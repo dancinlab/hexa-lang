@@ -1,0 +1,188 @@
+#!hexa strict
+//
+// nanobot/module/bayesian_n6_stratum_bias.hexa — F-NB-2-c source-class stratum bias.
+//
+// HEXA-NATIVE port of _python_bridge/module/nanobot_bayesian_n6_stratum_bias.py
+// (R5 sunset 22/57, 2026-05-07). Stratifies n=30 corpus by paper_ref year
+// regex (pre/post 2000) and tests F-NB-2 robustness.
+
+use "nanobot/module/bayesian_audit_n30"
+
+let PASS_DELTA = 1.0
+// POSIX ERE — match a 4-digit year with non-digit guards.
+let YEAR_RE = "(^|[^0-9])(19[5-9][0-9]|20[0-3][0-9])([^0-9]|$)"
+
+fn registry_path() -> string {
+    let cwd = exec("pwd").trim()
+    return cwd + "/state/discovery_absorption/registry.jsonl"
+}
+
+fn fabs(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn classify_entry(entry) -> string {
+    let mut ref = ""
+    let r_v = entry["ref"]
+    if type_of(r_v) == "string" { ref = r_v }
+    let m = regex_search(YEAR_RE, ref)
+    if len(m) == 0 { return "unknown" }
+    let span = ref.substring(m[0], m[1])
+    let mut yr_start = -1
+    let mut k = 0
+    while k + 4 <= len(span) {
+        let c4 = span.substring(k, k + 4)
+        let mut all_digits = true
+        let mut q = 0
+        while q < 4 {
+            let ch = c4.substring(q, q + 1)
+            if ch < "0" || ch > "9" { all_digits = false }
+            q = q + 1
+        }
+        if all_digits { yr_start = k; break }
+        k = k + 1
+    }
+    if yr_start < 0 { return "unknown" }
+    let yr = to_int(span.substring(yr_start, yr_start + 4))
+    if yr < 2000 { return "pre_2000" }
+    return "post_2000"
+}
+
+fn stratum_audit(stratum_corpus) {
+    let r = {}
+    let n = len(stratum_corpus)
+    if n == 0 {
+        r["n"] = 0
+        r["n_match"] = 0
+        r["n_total"] = 0
+        r["log10_bf"] = void
+        r["log10_bf_sentinel"] = "empty_stratum"
+        return r
+    }
+    let bayes = log_bayes_factor_c(stratum_corpus, 1.0, 1.0, "applicable", 12, 4, 2, 24)
+    let mut n_match = 0
+    let mut n_total = 0
+    let mut i = 0
+    while i < n {
+        n_match = n_match + n6_match_per_entry_c(stratum_corpus[i], 12, 4, 2, 24)
+        n_total = n_total + applicable_axes_per_entry(stratum_corpus[i])
+        i = i + 1
+    }
+    r["n"] = n
+    r["n_match"] = n_match
+    r["n_total"] = n_total
+    r["log10_bf"] = bayes["log10_bayes_factor_h1_over_h0"]
+    r["log10_bf_sentinel"] = bayes["log10_bf_sentinel"]
+    return r
+}
+
+fn compute_delta(a, b) {
+    let r = {}
+    let a_lbf = a["log10_bf"]
+    let b_lbf = b["log10_bf"]
+    if type_of(a_lbf) == "void" || a_lbf == void || type_of(b_lbf) == "void" || b_lbf == void {
+        let mut a_frac = 0.0
+        let mut b_frac = 0.0
+        if a["n_total"] > 0 { a_frac = to_float(a["n_match"]) / to_float(a["n_total"]) }
+        if b["n_total"] > 0 { b_frac = to_float(b["n_match"]) / to_float(b["n_total"]) }
+        r["delta"] = fabs(a_frac - b_frac) * 10.0
+        r["method"] = "match_fraction_proxy"
+        return r
+    }
+    r["delta"] = fabs(to_float(a_lbf) - to_float(b_lbf))
+    r["method"] = "log10_bf_direct"
+    return r
+}
+
+fn parse_argv_local(av) {
+    let r = {}
+    r["emit"] = false
+    r["summary"] = false
+    let mut i = 0
+    while i < len(av) {
+        let a = av[i]
+        if a == "--emit" { r["emit"] = true }
+        else if a == "--summary" { r["summary"] = true }
+        i = i + 1
+    }
+    return r
+}
+
+fn main() {
+    let cfg = parse_argv_local(args())
+    let corpus = build_corpus_n30()
+    let pre = []
+    let post = []
+    let unk = []
+    let mut i = 0
+    while i < len(corpus) {
+        let e = corpus[i]
+        let cls = classify_entry(e)
+        if cls == "pre_2000" { pre.push(e) }
+        else if cls == "post_2000" { post.push(e) }
+        else { unk.push(e) }
+        i = i + 1
+    }
+
+    let audit_pre = stratum_audit(pre)
+    let audit_post = stratum_audit(post)
+    let audit_unk = stratum_audit(unk)
+
+    let dr = compute_delta(audit_pre, audit_post)
+    let mut verdict = "FAIL"
+    if dr["delta"] <= PASS_DELTA { verdict = "PASS" }
+
+    let audited_at = utc_iso_now()
+    let strata = {}
+    strata["pre_2000"] = audit_pre
+    strata["post_2000"] = audit_post
+    strata["unknown"] = audit_unk
+
+    let nb_c = {}
+    nb_c["verdict"] = verdict
+    nb_c["delta_log10_bf"] = dr["delta"]
+    nb_c["delta_method"] = dr["method"]
+    nb_c["pass_threshold"] = PASS_DELTA
+    nb_c["raw_91_c3_disclose"] = "Stratification by reference year (pre/post 2000) is a proxy for textbook-vs-experimental source class — heuristic, automatable. PASS = |delta log10_BF| <= 1.0 (one Jeffreys band) between primary strata. Corpus n=30 may yield empty/small strata; in that case match-fraction proxy is reported."
+
+    let subs = {}
+    subs["f_nb_2_c"] = nb_c
+
+    let w = {}
+    w["schema"] = "raw_77_nanobot_bayesian_audit_v2"
+    w["audited_at"] = audited_at
+    w["audit_kind"] = "n6_source_class_stratum_bias"
+    w["stratum_classifier"] = "year_pre_post_2000"
+    w["stratum_results"] = strata
+    w["f_nb_2_subclauses"] = subs
+    w["raw_91_c3_disclose"] = "F-NB-2-c sub-clause closure runs alongside F-NB-2-n6-decorative (prior closure 2026-05-06). F-NB-2-b (n=60 ensemble drift) still pending corpus enlargement cycle 27."
+    w["raw_77_append_only"] = true
+    w["raw_9_hexa_only"] = "hexa stdlib only (R5 sunset 2026-05-07)"
+    w["witness_ref"] = "state/discovery_absorption/registry.jsonl#raw_77_nanobot_bayesian_audit_v2"
+
+    if cfg["emit"] {
+        let path = registry_path()
+        let last_slash = path.last_index_of("/")
+        exec("mkdir -p " + path.substring(0, last_slash))
+        append_file(path, json_encode(w) + "\n")
+        eprintln("emitted 1 witness row -> " + path)
+    }
+
+    if cfg["summary"] {
+        println(json_encode(w))
+    } else {
+        let pre_lbf = audit_pre["log10_bf"]
+        let post_lbf = audit_post["log10_bf"]
+        let mut pre_str = "void"
+        if type_of(pre_lbf) != "void" { pre_str = to_string(pre_lbf) }
+        let mut post_str = "void"
+        if type_of(post_lbf) != "void" { post_str = to_string(post_lbf) }
+        eprintln("pre_2000 n=" + to_string(audit_pre["n"]) + " log_bf=" + pre_str +
+            "  post_2000 n=" + to_string(audit_post["n"]) + " log_bf=" + post_str +
+            "  delta=" + to_string(dr["delta"]) + " (" + dr["method"] + ")  verdict=" + verdict)
+    }
+
+    if verdict == "PASS" { exit(0) }
+    exit(1)
+}

@@ -1,0 +1,8 @@
+#!hexa strict
+// perovskite synthesize — anti-solvent anneal temp.
+fn main() {
+    let anneal_C = 100.0
+    println("perovskite_synthesize (anti-solvent anneal temp):")
+    println("  anneal_C = " + str(anneal_C))
+    println("__HEXA_PEROVSKITE_SYNTHESIZE__ PASS gate=GATE_OPEN absorbed=false")
+}

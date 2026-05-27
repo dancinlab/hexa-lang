@@ -1,0 +1,69 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// tmp_rfc030_smoke.hexa — RFC 030 bytes_to_str_raw smoke
+//
+// Falsifiers (≥5, per F-RFC030-* in rfc_030_bytes_to_str_raw.md):
+//   F-RFC030-EMPTY: bytes_to_str_raw([]) == ""
+//   F-RFC030-ASCII: bytes_to_str_raw([72,105]) == "Hi"
+//   F-RFC030-UTF8-RT: bytes_to_str_raw([236,149,136,235,133,149]) == "안녕"
+//   F-RFC030-EMOJI-RT: bytes_to_str_raw([240,159,140,140]) == "🌌"
+//   F-RFC030-RANGE: bytes_to_str_raw([256]) == ""
+//   F-RFC030-NUL: bytes_to_str_raw([0]) == ""
+// ════════════════════════════════════════════════════════════════════════
+
+fn check(label: string, got: string, want: string) {
+    let want_len = len(want)
+    let got_len = len(got)
+    if got == want {
+        println("PASS  " + label + "  (len=" + to_string(got_len) + ")")
+        return 1
+    }
+    println("FAIL  " + label + "  want=\"" + want + "\" (len=" + to_string(want_len) + ")  got=\"" + got + "\" (len=" + to_string(got_len) + ")")
+    return 0
+}
+
+fn main() {
+    let mut pass = 0
+    let mut total = 0
+
+    // F-RFC030-EMPTY
+    let s_empty = bytes_to_str_raw([])
+    pass = pass + check("F-RFC030-EMPTY", s_empty, "")
+    total = total + 1
+
+    // F-RFC030-ASCII
+    let s_ascii = bytes_to_str_raw([72, 105])
+    pass = pass + check("F-RFC030-ASCII", s_ascii, "Hi")
+    total = total + 1
+
+    // F-RFC030-UTF8-RT — "안녕" is 6 UTF-8 bytes:
+    //   안 = E89588 (wait — actually 안 is EC 95 88, 녕 is EB 85 95)
+    //   ec 95 88 = 236 149 136
+    //   eb 85 95 = 235 133 149
+    let s_kor = bytes_to_str_raw([236, 149, 136, 235, 133, 149])
+    pass = pass + check("F-RFC030-UTF8-RT (안녕)", s_kor, "안녕")
+    total = total + 1
+
+    // F-RFC030-EMOJI-RT — "🌌" U+1F30C is 4 UTF-8 bytes F0 9F 8C 8C
+    let s_emoji = bytes_to_str_raw([240, 159, 140, 140])
+    pass = pass + check("F-RFC030-EMOJI-RT (🌌)", s_emoji, "🌌")
+    total = total + 1
+
+    // F-RFC030-RANGE — out of range returns ""
+    let s_oor = bytes_to_str_raw([256])
+    pass = pass + check("F-RFC030-RANGE ([256])", s_oor, "")
+    total = total + 1
+
+    // F-RFC030-NUL — embedded NUL returns ""
+    let s_nul = bytes_to_str_raw([0])
+    pass = pass + check("F-RFC030-NUL ([0])", s_nul, "")
+    total = total + 1
+
+    println("")
+    println("RFC 030 smoke: " + to_string(pass) + "/" + to_string(total) + " passed")
+    if pass == total {
+        println("PASS — RFC 030 bytes_to_str_raw works end-to-end")
+    } else {
+        println("FAIL — RFC 030 smoke incomplete")
+    }
+}

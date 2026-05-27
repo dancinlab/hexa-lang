@@ -1,0 +1,353 @@
+#!hexa strict
+// hexa-cern/firmware/sim/timing_chain.hexa
+//
+// §A.6.1 step C chunk 1/4 — sim-firmware: timing chain (master clock +
+// laser trigger generator). Sim-only — no hardware-in-the-loop. Models
+// the §X.4 / benchtop_v0_design.md B1 + B3 blocks:
+//
+//   B1 master clock (OCXO + PLL, 100 MHz, ±1 ppm) ──┐
+//                                                   │
+//                                                   ▼
+//   B3 trigger / timing controller (FPGA / MCU)  ──── B2 laser driver
+//                                                     (4 Hz, jitter <1 fs)
+//
+// What this file simulates:
+//   • clock tick generator with configurable nominal period and gaussian
+//     jitter σ_j (rng via deterministic LCG so the sim is reproducible)
+//   • trigger generator that emits a pulse delayed by D_TRIG after each
+//     clock tick, with a programmable gate width
+//   • aggregate diagnostics: tick rate, period mean/std, trigger
+//     latency mean/std, gate-width consistency
+//
+// Acceptance gates (= what real firmware would have to satisfy):
+//   1. tick rate within 100 ppm of design 4 Hz
+//   2. tick-period jitter σ < 1 µs  (stretch goal: < 1 fs in HW)
+//   3. trigger latency mean ≈ D_TRIG within 1%
+//   4. trigger gate width within 5% of programmed value
+//   5. no missed ticks over N_TICKS
+//   6. no double-triggers (per-tick at-most-once invariant)
+//   7. cumulative time drift < 0.1% of total run time
+//
+// This is NOT verify/* RSC layer (per recipe §9.1) — it lives under
+// firmware/sim/ and is allowed to break RSC invariants. But for
+// sim-firmware regression hygiene we still emit a sentinel and
+// FALSIFIERS list so it can be wired into tests/.
+//
+// Run:
+//   hexa run firmware/sim/timing_chain.hexa
+//
+// @no-lock-needed
+
+use "self/runtime/math_pure"
+
+let HOME = env("HOME")
+
+fn _root() -> str {
+    let r = env("PETITE_CERN_ROOT")
+    if r.len() > 0 { return r }
+    let pwd = exec("pwd").trim()
+    if pwd.len() > 0 { return pwd }
+    return HOME + "/core/hexa-cern"
+}
+
+let ROOT = _root()
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+fn abs_f(x: float) -> float {
+    if x < 0.0 { return -x }
+    return x
+}
+
+// ── design point ────────────────────────────────────────────────────────
+let TICK_RATE_HZ = 4.0                       // 4 Hz repetition (τ = 4)
+let TICK_PERIOD_S = 0.25                     // 1/4 Hz
+let TICK_JITTER_S = 100.0e-9                 // 100 ns σ_j (sim-realistic)
+let D_TRIG_S      = 1.0e-6                   // 1 µs trigger delay
+let GATE_WIDTH_S  = 200.0e-9                 // 200 ns gate
+let GATE_TOLERANCE = 5.0e-9                  // ±5 ns gate jitter
+let N_TICKS       = 1024                     // sim run length
+
+// ── deterministic LCG-based jitter (no hidden state from real RNG) ─────
+//
+// Linear-congruential generator: x_{n+1} = (a·x_n + c) mod m
+// Constants from Numerical Recipes (Park-Miller variant).
+let LCG_M : float = 4294967296.0             // 2^32
+let LCG_A : float = 1664525.0
+let LCG_C : float = 1013904223.0
+
+let mut LCG_STATE : float = 12345.0
+
+fn _lcg_next() -> float {
+    let v = LCG_A * LCG_STATE + LCG_C
+    let r = fmod_pure(v, LCG_M)
+    LCG_STATE = r
+    return r / LCG_M    // uniform [0, 1)
+}
+
+// Box-Muller: two uniform → one gaussian (zero mean, unit std).
+fn gaussian_unit() -> float {
+    let mut u1 = _lcg_next()
+    if u1 < 1.0e-12 { u1 = 1.0e-12 }
+    let u2 = _lcg_next()
+    let mag = sqrt_pure(-2.0 * log_pure(u1))
+    return mag * cos_pure(2.0 * pi_pure() * u2)
+}
+
+// ── tick simulator ──────────────────────────────────────────────────────
+//
+// returns array of timestamps (real time when each tick fires)
+fn run_clock_sim(n: int) -> [float] {
+    let mut t = 0.0
+    let mut ts : [float] = []
+    let mut i = 0
+    while i < n {
+        let jitter = gaussian_unit() * TICK_JITTER_S
+        let dt = TICK_PERIOD_S + jitter
+        t = t + dt
+        ts.push(t)
+        i = i + 1
+    }
+    return ts
+}
+
+// ── trigger simulator ──────────────────────────────────────────────────
+//
+// for each tick, schedule a trigger pulse at tick_time + D_TRIG (with a
+// small per-trigger delay-jitter independent of clock jitter), with a
+// gate-width also slightly jittered.
+//
+// returns flat array: for each tick i, three entries [tick_t, trig_start, trig_end]
+// → flat indices: 3*i, 3*i+1, 3*i+2
+fn run_trigger_sim(ticks: [float]) -> [float] {
+    let mut out : [float] = []
+    let mut i = 0
+    while i < ticks.len() {
+        let tick_t = ticks[i]
+        let dly_jit = gaussian_unit() * 5.0e-9     // 5 ns σ trigger latency
+        let trig_start = tick_t + D_TRIG_S + dly_jit
+        let gw_jit = gaussian_unit() * GATE_TOLERANCE
+        let trig_end = trig_start + GATE_WIDTH_S + gw_jit
+        out.push(tick_t)
+        out.push(trig_start)
+        out.push(trig_end)
+        i = i + 1
+    }
+    return out
+}
+
+fn mean_pure(xs: [float]) -> float {
+    if xs.len() == 0 { return 0.0 }
+    let mut s = 0.0
+    for x in xs { s = s + x }
+    return s / float(xs.len())
+}
+
+fn stddev_pure(xs: [float], m: float) -> float {
+    if xs.len() <= 1 { return 0.0 }
+    let mut s = 0.0
+    for x in xs {
+        let d = x - m
+        s = s + d * d
+    }
+    return sqrt_pure(s / float(xs.len() - 1))
+}
+
+// ── checks ──────────────────────────────────────────────────────────────
+
+fn check_tick_count(ticks: [float]) {
+    let ok = ticks.len() == N_TICKS
+    _check(ok, "no missed ticks (got exactly N_TICKS)",
+           "ticks = " + str(ticks.len()) + ", N_TICKS = " + str(N_TICKS))
+}
+
+fn check_tick_rate(ticks: [float]) {
+    if ticks.len() < 2 {
+        _check(false, "tick rate within 100 ppm of 4 Hz", "too few ticks")
+        return
+    }
+    let total_t = ticks[ticks.len() - 1]
+    let measured_rate = float(ticks.len()) / total_t
+    let rel_err = abs_f(measured_rate - TICK_RATE_HZ) / TICK_RATE_HZ
+    let ok = rel_err < 1.0e-4
+    _check(ok,
+           "tick rate within 100 ppm of design " + str(TICK_RATE_HZ) + " Hz",
+           "measured = " + str(measured_rate) + " Hz, rel err = " + str(rel_err))
+}
+
+fn check_period_jitter(ticks: [float]) {
+    if ticks.len() < 3 {
+        _check(false, "period jitter < 1 µs", "too few ticks")
+        return
+    }
+    let mut periods : [float] = []
+    let mut i = 1
+    while i < ticks.len() {
+        periods.push(ticks[i] - ticks[i - 1])
+        i = i + 1
+    }
+    let m = mean_pure(periods)
+    let sd = stddev_pure(periods, m)
+    let ok = sd < 1.0e-6
+    _check(ok,
+           "period jitter σ < 1 µs  (sim target; HW target < 1 fs)",
+           "σ = " + str(sd * 1.0e9) + " ns, mean = " + str(m * 1.0e3) + " ms")
+}
+
+fn check_trigger_latency(triggers: [float]) {
+    let n = triggers.len() / 3
+    if n < 2 {
+        _check(false, "trigger latency mean ≈ D_TRIG within 1%", "no triggers")
+        return
+    }
+    let mut latencies : [float] = []
+    let mut i = 0
+    while i < n {
+        let tick_t = triggers[i * 3]
+        let trig_t = triggers[i * 3 + 1]
+        latencies.push(trig_t - tick_t)
+        i = i + 1
+    }
+    let m = mean_pure(latencies)
+    let rel_err = abs_f(m - D_TRIG_S) / D_TRIG_S
+    _check(rel_err < 0.01,
+           "trigger latency mean ≈ D_TRIG within 1%",
+           "mean = " + str(m * 1.0e6) + " µs, target = " + str(D_TRIG_S * 1.0e6) + " µs, err = " + str(rel_err))
+}
+
+fn check_gate_width(triggers: [float]) {
+    let n = triggers.len() / 3
+    if n < 2 {
+        _check(false, "gate width within 5%", "no triggers")
+        return
+    }
+    let mut widths : [float] = []
+    let mut i = 0
+    while i < n {
+        let s = triggers[i * 3 + 1]
+        let e = triggers[i * 3 + 2]
+        widths.push(e - s)
+        i = i + 1
+    }
+    let m = mean_pure(widths)
+    let rel_err = abs_f(m - GATE_WIDTH_S) / GATE_WIDTH_S
+    _check(rel_err < 0.05,
+           "gate width within 5% of programmed " + str(GATE_WIDTH_S * 1.0e9) + " ns",
+           "mean = " + str(m * 1.0e9) + " ns, err = " + str(rel_err))
+}
+
+fn check_no_double_triggers(triggers: [float]) {
+    // Each tick must produce exactly one trigger interval.  If two
+    // intervals overlap, the laser would fire twice and the diagnostic
+    // gate would be ambiguous.  Check trig_end[i] < trig_start[i+1].
+    let n = triggers.len() / 3
+    if n < 2 {
+        _check(true, "no double-triggers across run", "n < 2 — trivial")
+        return
+    }
+    let mut i = 0
+    let mut bad = 0
+    while i < n - 1 {
+        let end_i  = triggers[i * 3 + 2]
+        let start_j = triggers[(i + 1) * 3 + 1]
+        if start_j <= end_i { bad = bad + 1 }
+        i = i + 1
+    }
+    _check(bad == 0,
+           "no double-triggers across " + str(n) + " ticks",
+           "bad pairs = " + str(bad))
+}
+
+fn check_total_time_drift(ticks: [float]) {
+    let n = ticks.len()
+    if n < 2 {
+        _check(false, "cumulative time drift < 0.1%", "too few ticks")
+        return
+    }
+    let measured = ticks[n - 1]
+    let predicted = float(n) * TICK_PERIOD_S
+    let rel = abs_f(measured - predicted) / predicted
+    _check(rel < 1.0e-3,
+           "cumulative time drift < 0.1% of total run time",
+           "measured = " + str(measured) + " s, predicted = " + str(predicted) + " s, drift = " + str(rel))
+}
+
+fn check_pillar_doc_anchor() {
+    let txt = if file_exists(ROOT + "/mini/doc/benchtop_v0_design.md") { read_file(ROOT + "/mini/doc/benchtop_v0_design.md") } else { "" }
+    let ok = txt.find("B1") >= 0 && txt.find("B3") >= 0 && txt.find("OCXO") >= 0
+    _check(ok,
+           "benchtop_v0_design.md references B1 + B3 + OCXO  (this sim's anchor)",
+           "doc len = " + str(txt.len()))
+}
+
+let FALSIFIERS = [
+    "ticks ≠ N_TICKS -> clock dropped or doubled events",
+    "tick rate not within 100 ppm of 4 Hz -> oscillator frequency off",
+    "period jitter σ ≥ 1 µs -> jitter sim above sim-target",
+    "trigger latency mean off > 1% -> trigger pipeline introduces bias",
+    "gate width off > 5% -> gate generator broken",
+    "double-triggers detected -> trigger gate overlaps next tick",
+    "cumulative time drift > 0.1% -> systematic frequency error",
+    "doc anchor missing -> firmware sim divorced from benchtop design doc",
+]
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-cern firmware/sim — timing chain  (§A.6.1 step C 1/4)")
+    println("  master clock (B1) + laser trigger (B3) sim — no hardware-in-the-loop")
+    println("========================================================================")
+    println("")
+    println("  design:")
+    println("    rate         = " + str(TICK_RATE_HZ) + " Hz")
+    println("    period       = " + str(TICK_PERIOD_S * 1.0e3) + " ms")
+    println("    jitter σ     = " + str(TICK_JITTER_S * 1.0e9) + " ns  (sim target; HW <1 fs)")
+    println("    trig delay   = " + str(D_TRIG_S * 1.0e6) + " µs")
+    println("    gate width   = " + str(GATE_WIDTH_S * 1.0e9) + " ns")
+    println("    N_ticks      = " + str(N_TICKS))
+    println("")
+
+    let ticks = run_clock_sim(N_TICKS)
+    let triggers = run_trigger_sim(ticks)
+    println("  result:")
+    if ticks.len() > 0 {
+        println("    last tick    = " + str(ticks[ticks.len() - 1]) + " s")
+    }
+    println("    n triggers   = " + str(triggers.len() / 3))
+    println("")
+
+    check_tick_count(ticks)
+    check_tick_rate(ticks)
+    check_period_jitter(ticks)
+    check_trigger_latency(triggers)
+    check_gate_width(triggers)
+    check_no_double_triggers(triggers)
+    check_total_time_drift(ticks)
+    check_pillar_doc_anchor()
+
+    println("")
+    println("  Note: deterministic LCG-based jitter — same seed → same trace.")
+    println("  Real HW will use OCXO + PLL frequency reference; this sim is a")
+    println("  numerical placeholder for B1 + B3 timing pipeline.")
+
+    println("")
+    println("  FALSIFIERS (" + str(len(FALSIFIERS)) + "):")
+    for f in FALSIFIERS { println("    ✗ " + f) }
+    println("========================================================================")
+    let pass_n = RUN - FAIL
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_CERN_FW_TIMING_CHAIN__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_CERN_FW_TIMING_CHAIN__ PASS — clock + trigger sim end-to-end clean")
+    exit(0)
+}

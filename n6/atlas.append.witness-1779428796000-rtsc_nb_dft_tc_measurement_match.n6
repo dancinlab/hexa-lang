@@ -1,0 +1,10 @@
+// witness shard — hexa atlas append-witness
+// emitter: rtsc-dft-proof-2026-05-22
+// kind: E
+// id: rtsc_nb_dft_tc_measurement_match
+// timestamp_ms: 1779428796000
+
+@E rtsc_nb_dft_tc_measurement_match
+  "nb_dft_tc_measurement_match = Nb BCC ambient DFT el-ph 4x4x4 q (24^3 k, USPP PBE spn, pool:ubu-2): lambda=0.93-1.08, omega_log=192K, Tc_AD=9.9-13K (mu*=0.13) vs measured Tc=9.25K, agreement ~10-40% textbook first-principles; double-validated by PR#299 BCS-universal-ratio attestation 0.31% rel_err; gate-(c) ambient axis measurement-grade proof of first-principles SC evaluation; RTSC.md §9.13.2b"
+
+// EOF — hexa atlas append-witness

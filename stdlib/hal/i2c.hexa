@@ -1,0 +1,63 @@
+#!hexa strict
+// stdlib/hal/i2c/i2c.hexa — σ-slot 2: I²C bus.
+//
+// import:  use "stdlib/hal/i2c"
+// φ:       digital
+// handles: ≤ 4 buses, ≤ 24 (= J₂) target devices per bus.
+//
+// canon-aware (~/core/canon/domains/compute/chip-interconnect):
+//   - canon enumerates UCIe σ·J₂=288 lane @ 48 Gbps as die-to-die ceiling.
+//     I²C is the board-level analog: σ·J₂=288 b/s × σ-φ=10 (slow-mode) =
+//     10 kbit/s baseline; τ-staged speed grades 100k/400k/1M/3.4M.
+
+let MODULE_NAME = "i2c"
+let SIGMA_SLOT  = 2
+let PHI_KIND    = "digital"
+
+// ── speed grades (τ=4 stage) — canon-inspired ladder ─────────────────
+let SPEED_STANDARD  = 100000     // 100 kHz
+let SPEED_FAST      = 400000     // 400 kHz
+let SPEED_FAST_PLUS = 1000000    // 1 MHz
+let SPEED_HIGH      = 3400000    // 3.4 MHz
+
+// ── handle is bus index (0..3 = ≤ 4 buses) ────────────────────────────
+
+fn i2c_configure(bus: int, speed_hz: int) -> int {
+    if bus < 0 || bus > 3 { return -1 }
+    if speed_hz < 1000 || speed_hz > 5000000 { return -2 }
+    return bus
+}
+
+fn i2c_start(handle: int) -> bool {
+    if handle < 0 { return false }
+    return true
+}
+
+fn i2c_write(handle: int, addr: int, data: [int]) -> bool {
+    if handle < 0 || addr < 0 || addr > 127 { return false }
+    println("[i2c sim] bus " + str(handle) + " write addr=0x" + str(addr) + " bytes=" + str(data.len()))
+    return true
+}
+
+fn i2c_read(handle: int, addr: int, n: int) -> [int] {
+    if handle < 0 || addr < 0 || addr > 127 || n <= 0 { return [] }
+    let mut out: [int] = []
+    let mut i = 0
+    while i < n { out = out + [0]; i = i + 1 }   // sim: zero-fill
+    return out
+}
+
+fn i2c_report(handle: int) -> str {
+    if handle < 0 { return "i2c: invalid" }
+    return "i2c: bus " + str(handle) + " ok (sim)"
+}
+
+fn i2c_open(bus: int, speed_hz: int) -> int {
+    let h = i2c_configure(bus, speed_hz)
+    if h < 0 { return h }
+    if !i2c_start(h) { return -3 }
+    return h
+}
+
+fn i2c_close(handle: int) -> bool { return handle >= 0 }
+fn i2c_module_meta() -> [str] { return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"] }

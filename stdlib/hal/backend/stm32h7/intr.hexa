@@ -1,0 +1,109 @@
+#!hexa strict
+// stdlib/hal/backend/stm32h7/intr.hexa — STM32H7 IRQ backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    STMicroelectronics STM32H7 Cortex-M7 @ 480 MHz.
+// Chip ref:  ARMv7-M PM0214 §4.3 NVIC + RM0433 §11 EXTI / NVIC vectors.
+//            Cortex-M7 NVIC supports up to 240 external interrupts;
+//            STM32H7 maps ~150 peripheral IRQs.
+// Surface:   stm32h7_intr_{configure,attach,enable,disable,clear}(...)
+// Dispatch:  intr.hexa selects this via cfg-flag.
+//
+// MMIO layout (NVIC at fixed System Control Space):
+//
+//   NVIC base = 0xE000E100   (architectural; NOT a peripheral region)
+//
+//   NVIC_ISER<n>               0x000 + 4·n   set-enable (n=0..7 for IRQ 0..255)
+//   NVIC_ICER<n>               0x080 + 4·n   clear-enable
+//   NVIC_ISPR<n>               0x100 + 4·n   set-pending
+//   NVIC_ICPR<n>               0x180 + 4·n   clear-pending
+//   NVIC_IABR<n>               0x200 + 4·n   active-bit (read-only)
+//   NVIC_IPR<n>                0x300 + 4·n   8-bit priority per IRQ (4 IRQs/word)
+//
+//   STIR (Software Trigger Interrupt) at 0xE000EF00.
+//
+//   EXTI block @ 0x58000000 (separate IP) — gates external lines to NVIC.
+//
+// Priority encoding: 4 bits = 16 levels (Cortex-M7 default; STM32H7
+// uses NVIC_PRIO_BITS=4). Priority 0 = highest. Configurable
+// preemption / sub-priority split via SCB_AIRCR.PRIGROUP.
+//
+// Vector table: at 0x00000000 (or VTOR-relocated). Each entry is a
+// 4-byte function pointer. STM32H7 has 1 fixed (Reset) + 14 system
+// + ~150 peripheral entries.
+//
+// Architectural note: NVIC is part of ARMv7-M System Control Space —
+// NOT a vendor peripheral. The same register layout applies to every
+// Cortex-M7 chip; only the IRQ-to-peripheral mapping is vendor-specific.
+
+let MODULE_NAME = "stm32h7_intr"
+let SIGMA_SLOT  = 9
+let PHI_KIND    = "digital"
+
+let NVIC_BASE     = 0xE000E100
+let NVIC_ISER     = 0x000
+let NVIC_ICER     = 0x080
+let NVIC_ISPR     = 0x100
+let NVIC_ICPR     = 0x180
+let NVIC_IPR      = 0x300
+let SCB_AIRCR     = 0xE000ED0C
+
+let MAX_IRQ_NUM   = 150           // STM32H7 peripheral IRQ ceiling
+let NVIC_PRIO_BITS = 4            // 16 priority levels
+
+// Map sim 4-level priority (PRIO_HIGH/REAL_T/NORMAL/LOW) to NVIC's
+// 4-bit field. We bias high so the sim's PRIO_HIGH (=0) gets actual 0.
+let PRIO_HIGH    = 0
+let PRIO_REAL_T  = 1
+let PRIO_NORMAL  = 2
+let PRIO_LOW     = 3
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn stm32h7_intr_configure(vector: int, priority: int) -> int {
+    if vector < 0 || vector > 23 { return -1 }   // J₂=24 sim cap
+    if priority < 0 || priority > 3 { return -2 }
+    // STUB: NVIC_IPR[vector/4] byte (vector%4) = priority << (8 - NVIC_PRIO_BITS)
+    return vector
+}
+
+fn stm32h7_intr_attach(handle: int, name: str) -> bool {
+    if handle < 0 { return false }
+    // STUB: write vector table entry [handle] with the resolved ISR address
+    //       (either statically linked from .vector_table section, or
+    //        VTOR-relocated copy in SRAM).
+    return true
+}
+
+fn stm32h7_intr_enable(handle: int) -> bool {
+    if handle < 0 || handle > 23 { return false }
+    // STUB: NVIC_ISER[handle/32] = 1 << (handle%32)
+    return true
+}
+
+fn stm32h7_intr_disable(handle: int) -> bool {
+    if handle < 0 || handle > 23 { return false }
+    // STUB: NVIC_ICER[handle/32] = 1 << (handle%32)
+    return true
+}
+
+fn stm32h7_intr_clear(handle: int) -> bool {
+    if handle < 0 || handle > 23 { return false }
+    // STUB: NVIC_ICPR[handle/32] = 1 << (handle%32)
+    return true
+}
+
+fn stm32h7_intr_report(handle: int) -> str {
+    return "[stm32h7_intr sim] handle=" + str(handle) + " (skeleton stub — TODO MMIO)"
+}
+
+fn stm32h7_intr_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[stm32h7_intr sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  NVIC=" + str(NVIC_BASE) + " (Cortex-M7; arch SCS, not peripheral)")
+    println("  ~150 peripheral IRQs; 16 priority levels (4-bit NVIC_PRIO_BITS)")
+}

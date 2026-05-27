@@ -1,0 +1,195 @@
+// HEXA Standard Library — crypto/aes256gcm
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// AES-256-GCM AEAD (NIST SP 800-38D) — pure hexa, the TLS 1.3
+// TLS_AES_256_GCM_SHA384 cipher. Same GHASH (GF(2^128), bit-reflected) + CTR
+// construction as aes128gcm, over the aes256 block cipher. 12-byte IV →
+// J0 = IV‖0x00000001. let-mut idiom (#1506).
+//
+// Surface:
+//   pub fn aes256gcm_encrypt(key: [int], iv: [int], aad: [int], pt: [int]) -> [int]   — ct ‖ 16-byte tag
+//   pub fn aes256gcm_verify(key: [int], iv: [int], aad: [int], ct: [int], tag: [int]) -> bool
+//   pub fn aes256gcm_decrypt(key: [int], iv: [int], ct: [int]) -> [int]
+//
+// Verified vector (NIST SP 800-38D / GCM AES-256 test case 14):
+//   K=feffe992..308 (32B) · IV=cafebabefacedbaddecaf888 · A=feedface..dad2
+//   P=d9313225..ba637b39 · C=522dc1f0..bcc9f662 · T=76fc6ece0f4e1768cddf8853bb2d551b
+
+use "stdlib/crypto/aes256"
+
+@pure
+fn _shr1(v: [int]) -> [int] {
+    let mut o: [int] = []
+    let mut i = 0
+    while i < 16 {
+        let hi = if i == 0 { 0 } else { (v[i-1] & 1) << 7 }
+        o.push(((v[i] >> 1) | hi) & 0xFF)
+        i = i + 1
+    }
+    return o
+}
+
+@pure
+fn _gmul(x: [int], y: [int]) -> [int] {
+    let mut z: [int] = []
+    let mut k = 0
+    while k < 16 { z.push(0); k = k + 1 }
+    let mut v: [int] = []
+    k = 0
+    while k < 16 { v.push(y[k]); k = k + 1 }
+    let mut i = 0
+    while i < 128 {
+        let bit = (x[i >> 3] >> (7 - (i & 7))) & 1
+        if bit == 1 {
+            let mut j = 0
+            while j < 16 { z[j] = z[j] ^ v[j]; j = j + 1 }
+        }
+        let lsb = v[15] & 1
+        v = _shr1(v)
+        if lsb == 1 { v[0] = v[0] ^ 0xe1 }
+        i = i + 1
+    }
+    return z
+}
+
+@pure
+fn _ghash(h: [int], data: [int]) -> [int] {
+    let mut y: [int] = []
+    let mut k = 0
+    while k < 16 { y.push(0); k = k + 1 }
+    let mut i = 0
+    while i < len(data) {
+        let mut j = 0
+        while j < 16 { y[j] = y[j] ^ data[i + j]; j = j + 1 }
+        y = _gmul(y, h)
+        i = i + 16
+    }
+    return y
+}
+
+@pure
+fn _inc32(ctr: [int]) -> [int] {
+    let mut o: [int] = []
+    let mut i = 0
+    while i < 16 { o.push(ctr[i]); i = i + 1 }
+    let mut c = 1
+    let mut p = 15
+    while p >= 12 {
+        let s = o[p] + c
+        o[p] = s & 0xFF
+        c = s >> 8
+        p = p - 1
+    }
+    return o
+}
+
+@pure
+fn _pad16_to(out: [int], curlen: int) -> [int] {
+    let mut o = out
+    let rem = curlen % 16
+    if rem != 0 {
+        let mut k = rem
+        while k < 16 { o.push(0); k = k + 1 }
+    }
+    return o
+}
+
+@pure
+fn _len64_bits(byte_len: int) -> [int] {
+    let bits = byte_len * 8
+    let mut o: [int] = []
+    let mut i = 7
+    while i >= 0 { o.push((bits >> (i * 8)) & 0xFF); i = i - 1 }
+    return o
+}
+
+@pure
+fn _gctr(ks: [int], ctr0: [int], data: [int]) -> [int] {
+    let mut out: [int] = []
+    let mut ctr = ctr0
+    let mut i = 0
+    while i < len(data) {
+        let stream = aes256_encrypt_block_ks(ks, ctr)
+        let mut j = 0
+        while j < 16 {
+            if i + j < len(data) { out.push((data[i + j] ^ stream[j]) & 0xFF) }
+            j = j + 1
+        }
+        ctr = _inc32(ctr)
+        i = i + 16
+    }
+    return out
+}
+
+@pure
+fn _j0(iv: [int]) -> [int] {
+    let mut j: [int] = []
+    let mut i = 0
+    while i < 12 { j.push(iv[i]); i = i + 1 }
+    j.push(0); j.push(0); j.push(0); j.push(1)
+    return j
+}
+
+@pure
+fn _gcm_tag(ks: [int], h: [int], j0: [int], aad: [int], ct: [int]) -> [int] {
+    let mut g: [int] = []
+    let mut i = 0
+    while i < len(aad) { g.push(aad[i]); i = i + 1 }
+    g = _pad16_to(g, len(aad))
+    i = 0
+    while i < len(ct) { g.push(ct[i]); i = i + 1 }
+    g = _pad16_to(g, len(ct))
+    let la = _len64_bits(len(aad))
+    i = 0
+    while i < 8 { g.push(la[i]); i = i + 1 }
+    let lc = _len64_bits(len(ct))
+    i = 0
+    while i < 8 { g.push(lc[i]); i = i + 1 }
+    let s = _ghash(h, g)
+    let ej0 = aes256_encrypt_block_ks(ks, j0)
+    let mut tag: [int] = []
+    i = 0
+    while i < 16 { tag.push((s[i] ^ ej0[i]) & 0xFF); i = i + 1 }
+    return tag
+}
+
+@pure
+pub fn aes256gcm_encrypt(key: [int], iv: [int], aad: [int], pt: [int]) -> [int] {
+    let ks = aes256_key_expansion(key)
+    let mut zero: [int] = []
+    let mut i = 0
+    while i < 16 { zero.push(0); i = i + 1 }
+    let h = aes256_encrypt_block_ks(ks, zero)
+    let j0 = _j0(iv)
+    let ct = _gctr(ks, _inc32(j0), pt)
+    let tag = _gcm_tag(ks, h, j0, aad, ct)
+    let mut out: [int] = []
+    i = 0
+    while i < len(ct) { out.push(ct[i]); i = i + 1 }
+    i = 0
+    while i < 16 { out.push(tag[i]); i = i + 1 }
+    return out
+}
+
+@pure
+pub fn aes256gcm_verify(key: [int], iv: [int], aad: [int], ct: [int], tag: [int]) -> bool {
+    if len(tag) != 16 { return false }
+    let ks = aes256_key_expansion(key)
+    let mut zero: [int] = []
+    let mut i = 0
+    while i < 16 { zero.push(0); i = i + 1 }
+    let h = aes256_encrypt_block_ks(ks, zero)
+    let want = _gcm_tag(ks, h, _j0(iv), aad, ct)
+    let mut diff = 0
+    i = 0
+    while i < 16 { if want[i] != tag[i] { diff = 1 }; i = i + 1 }
+    return diff == 0
+}
+
+@pure
+pub fn aes256gcm_decrypt(key: [int], iv: [int], ct: [int]) -> [int] {
+    let ks = aes256_key_expansion(key)
+    return _gctr(ks, _inc32(_j0(iv)), ct)
+}

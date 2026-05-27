@@ -1,0 +1,105 @@
+// HEXA Native Compiler — Phase 3 A11 surge smoke
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write]
+//
+// Verifies the Cartesian product fan-out and the cap policy.
+//
+//   hexa run compiler/surge/surge_test.hexa
+
+use "compiler/surge/surge"
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok { println("  PASS  " + label) }
+    else { println("  FAIL  " + label); fails.push(label) }
+}
+
+fn _hermetic_home() {
+    let stamp = exec("date +%s%N 2>/dev/null").trim()
+    let tmp = "/tmp/hexa-surge-smoke-" + stamp
+    mkdir(tmp)
+    setenv("HOME", tmp)
+}
+
+fn main() {
+    println("surge A11 Cartesian fan-out smoke")
+    _hermetic_home()
+
+    let fails = []
+    let mut pass: i64 = 0
+    let mut total: i64 = 0
+
+    // 1) plan math — 2 engines × 2 variants × 2 seeds = 8
+    let plan = surge_plan("alpha", "nexus,openai", 2, "s1,s2", "")
+    total = total + 1
+    if len(plan.engines) == 2 && plan.variants_n == 2 && len(plan.seeds) == 2 && plan.total == 8 {
+        pass = pass + 1; _check("plan 2×2×2 = 8", true, fails)
+    } else {
+        _check("plan 2×2×2 = 8 (got total=" + to_string(plan.total) + ")", false, fails)
+    }
+
+    // 2) run within cap — 1 engine × 1 variant × 2 seeds = 2 ≤ 12
+    setenv("HEXA_SURGE_MAX", "12")
+    let r1 = surge_run("ignored", "1", "nexus", "fast", "", "", 1, "", "p,q", "")
+    total = total + 1
+    if !r1.rejected && r1.ran == 2 && r1.errors == 0 {
+        pass = pass + 1; _check("within-cap run completes (ran=2 errors=0)", true, fails)
+    } else {
+        _check("within-cap run completes (got rejected=" + to_string(r1.rejected)
+            + " ran=" + to_string(r1.ran)
+            + " errors=" + to_string(r1.errors) + ")", false, fails)
+    }
+
+    // 3) cap rejection — set cap=4, plan total=8 → rejected
+    setenv("HEXA_SURGE_MAX", "4")
+    let r2 = surge_run("alpha", "1", "nexus", "fast", "", "", 2, "nexus,openai", "s1,s2", "")
+    total = total + 1
+    if r2.rejected && r2.ran == 0 && r2.cap == 4 && r2.plan_total == 8 {
+        pass = pass + 1; _check("over-cap plan rejected (ran=0 cap=4 plan=8)", true, fails)
+    } else {
+        _check("over-cap plan rejected (got rejected=" + to_string(r2.rejected)
+            + " ran=" + to_string(r2.ran)
+            + " cap=" + to_string(r2.cap)
+            + " plan=" + to_string(r2.plan_total) + ")", false, fails)
+    }
+
+    // 4) non-nexus engine routes via chain shim — 1 chain run
+    setenv("HEXA_SURGE_MAX", "12")
+    let r3 = surge_run("seed_c", "1", "nexus", "fast", "", "", 1, "openai", "", "")
+    total = total + 1
+    if !r3.rejected && r3.ran == 1 && r3.errors == 0 {
+        pass = pass + 1; _check("openai engine routed via chain (ran=1)", true, fails)
+    } else {
+        _check("openai engine routed via chain (got rejected=" + to_string(r3.rejected)
+            + " ran=" + to_string(r3.ran) + ")", false, fails)
+    }
+
+    // 5) cap source — explicit HEXA_SURGE_MAX wins
+    setenv("HEXA_SURGE_MAX", "7")
+    total = total + 1
+    if surge_max_runs() == 7 {
+        pass = pass + 1; _check("HEXA_SURGE_MAX=7 honoured", true, fails)
+    } else {
+        _check("HEXA_SURGE_MAX=7 honoured (got " + to_string(surge_max_runs()) + ")", false, fails)
+    }
+
+    println("")
+    println(to_string(pass) + "/" + to_string(total) + " PASS")
+    if len(fails) == 0 {
+        println("RESULT: PASS (surge A11 — Cartesian fan-out + cap)")
+        exit(0)
+    } else {
+        println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
+        exit(1)
+    }
+}
+
+let _av = argv()
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let s = to_string(_av[1])
+    if s.ends_with("/surge_test.hexa") { return true }
+    if s == "surge_test.hexa" { return true }
+    return false
+}
+if _is_main() { main() }

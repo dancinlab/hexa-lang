@@ -1,0 +1,374 @@
+//
+// F-FUSION-ATTN-MULTICTA-WALL -- round 4 of the GPU sec10 GEMM-fusion axis.
+// Multi-CTA fused flash-attention with TENSOR-CORE inner GEMMs and a WIDE
+// key/value tile (BK = 256 keys per online-softmax round) so the softmax +
+// O-rescale overhead is amortized over 16 WMMA key-subtiles per round. This
+// is the round-3 successor: round 3 used BK=16 (one key-subtile per softmax
+// round), which made the per-tile softmax/rescale dominate; round 4 widens
+// the KV tile to BK=256, closing the wall gap from 9.4-15.5x to 1.3-2.0x.
+//
+// Computes  O = softmax(Q K^T / sqrt(d)) V  in ONE kernel launch, the S score
+// tile RESIDENT IN SHARED MEMORY (never to global HBM), online softmax
+// (running max m_i + running sum l_i per query row), both inner GEMMs on
+// Tensor Cores via wmma.mma.sync m16n16k16 (f16 multiply, f32 accumulate).
+//
+// GEOMETRY (validated numerically by the CUDA-C oracle fa_bk_oracle.cu, BKT=16)
+//   d   = 64   (head dim; 4 wmma K-tiles of 16)
+//   BM  = 16   query rows per CTA   (one WMMA M dim; grid.x = N/16 CTAs)
+//   BK  = 256  key rows per softmax round (BKT = 16 wmma N-subtiles of 16)
+//   One thread BLOCK = one WARP (32 threads) owns BM=16 query rows.
+//   grid.x = N/16 -- MAX grid saturation (32..256 CTAs for N=512..4096 vs the
+//     RTX 5070's 48 SMs; the multi-warp-per-CTA variants were measured SLOWER
+//     because bundling warps cut the grid count + raised smem/CTA).
+//   N must be a multiple of BK = 256.
+//
+// SHARED MEMORY BUDGET (per CTA / per warp)
+//   s_tile : 16*256 f32 = 16384 B   (QK^T scores, wide; reused as PV scratch)
+//   p_tile : 16*256 f16 =  8192 B   (softmax probabilities, f16 for wmma.load.a)
+//   o_tile : 16*64  f32 =  4096 B   (running O accumulator, shared round-trip)
+//   m_vec/l_vec/c_vec : 3*16 f32 = 192 B
+//   TOTAL  : 28864 B  < 49152 B/CTA RTX 5070 envelope.  S+O stay in smem.
+//
+// PURE ASCII -- driver-JIT ptxas rejects non-ASCII comments.
+// ----------------------------------------------------------------------------
+
+.version 7.0
+.target sm_80
+.address_size 64
+
+.shared .align 16 .b8 s_tile[16384];  // 16x256 f32 QK^T scores
+.shared .align 16 .b8 p_tile[8192];   // 16x256 f16 softmax probs
+.shared .align 16 .b8 o_tile[4096];   // 16x64  f32 running O
+.shared .align 4  .b8 m_vec[64];      // 16 f32 running max
+.shared .align 4  .b8 l_vec[64];      // 16 f32 running sum
+.shared .align 4  .b8 c_vec[64];      // 16 f32 per-round correction
+
+.visible .entry flash_attn_wmma_mcta (
+    .param .u64 q_ptr,
+    .param .u64 k_ptr,
+    .param .u64 v_ptr,
+    .param .u64 o_ptr,
+    .param .u32 n_seq,
+    .param .f32 scale
+)
+{
+    .reg .pred  %p<8>;
+    .reg .b32   %r<64>;
+    .reg .f32   %f<48>;
+    .reg .b16   %h<4>;
+    .reg .b64   %rd<48>;
+    .reg .b32   %ra<8>;     // A fragment (Q or P)
+    .reg .b32   %rb<8>;     // B fragment (K or V)
+    .reg .f32   %fs<8>;     // S/PV accumulator
+    .reg .f32   %oa<8>;     // P.V output accumulator (one N-tile at a time)
+
+    ld.param.u64 %rd0, [q_ptr];
+    ld.param.u64 %rd1, [k_ptr];
+    ld.param.u64 %rd2, [v_ptr];
+    ld.param.u64 %rd3, [o_ptr];
+    ld.param.u32 %r0,  [n_seq];
+    ld.param.f32 %f40, [scale];
+
+    cvta.to.global.u64 %rd0, %rd0;
+    cvta.to.global.u64 %rd1, %rd1;
+    cvta.to.global.u64 %rd2, %rd2;
+    cvta.to.global.u64 %rd3, %rd3;
+
+    mov.u32 %r30, s_tile;
+    mov.u32 %r31, p_tile;
+    mov.u32 %r32, o_tile;
+    mov.u32 %r33, m_vec;
+    mov.u32 %r34, l_vec;
+    mov.u32 %r35, c_vec;
+
+    mov.u32 %r1, %tid.x;
+    and.b32 %r2, %r1, 31;          // lane 0..31
+
+    mov.u32 %r3, %ctaid.x;
+    shl.b32 %r4, %r3, 4;           // qrow_base = ctaid.x * 16
+
+    // &q[qrow_base][0]  (f16: row stride d=64 -> 128 bytes)
+    mul.wide.u32 %rd10, %r4, 128;
+    add.u64 %rd10, %rd0, %rd10;
+
+    // ---- init: m=-inf, l=0 (lanes 0..15); o_tile=0 (all 32 lanes) ----
+    setp.ge.u32 %p1, %r2, 16;
+    @%p1 bra $init_ml_skip;
+      shl.b32 %r5, %r2, 2;          // lane*4
+      add.u32 %r6, %r33, %r5;
+      mov.f32 %f1, 0fFF800000;      // -inf
+      st.shared.f32 [%r6], %f1;
+      add.u32 %r7, %r34, %r5;
+      mov.f32 %f2, 0f00000000;
+      st.shared.f32 [%r7], %f2;
+$init_ml_skip:
+    // zero o_tile (16*64 = 1024 f32 = 4096 B), strided by 32 lanes
+    mov.f32 %f2, 0f00000000;
+    shl.b32 %r10, %r2, 2;           // lane*4 (start byte)
+$ozero:
+    setp.ge.u32 %p2, %r10, 4096;
+    @%p2 bra $ozero_done;
+    add.u32 %r11, %r32, %r10;
+    st.shared.f32 [%r11], %f2;
+    add.u32 %r10, %r10, 128;        // stride 32 lanes * 4 bytes
+    bra $ozero;
+$ozero_done:
+    bar.sync 0;
+
+    // ---- stream over KV BLOCKS kb = 0 .. (N/256 - 1) ----
+    // n_blocks = N / 256 = N >> 8
+    shr.u32 %r12, %r0, 8;           // n_blocks
+    mov.u32 %r13, 0;               // kb
+$block_loop:
+    setp.ge.u32 %p1, %r13, %r12;
+    @%p1 bra $block_done;
+
+    // KV block base row = kb*256 ; byte offset = kb*256*128 = kb << 15
+    shl.b32 %r14, %r13, 15;         // krow_base_bytes = kb*256*128
+    mul.wide.u32 %rd11, %r14, 1;
+    add.u64 %rd12, %rd1, %rd11;     // &k[kb*256][0]
+    add.u64 %rd13, %rd2, %rd11;     // &v[kb*256][0]
+
+    // ============ QK^T (Tensor Core) for 16 key-subtiles -> s_tile[:, sub*16] =
+    // s_tile is 16x256 f32 (row stride 256). subtile sub occupies cols
+    // [sub*16 .. sub*16+15]; store with ldm=256 at byte offset sub*16*4=sub*64.
+    mov.u32 %r15, 0;               // sub (0..15)
+    mov.u64 %rd14, %rd12;          // &k for this subtile (advance 16 rows = 16*128=2048 B)
+$qk_subloop:
+    setp.ge.u32 %p2, %r15, 16;
+    @%p2 bra $qk_subdone;
+    // S subtile accumulator
+    mov.f32 %fs0, 0f00000000; mov.f32 %fs1, 0f00000000;
+    mov.f32 %fs2, 0f00000000; mov.f32 %fs3, 0f00000000;
+    mov.f32 %fs4, 0f00000000; mov.f32 %fs5, 0f00000000;
+    mov.f32 %fs6, 0f00000000; mov.f32 %fs7, 0f00000000;
+    // d-loop: 4 K-tiles of 16 (A=Q row, B=K col=K^T), stride 64
+    mov.u64 %rd20, %rd10;          // &q
+    mov.u64 %rd21, %rd14;          // &k subtile
+    mov.u32 %r16, 4;
+$qk_kloop:
+    setp.eq.u32 %p3, %r16, 0;
+    @%p3 bra $qk_kdone;
+    wmma.load.a.sync.aligned.row.m16n16k16.global.f16
+        {%ra0,%ra1,%ra2,%ra3,%ra4,%ra5,%ra6,%ra7}, [%rd20], 64;
+    wmma.load.b.sync.aligned.col.m16n16k16.global.f16
+        {%rb0,%rb1,%rb2,%rb3,%rb4,%rb5,%rb6,%rb7}, [%rd21], 64;
+    wmma.mma.sync.aligned.row.col.m16n16k16.f32.f32
+        {%fs0,%fs1,%fs2,%fs3,%fs4,%fs5,%fs6,%fs7},
+        {%ra0,%ra1,%ra2,%ra3,%ra4,%ra5,%ra6,%ra7},
+        {%rb0,%rb1,%rb2,%rb3,%rb4,%rb5,%rb6,%rb7},
+        {%fs0,%fs1,%fs2,%fs3,%fs4,%fs5,%fs6,%fs7};
+    add.u64 %rd20, %rd20, 32;
+    add.u64 %rd21, %rd21, 32;
+    sub.u32 %r16, %r16, 1;
+    bra $qk_kloop;
+$qk_kdone:
+    // scale
+    mul.f32 %fs0, %fs0, %f40; mul.f32 %fs1, %fs1, %f40;
+    mul.f32 %fs2, %fs2, %f40; mul.f32 %fs3, %fs3, %f40;
+    mul.f32 %fs4, %fs4, %f40; mul.f32 %fs5, %fs5, %f40;
+    mul.f32 %fs6, %fs6, %f40; mul.f32 %fs7, %fs7, %f40;
+    // store subtile to s_tile[:, sub*16] with ldm=256: dst = s_tile + sub*64
+    shl.b32 %r17, %r15, 6;          // sub*64 bytes
+    add.u32 %r18, %r30, %r17;
+    wmma.store.d.sync.aligned.row.m16n16k16.shared.f32
+        [%r18], {%fs0,%fs1,%fs2,%fs3,%fs4,%fs5,%fs6,%fs7}, 256;
+    // advance k subtile by 16 rows (16*128 = 2048 bytes)
+    add.u64 %rd14, %rd14, 2048;
+    add.u32 %r15, %r15, 1;
+    bra $qk_subloop;
+$qk_subdone:
+    bar.sync 0;
+
+    // ============ ONLINE SOFTMAX over the BK=256-wide S row ============
+    // lanes 0..15 each own one query row i. S row i base = s_tile + i*256*4
+    setp.ge.u32 %p3, %r2, 16;
+    @%p3 bra $sm_skip;
+      mul.lo.u32 %r19, %r2, 1024;   // row byte offset (256 f32 = 1024 B)
+      add.u32 %r20, %r30, %r19;      // &S[i][0]
+      // s_max over 256 cols
+      mov.f32 %f3, 0fFF800000;
+      mov.u32 %r21, 0;
+$smax:
+      setp.ge.u32 %p4, %r21, 1024;
+      @%p4 bra $smax_done;
+      add.u32 %r22, %r20, %r21;
+      ld.shared.f32 %f4, [%r22];
+      max.f32 %f3, %f3, %f4;
+      add.u32 %r21, %r21, 4;
+      bra $smax;
+$smax_done:
+      shl.b32 %r23, %r2, 2;          // i*4
+      add.u32 %r24, %r33, %r23;      // &m_vec[i]
+      ld.shared.f32 %f5, [%r24];     // m_prev
+      max.f32 %f6, %f5, %f3;         // m_new
+      // c = exp(m_prev - m_new) via ex2.approx ; log2(e)=0f3FB8AA3B
+      sub.f32 %f7, %f5, %f6;
+      mov.f32 %f8, 0f3FB8AA3B;
+      mul.f32 %f9, %f7, %f8;
+      ex2.approx.f32 %f10, %f9;      // c
+      add.u32 %r25, %r35, %r23;      // &c_vec[i]
+      st.shared.f32 [%r25], %f10;
+      // p_j = exp(s_ij - m_new); row_sum; write p_j f16 to p_tile row i
+      // p_tile row i base = i*256*2 = i*512 bytes
+      mul.lo.u32 %r26, %r2, 512;
+      add.u32 %r27, %r31, %r26;      // &P[i][0] (f16)
+      mov.f32 %f11, 0f00000000;      // row_sum
+      mov.u32 %r21, 0;              // S col byte offset (0..1020)
+      mov.u32 %r28, 0;              // P col byte offset (0..510)
+$pexp:
+      setp.ge.u32 %p4, %r21, 1024;
+      @%p4 bra $pexp_done;
+      add.u32 %r22, %r20, %r21;
+      ld.shared.f32 %f4, [%r22];     // s_ij
+      sub.f32 %f12, %f4, %f6;
+      mul.f32 %f13, %f12, %f8;
+      ex2.approx.f32 %f14, %f13;     // p_ij
+      add.f32 %f11, %f11, %f14;
+      cvt.rn.f16.f32 %h0, %f14;
+      add.u32 %r29, %r27, %r28;
+      st.shared.b16 [%r29], %h0;
+      add.u32 %r21, %r21, 4;
+      add.u32 %r28, %r28, 2;
+      bra $pexp;
+$pexp_done:
+      // l_new = l_prev * c + row_sum
+      add.u32 %r36, %r34, %r23;      // &l_vec[i]
+      ld.shared.f32 %f15, [%r36];
+      fma.rn.f32 %f16, %f15, %f10, %f11;
+      st.shared.f32 [%r36], %f16;
+      st.shared.f32 [%r24], %f6;     // m_vec[i] = m_new
+$sm_skip:
+    bar.sync 0;
+
+    // ============ rescale running O by c (all 32 lanes over 16*64 f32) =====
+    // O[idx] *= c_vec[idx/64].  idx in elements 0..1023; byte = idx*4.
+    shl.b32 %r10, %r2, 2;           // lane*4 start byte
+$orescale:
+    setp.ge.u32 %p4, %r10, 4096;
+    @%p4 bra $orescale_done;
+    // row = byte/256 ; c_vec[row] at row*4
+    shr.u32 %r37, %r10, 8;          // byte/256 = row
+    shl.b32 %r38, %r37, 2;          // row*4
+    add.u32 %r39, %r35, %r38;
+    ld.shared.f32 %f10, [%r39];     // c
+    add.u32 %r11, %r32, %r10;
+    ld.shared.f32 %f17, [%r11];
+    mul.f32 %f17, %f17, %f10;
+    st.shared.f32 [%r11], %f17;
+    add.u32 %r10, %r10, 128;        // stride 32 lanes
+    bra $orescale;
+$orescale_done:
+    bar.sync 0;
+
+    // ============ P.V (Tensor Core) + add to O tile ============
+    // O_partial[16x64] = P[16x256] . V[256x64], summed over 16 key-subtiles.
+    // For each of 4 output N-tiles t (cols [t*16..]), sum 16 wmma over subtiles.
+    // A = P subtile (shared, row f16, ldm=256) ; B = V subtile (global, row f16, ldm=64).
+    mov.u32 %r40, 0;               // t (0..3)
+$pv_tloop:
+    setp.ge.u32 %p5, %r40, 4;
+    @%p5 bra $pv_tdone;
+    // zero O-partial accumulator
+    mov.f32 %oa0, 0f00000000; mov.f32 %oa1, 0f00000000;
+    mov.f32 %oa2, 0f00000000; mov.f32 %oa3, 0f00000000;
+    mov.f32 %oa4, 0f00000000; mov.f32 %oa5, 0f00000000;
+    mov.f32 %oa6, 0f00000000; mov.f32 %oa7, 0f00000000;
+    // V N-tile col base byte = t*16*2 = t*32 within each V row
+    shl.b32 %r41, %r40, 5;          // t*32
+    // sum over 16 key-subtiles
+    mov.u32 %r42, 0;               // sub
+    // P subtile base byte = sub*16*2 = sub*32 (col offset, ldm=256)
+    // V subtile base = &v[kb*256][0] + sub*16*128 (row) + t*32 (col)
+    mov.u64 %rd15, %rd13;          // &v block base
+    cvt.u64.u32 %rd16, %r41;       // t*32 col offset -> 64-bit
+    add.u64 %rd15, %rd15, %rd16;   // + t*32 col offset
+$pv_subloop:
+    setp.ge.u32 %p6, %r42, 16;
+    @%p6 bra $pv_subdone;
+    // P A-fragment: p_tile + sub*32 byte col, ldm=256
+    shl.b32 %r43, %r42, 5;          // sub*32
+    add.u32 %r44, %r31, %r43;
+    wmma.load.a.sync.aligned.row.m16n16k16.shared.f16
+        {%ra0,%ra1,%ra2,%ra3,%ra4,%ra5,%ra6,%ra7}, [%r44], 256;
+    // V B-fragment: &v block + sub*2048 (row) + t*32 (col), ldm=64
+    wmma.load.b.sync.aligned.row.m16n16k16.global.f16
+        {%rb0,%rb1,%rb2,%rb3,%rb4,%rb5,%rb6,%rb7}, [%rd15], 64;
+    wmma.mma.sync.aligned.row.row.m16n16k16.f32.f32
+        {%oa0,%oa1,%oa2,%oa3,%oa4,%oa5,%oa6,%oa7},
+        {%ra0,%ra1,%ra2,%ra3,%ra4,%ra5,%ra6,%ra7},
+        {%rb0,%rb1,%rb2,%rb3,%rb4,%rb5,%rb6,%rb7},
+        {%oa0,%oa1,%oa2,%oa3,%oa4,%oa5,%oa6,%oa7};
+    add.u64 %rd15, %rd15, 2048;     // next V subtile row (+16 rows)
+    add.u32 %r42, %r42, 1;
+    bra $pv_subloop;
+$pv_subdone:
+    // store O-partial to s_tile (reuse, ldm=256), then lanes add into o_tile
+    wmma.store.d.sync.aligned.row.m16n16k16.shared.f32
+        [%r30], {%oa0,%oa1,%oa2,%oa3,%oa4,%oa5,%oa6,%oa7}, 256;
+    bar.sync 0;
+    // lanes 0..15 add s_tile row i cols[0..15] into o_tile row i cols[t*16..]
+    setp.ge.u32 %p3, %r2, 16;
+    @%p3 bra $pv_addskip;
+      mul.lo.u32 %r19, %r2, 1024;   // s_tile row byte (ldm=256 -> 1024 B/row)
+      add.u32 %r20, %r30, %r19;
+      mul.lo.u32 %r45, %r2, 256;     // o_tile row byte (64 f32 = 256 B/row)
+      add.u32 %r46, %r32, %r45;
+      shl.b32 %r47, %r40, 6;         // t*64 (t*16 cols * 4 bytes)
+      add.u32 %r46, %r46, %r47;
+      mov.u32 %r21, 0;
+$pv_add:
+      setp.ge.u32 %p4, %r21, 64;     // 16 f32
+      @%p4 bra $pv_adddone;
+      add.u32 %r22, %r20, %r21;
+      ld.shared.f32 %f18, [%r22];
+      add.u32 %r48, %r46, %r21;
+      ld.shared.f32 %f19, [%r48];
+      add.f32 %f19, %f19, %f18;
+      st.shared.f32 [%r48], %f19;
+      add.u32 %r21, %r21, 4;
+      bra $pv_add;
+$pv_adddone:
+$pv_addskip:
+    bar.sync 0;
+    add.u32 %r40, %r40, 1;
+    bra $pv_tloop;
+$pv_tdone:
+
+    add.u32 %r13, %r13, 1;
+    bra $block_loop;
+$block_done:
+
+    // ============ FINALIZE: O[i][:] = o_tile[i][:] / l[i] ============
+    setp.ge.u32 %p3, %r2, 16;
+    @%p3 bra $fin_skip;
+      shl.b32 %r23, %r2, 2;
+      add.u32 %r36, %r34, %r23;      // &l_vec[i]
+      ld.shared.f32 %f16, [%r36];
+      rcp.rn.f32 %f20, %f16;
+      mul.lo.u32 %r45, %r2, 256;     // o_tile row byte
+      add.u32 %r46, %r32, %r45;
+      add.u32 %r49, %r4, %r2;        // global row = qrow_base + i
+      setp.ge.u32 %p7, %r49, %r0;
+      @%p7 bra $fin_skip;
+      mul.wide.u32 %rd30, %r49, 128;
+      add.u64 %rd31, %rd3, %rd30;    // &o_global[row][0]
+      mov.u32 %r21, 0;              // src f32 byte (0..252)
+      mov.u32 %r50, 0;              // dst f16 byte (0..126)
+$fin:
+      setp.ge.u32 %p4, %r21, 256;
+      @%p4 bra $fin_done;
+      add.u32 %r48, %r46, %r21;
+      ld.shared.f32 %f17, [%r48];
+      mul.f32 %f17, %f17, %f20;
+      cvt.rn.f16.f32 %h0, %f17;
+      cvt.u64.u32 %rd32, %r50;
+      add.u64 %rd33, %rd31, %rd32;
+      st.global.b16 [%rd33], %h0;
+      add.u32 %r21, %r21, 4;
+      add.u32 %r50, %r50, 2;
+      bra $fin;
+$fin_done:
+$fin_skip:
+    ret;
+}

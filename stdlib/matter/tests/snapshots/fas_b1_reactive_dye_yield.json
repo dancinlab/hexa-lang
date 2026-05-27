@@ -1,0 +1,27 @@
+{
+  "__fixture_tag__": "VENDORED SOURCE SNAPSHOT — frozen citation, not live data",
+  "gate_id": "fas_b1_reactive_dye_yield",
+  "claim": {
+    "property": "reactive dye covalent yield on cellulose",
+    "material": "Procion / Drimarene / Remazol-class reactive dye on cotton cellulose",
+    "yield_pct_min": 60,
+    "unit": "percent",
+    "condition": "60 C, pH 11 (Na2CO3 alkali fixation); Soxhlet wash-off + UV-Vis residual absorbance; n >= 3 swatches"
+  },
+  "source": {
+    "kind": "ISO_STANDARD_PLUS_INDUSTRY",
+    "primary": "ISO 105-X12 — colorfastness to rubbing (crocking) test method for reactive-dyed fabrics",
+    "secondary": "ICI Procion-H technical manual (industrial reactive-dye fixation envelope); Aspland J.R. 1997 'Textile Dyeing and Coloration', AATCC",
+    "citation": "ISO 105-X12 + ICI Procion-H + Aspland 1997 — reactive dye covalent yield >= 60 % on cellulose at 60 C, pH 11"
+  },
+  "tolerance": {
+    "min_threshold_pct": 60,
+    "basis": "industrial reactive-dye envelope: covalent yield must be >= 60 % at 60 C / pH 11 to qualify as reactive-grade; < 50 % retires the claim"
+  },
+  "spec_doc": {
+    "path": "hexa-fashion/fashion-architecture.md",
+    "line_hint": "§3.1 Reactive dye block: F-FAS-Q1 falsifier '>= 60 % on cellulose at 60 C, pH 11'"
+  },
+  "accessed": "2026-05-13",
+  "n6_lattice_fit_applied": false
+}

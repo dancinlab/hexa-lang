@@ -1,0 +1,227 @@
+// HEXA Native Compiler — Atlas falsifier accessor + cascade query
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// ATLAS R5 milestone: "falsifier 구조화 필드 + cascade 무효화".
+//
+// DESIGN (additive, behaviour-preserving — see ATLAS.log.md):
+//   hexa struct literals do NOT default missing fields (the codegen emits a
+//   `hexa_codegen_error__missing_field__*` deliberate compile error), so a
+//   new field on `AtlasNode` would force a rewrite of all ~16 k node literals
+//   in compiler/atlas/embedded.gen.hexa (the frozen data SSOT). That is the
+//   broad-impact breakage the milestone was warned against. Instead we treat
+//   the falsifier as a STRUCTURED ACCESSOR over the node's existing `raw`
+//   text: 427 corpus nodes already carry a `falsifier:` continuation line
+//   (the form `compiler/atlas/falsifier_wellformed_audit.hexa` already
+//   audits). `node_falsifier` gives that clause a typed surface without any
+//   schema change — every existing node still parses byte-identically.
+//
+//   CASCADE INVALIDATION reuses the EXISTING edge model. A node B "cites"
+//   node A through B's `<-` (depends_on), `|>` (verified_by), `==`
+//   (equivalents) or `->` (derives) edges (already parsed into
+//   `EdgeInfo` by compiler/atlas/parser.hexa). When A is hypothetically
+//   falsified, every B that cites A is a CASCADE CANDIDATE — a node whose
+//   claim leaned on A and should be re-examined. This is a READ-ONLY query:
+//   it lists candidates, it does NOT tombstone, mutate, or PR anything (that
+//   heavyweight RFC-017 §5e machinery lives RETIRED in
+//   compiler/discover/cascade.hexa + tombstone.hexa and is intentionally out
+//   of scope here).
+//
+// PUBLIC SURFACE
+//   pub fn node_falsifier(node) -> string         // "" when absent
+//   pub fn node_has_falsifier(node) -> bool
+//   pub struct CascadeHit { id, kind, via }
+//   pub fn cascade_candidates(falsified_id, nodes) -> CascadeHit[]
+//   pub fn cascade_candidates_static(falsified_id) -> CascadeHit[]
+//   pub fn cascade_to_text(falsified_id, hits) -> string
+//
+// Catalog/diagnostic strings: ENGLISH ONLY (repo policy).
+
+use "compiler/atlas/parser"
+use "compiler/atlas/static_index"
+
+// --- tiny string helpers (standalone; mirror parser.hexa conventions) ------
+
+fn _is_ws_cas(c: string) -> bool {
+    return c == " " || c == "\t"
+}
+
+fn _ltrim_cas(s: string) -> string {
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if !_is_ws_cas(c) { break }
+        i = i + 1
+    }
+    return s.substring(i, n)
+}
+
+fn _rtrim_cas(s: string) -> string {
+    let n = len(s)
+    let mut i = n
+    while i > 0 {
+        let c = s.substring(i - 1, i)
+        if !_is_ws_cas(c) { break }
+        i = i - 1
+    }
+    return s.substring(0, i)
+}
+
+fn _trim_cas(s: string) -> string {
+    return _rtrim_cas(_ltrim_cas(s))
+}
+
+fn _starts_with_cas(s: string, prefix: string) -> bool {
+    let m = len(prefix)
+    if len(s) < m { return false }
+    return s.substring(0, m) == prefix
+}
+
+// --- structured falsifier accessor -----------------------------------------
+
+// node_falsifier — extract the falsifier clause from a node's raw text.
+//
+// Recognized grammar (first hit wins, scanned over continuation lines):
+//   falsifier: <clause>
+//   falsifier = <clause>
+//   falsifier=<clause>
+//   "falsifier: <clause>"          (inside a quoted-prose continuation)
+//
+// The clause is everything after the `falsifier` key on its line, trimmed,
+// with a trailing closing quote stripped when the line was a quoted-prose
+// continuation. Returns "" when the node carries no falsifier — additive:
+// the 99%+ of corpus nodes without one are unaffected.
+pub fn node_falsifier(node: AtlasNode) -> string {
+    let raw = node.raw
+    if len(raw) == 0 { return "" }
+    let lines = raw.split("\n")
+    let n = len(lines)
+    // Skip the header line (i = 0); falsifiers live in continuations.
+    let mut i = 1
+    while i < n {
+        let line = to_string(lines[i])
+        // Strip a leading quote (quoted-prose continuation) before keying.
+        let s0 = _ltrim_cas(line)
+        let s = if len(s0) > 0 && s0.substring(0, 1) == "\"" {
+            _ltrim_cas(s0.substring(1, len(s0)))
+        } else {
+            s0
+        }
+        let mut key_len = -1
+        if _starts_with_cas(s, "falsifier:") { key_len = len("falsifier:") }
+        else if _starts_with_cas(s, "falsifier =") { key_len = len("falsifier =") }
+        else if _starts_with_cas(s, "falsifier=") { key_len = len("falsifier=") }
+        if key_len >= 0 {
+            let mut body = _trim_cas(s.substring(key_len, len(s)))
+            // Strip a single trailing quote left from a quoted-prose wrap.
+            let bn = len(body)
+            if bn > 0 && body.substring(bn - 1, bn) == "\"" {
+                body = _rtrim_cas(body.substring(0, bn - 1))
+            }
+            return body
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// node_has_falsifier — predicate form of node_falsifier.
+pub fn node_has_falsifier(node: AtlasNode) -> bool {
+    return len(node_falsifier(node)) > 0
+}
+
+// --- cascade query ---------------------------------------------------------
+
+// A node that cites the (hypothetically) falsified node. `via` records WHICH
+// edge bucket carried the citation so a caller can rank candidates (a
+// `verified_by` cite is a stronger dependency than a loose `==` equivalent).
+pub struct CascadeHit {
+    id: string,        // the citing node's id
+    kind: string,      // the citing node's kind code ("P"|"C"|"L"|...)
+    via: string        // "depends_on" | "derives" | "equivalents" | "verified_by"
+}
+
+// _arr_has — does `arr` (string[]) contain exactly `target`?
+fn _arr_has(arr: array, target: string) -> bool {
+    let mut i = 0
+    while i < len(arr) {
+        if to_string(arr[i]) == target { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// _scan_one — classify how (if at all) `node` cites `falsified_id`, returning
+// the first matching edge bucket name or "" (no citation). Probe order is
+// strongest-dependency-first: depends_on, verified_by, equivalents, derives.
+fn _scan_one(node: AtlasNode, falsified_id: string) -> string {
+    let e = node.edges
+    if _arr_has(e.depends_on, falsified_id) { return "depends_on" }
+    if _arr_has(e.verified_by, falsified_id) { return "verified_by" }
+    if _arr_has(e.equivalents, falsified_id) { return "equivalents" }
+    if _arr_has(e.derives, falsified_id) { return "derives" }
+    return ""
+}
+
+// cascade_candidates — given a falsified node id and a node array, return the
+// CascadeHits for every OTHER node that cites it via a structured edge. The
+// caller is responsible for enriching nodes first (rodata embed nodes carry
+// their edges already; freshly parsed ones do too). Pure / read-only — no
+// mutation, no tombstone, no I/O.
+pub fn cascade_candidates(falsified_id: string, nodes: array) -> array {
+    let out = []
+    if len(falsified_id) == 0 { return out }
+    let mut i = 0
+    while i < len(nodes) {
+        let node = nodes[i]
+        // Never let a node cascade onto itself.
+        if node.id != falsified_id {
+            let via = _scan_one(node, falsified_id)
+            if via != "" {
+                out.push(CascadeHit { id: node.id, kind: node.kind, via: via })
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// cascade_candidates_static — convenience wrapper over the binary built-in
+// atlas. Enriches each rodata node (backfills grade/edges from `raw`) then
+// runs cascade_candidates. The falsified id is HYPOTHETICAL — this query
+// never falsifies the node itself; it only reports who would be affected.
+pub fn cascade_candidates_static(falsified_id: string) -> array {
+    let all = atlas_list()
+    let enriched = []
+    let mut i = 0
+    while i < len(all) {
+        enriched.push(atlas_enrich(all[i]))
+        i = i + 1
+    }
+    return cascade_candidates(falsified_id, enriched)
+}
+
+// cascade_to_text — human-readable rendering of a cascade query result.
+pub fn cascade_to_text(falsified_id: string, hits: array) -> string {
+    let parts = []
+    parts.push("cascade: if ")
+    parts.push(falsified_id)
+    parts.push(" were FALSIFIED, ")
+    parts.push(to_string(len(hits)))
+    parts.push(" node(s) cite it:\n")
+    let mut i = 0
+    while i < len(hits) {
+        let h = hits[i]
+        parts.push("  [")
+        parts.push(h.kind)
+        parts.push("] ")
+        parts.push(h.id)
+        parts.push("  (via ")
+        parts.push(h.via)
+        parts.push(")\n")
+        i = i + 1
+    }
+    return parts.join("")
+}

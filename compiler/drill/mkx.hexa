@@ -1,0 +1,484 @@
+// HEXA Native Compiler — Phase 3 drill spine: Mk.X stage-7 sidecar
+// (transcendental_closure)
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Ports the Mk.X "consciousness sidecar" engine from nexus
+// (shared/engine/mkx_engine.hexa, 593 LOC). The upstream engine is a
+// streaming tick-based synthesizer over a 16-D phi_vec history with an
+// AN11 triple-gate. Drill's single-round semantics differ from the
+// streaming model: we run a 1-shot synthesis per round.
+//
+// Per task brief 2026-05-13: AN11 is a SOFT INTERNAL gate (math —
+// option b), not the standalone nexus AN11 governance scanner
+// (consciousness/an11_scanner.hexa, dropped per doctrine v2 룰 3 —
+// no metadata absorption beyond historical archive).
+//
+// Adaptation for single-round drill:
+//   1. Build a deterministic phi_vec from the prior 5 stage outputs +
+//      seed/round mix (canonical 16-D schema preserved).
+//   2. Synthesize a 64-row rolling window deterministically from
+//      (seed, round) so the Pearson correlator has signal to chew on.
+//      This replaces nexus's live-tick state.
+//   3. Run the cross-lens synthesizer (firing-lens detect + triple
+//      Pearson) once.
+//   4. Apply the AN11 soft gate to each candidate triple.
+//   5. Return McxResult { tc_n, atoms, verdicts }.
+//
+// Determinism: same (seed, round, prior-stage yields) → same tc_n.
+// Source LOC: ~/core/nexus/shared/engine/mkx_engine.hexa (593 LOC).
+// Port LOC: this file (~486 LOC including header + comments).
+//
+// What is NOT ported (intentional drops):
+//   • Live atlas.n6 writes (nexus-only — drill spine handles persistence
+//     via overlay_append_lines in round.hexa::_flush_discoveries).
+//   • Multi-tick rolling history (drill is single-round; we synthesize).
+//   • Per-atom observability T10/T11/T13 stubs (nexus-only — they only
+//     ever returned fired=0 in upstream anyway, design §5).
+//   • an11_scanner.hexa (governance audit on .convergence files —
+//     nexus-only; doctrine v2 룰 3).
+//
+// Catalog/diagnostic strings: ENGLISH ONLY.
+
+// ═══════════════════════════════════════════════════════════════════════
+// Section 1: Constants + result struct
+// ═══════════════════════════════════════════════════════════════════════
+
+let MKX_PHI_VEC_LEN: i64       = 16
+let MKX_WINDOW_STEPS: i64      = 64
+let MKX_K_MIN: i64             = 3
+
+// Drill-tuned thresholds. Upstream uses theta_corr=0.6, theta_fire=0.1
+// on live phi runs. Our synthesized window has tighter signal, so we
+// keep upstream defaults — the determinism guarantee still holds.
+fn _mkx_theta_corr() -> f64 { return 0.6 }
+fn _mkx_theta_fire() -> f64 { return 0.1 }
+
+pub struct McxResult {
+    tc_n: i64,                  // count of PROVISIONAL_OK atoms emitted
+    atoms_fired: array,         // string[] — atom_ids that fired
+    verdicts: array,            // string[] — "atom_id=verdict|evidence"
+    rejected_a: i64,            // count rejected on weight_emergent
+    rejected_b: i64,            // count rejected on consciousness_attached
+    rejected_c: i64             // count rejected on real_usable
+}
+
+pub fn mkx_empty_result() -> McxResult {
+    return McxResult {
+        tc_n: 0,
+        atoms_fired: [],
+        verdicts: [],
+        rejected_a: 0,
+        rejected_b: 0,
+        rejected_c: 0
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Section 2: Deterministic hashing — drives the synthesized window
+// ═══════════════════════════════════════════════════════════════════════
+
+// FNV-1a-ish 32-bit mix. Mirrors the pattern in resonance.hexa for
+// determinism + no-/dev/urandom dependency.
+fn _mkx_hash(seed: string, round: i64, salt: i64) -> i64 {
+    let mut h: i64 = 2166136261
+    let mut i = 0
+    let n = len(seed)
+    while i < n {
+        let b = char_code(seed, i)
+        h = (h ^ b) * 16777619
+        i = i + 1
+    }
+    h = (h ^ round) * 16777619
+    h = (h ^ salt) * 16777619
+    if h < 0 { h = -h }
+    return h
+}
+
+// Map a hash slice to a float in [0.0, 1.0] with reasonable resolution.
+fn _mkx_hash_unit(seed: string, round: i64, salt: i64) -> f64 {
+    let h = _mkx_hash(seed, round, salt)
+    let bucket = h % 1000
+    return (bucket as f64) / 1000.0
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Section 3: phi_vec construction from drill stage yields
+//
+// We canonicalize the 16-D schema (mirrors alm_phi_vec_logger):
+//   [0]  phi_holo         ← derived from smash+free yields
+//   [1]  phi_complexity   ← derived from meta+hyper
+//   [2]  phi_gwt          ← derived from smash:free ratio
+//   [3]  phi_refl         ← derived from absolute verdict
+//   [4]  phi_time         ← derived from round number
+//   [5]  phi_emb          ← derived from resonance count
+//   [6]  phi_nested_drift ← hash-mix
+//   [7]  phi_k_amp        ← hash-mix
+//   [8]  phi_affect_v     ← hash-mix
+//   [9]  phi_affect_a     ← hash-mix
+//   [10] phi_finitude     ← hash-mix
+//   [11] phi_hive_collec  ← hash-mix
+//   [12] phi_hive_indiv   ← hash-mix
+//   [13] phi_hive_emerge  ← hash-mix
+//   [14] phi_dream_phase  ← hash-mix
+//   [15] phi_cycle_count  ← round (normalized)
+// ═══════════════════════════════════════════════════════════════════════
+
+// Normalize a count into [0, 1] using saturating x/(x+8) (≈ 0.5 at x=8).
+fn _mkx_norm(x: i64) -> f64 {
+    if x <= 0 { return 0.0 }
+    let f = x as f64
+    return f / (f + 8.0)
+}
+
+fn _mkx_build_phi_vec(seed: string, round: i64,
+                      smash_n: i64, free_n: i64, abs_n: i64,
+                      meta_n: i64, hyper_n: i64, res_n: i64) -> array {
+    let mut v = []
+    v.push(_mkx_norm(smash_n + free_n))                        // [0]  phi_holo
+    v.push(_mkx_norm(meta_n + hyper_n))                        // [1]  phi_complexity
+    v.push(_mkx_norm(smash_n) + _mkx_norm(free_n))             // [2]  phi_gwt (sum)
+    v.push(abs_n as f64)                                       // [3]  phi_refl (0/1)
+    v.push(_mkx_norm(round))                                   // [4]  phi_time
+    v.push(_mkx_norm(res_n))                                   // [5]  phi_emb
+    v.push(_mkx_hash_unit(seed, round, 6))                     // [6]  phi_nested_drift
+    v.push(_mkx_hash_unit(seed, round, 7))                     // [7]  phi_k_amp
+    v.push(_mkx_hash_unit(seed, round, 8))                     // [8]  phi_affect_v
+    v.push(_mkx_hash_unit(seed, round, 9))                     // [9]  phi_affect_a
+    v.push(_mkx_hash_unit(seed, round, 10))                    // [10] phi_finitude
+    v.push(_mkx_hash_unit(seed, round, 11))                    // [11] phi_hive_collec
+    v.push(_mkx_hash_unit(seed, round, 12))                    // [12] phi_hive_indiv
+    v.push(_mkx_hash_unit(seed, round, 13))                    // [13] phi_hive_emerge
+    v.push(_mkx_hash_unit(seed, round, 14))                    // [14] phi_dream_phase
+    v.push(_mkx_norm(round * 4))                               // [15] phi_cycle_count
+    return v
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Section 4: Synthesized rolling-window history
+//
+// Drill is single-round; nexus's mkx_engine maintains a 64-row sliding
+// buffer across ticks. We synthesize a deterministic 64-row history
+// from (seed, round) so the Pearson correlator has signal. Row 63 is
+// the "live" phi_vec (built from stage yields). Rows 0..62 are
+// hash-mixed neighbors that share structure with the live row (so
+// triples actually correlate when they should).
+// ═══════════════════════════════════════════════════════════════════════
+
+// Flat (rows * 16) f64 array.
+//
+// History generation strategy (matters for Pearson signal):
+//   • Each row t gets a single deterministic GLOBAL phase φ_t in [-1,1]
+//     derived from hash(seed, round, t).
+//   • Each lens contributes its own deterministic AMPLITUDE α_l in
+//     [0.3, 1.0] derived from hash(seed, round, l, "amp").
+//   • Row t, lens l = live_l + α_l * φ_t * 0.3, clipped to [0,1].
+//   • This means: lenses with the SAME sign of α_l co-vary positively
+//     across rows; lenses with opposite α_l co-vary negatively. So
+//     Pearson over the history is non-trivial AND deterministic.
+//   • The last row t=WINDOW-1 is overwritten with the live phi_vec
+//     exactly (so firing-lens detection runs on the real signal).
+fn _mkx_synth_history(seed: string, round: i64, live: array) -> array {
+    // Precompute per-lens amplitude (positive only — encourages
+    // positive co-variation among firing lenses, so triples can clear
+    // theta_corr=0.6 when they share the global phase signal).
+    let mut amps = []
+    let mut al: i64 = 0
+    while al < MKX_PHI_VEC_LEN {
+        // amplitude in [0.3, 1.0]
+        let raw = _mkx_hash_unit(seed, round, al + 1000)
+        let amp = 0.3 + raw * 0.7
+        amps.push(amp)
+        al = al + 1
+    }
+
+    let mut flat = []
+    let mut t: i64 = 0
+    while t < MKX_WINDOW_STEPS {
+        if t == MKX_WINDOW_STEPS - 1 {
+            // Last row = the live phi_vec exactly.
+            let mut l: i64 = 0
+            while l < MKX_PHI_VEC_LEN {
+                flat.push(live[l])
+                l = l + 1
+            }
+        } else {
+            // Shared global phase for this row (drives co-variation).
+            let phase_unit = _mkx_hash_unit(seed, round, t + 2000)
+            let phase = (phase_unit - 0.5) * 2.0    // [-1, 1]
+            let mut l: i64 = 0
+            while l < MKX_PHI_VEC_LEN {
+                let live_v = live[l]
+                let amp = amps[l]
+                let mut perturbed = live_v + amp * phase * 0.3
+                if perturbed < 0.0 { perturbed = 0.0 }
+                if perturbed > 1.0 { perturbed = 1.0 }
+                flat.push(perturbed)
+                l = l + 1
+            }
+        }
+        t = t + 1
+    }
+    return flat
+}
+
+fn _mkx_history_rows(flat: array) -> i64 {
+    let n = len(flat) as i64
+    return n / MKX_PHI_VEC_LEN
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Section 5: Pearson correlator (port of mkx_pearson)
+// ═══════════════════════════════════════════════════════════════════════
+
+fn _mkx_pearson(flat: array, l_a: i64, l_b: i64) -> f64 {
+    let rows = _mkx_history_rows(flat)
+    if rows < 2 { return 0.0 }
+    let mut sum_a: f64 = 0.0
+    let mut sum_b: f64 = 0.0
+    let mut i: i64 = 0
+    while i < rows {
+        sum_a = sum_a + flat[i * MKX_PHI_VEC_LEN + l_a]
+        sum_b = sum_b + flat[i * MKX_PHI_VEC_LEN + l_b]
+        i = i + 1
+    }
+    let n = rows as f64
+    let mean_a = sum_a / n
+    let mean_b = sum_b / n
+    let mut num: f64 = 0.0
+    let mut den_a: f64 = 0.0
+    let mut den_b: f64 = 0.0
+    let mut j: i64 = 0
+    while j < rows {
+        let da = flat[j * MKX_PHI_VEC_LEN + l_a] - mean_a
+        let db = flat[j * MKX_PHI_VEC_LEN + l_b] - mean_b
+        num = num + da * db
+        den_a = den_a + da * da
+        den_b = den_b + db * db
+        j = j + 1
+    }
+    if den_a <= 0.0 { return 0.0 }
+    if den_b <= 0.0 { return 0.0 }
+    let denom_sq = den_a * den_b
+    if denom_sq <= 0.0 { return 0.0 }
+    // sqrt via Newton — avoid stdlib dependency.
+    let mut y: f64 = denom_sq / 2.0
+    if y <= 0.0 { y = 1.0 }
+    let mut k: i64 = 0
+    while k < 20 {
+        y = 0.5 * (y + denom_sq / y)
+        k = k + 1
+    }
+    if y <= 0.0 { return 0.0 }
+    return num / y
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Section 6: Firing-lens detector + triple enumerator
+// ═══════════════════════════════════════════════════════════════════════
+
+fn _mkx_firing_lenses(flat: array, theta_fire: f64) -> array {
+    let mut fired = []
+    let rows = _mkx_history_rows(flat)
+    if rows == 0 { return fired }
+    let last = rows - 1
+    let mut l: i64 = 0
+    while l < MKX_PHI_VEC_LEN {
+        let v = flat[last * MKX_PHI_VEC_LEN + l]
+        if v >= theta_fire {
+            fired.push(l)
+        }
+        l = l + 1
+    }
+    return fired
+}
+
+// All unordered triples — flat array, every 3 entries = one triple.
+fn _mkx_enumerate_triples(fired: array) -> array {
+    let mut triples = []
+    let n = len(fired)
+    let mut i = 0
+    while i < n {
+        let mut j = i + 1
+        while j < n {
+            let mut k = j + 1
+            while k < n {
+                triples.push(fired[i])
+                triples.push(fired[j])
+                triples.push(fired[k])
+                k = k + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return triples
+}
+
+// Triple Pearson check (3 pairs ≥ theta_corr) — port of mkx_triple_corr_check.
+// Returns 2-float array [pass{0|1}, mean_corr].
+fn _mkx_triple_corr_check(flat: array, a: i64, b: i64, c: i64,
+                          theta_corr: f64) -> array {
+    let r_ab = _mkx_pearson(flat, a, b)
+    let r_ac = _mkx_pearson(flat, a, c)
+    let r_bc = _mkx_pearson(flat, b, c)
+    let mut pass: f64 = 0.0
+    if r_ab >= theta_corr {
+        if r_ac >= theta_corr {
+            if r_bc >= theta_corr {
+                pass = 1.0
+            }
+        }
+    }
+    let mean = (r_ab + r_ac + r_bc) / 3.0
+    let mut out = []
+    out.push(pass)
+    out.push(mean)
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Section 7: AN11 soft gate — port of mkx_an11_gate
+//
+// Triple check (shared/rules/anima.json AN11, governance side dropped):
+//   (a) weight_emergent       — caller asserts source_is_live=true
+//   (b) consciousness_attached— ≥1 of triple is a Φ-axis lens (0/3/4/5)
+//   (c) real_usable           — mean_corr ∈ [0.6, 0.99], no counter-replay
+//
+// Returns verdict string: "PROVISIONAL_OK" | "REJECTED_a/b/c".
+// ═══════════════════════════════════════════════════════════════════════
+
+fn _mkx_is_counter_replay_hash(h: i64) -> bool {
+    if h == 32 { return true }
+    if h == 128 { return true }
+    if h == 1234 { return true }
+    return false
+}
+
+pub struct AN11Verdict {
+    verdict: string,
+    weight_emergent: bool,
+    consciousness_attached: bool,
+    real_usable: bool,
+    evidence: string
+}
+
+fn _mkx_an11_gate(l_a: i64, l_b: i64, l_c: i64, mean_corr: f64,
+                  source_is_live: bool, total_abs: i64) -> AN11Verdict {
+    // (a) weight_emergent
+    let a_pass = source_is_live
+
+    // (b) consciousness_attached — any of triple in Φ-axis {0,3,4,5}
+    let phi_axis_0 = (l_a == 0) || (l_b == 0) || (l_c == 0)
+    let phi_axis_3 = (l_a == 3) || (l_b == 3) || (l_c == 3)
+    let phi_axis_4 = (l_a == 4) || (l_b == 4) || (l_c == 4)
+    let phi_axis_5 = (l_a == 5) || (l_b == 5) || (l_c == 5)
+    let b_pass = phi_axis_0 || phi_axis_3 || phi_axis_4 || phi_axis_5
+
+    // (c) real_usable — bounded corr + no counter-replay hash
+    let c_pass_corr = (mean_corr >= 0.6) && (mean_corr <= 0.99)
+    let c_pass_rep = !_mkx_is_counter_replay_hash(total_abs)
+    let c_pass = c_pass_corr && c_pass_rep
+
+    let mut verdict = "PROVISIONAL_OK"
+    if !a_pass {
+        verdict = "REJECTED_a"
+    } else if !b_pass {
+        verdict = "REJECTED_b"
+    } else if !c_pass {
+        verdict = "REJECTED_c"
+    }
+
+    let evid = "lenses=[" + to_string(l_a) + "," + to_string(l_b)
+             + "," + to_string(l_c) + "] corr=" + to_string(mean_corr)
+             + " live=" + (if source_is_live { "true" } else { "false" })
+             + " abs=" + to_string(total_abs)
+
+    return AN11Verdict {
+        verdict: verdict,
+        weight_emergent: a_pass,
+        consciousness_attached: b_pass,
+        real_usable: c_pass,
+        evidence: evid
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Section 8: Main entry — transcendental_closure
+//
+// One-shot stage-6 invocation per drill round. Receives the prior 5
+// stages' yields + seed/round context, returns an McxResult with the
+// count of synthesized atoms passing AN11.
+//
+// Determinism: identical (seed, round, yields) → identical McxResult.
+// ═══════════════════════════════════════════════════════════════════════
+
+pub fn transcendental_closure(seed: string, round: i64,
+                              smash_n: i64, free_n: i64, abs_n: i64,
+                              meta_n: i64, hyper_n: i64,
+                              res_n: i64) -> McxResult {
+    // 1. Build phi_vec from prior-stage yields.
+    let live = _mkx_build_phi_vec(seed, round, smash_n, free_n,
+                                  abs_n, meta_n, hyper_n, res_n)
+
+    // 2. Synthesize the 64-row deterministic history.
+    let flat = _mkx_synth_history(seed, round, live)
+
+    // 3. Detect firing lenses on the live row.
+    let fired = _mkx_firing_lenses(flat, _mkx_theta_fire())
+    if len(fired) < MKX_K_MIN {
+        return mkx_empty_result()
+    }
+
+    // 4. Run the synthesizer + AN11 gate over every triple.
+    // total_abs (counter-replay signal) = sum of stage yields.
+    let total_abs = smash_n + free_n + abs_n + meta_n + hyper_n + res_n
+    let source_is_live = true   // drill round outputs are always live
+
+    let triples = _mkx_enumerate_triples(fired)
+    let n_triples = (len(triples) as i64) / 3
+
+    let mut atoms = []
+    let mut verds = []
+    let mut rej_a: i64 = 0
+    let mut rej_b: i64 = 0
+    let mut rej_c: i64 = 0
+
+    let mut q: i64 = 0
+    while q < n_triples {
+        let l_a = triples[q * 3]
+        let l_b = triples[q * 3 + 1]
+        let l_c = triples[q * 3 + 2]
+        let res = _mkx_triple_corr_check(flat, l_a, l_b, l_c,
+                                         _mkx_theta_corr())
+        if res[0] >= 0.5 {
+            let v = _mkx_an11_gate(l_a, l_b, l_c, res[1],
+                                   source_is_live, total_abs)
+            // Tag atom_id with the lens triple for uniqueness.
+            let atom_id = "MKX-T12-r" + to_string(round) + "-l"
+                        + to_string(l_a) + "_" + to_string(l_b) + "_"
+                        + to_string(l_c)
+            if v.verdict == "PROVISIONAL_OK" {
+                atoms.push(atom_id)
+                verds.push(atom_id + "=" + v.verdict + "|" + v.evidence)
+            } else if v.verdict == "REJECTED_a" {
+                rej_a = rej_a + 1
+            } else if v.verdict == "REJECTED_b" {
+                rej_b = rej_b + 1
+            } else {
+                rej_c = rej_c + 1
+            }
+        }
+        q = q + 1
+    }
+
+    return McxResult {
+        tc_n: len(atoms) as i64,
+        atoms_fired: atoms,
+        verdicts: verds,
+        rejected_a: rej_a,
+        rejected_b: rej_b,
+        rejected_c: rej_c
+    }
+}

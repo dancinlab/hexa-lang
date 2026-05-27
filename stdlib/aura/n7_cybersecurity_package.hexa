@@ -1,0 +1,144 @@
+#!hexa strict
+// stdlib/aura/n7_cybersecurity_package.hexa — `aura + N7` FDA 524B
+// cybersecurity package (hexa-native).
+//
+// CONTEXT: FDA Premarket Cybersecurity Guidance (2023 final) +
+//   section 524B Federal Food, Drug, and Cosmetic Act.
+//   AURA-100 = networked device (BLE) → cybersecurity required.
+//
+// Honesty (g3 · @D d1):
+//   * absorbed=false PERMANENTLY — package skeleton, NOT attested.
+//
+// Sentinels:
+//   __HEXA_AURA_N7_CYBERSECURITY_PACKAGE__ PASS
+//   AURA_N7_CYBERSECURITY_PACKAGE_OK gate=GATE_OPEN absorbed=false
+
+let VERSION       = "0.1.0"
+let MODULE        = "aura-n7-cybersecurity-package"
+let GEOMETRY_ID   = "aura_n7_cybersecurity_package_v1"
+let RECORD_KIND   = "aura_n7_cybersecurity_package_record"
+
+fn _scope_block() -> [str] {
+    return [
+        "FDA_guidance: 2023 Premarket Cybersecurity Guidance (final · 524B-aligned)",
+        "section_524B: Federal Food, Drug, and Cosmetic Act § 524B (Cyber Device)",
+        "applicability: networked device (BLE) → cyber device per 524B",
+        "submission_attachment: cybersecurity content per 524B(b)(1)",
+        "post_market_obligation: monitor + identify + address + disclose vulnerabilities",
+        "FDA_recognized_standards: NIST CSF + ISO/IEC 27001 + AAMI TIR57",
+    ]
+}
+
+fn _threat_model_block() -> [str] {
+    return [
+        "methodology: STRIDE (Spoofing · Tampering · Repudiation · Info Disclosure · DoS · EoP)",
+        "asset_inventory: EEG data + GATT service + firmware image + secure boot key",
+        "trust_boundary: device ↔ phone app ↔ cloud (if any) ↔ BLE radio",
+        "adversary_model: passive sniffer + active MITM + side-channel + supply-chain",
+        "attack_surface: BLE GATT + USB charging + JTAG/SWD (if exposed) + OTA update",
+        "high_risk_threats: GATT auth bypass · firmware downgrade · BLE pairing intercept",
+    ]
+}
+
+fn _security_controls_block() -> [str] {
+    return [
+        "secure_boot: MCUboot ed25519 signature verification before app boot",
+        "secure_OTA: signed image + version-monotone + dual-slot rollback",
+        "BLE_pairing: LE Secure Connections (P-256 ECDH) + numeric comparison OR passkey",
+        "GATT_auth: per-characteristic permission (encrypted + authenticated)",
+        "data_at_rest: minimal sensitive data (EEG transient · no PHI persistent)",
+        "data_in_transit: BLE Link-Layer encryption (AES-CCM)",
+        "JTAG_lock: APPROTECT enabled in production (Nordic UICR APPROTECT)",
+        "anti_rollback: monotonic counter in protected NV region",
+    ]
+}
+
+fn _sbom_block() -> [str] {
+    return [
+        "format: SPDX 2.3 (NTIA-recommended) OR CycloneDX 1.5",
+        "components: Zephyr + NCS + NimBLE + MCUboot + (firmware build dependencies)",
+        "version_pin: exact version per release + cryptographic hash",
+        "vulnerability_scan: trivy / grype against SBOM + CVE database",
+        "monthly_re_scan: ongoing CVE monitoring per 524B post-market obligation",
+        "disclosure: SBOM included in 510(k) + customer access on request",
+    ]
+}
+
+fn _vulnerability_management_block() -> [str] {
+    return [
+        "coord_disclosure: published security.txt + PSIRT email + GPG key",
+        "intake_SLA: 24h acknowledgment + 7d triage",
+        "remediation_SLA: critical 30d · high 90d · medium 180d (per CVSS v3.1)",
+        "ICS_CERT_advisory: coordinate with MedISAC + ICS-CERT for medical-device CVEs",
+        "post_release: signed OTA pushed to fleet + customer notification",
+        "field_action: per 21 CFR 806 + FDA enforcement guidance if exploitation observed",
+    ]
+}
+
+fn _testing_block() -> [str] {
+    return [
+        "fuzz_testing: BLE GATT fuzzing (e.g. BleepBleep · BTfuzz) on production firmware",
+        "static_analysis: clang-tidy + coverity (open license for FOSS) + checkpatch.pl",
+        "penetration_test: independent pentester + scoped engagement (external)",
+        "side_channel: power analysis OPTIONAL (low priority for non-key-storing device)",
+        "supply_chain: SLSA level 3 build provenance · signed CI artifacts",
+        "report_format: per FDA guidance template + risk-control mapping",
+    ]
+}
+
+fn _scope_caveats() -> [str] {
+    return [
+        "N7 cybersecurity package is a SKELETON, NOT attested 524B compliance.",
+        "Actual attestation requires: threat model exec + pentest + signed SBOM.",
+        "Pentest cost: $15-50K (scope-dependent).",
+        "absorbed=false PERMANENTLY (g3) - skeleton, NEVER an FDA-attested package.",
+    ]
+}
+
+fn _emit_block(label: str, lines: [str]) {
+    print("# [" + label + "]")
+    let n = lines.len()
+    let mut i = 0
+    while i < n {
+        print("#   - " + lines[i])
+        i = i + 1
+    }
+    print("#")
+}
+
+fn _emit_header() {
+    print("# AURA N7 - FDA 524B cybersecurity package skeleton")
+    print("# device_target = AURA-100 cyber device (BLE-connected)")
+    print("# version = " + VERSION)
+    print("# ringfence: skeleton - NOT attested 524B compliance")
+    print("#")
+    _emit_block("scope",                  _scope_block())
+    _emit_block("threat_model",           _threat_model_block())
+    _emit_block("security_controls",      _security_controls_block())
+    _emit_block("sbom",                   _sbom_block())
+    _emit_block("vulnerability_mgmt",     _vulnerability_management_block())
+    _emit_block("testing",                _testing_block())
+}
+
+fn _emit_caveats() {
+    let c = _scope_caveats()
+    let n = c.len()
+    let mut i = 0
+    while i < n {
+        print("# scope_caveat: " + c[i])
+        i = i + 1
+    }
+}
+
+fn main() {
+    _emit_header()
+    _emit_caveats()
+
+    print("AURA_N7_CYBERSECURITY_PACKAGE_OK record_kind=" + RECORD_KIND
+        + " geometry_id=" + GEOMETRY_ID
+        + " gate=GATE_OPEN absorbed=false"
+        + " version=" + VERSION
+        + " fda=524B sbom=SPDX-2.3")
+
+    print("__HEXA_AURA_N7_CYBERSECURITY_PACKAGE__ PASS")
+}

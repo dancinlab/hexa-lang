@@ -1,0 +1,523 @@
+// self/experiment/mk2/guard.hexa — prism 수준 L0/수렴 강제 가드
+// 사용: hexa guard.hexa check <file_path>     — L0 수정 감지 + 경고
+//       hexa guard.hexa checklist             — 커밋 전 체크리스트
+//       hexa guard.hexa recurrence <category> — 반복 카운터 +1
+//       hexa guard.hexa root-cause <file>     — 근본원인 코드 수정 확인
+
+// 2026-04-28 F-A1-PATTERN cross-repo fix: printenv missing in busybox.
+let mut _home = ""
+try {
+    let h = env_var("HOME")
+    if type_of(h) == "string" { _home = to_string(h) }
+} catch err { _home = "" }
+if len(_home) == 0 { _home = exec("echo \"$HOME\"").trim() }
+let _shared = _home + "/Dev/nexus/shared"
+let _lockdown_path = _shared + "/core-lockdown.json"
+
+// ═══════════════════════════════════════════════════════════
+// ─── L0 파일 감지 ───
+// ═══════════════════════════════════════════════════════════
+
+// 2026-04-11: python3 → pure-hexa json_parse + 객체 순회.
+// lockdown.json 형식: {"projects": {projname: {"L0": [{"path": "...", "desc": "..."}, ...]}}}
+fn is_l0_file(file_path: string) -> bool {
+    if !file_exists(_lockdown_path) { return false }
+    try {
+        let raw = read_file(_lockdown_path)
+        let d = json_parse(raw)
+        let projects = d["projects"]
+        let proj_keys = keys(projects)
+        for pk in proj_keys {
+            let proj = projects[pk]
+            let l0_list = proj["L0"]
+            if to_string(l0_list) != "" {
+                let n = len(l0_list)
+                let mut i = 0
+                while i < n {
+                    let entry = l0_list[i]
+                    let p = to_string(entry["path"])
+                    if file_path.ends_with(p) || file_path.contains(p) { return true }
+                    i = i + 1
+                }
+            }
+        }
+    } catch e {}
+    return false
+}
+
+fn get_l0_desc(file_path: string) -> string {
+    if !file_exists(_lockdown_path) { return "" }
+    try {
+        let raw = read_file(_lockdown_path)
+        let d = json_parse(raw)
+        let projects = d["projects"]
+        let proj_keys = keys(projects)
+        for pk in proj_keys {
+            let proj = projects[pk]
+            let l0_list = proj["L0"]
+            if to_string(l0_list) != "" {
+                let n = len(l0_list)
+                let mut i = 0
+                while i < n {
+                    let entry = l0_list[i]
+                    let p = to_string(entry["path"])
+                    if file_path.ends_with(p) || file_path.contains(p) {
+                        return to_string(entry["desc"])
+                    }
+                    i = i + 1
+                }
+            }
+        }
+    } catch e {}
+    return ""
+}
+
+// ═══════════════════════════════════════════════════════════
+// ─── check: L0 수정 감지 → 승인 요청 ───
+// ═══════════════════════════════════════════════════════════
+
+fn cmd_check(file_path: string) {
+    if !is_l0_file(file_path) { return }
+
+    let desc = get_l0_desc(file_path)
+    println("⛔ L0 코어 보호 파일 감지: " + file_path)
+    println("   설명: " + desc)
+    println("")
+    println("이 파일은 L0 코어 보호 파일입니다. 수정 승인하시겠습니까?")
+    println("")
+    println("승인 후 필수 절차:")
+    println("  1. 커밋 메시지에 'L0-수정: [파일명] — [이유]' 명시")
+    println("  2. 파일 상단 불변식 주석에 변경 사항 반영")
+    println("  3. 해당 프로젝트 테스트 통과 확인")
+    println("  4. convergence JSON 업데이트")
+}
+
+// ═══════════════════════════════════════════════════════════
+// ─── checklist: 커밋 전 체크리스트 ───
+// ═══════════════════════════════════════════════════════════
+
+fn cmd_checklist() {
+    // git diff로 변경 파일 확인
+    let mut changed = ""
+    try { changed = exec("git diff --cached --name-only 2>/dev/null").trim() } catch e {}
+    if changed == "" {
+        try { changed = exec("git diff --name-only 2>/dev/null").trim() } catch e {}
+    }
+    if changed == "" {
+        println("변경 파일 없음")
+        return
+    }
+
+    let files = changed.split("\n")
+    let mut has_l0 = false
+    let mut has_code = false
+    let mut has_doc = false
+    let mut has_convergence = false
+    let mut has_todo = false
+
+    for f in files {
+        let ft = f.trim()
+        if ft == "" { continue }
+        if is_l0_file(ft) { has_l0 = true }
+        if ft.contains(".hexa") || ft.contains(".rs") || ft.contains(".ts") || ft.contains(".py") { has_code = true }
+        if ft.contains(".md") || ft.contains("README") { has_doc = true }
+        if ft.contains("convergence") { has_convergence = true }
+        if ft.contains("todo") { has_todo = true }
+    }
+
+    println("═══ 커밋 전 체크리스트 ═══")
+    println("")
+
+    // L0 경고
+    if has_l0 {
+        println("⛔ L0 파일 변경 감지!")
+        for f in files {
+            if f.trim() != "" && is_l0_file(f.trim()) {
+                println("  🔴 " + f.trim() + " — " + get_l0_desc(f.trim()))
+            }
+        }
+        println("  → 커밋 메시지에 'L0-수정:' 접두사 필수")
+        println("")
+    }
+
+    // 체크리스트
+    let mut checks = 0
+    let mut total = 0
+
+    // 1. 코드 변경 시 테스트 통과 확인
+    if has_code {
+        total = total + 1
+        println("□ 테스트 통과 확인 (./hexa self/test_interp*.hexa / pnpm test)")
+    }
+
+    // 2. convergence 업데이트
+    total = total + 1
+    if has_convergence {
+        checks = checks + 1
+        println("☑ convergence JSON 업데이트 됨")
+    } else {
+        println("□ convergence JSON 업데이트 필요? (골화/안정/실패 변경 시)")
+    }
+
+    // 3. 문서만 변경 시 근본원인 경고
+    if has_doc && !has_code {
+        println("⚠️ 문서만 변경 — 근본원인 코드 수정이 동반되었는가?")
+        println("  문서화만으로 완료 처리 금지. 코드 수정이 필요하면 함께 커밋.")
+    }
+
+    // 4. NEXUS-6 스캔
+    total = total + 1
+    println("□ NEXUS-6 변경 전후 스캔 완료? (R3)")
+
+    // 5. 발견/결과 기록
+    total = total + 1
+    println("□ 발견/결과 파일에 영구 기록? (R6)")
+
+    // 6. 하드코딩 없음
+    total = total + 1
+    println("□ 하드코딩 없음? shared/*.jsonl 동적 로드? (R2)")
+
+    println("")
+    println("체크: " + to_string(checks) + "/" + to_string(total) + " 자동 확인됨")
+    println("나머지 수동 확인 후 커밋하세요.")
+}
+
+// ═══════════════════════════════════════════════════════════
+// ─── recurrence: 반복 카운터 +1 ───
+// ═══════════════════════════════════════════════════════════
+
+// 2026-04-11: python3 → pure-hexa json_parse + 직접 mutation + json_stringify
+fn cmd_recurrence(category: string, project: string) {
+    let conv_path = _shared + "/convergence/" + project + ".json"
+    if !file_exists(conv_path) {
+        println("recurrence 업데이트 실패: " + conv_path + " 없음")
+        return
+    }
+    try {
+        let raw = read_file(conv_path)
+        let d = json_parse(raw)
+        let sections = ["ossified", "stable", "failed"]
+        for section in sections {
+            let sec = d[section]
+            if to_string(sec) != "" {
+                let sec_keys = keys(sec)
+                let mut found = false
+                for k in sec_keys {
+                    if k == category { found = true }
+                }
+                if found {
+                    let item = sec[category]
+                    let cur = to_int(item["recurrence"])
+                    let rc = cur + 1
+                    d[section][category]["recurrence"] = rc
+                    println("recurrence=" + to_string(rc) + " (" + section + "." + category + ")")
+                    if rc >= 3 {
+                        println("⚠️ 3회 반복! 설계 개선 필수: " + category)
+                    }
+                    write_file(conv_path, json_stringify(d))
+                    return
+                }
+            }
+        }
+        println("카테고리 미발견: " + category)
+    } catch e {
+        println("recurrence 업데이트 실패: " + category)
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// ─── root-cause: 근본원인 코드 수정 확인 ───
+// ═══════════════════════════════════════════════════════════
+
+fn cmd_root_cause() {
+    let mut changed = ""
+    try { changed = exec("git diff --cached --name-only 2>/dev/null").trim() } catch e {}
+    if changed == "" {
+        try { changed = exec("git diff --name-only 2>/dev/null").trim() } catch e {}
+    }
+
+    let files = changed.split("\n")
+    let mut has_code = false
+    let mut has_doc = false
+
+    for f in files {
+        let ft = f.trim()
+        if ft == "" { continue }
+        if ft.contains(".hexa") || ft.contains(".rs") || ft.contains(".ts") { has_code = true }
+        if ft.contains(".md") || ft.contains(".json") { has_doc = true }
+    }
+
+    if has_doc && !has_code {
+        println("⚠️ 경고: 문서/JSON만 변경되고 코드 수정 없음")
+        println("   근본원인 코드 수정이 필요하면 함께 커밋하세요.")
+        println("   문서화만으로 완료 처리 = 수렴 아님 (prism P-029 교훈)")
+    } else if has_code {
+        println("✅ 코드 수정 포함됨 — 근본원인 해결 확인")
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// ─── verify: L0 불변식 계약 테스트 ───
+// ═══════════════════════════════════════════════════════════
+
+// 2026-04-11: 9개 INV 모두 python3 → pure-hexa json_parse 헬퍼로 교체.
+// 객체 키 존재 검사: keys(obj) 순회, 카운트는 len() 직접.
+
+fn _has_key(obj, key: string) -> bool {
+    let ks = keys(obj)
+    for k in ks {
+        if k == key { return true }
+    }
+    return false
+}
+
+fn _has_keys(obj, required) -> bool {
+    let n = len(required)
+    let mut i = 0
+    while i < n {
+        if !_has_key(obj, required[i]) { return false }
+        i = i + 1
+    }
+    return true
+}
+
+fn _try_json_load(path: string) {
+    if !file_exists(path) { return "" }
+    try { return json_parse(read_file(path)) } catch e { return "" }
+}
+
+fn cmd_verify() {
+    println("═══ L0 불변식 계약 테스트 ═══")
+    println("")
+
+    let mut pass: i64 = 0
+    let mut fail: i64 = 0
+
+    // INV-001: n6_constants.jsonl — 7개 기본상수 존재
+    let n6c_path = _shared + "/n6_constants.jsonl"
+    let mut found_constants = ""
+    if file_exists(n6c_path) {
+        let raw = read_file(n6c_path)
+        let lines = raw.split("\n")
+        for line in lines {
+            if len(line) > 0 {
+                try {
+                    let d = json_parse(line)
+                    found_constants = found_constants + "|" + to_string(d["name"])
+                } catch e {}
+            }
+        }
+    }
+    let required_consts = ["n", "sigma", "phi", "tau", "sopfr", "j2", "P2"]
+    let mut missing_consts = ""
+    for c in required_consts {
+        if !found_constants.contains("|" + c) {
+            missing_consts = missing_consts + " " + c
+        }
+    }
+    if missing_consts == "" && file_exists(n6c_path) {
+        pass = pass + 1
+        println("  ✅ INV-001: n6_constants.jsonl 7개 기본상수 존재")
+    } else {
+        fail = fail + 1
+        println("  ❌ INV-001: n6_constants.jsonl — missing=" + missing_consts)
+    }
+
+    // INV-002: discovery_graph.json — nodes 1000+
+    let dg_path = _shared + "/discovery_graph.json"
+    let mut node_count = 0
+    if file_exists(dg_path) {
+        let raw = read_file(dg_path)
+        // 빠른 카운트: "node" 하위문자열 카운트 (정밀 파싱 불필요)
+        let parts = raw.split("\"node")
+        node_count = len(parts) - 1
+    }
+    if node_count >= 1000 {
+        pass = pass + 1
+        println("  ✅ INV-002: discovery_graph.json 스키마 유효 (" + to_string(node_count) + "n)")
+    } else {
+        fail = fail + 1
+        println("  ❌ INV-002: discovery_graph.json — n=" + to_string(node_count))
+    }
+
+    // INV-003: core-lockdown.json — levels + projects + keywords + ai_protocol 키 존재
+    let inv3_d = _try_json_load(_lockdown_path)
+    if to_string(inv3_d) != "" && _has_keys(inv3_d, ["levels", "projects", "keywords", "ai_protocol"]) {
+        pass = pass + 1
+        println("  ✅ INV-003: core-lockdown.json 스키마 유효")
+    } else {
+        fail = fail + 1
+        println("  ❌ INV-003: core-lockdown.json — missing keys")
+    }
+
+    // INV-004: absolute_rules.json — common 8개 + projects 7개
+    let inv4_d = _try_json_load(_shared + "/absolute_rules.json")
+    let mut nc = 0
+    let mut np = 0
+    if to_string(inv4_d) != "" {
+        let cm = inv4_d["common"]
+        let pj = inv4_d["projects"]
+        if to_string(cm) != "" { nc = len(cm) }
+        if to_string(pj) != "" { np = len(keys(pj)) }
+    }
+    if nc >= 8 && np >= 7 {
+        pass = pass + 1
+        println("  ✅ INV-004: absolute_rules.json 구조 유효 (R" + to_string(nc) + "/P" + to_string(np) + ")")
+    } else {
+        fail = fail + 1
+        println("  ❌ INV-004: absolute_rules.json — common=" + to_string(nc) + ",projects=" + to_string(np))
+    }
+
+    // INV-005: core.json — systems + commands + folders 키 존재
+    let inv5_d = _try_json_load(_shared + "/core.json")
+    if to_string(inv5_d) != "" && _has_keys(inv5_d, ["systems", "commands", "folders"]) {
+        let ns = len(keys(inv5_d["systems"]))
+        let nc5 = len(keys(inv5_d["commands"]))
+        pass = pass + 1
+        println("  ✅ INV-005: core.json 구조 유효 (S" + to_string(ns) + "/C" + to_string(nc5) + ")")
+    } else {
+        fail = fail + 1
+        println("  ❌ INV-005: core.json — missing keys")
+    }
+
+    // INV-006: convergence/ — 7개 프로젝트 JSON + ossified/stable/failed 키
+    let projs6 = ["nexus", "anima", "canon", "papers", "hexa-lang", "void", "airgenome"]
+    let mut ok6 = 0
+    for p in projs6 {
+        let pf = _shared + "/convergence/" + p + ".json"
+        let pd = _try_json_load(pf)
+        if to_string(pd) != "" && _has_keys(pd, ["ossified", "stable", "failed"]) {
+            ok6 = ok6 + 1
+        }
+    }
+    if ok6 == 7 {
+        pass = pass + 1
+        println("  ✅ INV-006: convergence/ 7개 프로젝트 유효 (" + to_string(ok6) + "/7)")
+    } else {
+        fail = fail + 1
+        println("  ❌ INV-006: convergence/ — " + to_string(ok6) + "/7")
+    }
+
+    // INV-007: todo/ — 7개 프로젝트 + tasks 배열 비어있지 않음
+    let mut ok7 = 0
+    for p in projs6 {
+        let pf = _shared + "/todo/" + p + ".json"
+        let pd = _try_json_load(pf)
+        if to_string(pd) != "" && _has_key(pd, "tasks") {
+            let t = pd["tasks"]
+            if to_string(t) != "" && len(t) > 0 { ok7 = ok7 + 1 }
+        }
+    }
+    if ok7 == 7 {
+        pass = pass + 1
+        println("  ✅ INV-007: todo/ 7개 프로젝트 유효 (" + to_string(ok7) + "/7)")
+    } else {
+        fail = fail + 1
+        println("  ❌ INV-007: todo/ — " + to_string(ok7) + "/7")
+    }
+
+    // INV-008: atlas.n6 — 등급 항목 100+ + EXACT([N*]) 비율 80%+
+    // 2026-04-11: awk regex → pure-hexa 라인 스캔.
+    // [N], [N*], [N!], [N?] 패턴 카운트 (* = EXACT 표시)
+    let atlas_path = _shared + "/n6/atlas.n6"
+    let mut n8 = 0
+    let mut ex8 = 0
+    if file_exists(atlas_path) {
+        let raw = read_file(atlas_path)
+        let lines = raw.split("\n")
+        for line in lines {
+            // Find '[' followed by digit
+            let parts = line.split("[")
+            let mut pi = 1
+            while pi < len(parts) {
+                let p = parts[pi]
+                // 닫는 ]까지를 split[0]으로 추출
+                if p.contains("]") {
+                    let inner = p.split("]")
+                    let inside = inner[0]
+                    if len(inside) > 0 {
+                        let first = inside.substring(0, 1)
+                        if first == "0" || first == "1" || first == "2" || first == "3" || first == "4" || first == "5" || first == "6" || first == "7" || first == "8" || first == "9" {
+                            n8 = n8 + 1
+                            if inside.contains("*") { ex8 = ex8 + 1 }
+                        }
+                    }
+                }
+                pi = pi + 1
+            }
+        }
+    }
+    let pct8 = if n8 > 0 { (ex8 * 100) / n8 } else { 0 }
+    if n8 >= 100 && pct8 >= 80 {
+        pass = pass + 1
+        println("  ✅ INV-008: atlas.n6 유효 (" + to_string(n8) + "nodes/" + to_string(pct8) + "%EXACT)")
+    } else {
+        fail = fail + 1
+        println("  ❌ INV-008: atlas.n6 — n=" + to_string(n8) + ",exact=" + to_string(pct8) + "%")
+    }
+
+    // INV-009: loop/ — 3개 JSON + phases 키
+    let projs9 = ["nexus", "anima", "canon"]
+    let mut ok9 = 0
+    for p in projs9 {
+        let pf = _shared + "/loop/" + p + ".json"
+        let pd = _try_json_load(pf)
+        if to_string(pd) != "" && _has_key(pd, "phases") {
+            ok9 = ok9 + 1
+        }
+    }
+    if ok9 == 3 {
+        pass = pass + 1
+        println("  ✅ INV-009: loop/ 3개 성장 루프 유효 (" + to_string(ok9) + "/3)")
+    } else {
+        fail = fail + 1
+        println("  ❌ INV-009: loop/ — " + to_string(ok9) + "/3")
+    }
+
+    println("")
+    let total = pass + fail
+    if fail == 0 {
+        println("✅ 전체 통과: " + to_string(pass) + "/" + to_string(total))
+    } else {
+        println("❌ 실패 있음: " + to_string(pass) + "/" + to_string(total) + " (" + to_string(fail) + "건 실패)")
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// ─── MAIN ───
+// ═══════════════════════════════════════════════════════════
+
+let _args = args()
+let _cmd = if _args.len() >= 3 { _args[2] } else { "help" }
+
+if _cmd == "check" {
+    let file = if _args.len() >= 4 { _args[3] } else { "" }
+    if file == "" {
+        println("사용: hexa guard.hexa check <file_path>")
+    } else {
+        cmd_check(file)
+    }
+} else if _cmd == "checklist" {
+    cmd_checklist()
+} else if _cmd == "recurrence" {
+    let cat = if _args.len() >= 4 { _args[3] } else { "" }
+    let proj = if _args.len() >= 5 { _args[4] } else { "nexus" }
+    if cat == "" {
+        println("사용: hexa guard.hexa recurrence <category> [project]")
+    } else {
+        cmd_recurrence(cat, proj)
+    }
+} else if _cmd == "root-cause" {
+    cmd_root_cause()
+} else if _cmd == "verify" {
+    cmd_verify()
+} else {
+    println("guard.hexa — prism 수준 L0/수렴 강제 가드")
+    println("")
+    println("사용법:")
+    println("  hexa guard.hexa check <file>        — L0 수정 감지 + 승인 요청")
+    println("  hexa guard.hexa checklist            — 커밋 전 체크리스트")
+    println("  hexa guard.hexa recurrence <cat> [proj] — 반복 카운터 +1")
+    println("  hexa guard.hexa root-cause           — 근본원인 코드 수정 확인")
+    println("  hexa guard.hexa verify               — L0 불변식 계약 테스트 (9건)")
+}

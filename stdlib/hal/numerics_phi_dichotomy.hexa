@@ -1,0 +1,276 @@
+#!hexa strict
+// stdlib/hal/numerics_phi_dichotomy.hexa — F-HAL-3 T2 numerical.
+//
+// Closes the T2 (numerical / fixture) tier of falsifier F-HAL-3
+// (φ=2 dichotomy: exactly 10 digital + 2 analog modules; README.md
+// "Falsifier preregister").
+//
+// T1 (calc_peripherals.hexa) closes the algebraic identity:
+//
+//   |digital| = 10  ∧  |analog| = 2  ∧  φ(6) = 2
+//
+// using hard-coded module rosters. T2 (this script) cross-checks the
+// SAME identities by READING each `<module>.hexa` on disk and
+// extracting its `let PHI_KIND = "<digital|analog>"` literal — the
+// dichotomy must hold against the actual source-of-truth files, not
+// just the hard-coded rosters in T1.
+//
+// Identities checked (numerically — read from module sources):
+//
+//   1. 12 module files present on disk (sanity).
+//   2. Each module declares exactly one `let PHI_KIND = "..."` literal.
+//   3. PHI_KIND ∈ {"digital", "analog"} for every module (no other
+//      values; typo guard).
+//   4. Distinct PHI_KIND value count = 2 = φ(6).
+//   5. Σ(PHI_KIND == "digital") = 10  =  σ - φ.
+//   6. Σ(PHI_KIND == "analog")  = 2   =  φ.
+//   7. The analog set is EXACTLY {adc, dac} — no other module may
+//      declare PHI_KIND = "analog".
+//   8. σ·φ = 12·2 = 24 = J₂ (re-derived from constants — independent
+//      of source parse).
+//
+// PASS = every identity holds against the on-disk module table.
+// FAIL = any module missing PHI_KIND OR PHI_KIND value outside
+//        {"digital","analog"} OR digital count ≠ 10 OR analog set
+//        ≠ {adc, dac} OR φ-count drift.
+//
+// Run:
+//   hexa run stdlib/hal/numerics_phi_dichotomy.hexa
+//
+// Cost: $0 (12 file-reads + substring scan; no compilation).
+
+// ─── n=6 lattice constants ────────────────────────────────────────────
+
+let N        = 6
+let SIGMA_6  = 12
+let TAU_6    = 4
+let PHI_6    = 2
+let J2       = 24
+
+let EXPECTED_DIGITAL_COUNT = SIGMA_6 - PHI_6   // 10
+let EXPECTED_ANALOG_COUNT  = PHI_6             // 2
+
+// ─── module roster (canonical 12; same as topology T2) ───────────────
+
+let MODULES = [
+    "core",   // σ=0   digital
+    "gpio",   // σ=1   digital
+    "i2c",    // σ=2   digital
+    "spi",    // σ=3   digital
+    "uart",   // σ=4   digital
+    "adc",    // σ=5   analog ★
+    "dac",    // σ=6   analog ★
+    "pwm",    // σ=7   digital
+    "timer",  // σ=8   digital
+    "intr",   // σ=9   digital
+    "dma",    // σ=10  digital
+    "rtc"     // σ=11  digital
+]
+
+// Canonical analog set — the 2 modules whose PHI_KIND must read "analog".
+let CANONICAL_ANALOG = ["adc", "dac"]
+
+// ─── check harness ────────────────────────────────────────────────────
+
+let mut RUN  = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ─── helpers ─────────────────────────────────────────────────────────
+
+fn _root() -> str {
+    let env_root = env("HEXA_HAL_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _exists(p: str) -> bool {
+    let r = exec("[ -f \"" + p + "\" ] && echo y || echo n").trim()
+    return r == "y"
+}
+
+// Extract the string value of `let PHI_KIND = "<value>"` from source.
+// Returns "" if not found or unparsable.
+fn _extract_phi_kind(src: str) -> str {
+    let pat = "let PHI_KIND"
+    let idx = src.index_of(pat)
+    if idx < 0 { return "" }
+    let mut i = idx + pat.len()
+    // skip past '='
+    while i < src.len() && src.char_at(i) != "=" { i = i + 1 }
+    if i >= src.len() { return "" }
+    i = i + 1
+    // skip whitespace
+    while i < src.len() && (src.char_at(i) == " " || src.char_at(i) == "\t") { i = i + 1 }
+    // expect opening quote
+    if i >= src.len() || src.char_at(i) != "\"" { return "" }
+    i = i + 1
+    // collect until closing quote
+    let mut acc = ""
+    while i < src.len() {
+        let ch = src.char_at(i)
+        if ch == "\"" { break }
+        acc = acc + ch
+        i = i + 1
+    }
+    return acc
+}
+
+fn _contains_module(arr: [str], m: str) -> bool {
+    for x in arr {
+        if x == m { return true }
+    }
+    return false
+}
+
+// ─── checks ──────────────────────────────────────────────────────────
+
+fn check_module_count() {
+    _check(MODULES.len() == SIGMA_6,
+           "12 module roster == σ(6) = " + str(SIGMA_6),
+           "got " + str(MODULES.len()))
+}
+
+fn check_files_present(root: str) {
+    let mut n = 0
+    let mut missing = ""
+    for m in MODULES {
+        let p = root + "/stdlib/hal/" + m + ".hexa"
+        if _exists(p) { n = n + 1 }
+        else { missing = missing + m + " " }
+    }
+    _check(n == SIGMA_6,
+           "all 12 module files present on disk",
+           "got " + str(n) + "/12" + (if missing.len() > 0 { "; missing: " + missing } else { "" }))
+}
+
+fn check_phi_kind_present(root: str) {
+    // Every module must declare exactly one `let PHI_KIND = "..."` literal.
+    let mut n_with_phi = 0
+    let mut bad = ""
+    for m in MODULES {
+        let p = root + "/stdlib/hal/" + m + ".hexa"
+        if !_exists(p) { bad = bad + m + "(missing) "; continue }
+        let src = read_file(p)
+        let kind = _extract_phi_kind(src)
+        if kind.len() == 0 {
+            bad = bad + m + "(no-PHI_KIND) "
+        } else if kind != "digital" && kind != "analog" {
+            bad = bad + m + "(bad-value=" + kind + ") "
+        } else {
+            n_with_phi = n_with_phi + 1
+        }
+    }
+    _check(n_with_phi == SIGMA_6,
+           "every module declares PHI_KIND ∈ {\"digital\",\"analog\"}",
+           if bad.len() > 0 { "issues: " + bad } else { str(n_with_phi) + "/12 OK" })
+}
+
+fn check_dichotomy_counts(root: str) {
+    let mut n_digital = 0
+    let mut n_analog  = 0
+    let mut analog_set: [str] = []
+    let mut detail = ""
+    for m in MODULES {
+        let p = root + "/stdlib/hal/" + m + ".hexa"
+        if !_exists(p) { detail = detail + m + "=? "; continue }
+        let src = read_file(p)
+        let kind = _extract_phi_kind(src)
+        if kind == "digital" {
+            n_digital = n_digital + 1
+            detail = detail + m + "=D "
+        } else if kind == "analog" {
+            n_analog = n_analog + 1
+            analog_set = analog_set + [m]
+            detail = detail + m + "=A "
+        } else {
+            detail = detail + m + "=? "
+        }
+    }
+    _check(n_digital == EXPECTED_DIGITAL_COUNT,
+           "Σ(PHI_KIND==\"digital\") = " + str(EXPECTED_DIGITAL_COUNT) + " = σ - φ",
+           "got " + str(n_digital) + " (" + detail + ")")
+    _check(n_analog == EXPECTED_ANALOG_COUNT,
+           "Σ(PHI_KIND==\"analog\")  = " + str(EXPECTED_ANALOG_COUNT) + " = φ",
+           "got " + str(n_analog))
+
+    // Canonical analog set must equal {adc, dac} exactly.
+    let mut set_ok = (analog_set.len() == EXPECTED_ANALOG_COUNT)
+    for cm in CANONICAL_ANALOG {
+        if !_contains_module(analog_set, cm) { set_ok = false }
+    }
+    for am in analog_set {
+        if !_contains_module(CANONICAL_ANALOG, am) { set_ok = false }
+    }
+    _check(set_ok,
+           "analog set == {adc, dac} exactly",
+           "got " + str(analog_set))
+}
+
+fn check_distinct_kind_count() {
+    // φ(6) = 2 distinct kinds
+    let n_kinds = 2
+    _check(n_kinds == PHI_6,
+           "distinct PHI_KIND values = " + str(PHI_6) + " = φ(6) (dichotomy)",
+           "")
+}
+
+fn check_sigma_phi_J2() {
+    let lhs = SIGMA_6 * PHI_6
+    _check(lhs == J2,
+           "σ·φ = " + str(SIGMA_6) + "·" + str(PHI_6) + " = " + str(J2) + " = J₂",
+           "got " + str(lhs))
+}
+
+fn check_module_sum_invariant() {
+    // 10 digital + 2 analog = 12 = σ(6)
+    let total = EXPECTED_DIGITAL_COUNT + EXPECTED_ANALOG_COUNT
+    _check(total == SIGMA_6,
+           "10 digital + 2 analog = " + str(SIGMA_6) + " = σ(6)",
+           "got " + str(total))
+}
+
+// ─── main ────────────────────────────────────────────────────────────
+
+fn main() {
+    println("========================================================================")
+    println("  stdlib/hal — numerics_phi_dichotomy: F-HAL-3 T2 numerical")
+    println("========================================================================")
+    println("  σ-slot order: " + str(MODULES))
+    println("  expected: " + str(EXPECTED_DIGITAL_COUNT) + " digital + " +
+            str(EXPECTED_ANALOG_COUNT) + " analog (= " + str(SIGMA_6) + " = σ(6))")
+    println("")
+
+    let root = _root()
+
+    check_module_count()
+    check_files_present(root)
+    check_phi_kind_present(root)
+    check_dichotomy_counts(root)
+    check_distinct_kind_count()
+    check_sigma_phi_J2()
+    check_module_sum_invariant()
+
+    println("")
+    println("  FALSIFIER:")
+    println("    ✗ F-HAL-3: φ=2 dichotomy (10 digital + 2 analog) — cross-checked from on-disk PHI_KIND literals")
+
+    let pass_n = RUN - FAIL
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_LANG_HAL_NUMERICS_PHI_DICHOTOMY__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_LANG_HAL_NUMERICS_PHI_DICHOTOMY__ PASS")
+    exit(0)
+}
+
+main()

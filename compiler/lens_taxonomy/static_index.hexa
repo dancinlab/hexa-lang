@@ -1,0 +1,52 @@
+// HEXA Native Compiler — Wave 1 absorption: lens_taxonomy static index
+//
+//   pub fn lenses_list() -> [LensEntry]
+//   pub fn lens_lookup(name: string) -> LensEntry
+//   pub fn lenses_by_category(category: string) -> [LensEntry]
+//   pub fn lenses_by_status(status: string) -> [LensEntry]
+//
+// All scans are linear (O(n) over 4000). For S1 absorption this is
+// adequate; a packed perfect-hash variant can be introduced later if
+// profiling justifies.
+
+use "compiler/lens_taxonomy/embed"
+use "compiler/lens_taxonomy/embedded.gen"
+
+pub fn lenses_list() -> [LensEntry] {
+    return LENS_TAXONOMY
+}
+
+pub fn lens_lookup(name: string) -> LensEntry {
+    let n = len(LENS_TAXONOMY)
+    let mut i = 0
+    while i < n {
+        let e = LENS_TAXONOMY[i]
+        if e.name == name { return e }
+        i = i + 1
+    }
+    return LensEntry { name: "", file: "", category: "", status: "", description: "", derived_from: "" }
+}
+
+pub fn lenses_by_category(category: string) -> [LensEntry] {
+    let out = []
+    let n = len(LENS_TAXONOMY)
+    let mut i = 0
+    while i < n {
+        let e = LENS_TAXONOMY[i]
+        if e.category == category { out.push(e) }
+        i = i + 1
+    }
+    return out
+}
+
+pub fn lenses_by_status(status: string) -> [LensEntry] {
+    let out = []
+    let n = len(LENS_TAXONOMY)
+    let mut i = 0
+    while i < n {
+        let e = LENS_TAXONOMY[i]
+        if e.status == status { out.push(e) }
+        i = i + 1
+    }
+    return out
+}

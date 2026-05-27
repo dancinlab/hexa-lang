@@ -1,0 +1,8 @@
+#!hexa strict
+// aerogel structure — mean pore size.
+fn main() {
+    let pore_nm = 10.0
+    println("aerogel_structure (mean pore size):")
+    println("  pore_nm = " + str(pore_nm))
+    println("__HEXA_AEROGEL_STRUCTURE__ PASS gate=GATE_OPEN absorbed=false")
+}

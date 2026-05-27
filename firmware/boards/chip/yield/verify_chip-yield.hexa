@@ -1,0 +1,48 @@
+#!hexa strict
+// yield/verify_chip-yield.hexa — yield ramp / binning / defect Pareto.
+//
+// Yield model: Poisson-clustered with 12 defect-class bins (σ(6)=12).
+// τ(6)=4 binning grades (PASS-A / PASS-B / RECYCLE / SCRAP).
+// φ(6)=2 verdict (good die / bad die).
+//
+// Falsifiers:
+//   F-CHIP-Y-1: <12 defect classes ⇒ Pareto under-resolved.
+//   F-CHIP-Y-2: ≠4 binning grades ⇒ τ-redundancy broken.
+
+fn _yield_poisson(D0_per_cm2: f64, area_cm2: f64) -> f64 {
+    // Negative-binomial yield ≈ exp(-D0·A) Poisson approximation.
+    let l = D0_per_cm2 * area_cm2
+    let neg_l = -l
+    let y = exp(neg_l)
+    return y
+}
+
+fn main() {
+    let defect_classes = [
+        "particle", "scratch", "etch-residue", "lithography-misalign",
+        "CMP-erosion", "stress-induced-crack", "void", "bridging",
+        "open-circuit", "shorts", "via-incomplete", "metal-thinning"
+    ]
+    if defect_classes.len() != 12 {
+        println("[yield] FAIL — defect class count drift: σ(6)=12 ≠ " + str(defect_classes.len()))
+        exit(1)
+    }
+    let bins = ["PASS-A", "PASS-B", "RECYCLE", "SCRAP"]
+    if bins.len() != 4 {
+        println("[yield] FAIL — binning grade count drift: τ(6)=4 ≠ " + str(bins.len()))
+        exit(1)
+    }
+    println("[yield] σ(6)=12 defect classes + τ(6)=4 binning grades PASS")
+
+    // Sample yield projection: D0 = 0.10 /cm², die area = 1 cm² (large SoC)
+    let D0 = 0.10
+    let area = 1.0
+    let y = _yield_poisson(D0, area)
+    println("[yield] sample Poisson yield (D0=0.10/cm², 1cm² die): " + str(y))
+    // sanity: yield in (0,1)
+    if y <= 0.0 || y > 1.0 {
+        println("[yield] FAIL — yield out of (0,1] range")
+        exit(1)
+    }
+    println("[yield] yield ∈ (0,1] PASS")
+}

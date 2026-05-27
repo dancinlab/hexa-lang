@@ -1,0 +1,115 @@
+// F-P0-OBJEQ-PREPOST — cycle 6 sub-falsifier (RFC 063 § P0).
+//
+// Real darwin-arm64 frame prologue+epilogue patterns:
+//
+//   fn main():
+//     stp x29, x30, [sp, #-16]!     // pre-index, writeback
+//     mov x29, sp
+//     bl  _callee
+//     ldp x29, x30, [sp], #16       // post-index, writeback
+//     ret
+//
+// Expected encoding (computed against ARM ARM C6.2.273):
+//   stp x29, x30, [sp, #-16]!   pre-index   imm7 = -16/8 = -2 = 0x7E (7-bit signed)
+//                               base 0xA9800000 | (0x7E<<15) | (30<<10) | (31<<5) | 29
+//                               = 0xA9BF7BFD
+//   mov x29, sp                 alias for ORR Xd, XZR, Xn (encoder)
+//                               = 0xAA0003FD ... wait the encoder handles MOV reg-reg
+//   bl  _callee                 0x94000000 + reloc
+//   ldp x29, x30, [sp], #16     post-index  imm7 = 16/8 = 2
+//                               base 0xA8C00000 | (2<<15) | (30<<10) | (31<<5) | 29
+//                               = 0xA8C17BFD
+//   ret                         0xD65F03C0
+
+import "../../emit/macho_arm64.hexa"
+import "../../ir/lir.hexa"
+
+fn _empty_preg() -> PReg { return PReg { name: "", kind: "gpr" } }
+fn _op_reg(name: string) -> LOperand {
+    return LOperand { kind: "reg", reg: PReg { name: name, kind: "gpr" },
+                       imm: 0, mem_base: _empty_preg(), mem_offset: 0, label: "" }
+}
+fn _op_imm(v: Int) -> LOperand {
+    return LOperand { kind: "imm", reg: _empty_preg(),
+                       imm: v, mem_base: _empty_preg(), mem_offset: 0, label: "" }
+}
+fn _op_label(name: string) -> LOperand {
+    return LOperand { kind: "label", reg: _empty_preg(),
+                       imm: 0, mem_base: _empty_preg(), mem_offset: 0, label: name }
+}
+fn _hex2(v: Int) -> string {
+    let hi = (v >> 4) & 0xF; let lo = v & 0xF
+    let d = "0123456789abcdef"
+    return d.substring(hi, hi + 1) + d.substring(lo, lo + 1)
+}
+fn _bytes_to_hex(bs: [Int]) -> string {
+    let mut s = ""; let mut i = 0
+    while i < len(bs) { if i > 0 { s = s + " " } ; s = s + _hex2(bs[i] & 0xFF); i = i + 1 }
+    return s
+}
+
+fn main() {
+    // arm64_darwin LIR convention: frame mem operands are carried as
+    // *label*-kind LOperand whose `label` string is the literal
+    // `[sp, #-16]!` / `[sp], #16`. Mirrors what arm64_darwin.hexa
+    // emits at the prologue/epilogue (commit f57d077e onward).
+    let instrs: [LInstr] = [
+        LInstr { op: "stp", args: [_op_reg("x29"), _op_reg("x30"), _op_label("[sp, #-16]!")], comment: "" },
+        LInstr { op: "mov", args: [_op_reg("x29"), _op_reg("sp")],                              comment: "" },
+        LInstr { op: "bl",  args: [_op_label("_callee")],                                       comment: "" },
+        LInstr { op: "ldp", args: [_op_reg("x29"), _op_reg("x30"), _op_label("[sp], #16")],     comment: "" },
+        LInstr { op: "ret", args: [],                                                            comment: "" },
+    ]
+    let f = LFunc {
+        name: "main", target: "arm64-apple-darwin",
+        instrs: instrs, frame_size: 16, callee_saved: [], def_line: 0,
+    }
+    let lm = LModule {
+        file: "frame_real.hexa", target: "arm64-apple-darwin",
+        funcs: [f], rodata: [], bss: [], globals: [], floats: [],
+    }
+    let obj = pack_lir(lm)
+
+    println("F-P0-OBJEQ-PREPOST: packed " + to_string(len(obj.text)) + " bytes")
+    println("  text   = " + _bytes_to_hex(obj.text))
+
+    // Hand-computed reference words — cross-checked against
+    // `clang -c -arch arm64` oracle on the equivalent .s:
+    //   stp x29,x30,[sp,#-16]!   0xA9BF7BFD  (pre-index, imm7=-2)
+    //   mov x29, sp              0x910003FD  (alias for ADD x29, sp, #0;
+    //                            ORR XZR-form is wrong since reg 31
+    //                            is XZR in ORR-Rm but SP in MOV-with-SP)
+    //   bl _callee (extern)      0x94000000  (bare; reloc patches)
+    //   ldp x29,x30,[sp],#16     0xA8C17BFD  (post-index, imm7=2)
+    //   ret                      0xD65F03C0
+    let expected: [Int] = [
+        0xFD, 0x7B, 0xBF, 0xA9,    // stp x29,x30,[sp,#-16]!
+        0xFD, 0x03, 0x00, 0x91,    // mov x29, sp (= add x29, sp, #0)
+        0x00, 0x00, 0x00, 0x94,    // bl _callee
+        0xFD, 0x7B, 0xC1, 0xA8,    // ldp x29,x30,[sp],#16
+        0xC0, 0x03, 0x5F, 0xD6,    // ret
+    ]
+    let en = len(expected)
+    let tn = len(obj.text)
+    if tn != en {
+        println("FAIL: text len = " + to_string(tn) + " (expected " + to_string(en) + ")")
+        println("  expected: " + _bytes_to_hex(expected))
+        exit(1)
+    }
+    let mut i = 0
+    while i < tn {
+        if (obj.text[i] & 0xFF) != expected[i] {
+            println("FAIL: byte " + to_string(i) + " is 0x" + _hex2(obj.text[i] & 0xFF) +
+                    " expected 0x" + _hex2(expected[i]))
+            println("  expected: " + _bytes_to_hex(expected))
+            exit(2)
+        }
+        i = i + 1
+    }
+
+    let bytes = serialize(obj)
+    write_bytes("/tmp/macho_p0_cycle6.ours.o", bytes)
+    println("  wrote " + to_string(len(bytes)) + " bytes to /tmp/macho_p0_cycle6.ours.o")
+    println("F-P0-OBJEQ-PREPOST PASS — STP pre-index + LDP post-index byte-eq")
+    exit(0)
+}

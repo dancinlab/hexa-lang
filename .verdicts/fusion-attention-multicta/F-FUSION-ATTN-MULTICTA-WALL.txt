@@ -1,0 +1,92 @@
+F-FUSION-ATTN-MULTICTA-WALL  -- round 4 of the GPU sec10 GEMM-fusion (attention) axis
+=====================================================================================
+Date  : 2026-05-25
+Host  : ubu-2  NVIDIA GeForce RTX 5070  driver 580.159.03  sm_120  (48 SMs)
+Tools : ptxas/nvcc CUDA 12.0 V12.0.140
+Gate  : hexa verify (g5) is BROKEN on both ubu hosts -> correctness settled by the
+        compiled f64-CPU-reference harness (fa_wmma_host.c), stdout persisted verbatim.
+
+FALSIFIER
+  Author a CORRECT multi-CTA fused flash-attention kernel (one CTA per query block so
+  the grid saturates the GPU SMs, keeping the fusion: online softmax, S tile in shared
+  never to HBM, wmma inner GEMMs) and re-time vs the cuBLAS-TC 3-launch baseline.
+  Win condition = fused beats cuBLAS-TC by >=30% (ratio fused/cublas <= 0.70).
+
+PRIMARY GATE: NUMERIC (vs f64 CPU reference)
+  IMPORTANT round-3-correction: round 3 reported max_rel 2.6-4.8 = FAIL. That was a
+  METRIC ARTIFACT, not a kernel bug. The naive metric |err|/(|want|+1e-6) blows up on
+  the many near-zero attention output elements (|want| << 1e-6). The honest flash-attn
+  metric is the per-ROW-scaled relative error + global RMS relative error. Under the
+  honest metric the round-3 ALGORITHM is already correct (validated independently in
+  clean CUDA-C nvcuda::wmma: rel_rowscale 5e-4, rms 2.6e-4, PASS).
+
+  HAND-PTX kernel flash_attn_wmma_mcta (the SHIPPED fused kernel), driver-JIT sm_120:
+  [geom] BQ=16 block=32 grid=32 CTAs (vs 48 SMs)
+  N=512 d=64  max_abs=4.02796e-05  max_rel_naive=2.93258  max_rel_rowscale=0.000629789  rms_rel=0.000264061  numeric=PASS (gate: rel_rowscale<=1e-2)
+  [geom] BQ=16 block=32 grid=64 CTAs (vs 48 SMs)
+  N=1024 d=64  max_abs=6.33083e-05  max_rel_naive=6.65134  max_rel_rowscale=0.00056447  rms_rel=0.000268724  numeric=PASS (gate: rel_rowscale<=1e-2)
+  [geom] BQ=16 block=32 grid=128 CTAs (vs 48 SMs)
+  N=2048 d=64  max_abs=3.13833e-05  max_rel_naive=4.13608  max_rel_rowscale=0.000630477  rms_rel=0.000273012  numeric=PASS (gate: rel_rowscale<=1e-2)
+  [geom] BQ=16 block=32 grid=256 CTAs (vs 48 SMs)
+  N=4096 d=64  max_abs=3.11565e-05  max_rel_naive=3.48888  max_rel_rowscale=0.000714212  rms_rel=0.000273091  numeric=PASS (gate: rel_rowscale<=1e-2)
+
+  NUMERIC = PASS at all 4 shapes (rel_rowscale 5.6e-4 .. 7.1e-4 << 1e-2).
+  The PASS matches the CUDA-C oracle exactly => the hand-PTX WMMA fragment handling
+  (QK^T mma.row.col, P.V mma.row.row, wmma.store.d to shared, scalar softmax) is correct.
+
+PTXAS-CLEAN (verbatim)
+  pure-ASCII (0 non-ascii bytes)
+  ptxas -arch=sm_80 flash_attn_wmma_mcta.sm80.ptx -> rc=0  (41 regs, 28864 B smem, 0 spill, 392 B cmem)
+  ptxas -arch=sm_90 flash_attn_wmma_mcta.ptx      -> rc=0  (32 regs, 28864 B smem, 0 spill)
+  driver-JIT sm_120 (cuModuleLoadDataEx, CU_JIT_TARGET_FROM_CUCONTEXT) -> loads + runs OK
+  FOOTPRINT vs RTX 5070 envelope: 28864 B smem/CTA (49152 cap = 58.7%, FITS);
+    32 regs/thread (65536/block cap, FITS); 0 spill. S(16x256)+O(16x64) stay in smem.
+
+GRID OCCUPANCY (CTAs vs 48 SMs)
+  grid.x = N/16 -- MAX grid saturation:  N=512->32 CTAs  N=1024->64  N=2048->128  N=4096->256.
+  (A geometry sweep MEASURED that bundling multiple warps per CTA is SLOWER: it cuts
+   the grid count + raises smem/CTA -> fewer co-resident CTAs/SM. 1 warp/CTA wins.)
+
+TIMED WALL (cuEvent, 20 warmup + 200 timed median, ms) -- GPU clean (0% util, 0 compute procs)
+  N      fused(hand-PTX)   cuBLAS-TC     ratio fused/cublas   round-3 ratio   gap closure
+  512    0.056608          0.016672      3.40x slower         9.4x            9.4x  -> 3.40x
+  1024   0.114016          0.030848      3.70x                10.9x           10.9x -> 3.70x
+  2048   0.244032          0.061664      3.96x                13.3x           13.3x -> 3.96x
+  4096   0.953696          0.190272      5.01x                15.5x           15.5x -> 5.01x
+
+  CUDA-C-VALIDATED GEOMETRY FLOOR (same algorithm, nvcc-optimized scalar loops; the
+  achievable target a hexa-codegen path could reach -- the hand-PTX scalar softmax/
+  rescale loops are un-vectorized, ~2-2.5x slower than nvcc's ld.shared.v4 / unroll):
+  N      fused(CUDA-C,BKT=16)  cuBLAS-TC   ratio        gap closure
+  512    0.021888              0.016608    1.32x slower  9.4x  -> 1.32x
+  1024   0.044416              0.030752    1.44x         10.9x -> 1.44x
+  2048   0.101760              0.061632    1.65x         13.3x -> 1.65x
+  4096   0.388288              0.190496    2.04x         15.5x -> 2.04x
+
+WHAT CLOSED THE GAP (the round-4 lever)
+  Round 3 used BK=16 (one 16-key wmma subtile per online-softmax round) so the per-tile
+  softmax + O-rescale + shared round-trip dominated. Round 4 WIDENS the KV tile to
+  BK=256 (16 wmma subtiles per softmax round), amortizing the softmax/rescale overhead
+  16x. That single lever closed 9-15x -> ~2x (CUDA-C) / 3.4-5x (hand-PTX). The S score
+  matrix STILL never touches HBM (only the running 16x256 tile lives in smem); both
+  inner GEMMs still on Tensor Cores; 1 launch.
+
+VERDICT (g3 honest -- measure the GAP, do not over-claim)
+  numeric clause     : PASS (the round-3 "FAIL" was a metric artifact -- closed honestly)
+  multi-CTA + fusion : PASS (grid saturates, S never to HBM, both GEMMs on TCs, 1 launch)
+  ptxas-clean        : PASS (sm_80 + sm_90 + driver-JIT sm_120)
+  wall >=30% win     : NO. Fused is 3.4-5.0x slower (hand-PTX) / 1.3-2.0x slower (CUDA-C
+                       geometry floor) than cuBLAS-TC. NOT a win.
+
+  TIER = ORANGE (quantified partial / measured progress). A CORRECT multi-CTA fused
+  kernel that closes the round-3 gap by ~3-8x but does NOT beat cuBLAS-TC.
+
+  The structural moat (1 launch, 0 S-HBM) is real and preserved, but at d=64 attention
+  the per-16x16-tile online-softmax overhead -- NOT S-HBM traffic -- is the bottleneck;
+  cuBLAS amortizes its GEMMs over huge tiles that the tiny 16x16 WMMA fused path cannot
+  match. Wide-KV amortization narrows but does not close this. The GEMM-fusion axis
+  remains NOT-won; the sec10 box stays [x] only via the launch-amort axis (PR #1028).
+
+INVARIANTS
+  @F f1 no LLVM. @F f2 no C-transpile. compiler/codegen/*.hexa UNTOUCHED (hand-emit PTX;
+  the CUDA-C files are correctness oracles only, not the shipped fused path).

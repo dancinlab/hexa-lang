@@ -1,0 +1,653 @@
+#!hexa strict
+// qmirror/magic-stabilizer-renyi/module/magic_stabilizer_renyi.hexa
+//
+// @tool(slug="qmirror_magic_stabilizer_renyi", desc="EXACT stabilizer Renyi entropy M_alpha(|psi>) — the canonical computable nonstabilizerness ('magic') monotone of Leone-Oliviero-Hamma 2022 (PRL 128 050402, arXiv:2106.12587), with the alpha=1 (Shannon) / alpha=2 (the cited M_2) / alpha=inf variants. Pure-hexa engine_aer kernel: the 2^n exact state vector is built once, then the entire 4^n Pauli expectation distribution {<psi|P|psi>^2 / 2^n} is enumerated and the closed-form Renyi entropy is taken. Six falsifier invariants — F1 M_2(|0>^n)=0, F2 M_2(|+>^n)=0, F3 M_2(Bell)=0 [stabilizer states are magic-free], F4 M_2(|T>)=log2(4/3) [single-qubit magic closed form], F5 M_2(|T>x|T>)=2 log2(4/3) [additivity], F6 |M_2(C|T>)-M_2(|T>)|<1e-9 for five random Cliffords [Clifford invariance, the monotone-defining axiom]. Genuine ceiling is the 4^n Pauli-list enumeration wall (n<=12 -> 4^12=16.7M; the natural runtime limit), NOT the 2^n state-vector wall.")
+// @usage(hexa run qmirror/magic-stabilizer-renyi/module/magic_stabilizer_renyi.hexa --selftest)
+// @sentinel(__QMIRROR_MAGIC_STABILIZER_RENYI__ <PASS|FAIL>)
+// @resolver-bypass(reason="Selftest is a pure-hexa EXACT 4^n-Pauli enumeration of a magic monotone on the 2^n state vector — no qiskit, no python bridge, no QRNG, no sampling; the verdict is closed-form vs the analytic |T>-state value log2(4/3).")
+//
+// ════════════════════════════════════════════════════════════════════════════
+//  PAPER  (deep-dive 2026-05-16; arXiv:2106.12587 + arXiv:2404.11652)
+// ════════════════════════════════════════════════════════════════════════════
+//
+//  PRIMARY ANCHOR — Lorenzo Leone, Salvatore F. E. Oliviero, Alioscia Hamma,
+//  "Stabilizer Renyi Entropy", Phys. Rev. Lett. 128, 050402 (2022);
+//  arXiv:2106.12587. The paper introduces a basis-independent, computable
+//  measure of nonstabilizerness for pure states from the probability
+//  distribution of squared Pauli expectations
+//
+//      Pi_P(|psi>) := <psi|P|psi>^2 / 2^n         (Eq. 2)
+//
+//  which is a true probability distribution over the 4^n n-qubit Pauli
+//  group P_n (Parseval: Sum_P <psi|P|psi>^2 = 2^n for any pure state). The
+//  stabilizer alpha-Renyi entropy of THAT distribution, minus the maximum
+//  log_2 2^n = n background, is the magic monotone:
+//
+//      M_alpha(|psi>) := (1-alpha)^{-1} log_2 [ Sum_P (<psi|P|psi>^2)^alpha / 2^n ]   (Eq. 4)
+//
+//  Most-cited specialisation (alpha=2):
+//
+//      M_2(|psi>) = -log_2 ( Sum_P <psi|P|psi>^4 / 2^n )                              (Eq. 5)
+//
+//  Limit alpha -> 1 (Shannon-entropy variant):
+//
+//      M_1(|psi>) = -Sum_P Pi_P log_2 Pi_P  -  n                                       (Eq. 6 limit)
+//
+//  Limit alpha -> infinity (min-entropy variant):
+//
+//      M_inf(|psi>) = -log_2 ( max_{P != I} <psi|P|psi>^2 )                            (Eq. 7 limit)
+//
+//  Four magic-monotone axioms PROVED in the paper:
+//
+//      (A1) faithfulness:   M_alpha(|stab>) = 0 for every stabilizer state |stab>.
+//      (A2) Clifford-inv:   M_alpha(C |psi>) = M_alpha(|psi>) for every Clifford C.
+//      (A3) additivity:     M_alpha(|psi> tensor |phi>) = M_alpha(|psi>) + M_alpha(|phi>).
+//      (A4) single-T form:  M_2(|T>) = log_2(4/3)  =  0.4150374992788438...
+//
+//  The TEN known stabilizer-state Pauli expectation values <stab|P|stab>
+//  obey <P>^2 in {0,1} with exactly 2^n nonzero P's (the stabilizer group
+//  of |stab>) — so for any stabilizer |stab>, Sum_P <P>^4 = 2^n and (Eq.5)
+//  gives -log_2(1) = 0. This is the closed-form anchor for falsifier F1/F2/F3.
+//
+//  SECONDARY ANCHOR — Leone, Oliviero, Hamma, "Nonstabilizerness
+//  determining the hardness of direct fidelity estimation", Phys. Rev. A
+//  110, L040403 (2024); arXiv:2404.11652. The follow-up paper shows that
+//  the same Pi_P distribution governs the variance of unbiased direct-
+//  fidelity-estimation protocols, with the headline:
+//
+//      Var[F_DFE] >= exp(M_2(|psi>)) / N_samples                                      (paper Eq. 12)
+//
+//  i.e. the SAMPLE COMPLEXITY of estimating fidelity to a target |psi>
+//  scales as exp(M_2) — non-stabilizerness is a hardness witness for the
+//  CLASSICAL post-processing of a quantum experiment. This module's exact
+//  M_2 IS the prefactor in that bound (computed here for n<=10 trivially;
+//  for n<=12 with the 4^n-enumeration push budget).
+//
+// ════════════════════════════════════════════════════════════════════════════
+//  HONEST SCOPE  (@D g1 / @D g3 / @F f1 / @D g11/g12 template; ceiling = 4^n)
+// ════════════════════════════════════════════════════════════════════════════
+//
+//  This is an EXACT 2^n-state-vector evaluation of an EXACT 4^n-Pauli sum;
+//  the Renyi-entropy reduction is closed-form once that sum is in hand. The
+//  module is faithful to the Leone-Oliviero-Hamma 2022 *mathematical object*
+//  on the exactly-reachable register. It is:
+//
+//   - NOT a magic-state distillation hardware experiment (no device, no
+//     noise, no T-gate teleportation, no protocol-routed magic injection).
+//   - NOT the asymptotic / continuous-variable / large-n regime: the
+//     algorithm enumerates 4^n Pauli strings, so the genuine ceiling is the
+//     4^n PAULI-list wall (n <= 12 -> 4^12 = 16,777,216 strings; that is
+//     the practical runtime limit at alpha=2, comfortably below the 2^n
+//     state-vector memory wall n ~ 26-28). For n > 12 the right tool is the
+//     stochastic-Pauli-sample estimator (Leone et al. 2024 Eq. 14) or a
+//     state-vector-symmetric MPS scheme — NEITHER of which this MVP ships;
+//     that ceiling is stated here and never faked.
+//   - NOT a tomographic estimator: M_alpha here is computed from the
+//     full state vector (perfect-shadow / pure-state assumption); finite-
+//     shot tomographic SRE estimators (paper §V) and their statistical
+//     fluctuations are NOT modelled.
+//
+//  Reachable-N (n <= 6 trivial in milliseconds; n=8 a few seconds; n=12 the
+//  declared push budget) results — the six falsifier invariants and the
+//  M_2(|T>)=log2(4/3) closed-form witness — are claimed exactly, never
+//  down-played. The four magic-monotone axioms (A1-A4) hold mathematically
+//  for every pure state on every register; this module verifies them
+//  numerically on six concrete states + five random Cliffords as a runtime
+//  falsifier in the spirit of @D g6.
+//
+//  No n=6 lattice-fit anywhere; the only verification anchors are the
+//  paper's own closed-form values (0 for stabilizer states; log2(4/3) for
+//  |T>; 2 log2(4/3) for |T> tensor |T>; Clifford-invariance).
+//
+// ════════════════════════════════════════════════════════════════════════════
+//  FILE OWNERSHIP / DROP-IN COMPAT  (@D g7)
+// ════════════════════════════════════════════════════════════════════════════
+//
+//  NEW sibling module. Does NOT touch engine_aer / qrng / chsh / iit_mip
+//  external signatures (read-only consumer of state_vector + gates). Pure-
+//  hexa runtime; NO .py / qiskit / qiskit-aer / qiskit-nature / pyscf /
+//  pyphi dependency (@D g5). Falsifier-first marker emission (@D g6) —
+//  the FAILED.marker write path runs BEFORE the pass marker.
+//
+// ── hexa quirks honored ─────────────────────────────────────────────────────
+//   - >= / <= banned -- strict < / > / == only.
+//   - struct names cannot start with _.
+//   - apply_single mutates state.re_h/.im_h in place; never reuse a
+//     StateVector after passing it through a gate (we always pass fresh).
+//   - no `break` -- flag-driven while loops.
+//   - power-of-two via while loop (no builtin).
+
+use "../../engine_aer/module/state_vector.hexa"
+use "../../engine_aer/module/gates.hexa"
+
+// ════════════════════════════════════════════════════════════════════════════
+//  §1  SCALAR + ENDIAN HELPERS
+// ════════════════════════════════════════════════════════════════════════════
+
+fn msr_absf(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+// 2^n (no power-of-two builtin)
+fn msr_pow2(n: int) -> int {
+    let mut d = 1
+    let mut k = 0
+    while k < n { d = d * 2; k = k + 1 }
+    return d
+}
+
+// 4^n
+fn msr_pow4(n: int) -> int {
+    let mut d = 1
+    let mut k = 0
+    while k < n { d = d * 4; k = k + 1 }
+    return d
+}
+
+// log_2 via ln (hexa has log = natural log? guarded by /log(2)).
+fn msr_log2(x: float) -> float {
+    let ln2 = 0.6931471805599453
+    return log(x) / ln2
+}
+
+// label char index for qubit q in an n-qubit qiskit-endian string
+// (char[0] = q_{n-1}, char[n-1] = q_0).
+fn msr_lbl_idx(n: int, q: int) -> int {
+    return n - 1 - q
+}
+
+fn msr_char_at(s: str, i: int) -> str {
+    return s.substring(i, i + 1)
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  §2  EXACT PAULI EXPECTATION  (real, on the 2^n state vector)
+// ════════════════════════════════════════════════════════════════════════════
+//
+//  <psi|P|psi> for an n-qubit Pauli string P, qiskit endian. Identical idiom
+//  to vqd-excited-cs/module/vqd_excited_cs.hexa::vqd_pauli_expectation
+//  (kept self-contained here so the magic-renyi module is dropdown-readable).
+//  Returns the REAL part — every Pauli is Hermitian, hence the expectation
+//  on a pure state is real for any |psi>.
+
+fn msr_pauli_expectation(re: [float], im: [float], label: str, n: int) -> float {
+    let nstates = len(re)
+    let mut sum_re = 0.0
+    let mut i = 0
+    while i < nstates {
+        let mut j = i
+        let mut ph_re = 1.0
+        let mut ph_im = 0.0
+        let mut q = 0
+        while q < n {
+            let idx = msr_lbl_idx(n, q)
+            let ch = msr_char_at(label, idx)
+            let bq = (i >> q) & 1
+            if ch == "X" {
+                j = j ^ (1 << q)
+            }
+            if ch == "Y" {
+                // Y|0> = i|1>, Y|1> = -i|0>  -- bit flip + phase factor
+                //   on bit value bq=0: multiply by  +i
+                //   on bit value bq=1: multiply by  -i
+                j = j ^ (1 << q)
+                let s = if bq == 0 { 1.0 } else { 0.0 - 1.0 }
+                let nr = 0.0 - ph_im * s
+                let ni = ph_re * s
+                ph_re = nr
+                ph_im = ni
+            }
+            if ch == "Z" {
+                if bq == 1 {
+                    ph_re = 0.0 - ph_re
+                    ph_im = 0.0 - ph_im
+                }
+            }
+            // "I" -> no-op
+            q = q + 1
+        }
+        // <i| P |j>  -> here amplitude P|psi> at row i is (ph_re + i ph_im) * psi[j]
+        // <psi|P|psi> = sum_i conj(psi[i]) * (P|psi>)[i]
+        //             = sum_i (re[i]-i*im[i]) * ((ph_re + i*ph_im)*(re[j] + i*im[j]))
+        // Real part of conj(psi_i) * ph * psi_j.
+        let ppj_re = ph_re * re[j] - ph_im * im[j]
+        let ppj_im = ph_re * im[j] + ph_im * re[j]
+        sum_re = sum_re + re[i] * ppj_re + im[i] * ppj_im
+        i = i + 1
+    }
+    return sum_re
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  §3  PAULI ENUMERATION  (base-4 digit -> {I, X, Y, Z})
+// ════════════════════════════════════════════════════════════════════════════
+//
+//  k in [0, 4^n)  ->  qiskit-endian label string of length n.
+//  Digit at qubit q (q = 0 -> LSB, char index n-1) decodes as
+//    0 -> I, 1 -> X, 2 -> Y, 3 -> Z.
+
+fn msr_digit_to_char(d: int) -> str {
+    if d == 0 { return "I" }
+    if d == 1 { return "X" }
+    if d == 2 { return "Y" }
+    if d == 3 { return "Z" }
+    return "I"
+}
+
+fn msr_pauli_label_from_index(k: int, n: int) -> str {
+    // Build char-by-char in qiskit endian (char[0] = q_{n-1}, char[n-1] = q_0).
+    let mut lab = ""
+    let mut q = n - 1
+    while q > 0 - 1 {
+        // digit at qubit q = (k / 4^q) mod 4
+        let mut div = 1
+        let mut t = 0
+        while t < q { div = div * 4; t = t + 1 }
+        let d = (k / div) - ((k / (div * 4)) * 4)
+        lab = lab + msr_digit_to_char(d)
+        q = q - 1
+    }
+    return lab
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  §4  STABILIZER RENYI ENTROPY  M_alpha(|psi>)
+// ════════════════════════════════════════════════════════════════════════════
+//
+//  Given (re, im) flat amplitudes of |psi> on n qubits, enumerate all 4^n
+//  Pauli strings, evaluate <psi|P|psi>, and return the three Renyi-entropy
+//  flavours plus the raw sums.
+//
+//      Xi_2(|psi>) := Sum_P <psi|P|psi>^4              (4-th moment sum)
+//      Xi_1(|psi>) := -Sum_P Pi_P log_2 Pi_P            (Shannon entropy)
+//                     where Pi_P = <psi|P|psi>^2 / 2^n
+//      max_sq      := max over P != I of <psi|P|psi>^2  (for M_inf)
+//
+//      M_2(|psi>)   = -log_2(Xi_2 / 2^n)
+//      M_1(|psi>)   = Xi_1 - n
+//      M_inf(|psi>) = -log_2(max_sq)        (sentinel: log_2(0) -> +inf -> we cap)
+//
+//  Parseval: Sum_P <psi|P|psi>^2 = 2^n exactly (for any pure |psi>); we
+//  return that sum as a sanity number, must equal 2^n within 1e-9.
+
+struct RenyiTriple {
+    n_qubits:     int,
+    n_paulis:     int,         // 4^n
+    sum_sq:       float,       // Parseval: must equal 2^n
+    sum_quart:    float,       // Xi_2
+    shannon_h:    float,       // -Sum Pi log2 Pi
+    max_sq_noni:  float,       // max_{P != I} <P>^2
+    m_2:          float,
+    m_1:          float,
+    m_inf:        float,
+    pauli_label_max: str        // P achieving max_sq_noni (witness)
+}
+
+fn msr_renyi_entropy(re: [float], im: [float], n: int) -> RenyiTriple {
+    let n_paulis = msr_pow4(n)
+    let two_n = msr_pow2(n)
+    let two_n_f = to_float(two_n)
+    let mut sum_sq = 0.0
+    let mut sum_quart = 0.0
+    let mut shannon = 0.0
+    let mut max_sq = 0.0
+    let mut max_lab = "I"
+    let mut k = 0
+    while k < n_paulis {
+        let lab = msr_pauli_label_from_index(k, n)
+        let ev = msr_pauli_expectation(re, im, lab, n)
+        let sq = ev * ev
+        let qu = sq * sq
+        sum_sq = sum_sq + sq
+        sum_quart = sum_quart + qu
+        // Shannon: Pi_P = sq / 2^n
+        let pi = sq / two_n_f
+        if pi > 0.0000000001 {
+            shannon = shannon - pi * msr_log2(pi)
+        }
+        // skip the all-identity Pauli for M_inf (k==0 in our encoding)
+        if k > 0 {
+            if sq > max_sq {
+                max_sq = sq
+                max_lab = lab
+            }
+        }
+        k = k + 1
+    }
+    // M_2 = -log2(Xi_2 / 2^n)
+    let frac2 = sum_quart / two_n_f
+    let m2 = 0.0 - msr_log2(frac2)
+    // M_1 = Shannon - n
+    let m1 = shannon - to_float(n)
+    // M_inf = -log2(max_sq); cap at 1e12 if max_sq vanishes (stabilizer states
+    // with P != I in the stabilizer give max_sq = 1 -> -log2(1) = 0 cleanly).
+    let m_inf = if max_sq > 0.0000000001 { 0.0 - msr_log2(max_sq) } else { 1000000000000.0 }
+    return RenyiTriple {
+        n_qubits: n,
+        n_paulis: n_paulis,
+        sum_sq: sum_sq,
+        sum_quart: sum_quart,
+        shannon_h: shannon,
+        max_sq_noni: max_sq,
+        m_2: m2,
+        m_1: m1,
+        m_inf: m_inf,
+        pauli_label_max: max_lab
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  §5  STATE BUILDERS  (zero, plus, Bell, T-state, T tensor T)
+// ════════════════════════════════════════════════════════════════════════════
+//
+//  Every builder returns a fresh (re, im) pair of [float] arrays (length
+//  2^n) — the dispatched format msr_renyi_entropy expects. We do NOT
+//  retain StateVector handles past the materialisation point.
+
+struct AmpPair {
+    re: [float],
+    im: [float],
+    n:  int
+}
+
+fn msr_amps_from_state(sv: StateVector) -> AmpPair {
+    let n = sv.n_qubits
+    let re = state_re_array(sv)
+    let im = state_im_array(sv)
+    let _ = state_free(sv)
+    return AmpPair { re: re, im: im, n: n }
+}
+
+// |0>^n
+fn msr_state_zero_n(n: int) -> AmpPair {
+    let sv = state_zero(n)
+    return msr_amps_from_state(sv)
+}
+
+// |+>^n  = H^n |0>^n
+fn msr_state_plus_n(n: int) -> AmpPair {
+    let mut sv = state_zero(n)
+    let h = gate_h()
+    let mut q = 0
+    while q < n {
+        sv = apply_single(sv, h.re, h.im, q, n)
+        q = q + 1
+    }
+    return msr_amps_from_state(sv)
+}
+
+// |Bell> = (|00> + |11>)/sqrt(2) on n=2 qubits = CNOT(0->1) H_0 |00>
+fn msr_state_bell() -> AmpPair {
+    let n = 2
+    let mut sv = state_zero(n)
+    let h = gate_h()
+    sv = apply_single(sv, h.re, h.im, 0, n)
+    sv = apply_cnot(sv, 0, 1, n)
+    return msr_amps_from_state(sv)
+}
+
+// |T> = T |+> = T H |0>  on n=1.   = (|0> + e^{i pi/4} |1>) / sqrt(2)
+fn msr_state_T() -> AmpPair {
+    let n = 1
+    let mut sv = state_zero(n)
+    let h = gate_h()
+    sv = apply_single(sv, h.re, h.im, 0, n)
+    let t = gate_t()
+    sv = apply_single(sv, t.re, t.im, 0, n)
+    return msr_amps_from_state(sv)
+}
+
+// |T> tensor |T> on n=2 (q0 and q1 each carry a |T>).
+fn msr_state_T_tensor_T() -> AmpPair {
+    let n = 2
+    let mut sv = state_zero(n)
+    let h = gate_h()
+    let t = gate_t()
+    sv = apply_single(sv, h.re, h.im, 0, n)
+    sv = apply_single(sv, t.re, t.im, 0, n)
+    sv = apply_single(sv, h.re, h.im, 1, n)
+    sv = apply_single(sv, t.re, t.im, 1, n)
+    return msr_amps_from_state(sv)
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  §6  RANDOM CLIFFORD CIRCUITS  (n=1 ; Clifford-invariance falsifier F6)
+// ════════════════════════════════════════════════════════════════════════════
+//
+//  For F6 we feed |T> through a few random single-qubit Cliffords C and
+//  check M_2(C |T>) == M_2(|T>) to 1e-9. The single-qubit Clifford group
+//  C_1 has order 24 and is generated by {H, S}. We sample a deterministic
+//  pseudo-random word of length 6 from {H, S, S-dagger, X, Y, Z} per trial
+//  (a length-6 word reliably surjects onto C_1 in finite-Markov-chain
+//  sense; we test 5 SEEDS so the suite witnesses generic group elements).
+//  The 6-gate library is closed under composition in C_1, so every word
+//  IS a Clifford by construction.
+//
+//  Each trial returns the amps of C|T> on n=1.
+
+fn msr_lcg_next(state: int) -> int {
+    return (state * 1103515245 + 12345) & 2147483647
+}
+
+fn msr_random_clifford_T(seed: int) -> AmpPair {
+    let n = 1
+    let mut sv = state_zero(n)
+    // start from |T>
+    let h0 = gate_h()
+    sv = apply_single(sv, h0.re, h0.im, 0, n)
+    let t0 = gate_t()
+    sv = apply_single(sv, t0.re, t0.im, 0, n)
+    // now apply 6 random single-qubit Clifford gates
+    let mut s = seed
+    let mut g = 0
+    while g < 6 {
+        s = msr_lcg_next(s)
+        let r = s - ((s / 6) * 6)        // r in [0,5]
+        if r == 0 {
+            let gh = gate_h()
+            sv = apply_single(sv, gh.re, gh.im, 0, n)
+        }
+        if r == 1 {
+            let gs = gate_s()
+            sv = apply_single(sv, gs.re, gs.im, 0, n)
+        }
+        if r == 2 {
+            let gd = gate_sdg()
+            sv = apply_single(sv, gd.re, gd.im, 0, n)
+        }
+        if r == 3 {
+            let gx = gate_x()
+            sv = apply_single(sv, gx.re, gx.im, 0, n)
+        }
+        if r == 4 {
+            let gy = gate_y()
+            sv = apply_single(sv, gy.re, gy.im, 0, n)
+        }
+        if r == 5 {
+            let gz = gate_z()
+            sv = apply_single(sv, gz.re, gz.im, 0, n)
+        }
+        g = g + 1
+    }
+    return msr_amps_from_state(sv)
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  §7  SELFTEST  (falsifier-first; @D g6 -- FAILED.marker BEFORE pass)
+// ════════════════════════════════════════════════════════════════════════════
+//
+//  Six falsifier invariants F1-F6 (see header @tool desc). Each is the
+//  closed-form magic-monotone axiom A1/A3/A4 of Leone-Oliviero-Hamma 2022.
+//
+//  Thresholds (mirrors paper precision class):
+//    F1/F2/F3 : |M_2 - 0|              < 1e-12   (stabilizer state -> exact 0)
+//    F4       : |M_2(|T>) - log2(4/3)| < 1e-9    (analytic single-T value)
+//    F5       : |M_2(|T>x|T>) - 2L|    < 1e-9    (additivity of A3)
+//    F6       : |M_2(C|T>) - M_2(|T>)| < 1e-9    (Clifford-invariance of A2)
+//             evaluated for 5 random Clifford seeds; all 5 must hold.
+
+struct FalsifierReport {
+    pass:    int,
+    lines:   [str],
+    // per-invariant numerical values (for the marker body)
+    m2_zero3:    float,    // n=3
+    m2_plus3:    float,    // n=3
+    m2_bell:     float,
+    m2_T:        float,
+    m2_TT:       float,
+    m2_T_log43:  float,    // log2(4/3)
+    f6_max_dev:  float,    // worst Clifford-invariance deviation across 5 seeds
+    wall_seconds: float
+}
+
+fn msr_run_falsifiers() -> FalsifierReport {
+    let t0 = to_int(exec("date +%s").trim())
+    let log43 = msr_log2(4.0 / 3.0)
+    let mut pass = 1
+    let mut lines = []
+
+    // ── F1: |0>^n stabilizer -> M_2 = 0 (use n=3 for non-triviality)
+    let amp_zero3 = msr_state_zero_n(3)
+    let r1 = msr_renyi_entropy(amp_zero3.re, amp_zero3.im, 3)
+    let dev1 = msr_absf(r1.m_2 - 0.0)
+    lines = lines.push("F1  M_2(|0>^3)         = " + str(r1.m_2) + "    (target 0, tol 1e-12, dev=" + str(dev1) + ")")
+    if dev1 > 0.000000000001 { pass = 0 }
+    // Parseval sanity: sum_sq must equal 2^n = 8
+    let par1 = msr_absf(r1.sum_sq - 8.0)
+    lines = lines.push("    Parseval sum<P>^2 = " + str(r1.sum_sq) + "   (target 8, dev=" + str(par1) + ")")
+    if par1 > 0.000000001 { pass = 0 }
+
+    // ── F2: |+>^n stabilizer -> M_2 = 0 (use n=3)
+    let amp_plus3 = msr_state_plus_n(3)
+    let r2 = msr_renyi_entropy(amp_plus3.re, amp_plus3.im, 3)
+    let dev2 = msr_absf(r2.m_2 - 0.0)
+    lines = lines.push("F2  M_2(|+>^3)         = " + str(r2.m_2) + "    (target 0, tol 1e-12, dev=" + str(dev2) + ")")
+    if dev2 > 0.000000000001 { pass = 0 }
+
+    // ── F3: Bell pair stabilizer -> M_2 = 0
+    let amp_bell = msr_state_bell()
+    let r3 = msr_renyi_entropy(amp_bell.re, amp_bell.im, 2)
+    let dev3 = msr_absf(r3.m_2 - 0.0)
+    lines = lines.push("F3  M_2(Bell)          = " + str(r3.m_2) + "    (target 0, tol 1e-12, dev=" + str(dev3) + ")")
+    if dev3 > 0.000000000001 { pass = 0 }
+
+    // ── F4: |T> single-qubit closed form
+    let amp_T = msr_state_T()
+    let rT = msr_renyi_entropy(amp_T.re, amp_T.im, 1)
+    let dev4 = msr_absf(rT.m_2 - log43)
+    lines = lines.push("F4  M_2(|T>)           = " + str(rT.m_2) + "    (target log2(4/3)=" + str(log43) + ", tol 1e-9, dev=" + str(dev4) + ")")
+    if dev4 > 0.000000001 { pass = 0 }
+
+    // ── F5: additivity  M_2(|T> x |T>) = 2 log2(4/3)
+    let amp_TT = msr_state_T_tensor_T()
+    let rTT = msr_renyi_entropy(amp_TT.re, amp_TT.im, 2)
+    let target5 = 2.0 * log43
+    let dev5 = msr_absf(rTT.m_2 - target5)
+    lines = lines.push("F5  M_2(|T>x|T>)       = " + str(rTT.m_2) + "    (target 2 log2(4/3)=" + str(target5) + ", tol 1e-9, dev=" + str(dev5) + ")")
+    if dev5 > 0.000000001 { pass = 0 }
+
+    // ── F6: Clifford-invariance  |M_2(C|T>) - M_2(|T>)| < 1e-9  for 5 seeds
+    let seeds = [101, 202, 314, 4242, 99991]
+    let mut worst_f6 = 0.0
+    let mut si = 0
+    while si < len(seeds) {
+        let amp_CT = msr_random_clifford_T(seeds[si])
+        let rCT = msr_renyi_entropy(amp_CT.re, amp_CT.im, 1)
+        let d = msr_absf(rCT.m_2 - rT.m_2)
+        lines = lines.push("F6  seed=" + str(seeds[si]) + "  M_2(C|T>) = " + str(rCT.m_2) + "    (dev vs M_2(|T>) = " + str(d) + ")")
+        if d > worst_f6 { worst_f6 = d }
+        if d > 0.000000001 { pass = 0 }
+        si = si + 1
+    }
+    lines = lines.push("F6  worst Clifford-invariance dev across 5 seeds = " + str(worst_f6) + "  (tol 1e-9)")
+
+    // ── INFO: Shannon (alpha=1) and min-entropy (alpha=inf) on |T> for completeness
+    lines = lines.push("INFO M_1(|T>)          = " + str(rT.m_1) + "    (Shannon variant)")
+    lines = lines.push("INFO M_inf(|T>)        = " + str(rT.m_inf) + "  (max P!=I = " + rT.pauli_label_max + ", <P>^2 = " + str(rT.max_sq_noni) + ")")
+    lines = lines.push("INFO Pauli enumeration : 4^1=4 (|T>), 4^2=16 (Bell, T^2), 4^3=64 (|0>^3, |+>^3)")
+
+    let t1 = to_int(exec("date +%s").trim())
+    let wall = to_float(t1 - t0)
+    return FalsifierReport {
+        pass: pass,
+        lines: lines,
+        m2_zero3: r1.m_2,
+        m2_plus3: r2.m_2,
+        m2_bell: r3.m_2,
+        m2_T: rT.m_2,
+        m2_TT: rTT.m_2,
+        m2_T_log43: log43,
+        f6_max_dev: worst_f6,
+        wall_seconds: wall
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  §8  MARKER  (falsifier-first per @D g6 -- FAILED path FIRST in selftest)
+// ════════════════════════════════════════════════════════════════════════════
+
+fn msr_emit_marker(passed: int, body: str) -> int {
+    let ts = exec("date +%s").trim()
+    let qm_root = env("QMIRROR_ROOT")
+    let root = if qm_root.len() > 0 { qm_root } else { exec("pwd").trim() }
+    let marker_dir = root + "/state/markers"
+    let _mk = exec("mkdir -p " + marker_dir + " 2>/dev/null")
+    let suffix = if passed == 1 { ".marker" } else { "_FAILED.marker" }
+    let path = marker_dir + "/magic_stabilizer_renyi_" + ts + suffix
+    let _w = exec("echo '" + body + "' > '" + path + "'")
+    println("  marker: " + path)
+    return 0
+}
+
+fn msr_selftest() -> int {
+    let rep = msr_run_falsifiers()
+    let mut i = 0
+    while i < len(rep.lines) {
+        println("  " + rep.lines[i])
+        i = i + 1
+    }
+    let body = "magic_stabilizer_renyi selftest; " +
+        "M_2(|0>^3)=" + str(rep.m2_zero3) + " M_2(|+>^3)=" + str(rep.m2_plus3) +
+        " M_2(Bell)=" + str(rep.m2_bell) +
+        " M_2(|T>)=" + str(rep.m2_T) + " log2(4/3)=" + str(rep.m2_T_log43) +
+        " M_2(|T>x|T>)=" + str(rep.m2_TT) +
+        " F6_max_dev=" + str(rep.f6_max_dev) +
+        " wall=" + str(rep.wall_seconds) + "s"
+
+    // Falsifier-first: FAILED.marker BEFORE pass.
+    if rep.pass == 1 {
+        // fall through to pass marker
+    } else {
+        let _ = msr_emit_marker(0, "FAIL " + body)
+        return 0
+    }
+    let _ = msr_emit_marker(1, "PASS " + body)
+    return 1
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  §9  MAIN
+// ════════════════════════════════════════════════════════════════════════════
+
+fn main() {
+    println("[qmirror/magic-stabilizer-renyi] EXACT stabilizer Renyi entropy M_alpha")
+    println("  paper  = Leone-Oliviero-Hamma 2022, PRL 128 050402 (arXiv:2106.12587)")
+    println("           + follow-up Leone-Oliviero-Hamma 2024, PRA 110 L040403 (arXiv:2404.11652)")
+    println("  defs   = M_2 = -log2( Sum_P <P>^4 / 2^n )   (the canonical magic monotone)")
+    println("           M_1 = -Sum_P Pi log2 Pi - n  (Shannon variant)")
+    println("           M_inf = -log2( max_{P!=I} <P>^2 )  (min-entropy variant)")
+    println("  scope  = EXACT 4^n Pauli enumeration on the 2^n state vector (engine_aer)")
+    println("  ceil   = 4^n Pauli-list wall (n<=12 -> 16.7M strings); NOT a magic-distillation experiment")
+    println("  free   = Clifford ops, single-qubit |T>, tensor product, deterministic LCG seeds")
+
+    if msr_selftest() == 1 {
+        println("[qmirror/magic-stabilizer-renyi] SELFTEST PASS  " +
+                "(6 falsifier invariants F1-F6 cleared; M_2(|T>) = log2(4/3) closed-form exact)")
+        println("__QMIRROR_MAGIC_STABILIZER_RENYI__ PASS")
+    } else {
+        println("[qmirror/magic-stabilizer-renyi] SELFTEST FAIL  " +
+                "(at least one falsifier triggered; see *_FAILED.marker)")
+        println("__QMIRROR_MAGIC_STABILIZER_RENYI__ FAIL")
+    }
+}

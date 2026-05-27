@@ -1,0 +1,111 @@
+#!hexa strict
+// stdlib/hal/backend/esp32/intr.hexa — ESP32 IRQ backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    ESP32 dual Xtensa LX6 @ 240 MHz (PRO_CPU + APP_CPU).
+// Chip ref:  ESP32 TRM §6 Interrupt Matrix; Xtensa LX6 ISA §4.7.
+// Surface:   esp32_intr_{configure,attach,enable,disable,clear}(...)
+// Dispatch:  intr.hexa selects this via cfg-flag.
+//
+// Architecture: ESP32 uses an **interrupt matrix** that routes ~70
+// peripheral interrupts onto each core's 32 internal Xtensa interrupt
+// lines. Each peripheral has a per-core MAP register that selects
+// which Xtensa interrupt # (0..31) it triggers.
+//
+// MMIO layout:
+//
+//   DPORT base = 0x3FF00000   (system & matrix mux)
+//
+//   DPORT_PRO_<peripheral>_INTR_MAP_REG    PRO_CPU peripheral routing
+//                                           (per-peri base + offset; e.g.
+//                                            DPORT_PRO_UART_INTR_MAP_REG = 0x10C
+//                                            relative to DPORT_BASE)
+//   DPORT_APP_<peripheral>_INTR_MAP_REG    APP_CPU peripheral routing
+//                                           (mirror table at +0x90 offset)
+//   DPORT_PRO_INTR_STATUS_REG_0/1/2        bitmap of asserted IRQs (read)
+//   DPORT_APP_INTR_STATUS_REG_0/1/2
+//
+// Xtensa-side: 32 internal interrupt lines (CPU interrupts 0..31)
+// grouped into priority levels 1..7:
+//   level 1: software-maskable (used for most peripheral IRQs)
+//   level 2-3: medium-high (DMA, timer)
+//   level 4: high (high-priority timer)
+//   level 5: NMI (debug)
+//   level 6-7: profiling / unmaskable (not user-allocatable)
+//
+// Priority mapping (sim 4-level → Xtensa 7-level):
+//   PRIO_HIGH (0) → Xtensa level 4 (high-priority IRQ)
+//   PRIO_REAL_T (1) → Xtensa level 3
+//   PRIO_NORMAL (2) → Xtensa level 1 (default)
+//   PRIO_LOW (3) → Xtensa level 1 (with software-tail-chain reorder)
+//
+// Vector entry: handlers in .iram1 section at fixed Xtensa-level
+// vector offsets (level1: 0x40000180; level2: 0x40000200; ...).
+
+let MODULE_NAME = "esp32_intr"
+let SIGMA_SLOT  = 9
+let PHI_KIND    = "digital"
+
+let DR_REG_DPORT_BASE = 0x3FF00000
+let DPORT_PRO_INTR_MAP_OFFSET_BASE = 0x10C    // first PRO_<peri>_INTR_MAP_REG
+let DPORT_APP_INTR_MAP_OFFSET_DELTA = 0x90    // APP table offset from PRO
+
+let XTENSA_VECTOR_LEVEL1 = 0x40000180
+let XTENSA_VECTOR_LEVEL2 = 0x40000200
+let XTENSA_VECTOR_LEVEL3 = 0x40000280
+
+let MAX_PERIPHERAL_IRQ = 70    // ESP32 peripheral IRQ source count
+let MAX_XTENSA_IRQ     = 32    // CPU-internal IRQ lines
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn esp32_intr_configure(vector: int, priority: int) -> int {
+    if vector < 0 || vector > 23 { return -1 }
+    if priority < 0 || priority > 3 { return -2 }
+    // STUB: write DPORT_PRO_<peripheral>_INTR_MAP_REG with the chosen
+    //       Xtensa CPU interrupt # (1..31, mapped from sim priority).
+    return vector
+}
+
+fn esp32_intr_attach(handle: int, name: str) -> bool {
+    if handle < 0 { return false }
+    // STUB: install ISR in the Xtensa-level dispatcher table; ESP-IDF
+    //       calls esp_intr_alloc_intrstatus to glue source → handler.
+    return true
+}
+
+fn esp32_intr_enable(handle: int) -> bool {
+    if handle < 0 || handle > 23 { return false }
+    // STUB: WSR INTENABLE register (Xtensa special); set bit corresponding
+    //       to the CPU interrupt # this source was mapped to.
+    return true
+}
+
+fn esp32_intr_disable(handle: int) -> bool {
+    if handle < 0 || handle > 23 { return false }
+    // STUB: clear corresponding INTENABLE bit
+    return true
+}
+
+fn esp32_intr_clear(handle: int) -> bool {
+    if handle < 0 || handle > 23 { return false }
+    // STUB: WSR INTCLEAR with the bit; for level-triggered sources,
+    //       the peripheral's own status register must also be cleared.
+    return true
+}
+
+fn esp32_intr_report(handle: int) -> str {
+    return "[esp32_intr sim] handle=" + str(handle) + " (skeleton stub — TODO MMIO)"
+}
+
+fn esp32_intr_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32_intr sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  DPORT base=" + str(DR_REG_DPORT_BASE) + " (interrupt matrix mux)")
+    println("  Xtensa LX6: 32 CPU IRQ lines × 7 priority levels; ~70 peri sources")
+    println("  dual-core: separate PRO + APP intr matrices")
+}

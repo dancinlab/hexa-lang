@@ -1,0 +1,121 @@
+#!hexa strict
+// stdlib/hal/backend/stm32h7/gpio.hexa — STM32H7 (Cortex-M7) GPIO backend
+//                                        — paper skeleton.
+//
+// Phase: skeleton / stub. Real MMIO will go here once Cortex-M
+// cross-compile lands. Sim-first invariant preserved (gpio.hexa sim
+// backend ships before this; this file is a HW-backend addition, not
+// a sim replacement).
+//
+// Target:    STMicroelectronics STM32H7 family (Cortex-M7 @ 480 MHz).
+// Chip ref:  RM0433 reference manual, GPIO peripheral §8.
+// Surface:   stm32h7_gpio_{configure,write,read,toggle}(pin, ...)
+// Dispatch:  v0.2.0+ — gpio.hexa selects this via cfg-flag
+//            (e.g. `cfg target = "stm32h7"`).
+//
+// MMIO layout (sketch; real impl writes registers):
+//
+//   GPIOA base:  0x58020000
+//   GPIOB base:  0x58020400
+//   GPIOC base:  0x58020800
+//   ...stride 0x0400 per bank.
+//
+//   Per-bank registers (offsets):
+//     MODER   0x00   2 bits/pin: 00=input 01=output 10=AF 11=analog
+//     OTYPER  0x04   1 bit/pin:  0=push-pull 1=open-drain
+//     IDR     0x10   16 bits read
+//     ODR     0x14   16 bits read/write
+//     BSRR    0x18   atomic set/reset (preferred over ODR)
+//
+// This file maps the σ×τ×2 = 96-pin envelope (= 6 banks × 16 pins)
+// to (bank_idx, pin_in_bank) tuples for the canonical Nucleo-H7
+// pinout. Banks beyond GPIOF are device-dependent and omitted.
+
+// ─── pin → (bank, pin-in-bank) table (96-pin envelope) ───────────────
+
+// 6 GPIO banks × 16 pins/bank = 96 pins covers σ×τ×2 = 96.
+let BANK_NAMES = ["GPIOA", "GPIOB", "GPIOC", "GPIOD", "GPIOE", "GPIOF"]
+let BANK_COUNT = 6
+let PINS_PER_BANK = 16
+let PIN_ENVELOPE = BANK_COUNT * PINS_PER_BANK   // = 96
+
+// MMIO base table (informational; real impl reads via volatile-ptr).
+let BANK_BASES = [
+    "0x58020000",   // GPIOA
+    "0x58020400",   // GPIOB
+    "0x58020800",   // GPIOC
+    "0x58020C00",   // GPIOD
+    "0x58021000",   // GPIOE
+    "0x58021400"    // GPIOF
+]
+
+// ─── pin-mode mirror of stdlib/hal/gpio.hexa ──────────────────────────
+
+let MODE_INPUT        = 0
+let MODE_OUTPUT       = 1
+let MODE_INPUT_PULLUP = 2
+let MODE_INPUT_PULLDN = 3
+let MODE_OPEN_DRAIN   = 4
+let MODE_ANALOG       = 5
+
+// ─── pin → (bank, pin) decode ─────────────────────────────────────────
+
+fn stm32h7_pin_bank(pin: int) -> int {
+    if pin < 0 || pin >= PIN_ENVELOPE { return -1 }
+    return pin / PINS_PER_BANK
+}
+
+fn stm32h7_pin_in_bank(pin: int) -> int {
+    if pin < 0 || pin >= PIN_ENVELOPE { return -1 }
+    return pin - (stm32h7_pin_bank(pin) * PINS_PER_BANK)
+}
+
+fn stm32h7_pin_label(pin: int) -> str {
+    let b = stm32h7_pin_bank(pin)
+    if b < 0 { return "P??" }
+    let p = stm32h7_pin_in_bank(pin)
+    return BANK_NAMES[b] + ":" + str(p)
+}
+
+// ─── stub surface (placeholder MMIO writes) ───────────────────────────
+
+fn stm32h7_gpio_configure(pin: int, mode: int) -> int {
+    if pin < 0 || pin >= PIN_ENVELOPE { return -1 }
+    if mode < MODE_INPUT || mode > MODE_ANALOG { return -2 }
+    let label = stm32h7_pin_label(pin)
+    println("[stm32h7 gpio] configure pin " + str(pin) + " (" + label +
+            ") mode=" + str(mode) + "  // TODO: write MODER/OTYPER/PUPDR")
+    return 0
+}
+
+fn stm32h7_gpio_write(pin: int, value: bool) -> int {
+    if pin < 0 || pin >= PIN_ENVELOPE { return -1 }
+    let label = stm32h7_pin_label(pin)
+    let v = if value { "1" } else { "0" }
+    println("[stm32h7 gpio] write pin " + str(pin) + " (" + label +
+            ") = " + v + "  // TODO: write BSRR atomic set/reset")
+    return 0
+}
+
+fn stm32h7_gpio_read(pin: int) -> int {
+    if pin < 0 || pin >= PIN_ENVELOPE { return -1 }
+    let label = stm32h7_pin_label(pin)
+    println("[stm32h7 gpio] read pin " + str(pin) + " (" + label +
+            ")  // TODO: read IDR")
+    // Stub returns 0 (low) until real MMIO read lands.
+    return 0
+}
+
+fn stm32h7_gpio_toggle(pin: int) -> int {
+    if pin < 0 || pin >= PIN_ENVELOPE { return -1 }
+    let label = stm32h7_pin_label(pin)
+    println("[stm32h7 gpio] toggle pin " + str(pin) + " (" + label +
+            ")  // TODO: read IDR, XOR, write BSRR")
+    return 0
+}
+
+// ─── self-introspection ───────────────────────────────────────────────
+
+fn stm32h7_gpio_backend_meta() -> [str] {
+    return ["stm32h7", "gpio", "skeleton", str(PIN_ENVELOPE)]
+}

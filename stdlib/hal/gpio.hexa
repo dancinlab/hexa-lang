@@ -1,0 +1,80 @@
+#!hexa strict
+// stdlib/hal/gpio/gpio.hexa — σ-slot 1: digital I/O.
+//
+// import:  use "stdlib/hal/gpio"
+// φ:       digital
+// handles: ≤ J₂/n = 4 concurrent pins per process (sim limit; HW
+//          backend can extend per-MCU pin count).
+
+let MODULE_NAME = "gpio"
+let SIGMA_SLOT  = 1
+let PHI_KIND    = "digital"
+
+// ── pin modes ─────────────────────────────────────────────────────────
+let MODE_INPUT       = 0
+let MODE_OUTPUT      = 1
+let MODE_INPUT_PULLUP = 2
+let MODE_INPUT_PULLDN = 3
+let MODE_OPEN_DRAIN  = 4
+let MODE_ANALOG      = 5
+
+// ── handle (sim: pin number is the handle) ────────────────────────────
+//
+// HW backend: handle is an index into a per-MCU pin descriptor table.
+
+// ── τ-stage 0: CONFIGURE ──────────────────────────────────────────────
+fn gpio_configure(pin: int, mode: int) -> int {
+    if pin < 0 || pin > 255 { return -1 }
+    if mode < 0 || mode > 5 { return -2 }
+    // sim: just echo pin as handle
+    return pin
+}
+
+// ── τ-stage 1: START ──────────────────────────────────────────────────
+fn gpio_start(handle: int) -> bool {
+    if handle < 0 { return false }
+    return true
+}
+
+// ── τ-stage 2: SERVE — read / write ───────────────────────────────────
+fn gpio_write(handle: int, value: bool) -> bool {
+    if handle < 0 { return false }
+    // sim: print state change; HW backend writes pin register.
+    let v = if value { "HI" } else { "LO" }
+    println("[gpio sim] pin " + str(handle) + " <- " + v)
+    return true
+}
+
+fn gpio_read(handle: int) -> bool {
+    if handle < 0 { return false }
+    // sim: always return false; HW backend reads pin register.
+    return false
+}
+
+fn gpio_toggle(handle: int) -> bool {
+    if handle < 0 { return false }
+    let cur = gpio_read(handle)
+    return gpio_write(handle, !cur)
+}
+
+// ── τ-stage 3: REPORT ─────────────────────────────────────────────────
+fn gpio_report(handle: int) -> str {
+    if handle < 0 { return "gpio: invalid handle" }
+    return "gpio: pin " + str(handle) + " ok (sim)"
+}
+
+// ── convenience aliases ───────────────────────────────────────────────
+fn gpio_open(pin: int, mode: int) -> int {
+    let h = gpio_configure(pin, mode)
+    if h < 0 { return h }
+    if !gpio_start(h) { return -3 }
+    return h
+}
+
+fn gpio_close(handle: int) -> bool {
+    return handle >= 0   // sim no-op
+}
+
+fn gpio_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}

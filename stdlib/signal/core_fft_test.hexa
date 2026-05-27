@@ -1,0 +1,234 @@
+// Smoke test — stdlib/signal/core_fft (Cooley-Tukey radix-2 FFT / IFFT).
+//
+// SELF-CONTAINED build target. NOTE: single-file `hexa build` does NOT flatten
+// `import "stdlib/..."` (undefined link symbols), so the module body is inlined
+// here VERBATIM (identical to stdlib/signal/core_fft.hexa) to give a compilable
+// + PASSing regression harness. Once cross-import flatten lands (M5-style
+// rebootstrap) this can collapse to `import "stdlib/signal/core_fft.hexa"`.
+//
+// Checks:
+//   T1 impulse → flat spectrum (x=[1,0,0,0] → X all 1+0j)
+//   T2 DC      → single DC bin (x=[1,1,1,1] → X[0]=4, rest 0)
+//   T3 4-point DFT against hand-computed values (x=[1,2,3,4]):
+//        re = [10, -2, -2, -2],  im = [0, 2, 0, -2]
+//   T4 IFFT round-trip recovers the input (x=[1,2,3,4]).
+
+// ════════════════════════════════════════════════════════════════════
+// Inlined module body — VERBATIM copy of stdlib/signal/core_fft.hexa
+// ════════════════════════════════════════════════════════════════════
+
+let CF_PI = 3.14159265358979323846
+let CF_TWO_PI = 6.28318530717958647692
+
+fn _cf_bit_reverse(x: int, bits: int) -> int {
+    let mut result = 0
+    let mut val = x
+    let mut i = 0
+    while i < bits {
+        result = result * 2 + (val - (val / 2) * 2)
+        val = val / 2
+        i = i + 1
+    }
+    return result
+}
+
+fn _cf_log2_int(n: int) -> int {
+    let mut result = 0
+    let mut v = n
+    while v > 1 {
+        v = v / 2
+        result = result + 1
+    }
+    return result
+}
+
+pub fn fft_native(real: [float], imag: [float], n: int) -> [float] {
+    if n <= 0 { return [] }
+    let bits = _cf_log2_int(n)
+
+    let mut re = []
+    let mut im = []
+    let mut i = 0
+    while i < n {
+        let rev = _cf_bit_reverse(i, bits)
+        re = re.push(real[rev])
+        im = im.push(imag[rev])
+        i = i + 1
+    }
+
+    let mut stride = 2
+    while stride <= n {
+        let half = stride / 2
+        let mut j = 0
+        while j < n {
+            let mut k = 0
+            while k < half {
+                let tw_re = cos(0.0 - CF_TWO_PI * k / stride)
+                let tw_im = sin(0.0 - CF_TWO_PI * k / stride)
+                let a_idx = j + k
+                let b_idx = j + k + half
+                let tb_re = tw_re * re[b_idx] - tw_im * im[b_idx]
+                let tb_im = tw_re * im[b_idx] + tw_im * re[b_idx]
+                let a_re = re[a_idx]
+                let a_im = im[a_idx]
+                let new_a_re = a_re + tb_re
+                let new_a_im = a_im + tb_im
+                let new_b_re = a_re - tb_re
+                let new_b_im = a_im - tb_im
+                let mut re_new = []
+                let mut im_new = []
+                let mut q = 0
+                while q < n {
+                    if q == a_idx {
+                        re_new = re_new.push(new_a_re)
+                        im_new = im_new.push(new_a_im)
+                    } else if q == b_idx {
+                        re_new = re_new.push(new_b_re)
+                        im_new = im_new.push(new_b_im)
+                    } else {
+                        re_new = re_new.push(re[q])
+                        im_new = im_new.push(im[q])
+                    }
+                    q = q + 1
+                }
+                re = re_new
+                im = im_new
+                k = k + 1
+            }
+            j = j + stride
+        }
+        stride = stride * 2
+    }
+
+    let mut out = []
+    let mut p = 0
+    while p < n {
+        out = out.push(re[p])
+        out = out.push(im[p])
+        p = p + 1
+    }
+    return out
+}
+
+pub fn ifft_native(real: [float], imag: [float], n: int) -> [float] {
+    if n <= 0 { return [] }
+
+    let mut conj_im = []
+    let mut i = 0
+    while i < n {
+        conj_im = conj_im.push(0.0 - imag[i])
+        i = i + 1
+    }
+
+    let fft_out = fft_native(real, conj_im, n)
+
+    let mut out = []
+    let inv_n = 1.0 / n
+    let mut j = 0
+    while j < n {
+        let re_val = fft_out[j * 2] * inv_n
+        let im_val = 0.0 - fft_out[j * 2 + 1] * inv_n
+        out = out.push(re_val)
+        out = out.push(im_val)
+        j = j + 1
+    }
+    return out
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Test harness
+// ════════════════════════════════════════════════════════════════════
+
+fn _abs_f(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn _check_flag(name: string, ok: int) -> int {
+    if ok == 1 {
+        println("PASS " + name)
+        return 0
+    }
+    println("FAIL " + name)
+    return 1
+}
+
+// Tolerance for the libm-trig FFT. The twiddle factors now use the native
+// libm cos/sin (IEEE-correct), so the only residual is floating-point rounding
+// across the radix-2 butterfly passes — on these N=4 cases the worst-case
+// per-bin error is ~1e-15 (well under 1e-9). 1e-9 leaves a wide margin while
+// being ~5e6× tighter than the old Taylor-drift 5e-3.
+let CF_TOL = 1.0e-9
+
+fn main() {
+    let mut fails = 0
+
+    // ── T1: impulse → flat spectrum ──
+    // x = [1, 0, 0, 0]  →  X[k] = 1 + 0j  for all k
+    let imp_re = [1.0, 0.0, 0.0, 0.0]
+    let imp_im = [0.0, 0.0, 0.0, 0.0]
+    let imp_spec = fft_native(imp_re, imp_im, 4)
+    let mut imp_ok = 1
+    let mut b = 0
+    while b < 4 {
+        if _abs_f(imp_spec[b * 2] - 1.0) > CF_TOL { imp_ok = 0 }
+        if _abs_f(imp_spec[b * 2 + 1] - 0.0) > CF_TOL { imp_ok = 0 }
+        b = b + 1
+    }
+    fails = fails + _check_flag("T1_impulse_flat_spectrum", imp_ok)
+
+    // ── T2: DC → single DC bin ──
+    // x = [1, 1, 1, 1]  →  X[0] = 4,  X[1..3] = 0
+    let dc_re = [1.0, 1.0, 1.0, 1.0]
+    let dc_im = [0.0, 0.0, 0.0, 0.0]
+    let dc_spec = fft_native(dc_re, dc_im, 4)
+    let mut dc_ok = 1
+    if _abs_f(dc_spec[0] - 4.0) > CF_TOL { dc_ok = 0 }
+    if _abs_f(dc_spec[1] - 0.0) > CF_TOL { dc_ok = 0 }
+    let mut d = 1
+    while d < 4 {
+        if _abs_f(dc_spec[d * 2] - 0.0) > CF_TOL { dc_ok = 0 }
+        if _abs_f(dc_spec[d * 2 + 1] - 0.0) > CF_TOL { dc_ok = 0 }
+        d = d + 1
+    }
+    fails = fails + _check_flag("T2_dc_single_bin", dc_ok)
+
+    // ── T3: 4-point DFT against hand-computed values ──
+    // x = [1, 2, 3, 4] (imag 0). W_4^k = {1, -j, -1, +j}.
+    //   X[0] = 10 + 0j
+    //   X[1] = -2 + 2j
+    //   X[2] = -2 + 0j
+    //   X[3] = -2 - 2j
+    let sig_re = [1.0, 2.0, 3.0, 4.0]
+    let sig_im = [0.0, 0.0, 0.0, 0.0]
+    let spec = fft_native(sig_re, sig_im, 4)
+    let exp_re = [10.0, -2.0, -2.0, -2.0]
+    let exp_im = [0.0, 2.0, 0.0, -2.0]
+    let mut dft_ok = 1
+    let mut c = 0
+    while c < 4 {
+        if _abs_f(spec[c * 2] - exp_re[c]) > CF_TOL { dft_ok = 0 }
+        if _abs_f(spec[c * 2 + 1] - exp_im[c]) > CF_TOL { dft_ok = 0 }
+        c = c + 1
+    }
+    fails = fails + _check_flag("T3_4point_dft_hand_computed", dft_ok)
+
+    // ── T4: IFFT round-trip recovers the input ──
+    // ifft( fft(x) ) ≈ x.  Feed the T3 spectrum back through ifft_native.
+    let rec = ifft_native(exp_re, exp_im, 4)
+    let mut rt_ok = 1
+    let mut r = 0
+    while r < 4 {
+        if _abs_f(rec[r * 2] - sig_re[r]) > CF_TOL { rt_ok = 0 }
+        if _abs_f(rec[r * 2 + 1] - 0.0) > CF_TOL { rt_ok = 0 }
+        r = r + 1
+    }
+    fails = fails + _check_flag("T4_ifft_roundtrip", rt_ok)
+
+    if fails == 0 {
+        println("ALL PASS — stdlib/signal/core_fft")
+    } else {
+        println("FAILURES: " + to_string(fails))
+        exit(1)
+    }
+}

@@ -1,0 +1,220 @@
+{
+  "board": {
+    "design_settings": {
+      "defaults": {
+        "board_outline_line_width": 0.05,
+        "copper_line_width": 0.1,
+        "copper_text_size_h": 1.0,
+        "copper_text_size_v": 1.0,
+        "copper_text_thickness": 0.2
+      },
+      "rules": {
+        "min_copper_edge_clearance": 0.3,
+        "min_hole_clearance": 0.15,
+        "min_microvia_diameter": 0.15,
+        "min_microvia_drill": 0.075,
+        "min_silk_clearance": 0.0,
+        "min_through_hole_diameter": 0.2,
+        "min_track_width": 0.075,
+        "min_via_annular_width": 0.05,
+        "min_via_diameter": 0.3
+      },
+      "track_widths": [0.0, 0.075, 0.1, 0.15, 0.2, 0.3, 0.5, 1.0],
+      "via_dimensions": [
+        {"diameter": 0.0, "drill": 0.0},
+        {"diameter": 0.3, "drill": 0.15},
+        {"diameter": 0.5, "drill": 0.25}
+      ]
+    },
+    "layer_presets": [],
+    "viewports": []
+  },
+  "boards": [],
+  "cvpcb": {
+    "equivalence_files": [],
+    "filter_footprints_by_pin_count": false,
+    "filter_footprints_by_library": false,
+    "filter_footprints_by_name": false,
+    "filter_footprints_keyword": ""
+  },
+  "libraries": {
+    "pinned_footprint_libs": [],
+    "pinned_symbol_libs": []
+  },
+  "meta": {
+    "filename": "fw03_hbm.kicad_pro",
+    "version": 1
+  },
+  "net_settings": {
+    "classes": [
+      {
+        "name": "Default",
+        "clearance": 0.1,
+        "track_width": 0.15,
+        "via_diameter": 0.4,
+        "via_drill": 0.2,
+        "uvia_diameter": 0.25,
+        "uvia_drill": 0.1,
+        "diff_pair_width": 0.1,
+        "diff_pair_gap": 0.15,
+        "diff_pair_via_gap": 0.2,
+        "wire_width": 6,
+        "bus_width": 12,
+        "line_style": 0,
+        "schematic_color": "rgba(0, 0, 0, 0.000)",
+        "pcb_color": "rgba(0, 0, 0, 0.000)"
+      },
+      {
+        "name": "Power_HiCurrent",
+        "clearance": 0.3,
+        "track_width": 0.8,
+        "via_diameter": 1.0,
+        "via_drill": 0.5,
+        "uvia_diameter": 0.3,
+        "uvia_drill": 0.1,
+        "diff_pair_width": 0.1,
+        "diff_pair_gap": 0.15,
+        "diff_pair_via_gap": 0.2,
+        "wire_width": 6,
+        "bus_width": 12,
+        "line_style": 0,
+        "schematic_color": "rgba(180, 180, 0, 1.000)",
+        "pcb_color": "rgba(180, 180, 0, 1.000)"
+      },
+      {
+        "name": "Power_LoCurrent",
+        "clearance": 0.2,
+        "track_width": 0.4,
+        "via_diameter": 0.6,
+        "via_drill": 0.3,
+        "uvia_diameter": 0.3,
+        "uvia_drill": 0.1,
+        "diff_pair_width": 0.1,
+        "diff_pair_gap": 0.15,
+        "diff_pair_via_gap": 0.2,
+        "wire_width": 6,
+        "bus_width": 12,
+        "line_style": 0,
+        "schematic_color": "rgba(0, 0, 0, 0.000)",
+        "pcb_color": "rgba(0, 0, 0, 0.000)"
+      },
+      {
+        "name": "HBM4_PHY",
+        "clearance": 0.075,
+        "track_width": 0.075,
+        "via_diameter": 0.3,
+        "via_drill": 0.15,
+        "uvia_diameter": 0.15,
+        "uvia_drill": 0.075,
+        "diff_pair_width": 0.075,
+        "diff_pair_gap": 0.15,
+        "diff_pair_via_gap": 0.2,
+        "wire_width": 6,
+        "bus_width": 12,
+        "line_style": 0,
+        "schematic_color": "rgba(220, 50, 220, 1.000)",
+        "pcb_color": "rgba(220, 50, 220, 1.000)"
+      },
+      {
+        "name": "HBM4_CK",
+        "clearance": 0.1,
+        "track_width": 0.1,
+        "via_diameter": 0.35,
+        "via_drill": 0.175,
+        "uvia_diameter": 0.2,
+        "uvia_drill": 0.1,
+        "diff_pair_width": 0.1,
+        "diff_pair_gap": 0.15,
+        "diff_pair_via_gap": 0.2,
+        "wire_width": 6,
+        "bus_width": 12,
+        "line_style": 0,
+        "schematic_color": "rgba(160, 50, 160, 1.000)",
+        "pcb_color": "rgba(160, 50, 160, 1.000)"
+      },
+      {
+        "name": "I2C_SMBus",
+        "clearance": 0.15,
+        "track_width": 0.15,
+        "via_diameter": 0.4,
+        "via_drill": 0.2,
+        "uvia_diameter": 0.25,
+        "uvia_drill": 0.1,
+        "diff_pair_width": 0.1,
+        "diff_pair_gap": 0.15,
+        "diff_pair_via_gap": 0.2,
+        "wire_width": 6,
+        "bus_width": 12,
+        "line_style": 0,
+        "schematic_color": "rgba(50, 180, 180, 1.000)",
+        "pcb_color": "rgba(50, 180, 180, 1.000)"
+      }
+    ],
+    "meta": {"version": 3},
+    "net_colors": null,
+    "netclass_assignments": null,
+    "netclass_patterns": [
+      {"netclass": "Power_HiCurrent", "pattern": "/+1V10"},
+      {"netclass": "Power_HiCurrent", "pattern": "/+0V40"},
+      {"netclass": "Power_LoCurrent", "pattern": "/+24V"},
+      {"netclass": "Power_LoCurrent", "pattern": "/+3V3"},
+      {"netclass": "Power_LoCurrent", "pattern": "/+1V8"},
+      {"netclass": "Power_LoCurrent", "pattern": "/+0V85"},
+      {"netclass": "Power_LoCurrent", "pattern": "/GND"},
+      {"netclass": "HBM4_PHY", "pattern": "/HBM4_DQ*"},
+      {"netclass": "HBM4_CK", "pattern": "/HBM4_DQS*"},
+      {"netclass": "HBM4_CK", "pattern": "/HBM4_CK*"},
+      {"netclass": "I2C_SMBus", "pattern": "/I2C_SMBUS*"},
+      {"netclass": "I2C_SMBus", "pattern": "/THERMAL_SENSE_BUS*"}
+    ]
+  },
+  "pcbnew": {
+    "last_paths": {
+      "gencad": "",
+      "idf": "",
+      "netlist": "",
+      "plot": "",
+      "pos_files": "",
+      "specctra_dsn": "",
+      "step": "",
+      "vrml": ""
+    },
+    "page_layout_descr_file": ""
+  },
+  "schematic": {
+    "annotate_start_num": 0,
+    "drawing": {
+      "default_line_thickness": 6.0,
+      "default_text_size": 50.0,
+      "field_names": [],
+      "intersheets_refs_own_page": false,
+      "intersheets_refs_prefix": "",
+      "intersheets_refs_short": false,
+      "intersheets_refs_show": false,
+      "intersheets_refs_suffix": "",
+      "junction_size_choice": 3,
+      "label_size_ratio": 0.375,
+      "pin_symbol_size": 25.0,
+      "text_offset_ratio": 0.15
+    },
+    "legacy_lib_dir": "",
+    "legacy_lib_list": [],
+    "meta": {"version": 1},
+    "net_format_name": "",
+    "page_layout_descr_file": "",
+    "plot_directory": "",
+    "spice_adjust_passive_values": false,
+    "spice_external_command": "spice \"%I\"",
+    "subpart_first_id": 65,
+    "subpart_id_separator": 0
+  },
+  "sheets": [
+    ["00000000-0000-0000-0000-000000000000", "Root"]
+  ],
+  "text_variables": {
+    "BOARD_ID": "HEXA-CHIP-FW-03",
+    "BOARD_FALSIFIER": "F-CHIP-3",
+    "BOARD_REV": "v0.1-paper",
+    "BOARD_DATE": "2026-05-08"
+  }
+}

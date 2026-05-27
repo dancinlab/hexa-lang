@@ -1,0 +1,116 @@
+#!hexa strict
+// hexa-space/verify/board_audit.hexa — Phase E doc-bundle presence audit.
+//
+// For each Stage-1 controller (HEXA-{ORBIT,LAUNCH,DXA,RAPTOR}-01) verifies
+// the presence of:
+//   1. SCHEMATIC.md   — board-level net list + power tree
+//   2. BOM.csv        — bill of materials with TOTAL line
+//   3. PCB.md         — stack-up + outline + routing rules
+//   4. COMMISSIONING.md — Phase E bring-up checklist with closure-event gate
+//   5. <board>.kicad_sch — KiCad-readable root sheet skeleton
+//
+// Plus inventory cross-check: BOM.csv contains a TOTAL_BOARD line and
+// SCHEMATIC.md cites HEXA_REG_ID = 0x060C0402 master closure register.
+//
+// Sentinel: __HEXA_SPACE_BOARD_AUDIT__ PASS  (recipe §4 invariants)
+// Cost: $0 — file existence + grep.
+// @no-lock-needed
+
+let HOME = env("HOME")
+
+fn _root() -> str {
+    let r = env("HEXA_SPACE_ROOT")
+    if r.len() > 0 { return r }
+    let pwd = exec("pwd").trim()
+    if pwd.len() > 0 { return pwd }
+    return HOME + "/core/hexa-space"
+}
+
+let ROOT = _root()
+
+let FALSIFIERS: [str] = ["F-SPACE-1", "F-SPACE-2", "F-SPACE-3", "F-SPACE-4"]
+
+let BOARDS: [str] = [
+    "orbit_01",      // F-SPACE-1
+    "launch_01",     // F-SPACE-2
+    "dxa_01",        // F-SPACE-3
+    "raptor_01",     // F-SPACE-4
+]
+
+fn _read(p: str) -> str {
+    if file_exists(p) == false { return "" }
+    return read_file(p)
+}
+
+fn _has(t: str, s: str) -> bool {
+    if t.len() == 0 { return false }
+    return t.find(s) >= 0
+}
+
+let mut RUN  = 0
+let mut FAIL = 0
+let mut FAILURES = []
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    if ok {
+        println("  [PASS] " + label)
+        if detail.len() > 0 { println("         · " + detail) }
+    } else {
+        FAIL = FAIL + 1
+        FAILURES.push(label + " :: " + detail)
+        println("  [FAIL] " + label + "  · " + detail)
+    }
+}
+
+fn _audit_board(slug: str) {
+    let dir = ROOT + "/firmware/board/" + slug
+    println("")
+    println("  --- " + slug + " ---")
+    let docs = [
+        "SCHEMATIC.md",
+        "BOM.csv",
+        "PCB.md",
+        "COMMISSIONING.md",
+        slug + ".kicad_sch",
+    ]
+    for d in docs {
+        let p = dir + "/" + d
+        let exists = file_exists(p)
+        _check(exists, slug + "/" + d + " present",
+               if exists { "" } else { "missing: " + p })
+    }
+    let bom = _read(dir + "/BOM.csv")
+    _check(_has(bom, "TOTAL_BOARD"),
+           slug + "/BOM.csv has TOTAL_BOARD line", "")
+    let sch = _read(dir + "/SCHEMATIC.md")
+    _check(_has(sch, "0x060C0402") || _has(sch, "060C_0402"),
+           slug + "/SCHEMATIC.md cites HEXA_REG_ID 0x060C0402", "")
+    let cmn = _read(dir + "/COMMISSIONING.md")
+    _check(_has(cmn, "closure event"),
+           slug + "/COMMISSIONING.md declares F-SPACE-N closure event gate",
+           "")
+}
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-space — Phase E board-doc audit (4 Stage-1 controllers)")
+    println("========================================================================")
+    println("  root: " + ROOT)
+
+    for b in BOARDS { _audit_board(b) }
+
+    let pass_n = RUN - FAIL
+    println("")
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " Phase E doc checks pass")
+    if FAIL > 0 {
+        println("  FAILURES:")
+        for f in FAILURES { println("    ✗ " + f) }
+        println("__HEXA_SPACE_BOARD_AUDIT__ FAIL")
+        exit(1)
+    }
+    println("  All 4 Stage-1 controllers ship Phase E procurement-prep docs.")
+    println("__HEXA_SPACE_BOARD_AUDIT__ PASS")
+    exit(0)
+}

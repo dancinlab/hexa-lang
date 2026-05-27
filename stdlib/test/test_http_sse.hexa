@@ -1,0 +1,246 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  stdlib/test/test_http_sse.hexa
+//
+//  Selftest for stdlib/http_sse — SSE / chunked streaming client.
+//
+//  Run:
+//      hexa run stdlib/test/test_http_sse.hexa
+//          → pure-string parser tests + buffered replay (interp-safe).
+//      ANIMA_HTTP_SSE_LIVE=1 hexa build stdlib/test/test_http_sse.hexa -o /tmp/sse_t \
+//          && /tmp/sse_t
+//          → adds live streaming probe against
+//             https://stream.wikimedia.org/v2/stream/recentchange (AOT only;
+//             requires HEXA_HTTP_SSE_ASSUME_AOT=1).
+//
+//  Coverage:
+//      * shell-escape header build (pure string)
+//      * curl cmd builder (deterministic, no exec)
+//      * event parser: comment, simple data, multi-data join, event field,
+//        id field, retry int, blank line dispatch, no-colon field.
+//      * buffered replay over a fixture string (interp-safe end-to-end)
+//      * live SSE probe (opt-in, AOT only)
+// ═══════════════════════════════════════════════════════════════════════════
+
+use "stdlib/http_sse"
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn chk_eq_int(tag, got, want) {
+    if got == want {
+        println("  PASS " + tag + " == " + to_string(want))
+        pass_count = pass_count + 1
+    } else {
+        println("  FAIL " + tag + " got=" + to_string(got) + " want=" + to_string(want))
+        fail_count = fail_count + 1
+    }
+}
+
+fn chk_eq_str(tag, got, want) {
+    if to_string(got) == want {
+        println("  PASS " + tag + " == \"" + want + "\"")
+        pass_count = pass_count + 1
+    } else {
+        println("  FAIL " + tag + " got=\"" + to_string(got) + "\" want=\"" + want + "\"")
+        fail_count = fail_count + 1
+    }
+}
+
+fn chk_eq_bool(tag, got, want) {
+    if got == want {
+        println("  PASS " + tag)
+        pass_count = pass_count + 1
+    } else {
+        let g = if got { "true" } else { "false" }
+        let w = if want { "true" } else { "false" }
+        println("  FAIL " + tag + " got=" + g + " want=" + w)
+        fail_count = fail_count + 1
+    }
+}
+
+fn chk_contains(tag, haystack, needle) {
+    let idx = to_string(haystack).index_of(needle)
+    if idx >= 0 {
+        println("  PASS " + tag + " contains \"" + needle + "\"")
+        pass_count = pass_count + 1
+    } else {
+        println("  FAIL " + tag + " missing \"" + needle + "\" in: " + to_string(haystack))
+        fail_count = fail_count + 1
+    }
+}
+
+// ── module-scope event sink (callback fn idents must be top-level) ──
+let mut _test_collected_events = []
+
+fn _test_event_collector(ev) {
+    let line = to_string(ev["event"]) + "|" + to_string(ev["data"]) + "|" + to_string(ev["id"])
+    _test_collected_events.push(line)
+}
+
+fn main() -> void {
+    println("── stdlib/http_sse selftest ──")
+
+    // ── 1. curl cmd builder (deterministic) ─────────────────────────
+    let cmd = http_sse_build_curl_cmd(
+        "https://example.com/sse",
+        #{"Accept": "text/event-stream", "Authorization": "Bearer xyz"},
+        30
+    )
+    chk_contains("cmd_has_no_buffer", cmd, "--no-buffer")
+    chk_contains("cmd_has_silent", cmd, "-sSL")
+    chk_contains("cmd_has_max_time", cmd, "--max-time 30")
+    chk_contains("cmd_has_accept_header", cmd, "Accept: text/event-stream")
+    chk_contains("cmd_has_auth_header", cmd, "Authorization: Bearer xyz")
+    chk_contains("cmd_has_url", cmd, "https://example.com/sse")
+    chk_contains("cmd_redirects_stderr", cmd, "2>/dev/null")
+
+    // 1b. timeout<=0 → no --max-time (long-lived streams).
+    let cmd_inf = http_sse_build_curl_cmd("https://example.com/", #{}, 0)
+    let has_max_time = cmd_inf.index_of("--max-time")
+    chk_eq_bool("cmd_no_timeout_omits_max_time", has_max_time < 0, true)
+
+    // ── 2. SSE event parser (pure string) ───────────────────────────
+
+    // Simple data field.
+    let ev1 = http_sse_empty_event()
+    let ev1b = http_sse_parse_event(ev1, "data: hello world")
+    chk_eq_str("simple_data", ev1b["data"], "hello world")
+    chk_eq_str("simple_event_default", ev1b["event"], "message")
+
+    // Multi-data join with "\n".
+    let ev2 = http_sse_empty_event()
+    let ev2a = http_sse_parse_event(ev2, "data: line1")
+    let ev2b = http_sse_parse_event(ev2a, "data: line2")
+    chk_eq_str("multi_data_join", ev2b["data"], "line1\nline2")
+
+    // Event field.
+    let ev3 = http_sse_empty_event()
+    let ev3a = http_sse_parse_event(ev3, "event: token")
+    let ev3b = http_sse_parse_event(ev3a, "data: hi")
+    chk_eq_str("event_field", ev3b["event"], "token")
+    chk_eq_str("event_field_data", ev3b["data"], "hi")
+
+    // ID field.
+    let ev4 = http_sse_empty_event()
+    let ev4a = http_sse_parse_event(ev4, "id: 42")
+    chk_eq_str("id_field", ev4a["id"], "42")
+
+    // Retry field (integer ms).
+    let ev5 = http_sse_empty_event()
+    let ev5a = http_sse_parse_event(ev5, "retry: 5000")
+    chk_eq_int("retry_field", ev5a["retry"], 5000)
+
+    // Comment line ignored.
+    let ev6 = http_sse_empty_event()
+    let ev6a = http_sse_parse_event(ev6, ": keep-alive ping")
+    chk_eq_str("comment_ignored_data", ev6a["data"], "")
+    chk_eq_str("comment_ignored_event", ev6a["event"], "message")
+
+    // Field with no colon → field=line, value="".
+    let ev7 = http_sse_empty_event()
+    let ev7a = http_sse_parse_event(ev7, "data")
+    chk_eq_str("no_colon_field_data_empty", ev7a["data"], "")
+    chk_eq_bool("no_colon_field_data_marked", ev7a["_has_data"], true)
+
+    // Leading-space stripping.
+    let ev8 = http_sse_empty_event()
+    let ev8a = http_sse_parse_event(ev8, "data:  two-spaces")
+    chk_eq_str("strip_one_leading_space", ev8a["data"], " two-spaces")
+
+    // CRLF tolerance.
+    let ev9 = http_sse_empty_event()
+    let ev9a = http_sse_parse_event(ev9, "data: crlf\r\n")
+    chk_eq_str("crlf_strip", ev9a["data"], "crlf")
+
+    // ── 3. Buffered replay (interp-safe end-to-end) ─────────────────
+    //
+    // We don't actually hit the network here — instead we monkey-patch
+    // the buffered path by feeding a synthetic SSE transcript through
+    // the parser-driven loop. To do that we re-implement the buffered
+    // dispatcher inline (since http_sse_get_buffered requires a real
+    // exec(curl)). The point is to verify the parser+dispatcher chain
+    // produces the right event sequence.
+
+    let fixture = "event: open\ndata: {\"id\":1}\n\nevent: token\ndata: hello\n\ndata: line1\ndata: line2\n\n: keep-alive\n\nevent: close\nid: end\ndata: bye\n\n"
+    _test_collected_events = []
+
+    let lines = split(fixture, "\n")
+    let mut ev = http_sse_empty_event()
+    let mut i = 0
+    while i < len(lines) {
+        let line = to_string(lines[i])
+        if len(line) == 0 {
+            let has_content = ev["_has_data"] || to_string(ev["event"]) != "message" || len(to_string(ev["id"])) > 0
+            if has_content {
+                _test_event_collector(ev)
+            }
+            ev = http_sse_empty_event()
+        } else {
+            ev = http_sse_parse_event(ev, line)
+        }
+        i = i + 1
+    }
+
+    chk_eq_int("fixture_event_count", len(_test_collected_events), 4)
+    if len(_test_collected_events) >= 4 {
+        chk_eq_str("fixture_ev0", _test_collected_events[0], "open|{\"id\":1}|")
+        chk_eq_str("fixture_ev1", _test_collected_events[1], "token|hello|")
+        chk_eq_str("fixture_ev2", _test_collected_events[2], "message|line1\nline2|")
+        chk_eq_str("fixture_ev3", _test_collected_events[3], "close|bye|end")
+    }
+
+    // ── 4. http_sse_available probe ─────────────────────────────────
+    let avail = http_sse_available()
+    // curl is required by sister stdlib/http; we expect it to be
+    // present in the dev/CI environment. Don't fail the test if it
+    // isn't — just record.
+    if avail["curl"] {
+        println("  INFO curl available")
+    } else {
+        println("  INFO curl missing (streaming will fail)")
+    }
+    println("  INFO exec_stream presumed=" + to_string(avail["exec_stream"]) + " (set HEXA_HTTP_SSE_ASSUME_AOT=1 under AOT)")
+
+    // ── 5. Live probe (opt-in, AOT only) ────────────────────────────
+    //
+    // ANIMA_HTTP_SSE_LIVE=1 enables a 5-second tap on the public
+    // Wikimedia recent-change SSE feed (no auth required, ≥1 event/s
+    // typical). Skip when not under AOT (interp lacks exec_stream).
+    let live_env = env("ANIMA_HTTP_SSE_LIVE")
+    let aot_env = env("HEXA_HTTP_SSE_ASSUME_AOT")
+    if live_env == "1" && aot_env == "1" && avail["curl"] {
+        println("  -- live probe enabled (ANIMA_HTTP_SSE_LIVE=1, AOT) --")
+        _test_collected_events = []
+        let rc = http_sse_get(
+            "https://stream.wikimedia.org/v2/stream/recentchange",
+            #{"Accept": "text/event-stream"},
+            _test_event_collector,
+            5
+        )
+        // curl --max-time 5 returns 28 (Operation timeout) — that's
+        // success for our purposes (we got SOME events before it
+        // tripped). Accept either 0 (server hung up cleanly) or 28.
+        let rc_ok = rc == 0 || rc == 28
+        chk_eq_bool("live_rc_acceptable", rc_ok, true)
+        // Wikimedia stream emits ~5-10 events/s — expect at least 1
+        // in 5 seconds even on a slow link.
+        let got = len(_test_collected_events)
+        let some = got >= 1
+        chk_eq_bool("live_event_received", some, true)
+        if got > 0 {
+            println("  INFO live captured " + to_string(got) + " events (first: " + to_string(_test_collected_events[0]).substring(0, 60) + "...)")
+        }
+    } else {
+        println("  -- live probe skipped (need ANIMA_HTTP_SSE_LIVE=1 + HEXA_HTTP_SSE_ASSUME_AOT=1 + curl) --")
+    }
+
+    let total = pass_count + fail_count
+    println("")
+    println("  pass=" + to_string(pass_count) + "  fail=" + to_string(fail_count))
+    if fail_count == 0 {
+        println("PASS: http_sse stdlib selftest " + to_string(pass_count) + "/" + to_string(total))
+        return
+    }
+    println("FAIL: http_sse stdlib selftest " + to_string(pass_count) + "/" + to_string(total))
+    exit(1)
+}

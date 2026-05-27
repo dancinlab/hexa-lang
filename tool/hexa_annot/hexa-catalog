@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+# hexa-catalog — @cli/@flag/@doc CLI surface extractor (AST-backed)
+#
+# Input:
+#   hexa-catalog <file.hexa> [<file2.hexa> ...]
+#   hexa-catalog --dir <directory>
+#
+# Output (stdout JSON, schema v0.2 / source "ast"):
+#   { "version":"0.2","source":"ast",
+#     "commands":[{sub, desc, file, line, flags[{name,type,required,default,desc}]}] }
+set -eu
+
+usage() {
+    cat >&2 <<EOF
+usage: hexa-catalog <file.hexa> [file2.hexa ...]
+       hexa-catalog --dir <directory>
+EOF
+    exit 1
+}
+
+case "${1:-}" in
+    -h|--help|"") usage ;;
+esac
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+. "${SCRIPT_DIR}/_ast_extract.sh"
+
+if ! resolve_files "$@"; then exit 1; fi
+if [ ${#FILES[@]} -eq 0 ]; then
+    printf '{"version":"0.2","source":"ast","commands":[]}\n'
+    exit 0
+fi
+
+run_ast_extract | awk '
+function jesc(s,   r) { r = s; gsub(/\\/, "\\\\", r); gsub(/"/, "\\\"", r); return r }
+function decode_esc(s,   out, i, n, c, nc) {
+    out = ""; n = length(s); i = 1
+    while (i <= n) {
+        c = substr(s, i, 1)
+        if (c == "\\" && i < n) {
+            nc = substr(s, i + 1, 1)
+            if (nc == "n")  { out = out "\n"; i += 2; continue }
+            if (nc == "r")  { out = out "\r"; i += 2; continue }
+            if (nc == "t")  { out = out "\t"; i += 2; continue }
+            if (nc == "\\") { out = out "\\"; i += 2; continue }
+        }
+        out = out c; i++
+    }
+    return out
+}
+function kv_extract(raw, key,    s, pat, pos, rest, val, n, i, c, nc) {
+    s = raw
+    pat = "(^|[ \\t,(])" key "[ \\t]*[=:][ \\t]*"
+    pos = match(s, pat)
+    if (pos == 0) return ""
+    rest = substr(s, pos + RLENGTH)
+    sub(/^[ \t]+/, "", rest)
+    if (substr(rest, 1, 1) == "\"") {
+        val = ""; i = 2; n = length(rest)
+        while (i <= n) {
+            c = substr(rest, i, 1)
+            if (c == "\"") break
+            val = val c; i++
+        }
+        return val
+    }
+    if (match(rest, /[,)[:space:]]/)) return substr(rest, 1, RSTART - 1)
+    return rest
+}
+BEGIN { FS = "\t"; n_cmds = 0; cur_fn = "" }
+/^# error\t/ { next }
+{
+    kind = $1; tgtk = $2; fn = $3; file = $4; line = $5; raw = decode_esc($6)
+    if (tgtk != "fn") next
+    if (kind == "cli") {
+        n_cmds++
+        cmd_sub[n_cmds]  = kv_extract(raw, "sub")
+        cmd_desc[n_cmds] = kv_extract(raw, "desc")
+        cmd_file[n_cmds] = file
+        cmd_line[n_cmds] = line
+        cmd_fn[n_cmds]   = fn
+        cmd_flags_n[n_cmds] = 0
+    } else if (kind == "flag" && n_cmds > 0 && cmd_fn[n_cmds] == fn) {
+        idx = ++cmd_flags_n[n_cmds]
+        flag_name[n_cmds, idx]    = kv_extract(raw, "name")
+        flag_type[n_cmds, idx]    = kv_extract(raw, "type")
+        flag_req[n_cmds, idx]     = kv_extract(raw, "required")
+        flag_default[n_cmds, idx] = kv_extract(raw, "default")
+        flag_desc[n_cmds, idx]    = kv_extract(raw, "desc")
+    } else if (kind == "doc" && n_cmds > 0 && cmd_fn[n_cmds] == fn) {
+        # accept positional first string after @doc(
+        if (cmd_desc[n_cmds] == "") {
+            # try section= or body= or _pos_1
+            d = kv_extract(raw, "body")
+            if (d == "") d = kv_extract(raw, "section")
+            if (d != "") cmd_desc[n_cmds] = d
+        }
+    }
+}
+END {
+    body = ""
+    for (i = 1; i <= n_cmds; i++) {
+        if (i > 1) body = body ","
+        body = body "{"
+        body = body "\"sub\":\""  jesc(cmd_sub[i]) "\""
+        body = body ",\"desc\":\"" jesc(cmd_desc[i]) "\""
+        body = body ",\"file\":\"" jesc(cmd_file[i]) "\""
+        body = body ",\"line\":"   cmd_line[i]
+        flags_body = ""
+        for (j = 1; j <= cmd_flags_n[i]; j++) {
+            if (j > 1) flags_body = flags_body ","
+            flags_body = flags_body "{"
+            flags_body = flags_body "\"name\":\"" jesc(flag_name[i, j]) "\""
+            if (flag_type[i, j] != "")    flags_body = flags_body ",\"type\":\"" jesc(flag_type[i, j]) "\""
+            if (flag_req[i, j] != "")     flags_body = flags_body ",\"required\":" (flag_req[i, j] == "true" ? "true" : "false")
+            if (flag_default[i, j] != "") flags_body = flags_body ",\"default\":\"" jesc(flag_default[i, j]) "\""
+            if (flag_desc[i, j] != "")    flags_body = flags_body ",\"desc\":\"" jesc(flag_desc[i, j]) "\""
+            flags_body = flags_body "}"
+        }
+        body = body ",\"flags\":[" flags_body "]"
+        body = body "}"
+    }
+    printf("{\"version\":\"0.2\",\"source\":\"ast\",\"commands\":[%s]}\n", body)
+}'

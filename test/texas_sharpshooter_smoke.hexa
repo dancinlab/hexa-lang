@@ -1,0 +1,98 @@
+// test/texas_sharpshooter_smoke.hexa — smoke for symbolic/texas_sharpshooter.hexa
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Reference values reproduced from archive-TECS-L/texas_quantum.py (the
+// DISCOVERIES list + scan_1d/2d + verdict ladder). All deterministic scans
+// are exact integer sweeps, so hit counts are reproducible:
+//   divisor_sigma(6,1)=12 · triangular(17)=153   (NT helpers from source)
+//   disc0 "137+1/n"  n∈[1,1000]      → hits=995, total=1000, p=0.995
+//   disc2 "n×e²"     n∈[1,100]       → hits=1,   total=100,  p=0.01
+//   disc7 "e+1/n"    n∈[1,1000]      → hits=122, total=1000
+//   disc4 "a/b"      a∈[1,20]b∈[1,200] → hits=9, total=4000
+//   disc1 "σ(a)·T(b)" a,b∈[1,100]    → hits=2,   total=10000
+//   MC-only disc5/disc6 (a^ln b / exp(1/ab)) → hits=0, total=100000
+//   verdict ladder: <0.01 structural · <0.05 weak · else chance
+//   bonferroni_p(0.001, 8) = 0.008  → "structural"
+// (The 300k-iteration 3D m_tau scan is exercised by the kernel but omitted
+//  from this fast smoke; manifest documents hits=100/300000.)
+//
+// Run:  hexa run test/texas_sharpshooter_smoke.hexa
+// Sentinel: __TXS_SMOKE__ PASS|FAIL on the final line.
+
+import "compiler/atlas/symbolic/texas_sharpshooter.hexa"
+
+let mut PASS = 0
+let mut FAIL = 0
+
+fn check(label: string, cond: bool) {
+    if cond {
+        PASS = PASS + 1
+        println("[PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("[FAIL] " + label)
+    }
+}
+
+fn approx(a: float, b: float, tol: float) -> bool {
+    let d = a - b
+    if d < 0.0 { return (0.0 - d) < tol }
+    return d < tol
+}
+
+// ── NT helpers ──────────────────────────────────────────────────────────
+check("divisor_sigma(6,1) == 12", divisor_sigma(6, 1) == 12)
+check("divisor_sigma(28,1) == 56", divisor_sigma(28, 1) == 56)
+check("divisor_sigma(6,0) == 4 (tau)", divisor_sigma(6, 0) == 4)
+check("triangular(17) == 153", triangular(17) == 153)
+check("triangular(6) == 21", triangular(6) == 21)
+
+// ── verdict ladder (fixed thresholds) ───────────────────────────────────
+check("verdict(0.005) == structural", verdict(0.005) == "structural")
+check("verdict(0.03)  == weak",       verdict(0.03) == "weak")
+check("verdict(0.20)  == chance",     verdict(0.20) == "chance")
+
+// ── Bonferroni correction ───────────────────────────────────────────────
+check("bonferroni_p(0.001, 8) == 0.008", approx(bonferroni_p(0.001, 8), 0.008, 0.0001))
+check("bonferroni_p(0.5, 8) clamps to 1.0", approx(bonferroni_p(0.5, 8), 1.0, 0.0001))
+check("bonferroni(0.001,8)=0.008 → structural", verdict(bonferroni_p(0.001, 8)) == "structural")
+
+// ── discovery table ─────────────────────────────────────────────────────
+let ds = discoveries()
+check("discoveries() has 8 entries", len(ds) == 8)
+
+// ── deterministic 1D scans ──────────────────────────────────────────────
+let r0 = run_single(ds[0])
+check("disc0 1/alpha: hits=995, total=1000", r0.hits == 995 && r0.total == 1000)
+check("single_p(disc0) == 0.995", approx(single_p(ds[0]), 0.995, 0.0001))
+
+let r2 = run_single(ds[2])
+check("disc2 m_mu/m_e: hits=1, total=100", r2.hits == 1 && r2.total == 100)
+
+let r7 = run_single(ds[7])
+check("disc7 CMB: hits=122, total=1000", r7.hits == 122 && r7.total == 1000)
+
+// ── deterministic 2D scans ──────────────────────────────────────────────
+let r4 = run_single(ds[4])
+check("disc4 sin2θW (a/b): hits=9, total=4000", r4.hits == 9 && r4.total == 4000)
+
+let r1 = run_single(ds[1])
+check("disc1 m_p/m_e (σ·T): hits=2, total=10000", r1.hits == 2 && r1.total == 10000)
+
+// ── MC-only discoveries are well-defined (hits=0, total=MC_TRIALS) ───────
+let r5 = run_single(ds[5])
+check("disc5 (MC-only) hits=0 total=100000", r5.hits == 0 && r5.total == 100000)
+let r6 = run_single(ds[6])
+check("disc6 (MC-only) hits=0 total=100000", r6.hits == 0 && r6.total == 100000)
+
+println("")
+println("═══════════════════════════════════════════════════════════")
+println("  texas_sharpshooter smoke: PASS=" + str(PASS) + " FAIL=" + str(FAIL))
+println("═══════════════════════════════════════════════════════════")
+if FAIL > 0 {
+    println("__TXS_SMOKE__ FAIL")
+} else {
+    println("__TXS_SMOKE__ PASS")
+}

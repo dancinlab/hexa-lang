@@ -1,0 +1,135 @@
+// HEXA Native Compiler — Phase 4 external-resource absorption: bridges smoke
+//
+// @version 0.1.0
+// @capabilities [exec, env]
+//
+// One smoke per bridge under HEXA_FORCE_FALLBACK=1. Verifies:
+//   - δ dispatcher returns ok=true on fallback path
+//   - fallback body is non-empty
+//   - exit_code == 0
+//
+// Run:  hexa run compiler/bridges/bridges_test.hexa
+//
+// The test sets HEXA_FORCE_FALLBACK via setenv() inside main() because
+// the hexa.real launcher strips ad-hoc env vars at startup — see the
+// note in compiler/hw_probes/probes_test.hexa.
+
+import "./_common.hexa"
+import "./codata.hexa"
+import "./oeis.hexa"
+import "./arxiv.hexa"
+import "./gw.hexa"
+import "./horizons.hexa"
+import "./cmb.hexa"
+import "./nanograv.hexa"
+import "./simbad.hexa"
+import "./icecube.hexa"
+import "./nist_atomic.hexa"
+import "./wikipedia.hexa"
+import "./openalex.hexa"
+import "./gaia.hexa"
+import "./lhc.hexa"
+import "./pubchem.hexa"
+import "./uniprot.hexa"
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok { println("  PASS  " + label) }
+    else { println("  FAIL  " + label); fails.push(label) }
+}
+
+fn _exercise(name: string, r: array, fails: array) -> bool {
+    let ok = cli_ok(r) && cli_stdout(r).len() > 0 && cli_exit(r) == 0
+    _check(name + " (fallback) ok+body+exit0", ok, fails)
+    return ok
+}
+
+fn main() {
+    setenv("HEXA_FORCE_FALLBACK", "1")
+
+    println("bridges Phase 4 smoke (δ try-live-or-fallback, 16 bridges)")
+    println("HEXA_FORCE_FALLBACK = " + env("HEXA_FORCE_FALLBACK"))
+    println("")
+
+    let fails = []
+    let mut pass: i64 = 0
+    let mut total: i64 = 0
+
+    // Each bridge: 1 smoke through its <name>_run() entry.
+    let pairs = [
+        "codata",
+        "oeis",
+        "arxiv",
+        "gw",
+        "horizons",
+        "cmb",
+        "nanograv",
+        "simbad",
+        "icecube",
+        "nist_atomic",
+        "wikipedia",
+        "openalex",
+        "gaia",
+        "lhc",
+        "pubchem",
+        "uniprot",
+    ]
+
+    // codata
+    total = total + 1
+    if _exercise("codata", codata_run([]), fails) { pass = pass + 1 }
+    // oeis
+    total = total + 1
+    if _exercise("oeis", oeis_run(["A000396"]), fails) { pass = pass + 1 }
+    // arxiv
+    total = total + 1
+    if _exercise("arxiv", arxiv_run(["cat:physics.gen-ph", "3"]), fails) { pass = pass + 1 }
+    // gw
+    total = total + 1
+    if _exercise("gw", gw_run([]), fails) { pass = pass + 1 }
+    // horizons
+    total = total + 1
+    if _exercise("horizons", horizons_run(["301"]), fails) { pass = pass + 1 }
+    // cmb
+    total = total + 1
+    if _exercise("cmb", cmb_run([]), fails) { pass = pass + 1 }
+    // nanograv
+    total = total + 1
+    if _exercise("nanograv", nanograv_run([]), fails) { pass = pass + 1 }
+    // simbad
+    total = total + 1
+    if _exercise("simbad", simbad_run(["SgrA*"]), fails) { pass = pass + 1 }
+    // icecube
+    total = total + 1
+    if _exercise("icecube", icecube_run([]), fails) { pass = pass + 1 }
+    // nist_atomic
+    total = total + 1
+    if _exercise("nist_atomic", nist_atomic_run(["H"]), fails) { pass = pass + 1 }
+    // wikipedia
+    total = total + 1
+    if _exercise("wikipedia", wikipedia_run(["Perfect_number"]), fails) { pass = pass + 1 }
+    // openalex
+    total = total + 1
+    if _exercise("openalex", openalex_run(["perfect+number"]), fails) { pass = pass + 1 }
+    // gaia
+    total = total + 1
+    if _exercise("gaia", gaia_run([]), fails) { pass = pass + 1 }
+    // lhc
+    total = total + 1
+    if _exercise("lhc", lhc_run([]), fails) { pass = pass + 1 }
+    // pubchem
+    total = total + 1
+    if _exercise("pubchem", pubchem_run(["962"]), fails) { pass = pass + 1 }
+    // uniprot
+    total = total + 1
+    if _exercise("uniprot", uniprot_run(["P01308"]), fails) { pass = pass + 1 }
+
+    println("")
+    println(to_string(pass) + "/" + to_string(total) + " PASS")
+    if len(fails) > 0 {
+        println("FAILURES:")
+        let mut i = 0
+        while i < len(fails) { println("  - " + to_string(fails[i])); i = i + 1 }
+        exit(1)
+    }
+    exit(0)
+}

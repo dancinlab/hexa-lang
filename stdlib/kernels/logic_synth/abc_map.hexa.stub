@@ -1,0 +1,64 @@
+#!hexa strict
+// stdlib/yosys/abc_map.hexa — ABC technology mapper (D18 bounded-subprocess)
+//
+// @version 0.0.1-skeleton
+// @capabilities [abc, techmap, subprocess, provenance]
+// @stability skeleton (rfc_006 §4 module-5 of 7; bodies pending §5 gate)
+// @since 2026-05-19
+//
+// **D18 BOUNDED-SUBPROCESS BOUNDARY** (rfc_006 §4 / hexa-arch D18 /
+//  AGENTS.tape g5 hybrid exception):
+//
+//   This module is INTENTIONALLY NOT a clean-room re-derivation of
+//   ABC. The Berkeley ABC technology mapper is invoked as an
+//   absorbed-substrate subprocess. hexa-arch D18 explicitly REJECTED
+//   option (7b) "full ABC clean-room re-derivation" and selected (7a)
+//   "bounded-subprocess invocation" for this scope.
+//
+//   - substrate         : abc (Berkeley logic synthesis & verification)
+//   - substrate repo    : https://github.com/berkeley-abc/abc
+//   - substrate license : Apache-2 / MIT
+//   - substrate scope   : combinational technology mapping
+//                          (read AIG/BLIF → map to lib → write mapped)
+//   - invocation idiom  : `abc <script>` (one process per pass invocation,
+//                          script string built hexa-native from the
+//                          RTLIL+Liberty inputs); stderr/stdout captured;
+//                          exit code = abc's own (0 = ok, non-0 = fail-loud)
+//   - provenance log    : every call writes to stderr ↓
+//                          [abc_map] url=https://github.com/berkeley-abc/abc
+//                          [abc_map] binary=<resolved-path>
+//                          [abc_map] version=<abc -h first-line>
+//                          [abc_map] script-size=<bytes>
+//                          [abc_map] exit=<code>
+//   - upstream Yosys ref: passes/techmap/abc.cc (the inverse — Yosys'
+//                          own invocation of ABC; consulted for *what*
+//                          script form ABC expects, NOT for code reuse)
+//
+// rfc_006 §4: module-5 of 7. Lifts a hexa-native RTLIL design into
+// an AIG/BLIF intermediate, hands it to ABC for technology mapping
+// against the Liberty cell library (parsed by liberty.hexa), and lifts
+// the mapped result back into RTLIL for the write_verilog stage.
+//
+// fail-loud (rfc_006 §4 idiom): if `abc` binary is not on PATH, or
+// returns a non-zero exit code, or stdout/stderr indicate a parse
+// failure, this module MUST exit with a clear diagnostic naming the
+// missing/failed step + the captured stderr. NO silent fallback.
+//
+// g3 invariant: the rfc_006 §5 area oracle (d4≈61,763 d6≈93,609
+// 1.516×) is the MEASUREMENT that closes this D18 boundary. Until
+// abc_map.hexa + liberty.hexa together produce that ratio on
+// comb/rtl/router_d{4,6}.v against SKY130 sky130_fd_sc_hd, NO
+// "absorbed" claim is valid for this stdlib.
+
+fn main() {
+    // Skeleton phase — no body landed yet (rfc_048 raw-91 doctrine).
+    // Self-test will: probe `abc` binary on PATH, fail-loud-diagnose
+    // if absent (NOT silently skip), run a trivial AIG round-trip
+    // (read_aiger → write_aiger), verify binary cooperation.
+    // Gate-§5 self-test will: synth comb/rtl/router_d4.v + router_d6.v
+    // through the full read_verilog → passes → liberty → abc_map →
+    // write_verilog flow against SKY130, check area within ±5% of
+    // (61763, 93609, 1.516×).
+    println("stdlib/yosys/abc_map.hexa: TBD-STUB (rfc_006 §4 module-5, D18)");
+    exit(91);  // rfc_048 raw-91 — TBD-stub-hit, do not wire in
+}

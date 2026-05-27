@@ -1,0 +1,363 @@
+// ═══════════════════════════════════════════════════════════════════
+//  self/ml/speculative_decode.hexa — pure Hexa speculative decoding
+//
+//  AI-native inference: draft model generates k tokens ahead, target
+//  model verifies in parallel; accept/reject per Leviathan et al.
+//
+//  Probability-based accept/reject:
+//    Accept token t if p_big(t) >= p_draft(t)
+//    Else reject with probability 1 - p_big(t)/p_draft(t)
+//
+//  Pure Hexa — no C, no FFI, no extern.
+//
+//  Public API:
+//    softmax(logits)                            -> [float]
+//    argmax(arr)                                -> int
+//    sample_categorical(probs, rand_val)        -> int
+//    spec_decode_step(draft_model, target_model, prefix, k)
+//                                               -> [int]
+//    spec_decode_loop(draft_model, target_model, prefix, max_tokens, k)
+//                                               -> [int]
+//    mock_draft_model(vocab_size)               -> dict
+//    mock_target_model(vocab_size)              -> dict
+// ═══════════════════════════════════════════════════════════════════
+
+// ── softmax: stable with max subtraction ──────────────────────────
+@pure
+fn softmax(logits) {
+    let n = len(logits)
+    if n == 0 { return [] }
+    // find max
+    let mut mx = logits[0]
+    let mut i = 1
+    while i < n {
+        if logits[i] > mx { mx = logits[i] }
+        i = i + 1
+    }
+    // exp and sum
+    let mut probs = []
+    let mut sum_e = 0.0
+    i = 0
+    while i < n {
+        let e = exp(logits[i] - mx)
+        probs.push(e)
+        sum_e = sum_e + e
+        i = i + 1
+    }
+    // normalize
+    if sum_e > 0.0 {
+        let inv = 1.0 / sum_e
+        i = 0
+        while i < n {
+            probs[i] = probs[i] * inv
+            i = i + 1
+        }
+    }
+    return probs
+}
+
+// ── argmax: index of maximum value ────────────────────────────────
+@pure
+fn argmax(arr) {
+    let n = len(arr)
+    if n == 0 { return 0 }
+    let mut best_i = 0
+    let mut best_v = arr[0]
+    let mut i = 1
+    while i < n {
+        if arr[i] > best_v {
+            best_v = arr[i]
+            best_i = i
+        }
+        i = i + 1
+    }
+    return best_i
+}
+
+// ── sample_categorical: sample from distribution given uniform [0,1) ──
+@pure
+fn sample_categorical(probs, rand_val) {
+    let n = len(probs)
+    if n == 0 { return 0 }
+    let mut cumsum = 0.0
+    let mut i = 0
+    while i < n {
+        cumsum = cumsum + probs[i]
+        if rand_val < cumsum {
+            return i
+        }
+        i = i + 1
+    }
+    // fallback: last token (rounding)
+    return n - 1
+}
+
+// ── deterministic hash for mock models ────────────────────────────
+@pure
+fn _ctx_hash_spec(ctx) {
+    let n = len(ctx)
+    let start = if n < 4 { 0 } else { n - 4 }
+    let mut h = 2654435761
+    let mut i = start
+    while i < n {
+        h = h ^ ((ctx[i] + 1) * (i + 7) * 1315423911)
+        i = i + 1
+    }
+    return h
+}
+
+// ── pseudo-random from integer seed ───────────────────────────────
+@pure
+fn _pseudo_rand(seed) {
+    // simple LCG mapped to [0,1)
+    let v = ((seed * 1103515245 + 12345) % 2147483647)
+    let pos = if v < 0 { v + 2147483647 } else { v }
+    return to_float(pos) / 2147483647.0
+}
+
+// ── mock draft model: returns logits dict ─────────────────────────
+// model["type"] = "draft"
+// model["vocab_size"] = vocab_size
+// Call: model_logits(model, prefix) -> [float] logits
+fn mock_draft_model(vocab_size) {
+    let mut m = #{}
+    m["type"] = "draft"
+    m["vocab_size"] = vocab_size
+    return m
+}
+
+// ── mock target model: returns logits dict ────────────────────────
+// model["type"] = "verify"
+// model["vocab_size"] = vocab_size
+// Call: model_logits(model, prefix) -> [float] logits
+//       target_logits_all(model, prefix, k) -> [[float]] k+1 logit rows
+fn mock_target_model(vocab_size) {
+    let mut m = #{}
+    m["type"] = "target"
+    m["vocab_size"] = vocab_size
+    return m
+}
+
+// ── generate logits for a model given prefix ──────────────────────
+// Draft model: peaked distribution around hash-determined token
+// Verify model: similar but slightly different (agrees ~80%)
+fn model_logits(model, prefix) {
+    let vs = model["vocab_size"]
+    let h = _ctx_hash_spec(prefix)
+    let peak_token = h % vs
+    let peak_pos = if peak_token < 0 { peak_token + vs } else { peak_token }
+
+    // Build logits: strong peak at peak_pos, small elsewhere
+    let mut logits = []
+    let mut i = 0
+    while i < vs {
+        if i == peak_pos {
+            if model["type"] == "draft" {
+                logits.push(5.0)
+            } else {
+                // verify model: agree with draft ~80% of time
+                // shift peak by 1 when h%5==0
+                if (h % 5) == 0 {
+                    logits.push(1.0)
+                } else {
+                    logits.push(5.0)
+                }
+            }
+        } else if i == ((peak_pos + 1) % vs) {
+            if model["type"] == "target" && (h % 5) == 0 {
+                logits.push(5.0)
+            } else {
+                logits.push(0.5)
+            }
+        } else {
+            logits.push(0.1)
+        }
+        i = i + 1
+    }
+    return logits
+}
+
+// ── draft_logits_fn: prefix -> [float] ────────────────────────────
+fn draft_logits_fn(model, prefix) {
+    return model_logits(model, prefix)
+}
+
+// ── target_logits_fn: prefix -> [[float]] for k+1 positions ──────
+// Given prefix and k draft tokens appended, produce logits at each position.
+// target_logits_all(model, prefix, draft_tokens) returns array of (len(draft_tokens)+1) logit arrays.
+// Position i: logits conditioned on prefix + draft_tokens[0..i]
+fn target_logits_all(model, prefix, draft_tokens) {
+    let k = len(draft_tokens)
+    let mut results = []
+    let mut cur = []
+    // copy prefix
+    let mut i = 0
+    while i < len(prefix) {
+        cur.push(prefix[i])
+        i = i + 1
+    }
+    // position 0: logits for prefix alone (verifies draft_tokens[0])
+    results.push(model_logits(model, cur))
+    // positions 1..k: add each draft token, get logits
+    let mut j = 0
+    while j < k {
+        cur.push(draft_tokens[j])
+        results.push(model_logits(model, cur))
+        j = j + 1
+    }
+    return results
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  spec_decode_step — generate k draft tokens, verify, accept/reject
+//
+//  Returns: array of accepted tokens (0 to k+1 tokens)
+//
+//  Algorithm (Leviathan et al.):
+//    1. Autoregress k tokens from draft model
+//    2. Run verify model on prefix + draft tokens (k+1 forward passes, or batched)
+//    3. For each draft token i (0..k-1):
+//       - p_draft = softmax(draft_logits_i)[token_i]
+//       - p_big   = softmax(target_logits_i)[token_i]
+//       - if p_big >= p_draft: accept
+//       - else: accept with prob p_big/p_draft (using rand)
+//       - on reject: sample from adjusted distribution, stop
+//    4. If all k accepted: bonus token from verify logits at position k
+// ═══════════════════════════════════════════════════════════════════
+@speculative_decode
+fn spec_decode_step(draft_model, target_model, prefix, k) {
+    let vs = draft_model["vocab_size"]
+
+    // Step 1: Generate k draft tokens autoregressively
+    let mut draft_tokens = []
+    let mut draft_logits_list = []
+    let mut cur = []
+    let mut i = 0
+    while i < len(prefix) {
+        cur.push(prefix[i])
+        i = i + 1
+    }
+    let mut di = 0
+    while di < k {
+        let logits = draft_logits_fn(draft_model, cur)
+        draft_logits_list.push(logits)
+        let probs = softmax(logits)
+        let token = argmax(probs)
+        draft_tokens.push(token)
+        cur.push(token)
+        di = di + 1
+    }
+
+    // Step 2: Verify model logits for all positions
+    let target_logits = target_logits_all(target_model, prefix, draft_tokens)
+
+    // Step 3: Accept/reject each draft token
+    let mut accepted = []
+    let mut j = 0
+    let mut rejected = false
+    while j < k && !rejected {
+        let draft_probs = softmax(draft_logits_list[j])
+        let target_probs = softmax(target_logits[j])
+        let t = draft_tokens[j]
+        let p_draft = draft_probs[t]
+        let p_big = target_probs[t]
+
+        if p_big >= p_draft {
+            // deterministic accept
+            accepted.push(t)
+        } else {
+            // probabilistic accept: accept with prob p_big / p_draft
+            let accept_prob = if p_draft > 0.0 { p_big / p_draft } else { 0.0 }
+            let r = _pseudo_rand(_ctx_hash_spec(prefix) + j * 7919 + t * 131)
+            if r < accept_prob {
+                accepted.push(t)
+            } else {
+                // Reject: sample from adjusted distribution
+                // p_adjusted(t) = max(0, p_big(t) - p_draft(t)) / Z
+                let mut adjusted = []
+                let mut sum_adj = 0.0
+                let mut ai = 0
+                while ai < vs {
+                    let diff = target_probs[ai] - draft_probs[ai]
+                    let val = if diff > 0.0 { diff } else { 0.0 }
+                    adjusted.push(val)
+                    sum_adj = sum_adj + val
+                    ai = ai + 1
+                }
+                // normalize
+                if sum_adj > 0.0 {
+                    let inv = 1.0 / sum_adj
+                    ai = 0
+                    while ai < vs {
+                        adjusted[ai] = adjusted[ai] * inv
+                        ai = ai + 1
+                    }
+                }
+                let r2 = _pseudo_rand(_ctx_hash_spec(prefix) + j * 3571 + 997)
+                let sampled = sample_categorical(adjusted, r2)
+                accepted.push(sampled)
+                rejected = true
+            }
+        }
+        j = j + 1
+    }
+
+    // Step 4: If all k accepted, bonus token from verify model
+    if !rejected && len(accepted) == k {
+        let bonus_probs = softmax(target_logits[k])
+        let bonus_token = argmax(bonus_probs)
+        accepted.push(bonus_token)
+    }
+
+    return accepted
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  spec_decode_loop — loop speculative decoding until max_tokens
+// ═══════════════════════════════════════════════════════════════════
+fn spec_decode_loop(draft_model, target_model, prefix, max_tokens, k) {
+    let mut cur = []
+    let mut i = 0
+    while i < len(prefix) {
+        cur.push(prefix[i])
+        i = i + 1
+    }
+    let mut generated = []
+    while len(generated) < max_tokens {
+        let remain = max_tokens - len(generated)
+        let kk = if k < remain { k } else { remain }
+        let tokens = spec_decode_step(draft_model, target_model, cur, kk)
+        let mut ti = 0
+        while ti < len(tokens) && len(generated) < max_tokens {
+            cur.push(tokens[ti])
+            generated.push(tokens[ti])
+            ti = ti + 1
+        }
+        // Safety: if no tokens generated (shouldn't happen), break
+        if len(tokens) == 0 { break }
+    }
+    return generated
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Adaptive k adjustment (preserved from original)
+// ═══════════════════════════════════════════════════════════════════
+fn adaptive_k(current_k, n_accepted, n_drafted, k_min, k_max) {
+    if n_drafted == 0 { return current_k }
+    let rate_pct = (n_accepted * 100) / n_drafted
+    let mut new_k = current_k
+    if rate_pct >= 80 {
+        new_k = current_k + 2
+    } else if rate_pct < 50 {
+        new_k = current_k - 1
+    }
+    if new_k < k_min { new_k = k_min }
+    if new_k > k_max { new_k = k_max }
+    return new_k
+}
+
+// ── acceptance rate calculator ────────────────────────────────────
+fn acceptance_rate(accepted, drafted) {
+    if drafted == 0 { return 0 }
+    return (accepted * 100) / drafted
+}

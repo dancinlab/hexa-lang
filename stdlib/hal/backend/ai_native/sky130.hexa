@@ -1,0 +1,188 @@
+#!hexa strict
+// stdlib/hal/backend/ai_native/sky130.hexa — SkyWater SKY130 PDK
+//                                              AI-native silicon backend
+//                                              — paper skeleton.
+//
+// Phase: skeleton / stub. Real synthesis (Yosys / OpenLane2) + place-and-
+// route (OpenROAD) + tape-out (Efabless MPW shuttle) are downstream
+// scope. Paper-tier stub documents the area/timing/power surface
+// mapping for the 3 AI-native silicon primitives on the SKY130 130nm
+// open-source PDK. Sim-first invariant preserved (ai.hexa sim ships
+// first; this is per-PDK silicon backend metadata).
+//
+// Target:    SkyWater SKY130 PDK (sky130A standard-cell library;
+//            current as of 2026-05-08; Google/SkyWater open-source PDK
+//            v1.0.456+ via Efabless OpenLane2 docker image).
+// Process:   130 nm bulk CMOS, 5-metal-layer standard option (1.8V core).
+// Density:   ~0.5 M-gate/mm² standard-cell density (sky130_fd_sc_hd
+//            high-density library; foundry-published density disclosure
+//            web-searched 2026-05-08).
+// Tape-out:  Efabless MPW shuttle ($25-50K per chiplet; ~6mm² limit).
+// IR:        none (this is a per-PDK silicon backend, not a compute IR;
+//            consumes RTL Verilog from ai_native_arch/doc/datasheet_*.md
+//            §6 [prov_regfile, promotion_counter_mmu, bt_id_decoder]).
+// Surface:   sky130_{tile_area, prov_regfile_area, mmu_area,
+//            bt_decoder_area, frequency_max, voltage_core,
+//            tile_meta, pdk_meta}.
+// Dispatch:  ai.hexa selects this via cfg-flag (`cfg ai_native_pdk = "sky130"`);
+//            paper-tier dispatch returns symbolic area/freq numbers.
+//
+// canon-aware (~/core/canon/domains/compute/ai-native-architecture/
+// analysis/btAI3_rtl_design.md §6 row "SKY130 130 nm" + hexa-chip
+// ai_native_arch/doc/datasheet_ai_native_arch.md §6 PDK area table).
+//
+// Phase G iter 9+1 / stdlib/hal v1.9.0 (per-PDK ai_native split,
+// SKY130 first since it's the open-source PDK and Efabless MPW shuttle
+// makes it the most actionable foundry candidate for n=6 chiplet
+// tape-out).
+//
+// Architectural guard: paper-spec only — NOT FFI to SiliconCompiler /
+// OpenLane2 / Yosys / OpenROAD. canon §7.5 ("FFI는 downstream") +
+// roadmap §G.5. v1.9.0+ adopts per-PDK split commit policy
+// (1 commit per PDK).
+
+let MODULE_NAME = "ai_native_sky130"
+let PDK_NAME    = "sky130"
+let PDK_TIER    = "open-source"   // open-source / proprietary
+let PDK_NODE_NM = 130              // process node (nanometres)
+
+// ── PDK density disclosures (web-searched 2026-05-08) ────────────────
+// SkyWater foundry public disclosure: sky130_fd_sc_hd density ~0.5 M-gate/mm²
+// (high-density standard-cell library; the actual reference was 500 K
+// equivalent NAND2 / mm² per the SkyWater PDK README v1.0.456). Multiply
+// by ~50% utilisation post-P&R to get ~0.25 M-effective-gate/mm².
+let DENSITY_KGATE_PER_MM2  = 500   // K-gates/mm² (raw cell density)
+let DENSITY_UTIL_BP        = 5000  // 50% basis-point post-P&R utilisation
+
+// ── core voltage / frequency band (SKY130 sky130A) ───────────────────
+let VCORE_MV      = 1800   // 1.8V core (sky130A nominal)
+let FREQ_MIN_MHZ  = 200    // SKY130 typical floor
+let FREQ_MAX_MHZ  = 400    // SKY130 typical ceiling (no DVFS)
+
+// ── tile-level area placeholders (canon §6 + datasheet §6) ────────────
+// All in micro-mm² (μ-mm²) integer units to avoid float; divide by 1000
+// to get mm². Per-tile, σ²=144-entry MAC array dominant.
+let MAC_ARRAY_AREA_UMM2     = 2000000   // ~2.0 mm² (σ²=144 8b MACs)
+let PROV_REGFILE_AREA_UMM2  =   42000   // ~0.042 mm² (144 SFF + OR-tree)
+let MMU_AREA_UMM2           =   18000   // ~0.018 mm² (τ=4-bit × 144 ctr)
+let BT_DECODER_AREA_UMM2    =     900   // ~0.0009 mm² (3b → 7 one-hot, 5 gates)
+let TILE_AREA_UMM2          = 2060900   // sum
+
+// ── chip-level area (n_tiles=6 from ai.hexa N_TILES) ──────────────────
+let N_TILES               = 6
+let CHIP_AREA_UMM2        = 12365400    // 6 × 2.0609 mm² ≈ 12.37 mm²
+
+// ── overhead ratio (φ/σ_n = 1/36 = ~2.78% basis-point form 278) ──────
+let OVERHEAD_BP           = 278   // basis-points (1/36 ≈ 2.78%)
+
+// ── max die area constraint (Efabless MPW chiplet ceiling) ──────────
+let EFABLESS_MPW_LIMIT_UMM2 = 6000000   // 6 mm² shuttle ceiling
+
+// ── stub handlers ────────────────────────────────────────────────────
+
+// Returns per-tile area in micro-mm² for the requested block.
+// Tier IDs:
+//   0 = MAC array (σ²)
+//   1 = prov_regfile
+//   2 = promotion_counter_mmu
+//   3 = bt_id_decoder
+//   4 = whole tile
+fn sky130_tile_area(block_id: int) -> int {
+    if block_id == 0 { return MAC_ARRAY_AREA_UMM2 }
+    if block_id == 1 { return PROV_REGFILE_AREA_UMM2 }
+    if block_id == 2 { return MMU_AREA_UMM2 }
+    if block_id == 3 { return BT_DECODER_AREA_UMM2 }
+    if block_id == 4 { return TILE_AREA_UMM2 }
+    return -1
+}
+
+// Returns whole-chip area in μ-mm² (n_tiles × tile_area).
+fn sky130_chip_area() -> int {
+    return CHIP_AREA_UMM2
+}
+
+// Returns provenance overhead in basis-points (1/36 ≈ 278 bp).
+fn sky130_overhead_bp() -> int {
+    return OVERHEAD_BP
+}
+
+// Returns max frequency band [min, max] MHz.
+fn sky130_freq_band() -> [int] {
+    return [FREQ_MIN_MHZ, FREQ_MAX_MHZ]
+}
+
+// Returns core voltage in millivolts.
+fn sky130_vcore_mv() -> int {
+    return VCORE_MV
+}
+
+// Returns true if chip area fits the Efabless MPW shuttle.
+// Note: at 12.37 mm² for n_tiles=6, we EXCEED the 6 mm² shuttle ceiling.
+// First tape-out path on SKY130 must use n_tiles=2 or 3 (stripped chip)
+// or rent a larger MPW slot.
+fn sky130_fits_mpw_shuttle() -> bool {
+    return CHIP_AREA_UMM2 <= EFABLESS_MPW_LIMIT_UMM2
+}
+
+// Suggest a tape-out tile-count that fits MPW shuttle.
+// Returns max n_tiles such that n_tiles × TILE_AREA_UMM2 ≤ MPW_LIMIT.
+fn sky130_max_tiles_in_mpw() -> int {
+    return EFABLESS_MPW_LIMIT_UMM2 / TILE_AREA_UMM2
+}
+
+// Returns module metadata.
+fn sky130_module_meta() -> [str] {
+    return [MODULE_NAME, PDK_NAME, PDK_TIER, str(PDK_NODE_NM)]
+}
+
+// Returns PDK metadata (node + density + voltage).
+fn sky130_pdk_meta() -> [str] {
+    return [
+        PDK_NAME,
+        str(PDK_NODE_NM) + "nm",
+        str(DENSITY_KGATE_PER_MM2) + "K-gates/mm²",
+        str(VCORE_MV) + "mV"
+    ]
+}
+
+// ── invariant ledger (cross-check against canon §6 + datasheet §6) ────
+
+fn sky130_invariant_n_tiles() -> int { return N_TILES }
+fn sky130_invariant_overhead_bp() -> int { return OVERHEAD_BP }
+fn sky130_invariant_node_nm() -> int { return PDK_NODE_NM }
+
+// ── sim-first: report path ───────────────────────────────────────────
+
+fn sky130_report() -> str {
+    return "[ai_native sky130 sim] tile=" + str(TILE_AREA_UMM2 / 1000) +
+           "·10⁻³ mm² · chip=" + str(CHIP_AREA_UMM2 / 1000) +
+           "·10⁻³ mm² · freq=" + str(FREQ_MIN_MHZ) + "-" + str(FREQ_MAX_MHZ) + " MHz"
+}
+
+// ── bench / sim main ────────────────────────────────────────────────
+
+fn main() {
+    println("[ai_native sky130] stdlib/hal/backend/ai_native/sky130.hexa — paper-tier SKY130 backend")
+    println("  PDK: " + PDK_NAME + " (" + PDK_TIER + ", " + str(PDK_NODE_NM) + " nm bulk CMOS)")
+    println("  density: " + str(DENSITY_KGATE_PER_MM2) + " K-gates/mm² (sky130_fd_sc_hd, util " + str(DENSITY_UTIL_BP) + " bp)")
+    println("  Vcore: " + str(VCORE_MV) + " mV")
+    println("  freq band: [" + str(FREQ_MIN_MHZ) + ", " + str(FREQ_MAX_MHZ) + "] MHz")
+    println("  area per tile (μ-mm²):")
+    println("    MAC array (σ²=144): " + str(MAC_ARRAY_AREA_UMM2))
+    println("    prov_regfile      : " + str(PROV_REGFILE_AREA_UMM2))
+    println("    promotion_mmu     : " + str(MMU_AREA_UMM2))
+    println("    bt_id_decoder     : " + str(BT_DECODER_AREA_UMM2))
+    println("    TILE TOTAL        : " + str(TILE_AREA_UMM2) + " (~" + str(TILE_AREA_UMM2 / 1000) + "·10⁻³ mm²)")
+    println("  chip area (n_tiles=" + str(N_TILES) + "): " + str(CHIP_AREA_UMM2) + " μ-mm² (~" + str(CHIP_AREA_UMM2 / 1000000) + "." + str((CHIP_AREA_UMM2 / 10000) - (CHIP_AREA_UMM2 / 1000000)*100) + " mm²)")
+    println("  overhead φ/σ_n: " + str(OVERHEAD_BP) + " bp (1/36 ≈ 2.78%)")
+    println("  Efabless MPW limit: " + str(EFABLESS_MPW_LIMIT_UMM2) + " μ-mm² (6 mm²)")
+    let fits = sky130_fits_mpw_shuttle()
+    if fits {
+        println("  fits MPW shuttle: YES (n_tiles=" + str(N_TILES) + ")")
+    } else {
+        println("  fits MPW shuttle: NO at n_tiles=" + str(N_TILES) + "; max fits = " + str(sky130_max_tiles_in_mpw()))
+    }
+    println("  arch guard: paper-spec only; FFI to OpenLane2/Yosys/OpenROAD downstream (canon §7.5).")
+}
+
+main()

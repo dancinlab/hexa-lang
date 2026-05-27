@@ -1,0 +1,67 @@
+// HEXA Native Compiler — Wave 1 absorption: grade rubric static index
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+//   pub fn grade_rubric_list() -> [GradeRubricEntry]
+//   pub fn lookup_grade(level: i64) -> GradeRubricEntry
+//   pub fn grade_rubric_kv_list() -> [GradeRubricKv]
+//   pub fn verify_grade(label: string) -> i64
+//   pub fn promotion_rule(transition: string) -> string
+
+use "compiler/grade_rubric/embed"
+use "compiler/grade_rubric/embedded.gen"
+
+pub fn grade_rubric_list() -> [GradeRubricEntry] {
+    return GRADE_RUBRIC
+}
+
+pub fn lookup_grade(level: i64) -> GradeRubricEntry {
+    let n = len(GRADE_RUBRIC)
+    let mut i = 0
+    while i < n {
+        let e = GRADE_RUBRIC[i]
+        if e.grade == level { return e }
+        i = i + 1
+    }
+    return GradeRubricEntry { grade: 0, stage: "", emoji: "", criteria: "" }
+}
+
+pub fn grade_rubric_kv_list() -> [GradeRubricKv] {
+    return GRADE_RUBRIC_KV
+}
+
+// Map verify label (EXACT/CLOSE/WEAK/MISS) → integer grade.
+pub fn verify_grade(label: string) -> i64 {
+    let n = len(GRADE_RUBRIC_KV)
+    let mut i = 0
+    while i < n {
+        let e = GRADE_RUBRIC_KV[i]
+        if e.table == "verify_mapping" && e.key == label { return e.value_i64 }
+        i = i + 1
+    }
+    return 0
+}
+
+// Lookup a promotion transition rule (e.g. "9_to_10").
+pub fn promotion_rule(transition: string) -> string {
+    let n = len(GRADE_RUBRIC_KV)
+    let mut i = 0
+    while i < n {
+        let e = GRADE_RUBRIC_KV[i]
+        if e.table == "promotion" && e.key == transition { return e.value_str }
+        i = i + 1
+    }
+    return ""
+}
+
+pub fn demotion_rule(name: string) -> string {
+    let n = len(GRADE_RUBRIC_KV)
+    let mut i = 0
+    while i < n {
+        let e = GRADE_RUBRIC_KV[i]
+        if e.table == "demotion" && e.key == name { return e.value_str }
+        i = i + 1
+    }
+    return ""
+}

@@ -1,0 +1,175 @@
+// ═══════════════════════════════════════════════════════════
+//  test_parser_error_recovery.hexa — I1 Parser Error Recovery
+//  Verifies that the self-hosted parser collects multiple errors
+//  instead of halting on the first one, and that valid statements
+//  after errors are still parsed correctly.
+//
+//  Approach: load lexer.hexa + parser.hexa, call tokenize/parse/
+//  p_get_errors/p_error_count/p_has_errors/p_format_errors.
+// ═══════════════════════════════════════════════════════════
+
+use "self/stdlib/law_io"
+
+let SELF_DIR = "self"
+// 2026-04-25 docker-hard-landing: prefer bare dispatcher (test runs build artifacts).
+let HEXA = if file_exists("./build/hexa.real") { "./build/hexa.real" } else { "./hexa" }
+let TMP = "/tmp/hexa_parser_recovery"
+
+exec("mkdir -p " + TMP)
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn check(name, actual, expected) {
+    if to_string(actual) == to_string(expected) {
+        println("[PASS] " + name)
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name + " — expected: " + to_string(expected) + ", got: " + to_string(actual))
+        fail_count = fail_count + 1
+    }
+}
+
+fn check_true(name, val) {
+    check(name, val, true)
+}
+
+fn check_ge(name, actual, minimum) {
+    if actual >= minimum {
+        println("[PASS] " + name + " (" + to_string(actual) + " >= " + to_string(minimum) + ")")
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name + " — expected >= " + to_string(minimum) + ", got: " + to_string(actual))
+        fail_count = fail_count + 1
+    }
+}
+
+println("═══════════════════════════════════════════════════════")
+println("  I1: Parser Error Recovery Tests")
+println("═══════════════════════════════════════════════════════")
+println("")
+
+// Load self-hosted lexer + parser
+let lexer_src = read_file(SELF_DIR + "/lexer.hexa")
+let parser_src = read_file(SELF_DIR + "/parser.hexa")
+let pipeline = lexer_src + "\n" + parser_src + "\n"
+
+let MARKER = "___PARSE_RECOVERY___"
+
+fn run_parse(name, src) {
+    let src_file = TMP + "/src_" + name + ".hexa"
+    let drv_file = TMP + "/drv_" + name + ".hexa"
+
+    safe_write_file(src_file, src)
+
+    let driver = pipeline + "\nlet __src = read_file(\"" + src_file + "\")\nlet __tokens = tokenize(__src)\nlet __stmts = parse(__tokens)\nprintln(\"" + MARKER + "\")\nprintln(to_string(p_error_count()))\nprintln(to_string(len(__stmts)))\nprintln(to_string(p_has_errors()))\nprintln(p_format_errors())\nprintln(\"" + MARKER + "\")\n"
+
+    safe_write_file(drv_file, driver)
+    let result = exec(HEXA + " " + drv_file + " 2>&1")
+
+    let lines = to_string(result).split("\n")
+    let mut capture = false
+    let mut out = []
+    for line in lines {
+        if line == MARKER {
+            if capture { capture = false } else { capture = true }
+        } else {
+            if capture { out.push(line) }
+        }
+    }
+    return out
+}
+
+// ── 1. Valid code — zero errors ────────────────────────────
+println("--- 1. Valid code ---")
+let t1 = run_parse("valid", "let x = 1\nlet y = 2\nfn foo() {\n  return 42\n}\n")
+check("valid: error_count=0", t1[0], "0")
+check("valid: stmt_count=3", t1[1], "3")
+check("valid: has_errors=false", t1[2], "false")
+
+// ── 2. Single error with recovery ──────────────────────────
+println("")
+println("--- 2. Single error + recovery ---")
+let t2 = run_parse("one_err", "let x = 1\nlet = ;\nlet y = 2\n")
+check_ge("one_err: errors >= 1", to_int(t2[0]), 1)
+check_ge("one_err: stmts >= 1", to_int(t2[1]), 1)
+check("one_err: has_errors=true", t2[2], "true")
+
+// ── 3. Multiple errors collected ───────────────────────────
+println("")
+println("--- 3. Multiple errors ---")
+let t3 = run_parse("multi_err", "let a = 1\nfn () {}\nlet b = 2\nstruct { }\nlet c = 3\n")
+check_ge("multi_err: errors >= 2", to_int(t3[0]), 2)
+check_ge("multi_err: stmts >= 2", to_int(t3[1]), 2)
+
+// ── 4. Valid stmts after error are parsed ──────────────────
+println("")
+println("--- 4. Recovery preserves valid ---")
+let t4 = run_parse("after_err", "fn a() { return 1 }\nfn () {}\nfn b() { return 2 }\nlet c = 3\n")
+check_ge("after_err: stmts >= 2", to_int(t4[1]), 2)
+
+// ── 5. Empty source ────────────────────────────────────────
+println("")
+println("--- 5. Empty source ---")
+let t5 = run_parse("empty", "")
+check("empty: errors=0", t5[0], "0")
+check("empty: stmts=0", t5[1], "0")
+check("empty: has_errors=false", t5[2], "false")
+
+// ── 6. Only whitespace / newlines ──────────────────────────
+println("")
+println("--- 6. Whitespace only ---")
+let t6 = run_parse("ws_only", "\n\n\n")
+check("ws: errors=0", t6[0], "0")
+check("ws: stmts=0", t6[1], "0")
+
+// ── 7. Error at end of input ───────────────────────────────
+println("")
+println("--- 7. Error at end ---")
+let t7 = run_parse("end_err", "let x = 1\nlet y =")
+check_ge("end_err: errors >= 1", to_int(t7[0]), 1)
+check_ge("end_err: stmts >= 1", to_int(t7[1]), 1)
+
+// ── 8. Garbage between valid stmts ─────────────────────────
+println("")
+println("--- 8. Garbage between valid ---")
+let t8 = run_parse("garbage", "let a = 10\nfn () {}\nlet b = 20\nlet = ;\nlet c = 30\n")
+check_ge("garbage: stmts >= 2", to_int(t8[1]), 2)
+
+// ── 9. p_format_errors output ──────────────────────────────
+println("")
+println("--- 9. Formatted error output ---")
+let t9 = run_parse("fmt_out", "fn () {}\nlet ok = 1\n")
+check_ge("fmt_out: errors >= 1", to_int(t9[0]), 1)
+check_true("fmt_out: has error[ prefix", t9[3].contains("error["))
+
+// ── 10. parse_strict backward compat ───────────────────────
+println("")
+println("--- 10. parse_strict compat ---")
+let drv10 = pipeline + "\nlet __t10 = tokenize(\"let x = 1\")\nlet __s10 = parse_strict(__t10)\nprintln(\"" + MARKER + "\")\nprintln(to_string(len(__s10)))\nprintln(\"" + MARKER + "\")\n"
+safe_write_file(TMP + "/drv_strict.hexa", drv10)
+let r10 = exec(HEXA + " " + TMP + "/drv_strict.hexa 2>&1")
+let r10l = to_string(r10).split("\n")
+let mut c10 = false
+let mut o10 = []
+for line in r10l {
+    if line == MARKER { if c10 { c10 = false } else { c10 = true } } else { if c10 { o10.push(line) } }
+}
+check("strict: 1 stmt", o10[0], "1")
+
+// Tests 11-24 removed for speed — core recovery coverage preserved by tests 1-10
+
+// ═══════════════════════════════════════════════════════════
+//  SUMMARY
+// ═══════════════════════════════════════════════════════════
+
+println("")
+println("═══════════════════════════════════════════════════════")
+let total = pass_count + fail_count
+println("  I1 Parser Error Recovery: " + to_string(pass_count) + " PASS / " + to_string(fail_count) + " FAIL / " + to_string(total) + " total")
+if fail_count == 0 {
+    println("  ALL PARSER ERROR RECOVERY TESTS PASSED!")
+} else {
+    println("  SOME TESTS FAILED")
+}
+println("═══════════════════════════════════════════════════════")

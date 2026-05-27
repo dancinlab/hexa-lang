@@ -1,0 +1,345 @@
+// universe.hexa — ANU-Time universe main loop (★19 MVP)
+//
+// sim 의 주관적 시간 τ ≡ 양자측정 카운트.
+// 한 tick = 다음 ANU byte 도착. wall-clock 과 무관.
+//
+// 사용:   hexa universe.hexa <max_ticks> [run_dir]
+// 출력:   <run_dir>/log.jsonl — tick 당 1줄 {tau, wall_t_ns, byte, source, state_hash, diff_L1}
+//
+// 환경:   NEXUS_NO_BUDGET_OK=1 권장 (장시간 실행)
+
+// ─── anu_clock + mini_world inline (hexa stage1 import 한계 회피) ───
+
+// === anu_clock ===
+let mut __anuc_hex: string = ""
+let mut __anuc_pos: i64 = 0
+let mut __anuc_source: string = ""
+let mut __anuc_total: i64 = 0
+
+fn anuc_now_ns() -> i64 {
+    // R37/AN13/L3-PY violation — python3 time.time_ns() stubbed 2026-04-18
+    // Fallback: shell `date +%s%N` (Linux ns, macOS falls back).
+    // macOS-correct (date-percent-3n-macos-bypass-audit 2026-04-27): see anu_clock.hexa fix.
+    let mut r = ""
+    try { r = to_string(exec("date +%s%N 2>/dev/null")).trim() } catch e { r = "0" }
+    let mut v: i64 = 0
+    if r.len() > 0 && r.contains("N") == false {
+        try { v = to_int(r) } catch e { v = 0 }
+    }
+    if v <= 0 {
+        let mut sec_str = ""
+        try { sec_str = to_string(exec("date +%s")).trim() } catch e2 { sec_str = "" }
+        if sec_str.len() > 0 {
+            try { let sec = to_int(sec_str); v = sec * 1000000000 } catch e3 { v = 0 }
+        }
+    }
+    return v
+}
+
+fn anuc_now_epoch() -> i64 {
+    let mut r = ""
+    try { r = to_string(exec("date +%s")).trim() } catch e { r = "0" }
+    let mut v: i64 = 0
+    try { v = to_int(r) } catch e { v = 0 }
+    return v
+}
+
+fn _anuc_file_exists(path: string) -> bool {
+    let mut r = ""
+    try { r = to_string(exec("[ -f '" + path + "' ] && echo 1 || echo 0")).trim() } catch e { r = "0" }
+    return r == "1"
+}
+
+fn _anuc_file_mtime(path: string) -> i64 {
+    let mut r = ""
+    try { r = to_string(exec("stat -f '%m' '" + path + "' 2>/dev/null || stat -c '%Y' '" + path + "' 2>/dev/null")).trim() } catch e { r = "0" }
+    if r.len() == 0 { return 0 }
+    let mut v: i64 = 0
+    try { v = to_int(r) } catch e { v = 0 }
+    return v
+}
+
+fn _anuc_cache_path() -> string {
+    let mut home = ""
+    try { home = to_string(exec("printenv HOME")).trim() } catch e { home = "" }
+    return home + "/Dev/nexus/discovery/rng_lab/.anu_cache.bin"
+}
+
+fn _anuc_read_cache() -> string {
+    let path = _anuc_cache_path()
+    if !_anuc_file_exists(path) { return "" }
+    let mtime = _anuc_file_mtime(path)
+    let age = anuc_now_epoch() - mtime
+    if age > 60 { return "" }
+    let mut c = ""
+    try { c = read_file(path).trim() } catch e { c = "" }
+    if c.len() < 128 { return "" }
+    return c.substring(0, 128)
+}
+
+fn _anuc_fetch_anu() -> string {
+    // R37/AN13/L3-PY violation — python3 JSON parser for ANU QRNG stubbed 2026-04-18
+    // No-op: return "" → caller falls back to _anuc_fetch_urandom().
+    eprintln("[R37] universe._anuc_fetch_anu: python3 JSON parser disabled; using urandom fallback.")
+    return ""
+}
+
+fn _anuc_fetch_urandom() -> string {
+    let tmp = "/tmp/anu_ur." + to_string(anuc_now_epoch()) + ".hex"
+    let cmd = "head -c 64 /dev/urandom | od -An -vtx1 | tr -d ' \\n' > " + tmp + "; cat " + tmp + "; rm -f " + tmp
+    let mut hex = ""
+    try { hex = to_string(exec(cmd)).trim() } catch e { hex = "" }
+    if hex.len() < 128 { return "" }
+    return hex.substring(0, 128)
+}
+
+fn _anuc_refresh() -> bool {
+    let cached = _anuc_read_cache()
+    if cached.len() >= 128 {
+        if cached != __anuc_hex {
+            __anuc_hex = cached
+            __anuc_pos = 0
+            __anuc_source = "cache"
+            return true
+        }
+    }
+    let anu = _anuc_fetch_anu()
+    if anu.len() >= 128 {
+        __anuc_hex = anu
+        __anuc_pos = 0
+        __anuc_source = "anu"
+        return true
+    }
+    let ur = _anuc_fetch_urandom()
+    if ur.len() >= 128 {
+        __anuc_hex = ur
+        __anuc_pos = 0
+        __anuc_source = "urandom"
+        return true
+    }
+    __anuc_source = "fail"
+    return false
+}
+
+fn anuc_init() {
+    __anuc_hex = ""
+    __anuc_pos = 0
+    __anuc_source = ""
+    __anuc_total = 0
+}
+
+fn _hex_pair_to_int(h2: string) -> i64 {
+    let mut r = ""
+    try { r = to_string(exec("printf '%d' 0x" + h2 + " 2>/dev/null")).trim() } catch e { r = "0" }
+    if r.len() == 0 { return 0 }
+    let mut v: i64 = 0
+    try { v = to_int(r) } catch e { v = 0 }
+    if v < 0 { v = 0 }
+    if v > 255 { v = 255 }
+    return v
+}
+
+fn anuc_next_byte() -> i64 {
+    if __anuc_hex.len() < 128 || __anuc_pos >= 64 {
+        let ok = _anuc_refresh()
+        if !ok { return 0 - 1 }
+    }
+    let off = __anuc_pos * 2
+    let h2 = __anuc_hex.substring(off, off + 2)
+    let b = _hex_pair_to_int(h2)
+    __anuc_pos = __anuc_pos + 1
+    __anuc_total = __anuc_total + 1
+    return b
+}
+
+fn anuc_source() -> string { return __anuc_source }
+
+// === mini_world ===
+const SIGMA_SQ: i64 = 64
+const SCALE: i64 = 65536
+const TAU_MIX: i64 = 4
+
+let mut __mw_x: [i64] = []
+let mut __mw_tick: i64 = 0
+
+fn mw_init(seed: i64) {
+    let mut xs: [i64] = []
+    let mut i = 0
+    while i < SIGMA_SQ {
+        let v = (seed * 1103 + i * 37 + 17) % SCALE
+        let mut vv = v
+        if vv < 0 { vv = 0 - vv }
+        xs = xs + [vv]
+        i = i + 1
+    }
+    __mw_x = xs
+    __mw_tick = 0
+}
+
+fn _mw_coord_hash(i: i64) -> i64 {
+    let h = (i * 131 + 73) % 251
+    return h + 5
+}
+
+fn mw_step(byte: i64) {
+    if byte < 0 { return }
+    let mut b = byte
+    if b > 255 { b = b % 256 }
+    let mut xs1: [i64] = []
+    let mut i = 0
+    while i < SIGMA_SQ {
+        let h = _mw_coord_hash(i)
+        let mut v = __mw_x[i]
+        v = v + b * h + (__mw_tick % 31)
+        if v < 0 { v = 0 - v }
+        v = v % SCALE
+        xs1 = xs1 + [v]
+        i = i + 1
+    }
+    let mut cur = xs1
+    let mut layer = 0
+    while layer < TAU_MIX {
+        let mut xs2: [i64] = []
+        let mut j = 0
+        while j < SIGMA_SQ {
+            let k_prev = (j + SIGMA_SQ - 1) % SIGMA_SQ
+            let left = cur[k_prev]
+            let right = cur[j]
+            let mix = (left * 7 + right + layer * 13) % SCALE
+            xs2 = xs2 + [mix]
+            j = j + 1
+        }
+        cur = xs2
+        layer = layer + 1
+    }
+    __mw_x = cur
+    __mw_tick = __mw_tick + 1
+}
+
+fn mw_state_hash() -> i64 {
+    let mut h: i64 = 0
+    let mut i = 0
+    while i < SIGMA_SQ {
+        let v = __mw_x[i]
+        h = (h * 33 + v) % 9999999967
+        i = i + 1
+    }
+    return h
+}
+
+fn mw_snapshot() -> [i64] {
+    let mut out: [i64] = []
+    let mut i = 0
+    while i < SIGMA_SQ {
+        out = out + [__mw_x[i]]
+        i = i + 1
+    }
+    return out
+}
+
+fn mw_state_diff(prev: [i64]) -> i64 {
+    let mut d: i64 = 0
+    let mut i = 0
+    let mut n = SIGMA_SQ
+    if prev.len() < n { n = prev.len() }
+    while i < n {
+        let a = __mw_x[i]
+        let b = prev[i]
+        let g = a - b
+        if g < 0 { d = d + (0 - g) } else { d = d + g }
+        i = i + 1
+    }
+    return d
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// MAIN LOOP
+// ═══════════════════════════════════════════════════════════════════
+
+let _uargs = args()
+let mut max_ticks: i64 = 300
+let mut run_dir: string = ""
+
+// args: [0]=interp, [1]=script, [2]=max_ticks, [3]=run_dir
+if _uargs.len() >= 2 {
+    try { max_ticks = to_int(_uargs[1]) } catch e { max_ticks = 300 }
+}
+
+// run_dir 자동 생성 또는 인자 지정
+if _uargs.len() >= 3 {
+    run_dir = _uargs[2]
+} else {
+    let mut home = ""
+    try { home = to_string(exec("printenv HOME")).trim() } catch e { home = "" }
+    let ts = to_string(anuc_now_epoch())
+    run_dir = home + "/Dev/nexus/sim_bridge/anu_time/runs/" + ts
+}
+
+// mkdir
+try { let _m = exec("mkdir -p '" + run_dir + "'") } catch e {}
+
+let log_path = run_dir + "/log.jsonl"
+let meta_path = run_dir + "/meta.json"
+
+// init
+anuc_init()
+mw_init(6)  // n=6 seed
+
+println("[universe] start max_ticks=" + to_string(max_ticks) + " run_dir=" + run_dir)
+
+let start_ns = anuc_now_ns()
+let start_epoch = anuc_now_epoch()
+
+// meta write
+let meta_json = "{\"start_ns\":" + to_string(start_ns) + ",\"start_epoch\":" + to_string(start_epoch) + ",\"max_ticks\":" + to_string(max_ticks) + ",\"sigma_sq\":" + to_string(SIGMA_SQ) + ",\"scale\":" + to_string(SCALE) + ",\"tau_mix\":" + to_string(TAU_MIX) + ",\"seed\":6}\n"
+try { write_file(meta_path, meta_json) } catch e {}
+
+// clear log
+try { write_file(log_path, "") } catch e {}
+
+let mut tau: i64 = 0
+let mut prev_snap = mw_snapshot()
+let mut fail_streak: i64 = 0
+
+while tau < max_ticks {
+    let t0 = anuc_now_ns()
+    let byte = anuc_next_byte()
+    let t1 = anuc_now_ns()
+
+    if byte < 0 {
+        fail_streak = fail_streak + 1
+        println("[universe] WARN byte=-1 streak=" + to_string(fail_streak) + " tau=" + to_string(tau))
+        if fail_streak >= 5 {
+            println("[universe] ABORT: 5 consecutive byte fetch failures")
+            break
+        }
+        continue
+    }
+    fail_streak = 0
+
+    mw_step(byte)
+    let sh = mw_state_hash()
+    let diff = mw_state_diff(prev_snap)
+    prev_snap = mw_snapshot()
+
+    let line = "{\"tau\":" + to_string(tau) + ",\"wall_t_ns\":" + to_string(t1) + ",\"byte_dt_ns\":" + to_string(t1 - t0) + ",\"byte\":" + to_string(byte) + ",\"source\":\"" + anuc_source() + "\",\"state_hash\":" + to_string(sh) + ",\"diff_L1\":" + to_string(diff) + "}\n"
+    try { append_file(log_path, line) } catch e {}
+
+    // progress 매 30 tick
+    if tau % 30 == 0 {
+        let elapsed_s = (t1 - start_ns) / 1000000000
+        println("[tau=" + to_string(tau) + "] wall=" + to_string(elapsed_s) + "s byte=" + to_string(byte) + " src=" + anuc_source() + " diff_L1=" + to_string(diff))
+    }
+
+    tau = tau + 1
+}
+
+let end_ns = anuc_now_ns()
+let total_wall_ns = end_ns - start_ns
+let total_wall_s = total_wall_ns / 1000000000
+
+println("[universe] done tau=" + to_string(tau) + " wall=" + to_string(total_wall_s) + "s log=" + log_path)
+
+// finalize meta
+let fmeta = "{\"start_ns\":" + to_string(start_ns) + ",\"end_ns\":" + to_string(end_ns) + ",\"start_epoch\":" + to_string(start_epoch) + ",\"max_ticks\":" + to_string(max_ticks) + ",\"actual_ticks\":" + to_string(tau) + ",\"total_wall_ns\":" + to_string(total_wall_ns) + ",\"sigma_sq\":" + to_string(SIGMA_SQ) + ",\"scale\":" + to_string(SCALE) + ",\"tau_mix\":" + to_string(TAU_MIX) + ",\"seed\":6}\n"
+try { write_file(meta_path, fmeta) } catch e {}

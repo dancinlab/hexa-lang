@@ -1,0 +1,133 @@
+// ═══════════════════════════════════════════════════════════
+//  self/stdlib/ssh/authorized_keys.hexa -- ~/.ssh/authorized_keys parser
+//
+//  Used by sshd-side userauth to look up an offered pubkey blob and
+//  decide whether to accept it. MVP scope:
+//    - ssh-ed25519 entries only
+//    - no options (no `command=`, `from=`, `restrict`, etc.) — those
+//      lines are still parsed but the options are dropped
+//    - no glob, no certs
+//
+//  Surface:
+//    ssh_authkeys_load(path) -> [{ pub_blob, pk32, comment }]
+//    ssh_authkeys_matches(entries, pub_blob) -> bool
+
+use "self/stdlib/ssh/keyfile"   // ssh_base64_decode_bytes
+
+fn _ak_parse_line(line: string) -> any {
+    let trimmed = line.trim()
+    if len(trimmed) == 0 { return #{ "skip": true } }
+    if char_code(trimmed, 0) == 35 { return #{ "skip": true } }    // '#'
+    // Split into whitespace-separated fields.
+    let mut fields: [string] = [""]
+    let mut idx = 0
+    let mut i = 0
+    while i < len(trimmed) {
+        let c = char_code(trimmed, i)
+        if c == 32 || c == 9 {
+            if len(fields[idx]) > 0 { fields.push("") ; idx = idx + 1 }
+        } else {
+            fields[idx] = fields[idx] + chr(c)
+        }
+        i = i + 1
+    }
+    // The key_type token is the first field that starts with "ssh-".
+    // Anything before it = options blob (we ignore).
+    let mut type_idx = -1
+    let mut fi = 0
+    while fi < len(fields) {
+        let f = fields[fi]
+        if len(f) > 3 {
+            if char_code(f, 0) == 115 && char_code(f, 1) == 115 &&
+               char_code(f, 2) == 104 && char_code(f, 3) == 45 {     // "ssh-"
+                type_idx = fi
+                break
+            }
+        }
+        fi = fi + 1
+    }
+    if type_idx < 0 || type_idx + 1 > len(fields) - 1 {
+        return #{ "skip": true }
+    }
+    let key_type = fields[type_idx]
+    let b64 = fields[type_idx + 1]
+    let comment = if type_idx + 2 < len(fields) { fields[type_idx + 2] } else { "" }
+    return #{ "key_type": key_type, "b64": b64, "comment": comment }
+}
+
+fn _ak_extract_ed25519(b64: string) -> [int] {
+    let blob = ssh_base64_decode_bytes(b64)
+    if len(blob) < 4 + 11 + 4 + 32 { return [] }
+    let n0 = blob[0] * 16777216 + blob[1] * 65536 + blob[2] * 256 + blob[3]
+    if n0 != 11 { return [] }
+    let label = "ssh-ed25519"
+    let mut i = 0
+    while i < 11 {
+        if blob[4 + i] != char_code(label, i) { return [] }
+        i = i + 1
+    }
+    let n1 = blob[15] * 16777216 + blob[16] * 65536 + blob[17] * 256 + blob[18]
+    if n1 != 32 { return [] }
+    let mut pk: [int] = []
+    let mut j = 0
+    while j < 32 { pk.push(blob[19 + j]) ; j = j + 1 }
+    return pk
+}
+
+pub fn ssh_authkeys_load(path: string) -> any {
+    let text = read_file(path)
+    if type_of(text) != "string" { return #{ "error": "cannot read " + path } }
+    let mut out: [any] = []
+    let mut line = ""
+    let n = len(text)
+    let mut i = 0
+    while i < n + 1 {
+        let c = if i < n { char_code(text, i) } else { 10 }
+        if c == 10 {
+            let p = _ak_parse_line(line)
+            line = ""
+            if !has_key(p, "skip") {
+                if p["key_type"] == "ssh-ed25519" {
+                    let pk = _ak_extract_ed25519(p["b64"])
+                    if len(pk) == 32 {
+                        // Re-encode the wire pub_blob from pk so callers
+                        // can byte-compare directly with an offered blob.
+                        let mut pb: [int] = []
+                        pb.push(0) ; pb.push(0) ; pb.push(0) ; pb.push(11)
+                        let lbl = "ssh-ed25519"
+                        let mut li = 0
+                        while li < 11 { pb.push(char_code(lbl, li)) ; li = li + 1 }
+                        pb.push(0) ; pb.push(0) ; pb.push(0) ; pb.push(32)
+                        let mut pi = 0
+                        while pi < 32 { pb.push(pk[pi]) ; pi = pi + 1 }
+                        out.push(#{ "pub_blob": pb, "pk32": pk, "comment": p["comment"] })
+                    }
+                }
+            }
+        } else {
+            line = line + chr(c)
+        }
+        i = i + 1
+    }
+    return out
+}
+
+pub fn ssh_authkeys_matches(entries: any, pub_blob: [int]) -> bool {
+    if type_of(entries) != "array" { return false }
+    let mut i = 0
+    while i < len(entries) {
+        let e = entries[i]
+        let eb = e["pub_blob"]
+        if len(eb) == len(pub_blob) {
+            let mut eq = true
+            let mut j = 0
+            while j < len(eb) {
+                if eb[j] != pub_blob[j] { eq = false; break }
+                j = j + 1
+            }
+            if eq { return true }
+        }
+        i = i + 1
+    }
+    return false
+}

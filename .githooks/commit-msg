@@ -1,0 +1,212 @@
+#!/usr/bin/env bash
+# .githooks/commit-msg — silent-wipe guard (enforcement)
+# Background: see inbox/notes/2026-05-22-wipe-governance-proposal.md
+# Opt-in via:  git config core.hooksPath .githooks
+#
+# This guard lives in commit-msg (NOT pre-commit) because only the
+# commit-msg hook is reliably handed the final commit message file as $1.
+# A pre-commit hook reads a STALE .git/COMMIT_EDITMSG and cannot apply the
+# subject-keyword / WIPE-OK predicate correctly. The companion
+# .githooks/pre-commit is an informational early-warning only.
+#
+# HARDENING (2026-05-22, post wipe #4 bf406f08 = 307 files / -82,597 LOC):
+# wipe #4 evaded the original guard for THREE reasons —
+#   (a) only 146 of the 82,597 deleted lines fell inside the 7 narrow
+#       runtime/codegen GUARD_GLOBS, so the >50-line predicate barely fired
+#       and a TREE-WIDE mass-delete with most lines outside those paths is
+#       invisible to Tier 1;
+#   (b) the hook was never activated (opt-in core.hooksPath, nobody opted in);
+#   (c) the wipe rode in on a stale-tree rebase ("absorbed 317-file churn").
+# Tiers 2+3 below add a tree-wide mass-delete gate and a protected-subtree
+# gate; the companion pre-commit adds a stale-tree behind-origin warning.
+set -euo pipefail
+
+# ----------------------------------------------------------------------
+# Read the final commit message (git hands the file as $1 to commit-msg).
+# ----------------------------------------------------------------------
+msg_file="${1:-}"
+[ -n "$msg_file" ] && [ -f "$msg_file" ] || msg_file=$(git rev-parse --git-dir)/COMMIT_EDITMSG
+subject=""
+body=""
+if [ -f "$msg_file" ]; then
+  subject=$(grep -v '^#' "$msg_file" | head -n 1 || true)
+  body=$(grep -v '^#' "$msg_file" || true)
+fi
+prefix="${subject%%:*}"
+
+# A merge commit re-introducing the other parent's tree legitimately shows
+# huge "deletions" in the diff; skip the guard for merges.
+if [ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
+  exit 0
+fi
+
+# ======================================================================
+# TIER 1 — runtime/codegen narrow-path guard (original behaviour)
+# ======================================================================
+GUARD_GLOBS=(
+  'stdlib/runtime/'
+  'self/runtime.c'
+  'self/runtime_core.c'
+  'self/runtime_arena.c'
+  'self/codegen_c2.hexa'
+  'compiler/check/bind.hexa'
+  'self/rt/core.hexa'
+)
+
+dels=$(git diff --cached --numstat -- "${GUARD_GLOBS[@]}" 2>/dev/null \
+  | awk '{ sum += $2 } END { print sum+0 }')
+
+if [ "${dels:-0}" -ge 50 ]; then
+  # Allow if the conventional-commit PREFIX (text before the first ':')
+  # declares a runtime/codegen scope. Anchoring to the prefix closes the
+  # e8c2dc1c blind spot: `wip: ...compiler/stdlib follow-on` mentions
+  # "stdlib" only in free-text, NOT a scope declaration.
+  if echo "$prefix" | grep -qiE 'runtime|stdlib|codegen|rt_|restore|re-land|recover'; then
+    : # allowed
+  elif echo "$body" | grep -qE '^WIPE-OK:'; then
+    : # escape hatch
+  else
+    echo ""
+    echo "------------------------------------------------------------"
+    echo "BLOCKED: commit-msg silent-wipe guard (Tier 1 · runtime/codegen)"
+    echo "------------------------------------------------------------"
+    echo ""
+    echo "This commit deletes ${dels} lines in runtime/codegen guarded paths"
+    echo "but the subject PREFIX does not declare runtime/stdlib/codegen scope."
+    echo ""
+    echo "Subject: $subject"
+    echo ""
+    echo "Guarded files with staged deletions:"
+    git diff --cached --numstat -- "${GUARD_GLOBS[@]}" \
+      | awk '$2 > 0 { printf "  -%-5d %s\n", $2, $3 }'
+    echo ""
+    echo "If intentional, add to the commit body:    WIPE-OK: <one-line reason>"
+    echo "Otherwise restage without those files:     git restore --staged <file>"
+    echo ""
+    echo "Background: inbox/notes/2026-05-22-wipe-governance-proposal.md"
+    echo "------------------------------------------------------------"
+    exit 1
+  fi
+fi
+
+# ======================================================================
+# TIER 2 — tree-wide mass-delete guard (closes the bf406f08 #4 blind spot)
+#
+# Fires when a SINGLE commit removes a campaign-scale chunk of the tree:
+#   - more than MAX_DEL_FILES files deleted entirely (mode delete), OR
+#   - more than MAX_DEL_LINES lines removed across the WHOLE staged diff.
+# Allowed only when the commit clearly declares intent — the prefix or the
+# body must carry a restore/revert/wipe/sunset/attestation marker, or an
+# explicit `WIPE-DELETE-OK:` trailer. The campaign's own commits qualify:
+#   restore(stdlib): ...            -> prefix match
+#   chore(D116): _python_bridge sunset
+#   chore(D116): docs-only attestation
+# ======================================================================
+MAX_DEL_FILES=50
+MAX_DEL_LINES=5000
+
+del_files=$(git diff --cached --diff-filter=D --name-only 2>/dev/null | wc -l | tr -d ' ')
+total_dels=$(git diff --cached --numstat 2>/dev/null \
+  | awk '{ if ($2 != "-") sum += $2 } END { print sum+0 }')
+
+if [ "${del_files:-0}" -gt "$MAX_DEL_FILES" ] || [ "${total_dels:-0}" -gt "$MAX_DEL_LINES" ]; then
+  # Intent markers: in the PREFIX (scope declaration) ...
+  if echo "$prefix" | grep -qiE 'restore|revert|re-land|recover|wipe|sunset|attestation|deprecat|archive|remove|rm '; then
+    : # declared in prefix
+  # ... or anywhere in the body via an explicit trailer.
+  elif echo "$body" | grep -qiE '^(WIPE-OK|WIPE-DELETE-OK|MASS-DELETE-OK|SUNSET-OK|RESTORE):'; then
+    : # explicit trailer escape
+  else
+    echo ""
+    echo "------------------------------------------------------------"
+    echo "BLOCKED: commit-msg silent-wipe guard (Tier 2 · tree-wide mass-delete)"
+    echo "------------------------------------------------------------"
+    echo ""
+    echo "This commit removes ${del_files} files entirely and ${total_dels} lines"
+    echo "tree-wide — at or above the mass-delete threshold"
+    echo "(>${MAX_DEL_FILES} files OR >${MAX_DEL_LINES} lines)."
+    echo ""
+    echo "This is the bf406f08 pattern: a stale-tree rebase silently dropping"
+    echo "everything merged since the worktree forked. If you did NOT mean to"
+    echo "delete the whole tree, your branch is almost certainly STALE —"
+    echo "rebase onto origin/main and re-stage."
+    echo ""
+    echo "Subject: $subject"
+    echo ""
+    echo "First 20 deleted files:"
+    git diff --cached --diff-filter=D --name-only | head -20 | sed 's/^/  - /'
+    [ "${del_files:-0}" -gt 20 ] && echo "  ... and $((del_files - 20)) more"
+    echo ""
+    echo "If this mass-delete is genuinely intentional, declare it:"
+    echo "  - use a restore/revert/sunset/attestation/remove PREFIX, e.g."
+    echo "      restore(stdlib): re-land builtins lost to wipe"
+    echo "      chore(D116): _python_bridge sunset"
+    echo "  - or add a body trailer:    WIPE-DELETE-OK: <one-line reason>"
+    echo ""
+    echo "Background: inbox/notes/2026-05-22-wipe-governance-proposal.md"
+    echo "------------------------------------------------------------"
+    exit 1
+  fi
+fi
+
+# ======================================================================
+# TIER 3 — protected-subtree guard
+#
+# Deleting an ENTIRE stdlib/<domain>/ subtree (every tracked file under it
+# staged for delete) is a campaign-scale event even when the file/line
+# counts are modest. Require the same explicit intent as Tier 2.
+# ======================================================================
+PROTECTED_PARENTS=(
+  'stdlib/bio'
+  'stdlib/chem'
+  'stdlib/matter'
+  'stdlib/runtime'
+  'stdlib/rtsc'
+  'stdlib/chip'
+  'compiler'
+  'self'
+)
+
+wiped_subtree=""
+for parent in "${PROTECTED_PARENTS[@]}"; do
+  # tracked files under this parent in the parent commit (HEAD)
+  head_count=$(git ls-tree -r --name-only HEAD -- "$parent" 2>/dev/null | wc -l | tr -d ' ')
+  [ "${head_count:-0}" -eq 0 ] && continue
+  # how many of them are staged for deletion in this commit
+  del_count=$(git diff --cached --diff-filter=D --name-only -- "$parent" 2>/dev/null | wc -l | tr -d ' ')
+  # entire subtree wiped (and it was non-trivial: >5 files)
+  if [ "${del_count}" -ge "${head_count}" ] && [ "${head_count}" -gt 5 ]; then
+    wiped_subtree="$parent ($del_count/$head_count files)"
+    break
+  fi
+done
+
+if [ -n "$wiped_subtree" ]; then
+  if echo "$prefix" | grep -qiE 'restore|revert|re-land|recover|wipe|sunset|attestation|deprecat|archive|remove|rm '; then
+    : # declared in prefix
+  elif echo "$body" | grep -qiE '^(WIPE-OK|WIPE-DELETE-OK|MASS-DELETE-OK|SUNSET-OK|RESTORE):'; then
+    : # explicit trailer escape
+  else
+    echo ""
+    echo "------------------------------------------------------------"
+    echo "BLOCKED: commit-msg silent-wipe guard (Tier 3 · protected subtree)"
+    echo "------------------------------------------------------------"
+    echo ""
+    echo "This commit deletes the ENTIRE protected subtree: $wiped_subtree"
+    echo ""
+    echo "Subject: $subject"
+    echo ""
+    echo "Wholesale removal of a domain subtree must be declared intent."
+    echo "If your branch is STALE this is a silent wipe — rebase onto"
+    echo "origin/main and re-stage."
+    echo ""
+    echo "If intentional, declare it via a restore/revert/sunset/remove"
+    echo "PREFIX or a body trailer:   WIPE-DELETE-OK: <one-line reason>"
+    echo ""
+    echo "Background: inbox/notes/2026-05-22-wipe-governance-proposal.md"
+    echo "------------------------------------------------------------"
+    exit 1
+  fi
+fi
+
+exit 0

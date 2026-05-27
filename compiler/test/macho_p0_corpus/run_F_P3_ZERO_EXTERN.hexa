@@ -1,0 +1,100 @@
+// F-P3-ZERO-EXTERN — P3 falsifier.
+//
+// Measure that `aprime_cc --emit=obj --backend=native trivial.hexa`
+// forks 0 external `as`/`ld`/`clang` processes — the hexa-native
+// obj-emit path is genuinely toolchain-independent.
+//
+// Strategy: build with a stripped PATH that does NOT contain
+// clang/as/ld. If aprime_cc still produces a valid .o, then it
+// truly doesn't fork those tools.
+//
+// HONEST SCOPE: the FULL `--emit=exec` path STILL forks `ld` for
+// the link step (P1's hexa_ld doesn't yet replace ld for real
+// runtime — only static-link with synthetic stubs). F-P3-ZERO-
+// EXTERN-OBJ closes the **obj-emit subset** of RFC 063 § P3's
+// zero-fork goal.
+
+import "../../emit/macho_arm64.hexa"
+import "../../ir/lir.hexa"
+
+fn main() {
+    // Build aprime_cc with a stripped PATH that excludes clang/as/ld
+    // sites. If `--backend=native` truly forks 0 external tools, the
+    // build succeeds with this PATH.
+    //
+    // We invoke /tmp/aprime_s7 (the pre-built native aprime_cc from
+    // earlier cycles) directly without going through PATH lookup.
+    let aprime = "/tmp/aprime_s7"
+
+    // Verify aprime_s7 exists.
+    let st = exec_capture("test -x " + aprime + " && echo OK || echo MISSING")
+    let st_out = to_string(st[0]).trim()
+    if st_out != "OK" {
+        println("FAIL: " + aprime + " not found / not executable")
+        println("  build it first: bash tool/build_aprime.sh -o " + aprime)
+        exit(1)
+    }
+
+    let src = "compiler/test/macho_p0_corpus/trivial.hexa"
+
+    // Stripped PATH — only POSIX core utils, no compiler toolchain.
+    let stripped_path = "/usr/bin:/bin"
+
+    // Run aprime_cc --emit=obj --backend=native with stripped PATH.
+    let cmd = "env -i PATH=" + stripped_path + " " +
+              aprime + " _drv.hexa --target=arm64-apple-darwin " +
+              "--emit=obj --backend=native -o /tmp/p3_zero_extern.o " + src +
+              " 2>&1"
+    let r = exec_capture(cmd)
+    let r_out = to_string(r[0])
+    let r_rc  = to_int(r[2])
+    println("=== aprime_cc with stripped PATH ===")
+    println(r_out)
+    println("rc=" + to_string(r_rc))
+
+    let mut ok = true
+    if r_rc != 0 {
+        println("FAIL: aprime_cc rc=" + to_string(r_rc) + " (expected 0)")
+        ok = false
+    }
+    // Output must NOT mention clang/as/ld (would indicate a fork attempt
+    // that succeeded somehow). atlas/hxc loads count is hexa-internal.
+    if r_out.find("clang") >= 0 {
+        println("FAIL: stdout contains 'clang' — possible fork attempt")
+        ok = false
+    }
+    // `as ` substring is too broad (might match "as-is" in messages);
+    // restrict to looking for `/as ` or `as_cmd` etc.
+    if r_out.find("/as ") >= 0 || r_out.find("/ld ") >= 0 {
+        println("FAIL: stdout contains assembler/linker path")
+        ok = false
+    }
+
+    // Verify the .o was actually produced + has Mach-O magic.
+    let sz = exec_capture("wc -c < /tmp/p3_zero_extern.o 2>&1 | tr -d ' '")
+    let sz_n = to_int(to_string(sz[0]).trim())
+    println(".o size = " + to_string(sz_n) + " bytes")
+    if sz_n < 100 {
+        println("FAIL: .o too small (" + to_string(sz_n) + " bytes); expected > 100")
+        ok = false
+    }
+
+    // Magic check via `file`.
+    let f = exec_capture("file /tmp/p3_zero_extern.o 2>&1")
+    let f_out = to_string(f[0])
+    println(f_out)
+    if f_out.find("Mach-O") < 0 || f_out.find("arm64") < 0 {
+        println("FAIL: file did not see Mach-O arm64")
+        ok = false
+    }
+    if f_out.find("object") < 0 && f_out.find("relocatable") < 0 {
+        println("FAIL: file did not see relocatable object")
+        ok = false
+    }
+
+    if !ok { exit(2) }
+
+    println("🛸 F-P3-ZERO-EXTERN-OBJ FULL PASS — aprime_cc --emit=obj --backend=native runs with no clang/as/ld in PATH")
+    println("   trivial.hexa → .o produced (" + to_string(sz_n) + " B) without external toolchain fork.")
+    exit(0)
+}

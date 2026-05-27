@@ -1,0 +1,1005 @@
+// ===================================================================
+//  test_tensor_parallel.hexa — Unit tests for 2-way tensor parallelism
+//
+//  Verifies that every tensor-parallel primitive in
+//  self/ml/tensor_parallel.hexa produces numerically identical results
+//  to the equivalent single-GPU computation (monolithic GEMM / MHA).
+//
+//  Run: ./hexa self/test_tensor_parallel.hexa
+//
+//  ML roadmap #20 — Tensor Parallelism
+// ===================================================================
+
+// -- inlined from self/ml/tensor_parallel.hexa --
+// codegen import not wired for test files
+
+// ===================================================================
+//  tensor_parallel.hexa — 2-way Tensor Parallelism (Megatron-LM style)
+//
+//  Pure hexa, pure CPU simulation. A "rank" is just an index 0..nranks-1
+//  into an array of shards. Each rank holds a slice of the weight matrix
+//  and computes on a slice of the input/output. Collective communication
+//  (all-reduce, all-gather, reduce-scatter) is simulated by walking the
+//  shard arrays — no CUDA, no NCCL, no network.
+//
+//  Linear layers:
+//    * column_parallel: W[K x N] split along N (output features).
+//        Y = [X W_1, X W_2]  (each rank holds one column shard of Y)
+//    * row_parallel:    W[K x N] split along K (input features).
+//        Y = X_1 W_1 + X_2 W_2  (each rank reduces, result broadcast)
+//
+//  Attention (2-way TP, Megatron):
+//    * QKV are column_parallel:   each rank owns n_heads/tp heads.
+//    * Output projection is row_parallel: each rank's partial result
+//      is summed via all-reduce.
+//
+//  Forward and backward passes are both implemented.
+//  Correctness: all TP ops must numerically match a single monolithic
+//  GEMM to within 1e-6 (tested in self/test_tensor_parallel.hexa).
+//
+//  Notation:
+//    - Matrices are row-major flat arrays of float, length rows*cols.
+//    - Shard lists are arrays of length nranks. shards[r] is the
+//      flat matrix owned by rank r.
+// ===================================================================
+
+let TP_NUM_RANKS = 2
+
+// ── Flat row-major matrix helpers ────────────────────────────
+fn tp_mat_zeros(rows, cols) {
+    let mut m = []
+    let n = rows * cols
+    let mut i = 0
+    while i < n {
+        m.push(0.0)
+        i = i + 1
+    }
+    m
+}
+
+fn tp_mat_get(M, cols, r, c) { M[r * cols + c] }
+
+fn tp_mat_rows_cols_len(rows, cols) { rows * cols }
+
+// Build a deterministic test matrix filled with sin-like values.
+// Deterministic across ranks so we can compare TP vs single GEMM.
+fn tp_mat_range(rows, cols, start, step) {
+    let mut m = []
+    let mut i = 0
+    let n = rows * cols
+    while i < n {
+        m.push(start + to_float(i) * step)
+        i = i + 1
+    }
+    m
+}
+
+// ── Monolithic matrix multiply (reference path) ──────────────
+// C = A (M x K) @ B (K x N), row-major. Used both as the reference
+// for correctness tests and as the per-rank local GEMM kernel.
+fn tp_matmul(A, B, M, K, N) {
+    let mut C = tp_mat_zeros(M, N)
+    let mut r = 0
+    while r < M {
+        let mut c = 0
+        while c < N {
+            let mut s = 0.0
+            let mut k = 0
+            while k < K {
+                s = s + A[r * K + k] * B[k * N + c]
+                k = k + 1
+            }
+            C[r * N + c] = s
+            c = c + 1
+        }
+        r = r + 1
+    }
+    C
+}
+
+// Transpose: out[c*rows + r] = in[r*cols + c]
+fn tp_transpose(Min, rows, cols) {
+    let mut out = tp_mat_zeros(cols, rows)
+    let mut r = 0
+    while r < rows {
+        let mut c = 0
+        while c < cols {
+            out[c * rows + r] = Min[r * cols + c]
+            c = c + 1
+        }
+        r = r + 1
+    }
+    out
+}
+
+// Element-wise add two flat matrices of the same shape.
+fn tp_mat_add(A, B, n) {
+    let mut out = []
+    let mut i = 0
+    while i < n {
+        out.push(A[i] + B[i])
+        i = i + 1
+    }
+    out
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Weight sharding helpers
+// ═══════════════════════════════════════════════════════════════
+
+// Column split: W[rows x cols] → nranks shards, each [rows x cols/nranks].
+// Rank r gets columns [r*cpr .. (r+1)*cpr). Requires cols % nranks == 0.
+fn tp_split_col(W, rows, cols, nranks) {
+    let cpr = cols / nranks
+    let mut shards = []
+    let mut r = 0
+    while r < nranks {
+        let mut shard = tp_mat_zeros(rows, cpr)
+        let col_start = r * cpr
+        let mut i = 0
+        while i < rows {
+            let mut j = 0
+            while j < cpr {
+                shard[i * cpr + j] = W[i * cols + (col_start + j)]
+                j = j + 1
+            }
+            i = i + 1
+        }
+        shards.push(shard)
+        r = r + 1
+    }
+    shards
+}
+
+// Row split: W[rows x cols] → nranks shards, each [rows/nranks x cols].
+// Requires rows % nranks == 0.
+fn tp_split_row(W, rows, cols, nranks) {
+    let rpr = rows / nranks
+    let mut shards = []
+    let mut r = 0
+    while r < nranks {
+        let mut shard = tp_mat_zeros(rpr, cols)
+        let row_start = r * rpr
+        let mut i = 0
+        while i < rpr {
+            let mut j = 0
+            while j < cols {
+                shard[i * cols + j] = W[(row_start + i) * cols + j]
+                j = j + 1
+            }
+            i = i + 1
+        }
+        shards.push(shard)
+        r = r + 1
+    }
+    shards
+}
+
+// Inverse of tp_split_col: concat column shards back to a single matrix.
+fn tp_unsplit_col(shards, rows, cpr, nranks) {
+    let cols = cpr * nranks
+    let mut out = tp_mat_zeros(rows, cols)
+    let mut r = 0
+    while r < nranks {
+        let shard = shards[r]
+        let col_start = r * cpr
+        let mut i = 0
+        while i < rows {
+            let mut j = 0
+            while j < cpr {
+                out[i * cols + (col_start + j)] = shard[i * cpr + j]
+                j = j + 1
+            }
+            i = i + 1
+        }
+        r = r + 1
+    }
+    out
+}
+
+// Inverse of tp_split_row: concat row shards back.
+fn tp_unsplit_row(shards, rpr, cols, nranks) {
+    let rows = rpr * nranks
+    let mut out = tp_mat_zeros(rows, cols)
+    let mut r = 0
+    while r < nranks {
+        let shard = shards[r]
+        let row_start = r * rpr
+        let mut i = 0
+        while i < rpr {
+            let mut j = 0
+            while j < cols {
+                out[(row_start + i) * cols + j] = shard[i * cols + j]
+                j = j + 1
+            }
+            i = i + 1
+        }
+        r = r + 1
+    }
+    out
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Collective communication primitives (CPU simulation)
+//
+//  Each "rank" is an index into a length-nranks array. After any
+//  collective, every rank holds a consistent result — we model this
+//  by returning a length-nranks array whose entries are the same
+//  (for broadcast/all-reduce/all-gather) or the local shards (for
+//  reduce-scatter).
+// ═══════════════════════════════════════════════════════════════
+
+// tp_broadcast: replicate x to all ranks. Returns [x, x, ...].
+fn tp_broadcast(x, nranks) {
+    let mut out = []
+    let mut r = 0
+    while r < nranks {
+        out.push(x)
+        r = r + 1
+    }
+    out
+}
+
+// tp_all_reduce_sum: element-wise sum the per-rank flat matrices.
+// Input shards must all be the same length. Output is a length-nranks
+// array, every entry equal to the reduced sum. n = length of each shard.
+fn tp_all_reduce_sum(shards, n, nranks) {
+    let mut summed = tp_mat_zeros(1, n)
+    let mut r = 0
+    while r < nranks {
+        let s = shards[r]
+        let mut i = 0
+        while i < n {
+            summed[i] = summed[i] + s[i]
+            i = i + 1
+        }
+        r = r + 1
+    }
+    tp_broadcast(summed, nranks)
+}
+
+// tp_all_gather_col: each rank holds one [rows x cpr] column shard.
+// After all-gather, every rank holds the full [rows x cpr*nranks]
+// matrix with shards concatenated along the column dimension.
+fn tp_all_gather_col(shards, rows, cpr, nranks) {
+    let full = tp_unsplit_col(shards, rows, cpr, nranks)
+    tp_broadcast(full, nranks)
+}
+
+// tp_all_gather_row: each rank holds one [rpr x cols] row shard.
+// After all-gather, every rank holds the full [rpr*nranks x cols].
+fn tp_all_gather_row(shards, rpr, cols, nranks) {
+    let full = tp_unsplit_row(shards, rpr, cols, nranks)
+    tp_broadcast(full, nranks)
+}
+
+// tp_reduce_scatter_row: input is a length-nranks array where each
+// entry is a full [rows x cols] matrix (e.g. a per-rank contribution).
+// Output is a length-nranks array where rank r holds the sum of all
+// inputs restricted to rows [r*rpr .. (r+1)*rpr).
+fn tp_reduce_scatter_row(contribs, rows, cols, nranks) {
+    // First, element-wise sum into one full matrix.
+    let mut full = tp_mat_zeros(rows, cols)
+    let n = rows * cols
+    let mut r = 0
+    while r < nranks {
+        let c = contribs[r]
+        let mut i = 0
+        while i < n {
+            full[i] = full[i] + c[i]
+            i = i + 1
+        }
+        r = r + 1
+    }
+    // Then row-split into shards.
+    let rpr = rows / nranks
+    tp_split_row(full, rows, cols, nranks)
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Column-parallel linear: Y = X @ W
+//
+//  X: [batch x K]  (replicated / broadcast on every rank)
+//  W: [K x N] split into nranks column shards W_r of shape [K x N/nranks]
+//  Forward:
+//      Y_r = X @ W_r                          [batch x N/nranks]
+//      Y   = all_gather_col([Y_0, Y_1, ...])  [batch x N]
+//
+//  Backward (given grad_Y split the same way):
+//      grad_X_r = grad_Y_r @ W_r^T            [batch x K]
+//      grad_X   = all_reduce_sum(grad_X_r)    [batch x K]
+//      grad_W_r = X^T @ grad_Y_r              [K x N/nranks]
+// ═══════════════════════════════════════════════════════════════
+
+fn tp_column_parallel_linear_forward(X, W_shards, batch, K, N, nranks) {
+    let cpr = N / nranks
+    // Each rank computes Y_r = X @ W_r.
+    let mut Y_shards = []
+    let mut r = 0
+    while r < nranks {
+        let W_r = W_shards[r]
+        let Y_r = tp_matmul(X, W_r, batch, K, cpr)
+        Y_shards.push(Y_r)
+        r = r + 1
+    }
+    Y_shards
+}
+
+// Same as above but returns the materialized full output [batch x N]
+// by running all-gather on the column shards.
+fn tp_column_parallel_linear_forward_gathered(X, W_shards, batch, K, N, nranks) {
+    let Y_shards = tp_column_parallel_linear_forward(X, W_shards, batch, K, N, nranks)
+    let cpr = N / nranks
+    tp_unsplit_col(Y_shards, batch, cpr, nranks)
+}
+
+// Backward through column-parallel linear.
+// Inputs:
+//   X              [batch x K] (broadcast)
+//   W_shards[r]    [K x N/nranks]
+//   grad_Y_shards[r] [batch x N/nranks]
+// Returns [grad_X, grad_W_shards] where
+//   grad_X              [batch x K]
+//   grad_W_shards[r]    [K x N/nranks]
+fn tp_column_parallel_linear_backward(X, W_shards, grad_Y_shards, batch, K, N, nranks) {
+    let cpr = N / nranks
+    // grad_W_r = X^T @ grad_Y_r    shape [K x cpr]
+    let Xt = tp_transpose(X, batch, K)
+    let mut grad_W_shards = []
+    let mut r = 0
+    while r < nranks {
+        let gY = grad_Y_shards[r]
+        let gW = tp_matmul(Xt, gY, K, batch, cpr)
+        grad_W_shards.push(gW)
+        r = r + 1
+    }
+    // grad_X_r = grad_Y_r @ W_r^T   shape [batch x K]
+    // grad_X   = sum_r grad_X_r via all-reduce.
+    let mut partial_grad_X = []
+    r = 0
+    while r < nranks {
+        let W_r = W_shards[r]
+        let gY = grad_Y_shards[r]
+        let W_rT = tp_transpose(W_r, K, cpr)
+        let gX_r = tp_matmul(gY, W_rT, batch, cpr, K)
+        partial_grad_X.push(gX_r)
+        r = r + 1
+    }
+    let reduced = tp_all_reduce_sum(partial_grad_X, batch * K, nranks)
+    let grad_X = reduced[0]
+    return [grad_X, grad_W_shards]
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Row-parallel linear: Y = X @ W
+//
+//  X: [batch x K] split into row shards X_r of shape [batch x K/nranks]
+//     (i.e. along the contraction dim K, not the batch dim).
+//  W: [K x N] split into row shards W_r of shape [K/nranks x N].
+//  Forward:
+//      Y_r = X_r @ W_r                        [batch x N]
+//      Y   = all_reduce_sum([Y_0, Y_1, ...])  [batch x N]
+//
+//  Backward:
+//      grad_X_r = grad_Y @ W_r^T              [batch x K/nranks]
+//      grad_W_r = X_r^T @ grad_Y              [K/nranks x N]
+// ═══════════════════════════════════════════════════════════════
+
+fn tp_row_parallel_linear_forward(X_shards, W_shards, batch, K, N, nranks) {
+    let kpr = K / nranks
+    // Each rank computes its partial GEMM.
+    let mut partials = []
+    let mut r = 0
+    while r < nranks {
+        let X_r = X_shards[r]
+        let W_r = W_shards[r]
+        let P_r = tp_matmul(X_r, W_r, batch, kpr, N)
+        partials.push(P_r)
+        r = r + 1
+    }
+    // All-reduce sum — every rank now holds the full [batch x N].
+    tp_all_reduce_sum(partials, batch * N, nranks)
+}
+
+// Convenience: return just the materialized [batch x N] (rank 0 copy).
+fn tp_row_parallel_linear_forward_reduced(X_shards, W_shards, batch, K, N, nranks) {
+    let reduced = tp_row_parallel_linear_forward(X_shards, W_shards, batch, K, N, nranks)
+    reduced[0]
+}
+
+// Backward through row-parallel linear.
+// grad_Y is the full [batch x N] gradient (broadcast / replicated).
+// Returns [grad_X_shards, grad_W_shards].
+fn tp_row_parallel_linear_backward(X_shards, W_shards, grad_Y, batch, K, N, nranks) {
+    let kpr = K / nranks
+    let mut grad_X_shards = []
+    let mut grad_W_shards = []
+    let mut r = 0
+    while r < nranks {
+        let X_r = X_shards[r]
+        let W_r = W_shards[r]
+        // grad_X_r = grad_Y @ W_r^T   shape [batch x kpr]
+        let W_rT = tp_transpose(W_r, kpr, N)
+        let gX = tp_matmul(grad_Y, W_rT, batch, N, kpr)
+        grad_X_shards.push(gX)
+        // grad_W_r = X_r^T @ grad_Y   shape [kpr x N]
+        let X_rT = tp_transpose(X_r, batch, kpr)
+        let gW = tp_matmul(X_rT, grad_Y, kpr, batch, N)
+        grad_W_shards.push(gW)
+        r = r + 1
+    }
+    return [grad_X_shards, grad_W_shards]
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  2-way TP Attention Block
+//
+//  Single-token-per-sequence (batch) attention, following Megatron's
+//  layout:
+//    * Q, K, V projections: column_parallel — each rank owns
+//      n_heads/tp contiguous heads.
+//    * Output projection: row_parallel — each rank produces a partial
+//      output whose sum equals the true single-GPU output.
+//
+//  Inputs
+//    X      [batch x dim]
+//    Wq, Wk, Wv:  [dim x dim] full weight matrices on disk. We split
+//                 each by column into heads-per-rank shards.
+//    Wo:          [dim x dim] full output projection, row-split so each
+//                 rank owns [dim/tp x dim].
+//    n_heads      total attention heads
+//    head_dim     per-head dim
+//    dim = n_heads * head_dim
+//
+//  Output: Y [batch x dim] (every rank's view — rank 0 returned).
+// ═══════════════════════════════════════════════════════════════
+
+// Softmax over one row of length n.
+fn tp_softmax_row(x, n) {
+    let mut mx = x[0]
+    let mut i = 1
+    while i < n {
+        if x[i] > mx { mx = x[i] }
+        i = i + 1
+    }
+    let mut ex = []
+    let mut sum_e = 0.0
+    i = 0
+    while i < n {
+        let e = exp(x[i] - mx)
+        ex.push(e)
+        sum_e = sum_e + e
+        i = i + 1
+    }
+    let mut out = []
+    let inv = 1.0 / sum_e
+    i = 0
+    while i < n {
+        out.push(ex[i] * inv)
+        i = i + 1
+    }
+    out
+}
+
+// Multi-head scaled dot-product attention on a single [batch x heads*head_dim]
+// activation. Here Q/K/V have shape [batch x heads*head_dim] and batch also
+// plays the role of sequence length (self-attention over the batch rows).
+fn tp_mha_forward_local(Q, K, V, batch, n_heads_local, head_dim) {
+    let hd = head_dim
+    let H = n_heads_local
+    let local_feat = H * hd
+    let scale = 1.0 / sqrt(to_float(hd))
+    let mut Y = tp_mat_zeros(batch, local_feat)
+    let mut h = 0
+    while h < H {
+        // For each head, compute Q_h K_h^T, softmax, times V_h.
+        // Q_h[i,d] = Q[i, h*hd + d]
+        let mut i = 0
+        while i < batch {
+            // scores[j] = Q_h[i] . K_h[j] * scale
+            let mut scores = []
+            let mut j = 0
+            while j < batch {
+                let mut dot = 0.0
+                let mut d = 0
+                while d < hd {
+                    dot = dot + Q[i * local_feat + h * hd + d] * K[j * local_feat + h * hd + d]
+                    d = d + 1
+                }
+                scores.push(dot * scale)
+                j = j + 1
+            }
+            // softmax over sequence dim (batch)
+            let attn = tp_softmax_row(scores, batch)
+            // out[i, h, d] = sum_j attn[j] * V_h[j, d]
+            let mut d = 0
+            while d < hd {
+                let mut acc = 0.0
+                let mut jj = 0
+                while jj < batch {
+                    acc = acc + attn[jj] * V[jj * local_feat + h * hd + d]
+                    jj = jj + 1
+                }
+                Y[i * local_feat + h * hd + d] = acc
+                d = d + 1
+            }
+            i = i + 1
+        }
+        h = h + 1
+    }
+    Y
+}
+
+// 2-way TP attention forward.
+// Returns the materialized [batch x dim] output (rank 0 view).
+fn tp_attention_forward(X, Wq, Wk, Wv, Wo, batch, n_heads, head_dim, nranks) {
+    let dim = n_heads * head_dim
+    let heads_per_rank = n_heads / nranks
+    let feat_per_rank = heads_per_rank * head_dim  // = dim / nranks
+
+    // Column-parallel Q, K, V: each rank owns feat_per_rank columns.
+    let Wq_shards = tp_split_col(Wq, dim, dim, nranks)
+    let Wk_shards = tp_split_col(Wk, dim, dim, nranks)
+    let Wv_shards = tp_split_col(Wv, dim, dim, nranks)
+
+    // Each rank computes its local Q_r, K_r, V_r ∈ [batch x feat_per_rank]
+    let mut Q_shards = []
+    let mut K_shards = []
+    let mut V_shards = []
+    let mut r = 0
+    while r < nranks {
+        Q_shards.push(tp_matmul(X, Wq_shards[r], batch, dim, feat_per_rank))
+        K_shards.push(tp_matmul(X, Wk_shards[r], batch, dim, feat_per_rank))
+        V_shards.push(tp_matmul(X, Wv_shards[r], batch, dim, feat_per_rank))
+        r = r + 1
+    }
+
+    // Local MHA on each rank's heads.
+    let mut Y_local_shards = []
+    r = 0
+    while r < nranks {
+        let Q_r = Q_shards[r]
+        let K_r = K_shards[r]
+        let V_r = V_shards[r]
+        let Y_r = tp_mha_forward_local(Q_r, K_r, V_r, batch, heads_per_rank, head_dim)
+        Y_local_shards.push(Y_r)
+        r = r + 1
+    }
+
+    // Row-parallel output projection: Wo is split along its row dim (K-axis).
+    // Each rank multiplies its [batch x feat_per_rank] local output by its
+    // Wo row shard [feat_per_rank x dim] and all-reduces the sum.
+    let Wo_shards = tp_split_row(Wo, dim, dim, nranks)
+    let mut partials = []
+    r = 0
+    while r < nranks {
+        let Y_r = Y_local_shards[r]
+        let Wo_r = Wo_shards[r]
+        let P_r = tp_matmul(Y_r, Wo_r, batch, feat_per_rank, dim)
+        partials.push(P_r)
+        r = r + 1
+    }
+    let reduced = tp_all_reduce_sum(partials, batch * dim, nranks)
+    reduced[0]
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Single-GPU reference attention for correctness comparison.
+//  Same math as tp_attention_forward but without any sharding.
+// ═══════════════════════════════════════════════════════════════
+fn tp_attention_forward_single(X, Wq, Wk, Wv, Wo, batch, n_heads, head_dim) {
+    let dim = n_heads * head_dim
+    let Q = tp_matmul(X, Wq, batch, dim, dim)
+    let K = tp_matmul(X, Wk, batch, dim, dim)
+    let V = tp_matmul(X, Wv, batch, dim, dim)
+    let Y_local = tp_mha_forward_local(Q, K, V, batch, n_heads, head_dim)
+    tp_matmul(Y_local, Wo, batch, dim, dim)
+}
+
+println("[tensor_parallel] module loaded — 2-way TP primitives ready")
+
+
+// -- end inlined --
+
+let mut TESTS_PASSED = 0
+let mut TESTS_FAILED = 0
+
+fn tp_abs(x) {
+    if x < 0.0 { -x } else { x }
+}
+
+// Element-wise compare two flat matrices.
+fn mat_near(A, B, n, tol) {
+    let mut ok = true
+    let mut i = 0
+    while i < n {
+        let d = tp_abs(A[i] - B[i])
+        if d > tol { ok = false }
+        i = i + 1
+    }
+    ok
+}
+
+// Maximum absolute difference between two flat matrices.
+fn max_abs_diff(A, B, n) {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n {
+        let d = tp_abs(A[i] - B[i])
+        if d > m { m = d }
+        i = i + 1
+    }
+    m
+}
+
+fn check(name, cond) {
+    if cond {
+        TESTS_PASSED = TESTS_PASSED + 1
+        println("[PASS] " + name)
+    } else {
+        TESTS_FAILED = TESTS_FAILED + 1
+        println("[FAIL] " + name)
+    }
+}
+
+fn check_near(name, got, expected, tol) {
+    let d = tp_abs(got - expected)
+    if d < tol {
+        TESTS_PASSED = TESTS_PASSED + 1
+        println("[PASS] " + name)
+    } else {
+        TESTS_FAILED = TESTS_FAILED + 1
+        println("[FAIL] " + name + " got=" + str(got) + " expected=" + str(expected) + " diff=" + str(d))
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Test 1 — basic matrix helpers
+// ═══════════════════════════════════════════════════════════════
+fn test_mat_helpers() {
+    println("[test] 1. tp_matmul reference correctness")
+    // A = [[1,2,3],[4,5,6]]  (2x3)
+    // B = [[1,2],[3,4],[5,6]] (3x2)
+    // C = A @ B = [[22,28],[49,64]]
+    let A = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    let B = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    let C = tp_matmul(A, B, 2, 3, 2)
+    check_near("matmul C[0,0]=22", C[0], 22.0, 0.000001)
+    check_near("matmul C[0,1]=28", C[1], 28.0, 0.000001)
+    check_near("matmul C[1,0]=49", C[2], 49.0, 0.000001)
+    check_near("matmul C[1,1]=64", C[3], 64.0, 0.000001)
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Test 2 — column split / unsplit round-trip
+// ═══════════════════════════════════════════════════════════════
+fn test_split_col_roundtrip() {
+    println("[test] 2. tp_split_col round-trip")
+    let W = tp_mat_range(3, 4, 0.0, 1.0)  // 3x4
+    let shards = tp_split_col(W, 3, 4, 2)
+    check("split_col nranks", len(shards) == 2)
+    check("shard0 length", len(shards[0]) == 6)  // 3*(4/2)
+    check("shard1 length", len(shards[1]) == 6)
+    let rebuilt = tp_unsplit_col(shards, 3, 2, 2)
+    check("unsplit_col round-trip", mat_near(rebuilt, W, 12, 0.000001))
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Test 3 — row split / unsplit round-trip
+// ═══════════════════════════════════════════════════════════════
+fn test_split_row_roundtrip() {
+    println("[test] 3. tp_split_row round-trip")
+    let W = tp_mat_range(4, 3, 0.0, 1.0)  // 4x3
+    let shards = tp_split_row(W, 4, 3, 2)
+    check("split_row nranks", len(shards) == 2)
+    check("shard0 length", len(shards[0]) == 6)  // (4/2)*3
+    check("shard1 length", len(shards[1]) == 6)
+    let rebuilt = tp_unsplit_row(shards, 2, 3, 2)
+    check("unsplit_row round-trip", mat_near(rebuilt, W, 12, 0.000001))
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Test 4 — all-reduce sum
+// ═══════════════════════════════════════════════════════════════
+fn test_all_reduce_sum() {
+    println("[test] 4. tp_all_reduce_sum")
+    let a0 = [1.0, 2.0, 3.0, 4.0]
+    let a1 = [10.0, 20.0, 30.0, 40.0]
+    let shards = [a0, a1]
+    let result = tp_all_reduce_sum(shards, 4, 2)
+    check("all_reduce length", len(result) == 2)
+    let r0 = result[0]
+    let r1 = result[1]
+    check_near("all_reduce r0[0]", r0[0], 11.0, 0.000001)
+    check_near("all_reduce r0[3]", r0[3], 44.0, 0.000001)
+    check("all_reduce consistent ranks", mat_near(r0, r1, 4, 0.000001))
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Test 5 — all-gather along column dim
+// ═══════════════════════════════════════════════════════════════
+fn test_all_gather_col() {
+    println("[test] 5. tp_all_gather_col")
+    // Shard 0: 2x2 with values 1..4, Shard 1: 2x2 with values 10..13
+    let s0 = [1.0, 2.0, 3.0, 4.0]
+    let s1 = [10.0, 11.0, 12.0, 13.0]
+    let shards = [s0, s1]
+    let result = tp_all_gather_col(shards, 2, 2, 2)
+    check("gather length = nranks", len(result) == 2)
+    let g0 = result[0]
+    // Expected layout (2x4 row-major):
+    //   row 0: [1, 2, 10, 11]
+    //   row 1: [3, 4, 12, 13]
+    check_near("g[0,0]", g0[0], 1.0, 0.000001)
+    check_near("g[0,1]", g0[1], 2.0, 0.000001)
+    check_near("g[0,2]", g0[2], 10.0, 0.000001)
+    check_near("g[0,3]", g0[3], 11.0, 0.000001)
+    check_near("g[1,0]", g0[4], 3.0, 0.000001)
+    check_near("g[1,2]", g0[6], 12.0, 0.000001)
+    check_near("g[1,3]", g0[7], 13.0, 0.000001)
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Test 6 — reduce-scatter
+// ═══════════════════════════════════════════════════════════════
+fn test_reduce_scatter() {
+    println("[test] 6. tp_reduce_scatter_row")
+    // 4x2 contributions
+    let c0 = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+    let c1 = [10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0]
+    let contribs = [c0, c1]
+    let shards = tp_reduce_scatter_row(contribs, 4, 2, 2)
+    check("reduce_scatter nranks", len(shards) == 2)
+    let s0 = shards[0]
+    let s1 = shards[1]
+    // Sum = [11,12,13,14,15,16,17,18]
+    // Row-split: s0 = [11,12,13,14], s1 = [15,16,17,18]
+    check_near("rs s0[0]", s0[0], 11.0, 0.000001)
+    check_near("rs s0[3]", s0[3], 14.0, 0.000001)
+    check_near("rs s1[0]", s1[0], 15.0, 0.000001)
+    check_near("rs s1[3]", s1[3], 18.0, 0.000001)
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Test 7 — column-parallel linear forward matches single GEMM
+// ═══════════════════════════════════════════════════════════════
+fn test_column_parallel_forward() {
+    println("[test] 7. column_parallel_linear_forward == single GEMM")
+    let batch = 3
+    let K = 4
+    let N = 6
+    let X = tp_mat_range(batch, K, 0.1, 0.07)
+    let W = tp_mat_range(K, N, -0.5, 0.03)
+
+    let Y_single = tp_matmul(X, W, batch, K, N)
+
+    let W_shards = tp_split_col(W, K, N, 2)
+    let Y_full = tp_column_parallel_linear_forward_gathered(X, W_shards, batch, K, N, 2)
+
+    let diff = max_abs_diff(Y_single, Y_full, batch * N)
+    check("col-parallel numerical match", diff < 0.000001)
+    check("col-parallel output size", len(Y_full) == batch * N)
+
+    // Also verify the shard-only (ungathered) form can be rebuilt.
+    let Y_shards = tp_column_parallel_linear_forward(X, W_shards, batch, K, N, 2)
+    let rebuilt = tp_unsplit_col(Y_shards, batch, N / 2, 2)
+    check("col-parallel shards rebuild match", mat_near(rebuilt, Y_single, batch * N, 0.000001))
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Test 8 — row-parallel linear forward matches single GEMM
+// ═══════════════════════════════════════════════════════════════
+fn test_row_parallel_forward() {
+    println("[test] 8. row_parallel_linear_forward == single GEMM")
+    let batch = 3
+    let K = 6
+    let N = 4
+    let X = tp_mat_range(batch, K, 0.2, 0.05)
+    let W = tp_mat_range(K, N, -0.4, 0.025)
+
+    let Y_single = tp_matmul(X, W, batch, K, N)
+
+    // Row-parallel splits X along its feature/contraction dim and W along its
+    // row dim. We model X_shards by column-splitting X into halves.
+    let X_shards = tp_split_col(X, batch, K, 2)
+    let W_shards = tp_split_row(W, K, N, 2)
+    let Y_full = tp_row_parallel_linear_forward_reduced(X_shards, W_shards, batch, K, N, 2)
+
+    let diff = max_abs_diff(Y_single, Y_full, batch * N)
+    check("row-parallel numerical match", diff < 0.000001)
+    check("row-parallel output size", len(Y_full) == batch * N)
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Test 9 — column-parallel backward gradients
+//  Verify that grad_X and concatenated grad_W match the single-GPU path.
+// ═══════════════════════════════════════════════════════════════
+fn test_column_parallel_backward() {
+    println("[test] 9. column_parallel_linear_backward gradient match")
+    let batch = 2
+    let K = 3
+    let N = 4
+    let X = tp_mat_range(batch, K, 0.3, 0.11)
+    let W = tp_mat_range(K, N, -0.2, 0.07)
+    // Upstream gradient grad_Y is [batch x N].
+    let grad_Y = tp_mat_range(batch, N, 0.05, 0.13)
+
+    // Single-GPU reference gradients:
+    //   grad_X = grad_Y @ W^T
+    //   grad_W = X^T @ grad_Y
+    let Wt = tp_transpose(W, K, N)
+    let grad_X_ref = tp_matmul(grad_Y, Wt, batch, N, K)
+    let Xt = tp_transpose(X, batch, K)
+    let grad_W_ref = tp_matmul(Xt, grad_Y, K, batch, N)
+
+    // TP path.
+    let W_shards = tp_split_col(W, K, N, 2)
+    let grad_Y_shards = tp_split_col(grad_Y, batch, N, 2)
+    let result = tp_column_parallel_linear_backward(X, W_shards, grad_Y_shards, batch, K, N, 2)
+    let grad_X_tp = result[0]
+    let grad_W_shards_tp = result[1]
+    let grad_W_tp = tp_unsplit_col(grad_W_shards_tp, K, N / 2, 2)
+
+    let gx_diff = max_abs_diff(grad_X_ref, grad_X_tp, batch * K)
+    let gw_diff = max_abs_diff(grad_W_ref, grad_W_tp, K * N)
+    check("col-parallel grad_X match", gx_diff < 0.000001)
+    check("col-parallel grad_W match", gw_diff < 0.000001)
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Test 10 — row-parallel backward gradients
+// ═══════════════════════════════════════════════════════════════
+fn test_row_parallel_backward() {
+    println("[test] 10. row_parallel_linear_backward gradient match")
+    let batch = 2
+    let K = 4
+    let N = 3
+    let X = tp_mat_range(batch, K, 0.25, 0.09)
+    let W = tp_mat_range(K, N, -0.3, 0.06)
+    let grad_Y = tp_mat_range(batch, N, 0.1, 0.17)
+
+    // Reference grads.
+    let Wt = tp_transpose(W, K, N)
+    let grad_X_ref = tp_matmul(grad_Y, Wt, batch, N, K)
+    let Xt = tp_transpose(X, batch, K)
+    let grad_W_ref = tp_matmul(Xt, grad_Y, K, batch, N)
+
+    let X_shards = tp_split_col(X, batch, K, 2)
+    let W_shards = tp_split_row(W, K, N, 2)
+    let bw = tp_row_parallel_linear_backward(X_shards, W_shards, grad_Y, batch, K, N, 2)
+    let grad_X_shards_tp = bw[0]
+    let grad_W_shards_tp = bw[1]
+    let grad_X_tp = tp_unsplit_col(grad_X_shards_tp, batch, K / 2, 2)
+    let grad_W_tp = tp_unsplit_row(grad_W_shards_tp, K / 2, N, 2)
+
+    let gx_diff = max_abs_diff(grad_X_ref, grad_X_tp, batch * K)
+    let gw_diff = max_abs_diff(grad_W_ref, grad_W_tp, K * N)
+    check("row-parallel grad_X match", gx_diff < 0.000001)
+    check("row-parallel grad_W match", gw_diff < 0.000001)
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Test 11 — 2-way TP attention forward matches single-GPU attention
+// ═══════════════════════════════════════════════════════════════
+fn test_tp_attention_forward() {
+    println("[test] 11. 2-way TP attention == single-GPU attention")
+    let batch = 3
+    let n_heads = 4
+    let head_dim = 2
+    let dim = n_heads * head_dim  // 8
+
+    let X = tp_mat_range(batch, dim, 0.05, 0.011)
+    let Wq = tp_mat_range(dim, dim, -0.3, 0.013)
+    let Wk = tp_mat_range(dim, dim, 0.2, 0.017)
+    let Wv = tp_mat_range(dim, dim, -0.1, 0.019)
+    let Wo = tp_mat_range(dim, dim, 0.15, 0.023)
+
+    let Y_single = tp_attention_forward_single(X, Wq, Wk, Wv, Wo, batch, n_heads, head_dim)
+    let Y_tp = tp_attention_forward(X, Wq, Wk, Wv, Wo, batch, n_heads, head_dim, 2)
+
+    let diff = max_abs_diff(Y_single, Y_tp, batch * dim)
+    check("TP attention numerical match", diff < 0.000001)
+    check("TP attention output size", len(Y_tp) == batch * dim)
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Test 12 — broadcast + transpose sanity
+// ═══════════════════════════════════════════════════════════════
+fn test_broadcast_and_transpose() {
+    println("[test] 12. broadcast + transpose")
+    let x = [3.0, 1.5, 7.25, 0.0]
+    let bc = tp_broadcast(x, 2)
+    check("broadcast len", len(bc) == 2)
+    let r0 = bc[0]
+    let r1 = bc[1]
+    check("broadcast rank0 eq", mat_near(r0, x, 4, 0.000001))
+    check("broadcast rank1 eq", mat_near(r1, x, 4, 0.000001))
+
+    // transpose round-trip: T(T(M)) == M
+    let M = tp_mat_range(3, 5, 1.0, 0.3)
+    let Mt = tp_transpose(M, 3, 5)
+    let Mtt = tp_transpose(Mt, 5, 3)
+    check("transpose round-trip", mat_near(M, Mtt, 15, 0.000001))
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Test 13 — end-to-end: column-parallel + row-parallel composition
+//  Mirrors a transformer FFN: X -> GEMM1 (col) -> GEMM2 (row) -> Y.
+// ═══════════════════════════════════════════════════════════════
+fn test_ffn_like_composition() {
+    println("[test] 13. FFN-like col->row composition")
+    let batch = 2
+    let dim = 4
+    let hidden = 6
+
+    let X = tp_mat_range(batch, dim, 0.1, 0.05)
+    let W1 = tp_mat_range(dim, hidden, -0.2, 0.03)
+    let W2 = tp_mat_range(hidden, dim, 0.15, 0.02)
+
+    // Single GPU: Y = (X @ W1) @ W2
+    let H = tp_matmul(X, W1, batch, dim, hidden)
+    let Y_single = tp_matmul(H, W2, batch, hidden, dim)
+
+    // TP path: column-parallel GEMM1, then row-parallel GEMM2.
+    // After column-parallel, H is split along its hidden dim — this is
+    // exactly the row-split X input that row-parallel GEMM2 expects.
+    let W1_shards = tp_split_col(W1, dim, hidden, 2)
+    let H_shards = tp_column_parallel_linear_forward(X, W1_shards, batch, dim, hidden, 2)
+
+    let W2_shards = tp_split_row(W2, hidden, dim, 2)
+    let Y_tp = tp_row_parallel_linear_forward_reduced(H_shards, W2_shards, batch, hidden, dim, 2)
+
+    let diff = max_abs_diff(Y_single, Y_tp, batch * dim)
+    check("FFN col->row composition match", diff < 0.000001)
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Test 14 — all-gather round-trip via row
+// ═══════════════════════════════════════════════════════════════
+fn test_all_gather_row() {
+    println("[test] 14. tp_all_gather_row round-trip")
+    let M = tp_mat_range(4, 3, 2.5, 0.11)  // 4x3
+    let shards = tp_split_row(M, 4, 3, 2)
+    let gathered = tp_all_gather_row(shards, 2, 3, 2)
+    check("gather_row length = nranks", len(gathered) == 2)
+    let g0 = gathered[0]
+    check("gather_row rank0 matches source", mat_near(g0, M, 12, 0.000001))
+    let g1 = gathered[1]
+    check("gather_row rank1 matches source", mat_near(g1, M, 12, 0.000001))
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Runner
+// ═══════════════════════════════════════════════════════════════
+fn run_all() {
+    println("============================================================")
+    println("  Tensor Parallelism Tests (2-way Megatron-LM)")
+    println("============================================================")
+    test_mat_helpers()
+    test_split_col_roundtrip()
+    test_split_row_roundtrip()
+    test_all_reduce_sum()
+    test_all_gather_col()
+    test_reduce_scatter()
+    test_column_parallel_forward()
+    test_row_parallel_forward()
+    test_column_parallel_backward()
+    test_row_parallel_backward()
+    test_tp_attention_forward()
+    test_broadcast_and_transpose()
+    test_ffn_like_composition()
+    test_all_gather_row()
+
+    println("")
+    println("============================================================")
+    let total = TESTS_PASSED + TESTS_FAILED
+    println("  Results: " + str(TESTS_PASSED) + "/" + str(total) + " passed")
+    if TESTS_FAILED > 0 {
+        println("  FAILED: " + str(TESTS_FAILED) + " tests")
+    } else {
+        println("  ALL PASSED")
+    }
+    println("============================================================")
+}
+
+run_all()

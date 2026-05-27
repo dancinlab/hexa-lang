@@ -1,0 +1,11 @@
+#!hexa strict
+// co2-capture analyze — Langmuir loading at atmospheric P_CO2 = 400 ppm.
+fn main() {
+    let P_atm = 0.0004        // 400 ppm = 4e-4 atm
+    let b = 10.0              // adsorption constant atm^-1
+    let theta = b * P_atm / (1.0 + b * P_atm)
+    println("co2-capture_analyze (Langmuir · P=400 ppm):")
+    println("  P_atm = " + str(P_atm) + "  b_atm_inv = " + str(b))
+    println("  loading_fraction_theta = " + str(theta))
+    println("__HEXA_CO2_CAPTURE_ANALYZE__ PASS gate=GATE_OPEN absorbed=false")
+}

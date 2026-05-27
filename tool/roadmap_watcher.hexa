@@ -1,0 +1,404 @@
+// tool/roadmap_watcher.hexa — launchd-invoked live-roadmap snapshotter (no-hardcode)
+//
+// PURPOSE
+//   Every 60s (launchd StartInterval), scan each configured repo's .roadmap,
+//   compute verification progress, and append a JSONL snapshot line to
+//   $HOME/.airgenome/roadmap_snapshot.jsonl.
+//
+//   Also enforces chflags uchg on .roadmap and chflags uappnd on audit,
+//   restoring the lock if it has been broken (OS-level invariant),
+//   UNLESS a bounded hx_unlock window is currently active (see below).
+//
+// REPO LIST
+//   Hard-coded minimal list (hexa, no external config):
+//     anima, airgenome, hexa-lang
+//   airgenome .roadmap is optional — a missing file is recorded with
+//   status="missing" (not a fault, since the sibling finalize agent is in
+//   the process of creating it).
+//
+// METRICS (per repo)
+//   total_gates      — count of verification gate markers "□" and "✓"
+//   satisfied_gates  — count of "✓"
+//   pending_gates    — count of "□"
+//   percent          — integer 0..100
+//   last_modified    — mtime in ISO-8601
+//   chflags_ok       — whether uchg is currently set on .roadmap
+//   raw_audit_uappnd — whether uappnd is currently set on audit
+//   unlock_active    — true when hx_unlock's grace window is in effect
+//
+// OUTPUT
+//   appends one line to $HOME/.airgenome/roadmap_snapshot.jsonl
+//
+// INVARIANTS ENFORCED
+//   - .roadmap missing uchg    → re-applied (unless unlock window active)
+//   - audit missing uappnd → re-applied
+//   (Only on darwin. Linux: no-op.)
+//
+// UNLOCK-WINDOW AWARENESS (2026-04-22)
+//   Reads the repo's audit for the most recent `| unlock | ok |` entry
+//   and compares it with the most recent `| lock |` / `| relock-auto |`.
+//   If the latest terminal event is an unlock that occurred within
+//   HEXA_RELOCK_GRACE_SEC seconds (default 300, matches hx_unlock default
+//   --window), chflags restoration is skipped so the operator's bounded
+//   edit window survives. Before this guard existed, the 60s watcher tick
+//   killed hx_unlock's 300s window after the first minute.
+
+fn _iso_utc_now() -> string {
+    return to_string(exec("date -u +\"%Y-%m-%dT%H:%M:%SZ\"")).trim()
+}
+
+fn _home() -> string {
+    let h = env("HOME")
+    if h != "" { return h }
+    return to_string(exec("echo $HOME")).trim()
+}
+
+fn _is_darwin() -> bool {
+    return to_string(exec("uname -s")).trim() == "Darwin"
+}
+
+// Count occurrences of a single glyph in a string.
+fn _count_occurrences(s: string, glyph: string) -> int {
+    let n = len(s)
+    let gl = len(glyph)
+    if gl == 0 || n < gl { return 0 }
+    let mut count = 0
+    let mut i = 0
+    while i <= n - gl {
+        if s.substring(i, i + gl) == glyph {
+            count = count + 1
+            i = i + gl
+        } else {
+            i = i + 1
+        }
+    }
+    return count
+}
+
+// Check whether chflags <flag> is set on <path> (darwin only).
+// Returns true on non-darwin (nothing to enforce).
+fn _has_chflag(path: string, flag: string) -> bool {
+    if !_is_darwin() { return true }
+    let cmd = "ls -lO '" + path + "' 2>/dev/null | awk '{print $5}'"
+    let out = to_string(exec(cmd)).trim()
+    return out.index_of(flag) >= 0
+}
+
+fn _restore_chflag(path: string, flag: string) -> bool {
+    if !_is_darwin() { return true }
+    let r = exec_with_status("chflags " + flag + " '" + path + "' 2>/dev/null")
+    return r[1] == 0
+}
+
+// ─── unlock-window awareness (2026-04-22) ────────────────────────
+//
+// hx_unlock opens a bounded write window (default 300s) by clearing uchg
+// and scheduling a relock_daemon child. Without this guard, the 60s
+// watcher tick clobbered the window after ~60s by re-applying uchg
+// unconditionally. We now read audit to determine whether an
+// unlock grace is currently in effect per repo.
+
+fn _parse_int_digits(s: string) -> int {
+    let digits = "0123456789"
+    let mut n = 0
+    let mut j = 0
+    while j < len(s) {
+        let c = s.substring(j, j + 1)
+        if !digits.contains(c) { break }
+        n = n * 10 + (ord(c) - ord("0"))
+        j = j + 1
+    }
+    return n
+}
+
+fn _iso_to_epoch(iso: string) -> int {
+    if iso == "" { return 0 }
+    let mut cmd = ""
+    if _is_darwin() {
+        cmd = "date -u -j -f '%Y-%m-%dT%H:%M:%SZ' '" + iso + "' +%s 2>/dev/null"
+    } else {
+        cmd = "date -u -d '" + iso + "' +%s 2>/dev/null"
+    }
+    let out = to_string(exec(cmd)).trim()
+    return _parse_int_digits(out)
+}
+
+fn _now_epoch() -> int {
+    return _parse_int_digits(to_string(exec("date -u +%s")).trim())
+}
+
+fn _grace_seconds() -> int {
+    // HEXA_RELOCK_GRACE_SEC override (default 300, max 3600 — matches hx_unlock).
+    let raw = env("HEXA_RELOCK_GRACE_SEC")
+    if raw == "" { return 300 }
+    let n = _parse_int_digits(raw)
+    if n <= 0 { return 300 }
+    if n > 3600 { return 3600 }
+    return n
+}
+
+// Short-window grace for in-flight user edits — independent of hx_unlock's
+// audit-driven window (_grace_seconds). If the target file has been
+// modified within this many seconds, SKIP chflags restore so the editor
+// session isn't interrupted mid-keystroke. Configurable via
+// HEXA_WATCHER_GRACE_SEC (default 30, max 600).
+fn _fresh_edit_grace_seconds() -> int {
+    let raw = env("HEXA_WATCHER_GRACE_SEC")
+    if raw == "" { return 30 }
+    let n = _parse_int_digits(raw)
+    if n <= 0 { return 30 }
+    if n > 600 { return 600 }
+    return n
+}
+
+// Epoch-seconds mtime for <path>, or 0 if absent / stat failed.
+fn _mtime_epoch(path: string) -> int {
+    let chk = exec_with_status("test -e '" + path + "'")
+    if chk[1] != 0 { return 0 }
+    if _is_darwin() {
+        let cmd = "stat -f %m '" + path + "' 2>/dev/null"
+        return _parse_int_digits(to_string(exec(cmd)).trim())
+    }
+    let cmd = "stat -c %Y '" + path + "' 2>/dev/null"
+    return _parse_int_digits(to_string(exec(cmd)).trim())
+}
+
+// Scan the tail of audit for the most recent unlock/lock/relock-auto
+// event. Returns ["kind", "iso_ts"] or ["", ""] if none found.
+// We only read the tail (last 200 lines) to bound work — all recent edits
+// live there for any realistic audit rotation cadence.
+fn _last_lock_event(audit_path: string) -> array {
+    let chk = exec_with_status("test -f '" + audit_path + "'")
+    if chk[1] != 0 { return ["", ""] }
+    let cmd = "tail -n 200 '" + audit_path
+              + "' | grep -E '\\| (unlock|lock|relock-auto) \\|' | tail -n 1"
+    let line = to_string(exec(cmd)).trim()
+    if line == "" { return ["", ""] }
+    // format: ISO_TS | KIND | ACTOR | reason | result | ...
+    let p1 = line.index_of(" | ")
+    if p1 <= 0 { return ["", ""] }
+    let ts = line.substring(0, p1).trim()
+    let rest = line.substring(p1 + 3, len(line))
+    let p2 = rest.index_of(" | ")
+    if p2 <= 0 { return ["", ""] }
+    let kind = rest.substring(0, p2).trim()
+    // Only accept unlock when result is ok (reject blocked/fail).
+    if kind == "unlock" {
+        // peek at field 4 (result)
+        let after_kind = rest.substring(p2 + 3, len(rest))  // after "KIND | "
+        let p3 = after_kind.index_of(" | ")                  // end of ACTOR
+        if p3 <= 0 { return ["", ""] }
+        let after_actor = after_kind.substring(p3 + 3, len(after_kind))
+        let p4 = after_actor.index_of(" | ")                 // end of REASON
+        if p4 <= 0 { return ["", ""] }
+        let after_reason = after_actor.substring(p4 + 3, len(after_actor))
+        let p5 = after_reason.index_of(" | ")
+        let mut result = after_reason
+        if p5 > 0 { result = after_reason.substring(0, p5).trim() }
+        else { result = after_reason.trim() }
+        if result != "ok" { return ["", ""] }
+    }
+    return [kind, ts]
+}
+
+fn _unlock_window_active(audit_path: string, grace_sec: int) -> bool {
+    let ev = _last_lock_event(audit_path)
+    let kind = ev[0]
+    let ts = ev[1]
+    if kind != "unlock" { return false }
+    let unlock_epoch = _iso_to_epoch(ts)
+    if unlock_epoch <= 0 { return false }
+    let now = _now_epoch()
+    if now <= 0 { return false }
+    let elapsed = now - unlock_epoch
+    return elapsed < grace_sec
+}
+
+fn _mtime_iso(path: string) -> string {
+    let chk = exec_with_status("test -e '" + path + "'")
+    if chk[1] != 0 { return "" }
+    // darwin stat: stat -f "%Sm" -t "%Y-%m-%dT%H:%M:%SZ" <path>
+    if _is_darwin() {
+        let cmd = "stat -f \"%Sm\" -t \"%Y-%m-%dT%H:%M:%SZ\" '" + path + "' 2>/dev/null"
+        return to_string(exec(cmd)).trim()
+    }
+    // linux: stat -c "%y" — best-effort
+    let cmd = "stat -c \"%y\" '" + path + "' 2>/dev/null"
+    return to_string(exec(cmd)).trim()
+}
+
+fn _scan_repo(home: string, name: string) -> string {
+    let repo = home + "/core/" + name
+    let rpath = repo + "/.roadmap"
+    let apath = repo + "/audit"
+
+    let chk = exec_with_status("test -f '" + rpath + "'")
+    if chk[1] != 0 {
+        return "{\"repo\":\"" + name + "\",\"status\":\"missing\"}"
+    }
+
+    let src = to_string(read_file(rpath))
+    let satisfied = _count_occurrences(src, "✓")
+    let pending = _count_occurrences(src, "□")
+    let total = satisfied + pending
+    let mut pct = 0
+    if total > 0 { pct = (satisfied * 100 + total / 2) / total }
+
+    let chflags_ok = _has_chflag(rpath, "uchg")
+    let audit_exists = exec_with_status("test -f '" + apath + "'")
+    let mut raw_audit_ok = true
+    if audit_exists[1] == 0 {
+        raw_audit_ok = _has_chflag(apath, "uchg") || _has_chflag(apath, "uappnd")
+    }
+
+    // Honour active hx_unlock grace window — skip chflags restoration
+    // while the operator's bounded edit window is in effect. Without
+    // this guard, the 60s watcher tick killed hx_unlock's 300s window.
+    let grace = _grace_seconds()
+    let mut unlock_active = false
+    if audit_exists[1] == 0 {
+        unlock_active = _unlock_window_active(apath, grace)
+    }
+
+    // Short-window fresh-edit grace (mtime-based, independent of hx_unlock).
+    // If .roadmap was edited within HEXA_WATCHER_GRACE_SEC seconds (default
+    // 30s), skip the uchg restore so an in-flight editor session isn't
+    // interrupted mid-keystroke. Emits a [SKIP-FRESH-EDIT mtime=<X>]
+    // breadcrumb so operators can correlate tick runs with live edits.
+    let fresh_grace = _fresh_edit_grace_seconds()
+    let rm_mtime = _mtime_epoch(rpath)
+    let now_epoch = _now_epoch()
+    let mut fresh_edit = false
+    if rm_mtime > 0 && now_epoch > 0 {
+        let age = now_epoch - rm_mtime
+        if age >= 0 && age < fresh_grace { fresh_edit = true }
+    }
+
+    // Auto-restore — OS-level deterministic invariant.
+    if !chflags_ok && !unlock_active && !fresh_edit {
+        let _ = _restore_chflag(rpath, "uchg")
+    } else if !chflags_ok && fresh_edit {
+        eprintln("[SKIP-FRESH-EDIT mtime=" + to_string(rm_mtime) + "] " + rpath + " (age=" + to_string(now_epoch - rm_mtime) + "s < " + to_string(fresh_grace) + "s)")
+    }
+    // audit uappnd is separate from unlock window semantics (hx_unlock
+    // does not clear it); always restore if missing.
+    if audit_exists[1] == 0 && !raw_audit_ok {
+        let _ = _restore_chflag(apath, "uappnd")
+    }
+
+    let mtime = _mtime_iso(rpath)
+
+    let mut parts = []
+    parts.push("{\"repo\":\"")
+    parts.push(name)
+    parts.push("\",\"total_gates\":")
+    parts.push(to_string(total))
+    parts.push(",\"satisfied\":")
+    parts.push(to_string(satisfied))
+    parts.push(",\"pending\":")
+    parts.push(to_string(pending))
+    parts.push(",\"percent\":")
+    parts.push(to_string(pct))
+    parts.push(",\"chflags_ok\":")
+    if chflags_ok { parts.push("true") } else { parts.push("false") }
+    parts.push(",\"raw_audit_ok\":")
+    if raw_audit_ok { parts.push("true") } else { parts.push("false") }
+    parts.push(",\"unlock_active\":")
+    if unlock_active { parts.push("true") } else { parts.push("false") }
+    parts.push(",\"fresh_edit\":")
+    if fresh_edit { parts.push("true") } else { parts.push("false") }
+    parts.push(",\"last_modified\":\"")
+    parts.push(mtime)
+    parts.push("\"}")
+    return parts.join("")
+}
+
+fn _cmd_selftest() -> int {
+    println("[roadmap_watcher selftest]")
+    // 1) _count_occurrences of multi-byte glyphs (✓ is 3 bytes UTF-8)
+    let s = "□ a ✓ b □ c ✓ d ✓"
+    let n_check = _count_occurrences(s, "✓")
+    let n_box   = _count_occurrences(s, "□")
+    if n_check != 3 { eprintln("FAIL: count ✓ = " + to_string(n_check)); return 1 }
+    if n_box != 2   { eprintln("FAIL: count □ = " + to_string(n_box)); return 1 }
+    // 2) empty / oversized glyph cases
+    if _count_occurrences("", "x") != 0   { eprintln("FAIL: count empty"); return 1 }
+    if _count_occurrences("ab", "abc") != 0 { eprintln("FAIL: count glyph>str"); return 1 }
+    // 3) _parse_int_digits parses leading digits, stops on non-digit
+    if _parse_int_digits("123abc") != 123 { eprintln("FAIL: parse 123abc"); return 1 }
+    if _parse_int_digits("")       != 0   { eprintln("FAIL: parse empty"); return 1 }
+    if _parse_int_digits("0")      != 0   { eprintln("FAIL: parse 0"); return 1 }
+    // 4) _grace_seconds honours env bounds (default = 300)
+    // (We don't mutate env inside selftest — just check a default path.)
+    let g = _grace_seconds()
+    if g < 60 || g > 3600 { eprintln("FAIL: grace out of range: " + to_string(g)); return 1 }
+    // 5) _shell_quote wraps + escapes embedded '
+    let q = _shell_quote("a'b")
+    if q != "'a'\\''b'" { eprintln("FAIL: _shell_quote: " + q); return 1 }
+    // 6) _fresh_edit_grace_seconds default + bounds (HEXA_WATCHER_GRACE_SEC)
+    let fg = _fresh_edit_grace_seconds()
+    if fg < 1 || fg > 600 { eprintln("FAIL: fresh grace out of range: " + to_string(fg)); return 1 }
+    // 7) _mtime_epoch on /tmp (always exists) yields a sane epoch, 0 on junk.
+    let mtime_ok = _mtime_epoch("/tmp")
+    if mtime_ok <= 0 { eprintln("FAIL: _mtime_epoch /tmp not > 0"); return 1 }
+    let mtime_none = _mtime_epoch("/tmp/__irh_mtime_never__")
+    if mtime_none != 0 { eprintln("FAIL: _mtime_epoch absent != 0: " + to_string(mtime_none)); return 1 }
+    println("[roadmap_watcher selftest] OK")
+    return 0
+}
+
+fn main() -> int {
+    // --selftest dispatch — hermetic, no launchd / chflags side-effects
+    let av = args()
+    let mut _i = 0
+    while _i < len(av) {
+        let _a = av[_i]
+        if _a == "--selftest" || (_i >= 2 && _a == "selftest") {
+            return _cmd_selftest()
+        }
+        _i = _i + 1
+    }
+    let home = _home()
+    let out_dir = home + "/.airgenome"
+    let out_path = out_dir + "/roadmap_snapshot.jsonl"
+
+    let _mkdir = exec_with_status("mkdir -p '" + out_dir + "'")
+
+    let ts = _iso_utc_now()
+    let repos = ["anima", "airgenome", "hexa-lang"]
+
+    let mut repo_jsons = []
+    for r in repos {
+        repo_jsons.push(_scan_repo(home, r))
+    }
+
+    let mut line_parts = []
+    line_parts.push("{\"ts\":\"")
+    line_parts.push(ts)
+    line_parts.push("\",\"repos\":[")
+    let mut first = true
+    for rj in repo_jsons {
+        if !first { line_parts.push(",") }
+        line_parts.push(rj)
+        first = false
+    }
+    line_parts.push("]}\n")
+
+    let line = line_parts.join("")
+    let cmd = "printf '%s' " + _shell_quote(line) + " >> '" + out_path + "'"
+    let _w = exec_with_status(cmd)
+
+    // Echo last line to stdout — useful when invoked manually.
+    print(line)
+    return 0
+}
+
+fn _shell_quote(s: string) -> string {
+    let mut parts = []
+    parts.push("'")
+    parts.push(s.replace("'", "'\\''"))
+    parts.push("'")
+    return parts.join("")
+}
+
+

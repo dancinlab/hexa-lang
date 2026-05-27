@@ -1,0 +1,23 @@
+Device: NVIDIA GeForce RTX 5070 sm_120
+CUDA driver=13000 runtime=12000
+loaded hexa-PSWZ PTX shape 4096 (sgemm_4warp_swizzle_4096x4096_grid)
+  shape 4096: regs/thd=64, shmem=8192 B, max_thd_per_block=1024
+loaded hexa-PSWZ PTX shape 5120 (sgemm_4warp_swizzle_5120x5120_grid)
+  shape 5120: regs/thd=64, shmem=8192 B, max_thd_per_block=1024
+loaded hexa-PSWZ PTX shape 6144 (sgemm_4warp_swizzle_6144x6144_grid)
+  shape 6144: regs/thd=64, shmem=8192 B, max_thd_per_block=1024
+loaded hexa-PSWZ PTX shape 8192 (sgemm_4warp_swizzle_8192x8192_grid)
+  shape 8192: regs/thd=64, shmem=8192 B, max_thd_per_block=1024
+Device VRAM free=11601.19 MB total=11772.44 MB
+[M=4096] allocating 128.00 MB device memory (A=32768 KB + B=32768 KB + C=65536 KB)
+[M=4096] cuBLAS HGEMM            median=1.962096 ms  std=0.003666  min=1.953760  max=1.964480  TFLOPS= 70.0470
+[M=4096] hexa-PSWZ 4warp+CTA-swz median=2.368528 ms  std=0.002125  min=2.361280  max=2.374880  TFLOPS= 58.0272  ratio=0.8284  maxabs=0.0000  maxrel=0.0000  CTAs=4096  regs=64
+[M=5120] allocating 200.00 MB device memory (A=51200 KB + B=51200 KB + C=102400 KB)
+[M=5120] cuBLAS HGEMM            median=3.813568 ms  std=0.001252  min=3.811456  max=3.825504  TFLOPS= 70.3896
+[M=5120] hexa-PSWZ 4warp+CTA-swz median=5.320896 ms  std=0.010559  min=5.290016  max=5.347296  TFLOPS= 50.4493  ratio=0.7167  maxabs=0.0000  maxrel=0.0000  CTAs=6400  regs=64
+[M=6144] allocating 288.00 MB device memory (A=73728 KB + B=73728 KB + C=147456 KB)
+[M=6144] cuBLAS HGEMM            median=6.548576 ms  std=0.012439  min=6.546080  max=6.579360  TFLOPS= 70.8332
+[M=6144] hexa-PSWZ 4warp+CTA-swz median=10.002352 ms  std=0.024963  min=9.893888  max=10.078272  TFLOPS= 46.3747  ratio=0.6547  maxabs=0.0000  maxrel=0.0000  CTAs=9216  regs=64
+[M=8192] allocating 512.00 MB device memory (A=131072 KB + B=131072 KB + C=262144 KB)
+[M=8192] cuBLAS HGEMM            median=15.525920 ms  std=0.001989  min=15.519648  max=15.530432  TFLOPS= 70.8178
+[M=8192] hexa-PSWZ 4warp+CTA-swz median=24.891264 ms  std=0.035971  min=24.820704  max=25.016159  TFLOPS= 44.1726  ratio=0.6237  maxabs=0.0000  maxrel=0.0000  CTAs=16384  regs=64

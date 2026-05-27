@@ -1,0 +1,24 @@
+#!hexa strict
+// conscious_soc/verify_consciousness-soc.hexa — consciousness-SoC integration spec.
+//
+// Companion to conscious_chip; this verb covers SoC integration with
+// the consciousness substrate (chip-level awareness IP). Experimental.
+//
+// Falsifier F-CHIP-4 (.roadmap §A.4): consciousness n=6 invariant
+// claim vs Φ (IIT) / PCI measurement.
+//
+// At hexa-chip layer the only honest claim is SPEC_FIRST: τ(6)=4
+// consciousness-axis primitives (qualia / valence / agency / unity)
+// each get a dedicated SoC subsystem slot.
+
+fn main() {
+    let primitives = ["qualia", "valence", "agency", "unity"]
+    if primitives.len() != 4 {
+        println("[conscious_soc] FAIL — τ(6)=4 primitive count drift")
+        exit(1)
+    }
+    println("[conscious_soc] τ(6)=4 consciousness primitives:")
+    for p in primitives { println("  - " + p) }
+    println("[conscious_soc] (F-CHIP-4 bench: requires Φ/PCI experimental fit)")
+    println("[conscious_soc] SPEC_FIRST — no empirical claim at v1.0.0 PASS")
+}

@@ -1,0 +1,234 @@
+// tests/integration_akida_a_bootstrap_mock.hexa — Akida A-bootstrap mock cycle
+//
+// DESIGN-TIER 2026-05-01. Hardware (Raspberry Pi 5 + AKD1000 Akida Dev Kit)
+// 미도착. A-design 4 layer (commit hive `af28e79bf`) 의 host-pool layer
+// (Layer 3 = RM4 zero-touch bootstrap step 11 = `akida_capability_register`)
+// 가 mock host 으로 작동하는지 사전 검증. 도착 시 single 명령
+// `hive-resource add raspberry-akida` 가 동일 mechanism 으로 진입한다.
+//
+// HARD constraints:
+//   - claude binary call count = 0
+//   - real Akida invocation = 0 (hardware 미도착)
+//   - production (.resource / ~/.ssh/config / chflags) 변경 = 0
+//   - chflags / sudo 변경 = 0
+//   - ".hexa 가 mac 에서 실행되면 안됨" — selftest 의 io_seam 은 모두 mock
+//     fixture path 만 read-only 로 사용한다.
+//
+// F1: mock fixture 생성/검증 (idempotent, raw 65) — `~/.mirror/mock-akida-host/`
+// F2: RM4 step 11 sim invoke when AKIDA_HW_PRESENT=0 (graceful skip default)
+// F3: F1 fixture 활성화 후 step 11 sim → `.resource` entry draft 추가 verify
+// F4: M9 6-dim view design 이 `neuromorphic_accelerators` field reference
+// F5: idempotent re-run (raw 65) — 두 번 실행해도 single entry 만 emit
+//
+// raw refs: raw 9 hexa-only · raw 47 cross-bridge-witness · raw 65 idempotent
+//           raw 91 honest C3 (mock-tier disclosure) · raw 95 host-aware
+//           raw 169 surgical · raw 247 pure-fn/io-seam
+//
+// @tool(slug="integration_akida_a_bootstrap_mock", desc="Akida A-bootstrap pre-arrival mock cycle. F1-F5 simulate RM4 step 11 (akida_capability_register / Layer 3 of A-design 4 layer) using ~/.mirror/mock-akida-host/ fixture. Production touch=0, claude calls=0, real Akida calls=0. DESIGN-TIER 2026-05-01.")
+// @usage(hexa run tests/integration_akida_a_bootstrap_mock.hexa)
+// @design-tier 2026-05-01
+// @raw-refs raw_9 raw_47 raw_65 raw_91 raw_95 raw_169 raw_247
+
+use std::env
+
+fn _hive() -> str {
+    let h = env("HIVE")
+    if h == "" {
+        let home = env("HOME")
+        if home == "" { return "" }
+        return home + "/core/hive"
+    }
+    return h
+}
+
+fn _mock_dir() -> str {
+    let override_dir = env("AKIDA_HW_MOCK_DIR")
+    if override_dir != "" { return override_dir }
+    let home = env("HOME")
+    return home + "/.mirror/mock-akida-host"
+}
+
+fn _run(cmd: str) -> str {
+    let raw = exec(cmd + " 2>&1")
+    return to_string(raw)
+}
+
+// ─── pure-fn — sim_step11_resource_entry ──────────────────────────────
+//
+// Simulates RM4 step 11 (`akida_capability_register`) emit for `.resource`.
+// Pure: takes (probe_output, sdk_version, count) → emits the appended
+// accelerator field line. Mirrors the spec in
+// docs/akida_omega_cycle_integration.md § "R7' RM4 patch design".
+//
+// Output shape:
+//   "  accelerator=AKD1000 sdk=MetaTF-<ver> count=<n>\n"
+@pure_fn
+fn sim_step11_resource_entry(count: int, sdk_version: str) -> str {
+    if count <= 0 { return "" }
+    let mut sdk = sdk_version
+    if sdk == "" || sdk == "unknown" { sdk = "MetaTF-unknown" }
+    if !sdk.starts_with("MetaTF-") { sdk = "MetaTF-" + sdk }
+    return "  accelerator=AKD1000 sdk=" + sdk + " count=" + to_string(count) + "\n"
+}
+
+// ─── pure-fn — already_registered ─────────────────────────────────────
+//
+// raw 65 idempotent helper. Returns true if the .resource snippet already
+// has an `accelerator=AKD1000` line (pure substring scan; never mutates).
+@pure_fn
+fn already_registered(resource_snippet: str) -> bool {
+    return resource_snippet.contains("accelerator=AKD1000")
+}
+
+// ─── pure-fn — parse_akida_ls_count ───────────────────────────────────
+//
+// Tiny mirror of M-AK classify_akida_capability count loop, kept inline so
+// this test does not depend on M-AK runtime invocation (which would require
+// hexa-on-mac execution). Pure substring count of "AKD1000".
+@pure_fn
+fn parse_akida_ls_count(probe: str) -> int {
+    let lower = probe.to_lower()
+    let mut idx = 0
+    let mut count = 0
+    while idx + 7 <= len(lower) {
+        if lower.slice(idx, idx + 7) == "akd1000" { count = count + 1 }
+        idx = idx + 1
+    }
+    return count
+}
+
+// ─── pure-fn — parse_metatf_sdk ───────────────────────────────────────
+@pure_fn
+fn parse_metatf_sdk(probe: str) -> str {
+    let lower = probe.to_lower()
+    if !lower.contains("metatf") { return "unknown" }
+    let mut i = 0
+    while i + 6 <= len(lower) {
+        if lower.slice(i, i + 6) == "metatf" {
+            // skip token + optional space
+            let mut j = i + 6
+            while j < len(lower) {
+                let ch = lower.slice(j, j + 1)
+                if ch != " " && ch != "-" { break }
+                j = j + 1
+            }
+            // collect digits/dots
+            let mut k = j
+            while k < len(lower) {
+                let ch = lower.slice(k, k + 1)
+                let ok = (ch >= "0" && ch <= "9") || ch == "."
+                if !ok { break }
+                k = k + 1
+            }
+            if k > j { return lower.slice(j, k) }
+        }
+        i = i + 1
+    }
+    return "unknown"
+}
+
+// ─── F1 — mock fixture ensure (idempotent) ────────────────────────────
+fn ensure_fixture() -> bool {
+    let dir = _mock_dir()
+    if dir == "" { return false }
+    // Caller (operator) is expected to pre-create the dir per task spec.
+    // We re-assert files exist; if any missing, we DO NOT auto-write
+    // (production-side write discipline). Test only verifies presence.
+    let r = _run("test -f " + dir + "/lspci.out && test -f " + dir + "/akida_ls.out && test -f " + dir + "/metatf_info.json && echo HIT || echo MISS")
+    return r.contains("HIT")
+}
+
+// ─── F2/F3 — RM4 step 11 simulation (mock-tier) ────────────────────────
+//
+// Pure simulation: read mock fixture file, classify, emit draft entry.
+// Returns the simulated `.resource` snippet (in-memory only — never
+// written to disk; production touch = 0).
+fn sim_step11_invoke(hw_present: bool) -> str {
+    if !hw_present {
+        // Default: graceful skip (no AKIDA_HW_PRESENT export → no-op).
+        return ""
+    }
+    let dir = _mock_dir()
+    let probe_raw = _run("cat " + dir + "/akida_ls.out")
+    let probe = probe_raw.trim()
+    let count = parse_akida_ls_count(probe)
+    let sdk = parse_metatf_sdk(probe)
+    return sim_step11_resource_entry(count, sdk)
+}
+
+// ─── main / selftest ──────────────────────────────────────────────────
+fn main() -> int {
+    println("[integration_akida_a_bootstrap_mock — DESIGN-TIER pre-arrival]")
+    println("  mock_dir=" + _mock_dir())
+    let mut fails = 0
+
+    // F1: mock fixture 생성 (idempotent)
+    let f1_first = ensure_fixture()
+    let f1_second = ensure_fixture()
+    if f1_first && f1_second {
+        println("  PASS F1 mock fixture present + idempotent re-check")
+    } else {
+        println("  FAIL F1 mock fixture missing (operator must seed " + _mock_dir() + ")")
+        fails = fails + 1
+    }
+
+    // F2: graceful skip when AKIDA_HW_PRESENT=0 (default)
+    std::env::set("AKIDA_HW_PRESENT", "0")
+    let f2_out = sim_step11_invoke(false)
+    if f2_out == "" {
+        println("  PASS F2 graceful skip when AKIDA_HW_PRESENT=0 (default)")
+    } else {
+        println("  FAIL F2 expected empty output, got: " + f2_out)
+        fails = fails + 1
+    }
+
+    // F3: AKIDA_HW_PRESENT=1 + fixture active → entry draft emitted
+    std::env::set("AKIDA_HW_PRESENT", "1")
+    let f3_out = sim_step11_invoke(true)
+    let f3_ok = f3_out.contains("accelerator=AKD1000") && f3_out.contains("sdk=MetaTF-2.4.0") && f3_out.contains("count=1")
+    if f3_ok {
+        println("  PASS F3 RM4 step 11 sim → .resource entry draft (mock)")
+        println("    draft=" + f3_out.trim())
+    } else {
+        println("  FAIL F3 entry draft missing/malformed")
+        println("    out=" + f3_out)
+        fails = fails + 1
+    }
+
+    // F4: M9 6-dim view design references neuromorphic_accelerators
+    //     (raw 91 honest C3 — actual M9 surface change is design-only
+    //     until hardware lands; we verify the design doc references the
+    //     6th dim field name.)
+    let doc = _hive() + "/docs/akida_omega_cycle_integration.md"
+    let f4 = _run("grep -F neuromorphic_accelerators " + doc)
+    if f4.contains("neuromorphic_accelerators") {
+        println("  PASS F4 M9 6-dim design references neuromorphic_accelerators")
+    } else {
+        println("  FAIL F4 M9 6-dim design field reference missing")
+        fails = fails + 1
+    }
+
+    // F5: idempotent re-run (raw 65) — second invoke on already-registered
+    // snippet must be detected by already_registered() and skipped.
+    let snippet = "resource 4 new \"raspberry-akida\"\n  slug host-raspberry-akida\n" + f3_out
+    if already_registered(snippet) {
+        // Simulate the RM4 idempotency guard: re-invoke would skip.
+        let f5_skip = if already_registered(snippet) { "" } else { sim_step11_invoke(true) }
+        if f5_skip == "" {
+            println("  PASS F5 idempotent re-run (raw 65) — already-registered detected")
+        } else {
+            println("  FAIL F5 idempotent guard failed; re-emitted entry")
+            fails = fails + 1
+        }
+    } else {
+        println("  FAIL F5 already_registered() did not detect prior entry")
+        fails = fails + 1
+    }
+
+    if fails == 0 {
+        println("[integration_akida_a_bootstrap_mock] OK 5/5 (DESIGN-TIER mock; HW en route)")
+        return 0
+    }
+    println("[integration_akida_a_bootstrap_mock] FAIL " + to_string(fails) + "/5")
+    return 1
+}

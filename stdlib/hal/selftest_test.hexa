@@ -1,0 +1,60 @@
+#!hexa strict
+// stdlib/hal/tests/test_selftest.hexa — verify all 12 module files on disk.
+
+let MODULES = [
+    "core/core.hexa",
+    "gpio/gpio.hexa",
+    "i2c/i2c.hexa",
+    "spi/spi.hexa",
+    "uart/uart.hexa",
+    "adc/adc.hexa",
+    "dac/dac.hexa",
+    "pwm/pwm.hexa",
+    "timer/timer.hexa",
+    "intr/intr.hexa",
+    "dma/dma.hexa",
+    "rtc/rtc.hexa"
+]
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+fn main() {
+    println("=== test_selftest — module file inventory ===")
+    let env_root = env("HEXA_HAL_ROOT")
+    let root = if env_root.len() > 0 { env_root } else { exec("pwd").trim() }
+
+    let mut missing: [str] = []
+    for m in MODULES {
+        let p = root + "/" + m
+        if file_exists(p) == false { missing = missing + [m] }
+    }
+
+    let total = MODULES.len()
+    let present = total - missing.len()
+
+    _check(total == 12, "module list length == σ(6) = 12", "got " + str(total))
+    _check(missing.len() == 0,
+           "all 12 module files present on disk",
+           if missing.len() > 0 { "missing: " + str(missing.len()) } else { "" })
+
+    let prelude = root + "/prelude.hexa"
+    _check(file_exists(prelude), "prelude.hexa present", "")
+
+    println("  present: " + str(present) + "/" + str(total))
+
+    if FAIL > 0 {
+        println("__HEXA_HAL_TEST_SELFTEST__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_HAL_TEST_SELFTEST__ PASS")
+    exit(0)
+}

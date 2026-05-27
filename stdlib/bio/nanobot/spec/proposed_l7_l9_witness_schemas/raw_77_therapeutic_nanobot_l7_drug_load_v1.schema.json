@@ -1,0 +1,91 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://hexa-bio/nanobot/spec/proposed_l7_l9_witness_schemas/raw_77_therapeutic_nanobot_l7_drug_load_v1.schema.json",
+  "title": "raw_77_therapeutic_nanobot_l7_drug_load_v1 — L7 drug-load witness (CONSUMER-PROPOSED draft, hexa-bio → canon)",
+  "description": "CONSUMER-PROPOSED draft (hexa-bio → canon). The canonical handoff JSON (canon@mk1:domains/life/therapeutic-nanobot/handoff/2026-05-28_hexa-nanobot-therapeutic-nanobot-boundary.json, raw_77_therapeutic_nanobot_l7_acceptance_v1, DECLARED v1.0.0-stub) names this schema as a placeholder; this file is hexa-bio's proposed field-set, derived from that handoff JSON's per-layer `responsibility` + `primitives` + `consumes_from_l6`. Canon adopts/edits and the file's source-of-truth becomes canon/domains/life/therapeutic-nanobot/spec/. raw_91 C3: a contract draft — boundary acknowledgment level; NO wet-lab/clinical claim; wet-lab + IP/contract review = canon cycle-30+. L7 = payload encapsulation + release kinetics; consumes_from_l6 = {work_per_cycle_kT (≡ raw_77_nanobot_actuation_v2.work_per_cycle_kT_units), vertex_decorations}.",
+  "type": "object",
+  "required": [
+    "schema",
+    "actuator_id",
+    "l6_witness_ref",
+    "drug_payload",
+    "surface_coating"
+  ],
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "raw_77_therapeutic_nanobot_l7_drug_load_v1"
+    },
+    "actuator_id": {
+      "type": "string",
+      "description": "≡ the L6 raw_77_nanobot_actuation_v2 / raw_77_nanobot_l6_handoff_v1 actuator_id."
+    },
+    "l6_witness_ref": {
+      "type": "string",
+      "description": "Path/ref to the consumed L6 single-machine witness (raw_77_nanobot_l6_handoff_v1)."
+    },
+    "consumed_from_l6": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "work_per_cycle_kT",
+          "vertex_decorations"
+        ]
+      },
+      "description": "L6 fields this L7 witness consumes (per the canon handoff: work_per_cycle_kT_units, vertex_decorations)."
+    },
+    "drug_payload": {
+      "type": "object",
+      "required": [
+        "shell_type",
+        "k_release_s_inv",
+        "payload_mass_amu"
+      ],
+      "properties": {
+        "shell_type": {
+          "type": "string",
+          "enum": [
+            "lipid_shell",
+            "polymer_cage",
+            "other"
+          ]
+        },
+        "k_release_s_inv": {
+          "type": "number",
+          "minimum": 0,
+          "description": "First-order payload-release rate constant (s^-1)."
+        },
+        "payload_mass_amu": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Encapsulated payload mass (amu)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "surface_coating": {
+      "type": "object",
+      "required": [
+        "peg_density_per_nm2",
+        "zeta_potential_mV"
+      ],
+      "properties": {
+        "peg_density_per_nm2": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Surface PEG-chain density (chains·nm^-2)."
+        },
+        "zeta_potential_mV": {
+          "type": "number",
+          "description": "Particle zeta potential (mV)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "raw_91_c3_disclose": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,13 @@
+.version 8.0
+.target sm_80
+.address_size 64
+.visible .entry t (.param .u64 a, .param .u64 b, .param .u64 c) {
+    .reg .u64 %rd<5>;
+    .reg .b16 %fb<5>;
+    ld.param.u64 %rd0, [a]; ld.param.u64 %rd1, [b]; ld.param.u64 %rd2, [c];
+    ld.global.b16 %fb0, [%rd0];
+    ld.global.b16 %fb1, [%rd1];
+    add.bf16 %fb2, %fb0, %fb1;
+    st.global.b16 [%rd2], %fb2;
+    ret;
+}

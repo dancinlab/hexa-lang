@@ -1,0 +1,103 @@
+(kicad_sch (version 20231120) (generator "hexa-rtsc-phase-E")
+
+	(uuid "33333333-3333-3333-3333-333333333333")
+
+	(paper "A3")
+
+	(title_block
+		(title "hexa-rtsc Calorimetry Rig — Phase E schematic skeleton")
+		(date "2026-05-08")
+		(rev "v0.1-skeleton")
+		(company "dancinlab/hexa-rtsc")
+		(comment 1 "Spec: doc/calorimetry_rig_v0.md (Stage A)")
+		(comment 2 "MCU:  firmware/mcu/calorimetry_drv.rs (Phase D+, 6/6 PASS)")
+		(comment 3 "HDL:  firmware/hdl/calorimetry_daq.v (Phase D+, parses)")
+		(comment 4 "Sim:  firmware/sim/calorimetry_ctrl.hexa (Phase D+, 12/12 PASS)")
+	)
+
+	(lib_symbols
+		(symbol "MCU_ST_STM32F4:STM32F407VGT6"
+			(in_bom yes) (on_board yes)
+			(property "Reference" "U1" (at 0 0 0))
+			(property "Footprint" "Package_QFP:LQFP-100_14x14mm_P0.5mm" (at 0 0 0))
+			(property "Datasheet" "https://www.st.com/resource/en/datasheet/stm32f407vg.pdf" (at 0 0 0))
+		)
+		(symbol "Analog_DAC:AD5660"
+			(in_bom yes) (on_board yes)
+			(property "Reference" "U2" (at 0 0 0))
+			(property "Value" "AD5660 (16-bit, 1.25us)" (at 0 0 0))
+			(property "Footprint" "Package_SO:MSOP-10_3x3mm_P0.5mm" (at 0 0 0))
+			(property "Datasheet" "https://www.analog.com/media/en/technical-documentation/data-sheets/AD5620_5640_5660.pdf" (at 0 0 0))
+		)
+		(symbol "Analog_ADC:LTC2400"
+			(in_bom yes) (on_board yes)
+			(property "Reference" "U3" (at 0 0 0))
+			(property "Value" "LTC2400 (24-bit ΣΔ)" (at 0 0 0))
+			(property "Footprint" "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm" (at 0 0 0))
+			(property "Datasheet" "https://www.analog.com/media/en/technical-documentation/data-sheets/2400fa.pdf" (at 0 0 0))
+		)
+		(symbol "Sensor_Temperature:CernoxCX1080CU"
+			(in_bom yes) (on_board no)
+			(property "Reference" "TS1" (at 0 0 0))
+			(property "Value" "Cernox_CX-1080-CU" (at 0 0 0))
+			(property "Datasheet" "https://www.lakeshore.com/products/categories/temperature-products/cryogenic-temperature-sensors/cernox" (at 0 0 0))
+		)
+	)
+
+	;; ─── Top-level instances ─────────────────────────────────────────
+	(symbol (lib_id "MCU_ST_STM32F4:STM32F407VGT6")
+		(at 100 100 0) (uuid "u1-stm32f4-calorimetry")
+		(property "Reference" "U1" (at 100 50 0))
+		(property "Value" "STM32F407VGT6" (at 100 150 0))
+		(instances (project "calorimetry_rig" (path "/" (reference "U1") (unit 1))))
+	)
+
+	(symbol (lib_id "Analog_DAC:AD5660") (at 70 80 0) (uuid "u2-ad5660-heat-pulse")
+		(property "Reference" "U2" (at 70 75 0))
+		(property "Value" "AD5660 (heat pulse DAC)" (at 70 85 0))
+		(instances (project "calorimetry_rig" (path "/" (reference "U2") (unit 1))))
+	)
+
+	(symbol (lib_id "Analog_ADC:LTC2400") (at 70 120 0) (uuid "u3-ltc2400-temp")
+		(property "Reference" "U3" (at 70 115 0))
+		(property "Value" "LTC2400 (24-bit T-readout)" (at 70 125 0))
+		(instances (project "calorimetry_rig" (path "/" (reference "U3") (unit 1))))
+	)
+
+	(symbol (lib_id "Sensor_Temperature:CernoxCX1080CU") (at 30 120 0) (uuid "ts1-cernox")
+		(property "Reference" "TS1" (at 30 115 0))
+		(property "Value" "Cernox CX-1080-CU\n(1.5-325 K, 1 mK below 5 K)" (at 30 125 0))
+		(instances (project "calorimetry_rig" (path "/" (reference "TS1") (unit 1))))
+	)
+
+	;; ─── Net labels ───────────────────────────────────────────────
+	(label "DAC_HEAT_PULSE_OUT" (at 80 80 0))
+	(label "ADC_CERNOX_DIFF_P" (at 50 118 0))
+	(label "ADC_CERNOX_DIFF_N" (at 50 122 0))
+	(label "DAC_SCLK" (at 90 75 0))
+	(label "DAC_SYNC_N" (at 90 80 0))
+	(label "DAC_SDI" (at 90 85 0))
+	(label "ADC_SCLK" (at 90 115 0))
+	(label "ADC_CS_N" (at 90 120 0))
+	(label "ADC_SDO" (at 90 125 0))
+	(label "UART_TX" (at 130 100 0))
+	(label "UART_RX" (at 130 110 0))
+	(label "MU_METAL_PROBE" (at 30 100 0))
+	(label "LHE_LEVEL_MONITOR" (at 30 130 0))
+
+	;; ─── Power ────────────────────────────────────────────────────
+	(label "+3V3" (at 100 50 0))
+	(label "+5V_AVDD" (at 100 60 0))
+	(label "+5V_REF" (at 60 75 0))
+	(label "GND" (at 100 150 0))
+
+	(text "Calorimetry rig MCU board — STM32F407VGT6 + AD5660 DAC + LTC2400 ADC\nBachmann 1972 relaxation method.  Pulse width = τ(6) ms = 4 ms baseline.\nADC at 16 ms cadence (62.5 Hz output rate after ΣΔ decimation)."
+		(at 100 30 0)
+		(effects (font (size 1.5 1.5)))
+	)
+	(text "4 interlocks (= τ(6)): StageTempLow + PulseRateExcess + HostTimeout + AdcDropout.\nBCS specific-heat anchor: ΔC/γTc = σ(6)/(7·ζ(3)) ≈ 1.4257 (verified).\nCernox sample mount on dilution-fridge stage (10 mK base, 0.3 K with ³He fridge alt)."
+		(at 100 165 0)
+		(effects (font (size 1.2 1.2)))
+	)
+
+)

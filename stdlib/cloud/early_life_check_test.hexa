@@ -1,0 +1,96 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+// stdlib/cloud/early_life_check_test.hexa — regression guard for the
+// `--early-life-check <sec>` nohup flag scanner (cloud 0.2.3, PR #1120,
+// anima cloud handoff inbox/patches/cloud-launch-trainer-script-arg-missing.md
+// Option C).
+//
+// #1120 landed the flag + verified an isolated 6/6 logic test, but that
+// run was ephemeral — never committed. This persists those exact 6 cases
+// as a permanent CI guard so a future edit to the scanner (or its sibling
+// `_max_wall_cli`, also untested) cannot silently regress the window that
+// gates early teardown of a $-bearing pod.
+//
+// LLM-free, network-free. cloud_cli.hexa carries a `main()`, and import
+// auto-fires top-level main() in hexa (INBOX G2), so the scanner cannot be
+// `use`d here without side effects — this mirrors the source verbatim, the
+// established stdlib-CLI parser-test pattern (see env_passthrough_test.hexa).
+// Keep _early_life_cli / _cli_atoi byte-identical to cloud_cli.hexa.
+//
+// Run:   hexa run stdlib/cloud/early_life_check_test.hexa
+// PASS:  exits 0, prints "early_life_check_test PASS".
+
+// ── mirror of cloud_cli.hexa:_cli_atoi (digit-only base-10 scan) ─────────
+fn _cli_atoi(s: str) -> int {
+    let mut i = 0
+    let mut v = 0
+    let n = len(s)
+    while i < n {
+        let cc = char_code(s.substring(i, i + 1))
+        if cc >= 48 && cc <= 57 {
+            v = v * 10 + (cc - 48)
+        }
+        i = i + 1
+    }
+    return v
+}
+
+// ── mirror of cloud_cli.hexa:_early_life_cli (pre-"--" flag scan) ────────
+fn _early_life_cli(av: [str], start: int) -> int {
+    let mut i = start
+    while i < len(av) {
+        let t = av[i]
+        if t == "--" {
+            return 0
+        } else if t == "--early-life-check" {
+            if i + 1 < len(av) {
+                return _cli_atoi(av[i + 1])
+            }
+            return 0
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+fn _fail(case: str, got: int, want: int) {
+    println("FAIL " + case + ": got " + str(got) + ", want " + str(want))
+    exit(1)
+}
+
+fn _check(case: str, got: int, want: int) {
+    if got != want {
+        _fail(case, got, want)
+    }
+    println(case + " PASS — " + str(got))
+}
+
+fn main() {
+    // case 1: absent → 0 (no flag in the pre-"--" window, check disabled)
+    _check("absent",
+        _early_life_cli(["host", "log", "--", "bash", "x.sh"], 0), 0)
+
+    // case 2: present → parsed value
+    _check("present",
+        _early_life_cli(["--early-life-check", "60"], 0), 60)
+
+    // case 3: after-separator NOT consumed → 0. A `--early-life-check`
+    //         token living inside the remote argv (past "--") must be
+    //         ignored, never stolen from the launched program.
+    _check("after-sep",
+        _early_life_cli(["--", "--early-life-check", "60"], 0), 0)
+
+    // case 4: mixed with other flags before it → 30
+    _check("mixed",
+        _early_life_cli(["--port", "22", "--early-life-check", "30", "--", "bash"], 0), 30)
+
+    // case 5: dangling flag (no value at end) → 0, not a crash
+    _check("dangling",
+        _early_life_cli(["--early-life-check"], 0), 0)
+
+    // case 6: honors the start offset (scan begins past host+logfile) → 120
+    _check("offset",
+        _early_life_cli(["host", "log", "--early-life-check", "120"], 2), 120)
+
+    println("early_life_check_test PASS — 6/6 cases")
+    exit(0)
+}

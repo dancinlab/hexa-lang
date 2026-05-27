@@ -1,0 +1,165 @@
+// stdlib/cloud/vast_json_strip_test.hexa — deterministic falsifiers for
+// the vastai JSON-noise stripper (robustness fix-at-source).
+//
+// Real bug reproduced here WITHOUT a live API / network / credentials:
+//   `hexa cloud list --provider vast` →
+//     "[cloud] vast: list: non-array JSON — DEPRECATED: ... []"
+//   because recent vastai + macOS python emit NON-JSON noise BEFORE the
+//   `--raw` payload on the (intentionally 2>&1-merged) stream:
+//     (a) a `DEPRECATED:` notice (vastai),
+//     (b) `NotOpenSSLWarning` (urllib3 on LibreSSL).
+//   _vast_strip_to_json drops everything before the first `[`/`{` so the
+//   payload parses; with no opener it returns the string unchanged so the
+//   existing non-JSON fail path still fires (real errors preserved).
+//
+// Part 1 — pure-string unit tests of the stripper (no shell at all).
+// Part 2 — end-to-end: a fake `vastai` shim at $HOME/bin/vastai (temp HOME)
+//          emits the exact noise + a JSON instances array → vast_list_instances
+//          must parse it cleanly to "N instances" (NOT the non-array fail).
+//
+// Run:   hexa run stdlib/cloud/vast_json_strip_test.hexa
+// PASS:  exits 0, prints "vast_json_strip_test PASS — N/N cases".
+
+use "stdlib/cloud/vast"
+use "stdlib/alloc/json_object"
+
+fn _fail(case: str, msg: str) {
+    println("FAIL " + case + ": " + msg)
+    exit(1)
+}
+
+fn _eq(case: str, got: str, want: str) {
+    if got != want {
+        _fail(case, "got [" + got + "] want [" + want + "]")
+    }
+}
+
+fn main() {
+    let mut n = 0
+
+    // ── Part 1: pure-string stripper unit tests ──────────────────────
+
+    // 1a. The EXACT bug shape: DEPRECATED + urllib3 warning, then array.
+    let noisy_arr = "DEPRECATED: show instances will change in a future release.\n"
+        + "/Users/x/.vastai-venv/lib/python3.13/site-packages/urllib3/__init__.py:35: "
+        + "NotOpenSSLWarning: urllib3 v2 only supports OpenSSL 1.1.1+, currently the "
+        + "'ssl' module is compiled with 'LibreSSL 2.8.3'. See: https://github.com/urllib3/urllib3/issues/3020\n"
+        + "  warnings.warn(\n"
+        + "[ { \"id\": 12345 }, { \"id\": 67890 } ]"
+    _eq("1a-strip-array", vast_strip_to_json_TEST(noisy_arr), "[ { \"id\": 12345 }, { \"id\": 67890 } ]")
+    n = n + 1
+
+    // 1a-parse: the stripped string actually parses to a 2-element array.
+    let p1 = json_parse(vast_strip_to_json_TEST(noisy_arr))
+    if type_of(p1) != "array" { _fail("1a-parse", "stripped output did not parse as array (" + type_of(p1) + ")") }
+    if len(p1) != 2 { _fail("1a-parse", "expected 2 elements, got " + to_string(len(p1))) }
+    let e0 = json_object_get(p1[0], "id")
+    if type_of(e0) != "int" || to_string(e0) != "12345" { _fail("1a-parse", "first id wrong: " + to_string(e0)) }
+    n = n + 1
+
+    // 1b. Object payload (show instance --raw / create response) after noise.
+    let noisy_obj = "DEPRECATED: foo\nNotOpenSSLWarning: bar\n{ \"new_contract\": 42, \"ssh_host\": \"1.2.3.4\" }"
+    _eq("1b-strip-object", vast_strip_to_json_TEST(noisy_obj), "{ \"new_contract\": 42, \"ssh_host\": \"1.2.3.4\" }")
+    let p2 = json_parse(vast_strip_to_json_TEST(noisy_obj))
+    if type_of(p2) != "map" { _fail("1b-parse", "stripped object did not parse as map (" + type_of(p2) + ")") }
+    if to_string(json_object_get(p2, "new_contract")) != "42" { _fail("1b-parse", "new_contract wrong") }
+    n = n + 1
+
+    // 1c. Clean JSON (no noise) is untouched — array.
+    _eq("1c-clean-array", vast_strip_to_json_TEST("[1,2,3]"), "[1,2,3]")
+    n = n + 1
+
+    // 1d. Clean JSON (no noise) is untouched — object.
+    _eq("1d-clean-object", vast_strip_to_json_TEST("{\"a\":1}"), "{\"a\":1}")
+    n = n + 1
+
+    // 1e. Real-error preservation: no `[`/`{` anywhere → returned unchanged
+    //     so the caller's non-JSON fail path still fires (NOT masked).
+    let api_err = "ERROR: api key invalid (401)\n"
+    _eq("1e-no-json-preserved", vast_strip_to_json_TEST(api_err), api_err)
+    let pe = json_parse(vast_strip_to_json_TEST(api_err))
+    if type_of(pe) == "array" { _fail("1e-no-json-preserved", "error string must NOT parse as array") }
+    n = n + 1
+
+    // 1f. Empty output → returned unchanged (genuine empty detected downstream).
+    _eq("1f-empty-preserved", vast_strip_to_json_TEST(""), "")
+    n = n + 1
+
+    // 1g. Leading whitespace-only before JSON also stripped (json_parse can
+    //     handle whitespace, but the strip must not corrupt the payload).
+    _eq("1g-leading-ws", vast_strip_to_json_TEST("   \n\t[42]"), "[42]")
+    n = n + 1
+
+    // 1h. First opener wins: the stripper cuts at the FIRST `[`/`{`. For
+    //     vastai's real noise (DEPRECATED / urllib3 — neither contains a
+    //     bare bracket), the first opener IS the start of the JSON payload.
+    //     Single-line noise (no trailing newline) before an array.
+    let oneline = "DEPRECATED: show instances will change soon. [ { \"id\": 9 } ]"
+    _eq("1h-first-opener", vast_strip_to_json_TEST(oneline), "[ { \"id\": 9 } ]")
+    n = n + 1
+
+    // ── Part 2: end-to-end through vast_list_instances with a fake vastai ─
+    // A shim at $HOME/bin/vastai emits the exact noise + an instances array.
+    // vast_list_instances must parse it to "2 instances", NOT fall into
+    // "list: non-array JSON". This exercises the real code path
+    // (exec → 2>&1 merge → strip → json_parse) deterministically.
+    //
+    // _vastai_path() resolves $HOME/bin/vastai FIRST, so the runner launches
+    // this binary with HOME pointed at a scratch dir (the runtime's set_env
+    // is a no-op stub, so HOME MUST be set at process launch, not here).
+    // Guard: skip Part 2 unless HOME was redirected into a hexa scratch dir
+    // (a real /Users HOME would hit the user's actual vastai). The test
+    // runner sets HOME=<tempdir>; bare `hexa run` of this file skips Part 2.
+
+    let home = env_var("HOME")
+    if home.index_of("hexa_vast_test") < 0 {
+        println("vast_json_strip_test PASS (Part 1 only — set HOME=*hexa_vast_test* to run e2e) — " + to_string(n) + "/" + to_string(n) + " cases")
+        exit(0)
+    }
+
+    let bindir = home + "/bin"
+    let _mk = exec("mkdir -p '" + bindir + "'")
+
+    // Fake vastai: prints DEPRECATED + urllib3 warning to stderr, then a
+    // 2-element instances array to stdout. The leading noise on stderr is
+    // what the production `2>&1` merges ahead of the JSON.
+    let shim = bindir + "/vastai"
+    let shim_body = "#!/bin/sh\n"
+        + "echo 'DEPRECATED: show instances will change in a future release.' >&2\n"
+        + "echo \"NotOpenSSLWarning: urllib3 v2 only supports OpenSSL 1.1.1+, currently the 'ssl' module is compiled with 'LibreSSL 2.8.3'.\" >&2\n"
+        + "echo '  warnings.warn(' >&2\n"
+        + "printf '%s\\n' '[ { \"id\": 11111 }, { \"id\": 22222 } ]'\n"
+    write_file(shim, shim_body)
+    let _chmod = exec("chmod +x '" + shim + "'")
+
+    let lst = vast_list_instances()
+    if lst.ok != 1 {
+        _fail("2-e2e-list", "expected ok=1, got ok=" + to_string(lst.ok) + " msg=" + lst.message)
+    }
+    if len(lst.instance_ids) != 2 {
+        _fail("2-e2e-list", "expected 2 instance ids, got " + to_string(len(lst.instance_ids)) + " msg=" + lst.message)
+    }
+    if lst.instance_ids[0] != "11111" || lst.instance_ids[1] != "22222" {
+        _fail("2-e2e-list", "instance ids wrong: " + lst.instance_ids[0] + "," + lst.instance_ids[1])
+    }
+    if lst.message.index_of("non-array JSON") >= 0 {
+        _fail("2-e2e-list", "still hit the non-array fail path: " + lst.message)
+    }
+    n = n + 1
+
+    // 2b. Negative control: a fake vastai that emits ONLY noise (no JSON)
+    //     must still FAIL (non-array) — strip must not fabricate success.
+    let shim_body2 = "#!/bin/sh\n"
+        + "echo 'DEPRECATED: foo' >&2\n"
+        + "echo 'ERROR: vast api unreachable' >&2\n"
+    write_file(shim, shim_body2)
+    let _chmod2 = exec("chmod +x '" + shim + "'")
+    let lst2 = vast_list_instances()
+    if lst2.ok != 0 {
+        _fail("2b-neg-control", "noise-only output must fail (ok=0), got ok=" + to_string(lst2.ok))
+    }
+    n = n + 1
+
+    println("vast_json_strip_test PASS — " + to_string(n) + "/" + to_string(n) + " cases")
+    exit(0)
+}

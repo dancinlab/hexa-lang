@@ -1,0 +1,2 @@
+COMPUTE: sigma(8190) = 26208
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form compute, self-verified deterministic · g_self_verify · TECS-L Tier1)

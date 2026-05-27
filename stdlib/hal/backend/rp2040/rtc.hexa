@@ -1,0 +1,113 @@
+#!hexa strict
+// stdlib/hal/backend/rp2040/rtc.hexa — RP2040 RTC backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    Raspberry Pi RP2040 dual Cortex-M0+ @ 133 MHz.
+// Chip ref:  RP2040 Datasheet §4.8 RTC — single calendar (year/month/day/
+//            DOTW/hour/min/sec) + 1 match alarm + IRQ output. Clocked from
+//            CLK_RTC (typ derived from XOSC ÷ ~1500 → ~46.875 kHz, then /M
+//            to 1 Hz internally).
+// Surface:   rp2040_rtc_{configure,start,set_time,get_time,set_alarm,clear,report}(...)
+// Dispatch:  rtc.hexa selects this via cfg-flag.
+//
+// MMIO layout:
+//
+//   RTC:  base = 0x4005C000   (single instance)
+//
+//   CLKDIV_M1                  0x000   clock divider minus 1 (M-1)
+//                                       e.g. CLK_RTC=46875 Hz, M=46875 → 1 Hz
+//   SETUP_0                    0x004   year (12-bit) + month (4-bit) + day (5-bit)
+//   SETUP_1                    0x008   DOTW (3-bit) + hour (5-bit) + min (6-bit) + sec (6-bit)
+//   CTRL                       0x00C   RTC_ENABLE bit 0, LOAD bit 4 (commit setup),
+//                                       FORCE_NOTLEAPYEAR bit 8
+//   IRQ_SETUP_0                0x010   match alarm date
+//   IRQ_SETUP_1                0x014   match alarm time
+//                                       MATCH_ENA bit 28 (enable alarm match)
+//                                       (year/month/day/dotw/hour/min/sec each
+//                                        have own MATCH_<field>_ENA bit)
+//   RTC_0 / RTC_1              0x018 / 0x01C   current time read-back
+//   INTR / INTE / INTF / INTS  0x020..0x02C   interrupt control (single source)
+//
+// Year range: 0..4095 (12-bit field; defaults invalid until set). Setup
+// procedure: CTRL.RTC_ENABLE = 0 → write SETUP_0/1 → CTRL.LOAD = 1
+// (atomic commit) → CTRL.RTC_ENABLE = 1.
+//
+// Note: CLK_RTC must be ≥ 32 Hz for the RTC to advance; on Pico boards,
+// XOSC = 12 MHz → CLK_RTC = 12e6 / 256 = 46875 Hz typically.
+
+let MODULE_NAME = "rp2040_rtc"
+let SIGMA_SLOT  = 11
+let PHI_KIND    = "digital"
+
+let RTC_BASE      = 0x4005C000
+
+let CLKDIV_M1     = 0x000
+let SETUP_0       = 0x004
+let SETUP_1       = 0x008
+let CTRL          = 0x00C
+let IRQ_SETUP_0   = 0x010
+let IRQ_SETUP_1   = 0x014
+let RTC_0         = 0x018
+let RTC_1         = 0x01C
+let INTR          = 0x020
+let INTE          = 0x028
+
+let CLK_RTC_HZ    = 46875   // typical board CLK_RTC
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn rp2040_rtc_configure(idx: int) -> int {
+    if idx != 0 { return -1 }   // single RTC on RP2040
+    // STUB: clear CTRL.RTC_ENABLE; set CLKDIV_M1 = CLK_RTC - 1;
+    //       no time set yet (caller invokes set_time).
+    return idx
+}
+
+fn rp2040_rtc_start(handle: int) -> bool {
+    if handle < 0 { return false }
+    // STUB: set CTRL.RTC_ENABLE = 1
+    return true
+}
+
+fn rp2040_rtc_set_time(handle: int, year: int, month: int, day: int, hour: int, minute: int, second: int) -> bool {
+    if handle < 0 { return false }
+    if year < 0 || year > 4095 { return false }
+    // STUB: clear RTC_ENABLE; write SETUP_0 (year/month/day) + SETUP_1
+    //       (dotw/hour/min/sec); pulse CTRL.LOAD=1; set RTC_ENABLE=1.
+    return true
+}
+
+fn rp2040_rtc_get_time(handle: int) -> str {
+    if handle < 0 { return "rtc: invalid" }
+    // STUB: read RTC_0 + RTC_1; decode bit fields.
+    return "[rp2040_rtc sim] time read TODO"
+}
+
+fn rp2040_rtc_set_alarm(handle: int, hour: int, minute: int, second: int) -> bool {
+    if handle < 0 { return false }
+    // STUB: write IRQ_SETUP_1 with hour/min/sec + MATCH_HOUR_ENA + MATCH_MIN_ENA
+    //       + MATCH_SEC_ENA + MATCH_ENA bit 28.
+    return true
+}
+
+fn rp2040_rtc_clear(handle: int) -> bool {
+    if handle < 0 { return false }
+    // STUB: clear IRQ_SETUP_1.MATCH_ENA; clear INTR (no W1C — re-arm by
+    //       clearing match enable then re-enabling).
+    return true
+}
+
+fn rp2040_rtc_report(handle: int) -> str {
+    return "[rp2040_rtc sim] handle=" + str(handle) + " (skeleton stub — TODO MMIO)"
+}
+
+fn rp2040_rtc_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[rp2040_rtc sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  RTC=" + str(RTC_BASE) + " (single instance + 1 match alarm)")
+    println("  CLK_RTC typ 46875 Hz (XOSC=12 MHz / 256); divider M = CLK_RTC for 1 Hz")
+}

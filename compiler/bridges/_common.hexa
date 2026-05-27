@@ -1,0 +1,102 @@
+// HEXA Native Compiler — Phase 4 external-resource absorption: bridges _common
+//
+// @version 0.1.0
+// @capabilities [exec, env]
+//
+// Shared δ (try-live-or-fallback) helpers for the 15 external data
+// bridges (codata, oeis, arxiv, gw, horizons, cmb, nanograv, simbad,
+// icecube, nist_atomic, wikipedia, openalex, gaia, lhc, pubchem,
+// uniprot). Mirrors `compiler/hw_probes/_common.hexa` so adapter call
+// sites in either module subtree see one API.
+//
+// Doctrine v2 rule 4 — every external-resource adapter has the form:
+//
+//   fn <name>_run(args) -> Result {
+//       if cli_available("<cli>") && (env("HEXA_FORCE_FALLBACK") != "1") {
+//           let r = exec_cli("<cli>", args)
+//           if r.ok { return r }
+//       }
+//       return <name>_fallback(args)
+//   }
+//
+// For HTTP bridges the "CLI" is `curl` (the same binary nexus uses
+// underneath `tool/bridge_helper.sh`). The fallback returns frozen
+// cached payloads compiled into each bridge file.
+//
+// γ enforced: returns values only. No atlas / audit / discovery
+// writes. Network calls bounded by HEXA_CLI_TIMEOUT_SEC (default 30 s).
+
+pub fn shq(s: string) -> string {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+pub fn _cli_timeout_sec() -> string {
+    let v = env("HEXA_CLI_TIMEOUT_SEC")
+    if v.len() > 0 { return v }
+    return "30"
+}
+
+// `curl` is the standard HTTP fetcher; treat it as the bridge CLI.
+pub fn http_available() -> bool {
+    if env("HEXA_FORCE_FALLBACK") == "1" { return false }
+    let raw = exec("command -v curl 2>/dev/null || true")
+    return raw.trim().len() > 0
+}
+
+pub fn cli_available(name: string) -> bool {
+    if env("HEXA_FORCE_FALLBACK") == "1" { return false }
+    let raw = exec("command -v " + shq(name) + " 2>/dev/null || true")
+    return raw.trim().len() > 0
+}
+
+// Fetch a URL with curl; returns [ok, body, stderr, exit_code]. Cap
+// is applied by piping through `head -c <max-bytes>` if max_bytes > 0.
+pub fn http_get(url: string, max_bytes: i64) -> array {
+    if !http_available() { return [false, "", "curl unavailable or forced-fallback", 1] }
+    let t = _cli_timeout_sec()
+    // `-f` fail-on-error, `-s` silent, `-S` show errors, `-L` follow redirects.
+    let mut cmd = "curl -fsSL --max-time " + t + " " + shq(url)
+    if max_bytes > 0 {
+        cmd = cmd + " 2>/dev/null | head -c " + to_string(max_bytes)
+    } else {
+        cmd = cmd + " 2>&1"
+    }
+    let r = exec_capture(cmd)
+    let stdout_s = to_string(r[0])
+    let stderr_s = to_string(r[1])
+    let ec = to_int(r[2])
+    let ok = ec == 0 && stdout_s.len() > 0
+    return [ok, stdout_s, stderr_s, ec]
+}
+
+pub fn exec_cli(name: string, cli_args: [string]) -> array {
+    let mut cmd = shq(name)
+    let mut i = 0
+    while i < len(cli_args) {
+        cmd = cmd + " " + shq(cli_args[i])
+        i = i + 1
+    }
+    let has_timeout = exec("command -v timeout 2>/dev/null || true").trim().len() > 0
+    let prefixed = if has_timeout { "timeout " + _cli_timeout_sec() + " " + cmd } else { cmd }
+    let r = exec_capture(prefixed)
+    let stdout_s = to_string(r[0])
+    let stderr_s = to_string(r[1])
+    let ec = to_int(r[2])
+    let ok = ec == 0
+    return [ok, stdout_s, stderr_s, ec]
+}
+
+// Result tuple accessors.
+pub fn cli_ok(r: array) -> bool { return r[0] }
+pub fn cli_stdout(r: array) -> string { return to_string(r[1]) }
+pub fn cli_stderr(r: array) -> string { return to_string(r[2]) }
+pub fn cli_exit(r: array) -> i64 { return to_int(r[3]) }
+
+// Build a δ result from a body string (used by fallback paths).
+pub fn ok_body(body: string) -> array {
+    return [true, body, "", 0]
+}
+
+pub fn fail_body(msg: string) -> array {
+    return [false, "", msg, 2]
+}

@@ -1,0 +1,473 @@
+// ═══════════════════════════════════════════════════════════════════
+//  test_membership_defense.hexa — Membership Inference Defense (#283)
+// ═══════════════════════════════════════════════════════════════════
+
+// -- inlined from self/ml/membership_defense.hexa --
+// codegen import not wired for test files
+
+// ═══════════════════════════════════════════════════════════════════
+//  self/ml/membership_defense.hexa — Membership Inference Defense (#283)
+//
+//  Defenses against membership inference attacks (Shokri et al.).
+//  Attacker observes model output p(x) and guesses whether x ∈ training
+//  set from confidence gap.  We lower the gap between member and
+//  non-member outputs.
+//
+//  Defenses implemented:
+//    • Temperature softening           p_T[i] ∝ exp(logit_i / T)
+//    • Label smoothing (ε)              target = (1-ε)·onehot + ε/K
+//    • Output perturbation (Gaussian)   p' = normalize(p + N(0,σ²))
+//    • Confidence masking (top-k)       keep top-k, uniform elsewhere
+//    • MemGuard-lite                    cap max confidence at τ
+//
+//  Baseline attacker: predict MEMBER iff max_p(x) > threshold.
+//
+//  API:
+//    md_softmax(logits)                 -> [float]
+//    md_temp_softmax(logits, T)         -> [float]
+//    md_label_smooth(target, K, eps)    -> [float]
+//    md_output_gauss(p, sigma, seed)    -> [float]
+//    md_confidence_mask(p, k)           -> [float]
+//    md_mem_guard(p, tau)               -> [float]
+//    md_attack_predict(p, threshold)    -> bool
+//    md_attack_accuracy(P_mem, P_nonmem, threshold) -> float
+//    md_apply_defense(p, kind, param, seed) -> [float]
+//
+//  AI-NATIVE attrs:
+//    @pure
+// ═══════════════════════════════════════════════════════════════════
+
+fn md_abs(inp) { if inp < 0.0 { return 0.0 - inp } return inp }
+
+fn md_exp(inp) {
+    let mut v = inp
+    if v > 20.0 { v = 20.0 }
+    if v < -20.0 { v = -20.0 }
+    let mut result = 1.0
+    let mut term = 1.0
+    let mut i = 1
+    while i < 30 {
+        term = term * v / to_float(i)
+        result = result + term
+        i = i + 1
+    }
+    if result < 0.0 { return 0.0 }
+    return result
+}
+
+fn md_log(inp) {
+    if inp <= 0.0 { return -30.0 }
+    let mut v = inp
+    let mut count = 0
+    while v > 2.0 {
+        v = v / 2.718281828
+        count = count + 1
+    }
+    while v < 0.5 {
+        v = v * 2.718281828
+        count = count - 1
+    }
+    let d = v - 1.0
+    let ln_v = d - d * d / 2.0 + d * d * d / 3.0 - d * d * d * d / 4.0
+    return to_float(count) + ln_v
+}
+
+fn md_sqrt(inp) {
+    if inp <= 0.0 { return 0.0 }
+    let mut g = inp / 2.0
+    if g < 1.0 { g = 1.0 }
+    let mut _i = 0
+    while _i < 30 {
+    return g
+        _i = _i + 1
+}
+
+fn md_zeros_f(n) {
+    let mut v = []
+    let mut _i = 0
+    while _i < n {
+    return v
+        _i = _i + 1
+}
+
+fn md_lcg(state) {
+    return (state * 1103515245 + 12345) % 2147483648
+}
+
+fn md_uniform(state) {
+    let s = md_lcg(state)
+    return [to_float(s) / 2147483648.0, to_float(s)]
+}
+
+fn md_gauss_pair(state) {
+    let p1 = md_uniform(state)
+    let mut u1 = p1[0]
+    let s1 = p1[1]
+    if u1 < 1.0e-9 { u1 = 1.0e-9 }
+    let p2 = md_uniform(int(s1))
+    let u2 = p2[0]
+    let s2 = p2[1]
+    let r = md_sqrt(-2.0 * md_log(u1))
+    let theta = 6.2831853 * u2
+    let c = 1.0 - theta * theta / 2.0 + theta * theta * theta * theta / 24.0
+    let z0 = r * c
+    return [z0, s2]
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Softmax
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn md_softmax(logits) {
+    let K = len(logits)
+    let mut mx = logits[0]
+    let mut k = 1
+    while k < K {
+    let mut out = md_zeros_f(K)
+    let mut sum = 0.0
+    for k in 0..K {
+        let e = md_exp(logits[k] - mx)
+        out[k] = e
+        sum = sum + e
+    }
+    if sum <= 0.0 { sum = 1.0e-12 }
+    for k in 0..K { out[k] = out[k] / sum }
+    return out
+        k = k + 1
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  (1) Temperature softening
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn md_temp_softmax(logits, T) {
+    let K = len(logits)
+    let mut safeT = T
+    if safeT < 1.0e-6 { safeT = 1.0e-6 }
+    let mut scaled = md_zeros_f(K)
+    let mut k = 0
+    while k < K {
+    return md_softmax(scaled)
+        k = k + 1
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  (2) Label smoothing target vector
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn md_label_smooth(target, K, eps) {
+    let base = eps / to_float(K)
+    let mut out = md_zeros_f(K)
+    let mut k = 0
+    while k < K {
+    out[target] = out[target] + (1.0 - eps)
+    return out
+        k = k + 1
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  (3) Output perturbation  p' = normalize(p + N(0,σ²))
+// ═══════════════════════════════════════════════════════════════════
+fn md_output_gauss(p, sigma, seed) {
+    let K = len(p)
+    let mut state = seed
+    if state <= 0 { state = 1 }
+    let mut out = md_zeros_f(K)
+    let mut k = 0
+    while k < K {
+        let g = md_gauss_pair(state)
+        state = int(g[1])
+        if state <= 0 { state = 1 }
+        let mut v = p[k] + g[0] * sigma
+        if v < 0.0 { v = 0.0 }
+        out[k] = v
+        k = k + 1
+    }
+    let mut sum = 0.0
+    let mut k = 0
+    while k < K {
+    if sum <= 0.0 {
+        for k in 0..K { out[k] = 1.0 / to_float(K) }
+        return out
+    }
+    for k in 0..K { out[k] = out[k] / sum }
+    return out
+        k = k + 1
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  (4) Confidence masking: keep top-k, uniform elsewhere
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn md_confidence_mask(p, k) {
+    let K = len(p)
+    let mut sorted = md_zeros_f(K)
+    let mut i = 0
+    while i < K {
+    // simple selection for threshold (k-th largest)
+    for a in 0..K {
+        for b in (a + 1)..K {
+            if sorted[b] > sorted[a] {
+                let tmp = sorted[a]
+                sorted[a] = sorted[b]
+                sorted[b] = tmp
+            }
+        }
+    }
+    let mut kk = k
+    if kk > K { kk = K }
+    if kk <= 0 { kk = 1 }
+    let cutoff = sorted[kk - 1]
+    let mut out = md_zeros_f(K)
+    let mut kept_sum = 0.0
+    let mut kept_cnt = 0
+    for i in 0..K {
+        if p[i] >= cutoff {
+            out[i] = p[i]
+            kept_sum = kept_sum + p[i]
+            kept_cnt = kept_cnt + 1
+        }
+    }
+    let rest_mass = 1.0 - kept_sum
+    let rest_cnt = K - kept_cnt
+    if rest_cnt > 0 {
+        let share = rest_mass / to_float(rest_cnt)
+        for i in 0..K {
+            if out[i] == 0.0 { out[i] = share }
+        }
+    }
+    // ensure non-negative
+    for i in 0..K { if out[i] < 0.0 { out[i] = 0.0 } }
+    let mut sum = 0.0
+    for i in 0..K { sum = sum + out[i] }
+    if sum <= 0.0 { sum = 1.0 }
+    for i in 0..K { out[i] = out[i] / sum }
+    return out
+        i = i + 1
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  (5) MemGuard-lite: cap maximum confidence
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn md_mem_guard(p, tau) {
+    let K = len(p)
+    let mut out = md_zeros_f(K)
+    let mut mx_idx = 0
+    let mut mx_val = p[0]
+    let mut i = 1
+    while i < K {
+        if p[i] > mx_val {
+            mx_val = p[i]
+            mx_idx = i
+        }
+        i = i + 1
+    }
+    if mx_val <= tau {
+        let mut i = 0
+        while i < K {
+        return out
+            i = i + 1
+    }
+    let excess = mx_val - tau
+    out[mx_idx] = tau
+    let mut other_sum = 0.0
+    let mut i = 0
+    while i < K {
+        if i != mx_idx { other_sum = other_sum + p[i] }
+        i = i + 1
+    }
+    if other_sum <= 0.0 {
+        let share = excess / to_float(K - 1)
+        let mut i = 0
+        while i < K {
+            if i != mx_idx { out[i] = share }
+            i = i + 1
+        }
+    } else {
+        let mut i = 0
+        while i < K {
+            if i != mx_idx {
+                out[i] = p[i] + excess * (p[i] / other_sum)
+            }
+            i = i + 1
+        }
+    }
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  (6) Baseline attacker: flag MEMBER if max_p > threshold
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn md_attack_predict(p, threshold) {
+    let K = len(p)
+    let mut mx = p[0]
+    let mut i = 1
+    while i < K {
+    return mx > threshold
+        i = i + 1
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  (7) Attack accuracy on balanced (member, non-member) pool
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn md_attack_accuracy(P_mem, P_nonmem, threshold) {
+    let M = len(P_mem)
+    let N = len(P_nonmem)
+    if M + N == 0 { return 0.0 }
+    let mut correct = 0
+    let mut i = 0
+    while i < M {
+        if md_attack_predict(P_mem[i], threshold) { correct = correct + 1 }
+        i = i + 1
+    }
+    let mut j = 0
+    while j < N {
+        if md_attack_predict(P_nonmem[j], threshold) == false { correct = correct + 1 }
+        j = j + 1
+    }
+    return to_float(correct) / to_float(M + N)
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  (8) Unified dispatcher
+// ═══════════════════════════════════════════════════════════════════
+fn md_apply_defense(p, kind, param, seed) {
+    if kind == "temp" {
+        // param = temperature applied on logits = log(p)
+        let K = len(p)
+        let mut logits = md_zeros_f(K)
+        let mut i = 0
+        while i < K {
+        return md_temp_softmax(logits, param)
+            i = i + 1
+    }
+    if kind == "gauss" {
+        return md_output_gauss(p, param, seed)
+    }
+    if kind == "topk" {
+        return md_confidence_mask(p, int(param))
+    }
+    if kind == "memguard" {
+        return md_mem_guard(p, param)
+    }
+    return p
+}
+
+
+// -- end inlined --
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn check(name, cond) {
+    if cond {
+        println("[PASS] " + name)
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name)
+        fail_count = fail_count + 1
+    }
+}
+
+fn fabs_(inp) { if inp < 0.0 { return 0.0 - inp } return inp }
+fn approx_(a, b, eps) { return fabs_(a - b) < eps }
+
+fn sum_vec(v) {
+    let n = len(v)
+    let mut s = 0.0
+    let mut i = 0
+
+    while i < n { s = s + v[i] }
+    return s
+}
+
+fn max_vec(v) {
+    let n = len(v)
+    let mut m = v[0]
+    let mut i = 1
+
+    while i < n { if v[i] > m { m = v[i] } }
+    return m
+}
+
+println("=== Membership Inference Defense (#283) ===")
+
+// ── T1 softmax sums to 1 ────────────────────────────────────
+let sm1 = md_softmax([1.0, 2.0, 3.0])
+check("T1 softmax sums to 1", approx_(sum_vec(sm1), 1.0, 1.0e-6))
+
+// ── T2 temp softmax T=1 ≈ softmax ──────────────────────────
+let sm2 = md_temp_softmax([1.0, 2.0, 3.0], 1.0)
+check("T2 T=1 equals softmax", approx_(sm2[0], sm1[0], 1.0e-6) && approx_(sm2[2], sm1[2], 1.0e-6))
+
+// ── T3 high T flattens distribution ────────────────────────
+let sm_hiT = md_temp_softmax([1.0, 2.0, 3.0], 100.0)
+let max_hiT = max_vec(sm_hiT)
+check("T3 high T flattens", max_hiT < max_vec(sm1))
+
+// ── T4 very high T approaches uniform ──────────────────────
+let K4 = 3
+let uni_gap = fabs_(max_hiT - 1.0 / to_float(K4))
+check("T4 high T ~ uniform", uni_gap < 0.05)
+
+// ── T5 label smoothing sums to 1 ───────────────────────────
+let ls5 = md_label_smooth(1, 4, 0.1)
+check("T5 label smooth sums to 1", approx_(sum_vec(ls5), 1.0, 1.0e-6))
+
+// ── T6 label smoothing assigns mass to non-target ──────────
+check("T6 non-target > 0", ls5[0] > 0.0)
+check("T6 target biggest", ls5[1] > ls5[0])
+
+// ── T7 output gauss sums to 1 ──────────────────────────────
+let p_in = [0.7, 0.2, 0.1]
+let og7 = md_output_gauss(p_in, 0.05, 42)
+check("T7 output_gauss sums to 1", approx_(sum_vec(og7), 1.0, 1.0e-4))
+
+// ── T8 top-k masking flattens tail ─────────────────────────
+let cm8 = md_confidence_mask([0.7, 0.15, 0.1, 0.05], 1)
+check("T8 top-k sums to 1", approx_(sum_vec(cm8), 1.0, 1.0e-4))
+check("T8 top-k reduces max", cm8[0] <= 0.7 + 1.0e-4)
+
+// ── T9 mem_guard caps max ──────────────────────────────────
+let mg9 = md_mem_guard([0.95, 0.03, 0.02], 0.8)
+check("T9 max ≤ tau", max_vec(mg9) <= 0.8 + 1.0e-6)
+check("T9 mg sums to 1", approx_(sum_vec(mg9), 1.0, 1.0e-6))
+
+// ── T10 mem_guard passthrough when under tau ──────────────
+let mg10 = md_mem_guard([0.6, 0.3, 0.1], 0.9)
+check("T10 passthrough", approx_(mg10[0], 0.6, 1.0e-6))
+
+// ── T11 attack_predict basic ───────────────────────────────
+check("T11 member -> yes", md_attack_predict([0.95, 0.05], 0.8))
+check("T11 low-conf -> no", md_attack_predict([0.55, 0.45], 0.8) == false)
+
+// ── T12 attack accuracy drops with defense ────────────────
+// Members (high conf), non-members (lower conf)
+let Pm = [[0.95, 0.05], [0.92, 0.08], [0.97, 0.03]]
+let Pn = [[0.6, 0.4], [0.65, 0.35], [0.55, 0.45]]
+let acc_base = md_attack_accuracy(Pm, Pn, 0.8)
+// apply mem_guard defense to members
+let mut Pm_def = []
+let mut i = 0
+
+while i < 3 { Pm_def = Pm_def + [md_mem_guard(Pm[i], 0.7)] }
+let acc_def = md_attack_accuracy(Pm_def, Pn, 0.8)
+check("T12 attack acc base high", acc_base >= 0.8)
+check("T12 defense lowers acc", acc_def < acc_base)
+
+// ── T13 apply_defense dispatch ────────────────────────────
+let def13 = md_apply_defense([0.9, 0.05, 0.05], "memguard", 0.7, 1)
+check("T13 dispatch memguard", max_vec(def13) <= 0.7 + 1.0e-6)
+
+// ── T14 apply_defense temp dispatch ────────────────────────
+let def14 = md_apply_defense([0.8, 0.1, 0.1], "temp", 10.0, 1)
+check("T14 dispatch temp flattens", max_vec(def14) < 0.8)
+
+println("")
+println("=== Membership Defense summary ===")
+println("PASS: " + str(pass_count))
+println("FAIL: " + str(fail_count))
+println("TOTAL: " + str(pass_count + fail_count))

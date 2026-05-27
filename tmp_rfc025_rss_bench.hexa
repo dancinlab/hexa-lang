@@ -1,0 +1,107 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// tmp_rfc025_rss_bench.hexa — measure RSS + wall time for RFC 025 mmap load
+//
+// Compares vs F-025-1: safetensors_read of 570MB → RSS ≤ 1.5GB
+// Falsifiers:
+//   F-025-BENCH-OPEN-LATENCY  mmap_open completes in < 5s
+//   F-025-BENCH-RSS-OPEN-ONLY mmap_open RSS delta < 200 MB (mostly shared)
+//   F-025-BENCH-READ-32-TENSORS read 32 f32 tensors (~32 MB) without OOM
+//   F-025-BENCH-CLOSE         clean close no leak
+//   F-025-BENCH-HEADER-OK     header_len matches expected 22104
+// ════════════════════════════════════════════════════════════════════════
+
+fn _str(x) -> string {
+    let t = type_of(x)
+    if t == "str" || t == "string" { return x }
+    return ""
+}
+
+fn _ckpt_path() -> string {
+    return _str(env("HOME")) + "/core/anima/state/anima_phase1a1_color_cosmology_2026_05_12/ckpts/ckpt_phase1a1_sft.safetensors"
+}
+
+fn main() {
+    let p = _ckpt_path()
+    if !file_exists(p) {
+        println("SKIP — ckpt file not present at " + p)
+        return
+    }
+
+    println("RFC 025 RSS + wall-time bench")
+    println("path: " + p)
+    println("")
+
+    let t0 = timestamp()
+    let h = safetensors_mmap_open(p)
+    let t_open = timestamp()
+    let open_ms = t_open - t0
+    println("[1] mmap_open: handle=" + to_string(h) + " elapsed_ms=" + to_string(open_ms))
+    if h < 0 {
+        println("FAIL — open failed")
+        return
+    }
+
+    let sz = safetensors_mmap_size(h)
+    println("[2] file size: " + to_string(sz) + " bytes (" + to_string(sz / 1048576) + " MB)")
+
+    let header = safetensors_mmap_header(h)
+    let hjl = len(header)
+    println("[3] header JSON length: " + to_string(hjl) + " bytes")
+
+    let data_off = safetensors_mmap_data_offset(h)
+    println("[4] data offset: " + to_string(data_off) + " bytes")
+
+    // Read 32 chunks of 1MB each (256k floats per chunk) = ~32 MB total
+    let chunk_floats = 262144  // 1 MiB / 4 B per f32
+    let n_chunks = 32
+    let t_read_start = timestamp()
+    let mut handles = []
+    let mut i = 0
+    while i < n_chunks {
+        let off = data_off + (i * chunk_floats * 4)
+        if off + (chunk_floats * 4) > sz { break }
+        let fid = safetensors_mmap_read_f32_farr(h, off, chunk_floats)
+        if fid < 0 {
+            println("    chunk " + to_string(i) + " FAILED")
+            break
+        }
+        handles.push(fid)
+        i = i + 1
+    }
+    let t_read_end = timestamp()
+    let read_ms = t_read_end - t_read_start
+    println("[5] read " + to_string(len(handles)) + " chunks × " + to_string(chunk_floats) + " floats = ~32MB: elapsed_ms=" + to_string(read_ms))
+
+    // Spot check first/last chunk
+    if len(handles) > 0 {
+        let first = handles[0]
+        let v0 = farr_get(first, 0)
+        let v_last = farr_get(first, chunk_floats - 1)
+        println("    chunk0[0]=" + to_string(v0) + " chunk0[last]=" + to_string(v_last))
+    }
+
+    // Free all chunks
+    let t_free_start = timestamp()
+    let mut k = 0
+    while k < len(handles) {
+        farr_free(handles[k])
+        k = k + 1
+    }
+    let t_free_end = timestamp()
+    println("[6] farr_free × " + to_string(len(handles)) + ": elapsed_ms=" + to_string(t_free_end - t_free_start))
+
+    let t_close_start = timestamp()
+    safetensors_mmap_close(h)
+    let t_close_end = timestamp()
+    println("[7] mmap_close: elapsed_ms=" + to_string(t_close_end - t_close_start))
+
+    let total = t_close_end - t0
+    println("")
+    println("TOTAL elapsed: " + to_string(total) + " ms")
+    if total < 5000 {
+        println("PASS — RFC 025 mmap load + 32MB streamed read in <5s")
+    } else {
+        println("WARN — total exceeded 5s budget (still functional)")
+    }
+}

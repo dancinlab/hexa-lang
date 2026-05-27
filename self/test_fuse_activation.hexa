@@ -1,0 +1,573 @@
+// ═══════════════════════════════════════════════════════════════════
+//  test_fuse_activation.hexa — ROI #89 correctness suite
+//
+//  Verifies self/ai_native/fuse_activation.hexa:
+//      - ReLU fused ≡ ReLU(gemm_naive)                   within 1e-5
+//      - GELU fused ≡ GELU(gemm_naive)                   within 1e-4
+//      - SiLU fused ≡ SiLU(gemm_naive)                   within 1e-4
+//      - shapes: 4x4 (square), 8x16 (wide), 16x8 (tall)
+//      - inputs cover negative / zero / positive regimes so the
+//        activation non-linearity is actually exercised
+//      - ReLU kills negatives     (saturating behaviour)
+//      - GELU(0) == 0,  GELU(large) ≈ large
+//      - SiLU(0) == 0,  SiLU(large) ≈ large
+//      - allocation accounting:  fused = 1,  naive = 2
+// ═══════════════════════════════════════════════════════════════════
+
+// -- inlined from self/ai_native/fuse_activation.hexa --
+// codegen import not wired for test files
+
+// ═══════════════════════════════════════════════════════════════════
+//  self/ai_native/fuse_activation.hexa — AI-native ROI #89
+//
+//  @fuse_activation — GEMM + pointwise activation fusion.
+//
+//  Motivation:
+//      Transformer FFN blocks evaluate  act(X · W + b)  every forward
+//      step. The unfused schedule writes a full intermediate matrix
+//      C = X·W  to memory, reads it back, applies the activation,
+//      and writes the result — one full N·M tensor round-trip per
+//      activation. With fusion the activation runs inside the GEMM
+//      inner loop on the value already resident in a register, so
+//      the intermediate never materialises. Net win: memory round
+//      trips 1 → 0, intermediate allocation 1 → 0.
+//
+//  Public API (row-major 2D arrays — A, B, C: [[float]]):
+//      gemm_naive(A, B)                  -> C      (baseline)
+//      activate_relu(C)                  -> C'     (baseline)
+//      activate_gelu(C)                  -> C'     (baseline, tanh approx)
+//      activate_silu(C)                  -> C'     (baseline)
+//      gemm_relu_fused(A, B)             -> max(0, A·B)               (fused)
+//      gemm_gelu_fused(A, B)             -> GELU(A·B)                 (fused)
+//      gemm_silu_fused(A, B)             -> SiLU(A·B)                 (fused)
+//      fused_alloc_count()               -> 1      (one C output)
+//      naive_alloc_count()               -> 2      (GEMM out + act out)
+//
+//  Numerical contract:
+//      fused(A, B) == activate(gemm_naive(A, B))   within
+//          1e-5  for ReLU          (exact pointwise identity)
+//          1e-4  for GELU/SiLU     (transcendental floating error)
+//
+//  Allocation contract:
+//      Naive path allocates  GEMM-out  then  activation-out   = 2 mats
+//      Fused path allocates  exactly one output matrix         = 1 mat
+//      (both helpers exported for tests / bench accounting.)
+//
+//  GELU approximation (no libm erf in hexa runtime):
+//      GELU(x) ≈ 0.5·x·(1 + tanh( √(2/π) · (x + 0.044715·x³) ))
+//      Matches the "tanh GELU" used by GPT-2 / LLaMA-style FFNs.
+//      Maximum error vs exact-erf GELU is ~1e-4 on typical input
+//      ranges — comfortably within the 1e-4 tolerance.
+//
+//  SiLU (a.k.a. Swish-1):
+//      SiLU(x) = x · sigmoid(x) = x / (1 + exp(-x))
+//      Sigmoid input is clamped to [-40, 40] so that exp stays finite
+//      in the hexa float interpreter.
+//
+//  Grammar cautions (HX3 pitfalls):
+//      - slice precedence: arr[(i+1)..j] — parens required
+//      - no bit-ops (<<, >>, |) — arithmetic only
+//      - no struct literal in `if` heads
+//      - `and`/`or` → `&&`/`||`
+//      - `@attr pub fn` unsupported → use `@attr fn _impl` + `pub fn` forwarder
+//      - no `enum` — activation kind is picked at call site via fn name
+//      - abs → use abs_pure from math_pure.hexa
+//
+//  AI-native attrs:
+//      @hot      — FFN activation GEMMs are in the hot path
+//      @parallel — outer row loop is embarrassingly parallel
+//      @pure     — no side effects beyond returned C
+// ═══════════════════════════════════════════════════════════════════
+
+// ── helpers ────────────────────────────────────────────────────────
+
+fn fa89_zeros_2d(r, c) {
+    let mut m = []
+    let mut _i = 0
+
+    while _i < r {
+        let mut row = []
+        let mut _j = 0
+
+        while _j < c {
+            row = row + [0.0]
+        }
+        m = m + [row]
+    }
+    return m
+}
+
+// fa89_fabs → abs_pure (math_pure.hexa)
+
+// ── pointwise activations ──────────────────────────────────────────
+
+fn fa89_relu_scalar(x) {
+    if x < 0.0 { return 0.0 }
+    return x
+}
+
+// tanh-GELU (GPT-2 / LLaMA):
+//   0.5 · x · (1 + tanh( sqrt(2/π) · (x + 0.044715 · x³) ))
+// Constant √(2/π) ≈ 0.7978845608028654.
+fn fa89_gelu_scalar(x) {
+    let k = 0.7978845608028654
+    let x3 = x * x * x
+    let inner = k * (x + 0.044715 * x3)
+    return 0.5 * x * (1.0 + tanh(inner))
+}
+
+// Sigmoid, numerically safe — clamp input to [-40, 40].
+fn fa89_sigmoid_scalar(x) {
+    let mut c = x
+    if c >  40.0 { c =  40.0 }
+    if c < -40.0 { c = -40.0 }
+    return 1.0 / (1.0 + exp(0.0 - c))
+}
+
+// SiLU(x) = x · sigmoid(x)
+fn fa89_silu_scalar(x) {
+    return x * fa89_sigmoid_scalar(x)
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Baseline — unfused GEMM followed by a map over the output.
+//  Each stage allocates its own matrix. naive_alloc_count = 2.
+// ═══════════════════════════════════════════════════════════════════
+
+@hot
+fn gemm_naive(A, B) {
+    let M = len(A)
+    let K = len(A[0])
+    let N = len(B[0])
+
+    let mut C = fa89_zeros_2d(M, N)
+
+    let mut i = 0
+
+
+    while i < M {
+        let mut k = 0
+
+        while k < K {
+            let a = A[i][k]
+            let mut j = 0
+
+            while j < N {
+                C[i][j] = C[i][j] + a * B[k][j]
+            }
+        }
+    }
+    return C
+}
+
+fn activate_relu(C) {
+    let M = len(C)
+    let N = len(C[0])
+    let mut O = fa89_zeros_2d(M, N)
+    let mut i = 0
+
+    while i < M {
+        let mut j = 0
+
+        while j < N {
+            O[i][j] = fa89_relu_scalar(C[i][j])
+        }
+    }
+    return O
+}
+
+fn activate_gelu(C) {
+    let M = len(C)
+    let N = len(C[0])
+    let mut O = fa89_zeros_2d(M, N)
+    let mut i = 0
+
+    while i < M {
+        let mut j = 0
+
+        while j < N {
+            O[i][j] = fa89_gelu_scalar(C[i][j])
+        }
+    }
+    return O
+}
+
+fn activate_silu(C) {
+    let M = len(C)
+    let N = len(C[0])
+    let mut O = fa89_zeros_2d(M, N)
+    let mut i = 0
+
+    while i < M {
+        let mut j = 0
+
+        while j < N {
+            O[i][j] = fa89_silu_scalar(C[i][j])
+        }
+    }
+    return O
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Fused kernels — compute one GEMM cell to completion, apply the
+//  activation to the in-register accumulator, write-once to C[i][j].
+//
+//  Loop order (i, j, k): the (k) reduction is innermost so that the
+//  scalar accumulator `acc` sees the full dot-product before any
+//  activation is applied. This diverges from the (i, k, j) order of
+//  gemm_naive because fusion needs the completed cell, not a running
+//  partial sum streamed across j.
+//
+//  Allocation budget: exactly ONE matrix (the returned C).
+// ═══════════════════════════════════════════════════════════════════
+
+@hot @parallel
+fn gemm_relu_fused(A, B) {
+    let M = len(A)
+    let K = len(A[0])
+    let N = len(B[0])
+
+    let mut C = fa89_zeros_2d(M, N)
+
+    let mut i = 0
+
+
+    while i < M {
+        let mut j = 0
+
+        while j < N {
+            let mut acc = 0.0
+            let mut k = 0
+
+            while k < K {
+                acc = acc + A[i][k] * B[k][j]
+            }
+            C[i][j] = fa89_relu_scalar(acc)
+        }
+    }
+    return C
+}
+
+@hot @parallel
+fn gemm_gelu_fused(A, B) {
+    let M = len(A)
+    let K = len(A[0])
+    let N = len(B[0])
+
+    let mut C = fa89_zeros_2d(M, N)
+
+    let mut i = 0
+
+
+    while i < M {
+        let mut j = 0
+
+        while j < N {
+            let mut acc = 0.0
+            let mut k = 0
+
+            while k < K {
+                acc = acc + A[i][k] * B[k][j]
+            }
+            C[i][j] = fa89_gelu_scalar(acc)
+        }
+    }
+    return C
+}
+
+@hot @parallel
+fn gemm_silu_fused(A, B) {
+    let M = len(A)
+    let K = len(A[0])
+    let N = len(B[0])
+
+    let mut C = fa89_zeros_2d(M, N)
+
+    let mut i = 0
+
+
+    while i < M {
+        let mut j = 0
+
+        while j < N {
+            let mut acc = 0.0
+            let mut k = 0
+
+            while k < K {
+                acc = acc + A[i][k] * B[k][j]
+            }
+            C[i][j] = fa89_silu_scalar(acc)
+        }
+    }
+    return C
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Allocation accounting (for tests / bench reporting).
+//  naive path:  GEMM out (1)  +  activation out (1)  = 2
+//  fused path:  fused out (1)                        = 1
+// ═══════════════════════════════════════════════════════════════════
+
+pub fn naive_alloc_count() {
+    return 2
+}
+
+pub fn fused_alloc_count() {
+    return 1
+}
+
+
+// -- end inlined --
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn check(name, cond) {
+    if cond {
+        println("[PASS] " + name)
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name)
+        fail_count = fail_count + 1
+    }
+}
+
+fn fabs_local(x) {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn mat_close(A, B, eps) {
+    let rows = len(A)
+    if len(B) != rows { return false }
+    let mut i = 0
+
+    while i < rows {
+        let cols = len(A[i])
+        if len(B[i]) != cols { return false }
+        let mut j = 0
+
+        while j < cols {
+            if fabs_local(A[i][j] - B[i][j]) > eps { return false }
+        }
+    }
+    return true
+}
+
+// Check that every cell of `C` is ≥ 0 — used to confirm ReLU
+// actually erased every negative activation in the fused path.
+fn all_nonneg(C) {
+    let rows = len(C)
+    let mut i = 0
+
+    while i < rows {
+        let cols = len(C[i])
+        let mut j = 0
+
+        while j < cols {
+            if C[i][j] < 0.0 { return false }
+        }
+    }
+    return true
+}
+
+// Count cells equal to 0.0 — after ReLU on a signed input matrix
+// we expect at least a few zeros.
+fn count_zeros(C) {
+    let mut n = 0
+    let rows = len(C)
+    let mut i = 0
+
+    while i < rows {
+        let cols = len(C[i])
+        let mut j = 0
+
+        while j < cols {
+            if C[i][j] == 0.0 { n = n + 1 }
+        }
+    }
+    return n
+}
+
+// LCG for deterministic, signed, zero-mean-ish random matrices
+fn lcg_step(state) {
+    let a = 1103515245
+    let c = 12345
+    let m = 2147483648
+    return (state * a + c) % m
+}
+
+// Signed float in [-0.5, 0.5] — forces negative / positive / near-zero
+// inputs so GEMM outputs span all three activation regimes.
+fn rand_matrix(rows, cols, seed) {
+    let mut state = seed
+    let mut M = []
+    let mut _i = 0
+
+    while _i < rows {
+        let mut row = []
+        let mut _j = 0
+
+        while _j < cols {
+            state = lcg_step(state)
+            let r = (state % 1000) * 0.001 - 0.5
+            row = row + [r]
+        }
+        M = M + [row]
+    }
+    return M
+}
+
+// ══════════════════════════════════════════════════════════════════
+println("═══════════════════════════════════════════════════════")
+println("  ROI #89 @fuse_activation GEMM+act fusion — correctness")
+println("═══════════════════════════════════════════════════════")
+
+let eps_relu = 1.0e-5
+let eps_trans = 1.0e-4
+
+// ── Test A : pointwise corner cases (shape 1x1) ─────────────────
+// ReLU(±) / GELU(0) / GELU(large) / SiLU(0) / SiLU(large)
+
+// [[-2]] · [[1]]  → gemm = -2, relu = 0
+let Aneg = [[0.0 - 2.0]]
+let Bpos = [[1.0]]
+let r1 = gemm_relu_fused(Aneg, Bpos)
+check("1x1 ReLU(-2) == 0",               fabs_local(r1[0][0]) < eps_relu)
+
+// [[3]] · [[2]]   → gemm = 6, relu = 6
+let A3 = [[3.0]]
+let B2 = [[2.0]]
+let r2 = gemm_relu_fused(A3, B2)
+check("1x1 ReLU(6)  == 6",               fabs_local(r1[0][0] - 0.0) < eps_relu)
+check("1x1 ReLU(+)  preserves value",    fabs_local(r2[0][0] - 6.0) < eps_relu)
+
+// [[0]] · [[0]]   → gemm = 0, gelu = 0, silu = 0
+let Azero = [[0.0]]
+let Bzero = [[0.0]]
+let g0 = gemm_gelu_fused(Azero, Bzero)
+let s0 = gemm_silu_fused(Azero, Bzero)
+check("1x1 GELU(0) == 0",                fabs_local(g0[0][0]) < eps_trans)
+check("1x1 SiLU(0) == 0",                fabs_local(s0[0][0]) < eps_trans)
+
+// [[5]] · [[2]]   → gemm = 10, GELU(10) ≈ 10, SiLU(10) ≈ 10
+let A5 = [[5.0]]
+let gL = gemm_gelu_fused(A5, B2)
+let sL = gemm_silu_fused(A5, B2)
+// GELU(10): 0.5·10·(1 + tanh(very_large)) ≈ 10
+check("1x1 GELU(10) ≈ 10",               fabs_local(gL[0][0] - 10.0) < 1.0e-3)
+// SiLU(10) = 10 · sigmoid(10) ≈ 10 · 0.9999546 ≈ 9.99955
+check("1x1 SiLU(10) ≈ 10",               fabs_local(sL[0][0] - 10.0) < 1.0e-3)
+
+// ── Test B : 4x4 square — fused vs naive for all three acts ─────
+let A4 = rand_matrix(4, 4, 17)
+let B4 = rand_matrix(4, 4, 29)
+let gemm4 = gemm_naive(A4, B4)
+let ref_relu4 = activate_relu(gemm4)
+let ref_gelu4 = activate_gelu(gemm4)
+let ref_silu4 = activate_silu(gemm4)
+let fu_relu4  = gemm_relu_fused(A4, B4)
+let fu_gelu4  = gemm_gelu_fused(A4, B4)
+let fu_silu4  = gemm_silu_fused(A4, B4)
+check("4x4 ReLU fused == naive",          mat_close(fu_relu4, ref_relu4, eps_relu))
+check("4x4 GELU fused == naive",          mat_close(fu_gelu4, ref_gelu4, eps_trans))
+check("4x4 SiLU fused == naive",          mat_close(fu_silu4, ref_silu4, eps_trans))
+check("4x4 ReLU output is non-negative",  all_nonneg(fu_relu4))
+check("4x4 ReLU erased some negatives",   count_zeros(fu_relu4) > 0)
+
+// ── Test C : 8x16 wide — fused vs naive for all three acts ──────
+// A: 8x12, B: 12x16, C: 8x16
+let A8  = rand_matrix(8, 12, 101)
+let B16 = rand_matrix(12, 16, 103)
+let gemm816 = gemm_naive(A8, B16)
+let ref_relu816 = activate_relu(gemm816)
+let ref_gelu816 = activate_gelu(gemm816)
+let ref_silu816 = activate_silu(gemm816)
+let fu_relu816  = gemm_relu_fused(A8, B16)
+let fu_gelu816  = gemm_gelu_fused(A8, B16)
+let fu_silu816  = gemm_silu_fused(A8, B16)
+check("8x16 ReLU fused == naive",         mat_close(fu_relu816, ref_relu816, eps_relu))
+check("8x16 GELU fused == naive",         mat_close(fu_gelu816, ref_gelu816, eps_trans))
+check("8x16 SiLU fused == naive",         mat_close(fu_silu816, ref_silu816, eps_trans))
+check("8x16 ReLU output is non-negative", all_nonneg(fu_relu816))
+check("8x16 ReLU erased some negatives",  count_zeros(fu_relu816) > 0)
+check("8x16 shape rows == 8",             len(fu_relu816) == 8)
+check("8x16 shape cols == 16",            len(fu_relu816[0]) == 16)
+
+// ── Test D : 16x8 tall — fused vs naive for all three acts ──────
+// A: 16x10, B: 10x8, C: 16x8
+let A16t = rand_matrix(16, 10, 211)
+let B8t  = rand_matrix(10, 8, 233)
+let gemm168 = gemm_naive(A16t, B8t)
+let ref_relu168 = activate_relu(gemm168)
+let ref_gelu168 = activate_gelu(gemm168)
+let ref_silu168 = activate_silu(gemm168)
+let fu_relu168  = gemm_relu_fused(A16t, B8t)
+let fu_gelu168  = gemm_gelu_fused(A16t, B8t)
+let fu_silu168  = gemm_silu_fused(A16t, B8t)
+check("16x8 ReLU fused == naive",         mat_close(fu_relu168, ref_relu168, eps_relu))
+check("16x8 GELU fused == naive",         mat_close(fu_gelu168, ref_gelu168, eps_trans))
+check("16x8 SiLU fused == naive",         mat_close(fu_silu168, ref_silu168, eps_trans))
+check("16x8 ReLU output is non-negative", all_nonneg(fu_relu168))
+check("16x8 ReLU erased some negatives",  count_zeros(fu_relu168) > 0)
+check("16x8 shape rows == 16",            len(fu_relu168) == 16)
+check("16x8 shape cols == 8",             len(fu_relu168[0]) == 8)
+
+// ── Test E : allocation accounting ──────────────────────────────
+check("fused_alloc_count == 1",           fused_alloc_count() == 1)
+check("naive_alloc_count == 2",           naive_alloc_count() == 2)
+check("fused eliminates 1 round trip",    naive_alloc_count() - fused_alloc_count() == 1)
+
+// ── Test F : GELU / SiLU sanity on larger input range ───────────
+// A matrix whose rows sum to ±large so GEMM output spans the full
+// activation curve, not just the near-zero regime.
+let Abig = [
+    [1.0, 2.0, 3.0, 4.0],
+    [0.0 - 1.0, 0.0 - 2.0, 0.0 - 3.0, 0.0 - 4.0],
+    [0.5, 0.5, 0.5, 0.5],
+    [0.0, 0.0, 0.0, 0.0]
+]
+let Bbig = [
+    [1.0, 1.0, 1.0, 1.0],
+    [1.0, 1.0, 1.0, 1.0],
+    [1.0, 1.0, 1.0, 1.0],
+    [1.0, 1.0, 1.0, 1.0]
+]
+// C[0] = 10, C[1] = -10, C[2] = 2, C[3] = 0   for every column
+let gBig = gemm_naive(Abig, Bbig)
+check("big GEMM row0 col0 == 10",         fabs_local(gBig[0][0] - 10.0)  < eps_relu)
+check("big GEMM row1 col0 == -10",        fabs_local(gBig[1][0] + 10.0)  < eps_relu)
+check("big GEMM row3 col0 == 0",          fabs_local(gBig[3][0])         < eps_relu)
+
+let rBig = gemm_relu_fused(Abig, Bbig)
+check("big ReLU row0 col0 == 10",         fabs_local(rBig[0][0] - 10.0)  < eps_relu)
+check("big ReLU row1 col0 == 0   (negs killed)",  fabs_local(rBig[1][0]) < eps_relu)
+check("big ReLU row3 col0 == 0",          fabs_local(rBig[3][0])         < eps_relu)
+
+let gBigG = gemm_gelu_fused(Abig, Bbig)
+check("big GELU row0 col0 ≈ 10",          fabs_local(gBigG[0][0] - 10.0) < 1.0e-3)
+check("big GELU row1 col0 ≈ 0  (saturates)", fabs_local(gBigG[1][0])     < 1.0e-3)
+check("big GELU row3 col0 == 0",          fabs_local(gBigG[3][0])        < eps_trans)
+
+let sBig = gemm_silu_fused(Abig, Bbig)
+check("big SiLU row0 col0 ≈ 10",          fabs_local(sBig[0][0] - 10.0)  < 1.0e-3)
+check("big SiLU row1 col0 ≈ 0  (saturates)", fabs_local(sBig[1][0])      < 1.0e-3)
+check("big SiLU row3 col0 == 0",          fabs_local(sBig[3][0])         < eps_trans)
+
+// Cross-check: fused ≡ activate ∘ naive  on this hand-built matrix
+let refBigR = activate_relu(gBig)
+let refBigG = activate_gelu(gBig)
+let refBigS = activate_silu(gBig)
+check("big ReLU fused == naive",          mat_close(rBig,  refBigR, eps_relu))
+check("big GELU fused == naive",          mat_close(gBigG, refBigG, eps_trans))
+check("big SiLU fused == naive",          mat_close(sBig,  refBigS, eps_trans))
+
+// ══════════════════════════════════════════════════════════════════
+println("")
+println("pass=" + to_string(pass_count) + " fail=" + to_string(fail_count))
+if fail_count == 0 {
+    println("ALL PASS")
+} else {
+    println("FAILED")
+}
+println(to_string(pass_count) + " passed")

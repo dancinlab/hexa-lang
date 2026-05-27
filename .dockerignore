@@ -1,0 +1,30 @@
+# Docker build context filter for hexa-lang.
+# The runner image only needs:
+#   - build/hexa_linux_<arch>           (CLI dispatcher, arm64 + x86_64)
+#   - build/hexa_interp_linux_<arch>    (stage0/interp, arm64 + x86_64)
+# Everything else just bloats the upload to the buildx daemon.
+
+# Default: ignore everything…
+*
+
+# …then re-include the precise paths the Dockerfile COPY'es.
+!build/hexa_linux_arm64
+!build/hexa_linux_x86_64
+!build/hexa_interp_linux_arm64
+!build/hexa_interp_linux_x86_64
+!docker/
+# 2026-04-26: bake module_loader + stdlib so bind-mount-less containers
+# can resolve `use "stdlib/X"` (module-loader fail-loud gap closure).
+!self/
+!self/module_loader.hexa
+!self/stdlib/
+!self/stdlib/**
+# 2026-04-26 ω-runner-7: include native_gate.c so the builder stage can
+# compile native_gate.so and bake LD_PRELOAD into the runtime image
+# (OS-level enforce; macOS host stays advisory due to SIP, Linux
+# container is the actual enforcer per Mac→docker hard-landing policy).
+!self/native/
+!self/native/native_gate.c
+
+# Keep .git out — multi-MB and never needed by the runner image.
+.git/

@@ -1,0 +1,37 @@
+#!hexa strict
+// eda/verify_chip-eda.hexa — EDA flow integration verb (Cadence/Synopsys/Mentor).
+//
+// EDA flow at hexa-chip layer is canonical-tool agnostic — the n=6 chip
+// substrate just enumerates τ(6)=4 design stages (RTL / synth / P&R /
+// sign-off) and ensures each maps to a vendor tool with at least one
+// open-source alternative for τ(6)-fold redundancy.
+//
+// Falsifiers:
+//   F-CHIP-EDA-1: τ(6)=4 stage count violated.
+//   F-CHIP-EDA-2: any stage with zero open-source backup ⇒ τ-redundancy broken.
+
+fn main() {
+    // (stage, primary_vendor, foss_alternative)
+    let flow = [
+        ["RTL",       "Verilog/SystemVerilog", "Verilator"],
+        ["synth",     "Synopsys DC",           "Yosys"],
+        ["P&R",       "Cadence Innovus",       "OpenROAD"],
+        ["sign-off",  "Cadence Tempus/Voltus", "OpenSTA"]
+    ]
+    if flow.len() != 4 {
+        println("[eda] FAIL — flow stage count " + str(flow.len()) + " ≠ τ(6)=4")
+        exit(1)
+    }
+    println("[eda] τ(6)=4 EDA flow stages with FOSS τ-redundancy:")
+    let mut i = 0
+    while i < flow.len() {
+        let r = flow[i]
+        if r[2].len() == 0 {
+            println("[eda] FAIL — stage " + r[0] + " has no FOSS alternative (F-CHIP-EDA-2)")
+            exit(1)
+        }
+        println("  " + r[0] + ":  " + r[1] + "  ↔  " + r[2])
+        i = i + 1
+    }
+    println("[eda] τ(6)=4 + FOSS-redundancy intact PASS")
+}

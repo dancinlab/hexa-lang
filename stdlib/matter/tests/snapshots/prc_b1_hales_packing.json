@@ -1,0 +1,28 @@
+{
+  "__fixture_tag__": "VENDORED SOURCE SNAPSHOT — frozen citation, not live data",
+  "gate_id": "prc_b1_hales_packing",
+  "claim": {
+    "property": "FCC / HCP atomic packing fraction (Kepler conjecture, proved)",
+    "system": "infinite arrangement of identical hard spheres in R^3",
+    "value": 0.7405,
+    "exact_formula": "pi / (3 * sqrt(2))",
+    "unit": "dimensionless (volume fraction)",
+    "condition": "monodisperse spheres; lattice closest-packing FCC ≡ HCP at this density"
+  },
+  "source": {
+    "kind": "FORMAL_PROOF",
+    "primary": "Hales T.C., 'A proof of the Kepler conjecture', Annals of Mathematics 162 (2005) 1065-1185",
+    "completion": "Hales T.C. et al. (2017) 'A Formal Proof of the Kepler Conjecture', Forum Math. Pi 5, e2 — fully machine-verified",
+    "citation": "Hales 2005 + Hales et al. 2017 formal proof — FCC/HCP packing density = pi / (3*sqrt(2)) ≈ 0.7405"
+  },
+  "tolerance": {
+    "abs": 0.0005,
+    "basis": "exact value 0.74048... rounded to 4 sig figs; 0.7405 last-digit precision"
+  },
+  "spec_doc": {
+    "path": "LIMIT_BREAKTHROUGH.md",
+    "line_hint": "L11 row 'Atomic packing fraction | Physical / HARD | FCC/HCP: 0.7405 (Kepler conjecture, Hales 2017)'"
+  },
+  "accessed": "2026-05-13",
+  "n6_lattice_fit_applied": false
+}

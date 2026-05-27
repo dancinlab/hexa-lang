@@ -1,0 +1,88 @@
+#!hexa strict
+// hexa-millennium/verify/lattice_arithmetic.hexa — n=6 lattice self-consistency.
+//
+// Per LATTICE_POLICY.md §1.3 rule 1, lattice arithmetic (σ·φ = n·τ = 24,
+// 1/2 + 1/3 + 1/6 = 1) is permitted ONLY as an aux self-consistency check —
+// it must NEVER stand alone as verification, must NEVER be applied to
+// external entities (e.g. Clay Mathematics Institute, Perelman, Fields
+// medallists), and must be paired with at least one real-limits anchor
+// (see real_limits_anchor.hexa).
+//
+// This script: native-lattice arithmetic identities only. Pass iff arithmetic
+// holds. NO external-domain claims. NO claim that any Clay Millennium
+// Problem has been solved by this repo.
+
+fn _assert(label: str, cond: bool, mut ok: int, mut bad: int) -> [int] {
+    if cond {
+        println("  [PASS] " + label)
+        return [ok + 1, bad]
+    }
+    println("  [FAIL] " + label)
+    return [ok, bad + 1]
+}
+
+fn main() {
+    println("hexa-millennium/verify/lattice_arithmetic — n=6 self-consistency (aux only)")
+    println("")
+    println("  scope: native-lattice arithmetic identities ONLY")
+    println("  policy: LATTICE_POLICY §1.3 rule 1 — aux check; never sole verification")
+    println("  policy: LATTICE_POLICY §1.3 rule 4 — NEVER applied to external entities")
+    println("          use THEIR OWN proofs; no lattice-fit imposed on their work.")
+    println("")
+
+    let n = 6
+    let sigma = 12   // σ(6) — sum of divisors {1,2,3,6}
+    let tau = 4      // τ(6) — number of divisors
+    let phi = 2      // φ(6) — Euler totient {1,5}
+    let sopfr = 5    // sopfr(6) = 2 + 3 (sum of prime factors with multiplicity)
+    let j2 = 24      // Jordan totient J₂(6) = σ·φ = n·τ
+
+    let mut ok = 0
+    let mut bad = 0
+
+    // σ·φ = 24
+    let r1 = _assert("σ(6)·φ(6) = 24  (12·2 = 24)", sigma * phi == 24, ok, bad)
+    ok = r1[0]; bad = r1[1]
+
+    // n·τ = 24
+    let r2 = _assert("n·τ(6) = 24      (6·4 = 24)", n * tau == 24, ok, bad)
+    ok = r2[0]; bad = r2[1]
+
+    // J₂(6) = σ·φ = n·τ
+    let r3 = _assert("J₂(6) = σ·φ = n·τ (24 = 24 = 24)", j2 == sigma * phi && j2 == n * tau, ok, bad)
+    ok = r3[0]; bad = r3[1]
+
+    // Divisor identity 1/2 + 1/3 + 1/6 = 1 (in integers: 3 + 2 + 1 = 6)
+    let r4 = _assert("1/2 + 1/3 + 1/6 = 1 (3+2+1 = 6)", 3 + 2 + 1 == 6, ok, bad)
+    ok = r4[0]; bad = r4[1]
+
+    // τ(6) divisor count: {1,2,3,6} has 4 elements
+    let r5 = _assert("τ(6) = |{1,2,3,6}| = 4", tau == 4, ok, bad)
+    ok = r5[0]; bad = r5[1]
+
+    // 6 is the smallest perfect number: σ(6) = 2·6 = 12
+    let r6 = _assert("6 perfect: σ(6) = 2·n (12 = 12)", sigma == 2 * n, ok, bad)
+    ok = r6[0]; bad = r6[1]
+
+    // sopfr(6) = 5 (2 + 3)
+    let r7 = _assert("sopfr(6) = 2 + 3 = 5", sopfr == 5, ok, bad)
+    ok = r7[0]; bad = r7[1]
+
+    // Yang-Mills β₀ candidate organising principle: β₀ = σ − sopfr = 7
+    // (NOT a claim that this constitutes a proof of the mass gap — it is
+    //  the n=6 organising-principle integer used by the yang_mills spec.)
+    let beta0 = sigma - sopfr
+    let r8 = _assert("β₀ organising-integer = σ − sopfr = 7 (yang_mills spec input)", beta0 == 7, ok, bad)
+    ok = r8[0]; bad = r8[1]
+
+    println("")
+    println("  passed: " + str(ok) + "  failed: " + str(bad))
+    println("  NOTE: lattice arithmetic alone is INSUFFICIENT verification of any")
+    println("        Clay Millennium Problem candidate. See real_limits_anchor.hexa")
+    println("        for HARD walls (Gödel incompleteness, Clay 2-yr review, etc.).")
+    if bad > 0 {
+        println("__HEXA_MILLENNIUM_LATTICE_ARITHMETIC__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_MILLENNIUM_LATTICE_ARITHMETIC__ PASS")
+}

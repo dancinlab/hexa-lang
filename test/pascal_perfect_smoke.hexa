@@ -1,0 +1,80 @@
+// test/pascal_perfect_smoke.hexa — smoke for symbolic/pascal_perfect.hexa
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Reference values from pascal_perfect.py (archive-TECS-L/.shared/calc,
+// commit 4ee05c39):
+//   row 6 = [1,6,15,20,15,6,1] · Σ = 64 = 2⁶ · alt-sum = 0
+//   hockey-stick Σ_{i=2}^{6} C(i,2) = 35 = C(7,3)
+//   even perfect P(p) = C(2^p,2): p=2→6, p=3→28, p=5→496, p=7→8128
+//   row-6 Shannon entropy of B(6,½) ≈ 2.333362 bits  (real-limit anchor)
+//
+// Run:  hexa run test/pascal_perfect_smoke.hexa
+// Sentinel: __PASCAL_SMOKE__ PASS|FAIL on the final line.
+
+import "compiler/atlas/symbolic/pascal_perfect.hexa"
+
+let mut PASS = 0
+let mut FAIL = 0
+
+fn check(label: string, cond: bool) {
+    if cond {
+        PASS = PASS + 1
+        println("[PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("[FAIL] " + label)
+    }
+}
+fn approx(a: float, b: float, tol: float) -> bool {
+    let d = a - b
+    if d < 0.0 { return (0.0 - d) < tol }
+    return d < tol
+}
+
+// ── binomial / pascal row ────────────────────────────────────────────────
+check("C(6,2) == 15",  pp_binomial(6, 2) == 15)
+check("C(6,3) == 20",  pp_binomial(6, 3) == 20)
+let r6 = pp_pascal_row(6)
+check("row 6 has 7 entries", len(r6) == 7)
+check("row 6 == [1,6,15,20,15,6,1]",
+      r6[0]==1 && r6[1]==6 && r6[2]==15 && r6[3]==20 && r6[4]==15 && r6[5]==6 && r6[6]==1)
+
+// ── row sum = 2ⁿ, alt sum = 0 ────────────────────────────────────────────
+check("row_sum(6) == 64", pp_row_sum(6) == 64)
+check("row_sum(6) == 2⁶", pp_row_sum_is_pow2(6))
+check("row_sum(10) == 1024 = 2¹⁰", pp_row_sum_is_pow2(10))
+check("alt_sum(6) == 0", pp_alt_sum(6) == 0)
+check("alt_sum(0) == 1", pp_alt_sum(0) == 1)
+
+// ── hockey-stick identity ────────────────────────────────────────────────
+check("Σ_{i=2}^{6} C(i,2) == 35", pp_hockey_stick_lhs(6, 2) == 35)
+check("hockey-stick C(7,3) == 35", pp_binomial(7, 3) == 35)
+check("hockey_stick_holds(6,2)", pp_hockey_stick_holds(6, 2))
+check("hockey_stick_holds(10,4)", pp_hockey_stick_holds(10, 4))
+
+// ── perfect = triangular = C(2^p,2) ──────────────────────────────────────
+check("even_perfect(2) == 6 (P1)",     pp_even_perfect(2) == 6)
+check("even_perfect(3) == 28 (P2)",    pp_even_perfect(3) == 28)
+check("even_perfect(5) == 496 (P3)",   pp_even_perfect(5) == 496)
+check("even_perfect(7) == 8128 (P4)",  pp_even_perfect(7) == 8128)
+check("P1=6 = C(4,2) = T(3)",   pp_perfect_is_triangular(2))
+check("P2=28 = C(8,2) = T(7)",  pp_perfect_is_triangular(3))
+check("P3=496 = C(32,2) = T(31)", pp_perfect_is_triangular(5))
+
+// ── Shannon entropy of row 6 (REAL-limit anchor) ─────────────────────────
+check("row6 entropy ≈ 2.333362 bits",
+      approx(pp_row_entropy_bits(6), 2.333362, 0.0001))
+check("row2 entropy == 1.5 bits (B(2,½))",
+      approx(pp_row_entropy_bits(2), 1.5, 0.0001))
+
+println("")
+println("═══════════════════════════════════════════════════════════")
+println("  pascal_perfect smoke: PASS=" + str(PASS) + " FAIL=" + str(FAIL))
+println("═══════════════════════════════════════════════════════════")
+if FAIL > 0 {
+    println("__PASCAL_SMOKE__ FAIL")
+} else {
+    println("__PASCAL_SMOKE__ PASS")
+}

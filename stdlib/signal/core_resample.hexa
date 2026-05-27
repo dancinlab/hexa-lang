@@ -1,0 +1,176 @@
+// HEXA Standard Library — signal/core_resample
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Resampling + scalar audio-utility primitives — the arithmetic half of the
+// HEXA-SPEAK DSP core that does NOT depend on the FFT/STFT machinery:
+//
+//   • resample(x, ratio)         linear-interpolation sample-rate change
+//   • resample_rate(x, in, out)  sr_in → sr_out convenience wrapper
+//   • pitch_shift(x, semitones)  time-domain pitch shift (duration-preserving)
+//   • rms(x)                     root-mean-square energy of a buffer
+//   • zcr(x)                     zero-crossing rate (sign flips / (N−1))
+//   • lin_to_db(x) / db_to_lin(db)   amplitude ↔ decibel conversion
+//
+// All functions are pure (no side effects) and operate on flat [float] buffers.
+//
+// Resampling (linear interp):
+//   For output index i with `ratio` output-samples-per-input-sample, the source
+//   read position is  p = i / ratio  in the input grid. With  k = ⌊p⌋  and
+//   t = p − k,  the output is the lerp  x[k]·(1−t) + x[k+1]·t  (clamped at the
+//   tail to x[N−1]). Output length = ⌊N · ratio⌋.
+//
+// Pitch shift (time-domain):
+//   shift = 2^(semitones/12). The signal is re-read at rate `shift` (compress
+//   for higher pitch, stretch for lower) into a buffer of the SAME length, so
+//   pitch changes while duration is preserved. This is the simple linear-interp
+//   variant; vocoder-grade quality comes from the neural synthesis stage, not
+//   this utility. It is fully time-domain — no STFT dependency.
+//
+// dB conversion (libm):
+//   lin_to_db(x) = 20·log10(x)            (x ≤ ~0 floored to −120 dB)
+//   db_to_lin(db) = 10^(db/20) = pow(10, db/20)
+//   These use the native libm `log10` / `pow` builtins (IEEE-correct), replacing
+//   the anima baseline's exp/ln-series approximations.
+//
+// Provenance:
+//   port of anima HEXAD/VOICE/anima-voice/dsp_core.hexa §6/§8/§9 — dsp_resample,
+//   dsp_pitch_shift, the rms_accumulate/rms_finalize + zcr_count/zcr_finalize
+//   accumulator pairs (here folded into whole-buffer rms/zcr), and the
+//   linear_to_db / db_to_linear utilities — with the transcendental ops routed
+//   to native libm (log10 / pow). BT-SPEAK-DSP-00 foundation primitives.
+
+let CR_DB_FLOOR = 0.0 - 120.0   // dB returned for non-positive amplitude
+let CR_SILENCE  = 0.000001      // |x| ≤ this is treated as silence
+
+// ── linear interpolation between two adjacent samples ───────────────────────
+// out = s0·(1−t) + s1·t  for fractional position t in [0, 1).
+fn _cr_lerp(s0: float, s1: float, t: float) -> float {
+    return s0 * (1.0 - t) + s1 * t
+}
+
+// ── floor a non-negative float to an int index ──────────────────────────────
+// p ≥ 0 here by construction (resample read positions). `floor` is libm.
+fn _cr_floor_idx(p: float) -> int {
+    let f = floor(p)
+    let mut k = 0
+    // Walk up to the floored value: robust int materialisation that avoids any
+    // implicit float→int cast. p stays small for audio buffers.
+    while (k + 1) * 1.0 <= f {
+        k = k + 1
+    }
+    return k
+}
+
+// ── resample(x, ratio): linear-interpolation resampler ──────────────────────
+// `ratio` = output samples per input sample (sr_out / sr_in).
+//   ratio > 1 upsamples, ratio < 1 downsamples.
+// Output length = ⌊len(x) · ratio⌋. Buffers of length ≤ 1 pass through.
+pub fn resample(x: [float], ratio: float) -> [float] {
+    let n_in = len(x)
+    if n_in <= 1 { return x }
+    if ratio <= 0.0 { return [] }
+
+    let n_out = _cr_floor_idx(n_in * ratio)
+    if n_out <= 0 { return [] }
+
+    let inv = 1.0 / ratio   // input samples per output sample
+    let mut out = []
+    let mut i = 0
+    while i < n_out {
+        let src_pos = i * inv
+        let k = _cr_floor_idx(src_pos)
+        if k >= n_in - 1 {
+            out = out.push(x[n_in - 1])
+        } else {
+            let t = src_pos - k * 1.0
+            out = out.push(_cr_lerp(x[k], x[k + 1], t))
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// ── resample_rate(x, sr_in, sr_out): sample-rate conversion wrapper ─────────
+// Equivalent to resample(x, sr_out/sr_in). Output length = ⌊len·sr_out/sr_in⌋.
+pub fn resample_rate(x: [float], sr_in: int, sr_out: int) -> [float] {
+    let n_in = len(x)
+    if n_in <= 1 { return x }
+    if sr_in == sr_out { return x }
+    if sr_in <= 0 || sr_out <= 0 { return [] }
+    return resample(x, sr_out * 1.0 / sr_in)
+}
+
+// ── pitch_shift(x, semitones): time-domain pitch shift ──────────────────────
+// shift = 2^(semitones/12). Re-reads the signal at rate `shift` into a buffer
+// of the SAME length (pitch changes, duration preserved). Time-domain only.
+pub fn pitch_shift(x: [float], semitones: float) -> [float] {
+    let n = len(x)
+    if n <= 1 { return x }
+
+    // 2^(semitones/12) via libm pow.
+    let shift = pow(2.0, semitones / 12.0)
+    if shift <= 0.0 { return x }
+
+    let mut out = []
+    let mut i = 0
+    while i < n {
+        let src_pos = i * shift
+        let k = _cr_floor_idx(src_pos)
+        if k >= n - 1 {
+            out = out.push(x[n - 1])
+        } else {
+            let t = src_pos - k * 1.0
+            out = out.push(_cr_lerp(x[k], x[k + 1], t))
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// ── rms(x): root-mean-square energy of a buffer ─────────────────────────────
+// rms = sqrt( (Σ x[i]²) / N ). Empty buffer → 0.
+pub fn rms(x: [float]) -> float {
+    let n = len(x)
+    if n <= 0 { return 0.0 }
+    let mut sum_sq = 0.0
+    let mut i = 0
+    while i < n {
+        sum_sq = sum_sq + x[i] * x[i]
+        i = i + 1
+    }
+    return sqrt(sum_sq / n)
+}
+
+// ── zcr(x): zero-crossing rate ──────────────────────────────────────────────
+// Count of sign changes between consecutive samples, divided by (N−1).
+// A sample at exactly 0 is treated as non-negative (sign +). Buffers of length
+// ≤ 1 → 0.
+pub fn zcr(x: [float]) -> float {
+    let n = len(x)
+    if n <= 1 { return 0.0 }
+    let mut crossings = 0
+    let mut i = 1
+    while i < n {
+        let prev = x[i - 1]
+        let curr = x[i]
+        if prev >= 0.0 && curr < 0.0 { crossings = crossings + 1 }
+        if prev < 0.0 && curr >= 0.0 { crossings = crossings + 1 }
+        i = i + 1
+    }
+    return crossings * 1.0 / (n - 1)
+}
+
+// ── lin_to_db(x): amplitude → decibels ──────────────────────────────────────
+// 20·log10(x). Non-positive / sub-silence amplitude → CR_DB_FLOOR (−120 dB).
+pub fn lin_to_db(x: float) -> float {
+    if x <= CR_SILENCE { return CR_DB_FLOOR }
+    return 20.0 * log10(x)
+}
+
+// ── db_to_lin(db): decibels → amplitude ─────────────────────────────────────
+// 10^(db/20) = pow(10, db/20).
+pub fn db_to_lin(db: float) -> float {
+    return pow(10.0, db / 20.0)
+}

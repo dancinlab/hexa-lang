@@ -1,0 +1,150 @@
+#!hexa strict
+// stdlib/aura/a3_emc_test_runbook.hexa — `aura + A3` EMC testhouse
+// engagement runbook emitter (hexa-native).
+//
+// LAYER: accredited-gate-readiness runbook. Emits an
+// aura_a3_emc_test_runbook_record sentinel carrying the
+// IEC 60601-1-2 Ed.4.1 EMC test plan + ISO/IEC 17025 accredited
+// testhouse engagement runbook for the AURA-100 wearable BCI.
+//
+// CONTEXT: aura.md §"Accredited-lab gates" A3:
+//   "EMC testhouse measurement — ISO/IEC 17025 accredited lab +
+//    IEC 60601-1-2 Ed.4.1 emission+immunity full test report"
+//
+// Honesty (g3 · @D d1):
+//   * absorbed=false PERMANENTLY — runbook is NOT a passed test report.
+//
+// Sentinels:
+//   __HEXA_AURA_A3_EMC_TEST_RUNBOOK__ PASS
+//   AURA_A3_EMC_TEST_RUNBOOK_OK gate=GATE_OPEN absorbed=false
+
+let VERSION       = "0.1.0"
+let MODULE        = "aura-a3-emc-test-runbook"
+let GEOMETRY_ID   = "aura_a3_emc_test_runbook_v1"
+let RECORD_KIND   = "aura_a3_emc_test_runbook_record"
+
+fn _standard_scope_block() -> [str] {
+    return [
+        "primary_standard: IEC 60601-1-2 Ed.4.1 (Amendment 1:2020 latest)",
+        "collateral_standards: IEC 60601-1 + IEC 60601-1-6 + IEC 60601-1-11",
+        "environment_classification: home-healthcare per IEC 60601-1-11",
+        "EUT_classification: portable + body-worn + battery-powered",
+        "intended_use_environment: residential + travel + non-clinical professional",
+        "FDA_recognized_consensus: yes (FDA recognized standards database)",
+    ]
+}
+
+fn _emission_test_block() -> [str] {
+    return [
+        "conducted_emission: CISPR 11 Group 1 Class B (limits per CISPR 11 Table 1)",
+        "radiated_emission: CISPR 11 Group 1 Class B (limits 30 MHz - 1 GHz + 1 GHz - 6 GHz)",
+        "harmonics: IEC 61000-3-2 (not applicable - battery-powered <16A AC)",
+        "flicker: IEC 61000-3-3 (not applicable - battery-powered)",
+        "BLE_radiator_assessment: 2.4 GHz intentional radiator per FCC 15.247 (separate cert)",
+        "spurious_emission: per CISPR 11 + bluetooth_band_exception evaluation",
+    ]
+}
+
+fn _immunity_test_block() -> [str] {
+    return [
+        "ESD: IEC 61000-4-2 ±8 kV contact / ±15 kV air (criterion A or B)",
+        "radiated_RF: IEC 61000-4-3 3 V/m 80-1000 MHz + 10 V/m 1-6 GHz + spot 80% AM 1 kHz",
+        "EFT: IEC 61000-4-4 (not applicable - battery-only · no power-line input)",
+        "surge: IEC 61000-4-5 (not applicable - battery-only)",
+        "conducted_RF: IEC 61000-4-6 3 Vrms 150 kHz - 80 MHz (only applicable on data cables)",
+        "PFMF: IEC 61000-4-8 30 A/m 50/60 Hz power-frequency magnetic field",
+        "voltage_dips: IEC 61000-4-11 (not applicable - battery-only)",
+        "proximity_field: IEC 61000-4-39 wireless 9-28 V/m at carrier frequencies (385/450/710/745/780/810/870/930/1720/1845/1970/2450/5240/5500/5785 MHz)",
+    ]
+}
+
+fn _essential_performance_block() -> [str] {
+    return [
+        "essential_performance_definition: BLE link maintained + EEG streaming sustained",
+        "performance_criterion_A: continued operation (no measurable degradation)",
+        "performance_criterion_B: temporary degradation acceptable + auto-recovery",
+        "performance_criterion_C: degradation not acceptable - failure of essential performance",
+        "monitoring_setup: real-time BLE link status + EEG sample-rate + data-loss counter",
+        "pass_threshold: criterion A for emission + criterion B acceptable for immunity",
+    ]
+}
+
+fn _testhouse_engagement_block() -> [str] {
+    return [
+        "candidates: UL Solutions (US/global) · TUV Rheinland (DE) · SGS (CH) · Intertek (UK)",
+        "accreditation: ISO/IEC 17025 required + medical device EMC scope",
+        "fee_estimate: $25-50K full IEC 60601-1-2 Ed.4.1 + reasonable iteration count",
+        "lead_time: 2-4 weeks per cycle (testhouse-dependent) · typical 1-2 cycles to pass",
+        "EUT_delivery: 3+ production-build EUT samples + accessories + test fixtures",
+        "test_plan_submission: detailed test plan + EUT configuration + intended use docs",
+        "test_report_format: per IEC 60601-1-2 Annex requirements + EMC test report template",
+    ]
+}
+
+fn _pre_compliance_block() -> [str] {
+    return [
+        "pre_compliance_strategy: in-house testing on key tests (ESD + radiated RF + proximity)",
+        "spectrum_analyzer: open-source siglent SDS / Rigol DSA - radiated emission scan",
+        "ESD_gun: rental ESD simulator (Hyperion / Schaffner) - $200-500/wk",
+        "anechoic_chamber: 3m semi-anechoic chamber rental - $500-2000/day",
+        "near_field_probes: H-field + E-field probes for design-iteration spotting",
+        "pre_compliance_passes: increase confidence + reduce paid testhouse iterations",
+    ]
+}
+
+fn _scope_caveats() -> [str] {
+    return [
+        "A3 EMC test runbook is a DRAFT test plan, NOT a passed test report.",
+        "Actual testhouse engagement requires: real EUT samples + paid contract + test cycles.",
+        "Pre-compliance testing recommended to reduce paid iteration cost.",
+        "absorbed=false PERMANENTLY (g3) - runbook outline, NEVER an IEC 60601-1-2 passed report.",
+    ]
+}
+
+fn _emit_block(label: str, lines: [str]) {
+    print("# [" + label + "]")
+    let n = lines.len()
+    let mut i = 0
+    while i < n {
+        print("#   - " + lines[i])
+        i = i + 1
+    }
+    print("#")
+}
+
+fn _emit_header() {
+    print("# AURA A3 - EMC testhouse engagement runbook (IEC 60601-1-2 Ed.4.1)")
+    print("# device_target = post-aural / temporal-bone clip BCI · home-healthcare env")
+    print("# version = " + VERSION)
+    print("# ringfence: runbook outline - NOT a passed EMC report")
+    print("#")
+    _emit_block("standard_scope",       _standard_scope_block())
+    _emit_block("emission_tests",       _emission_test_block())
+    _emit_block("immunity_tests",       _immunity_test_block())
+    _emit_block("essential_performance",_essential_performance_block())
+    _emit_block("testhouse_engagement", _testhouse_engagement_block())
+    _emit_block("pre_compliance",       _pre_compliance_block())
+}
+
+fn _emit_caveats() {
+    let c = _scope_caveats()
+    let n = c.len()
+    let mut i = 0
+    while i < n {
+        print("# scope_caveat: " + c[i])
+        i = i + 1
+    }
+}
+
+fn main() {
+    _emit_header()
+    _emit_caveats()
+
+    print("AURA_A3_EMC_TEST_RUNBOOK_OK record_kind=" + RECORD_KIND
+        + " geometry_id=" + GEOMETRY_ID
+        + " gate=GATE_OPEN absorbed=false"
+        + " version=" + VERSION
+        + " sections=6 fee=25-50K duration=2-4wk/cycle")
+
+    print("__HEXA_AURA_A3_EMC_TEST_RUNBOOK__ PASS")
+}

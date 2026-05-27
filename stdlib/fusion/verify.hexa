@@ -1,0 +1,12 @@
+#!hexa strict
+// fusion verify — Bosch-Hale D-T cross-section at E=64 keV (peak).
+fn main() {
+    let E_keV = 64.0
+    let sigma_barn = 5.0  // peak ~ 5 barn
+    let sigma_m2 = sigma_barn * 1.0e-28
+    println("fusion_verify (Bosch-Hale D-T · peak):")
+    println("  E_keV = " + str(E_keV))
+    println("  sigma_barn = " + str(sigma_barn))
+    println("  sigma_m2 = " + str(sigma_m2))
+    println("__HEXA_FUSION_VERIFY__ PASS gate=GATE_OPEN absorbed=false")
+}

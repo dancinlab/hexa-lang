@@ -1,0 +1,4 @@
+$ hexa verify --expr phi 720 192
+verify --expr phi(720)=192
+  calc   = 192  == expected 192
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)

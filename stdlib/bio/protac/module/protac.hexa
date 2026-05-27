@@ -1,0 +1,153 @@
+#!hexa strict
+// protac/module/protac.hexa — PROTAC sub-axis verb
+//
+// LAYER: SUB-AXIS, NOT a hexa-bio core-5 axis. PROTAC `:> BIFUNCTIONAL`
+//        (expansion-MAIN) per AXIS/HIERARCHY.tape `@D sub_under_bifunctional`.
+//        The committed 5-axis core (QUANTUM · WEAVE · NANOBOT · RIBOZYME ·
+//        VIROCAPSID — AXIS.tape) is UNCHANGED.
+//
+// HEXA-family role: PROteolysis-TArgeting Chimera — a bifunctional small
+// molecule with a target-binding warhead, an E3-recruiting warhead, and a
+// linker. Specializes the parent BIFUNCTIONAL axis toward the proteasomal
+// degradation pathway: the productive event is a cooperative ternary
+// complex POI·PROTAC·E3 → poly-Ub → 26S proteasome → catalytic release.
+// Own modality precedent (g3/f1, never lattice-fit): ARV-471
+// (vepdegestrant, ER PROTAC, clinical) · ARV-110 (bavdegalutamide, AR
+// PROTAC, clinical) · Sakamoto et al., PNAS 2001;98:8554 (first peptidic
+// PROTAC).
+//
+// Real-limit anchor (AGENTS.tape g1 real-limits-first):
+//   - mass-action three-body ternary-equilibrium with cooperativity alpha
+//     and the hook effect (non-monotone ternary fraction in [PROTAC])
+//     (Douglass et al., J Am Chem Soc 2013;135:6092 — three-body model;
+//      Gadd et al., Nat Chem Biol 2017;13:514 — VHL/BRD4 alpha;
+//      Hughes & Ciulli, Essays Biochem 2017;61:505 — hook effect)
+//
+// n=6 lattice stance (g2/f_lattice_fit): a ternary complex has three
+// bodies because the degrader bridges one POI and one E3 — that is the
+// modality's definition. Neither alpha nor any K_d nor the hook-peak
+// concentration is derived from the n=6 lattice. NO lattice arithmetic.
+//
+// In-silico scope (g8/f2): a PASS verifies IN-SILICO simulator+metadata
+// consistency ONLY (mass-action ternary algebra; cooperativity alpha
+// dependence; hook curve self-consistency). NEVER a therapeutic /
+// degradation (DC50/Dmax) / immunogenic / regulatory claim. The PROTAC
+// sub-axis is scientifically UNPROVEN at the wet-lab boundary.
+//
+// Sentinels:
+//   __HEXA_BIO_PROTAC__ PASS         — verb loaded + status printed
+//   Python sim prints __PROTAC__ PASS|FAIL (source-of-truth)
+
+let VERSION = "1.0.0"
+let MODULE  = "protac"
+let LAYER   = "sub-axis :> BIFUNCTIONAL (NOT core-5)"
+
+fn _root() -> str {
+    let r = env("HEXA_BIO_ROOT")
+    if r.len() > 0 { return r }
+    let inferred = exec("dirname \"$(dirname \"$(dirname \"$0\")\")\" 2>/dev/null || true").trim()
+    if inferred.len() > 0 { return inferred }
+    return env("HOME") + "/.hexa-bio"  // @allow-devpath
+}
+
+fn _sim_path() -> str {
+    return _root() + "/_python_bridge/module/protac_sim.py"
+}
+
+fn _print_status() {
+    println("  status: SUB-AXIS v" + VERSION + " (NOT core-5)")
+    println("          parent: BIFUNCTIONAL (expansion-MAIN)")
+    println("          AXIS/HIERARCHY.tape @D sub_under_bifunctional;")
+    println("          AXIS.tape core-5 SSOT UNCHANGED")
+}
+
+fn _print_modality() {
+    println("  PROTAC modality — own precedent (g3/f1, never lattice-fit):")
+    println("    ARV-471      ER PROTAC          clinical (Arvinas/Pfizer)")
+    println("    ARV-110      AR PROTAC          clinical (Arvinas)")
+    println("    Sakamoto'01  first peptidic PROTAC  PNAS 98:8554")
+    println("  no FDA-approved PROTAC yet — research / clinical-stage modality")
+}
+
+fn _print_real_limits() {
+    println("  real-limit anchors (AGENTS.tape g1 — real-limits-first):")
+    println("    mass-action three-body ternary equilibrium + hook effect")
+    println("      (Douglass et al., J Am Chem Soc 2013;135:6092-6099 —")
+    println("       three-body binding-equilibrium closed form;")
+    println("       Gadd et al., Nat Chem Biol 2017;13:514-521 —")
+    println("       cooperativity alpha for VHL-MZ1-BRD4 ternary;")
+    println("       Hughes & Ciulli, Essays Biochem 2017;61:505-515 —")
+    println("       the hook effect)")
+}
+
+fn _print_lattice_stance() {
+    println("  n=6 lattice stance (g2/f_lattice_fit): a ternary complex has")
+    println("  three bodies because the degrader bridges one POI and one E3 —")
+    println("  the modality's definition. Neither alpha, nor any K_d, nor the")
+    println("  hook-peak concentration is derived from the n=6 lattice.")
+}
+
+fn _print_in_silico_caveat() {
+    println("  in-silico scope (g8/f2): a PASS verifies IN-SILICO simulator +")
+    println("  metadata consistency ONLY (mass-action ternary algebra; alpha")
+    println("  dependence; hook curve self-consistency). It is NOT a binding-")
+    println("  affinity, degradation (DC50/Dmax), immunogenic, regulatory, or")
+    println("  therapeutic-efficacy claim. The PROTAC sub-axis is")
+    println("  scientifically UNPROVEN at the wet-lab boundary.")
+}
+
+fn _print_sim_pointer() {
+    println("  source-of-truth sim (Python, stdlib-only, deterministic):")
+    println("    " + _sim_path())
+    println("    run: python3 _python_bridge/module/protac_sim.py")
+}
+
+fn cmd_protac(args: [str]) {
+    println("hexa-bio " + MODULE + " " + VERSION + " — proteolysis-targeting chimera (sub-axis)")
+    println("")
+
+    let mut show_sim = false
+    let mut i = 0
+    while i < args.len() {
+        if args[i] == "--sim" { show_sim = true }
+        i = i + 1
+    }
+
+    _print_status()
+    println("")
+    _print_modality()
+    println("")
+    _print_real_limits()
+    println("")
+    _print_lattice_stance()
+    println("")
+    _print_in_silico_caveat()
+    if show_sim {
+        println("")
+        _print_sim_pointer()
+    }
+    println("")
+    println("usage: hexa-bio protac [--sim]")
+    println("[protac] verb is announce/status only; the Python sim is the")
+    println("[protac] in-silico source-of-truth (see --sim for path)")
+    println("__HEXA_BIO_PROTAC__ PASS")
+}
+
+fn main() {
+    let raw = args()
+    let mut user: [str] = []
+    let mut sidx = -1
+    let mut i = 0
+    while i < raw.len() {
+        if raw[i].ends_with(".hexa") { sidx = i; break }
+        i = i + 1
+    }
+    let mut start = 1
+    if sidx >= 0 { start = sidx + 1 }
+    let mut k = start
+    while k < raw.len() {
+        user = user + [raw[k]]
+        k = k + 1
+    }
+    cmd_protac(user)
+}

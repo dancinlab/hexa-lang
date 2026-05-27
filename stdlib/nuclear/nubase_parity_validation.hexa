@@ -1,0 +1,117 @@
+// nubase_parity_validation.hexa — NUCLEAR bulk parity validator (Round-2 B).
+//
+// Validates the landed NC1/NC2/NC3 alpha-decay half-life kernels
+// (stdlib/nuclear/sim.hexa v0.6.0: viola_seaborg_log10_t / royer_log10_t /
+// consensus_alpha) against a bulk set of MEASURED alpha-emitters — raising
+// the validation base from 2 hand anchors (U-238, Og-294) to 85 measured
+// nuclides. This is VALIDATION, not prediction: deviations are reported
+// honestly, large or small. absorbed = false (a model-vs-measurement parity
+// study is not a new measurement).
+//
+// gap-audit Round-2 B: "half-life kernels validated against only 2 anchors".
+//
+// ── DATA SOURCING (NUCLEAR.md S3.3 — no fabrication) ───────────────────
+// Measured Q_alpha + measured log10 T_1/2(alpha) are VERBATIM from the
+// IAEA Nuclear Structure & Decay Data service (live API), which serves
+// NUBASE2020 / AME2020:
+//   Source : IAEA NSDC live (nds.iaea.org/relnsd/v1) — NUBASE2020/AME2020
+//   Fetched: 2026-05-25T05:19:19Z (UTC)
+//   Fetcher: stdlib/nuclear/nubase_parity_fetch.hexa (hexa-native live
+//            network fetch via stdlib/net http_get_status; honest-skip
+//            gate_type=network-fail if offline; re-run to refresh the
+//            embedded snapshot below). The 85 rows below are a verbatim
+//            snapshot of that fetcher's output (kept rows).
+//   Filter : decay_1 == "A" (alpha primary) AND measured Q_alpha>0 AND
+//            measured T_1/2>0. Partial-alpha correction applied where the
+//            measured alpha branch < 100% (log10 T_alpha = log10 T_total
+//            - log10(branch/100)) so we compare predicted-PARTIAL-alpha
+//            vs measured-PARTIAL-alpha honestly.
+// Citation: Kondev, Wang, Huang, Naimi, Audi — NUBASE2020, Chinese Phys C
+//           45 (2021) 030001; Wang, Huang, Kondev, Audi, Naimi — AME2020,
+//           Chinese Phys C 45 (2021) 030003. arxiv:2105.01035 (companion).
+//
+// Run (canonical root, mini / POOL_DISABLE=1):
+//   POOL_DISABLE=1 ./hexa run --no-sentinel \
+//     stdlib/nuclear/nubase_parity_validation.hexa
+
+use "stdlib/nuclear/sim"
+
+fn _fabs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn main() {
+    let ds_name = ["144nd", "146sm", "147sm", "148sm", "148gd", "150gd", "152gd", "154dy", "174hf", "186os", "190pt", "209bi", "208po", "209po", "210po", "211po", "212po", "214po", "216po", "218po", "215at", "217at", "218rn", "219rn", "220rn", "222rn", "221fr", "221ra", "222ra", "223ra", "224ra", "226ra", "225ac", "227th", "228th", "229th", "230th", "232th", "231pa", "232u", "233u", "234u", "235u", "236u", "238u", "237np", "236pu", "238pu", "239pu", "240pu", "242pu", "244pu", "241am", "243am", "242cm", "243cm", "244cm", "245cm", "246cm", "248cm", "247bk", "249cf", "250cf", "251cf", "252cf", "253es", "254es", "252fm", "255fm", "257fm", "254no", "259no", "255lr", "259rf", "263sg", "266hs", "267hs", "270ds", "272rg", "285cn", "286fl", "288fl", "289fl", "290lv", "294og"]
+    let ds_Z = [60, 62, 62, 62, 64, 64, 64, 66, 72, 76, 78, 83, 84, 84, 84, 84, 84, 84, 84, 84, 85, 85, 86, 86, 86, 86, 87, 88, 88, 88, 88, 88, 89, 90, 90, 90, 90, 90, 91, 92, 92, 92, 92, 92, 92, 93, 94, 94, 94, 94, 94, 94, 95, 95, 96, 96, 96, 96, 96, 96, 97, 98, 98, 98, 98, 99, 99, 100, 100, 100, 102, 102, 103, 104, 106, 108, 108, 110, 111, 112, 114, 114, 114, 116, 118]
+    let ds_A = [144, 146, 147, 148, 148, 150, 152, 154, 174, 186, 190, 209, 208, 209, 210, 211, 212, 214, 216, 218, 215, 217, 218, 219, 220, 222, 221, 221, 222, 223, 224, 226, 225, 227, 228, 229, 230, 232, 231, 232, 233, 234, 235, 236, 238, 237, 236, 238, 239, 240, 242, 244, 241, 243, 242, 243, 244, 245, 246, 248, 247, 249, 250, 251, 252, 253, 254, 252, 255, 257, 254, 259, 255, 259, 263, 266, 267, 270, 272, 285, 286, 288, 289, 290, 294]
+    let ds_Q = [1.901283, 2.528779, 2.311347, 1.987046, 3.271291, 2.807394, 2.203847, 2.945120, 2.494430, 2.821196, 3.268612, 3.137298, 5.215692, 4.979231, 5.407531, 7.594560, 8.954195, 7.833541, 6.906350, 6.114754, 8.177617, 7.201353, 7.262470, 6.946192, 6.404742, 5.590389, 6.457737, 6.880395, 6.677876, 5.978992, 5.788923, 4.870703, 5.935138, 6.146598, 5.520151, 5.167558, 4.770020, 4.081600, 5.149907, 5.413630, 4.908678, 4.857532, 4.678056, 4.572956, 4.269858, 4.957273, 5.867147, 5.593273, 5.244522, 5.255821, 4.984228, 4.665608, 5.637820, 5.439085, 6.215635, 6.168800, 5.901600, 5.624493, 5.475120, 5.161811, 5.889600, 6.293293, 6.128508, 6.176960, 6.216947, 6.739238, 6.617230, 7.153744, 7.240568, 6.863660, 8.226203, 7.854000, 8.555641, 9.130000, 9.403263, 10.345686, 10.037505, 11.116993, 11.197427, 9.388000, 10.355066, 10.076487, 9.954180, 10.996833, 11.867327]
+    let ds_T = [22.858930, 15.331604, 18.529694, 23.344193, 9.350964, 13.751948, 21.532518, 13.976216, 22.800125, 22.800125, 19.195451, 26.802291, 7.961210, 9.594493, 7.077575, -0.287350, -6.531210, -3.786589, -0.838632, 2.269179, -4.000000, -1.486752, -1.471726, 0.597695, 1.745075, 5.518827, 2.468347, 1.447158, 1.526339, 5.994560, 5.496612, 10.703215, 5.933025, 6.208286, 7.780492, 11.395621, 12.377525, 17.645223, 12.011912, 9.337314, 12.701010, 12.889146, 16.346667, 14.868682, 17.149208, 13.830319, 7.955157, 9.442094, 11.881292, 11.316065, 13.070804, 15.409720, 10.135181, 11.366208, 7.148382, 8.964249, 8.757013, 11.424561, 11.171860, 13.078731, 10.638974, 10.044402, 8.616037, 10.452371, 7.935534, 6.247632, 7.376951, 4.960975, 4.858850, 6.939593, 1.755027, 3.666518, 1.494065, 0.416423, 0.154902, -2.408057, -1.366532, -3.698970, -2.420216, 1.518514, -0.558043, -0.193820, 0.380211, -2.080922, -3.236572]
+
+    let n = len(ds_Z)
+    println("# NUBASE2020/AME2020 bulk parity — alpha-decay half-life kernels")
+    println("# source: IAEA NSDC live (nds.iaea.org/relnsd/v1) — NUBASE2020/AME2020")
+    println("# fetched_utc: 2026-05-25T05:19:19Z")
+    println("# N=" + to_string(n))
+    println("# cols: nuclide Z A Q_MeV meas_log10T VS Royer cons_mean spread_dex dev_cons in_band")
+    println("#---")
+
+    let mut i = 0
+    let mut sse_vs: float = 0.0
+    let mut sse_ro: float = 0.0
+    let mut sse_co: float = 0.0
+    let mut sum_bias_vs: float = 0.0
+    let mut sum_bias_ro: float = 0.0
+    let mut sum_bias_co: float = 0.0
+    let mut sum_abs_co: float = 0.0
+    let mut in_band: int = 0
+    let mut maxdev: float = 0.0
+    let mut maxdev_idx: int = 0
+    while i < n {
+        let Z = ds_Z[i]
+        let A = ds_A[i]
+        let Q = ds_Q[i]
+        let meas = ds_T[i]
+        let vs = viola_seaborg_log10_t(Z, Q)
+        let ro = royer_log10_t(Z, A, Q)
+        let vals = [vs, ro]
+        let c = consensus_alpha(vals)
+        let dev_vs = vs - meas
+        let dev_ro = ro - meas
+        let dev_co = c.mean - meas
+        sse_vs = sse_vs + dev_vs * dev_vs
+        sse_ro = sse_ro + dev_ro * dev_ro
+        sse_co = sse_co + dev_co * dev_co
+        sum_bias_vs = sum_bias_vs + dev_vs
+        sum_bias_ro = sum_bias_ro + dev_ro
+        sum_bias_co = sum_bias_co + dev_co
+        let adc = _fabs(dev_co)
+        sum_abs_co = sum_abs_co + adc
+        let mut band = 0
+        if meas >= c.min { if meas <= c.max { band = 1 } }
+        in_band = in_band + band
+        if adc > maxdev { maxdev = adc  maxdev_idx = i }
+        println(ds_name[i] + "\t" + to_string(Z) + "\t" + to_string(A) + "\t"
+                + to_string(Q) + "\t" + to_string(meas) + "\t" + to_string(vs) + "\t"
+                + to_string(ro) + "\t" + to_string(c.mean) + "\t" + to_string(c.spread_dex)
+                + "\t" + to_string(dev_co) + "\t" + to_string(band))
+        i = i + 1
+    }
+    let nf = to_float(n)
+    let rms_vs = sqrt(sse_vs / nf)
+    let rms_ro = sqrt(sse_ro / nf)
+    let rms_co = sqrt(sse_co / nf)
+    let bias_vs = sum_bias_vs / nf
+    let bias_ro = sum_bias_ro / nf
+    let bias_co = sum_bias_co / nf
+    let mae_co = sum_abs_co / nf
+    println("#===")
+    println("# SUMMARY (dex = log10 seconds)")
+    println("# N = " + to_string(n))
+    println("# RMS_VS    = " + to_string(rms_vs))
+    println("# RMS_Royer = " + to_string(rms_ro))
+    println("# RMS_consensus = " + to_string(rms_co))
+    println("# bias_VS    (mean pred-meas) = " + to_string(bias_vs))
+    println("# bias_Royer (mean pred-meas) = " + to_string(bias_ro))
+    println("# bias_consensus = " + to_string(bias_co))
+    println("# MAE_consensus = " + to_string(mae_co))
+    println("# within_spread_band = " + to_string(in_band) + " / " + to_string(n))
+    println("# worst_consensus_dev = " + to_string(maxdev) + " dex @ " + ds_name[maxdev_idx])
+}

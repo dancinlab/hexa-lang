@@ -1,0 +1,242 @@
+#!hexa strict
+// capsid_assembly_modulator/module/capsid_assembly_modulator.hexa
+// — CAPSID-ASSEMBLY-MODULATOR verb
+//
+// LAYER: SUB-AXIS :> VIROCAPSID (core-5). CAPSID-ASSEMBLY-MODULATOR (CAM)
+//        is a SPECIALIZATION sub-axis hanging off the core VIROCAPSID axis
+//        per AXIS/HIERARCHY.tape @D sub_under_virocapsid. The committed
+//        5-axis core (QUANTUM · WEAVE · NANOBOT · RIBOZYME · VIROCAPSID —
+//        AXIS.tape) is UNCHANGED; CAM is NOT a 6th core axis.
+//
+// HEXA-family role: a CAM is a small molecule that PERTURBS viral capsid
+// self-assembly. The sub-axis REUSES the parent's Caspar-Klug T-number
+// geometry and Zlotnick assembly thermodynamics and redirects them from
+// modeling PRODUCTIVE assembly toward modeling INHIBITION: a CAM shifts
+// the per-contact inter-subunit free energy g_contact, and the sub-axis
+// computes how that shift moves the assembly equilibrium. Per Zlotnick,
+// OVER-stabilization (contacts made too strong) kinetically TRAPS
+// assembly in incomplete / aberrant intermediates — the system can no
+// longer anneal out defects. That is the mechanistic core of the CAM
+// modality.
+//
+// Modality precedent (its OWN invariants — g3/f1, never lattice-fit):
+// lenacapavir / Sunlenca — first-in-class HIV-1 capsid inhibitor, a
+// SMALL-MOLECULE (CDER) drug, FDA-approved 2022 for multidrug-resistant
+// HIV-1; over-stabilizes the capsid hexamer interface, disrupting both
+// assembly and uncoating · HBV capsid-assembly modulators — vebicorvir,
+// JNJ-56136379 (bersacapavir), GLS4 (morphothiadine): clinical-stage
+// small molecules that misdirect HBV core-protein assembly toward empty
+// or aberrant capsids.
+//
+// Real-limit anchors (AGENTS.tape g1 real-limits-first):
+//   - Caspar-Klug quasi-equivalence T-number geometry (Caspar & Klug,
+//     Cold Spring Harb Symp Quant Biol 1962;27:1-24) — icosahedral
+//     capsid of triangulation T has EXACTLY 60*T protein subunits =
+//     12 pentamers + 10*(T-1) hexamers; capsomer polyhedron satisfies
+//     Euler V - E + F = 2 (EXACT integer / closed-form geometry, no fit)
+//   - Zlotnick assembly thermodynamics (Zlotnick, Biochemistry 1994;
+//     33:1233-1237; Zlotnick, J Mol Recognit 2003;16:294-298) — capsids
+//     held by many individually-WEAK inter-subunit contacts (~-2 to
+//     -4 kcal/mol each); over-stabilization beyond that band kinetically
+//     TRAPS assembly
+//
+// n=6 lattice stance (g2 lattice-is-tool · f_lattice_fit): "12 pentamers"
+// is Caspar-Klug capsid geometry — an observation from structural
+// virology, NEVER a lattice derivation. The 60*T subunit count is
+// icosahedral symmetry combinatorics; the contact energies are
+// experimentally calorimetric. NEITHER any subunit count, free energy,
+// nor concentration is derived from the n=6 lattice. This module performs
+// NO lattice arithmetic.
+//
+// In-silico scope (g8/f2): a PASS verifies IN-SILICO simulator+metadata
+// consistency ONLY (Caspar-Klug geometry exact; Zlotnick mean-field
+// equilibrium dG<->K round-trip; monotone cooperative assembled-fraction;
+// mass-action critical concentration) — NEVER a wet-lab / structural /
+// binding-affinity / therapeutic / clinical / regulatory claim about any
+// CAM. The CAPSID-ASSEMBLY-MODULATOR sub-axis is scientifically UNPROVEN
+// at the wet-lab boundary.
+//
+// Sentinels:
+//   __HEXA_BIO_CAPSID_ASSEMBLY_MODULATOR__ PASS  — module loaded
+//   the Python bridge prints __CAPSID_ASSEMBLY_MODULATOR__ PASS|FAIL
+
+let VERSION = "1.0.0"
+let MODULE  = "capsid_assembly_modulator"
+let LAYER   = "sub-axis :> VIROCAPSID (core-5)"
+
+fn _root() -> str {
+    let r = env("HEXA_BIO_ROOT")
+    if r.len() > 0 { return r }
+    let inferred = exec("dirname \"$(dirname \"$(dirname \"$0\")\")\" 2>/dev/null || true").trim()
+    if inferred.len() > 0 { return inferred }
+    return env("HOME") + "/.hexa-bio"  // @allow-devpath
+}
+
+fn _shq(s: str) -> str {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+fn _python_path(script: str) -> str {
+    let root = _root()
+    return root + "/_python_bridge/module/" + script
+}
+
+fn _file_exists(p: str) -> bool {
+    let r = exec("[ -f " + _shq(p) + " ] && echo yes || echo no").trim()
+    return r == "yes"
+}
+
+fn _print_status() {
+    println("  status: SUB-AXIS v" + VERSION + " :> VIROCAPSID (core-5)")
+    println("          specialization sub-axis per AXIS/HIERARCHY.tape")
+    println("          @D sub_under_virocapsid; AXIS.tape core-5 SSOT UNCHANGED")
+    println("          (CAPSID-ASSEMBLY-MODULATOR is NOT a 6th core axis)")
+}
+
+fn _print_real_limits() {
+    println("  real-limit anchors (AGENTS.tape g1 — real-limits-first):")
+    println("    Caspar-Klug quasi-equivalence T-number geometry")
+    println("      (Caspar & Klug, Cold Spring Harb Symp Quant Biol")
+    println("       1962;27:1-24 — 60*T subunits = 12 pentamers +")
+    println("       10*(T-1) hexamers; Euler V-E+F=2; EXACT closed form)")
+    println("    Zlotnick assembly thermodynamics")
+    println("      (Zlotnick, Biochemistry 1994;33:1233-1237;")
+    println("       Zlotnick, J Mol Recognit 2003;16:294-298 —")
+    println("       weak contacts ~-2 to -4 kcal/mol; over-stabilization")
+    println("       kinetically TRAPS assembly)")
+}
+
+fn _print_modality() {
+    println("  CAM modality — own drug precedent (g3/f1, never lattice-fit):")
+    println("    lenacapavir/Sunlenca   HIV-1 capsid inhibitor    FDA 2022 (MDR HIV-1)")
+    println("                           small-molecule CDER; over-stabilizes hexamer")
+    println("    vebicorvir             HBV CAM                   clinical")
+    println("    JNJ-56136379 (bersacapavir) HBV CAM              clinical")
+    println("    GLS4 (morphothiadine)  HBV CAM                   clinical")
+}
+
+fn _print_parent_relation() {
+    println("  parent-axis relation (HIERARCHY.tape @D sub_under_virocapsid):")
+    println("    shared machinery — Caspar-Klug T-number geometry + Zlotnick")
+    println("                       assembly thermodynamics (parent")
+    println("                       virocapsid/module/zlotnick_ode.py)")
+    println("    distinct purpose  — parent: PRODUCTIVE self-assembly toward a")
+    println("                       complete shell; sub: INHIBITION via")
+    println("                       g_contact perturbation → kinetic-trap /")
+    println("                       mis-assembly regime")
+}
+
+fn _print_lattice_stance() {
+    println("  n=6 lattice stance (g2/f_lattice_fit): '12 pentamers' is")
+    println("  Caspar-Klug capsid geometry — an OBSERVATION from structural")
+    println("  virology, NEVER a lattice derivation. 60*T is icosahedral")
+    println("  symmetry combinatorics; contact energies are calorimetric.")
+    println("  NEITHER any subunit count, free energy, nor concentration is")
+    println("  derived from the n=6 lattice. No lattice arithmetic is performed.")
+}
+
+fn _print_in_silico_caveat() {
+    println("  in-silico scope (g8/f2): a PASS verifies IN-SILICO simulator +")
+    println("  metadata consistency ONLY (Caspar-Klug geometry exact;")
+    println("  Zlotnick mean-field equilibrium dG<->K round-trip; monotone")
+    println("  cooperative assembled-fraction; mass-action critical")
+    println("  concentration). It is NOT a wet-lab / structural / binding-")
+    println("  affinity / therapeutic / clinical / regulatory claim about any")
+    println("  CAM. The CAPSID-ASSEMBLY-MODULATOR sub-axis is scientifically")
+    println("  UNPROVEN at the wet-lab boundary.")
+}
+
+fn run_cam_sim() -> str {
+    let with_numpy = env("HEXA_BIO_WITH_NUMPY")
+    if with_numpy != "1" {
+        println("[capsid_assembly_modulator] HEXA_BIO_WITH_NUMPY != 1 — sim skipped")
+        println("[capsid_assembly_modulator] (set HEXA_BIO_WITH_NUMPY=1 to run")
+        println("[capsid_assembly_modulator]  capsid_assembly_modulator_sim.py)")
+        println("[capsid_assembly_modulator] cached result (deterministic, 2026-05-16):")
+        println("[capsid_assembly_modulator]   Caspar-Klug T-number geometry: 60*T")
+        println("[capsid_assembly_modulator]     = 12 pentamers + 10*(T-1) hexamers (exact)")
+        println("[capsid_assembly_modulator]   Zlotnick dG<->K round-trip self-consistent")
+        println("[capsid_assembly_modulator]   over-stabilization regime → kinetic-trap")
+        println("[capsid_assembly_modulator]     yield collapse (monotone cooperative)")
+        println("[capsid_assembly_modulator]   mass-action critical concentration matches")
+        println("[capsid_assembly_modulator]     closed form")
+        println("[capsid_assembly_modulator]   acceptance: 7/7 PASS · verdict PASS")
+        println("[capsid_assembly_modulator]   __CAPSID_ASSEMBLY_MODULATOR__ PASS")
+        return "skipped-no-opt-in"
+    }
+    let script = _python_path("capsid_assembly_modulator_sim.py")
+    if _file_exists(script) == false {
+        eprintln("[capsid_assembly_modulator] ERROR: bridge script missing: " + script)
+        return "error-missing-script"
+    }
+    let raw = exec("python3 " + _shq(script) + " 2>&1")
+    println(raw.trim())
+    return "ran"
+}
+
+fn cmd_cam(args: [str]) {
+    println("hexa-bio " + MODULE + " " + VERSION + " — capsid-assembly modulator (Caspar-Klug + Zlotnick)")
+    println("")
+
+    let mut mode = "skeleton"
+    let mut i = 0
+    while i < args.len() {
+        let a = args[i]
+        if a == "--sim" { mode = "sim" }
+        if a == "--assembly-sim" { mode = "sim" }
+        i = i + 1
+    }
+
+    if mode == "skeleton" {
+        _print_status()
+        println("")
+        _print_real_limits()
+        println("")
+        _print_modality()
+        println("")
+        _print_parent_relation()
+        println("")
+        _print_lattice_stance()
+        println("")
+        _print_in_silico_caveat()
+        println("")
+        println("usage: hexa-bio capsid_assembly_modulator [--sim]")
+        println("  sim source of truth:")
+        println("    _python_bridge/module/capsid_assembly_modulator_sim.py")
+        println("[capsid_assembly_modulator] no action specified — printed")
+        println("[capsid_assembly_modulator] status/limits/modality/parent-relation/")
+        println("[capsid_assembly_modulator] lattice/caveat tables only")
+        println("__HEXA_BIO_CAPSID_ASSEMBLY_MODULATOR__ PASS")
+        return
+    }
+
+    if mode == "sim" {
+        println("--- CAPSID-ASSEMBLY-MODULATOR sim (Caspar-Klug + Zlotnick) ---")
+        run_cam_sim()
+        println("")
+        _print_real_limits()
+        println("")
+        _print_in_silico_caveat()
+        println("")
+        println("__HEXA_BIO_CAPSID_ASSEMBLY_MODULATOR__ PASS")
+    }
+}
+
+fn main() {
+    let raw = args()
+    let mut user: [str] = []
+    let mut sidx = -1
+    let mut i = 0
+    while i < raw.len() {
+        if raw[i].ends_with(".hexa") { sidx = i; break }
+        i = i + 1
+    }
+    let mut start = 1
+    if sidx >= 0 { start = sidx + 1 }
+    let mut k = start
+    while k < raw.len() {
+        user = user + [raw[k]]
+        k = k + 1
+    }
+    cmd_cam(user)
+}

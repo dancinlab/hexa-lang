@@ -1,0 +1,12 @@
+[loop] hexa loop — RFC 065 Phase C-4 + RFC 080 Phase A
+  flags: once=true no_fire=true dry_run=false
+
+[loop] cycle 1 (Phase C-4 + RFC 080 DFS)
+  [1/8 SCAN]    corpus snapshot (B-2.1: hash atlas + recent commits)
+  [2/8 LENS]    36 lens applied (C-2 real view, 153 candidate(s) emitted)
+  [3/8 DEDUP]   cooldown blocked 0 -> 153 survive
+  [4/8 GATE]    fire-vs-resolve -> 0 fire-needed, 153 settled
+  [5/8 FIRE]    --no-fire (default) - 0 uncertain deferred
+  [6/8 DRAFT]   148 candidate(s) -> archive/atlas_candidates/<slug>.md (dedup skipped 5)
+  [7/8 AUDIT]   chain += 153 · cooldown += 153 · growth.self_host += 153
+  [8/8 EXHAUST] 153 emit, 147 cooldown active -> continue

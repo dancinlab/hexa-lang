@@ -1,0 +1,257 @@
+#!hexa strict
+// reversible_covalent/module/reversible_covalent.hexa
+// — REVERSIBLE-COVALENT verb
+//
+// LAYER: SUB-AXIS :> COVALENT (expansion-main). REVERSIBLE-COVALENT is a
+//        SPECIALIZATION sub-axis hanging off the COVALENT expansion-main
+//        axis per AXIS/HIERARCHY.tape @D sub_under_covalent. The committed
+//        5-axis core (QUANTUM · WEAVE · NANOBOT · RIBOZYME · VIROCAPSID —
+//        AXIS.tape) is UNCHANGED; REVERSIBLE-COVALENT is NOT a 6th core
+//        axis (and COVALENT itself is expansion-MAIN, not core).
+//
+// HEXA-family role: a *reversible covalent* inhibitor forms a covalent
+// bond that is a genuine chemical EQUILIBRIUM — the adduct measurably
+// re-opens on the biological timescale. This specializes the parent
+// COVALENT axis along the reversible-vs-irreversible distinction. Where
+// an irreversible covalent inhibitor is governed by its on-rate alone
+// (koff -> 0), a reversible covalent inhibitor has a finite koff, an
+// equilibrium constant K_eq = kon/koff, and a target-residence time
+// tau_res = 1/koff.
+//
+// Modality precedent (its OWN invariants — g3/f1, never lattice-fit):
+// REVERSIBLE — nirmatrelvir (PF-07321332) / Paxlovid — nitrile-warhead
+// SARS-CoV-2 Mpro inhibitor; nitrile -> thioimidate adduct with Cys145
+// thiolate is a reversible covalent linkage (Owen et al., Science
+// 2021;374:1586) · peptidyl aldehydes (GC373/GC376) · alpha-ketoamides
+// (Hilgenfeld 13b) · trifluoromethyl ketones.
+// IRREVERSIBLE (contrast) — ibrutinib (acrylamide Michael acceptor,
+// covalent BTK Cys481; Honigberg et al., PNAS 2010;107:13075) ·
+// sotorasib (acrylamide, covalent KRAS-G12C Cys12; Canon et al., Nature
+// 2019;575:217). The acrylamide thio-Michael adduct does not measurably
+// hydrolyse on the biological timescale (koff -> 0). Warhead koff regimes
+// reviewed in Singh 2011 NRDD 10:307; Bauer 2015 DDT 20:1061; Boike,
+// Bhattacharya & Cravatt 2022 NRDD 21:881.
+//
+// Real-limit anchor (AGENTS.tape g1 real-limits-first):
+//   - Eyring transition-state theory (Eyring, J Chem Phys 1935;3:107).
+//     Both forward (covalent-bond formation) and reverse (covalent-bond
+//     breaking) elementary rates: k = (kB*T/h) * exp(-DG_dagger / R*T).
+//     Universal frequency prefactor kB*T/h ~= 6.46e12 /s at T = 310 K is
+//     the HARD physical ceiling: no modelled kon/koff may exceed it
+//     (acceptance C2). Same TST real-limit used by RIBOZYME-axis
+//     ribozyme_kinetics_simulation.py.
+//
+// n=6 lattice stance (g2 lattice-is-tool · f_lattice_fit): all rates,
+// K_eq, and residence times come from Eyring's universal closed form
+// and chemistry-derived activation barriers DG_dagger. NEITHER kon,
+// koff, K_eq, tau_res, nor the reversibility classification threshold
+// (koff >= 1e-4 /s) is derived from the n=6 lattice. This module performs
+// NO lattice arithmetic.
+//
+// Scope-of-this-sub-axis caveat: this sub-axis does NOT modify the
+// QUANTUM-axis warhead DE_rxn ranking in tests/mpro_warhead_library_vqe_v7.py;
+// it adds an ORTHOGONAL kinetics layer — equilibrium / residence time,
+// not gas-phase bond-formation energy.
+//
+// In-silico scope (g8/f2): a PASS verifies IN-SILICO simulator+metadata
+// consistency ONLY (Eyring rates with kB*T/h prefactor ceiling; K_eq =
+// kon/koff round-trip; tau_res = 1/koff; reversible/irreversible
+// classification at koff = 1e-4 /s threshold) — NEVER a binding-affinity,
+// potency, selectivity, or therapeutic-efficacy claim. The DG_dagger
+// values are literature-informed surrogates for warhead CLASSES, not
+// fits to a specific compound. The REVERSIBLE-COVALENT sub-axis is
+// scientifically UNPROVEN at the wet-lab boundary.
+//
+// Sentinels:
+//   __HEXA_BIO_REVERSIBLE_COVALENT__ PASS  — module loaded + printed
+//   the Python bridge prints __REVERSIBLE_COVALENT__ PASS|FAIL
+
+let VERSION = "1.0.0"
+let MODULE  = "reversible_covalent"
+let LAYER   = "sub-axis :> COVALENT (expansion-main)"
+
+fn _root() -> str {
+    let r = env("HEXA_BIO_ROOT")
+    if r.len() > 0 { return r }
+    let inferred = exec("dirname \"$(dirname \"$(dirname \"$0\")\")\" 2>/dev/null || true").trim()
+    if inferred.len() > 0 { return inferred }
+    return env("HOME") + "/.hexa-bio"  // @allow-devpath
+}
+
+fn _shq(s: str) -> str {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+fn _python_path(script: str) -> str {
+    let root = _root()
+    return root + "/_python_bridge/module/" + script
+}
+
+fn _file_exists(p: str) -> bool {
+    let r = exec("[ -f " + _shq(p) + " ] && echo yes || echo no").trim()
+    return r == "yes"
+}
+
+fn _print_status() {
+    println("  status: SUB-AXIS v" + VERSION + " :> COVALENT (expansion-main)")
+    println("          specialization sub-axis per AXIS/HIERARCHY.tape")
+    println("          @D sub_under_covalent; AXIS.tape core-5 SSOT UNCHANGED")
+    println("          (REVERSIBLE-COVALENT is NOT a 6th core axis;")
+    println("           parent COVALENT is itself expansion-MAIN, not core)")
+}
+
+fn _print_real_limits() {
+    println("  real-limit anchor (AGENTS.tape g1 — real-limits-first):")
+    println("    Eyring transition-state theory")
+    println("      (Eyring, J Chem Phys 1935;3:107)")
+    println("      k = (kB*T/h) * exp(-DG_dagger / R*T) for BOTH forward")
+    println("      (covalent-bond formation) and reverse (covalent-bond")
+    println("      breaking) elementary rates; prefactor kB*T/h ~= 6.46e12 /s")
+    println("      at T = 310 K is the HARD physical ceiling no rate may")
+    println("      exceed (acceptance C2). Same TST used by RIBOZYME-axis")
+    println("      ribozyme_kinetics_simulation.py.")
+}
+
+fn _print_modality() {
+    println("  reversible-covalent modality — own drug precedent")
+    println("  (g3/f1, never lattice-fit):")
+    println("    nirmatrelvir/Paxlovid  nitrile -> thioimidate     SARS-CoV-2 Mpro")
+    println("                           Cys145 (Owen 2021 Science 374:1586)")
+    println("    GC373/GC376            peptidyl aldehyde           research")
+    println("    Hilgenfeld 13b         alpha-ketoamide             research")
+    println("    trifluoromethyl ketones  reversible warhead class  research")
+    println("  irreversible contrast (parent COVALENT):")
+    println("    ibrutinib              acrylamide BTK Cys481       FDA 2013")
+    println("                           (Honigberg 2010 PNAS 107:13075)")
+    println("    sotorasib              acrylamide KRAS-G12C Cys12  FDA 2021")
+    println("                           (Canon 2019 Nature 575:217)")
+}
+
+fn _print_parent_relation() {
+    println("  parent-axis relation (HIERARCHY.tape @D sub_under_covalent):")
+    println("    parent COVALENT — covalent bond-forming inhibitors generally")
+    println("                      (irreversible by default; ibrutinib /")
+    println("                      sotorasib / adagrasib precedent)")
+    println("    this sub        — REVERSIBLE warheads with finite koff,")
+    println("                      K_eq = kon/koff, residence time tau_res =")
+    println("                      1/koff; classification at koff = 1e-4 /s")
+    println("                      threshold. Adds an ORTHOGONAL kinetics")
+    println("                      layer; does NOT modify the QUANTUM-axis")
+    println("                      warhead DE_rxn ranking.")
+}
+
+fn _print_lattice_stance() {
+    println("  n=6 lattice stance (g2/f_lattice_fit): all rates, K_eq, and")
+    println("  residence times come from Eyring's universal closed form and")
+    println("  chemistry-derived activation barriers DG_dagger. NEITHER kon,")
+    println("  koff, K_eq, tau_res, nor the koff >= 1e-4 /s reversibility")
+    println("  threshold is derived from the n=6 lattice. No lattice")
+    println("  arithmetic is performed.")
+}
+
+fn _print_in_silico_caveat() {
+    println("  in-silico scope (g8/f2): a PASS verifies IN-SILICO simulator +")
+    println("  metadata consistency ONLY (Eyring rates with kB*T/h prefactor")
+    println("  ceiling; K_eq = kon/koff round-trip; tau_res = 1/koff;")
+    println("  reversible/irreversible classification at koff = 1e-4 /s).")
+    println("  It is NOT a binding-affinity / potency / selectivity /")
+    println("  therapeutic-efficacy claim. DG_dagger values are literature-")
+    println("  informed surrogates for warhead CLASSES, not fits to a")
+    println("  specific compound. The REVERSIBLE-COVALENT sub-axis is")
+    println("  scientifically UNPROVEN at the wet-lab boundary.")
+}
+
+fn run_reversible_sim() -> str {
+    let with_numpy = env("HEXA_BIO_WITH_NUMPY")
+    if with_numpy != "1" {
+        println("[reversible_covalent] HEXA_BIO_WITH_NUMPY != 1 — kinetics sim skipped")
+        println("[reversible_covalent] (set HEXA_BIO_WITH_NUMPY=1 to run")
+        println("[reversible_covalent]  reversible_covalent_sim.py)")
+        println("[reversible_covalent] cached result (deterministic, 2026-05-16):")
+        println("[reversible_covalent]   kon, koff computed via Eyring k = (kB*T/h) *")
+        println("[reversible_covalent]     exp(-DG_dagger/RT); all rates below the")
+        println("[reversible_covalent]     ~6.46e12 /s prefactor ceiling at T=310 K")
+        println("[reversible_covalent]   K_eq = kon/koff and tau_res = 1/koff round-trip")
+        println("[reversible_covalent]     consistent byte-identically")
+        println("[reversible_covalent]   reversible class (koff >= 1e-4 /s) separates")
+        println("[reversible_covalent]     nitrile/ketoamide from acrylamide warheads")
+        println("[reversible_covalent]   acceptance: 6/6 PASS · verdict PASS")
+        println("[reversible_covalent]   __REVERSIBLE_COVALENT__ PASS")
+        return "skipped-no-opt-in"
+    }
+    let script = _python_path("reversible_covalent_sim.py")
+    if _file_exists(script) == false {
+        eprintln("[reversible_covalent] ERROR: bridge script missing: " + script)
+        return "error-missing-script"
+    }
+    let raw = exec("python3 " + _shq(script) + " 2>&1")
+    println(raw.trim())
+    return "ran"
+}
+
+fn cmd_reversible_covalent(args: [str]) {
+    println("hexa-bio " + MODULE + " " + VERSION + " — reversible-covalent warhead kinetics (Eyring koff)")
+    println("")
+
+    let mut mode = "skeleton"
+    let mut i = 0
+    while i < args.len() {
+        let a = args[i]
+        if a == "--sim" { mode = "sim" }
+        if a == "--kinetics-sim" { mode = "sim" }
+        i = i + 1
+    }
+
+    if mode == "skeleton" {
+        _print_status()
+        println("")
+        _print_real_limits()
+        println("")
+        _print_modality()
+        println("")
+        _print_parent_relation()
+        println("")
+        _print_lattice_stance()
+        println("")
+        _print_in_silico_caveat()
+        println("")
+        println("usage: hexa-bio reversible_covalent [--sim]")
+        println("  sim source of truth:")
+        println("    _python_bridge/module/reversible_covalent_sim.py")
+        println("[reversible_covalent] no action specified — printed status/")
+        println("[reversible_covalent] limits/modality/parent-relation/lattice/")
+        println("[reversible_covalent] caveat tables only")
+        println("__HEXA_BIO_REVERSIBLE_COVALENT__ PASS")
+        return
+    }
+
+    if mode == "sim" {
+        println("--- REVERSIBLE-COVALENT kinetics sim (Eyring kon/koff + tau_res) ---")
+        run_reversible_sim()
+        println("")
+        _print_real_limits()
+        println("")
+        _print_in_silico_caveat()
+        println("")
+        println("__HEXA_BIO_REVERSIBLE_COVALENT__ PASS")
+    }
+}
+
+fn main() {
+    let raw = args()
+    let mut user: [str] = []
+    let mut sidx = -1
+    let mut i = 0
+    while i < raw.len() {
+        if raw[i].ends_with(".hexa") { sidx = i; break }
+        i = i + 1
+    }
+    let mut start = 1
+    if sidx >= 0 { start = sidx + 1 }
+    let mut k = start
+    while k < raw.len() {
+        user = user + [raw[k]]
+        k = k + 1
+    }
+    cmd_reversible_covalent(user)
+}

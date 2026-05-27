@@ -1,0 +1,101 @@
+// anu_noise_model.hexa — ANU QRNG → Qiskit NoiseModel bridge adapter
+//
+// Role
+//   Given an iteration count `n_calls` and a per-iter byte budget (default 16),
+//   fetch ANU-QRNG bytes via the existing self-contained fetcher
+//   (shared/sim_bridge/godel_q/anu_source.hexa) and stream them as hex lines
+//   onto stdout. One hex line == one iteration's randomness slice.
+//
+//   vqe_h2_demo.py reads this blob, converts each line into a float vector in
+//   [0,1), and uses it to (a) choose Pauli-error outcomes (bit-flip / phase-flip
+//   / Z-flip) matching a target average error rate, and (b) perturb ansatz
+//   parameters with ANU-seeded Gaussian noise.
+//
+// Why a hexa wrapper at all:
+//   • Routes through GATE_LOCAL=1 infra without ad-hoc curl in Python.
+//   • Caches 64-byte blocks; one ANU fetch covers N iterations when
+//     (bytes_per_iter * n_calls) < 64 * refills.
+//   • Logs source (anu / cache / urandom) alongside so runner.sh can
+//     detect fallback mode.
+//
+// Usage
+//   HEXA_LOCAL=1 hexa anu_noise_model.hexa <n_calls> [bytes_per_iter=16]
+//     → stdout (data lines):    "<hex>...\n" * n_calls  (pure hex, no '#')
+//     → stdout (info line):     "# info source=<anu|urandom|mixed> ..."
+//
+// The hex lines are what Python consumes.  Each byte maps to a float
+// b/256.0 in the Python side; errata documented in README.md.
+// stage0 hexa's eprintln is stdout-bound; we use a '#' prefix so callers
+// can grep out the metadata line trivially.
+
+// @no-sandbox — reads self-contained anu_source.hexa; no L0 writes.
+
+let argv = args()
+if argv.len() < 2 {
+    eprintln("usage: anu_noise_model.hexa <n_calls> [bytes_per_iter=16]")
+    exit(2)
+}
+
+let n_calls = to_int(argv[1])
+let mut bpi = 16
+if argv.len() >= 3 { bpi = to_int(argv[2]) }
+
+if n_calls <= 0 || n_calls > 100000 {
+    eprintln("REJECT: n_calls out of range [1, 100000]")
+    exit(2)
+}
+if bpi <= 0 || bpi > 64 {
+    eprintln("REJECT: bytes_per_iter out of range [1, 64]")
+    exit(2)
+}
+
+let home = env_var("HOME")
+let hexa_bin = home + "/Dev/nexus/bin/hexa"
+let anu_src = home + "/Dev/nexus/sim_bridge/godel_q/anu_source.hexa"
+
+let mut anu_count = 0
+let mut ura_count = 0
+let mut total_bytes = 0
+
+// accumulate a pool of hex-nibbles, 1 ANU fetch = 64 bytes = 128 hex chars
+let mut pool = ""
+let mut i = 0
+while i < n_calls {
+    let need = bpi * 2
+    while pool.len() < need {
+        let cmd = "HEXA_LOCAL=1 " + hexa_bin + " " + anu_src + " info 2>/dev/null"
+        let out = to_string(exec(cmd)).trim()  // @allow-bare-exec
+        if out.len() == 0 {
+            eprintln("REJECT: anu_source returned empty")
+            exit(3)
+        }
+        let mut hex_chunk = ""
+        let mut src_tag = ""
+        let parts = out.split(" ")
+        let mut j = 0
+        while j < parts.len() {
+            let p = parts[j]
+            if p.starts_with("hex=") { hex_chunk = p.substring(4, p.len()) }
+            if p.starts_with("source=") { src_tag = p.substring(7, p.len()) }
+            j = j + 1
+        }
+        if hex_chunk.len() < 2 {
+            eprintln("REJECT: anu_source hex empty")
+            exit(3)
+        }
+        pool = pool + hex_chunk
+        if src_tag == "anu" || src_tag == "cache" { anu_count = anu_count + 1 }
+        else { ura_count = ura_count + 1 }
+    }
+    let line = pool.substring(0, need)
+    pool = pool.substring(need, pool.len())
+    println(line)
+    total_bytes = total_bytes + bpi
+    i = i + 1
+}
+
+let mut src_label = "anu"
+if anu_count == 0 && ura_count > 0 { src_label = "urandom" }
+else if anu_count > 0 && ura_count > 0 { src_label = "mixed" }
+
+println("# info source=" + src_label + " anu_fetches=" + to_string(anu_count) + " ura_fetches=" + to_string(ura_count) + " total_bytes=" + to_string(total_bytes))

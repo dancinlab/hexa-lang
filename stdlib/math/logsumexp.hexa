@@ -1,0 +1,220 @@
+#!hexa strict
+// ============================================================================
+// stdlib/math/logsumexp.hexa — numerically-stable log-sum-exp (LSE)
+//
+// Pure-math primitive for the log-sum-exp reduction, the workhorse behind
+// softmax denominators, log-domain probability normalization, and any
+// marginalization over log-weights. No domain (classifier logits / HMM
+// forward pass / variational ELBO / etc.) baked in. Downstream callers `use`
+// this module and supply their own log-domain quantities.
+//
+//     LSE(x₁,…,xₙ) = ln( Σ_i exp(x_i) )
+//
+// The naive form overflows the moment any x_i ≳ 710 (exp overflows double) and
+// underflows to ln(0) = −∞ when every x_i ≪ 0. The max-shift identity makes it
+// safe for any finite inputs:
+//
+//     m = max_i x_i
+//     LSE(x) = m + ln( Σ_i exp(x_i − m) )
+//
+// Every shifted term exp(x_i − m) ∈ (0, 1], the largest being exactly 1, so the
+// sum is in [1, n] — no overflow, and at least one term (the max) contributes
+// fully so there is no total underflow. When every input is −∞ the result is
+// −∞ (the empty/all-zero-probability limit).
+//
+// Honest scope (commons g3):
+//   · Real-valued finite (or −∞) inputs. +∞ propagates to +∞.
+//   · Empty input → −∞ sentinel (ln of an empty sum = ln 0).
+//   · exp/ln come from self/runtime/math_pure (series/range-reduced, ~ε).
+//
+// Surface (pure functions):
+//   fn logsumexp(xs)        → ln Σ exp(x_i)          (max-shifted)
+//   fn softmax(xs)          → [p_i]  with  p_i = exp(x_i − LSE(x))   (Σ p = 1)
+//
+// Self-test (this file): 5 closed-form falsifiers
+//   LSE([0,0,0]) = ln 3
+//   LSE([1000,1000]) = 1000 + ln 2   (naive would overflow)
+//   LSE([x]) = x                     (single = identity)
+//   LSE(x) ≥ max(x)                  (lower-bound invariant)
+//   softmax denominator: Σ exp(x_i − LSE) = 1
+//
+// Run:
+//     hexa run stdlib/math/logsumexp.hexa
+//
+// @no-lock-needed
+
+use "self/runtime/math_pure"
+
+let VERSION = "1.0.0"
+
+// ─── check harness ──────────────────────────────────────────────────────
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+fn abs_f(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn rel_err(a: float, b: float) -> float {
+    let d = abs_f(a - b)
+    let abs_b = abs_f(b)
+    if abs_b < 1.0e-30 { return d }
+    return d / abs_b
+}
+
+// −∞ sentinel for the empty / all-zero-probability limit (ln 0).
+let NEG_INF: float = -1.0e300
+
+// ─── core: max-shifted log-sum-exp ──────────────────────────────────────
+
+// LSE(xs) = m + ln( Σ exp(x_i − m) ),  m = max_i x_i.
+// Empty input → NEG_INF (ln of an empty sum).
+fn logsumexp(xs: [float]) -> float {
+    let n = xs.len()
+    if n < 1 { return NEG_INF }
+
+    // First pass: the maximum (the shift that keeps every term ≤ 1).
+    let mut m: float = xs[0]
+    let mut i = 1
+    while i < n {
+        if xs[i] > m { m = xs[i] }
+        i = i + 1
+    }
+
+    // If the max is the −∞ sentinel, every input is −∞ → LSE = −∞.
+    if m <= NEG_INF * 0.5 { return NEG_INF }
+
+    // Second pass: Σ exp(x_i − m). The max term contributes exactly 1.0.
+    let mut s: float = 0.0
+    let mut j = 0
+    while j < n {
+        s = s + exp_pure(xs[j] - m)
+        j = j + 1
+    }
+
+    return m + log_pure(s)
+}
+
+// softmax(xs)_i = exp(x_i − LSE(xs)); the components sum to 1.
+fn softmax(xs: [float]) -> [float] {
+    let n = xs.len()
+    let lse = logsumexp(xs)
+    let mut out: [float] = []
+    let mut i = 0
+    while i < n {
+        out = out + [exp_pure(xs[i] - lse)]
+        i = i + 1
+    }
+    return out
+}
+
+// ─── analytical anchor checks (self-test) ───────────────────────────────
+
+fn check_lse_zeros() {
+    // LSE([0,0,0]) = ln(exp0 + exp0 + exp0) = ln 3.
+    // ln 3 is passed inline (a stored divided/special literal would round).
+    let xs: [float] = [0.0, 0.0, 0.0]
+    let v = logsumexp(xs)
+    _check(rel_err(v, log_pure(3.0)) < 1.0e-13,
+        "LSE([0,0,0]) = ln 3 (closed-form anchor)",
+        "LSE=" + str(v) + "  ln3=" + str(log_pure(3.0)) +
+        "  rel_err=" + str(rel_err(v, log_pure(3.0))))
+}
+
+fn check_lse_overflow_safe() {
+    // LSE([1000,1000]) = 1000 + ln 2. Naive Σ exp(1000) overflows double (∞);
+    // the max-shift makes each shifted term exp(0)=1 so the sum is exactly 2.
+    let xs: [float] = [1000.0, 1000.0]
+    let v = logsumexp(xs)
+    let target_ok = rel_err(v, 1000.0 + log_pure(2.0)) < 1.0e-13
+    let finite = v < 1.0e290 && v > -1.0e290
+    _check(target_ok && finite,
+        "LSE([1000,1000]) = 1000 + ln 2 (overflow-safe; naive → ∞)",
+        "LSE=" + str(v) + "  target=" + str(1000.0 + log_pure(2.0)) +
+        "  finite=" + str(finite))
+}
+
+fn check_lse_single_identity() {
+    // A single element: LSE([x]) = ln(exp x) = x.
+    let xs: [float] = [-37.25]
+    let v = logsumexp(xs)
+    _check(rel_err(v, -37.25) < 1.0e-13,
+        "LSE([x]) = x (single = identity)",
+        "LSE=" + str(v) + "  x=-37.25  rel_err=" + str(rel_err(v, -37.25)))
+}
+
+fn check_lse_ge_max() {
+    // LSE(x) ≥ max(x) always (the sum has the max-term plus non-negative rest).
+    let xs: [float] = [-2.0, 5.5, 0.0, 5.49, 3.0, -100.0]
+    let v = logsumexp(xs)
+    // max is 5.5
+    _check(v >= 5.5 && v < 5.5 + log_pure(6.0),
+        "LSE(x) ≥ max(x) and ≤ max + ln n (bounding invariant)",
+        "LSE=" + str(v) + "  max=5.5  max+ln(n)=" + str(5.5 + log_pure(6.0)))
+}
+
+fn check_softmax_normalized() {
+    // softmax components must sum to 1 (LSE is exactly the normalizer).
+    let xs: [float] = [1.0, 2.0, 3.0, -1.0, 0.5]
+    let p = softmax(xs)
+    let mut s: float = 0.0
+    let mut i = 0
+    while i < p.len() {
+        s = s + p[i]
+        i = i + 1
+    }
+    _check(rel_err(s, 1.0) < 1.0e-13,
+        "softmax denominator: Σ exp(x_i − LSE) = 1 (normalizer consistency)",
+        "Σp=" + str(s) + "  rel_err=" + str(rel_err(s, 1.0)))
+}
+
+// ─── falsifiers ─────────────────────────────────────────────────────────
+
+let FALSIFIERS = [
+    "zeros break — LSE([0,0,0]) ≠ ln 3 → DEMOTE Σ exp(x_i − m) accumulation",
+    "overflow break — LSE([1000,1000]) overflows / ≠ 1000+ln 2 → DEMOTE max-shift (m = max_i x_i)",
+    "single break — LSE([x]) ≠ x → DEMOTE n=1 identity (sum=1 ⇒ ln 1 = 0 ⇒ m)",
+    "lower-bound break — LSE(x) < max(x) → DEMOTE max-term-contributes-1.0 invariant",
+    "softmax break — Σ exp(x_i − LSE) ≠ 1 → DEMOTE LSE-as-normalizer (denominator = exp LSE)",
+]
+
+// ─── main ───────────────────────────────────────────────────────────────
+
+fn main() {
+    println("========================================================================")
+    println("  stdlib/math — numerically-stable log-sum-exp (LSE)")
+    println("========================================================================")
+    println("  LSE(x) = m + ln( Σ exp(x_i − m) ),   m = max_i x_i")
+    println("  softmax_i = exp(x_i − LSE(x))   (Σ = 1)")
+    println("")
+
+    println("  Anchor checks (5 closed-form falsifiers):")
+    check_lse_zeros()
+    check_lse_overflow_safe()
+    check_lse_single_identity()
+    check_lse_ge_max()
+    check_softmax_normalized()
+
+    println("")
+    println("  FALSIFIERS (" + str(FALSIFIERS.len()) + "):")
+    for f in FALSIFIERS { println("    ✗ " + f) }
+
+    println("========================================================================")
+    let pass_n = RUN - FAIL
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("  log-sum-exp primitive self-test FAILED — see per-check output above.")
+        println("__HEXA_STDLIB_MATH_LOGSUMEXP__ FAIL")
+        exit(1)
+    }
+    println("  log-sum-exp primitive: PASS")
+    println("__HEXA_STDLIB_MATH_LOGSUMEXP__ PASS")
+    exit(0)
+}

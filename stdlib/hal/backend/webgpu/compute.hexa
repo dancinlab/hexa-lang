@@ -1,0 +1,161 @@
+#!hexa strict
+// stdlib/hal/backend/webgpu/compute.hexa — WebGPU backend
+//                                           — paper skeleton.
+//
+// Phase: skeleton / stub. Real WebGPU integration is downstream FFI
+// scope (wgpu-native via webgpu.h C ABI for native; navigator.gpu
+// for browser).
+//
+// Target:    WebGPU CR Draft (canon §2 web-search 2026-05-08).
+// Runtime:   wgpu-native (Rust impl with C bindings — github.com/gfx-rs/wgpu)
+//            OR Dawn (Google's C++ impl) — both expose webgpu.h.
+//            Browser: navigator.gpu (JS API; same WGSL surface).
+// IR:        WGSL (WebGPU Shading Language; required for browser)
+//            OR SPIR-V (wgpu-native + Tint translator; native only).
+// Hardware:  cross-platform/cross-vendor — Vulkan (Linux/Android),
+//            DirectX 12 (Windows), Metal (macOS/iOS), OpenGL ES (legacy).
+// Surface:   wgpu_{buffer_alloc,...,event_release}
+//
+// IR mapping: WGSL is canonical; SPIR-V supported by wgpu-native via
+// Tint (shader translator). Browser implementations require WGSL only
+// (security: SPIR-V is too low-level to safely accept from web).
+//
+// Memory tier mapping (compute.hexa TIER_* → WebGPU GPUBuffer usage):
+//   TIER_PRIVATE  → not directly exposed (per-invocation register state)
+//   TIER_GROUP    → workgroup variables (var<workgroup> in WGSL)
+//   TIER_DEVICE   → GPUBufferUsage.STORAGE | COPY_SRC | COPY_DST
+//   TIER_CONSTANT → GPUBufferUsage.UNIFORM (UBO; ≤ 64 KB on most adapters)
+//
+// Barrier scope mapping:
+//   SCOPE_SUBGROUP   → subgroupBarrier() (WebGPU subgroups extension;
+//                                          experimental as of CR Draft;
+//                                          enabled via subgroups feature)
+//   SCOPE_WORKGROUP  → workgroupBarrier() (WGSL builtin)
+//   SCOPE_CLUSTER    → no native; emulate via storage atomics
+//   SCOPE_GRID       → no native; emulate via separate dispatch
+//
+// Subgroup size: WebGPU exposes only `subgroup_size` (range typically
+// 4..128 depending on adapter — 32 on Nvidia/Apple, 32 or 64 on AMD,
+// 8/16/32 on Intel). sg_w should be aligned to the actual reported
+// value via GPUSupportedFeatures.subgroups + min/max query.
+//
+// WebGPU dispatch limits (CR Draft):
+//   maxComputeWorkgroupsPerDimension = 65535
+//   maxComputeWorkgroupSizeX/Y/Z      = 256/256/64 (defaults; adapter-specific)
+//   maxComputeInvocationsPerWorkgroup = 256
+
+let MODULE_NAME = "wgpu_compute"
+let VENDOR_NAME = "webgpu"
+
+let WEBGPU_VERSION = "CR-Draft"
+
+let IR_PRIMARY  = "wgsl"      // canonical WebGPU shader IR
+let IR_FALLBACK = "spirv"     // wgpu-native + Tint translator
+
+let TIER_PRIVATE  = 0
+let TIER_GROUP    = 1
+let TIER_DEVICE   = 2
+let TIER_CONSTANT = 3
+
+let SCOPE_SUBGROUP  = 0
+let SCOPE_WORKGROUP = 1
+let SCOPE_CLUSTER   = 2
+let SCOPE_GRID      = 3
+
+// GPUBufferUsage bitfields (per CR Draft §5.8).
+let GPUBufferUsage_MAP_READ      = 0x0001
+let GPUBufferUsage_MAP_WRITE     = 0x0002
+let GPUBufferUsage_COPY_SRC      = 0x0004
+let GPUBufferUsage_COPY_DST      = 0x0008
+let GPUBufferUsage_INDEX         = 0x0010
+let GPUBufferUsage_VERTEX        = 0x0020
+let GPUBufferUsage_UNIFORM       = 0x0040
+let GPUBufferUsage_STORAGE       = 0x0080
+let GPUBufferUsage_INDIRECT      = 0x0100
+let GPUBufferUsage_QUERY_RESOLVE = 0x0200
+
+// Limits (CR Draft default; queryable at runtime).
+let MAX_WORKGROUP_INVOCATIONS = 256
+let MAX_WORKGROUPS_PER_DIM    = 65535
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn wgpu_buffer_alloc(tier: int, n_bytes: int) -> int {
+    if tier < 0 || tier > 3 { return -1 }
+    if n_bytes <= 0 { return -2 }
+    // STUB: device.createBuffer({size: n, usage: STORAGE|COPY_SRC|COPY_DST})
+    //       For UNIFORM (TIER_CONSTANT), enforce n ≤ maxUniformBufferBindingSize (64 KB default).
+    return 0
+}
+
+fn wgpu_buffer_h2d(handle: int, src_host: int, n_bytes: int) -> bool {
+    if handle < 0 || n_bytes <= 0 { return false }
+    // STUB: queue.writeBuffer(buffer, 0, src, 0, n_bytes)
+    //       OR mapAsync + getMappedRange + memcpy + unmap (for streaming)
+    return true
+}
+
+fn wgpu_buffer_d2h(handle: int, dst_host: int, n_bytes: int) -> bool {
+    if handle < 0 || n_bytes <= 0 { return false }
+    // STUB: copyToReadbackBuffer (separate MAP_READ buffer) + mapAsync + getMappedRange
+    return true
+}
+
+fn wgpu_buffer_free(handle: int) -> bool {
+    if handle < 0 { return false }
+    // STUB: buffer.destroy()
+    return true
+}
+
+fn wgpu_kernel_compile(ir: int, n_bytes: int) -> int {
+    if ir < 0 || n_bytes <= 0 { return -1 }
+    // STUB: device.createShaderModule({code: wgsl_or_spirv_bytes})
+    //       + device.createComputePipeline({layout: ..., compute: {module, entryPoint}})
+    return 0
+}
+
+fn wgpu_kernel_release(handle: int) -> bool {
+    if handle < 0 { return false }
+    return true
+}
+
+fn wgpu_dispatch(kern: int, gx: int, gy: int, gz: int,
+                 wx: int, wy: int, wz: int,
+                 scope: int, dep: int, sg_w: int) -> int {
+    if kern < 0 { return -1 }
+    if scope < 0 || scope > 3 { return -2 }
+    if gx > MAX_WORKGROUPS_PER_DIM || gy > MAX_WORKGROUPS_PER_DIM ||
+       gz > MAX_WORKGROUPS_PER_DIM { return -3 }
+    if (wx * wy * wz) > MAX_WORKGROUP_INVOCATIONS { return -4 }
+    // STUB: encoder = device.createCommandEncoder()
+    //       pass = encoder.beginComputePass()
+    //       pass.setPipeline(pipeline)
+    //       pass.setBindGroup(0, bg)
+    //       pass.dispatchWorkgroups(gx, gy, gz)
+    //       pass.end()
+    //       queue.submit([encoder.finish()])
+    return 0
+}
+
+fn wgpu_event_wait(event: int) -> bool {
+    if event < 0 { return false }
+    // STUB: device.poll(WAIT) (wgpu-native) OR await queue.onSubmittedWorkDone() (browser)
+    return true
+}
+
+fn wgpu_event_release(event: int) -> bool {
+    if event < 0 { return false }
+    return true
+}
+
+fn wgpu_module_meta() -> [str] {
+    return [MODULE_NAME, VENDOR_NAME, IR_PRIMARY, "4"]
+}
+
+fn main() {
+    println("[wgpu_compute sim] STUB skeleton — sim-first; FFI to wgpu-native (or navigator.gpu) TODO")
+    println("  WebGPU " + WEBGPU_VERSION)
+    println("  IR: WGSL (primary; browser-required) | SPIR-V (wgpu-native via Tint)")
+    println("  cross-platform: Vulkan / D3D12 / Metal / OpenGL ES")
+    println("  default limits: maxWG=" + str(MAX_WORKGROUPS_PER_DIM) + ", invocations/WG=" + str(MAX_WORKGROUP_INVOCATIONS))
+}

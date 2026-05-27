@@ -1,0 +1,56 @@
+// HEXA Standard Library — math/wrap_pi
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Angle normalization primitive. Lands the orbital Kepler pilot's
+// in-kernel inline (stdlib/kernels/orbital/kepler_2body_kernel.hexa:107)
+// as a reusable core primitive so any future angle-mod consumer
+// (control, planning, IK, gyro fusion, SDR phase wraps, …) inherits
+// the same +π-boundary convention.
+//
+// Surface:
+//   pub fn wrap_pi(x: float) -> float    // (−π, π]
+//
+// Convention:
+//   Maps any real x to the unique representative in (−π, π], i.e. +π
+//   stays at +π (NOT at −π). This matches Python `fmod`-based angle
+//   normalization (used by Skyfield, SciPy, pvlib, …) so cross-language
+//   parity tests don't false-flag at the boundary.
+//
+// The natural `x − 2π·floor((x+π)/2π)` formulation would map +π → −π;
+// we instead reduce to [0, 2π) and shift only if `> π` (strict
+// inequality at +π preserves the boundary). See the orbital pilot's
+// reconcile note (#5b) for the discovery context.
+
+use "stdlib/core/math/float"
+
+// ── reduce angle (rad) into [−π, π] ──────────────────────────────────
+//
+// Mathematically equivalent to `fmod(x, 2π)` post-shifted to be
+// symmetric about 0, preserving BOTH boundaries (matches Python
+// `math.fmod` parity): a literal +π input returns +π, a literal −π
+// input returns −π. All other inputs fall in the open interval
+// (−π, π); the boundary is multi-valued and selected by input sign.
+//
+// Examples:
+//   wrap_pi(0.0)       =  0.0
+//   wrap_pi(pi())      =  pi()             (+π preserved)
+//   wrap_pi(-pi())     = -pi()             (−π preserved — diverges
+//                                            from the convenient
+//                                            `floor((x+π)/2π)` form)
+//   wrap_pi(2.5*pi())  =  0.5*pi()         (large positive wraps)
+//   wrap_pi(-2.5*pi()) = -0.5*pi()         (large negative wraps)
+pub fn wrap_pi(x: float) -> float {
+    let p = pi()
+    // Fast path / parity guard: already in [−π, π] — return as-is.
+    // This is what preserves `wrap_pi(−π) = −π` (the floored-modulo
+    // formula would round-trip −π → +π by quotient-set membership).
+    if x >= 0.0 - p && x <= p { return x }
+    let two_pi = tau()
+    // Floored-modulo into [0, 2π) — works correctly for negative x too.
+    let mut m = x - two_pi * floor(x / two_pi)
+    // (π, 2π) → (−π, 0). Strict `>` keeps exact +π at +π post-wrap.
+    if m > p { m = m - two_pi }
+    return m
+}

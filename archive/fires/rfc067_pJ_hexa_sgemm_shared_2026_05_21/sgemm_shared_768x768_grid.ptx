@@ -1,0 +1,182 @@
+// RFC 067 PJ perf SGEMM hexa-emit + shared-mem prefetch -- M=N=K=768.
+//
+// Same WMMA shape and tile geometry as PI (gen_sgemm_ptx.py), but the
+// per-K-step A and B tiles are first co-operatively loaded into shared
+// memory by all 512 threads, then read by all 16 warps via
+// wmma.load.{a,b}.shared. This trades K-step global re-loads (4 warps
+// share each row of A and each col of B in the PI kernel) for a single
+// global load per K-step + 4 shared-mem reads.
+//
+// Layout (unchanged from PI):
+//   A row-major     [M=768 x K=768] f32. Row stride = 768 elem = 3072 B.
+//   B col-major     [K=768 x N=768] f32. Col stride = 768 elem = 3072 B.
+//   C row-major out [M=768 x N=768] f32. Row stride = 768 elem = 3072 B.
+//
+// Per-CTA base addresses:
+//   A_cta = a + ctaid.y * 196608
+//   B_cta = b + ctaid.x * 196608
+//   C_cta = c + ctaid.y * 196608 + ctaid.x * 256
+//
+// Per-warp offsets (warp = tid.x>>5, m_tile = warp>>2, n_tile = warp&3):
+//   A_warp_smem = _tg_a + m_tile * 16 * 32     (stride 8 elem = 32 B)
+//   B_warp_smem = _tg_b + n_tile * 16 * 32
+//   C_warp     = C_cta + m_tile * 49152 + n_tile * 64
+//
+// Cooperative load (per K-step):
+//   thread t = tid.x in [0, 512):
+//     row_a = t >> 3      col_a = t & 7
+//     row_b = t >> 3      kr_b  = t & 7        (B col-major: load along K)
+//     A_g  = A_cta + row_a * 768 * 4 + (k_step*8 + col_a) * 4
+//     B_g  = B_cta + row_b * 768 * 4 + (k_step*8 + kr_b)  * 4
+//     _tg_a[row_a*8 + col_a] = *A_g
+//     _tg_b[row_b*8 + kr_b]  = *B_g
+//   bar.sync 0
+//   wmma.load.a.shared / wmma.load.b.shared / wmma.mma / bar.sync 0
+
+.version 8.0
+.target sm_90
+.address_size 64
+
+.shared .align 16 .b8 _tg_a[2048];   // 64 rows * 8 elem * 4 B
+.shared .align 16 .b8 _tg_b[2048];   // 64 cols * 8 elem * 4 B
+
+.visible .entry sgemm_shared_768x768_grid (
+    .param .u64 a,
+    .param .u64 b,
+    .param .u64 c,
+    .param .u64 k_tiles
+)
+{
+    .reg .u64 %rd<32>;
+    .reg .u32 %r<32>;
+    .reg .pred %p1;
+    .reg .b32 %ra<4>;
+    .reg .b32 %rb<4>;
+    .reg .f32 %fc<8>;
+    .reg .f32 %fa1;
+    .reg .f32 %fb1;
+
+    ld.param.u64 %rd0, [a];
+    ld.param.u64 %rd1, [b];
+    ld.param.u64 %rd2, [c];
+    ld.param.u64 %rd3, [k_tiles];
+
+    mov.u32 %r10, %ctaid.y;
+    mov.u32 %r11, %ctaid.x;
+
+    mov.u32 %r1, %tid.x;
+    shr.u32 %r2, %r1, 5;        // warp id
+    shr.u32 %r3, %r2, 2;        // m_tile = warp >> 2
+    and.b32 %r4, %r2, 3;        // n_tile = warp & 3
+
+    // Cooperative-load indices (per thread):
+    //   row_load = tid.x >> 3   in [0, 64)
+    //   col_load = tid.x & 7    in [0, 8)
+    shr.u32 %r12, %r1, 3;       // row_load
+    and.b32 %r13, %r1, 7;       // col_load
+
+    // A_cta base = a + ctaid.y * 196608
+    mul.lo.u32 %r5, %r10, 196608;
+    cvt.u64.u32 %rd4, %r5;
+    add.u64 %rd10, %rd0, %rd4;
+
+    // B_cta base = b + ctaid.x * 196608
+    mul.lo.u32 %r5, %r11, 196608;
+    cvt.u64.u32 %rd5, %r5;
+    add.u64 %rd11, %rd1, %rd5;
+
+    // A load-offset (per-thread, w.r.t. A_cta, excludes k_step):
+    //   row_load * 768 * 4 + col_load * 4
+    mul.lo.u32 %r14, %r12, 3072;
+    mul.lo.u32 %r15, %r13, 4;
+    add.u32 %r14, %r14, %r15;
+    cvt.u64.u32 %rd14, %r14;
+    add.u64 %rd14, %rd10, %rd14;     // %rd14 = A_cta + row_load*3072 + col_load*4
+
+    // B load-offset (per-thread, w.r.t. B_cta, excludes k_step):
+    //   row_load * 768 * 4 + col_load * 4  (B col-major: row_load = which col,
+    //                                       col_load = K-row within tile)
+    cvt.u64.u32 %rd15, %r14;          // same scalar offset
+    add.u64 %rd15, %rd11, %rd15;      // %rd15 = B_cta + row_load*3072 + col_load*4
+
+    // Shared-mem store address: same per-thread offset for A and B tiles.
+    //   _tg_a + (row_load * 8 + col_load) * 4
+    shl.b32 %r16, %r12, 5;            // row_load * 32 (= row * 8 * 4)
+    mul.lo.u32 %r17, %r13, 4;
+    add.u32 %r16, %r16, %r17;
+    mov.u32 %r18, _tg_a;
+    add.u32 %r19, %r18, %r16;         // smem A store addr (b32 generic)
+    mov.u32 %r20, _tg_b;
+    add.u32 %r21, %r20, %r16;         // smem B store addr (b32 generic)
+
+    // Per-warp shared-mem read addresses:
+    //   A_warp_smem = _tg_a + m_tile * 16 * 32   (stride 8 elem = 32 B per row)
+    //   B_warp_smem = _tg_b + n_tile * 16 * 32
+    mul.lo.u32 %r22, %r3, 512;        // m_tile * (16 rows * 32 B/row) = m_tile * 512
+    add.u32 %r23, %r18, %r22;         // smem A read (warp's m_tile)
+    mul.lo.u32 %r24, %r4, 512;
+    add.u32 %r25, %r20, %r24;         // smem B read (warp's n_tile)
+
+    // C base offset = ctaid.y * 196608 + m_tile * 49152
+    //               + ctaid.x * 256   + n_tile * 64.
+    mul.lo.u32 %r5, %r10, 196608;
+    mul.lo.u32 %r6, %r3, 49152;
+    add.u32 %r7, %r5, %r6;
+    mul.lo.u32 %r8, %r11, 256;
+    add.u32 %r7, %r7, %r8;
+    mul.lo.u32 %r8, %r4, 64;
+    add.u32 %r7, %r7, %r8;
+    cvt.u64.u32 %rd6, %r7;
+    add.u64 %rd12, %rd2, %rd6;
+
+    mov.f32 %fc0, 0f00000000;
+    mov.f32 %fc1, 0f00000000;
+    mov.f32 %fc2, 0f00000000;
+    mov.f32 %fc3, 0f00000000;
+    mov.f32 %fc4, 0f00000000;
+    mov.f32 %fc5, 0f00000000;
+    mov.f32 %fc6, 0f00000000;
+    mov.f32 %fc7, 0f00000000;
+
+    cvt.s32.s64 %r0, %rd3;
+
+    // K-step delta: each WMMA K=8 -> 8 fp32 elems = 32 bytes along K-dim.
+    // %rd14 / %rd15 advance by 32 B per K-step.
+
+$kloop:
+    setp.le.s32 %p1, %r0, 0;
+    @%p1 bra $kloop_done;
+
+    // ---- Cooperative load A-tile + B-tile to shared ----
+    ld.global.f32 %fa1, [%rd14];
+    ld.global.f32 %fb1, [%rd15];
+    st.shared.f32 [%r19], %fa1;
+    st.shared.f32 [%r21], %fb1;
+    bar.sync 0;
+
+    // ---- WMMA load from shared, mma ----
+    wmma.load.a.sync.aligned.row.m16n16k8.shared.tf32
+        {%ra0, %ra1, %ra2, %ra3}, [%r23], 8;
+
+    wmma.load.b.sync.aligned.col.m16n16k8.shared.tf32
+        {%rb0, %rb1, %rb2, %rb3}, [%r25], 8;
+
+    wmma.mma.sync.aligned.row.col.m16n16k8.f32.tf32.tf32.f32
+        {%fc0, %fc1, %fc2, %fc3, %fc4, %fc5, %fc6, %fc7},
+        {%ra0, %ra1, %ra2, %ra3},
+        {%rb0, %rb1, %rb2, %rb3},
+        {%fc0, %fc1, %fc2, %fc3, %fc4, %fc5, %fc6, %fc7};
+
+    bar.sync 0;                      // before next-iter overwrite of _tg
+
+    // K-step: advance per-thread global load pointers by 32 B.
+    add.u64 %rd14, %rd14, 32;
+    add.u64 %rd15, %rd15, 32;
+    sub.s32 %r0, %r0, 1;
+    bra $kloop;
+
+$kloop_done:
+    wmma.store.d.sync.aligned.row.m16n16k8.global.f32
+        [%rd12], {%fc0, %fc1, %fc2, %fc3, %fc4, %fc5, %fc6, %fc7}, 768;
+    ret;
+}

@@ -1,0 +1,176 @@
+#!hexa strict
+// qmirror/process_tomography/module/process_tomography.hexa
+//   quantum process tomography (cond.9 / F-QM-2-TOMO-9)
+//
+// STANDALONE: pure-hexa kernel (Phase 8 absorption, 2026-05-12 —
+// PARALLEL_SUBAGENT_FIRING_ROADMAP_2026_05_12.md §4 Round 2).  All circuit
+// execution + Choi reconstruction + process_fidelity now goes through
+// process_tomography_native.hexa, which builds on engine_aer's pure-hexa
+// state-vector kernel.  No subprocess, no python, no qiskit/numpy dependency.
+//
+// @tool(slug="qmirror_process_tomography", desc="Linear-inversion quantum process tomography on the pure-hexa engine_aer state-vector kernel for the 7 standard target gates (H, X, Y, Z, S, T, CNOT). Sweeps 4^n prep states x 3^n meas bases per gate, reconstructs the Choi matrix via the Pauli-expansion estimator + per-qubit basis-coefficient decomposition, and reports process_fidelity + average_gate_fidelity vs the analytic ideal Choi. Pure-hexa kernel — process_tomography_native_one drives engine_aer state-vector primitives in-process; no python bridge, no qiskit. PASS = process_fidelity >= 0.99 for ALL gates.")
+// @usage(hexa run qmirror/process_tomography/module/process_tomography.hexa --selftest)
+// @sentinel(__QMIRROR_PROCESS_TOMOGRAPHY__ <PASS|FAIL>)
+// @resolver-bypass(reason="Selftest exercises a 1-qubit H gate via the pure-hexa native kernel (state-vector + linear-inversion); no qiskit, no python bridge.")
+//
+// Spec ref: docs/qmirror_2_axes_spec_2026_05_03.md cond.9 (F-QM-2-TOMO-9)
+// Plan ref: PARALLEL_SUBAGENT_FIRING_ROADMAP_2026_05_12.md §4 Round 2 (Phase 8 process_tomography)
+//
+//   (1) Linear inversion only — no MLE / projected-CP correction.  The bridge
+//       runner did this too; the native kernel reaches pf ≈ 1.0 because it
+//       reads EXACT state-vector probabilities (no Monte-Carlo shot noise),
+//       so the channel-not-CP warnings the qiskit runner suppressed simply
+//       don't fire here.  Banaszek-style MLE / Smolin-Gambetta projection
+//       remain roadmap (Phase 3).
+//   (2) Pauli-product POVM cap at n <= 4 qubits in the public API.  The
+//       native kernel currently asserts n <= 2 (only CNOT exercises n=2).
+//       Single-qubit gates: 4 * 3 = 12 circuits per gate.
+//       CNOT:               4^2 * 3^2 = 144 circuits.
+//   (3) Choi data is no longer shipped through this wrapper — the native
+//       kernel returns the verdict struct only.  Per-cell Choi matrices
+//       (choi_re / choi_im keys) are derivable directly from
+//       _pt_assemble_choi if a downstream caller wants them.
+//   (4) The native kernel is local + noiseless (state-vector simulation,
+//       no Aer noise model).  F-QM-2-TOMO-9 PASS validates the
+//       reconstruction pipeline, NOT QPU calibration; QPU runs are a
+//       separate cond (qmirror.cond12_surface or roadmap.ionq counterpart).
+
+use "./process_tomography_native.hexa"
+
+// Single-gate verdict struct (public surface — unchanged from Phase 7).
+struct GateVerdict {
+    name:                 str,
+    n_qubits:             int,
+    process_fidelity:     float,
+    avg_gate_fidelity:    float,
+    n_shots:              int,
+    n_pauli_settings:     int,    // 3^n
+    n_prep_states:        int,    // 4^n
+    n_circuits:           int,    // (3^n) * (4^n)
+    passed:               int,
+    wall_seconds:         float,
+    message:              str
+}
+
+// Aggregate sweep verdict (unchanged).
+struct SweepVerdict {
+    ok:                int,
+    n_pass:            int,
+    n_total:           int,
+    fidelity_min:      float,
+    fidelity_mean:     float,
+    gates:             [GateVerdict],
+    n_shots:           int,
+    seed:              int,
+    verdict:           str,            // "PASS" | "FAIL"
+    message:           str
+}
+
+fn gate_verdict_fail(name: str, reason: str) -> GateVerdict {
+    return GateVerdict {
+        name: name, n_qubits: 0, process_fidelity: 0.0, avg_gate_fidelity: 0.0,
+        n_shots: 0, n_pauli_settings: 0, n_prep_states: 0, n_circuits: 0,
+        passed: 0, wall_seconds: 0.0, message: reason
+    }
+}
+
+fn sweep_verdict_fail(reason: str) -> SweepVerdict {
+    return SweepVerdict {
+        ok: 0, n_pass: 0, n_total: 0, fidelity_min: 0.0, fidelity_mean: 0.0,
+        gates: [], n_shots: 0, seed: 0, verdict: "FAIL", message: reason
+    }
+}
+
+fn _abs_pt(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+// Public single-gate API.  Phase 8 migration: replaced python bridge with
+// direct process_tomography_native_one call (pure-hexa kernel; no subprocess).
+fn process_tomography_one(gate: str, n_qubits: int, n_shots: int, seed: int) -> GateVerdict {
+    if n_shots < 1 { return gate_verdict_fail(gate, "n_shots < 1") }
+    if n_qubits < 1 { return gate_verdict_fail(gate, "n_qubits < 1") }
+    if n_qubits > 4 { return gate_verdict_fail(gate, "E_QUBIT_CEILING: n_qubits > 4") }
+
+    let r = process_tomography_native_one(gate, n_qubits, n_shots, seed)
+    if r.ok != 1 {
+        return gate_verdict_fail(gate, "native: " + r.message)
+    }
+
+    return GateVerdict {
+        name:               r.name,
+        n_qubits:           r.n_qubits,
+        process_fidelity:   r.process_fidelity,
+        avg_gate_fidelity:  r.avg_gate_fidelity,
+        n_shots:            r.n_shots,
+        n_pauli_settings:   r.n_pauli_settings,
+        n_prep_states:      r.n_prep_states,
+        n_circuits:         r.n_circuits,
+        passed:             r.passed,
+        wall_seconds:       r.wall_seconds,
+        message:            "ok"
+    }
+}
+
+// Public 7-gate sweep API.  Phase 8 migration: drives the native kernel
+// gate-by-gate (no JSON bridge; no subprocess).
+fn process_tomography_sweep(n_shots: int, seed: int) -> SweepVerdict {
+    if n_shots < 1 { return sweep_verdict_fail("n_shots < 1") }
+
+    let gates = ["H", "X", "Y", "Z", "S", "T", "CNOT"]
+    let mut gates_out = []
+    let mut fid_min = 1.0
+    let mut fid_sum = 0.0
+    let mut n_pass = 0
+    let mut g = 0
+    while g < len(gates) {
+        let name = gates[g]
+        let nq = if name == "CNOT" { 2 } else { 1 }
+        let v = process_tomography_one(name, nq, n_shots, seed)
+        gates_out = gates_out.push(v)
+        if v.passed == 1 { n_pass = n_pass + 1 }
+        if v.process_fidelity < fid_min { fid_min = v.process_fidelity }
+        fid_sum = fid_sum + v.process_fidelity
+        g = g + 1
+    }
+    let n_total = len(gates)
+    let mean = if n_total > 0 { fid_sum / to_float(n_total) } else { 0.0 }
+    let verdict = if n_pass == n_total { "PASS" } else { "FAIL" }
+
+    return SweepVerdict {
+        ok: 1, n_pass: n_pass, n_total: n_total,
+        fidelity_min: fid_min, fidelity_mean: mean,
+        gates: gates_out, n_shots: n_shots, seed: seed,
+        verdict: verdict,
+        message: "sweep " + verdict + ": " + str(n_pass) + "/" + str(n_total) +
+                 " (min pf=" + str(fid_min) + ")"
+    }
+}
+
+// Selftest: a single 1-qubit H tomography at 4000 shots (fast).
+// The full 7-gate cond.9 verdict run is in state/qmirror_2_cond9_tomography_<date>/.
+fn _selftest() -> int {
+    let v = process_tomography_one("H", 1, 4000, 2026)
+    if v.passed != 1 { return 0 }
+    if v.n_qubits != 1 { return 0 }
+    if v.n_pauli_settings != 3 { return 0 }       // 3^1
+    if v.n_prep_states != 4 { return 0 }          // 4^1
+    if v.n_circuits != 12 { return 0 }            // 4 * 3
+    if v.process_fidelity < 0.99 { return 0 }
+    if v.avg_gate_fidelity < 0.99 { return 0 }
+    if _abs_pt(v.process_fidelity - 1.0) > 0.05 { return 0 }
+    return 1
+}
+
+fn main() {
+    println("[qmirror/process_tomography] Quantum process tomography (cond.9 / F-QM-2-TOMO-9)")
+    println("  engine     = hexa_native (pure-hexa state-vector kernel; Phase 8 absorption)")
+    if _selftest() == 1 {
+        println("[qmirror/process_tomography] SELFTEST PASS (H gate, 4000 shots, pf >= 0.99)")
+        println("__QMIRROR_PROCESS_TOMOGRAPHY__ PASS")
+    } else {
+        println("[qmirror/process_tomography] SELFTEST FAIL")
+        println("__QMIRROR_PROCESS_TOMOGRAPHY__ FAIL")
+    }
+}

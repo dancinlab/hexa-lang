@@ -1,0 +1,27 @@
+# hexa-chip — repo-local ignores
+
+# CLI audit log + scratch state
+state/
+
+# hexa cache
+.hexa-cache/
+.aot-cache/
+
+# pdf build output (parallel to hexa-sscb convention)
+build/out/
+*.pdf
+
+# editor / OS
+.DS_Store
+*.swp
+*~
+
+# Python cache (terafab verify scripts + tests)
+__pycache__/
+*.pyc
+
+# Mk.II poll cycle log (terafab/poll_mk2.py append target — Wave G)
+terafab/mk2-poll.log
+
+# Mk.II poll cycle log (exynos/poll_exynos_mk2.py append target — Wave H)
+exynos/mk2-poll.log

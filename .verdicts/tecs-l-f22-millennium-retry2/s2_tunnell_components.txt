@@ -1,0 +1,19 @@
+Tunnell test for odd squarefree n (BSD-conditional congruent-number test):
+A_n = #{(x,y,z): n = 2x^2 + y^2 + 32z^2}
+B_n = #{(x,y,z): n = 2x^2 + y^2 + 8z^2}
+Tunnell: n congruent  iff  2*A_n = B_n
+
+n=  5 A=  0 B=  0 2A=  0  2A=B (cong)  known=CONG
+n=  7 A=  0 B=  0 2A=  0  2A=B (cong)  known=CONG
+n= 13 A=  0 B=  0 2A=  0  2A=B (cong)  known=CONG
+n= 15 A=  0 B=  0 2A=  0  2A=B (cong)  known=CONG
+n= 21 A=  0 B=  0 2A=  0  2A=B (cong)  known=CONG
+n= 23 A=  0 B=  0 2A=  0  2A=B (cong)  known=CONG
+n=  6 A=  4 B=  4 2A=  8  2A!=B (not cong)  known=CONG
+n= 14 A=  0 B=  8 2A=  0  2A!=B (not cong)  known=CONG
+n= 20 A=  0 B=  8 2A=  0  2A!=B (not cong)  known=CONG
+n= 22 A=  4 B=  4 2A=  8  2A!=B (not cong)  known=CONG
+Tunnell-even (n=2m, m odd squarefree):
+n=  6 m=3 C=0 D=0 2C=0 2C=D (n=2m congruent iff 2C=D)
+n= 14 m=7 C=0 D=0 2C=0 2C=D (n=2m congruent iff 2C=D)
+n= 22 m=11 C=0 D=0 2C=0 2C=D (n=2m congruent iff 2C=D)

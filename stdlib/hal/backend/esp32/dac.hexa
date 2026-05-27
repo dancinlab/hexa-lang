@@ -1,0 +1,91 @@
+#!hexa strict
+// stdlib/hal/backend/esp32/dac.hexa — ESP32 DAC backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    ESP32 dual Xtensa LX6 @ 240 MHz.
+// Chip ref:  ESP32 TRM §5.13 DAC — 2 channels × 8-bit (GPIO25/26).
+//            DMA-driven cosine wave generator (CW), but NO 12-bit support
+//            (vs STM32H7's 12-bit). For higher precision: external SPI DAC.
+// Surface:   esp32_dac_{configure,write,close}(...)
+// Dispatch:  dac.hexa selects this via cfg-flag.
+//
+// MMIO layout (RTC + SENS controllers handle DAC):
+//
+//   RTC_IO base    = 0x3FF48400
+//   SENS base      = 0x3FF48800   (shared with SAR ADC)
+//
+//   RTCIO_PAD_DAC1_REG          0x084 (under RTC_IO base):
+//                                  PDAC1_DAC bits 23:19 (8-bit value, ch1)
+//                                  PDAC1_DAC_XPD_FORCE bit 18 (force-enable)
+//                                  PDAC1_XPD_DAC bit 17 (powered)
+//                                  PDAC1_MUX_SEL bit 16 (mux to RTC)
+//   RTCIO_PAD_DAC2_REG          0x088 (8-bit value, ch2)
+//
+//   SENS_SAR_DAC_CTRL1_REG      0x094 (under SENS base):
+//                                  SW_FSTEP bits 15:8 (CW step)
+//                                  SW_TONE_EN bit 5 (cosine wave gen enable)
+//   SENS_SAR_DAC_CTRL2_REG      0x098 (CW per-channel scale + invert)
+//
+// Channels:
+//   DAC1 (CHANNEL 1): GPIO25
+//   DAC2 (CHANNEL 2): GPIO26
+//
+// Resolution: 8-bit native (256 levels). For software upscale, dither
+// across rapid writes to approximate higher res — bandwidth-trade.
+// Conversion rate: ≤ 1 MSPS via I2S DMA "DAC mode"; static write < 1 µs.
+
+let MODULE_NAME = "esp32_dac"
+let SIGMA_SLOT  = 6
+let PHI_KIND    = "analog"
+
+let DR_REG_RTC_IO_BASE = 0x3FF48400
+let DR_REG_SENS_BASE   = 0x3FF48800
+
+let RTCIO_PAD_DAC1_REG     = 0x084
+let RTCIO_PAD_DAC2_REG     = 0x088
+let SENS_SAR_DAC_CTRL1_REG = 0x094
+
+let RES_8BIT  = 8     // native
+let RES_12BIT = 12    // not native — dither/external
+
+let DAC_CHANNEL_GPIO25 = 0
+let DAC_CHANNEL_GPIO26 = 1
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn esp32_dac_configure(unit: int, channel: int, resolution: int) -> int {
+    if unit != 0 { return -1 }                  // single DAC unit (2 channels)
+    if channel < 0 || channel > 1 { return -2 } // GPIO25 or GPIO26
+    if resolution != 8 { return -3 }            // 8-bit only on ESP32 DAC
+    // STUB: set PDAC<n>_XPD_DAC=1, MUX_SEL=1, XPD_FORCE=1
+    return unit * 12 + channel
+}
+
+fn esp32_dac_write(handle: int, value: int) -> bool {
+    if handle < 0 { return false }
+    if value < 0 || value > 255 { return false }   // 8-bit native
+    // STUB: write RTCIO_PAD_DAC<n>_REG.PDAC<n>_DAC = value (bits 23:19)
+    return true
+}
+
+fn esp32_dac_close(handle: int) -> bool {
+    if handle < 0 { return false }
+    // STUB: clear PDAC<n>_XPD_DAC
+    return true
+}
+
+fn esp32_dac_report(handle: int) -> str {
+    return "[esp32_dac sim] handle=" + str(handle) + " (skeleton stub — TODO MMIO)"
+}
+
+fn esp32_dac_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32_dac sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  RTC_IO=" + str(DR_REG_RTC_IO_BASE) + " SENS=" + str(DR_REG_SENS_BASE))
+    println("  2 channels (GPIO25/26), 8-bit native, ≤ 1 MSPS via I2S DMA")
+    println("  cosine wave generator (CW) supported via SAR_DAC_CTRL1.SW_TONE_EN")
+}

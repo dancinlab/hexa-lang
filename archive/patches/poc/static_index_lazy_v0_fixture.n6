@@ -1,0 +1,62 @@
+# Fixture for incoming/poc/static_index_lazy_v0.hexa
+# Subset shape of compiler/atlas/embedded.gen.hexa rodata, deliberately small
+# (50 nodes: 10 P, 30 C, 5 L, 5 E) so the PoC smoke is fast.
+#
+# This file is NOT real atlas data — every id is a synthetic stand-in.
+# Format: header-only nodes; the PoC parser tolerates continuation lines.
+
+@P p_alpha :: poc.foundation [10*]
+@P p_beta :: poc.foundation [10*]
+  <- p_alpha
+@P p_gamma :: poc.foundation [10]
+@P p_delta :: poc.foundation [10]
+@P p_epsilon :: poc.foundation [9]
+@P p_zeta :: poc.foundation [9]
+@P p_eta :: poc.foundation [8]
+@P p_theta :: poc.foundation [8]
+@P p_iota :: poc.foundation [7]
+@P p_kappa :: poc.foundation [7]
+
+@C c_pi :: poc.constant [10*]
+@C c_e :: poc.constant [10*]
+@C c_phi :: poc.constant [10*]
+@C c_sqrt2 :: poc.constant [10]
+@C c_sqrt3 :: poc.constant [10]
+@C c_sqrt5 :: poc.constant [9]
+@C c_gamma :: poc.constant [9]
+@C c_zeta3 :: poc.constant [9]
+@C c_catalan :: poc.constant [8]
+@C c_khinchin :: poc.constant [8]
+@C c_glaisher :: poc.constant [8]
+@C c_feigenbaum :: poc.constant [7]
+@C c_brun :: poc.constant [7]
+@C c_meissel :: poc.constant [7]
+@C c_artin :: poc.constant [6]
+@C c_landau :: poc.constant [6]
+@C c_ramanujan :: poc.constant [6]
+@C c_apery :: poc.constant [5]
+@C c_omega :: poc.constant [5]
+@C c_chaitin :: poc.constant [5]
+@C c_lochs :: poc.constant [4]
+@C c_levy :: poc.constant [4]
+@C c_porter :: poc.constant [4]
+@C c_niven :: poc.constant [3]
+@C c_sierpinski :: poc.constant [3]
+@C c_mills :: poc.constant [3]
+@C c_plastic :: poc.constant [2]
+@C c_silver :: poc.constant [2]
+@C c_bronze :: poc.constant [2]
+@C c_supersilver :: poc.constant [1]
+@C c_superbronze :: poc.constant [1]
+
+@L l_thermo_1st :: poc.law [10*]
+@L l_thermo_2nd :: poc.law [10*]
+@L l_thermo_3rd :: poc.law [9]
+@L l_newton_2nd :: poc.law [10*]
+@L l_ohm :: poc.law [9]
+
+@E e_michelson :: poc.experiment [10*]
+@E e_eotvos :: poc.experiment [9]
+@E e_stern_gerlach :: poc.experiment [9]
+@E e_aspect :: poc.experiment [9]
+@E e_cmb_planck :: poc.experiment [10*]

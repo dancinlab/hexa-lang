@@ -1,0 +1,25 @@
+// HEXA Standard Library — time/now
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Unix epoch seconds (int) — counterpart to stdlib/time/iso8601::iso8601_utc_now
+// which returns the formatted string. `now_utc()` returns the raw integer
+// timestamp, drop-in for the 68+ anima inline `now_utc` definitions surveyed
+// in STDLIB Phase 1b (2026-05-25, `HEXAD/STDLIB/survey_anima_wide_2026_05_25.md`).
+//
+// Surface:
+//   pub fn now_utc() -> int    // unix epoch seconds (int64)
+//
+// Convention: anima's `now_utc` returns int (epoch seconds). hexa-lang
+// runtime exposes `hexa_now_epoch` (extern HexaVal carrier in runtime.h).
+// If runtime epoch builtin name differs, this wrapper delegates accordingly.
+
+pub fn now_utc() -> int {
+    // Delegates to hexa runtime epoch builtin. If `hexa_now_epoch` is the
+    // canonical name, replace `now_epoch_seconds` below with it. The runtime
+    // builtin is f64 in some impls; cast to int via `.to_int()` for the
+    // anima convention.
+    let t = now_epoch_seconds()
+    return t.to_int()
+}

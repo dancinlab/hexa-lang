@@ -1,0 +1,10 @@
+Generating SQLite file nsys_M4096.sqlite from nsys_M4096.nsys-rep
+Processing [nsys_M4096.sqlite] with [/opt/nvidia/nsight-systems/2025.1.3/host-linux-x64/reports/cuda_gpu_kern_sum.py]... 
+Time (%),Total Time (ns),Instances,Avg (ns),Med (ns),Min (ns),Max (ns),StdDev (ns),Name
+100.0,55495503,23,2412848.0,2410325.0,2402933,2469847,13336.6,sgemm_4warp_swizzle_4096x4096_grid
+
+Processing [nsys_M4096.sqlite] with [/opt/nvidia/nsight-systems/2025.1.3/host-linux-x64/reports/cuda_gpu_mem_size_sum.py]... 
+Total (MB),Count,Avg (MB),Med (MB),Min (MB),Max (MB),StdDev (MB),Operation
+67.109,2,33.554,33.554,33.554,33.554,0.000,[CUDA memcpy Host-to-Device]
+67.109,1,67.109,67.109,67.109,67.109,0.000,[CUDA memset]
+

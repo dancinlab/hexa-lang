@@ -1,0 +1,23 @@
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function 'sgemm_32x32_1536x1536_grid' for 'sm_90'
+ptxas info    : Function properties for sgemm_32x32_1536x1536_grid
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 70 registers, 16384 bytes smem
+=== 256 ===
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 70 registers, 16384 bytes smem
+=== 384 ===
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 70 registers, 16384 bytes smem
+=== 512 ===
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 70 registers, 16384 bytes smem
+=== 768 ===
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 70 registers, 16384 bytes smem
+=== 1024 ===
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 70 registers, 16384 bytes smem
+=== 1536 ===
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 70 registers, 16384 bytes smem

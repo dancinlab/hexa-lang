@@ -1,0 +1,200 @@
+# TECS-L axis F · F6 — beyond n=6 sweep at NOTABLE n
+# σφ=nτ identity test extending M3 [1,100] sweep — confirming M10's universal proof (∀n: σφ=nτ ⟺ n∈{1,6}) at large/special n
+# D(n) := σ(n)·φ(n) − n·τ(n);  M10 predicts D(n) ≠ 0 for all n ∉ {1,6}
+# generated: 2026-05-25T13:53:06Z
+# host: Darwin 25.5.0 arm64
+
+==========================================================
+n = 210   |   notable class:
+    primorial #4 = 2·3·5·7
+----------------------------------------------------------
+$ hexa verify --expr sigma 210 576
+verify --expr sigma(210)=576
+  calc   = 576  == expected 576
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+$ hexa verify --expr phi 210 48
+verify --expr phi(210)=48
+  calc   = 48  == expected 48
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+$ hexa verify --expr tau 210 16
+verify --expr tau(210)=16
+  calc   = 16  == expected 16
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+D(210) = σ(210)·φ(210) − 210·τ(210)
+     = 576 · 48 − 210 · 16
+     = 27648 − 3360
+     = 24288
+VERDICT: D(210) ≠ 0  — confirms M10 prediction (σφ=nτ FAILS at n=210, n∉{1,6})
+
+==========================================================
+n = 720   |   notable class:
+    factorial 6! = 2^4·3^2·5
+----------------------------------------------------------
+$ hexa verify --expr sigma 720 2418
+verify --expr sigma(720)=2418
+  calc   = 2418  == expected 2418
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+$ hexa verify --expr phi 720 192
+verify --expr phi(720)=192
+  calc   = 192  == expected 192
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+$ hexa verify --expr tau 720 30
+verify --expr tau(720)=30
+  calc   = 30  == expected 30
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+D(720) = σ(720)·φ(720) − 720·τ(720)
+     = 2418 · 192 − 720 · 30
+     = 464256 − 21600
+     = 442656
+VERDICT: D(720) ≠ 0  — confirms M10 prediction (σφ=nτ FAILS at n=720, n∉{1,6})
+
+==========================================================
+n = 1024   |   notable class:
+    pure power of 2 = 2^10
+----------------------------------------------------------
+$ hexa verify --expr sigma 1024 2047
+verify --expr sigma(1024)=2047
+  calc   = 2047  == expected 2047
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+$ hexa verify --expr phi 1024 512
+verify --expr phi(1024)=512
+  calc   = 512  == expected 512
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+$ hexa verify --expr tau 1024 11
+verify --expr tau(1024)=11
+  calc   = 11  == expected 11
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+D(1024) = σ(1024)·φ(1024) − 1024·τ(1024)
+     = 2047 · 512 − 1024 · 11
+     = 1048064 − 11264
+     = 1036800
+VERDICT: D(1024) ≠ 0  — confirms M10 prediction (σφ=nτ FAILS at n=1024, n∉{1,6})
+
+==========================================================
+n = 2310   |   notable class:
+    primorial #5 = 2·3·5·7·11
+----------------------------------------------------------
+$ hexa verify --expr sigma 2310 6912
+verify --expr sigma(2310)=6912
+  calc   = 6912  == expected 6912
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+$ hexa verify --expr phi 2310 480
+verify --expr phi(2310)=480
+  calc   = 480  == expected 480
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+$ hexa verify --expr tau 2310 32
+verify --expr tau(2310)=32
+  calc   = 32  == expected 32
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+D(2310) = σ(2310)·φ(2310) − 2310·τ(2310)
+     = 6912 · 480 − 2310 · 32
+     = 3317760 − 73920
+     = 3243840
+VERDICT: D(2310) ≠ 0  — confirms M10 prediction (σφ=nτ FAILS at n=2310, n∉{1,6})
+
+==========================================================
+n = 30030   |   notable class:
+    primorial #6 = 2·3·5·7·11·13
+----------------------------------------------------------
+$ hexa verify --expr sigma 30030 96768
+verify --expr sigma(30030)=96768
+  calc   = 96768  == expected 96768
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+$ hexa verify --expr phi 30030 5760
+verify --expr phi(30030)=5760
+  calc   = 5760  == expected 5760
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+$ hexa verify --expr tau 30030 64
+verify --expr tau(30030)=64
+  calc   = 64  == expected 64
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+D(30030) = σ(30030)·φ(30030) − 30030·τ(30030)
+     = 96768 · 5760 − 30030 · 64
+     = 557383680 − 1921920
+     = 555461760
+VERDICT: D(30030) ≠ 0  — confirms M10 prediction (σφ=nτ FAILS at n=30030, n∉{1,6})
+
+==========================================================
+n = 8128   |   notable class:
+    4th perfect number (Euclid–Euler P_4 = 2^6·M_7)
+----------------------------------------------------------
+$ hexa verify --expr sigma 8128 16256
+verify --expr sigma(8128)=16256
+  calc   = 16256  == expected 16256
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+$ hexa verify --expr phi 8128 4032
+verify --expr phi(8128)=4032
+  calc   = 4032  == expected 4032
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+$ hexa verify --expr tau 8128 14
+verify --expr tau(8128)=14
+  calc   = 14  == expected 14
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+D(8128) = σ(8128)·φ(8128) − 8128·τ(8128)
+     = 16256 · 4032 − 8128 · 14
+     = 65544192 − 113792
+     = 65430400
+VERDICT: D(8128) ≠ 0  — confirms M10 prediction (σφ=nτ FAILS at n=8128, n∉{1,6})
+
+==========================================================
+n = 33550336   |   notable class:
+    5th perfect number (Euclid–Euler P_5 = 2^12·M_13)
+----------------------------------------------------------
+$ hexa verify --expr sigma 33550336 67100672
+verify --expr sigma(33550336)=67100672
+  calc   = 67100672  == expected 67100672
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+$ hexa verify --expr phi 33550336 16773120
+verify --expr phi(33550336)=16773120
+  calc   = 16773120  == expected 16773120
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+$ hexa verify --expr tau 33550336 26
+verify --expr tau(33550336)=26
+  calc   = 26  == expected 26
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+D(33550336) = σ(33550336)·φ(33550336) − 33550336·τ(33550336)
+     = 67100672 · 16773120 − 33550336 · 26
+     = 1125487623536640 − 872308736
+     = 1125486751227904
+VERDICT: D(33550336) ≠ 0  — confirms M10 prediction (σφ=nτ FAILS at n=33550336, n∉{1,6})
+
+==========================================================
+SWEEP SUMMARY — 7/7 notable n with D(n) ≠ 0
+----------------------------------------------------------
+  n=210        D(n)=24288
+  n=720        D(n)=442656
+  n=1024       D(n)=1036800
+  n=2310       D(n)=3243840
+  n=30030      D(n)=555461760
+  n=8128       D(n)=65430400
+  n=33550336   D(n)=1125486751227904
+
+All 7 D(n) ≠ 0 — M10's closed-form proof (σφ=nτ ⟺ n∈{1,6}) confirmed at:
+  · two factorial/primorial scales (210, 2310, 30030, 720)
+  · pure power-of-2 (1024)
+  · perfect numbers #4, #5 (8128, 33550336) — extends [1,100] sweep by factor ~335503
+
+Sweep is verify-anchored: each σ/φ/τ component is 🔵 SUPPORTED-FORMAL (hexa-native closed-form);
+D(n) is exact integer arithmetic on those 🔵 components.
+==========================================================

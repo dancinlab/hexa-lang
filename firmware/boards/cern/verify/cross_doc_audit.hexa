@@ -1,0 +1,340 @@
+#!hexa strict
+// hexa-cern/verify/cross_doc_audit.hexa — cross-pillar consistency audit.
+//
+// Scans the canonical project documents and confirms shared anchors
+// agree. The shared anchors here are the σ-cascade hierarchy (E_0..E_6),
+// the LHC/DESY baselines, the BT-401 cross-link family, and the OEIS
+// sequence cites.
+//
+// Run:
+//   hexa run verify/cross_doc_audit.hexa     # exit 0 = all anchors agree
+//
+// Authority: .roadmap.hexa_cern §A.1 + 3 pillar specs (frozen v1.0).
+//
+// Cost: $0.
+// @no-lock-needed
+
+let HOME = env("HOME")
+
+fn _root() -> str {
+    let r = env("PETITE_CERN_ROOT")
+    if r.len() > 0 { return r }
+    let pwd = exec("pwd").trim()
+    if pwd.len() > 0 { return pwd }
+    return HOME + "/core/hexa-cern"  // @allow-devpath
+}
+
+let ROOT = _root()
+let DOC_MINI        = ROOT + "/mini/doc/mini-accelerator.md"
+let DOC_PARENT      = ROOT + "/parent/doc/particle-accelerator.md"
+let DOC_CLASSICAL   = ROOT + "/classical/doc/classical-mechanics-accelerator.md"
+let DOC_README      = ROOT + "/README.md"
+let DOC_ROADMAP     = ROOT + "/.roadmap.hexa_cern"
+let DOC_BENCHTOP_V0 = ROOT + "/mini/doc/benchtop_v0_design.md"
+let HDL_TIMING_CTRL = ROOT + "/firmware/hdl/timing_ctrl.v"
+let HDL_README      = ROOT + "/firmware/hdl/README.md"
+let MCU_CARGO       = ROOT + "/firmware/mcu/Cargo.toml"
+let MCU_MAIN        = ROOT + "/firmware/mcu/src/main.rs"
+let MCU_README      = ROOT + "/firmware/mcu/README.md"
+let FW_MAKEFILE     = ROOT + "/firmware/Makefile"
+let FW_README       = ROOT + "/firmware/README.md"
+let HDL_TB          = ROOT + "/firmware/hdl/testbench/timing_ctrl_tb.v"
+
+fn _read(p: str) -> str {
+    if file_exists(p) == false { return "" }
+    return read_file(p)
+}
+
+fn _has(t: str, s: str) -> bool {
+    if t.len() == 0 { return false }
+    return t.find(s) >= 0
+}
+
+fn _any(t: str, ss: [str]) -> bool {
+    for s in ss { if _has(t, s) { return true } }
+    return false
+}
+
+let mut RUN = 0
+let mut FAIL = 0
+let mut FAILURES = []
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    if ok {
+        println("  [PASS] " + label)
+        if detail.len() > 0 { println("         · " + detail) }
+    } else {
+        FAIL = FAIL + 1
+        FAILURES.push(label)
+        println("  [FAIL] " + label)
+        if detail.len() > 0 { println("         · " + detail) }
+    }
+}
+
+// Check 1 — LHC 7 TeV baseline mentioned in roadmap + parent + README
+fn check_lhc_baseline() {
+    let phrases = ["7 TeV", "7TeV", "LHC"]
+    let ok_road = _any(_read(DOC_ROADMAP), phrases)
+    let ok_par  = _any(_read(DOC_PARENT),  phrases)
+    let ok_rdme = _any(_read(DOC_README),  phrases)
+    _check(ok_road && ok_par && ok_rdme,
+           "LHC 7 TeV baseline appears in roadmap + parent + README",
+           "ok_road=" + str(ok_road) + " ok_par=" + str(ok_par) + " ok_rdme=" + str(ok_rdme))
+}
+
+// Check 2 — DESY 1 GeV/m baseline appears in roadmap + mini + README
+fn check_desy_baseline() {
+    let phrases = ["1 GeV/m", "DESY"]
+    let ok_road = _any(_read(DOC_ROADMAP), phrases)
+    let ok_min  = _any(_read(DOC_MINI),    phrases)
+    let ok_rdme = _any(_read(DOC_README),  phrases)
+    _check(ok_road && ok_min && ok_rdme,
+           "DESY 1 GeV/m baseline appears in roadmap + mini + README",
+           "ok_road=" + str(ok_road) + " ok_min=" + str(ok_min) + " ok_rdme=" + str(ok_rdme))
+}
+
+// Check 3 — 100 MeV mini target consistent across roadmap + mini + parent
+fn check_mini_target() {
+    let phrases = ["100 MeV", "100MeV"]
+    let ok_road = _any(_read(DOC_ROADMAP), phrases)
+    let ok_min  = _any(_read(DOC_MINI),    phrases)
+    let ok_par  = _any(_read(DOC_PARENT),  phrases)
+    _check(ok_road && ok_min && ok_par,
+           "mini target 100 MeV consistent (roadmap + mini + parent)",
+           "")
+}
+
+// Check 4 — σ-cascade chain MeV→TeV present in parent and referenced in roadmap
+fn check_cascade_span() {
+    let par = _read(DOC_PARENT)
+    let road = _read(DOC_ROADMAP)
+    let par_ok  = _has(par, "MeV -> TeV") || _has(par, "MeV → TeV")
+    let road_ok = _any(road, ["σ-cascade", "sigma-cascade"])
+    _check(par_ok && road_ok,
+           "σ-cascade span MeV→TeV in parent + roadmap",
+           "par_chain=" + str(par_ok) + " road_chain=" + str(road_ok))
+}
+
+// Check 5 — FCC σ³=1728 envelope reuse appears in parent
+fn check_fcc_envelope() {
+    let txt = _read(DOC_PARENT)
+    let ok = (_any(txt, ["sigma^3", "σ³", "σ^3"]) && _has(txt, "1728"))
+    _check(ok, "parent: FCC envelope σ³ = 1728", "")
+}
+
+// Check 6 — OEIS sequence cites (A000203 / A000005 / A000010 / A001414) in ≥ 2 pillars
+fn check_oeis_cites() {
+    let mini = _read(DOC_MINI)
+    let par  = _read(DOC_PARENT)
+    let cls  = _read(DOC_CLASSICAL)
+    let mut hits = 0
+    let oeis = ["A000203", "A000005", "A000010", "A001414"]
+    if _any(mini, oeis) { hits = hits + 1 }
+    if _any(par,  oeis) { hits = hits + 1 }
+    if _any(cls,  oeis) { hits = hits + 1 }
+    _check(hits >= 2,
+           "OEIS sequence cites appear in ≥ 2 pillars",
+           "hits = " + str(hits) + " of 3 (mini/parent/classical)")
+}
+
+// Check 7 — BT cross-link family (BT-124 / BT-401) referenced in ≥ 2 pillars
+fn check_bt_crosslinks() {
+    let mini = _read(DOC_MINI)
+    let par  = _read(DOC_PARENT)
+    let cls  = _read(DOC_CLASSICAL)
+    let mut hits = 0
+    let bt = ["BT-124", "BT-401"]
+    if _any(mini, bt) { hits = hits + 1 }
+    if _any(par,  bt) { hits = hits + 1 }
+    if _any(cls,  bt) { hits = hits + 1 }
+    _check(hits >= 2,
+           "BT cross-links appear in ≥ 2 pillars",
+           "hits = " + str(hits) + " of 3")
+}
+
+// Check 8 — README exposes the same 3-pillar verb set as cli
+fn check_readme_verbs() {
+    let txt = _read(DOC_README)
+    let ok = _has(txt, "mini") && _has(txt, "parent") && _has(txt, "classical")
+    _check(ok, "README exposes 3-pillar verbs (mini / parent / classical)", "")
+}
+
+// Check 9 — CLI dispatcher source declares the 3 cmd_<pillar> handlers
+fn check_cli_handlers() {
+    let txt = _read(ROOT + "/cli/hexa-cern.hexa")
+    let ok = _has(txt, "fn cmd_mini") &&
+             _has(txt, "fn cmd_parent") &&
+             _has(txt, "fn cmd_classical")
+    _check(ok, "cli/hexa-cern.hexa declares 3 cmd_<pillar> handlers", "")
+}
+
+// Check 10 — n=6 σ-cascade 6-order claim (precision ×10, throughput ×144, etc.) in README
+fn check_six_order_claim() {
+    let txt = _read(DOC_README)
+    let ok = _has(txt, "144") && _has(txt, "10×") && _has(txt, "6 order")
+    _check(ok, "README declares σ-cascade 6-order ceiling (×10 / ×144 / ÷12 / ÷10 / ÷144 / ×48)",
+           "")
+}
+
+// Check 11 — release v1.0.0 frozen in roadmap §A.2
+fn check_release_frozen() {
+    let txt = _read(DOC_ROADMAP)
+    let ok = _has(txt, "v1.0.0") && _has(txt, "RELEASED")
+    _check(ok, "roadmap §A.2: v1.0.0 RELEASED line present", "")
+}
+
+// Check 15 — §A.6.1 step D 3/3 build scaffolding: Makefile + Verilog
+//             testbench + firmware/README.md  (closes step D)
+fn check_step_d_build_scaffold() {
+    let mk = _read(FW_MAKEFILE)
+    let fw_rd = _read(FW_README)
+    let tb = _read(HDL_TB)
+    let ok_mk_exists = mk.len() > 0
+    let ok_mk_targets = _has(mk, "sim-hexa") && _has(mk, "sim-iverilog") &&
+                        _has(mk, "cargo-check") && _has(mk, "lint") &&
+                        _has(mk, "build-bitstream") && _has(mk, "flash-mcu")
+    let ok_mk_status = _has(mk, "buildable") && _has(mk, "needs toolchain") &&
+                       _has(mk, "needs board")
+    let ok_fw_rd_exists = fw_rd.len() > 0
+    let ok_fw_rd_tree = _has(fw_rd, "firmware/sim") && _has(fw_rd, "firmware/hdl") &&
+                        _has(fw_rd, "firmware/mcu")
+    let ok_fw_rd_ssot = _has(fw_rd, "single-source-of-truth") || _has(fw_rd, "Single-source-of-truth")
+    let ok_tb_exists = tb.len() > 0
+    let ok_tb_module = _has(tb, "module timing_ctrl_tb") && _has(tb, "TB PASS") && _has(tb, "TB FAIL")
+    let ok_tb_phases = _has(tb, "phase 1") && _has(tb, "phase 2") && _has(tb, "interlock")
+    let ok = ok_mk_exists && ok_mk_targets && ok_mk_status &&
+             ok_fw_rd_exists && ok_fw_rd_tree && ok_fw_rd_ssot &&
+             ok_tb_exists && ok_tb_module && ok_tb_phases
+    _check(ok,
+           "firmware/{Makefile,README,hdl/testbench} step-D build scaffold present",
+           "mk=" + str(ok_mk_exists) +
+           " targets=" + str(ok_mk_targets) +
+           " status=" + str(ok_mk_status) +
+           " fwrd=" + str(ok_fw_rd_exists) +
+           " tree=" + str(ok_fw_rd_tree) +
+           " ssot=" + str(ok_fw_rd_ssot) +
+           " tb=" + str(ok_tb_exists) +
+           " tb_mod=" + str(ok_tb_module) +
+           " tb_ph=" + str(ok_tb_phases))
+}
+
+// Check 14 — §A.6.1 step D 2/3 Rust MCU skeleton (Cargo.toml + main.rs +
+//             README) present + cross-anchored to .hexa sims and HDL.
+fn check_step_d_mcu_skeleton() {
+    let cargo = _read(MCU_CARGO)
+    let main_rs = _read(MCU_MAIN)
+    let readme = _read(MCU_README)
+    let ok_cargo_exists = cargo.len() > 0
+    let ok_target = _has(cargo, "thumbv7em-none-eabihf") || _has(cargo, "Cortex-M")
+    let ok_main_exists = main_rs.len() > 0
+    let ok_no_std = _has(main_rs, "#![no_std]") && _has(main_rs, "#![no_main]")
+    let ok_constants = _has(main_rs, "CLK_HZ") && _has(main_rs, "TICK_HZ") &&
+                       _has(main_rs, "D_TRIG_CYCLES") && _has(main_rs, "GATE_CYCLES")
+    let ok_state_machines = _has(main_rs, "TriggerSm") && _has(main_rs, "PiCtrl") &&
+                            _has(main_rs, "InterlockOk")
+    let ok_skeleton = _has(main_rs, "SKELETON ONLY") && _has(main_rs, "NOT BUILDABLE WITHOUT")
+    let ok_readme_exists = readme.len() > 0
+    let ok_readme_anchor = _has(readme, "timing_chain.hexa") &&
+                           _has(readme, "dac_chain.hexa") &&
+                           _has(readme, "control_loop.hexa") &&
+                           _has(readme, "§A.6.1 step D")
+    let ok = ok_cargo_exists && ok_target && ok_main_exists && ok_no_std &&
+             ok_constants && ok_state_machines && ok_skeleton &&
+             ok_readme_exists && ok_readme_anchor
+    _check(ok,
+           "firmware/mcu/ Rust skeleton present + matches sim consts + skeleton-tagged",
+           "cargo=" + str(ok_cargo_exists) +
+           " target=" + str(ok_target) +
+           " main=" + str(ok_main_exists) +
+           " no_std=" + str(ok_no_std) +
+           " consts=" + str(ok_constants) +
+           " sms=" + str(ok_state_machines) +
+           " skel=" + str(ok_skeleton) +
+           " readme=" + str(ok_readme_exists) +
+           " readme_anchor=" + str(ok_readme_anchor))
+}
+
+// Check 13 — §A.6.1 step D HDL skeleton (timing_ctrl.v) present +
+//             cross-anchored to firmware/sim/timing_chain.hexa
+fn check_step_d_hdl_skeleton() {
+    let v_txt = _read(HDL_TIMING_CTRL)
+    let r_txt = _read(HDL_README)
+    let ok_v_exists  = v_txt.len() > 0
+    let ok_module    = _has(v_txt, "module timing_ctrl")
+    let ok_params    = _has(v_txt, "TICK_HZ") && _has(v_txt, "D_TRIG_CYCLES") && _has(v_txt, "GATE_CYCLES")
+    let ok_interlock = _has(v_txt, "hv_ok_i") && _has(v_txt, "vacuum_ok_i") && _has(v_txt, "water_ok_i")
+    let ok_skeleton  = _has(v_txt, "SKELETON ONLY") && _has(v_txt, "NOT BUILDABLE WITHOUT")
+    let ok_r_exists  = r_txt.len() > 0
+    let ok_r_anchor  = _has(r_txt, "timing_chain.hexa") && _has(r_txt, "§A.6.1")
+    let ok = ok_v_exists && ok_module && ok_params && ok_interlock && ok_skeleton && ok_r_exists && ok_r_anchor
+    _check(ok,
+           "firmware/hdl/timing_ctrl.v skeleton present + matches sim params + skeleton-tagged",
+           "v=" + str(ok_v_exists) +
+           " module=" + str(ok_module) +
+           " params=" + str(ok_params) +
+           " interlock=" + str(ok_interlock) +
+           " skel=" + str(ok_skeleton) +
+           " readme=" + str(ok_r_exists) +
+           " readme_anchor=" + str(ok_r_anchor))
+}
+
+// Check 12 — §A.6.1 step A benchtop_v0_design.md present + cross-anchored
+//             to §X.4 (mini), §A.6.1 (roadmap), and the v0 sentinel.
+fn check_benchtop_v0_design() {
+    let txt = _read(DOC_BENCHTOP_V0)
+    let ok_exists   = txt.len() > 0
+    let ok_x4_anchor = _has(txt, "§X.4") || _has(txt, "FIRST-IN-WORLD")
+    let ok_a61      = _has(txt, "§A.6.1") || _has(txt, "A.6.1")
+    let ok_sentinel = _has(txt, "__HEXA_CERN_BENCHTOP_V0_DESIGN__")
+    let ok_bom      = _has(txt, "BOM") || _has(txt, "Bill of Materials")
+    let ok_lattice  = _has(txt, "n=6") && _has(txt, "σ") && _has(txt, "τ")
+    let road_txt    = _read(DOC_ROADMAP)
+    let ok_road_a6  = _has(road_txt, "§A.6.1") && _has(road_txt, "A → B")
+    let ok = ok_exists && ok_x4_anchor && ok_a61 && ok_sentinel && ok_bom && ok_lattice && ok_road_a6
+    _check(ok,
+           "benchtop_v0_design.md present + anchors to §X.4 / §A.6.1 / lattice / sentinel",
+           "exists=" + str(ok_exists) +
+           " x4=" + str(ok_x4_anchor) +
+           " a61=" + str(ok_a61) +
+           " sentinel=" + str(ok_sentinel) +
+           " bom=" + str(ok_bom) +
+           " lattice=" + str(ok_lattice) +
+           " road_a6=" + str(ok_road_a6))
+}
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-cern — cross-pillar consistency audit")
+    println("========================================================================")
+    println("  root: " + ROOT)
+    println("")
+
+    check_lhc_baseline()
+    check_desy_baseline()
+    check_mini_target()
+    check_cascade_span()
+    check_fcc_envelope()
+    check_oeis_cites()
+    check_bt_crosslinks()
+    check_readme_verbs()
+    check_cli_handlers()
+    check_six_order_claim()
+    check_release_frozen()
+    check_benchtop_v0_design()
+    check_step_d_hdl_skeleton()
+    check_step_d_mcu_skeleton()
+    check_step_d_build_scaffold()
+
+    println("========================================================================")
+    let pass_n = RUN - FAIL
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        for f in FAILURES { println("    ✗ " + f) }
+        println("__HEXA_CERN_CROSS_DOC__ FAIL")
+        exit(1)
+    }
+    println("  All cross-pillar anchors agree.")
+    println("__HEXA_CERN_CROSS_DOC__ PASS")
+    exit(0)
+}

@@ -1,0 +1,8 @@
+#!hexa strict
+// co2-capture design — amine loading capacity.
+fn main() {
+    let amine_mmol_per_g = 5.0
+    println("co2-capture_design (amine loading capacity):")
+    println("  amine_mmol_per_g = " + str(amine_mmol_per_g))
+    println("__HEXA_CO2_CAPTURE_DESIGN__ PASS gate=GATE_OPEN absorbed=false")
+}

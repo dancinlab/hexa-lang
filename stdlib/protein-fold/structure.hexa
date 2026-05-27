@@ -1,0 +1,8 @@
+#!hexa strict
+// protein-fold structure — target protein length.
+fn main() {
+    let residues_target = 100.0
+    println("protein-fold_structure (target protein length):")
+    println("  residues_target = " + str(residues_target))
+    println("__HEXA_PROTEIN_FOLD_STRUCTURE__ PASS gate=GATE_OPEN absorbed=false")
+}

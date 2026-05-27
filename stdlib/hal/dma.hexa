@@ -1,0 +1,59 @@
+#!hexa strict
+// stdlib/hal/dma/dma.hexa — σ-slot 10: direct memory access.
+//
+// import:  use "stdlib/hal/dma"
+// φ:       digital
+// handles: ≤ J₂=24 channels (canon σ·J₂=288 lane scaled to embedded).
+//
+// canon-aware (~/core/canon/domains/compute/chip-interconnect):
+//   - canon σ·J₂=288 lane @ 48 Gbps die-to-die. DMA channel count
+//     scales J₂=24 baseline + σ-multiplier per chiplet die.
+
+let MODULE_NAME = "dma"
+let SIGMA_SLOT  = 10
+let PHI_KIND    = "digital"
+
+// ── transfer directions (τ=4 patterns) ────────────────────────────────
+let DIR_MEM_TO_MEM = 0
+let DIR_MEM_TO_PER = 1
+let DIR_PER_TO_MEM = 2
+let DIR_PER_TO_PER = 3
+
+// ── transfer width ────────────────────────────────────────────────────
+let WIDTH_BYTE = 1
+let WIDTH_HALF = 2
+let WIDTH_WORD = 4
+
+fn dma_configure(channel: int, direction: int, width: int) -> int {
+    if channel < 0 || channel > 23 { return -1 }   // J₂=24
+    if direction < 0 || direction > 3 { return -2 }
+    if width != 1 && width != 2 && width != 4 { return -3 }
+    return channel
+}
+
+fn dma_start(handle: int, src: int, dst: int, n_bytes: int) -> bool {
+    if handle < 0 || n_bytes <= 0 { return false }
+    println("[dma sim] ch " + str(handle) + " src=0x" + str(src) + " dst=0x" + str(dst) + " bytes=" + str(n_bytes))
+    return true
+}
+
+fn dma_wait(handle: int) -> bool {
+    if handle < 0 { return false }
+    return true   // sim: instant
+}
+
+fn dma_abort(handle: int) -> bool { return handle >= 0 }
+
+fn dma_report(handle: int) -> str {
+    if handle < 0 { return "dma: invalid" }
+    return "dma: ch " + str(handle) + " ok (sim)"
+}
+
+fn dma_open(channel: int, direction: int, width: int) -> int {
+    let h = dma_configure(channel, direction, width)
+    if h < 0 { return h }
+    return h
+}
+
+fn dma_close(handle: int) -> bool { return handle >= 0 }
+fn dma_module_meta() -> [str] { return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "24"] }

@@ -1,0 +1,44 @@
+// Deterministic closed-form check of the cross-layer transformer-block
+// activation-HBM moat (axis C).
+//
+//   R(d, dff) = (13*d + 4*dff) / (3*d)
+//
+// With the canonical dff = 4*d:  R = 13/3 + 16/3 = 29/3 = 9.6667x
+// We multiply by 3 to stay in integers (3*R = 29 for dff = 4d).
+fn ratio_x3(d: i64, dff: i64) -> i64 {
+    // 3 * R = (13*d + 4*dff) / d   (integer when d divides numerator)
+    return (13 * d + 4 * dff) / d
+}
+
+fn launches_ratio_x3(fused: i64, eager: i64) -> i64 {
+    // 3 * (eager / fused)
+    return 3 * eager / fused
+}
+
+fn main() {
+    // canonical dff = 4*d => 3R = 29  =>  R = 9.6667x
+    let r3_d768:    i64 = ratio_x3(768,  3072)    // expect 29
+    let r3_d1024:   i64 = ratio_x3(1024, 4096)    // expect 29
+    let r3_d4096:   i64 = ratio_x3(4096, 16384)   // expect 29
+    print("3xR(d=768,dff=3072)=")
+    println(r3_d768)
+    print("3xR(d=1024,dff=4096)=")
+    println(r3_d1024)
+    print("3xR(d=4096,dff=16384)=")
+    println(r3_d4096)
+
+    // launches: fused=3, eager=11 => eager/fused = 11/3 = 3.6667
+    let lr3: i64 = launches_ratio_x3(3, 11)        // expect 11
+    print("3x(eager_L/fused_L)=")
+    println(lr3)
+
+    if r3_d768 == 29 {
+        if r3_d1024 == 29 {
+            if r3_d4096 == 29 {
+                if lr3 == 11 {
+                    println("STRUCTURAL-RATIO-CLOSED-FORM: PASS")
+                }
+            }
+        }
+    }
+}

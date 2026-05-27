@@ -1,0 +1,13 @@
+=== FOCAL n=6: Gamma_1(6)=12, X(6)=72 — the two 🔵 components ===
+(assembly: Gamma_1(6) = psi(6)*phi(6)/2 = 12*2/2 = 12 ;  X(6) = 6*12 = 72)
+
+verify --expr gamma0_index(6)=12
+  calc   = 12  == expected 12
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+verify --expr phi(6)=2
+  calc   = 2  == expected 2
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+--- assembled (🟡 cited closed-form, exact integer arithmetic) ---
+Gamma_1(6) idx = 12 ;  X(6)=Gamma(6) idx = 72 ;  relation X=N*Gamma_1: 72=6*12 OK

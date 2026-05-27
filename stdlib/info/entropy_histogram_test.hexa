@@ -1,0 +1,59 @@
+// stdlib/info/entropy_histogram_test — list-based entropy_hist + joint_entropy_hist.
+// Verifies the new module compiles and produces correct values on 3 oracles:
+//   1. single-bin spike  -> H == 0
+//   2. uniform 4-bin     -> H ≈ ln(4) = 1.3862944 (nats)
+//   3. joint correlated  -> H_joint(x,x) ≈ H(x)
+//
+// Self-contained (no cross-stdlib import).
+
+import "stdlib/info/entropy_histogram.hexa"
+
+fn _fabs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+
+fn _close(name: string, got: float, want: float, tol: float) -> int {
+    let d = _fabs(got - want)
+    if d < tol {
+        println("PASS " + name + " got=" + to_string(got) + " want=" + to_string(want))
+        return 0
+    }
+    println("FAIL " + name + " got=" + to_string(got) + " want=" + to_string(want) + " tol=" + to_string(tol))
+    return 1
+}
+
+fn main() {
+    let mut fails = 0
+
+    // ── 1. single-bin spike: all values land in bin 0 -> H = 0 ──
+    let spike = [0.0, 0.0, 0.0, 0.0]
+    let h_spike = entropy_hist(spike, 0.0, 1.0, 4)
+    fails = fails + _close("spike H=0", h_spike, 0.0, 0.0000001)
+
+    // ── 2. uniform 4-bin: 4 values, one per bin -> H = ln(4) ──
+    let uni = [0.1, 0.35, 0.6, 0.85]
+    let h_uni = entropy_hist(uni, 0.0, 1.0, 4)
+    let ln4 = log(4.0)
+    fails = fails + _close("uniform H=ln(4)", h_uni, ln4, 0.000001)
+
+    // ── 3. empty -> H = 0 ──
+    let empty_arr = []
+    let h_empty = entropy_hist(empty_arr, 0.0, 1.0, 4)
+    fails = fails + _close("empty H=0", h_empty, 0.0, 0.0000001)
+
+    // ── 4. joint(x, x): pairs collapse to diagonal -> H_joint(x,x) == H(x) ──
+    let xs = [0.1, 0.35, 0.6, 0.85]
+    let h_x  = entropy_hist(xs, 0.0, 1.0, 4)
+    let h_xx = joint_entropy_hist(xs, xs, 0.0, 1.0, 4)
+    fails = fails + _close("joint(x,x)=H(x)", h_xx, h_x, 0.000001)
+
+    // ── 5. joint uniform pairs: 4 pairs in 4 distinct cells out of 16 -> H = ln(4) ──
+    let ys = [0.85, 0.6, 0.35, 0.1]
+    let h_xy = joint_entropy_hist(xs, ys, 0.0, 1.0, 4)
+    fails = fails + _close("joint perm H=ln(4)", h_xy, ln4, 0.000001)
+
+    if fails == 0 {
+        println("ALL PASS — stdlib/info/entropy_histogram")
+    } else {
+        println("FAILURES: " + to_string(fails))
+        exit(1)
+    }
+}

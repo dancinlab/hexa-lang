@@ -1,0 +1,176 @@
+{
+  "rfc": "067-PBEAT-cublas-beat-envelope",
+  "date_utc": "2026-05-22",
+  "host": "ubu-2",
+  "device": "NVIDIA GeForce RTX 5070",
+  "sm": "sm_120",
+  "driver_version": 13000,
+  "runtime_version": 12000,
+  "warmup": 20,
+  "measurement_count": 200,
+  "timing_method": "cudaEventRecord per-launch (sync each iter)",
+  "variants": [
+    "N121-6stage (4-warp 64x64 + 6-stage cp.async)",
+    "N107-swizzle (4-warp 64x64 + 2-slot swizzle)"
+  ],
+  "n_repeats": 3,
+  "repeat_tags": [
+    "r1",
+    "r2",
+    "r3"
+  ],
+  "note": "cuBLAS-BEAT regime is small-shape LAUNCH-OVERHEAD-bound (under-subscribed grid), NOT compute-bound. Per-shape values aggregate the median across 3 independent fires (each 200 reps + 20 warmup, cuEvent sync). Envelope is NON-MONOTONIC: cuBLAS HGEMM picks a slow launch-bound kernel at M=448 (16.7 TFLOPS) vs M=384 (16.85 TFLOPS), re-opening a BEAT window at 448.",
+  "beat_boundary_M_median": 448,
+  "beat_boundary_M_per_run": [
+    448,
+    448,
+    448
+  ],
+  "bit_exact_all_shapes_all_variants_all_runs": true,
+  "shapes": [
+    {
+      "M": 192,
+      "N": 192,
+      "K": 192,
+      "num_ctas": 9,
+      "cublas_hgemm_tflops_med": 3.029918,
+      "cublas_hgemm_median_ms_med": 0.004672,
+      "n121_6stage_tflops_med": 2.756187,
+      "ratio_n121_med": 0.90625,
+      "ratio_n121_minmax": [
+        0.893,
+        0.9097
+      ],
+      "n107_swizzle_tflops_med": 2.697366,
+      "ratio_n107_med": 0.890244,
+      "ratio_n107_minmax": [
+        0.8788,
+        0.9154
+      ],
+      "best_ratio_med": 0.90625,
+      "best_variant": "N121-6stage",
+      "beat": false,
+      "maxabs_all_runs": 0.0
+    },
+    {
+      "M": 256,
+      "N": 256,
+      "K": 256,
+      "num_ctas": 16,
+      "cublas_hgemm_tflops_med": 4.993219,
+      "cublas_hgemm_median_ms_med": 0.00672,
+      "n121_6stage_tflops_med": 5.418998,
+      "ratio_n121_med": 1.085271,
+      "ratio_n121_minmax": [
+        1.0825,
+        1.1507
+      ],
+      "n107_swizzle_tflops_med": 5.418998,
+      "ratio_n107_med": 1.085271,
+      "ratio_n107_minmax": [
+        1.0579,
+        1.0881
+      ],
+      "best_ratio_med": 1.085271,
+      "best_variant": "N121-6stage",
+      "beat": true,
+      "maxabs_all_runs": 0.0
+    },
+    {
+      "M": 320,
+      "N": 320,
+      "K": 320,
+      "num_ctas": 25,
+      "cublas_hgemm_tflops_med": 9.775656,
+      "cublas_hgemm_median_ms_med": 0.006704,
+      "n121_6stage_tflops_med": 10.163772,
+      "ratio_n121_med": 1.042184,
+      "ratio_n121_minmax": [
+        1.0371,
+        1.0423
+      ],
+      "n107_swizzle_tflops_med": 9.142857,
+      "ratio_n107_med": 0.9375,
+      "ratio_n107_minmax": [
+        0.9249,
+        0.9976
+      ],
+      "best_ratio_med": 1.042184,
+      "best_variant": "N121-6stage",
+      "beat": true,
+      "maxabs_all_runs": 0.0
+    },
+    {
+      "M": 384,
+      "N": 384,
+      "K": 384,
+      "num_ctas": 36,
+      "cublas_hgemm_tflops_med": 16.852114,
+      "cublas_hgemm_median_ms_med": 0.00672,
+      "n121_6stage_tflops_med": 16.049633,
+      "ratio_n121_med": 0.952381,
+      "ratio_n121_minmax": [
+        0.9375,
+        1.0269
+      ],
+      "n107_swizzle_tflops_med": 14.127521,
+      "ratio_n107_med": 0.838323,
+      "ratio_n107_minmax": [
+        0.8219,
+        0.8678
+      ],
+      "best_ratio_med": 0.952381,
+      "best_variant": "N121-6stage",
+      "beat": false,
+      "maxabs_all_runs": 0.0
+    },
+    {
+      "M": 448,
+      "N": 448,
+      "K": 448,
+      "num_ctas": 49,
+      "cublas_hgemm_tflops_med": 16.700481,
+      "cublas_hgemm_median_ms_med": 0.010768,
+      "n121_6stage_tflops_med": 16.977982,
+      "ratio_n121_med": 1.016616,
+      "ratio_n121_minmax": [
+        0.9825,
+        1.0181
+      ],
+      "n107_swizzle_tflops_med": 16.977982,
+      "ratio_n107_med": 1.016616,
+      "ratio_n107_minmax": [
+        1.0151,
+        1.0243
+      ],
+      "best_ratio_med": 1.016616,
+      "best_variant": "N121-6stage",
+      "beat": true,
+      "maxabs_all_runs": 0.0
+    },
+    {
+      "M": 512,
+      "N": 512,
+      "K": 512,
+      "num_ctas": 64,
+      "cublas_hgemm_tflops_med": 24.818366,
+      "cublas_hgemm_median_ms_med": 0.010816,
+      "n121_6stage_tflops_med": 22.610803,
+      "ratio_n121_med": 0.911051,
+      "ratio_n121_minmax": [
+        0.888,
+        0.9111
+      ],
+      "n107_swizzle_tflops_med": 22.610803,
+      "ratio_n107_med": 0.911051,
+      "ratio_n107_minmax": [
+        0.9084,
+        0.9135
+      ],
+      "best_ratio_med": 0.911051,
+      "best_variant": "N121-6stage",
+      "beat": false,
+      "maxabs_all_runs": 0.0
+    }
+  ]
+}

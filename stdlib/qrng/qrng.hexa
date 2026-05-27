@@ -1,0 +1,318 @@
+#!hexa strict
+// stdlib/qrng/qrng.hexa — qrng stdlib runnable entrypoint + CLI dispatcher
+//
+// @version 1.0.0
+// @capabilities [randomness, selftest, dispatch, cli]
+// @stability stable
+// @since 2026-05-16
+//
+// Runnable entrypoint dispatched by `hexa qrng <subcmd>` (see self/main.hexa
+// `else if sub == "qrng"` branch).
+//
+// Subcommands:
+//   hexa qrng                          aggregate selftest (default if no subcmd)
+//   hexa qrng status                   9-backend table + tier coverage (T0..T3)
+//   hexa qrng collect [--bytes=N] [--seed=S] [--source=NAME]
+//                                      pull N random bytes via router fallback chain
+//   hexa qrng selftest                 full provider sweep (12 sentinels)
+//   hexa qrng chain                    show resolved router fallback chain
+//   hexa qrng meta --backend=NAME      print backend metadata
+//   hexa qrng --help, -h               this help
+//   hexa qrng --version, -v            version
+//
+// Programmatic use: import the finer-grained modules:
+//   use "stdlib/qrng/source"           // QrngBytes, QrngSourceMeta + helpers
+//   use "stdlib/qrng/backends/anu"     // qrng_source_collect_anu, qrng_anu_*
+//   use "stdlib/qrng/registry"         // qrng_registry_collect
+//   use "stdlib/qrng/router"           // qrng_route_collect
+//   use "stdlib/qrng/audit"            // qrng_audited_bytes
+//
+// Source: RFC 044 — absorbs ~/core/qrng/{qrng_main, cli/qrng.hexa} v1.0.0.
+
+use "stdlib/qrng/source"
+use "stdlib/qrng/qrng_main"
+use "stdlib/qrng/registry"
+use "stdlib/qrng/router"
+
+let VERSION = "1.0.0"
+
+fn _hex_byte(b: int) -> str {
+    let chars = "0123456789abcdef"
+    let hi = b / 16
+    let lo = b % 16
+    return chars.substring(hi, hi + 1) + chars.substring(lo, lo + 1)
+}
+
+fn _bytes_to_hex(bs: [int]) -> str {
+    let mut hex = ""
+    let mut i = 0
+    while i < len(bs) {
+        hex = hex + _hex_byte(bs[i])
+        i = i + 1
+    }
+    return hex
+}
+
+fn _find_flag(a: [str], flag: str, default_val: str) -> str {
+    let n = len(a)
+    let mut i = 0
+    while i < n {
+        if a[i] == flag {
+            if i + 1 < n { return a[i + 1] }
+        }
+        // also accept --key=value form
+        let prefix = flag + "="
+        if a[i].starts_with(prefix) {
+            return a[i].substring(len(prefix), len(a[i]))
+        }
+        i = i + 1
+    }
+    return default_val
+}
+
+fn _has_flag(a: [str], flag: str) -> int {
+    let mut i = 0
+    while i < len(a) {
+        if a[i] == flag { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+fn cmd_qrng_help() {
+    println("hexa qrng " + VERSION + " — Quantum RNG (9 backends T0..T3 + NIST SP 800-22 audit)")
+    println("")
+    println("USAGE")
+    println("  hexa qrng                                 aggregate selftest (default)")
+    println("  hexa qrng status                          9-backend table + tier coverage")
+    println("  hexa qrng collect [--bytes=N] [--seed=S] [--source=NAME]")
+    println("                                            pull bytes via router fallback chain")
+    println("  hexa qrng selftest                        full provider sweep (12 sentinels)")
+    println("  hexa qrng chain                           resolved router fallback chain")
+    println("  hexa qrng meta --backend=NAME             print backend metadata")
+    println("  hexa qrng --help, -h                      this help")
+    println("  hexa qrng --version, -v                   version")
+    println("")
+    println("PROGRAMMATIC USE")
+    println("  use \"stdlib/qrng/source\"                 QrngBytes, QrngSourceMeta + helpers")
+    println("  use \"stdlib/qrng/backends/anu\"           qrng_source_collect_anu, qrng_anu_*")
+    println("  use \"stdlib/qrng/registry\"               qrng_registry_collect dispatch")
+    println("  use \"stdlib/qrng/router\"                 qrng_route_collect fallback chain")
+    println("  use \"stdlib/qrng/audit\"                  qrng_audited_bytes single-stage")
+    println("")
+    println("ENV")
+    println("  QRNG_LIVE=1                               enable live network paths")
+    println("  QRNG_MOCK=1                               force mock LCG fixture (CI-safe)")
+    println("  QRNG_SOURCE=<name>                        pin single backend (skips chain)")
+    println("  QRNG_FALLBACK_CHAIN=a,b,c                 comma-sep custom chain")
+    println("  QRNG_HW_LIVE=1                            hardware_qrng live serial/PCIe")
+    println("  T2 secrets: IBM_QUANTUM_TOKEN · IONQ_API_KEY · QCS_API_KEY · AWS_*")
+    println("")
+    println("RFC 044 absorption · archive: github.com/dancinlab/qrng (private)")
+}
+
+fn cmd_qrng_version() {
+    println("hexa qrng " + VERSION)
+    println("stdlib/qrng — RFC 044 absorption of dancinlab/qrng v1.0.0")
+    println("license: Apache-2.0  |  DOI: 10.5281/zenodo.20102966")
+}
+
+fn cmd_qrng_status() {
+    println("hexa qrng " + VERSION + " status — 9 backends + tier coverage T0..T3")
+    println("")
+    let names = qrng_registry_names()
+    let mut i = 0
+    while i < len(names) {
+        let m = qrng_registry_meta(names[i])
+        let qflag = if m.is_quantum == 1 { "Q" } else { " " }
+        let lflag = if m.is_local == 1 { "L" } else { " " }
+        let fflag = if m.is_free == 1 { "F" } else { "$" }
+        let tier_str = "T" + str(m.tier)
+        println("  " + tier_str + "  " + qflag + lflag + fflag + "  " + m.name + "  (" + m.status + ")  vendor=" + m.vendor)
+        i = i + 1
+    }
+    println("")
+    println("  legend: Q=is_quantum  L=is_local  F=is_free / $=paid")
+    println("")
+    println("  router default chain (env-overridable):")
+    println("    curby → anu → nist_beacon → ibm_quantum → ionq → rigetti → braket → hardware_qrng → mock_qrng")
+}
+
+fn cmd_qrng_chain() {
+    println("hexa qrng " + VERSION + " chain — resolved router fallback chain")
+    println("")
+    let chain = qrng_resolve_chain()
+    let mut chain_str = ""
+    let mut i = 0
+    while i < len(chain) {
+        if i > 0 { chain_str = chain_str + " → " }
+        chain_str = chain_str + chain[i]
+        i = i + 1
+    }
+    println("  resolved: [" + chain_str + "]  (" + str(len(chain)) + " backend(s))")
+    println("")
+    let single = exec("printenv QRNG_SOURCE 2>/dev/null || printenv NEXUS_QRNG_SOURCE 2>/dev/null || true").trim()
+    let custom = exec("printenv QRNG_FALLBACK_CHAIN 2>/dev/null || printenv NEXUS_QRNG_FALLBACK_CHAIN 2>/dev/null || true").trim()
+    if len(single) > 0 {
+        println("  source: QRNG_SOURCE=" + single + " (single-backend pin)")
+    } else if len(custom) > 0 {
+        println("  source: QRNG_FALLBACK_CHAIN=" + custom + " (custom chain)")
+    } else {
+        println("  source: built-in default chain")
+    }
+    println("")
+    println("  hint: set QRNG_SOURCE=<single> to pin one backend,")
+    println("        or QRNG_FALLBACK_CHAIN=a,b,c for custom chain.")
+}
+
+fn cmd_qrng_meta(args: [str]) {
+    let backend = _find_flag(args, "--backend", "")
+    if len(backend) == 0 {
+        println("hexa qrng meta: --backend required")
+        println("  one of: curby | anu | nist_beacon | ibm_quantum | ionq | rigetti | braket | hardware_qrng | mock_qrng")
+        return
+    }
+    let m = qrng_registry_meta(backend)
+    if m.tier == -1 {
+        println("hexa qrng meta: unknown backend '" + backend + "'")
+        return
+    }
+    println("hexa qrng meta — backend=" + backend)
+    println("  name:           " + m.name)
+    println("  tier:           T" + str(m.tier))
+    println("  throughput_bps: " + str(m.throughput_bps))
+    println("  cost_usd:       " + str(m.cost_usd))
+    println("  lead_days:      " + str(m.lead_days))
+    println("  is_quantum:     " + str(m.is_quantum))
+    println("  is_local:       " + str(m.is_local))
+    println("  is_free:        " + str(m.is_free))
+    println("  status:         " + m.status)
+    println("  vendor:         " + m.vendor)
+}
+
+fn cmd_qrng_collect(args: [str]) {
+    let n_bytes_s = _find_flag(args, "--bytes", "16")
+    let seed_s = _find_flag(args, "--seed", "1")
+    let source = _find_flag(args, "--source", "")
+    let n_bytes = to_int(n_bytes_s)
+    let seed_i = to_int(seed_s)
+
+    if n_bytes < 1 {
+        println("hexa qrng collect: --bytes must be >= 1")
+        exit(1)
+    }
+
+    if len(source) > 0 {
+        // pin single backend via registry dispatch
+        let r = qrng_registry_collect(source, n_bytes, seed_i)
+        if r.ok != 1 {
+            println("hexa qrng collect: " + source + " failed: " + r.message)
+            exit(1)
+        }
+        let hex = _bytes_to_hex(r.bytes_)
+        println("QRNG_HEX:" + hex)
+        println("QRNG_SOURCE:" + source)
+        println("QRNG_NB:" + str(r.n_bytes))
+        return
+    }
+
+    // router fallback chain
+    let route = qrng_route_collect(n_bytes, seed_i)
+    if route.result.ok != 1 {
+        println("hexa qrng collect: router failed: " + route.result.message)
+        let mut k = 0
+        while k < len(route.attempts) {
+            println("  try[" + str(k) + "] " + route.attempts[k] + " -> " + route.reasons[k])
+            k = k + 1
+        }
+        exit(1)
+    }
+    let hex = _bytes_to_hex(route.result.bytes_)
+    println("QRNG_HEX:" + hex)
+    println("QRNG_SOURCE:" + route.final_backend)
+    println("QRNG_NB:" + str(route.result.n_bytes))
+    let mut atts = ""
+    let mut k = 0
+    while k < len(route.attempts) {
+        if k > 0 { atts = atts + "," }
+        atts = atts + route.attempts[k]
+        k = k + 1
+    }
+    println("QRNG_ATTEMPTS:" + atts)
+}
+
+fn cmd_qrng_selftest() {
+    println("hexa qrng " + VERSION + " selftest — aggregate sweep")
+    println("")
+    let ok = qrng_main_aggregate()
+    println("")
+    if ok == 1 {
+        println("  verdict: PASS (aggregate)")
+        println("  __QRNG_SELFTEST__ PASS")
+        println("")
+        println("  individual backend tests: hexa run stdlib/test/test_qrng_*.hexa")
+    } else {
+        println("  verdict: FAIL — see per-module output above")
+        println("  __QRNG_SELFTEST__ FAIL")
+        exit(1)
+    }
+}
+
+fn main() {
+    let argv = args()
+    // argv shape: [interp_path, this_script, sub?, flag1, flag2, ...]
+    // self/main.hexa dispatch passes ["qrng_cli", "qrng_dispatch", sub, args...]
+    // when invoked as `hexa qrng <sub> ...`.
+    let n = len(argv)
+
+    // Find first positional after the script path.
+    let mut subcmd_idx = -1
+    let mut i = 0
+    while i < n {
+        if argv[i].ends_with(".hexa") { subcmd_idx = i + 1; break }
+        i = i + 1
+    }
+    if subcmd_idx < 0 { subcmd_idx = 2 }  // direct invocation: argv[0]=interp argv[1]=script
+
+    // No subcommand → aggregate selftest (default; matches existing qrng.hexa behavior).
+    if subcmd_idx >= n {
+        println("[qrng] stdlib/qrng — 9-backend QRNG abstraction (RFC 044)")
+        let ok = qrng_main_aggregate()
+        if ok == 1 {
+            println("[qrng] aggregate:              ALL PASS")
+            println("__QRNG_MAIN__ PASS")
+            return
+        }
+        println("[qrng] aggregate:              SOME FAIL")
+        println("__QRNG_MAIN__ FAIL")
+        exit(1)
+    }
+
+    let sub = argv[subcmd_idx]
+    let mut sub_args = []
+    let mut j = subcmd_idx + 1
+    while j < n {
+        sub_args.push(argv[j])
+        j = j + 1
+    }
+
+    if sub == "--help" || sub == "-h" || sub == "help" {
+        cmd_qrng_help()
+    } else if sub == "--version" || sub == "-v" || sub == "version" {
+        cmd_qrng_version()
+    } else if sub == "status" {
+        cmd_qrng_status()
+    } else if sub == "chain" {
+        cmd_qrng_chain()
+    } else if sub == "meta" {
+        cmd_qrng_meta(sub_args)
+    } else if sub == "collect" {
+        cmd_qrng_collect(sub_args)
+    } else if sub == "selftest" {
+        cmd_qrng_selftest()
+    } else {
+        println("hexa qrng: unknown subcommand '" + sub + "'")
+        println("run 'hexa qrng --help' for usage")
+        exit(2)
+    }
+}

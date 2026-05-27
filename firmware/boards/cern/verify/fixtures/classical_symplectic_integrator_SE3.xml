@@ -1,0 +1,65 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<feed xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/" xmlns:arxiv="http://arxiv.org/schemas/atom" xmlns="http://www.w3.org/2005/Atom">
+  <id>https://arxiv.org/api/U1ZQt7Ef9rj3h3Qok7GPxgDEqf4</id>
+  <title>arXiv Query: search_query=all:symplectic OR all:integrator OR all:SE3&amp;id_list=&amp;start=0&amp;max_results=3</title>
+  <updated>2026-05-07T15:25:12Z</updated>
+  <link href="https://arxiv.org/api/query?search_query=all:symplectic+OR+(all:integrator+OR+all:SE3)&amp;start=0&amp;max_results=3&amp;id_list=" type="application/atom+xml"/>
+  <opensearch:itemsPerPage>3</opensearch:itemsPerPage>
+  <opensearch:totalResults>286485</opensearch:totalResults>
+  <opensearch:startIndex>0</opensearch:startIndex>
+  <entry>
+    <id>http://arxiv.org/abs/math/0601540v1</id>
+    <title>Symplectic forms and surfaces of negative square</title>
+    <updated>2006-01-23T05:08:17Z</updated>
+    <link href="https://arxiv.org/abs/math/0601540v1" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/math/0601540v1" rel="related" type="application/pdf" title="pdf"/>
+    <summary>  We introduce an analogue of the inflation technique of Lalonde-McDuff, allowing us to obtain new symplectic forms from symplectic surfaces of negative self-intersection in symplectic four-manifolds. We consider the implications of this construction for the symplectic cones of Kähler surfaces, proving along the way a result which can be used to simplify the intersections of distinct pseudoholomorphic curves via a perturbation.</summary>
+    <category term="math.SG" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2006-01-23T05:08:17Z</published>
+    <arxiv:comment>17 pages. To appear in Journal of Symplectic Geometry</arxiv:comment>
+    <arxiv:primary_category term="math.SG"/>
+    <arxiv:journal_ref>J. Symplectic Geom. 4 (2006), no. 1, 71--91</arxiv:journal_ref>
+    <author>
+      <name>Tian-Jun Li</name>
+    </author>
+    <author>
+      <name>Michael Usher</name>
+    </author>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/1007.4036v2</id>
+    <title>Symplectic reduction of quasi-morphisms and quasi-states</title>
+    <updated>2011-06-18T14:44:51Z</updated>
+    <link href="https://arxiv.org/abs/1007.4036v2" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/1007.4036v2" rel="related" type="application/pdf" title="pdf"/>
+    <summary>We prove that quasi-morphisms and quasi-states on a closed integral symplectic manifold descend under symplectic reduction to symplectic hyperplane sections. Along the way we show that quasi-morphisms that arise from spectral invariants are the Calabi homomorphism when restricted to Hamiltonians supported on stably displaceable sets.</summary>
+    <category term="math.SG" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2010-07-23T02:36:35Z</published>
+    <arxiv:comment>20 pages; v2: added remarks and updated references, to appear in Journal of Symplectic Geometry</arxiv:comment>
+    <arxiv:primary_category term="math.SG"/>
+    <arxiv:journal_ref>J. Symplectic Geom. 10(2):225-246, 2012</arxiv:journal_ref>
+    <author>
+      <name>Matthew Strom Borman</name>
+    </author>
+    <arxiv:doi>10.4310/JSG.2012.v10.n2.a4</arxiv:doi>
+    <link rel="related" href="https://doi.org/10.4310/JSG.2012.v10.n2.a4" title="doi"/>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/1811.09984v4</id>
+    <title>Translated points for contactomorphisms of prequantization spaces over monotone symplectic toric manifolds</title>
+    <updated>2022-06-10T08:58:43Z</updated>
+    <link href="https://arxiv.org/abs/1811.09984v4" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/1811.09984v4" rel="related" type="application/pdf" title="pdf"/>
+    <summary>We prove a version of Sandon's conjecture on the number of translated points of contactomorphisms for the case of prequantization bundles over certain closed monotone symplectic toric manifolds. Namely we show that any contactomorphism of such a prequantization bundle lying in the identity component of the contactomorphism group possesses at least $N$ translated points, where $N$ is the minimal Chern number of the symplectic toric manifold. The proof relies on the theory of generating functions coupled with equivariant cohomology, whereby we adapt Givental's approach to the Arnold conjecture for integral symplectic toric manifolds to the context of prequantization bundles.</summary>
+    <category term="math.SG" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2018-11-25T10:29:36Z</published>
+    <arxiv:comment>Published in the Journal of Symplectic Geometry</arxiv:comment>
+    <arxiv:primary_category term="math.SG"/>
+    <arxiv:journal_ref>Journal of Symplectic Geometry, Vol. 19, No. 6 (2021), pp. 1421-1493</arxiv:journal_ref>
+    <author>
+      <name>Brian Tervil</name>
+    </author>
+    <arxiv:doi>10.4310/JSG.2021.v19.n6.a3</arxiv:doi>
+    <link rel="related" href="https://doi.org/10.4310/JSG.2021.v19.n6.a3" title="doi"/>
+  </entry>
+</feed>

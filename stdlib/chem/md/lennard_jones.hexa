@@ -1,0 +1,129 @@
+// stdlib/chem/md/lennard_jones.hexa — Lennard-Jones 6-12 pair potential +
+// system energy accumulators for the MD-core (TTR M5 cycle 1).
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// References:
+//   Jones, J.E. (1924). On the determination of molecular fields.
+//     Proc. Roy. Soc. London A 106, 463 (LJ 6-12 form).
+//
+// Pure algorithmic — no I/O, no syscall, no PBC. Vacuum boundary
+// (all pair distances computed in raw 3-space, no minimum-image
+// convention).
+//
+// DEFERRED (do NOT belong in this PR; follow-up milestones):
+//   * Periodic boundary conditions (minimum-image distance)
+//   * Long-range tail correction / cutoff smoothing
+//   * Coulomb electrostatics, Ewald/PME
+//   * Bonded forces (bonds/angles/dihedrals)
+//   * Neighbour lists / cell decomposition
+//   * Thermostats / barostats
+//   * GPU dispatch
+//
+// Public surface:
+//   pub fn lj_pair_force(p1, p2, eps, sigma)    -> [fx, fy, fz]
+//   pub fn lj_pair_energy(p1, p2, eps, sigma)   -> float
+//   pub fn lj_system_energy(particles, eps, sigma) -> float
+//   pub fn kinetic_energy(particles)            -> float
+//   pub fn total_energy(particles, eps, sigma)  -> float
+//
+// Particle layout is shared with verlet.hexa (struct MdParticle).
+// Re-declared here so the LJ module is usable stand-alone.
+
+pub struct MdParticle {
+    x: float,
+    y: float,
+    z: float,
+    vx: float,
+    vy: float,
+    vz: float,
+    mass: float,
+    fx: float,
+    fy: float,
+    fz: float,
+}
+
+// ── Lennard-Jones pair force ─────────────────────────────────────────
+//
+// U(r) = 4 ε [(σ/r)^12 − (σ/r)^6]
+// F_vec on p1 due to p2 = −∇U evaluated at p1:
+//   F = (24 ε / r²) · [2(σ/r)^12 − (σ/r)^6] · (r_p1 − r_p2)
+// Newton's third law gives the opposite vector on p2 (caller responsibility).
+//
+// Singularity guard: r → 0 returns zero force (caller should never
+// supply coincident particles in MD; this keeps the integrator from
+// NaN-blowing the trajectory if the timestep is too aggressive).
+
+pub fn lj_pair_force(p1: MdParticle, p2: MdParticle, eps: float, sigma: float) -> array {
+    let dx = p1.x - p2.x
+    let dy = p1.y - p2.y
+    let dz = p1.z - p2.z
+    let r2 = dx * dx + dy * dy + dz * dz
+    if r2 < 1.0e-30 {
+        return [0.0, 0.0, 0.0]
+    }
+    let inv_r2 = 1.0 / r2
+    let s2 = sigma * sigma
+    let sr2 = s2 * inv_r2        // (σ/r)²
+    let sr6 = sr2 * sr2 * sr2    // (σ/r)^6
+    let sr12 = sr6 * sr6         // (σ/r)^12
+    // |F| / r = 24 ε (2·sr12 − sr6) / r²   ← factor that multiplies r⃗.
+    let factor = 24.0 * eps * (2.0 * sr12 - sr6) * inv_r2
+    return [factor * dx, factor * dy, factor * dz]
+}
+
+// ── Pair potential energy ────────────────────────────────────────────
+
+pub fn lj_pair_energy(p1: MdParticle, p2: MdParticle, eps: float, sigma: float) -> float {
+    let dx = p1.x - p2.x
+    let dy = p1.y - p2.y
+    let dz = p1.z - p2.z
+    let r2 = dx * dx + dy * dy + dz * dz
+    if r2 < 1.0e-30 {
+        return 0.0
+    }
+    let s2 = sigma * sigma
+    let sr2 = s2 / r2
+    let sr6 = sr2 * sr2 * sr2
+    let sr12 = sr6 * sr6
+    return 4.0 * eps * (sr12 - sr6)
+}
+
+// ── System potential energy: Σ_{i<j} U(r_ij) ─────────────────────────
+
+pub fn lj_system_energy(particles: array, eps: float, sigma: float) -> float {
+    let n = len(particles)
+    let mut u_total = 0.0
+    let mut i = 0
+    while i < n {
+        let mut j = i + 1
+        while j < n {
+            u_total = u_total + lj_pair_energy(particles[i], particles[j], eps, sigma)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return u_total
+}
+
+// ── Kinetic energy: Σ ½ m (vx² + vy² + vz²) ──────────────────────────
+
+pub fn kinetic_energy(particles: array) -> float {
+    let n = len(particles)
+    let mut ke = 0.0
+    let mut i = 0
+    while i < n {
+        let p = particles[i]
+        let v2 = p.vx * p.vx + p.vy * p.vy + p.vz * p.vz
+        ke = ke + 0.5 * p.mass * v2
+        i = i + 1
+    }
+    return ke
+}
+
+// ── Total energy = KE + PE ───────────────────────────────────────────
+
+pub fn total_energy(particles: array, eps: float, sigma: float) -> float {
+    return kinetic_energy(particles) + lj_system_energy(particles, eps, sigma)
+}

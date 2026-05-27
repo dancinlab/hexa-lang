@@ -1,0 +1,143 @@
+// compiler/atlas/symbolic/convergence_cluster.hexa — multi-domain convergence detector
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Hexa-native port of the ConvergenceCluster algorithm from
+// archive-TECS-L/convergence_engine.py (TECS-L absorption Wave 2 —
+// manifest §Backlog #4).
+//
+// A "convergence point" is a value independently reached from ≥ N distinct
+// domains. The algorithm:
+//
+//   add(value, domain)   incremental online clustering — a path joins an
+//                         existing cluster iff |v − center|/|center| < θ,
+//                         and the cluster center becomes the running mean
+//                         of its members (the Python np.mean update).
+//   is_convergence(c, k) the cluster is a convergence point iff ≥ k DISTINCT
+//                         single-domain paths reach it (the source's STRICT
+//                         independence criterion).
+//   score(cluster)        deterministic convergence score:
+//                            base        = max(0, −log10(target_err+1e-15))
+//                            domain_bonus = (n_independent − 1)·20
+//                            exact_bonus  = 50 if target_err < 1e-12 else 0
+//                         (the trivial-arithmetic / signature-const / novelty
+//                          plumbing depends on the domain-constant catalog,
+//                          which is engine-orchestration — NOT ported here;
+//                          callers pass the already-attributed domain id.)
+//
+// Exact float clustering; zero external dependency (g5 hexa-native-only).
+//
+// Cross-link: atlas/inbox/_tecsl_calculator_port_manifest.md §B / §Backlog #4.
+
+fn _absf(x: float) -> float {
+    if x < 0.0 { return -x }
+    return x
+}
+
+// log10 via natural log (log is the libm builtin).
+fn _log10(x: float) -> float {
+    return log(x) / 2.302585092994046
+}
+
+// A single path that reached `value` from domain `domain` (one domain id).
+pub struct Path {
+    value: float,
+    domain: int
+}
+
+pub struct Cluster {
+    center: float,
+    sum: float,        // running sum for the mean update
+    count: int,
+    paths: [Path]
+}
+
+pub struct ClusterSet {
+    threshold: float,
+    clusters: [Cluster]
+}
+
+pub fn new_cluster_set(threshold: float) -> ClusterSet {
+    let cs: [Cluster] = []
+    return ClusterSet { threshold: threshold, clusters: cs }
+}
+
+// add a path: join the first cluster within relative threshold (recentering
+// to the running mean), else open a new cluster. Mirrors Python .add().
+pub fn cluster_add(cs: ClusterSet, value: float, domain: int) -> ClusterSet {
+    let mut i = 0
+    while i < len(cs.clusters) {
+        let c = cs.clusters[i]
+        if c.center != 0.0 {
+            if _absf(value - c.center) / _absf(c.center) < cs.threshold {
+                let mut paths = c.paths
+                paths.push(Path { value: value, domain: domain })
+                let new_sum = c.sum + value
+                let new_count = c.count + 1
+                cs.clusters[i] = Cluster {
+                    center: new_sum / to_float(new_count),
+                    sum: new_sum,
+                    count: new_count,
+                    paths: paths
+                }
+                return cs
+            }
+        }
+        i = i + 1
+    }
+    let mut np: [Path] = []
+    np.push(Path { value: value, domain: domain })
+    cs.clusters.push(Cluster { center: value, sum: value, count: 1, paths: np })
+    return cs
+}
+
+// number of DISTINCT domains with a single-domain path into this cluster
+// (the source's STRICT independent-domain count).
+pub fn independent_domains(c: Cluster) -> int {
+    let mut seen: [int] = []
+    let mut i = 0
+    while i < len(c.paths) {
+        let d = c.paths[i].domain
+        let mut found = false
+        let mut j = 0
+        while j < len(seen) {
+            if seen[j] == d { found = true }
+            j = j + 1
+        }
+        if !found { seen.push(d) }
+        i = i + 1
+    }
+    return len(seen)
+}
+
+// a cluster is a convergence point iff ≥ min_domains independent domains.
+pub fn is_convergence_point(c: Cluster, min_domains: int) -> bool {
+    return independent_domains(c) >= min_domains
+}
+
+// deterministic convergence score against a target value (Python score
+// formula, independence-driven terms only).
+pub fn convergence_score(c: Cluster, target: float) -> float {
+    let denom = if _absf(target) > 0.000000000000001 { _absf(target) } else { 0.000000000000001 }
+    let err = _absf(c.center - target) / denom
+    let base_raw = 0.0 - _log10(err + 0.000000000000001)
+    let base = if base_raw > 0.0 { base_raw } else { 0.0 }
+    let n_ind = independent_domains(c)
+    let domain_bonus = to_float((n_ind - 1) * 20)
+    let exact_bonus = if err < 0.000000000001 { 50.0 } else { 0.0 }
+    return base + domain_bonus + exact_bonus
+}
+
+// all clusters that are convergence points (≥ min_domains), in insertion order.
+pub fn convergence_points(cs: ClusterSet, min_domains: int) -> [Cluster] {
+    let mut out: [Cluster] = []
+    let mut i = 0
+    while i < len(cs.clusters) {
+        if is_convergence_point(cs.clusters[i], min_domains) {
+            out.push(cs.clusters[i])
+        }
+        i = i + 1
+    }
+    return out
+}

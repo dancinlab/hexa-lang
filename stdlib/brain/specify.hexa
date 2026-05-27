@@ -1,0 +1,36 @@
+#!hexa strict
+// stdlib/brain/specify.hexa — `brain + specify` producer (hexa-native · N24 pilot).
+//
+// LAYER: per-verb cell producer · AURA N24 per-verb migration pilot.
+// Mirrors stdlib/aura/specify.hexa sentinel convention. Replaces the
+// legacy stdlib/brain/specify.py during the .py → .hexa migration.
+//
+// Sentinels:
+//   __HEXA_BRAIN_SPECIFY__ PASS
+//   BRAIN_SPECIFY_OK gate=GATE_OPEN absorbed=false
+
+let VERSION       = "0.1.0"
+let MODULE        = "brain-specify"
+let RECORD_KIND   = "brain_specify_record"
+
+fn _scope_caveats() -> [str] {
+    return [
+        "brain specify producer (hexa-native · N24 migration pilot) — spec skeleton TEMPLATE.",
+        "measurement_gate = GATE_OPEN — spec skeleton is not an absorption claim (g3).",
+        "absorbed=false PERMANENTLY (g3) — pilot producer, full verb-cell suite is follow-up.",
+    ]
+}
+
+fn main() {
+    print("# BRAIN SPECIFY — hexa-native producer (N24 per-verb migration pilot)")
+    print("# version = " + VERSION)
+    let c = _scope_caveats()
+    let n = c.len()
+    let mut i = 0
+    while i < n {
+        print("# scope_caveat: " + c[i])
+        i = i + 1
+    }
+    print("BRAIN_SPECIFY_OK record_kind=" + RECORD_KIND + " gate=GATE_OPEN absorbed=false version=" + VERSION)
+    print("__HEXA_BRAIN_SPECIFY__ PASS")
+}

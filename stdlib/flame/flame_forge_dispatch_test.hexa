@@ -1,0 +1,93 @@
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/flame/flame_forge_dispatch_test.hexa — RFC 050 L1 slice 1 smoke
+//
+// Verifies the `forge_dispatch_matmul` builtin (the hexa-callable wrapper
+// around forge_tier_dispatch_v1, RFC 050 §6.1) produces the SAME result as
+// the direct `farr_matmul` path (the RFC 040 / RFC 032 baseline).
+//
+// Falsifier:
+//   F-RFC050-L1-DISPATCH-EQ   forge_dispatch_matmul(A,M,K,B,N) farr equals
+//                             farr_matmul(A,M,K,B,N) farr element-by-element
+//                             within tolerance. Both route to the same
+//                             hexa_farr_matmul FP64 baseline — the dispatch
+//                             plumbing must not alter the result.
+//
+// $0 — CPU farr only, no GPU fire. Parse-gated with hexa_real parse.
+//
+// SSOT: docs/rfc/rfc_drafts_2026_05_12/rfc_050_flame_forge_integration.md
+// ════════════════════════════════════════════════════════════════════════
+
+fn _fd_abs(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+// Max |Δ| between two farr handles over the first n elements.
+fn _fd_max_dev(a: int, b: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n {
+        let d = _fd_abs(farr_get(a, i) - farr_get(b, i))
+        if d > m { m = d }
+        i = i + 1
+    }
+    return m
+}
+
+fn main() {
+    // Small asymmetric matmul: A[M,K] @ B[K,N] = C[M,N].
+    let M = 2
+    let K = 3
+    let N = 2
+
+    // A = [[1,2,3],[4,5,6]]  (row-major, M*K = 6 elems)
+    let A = farr_zeros(M * K)
+    let _a0 = farr_set(A, 0, 1.0)
+    let _a1 = farr_set(A, 1, 2.0)
+    let _a2 = farr_set(A, 2, 3.0)
+    let _a3 = farr_set(A, 3, 4.0)
+    let _a4 = farr_set(A, 4, 5.0)
+    let _a5 = farr_set(A, 5, 6.0)
+
+    // B = [[7,8],[9,10],[11,12]]  (row-major, K*N = 6 elems)
+    let B = farr_zeros(K * N)
+    let _b0 = farr_set(B, 0, 7.0)
+    let _b1 = farr_set(B, 1, 8.0)
+    let _b2 = farr_set(B, 2, 9.0)
+    let _b3 = farr_set(B, 3, 10.0)
+    let _b4 = farr_set(B, 4, 11.0)
+    let _b5 = farr_set(B, 5, 12.0)
+
+    // Direct path: the RFC 032 baseline builtin.
+    let C_direct = farr_matmul(A, M, K, B, N)
+
+    // Dispatched path: routed through forge_tier_dispatch_v1.
+    let C_forge = forge_dispatch_matmul(A, M, K, B, N)
+
+    // Both must return a valid farr handle (>= 0).
+    if C_direct < 0 {
+        print("FAIL: farr_matmul returned a bad handle")
+        return
+    }
+    if C_forge < 0 {
+        print("FAIL: forge_dispatch_matmul returned a bad handle")
+        return
+    }
+
+    // Element-wise equality within FP64 tolerance. Both paths run the
+    // identical hexa_farr_matmul kernel, so max |Δ| should be 0.0; the
+    // tolerance only guards against an accidental reorder.
+    let dev = _fd_max_dev(C_direct, C_forge, M * N)
+    let tol = 0.000000001
+
+    if dev <= tol {
+        print("PASS: F-RFC050-L1-DISPATCH-EQ — forge_dispatch_matmul == farr_matmul")
+    } else {
+        print("FAIL: F-RFC050-L1-DISPATCH-EQ — dispatch path diverged")
+    }
+
+    let _f1 = farr_free(A)
+    let _f2 = farr_free(B)
+    let _f3 = farr_free(C_direct)
+    let _f4 = farr_free(C_forge)
+}

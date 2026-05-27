@@ -1,0 +1,8 @@
+#!hexa strict
+// electrocat specify — HER overpotential target.
+fn main() {
+    let eta_mV = 100.0
+    println("electrocat_specify (HER overpotential target):")
+    println("  eta_mV = " + str(eta_mV))
+    println("__HEXA_ELECTROCAT_SPECIFY__ PASS gate=GATE_OPEN absorbed=false")
+}

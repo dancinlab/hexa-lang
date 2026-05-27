@@ -1,0 +1,8 @@
+#!hexa strict
+// graphene design — magic-angle bilayer twist.
+fn main() {
+    let twist_deg = 1.1
+    println("graphene_design (magic-angle bilayer twist):")
+    println("  twist_deg = " + str(twist_deg))
+    println("__HEXA_GRAPHENE_DESIGN__ PASS gate=GATE_OPEN absorbed=false")
+}

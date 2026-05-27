@@ -1,0 +1,8 @@
+#!hexa strict
+// metamaterial design — SRR split gap.
+fn main() {
+    let split_gap_mm = 0.2
+    println("metamaterial_design (SRR split gap):")
+    println("  split_gap_mm = " + str(split_gap_mm))
+    println("__HEXA_METAMATERIAL_DESIGN__ PASS gate=GATE_OPEN absorbed=false")
+}

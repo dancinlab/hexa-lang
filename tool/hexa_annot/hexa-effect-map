@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# hexa-effect-map — Tier 3 annotation extractor (AST-backed)
+#
+# Inputs:
+#   hexa-effect-map <file.hexa> [<file2.hexa> ...]
+#   hexa-effect-map --dir <directory>
+#   hexa-effect-map [--kind effect|capability|ai|prove|refines] <files...>
+#
+# Output (stdout JSON, schema v0.2 / source "ast"):
+#   { "version":"0.2","source":"ast",
+#     "annotations":[{kind,fn,file,line,meta{...}}],
+#     "summary":{effect,capability,ai,prove,refines,total} }
+#
+# Recognized annotations (immediately preceding fn decl, stacking allowed):
+#   @effect(kind="io|net|state|time|rand"),  also accepts @effect(io) bare form
+#   @capability(cap="<name>")
+#   @ai(hint="<text>")
+#   @prove
+#   @refines(pred="<expr>")
+#
+# Phase 5 (2026-05-13): grep MVP → AST. Token-level walk via
+# tool/hexa_annot/_ast_extract.hexa avoids the `@effect` inside `//` comment
+# and `"..."` string false-positives of the previous heuristic.
+set -eu
+
+usage() {
+    cat >&2 <<EOF
+usage: hexa-effect-map [--kind effect|capability|ai|prove|refines] <file.hexa> [file2.hexa ...]
+       hexa-effect-map [--kind ...] --dir <directory>
+EOF
+    exit 1
+}
+
+case "${1:-}" in
+    -h|--help) usage ;;
+    "") usage ;;
+esac
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+. "${SCRIPT_DIR}/_ast_extract.sh"
+
+filter_kind=""
+ARGS=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --kind)
+            shift
+            [ $# -ge 1 ] || usage
+            case "$1" in
+                effect|capability|ai|prove|refines) filter_kind="$1" ;;
+                *) echo "ERROR: invalid kind: $1" >&2; usage ;;
+            esac
+            shift
+            ;;
+        -h|--help) usage ;;
+        *) ARGS+=("$1"); shift ;;
+    esac
+done
+
+if ! resolve_files "${ARGS[@]}"; then
+    exit 1
+fi
+
+if [ ${#FILES[@]} -eq 0 ]; then
+    printf '{"version":"0.2","source":"ast","annotations":[],"summary":{"effect":0,"capability":0,"ai":0,"prove":0,"refines":0,"total":0}}\n'
+    exit 0
+fi
+
+run_ast_extract | ast_emit_kindmap_json "effect,capability,ai,prove,refines" "$filter_kind"

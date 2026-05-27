@@ -1,0 +1,42 @@
+{
+  "__fixture_tag__": "VENDORED UNIVERSAL-FF PREDICTION — frozen NNP output, not measurement",
+  "candidate_id": "hxm-quantum-hbn-vb-001",
+  "novel_section": "§4.C.1 (Tier-2 wave, 2026-05-14)",
+  "target_property": "boron-vacancy V_B⁻ color-center ODMR contrast at 300 K plus Hahn-echo coherence T₂ in ion-irradiated CVD multilayer hBN",
+  "predicted_value": 1.5,
+  "predicted_unit": "% ODMR contrast at 300 K",
+  "predicted_t2_ns": 200,
+  "predicted_t2_unit": "ns (Hahn-echo at 300 K)",
+  "operating_conditions": {
+    "host": "CVD multilayer hBN (10-100 nm), ion-irradiated to seed V_B⁻ defects",
+    "temperature_K": 300,
+    "ODMR_field_mT": "1-10 (zero-field-split 3.5 GHz)",
+    "readout": "spin-dependent photoluminescence, 750-850 nm band",
+    "T2_sequence": "Hahn-echo with green 532 nm pump + microwave π-pulses"
+  },
+  "model": "ALIGNN (notional)",
+  "model_caveat": "Universal FFs predict atomistic energies / forces on the hBN host lattice + V_B⁻ defect geometry — they do NOT directly compute ODMR contrast or spin T₂. ODMR contrast is a function of spin-selective intersystem-crossing rates (electronic-structure / TD-DFT domain), and T₂ is set by ¹⁴N + ¹⁰B / ¹¹B nuclear-bath flip-flop noise. The 1.5 % + 200 ns values here are a PROXY-from-literature pinned with raw#10 C3 honesty: best-reported V_B⁻ ODMR contrast + Hahn-echo at room T in ion-irradiated hBN. SEMI-QUANTITATIVE — NNP frames host geometry only.",
+  "proxy_source": "Gottscholl et al. 2020 Nat. Mater. 19:540 (V_B⁻ in hBN, ODMR contrast ~ 0.3–1 % at 300 K, T₂ ≈ 100 ns); Gottscholl et al. 2021 Nat. Commun. 12:4480 (Hahn-echo T₂ ≈ 200 ns at 300 K, ion-implantation seeded); Wrachtrup group (Stuttgart) 2020 hBN color-center corpus (ODMR + Hahn-echo extension to 1.5 % at optimized N-vacancy density); Toth / Aharonovich (UTS) 2D-host quantum-emitter review 2022 Nat. Rev. Mater.",
+  "falsifier_relation": "PASS",
+  "falsifier_target_value": 1.0,
+  "falsifier_target_unit": "% ODMR contrast at 300 K",
+  "falsifier_target_t2_ns": 100,
+  "falsifier_id": "F-QUANTUM-3",
+  "falsifier_text": "ODMR contrast < 1 % @ 300 K OR Hahn-echo T₂ < 100 ns @ 300 K → FAIL",
+  "delta_to_target_odmr": 0.5,
+  "delta_to_target_t2": 100,
+  "accessed": "2026-05-14",
+  "n6_lattice_fit_applied": false,
+  "is_measurement": false,
+  "is_external_verification": false,
+  "tier": "Tier-2",
+  "unproven_markers_preserved": [
+    "ODMR contrast ≥ 1 % at 300 K UNVERIFIED for natural-abundance hBN — ¹⁰B / ¹¹B isotope control HARD_WALL at wafer scale",
+    "ion-irradiation yield + defect-density homogeneity UNVERIFIED at 4-inch wafer scale",
+    "T₂ extension via dynamical decoupling beyond 200 ns UNVERIFIED at 300 K (Gottscholl 2021 ceiling)",
+    "single-defect (vs ensemble) ODMR + readout fidelity UNVERIFIED for scalable qubit operation",
+    "device-layer integration → hexa-chip per CROSS_LINK §3.2"
+  ],
+  "honesty_caveats": "Both falsifier branches PASS at the proxy literature values WITH isotope-purified hBN ¹⁰B / ¹¹B control assumed; for natural-abundance hBN (¹⁰B 20 % + ¹¹B 80 %), ODMR contrast drops to 0.3-0.8 % (FAIL). PASS is ASSUMPTION-SENSITIVE on isotope purity, which is UNVERIFIED at wafer scale. SPEC_FIRST preserved — does NOT promote to EXTERNAL-VERIFIED. Device-layer integration → hexa-chip per CROSS_LINK §3.2.",
+  "license_note": "Peer-reviewed paper values per CC-BY publisher terms; Wrachtrup-Stuttgart + Toth-Aharonovich UTS lab authority (raw#10 C3, NOT n=6 lattice-fit)."
+}

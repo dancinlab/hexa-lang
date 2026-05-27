@@ -1,0 +1,15 @@
+{
+  "falsifier_id": "F-L1",
+  "measured_ts": "2026-05-07T01:45:39Z",
+  "measured_value": {
+    "substrate": "cpu_emulator_cnn2snn_stub",
+    "j_per_op_synthetic": 8e-13,
+    "effective_j_per_active_bit": 8e-13,
+    "sparsity": 0.0,
+    "honesty_note": "synthetic from cnn2snn_emulator \u2014 NOT promotion-eligible. Falls within vendor spec band by construction so downstream consumers (host_register.sh SIMULATOR=1) can proceed."
+  },
+  "verdict": "PARTIAL-SIMULATOR",
+  "raw_log_path": "/Users/ghost/core/nexus/state/akida_evidence/F-L1_20260507T014539Z.json",
+  "hardware_present": false,
+  "command": "scripts/akida/energy_meter.py --falsifier F-L1 --simulator"
+}

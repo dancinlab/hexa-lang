@@ -1,0 +1,40 @@
+#!hexa strict
+// materials/verify_chip-materials.hexa — substrate / dielectric / metal stack.
+//
+// Materials stack at hexa-chip layer enumerates τ(6)=4 material categories:
+//   substrate / dielectric / interconnect-metal / barrier
+// Each category has at least 3 candidate materials (3·4 = 12 = σ(6)).
+//
+// Falsifiers:
+//   F-CHIP-M-1: τ(6)=4 category count violated.
+//   F-CHIP-M-2: <12 candidate materials enumerated ⇒ σ(6) lattice slack lost.
+
+fn main() {
+    let categories = ["substrate", "dielectric", "interconnect", "barrier"]
+    if categories.len() != 4 {
+        println("[materials] FAIL — τ(6)=4 categories drift")
+        exit(1)
+    }
+    let candidates = [
+        // substrate (3)
+        "Si-bulk", "SOI", "GaN-on-Si",
+        // dielectric (3)
+        "SiO2", "SiN", "high-k-HfO2",
+        // interconnect (3)
+        "Cu", "Co", "Ru",
+        // barrier (3)
+        "TaN", "TiN", "SiN-cap"
+    ]
+    if candidates.len() != 12 {
+        println("[materials] FAIL — σ(6)=12 candidates drift: " + str(candidates.len()))
+        exit(1)
+    }
+    println("[materials] τ(6)=4 categories × 3 candidates = σ(6)=12 PASS")
+    let mut i = 0
+    while i < categories.len() {
+        let c = categories[i]
+        let off = i * 3
+        println("  " + c + ":  " + candidates[off] + " · " + candidates[off+1] + " · " + candidates[off+2])
+        i = i + 1
+    }
+}

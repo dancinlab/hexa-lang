@@ -1,0 +1,22 @@
+// tool/exp_f64_probe.hexa — F-EXPF64-POLYNOMIAL-NUMERIC kernel
+//
+// PR #1333 (RFC 055 §13 f64 exp polynomial) — terminal numeric falsifier
+// on ubu-2 RTX 5070 driver-JIT. Computes c[i] = exp(a[i]) over a
+// dense f64 input range; the host harness compares against CPU libm
+// with tolerance max_rel_err < 1e-9.
+//
+// Input shape (host-side): N = 256, blockDim = 256, gridDim = 1.
+// a[i] = (i / N) * 10.0 - 5.0 (range [-5, +5] — safely within the
+// polynomial accuracy envelope; exp(±5) ≈ 148.4 / 0.00674).
+//
+// Single-block to match `gpu_thread_id_x()`'s block-local semantics
+// (one launch ⇒ tid is the global index). For multi-block tests a
+// future global-thread-id intrinsic is needed.
+
+@gpu_kernel
+fn exp_f64_probe(a: [f64], c: [f64], n: i64) {
+    let mut tid: i64 = to_i64(gpu_thread_id_x())
+    if tid < n {
+        c[to_i64(tid)] = exp(a[to_i64(tid)])
+    }
+}

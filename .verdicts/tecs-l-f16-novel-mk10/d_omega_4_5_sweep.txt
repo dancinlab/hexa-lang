@@ -1,0 +1,15 @@
+# F16 s2 — omega=4/5 D-discrepancy sweep
+# F14 zero-density theorem prediction: D(n) != 0 for all omega>=3
+# 8 candidates · components verified via hexa verify --expr (--no-absorb)
+
+n=210 (omega=4 2*3*5*7): sigma=576🔵 phi=48🔵 tau=16🔵 D=24288 !=0 -> 🔴 CLOSED-NEGATIVE (F14 zero-density holds)
+n=420 (omega=4 2^2*3*5*7): sigma=1344🔵 phi=96🔵 tau=24🔵 D=118944 !=0 -> 🔴 CLOSED-NEGATIVE (F14 zero-density holds)
+n=330 (omega=4 2*3*5*11): sigma=864🔵 phi=80🔵 tau=16🔵 D=63840 !=0 -> 🔴 CLOSED-NEGATIVE (F14 zero-density holds)
+n=1155 (omega=4 3*5*7*11): sigma=2304🔵 phi=480🔵 tau=16🔵 D=1087440 !=0 -> 🔴 CLOSED-NEGATIVE (F14 zero-density holds)
+n=2310 (omega=5 2*3*5*7*11): sigma=6912🔵 phi=480🔵 tau=32🔵 D=3243840 !=0 -> 🔴 CLOSED-NEGATIVE (F14 zero-density holds)
+n=4620 (omega=5 2^2*3*5*7*11): sigma=16128🔵 phi=960🔵 tau=48🔵 D=15261120 !=0 -> 🔴 CLOSED-NEGATIVE (F14 zero-density holds)
+n=2730 (omega=5 2*3*5*7*13): sigma=8064🔵 phi=576🔵 tau=32🔵 D=4557504 !=0 -> 🔴 CLOSED-NEGATIVE (F14 zero-density holds)
+n=9240 (omega=5 2^3*3*5*7*11): sigma=34560🔵 phi=1920🔵 tau=64🔵 D=65763840 !=0 -> 🔴 CLOSED-NEGATIVE (F14 zero-density holds)
+
+# Summary: 8/8 D(n) != 0 (F14 zero-density theorem holds on omega=4/5 sample)
+# Each component (sigma/phi/tau) BLUE per hexa-native verify

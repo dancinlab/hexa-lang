@@ -1,0 +1,942 @@
+// ═══════════════════════════════════════════════════════════════════
+//  test_s4d_ssm.hexa — S4D Diagonal State Space Model (#315)
+//
+//  Tests (27):
+//    1.  s4d_init model keys and dimensions
+//    2.  A is HiPPO diagonal (complex, real=-0.5)
+//    3.  B shape: complex[D_state][D_in]
+//    4.  C shape: complex[D_out][D_state]
+//    5.  D_skip shape: float[D_out][D_in]
+//    6.  Deterministic init (same seed)
+//    7.  Different seeds produce different models
+//    8.  s4d_discretize returns [A_bar, B_bar]
+//    9.  A_bar has decaying magnitude (|exp(a*dt)| < 1 for real(a)<0)
+//   10.  B_bar shape matches B
+//   11.  s4d_scan output shape [L][D_out]
+//   12.  s4d_scan outputs are finite
+//   13.  s4d_scan zero input yields near-zero output
+//   14.  s4d_kernel shape [L][D_out][D_in]
+//   15.  s4d_conv output shape [L][D_out]
+//   16.  s4d_conv outputs are finite
+//   17.  scan vs conv produce same outputs
+//   18.  s4d_loss non-negative
+//   19.  s4d_loss zero for perfect match
+//   20.  s4d_scan sequence order matters (causal)
+//   21.  Complex math: cmul correctness
+//   22.  Complex math: cexp of zero
+//   23.  Complex math: cinv correctness
+//   24.  dt stored correctly
+//   25.  Single timestep sequence works
+//   26.  s4d_train_step reduces loss
+//   27.  Training multiple steps monotonic improvement
+//
+//  run: ./hexa self/test_s4d_ssm.hexa
+// ═══════════════════════════════════════════════════════════════════
+
+// -- inlined from self/ml/s4d_ssm.hexa --
+// codegen import not wired for test files
+
+// ═══════════════════════════════════════════════════════════════════
+//  self/ml/s4d_ssm.hexa — S4D Diagonal State Space Model (#315)
+//
+//  S4D (Gu et al., 2022) — Diagonal State Space Model.
+//  Simplifies S4's NPLR parameterization to purely diagonal A matrix,
+//  making computation trivially parallelizable.
+//
+//  Key math (complex diagonal):
+//    A = diag(a_1, ..., a_N)  complex, initialized from HiPPO
+//    Discretization:  A_bar = exp(A * dt),  B_bar = (A_bar - I) * A^{-1} * B
+//    Recurrence:      x_{k+1} = A_bar * x_k + B_bar * u_k
+//    Output:          y_k = Re(C * x_k) + D * u_k
+//    Parallel:        K = C * A_bar^{0..L-1} * B_bar, then y = K * u
+//
+//  Complex numbers simulated as [real, imag] pairs since HEXA
+//  has no native complex type.
+//
+//  API:
+//    s4d_init(D_in, D_state, D_out, dt, seed) -> model
+//    s4d_discretize(A, B, dt)                  -> [A_bar, B_bar]
+//    s4d_scan(model, u_seq)                    -> outputs (recurrent)
+//    s4d_kernel(model, L)                      -> kernel (conv)
+//    s4d_conv(model, u_seq)                    -> outputs (parallel)
+//    s4d_loss(model, u_seqs, y_seqs)           -> float
+//    s4d_train_step(model, U, Y, lr)           -> model
+//
+//  AI-NATIVE attrs:
+//    @pure  (scan/conv/kernel/loss)
+//    @hot   (train)
+// ═══════════════════════════════════════════════════════════════════
+
+// ─── Math helpers ────────────────────────────────────────────────
+
+fn s4d_abs(x) { if x < 0.0 { return 0.0 - x } return x }
+
+fn s4d_exp(x) {
+    let mut v = x
+    if v > 20.0 { v = 20.0 }
+    if v < -20.0 { v = -20.0 }
+    let mut result = 1.0
+    let mut term = 1.0
+    let mut i = 1
+    while i < 30 {
+        term = term * v / to_float(i)
+        result = result + term
+        i = i + 1
+    }
+    if result < 0.0 { return 0.0 }
+    return result
+}
+
+fn s4d_log(x) {
+    if x <= 0.0 { return -30.0 }
+    let mut v = x
+    let mut count = 0
+    while v > 2.0 {
+        v = v / 2.718281828
+        count = count + 1
+    }
+    while v < 0.5 {
+        v = v * 2.718281828
+        count = count - 1
+    }
+    let d = v - 1.0
+    let ln_v = d - d * d / 2.0 + d * d * d / 3.0 - d * d * d * d / 4.0
+    return to_float(count) + ln_v
+}
+
+fn s4d_cos(x) {
+    let mut v = x
+    while v > 3.14159265 { v = v - 6.28318530 }
+    while v < -3.14159265 { v = v + 6.28318530 }
+    let mut result = 1.0
+    let mut term = 1.0
+    let mut i = 1
+    while i < 15 {
+        term = term * (0.0 - v * v) / to_float((2 * i - 1) * (2 * i))
+        result = result + term
+        i = i + 1
+    }
+    return result
+}
+
+fn s4d_sin(x) {
+    let mut v = x
+    while v > 3.14159265 { v = v - 6.28318530 }
+    while v < -3.14159265 { v = v + 6.28318530 }
+    let mut result = v
+    let mut term = v
+    let mut i = 1
+    while i < 15 {
+        term = term * (0.0 - v * v) / to_float((2 * i) * (2 * i + 1))
+        result = result + term
+        i = i + 1
+    }
+    return result
+}
+
+fn s4d_sqrt(x) {
+    if x <= 0.0 { return 0.0 }
+    let mut g = x / 2.0
+    if g < 0.001 { g = 0.001 }
+    let mut _i = 0
+    while _i < 30 {
+        g = (g + x / g) / 2.0
+        _i = _i + 1
+    }
+    return g
+}
+
+// ─── Complex number helpers: [real, imag] ────────────────────────
+
+fn s4d_cmul(a, b) {
+    // (a0+a1*i)*(b0+b1*i) = (a0*b0-a1*b1) + (a0*b1+a1*b0)*i
+    return [a[0] * b[0] - a[1] * b[1], a[0] * b[1] + a[1] * b[0]]
+}
+
+fn s4d_cadd(a, b) {
+    return [a[0] + b[0], a[1] + b[1]]
+}
+
+fn s4d_csub(a, b) {
+    return [a[0] - b[0], a[1] - b[1]]
+}
+
+fn s4d_cscale(a, s) {
+    return [a[0] * s, a[1] * s]
+}
+
+fn s4d_cexp(a) {
+    // exp(r + i*t) = exp(r) * (cos(t) + i*sin(t))
+    let er = s4d_exp(a[0])
+    return [er * s4d_cos(a[1]), er * s4d_sin(a[1])]
+}
+
+fn s4d_cinv(a) {
+    // 1/(r + i*t) = (r - i*t) / (r^2 + t^2)
+    let d = a[0] * a[0] + a[1] * a[1]
+    if d < 1.0e-30 { return [0.0, 0.0] }
+    return [a[0] / d, (0.0 - a[1]) / d]
+}
+
+fn s4d_creal(a) { return a[0] }
+
+// ─── Array helpers ───────────────────────────────────────────────
+
+fn s4d_zeros(n) {
+    let mut v = []
+    let mut _i = 0
+    while _i < n {
+    return v
+        _i = _i + 1
+}
+
+fn s4d_zeros_2d(rows, cols) {
+    let mut m = []
+    let mut _r = 0
+    while _r < rows {
+        let mut row = []
+        for _c in 0..cols { row = row + [0.0] }
+        m = m + [row]
+        _r = _r + 1
+    }
+    return m
+}
+
+fn s4d_czeros(n) {
+    let mut v = []
+    let mut _i = 0
+    while _i < n {
+    return v
+        _i = _i + 1
+}
+
+fn s4d_lcg(state) {
+    return (state * 1103515245 + 12345) % 2147483648
+}
+
+fn s4d_uniform(state) {
+    let s = s4d_lcg(state)
+    return [to_float(s) / 2147483648.0, to_float(s)]
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  HiPPO diagonal initialization
+//
+//  For S4D, A is initialized from the HiPPO matrix diagonal
+//  approximation: a_n = -1/2 + n*i for n = 0..N-1 (simplified).
+//  Actually S4D-Lin uses: a_n = -1/2 + i*pi*n  (diagonal approx).
+//  We use the standard form: a_n = -0.5 + i*pi*(n+0.5)
+// ═══════════════════════════════════════════════════════════════════
+
+fn s4d_hippo_diag(N) {
+    let mut A = []
+    let mut n = 0
+    while n < N {
+        let real_part = 0.0 - 0.5
+        let imag_part = 3.14159265 * (to_float(n) + 0.5)
+        A = A + [[real_part, imag_part]]
+        n = n + 1
+    }
+    return A
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  s4d_init — Initialize S4D model
+//
+//  Parameters:
+//    A : complex[D_state]   — diagonal state matrix (HiPPO init)
+//    B : complex[D_state x D_in]  — input projection
+//    C : complex[D_out x D_state] — output projection
+//    D_skip : float[D_out x D_in] — skip connection
+//    dt : float — discretization step
+// ═══════════════════════════════════════════════════════════════════
+
+fn s4d_init(D_in, D_state, D_out, dt, seed) {
+    let mut state = seed
+    if state <= 0 { state = 1 }
+
+    // A: HiPPO diagonal
+    let A = s4d_hippo_diag(D_state)
+
+    // B: complex[D_state x D_in], small random
+    let mut B = []
+    let mut n = 0
+    while n < D_state {
+        let mut row = []
+        for j in 0..D_in {
+            let u1 = s4d_uniform(state)
+            state = int(u1[1])
+            if state <= 0 { state = 1 }
+            let u2 = s4d_uniform(state)
+            state = int(u2[1])
+            if state <= 0 { state = 1 }
+            let scale = 1.0 / s4d_sqrt(to_float(D_state))
+            row = row + [[(u1[0] - 0.5) * scale, (u2[0] - 0.5) * scale]]
+        }
+        B = B + [row]
+        n = n + 1
+    }
+
+    // C: complex[D_out x D_state], small random
+    let mut C = []
+    let mut i = 0
+    while i < D_out {
+        let mut row = []
+        for n in 0..D_state {
+            let u1 = s4d_uniform(state)
+            state = int(u1[1])
+            if state <= 0 { state = 1 }
+            let u2 = s4d_uniform(state)
+            state = int(u2[1])
+            if state <= 0 { state = 1 }
+            let scale = 1.0 / s4d_sqrt(to_float(D_state))
+            row = row + [[(u1[0] - 0.5) * scale, (u2[0] - 0.5) * scale]]
+        }
+        C = C + [row]
+        i = i + 1
+    }
+
+    // D_skip: float[D_out x D_in], small random
+    let mut D_skip = s4d_zeros_2d(D_out, D_in)
+    let mut i = 0
+    while i < D_out {
+        for j in 0..D_in {
+            let u = s4d_uniform(state)
+            state = int(u[1])
+            if state <= 0 { state = 1 }
+            D_skip[i][j] = (u[0] - 0.5) * 0.1
+        }
+        i = i + 1
+    }
+
+    return #{
+        "D_in": D_in,
+        "D_state": D_state,
+        "D_out": D_out,
+        "A": A,
+        "B": B,
+        "C": C,
+        "D_skip": D_skip,
+        "dt": dt
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  s4d_discretize — ZOH discretization for diagonal A
+//
+//  A_bar_n = exp(a_n * dt)                     (complex scalar)
+//  B_bar_n = (A_bar_n - 1) * a_n^{-1} * B_n   (exact ZOH)
+//
+//  Input:  A[N] complex, B[N x D_in] complex, dt float
+//  Output: [A_bar, B_bar]
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn s4d_discretize(A, B, dt) {
+    let N = len(A)
+    let D_in = len(B[0])
+    let mut A_bar = []
+    let mut B_bar = []
+    let mut n = 0
+    while n < N {
+        // A_bar_n = exp(a_n * dt)
+        let a_dt = s4d_cscale(A[n], dt)
+        let a_bar = s4d_cexp(a_dt)
+        A_bar = A_bar + [a_bar]
+        // B_bar_n = (a_bar - 1) * inv(a_n) * B_n  for each input dim
+        let diff = s4d_csub(a_bar, [1.0, 0.0])
+        let a_inv = s4d_cinv(A[n])
+        let factor = s4d_cmul(diff, a_inv)
+        let mut b_row = []
+        for j in 0..D_in {
+            b_row = b_row + [s4d_cmul(factor, B[n][j])]
+        }
+        B_bar = B_bar + [b_row]
+        n = n + 1
+    }
+    return [A_bar, B_bar]
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  s4d_scan — Recurrent scan through a sequence
+//
+//  For each time step k:
+//    x_{k+1} = A_bar * x_k + B_bar * u_k   (element-wise diagonal)
+//    y_k     = Re(C * x_k) + D_skip * u_k
+//
+//  Input:  model, u_seq[L][D_in]
+//  Output: outputs[L][D_out]
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn s4d_scan(model, u_seq) {
+    let D_in = model["D_in"]
+    let D_state = model["D_state"]
+    let D_out = model["D_out"]
+    let C = model["C"]
+    let D_skip = model["D_skip"]
+    let L = len(u_seq)
+
+    let disc = s4d_discretize(model["A"], model["B"], model["dt"])
+    let A_bar = disc[0]
+    let B_bar = disc[1]
+
+    // state x: complex[D_state]
+    let mut x = s4d_czeros(D_state)
+    let mut outputs = []
+
+    let mut k = 0
+    while k < L {
+        let u_k = u_seq[k]
+        // x = A_bar * x + B_bar * u_k
+        let mut x_new = s4d_czeros(D_state)
+        for n in 0..D_state {
+            let mut acc = s4d_cmul(A_bar[n], x[n])
+            for j in 0..D_in {
+                acc = s4d_cadd(acc, s4d_cscale(B_bar[n][j], u_k[j]))
+            }
+            x_new[n] = acc
+        }
+        x = x_new
+
+        // y_k = Re(C * x) + D_skip * u
+        let mut y_k = s4d_zeros(D_out)
+        for i in 0..D_out {
+            let mut val = 0.0
+            for n in 0..D_state {
+                let cx = s4d_cmul(C[i][n], x[n])
+                val = val + s4d_creal(cx)
+            }
+            // skip connection
+            for j in 0..D_in {
+                val = val + D_skip[i][j] * u_k[j]
+            }
+            y_k[i] = val
+        }
+        outputs = outputs + [y_k]
+        k = k + 1
+    }
+    return outputs
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  s4d_kernel — Compute convolution kernel K[L][D_out][D_in]
+//
+//  K_l = C * diag(A_bar^l) * B_bar   for l = 0..L-1
+//
+//  For each output i and input j:
+//    K[l][i][j] = Re( sum_n C[i][n] * A_bar[n]^l * B_bar[n][j] )
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn s4d_kernel(model, L) {
+    let D_in = model["D_in"]
+    let D_state = model["D_state"]
+    let D_out = model["D_out"]
+    let C = model["C"]
+
+    let disc = s4d_discretize(model["A"], model["B"], model["dt"])
+    let A_bar = disc[0]
+    let B_bar = disc[1]
+
+    // Precompute C[i][n] * B_bar[n][j] for all (i, n, j)
+    // Then accumulate powers of A_bar
+
+    // A_bar_pow[n] = A_bar[n]^l, starts at 1
+    let mut A_pow = []
+    let mut n = 0
+    while n < D_state {
+        A_pow = A_pow + [[1.0, 0.0]]
+        n = n + 1
+    }
+
+    let mut kernel = []
+    let mut l = 0
+    while l < L {
+        let mut K_l = s4d_zeros_2d(D_out, D_in)
+        for i in 0..D_out {
+            for j in 0..D_in {
+                let mut val = [0.0, 0.0]
+                for n in 0..D_state {
+                    // C[i][n] * A_bar[n]^l * B_bar[n][j]
+                    let cb = s4d_cmul(C[i][n], B_bar[n][j])
+                    val = s4d_cadd(val, s4d_cmul(cb, A_pow[n]))
+                }
+                K_l[i][j] = s4d_creal(val)
+            }
+        }
+        kernel = kernel + [K_l]
+        // Update powers: A_pow[n] *= A_bar[n]
+        for n in 0..D_state {
+            A_pow[n] = s4d_cmul(A_pow[n], A_bar[n])
+        }
+        l = l + 1
+    }
+    return kernel
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  s4d_conv — Parallel convolution mode
+//
+//  y[t][i] = sum_{l=0}^{t} K[l][i][j] * u[t-l][j]  + D_skip * u[t]
+//
+//  Input:  model, u_seq[L][D_in]
+//  Output: outputs[L][D_out]
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn s4d_conv(model, u_seq) {
+    let L = len(u_seq)
+    let D_in = model["D_in"]
+    let D_out = model["D_out"]
+    let D_skip = model["D_skip"]
+
+    let K = s4d_kernel(model, L)
+
+    let mut outputs = []
+    let mut t = 0
+    while t < L {
+        let mut y_t = s4d_zeros(D_out)
+        for i in 0..D_out {
+            let mut val = 0.0
+            // Convolution: sum over past inputs
+            for l in 0..(t + 1) {
+                for j in 0..D_in {
+                    val = val + K[l][i][j] * u_seq[t - l][j]
+                }
+            }
+            // Skip connection
+            for j in 0..D_in {
+                val = val + D_skip[i][j] * u_seq[t][j]
+            }
+            y_t[i] = val
+        }
+        outputs = outputs + [y_t]
+        t = t + 1
+    }
+    return outputs
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  s4d_loss — MSE loss over sequences
+//
+//  L = (1/N) * sum_seq sum_t ||y_pred_t - y_true_t||^2
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn s4d_loss(model, u_seqs, y_seqs) {
+    let N = len(u_seqs)
+    if N == 0 { return 0.0 }
+    let D_out = model["D_out"]
+    let mut total = 0.0
+    let mut count = 0
+    let mut i = 0
+    while i < N {
+        let preds = s4d_scan(model, u_seqs[i])
+        let targets = y_seqs[i]
+        let L = len(preds)
+        for t in 0..L {
+            for d in 0..D_out {
+                let diff = preds[t][d] - targets[t][d]
+                total = total + diff * diff
+            }
+            count = count + 1
+        }
+        i = i + 1
+    }
+    if count == 0 { return 0.0 }
+    return total / to_float(count)
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  s4d_train_step — One gradient descent step via finite differences
+//
+//  Perturbs each real parameter by eps, measures loss change,
+//  and updates.  For complex params, perturbs real and imag parts
+//  independently.
+//
+//  This is intentionally simple; S4D's diagonal structure means
+//  the parameter count is modest (O(D_state * (D_in + D_out))).
+// ═══════════════════════════════════════════════════════════════════
+@hot
+fn s4d_train_step(model, U, Y, lr) {
+    let D_in = model["D_in"]
+    let D_state = model["D_state"]
+    let D_out = model["D_out"]
+    let eps = 1.0e-4
+    let base_loss = s4d_loss(model, U, Y)
+
+    // ── Gradient for B (complex[D_state][D_in]) ──────────────
+    let mut B_new = model["B"]
+    let mut n = 0
+    while n < D_state {
+        for j in 0..D_in {
+            // Real part
+            let old_r = B_new[n][j][0]
+            B_new[n][j][0] = old_r + eps
+            let mut m_tmp = #{
+                "D_in": D_in, "D_state": D_state, "D_out": D_out,
+                "A": model["A"], "B": B_new, "C": model["C"],
+                "D_skip": model["D_skip"], "dt": model["dt"]
+            }
+            let loss_r = s4d_loss(m_tmp, U, Y)
+            let grad_r = (loss_r - base_loss) / eps
+            B_new[n][j][0] = old_r - lr * grad_r
+
+            // Imag part
+            let old_i = B_new[n][j][1]
+            B_new[n][j][1] = old_i + eps
+            m_tmp = #{
+                "D_in": D_in, "D_state": D_state, "D_out": D_out,
+                "A": model["A"], "B": B_new, "C": model["C"],
+                "D_skip": model["D_skip"], "dt": model["dt"]
+            }
+            let loss_i = s4d_loss(m_tmp, U, Y)
+            let grad_i = (loss_i - base_loss) / eps
+            B_new[n][j][1] = old_i - lr * grad_i
+        }
+        n = n + 1
+    }
+
+    // ── Gradient for C (complex[D_out][D_state]) ─────────────
+    let mut C_new = model["C"]
+    let mut i = 0
+    while i < D_out {
+        for n in 0..D_state {
+            let old_r = C_new[i][n][0]
+            C_new[i][n][0] = old_r + eps
+            let mut m_tmp = #{
+                "D_in": D_in, "D_state": D_state, "D_out": D_out,
+                "A": model["A"], "B": B_new, "C": C_new,
+                "D_skip": model["D_skip"], "dt": model["dt"]
+            }
+            let loss_r = s4d_loss(m_tmp, U, Y)
+            let grad_r = (loss_r - base_loss) / eps
+            C_new[i][n][0] = old_r - lr * grad_r
+
+            let old_i = C_new[i][n][1]
+            C_new[i][n][1] = old_i + eps
+            m_tmp = #{
+                "D_in": D_in, "D_state": D_state, "D_out": D_out,
+                "A": model["A"], "B": B_new, "C": C_new,
+                "D_skip": model["D_skip"], "dt": model["dt"]
+            }
+            let loss_i = s4d_loss(m_tmp, U, Y)
+            let grad_i = (loss_i - base_loss) / eps
+            C_new[i][n][1] = old_i - lr * grad_i
+        }
+        i = i + 1
+    }
+
+    // ── Gradient for D_skip (float[D_out][D_in]) ─────────────
+    let mut D_new = model["D_skip"]
+    let mut i = 0
+    while i < D_out {
+        for j in 0..D_in {
+            let old_v = D_new[i][j]
+            D_new[i][j] = old_v + eps
+            let m_tmp = #{
+                "D_in": D_in, "D_state": D_state, "D_out": D_out,
+                "A": model["A"], "B": B_new, "C": C_new,
+                "D_skip": D_new, "dt": model["dt"]
+            }
+            let loss_v = s4d_loss(m_tmp, U, Y)
+            let grad_v = (loss_v - base_loss) / eps
+            D_new[i][j] = old_v - lr * grad_v
+        }
+        i = i + 1
+    }
+
+    // ── Gradient for dt (scalar) ─────────────────────────────
+    let old_dt = model["dt"]
+    let m_dt = #{
+        "D_in": D_in, "D_state": D_state, "D_out": D_out,
+        "A": model["A"], "B": B_new, "C": C_new,
+        "D_skip": D_new, "dt": old_dt + eps
+    }
+    let loss_dt = s4d_loss(m_dt, U, Y)
+    let grad_dt = (loss_dt - base_loss) / eps
+    let mut dt_new = old_dt - lr * grad_dt
+    if dt_new < 1.0e-6 { dt_new = 1.0e-6 }
+
+    return #{
+        "D_in": D_in,
+        "D_state": D_state,
+        "D_out": D_out,
+        "A": model["A"],
+        "B": B_new,
+        "C": C_new,
+        "D_skip": D_new,
+        "dt": dt_new
+    }
+}
+
+
+// -- end inlined --
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn check(name, cond) {
+    if cond {
+        println("[PASS] " + name)
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name)
+        fail_count = fail_count + 1
+    }
+}
+
+fn fabs_(v) { if v < 0.0 { return 0.0 - v } return v }
+fn approx_(a, b, eps) { return fabs_(a - b) < eps }
+
+println("=== S4D Diagonal SSM (#315) Tests ===")
+
+// ── Setup ──────────────────────────────────────────────────────
+let D_in = 2
+let D_state = 4
+let D_out = 2
+let dt = 0.01
+let seed = 42
+
+let model = s4d_init(D_in, D_state, D_out, dt, seed)
+
+// ── T1 init model keys and dimensions ─────────────────────────
+check("T1 D_in", model["D_in"] == D_in)
+check("T1 D_state", model["D_state"] == D_state)
+check("T1 D_out", model["D_out"] == D_out)
+check("T1 dt stored", approx_(model["dt"], 0.01, 1.0e-9))
+
+// ── T2 A is HiPPO diagonal ───────────────────────────────────
+let A = model["A"]
+check("T2 A length = D_state", len(A) == D_state)
+let mut hippo_ok = true
+let mut n = 0
+
+while n < D_state {
+    if fabs_(A[n][0] - (0.0 - 0.5)) > 1.0e-6 { hippo_ok = false }
+    let expected_imag = 3.14159265 * (to_float(n) + 0.5)
+    if fabs_(A[n][1] - expected_imag) > 1.0e-4 { hippo_ok = false }
+}
+check("T2 A HiPPO diagonal real=-0.5, imag=pi*(n+0.5)", hippo_ok)
+
+// ── T3 B shape: complex[D_state][D_in] ───────────────────────
+let B = model["B"]
+check("T3 B rows = D_state", len(B) == D_state)
+check("T3 B cols = D_in", len(B[0]) == D_in)
+check("T3 B[0][0] is complex pair", len(B[0][0]) == 2)
+
+// ── T4 C shape: complex[D_out][D_state] ──────────────────────
+let C = model["C"]
+check("T4 C rows = D_out", len(C) == D_out)
+check("T4 C cols = D_state", len(C[0]) == D_state)
+check("T4 C[0][0] is complex pair", len(C[0][0]) == 2)
+
+// ── T5 D_skip shape: float[D_out][D_in] ─────────────────────
+let Dsk = model["D_skip"]
+check("T5 D_skip rows = D_out", len(Dsk) == D_out)
+check("T5 D_skip cols = D_in", len(Dsk[0]) == D_in)
+
+// ── T6 Deterministic init (same seed) ─────────────────────────
+let model_a = s4d_init(D_in, D_state, D_out, dt, 77)
+let model_b = s4d_init(D_in, D_state, D_out, dt, 77)
+let mut det_ok = true
+let mut n = 0
+
+while n < D_state {
+    let mut j = 0
+
+    while j < D_in {
+        if fabs_(model_a["B"][n][j][0] - model_b["B"][n][j][0]) > 1.0e-12 { det_ok = false }
+        if fabs_(model_a["B"][n][j][1] - model_b["B"][n][j][1]) > 1.0e-12 { det_ok = false }
+    }
+}
+check("T6 deterministic init (same seed)", det_ok)
+
+// ── T7 Different seeds produce different models ───────────────
+let model_c = s4d_init(D_in, D_state, D_out, dt, 99)
+let mut diff_found = false
+let mut n = 0
+
+while n < D_state {
+    let mut j = 0
+
+    while j < D_in {
+        if fabs_(model_a["B"][n][j][0] - model_c["B"][n][j][0]) > 1.0e-6 { diff_found = true }
+    }
+}
+check("T7 different seeds differ", diff_found)
+
+// ── T8 s4d_discretize returns [A_bar, B_bar] ─────────────────
+let disc = s4d_discretize(model["A"], model["B"], model["dt"])
+let A_bar = disc[0]
+let B_bar = disc[1]
+check("T8 A_bar length = D_state", len(A_bar) == D_state)
+check("T8 B_bar length = D_state", len(B_bar) == D_state)
+
+// ── T9 A_bar decaying magnitude ──────────────────────────────
+// |exp(a*dt)| = exp(real(a)*dt) = exp(-0.5*0.01) < 1
+let mut decay_ok = true
+let mut n = 0
+
+while n < D_state {
+    let mag = s4d_sqrt(A_bar[n][0] * A_bar[n][0] + A_bar[n][1] * A_bar[n][1])
+    if mag >= 1.0 { decay_ok = false }
+}
+check("T9 A_bar magnitude < 1 (stable)", decay_ok)
+
+// ── T10 B_bar shape matches B ─────────────────────────────────
+check("T10 B_bar[0] length = D_in", len(B_bar[0]) == D_in)
+check("T10 B_bar[0][0] is complex", len(B_bar[0][0]) == 2)
+
+// ── T11 s4d_scan output shape ─────────────────────────────────
+let u_seq = [[1.0, 0.0], [0.0, 1.0], [0.5, 0.5], [0.3, 0.7]]
+let scan_out = s4d_scan(model, u_seq)
+check("T11 scan output length = L", len(scan_out) == 4)
+check("T11 scan output dim = D_out", len(scan_out[0]) == D_out)
+
+// ── T12 s4d_scan outputs are finite ──────────────────────────
+let mut scan_finite = true
+let mut t = 0
+
+while t < 4 {
+    let mut i = 0
+
+    while i < D_out {
+        if fabs_(scan_out[t][i]) > 1.0e6 { scan_finite = false }
+    }
+}
+check("T12 scan outputs finite", scan_finite)
+
+// ── T13 s4d_scan zero input yields near-zero output ──────────
+let u_zero = [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]]
+let out_zero = s4d_scan(model, u_zero)
+let mut near_zero = true
+let mut t = 0
+
+while t < 3 {
+    let mut i = 0
+
+    while i < D_out {
+        if fabs_(out_zero[t][i]) > 1.0e-6 { near_zero = false }
+    }
+}
+check("T13 zero input -> near-zero output", near_zero)
+
+// ── T14 s4d_kernel shape ─────────────────────────────────────
+let K = s4d_kernel(model, 4)
+check("T14 kernel length = L", len(K) == 4)
+check("T14 kernel[0] rows = D_out", len(K[0]) == D_out)
+check("T14 kernel[0][0] cols = D_in", len(K[0][0]) == D_in)
+
+// ── T15 s4d_conv output shape ────────────────────────────────
+let conv_out = s4d_conv(model, u_seq)
+check("T15 conv output length = L", len(conv_out) == 4)
+check("T15 conv output dim = D_out", len(conv_out[0]) == D_out)
+
+// ── T16 s4d_conv outputs are finite ──────────────────────────
+let mut conv_finite = true
+let mut t = 0
+
+while t < 4 {
+    let mut i = 0
+
+    while i < D_out {
+        if fabs_(conv_out[t][i]) > 1.0e6 { conv_finite = false }
+    }
+}
+check("T16 conv outputs finite", conv_finite)
+
+// ── T17 scan vs conv produce same outputs ─────────────────────
+let mut scan_conv_match = true
+let mut max_diff = 0.0
+let mut t = 0
+
+while t < 4 {
+    let mut i = 0
+
+    while i < D_out {
+        let d = fabs_(scan_out[t][i] - conv_out[t][i])
+        if d > max_diff { max_diff = d }
+        if d > 0.01 { scan_conv_match = false }
+    }
+}
+check("T17 scan == conv (tol=0.01)", scan_conv_match)
+println("  scan vs conv max diff: " + str(max_diff))
+
+// ── T18 s4d_loss non-negative ────────────────────────────────
+let y_target = [[1.0, 0.0], [0.0, 1.0], [1.0, 0.0], [0.0, 1.0]]
+let U_batch = [u_seq]
+let Y_batch = [y_target]
+let loss_val = s4d_loss(model, U_batch, Y_batch)
+check("T18 loss >= 0", loss_val >= 0.0)
+
+// ── T19 s4d_loss zero for perfect match ──────────────────────
+let preds_for_loss = s4d_scan(model, u_seq)
+let loss_perf = s4d_loss(model, [u_seq], [preds_for_loss])
+check("T19 loss = 0 for perfect match", loss_perf < 1.0e-9)
+
+// ── T20 sequence order matters (causal) ──────────────────────
+let u_fwd = [[1.0, 0.0], [0.0, 0.0], [0.0, 0.0]]
+let u_rev = [[0.0, 0.0], [0.0, 0.0], [1.0, 0.0]]
+let out_fwd = s4d_scan(model, u_fwd)
+let out_rev = s4d_scan(model, u_rev)
+let mut causal_diff = false
+let mut i = 0
+
+while i < D_out {
+    if fabs_(out_fwd[2][i] - out_rev[2][i]) > 1.0e-6 { causal_diff = true }
+}
+check("T20 causal: input order matters", causal_diff)
+
+// ── T21 complex math: cmul ───────────────────────────────────
+// (1+2i)*(3+4i) = (3-8)+(4+6)i = -5+10i
+let cm = s4d_cmul([1.0, 2.0], [3.0, 4.0])
+check("T21 cmul real", approx_(cm[0], -5.0, 1.0e-9))
+check("T21 cmul imag", approx_(cm[1], 10.0, 1.0e-9))
+
+// ── T22 complex math: cexp of zero ───────────────────────────
+let ce = s4d_cexp([0.0, 0.0])
+check("T22 cexp(0) = 1+0i", approx_(ce[0], 1.0, 1.0e-6) && approx_(ce[1], 0.0, 1.0e-6))
+
+// ── T23 complex math: cinv ───────────────────────────────────
+// inv(1+i) = (1-i)/2 = 0.5 - 0.5i
+let ci = s4d_cinv([1.0, 1.0])
+check("T23 cinv real", approx_(ci[0], 0.5, 1.0e-9))
+check("T23 cinv imag", approx_(ci[1], -0.5, 1.0e-9))
+
+// ── T24 dt stored correctly ──────────────────────────────────
+let m24 = s4d_init(D_in, D_state, D_out, 0.05, 42)
+check("T24 dt = 0.05", approx_(m24["dt"], 0.05, 1.0e-9))
+
+// ── T25 single timestep sequence ─────────────────────────────
+let u_single = [[0.7, 0.3]]
+let out_single = s4d_scan(model, u_single)
+check("T25 single timestep scan", len(out_single) == 1 && len(out_single[0]) == D_out)
+
+// ── T26 s4d_train_step reduces loss ──────────────────────────
+let U_tr = [
+    [[1.0, 0.0], [1.0, 0.0], [1.0, 0.0]],
+    [[0.0, 1.0], [0.0, 1.0], [0.0, 1.0]]
+]
+let Y_tr = [
+    [[1.0, 0.0], [1.0, 0.0], [1.0, 0.0]],
+    [[0.0, 1.0], [0.0, 1.0], [0.0, 1.0]]
+]
+let mut m_tr = s4d_init(D_in, D_state, D_out, 0.01, 42)
+let loss_before = s4d_loss(m_tr, U_tr, Y_tr)
+m_tr = s4d_train_step(m_tr, U_tr, Y_tr, 0.0001)
+let loss_after1 = s4d_loss(m_tr, U_tr, Y_tr)
+check("T26 training reduces loss", loss_after1 < loss_before)
+println("  loss before: " + str(loss_before))
+println("  loss after 1 step: " + str(loss_after1))
+
+// ── T27 training multiple steps monotonic improvement ────────
+m_tr = s4d_train_step(m_tr, U_tr, Y_tr, 0.0001)
+let loss_after2 = s4d_loss(m_tr, U_tr, Y_tr)
+m_tr = s4d_train_step(m_tr, U_tr, Y_tr, 0.0001)
+let loss_after3 = s4d_loss(m_tr, U_tr, Y_tr)
+check("T27 multi-step loss decreases", loss_after3 < loss_after1)
+println("  loss after 3 steps: " + str(loss_after3))
+
+// ═══════════════════════════════════════════════════════════════
+println("")
+println("=== S4D SSM (#315) test summary ===")
+println("PASS: " + str(pass_count))
+println("FAIL: " + str(fail_count))
+println("TOTAL: " + str(pass_count + fail_count))

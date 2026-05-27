@@ -1,0 +1,57 @@
+#!hexa strict
+// stdlib/hal/uart/uart.hexa — σ-slot 4: async serial.
+//
+// import:  use "stdlib/hal/uart"
+// φ:       digital
+// handles: ≤ 4 ports.
+//
+// canon-aware: σ=12 baud-rate ladder mirrors σ-cardinality.
+// Standard rates: 110/300/600/1200/2400/4800/9600/19200/38400/57600/115200/230400
+// = 12 = σ(6) baud generations (factor-2 doubling per gen).
+
+let MODULE_NAME = "uart"
+let SIGMA_SLOT  = 4
+let PHI_KIND    = "digital"
+
+// 12-baud ladder = σ(6) generations
+let BAUD_LADDER = [110, 300, 600, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400]
+
+fn uart_configure(port: int, baud: int, data_bits: int, parity: int, stop_bits: int) -> int {
+    if port < 0 || port > 3 { return -1 }
+    if data_bits < 5 || data_bits > 9 { return -2 }
+    if parity < 0 || parity > 2 { return -3 }   // 0=none, 1=odd, 2=even
+    if stop_bits < 1 || stop_bits > 2 { return -4 }
+    if baud < 50 || baud > 4000000 { return -5 }
+    return port
+}
+
+fn uart_start(handle: int) -> bool { return handle >= 0 }
+
+fn uart_write(handle: int, data: [int]) -> bool {
+    if handle < 0 { return false }
+    println("[uart sim] port " + str(handle) + " tx " + str(data.len()) + " bytes")
+    return true
+}
+
+fn uart_read(handle: int, n: int) -> [int] {
+    if handle < 0 { return [] }
+    let mut out: [int] = []
+    let mut i = 0
+    while i < n { out = out + [0]; i = i + 1 }
+    return out
+}
+
+fn uart_report(handle: int) -> str {
+    if handle < 0 { return "uart: invalid" }
+    return "uart: port " + str(handle) + " ok (sim)"
+}
+
+fn uart_open(port: int, baud: int) -> int {
+    let h = uart_configure(port, baud, 8, 0, 1)
+    if h < 0 { return h }
+    if !uart_start(h) { return -6 }
+    return h
+}
+
+fn uart_close(handle: int) -> bool { return handle >= 0 }
+fn uart_module_meta() -> [str] { return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"] }

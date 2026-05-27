@@ -1,0 +1,442 @@
+// tool/build_hexa_cli.hexa — native port of build_hexa_cli.sh.
+//
+// Compiles self/main.hexa (CLI dispatcher) and self/module_loader.hexa
+// (import flattener) into native binaries via the hexat transpiler
+// + clang + runtime.c. Replaces the retired .sh, removing the last
+// .sh in the hexa-native tool/ tree (g_hexa_native_no_sh_py_writes).
+//
+// Produces:
+//   build/hexa_cli_driver     — compiled self/main.hexa  (CLI dispatcher)
+//   build/hexa_module_loader  — compiled self/module_loader.hexa
+//
+// Env:
+//   CLANG                       compiler override (default: clang)
+//   SKIP_TRANSPILE=1            reuse existing build/stage1/*.c
+//   NO_SMOKE=1                  skip smoke test
+//   LOCAL_BUILD=1               permit local Mac build (escape hatch)
+//   HEXA_POOL_BUILD_HOST=<host> ack-only marker (PR2 will auto-offload)
+//
+// Flags (opt-in):
+//   --install                   after a successful build, deploy
+//                               build/hexa_cli_driver to the shim's targets
+//                               (CANON M8 — closes the M3b deploy gap so a
+//                               pull never leaves a stale deployed hexa).
+//                               OFF by default — CI / fresh-clone never deploy.
+//
+// Re-entry gate (kick-storm Mac kill 2026-05-23 root cause —
+// memory: feedback_pool_cli_offload_heavy_build):
+//   On Mac (Darwin) without LOCAL_BUILD=1 the build REFUSES with a
+//   hint pointing at `pool on mini`. The gate is the simplest
+//   sufficient countermeasure (g0); auto-offload follows as a
+//   separate PR.
+
+fn _die(msg: string) {
+    eprintln("build_hexa_cli: " + msg)
+    exit(1)
+}
+
+fn _must_exist(path: string, hint: string) {
+    if !file_exists(path) {
+        _die(hint + " missing: " + path)
+    }
+}
+
+fn _uname() -> string {
+    return to_string(exec("uname")).trim()
+}
+
+fn _uname_m() -> string {
+    return to_string(exec("uname -m")).trim()
+}
+
+// shell single-quote escape: ' → '\''
+fn _shq(s: string) -> string {
+    let mut out = "'"
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "'" {
+            out = out + "'\\''"
+        } else {
+            out = out + c
+        }
+        i = i + 1
+    }
+    out = out + "'"
+    return out
+}
+
+fn _run(cmd: string, label: string) {
+    let r = exec_with_status(cmd)
+    let rc = r[1]
+    if rc != 0 {
+        eprintln("build_hexa_cli: " + label + " failed (rc=" + to_string(rc) + ")")
+        let out = to_string(r[0])
+        if len(out) > 0 { eprintln(out) }
+        exit(rc)
+    }
+}
+
+fn _file_exists(p: string) -> bool {
+    let r = exec_with_status("test -f " + _shq(p))
+    return r[1] == 0
+}
+
+// _pick_hexat: select the committed hexat binary that matches the
+// host (os, arch) triple. Returns absolute path under <repo>/self/native/.
+//
+// Layout (multiarch, 2026-05-24):
+//   self/native/hexat                  — Mac arm64 (Mach-O), legacy name
+//   self/native/hexat_linux_x86_64     — Linux x86_64 (ELF)
+//
+// The legacy name "hexat" is preserved for Mac arm64 to avoid churning
+// the entire build chain (bootstrap.yml, build_hexa_cli_native.hexa, etc).
+// Other (os, arch) pairs use a suffixed name so a single git commit can
+// carry every host's binary.
+//
+// Background: PR #454 regen-ed hexat on Mac arm64 only, leaving Linux
+// hosts (ubu-1/ubu-2) running a Mac binary via shared self/native/hexat
+// — which SIGSEGVs / exec-fails on Linux. This helper lets Linux pick
+// its own ELF without forcing every commit to rebuild every arch.
+fn _pick_hexat(repo_root: string) -> string {
+    // CANON M3b: the transpiler is a per-machine build artifact, not a
+    // committed binary. Returns the expected build/hexat path; _do_build
+    // bootstraps it from hexa_cc.c (cc hexa_cc.c runtime.c) when absent.
+    return repo_root + "/build/hexat"
+}
+
+// REPO_ROOT — HEXA_LANG if set, else cwd.
+fn _repo_root() -> string {
+    let hl = env_var("HEXA_LANG")
+    if hl != "" { return hl }
+    return to_string(exec("pwd")).trim()
+}
+
+// Mac re-entry gate. Returns true iff the build must NOT proceed locally.
+fn _refuse_local_on_mac() -> bool {
+    if _uname() != "Darwin" { return false }
+    if env_var("LOCAL_BUILD") == "1" { return false }
+    return true
+}
+
+fn _print_refuse_hint(repo_root: string) {
+    eprintln("REFUSE: build_hexa_cli is heavy on Mac arm64.")
+    eprintln("  this guard exists because kick-storm + multi-agent")
+    eprintln("  local builds killed the Mac (2026-05-23 incident).")
+    eprintln("")
+    eprintln("  pool offload (recommended):")
+    eprintln("    pool on mini bash -lc " + _shq("cd " + repo_root + " && LOCAL_BUILD=1 tool/build_hexa_cli"))
+    eprintln("")
+    eprintln("  force local (will burden Mac):")
+    eprintln("    LOCAL_BUILD=1 tool/build_hexa_cli")
+}
+
+// --install present anywhere in argv? Opt-in deploy gate (CANON M8).
+fn _want_install() -> bool {
+    let av = args()
+    let n = len(av)
+    let mut i = 0
+    while i < n {
+        if to_string(av[i]) == "--install" { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// $HOME, robustly (env first). Empty → caller skips the ~/.hx/bin targets.
+fn _home() -> string {
+    let h = env_var("HOME")
+    if h != "" { return h }
+    return to_string(exec("echo $HOME")).trim()
+}
+
+// Copy build/hexa_cli_driver into one shim target + codesign on Mac.
+//
+// GUARD (2026-05-26): never deploy a TRANSPILER binary to a driver shim
+// target. The transpiler (hexa_v2 / `self/native/hexa_v2`) and the CLI driver
+// (hexa_cli_driver) are distinct binaries; the shim target name `hxv2`
+// resembles the transpiler name `hexa_v2`, and a mis-deploy put the transpiler
+// at ~/.hx/bin/{hexa.real,hxv2}. Because the transpiler treats argv as
+// `<in> <out>`, every `hexa parse <f>` then CLOBBERED <f> with an empty C stub
+// and `hexa verify --expr …` printed "OK: --expr" (writing a stub to a file
+// named `--expr`). Only the transpiler carries the codegen emit banner, so a
+// driver_out that contains it is the wrong artifact — refuse rather than ship
+// a source-destroying binary onto the shim.
+fn _deploy_one(driver_out: string, dst: string, uname: string) {
+    if dst == "" { return }
+    let _banner = to_string(exec("strings " + _shq(driver_out)
+        + " 2>/dev/null | grep -c 'Generated by HEXA self-host compiler'")).trim()
+    if _banner != "0" && _banner != "" {
+        _die("refusing to deploy a TRANSPILER as the driver: " + driver_out
+            + " carries the self-host emit banner (expected build/hexa_cli_driver). "
+            + "A transpiler at a driver shim target clobbers source on `hexa parse`.")
+    }
+    _run("cp -f " + _shq(driver_out) + " " + _shq(dst), "deploy → " + dst)
+    if uname == "Darwin" {
+        let _ = exec("codesign --force --sign - " + _shq(dst) + " 2>/dev/null || true")
+    }
+    println("  deployed: " + dst)
+}
+
+// CANON M8 — install step. The shim resolves ~/.hx/bin/hexa → main-worktree
+// `hexa` shim → __hexa_dir = main-worktree → tries `hxv2` (preferred) →
+// falls back to `hexa.real`. The root cause of the M3b deploy gap (M5
+// diagnosis, PR #975) was that the build produced build/hexa_cli_driver but
+// never copied it to these targets, so a post-pull deployed hexa stayed
+// stale (PRE-M3b) and broke. This copies the fresh driver to all four
+// targets so the gap can never recur. Opt-in (--install) — never auto-runs.
+// INBOX 3 binary activation fix (2026-05-27, #1281/#1283 family): the
+// shipped install was missing self/runtime.o, the cached object hexa
+// cc --regen links against. cmd_cc() has a lazy stale-check that
+// compiles runtime.o on first invocation, but a fresh-install user
+// invoking `hexa verify` (which runs verify_cli via `hexa run`)
+// hits the deployed driver's link step BEFORE cmd_cc gets a chance,
+// failing with `runtime.o missing`. Build it as part of --install
+// so the deploy is self-sufficient.
+fn _install_runtime_o(repo_root: string, uname: string) {
+    let rt_c = repo_root + "/self/runtime.c"
+    let rt_o = repo_root + "/self/runtime.o"
+    if !file_exists(rt_c) {
+        eprintln("  warn: " + rt_c + " missing — skipped runtime.o pre-build")
+        return
+    }
+    // Stale check — skip if .o newer than .c (same logic as cmd_cc).
+    let stale = exec("[ " + _shq(rt_o) + " -nt " + _shq(rt_c) + " ] && printf cached || printf stale").trim()
+    if stale == "cached" {
+        println("  [rt.o] cached (" + rt_o + ")")
+        return
+    }
+    let mut cmd = ""
+    if uname == "Linux" {
+        cmd = "clang -O2 -D_GNU_SOURCE -c " + _shq(rt_c) + " -o " + _shq(rt_o) + " 2>&1"
+    } else {
+        cmd = "clang -O2 -c " + _shq(rt_c) + " -o " + _shq(rt_o) + " 2>&1"
+    }
+    println("  [rt.o] " + cmd)
+    let r = exec(cmd)
+    if !file_exists(rt_o) {
+        eprintln("  error: runtime.o build failed:")
+        eprintln(r)
+        return
+    }
+    println("  [rt.o] OK (" + rt_o + ")")
+}
+
+fn _install_driver(repo_root: string, uname: string) {
+    let driver_out = repo_root + "/build/hexa_cli_driver"
+    _must_exist(driver_out, "driver (build first)")
+    println("")
+    println("=== INSTALL (deploy to shim targets) ===")
+    // INBOX 3 #1281/#1283: ensure self/runtime.o is present so
+    // ~/.hx/bin/self/runtime.o (via symlink) resolves on first
+    // `hexa cc --regen` / `hexa verify` invocation.
+    _install_runtime_o(repo_root, uname)
+    // main-worktree: hxv2 (shim-preferred) + hexa.real (fallback)
+    _deploy_one(driver_out, repo_root + "/hxv2",      uname)
+    _deploy_one(driver_out, repo_root + "/hexa.real", uname)
+    // ~/.hx/bin: hxv2 + hexa.real
+    let home = _home()
+    if home != "" {
+        let hxbin = home + "/.hx/bin"
+        let _ = exec("mkdir -p " + _shq(hxbin))
+        _deploy_one(driver_out, hxbin + "/hxv2",      uname)
+        _deploy_one(driver_out, hxbin + "/hexa.real", uname)
+    } else {
+        eprintln("  warn: $HOME unresolved — skipped ~/.hx/bin targets")
+    }
+    println("=== INSTALL OK ===")
+}
+
+fn _do_build(repo_root: string) {
+    // multiarch-aware: Linux x86_64 → hexat_linux_x86_64; Mac arm64 → hexat.
+    // Falls back to legacy "hexat" path when the arch-specific binary
+    // hasn't been committed yet (pre-multiarch clones).
+    let hexat   = _pick_hexat(repo_root)
+    let main_hexa = repo_root + "/self/main.hexa"
+    let ml_hexa   = repo_root + "/self/module_loader.hexa"
+    let stage1    = repo_root + "/build/stage1"
+    let main_c    = stage1 + "/main_native.c"
+    let main_expanded = stage1 + "/main_expanded.hexa"
+    let ml_c      = stage1 + "/module_loader.c"
+    let driver_out = repo_root + "/build/hexa_cli_driver"
+    let ml_out     = repo_root + "/build/hexa_module_loader"
+    let runtime_c  = repo_root + "/self/runtime.c"
+    let inc        = repo_root + "/self"
+
+    _must_exist(main_hexa, "main source")
+    _must_exist(ml_hexa,   "module_loader source")
+
+    let _ = exec("mkdir -p " + _shq(stage1) + " " + _shq(repo_root + "/build"))
+
+    let mut cc = env_var("CLANG")
+    if cc == "" { cc = "clang" }
+
+    let uname = _uname()
+    let mut cflags = "-O2 -std=c11 -D_GNU_SOURCE -Wno-trigraphs -fbracket-depth=4096 -I " + _shq(inc)
+    let mut ldflags = "-lpthread -lm -Wl,-stack_size,0x4000000"
+    if uname == "Linux" {
+        // -fbracket-depth is clang-only; bootstrap.yml uses bare gcc on Linux
+        // and has no equivalent — Linux clang accepts -fbracket-depth so we
+        // honour CLANG=clang, but default cc=clang on Linux is usually gcc.
+        let mut bracket = " -fbracket-depth=4096"
+        if cc == "gcc" || cc == "cc" { bracket = "" }
+        cflags  = "-O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs" + bracket + " -I " + _shq(inc)
+        ldflags = "-lpthread -lm -ldl"
+    }
+
+    // ── Step 0: bootstrap the transpiler artifact (CANON M3b · Go 1.4 C-seed).
+    //   The transpiler is no longer a committed binary — build it per-machine
+    //   from the arch-neutral hexa_cc.c so it is never arch-mismatched. The
+    //   amalgam swap (#include "runtime.h" → "runtime.c") pulls the runtime
+    //   bodies into a single TU (hexa_cc.c heads with the proto-only header).
+    if !_file_exists(hexat) {
+        println("[0/5] bootstrap transpiler: cc hexa_cc.c runtime.c → " + hexat)
+        let hexa_cc_c = repo_root + "/self/native/hexa_cc.c"
+        _must_exist(hexa_cc_c, "hexa_cc.c (transpiler C seed)")
+        let amalgam = repo_root + "/build/_hexa_cc_amalgam.c"
+        _run("sed 's|#include \"runtime.h\"|#include \"runtime.c\"|' " + _shq(hexa_cc_c) + " > " + _shq(amalgam), "amalgam hexa_cc.c")
+        _run(cc + " " + cflags + " " + _shq(amalgam) + " -o " + _shq(hexat) + " " + ldflags, "bootstrap hexat")
+        let _ = exec("rm -f " + _shq(amalgam))
+    }
+    _must_exist(hexat, "hexat (bootstrap from hexa_cc.c failed)")
+
+    // ── Step 1+2+3: chicken-egg flatten chain (bootstrap.yml parity).
+    //
+    // self/main.hexa `use`s 7 compiler frontend modules (lex/parse/lower/...);
+    // hexat is a single-file transpiler with no `use` resolution. Therefore
+    // transpiling main.hexa directly emits extern stubs that fail to link
+    // (undefined references to lex / parse / lower / lower_hir / static_atlas /
+    // codegen_emit_ptx_for_sm). The fix mirrors bootstrap.yml:
+    //
+    //   (1) hexat module_loader.hexa → module_loader.c        (zero `use`)
+    //   (2) cc module_loader.c → build/hexa_module_loader        (binary)
+    //   (3) hexa_module_loader main.hexa → main_expanded.hexa    (flatten)
+    //   (4) hexat main_expanded.hexa → main_native.c           (transpile)
+    //   (5) cc main_native.c → build/hexa_cli_driver             (binary)
+    //
+    // Mac arm64 only "worked" before this fix because a previously-built
+    // build/stage1/main_native.c (flattened source from an earlier session)
+    // remained on disk and SKIP_TRANSPILE-style stale-reuse masked the bug.
+    // On a fresh Linux x86_64 clone there is no such cache, and the
+    // single-step transpile path surfaces the chicken-egg immediately.
+    if env_var("SKIP_TRANSPILE") == "" {
+        println("[1/5] transpile module_loader.hexa → " + ml_c)
+        _run(_shq(hexat) + " " + _shq(ml_hexa) + " " + _shq(ml_c), "transpile module_loader.hexa")
+
+        println("[2/5] compile hexa_module_loader (stage-1 flattener)")
+        _run(cc + " " + cflags + " " + _shq(ml_c) + " " + _shq(runtime_c) + " -o " + _shq(ml_out) + " " + ldflags, "compile module_loader")
+
+        println("[3/5] flatten main.hexa            → " + main_expanded)
+        _run(_shq(ml_out) + " " + _shq(main_hexa) + " " + _shq(main_expanded), "flatten main.hexa")
+
+        println("[3/5] transpile main_expanded.hexa → " + main_c)
+        _run(_shq(hexat) + " " + _shq(main_expanded) + " " + _shq(main_c), "transpile main_expanded.hexa")
+    }
+    _must_exist(main_c, "transpiled C")
+    _must_exist(ml_c,   "transpiled C")
+    _must_exist(ml_out, "compiled module_loader")
+
+    // ── Step 4: compile driver (runtime.c appended as 2nd TU)
+    println("[4/5] compile hexa_cli_driver")
+    _run(cc + " " + cflags + " " + _shq(main_c) + " " + _shq(runtime_c) + " -o " + _shq(driver_out) + " " + ldflags, "compile driver")
+
+    // ── Step 4b: Darwin codesign
+    if uname == "Darwin" {
+        println("[4/5] codesign (Darwin)")
+        let _x1 = exec("codesign --force --sign - " + _shq(driver_out) + " 2>/dev/null || true")
+        let _x2 = exec("codesign --force --sign - " + _shq(ml_out)     + " 2>/dev/null || true")
+    }
+
+    // ── Step 4b: shadow install-layout in build/
+    let _ = exec("mkdir -p " + _shq(repo_root + "/build/self/native") + " " + _shq(repo_root + "/build/self/forge"))
+    let _ = exec("cp -f " + _shq(hexat)                                 + " " + _shq(repo_root + "/build/self/native/hexat"))
+    let _ = exec("cp -f " + _shq(repo_root + "/self/native/hexa_cc.c")    + " " + _shq(repo_root + "/build/self/native/hexa_cc.c"))
+    let _ = exec("cp -f " + _shq(repo_root + "/self/runtime.h")           + " " + _shq(repo_root + "/build/self/runtime.h"))
+    let _ = exec("cp -f " + _shq(repo_root + "/self/runtime.c")           + " " + _shq(repo_root + "/build/self/runtime.c"))
+    let _ = exec("cp -f " + _shq(repo_root + "/self/runtime_core.c")      + " " + _shq(repo_root + "/build/self/runtime_core.c"))
+    let _ = exec("cp -f " + _shq(repo_root + "/self/runtime_hi_gen.c")    + " " + _shq(repo_root + "/build/self/runtime_hi_gen.c"))
+    let _ = exec("cp -f " + _shq(repo_root + "/self/forge/forge_tier_v1.c") + " " + _shq(repo_root + "/build/self/forge/forge_tier_v1.c"))
+    let _ = exec("cp -f " + _shq(repo_root + "/self/forge/forge_tier_v1.h") + " " + _shq(repo_root + "/build/self/forge/forge_tier_v1.h"))
+
+    // native/*.c bodies — skip giant generated TUs not included by runtime.c
+    let nat_dir = repo_root + "/self/native"
+    let raw_c = to_string(exec("ls -1 " + _shq(nat_dir) + "/*.c 2>/dev/null")).trim()
+    if raw_c != "" {
+        let lines = raw_c.split("\n")
+        let mut i = 0
+        while i < len(lines) {
+            let p = lines[i]
+            let base = to_string(exec("basename " + _shq(p))).trim()
+            if base != "hexa_cc.c" {
+                let _ = exec("cp -f " + _shq(p) + " " + _shq(repo_root + "/build/self/native/" + base))
+            }
+            i = i + 1
+        }
+    }
+    // native/*.h headers — all of them
+    let raw_h = to_string(exec("ls -1 " + _shq(nat_dir) + "/*.h 2>/dev/null")).trim()
+    if raw_h != "" {
+        let lines = raw_h.split("\n")
+        let mut i = 0
+        while i < len(lines) {
+            let p = lines[i]
+            let base = to_string(exec("basename " + _shq(p))).trim()
+            let _ = exec("cp -f " + _shq(p) + " " + _shq(repo_root + "/build/self/native/" + base))
+            i = i + 1
+        }
+    }
+
+    // ── Step 5: smoke
+    if env_var("NO_SMOKE") == "" {
+        println("[5/5] smoke")
+        let tmp_base = to_string(exec("mktemp /tmp/hexa_cli_smoke.XXXXXX")).trim()
+        let smoke_src = tmp_base + ".hexa"
+        let smoke_bin = tmp_base + ".bin"
+        write_file(smoke_src, "fn main() {\n    println(\"hexa-cli-smoke-ok\")\n}\n")
+
+        let r1 = exec_with_status(_shq(driver_out) + " --version >/dev/null")
+        if r1[1] != 0 { eprintln("  FAIL --version") exit(1) }
+        println("  OK   --version")
+
+        let r2 = exec_with_status(_shq(driver_out) + " parse " + _shq(smoke_src) + " >/dev/null")
+        if r2[1] != 0 { eprintln("  FAIL parse") exit(1) }
+        println("  OK   parse")
+
+        let build_cmd = "HEXA_LANG=" + _shq(repo_root) + " HEXA_MAC_BUILD_OK=1 " +
+                        _shq(driver_out) + " build " + _shq(smoke_src) +
+                        " -o " + _shq(smoke_bin) + " >/dev/null"
+        let r3 = exec_with_status(build_cmd)
+        if r3[1] != 0 { eprintln("  FAIL build") exit(1) }
+        let r4 = exec_with_status(_shq(smoke_bin) + " 2>&1")
+        let got = to_string(r4[0]).trim()
+        if got != "hexa-cli-smoke-ok" {
+            eprintln("  FAIL build-run: got '" + got + "'")
+            exit(1)
+        }
+        println("  OK   build (round-trip)")
+
+        let _ = exec("rm -f " + _shq(tmp_base) + " " + _shq(smoke_src) + " " + _shq(smoke_bin))
+    }
+
+    println("")
+    println("=== BUILD OK ===")
+    let drv_sz = to_string(exec("wc -c < " + _shq(driver_out) + " | tr -d ' '")).trim()
+    let ml_sz  = to_string(exec("wc -c < " + _shq(ml_out)     + " | tr -d ' '")).trim()
+    println("  driver        : " + driver_out + " (" + drv_sz + " bytes)")
+    println("  module_loader : " + ml_out     + " (" + ml_sz  + " bytes)")
+}
+
+fn main() {
+    let repo_root = _repo_root()
+    if _refuse_local_on_mac() {
+        _print_refuse_hint(repo_root)
+        exit(2)
+    }
+    _do_build(repo_root)
+    // CANON M8 — opt-in deploy. Only when --install is passed; the build
+    // alone (CI, fresh clone) never touches the shim targets.
+    if _want_install() {
+        _install_driver(repo_root, _uname())
+    }
+}

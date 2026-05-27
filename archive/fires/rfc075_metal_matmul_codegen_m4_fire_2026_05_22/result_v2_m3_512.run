@@ -1,0 +1,14 @@
+device_name=Apple M3
+registry_id=4294968442
+max_threads_per_threadgroup=1024x1024x1024
+VALID_PIPELINE matmul_kernel  tew=32  max=1024
+shape M=512 N=512 K=512
+--- RESULT ---
+full_tile_max_abs_diff=1.1444092e-05
+full_tile_max_rel_err=3.2846577e-07
+zero_inside_missing=0  (expected 0 for full-tile)
+median_ms=0.7705000025453046
+full_tile_gflops=348.3912460911592
+TOL=0.001
+F-RFC075-METAL-MATMUL-CODEGEN-M4-FULLTILE: PASS (full-tile rel_err=3.2846577e-07 < 0.001, zero_missing=0)
+wrote result.json

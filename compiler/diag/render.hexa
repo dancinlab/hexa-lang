@@ -1,0 +1,185 @@
+// HEXA Native Compiler — Diagnostic Renderers (RFC-019 §3, §7)
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Four output modes per RFC-019 §7:
+//   - render_pretty(d)  — multi-line, English labels (Decision 3, 2026-05-09)
+//   - render_short(d)   — single-line grep-friendly
+//   - render_json(d)    — single JSON line, lint_log.jsonl shape
+//   - render_github(d)  — GitHub Actions annotation
+//
+// All labels are English (`cause:`, `suggest:`, `fix:`, `explain:`).
+// Source line context (±2 lines + underline) is intentionally deferred:
+// stage0 has no source-string accessor on Diagnostic, so v1 emits the
+// header + cause + (optional) suggest + explain hint only. The shape
+// matches RFC-019 §3 minus the bracketed source excerpt.
+
+import "./catalog.hexa"
+import "../lex/tokens.hexa"
+
+// ── Severity → string ────────────────────────────────────────
+
+fn _sev_str(s: Severity) -> string {
+    return match s {
+        Severity::Error -> "error",
+        Severity::Warning -> "warning",
+        Severity::Note -> "note"
+    }
+}
+
+fn _sev_header(s: Severity) -> string {
+    return match s {
+        Severity::Error -> "HexaError",
+        Severity::Warning -> "HexaWarn",
+        Severity::Note -> "HexaNote"
+    }
+}
+
+// ── i64 → string (stage0 has `to_string` builtin; alias for clarity) ──
+
+fn _itoa(n: i64) -> string {
+    return to_string(n)
+}
+
+// ── Header location: file:line:col-end_col ──────────────────
+//
+// `end_col` is `col + len` when len > 0 (per Span semantics in
+// compiler/lex/tokens.hexa). When len <= 0 we omit the dash form.
+
+fn _loc_pretty(sp: Span) -> string {
+    let base = sp.file + ":" + _itoa(sp.line) + ":" + _itoa(sp.col)
+    if sp.len > 0 {
+        let end_col = sp.col + sp.len
+        return base + "-" + _itoa(end_col)
+    }
+    return base
+}
+
+fn _loc_short(sp: Span) -> string {
+    return sp.file + ":" + _itoa(sp.line) + ":" + _itoa(sp.col)
+}
+
+// ── JSON escape ──────────────────────────────────────────────
+
+fn _json_escape(s: string) -> string {
+    let cs = s.chars()
+    let n = len(cs)
+    let mut out = ""
+    let mut i = 0
+    while i < n {
+        let c = cs[i]
+        if c == '\\' {
+            out = out + "\\\\"
+        } else {
+            if c == '"' {
+                out = out + "\\\""
+            } else {
+                if c == '\n' {
+                    out = out + "\\n"
+                } else {
+                    if c == '\r' {
+                        out = out + "\\r"
+                    } else {
+                        if c == '\t' {
+                            out = out + "\\t"
+                        } else {
+                            out = out + to_string(c)
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// ── Pretty (RFC-019 §3) ──────────────────────────────────────
+//
+// Format (English labels per Decision 3):
+//
+//   HexaError [HX1042] file:line:col-end_col
+//       cause:   <message>
+//       suggest: <suggest>            (omitted when empty)
+//       fix:     hexa fix --apply HX1042 file
+//       explain: hexa explain HX1042
+//
+// Source-line context is intentionally deferred — see module header.
+
+pub fn render_pretty(d: Diagnostic) -> string {
+    let header = _sev_header(d.severity) + " [" + d.code + "] " + _loc_pretty(d.span)
+    let mut out = header + "\n"
+    out = out + "    cause:   " + d.message + "\n"
+    if len(d.suggest) > 0 {
+        out = out + "    suggest: " + d.suggest + "\n"
+    }
+    let f = d.fixit
+    let has_fix = match f.kind {
+        FixItKind::None -> false,
+        FixItKind::Replace -> true,
+        FixItKind::Insert -> true,
+        FixItKind::Delete -> true,
+        FixItKind::Multi -> true
+    }
+    if has_fix {
+        out = out + "    fix:     hexa fix --apply " + d.code + " " + d.span.file + "\n"
+    }
+    out = out + "    explain: hexa explain " + d.code
+    return out
+}
+
+// ── Short (one line, grep-friendly) ──────────────────────────
+
+pub fn render_short(d: Diagnostic) -> string {
+    let mut s = _loc_short(d.span) + " " + d.code + " " + _sev_str(d.severity) + ": " + d.message
+    if len(d.suggest) > 0 {
+        s = s + "  [suggest=" + d.suggest + "]"
+    }
+    return s
+}
+
+// ── JSON line (RFC-019 §7 schema, abbreviated for v1) ────────
+//
+// We emit a stable subset: code, severity, stage, file, line, col,
+// message, suggest. `args`, `fix_it`, `related` are deferred until a
+// real JSON serializer lands; they're additive so consumers can grow
+// into them without a schema break.
+
+pub fn render_json(d: Diagnostic) -> string {
+    let sp = d.span
+    let mut s = "{"
+    s = s + "\"code\":\"" + _json_escape(d.code) + "\","
+    s = s + "\"severity\":\"" + _sev_str(d.severity) + "\","
+    s = s + "\"stage\":\"" + _json_escape(d.stage) + "\","
+    s = s + "\"file\":\"" + _json_escape(sp.file) + "\","
+    s = s + "\"line\":" + _itoa(sp.line) + ","
+    s = s + "\"col\":" + _itoa(sp.col) + ","
+    s = s + "\"message\":\"" + _json_escape(d.message) + "\","
+    s = s + "\"suggest\":\"" + _json_escape(d.suggest) + "\""
+    s = s + "}"
+    return s
+}
+
+// ── GitHub Actions annotation ────────────────────────────────
+//
+// Spec: ::error file=PATH,line=N,col=N::HXcode message
+// Severity-aware: warnings emit `::warning`, notes emit `::notice`.
+
+fn _gh_kind(s: Severity) -> string {
+    return match s {
+        Severity::Error -> "error",
+        Severity::Warning -> "warning",
+        Severity::Note -> "notice"
+    }
+}
+
+pub fn render_github(d: Diagnostic) -> string {
+    let sp = d.span
+    let head = "::" + _gh_kind(d.severity)
+        + " file=" + sp.file
+        + ",line=" + _itoa(sp.line)
+        + ",col=" + _itoa(sp.col)
+        + "::"
+    return head + d.code + " " + d.message
+}

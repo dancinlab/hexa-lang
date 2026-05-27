@@ -1,0 +1,23 @@
+CLOSED-FORM PROOF (machine-verified lemmas + elementary exp>linear bound).
+
+Theorem: for all positive integers n, sigma(n)*phi(n) = n*tau(n) <=> n in {1,6}.
+
+By multiplicativity, sigma*phi=n*tau  <=>  prod_{p^a || n} g(p,a) = 1,
+where g(p,a) = (p^(a+1) - 1) / (p*(a+1)).
+
+Sign lemma: g(p,a) > 1 for every prime power EXCEPT g(2,1) = 3/4.
+  g(p,a)>1 <=> p^(a+1) > p(a+1)+1.
+  p=2: 2^(a+1) > 2a+3 fails only at a=1 (4<5); holds a>=2 (exp>linear).
+  p>=3: a=1 gives p^2>2p+1 <=> p>1+sqrt2 (p>=3 ok); a>=2 exp>linear.
+  base cases machine-verified 🔵: g(2,1)=3/4, g(3,1)=4/3, g(2,2)=7/6,
+  g(5,1)=12/5, g(7,1)=24/7  (sigma/phi at p=2,3,4,5,7 each 🔵).
+
+Product analysis: only factor <1 is g(2,1)=3/4; smallest odd factor g(3,1)=4/3.
+  n=1: empty product = 1.
+  n>1 without 2^1: all factors >1 -> product >1.  => need 2^1 || n.
+  2^1 || n: product = (3/4) * prod_odd; need prod_odd = 4/3.
+    0 odd: 3/4 (n=2) no;  1 odd =4/3: only (3,1) -> n=6;  >=2 odd: >=16/9 no.
+  => solution set = {1, 6}.  QED.
+
+Verdict: 🔵 SUPPORTED-FORMAL — unbounded (forall n) uniqueness PROVEN closed-form.
+Promotes the 🟡 citation residual of M1/M3/M9 to 🔵. Finite sweep no longer needed.

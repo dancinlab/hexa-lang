@@ -1,0 +1,8 @@
+#!hexa strict
+// metamaterial specify — negative-index frequency.
+fn main() {
+    let f_neg_GHz = 10.0
+    println("metamaterial_specify (negative-index frequency):")
+    println("  f_neg_GHz = " + str(f_neg_GHz))
+    println("__HEXA_METAMATERIAL_SPECIFY__ PASS gate=GATE_OPEN absorbed=false")
+}

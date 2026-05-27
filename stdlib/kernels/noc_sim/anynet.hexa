@@ -1,0 +1,662 @@
+#!hexa strict
+// stdlib/booksim/anynet.hexa — BookSim2 `anynet` topology loader (CLEAN-ROOM)
+//
+// @version 0.0.1
+// @capabilities [topology, parse, io]
+// @stability phase-b (anynet slice of rfc_003 Phase B — bodies landed)
+// @since 2026-05-18
+//
+// CLEAN-ROOM PROVENANCE (design.md Decision 1 — public-surface clean-room)
+//   This module re-derives the *public surface* of BookSim2's anynet
+//   topology loader by inspection of OSS source + manual only. No upstream
+//   code is copied; the C++ STL-driven map<int,map<int,pair<int,int>>>
+//   loader is re-expressed from scratch as a typed hexa structure. Upstream
+//   identifiers (`router`/`node`/`link_weight`) are used only as the
+//   standardized file-format vocabulary the BookSim2 manual itself fixes.
+//
+//   - upstream code    : src/networks/anynet.cpp
+//                          :60-126   (AnyNet::_ComputeSize size/channel count)
+//                          :324-430  (AnyNet::readFile line-state-machine:
+//                                     HEAD_TYPE → HEAD_ID → BODY_TYPE →
+//                                     BODY_ID → LINK_WEIGHT, link_weight
+//                                     default 1, bidirectional latency)
+//   - upstream spec    : doc/manual.tex §anynet (file-format description)
+//   - upstream license : BSD-2-Clause (Stanford 2007-2015,
+//                         /tmp/hexa-arch-rfc001-measurement/booksim2/LICENSE.md)
+//   - upstream commit  : 28f43299f1706a3160ffac721ca461d74eb6e618
+//
+// Anynet file format (re-derived from anynet.cpp:324-430 state machine):
+//   one logical line declares one HEAD (router|node) plus zero or more
+//   BODY connections, each BODY optionally carrying an integer link_weight
+//   (latency in cycles, default 1):
+//     <head_type> <head_id> [ <body_type> <body_id> [<link_weight>] ]*
+//   head_type/body_type ∈ {router, node}. A router→router body is a
+//   directed inter-router channel; a router↔node body binds an
+//   injection/ejection endpoint. Latency is per-direction; the reverse
+//   direction is declared on the neighbor's own line (anynet.cpp:380-405).
+//
+// Source: rfc_001 §3 minimal subset + rfc_003 §3.1 / §5 provenance map.
+// Structural acceptance: the parsed topology must be consistent with the
+// already-committed Leighton-oracle numbers in
+//   exports/chip/noc/f1f2/records/*tornado*.json
+// (node_count=64 for the 8x8 d4 mesh and 8x8 d6 axial-hex; d4 mesh
+// bisection=8, diameter=14 — Dally & Towles PPIN 2004 §3.2 closed forms,
+// Leighton 1984 DOI 10.1007/BF01744433).
+
+use "stdlib/core/parse"
+
+// ─── public types ────────────────────────────────────────────────────────
+
+// One directional inter-router channel: src→dst with per-edge latency.
+// CLEAN-ROOM (anynet.cpp:380-405 — router_list[ROUTER][head][body].second).
+struct AnynetEdge {
+    src:            int,
+    dst:            int,
+    latency_cycles: int,
+}
+
+// Binding of a CPU/memory node (injects/ejects packets) to a router.
+// node_id == -1 means "no node attached" (BookSim2 warns; not fatal here).
+// CLEAN-ROOM (anynet.cpp:407-420 — router_list[NODE][head][body]).
+struct AnynetNodeBind {
+    router_id: int,
+    node_id:   int,
+}
+
+// Whole parsed topology — typed result of the loader.
+// ok=0 + nonempty message on parse failure; caller MUST check ok.
+struct AnynetTopology {
+    ok:         int,
+    n_routers:  int,
+    edges:      [AnynetEdge],
+    nodes:      [AnynetNodeBind],
+    max_degree: int,     // observed max out-degree; cross-check vs config
+    message:    str,
+}
+
+// ─── private parse helpers ────────────────────────────────────────────────
+
+// Tokenize one line on whitespace, dropping empty/blank tokens.
+// Re-derives the anynet.cpp:351-367 `line.find(" ",pos)` skip-blank loop.
+fn _anynet_tokens(line: str) -> [str] {
+    let raw = line.split(" ")
+    let mut out: [str] = []
+    let mut i = 0
+    while i < len(raw) {
+        let t = raw[i].trim()
+        if len(t) > 0 {
+            out = out.push(t)
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// True iff `id` already appears as an AnynetEdge.src→dst pair.
+fn _anynet_has_edge(edges: [AnynetEdge], s: int, d: int) -> int {
+    let mut i = 0
+    while i < len(edges) {
+        if edges[i].src == s {
+            if edges[i].dst == d {
+                return 1
+            }
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+// Out-degree of router `rid` (count of distinct outgoing edges).
+fn anynet_router_degree(t: AnynetTopology, router_id: int) -> int {
+    let mut deg = 0
+    let mut i = 0
+    while i < len(t.edges) {
+        if t.edges[i].src == router_id {
+            deg = deg + 1
+        }
+        i = i + 1
+    }
+    return deg
+}
+
+// ─── public API ───────────────────────────────────────────────────────────
+
+// Parse anynet file content into a typed topology. Pure / no IO.
+// CLEAN-ROOM: re-derives the anynet.cpp:324-430 readFile state machine
+//   (HEAD_TYPE → HEAD_ID → BODY_TYPE → BODY_ID → LINK_WEIGHT) and the
+//   :60-126 _ComputeSize channel/size accounting. The upstream nested
+//   STL maps are replaced by flat typed [AnynetEdge]/[AnynetNodeBind].
+fn anynet_parse(text: str) -> AnynetTopology {
+    let lines = text.split("\n")
+    let mut edges: [AnynetEdge] = []
+    let mut nodes: [AnynetNodeBind] = []
+    // Track which router ids were declared as a HEAD so n_routers counts
+    // routers, not nodes (anynet.cpp:124 `_size = router_list[1].size()`).
+    let mut router_ids: [int] = []
+    let mut max_rid = -1
+
+    let mut li = 0
+    while li < len(lines) {
+        let toks = _anynet_tokens(lines[li])
+        li = li + 1
+        if len(toks) == 0 {
+            continue          // anynet.cpp:345 — blank line skipped
+        }
+        // ── HEAD_TYPE / HEAD_ID (anynet.cpp:369-394) ──
+        let head_type = toks[0]
+        if head_type != "router" {
+            if head_type != "node" {
+                return AnynetTopology {
+                    ok: 0, n_routers: 0, edges: [], nodes: [],
+                    max_degree: 0,
+                    message: "anynet_parse: unknown head-of-line type '" + head_type + "'"
+                }
+            }
+        }
+        if len(toks) < 2 {
+            return AnynetTopology {
+                ok: 0, n_routers: 0, edges: [], nodes: [],
+                max_degree: 0,
+                message: "anynet_parse: head id missing on a declaration line"
+            }
+        }
+        let head_id = to_int_safe(toks[1])
+        // A `router` head is a real router vertex; `node` heads bind only.
+        if head_type == "router" {
+            let mut seen = 0
+            let mut ri = 0
+            while ri < len(router_ids) {
+                if router_ids[ri] == head_id { seen = 1 }
+                ri = ri + 1
+            }
+            if seen == 0 {
+                router_ids = router_ids.push(head_id)
+            }
+            if head_id > max_rid { max_rid = head_id }
+        }
+
+        // ── BODY loop: (body_type body_id [link_weight])* ──
+        // Re-derives the anynet.cpp:396-430 BODY_TYPE/BODY_ID/LINK_WEIGHT
+        // cycle. After consuming a (type,id) pair we peek the next token:
+        // if it is numeric it is the link_weight, else it starts the next
+        // body. link_weight default = 1 (anynet.cpp:360 `link_weight=1`).
+        let mut ti = 2
+        while ti < len(toks) {
+            let body_type = toks[ti]
+            if body_type != "router" {
+                if body_type != "node" {
+                    return AnynetTopology {
+                        ok: 0, n_routers: 0, edges: [], nodes: [],
+                        max_degree: 0,
+                        message: "anynet_parse: unknown body type '" + body_type + "'"
+                    }
+                }
+            }
+            if ti + 1 >= len(toks) {
+                return AnynetTopology {
+                    ok: 0, n_routers: 0, edges: [], nodes: [],
+                    max_degree: 0,
+                    message: "anynet_parse: body id missing after '" + body_type + "'"
+                }
+            }
+            let body_id = to_int_safe(toks[ti + 1])
+            ti = ti + 2
+            // optional link_weight: present iff next token is numeric
+            // (anynet.cpp:412-419 LINK_WEIGHT — non-numeric falls through
+            //  to the next BODY_TYPE).
+            let mut lw = 1
+            if ti < len(toks) {
+                let peek = toks[ti]
+                if is_numeric_str(peek) {
+                    lw = to_int_safe(peek)
+                    ti = ti + 1
+                }
+            }
+            if head_type == "router" {
+                if body_type == "router" {
+                    // directed inter-router channel
+                    if _anynet_has_edge(edges, head_id, body_id) == 0 {
+                        edges = edges.push(AnynetEdge {
+                            src: head_id, dst: body_id, latency_cycles: lw
+                        })
+                    }
+                } else {
+                    // router↔node endpoint bind
+                    nodes = nodes.push(AnynetNodeBind {
+                        router_id: head_id, node_id: body_id
+                    })
+                }
+            } else {
+                // head is `node`: body binds that node to a router
+                if body_type == "router" {
+                    nodes = nodes.push(AnynetNodeBind {
+                        router_id: body_id, node_id: head_id
+                    })
+                } else {
+                    nodes = nodes.push(AnynetNodeBind {
+                        router_id: -1, node_id: head_id
+                    })
+                }
+            }
+        }
+    }
+
+    if len(router_ids) == 0 {
+        return AnynetTopology {
+            ok: 0, n_routers: 0, edges: [], nodes: [],
+            max_degree: 0,
+            message: "anynet_parse: no router declarations found"
+        }
+    }
+
+    // observed max out-degree (anynet.cpp:_ComputeSize channel accounting)
+    let mut maxd = 0
+    let mut k = 0
+    while k < len(router_ids) {
+        let d = _anynet_count_out(edges, router_ids[k])
+        if d > maxd { maxd = d }
+        k = k + 1
+    }
+
+    return AnynetTopology {
+        ok: 1,
+        n_routers: len(router_ids),
+        edges: edges,
+        nodes: nodes,
+        max_degree: maxd,
+        message: "ok"
+    }
+}
+
+// out-degree counter usable before an AnynetTopology exists.
+fn _anynet_count_out(edges: [AnynetEdge], rid: int) -> int {
+    let mut d = 0
+    let mut i = 0
+    while i < len(edges) {
+        if edges[i].src == rid { d = d + 1 }
+        i = i + 1
+    }
+    return d
+}
+
+// Load anynet file from path. Hard-exit 91 on file-not-found / parse-fail
+// per rfc_001 §7.3 raw-91 doctrine (silent skip BANNED).
+fn anynet_load(path: str) -> AnynetTopology {
+    let text = read_file(path)
+    if len(text) == 0 {
+        println("anynet_load: cannot read or empty file: " + path)
+        exit(91)
+    }
+    let t = anynet_parse(text)
+    if t.ok == 0 {
+        println("anynet_load: parse failed: " + t.message)
+        exit(91)
+    }
+    return t
+}
+
+// Emit topology back as anynet-format text (one router head per line,
+// router bodies then node bodies). Round-trip: anynet_parse(anynet_emit(t))
+// is structurally equal to t (modulo whitespace + line order).
+// CLEAN-ROOM: emits to the manual.tex §anynet line grammar — BookSim2 only
+// consumes anynet files, never emits them, so there is no upstream code
+// to re-derive for this direction.
+fn anynet_emit(t: AnynetTopology) -> str {
+    let mut out = ""
+    // routers in first-seen id order via edge/node scan; emit per source id
+    let mut emitted: [int] = []
+    let mut i = 0
+    while i < len(t.edges) {
+        let s = t.edges[i].src
+        let mut seen = 0
+        let mut e = 0
+        while e < len(emitted) {
+            if emitted[e] == s { seen = 1 }
+            e = e + 1
+        }
+        if seen == 0 {
+            emitted = emitted.push(s)
+            let mut line = "router " + str(s)
+            let mut j = 0
+            while j < len(t.edges) {
+                if t.edges[j].src == s {
+                    line = line + " router " + str(t.edges[j].dst)
+                    line = line + " " + str(t.edges[j].latency_cycles)
+                }
+                j = j + 1
+            }
+            let mut n = 0
+            while n < len(t.nodes) {
+                if t.nodes[n].router_id == s {
+                    line = line + " node " + str(t.nodes[n].node_id)
+                }
+                n = n + 1
+            }
+            out = out + line + "\n"
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// ─── concrete topology builders (the two downstream needs) ─────────────────
+//
+// rfc_003 task step 2: the loader must support exactly the two topologies
+// already committed in exports/chip/noc/f1f2/records/*tornado*.json:
+//   (a) 8x8 degree-4 2-D mesh   (kind=mesh_2d,   node_count=64, B=8, D=14)
+//   (b) 8x8 degree-6 axial-hex  (kind=hex_axial, node_count=64, deg≤6)
+// These builders produce the anynet *source text* for each so the same
+// anynet_parse path is exercised end-to-end (no special-case loader).
+
+// 8x8 degree-4 open-boundary mesh as anynet text.
+// Node (r,c) id = r*8 + c; cardinal neighbours only (Dally & Towles PPIN
+// 2004 §3.2 — k-ary 2-mesh). 64 routers, 64 bound nodes, 112 undirected
+// links → 224 directed edges. Interior degree 4, corner 2, edge 3.
+fn anynet_mesh_8x8_d4_text() -> str {
+    let k = 8
+    let mut out = ""
+    let mut r = 0
+    while r < k {
+        let mut c = 0
+        while c < k {
+            let id = r * k + c
+            let mut line = "router " + str(id) + " node " + str(id)
+            // +x / -x / +y / -y cardinal neighbours, in-bounds only
+            if c + 1 < k { line = line + " router " + str(r * k + (c + 1)) + " 1" }
+            if c - 1 >= 0 { line = line + " router " + str(r * k + (c - 1)) + " 1" }
+            if r + 1 < k { line = line + " router " + str((r + 1) * k + c) + " 1" }
+            if r - 1 >= 0 { line = line + " router " + str((r - 1) * k + c) + " 1" }
+            out = out + line + "\n"
+            c = c + 1
+        }
+        r = r + 1
+    }
+    return out
+}
+
+// 8x8 degree-6 axial-hex as anynet text. Axial (q,r) projected onto the
+// same square grid (record coord_kind = axial_qr_projected_to_square_grid):
+// the 4 cardinal neighbours (cost-1, 2.5 mm) PLUS 2 diagonal neighbours on
+// the +i/-j axis (cost-2, 3.536 mm) per the d6_hex record links_note. 64
+// routers, max degree 6 (interior).
+fn anynet_hex_8x8_d6_text() -> str {
+    let k = 8
+    let mut out = ""
+    let mut r = 0
+    while r < k {
+        let mut c = 0
+        while c < k {
+            let id = r * k + c
+            let mut line = "router " + str(id) + " node " + str(id)
+            // 4 cardinal (cost 1)
+            if c + 1 < k { line = line + " router " + str(r * k + (c + 1)) + " 1" }
+            if c - 1 >= 0 { line = line + " router " + str(r * k + (c - 1)) + " 1" }
+            if r + 1 < k { line = line + " router " + str((r + 1) * k + c) + " 1" }
+            if r - 1 >= 0 { line = line + " router " + str((r - 1) * k + c) + " 1" }
+            // 2 hex-axial diagonals on the +i/-j axis (cost 2):
+            //   (r-1,c+1) and (r+1,c-1)  — the axial third axis
+            if r - 1 >= 0 {
+                if c + 1 < k { line = line + " router " + str((r - 1) * k + (c + 1)) + " 2" }
+            }
+            if r + 1 < k {
+                if c - 1 >= 0 { line = line + " router " + str((r + 1) * k + (c - 1)) + " 2" }
+            }
+            out = out + line + "\n"
+            c = c + 1
+        }
+        r = r + 1
+    }
+    return out
+}
+
+// ─── analytic structural metrics (Leighton-oracle cross-check) ─────────────
+//
+// These are graph-structural derivations of the numbers already committed
+// to the d4 records (bisection B=8, diameter D=14 for the 8x8 mesh).
+// CLEAN-ROOM: NOT from BookSim2 — Dally & Towles PPIN 2004 §3.2 (k-ary
+// 2-mesh bisection = k for even k, on a bisecting cut of k links) and the
+// mesh diameter = (k-1)+(k-1) Manhattan span. Full Leighton lower-bound
+// derivation is a separate later module (leighton.hexa) — out of scope
+// here; this is only the structural consistency check the task requires.
+
+// BFS shortest-path eccentricity-max = unweighted graph diameter (hop
+// count). For the 8x8 d4 mesh this is the Manhattan span (7+7 = 14).
+fn anynet_diameter_hops(t: AnynetTopology) -> int {
+    let n = t.n_routers
+    if n == 0 { return 0 }
+    let mut diam = 0
+    let mut s = 0
+    while s < n {
+        // BFS from router id s (ids are 0..n-1 for our builders)
+        let mut dist: [int] = []
+        let mut z = 0
+        while z < n {
+            dist = dist.push(-1)
+            z = z + 1
+        }
+        dist[s] = 0
+        let mut frontier: [int] = []
+        frontier = frontier.push(s)
+        while len(frontier) > 0 {
+            let mut nextf: [int] = []
+            let mut fi = 0
+            while fi < len(frontier) {
+                let u = frontier[fi]
+                let mut ei = 0
+                while ei < len(t.edges) {
+                    if t.edges[ei].src == u {
+                        let v = t.edges[ei].dst
+                        if v >= 0 {
+                            if v < n {
+                                if dist[v] < 0 {
+                                    dist[v] = dist[u] + 1
+                                    if dist[v] > diam { diam = dist[v] }
+                                    nextf = nextf.push(v)
+                                }
+                            }
+                        }
+                    }
+                    ei = ei + 1
+                }
+                fi = fi + 1
+            }
+            frontier = nextf
+        }
+        s = s + 1
+    }
+    return diam
+}
+
+// Bisection (link cut) for an even k×k mesh laid out row-major: cut the
+// grid in half between column k/2-1 and k/2; the number of undirected
+// cardinal links crossing that cut is exactly k (one per row). Counted
+// directed-edge pairs / 2. Dally & Towles PPIN 2004 §3.2.
+fn anynet_mesh_bisection(t: AnynetTopology, k: int) -> int {
+    let half = k / 2
+    let mut crossing = 0
+    let mut i = 0
+    while i < len(t.edges) {
+        let s = t.edges[i].src
+        let d = t.edges[i].dst
+        let sc = s % k
+        let dc = d % k
+        // count only the left→right directed edge across the cut; the
+        // reverse (sc>=half, dc<half) directed edge is NOT matched here,
+        // so each undirected link is counted exactly once.
+        if sc < half {
+            if dc >= half {
+                crossing = crossing + 1
+            }
+        }
+        i = i + 1
+    }
+    return crossing
+}
+
+// ─── self-test (rfc_003 task step 3) ───────────────────────────────────────
+//
+// hexa-lang self-test convention observed in stdlib/collections_test.hexa:
+// a `fn main()` with a check/check_eq counter that prints PASS n/total and
+// exit(1) on first failure. Run with: `hexa run stdlib/booksim/anynet.hexa`.
+
+fn main() {
+    let mut pass_count = 0
+    let mut total_count = 0
+    let mut first_fail = ""
+
+    // --- d4 8x8 mesh ---
+    let m_text = anynet_mesh_8x8_d4_text()
+    let m = anynet_parse(m_text)
+
+    total_count = total_count + 1
+    if m.ok == 1 {
+        pass_count = pass_count + 1
+    } else {
+        if first_fail == "" { first_fail = "d4_parse_ok" }
+        println("FAIL d4_parse_ok: " + m.message)
+    }
+
+    total_count = total_count + 1
+    if m.n_routers == 64 {
+        pass_count = pass_count + 1
+    } else {
+        if first_fail == "" { first_fail = "d4_node_count" }
+        println("FAIL d4_node_count got=" + str(m.n_routers) + " want=64")
+    }
+
+    // interior router (3,3) id=27 must have degree 4
+    let d4_interior = anynet_router_degree(m, 27)
+    total_count = total_count + 1
+    if d4_interior == 4 {
+        pass_count = pass_count + 1
+    } else {
+        if first_fail == "" { first_fail = "d4_interior_deg" }
+        println("FAIL d4_interior_deg got=" + str(d4_interior) + " want=4")
+    }
+
+    // 8x8 open mesh: 112 undirected links → 224 directed edges
+    total_count = total_count + 1
+    if len(m.edges) == 224 {
+        pass_count = pass_count + 1
+    } else {
+        if first_fail == "" { first_fail = "d4_edge_count" }
+        println("FAIL d4_edge_count got=" + str(len(m.edges)) + " want=224")
+    }
+
+    // observed max out-degree of an 8x8 mesh = 4 (interior)
+    total_count = total_count + 1
+    if m.max_degree == 4 {
+        pass_count = pass_count + 1
+    } else {
+        if first_fail == "" { first_fail = "d4_max_degree" }
+        println("FAIL d4_max_degree got=" + str(m.max_degree) + " want=4")
+    }
+
+    // analytic bisection B=8 (matches committed d4 record bisection_observed)
+    let b = anynet_mesh_bisection(m, 8)
+    total_count = total_count + 1
+    if b == 8 {
+        pass_count = pass_count + 1
+    } else {
+        if first_fail == "" { first_fail = "d4_bisection" }
+        println("FAIL d4_bisection got=" + str(b) + " want=8")
+    }
+
+    // analytic diameter D=14 (matches committed d4 record diameter_observed)
+    let dia = anynet_diameter_hops(m)
+    total_count = total_count + 1
+    if dia == 14 {
+        pass_count = pass_count + 1
+    } else {
+        if first_fail == "" { first_fail = "d4_diameter" }
+        println("FAIL d4_diameter got=" + str(dia) + " want=14")
+    }
+
+    // 64 node binds
+    total_count = total_count + 1
+    if len(m.nodes) == 64 {
+        pass_count = pass_count + 1
+    } else {
+        if first_fail == "" { first_fail = "d4_node_binds" }
+        println("FAIL d4_node_binds got=" + str(len(m.nodes)) + " want=64")
+    }
+
+    // --- d6 8x8 axial-hex ---
+    let h_text = anynet_hex_8x8_d6_text()
+    let h = anynet_parse(h_text)
+
+    total_count = total_count + 1
+    if h.ok == 1 {
+        pass_count = pass_count + 1
+    } else {
+        if first_fail == "" { first_fail = "d6_parse_ok" }
+        println("FAIL d6_parse_ok: " + h.message)
+    }
+
+    total_count = total_count + 1
+    if h.n_routers == 64 {
+        pass_count = pass_count + 1
+    } else {
+        if first_fail == "" { first_fail = "d6_node_count" }
+        println("FAIL d6_node_count got=" + str(h.n_routers) + " want=64")
+    }
+
+    // interior router (3,3) id=27 must have degree 6 (4 cardinal + 2 diag)
+    let d6_interior = anynet_router_degree(h, 27)
+    total_count = total_count + 1
+    if d6_interior == 6 {
+        pass_count = pass_count + 1
+    } else {
+        if first_fail == "" { first_fail = "d6_interior_deg" }
+        println("FAIL d6_interior_deg got=" + str(d6_interior) + " want=6")
+    }
+
+    total_count = total_count + 1
+    if h.max_degree == 6 {
+        pass_count = pass_count + 1
+    } else {
+        if first_fail == "" { first_fail = "d6_max_degree" }
+        println("FAIL d6_max_degree got=" + str(h.max_degree) + " want=6")
+    }
+
+    // d6 hex diameter must be <= d4 mesh diameter (the hex axial links can
+    // only shorten or equal paths) — committed d6 record diameter_observed=14
+    let h_dia = anynet_diameter_hops(h)
+    total_count = total_count + 1
+    if h_dia <= 14 {
+        pass_count = pass_count + 1
+    } else {
+        if first_fail == "" { first_fail = "d6_diameter" }
+        println("FAIL d6_diameter got=" + str(h_dia) + " want<=14")
+    }
+
+    // --- round-trip (emit → parse) structural identity ---
+    let m2 = anynet_parse(anynet_emit(m))
+    total_count = total_count + 1
+    if m2.ok == 1 {
+        if m2.n_routers == m.n_routers {
+            if len(m2.edges) == len(m.edges) {
+                pass_count = pass_count + 1
+            } else {
+                if first_fail == "" { first_fail = "d4_roundtrip_edges" }
+                println("FAIL d4_roundtrip_edges got=" + str(len(m2.edges)))
+            }
+        } else {
+            if first_fail == "" { first_fail = "d4_roundtrip_routers" }
+            println("FAIL d4_roundtrip_routers got=" + str(m2.n_routers))
+        }
+    } else {
+        if first_fail == "" { first_fail = "d4_roundtrip_ok" }
+        println("FAIL d4_roundtrip_ok: " + m2.message)
+    }
+
+    println("PASS " + str(pass_count) + "/" + str(total_count) + " — stdlib/booksim/anynet.hexa")
+    println("  d4 mesh: routers=" + str(m.n_routers) + " edges=" + str(len(m.edges))
+        + " B=" + str(b) + " D=" + str(dia) + " maxdeg=" + str(m.max_degree))
+    println("  d6 hex : routers=" + str(h.n_routers) + " edges=" + str(len(h.edges))
+        + " D=" + str(h_dia) + " maxdeg=" + str(h.max_degree))
+    if first_fail != "" {
+        println("first fail: " + first_fail)
+        exit(1)
+    }
+}

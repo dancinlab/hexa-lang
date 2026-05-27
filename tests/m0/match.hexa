@@ -1,0 +1,28 @@
+// Stage1 Gap 14 / idiom 1 verification — match-on-enum with payload binders.
+//
+// Exercises:
+//   - enum decl with payload-bearing variant (Shape::Circle(r))
+//   - match arms over EnumPath patterns
+//   - payload-binder name resolved in the arm body
+//
+// Goal: lower passes produce non-empty MIR + non-empty .s. Codegen for
+// enum-discriminant tables is a Gap 15 follow-up; this test only asserts
+// that the lower pass no longer drops the match arms on the floor.
+
+enum Shape {
+    Circle(i64),
+    Square(i64),
+    Other
+}
+
+fn classify(s: Shape) -> i64 {
+    return match s {
+        Shape::Circle(r) -> 1,
+        Shape::Square(r) -> 2,
+        _ -> 0
+    }
+}
+
+fn main() -> i32 {
+    return 0
+}

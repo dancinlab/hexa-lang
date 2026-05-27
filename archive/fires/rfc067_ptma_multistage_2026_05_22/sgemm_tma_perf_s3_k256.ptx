@@ -1,0 +1,211 @@
+//
+// RFC 067 N201 perf-proxy multi-stage TMA  STAGES=3  K_TILES=256
+//
+// Bandwidth-dominated proxy: per-CTA K-loop of TMA loads + fp16 reduce.
+// Grid = (M/64, 1, 1). Output: 1 f32 per CTA in C.
+//
+// shmem: A 6144 + B 6144 + mbar 24 = 12312 B
+//
+.version 8.7
+.target sm_120a
+.address_size 64
+
+.shared .align 16 .b8 smem_a[6144];
+.shared .align 16 .b8 smem_b[6144];
+.shared .align 8  .b8 smem_mbar[24];
+.shared .align 4  .b8 smem_reduce[512]; // per-thread f32
+
+.visible .entry sgemm_tma_perf(
+    .param .align 64 .b8 tmap_a_param[128],
+    .param .align 64 .b8 tmap_b_param[128],
+    .param .u64 c_ptr_param
+) {
+    .reg .b32 %tx, %cta_id;
+    .reg .b32 %k_iter, %k_off, %tx_count;
+    .reg .b32 %slot, %slot_a, %slot_b, %slot_mbar;
+    .reg .b64 %tmap_a_pp, %tmap_b_pp, %tmap_a_addr, %tmap_b_addr;
+    .reg .b64 %c_addr;
+    .reg .b32 %smem_a_lo, %smem_b_lo, %smem_mbar_lo, %smem_reduce_lo;
+    .reg .b32 %arr_count;
+    .reg .b64 %tok;
+    .reg .pred %p0, %p_issue, %pdone;
+    .reg .b32 %x0, %y0, %x1, %y1;
+    .reg .b32 %parity0;
+    .reg .b32 %parity1;
+    .reg .b32 %parity2;
+    .reg .b32 %parity;
+    .reg .f32 %acc, %tmp_f;
+    .reg .b16 %h_tmp;
+    .reg .b32 %slab_a_base, %slab_b_base, %addr_tmp;
+    .reg .b32 %row_m, %row_n;
+    .reg .b32 %issue_k, %issue_kx16;
+    .reg .b64 %c_off, %c_dst;
+    .reg .b32 %m_origin;
+
+    mov.u32 %tx, %tid.x;
+    mov.u32 %cta_id, %ctaid.x;
+    mul.lo.s32 %m_origin, %cta_id, 64; // each CTA owns 64 rows of A
+
+    mov.b64 %tmap_a_pp, tmap_a_param;
+    cvta.param.u64 %tmap_a_addr, %tmap_a_pp;
+    mov.b64 %tmap_b_pp, tmap_b_param;
+    cvta.param.u64 %tmap_b_addr, %tmap_b_pp;
+    ld.param.u64 %c_addr, [c_ptr_param];
+    mov.u32 %smem_a_lo, smem_a;
+    mov.u32 %smem_b_lo, smem_b;
+    mov.u32 %smem_mbar_lo, smem_mbar;
+    mov.u32 %smem_reduce_lo, smem_reduce;
+
+    // init accumulator
+    mov.f32 %acc, 0f00000000;
+
+    // mbarrier init (thread 0 only)
+    setp.eq.s32 %p0, %tx, 0;
+    @!%p0 bra L_init_done;
+    mov.u32 %arr_count, 1;
+    mbarrier.init.shared.b64 [%smem_mbar_lo+0], %arr_count;
+    mbarrier.init.shared.b64 [%smem_mbar_lo+8], %arr_count;
+    mbarrier.init.shared.b64 [%smem_mbar_lo+16], %arr_count;
+    fence.proxy.async.shared::cta;
+L_init_done:
+    bar.sync 0;
+
+    mov.u32 %parity0, 0;
+    mov.u32 %parity1, 0;
+    mov.u32 %parity2, 0;
+
+    setp.eq.s32 %p0, %tx, 0;
+    @!%p0 bra L_prologue_done;
+    // prologue stage 0 (k=0, k_off=0)
+    mov.u32 %x0, 0;
+    mov.u32 %y0, %m_origin;
+    cp.async.bulk.tensor.2d.shared::cluster.global.tile.mbarrier::complete_tx::bytes
+        [%smem_a_lo+0], [%tmap_a_addr, {%x0, %y0}], [%smem_mbar_lo+0];
+    mov.u32 %x1, 0;
+    mov.u32 %y1, 0;
+    cp.async.bulk.tensor.2d.shared::cluster.global.tile.mbarrier::complete_tx::bytes
+        [%smem_b_lo+0], [%tmap_b_addr, {%x1, %y1}], [%smem_mbar_lo+0];
+    mov.u32 %tx_count, 4096;
+    mbarrier.arrive.expect_tx.release.cta.shared::cta.b64
+        %tok, [%smem_mbar_lo+0], %tx_count;
+    // prologue stage 1 (k=1, k_off=16)
+    mov.u32 %x0, 16;
+    mov.u32 %y0, %m_origin;
+    cp.async.bulk.tensor.2d.shared::cluster.global.tile.mbarrier::complete_tx::bytes
+        [%smem_a_lo+2048], [%tmap_a_addr, {%x0, %y0}], [%smem_mbar_lo+8];
+    mov.u32 %x1, 0;
+    mov.u32 %y1, 16;
+    cp.async.bulk.tensor.2d.shared::cluster.global.tile.mbarrier::complete_tx::bytes
+        [%smem_b_lo+2048], [%tmap_b_addr, {%x1, %y1}], [%smem_mbar_lo+8];
+    mov.u32 %tx_count, 4096;
+    mbarrier.arrive.expect_tx.release.cta.shared::cta.b64
+        %tok, [%smem_mbar_lo+8], %tx_count;
+    // prologue stage 2 (k=2, k_off=32)
+    mov.u32 %x0, 32;
+    mov.u32 %y0, %m_origin;
+    cp.async.bulk.tensor.2d.shared::cluster.global.tile.mbarrier::complete_tx::bytes
+        [%smem_a_lo+4096], [%tmap_a_addr, {%x0, %y0}], [%smem_mbar_lo+16];
+    mov.u32 %x1, 0;
+    mov.u32 %y1, 32;
+    cp.async.bulk.tensor.2d.shared::cluster.global.tile.mbarrier::complete_tx::bytes
+        [%smem_b_lo+4096], [%tmap_b_addr, {%x1, %y1}], [%smem_mbar_lo+16];
+    mov.u32 %tx_count, 4096;
+    mbarrier.arrive.expect_tx.release.cta.shared::cta.b64
+        %tok, [%smem_mbar_lo+16], %tx_count;
+L_prologue_done:
+    bar.sync 0;
+
+    mov.u32 %k_iter, 0;
+L_kloop:
+    rem.s32 %slot, %k_iter, 3;
+    mul.lo.s32 %slot_a, %slot, 2048;
+    mul.lo.s32 %slot_b, %slot, 2048;
+    mul.lo.s32 %slot_mbar, %slot, 8;
+
+    mov.u32 %parity, %parity0;
+    setp.eq.s32 %p0, %slot, 1;
+    @%p0 mov.u32 %parity, %parity1;
+    setp.eq.s32 %p0, %slot, 2;
+    @%p0 mov.u32 %parity, %parity2;
+
+    .reg .b32 %wait_addr;
+    add.s32 %wait_addr, %smem_mbar_lo, %slot_mbar;
+L_wait:
+    mbarrier.try_wait.parity.shared::cta.b64 %pdone, [%wait_addr], %parity;
+    @!%pdone bra L_wait;
+    bar.sync 0;
+
+    setp.eq.s32 %p0, %slot, 0;
+    @%p0 xor.b32 %parity0, %parity0, 1;
+    setp.eq.s32 %p0, %slot, 1;
+    @%p0 xor.b32 %parity1, %parity1, 1;
+    setp.eq.s32 %p0, %slot, 2;
+    @%p0 xor.b32 %parity2, %parity2, 1;
+
+    add.s32 %slab_a_base, %smem_a_lo, %slot_a;
+    add.s32 %slab_b_base, %smem_b_lo, %slot_b;
+    // sum one A elem + one B elem from current slab (thread tx reads byte tx*2)
+    .reg .b32 %off_b2;
+    mul.lo.s32 %off_b2, %tx, 2;
+    add.s32 %addr_tmp, %slab_a_base, %off_b2;
+    ld.shared.b16 %h_tmp, [%addr_tmp];
+    cvt.f32.f16 %tmp_f, %h_tmp;
+    add.f32 %acc, %acc, %tmp_f;
+    add.s32 %addr_tmp, %slab_b_base, %off_b2;
+    ld.shared.b16 %h_tmp, [%addr_tmp];
+    cvt.f32.f16 %tmp_f, %h_tmp;
+    add.f32 %acc, %acc, %tmp_f;
+
+    add.s32 %issue_k, %k_iter, 3;
+    setp.lt.s32 %p_issue, %issue_k, 256;
+    setp.eq.and.s32 %p_issue, %tx, 0, %p_issue;
+    @!%p_issue bra L_skip_issue;
+    mul.lo.s32 %issue_kx16, %issue_k, 16;
+    .reg .b32 %issue_a_addr, %issue_b_addr, %issue_mbar_addr;
+    add.s32 %issue_a_addr, %smem_a_lo, %slot_a;
+    add.s32 %issue_b_addr, %smem_b_lo, %slot_b;
+    add.s32 %issue_mbar_addr, %smem_mbar_lo, %slot_mbar;
+    mov.u32 %x0, %issue_kx16;
+    mov.u32 %y0, %m_origin;
+    cp.async.bulk.tensor.2d.shared::cluster.global.tile.mbarrier::complete_tx::bytes
+        [%issue_a_addr], [%tmap_a_addr, {%x0, %y0}], [%issue_mbar_addr];
+    mov.u32 %x1, 0;
+    mov.u32 %y1, %issue_kx16;
+    cp.async.bulk.tensor.2d.shared::cluster.global.tile.mbarrier::complete_tx::bytes
+        [%issue_b_addr], [%tmap_b_addr, {%x1, %y1}], [%issue_mbar_addr];
+    mov.u32 %tx_count, 4096;
+    mbarrier.arrive.expect_tx.release.cta.shared::cta.b64
+        %tok, [%issue_mbar_addr], %tx_count;
+L_skip_issue:
+
+    add.s32 %k_iter, %k_iter, 1;
+    setp.lt.s32 %p0, %k_iter, 256;
+    @%p0 bra L_kloop;
+
+    // per-thread acc -> smem_reduce -> bar.sync -> thread 0 reduce + store
+    .reg .b32 %red_off;
+    mul.lo.s32 %red_off, %tx, 4;
+    add.s32 %red_off, %smem_reduce_lo, %red_off;
+    st.shared.f32 [%red_off], %acc;
+    bar.sync 0;
+    setp.eq.s32 %p0, %tx, 0;
+    @!%p0 bra L_done;
+    .reg .f32 %sum, %v;
+    .reg .b32 %i, %off2;
+    mov.f32 %sum, 0f00000000;
+    mov.u32 %i, 0;
+L_red:
+    mul.lo.s32 %off2, %i, 4;
+    add.s32 %off2, %smem_reduce_lo, %off2;
+    ld.shared.f32 %v, [%off2];
+    add.f32 %sum, %sum, %v;
+    add.s32 %i, %i, 1;
+    setp.lt.s32 %p0, %i, 128;
+    @%p0 bra L_red;
+    cvt.u64.u32 %c_off, %cta_id;
+    mul.lo.u64 %c_off, %c_off, 4;
+    add.u64 %c_dst, %c_addr, %c_off;
+    st.global.f32 [%c_dst], %sum;
+L_done:
+    ret;
+}

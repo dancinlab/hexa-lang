@@ -1,0 +1,109 @@
+// HEXA Standard Library — crypto/asn1_der
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Minimal ASN.1 DER decoder (X.690) — pure hexa. The foundation X.509 cert
+// chain validation needs (DER is the binary encoding of every X.509 / PKCS
+// structure). Handles short-and-long-form lengths, OID decoding (variable-
+// length base-128), and TLV iteration over SEQUENCE/SET children. Encoding-
+// only side ignored (decode is what cert parsing needs). let-mut idiom (#1506).
+//
+// Surface — each takes (b: [int], o: int) where o = offset of a TLV's tag:
+//   pub fn der_tag(b: [int], o: int) -> int             — single-byte tag
+//   pub fn der_header_size(b: [int], o: int) -> int     — bytes consumed by tag+length
+//   pub fn der_value_len(b: [int], o: int) -> int       — length value (short or long form)
+//   pub fn der_value_start(b: [int], o: int) -> int     — offset where the value begins
+//   pub fn der_next(b: [int], o: int) -> int            — offset of next sibling TLV
+//   pub fn der_int(b: [int], voff: int, vlen: int) -> int  — INTEGER value (small, signed)
+//   pub fn der_oid_str(b: [int], voff: int, vlen: int) -> string — OID dotted form
+//
+// Verified vectors:
+//   OID 1.2.840.113549 (RSA prefix) = 06 06 2a 86 48 86 f7 0d → "1.2.840.113549"
+//   SEQUENCE{INTEGER 10, INTEGER 20} = 30 06 02 01 0a 02 01 14
+//   OCTET STRING long-form length 128 = 04 81 80 + 128 zero bytes
+
+@pure
+pub fn der_tag(b: [int], o: int) -> int {
+    return b[o] & 0xFF
+}
+
+// length parsing: short form (b[o+1] high bit 0) → that byte itself.
+// long form (high bit 1) → low 7 bits = number of subsequent length bytes (big-endian).
+@pure
+pub fn der_value_len(b: [int], o: int) -> int {
+    let n = b[o + 1] & 0xFF
+    if n < 0x80 { return n }
+    let nbytes = n & 0x7F
+    let mut v = 0
+    let mut i = 0
+    while i < nbytes {
+        v = (v << 8) | (b[o + 2 + i] & 0xFF)
+        i = i + 1
+    }
+    return v
+}
+
+@pure
+pub fn der_header_size(b: [int], o: int) -> int {
+    // 1 byte tag + 1 byte length (short) or 1 + (1 + N) (long)
+    let n = b[o + 1] & 0xFF
+    if n < 0x80 { return 2 }
+    return 2 + (n & 0x7F)
+}
+
+@pure
+pub fn der_value_start(b: [int], o: int) -> int {
+    return o + der_header_size(b, o)
+}
+
+@pure
+pub fn der_next(b: [int], o: int) -> int {
+    return der_value_start(b, o) + der_value_len(b, o)
+}
+
+// Decode an INTEGER value (signed, two's-complement); caller passes the
+// raw value bytes. Suitable for small integers (≤ 63-bit). Big integers
+// (RSA modulus etc.) keep the raw bytes — caller handles them.
+@pure
+pub fn der_int(b: [int], voff: int, vlen: int) -> int {
+    let mut v = 0
+    let mut i = 0
+    // sign-extend from the top byte's high bit
+    if vlen > 0 && (b[voff] & 0x80) != 0 {
+        v = 0 - 1   // start with all-1s for negative
+        // shift in low bits
+    }
+    while i < vlen {
+        v = ((v << 8) & 0xFFFFFFFFFFFFFFFF) | (b[voff + i] & 0xFF)
+        i = i + 1
+    }
+    return v
+}
+
+// Decode an OID's variable-length base-128 encoding to a dotted string.
+// First byte = 40*v1 + v2; subsequent values are 7-bit base-128 big-endian
+// with the high bit set on continuation bytes.
+@pure
+pub fn der_oid_str(b: [int], voff: int, vlen: int) -> string {
+    if vlen == 0 { return "" }
+    let first = b[voff] & 0xFF
+    let v1 = first / 40
+    let v2 = first - 40 * v1
+    let mut parts: [string] = []
+    parts.push(to_string(v1))
+    parts.push(to_string(v2))
+    let mut i = 1
+    while i < vlen {
+        let mut acc = 0
+        let mut more = 1
+        while more == 1 {
+            let by = b[voff + i] & 0xFF
+            acc = (acc << 7) | (by & 0x7F)
+            i = i + 1
+            if (by & 0x80) == 0 { more = 0 }
+        }
+        parts.push(to_string(acc))
+    }
+    return parts.join(".")
+}

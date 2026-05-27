@@ -1,0 +1,60 @@
+{
+  "__fixture_tag__": "VENDORED UNIVERSAL-FF PREDICTION — frozen NNP output, not measurement",
+  "candidate_id": "hxm-pv-tandem-002",
+  "novel_section": "§4.A.11 (Round 3, 2026-05-13)",
+  "target_property": "certified-aperture power-conversion efficiency (PCE) under 1-sun AM1.5G",
+  "predicted_value": 32.5,
+  "predicted_unit": "% PCE",
+  "operating_conditions": {
+    "spectrum": "AM1.5G",
+    "irradiance_W_per_m2": 1000,
+    "temperature_C": 25,
+    "aperture_class": "certified, full-area (NREL chart)"
+  },
+  "model": "MACE-MP-0 (notional)",
+  "model_caveat": "Universal FFs are atomistic — they predict total energy / forces / stress, not device-level PCE. The PCE value here is a PROXY-from-literature pinned with raw#10 C3 honesty: it is the certified perovskite-Si 2T tandem record (HZB / Helmholtz 32.5% 2024) that a notional MACE-MP-0 + drift-diffusion / SCAPS coupling would TRY to match in principle. SEMI-QUANTITATIVE: device PCE is a downstream property; electronic structure live in DFT-domain (MP / OMat24 / GNoME), not pure NNP-domain.",
+  "proxy_source": "HZB (Helmholtz-Zentrum Berlin) certified perovskite-Si 2T tandem 32.5% record, May 2024 (Albrecht / Stannowski group press release + NREL chart entry); concurrent KAUST 33.7% 4T result (Stuckelberger 2024) and Longi 33.9% certified single-junction perovskite-Si reported in 2024 are cited in §4.A.11 for context",
+  "falsifier_relation": "MARGINAL",
+  "falsifier_target_value": 32.0,
+  "falsifier_target_unit": "% PCE",
+  "falsifier_id": "F-PV-3",
+  "falsifier_text": "certified-aperture PCE < 32% OR T80 < 1000h @ ISOS-L1 → FAIL",
+  "delta_to_target": 0.5,
+  "accessed": "2026-05-13",
+  "arxiv_anchor_refresh_2026_05_14": {
+    "snapshot": "_research_bridge/arxiv/arxiv_cache/tier1_anchor_refresh_2026-05-14.jsonl",
+    "cross_check_papers": [
+      {
+        "arxiv_id": "2511.23004",
+        "title": "CsCl seed layer ... 30.3% efficient perovskite-silicon tandem",
+        "note": "30.3% reported (Nov 2025) — below 32% target, supports MARGINAL falsifier_relation"
+      },
+      {
+        "arxiv_id": "2604.24098",
+        "title": "Characterizing Fill Factor Limitations in Perovskite-Silicon Tandem",
+        "note": "photoshunt identified as key FF-loss mechanism (Apr 2026)"
+      },
+      {
+        "arxiv_id": "2504.18196",
+        "title": "Monitoring charge separation via transient SPV",
+        "note": "Albrecht group — material-interface diagnostic"
+      },
+      {
+        "arxiv_id": "2502.05465",
+        "title": "Prospects for market-specific design",
+        "note": "location-specific yield analysis, 2x degradation rate relaxation"
+      }
+    ],
+    "verdict_unchanged": "falsifier_relation remains MARGINAL — record 32.5% (HZB May 2024) above 32% threshold; Nov 2025 fully-textured tandem only reached 30.3%, suggesting commodity scale still below target"
+  },
+  "n6_lattice_fit_applied": false,
+  "is_measurement": false,
+  "is_external_verification": false,
+  "unproven_markers_preserved": [
+    "perovskite 25-yr operational lifetime UNVERIFIED at commercial scale",
+    "Br/I segregation under operating light HARD_WALL (Hoke effect)",
+    "Pb halide migration to encapsulant HARD_WALL on environmental regulation"
+  ],
+  "honesty_caveats": "T80 lifetime under ISOS-L1 is the binding falsifier together with PCE; this fixture pins PCE only. Even at 32.5% PCE, T80 < 1000h would FAIL the candidate. SPEC_FIRST preserved — this status does NOT promote to EXTERNAL-VERIFIED; an attributed external-lab measurement on the hxm-pv-tandem-002 chemistry (not the chart record) is required for that.",
+  "license_note": "PCE record values are public NREL chart entries; vendor / HZB press releases govern (raw#10 C3, NOT n=6 lattice-fit)."
+}

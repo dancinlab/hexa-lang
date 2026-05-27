@@ -1,0 +1,297 @@
+// tool/atlas_absorb_hexa_bio.hexa — Wave 2.2 of hexa-bio absorption (2026-05-15)
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write]
+//
+// Read-only on ~/core/hexa-bio/. Emits:
+//   compiler/atlas/n6_axes.gen.hexa  (5 n=6 axis @P nodes — RIBOZYME /
+//                                      VIROCAPSID / NANOBOT / WEAVE / QUANTUM)
+//
+// Source SSOT (Apache-2.0, dancinlab, hexa-bio v1.1.0 + commit a257893):
+//   ~/core/hexa-bio/quantum/module/n6_lattice_check.hexa
+//   recorded source_line per row: 38 / 43 / 48 / 53 / 58 (legacy snapshot
+//   pointers preserved for byte-stability of the rodata).
+//
+// Run: hexa run tool/atlas_absorb_hexa_bio.hexa
+//
+// Reproducibility: re-running regenerates byte-identically. Drift check
+// scans the upstream for each `<UPPER>_ROW` declaration + anchor id; on
+// mismatch prints `DRIFT` and emits anyway (manual reconciliation step).
+// Mirrors tool/atlas_absorb_real_limits.hexa.
+
+// ── string escaping (mirrors compiler/atlas/embed.hexa::_escape_string) ──
+
+fn _escape_char(c: string) -> string {
+    if c == "\\" { return "\\\\" }
+    if c == "\"" { return "\\\"" }
+    if c == "\n" { return "\\n" }
+    if c == "\r" { return "\\r" }
+    if c == "\t" { return "\\t" }
+    return c
+}
+
+fn _escape_string(s: string) -> string {
+    let n = len(s)
+    let chunks = []
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        chunks.push(_escape_char(c))
+        i = i + 1
+    }
+    return chunks.join("")
+}
+
+// All 5 rows are lattice self-check verified (g=10*) AND now carry a
+// g3 anchor (real_limit_anchor cell) per AGENTS.tape @D g3. The
+// structured GradeInfo flips `verified: true` on the strength of the
+// anchor presence (2026-05-15 upstream update).
+let _VERIFIED_GRADE = "GradeInfo { value: 10, verified: true, breakthrough: false, hypothesis: false }"
+let _ZERO_EDGES = "EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] }"
+
+fn _emit_node(kind: string, id: string, raw: string, source_file: string, source_line) -> string {
+    let parts = []
+    parts.push("    AtlasNode { kind: \"")
+    parts.push(_escape_string(kind))
+    parts.push("\", id: \"")
+    parts.push(_escape_string(id))
+    parts.push("\", raw: \"")
+    parts.push(_escape_string(raw))
+    parts.push("\", source_file: \"")
+    parts.push(_escape_string(source_file))
+    parts.push("\", source_line: ")
+    parts.push(to_string(source_line))
+    parts.push(", grade: ")
+    parts.push(_VERIFIED_GRADE)
+    parts.push(", edges: ")
+    parts.push(_ZERO_EDGES)
+    parts.push(" }")
+    return parts.join("")
+}
+
+// ── canonical row table ────────────────────────────────────────────────
+// row: [snake_id, axis_upper, sigma_meaning, tau_meaning, phi_meaning,
+//       j2_meaning, real_limit_anchor, subcategory, source_line]
+// Values copied verbatim from n6_lattice_check.hexa with non-ASCII subs
+// matching existing n6_axes.gen.hexa byte stream: `× → x` in QUANTUM σ.
+
+let _ROWS = [
+    ["ribozyme",   "RIBOZYME",
+     "12-nt catalytic core (Symons 1981 hammerhead)",
+     "4-state reaction ladder (substrate/TS/cleaved/released)",
+     "cleaved-vs-intact phosphodiester binary",
+     "trigonal-bipyramidal phosphate TS pose-equivalence",
+     "real_limits.boltzmann_constant",
+     "bio", 38],
+
+    ["virocapsid", "VIROCAPSID",
+     "12-pentamer for T=1 icosahedral capsid (Caspar-Klug)",
+     "4 assembly states (apo/dimer/trimer/closed)",
+     "open-vs-closed cage binary",
+     "icosahedral 24-fold symmetry (T=1 fold)",
+     "real_limits.bekenstein_bound",
+     "bio", 43],
+
+    ["nanobot",    "NANOBOT",
+     "12 actuation nodes (mechanical degrees of freedom)",
+     "4-state actuation ladder (rest/load/work/release)",
+     "engaged-vs-released binary",
+     "actuation-cycle 24-step sequence",
+     "real_limits.margolus_levitin",
+     "substrate", 48],
+
+    ["weave",      "WEAVE",
+     "12 base-pair turn (DNA helix structural period)",
+     "4-base alphabet (A/T/G/C)",
+     "duplex-vs-single-strand binary",
+     "double-helix 24-fold helical symmetry (B-DNA period)",
+     "real_limits.shannon_entropy",
+     "bio", 53],
+
+    ["quantum",    "QUANTUM",
+     "H2 6-Pauli expansion (Kandala 2017) x 2 qubits = 12 ops",
+     "H2 ansatz d=1 hardware-efficient (Ry-Ry-CNOT-Ry-Ry, 4 params)",
+     "binary fold-marker via best_idx (0 vs other)",
+     "sigma*tau = H2 falsifier evaluation surface area",
+     "real_limits.margolus_levitin",
+     "substrate", 58]
+]
+
+fn _row_raw(row) -> string {
+    let snake = to_string(row[0])
+    let upper = to_string(row[1])
+    let sigma_m = to_string(row[2])
+    let tau_m   = to_string(row[3])
+    let phi_m   = to_string(row[4])
+    let j2_m    = to_string(row[5])
+    let anchor  = to_string(row[6])
+    let subcat  = to_string(row[7])
+    let parts = []
+    parts.push("@P n6_axes.")
+    parts.push(snake)
+    parts.push(" = ")
+    parts.push(upper)
+    parts.push(" :: n6_axes.")
+    parts.push(subcat)
+    parts.push(" [10*]\n")
+    parts.push("  sigma: ")
+    parts.push(sigma_m)
+    parts.push(" (12)\n")
+    parts.push("  tau: ")
+    parts.push(tau_m)
+    parts.push(" (4)\n")
+    parts.push("  phi: ")
+    parts.push(phi_m)
+    parts.push(" (2)\n")
+    parts.push("  J2: ")
+    parts.push(j2_m)
+    parts.push(" (24)\n")
+    parts.push("  master_identity: sigma*phi = n*tau = 24\n")
+    parts.push("  real_limit_anchor: ")
+    parts.push(anchor)
+    return parts.join("")
+}
+
+fn _emit_axes() -> string {
+    let parts = []
+    parts.push("@phase(\"parse_only\")\n")
+    parts.push("pub let N6_AXES: [AtlasNode] = [\n")
+    let n = len(_ROWS)
+    let mut i = 0
+    while i < n {
+        let row = _ROWS[i]
+        let snake = to_string(row[0])
+        let source_line = row[8]
+        let raw = _row_raw(row)
+        parts.push(_emit_node("P", "n6_axes." + snake, raw, "n6_lattice_check.hexa", source_line))
+        if i + 1 < n { parts.push(",") }
+        parts.push("\n")
+        i = i + 1
+    }
+    parts.push("]\n\n")
+    return parts.join("")
+}
+
+fn _emit_file() -> string {
+    let parts = []
+    parts.push("// absorbed from ~/core/hexa-bio/quantum/module/n6_lattice_check.hexa (Apache-2.0, hexa-bio v1.1.0, dancinlab 2026-05-15)\n")
+    parts.push("// SSOT snapshot — as_of: 2026-05-15 — re-generate from source not hand-edit\n")
+    parts.push("//\n")
+    parts.push("// N6_AXES — 5 @P nodes (RIBOZYME / VIROCAPSID / NANOBOT / WEAVE / QUANTUM)\n")
+    parts.push("//\n")
+    parts.push("// Each row records the canonical meaning of sigma(6)=12 / tau(6)=4 / phi(6)=2 /\n")
+    parts.push("// J2=24 for one of the 5 hexa-bio axes. Grade = 10 (lattice self-check via\n")
+    parts.push("// compiler/n6_lattice/verify.hexa::verify_all() — sigma/tau/phi/J2 + master\n")
+    parts.push("// identity all PASS deterministically).\n")
+    parts.push("//\n")
+    parts.push("// 2026-05-15 update: verified flag flipped back to TRUE — hexa-bio's upstream\n")
+    parts.push("// SSOT now carries a `real_limit_anchor` cell on each row (e.g. RIBOZYME ↦\n")
+    parts.push("// real_limits.boltzmann_constant via Arrhenius rate ∝ exp(-Ea/kT)) satisfying\n")
+    parts.push("// AGENTS.tape @D g3 (verification-anchor-real-limit). The raw body's\n")
+    parts.push("// `real_limit_anchor:` line carries the §1.2 citation. Both verify_all()\n")
+    parts.push("// (lattice self-check) and verify_g3_anchor (anchor presence) PASS on the\n")
+    parts.push("// upstream — see hexa-bio/quantum/module/n6_lattice_check.hexa.\n")
+    parts.push("//\n")
+    parts.push("// Intentional duplication: compiler/n6_lattice/axis_table.hexa already exposes\n")
+    parts.push("// the same 5-axis rodata as `N6Axis` structs for the lattice-verify subsystem.\n")
+    parts.push("// This file re-expresses the same data as atlas AtlasNode rodata so that\n")
+    parts.push("// atlas-format consumers (anima_main, anchor_audit, etc.) can iterate axes\n")
+    parts.push("// alongside @C / @L / other primitives without an axis_table-specific path.\n")
+    parts.push("//\n")
+    parts.push("// Regenerate via: hexa run tool/atlas_absorb_hexa_bio.hexa  (planned)\n")
+    parts.push("\n")
+    parts.push("use \"compiler/atlas/parser\"\n")
+    parts.push("\n")
+    parts.push(_emit_axes())
+    parts.push("// public count accessor — smoke tests assert without walking the\n")
+    parts.push("// parse_only-decorated array directly.\n")
+    parts.push("pub fn n6_axes_count() -> i64 { return len(N6_AXES) }\n")
+    parts.push("\n")
+    parts.push("pub fn n6_axes() -> [AtlasNode] { return N6_AXES }\n")
+    parts.push("\n")
+    parts.push("// Convenience lookup by short axis name (case-insensitive on RIBOZYME vs\n")
+    parts.push("// ribozyme — both forms accepted). Returns the empty-kind sentinel node\n")
+    parts.push("// when no axis matches; callers should check `result.kind == \"\"`.\n")
+    parts.push("pub fn n6_axis_by_name(name: string) -> AtlasNode {\n")
+    parts.push("    let nodes = N6_AXES\n")
+    parts.push("    let mut i = 0\n")
+    parts.push("    while i < len(nodes) {\n")
+    parts.push("        let n = nodes[i]\n")
+    parts.push("        // Match the id suffix after `n6_axes.` (lowercase form) or the\n")
+    parts.push("        // uppercase label embedded in the raw header (e.g. \"= RIBOZYME ::\").\n")
+    parts.push("        let id_suffix = \"n6_axes.\" + name\n")
+    parts.push("        if n.id == id_suffix { return n }\n")
+    parts.push("        let upper_needle = \"= \" + name + \" ::\"\n")
+    parts.push("        if n.raw.contains(upper_needle) { return n }\n")
+    parts.push("        i = i + 1\n")
+    parts.push("    }\n")
+    parts.push("    return AtlasNode {\n")
+    parts.push("        kind: \"\", id: \"\", raw: \"\", source_file: \"\", source_line: 0,\n")
+    parts.push("        grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false },\n")
+    parts.push("        edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] }\n")
+    parts.push("    }\n")
+    parts.push("}\n")
+    return parts.join("")
+}
+
+// ── drift check (read-only against the source hexa file) ───────────────
+//
+// For each row, the upstream n6_lattice_check.hexa must still declare a
+// `<UPPER>_ROW` literal that contains both the uppercase axis name and
+// the row's real_limit_anchor id. We scan the whole file rather than
+// pinning to a specific line — the recorded `source_line` in this
+// generated rodata is a snapshot pointer (38/43/48/53/58 — preserved
+// from the pre-update gen.hexa for byte-stability), not a guarantee
+// that the upstream's line numbering still matches today.
+
+fn _check_drift(src_path: string) -> i64 {
+    let text = read_file(src_path)
+    if len(text) == 0 {
+        println("  warn: source not readable at " + src_path + " — skipping drift check")
+        return 0
+    }
+    let n_rows = len(_ROWS)
+    let mut drift = 0
+    let mut i = 0
+    while i < n_rows {
+        let row = _ROWS[i]
+        let upper = to_string(row[1])
+        let anchor = to_string(row[6])
+        let needle_row = "let " + upper + "_ROW"
+        let needle_anchor = "\"" + anchor + "\""
+        if !text.contains(needle_row) {
+            println("  DRIFT  " + upper + " — `" + needle_row + "` not found in source")
+            drift = drift + 1
+        } else if !text.contains(needle_anchor) {
+            println("  DRIFT  " + upper + " — anchor `" + anchor + "` not found in source")
+            drift = drift + 1
+        }
+        i = i + 1
+    }
+    return drift
+}
+
+// ── driver ─────────────────────────────────────────────────────────────
+
+fn main() {
+    let home = env("HOME")
+    let src = home + "/core/hexa-bio/quantum/module/n6_lattice_check.hexa"
+
+    println("n6_axes absorption — wave 2.2")
+    println("  source: " + src)
+    println("  rows:   " + to_string(len(_ROWS)) + " (expected 5: RIBOZYME/VIROCAPSID/NANOBOT/WEAVE/QUANTUM)")
+
+    let drift = _check_drift(src)
+    if drift == 0 {
+        println("  drift:  OK — all rows match source line axis names")
+    } else {
+        println("  drift:  " + to_string(drift) + " row(s) drifted (see above) — emitting anyway")
+    }
+
+    let out = "compiler/atlas/n6_axes.gen.hexa"
+    let body = _emit_file()
+    write_file(out, body)
+    println("  wrote:  " + out + " (" + to_string(len(body)) + " bytes)")
+
+    println("done.")
+}

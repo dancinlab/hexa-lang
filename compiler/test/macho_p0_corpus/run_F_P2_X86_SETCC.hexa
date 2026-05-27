@@ -1,0 +1,121 @@
+// F-P2-X86-SETCC — verify MOVZX + SETcc encoding + composite predicate program.
+// Composite computes `(7 > 3) ? 1 : 0` → exit 1 on Linux x86_64.
+//
+// Expected byte-eq vs Intel manual:
+//   SETE  AL         0F 94 c0
+//   SETNE AL         0F 95 c0
+//   SETL  AL         0F 9C c0
+//   SETGE AL         0F 9D c0
+//   SETLE AL         0F 9E c0
+//   SETG  AL         0F 9F c0
+//   SETE  R10B       41 0F 94 c2          (REX.B for r10)
+//   MOVZX EAX, AL    0F B6 c0
+//   MOVZX EDI, AL    0F B6 f8
+
+import "../../emit/elf_x86_64.hexa"
+
+fn _hex(v: Int) -> string {
+    let hi = (v >> 4) & 0xF; let lo = v & 0xF
+    let d = "0123456789abcdef"
+    return d.substring(hi, hi + 1) + d.substring(lo, lo + 1)
+}
+fn _bs(bs: [Int]) -> string {
+    let mut s = ""; let mut i = 0
+    while i < len(bs) { if i > 0 { s = s + " " }; s = s + _hex(bs[i] & 0xFF); i = i + 1 }
+    return s
+}
+fn _eq(label: string, got: [Int], want: [Int]) -> bool {
+    if len(got) != len(want) { println("FAIL " + label + ": len " + to_string(len(got)) + " vs " + to_string(len(want))); return false }
+    let mut i = 0
+    while i < len(got) {
+        if (got[i] & 0xFF) != want[i] {
+            println("FAIL " + label + " byte " + to_string(i) + ": " + _hex(got[i] & 0xFF) + " vs " + _hex(want[i]))
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+fn main() {
+    let mut ok = true
+
+    let cases: [string] = [
+        "SETE AL", "SETNE AL", "SETL AL", "SETGE AL", "SETLE AL", "SETG AL",
+        "SETE R10B",
+        "MOVZX EAX,AL", "MOVZX EDI,AL",
+    ]
+    let want: [[Int]] = [
+        [0x0F, 0x94, 0xC0],
+        [0x0F, 0x95, 0xC0],
+        [0x0F, 0x9C, 0xC0],
+        [0x0F, 0x9D, 0xC0],
+        [0x0F, 0x9E, 0xC0],
+        [0x0F, 0x9F, 0xC0],
+        [0x41, 0x0F, 0x94, 0xC2],
+        [0x0F, 0xB6, 0xC0],
+        [0x0F, 0xB6, 0xF8],
+    ]
+    let got: [[Int]] = [
+        encode_x86_64_insn("SETE",  ["al"]),
+        encode_x86_64_insn("SETNE", ["al"]),
+        encode_x86_64_insn("SETL",  ["al"]),
+        encode_x86_64_insn("SETGE", ["al"]),
+        encode_x86_64_insn("SETLE", ["al"]),
+        encode_x86_64_insn("SETG",  ["al"]),
+        encode_x86_64_insn("SETE",  ["r10b"]),
+        encode_x86_64_insn("MOVZX", ["eax", "al"]),
+        encode_x86_64_insn("MOVZX", ["edi", "al"]),
+    ]
+    let mut i = 0
+    while i < len(cases) {
+        println(cases[i] + " → " + _bs(got[i]))
+        if !_eq(cases[i], got[i], want[i]) { ok = false }
+        i = i + 1
+    }
+    if !ok { exit(1) }
+
+    // Composite program: compute (7 > 3) ? 1 : 0, exit with that value.
+    //   mov eax, #7              B8 07 00 00 00
+    //   mov ecx, #3              B9 03 00 00 00
+    //   cmp eax, ecx             39 c8           (CMP r32 r32 — already
+    //                                              encoded as cmp eax,ecx)
+    //   setg al                  0F 9F C0
+    //   movzx edi, al            0F B6 F8
+    //   mov eax, #60             B8 3C 00 00 00
+    //   syscall                  0F 05
+    let prog: [Int] = []
+    let mut k = 0
+    let p0 = encode_x86_64_insn("MOV", ["eax", "#7"])
+    k = 0; while k < len(p0) { prog.push(p0[k]); k = k + 1 }
+    let p1 = encode_x86_64_insn("MOV", ["ecx", "#3"])
+    k = 0; while k < len(p1) { prog.push(p1[k]); k = k + 1 }
+    let p2 = encode_x86_64_insn("CMP", ["eax", "ecx"])
+    k = 0; while k < len(p2) { prog.push(p2[k]); k = k + 1 }
+    let p3 = encode_x86_64_insn("SETG", ["al"])
+    k = 0; while k < len(p3) { prog.push(p3[k]); k = k + 1 }
+    let p4 = encode_x86_64_insn("MOVZX", ["edi", "al"])
+    k = 0; while k < len(p4) { prog.push(p4[k]); k = k + 1 }
+    let p5 = encode_x86_64_insn("MOV", ["eax", "#60"])
+    k = 0; while k < len(p5) { prog.push(p5[k]); k = k + 1 }
+    let p6 = encode_x86_64_insn("SYSCALL", [])
+    k = 0; while k < len(p6) { prog.push(p6[k]); k = k + 1 }
+    println("\n[(7 > 3) ? 1 : 0 predicate program: " + to_string(len(prog)) + " B]")
+    println("  " + _bs(prog))
+
+    let elf = serialize_elf_exec_x86_64(prog)
+    let elf_path = "/tmp/p2_c28_setg.elf"
+    write_bytes(elf_path, elf)
+    let scp = exec_capture("scp " + elf_path + " ubu-2:/tmp/p2_c28_setg.elf 2>&1")
+    if to_int(scp[2]) != 0 { println("FAIL scp"); exit(2) }
+    let r = exec_capture("ssh ubu-2 'chmod +x /tmp/p2_c28_setg.elf && /tmp/p2_c28_setg.elf; echo REMOTE_RC=$?' 2>&1")
+    let rout = to_string(r[0])
+    println("ubu-2: " + rout)
+    if rout.find("REMOTE_RC=1") < 0 {
+        println("FAIL: (7 > 3) ? 1 : 0 did not yield exit 1")
+        exit(3)
+    }
+
+    println("🎉 F-P2-X86-SETCC FULL PASS — 9 rules + (7>3) predicate program runs on Linux")
+    exit(0)
+}

@@ -1,0 +1,81 @@
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/flame/flame_phase4b3_extern_test.hexa — extern fn ABI proof-of-concept
+//
+// Tests the integration mechanism for Phase 4-B-3 leaf primitive
+// (Path A from STATUS.md): can hexa-source call a C extern fn that
+// reads `_hx_farr_table[id].buf` directly?
+//
+// Build:
+//   tool/flame_phase4b3_extern_build.sh stdlib/flame/flame_phase4b3_extern_test.hexa
+// (wraps hexa build with primitive .c concat)
+//
+// Falsifier:
+//   F-RFC047-EXTERN-ABI  hexa source can call primitive via extern fn
+//                        without compile/link error
+//   F-RFC047-EXTERN-EQ   primitive output == hexa wrapper output (byte-eq)
+// ════════════════════════════════════════════════════════════════════════
+
+extern fn flame_rmsnorm_d32_fwd_primitive(x_id: int, g_id: int, y_id: int, xn_id: int, inv_id: int)
+
+fn main() {
+    let d = 32
+    println("=== flame Phase 4-B-3 extern fn ABI test ===")
+
+    // Allocate input farrs with deterministic seed values
+    let x  = farr_zeros(d)
+    let g  = farr_zeros(d)
+    let mut i = 0
+    while i < d {
+        // x = sin(0.1·(i+1)), g = cos(0.1·(i+1)) — matches byte-eq test seed
+        let xv = sin(0.1 * to_float(i + 1))
+        let gv = cos(0.1 * to_float(i + 1))
+        let _ = farr_set(x, i, xv)
+        let _ = farr_set(g, i, gv)
+        i = i + 1
+    }
+
+    // Path 1: hexa wrapper (existing nn_rmsnorm_fwd from nn_lib)
+    let y_h   = farr_zeros(d)
+    let xn_h  = farr_zeros(d)
+    let inv_h = farr_zeros(1)
+    nn_rmsnorm_fwd(x, g, y_h, xn_h, inv_h, d)
+
+    // Path 2: primitive via extern fn
+    let y_p   = farr_zeros(d)
+    let xn_p  = farr_zeros(d)
+    let inv_p = farr_zeros(1)
+    flame_rmsnorm_d32_fwd_primitive(x, g, y_p, xn_p, inv_p)
+
+    // Diff
+    let mut max_y_diff   = 0.0
+    let mut max_xn_diff  = 0.0
+    let mut j = 0
+    while j < d {
+        let dy  = farr_get(y_h, j) - farr_get(y_p, j)
+        let dxn = farr_get(xn_h, j) - farr_get(xn_p, j)
+        let ady = if dy < 0.0 { 0.0 - dy } else { dy }
+        let adxn = if dxn < 0.0 { 0.0 - dxn } else { dxn }
+        if ady > max_y_diff { max_y_diff = ady }
+        if adxn > max_xn_diff { max_xn_diff = adxn }
+        j = j + 1
+    }
+    let dinv = farr_get(inv_h, 0) - farr_get(inv_p, 0)
+    let max_inv_diff = if dinv < 0.0 { 0.0 - dinv } else { dinv }
+
+    println("  max|y_hexa  − y_primitive|  = " + to_string(max_y_diff))
+    println("  max|xn_hexa − xn_primitive| = " + to_string(max_xn_diff))
+    println("  max|inv_hexa − inv_primitive| = " + to_string(max_inv_diff))
+    println("")
+
+    if max_y_diff == 0.0 {
+        if max_xn_diff == 0.0 {
+            if max_inv_diff == 0.0 {
+                println("PASS  F-RFC047-EXTERN-EQ  hexa wrapper == primitive (max|Δ| = 0.0)")
+                println("PASS  F-RFC047-EXTERN-ABI  extern fn call mechanism works")
+                exit(0)
+            }
+        }
+    }
+    println("FAIL  diff non-zero")
+    exit(1)
+}

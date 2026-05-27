@@ -1,0 +1,71 @@
+#!/bin/sh
+# tool/gpu_regpressure — G2 round-3 register-pressure / unroll advisor
+#
+# Compiles a .ptx through ptxas -v to read per-kernel register counts and
+# spill stores/loads, then advises a safe unroll factor — refusing high
+# unroll when register pressure already approaches the per-thread ceiling.
+#
+# Usage:
+#   gpu_regpressure <foo.ptx> [-arch=sm_80] [-target-occ=50]
+#
+# -target-occ N : desired occupancy% (default 50). The advisor caps the
+#                 reg budget at MAX_REGS_PER_SM / (target_blocks * TPB)
+#                 and flags any kernel exceeding it.
+#
+# Closes GPU.md milestone G2.
+
+set -eu
+
+if [ $# -lt 1 ]; then
+  echo "usage: gpu_regpressure <foo.ptx> [-arch=sm_80] [-target-occ=50]" >&2
+  exit 2
+fi
+
+PTX="$1"; shift
+ARCH="sm_80"
+TARGET_OCC=50
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -arch=*)       ARCH="${1#-arch=}" ;;
+    -target-occ=*) TARGET_OCC="${1#-target-occ=}" ;;
+    *) echo "gpu_regpressure: unknown arg: $1" >&2; exit 2 ;;
+  esac
+  shift
+done
+
+PTXAS="${PTXAS:-ptxas}"
+
+# 255 regs/thread is the hardware max for all sm_70+; spill begins beyond it.
+MAX_REGS_PER_THREAD=255
+# Reg budget to hit target occupancy: for 2048 threads/SM and 65536 regs/SM,
+# 50% occupancy (1024 active threads) → 64 regs/thread before pressure caps it.
+BUDGET=$(awk -v occ="$TARGET_OCC" 'BEGIN { t = 2048 * occ / 100; if (t > 0) print int(65536 / t); else print 255 }')
+
+echo "=== register pressure ($ARCH, target ${TARGET_OCC}% → budget ${BUDGET} regs/thread) ==="
+
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+
+# ptxas -v emits "Used N registers, M bytes smem" + "N bytes spill stores" on stderr
+"$PTXAS" -v "$PTX" -arch="$ARCH" -o "$TMP/cubin" 2>"$TMP/log" || true
+
+awk -v budget="$BUDGET" -v hwmax="$MAX_REGS_PER_THREAD" '
+  /Compiling entry function/ { gsub(/.*function .|. for .*/, ""); kernel = $0 }
+  /Used [0-9]+ registers/ {
+    for (i = 1; i <= NF; i++) if ($i == "Used") regs = $(i+1) + 0
+    verdict = "OK"
+    if (regs > hwmax) verdict = "SPILL-RISK (>" hwmax ")"
+    else if (regs > budget) verdict = "OVER-BUDGET (unroll factor 1 advised)"
+    printf "  %-40s %3d regs  [%s]\n", kernel, regs, verdict
+  }
+  /bytes spill stores/ {
+    for (i = 1; i <= NF; i++) if ($(i+1) == "bytes" && $(i+2) == "spill") {
+      if ($i + 0 > 0) printf "  %-40s SPILLING %d bytes — reduce unroll / live ranges\n", kernel, $i
+    }
+  }
+' "$TMP/log"
+
+# Surface raw ptxas log too for full context
+echo "--- raw ptxas -v ---"
+cat "$TMP/log"

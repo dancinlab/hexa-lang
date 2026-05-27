@@ -1,0 +1,245 @@
+#!hexa strict
+// hexa-chip/verify/saturation_check.hexa — RSC self-stop signal.
+//
+// Recipe §7.4 priority 15 — the canonical script that confirms the
+// closure-depth-accumulation loop has reached saturation. When this
+// passes, the RSC loop terminates per recipe §7.2 (sat-1 + sat-2 both
+// met → T3 empirical only; Stage-1+ scope per recipe §9).
+//
+// Three conditions (hexa-chip variant; iter 21 added sat-3):
+//   sat-1: every MEASURABLE falsifier (F-CHIP-1/2/3) has T2 stack ≥ 3
+//          and every script in the stack is on disk. F-CHIP-4
+//          (consciousness-chip Φ) is non-measurable v1.x and is
+//          deliberately excluded — same exclusion as falsifier_check.
+//   sat-2: §1 16-script numerical-tier inventory complete (numerics_*
+//          on disk ≥ 9) AND lint_numerics.hexa passes (every
+//          numerics_*.hexa satisfies recipe §4 5 invariants).
+//   sat-3: every MEASURABLE falsifier has T3 (archival empirical)
+//          stack ≥ 1 script on disk. iter 18-20 wired
+//          empirical_process / _npu / _hbm. Strict bench T3 (live
+//          hardware feed) is Stage-1+ deferred to v2.0.0+.
+//
+// PASS = both met → emit `__HEXA_CHIP_RSC_SATURATED__ STOP` (the
+//        signal sentinel; CI / loop runners parse this to terminate).
+//        Exit 0.
+// FAIL = either condition unmet → emit `__HEXA_CHIP_RSC_SATURATED__
+//        NOT_YET — N condition(s) missing` and exit 1. Loop continues
+//        with next chunk from recipe §7.4 priority table.
+//
+// This script is NOT a numerics_*.hexa (so lint_numerics doesn't
+// audit it for math_pure import etc.). It's a meta-stop signal.
+//
+// Run:
+//   hexa run verify/saturation_check.hexa
+//   hexa run verify/saturation_check.hexa --json
+//
+// Cost: $0 (file-existence sweep + one nested lint subprocess).
+// @no-lock-needed
+
+let HOME = env("HOME")
+
+fn _root() -> str {
+    let r = env("HEXA_CHIP_ROOT")
+    if r.len() > 0 { return r }
+    let pwd = exec("pwd").trim()
+    if pwd.len() > 0 { return pwd }
+    return HOME + "/core/hexa-chip"  // @allow-devpath
+}
+
+let ROOT = _root()
+let VERIFY_DIR = ROOT + "/verify"
+
+fn _exists(p: str) -> bool { return file_exists(p) }
+
+fn _shq(s: str) -> str { return "'" + s.replace("'", "'\\''") + "'" }
+
+fn _hexa_bin() -> str {
+    let h = exec("which hexa 2>/dev/null").trim()
+    if h.len() > 0 { return h }
+    return HOME + "/.hx/bin/hexa"  // @allow-devpath
+}
+
+fn _has_flag(a: [str], flag: str) -> bool {
+    for x in a { if x == flag { return true } }
+    return false
+}
+
+fn _user_args() -> [str] {
+    let raw = args()
+    let mut sidx = -1
+    let mut i = 0
+    while i < raw.len() {
+        if raw[i].ends_with(".hexa") { sidx = i; break }
+        i = i + 1
+    }
+    let mut out: [str] = []
+    let mut j = sidx + 1
+    if sidx < 0 { j = 0 }
+    while j < raw.len() { out = out + [raw[j]]; j = j + 1 }
+    return out
+}
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ── F-CHIP T2 stacks (must mirror falsifier_check.hexa) ────────────────
+//
+// Measurable falsifiers only. F-CHIP-4 (consciousness Φ) has no
+// commercial bench data and is non-measurable at v1.x — excluded from
+// sat-1 by design (same as falsifier_check sat-1 logic).
+
+let F1_T2 = ["numerics_process.hexa", "numerics_process_parity.hexa", "numerics_process_solver.hexa", "numerics_spice_corner.hexa"]
+let F2_T2 = ["numerics_npu.hexa",     "numerics_npu_parity.hexa",     "numerics_npu_solver.hexa",     "numerics_rtl_isa_n6.hexa"]
+let F3_T2 = ["numerics_hbm.hexa",     "numerics_hbm_parity.hexa",     "numerics_hbm_solver.hexa",     "numerics_power_thermal.hexa"]
+
+// T3 stacks (archival empirical fixtures — iter 18-20).
+let F1_T3 = ["empirical_process.hexa"]
+let F2_T3 = ["empirical_npu.hexa"]
+let F3_T3 = ["empirical_hbm.hexa"]
+
+fn _all_present(names: [str]) -> bool {
+    for n in names { if _exists(VERIFY_DIR + "/" + n) == false { return false } }
+    return names.len() > 0
+}
+
+// ── checks ────────────────────────────────────────────────────────────
+
+fn check_sat_1_per_falsifier_t2_three() {
+    let ok1 = _all_present(F1_T2) && F1_T2.len() >= 3
+    let ok2 = _all_present(F2_T2) && F2_T2.len() >= 3
+    let ok3 = _all_present(F3_T2) && F3_T2.len() >= 3
+    _check(ok1, "F-CHIP-1 T2 ×" + str(F1_T2.len()) + " ≥ 3 (process — all present on disk)", "")
+    _check(ok2, "F-CHIP-2 T2 ×" + str(F2_T2.len()) + " ≥ 3 (NPU — all present on disk)",     "")
+    _check(ok3, "F-CHIP-3 T2 ×" + str(F3_T2.len()) + " ≥ 3 (HBM — all present on disk)",     "")
+}
+
+fn check_sat_3_per_falsifier_t3_one() {
+    // sat-3 (RSC iter 21): each measurable falsifier has ≥ 1 T3
+    // (archival empirical) script. Strict bench T3 = Stage-1+.
+    let ok1 = _all_present(F1_T3) && F1_T3.len() >= 1
+    let ok2 = _all_present(F2_T3) && F2_T3.len() >= 1
+    let ok3 = _all_present(F3_T3) && F3_T3.len() >= 1
+    _check(ok1, "F-CHIP-1 T3 ×" + str(F1_T3.len()) + " ≥ 1 (process empirical archival)", "")
+    _check(ok2, "F-CHIP-2 T3 ×" + str(F2_T3.len()) + " ≥ 1 (NPU empirical archival)",     "")
+    _check(ok3, "F-CHIP-3 T3 ×" + str(F3_T3.len()) + " ≥ 1 (HBM empirical archival)",     "")
+}
+
+fn check_sat_2_inventory_lint() {
+    // Inventory: numerics_*.hexa count ≥ 9 (recipe §1 numerical tier minimum).
+    let cmd = "ls " + VERIFY_DIR + "/numerics_*.hexa 2>/dev/null | wc -l | tr -d ' '"
+    let raw = exec(cmd).trim()
+    let inv_count = int(raw)
+    _check(inv_count >= 9,
+           "numerics_*.hexa inventory count ≥ 9  (recipe §1 minimum)",
+           "on-disk count = " + str(inv_count))
+
+    // Lint: lint_numerics.hexa passes (5 invariants hold across every numerics_*.hexa).
+    let lint_cmd = "HEXA_CHIP_ROOT=" + _shq(ROOT) + " " + _shq(_hexa_bin()) +
+                   " run " + _shq(VERIFY_DIR + "/lint_numerics.hexa") +
+                   " >/dev/null 2>&1 && echo y || echo n"
+    let lint_out = exec(lint_cmd).trim()
+    _check(lint_out == "y",
+           "lint_numerics passes (recipe §4 5 invariants)",
+           "")
+}
+
+fn check_required_scripts_present() {
+    // Recipe §1 backbone — these must all be on disk regardless of
+    // saturation status (regression guard against accidental deletion).
+    let required = [
+        "cross_doc_audit.hexa",
+        "calc_process.hexa",
+        "calc_npu.hexa",
+        "calc_hbm.hexa",
+        "falsifier_check.hexa",
+        "lint_numerics.hexa",
+        "numerics_cross_pillar.hexa",
+        "numerics_lattice_arithmetic.hexa",
+    ]
+    for s in required {
+        _check(_exists(VERIFY_DIR + "/" + s),
+               "required script present: " + s,
+               "")
+    }
+}
+
+// ── main ──────────────────────────────────────────────────────────────
+
+fn main() {
+    let ua = _user_args()
+    let json_mode = _has_flag(ua, "--json")
+
+    if !json_mode {
+        println("========================================================================")
+        println("  hexa-chip — RSC saturation check  (recipe §7.2 sat-1 + sat-2 + sat-3 / §7.4 #15)")
+        println("========================================================================")
+        println("")
+        println("  sat-1 — per-measurable-falsifier T2 ≥ 3:")
+    }
+    check_sat_1_per_falsifier_t2_three()
+
+    if !json_mode {
+        println("")
+        println("  sat-2 — inventory + lint:")
+    }
+    check_sat_2_inventory_lint()
+
+    if !json_mode {
+        println("")
+        println("  sat-3 — per-measurable-falsifier T3 archival ≥ 1:")
+    }
+    check_sat_3_per_falsifier_t3_one()
+
+    if !json_mode {
+        println("")
+        println("  recipe §1 backbone presence:")
+    }
+    check_required_scripts_present()
+
+    let pass_n = RUN - FAIL
+
+    if json_mode {
+        let mut js = "{\"tool\":\"hexa-chip/verify/saturation_check.hexa\","
+        js = js + "\"schema\":\"hexa-chip/saturation/v1\","
+        js = js + "\"run\":" + str(RUN) + ","
+        js = js + "\"pass\":" + str(pass_n) + ","
+        js = js + "\"fail\":" + str(FAIL) + ","
+        js = js + "\"saturated\":"
+        if FAIL == 0 { js = js + "true" } else { js = js + "false" }
+        js = js + ",\"signal\":\""
+        if FAIL == 0 { js = js + "__HEXA_CHIP_RSC_SATURATED__ STOP" }
+        else         { js = js + "__HEXA_CHIP_RSC_SATURATED__ NOT_YET" }
+        js = js + "\"}"
+        println(js)
+        if FAIL > 0 { exit(1) }
+        return
+    }
+
+    println("")
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " saturation checks passed")
+    if FAIL > 0 {
+        println("__HEXA_CHIP_RSC_SATURATED__ NOT_YET — " + str(FAIL) + " condition(s) missing")
+        println("  → loop continues. pick next chunk from recipe §7.4 priority table.")
+        exit(1)
+    }
+    println("__HEXA_CHIP_RSC_SATURATED__ STOP")
+    println("")
+    println("  closure depth across F-CHIP-1 / F-CHIP-2 / F-CHIP-3 (measurable):")
+    println("    T1 (algebraic)  ✓  via verify/calc_*.hexa            (3 scripts)")
+    println("    T2 (numerical)  ✓  via verify/numerics_*.hexa        (×3 each = 9)")
+    println("    T3 (empirical)  ✓  via verify/empirical_*.hexa       (archival fixtures, ×1 each)")
+    println("  F-CHIP-1/2/3 ALL at 100% closure. Strict bench T3 (live hardware feed)")
+    println("  remains Stage-1+ scope — deferred to v2.0.0+ tape-out / fab cycles.")
+    println("  F-CHIP-4 (consciousness Φ) non-measurable at v1.x — excluded by design.")
+    println("  RSC loop terminates here. Next-tier work needs hardware, not chunks.")
+    exit(0)
+}

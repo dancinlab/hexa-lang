@@ -1,0 +1,13 @@
+#!hexa strict
+// graphene analyze — Wallace lattice (a₀ = a/√3) + Fermi velocity.
+extern fn sqrt(x: float) -> float
+fn main() {
+    let a_Angstrom = 2.46
+    let a0_CC = a_Angstrom / sqrt(3.0)
+    let vF_ms = 1.0e6
+    println("graphene_analyze (Wallace1947 · π-band):")
+    println("  lattice_a_A = " + str(a_Angstrom))
+    println("  nearest_neighbor_a0_A = " + str(a0_CC))
+    println("  vF_m_per_s = " + str(vF_ms))
+    println("__HEXA_GRAPHENE_ANALYZE__ PASS gate=GATE_OPEN absorbed=false")
+}

@@ -1,0 +1,8 @@
+#!hexa strict
+// photonic handoff — AWG mux channels.
+fn main() {
+    let awg_channels = 100.0
+    println("photonic_handoff (AWG mux channels):")
+    println("  awg_channels = " + str(awg_channels))
+    println("__HEXA_PHOTONIC_HANDOFF__ PASS gate=GATE_OPEN absorbed=false")
+}

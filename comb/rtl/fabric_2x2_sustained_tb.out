@@ -1,0 +1,8 @@
+=== 2x2 fabric sustained traffic — degree-4 mesh ===
+workload     cycles  injected  delivered  drop_rate  avg_lat
+0 (uniform   )     1000      1268       1266    0%       5
+1 (matmul-row)     1000      1268       1266    0%       3
+2 (matmul-col)     1000      1268       1266    0%       3
+3 (transpose )     1000      1268       1266    0%       4
+=== done ===
+build/artifacts/fabric_2x2_sus.v2k:396: $finish called at 42200 (1s)

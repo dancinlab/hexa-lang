@@ -1,0 +1,28 @@
+// HEXA Standard Library — crypto/chacha20 self-test
+// @ci_gate
+use "stdlib/crypto/chacha20"
+let mut pass = 0
+let mut total = 0
+fn cki(name: string, got: int, want: int) {
+    total = total + 1
+    if got == want { pass = pass + 1 } else { println("FAIL " + name + " got=" + to_string(got)) }
+}
+fn main() {
+    let mut key: [int] = []
+    let mut i = 0
+    while i < 32 { key.push(i); i = i + 1 }
+    let nonce = [0,0,0,9, 0,0,0,0x4a, 0,0,0,0]
+    let blk = chacha20_block(key, 1, nonce)
+    // RFC 8439 §2.3.2 first keystream word 0xe4e7f110 (LE bytes 10 f1 e7 e4)
+    cki("w0_b0", blk[0], 16)
+    cki("w0_b1", blk[1], 241)
+    cki("w0_b2", blk[2], 231)
+    cki("w0_b3", blk[3], 228)
+    cki("blklen", len(blk), 64)
+    let pt = [72,101,108,108,111]
+    let ct = chacha20_encrypt(key, 1, nonce, pt)
+    let rt = chacha20_encrypt(key, 1, nonce, ct)
+    cki("rt0", rt[0], 72); cki("rt4", rt[4], 111)
+    println("chacha20 self-test: " + to_string(pass) + "/" + to_string(total))
+    if pass == total { println("PASS") } else { println("FAILED") }
+}

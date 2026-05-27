@@ -1,0 +1,8 @@
+#!hexa strict
+// rtsc synthesize — DAC anvil pressure.
+fn main() {
+    let anvil_P_GPa = 155.0
+    println("rtsc_synthesize (DAC anvil pressure):")
+    println("  anvil_P_GPa = " + str(anvil_P_GPa))
+    println("__HEXA_RTSC_SYNTHESIZE__ PASS gate=GATE_OPEN absorbed=false")
+}

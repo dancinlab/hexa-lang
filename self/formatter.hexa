@@ -1,0 +1,770 @@
+// self/formatter.hexa — HEXA Code Formatter ported from src/formatter.rs
+// Stage: P6 self-hosting — bodies filled from src/formatter.rs (540 LOC original).
+//
+// Pretty-prints HEXA source code:
+//   - 4-space indentation
+//   - Normalized whitespace
+//   - Aligned `=` in consecutive let statements
+//   - One blank line between functions
+//   - No trailing whitespace
+//
+// Public API:
+//   format_source(source)  -> string            driver: tokenize -> parse -> format
+//   check_format(source)   -> bool              true iff already formatted
+//
+// AST shape: Map-based AstNode used by self/parser.hexa
+// (kind discriminator + {name,value,op,left,right,cond,then_body,else_body,
+//  params,body,args,fields,items,variants,arms,iter_expr,ret_type,target,
+//  trait_name,methods}).
+
+// ══════════════════════════════════════════════════════════════
+// Driver
+// ══════════════════════════════════════════════════════════════
+
+fn format_source(source) {
+    let tokens = tokenize(source)
+    let stmts = parse(tokens)
+    return format_stmts(stmts, 0)
+}
+
+fn check_format(source) {
+    let formatted = format_source(source)
+    return trim(source) == trim(formatted)
+}
+
+// ══════════════════════════════════════════════════════════════
+// Indentation helper
+// ══════════════════════════════════════════════════════════════
+
+fn ind(level) {
+    let mut s = ""
+    let mut i = 0
+    while i < level {
+        s = s + "    "
+        i = i + 1
+    }
+    return s
+}
+
+// ══════════════════════════════════════════════════════════════
+// Statement list — handles let alignment + blank line between fns
+// ══════════════════════════════════════════════════════════════
+
+fn format_stmts(stmts, indent) {
+    let mut parts = []
+    let mut i = 0
+    let n = len(stmts)
+    while i < n {
+        // Collect consecutive let statements for alignment
+        let mut group = []
+        let mut j = i
+        while j < n {
+            let gk = stmts[j].kind
+            if gk == "LetStmt" || gk == "LetMutStmt" {
+                group.push(j)
+                j = j + 1
+            } else {
+                break
+            }
+        }
+
+        if len(group) > 1 {
+            parts.push(format_let_group_aligned(stmts, group, indent))
+            i = j
+        } else {
+            // Add blank line before FnDecl/AsyncFnDecl (except first)
+            if i > 0 {
+                let curk = stmts[i].kind
+                if curk == "FnDecl" || curk == "AsyncFnDecl" {
+                    let cur = parts.join("")
+                    if !ends_with(cur, "\n\n") {
+                        parts.push("\n")
+                    }
+                }
+            }
+            parts.push(format_stmt(stmts[i], indent))
+            parts.push("\n")
+            i = i + 1
+        }
+    }
+    let mut out = parts.join("")
+    // Strip excess trailing newlines, leave at most one
+    // @partial — Stage 0: pre-witness acknowledgement, refine in follow-up
+    // @partial — Stage 0: pre-witness acknowledgement, refine in follow-up
+    while ends_with(out, "\n\n") {
+        out = out.substring(0, len(out) - 1)
+    }
+    return out
+}
+
+fn format_let_group_aligned(stmts, group_idx_list, indent) {
+    // Compute max (name + ann) width
+    let mut max_w = 0
+    let mut gi = 0
+    while gi < len(group_idx_list) {
+        let idx = group_idx_list[gi]
+        let st = stmts[idx]
+        let mut ann_len = 0
+        if st.value != "" {
+            ann_len = len(st.value) + 2  // ": T"
+        }
+        let total = len(st.name) + ann_len
+        if total > max_w { max_w = total }
+        gi = gi + 1
+    }
+    // Emit aligned lets
+    let prefix = ind(indent)
+    let mut out_parts = []
+    let mut gj = 0
+    while gj < len(group_idx_list) {
+        let idx2 = group_idx_list[gj]
+        let st2 = stmts[idx2]
+        let kw = "let "
+        if st2.kind == "LetMutStmt" { kw = "let mut " }
+        let mut left_part = st2.name
+        if st2.value != "" {
+            left_part = left_part + ": " + st2.value
+        }
+        // Pad with spaces to max_w
+        let mut pad_parts = [left_part]
+        let mut pad_i = len(left_part)
+        while pad_i < max_w {
+            pad_parts.push(" ")
+            pad_i = pad_i + 1
+        }
+        let padded = pad_parts.join("")
+        let mut rhs = ""
+        if st2.left != "" {
+            rhs = format_expr(st2.left)
+        }
+        out_parts.push(prefix + kw + padded + " = " + rhs + "\n")
+        gj = gj + 1
+    }
+    return out_parts.join("")
+}
+
+// ══════════════════════════════════════════════════════════════
+// Statement dispatcher — one branch per AstNode "kind"
+// ══════════════════════════════════════════════════════════════
+
+fn format_stmt(stmt, indent) {
+    let prefix = ind(indent)
+    let k = stmt.kind
+
+    // ── bindings ───────────────────────────────────────────
+    if k == "LetStmt" || k == "LetMutStmt" {
+        let kw = "let "
+        if k == "LetMutStmt" { kw = "let mut " }
+        let mut ann = ""
+        if stmt.value != "" { ann = ": " + stmt.value }
+        let mut rhs = ""
+        if stmt.left != "" { rhs = " = " + format_expr(stmt.left) }
+        return prefix + kw + stmt.name + ann + rhs
+    }
+    if k == "ConstStmt" {
+        let mut ann = ""
+        if stmt.value != "" { ann = ": " + stmt.value }
+        let mut rhs = ""
+        if stmt.left != "" { rhs = format_expr(stmt.left) }
+        return prefix + "const " + stmt.name + ann + " = " + rhs
+    }
+    if k == "StaticStmt" {
+        let mut ann = ""
+        if stmt.value != "" { ann = ": " + stmt.value }
+        let mut rhs = ""
+        if stmt.left != "" { rhs = format_expr(stmt.left) }
+        return prefix + "static " + stmt.name + ann + " = " + rhs
+    }
+    if k == "AtomicLet" {
+        let mut ann = ""
+        if stmt.value != "" { ann = ": " + stmt.value }
+        let mut rhs = ""
+        if stmt.left != "" { rhs = " = " + format_expr(stmt.left) }
+        return prefix + "atomic let " + stmt.name + ann + rhs
+    }
+    if k == "TypeAlias" {
+        return prefix + "type " + stmt.name + " = " + stmt.value
+    }
+
+    // ── assignment / expression / return ───────────────────
+    if k == "AssignStmt" {
+        return prefix + format_expr(stmt.left) + " = " + format_expr(stmt.right)
+    }
+    if k == "ExprStmt" {
+        return prefix + format_expr(stmt.left)
+    }
+    if k == "ReturnStmt" {
+        if stmt.left == "" {
+            return prefix + "return"
+        }
+        return prefix + "return " + format_expr(stmt.left)
+    }
+
+    // ── declarations ───────────────────────────────────────
+    if k == "FnDecl" {
+        return format_fn_decl(stmt, indent, false)
+    }
+    if k == "AsyncFnDecl" {
+        return format_fn_decl(stmt, indent, true)
+    }
+    if k == "ExternFnDecl" {
+        let mut parts = []
+        let plist = stmt.params
+        let mut pi = 0
+        while pi < len(plist) {
+            let p = plist[pi]
+            parts.push(p.name + ": " + p.value)
+            pi = pi + 1
+        }
+        let mut ret = ""
+        if stmt.ret_type != "" { ret = " -> " + stmt.ret_type }
+        return prefix + "extern fn " + stmt.name + "(" + join(parts, ", ") + ")" + ret
+    }
+    if k == "ComptimeFnDecl" {
+        let cplist = stmt.params
+        let mut cparts = []
+        let mut cpi = 0
+        while cpi < len(cplist) {
+            let cp = cplist[cpi]
+            if cp.value != "" {
+                cparts.push(cp.name + ": " + cp.value)
+            } else {
+                cparts.push(cp.name)
+            }
+            cpi = cpi + 1
+        }
+        let mut cret = ""
+        if stmt.ret_type != "" { cret = " -> " + stmt.ret_type }
+        return prefix + "comptime fn " + stmt.name + "(" + join(cparts, ", ") + ")" + cret + " " + format_block(stmt.body, indent)
+    }
+    if k == "StructDecl" {
+        let mut s = prefix + "struct " + stmt.name + " {\n"
+        let fs = stmt.fields
+        let mut fi = 0
+        while fi < len(fs) {
+            let f = fs[fi]
+            s = s + prefix + "    " + f.name + ": " + f.value + ",\n"
+            fi = fi + 1
+        }
+        s = s + prefix + "}"
+        return s
+    }
+    if k == "EnumDecl" {
+        let mut s = prefix + "enum " + stmt.name + " {\n"
+        let vs = stmt.variants
+        let mut vi = 0
+        while vi < len(vs) {
+            let v = vs[vi]
+            let vtypes = v.items
+            if vtypes == "" || len(vtypes) == 0 {
+                s = s + prefix + "    " + v.name + ",\n"
+            } else {
+                s = s + prefix + "    " + v.name + "(" + join(vtypes, ", ") + "),\n"
+            }
+            vi = vi + 1
+        }
+        s = s + prefix + "}"
+        return s
+    }
+    if k == "TraitDecl" {
+        let mut s = prefix + "trait " + stmt.name + " {\n"
+        let ms = stmt.methods
+        let mut mi = 0
+        while mi < len(ms) {
+            s = s + format_fn_decl(ms[mi], indent + 1, false) + "\n"
+            mi = mi + 1
+        }
+        s = s + prefix + "}"
+        return s
+    }
+    if k == "ImplBlock" {
+        let mut header = prefix + "impl "
+        if stmt.trait_name != "" {
+            header = header + stmt.trait_name + " for "
+        }
+        header = header + stmt.target + " {\n"
+        let mut s = header
+        let ms2 = stmt.methods
+        let mut mj = 0
+        while mj < len(ms2) {
+            if mj > 0 { s = s + "\n" }
+            s = s + format_fn_decl(ms2[mj], indent + 1, false) + "\n"
+            mj = mj + 1
+        }
+        s = s + prefix + "}"
+        return s
+    }
+    if k == "MacroDef" {
+        let rules = stmt.items
+        if rules == "" || len(rules) == 0 {
+            return prefix + "macro! " + stmt.name + " {}"
+        }
+        let mut s = prefix + "macro! " + stmt.name + " {\n"
+        let mut ri = 0
+        while ri < len(rules) {
+            let r = rules[ri]
+            let pat_toks = r.params
+            let mut pat_str = ""
+            if pat_toks != "" { pat_str = join(pat_toks, " ") }
+            s = s + prefix + "    (" + pat_str + ") => " + format_block(r.body, indent + 1) + ",\n"
+            ri = ri + 1
+        }
+        s = s + prefix + "}"
+        return s
+    }
+    if k == "EffectDecl" {
+        let ops = stmt.items
+        let mut s = prefix + "@effect " + stmt.name + " {\n"
+        let mut oi = 0
+        while oi < len(ops) {
+            let op = ops[oi]
+            let op_params = op.params
+            let mut opparts = []
+            let mut opi = 0
+            while opi < len(op_params) {
+                let opp = op_params[opi]
+                if opp.value != "" {
+                    opparts.push(opp.name + ": " + opp.value)
+                } else {
+                    opparts.push(opp.name)
+                }
+                opi = opi + 1
+            }
+            let mut opret = ""
+            if op.ret_type != "" { opret = " -> " + op.ret_type }
+            s = s + prefix + "    fn " + op.name + "(" + join(opparts, ", ") + ")" + opret + ",\n"
+            oi = oi + 1
+        }
+        s = s + prefix + "}"
+        return s
+    }
+
+    // ── control flow ───────────────────────────────────────
+    if k == "ForStmt" {
+        return prefix + "for " + stmt.name + " in " + format_expr(stmt.iter_expr) + " " + format_block(stmt.body, indent)
+    }
+    if k == "WhileStmt" {
+        return prefix + "while " + format_expr(stmt.cond) + " " + format_block(stmt.body, indent)
+    }
+    if k == "LoopStmt" {
+        return prefix + "loop " + format_block(stmt.body, indent)
+    }
+    if k == "BreakStmt" { return prefix + "break" }
+    if k == "ContinueStmt" { return prefix + "continue" }
+
+    // ── errors / concurrency ───────────────────────────────
+    if k == "TryCatch" {
+        let kw = "catch"
+        let nm = stmt.name
+        if starts_with(nm, "__recover__") {
+            kw = "recover"
+            nm = nm.substring(len("__recover__"), len(nm))
+        }
+        return prefix + "try " + format_block(stmt.then_body, indent) + " " + kw + " " + nm + " " + format_block(stmt.else_body, indent)
+    }
+    if k == "ThrowStmt" {
+        return prefix + "throw " + format_expr(stmt.left)
+    }
+    if k == "PanicStmt" {
+        return prefix + "panic " + format_expr(stmt.left)
+    }
+    if k == "SpawnStmt" {
+        if stmt.name != "" {
+            return prefix + "spawn \"" + stmt.name + "\" " + format_block(stmt.body, indent)
+        }
+        return prefix + "spawn " + format_block(stmt.body, indent)
+    }
+    if k == "DropStmt" {
+        return prefix + "drop " + stmt.name
+    }
+    if k == "OwnStmt" {
+        return prefix + "own " + stmt.name
+    }
+    if k == "BorrowStmt" {
+        return prefix + "borrow " + stmt.name
+    }
+    if k == "MoveStmt" {
+        return prefix + "move " + stmt.name
+    }
+    if k == "HandleWithStmt" {
+        let handlers = stmt.items
+        let body_str = format_block(stmt.body, indent)
+        let mut s = prefix + "handle " + body_str + " with {\n"
+        let mut hi = 0
+        while hi < len(handlers) {
+            let h = handlers[hi]
+            let hpar = h.params
+            let mut hpar_str = ""
+            if hpar != "" { hpar_str = join(hpar, ", ") }
+            s = s + prefix + "    " + h.target + "." + h.name + "(" + hpar_str + ") => " + format_block(h.body, indent + 1) + ",\n"
+            hi = hi + 1
+        }
+        s = s + prefix + "}"
+        return s
+    }
+
+    // ── proofs / intents / verification ────────────────────
+    if k == "ProofStmt" {
+        return prefix + "proof " + stmt.name + " " + format_block(stmt.body, indent)
+    }
+    if k == "AssertStmt" {
+        return prefix + "assert " + format_expr(stmt.left)
+    }
+    if k == "IntentStmt" {
+        let ifields = stmt.fields
+        let mut s = prefix + "@intent \"" + stmt.name + "\" {\n"
+        let mut ifi = 0
+        while ifi < len(ifields) {
+            let iff = ifields[ifi]
+            s = s + prefix + "    " + iff.name + ": " + format_expr(iff.left) + ",\n"
+            ifi = ifi + 1
+        }
+        s = s + prefix + "}"
+        return s
+    }
+    if k == "VerifyStmt" {
+        return prefix + "@verify \"" + stmt.name + "\" " + format_block(stmt.body, indent)
+    }
+    if k == "TheoremStmt" {
+        return prefix + "theorem " + stmt.name + " " + format_block(stmt.body, indent)
+    }
+    if k == "GenerateStmt" {
+        let mut hint = ""
+        if stmt.name != "" { hint = stmt.name + " " }
+        return prefix + "@generate " + hint + "{ \"" + stmt.value + "\" }"
+    }
+    if k == "GenerateFnStmt" {
+        let gplist = stmt.params
+        let mut gparts = []
+        let mut gpi = 0
+        while gpi < len(gplist) {
+            let gp = gplist[gpi]
+            if gp.value != "" {
+                gparts.push(gp.name + ": " + gp.value)
+            } else {
+                gparts.push(gp.name)
+            }
+            gpi = gpi + 1
+        }
+        let mut gret = ""
+        if stmt.ret_type != "" { gret = " -> " + stmt.ret_type }
+        return prefix + "@generate fn " + stmt.name + "(" + join(gparts, ", ") + ")" + gret + " { \"" + stmt.value + "\" }"
+    }
+    if k == "EvolveFn" {
+        return prefix + "@evolve fn " + stmt.name + "(...) {}"
+    }
+    if k == "ConsciousnessBlock" {
+        return prefix + "consciousness \"" + stmt.name + "\" {}"
+    }
+
+    // ── modules ────────────────────────────────────────────
+    if k == "ModStmt" {
+        let mut s = prefix + "mod " + stmt.name + " {\n"
+        s = s + format_stmts(stmt.body, indent + 1)
+        s = s + prefix + "}"
+        return s
+    }
+    if k == "UseStmt" {
+        let path = stmt.items
+        return prefix + "use " + join(path, "::")
+    }
+
+    // ── tuples ─────────────────────────────────────────────
+    if k == "LetTuple" {
+        let names = stmt.items
+        return prefix + "let (" + join(names, ", ") + ") = " + format_expr(stmt.left)
+    }
+
+    // Fallback: unknown kind
+    return prefix + "/* unknown stmt: " + k + " */"
+}
+
+// ══════════════════════════════════════════════════════════════
+// Fn decl / block helpers
+// ══════════════════════════════════════════════════════════════
+
+fn format_fn_decl(decl, indent, is_async) {
+    let prefix = ind(indent)
+    let mut async_prefix = ""
+    if is_async { async_prefix = "async " }
+    let plist = decl.params
+    let mut parts = []
+    let mut pi = 0
+    while pi < len(plist) {
+        let p = plist[pi]
+        if p.value != "" {
+            parts.push(p.name + ": " + p.value)
+        } else {
+            parts.push(p.name)
+        }
+        pi = pi + 1
+    }
+    let mut ret = ""
+    if decl.ret_type != "" { ret = " -> " + decl.ret_type }
+    return prefix + async_prefix + "fn " + decl.name + "(" + join(parts, ", ") + ")" + ret + " " + format_block(decl.body, indent)
+}
+
+fn format_block(stmts, indent) {
+    if stmts == "" { return "{}" }
+    if len(stmts) == 0 { return "{}" }
+    let mut s = "{\n"
+    s = s + format_stmts(stmts, indent + 1)
+    s = s + ind(indent) + "}"
+    return s
+}
+
+// ══════════════════════════════════════════════════════════════
+// Expression dispatcher
+// ══════════════════════════════════════════════════════════════
+
+// decreases expr — structural
+fn format_expr(expr) {
+    if expr == "" { return "" }
+    let k = expr.kind
+
+    // ── literals ───────────────────────────────────────────
+    if k == "IntLit"    { return to_string(expr.value) }
+    if k == "FloatLit"  { return to_string(expr.value) }
+    if k == "BoolLit"   { return to_string(expr.value) }
+    if k == "StringLit" {
+        // Escape \ and "
+        let raw = to_string(expr.value)
+        let mut esc = ""
+        let mut si = 0
+        while si < len(raw) {
+            let ch = raw.substring(si, si + 1)
+            if ch == "\\" {
+                esc = esc + "\\\\"
+            } else if ch == "\"" {
+                esc = esc + "\\\""
+            } else {
+                esc = esc + ch
+            }
+            si = si + 1
+        }
+        return "\"" + esc + "\""
+    }
+    if k == "CharLit" {
+        return "'" + to_string(expr.value) + "'"
+    }
+    if k == "Ident"     { return expr.name }
+    if k == "Wildcard"  { return "_" }
+
+    // ── operators ──────────────────────────────────────────
+    if k == "BinOp" {
+        return format_expr(expr.left) + " " + binop_str(expr.op) + " " + format_expr(expr.right)
+    }
+    if k == "UnaryOp" {
+        let op = expr.op
+        let mut op_str = op
+        if op == "!"  { op_str = "!" }
+        if op == "-"  { op_str = "-" }
+        if op == "~"  { op_str = "~" }
+        return op_str + format_expr(expr.left)
+    }
+    if k == "Range" {
+        let mut op = ".."
+        if expr.value == "inclusive" { op = "..=" }
+        return format_expr(expr.left) + op + format_expr(expr.right)
+    }
+
+    // ── calls / members ────────────────────────────────────
+    if k == "Call" {
+        let args = expr.args
+        let mut arg_strs = []
+        let mut ai = 0
+        while ai < len(args) {
+            arg_strs.push(format_expr(args[ai]))
+            ai = ai + 1
+        }
+        return format_expr(expr.left) + "(" + join(arg_strs, ", ") + ")"
+    }
+    if k == "Field" {
+        return format_expr(expr.left) + "." + expr.name
+    }
+    if k == "Index" {
+        return format_expr(expr.left) + "[" + format_expr(expr.right) + "]"
+    }
+    if k == "MacroInvoc" {
+        return expr.name + "!(...)"
+    }
+
+    // ── collections / literals ─────────────────────────────
+    if k == "Array" {
+        let items = expr.items
+        let mut strs = []
+        let mut ii = 0
+        while ii < len(items) {
+            strs.push(format_expr(items[ii]))
+            ii = ii + 1
+        }
+        return "[" + join(strs, ", ") + "]"
+    }
+    if k == "Tuple" {
+        let items2 = expr.items
+        let mut strs2 = []
+        let mut ij = 0
+        while ij < len(items2) {
+            strs2.push(format_expr(items2[ij]))
+            ij = ij + 1
+        }
+        return "(" + join(strs2, ", ") + ")"
+    }
+    if k == "MapLit" {
+        let entries = expr.items
+        let mut pairs = []
+        let mut ek = 0
+        while ek < len(entries) {
+            let e = entries[ek]
+            pairs.push(format_expr(e.left) + ": " + format_expr(e.right))
+            ek = ek + 1
+        }
+        return "{" + join(pairs, ", ") + "}"
+    }
+    if k == "StructInit" {
+        let flds = expr.fields
+        let mut fstrs = []
+        let mut fi = 0
+        while fi < len(flds) {
+            let f = flds[fi]
+            fstrs.push(f.name + ": " + format_expr(f.left))
+            fi = fi + 1
+        }
+        return expr.name + " { " + join(fstrs, ", ") + " }"
+    }
+    if k == "EnumPath" {
+        // name = enum name, value = variant name; left may hold data expr
+        if expr.left == "" {
+            return expr.name + "::" + expr.value
+        }
+        return expr.name + "::" + expr.value + "(" + format_expr(expr.left) + ")"
+    }
+    if k == "ArrayPattern" {
+        let apats = expr.items
+        let mut aparts = []
+        if apats != "" {
+            let mut api = 0
+            while api < len(apats) {
+                aparts.push(format_expr(apats[api]))
+                api = api + 1
+            }
+        }
+        if expr.name != "" {
+            aparts.push("..." + expr.name)
+        }
+        return "[" + join(aparts, ", ") + "]"
+    }
+
+    // ── control-flow exprs ─────────────────────────────────
+    if k == "Lambda" {
+        let ps = expr.params
+        let mut pnames = []
+        let mut pk = 0
+        while pk < len(ps) {
+            pnames.push(ps[pk])
+            pk = pk + 1
+        }
+        return "|" + join(pnames, ", ") + "| " + format_expr(expr.left)
+    }
+    if k == "IfExpr" {
+        let then_str = format_block(expr.then_body, 0)
+        let eb = expr.else_body
+        let mut has_else = false
+        if eb != "" {
+            if len(eb) > 0 { has_else = true }
+        }
+        if has_else {
+            return "if " + format_expr(expr.cond) + " " + then_str + " else " + format_block(eb, 0)
+        }
+        return "if " + format_expr(expr.cond) + " " + then_str
+    }
+    if k == "MatchExpr" {
+        let m_arms = expr.arms
+        let mut s = "match " + format_expr(expr.left) + " {\n"
+        let mut mi = 0
+        while mi < len(m_arms) {
+            let arm = m_arms[mi]
+            let mut guard_str = ""
+            if arm.cond != "" {
+                guard_str = " if " + format_expr(arm.cond)
+            }
+            s = s + "    " + format_expr(arm.left) + guard_str + " -> {\n"
+            let abody = arm.body
+            let mut bi = 0
+            while bi < len(abody) {
+                let line = format_stmt(abody[bi], 0)
+                s = s + "        " + line.trim() + "\n"
+                bi = bi + 1
+            }
+            s = s + "    },\n"
+            mi = mi + 1
+        }
+        s = s + "}"
+        return s
+    }
+    if k == "Block" {
+        return format_block(expr.body, 0)
+    }
+
+    // ── ownership / async / effects ────────────────────────
+    if k == "Own"      { return "own "    + format_expr(expr.left) }
+    if k == "Move"     { return "move "   + format_expr(expr.left) }
+    if k == "Borrow"   { return "borrow " + format_expr(expr.left) }
+    if k == "Await"    { return "await "  + format_expr(expr.left) }
+    if k == "Yield"    { return "yield "  + format_expr(expr.left) }
+    if k == "Comptime" { return "comptime " + format_expr(expr.left) }
+    if k == "Resume"   { return "resume(" + format_expr(expr.left) + ")" }
+    if k == "DynCast" {
+        return "dyn " + expr.name + "(" + format_expr(expr.left) + ")"
+    }
+    if k == "HandleWith" { return "handle { ... } with { ... }" }
+    if k == "EffectCall" {
+        return expr.name + "." + expr.value + "(...)"
+    }
+    if k == "Template"   { return "<template>" }
+    if k == "TryCatchExpr" {
+        return "try { ... } catch { ... }"
+    }
+
+    return "/* unknown expr: " + k + " */"
+}
+
+// ══════════════════════════════════════════════════════════════
+// BinOp → string
+// ══════════════════════════════════════════════════════════════
+//
+// Note: parser stores op_tok.value directly (e.g. "+", "==", "&&"),
+// not the enum name. So most cases are identity. Aliases kept for safety.
+fn binop_str(op) {
+    if op == "Add"        { return "+" }
+    if op == "Sub"        { return "-" }
+    if op == "Mul"        { return "*" }
+    if op == "Div"        { return "/" }
+    if op == "Rem"        { return "%" }
+    if op == "Pow"        { return "**" }
+    if op == "Eq"         { return "==" }
+    if op == "Ne"         { return "!=" }
+    if op == "Lt"         { return "<" }
+    if op == "Gt"         { return ">" }
+    if op == "Le"         { return "<=" }
+    if op == "Ge"         { return ">=" }
+    if op == "And"        { return "&&" }
+    if op == "Or"         { return "||" }
+    if op == "Xor"        { return "^^" }
+    if op == "BitAnd"     { return "&" }
+    if op == "BitOr"      { return "|" }
+    if op == "BitXor"     { return "^" }
+    if op == "Assign"     { return "=" }
+    if op == "DeclAssign" { return ":=" }
+    if op == "Range"      { return ".." }
+    if op == "Arrow"      { return "->" }
+    // Fallthrough: op already a literal like "+", "==", "&&"
+    return op
+}
+
+// ══════════════════════════════════════════════════════════════
+// Entrypoint smoke
+// ══════════════════════════════════════════════════════════════
+
+// Future (P6): wire into hexa CLI (`hexa fmt <file>`)
+let _smoke = format_source("")

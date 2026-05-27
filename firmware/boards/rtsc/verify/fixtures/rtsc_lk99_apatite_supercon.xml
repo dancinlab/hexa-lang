@@ -1,0 +1,91 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<feed xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/" xmlns:arxiv="http://arxiv.org/schemas/atom" xmlns="http://www.w3.org/2005/Atom">
+  <id>https://arxiv.org/api/QKWb8KvauOL+YiiwilNjz2jhM7Q</id>
+  <title>arXiv Query: search_query=all:LK-99 OR all:Pb10 OR all:apatite OR all:superconductor&amp;id_list=&amp;start=0&amp;max_results=3</title>
+  <updated>2026-05-07T20:53:03Z</updated>
+  <link href="https://arxiv.org/api/query?search_query=all:LK-99+OR+(all:Pb10+OR+(all:apatite+OR+all:superconductor))&amp;start=0&amp;max_results=3&amp;id_list=" type="application/atom+xml"/>
+  <opensearch:itemsPerPage>3</opensearch:itemsPerPage>
+  <opensearch:totalResults>30542</opensearch:totalResults>
+  <opensearch:startIndex>0</opensearch:startIndex>
+  <entry>
+    <id>http://arxiv.org/abs/2307.16402v2</id>
+    <title>Synthesis of possible room temperature superconductor LK-99:Pb$_9$Cu(PO$_4$)$_6$O</title>
+    <updated>2023-08-26T07:56:33Z</updated>
+    <link href="https://arxiv.org/abs/2307.16402v2" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/2307.16402v2" rel="related" type="application/pdf" title="pdf"/>
+    <summary>The quest for room-temperature superconductors has been teasing scientists and physicists, since its inception in 1911 itself. Several assertions have already been made about room temperature superconductivity but were never verified or reproduced across the labs. The cuprates were the earliest high transition temperature superconductors, and it seems that copper has done the magic once again. Last week, a Korean group synthesized a Lead Apatite-based compound LK-99, showing a T$_c$ of above 400$^\circ$K. The signatures of superconductivity in the compound are very promising, in terms of resistivity (R = 0) and diamagnetism at T$_c$. Although, the heat capacity (C$_p$) did not show the obvious transition at T$_c$. Inspired by the interesting claims of above room temperature superconductivity in LK-99, in this article, we report the synthesis of polycrystalline samples of LK-99, by following the same heat treatment as reported in [1,2] by the two-step precursor method. The phase is confirmed through X-ray diffraction (XRD) measurements, performed after each heat treatment. The room temperature diamagnetism is not evidenced by the levitation of a permanent magnet over the sample or vice versa. Further measurements for the confirmation of bulk superconductivity on variously synthesized samples are underway. Our results on the present LK-99 sample, being synthesized at 925$^\circ$C, as of now do not approve the appearance of bulk superconductivity at room temperature. Further studies with different heat treatments are though, yet underway.</summary>
+    <category term="cond-mat.supr-con" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="cond-mat.mtrl-sci" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="cond-mat.str-el" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2023-07-31T04:41:20Z</published>
+    <arxiv:comment>Short Commun.: 8pages Text + Figs: Comments/suggestion Welcome</arxiv:comment>
+    <arxiv:primary_category term="cond-mat.supr-con"/>
+    <arxiv:journal_ref>Superconductor Science and Technology 36, 10LT02 (2023)</arxiv:journal_ref>
+    <author>
+      <name>Kapil Kumar</name>
+      <arxiv:affiliation>CSIR-NPL, INDIA</arxiv:affiliation>
+    </author>
+    <author>
+      <name>N. K. Karn</name>
+      <arxiv:affiliation>CSIR-NPL, INDIA</arxiv:affiliation>
+    </author>
+    <author>
+      <name>V. P. S. Awana</name>
+      <arxiv:affiliation>CSIR-NPL, INDIA</arxiv:affiliation>
+    </author>
+    <arxiv:doi>10.1088/1361-6668/acf002</arxiv:doi>
+    <link rel="related" href="https://doi.org/10.1088/1361-6668/acf002" title="doi"/>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2309.07928v1</id>
+    <title>Deciphering the Enigma of Cu-Doped Lead Apatite (LK-99): Structural Insights, Electronic Properties, and Implications for Ambient-Pressure Superconductivity</title>
+    <updated>2023-09-12T15:44:41Z</updated>
+    <link href="https://arxiv.org/abs/2309.07928v1" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/2309.07928v1" rel="related" type="application/pdf" title="pdf"/>
+    <summary>The most recent discovery, the Cu-doped lead apatite LK-99, is a proposed room-temperature superconductor operating under ambient pressure. However, this discovery has brought a slew of conflicting results from different scientific groups. While some observed the absence of electrical resistance, others could not confirm any signs of superconductivity in LK-99. Here, we investigate the structural and electronic properties of LK-99 and its antecedent compounds through quantum mechanics (QM) and QM-based molecular dynamics (QM-MD) simulations. Our study elucidates the insulating nature of base compounds, Pb$_{10}$(PO$_4$)$_6$O and Pb$_{10}$(PO$_4$)$_6$(OH)$_2$, spotlighting their large band gaps. Notably, Cu doping in LK-99 disrupts its symmetry, yielding a distorted ground-state crystal structure with a triclinic P1 symmetry and CuO$_4$ square coordination. Such alterations predispose LK-99 to exhibit semiconducting behaviors, characterized by a flat band above the Fermi energy, arising from Cu-3d and O-2p orbitals. In addition, the S doping sustains the triclinic P1 symmetry but leads to a significantly reduced band gap, with a band emerging primarily from Cu-3d and S-3p orbitals. These findings are important in understanding LK-99's structural and electronic properties and provide a strategic compass for the development of high-T$_C$ superconductors.</summary>
+    <category term="cond-mat.supr-con" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="cond-mat.mtrl-sci" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2023-09-12T15:44:41Z</published>
+    <arxiv:comment>24 pages, 4 figures</arxiv:comment>
+    <arxiv:primary_category term="cond-mat.supr-con"/>
+    <author>
+      <name>Jun Li</name>
+    </author>
+    <author>
+      <name>Qi An</name>
+    </author>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2308.01135v4</id>
+    <title>Electronic Structure and Vibrational Stability of Copper-substituted Lead Apatite (LK-99)</title>
+    <updated>2024-03-27T16:49:49Z</updated>
+    <link href="https://arxiv.org/abs/2308.01135v4" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/2308.01135v4" rel="related" type="application/pdf" title="pdf"/>
+    <summary>Two recent preprints in the physics archive (arXiv) have called attention as they claim experimental evidence that a Cu-substituted apatite material (dubbed LK-99) exhibits superconductivity at room temperature and pressure. If this proves to be true, LK-99 will be a ``holy grail" of superconductors. In this work, we used Density Functional Theory (DFT+U) calculations to elucidate some key features of the electronic structure of LK-99. We find two different phases of this material: (i) a hexagonal lattice featuring metallic half-filled and spin-split bands, a nesting of the Fermi surface, a remarkably large electron-phonon coupling, but this lattice is vibrationally unstable. (ii) a triclinic lattice, with the Cu and surrounding O distorted. This lattice is vibrationally stable and its bands correspond to an insulator. In a crystal, the Cu atoms should oscillate between equivalent triclinic positions, with an average close to the hexagonal positions. We discuss the electronic structure expected from these fluctuations and if it is compatible with superconductivity.</summary>
+    <category term="cond-mat.supr-con" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="cond-mat.mtrl-sci" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2023-08-02T13:28:10Z</published>
+    <arxiv:primary_category term="cond-mat.supr-con"/>
+    <arxiv:journal_ref>Phys. Rev. B 109, 144515, 2024</arxiv:journal_ref>
+    <author>
+      <name>J. Cabezas-Escares</name>
+    </author>
+    <author>
+      <name>N. F. Barrera</name>
+    </author>
+    <author>
+      <name>R. H. Lavroff</name>
+    </author>
+    <author>
+      <name>A. N. Alexandrova</name>
+    </author>
+    <author>
+      <name>C. Cardenas</name>
+    </author>
+    <author>
+      <name>F. Munoz</name>
+    </author>
+    <arxiv:doi>10.1103/PhysRevB.109.144515</arxiv:doi>
+    <link rel="related" href="https://doi.org/10.1103/PhysRevB.109.144515" title="doi"/>
+  </entry>
+</feed>

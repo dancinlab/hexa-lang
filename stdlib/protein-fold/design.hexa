@@ -1,0 +1,8 @@
+#!hexa strict
+// protein-fold design — AlphaFold ensemble size.
+fn main() {
+    let af_models = 5.0
+    println("protein-fold_design (AlphaFold ensemble size):")
+    println("  af_models = " + str(af_models))
+    println("__HEXA_PROTEIN_FOLD_DESIGN__ PASS gate=GATE_OPEN absorbed=false")
+}

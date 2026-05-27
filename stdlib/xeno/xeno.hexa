@@ -1,0 +1,468 @@
+#!hexa strict
+// stdlib/xeno/xeno.hexa — xeno stdlib CLI dispatcher
+//
+// @version 0.1.0
+// @capabilities [substrate, neuromorphic, quantum, dispatch, cli, subprocess]
+// @stability stable
+// @since 2026-05-18
+//
+// Runnable entrypoint dispatched by `hexa xeno <topic>` (see self/main.hexa
+// `else if sub == "xeno"` branch).
+//
+// xeno = non-GPU exotic compute substrate SSOT — silicon neuromorphic
+// (AKIDA / Loihi3 / Northpole) + biological organoid (FinalSpark /
+// Cortical Labs DishBrain) + quantum gate (IonQ) + quantum random (QRNG).
+//
+// Topics (8):
+//   hexa xeno                          status (default)
+//   hexa xeno status                   xeno health + sister-repo reachability + substrate inventory
+//   hexa xeno connect <target>         bridge probe (anima | nexus | hive | hexa-brain | all)
+//   hexa xeno invoke <target> [args]   passthrough to a sister repo CLI
+//   hexa xeno fallback                 degraded-mode info (local SSOT only)
+//   hexa xeno list                     substrate inventory (7 substrates)
+//   hexa xeno roadmap <name>           print a substrate roadmap
+//   hexa xeno falsifier [list|run|all] 12-falsifier harness (nexus copy SSOT)
+//   hexa xeno cycle [...]              Akida cycle dispatcher (AKD1000 primary + Cloud fallback)
+//   hexa xeno --help, -h               this help
+//   hexa xeno --version, -v            version
+//
+// This hexa dispatcher absorbs the original bash `bin/xeno` (RFC 048).
+// Substrate roadmaps live in stdlib/xeno/roadmaps/ (absorbed). The Python
+// falsifier/cycle machinery (runner.py / cycle_runner.py) is NOT hexa-native;
+// it remains frozen at github.com/dancinlab/archive_xeno — falsifier/cycle
+// resolve it via $XENO_ROOT, else emit a raw-91 honest fail-loud pointer.
+//
+// Exit codes (xeno doctrine — @D g3 honesty-external):
+//   0  success   1  subcommand error   2  unknown topic   91  unreachable (fail-loud)
+//
+// Source: RFC 048 — absorbs ~/core/xeno v0.1.0 (dancinlab/xeno).
+
+let VERSION = "0.1.0"
+
+fn _shq(s: str) -> str {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+fn _file_exists(p: str) -> bool {
+    return exec("[ -f " + _shq(p) + " ] && echo y || echo n").trim() == "y"
+}
+
+fn _dir_exists(p: str) -> bool {
+    return exec("[ -d " + _shq(p) + " ] && echo y || echo n").trim() == "y"
+}
+
+// _xeno_self_dir — resolve stdlib/xeno/ from this script's own argv path.
+fn _xeno_self_dir() -> str {
+    let argv = args()
+    let mut i = 0
+    while i < len(argv) {
+        if argv[i].ends_with("xeno.hexa") {
+            let cut = argv[i].rfind("/")
+            if cut > 0 { return argv[i].substring(0, cut) }
+        }
+        i = i + 1
+    }
+    return "stdlib/xeno"
+}
+
+// _roadmaps_dir — substrate roadmaps, co-located under stdlib/xeno/roadmaps/.
+fn _roadmaps_dir() -> str {
+    return _xeno_self_dir() + "/roadmaps"
+}
+
+// _xeno_root — root holding the Python falsifier/cycle machinery
+// (scripts/akida/...). $XENO_ROOT env override, else the absorbed
+// stdlib/xeno/ tree itself (scripts/ was absorbed in full per RFC 048).
+fn _xeno_root() -> str {
+    let r = env("XENO_ROOT")
+    if r.len() > 0 && _dir_exists(r) { return r }
+    let self_d = _xeno_self_dir()
+    if _dir_exists(self_d + "/scripts") { return self_d }
+    return ""
+}
+
+fn _home() -> str { return env("HOME") }
+
+let SUBSTRATES = ["akida", "loihi3", "northpole", "finalspark", "cortical_labs", "ionq", "qrng"]
+
+fn _substrate_vendor(name: str) -> str {
+    if name == "akida" { return "BrainChip AKD1000 (silicon neuromorphic)" }
+    if name == "loihi3" { return "Intel (silicon neuromorphic)" }
+    if name == "northpole" { return "IBM (silicon neuromorphic)" }
+    if name == "finalspark" { return "FinalSpark (biological organoid)" }
+    if name == "cortical_labs" { return "Cortical Labs DishBrain (biological organoid)" }
+    if name == "ionq" { return "IonQ (quantum gate)" }
+    if name == "qrng" { return "QRNG (quantum random)" }
+    return "(unknown substrate)"
+}
+
+// ─── sister-repo probe (raw-91 honest C3 — silent skip BANNED) ───
+
+fn _probe_repo(name: str, root: str, entry: str) -> bool {
+    if !_dir_exists(root) {
+        println("  X  " + name + "  unreachable (path missing: " + root + ")")
+        return false
+    }
+    if !_dir_exists(root + "/.git") {
+        println("  /  " + name + "  path exists but not a git repo: " + root)
+        return false
+    }
+    if entry.len() > 0 && !_file_exists(root + "/" + entry) {
+        println("  /  " + name + "  entry missing: " + root + "/" + entry)
+        return false
+    }
+    println("  OK " + name + "  reachable: " + root)
+    return true
+}
+
+fn _emit_fallback_warning(failed: str) {
+    println("")
+    println("--- xeno fallback mode ---")
+    println("  Reason     : " + failed + " unreachable")
+    println("  Mode       : local-ssot-only")
+    println("  Resolution : restore " + failed + " OR set its <REPO>_ROOT env")
+    println("  raw 91 honest C3: silent skip BANNED — this warning is mandatory")
+    println("--------------------------")
+}
+
+// ─── topic: status ───
+
+fn cmd_status() {
+    println("xeno status  (xeno " + VERSION + ")")
+    println("")
+    println("sister repos:")
+    let h = _home()
+    let _a = _probe_repo("anima     ", h + "/core/anima", "bin/anima")
+    let _n = _probe_repo("nexus     ", h + "/core/nexus", "bin/nexus-cli")
+    let _hv = _probe_repo("hive      ", h + "/core/hive", "")
+    let _hb = _probe_repo("hexa-brain", h + "/core/hexa-brain", "")
+    println("")
+    println("substrate inventory (7):")
+    let rdir = _roadmaps_dir()
+    let mut i = 0
+    while i < len(SUBSTRATES) {
+        let s = SUBSTRATES[i]
+        if _file_exists(rdir + "/.roadmap." + s) {
+            println("  OK " + s + "  — " + _substrate_vendor(s))
+        } else {
+            println("  X  " + s + "  (roadmap missing)")
+        }
+        i = i + 1
+    }
+}
+
+// ─── topic: connect ───
+
+fn cmd_connect(a: [str]) {
+    let target = if len(a) > 0 { a[0] } else { "" }
+    if target.len() == 0 {
+        println("xeno connect <anima|nexus|hive|hexa-brain|all>")
+        exit(2)
+    }
+    let h = _home()
+    if target == "anima" {
+        if !_probe_repo("anima", h + "/core/anima", "bin/anima") { _emit_fallback_warning("anima"); exit(91) }
+    } else if target == "nexus" {
+        if !_probe_repo("nexus", h + "/core/nexus", "bin/nexus-cli") { _emit_fallback_warning("nexus"); exit(91) }
+    } else if target == "hive" {
+        if !_probe_repo("hive", h + "/core/hive", "") { _emit_fallback_warning("hive"); exit(91) }
+    } else if target == "hexa-brain" {
+        if !_probe_repo("hexa-brain", h + "/core/hexa-brain", "") { _emit_fallback_warning("hexa-brain"); exit(91) }
+    } else if target == "all" {
+        let mut ok = true
+        if !_probe_repo("anima     ", h + "/core/anima", "bin/anima") { ok = false }
+        if !_probe_repo("nexus     ", h + "/core/nexus", "bin/nexus-cli") { ok = false }
+        if !_probe_repo("hive      ", h + "/core/hive", "") { ok = false }
+        if !_probe_repo("hexa-brain", h + "/core/hexa-brain", "") { ok = false }
+        if !ok { _emit_fallback_warning("one or more sister repos"); exit(91) }
+    } else {
+        println("unknown target: " + target + " (expected: anima|nexus|hive|hexa-brain|all)")
+        exit(2)
+    }
+}
+
+// ─── topic: invoke ───
+
+fn cmd_invoke(a: [str]) {
+    let target = if len(a) > 0 { a[0] } else { "" }
+    if target.len() == 0 {
+        println("xeno invoke <anima|nexus> [args...]")
+        exit(2)
+    }
+    let h = _home()
+    let mut entry = ""
+    if target == "anima" { entry = h + "/core/anima/bin/anima" }
+    else if target == "nexus" { entry = h + "/core/nexus/bin/nexus-cli" }
+    else {
+        println("unknown invoke target: " + target + " (expected: anima|nexus)")
+        exit(2)
+    }
+    if !_file_exists(entry) {
+        _emit_fallback_warning(target)
+        exit(91)
+    }
+    let mut cmd = _shq(entry)
+    let mut i = 1
+    while i < len(a) {
+        cmd = cmd + " " + _shq(a[i])
+        i = i + 1
+    }
+    print(exec(cmd + " 2>&1"))
+}
+
+// ─── topic: fallback ───
+
+fn cmd_fallback() {
+    println("xeno fallback mode (local SSOT only)")
+    println("")
+    println("Available without sister repos:")
+    println("  OK stdlib/xeno/roadmaps/  — 10 substrate roadmaps (absorbed)")
+    println("")
+    println("NOT available in fallback:")
+    println("  - anima Phi pipeline live execution")
+    println("  - nexus 216 lenses / drill / blowup")
+    println("  - hive omega cycle integration")
+    println("  - hexa-brain EEG live spec link")
+    println("  - falsifier / cycle live runs (Python machinery absorbed, needs python3 on PATH)")
+    println("")
+    println("raw 91 honest C3: this fallback is fail-loud (NOT silent).")
+}
+
+// ─── topic: list ───
+
+fn cmd_list() {
+    println("xeno substrate inventory (7 substrates)")
+    println("")
+    let rdir = _roadmaps_dir()
+    let mut i = 0
+    while i < len(SUBSTRATES) {
+        let s = SUBSTRATES[i]
+        let mark = if _file_exists(rdir + "/.roadmap." + s) { "OK" } else { "X " }
+        println("  " + mark + "  " + s + "  — " + _substrate_vendor(s))
+        i = i + 1
+    }
+    println("")
+    println("  roadmap detail: hexa xeno roadmap <name>")
+}
+
+// ─── topic: roadmap ───
+
+fn cmd_roadmap(a: [str]) {
+    let name = if len(a) > 0 { a[0] } else { "" }
+    if name.len() == 0 {
+        cmd_list()
+        return
+    }
+    let rdir = _roadmaps_dir()
+    let f = rdir + "/.roadmap." + name
+    if _file_exists(f) {
+        print(exec("cat " + _shq(f)))
+    } else {
+        println("no roadmap: " + name)
+        println("available: akida loihi3 northpole finalspark cortical_labs ionq qrng")
+        println("           n_substrate nlm_neuromorphic_lm p10_substrate_poc")
+        exit(1)
+    }
+}
+
+// ─── topic: falsifier ───
+
+fn _falsifier_category(fid: str) -> str {
+    if fid == "F-C" { return "architectural" }
+    if fid == "F-L7" { return "QRNG entropy" }
+    if fid == "F-M2" { return "gzip compression" }
+    if fid == "F-M3a" { return "dispatch routing" }
+    if fid == "F-L1" { return "J/op energy [hardware]" }
+    if fid == "F-L1+" { return "sub-Landauer sparsity [hardware]" }
+    if fid == "F-L6" { return "Lyapunov sweep [hardware]" }
+    if fid == "F-M1" { return "Godel-q disagreement [hardware]" }
+    if fid == "F-M3b" { return "Phi substrate-invariance [hardware]" }
+    if fid == "F-M4" { return "trace equivalence [hardware]" }
+    if fid == "F-A" { return "blowup phase-7 [hardware]" }
+    if fid == "F-B" { return "check_* hot-loop [hardware]" }
+    return "(unknown)"
+}
+
+fn cmd_falsifier(a: [str]) {
+    let sub = if len(a) > 0 { a[0] } else { "list" }
+    if sub == "list" {
+        println("xeno falsifier inventory  (nexus 12-falsifier harness, copy SSOT)")
+        println("")
+        let fids = ["F-C", "F-L7", "F-M2", "F-M3a", "F-L1", "F-L1+", "F-L6", "F-M1", "F-M3b", "F-M4", "F-A", "F-B"]
+        let mut i = 0
+        while i < len(fids) {
+            println("  " + fids[i] + "  —  " + _falsifier_category(fids[i]))
+            i = i + 1
+        }
+        println("")
+        println("  run: hexa xeno falsifier run <F-id>   (requires XENO_ROOT → archive_xeno checkout)")
+        return
+    }
+    if sub == "run" || sub == "all" {
+        let root = _xeno_root()
+        if root.len() == 0 {
+            println("xeno falsifier " + sub + ": Python harness unavailable.")
+            _emit_fallback_warning("xeno falsifier runner.py")
+            println("  The 12-falsifier harness (scripts/akida/nexus_origin/runner.py)")
+            println("  is absorbed under stdlib/xeno/scripts/ but needs python3 on PATH.")
+            println("  Set XENO_ROOT to an alternative checkout if needed.")
+            exit(91)
+        }
+        let runner = root + "/scripts/akida/nexus_origin/runner.py"
+        if !_file_exists(runner) {
+            println("xeno falsifier " + sub + ": runner.py missing at " + runner)
+            exit(91)
+        }
+        let mut cmd = "cd " + _shq(root + "/scripts/akida/nexus_origin") + " && python3 runner.py"
+        let mut i = 1
+        while i < len(a) {
+            cmd = cmd + " " + _shq(a[i])
+            i = i + 1
+        }
+        print(exec(cmd + " 2>&1"))
+        return
+    }
+    println("usage: hexa xeno falsifier {list | run <F-id> [args] | all [args]}")
+    exit(2)
+}
+
+// ─── topic: cycle ───
+
+fn cmd_cycle(a: [str]) {
+    let sub = if len(a) > 0 { a[0] } else { "status" }
+    if sub == "status" {
+        println("xeno Akida cycle status  (own 35: AKD1000 primary, Akida Cloud fallback)")
+        println("")
+        let probe = exec("python3 -c 'import akida; assert len(akida.devices())>0' 2>/dev/null && echo primary || echo fallback").trim()
+        if probe == "primary" {
+            println("  PRIMARY active: AKD1000 physical chip")
+            print(exec("python3 -c 'import akida; print(\"  akida pkg:\", akida.__version__)' 2>&1"))
+        } else {
+            println("  PRIMARY unavailable: AKD1000 chip not probed (akida package absent or no device)")
+            println("  FALLBACK path: Akida Cloud")
+        }
+        println("")
+        println("  cycle phases: D-1 prep / D+0 connect-upload-run / D+1 exfil-verdict")
+        println("  full cycle machinery (cycle_runner.py) is frozen at github.com/dancinlab/archive_xeno")
+        return
+    }
+    // probe / capabilities / measure / prep / run / exfil / verdict / remote — Python machinery.
+    let root = _xeno_root()
+    if root.len() == 0 {
+        println("xeno cycle " + sub + ": Akida cycle machinery unavailable.")
+        _emit_fallback_warning("xeno cycle_runner.py")
+        println("  scripts/akida/cycle_runner.py is absorbed under stdlib/xeno/scripts/")
+        println("  but needs python3 on PATH. Set XENO_ROOT for an alternative checkout.")
+        exit(91)
+    }
+    let cr = root + "/scripts/akida/cycle_runner.py"
+    if !_file_exists(cr) {
+        println("xeno cycle " + sub + ": cycle_runner.py missing at " + cr)
+        exit(91)
+    }
+    let mut cmd = "python3 " + _shq(cr) + " " + _shq(sub)
+    let mut i = 1
+    while i < len(a) {
+        cmd = cmd + " " + _shq(a[i])
+        i = i + 1
+    }
+    print(exec(cmd + " 2>&1"))
+}
+
+// ─── version / help ───
+
+fn cmd_version() {
+    println("hexa xeno " + VERSION)
+    println("stdlib/xeno — RFC 048 absorption of dancinlab/xeno v0.1.0")
+    println("license: MIT  |  DOI: 10.5281/zenodo.20102972")
+}
+
+fn cmd_help() {
+    println("hexa xeno " + VERSION + " — non-GPU exotic compute substrate SSOT")
+    println("")
+    println("USAGE")
+    println("  hexa xeno [topic] [args...]")
+    println("")
+    println("TOPICS")
+    println("  status                    xeno health + sister-repo reachability + substrate inventory (default)")
+    println("  connect <target>          bridge probe (anima | nexus | hive | hexa-brain | all)")
+    println("  invoke <target> [args]    passthrough to a sister repo CLI (anima | nexus)")
+    println("  fallback                  degraded-mode info (local SSOT only)")
+    println("  list                      substrate inventory (7 substrates)")
+    println("  roadmap <name>            print a substrate roadmap")
+    println("  falsifier [list|run|all]  12-falsifier harness (nexus copy SSOT)")
+    println("  cycle [status|probe|...]  Akida cycle dispatcher (AKD1000 primary + Cloud fallback)")
+    println("  --help, -h                this help")
+    println("  --version, -v             version")
+    println("")
+    println("SUBSTRATES (7)")
+    println("  akida          BrainChip AKD1000     silicon neuromorphic")
+    println("  loihi3         Intel                 silicon neuromorphic")
+    println("  northpole      IBM                   silicon neuromorphic")
+    println("  finalspark     FinalSpark            biological organoid")
+    println("  cortical_labs  Cortical Labs DishBrain biological organoid")
+    println("  ionq           IonQ                  quantum gate")
+    println("  qrng           QRNG                  quantum random")
+    println("")
+    println("EXIT CODES")
+    println("  0  success   1  subcommand error   2  unknown topic")
+    println("  91 connection failed (raw 91 honest C3 fail-loud — silent skip BANNED)")
+    println("")
+    println("ENV")
+    println("  XENO_ROOT                 archive_xeno checkout (enables falsifier run / cycle Python machinery)")
+    println("")
+    println("RFC 048 absorption · historical tombstone: github.com/dancinlab/archive_xeno")
+}
+
+fn main() {
+    let argv = args()
+    let n = len(argv)
+
+    let mut topic_idx = -1
+    let mut i = 0
+    while i < n {
+        if argv[i].ends_with(".hexa") { topic_idx = i + 1; break }
+        i = i + 1
+    }
+    if topic_idx < 0 { topic_idx = 2 }
+
+    // No topic → status (default).
+    if topic_idx >= n {
+        cmd_status()
+        return
+    }
+
+    let topic = argv[topic_idx]
+    let mut rest: [str] = []
+    let mut j = topic_idx + 1
+    while j < n {
+        rest.push(argv[j])
+        j = j + 1
+    }
+
+    if topic == "--help" || topic == "-h" || topic == "help" {
+        cmd_help()
+    } else if topic == "--version" || topic == "-v" || topic == "version" {
+        cmd_version()
+    } else if topic == "status" {
+        cmd_status()
+    } else if topic == "connect" {
+        cmd_connect(rest)
+    } else if topic == "invoke" {
+        cmd_invoke(rest)
+    } else if topic == "fallback" {
+        cmd_fallback()
+    } else if topic == "list" {
+        cmd_list()
+    } else if topic == "roadmap" {
+        cmd_roadmap(rest)
+    } else if topic == "falsifier" {
+        cmd_falsifier(rest)
+    } else if topic == "cycle" {
+        cmd_cycle(rest)
+    } else {
+        println("hexa xeno: unknown topic '" + topic + "'")
+        println("run 'hexa xeno --help' for usage")
+        exit(2)
+    }
+}

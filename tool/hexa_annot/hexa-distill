@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# hexa-distill — model-distillation annotation extractor (AST-backed)
+# Recognizes: @distill, @prune, @lora, @adapter, @kd
+set -eu
+
+usage() {
+    cat >&2 <<EOF
+usage: hexa-distill [--kind distill|prune|lora|adapter|kd] <file.hexa> [file2.hexa ...]
+       hexa-distill [--kind ...] --dir <directory>
+EOF
+    exit 1
+}
+
+case "${1:-}" in
+    -h|--help|"") usage ;;
+esac
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+. "${SCRIPT_DIR}/_ast_extract.sh"
+
+filter_kind=""
+ARGS=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --kind)
+            shift; [ $# -ge 1 ] || usage
+            case "$1" in
+                distill|prune|lora|adapter|kd) filter_kind="$1" ;;
+                *) echo "ERROR: invalid kind: $1" >&2; usage ;;
+            esac
+            shift ;;
+        -h|--help) usage ;;
+        *) ARGS+=("$1"); shift ;;
+    esac
+done
+
+if ! resolve_files "${ARGS[@]}"; then exit 1; fi
+
+if [ ${#FILES[@]} -eq 0 ]; then
+    printf '{"version":"0.2","source":"ast","annotations":[],"summary":{"distill":0,"prune":0,"lora":0,"adapter":0,"kd":0,"total":0}}\n'
+    exit 0
+fi
+
+run_ast_extract | ast_emit_kindmap_json "distill,prune,lora,adapter,kd" "$filter_kind"

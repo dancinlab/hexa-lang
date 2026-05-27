@@ -1,0 +1,249 @@
+// RFC 055 055-P0 - hexa-native NVPTX emit | target=nvptx64-nvidia-cuda-sm80
+.version 7.0
+.target sm_80
+.address_size 64
+
+.visible .entry probe_logsumexp_f64 (
+    .param .u64 probe_logsumexp_f64_param_0,
+    .param .u64 probe_logsumexp_f64_param_1,
+    .param .u64 probe_logsumexp_f64_param_2
+)
+{
+    .shared .align 8 .b8 _hexa_sh_probe_logsumexp_f64[2048];
+    .reg .u64 %rd2;
+    .reg .u64 %sh4;
+    .reg .f64 %fd3;
+    .reg .u32 %r5;
+    .reg .u64 %rd6;
+    .reg .u64 %rd7;
+    .reg .pred %p8;
+    .reg .u64 %rd10;
+    .reg .f64 %fd12;
+    .reg .f64 %fd14;
+    .reg .f64 %fd15;
+    .reg .u64 %rd16;
+    .reg .pred %p17;
+    .reg .pred %p18;
+    .reg .f64 %fd32;
+    .reg .f64 %fd33;
+    .reg .f64 %fd34;
+    .reg .pred %p35;
+    .reg .f64 %fd21;
+    .reg .f64 %fd22;
+    .reg .u64 %rd24;
+    .reg .f64 %fd25;
+    .reg .f64 %fd26;
+    .reg .pred %p27;
+    .reg .f64 %fd30;
+    .reg .u64 %rd31;
+    .reg .f64 %fd39;
+    .reg .f64 %fd40;
+    .reg .f64 %fd41;
+    .reg .f64 %fd43;
+    .reg .pred %p44;
+    .reg .pred %p45;
+    .reg .pred %p56;
+    .reg .f64 %fd49;
+    .reg .u64 %rd51;
+    .reg .f64 %fd52;
+    .reg .f64 %fd53;
+    .reg .f64 %fd54;
+    .reg .u64 %rd55;
+    .reg .f64 %fd58;
+    .reg .f64 %fd59;
+    .reg .f64 %fd60;
+    .reg .u64 %rd0;
+    .reg .u64 %rd1;
+    .reg .u64 %rd_idxa_12;
+    .reg .u64 %rd_idxa_14;
+    .reg .u64 %rd_idxa_32;
+    .reg .u64 %rd_idxa_21;
+    .reg .u64 %rd_idxa_25;
+    .reg .u64 %rd_idxa_39;
+    .reg .u64 %rd_idxa_49;
+    .reg .u64 %rd_idxa_52;
+    .reg .u64 %rd_idxa_58;
+    .reg .u64 %rd_idxs_addr;
+    .reg .f64 %fd_exp_t_41;
+    .reg .f64 %fd_exp_kf_41;
+    .reg .f64 %fd_exp_r_41;
+    .reg .f64 %fd_exp_p_41;
+    .reg .f64 %fd_exp_pow2k_41;
+    .reg .u64 %rd_exp_k_41;
+    .reg .u64 %rd_exp_b_41;
+    .reg .f64 %fd_log_m_59;
+    .reg .f64 %fd_log_y_59;
+    .reg .f64 %fd_log_y2_59;
+    .reg .f64 %fd_log_p_59;
+    .reg .u64 %rd_log_b_59;
+    .reg .u64 %rd_log_k_59;
+    .reg .u64 %rd_idx_off_10_8;
+$L_0:
+    ld.param.u64 %rd0, [probe_logsumexp_f64_param_0];  // load kernel param 0 into reg
+    ld.param.u64 %rd1, [probe_logsumexp_f64_param_1];  // load kernel param 1 into reg
+    ld.param.u64 %rd2, [probe_logsumexp_f64_param_2];  // load kernel param 2 into reg
+    mov.u64 %sh4, _hexa_sh_probe_logsumexp_f64 + 0;  // init @shared base = _hexa_sh_probe_logsumexp_f64 + 0
+    // PR-C piece 6 - skipped default-init STMT_ASSIGN for SHARED-bank dst (op=let, id=4)
+    mov.u32 %r5, %tid.x;  // gpu_thread_id_x()
+    cvt.s64.s32 %rd6, %r5;  // to_i64 (s32 to s64)
+    mov.u64 %rd7, %rd6;  // assign
+    setp.lt.s64 %p8, %rd7, %rd2;  // cmp <
+    @%p8 bra $L_1;  // br_cond true -> $L_1
+    bra $L_2;  // br_cond false -> $L_2
+$L_1:
+    mov.b64 %rd10, %rd7;  // to_i64 (widen no-op)
+    mul.lo.s64 %rd_idx_off_10_8, %rd10, 8;  // shared idx byte off = idx * 8
+    add.s64 %rd_idxa_12, %rd_idx_off_10_8, %rd0;  // index addr = shared_off + base
+    ld.global.f64 %fd12, [%rd_idxa_12];  // ld base[idx] (f64)
+    add.s64 %rd_idxs_addr, %rd_idx_off_10_8, %sh4;  // index_set addr = shared_off + base
+    st.shared.f64 [%rd_idxs_addr], %fd12;  // st base[idx] = val .shared (f64)
+    bra $L_3;  // br -> $L_3
+$L_2:
+    mul.lo.s64 %rd_idxa_14, 0, 8;  // index byte off = idx * 8
+    add.s64 %rd_idxa_14, %rd_idxa_14, %rd0;  // index addr = base + off
+    ld.global.f64 %fd14, [%rd_idxa_14];  // ld base[idx] (f64)
+    add.s64 %rd_idxs_addr, %rd_idx_off_10_8, %sh4;  // index_set addr = shared_off + base
+    st.shared.f64 [%rd_idxs_addr], %fd14;  // st base[idx] = val .shared (f64)
+    bra $L_3;  // br -> $L_3
+$L_3:
+    bar.sync 0;  // gpu_barrier()
+    mov.u64 %rd16, 128;  // assign
+    bra $L_4;  // br -> $L_4
+$L_4:
+    setp.gt.s64 %p17, %rd16, 0;  // cmp >
+    @%p17 bra $L_5;  // br_cond true -> $L_5
+    bra $L_6;  // br_cond false -> $L_6
+$L_5:
+    setp.lt.s64 %p18, %rd7, %rd16;  // cmp <
+    @%p18 bra $L_7;  // br_cond true -> $L_7
+    bra $L_8;  // br_cond false -> $L_8
+$L_6:
+    mul.lo.s64 %rd_idxa_32, 0, 8;  // index byte off = idx * 8
+    add.s64 %rd_idxa_32, %rd_idxa_32, %sh4;  // index addr = base + off
+    ld.shared.f64 %fd32, [%rd_idxa_32];  // ld base[idx] .shared (f64)
+    mov.f64 %fd33, %fd32;  // assign
+    bar.sync 0;  // gpu_barrier()
+    setp.lt.s64 %p35, %rd7, %rd2;  // cmp <
+    @%p35 bra $L_11;  // br_cond true -> $L_11
+    bra $L_12;  // br_cond false -> $L_12
+$L_7:
+    add.s64 %rd_idxa_21, %rd_idx_off_10_8, %sh4;  // index addr = shared_off + base
+    ld.shared.f64 %fd21, [%rd_idxa_21];  // ld base[idx] .shared (f64)
+    mov.f64 %fd22, %fd21;  // assign
+    add.s64 %rd24, %rd10, %rd16;  // binop +
+    mul.lo.s64 %rd_idxa_25, %rd24, 8;  // index byte off = idx * 8
+    add.s64 %rd_idxa_25, %rd_idxa_25, %sh4;  // index addr = base + off
+    ld.shared.f64 %fd25, [%rd_idxa_25];  // ld base[idx] .shared (f64)
+    mov.f64 %fd26, %fd25;  // assign
+    setp.gt.f64 %p27, %fd26, %fd22;  // cmp >
+    @%p27 bra $L_9;  // br_cond true -> $L_9
+    bra $L_10;  // br_cond false -> $L_10
+$L_8:
+    bar.sync 0;  // gpu_barrier()
+    div.s64 %rd31, %rd16, 2;  // binop /
+    mov.u64 %rd16, %rd31;  // assign
+    bra $L_4;  // br -> $L_4
+$L_9:
+    add.s64 %rd_idxs_addr, %rd_idx_off_10_8, %sh4;  // index_set addr = shared_off + base
+    st.shared.f64 [%rd_idxs_addr], %fd26;  // st base[idx] = val .shared (f64)
+    bra $L_10;  // br -> $L_10
+$L_10:
+    bra $L_8;  // br -> $L_8
+$L_11:
+    add.s64 %rd_idxa_39, %rd_idx_off_10_8, %rd0;  // index addr = shared_off + base
+    ld.global.f64 %fd39, [%rd_idxa_39];  // ld base[idx] (f64)
+    sub.f64 %fd40, %fd39, %fd33;  // binop -
+    mul.f64 %fd_exp_t_41, %fd40, 0d3FF71547652B82FE;  // exp f64: t = x * log2(e)
+    cvt.rni.f64.f64 %fd_exp_kf_41, %fd_exp_t_41;  // exp f64: kf = round(t)
+    cvt.rni.s64.f64 %rd_exp_k_41, %fd_exp_kf_41;  // exp f64: k = (s64) kf
+    mul.f64 %fd_exp_t_41, %fd_exp_kf_41, 0d3FE62E42FEE00000;  // exp f64: t = kf * ln2_hi
+    sub.f64 %fd_exp_r_41, %fd40, %fd_exp_t_41;  // exp f64: r = x - kf*ln2_hi
+    mul.f64 %fd_exp_t_41, %fd_exp_kf_41, 0d3DEA39EF35793C76;  // exp f64: t = kf * ln2_lo
+    sub.f64 %fd_exp_r_41, %fd_exp_r_41, %fd_exp_t_41;  // exp f64: r -= kf*ln2_lo (Cody-Waite)
+    mov.f64 %fd_exp_p_41, 0d3E927E4FB7789F5C;  // exp f64 Horner: p = C10 (1/10!)
+    fma.rn.f64 %fd_exp_p_41, %fd_exp_r_41, %fd_exp_p_41, 0d3EC71DE3A556C734;  // exp f64 Horner step
+    fma.rn.f64 %fd_exp_p_41, %fd_exp_r_41, %fd_exp_p_41, 0d3EFA01A01A01A01A;  // exp f64 Horner step
+    fma.rn.f64 %fd_exp_p_41, %fd_exp_r_41, %fd_exp_p_41, 0d3F2A01A01A01A01A;  // exp f64 Horner step
+    fma.rn.f64 %fd_exp_p_41, %fd_exp_r_41, %fd_exp_p_41, 0d3F56C16C16C16C17;  // exp f64 Horner step
+    fma.rn.f64 %fd_exp_p_41, %fd_exp_r_41, %fd_exp_p_41, 0d3F81111111111111;  // exp f64 Horner step
+    fma.rn.f64 %fd_exp_p_41, %fd_exp_r_41, %fd_exp_p_41, 0d3FA5555555555555;  // exp f64 Horner step
+    fma.rn.f64 %fd_exp_p_41, %fd_exp_r_41, %fd_exp_p_41, 0d3FC5555555555555;  // exp f64 Horner step
+    fma.rn.f64 %fd_exp_p_41, %fd_exp_r_41, %fd_exp_p_41, 0d3FE0000000000000;  // exp f64 Horner step
+    fma.rn.f64 %fd_exp_p_41, %fd_exp_r_41, %fd_exp_p_41, 0d3FF0000000000000;  // exp f64 Horner step
+    fma.rn.f64 %fd_exp_p_41, %fd_exp_r_41, %fd_exp_p_41, 0d3FF0000000000000;  // exp f64 Horner step
+    add.s64 %rd_exp_b_41, %rd_exp_k_41, 1023;  // exp f64: b = k + 1023 (IEEE bias)
+    shl.b64 %rd_exp_b_41, %rd_exp_b_41, 52;  // exp f64: b <<= 52 (exponent field)
+    mov.b64 %fd_exp_pow2k_41, %rd_exp_b_41;  // exp f64: pow2k = bit-cast b
+    mul.f64 %fd41, %fd_exp_p_41, %fd_exp_pow2k_41;  // exp f64: dst = poly * 2^k = e^x
+    add.s64 %rd_idxs_addr, %rd_idx_off_10_8, %sh4;  // index_set addr = shared_off + base
+    st.shared.f64 [%rd_idxs_addr], %fd41;  // st base[idx] = val .shared (f64)
+    bra $L_13;  // br -> $L_13
+$L_12:
+    add.s64 %rd_idxs_addr, %rd_idx_off_10_8, %sh4;  // index_set addr = shared_off + base
+    st.shared.f64 [%rd_idxs_addr], 0.0;  // st base[idx] = val .shared (f64)
+    bra $L_13;  // br -> $L_13
+$L_13:
+    bar.sync 0;  // gpu_barrier()
+    mov.u64 %rd16, 128;  // assign
+    bra $L_14;  // br -> $L_14
+$L_14:
+    setp.gt.s64 %p44, %rd16, 0;  // cmp >
+    @%p44 bra $L_15;  // br_cond true -> $L_15
+    bra $L_16;  // br_cond false -> $L_16
+$L_15:
+    setp.lt.s64 %p45, %rd7, %rd16;  // cmp <
+    @%p45 bra $L_17;  // br_cond true -> $L_17
+    bra $L_18;  // br_cond false -> $L_18
+$L_16:
+    setp.eq.s64 %p56, %rd7, 0;  // cmp ==
+    @%p56 bra $L_19;  // br_cond true -> $L_19
+    bra $L_20;  // br_cond false -> $L_20
+$L_17:
+    add.s64 %rd_idxa_49, %rd_idx_off_10_8, %sh4;  // index addr = shared_off + base
+    ld.shared.f64 %fd49, [%rd_idxa_49];  // ld base[idx] .shared (f64)
+    add.s64 %rd51, %rd10, %rd16;  // binop +
+    mul.lo.s64 %rd_idxa_52, %rd51, 8;  // index byte off = idx * 8
+    add.s64 %rd_idxa_52, %rd_idxa_52, %sh4;  // index addr = base + off
+    ld.shared.f64 %fd52, [%rd_idxa_52];  // ld base[idx] .shared (f64)
+    add.f64 %fd53, %fd49, %fd52;  // binop +
+    add.s64 %rd_idxs_addr, %rd_idx_off_10_8, %sh4;  // index_set addr = shared_off + base
+    st.shared.f64 [%rd_idxs_addr], %fd53;  // st base[idx] = val .shared (f64)
+    bra $L_18;  // br -> $L_18
+$L_18:
+    bar.sync 0;  // gpu_barrier()
+    div.s64 %rd55, %rd16, 2;  // binop /
+    mov.u64 %rd16, %rd55;  // assign
+    bra $L_14;  // br -> $L_14
+$L_19:
+    mul.lo.s64 %rd_idxa_58, 0, 8;  // index byte off = idx * 8
+    add.s64 %rd_idxa_58, %rd_idxa_58, %sh4;  // index addr = base + off
+    ld.shared.f64 %fd58, [%rd_idxa_58];  // ld base[idx] .shared (f64)
+    mov.b64 %rd_log_b_59, %fd58;  // log f64: bits = bit-cast x
+    shr.s64 %rd_log_k_59, %rd_log_b_59, 52;  // log f64: k_raw = bits >> 52
+    sub.s64 %rd_log_k_59, %rd_log_k_59, 1023;  // log f64: k = k_raw - 1023
+    cvt.rn.f64.s64 %fd_log_p_59, %rd_log_k_59;  // log f64: kf = (f64) k
+    and.b64 %rd_log_b_59, %rd_log_b_59, 0x000FFFFFFFFFFFFF;  // log f64: keep mantissa bits
+    or.b64 %rd_log_b_59, %rd_log_b_59, 0x3FF0000000000000;  // log f64: set exponent bias = 1023
+    mov.b64 %fd_log_m_59, %rd_log_b_59;  // log f64: m = bit-cast back, m in [1,2)
+    sub.f64 %fd_log_y_59, %fd_log_m_59, 0d3FF0000000000000;  // log f64: m - 1
+    add.f64 %fd_log_m_59, %fd_log_m_59, 0d3FF0000000000000;  // log f64: m + 1 (reuse m_reg)
+    div.rn.f64 %fd_log_y_59, %fd_log_y_59, %fd_log_m_59;  // log f64: y = (m-1)/(m+1)
+    mul.f64 %fd_log_y2_59, %fd_log_y_59, %fd_log_y_59;  // log f64: y^2 = y * y
+    mov.f64 %fd_log_p_59, 0d3FB745D1745D1746;  // log f64 Horner: p = C5 (= 1/11)
+    fma.rn.f64 %fd_log_p_59, %fd_log_y2_59, %fd_log_p_59, 0d3FBC71C71C71C71C;  // log f64 Horner step
+    fma.rn.f64 %fd_log_p_59, %fd_log_y2_59, %fd_log_p_59, 0d3FC2492492492492;  // log f64 Horner step
+    fma.rn.f64 %fd_log_p_59, %fd_log_y2_59, %fd_log_p_59, 0d3FC999999999999A;  // log f64 Horner step
+    fma.rn.f64 %fd_log_p_59, %fd_log_y2_59, %fd_log_p_59, 0d3FD5555555555555;  // log f64 Horner step
+    fma.rn.f64 %fd_log_p_59, %fd_log_y2_59, %fd_log_p_59, 0d3FF0000000000000;  // log f64 Horner step
+    mul.f64 %fd_log_p_59, %fd_log_y_59, %fd_log_p_59;  // log f64: y * P
+    mul.f64 %fd_log_p_59, %fd_log_p_59, 0d4000000000000000;  // log f64: 2 * y * P = log(m)
+    cvt.rn.f64.s64 %fd_log_y2_59, %rd_log_k_59;  // log f64: kf = (f64) k (re-cvt)
+    fma.rn.f64 %fd59, %fd_log_y2_59, 0d3FE62E42FEFA39EF, %fd_log_p_59;  // log f64: dst = kf*ln2 + log(m)
+    add.f64 %fd60, %fd33, %fd59;  // binop +
+    mul.lo.s64 %rd_idxs_addr, 0, 8;  // index_set byte off = idx * 8
+    add.s64 %rd_idxs_addr, %rd_idxs_addr, %rd1;  // index_set addr = base + off
+    st.global.f64 [%rd_idxs_addr], %fd60;  // st base[idx] = val (f64)
+    bra $L_20;  // br -> $L_20
+$L_20:
+    ret;  // return
+}

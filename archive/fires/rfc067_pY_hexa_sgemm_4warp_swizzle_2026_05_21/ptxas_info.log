@@ -1,0 +1,30 @@
+=== shape 256 (sgemm_4warp_swizzle_256x256_grid) ===
+
+
+shape 256 cuFuncGetAttribute: regs/thd=64, shmem=8192 B, max_thd_per_block=1024
+
+=== shape 384 (sgemm_4warp_swizzle_384x384_grid) ===
+
+
+shape 384 cuFuncGetAttribute: regs/thd=64, shmem=8192 B, max_thd_per_block=1024
+
+=== shape 512 (sgemm_4warp_swizzle_512x512_grid) ===
+
+
+shape 512 cuFuncGetAttribute: regs/thd=64, shmem=8192 B, max_thd_per_block=1024
+
+=== shape 768 (sgemm_4warp_swizzle_768x768_grid) ===
+
+
+shape 768 cuFuncGetAttribute: regs/thd=64, shmem=8192 B, max_thd_per_block=1024
+
+=== shape 1024 (sgemm_4warp_swizzle_1024x1024_grid) ===
+
+
+shape 1024 cuFuncGetAttribute: regs/thd=64, shmem=8192 B, max_thd_per_block=1024
+
+=== shape 1536 (sgemm_4warp_swizzle_1536x1536_grid) ===
+
+
+shape 1536 cuFuncGetAttribute: regs/thd=64, shmem=8192 B, max_thd_per_block=1024
+

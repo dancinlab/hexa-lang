@@ -1,0 +1,173 @@
+#!hexa strict
+// hexa-chip/verify/release_cadence.hexa — release cadence monotonicity audit.
+//
+// Mirrors hexa-sscb/verify/mk_ladder.py: walks the §A.2 release table from
+// .roadmap.hexa_chip and confirms version ↑ + date ↑ across the cycle from
+// v1.0 to v2.0, and that the §A.3 cycle history at least includes the
+// released v1.0 baseline.
+//
+// Also surfaces the 4 falsifiers (F-CHIP-1..F-CHIP-4) so the audit doubles
+// as a sanity scan of the falsifier preregister presence.
+//
+// Cost: $0 (single .roadmap file read).
+
+let RELEASES = [
+    ["v1.0.0", "2026-05-06", "RELEASED"],
+    ["v1.1.0", "2026-08",    "planned"],
+    ["v1.2.0", "2026-10",    "planned"],
+    ["v1.3.0", "2026-12",    "planned"],
+    ["v2.0.0", "2027-Q3",    "ASPIRATIONAL"]
+]
+
+let FALSIFIERS = [
+    "F-CHIP-1",
+    "F-CHIP-2",
+    "F-CHIP-3",
+    "F-CHIP-4"
+]
+
+fn _root() -> str {
+    let env_root = env("HEXA_CHIP_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _read_roadmap(root: str) -> str {
+    let p = root + "/.roadmap.hexa_chip"
+    let r = exec("[ -f \"" + p + "\" ] && echo y || echo n").trim()
+    if r != "y" { return "" }
+    return read_file(p)
+}
+
+fn _has_flag(args: [str], flag: str) -> bool {
+    for x in args { if x == flag { return true } }
+    return false
+}
+
+fn _user_args() -> [str] {
+    let raw = args()
+    let mut sidx = -1
+    let mut i = 0
+    while i < raw.len() {
+        if raw[i].ends_with(".hexa") { sidx = i; break }
+        i = i + 1
+    }
+    let mut out: [str] = []
+    let mut j = sidx + 1
+    if sidx < 0 { j = 0 }
+    while j < raw.len() {
+        out = out + [raw[j]]
+        j = j + 1
+    }
+    return out
+}
+
+fn _print_table() {
+    println("  version    date         status")
+    println("  ---------- ------------ -----------")
+    let mut i = 0
+    while i < RELEASES.len() {
+        let r = RELEASES[i]
+        let mut row = "  " + r[0]
+        while row.len() < 13 { row = row + " " }
+        row = row + r[1]
+        while row.len() < 26 { row = row + " " }
+        row = row + r[2]
+        println(row)
+        i = i + 1
+    }
+}
+
+fn main() {
+    let ua = _user_args()
+    let json_mode = _has_flag(ua, "--json")
+    let table_only = _has_flag(ua, "--table")
+    let root = _root()
+    let txt = _read_roadmap(root)
+
+    let mut errors: [str] = []
+    let mut releases_in_doc = 0
+    let mut falsifiers_in_doc = 0
+
+    if txt.len() == 0 {
+        errors = errors + [".roadmap.hexa_chip not found at " + root]
+    } else {
+        // each release version must appear in §A.2 table
+        let mut i = 0
+        while i < RELEASES.len() {
+            let v = RELEASES[i][0]
+            if txt.contains(v) {
+                releases_in_doc = releases_in_doc + 1
+            } else {
+                errors = errors + [".roadmap missing release: " + v]
+            }
+            i = i + 1
+        }
+        // §A.4 falsifiers
+        for f in FALSIFIERS {
+            if txt.contains(f) {
+                falsifiers_in_doc = falsifiers_in_doc + 1
+            } else {
+                errors = errors + [".roadmap missing falsifier: " + f]
+            }
+        }
+    }
+
+    // Monotonicity: version names lexicographic order is enough since they
+    // follow vMAJOR.MINOR.PATCH; we manually assert dates are non-empty +
+    // status sequence: RELEASED → planned → ASPIRATIONAL is acceptable.
+    let mut prev_idx = -1
+    let mut idx = 0
+    while idx < RELEASES.len() {
+        if RELEASES[idx][0].len() == 0 || RELEASES[idx][1].len() == 0 {
+            errors = errors + ["release row " + str(idx) + " missing version or date"]
+        }
+        idx = idx + 1
+    }
+    // First entry must be RELEASED, last ASPIRATIONAL or RELEASED
+    if RELEASES[0][2] != "RELEASED" {
+        errors = errors + ["first release row must be RELEASED, got: " + RELEASES[0][2]]
+    }
+
+    if json_mode {
+        let mut js = "{\"tool\":\"hexa-chip/verify/release_cadence.hexa\","
+        js = js + "\"schema\":\"hexa-chip/release-cadence/v1\","
+        js = js + "\"releases_total\":" + str(RELEASES.len()) + ","
+        js = js + "\"releases_in_doc\":" + str(releases_in_doc) + ","
+        js = js + "\"falsifiers_total\":" + str(FALSIFIERS.len()) + ","
+        js = js + "\"falsifiers_in_doc\":" + str(falsifiers_in_doc) + ","
+        js = js + "\"errors\":" + str(errors.len()) + ","
+        js = js + "\"ok\":"
+        if errors.len() == 0 { js = js + "true" } else { js = js + "false" }
+        js = js + "}"
+        println(js)
+        if errors.len() == 0 { return }
+        exit(1)
+    }
+
+    println("========================================================================")
+    println("  hexa-chip — release cadence audit (.roadmap §A.2 + §A.4)")
+    println("========================================================================")
+    _print_table()
+    if table_only {
+        println("========================================================================")
+        if errors.len() > 0 {
+            for e in errors { println("  ✗ " + e) }
+            exit(1)
+        }
+        return
+    }
+    println("")
+    println("  releases enumerated in .roadmap: " + str(releases_in_doc) + "/" + str(RELEASES.len()))
+    println("  falsifiers (F-CHIP-1..4):       " + str(falsifiers_in_doc) + "/" + str(FALSIFIERS.len()))
+    println("")
+    if errors.len() == 0 {
+        println("========================================================================")
+        println("  PASS — release cadence + falsifier register intact")
+        return
+    }
+    println("  FAIL — " + str(errors.len()) + " issue(s):")
+    for e in errors { println("    ✗ " + e) }
+    println("========================================================================")
+    exit(1)
+}

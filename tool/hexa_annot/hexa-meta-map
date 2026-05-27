@@ -1,0 +1,193 @@
+#!/usr/bin/env bash
+# hexa-meta-map — metacognition annotation extractor (AST-backed)
+# Recognizes: @meta, @reflect, @introspect, @self_model, @theory_of_mind, @qualia
+# Summary includes the unique set of `phase=` values seen on @reflect.
+set -eu
+
+usage() {
+    cat >&2 <<EOF
+usage: hexa-meta-map [--kind meta|reflect|introspect|self_model|theory_of_mind|qualia] <file.hexa> [file2.hexa ...]
+       hexa-meta-map [--kind ...] --dir <directory>
+EOF
+    exit 1
+}
+
+case "${1:-}" in
+    -h|--help|"") usage ;;
+esac
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+. "${SCRIPT_DIR}/_ast_extract.sh"
+
+filter_kind=""
+ARGS=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --kind)
+            shift; [ $# -ge 1 ] || usage
+            case "$1" in
+                meta|reflect|introspect|self_model|theory_of_mind|qualia) filter_kind="$1" ;;
+                *) echo "ERROR: invalid kind: $1" >&2; usage ;;
+            esac
+            shift ;;
+        -h|--help) usage ;;
+        *) ARGS+=("$1"); shift ;;
+    esac
+done
+
+if ! resolve_files "${ARGS[@]}"; then exit 1; fi
+if [ ${#FILES[@]} -eq 0 ]; then
+    printf '{"version":"0.2","source":"ast","meta_annotations":[],"summary":{"meta":0,"reflect":0,"introspect":0,"self_model":0,"theory_of_mind":0,"qualia":0,"total":0,"phases_covered":[]}}\n'
+    exit 0
+fi
+
+run_ast_extract | awk -v filter="$filter_kind" '
+function json_escape(s,   r) {
+    r = s; gsub(/\\/, "\\\\", r); gsub(/"/, "\\\"", r); gsub(/\t/, "\\t", r); gsub(/\r/, "\\r", r); gsub(/\n/, "\\n", r); return r
+}
+function decode_esc(s,   out, i, n, c, nc) {
+    out = ""; n = length(s); i = 1
+    while (i <= n) {
+        c = substr(s, i, 1)
+        if (c == "\\" && i < n) {
+            nc = substr(s, i + 1, 1)
+            if (nc == "n")  { out = out "\n"; i += 2; continue }
+            if (nc == "r")  { out = out "\r"; i += 2; continue }
+            if (nc == "t")  { out = out "\t"; i += 2; continue }
+            if (nc == "\\") { out = out "\\"; i += 2; continue }
+        }
+        out = out c; i++
+    }
+    return out
+}
+function kv_extract(raw, key,    s, pat, pos, rest, val, n, i, c, nc) {
+    s = raw
+    pat = "(^|[ \\t,(])" key "[ \\t]*[=:][ \\t]*"
+    pos = match(s, pat)
+    if (pos == 0) return ""
+    rest = substr(s, pos + RLENGTH)
+    sub(/^[ \t]+/, "", rest)
+    if (substr(rest, 1, 1) == "\"") {
+        val = ""; i = 2; n = length(rest)
+        while (i <= n) {
+            c = substr(rest, i, 1)
+            if (c == "\\" && i < n) {
+                nc = substr(rest, i + 1, 1)
+                if (nc == "\"") { val = val "\""; i += 2; continue }
+                if (nc == "\\") { val = val "\\"; i += 2; continue }
+                val = val c; i++; continue
+            }
+            if (c == "\"") break
+            val = val c; i++
+        }
+        return val
+    }
+    if (match(rest, /[,)[:space:]]/)) return substr(rest, 1, RSTART - 1)
+    return rest
+}
+function kv_to_json(raw,    s, n, i, c, key, val, depth, n_out, is_str, nc, out, sep) {
+    s = raw; sub(/^[ \t]+/, "", s); n = length(s); i = 1; n_out = 0; out = ""
+    while (i <= n) {
+        while (i <= n && (substr(s, i, 1) == " " || substr(s, i, 1) == "\t" || substr(s, i, 1) == ",")) i++
+        if (i > n) break
+        key = ""
+        while (i <= n) {
+            c = substr(s, i, 1)
+            if ((c >= "A" && c <= "Z") || (c >= "a" && c <= "z") || (c >= "0" && c <= "9") || c == "_") { key = key c; i++ } else break
+        }
+        if (key == "") {
+            val = ""; depth = 0
+            while (i <= n) {
+                c = substr(s, i, 1)
+                if (c == "(" || c == "[" || c == "{") depth++
+                else if (c == ")" || c == "]" || c == "}") depth--
+                else if (c == "," && depth == 0) break
+                val = val c; i++
+            }
+            gsub(/^[ \t]+|[ \t]+$/, "", val)
+            if (val == "") continue
+            n_out++
+            if (n_out > 1) out = out ","
+            if (length(val) >= 2 && substr(val, 1, 1) == "\"" && substr(val, length(val), 1) == "\"") val = substr(val, 2, length(val) - 2)
+            out = out "\"_pos_" n_out "\":\"" json_escape(val) "\""
+            continue
+        }
+        while (i <= n && (substr(s, i, 1) == " " || substr(s, i, 1) == "\t")) i++
+        sep = substr(s, i, 1)
+        if (sep != "=" && sep != ":") {
+            n_out++; if (n_out > 1) out = out ","
+            out = out "\"" json_escape(key) "\":\"\""
+            continue
+        }
+        i++
+        while (i <= n && (substr(s, i, 1) == " " || substr(s, i, 1) == "\t")) i++
+        val = ""; is_str = 0
+        if (substr(s, i, 1) == "\"") {
+            is_str = 1; i++
+            while (i <= n) {
+                c = substr(s, i, 1)
+                if (c == "\\" && i < n) {
+                    nc = substr(s, i + 1, 1)
+                    if (nc == "\"") { val = val "\""; i += 2; continue }
+                    if (nc == "\\") { val = val "\\"; i += 2; continue }
+                    val = val c; i++; continue
+                }
+                if (c == "\"") { i++; break }
+                val = val c; i++
+            }
+        } else {
+            depth = 0
+            while (i <= n) {
+                c = substr(s, i, 1)
+                if (c == "(" || c == "[" || c == "{") depth++
+                else if (c == ")" || c == "]" || c == "}") depth--
+                else if (c == "," && depth == 0) break
+                val = val c; i++
+            }
+            gsub(/^[ \t]+|[ \t]+$/, "", val)
+        }
+        n_out++; if (n_out > 1) out = out ","
+        if (is_str) out = out "\"" json_escape(key) "\":\"" json_escape(val) "\""
+        else if (val == "true" || val == "false" || val == "null") out = out "\"" json_escape(key) "\":" val
+        else if (val ~ /^-?[0-9]+$/ || val ~ /^-?[0-9]+\.[0-9]+$/) out = out "\"" json_escape(key) "\":" val
+        else out = out "\"" json_escape(key) "\":\"" json_escape(val) "\""
+    }
+    return out
+}
+BEGIN {
+    FS = "\t"
+    n_kinds = split("meta,reflect,introspect,self_model,theory_of_mind,qualia", kinds_arr, ",")
+    for (i = 1; i <= n_kinds; i++) { kinds_idx[kinds_arr[i]] = i; counts[kinds_arr[i]] = 0 }
+    body = ""; total = 0
+    n_phases = 0
+}
+/^# error\t/ { next }
+{
+    kind = $1; tgtk = $2; fn = $3; file = $4; line = $5; raw = decode_esc($6)
+    if (!(kind in kinds_idx)) next
+    if (filter != "" && kind != filter) next
+    counts[kind]++
+    if (total > 0) body = body ","
+    total++
+    body = body "{\"kind\":\"" json_escape(kind) "\",\"fn\":\"" json_escape(fn) "\",\"file\":\"" json_escape(file) "\",\"line\":" line ",\"meta\":{" kv_to_json(raw) "}}"
+    if (kind == "reflect") {
+        p = kv_extract(raw, "phase")
+        if (p != "" && !(p in phase_seen)) { phase_seen[p] = 1; phases[++n_phases] = p }
+    }
+}
+END {
+    sum = ""
+    for (i = 1; i <= n_kinds; i++) {
+        if (i > 1) sum = sum ","
+        sum = sum "\"" kinds_arr[i] "\":" counts[kinds_arr[i]]
+    }
+    sum = sum ",\"total\":" total
+    phases_str = ""
+    for (i = 1; i <= n_phases; i++) {
+        if (i > 1) phases_str = phases_str ","
+        if (phases[i] ~ /^-?[0-9]+$/) phases_str = phases_str phases[i]
+        else phases_str = phases_str "\"" phases[i] "\""
+    }
+    sum = sum ",\"phases_covered\":[" phases_str "]"
+    printf("{\"version\":\"0.2\",\"source\":\"ast\",\"meta_annotations\":[%s],\"summary\":{%s}}\n", body, sum)
+}'

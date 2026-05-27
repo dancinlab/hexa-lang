@@ -1,0 +1,117 @@
+#!hexa strict
+// stdlib/hal/backend/stm32h7/adc.hexa — STM32H7 (Cortex-M7) ADC backend
+//                                       — paper skeleton.
+//
+// Phase: skeleton / stub. Real MMIO will go here once Cortex-M
+// cross-compile lands. Sim-first invariant preserved (adc.hexa sim
+// backend ships before this; this file is a HW-backend addition, not
+// a sim replacement).
+//
+// Target:    STMicroelectronics STM32H7 family (Cortex-M7 @ 480 MHz).
+// Chip ref:  RM0433 reference manual, ADC peripheral §25.
+// Surface:   stm32h7_adc_{configure,read}(unit, channel, ...)
+// Dispatch:  v0.2.0+ — adc.hexa selects this via cfg-flag.
+//
+// STM32H7 ships 3 SAR ADC units (ADC1, ADC2, ADC3) — 16-bit
+// resolution max, up to 3.6 MSPS. ADC1 and ADC2 share an APB clock
+// domain (D2); ADC3 sits in D3 (BDMA / low-power).
+//
+// MMIO layout (sketch):
+//
+//   ADC1 base:   0x40022000   (D2 domain)
+//   ADC2 base:   0x40022100   (D2 domain — same block as ADC1)
+//   ADC12 common 0x40022300   (shared CCR / CSR)
+//   ADC3 base:   0x58026000   (D3 domain)
+//   ADC3 common  0x58026300
+//
+//   Per-unit registers (offsets):
+//     ISR       0x00   status: ADRDY / EOC / EOS
+//     IER       0x04   interrupt enable
+//     CR        0x08   start: ADEN / ADCAL / ADSTART
+//     CFGR      0x0C   resolution / DMA / continuous mode
+//     SQR1..4   0x30   regular sequence registers
+//     DR        0x40   data register (right-aligned 16-bit)
+//
+// Channels (per unit; 19 channels total per ADC):
+//   ADC1 ch 0..15 → external pins (PA0..PA7, PB0/PB1, PC0..PC5);
+//   ADC1 ch 16    → internal V_SENSE (temp sensor)
+//   ADC1 ch 17    → internal V_REFINT
+//   ADC1 ch 18    → internal V_BAT
+//   ADC2 / ADC3 follow the same layout with different muxes.
+//
+// Resolution grades (CFGR.RES bitfield):
+//   16, 14, 12, 10, 8 bits.
+
+// ─── unit table ──────────────────────────────────────────────────────
+
+let UNIT_COUNT = 3
+let UNIT_NAMES = ["ADC1", "ADC2", "ADC3"]
+let UNIT_BASES = [
+    "0x40022000",   // ADC1
+    "0x40022100",   // ADC2
+    "0x58026000"    // ADC3
+]
+
+let CHANNELS_PER_UNIT = 19   // 0..15 external + 16..18 internal
+
+// Channel-to-pin mapping for ADC1 (encoded bank*16 + offset).
+// PA=0, PB=1, PC=2; channels 16..18 are internal (-1).
+let ADC1_CH_PIN = [
+    0, 1, 2, 3, 4, 5, 6, 7,         // ch 0..7  → PA0..PA7
+    16, 17,                         // ch 8..9  → PB0, PB1
+    32, 33, 34, 35, 36, 37,         // ch 10..15 → PC0..PC5
+    -1,                             // ch 16    → V_SENSE (temp)
+    -1,                             // ch 17    → V_REFINT
+    -1                              // ch 18    → V_BAT
+]
+
+// ADC2 shares the same external mux as ADC1 on Nucleo-H7;
+// ADC3 has its own pin set. We expose a single canonical map
+// (ADC1) and document that ADC2/3 follow the same layout in
+// sketch — real impl will branch per-unit.
+
+// ─── resolution grades (mirror stdlib/hal/adc.hexa) ──────────────────
+
+let RES_8  = 8
+let RES_10 = 10
+let RES_12 = 12
+let RES_14 = 14
+let RES_16 = 16
+
+fn _is_valid_res(r: int) -> bool {
+    return r == 8 || r == 10 || r == 12 || r == 14 || r == 16
+}
+
+// ─── stub surface ────────────────────────────────────────────────────
+
+fn stm32h7_adc_configure(unit: int, channel: int, resolution: int) -> int {
+    if unit < 0 || unit >= UNIT_COUNT { return -1 }
+    if channel < 0 || channel >= CHANNELS_PER_UNIT { return -2 }
+    if !_is_valid_res(resolution) { return -3 }
+    let name = UNIT_NAMES[unit]
+    let pin = if unit == 0 { ADC1_CH_PIN[channel] } else { -1 }
+    let pin_label = if pin < 0 { "internal" } else { "pin" + str(pin) }
+    println("[stm32h7 adc] configure " + name +
+            " ch=" + str(channel) +
+            " src=" + pin_label +
+            " res=" + str(resolution) + "bit" +
+            "  // TODO: write CFGR.RES, SQR1, calibrate (ADCAL)")
+    return unit
+}
+
+fn stm32h7_adc_read(unit: int, channel: int) -> int {
+    if unit < 0 || unit >= UNIT_COUNT { return -1 }
+    if channel < 0 || channel >= CHANNELS_PER_UNIT { return -2 }
+    let name = UNIT_NAMES[unit]
+    println("[stm32h7 adc] read " + name +
+            " ch=" + str(channel) +
+            "  // TODO: set ADSTART, poll EOC, read DR")
+    // Stub returns 0 until real MMIO read lands.
+    return 0
+}
+
+// ─── self-introspection ──────────────────────────────────────────────
+
+fn stm32h7_adc_backend_meta() -> [str] {
+    return ["stm32h7", "adc", "skeleton", str(UNIT_COUNT * CHANNELS_PER_UNIT)]
+}

@@ -1,0 +1,109 @@
+// test/physics_constant_engine_smoke.hexa — smoke for symbolic/physics_constant_engine.hexa
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Reference values reproduced from archive-TECS-L/physics_constant_engine.py
+// (DERIVED dict comments + KNOWN_MATCHES + find_matches semantics):
+//   DERIVED: sigma=12, tau=4, s-t=8 (SU(3)), s*t=48, s/t=3, t!=24,
+//            P1!=720, T(s)=T(12)=78, T(t)=T(4)=10, T(P1)=T(6)=21
+//   KNOWN_MATCHES:
+//     1/alpha:  8*17+1 = 137   (vs 137.035999084 → err ≈ 0.0263%)
+//     m_p/m_e:  sigma*153 = 1836 (vs 1836.15267343 → err ≈ 0.0083%)
+//     sin2θW:   (s/t)/(s+1) = 3/13 ≈ 0.23077 (vs 0.23122 → err ≈ 0.195%)
+//   find_best_match(137.0) → exact "137" base const (err 0%)
+//   find_best_match(720.0) → exact "P1!" (err 0%)
+//   find_best_match(48.0)  → exact "s*t" (err 0%)
+//   match_count(1.0) ≥ 9   (many magic numbers + 137 within 1%)
+//
+// Run:  hexa run test/physics_constant_engine_smoke.hexa
+// Sentinel: __PCE_SMOKE__ PASS|FAIL on the final line.
+
+import "compiler/atlas/symbolic/physics_constant_engine.hexa"
+
+let mut PASS = 0
+let mut FAIL = 0
+
+fn check(label: string, cond: bool) {
+    if cond {
+        PASS = PASS + 1
+        println("[PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("[FAIL] " + label)
+    }
+}
+
+fn approx(a: float, b: float, tol: float) -> bool {
+    let d = a - b
+    if d < 0.0 { return (0.0 - d) < tol }
+    return d < tol
+}
+
+fn _byname(name: string) -> float {
+    let dc = derived_constants()
+    let mut i = 0
+    while i < len(dc) {
+        if dc[i].name == name { return dc[i].value }
+        i = i + 1
+    }
+    return -999999.0
+}
+
+// ── DERIVED base-constant table ─────────────────────────────────────────
+check("derived sigma == 12", approx(_byname("sigma"), 12.0, 0.0001))
+check("derived tau == 4",    approx(_byname("tau"), 4.0, 0.0001))
+check("derived s-t == 8 (SU(3))", approx(_byname("s-t"), 8.0, 0.0001))
+check("derived s*t == 48",   approx(_byname("s*t"), 48.0, 0.0001))
+check("derived s/t == 3",    approx(_byname("s/t"), 3.0, 0.0001))
+check("derived t! == 24",    approx(_byname("t!"), 24.0, 0.0001))
+check("derived P1! == 720",  approx(_byname("P1!"), 720.0, 0.0001))
+check("derived T(s) == 78",  approx(_byname("T(s)"), 78.0, 0.0001))
+check("derived T(t) == 10",  approx(_byname("T(t)"), 10.0, 0.0001))
+check("derived T(P1) == 21", approx(_byname("T(P1)"), 21.0, 0.0001))
+check("derived table has 21 entries", len(derived_constants()) == 21)
+
+// ── generated expression set is non-trivial ─────────────────────────────
+check("generate_expressions produces > 200 exprs", len(generate_expressions()) > 200)
+
+// ── find_best_match: exact base-constant hits ───────────────────────────
+let m137 = find_best_match(137.0)
+check("find_best_match(137) exact (err% < 1e-6)", m137.error_pct < 0.000001)
+check("find_best_match(137).expr == \"137\"", m137.expr == "137")
+
+let m720 = find_best_match(720.0)
+check("find_best_match(720) exact (err% < 1e-6)", m720.error_pct < 0.000001)
+
+let m48 = find_best_match(48.0)
+check("find_best_match(48) exact (err% < 1e-6)", m48.error_pct < 0.000001)
+
+// ── KNOWN_MATCHES (the three verified discoveries) ──────────────────────
+let km = known_matches()
+check("known_matches has 3 entries", len(km) == 3)
+
+let mut k_alpha_err = -1.0
+let mut k_mp_err = -1.0
+let mut k_sin_err = -1.0
+let mut ki = 0
+while ki < len(km) {
+    if km[ki].target == "1/alpha"      { k_alpha_err = km[ki].error_pct }
+    if km[ki].target == "m_p/m_e"      { k_mp_err = km[ki].error_pct }
+    if km[ki].target == "sin2_thetaW"  { k_sin_err = km[ki].error_pct }
+    ki = ki + 1
+}
+check("1/alpha (8*17+1=137) err ≈ 0.0263%", approx(k_alpha_err, 0.0263, 0.005))
+check("m_p/m_e (sigma*153=1836) err ≈ 0.0083%", approx(k_mp_err, 0.0083, 0.005))
+check("sin2θW (3/13) err ≈ 0.195%", approx(k_sin_err, 0.195, 0.02))
+
+// ── match_count within 1% threshold ─────────────────────────────────────
+check("match_count(1.0) >= 9 (magic numbers + 137 within 1%)", match_count(1.0) >= 9)
+
+println("")
+println("═══════════════════════════════════════════════════════════")
+println("  physics_constant_engine smoke: PASS=" + str(PASS) + " FAIL=" + str(FAIL))
+println("═══════════════════════════════════════════════════════════")
+if FAIL > 0 {
+    println("__PCE_SMOKE__ FAIL")
+} else {
+    println("__PCE_SMOKE__ PASS")
+}

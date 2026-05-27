@@ -1,0 +1,175 @@
+// HEXA Native Compiler — Wave 1 atlas .n6 parser regression test
+//
+// @version 0.1.0
+// @capabilities [pure, fs_read, fs_write]
+//
+// Covers:
+//   * all 9 n6-spec kinds emit AtlasNodes (P / C / L / E / F / R / S / X / Q)
+//   * 4 grade marker variants — plain / `*` / `!` / `?` — parse correctly
+//   * all 7 edge operators (<- -> => == ~> |> !!) are absorbed
+//   * @E semantic drift: parser treats @E as a real node kind ("E")
+//
+// Run:
+//   hexa run compiler/atlas/parser_test.hexa
+
+use "compiler/atlas/parser"
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok {
+        println("  PASS  " + label)
+    } else {
+        println("  FAIL  " + label)
+        fails.push(label)
+    }
+}
+
+fn _write_fixture() -> string {
+    let path = "/tmp/atlas_parser_test_fixture.n6"
+    let body = "@P alpha = 1 :: foundation [11*]\n  -> beta\n  -> gamma\n  => application example\n  == 1\n  |> verify_alpha.py\n  !! H-001\n\n@C beta = 2 :: foundation [10]\n  <- alpha\n  ~> 2.0\n\n@L gamma_law :: physics [9?]\n  \"hypothesis text\"\n  <- alpha\n\n@F formula_one = a*b :: math [10!]\n  <- alpha, beta\n\n@R relation_one :: foundation [10*]\n  <- alpha\n  == alpha\n\n@S symmetry_one :: topology [10*]\n  => preserves shape\n\n@X cross_one :: crossing [8]\n  => bridges domains\n\n@? mystery_one :: cosmology [3?]\n  ~> 0.5\n\n@E experiment_one :: meta [10*]\n  |> exp_one.py\n"
+    write_file(path, body)
+    return path
+}
+
+fn _has_id(arr: array, id: string) -> bool {
+    let mut i = 0
+    while i < len(arr) {
+        if to_string(arr[i].id) == id { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn _find_by_id(arr: array, id: string) -> AtlasNode {
+    let mut i = 0
+    while i < len(arr) {
+        let n = arr[i]
+        if n.id == id { return n }
+        i = i + 1
+    }
+    return AtlasNode {
+        kind: "",
+        id: "",
+        raw: "",
+        source_file: "",
+        source_line: 0,
+        grade: empty_grade(),
+        edges: empty_edges()
+    }
+}
+
+fn main() {
+    println("wave-1 atlas .n6 parser test")
+
+    let fixture = _write_fixture()
+    let nodes = parse_atlas_file(fixture, "test.n6")
+    println("  parsed " + to_string(len(nodes)) + " nodes")
+
+    let fails = []
+
+    // ── all 9 kinds emit ──
+    _check("9 nodes parsed (one per kind)", len(nodes) == 9, fails)
+
+    let n_p = _find_by_id(nodes, "alpha")
+    let n_c = _find_by_id(nodes, "beta")
+    let n_l = _find_by_id(nodes, "gamma_law")
+    let n_f = _find_by_id(nodes, "formula_one")
+    let n_r = _find_by_id(nodes, "relation_one")
+    let n_s = _find_by_id(nodes, "symmetry_one")
+    let n_x = _find_by_id(nodes, "cross_one")
+    let n_q = _find_by_id(nodes, "mystery_one")
+    let n_e = _find_by_id(nodes, "experiment_one")
+
+    _check("@P emits kind=P", n_p.kind == "P", fails)
+    _check("@C emits kind=C", n_c.kind == "C", fails)
+    _check("@L emits kind=L", n_l.kind == "L", fails)
+    _check("@F emits kind=F", n_f.kind == "F", fails)
+    _check("@R emits kind=R", n_r.kind == "R", fails)
+    _check("@S emits kind=S", n_s.kind == "S", fails)
+    _check("@X emits kind=X", n_x.kind == "X", fails)
+    _check("@? emits kind=Q", n_q.kind == "Q", fails)
+    _check("@E emits kind=E (n6 spec semantics)", n_e.kind == "E", fails)
+
+    // ── grade markers ──
+    // [11*] → verified, value=11
+    _check("alpha grade value == 11", n_p.grade.value == 11, fails)
+    _check("alpha grade verified", n_p.grade.verified, fails)
+    _check("alpha grade not breakthrough", !n_p.grade.breakthrough, fails)
+    _check("alpha grade not hypothesis", !n_p.grade.hypothesis, fails)
+
+    // [10] → plain
+    _check("beta grade value == 10", n_c.grade.value == 10, fails)
+    _check("beta grade not verified", !n_c.grade.verified, fails)
+
+    // [9?] → hypothesis
+    _check("gamma_law grade value == 9", n_l.grade.value == 9, fails)
+    _check("gamma_law grade hypothesis", n_l.grade.hypothesis, fails)
+
+    // [10!] → breakthrough
+    _check("formula_one grade value == 10", n_f.grade.value == 10, fails)
+    _check("formula_one grade breakthrough", n_f.grade.breakthrough, fails)
+
+    // [3?] → hypothesis again
+    _check("mystery_one grade hypothesis", n_q.grade.hypothesis, fails)
+
+    // ── 7 edge operators ──
+    // alpha: -> beta, -> gamma, => app, == 1, |> verify, !! H-001
+    _check("alpha derives contains beta", len(n_p.edges.derives) >= 1 && n_p.edges.derives[0] == "beta", fails)
+    _check("alpha applications populated", len(n_p.edges.applications) >= 1, fails)
+    _check("alpha equivalents populated", len(n_p.edges.equivalents) >= 1, fails)
+    _check("alpha verified_by populated", len(n_p.edges.verified_by) >= 1, fails)
+    _check("alpha breakthroughs populated", len(n_p.edges.breakthroughs) >= 1, fails)
+
+    // beta: <- alpha, ~> 2.0
+    _check("beta depends_on contains alpha", len(n_c.edges.depends_on) >= 1 && n_c.edges.depends_on[0] == "alpha", fails)
+    _check("beta converges populated", len(n_c.edges.converges) >= 1, fails)
+
+    // formula_one: <- alpha, beta (CSV split)
+    _check("formula_one depends_on has 2 entries", len(n_f.edges.depends_on) == 2, fails)
+
+    // ── parse_grade unit tests ──
+    let g1 = parse_grade("10*")
+    _check("parse_grade(10*) value=10 verified", g1.value == 10 && g1.verified && !g1.breakthrough && !g1.hypothesis, fails)
+    let g2 = parse_grade("10!")
+    _check("parse_grade(10!) value=10 breakthrough", g2.value == 10 && !g2.verified && g2.breakthrough, fails)
+    let g3 = parse_grade("10*!")
+    _check("parse_grade(10*!) verified && breakthrough", g3.value == 10 && g3.verified && g3.breakthrough, fails)
+    let g4 = parse_grade("3?")
+    _check("parse_grade(3?) hypothesis", g4.value == 3 && g4.hypothesis, fails)
+    let g5 = parse_grade("11*")
+    _check("parse_grade(11*) value=11", g5.value == 11 && g5.verified, fails)
+    let g6 = parse_grade("")
+    _check("parse_grade('') value=-1", g6.value == -1, fails)
+    let g7 = parse_grade("d.r")
+    _check("parse_grade(d.r) alien-index value=-1", g7.value == -1, fails)
+
+    println("")
+    if len(fails) == 0 {
+        println("RESULT: PASS")
+        exec("rm -f '" + fixture + "' 2>/dev/null")
+        exit(0)
+    } else {
+        println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
+        let mut i = 0
+        while i < len(fails) {
+            println("  - " + to_string(fails[i]))
+            i = i + 1
+        }
+        exit(1)
+    }
+}
+
+// --- is_main guard ---------------------------------------------------------
+
+let _av = argv()
+
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let script = to_string(_av[1])
+    if script.ends_with("/parser_test.hexa") { return true }
+    if script == "parser_test.hexa" { return true }
+    return false
+}
+
+if _is_main() {
+    main()
+}

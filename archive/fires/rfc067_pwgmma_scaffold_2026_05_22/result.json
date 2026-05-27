@@ -1,0 +1,65 @@
+{
+  "fire_id": "rfc067_pwgmma_scaffold_2026_05_22",
+  "host": "ubu-2",
+  "device": "NVIDIA GeForce RTX 5070",
+  "device_compute_capability": "sm_120",
+  "driver_version": "580.159.03",
+  "driver_api_version": 13000,
+  "cuda_toolkit_version": "12.0",
+  "ptxas_version": "12.0.140",
+  "ptxas_max_ptx_isa": "8.0",
+  "ptxas_max_sm_arch_standalone": "sm_90a",
+
+  "ptx_target": "sm_90a",
+  "instruction_class": "wgmma.async (warpgroup async MMA)",
+  "instructions_used": [
+    "wgmma.fence.sync.aligned",
+    "wgmma.mma_async.sync.aligned.m64n16k16.f32.f16.f16",
+    "wgmma.commit_group.sync.aligned",
+    "wgmma.wait_group.sync.aligned 0"
+  ],
+
+  "ptxas_standalone_sm_90a": {
+    "status": "OK",
+    "registers": 34,
+    "smem_bytes": 2560,
+    "stack_frame": 0,
+    "spills": 0,
+    "note": "PTX scaffold assembles cleanly when target is sm_90a (Hopper)."
+  },
+
+  "cumoduleloaddataex_sm_120": {
+    "status": "REJECTED",
+    "error_category": "CUDA_ERROR_INVALID_PTX (a PTX JIT compilation failed)",
+    "rejected_instructions": [
+      {"line": 90, "inst": "wgmma.fence",         "error": "cannot be compiled for architecture 'sm_120a'"},
+      {"line": 91, "inst": "wgmma.mma_async with floating point types", "error": "cannot be compiled for architecture 'sm_120a'"},
+      {"line": 94, "inst": "wgmma.commit_group",  "error": "cannot be compiled for architecture 'sm_120a'"},
+      {"line": 95, "inst": "wgmma.wait_group",    "error": "cannot be compiled for architecture 'sm_120a'"}
+    ],
+    "interpretation": "Driver-JIT (CUDA 13.0 ptxas) explicitly rejects the entire wgmma instruction class when lowering to sm_120a (Blackwell consumer / GB202)."
+  },
+
+  "numeric_result": null,
+  "gflops": null,
+
+  "verdict": "FALSIFIED-ARCHITECTURAL",
+  "feasibility_on_rtx_5070_sm_120": "IMPOSSIBLE",
+
+  "falsifier": "F-RFC067-HEXA-WGMMA-SCAFFOLD",
+  "falsifier_status": "ARCH-REJECTED (not a code bug; instruction class is sm_90a-only)",
+
+  "architectural_finding": {
+    "wgmma_class_scope": "Hopper sm_90a only",
+    "sm_120_tensor_core_path": "Blackwell consumer (GB202 / sm_120a) does NOT inherit wgmma. It also does NOT support tcgen05 (which is sm_100a / B200 / datacenter Blackwell). Consumer Blackwell falls back to mma.sync (warp-level synchronous, Ampere-style).",
+    "implication_for_cublas_gap": "The 16% gap (0.84 ratio) on RTX 5070 vs cuBLAS HGEMM CANNOT be closed by transitioning from mma.sync to wgmma.async on this silicon. cuBLAS on sm_120 also uses warp-level mma.sync (matches N104 SASS-diff finding: cuBLAS picks cutlass_80_tensorop_s16816gemm = Ampere/Hopper mma.sync kernel, not a Hopper-specific wgmma kernel).",
+    "where_wgmma_would_pay": "H100 / H200 (sm_90a) — the original wgmma target. A Hopper-class pool host would be needed to actually fire this scaffold; on consumer Blackwell the instruction class is architecturally unavailable."
+  },
+
+  "next_steps_g3": [
+    "Do NOT pursue wgmma path on RTX 5070 — architecturally rejected.",
+    "Stay on mma.sync ceiling investigation for the 0.84->1.0 gap on sm_120.",
+    "If a Hopper pool host (sm_90a) becomes available, this scaffold is ready to fire there: standalone ptxas already compiled it clean (34 reg, 2560 B smem, 0 spills).",
+    "Consumer Blackwell (sm_120) gap closure must come from: (a) larger CTA tiles, (b) better mma.sync scheduling, (c) cp.async-bulk + TMA emulation if available on sm_120, NOT wgmma."
+  ]
+}

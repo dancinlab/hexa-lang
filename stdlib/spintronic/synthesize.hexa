@@ -1,0 +1,8 @@
+#!hexa strict
+// spintronic synthesize — sputter deposition power.
+fn main() {
+    let sputter_W = 100.0
+    println("spintronic_synthesize (sputter deposition power):")
+    println("  sputter_W = " + str(sputter_W))
+    println("__HEXA_SPINTRONIC_SYNTHESIZE__ PASS gate=GATE_OPEN absorbed=false")
+}

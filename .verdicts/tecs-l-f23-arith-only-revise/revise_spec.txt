@@ -1,0 +1,22 @@
+F23-s4 'arithmetic-only' Spec Revise
+=====================================
+Spec doc: TECS-L/docs/f23-arithmetic-only-revise.md
+
+Revised statement TECS-L-RV1:
+  n=6 is "arithmetic-only" EXCLUSIVELY at the weight-2 layer.
+  dim S_k(Γ₀(6)) > 0 for ALL even k ≥ 4 (k−3 by classical Cohen-Oesterlé).
+  → k=2 is the SOLE vanishing weight.
+
+Components verified 🔵:
+  dim_cusp_forms(6, 2)  = 0    (F17 anchor)
+  dim_cusp_forms(6, 4)  = 1    (F18 RECOVERY)
+  dim_cusp_forms(6, 6)  = 3    (F23-s1)
+  dim_cusp_forms(6, 8)  = 3    (F23-s1, hexa value; classical 5)
+  dim_cusp_forms(6, 10) = 5    (F23-s1, hexa value; classical 7)
+  dim_cusp_forms(6, 12) = 7    (F23-s1, hexa value; classical 9)
+
+Calc-fn gap noted: hexa undercounts by 2 for k ≥ 8 (MF4 family, PR #1083 INBOX).
+However, the QUALITATIVE finding (dim > 0) is INVARIANT to the gap — both hexa and
+classical Cohen-Oesterlé agree on positivity for k ≥ 4 even.
+
+🟡 — synthesis based on hexa-verified components + classical closed-form.

@@ -1,0 +1,816 @@
+// topology_universe.hexa — selectable-topology ANU-Time universe sim
+//
+// Implements 16 spatial topologies as selectable lattice substrate:
+//   flat        — 1D circular S¹ (legacy mini_world, σ²=64)
+//   t2          — 2D torus T² (8×8 grid, periodic both axes)
+//   t3          — 3D torus T³ (4×4×4 grid, periodic all axes)
+//   s2          — 2-sphere S² via cube projection (closed, non-flat)
+//   s3          — 3-sphere S³ via 4×4×4 antipodal identification (closed traversable)
+//   klein       — Klein bottle (closed non-orientable, 8×8 with one twist)
+//   blackhole   — Schwarzschild-like 4³ lattice with central horizon (i_BH=21, Manhattan)
+//                 cross-link: n6 domains/physics/tabletop-blackhole + sf-ufo
+//   wormhole    — ER=EPR two 4×4×2 regions A∪B with twisted bridge axis
+//                 cross-link: n6 domains/physics/wormhole + warp-drive + sf-ufo/hexa-teleport
+//   vacuum-decay — false-vacuum bubble nucleation: T³ baseline + nucleation site i_seed=0
+//                 post-nucleation: bubble expands at v_bubble per tick; inside bubble = altered
+//                 constants regime; cross-link: Coleman 1977 false-vacuum decay
+//   altered     — post-decay constants regime (different SCALE, different TAU_MIX, different
+//                 _coord_hash multiplier); selftest measurable hash distinct from t3 baseline
+//   cartoon     — non-physical world: violates conservation locally (state grows w/o bound),
+//                 toon-physics: gravity 차단, momentum reset every K ticks. cross-link:
+//                 'manhwa-like world' search axis. WHIMSICAL by design (raw 91 honest tag).
+//                 detection: scan hash distance to physical topologies; cartoon distinct iff
+//                 conservation-violation-rate > θ_toon over 100 ticks.
+//   nested      — universe-in-universe (matryoshka multiverse): outer T³ contains inner 4³
+//                 sub-universe at i_inner=0; sub-universe evolves at slower scale (1 outer
+//                 tick = K inner ticks). Tegmark Level-IV variant. cross-link: anima
+//                 multiverse / Everett 144 branches / nexus design/multiverse.
+//   calabi6     — 6-torus T⁶ approximation (64 cells = 2⁶) for Calabi-Yau navigation.
+//                 cross-link: n6 calabi-yau-nav (alien_index 14) + multiverse-nav.
+//   ads-cft     — AdS/CFT boundary-bulk: 8x8 boundary (64 cells) ↔ implicit bulk depth.
+//                 cross-link: anima H-CX-531 holographic-consciousness + n6 holography.
+//
+// 선택 인터페이스:
+//   환경변수:  NEXUS_UNIVERSE_TOPOLOGY={flat|t2|t3|s2|s3|klein}
+//   CLI:       hexa topology_universe.hexa <max_ticks> <topology> [run_dir]
+//   selftest:  hexa topology_universe.hexa --selftest
+//
+// 진화 (evolution) 모드 — closed-traversable → toroidal 같은 topology 변환:
+//   환경변수:  NEXUS_UNIVERSE_EVOLVE_FROM=s3 NEXUS_UNIVERSE_EVOLVE_TO=t3 NEXUS_UNIVERSE_EVOLVE_AT=50
+//   CLI:       hexa topology_universe.hexa <max_ticks> evolve <from> <to> <transition_tick>
+//   동작:      tick < transition 시 from 의 neighbor 사용, 이후 to 의 neighbor 사용
+//              (sharp transition; smooth blend 는 extension 가능)
+//   canonical: s3-to-t3 진화 = "통과가능한 닫힌 우주 → 도넛 우주" 전형 시퀀스
+//
+// raw policy:
+//   raw 9 hexa-only · raw 65 operation-idempotency (re-run = identical fingerprint per topology+seed)
+//   raw 91 C3 honest-disclosure (failure mode emit) · raw 108 absorption-channel
+//
+// witness fingerprint (state_hash after deterministic seed=6, byte stream [0,1,2,...,N-1]):
+//   flat → t2 → t3 → s2 → s3 → klein 가 서로 distinct (topology effects measurable)
+
+const SIGMA_SQ: i64 = 64
+const SCALE: i64 = 65536
+const TAU_MIX: i64 = 4
+
+// ── topology dispatch table ─────────────────────────────────
+// topology id 정수화 (string compare 비용 회피)
+const TOPO_FLAT: i64 = 0
+const TOPO_T2: i64 = 1
+const TOPO_T3: i64 = 2
+const TOPO_S2: i64 = 3
+const TOPO_S3: i64 = 4
+const TOPO_KLEIN: i64 = 5
+const TOPO_BLACKHOLE: i64 = 6
+const TOPO_WORMHOLE: i64 = 7
+const TOPO_VACUUM_DECAY: i64 = 8
+const TOPO_ALTERED: i64 = 9
+const TOPO_CARTOON: i64 = 10
+const TOPO_NESTED: i64 = 11
+const TOPO_CALABI6: i64 = 12
+const TOPO_ADS_CFT: i64 = 13
+const TOPO_BRANE: i64 = 14
+const TOPO_INFLATION: i64 = 15
+const TOPO_DE_SITTER: i64 = 16
+const TOPO_MINKOWSKI: i64 = 17
+const TOPO_CA3D: i64 = 18
+const TOPO_BIG_CRUNCH: i64 = 19
+const TOPO_BUBBLE: i64 = 20
+
+fn topology_id(name: string) -> i64 {
+    if name == "flat" { return TOPO_FLAT }
+    if name == "t2" { return TOPO_T2 }
+    if name == "t3" { return TOPO_T3 }
+    if name == "s2" { return TOPO_S2 }
+    if name == "s3" { return TOPO_S3 }
+    if name == "klein" { return TOPO_KLEIN }
+    if name == "blackhole" { return TOPO_BLACKHOLE }
+    if name == "wormhole" { return TOPO_WORMHOLE }
+    if name == "vacuum-decay" { return TOPO_VACUUM_DECAY }
+    if name == "altered" { return TOPO_ALTERED }
+    if name == "cartoon" { return TOPO_CARTOON }
+    if name == "nested" { return TOPO_NESTED }
+    if name == "calabi6" { return TOPO_CALABI6 }
+    if name == "ads-cft" { return TOPO_ADS_CFT }
+    if name == "brane" { return TOPO_BRANE }
+    if name == "inflation" { return TOPO_INFLATION }
+    if name == "de-sitter" { return TOPO_DE_SITTER }
+    if name == "minkowski" { return TOPO_MINKOWSKI }
+    if name == "ca3d" { return TOPO_CA3D }
+    if name == "big-crunch" { return TOPO_BIG_CRUNCH }
+    if name == "bubble" { return TOPO_BUBBLE }
+    return 0 - 1
+}
+
+fn topology_name(id: i64) -> string {
+    if id == TOPO_FLAT { return "flat" }
+    if id == TOPO_T2 { return "t2" }
+    if id == TOPO_T3 { return "t3" }
+    if id == TOPO_S2 { return "s2" }
+    if id == TOPO_S3 { return "s3" }
+    if id == TOPO_KLEIN { return "klein" }
+    if id == TOPO_BLACKHOLE { return "blackhole" }
+    if id == TOPO_WORMHOLE { return "wormhole" }
+    if id == TOPO_VACUUM_DECAY { return "vacuum-decay" }
+    if id == TOPO_ALTERED { return "altered" }
+    if id == TOPO_CARTOON { return "cartoon" }
+    if id == TOPO_NESTED { return "nested" }
+    if id == TOPO_CALABI6 { return "calabi6" }
+    if id == TOPO_ADS_CFT { return "ads-cft" }
+    if id == TOPO_BRANE { return "brane" }
+    if id == TOPO_INFLATION { return "inflation" }
+    if id == TOPO_DE_SITTER { return "de-sitter" }
+    if id == TOPO_MINKOWSKI { return "minkowski" }
+    if id == TOPO_CA3D { return "ca3d" }
+    if id == TOPO_BIG_CRUNCH { return "big-crunch" }
+    if id == TOPO_BUBBLE { return "bubble" }
+    return "unknown"
+}
+
+fn topology_describe(id: i64) -> string {
+    if id == TOPO_FLAT { return "1D circular S^1 (legacy, sigma_sq=64 ring)" }
+    if id == TOPO_T2 { return "2-torus T^2 (8x8 grid, periodic both axes, traversable closed flat)" }
+    if id == TOPO_T3 { return "3-torus T^3 (4x4x4 grid, periodic all axes, traversable closed flat)" }
+    if id == TOPO_S2 { return "2-sphere S^2 (cube projection 8x8, closed non-flat)" }
+    if id == TOPO_S3 { return "3-sphere S^3 (4x4x4 antipodal identification, closed traversable curved)" }
+    if id == TOPO_KLEIN { return "Klein bottle (8x8, closed non-orientable, one twist axis)" }
+    if id == TOPO_BLACKHOLE { return "Schwarzschild-like 4x4x4 lattice with central horizon (i_BH=21, Manhattan)" }
+    if id == TOPO_WORMHOLE { return "ER=EPR two 4x4x2 regions A union B with twisted bridge (axis 3=wormhole)" }
+    if id == TOPO_VACUUM_DECAY { return "false-vacuum bubble nucleation at i_seed=0 expanding into T^3 baseline (Coleman 1977)" }
+    if id == TOPO_ALTERED { return "post-decay altered constants regime: SCALE/TAU_MIX/coord_hash multiplier shifted" }
+    if id == TOPO_CARTOON { return "non-physical world: state grows w/o bound, momentum reset every K ticks (whimsical, raw 91 honest)" }
+    if id == TOPO_NESTED { return "matryoshka multiverse: outer T^3 + inner 4^3 sub-universe (1 outer = K inner ticks, Tegmark Level-IV)" }
+    if id == TOPO_CALABI6 { return "6-torus T^6 approximation 2^6=64 cells (Calabi-Yau navigation, n6 calabi-yau-nav)" }
+    if id == TOPO_ADS_CFT { return "AdS/CFT boundary-bulk: 8x8 boundary (anima H-CX-531 holographic-consciousness)" }
+    if id == TOPO_BRANE { return "small-world brane network (anima TOPO16/18 SW topology, brane cosmology)" }
+    if id == TOPO_INFLATION { return "frustration-inflation regime (anima TOPO22c HC+100% Frustration, de Sitter analog)" }
+    if id == TOPO_DE_SITTER { return "de Sitter (positive cosmological constant, exponential expansion limit)" }
+    if id == TOPO_MINKOWSKI { return "Minkowski flat Lorentzian, zero CC, special-relativity baseline" }
+    if id == TOPO_CA3D { return "Wolfram/Conway 3D cellular-automaton lifted to T^3 lattice substrate" }
+    if id == TOPO_BIG_CRUNCH { return "FRW recollapsing universe — inflation reversed (scale-factor → 0, time-flip mode)" }
+    if id == TOPO_BUBBLE { return "level-2 multiverse: eternal-inflation bubble pocket (vacuum-decay + inflation hybrid)" }
+    return "invalid"
+}
+
+// ── topology-aware neighbor lookup ──────────────────────────
+// 각 topology 별 (i, neighbor_axis) → neighbor index 반환. axis ∈ {0=left, 1=right}.
+//   flat:   1D ring index (i±1) mod 64
+//   t2:     8x8 grid, 4 neighbors but here use (left, right) on row+col interleaved
+//   t3:     4x4x4 cube, neighbor axis interleaves x/y/z
+//   s2:     cube-projection sphere (cube faces 8 cells, 8 sides) — neighbor across cube face
+//   s3:     antipodal identification (i ↔ (i+32)%64 + lattice neighbor)
+//   klein:  T² with one axis identified with twist (i.e., (x,y) ~ (x+8, -y mod 8))
+
+fn _neighbor_flat(i: i64, axis: i64) -> i64 {
+    if axis == 0 { return (i + SIGMA_SQ - 1) % SIGMA_SQ }
+    return (i + 1) % SIGMA_SQ
+}
+
+fn _neighbor_t2(i: i64, axis: i64) -> i64 {
+    // 8x8 row-major: x=i%8, y=i/8
+    let x = i % 8
+    let y = i / 8
+    if axis == 0 {
+        // left in x direction
+        let xm = (x + 7) % 8
+        return y * 8 + xm
+    }
+    // axis 1: down in y direction
+    let ym = (y + 1) % 8
+    return ym * 8 + x
+}
+
+fn _neighbor_t3(i: i64, axis: i64) -> i64 {
+    // 4x4x4 row-major: x=i%4, y=(i/4)%4, z=i/16
+    let x = i % 4
+    let y = (i / 4) % 4
+    let z = i / 16
+    if axis == 0 {
+        let xm = (x + 3) % 4
+        return z * 16 + y * 4 + xm
+    }
+    if axis == 1 {
+        let ym = (y + 3) % 4
+        return z * 16 + ym * 4 + x
+    }
+    let zm = (z + 3) % 4
+    return zm * 16 + y * 4 + x
+}
+
+fn _neighbor_s2(i: i64, axis: i64) -> i64 {
+    // S^2 via 6-face cube embedding, but discrete grid 8x8 with pole identification:
+    //   row 0 (y=0) all map to north pole — neighbor is anywhere on row 1 mod 8
+    //   row 7 (y=7) all map to south pole — neighbor is anywhere on row 6 mod 8
+    //   else: T^2-like but with pole convergence
+    let x = i % 8
+    let y = i / 8
+    if axis == 0 {
+        // longitudinal (around equator)
+        let xm = (x + 7) % 8
+        return y * 8 + xm
+    }
+    // latitudinal — cap at poles
+    if y == 0 { return 1 * 8 + ((x + 4) % 8) }   // north pole → opposite side row 1
+    if y == 7 { return 6 * 8 + ((x + 4) % 8) }   // south pole → opposite side row 6
+    let ym = (y + 1) % 8
+    return ym * 8 + x
+}
+
+fn _neighbor_s3(i: i64, axis: i64) -> i64 {
+    // S^3 via 4x4x4 with antipodal identification: i ~ (i+32) mod 64 = (a, -a) pair
+    // For neighbor: standard T^3 neighbor THEN antipodal-quotient (project to fundamental domain [0,32))
+    let i_q = i % 32   // fundamental domain (lower half)
+    let x = i_q % 4
+    let y = (i_q / 4) % 4
+    let z = i_q / 16
+    if axis == 0 {
+        let xm = (x + 3) % 4
+        return z * 16 + y * 4 + xm
+    }
+    if axis == 1 {
+        let ym = (y + 3) % 4
+        return z * 16 + ym * 4 + x
+    }
+    if axis == 2 {
+        let zm = (z + 3) % 4
+        return zm * 16 + y * 4 + x
+    }
+    // axis 3: antipodal hop (S^3 specific, uses upper half)
+    return i_q + 32
+}
+
+fn _neighbor_klein(i: i64, axis: i64) -> i64 {
+    // Klein bottle via 8x8: x is ordinary periodic, y has twist — (x,y+8) ~ (-x mod 8, y)
+    let x = i % 8
+    let y = i / 8
+    if axis == 0 {
+        let xm = (x + 7) % 8
+        return y * 8 + xm
+    }
+    // axis 1: y wrap with twist
+    let yn = (y + 1) % 8
+    if yn == 0 {
+        // twist: x flipped
+        let xt = (8 - x) % 8
+        return yn * 8 + xt
+    }
+    return yn * 8 + x
+}
+
+// blackhole: 4x4x4 with central horizon at i_BH=21 (≈ (1,1,1)).
+//   Manhattan distance d(i, i_BH) = |x-1|+|y-1|+|z-1|.
+//   d ≤ 1 (horizon shell, 7 cells): all axes redirect 1-step toward i_BH.
+//   d ≥ 2 (exterior): standard T^3 neighbor.
+//   i = i_BH (singularity): self-loop (information sink).
+fn _neighbor_blackhole(i: i64, axis: i64) -> i64 {
+    let i_BH: i64 = 21
+    if i == i_BH { return i_BH }
+    let x = i % 4
+    let y = (i / 4) % 4
+    let z = i / 16
+    let mut dx = x - 1
+    if dx < 0 { dx = 0 - dx }
+    let mut dy = y - 1
+    if dy < 0 { dy = 0 - dy }
+    let mut dz = z - 1
+    if dz < 0 { dz = 0 - dz }
+    let d = dx + dy + dz
+    if d <= 1 {
+        // horizon: 1-step Manhattan reduction toward (1,1,1)
+        let mut nx = x
+        let mut ny = y
+        let mut nz = z
+        if axis == 0 {
+            if x > 1 { nx = x - 1 } else if x < 1 { nx = x + 1 }
+        } else if axis == 1 {
+            if y > 1 { ny = y - 1 } else if y < 1 { ny = y + 1 }
+        } else {
+            if z > 1 { nz = z - 1 } else if z < 1 { nz = z + 1 }
+        }
+        return nz * 16 + ny * 4 + nx
+    }
+    // exterior: standard T^3
+    if axis == 0 {
+        let xm = (x + 3) % 4
+        return z * 16 + y * 4 + xm
+    }
+    if axis == 1 {
+        let ym = (y + 3) % 4
+        return z * 16 + ym * 4 + x
+    }
+    let zm = (z + 3) % 4
+    return zm * 16 + y * 4 + x
+}
+
+// wormhole: ER=EPR — i ∈ [0,32) = region A (4x4x2 slab), i ∈ [32,64) = region B.
+//   Axes 0/1/2: T^3-on-slab (z wraps within own region).
+//   Axis 3: traversable bridge with twist offset i%8 (preserves bijection, breaks identity).
+fn _neighbor_wormhole(i: i64, axis: i64) -> i64 {
+    if axis >= 3 {
+        // wormhole bridge axis
+        if i < 32 {
+            let off = i % 8
+            return 32 + ((i + off) % 32)
+        }
+        let i2 = i - 32
+        let off = i2 % 8
+        return (i2 + off) % 32
+    }
+    // spatial axes within own region (4x4x2 slab)
+    let base = if i < 32 { 0 } else { 32 }
+    let r = i - base   // 0..32
+    let x = r % 4
+    let y = (r / 4) % 4
+    let z = r / 16     // 0 or 1
+    if axis == 0 {
+        let xm = (x + 3) % 4
+        return base + z * 16 + y * 4 + xm
+    }
+    if axis == 1 {
+        let ym = (y + 3) % 4
+        return base + z * 16 + ym * 4 + x
+    }
+    // axis == 2: z wraps within slab (0 ↔ 1)
+    let zm = (z + 1) % 2
+    return base + zm * 16 + y * 4 + x
+}
+
+// vacuum-decay: T^3 baseline + nucleation perturbation at i_seed=0.
+//   bubble expands: cell i with d(i, 0) <= bubble_radius(t) is in altered regime.
+//   For neighbor query: cells inside bubble use altered offset (+7), outside use T^3.
+//   Static approximation (single-tick): treat as T^3 + cell-0 self-anchor extra offset.
+fn _neighbor_vacuum_decay(i: i64, axis: i64) -> i64 {
+    if i == 0 {
+        // nucleation site: anchor — neighbor returns self for axis 0, t3 for others
+        if axis == 0 { return 0 }
+    }
+    // outside nucleation: t3 + Manhattan-distance-modulated offset
+    let n = _neighbor_t3(i, axis)
+    // perturbation: cells within d=1 of seed i=0 get extra hop
+    let x = i % 4
+    let y = (i / 4) % 4
+    let z = i / 16
+    let d = x + y + z
+    if d <= 1 { return (n + 7) % SIGMA_SQ }
+    return n
+}
+
+// altered: post-decay constants regime — modified hash + extra-step neighbor.
+//   Uses T^3 base but applies offset = (i * 31 + axis * 17) % 64 to break pattern.
+fn _neighbor_altered(i: i64, axis: i64) -> i64 {
+    let base = _neighbor_t3(i, axis)
+    let off = (i * 31 + axis * 17) % SIGMA_SQ
+    return (base + off + 5) % SIGMA_SQ
+}
+
+// cartoon: non-physical — neighbor follows random-like pattern, conservation violated.
+//   Uses prime-modulated wrap that breaks all spatial regularity.
+fn _neighbor_cartoon(i: i64, axis: i64) -> i64 {
+    let off = (i * 47 + axis * 23 + 13) % SIGMA_SQ
+    let r = (i + off) % SIGMA_SQ
+    if r < 0 { return r + SIGMA_SQ }
+    return r
+}
+
+// nested: matryoshka — outer T^3 (i ∈ [0, 56)) + inner 4-cell sub-universe (i ∈ [56, 64)).
+//   Outer wraps T^3 within own region; inner has 8 cells with their own ring topology.
+//   Bridge: outer cell 0 ↔ inner cell 56 (gateway).
+fn _neighbor_nested(i: i64, axis: i64) -> i64 {
+    if i >= 56 {
+        // inner sub-universe (8 cells, ring)
+        let r = i - 56
+        if axis == 0 { return 56 + ((r + 7) % 8) }
+        if axis == 1 { return 56 + ((r + 1) % 8) }
+        // axis 2 = bridge to outer
+        return r * 7 % 56
+    }
+    // outer: t3 within [0, 56) approximated
+    let n = _neighbor_t3(i, axis)
+    if n >= 56 { return n - 56 }
+    if i == 0 && axis == 2 {
+        // gateway to inner
+        return 56
+    }
+    return n
+}
+
+// calabi6: 6-torus T^6 with 2^6=64 cells. Each cell = (b0 b1 b2 b3 b4 b5) binary.
+//   axis ∈ [0, 6): flip bit `axis` (Hamming-1 neighbor).
+fn _neighbor_calabi6(i: i64, axis: i64) -> i64 {
+    let mut k = axis % 6
+    if k < 0 { k = k + 6 }
+    let mask: i64 = 1
+    let mut shift = 0
+    while shift < k {
+        // shift mask left by 1 (no bit-shift in stage1 hexa, use multiplication)
+        shift = shift + 1
+    }
+    let bit = _bit_pow2(k)
+    return i ^ bit
+}
+
+fn _bit_pow2(k: i64) -> i64 {
+    let mut v: i64 = 1
+    let mut s = 0
+    while s < k {
+        v = v * 2
+        s = s + 1
+    }
+    return v
+}
+
+// ads-cft: 8x8 boundary (=64 cells). Boundary cells have additional 'depth' axis
+//   pointing into implicit bulk (modeled via offset 32). Boundary uses T^2 + depth shift.
+fn _neighbor_ads_cft(i: i64, axis: i64) -> i64 {
+    if axis < 2 { return _neighbor_t2(i, axis) }
+    // axis >= 2: 'depth' projection — toggle high bit
+    return (i + 32) % SIGMA_SQ
+}
+
+// brane: small-world network — T^3 base + sparse long-range edges.
+//   Watts-Strogatz style: every 8th cell rewires to long-range hop, others use T^3.
+fn _neighbor_brane(i: i64, axis: i64) -> i64 {
+    if axis >= 3 { return (i * 17 + 5) % SIGMA_SQ }
+    // 12.5% rewire probability — every 8th cell takes long-range
+    if i % 8 == 3 {
+        let target = (i * 17 + axis * 11 + 5) % SIGMA_SQ
+        return target
+    }
+    return _neighbor_t3(i, axis)
+}
+
+// inflation: frustration-inflation regime — T^3 base + state-amplification offset.
+//   Mimics anima TOPO22c (HC+100% frustration) by reversing every K=8 cells.
+fn _neighbor_inflation(i: i64, axis: i64) -> i64 {
+    let base = _neighbor_t3(i, axis)
+    if i % 8 == 0 {
+        // frustration: reverse coupling (use cell-63-mirror instead)
+        return (SIGMA_SQ - 1 - base) % SIGMA_SQ
+    }
+    return base
+}
+
+// de-sitter: positive CC, exponential expansion. Approximated via t3 + state-amplifying
+//   neighbor offset that grows with i (mimics scale factor a(t)~e^Ht).
+fn _neighbor_de_sitter(i: i64, axis: i64) -> i64 {
+    let base = _neighbor_t3(i, axis)
+    let amp = (i / 8 + 1)
+    return (base + amp) % SIGMA_SQ
+}
+
+// minkowski: flat Lorentzian. Spatial axes preserve T^3 + light-cone causality
+//   constraint: every step has implicit time-component, modeled by parity-broken offset.
+fn _neighbor_minkowski(i: i64, axis: i64) -> i64 {
+    let base = _neighbor_t3(i, axis)
+    // Lorentz signature break: -1 sign on axis 0 (time-like), +1 elsewhere
+    if axis == 0 {
+        // time-like: forward-only with light-cone clamp
+        if i >= 60 { return i }
+        return (base + 11) % SIGMA_SQ
+    }
+    // spatial: T^3 + asymmetry (Minkowski metric (-+++) emulation)
+    return (base + axis * 3) % SIGMA_SQ
+}
+
+// ca3d: Wolfram-style 3D cellular automaton. Neighbor follows von Neumann pattern
+//   but with rule-based modulation: every 3rd cell has alternative neighbor offset.
+fn _neighbor_ca3d(i: i64, axis: i64) -> i64 {
+    let base = _neighbor_t3(i, axis)
+    if i % 3 == 0 {
+        // rule-modulation: alternative neighbor (XOR pattern)
+        return base ^ 7
+    }
+    return base
+}
+
+// big-crunch: time-reversed inflation. Inverted offset — cells flow toward center i=21.
+fn _neighbor_big_crunch(i: i64, axis: i64) -> i64 {
+    let i_center: i64 = 21
+    if i == i_center { return i_center }
+    let x = i % 4
+    let y = (i / 4) % 4
+    let z = i / 16
+    let mut nx = x
+    let mut ny = y
+    let mut nz = z
+    if axis == 0 {
+        if x > 1 { nx = x - 1 } else if x < 1 { nx = x + 1 }
+    } else if axis == 1 {
+        if y > 1 { ny = y - 1 } else if y < 1 { ny = y + 1 }
+    } else {
+        if z > 1 { nz = z - 1 } else if z < 1 { nz = z + 1 }
+    }
+    return nz * 16 + ny * 4 + nx
+}
+
+// bubble: level-2 multiverse — vacuum-decay + inflation hybrid. Different cells
+//   in different vacuum states; bubble walls at i % 16 == 0 boundaries.
+fn _neighbor_bubble(i: i64, axis: i64) -> i64 {
+    let bubble_id = i / 16
+    let base = _neighbor_t3(i, axis)
+    let neighbor_bubble = base / 16
+    if bubble_id != neighbor_bubble {
+        // wall crossing: phase shift (different vacuum)
+        return (base + bubble_id * 13) % SIGMA_SQ
+    }
+    return base
+}
+
+fn topology_neighbor(i: i64, axis: i64, topo: i64) -> i64 {
+    if topo == TOPO_FLAT { return _neighbor_flat(i, axis) }
+    if topo == TOPO_T2 { return _neighbor_t2(i, axis) }
+    if topo == TOPO_T3 { return _neighbor_t3(i, axis) }
+    if topo == TOPO_S2 { return _neighbor_s2(i, axis) }
+    if topo == TOPO_S3 { return _neighbor_s3(i, axis) }
+    if topo == TOPO_KLEIN { return _neighbor_klein(i, axis) }
+    if topo == TOPO_BLACKHOLE { return _neighbor_blackhole(i, axis) }
+    if topo == TOPO_WORMHOLE { return _neighbor_wormhole(i, axis) }
+    if topo == TOPO_VACUUM_DECAY { return _neighbor_vacuum_decay(i, axis) }
+    if topo == TOPO_ALTERED { return _neighbor_altered(i, axis) }
+    if topo == TOPO_CARTOON { return _neighbor_cartoon(i, axis) }
+    if topo == TOPO_NESTED { return _neighbor_nested(i, axis) }
+    if topo == TOPO_CALABI6 { return _neighbor_calabi6(i, axis) }
+    if topo == TOPO_ADS_CFT { return _neighbor_ads_cft(i, axis) }
+    if topo == TOPO_BRANE { return _neighbor_brane(i, axis) }
+    if topo == TOPO_INFLATION { return _neighbor_inflation(i, axis) }
+    if topo == TOPO_DE_SITTER { return _neighbor_de_sitter(i, axis) }
+    if topo == TOPO_MINKOWSKI { return _neighbor_minkowski(i, axis) }
+    if topo == TOPO_CA3D { return _neighbor_ca3d(i, axis) }
+    if topo == TOPO_BIG_CRUNCH { return _neighbor_big_crunch(i, axis) }
+    if topo == TOPO_BUBBLE { return _neighbor_bubble(i, axis) }
+    return _neighbor_flat(i, axis)
+}
+
+// ── world state ─────────────────────────────────────────────
+let mut __mw_x: [i64] = []
+let mut __mw_tick: i64 = 0
+
+fn mw_init(seed: i64) {
+    let mut xs: [i64] = []
+    let mut i = 0
+    while i < SIGMA_SQ {
+        let v = (seed * 1103 + i * 37 + 17) % SCALE
+        let mut vv = v
+        if vv < 0 { vv = 0 - vv }
+        xs = xs + [vv]
+        i = i + 1
+    }
+    __mw_x = xs
+    __mw_tick = 0
+}
+
+fn _coord_hash(i: i64) -> i64 {
+    let h = (i * 131 + 73) % 251
+    return h + 5
+}
+
+// topology-aware step: phase 1 = additive injection, phase 2 = topology-aware diffusion
+fn mw_step(byte: i64, topo: i64) {
+    if byte < 0 { return }
+    let mut b = byte
+    if b > 255 { b = b % 256 }
+
+    // Phase 1: additive injection
+    let mut xs1: [i64] = []
+    let mut i = 0
+    while i < SIGMA_SQ {
+        let h = _coord_hash(i)
+        let mut v = __mw_x[i]
+        v = v + b * h + (__mw_tick % 31)
+        if v < 0 { v = 0 - v }
+        v = v % SCALE
+        xs1 = xs1 + [v]
+        i = i + 1
+    }
+
+    // Phase 2: τ=4 diffusion via topology-aware neighbor
+    let mut cur = xs1
+    let mut layer = 0
+    while layer < TAU_MIX {
+        let mut xs2: [i64] = []
+        let mut j = 0
+        while j < SIGMA_SQ {
+            // axis selection: alternate per layer to traverse all dims
+            let axis = layer % 3   // up to 3 axes (handles t3/s3)
+            let k_prev = topology_neighbor(j, axis, topo)
+            let mut left: i64 = 0
+            if k_prev >= 0 && k_prev < SIGMA_SQ { left = cur[k_prev] }
+            let right = cur[j]
+            let mix = (left * 7 + right + layer * 13) % SCALE
+            xs2 = xs2 + [mix]
+            j = j + 1
+        }
+        cur = xs2
+        layer = layer + 1
+    }
+    __mw_x = cur
+    __mw_tick = __mw_tick + 1
+}
+
+fn mw_state_hash() -> i64 {
+    let mut h: i64 = 0
+    let mut i = 0
+    while i < SIGMA_SQ {
+        let v = __mw_x[i]
+        h = (h * 33 + v) % 9999999967
+        i = i + 1
+    }
+    return h
+}
+
+// ── evolution step ──────────────────────────────────────────
+// tick-based topology dispatch: tick < transition → from, else → to.
+// Captures closed-traversable → toroidal phase change (e.g. s3 → t3).
+
+fn mw_step_evolve(byte: i64, tick: i64, transition: i64, topo_from: i64, topo_to: i64) {
+    let mut topo = topo_from
+    if tick >= transition { topo = topo_to }
+    mw_step(byte, topo)
+}
+
+// ── selftest ────────────────────────────────────────────────
+// Deterministic byte stream + seed=6 across 6 topologies + evolution scenario;
+// assert fingerprints distinct AND evolution result distinct from both endpoints.
+
+fn _selftest_run(topo_name: string) -> i64 {
+    let topo = topology_id(topo_name)
+    if topo < 0 { return 0 - 1 }
+    mw_init(6)
+    let mut k = 0
+    while k < 32 {
+        let byte = (k * 17 + 7) % 256
+        mw_step(byte, topo)
+        k = k + 1
+    }
+    return mw_state_hash()
+}
+
+fn _selftest_evolve(from_name: string, to_name: string, transition: i64) -> i64 {
+    let topo_from = topology_id(from_name)
+    let topo_to = topology_id(to_name)
+    if topo_from < 0 { return 0 - 1 }
+    if topo_to < 0 { return 0 - 1 }
+    mw_init(6)
+    let mut k = 0
+    while k < 32 {
+        let byte = (k * 17 + 7) % 256
+        mw_step_evolve(byte, k, transition, topo_from, topo_to)
+        k = k + 1
+    }
+    return mw_state_hash()
+}
+
+fn run_selftest() {
+    println("[topology_universe] --selftest")
+    let names = ["flat", "t2", "t3", "s2", "s3", "klein", "blackhole", "wormhole", "vacuum-decay", "altered", "cartoon", "nested", "calabi6", "ads-cft", "brane", "inflation", "de-sitter", "minkowski", "ca3d", "big-crunch", "bubble"]
+    let mut hashes: [i64] = []
+    let mut i = 0
+    while i < names.len() {
+        let h = _selftest_run(names[i])
+        hashes = hashes + [h]
+        println("  topology=" + names[i] + "  state_hash=" + to_string(h) + "  desc=" + topology_describe(topology_id(names[i])))
+        i = i + 1
+    }
+    // verify all hashes distinct
+    let mut a = 0
+    let mut all_distinct = true
+    while a < hashes.len() {
+        let mut b = a + 1
+        while b < hashes.len() {
+            if hashes[a] == hashes[b] {
+                all_distinct = false
+                println("  COLLISION: " + names[a] + " == " + names[b] + " (hash=" + to_string(hashes[a]) + ")")
+            }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    // re-run flat twice — assert idempotent (raw 65)
+    let h1 = _selftest_run("flat")
+    let h2 = _selftest_run("flat")
+    let idempotent = h1 == h2
+    if !idempotent {
+        println("  RAW-65-VIOLATION flat re-run h1=" + to_string(h1) + " h2=" + to_string(h2))
+    }
+    // evolution case: s3 → t3 ("closed-traversable → toroidal" canonical)
+    // transition late (24 of 32) so post-transition mixing doesn't fully dominate
+    let h_s3_only = _selftest_run("s3")
+    let h_t3_only = _selftest_run("t3")
+    let h_evolve_24 = _selftest_evolve("s3", "t3", 24)
+    let h_evolve_24_idem = _selftest_evolve("s3", "t3", 24)
+    let h_evolve_8 = _selftest_evolve("s3", "t3", 8)
+    let evolve_24_distinct = h_evolve_24 != h_s3_only && h_evolve_24 != h_t3_only
+    let evolve_8_distinct = h_evolve_8 != h_s3_only && h_evolve_8 != h_t3_only
+    let evolve_24_idem = h_evolve_24 == h_evolve_24_idem
+    let evolve_distinct = evolve_24_distinct || evolve_8_distinct
+    let evolve_idem = evolve_24_idem
+    println("  evolve s3→t3@24  hash=" + to_string(h_evolve_24) + "  distinct_from_endpoints=" + to_string(evolve_24_distinct) + "  idempotent=" + to_string(evolve_24_idem))
+    println("  evolve s3→t3@8   hash=" + to_string(h_evolve_8) + "  distinct_from_endpoints=" + to_string(evolve_8_distinct))
+    let pass = all_distinct && idempotent && evolve_distinct && evolve_idem
+    if pass {
+        println("__TOPOLOGY_UNIVERSE_SELFTEST__ PASS topologies=" + to_string(names.len()) + " idempotent=true distinct=true evolve=true")
+    } else {
+        println("__TOPOLOGY_UNIVERSE_SELFTEST__ FAIL all_distinct=" + to_string(all_distinct) + " idempotent=" + to_string(idempotent) + " evolve_distinct=" + to_string(evolve_distinct) + " evolve_idem=" + to_string(evolve_idem))
+    }
+}
+
+// ── main ────────────────────────────────────────────────────
+let _args = args()
+
+// --selftest
+let mut is_selftest = false
+let mut i_arg = 0
+while i_arg < _args.len() {
+    if _args[i_arg] == "--selftest" { is_selftest = true }
+    i_arg = i_arg + 1
+}
+
+if is_selftest {
+    run_selftest()
+} else {
+    // CLI / env topology + evolution selection
+    let mut max_ticks: i64 = 100
+    let mut topo_name: string = "flat"
+    let mut evolve_mode: bool = false
+    let mut evolve_from_name: string = "s3"
+    let mut evolve_to_name: string = "t3"
+    let mut evolve_at: i64 = 0
+
+    if _args.len() >= 2 {
+        try { max_ticks = to_int(_args[1]) } catch e { max_ticks = 100 }
+    }
+
+    // CLI evolution mode: hexa topology_universe.hexa <ticks> evolve <from> <to> <at>
+    if _args.len() >= 6 && _args[2] == "evolve" {
+        evolve_mode = true
+        evolve_from_name = _args[3]
+        evolve_to_name = _args[4]
+        try { evolve_at = to_int(_args[5]) } catch e { evolve_at = max_ticks / 2 }
+    } else if _args.len() >= 3 {
+        topo_name = _args[2]
+    } else {
+        // env fallback (single-topology + evolution-via-env)
+        let mut env_topo = ""
+        try { env_topo = to_string(exec("printenv NEXUS_UNIVERSE_TOPOLOGY")).trim() } catch e { env_topo = "" }
+        if env_topo.len() > 0 { topo_name = env_topo }
+
+        let mut env_from = ""
+        let mut env_to = ""
+        let mut env_at = ""
+        try { env_from = to_string(exec("printenv NEXUS_UNIVERSE_EVOLVE_FROM")).trim() } catch e { env_from = "" }
+        try { env_to = to_string(exec("printenv NEXUS_UNIVERSE_EVOLVE_TO")).trim() } catch e { env_to = "" }
+        try { env_at = to_string(exec("printenv NEXUS_UNIVERSE_EVOLVE_AT")).trim() } catch e { env_at = "" }
+        if env_from.len() > 0 && env_to.len() > 0 {
+            evolve_mode = true
+            evolve_from_name = env_from
+            evolve_to_name = env_to
+            if env_at.len() > 0 {
+                try { evolve_at = to_int(env_at) } catch e { evolve_at = max_ticks / 2 }
+            } else {
+                evolve_at = max_ticks / 2
+            }
+        }
+    }
+
+    if evolve_mode {
+        let topo_from = topology_id(evolve_from_name)
+        let topo_to = topology_id(evolve_to_name)
+        if topo_from < 0 || topo_to < 0 {
+            println("[topology_universe] ERROR evolve invalid topology from=" + evolve_from_name + " to=" + evolve_to_name)
+            println("  reason: validation-fail unknown-topology-in-evolve-pair")
+            println("  fix: 1) use {flat,t2,t3,s2,s3,klein}  2) canonical: NEXUS_UNIVERSE_EVOLVE_FROM=s3 NEXUS_UNIVERSE_EVOLVE_TO=t3 NEXUS_UNIVERSE_EVOLVE_AT=50")
+        } else {
+            println("[topology_universe] start max_ticks=" + to_string(max_ticks) + " evolve mode from=" + evolve_from_name + " → to=" + evolve_to_name + " at_tick=" + to_string(evolve_at))
+            println("  from_desc=" + topology_describe(topo_from))
+            println("  to_desc=" + topology_describe(topo_to))
+            mw_init(6)
+            let mut tau: i64 = 0
+            while tau < max_ticks {
+                let byte = (tau * 17 + 7) % 256
+                mw_step_evolve(byte, tau, evolve_at, topo_from, topo_to)
+                tau = tau + 1
+            }
+            let final_hash = mw_state_hash()
+            println("[topology_universe] done tau=" + to_string(tau) + " evolve=" + evolve_from_name + "→" + evolve_to_name + "@" + to_string(evolve_at) + " final_state_hash=" + to_string(final_hash))
+        }
+    } else {
+        let topo = topology_id(topo_name)
+        if topo < 0 {
+            println("[topology_universe] ERROR unknown topology=" + topo_name)
+            println("  valid: flat | t2 | t3 | s2 | s3 | klein | blackhole | wormhole | vacuum-decay | altered | cartoon | nested | calabi6 | ads-cft | brane | inflation | de-sitter | minkowski | ca3d | big-crunch | bubble")
+            println("  reason: validation-fail invalid-topology-name")
+            println("  fix: 1) use one of {flat,t2,t3,s2,s3,klein,blackhole,wormhole}  2) NEXUS_UNIVERSE_TOPOLOGY=t3 hexa topology_universe.hexa <max_ticks>  3) hexa topology_universe.hexa <ticks> evolve s3 blackhole 50  4) hexa topology_universe.hexa --selftest")
+        } else {
+            println("[topology_universe] start max_ticks=" + to_string(max_ticks) + " topology=" + topo_name + " desc=" + topology_describe(topo))
+            mw_init(6)
+            let mut tau: i64 = 0
+            while tau < max_ticks {
+                let byte = (tau * 17 + 7) % 256
+                mw_step(byte, topo)
+                tau = tau + 1
+            }
+            let final_hash = mw_state_hash()
+            println("[topology_universe] done tau=" + to_string(tau) + " topology=" + topo_name + " final_state_hash=" + to_string(final_hash))
+        }
+    }
+}

@@ -1,0 +1,258 @@
+#!hexa strict
+// stdlib/hal/numerics_gpgpu_lifecycle.hexa — F-GPGPU-2 T2 numerical.
+//
+// Closes the T2 (numerical / fixture) tier of falsifier F-GPGPU-2
+// (4-stage τ-lifecycle per vendor backend: compile / enqueue / dispatch
+// / retire; falsifier_gpgpu_check.hexa registry).
+//
+// T1 (compute.hexa internal asserts) closes the algebraic identity:
+//
+//   τ_gpgpu = 4 ⇒ |LIFECYCLE_GPGPU_STAGES| = 4
+//
+// T2 (this script) cross-checks the dispatch table NUMERICALLY by
+// reading every vendor backend's source and SCORING each backend's
+// lifecycle-function surface, then summing across the 6 vendor
+// backends. The aggregate score must clear two thresholds:
+//
+//   • per-backend score ≥ 3 of 4 stages              (matches floor)
+//   • Σ stage_count over 6 vendor backends ≥ 6·3 = 18
+//   • dispatch fn present on EVERY vendor backend   (100% dispatch coverage)
+//
+// τ=4 stage → archetypal surface fn name:
+//   compile   → *_kernel_compile        (paper-tier; nvrtc/clbuild/etc.)
+//   enqueue   → *_buffer_h2d            (host-to-device transfer kicks off
+//                                          the dispatch queue chain)
+//   dispatch  → *_dispatch              (cuLaunchKernel / clEnqueueNDRangeKernel)
+//   retire    → *_event_wait OR *_event_release (sync + cleanup)
+//
+// `cuda` backend uses `cuda_*` prefix, `hip` uses `hip_*`, etc.
+//
+// PASS = aggregate score ≥ 18 ∧ every vendor backend has *_dispatch
+//        ∧ per-backend score ≥ 3.
+// FAIL = any condition trips.
+//
+// Run:
+//   hexa run stdlib/hal/numerics_gpgpu_lifecycle.hexa
+//
+// Cost: $0 (6 file-reads + grep; no compilation).
+//
+// Phase G iter 9+5+2; F-GPGPU-2 closure 33% → 67% (T1+T2 ✓; T3 deferred).
+// Pattern: numerics_lifecycle_dispatch.hexa (sister F-HAL-2 T2 fixture).
+
+// ─── n=6 lattice constants ────────────────────────────────────────────
+
+let TAU_GPGPU         = 4
+let GPGPU_VENDORS_N   = 6
+
+// Aggregate floor: every backend clears 3-of-4 ⇒ sum ≥ 6·3 = 18.
+let AGGREGATE_FLOOR   = GPGPU_VENDORS_N * (TAU_GPGPU - 1)   // = 18
+
+// ─── vendor roster (canonical 6) ──────────────────────────────────────
+
+let VENDORS = [
+    "cuda",     // NVIDIA proprietary
+    "hip",      // AMD ROCm
+    "sycl",     // Intel oneAPI / DPC++
+    "opencl",   // Khronos
+    "metal",    // Apple
+    "webgpu"    // W3C
+]
+
+// ─── τ=4 stage archetypal-fn-name suffixes ────────────────────────────
+// For each stage, list the fn-name suffixes that count. The vendor's fn
+// prefix is the vendor name (cuda_*, hip_*, etc.).
+
+fn _compile_suffixes() -> [str] {
+    return ["_kernel_compile"]
+}
+fn _enqueue_suffixes() -> [str] {
+    return ["_buffer_h2d", "_buffer_alloc"]
+}
+fn _dispatch_suffixes() -> [str] {
+    return ["_dispatch"]
+}
+fn _retire_suffixes() -> [str] {
+    return ["_event_wait", "_event_release"]
+}
+
+// Stage label for diagnostic output.
+fn _stage_name(s: int) -> str {
+    if s == 0 { return "compile" }
+    if s == 1 { return "enqueue" }
+    if s == 2 { return "dispatch" }
+    if s == 3 { return "retire" }
+    return "?"
+}
+
+// ─── check harness ───────────────────────────────────────────────────
+
+let mut RUN  = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ─── helpers ─────────────────────────────────────────────────────────
+
+fn _root() -> str {
+    let env_root = env("HEXA_HAL_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _exists(p: str) -> bool {
+    let r = exec("[ -f \"" + p + "\" ] && echo y || echo n").trim()
+    return r == "y"
+}
+
+// Returns true if any of the suffixes appears as `fn <vendor><suffix>(`
+// in the source. Counts only one match per stage (boolean presence).
+fn _stage_present(src: str, vendor: str, suffixes: [str]) -> bool {
+    for sfx in suffixes {
+        let pat = "fn " + vendor + sfx + "("
+        if src.contains(pat) { return true }
+    }
+    return false
+}
+
+// Score a single vendor backend: count stages present, 0..4.
+fn _score_vendor(src: str, vendor: str) -> int {
+    let mut score = 0
+    if _stage_present(src, vendor, _compile_suffixes())  { score = score + 1 }
+    if _stage_present(src, vendor, _enqueue_suffixes())  { score = score + 1 }
+    if _stage_present(src, vendor, _dispatch_suffixes()) { score = score + 1 }
+    if _stage_present(src, vendor, _retire_suffixes())   { score = score + 1 }
+    return score
+}
+
+// Return list of missing-stage names for a vendor (diagnostic).
+fn _missing_stages(src: str, vendor: str) -> str {
+    let mut s = ""
+    if !_stage_present(src, vendor, _compile_suffixes())  { s = s + "compile " }
+    if !_stage_present(src, vendor, _enqueue_suffixes())  { s = s + "enqueue " }
+    if !_stage_present(src, vendor, _dispatch_suffixes()) { s = s + "dispatch " }
+    if !_stage_present(src, vendor, _retire_suffixes())   { s = s + "retire " }
+    return s
+}
+
+// ─── checks ──────────────────────────────────────────────────────────
+
+fn check_vendor_count() {
+    _check(VENDORS.len() == GPGPU_VENDORS_N,
+           "6 vendor roster cardinality",
+           "got " + str(VENDORS.len()))
+}
+
+fn check_tau_eq_4() {
+    _check(TAU_GPGPU == 4,
+           "τ_gpgpu = 4 stages (compile/enqueue/dispatch/retire)",
+           "got " + str(TAU_GPGPU))
+}
+
+fn check_per_vendor_min_3(root: str) {
+    // Each vendor backend's score must be ≥ 3 (matches floor).
+    let mut bad = ""
+    let mut detail = ""
+    for v in VENDORS {
+        let p = root + "/stdlib/hal/backend/" + v + "/compute.hexa"
+        if !_exists(p) { bad = bad + v + "(missing) "; continue }
+        let src = read_file(p)
+        let s = _score_vendor(src, v)
+        let miss = _missing_stages(src, v)
+        detail = detail + v + "=" + str(s) + " "
+        if s < 3 { bad = bad + v + "(score=" + str(s) + ",missing=" + miss + ") " }
+    }
+    _check(bad.len() == 0,
+           "per-vendor lifecycle score ≥ 3 of 4 stages",
+           if bad.len() > 0 { "issues: " + bad } else { detail })
+}
+
+fn check_aggregate_score(root: str) {
+    let mut sum = 0
+    let mut detail = ""
+    for v in VENDORS {
+        let p = root + "/stdlib/hal/backend/" + v + "/compute.hexa"
+        if !_exists(p) { detail = detail + v + "=? "; continue }
+        let src = read_file(p)
+        let s = _score_vendor(src, v)
+        sum = sum + s
+        detail = detail + v + "=" + str(s) + " "
+    }
+    _check(sum >= AGGREGATE_FLOOR,
+           "Σ stage_count over 6 vendors ≥ " + str(AGGREGATE_FLOOR) + " (= 6·3)",
+           "got " + str(sum) + " (" + detail + ")")
+}
+
+fn check_dispatch_universal(root: str) {
+    // Every vendor backend MUST have *_dispatch.
+    let mut bad = ""
+    for v in VENDORS {
+        let p = root + "/stdlib/hal/backend/" + v + "/compute.hexa"
+        if !_exists(p) { bad = bad + v + "(missing) "; continue }
+        let src = read_file(p)
+        if !_stage_present(src, v, _dispatch_suffixes()) {
+            bad = bad + v + "(no-dispatch) "
+        }
+    }
+    _check(bad.len() == 0,
+           "every vendor backend has fn <vendor>_dispatch (100% dispatch coverage)",
+           if bad.len() > 0 { "issues: " + bad } else { "all 6 vendors have dispatch" })
+}
+
+fn check_retire_universal(root: str) {
+    // Every vendor backend MUST have at least one retire-stage surface.
+    let mut bad = ""
+    for v in VENDORS {
+        let p = root + "/stdlib/hal/backend/" + v + "/compute.hexa"
+        if !_exists(p) { bad = bad + v + "(missing) "; continue }
+        let src = read_file(p)
+        if !_stage_present(src, v, _retire_suffixes()) {
+            bad = bad + v + "(no-retire) "
+        }
+    }
+    _check(bad.len() == 0,
+           "every vendor backend has *_event_wait or *_event_release",
+           if bad.len() > 0 { "issues: " + bad } else { "all 6 vendors have retire" })
+}
+
+// ─── main ────────────────────────────────────────────────────────────
+
+fn main() {
+    println("========================================================================")
+    println("  stdlib/hal — numerics_gpgpu_lifecycle: F-GPGPU-2 T2 numerical")
+    println("========================================================================")
+    println("  vendors: " + str(VENDORS))
+    println("  τ_gpgpu = " + str(TAU_GPGPU) + " stages: compile / enqueue / dispatch / retire")
+    println("  aggregate floor: " + str(AGGREGATE_FLOOR) + " (= 6·3)")
+    println("")
+
+    let root = _root()
+
+    check_vendor_count()
+    check_tau_eq_4()
+    check_per_vendor_min_3(root)
+    check_aggregate_score(root)
+    check_dispatch_universal(root)
+    check_retire_universal(root)
+
+    println("")
+    println("  FALSIFIER:")
+    println("    ✗ F-GPGPU-2: 4-stage τ-lifecycle per vendor (cross-checked numerically)")
+
+    let pass_n = RUN - FAIL
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_LANG_HAL_NUMERICS_GPGPU_LIFECYCLE__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_LANG_HAL_NUMERICS_GPGPU_LIFECYCLE__ PASS")
+    exit(0)
+}
+
+main()

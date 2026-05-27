@@ -1,0 +1,206 @@
+// compiler/atlas/symbolic/sigma_phi_tau_uniqueness.hexa — n=6 uniqueness family
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Hexa-native port of the σ/φ/τ "n=6 unique" theorem family from
+// archive-TECS-L/.shared/calc (commit 4ee05c39; TECS-L absorption Wave 2 —
+// manifest §Backlog #7). Combines five source files into one verifier:
+//
+//   verify_sigma_phi_n.py        THM-A : σ(n)/φ(n) = n        ⟺ n ∈ {1, 6}
+//   verify_tau_plus_2.py         THM-B : τ(n) + 2 = n         ⟺ n = 6
+//                                        (closed bound τ(n) ≤ 2√n ⇒ n ≤ 7)
+//   verify_sigma_n_phi_tau.py    THM-C : σ(n)(n+φ(n)) = n·τ(n)²  unique n=6 (n>1)
+//   sigma_phi_ntau_proof.py      THM-D : σ(n)·φ(n) = n·τ(n)   ⟺ n ∈ {1, 6}
+//   n6_uniqueness_tester.py      generic exhaustive predicate uniqueness scan
+//
+// Each theorem is verified by EXACT integer arithmetic: an exhaustive scan
+// over [1, limit] enumerating the solution set, plus (THM-B) the closed-form
+// upper bound n ≤ ⌊(1+√3)²⌋ = 7 that makes the finite check a *proof*, not a
+// heuristic. Closes _archive_tecs_l_absorption_manifest.md §D GAP #1.
+// Zero external dependency (g5 hexa-native-only).
+//
+// Note: manifest §Backlog #7 suggested extending compiler/atlas/verify/
+// modular.hexa, but that file is a tightly-scoped T2-01 verdict verifier
+// (its own AtlasVerdict contract). Per Wave-1 one-engine-one-file
+// architecture this lands as a standalone symbolic engine instead;
+// compiler/atlas/verify/* may `use` it later for verdict-gating.
+//
+// Cross-link: atlas/inbox/_tecsl_calculator_port_manifest.md §C / §Backlog #7 ·
+// _archive_tecs_l_absorption_manifest.md §D GAP #1.
+
+// ── exact arithmetic primitives (self-contained) ────────────────────────
+
+pub fn spt_sigma(n: int) -> int {
+    if n <= 0 { return 0 }
+    let mut s = 0
+    let mut d = 1
+    while d <= n {
+        if n % d == 0 { s = s + d }
+        d = d + 1
+    }
+    return s
+}
+
+pub fn spt_tau(n: int) -> int {
+    if n <= 0 { return 0 }
+    let mut c = 0
+    let mut d = 1
+    while d <= n {
+        if n % d == 0 { c = c + 1 }
+        d = d + 1
+    }
+    return c
+}
+
+pub fn spt_phi(n: int) -> int {
+    if n <= 0 { return 0 }
+    if n == 1 { return 1 }
+    let mut count = 0
+    let mut k = 1
+    while k <= n {
+        // gcd(k, n)
+        let mut a = k
+        let mut b = n
+        while b != 0 {
+            let t = b
+            b = a % b
+            a = t
+        }
+        if a == 1 { count = count + 1 }
+        k = k + 1
+    }
+    return count
+}
+
+// ── THM-A : σ(n)/φ(n) = n ⟺ n ∈ {1, 6}  (verify_sigma_phi_n.py) ─────────
+// integer form: σ(n) = n·φ(n).
+pub fn thm_a_holds(n: int) -> bool {
+    if n <= 0 { return false }
+    return spt_sigma(n) == n * spt_phi(n)
+}
+
+// solution set of THM-A over [1, limit]
+pub fn thm_a_solutions(limit: int) -> [int] {
+    let mut sols: [int] = []
+    let mut n = 1
+    while n <= limit {
+        if thm_a_holds(n) { sols.push(n) }
+        n = n + 1
+    }
+    return sols
+}
+
+// ── THM-B : τ(n) + 2 = n  ⟺ n = 6   (verify_tau_plus_2.py) ──────────────
+
+pub fn thm_b_holds(n: int) -> bool {
+    if n <= 0 { return false }
+    return spt_tau(n) + 2 == n
+}
+
+// closed-form upper bound: τ(n)+2=n ⇒ n−2 ≤ 2√n ⇒ √n ≤ 1+√3
+//   ⇒ n ≤ (1+√3)² = 4 + 2√3 ≈ 7.464 ⇒ n ≤ 7.  Makes the scan a proof.
+pub fn thm_b_upper_bound() -> int {
+    let s3 = sqrt(3.0)
+    let b = (1.0 + s3) * (1.0 + s3)
+    return to_int(b)   // floor of 7.464… = 7
+}
+
+// τ(n) ≤ 2√n for all n in [1, limit] (the bound the proof rests on).
+pub fn thm_b_bound_holds(limit: int) -> bool {
+    let mut n = 1
+    while n <= limit {
+        let t = to_float(spt_tau(n))
+        if t > 2.0 * sqrt(to_float(n)) { return false }
+        n = n + 1
+    }
+    return true
+}
+
+pub fn thm_b_solutions(limit: int) -> [int] {
+    let mut sols: [int] = []
+    let mut n = 1
+    while n <= limit {
+        if thm_b_holds(n) { sols.push(n) }
+        n = n + 1
+    }
+    return sols
+}
+
+// ── THM-C : σ(n)(n+φ(n)) = n·τ(n)²  unique n=6 for n>1 ──────────────────
+//            (verify_sigma_n_phi_tau.py)
+pub fn thm_c_holds(n: int) -> bool {
+    if n <= 0 { return false }
+    let s = spt_sigma(n)
+    let p = spt_phi(n)
+    let t = spt_tau(n)
+    return s * (n + p) == n * t * t
+}
+
+pub fn thm_c_solutions(limit: int) -> [int] {
+    let mut sols: [int] = []
+    let mut n = 2          // theorem is "unique among n > 1"
+    while n <= limit {
+        if thm_c_holds(n) { sols.push(n) }
+        n = n + 1
+    }
+    return sols
+}
+
+// ── THM-D : σ(n)·φ(n) = n·τ(n)  ⟺ n ∈ {1, 6}  (sigma_phi_ntau_proof.py) ─
+pub fn thm_d_holds(n: int) -> bool {
+    if n <= 0 { return false }
+    return spt_sigma(n) * spt_phi(n) == n * spt_tau(n)
+}
+
+pub fn thm_d_solutions(limit: int) -> [int] {
+    let mut sols: [int] = []
+    let mut n = 1
+    while n <= limit {
+        if thm_d_holds(n) { sols.push(n) }
+        n = n + 1
+    }
+    return sols
+}
+
+// ── generic n=6-uniqueness predicate scan (n6_uniqueness_tester.py) ─────
+// predicate codes: 1=THM-A 2=THM-B 3=THM-C 4=THM-D.
+pub struct UniquenessReport {
+    predicate: int,
+    n_solutions: int,
+    has_1: bool,
+    has_6: bool,
+    is_n6_unique: bool      // solution set is exactly {6} (n>1 part)
+}
+
+fn _holds(code: int, n: int) -> bool {
+    if code == 1 { return thm_a_holds(n) }
+    if code == 2 { return thm_b_holds(n) }
+    if code == 3 { return thm_c_holds(n) }
+    if code == 4 { return thm_d_holds(n) }
+    return false
+}
+
+pub fn uniqueness_report(code: int, limit: int) -> UniquenessReport {
+    let mut cnt = 0
+    let mut h1 = false
+    let mut h6 = false
+    let mut only6_above1 = true
+    let mut n = 1
+    while n <= limit {
+        if _holds(code, n) {
+            cnt = cnt + 1
+            if n == 1 { h1 = true }
+            if n == 6 { h6 = true }
+            if n > 1 && n != 6 { only6_above1 = false }
+        }
+        n = n + 1
+    }
+    return UniquenessReport {
+        predicate: code,
+        n_solutions: cnt,
+        has_1: h1,
+        has_6: h6,
+        is_n6_unique: h6 && only6_above1
+    }
+}

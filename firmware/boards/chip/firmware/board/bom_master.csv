@@ -1,0 +1,50 @@
+board,line_item,candidate_part,mfg,unit_cost_usd,qty_per_board,lead_time_weeks,notes
+fw01_corner,FPGA SoC (Samsung-licensable),Lattice ECP5 LFE5UM-85F,Lattice Semiconductor,80.00,1,12,84K LUT; LFCSP-285 package
+fw01_corner,8-channel ADC,ADS131M08,Texas Instruments,25.00,1,8,24-bit Δ-Σ; SPI 8 MHz
+fw01_corner,16-channel DAC,AD5676R,Analog Devices,22.00,1,8,16-bit; SPI 25 MHz; internal 2.5V ref
+fw01_corner,Host MCU (BIST orchestrator),STM32G474RET6,STMicroelectronics,8.00,1,8,Cortex-M4 170 MHz; LQFP-64
+fw01_corner,Power 5V buck,LMR16030,Texas Instruments,3.00,1,8,24V→5V 3A
+fw01_corner,Power 3.3V buck,TPS62082,Texas Instruments,1.20,1,8,5V→3.3V 1.5A
+fw01_corner,Power 1.8V LDO,LM317,Texas Instruments,0.50,1,8,3.3V→1.8V adj
+fw01_corner,Power 1.2V LDO,LP3878,Texas Instruments,1.00,1,8,3.3V→1.2V FPGA core
+fw01_corner,Supervisor,TPS3823,Texas Instruments,0.80,1,8,reset sequencer
+fw01_corner,50 MHz oscillator,SiT8008B-50MHz,SiTime,1.50,1,8,LVCMOS clock
+fw01_corner,USB-C connector,USB4085-30-A,GCT,1.20,1,8,USB 3.2 + power
+fw01_corner,RJ45 jack,7499010122A,Wurth Elektronik,2.50,1,8,100Base-TX magnetics
+fw01_corner,JTAG 20p header,FTSH-110-01-L-DV,Samtec,1.80,1,8,2x10 0.05" pitch
+fw01_corner,Misc passives + PCB (4-layer 100x80mm),-,-,15.00,1,4,~150 R/C/L parts; JLCPCB
+fw01_corner,TOTAL_PER_BOARD,-,-,155.00,1,12,sum approx; matches board_v0_spec.md §1.2
+fw02_npu,Host MCU (descriptor cache),STM32H723ZGT6,STMicroelectronics,15.00,1,8,Cortex-M7 550 MHz; 1MB SRAM; LQFP-144
+fw02_npu,NPU IP target,Samsung Exynos NPU IP block,Samsung Foundry,0.00,1,9999,vendor-NDA; license-only; foundry MOU
+fw02_npu,Eval substitute (Phase D-1),Xilinx Zynq UltraScale+ XCZU7EV,AMD/Xilinx,1200.00,1,16,504K LUT; FFVC1156 package
+fw02_npu,HBM emulator (DRAM bridge FPGA),Lattice ECP5 LFE5UM-85F,Lattice Semiconductor,80.00,1,12,wide-bus bridge
+fw02_npu,DDR4 SODIMM 8GB,M471A1K43DB1-CTD,Samsung,40.00,1,8,3200 MT/s; 260-pin
+fw02_npu,PCIe Gen5 x4 endpoint,PEX8732,Microchip,45.00,1,12,switch / endpoint mode
+fw02_npu,PMIC,TPS65094,Texas Instruments,8.00,1,8,multi-rail sequencer
+fw02_npu,Power 3.3V buck,LMZ31707,Texas Instruments,9.00,1,8,12V→3.3V 7A
+fw02_npu,Power 1.8V buck,LMZ31506,Texas Instruments,7.00,1,8,12V→1.8V 6A
+fw02_npu,Power 0.85V buck,LTM4638,Analog Devices,18.00,1,12,1.8V→0.85V 15A; NPU core
+fw02_npu,Power 0.40V buck,LTM4624,Analog Devices,15.00,1,12,1.8V→0.40V 14A; HBM I/O
+fw02_npu,100 MHz PCIe ref clock,Si5341,Skyworks,12.00,1,12,jitter-cleaner
+fw02_npu,USB-C connector,USB4085-30-A,GCT,1.20,1,8,USB 3.2
+fw02_npu,RJ45 jack,7499010122A,Wurth Elektronik,2.50,1,8,100Base-TX
+fw02_npu,JTAG 20p header,FTSH-110-01-L-DV,Samtec,1.80,1,8,2x10 0.05"
+fw02_npu,SODIMM socket,AS0A526-H10R-7H,Foxconn,3.50,1,8,260-pin DDR4
+fw02_npu,Misc passives + PCB (8-layer 160x120mm),-,-,80.00,1,8,~400 R/C/L; impedance-controlled fab
+fw02_npu,TOTAL_PER_BOARD,-,-,345.00,1,16,sum approx (excl. eval Zynq sub); board_v0_spec.md §2.2
+fw03_hbm,HBM4 stack,SK hynix HBM4 16-Hi 48GB,SK hynix,1500.00,1,9999,vendor-NDA sample qty; foundry-route
+fw03_hbm,Si interposer (CoWoS-class),custom Samsung Foundry partner,Samsung Foundry,0.00,1,24,foundry MOU; no public price
+fw03_hbm,Host MCU (thermal coordinator),STM32H743ZIT6,STMicroelectronics,18.00,1,8,Cortex-M7 480 MHz
+fw03_hbm,16-bit ADC (T sense),ADS1115,Texas Instruments,4.00,1,8,4-ch I2C 400 kHz
+fw03_hbm,DVFS PMU,Renesas RAA489204,Renesas,8.00,1,12,multi-rail PMU
+fw03_hbm,Eval substitute (DDR4 SODIMM 16GB),M471A2K43DB1-CTD,Samsung,80.00,1,8,HBM emul
+fw03_hbm,HBM emulator FPGA (Phase D-1),Lattice ECP5 LFE5UM-85F,Lattice Semiconductor,80.00,1,12,wide-bus bridge
+fw03_hbm,Comparator (CATTRIP latch),TLV3702,Texas Instruments,2.00,1,8,open-drain
+fw03_hbm,50 MHz oscillator,SiT8008B-50MHz,SiTime,1.50,1,8,main clock
+fw03_hbm,HBM4 PHY ref oscillator,Si544,Skyworks,18.00,1,12,low-jitter
+fw03_hbm,Misc connectors (USB-C/RJ45/JTAG/SWD/PWR/SMBUS/TRIP),-,-,18.50,1,8,J1-J8
+fw03_hbm,SODIMM socket,AS0A526-H10R-7H,Foxconn,3.50,1,8,260-pin DDR4
+fw03_hbm,Misc passives + PCB (10-layer HDI 200x160mm),-,-,200.00,1,12,~600 R/C/L; HDI buried/blind via fab
+fw03_hbm,Power chain misc (caps/inductors/sense R),-,-,60.00,1,8,5-rail decoupling stack
+fw03_hbm,TOTAL_PER_BOARD,-,-,1870.00,1,24,sum approx (sample-qty); board_v0_spec.md §3.2
+GRAND_TOTAL,fw01+fw02+fw03 single-set run,-,-,2370.00,1,24,sum of 3 board totals

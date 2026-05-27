@@ -1,0 +1,114 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<feed xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/" xmlns:arxiv="http://arxiv.org/schemas/atom" xmlns="http://www.w3.org/2005/Atom">
+  <id>https://arxiv.org/api/yU7klUORlGY62oiaw1ztZBoB7zw</id>
+  <title>arXiv Query: search_query=all:REBCO OR all:high-field OR all:magnet OR all:upper OR all:critical OR all:field OR all:Hc2&amp;id_list=&amp;start=0&amp;max_results=3</title>
+  <updated>2026-05-07T20:53:26Z</updated>
+  <link href="https://arxiv.org/api/query?search_query=all:REBCO+OR+(all:high-field+OR+(all:magnet+OR+(all:upper+OR+(all:critical+OR+(all:field+OR+all:Hc2)))))&amp;start=0&amp;max_results=3&amp;id_list=" type="application/atom+xml"/>
+  <opensearch:itemsPerPage>3</opensearch:itemsPerPage>
+  <opensearch:totalResults>798093</opensearch:totalResults>
+  <opensearch:startIndex>0</opensearch:startIndex>
+  <entry>
+    <id>http://arxiv.org/abs/2507.20895v1</id>
+    <title>Rapid-cycling ReBCO dipole magnet concept for muon acceleration</title>
+    <updated>2025-07-28T14:47:45Z</updated>
+    <link href="https://arxiv.org/abs/2507.20895v1" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/2507.20895v1" rel="related" type="application/pdf" title="pdf"/>
+    <summary>We present a concept of the rapid-cycling 1.7 T ReBCO magnet for 1 to 10 kT/s ramping range as required for muon acceleration in a future muon collider presently under study. This approach is based on the 6 kA CORC-like cable constructed with 12 superconducting ReBCO tapes of 2 mm width. Based on theoretical prediction there is a linear scaling of the ReBCO cable hysteresis loss with the crossing magnetic field possibly generating power loss independent of the magnetic field ramping speed. This feature makes this ReBCO cable suitable for the construction of rapid-cycling magnets. In this work we outline the design of a dipole magnet for 1.7 T gap magnetic field and discuss the helium coolant parameters for the minimal electric power.</summary>
+    <category term="physics.acc-ph" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2025-07-28T14:47:45Z</published>
+    <arxiv:comment>29th IEEE International conference on magnet technology</arxiv:comment>
+    <arxiv:primary_category term="physics.acc-ph"/>
+    <author>
+      <name>Henryk Piekarz</name>
+      <arxiv:affiliation>Fermi National Accelerator Laboratory</arxiv:affiliation>
+    </author>
+    <author>
+      <name>Simon Otten</name>
+      <arxiv:affiliation>University of Twente</arxiv:affiliation>
+      <arxiv:affiliation>CERN</arxiv:affiliation>
+    </author>
+    <author>
+      <name>Anna Kario</name>
+      <arxiv:affiliation>University of Twente</arxiv:affiliation>
+      <arxiv:affiliation>CERN</arxiv:affiliation>
+    </author>
+    <author>
+      <name>Herman ten Kate</name>
+      <arxiv:affiliation>University of Twente</arxiv:affiliation>
+      <arxiv:affiliation>CERN</arxiv:affiliation>
+    </author>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/1404.3927v1</id>
+    <title>Behavior of nanoparticle clouds around a magnetized microsphere under magnetic and flow fields</title>
+    <updated>2014-04-14T18:52:48Z</updated>
+    <link href="https://arxiv.org/abs/1404.3927v1" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/1404.3927v1" rel="related" type="application/pdf" title="pdf"/>
+    <summary>When a micron-sized magnetizable particle is introduced into a suspension of nanosized magnetic particles, the nanoparticles accumulate around the microparticle and form thick anisotropic clouds extended in the direction of the applied magnetic field. This phenomenon promotes colloidal stabilization of bimodal magnetic suspensions and allows efficient magnetic separation of nanoparticles used in bioanalysis and water purification. In the present work, size and shape of nanoparticle clouds under the simultaneous action of an external uniform magnetic field and the flow have been studied in details. In experiments, dilute suspension of iron oxide nanoclusters (of a mean diameter of 60 nm) was pushed through a thin slit channel with the nickel microspheres (of a mean diameter of 50$μ$m) attached to the channel wall. The behavior of nanocluster clouds was observed in the steady state using an optical microscope. In the presence of strong enough flow, the size of the clouds monotonically decreases with increasing flow speed in both longitudinal and transverse magnetic fields. This is qualitatively explained by enhancement of hydrodynamic forces washing the nanoclusters away from the clouds. In the longitudinal field, the flow induces asymmetry of the front and the back clouds. To explain the flow and the field effects on the clouds, we have developed a simple model based on the balance of the stresses and particle fluxes on the cloud surface. This model, applied to the case of the magnetic field parallel to the flow, captures reasonably well the flow effect on the size and shape of the cloud and reveals that the only dimensionless parameter governing the cloud size is the ratio of hydrodynamic-to-magnetic forces - the Mason number. At strong magnetic interactions considered in the present work (dipolar coupling parameter $α\geq 2$), the Brownian motion seems not to affect the cloud behavior.</summary>
+    <category term="cond-mat.soft" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2014-04-14T18:52:48Z</published>
+    <arxiv:primary_category term="cond-mat.soft"/>
+    <arxiv:journal_ref>Physical Review E 89 (2014) 032310</arxiv:journal_ref>
+    <author>
+      <name>Cécilia Magnet</name>
+      <arxiv:affiliation>LPMC</arxiv:affiliation>
+    </author>
+    <author>
+      <name>Pavel Kuzhir</name>
+      <arxiv:affiliation>LPMC</arxiv:affiliation>
+    </author>
+    <author>
+      <name>Georges Bossis</name>
+      <arxiv:affiliation>LPMC</arxiv:affiliation>
+    </author>
+    <author>
+      <name>Alain Meunier</name>
+      <arxiv:affiliation>LPMC</arxiv:affiliation>
+    </author>
+    <author>
+      <name>Sebastien Nave</name>
+      <arxiv:affiliation>LPMC</arxiv:affiliation>
+    </author>
+    <author>
+      <name>Andrey Zubarev</name>
+      <arxiv:affiliation>ECOMERS</arxiv:affiliation>
+    </author>
+    <author>
+      <name>Claire Lomenech</name>
+      <arxiv:affiliation>ECOMERS</arxiv:affiliation>
+    </author>
+    <author>
+      <name>Victor Bashtovoi</name>
+      <arxiv:affiliation>BNTU</arxiv:affiliation>
+    </author>
+    <arxiv:doi>10.1103/PhysRevE.89.032310</arxiv:doi>
+    <link rel="related" href="https://doi.org/10.1103/PhysRevE.89.032310" title="doi"/>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2507.21301v1</id>
+    <title>REBCO delamination by transverse electromagnetic stress due to screening current in magnetic field</title>
+    <updated>2025-07-28T19:44:18Z</updated>
+    <link href="https://arxiv.org/abs/2507.21301v1" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/2507.21301v1" rel="related" type="application/pdf" title="pdf"/>
+    <summary>REBCO coated conductor has great potential to be used in ultra-high field magnets. Commercial REBCO tapes are strong in the longitudinal direction but prone to delamination by tensile stress in the thickness direction. For high field magnet applications, it is crucial to characterize delamination strength of REBCO conductor and better manage the transverse electromagnetic stress. In this work, the electromagnetic stress in high magnetic fields by screen current is used to study the delamination behavior of commercial REBCO tapes. Screening currents are induced in REBCO by either ramping field or rotating sample in magnetic fields up to 35 T. The experimental results are presented. The prospect of using this method for quality assurance in large magnet projects is discussed.</summary>
+    <category term="cond-mat.supr-con" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2025-07-28T19:44:18Z</published>
+    <arxiv:comment>5 pages, 5 figures, MT-29 poster presentation</arxiv:comment>
+    <arxiv:primary_category term="cond-mat.supr-con"/>
+    <author>
+      <name>Jun Lu</name>
+    </author>
+    <author>
+      <name>Jeremy Levitan</name>
+    </author>
+    <author>
+      <name>Yu Suetomi</name>
+    </author>
+    <author>
+      <name>Iain Dixon</name>
+    </author>
+    <author>
+      <name>Jan Jaroszynski</name>
+    </author>
+  </entry>
+</feed>

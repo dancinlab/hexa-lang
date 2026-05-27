@@ -1,0 +1,73 @@
+// HEXA Standard Library — stats/powerlaw_fit
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Scale-free α estimation via OLS slope on log-log frequency histogram.
+// Promoted from anima bench/info_measure_triad/bench.hexa (PR #1128
+// INFO-MEASURE-TRIAD), where it served as the scale-free / pool-diversity
+// measurer orthogonal to Shannon / LZ / 1-lag TE.
+//
+// Model:    p(k) ∝ k^(-α)
+//   1. Bucket sizes by floor(value) (integer-binned frequency histogram).
+//   2. log-log regression: ln(count) = -α · ln(bucket) + b
+//   3. α = -slope from ordinary least squares.
+//
+// Surface:
+//   pub fn powerlaw_fit(sizes: array) -> float
+//     Returns estimated α exponent. 0.0 if < 3 samples or degenerate fit.
+//
+// Note: For a true heavy-tail Hill-MLE estimator, use a dedicated module —
+// this is the OLS-on-log-log variant the anima triad bench used (closed-form,
+// no iterative solver, libm-light).
+
+extern fn log(x: float) -> float
+
+pub fn powerlaw_fit(sizes) -> float {
+    let n = len(sizes)
+    if n < 3 { return 0.0 }
+
+    // 1. Integer-bucket histogram.
+    let mut counts = #{}
+    for s in sizes {
+        let bucket = int(s)
+        let k = "" + bucket
+        if !has_key(counts, k) { counts[k] = 1 } else { counts[k] = counts[k] + 1 }
+    }
+
+    // 2. Extract (log k, log count) pairs (k > 0, count > 0 only).
+    let mut xs = []
+    let mut ys = []
+    for k in counts {
+        let ki = int(k)
+        let c = counts[k]
+        if ki > 0 && c > 0 {
+            xs = append(xs, log(ki + 0.0))
+            ys = append(ys, log(c + 0.0))
+        }
+    }
+    let m = len(xs)
+    if m < 2 { return 0.0 }
+
+    // 3. OLS slope.
+    let mut sum_x = 0.0
+    let mut sum_y = 0.0
+    let mut sum_xy = 0.0
+    let mut sum_xx = 0.0
+    let mut i = 0
+    while i < m {
+        sum_x = sum_x + xs[i]
+        sum_y = sum_y + ys[i]
+        sum_xy = sum_xy + xs[i] * ys[i]
+        sum_xx = sum_xx + xs[i] * xs[i]
+        i = i + 1
+    }
+    let mean_x = sum_x / (m + 0.0)
+    let mean_y = sum_y / (m + 0.0)
+    let denom = sum_xx - (m + 0.0) * mean_x * mean_x
+    if denom == 0.0 { return 0.0 }
+    let slope = (sum_xy - (m + 0.0) * mean_x * mean_y) / denom
+
+    // α = -slope (positive for heavy-tail decay).
+    return 0.0 - slope
+}

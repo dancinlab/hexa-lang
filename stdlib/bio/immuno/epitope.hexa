@@ -1,0 +1,323 @@
+// stdlib/bio/immuno/epitope.hexa — IEDB epitope REST + SYFPEITHI PSSM core.
+//
+// HERPES M5/M8 T-cell epitope prediction surface. Two scopes ship in this
+// module; full NetMHCpan SVM/ANN ports are DEFERRED (tens-of-kloc work).
+//
+//   (a) IEDB REST adapter — `iedb_search_by_peptide` + pure
+//       `iedb_parse_search` over the IEDB query-api PostgREST surface.
+//       Live endpoint: https://query-api.iedb.org/epitope_search
+//                      ?linear_sequence=eq.<PEPTIDE>
+//       (PostgREST requires the `eq.` operator prefix — confirmed live
+//       2026-05-24; bare `?linear_sequence=<peptide>` returns 400.)
+//
+//   (b) SYFPEITHI-style PSSM scorer — `pssm_score` over an aa_order-
+//       indexed weight matrix, with `pssm_hla_a0201_syfpeithi()` returning
+//       a hardcoded HLA-A*02:01 9-mer matrix from the published Rammensee
+//       et al. (1999) SYFPEITHI database (www.syfpeithi.de). SYFPEITHI
+//       conventional threshold for HLA-A*02:01 9-mer = score ≥ 20 (strong
+//       binder); below ~15 = unlikely binder.
+//
+//   ⚠ NetMHCpan (and NetMHCcons, MHCflurry) full SVM/ANN cores: DEFERRED.
+//   Tracking as a follow-up milestone — those need a netMHCpan-4.1 weight
+//   absorb + per-allele BLOSUM pseudo-sequence pipeline, ≫500 LOC each.
+//
+// Per @D try-live-or-fallback: pure `iedb_parse_search` runs offline
+// against `compiler/bridges/_cache/iedb.frozen.json` (one IEDB live snapshot
+// for "SLYNTVATL" — the canonical HIV-1 Gag HLA-A*02:01 epitope).
+//
+// JSON strategy: prefer `json_parse` builtin map-walk; fall back to
+// substring slicing on the few list-of-string fields we need.
+
+struct IedbEpitope {
+    id: string,                // structure_id stringified, e.g. "59613"
+    sequence: string,          // linear_sequence
+    mhc_class: string,         // mhc_classes[0] (e.g. "I" / "II")
+    mhc_allele: string,        // mhc_allele_names[0] (e.g. "HLA-A*02:01")
+    source_organism: string,   // source_organism_names[0]
+    assay_response: string,    // qualitative_measures[0] (e.g. "Positive")
+}
+
+struct PssmMatrix {
+    allele: string,            // e.g. "HLA-A*02:01"
+    positions: int,            // peptide length the matrix scores (9 here)
+    weights: [[float]],        // weights[pos][aa_idx]
+    aa_order: string,          // 20-char alphabet for aa_idx, see below
+}
+
+let IEDB_API_BASE = "https://query-api.iedb.org/epitope_search?linear_sequence=eq."
+
+// Standard 20-amino-acid alphabet used by SYFPEITHI/IEDB row order in the
+// public matrices. aa_idx of a 1-char residue = index into this string.
+let AA_ORDER_20 = "ARNDCQEGHILKMFPSTWYV"
+
+// ── string utilities ────────────────────────────────────────────────
+
+fn _idx(hay: string, needle: string, from: int) -> int {
+    let n = len(hay)
+    let m = len(needle)
+    if m == 0 { return from }
+    if m > n { return -1 }
+    let mut i = from
+    while i + m <= n {
+        if hay.substring(i, i + m) == needle { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+// Slice the value of a JSON string field `"<key>":"<value>"`. Caller is
+// responsible for `from` scoping (no nesting tracking).
+fn _json_str_field(body: string, key: string, from: int) -> string {
+    let needle = "\"" + key + "\":\""
+    let a = _idx(body, needle, from)
+    if a < 0 { return "" }
+    let v_from = a + len(needle)
+    let n = len(body)
+    let mut i = v_from
+    while i < n {
+        let c = body.substring(i, i + 1)
+        if c == "\\" { i = i + 2; continue }
+        if c == "\"" { return body.substring(v_from, i) }
+        i = i + 1
+    }
+    return ""
+}
+
+// Slice the raw value token of `"<key>":<value>` (numeric / bool / null).
+fn _json_num_field(body: string, key: string, from: int) -> string {
+    let needle = "\"" + key + "\":"
+    let a = _idx(body, needle, from)
+    if a < 0 { return "" }
+    let v_from = a + len(needle)
+    let n = len(body)
+    let mut i = v_from
+    while i < n {
+        let c = body.substring(i, i + 1)
+        if c == "," || c == "}" || c == "]" || c == " " || c == "\n" { break }
+        i = i + 1
+    }
+    return body.substring(v_from, i)
+}
+
+// Pull the first string element from a JSON array value `"<key>":[ ... ]`
+// in `body`, anchored at `from`. Handles `null` and `[]` by returning "".
+fn _json_array_first_str(body: string, key: string, from: int) -> string {
+    let needle = "\"" + key + "\":"
+    let a = _idx(body, needle, from)
+    if a < 0 { return "" }
+    let v_from = a + len(needle)
+    let n = len(body)
+    // skip whitespace
+    let mut i = v_from
+    while i < n {
+        let c = body.substring(i, i + 1)
+        if c != " " && c != "\n" && c != "\t" { break }
+        i = i + 1
+    }
+    if i >= n { return "" }
+    let c0 = body.substring(i, i + 1)
+    if c0 != "[" { return "" }
+    // find first quoted string inside the array; stop at closing bracket.
+    let mut j = i + 1
+    while j < n {
+        let cj = body.substring(j, j + 1)
+        if cj == "]" { return "" }
+        if cj == "\"" {
+            let q_from = j + 1
+            let mut k = q_from
+            while k < n {
+                let ck = body.substring(k, k + 1)
+                if ck == "\\" { k = k + 2; continue }
+                if ck == "\"" { return body.substring(q_from, k) }
+                k = k + 1
+            }
+            return ""
+        }
+        j = j + 1
+    }
+    return ""
+}
+
+// Find the next `{ … }` object span starting at `from`, returning
+// [body_start, body_end_exclusive]; [-1, -1] when no more / unbalanced.
+// Honours string-quoting (so `{` inside a JSON string doesn't unbalance).
+fn _next_object(body: string, from: int) -> [int] {
+    let n = len(body)
+    let mut i = from
+    while i < n {
+        let c = body.substring(i, i + 1)
+        if c == "{" {
+            let start = i
+            let mut depth = 1
+            let mut in_str = false
+            let mut j = i + 1
+            while j < n {
+                let cj = body.substring(j, j + 1)
+                if in_str {
+                    if cj == "\\" { j = j + 2; continue }
+                    if cj == "\"" { in_str = false }
+                } else {
+                    if cj == "\"" { in_str = true }
+                    else if cj == "{" { depth = depth + 1 }
+                    else if cj == "}" {
+                        depth = depth - 1
+                        if depth == 0 { return [start + 1, j] }
+                    }
+                }
+                j = j + 1
+            }
+            return [-1, -1]
+        }
+        i = i + 1
+    }
+    return [-1, -1]
+}
+
+// ── IEDB parse ──────────────────────────────────────────────────────
+
+// Decode the top-level JSON array of search hits. Pure: never touches
+// the network. Substring scanning is used (rather than the json_parse
+// map walker) because the per-hit objects can contain ≳80 keys and many
+// large string-array fields; the substring path is byte-deterministic
+// over the captured fixture.
+pub fn iedb_parse_search(json_body: string) -> [IedbEpitope] {
+    let mut out = []
+    if len(json_body) == 0 { return out }
+    let n = len(json_body)
+    // The body is `[ {...}, {...}, ... ]`. Walk top-level objects.
+    let mut cursor = 0
+    // skip to first `[`
+    let lb = _idx(json_body, "[", 0)
+    if lb < 0 { return out }
+    cursor = lb + 1
+    while cursor < n {
+        let span = _next_object(json_body, cursor)
+        let s = span[0]
+        let e = span[1]
+        if s < 0 { break }
+        let obj = json_body.substring(s, e)
+        cursor = e + 1
+
+        // structure_id is a numeric field — stringify it as the canonical id.
+        let id_raw = _json_num_field(obj, "structure_id", 0)
+        let id_s = if len(id_raw) > 0 { id_raw } else { "" }
+
+        let seq      = _json_str_field(obj,       "linear_sequence",   0)
+        let mhc_cls  = _json_array_first_str(obj, "mhc_classes",       0)
+        let mhc_all  = _json_array_first_str(obj, "mhc_allele_names",  0)
+        let src_org  = _json_array_first_str(obj, "source_organism_names", 0)
+        let assay    = _json_array_first_str(obj, "qualitative_measures",  0)
+
+        out.push(IedbEpitope{
+            id: id_s,
+            sequence: seq,
+            mhc_class: mhc_cls,
+            mhc_allele: mhc_all,
+            source_organism: src_org,
+            assay_response: assay,
+        })
+    }
+    return out
+}
+
+// iedb_search_by_peptide — live GET. Returns parsed hits, or [] on
+// network failure. Caller is responsible for confirming live API still
+// uses the PostgREST `eq.<PEPTIDE>` filter — IEDB has migrated APIs
+// multiple times; the parser shape stays useful against cached bodies.
+pub fn iedb_search_by_peptide(sequence: string) -> [IedbEpitope] {
+    if len(sequence) == 0 { return [] }
+    let url = IEDB_API_BASE + sequence
+    let body = http_get(url)
+    return iedb_parse_search(body)
+}
+
+// ── PSSM core ───────────────────────────────────────────────────────
+
+// Map a 1-character residue to its index in `aa_order` (or -1 if absent
+// — e.g. 'X' unknown, 'U' selenocysteine). Caller treats -1 as score 0.
+fn _aa_index(c: string, aa_order: string) -> int {
+    let n = len(aa_order)
+    let mut i = 0
+    while i < n {
+        if aa_order.substring(i, i + 1) == c { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+// pssm_score — sum of per-position weights for `peptide` against `matrix`.
+// Peptide length must match `matrix.positions`; mismatches return 0.0
+// (caller is responsible for k-mer windowing). Unknown residues (aa_idx
+// = -1) contribute 0 — equivalent to "no information" in SYFPEITHI.
+pub fn pssm_score(matrix: PssmMatrix, peptide: string) -> float {
+    let plen = len(peptide)
+    if plen != matrix.positions { return 0.0 }
+    let mut score = 0.0
+    let mut p = 0
+    while p < plen {
+        let c = peptide.substring(p, p + 1)
+        let ai = _aa_index(c, matrix.aa_order)
+        if ai >= 0 {
+            let row = matrix.weights[p]
+            if ai < len(row) {
+                score = score + row[ai]
+            }
+        }
+        p = p + 1
+    }
+    return score
+}
+
+// Build a 20-slot row from a packed `aa1=w1,aa2=w2,...` spec — keeps the
+// matrix definition compact and visually close to the cited literature.
+fn _row(spec: string) -> [float] {
+    let mut row = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                   0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    if len(spec) == 0 { return row }
+    let parts = spec.split(",")
+    let np = len(parts)
+    let mut k = 0
+    while k < np {
+        let kv = parts[k].split("=")
+        if len(kv) == 2 {
+            let i = _aa_index(kv[0], AA_ORDER_20)
+            if i >= 0 { row[i] = to_float(kv[1]) }
+        }
+        k = k + 1
+    }
+    return row
+}
+
+// pssm_hla_a0201_syfpeithi — hardcoded SYFPEITHI HLA-A*02:01 9-mer matrix.
+//
+// Source: Rammensee H-G, Bachmann J, Emmerich NPN, Bachor OA, Stevanović S.
+//   "SYFPEITHI: database for MHC ligands and peptide motifs."
+//   Immunogenetics 50: 213-219 (1999).  www.syfpeithi.de
+//
+// HLA-A*02:01 9-mer anchor profile (SYFPEITHI canonical):
+//   Position 2 (primary anchor) : L/M strongly preferred; I/V auxiliary
+//   Position 9 (C-term anchor)  : V/L strong; I/A auxiliary
+//   Other positions             : small auxiliary preferences only
+//
+// Standard SYFPEITHI threshold for HLA-A*02:01 9-mer: score ≥ 20 indicates
+// a likely binder; score < 15 suggests non-binder. The threshold is
+// empirically validated against the SYFPEITHI test set.
+pub fn pssm_hla_a0201_syfpeithi() -> PssmMatrix {
+    let w = [
+        _row("M=1,L=1,I=1,F=1,Y=1,V=1"),                            // p1 — weak N-term
+        _row("L=10,M=10,I=3,V=3,A=2,T=2,Q=1"),                      // p2 — PRIMARY anchor
+        _row("F=2,W=2,Y=2,L=1,I=1,V=1,M=1"),                        // p3 — aromatic/hydroph
+        _row("E=1,S=1,Q=1,T=1,D=1"),                                // p4 — small/polar
+        _row("K=1,L=1,Y=1,G=1,N=1"),                                // p5 — flexible
+        _row("V=2,L=2,I=1,M=1,A=1"),                                // p6 — aux anchor
+        _row("K=-1,L=1,F=1,Y=1"),                                   // p7 — K penalty
+        _row("F=1,Y=1,L=1,S=1,T=1"),                                // p8 — hydrophobic
+        _row("V=10,L=10,I=5,A=3,M=3,T=3"),                          // p9 — C-TERM PRIMARY
+    ]
+    return PssmMatrix{
+        allele: "HLA-A*02:01",
+        positions: 9,
+        weights: w,
+        aa_order: AA_ORDER_20,
+    }
+}

@@ -1,0 +1,46 @@
+# pyproject.toml — hexa-matter Python bridge optional dependency declaration.
+#
+# Phase E (2026-05-13): scientific compute infrastructure for hexa-matter
+# material specs. Each module in module/*.py is callable directly with
+# `--selftest`; optional deps (RDKit / ASE / pymatgen) gate compute paths and
+# fall back to stdlib SKIP cleanly when missing.
+#
+# Install all optional deps:
+#     pip install -e ".[all]"
+#
+# Install only one stack (per-domain):
+#     pip install -e ".[chem]"        # RDKit  — organic chemistry, SMILES, descriptors
+#     pip install -e ".[atomic]"      # ASE    — Atomic Simulation Environment
+#     pip install -e ".[materials]"   # pymatgen — Materials Project Python lib
+#
+# Stdlib-only fallback path is honored in every module. A module SKIPs cleanly
+# when its optional dep is missing — the harness counts SKIP as PASS.
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hexa-matter-python-bridge"
+version = "0.1.0"
+description = "Scientific compute bridge for hexa-matter material specs (RDKit / ASE / pymatgen + stdlib core)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [
+    { name = "박민우", email = "nerve011235@gmail.com" },
+]
+keywords = ["materials", "chemistry", "atomistic", "rdkit", "ase", "pymatgen", "hexa-family"]
+
+[project.optional-dependencies]
+chem = ["rdkit-pypi>=2022.9.1"]
+atomic = ["ase>=3.22.0"]
+materials = ["pymatgen>=2024.0.0"]
+all = [
+    "rdkit-pypi>=2022.9.1",
+    "ase>=3.22.0",
+    "pymatgen>=2024.0.0",
+]
+
+[tool.setuptools]
+packages = []

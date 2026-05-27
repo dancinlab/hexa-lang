@@ -1,0 +1,298 @@
+// self/rt/proc.hexa — P7-7d: hexa process / env / time over syscalls
+//
+// Replaces runtime.c exec/exit/env/args/sleep/clock/random paths.
+//
+// Surface (mirrors runtime.c):
+//   hexa_exit(code)
+//   hexa_exec(cmd) / hexa_exec_with_status(cmd) / hexa_exec_replace(cmd)
+//   hexa_env_var(name)
+//   hexa_args() / hexa_set_args(argc, argv_ptr)
+//   hexa_sleep(sec)
+//   hexa_clock() / hexa_timestamp()
+//   hexa_random()
+//
+// rt_* aliases provide the P7-7 uniform surface (see io.hexa precedent).
+
+use self::rt::syscall
+use self::rt::alloc
+use self::rt::io
+
+// ═══════════════════════════════════════════════════════════════════
+// Process control
+// ═══════════════════════════════════════════════════════════════════
+
+fn hexa_exit(code: int) -> int {
+    return sys_exit(code)
+}
+
+fn rt_exit(code: int) -> int { return sys_exit(code) }
+
+// ── exec pipeline ───────────────────────────────────────────────────
+//
+// Pipeline (hexa_exec_with_status):
+//   pipe(fds)                            // fds[0]=read, fds[1]=write
+//   pid = fork()
+//   if pid == 0:                         // child
+//       dup2(fds[1], STDOUT)
+//       close(fds[0]); close(fds[1])
+//       execve("/bin/sh", ["sh","-c",cmd,NULL], envp)
+//       sys_exit(127)                    // execve failed
+//   else:                                // parent
+//       close(fds[1])
+//       read fds[0] → buffer (until EOF)
+//       wait4(pid, &status, 0, NULL)
+//       close(fds[0])
+//       return (stdout, WEXITSTATUS(status))
+//
+// `status` from wait4 encodes: low 7 bits = signal, bit 7 = core dump,
+// next 8 bits = exit code. WEXITSTATUS(s) = (s >> 8) & 0xFF.
+
+// Build a NULL-terminated argv array on the arena:
+//   [cstr("/bin/sh"), cstr("-c"), cstr(cmd), 0]
+// Returns the argv base pointer (int addr).
+fn build_sh_argv(cmd: string) -> int {
+    // argv slots: 4 entries × 8 bytes = 32 bytes
+    let argv = hexa_ptr_alloc(32)
+    let sh = to_cstr("/bin/sh")
+    let dashc = to_cstr("-c")
+    let cmd_cs = to_cstr(cmd)
+    __mem_store64(argv,      sh)
+    __mem_store64(argv + 8,  dashc)
+    __mem_store64(argv + 16, cmd_cs)
+    __mem_store64(argv + 24, 0)
+    return argv
+}
+
+fn hexa_exec_with_status(cmd: string) -> [any] {
+    // fds: two 32-bit ints packed into 8 bytes (Linux pipe ABI).
+    // We over-allocate to 16 bytes so 64-bit slot reads are safe.
+    let fds = hexa_ptr_alloc(16)
+    let pipe_rc = sys_pipe(fds)
+    if pipe_rc < 0 { return ["", 127] }
+    // pipe() writes fds[0] at byte offset 0, fds[1] at byte offset 4 (32-bit each).
+    let rd_fd = __mem_load32(fds)
+    let wr_fd = __mem_load32(fds + 4)
+
+    let pid = sys_fork()
+    if pid < 0 {
+        sys_close(rd_fd)
+        sys_close(wr_fd)
+        return ["", 127]
+    }
+
+    if pid == 0 {
+        // Child: redirect stdout → write end, exec /bin/sh -c cmd.
+        sys_dup2(wr_fd, 1)  // STDOUT_FILENO
+        sys_close(rd_fd)
+        sys_close(wr_fd)
+        let sh_cstr = to_cstr("/bin/sh")
+        let argv = build_sh_argv(cmd)
+        sys_execve(sh_cstr, argv, __hexa_envp)
+        sys_exit(127)  // exec failed
+    }
+
+    // Parent: drain read end to EOF, then reap child.
+    sys_close(wr_fd)
+    let drained = read_to_end(rd_fd)
+    let buf = drained[0]
+    let n = drained[1]
+    sys_close(rd_fd)
+
+    let status_ptr = hexa_ptr_alloc(8)
+    __mem_store64(status_ptr, 0)
+    sys_wait4(pid, status_ptr, 0, 0)
+    let raw = __mem_load32(status_ptr)
+    let exit_code = (raw / 256) & 255  // WEXITSTATUS
+
+    let out = bytes_to_string(buf, n)
+    return [out, exit_code]
+}
+
+fn hexa_exec(cmd: string) -> string {
+    let result = hexa_exec_with_status(cmd)
+    return result[0]
+}
+
+// Replace current process: execve /bin/sh -c cmd. Does not return on success.
+fn hexa_exec_replace(cmd: string) -> int {
+    let sh_cstr = to_cstr("/bin/sh")
+    let argv = build_sh_argv(cmd)
+    return sys_execve(sh_cstr, argv, __hexa_envp)
+}
+
+fn rt_exec(cmd: string) -> string { return hexa_exec(cmd) }
+fn rt_exec_with_status(cmd: string) -> [any] { return hexa_exec_with_status(cmd) }
+fn rt_exec_replace(cmd: string) -> int { return hexa_exec_replace(cmd) }
+
+// ═══════════════════════════════════════════════════════════════════
+// Environment
+// ═══════════════════════════════════════════════════════════════════
+//
+// envp is stored at program entry (by main() startup glue) in a global
+// pointer. Lookup walks NULL-terminated array of "KEY=VAL\0" cstrings.
+//
+// BLOCKER: main() entry glue must call hexa_set_envp(envp) before any
+// env_var() call. Currently the interp main only captures argc/argv; the
+// envp slot (third crt0 arg on both Linux x86_64 and Darwin ARM64) needs
+// a new __hexa_set_envp(envp) hook in the codegen prologue. Until wired,
+// __hexa_envp stays 0 and env_var returns "".
+
+let mut __hexa_envp = 0   // addr of envp[] — NULL-terminated char** array
+
+fn hexa_set_envp(envp: int) {
+    __hexa_envp = envp
+}
+
+fn hexa_env_var(name: string) -> string {
+    if __hexa_envp == 0 { return "" }
+    let name_len = len(name)
+    let name_bytes = hexa_str_bytes(name)
+    let mut i = 0
+    while true {
+        // envp[i] is an 8-byte pointer on 64-bit; walk with 8-byte stride.
+        let entry_ptr = __mem_load64(__hexa_envp + i * 8)
+        if entry_ptr == 0 { return "" }
+        // Compare first name_len bytes, require '=' at name_len.
+        let mut matched = 1
+        let mut j = 0
+        while j < name_len {
+            if hexa_ptr_read_byte(entry_ptr, j) != name_bytes[j] {
+                matched = 0
+                break
+            }
+            j = j + 1
+        }
+        if matched == 1 && hexa_ptr_read_byte(entry_ptr, name_len) == 61 {
+            // '=' matched — scan to NUL, copy value.
+            let mut k = name_len + 1
+            while hexa_ptr_read_byte(entry_ptr, k) != 0 { k = k + 1 }
+            return bytes_to_string(entry_ptr + name_len + 1, k - name_len - 1)
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+fn rt_env_var(name: string) -> string { return hexa_env_var(name) }
+
+// ═══════════════════════════════════════════════════════════════════
+// argv
+// ═══════════════════════════════════════════════════════════════════
+
+let mut __hexa_argc = 0
+let mut __hexa_argv = 0  // addr of argv[] — NULL-terminated char** array
+
+fn hexa_set_args(argc: int, argv: int) {
+    __hexa_argc = argc
+    __hexa_argv = argv
+}
+
+fn hexa_args() -> [string] {
+    let mut out = []
+    let mut i = 0
+    while i < __hexa_argc {
+        let entry_ptr = __mem_load64(__hexa_argv + i * 8)
+        if entry_ptr == 0 { break }
+        let mut k = 0
+        while hexa_ptr_read_byte(entry_ptr, k) != 0 { k = k + 1 }
+        out.push(bytes_to_string(entry_ptr, k))
+        i = i + 1
+    }
+    return out
+}
+
+fn rt_args() -> [string] { return hexa_args() }
+
+// ═══════════════════════════════════════════════════════════════════
+// Sleep / clock / timestamp
+// ═══════════════════════════════════════════════════════════════════
+//
+// timespec layout = { int64 tv_sec; int64 tv_nsec } = 16 bytes on 64-bit.
+// (Darwin historically used 32-bit tv_sec; on arm64 / LP64 it's int64.)
+
+fn hexa_sleep(sec) -> int {
+    // Arg is seconds as int or float. Convert → tv_sec + tv_nsec.
+    let ts = hexa_ptr_alloc(16)
+    let seconds = int_of(sec)
+    let frac = float_of(sec) - float_of(seconds)
+    let nsec = int_of(frac * 1000000000.0)
+    __mem_store64(ts, seconds)
+    __mem_store64(ts + 8, nsec)
+    return sys_nanosleep(ts, 0)
+}
+
+// rt_sleep accepts milliseconds (matches the task spec).
+fn rt_sleep(ms: int) -> int {
+    let ts = hexa_ptr_alloc(16)
+    let sec = ms / 1000
+    let nsec = (ms % 1000) * 1000000
+    __mem_store64(ts, sec)
+    __mem_store64(ts + 8, nsec)
+    return sys_nanosleep(ts, 0)
+}
+
+fn hexa_clock() -> int {
+    // Monotonic nanoseconds.
+    let ts = hexa_ptr_alloc(16)
+    let rc = sys_clock_gettime(clock_monotonic(), ts)
+    if rc < 0 { return 0 }
+    let sec = __mem_load64(ts)
+    let nsec = __mem_load64(ts + 8)
+    return sec * 1000000000 + nsec
+}
+
+fn rt_clock() -> int { return hexa_clock() }
+
+fn hexa_timestamp() -> int {
+    let ts = hexa_ptr_alloc(16)
+    let rc = sys_clock_gettime(CLOCK_REALTIME(), ts)
+    if rc < 0 { return 0 }
+    return __mem_load64(ts)
+}
+
+fn rt_timestamp() -> int { return hexa_timestamp() }
+
+// ═══════════════════════════════════════════════════════════════════
+// Random — getrandom syscall (Linux) / /dev/urandom read (Darwin)
+// ═══════════════════════════════════════════════════════════════════
+//
+// sys_getrandom already dispatches Linux → SYS_getrandom and Darwin →
+// open("/dev/urandom") + read, so both targets share one path.
+
+fn hexa_random() -> int {
+    let buf = hexa_ptr_alloc(8)
+    let rc = sys_getrandom(buf, 8, 0)
+    if rc <= 0 { return 0 }
+    return __mem_load64(buf)
+}
+
+// rt_random(n): return n random bytes as an [int] array.
+fn rt_random(n: int) -> [int] {
+    if n <= 0 { return [] }
+    let buf = hexa_ptr_alloc(n)
+    let rc = sys_getrandom(buf, n, 0)
+    if rc <= 0 { return [] }
+    let mut out = []
+    let mut i = 0
+    while i < rc {
+        out.push(hexa_ptr_read_byte(buf, i))
+        i = i + 1
+    }
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Intrinsic shims (recognized by codegen; lowered to single instrs)
+// ═══════════════════════════════════════════════════════════════════
+
+@inline fn __mem_store64(addr: int, val: int) -> int { return 0 }
+@inline fn __mem_load64(addr: int) -> int { return 0 }
+@inline fn __mem_load32(addr: int) -> int { return 0 }
+
+// Type coercion helpers (interp-era runtime.c provides these; redeclared
+// here so rt/ compiles standalone).
+@inline fn int_of(x) -> int { return hexa_int_coerce(x) }
+@inline fn float_of(x) -> float { return hexa_float_coerce(x) }
+
+@inline fn hexa_int_coerce(x) -> int { return 0 }
+@inline fn hexa_float_coerce(x) -> float { return 0.0 }

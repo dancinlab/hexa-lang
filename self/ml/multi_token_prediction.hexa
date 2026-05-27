@@ -1,0 +1,357 @@
+// ═══════════════════════════════════════════════════════════════════
+//  self/ml/multi_token_prediction.hexa — Multi-Token Prediction (#215)
+//
+//  Gloeckle et al. "Better & Faster Large Language Models via
+//  Multi-token Prediction" (2024). Replaces the single next-token
+//  head with N parallel heads, each predicting the token at position
+//  +k (k=1..N). Train loss is the average over heads. At inference
+//  we can either (a) discard the extras and keep standard decoding,
+//  or (b) use all heads for speculative decoding — the k-th head
+//  drafts the t+k-th token and agreement measures acceptance.
+//
+//  Training:     L = (1/N) sum_k CE(head_k(h), target_{t+k})
+//  Inference:    draft = [argmax head_k(h) for k in 0..N]
+//                accepted = prefix of draft agreeing with verifier
+//
+//  Each head is a linear layer (W: dim x vocab, b: vocab). The
+//  backbone produces a hidden vector h; each head independently
+//  maps h -> vocab logits. Seeds differ per head so the heads are
+//  genuinely different projections.
+//
+//  Public API (prefix mtp_):
+//    mtp_config(n_heads, dim, vocab)                         -> dict
+//    mtp_head_init(dim, vocab, seed)                         -> [W, b]
+//    mtp_head_forward(W, b, hidden, dim, vocab)              -> logits
+//    mtp_create_heads(n_heads, dim, vocab)                   -> [head]
+//    mtp_forward_all_heads(heads, hidden, dim, vocab, n)     -> [[float]]
+//    mtp_softmax(logits, n)                                  -> [float]
+//    mtp_log_softmax(logits, n)                              -> [float]
+//    mtp_cross_entropy(logits, target, vocab)                -> float
+//    mtp_loss(heads, hidden_seq, target_seq, seq_len,
+//             dim, vocab, n_heads)                           -> float
+//    mtp_argmax(logits, vocab)                               -> int
+//    mtp_predict_top_k_per_head(heads, hidden, dim, vocab,
+//                               n_heads, k)                  -> [[int]]
+//    mtp_speculative_decode(heads, hidden, dim, vocab, n)    -> [tokens, confidences]
+//    mtp_accept_by_agreement(predicted, verified, n_heads)   -> int
+//    mtp_single_head_equiv(heads, hidden, dim, vocab)        -> [float]
+//
+//  AI-NATIVE attrs:
+//    @pure  — no side effects
+//    @hot   — called per training/inference step
+// ═══════════════════════════════════════════════════════════════════
+
+// ── numeric helpers ──────────────────────────────────────────────
+
+fn mtp_abs(x) {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn mtp_exp(x) {
+    let mut v = x
+    if v > 20.0 { v = 20.0 }
+    if v < -20.0 { v = -20.0 }
+    let mut result = 1.0
+    let mut term = 1.0
+    for i in 1..30 {
+        term = term * v / to_float(i)
+        result = result + term
+    }
+    if result < 0.0 { return 0.0 }
+    return result
+}
+
+fn mtp_log(x) {
+    if x <= 0.0 { return -20.0 }
+    let mut t = (x - 1.0) / (x + 1.0)
+    let t2 = t * t
+    let mut term = t
+    let mut result = 0.0
+    for i in 0..20 {
+        result = result + term / to_float(2 * i + 1)
+        term = term * t2
+    }
+    return 2.0 * result
+}
+
+// ── deterministic pseudo-random for head init ──────────────────
+// Simple hash: avoids extra state threading; given (i, j, seed) we
+// produce a float in [-1, 1] scaled by 1/sqrt(dim).
+
+fn mtp_hash_float(r, c, seed) {
+    let h = (r * 137 + c * 311 + seed * 7919) % 10007
+    return (to_float(h) / 10007.0 - 0.5) * 2.0
+}
+
+// ── config dict ────────────────────────────────────────────────
+
+pub fn mtp_config(n_heads, dim, vocab) {
+    return #{
+        "n_heads": n_heads,
+        "dim": dim,
+        "vocab": vocab
+    }
+}
+
+// ── head initialization ────────────────────────────────────────
+// A head = [W, b] where W is [dim][vocab] and b is [vocab].
+// W[i][v] = scaled hash(i, v, seed); b[v] = 0.
+
+pub fn mtp_head_init(dim, vocab, seed) {
+    let scale = 0.1
+    let mut W = []
+    for i in 0..dim {
+        let mut row = []
+        for v in 0..vocab {
+            let raw = mtp_hash_float(i, v, seed)
+            row = row + [raw * scale]
+        }
+        W = W + [row]
+    }
+    let mut b = []
+    for _v in 0..vocab {
+        b = b + [0.0]
+    }
+    return [W, b]
+}
+
+// ── head forward ────────────────────────────────────────────────
+// logits[v] = sum_i W[i][v] * hidden[i] + b[v]
+
+@pure @hot
+pub fn mtp_head_forward(W, b, hidden, dim, vocab) {
+    let mut logits = []
+    for v in 0..vocab {
+        let mut s = b[v]
+        for i in 0..dim {
+            s = s + W[i][v] * hidden[i]
+        }
+        logits = logits + [s]
+    }
+    return logits
+}
+
+// ── create N heads (different seeds per head) ──────────────────
+
+pub fn mtp_create_heads(n_heads, dim, vocab) {
+    let mut heads = []
+    for k in 0..n_heads {
+        // seed varies per head so heads are truly different
+        let head = mtp_head_init(dim, vocab, 101 + k * 991)
+        heads = heads + [head]
+    }
+    return heads
+}
+
+// ── forward all N heads ────────────────────────────────────────
+// Returns logits[n_heads][vocab].
+
+@pure @hot
+pub fn mtp_forward_all_heads(heads, hidden, dim, vocab, n_heads) {
+    let mut all_logits = []
+    for k in 0..n_heads {
+        let head = heads[k]
+        let W = head[0]
+        let b = head[1]
+        let logits = mtp_head_forward(W, b, hidden, dim, vocab)
+        all_logits = all_logits + [logits]
+    }
+    return all_logits
+}
+
+// ── softmax over n logits ──────────────────────────────────────
+
+@pure
+pub fn mtp_softmax(logits, n) {
+    let mut mx = logits[0]
+    for i in 1..n {
+        if logits[i] > mx { mx = logits[i] }
+    }
+    let mut exps = []
+    let mut z = 0.0
+    for i in 0..n {
+        let e = mtp_exp(logits[i] - mx)
+        exps = exps + [e]
+        z = z + e
+    }
+    if z <= 0.0 { z = 1.0e-10 }
+    let mut out = []
+    for i in 0..n {
+        out = out + [exps[i] / z]
+    }
+    return out
+}
+
+@pure
+pub fn mtp_log_softmax(logits, n) {
+    let mut mx = logits[0]
+    for i in 1..n {
+        if logits[i] > mx { mx = logits[i] }
+    }
+    let mut z = 0.0
+    for i in 0..n {
+        z = z + mtp_exp(logits[i] - mx)
+    }
+    if z <= 0.0 { z = 1.0e-10 }
+    let log_z = mtp_log(z)
+    let mut out = []
+    for i in 0..n {
+        out = out + [(logits[i] - mx) - log_z]
+    }
+    return out
+}
+
+// ── cross-entropy: -log softmax(logits)[target] ────────────────
+
+@pure
+pub fn mtp_cross_entropy(logits, target, vocab) {
+    let logp = mtp_log_softmax(logits, vocab)
+    return 0.0 - logp[target]
+}
+
+// ── argmax ──────────────────────────────────────────────────────
+
+@pure
+pub fn mtp_argmax(logits, vocab) {
+    let mut best = 0
+    let mut best_v = logits[0]
+    for i in 1..vocab {
+        if logits[i] > best_v {
+            best_v = logits[i]
+            best = i
+        }
+    }
+    return best
+}
+
+// ── training loss across a sequence ────────────────────────────
+// hidden_seq[t]: backbone hidden at position t (length seq_len).
+// target_seq: flattened [seq_len][n_heads] targets — target_seq[t*n_heads + k]
+//             is the token at position t+k+1.
+// Return: average per-head CE loss across (seq_len * n_heads) calls.
+
+@hot
+pub fn mtp_loss(heads, hidden_seq, target_seq, seq_len, dim, vocab, n_heads) {
+    if seq_len <= 0 { return 0.0 }
+    if n_heads <= 0 { return 0.0 }
+    let mut total = 0.0
+    let mut count = 0
+    for t in 0..seq_len {
+        let hidden = hidden_seq[t]
+        for k in 0..n_heads {
+            let head = heads[k]
+            let W = head[0]
+            let b = head[1]
+            let logits = mtp_head_forward(W, b, hidden, dim, vocab)
+            let tgt = target_seq[t * n_heads + k]
+            total = total + mtp_cross_entropy(logits, tgt, vocab)
+            count = count + 1
+        }
+    }
+    if count == 0 { return 0.0 }
+    return total / to_float(count)
+}
+
+// ── predict top-k tokens per head ──────────────────────────────
+// For each head, find the k largest logits and return their indices.
+// Out shape: [n_heads][k].
+
+@pure
+pub fn mtp_predict_top_k_per_head(heads, hidden, dim, vocab, n_heads, k) {
+    let mut out = []
+    for h in 0..n_heads {
+        let head = heads[h]
+        let W = head[0]
+        let b = head[1]
+        let logits = mtp_head_forward(W, b, hidden, dim, vocab)
+        // selection top-k (k small, typically <= 8)
+        let mut picked = []
+        let mut used = []
+        for _u in 0..vocab { used = used + [0] }
+        let kk = if k < vocab { k } else { vocab }
+        for _p in 0..kk {
+            let mut best = -1
+            let mut best_v = 0.0
+            let mut first = 1
+            for v in 0..vocab {
+                if used[v] == 0 {
+                    if first == 1 {
+                        best = v
+                        best_v = logits[v]
+                        first = 0
+                    } else {
+                        if logits[v] > best_v {
+                            best = v
+                            best_v = logits[v]
+                        }
+                    }
+                }
+            }
+            if best >= 0 {
+                picked = picked + [best]
+                used[best] = 1
+            }
+        }
+        out = out + [picked]
+    }
+    return out
+}
+
+// ── speculative decoding ──────────────────────────────────────
+// Returns [tokens, confidences]:
+//   tokens[k]       = argmax of head_k(hidden)
+//   confidences[k]  = softmax(head_k(hidden))[tokens[k]]
+// Length n_heads each.
+
+@pure @hot
+pub fn mtp_speculative_decode(heads, hidden, dim, vocab, n_heads) {
+    let mut tokens = []
+    let mut confidences = []
+    for k in 0..n_heads {
+        let head = heads[k]
+        let W = head[0]
+        let b = head[1]
+        let logits = mtp_head_forward(W, b, hidden, dim, vocab)
+        let tok = mtp_argmax(logits, vocab)
+        let probs = mtp_softmax(logits, vocab)
+        tokens = tokens + [tok]
+        confidences = confidences + [probs[tok]]
+    }
+    let pair = [tokens, confidences]
+    return pair
+}
+
+// ── accept-by-agreement ───────────────────────────────────────
+// Longest matching prefix between the draft and the verifier.
+// Draft comes from speculative_decode, verified is the oracle
+// sequence. Returns the accepted count (0..n_heads).
+
+@pure
+pub fn mtp_accept_by_agreement(predicted_tokens, verified, n_heads) {
+    let mut count = 0
+    let mut stop = 0
+    for i in 0..n_heads {
+        if stop == 0 {
+            if predicted_tokens[i] == verified[i] {
+                count = count + 1
+            } else {
+                stop = 1
+            }
+        }
+    }
+    return count
+}
+
+// ── single-head equivalence ───────────────────────────────────
+// When n_heads=1, mtp_forward_all_heads reduces to exactly one
+// standard LM head call. This helper returns that single head's
+// logits directly so tests can compare against all-heads output.
+
+@pure
+pub fn mtp_single_head_equiv(heads, hidden, dim, vocab) {
+    let head = heads[0]
+    let W = head[0]
+    let b = head[1]
+    return mtp_head_forward(W, b, hidden, dim, vocab)
+}

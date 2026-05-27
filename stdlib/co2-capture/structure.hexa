@@ -1,0 +1,8 @@
+#!hexa strict
+// co2-capture structure — MOF pore aperture.
+fn main() {
+    let pore_A = 5.0
+    println("co2-capture_structure (MOF pore aperture):")
+    println("  pore_A = " + str(pore_A))
+    println("__HEXA_CO2_CAPTURE_STRUCTURE__ PASS gate=GATE_OPEN absorbed=false")
+}

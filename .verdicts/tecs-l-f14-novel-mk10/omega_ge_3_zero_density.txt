@@ -1,0 +1,99 @@
+F14 Seed (5) NOVEL closed-negative (TECS-L F14, 2026-05-26):
+
+  D(n) zero-density theorem (corollary of M10, restricted to ω(n)≥3):
+    ∀ n with ω(n) ≥ 3 (≥3 distinct primes), D(n) := σ(n)·φ(n) − n·τ(n) ≠ 0.
+
+DERIVATION (corollary of M10 σφ=nτ ⟺ n∈{1,6}):
+  M10 closed-form: σ(n)φ(n) = nτ(n) ⟺ ∏_p g(p,a) = 1, with
+    g(p,a) := (p^(a+1) − 1) / (p·(a+1))
+  Inspection (M10 base):
+    g(2,1) = 3/4   < 1   (only sub-unity factor on (p,a) prime-power locus)
+    g(2,a≥2)       > 1
+    g(p≥3, a≥1)    > 1
+  So ∏ g = 1 needs cancelling g(2,1)·X = 1 with X > 1.
+  Only one factor >1 needed: g(3,1) = 4/3 → 3/4 · 4/3 = 1 → n=2·3=6.
+  For ω(n)≥3, ∏ g has ≥3 factors. With g(2,1)=3/4 at most once, the
+  remaining ≥2 factors all g(p,a) > 1. Adding ANY further factor g(p,a)>1
+  beyond g(3,1)=4/3 cancellation takes product strictly >1.
+  ∴ no ω≥3 solution. D(n)≠0 ∀ ω(n)≥3.                              ∎
+
+ZERO-DENSITY COROLLARY:
+  #{n ≤ N : D(n) = 0, ω(n) ≥ 3} = 0  ∀ N.
+  Combined with F13 D(pq)=0 ⟺ (p,q)=(2,3) (ω=2 case) + g(2,1)=3/4 only
+  on prime-power locus (ω=1 has no solution since 3/4 alone ≠ 1) + n=1
+  (ω=0, trivial), the FULL zero set is {1, 6} — M10 reconfirmed.
+
+VERIFIED via hexa verify --expr (no auto-absorb) — spot-check ω≥3 sample:
+
+  n=30 : σ=72 φ=8 τ=8
+    σ·φ          = 576
+    n·τ          = 240
+    D(n)         = 336
+    ✓ D≠0 (closed-negative confirms zero-density)
+    hexa verify sigma(30)=72 :       tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+    hexa verify euler_phi(30)=8 :   tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+    hexa verify tau(30)=8 :         tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+  n=42 : σ=96 φ=12 τ=8
+    σ·φ          = 1152
+    n·τ          = 336
+    D(n)         = 816
+    ✓ D≠0 (closed-negative confirms zero-density)
+    hexa verify sigma(42)=96 :       tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+    hexa verify euler_phi(42)=12 :   tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+    hexa verify tau(42)=8 :         tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+  n=60 : σ=168 φ=16 τ=12
+    σ·φ          = 2688
+    n·τ          = 720
+    D(n)         = 1968
+    ✓ D≠0 (closed-negative confirms zero-density)
+    hexa verify sigma(60)=168 :       tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+    hexa verify euler_phi(60)=16 :   tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+    hexa verify tau(60)=12 :         tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+  n=210 : σ=576 φ=48 τ=16
+    σ·φ          = 27648
+    n·τ          = 3360
+    D(n)         = 24288
+    ✓ D≠0 (closed-negative confirms zero-density)
+    hexa verify sigma(210)=576 :       tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+    hexa verify euler_phi(210)=48 :   tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+    hexa verify tau(210)=16 :         tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+  n=2310 : σ=6912 φ=480 τ=32
+    σ·φ          = 3317760
+    n·τ          = 73920
+    D(n)         = 3243840
+    ✓ D≠0 (closed-negative confirms zero-density)
+    hexa verify sigma(2310)=6912 :       tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+    hexa verify euler_phi(2310)=480 :   tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+    hexa verify tau(2310)=32 :         tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+  n=30030 : σ=96768 φ=5760 τ=64
+    σ·φ          = 557383680
+    n·τ          = 1921920
+    D(n)         = 555461760
+    ✓ D≠0 (closed-negative confirms zero-density)
+    hexa verify sigma(30030)=96768 :       tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+    hexa verify euler_phi(30030)=5760 :   tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+    hexa verify tau(30030)=64 :         tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+SUMMARY:
+  Total ω≥3 candidates: 6 (30, 42, 60, 210, 2310, 30030; ω∈{3,3,3,4,5,6})
+  D(n)=0 found: 0/6 (prediction CONFIRMED — zero-density on ω≥3 locus)
+  Combined with M10 closed-form (∏ g = 1 cancellation argument), the full
+  D(n)=0 zero set is {1, 6}.
+
+  This is a 🔴 CLOSED-NEGATIVE on the ω≥3 axis (the "no zeros on multi-prime
+  locus" claim is verified deterministically) — the falsifier "∃ ω(n)≥3 with
+  D(n)=0" is rejected by 6/6 spot witnesses + closed-form M10 cancellation
+  argument.
+
+ATLAS provenance: NOT in compiler/atlas/embedded.gen.hexa (derived corollary,
+no D_omega_density prefix).
+
+CLASSIFICATION: 🔴 CLOSED-NEGATIVE (publishable per project.tape
+@D paper_negative_ok) — closed-form zero-density theorem + 6 ω≥3 witnesses.
+  Frame: a NOVEL deterministic ruling-out of D=0 zeros on the ω≥3 locus,
+  isolating the {1,6} zero set to ω∈{0,1,2}.

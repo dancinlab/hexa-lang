@@ -1,0 +1,88 @@
+// _e2e_smoke.hexa — cheap end-to-end smoke for stdlib/cloud + runpod.
+//
+// Validates the full plumbing on a real RunPod pod for <$0.20 / ~2 min:
+//   1. runpod_create_cascade — pod create
+//   2. runpod_wait_ssh       — ports + ssh handshake
+//   3. cloud_run_opts        — echo a marker on the pod
+//   4. cloud_copy_to_opts    — upload a small file
+//   5. cloud_run_opts sha256sum — verify the upload
+//   6. cloud_copy_from_opts  — download it back
+//   7. runpod_terminate      — tear down
+//
+// Skips actual training (that's the dispatch's job, validated by science).
+
+use "stdlib/cloud/cloud"
+use "stdlib/cloud/runpod"
+
+fn main() {
+    println("=== e2e smoke (stdlib/cloud + runpod) " + utc_iso_now() + " ===")
+    let rk = exec("secret get runpod.api_key 2>/dev/null").trim()
+    if len(rk) == 0 { println("FATAL no runpod api key"); exit(1) }
+    let pubkey = read_file(env_var("HOME") + "/.ssh/id_ed25519.pub").trim()
+    if len(pubkey) == 0 { println("FATAL no ~/.ssh/id_ed25519.pub"); exit(1) }
+
+    let gpus = ["NVIDIA A100-SXM4-80GB", "NVIDIA A100 80GB PCIe", "NVIDIA H100 80GB HBM3", "NVIDIA H100 NVL", "NVIDIA H100 PCIe"]
+    let image = "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04"
+
+    println("[1/7] runpod_create_cascade ...")
+    let pod = runpod_create_cascade(rk, gpus, image, pubkey, "stdlib-cloud-e2e-smoke")
+    if pod.ok != 1 { println("FATAL " + pod.message); exit(1) }
+    println("    pod " + pod.pod_id + " — " + pod.message)
+
+    println("[2/7] runpod_wait_ssh (up to ~15min) ...")
+    let p = runpod_wait_ssh(rk, pod.pod_id, 90, 10)
+    if p.ok != 1 {
+        println("FATAL " + p.message)
+        runpod_terminate(rk, pod.pod_id)
+        exit(1)
+    }
+    println("    ssh ready at " + p.ip + ":" + p.port)
+
+    let host = "root@" + p.ip
+    let opts = runpod_pod_opts(p.port)
+    let mut rc = 0
+
+    println("[3/7] cloud_run echo ...")
+    let r3 = cloud_run_opts(host, opts, ["echo", "E2E_ECHO_OK"])
+    if r3.ok != 1 || r3.stdout_.index_of("E2E_ECHO_OK") < 0 {
+        println("FAIL echo — " + r3.message); rc = 1
+    } else { println("    ok") }
+
+    let local_src = "/tmp/e2e_smoke_src_" + to_string(timestamp())
+    let remote_pod = "/workspace/e2e_smoke.txt"
+    let local_dst = "/tmp/e2e_smoke_dst_" + to_string(timestamp())
+    write_file(local_src, "e2e-smoke-payload\nstructured argv lives\n")
+
+    println("[4/7] cloud_copy_to ...")
+    let r4 = cloud_copy_to_opts(host, opts, local_src, remote_pod)
+    if r4.ok != 1 { println("FAIL copy-to — " + r4.message); rc = 1 } else { println("    ok") }
+
+    println("[5/7] cloud_run sha256sum (remote) ...")
+    let r5 = cloud_run_opts(host, opts, ["sha256sum", remote_pod])
+    let remote_sha = r5.stdout_.trim().substring(0, 64)
+    let local_sha = exec("shasum -a 256 " + local_src + " | cut -d' ' -f1").trim()
+    if remote_sha != local_sha {
+        println("FAIL sha mismatch — remote=" + remote_sha + " local=" + local_sha); rc = 1
+    } else { println("    ok — " + remote_sha) }
+
+    println("[6/7] cloud_copy_from ...")
+    let r6 = cloud_copy_from_opts(host, opts, remote_pod, local_dst)
+    if r6.ok != 1 { println("FAIL copy-from — " + r6.message); rc = 1 } else {
+        let dst_sha = exec("shasum -a 256 " + local_dst + " | cut -d' ' -f1").trim()
+        if dst_sha != local_sha {
+            println("FAIL round-trip sha mismatch — dst=" + dst_sha + " local=" + local_sha); rc = 1
+        } else { println("    ok — round-trip byte-identical") }
+    }
+
+    println("[7/7] runpod_terminate ...")
+    let t = runpod_terminate(rk, pod.pod_id)
+    if t == 1 { println("    ok") } else { println("WARN terminate API returned empty") }
+
+    exec("rm -f " + local_src + " " + local_dst)
+    if rc == 0 {
+        println("=== e2e smoke PASS " + utc_iso_now() + " ===")
+        exit(0)
+    }
+    println("=== e2e smoke FAIL " + utc_iso_now() + " ===")
+    exit(1)
+}

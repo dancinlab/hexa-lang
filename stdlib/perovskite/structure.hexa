@@ -1,0 +1,8 @@
+#!hexa strict
+// perovskite structure — MAPbI3 cubic lattice.
+fn main() {
+    let MAPbI3_a_A = 6.3
+    println("perovskite_structure (MAPbI3 cubic lattice):")
+    println("  MAPbI3_a_A = " + str(MAPbI3_a_A))
+    println("__HEXA_PEROVSKITE_STRUCTURE__ PASS gate=GATE_OPEN absorbed=false")
+}

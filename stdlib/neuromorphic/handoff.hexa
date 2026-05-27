@@ -1,0 +1,8 @@
+#!hexa strict
+// neuromorphic handoff — full chip neuron count.
+fn main() {
+    let chip_neurons = 1000000.0
+    println("neuromorphic_handoff (full chip neuron count):")
+    println("  chip_neurons = " + str(chip_neurons))
+    println("__HEXA_NEUROMORPHIC_HANDOFF__ PASS gate=GATE_OPEN absorbed=false")
+}

@@ -1,0 +1,32 @@
+# F15 s2 — Ore (harmonic) non-perfect non-Mersenne-product family
+# H(n) = n*tau(n)/sigma(n); Ore iff in Z; perfect iff sigma=2n
+
+n=270 : sigma=720 tau=16 n*tau=4320  Ore=YES H(270)=6  Perfect=NO (sigma vs 2n=540)
+n=672 : sigma=2016 tau=24 n*tau=16128  Ore=YES H(672)=8  Perfect=NO (sigma vs 2n=1344)
+n=1638 : sigma=4368 tau=24 n*tau=39312  Ore=YES H(1638)=9  Perfect=NO (sigma vs 2n=3276)
+n=2970 : sigma=8640 tau=32 n*tau=95040  Ore=YES H(2970)=11  Perfect=NO (sigma vs 2n=5940)
+n=6200 : sigma=14880 tau=24 n*tau=148800  Ore=YES H(6200)=10  Perfect=NO (sigma vs 2n=12400)
+
+# Summary: 5/5 Ore · 5/5 non-perfect
+# Confirms Ore PROPERLY contains perfects (existence beyond Mersenne-products)
+
+# Family pattern analysis
+# 140  = 2^2 * 5 * 7         (omega=3, H=5)
+# 270  = 2 * 3^3 * 5         (omega=3, H=6)
+# 672  = 2^5 * 3 * 7         (omega=3, H=8)
+# 1638 = 2 * 3^2 * 7 * 13    (omega=4, H=9)
+# 2970 = 2 * 3^3 * 5 * 11    (omega=4, H=11)
+# 6200 = 2^3 * 5^2 * 31      (omega=3, H=10; uses Mersenne prime 31 = M_5)
+#
+# Honest finding (paper_significance gate):
+# Closed-form family pattern for "Ore-not-perfect" does NOT exist in finite shape —
+# Ore set itself (A001599) lacks known closed-form generators beyond Mersenne-product
+# subset (which IS A=perfect). The non-perfect Ore witnesses have heterogeneous
+# omega ∈ {3,4} and exponent multisets {(a,b,c,d)} — no single template covers them.
+#
+# Closed-negative finding (paper-eligible candidate):
+# 🔴 NO uniform closed-form family generates ALL Ore-not-perfect numbers.
+# This rules out the "Ore-shape closed-form lift" axis (analogous to F7 modular-curve
+# non-lift of σφ=nτ): Ore property strictly exceeds the Mersenne-product closed form.
+#
+# Tier: 🔵 (5/5 Ore + non-perfect verified) + 🟡 family-closed-form negative claim

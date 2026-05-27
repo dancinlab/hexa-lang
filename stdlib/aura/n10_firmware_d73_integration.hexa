@@ -1,0 +1,118 @@
+#!hexa strict
+// stdlib/aura/n10_firmware_d73_integration.hexa — `aura + N10`
+// AURA × FIRMWARE D73 cellrun integration (hexa-native).
+//
+// CONTEXT: firmware domain D73 cellrun owns actual cross-compile +
+// signing. AURA D5 synthesize cell only points to firmware D73 for
+// the real build. This file declares the substrate handoff.
+//
+// Honesty (g3 · @D d1):
+//   * absorbed=false PERMANENTLY — integration decl, NOT a wired flow.
+//
+// Sentinels:
+//   __HEXA_AURA_N10_FIRMWARE_D73_INTEGRATION__ PASS
+//   AURA_N10_FIRMWARE_D73_INTEGRATION_OK gate=GATE_OPEN absorbed=false
+
+let VERSION       = "0.1.0"
+let MODULE        = "aura-n10-firmware-d73-integration"
+let GEOMETRY_ID   = "aura_n10_firmware_d73_integration_v1"
+let RECORD_KIND   = "aura_n10_firmware_d73_integration_record"
+
+fn _substrate_handoff_block() -> [str] {
+    return [
+        "AURA_role: requirements + spec + DSP pipeline pointer (V1-V5 cells)",
+        "FIRMWARE_role: cross-compile + signing + release artifact (D73 cellrun)",
+        "handoff_format: firmware build manifest JSON (board + version + targets + sign-key-id)",
+        "FIRMWARE_invocation: hexa run stdlib/cockpit/cellrun.hexa firmware build --input <aura-manifest>",
+        "AURA_consumes: signed firmware binary + SBOM + build provenance record",
+        "release_pipeline: AURA spec → FIRMWARE build → AURA D5 bundle skeleton → release",
+    ]
+}
+
+fn _manifest_schema_block() -> [str] {
+    return [
+        "schema: aura_to_firmware_manifest_v1.json",
+        "fields: board (nrf5340dk | esp32c6) · target (cpuapp · ble_controller) · sysbuild (true/false)",
+        "fields: version_semver + git_short_sha + reproducibility_hash",
+        "fields: signing_key_id + signature_alg (ed25519 | RSA-2048) + secure_boot_v2 (true/false)",
+        "fields: feature_flags (OTA · BLE Mesh · etc) + sdkconfig_overlay_path",
+        "fields: build_args (-DCONF_FILE · -DBOARD · -DEXTRA_CONF_FILE) + target_image_name",
+    ]
+}
+
+fn _cellrun_dispatch_block() -> [str] {
+    return [
+        "dispatcher: stdlib/cockpit/cellrun.hexa generic verb-cell dispatcher",
+        "firmware_cell: firmware.demi [cell.build] (in hexa-lang stdlib/firmware/firmware.demi)",
+        "invocation: cellrun.hexa firmware build → forward AURA manifest → west build invocation",
+        "output_dir: exports/firmware/build/<aura-version>/<board>/zephyr.signed.bin",
+        "AURA_consumer: stdlib/aura/synthesize.hexa V5 reads firmware build output",
+        "verbose_logging: --verbose flag pipes west output to AURA log",
+    ]
+}
+
+fn _ci_integration_block() -> [str] {
+    return [
+        "CI_pipeline: GitHub Actions composite workflow",
+        "trigger: AURA tag push (v0.x.y-aura) OR FIRMWARE D73 update",
+        "matrix: AURA spec × FIRMWARE board (nrf5340dk + esp32c6 + future targets)",
+        "artifact_upload: per-board signed binary + per-AURA-version SBOM",
+        "release_step: gh release create with AURA + FIRMWARE artifacts bundled",
+        "test_step: QEMU smoke on each board target + integration test (HW-in-loop optional)",
+    ]
+}
+
+fn _scope_caveats() -> [str] {
+    return [
+        "N10 AURA × FIRMWARE integration is a HANDOFF decl, NOT a wired flow.",
+        "Actual wiring requires: FIRMWARE D73 cellrun implementation + manifest schema agreement.",
+        "Cross-domain test coverage requires HW-in-loop CI infrastructure.",
+        "absorbed=false PERMANENTLY (g3) - decl, NEVER a wired+tested integration.",
+    ]
+}
+
+fn _emit_block(label: str, lines: [str]) {
+    print("# [" + label + "]")
+    let n = lines.len()
+    let mut i = 0
+    while i < n {
+        print("#   - " + lines[i])
+        i = i + 1
+    }
+    print("#")
+}
+
+fn _emit_header() {
+    print("# AURA N10 - AURA × FIRMWARE D73 cellrun integration")
+    print("# device_target = AURA-100 firmware build path")
+    print("# version = " + VERSION)
+    print("# ringfence: handoff decl - NOT a wired flow")
+    print("#")
+    _emit_block("substrate_handoff",    _substrate_handoff_block())
+    _emit_block("manifest_schema",      _manifest_schema_block())
+    _emit_block("cellrun_dispatch",     _cellrun_dispatch_block())
+    _emit_block("ci_integration",       _ci_integration_block())
+}
+
+fn _emit_caveats() {
+    let c = _scope_caveats()
+    let n = c.len()
+    let mut i = 0
+    while i < n {
+        print("# scope_caveat: " + c[i])
+        i = i + 1
+    }
+}
+
+fn main() {
+    _emit_header()
+    _emit_caveats()
+
+    print("AURA_N10_FIRMWARE_D73_INTEGRATION_OK record_kind=" + RECORD_KIND
+        + " geometry_id=" + GEOMETRY_ID
+        + " gate=GATE_OPEN absorbed=false"
+        + " version=" + VERSION
+        + " cellrun=cellrun.hexa firmware_cell=firmware.demi")
+
+    print("__HEXA_AURA_N10_FIRMWARE_D73_INTEGRATION__ PASS")
+}

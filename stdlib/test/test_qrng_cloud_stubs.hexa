@@ -1,0 +1,78 @@
+// stdlib/test/test_qrng_cloud_stubs.hexa — T2 cloud-quantum stub selftest (ibm/ionq/rigetti/braket)
+//
+// Sentinels: __QRNG_IBM_QUANTUM__ PASS · __QRNG_IONQ__ PASS · __QRNG_RIGETTI__ PASS · __QRNG_BRAKET__ PASS
+
+use "stdlib/qrng/source"
+use "stdlib/qrng/backends/cloud/ibm_quantum"
+use "stdlib/qrng/backends/cloud/ionq"
+use "stdlib/qrng/backends/cloud/rigetti"
+use "stdlib/qrng/backends/cloud/braket"
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn chk(tag, cond) {
+    if cond { pass_count = pass_count + 1 } else { println("  FAIL " + tag); fail_count = fail_count + 1 }
+}
+
+fn main() -> void {
+    println("── stdlib/qrng/backends/cloud T2 stubs selftest ──")
+
+    // ibm_quantum
+    let mi = qrng_source_meta_ibm_quantum()
+    chk("ibm.name", mi.name == "ibm_quantum")
+    chk("ibm.tier", mi.tier == 2)
+    chk("ibm.is_quantum", mi.is_quantum == 1)
+    chk("ibm.status_stub", mi.status == "STUB_CREDENTIALED")
+
+    // ionq
+    let mo = qrng_source_meta_ionq()
+    chk("ionq.name", mo.name == "ionq")
+    chk("ionq.tier", mo.tier == 2)
+    chk("ionq.is_quantum", mo.is_quantum == 1)
+    chk("ionq.is_free_0", mo.is_free == 0)
+    chk("ionq.status_stub", mo.status == "STUB_CREDENTIALED")
+
+    // rigetti
+    let mr = qrng_source_meta_rigetti()
+    chk("rigetti.name", mr.name == "rigetti")
+    chk("rigetti.tier", mr.tier == 2)
+    chk("rigetti.is_quantum", mr.is_quantum == 1)
+    chk("rigetti.is_free_0", mr.is_free == 0)
+    chk("rigetti.status_stub", mr.status == "STUB_CREDENTIALED")
+
+    // braket
+    let mb = qrng_source_meta_braket()
+    chk("braket.name", mb.name == "braket")
+    chk("braket.tier", mb.tier == 2)
+    chk("braket.is_quantum_aggregator", mb.is_quantum == 1)
+    chk("braket.is_free_0", mb.is_free == 0)
+    chk("braket.status_stub", mb.status == "STUB_CREDENTIALED")
+
+    // gated collect → all fail
+    let r_ibm = qrng_source_collect_ibm_quantum(4, 1)
+    chk("ibm.gated_fail", r_ibm.ok == 0)
+    let r_ionq = qrng_source_collect_ionq(4, 1)
+    chk("ionq.gated_fail", r_ionq.ok == 0)
+    let r_rig = qrng_source_collect_rigetti(4, 1)
+    chk("rigetti.gated_fail", r_rig.ok == 0)
+    let r_brk = qrng_source_collect_braket(4, 1)
+    chk("braket.gated_fail", r_brk.ok == 0)
+
+    let total = pass_count + fail_count
+    println("  pass=" + to_string(pass_count) + "  fail=" + to_string(fail_count))
+    if fail_count == 0 {
+        println("PASS: qrng_cloud_stubs " + to_string(pass_count) + "/" + to_string(total))
+        println("__QRNG_IBM_QUANTUM__ PASS")
+        println("__QRNG_IONQ__ PASS")
+        println("__QRNG_RIGETTI__ PASS")
+        println("__QRNG_BRAKET__ PASS")
+        return
+    }
+    println("FAIL: qrng_cloud_stubs " + to_string(pass_count) + "/" + to_string(total))
+    println("__QRNG_IBM_QUANTUM__ FAIL")
+    println("__QRNG_IONQ__ FAIL")
+    println("__QRNG_RIGETTI__ FAIL")
+    println("__QRNG_BRAKET__ FAIL")
+    exit(1)
+}

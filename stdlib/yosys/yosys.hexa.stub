@@ -1,0 +1,54 @@
+#!hexa strict
+// stdlib/yosys/yosys.hexa — dispatcher / CLI entry (CLEAN-ROOM skeleton)
+//
+// @version 0.0.1-skeleton
+// @capabilities [dispatcher, cli]
+// @stability skeleton (rfc_006 §4 module-7 of 7; bodies pending §5 gate)
+// @since 2026-05-19
+//
+// CLEAN-ROOM PROVENANCE (design.md Decision 1 — public-surface clean-room)
+//   This module re-derives the *public surface* of Yosys' main loop +
+//   script driver by inspection of upstream + manual only. No upstream
+//   code is copied. This is the `hexa yosys <subcmd>` entry point;
+//   it routes to read_verilog / passes / liberty / abc_map /
+//   write_verilog as a thin orchestrator.
+//
+//   - upstream code     : kernel/yosys.cc       (main loop)
+//                         frontends/script/script.cc (script driver)
+//   - upstream manual   : https://yosyshq.readthedocs.io/projects/yosys/
+//                          en/latest/cmd/index.html
+//   - upstream license  : ISC (YosysHQ; LICENSE)
+//   - upstream repo     : https://github.com/YosysHQ/yosys
+//
+// rfc_006 §4: module-7 of 7. CLI surface (mirror of README):
+//
+//   hexa yosys                       # default = help
+//   hexa yosys --help                # subcmd + flag listing
+//   hexa yosys --version             # 0.0.1-skeleton
+//   hexa yosys selftest              # all module fn main() self-tests
+//   hexa yosys read-verilog <file>   # Verilog → RTLIL JSON dump
+//   hexa yosys synth <opts>          # full flow (read_verilog → passes
+//                                    →  abc_map → write_verilog)
+//   hexa yosys write-verilog <out>   # last RTLIL → gate netlist
+//
+// Exit codes (rfc_001 §7.3, mirrored by rfc_006):
+//   0  = ok
+//   1  = user error (bad args, missing input file, etc.)
+//   2  = runtime error (parser failure, abc subprocess fail, etc.)
+//   90 = measurement gate OPEN (no absorbed claim)
+//   91 = TBD stub hit (rfc_048 raw-91 doctrine — skeleton phase)
+//
+// Self/main.hexa integration (pending): add `else if sub == "yosys"`
+// branch to dispatch into this file's main(), same pattern as
+// `hexa qrng` / `hexa qmirror` / `hexa sim-universe` per
+// `AGENTS.tape` §0 stdlib-CLI sections.
+
+fn main() {
+    // Skeleton phase — no body landed yet (rfc_048 raw-91 doctrine).
+    // Self-test will: invoke each module's fn main() in sequence,
+    // collect their exit codes, fail-loud if any of them exit 91
+    // unexpectedly post-gate (when bodies are supposed to be landed).
+    println("stdlib/yosys/yosys.hexa: TBD-STUB (rfc_006 §4 module-7 dispatcher)");
+    println("[gate] rfc_006 §5 OPEN: SKY130 area-oracle (d4≈61,763 d6≈93,609 1.516×) unmeasured");
+    exit(91);  // rfc_048 raw-91 — TBD-stub-hit, do not wire in
+}

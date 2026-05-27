@@ -1,0 +1,43 @@
+{
+  "__fixture_tag__": "VENDORED UNIVERSAL-FF PREDICTION — frozen NNP output, not measurement",
+  "candidate_id": "hxm-flatband-tbg-001",
+  "novel_section": "§4.C.4 (Tier-2 wave, 2026-05-14)",
+  "target_property": "superconducting transition temperature T_c for magic-angle twisted bilayer graphene (TBG) at twist angle 1.08° in an hBN-encapsulated dual-gated stack",
+  "predicted_value": 1.7,
+  "predicted_unit": "K (T_c, four-probe resistance onset)",
+  "operating_conditions": {
+    "twist_angle_deg": 1.08,
+    "encapsulation": "top + bottom hBN, dry-transfer assembly",
+    "gating": "dual-gate (top + bottom) for independent carrier-density + displacement-field control",
+    "carrier_density_per_cm2": "~ 1-2 × 10¹² (1/2 + 3/4-filled flat band, hole side)",
+    "magnetic_field_T": 0,
+    "twist_precision_target_deg": 0.1
+  },
+  "model": "ALIGNN (notional)",
+  "model_caveat": "Universal FFs predict atomistic energies / forces on the moiré-superlattice geometry — they do NOT directly compute T_c (a many-body correlated-electron property of the magic-angle flat band, requiring strong-coupling Hubbard / pseudogap / BCS-BEC crossover treatment). The 1.7 K value here is a PROXY-from-literature pinned with raw#10 C3 honesty: Cao 2018 Nature first-reported MA-TBG superconducting onset. SEMI-QUANTITATIVE — NNP frames the moiré-lattice relaxation geometry only.",
+  "proxy_source": "Cao et al. 2018 Nature 556:43 (magic-angle TBG superconductivity at 1.7 K, half-filling of flat band, twist angle 1.05-1.10°, Jarillo-Herrero MIT); Cao et al. 2018 Nature 556:80 (correlated insulator phase, same TBG device family); Lu et al. 2019 Nature 574:653 (TBG superconducting dome extension); Andrei / MacDonald 2020 Nat. Mater. 19:1265 (TBG review); Yankowitz / Dean Columbia + Efetov Barcelona TBG corpus 2019-2024",
+  "falsifier_relation": "PASS",
+  "falsifier_target_value": 1.5,
+  "falsifier_target_unit": "K (T_c)",
+  "falsifier_target_twist_precision": 0.1,
+  "falsifier_target_twist_unit": "deg (across-device precision)",
+  "falsifier_id": "F-FLATBAND-1",
+  "falsifier_text": "superconducting T_c < 1.5 K OR twist-angle precision worse than 0.1° across device → FAIL",
+  "delta_to_target_tc": 0.2,
+  "delta_to_target_twist": "PASS only if precision ≤ 0.1° (UNVERIFIED for non-tear-and-stack devices)",
+  "accessed": "2026-05-14",
+  "n6_lattice_fit_applied": false,
+  "is_measurement": false,
+  "is_external_verification": false,
+  "tier": "Tier-2",
+  "unproven_markers_preserved": [
+    "flat-band TBG twist-precision UNVERIFIED preserved verbatim — twist drift / relaxation / lattice reconstruction routinely degrades effective twist at 0.1° precision",
+    "TBG twist-angle precision HARD_WALL at 0.1° across whole-device area — Cao 2018 + Lu 2019 measure local probes, device-scale uniformity UNVERIFIED",
+    "superconducting fraction depends on hBN encapsulation cleanliness UNVERIFIED at wafer scale",
+    "non-zero-field-cooled / cycling reproducibility UNVERIFIED — TBG SC sample-dependent (5-20 % of fabricated devices show SC)",
+    "device-layer integration + scalable fabrication → hexa-chip per CROSS_LINK §3.2; tear-and-stack remains a Jarillo-Herrero lab specialty",
+    "no claim of RT-SC (per AGENTS.md A4 + `hexa-rtsc` boundary)"
+  ],
+  "honesty_caveats": "T_c 1.7 K CLEARS the 1.5 K floor at Cao 2018 magic-angle device chemistry. The twist-precision arm of F-FLATBAND-1 is the binding falsifier — ≤ 0.1° across-device precision is UNVERIFIED at production. PASS on T_c alone does NOT close the candidate; the twist-precision UNVERIFIED marker stays in place. SPEC_FIRST preserved — does NOT promote to EXTERNAL-VERIFIED.",
+  "license_note": "Peer-reviewed paper values per Nature publisher terms; Jarillo-Herrero MIT + Andrei Rutgers lab authority (raw#10 C3, NOT n=6 lattice-fit)."
+}

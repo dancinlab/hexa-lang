@@ -1,0 +1,20 @@
+// AUTO-GENERATED — do not edit. Regenerate via tool/engine_registry_embed_gen.hexa
+//
+// Wave 1 absorption: engine registry static embed (D7).
+// Source: engine/engine_registry.jsonl in nexus repo
+
+use "compiler/engine_registry/embed"
+
+@phase("parse_only")
+pub let ENGINE_REGISTRY_HASH: string = "cab04e0a5db989f3e0127eb7d82e655ea141513ba3567483ea8f0410f8d33bf3"
+@phase("parse_only")
+pub let ENGINE_REGISTRY_GENERATED_AT: string = "2026-05-12T22:18:21Z"
+@phase("parse_only")
+pub let ENGINE_REGISTRY_SOURCE_COUNT: i64 = 3
+
+@phase("parse_only")
+pub let ENGINE_REGISTRY: [EngineEntry] = [
+    EngineEntry { ts: 1776270678, name: "BT-541_engine", score: 0, auto_spawned: true, bt_parent: "BT-541", attack_angle: "riemann_zeta,critical_line,zero_density,sigma_tau,bernoulli_691", path: "shared/engine/bt_engines/BT-541_engine.hexa" },
+    EngineEntry { ts: 1776270689, name: "BT-542_engine", score: 0, auto_spawned: true, bt_parent: "BT-542", attack_angle: "p_vs_np,complexity_class,polynomial_hierarchy,sat_solver,relativization,natural_proofs", path: "shared/engine/bt_engines/BT-542_engine.hexa" },
+    EngineEntry { ts: 1776275760, name: "BT-543_engine", score: 0, auto_spawned: true, bt_parent: "BT-543", attack_angle: "yang_mills,mass_gap,beta_0,sigma_sopfr,asymptotic_freedom,glueball", path: "shared/engine/bt_engines/BT-543_engine.hexa" }
+]

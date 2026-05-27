@@ -1,0 +1,97 @@
+#!/bin/bash
+# bin/hexa-run-native — interp-retirement R4/R6 pipeline switch.
+#
+# Three-tier fallback:
+#   1. aprime_cc-direct (R3 native arm64-asm codegen — the interp-
+#      retirement target). Opt-in via HEXA_APRIME_CC=<path> pointing
+#      at a built aprime_cc binary (see PLAN-interp-retirement.md
+#      "Build recipe" — /tmp/arm64_feasible.sh produces it). Tier
+#      skipped if HEXA_APRIME_CC unset or the binary is missing.
+#   2. `hexa build` (hexa_v2 → C → clang — the proven canonical
+#      native path). Default when tier 1 unavailable.
+#   3. `hexa run` (interpreter — the behavioural SSOT). Fallback
+#      whenever a higher tier fails.
+#
+# Usage:
+#   hexa-run-native <file.hexa> [args...]
+#   HEXA_NATIVE=0 hexa-run-native <file.hexa>           # force interp
+#   HEXA_APRIME_CC=/path/to/aprime_cc hexa-run-native … # opt into tier 1
+#   HEXA_APRIME_RT=/path/to/runtime.o                   # paired runtime obj
+#   HEXA_NATIVE_VERBOSE=1 hexa-run-native …             # log chosen tier
+#
+# Exit code mirrors whichever tier executed.
+
+set -uo pipefail
+
+usage() {
+    cat <<EOF >&2
+usage: hexa-run-native <file.hexa> [args...]
+env:
+  HEXA_NATIVE=0           force interp (skip native tiers entirely)
+  HEXA_APRIME_CC=<path>   try the aprime_cc direct-asm path first
+  HEXA_APRIME_RT=<path>   runtime.o paired with aprime_cc (defaults
+                            to <HEXA_APRIME_CC dir>/runtime-arm64.o)
+  HEXA_NATIVE_VERBOSE=1   log the chosen tier + fallback reason
+EOF
+    exit 2
+}
+
+[ $# -ge 1 ] || usage
+SRC="$1"; shift
+[ -f "$SRC" ] || { echo "hexa-run-native: file not found: $SRC" >&2; exit 2; }
+
+verbose() { [ "${HEXA_NATIVE_VERBOSE:-0}" = "1" ] && echo "[hexa-run-native] $*" >&2; }
+
+run_interp() {
+    verbose "tier=3 path=interp reason=$1"
+    exec hexa run "$SRC" "$@"
+}
+
+# Tier 0 (opt-out): force interp.
+if [ "${HEXA_NATIVE:-1}" = "0" ]; then
+    run_interp "HEXA_NATIVE=0"
+fi
+
+BIN_DIR="${TMPDIR:-/tmp}/hexa-run-native.$$"
+mkdir -p "$BIN_DIR"
+trap 'rm -rf "$BIN_DIR"' EXIT
+BIN_BASENAME=$(basename "$SRC" .hexa)
+
+# Tier 1: aprime_cc direct-asm (the R3 codegen). Opt-in.
+APRIME="${HEXA_APRIME_CC:-}"
+if [ -n "$APRIME" ] && [ -x "$APRIME" ]; then
+    APRIME_RT="${HEXA_APRIME_RT:-$(dirname "$APRIME")/runtime-arm64.o}"
+    if [ -f "$APRIME_RT" ]; then
+        verbose "tier=1 path=aprime_cc bin=$APRIME rt=$APRIME_RT"
+        ASM="$BIN_DIR/$BIN_BASENAME.s"
+        OBJ="$BIN_DIR/$BIN_BASENAME.o"
+        BIN="$BIN_DIR/$BIN_BASENAME.bin"
+        APRIME_LOG="$BIN_DIR/aprime.log"
+        if "$APRIME" _drv.hexa --emit=asm --target=arm64-apple-darwin -o "$ASM" "$SRC" > "$APRIME_LOG" 2>&1 \
+           && [ -s "$ASM" ] \
+           && clang -arch arm64 "$ASM" -c -o "$OBJ" 2>>"$APRIME_LOG" \
+           && clang -arch arm64 "$OBJ" "$APRIME_RT" -o "$BIN" -lm 2>>"$APRIME_LOG" \
+           && [ -x "$BIN" ]; then
+            verbose "tier=1 native exec=$BIN"
+            exec "$BIN" "$@"
+        fi
+        verbose "tier=1 fell through; see $APRIME_LOG"
+    else
+        verbose "tier=1 skipped: HEXA_APRIME_RT not found ($APRIME_RT)"
+    fi
+fi
+
+# Tier 2: `hexa build` (hexa_v2 → C → clang).
+: "${HEXA_MAC_BUILD_OK:=1}"; export HEXA_MAC_BUILD_OK
+BIN="$BIN_DIR/$BIN_BASENAME.bin"
+BUILD_LOG="$BIN_DIR/build.log"
+if ! hexa build "$SRC" -o "$BIN" > "$BUILD_LOG" 2>&1; then
+    verbose "tier=2 build-failed; see $BUILD_LOG"
+    run_interp "build-failed"
+fi
+if [ ! -x "$BIN" ]; then
+    verbose "tier=2 no-binary"
+    run_interp "no-binary"
+fi
+verbose "tier=2 path=hexa-build native exec=$BIN"
+exec "$BIN" "$@"

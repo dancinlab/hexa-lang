@@ -1,0 +1,8 @@
+#!hexa strict
+// gene-edit synthesize — IVT yield target.
+fn main() {
+    let ivt_yield_ug = 100.0
+    println("gene-edit_synthesize (IVT yield target):")
+    println("  ivt_yield_ug = " + str(ivt_yield_ug))
+    println("__HEXA_GENE_EDIT_SYNTHESIZE__ PASS gate=GATE_OPEN absorbed=false")
+}

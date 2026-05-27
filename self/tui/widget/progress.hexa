@@ -1,0 +1,223 @@
+#!hexa strict
+// self/tui/widget/progress.hexa — TUI-PRIM L4 background-task progress widget
+//
+// Renders Claude-Code-style task progress lines:
+//
+//   ✢ <name> BG running… (1m 18s · ↑ 1.7k tokens)
+//     ⎿  ◼ <active step>
+//        ✔ <completed step>          (strikethrough)
+//        ✔ <completed step>
+//        … +2 completed
+//
+// Plus exposes the formatting helpers (spinner_frame, format_duration_ms,
+// format_compact_number) so other widgets / harness paint code can reuse.
+//
+// API
+//   pub fn spinner_frame(tick: int) -> string
+//     Returns the spinner glyph for a given tick (0-indexed). 6-frame cycle:
+//     `· ✢ ✳ ✶ ✻ ✽`. Caller picks tick = (timestamp_ms / 50) so a 20 fps
+//     animation drops into existing 50 ms-tick frame loops naturally.
+//
+//   pub fn format_duration_ms(ms: int) -> string
+//     `45s` / `1m 18s` / `2h 30m` / `1d 3h`. Mirrors Claude Code's
+//     `formatDuration()` with `mostSignificantOnly=false` and trailing zeros
+//     suppressed (no `1m 0s`). Always positive; clamp ms to 0 at min.
+//
+//   pub fn format_compact_number(n: int) -> string
+//     `0` … `999` → plain; `1000`+ → `1k` / `1.2k` / `12k`; `1_000_000`+ →
+//     `1m` / `1.2m`. (Strips `.0` per Claude Code's `formatTokens()`.)
+//
+//   pub fn progress_draw(x, y, w, state) -> int
+//     Draws the full progress line (and optionally a step list below it).
+//     `state` is a map (see SHAPE below). Returns lines drawn.
+//
+// state SHAPE
+//   #{
+//      "name":           string,      // "Final wiring BG running…"
+//      "tick":           int,         // monotonic frame tick (drives spinner)
+//      "elapsed_ms":     int,         // total elapsed since task start
+//      "tokens":         int,         // accumulated token count (0 = hide)
+//      "show_tokens_after_ms": int,   // SHOW_TOKENS_AFTER_MS (default 30_000)
+//      "token_dir":      string,      // "up" or "down" — arrow direction
+//      "steps":          array,       // [["state", "label"], ...]
+//                                     // state ∈ "active" | "done" | "fail" | "pending"
+//      "max_steps_shown": int         // 0 = unlimited; else show N, collapse rest as `… +M completed`
+//   }
+//
+// COLORS
+//   The widget pulls fg from caller via state["fg"] / state["fg_dim"] /
+//   state["fg_done"] keys (each optional). Defaults: spinner = -1, dim = -1
+//   with dim attr, done = -1 with strikethrough. This keeps the widget
+//   theme-agnostic; consumers (e.g. harness-cli with VS-Dark palette)
+//   inject their own colors via state.
+
+use "self/tui/render"
+use "self/tui/widget/text"
+use "self/tui/widget/indent"
+
+// ── Spinner frames ──────────────────────────────────────────────
+// Mac default frame cycle (Claude Code, `getDefaultCharacters()`):
+//   `· ✢ ✳ ✶ ✻ ✽`. The first frame `·` doubles as the "still" indicator
+//   (when tick == 0 / no animation requested). 50 ms per frame = 6×50 =
+//   300 ms cycle = 3.3 Hz, smooth without being distracting.
+let SPINNER_FRAMES = ["·", "✢", "✳", "✶", "✻", "✽"]
+let SPINNER_FRAME_COUNT = 6
+
+pub fn spinner_frame(tick: int) -> string {
+    let mut t = tick
+    if t < 0 { t = -t }
+    let i = t % SPINNER_FRAME_COUNT
+    return SPINNER_FRAMES[i]
+}
+
+// ── Duration / number formatting ────────────────────────────────
+pub fn format_duration_ms(ms: int) -> string {
+    let mut m = ms
+    if m < 0 { m = 0 }
+    let secs_total = m / 1000
+    if secs_total < 60 { return str(secs_total) + "s" }
+    let mins_total = secs_total / 60
+    if mins_total < 60 {
+        let s = secs_total - mins_total * 60
+        if s == 0 { return str(mins_total) + "m" }
+        return str(mins_total) + "m " + str(s) + "s"
+    }
+    let hours_total = mins_total / 60
+    if hours_total < 24 {
+        let m_rem = mins_total - hours_total * 60
+        if m_rem == 0 { return str(hours_total) + "h" }
+        return str(hours_total) + "h " + str(m_rem) + "m"
+    }
+    let days = hours_total / 24
+    let h_rem = hours_total - days * 24
+    if h_rem == 0 { return str(days) + "d" }
+    return str(days) + "d " + str(h_rem) + "h"
+}
+
+// Compact-notation number: "1.2k", "999", "12k", "1m". Strips trailing ".0".
+// Matches Claude Code's `formatTokens()` = `formatNumber()` with .0 strip.
+pub fn format_compact_number(n: int) -> string {
+    let mut x = n
+    if x < 0 { x = -x }
+    if x < 1000 { return str(x) }
+    if x < 1000000 {
+        // tenths of k: round to nearest 100, divide
+        let tenths = (x + 50) / 100
+        let whole = tenths / 10
+        let frac = tenths - whole * 10
+        if frac == 0 { return str(whole) + "k" }
+        return str(whole) + "." + str(frac) + "k"
+    }
+    let tenths = (x + 50000) / 100000
+    let whole = tenths / 10
+    let frac = tenths - whole * 10
+    if frac == 0 { return str(whole) + "m" }
+    return str(whole) + "." + str(frac) + "m"
+}
+
+// ── Step state glyphs ───────────────────────────────────────────
+let STEP_ACTIVE  = "◼"      // U+25FC — BLACK MEDIUM SQUARE
+let STEP_DONE    = "✔"      // U+2714 — HEAVY CHECK MARK
+let STEP_FAIL    = "✗"      // U+2717 — BALLOT X
+let STEP_PENDING = "·"      // U+00B7 — MIDDLE DOT
+let STRIKETHROUGH_ATTRS = 32   // bit 5 — caller must support this in their render layer; harness-cli paints SGR 9 when set
+
+fn _step_glyph(state: string) -> string {
+    if state == "active"  { return STEP_ACTIVE }
+    if state == "done"    { return STEP_DONE }
+    if state == "fail"    { return STEP_FAIL }
+    if state == "pending" { return STEP_PENDING }
+    return STEP_PENDING
+}
+
+fn _step_attrs(state: string, base: int) -> int {
+    // Completed and failed steps get strikethrough so the eye flows over
+    // them to the active line at the top.
+    if state == "done" || state == "fail" { return base | STRIKETHROUGH_ATTRS }
+    return base
+}
+
+// ── Map helpers (defensive against missing keys) ─────────────────
+fn _str_at(m: any, k: string, dflt: string) -> string {
+    if has_key(m, k) { return str(m[k]) }
+    return dflt
+}
+fn _int_at(m: any, k: string, dflt: int) -> int {
+    if has_key(m, k) { let v = m[k] ; if type_of(v) == "int" { return v } }
+    return dflt
+}
+fn _arr_at(m: any, k: string) -> array {
+    if has_key(m, k) && type_of(m[k]) == "array" { return m[k] }
+    return []
+}
+
+// ── Main draw ────────────────────────────────────────────────────
+pub fn progress_draw(x: int, y: int, w: int, state: any) -> int {
+    if w < 4 { return 0 }
+    if type_of(state) != "map" { return 0 }
+    let name = _str_at(state, "name", "Working…")
+    let tick = _int_at(state, "tick", 0)
+    let elapsed_ms = _int_at(state, "elapsed_ms", 0)
+    let tokens = _int_at(state, "tokens", 0)
+    let show_after_ms = _int_at(state, "show_tokens_after_ms", 30000)
+    let token_dir = _str_at(state, "token_dir", "down")
+    let fg = _int_at(state, "fg", -1)
+    let fg_dim = _int_at(state, "fg_dim", -1)
+    let dim_attrs = 8
+
+    // Line 1 — spinner + name + (elapsed · arrow tokens)
+    let glyph = spinner_frame(tick)
+    let elapsed_str = format_duration_ms(elapsed_ms)
+    let mut suffix = "(" + elapsed_str
+    if tokens > 0 && elapsed_ms > show_after_ms - 1 {
+        let arrow = if token_dir == "up" { "↑" } else { "↓" }
+        suffix = suffix + " · " + arrow + " " + format_compact_number(tokens) + " tokens"
+    }
+    suffix = suffix + ")"
+    let head = glyph + " " + name + " "
+    // Render head + dim suffix, packed.
+    let head_w = if w < len(head) { w } else { len(head) }
+    let mut wrote = text_draw(x, y, head, head_w, fg, -1, 0)
+    let rem = w - wrote
+    if rem > 0 {
+        let suf_w = if rem < len(suffix) { rem } else { len(suffix) }
+        wrote = wrote + text_draw(x + wrote, y, suffix, suf_w, fg_dim, -1, dim_attrs)
+    }
+
+    // Step list (optional) — indent under the spinner.
+    let steps = _arr_at(state, "steps")
+    let max_shown = _int_at(state, "max_steps_shown", 0)
+    let mut lines = 1
+    if len(steps) == 0 { return lines }
+    let pre_w = indent_prefix_width()
+    if w < pre_w + 1 { return lines }
+    let shown = if max_shown == 0 || len(steps) < max_shown + 1 { len(steps) } else { max_shown }
+    let mut si = 0
+    let mut row = y + 1
+    while si < shown {
+        let entry = steps[si]
+        // Defensive: entry is `[state_str, label_str]`.
+        if type_of(entry) != "array" || len(entry) < 2 {
+            si = si + 1
+            continue
+        }
+        let st_str = str(entry[0])
+        let label = str(entry[1])
+        let gly = _step_glyph(st_str)
+        let attrs = _step_attrs(st_str, 0)
+        let line = "   " + gly + " " + label   // 3-space indent matches Claude Code's nested look
+        let line_w = if w < len(line) { w } else { len(line) }
+        let _w1 = text_draw(x, row, line, line_w, fg, -1, attrs)
+        row = row + 1
+        lines = lines + 1
+        si = si + 1
+    }
+    let rest = len(steps) - shown
+    if rest > 0 {
+        let collapse = "   … +" + str(rest) + " completed"
+        let cw = if w < len(collapse) { w } else { len(collapse) }
+        let _w2 = text_draw(x, row, collapse, cw, fg_dim, -1, dim_attrs)
+        lines = lines + 1
+    }
+    return lines
+}

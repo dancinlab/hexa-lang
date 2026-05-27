@@ -1,0 +1,6 @@
+=== E12 : hexa verify --expr tau 496 10 ===
+verify --expr tau(496)=10
+  calc   = 10  == expected 10
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+  absorb = ⚠ atlas register did NOT confirm fold; invocation:
+           hexa atlas register --from-verify tau 496 10

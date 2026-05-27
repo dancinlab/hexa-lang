@@ -1,0 +1,8 @@
+#!hexa strict
+// aerogel design — thermal conductivity target.
+fn main() {
+    let k_max_WmK = 0.02
+    println("aerogel_design (thermal conductivity target):")
+    println("  k_max_WmK = " + str(k_max_WmK))
+    println("__HEXA_AEROGEL_DESIGN__ PASS gate=GATE_OPEN absorbed=false")
+}

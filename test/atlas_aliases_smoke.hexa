@@ -1,0 +1,94 @@
+// test/atlas_aliases_smoke.hexa — Layer 3.0 alias-table bootstrap smoke
+//
+// Verifies:
+//   * ATLAS_ALIASES non-empty
+//   * 5 well-known verified roots each have ≥1 registered alias:
+//       shannon_entropy · speed_of_light · planck_constant ·
+//       boltzmann_constant · bekenstein_bound
+//   * Round-trip: canonical_for("Shannon entropy") returns
+//                 real_limits.shannon_entropy
+//                 canonical_for("Hales packing") returns
+//                 materials_limits.hales_packing
+//   * Negative: canonical_for("nonexistent foo") == ""
+//
+// Run:
+//   ./hexa run test/atlas_aliases_smoke.hexa
+
+use "compiler/atlas/parser"
+use "compiler/atlas/aliases.gen"
+
+fn _check(label: string, ok: bool, fails) {
+    if ok {
+        println("  PASS  " + label)
+    } else {
+        println("  FAIL  " + label)
+        fails.push(label)
+    }
+}
+
+fn main() {
+    let fails = []
+
+    println("atlas aliases smoke — layer 3.0 bootstrap")
+
+    // (a) non-empty
+    let all = atlas_aliases()
+    let n = len(all)
+    _check("ATLAS_ALIASES non-empty", n > 0, fails)
+    _check("atlas_aliases_count() == len(all)",
+           atlas_aliases_count() == n,
+           fails)
+
+    // (b) five well-known roots have ≥1 alias each
+    let shannon  = aliases_for("real_limits.shannon_entropy")
+    let cspeed   = aliases_for("real_limits.speed_of_light")
+    let planck   = aliases_for("real_limits.planck_constant")
+    let kb       = aliases_for("real_limits.boltzmann_constant")
+    let bek      = aliases_for("real_limits.bekenstein_bound")
+    _check("shannon_entropy has aliases",     len(shannon) >= 1, fails)
+    _check("speed_of_light has aliases",      len(cspeed)  >= 1, fails)
+    _check("planck_constant has aliases",     len(planck)  >= 1, fails)
+    _check("boltzmann_constant has aliases",  len(kb)      >= 1, fails)
+    _check("bekenstein_bound has aliases",    len(bek)     >= 1, fails)
+
+    // (c) round-trip — canonical_for(alias) returns the right id
+    let id1 = canonical_for("Shannon entropy")
+    _check("canonical_for('Shannon entropy') == real_limits.shannon_entropy",
+           id1 == "real_limits.shannon_entropy",
+           fails)
+    let id2 = canonical_for("Hales packing")
+    _check("canonical_for('Hales packing') == materials_limits.hales_packing",
+           id2 == "materials_limits.hales_packing",
+           fails)
+    let id3 = canonical_for("Carnot")
+    _check("canonical_for('Carnot') == real_limits.carnot_efficiency",
+           id3 == "real_limits.carnot_efficiency",
+           fails)
+
+    // (d) negative — unknown alias returns ""
+    let id_none = canonical_for("definitely not a real alias xyz")
+    _check("canonical_for(unknown) == ''", id_none == "", fails)
+
+    // (e) sanity — every entry has a non-empty canonical_id
+    let mut bad_id = 0
+    let mut i = 0
+    while i < n {
+        let entry = all[i]
+        if entry.canonical_id == "" { bad_id = bad_id + 1 }
+        i = i + 1
+    }
+    _check("every entry has non-empty canonical_id", bad_id == 0, fails)
+
+    let nf = len(fails)
+    println("")
+    if nf == 0 {
+        println("atlas aliases smoke: PASS")
+    } else {
+        println("atlas aliases smoke: FAIL — " + to_string(nf) + " check(s) failed")
+        let mut j = 0
+        while j < nf {
+            println("  - " + to_string(fails[j]))
+            j = j + 1
+        }
+    }
+}

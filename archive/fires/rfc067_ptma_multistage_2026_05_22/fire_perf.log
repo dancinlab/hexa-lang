@@ -1,0 +1,325 @@
+[build] host_perf OK
+[build] host_cublas OK
+=== perf-proxy sweep (cliff regime M >= 4096) ===
+--- M=1024  KT=64  STAGES=1
+Device: NVIDIA GeForce RTX 5070 sm_120  M=1024 K=1024 KT=64 stages=1 reps=64 grid=16
+{
+  "sm": "sm_120",
+  "M": 1024,  "K": 1024,  "N": 64,
+  "stages": 1,  "K_TILES": 64,  "grid": 16,  "reps": 64,
+  "ms_per_launch": 0.020557,
+  "tma_bytes_per_launch": 4194304,
+  "tma_gbps": 204.032890,
+  "notional_tflops": 6.529052
+}
+--- M=1024  KT=64  STAGES=2
+Device: NVIDIA GeForce RTX 5070 sm_120  M=1024 K=1024 KT=64 stages=2 reps=64 grid=16
+{
+  "sm": "sm_120",
+  "M": 1024,  "K": 1024,  "N": 64,
+  "stages": 2,  "K_TILES": 64,  "grid": 16,  "reps": 64,
+  "ms_per_launch": 0.016464,
+  "tma_bytes_per_launch": 4194304,
+  "tma_gbps": 254.748341,
+  "notional_tflops": 8.151947
+}
+--- M=1024  KT=64  STAGES=3
+Device: NVIDIA GeForce RTX 5070 sm_120  M=1024 K=1024 KT=64 stages=3 reps=64 grid=16
+{
+  "sm": "sm_120",
+  "M": 1024,  "K": 1024,  "N": 64,
+  "stages": 3,  "K_TILES": 64,  "grid": 16,  "reps": 64,
+  "ms_per_launch": 0.016458,
+  "tma_bytes_per_launch": 4194304,
+  "tma_gbps": 254.848962,
+  "notional_tflops": 8.155167
+}
+--- M=1024  KT=256  STAGES=1
+Device: NVIDIA GeForce RTX 5070 sm_120  M=1024 K=4096 KT=256 stages=1 reps=64 grid=16
+{
+  "sm": "sm_120",
+  "M": 1024,  "K": 4096,  "N": 64,
+  "stages": 1,  "K_TILES": 256,  "grid": 16,  "reps": 64,
+  "ms_per_launch": 0.073702,
+  "tma_bytes_per_launch": 16777216,
+  "tma_gbps": 227.634289,
+  "notional_tflops": 7.284297
+}
+--- M=1024  KT=256  STAGES=2
+Device: NVIDIA GeForce RTX 5070 sm_120  M=1024 K=4096 KT=256 stages=2 reps=64 grid=16
+{
+  "sm": "sm_120",
+  "M": 1024,  "K": 4096,  "N": 64,
+  "stages": 2,  "K_TILES": 256,  "grid": 16,  "reps": 64,
+  "ms_per_launch": 0.059483,
+  "tma_bytes_per_launch": 16777216,
+  "tma_gbps": 282.050607,
+  "notional_tflops": 9.025619
+}
+--- M=1024  KT=256  STAGES=3
+Device: NVIDIA GeForce RTX 5070 sm_120  M=1024 K=4096 KT=256 stages=3 reps=64 grid=16
+{
+  "sm": "sm_120",
+  "M": 1024,  "K": 4096,  "N": 64,
+  "stages": 3,  "K_TILES": 256,  "grid": 16,  "reps": 64,
+  "ms_per_launch": 0.061510,
+  "tma_bytes_per_launch": 16777216,
+  "tma_gbps": 272.755908,
+  "notional_tflops": 8.728189
+}
+--- M=4096  KT=64  STAGES=1
+Device: NVIDIA GeForce RTX 5070 sm_120  M=4096 K=1024 KT=64 stages=1 reps=64 grid=64
+{
+  "sm": "sm_120",
+  "M": 4096,  "K": 1024,  "N": 64,
+  "stages": 1,  "K_TILES": 64,  "grid": 64,  "reps": 64,
+  "ms_per_launch": 0.021236,
+  "tma_bytes_per_launch": 16777216,
+  "tma_gbps": 790.036520,
+  "notional_tflops": 25.281169
+}
+--- M=4096  KT=64  STAGES=2
+Device: NVIDIA GeForce RTX 5070 sm_120  M=4096 K=1024 KT=64 stages=2 reps=64 grid=64
+{
+  "sm": "sm_120",
+  "M": 4096,  "K": 1024,  "N": 64,
+  "stages": 2,  "K_TILES": 64,  "grid": 64,  "reps": 64,
+  "ms_per_launch": 0.016485,
+  "tma_bytes_per_launch": 16777216,
+  "tma_gbps": 1017.756993,
+  "notional_tflops": 32.568224
+}
+--- M=4096  KT=64  STAGES=3
+Device: NVIDIA GeForce RTX 5070 sm_120  M=4096 K=1024 KT=64 stages=3 reps=64 grid=64
+{
+  "sm": "sm_120",
+  "M": 4096,  "K": 1024,  "N": 64,
+  "stages": 3,  "K_TILES": 64,  "grid": 64,  "reps": 64,
+  "ms_per_launch": 0.016622,
+  "tma_bytes_per_launch": 16777216,
+  "tma_gbps": 1009.338020,
+  "notional_tflops": 32.298817
+}
+--- M=4096  KT=256  STAGES=1
+Device: NVIDIA GeForce RTX 5070 sm_120  M=4096 K=4096 KT=256 stages=1 reps=64 grid=64
+{
+  "sm": "sm_120",
+  "M": 4096,  "K": 4096,  "N": 64,
+  "stages": 1,  "K_TILES": 256,  "grid": 64,  "reps": 64,
+  "ms_per_launch": 0.077870,
+  "tma_bytes_per_launch": 67108864,
+  "tma_gbps": 861.806435,
+  "notional_tflops": 27.577806
+}
+--- M=4096  KT=256  STAGES=2
+Device: NVIDIA GeForce RTX 5070 sm_120  M=4096 K=4096 KT=256 stages=2 reps=64 grid=64
+{
+  "sm": "sm_120",
+  "M": 4096,  "K": 4096,  "N": 64,
+  "stages": 2,  "K_TILES": 256,  "grid": 64,  "reps": 64,
+  "ms_per_launch": 0.061517,
+  "tma_bytes_per_launch": 67108864,
+  "tma_gbps": 1090.899488,
+  "notional_tflops": 34.908784
+}
+--- M=4096  KT=256  STAGES=3
+Device: NVIDIA GeForce RTX 5070 sm_120  M=4096 K=4096 KT=256 stages=3 reps=64 grid=64
+{
+  "sm": "sm_120",
+  "M": 4096,  "K": 4096,  "N": 64,
+  "stages": 3,  "K_TILES": 256,  "grid": 64,  "reps": 64,
+  "ms_per_launch": 0.063547,
+  "tma_bytes_per_launch": 67108864,
+  "tma_gbps": 1056.050855,
+  "notional_tflops": 33.793627
+}
+--- M=6144  KT=64  STAGES=1
+Device: NVIDIA GeForce RTX 5070 sm_120  M=6144 K=1024 KT=64 stages=1 reps=64 grid=96
+{
+  "sm": "sm_120",
+  "M": 6144,  "K": 1024,  "N": 64,
+  "stages": 1,  "K_TILES": 64,  "grid": 96,  "reps": 64,
+  "ms_per_launch": 0.022606,
+  "tma_bytes_per_launch": 25165824,
+  "tma_gbps": 1113.236471,
+  "notional_tflops": 35.623567
+}
+--- M=6144  KT=64  STAGES=2
+Device: NVIDIA GeForce RTX 5070 sm_120  M=6144 K=1024 KT=64 stages=2 reps=64 grid=96
+{
+  "sm": "sm_120",
+  "M": 6144,  "K": 1024,  "N": 64,
+  "stages": 2,  "K_TILES": 64,  "grid": 96,  "reps": 64,
+  "ms_per_launch": 0.018513,
+  "tma_bytes_per_launch": 25165824,
+  "tma_gbps": 1359.359612,
+  "notional_tflops": 43.499508
+}
+--- M=6144  KT=64  STAGES=3
+Device: NVIDIA GeForce RTX 5070 sm_120  M=6144 K=1024 KT=64 stages=3 reps=64 grid=96
+{
+  "sm": "sm_120",
+  "M": 6144,  "K": 1024,  "N": 64,
+  "stages": 3,  "K_TILES": 64,  "grid": 96,  "reps": 64,
+  "ms_per_launch": 0.018484,
+  "tma_bytes_per_launch": 25165824,
+  "tma_gbps": 1361.492309,
+  "notional_tflops": 43.567754
+}
+--- M=6144  KT=256  STAGES=1
+Device: NVIDIA GeForce RTX 5070 sm_120  M=6144 K=4096 KT=256 stages=1 reps=64 grid=96
+{
+  "sm": "sm_120",
+  "M": 6144,  "K": 4096,  "N": 64,
+  "stages": 1,  "K_TILES": 256,  "grid": 96,  "reps": 64,
+  "ms_per_launch": 0.160612,
+  "tma_bytes_per_launch": 100663296,
+  "tma_gbps": 626.746361,
+  "notional_tflops": 20.055884
+}
+--- M=6144  KT=256  STAGES=2
+Device: NVIDIA GeForce RTX 5070 sm_120  M=6144 K=4096 KT=256 stages=2 reps=64 grid=96
+{
+  "sm": "sm_120",
+  "M": 6144,  "K": 4096,  "N": 64,
+  "stages": 2,  "K_TILES": 256,  "grid": 96,  "reps": 64,
+  "ms_per_launch": 0.108720,
+  "tma_bytes_per_launch": 100663296,
+  "tma_gbps": 925.894947,
+  "notional_tflops": 29.628638
+}
+--- M=6144  KT=256  STAGES=3
+Device: NVIDIA GeForce RTX 5070 sm_120  M=6144 K=4096 KT=256 stages=3 reps=64 grid=96
+{
+  "sm": "sm_120",
+  "M": 6144,  "K": 4096,  "N": 64,
+  "stages": 3,  "K_TILES": 256,  "grid": 96,  "reps": 64,
+  "ms_per_launch": 0.092857,
+  "tma_bytes_per_launch": 100663296,
+  "tma_gbps": 1084.067895,
+  "notional_tflops": 34.690173
+}
+--- M=8192  KT=64  STAGES=1
+Device: NVIDIA GeForce RTX 5070 sm_120  M=8192 K=1024 KT=64 stages=1 reps=64 grid=128
+{
+  "sm": "sm_120",
+  "M": 8192,  "K": 1024,  "N": 64,
+  "stages": 1,  "K_TILES": 64,  "grid": 128,  "reps": 64,
+  "ms_per_launch": 0.024650,
+  "tma_bytes_per_launch": 33554432,
+  "tma_gbps": 1361.262129,
+  "notional_tflops": 43.560388
+}
+--- M=8192  KT=64  STAGES=2
+Device: NVIDIA GeForce RTX 5070 sm_120  M=8192 K=1024 KT=64 stages=2 reps=64 grid=128
+{
+  "sm": "sm_120",
+  "M": 8192,  "K": 1024,  "N": 64,
+  "stages": 2,  "K_TILES": 64,  "grid": 128,  "reps": 64,
+  "ms_per_launch": 0.018507,
+  "tma_bytes_per_launch": 33554432,
+  "tma_gbps": 1813.115955,
+  "notional_tflops": 58.019711
+}
+--- M=8192  KT=64  STAGES=3
+Device: NVIDIA GeForce RTX 5070 sm_120  M=8192 K=1024 KT=64 stages=3 reps=64 grid=128
+{
+  "sm": "sm_120",
+  "M": 8192,  "K": 1024,  "N": 64,
+  "stages": 3,  "K_TILES": 64,  "grid": 128,  "reps": 64,
+  "ms_per_launch": 0.018508,
+  "tma_bytes_per_launch": 33554432,
+  "tma_gbps": 1812.969065,
+  "notional_tflops": 58.015010
+}
+--- M=8192  KT=256  STAGES=1
+Device: NVIDIA GeForce RTX 5070 sm_120  M=8192 K=4096 KT=256 stages=1 reps=64 grid=128
+{
+  "sm": "sm_120",
+  "M": 8192,  "K": 4096,  "N": 64,
+  "stages": 1,  "K_TILES": 256,  "grid": 128,  "reps": 64,
+  "ms_per_launch": 0.410484,
+  "tma_bytes_per_launch": 134217728,
+  "tma_gbps": 326.973930,
+  "notional_tflops": 10.463166
+}
+--- M=8192  KT=256  STAGES=2
+Device: NVIDIA GeForce RTX 5070 sm_120  M=8192 K=4096 KT=256 stages=2 reps=64 grid=128
+{
+  "sm": "sm_120",
+  "M": 8192,  "K": 4096,  "N": 64,
+  "stages": 2,  "K_TILES": 256,  "grid": 128,  "reps": 64,
+  "ms_per_launch": 0.347959,
+  "tma_bytes_per_launch": 134217728,
+  "tma_gbps": 385.728558,
+  "notional_tflops": 12.343314
+}
+--- M=8192  KT=256  STAGES=3
+Device: NVIDIA GeForce RTX 5070 sm_120  M=8192 K=4096 KT=256 stages=3 reps=64 grid=128
+{
+  "sm": "sm_120",
+  "M": 8192,  "K": 4096,  "N": 64,
+  "stages": 3,  "K_TILES": 256,  "grid": 128,  "reps": 64,
+  "ms_per_launch": 0.316890,
+  "tma_bytes_per_launch": 134217728,
+  "tma_gbps": 423.546743,
+  "notional_tflops": 13.553496
+}
+=== cuBLAS HGEMM reference ===
+--- cuBLAS  M=1024  K=1024  N=64
+{
+  "backend": "cublasGemmEx_R16F_C32F",
+  "M": 1024, "K": 1024, "N": 64, "reps": 64,
+  "ms_per_launch": 0.008256,
+  "tflops": 16.256008
+}
+--- cuBLAS  M=1024  K=4096  N=64
+{
+  "backend": "cublasGemmEx_R16F_C32F",
+  "M": 1024, "K": 4096, "N": 64, "reps": 64,
+  "ms_per_launch": 0.015717,
+  "tflops": 34.158613
+}
+--- cuBLAS  M=4096  K=1024  N=64
+{
+  "backend": "cublasGemmEx_R16F_C32F",
+  "M": 4096, "K": 1024, "N": 64, "reps": 64,
+  "ms_per_launch": 0.014474,
+  "tflops": 37.090809
+}
+--- cuBLAS  M=4096  K=4096  N=64
+{
+  "backend": "cublasGemmEx_R16F_C32F",
+  "M": 4096, "K": 4096, "N": 64, "reps": 64,
+  "ms_per_launch": 0.049241,
+  "tflops": 43.611699
+}
+--- cuBLAS  M=6144  K=1024  N=64
+{
+  "backend": "cublasGemmEx_R16F_C32F",
+  "M": 6144, "K": 1024, "N": 64, "reps": 64,
+  "ms_per_launch": 0.014470,
+  "tflops": 55.651593
+}
+--- cuBLAS  M=6144  K=4096  N=64
+{
+  "backend": "cublasGemmEx_R16F_C32F",
+  "M": 6144, "K": 4096, "N": 64, "reps": 64,
+  "ms_per_launch": 0.062564,
+  "tflops": 51.486885
+}
+--- cuBLAS  M=8192  K=1024  N=64
+{
+  "backend": "cublasGemmEx_R16F_C32F",
+  "M": 8192, "K": 1024, "N": 64, "reps": 64,
+  "ms_per_launch": 0.020568,
+  "tflops": 52.203216
+}
+--- cuBLAS  M=8192  K=4096  N=64
+{
+  "backend": "cublasGemmEx_R16F_C32F",
+  "M": 8192, "K": 4096, "N": 64, "reps": 64,
+  "ms_per_launch": 0.116499,
+  "tflops": 36.867147
+}
+[measure_perf] done -> results_raw.txt

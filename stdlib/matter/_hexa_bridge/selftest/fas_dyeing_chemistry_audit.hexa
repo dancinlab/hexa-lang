@@ -1,0 +1,81 @@
+#!hexa strict
+// hexa-matter/_hexa_bridge/selftest/fas_dyeing_chemistry_audit.hexa
+//
+// FAS group dye/fiber chemistry gate. hexa-native port of
+// `selftest/fas_dyeing_chemistry_audit.py` (T2). PASS iff the FAS spec
+// corpus (as a whole) names >= 2 dye classes AND >= 2 fiber substrates;
+// vacuous-PASS if no FAS spec on disk. Lossless — pure lowercase
+// substring set. stdlib-only; exec file read.
+
+let ROOT_ENV = env("HEXA_MATTER_ROOT")
+
+fn shq(s: str) -> str { return "'" + s.replace("'", "'\\''") + "'" }
+
+fn root() -> str {
+    if ROOT_ENV.len() > 0 { return ROOT_ENV }
+    return exec("pwd").trim()
+}
+
+fn read_if(p: str) -> str {
+    let ex = exec("[ -f " + shq(p) + " ] && echo y || echo n").trim()
+    if ex == "y" { return exec("cat " + shq(p) + " 2>/dev/null") }
+    return ""
+}
+
+fn has_str(xs: [str], v: str) -> bool {
+    let mut i = 0
+    while i < xs.len() {
+        if xs[i] == v { return true }
+        i = i + 1
+    }
+    return false
+}
+
+let FAS_SPECS = ["fashion-textile/fashion-textile.md", "textile-dyeing/textile-dyeing.md", "FASHION-TEXTILE.md", "TEXTILE-DYEING.md"]
+let DYE = ["reactive", "acid", "disperse", "vat", "direct", "mordant", "sulfur", "azo", "indigo", "natural dye", "pigment"]
+let FIBER = ["cotton", "wool", "silk", "polyester", "nylon", "cellulose", "pet", "pa6", "viscose", "linen"]
+
+fn main() {
+    println("hexa-matter/selftest/fas_dyeing_chemistry_audit (hexa-native, T2)")
+    let r = root()
+    let mut found = 0
+    let mut dye_seen: [str] = []
+    let mut fiber_seen: [str] = []
+    let mut i = 0
+    while i < FAS_SPECS.len() {
+        let body = read_if(r + "/" + FAS_SPECS[i])
+        if body.len() > 0 {
+            found = found + 1
+            let lo = body.to_lower()
+            let mut d = 0
+            while d < DYE.len() {
+                if lo.contains(DYE[d]) {
+                    if has_str(dye_seen, DYE[d]) == false { dye_seen.push(DYE[d]) }
+                }
+                d = d + 1
+            }
+            let mut f = 0
+            while f < FIBER.len() {
+                if lo.contains(FIBER[f]) {
+                    if has_str(fiber_seen, FIBER[f]) == false { fiber_seen.push(FIBER[f]) }
+                }
+                f = f + 1
+            }
+        }
+        i = i + 1
+    }
+
+    println("  corpus dye classes:      " + str(dye_seen.len()))
+    println("  corpus fiber substrates: " + str(fiber_seen.len()))
+
+    if found == 0 {
+        println("__HEXA_MATTER_FAS_DYEING__ PASS  (vacuous: no FAS specs on disk)")
+        return
+    }
+    if dye_seen.len() >= 2 && fiber_seen.len() >= 2 {
+        println("__HEXA_MATTER_FAS_DYEING__ PASS  (" + str(dye_seen.len()) + " dye + " + str(fiber_seen.len()) + " fiber)")
+    } else {
+        println("__HEXA_MATTER_FAS_DYEING__ FAIL  (need >= 2 each)")
+        exit(1)
+    }
+}

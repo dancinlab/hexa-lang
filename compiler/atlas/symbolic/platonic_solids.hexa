@@ -1,0 +1,161 @@
+// compiler/atlas/symbolic/platonic_solids.hexa — Euler-characteristic / 5-solids
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Hexa-native port of platonic_solids_n6.py from archive-TECS-L/.shared/calc
+// (commit 4ee05c39; TECS-L absorption Wave 3 — manifest §Backlog #13).
+//
+// Closed-form / verdict-gating kernels (no plotting / no Monte-Carlo texas):
+//   - The 5 Platonic solids' (V,E,F) table
+//   - Euler characteristic χ = V − E + F = 2 (sphere topology) — holds ∀ solid
+//   - "Exactly 5" : Schläfli {p,q} regular ⟺ 1/p + 1/q > 1/2
+//                   (angle-deficit > 0); the 5 integer solutions are exactly
+//                   the Platonic solids — closed-form classification proof.
+//   - Duality: 3 dual pairs (Tet self-dual; Cube↔Oct; Dodec↔Icos) =
+//              n/φ(n) = 6/2 = 3
+//   - Edge-sum 6+12+12+30+30 = 90 = P1·C(P1,2) = 6·15
+//
+// Zero external dependency (g5). Cross-link: manifest §C / §Backlog #13.
+
+// ── solid record (flat parallel arrays — index 0..4) ────────────────────
+// order: Tetrahedron, Cube, Octahedron, Dodecahedron, Icosahedron
+
+pub fn pl_count() -> int { return 5 }
+
+pub fn pl_V(i: int) -> int {
+    if i == 0 { return 4 }
+    if i == 1 { return 8 }
+    if i == 2 { return 6 }
+    if i == 3 { return 20 }
+    if i == 4 { return 12 }
+    return 0
+}
+pub fn pl_E(i: int) -> int {
+    if i == 0 { return 6 }
+    if i == 1 { return 12 }
+    if i == 2 { return 12 }
+    if i == 3 { return 30 }
+    if i == 4 { return 30 }
+    return 0
+}
+pub fn pl_F(i: int) -> int {
+    if i == 0 { return 4 }
+    if i == 1 { return 6 }
+    if i == 2 { return 8 }
+    if i == 3 { return 12 }
+    if i == 4 { return 20 }
+    return 0
+}
+// Schläfli symbol {p,q}: faces are p-gons, q meet at each vertex
+pub fn pl_p(i: int) -> int {
+    if i == 0 { return 3 }
+    if i == 1 { return 4 }
+    if i == 2 { return 3 }
+    if i == 3 { return 5 }
+    if i == 4 { return 3 }
+    return 0
+}
+pub fn pl_q(i: int) -> int {
+    if i == 0 { return 3 }
+    if i == 1 { return 3 }
+    if i == 2 { return 4 }
+    if i == 3 { return 3 }
+    if i == 4 { return 5 }
+    return 0
+}
+
+// ── Euler characteristic χ = V − E + F ──────────────────────────────────
+pub fn pl_euler(i: int) -> int {
+    return pl_V(i) - pl_E(i) + pl_F(i)
+}
+
+// χ = 2 for every Platonic solid (sphere topology) — verdict gate
+pub fn pl_all_euler_2() -> bool {
+    let mut i = 0
+    while i < pl_count() {
+        if pl_euler(i) != 2 { return false }
+        i = i + 1
+    }
+    return true
+}
+
+// ── "exactly 5" closed-form classification ──────────────────────────────
+// {p,q} is a valid Platonic solid ⟺ p≥3 ∧ q≥3 ∧ 1/p + 1/q > 1/2.
+// Integer test (avoid float): 2q + 2p > pq.
+pub fn pl_schlafli_valid(p: int, q: int) -> bool {
+    if p < 3 || q < 3 { return false }
+    return 2 * q + 2 * p > p * q
+}
+
+// exhaustive count of integer {p,q} with 3≤p,q≤bound satisfying the
+// angle-deficit inequality — must be exactly 5 (the proof of "only 5").
+pub fn pl_schlafli_solution_count(bound: int) -> int {
+    let mut cnt = 0
+    let mut p = 3
+    while p <= bound {
+        let mut q = 3
+        while q <= bound {
+            if pl_schlafli_valid(p, q) { cnt = cnt + 1 }
+            q = q + 1
+        }
+        p = p + 1
+    }
+    return cnt
+}
+
+// derive (V,E,F) from {p,q} via 1/V − 1/E + 1/F = ... ;
+// closed form: E = 2pq / (4 − (p−2)(q−2)),  V = 2E/q,  F = 2E/p.
+pub fn pl_E_from_schlafli(p: int, q: int) -> int {
+    let denom = 4 - (p - 2) * (q - 2)
+    if denom <= 0 { return 0 }
+    return (2 * p * q) / denom
+}
+pub fn pl_V_from_schlafli(p: int, q: int) -> int {
+    let e = pl_E_from_schlafli(p, q)
+    if q == 0 { return 0 }
+    return (2 * e) / q
+}
+pub fn pl_F_from_schlafli(p: int, q: int) -> int {
+    let e = pl_E_from_schlafli(p, q)
+    if p == 0 { return 0 }
+    return (2 * e) / p
+}
+
+// ── duality : Tet self-dual; Cube↔Oct; Dodec↔Icos = 3 pairs ─────────────
+// dual of {p,q} is {q,p}. 3 dual *pairs* = n/φ(n) at n=6 = 6/2 = 3.
+pub fn pl_dual_index(i: int) -> int {
+    if i == 0 { return 0 }  // Tetrahedron self-dual
+    if i == 1 { return 2 }  // Cube → Octahedron
+    if i == 2 { return 1 }  // Octahedron → Cube
+    if i == 3 { return 4 }  // Dodecahedron → Icosahedron
+    if i == 4 { return 3 }  // Icosahedron → Dodecahedron
+    return -1
+}
+// number of distinct dual classes (self-dual counts once) = 3
+pub fn pl_dual_pair_count() -> int {
+    let mut cnt = 0
+    let mut i = 0
+    while i < pl_count() {
+        let d = pl_dual_index(i)
+        if d >= i { cnt = cnt + 1 }
+        i = i + 1
+    }
+    return cnt
+}
+
+// ── edge-sum identity 90 = P1·C(P1,2) = 6·15 ────────────────────────────
+pub fn pl_edge_sum() -> int {
+    let mut s = 0
+    let mut i = 0
+    while i < pl_count() {
+        s = s + pl_E(i)
+        i = i + 1
+    }
+    return s
+}
+// C(6,2) = 15
+pub fn pl_binom6_2() -> int { return (6 * 5) / 2 }
+pub fn pl_edge_sum_identity() -> bool {
+    return pl_edge_sum() == 6 * pl_binom6_2()
+}

@@ -1,0 +1,17 @@
+#!hexa strict
+// stdlib/firmware/firmware.hexa — firmware domain root dispatcher.
+//
+// LAYER: AURA N20 — firmware domain hexa-native pivot.
+// Mirrors stdlib/bio/bio.hexa pattern.
+
+let VERSION   = "0.1.0"
+let MODULE    = "hexa-firmware"
+
+fn main() {
+    print("# FIRMWARE root dispatcher (hexa-native pivot · AURA N20)")
+    print("# version = " + VERSION)
+    print("# verb cells: specify · structure · design · analyze · synthesize · verify · handoff")
+    print("# AURA cross-link: N10 manifest schema (aura_to_firmware_manifest_v1)")
+    print("# substrate: hexa (cellrun.hexa dispatch) — per-verb producers may remain .py during migration")
+    print("__HEXA_FIRMWARE_ROOT__ PASS")
+}

@@ -1,0 +1,40 @@
+#!hexa strict
+// tests/test_firmware.hexa — regression for Phase C sim-firmware (T3 path).
+//
+// Verifies that all four Stage-1 controller sim-firmware scripts under
+// firmware/sim/*.hexa emit their __HEXA_SPACE_FW_*__ PASS sentinel.
+// Phase D HDL skeletons (firmware/hdl/*.v) are not run here — they are
+// Verilog (Vivado synthesis target), not hexa.
+
+let SIMS: [[str]] = [
+    ["orbit_pipeline",   "__HEXA_SPACE_FW_ORBIT_01__ PASS"],
+    ["launch_telemetry", "__HEXA_SPACE_FW_LAUNCH_01__ PASS"],
+    ["dxa_pipeline",     "__HEXA_SPACE_FW_DXA_01__ PASS"],
+    ["raptor_cluster",   "__HEXA_SPACE_FW_RAPTOR_01__ PASS"],
+]
+
+fn main() {
+    let mut root = env("HEXA_SPACE_ROOT")
+    if root.len() == 0 { root = exec("pwd").trim() }
+    println("test_firmware: HEXA_SPACE_ROOT=" + root)
+
+    let mut n_ok = 0
+    let mut n_fail = 0
+    for s in SIMS {
+        let p   = root + "/firmware/sim/" + s[0] + ".hexa"
+        let cmd = "HEXA_SPACE_ROOT=\"" + root + "\" hexa run \"" + p + "\" 2>&1"
+        let out = exec(cmd)
+        let ok  = out.contains(s[1])
+        if ok { n_ok = n_ok + 1; println("  [OK]    " + s[0]) }
+        else  { n_fail = n_fail + 1; println("  [FAIL]  " + s[0]) }
+    }
+
+    let total = SIMS.len()
+    if n_fail == 0 {
+        println("test_firmware: PASS  (" + str(n_ok) + "/" + str(total) +
+                " Phase C sentinels green)")
+        return
+    }
+    println("test_firmware: FAIL  (" + str(n_ok) + "/" + str(total) + ")")
+    exit(1)
+}

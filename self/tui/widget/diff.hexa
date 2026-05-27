@@ -1,0 +1,194 @@
+#!hexa strict
+// self/tui/widget/diff.hexa — TUI-PRIM L4 unified-diff widget
+//
+// Renders Claude-Code-style edit/diff blocks:
+//
+//   ⏺ Update(core/main.hexa)
+//     ⎿  Added 12 lines · Removed 0 lines
+//        1537   "        wilson tool image_info --path screenshot.png\n" +
+//        1538   "  wilson tool --list                     list every registered tool name\n" +
+//        1539   "\n" +
+//        1540 + "  wilson pool                            long-running tool-RPC daemon\n" +
+//        1541 + "      Boot once, dispatch many. ...\n" +
+//
+// gutter format = `<linenum>  <marker> <content>`
+//   linenum = right-aligned to gutter_width
+//   marker  = ` ` (context) | `+` (add) | `-` (remove)
+//   content = text up to width - gutter_width - 1
+//
+// API
+//   pub fn diff_gutter_width(max_linenum: int) -> int
+//     Returns the gutter cell count: linenum digits + 2 (one space + marker).
+//     E.g. max linenum 1540 → 4 digits → gutter width 6.
+//
+//   pub fn diff_draw_header(x, y, path: string, op: string, w, fg, bg, attrs) -> int
+//     Draws the "⏺ Update(<path>)" header line. `op` ∈ "Update" | "Create"
+//     | "Read" | "Delete" — used as the verb. Returns lines drawn (always 1).
+//
+//   pub fn diff_draw_summary(x, y, additions: int, removals: int, w, fg, bg, attrs) -> int
+//     Draws the "⎿ Added N lines · Removed M lines" summary line (dim).
+//     Skips fields that are zero. Returns lines drawn (1).
+//
+//   pub fn diff_draw_lines(x, y, lines: array, gutter_w: int, w, theme: any) -> int
+//     Draws the content lines. Each entry in `lines` is `[kind, linenum, text]`:
+//       kind = "ctx" | "add" | "del"
+//       linenum = int  (line number in target file; for "del" rows it's
+//                       the old-file line number — caller's choice)
+//       text = string
+//     theme = #{ "fg_ctx", "fg_add", "fg_del", "fg_gutter", "attrs" }
+//             — any missing key falls back to default. Returns row count drawn.
+//
+//   pub fn diff_draw_block(x, y, w, state: any) -> int
+//     One-shot convenience: header + summary + lines. Returns total lines drawn.
+//
+// state SHAPE (for diff_draw_block)
+//   #{
+//     "path":       string,       // file path
+//     "op":         string,       // "Update" | "Create" | etc.
+//     "additions":  int,
+//     "removals":   int,
+//     "lines":      array,        // [[kind, linenum, text], ...]
+//     "theme":      map           // optional (see above)
+//   }
+
+use "self/tui/render"
+use "self/tui/widget/text"
+use "self/tui/widget/indent"
+
+let DIFF_BULLET = "⏺ "                  // U+23FA — BLACK CIRCLE FOR RECORD
+let DIFF_BULLET_W = 2                   // ⏺ is single cell + trailing space
+let DIFF_PREFIX_W = 5                   // "  ⎿  " summary prefix (matches indent_prefix_width)
+let DIFF_DIM_ATTRS = 8
+
+// ── Gutter width ───────────────────────────────────────────────
+// Layout: `<digits><space><marker><space>` = digits + 3 cells. Claude Code
+// uses + 3 (marker(1) + space(1) + digits + space(1)); we follow.
+pub fn diff_gutter_width(max_linenum: int) -> int {
+    let mut n = max_linenum
+    if n < 0 { n = -n }
+    let mut d = 1
+    let mut x = n
+    while x > 9 {
+        x = x / 10
+        d = d + 1
+    }
+    return d + 3
+}
+
+// Right-pad a stringified linenum to `width`. Returns width-char string.
+fn _pad_linenum(n: int, width: int) -> string {
+    let s = str(n)
+    let pad = width - len(s)
+    if pad < 1 { return s }
+    let mut out = ""
+    let mut i = 0
+    while i < pad { out = out + " " ; i = i + 1 }
+    return out + s
+}
+
+// ── Header (⏺ <op>(<path>)) ────────────────────────────────────
+pub fn diff_draw_header(x: int, y: int, path: string, op: string, w: int, fg: int, bg: int, attrs: int) -> int {
+    if w < 4 { return 0 }
+    let verb = if op == "" { "Update" } else { op }
+    let line = DIFF_BULLET + verb + "(" + path + ")"
+    let lw = if w < len(line) { w } else { len(line) }
+    let _ = text_draw(x, y, line, lw, fg, bg, attrs)
+    return 1
+}
+
+// ── Summary (⎿ Added N · Removed M) ────────────────────────────
+pub fn diff_draw_summary(x: int, y: int, additions: int, removals: int, w: int, fg: int, bg: int, attrs: int) -> int {
+    if w < 4 { return 0 }
+    let mut body = ""
+    if additions > 0 {
+        let unit = if additions == 1 { "line" } else { "lines" }
+        body = "Added " + str(additions) + " " + unit
+    }
+    if removals > 0 {
+        if body != "" { body = body + " · " }
+        let unit = if removals == 1 { "line" } else { "lines" }
+        body = body + "Removed " + str(removals) + " " + unit
+    }
+    if body == "" { body = "No changes" }
+    return indent_draw(x, y, body, w, fg, bg, attrs)
+}
+
+// ── Lines (with gutter) ─────────────────────────────────────────
+fn _theme_int(theme: any, k: string, dflt: int) -> int {
+    if type_of(theme) == "map" && has_key(theme, k) {
+        let v = theme[k]
+        if type_of(v) == "int" { return v }
+    }
+    return dflt
+}
+
+pub fn diff_draw_lines(x: int, y: int, lines: array, gutter_w: int, w: int, theme: any) -> int {
+    if w < gutter_w + 1 { return 0 }
+    let fg_ctx = _theme_int(theme, "fg_ctx", -1)
+    let fg_add = _theme_int(theme, "fg_add", -1)
+    let fg_del = _theme_int(theme, "fg_del", -1)
+    let fg_gut = _theme_int(theme, "fg_gutter", -1)
+    let mut row = y
+    let n = len(lines)
+    let mut i = 0
+    while i < n {
+        let entry = lines[i]
+        if type_of(entry) != "array" || len(entry) < 3 {
+            i = i + 1
+            continue
+        }
+        let kind = str(entry[0])
+        let linenum = if type_of(entry[1]) == "int" { entry[1] } else { 0 }
+        let text_part = str(entry[2])
+
+        // Gutter: "<num>  <marker> "
+        let num_w = gutter_w - 3                  // marker(1) + space(1) + linenum(num_w) + space(1)
+        let num_str = _pad_linenum(linenum, num_w)
+        let marker = if kind == "add" { "+" } else { if kind == "del" { "-" } else { " " } }
+        let gutter = num_str + " " + marker + " "
+        let _g = text_draw(x, row, gutter, gutter_w, fg_gut, -1, DIFF_DIM_ATTRS)
+
+        // Content (in the line's color).
+        let content_w = w - gutter_w
+        let content_fg = if kind == "add" { fg_add } else { if kind == "del" { fg_del } else { fg_ctx } }
+        // Context lines render dim too; add/del get caller's full color.
+        let content_attrs = if kind == "add" || kind == "del" { 0 } else { DIFF_DIM_ATTRS }
+        let _c = text_draw(x + gutter_w, row, text_part, content_w, content_fg, -1, content_attrs)
+        row = row + 1
+        i = i + 1
+    }
+    return row - y
+}
+
+// ── One-shot block ──────────────────────────────────────────────
+pub fn diff_draw_block(x: int, y: int, w: int, state: any) -> int {
+    if type_of(state) != "map" { return 0 }
+    let path = if has_key(state, "path") { str(state["path"]) } else { "" }
+    let op = if has_key(state, "op") { str(state["op"]) } else { "Update" }
+    let adds = if has_key(state, "additions") && type_of(state["additions"]) == "int" { state["additions"] } else { 0 }
+    let rems = if has_key(state, "removals") && type_of(state["removals"]) == "int" { state["removals"] } else { 0 }
+    let lines = if has_key(state, "lines") && type_of(state["lines"]) == "array" { state["lines"] } else { [] }
+    let theme = if has_key(state, "theme") { state["theme"] } else { #{} }
+
+    // Compute gutter width from the max linenum in `lines`.
+    let mut max_ln = 1
+    let mut i = 0
+    while i < len(lines) {
+        let e = lines[i]
+        if type_of(e) == "array" && len(e) > 1 && type_of(e[1]) == "int" {
+            let ln = e[1]
+            if ln > max_ln { max_ln = ln }
+        }
+        i = i + 1
+    }
+    let gw = diff_gutter_width(max_ln)
+
+    // Theme defaults for header / summary.
+    let fg_hdr = _theme_int(theme, "fg_header", -1)
+    let fg_sum = _theme_int(theme, "fg_summary", -1)
+    let mut rows = 0
+    rows = rows + diff_draw_header(x, y, path, op, w, fg_hdr, -1, 0)
+    rows = rows + diff_draw_summary(x, y + rows, adds, rems, w, fg_sum, -1, DIFF_DIM_ATTRS)
+    rows = rows + diff_draw_lines(x, y + rows, lines, gw, w, theme)
+    return rows
+}

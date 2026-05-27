@@ -1,0 +1,72 @@
+// stdlib/kernels/chem/arrhenius_kernel.hexa — chem domain substrate seed
+//
+// First hexa-native chem-domain kernel. Minimal scaffolding stub — NOT
+// a D80 pilot (no parity oracle, no Python reference). Establishes the
+// `stdlib/kernels/chem/` subtree directory + import path so future
+// chem kernels (catalyst turnover, equilibrium, transition-state)
+// have a landing surface. Closes the demiurge G-report "chem : NOT
+// YET" gap (e451037d, 2026-05-20).
+//
+// Algorithm: Arrhenius rate equation (1889 — textbook closed form).
+//   k = A · exp(-Ea / (R · T))
+// where
+//   k   = reaction rate constant         [1/s for 1st-order]
+//   A   = pre-exponential factor         [same units as k]
+//   Ea  = activation energy              [J/mol]
+//   R   = molar gas constant 8.314462618 [J/(mol·K)] (CODATA 2018)
+//   T   = absolute temperature           [K]
+//
+// Why this kernel: Arrhenius is the universal-recognition entry-point
+// for chemical kinetics — every textbook, every reactor model, every
+// catalyst comparison reduces back to it. A 1-line port establishes
+// the substrate without forcing scope decisions (cantera-parity vs
+// RDKit-parity vs Psi4-parity) that belong in subsequent kernels.
+//
+// Layer (ABSORPTION.md ① / demiurge design.md D72):
+//   ①a kernel — THIS FILE. Domain-agnostic: pure (A, Ea, T) → k.
+//                No solvent model, no temperature-dependent A, no
+//                tunnelling correction. Those belong in ①b adapters.
+//   ①b adapter — not yet written. A future
+//                `stdlib/chem/kinetics.hexa` or sibling-repo
+//                `~/core/hexa-chem/` adapter would carry the reaction
+//                catalog + experimental fit parameters.
+//
+// @version 0.1.0
+// @capabilities [pure]
+// @stability stage-0 scaffolding stub (NO parity oracle wired). Numbers
+//   are textbook closed-form; correctness is the formula itself plus
+//   the CODATA R constant. Promotes to stage-2 once a cantera or Psi4
+//   parity reference lands.
+// @since 2026-05-20
+//
+// HONESTY (g3):
+//   * The Arrhenius formula IS the algorithm — it is a 2-parameter
+//     empirical fit, NOT a first-principles prediction. Real kinetics
+//     include modified-Arrhenius (k = A·T^n·exp(-Ea/RT)) and Eyring
+//     transition-state forms. Those are follow-on kernels, kept out
+//     here to keep the substrate seed minimal.
+//   * R is the CODATA 2018 exact value (8.314462618 J/(mol·K)).
+//     Numerical agreement against any external library will be at
+//     last-bit-of-double precision *if* they use the same constant.
+
+use "stdlib/core/math/float"
+
+/// CODATA 2018 molar gas constant [J / (mol · K)].
+pub fn r_gas_const() -> float {
+    return 8.314462618
+}
+
+/// Arrhenius rate constant.
+///   k = A · exp(-Ea / (R · T))
+///
+/// Inputs:
+///   a_pre     — pre-exponential factor [units of k]
+///   ea_jmol   — activation energy      [J/mol]
+///   temp_k    — absolute temperature   [K], must be > 0
+///
+/// Returns 0.0 if temp_k <= 0 (physically meaningless input).
+pub fn arrhenius_k(a_pre: float, ea_jmol: float, temp_k: float) -> float {
+    if temp_k <= 0.0 { return 0.0 }
+    let r = r_gas_const()
+    return a_pre * exp(-ea_jmol / (r * temp_k))
+}

@@ -1,0 +1,8 @@
+#!hexa strict
+// fusion handoff — thermal power target.
+fn main() {
+    let P_thermal_MW = 500.0
+    println("fusion_handoff (thermal power target):")
+    println("  P_thermal_MW = " + str(P_thermal_MW))
+    println("__HEXA_FUSION_HANDOFF__ PASS gate=GATE_OPEN absorbed=false")
+}

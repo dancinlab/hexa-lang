@@ -1,0 +1,314 @@
+#!hexa strict
+// hexa-antimatter/verify/firmware_phase_d_lint.hexa — Phase D inventory + invariant lint.
+//
+// Phase D produces 3 artefact families (per .roadmap §A.6.1 step 4-6):
+//
+//   firmware/hdl/  — Verilog top + Vivado constraints (XDC)
+//   firmware/mcu/  — Rust no_std skeletons + Cargo workspace
+//   firmware/doc/  — board_v0_*.md (BOM/pinout) + schematic_v0_*.md (netlist/layout)
+//
+// This lint verifies — without invoking the toolchain — that every
+// expected file exists on disk AND carries the structural markers that
+// downstream tooling (Vivado, cargo, KiCad) will require:
+//
+//   HDL .v   : `timescale + module ... + endmodule
+//   HDL .xdc : set_property + create_clock
+//   MCU .rs  : #![no_std] + state-machine type or const block
+//   Schematic .md : §1 block diagram + §3 net list + §5 layout
+//
+// Phase D ≠ "implementation finished".  The boards don't exist; this
+// lint instead ensures the *paper specification surface* is complete
+// and self-consistent.  If Phase D files drift out of alignment with
+// the sim/numerics layer, this lint catches it.
+//
+// Run: hexa run verify/firmware_phase_d_lint.hexa
+// Sentinel: __HEXA_ANTIMATTER_FIRMWARE_PHASE_D__ PASS
+
+let HOME = env("HOME")
+
+fn _root() -> str {
+    let r = env("HEXA_ANTIMATTER_ROOT")
+    if r.len() > 0 { return r }
+    let pwd = exec("pwd").trim()
+    if pwd.len() > 0 { return pwd }
+    return HOME + "/core/hexa-antimatter"
+}
+
+let ROOT = _root()
+let HDL_DIR  = ROOT + "/firmware/hdl"
+let MCU_DIR  = ROOT + "/firmware/mcu"
+let DOC_DIR  = ROOT + "/firmware/doc"
+let SIM_DIR  = ROOT + "/firmware/sim"
+
+fn _read(p: str) -> str {
+    return exec("cat \"" + p + "\" 2>/dev/null")
+}
+
+fn _has(t: str, s: str) -> bool {
+    if t.len() == 0 { return false }
+    return t.contains(s)
+}
+
+fn _exists(p: str) -> bool {
+    let r = exec("[ -f \"" + p + "\" ] && echo Y || echo N").trim()
+    return r == "Y"
+}
+
+let mut RUN = 0
+let mut FAIL = 0
+let mut FAILURES: [str] = []
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    if ok {
+        println("  [PASS] " + label)
+        if detail.len() > 0 { println("         · " + detail) }
+    } else {
+        FAIL = FAIL + 1
+        FAILURES = FAILURES + [label + " :: " + detail]
+        println("  [FAIL] " + label)
+        if detail.len() > 0 { println("         · " + detail) }
+    }
+}
+
+// ── §1 expected file inventory ────────────────────────────────────────
+
+let HDL_FILES = [
+    "atomic_clock.v",
+    "cyclotron_trigger.v",       // placeholder (MCU-only board)
+    "penning_rf.v",
+    "thrust_acq.v",
+    "build.tcl",
+    "README.md",
+]
+
+let HDL_XDC_FILES = [
+    "atomic_clock.xdc",
+    "penning_rf.xdc",
+    "thrust_acq.xdc",
+]
+
+let MCU_FILES = [
+    "Cargo.toml",
+    "lib.rs",
+    "README.md",
+    "pet_cyclotron.rs",
+    "tabletop.rs",
+    "cpt_bench.rs",
+    "thrust_bench.rs",
+]
+
+let DOC_BOARD_V0 = [
+    "board_v0_pet_cyclotron.md",
+    "board_v0_tabletop_penning.md",
+    "board_v0_atomic_clock.md",
+    "board_v0_thrust_acquisition.md",
+]
+
+let DOC_SCHEMATIC_V0 = [
+    "schematic_v0_pet_cyclotron.md",
+    "schematic_v0_tabletop_penning.md",
+    "schematic_v0_atomic_clock.md",
+    "schematic_v0_thrust_acquisition.md",
+]
+
+let FALSIFIERS = [
+    "F-AM-1: Phase D file (HDL/MCU/doc) for PET cyclotron missing → board path unreachable",
+    "F-AM-2: Phase D file for tabletop Penning missing → AD handshake path unreachable",
+    "F-AM-3: Phase D file for atomic clock missing → ν_c counting path unreachable",
+    "F-AM-4: Phase D file for thrust acquisition missing → coincidence path unreachable",
+    "Phase D HDL .v file missing `timescale + module + endmodule → Vivado parse fail",
+    "Phase D HDL .xdc file missing set_property + create_clock → Vivado constraint fail",
+    "Phase D MCU .rs file missing #![no_std] → cross-compile fail",
+    "Phase D schematic_v0_*.md missing block-diagram / net-list / layout sections → KiCad gen fail",
+]
+
+// ── §2 HDL Verilog structural lint ───────────────────────────────────
+
+fn check_verilog(name: str) {
+    let path = HDL_DIR + "/" + name
+    let exists = _exists(path)
+    _check(exists, "HDL " + name + " on disk", path)
+    if !exists { return }
+    let txt = _read(path)
+    // Non-Verilog files in HDL_FILES list (build script + readme)
+    if name == "build.tcl" {
+        _check(_has(txt, "create_project") || _has(txt, "set BOARDS"),
+               "HDL build.tcl — Vivado batch entry present", "")
+        return
+    }
+    if name == "README.md" { return }       // doc only
+    // Skip structural lint for placeholder file
+    if name == "cyclotron_trigger.v" {
+        let has_placeholder = _has(txt, "placeholder") || _has(txt, "MCU-only")
+        _check(has_placeholder,
+               "HDL " + name + " — placeholder note present (MCU-only board)",
+               "")
+        return
+    }
+    let has_ts     = _has(txt, "`timescale")
+    let has_mod    = _has(txt, "module ")
+    let has_endmod = _has(txt, "endmodule")
+    _check(has_ts && has_mod && has_endmod,
+           "HDL " + name + " — `timescale + module + endmodule",
+           if has_ts && has_mod && has_endmod { "" } else { "missing one of structural markers" })
+}
+
+// ── §3 HDL XDC constraint lint ─────────────────────────────────────
+
+fn check_xdc(name: str) {
+    let path = HDL_DIR + "/" + name
+    let exists = _exists(path)
+    _check(exists, "XDC " + name + " on disk", path)
+    if !exists { return }
+    let txt = _read(path)
+    let has_set_prop = _has(txt, "set_property")
+    let has_clk      = _has(txt, "create_clock")
+    let has_iostd    = _has(txt, "IOSTANDARD")
+    _check(has_set_prop && has_clk && has_iostd,
+           "XDC " + name + " — set_property + create_clock + IOSTANDARD",
+           "")
+}
+
+// ── §4 MCU Rust structural lint ────────────────────────────────────
+
+fn check_rust(name: str) {
+    let path = MCU_DIR + "/" + name
+    let exists = _exists(path)
+    _check(exists, "MCU " + name + " on disk", path)
+    if !exists { return }
+    if name == "Cargo.toml" {
+        let txt = _read(path)
+        _check(_has(txt, "[package]") || _has(txt, "[workspace]"),
+               "MCU Cargo.toml — has [package] or [workspace] section", "")
+        return
+    }
+    if name == "README.md" { return }      // doc only
+    if name == "lib.rs" {
+        let txt = _read(path)
+        _check(_has(txt, "pub mod"),
+               "MCU lib.rs — declares pub mod entries",
+               "")
+        return
+    }
+    let txt = _read(path)
+    let has_nostd = _has(txt, "#![no_std]")
+    let has_state = _has(txt, "pub enum") || _has(txt, "pub const")
+    _check(has_nostd && has_state,
+           "MCU " + name + " — #![no_std] + state-machine/const block",
+           "")
+}
+
+// ── §5 schematic / board doc structural lint ────────────────────
+
+fn check_schematic_md(name: str) {
+    let path = DOC_DIR + "/" + name
+    let exists = _exists(path)
+    _check(exists, "DOC " + name + " on disk", path)
+    if !exists { return }
+    let txt = _read(path)
+    let has_block   = _has(txt, "## §1 Block diagram") || _has(txt, "## §1 block diagram") || _has(txt, "Block diagram")
+    let has_netlist = _has(txt, "Net list") || _has(txt, "net list") || _has(txt, "## §3 Net list")
+    let has_layout  = _has(txt, "stackup") || _has(txt, "layout")
+    _check(has_block && has_netlist && has_layout,
+           "DOC " + name + " — block diagram + net list + layout sections",
+           "")
+}
+
+fn check_board_md(name: str) {
+    let path = DOC_DIR + "/" + name
+    _check(_exists(path), "DOC " + name + " on disk", path)
+}
+
+// ── §6 sim ↔ MCU sentinel cross-link ──────────────────────────────
+//
+// Each sim/*.hexa exposes a __HEXA_ANTIMATTER_FIRMWARE_<NAME>__ sentinel.
+// The Phase D MCU .rs should reference the matching sim file in its
+// header comment so the spec lineage is auditable.
+
+let CROSS_LINKS = [
+    "pet_cyclotron.rs|cyclotron_trigger.hexa",
+    "tabletop.rs|penning_rf.hexa",
+    "cpt_bench.rs|atomic_clock_counter.hexa",
+    "thrust_bench.rs|thrust_acquisition.hexa",
+]
+
+fn check_cross_link(spec: str) {
+    let parts = spec.split("|")
+    let rs = parts[0]
+    let sim = parts[1]
+    let txt = _read(MCU_DIR + "/" + rs)
+    _check(_has(txt, sim),
+           "MCU " + rs + " — references sim/" + sim,
+           "")
+}
+
+// ── §7 schematic ↔ HDL ↔ board doc triangulation ──────────────────
+
+fn check_triangulation() {
+    // For each FPGA board, schematic_v0_*.md should reference both the .v
+    // and .xdc files; the .xdc references the board doc; the .v matches
+    // the sim.
+    let triples = [
+        "schematic_v0_tabletop_penning.md|penning_rf.v|penning_rf.xdc",
+        "schematic_v0_atomic_clock.md|atomic_clock.v|atomic_clock.xdc",
+        "schematic_v0_thrust_acquisition.md|thrust_acq.v|thrust_acq.xdc",
+    ]
+    for t in triples {
+        let p = t.split("|")
+        let sm = _read(DOC_DIR + "/" + p[0])
+        let v_ok   = _has(sm, p[1])
+        let xdc_ok = _has(sm, p[2])
+        _check(v_ok && xdc_ok,
+               "schematic " + p[0] + " — references " + p[1] + " + " + p[2],
+               "")
+    }
+}
+
+// ── main ───────────────────────────────────────────────────────────
+
+fn main() {
+    println("==================================================================")
+    println("  hexa-antimatter — firmware Phase D inventory + invariant lint")
+    println("==================================================================")
+    println("  HDL dir : " + HDL_DIR)
+    println("  MCU dir : " + MCU_DIR)
+    println("  DOC dir : " + DOC_DIR)
+    println("  SIM dir : " + SIM_DIR)
+    println("")
+
+    println("-- §1 HDL Verilog inventory + structure --")
+    for f in HDL_FILES { check_verilog(f) }
+    println("")
+    println("-- §2 HDL XDC constraints --")
+    for f in HDL_XDC_FILES { check_xdc(f) }
+    println("")
+    println("-- §3 MCU Rust inventory + structure --")
+    for f in MCU_FILES { check_rust(f) }
+    println("")
+    println("-- §4 board_v0_*.md (BOM + pinout) inventory --")
+    for f in DOC_BOARD_V0 { check_board_md(f) }
+    println("")
+    println("-- §5 schematic_v0_*.md (block + netlist + layout) inventory --")
+    for f in DOC_SCHEMATIC_V0 { check_schematic_md(f) }
+    println("")
+    println("-- §6 MCU ↔ sim cross-link --")
+    for s in CROSS_LINKS { check_cross_link(s) }
+    println("")
+    println("-- §7 schematic ↔ HDL ↔ XDC triangulation --")
+    check_triangulation()
+
+    println("")
+    println("==================================================================")
+    let pass_n = RUN - FAIL
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("  FAILURES:")
+        for f in FAILURES { println("    x " + f) }
+        println("__HEXA_ANTIMATTER_FIRMWARE_PHASE_D__ FAIL")
+        exit(1)
+    }
+    println("  Phase D paper-spec surface complete + cross-linked.")
+    println("__HEXA_ANTIMATTER_FIRMWARE_PHASE_D__ PASS")
+    exit(0)
+}

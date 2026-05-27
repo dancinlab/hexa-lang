@@ -1,0 +1,480 @@
+// ═══════════════════════════════════════════════════════════════
+//  test_rectified_flow.hexa — Rectified Flow (#250)
+//
+//  Tests (13):
+//    T1  interpolate endpoints: x_t(t=0)=x0, x_t(t=1)=x1
+//    T2  interpolate midpoint: x_t(0.5)=(x0+x1)/2
+//    T3  target_velocity = x1 - x0
+//    T4  velocity MLP output dim = input dim
+//    T5  velocity MLP different t → different output
+//    T6  loss = 0 when pred matches target
+//    T7  loss > 0 when different
+//    T8  batch_loss > 0 on random data
+//    T9  1-step sample shape = input dim
+//    T10 euler sample shape
+//    T11 reflow returns (new_x0, new_x1) pair
+//    T12 straightness is non-negative
+//    T13 straightness small for linear velocity MLP (zero weights)
+// ═══════════════════════════════════════════════════════════════
+
+// -- inlined from self/ml/rectified_flow.hexa --
+// codegen import not wired for test files
+
+// ═══════════════════════════════════════════════════════════════════
+//  self/ml/rectified_flow.hexa — Rectified Flow (#250)
+//
+//  Straight ODE 1-step generation + reflow procedure.
+//
+//  Theory (Liu et al. 2023):
+//    Forward interpolation: x_t = (1-t) * x_0 + t * x_1
+//    where x_0 ~ noise (N(0,I)), x_1 ~ data.
+//    Target velocity: v*(x_t, t) = x_1 - x_0 (constant along the line)
+//    Learn v_theta(x_t, t) ~ E[x_1 - x_0 | x_t, t]
+//
+//  1-step sampling:
+//    x_1_pred = x_0 + v_theta(x_0, 0)
+//
+//  Multi-step (Euler ODE): x_{t+dt} = x_t + v_theta(x_t, t) * dt
+//
+//  Reflow:
+//    Generate pairs (x_0, x_1_pred) from the trained model,
+//    then re-train using these "straighter" coupling pairs
+//    so that the transport path becomes straighter.
+//
+//  API (pure):
+//    rf_zeros / rf_sqrt / rf_exp
+//    rf_interpolate(x0, x1, t)                  -> [float]
+//    rf_target_velocity(x0, x1)                 -> [float]
+//    rf_velocity_mlp(xt, t, w1, b1, w2, b2)     -> [float]  (predicts v_theta)
+//    rf_loss(v_pred, v_target)                  -> float
+//    rf_batch_loss(x0_batch, x1_batch, ts, w1, b1, w2, b2) -> float
+//    rf_sample_1step(x0, v)                     -> [float]
+//    rf_sample_euler(x0, n_steps, w1, b1, w2, b2) -> [float]
+//    rf_reflow_pairs(x0_batch, w1, b1, w2, b2)  -> [[[float]], [[float]]]  (new x0, x1)
+//    rf_straightness(x0, x1, v_theta_w1, b1, w2, b2) -> float
+//
+//  AI-NATIVE:
+//    @pure / @hot
+// ═══════════════════════════════════════════════════════════════════
+
+fn rf_abs(x) { if x < 0.0 { return 0.0 - x } return x }
+
+fn rf_sqrt(x) {
+    if x <= 0.0 { return 0.0 }
+    let mut g = x / 2.0
+    if g < 1.0 { g = 1.0 }
+    let mut _i = 0
+
+    while _i < 25 { g = (g + x / g) / 2.0 }
+    return g
+}
+
+fn rf_exp(x) {
+    let mut v = x
+    if v > 20.0 { v = 20.0 }
+    if v < -20.0 { v = -20.0 }
+    let mut result = 1.0
+    let mut term = 1.0
+    let mut i = 1
+
+    while i < 25 {
+        term = term * v / to_float(i)
+        result = result + term
+    }
+    if result < 0.0 { return 0.0 }
+    return result
+}
+
+fn rf_zeros(n) {
+    let mut v = []
+    let mut _i = 0
+
+    while _i < n { v = v + [0.0] }
+    return v
+}
+
+@pure
+fn rf_add(a, b) {
+    let n = len(a)
+    let mut out = rf_zeros(n)
+    let mut i = 0
+
+    while i < n { out[i] = a[i] + b[i] }
+    return out
+}
+
+@pure
+fn rf_sub(a, b) {
+    let n = len(a)
+    let mut out = rf_zeros(n)
+    let mut i = 0
+
+    while i < n { out[i] = a[i] - b[i] }
+    return out
+}
+
+@pure
+fn rf_scale(v, s) {
+    let n = len(v)
+    let mut out = rf_zeros(n)
+    let mut i = 0
+
+    while i < n { out[i] = v[i] * s }
+    return out
+}
+
+@pure
+fn rf_dot(a, b) {
+    let n = len(a)
+    let mut s = 0.0
+    let mut i = 0
+
+    while i < n { s = s + a[i] * b[i] }
+    return s
+}
+
+@pure
+fn rf_norm(v) { return rf_sqrt(rf_dot(v, v)) }
+
+// ═══════════════════════════════════════════════════════════════════
+//  1. Interpolation x_t = (1-t)*x0 + t*x1
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn rf_interpolate(x0, x1, t) {
+    let n = len(x0)
+    let mut xt = rf_zeros(n)
+    let mut i = 0
+
+    while i < n {
+        xt[i] = (1.0 - t) * x0[i] + t * x1[i]
+    }
+    return xt
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  2. Target velocity (constant along the line): v* = x1 - x0
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn rf_target_velocity(x0, x1) {
+    return rf_sub(x1, x0)
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  3. Velocity MLP — predicts v_theta(x_t, t)
+//
+//  Input: [x_t; t] (dim = d + 1)
+//  Output: velocity vector of dim d
+//
+//  w1: [hidden x (d+1)] flat, b1: [hidden]
+//  w2: [d x hidden] flat, b2: [d]
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn rf_gelu(x) {
+    let e2x = rf_exp(2.0 * x)
+    if e2x > 1.0e15 { return x }
+    let t = (e2x - 1.0) / (e2x + 1.0)
+    return 0.5 * x * (1.0 + t)
+}
+
+@pure
+fn rf_velocity_mlp(xt, t_val, w1, b1, w2, b2) {
+    let d = len(xt)
+    let in_dim = d + 1
+    let mut input = rf_zeros(in_dim)
+    let mut i = 0
+
+    while i < d { input[i] = xt[i] }
+    input[d] = t_val
+
+    let hidden_dim = len(b1)
+    let out_dim = len(b2)
+
+    let mut hid = rf_zeros(hidden_dim)
+    let mut i = 0
+
+    while i < hidden_dim {
+        let mut s = b1[i]
+        let mut j = 0
+
+        while j < in_dim {
+            s = s + w1[i * in_dim + j] * input[j]
+        }
+        hid[i] = rf_gelu(s)
+    }
+
+    let mut out = rf_zeros(out_dim)
+    let mut i = 0
+
+    while i < out_dim {
+        let mut s = b2[i]
+        let mut j = 0
+
+        while j < hidden_dim {
+            s = s + w2[i * hidden_dim + j] * hid[j]
+        }
+        out[i] = s
+    }
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  4. Loss: MSE between predicted and target velocity
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn rf_loss(v_pred, v_target) {
+    let diff = rf_sub(v_pred, v_target)
+    return 0.5 * rf_dot(diff, diff)
+}
+
+// Batch loss over pairs (x0_i, x1_i, t_i)
+@pure
+fn rf_batch_loss(x0_batch, x1_batch, ts, w1, b1, w2, b2) {
+    let n = len(x0_batch)
+    if n == 0 { return 0.0 }
+    let mut total = 0.0
+    let mut i = 0
+
+    while i < n {
+        let x0 = x0_batch[i]
+        let x1 = x1_batch[i]
+        let t = ts[i]
+        let xt = rf_interpolate(x0, x1, t)
+        let v_pred = rf_velocity_mlp(xt, t, w1, b1, w2, b2)
+        let v_target = rf_target_velocity(x0, x1)
+        total = total + rf_loss(v_pred, v_target)
+    }
+    return total / to_float(n)
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  5. 1-step sampling: x1_pred = x0 + v_theta(x0, 0)
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn rf_sample_1step(x0, w1, b1, w2, b2) {
+    let v = rf_velocity_mlp(x0, 0.0, w1, b1, w2, b2)
+    return rf_add(x0, v)
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  6. Euler multi-step sampling
+//   x_{t+dt} = x_t + v_theta(x_t, t) * dt
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn rf_sample_euler(x0, n_steps, w1, b1, w2, b2) {
+    let d = len(x0)
+    let mut x = rf_zeros(d)
+    let mut i = 0
+
+    while i < d { x[i] = x0[i] }
+    let dt = 1.0 / to_float(n_steps)
+    let mut step = 0
+
+    while step < n_steps {
+        let t = to_float(step) * dt
+        let v = rf_velocity_mlp(x, t, w1, b1, w2, b2)
+        let mut i = 0
+
+        while i < d {
+            x[i] = x[i] + v[i] * dt
+        }
+    }
+    return x
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  7. Reflow: regenerate (x0, x1_pred) pairs using the current v_theta
+//
+//  Returns [new_x0_batch, new_x1_batch] (straighter coupling)
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn rf_reflow_pairs(x0_batch, w1, b1, w2, b2) {
+    let n = len(x0_batch)
+    let mut new_x0 = []
+    let mut new_x1 = []
+    let mut i = 0
+
+    while i < n {
+        let x0 = x0_batch[i]
+        let x1_pred = rf_sample_1step(x0, w1, b1, w2, b2)
+        new_x0 = new_x0 + [x0]
+        new_x1 = new_x1 + [x1_pred]
+    }
+    return [new_x0, new_x1]
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  8. Straightness measure: variance of v_theta along the line
+//
+//  A perfectly rectified flow has constant v along (x_t, t),
+//  so variance → 0.
+//
+//  measure = (1/T) sum_t || v(x_t, t) - mean_v ||^2
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn rf_straightness(x0, x1, w1, b1, w2, b2, n_t) {
+    let d = len(x0)
+    let mut sum_v = rf_zeros(d)
+    let mut v_samples = []
+    let mut i = 0
+
+    while i < n_t {
+        let t = to_float(i) / to_float(n_t - 1)
+        let xt = rf_interpolate(x0, x1, t)
+        let v = rf_velocity_mlp(xt, t, w1, b1, w2, b2)
+        v_samples = v_samples + [v]
+        let mut j = 0
+
+        while j < d { sum_v[j] = sum_v[j] + v[j] }
+    }
+    let mut mean_v = rf_zeros(d)
+    let mut j = 0
+
+    while j < d { mean_v[j] = sum_v[j] / to_float(n_t) }
+    let mut var = 0.0
+    let mut i = 0
+
+    while i < n_t {
+        let diff = rf_sub(v_samples[i], mean_v)
+        var = var + rf_dot(diff, diff)
+    }
+    return var / to_float(n_t)
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Pseudo-random noise (for sampling from Gaussian source)
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn rf_pseudo_gauss(n, seed) {
+    let mut out = rf_zeros(n)
+    let mut i = 0
+
+    while i < n {
+        let mut h = (seed + 1) * 2654435761 + (i + 1) * 1315423911
+        h = h % 1000003
+        if h < 0 { h = 0 - h }
+        let u = to_float(h % 10000) / 10000.0
+        out[i] = (u - 0.5) * 3.46
+    }
+    return out
+}
+
+println("[rectified_flow] loaded — interpolation + velocity MLP + 1-step sample + reflow")
+
+
+// -- end inlined --
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn check(name, cond) {
+    if cond {
+        println("[PASS] " + name)
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name)
+        fail_count = fail_count + 1
+    }
+}
+
+fn fabs(x) { if x < 0.0 { return 0.0 - x } return x }
+fn approx(a, b, eps) { return fabs(a - b) < eps }
+
+// T1: endpoints
+let x0 = [0.0, 0.0, 0.0]
+let x1 = [1.0, 2.0, 3.0]
+let xt0 = rf_interpolate(x0, x1, 0.0)
+let xt1 = rf_interpolate(x0, x1, 1.0)
+check("T1a x_t(0)=x0", approx(xt0[0], 0.0, 0.001) && approx(xt0[1], 0.0, 0.001))
+check("T1b x_t(1)=x1", approx(xt1[0], 1.0, 0.001) && approx(xt1[2], 3.0, 0.001))
+
+// T2: midpoint
+let xt_mid = rf_interpolate(x0, x1, 0.5)
+check("T2 midpoint = (x0+x1)/2", approx(xt_mid[0], 0.5, 0.001) && approx(xt_mid[2], 1.5, 0.001))
+
+// T3: target velocity
+let tv = rf_target_velocity(x0, x1)
+check("T3 target velocity = x1 - x0", approx(tv[0], 1.0, 0.001) && approx(tv[2], 3.0, 0.001))
+
+// T4: velocity MLP
+// d=3, in_dim=4, hidden=5, out=3
+// w1: [5 x 4] = 20, b1: [5], w2: [3 x 5] = 15, b2: [3]
+let w1 = [0.1, 0.2, 0.3, 0.1,
+          0.2, 0.3, 0.1, 0.2,
+          0.3, 0.1, 0.2, 0.3,
+          0.1, 0.2, 0.3, 0.1,
+          0.2, 0.3, 0.1, 0.2]
+let b1 = [0.0, 0.0, 0.0, 0.0, 0.0]
+let w2 = [0.1, 0.2, 0.3, 0.1, 0.2,
+          0.3, 0.1, 0.2, 0.3, 0.1,
+          0.2, 0.3, 0.1, 0.2, 0.3]
+let b2 = [0.0, 0.0, 0.0]
+let xt_test = [0.5, 1.0, 1.5]
+let v_out = rf_velocity_mlp(xt_test, 0.5, w1, b1, w2, b2)
+check("T4 velocity MLP output dim = 3", len(v_out) == 3)
+
+// T5: different t → different output
+let v_out2 = rf_velocity_mlp(xt_test, 0.9, w1, b1, w2, b2)
+let mut diff_v = false
+let mut i = 0
+
+while i < 3 {
+    if fabs(v_out[i] - v_out2[i]) > 0.0001 { diff_v = true }
+}
+check("T5 different t → different v", diff_v)
+
+// T6: loss = 0 for perfect match
+let v_t = [1.0, 2.0, 3.0]
+let l0 = rf_loss(v_t, v_t)
+check("T6 loss = 0 for identical", approx(l0, 0.0, 0.001))
+
+// T7: loss > 0 when different
+let v_diff = [1.1, 2.1, 3.1]
+let l1 = rf_loss(v_diff, v_t)
+check("T7 loss > 0 for different", l1 > 0.0)
+
+// T8: batch loss
+let x0_batch = [[0.0, 0.0, 0.0], [0.1, 0.1, 0.1], [-0.2, 0.2, 0.0]]
+let x1_batch = [[1.0, 2.0, 3.0], [0.5, 1.0, 1.5], [0.2, 0.2, 0.2]]
+let ts = [0.3, 0.5, 0.7]
+let bl = rf_batch_loss(x0_batch, x1_batch, ts, w1, b1, w2, b2)
+check("T8 batch loss >= 0", bl >= 0.0)
+
+// T9: 1-step sampling
+let x_init = [0.1, 0.2, 0.3]
+let x_pred = rf_sample_1step(x_init, w1, b1, w2, b2)
+check("T9 1-step sample dim = 3", len(x_pred) == 3)
+
+// T10: euler sampling
+let x_euler = rf_sample_euler(x_init, 5, w1, b1, w2, b2)
+check("T10 euler sample dim = 3", len(x_euler) == 3)
+
+// T11: reflow
+let reflow_out = rf_reflow_pairs(x0_batch, w1, b1, w2, b2)
+let new_x0 = reflow_out[0]
+let new_x1 = reflow_out[1]
+check("T11 reflow new_x0 len = batch len", len(new_x0) == 3)
+check("T11b reflow new_x1 len = batch len", len(new_x1) == 3)
+
+// T12: straightness non-negative
+let s12 = rf_straightness(x0, x1, w1, b1, w2, b2, 5)
+check("T12 straightness >= 0", s12 >= 0.0)
+
+// T13: straightness tiny for zero-weight MLP (constant velocity)
+let w1z = [0.0, 0.0, 0.0, 0.0,
+           0.0, 0.0, 0.0, 0.0,
+           0.0, 0.0, 0.0, 0.0,
+           0.0, 0.0, 0.0, 0.0,
+           0.0, 0.0, 0.0, 0.0]
+let b1z = [0.0, 0.0, 0.0, 0.0, 0.0]
+let w2z = [0.0, 0.0, 0.0, 0.0, 0.0,
+           0.0, 0.0, 0.0, 0.0, 0.0,
+           0.0, 0.0, 0.0, 0.0, 0.0]
+let b2z = [1.0, 2.0, 3.0]
+let s13 = rf_straightness(x0, x1, w1z, b1z, w2z, b2z, 5)
+check("T13 straightness = 0 for constant v", approx(s13, 0.0, 0.001))
+
+println("")
+println("=== Rectified Flow test summary ===")
+println("PASS: " + str(pass_count))
+println("FAIL: " + str(fail_count))
+println("TOTAL: " + str(pass_count + fail_count))

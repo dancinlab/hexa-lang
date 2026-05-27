@@ -1,0 +1,215 @@
+#!/usr/bin/env bash
+# hexa-readme — SSOT README/CHANGELOG generator from .hexa annotations
+# (AST-backed; replaces the grep MVP).
+#
+# Usage:
+#   hexa-readme <file.hexa> [<file2.hexa> ...]
+#   hexa-readme [--mode readme|changelog|json] <files...>
+#   hexa-readme --dir <directory>
+#
+# Annotation kinds: @readme, @changelog, @api_doc, @example, @badge,
+#                   @citation, @license
+set -eu
+
+usage() {
+    cat >&2 <<EOF
+usage: hexa-readme [--mode readme|changelog|json] <file.hexa> [file2.hexa ...]
+       hexa-readme [--mode ...] --dir <directory>
+EOF
+    exit 2
+}
+
+case "${1:-}" in
+    -h|--help|"") usage ;;
+esac
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+. "${SCRIPT_DIR}/_ast_extract.sh"
+
+mode="readme"
+ARGS=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --mode)
+            shift; [ $# -ge 1 ] || usage
+            case "$1" in
+                readme|changelog|json) mode="$1" ;;
+                *) echo "hexa-readme: invalid mode: $1" >&2; usage ;;
+            esac
+            shift ;;
+        -h|--help) usage ;;
+        --) shift; while [ $# -gt 0 ]; do ARGS+=("$1"); shift; done ;;
+        *) ARGS+=("$1"); shift ;;
+    esac
+done
+
+if ! resolve_files "${ARGS[@]}"; then exit 2; fi
+if [ ${#FILES[@]} -eq 0 ]; then
+    echo "hexa-readme: no .hexa files found" >&2
+    exit 2
+fi
+
+# infer project name from first file path
+infer_project() {
+    local p="$1"
+    case "$p" in
+        */nexus/*)     echo "nexus"; return ;;
+        */hexa-lang/*) echo "hexa-lang"; return ;;
+        */Dev/*/*)     local tail="${p#*/Dev/}"; echo "${tail%%/*}"; return ;;
+    esac
+    local d
+    d=$(dirname "$p")
+    echo "$(basename "$d")"
+}
+PROJECT=$(infer_project "${FILES[0]}")
+
+run_ast_extract | awk -v mode="$mode" -v project="$PROJECT" '
+function jesc(s,   r) {
+    r = s; gsub(/\\/, "\\\\", r); gsub(/"/, "\\\"", r); gsub(/\t/, "\\t", r); gsub(/\r/, "\\r", r); gsub(/\n/, "\\n", r); return r
+}
+function decode_esc(s,   out, i, n, c, nc) {
+    out = ""; n = length(s); i = 1
+    while (i <= n) {
+        c = substr(s, i, 1)
+        if (c == "\\" && i < n) {
+            nc = substr(s, i + 1, 1)
+            if (nc == "n")  { out = out "\n"; i += 2; continue }
+            if (nc == "r")  { out = out "\r"; i += 2; continue }
+            if (nc == "t")  { out = out "\t"; i += 2; continue }
+            if (nc == "\\") { out = out "\\"; i += 2; continue }
+        }
+        out = out c; i++
+    }
+    return out
+}
+function kv_extract(raw, key,    s, pat, pos, rest, val, n, i, c, nc) {
+    s = raw
+    pat = "(^|[ \\t,(])" key "[ \\t]*[=:][ \\t]*"
+    pos = match(s, pat)
+    if (pos == 0) return ""
+    rest = substr(s, pos + RLENGTH)
+    sub(/^[ \t]+/, "", rest)
+    if (substr(rest, 1, 1) == "\"") {
+        val = ""; i = 2; n = length(rest)
+        while (i <= n) {
+            c = substr(rest, i, 1)
+            if (c == "\\" && i < n) {
+                nc = substr(rest, i + 1, 1)
+                if (nc == "\"") { val = val "\""; i += 2; continue }
+                if (nc == "\\") { val = val "\\"; i += 2; continue }
+                val = val c; i++; continue
+            }
+            if (c == "\"") break
+            val = val c; i++
+        }
+        return val
+    }
+    if (match(rest, /[,)[:space:]]/)) return substr(rest, 1, RSTART - 1)
+    return rest
+}
+BEGIN {
+    FS = "\t"
+    KINDS = "readme,changelog,api_doc,example,badge,citation,license"
+    n_kinds = split(KINDS, kinds_arr, ",")
+    for (i = 1; i <= n_kinds; i++) { kinds_set[kinds_arr[i]] = 1; counts[kinds_arr[i]] = 0 }
+    n_recs = 0; total = 0
+}
+/^# error\t/ { next }
+{
+    kind = $1; tgtk = $2; fn = $3; file = $4; line = $5; raw = decode_esc($6)
+    if (!(kind in kinds_set)) next
+    n_recs++
+    rec_kind[n_recs] = kind
+    rec_fn[n_recs]   = fn
+    rec_file[n_recs] = file
+    rec_line[n_recs] = line
+    rec_raw[n_recs]  = raw
+    counts[kind]++
+    total++
+}
+END {
+    if (mode == "json") {
+        body = ""
+        for (i = 1; i <= n_recs; i++) {
+            if (i > 1) body = body ","
+            k = rec_kind[i]
+            if (k == "readme") {
+                sec = kv_extract(rec_raw[i], "section")
+                ord = kv_extract(rec_raw[i], "order")
+                bd  = kv_extract(rec_raw[i], "body")
+                if (ord == "") ord = "0"
+                body = body "{\"kind\":\"readme\",\"section\":\"" jesc(sec) "\",\"order\":\"" jesc(ord) "\",\"body\":\"" jesc(bd) "\",\"file\":\"" jesc(rec_file[i]) "\"}"
+            } else if (k == "changelog") {
+                ver = kv_extract(rec_raw[i], "version")
+                kk  = kv_extract(rec_raw[i], "kind")
+                bd  = kv_extract(rec_raw[i], "body")
+                body = body "{\"kind\":\"changelog\",\"version\":\"" jesc(ver) "\",\"kind\":\"" jesc(kk) "\",\"body\":\"" jesc(bd) "\",\"file\":\"" jesc(rec_file[i]) "\"}"
+            } else if (k == "example") {
+                title = kv_extract(rec_raw[i], "title")
+                bd    = kv_extract(rec_raw[i], "body")
+                body = body "{\"kind\":\"example\",\"title\":\"" jesc(title) "\",\"body\":\"" jesc(bd) "\",\"file\":\"" jesc(rec_file[i]) "\"}"
+            } else if (k == "api_doc") {
+                pub = kv_extract(rec_raw[i], "public")
+                stb = kv_extract(rec_raw[i], "stable")
+                bd  = kv_extract(rec_raw[i], "body")
+                body = body "{\"kind\":\"api_doc\",\"public\":\"" jesc(pub) "\",\"stable\":\"" jesc(stb) "\",\"body\":\"" jesc(bd) "\",\"fn\":\"" jesc(rec_fn[i]) "\",\"file\":\"" jesc(rec_file[i]) "\"}"
+            } else if (k == "badge") {
+                alt = kv_extract(rec_raw[i], "alt")
+                url = kv_extract(rec_raw[i], "url")
+                lnk = kv_extract(rec_raw[i], "link")
+                body = body "{\"kind\":\"badge\",\"alt\":\"" jesc(alt) "\",\"url\":\"" jesc(url) "\",\"link\":\"" jesc(lnk) "\",\"file\":\"" jesc(rec_file[i]) "\"}"
+            } else if (k == "citation") {
+                bib = kv_extract(rec_raw[i], "bibtex")
+                body = body "{\"kind\":\"citation\",\"bibtex\":\"" jesc(bib) "\",\"file\":\"" jesc(rec_file[i]) "\"}"
+            } else if (k == "license") {
+                sp = kv_extract(rec_raw[i], "spdx")
+                body = body "{\"kind\":\"license\",\"spdx\":\"" jesc(sp) "\",\"file\":\"" jesc(rec_file[i]) "\"}"
+            }
+        }
+        sum = ""
+        for (i = 1; i <= n_kinds; i++) {
+            if (i > 1) sum = sum ","
+            sum = sum "\"" kinds_arr[i] "\":" counts[kinds_arr[i]]
+        }
+        sum = sum ",\"total\":" total
+        printf("{\"version\":\"0.2\",\"source\":\"ast\",\"annotations\":[%s],\"summary\":{%s}}\n", body, sum)
+    } else if (mode == "readme") {
+        printf "# %s\n\n", project
+        # readme sections by `section`/`order`
+        nsecs = 0
+        for (i = 1; i <= n_recs; i++) {
+            if (rec_kind[i] != "readme") continue
+            sec = kv_extract(rec_raw[i], "section")
+            if (sec == "") sec = "overview"
+            if (!(sec in seen_sec)) { seen_sec[sec] = 1; order_sec[++nsecs] = sec }
+            sec_body[sec, ++sec_n[sec]] = kv_extract(rec_raw[i], "body")
+        }
+        for (i = 1; i <= nsecs; i++) {
+            s = order_sec[i]
+            printf "## %s\n\n", s
+            for (j = 1; j <= sec_n[s]; j++) printf "%s\n\n", sec_body[s, j]
+        }
+        # examples
+        ne = 0
+        for (i = 1; i <= n_recs; i++) if (rec_kind[i] == "example") ne++
+        if (ne > 0) {
+            print "## Examples\n"
+            for (i = 1; i <= n_recs; i++) {
+                if (rec_kind[i] != "example") continue
+                title = kv_extract(rec_raw[i], "title")
+                bd = kv_extract(rec_raw[i], "body")
+                if (title != "") printf "### %s\n\n", title
+                printf "```\n%s\n```\n\n", bd
+            }
+        }
+    } else if (mode == "changelog") {
+        printf "# CHANGELOG — %s\n\n", project
+        for (i = 1; i <= n_recs; i++) {
+            if (rec_kind[i] != "changelog") continue
+            ver = kv_extract(rec_raw[i], "version")
+            kk  = kv_extract(rec_raw[i], "kind")
+            bd  = kv_extract(rec_raw[i], "body")
+            printf "## %s — %s\n\n%s\n\n", ver, kk, bd
+        }
+    }
+}'

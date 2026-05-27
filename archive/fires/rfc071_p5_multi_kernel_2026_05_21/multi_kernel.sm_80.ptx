@@ -1,0 +1,114 @@
+// RFC 055 055-P0 - hexa-native NVPTX emit | target=nvptx64-nvidia-cuda-sm80
+.version 7.0
+.target sm_80
+.address_size 64
+
+.visible .entry vec_add (
+    .param .u64 vec_add_param_0,
+    .param .u64 vec_add_param_1,
+    .param .u64 vec_add_param_2,
+    .param .u64 vec_add_param_3
+)
+{
+    .reg .u64 %rd0;
+    .reg .u64 %rd1;
+    .reg .u64 %rd2;
+    .reg .u64 %rd3;
+    .reg .u32 %r4;
+    .reg .u32 %r5;
+    .reg .u32 %r6;
+    .reg .u32 %r7;
+    .reg .u32 %r8;
+    .reg .u32 %r9;
+    .reg .u64 %rd10;
+    .reg .pred %p11;
+    .reg .f64 %fd15;
+    .reg .f64 %fd17;
+    .reg .f64 %fd18;
+    .reg .u64 %rd_idxa_15;
+    .reg .u64 %rd_idxa_17;
+    .reg .u64 %rd_idxs_addr;
+    .reg .u64 %rd_idx_off_10_8;
+$L_0:
+    ld.param.u64 %rd0, [vec_add_param_0];  // load kernel param 0 into reg
+    ld.param.u64 %rd1, [vec_add_param_1];  // load kernel param 1 into reg
+    ld.param.u64 %rd2, [vec_add_param_2];  // load kernel param 2 into reg
+    ld.param.u64 %rd3, [vec_add_param_3];  // load kernel param 3 into reg
+    mov.u32 %r4, %ctaid.x;  // gpu_block_id_x()
+    mov.u32 %r5, %ntid.x;  // gpu_block_dim_x()
+    mul.lo.s32 %r6, %r4, %r5;  // binop *
+    mov.u32 %r7, %tid.x;  // gpu_thread_id_x()
+    add.s32 %r8, %r6, %r7;  // binop +
+    mov.u32 %r9, %r8;  // assign
+    cvt.s64.s32 %rd10, %r9;  // to_i64 (s32 to s64)
+    setp.lt.s64 %p11, %rd10, %rd3;  // cmp <
+    @%p11 bra $L_1;  // br_cond true -> $L_1
+    bra $L_2;  // br_cond false -> $L_2
+$L_1:
+    mul.lo.s64 %rd_idx_off_10_8, %rd10, 8;  // shared idx byte off = idx * 8
+    add.s64 %rd_idxa_15, %rd_idx_off_10_8, %rd0;  // index addr = shared_off + base
+    ld.global.f64 %fd15, [%rd_idxa_15];  // ld base[idx] (f64)
+    add.s64 %rd_idxa_17, %rd_idx_off_10_8, %rd1;  // index addr = shared_off + base
+    ld.global.f64 %fd17, [%rd_idxa_17];  // ld base[idx] (f64)
+    add.f64 %fd18, %fd15, %fd17;  // binop +
+    add.s64 %rd_idxs_addr, %rd_idx_off_10_8, %rd2;  // index_set addr = shared_off + base
+    st.global.f64 [%rd_idxs_addr], %fd18;  // st base[idx] = val (f64)
+    bra $L_2;  // br -> $L_2
+$L_2:
+    ret;  // return
+}
+
+.visible .entry vec_mul (
+    .param .u64 vec_mul_param_0,
+    .param .u64 vec_mul_param_1,
+    .param .u64 vec_mul_param_2,
+    .param .u64 vec_mul_param_3
+)
+{
+    .reg .u64 %rd0;
+    .reg .u64 %rd1;
+    .reg .u64 %rd2;
+    .reg .u64 %rd3;
+    .reg .u32 %r4;
+    .reg .u32 %r5;
+    .reg .u32 %r6;
+    .reg .u32 %r7;
+    .reg .u32 %r8;
+    .reg .u32 %r9;
+    .reg .u64 %rd10;
+    .reg .pred %p11;
+    .reg .f64 %fd15;
+    .reg .f64 %fd17;
+    .reg .f64 %fd18;
+    .reg .u64 %rd_idxa_15;
+    .reg .u64 %rd_idxa_17;
+    .reg .u64 %rd_idxs_addr;
+    .reg .u64 %rd_idx_off_10_8;
+$L_0:
+    ld.param.u64 %rd0, [vec_mul_param_0];  // load kernel param 0 into reg
+    ld.param.u64 %rd1, [vec_mul_param_1];  // load kernel param 1 into reg
+    ld.param.u64 %rd2, [vec_mul_param_2];  // load kernel param 2 into reg
+    ld.param.u64 %rd3, [vec_mul_param_3];  // load kernel param 3 into reg
+    mov.u32 %r4, %ctaid.x;  // gpu_block_id_x()
+    mov.u32 %r5, %ntid.x;  // gpu_block_dim_x()
+    mul.lo.s32 %r6, %r4, %r5;  // binop *
+    mov.u32 %r7, %tid.x;  // gpu_thread_id_x()
+    add.s32 %r8, %r6, %r7;  // binop +
+    mov.u32 %r9, %r8;  // assign
+    cvt.s64.s32 %rd10, %r9;  // to_i64 (s32 to s64)
+    setp.lt.s64 %p11, %rd10, %rd3;  // cmp <
+    @%p11 bra $L_1;  // br_cond true -> $L_1
+    bra $L_2;  // br_cond false -> $L_2
+$L_1:
+    mul.lo.s64 %rd_idx_off_10_8, %rd10, 8;  // shared idx byte off = idx * 8
+    add.s64 %rd_idxa_15, %rd_idx_off_10_8, %rd0;  // index addr = shared_off + base
+    ld.global.f64 %fd15, [%rd_idxa_15];  // ld base[idx] (f64)
+    add.s64 %rd_idxa_17, %rd_idx_off_10_8, %rd1;  // index addr = shared_off + base
+    ld.global.f64 %fd17, [%rd_idxa_17];  // ld base[idx] (f64)
+    mul.f64 %fd18, %fd15, %fd17;  // binop *
+    add.s64 %rd_idxs_addr, %rd_idx_off_10_8, %rd2;  // index_set addr = shared_off + base
+    st.global.f64 [%rd_idxs_addr], %fd18;  // st base[idx] = val (f64)
+    bra $L_2;  // br -> $L_2
+$L_2:
+    ret;  // return
+}

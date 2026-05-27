@@ -1,0 +1,275 @@
+// tool/build_precompile.hexa — GO M2: precompile pipeline.
+//
+// Reads tool/precompile.json (M3 manifest), iterates declared scripts,
+// computes each script's runtime cache key (must EXACTLY match
+// self/main.hexa cmd_run's key formula:
+//
+//     key = sha256(source).substring(0, 16) + "_" + version_str()
+//
+// — drift here = silent cache miss in production), and emits a native
+// binary at:
+//
+//     release/precompile/hexa_run.<key>
+//
+// `cmd_run` / `cmd_run_user_direct` probe release/precompile/ BEFORE
+// ~/.hexa-cache/; a hit means the user's first invocation of a shipped
+// script skips the clang fork. This is the internal half of the
+// fork-storm mitigation (pool-route 0.6.5/0.6.6 handle the external
+// half; this M2+M3 handles cold-cache compile cost).
+//
+// Usage:
+//   hexa run tool/build_precompile.hexa            # build all manifest entries
+//   hexa run tool/build_precompile.hexa --list     # list entries + computed keys (no build)
+//   hexa run tool/build_precompile.hexa --verify   # check release/precompile/ for each entry
+//
+// Env:
+//   HEXA_PRECOMPILE_OUT=<dir>   override output dir (default: <repo>/release/precompile)
+//   HEXA_PRECOMPILE_VERSION=<v> override version_str() (testing only)
+//
+// MINIMUM DEMO contract (per cycle scope): manifest format + per-script
+// build + key emission. CI tarball wiring is a separate phase.
+
+fn _die(msg: string) {
+    eprintln("build_precompile: " + msg)
+    exit(1)
+}
+
+fn _shq(s: string) -> string {
+    let mut out = "'"
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "'" { out = out + "'\\''" } else { out = out + c }
+        i = i + 1
+    }
+    out = out + "'"
+    return out
+}
+
+fn _trim(s: string) -> string {
+    let n = len(s)
+    let mut a = 0
+    while a < n {
+        let c = s.substring(a, a + 1)
+        if c == " " || c == "\t" || c == "\n" || c == "\r" { a = a + 1 } else { a = n + 1 }
+    }
+    if a > n { a = a - n - 1 }
+    let mut b = n
+    while b > a {
+        let c = s.substring(b - 1, b)
+        if c == " " || c == "\t" || c == "\n" || c == "\r" { b = b - 1 } else { a = a }
+        if c != " " && c != "\t" && c != "\n" && c != "\r" { b = b; a = a; return s.substring(a, b) }
+    }
+    return s.substring(a, b)
+}
+
+// Version string — MUST stay in lockstep with self/main.hexa::version_str().
+// Override via env for tests; production callers leave it unset.
+fn _version_str() -> string {
+    let ov = env("HEXA_PRECOMPILE_VERSION")
+    if len(ov) > 0 { return ov }
+    return "0.1.0-dispatch"
+}
+
+// Resolve repo root: $HEXA_LANG > cwd containing self/main.hexa.
+fn _resolve_repo() -> string {
+    let h = env("HEXA_LANG")
+    if len(h) > 0 && file_exists(h + "/self/main.hexa") { return h }
+    if file_exists("./self/main.hexa") { return "." }
+    _die("cannot locate repo root (need self/main.hexa); set HEXA_LANG")
+    return ""
+}
+
+// Minimal JSON-array string extractor for the "scripts" key.
+// Format assumed (line-based, manifest under our control):
+//   "scripts": [
+//     "tool/foo.hexa",
+//     "tool/bar.hexa"
+//   ]
+// — extracts every double-quoted token between the matching brackets.
+fn _parse_scripts(body: string) -> [string] {
+    let needle = "\"scripts\""
+    let nl = len(needle)
+    let bl = len(body)
+    let mut i = 0
+    let mut start = -1
+    while i + nl <= bl {
+        if body.substring(i, i + nl) == needle { start = i; i = bl + 1 } else { i = i + 1 }
+    }
+    if start < 0 { _die("manifest missing \"scripts\" key") }
+    // Find '[' after needle.
+    let mut j = start + nl
+    while j < bl && body.substring(j, j + 1) != "[" { j = j + 1 }
+    if j >= bl { _die("manifest \"scripts\" not followed by '['") }
+    // Find matching ']'.
+    let mut k = j + 1
+    while k < bl && body.substring(k, k + 1) != "]" { k = k + 1 }
+    if k >= bl { _die("manifest \"scripts\" array not terminated") }
+    // Extract quoted strings between j+1 and k.
+    let arr_body = body.substring(j + 1, k)
+    let ab_len = len(arr_body)
+    let mut out = []
+    let mut p = 0
+    while p < ab_len {
+        if arr_body.substring(p, p + 1) == "\"" {
+            let mut q = p + 1
+            while q < ab_len && arr_body.substring(q, q + 1) != "\"" { q = q + 1 }
+            if q < ab_len {
+                let tok = arr_body.substring(p + 1, q)
+                if len(tok) > 0 { out.push(tok) }
+                p = q + 1
+            } else {
+                p = ab_len + 1
+            }
+        } else {
+            p = p + 1
+        }
+    }
+    return out
+}
+
+// Compute the cache key matching self/main.hexa cmd_run.
+fn _cache_key(repo: string, rel: string) -> string {
+    let abs = repo + "/" + rel
+    if !file_exists(abs) { _die("manifest entry missing on disk: " + rel) }
+    let h = sha256_file(abs)
+    return h.substring(0, 16) + "_" + _version_str()
+}
+
+fn _hexa_bin() -> string {
+    let av0 = args()
+    let mut exe = ""
+    if len(av0) > 0 { exe = av0[0] }
+    // Find a real `hexa` binary — prefer install_dir/hexa, fall back to PATH.
+    if len(exe) > 0 {
+        let real = to_string(exec("realpath " + _shq(exe) + " 2>/dev/null")).trim()
+        if len(real) > 0 {
+            let dn = to_string(exec("dirname " + _shq(real))).trim()
+            let cand = dn + "/hexa"
+            if file_exists(cand) { return cand }
+        }
+    }
+    let path_hexa = to_string(exec("command -v hexa 2>/dev/null")).trim()
+    if len(path_hexa) > 0 { return path_hexa }
+    _die("cannot locate `hexa` binary on PATH or via argv[0]")
+    return ""
+}
+
+fn _flag(name: string) -> bool {
+    let a = args()
+    let n = len(a)
+    let mut i = 1
+    while i < n {
+        if a[i] == name { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn main() {
+    let repo = _resolve_repo()
+    let manifest_path = repo + "/tool/precompile.json"
+    if !file_exists(manifest_path) { _die("missing " + manifest_path) }
+    let body = to_string(read_file(manifest_path))
+    let scripts = _parse_scripts(body)
+    let n = len(scripts)
+    if n == 0 { _die("manifest \"scripts\" array is empty") }
+
+    let mut out_dir = env("HEXA_PRECOMPILE_OUT")
+    if len(out_dir) == 0 { out_dir = repo + "/release/precompile" }
+    let _mk = exec("mkdir -p " + _shq(out_dir) + " 2>/dev/null")
+
+    let list_only = _flag("--list")
+    let verify_only = _flag("--verify")
+
+    let ver = _version_str()
+    println("build_precompile: manifest=" + manifest_path)
+    println("build_precompile: out_dir=" + out_dir)
+    println("build_precompile: version=" + ver)
+    println("build_precompile: scripts=" + to_string(n))
+
+    if list_only {
+        let mut i = 0
+        while i < n {
+            let rel = scripts[i]
+            let key = _cache_key(repo, rel)
+            println("  " + rel + " -> hexa_run." + key)
+            i = i + 1
+        }
+        return
+    }
+
+    if verify_only {
+        let mut ok = 0
+        let mut miss = 0
+        let mut i = 0
+        while i < n {
+            let rel = scripts[i]
+            let key = _cache_key(repo, rel)
+            let p = out_dir + "/hexa_run." + key
+            if file_exists(p) {
+                println("  HIT  " + rel + " -> " + p)
+                ok = ok + 1
+            } else {
+                println("  MISS " + rel + " -> " + p)
+                miss = miss + 1
+            }
+            i = i + 1
+        }
+        println("build_precompile: verify ok=" + to_string(ok) + " miss=" + to_string(miss))
+        if miss > 0 { exit(1) }
+        return
+    }
+
+    let hexa_bin = _hexa_bin()
+    println("build_precompile: hexa=" + hexa_bin)
+
+    let mut built = 0
+    let mut skipped = 0
+    let mut failed = 0
+    let mut i = 0
+    while i < n {
+        let rel = scripts[i]
+        let abs = repo + "/" + rel
+        let key = _cache_key(repo, rel)
+        let target = out_dir + "/hexa_run." + key
+        if file_exists(target) {
+            println("  SKIP " + rel + " (already at " + target + ")")
+            skipped = skipped + 1
+        } else {
+            let staging = target + ".tmp." + to_string(mono_ns())
+            let cmd = _shq(hexa_bin) + " build " + _shq(abs) + " -o " + _shq(staging) + " 2>&1; echo \"__BRC__=$?\""
+            let out = to_string(exec(cmd))
+            let mark = "__BRC__="
+            let ml = len(mark)
+            let mut mi = -1
+            let mut sj = len(out) - ml
+            while sj >= 0 {
+                if out.substring(sj, sj + ml) == mark { mi = sj; sj = -1 } else { sj = sj - 1 }
+            }
+            let mut rc = 1
+            if mi >= 0 {
+                let mut rs = out.substring(mi + ml, len(out))
+                let rsl = len(rs)
+                if rsl > 0 && rs.substring(rsl - 1, rsl) == "\n" { rs = rs.substring(0, rsl - 1) }
+                rc = rs.parse_int()
+            }
+            if rc == 0 && file_exists(staging) {
+                let _rn = exec("mv -f " + _shq(staging) + " " + _shq(target) + " 2>/dev/null")
+                println("  OK   " + rel + " -> " + target)
+                built = built + 1
+            } else {
+                let _cl = exec("rm -f " + _shq(staging) + " 2>/dev/null")
+                eprintln("  FAIL " + rel + " (rc=" + to_string(rc) + ")")
+                if mi > 0 { eprintln(out.substring(0, mi)) }
+                failed = failed + 1
+            }
+        }
+        i = i + 1
+    }
+
+    println("build_precompile: built=" + to_string(built) + " skipped=" + to_string(skipped) + " failed=" + to_string(failed))
+    if failed > 0 { exit(1) }
+}
+

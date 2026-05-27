@@ -1,0 +1,47 @@
+#!hexa strict
+// gpgpu_n6/projection/webgpu.hexa — vendor backend 6/6: W3C WebGPU.
+//
+// canon: ~/core/canon/domains/compute/gpgpu/gpgpu.md §5.1 (vector add).
+// IR substrate: WGSL → SPIR-V/MSL/HLSL via Tint/Naga (φ=0 dominantly).
+// Host = JavaScript / WebAssembly. Kernel = WGSL.
+// Sandboxed: no raw pointers, bounded resource handles, validation by
+// construction (canon §7.4).
+//
+// Phase F iter 3 — WebGPU GPUComputePassEncoder dispatch emission.
+
+use "stdlib/hal/compute"
+
+let WEBGPU_VENDOR = "WebGPU"
+let WEBGPU_IR     = "WGSL→SPIR-V/MSL/HLSL"
+let WEBGPU_LATEST = "W3C CR Draft (v2 in dev, 2026)"
+
+fn webgpu_project_launch(
+    _kern_name: str,
+    grid_x: int, grid_y: int, grid_z: int,
+    _wg_x: int, _wg_y: int, _wg_z: int,
+    _barrier_scope: int,
+    _subgroup_w: int
+) -> str {
+    // WebGPU: workgroup size is declared in WGSL via @workgroup_size(...);
+    // host dispatchWorkgroups counts workgroups (= grid_*), not threads.
+    return "pass.dispatchWorkgroups(" + str(grid_x) + ", " + str(grid_y) + ", " + str(grid_z) + ");"
+}
+
+fn webgpu_project_vector_add(n: int) -> str {
+    let wg_count = (n + 255) / 256   // ceil
+    return "// WGSL: @compute @workgroup_size(256)\n" +
+           "pass.dispatchWorkgroups(" + str(wg_count) + ");"
+}
+
+fn webgpu_capabilities() -> [str] {
+    return [
+        "sandboxed (no raw pointers, validated handles)",
+        "WGSL shading language",
+        "Tint/Naga translator → SPIR-V/MSL/HLSL",
+        "compute + render pipelines",
+        "browser ubiquity (Safari 26 / Chrome / Edge / Firefox)",
+        "v2 in dev (subgroup + tensor extensions in flight)"
+    ]
+}
+
+fn webgpu_meta() -> [str] { return [WEBGPU_VENDOR, WEBGPU_IR, WEBGPU_LATEST, str(webgpu_capabilities().len())] }

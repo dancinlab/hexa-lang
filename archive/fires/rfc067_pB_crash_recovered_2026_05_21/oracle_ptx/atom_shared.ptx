@@ -1,0 +1,14 @@
+.version 7.0
+.target sm_80
+.address_size 64
+.shared .align 4 .b8 _sh[16];
+.visible .entry hexa_atom_shared()
+{
+    .reg .b64 %rd1;
+    .reg .b32 %r0, %r1;
+    mov.u64 %rd1, _sh;
+    cvta.shared.u64 %rd1, %rd1;
+    mov.u32 %r0, 1;
+    atom.shared.add.s32 %r1, [%rd1], %r0;
+    ret;
+}

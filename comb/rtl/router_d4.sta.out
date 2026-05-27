@@ -1,0 +1,50 @@
+ABC RESULTS:   sky130_fd_sc_hd__mux4_2 cells:      318
+ABC RESULTS:   sky130_fd_sc_hd__nand2_1 cells:      270
+ABC RESULTS:   sky130_fd_sc_hd__nand2b_1 cells:       11
+ABC RESULTS:   sky130_fd_sc_hd__nand3_1 cells:       41
+ABC RESULTS:   sky130_fd_sc_hd__nand3b_1 cells:        1
+ABC RESULTS:   sky130_fd_sc_hd__nand4_1 cells:       67
+ABC RESULTS:   sky130_fd_sc_hd__nand4b_1 cells:        2
+ABC RESULTS:   sky130_fd_sc_hd__nor2_1 cells:       68
+ABC RESULTS:   sky130_fd_sc_hd__nor2b_1 cells:       11
+ABC RESULTS:   sky130_fd_sc_hd__nor3_1 cells:       23
+ABC RESULTS:   sky130_fd_sc_hd__nor3b_1 cells:        6
+ABC RESULTS:   sky130_fd_sc_hd__nor4_1 cells:       11
+ABC RESULTS:   sky130_fd_sc_hd__nor4b_1 cells:        7
+ABC RESULTS:   sky130_fd_sc_hd__o2111a_1 cells:        2
+ABC RESULTS:   sky130_fd_sc_hd__o211ai_1 cells:        5
+ABC RESULTS:   sky130_fd_sc_hd__o21a_1 cells:        2
+ABC RESULTS:   sky130_fd_sc_hd__o21ai_0 cells:       17
+ABC RESULTS:   sky130_fd_sc_hd__o21ba_1 cells:        1
+ABC RESULTS:   sky130_fd_sc_hd__o21bai_1 cells:        1
+ABC RESULTS:   sky130_fd_sc_hd__o221ai_1 cells:        1
+ABC RESULTS:   sky130_fd_sc_hd__o22a_1 cells:        1
+ABC RESULTS:   sky130_fd_sc_hd__o22ai_1 cells:       14
+ABC RESULTS:   sky130_fd_sc_hd__o2bb2ai_1 cells:        1
+ABC RESULTS:   sky130_fd_sc_hd__o311ai_0 cells:        1
+ABC RESULTS:   sky130_fd_sc_hd__o31a_1 cells:        1
+ABC RESULTS:   sky130_fd_sc_hd__o31ai_1 cells:        3
+ABC RESULTS:   sky130_fd_sc_hd__o41ai_1 cells:        1
+ABC RESULTS:   sky130_fd_sc_hd__or3_1 cells:        9
+ABC RESULTS:   sky130_fd_sc_hd__or3b_1 cells:        1
+ABC RESULTS:   sky130_fd_sc_hd__or4b_1 cells:        2
+ABC RESULTS:   sky130_fd_sc_hd__xnor2_1 cells:       24
+ABC RESULTS:   sky130_fd_sc_hd__xor2_1 cells:       26
+ABC RESULTS:        internal signals:     2299
+ABC RESULTS:           input signals:     1332
+ABC RESULTS:          output signals:      201
+Removing temp directory.
+Removing global temp directory.
+
+5. Executing STA pass (static timing analysis).
+
+Syntax error in command `sta -liberty /tmp/sky130/skywater-pdk-libs-sky130_fd_sc_hd/timing/sky130_fd_sc_hd__tt_025C_1v80.lib':
+
+    sta [options] [selection]
+
+This command performs static timing analysis on the design. (Only considers
+paths within a single module, so the design must be flattened.)
+
+ERROR: Command syntax error: Unknown option or option in arguments.
+> sta -liberty /tmp/sky130/skywater-pdk-libs-sky130_fd_sc_hd/timing/sky130_fd_sc_hd__tt_025C_1v80.lib
+>     ^

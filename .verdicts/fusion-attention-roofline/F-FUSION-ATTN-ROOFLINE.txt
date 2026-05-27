@@ -1,0 +1,111 @@
+F-FUSION-ATTN-ROOFLINE -- VERDICT (g3 honest, real measurement on ubu-2 RTX 5070 sm_120)
+================================================================================
+DATE: 2026-05-25
+HOST: ubu-2 RTX 5070 sm_120 driver=13000 (48 SMs, 5 MiB used, 0 compute procs at fire = uncontended)
+TOOLCHAIN: nvcc 12.9 / ptxas 12.9
+PRE-REGISTERED TARGET: ratio <= 1.10 vs cuBLAS-TC on at least one shape (N in {2048,4096}, d=64),
+                      AND report achieved % of sm_120 FP16 tensor-core roofline
+
+VERDICT TIER: ORANGE -- INSUFFICIENT (target NOT hit) + QUANTIFIED-CLOSED-NEGATIVE finding
+              The N204 roofline-GEMM toolkit (TMA + 64x64 mma.sync large tiles + double-buffer
+              + V-transpose for the proven non-trans path) does NOT transplant cleanly to
+              fused attention. Round 7 REGRESSED the wall vs round-4/5.
+
+GAP-CLOSURE TRAJECTORY
+  round-3 9.4-15.5x (scalar)
+  round-4 3.4-5.0x  (BK=256 multi-CTA WMMA, 16-row tile)
+  round-5 3.47x     (KV-split flash-decoding, small-N parity)
+  ROUND-7 5.3-6.9x  (TMA + double-buffer + 64x64 mma.sync) -- REGRESSION
+
+PER-SHAPE MEASURED (20 warmup + 200 timed cuEvent median, GPU 0% util pre-fire)
+  N=2048: fused 0.324864 ms  cuBLAS-TC 0.061568 ms  ratio 5.276x  fused 3.31 TFLOPS
+           numeric: max_abs 3.41e-5  rel_rowscale 6.11e-4  rms_rel 2.72e-4  PASS
+           grid 32 CTAs vs 48 SMs (66.7% SM coverage), 1 CTA/SM (smem-bound occupancy)
+  N=4096: fused 1.281312 ms  cuBLAS-TC 0.186624 ms  ratio 6.866x  fused 3.35 TFLOPS
+           numeric: max_abs 3.12e-5  rel_rowscale 7.14e-4  rms_rel 2.72e-4  PASS
+           grid 64 CTAs vs 48 SMs, 1 CTA/SM -> all SMs 1-CTA + 16 CTAs second wave
+
+ROOFLINE %
+  Stated assumptions (sm_120 RTX 5070 from GPU.md sec1f caps): 48 SM, 2.542 GHz, 192-bit bus.
+  Achievable FP16 tensor-core ceiling = cuBLAS HGEMM saturation ~70.2 TFLOPS (GPU.md sec1g N204).
+  Theoretical FP16-TC peak (48 SM x 4 TC x 256 FMA x 2 FLOP x 2.542 GHz) = 249.9 TFLOPS.
+  N=2048: 3.31 TFLOPS = 4.71% of cuBLAS ceiling, 1.32% of theoretical TC peak.
+  N=4096: 3.35 TFLOPS = 4.77% of cuBLAS ceiling, 1.34% of theoretical TC peak.
+  cuBLAS-TC 3-launch attention reaches 17.4 / 23.0 TFLOPS (24.8% / 32.8% of its own HGEMM ceiling).
+
+DOMINANT RESIDUAL (attributed via direct measurement)
+  cuOccupancyMaxActiveBlocksPerMultiprocessor: max_active_CTAs_per_SM = 1
+    (smem/CTA = 99136 B, smem_optin/SM = 102400 B)
+  At N=2048: only 32 of 48 SMs active (1 CTA each) -- 66.7% SM coverage.
+  At N=4096: all 48 SMs 1-CTA + 16 CTAs queued for second wave (serialization).
+  -> The 99 KB smem footprint (Q + K[2] + V[2] + V^T[2] + S + P + O + mlc) forces
+     1 CTA/SM, crushing the 8-CTAs/SM occupancy that the round-4 BM=16 kernel had.
+
+DOUBLE-BUFFER ATTRIBUTION
+  Single-buffer occupancy-test variant (same kernel, K/V/V^T single-slot, 74560 B smem):
+    wall 0.324896 ms -- IDENTICAL to double-buffered v2 (0.324864 ms)
+  -> double-buffer provides ZERO benefit here: the kernel is not DMA-bound; it is
+     occupancy/compute-bound at 1 CTA/SM. The TMA cp.async.bulk.tensor load overlap
+     opportunity is absent because the kernel doesn't have parallel compute to hide
+     the loads behind (only 1 CTA, 4 warps, with mma chain that can't overlap its
+     own smem dependencies on the SAME slot).
+
+WHICH N204 TECHNIQUE MOVED IT (rank by direct attribution)
+  (a) 64x64 mma.sync large tiles  -- BACKFIRED. The bigger output tile multiplies the
+       smem need (S 64x64 f32 = 16 KB vs round-4's 16x256 f32 = 16 KB ... actually same
+       size for S, but the WHOLE Q+K+V+Vt+P+O resident set scales with BM=64).
+  (b) TMA cp.async.bulk.tensor   -- NEUTRAL. Latency hidden by mbarriers; but only 1
+       CTA/SM means no occupancy to absorb the wait. SAVED HBM transactions (5 TMA
+       vs the round-4's 16-subtile-per-block global loads) but the win is canceled
+       by occupancy loss.
+  (c) double-buffer K/V          -- ZERO. (measured above)
+  (d) SWIZZLE_128B               -- NOT APPLIED (v2 uses SWIZZLE_NONE to avoid the
+       trans-fragment hazard discovered during the mma probe campaign).
+  (e) V-transpose in smem        -- COST: extra 8 KB smem + 4096-element transpose
+       per KV block. Necessary for the proven non-trans mma path (probe2/probe3
+       empirically established ldmatrix-trans gives a block-wise transpose, not a
+       full transpose, ruling out the trans path for P.V).
+
+KEY DISCOVERY (genuine new knowledge, paper_significance candidate but ORANGE -> NO paper)
+  The mma.sync.m16n8k16 trans/non-trans + ldmatrix combination was EMPIRICALLY
+  established for the fused-attention case:
+    probe2: non-trans ldmatrix B + mma.row.col => C = A . B^T  (err 1e-7, MATCH)
+    probe3: P.V via V pre-transpose + non-trans mma => P.V    (err 6e-8, MATCH)
+  This SUPERSEDES my initial design which used .trans for QK^T (matching the N204
+  SGEMM precedent). The .trans modifier performs only an 8x8-block transpose
+  within each 16x16 ldmatrix.x4 tile -- NOT a full 16x16 transpose -- making it
+  unsuitable for the P.V GEMM's contraction-along-B-rows requirement.
+
+CLOSED-NEGATIVE FINDING (terminal)
+  "The N204 standalone-GEMM roofline toolkit (large 64x64 tile + double-buffer +
+   TMA bulk loads) DOES NOT TRANSPLANT to fused flash-attention. Fused attention
+   has a fundamentally different smem residency profile (Q + K + V + V^T + S + P + O
+   simultaneously resident, all O(BM x BK) or O(BM x d)) that scales smem by
+   BM^2 -- so the GEMM-optimal BM=64 forces 1 CTA/SM occupancy, regressing the
+   wall from 3.47x (round-5, BM=16) to 5.3-6.9x (round-7, BM=64) despite a
+   CORRECT and CORRECTLY-NUMERIC implementation of TMA + double-buffer + mma.sync."
+  Binding constraint identified: smem-bound occupancy at 1 CTA/SM dominates.
+  Path forward (NOT this round): a SHALLOWER tile (BM=32 or BM=16 with multi-warp)
+  + REGISTER-RESIDENT O (avoid smem O tile) + selective TMA (Q only or interleaved)
+  could restore occupancy WITHOUT abandoning TMA loads. This is the round-8 wedge.
+
+INVARIANTS UPHELD
+  - codegen/*.hexa UNTOUCHED (hand-emit PTX path only)
+  - no LLVM (@F f1)
+  - no C-transpile changes (@F f2)
+  - S tile NEVER materialized to HBM (resident in smem) -- structural moat preserved
+  - 1 launch (vs cuBLAS-TC 3 launches) -- launch-count moat preserved
+  - pure ASCII PTX, ptxas-clean sm_120a (68 regs, 0 spills, 1 barrier, 8 B stack)
+  - mbarrier double-buffer parity protocol verified (no race observed over 220 launches)
+
+ARTIFACT
+  archive/fires/fusion_attention_roofline_2026_05_25/
+    flash_attn_tma_v2_{2048,4096}.ptx   -- the round-7 kernel (proven correct numeric)
+    flash_attn_tma_sb_{2048,4096}.ptx   -- single-buffer occupancy-attribution variant
+    fa_mma_oracle.cu                    -- mma fragment numeric oracle (PASS)
+    fa_roofline_host.c                  -- TMA host + cuBLAS-TC baseline + roofline %
+    probe2.cu / probe3.cu / mma_probe.cu -- mma fragment-map probes (the trans semantics
+                                          discovery campaign)
+    gen_*_ptx.hexa                      -- PTX generators (provenance)
+    result_partial.json / result.json   -- per-shape measured data
+    fire.log                            -- full session log

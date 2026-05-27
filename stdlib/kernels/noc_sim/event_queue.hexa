@@ -1,0 +1,277 @@
+// stdlib/kernels/noc_sim/event_queue.hexa — D80 g_hexa_only pilot
+// (demiurge AGENTS.tape @D g_hexa_only — ultimate form).
+//
+// FOURTH sample of the hexa-native parity port pattern (after
+// solar_kernel, mc_slab_demo, dft_naive). Clean-room hexa-native
+// discrete-event scheduler: a binary min-heap keyed on event time
+// (float seconds) with stable secondary ordering by insertion
+// sequence. The companion oracle in `event_queue.py` mirrors the
+// algorithm with Python's `heapq` — both sides must produce
+// bit-identical pop sequences for the same insert sequence.
+//
+// Layer (ABSORPTION.md ① / demiurge design.md D72):
+//   ①a kernel — THIS FILE. Domain-agnostic. No flit / no VC / no
+//                router pipeline — pure "insert(t, id, kind) /
+//                pop_next() / now() / has_next()" interface that any
+//                discrete-event simulation (NoC, queueing network,
+//                actor system) can ride.
+//   ①b adapter — none yet. The existing analytic NoC sweep
+//                (`stdlib/kernels/noc_sim/sweep.hexa`) is mean-field;
+//                a future event-driven flit simulator would compose
+//                this kernel with iq_router's pipeline timing model
+//                to produce a BookSim2-style cycle-accurate trace.
+//                That is intentionally out of scope for the pilot —
+//                this lands the SCHEDULER primitive, not the full
+//                event-driven NoC sim.
+//
+// @version 0.1.0
+// @capabilities [pure, mutable_state]
+// @stability stage-2 substrate (clean-room re-derivation, no external
+//   priority-queue dep). Substrate parity against the Python companion
+//   verified by `event_queue_test.hexa` — same insert sequence yields
+//   the same (time, id, kind) pop sequence on both sides.
+// @since 2026-05-20
+//
+// CLEAN-ROOM PROVENANCE
+//   This module carries NO BookSim2 / OMNeT++ / NS-3 / SimPy code.
+//   The binary min-heap is a textbook data structure (Williams 1964
+//   "Algorithm 232: Heapsort", CACM 7(6); Cormen-Leiserson-Rivest-
+//   Stein "Introduction to Algorithms" §6 heap operations). The
+//   array-as-heap layout (parent at i, children at 2i+1 / 2i+2) is
+//   the standard 0-indexed encoding.
+//
+//   - upstream code   : none (clean-room re-derivation)
+//   - upstream spec   : CLRS §6.5 priority-queue operations
+//                       (HEAP-INSERT / HEAP-EXTRACT-MIN).
+//   - parity baseline : Python `heapq` (cpython stdlib) on
+//                       (time, seq) keys. Same ordering, same pop
+//                       sequence — verified in `event_queue.py`.
+//
+// HONESTY (g3 — non-negotiable, inherited by every caller):
+//   * The scheduler IS the algorithm — pure data-structure semantics.
+//     There is no measurement here; "absorbed" applies only when a
+//     consumer uses this scheduler to drive a real DES that is
+//     itself parity-verified against an external substrate (BookSim2
+//     event trace, ns-3 packet trace, etc.).
+//   * Float time ties — the min-heap is keyed first on `time`, then
+//     on the monotone-increasing insertion sequence number `seq`.
+//     This guarantees deterministic, reproducible pop order even
+//     when two events share an exact event time (common in
+//     synchronous DES). Both this kernel and the Python oracle use
+//     the same convention.
+//   * Time MUST be non-negative and non-decreasing at the consumer
+//     layer (events scheduled in the past are a caller bug). The
+//     kernel itself does NOT enforce this; it will happily extract a
+//     past event. The honesty gate lives in the ①b adapter.
+//
+// Surface:
+//   struct Event { time: float, id: int, kind: int, seq: int }
+//   struct EventQueue { heap: [Event], next_seq: int }
+//
+//   pub fn eq_new() -> EventQueue
+//   pub fn eq_push(q: EventQueue, time: float, id: int, kind: int)
+//                  -> EventQueue
+//   pub fn eq_pop(q: EventQueue) -> [EventQueue, Event]
+//   pub fn eq_peek(q: EventQueue) -> Event   // top without remove
+//   pub fn eq_size(q: EventQueue) -> int
+//   pub fn eq_empty(q: EventQueue) -> bool
+//
+// The EventQueue is value-passed (immutable struct), so each
+// push/pop returns a new value. Hexa arrays are persistent under
+// `.push` so this is O(log n) per op, same as a mutable heap.
+
+// ── public types ─────────────────────────────────────────────────────
+
+/// One scheduled event. `seq` is the monotone insertion counter that
+/// breaks ties at the same `time` — guarantees FIFO at equal times.
+struct Event {
+    time: float,
+    id:   int,
+    kind: int,
+    seq:  int,
+}
+
+/// Min-heap of Event by (time, seq). 0-indexed binary heap: parent at
+/// floor((i-1)/2), children at 2i+1 / 2i+2.
+struct EventQueue {
+    heap:     [Event],
+    next_seq: int,
+}
+
+/// Composite result of `eq_pop` so callers can read the new queue +
+/// the popped event in one struct (hexa arrays of mixed struct types
+/// don't index back cleanly).
+struct EqPopResult {
+    q:  EventQueue,
+    ev: Event,
+    ok: bool,
+}
+
+// ── private heap helpers ─────────────────────────────────────────────
+
+/// True iff a < b in the (time, seq) lexicographic order.
+fn _ev_less(a: Event, b: Event) -> bool {
+    if a.time < b.time { return true }
+    if a.time > b.time { return false }
+    return a.seq < b.seq
+}
+
+/// Rebuild a [Event] with positions a and b swapped, using a fresh
+/// push-only construction (hexa arrays of structs don't always
+/// permit in-place index assignment, so we always rebuild). O(N) per
+/// swap — fine for the small heaps (N ≤ 1024) this kernel targets.
+fn _swap_events(h: [Event], a: int, b: int) -> [Event] {
+    let n = len(h)
+    let mut out: [Event] = []
+    let mut i = 0
+    while i < n {
+        if i == a {
+            out = out.push(h[b])
+        } else if i == b {
+            out = out.push(h[a])
+        } else {
+            out = out.push(h[i])
+        }
+        i = i + 1
+    }
+    return out
+}
+
+/// Sift the element at index i UP the heap until the heap-order is
+/// restored. CLRS HEAP-INSERT helper.
+fn _sift_up(heap: [Event], i: int) -> [Event] {
+    let mut h = heap
+    let mut idx = i
+    while idx > 0 {
+        let parent = (idx - 1) / 2
+        if _ev_less(h[idx], h[parent]) {
+            h = _swap_events(h, idx, parent)
+            idx = parent
+        } else {
+            return h
+        }
+    }
+    return h
+}
+
+/// Sift the element at index 0 DOWN the heap until the heap-order is
+/// restored. CLRS MIN-HEAPIFY iterative form.
+fn _sift_down(heap: [Event], n: int) -> [Event] {
+    let mut h = heap
+    let mut idx = 0
+    let mut keep_going = true
+    while keep_going {
+        let l = 2 * idx + 1
+        let r = 2 * idx + 2
+        let mut smallest = idx
+        if l < n {
+            if _ev_less(h[l], h[smallest]) { smallest = l }
+        }
+        if r < n {
+            if _ev_less(h[r], h[smallest]) { smallest = r }
+        }
+        if smallest == idx {
+            keep_going = false
+        } else {
+            h = _swap_events(h, idx, smallest)
+            idx = smallest
+        }
+    }
+    return h
+}
+
+/// Drop the last element of an Event array using push-only rebuild
+/// (avoids any reliance on `.pop()` semantics for struct arrays).
+fn _drop_last_event(h: [Event]) -> [Event] {
+    let n = len(h)
+    if n == 0 { return h }
+    let mut out: [Event] = []
+    let mut i = 0
+    while i < n - 1 {
+        out = out.push(h[i])
+        i = i + 1
+    }
+    return out
+}
+
+/// Replace the element at index 0 with `ev`, push-only rebuild.
+fn _set_head(h: [Event], ev: Event) -> [Event] {
+    let n = len(h)
+    if n == 0 { return h.push(ev) }
+    let mut out: [Event] = []
+    out = out.push(ev)
+    let mut i = 1
+    while i < n {
+        out = out.push(h[i])
+        i = i + 1
+    }
+    return out
+}
+
+// ── public API ───────────────────────────────────────────────────────
+
+/// Construct an empty event queue.
+pub fn eq_new() -> EventQueue {
+    return EventQueue { heap: [], next_seq: 0 }
+}
+
+/// Push (time, id, kind). The kernel assigns the monotone `seq`
+/// internally so callers never have to track it. Returns the new
+/// queue value (immutable-struct API; hexa array `.push` is O(1)
+/// amortized on persistent arrays).
+pub fn eq_push(q: EventQueue, time: float, id: int, kind: int) -> EventQueue {
+    let new_seq = q.next_seq
+    let ev = Event { time: time, id: id, kind: kind, seq: new_seq }
+    let mut h = q.heap.push(ev)
+    let n = len(h)
+    h = _sift_up(h, n - 1)
+    return EventQueue { heap: h, next_seq: new_seq + 1 }
+}
+
+/// Pop the smallest-time event. Returns `EqPopResult { q, ev, ok }`
+/// — the new queue value, the popped event, and `ok=false` iff the
+/// queue was empty (in which case `ev` is the sentinel with
+/// `time = -1.0` and `id = -1`, so the caller can detect drainage
+/// without aborting).
+pub fn eq_pop(q: EventQueue) -> EqPopResult {
+    let n = len(q.heap)
+    if n == 0 {
+        let sentinel = Event { time: 0.0 - 1.0, id: -1, kind: -1, seq: -1 }
+        return EqPopResult { q: q, ev: sentinel, ok: false }
+    }
+    let top = q.heap[0]
+    if n == 1 {
+        let empty = EventQueue { heap: [], next_seq: q.next_seq }
+        return EqPopResult { q: empty, ev: top, ok: true }
+    }
+    // Move the last element to position 0, drop the now-duplicated
+    // tail, then sift down. All operations are push-only rebuilds
+    // (see `_swap_events`, `_drop_last_event`, `_set_head`) so they
+    // don't depend on in-place struct-array element assignment.
+    let last = q.heap[n - 1]
+    let mut h = _set_head(q.heap, last)
+    h = _drop_last_event(h)
+    h = _sift_down(h, n - 1)
+    let q2 = EventQueue { heap: h, next_seq: q.next_seq }
+    return EqPopResult { q: q2, ev: top, ok: true }
+}
+
+/// Peek at the smallest-time event without removing it. Same
+/// sentinel convention as `eq_pop` for an empty queue.
+pub fn eq_peek(q: EventQueue) -> Event {
+    let n = len(q.heap)
+    if n == 0 {
+        return Event { time: 0.0 - 1.0, id: -1, kind: -1, seq: -1 }
+    }
+    return q.heap[0]
+}
+
+/// Number of pending events.
+pub fn eq_size(q: EventQueue) -> int {
+    return len(q.heap)
+}
+
+/// True iff there are no pending events.
+pub fn eq_empty(q: EventQueue) -> bool {
+    return len(q.heap) == 0
+}

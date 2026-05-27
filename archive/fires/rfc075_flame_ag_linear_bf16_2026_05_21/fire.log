@@ -1,0 +1,26 @@
+==== mode 1: default FP64 CPU baseline ====
+[harness] shape B=128 D=128 H=256 C=64
+[harness] HEXA_METAL=<unset> HEXA_BF16=<unset>
+[harness] fwd1 M·K=16384 K·N=32768 (gate 8192)
+[harness] fwd2 M·K=32768 K·N=16384 (gate 8192)
+JSON {"mode": "FP64-CPU", "metal": "unset", "bf16": "unset", "y": {"max_abs": 5.589461e-06, "max_rel": 5.916846e-08, "max_rel_norm": 3.457118e-08, "max_abs_ref": 1.616798e+02}, "metric": "max_rel", "err": 5.916846e-08, "tol": 1e-06}
+F-RFC075-FLAME-AG-LINEAR-DEFAULT-NUMERIC-EQ PASS  mode=FP64-CPU shape=B128·D128·H256·C64  y.max_abs=5.589e-06 y.max_rel=5.917e-08 tol=1e-06
+rc=0
+
+==== mode 2: HEXA_METAL=1 FP32 GPU (N40 control) ====
+[harness] shape B=128 D=128 H=256 C=64
+[harness] HEXA_METAL=1 HEXA_BF16=<unset>
+[harness] fwd1 M·K=16384 K·N=32768 (gate 8192)
+[harness] fwd2 M·K=32768 K·N=16384 (gate 8192)
+JSON {"mode": "FP32-GPU", "metal": "1", "bf16": "unset", "y": {"max_abs": 6.205128e-05, "max_rel": 1.091451e-03, "max_rel_norm": 3.837912e-07, "max_abs_ref": 1.616798e+02}, "metric": "max_rel", "err": 1.091451e-03, "tol": 5e-03}
+F-RFC075-FLAME-AG-LINEAR-FP32-NUMERIC-EQ PASS  mode=FP32-GPU shape=B128·D128·H256·C64  y.max_abs=6.205e-05 y.max_rel=1.091e-03 tol=5e-03
+rc=0
+
+==== mode 3: HEXA_METAL=1 + HEXA_BF16=1 bf16 round + FP32 GPU ====
+[harness] shape B=128 D=128 H=256 C=64
+[harness] HEXA_METAL=1 HEXA_BF16=1
+[harness] fwd1 M·K=16384 K·N=32768 (gate 8192)
+[harness] fwd2 M·K=32768 K·N=16384 (gate 8192)
+JSON {"mode": "bf16+FP32-GPU", "metal": "1", "bf16": "1", "y": {"max_abs": 3.864656e-01, "max_rel": 3.939114e+01, "max_rel_norm": 2.390315e-03, "max_abs_ref": 1.616798e+02}, "metric": "max_rel_norm", "err": 2.390315e-03, "tol": 1e-01}
+F-RFC075-FLAME-AG-LINEAR-BF16-NUMERIC-EQ PASS  mode=bf16+FP32-GPU shape=B128·D128·H256·C64  y.max_abs=3.865e-01 y.max_rel_norm=2.390e-03 tol=1e-01
+rc=0

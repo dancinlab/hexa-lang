@@ -1,0 +1,214 @@
+#!hexa strict
+// stdlib/kernels/plasma/plasma_metrics.hexa — ①a plasma kernel
+// (demiurge design.md D72 2-layer STDLIB restructure).
+//
+// Clean-room hexa-native plasma derived-parameter kernel (Stage 2 of
+// ABSORPTION.md §"hexa 포팅 단계"). Domain-AGNOSTIC: only standard
+// plasma-physics algebra (Debye / plasma-frequency / Lorentz /
+// thermal-speed / Alfvén / gyroradius) — no ITER operating point, no
+// device caveats. The ①b adapter `stdlib/fusion/plasma_metrics.hexa`
+// owns the ITER core reference scenario + honesty gate; this is the
+// kernel mirror of `kernels/circuit/`, `kernels/graph/`,
+// `kernels/fem/` under D72.
+//
+// @version 0.1.0
+// @capabilities [pure]
+// @stability stage-2 substrate (clean-room re-derivation, no plasmapy
+//   call). Substrate parity against plasmapy 2026.2.0 TBD — Stage 3
+//   parity check determines absorbed=true GATE.
+// @since 2026-05-20
+//
+// CLEAN-ROOM PROVENANCE (design.md Decision 1 / ABSORPTION.md §hexa
+// 포팅 단계 Stage 2)
+//   This module carries NO plasmapy code — it implements Bohm /
+//   Debye / Lorentz-force / Alfvén algebra directly from physics
+//   first principles. The formulae are 1920–1950s textbook plasma
+//   physics; the constants are CODATA 2022 SI exact (elementary
+//   charge, Boltzmann) + measured (electron mass, deuteron mass,
+//   vacuum permittivity, vacuum permeability).
+//
+//   - upstream code   : none (clean-room re-derivation)
+//   - upstream spec   : Krall & Trivelpiece "Principles of Plasma
+//                       Physics" (1973), Stix "Waves in Plasmas"
+//                       (1992). Mathematical facts only — no
+//                       proprietary or copyrighted material.
+//   - constants src   : CODATA 2022 recommended values
+//                       (https://physics.nist.gov/cuu/Constants/)
+//
+// HONESTY (g3 — non-negotiable):
+//   • Derived values ARE the measurement — these formulae are
+//     mathematical facts of Maxwell-Boltzmann + Lorentz algebra.
+//     Given inputs n_e, T, B, ion species, the output ω_pe / λ_D /
+//     ω_c / v_th / v_A / r_L are what such a plasma WOULD have.
+//   • BUT the *input* operating point (n_e=1e20, T_e=10 keV, B=5.3 T)
+//     is textbook ITER reference, NOT a real-device shot. So any
+//     consumer of these derived parameters must keep gate=GATE_OPEN
+//     and absorbed=false unless the inputs come from a measured
+//     Thomson-scattering / interferometry / magnetic-probe reading.
+//   • Stage 3 parity (TBD): cross-check each derived parameter
+//     against plasmapy 2026.2.0 for the ITER_core_reference scenario
+//     within a tolerance (target: ±1e-9 relative for non-relativistic
+//     parameters; ~2 % expected gap on gyroradius at T_e = 10 keV due
+//     to plasmapy's relativistic correction in gyroradius v_perp).
+//
+// Surface (all SI inputs/outputs, double-precision float):
+//   pub fn omega_pe(n_e_m3) -> rad/s
+//   pub fn omega_pi_deuteron(n_i_m3) -> rad/s
+//   pub fn lambda_d(t_e_ev, n_e_m3) -> m
+//   pub fn omega_ce(b_t) -> rad/s
+//   pub fn omega_ci_deuteron(b_t) -> rad/s
+//   pub fn v_thermal_e(t_e_ev) -> m/s
+//   pub fn v_thermal_deuteron(t_i_ev) -> m/s
+//   pub fn v_alfven_deuteron(b_t, n_i_m3) -> m/s
+//   pub fn gyroradius_e(t_e_ev, b_t) -> m
+//   pub fn gyroradius_deuteron(t_i_ev, b_t) -> m
+
+use "stdlib/core/math/float"
+
+// ── physical constants (CODATA 2022, SI) ─────────────────────────────
+
+/// Elementary charge [C] (exact per 2019 SI redefinition).
+pub fn elementary_charge() -> float { return 1.602176634e-19 }
+
+/// Boltzmann constant [J/K] (exact per 2019 SI redefinition).
+pub fn boltzmann() -> float { return 1.380649e-23 }
+
+/// Electron rest mass [kg] (CODATA 2022).
+pub fn electron_mass() -> float { return 9.1093837015e-31 }
+
+/// Deuteron (D+, ²H nucleus) rest mass [kg] (CODATA 2022 ≈ 2.01355 u).
+pub fn deuteron_mass() -> float { return 3.343583719e-27 }
+
+/// Proton rest mass [kg] (CODATA 2022).
+pub fn proton_mass() -> float { return 1.67262192369e-27 }
+
+/// Vacuum electric permittivity [F/m] (CODATA 2022, measured).
+pub fn epsilon_0() -> float { return 8.8541878128e-12 }
+
+/// Vacuum magnetic permeability [N/A²] (CODATA 2022, measured).
+pub fn mu_0() -> float { return 1.25663706212e-6 }
+
+// ── unit conversion helper ───────────────────────────────────────────
+
+/// Convert temperature in eV to Kelvin via k_B T = E (eV·e).
+/// T_K = T_eV * e / k_B.
+pub fn ev_to_kelvin(t_ev: float) -> float {
+    return t_ev * elementary_charge() / boltzmann()
+}
+
+// ── plasma frequencies ───────────────────────────────────────────────
+
+/// Electron plasma (Langmuir) frequency [rad/s].
+///   ω_pe = sqrt(n_e · e² / (ε₀ · m_e))
+/// — collective oscillation rate of electrons against fixed ion
+/// background; underpins screening, dispersion, refractive cutoff.
+pub fn omega_pe(n_e_m3: float) -> float {
+    let e = elementary_charge()
+    let m_e = electron_mass()
+    let eps0 = epsilon_0()
+    return sqrt(n_e_m3 * e * e / (eps0 * m_e))
+}
+
+/// Deuteron (D+, Z=1) plasma frequency [rad/s].
+///   ω_pi = sqrt(n_i · Z² · e² / (ε₀ · m_i))
+/// — ion analogue of ω_pe; relevant to ion-acoustic and lower-hybrid
+/// waves. Quasineutrality assumes n_i ≈ n_e for fully-ionized D+.
+pub fn omega_pi_deuteron(n_i_m3: float) -> float {
+    let e = elementary_charge()
+    let m_d = deuteron_mass()
+    let eps0 = epsilon_0()
+    return sqrt(n_i_m3 * e * e / (eps0 * m_d))
+}
+
+// ── Debye length ─────────────────────────────────────────────────────
+
+/// Electron Debye length [m].
+///   λ_D = sqrt(ε₀ · k_B · T_e / (n_e · e²))
+///       = sqrt(ε₀ · T_e_eV / (n_e · e))     (k_B T = T_eV · e)
+/// — characteristic screening distance; quasineutrality holds for
+/// scales ≫ λ_D.
+pub fn lambda_d(t_e_ev: float, n_e_m3: float) -> float {
+    let e = elementary_charge()
+    let eps0 = epsilon_0()
+    return sqrt(eps0 * t_e_ev / (n_e_m3 * e))
+}
+
+// ── cyclotron / gyrofrequencies ──────────────────────────────────────
+
+/// Electron cyclotron (gyrofrequency) [rad/s].
+///   ω_ce = |q| · B / m_e = e · B / m_e
+/// — Lorentz-force rotation rate of electrons in a magnetic field;
+/// the absolute (unsigned) value is reported, matching plasmapy.
+pub fn omega_ce(b_t: float) -> float {
+    let e = elementary_charge()
+    let m_e = electron_mass()
+    return e * b_t / m_e
+}
+
+/// Deuteron (D+, Z=1) cyclotron frequency [rad/s].
+///   ω_ci = Z · e · B / m_i
+pub fn omega_ci_deuteron(b_t: float) -> float {
+    let e = elementary_charge()
+    let m_d = deuteron_mass()
+    return e * b_t / m_d
+}
+
+// ── thermal speeds (most-probable convention) ────────────────────────
+
+/// Electron thermal speed [m/s] — most-probable (Maxwellian) speed:
+///   v_th_e = sqrt(2 · k_B · T_e / m_e)
+///          = sqrt(2 · T_e_eV · e / m_e)
+/// — matches plasmapy.thermal_speed(method="most_probable", default).
+pub fn v_thermal_e(t_e_ev: float) -> float {
+    let e = elementary_charge()
+    let m_e = electron_mass()
+    return sqrt(2.0 * t_e_ev * e / m_e)
+}
+
+/// Deuteron thermal speed [m/s] — most-probable convention.
+pub fn v_thermal_deuteron(t_i_ev: float) -> float {
+    let e = elementary_charge()
+    let m_d = deuteron_mass()
+    return sqrt(2.0 * t_i_ev * e / m_d)
+}
+
+// ── Alfvén speed ─────────────────────────────────────────────────────
+
+/// Alfvén speed for a D+ majority plasma [m/s].
+///   v_A = B / sqrt(μ₀ · n_i · m_i)
+/// — MHD wave speed along B; ignores electron-inertia and FLR
+/// corrections (valid for ω ≪ ω_ci).
+pub fn v_alfven_deuteron(b_t: float, n_i_m3: float) -> float {
+    let m_d = deuteron_mass()
+    let mu0 = mu_0()
+    return b_t / sqrt(mu0 * n_i_m3 * m_d)
+}
+
+// ── gyroradii (Larmor radii) ─────────────────────────────────────────
+
+/// Electron gyroradius (Larmor radius) [m] — non-relativistic:
+///   r_Le = v_⊥ / ω_ce,  with v_⊥ = v_th_e (most-probable)
+/// — at T_e = 10 keV, plasmapy applies a ~2 % relativistic correction
+/// (1/√(1−v²/c²) ≈ 1.020 at v ≈ 0.2 c). Stage 3 parity check will
+/// quantify the gap; this clean-room module reports the classical
+/// non-relativistic value (textbook formula).
+pub fn gyroradius_e(t_e_ev: float, b_t: float) -> float {
+    return v_thermal_e(t_e_ev) / omega_ce(b_t)
+}
+
+/// Deuteron gyroradius [m] — non-relativistic:
+///   r_Li = v_th_i / ω_ci    (D+, Z=1)
+/// — at T_i = 10 keV, deuteron is non-relativistic to high precision
+/// (v_th_i ≈ 10⁶ m/s ≪ c), so parity with plasmapy expected within
+/// constant-table noise.
+pub fn gyroradius_deuteron(t_i_ev: float, b_t: float) -> float {
+    return v_thermal_deuteron(t_i_ev) / omega_ci_deuteron(b_t)
+}
+
+// ── ①b adapter note ──────────────────────────────────────────────────
+//
+// The ITER core reference scenario aggregator (iter_core_n_e /
+// iter_core_omega_pe / iter_core_lambda_d / iter_core_v_alfven …) is
+// domain-specific (textbook ITER operating point, NOT a device shot)
+// and therefore lives in the ①b adapter `stdlib/fusion/
+// plasma_metrics.hexa`, NOT in this kernel.

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 140 140" role="img" aria-label="xeno logo">
+  <polygon points="70,8 130,42 130,98 70,132 10,98 10,42"
+           fill="none" stroke="#bf8700" stroke-width="6"
+           stroke-linejoin="round" stroke-linecap="round"/>
+  <ellipse cx="70" cy="68" rx="22" ry="28"
+           fill="none" stroke="#bf8700" stroke-width="4"/>
+  <circle cx="62" cy="60" r="4" fill="#bf8700"/>
+  <circle cx="78" cy="60" r="4" fill="#bf8700"/>
+  <path d="M 58 80 Q 70 86 82 80" fill="none" stroke="#bf8700" stroke-width="3" stroke-linecap="round"/>
+  <text x="70" y="118" text-anchor="middle"
+        font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace"
+        font-size="18" font-weight="700" fill="#bf8700"
+        letter-spacing="2">xeno</text>
+</svg>

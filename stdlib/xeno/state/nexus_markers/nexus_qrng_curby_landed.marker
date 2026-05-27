@@ -1,0 +1,4 @@
+module=modules/qrng/curby.hexa
+ts=2026-05-03T05:05:23Z
+selftest_tail=__QRNG_CURBY__ PASS
+status=IMPLEMENTED

@@ -1,0 +1,70 @@
+// ═══════════════════════════════════════════════════════════
+//  self/stdlib/os/mount.hexa -- Linux mount(2) / umount(2) wrappers
+//
+//  Thin facade over the C builtins in self/native/mount.c. The two
+//  functions match the kernel ABI shape (return 0 on success, -errno
+//  on failure) so callers can do:
+//
+//     let rc = mount("none", "/mnt/tmpfs", "tmpfs", 0, "size=64m")
+//     if rc != 0 { eprintln("mount failed: " + str(-rc)) ; return -1 }
+//
+//  Cross-platform: macOS returns -ENOSYS for both calls. The cpu-port
+//  consumers (session_linux.go, mount_linux.go) are Linux-only, so the
+//  Mac stub is graceful degradation rather than functional.
+//
+//  Flag constants below match `asm-generic/mount.h` (the canonical
+//  Linux header). They're exposed as hexa-side `let` constants instead
+//  of compile-time `const` because hexa lacks a u64 const literal
+//  form -- runtime ints fit fine since these are flag bits.
+
+// Linux MS_* flags (asm-generic/mount.h). Hex literals for clarity.
+pub let MS_RDONLY      : int = 1
+pub let MS_NOSUID      : int = 2
+pub let MS_NODEV       : int = 4
+pub let MS_NOEXEC      : int = 8
+pub let MS_SYNCHRONOUS : int = 16
+pub let MS_REMOUNT     : int = 32
+pub let MS_MANDLOCK    : int = 64
+pub let MS_DIRSYNC     : int = 128
+pub let MS_NOATIME     : int = 1024
+pub let MS_NODIRATIME  : int = 2048
+pub let MS_BIND        : int = 4096
+pub let MS_MOVE        : int = 8192
+pub let MS_REC         : int = 16384
+pub let MS_SILENT      : int = 32768
+pub let MS_POSIXACL    : int = 65536        // 1 << 16
+pub let MS_UNBINDABLE  : int = 131072       // 1 << 17
+pub let MS_PRIVATE     : int = 262144       // 1 << 18
+pub let MS_SLAVE       : int = 524288       // 1 << 19
+pub let MS_SHARED      : int = 1048576      // 1 << 20
+pub let MS_RELATIME    : int = 2097152      // 1 << 21
+pub let MS_STRICTATIME : int = 16777216     // 1 << 24
+pub let MS_LAZYTIME    : int = 33554432     // 1 << 25
+
+// umount2 flags (sys/mount.h).
+pub let MNT_FORCE       : int = 1
+pub let MNT_DETACH      : int = 2
+pub let MNT_EXPIRE      : int = 4
+pub let UMOUNT_NOFOLLOW : int = 8
+
+// Convenience: a few common bind-mount + tmpfs recipes the cpu port
+// uses, so callers don't replicate the flag set everywhere.
+pub fn bind_mount(src: string, tgt: string) -> int {
+    return mount(src, tgt, "", MS_BIND, "")
+}
+
+pub fn rec_bind_mount(src: string, tgt: string) -> int {
+    return mount(src, tgt, "", MS_BIND + MS_REC, "")
+}
+
+pub fn make_private(tgt: string) -> int {
+    return mount("none", tgt, "", MS_PRIVATE, "")
+}
+
+pub fn make_rec_private(tgt: string) -> int {
+    return mount("none", tgt, "", MS_PRIVATE + MS_REC, "")
+}
+
+pub fn mount_tmpfs(tgt: string, opts: string) -> int {
+    return mount("tmpfs", tgt, "tmpfs", 0, opts)
+}

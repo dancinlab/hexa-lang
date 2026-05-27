@@ -1,0 +1,177 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "hexa-bio/_python_bridge/spec/protac_capsid_modulator_cross_v1.schema.json",
+  "title": "protac_capsid_modulator_cross_v1 — CROSS-AXIS G1 output rows",
+  "description": "Output schema for _python_bridge/module/protac_capsid_modulator_cross.py. CROSS-AXIS integration G1: pairs PROTAC sub-axis ternary-complex hook-effect rows (mass-action + cooperativity; Douglass JACS 135:6092 2013; Gadd Nat Chem Biol 13:514 2017) side-by-side with CAPSID-ASSEMBLY-MODULATOR sub-axis kinetic-trap rows (mass-action + cooperativity under Caspar-Klug geometry; Caspar & Klug CSHSQB 27:1 1962; Zlotnick Biochemistry 33:1233 1994 / JMR 16:294 2003). The cross reports TWO DISTINCT PHENOMENA THAT SHARE MATHEMATICAL STRUCTURE — NOT a claim of mechanistic equivalence (a PROTAC degrades a protein; a CAM perturbs capsid self-assembly — very different biology). Both parent sims are imported, never re-implemented (AGENTS.tape f3). Modalities described by own drug precedent only (g3/f1): PROTAC = ARV-471 / ARV-110; CAM = lenacapavir (HIV-1, FDA 2022). No quantity derived from the n=6 lattice (g2 / f_lattice_fit). In-silico simulator-consistency only (g8/f2). Both parents are SUB-AXES; hexa-bio core-5 (QUANTUM · WEAVE · NANOBOT · RIBOZYME · VIROCAPSID) UNCHANGED.",
+  "type": "object",
+  "required": [
+    "schema",
+    "pair_id",
+    "pair_note",
+    "protac_axis",
+    "cam_axis",
+    "protac_side",
+    "cam_side",
+    "regime_signature",
+    "shared_magnitudes",
+    "framework",
+    "in_silico_caveat",
+    "illustrative_only"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "protac_capsid_modulator_cross_v1"
+    },
+    "pair_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Identifier of the paired (PROTAC-cooperativity, CAM-perturbation) ladder entry."
+    },
+    "pair_note": {
+      "type": "string",
+      "description": "Human-readable description of the paired entry."
+    },
+    "protac_axis": {
+      "type": "string",
+      "description": "PROTAC sub-axis label (:> BIFUNCTIONAL expansion-main)."
+    },
+    "cam_axis": {
+      "type": "string",
+      "description": "CAPSID-ASSEMBLY-MODULATOR sub-axis label (:> VIROCAPSID core)."
+    },
+    "protac_side": {
+      "type": "object",
+      "description": "Per-row PROTAC-side mass-action + cooperativity state from protac_sim.degrader_profile().",
+      "required": [
+        "protac",
+        "e3_ligase",
+        "kd_target_nM",
+        "kd_e3_nM",
+        "alpha_cooperativity",
+        "cooperativity_class",
+        "kd_ternary_apparent_nM",
+        "transfer_efficiency",
+        "ternary_fraction_peak",
+        "protac_at_peak_nM",
+        "hook_effect_present",
+        "degradation_drive"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "protac": {"type": "string", "minLength": 1},
+        "e3_ligase": {"type": "string", "minLength": 1},
+        "drug_precedent": {"type": "string"},
+        "kd_target_nM": {"type": "number", "exclusiveMinimum": 0},
+        "kd_e3_nM": {"type": "number", "exclusiveMinimum": 0},
+        "alpha_cooperativity": {"type": "number", "exclusiveMinimum": 0},
+        "cooperativity_class": {
+          "type": "string",
+          "enum": ["positive", "negative", "none"]
+        },
+        "kd_ternary_apparent_nM": {"type": "number", "exclusiveMinimum": 0},
+        "transfer_efficiency": {"type": "number", "minimum": 0, "maximum": 1},
+        "ternary_fraction_peak": {"type": "number", "minimum": 0, "maximum": 1},
+        "protac_at_peak_nM": {"type": "number", "exclusiveMinimum": 0},
+        "hook_effect_present": {"type": "boolean"},
+        "degradation_drive": {"type": "number", "minimum": 0, "maximum": 1}
+      }
+    },
+    "cam_side": {
+      "type": "object",
+      "description": "Per-row CAM-side Caspar-Klug geometry + Zlotnick equilibrium state from capsid_assembly_modulator_sim.simulate_cam().",
+      "required": [
+        "scenario",
+        "t_number",
+        "n_subunits",
+        "n_pentamers",
+        "n_hexamers",
+        "euler_invariant_ok",
+        "g_contact_baseline_kcal",
+        "delta_dg_modulator_kcal",
+        "g_contact_cam_kcal",
+        "c_total",
+        "baseline_c_star",
+        "baseline_assembled_fraction",
+        "perturbed_c_star",
+        "perturbed_assembled_fraction",
+        "assembled_fraction_shift",
+        "kinetic_trap_regime"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "scenario": {"type": "string", "minLength": 1},
+        "drug_precedent": {"type": "string"},
+        "t_number": {"type": "integer", "minimum": 1},
+        "n_subunits": {"type": "integer", "minimum": 60},
+        "n_pentamers": {"type": "integer", "const": 12},
+        "n_hexamers": {"type": "integer", "minimum": 0},
+        "euler_invariant_ok": {"type": "boolean", "const": true},
+        "g_contact_baseline_kcal": {"type": "number"},
+        "delta_dg_modulator_kcal": {"type": "number"},
+        "g_contact_cam_kcal": {"type": "number"},
+        "c_total": {"type": "number", "exclusiveMinimum": 0},
+        "baseline_c_star": {"type": "number", "exclusiveMinimum": 0},
+        "baseline_assembled_fraction": {"type": "number", "minimum": 0, "maximum": 1},
+        "perturbed_c_star": {"type": "number", "exclusiveMinimum": 0},
+        "perturbed_assembled_fraction": {"type": "number", "minimum": 0, "maximum": 1},
+        "assembled_fraction_shift": {"type": "number", "minimum": -1, "maximum": 1},
+        "kinetic_trap_regime": {"type": "boolean"}
+      }
+    },
+    "regime_signature": {
+      "type": "object",
+      "description": "Side-by-side regime classification: PROTAC hook-effect vs CAM kinetic-trap.",
+      "required": [
+        "protac_regime",
+        "protac_signature_flag",
+        "cam_regime",
+        "cam_signature_flag"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "protac_regime": {"type": "string"},
+        "protac_signature_flag": {"type": "boolean"},
+        "cam_regime": {"type": "string"},
+        "cam_signature_flag": {"type": "boolean"}
+      }
+    },
+    "shared_magnitudes": {
+      "type": "object",
+      "description": "Two unit-distinct, model-distinct perturbation magnitudes reported side-by-side under the shared cooperativity-vs-perturbation framework. NOT physically commensurate; never summed or normalised to each other.",
+      "required": [
+        "protac_cooperativity_log10_alpha_magnitude",
+        "cam_delta_dg_abs_kcal_magnitude",
+        "note"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "protac_cooperativity_log10_alpha_magnitude": {
+          "type": "number",
+          "minimum": 0,
+          "description": "|log10(alpha)| — magnitude (decades) by which PROTAC cooperativity shifts apparent ternary K_d off the alpha=1 baseline."
+        },
+        "cam_delta_dg_abs_kcal_magnitude": {
+          "type": "number",
+          "minimum": 0,
+          "description": "|delta_dg| — magnitude (kcal/mol) of the per-contact CAM perturbation off the Zlotnick weak-contact baseline."
+        },
+        "note": {"type": "string"}
+      }
+    },
+    "framework": {
+      "type": "string",
+      "description": "One-line statement of the shared mass-action + cooperativity + non-monotone-or-trap framework being demonstrated."
+    },
+    "in_silico_caveat": {
+      "type": "string",
+      "description": "g8/f2 in-silico-only caveat carried per row — including the explicit no-mechanistic-equivalence honesty statement."
+    },
+    "illustrative_only": {
+      "type": "boolean",
+      "const": true,
+      "description": "Always true — the cross row's regime flags and magnitudes are illustrative model outputs of the two parent sims' shared mathematical structure, NOT predictions of real PROTAC potency, CAM antiviral activity, or any therapeutic property."
+    }
+  }
+}

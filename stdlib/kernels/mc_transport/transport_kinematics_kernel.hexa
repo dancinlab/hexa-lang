@@ -1,0 +1,256 @@
+// stdlib/kernels/mc_transport/transport_kinematics_kernel.hexa
+// D80 g_hexa_only pilot #8 (demiurge AGENTS.tape @D g_hexa_only).
+//
+// Clean-room hexa-native port of the domain-agnostic numeric primitives
+// in `transport_kernel.py` (the ①a kernel under D72): relativistic
+// kinematics, PDG max-energy-transfer T_max, Bethe-Bloch mean stopping
+// power dE/dx (closed-form, density-effect δ = 0), and continuous-
+// slowing-down-approximation (CSDA) range as a trapezoidal integral of
+// 1/(dE/dx). The `particle`-library lookup half of transport_kernel.py
+// is NOT ported — that is a data-fetch over the PDG aggregator, not a
+// closed-form math kernel, and remains on the ①b adapter side.
+//
+// @version 0.1.0
+// @capabilities [pure]
+// @stability stage-2 substrate (clean-room re-derivation, no Geant4 or
+//   scikit-hep `particle` code inspection — only PDG textbook formulas).
+//   Substrate parity against Python `math` (libm) reference numbers
+//   captured 2026-05-20 on darwin-arm64; tolerance ceiling 1e-10
+//   relative, observed gap <1e-13 across all checks (CSDA included;
+//   the trapezoidal sums are bit-stable when step counts match).
+// @since 2026-05-20
+//
+// Layer (ABSORPTION.md ① / demiurge design.md D72):
+//   ①a kernel — THIS FILE. Domain-agnostic — caller supplies projectile
+//                (mass, charge), target (Z, A, I), KE. No CERN material
+//                list, no antiproton trap, no PET context.
+//   ①b adapter — `stdlib/cern/bethe_bloch_stopping.hexa` (CERN shielding
+//                materials × ELENA KE grid) ALREADY EXISTS and embeds
+//                Bethe-Bloch inline. The day a caller wants a domain-
+//                agnostic ①a call (e.g. a new `stdlib/<domain>/`
+//                adapter that needs T_max or stopping range without
+//                CERN baggage), it imports THIS module.
+//
+// CLEAN-ROOM PROVENANCE
+//   No Geant4 source-code inspection — closed-form PDG formulas only.
+//
+//   - upstream code   : none (clean-room re-derivation from textbook)
+//   - upstream spec   : Particle Data Group, "Review of Particle
+//                       Physics", §34 "Passage of particles through
+//                       matter", Workman et al., Phys. Rev. D 110
+//                       (2024) 030001:
+//                         eq. 34.4  T_max relativistic
+//                         eq. 34.5  Bethe-Bloch mean stopping power
+//                                   (density-correction δ = 0)
+//                       PDG Table 34.1 — mean excitation energy I per
+//                       element (caller-supplied; this kernel is
+//                       table-agnostic).
+//   - external const  : K_BB = 4πN_A r_e² m_e c² = 0.307075 MeV·cm²/g
+//                       (PDG 2024 eq. 34.5 / Table 34.4).
+//   - parity baseline : Python `math` libm closed-form line-by-line
+//                       transliteration on darwin-arm64 (Python 3.x).
+//
+// HONESTY (g3 — non-negotiable, inherited by every caller):
+//   * Relativistic kinematics IS exact special relativity — IEEE-754-
+//     deterministic; both sides agree bit-for-bit.
+//   * Bethe-Bloch dE/dx omits FOUR pieces vs a full Geant4 MC (the
+//     same four `transport_kernel.py` and `bethe_bloch_stopping.hexa`
+//     omit): shell corrections, density effect δ, straggling
+//     distribution, nuclear stopping channel. So even with a hexa-
+//     native body, callers' demiurge cells stay
+//     measurement_gate = GATE_OPEN / absorbed = false.
+//   * CSDA range is an approximation — no straggling, no nuclear
+//     stops, no δ-ray escape. The integral starts at a caller-supplied
+//     floor (Bethe-Bloch diverges as β → 0); the returned range is
+//     the range ABOVE that floor.
+//   * Substrate parity proves the PORT PATTERN, NOT the demiurge
+//     `absorbed=true` gate — that requires the HexaNativeParityRef
+//     schema + a measured-physics oracle (a Geant4-MC parity round).
+//
+// Surface (all SI / PDG units; energies in MeV, mass stopping power
+// in MeV·cm²/g, mass range in g/cm²; angles N/A):
+//
+//   pub fn k_bb() -> float                   // K = 0.307075 MeV·cm²/g
+//   pub fn relativistic_kinematics(ke, m) -> [float]
+//       // returns [gamma, beta2, beta, beta_gamma, momentum_mev, total_energy_mev]
+//   pub fn max_energy_transfer_mev(ke, mp, me) -> float
+//       // PDG eq. 34.4
+//   pub fn bethe_bloch_dedx(ke, mp, zp, Z, A, I_eV, me) -> [float]
+//       // returns [beta, gamma, beta_gamma, tmax_mev, dedx_mevcm2_per_g]
+//   pub fn stopping_range_csda(ke_top, mp, zp, Z, A, I_eV, me, n_steps, ke_floor) -> float
+//       // trapezoidal ∫_{ke_floor}^{ke_top} dE/(−dE/dx)   →   g/cm²
+
+use "stdlib/core/math/float"
+
+// ─── PDG constants (fn form — pub-let is not AOT-stable per
+// math/float.hexa conventions) ──────────────────────────────────────
+
+/// Bethe-Bloch K factor: 4πN_A r_e² m_e c² = 0.307075 MeV·cm²/g
+/// (PDG 2024 eq. 34.5 / Table 34.4). Fundamental, domain-agnostic.
+pub fn k_bb() -> float { return 0.307075 }
+
+// ─── relativistic kinematics ────────────────────────────────────────
+
+/// Exact special relativity for a projectile of rest mass `m_mev`
+/// carrying kinetic energy `ke_mev` (both MeV). Returns 6 doubles
+/// packed in a fixed-length array:
+///
+///   [gamma, beta2, beta, beta_gamma, momentum_mev, total_energy_mev]
+///
+/// with
+///     γ        = 1 + KE / (m·c²)
+///     β²       = 1 − 1/γ²
+///     β        = √β²
+///     βγ       = β·γ
+///     p        = βγ·m            (momentum, MeV/c)
+///     E_total  = KE + m          (MeV)
+///
+/// Pre-conditions (caller-enforced — the kernel does NOT guard):
+///   * m_mev > 0 (positive rest mass)
+///   * ke_mev ≥ 0 (well-defined β² ∈ [0, 1))
+///
+/// Out-of-domain inputs yield NaN-like floats; the ①b adapter is
+/// responsible for the physical-validity gate.
+pub fn relativistic_kinematics(ke_mev: float, m_mev: float) -> [float] {
+    let gamma = 1.0 + ke_mev / m_mev
+    let beta2 = 1.0 - 1.0 / (gamma * gamma)
+    let beta = sqrt(beta2)
+    let beta_gamma = beta * gamma
+    let momentum_mev = beta_gamma * m_mev
+    let total_energy_mev = ke_mev + m_mev
+    return [gamma, beta2, beta, beta_gamma, momentum_mev, total_energy_mev]
+}
+
+// ─── max energy transfer ────────────────────────────────────────────
+
+/// Maximum kinetic energy transferable to a free electron in one
+/// projectile-electron collision (PDG 2024 eq. 34.4, relativistic):
+///
+///   T_max = 2·m_e·c²·β²·γ² / (1 + 2γ·m_e/m + (m_e/m)²)
+///
+/// Returns T_max in MeV. Domain-agnostic.
+pub fn max_energy_transfer_mev(ke_mev: float, m_mev: float,
+                               m_e_mev: float) -> float {
+    let kin = relativistic_kinematics(ke_mev, m_mev)
+    let gamma = kin[0]
+    let beta2 = kin[1]
+    let r = m_e_mev / m_mev
+    let num = 2.0 * m_e_mev * beta2 * gamma * gamma
+    let den = 1.0 + 2.0 * gamma * r + r * r
+    return num / den
+}
+
+// ─── Bethe-Bloch mean stopping power ────────────────────────────────
+
+/// Bethe-Bloch mean mass stopping power −dE/dx at one (KE, medium)
+/// point (PDG 2024 eq. 34.5, density-correction δ = 0):
+///
+///   −dE/dx = K·z²·(Z/A)·(1/β²)·[ ½·ln(2 m_e β²γ² T_max / I²) − β² ]
+///
+/// with γ, β² from `relativistic_kinematics`, T_max from
+/// `max_energy_transfer_mev`, and K = `k_bb()`. Returns 5 doubles:
+///
+///   [beta, gamma, beta_gamma, tmax_mev, dedx_mevcm2_per_g]
+///
+/// Inputs:
+///   ke_mev       — projectile kinetic energy (MeV)
+///   mp_mev       — projectile rest mass (MeV)
+///   zp_charge    — projectile charge MAGNITUDE (the sign drops in z²;
+///                  caller may pass |Z|)
+///   target_z     — target atomic number
+///   target_a     — target atomic mass (g/mol; natural-mix avg ok for
+///                  W / Pb)
+///   target_i_ev  — target mean excitation energy I in eV (PDG Table
+///                  34.1 — caller-supplied; this kernel is
+///                  table-agnostic)
+///   me_mev       — electron rest mass (MeV)
+///
+/// Honesty: density-effect δ = 0 → kernel is valid in the non-/mildly-
+/// relativistic regime (KE ≲ a few GeV for protons / antiprotons in
+/// low-Z media); δ becomes important at higher γ. Caller owns the
+/// regime gate.
+pub fn bethe_bloch_dedx(ke_mev: float, mp_mev: float, zp_charge: int,
+                        target_z: int, target_a: float,
+                        target_i_ev: float, me_mev: float) -> [float] {
+    let kin = relativistic_kinematics(ke_mev, mp_mev)
+    let gamma = kin[0]
+    let beta2 = kin[1]
+    let beta = kin[2]
+    let beta_gamma = kin[3]
+
+    let tmax = max_energy_transfer_mev(ke_mev, mp_mev, me_mev)
+
+    let i_mev = target_i_ev * 0.000001
+    let log_arg = 2.0 * me_mev * beta2 * gamma * gamma * tmax / (i_mev * i_mev)
+    let log_term = 0.5 * log(log_arg)
+
+    let z2 = to_float(zp_charge * zp_charge)
+    let z_over_a = to_float(target_z) / target_a
+    let dedx = k_bb() * z2 * z_over_a * (log_term - beta2) / beta2
+
+    return [beta, gamma, beta_gamma, tmax, dedx]
+}
+
+// ─── CSDA stopping range ────────────────────────────────────────────
+
+/// Continuous-slowing-down-approximation range — trapezoidal integral
+///
+///     R(KE_top) = ∫_{ke_floor}^{ke_top} dE / (−dE/dx)(E)
+///
+/// using `n_steps` subdivisions of the closed interval [ke_floor,
+/// ke_top]. Returns the MASS range in g/cm² (divide by material density
+/// for a length). The integral starts at `ke_floor`, NOT 0: Bethe-Bloch
+/// diverges as β → 0 (the low-energy regime is exactly where shell
+/// corrections, which this kernel omits, dominate). `ke_floor` is the
+/// caller-supplied cutoff — the returned range is the range ABOVE
+/// `ke_floor`.
+///
+/// Trapezoidal rule:
+///   R ≈ step · ( ½·f(ke_floor) + Σ_{i=1..n-1} f(ke_floor + i·step)
+///                + ½·f(ke_top) )
+///   step = (ke_top − ke_floor) / n_steps
+///   f(E) = 1 / (−dE/dx(E))
+///
+/// Pre-conditions (caller-enforced):
+///   * ke_top > ke_floor (nothing to integrate otherwise)
+///   * n_steps ≥ 2
+///
+/// Tolerance discipline: a 256-step trapezoidal sum of a smooth
+/// 1/(dE/dx) reproduces the Python-side reference to <1e-13 relative
+/// (operation-order matches at the per-step level; the only residual
+/// is the IEEE-754 sum-order rounding of the running total, which is
+/// deterministic when both sides accumulate in the same order).
+pub fn stopping_range_csda(ke_top: float, mp_mev: float, zp_charge: int,
+                           target_z: int, target_a: float,
+                           target_i_ev: float, me_mev: float,
+                           n_steps: int, ke_floor: float) -> float {
+    let step = (ke_top - ke_floor) / to_float(n_steps)
+
+    let de_lo = bethe_bloch_dedx(ke_floor, mp_mev, zp_charge,
+                                 target_z, target_a, target_i_ev, me_mev)
+    let de_hi = bethe_bloch_dedx(ke_top, mp_mev, zp_charge,
+                                 target_z, target_a, target_i_ev, me_mev)
+    let mut total = 0.5 * (1.0 / de_lo[4] + 1.0 / de_hi[4])
+
+    let mut i = 1
+    while i < n_steps {
+        let e_i = ke_floor + to_float(i) * step
+        let de_i = bethe_bloch_dedx(e_i, mp_mev, zp_charge,
+                                    target_z, target_a, target_i_ev, me_mev)
+        total = total + 1.0 / de_i[4]
+        i = i + 1
+    }
+
+    return total * step
+}
+
+// ─── ①b adapter note ────────────────────────────────────────────────
+//
+// `stdlib/cern/bethe_bloch_stopping.hexa` already embeds an inline
+// Bethe-Bloch evaluator with CERN-domain materials + antiproton
+// projectile baked in. A future re-pointing of that adapter at this
+// kernel would (a) drop the inline math (4 functions), (b) keep only
+// the CERN material table + projectile + KE-sweep, (c) inherit the
+// CSDA range primitive for free. Same N+M reduction the D72 split
+// pursues for transport_kernel.py — a single ①a math kernel, N domain
+// adapters consume.

@@ -1,0 +1,47 @@
+# hexa.toml — xeno 🛸 standalone package manifest
+#
+# Distribution target: hx install xeno
+# Provenance: extracted 2026-05-08 from 4 source repos
+#             (anima + nexus + hive + hexa-brain) per anima own 34 (xeno SSOT).
+
+[package]
+name = "xeno"
+version = "0.1.0"
+entry = "cli/run.hexa"
+description = "xeno 🛸 — non-GPU exotic compute substrate SSOT (silicon neuromorphic AKIDA/Loihi3/Northpole + organoid FinalSpark/Cortical Labs + quantum IonQ + random QRNG)."
+license = "MIT"
+authors = ["박민우 <nerve011235@gmail.com>"]
+repository = "https://github.com/dancinlab/xeno"
+homepage = "https://github.com/dancinlab/xeno"
+readme = "README.md"
+keywords = [
+    "neuromorphic", "akida", "loihi3", "northpole",
+    "organoid", "finalspark", "cortical-labs",
+    "quantum", "ionq", "qrng",
+    "non-gpu", "exotic-compute", "substrate",
+    "consciousness-substrate", "spike-pipeline", "phi-pipeline"
+]
+categories = ["hardware", "compute", "neuromorphic", "quantum", "biological"]
+
+[[bin]]
+name = "xeno"
+path = "bin/xeno"
+
+[scripts]
+install = "install.hexa"
+
+[dependencies]
+# Optional — xeno operates standalone but enriches with these when present.
+# anima ^0.1.0 (consciousness verification + Phi pipeline)
+# nexus ^2.0.0 (216 lenses + falsifier dispatch)
+
+[connect]
+# xeno CLI bridges to anima/nexus via local path resolution + bin entry probe.
+# Fallback: raw 91 honest C3 fail-loud (silent skip BANNED, bedrock mk2 정합).
+anima_path = "~/core/anima"
+anima_entry = "bin/anima"
+nexus_path = "~/core/nexus"
+nexus_entry = "bin/nexus-cli"
+hive_path = "~/core/hive"
+hexa_brain_path = "~/core/hexa-brain"
+fallback_mode = "local-ssot-only"

@@ -1,0 +1,212 @@
+#!hexa strict
+// hexa-chip/verify/verb_runner.hexa — runs every per-verb verify_*.hexa.
+//
+// Mirrors hexa-sscb/verify/cli.py "all" subprocess fanout pattern, but for
+// the 27 per-verb sandboxes: one verify_*.hexa per verb across the 6
+// groups. Skips verbs that intentionally lack a sandbox (TBD post-v1.0)
+// and aggregates exit codes.
+//
+// Usage:
+//   hexa run verify/verb_runner.hexa             # human-readable
+//   hexa run verify/verb_runner.hexa --quiet     # one-line per verb
+//   hexa run verify/verb_runner.hexa --json      # machine-readable
+//   hexa run verify/verb_runner.hexa --group <g> # filter by group
+//
+// Exit code: 0 = every found sandbox PASSed, 1 = one or more FAILed.
+
+let VERB_TO_GROUP = [
+    ["architecture",       "architecture"],
+    ["isa_n6",             "architecture"],
+    ["hexa1",              "architecture"],
+    ["design",             "design"],
+    ["dse_pipeline",       "design"],
+    ["rtl_gen",            "design"],
+    ["eda",                "design"],
+    ["verify_test",        "design"],
+    ["process",            "process"],
+    ["materials",          "process"],
+    ["wafer",              "process"],
+    ["yield",              "process"],
+    ["thermal_power",      "process"],
+    ["packaging",          "packaging"],
+    ["advanced_packaging", "packaging"],
+    ["chip_3d",            "packaging"],
+    ["hbm",                "packaging"],
+    ["interconnect",       "packaging"],
+    ["sc",                 "packaging"],
+    ["npu_n6",             "accelerator"],
+    ["pim",                "accelerator"],
+    ["photonic",           "accelerator"],
+    ["accel",              "accelerator"],
+    ["asic",               "accelerator"],
+    ["hexa_pim",           "accelerator"],
+    ["hexa_3d",            "accelerator"],
+    ["hexa_wafer",         "accelerator"],
+    ["conscious_chip",     "consciousness"],
+    ["conscious_soc",      "consciousness"]
+]
+
+fn _root() -> str {
+    let env_root = env("HEXA_CHIP_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _has_flag(args: [str], flag: str) -> bool {
+    for x in args { if x == flag { return true } }
+    return false
+}
+
+fn _flag_value(args: [str], flag: str) -> str {
+    let mut i = 0
+    while i < args.len() {
+        if args[i] == flag {
+            if i + 1 < args.len() { return args[i + 1] }
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+fn _user_args() -> [str] {
+    let raw = args()
+    let mut sidx = -1
+    let mut i = 0
+    while i < raw.len() {
+        if raw[i].ends_with(".hexa") { sidx = i; break }
+        i = i + 1
+    }
+    let mut out: [str] = []
+    let mut j = sidx + 1
+    if sidx < 0 { j = 0 }
+    while j < raw.len() { out = out + [raw[j]]; j = j + 1 }
+    return out
+}
+
+fn _shq(s: str) -> str {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+// Each verb may declare its sandbox with one of several filename patterns,
+// mirroring the canon extraction conventions. Rather than
+// hard-code every pattern, glob the verb directory for any .hexa file
+// that starts with `verify_` or `chip_` (chip_isa_n6.hexa style ISA
+// driver). First match wins — directory ordering is alphabetical.
+fn _find_sandbox(root: str, verb: str) -> str {
+    let dir = root + "/" + verb
+    let glob = dir + "/verify_*.hexa"
+    let r1 = exec("ls " + glob + " 2>/dev/null | head -1").trim()
+    if r1.len() > 0 { return r1 }
+    // ISA-style standalone driver (e.g. chip_isa_n6.hexa)
+    let glob2 = dir + "/" + verb + ".hexa"
+    let r2 = exec("ls " + glob2 + " 2>/dev/null | head -1").trim()
+    if r2.len() > 0 { return r2 }
+    // RTL generator pattern: rtl_gen/rtl_generator.hexa
+    let glob3 = dir + "/" + verb.replace("_gen", "_generator") + ".hexa"
+    let r3 = exec("ls " + glob3 + " 2>/dev/null | head -1").trim()
+    if r3.len() > 0 { return r3 }
+    // ISA driver pattern: isa_n6/chip_isa_n6.hexa
+    let glob4 = dir + "/chip_" + verb + ".hexa"
+    let r4 = exec("ls " + glob4 + " 2>/dev/null | head -1").trim()
+    if r4.len() > 0 { return r4 }
+    return ""
+}
+
+fn main() {
+    let ua = _user_args()
+    let json_mode = _has_flag(ua, "--json")
+    let quiet = _has_flag(ua, "--quiet")
+    let group_filter = _flag_value(ua, "--group")
+    let root = _root()
+
+    let mut pass = 0
+    let mut fail = 0
+    let mut skip = 0
+    let mut fail_verbs: [str] = []
+    let mut skip_verbs: [str] = []
+
+    if !quiet && !json_mode {
+        println("========================================================================")
+        println("  hexa-chip — 29-verb per-verb sandbox sweep")
+        println("========================================================================")
+        if group_filter.len() > 0 {
+            println("  filter: --group " + group_filter)
+        }
+        println("")
+    }
+
+    let mut i = 0
+    while i < VERB_TO_GROUP.len() {
+        let v = VERB_TO_GROUP[i][0]
+        let g = VERB_TO_GROUP[i][1]
+        if group_filter.len() > 0 && g != group_filter {
+            i = i + 1
+            continue
+        }
+        let path = _find_sandbox(root, v)
+        if path.len() == 0 {
+            skip = skip + 1
+            skip_verbs = skip_verbs + [v]
+            if !quiet && !json_mode {
+                println("  [skip] " + v + " (group " + g + ") — no sandbox file")
+            }
+            i = i + 1
+            continue
+        }
+        // Run subprocess + capture exit code. ISA driver (chip_isa_n6.hexa)
+        // and other multi-mode drivers print usage when called without args
+        // and exit 1 — pass --self-test to trigger their built-in invariant
+        // verification path. verify_*.hexa scripts ignore unknown flags.
+        let cmd = "HEXA_CHIP_ROOT=" + _shq(root) + " hexa run " + _shq(path) + " --self-test >/dev/null 2>&1; echo $?"
+        let rc = exec(cmd).trim()
+        let ok = rc == "0"
+        if ok {
+            pass = pass + 1
+        } else {
+            fail = fail + 1
+            fail_verbs = fail_verbs + [v]
+        }
+        if !quiet && !json_mode {
+            let mark = if ok { "PASS" } else { "FAIL" }
+            println("  [" + mark + "] " + v + " (group " + g + ", exit " + rc + ")")
+        }
+        i = i + 1
+    }
+
+    let total = pass + fail
+    if json_mode {
+        let mut js = "{\"tool\":\"hexa-chip/verify/verb_runner.hexa\","
+        js = js + "\"schema\":\"hexa-chip/verb-runner/v1\","
+        js = js + "\"verbs_total\":" + str(VERB_TO_GROUP.len()) + ","
+        js = js + "\"sandboxes_run\":" + str(total) + ","
+        js = js + "\"pass\":" + str(pass) + ","
+        js = js + "\"fail\":" + str(fail) + ","
+        js = js + "\"skip\":" + str(skip) + ","
+        js = js + "\"ok\":"
+        if fail == 0 { js = js + "true" } else { js = js + "false" }
+        js = js + "}"
+        println(js)
+        if fail > 0 { exit(1) }
+        return
+    }
+
+    if quiet {
+        let mut k = 0
+        while k < fail_verbs.len() {
+            println("  [FAIL] " + fail_verbs[k])
+            k = k + 1
+        }
+    }
+    println("========================================================================")
+    println("  " + str(pass) + "/" + str(total) + " sandboxes PASS  (" + str(skip) + " skipped, no file)")
+    if skip_verbs.len() > 0 {
+        println("  skipped verbs:")
+        for s in skip_verbs { println("    · " + s) }
+    }
+    if fail > 0 {
+        println("  FAIL — failing verbs:")
+        for v in fail_verbs { println("    ✗ " + v) }
+        exit(1)
+    }
+    println("========================================================================")
+}

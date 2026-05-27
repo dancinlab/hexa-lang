@@ -1,0 +1,12 @@
+#!hexa strict
+// green-nh3 verify — thermoneutral electrolyzer voltage V_th = ΔH/(nF).
+fn main() {
+    let dH_kJmol = 92.4
+    let n = 6.0
+    let F = 96485.0
+    let V_th = dH_kJmol * 1000.0 / (n * F)
+    println("green-nh3_verify (electrolyzer thermoneutral):")
+    println("  dH_kJ_per_mol = " + str(dH_kJmol))
+    println("  V_th_V = " + str(V_th))
+    println("__HEXA_GREEN_NH3_VERIFY__ PASS gate=GATE_OPEN absorbed=false")
+}

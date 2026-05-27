@@ -1,0 +1,203 @@
+#!hexa strict
+//
+// ribozyme/module/bayesian_n6_stratum_bias.hexa — F-RB-2 source-class stratum bias.
+//
+// HEXA-NATIVE port of _python_bridge/module/ribozyme_bayesian_n6_stratum_bias.py
+// (R5 sunset 19/57, 2026-05-07). Stratifies n=30 corpus by paper_ref year
+// (pre-2000 vs post-2000) and tests whether F-RB-2 cycle-25 verdict
+// survives source-class disaggregation.
+//
+// Per cross-cutting Require (R5) raw 9 hexa-only: hexa stdlib only.
+
+use "ribozyme/module/bayesian_audit_n30"
+
+let PASS_DELTA = 1.0
+// POSIX ERE doesn't have \b — match a 4-digit year-shaped run with
+// non-digit guards on either side (or string boundary). Subsequent
+// digit-extract finds the actual year inside the matched span.
+let YEAR_RE = "(^|[^0-9])(19[5-9][0-9]|20[0-3][0-9])([^0-9]|$)"
+
+fn registry_path() -> string {
+    let cwd = exec("pwd").trim()
+    return cwd + "/state/discovery_absorption/registry.jsonl"
+}
+
+fn fabs(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn classify_year(entry) -> string {
+    let mut ref = ""
+    let pr = entry["paper_ref"]
+    if type_of(pr) == "string" { ref = pr }
+    let m = regex_search(YEAR_RE, ref)
+    if len(m) == 0 { return "unknown" }
+    // Match span includes optional leading non-digit + 4-digit year +
+    // optional trailing non-digit. Scan inside the span for the first
+    // 4 consecutive digits = the year.
+    let span = ref.substring(m[0], m[1])
+    let mut yr_start = -1
+    let mut k = 0
+    while k + 4 <= len(span) {
+        let c4 = span.substring(k, k + 4)
+        let mut all_digits = true
+        let mut q = 0
+        while q < 4 {
+            let ch = c4.substring(q, q + 1)
+            if ch < "0" || ch > "9" { all_digits = false }
+            q = q + 1
+        }
+        if all_digits { yr_start = k; break }
+        k = k + 1
+    }
+    if yr_start < 0 { return "unknown" }
+    let yr_str = span.substring(yr_start, yr_start + 4)
+    let yr = to_int(yr_str)
+    if yr < 2000 { return "pre_2000" }
+    return "post_2000"
+}
+
+fn stratum_audit(stratum_corpus) {
+    let r = {}
+    let n = len(stratum_corpus)
+    if n == 0 {
+        r["n"] = 0
+        r["n_match_4_of_4"] = 0
+        r["log10_bf"] = void
+        r["log10_bf_sentinel"] = "empty_stratum"
+        return r
+    }
+    let bayes = log_bayes_factor(stratum_corpus, 1.0, 1.0, 0.0625)
+    let mut matches = 0
+    let mut i = 0
+    while i < n {
+        let mp = n6_match_per_entry(stratum_corpus[i])
+        if mp["sum"] == 4 { matches = matches + 1 }
+        i = i + 1
+    }
+    // Inherits python's key-name bug — log10_bayes_factor_h1_over_h0 is
+    // never present (audit_n30 emits log_bayes_factor_h1_over_h0 sans
+    // "10"). lbf becomes void → sentinel "unavailable" → falls through
+    // to match_fraction_proxy in compute_delta below.
+    let lbf_v = bayes["log10_bayes_factor_h1_over_h0"]
+    let mut lbf = void
+    let mut sentinel = void
+    if type_of(lbf_v) == "void" || lbf_v == void {
+        sentinel = "unavailable"
+    } else if type_of(lbf_v) == "float" || type_of(lbf_v) == "int" {
+        lbf = to_float(lbf_v)
+    }
+    r["n"] = n
+    r["n_match_4_of_4"] = matches
+    r["match_fraction_4_of_4"] = to_float(matches) / to_float(n)
+    r["log10_bf"] = lbf
+    r["log10_bf_sentinel"] = sentinel
+    return r
+}
+
+fn compute_delta(a, b) {
+    let r = {}
+    let a_lbf = a["log10_bf"]
+    let b_lbf = b["log10_bf"]
+    if type_of(a_lbf) == "void" || a_lbf == void || type_of(b_lbf) == "void" || b_lbf == void {
+        let a_frac = to_float(a["match_fraction_4_of_4"])
+        let b_frac = to_float(b["match_fraction_4_of_4"])
+        r["delta"] = fabs(a_frac - b_frac) * 10.0
+        r["method"] = "match_fraction_proxy"
+        return r
+    }
+    r["delta"] = fabs(to_float(a_lbf) - to_float(b_lbf))
+    r["method"] = "log10_bf_direct"
+    return r
+}
+
+fn parse_argv_local(av) {
+    let r = {}
+    r["emit"] = false
+    r["summary"] = false
+    let mut i = 0
+    while i < len(av) {
+        let a = av[i]
+        if a == "--emit" { r["emit"] = true }
+        else if a == "--summary" { r["summary"] = true }
+        i = i + 1
+    }
+    return r
+}
+
+fn main() {
+    let cfg = parse_argv_local(args())
+    let corpus = build_corpus_n30()
+    let strata_pre = []
+    let strata_post = []
+    let strata_unknown = []
+    let mut i = 0
+    while i < len(corpus) {
+        let e = corpus[i]
+        let cls = classify_year(e)
+        if cls == "pre_2000" { strata_pre.push(e) }
+        else if cls == "post_2000" { strata_post.push(e) }
+        else { strata_unknown.push(e) }
+        i = i + 1
+    }
+
+    let audit_pre = stratum_audit(strata_pre)
+    let audit_post = stratum_audit(strata_post)
+    let audit_unknown = stratum_audit(strata_unknown)
+
+    let dr = compute_delta(audit_pre, audit_post)
+    let delta = dr["delta"]
+    let method = dr["method"]
+    let mut verdict = "FAIL"
+    if delta <= PASS_DELTA { verdict = "PASS" }
+
+    let audited_at = utc_iso_now()
+
+    let strata = {}
+    strata["pre_2000"] = audit_pre
+    strata["post_2000"] = audit_post
+    strata["unknown"] = audit_unknown
+
+    let stratum_bias = {}
+    stratum_bias["verdict"] = verdict
+    stratum_bias["delta_log10_bf"] = delta
+    stratum_bias["delta_method"] = method
+    stratum_bias["pass_threshold"] = PASS_DELTA
+    stratum_bias["raw_91_c3_disclose"] = "Stratification by paper_ref year (pre/post 2000) is a proxy for textbook-vs-experimental source class. F-RB-2 cycle-25 audit gave suspicious-perfect 30/30 (log_bf=79.74); this audit tests whether that result survives source-class disaggregation. PASS = |delta log10_BF| <= 1.0."
+
+    let subs = {}
+    subs["f_rb_2_stratum_bias"] = stratum_bias
+
+    let witness = {}
+    witness["schema"] = "raw_77_ribozyme_bayesian_audit_v2"
+    witness["audited_at"] = audited_at
+    witness["audit_kind"] = "n6_source_class_stratum_bias"
+    witness["stratum_classifier"] = "year_pre_post_2000"
+    witness["stratum_results"] = strata
+    witness["f_rb_2_subclauses"] = subs
+    witness["raw_77_append_only"] = true
+    witness["raw_9_hexa_only"] = "hexa stdlib only (R5 sunset 2026-05-07)"
+    witness["witness_ref"] = "state/discovery_absorption/registry.jsonl#raw_77_ribozyme_bayesian_audit_v2"
+
+    if cfg["emit"] {
+        let path = registry_path()
+        let last_slash = path.last_index_of("/")
+        exec("mkdir -p " + path.substring(0, last_slash))
+        append_file(path, json_encode(witness) + "\n")
+        eprintln("emitted 1 witness row -> " + path)
+    }
+
+    if cfg["summary"] {
+        println(json_encode(witness))
+    } else {
+        eprintln("pre_2000 n=" + to_string(audit_pre["n"]) + " m4=" + to_string(audit_pre["n_match_4_of_4"]) + "/" + to_string(audit_pre["n"]) +
+            " log_bf=" + to_string(audit_pre["log10_bf"]) +
+            "  post_2000 n=" + to_string(audit_post["n"]) + " m4=" + to_string(audit_post["n_match_4_of_4"]) + "/" + to_string(audit_post["n"]) +
+            " log_bf=" + to_string(audit_post["log10_bf"]) +
+            "  delta=" + to_string(delta) + " (" + method + ")  verdict=" + verdict)
+    }
+
+    if verdict == "PASS" { exit(0) }
+    exit(1)
+}

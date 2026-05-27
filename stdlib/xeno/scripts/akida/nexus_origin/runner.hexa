@@ -1,0 +1,204 @@
+// ═══════════════════════════════════════════════════════════
+// scripts/akida/runner.hexa — top-level akida falsifier orchestrator
+//
+// 배경:
+//   nexus 본 witness `design/kick/2026-05-07_anima-nexus-akida-physical-math-
+//   limit-saturation_omega_cycle.json` 의 11 hardware F-* + F-C architectural
+//   을 하나의 hexa 진입점에서 실행. anima-side F-M3b/F-M4 는 anima/scripts/
+//   akida/runner.hexa 별도 실행 — 본 파일은 sister-runner 호출 옵션 포함.
+//
+// 설계:
+//   - 4 blocker 해소 시퀀스 (resolve-blockers): synthetic spike trace,
+//     cnn2snn emulator, simulator-mode F-L1 evidence, host registration.
+//   - 그 뒤 falsifier.hexa run-all-simulator 로 11 falsifier 실행.
+//   - 결과를 awk RS-block 패턴 (PATTERNS §6) 으로 파싱 안 함 — 대신 evidence
+//     파일 경로만 stderr meta 로 추적 후 follow-up witness 는 python runner.py
+//     로 합산 (json_parse stdlib 갭 회피).
+//
+// CLI:
+//   hexa run scripts/akida/runner.hexa resolve-blockers
+//   hexa run scripts/akida/runner.hexa run-all
+//   hexa run scripts/akida/runner.hexa go              // resolve + run-all
+//
+// 규칙: hexa >=/<= 금지 — < / > 만 사용. stdlib only.
+// ═══════════════════════════════════════════════════════════
+
+fn _ns_now() -> i64 {
+    let mut r: i64 = 0
+    let raw = to_string(exec("date +%s%N 2>/dev/null")).trim()  // @allow-bare-exec
+    if raw.len() > 0 && raw.contains("N") == false {
+        try { r = to_int(raw) } catch e {}  // @allow-silent-catch
+    }
+    if r < 1 {
+        let s2 = to_string(exec("python3 -c 'import time;print(time.time_ns())' 2>/dev/null")).trim()  // @allow-bare-exec
+        try { r = to_int(s2) } catch e2 {}  // @allow-silent-catch
+    }
+    if r < 1 {
+        let s3 = to_string(exec("date +%s")).trim()  // @allow-bare-exec
+        try { let sec = to_int(s3); r = sec * 1000000000 } catch e3 {}  // @allow-silent-catch
+    }
+    return r
+}
+
+fn _meta(stage: string, detail: string, rc: i64, dur_us: i64) {
+    let mut m: [string] = []
+    m.push("NEXUS_AKIDA_RUNNER {\"stage\":\"")
+    m.push(stage)
+    m.push("\",\"detail\":\"")
+    m.push(detail)
+    m.push("\",\"rc\":")
+    m.push(to_string(rc))
+    m.push(",\"duration_us\":")
+    m.push(to_string(dur_us))
+    m.push("}")
+    eprintln(m.join(""))
+}
+
+fn _exec_capture(label: string, cmd: string) -> i64 {
+    let t0 = _ns_now()
+    let wrapped = cmd + "; echo \"__RC=$?\""
+    let out = to_string(exec(wrapped))                              // @allow-bare-exec
+    let t1 = _ns_now()
+    let rc_at = out.index_of("__RC=")
+    let mut rc: i64 = 1
+    if rc_at > -1 {
+        let tail = out.substring(rc_at + 5, len(out)).trim()
+        try { rc = to_int(tail) } catch e {}                         // @allow-silent-catch
+        print(out.substring(0, rc_at))
+    } else {
+        print(out)
+    }
+    _meta(label, cmd, rc, (t1 - t0) / 1000)
+    return rc
+}
+
+// ─── blocker 1: synthetic spike trace for F-L7 spike-fusion half ───
+fn resolve_spike_trace() -> i64 {
+    return _exec_capture(
+        "spike-trace",
+        "python3 scripts/akida/spike_trace_gen.py --n-events 100000 --rate-hz 200"
+    )
+}
+
+// ─── blocker 2: cnn2snn emulator self-test (F-M3b/M4 substrate hint) ───
+fn resolve_cnn2snn() -> i64 {
+    return _exec_capture(
+        "cnn2snn-emulator-selftest",
+        "python3 scripts/akida/cnn2snn_emulator.py"
+    )
+}
+
+// ─── blocker 3: simulator-mode F-L1 evidence to unblock host register ───
+fn resolve_fl1_simulator() -> i64 {
+    return _exec_capture(
+        "fl1-simulator",
+        "python3 scripts/akida/energy_meter.py --falsifier F-L1 --simulator"
+    )
+}
+
+// ─── blocker 4: host.rpi5-akida workspace registration (SIMULATOR=1 path) ───
+fn resolve_host_register() -> i64 {
+    return _exec_capture(
+        "host-register",
+        "SIMULATOR=1 bash scripts/akida/host_register.sh"
+    )
+}
+
+fn resolve_blockers() -> i32 {
+    let mut worst: i64 = 0
+    let r1 = resolve_spike_trace()
+    if r1 > worst { worst = r1 }
+    let r2 = resolve_cnn2snn()
+    if r2 > worst { worst = r2 }
+    let r3 = resolve_fl1_simulator()
+    if r3 > worst { worst = r3 }
+    let r4 = resolve_host_register()
+    if r4 > worst { worst = r4 }
+    return worst as i32
+}
+
+// ─── F-L7 with synthesized spike-trace ───
+fn run_fl7_with_trace() -> i64 {
+    return _exec_capture(
+        "F-L7-fused",
+        "python3 scripts/akida/qrng_entropy.py --bits 200000 --spike-trace state/akida_synth/spike_trace.txt"
+    )
+}
+
+// ─── F-M3a re-run after host registered ───
+fn run_fm3a_post_register() -> i64 {
+    return _exec_capture(
+        "F-M3a-post-register",
+        "python3 scripts/akida/dispatch_check.py --synth-route"
+    )
+}
+
+// ─── 11 falsifier 실행 (no-hw + simulator) via falsifier.hexa ───
+fn run_all_falsifiers() -> i64 {
+    return _exec_capture(
+        "all-simulator",
+        "hexa run scripts/akida/falsifier.hexa all-simulator"
+    )
+}
+
+// ─── follow-up witness emit via python runner.py (collect-only — reuses
+//     evidence written by upstream stages, no re-run) ───
+fn emit_followup() -> i64 {
+    return _exec_capture(
+        "followup-emit",
+        "python3 scripts/akida/runner.py --simulator --include-anima-stub --collect-only"
+    )
+}
+
+// ─── go: full sequence ───
+fn run_go() -> i32 {
+    let t0 = _ns_now()
+    let r0 = resolve_blockers()
+    let r1 = run_fl7_with_trace()
+    let r2 = run_fm3a_post_register()
+    let r3 = run_all_falsifiers()
+    let r4 = emit_followup()
+    let t1 = _ns_now()
+
+    let mut worst = r0 as i64
+    if r1 > worst { worst = r1 }
+    if r2 > worst { worst = r2 }
+    if r3 > worst { worst = r3 }
+    if r4 > worst { worst = r4 }
+
+    _meta("go", "all-stages-complete", worst, (t1 - t0) / 1000)
+    return worst as i32
+}
+
+fn main_dispatch(a: [string]) -> i32 {
+    let mut cmd = "help"
+    if len(a) > 2 { cmd = a[2] }
+
+    if cmd == "resolve-blockers" {
+        return resolve_blockers()
+    }
+    if cmd == "run-all" {
+        let r1 = run_fl7_with_trace()
+        let r2 = run_fm3a_post_register()
+        let r3 = run_all_falsifiers()
+        let r4 = emit_followup()
+        let mut worst = r1
+        if r2 > worst { worst = r2 }
+        if r3 > worst { worst = r3 }
+        if r4 > worst { worst = r4 }
+        return worst as i32
+    }
+    if cmd == "go" {
+        return run_go()
+    }
+
+    println("usage:")
+    println("  hexa run scripts/akida/runner.hexa resolve-blockers")
+    println("  hexa run scripts/akida/runner.hexa run-all")
+    println("  hexa run scripts/akida/runner.hexa go     # resolve + run-all (full sequence)")
+    return 1
+}
+
+let _argv = args()
+let _rc = main_dispatch(_argv)
+exit(_rc)  // @allow-silent-exit

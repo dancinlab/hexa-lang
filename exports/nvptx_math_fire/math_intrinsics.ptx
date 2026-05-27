@@ -1,0 +1,103 @@
+//
+// nvptx math-intrinsics silicon validation kernel.
+// Hand-written PTX using the EXACT mnemonics the hexa-lang NVPTX codegen
+// emits for source-level sqrt/max/min/abs/rsqrt/exp inside @gpu_kernel
+// (compiler/codegen/nvptx_target.hexa STMT_CALL math branch). Pure ASCII
+// for driver-JIT ptxas (no non-ASCII comments).
+//
+// Per-thread (one thread per element i):
+//   out_sqrt[i]  = sqrt.rn.f32(a[i])            EXACT
+//   out_max[i]   = max.f32(a[i], b[i])          EXACT
+//   out_min[i]   = min.f32(a[i], b[i])          EXACT
+//   out_abs[i]   = abs.f32(a[i])                EXACT
+//   out_rsqrt[i] = rsqrt.approx.f32(a[i])       APPROX (~2^-23 rel)
+//   out_exp[i]   = ex2.approx.f32(a[i]*log2e)   APPROX (e^a[i])
+//
+.version 7.8
+.target sm_80
+.address_size 64
+
+.visible .entry math_kernel(
+    .param .u64 p_a,
+    .param .u64 p_b,
+    .param .u64 p_sqrt,
+    .param .u64 p_max,
+    .param .u64 p_min,
+    .param .u64 p_abs,
+    .param .u64 p_rsqrt,
+    .param .u64 p_exp,
+    .param .u32 p_n
+)
+{
+    .reg .pred  %p<2>;
+    .reg .f32   %fs<16>;
+    .reg .b32   %r<6>;
+    .reg .b64   %rd<24>;
+
+    // gid = blockIdx.x * blockDim.x + threadIdx.x
+    mov.u32     %r1, %ctaid.x;
+    mov.u32     %r2, %ntid.x;
+    mov.u32     %r3, %tid.x;
+    mad.lo.s32  %r4, %r1, %r2, %r3;
+    ld.param.u32 %r5, [p_n];
+    setp.ge.s32 %p1, %r4, %r5;
+    @%p1 bra    DONE;
+
+    // byte offset = gid * 4 (f32)
+    cvt.s64.s32 %rd1, %r4;
+    mul.lo.s64  %rd2, %rd1, 4;
+
+    // load a[i], b[i]
+    ld.param.u64 %rd3, [p_a];
+    cvta.to.global.u64 %rd4, %rd3;
+    add.s64     %rd5, %rd4, %rd2;
+    ld.global.f32 %fs0, [%rd5];
+
+    ld.param.u64 %rd6, [p_b];
+    cvta.to.global.u64 %rd7, %rd6;
+    add.s64     %rd8, %rd7, %rd2;
+    ld.global.f32 %fs1, [%rd8];
+
+    // --- the wired intrinsics ---
+    sqrt.rn.f32      %fs2, %fs0;
+    max.f32          %fs3, %fs0, %fs1;
+    min.f32          %fs4, %fs0, %fs1;
+    abs.f32          %fs5, %fs1;          // abs of b[i] (spans negatives)
+    rsqrt.approx.f32 %fs6, %fs0;
+    mul.f32          %fs7, %fs0, 0f3FB8AA3B;   // log2(e) as f32 bits
+    ex2.approx.f32   %fs8, %fs7;
+
+    // store results
+    ld.param.u64 %rd9,  [p_sqrt];
+    cvta.to.global.u64 %rd10, %rd9;
+    add.s64     %rd11, %rd10, %rd2;
+    st.global.f32 [%rd11], %fs2;
+
+    ld.param.u64 %rd12, [p_max];
+    cvta.to.global.u64 %rd13, %rd12;
+    add.s64     %rd14, %rd13, %rd2;
+    st.global.f32 [%rd14], %fs3;
+
+    ld.param.u64 %rd15, [p_min];
+    cvta.to.global.u64 %rd16, %rd15;
+    add.s64     %rd17, %rd16, %rd2;
+    st.global.f32 [%rd17], %fs4;
+
+    ld.param.u64 %rd18, [p_abs];
+    cvta.to.global.u64 %rd19, %rd18;
+    add.s64     %rd20, %rd19, %rd2;
+    st.global.f32 [%rd20], %fs5;
+
+    ld.param.u64 %rd21, [p_rsqrt];
+    cvta.to.global.u64 %rd22, %rd21;
+    add.s64     %rd23, %rd22, %rd2;
+    st.global.f32 [%rd23], %fs6;
+
+    ld.param.u64 %rd9,  [p_exp];
+    cvta.to.global.u64 %rd10, %rd9;
+    add.s64     %rd11, %rd10, %rd2;
+    st.global.f32 [%rd11], %fs8;
+
+DONE:
+    ret;
+}

@@ -1,0 +1,166 @@
+// tool/build_hexac.hexa — S4 native-path build for the hexa-lang
+// compiler binary (canonical name `hexac`, the clean replacement for
+// the bootstrap-era codename `aprime_cc`).
+//
+// Hexa-native build orchestrator (no `.sh`): replaces the hexat -> C
+// -> clang stages of `tool/build_aprime.sh`. The native compiler
+// compiles its own source via `--emit=asm`, then we assemble + link.
+// NO hexat in the build path. clang is still shelled at stage 4 as
+// the assembler + linker; S7 (own assembler + `hexa_ld`) eliminates
+// that last toolchain dependency.
+//
+// Self-host fixpoint proven 2026-05-20 (gen1.s ≡ gen2.s byte-identical,
+// md5 29426b801cb072b2861bd608e884b20b). This script productizes that
+// chain — the 3-fn shim mirrors `/tmp/gen2_shim.c` from the S3 sub-
+// agent's chain.
+//
+// Pipeline (4 stages):
+//   1. flatten compiler/main.hexa import+use closure (compiled module
+//      loader, same call shape as build_aprime.sh stage 1).
+//   2. aprime_cc --emit=asm flat.hexa -> flat.s (native codegen).
+//   3. write asm-path naming shim (sha256_hex / list_dir / mono_ns
+//      wrappers — the asm path lacks build_aprime.sh's sed rewrites).
+//   4. clang assemble + link: flat.s + shim.c + runtime.c -> hexac.
+//
+// Usage:
+//   hexa run tool/build_hexac.hexa [-o OUT] [-r REPO] [-v APRIME]
+//
+// Flags:
+//   -o OUT     output binary path        (default: build/hexac)
+//   -r REPO    hexa-lang repo root       (default: $HEXA_LANG or cwd)
+//   -v APRIME  aprime_cc path            (default: <repo>/build/aprime_cc)
+//
+// Exit codes: 0 hexac built + Mach-O verified · 1 any stage failed.
+
+fn show_usage() {
+    println("usage: hexa run tool/build_hexac.hexa [-o OUT] [-r REPO] [-v APRIME]")
+}
+
+// ── Parse CLI args ──
+let raw_args = argv()
+let mut out = "build/hexac"
+let mut repo = ""
+let mut aprime = ""
+
+let mut i = 2  // skip [hexa_program, script_path]
+while i < len(raw_args) {
+    let a = raw_args[i]
+    if a == "-o" {
+        out = raw_args[i + 1]
+        i = i + 2
+    } else if a == "-r" {
+        repo = raw_args[i + 1]
+        i = i + 2
+    } else if a == "-v" {
+        aprime = raw_args[i + 1]
+        i = i + 2
+    } else if a == "-h" || a == "--help" {
+        show_usage()
+        exit(0)
+    } else {
+        println("build_hexac: unknown arg '" + a + "'")
+        show_usage()
+        exit(1)
+    }
+}
+
+// ── Resolve repo root ──
+if len(repo) == 0 {
+    repo = env("HEXA_LANG")
+}
+if len(repo) == 0 {
+    repo = exec("pwd").trim()
+}
+if !file_exists(repo + "/compiler/main.hexa") {
+    println("build_hexac: no compiler/main.hexa under " + repo)
+    exit(1)
+}
+
+// ── Resolve aprime_cc (the existing native compiler, pre-rename) ──
+if len(aprime) == 0 {
+    aprime = repo + "/build/aprime_cc"
+}
+if exec("test -x '" + aprime + "' && printf yes || printf no") != "yes" {
+    println("build_hexac: aprime_cc missing/not-executable: " + aprime)
+    println("            build it first via tool/build_aprime.sh")
+    exit(1)
+}
+
+let loader = repo + "/build/hexa_module_loader"
+if exec("test -x '" + loader + "' && printf yes || printf no") != "yes" {
+    println("build_hexac: module loader missing: " + loader)
+    exit(1)
+}
+
+// ── Per-build temp dir ──
+let tmp = exec("mktemp -d -t hexac_build.XXXXXX").trim()
+let flat  = tmp + "/flat.hexa"
+let flats = tmp + "/flat.s"
+let shim  = tmp + "/shim.c"
+
+println("=== build_hexac: repo=" + repo + "  aprime_cc=" + aprime + " ===")
+
+// ── Stage 1 — flatten import+use closure ──
+println("  [1/4] flatten compiler/main.hexa -> " + flat)
+let _r1 = exec("HEXA_LANG='" + repo + "' '" + loader + "' '" + repo + "/compiler/main.hexa' '" + flat + "' 2>&1 | tail -1")
+if len(_r1) > 0 { println("    " + _r1) }
+if exec("test -s '" + flat + "' && printf yes || printf no") != "yes" {
+    println("build_hexac: flatten produced empty " + flat)
+    exit(1)
+}
+
+// ── Stage 2 — aprime_cc native codegen ──
+// Leading `_drv.hexa` placeholder satisfies aprime_cc's argv
+// normalization (S5 finding: argv scan needs a `.hexa` token before
+// the flags consume the source).
+println("  [2/4] aprime_cc --emit=asm -> " + flats)
+let _r2 = exec("HEXA_LANG='" + repo + "' '" + aprime + "' _drv.hexa --emit=asm --target=arm64-apple-darwin -o '" + flats + "' '" + flat + "' 2>&1 | tail -3")
+if len(_r2) > 0 { println("    " + _r2) }
+if exec("test -s '" + flats + "' && printf yes || printf no") != "yes" {
+    println("build_hexac: aprime_cc produced empty " + flats)
+    exit(1)
+}
+
+// ── Stage 3 — asm-path naming shim ──
+// Native codegen emits source-level builtin names (sha256_hex /
+// list_dir / mono_ns); the C path's tool/s4_flatc_post.py + sed
+// bridges those to the hexa_* runtime exports. The asm path needs the
+// same bridge as a small linkable .c. Mirrors /tmp/gen2_shim.c.
+println("  [3/4] write asm-path naming shim -> " + shim)
+// Cycle 33: aprime_cc now compiles stdlib/core/hash/sha256.hexa which
+// defines `sha256_hex` as a hexa pub fn — so the shim's sha256_hex
+// triggers `duplicate symbol _sha256_hex` at link. `list_dir` is
+// defined in compiler/intrinsics/intrinsics.hexa BUT aprime_cc's
+// codegen doesn't emit its body (intrinsic-vs-impl ambiguity), so
+// the shim's list_dir bridge stays. mono_ns is pure runtime — keep.
+let shim_src = "/* asm-path naming bridge: native-asm builtin names ->\n   hexa_* runtime exports. Cycle 33 trimmed sha256_hex (defined as\n   real hexa fn in stdlib/core/hash/sha256.hexa now that aprime_cc\n   accepts hex literals); list_dir + mono_ns still need bridging. */\n#include \"runtime.h\"\nHexaVal list_dir(HexaVal p)   { return hexa_list_dir(p); }\nHexaVal mono_ns(void)         { return hexa_mono_ns(); }\n"
+write_file(shim, shim_src)
+
+// ── Stage 4 — clang assemble + link ──
+// clang here acts purely as assembler + linker. S7 replaces this step
+// with self-`as` + `hexa_ld`, dropping the final external dependency.
+println("  [4/4] clang assemble + link -> " + out)
+let out_dir = exec("dirname '" + out + "'").trim()
+let _mk = exec("mkdir -p '" + out_dir + "' 2>/dev/null")
+// Cycle 44: parallel dead-strip + -Oz to build_aprime.sh (cycle 43)
+// — same 55% binary shrink expected for hexac. clang here is just
+// assembler+link so -Oz applies to the runtime.c re-compile path.
+let cl_cmd = "clang -Oz -arch arm64 -ffunction-sections -fdata-sections -Wl,-dead_strip -I '" + repo + "/self' '" + flats + "' '" + shim + "' '" + repo + "/self/runtime.c' -o '" + out + "' 2>&1"
+let _r4 = exec(cl_cmd)
+if exec("test -x '" + out + "' && printf yes || printf no") != "yes" {
+    println("build_hexac: clang assemble+link failed:")
+    if len(_r4) > 0 { println(_r4) }
+    exit(1)
+}
+
+// ── Mach-O verification ──
+let head4 = exec("head -c 4 '" + out + "' | xxd -p").trim()
+if head4 == "cffaedfe" || head4 == "cefaedfe" || head4 == "cafebabe" {
+    let sz = exec("stat -f%z '" + out + "'").trim()
+    println("OK: hexac built at " + out + " (" + sz + " B Mach-O arm64)")
+    let _cleanup = exec("rm -rf '" + tmp + "' 2>/dev/null")
+    exit(0)
+} else {
+    println("build_hexac: " + out + " is not a Mach-O binary (head4=" + head4 + ")")
+    exit(1)
+}

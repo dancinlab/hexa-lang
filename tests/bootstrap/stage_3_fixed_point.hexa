@@ -1,0 +1,98 @@
+// tests/bootstrap/stage_3_fixed_point.hexa - Stage 2 -> Stage 3 byte-equal check.
+//
+// The fixed-point assertion that closes the bootstrap cycle:
+//
+//   stage_2 = stage_1(compiler/main.hexa)        (stage_2_smoke.hexa)
+//   stage_3 = stage_2(compiler/main.hexa)        (THIS HARNESS)
+//   ASSERT  sha256(stage_2) == sha256(stage_3)   (byte-equality)
+//
+// Reaching equality is the canonical "self-hosting compiler is consistent"
+// proof: any non-determinism in code generation, any host-host divergence,
+// any path/timestamp leak into the binary will fail this check.
+//
+// Common reasons this fails (see doc/bootstrap_stage_2_3.md):
+//   - timestamp or build-id embedded into the binary
+//   - hash-table iteration order depending on pointer values
+//   - file ordering depending on directory walk order (readdir non-determ.)
+//   - environment-variable leak (HOME, PWD) into emitted strings
+//
+// Exit codes:
+//   0   PASS (byte-equal) OR DEFERRED (stage 2 binary missing)
+//   1   stage 3 build attempted but produced no binary
+//   2   stage 2 and stage 3 differ (FIXED POINT FAIL)
+
+fn _path_exists(p: string) -> bool {
+    return file_exists(p)
+}
+
+fn _exec(cmd: string) -> string {
+    return to_string(exec(cmd))
+}
+
+fn _trim(s: string) -> string {
+    return s.trim()
+}
+
+fn sha256_file(path: string) -> string {
+    // Both `shasum -a 256` (BSD/macOS) and `sha256sum` (GNU/Linux) emit
+    // `<hex>  <path>`. We pipe through awk to take field 1 only and trim.
+    // Try shasum first (present on both platforms when coreutils-perl is
+    // installed); fall back to sha256sum.
+    let probe = _trim(_exec("command -v shasum >/dev/null 2>&1 && echo s || echo g"))
+    let mut cmd = ""
+    if probe == "s" {
+        cmd = "shasum -a 256 '" + path + "' 2>/dev/null | awk '{print $1}'"
+    } else {
+        cmd = "sha256sum '" + path + "' 2>/dev/null | awk '{print $1}'"
+    }
+    return _trim(_exec(cmd))
+}
+
+pub fn main() -> i32 {
+    println("[stage_3_fixed_point] start")
+
+    let stage_2 = "/tmp/hexa_stage_2"
+    let stage_3 = "/tmp/hexa_stage_3"
+
+    if !_path_exists(stage_2) {
+        println("[stage_3_fixed_point] stage 2 not found at " + stage_2 + "; deferred")
+        println("[stage_3_fixed_point] (run tests/bootstrap/stage_2_smoke.hexa first)")
+        return 0
+    }
+    println("[stage_3_fixed_point] stage 2 = " + stage_2)
+
+    // Wipe any prior stage 3 to avoid stale-file false PASS.
+    let _rm = _exec("rm -f '" + stage_3 + "' 2>/dev/null")
+
+    // Use stage 2 to recompile the compiler source -> stage 3.
+    let build_cmd = "chmod +x '" + stage_2 + "' && '" + stage_2 +
+                    "' build compiler/main.hexa -o '" + stage_3 + "' 2>&1"
+    println("[stage_3_fixed_point] build: " + build_cmd)
+    let build_out = _exec(build_cmd)
+    if build_out != "" {
+        println("[stage_3_fixed_point] build output: " + build_out)
+    }
+
+    if !_path_exists(stage_3) {
+        eprintln("[stage_3_fixed_point] FAIL: stage 3 binary not produced at " + stage_3)
+        return 1
+    }
+    println("[stage_3_fixed_point] stage 3 = " + stage_3)
+
+    // Byte-equal compare via SHA256.
+    let h2 = sha256_file(stage_2)
+    let h3 = sha256_file(stage_3)
+    if h2 == "" || h3 == "" {
+        eprintln("[stage_3_fixed_point] FAIL: could not hash binaries (h2='" + h2 + "', h3='" + h3 + "')")
+        return 1
+    }
+    if h2 != h3 {
+        eprintln("[stage_3_fixed_point] FIXED POINT FAIL")
+        eprintln("  stage_2 sha256 = " + h2)
+        eprintln("  stage_3 sha256 = " + h3)
+        eprintln("  see doc/bootstrap_stage_2_3.md for triage")
+        return 2
+    }
+    println("[stage_3_fixed_point] FIXED POINT PASS: stage_2 == stage_3 sha256=" + h2)
+    return 0
+}

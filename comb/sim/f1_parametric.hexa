@@ -1,0 +1,93 @@
+// comb/sim/f1_parametric.hexa — F1 parametric sweep (T2 first-cut)
+//
+// Non-contention NoC model (Dally & Towles 2004 §3.7) — gives a *lower
+// bound* result that congestion can only worsen (preserved ratios at low
+// load). degree-6 hex vs degree-4 mesh, uniform-random traffic.
+//
+// Per-packet (idealized):
+//   latency = avg_hops * t_hop
+//   energy  = avg_hops * e_hop
+//   t_hop   = t_router(d) + t_wire(L)
+//   e_hop   = e_router(d) + e_wire(L^2)      // RC delay/energy ~ L^2
+//
+// All values *x100 integer scaled* (no float; hexa runtime stays clean):
+//   t_router_d4_x100, t_router_d6_x100   router cycles per hop
+//   t_wire_x100                          axial wire cycles (baseline 100)
+//   e_wire_diag_x100                     diagonal hex link RC energy
+//                                        (100 = no penalty, 175 ≈ sqrt(3)
+//                                        full RC ratio for sqrt(3) length)
+//   e_router_d4_x100 = 100               baseline
+//   e_router_d6_x100 = 150               d-linear port cost (~1.5x)
+//
+// avg_hops uses int numerator with x3 (avg = 2k/3 mesh, 2R/3 hex).
+//
+// Outputs: lat and energy in x100 units per packet — degree-6 wins iff
+// lat_hex < lat_mesh AND/OR e_hex < e_mesh.
+//
+// Sources: Dally & Towles 2004; Leighton 1992; T1A_analytical.md.
+
+fn isqrt(n) {
+    let mut r = 0
+    while (r + 1) * (r + 1) <= n {
+        r = r + 1
+    }
+    r
+}
+
+fn hex_R(n) {
+    let mut r = 0
+    while (3 * (r + 1) * (r + 1) + 3 * (r + 1) + 1) <= n {
+        r = r + 1
+    }
+    r
+}
+
+fn f1_row(n, t_router_d4, t_router_d6, e_diag) {
+    let k = isqrt(n)
+    let r = hex_R(n)
+    let avg_hops_mesh_x3 = 2 * k
+    let avg_hops_hex_x3  = 2 * r
+    let t_wire = 100
+    let e_router_d4 = 100
+    let e_router_d6 = 150
+    let e_wire_axial = 100
+    // hex avg energy/hop: half axial, half diagonal (worst case)
+    let avg_e_hop_hex = (e_router_d6 + e_wire_axial + e_router_d6 + e_diag) / 2
+    let avg_e_hop_mesh = e_router_d4 + e_wire_axial
+    // total per-packet (multiply ratios; divide by 3 at print to keep int math)
+    let lat_mesh = avg_hops_mesh_x3 * (t_router_d4 + t_wire)
+    let lat_hex  = avg_hops_hex_x3  * (t_router_d6 + t_wire)
+    let e_mesh   = avg_hops_mesh_x3 * avg_e_hop_mesh
+    let e_hex    = avg_hops_hex_x3  * avg_e_hop_hex
+    let lat_win  = if lat_hex < lat_mesh { 1 } else { 0 }
+    let e_win    = if e_hex < e_mesh { 1 } else { 0 }
+    println("N=" + to_string(n)
+        + " t_r4=" + to_string(t_router_d4)
+        + " t_r6=" + to_string(t_router_d6)
+        + " e_diag=" + to_string(e_diag)
+        + " lat_m=" + to_string(lat_mesh)
+        + " lat_h=" + to_string(lat_hex)
+        + " e_m=" + to_string(e_mesh)
+        + " e_h=" + to_string(e_hex)
+        + " lat_d6_wins=" + to_string(lat_win)
+        + " e_d6_wins=" + to_string(e_win))
+}
+
+println("# comb F1 parametric sweep — non-contention NoC, x100 integer")
+println("# all per-packet totals (3x for int avg). win flags: 1 = degree-6 beats degree-4")
+println("# sweep dimensions: t_router_d6 (1.0..2.0 d-cost), e_diag (1.0..1.75 RC penalty)")
+println("#")
+// baseline: degree-cost-only, no diag wire penalty
+f1_row(1024, 100, 100, 100)
+f1_row(1024, 100, 150, 100)
+f1_row(1024, 100, 200, 100)
+// add diagonal wire RC penalty (sqrt(3) full at 175)
+f1_row(1024, 100, 150, 130)
+f1_row(1024, 100, 150, 175)
+f1_row(1024, 100, 200, 175)
+// scan N
+f1_row(256, 100, 150, 130)
+f1_row(10000, 100, 150, 130)
+println("#")
+println("# read: rows where lat_d6_wins=1 AND e_d6_wins=1 → degree-6 net wins F1")
+println("# rows where both =0 → degree-6 loses F1 in this regime (falsified)")

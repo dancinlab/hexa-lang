@@ -1,0 +1,29 @@
+{
+  "all_pass" : true,
+  "campaign" : "rfc075_metal_subdiv_2026_05_21",
+  "device" : "Apple M3",
+  "falsifier_F_RFC075_METAL_SUBDIV_NUMERIC_EQ" : "PASS",
+  "N" : 1024,
+  "rows" : [
+    {
+      "byte_mismatch" : 0,
+      "exact_expected" : true,
+      "max_abs_diff" : 0,
+      "max_ulp" : 0,
+      "shape" : "vec_sub",
+      "status" : "PASS_BYTEEQ"
+    },
+    {
+      "byte_mismatch" : 284,
+      "exact_expected" : false,
+      "max_abs_diff" : 7.62939453125e-06,
+      "max_ulp" : 1,
+      "shape" : "vec_div",
+      "status" : "PASS_LOW_ULP"
+    }
+  ],
+  "shapes_tested" : [
+    "vec_sub",
+    "vec_div"
+  ]
+}

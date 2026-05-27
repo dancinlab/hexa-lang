@@ -1,0 +1,236 @@
+// test/native_build/poc_rt_exit_obj_emit.hexa
+//
+// Chunk B/A bridge PoC (per RUNTIME.md Phase-H §"첫 increment" follow-on):
+// Produce a Mach-O .o file from hexa-emitted ARM64 bytes (rt_exit primitive),
+// link with a tiny C caller, and verify exit(42) at runtime.
+//
+// SCOPE — one primitive (`rt_exit`, 16 bytes, no relocs, the simplest case).
+//
+// SELF-CONTAINED: `use "self/codegen/runtime_arm64"` / `use "self/codegen/macho"`
+// were attempted first but the local repo on the build host has no compiled
+// module_loader (per memory `reference_hexa_module_loader_env_2026_05_20`),
+// so multi-`use` programs link-fail. For PoC reproducibility this file inlines
+// EXACT copies of the two source-of-truth functions:
+//   - rt_exit()        ← self/codegen/runtime_arm64.hexa L36
+//   - macho_obj_wrap() ← self/codegen/macho.hexa L34
+// (plus their leaf helpers). The bytes are character-identical to the
+// upstream definitions; the PoC therefore proves the upstream fns produce
+// a working .o, not a divergent copy.
+//
+// Pipeline (NO clang in object production):
+//   1. rt_exit() (inlined from self/codegen/runtime_arm64.hexa)  → [int] 16 bytes
+//   2. macho_obj_wrap(bytes, main_offset=0)                       → MH_OBJECT .o
+//   3. write_bytes("/tmp/poc_rt_exit.o", obj_bytes)               → file on disk
+//
+// The link step (clang caller.c rt_exit.o -o caller) is OUT OF SCOPE for
+// this PoC — chunk B is the EMIT side; link is the separate Phase-H scope
+// (tool/hexa_ld.hexa, already-shipped RUNTIME.md §"첫 increment"). clang is
+// only used downstream of this artifact as the linker (control oracle for
+// the PoC; not part of the produced .o's emit path).
+//
+// The .o exposes ONE external symbol `_hexa_main` (the macho_obj_wrap
+// fixed export name). The C caller declares `extern void hexa_main(long)`
+// and tail-calls it. The bytes set x16=1 (SYS_exit) and svc #0x80 with
+// whatever x0 the caller passed (rt_exit's prologue does NOT touch x0)
+// → exit(arg).
+//
+// Cross-cutting:
+//   - closure = runs exact (feedback-closure-is-physical-limit) — exit
+//     code 42 is the byte-level falsifier.
+//   - f1/f2 — clang ONLY as control oracle on the link side, NEVER in the
+//     produced .o's runtime emit (the 16 bytes come from rt_exit()).
+//   - no binaries committed.
+
+// ═══════════════════════════════════════════════════════════════════
+// Inlined from self/codegen/runtime_arm64.hexa (rt_exit, lines 36-60)
+// ═══════════════════════════════════════════════════════════════════
+fn rt_exit_bytes() -> [int] {
+    let mut c = []
+    // stp x29, x30, [sp, #-16]!     0xA9BF7BFD
+    c.push(253); c.push(123); c.push(191); c.push(169)
+    // mov x29, sp                    0x910003FD
+    c.push(253); c.push(3); c.push(0); c.push(145)
+    // mov x16, #1 (SYS_exit)        0xD2800030
+    c.push(48); c.push(0); c.push(128); c.push(210)
+    // svc #0x80                      0xD4001001
+    c.push(1); c.push(16); c.push(0); c.push(212)
+    return c
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Inlined from self/codegen/macho.hexa (constants + helpers + obj_wrap)
+// ═══════════════════════════════════════════════════════════════════
+fn mh_magic_64_v() -> int { return 0xFEEDFACF }
+fn mh_object_v() -> int { return 1 }
+fn cpu_type_arm64_v() -> int { return 0x0100000C }
+fn cpu_subtype_all_v() -> int { return 0 }
+fn lc_segment_64_v() -> int { return 0x19 }
+fn lc_symtab_v() -> int { return 0x02 }
+fn lc_build_version_v() -> int { return 0x32 }
+fn s_attr_pure_v() -> int { return 0x80000000 }
+fn s_attr_some_v() -> int { return 0x00000400 }
+fn n_ext_v() -> int { return 0x01 }
+fn n_sect_v() -> int { return 0x0e }
+
+fn align_to_v(val: int, align: int) -> int {
+    return (val + align - 1) / align * align
+}
+
+fn push_u16_le_v(buf: [int], val: int) -> [int] {
+    return buf.push(val % 256).push((val / 256) % 256)
+}
+
+fn push_u32_le_v(buf: [int], val: int) -> [int] {
+    return buf.push(val % 256).push((val / 256) % 256).push((val / 65536) % 256).push((val / 16777216) % 256)
+}
+
+fn push_u64_le_v(buf: [int], val: int) -> [int] {
+    let mut b = push_u32_le_v(buf, val % 0x100000000)
+    return push_u32_le_v(b, val / 0x100000000)
+}
+
+// Inlined from self/codegen/macho.hexa::macho_obj_wrap (L34-136).
+fn macho_obj_wrap_v(code: [int], main_offset: int) -> [int] {
+    let mut out = []
+    let code_size = len(code)
+
+    let header_size = 32
+    let segment_cmd_size = 152
+    let symtab_cmd_size = 24
+    let build_version_cmd_size = 24
+    let sizeofcmds = segment_cmd_size + symtab_cmd_size + build_version_cmd_size
+
+    let code_offset = align_to_v(header_size + sizeofcmds, 8)
+    let symtab_offset = align_to_v(code_offset + code_size, 4)
+    let nlist_size = 16
+    let strtab_offset = symtab_offset + nlist_size
+    let strtab_size = 1 + 11
+
+    // Mach-O Header (32 bytes)
+    out = push_u32_le_v(out, mh_magic_64_v())
+    out = push_u32_le_v(out, cpu_type_arm64_v())
+    out = push_u32_le_v(out, cpu_subtype_all_v())
+    out = push_u32_le_v(out, mh_object_v())
+    out = push_u32_le_v(out, 3)
+    out = push_u32_le_v(out, sizeofcmds)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+
+    // LC_SEGMENT_64
+    out = push_u32_le_v(out, lc_segment_64_v())
+    out = push_u32_le_v(out, segment_cmd_size)
+    let mut i = 0
+    while i < 16 { out.push(0); i = i + 1 }
+    out = push_u64_le_v(out, 0)
+    out = push_u64_le_v(out, align_to_v(strtab_offset + strtab_size, 8))
+    out = push_u64_le_v(out, code_offset)
+    out = push_u64_le_v(out, strtab_offset + strtab_size - code_offset)
+    out = push_u32_le_v(out, 7)
+    out = push_u32_le_v(out, 7)
+    out = push_u32_le_v(out, 1)
+    out = push_u32_le_v(out, 0)
+
+    // Section header: __text (80 bytes)
+    out.push(95); out.push(95); out.push(116); out.push(101); out.push(120); out.push(116)
+    let mut j = 0
+    while j < 10 { out.push(0); j = j + 1 }
+    out.push(95); out.push(95); out.push(84); out.push(69); out.push(88); out.push(84)
+    j = 0
+    while j < 10 { out.push(0); j = j + 1 }
+    out = push_u64_le_v(out, 0)
+    out = push_u64_le_v(out, code_size)
+    out = push_u32_le_v(out, code_offset)
+    out = push_u32_le_v(out, 2)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, s_attr_pure_v() + s_attr_some_v())
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+
+    // LC_SYMTAB
+    out = push_u32_le_v(out, lc_symtab_v())
+    out = push_u32_le_v(out, symtab_cmd_size)
+    out = push_u32_le_v(out, symtab_offset)
+    out = push_u32_le_v(out, 1)
+    out = push_u32_le_v(out, strtab_offset)
+    out = push_u32_le_v(out, strtab_size)
+
+    // LC_BUILD_VERSION
+    out = push_u32_le_v(out, lc_build_version_v())
+    out = push_u32_le_v(out, build_version_cmd_size)
+    out = push_u32_le_v(out, 1)
+    out = push_u32_le_v(out, 0x000E0000)
+    out = push_u32_le_v(out, 0x000E0000)
+    out = push_u32_le_v(out, 0)
+
+    // Pad to code_offset
+    while len(out) < code_offset { out.push(0) }
+
+    // Code section
+    let mut k = 0
+    while k < len(code) { out.push(code[k]); k = k + 1 }
+
+    // Pad to symtab_offset
+    while len(out) < symtab_offset { out.push(0) }
+
+    // Symbol table: nlist_64 (16 bytes)
+    out = push_u32_le_v(out, 1)
+    out.push(n_sect_v() + n_ext_v())
+    out.push(1)
+    out = push_u16_le_v(out, 0)
+    out = push_u64_le_v(out, main_offset)
+
+    // String table
+    out.push(0)
+    // "_hexa_main\0"
+    out.push(95); out.push(104); out.push(101); out.push(120); out.push(97)
+    out.push(95); out.push(109); out.push(97); out.push(105); out.push(110); out.push(0)
+
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// PoC entry
+// ═══════════════════════════════════════════════════════════════════
+fn poc_emit_rt_exit_obj() {
+    println("[poc] chunk B/A bridge — hexa-native .o emit for rt_exit")
+
+    let code = rt_exit_bytes()
+    if len(code) != 16 {
+        println("FAIL: rt_exit_bytes() expected 16, got " + to_string(len(code)))
+        return
+    }
+    println("  rt_exit bytes  : " + to_string(len(code)) + " (16 expected)")
+
+    // SVC trailer sanity (1, 16, 0, 212 = 0xD4001001 LE)
+    if code[12] != 1 || code[13] != 16 || code[14] != 0 || code[15] != 212 {
+        println("FAIL: SVC trailer mismatch")
+        return
+    }
+    println("  SVC trailer    : 01 10 00 d4 (svc #0x80) OK")
+
+    let obj = macho_obj_wrap_v(code, 0)
+    println("  obj_wrap size  : " + to_string(len(obj)) + " bytes total")
+
+    // MH_MAGIC_64 LE at offset 0 (0xFEEDFACF → cf fa ed fe)
+    if obj[0] != 0xcf || obj[1] != 0xfa || obj[2] != 0xed || obj[3] != 0xfe {
+        println("FAIL: MH_MAGIC_64 mismatch at offset 0")
+        return
+    }
+    println("  MH_MAGIC_64    : cf fa ed fe OK")
+
+    // filetype = MH_OBJECT (1) at offset 12
+    if obj[12] != 1 {
+        println("FAIL: filetype not MH_OBJECT (got " + to_string(obj[12]) + ")")
+        return
+    }
+    println("  filetype       : 1 (MH_OBJECT) OK")
+
+    let out = "/tmp/poc_rt_exit.o"
+    write_bytes(out, obj)
+    println("  wrote          : " + out)
+    println("[poc] EMIT OK — link/run via host shell driver")
+}
+
+poc_emit_rt_exit_obj()

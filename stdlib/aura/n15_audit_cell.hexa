@@ -1,0 +1,133 @@
+#!hexa strict
+// stdlib/aura/n15_audit_cell.hexa — `aura + N15` AURA 도메인 마일스톤
+// 일관성 audit cell (self-verification · hexa-native).
+//
+// CONTEXT: 22 LANDED (V0-V7 + D1-D7 + G1-G3 + A1-A4) + 15 next-list
+// (N1-N15) = 37 milestone total. N15 = 일관성 audit cell · 모든
+// hexa-lang/stdlib/aura/ 파일을 scope_caveat presence + sentinel
+// emit 패턴으로 통일성 검증.
+//
+// Honesty (g3 · @D d1):
+//   * absorbed=false PERMANENTLY — audit cell, NOT executed verification.
+//
+// Sentinels:
+//   __HEXA_AURA_N15_AUDIT_CELL__ PASS
+//   AURA_N15_AUDIT_CELL_OK gate=GATE_OPEN absorbed=false
+
+let VERSION       = "0.1.0"
+let MODULE        = "aura-n15-audit-cell"
+let GEOMETRY_ID   = "aura_n15_audit_cell_v1"
+let RECORD_KIND   = "aura_n15_audit_cell_record"
+
+fn _audit_scope_block() -> [str] {
+    return [
+        "scope: all stdlib/aura/*.hexa files (V0-V7 + D1-D7 + G1-G3 + A1-A4 + N1-N14)",
+        "self_includes: N15 itself (last in audit sweep)",
+        "consistency_dimensions: 6 axes (header / sentinels / scope_caveats / g3 marker / emit pattern / module-name)",
+        "tool: hexa run stdlib/aura/n15_audit_cell.hexa OR pool MCP wrap",
+        "output: per-file audit report + summary stats",
+        "automation: cellrun.hexa N15 as meta-cell (self-audit)",
+    ]
+}
+
+fn _consistency_check_block() -> [str] {
+    return [
+        "check_1_header: '#!hexa strict' shebang on line 1",
+        "check_2_module_let: 'let MODULE = ...' present + matches filename",
+        "check_3_record_kind: 'let RECORD_KIND = ...' present + uses aura_<verb>_record convention",
+        "check_4_scope_caveats: fn _scope_caveats() returns ≥3 items + includes 'absorbed=false PERMANENTLY (g3)'",
+        "check_5_main: fn main() calls _emit_header + _emit_caveats + sentinel emit",
+        "check_6_sentinel_OK_line: prints 'AURA_<VERB>_OK record_kind=...' on main exit",
+        "check_7_module_PASS_line: prints '__HEXA_AURA_<VERB>__ PASS' on main exit",
+    ]
+}
+
+fn _g3_compliance_block() -> [str] {
+    return [
+        "g3_axis_1: absorbed=false PERMANENTLY on all V/D/G/A/N cells (no producer-side absorbed=true)",
+        "g3_axis_2: scope_caveat block includes ringfence language ('TEMPLATE only · NOT cleared · etc')",
+        "g3_axis_3: V0 sleep_edf_measured_oracle.py + _dft_alpha_band_batch.hexa = ONLY absorbed=true source",
+        "g3_axis_4: G1-G3 paths label NOT solver / NOT platform / NOT SoC",
+        "g3_axis_5: A1-A4 packages label NOT cleared / NOT qualified / NOT submitted",
+        "g3_axis_6: D1-D7 substance label ILLUSTRATIVE / NOT regulatory commitment",
+    ]
+}
+
+fn _summary_stats_block() -> [str] {
+    return [
+        "milestones_total: 37 (V0-V7 8 + D1-D7 7 + G1-G3 3 + A1-A4 4 + N1-N15 15)",
+        "hexa_lang_PRs: 21 (V skeletons) + 7 (D substance) + 3 (G brk path) + 4 (A runbook) + 14 (N) = ~49 (target after N15)",
+        "demiurge_PRs: 10+ (migration + cellrun + log + milestone flip)",
+        "total_LOC_hexa_lang: ~3000+ (est. after N1-N15 LANDED)",
+        "g3_absorbed_true_count: 1 (V0 G33 Sleep-EDF only)",
+        "g3_absorbed_false_count: 36 (all others · TEMPLATE/ILLUSTRATIVE/ROADMAP/SCAFFOLD)",
+    ]
+}
+
+fn _audit_outputs_block() -> [str] {
+    return [
+        "per_file_report: filename · check_1_through_7 PASS/FAIL · scope_caveat count",
+        "violation_log: any failure → INBOX entry + diagnosis",
+        "metrics_dashboard: hexa-native sentinel stats over time",
+        "atlas_integration: D_aura_audit_consistency = % PASS (target 100%)",
+        "publication: audit report supports N14 paper section 6 (g3 methodology)",
+        "regression_guard: re-run on every aura/*.hexa add or modify (CI gate)",
+    ]
+}
+
+fn _scope_caveats() -> [str] {
+    return [
+        "N15 audit cell is a META cell, NOT a pre-executed audit run.",
+        "Actual audit run requires: hexa run + parsing of each *.hexa source.",
+        "Some checks (consistency_dimensions) are intentionally lightweight (file pattern only).",
+        "Deep semantic audit (e.g. 'are caveats truthful?') belongs to human review.",
+        "absorbed=false PERMANENTLY (g3) - meta-audit, NEVER a passed consistency proof.",
+    ]
+}
+
+fn _emit_block(label: str, lines: [str]) {
+    print("# [" + label + "]")
+    let n = lines.len()
+    let mut i = 0
+    while i < n {
+        print("#   - " + lines[i])
+        i = i + 1
+    }
+    print("#")
+}
+
+fn _emit_header() {
+    print("# AURA N15 - meta audit cell (self-consistency + g3 compliance)")
+    print("# device_target = 22 LANDED + 15 next-list = 37 milestone audit")
+    print("# version = " + VERSION)
+    print("# ringfence: meta-cell - NOT a pre-executed audit run")
+    print("#")
+    _emit_block("audit_scope",       _audit_scope_block())
+    _emit_block("consistency_check", _consistency_check_block())
+    _emit_block("g3_compliance",     _g3_compliance_block())
+    _emit_block("summary_stats",     _summary_stats_block())
+    _emit_block("audit_outputs",     _audit_outputs_block())
+}
+
+fn _emit_caveats() {
+    let c = _scope_caveats()
+    let n = c.len()
+    let mut i = 0
+    while i < n {
+        print("# scope_caveat: " + c[i])
+        i = i + 1
+    }
+}
+
+fn main() {
+    _emit_header()
+    _emit_caveats()
+
+    print("AURA_N15_AUDIT_CELL_OK record_kind=" + RECORD_KIND
+        + " geometry_id=" + GEOMETRY_ID
+        + " gate=GATE_OPEN absorbed=false"
+        + " version=" + VERSION
+        + " milestones=37 g3_absorbed_true=1_only_V0")
+
+    print("__HEXA_AURA_N15_AUDIT_CELL__ PASS")
+}

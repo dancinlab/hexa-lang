@@ -1,0 +1,89 @@
+{
+  "rfc": "RFC 071",
+  "phase": "P9",
+  "cycle": "N91 (re-fire of N70 after N81 BFLY-const restore + N71-C div re-restore)",
+  "title": "warp_reduce_sum multi-thread source-to-silicon — N91 re-fire",
+  "date": "2026-05-21",
+  "host": {
+    "driver_host": "macOS arm64 (build OK: /tmp/hexa_n91_driver)",
+    "silicon_host": "ubu-2 summer-B650M-K (reached, kernel JIT-rejected)"
+  },
+  "device": {
+    "name": "NVIDIA GeForce RTX 5070",
+    "compute_cap": "12.0",
+    "ptx_target": "sm_80 (would JIT-forward to sm_120a — JIT rejected upstream)"
+  },
+  "outcome": "BLOCKED_HONEST (gap C surfaced; gaps A+B closed)",
+  "main_head_at_start": "b6ca8506",
+  "compiler_source_touched": {
+    "value": true,
+    "reason": "Per task @D g3 honest-scope instruction 'If PTX_OP_SHFL_SYNC_BFLY_B32 still missing somehow, re-restore'. N71-C div edits were silently wiped by 7671d7db (same staging-conflict repair that wiped BFLY const). Mirrored the N81 restore class — re-applied to nvptx_target.hexa _nvptx_binop_mnemonic + _nvptx_binop_mnemonic_for_kind. Edit is uncommitted; lives only in working tree. NOT committed per task constraint 'DO NOT touch GPU.md or commit'."
+  },
+  "preconditions_verified": {
+    "PTX_OP_SHFL_SYNC_BFLY_B32_decl":     "PRESENT (commit 842d6565 restore; grep=1)",
+    "gpu_warp_shuffle_xor_wiring":        "PRESENT (commits 9d21356c + 7671d7db; grep=5)",
+    "div.s64_div.s32_arms":               "PRESENT after local re-restore (grep=4); WIPED on plain main"
+  },
+  "falsifiers": {
+    "F-RFC071-E2E-DRIVER-BUILD":                      "PASS (Mach-O arm64 binary produced)",
+    "F-RFC071-E2E-PTX-EMIT-CLEAN":                    "PASS (shfl.sync.bfly.b32 + div.s64 emit; no honest-stub `// unsupported` markers)",
+    "F-RFC071-E2E-PTX-LOAD":                          "FAIL (ptxas Arguments-mismatch on shfl; Unknown symbol %r9 %r16)",
+    "F-RFC071-E2E-WARP-REDUCE-SUM-NUMERIC-EQ":        "BLOCKED (upstream JIT-reject)"
+  },
+  "ptx_emit_substring_check": {
+    "shfl.sync.bfly.b32":                "PRESENT 1× (L78)",
+    "div.s64":                           "PRESENT 3× (L81 mask/2, L85 tid/32, L89 tid/32 second use)",
+    "div.s32":                           "ABSENT (kernel has no U32-dst div site; arm wired regardless)",
+    "// unsupported call":               "ABSENT",
+    "// unsupported binop":              "ABSENT",
+    "non_ascii_chars":                   0,
+    "file_size_bytes":                   3344
+  },
+  "silicon_fire_output": {
+    "device_name":      "NVIDIA GeForce RTX 5070",
+    "cuModuleLoadDataEx_result": "FAIL (a PTX JIT compilation failed)",
+    "ptxas_jit_err": [
+      "ptxas application ptx input, line 78; error : Arguments mismatch for instruction 'shfl'",
+      "ptxas application ptx input, line 79; error : Arguments mismatch for instruction 'add'",
+      "ptxas application ptx input, line 80; error : Arguments mismatch for instruction 'mov'",
+      "ptxas application ptx input, line 78; error : Unknown symbol '%r9'",
+      "ptxas application ptx input, line 78; error : Unknown symbol '%r16'",
+      "ptxas fatal : Ptx assembly aborted due to errors"
+    ]
+  },
+  "gap_status_after_N91": {
+    "GAP-A (gpu_warp_shuffle_xor mnemonic wiring)":    "CLOSED (shfl.sync.bfly.b32 emits)",
+    "GAP-B (integer / mnemonic wiring)":               "CLOSED (div.s64 / div.s32 emit)",
+    "GAP-C (FP64 -> u32-half decomposition for shfl)": "NEW — diagnosed; not closed. The lowering uses %r<id> for FP64 args; FP64 needs `mov.b64 {%r_lo,%r_hi},%fd_src` split + 2× shfl + recompose per PTX ISA §9.7.13.4. Fixture comment L22-25 had anticipated this gap by design."
+  },
+  "per_warp_outputs":      "N/A (kernel never launched — cuModuleLoadDataEx upstream FAIL)",
+  "cpu_reference_sum":     "N/A",
+  "total_gpu_sum":         "N/A",
+  "ulp_diff":              "N/A",
+  "chain_closure":         "PARTIAL — 2-of-3 codegen gaps closed (A, B). The 3-gap-chain assumption in the task spec (N70 = A+B+C) was inaccurate: N71-A wired only the PTX mnemonic, not the FP64-shuffle composition wrapper. Gap C newly diagnosed via ptxas message.",
+  "artifacts": {
+    "fixture":            "compiler/codegen/nvptx_p9_warp_reduce_test.hexa",
+    "host_c":             "inbox/fires/rfc071_p9_warp_reduce_2026_05_21/host_warp_reduce.c",
+    "fire_log":           "inbox/fires/rfc071_p9_warp_reduce_2026_05_21/fire.log",
+    "result_json":        "inbox/fires/rfc071_p9_warp_reduce_2026_05_21/result.json",
+    "emitted_ptx":        "inbox/fires/rfc071_p9_warp_reduce_2026_05_21/warp_reduce_sum.sm_80.ptx",
+    "ptx_baseline":       "inbox/fires/rfc071_p9_warp_reduce_2026_05_21/warp_reduce_sum.sm_80.ptx.n70_baseline",
+    "fire_log_prev_n81":  "inbox/fires/rfc071_p9_warp_reduce_2026_05_21/fire.log.prev",
+    "closure_md":         "inbox/fires/rfc071_p9_warp_reduce_2026_05_21/CLOSURE.md"
+  },
+  "follow_ons": {
+    "N91_PR_N71_C_RESTORE":   "Commit the div.s32/div.s64/div_f32 re-restore to compiler/codegen/nvptx_target.hexa permanently (mirrors 842d6565 BFLY restore). Trivial; closes the wipe class for this RFC scope.",
+    "N91_PR_FP64_SHFL_WRAP":  "Close GAP-C: in gpu_warp_shuffle_xor lower-stmt, detect FP64 src and synthesize hi/lo u32 split + 2× shfl.sync.bfly.b32 + recompose. Reusable across N70 + future FP64 reduce kernels."
+  },
+  "constraints_honored": {
+    "DO_NOT_touch_GPU_md":    true,
+    "DO_NOT_commit":          true,
+    "plain_ssh_ubu2":         "YES (no SIDECAR_NO_POOL=1; default route worked)",
+    "ptx_pure_ascii":         "YES (LC_ALL=C grep -P '[^\\x00-\\x7f]' empty)",
+    "cuModuleLoadDataEx":     "YES (used the driver-JIT API, not standalone ptxas)"
+  },
+  "cost": {
+    "usd": 0,
+    "wall_seconds": "~300 (env + build + emit + scp + nvcc + fire + artifact update)"
+  }
+}

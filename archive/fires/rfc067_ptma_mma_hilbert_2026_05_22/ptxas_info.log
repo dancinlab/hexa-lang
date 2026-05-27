@@ -1,0 +1,30 @@
+=== shape 512 (sgemm_tma_mma_hilbert_512x512_grid) ===
+
+
+shape 512 cuFuncGetAttribute: regs/thd=64, shmem=4112 B, max_thd_per_block=1024
+
+=== shape 1024 (sgemm_tma_mma_hilbert_1024x1024_grid) ===
+
+
+shape 1024 cuFuncGetAttribute: regs/thd=64, shmem=4112 B, max_thd_per_block=1024
+
+=== shape 2048 (sgemm_tma_mma_hilbert_2048x2048_grid) ===
+
+
+shape 2048 cuFuncGetAttribute: regs/thd=64, shmem=4112 B, max_thd_per_block=1024
+
+=== shape 4096 (sgemm_tma_mma_hilbert_4096x4096_grid) ===
+
+
+shape 4096 cuFuncGetAttribute: regs/thd=64, shmem=4112 B, max_thd_per_block=1024
+
+=== shape 6144 (sgemm_tma_mma_hilbert_6144x6144_grid) ===
+
+
+shape 6144 cuFuncGetAttribute: regs/thd=64, shmem=4112 B, max_thd_per_block=1024
+
+=== shape 8192 (sgemm_tma_mma_hilbert_8192x8192_grid) ===
+
+
+shape 8192 cuFuncGetAttribute: regs/thd=64, shmem=4112 B, max_thd_per_block=1024
+

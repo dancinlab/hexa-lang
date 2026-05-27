@@ -1,0 +1,97 @@
+// HEXA Standard Library — stats/correlation
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Paired-sample correlation coefficients over float-array (farr) handles.
+// Promoted from anima HEXAD/LIFE (~14 duplicate sites across h223/h234/h235/
+// h252/... phi-correlation runs). Byte-equal port of the canonical farr-handle
+// implementations.
+//
+// Why this exists:
+//   The anima LIFE hypothesis runs repeatedly re-implement Pearson r and
+//   Spearman rho to correlate Φ-substrate measurements (network topology,
+//   pain intensity, saturation, cross-substrate coupling, ...). The arrays are
+//   always native farr handles of length n. This module is the single source.
+//
+//   pearson_r(xs, ys, n) = Σ(dx·dy) / sqrt(Σdx² · Σdy²)
+//       where dx = xs[i] − mean(xs), dy = ys[i] − mean(ys).
+//       Returns 0.0 when the denominator is non-positive (degenerate / zero
+//       variance) — matches the anima callers' guard.
+//
+//   spearman_rho(xs, ys, n) = pearson_r over the AVERAGE RANKS of xs and ys.
+//       Ranks are 1-based; tied values receive the mean of the ranks they span
+//       (rank = (#less + 1) + (#equal − 1)/2).
+//
+// Surface:
+//   pub fn pearson_r(xs: int, ys: int, n: int) -> float
+//       // Pearson product-moment correlation over n paired samples.
+//       // xs / ys are farr handles; reads indices 0..n-1.
+//   pub fn spearman_rho(xs: int, ys: int, n: int) -> float
+//       // Spearman rank correlation (rank-Pearson, average ranks for ties).
+//       // Allocates two scratch rank farrs internally and frees them.
+//
+// Numerics: uses the `sqrt` builtin. No transcendental wrappers needed.
+// farr builtins (farr_zeros / farr_get / farr_set / farr_free) are intrinsic.
+
+// ── Pearson r over n paired samples (xs, ys are farr handles) ──────────────
+pub fn pearson_r(xs: int, ys: int, n: int) -> float {
+    let mut sx = 0.0
+    let mut sy = 0.0
+    let mut i = 0
+    while i < n {
+        sx = sx + farr_get(xs, i)
+        sy = sy + farr_get(ys, i)
+        i = i + 1
+    }
+    let mx = sx / (n * 1.0)
+    let my = sy / (n * 1.0)
+    let mut num = 0.0
+    let mut dx2 = 0.0
+    let mut dy2 = 0.0
+    let mut j = 0
+    while j < n {
+        let dx = farr_get(xs, j) - mx
+        let dy = farr_get(ys, j) - my
+        num = num + dx * dy
+        dx2 = dx2 + dx * dx
+        dy2 = dy2 + dy * dy
+        j = j + 1
+    }
+    let denom = sqrt(dx2 * dy2)
+    if denom <= 0.0 { return 0.0 }
+    return num / denom
+}
+
+// ── average rank of vals[idx] within vals[0..n-1] (1-based, ties → mean) ───
+fn _rank(vals: int, n: int, idx: int) -> float {
+    let me = farr_get(vals, idx)
+    let mut less = 0
+    let mut eq = 0
+    let mut k = 0
+    while k < n {
+        let other = farr_get(vals, k)
+        if other < me { less = less + 1 }
+        if other == me { eq = eq + 1 }
+        k = k + 1
+    }
+    let base = (less + 1) * 1.0
+    let span = (eq - 1) * 1.0
+    return base + span / 2.0
+}
+
+// ── Spearman ρ over n paired samples (rank-Pearson) ────────────────────────
+pub fn spearman_rho(xs: int, ys: int, n: int) -> float {
+    let rx = farr_zeros(n)
+    let ry = farr_zeros(n)
+    let mut k = 0
+    while k < n {
+        let _ = farr_set(rx, k, _rank(xs, n, k))
+        let _ = farr_set(ry, k, _rank(ys, n, k))
+        k = k + 1
+    }
+    let rho = pearson_r(rx, ry, n)
+    let _ = farr_free(rx)
+    let _ = farr_free(ry)
+    return rho
+}

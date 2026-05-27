@@ -1,0 +1,158 @@
+// Smoke test — stdlib/signal/core_filter (biquad LPF/HPF + pre/de-emphasis).
+//
+// Self-contained: single-file `hexa build` does NOT flatten `import "stdlib/..."`
+// (undefined link symbols), so the coefficient computation under test is INLINED
+// here verbatim from core_filter.hexa. The importable regression harness form
+// (below `main`, commented) becomes the canonical path once cross-import flatten
+// lands. Trig is routed to the native libm `sin` / `cos` builtins (IEEE-correct);
+// expected values are the analytic RBJ Butterworth coefficients at the reference
+// design point, plus structural invariants that hold for any correct trig impl.
+//
+// import "stdlib/signal/core_filter.hexa"   // ← canonical once flatten lands
+
+let CF_TWO_PI = 6.28318530717958647692
+
+fn _cf_biquad_omega(cutoff_hz: float, sample_rate: float) -> float {
+    return CF_TWO_PI * cutoff_hz / sample_rate
+}
+
+fn _cf_biquad_alpha(omega: float, Q: float) -> float {
+    return sin(omega) / (2.0 * Q)
+}
+
+fn lpf_coeff(cutoff_hz: float, sample_rate: float, Q: float, idx: int) -> float {
+    let w = _cf_biquad_omega(cutoff_hz, sample_rate)
+    let cs = cos(w)
+    let al = _cf_biquad_alpha(w, Q)
+    let a0 = 1.0 + al
+    if idx == 0 { return ((1.0 - cs) / 2.0) / a0 }
+    if idx == 1 { return (1.0 - cs) / a0 }
+    if idx == 2 { return ((1.0 - cs) / 2.0) / a0 }
+    if idx == 3 { return (0.0 - 2.0 * cs) / a0 }
+    if idx == 4 { return (1.0 - al) / a0 }
+    return 0.0
+}
+
+fn hpf_coeff(cutoff_hz: float, sample_rate: float, Q: float, idx: int) -> float {
+    let w = _cf_biquad_omega(cutoff_hz, sample_rate)
+    let cs = cos(w)
+    let al = _cf_biquad_alpha(w, Q)
+    let a0 = 1.0 + al
+    if idx == 0 { return ((1.0 + cs) / 2.0) / a0 }
+    if idx == 1 { return (0.0 - (1.0 + cs)) / a0 }
+    if idx == 2 { return ((1.0 + cs) / 2.0) / a0 }
+    if idx == 3 { return (0.0 - 2.0 * cs) / a0 }
+    if idx == 4 { return (1.0 - al) / a0 }
+    return 0.0
+}
+
+fn biquad_tick(sample: float, b0: float, b1: float, b2: float, a1: float, a2: float, x1: float, x2: float, y1: float, y2: float) -> float {
+    return b0 * sample + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2
+}
+
+fn preemphasis_tick(sample: float, prev_sample: float, coeff: float) -> float {
+    return sample - coeff * prev_sample
+}
+
+fn deemphasis_tick(sample: float, prev_output: float, coeff: float) -> float {
+    return sample + coeff * prev_output
+}
+
+// ── test scaffold ───────────────────────────────────────────────────────────
+
+fn _check_flag(name: string, ok: int) -> int {
+    if ok == 1 {
+        println("PASS " + name)
+        return 0
+    }
+    println("FAIL " + name)
+    return 1
+}
+
+fn _abs_f(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn _near(a: float, b: float, tol: float) -> int {
+    if _abs_f(a - b) <= tol { return 1 }
+    return 0
+}
+
+fn main() {
+    let mut fails = 0
+
+    // Reference design point: fc = 1000 Hz, fs = 8000 Hz, Q = 1/sqrt(2)
+    // (Butterworth). At ω = 2π·1000/8000 = π/4, cos ω = sin ω = √2/2, so
+    // α = sin ω / (2Q) = (√2/2)·(√2/2) = 0.5 and a0 = 1.5 EXACTLY. The expected
+    // coefficients below are the analytic RBJ Butterworth values (libm trig,
+    // IEEE-correct) — tightened tolerance pins them to 6 significant figures.
+    let fc = 1000.0
+    let fs = 8000.0
+    let q = 0.7071067811865476
+    let tol = 0.000001
+
+    // ── LPF known coefficients (b0,b1,b2,a1,a2) ──
+    // b0 = b2 = ((1-√2/2)/2)/1.5 = 0.09763107 ; b1 = (1-√2/2)/1.5 = 0.19526215
+    // a1 = (-2·√2/2)/1.5 = -0.94280904 ; a2 = (1-0.5)/1.5 = 1/3 = 0.33333333
+    let lb0 = lpf_coeff(fc, fs, q, 0)
+    let lb1 = lpf_coeff(fc, fs, q, 1)
+    let lb2 = lpf_coeff(fc, fs, q, 2)
+    let la1 = lpf_coeff(fc, fs, q, 3)
+    let la2 = lpf_coeff(fc, fs, q, 4)
+    fails = fails + _check_flag("lpf_b0_known", _near(lb0,  0.09763107, tol))
+    fails = fails + _check_flag("lpf_b1_known", _near(lb1,  0.19526215, tol))
+    fails = fails + _check_flag("lpf_b2_known", _near(lb2,  0.09763107, tol))
+    fails = fails + _check_flag("lpf_a1_known", _near(la1, -0.94280904, tol))
+    fails = fails + _check_flag("lpf_a2_known", _near(la2,  0.33333333, tol))
+
+    // ── HPF known coefficients ──
+    // b0 = b2 = ((1+√2/2)/2)/1.5 = 0.56903559 ; b1 = -(1+√2/2)/1.5 = -1.13807119
+    // a1, a2 share the LPF denominator (same ω, α).
+    let hb0 = hpf_coeff(fc, fs, q, 0)
+    let hb1 = hpf_coeff(fc, fs, q, 1)
+    let hb2 = hpf_coeff(fc, fs, q, 2)
+    let ha1 = hpf_coeff(fc, fs, q, 3)
+    let ha2 = hpf_coeff(fc, fs, q, 4)
+    fails = fails + _check_flag("hpf_b0_known", _near(hb0,  0.56903559, tol))
+    fails = fails + _check_flag("hpf_b1_known", _near(hb1, -1.13807119, tol))
+    fails = fails + _check_flag("hpf_b2_known", _near(hb2,  0.56903559, tol))
+    fails = fails + _check_flag("hpf_a1_known", _near(ha1, -0.94280904, tol))
+    fails = fails + _check_flag("hpf_a2_known", _near(ha2,  0.33333333, tol))
+
+    // ── Exact algebraic invariants (RBJ cookbook structure) ──
+    // LPF: numerator symmetric (b0 == b2) and b1 == 2*b0.
+    fails = fails + _check_flag("lpf_sym_b0_eq_b2", if lb0 == lb2 { 1 } else { 0 })
+    fails = fails + _check_flag("lpf_b1_eq_2b0", _near(lb1, 2.0 * lb0, tol))
+    // HPF: numerator symmetric (b0 == b2) and b1 == -2*b0.
+    fails = fails + _check_flag("hpf_sym_b0_eq_b2", if hb0 == hb2 { 1 } else { 0 })
+    fails = fails + _check_flag("hpf_b1_eq_neg2b0", _near(hb1, 0.0 - 2.0 * hb0, tol))
+    // LPF and HPF share the SAME denominator (a1, a2 identical — same ω, α).
+    fails = fails + _check_flag("shared_a1", if la1 == ha1 { 1 } else { 0 })
+    fails = fails + _check_flag("shared_a2", if la2 == ha2 { 1 } else { 0 })
+
+    // ── biquad_tick: identity (b0=1, all other taps 0) passes the sample ──
+    let id_out = biquad_tick(2.0, 1.0, 0.0, 0.0, 0.0, 0.0, 9.0, 9.0, 9.0, 9.0)
+    fails = fails + _check_flag("biquad_identity", _near(id_out, 2.0, tol))
+    // Direct Form I expansion: full coefficient set.
+    let df1 = biquad_tick(0.5, lb0, lb1, lb2, la1, la2, 0.1, 0.2, 0.3, 0.4)
+    let df1_ref = lb0 * 0.5 + lb1 * 0.1 + lb2 * 0.2 - la1 * 0.3 - la2 * 0.4
+    fails = fails + _check_flag("biquad_df1_expand", _near(df1, df1_ref, tol))
+
+    // ── pre/de-emphasis are exact inverses ──
+    // preemph: y = x - c*xprev ; deemph: x_rec = y + c*xprev recovers x.
+    let coeff = 0.97
+    let x = 0.73
+    let xprev = 0.41
+    let pe = preemphasis_tick(x, xprev, coeff)
+    let de = deemphasis_tick(pe, xprev, coeff)
+    fails = fails + _check_flag("preemph_known", _near(pe, x - coeff * xprev, tol))
+    fails = fails + _check_flag("preemph_deemph_inverse", _near(de, x, tol))
+
+    if fails == 0 {
+        println("ALL PASS — stdlib/signal/core_filter")
+    } else {
+        println("FAILURES: " + to_string(fails))
+        exit(1)
+    }
+}

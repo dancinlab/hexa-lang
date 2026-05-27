@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+# hexa-phi-map — anima consciousness contribution annotation extractor (AST-backed)
+# Recognizes: @phi, @consciousness, @channel, @iit
+set -eu
+
+usage() {
+    cat >&2 <<EOF
+usage: hexa-phi-map <file.hexa> [file2.hexa ...]
+       hexa-phi-map --dir <directory>
+       hexa-phi-map --project anima
+EOF
+    exit 1
+}
+
+case "${1:-}" in
+    -h|--help|"") usage ;;
+esac
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+. "${SCRIPT_DIR}/_ast_extract.sh"
+
+if [ "${1:-}" = "--project" ]; then
+    [ $# -ge 2 ] || usage
+    name="$2"
+    cand=""
+    if [ -d "$HOME/core/$name" ]; then cand="$HOME/core/$name"
+    elif [ -d "$HOME/Dev/$name" ]; then cand="$HOME/Dev/$name"
+    else echo "ERROR: project not found: $name" >&2; exit 1; fi
+    set -- --dir "$cand"
+fi
+
+if ! resolve_files "$@"; then exit 1; fi
+if [ ${#FILES[@]} -eq 0 ]; then
+    printf '{"version":"0.2","source":"ast","phi_fns":[],"consciousness_fns":[],"channel_fns":[],"iit_fns":[],"summary":{"phi":0,"consciousness":0,"channel":0,"iit":0,"total_weight":0,"tiers":[],"channels_ids":[],"metrics":[]}}\n'
+    exit 0
+fi
+
+TMP_TSV=$(mktemp -t hexa_phi_map.XXXXXX)
+trap 'rm -f "$TMP_TSV"' EXIT
+run_ast_extract > "$TMP_TSV"
+
+awk '
+function jesc(s,   r) { r = s; gsub(/\\/, "\\\\", r); gsub(/"/, "\\\"", r); return r }
+function decode_esc(s,   out, i, n, c, nc) {
+    out = ""; n = length(s); i = 1
+    while (i <= n) {
+        c = substr(s, i, 1)
+        if (c == "\\" && i < n) {
+            nc = substr(s, i + 1, 1)
+            if (nc == "n")  { out = out "\n"; i += 2; continue }
+            if (nc == "r")  { out = out "\r"; i += 2; continue }
+            if (nc == "t")  { out = out "\t"; i += 2; continue }
+            if (nc == "\\") { out = out "\\"; i += 2; continue }
+        }
+        out = out c; i++
+    }
+    return out
+}
+function kv_extract(raw, key,    s, pat, pos, rest, val, n, i, c, nc) {
+    s = raw
+    pat = "(^|[ \\t,(])" key "[ \\t]*[=:][ \\t]*"
+    pos = match(s, pat)
+    if (pos == 0) return ""
+    rest = substr(s, pos + RLENGTH)
+    sub(/^[ \t]+/, "", rest)
+    if (substr(rest, 1, 1) == "\"") {
+        val = ""; i = 2; n = length(rest)
+        while (i <= n) {
+            c = substr(rest, i, 1)
+            if (c == "\"") break
+            val = val c; i++
+        }
+        return val
+    }
+    if (match(rest, /[,)[:space:]]/)) return substr(rest, 1, RSTART - 1)
+    return rest
+}
+BEGIN {
+    FS = "\t"
+    phi_body = ""; cons_body = ""; chan_body = ""; iit_body = ""
+    n_phi = 0; n_cons = 0; n_chan = 0; n_iit = 0
+    total_weight = 0
+    n_tiers = 0; n_chid = 0; n_metrics = 0
+}
+/^# error\t/ { next }
+{
+    kind = $1; tgtk = $2; fn = $3; file = $4; line = $5; raw = decode_esc($6)
+    if (tgtk != "fn") next
+    if (kind == "phi") {
+        w = kv_extract(raw, "weight")
+        ch = kv_extract(raw, "channel")
+        if (w == "") w = "0"
+        if (n_phi > 0) phi_body = phi_body ","
+        phi_body = phi_body "{\"fn\":\"" jesc(fn) "\",\"weight\":" w ",\"channel\":\"" jesc(ch) "\",\"file\":\"" jesc(file) "\",\"line\":" line "}"
+        if (w ~ /^-?[0-9]+(\.[0-9]+)?$/) total_weight = total_weight + w
+        n_phi++
+    } else if (kind == "consciousness") {
+        tier = kv_extract(raw, "tier")
+        if (n_cons > 0) cons_body = cons_body ","
+        cons_body = cons_body "{\"fn\":\"" jesc(fn) "\",\"tier\":\"" jesc(tier) "\",\"file\":\"" jesc(file) "\",\"line\":" line "}"
+        if (tier != "" && !(tier in tier_seen)) { tier_seen[tier] = 1; tiers[++n_tiers] = tier }
+        n_cons++
+    } else if (kind == "channel") {
+        cid = kv_extract(raw, "id")
+        src = kv_extract(raw, "src")
+        if (cid == "") cid = "0"
+        if (n_chan > 0) chan_body = chan_body ","
+        chan_body = chan_body "{\"fn\":\"" jesc(fn) "\",\"id\":" cid ",\"src\":\"" jesc(src) "\",\"file\":\"" jesc(file) "\",\"line\":" line "}"
+        if (cid != "" && !(cid in chid_seen)) { chid_seen[cid] = 1; chids[++n_chid] = cid }
+        n_chan++
+    } else if (kind == "iit") {
+        m = kv_extract(raw, "metric")
+        if (n_iit > 0) iit_body = iit_body ","
+        iit_body = iit_body "{\"fn\":\"" jesc(fn) "\",\"metric\":\"" jesc(m) "\",\"file\":\"" jesc(file) "\",\"line\":" line "}"
+        if (m != "" && !(m in metric_seen)) { metric_seen[m] = 1; metrics[++n_metrics] = m }
+        n_iit++
+    }
+}
+END {
+    tiers_s = ""
+    for (i = 1; i <= n_tiers; i++) { if (i > 1) tiers_s = tiers_s ","; tiers_s = tiers_s "\"" jesc(tiers[i]) "\"" }
+    chid_s = ""
+    for (i = 1; i <= n_chid; i++) { if (i > 1) chid_s = chid_s ","; chid_s = chid_s chids[i] }
+    metr_s = ""
+    for (i = 1; i <= n_metrics; i++) { if (i > 1) metr_s = metr_s ","; metr_s = metr_s "\"" jesc(metrics[i]) "\"" }
+    printf("{\"version\":\"0.2\",\"source\":\"ast\",\"phi_fns\":[%s],\"consciousness_fns\":[%s],\"channel_fns\":[%s],\"iit_fns\":[%s],\"summary\":{\"phi\":%d,\"consciousness\":%d,\"channel\":%d,\"iit\":%d,\"total_weight\":%s,\"tiers\":[%s],\"channels_ids\":[%s],\"metrics\":[%s]}}\n",
+        phi_body, cons_body, chan_body, iit_body, n_phi, n_cons, n_chan, n_iit, total_weight, tiers_s, chid_s, metr_s)
+}' "$TMP_TSV"

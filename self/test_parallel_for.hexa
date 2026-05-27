@@ -1,0 +1,491 @@
+// ═══════════════════════════════════════════════════════════
+//  test_parallel_for.hexa — ROI #80 verification.
+//
+//  Checks the logical @parallel_for semantics:
+//    (1) num_workers heuristic clamps to [0, 4]
+//    (2) partition_range(100, 4) produces 4 equal [start,end) chunks
+//    (3) partition union covers [0, n) exactly, no gap, no overlap
+//    (4) uneven split n=10, w=3 distributes remainder to the first
+//        chunks (4+3+3 = 10)
+//    (5) map-style body: y[i] = x[i]*2 produces the correct array
+//    (6) parallel_for_logical output == sequential_for output (byte-
+//        equal) for an independent body
+//    (7) edge cases: n=0, n=1, workers > n, workers == 0
+//    (8) is_indep_loop: disjoint read/write is safe; cross-dependency
+//        or read-write aliasing is unsafe
+// ═══════════════════════════════════════════════════════════
+
+// -- inlined from self/ai_native/parallel_for.hexa --
+// codegen import not wired for test files
+
+// ═══════════════════════════════════════════════════════════
+//  self/ai_native/parallel_for.hexa — ROI #80
+//
+//  @parallel_for — logical parallelization of embarrassingly-parallel
+//  loops (OMP/pthread analogue in pure hexa, no FFI).
+//
+//  Background: during T1/T2 physical-ceiling work we found that many
+//  AI-native hot paths are pure map-style loops
+//      for i in 0..n:  y[i] = f(x[i])
+//  whose iterations are independent. On real hardware these should
+//  be dispatched to an OS thread pool (OpenMP parallel for / pthread
+//  fork-join). At the pure-interpreter stage we cannot call OS threads
+//  (FFI is banned by HX7), so this module provides the *logical*
+//  decomposition — range partitioning + sequential per-partition
+//  execution — with an API shaped so a future runtime can wire real
+//  threads behind `parallel_for_logical` without changing call sites.
+//
+//  Invariants (checked in self/test_parallel_for.hexa):
+//    - partition_range(n, w) produces a list of (start, end) whose
+//      union is exactly [0, n) with no overlap and no gap.
+//    - parallel_for_logical yields byte-identical output to the
+//      sequential baseline for independent body functions.
+//    - worker count clamps: num_workers(0)=0, num_workers(1)=1,
+//      num_workers(n) = min(n, 4) for n > 0.
+//
+//  Non-goals for this ROI checkpoint:
+//    - Actual OS thread dispatch — cooperative rt_spawn implemented;
+//      swap pf_rt_spawn body with pthread/workqueue for real threads.
+//    - Reduction / scan style parallelism — that is ROI #81 and
+//      ROI #82 (fuse + scan), and the APIs here deliberately only
+//      cover the map case where body(i, ctx) writes to ctx.dst[i].
+// ═══════════════════════════════════════════════════════════
+
+// ── worker count heuristic ─────────────────────────────────
+// Assume a typical 4-core CPU as the default upper bound; never
+// spawn more workers than iterations (each worker must have >=1
+// item of work — empty partitions waste a thread slot).
+pub fn num_workers(n) {
+    if n <= 0 { return 0 }
+    if n < 4 { return n }
+    return 4
+}
+
+// ── range partitioning ─────────────────────────────────────
+// Split [0, n) into `workers` contiguous chunks. Chunks are as
+// even as possible; the first `rem = n % workers` chunks carry
+// one extra element so that sum(chunk_len) == n exactly.
+//
+// Returns: list of 2-element arrays [start, end). When `workers <= 0`
+// the result is empty; when `n == 0` the result is empty.
+//
+// Examples:
+//   partition_range(100, 4) -> [[0,25],[25,50],[50,75],[75,100]]
+//   partition_range(10,  3) -> [[0,4],[4,7],[7,10]]   // 4+3+3
+//   partition_range(0,   4) -> []
+//   partition_range(3,   8) -> [[0,1],[1,2],[2,3]]    // workers > n
+pub fn partition_range(n, workers) {
+    let mut out = []
+    if n <= 0 { return out }
+    if workers <= 0 { return out }
+
+    // clamp workers down to n so we never emit an empty partition.
+    let mut w = workers
+    if w > n { w = n }
+
+    let base = n / w
+    let rem  = n - base * w       // remainder without using %
+
+    let mut cursor = 0
+    let mut i = 0
+    while i < w {
+        let mut chunk = base
+        if i < rem { chunk = chunk + 1 }
+        let start = cursor
+        let endv  = cursor + chunk
+        out.push([start, endv])
+        cursor = endv
+        i = i + 1
+    }
+    return out
+}
+
+// Partition size for iteration `i` if the caller wants scalar access.
+// Thin convenience wrapper around partition_range().
+pub fn partition_size(n, workers, i) {
+    let parts = partition_range(n, workers)
+    if i < 0 { return 0 }
+    if i >= len(parts) { return 0 }
+    let p = parts[i]
+    return p[1] - p[0]
+}
+
+// ── parallel_for: map-style over (start, end) partitions ───
+// body(i, ctx) must be independent across distinct i values;
+// ctx is an opaque payload (typically a struct or an array) that
+// the body uses to read inputs / write outputs.
+//
+// Semantics: partitions are dispatched via pf_rt_spawn (cooperative
+// spawn — runs immediately). Once a real thread pool exists, swap
+// pf_rt_spawn internals for real dispatch; this API stays unchanged.
+pub fn parallel_for_logical(n, workers, body, ctx) {
+    if n <= 0 { return ctx }
+    let parts = partition_range(n, workers)
+    let np = len(parts)
+    // Phase 1: spawn — each partition dispatched via pf_rt_spawn.
+    // Currently cooperative (runs immediately); when OS threads land
+    // these will execute in parallel on the thread pool.
+    pf_rt_task_results = []
+    pf_rt_task_count   = 0
+    let mut handles = []
+    let mut pi = 0
+    while pi < np {
+        let part  = parts[pi]
+        let start = part[0]
+        let endv  = part[1]
+        let h = pf_rt_spawn(body, start, endv, ctx)
+        handles.push(h)
+        pi = pi + 1
+    }
+    // Phase 2: join — barrier; all partitions must complete before
+    // returning ctx. With cooperative spawn this is a no-op (already
+    // done), but the join call makes the contract explicit for the
+    // future real-thread backend.
+    pf_rt_join_all(handles)
+    return ctx
+}
+
+// ── sequential baseline for equivalence testing ────────────
+// Runs the same body over [0, n) in a single loop — used by the
+// test suite to assert parallel_for_logical produces the same
+// result as straight-line iteration.
+pub fn sequential_for(n, body, ctx) {
+    let mut i = 0
+    while i < n {
+        body(i, ctx)
+        i = i + 1
+    }
+    return ctx
+}
+
+// ── AST shape helper: is_indep_loop ────────────────────────
+// Very small, string-ish heuristic that accepts a list of body
+// "markers" and decides whether the loop is safe to parallelize.
+// A marker is one of:
+//     "read:<name>"   — body reads variable <name>
+//     "write:<name>"  — body writes variable <name>
+//     "crossdep"      — body reads a cross-iteration dependency
+//                       (e.g. y[i] = y[i-1] + ...)  -> NOT safe
+// The loop is parallelizable iff no marker is "crossdep" and every
+// write target is disjoint from every read target (we approximate
+// this by requiring that no name appears as both read and write —
+// the common map case `y[i]=f(x[i])` reads `x` and writes `y`).
+//
+// This mirrors what an AST pass would check; once we wire this to
+// the real AST, the caller will translate BinOp/Index nodes into
+// these markers.
+pub fn is_indep_loop(markers) {
+    let n = len(markers)
+    let mut reads  = []
+    let mut writes = []
+    let mut i = 0
+    while i < n {
+        let m = markers[i]
+        if m == "crossdep" { return false }
+        // marker format: "kind:name"
+        let colon = str_index_of(m, ":")
+        if colon > 0 {
+            let kind = str_slice(m, 0, colon)
+            let name = str_slice(m, colon + 1, len(m))
+            if kind == "read"  { reads.push(name) }
+            if kind == "write" { writes.push(name) }
+        }
+        i = i + 1
+    }
+    // reject if any name is in both reads and writes
+    let nw = len(writes)
+    let mut wi = 0
+    while wi < nw {
+        let wn = writes[wi]
+        let nr = len(reads)
+        let mut ri = 0
+        while ri < nr {
+            if reads[ri] == wn { return false }
+            ri = ri + 1
+        }
+        wi = wi + 1
+    }
+    return true
+}
+
+// ── cooperative spawn infrastructure (self-contained) ──────
+// Minimal fork-join runtime for partition dispatch. Each "spawn"
+// runs its closure immediately (cooperative scheduling). When OS
+// threads arrive, only this section needs replacement — all call
+// sites above remain unchanged.
+//
+// API contract (matches self/runtime/spawn_pure.hexa):
+//   pf_rt_spawn(body, start, endv, ctx) -> handle
+//   pf_rt_join(handle) -> result
+//   pf_rt_join_all(handles) -> [result, ...]
+
+let mut pf_rt_task_results = []
+let mut pf_rt_task_count   = 0
+
+fn pf_rt_spawn(body, start, endv, ctx) {
+    // Execute the partition body immediately (cooperative).
+    let mut i = start
+    while i < endv {
+        body(i, ctx)
+        i = i + 1
+    }
+    // Record completion; result is void (body writes to ctx in-place).
+    let h = pf_rt_task_count
+    pf_rt_task_results.push(0)
+    pf_rt_task_count = pf_rt_task_count + 1
+    return h
+}
+
+fn pf_rt_join(h) {
+    if h < 0 { return 0 }
+    if h >= pf_rt_task_count { return 0 }
+    return pf_rt_task_results[h]
+}
+
+fn pf_rt_join_all(handles) {
+    let n = len(handles)
+    let mut out = []
+    let mut i = 0
+    while i < n {
+        out.push(pf_rt_join(handles[i]))
+        i = i + 1
+    }
+    return out
+}
+
+// ── tiny string helpers used by is_indep_loop ──────────────
+// Kept local so parallel_for.hexa has no extra module imports;
+// stdlib/string.hexa is T4 material but we want this module to
+// be usable in isolation during bootstrap paths.
+fn str_index_of(s, sub) {
+    let n  = len(s)
+    let m  = len(sub)
+    if m == 0 { return 0 }
+    if m > n { return -1 }
+    let last = n - m
+    let mut i = 0
+    while i <= last {
+        let mut j = 0
+        let mut ok = true
+        while j < m {
+            // char-wise equality using slice of length 1
+            let a = str_slice(s,   i + j, i + j + 1)
+            let b = str_slice(sub, j,     j + 1)
+            if a != b { ok = false; j = m } else { j = j + 1 }
+        }
+        if ok { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+fn str_slice(s, a, b) {
+    // wrap around to builtin substring with clamped bounds
+    let n = len(s)
+    let mut aa = a
+    let mut bb = b
+    if aa < 0 { aa = 0 }
+    if bb > n { bb = n }
+    if bb < aa { bb = aa }
+    return s.substring(aa, bb)
+}
+
+
+// -- end inlined --
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn check(name, cond) {
+    if cond {
+        println("[PASS] " + name)
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name)
+        fail_count = fail_count + 1
+    }
+}
+
+// body used in (5) and (6): dst[i] = src[i] * 2
+// ctx = [src, dst]
+fn body_double(i, ctx) {
+    let src = ctx[0]
+    let dst = ctx[1]
+    dst[i] = src[i] * 2
+}
+
+// body used for uneven-split test: dst[i] = i + 100
+fn body_offset(i, ctx) {
+    let dst = ctx[0]
+    dst[i] = i + 100
+}
+
+// helper: check partitions cover [0, n) with no gap / overlap.
+fn cover_ok(parts, n) {
+    let np = len(parts)
+    if np == 0 { return n == 0 }
+    let first = parts[0]
+    if first[0] != 0 { return false }
+    let mut i = 1
+    while i < np {
+        let prev = parts[i - 1]
+        let curr = parts[i]
+        if prev[1] != curr[0] { return false }    // gap or overlap
+        if curr[1] < curr[0]  { return false }    // inverted
+        i = i + 1
+    }
+    let last = parts[np - 1]
+    return last[1] == n
+}
+
+// helper: count chunk lengths
+fn chunk_lens(parts) {
+    let mut out = []
+    let np = len(parts)
+    let mut i = 0
+    while i < np {
+        let p = parts[i]
+        out.push(p[1] - p[0])
+        i = i + 1
+    }
+    return out
+}
+
+println("=== @parallel_for tests ===")
+
+// ── (1) num_workers heuristic ──────────────────────────────
+check("num_workers(0) == 0",   num_workers(0) == 0)
+check("num_workers(1) == 1",   num_workers(1) == 1)
+check("num_workers(2) == 2",   num_workers(2) == 2)
+check("num_workers(3) == 3",   num_workers(3) == 3)
+check("num_workers(4) == 4",   num_workers(4) == 4)
+check("num_workers(100) == 4", num_workers(100) == 4)
+check("num_workers(-5) == 0",  num_workers(-5) == 0)
+
+// ── (2) partition_range(100, 4): 4 equal chunks of 25 ──────
+let p100_4 = partition_range(100, 4)
+check("p100_4: 4 parts", len(p100_4) == 4)
+let p100_4_lens = chunk_lens(p100_4)
+check("p100_4: all lens == 25",
+      p100_4_lens[0] == 25 && p100_4_lens[1] == 25 &&
+      p100_4_lens[2] == 25 && p100_4_lens[3] == 25)
+check("p100_4: covers [0,100)", cover_ok(p100_4, 100))
+// spot-check boundaries
+let p0 = p100_4[0]
+let p3 = p100_4[3]
+check("p100_4[0] == [0, 25]",  p0[0] == 0   && p0[1] == 25)
+check("p100_4[3] == [75, 100]", p3[0] == 75 && p3[1] == 100)
+
+// ── (3) coverage property across several shapes ────────────
+check("cover n=50  w=4", cover_ok(partition_range(50,  4), 50))
+check("cover n=7   w=3", cover_ok(partition_range(7,   3), 7))
+check("cover n=1   w=4", cover_ok(partition_range(1,   4), 1))
+check("cover n=0   w=4", cover_ok(partition_range(0,   4), 0))
+check("cover n=17  w=5", cover_ok(partition_range(17,  5), 17))
+
+// ── (4) uneven split: n=10, w=3 -> [4, 3, 3] ───────────────
+let p10_3 = partition_range(10, 3)
+check("p10_3: 3 parts", len(p10_3) == 3)
+let p10_3_lens = chunk_lens(p10_3)
+check("p10_3: lens == [4, 3, 3]",
+      p10_3_lens[0] == 4 && p10_3_lens[1] == 3 && p10_3_lens[2] == 3)
+check("p10_3: covers [0,10)", cover_ok(p10_3, 10))
+
+// a second skew example: n=7, w=4 -> [2, 2, 2, 1]
+let p7_4 = partition_range(7, 4)
+let p7_4_lens = chunk_lens(p7_4)
+check("p7_4: lens == [2, 2, 2, 1]",
+      p7_4_lens[0] == 2 && p7_4_lens[1] == 2 &&
+      p7_4_lens[2] == 2 && p7_4_lens[3] == 1)
+
+// ── (5) map-style body: y[i] = x[i]*2 ──────────────────────
+let src1 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+let mut dst1 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+parallel_for_logical(10, num_workers(10), body_double, [src1, dst1])
+check("map*2: dst1[0] == 2",  dst1[0] == 2)
+check("map*2: dst1[5] == 12", dst1[5] == 12)
+check("map*2: dst1[9] == 20", dst1[9] == 20)
+let mut all_ok = true
+let mut i5 = 0
+while i5 < 10 {
+    if dst1[i5] != (i5 + 1) * 2 { all_ok = false }
+    i5 = i5 + 1
+}
+check("map*2: all 10 entries correct", all_ok)
+
+// ── (6) parallel == sequential (byte-equal) ────────────────
+let src2 = [2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30]
+let n2 = 15
+let mut dst_par = []
+let mut dst_seq = []
+let mut k = 0
+while k < n2 {
+    dst_par.push(0)
+    dst_seq.push(0)
+    k = k + 1
+}
+parallel_for_logical(n2, num_workers(n2), body_double, [src2, dst_par])
+sequential_for(n2, body_double, [src2, dst_seq])
+let mut eq = true
+let mut ci = 0
+while ci < n2 {
+    if dst_par[ci] != dst_seq[ci] { eq = false }
+    ci = ci + 1
+}
+check("parallel == sequential", eq)
+
+// ── (7) edge cases ─────────────────────────────────────────
+// n=0
+let mut dst_e0 = []
+parallel_for_logical(0, 4, body_offset, [dst_e0])
+check("edge n=0: dst len stays 0", len(dst_e0) == 0)
+check("edge n=0: partitions empty", len(partition_range(0, 4)) == 0)
+
+// n=1
+let mut dst_e1 = [0]
+parallel_for_logical(1, 4, body_offset, [dst_e1])
+check("edge n=1: dst[0] == 100", dst_e1[0] == 100)
+let p1_4 = partition_range(1, 4)
+check("edge n=1,w=4: 1 partition", len(p1_4) == 1)
+check("edge n=1,w=4: covers [0,1)", cover_ok(p1_4, 1))
+
+// workers > n
+let mut dst_e2 = [0, 0, 0]
+parallel_for_logical(3, 8, body_offset, [dst_e2])
+check("edge n=3,w=8: dst == [100,101,102]",
+      dst_e2[0] == 100 && dst_e2[1] == 101 && dst_e2[2] == 102)
+let p3_8 = partition_range(3, 8)
+check("edge n=3,w=8: 3 partitions (clamped)", len(p3_8) == 3)
+check("edge n=3,w=8: covers [0,3)", cover_ok(p3_8, 3))
+
+// workers == 0
+check("edge w=0: empty partitions", len(partition_range(10, 0)) == 0)
+
+// ── (8) is_indep_loop markers ──────────────────────────────
+// classic map: read x, write y  -> safe
+check("indep: read:x + write:y safe",
+      is_indep_loop(["read:x", "write:y"]))
+// read/write aliasing: y read and written
+check("indep: read:y + write:y unsafe",
+      is_indep_loop(["read:y", "write:y"]) == false)
+// explicit cross-iteration dependency
+check("indep: crossdep unsafe",
+      is_indep_loop(["read:x", "crossdep", "write:y"]) == false)
+// multiple independent arrays
+check("indep: multi-reads + disjoint write safe",
+      is_indep_loop(["read:a", "read:b", "read:c", "write:d"]))
+
+// partition_size sanity
+check("partition_size(10,3,0) == 4", partition_size(10, 3, 0) == 4)
+check("partition_size(10,3,2) == 3", partition_size(10, 3, 2) == 3)
+check("partition_size(10,3,9) == 0 (OOB)", partition_size(10, 3, 9) == 0)
+
+println("")
+println("=== summary ===")
+println("  PASS: " + to_string(pass_count))
+println("  FAIL: " + to_string(fail_count))
+if fail_count == 0 {
+    println("parallel_for: ALL GREEN")
+} else {
+    println("parallel_for: FAILURES detected")
+}

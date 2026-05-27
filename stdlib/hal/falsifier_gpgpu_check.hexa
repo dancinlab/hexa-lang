@@ -1,0 +1,263 @@
+#!hexa strict
+// stdlib/hal/falsifier_gpgpu_check.hexa — GPGPU axis falsifier preregister
+//                                          + closure-pct tracker.
+//
+// Companion to stdlib/hal/falsifier_check.hexa (the embedded HW-12 lattice
+// closure tracker). This file preregisters F-GPGPU-1..6 — the falsifiers
+// for the **separate GPGPU axis** introduced at v0.13.0 (compute.hexa) +
+// expanded at v1.6.0 (SPIR-V/PTX IR backends) + populated at v1.7.0
+// (6 vendor backends: cuda/hip/sycl/opencl/metal/webgpu).
+//
+// **Lattice axis** (canon ~/core/canon/domains/compute/gpgpu/gpgpu.md
+// @47c70cbf): GPGPU is independent of the embedded HW-12 axis. Its
+// invariants:
+//
+//   σ=12 = 6 vendors × 2 IRs                (compute axis cardinality)
+//   τ=4   compile / enqueue / dispatch / retire
+//   φ=2   SPIR-V ‖ PTX (every vendor consumes ≥1)
+//   J₂′=48 = σ · τ (dispatch-state combinations)
+//   tiers=4 = private / group / device / constant   (τ=4 mirror)
+//   scopes=4 = subgroup / workgroup / cluster / grid (τ=4 mirror)
+//
+// Closure formula (recipe §3 — same as F-HAL):
+//   closure_pct(t1, t2, t3) = 0/33/67/100 by tier count.
+//
+// Status (v1.11.0 — 2026-05-08):
+//
+//   F-GPGPU-1  T1 ✓ (compute.hexa internal asserts)  T2 ☐  T3 ☐    33%
+//   F-GPGPU-2  T1 ✓ (compute.hexa lifecycle stages)  T2 ☐  T3 ☐    33%
+//   F-GPGPU-3  T1 ✓ (backend/{cuda,hip,...}/compute) T2 ☐  T3 ☐    33%
+//   F-GPGPU-4  T1 ✓ (compute.hexa σ·τ = 48 derived)  T2 ☐  T3 ☐    33%
+//   F-GPGPU-5  T1 ✓ (compute.hexa TIER_* = 4 const)  T2 ☐  T3 ☐    33%
+//   F-GPGPU-6  T1 ✓ (compute.hexa SCOPE_* = 4 const) T2 ☐  T3 ☐    33%
+//
+// **sat-2 (every F-GPGPU has ≥ 1 T1 satisfier on disk): EXPECTED PASS**
+// **sat-1 (every F-GPGPU ≥ 67% closure): NOT YET** — needs T2 numerics
+// (planned v1.12.0+: numerics_gpgpu_dispatch.hexa, fixture-tier sweep).
+//
+// Run:
+//   hexa run stdlib/hal/falsifier_gpgpu_check.hexa
+//
+// Cost: $0 (file existence checks only).
+
+// ─── falsifier registry (F-GPGPU-1..6) ────────────────────────────────
+
+let FALSIFIERS = [
+    ["F-GPGPU-1", "σ=12 = 6 vendors × 2 IRs (compute lattice cardinality)"],
+    ["F-GPGPU-2", "4-stage τ-lifecycle: compile / enqueue / dispatch / retire"],
+    ["F-GPGPU-3", "φ=2 IR substrates: SPIR-V ∥ PTX; every vendor ≥1"],
+    ["F-GPGPU-4", "J₂′ = σ·τ = 48 dispatch-state combinations"],
+    ["F-GPGPU-5", "4 memory tiers: private / group / device / constant"],
+    ["F-GPGPU-6", "4 barrier scopes: subgroup / workgroup / cluster / grid"]
+]
+
+// T1 tier-stacks (algebraic — satisfied by compute.hexa + 6 vendor
+// backends + 2 IR backends; constants are EXACT and re-assertable).
+let F1_T1 = ["compute.hexa"]
+let F2_T1 = ["compute.hexa"]
+let F3_T1 = [
+    "backend/cuda/compute.hexa",
+    "backend/hip/compute.hexa",
+    "backend/sycl/compute.hexa",
+    "backend/opencl/compute.hexa",
+    "backend/metal/compute.hexa",
+    "backend/webgpu/compute.hexa"
+]
+let F4_T1 = ["compute.hexa"]
+let F5_T1 = ["compute.hexa"]
+let F6_T1 = ["compute.hexa"]
+
+// T2 tier-stacks (numerical / fixture — planned v1.12.0+; preregister
+// the file names so future iters can drop them in without renaming).
+let F1_T2: [str] = ["numerics_gpgpu_lattice.hexa"]      // not on disk yet
+let F2_T2: [str] = ["numerics_gpgpu_lifecycle.hexa"]    // not on disk yet
+let F3_T2: [str] = ["numerics_gpgpu_ir_dichotomy.hexa"] // not on disk yet
+let F4_T2: [str] = ["numerics_gpgpu_dispatch.hexa"]     // not on disk yet
+let F5_T2: [str] = ["numerics_gpgpu_mem_tiers.hexa"]    // not on disk yet
+let F6_T2: [str] = ["numerics_gpgpu_barriers.hexa"]     // not on disk yet
+
+// T3 tier-stacks (HW-bench — cross-vendor SAXPY benchmark fixture;
+// blocked on actual GPU runtime FFI which is downstream per canon §7.5).
+let F1_T3: [str] = []
+let F2_T3: [str] = []
+let F3_T3: [str] = []
+let F4_T3: [str] = []
+let F5_T3: [str] = []
+let F6_T3: [str] = []
+
+// ─── helpers (mirror falsifier_check.hexa) ───────────────────────────
+
+fn _root() -> str {
+    let env_root = env("HEXA_HAL_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _exists(p: str) -> bool {
+    let r = exec("[ -f \"" + p + "\" ] && echo y || echo n").trim()
+    return r == "y"
+}
+
+fn _stack_ok(root: str, stack: [str]) -> bool {
+    if stack.len() == 0 { return false }
+    for s in stack {
+        if !_exists(root + "/stdlib/hal/" + s) { return false }
+    }
+    return true
+}
+
+fn _stack_present_count(root: str, stack: [str]) -> int {
+    let mut n = 0
+    for s in stack {
+        if _exists(root + "/stdlib/hal/" + s) { n = n + 1 }
+    }
+    return n
+}
+
+fn closure_pct(t1: bool, t2: bool, t3: bool) -> int {
+    let mut n = 0
+    if t1 { n = n + 1 }
+    if t2 { n = n + 1 }
+    if t3 { n = n + 1 }
+    if n == 0 { return 0 }
+    if n == 1 { return 33 }
+    if n == 2 { return 67 }
+    return 100
+}
+
+fn _bool_str(b: bool) -> str { if b { return "✓" }; return "✗" }
+
+fn _registered_missing(root: str, stack: [str]) -> int {
+    let mut n = 0
+    for s in stack {
+        if s.len() > 0 && !_exists(root + "/stdlib/hal/" + s) { n = n + 1 }
+    }
+    return n
+}
+
+// ─── main ────────────────────────────────────────────────────────────
+
+fn main() {
+    let root = _root()
+
+    let f1_t1 = _stack_ok(root, F1_T1)
+    let f2_t1 = _stack_ok(root, F2_T1)
+    let f3_t1 = _stack_ok(root, F3_T1)
+    let f4_t1 = _stack_ok(root, F4_T1)
+    let f5_t1 = _stack_ok(root, F5_T1)
+    let f6_t1 = _stack_ok(root, F6_T1)
+
+    let f1_t2 = _stack_ok(root, F1_T2)
+    let f2_t2 = _stack_ok(root, F2_T2)
+    let f3_t2 = _stack_ok(root, F3_T2)
+    let f4_t2 = _stack_ok(root, F4_T2)
+    let f5_t2 = _stack_ok(root, F5_T2)
+    let f6_t2 = _stack_ok(root, F6_T2)
+
+    let f1_t3 = _stack_ok(root, F1_T3)
+    let f2_t3 = _stack_ok(root, F2_T3)
+    let f3_t3 = _stack_ok(root, F3_T3)
+    let f4_t3 = _stack_ok(root, F4_T3)
+    let f5_t3 = _stack_ok(root, F5_T3)
+    let f6_t3 = _stack_ok(root, F6_T3)
+
+    let f1_pct = closure_pct(f1_t1, f1_t2, f1_t3)
+    let f2_pct = closure_pct(f2_t1, f2_t2, f2_t3)
+    let f3_pct = closure_pct(f3_t1, f3_t2, f3_t3)
+    let f4_pct = closure_pct(f4_t1, f4_t2, f4_t3)
+    let f5_pct = closure_pct(f5_t1, f5_t2, f5_t3)
+    let f6_pct = closure_pct(f6_t1, f6_t2, f6_t3)
+
+    let f1_t1_n = _stack_present_count(root, F1_T1)
+    let f2_t1_n = _stack_present_count(root, F2_T1)
+    let f3_t1_n = _stack_present_count(root, F3_T1)
+    let f4_t1_n = _stack_present_count(root, F4_T1)
+    let f5_t1_n = _stack_present_count(root, F5_T1)
+    let f6_t1_n = _stack_present_count(root, F6_T1)
+
+    let miss = _registered_missing(root, F1_T1) +
+               _registered_missing(root, F2_T1) +
+               _registered_missing(root, F3_T1) +
+               _registered_missing(root, F4_T1) +
+               _registered_missing(root, F5_T1) +
+               _registered_missing(root, F6_T1)
+    let ok = miss == 0
+
+    let sat_1 = (f1_pct >= 67) && (f2_pct >= 67) && (f3_pct >= 67) &&
+                (f4_pct >= 67) && (f5_pct >= 67) && (f6_pct >= 67)
+    let sat_2 = (f1_t1_n >= 1) && (f2_t1_n >= 1) && (f3_t1_n >= 1) &&
+                (f4_t1_n >= 1) && (f5_t1_n >= 1) && (f6_t1_n >= 1)
+
+    println("========================================================================")
+    println("  stdlib/hal — F-GPGPU axis closure tracker (preregister + check)")
+    println("========================================================================")
+    println("")
+    println("  per-falsifier closure (T1 algebraic / T2 numerical / T3 HW-bench):")
+    println("    id          T1   T2   T3   closure")
+    let f1_t2_lbl = "  " + _bool_str(f1_t2) + "  "
+    let f2_t2_lbl = "  " + _bool_str(f2_t2) + "  "
+    let f3_t2_lbl = "  " + _bool_str(f3_t2) + "  "
+    let f4_t2_lbl = "  " + _bool_str(f4_t2) + "  "
+    let f5_t2_lbl = "  " + _bool_str(f5_t2) + "  "
+    let f6_t2_lbl = "  " + _bool_str(f6_t2) + "  "
+    let f1_t3_lbl = "  " + _bool_str(f1_t3) + "  "
+    let f2_t3_lbl = "  " + _bool_str(f2_t3) + "  "
+    let f3_t3_lbl = "  " + _bool_str(f3_t3) + "  "
+    let f4_t3_lbl = "  " + _bool_str(f4_t3) + "  "
+    let f5_t3_lbl = "  " + _bool_str(f5_t3) + "  "
+    let f6_t3_lbl = "  " + _bool_str(f6_t3) + "  "
+    println("    F-GPGPU-1    " + _bool_str(f1_t1) + f1_t2_lbl + f1_t3_lbl + " " + str(f1_pct) + "%")
+    println("    F-GPGPU-2    " + _bool_str(f2_t1) + f2_t2_lbl + f2_t3_lbl + " " + str(f2_pct) + "%")
+    println("    F-GPGPU-3    " + _bool_str(f3_t1) + f3_t2_lbl + f3_t3_lbl + " " + str(f3_pct) + "%")
+    println("    F-GPGPU-4    " + _bool_str(f4_t1) + f4_t2_lbl + f4_t3_lbl + " " + str(f4_pct) + "%")
+    println("    F-GPGPU-5    " + _bool_str(f5_t1) + f5_t2_lbl + f5_t3_lbl + " " + str(f5_pct) + "%")
+    println("    F-GPGPU-6    " + _bool_str(f6_t1) + f6_t2_lbl + f6_t3_lbl + " " + str(f6_pct) + "%")
+    println("")
+
+    println("  registered claims:")
+    let mut idx = 1
+    while idx <= FALSIFIERS.len() {
+        let f = FALSIFIERS[idx - 1]
+        println("    " + f[0] + ":  " + f[1])
+        idx = idx + 1
+    }
+    println("")
+
+    println("  T1 stack inventory (compute.hexa + 6 vendor backends + 2 IR):")
+    println("    F-GPGPU-1 → " + str(F1_T1))
+    println("    F-GPGPU-2 → " + str(F2_T1))
+    println("    F-GPGPU-3 → " + str(F3_T1))
+    println("    F-GPGPU-4 → " + str(F4_T1))
+    println("    F-GPGPU-5 → " + str(F5_T1))
+    println("    F-GPGPU-6 → " + str(F6_T1))
+    println("")
+
+    println("  T2 stack preregister (planned v1.12.0+ numerics_gpgpu_*.hexa):")
+    println("    F-GPGPU-1 → " + str(F1_T2))
+    println("    F-GPGPU-2 → " + str(F2_T2))
+    println("    F-GPGPU-3 → " + str(F3_T2))
+    println("    F-GPGPU-4 → " + str(F4_T2))
+    println("    F-GPGPU-5 → " + str(F5_T2))
+    println("    F-GPGPU-6 → " + str(F6_T2))
+    println("")
+
+    println("  saturation status:")
+    println("    sat-1 (all 6 F-GPGPU ≥ 67% closure):                 " + _bool_str(sat_1))
+    println("    sat-2 (every F-GPGPU has ≥ 1 T1 satisfier on disk):  " + _bool_str(sat_2))
+    println("")
+
+    println("========================================================================")
+
+    if !ok {
+        println("  FAIL — " + str(miss) + " registered T1 satisfier(s) missing from disk")
+        println("__HEXA_LANG_HAL_FALSIFIER_GPGPU_CHECK__ FAIL")
+        exit(1)
+    }
+    println("  PASS — every registered T1 satisfier present on disk")
+    if sat_1 { println("    ★ sat-1 milestone reached: all 6 F-GPGPU ≥ 67%") }
+    if sat_2 { println("    ★ sat-2 milestone reached: every F-GPGPU has ≥ 1 T1 satisfier") }
+    println("__HEXA_LANG_HAL_FALSIFIER_GPGPU_CHECK__ PASS")
+    exit(0)
+}
+
+main()

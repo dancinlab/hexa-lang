@@ -1,0 +1,58 @@
+// HEXA Native Compiler — Phase 1-extension absorption: roadmaps archive (D11)
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Source SSOT:
+//   ~/core/nexus/roadmaps/<project>.json
+//
+// Per absorption doctrine v2 rule 3, the per-project roadmaps under nexus
+// are absorbed into hexa-lang as frozen archives — historical records,
+// NOT active management surfaces. We do NOT track phase progress; we
+// preserve the document.
+//
+// Each entry is one RoadmapArchive carrying:
+//   - project key (anima/nexus/canon/papers/hexa-lang/void/airgenome)
+//   - source path (relative to nexus root, e.g. "roadmaps/nexus.json")
+//   - per-file sha256
+//   - raw_json: the entire roadmap document serialized as canonical JSON
+//   - size_bytes / phase_count / track_count: cached scalars for cheap
+//     queries that don't want to parse raw_json
+//   - status: "present" | "not_found" — when the file doesn't exist on
+//     disk we still emit a row so consumers see the gap explicitly.
+//
+// The 7 projects per projects.json readme_order are anima/nexus/canon/
+// papers/hexa-lang/void/airgenome. canon's roadmap lives under the file
+// name `n6-architecture.json` (its `_meta.project` reads "CANON"); we
+// use the project key "canon" but record that path verbatim.
+
+@phase("parse_only")
+pub struct RoadmapArchive {
+    // Project key as it appears in projects.json (e.g. "nexus", "canon").
+    project: string,
+
+    // Source path relative to the nexus repo root.
+    source_path: string,
+
+    // sha256 of the source file (lowercase hex). Empty string if
+    // status == "not_found".
+    sha256: string,
+
+    // "present" | "not_found". When "not_found", raw_json == "" and the
+    // numeric fields are 0; the entry still occupies a row so consumers
+    // can see the gap.
+    status: string,
+
+    // Size in bytes of the raw source file. 0 if not_found.
+    size_bytes: i64,
+
+    // Number of phases at top level (0 if absent or not_found).
+    phase_count: i64,
+
+    // Number of tracks at top level (0 if absent or not_found).
+    track_count: i64,
+
+    // Canonical JSON serialization of the entire roadmap document.
+    // Consumers that need structured access should json_parse() this.
+    raw_json: string
+}

@@ -1,0 +1,24 @@
+// RFC 067 N206 — emit TMA matmul PTX via the codegen pipeline.
+//
+// @version 0.0.1
+// @capabilities [pure]
+//
+// Reaches into the public codegen entry point
+// `_nvptx_emit_matmul_tma_module(name, target, ptx_version)` (made pub
+// in N206) and writes the emitted PTX to stdout for downstream
+// silicon-fire on ubu-1 RTX 5070 sm_120a.
+//
+// Run:
+//   hexa build inbox/fires/rfc067_n206_tma_codegen_emit_2026_05_22/emit_tma_ptx.hexa -o /tmp/emit_tma
+//   /tmp/emit_tma > sgemm_tma_codegen.ptx
+
+import "../../../compiler/codegen/nvptx_target.hexa"
+import "../../../compiler/codegen/nvptx_tma_ops.hexa"
+
+fn main() {
+    // Kernel name `sgemm_tma_smoke` matches the N200 SMOKE host driver
+    // (`inbox/fires/rfc067_ptma_named_bar_hilbert_2026_05_22/host.c`)
+    // so the same host binary can fire this codegen-emitted PTX.
+    let ptx = _nvptx_emit_matmul_tma_module("sgemm_tma_smoke", NVPTX_TARGET_SM120A, NVPTX_PTX_VERSION_SM120A)
+    print(ptx)
+}

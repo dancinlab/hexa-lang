@@ -1,0 +1,305 @@
+#!hexa strict
+// tool/aot_cc_select.hexa — SH4 selector module for the AOT cc backend.
+//
+// Background
+//   self/main.hexa::aot_build_slot(...) (the Layer-3 link step) decides
+//   which compiler to invoke. SH1 shipped an inline env_var check
+//   (HEXA_AOT_CC, default "clang"). With phase 1 of SH3 closed (a
+//   trivial subset compiles natively without clang) and phase 2 partly
+//   landed, the dispatch surface needs a real selector — one that
+//   inspects the source AST and routes:
+//
+//     - native-supported subset (currently: trivial println literal /
+//       const-arith / BoolLit) → tool/aot_native_trivial.hexa
+//     - everything else                                   → clang (or
+//       whatever HEXA_AOT_CC says)
+//
+// This module is the single answer to "what backend should this build
+// use?"  The actual rewire of main.hexa to consume it happens in the
+// SH4 follow-up; this commit ships the selector itself, testable in
+// isolation, so the wiring change is a small one-line edit later.
+//
+// Usage as a CLI probe (for tests / dispatch debugging):
+//   hexa tool/aot_cc_select.hexa [<source.hexa>]
+// Outputs one line of JSON:
+//   {"backend":"clang","reason":"default","cc":"clang"}
+//   {"backend":"clang","reason":"env-override","cc":"zig cc"}
+//   {"backend":"native","reason":"trivial-subset","cc":"<native>"}
+//
+// Resolution order (first match wins)
+//   1. HEXA_AOT_BACKEND env var
+//        - "native"   → force native (file ignored if absent)
+//        - "clang"    → force clang
+//        - any other  → ignored, fall through
+//   2. HEXA_AOT_CC env var
+//        - non-empty  → use as the cc command (e.g. "zig cc"), backend
+//                       still classed as "clang-family"
+//        - empty/unset → fall through
+//   3. Source-AST classification (when a path is supplied)
+//        - matches the native trivial subset → backend = native
+//   4. Default → backend = clang, cc = "clang"
+//
+// Pure function semantics: pick_backend(source_path) → result map with
+//   { backend, reason, cc }. Same inputs → identical output.
+//
+// W-α rewire shape (when load drops + binary swap window is safe)
+//   self/main.hexa::aot_build_slot lines 1760-1761 today read:
+//     let mut __aot_cc = env_var("HEXA_AOT_CC")
+//     if __aot_cc == "" { __aot_cc = "clang" }
+//   The W-α replacement (cc selection only, native dispatch is a later
+//   wedge — see SH3 phase 5):
+//     let __aot_pick = pick_backend_with_env(
+//         file,
+//         env_var("HEXA_AOT_BACKEND"),
+//         env_var("HEXA_AOT_CC"))
+//     let mut __aot_cc = __aot_pick["cc"]
+//     // Native backend route is a separate wedge; for cc-only routing
+//     // we fall back to clang here so existing pipeline is unchanged.
+//     if __aot_cc == "<native>" { __aot_cc = "clang" }
+//   And cflag_str (line 1762) folds __aot_pick["backend"] in so the
+//   layered link cache key shifts when the backend identity flips:
+//     let cflag_str = __aot_pick["backend"] + "|" + __aot_cc + "|-O2|" + ...
+//   Module import: add `use "tool/aot_cc_select"` near the top of
+//   self/main.hexa (alongside other tool imports). Note: pick_backend's
+//   1st arg is the .hexa source (file), not the transpiled c_file —
+//   the AST classifier needs the .hexa to lex/parse.
+//
+// W-α' rewire shape (cmd_build sibling of W-α; same load-window gating)
+//   self/main.hexa::cmd_build line 1021 today reads:
+//     let compile = "clang -O2 " + os_clang_cflags() + _strict +
+//                   "-Wno-trigraphs -fbracket-depth=4096 -I '" + __inst +
+//                   "/self' " + c_file + " -o '" + tmp + "'" +
+//                   os_clang_ldflags() + " 2>&1"
+//   The "clang" is hard-coded inline (no SH1 surface here). W-α'
+//   replaces it with the same selector dispatch as W-α, using the
+//   .hexa source path `src` (the cmd_build arg) for AST classification.
+//   Replacement (insert before the `let compile = ...` line, edit
+//   the literal "clang" inside the string):
+//     let __cb_pick = pick_backend_with_env(
+//         src,
+//         env_var("HEXA_AOT_BACKEND"),
+//         env_var("HEXA_AOT_CC"))
+//     let mut __cb_cc = __cb_pick["cc"]
+//     // Native dispatch is a later wedge (cmd_build needs codegen + atomic
+//     // rename + macOS Gatekeeper signing — separate from cc selection).
+//     // For cc-only routing, fall back to clang on "<native>".
+//     if __cb_cc == "<native>" { __cb_cc = "clang" }
+//     let compile = __cb_cc + " -O2 " + os_clang_cflags() + _strict +
+//                   "-Wno-trigraphs -fbracket-depth=4096 -I '" + __inst +
+//                   "/self' " + c_file + " -o '" + tmp + "'" +
+//                   os_clang_ldflags() + " 2>&1"
+//   Module import: same `use "tool/aot_cc_select"` shared with W-α —
+//   one import covers both call sites. cmd_build does NOT layer-cache
+//   its link, so no cflag_str backend-id fold is needed (every cmd_build
+//   invocation is a fresh compile to a user-named output path). The
+//   selftest matrix in this module already covers all cc-resolution
+//   branches that cmd_build exercises (env-override, fall-through,
+//   garbage BACKEND, missing source) — pre-validated.
+
+use "self/lexer"
+use "self/parser"
+
+// SH3 phase 5 will replace this with a real "is this AST natively
+// supported?" probe. Today it accepts the same trivial subset that
+// tool/aot_native_trivial.hexa accepts: a single ExprStmt of
+// println(StringLit | BoolLit | IntLit | BinOp(arith) | BinOp(cmp))
+// or zero-or-more LetStmt followed by such an ExprStmt.
+fn looks_like_trivial_subset(source_path: string) -> bool {
+    let probe = exec("test -r '" + source_path + "' && printf yes || printf no")
+    if probe != "yes" { return false }
+    let src = to_string(read_file(source_path))
+    let tokens = tokenize(src)
+    let ast = parse(tokens)
+    if len(ast) < 1 { return false }
+    let last = ast[len(ast) - 1]
+    if last["kind"] != "ExprStmt" { return false }
+    let expr = last["left"]
+    if expr["kind"] != "Call" { return false }
+    let callee = expr["left"]
+    if callee["kind"] != "Ident" { return false }
+    if callee["name"] != "println" { return false }
+    let args = expr["args"]
+    if len(args) != 1 { return false }
+    let arg0 = args[0]
+    let ak = arg0["kind"]
+    if ak == "StringLit" { return true }
+    if ak == "BoolLit"   { return true }
+    if ak == "IntLit"    { return true }
+    if ak == "Ident"     { return true }
+    if ak == "BinOp"     { return true }
+    return false
+}
+
+// pick_backend_with_env — pure form. Takes the env values explicitly so
+// callers (incl. main.hexa W-α rewire and in-process selftest) can drive
+// resolution without touching process env. Same inputs → identical output.
+fn pick_backend_with_env(source_path: string, backend_env: string, cc_env: string) {
+    // 1. HEXA_AOT_BACKEND override
+    if backend_env == "native" {
+        return #{
+            "backend": "native",
+            "reason":  "env-override-native",
+            "cc":      "<native>"
+        }
+    }
+    if backend_env == "clang" {
+        let cc = if len(cc_env) > 0 { cc_env } else { "clang" }
+        return #{
+            "backend": "clang",
+            "reason":  "env-override-clang",
+            "cc":      cc
+        }
+    }
+
+    // 2. HEXA_AOT_CC env var (clang-family)
+    if len(cc_env) > 0 {
+        return #{
+            "backend": "clang",
+            "reason":  "env-override",
+            "cc":      cc_env
+        }
+    }
+
+    // 3. AST classification
+    if len(source_path) > 0 {
+        if looks_like_trivial_subset(source_path) {
+            return #{
+                "backend": "native",
+                "reason":  "trivial-subset",
+                "cc":      "<native>"
+            }
+        }
+    }
+
+    // 4. Default
+    return #{
+        "backend": "clang",
+        "reason":  "default",
+        "cc":      "clang"
+    }
+}
+
+// pick_backend — implicit-env wrapper. Reads HEXA_AOT_BACKEND /
+// HEXA_AOT_CC from process env and delegates to the pure form. Kept for
+// CLI use (`hexa tool/aot_cc_select.hexa <file>`) and back-compat.
+fn pick_backend(source_path: string) {
+    return pick_backend_with_env(
+        source_path,
+        env_var("HEXA_AOT_BACKEND"),
+        env_var("HEXA_AOT_CC")
+    )
+}
+
+// ─── self-test (selftest) ─────────────────────────────────────
+// `hexa tool/aot_cc_select.hexa --selftest` runs in-process probes
+// across the four resolution branches. Returns rc=0 on PASS, rc=2 on
+// any FAIL — matches the in-house test harness convention.
+fn run_selftest() {
+    let mut fails = 0
+
+    // Probe 1: default (no env, no source). Uses pure form to avoid
+    // pollution from caller's process env.
+    let r1 = pick_backend_with_env("", "", "")
+    if r1["backend"] != "clang" || r1["reason"] != "default" {
+        eprintln("FAIL probe-1 default: " + str(r1))
+        fails = fails + 1
+    }
+
+    // Probe 2: trivial-subset path.
+    let trivial_path = "/tmp/_sh4_trivial.hexa"
+    let _w1 = exec("printf 'println(\"hi\")' > '" + trivial_path + "'")
+    let r2 = pick_backend_with_env(trivial_path, "", "")
+    if r2["backend"] != "native" || r2["reason"] != "trivial-subset" {
+        eprintln("FAIL probe-2 trivial: " + str(r2))
+        fails = fails + 1
+    }
+
+    // Probe 3: non-trivial source falls back to clang/default.
+    let nontrivial_path = "/tmp/_sh4_nontrivial.hexa"
+    let _w2 = exec("printf 'fn main() { let x = 1; for i in 0..10 { println(i) } }' > '" + nontrivial_path + "'")
+    let r3 = pick_backend_with_env(nontrivial_path, "", "")
+    if r3["backend"] != "clang" || r3["reason"] != "default" {
+        eprintln("FAIL probe-3 nontrivial: " + str(r3))
+        fails = fails + 1
+    }
+
+    // Probe 4: HEXA_AOT_BACKEND=native forces native regardless of source.
+    let r4 = pick_backend_with_env(nontrivial_path, "native", "")
+    if r4["backend"] != "native" || r4["reason"] != "env-override-native" {
+        eprintln("FAIL probe-4 backend=native: " + str(r4))
+        fails = fails + 1
+    }
+
+    // Probe 5: HEXA_AOT_BACKEND=clang forces clang even on trivial source.
+    let r5 = pick_backend_with_env(trivial_path, "clang", "")
+    if r5["backend"] != "clang" || r5["reason"] != "env-override-clang" || r5["cc"] != "clang" {
+        eprintln("FAIL probe-5 backend=clang: " + str(r5))
+        fails = fails + 1
+    }
+
+    // Probe 6: HEXA_AOT_BACKEND=clang + HEXA_AOT_CC=zig cc → cc folded in.
+    let r6 = pick_backend_with_env("", "clang", "zig cc")
+    if r6["backend"] != "clang" || r6["reason"] != "env-override-clang" || r6["cc"] != "zig cc" {
+        eprintln("FAIL probe-6 backend=clang+cc=zig: " + str(r6))
+        fails = fails + 1
+    }
+
+    // Probe 7: HEXA_AOT_CC=tcc alone (no backend var) → clang-family,
+    // env-override reason. Verifies the fall-through ordering: BACKEND
+    // override is tried before CC override.
+    let r7 = pick_backend_with_env("", "", "tcc")
+    if r7["backend"] != "clang" || r7["reason"] != "env-override" || r7["cc"] != "tcc" {
+        eprintln("FAIL probe-7 cc=tcc: " + str(r7))
+        fails = fails + 1
+    }
+
+    // Probe 8: BACKEND="garbage" alone — must fall through (per spec
+    // "any other value → ignored, fall through"), landing on default.
+    // Defends against typos / debug overrides silently picking native.
+    let r8 = pick_backend_with_env("", "garbage", "")
+    if r8["backend"] != "clang" || r8["reason"] != "default" {
+        eprintln("FAIL probe-8 backend=garbage: " + str(r8))
+        fails = fails + 1
+    }
+
+    // Probe 9: BACKEND="garbage" + CC="tcc" — BACKEND ignored, CC
+    // override fires. Witnesses ordering: BACKEND fall-through reaches
+    // the CC override branch (not the AST/default branches).
+    let r9 = pick_backend_with_env("", "garbage", "tcc")
+    if r9["backend"] != "clang" || r9["reason"] != "env-override" || r9["cc"] != "tcc" {
+        eprintln("FAIL probe-9 backend=garbage+cc=tcc: " + str(r9))
+        fails = fails + 1
+    }
+
+    // Probe 10: nonexistent source path — `test -r` fails inside
+    // looks_like_trivial_subset, so the AST branch is skipped silently
+    // and resolution falls through to default. No crash, no native
+    // mis-dispatch on a missing/typo'd path.
+    let r10 = pick_backend_with_env("/tmp/_sh4_does_not_exist.hexa", "", "")
+    if r10["backend"] != "clang" || r10["reason"] != "default" {
+        eprintln("FAIL probe-10 nonexistent: " + str(r10))
+        fails = fails + 1
+    }
+
+    let _r1 = exec("rm -f '" + trivial_path + "' '" + nontrivial_path + "'")
+
+    if fails == 0 {
+        println("aot_cc_select selftest: PASS (10 probes)")
+    } else {
+        eprintln("aot_cc_select selftest: FAIL (" + str(fails) + " probes)")
+        exit(2)
+    }
+}
+
+let av = real_args()
+if len(av) >= 1 && av[0] == "--selftest" {
+    run_selftest()
+} else {
+    // Force the string view so the fn-arg-map drift doesn't strip
+    // looks_like_trivial_subset()'s source_path argument. Same nudge
+    // as build_println_dyn's "" + s_in pattern.
+    let mut path = ""
+    if len(av) >= 1 { path = "" + av[0] }
+    let r = pick_backend(path)
+    println("{\"backend\":\"" + r["backend"] + "\",\"reason\":\"" + r["reason"] + "\",\"cc\":\"" + r["cc"] + "\"}")
+}

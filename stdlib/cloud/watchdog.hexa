@@ -1,0 +1,425 @@
+// stdlib/cloud/watchdog.hexa — idle-pod autokill helper.
+//
+// 출처: archive/patches/hexa-cloud-idle-autokill-missing-2026-05-24.md
+// (RTSC 캠페인 중 5 pods 가 18-27h idle 으로 ≈ $25 burn — `hexa cloud` 에
+// idle 감지 + auto-destroy 메커니즘 부재. 본 모듈은 Fix A — watchdog —
+// 의 closed-form 부분: 결정 로직 + scan/poll 한 사이클 + dry-run 모드).
+//
+// 설계 요약
+//
+//   1. `_should_autokill(uptime_min, util_pct, threshold_min, util_cap_pct)`
+//      = pure decision function. network/CLI 의존성 0; falsifier-test
+//      가능. uptime ≥ threshold 이고 util ≤ cap 이면 1, 그 외 0.
+//
+//   2. `IdlePodSnapshot` = runpodctl 한 호출 (`pod get <id> -o json`) 의
+//      idle-decision 에 쓰이는 필드만 발췌한 작은 struct (pod_id, name,
+//      uptime_min, gpu_util_pct, cost_per_hr). 실시간 호출은
+//      `runpod_get_idle_snapshot(pod_id)` 가 채우고, 테스트는 직접 struct
+//      를 만들어 `_should_autokill` 만 호출하므로 live pod 가 필요 없음.
+//
+//   3. `runpod_idle_autokill_sweep(threshold_min, util_cap_pct, dry_run)`
+//      = scan 한 사이클: list_pods → 각 pod 의 snapshot 채우기 → 결정 →
+//      kill (dry_run==0 일 때만). 반환 = (killed: [str], spared: [str],
+//      errors: [str]). 데몬화는 follow-up — 본 PR 은 foreground 1-cycle 만.
+//
+// 본 PR 의 wipe-guard 범위 = stdlib/cloud/* 신규 파일만; 다른 모듈은
+// 손대지 않는다. live pod terminate 호출은 dry_run=0 + util_cap_pct < 100
+// + threshold_min ≥ 5 의 3중 게이트 통과 시에만 동작 (테스트 fixture 는
+// dry_run=1 + mock injection 으로 termination 경로 회피).
+
+use "stdlib/alloc/json_object"
+use "stdlib/cloud/runpod"
+
+// ── snapshot shape ───────────────────────────────────────────────────
+
+struct IdlePodSnapshot {
+    pod_id:        str,    // RunPod pod id (empty = "no info")
+    name:          str,    // pod name (best-effort; "" 허용)
+    uptime_min:    int,    // 분 단위 가동 시간; -1 = 미지/미회수
+    gpu_util_pct:  int,    // 0..100 GPU util 퍼센트; -1 = 미지
+    cost_per_hr:   int,    // 시간당 비용 (millicents 단위, int; 0 = 미지)
+    message:       str
+}
+
+fn _snap_empty(msg: str) -> IdlePodSnapshot {
+    return IdlePodSnapshot {
+        pod_id:       "",
+        name:         "",
+        uptime_min:   -1,
+        gpu_util_pct: -1,
+        cost_per_hr:  0,
+        message:      msg
+    }
+}
+
+// ── pure decision (no network, no exec) ──────────────────────────────
+
+// _should_autokill — 핵심 결정 함수.
+//
+// 반환 1 = autokill 권장 (uptime ≥ threshold AND util ≤ cap).
+// 반환 0 = 살림 (uptime 미달 / util 활성 / -1 미지값 / 게이트 미통과).
+//
+// 게이트 (전부 만족해야 1 반환):
+//   • threshold_min ≥ 5         — 너무 짧은 threshold (≤ 4 min) 는 false-
+//                                  positive 위험 → 보수적으로 0 반환
+//   • util_cap_pct in [0, 99]   — 100% 이상은 무의미; 음수 거부
+//   • uptime_min ≥ 0            — -1 미지 = 결정 거부
+//   • gpu_util_pct ≥ 0          — -1 미지 = 결정 거부
+//   • uptime_min ≥ threshold_min
+//   • gpu_util_pct ≤ util_cap_pct
+fn _should_autokill(uptime_min: int, gpu_util_pct: int, threshold_min: int, util_cap_pct: int) -> int {
+    if threshold_min < 5 { return 0 }
+    if util_cap_pct < 0 { return 0 }
+    if util_cap_pct > 99 { return 0 }
+    if uptime_min < 0 { return 0 }
+    if gpu_util_pct < 0 { return 0 }
+    if uptime_min < threshold_min { return 0 }
+    if gpu_util_pct > util_cap_pct { return 0 }
+    return 1
+}
+
+// ── snapshot fetch (runpodctl, real) ─────────────────────────────────
+
+// _shq_local — POSIX-quote (cloud.hexa / runpod.hexa mirror; 모듈 간 의존
+// 최소화를 위해 다시 정의).
+fn _shq_local(s: str) -> str {
+    let mut out = "'"
+    let mut i = 0
+    let n = len(s)
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "'" {
+            out = out + "'\\''"
+        } else {
+            out = out + c
+        }
+        i = i + 1
+    }
+    return out + "'"
+}
+
+// _runpodctl_bin — runpod.hexa 의 `_runpodctl_path` 와 같은 검출 규칙;
+// 모듈 경계 보존 (이 함수는 watchdog 전용 사본).
+fn _runpodctl_bin() -> str {
+    if env_var("RUNPODCTL_DISABLE") == "1" {
+        return ""
+    }
+    let home_bin = env_var("HOME") + "/bin/runpodctl"
+    if file_exists(home_bin) {
+        return home_bin
+    }
+    let on_path = exec("command -v runpodctl 2>/dev/null").trim()
+    return on_path
+}
+
+// runpod_get_idle_snapshot — `runpodctl pod get <id> -o json` 을 호출하고
+// idle-decision 에 필요한 필드만 추출. runpodctl 미설치 / pod 미존재 /
+// JSON parse 실패 시 모든 숫자 필드 -1 / 0 으로 채워서 snapshot.message 에
+// 진단 문자열을 담아 반환 → 결정 함수가 자동으로 "살림(0)" 처리.
+//
+// runpodctl 2.x `pod get` 의 JSON 스키마 (관련 필드만):
+//   {
+//     "id":              "<pod_id>",
+//     "name":            "<user-chosen>",
+//     "costPerHr":       0.59,
+//     "runtime": {
+//        "uptimeInSeconds": 12345,
+//        "gpus": [{ "gpuUtilPercent": 0 }, ...]
+//     }
+//   }
+fn runpod_get_idle_snapshot(pod_id: str) -> IdlePodSnapshot {
+    if len(pod_id) == 0 {
+        return _snap_empty("empty pod_id")
+    }
+    let rpc = _runpodctl_bin()
+    if len(rpc) == 0 {
+        return _snap_empty("runpodctl not found")
+    }
+    let cmd = _shq_local(rpc) + " pod get " + _shq_local(pod_id) + " -o json 2>&1"
+    let out = exec(cmd)
+    if len(out) == 0 {
+        return _snap_empty("pod get: empty stdout")
+    }
+    let parsed = json_parse(out)
+    let id_s = json_object_get_str(parsed, "id", "")
+    if len(id_s) == 0 {
+        return _snap_empty("pod get: no id field — " + out.substring(0, 120))
+    }
+    let name_s = json_object_get_str(parsed, "name", "")
+    // uptime — runtime.uptimeInSeconds (seconds → minutes via integer
+    // floor). 미존재 = -1.
+    let upt_v = json_object_get_path(parsed, "runtime.uptimeInSeconds")
+    let mut uptime_min = -1
+    if type_of(upt_v) == "int" {
+        let secs = upt_v
+        uptime_min = secs / 60
+    }
+    // gpu util — runtime.gpus 배열에서 최댓값 (multi-GPU pod 에서는 어떤
+    // 하나라도 활성이면 살림). 미존재/빈 배열 = -1.
+    let gpus_v = json_object_get_path(parsed, "runtime.gpus")
+    let mut max_util = -1
+    if type_of(gpus_v) == "array" {
+        let mut gi = 0
+        while gi < len(gpus_v) {
+            let g = gpus_v[gi]
+            let u_v = json_object_get(g, "gpuUtilPercent")
+            if type_of(u_v) == "int" {
+                if u_v > max_util {
+                    max_util = u_v
+                }
+            }
+            gi = gi + 1
+        }
+    }
+    // cost — costPerHr 가 float 라 본 모듈은 일단 기록만 (decision 에는
+    // 미사용). 향후 cost-aware policy 에서 surfacing 가능.
+    let cost_mcc = 0
+    return IdlePodSnapshot {
+        pod_id:       id_s,
+        name:         name_s,
+        uptime_min:   uptime_min,
+        gpu_util_pct: max_util,
+        cost_per_hr:  cost_mcc,
+        message:      "ok"
+    }
+}
+
+// ── sweep result ─────────────────────────────────────────────────────
+
+struct IdleSweepResult {
+    ok:       int,      // 1 iff list 가 성공했고 sweep 전체가 완료
+    killed:   [str],    // terminate 가 실제 (또는 dry-run 시 가상으로) 실행된 pod_ids
+    spared:   [str],    // 조사했지만 살린 pod_ids
+    errors:   [str],    // snapshot 또는 terminate 실패 진단 (per-pod)
+    dry_run:  int,      // 입력 echo — 0/1
+    message:  str
+}
+
+fn _sweep_fail(msg: str) -> IdleSweepResult {
+    return IdleSweepResult {
+        ok:      0,
+        killed:  [],
+        spared:  [],
+        errors:  [],
+        dry_run: 0,
+        message: msg
+    }
+}
+
+// ── full sweep (1 cycle) ─────────────────────────────────────────────
+
+// runpod_idle_autokill_sweep — 한 번의 sweep cycle 을 실행:
+//   1. runpod_list_pods 로 활성 pod ids 회수
+//   2. 각 pod 마다 runpod_get_idle_snapshot 으로 uptime+util 회수
+//   3. _should_autokill 로 결정 (closed-form, pure)
+//   4. dry_run==0 이고 결정==1 이면 runpod_terminate 호출, 그 외엔 spared
+//      list 에 적재 (또는 dry_run 모드면 killed list 에 적재하되 실제
+//      terminate 는 하지 않음)
+//
+// dry_run==1 = scan + 결정만 (실제 terminate 호출 X). 첫 release 는
+// foreground 1-cycle 만 — 데몬화 / cron 은 follow-up (commons g37
+// auto-launch 규칙에 따라 사용자-요청 시에만).
+//
+// api_key 는 runpod_terminate 의 GraphQL fallback 용. dry_run==1 이면
+// 사용 안 됨.
+fn runpod_idle_autokill_sweep(
+    api_key:        str,
+    threshold_min:  int,
+    util_cap_pct:   int,
+    dry_run:        int
+) -> IdleSweepResult {
+    let lst = runpod_list_pods()
+    if lst.ok == 0 {
+        return _sweep_fail("list_pods failed: " + lst.message)
+    }
+    let mut killed = []
+    let mut spared = []
+    let mut errors = []
+    let mut i = 0
+    while i < len(lst.pod_ids) {
+        let pid = lst.pod_ids[i]
+        let snap = runpod_get_idle_snapshot(pid)
+        if snap.uptime_min < 0 || snap.gpu_util_pct < 0 {
+            errors.push(pid + ": " + snap.message)
+            spared.push(pid)
+            i = i + 1
+            continue
+        }
+        let verdict = _should_autokill(snap.uptime_min, snap.gpu_util_pct, threshold_min, util_cap_pct)
+        if verdict == 1 {
+            if dry_run == 1 {
+                killed.push(pid)
+            } else {
+                let ok = runpod_terminate(api_key, pid)
+                if ok == 1 {
+                    killed.push(pid)
+                } else {
+                    errors.push(pid + ": terminate failed")
+                    spared.push(pid)
+                }
+            }
+        } else {
+            spared.push(pid)
+        }
+        i = i + 1
+    }
+    let killed_msg = if dry_run == 1 {
+        "would kill " + to_string(len(killed))
+    } else {
+        "killed " + to_string(len(killed))
+    }
+    return IdleSweepResult {
+        ok:      1,
+        killed:  killed,
+        spared:  spared,
+        errors:  errors,
+        dry_run: dry_run,
+        message: killed_msg + " · spared " + to_string(len(spared)) + " · errors " + to_string(len(errors))
+    }
+}
+
+// ── CLI entry (thin arg-parse wrapper over the sweep) ────────────────
+//
+// Mirrors preflight.hexa's `preflight_run(av, start) -> int` so cloud_cli
+// can dispatch `hexa cloud watchdog` the same way it dispatches preflight.
+// DRY-RUN BY DEFAULT — a sweep is gated on dry_run, so without an explicit
+// `--kill` / `--no-dry-run` flag the verb only lists idle pods + what WOULD
+// be terminated; it never calls runpod_terminate.
+//
+// Flags:
+//   --threshold-min N   idle uptime gate in minutes (default 60; min 5)
+//   --util-cap-pct  N   max GPU util to count as idle (default 0; 0..99)
+//   --kill | --no-dry-run   actually terminate (needs RUNPOD_API_KEY env)
+//   --help | -h
+//
+// Exit codes: 0 = clean sweep (dry-run plan emitted, or kills done) ·
+//             1 = invalid args / help · 2 = sweep failed (no creds / no
+//             runpodctl / list error).
+
+fn _wd_atoi(s: str) -> int {
+    let mut v = 0
+    let mut i = 0
+    let n = len(s)
+    if n == 0 { return -1 }
+    while i < n {
+        let cc = char_code(s.substring(i, i + 1))
+        if cc >= 48 && cc <= 57 {
+            v = v * 10 + (cc - 48)
+        } else {
+            return -1
+        }
+        i = i + 1
+    }
+    return v
+}
+
+fn _watchdog_help() {
+    println("hexa cloud watchdog — idle-pod autokill sweep (1 cycle)")
+    println("")
+    println("usage:")
+    println("  watchdog [--threshold-min N] [--util-cap-pct N] [--kill]")
+    println("")
+    println("flags:")
+    println("  --threshold-min N   idle uptime gate in minutes (default 60; min 5)")
+    println("  --util-cap-pct N    max GPU util% counted as idle (default 0; 0..99)")
+    println("  --kill              actually terminate matched pods (alias --no-dry-run)")
+    println("                      requires RUNPOD_API_KEY in env; default is DRY-RUN")
+    println("  --help | -h")
+    println("")
+    println("DRY-RUN by default: lists idle pods + what WOULD be killed, kills nothing.")
+    println("exit code: 0 = clean sweep · 1 = invalid args / help · 2 = sweep failed")
+    println("           (no runpodctl / no pods / list error).")
+}
+
+// watchdog_run — parse argv (from position `start`) and run one sweep
+// cycle. Returns the exit code described above.
+fn watchdog_run(av: [str], start: int) -> int {
+    let mut threshold_min = 60
+    let mut util_cap_pct = 0
+    let mut dry_run = 1
+    let mut i = start
+    while i < len(av) {
+        let t = av[i]
+        if t == "--threshold-min" || t == "--threshold" {
+            if i + 1 >= len(av) {
+                println("[watchdog] error: --threshold-min requires a value")
+                return 1
+            }
+            let v = _wd_atoi(av[i + 1])
+            if v < 0 {
+                println("[watchdog] error: --threshold-min not a non-negative integer: " + av[i + 1])
+                return 1
+            }
+            threshold_min = v
+            i = i + 2
+        } else if t == "--util-cap-pct" || t == "--util-cap" {
+            if i + 1 >= len(av) {
+                println("[watchdog] error: --util-cap-pct requires a value")
+                return 1
+            }
+            let v = _wd_atoi(av[i + 1])
+            if v < 0 {
+                println("[watchdog] error: --util-cap-pct not a non-negative integer: " + av[i + 1])
+                return 1
+            }
+            util_cap_pct = v
+            i = i + 2
+        } else if t == "--kill" || t == "--no-dry-run" {
+            dry_run = 0
+            i = i + 1
+        } else if t == "--dry-run" {
+            dry_run = 1
+            i = i + 1
+        } else if t == "--help" || t == "-h" || t == "help" {
+            _watchdog_help()
+            return 1
+        } else {
+            // Skip unknown tokens (tolerate upstream verb prefixes).
+            i = i + 1
+        }
+    }
+
+    let mut mode = "DRY-RUN"
+    if dry_run == 0 { mode = "LIVE (--kill)" }
+    println("=== hexa cloud watchdog — idle-pod autokill sweep ===")
+    println("mode           = " + mode)
+    println("threshold_min  = " + to_string(threshold_min))
+    println("util_cap_pct   = " + to_string(util_cap_pct))
+    println("")
+
+    // api_key is only consumed by runpod_terminate when dry_run == 0.
+    // Resolve via the shared SSOT (secret get → config.toml → env) so the
+    // orphan-killer auths without a manual env var — a watchdog that can't
+    // auth is the reason an idle-dispatch orphan keeps billing.
+    let api_key = runpod_api_key()
+    if dry_run == 0 && len(api_key) == 0 {
+        println("[watchdog] error: --kill needs a RunPod key — set `secret set runpod.api_key`, ~/.runpod/config.toml, or RUNPOD_API_KEY")
+        return 1
+    }
+
+    let res = runpod_idle_autokill_sweep(api_key, threshold_min, util_cap_pct, dry_run)
+    if res.ok == 0 {
+        println("[watchdog] sweep failed: " + res.message)
+        return 2
+    }
+
+    let mut ki = 0
+    while ki < len(res.killed) {
+        let label = if dry_run == 1 { "  WOULD-KILL  " } else { "  KILLED      " }
+        println(label + res.killed[ki])
+        ki = ki + 1
+    }
+    let mut si = 0
+    while si < len(res.spared) {
+        println("  spared      " + res.spared[si])
+        si = si + 1
+    }
+    let mut ei = 0
+    while ei < len(res.errors) {
+        println("  ! " + res.errors[ei])
+        ei = ei + 1
+    }
+    println("")
+    println("[watchdog] " + res.message)
+    return 0
+}

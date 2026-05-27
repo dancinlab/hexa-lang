@@ -1,0 +1,226 @@
+#!hexa strict
+// stdlib/aura/structure.hexa — `aura + structure` producer (hexa-native).
+//
+// LAYER: per-verb cell producer. Emits an aura_structure_record-shaped
+// sentinel carrying the post-aural / temporal-bone clip wearable BCI
+// architectural partitioning — multi-electrode dry/wet EEG sensor
+// array + AFE/ADC + BLE radio + battery + mastoid mechanical clip
+// — TEMPLATE scaffold, NOT a built bill-of-materials.
+//
+// CONTEXT: AURA = post-aural / temporal-bone clip wearable BCI domain.
+// aura.demi [cell.structure] wires substrate=hexa → this script.
+//
+// Citations (domains/aura.md §1 + §2 + §6):
+//   * Sensor array — dry vs wet EEG trade (option shelf: aura.md §6)
+//   * AFE — low-noise instrumentation amp + ADC (24-bit sigma-delta)
+//   * Radio — Bluetooth SIG Core Spec v5.x (nRF Connect SDK reference)
+//   * Battery — disposable vs rechargeable (option shelf: aura.md §6)
+//   * Mechanical — mastoid / temporal-bone clip (FreeCAD + KiCad StepUp)
+//   * IEC 60601-1 type B/BF applied-part classification reference
+//
+// Honesty (g3 · @D d1 · aura.demi line 56-60):
+//   * measurement_gate = GATE_OPEN permanently
+//   * absorbed = false PERMANENTLY — partitioning skeleton is
+//     architectural scaffold, NEVER a built device. The mechanical
+//     enclosure + PCB fab + AFE silicon selection live downstream in
+//     chip + component cells (this cell is meta).
+//
+// Sentinels:
+//   __HEXA_AURA_STRUCTURE__ PASS         — dispatcher loaded
+//   AURA_STRUCTURE_OK gate=GATE_OPEN absorbed=false  — cellrun parse line
+//
+// Usage:
+//   hexa run stdlib/aura/structure.hexa
+//
+// Pattern: mirrors stdlib/aura/specify.hexa (V1 PR #1338).
+
+let VERSION       = "0.1.0"
+let MODULE        = "aura-structure"
+let GEOMETRY_ID   = "aura_structure_v1"
+let RECORD_KIND   = "aura_structure_record"
+
+// ─── architectural blocks (partitioning skeleton) ─────────────────────
+
+fn _sensor_array_block() -> [str] {
+    return [
+        "multi-electrode array (count placeholder · target 8-32 channels)",
+        "electrode type option: dry (Ag/AgCl plated · no gel) | wet (gel-coupled · higher SNR)",
+        "reference electrode + ground (mastoid bony prominence anchor)",
+        "skin-contact biocompatibility per ISO 10993-1 (skin-contact)",
+        "applied-part classification: Type BF per IEC 60601-1",
+    ]
+}
+
+fn _afe_adc_block() -> [str] {
+    return [
+        "low-noise instrumentation amp (input-referred noise placeholder · target < 1 uV-pp 0.5-50 Hz)",
+        "right-leg-drive (RLD) common-mode rejection",
+        "24-bit sigma-delta ADC (Texas Instruments ADS1299-class reference · placeholder)",
+        "anti-alias filter: 1st-order RC + digital decimation",
+        "sample rate placeholder (target 250-500 Hz per channel)",
+    ]
+}
+
+fn _radio_block() -> [str] {
+    return [
+        "Bluetooth Low Energy 5.x (Bluetooth SIG Core Spec v5.x)",
+        "SoC option: Nordic nRF52 / nRF53 / nRF54 (nRF Connect SDK · Zephyr)",
+        "antenna: PCB chip antenna OR matched trace (openEMS validation at V4 analyze cell)",
+        "GATT profile: custom EEG streaming service (UUID placeholder) + standard Battery + Device Info",
+        "BLE link budget placeholder (target -60 dBm RSSI at 1 m · indoor)",
+    ]
+}
+
+fn _battery_block() -> [str] {
+    return [
+        "battery option: disposable coin cell (CR2032 · ~225 mAh) | rechargeable Li-Po (placeholder mAh)",
+        "power management IC (PMIC) with LDO + boost (placeholder)",
+        "expected runtime placeholder (target 12-24 h per session · depending on sample-rate)",
+        "charging interface (rechargeable only): USB-C 5V / wireless Qi (option)",
+        "battery safety per IEC 62133-2 (Li-Po) — accredited cell + protection IC",
+    ]
+}
+
+fn _mechanical_block() -> [str] {
+    return [
+        "mastoid / temporal-bone clip — post-aural anchor",
+        "enclosure material: medical-grade silicone OR ABS+TPE (skin-contact-rated)",
+        "ingress protection: IPX4 target (splash) for daily-wear scenario",
+        "weight placeholder (target < 15 g per side · ergonomic ceiling)",
+        "MCAD authoring: FreeCAD parametric + KiCad StepUp PCB↔mechanical co-design",
+    ]
+}
+
+fn _scope_caveats() -> [str] {
+    return [
+        "multi-electrode dry/wet EEG sensor array + AFE/ADC + BLE radio + battery partitioning skeleton - TEMPLATE.",
+        "mastoid / temporal-bone clip mechanical = FreeCAD KiCad-StepUp territory (chip+component cells own MCAD, this is meta).",
+        "measurement_gate = GATE_OPEN permanently - structure skeleton is not an absorption claim (g3).",
+        "absorbed=false PERMANENTLY (g3) - partitioning is architectural scaffold, NEVER a built bill-of-materials.",
+        "D2 substantive blocks (sensor_array_real / afe_adc_real / radio_ble_real / battery_power_real / mechanical_real) are ILLUSTRATIVE BOM-level reference targets, NOT vendor-qualified silicon selections. Real BOM lives at chip + component cell with vendor audit + ngspice/HFSS validation.",
+    ]
+}
+
+// ─── D2 substance: illustrative BOM-level values (NOT vendor-validated) ─
+//
+// These fill the architectural-partitioning placeholders with
+// ILLUSTRATIVE BOM choices intended to demonstrate the structure
+// shape. Actual silicon selection requires vendor-qualification +
+// supply-chain audit + ngspice/HFSS validation which live downstream
+// in chip + component + design cells. absorbed=false stays PERMANENTLY.
+
+fn _sensor_array_real_block() -> [str] {
+    return [
+        "channel_count: 16 (8 per side · bilateral coverage)",
+        "electrode_material: Ag/AgCl plated (dry option) / hydrogel-coupled (wet option)",
+        "electrode_diameter: 5 mm (active) / 8 mm (reference)",
+        "skin_contact_area_total: ~6.3 cm^2 (16 ch × ~0.4 cm^2)",
+        "reference_placement: mastoid bony prominence (left + right · linked-mastoid)",
+        "ground_placement: post-auricular skin (RLD-driven)",
+        "biocompat_panel: ISO 10993-1 cytotoxicity + sensitization + irritation",
+    ]
+}
+
+fn _afe_adc_real_block() -> [str] {
+    return [
+        "AFE_IC: Texas Instruments ADS1299 (8-channel sigma-delta · 24-bit) · 2 ICs daisy-chained for 16-ch",
+        "instr_amp_gain: 1/2/4/6/8/12/24 selectable (default 24 for EEG µV-range)",
+        "input_referred_noise: ~1 µV-pp 0.5-50 Hz (datasheet typical @ gain=24)",
+        "CMRR: ≥ 110 dB @ 60 Hz (RLD enabled)",
+        "sample_rate: 250 / 500 / 1000 / 2000 SPS per channel (per ADS1299 control reg)",
+        "input_protection: ±15 V over-range tolerance (per ADS1299 datasheet)",
+        "anti_alias_filter: 1st-order RC (10 kHz cutoff · 4.7 kΩ + 3.3 nF illustrative)",
+    ]
+}
+
+fn _radio_real_block() -> [str] {
+    return [
+        "BLE_SoC: Nordic nRF5340 (dual-core: M33 application + M33 network · BLE 5.3 LE Audio capable)",
+        "alt_SoC: Nordic nRF52840 (single-core M4F · BLE 5.0 mature)",
+        "antenna: 2.4 GHz chip antenna (Johanson Technology 2450AT18B100 illustrative) + π-network matching",
+        "PHY: LE 2M PHY (2 Mbps) for sustained EEG streaming",
+        "max_tx_power: +8 dBm (per nRF5340 limit · regulatory: FCC 15.247 / ETSI EN 300 328)",
+        "GATT_services: custom EEG streaming (UUID TBD) + Battery (0x180F) + Device Information (0x180A)",
+        "BLE_throughput_target: ~10 kB/s sustained (16 ch × 250 Hz × 24-bit ~ 96 kbps + framing)",
+    ]
+}
+
+fn _battery_real_block() -> [str] {
+    return [
+        "battery_type: Li-Po pouch (rechargeable variant) — 200 mAh @ 3.7 V nominal per side",
+        "alt_disposable: CR2032 coin cell (single-side · ~225 mAh @ 3.0 V nominal)",
+        "PMIC: TI BQ25180 (charge IC, 0.5 A · battery monitoring · Li-Po protection)",
+        "LDO: TI TPS62840 (3.3 V buck-boost for nRF5340 + ADS1299 supply)",
+        "runtime_target: ≥ 12 h continuous (250 Hz × 16 ch sustained streaming · BLE 2M PHY)",
+        "charging_interface: USB-C 5 V (rechargeable) · ≤ 90 min full charge target",
+        "battery_safety: IEC 62133-2 certified Li-Po cell + integrated protection IC",
+    ]
+}
+
+fn _mechanical_real_block() -> [str] {
+    return [
+        "enclosure_topology: clamshell + post-auricular clip (mastoid anchor)",
+        "weight_target: ≤ 25 g per side (50 g total bilateral · ergonomic ceiling)",
+        "primary_material: medical-grade silicone (Shore A ~30) over ABS sub-frame",
+        "skin_contact_zones: hydrogel pad (wet) OR Ag/AgCl pin array (dry) — interchangeable",
+        "ingress_protection: IPX4 (splash · daily-wear use case · not for shower/swim)",
+        "MCAD_authoring: FreeCAD 1.0+ parametric model + KiCad StepUp PCB↔mechanical link",
+        "prototype_path: SLA resin print (Form 3 · Clear V4) + soft-tooled silicone overmold",
+    ]
+}
+
+// ─── emit helpers ─────────────────────────────────────────────────────
+
+fn _emit_block(label: str, lines: [str]) {
+    print("# [" + label + "]")
+    let n = lines.len()
+    let mut i = 0
+    while i < n {
+        print("#   - " + lines[i])
+        i = i + 1
+    }
+    print("#")
+}
+
+fn _emit_header() {
+    print("# AURA STRUCTURE — wearable BCI architectural partitioning skeleton")
+    print("# device_target = post-aural / temporal-bone clip BCI")
+    print("# version = " + VERSION)
+    print("#")
+    _emit_block("sensor_array",   _sensor_array_block())
+    _emit_block("afe_adc",        _afe_adc_block())
+    _emit_block("radio_ble",      _radio_block())
+    _emit_block("battery_power",  _battery_block())
+    _emit_block("mechanical",     _mechanical_block())
+
+    // ─── D2 substantive blocks (illustrative BOM-level reference targets) ──
+    _emit_block("sensor_array_real",   _sensor_array_real_block())
+    _emit_block("afe_adc_real",        _afe_adc_real_block())
+    _emit_block("radio_ble_real",      _radio_real_block())
+    _emit_block("battery_power_real",  _battery_real_block())
+    _emit_block("mechanical_real",     _mechanical_real_block())
+}
+
+fn _emit_caveats() {
+    let c = _scope_caveats()
+    let n = c.len()
+    let mut i = 0
+    while i < n {
+        print("# scope_caveat: " + c[i])
+        i = i + 1
+    }
+}
+
+// ─── main entry ───────────────────────────────────────────────────────
+
+fn main() {
+    _emit_header()
+    _emit_caveats()
+
+    print("AURA_STRUCTURE_OK record_kind=" + RECORD_KIND
+        + " geometry_id=" + GEOMETRY_ID
+        + " gate=GATE_OPEN absorbed=false"
+        + " version=" + VERSION)
+
+    print("__HEXA_AURA_STRUCTURE__ PASS")
+}

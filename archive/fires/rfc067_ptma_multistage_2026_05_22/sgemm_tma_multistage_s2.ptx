@@ -1,0 +1,184 @@
+//
+// RFC 067 N201 -- Multi-stage TMA (STAGES=2) SGEMM smoke (M=N=K=64, single CTA)
+//
+// Builds on N200 SMOKE (single-stage TMA). 3 mbarriers + 3 smem slabs rotate
+// per K-iter. Prologue prefetches STAGES K-tiles ahead; steady-state overlaps
+// TMA fetch of k+STAGES with compute on k. Each stage owns its own parity bit.
+//
+// shmem footprint: A slabs 4096 B + B slabs 4096 B + mbars 16 B
+//                = 8208 B (limit 48 KB = 49152 B)
+//
+// SMOKE verification: write FINAL slab_a (k_iter=K_TILES-1) to C; expected to
+// equal a[0..15, 48..63] in row-major (= K-tile 3 of A).
+//
+// .target sm_120a + .version 8.7. ASCII-only.
+//
+
+.version 8.7
+.target sm_120a
+.address_size 64
+
+.shared .align 16 .b8 smem_a[4096];   // 2 A slabs, each 2048 B
+.shared .align 16 .b8 smem_b[4096];   // 2 B slabs, each 2048 B
+.shared .align 8  .b8 smem_mbar[16]; // 2 mbarriers, 8 B each
+
+.visible .entry sgemm_tma_multistage(
+    .param .align 64 .b8 tmap_a_param[128],
+    .param .align 64 .b8 tmap_b_param[128],
+    .param .u64 c_ptr_param
+) {
+    .reg .b32 %tx, %lane, %wid;
+    .reg .b32 %k_iter, %k_off, %tx_count;
+    .reg .b32 %slot, %slot_a, %slot_b, %slot_mbar;
+    .reg .b32 %issue_k, %issue_kx16, %issue_slot, %issue_slot_a, %issue_slot_b, %issue_slot_mbar;
+    .reg .b32 %issue_ok;
+    .reg .b64 %tmap_a_pp, %tmap_b_pp, %tmap_a_addr, %tmap_b_addr;
+    .reg .b64 %c_addr;
+    .reg .b32 %smem_a_lo, %smem_b_lo, %smem_mbar_lo;
+    .reg .b32 %arr_count;
+    .reg .b64 %tok;
+    .reg .pred %p0, %p_issue, %pdone, %p_final;
+    .reg .b32 %x0, %y0, %x1, %y1;
+    .reg .b32 %parity0;
+    .reg .b32 %parity1;
+    .reg .b32 %parity;
+    .reg .b32 %i;
+    .reg .b32 %off_smem, %off_c;
+    .reg .b16 %h0, %h1;
+    .reg .f32 %f0, %f1;
+    .reg .b64 %c_off, %c_dst;
+    .reg .b32 %final_slot_byte;
+
+    mov.u32 %tx, %tid.x;
+    and.b32 %lane, %tx, 31;
+    shr.u32 %wid, %tx, 5;
+
+    mov.b64 %tmap_a_pp, tmap_a_param;
+    cvta.param.u64 %tmap_a_addr, %tmap_a_pp;
+    mov.b64 %tmap_b_pp, tmap_b_param;
+    cvta.param.u64 %tmap_b_addr, %tmap_b_pp;
+    ld.param.u64 %c_addr, [c_ptr_param];
+    mov.u32 %smem_a_lo, smem_a;
+    mov.u32 %smem_b_lo, smem_b;
+    mov.u32 %smem_mbar_lo, smem_mbar;
+
+    setp.eq.s32 %p0, %tx, 0;
+    @!%p0 bra L_init_done;
+    mov.u32 %arr_count, 1;
+    mbarrier.init.shared.b64 [%smem_mbar_lo+0], %arr_count;
+    mbarrier.init.shared.b64 [%smem_mbar_lo+8], %arr_count;
+    fence.proxy.async.shared::cta;
+L_init_done:
+    bar.sync 0;
+
+    mov.u32 %parity0, 0;
+    mov.u32 %parity1, 0;
+
+    setp.eq.s32 %p0, %tx, 0;
+    @!%p0 bra L_prologue_done;
+    // Prologue issues min(STAGES=2, K_TILES=4) tiles.
+    // Prologue stage 0 (k=0, k_off=0)
+    mov.u32 %x0, 0;
+    mov.u32 %y0, 0;
+    cp.async.bulk.tensor.2d.shared::cluster.global.tile.mbarrier::complete_tx::bytes
+        [%smem_a_lo+0], [%tmap_a_addr, {%x0, %y0}], [%smem_mbar_lo+0];
+    mov.u32 %x1, 0;
+    mov.u32 %y1, 0;
+    cp.async.bulk.tensor.2d.shared::cluster.global.tile.mbarrier::complete_tx::bytes
+        [%smem_b_lo+0], [%tmap_b_addr, {%x1, %y1}], [%smem_mbar_lo+0];
+    mov.u32 %tx_count, 4096;
+    mbarrier.arrive.expect_tx.release.cta.shared::cta.b64
+        %tok, [%smem_mbar_lo+0], %tx_count;
+    // Prologue stage 1 (k=1, k_off=16)
+    mov.u32 %x0, 16;
+    mov.u32 %y0, 0;
+    cp.async.bulk.tensor.2d.shared::cluster.global.tile.mbarrier::complete_tx::bytes
+        [%smem_a_lo+2048], [%tmap_a_addr, {%x0, %y0}], [%smem_mbar_lo+8];
+    mov.u32 %x1, 0;
+    mov.u32 %y1, 16;
+    cp.async.bulk.tensor.2d.shared::cluster.global.tile.mbarrier::complete_tx::bytes
+        [%smem_b_lo+2048], [%tmap_b_addr, {%x1, %y1}], [%smem_mbar_lo+8];
+    mov.u32 %tx_count, 4096;
+    mbarrier.arrive.expect_tx.release.cta.shared::cta.b64
+        %tok, [%smem_mbar_lo+8], %tx_count;
+L_prologue_done:
+    bar.sync 0;
+
+    mov.u32 %k_iter, 0;
+L_kloop:
+    rem.s32 %slot, %k_iter, 2;
+    mul.lo.s32 %slot_a, %slot, 2048;
+    mul.lo.s32 %slot_b, %slot, 2048;
+    mul.lo.s32 %slot_mbar, %slot, 8;
+
+    // pick parity for current slot
+    mov.u32 %parity, %parity0;
+    setp.eq.s32 %p0, %slot, 1;
+    @%p0 mov.u32 %parity, %parity1;
+
+    .reg .b32 %wait_addr;
+    add.s32 %wait_addr, %smem_mbar_lo, %slot_mbar;
+L_wait:
+    mbarrier.try_wait.parity.shared::cta.b64 %pdone, [%wait_addr], %parity;
+    @!%pdone bra L_wait;
+    bar.sync 0;
+
+    // flip parity for the slot we just waited on (per-stage parity bit)
+    setp.eq.s32 %p0, %slot, 0;
+    @%p0 xor.b32 %parity0, %parity0, 1;
+    setp.eq.s32 %p0, %slot, 1;
+    @%p0 xor.b32 %parity1, %parity1, 1;
+
+    // SMOKE op: only write at the FINAL K-iter (k_iter == 3)
+    setp.eq.s32 %p_final, %k_iter, 3;
+    @!%p_final bra L_skip_smoke_write;
+    .reg .b32 %final_slab_a_lo;
+    add.s32 %final_slab_a_lo, %smem_a_lo, %slot_a;
+    setp.lt.s32 %p0, %tx, 128;
+    @!%p0 bra L_skip_smoke_write;
+    mul.lo.s32 %off_smem, %tx, 8;
+    add.s32 %off_smem, %final_slab_a_lo, %off_smem;
+    ld.shared.b16 %h0, [%off_smem];
+    ld.shared.b16 %h1, [%off_smem+2];
+    cvt.f32.f16 %f0, %h0;
+    cvt.f32.f16 %f1, %h1;
+    cvt.u64.u32 %c_off, %tx;
+    mul.lo.u64 %c_off, %c_off, 8;
+    add.u64 %c_dst, %c_addr, %c_off;
+    st.global.f32 [%c_dst], %f0;
+    st.global.f32 [%c_dst+4], %f1;
+L_skip_smoke_write:
+    bar.sync 0;
+
+    // issue k+STAGES into the slot we just vacated (only thread 0)
+    add.s32 %issue_k, %k_iter, 2;
+    setp.lt.s32 %p_issue, %issue_k, 4;
+    setp.eq.and.s32 %p_issue, %tx, 0, %p_issue;
+    @!%p_issue bra L_skip_issue;
+    mul.lo.s32 %issue_kx16, %issue_k, 16;
+    mov.u32 %issue_slot_a, %slot_a;
+    mov.u32 %issue_slot_b, %slot_b;
+    mov.u32 %issue_slot_mbar, %slot_mbar;
+    .reg .b32 %issue_a_addr, %issue_b_addr, %issue_mbar_addr;
+    add.s32 %issue_a_addr, %smem_a_lo, %issue_slot_a;
+    add.s32 %issue_b_addr, %smem_b_lo, %issue_slot_b;
+    add.s32 %issue_mbar_addr, %smem_mbar_lo, %issue_slot_mbar;
+    mov.u32 %x0, %issue_kx16;
+    mov.u32 %y0, 0;
+    cp.async.bulk.tensor.2d.shared::cluster.global.tile.mbarrier::complete_tx::bytes
+        [%issue_a_addr], [%tmap_a_addr, {%x0, %y0}], [%issue_mbar_addr];
+    mov.u32 %x1, 0;
+    mov.u32 %y1, %issue_kx16;
+    cp.async.bulk.tensor.2d.shared::cluster.global.tile.mbarrier::complete_tx::bytes
+        [%issue_b_addr], [%tmap_b_addr, {%x1, %y1}], [%issue_mbar_addr];
+    mov.u32 %tx_count, 4096;
+    mbarrier.arrive.expect_tx.release.cta.shared::cta.b64
+        %tok, [%issue_mbar_addr], %tx_count;
+L_skip_issue:
+
+    add.s32 %k_iter, %k_iter, 1;
+    setp.lt.s32 %p0, %k_iter, 4;
+    @%p0 bra L_kloop;
+
+    ret;
+}

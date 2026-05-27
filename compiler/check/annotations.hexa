@@ -1,0 +1,618 @@
+// HEXA Native Compiler — Phase B4 / S8: annotation semantics pass
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Walks Item.annotations across a Module and validates the four hexa-lang
+// annotations defined by RFC-017 §3.5 and SPEC.yaml opt_out:
+//
+//   @law(formula_str, units="..."?)        — at least one string-literal
+//                                              positional arg (the formula).
+//   @implements(L[id])                     — owned by citation.hexa (S8).
+//                                              IGNORED here to avoid double-
+//                                              emit of HX8001..HX8003.
+//   @grace(HXcode, until="YYYY-MM-DD",     — opt-out grace label, three
+//          reason="...")                     fields ALL required. Expires
+//                                              when today >= until.
+//   @discover(kind="P"|"C"|"L"|"E")        — discovery hint, kind required.
+//
+// Multi-error policy (RFC-019 §6): every malformed annotation emits its own
+// diagnostic; we never early-stop. Returns array of Diagnostic. HX9000 is
+// emitted for every well-formed @grace site (SPEC.yaml ai_native_warn_policy).
+//
+// Diagnostic codes:
+//   HX8010  @law malformed
+//   HX9000  @grace ai-native warn (every well-formed @grace site)
+//   HX9001  @grace expired (already in catalog)
+//   HX9002  @grace malformed
+//   HX9003  @discover malformed
+//
+// Public entry:
+//   pub fn check_annotations(module: Module, today: string) -> [Diagnostic]
+//
+// `today` is an ISO-8601 YYYY-MM-DD string; ISO ordering matches lexicographic
+// string comparison so `>=` semantics work without a date parser.
+
+import "../parse/ast.hexa"
+import "../diag/catalog.hexa"
+import "../diag/builder.hexa"
+import "../lex/tokens.hexa"
+
+// ── ExprKind probes (stage0 pattern: tag through match) ──────
+
+fn _is_string_lit(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::LiteralString -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Break -> false,
+        ExprKind::Continue -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
+    }
+}
+
+fn _annot_is_assign(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Assign -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Break -> false,
+        ExprKind::Continue -> false,
+        ExprKind::Let -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
+    }
+}
+
+fn _annot_is_ident(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Ident -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Break -> false,
+        ExprKind::Continue -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
+    }
+}
+
+// ── kwarg lookup ─────────────────────────────────────────────
+// A kwarg in `@name(key="val", ...)` parses as ExprKind::Assign with
+// children[0] = Ident("key") and children[1] = LiteralString. We scan
+// the annotation's positional/kwarg arg list and return the value Expr
+// for `key`, or an empty placeholder when missing.
+
+fn _empty_expr() -> Expr {
+    return Expr {
+        kind: ExprKind::Ident,
+        span: Span { file: "", line: 0, col: 0, len: 0 },
+        text: "",
+        annotations: [],
+        children: [],
+        atlas_ref: AtlasRef { kind: "", id: "", span: Span { file: "", line: 0, col: 0, len: 0 } }
+    }
+}
+
+// Returns the kwarg value expr, or _empty_expr when absent. The `found`
+// out-param is set true iff the key was located. We use a length-checked
+// children pair so a malformed Assign (e.g. lhs not Ident) is treated as
+// "not present".
+fn _kwarg_lookup(args: [Expr], key: string) -> Expr {
+    let mut i = 0
+    while i < len(args) {
+        let a = args[i]
+        if _annot_is_assign(a.kind) {
+            if len(a.children) >= 2 {
+                let lhs = a.children[0]
+                if _annot_is_ident(lhs.kind) {
+                    if lhs.text == key {
+                        return a.children[1]
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    return _empty_expr()
+}
+
+// True if any kwarg with name `key` is present (even if the value is a
+// non-string-literal — we still want to detect "field provided").
+fn _kwarg_present(args: [Expr], key: string) -> bool {
+    let mut i = 0
+    while i < len(args) {
+        let a = args[i]
+        if _annot_is_assign(a.kind) {
+            if len(a.children) >= 2 {
+                let lhs = a.children[0]
+                if _annot_is_ident(lhs.kind) {
+                    if lhs.text == key { return true }
+                }
+            }
+        }
+        i = i + 1
+    }
+    return false
+}
+
+// First positional (non-Assign) arg. Returns _empty_expr when none.
+fn _first_positional(args: [Expr]) -> Expr {
+    let mut i = 0
+    while i < len(args) {
+        let a = args[i]
+        if !_annot_is_assign(a.kind) { return a }
+        i = i + 1
+    }
+    return _empty_expr()
+}
+
+fn _has_positional(args: [Expr]) -> bool {
+    let mut i = 0
+    while i < len(args) {
+        if !_annot_is_assign(args[i].kind) { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// ── String / date validators ─────────────────────────────────
+
+// HX-code shape: "HX" + 4 ASCII digits.
+fn _is_hx_code(s: string) -> bool {
+    if len(s) != 6 { return false }
+    let cs = s.chars()
+    if cs[0] != 'H' { return false }
+    if cs[1] != 'X' { return false }
+    let mut i = 2
+    while i < 6 {
+        let c = cs[i]
+        if c < '0' { return false }
+        if c > '9' { return false }
+        i = i + 1
+    }
+    return true
+}
+
+// ISO-8601 date shape: YYYY-MM-DD. We only validate the surface shape;
+// out-of-range months/days fail the lexical check too because ISO-8601
+// numerics are zero-padded so `13` for month would still be syntactically
+// a valid YYYY-MM-DD string but semantically out of range. Stage0 keeps
+// the validator surface-only — calendar validity is RFC-017 follow-up.
+fn _is_iso_date(s: string) -> bool {
+    if len(s) != 10 { return false }
+    let cs = s.chars()
+    let mut i = 0
+    while i < 10 {
+        let c = cs[i]
+        if i == 4 {
+            if c != '-' { return false }
+        } else if i == 7 {
+            if c != '-' { return false }
+        } else {
+            if c < '0' { return false }
+            if c > '9' { return false }
+        }
+        i = i + 1
+    }
+    return true
+}
+
+// ── Per-annotation validators ────────────────────────────────
+
+fn _check_law(a: Annotation, out: array) {
+    // Need ≥ 1 positional arg, first positional must be a string literal.
+    if !_has_positional(a.args) {
+        let mut b = diag_new("HX8010")
+        b = diag_span(b, a.span)
+        b = diag_arg(b, "detail", "missing formula string (expected `@law(\"...\")`)")
+        out.push(diag_emit(b))
+        return
+    }
+    let first = _first_positional(a.args)
+    if !_is_string_lit(first.kind) {
+        let mut b = diag_new("HX8010")
+        b = diag_span(b, first.span)
+        b = diag_arg(b, "detail", "first argument must be a string literal formula")
+        out.push(diag_emit(b))
+    }
+}
+
+fn _check_grace(a: Annotation, today: string, out: array) {
+    // Field 1: positional HX-code.
+    if !_has_positional(a.args) {
+        let mut b = diag_new("HX9002")
+        b = diag_span(b, a.span)
+        b = diag_arg(b, "detail", "missing positional HX error code")
+        out.push(diag_emit(b))
+        return
+    }
+    let code_expr = _first_positional(a.args)
+    let code_str = code_expr.text
+    let mut code_ok = false
+    if _annot_is_ident(code_expr.kind) {
+        code_ok = _is_hx_code(code_str)
+    } else if _is_string_lit(code_expr.kind) {
+        code_ok = _is_hx_code(code_str)
+    }
+    if !code_ok {
+        let mut b = diag_new("HX9002")
+        b = diag_span(b, code_expr.span)
+        b = diag_arg(b, "detail", "first argument must be an HX error code matching `HX[0-9]{4}`")
+        out.push(diag_emit(b))
+        return
+    }
+
+    // Field 2: until="YYYY-MM-DD".
+    if !_kwarg_present(a.args, "until") {
+        let mut b = diag_new("HX9002")
+        b = diag_span(b, a.span)
+        b = diag_arg(b, "detail", "missing required field `until=\"YYYY-MM-DD\"`")
+        out.push(diag_emit(b))
+        return
+    }
+    let until_val = _kwarg_lookup(a.args, "until")
+    if !_is_string_lit(until_val.kind) {
+        let mut b = diag_new("HX9002")
+        b = diag_span(b, until_val.span)
+        b = diag_arg(b, "detail", "`until` must be a string literal in YYYY-MM-DD form")
+        out.push(diag_emit(b))
+        return
+    }
+    if !_is_iso_date(until_val.text) {
+        let mut b = diag_new("HX9002")
+        b = diag_span(b, until_val.span)
+        b = diag_arg(b, "detail", "`until` value `" + until_val.text + "` is not a valid YYYY-MM-DD date")
+        out.push(diag_emit(b))
+        return
+    }
+
+    // Field 3: reason="...".
+    if !_kwarg_present(a.args, "reason") {
+        let mut b = diag_new("HX9002")
+        b = diag_span(b, a.span)
+        b = diag_arg(b, "detail", "missing required field `reason=\"...\"`")
+        out.push(diag_emit(b))
+        return
+    }
+    let reason_val = _kwarg_lookup(a.args, "reason")
+    if !_is_string_lit(reason_val.kind) {
+        let mut b = diag_new("HX9002")
+        b = diag_span(b, reason_val.span)
+        b = diag_arg(b, "detail", "`reason` must be a string literal")
+        out.push(diag_emit(b))
+        return
+    }
+    if len(reason_val.text) == 0 {
+        let mut b = diag_new("HX9002")
+        b = diag_span(b, reason_val.span)
+        b = diag_arg(b, "detail", "`reason` must be a non-empty string")
+        out.push(diag_emit(b))
+        return
+    }
+
+    // Expiry check — string compare on ISO-8601 dates is correct.
+    if today >= until_val.text {
+        let mut b = diag_new("HX9001")
+        b = diag_span(b, a.span)
+        b = diag_arg(b, "error_code", code_str)
+        b = diag_arg(b, "until", until_val.text)
+        out.push(diag_emit(b))
+    }
+
+    // HX9000 ai-native warn (SPEC.yaml opt_out.ai_native_warn_policy):
+    // every well-formed @grace site emits this Warning at compile time so
+    // the bypass is visible at every compile. Reviewer acknowledgement is
+    // enforced at the CI/PR layer (Acked-grace trailer); the compiler just
+    // makes sure the warn is emitted. Multi-error collected alongside HX9001.
+    //
+    // suppressed_diagnostic_inlining: if a check pass actually emits a
+    // matching diagnostic, apply_grace_suppression() rewrites this
+    // in-place HX9000 with one carrying the FULL inlined render. When no
+    // real diagnostic fires, the in-place HX9000 stays — we populate the
+    // suppressed_* slots with neutral placeholders so the catalog
+    // template doesn't surface `{suppressed_title}` etc. verbatim.
+    let mut w = diag_new("HX9000")
+    w = diag_span(w, a.span)
+    w = diag_arg(w, "file", a.span.file)
+    w = diag_arg(w, "line", to_string(a.span.line))
+    w = diag_arg(w, "error_code", code_str)
+    w = diag_arg(w, "until", until_val.text)
+    w = diag_arg(w, "reason", reason_val.text)
+    w = diag_arg(w, "suppressed_title", "no diagnostic emitted at this site (pre-emptive @grace)")
+    w = diag_arg(w, "suppressed_message", "(no matching diagnostic was emitted by any check pass; @grace covers a hypothetical future diagnostic of code " + code_str + ")")
+    w = diag_arg(w, "suppressed_severity_original", "n/a")
+    out.push(diag_emit(w))
+}
+
+fn _check_discover(a: Annotation, out: array) {
+    // kind kwarg required, value ∈ {"P", "C", "L", "E"}.
+    if !_kwarg_present(a.args, "kind") {
+        let mut b = diag_new("HX9003")
+        b = diag_span(b, a.span)
+        b = diag_arg(b, "detail", "missing required `kind=` argument")
+        out.push(diag_emit(b))
+        return
+    }
+    let kind_val = _kwarg_lookup(a.args, "kind")
+    if !_is_string_lit(kind_val.kind) {
+        let mut b = diag_new("HX9003")
+        b = diag_span(b, kind_val.span)
+        b = diag_arg(b, "detail", "`kind` must be a string literal")
+        out.push(diag_emit(b))
+        return
+    }
+    let v = kind_val.text
+    let ok = (v == "P") || (v == "C") || (v == "L") || (v == "E")
+    if !ok {
+        let mut b = diag_new("HX9003")
+        b = diag_span(b, kind_val.span)
+        b = diag_arg(b, "detail", "`kind` value `" + v + "` is not one of \"P\", \"C\", \"L\", \"E\"")
+        out.push(diag_emit(b))
+    }
+}
+
+// ── Per-item walk ────────────────────────────────────────────
+
+fn _annot_walk_item(it: Item, today: string, out: array) {
+    let mut i = 0
+    while i < len(it.annotations) {
+        let a = it.annotations[i]
+        if a.name == "law" {
+            _check_law(a, out)
+        } else if a.name == "implements" {
+            // Owned by citation.hexa — skip.
+        } else if a.name == "grace" {
+            _check_grace(a, today, out)
+        } else if a.name == "discover" {
+            _check_discover(a, out)
+        }
+        // Other annotation names (units, verify, prove, …) belong to
+        // their own passes — leave them alone here.
+        i = i + 1
+    }
+}
+
+// ── Public entry ─────────────────────────────────────────────
+
+pub fn check_annotations(module: Module, today: string) -> array {
+    let mut out = []
+    let mut i = 0
+    while i < len(module.items) {
+        _annot_walk_item(module.items[i], today, out)
+        i = i + 1
+    }
+    return out
+}
+
+// ── @grace suppression post-processing ──────────────────────
+//
+// SPEC.yaml opt_out.ai_native_warn_policy.suppressed_diagnostic_inlining:
+// rather than weave per-pass @grace-awareness through every check pass
+// (resolve / bind / types / units / citation / equational), we let each
+// pass emit its diagnostics normally and post-process the collected
+// list here. For every well-formed @grace site:
+//
+//   1. Find diagnostics whose `code` matches the @grace error_code AND
+//      whose `span.file` matches the item file AND whose `span.line`
+//      falls inside the @grace-protected item's line range.
+//   2. Remove those matches from the diag list (suppression intact).
+//   3. Synthesize a paired HX9000 via diag_suppressed_by_grace(),
+//      inlining the full rendered original message into HX9000 args.
+//
+// Item line range: [item.span.line, next_item.span.line - 1] when
+// there's a next item, else [item.span.line, +inf]. That covers the
+// item's body without depending on a parser-tracked end-line. The
+// existing in-place HX9000 emitted by _check_grace (no inlining) is
+// preserved when no real diagnostic matches — i.e. @grace fires before
+// the suppressed code actually shows up. When a match exists, we
+// REPLACE the in-place HX9000 with the inlined HX9000.
+
+// Internal: find @grace annotation on an item, returning code/until/reason.
+// `found` is signalled by non-empty error_code in the returned tuple-like
+// triple. For stage0 portability we represent the triple as a 3-string
+// array: [code, until, reason] (empty code means "no @grace").
+fn _grace_fields(it: Item) -> [string] {
+    let mut i = 0
+    while i < len(it.annotations) {
+        let a = it.annotations[i]
+        if a.name == "grace" {
+            // first positional: HX-code (Ident or string literal)
+            if !_has_positional(a.args) { i = i + 1; continue }
+            let code_expr = _first_positional(a.args)
+            let code_str = code_expr.text
+            let mut code_ok = false
+            if _annot_is_ident(code_expr.kind) {
+                code_ok = _is_hx_code(code_str)
+            } else if _is_string_lit(code_expr.kind) {
+                code_ok = _is_hx_code(code_str)
+            }
+            if !code_ok { i = i + 1; continue }
+            if !_kwarg_present(a.args, "until") { i = i + 1; continue }
+            let until_val = _kwarg_lookup(a.args, "until")
+            if !_is_string_lit(until_val.kind) { i = i + 1; continue }
+            if !_is_iso_date(until_val.text) { i = i + 1; continue }
+            if !_kwarg_present(a.args, "reason") { i = i + 1; continue }
+            let reason_val = _kwarg_lookup(a.args, "reason")
+            if !_is_string_lit(reason_val.kind) { i = i + 1; continue }
+            if len(reason_val.text) == 0 { i = i + 1; continue }
+            return [code_str, until_val.text, reason_val.text]
+        }
+        i = i + 1
+    }
+    return ["", "", ""]
+}
+
+fn _next_item_line(items: [Item], idx: i64) -> i64 {
+    let j = idx + 1
+    if j < len(items) { return items[j].span.line }
+    return 1000000000
+}
+
+fn _diag_in_item_range(d: Diagnostic, file: string, lo: i64, upper_excl: i64) -> bool {
+    if d.span.file != file { return false }
+    if d.span.line < lo { return false }
+    if d.span.line >= upper_excl { return false }
+    return true
+}
+
+// True when the diagnostic at index `i` is a same-line HX9000 emitted
+// by _check_grace for the same @grace annotation we're processing.
+// We detect it by code (HX9000) and span.line == item.span.line, with
+// matching file. This is the in-place HX9000 we replace with the
+// inlined version when a real diagnostic match is also found.
+fn _is_inplace_hx9000_for(d: Diagnostic, item_file: string, item_line: i64) -> bool {
+    if d.code != "HX9000" { return false }
+    if d.span.file != item_file { return false }
+    if d.span.line != item_line { return false }
+    return true
+}
+
+pub fn apply_grace_suppression(module: Module, diags: [Diagnostic],
+    today: string) -> [Diagnostic] {
+    // Walk items to discover @grace sites; for each, scan the diag
+    // list for matching real diagnostics and rewrite. We do a
+    // mark-and-sweep style: build a parallel `keep[]` bool array and
+    // a `synth[]` list of HX9000 inlined diagnostics, then assemble
+    // the result.
+    let n = len(diags)
+    let mut keep: [bool] = []
+    let mut k0 = 0
+    while k0 < n { keep.push(true); k0 = k0 + 1 }
+
+    let mut synth: [Diagnostic] = []
+    let _today_unused = today  // reserved for future expiry-driven gating
+
+    let mut ii = 0
+    while ii < len(module.items) {
+        let it = module.items[ii]
+        let triple = _grace_fields(it)
+        let gcode = triple[0]
+        let guntil = triple[1]
+        let greason = triple[2]
+        if len(gcode) == 0 { ii = ii + 1; continue }
+
+        let lo = it.span.line
+        let upper_excl = _next_item_line(module.items, ii)
+        let item_file = it.span.file
+
+        // Scan diags for matches. For every match: drop it from keep[]
+        // and produce a paired HX9000 in synth[].
+        let mut found_match = false
+        let mut di = 0
+        while di < n {
+            if keep[di] {
+                let d = diags[di]
+                if d.code == gcode {
+                    if _diag_in_item_range(d, item_file, lo, upper_excl) {
+                        keep[di] = false
+                        let paired = diag_suppressed_by_grace(d, guntil, greason)
+                        synth.push(paired)
+                        found_match = true
+                    }
+                }
+            }
+            di = di + 1
+        }
+
+        // If we matched at least one real diagnostic, drop the
+        // in-place HX9000 emitted by _check_grace for this same
+        // @grace site (we replace it with the inlined HX9000 in
+        // synth). If no real match was found, we leave the in-place
+        // HX9000 alone — @grace fires before the underlying code
+        // does, but the warn must still surface.
+        if found_match {
+            let mut dj = 0
+            while dj < n {
+                if keep[dj] {
+                    let d2 = diags[dj]
+                    if _is_inplace_hx9000_for(d2, item_file, it.span.line) {
+                        keep[dj] = false
+                    }
+                }
+                dj = dj + 1
+            }
+        }
+
+        ii = ii + 1
+    }
+
+    // Assemble the result: kept original diags first, then synth tail.
+    let mut out: [Diagnostic] = []
+    let mut p = 0
+    while p < n {
+        if keep[p] { out.push(diags[p]) }
+        p = p + 1
+    }
+    let mut q = 0
+    while q < len(synth) {
+        out.push(synth[q])
+        q = q + 1
+    }
+    return out
+}

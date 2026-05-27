@@ -1,0 +1,60 @@
+// STEP-0 PROBE: native .reg .bf16 + add.bf16 at .version 8.7 / sm_120.
+// GPU.md sec2c: does the RTX 5070 sm_120 driver-JIT accept NATIVE bf16
+// register type at PTX ISA 8.7 (vs the .b16 storage bitcast)?
+//
+// Pure ASCII (driver-JIT ptxas rejects non-ASCII PTX comments).
+//
+// Storage in/out is .b16 (global mem is byte-addressed 16-bit); the
+// arithmetic register bank is declared NATIVE .reg .bf16, and the loaded
+// .b16 value is moved into the bf16 reg via mov.b16 (bit-reinterpret),
+// then add.bf16 operates on the native bf16 regs, result moved back to
+// a .b16 reg for st.global.b16. c[i] = a[i] + b[i].
+
+.version 8.7
+.target sm_120
+.address_size 64
+
+.visible .entry bf16_vadd (
+    .param .u64 a,
+    .param .u64 b,
+    .param .u64 c,
+    .param .u64 n
+)
+{
+    .reg .u64 %rd<10>;
+    .reg .u32 %r<10>;
+    .reg .pred %p1;
+    .reg .b16 %hs<5>;
+    .reg .bf16 %fb<5>;
+
+    ld.param.u64 %rd0, [a];
+    ld.param.u64 %rd1, [b];
+    ld.param.u64 %rd2, [c];
+    ld.param.u64 %rd3, [n];
+
+    mov.u32 %r0, %ctaid.x;
+    mov.u32 %r1, %ntid.x;
+    mov.u32 %r2, %tid.x;
+    mad.lo.s32 %r3, %r0, %r1, %r2;
+
+    cvt.s32.s64 %r4, %rd3;
+    setp.ge.s32 %p1, %r3, %r4;
+    @%p1 bra $exit;
+
+    cvt.u64.u32 %rd4, %r3;
+    shl.b64 %rd5, %rd4, 1;
+    add.u64 %rd6, %rd0, %rd5;
+    add.u64 %rd7, %rd1, %rd5;
+    add.u64 %rd8, %rd2, %rd5;
+
+    ld.global.b16 %hs0, [%rd6];
+    ld.global.b16 %hs1, [%rd7];
+    mov.b16 %fb0, %hs0;
+    mov.b16 %fb1, %hs1;
+    add.bf16 %fb2, %fb0, %fb1;
+    mov.b16 %hs2, %fb2;
+    st.global.b16 [%rd8], %hs2;
+
+$exit:
+    ret;
+}

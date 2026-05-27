@@ -1,0 +1,47 @@
+#!hexa strict
+// gpgpu_n6/projection/opencl.hexa — vendor backend 4/6: Khronos OpenCL.
+//
+// canon: ~/core/canon/domains/compute/gpgpu/gpgpu.md §5.1 (vector add).
+// IR substrate: SPIR-V (φ=0). Runtime-driven: kernel = OpenCL C / C++
+// for OpenCL, host = clEnqueueNDRangeKernel.
+//
+// Phase F iter 3 — OpenCL clEnqueueNDRangeKernel emission.
+
+use "stdlib/hal/compute"
+
+let OPENCL_VENDOR = "OpenCL"
+let OPENCL_IR     = "SPIR-V"
+let OPENCL_LATEST = "3.1.0 (2026-05-05)"
+
+fn opencl_project_launch(
+    kern_name: str,
+    grid_x: int, grid_y: int, grid_z: int,
+    wg_x: int, wg_y: int, wg_z: int,
+    _barrier_scope: int,
+    _subgroup_w: int
+) -> str {
+    let global_x = grid_x * wg_x
+    let global_y = grid_y * wg_y
+    let global_z = grid_z * wg_z
+    return "size_t global[] = {" + str(global_x) + "," + str(global_y) + "," + str(global_z) + "};\n" +
+           "size_t local[]  = {" + str(wg_x) + "," + str(wg_y) + "," + str(wg_z) + "};\n" +
+           "clEnqueueNDRangeKernel(queue, /*kernel=*/" + kern_name + ", 3, NULL, global, local, 0, NULL, NULL);"
+}
+
+fn opencl_project_vector_add(n: int) -> str {
+    return "size_t global = " + str(n) + "; size_t local = 256;\n" +
+           "clEnqueueNDRangeKernel(queue, k_add, 1, NULL, &global, &local, 0, NULL, NULL);"
+}
+
+fn opencl_capabilities() -> [str] {
+    return [
+        "feature-test based core (OpenCL 3.0 made many 2.x features optional)",
+        "SPIR-V kernel ingestion",
+        "C++ for OpenCL kernel language",
+        "subgroup extension (cl_khr_subgroups)",
+        "intermediate language program objects",
+        "external memory + semaphore extensions"
+    ]
+}
+
+fn opencl_meta() -> [str] { return [OPENCL_VENDOR, OPENCL_IR, OPENCL_LATEST, str(opencl_capabilities().len())] }

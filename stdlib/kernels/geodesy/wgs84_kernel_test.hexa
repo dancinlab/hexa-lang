@@ -1,0 +1,330 @@
+// stdlib/kernels/geodesy/wgs84_kernel_test.hexa
+// D80 g_hexa_only pilot #13 — parity test for wgs84_kernel.hexa.
+//
+// Two tiers (per D80 pattern from pilots #1-#12):
+//   (1) COMPANION parity vs `geodesy_oracle.py` (Python `math` libm
+//       line-by-line transliteration of the kernel) — `want` literals
+//       below are dumped from the oracle and held to the D80 ceiling
+//       1e-10 relative. The kernel and oracle share the same darwin-
+//       arm64 libm primitives so per-operation IEEE-754 results match;
+//       in practice we see rel_err well below 1e-12.
+//   (2) ANALYTIC invariants — physics / geometry identities that
+//       must hold by construction (e.g. round-trip ECEF↔geodetic
+//       returns the input, north-pole z = b, the antipodal haversine
+//       distance is exactly half Earth's circumference at equator).
+//
+// 6 ECEF reference points × (3 forward + 3 round-trip) = 36 forward
+// asserts; 5 haversine pairs = 5 asserts; 4 Vincenty pairs × 3 outputs
+// = 12 asserts; plus 14 invariants + WGS84 constants = total 70+.
+//
+// Tolerance: D80 ceiling 1e-10 relative. Where the want value is 0
+// (e.g. equator latitude after round-trip, antipodal Vincenty
+// azimuth), use ABSOLUTE 1e-9 (the kernel emits rad-scale values).
+
+use "stdlib/kernels/geodesy/wgs84_kernel"
+use "stdlib/core/math/float"
+
+let mut pass_count = 0
+let mut total_count = 0
+let mut failed = ""
+
+fn check(name: str, cond: bool) {
+    total_count = total_count + 1
+    if cond {
+        pass_count = pass_count + 1
+    } else {
+        if failed == "" { failed = name }
+        print("FAIL " + name)
+    }
+}
+
+fn fabs(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn rel_err(got: float, want: float) -> float {
+    if fabs(want) < 1.0e-12 { return fabs(got - want) }
+    return fabs(got - want) / fabs(want)
+}
+
+fn check_close(name: str, got: float, want: float, tol: float) {
+    let e = rel_err(got, want)
+    if e > tol {
+        print(name + " rel_err=" + str(e) + " got=" + str(got)
+              + " want=" + str(want))
+    }
+    check(name, e <= tol)
+}
+
+fn check_abs(name: str, got: float, want: float, tol: float) {
+    let e = fabs(got - want)
+    if e > tol {
+        print(name + " abs_err=" + str(e) + " got=" + str(got)
+              + " want=" + str(want))
+    }
+    check(name, e <= tol)
+}
+
+fn main() {
+    let tol = 1.0e-10
+    let abs_tol = 1.0e-9
+
+    // ───────────────────────────────────────────────────────────────
+    // WGS84 constants — defining + derived
+    // ───────────────────────────────────────────────────────────────
+    check_close("C1 a = 6378137.0",
+                wgs84_a(), 6378137.0, tol)
+    check_close("C2 f = 1/298.257223563",
+                wgs84_f(), 1.0 / 298.257223563, tol)
+    check_close("C3 b = a·(1−f)",
+                wgs84_b(), 6.35675231424517930e+06, tol)
+    check_close("C4 e² = 2f − f²",
+                wgs84_e2(), 6.69437999014131646e-03, tol)
+    check_close("C5 e'² = e²/(1−e²)",
+                wgs84_ep2(), 6.73949674227643410e-03, tol)
+    check_close("C6 R_mean = (2a+b)/3",
+                wgs84_mean_radius(), 6.37100877141505945e+06, tol)
+
+    // ───────────────────────────────────────────────────────────────
+    // Deg ↔ rad invariants
+    // ───────────────────────────────────────────────────────────────
+    check_close("D1 deg2rad(180) = π",
+                deg2rad(180.0), pi(), tol)
+    check_close("D2 rad2deg(π) = 180",
+                rad2deg(pi()), 180.0, tol)
+    check_close("D3 rad2deg(deg2rad(x)) = x",
+                rad2deg(deg2rad(42.42)), 42.42, tol)
+
+    // ───────────────────────────────────────────────────────────────
+    // Forward geodetic → ECEF — 6 textbook reference points.
+    //
+    // `want` literals are dumped bit-exact from geodesy_oracle.py.
+    // ───────────────────────────────────────────────────────────────
+
+    // P1: equator-Greenwich (0, 0, 0)
+    //   expected: (a, 0, 0) by definition.
+    let p1 = geodetic_to_ecef(deg2rad(0.0), deg2rad(0.0), 0.0)
+    check_close("P1 eq-Greenwich x",
+                p1[0], 6.37813700000000000e+06, tol)
+    check_abs("P1 eq-Greenwich y",  p1[1], 0.0, 1.0e-6)
+    check_abs("P1 eq-Greenwich z",  p1[2], 0.0, 1.0e-6)
+
+    // P2: North Pole (90, 0, 0)
+    //   expected: x ≈ 0 (cos 90° = 0 within IEEE-754), y = 0, z = b.
+    let p2 = geodetic_to_ecef(deg2rad(90.0), deg2rad(0.0), 0.0)
+    check_abs("P2 NP x ≈ 0", p2[0], 0.0, 1.0e-6)
+    check_abs("P2 NP y = 0", p2[1], 0.0, 1.0e-6)
+    check_close("P2 NP z = b",
+                p2[2], 6.35675231424517930e+06, tol)
+
+    // P3: NIST Boulder (39.9931, -105.2624, 1650)
+    let p3 = geodetic_to_ecef(deg2rad(39.9931),
+                              deg2rad(-105.2624), 1650.0)
+    check_close("P3 Boulder x", p3[0], -1.28841877856545290e+06, tol)
+    check_close("P3 Boulder y", p3[1], -4.72183821959915664e+06, tol)
+    check_close("P3 Boulder z", p3[2],  4.07845909373329813e+06, tol)
+
+    // P4: CERN Geneva (46.2333, 6.0500, 432)
+    let p4 = geodetic_to_ecef(deg2rad(46.2333),
+                              deg2rad(6.05), 432.0)
+    check_close("P4 CERN x", p4[0], 4.39531060858633928e+06, tol)
+    check_close("P4 CERN y", p4[1], 4.65844120914774889e+05, tol)
+    check_close("P4 CERN z", p4[2], 4.58353546089097764e+06, tol)
+
+    // P5: Sydney Opera (-33.8568, 151.2153, 10)
+    let p5 = geodetic_to_ecef(deg2rad(-33.8568),
+                              deg2rad(151.2153), 10.0)
+    check_close("P5 Sydney x", p5[0], -4.64697591556638386e+06, tol)
+    check_close("P5 Sydney y", p5[1],  2.55308091887510242e+06, tol)
+    check_close("P5 Sydney z", p5[2], -3.53327269868161390e+06, tol)
+
+    // P6: ISS-altitude over (0,0): (0, 0, 400e3)
+    //   expected: x = a + 400000, y = 0, z = 0.
+    let p6 = geodetic_to_ecef(deg2rad(0.0), deg2rad(0.0),
+                              400000.0)
+    check_close("P6 ISS-alt x = a+400e3",
+                p6[0], 6.77813700000000000e+06, tol)
+    check_abs("P6 ISS-alt y", p6[1], 0.0, 1.0e-6)
+    check_abs("P6 ISS-alt z", p6[2], 0.0, 1.0e-6)
+
+    // ───────────────────────────────────────────────────────────────
+    // Round-trip ECEF → geodetic on the 6 reference points.
+    //
+    // Bowring 1985 is a 1-iteration estimator — the published bound
+    // is < 0.1 mm latitude error for h ≤ 10000 km. We require:
+    //   * lat / lon round-trip rel_err ≤ 1e-10
+    //   * h round-trip abs_err ≤ 1e-7 m (= 0.1 µm — well under the
+    //     1 mm Bowring bound; far inside the D80 1e-10 ceiling for
+    //     ellipsoidal radii at metre scale)
+    // ───────────────────────────────────────────────────────────────
+
+    let h_tol = 1.0e-7   // metres — Bowring 1-iter ceiling (1 mm bound)
+
+    // R1: equator (0, 0, 0)
+    let r1 = ecef_to_geodetic(p1[0], p1[1], p1[2])
+    check_abs("R1 lat = 0",   rad2deg(r1[0]),  0.0, 1.0e-10)
+    check_abs("R1 lon = 0",   rad2deg(r1[1]),  0.0, 1.0e-10)
+    check_abs("R1 h = 0",     r1[2],            0.0, h_tol)
+
+    // R2: NP (90, 0, 0)  — pole singularity stress
+    let r2 = ecef_to_geodetic(p2[0], p2[1], p2[2])
+    check_close("R2 lat = 90", rad2deg(r2[0]), 90.0, tol)
+    // lon at exact pole is undefined; oracle returns 0, so we accept ≤1e-9 rad
+    check_abs("R2 lon ≈ 0",    r2[1],          0.0, abs_tol)
+    check_abs("R2 h = 0",      r2[2],          0.0, h_tol)
+
+    // R3: Boulder
+    let r3 = ecef_to_geodetic(p3[0], p3[1], p3[2])
+    check_close("R3 lat = 39.9931", rad2deg(r3[0]),  39.9931,    tol)
+    check_close("R3 lon = -105.2624", rad2deg(r3[1]), -105.2624, tol)
+    check_abs("R3 h = 1650",        r3[2],          1650.0,   h_tol)
+
+    // R4: CERN
+    let r4 = ecef_to_geodetic(p4[0], p4[1], p4[2])
+    check_close("R4 lat = 46.2333", rad2deg(r4[0]),  46.2333,  tol)
+    check_close("R4 lon = 6.05",    rad2deg(r4[1]),   6.05,    tol)
+    check_abs("R4 h = 432",         r4[2],          432.0,    h_tol)
+
+    // R5: Sydney
+    let r5 = ecef_to_geodetic(p5[0], p5[1], p5[2])
+    check_close("R5 lat = -33.8568", rad2deg(r5[0]), -33.8568, tol)
+    check_close("R5 lon = 151.2153", rad2deg(r5[1]), 151.2153, tol)
+    check_abs("R5 h = 10",           r5[2],           10.0,    h_tol)
+
+    // R6: ISS-alt
+    let r6 = ecef_to_geodetic(p6[0], p6[1], p6[2])
+    check_abs("R6 lat = 0",     rad2deg(r6[0]),     0.0, 1.0e-10)
+    check_abs("R6 lon = 0",     rad2deg(r6[1]),     0.0, 1.0e-10)
+    check_abs("R6 h = 400e3",   r6[2],         400000.0, h_tol)
+
+    // ───────────────────────────────────────────────────────────────
+    // Haversine — 5 reference pairs against geodesy_oracle.py.
+    //
+    // Analytic invariants:
+    //   H1 equator-quarter = π·R/2 (one quarter of equator)
+    //   H2 antipode = π·R (half equator) = 2 × H1
+    //   H3 pole→equator = π·R/2 = H1 by symmetry
+    // ───────────────────────────────────────────────────────────────
+
+    // H1: equator quarter (0,0) → (0,90) — analytic π·R/2
+    let h1 = haversine(deg2rad(0.0), deg2rad(0.0),
+                       deg2rad(0.0), deg2rad(90.0))
+    check_close("H1 eq-quarter",  h1, 1.00075571761168409e+07, tol)
+    check_close("H1 eq-quarter analytic π·R/2",
+                h1, pi() * wgs84_mean_radius() / 2.0, tol)
+
+    // H2: equator antipode (0,0) → (0,180) — analytic π·R
+    let h2 = haversine(deg2rad(0.0), deg2rad(0.0),
+                       deg2rad(0.0), deg2rad(180.0))
+    check_close("H2 eq-antipode", h2, 2.00151143522336856e+07, tol)
+    check_close("H2 eq-antipode analytic π·R",
+                h2, pi() * wgs84_mean_radius(), tol)
+    check_close("H2 = 2 × H1",
+                h2, 2.0 * h1, tol)
+
+    // H3: pole → equator (90,0) → (0,0) — same as H1 by sphere
+    // symmetry (great circle through pole and equator-Greenwich is
+    // a meridian, π·R/2 long)
+    let h3 = haversine(deg2rad(90.0), deg2rad(0.0),
+                       deg2rad(0.0), deg2rad(0.0))
+    check_close("H3 pole→eq", h3, 1.00075571761168409e+07, tol)
+    check_close("H3 = H1 (sphere symmetry)", h3, h1, tol)
+
+    // H4: Boulder → CERN
+    let h4 = haversine(deg2rad(39.9931), deg2rad(-105.2624),
+                       deg2rad(46.2333), deg2rad(6.05))
+    check_close("H4 Boulder→CERN", h4, 8.25570448163326364e+06, tol)
+
+    // H5: Boulder → Sydney
+    let h5 = haversine(deg2rad(39.9931), deg2rad(-105.2624),
+                       deg2rad(-33.8568), deg2rad(151.2153))
+    check_close("H5 Boulder→Sydney", h5, 1.33936931389683411e+07, tol)
+
+    // Symmetry invariant: haversine(a, b) == haversine(b, a)
+    let h4_rev = haversine(deg2rad(46.2333), deg2rad(6.05),
+                           deg2rad(39.9931), deg2rad(-105.2624))
+    check_close("Hsym Boulder↔CERN", h4_rev, h4, tol)
+
+    // Same-point invariant: distance(a, a) = 0
+    let h_self = haversine(deg2rad(39.9931), deg2rad(-105.2624),
+                           deg2rad(39.9931), deg2rad(-105.2624))
+    check_abs("Hself same-point = 0", h_self, 0.0, 1.0e-6)
+
+    // ───────────────────────────────────────────────────────────────
+    // Vincenty inverse — 4 reference pairs against geodesy_oracle.py.
+    //
+    // For each pair we check distance, azimuth-1, azimuth-2 against
+    // the oracle dump. Iteration-count comparison is informational
+    // (not gated — Vincenty's λ-loop step count varies by ~1 with
+    // libm rounding on tail iterations).
+    // ───────────────────────────────────────────────────────────────
+
+    // V1: Boulder → CERN — non-antipodal, expected 4 iters
+    let v1 = vincenty_inverse(deg2rad(39.9931), deg2rad(-105.2624),
+                              deg2rad(46.2333), deg2rad(6.05))
+    check_close("V1 Boulder→CERN dist",
+                v1[0], 8.27721863805110287e+06, tol)
+    check_close("V1 Boulder→CERN az1",
+                v1[1], 7.33536257522733659e-01, tol)
+    check_close("V1 Boulder→CERN az2",
+                v1[2], 2.30667881819312814e+00, tol)
+
+    // V2: Boulder → Sydney — long path, expected 5 iters
+    let v2 = vincenty_inverse(deg2rad(39.9931), deg2rad(-105.2624),
+                              deg2rad(-33.8568), deg2rad(151.2153))
+    check_close("V2 Boulder→Sydney dist",
+                v2[0], 1.33848377627533562e+07, tol)
+    check_close("V2 Boulder→Sydney az1",
+                v2[1], -1.92564465809377339e+00, tol)
+    check_close("V2 Boulder→Sydney az2",
+                v2[2], -2.09568535911384002e+00, tol)
+
+    // V3: equator quarter (0,0) → (0,90) — equatorial great circle
+    // matches the meridional formula: along the equator, distance =
+    // a · Δλ exactly.
+    let v3 = vincenty_inverse(deg2rad(0.0), deg2rad(0.0),
+                              deg2rad(0.0), deg2rad(90.0))
+    check_close("V3 eq-quarter dist",
+                v3[0], 1.00187541713903770e+07, tol)
+    check_close("V3 eq-quarter dist = a·π/2",
+                v3[0], wgs84_a() * pi() / 2.0, tol)
+    // azimuth on equator is exactly π/2 (due east)
+    check_close("V3 eq az1 = π/2",
+                v3[1], pi() / 2.0, tol)
+    check_close("V3 eq az2 = π/2",
+                v3[2], pi() / 2.0, tol)
+
+    // V4: near-pole meridian (89.999999, 0) → (0.000001, 0)
+    // — meridional path; expected close to b · π/2 if exact pole,
+    // but here we use the oracle dump (since lat ≠ exact pole).
+    let v4 = vincenty_inverse(deg2rad(89.999999), deg2rad(0.0),
+                              deg2rad(0.000001),  deg2rad(0.0))
+    check_close("V4 near-pole→eq dist",
+                v4[0], 1.00019655070435386e+07, tol)
+    check_close("V4 near-pole az1 = π",
+                v4[1], pi(), tol)
+    check_close("V4 near-pole az2 = π",
+                v4[2], pi(), tol)
+
+    // ───────────────────────────────────────────────────────────────
+    // Cross-algorithm invariant: Vincenty ≈ haversine on similar-
+    // lat short paths (within ~0.5% — the spherical / ellipsoidal
+    // discrepancy is bounded by the flattening).
+    //   Boulder → CERN: |V1.dist − H4| / V1.dist  ≤ 0.005
+    // ───────────────────────────────────────────────────────────────
+    let dvh = fabs(v1[0] - h4) / v1[0]
+    check("X1 Vincenty ≈ Haversine within 0.5% (Boulder→CERN)",
+          dvh < 0.005)
+    print("X1 |Vincenty - Haversine|/Vincenty = " + str(dvh))
+
+    // ───────────────────────────────────────────────────────────────
+    // SUMMARY
+    // ───────────────────────────────────────────────────────────────
+    print("wgs84_kernel_test: " + str(pass_count) + "/" + str(total_count))
+    if failed != "" {
+        print("FAILED: " + failed)
+    } else {
+        print("PASS")
+    }
+}

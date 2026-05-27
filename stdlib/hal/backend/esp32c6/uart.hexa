@@ -1,0 +1,79 @@
+#!hexa strict
+// stdlib/hal/backend/esp32c6/uart.hexa — ESP32-C6 UART backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    ESP32-C6 RV32IMAC RISC-V @ 160 MHz.
+// Chip ref:  ESP32-C6 TRM v1.2 §20 HP UART + §35 LP UART.
+// Surface:   esp32c6_uart_{configure,write_byte,read_byte,close}(...)
+// Dispatch:  uart.hexa selects this via cfg-flag.
+//
+// MMIO layout: 2 HP UARTs + 1 LP UART on C6 (new on C-series).
+//
+//   HP UART0:  base = DR_REG_UART_BASE      = 0x60000000   (boot console)
+//   HP UART1:  base = DR_REG_UART1_BASE     = 0x60001000
+//   LP UART0:  base = DR_REG_LP_UART_BASE   = 0x600B1400
+//
+// Same fractional baud divisor (CLKDIV + CLKDIV_FRAG/16) as ESP32 family.
+// LP UART runs in LP_APB domain — receive bytes during deep sleep,
+// trigger HP wake on RX threshold.
+
+let MODULE_NAME = "esp32c6_uart"
+let SIGMA_SLOT  = 4
+let PHI_KIND    = "digital"
+
+let DR_REG_UART_BASE    = 0x60000000   // HP UART0
+let DR_REG_UART1_BASE   = 0x60001000   // HP UART1
+let DR_REG_LP_UART_BASE = 0x600B1400   // LP UART0
+
+let UART_FIFO_REG    = 0x000
+let UART_CLKDIV_REG  = 0x014
+let UART_STATUS_REG  = 0x01C
+let UART_CONF0_REG   = 0x020
+
+let APB_CLK_HZ = 80000000
+
+let WLEN_5 = 0
+let WLEN_6 = 1
+let WLEN_7 = 2
+let WLEN_8 = 3
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn esp32c6_uart_configure(unit: int, baud: int, word_bits: int) -> int {
+    if unit < 0 || unit > 2 { return -1 }   // 0,1=HP; 2=LP
+    if baud < 110 || baud > 5000000 { return -2 }
+    if word_bits < 5 || word_bits > 8 { return -3 }
+    return unit
+}
+
+fn esp32c6_uart_write_byte(unit: int, byte: int) -> int {
+    if unit < 0 || unit > 2 { return -1 }
+    if byte < 0 || byte > 255 { return -2 }
+    return 0
+}
+
+fn esp32c6_uart_read_byte(unit: int) -> int {
+    if unit < 0 || unit > 2 { return -1 }
+    return 0
+}
+
+fn esp32c6_uart_close(unit: int) -> int {
+    if unit < 0 || unit > 2 { return -1 }
+    return 0
+}
+
+fn esp32c6_uart_report(unit: int) -> str {
+    return "[esp32c6_uart sim] unit=" + str(unit) + " (skeleton stub — TODO MMIO)"
+}
+
+fn esp32c6_uart_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32c6_uart sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  HP UART0=" + str(DR_REG_UART_BASE) + " UART1=" + str(DR_REG_UART1_BASE) +
+            " LP UART0=" + str(DR_REG_LP_UART_BASE))
+    println("  LP UART runs in LP_APB; wake HP on RX threshold during deep-sleep")
+}

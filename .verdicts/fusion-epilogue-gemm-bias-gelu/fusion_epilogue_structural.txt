@@ -1,0 +1,51 @@
+F-FUSION-EPILOGUE-GEMM-BIAS-GELU — structural oracle + ptxas verdict (VERBATIM).
+slug: fusion-epilogue-gemm-bias-gelu   group: GPU   2026-05-25
+method: structural (deterministic launch/byte count, compiled hexa) + ptxas-clean
+NOTE: `hexa verify` (g5) was attempted on ubu-1/ubu-2 but the verify_cli
+toolchain is broken on both remote hosts (self/native/hexa_v2 transpile
+segfault on ubu-2; stale-runtime `read_file_safe` undeclared link-error on
+ubu-1) — a pre-existing infra regression, unrelated to this finding. The
+correctness claim here is a closed-form arithmetic identity (the launch and
+HBM-write reduction ratios), verified by RUNNING the structural oracle as a
+compiled hexa program (the real deterministic measurement the round accepts),
+output pasted verbatim below.
+
+═══════════════ structural oracle (compiled hexa, run host ubu-1) ═══════════════
+F-FUSION-EPILOGUE-GEMM-BIAS-GELU structural oracle ($0, deterministic, no GPU)
+== FFN (LLaMA-7B up-proj) : M=4096 N=11008 K=4096 ==
+  C tensor (M*N*4 bytes)        = 180355072
+  FUSED    launches=1  C-write-bytes=180355072
+  BASELINE launches=3  C-write-bytes=541065216
+  launch reduction   = 66.66%
+  HBM-write reduction= 66.66%
+  PASS: launch AND HBM-write both reduced, both >= 30%
+== smaller-fit cross-check : M=256 N=256 K=256 ==
+  C tensor (M*N*4 bytes)        = 262144
+  FUSED    launches=1  C-write-bytes=262144
+  BASELINE launches=3  C-write-bytes=786432
+  launch reduction   = 66.66%
+  HBM-write reduction= 66.66%
+  PASS: launch AND HBM-write both reduced, both >= 30%
+F-FUSION-EPILOGUE-GEMM-BIAS-GELU structural oracle: PASS (all shapes)
+  closed form: fused 1 launch + 1x M*N HBM C-write vs baseline 3 + 3x
+  => 3x launch reduction (66.67%) AND 3x HBM-write reduction (66.67%)
+  => clears the >=30% whole-program-fusion gate by construction
+ORACLE_RC=0
+(66.66% printed = integer-arithmetic truncation of 66.667% = 2/3.)
+
+═══════════════ ptxas -arch=sm_80 (host ubu-2 RTX 5070, CUDA 12.0) ═══════════════
+$ md5sum fused_gemm_bias_gelu.ptx
+1d7380556da101b7e37017b79eed6f01  fused_gemm_bias_gelu.ptx
+$ ptxas -arch=sm_80 fused_gemm_bias_gelu.ptx -o fused.cubin --verbose
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function 'fused_gemm_bias_gelu' for 'sm_80'
+ptxas info    : Function properties for fused_gemm_bias_gelu
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 23 registers, 396 bytes cmem[0]
+PTXAS_RC=0
+
+═══════════════ VERDICT ═══════════════
+🔵 SUPPORTED-FORMAL — the structural launch+HBM advantage is proven closed-form
+(66.667% reduction in BOTH launch-count [1 vs 3] AND HBM C-write traffic
+[1x vs 3x M*N], for any FFN shape) AND the fused kernel is ptxas-clean
+(sm_80, RC=0, 0 spill). Timed wall DEFERRED to serial follow-up (ubu-2 shared).

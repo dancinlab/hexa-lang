@@ -1,0 +1,120 @@
+#!hexa strict
+// stdlib/hal/backend/rp2040/dma.hexa — RP2040 DMA backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    Raspberry Pi RP2040 dual Cortex-M0+ @ 133 MHz.
+// Chip ref:  RP2040 Datasheet §2.5 DMA — 12 channels with control-block
+//            chaining, programmable data request (DREQ) signals from
+//            peripherals, and a "sniff" mode for CRC/sum without CPU.
+// Surface:   rp2040_dma_{configure,start,wait,abort}(...)
+// Dispatch:  dma.hexa selects this via cfg-flag.
+//
+// MMIO layout:
+//
+//   DMA:  base = 0x50000000   (12 channels, 0..11)
+//
+//   CH<n>_READ_ADDR              0x000 + 0x40·n   source address
+//   CH<n>_WRITE_ADDR             0x004 + 0x40·n   dest address
+//   CH<n>_TRANS_COUNT            0x008 + 0x40·n   # transfers (NOT bytes)
+//   CH<n>_CTRL_TRIG              0x00C + 0x40·n   ctrl + write trigger:
+//                                                    EN bit 0
+//                                                    HIGH_PRIORITY bit 1
+//                                                    DATA_SIZE bits 3:2
+//                                                       (0=byte 1=halfword 2=word)
+//                                                    INCR_READ bit 4
+//                                                    INCR_WRITE bit 5
+//                                                    RING_SIZE bits 9:6
+//                                                    RING_SEL bit 10
+//                                                    CHAIN_TO bits 14:11
+//                                                    TREQ_SEL bits 19:15
+//                                                    IRQ_QUIET bit 20
+//                                                    BSWAP bit 21
+//                                                    SNIFF_EN bit 22
+//                                                    BUSY bit 23 (RO)
+//                                                    AHB_ERR bit 31
+//   CH<n>_AL1/AL2/AL3_*          (aliases for chained programming)
+//   INTR / INTE / INTF / INTS    0x400..0x40C   IRQ status / enable
+//   TIMER<0..3>                  0x420..0x42C   pacing timers
+//   MULTI_CHAN_TRIGGER           0x430   atomic multi-channel start
+//   SNIFF_CTRL / SNIFF_DATA      0x434/0x438   CRC/sum mode
+//   FIFO_LEVELS                  0x440   per-channel fifo depth
+//
+// DREQ signals: 41 sources (PIO0/1, SPI0/1, UART0/1 RX/TX, I2C0/1 RX/TX,
+// ADC, XIP_STREAM, TIMER0..3, plus PERMANENT for free-running M2M).
+//
+// Distinctive features vs STM32H7 / ESP32:
+//   - Control-block chaining (CH_n.CHAIN_TO=m) — channels can program
+//     each other for arbitrary scatter-gather without CPU.
+//   - Sniff mode — CRC32, IEEE CRC16, even/odd parity sum computed
+//     during transfer without consuming a separate channel.
+//   - Pacing timers — limit DMA bandwidth (e.g. video timing).
+
+let MODULE_NAME = "rp2040_dma"
+let SIGMA_SLOT  = 10
+let PHI_KIND    = "digital"
+
+let DMA_BASE          = 0x50000000
+
+let CH0_READ_ADDR     = 0x000
+let CH0_WRITE_ADDR    = 0x004
+let CH0_TRANS_COUNT   = 0x008
+let CH0_CTRL_TRIG     = 0x00C
+let CH_STRIDE         = 0x040
+
+let DMA_INTR          = 0x400
+let DMA_INTE0         = 0x404
+let DMA_INTS0         = 0x40C
+
+let MAX_CHAN          = 12
+
+let DATA_SIZE_BYTE = 0
+let DATA_SIZE_HALF = 1
+let DATA_SIZE_WORD = 2
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn rp2040_dma_configure(channel: int, direction: int, width: int) -> int {
+    if channel < 0 || channel > 11 { return -1 }   // 12 channels on RP2040
+    if direction < 0 || direction > 3 { return -2 }
+    if width != 1 && width != 2 && width != 4 { return -3 }
+    // STUB: encode CTRL_TRIG bits — INCR_READ + INCR_WRITE based on
+    //       direction; DATA_SIZE = log2(width); TREQ_SEL = peripheral
+    //       DREQ index (or 0x3F = PERMANENT for M→M).
+    return channel
+}
+
+fn rp2040_dma_start(handle: int, src: int, dst: int, n_bytes: int) -> bool {
+    if handle < 0 || handle > 11 { return false }
+    if n_bytes <= 0 { return false }
+    // STUB: write CH<handle>_READ_ADDR = src; CH<handle>_WRITE_ADDR = dst;
+    //       TRANS_COUNT = n_bytes / width; write CTRL_TRIG with EN=1
+    //       (writing CTRL_TRIG kicks off transfer — name is "_TRIG" for that).
+    return true
+}
+
+fn rp2040_dma_wait(handle: int) -> bool {
+    if handle < 0 || handle > 11 { return false }
+    // STUB: spin on CH<handle>_CTRL_TRIG.BUSY = 0
+    return true
+}
+
+fn rp2040_dma_abort(handle: int) -> bool {
+    if handle < 0 || handle > 11 { return false }
+    // STUB: write CHAN_ABORT register with bit (1 << handle)
+    return true
+}
+
+fn rp2040_dma_report(handle: int) -> str {
+    return "[rp2040_dma sim] handle=" + str(handle) + " (skeleton stub — TODO MMIO)"
+}
+
+fn rp2040_dma_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[rp2040_dma sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  DMA=" + str(DMA_BASE) + " (12 channels; control-block chaining; sniff mode)")
+    println("  41 DREQ sources; pacing timers; AHB master")
+}

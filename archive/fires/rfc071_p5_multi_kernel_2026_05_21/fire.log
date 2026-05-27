@@ -1,0 +1,18 @@
+{"status":"PASS","vec_add":{"status":"PASS","max_abs_diff":0,"byte_mismatch":0,"first_mis":-1,"c0":2.9647833402501771,"ref0":2.9647833402501771},"vec_mul":{"status":"PASS","max_abs_diff":0,"byte_mismatch":0,"first_mis":-1,"c0":2.1032052170878326,"ref0":2.1032052170878326},"N":1024,"a0":1.1753414355242713,"b0":1.789441904725906}
+rc=0
+--- STDERR ---
+loaded PTX 4043 bytes
+JIT info: ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function 'vec_mul' for 'sm_120a'
+ptxas info    : Function properties for vec_mul
+ptxas         .     0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 16 registers, used 0 barriers
+ptxas info    : Compile time = 2.007 ms
+ptxas info    : Compiling entry function 'vec_add' for 'sm_120a'
+ptxas info    : Function properties for vec_add
+ptxas         .     0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 16 registers, used 0 barriers
+ptxas info    : Compile time = 1.278 ms
+resolved both entries: vec_add + vec_mul
+vec_add: max_abs=0 bm=0 firstmis=-1 c[0]=2.9647833402501771 ref[0]=2.9647833402501771
+vec_mul: max_abs=0 bm=0 firstmis=-1 c[0]=2.1032052170878326 ref[0]=2.1032052170878326

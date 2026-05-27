@@ -1,0 +1,79 @@
+// test/catalan_combinatorial_smoke.hexa — smoke for symbolic/catalan_combinatorial.hexa
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Reference values from catalan_combinatorial_n6.py (archive-TECS-L/
+// .shared/calc, commit 4ee05c39):
+//   catalan 0..7 = 1,1,2,5,14,42,132,429   (C₆=132=σ(6)·11)
+//   fibonacci    F₆ = 8 = φ·τ ; F₈ = 21
+//   bell 0..6    = 1,1,2,5,15,52,203       (B(6)=203)
+//   derangement  !6 = 265 ; !4 = 9
+//   stirling2    S(6,2)=31 · S(6,3)=90 · S(6,6)=1
+//   partition    p(6)=11 · p(10)=42
+//
+// Run:  hexa run test/catalan_combinatorial_smoke.hexa
+// Sentinel: __CATALAN_SMOKE__ PASS|FAIL on the final line.
+
+import "compiler/atlas/symbolic/catalan_combinatorial.hexa"
+
+let mut PASS = 0
+let mut FAIL = 0
+
+fn check(label: string, cond: bool) {
+    if cond {
+        PASS = PASS + 1
+        println("[PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("[FAIL] " + label)
+    }
+}
+
+// ── binomial / factorial ─────────────────────────────────────────────────
+check("C(6,2) == 15",   cc_binomial(6, 2) == 15)
+check("C(2·6,6) == 924", cc_binomial(12, 6) == 924)
+check("6! == 720",      cc_factorial(6) == 720)
+
+// ── catalan ──────────────────────────────────────────────────────────────
+check("catalan(0) == 1", cc_catalan(0) == 1)
+check("catalan(3) == 5 (= sopfr(6))", cc_catalan(3) == 5)
+check("catalan(4) == 14 (= 2·M3)",    cc_catalan(4) == 14)
+check("catalan(6) == 132 (= σ(6)·11)", cc_catalan(6) == 132)
+check("catalan(7) == 429", cc_catalan(7) == 429)
+
+// ── fibonacci ────────────────────────────────────────────────────────────
+check("fibonacci(0) == 0", cc_fibonacci(0) == 0)
+check("fibonacci(1) == 1", cc_fibonacci(1) == 1)
+check("fibonacci(6) == 8 (= φ·τ)", cc_fibonacci(6) == 8)
+check("fibonacci(8) == 21", cc_fibonacci(8) == 21)
+
+// ── bell ─────────────────────────────────────────────────────────────────
+check("bell(0) == 1",  cc_bell(0) == 1)
+check("bell(4) == 15", cc_bell(4) == 15)
+check("bell(6) == 203", cc_bell(6) == 203)
+
+// ── stirling2 ────────────────────────────────────────────────────────────
+check("S(6,2) == 31", cc_stirling2(6, 2) == 31)
+check("S(6,3) == 90", cc_stirling2(6, 3) == 90)
+check("S(6,6) == 1",  cc_stirling2(6, 6) == 1)
+check("S(5,3) == 25", cc_stirling2(5, 3) == 25)
+
+// ── derangement ──────────────────────────────────────────────────────────
+check("derangement(0) == 1", cc_derangement(0) == 1)
+check("derangement(4) == 9", cc_derangement(4) == 9)
+check("derangement(6) == 265", cc_derangement(6) == 265)
+
+// ── partition ────────────────────────────────────────────────────────────
+check("p(6) == 11",  cc_partition_count(6) == 11)
+check("p(10) == 42", cc_partition_count(10) == 42)
+
+println("")
+println("═══════════════════════════════════════════════════════════")
+println("  catalan_combinatorial smoke: PASS=" + str(PASS) + " FAIL=" + str(FAIL))
+println("═══════════════════════════════════════════════════════════")
+if FAIL > 0 {
+    println("__CATALAN_SMOKE__ FAIL")
+} else {
+    println("__CATALAN_SMOKE__ PASS")
+}

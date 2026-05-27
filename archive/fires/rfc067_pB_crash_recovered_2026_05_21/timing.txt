@@ -1,0 +1,12 @@
+cold_module_load_us=5748
+first_launch_us=23
+nth_launch_us_avg=1
+warm_module_load_us=28
+alloc size=4096 alloc_us=73 free_us=45
+alloc size=4194304 alloc_us=24 free_us=22
+alloc size=67108864 alloc_us=39 free_us=43
+alloc size=268435456 alloc_us=112 free_us=121
+alloc size=268435456 alloc_us=423 free_us=154
+recovery_trial_1=OK
+recovery_trial_2=OK
+recovery_trial_3=OK

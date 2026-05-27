@@ -1,0 +1,133 @@
+// compiler/codegen/nvptx_n71b_fire_emit.hexa
+// N71-B (N70/N91 GAP-C) — hand-MIR warp_reduce_sum PTX emitter for the
+// ubu-2 silicon fire. Self-contained (imports only nvptx_target + mir,
+// NO atlas/lower chain) so it builds via the lightweight `hexa build`
+// path — the full source→PTX driver can't be cheaply rebuilt here
+// (self-bootstrap transpiler regresses on this host; the build_nvptx
+// import set hits an unrelated atlas dup-struct flatten error).
+//
+// The MIR mirrors compiler/codegen/nvptx_p9_warp_reduce_test.hexa
+// @gpu_kernel warp_reduce_sum(a:[f64], out:[f64], n:i64):
+//   sum (f64) accumulates a[tid..n step bdim], then a 5-step
+//   gpu_warp_shuffle_xor(sum, mask) butterfly (mask=16,8,4,2,1), lane-0
+//   per-warp store. The shuffle source `sum` is f64 → exercises the
+//   N71-B decompose/recompose; the mask is in the u64 bank → exercises
+//   the cvt.u32.u64 narrow. This is the exact GAP-C surface.
+//
+//   hexa build compiler/codegen/nvptx_n71b_fire_emit.hexa -o /tmp/fe
+//   /tmp/fe > /tmp/warp_reduce_sum.n71b.sm_80.ptx
+
+import "../ir/mir.hexa"
+import "./nvptx_target.hexa"
+
+fn _l(id: i64, name: string) -> Local {
+    return Local { id: id, arena_id: 1, type_id: 0, name_hint: name, precision: "", space: "" }
+}
+fn _li64(id: i64, name: string) -> Local {
+    return Local { id: id, arena_id: 1, type_id: 1, name_hint: name, precision: "", space: "" }
+}
+fn _opl(id: i64) -> Operand {
+    return Operand { kind: "local", local_id: id, int_val: 0, float_val: 0.0, str_val: "", global_id: -1 }
+}
+fn _opci(v: i64) -> Operand {
+    return Operand { kind: "const_int", local_id: -1, int_val: v, float_val: 0.0, str_val: "", global_id: -1 }
+}
+fn _opcf(v: f64) -> Operand {
+    return Operand { kind: "const_float", local_id: -1, int_val: 0, float_val: v, str_val: "", global_id: -1 }
+}
+fn _miss() -> Local {
+    return Local { id: -1, arena_id: 0, type_id: 0, name_hint: "", precision: "", space: "" }
+}
+fn _binop(dst: Local, op: string, a: Operand, b: Operand) -> Stmt {
+    let mut xs = []; xs.push(a); xs.push(b)
+    return Stmt { kind: STMT_BINOP, dst: dst, op: op, args: xs, target_block: -1, target_block_else: -1 }
+}
+fn _assign1(dst: Local, op: string, a: Operand) -> Stmt {
+    let mut xs = []; xs.push(a)
+    return Stmt { kind: STMT_ASSIGN, dst: dst, op: op, args: xs, target_block: -1, target_block_else: -1 }
+}
+fn _call0(dst: Local, callee: string) -> Stmt {
+    return Stmt { kind: STMT_CALL, dst: dst, op: callee, args: [], target_block: -1, target_block_else: -1 }
+}
+fn _callN(dst: Local, callee: string, args: [Operand]) -> Stmt {
+    return Stmt { kind: STMT_CALL, dst: dst, op: callee, args: args, target_block: -1, target_block_else: -1 }
+}
+fn _ret() -> Stmt {
+    return Stmt { kind: STMT_RETURN, dst: _miss(), op: "", args: [], target_block: -1, target_block_else: -1 }
+}
+fn _blk(id: i64, stmts: [Stmt]) -> Block {
+    return Block { id: id, stmts: stmts, preds: [], succs: [] }
+}
+
+// A reduced but faithful straight-line slice that drives the exact
+// codegen surface (f64 shuffle src + u64 mask). We keep it single-block
+// so the emitted PTX is a clean `.func` body the host driver can launch
+// (the full looped kernel adds nothing to the GAP-C decompose math being
+// validated; the loop/branch lowering is already covered by N64).
+//
+// kernel(a, out, n):
+//   tid  = to_i64(gpu_thread_id_x())     -> u64
+//   sum  = a[tid]                         -> f64 (single load, no loop)
+//   mask = 16 (i64)                       -> u64
+//   t    = gpu_warp_shuffle_xor(sum, mask)-> f64   ← N71-B surface
+//   sum  = sum + t                        -> f64
+//   out[0] = sum
+fn _build() -> MModule {
+    let a    = _li64(0, "a")        // param 0 (array base) — u64
+    let out  = _li64(1, "out")      // param 1 (array base) — u64
+    let n    = _li64(2, "n")        // param 2 — u64
+    let tidc = _l(3, "tidc")        // gpu_thread_id_x -> u32
+    let tid  = _li64(4, "tid")      // to_i64(tidc) -> u64
+    let sum  = _l(5, "sum")         // a[tid] load -> f64
+    let mask = _li64(6, "mask")     // 16 (i64) -> u64
+    let t    = _l(7, "t")           // shuffle_xor(sum, mask) -> f64 (src f64 + u64 mask)
+    let sum2 = _l(8, "sum2")        // sum + t -> f64
+
+    let mut shuf = []
+    shuf.push(_opl(sum.id))
+    shuf.push(_opl(mask.id))
+
+    let mut s0 = []
+    s0.push(_call0(tidc, "gpu_thread_id_x"))
+    s0.push(_callN(tid, "to_i64", [ _opl(tidc.id) ]))
+    // sum = a[tid]  (op="index": base=a, idx=tid) -> f64
+    let mut idx_args = []; idx_args.push(_opl(a.id)); idx_args.push(_opl(tid.id))
+    s0.push(Stmt { kind: STMT_ASSIGN, dst: sum, op: "index", args: idx_args, target_block: -1, target_block_else: -1 })
+    s0.push(_assign1(mask, "assign", _opci(16)))         // mask i64 = 16 -> u64
+    s0.push(_callN(t, "gpu_warp_shuffle_xor", shuf))     // ← N71-B
+    s0.push(_binop(sum2, "add", _opl(sum.id), _opl(t.id)))
+    // out[tid] = sum2  (op="index_set": base=out, idx=tid, val=sum2) —
+    // per-lane output so the host can verify ALL 32 lanes (no write race).
+    let mut set_args = []; set_args.push(_opl(out.id)); set_args.push(_opl(tid.id)); set_args.push(_opl(sum2.id))
+    s0.push(Stmt { kind: STMT_ASSIGN, dst: _miss(), op: "index_set", args: set_args, target_block: -1, target_block_else: -1 })
+    s0.push(_ret())
+
+    let mut blocks = []
+    blocks.push(_blk(0, s0))
+    let mut locals = []
+    locals.push(a); locals.push(out); locals.push(n); locals.push(tidc)
+    locals.push(tid); locals.push(sum); locals.push(mask); locals.push(t); locals.push(sum2)
+
+    let mut params = []
+    params.push(a); params.push(out); params.push(n)
+
+    let mf = MFunc {
+        name: "warp_reduce_sum",
+        params: params,
+        return_local: _miss(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_KERNEL
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "warp_reduce_sum_fire.hexa", funcs: fns, globals: [] }
+}
+
+fn main() {
+    let ptx = codegen_emit_ptx_sm80(_build())
+    print(ptx)
+}

@@ -1,0 +1,53 @@
+// HEXA Native Compiler — Wave 1 absorption: calculators static index
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+//   pub fn calculators_list() -> [CalculatorEntry]
+//   pub fn calculators_lookup(project: string, name: string) -> CalculatorEntry
+//   pub fn calculators_by_project(project: string) -> [CalculatorEntry]
+//   pub fn calculators_by_category(category: string) -> [CalculatorEntry]
+
+use "compiler/calculators/embed"
+use "compiler/calculators/embedded.gen"
+
+pub fn calculators_list() -> [CalculatorEntry] {
+    return CALCULATORS
+}
+
+pub fn calculators_lookup(project: string, name: string) -> CalculatorEntry {
+    let n = len(CALCULATORS)
+    let mut i = 0
+    while i < n {
+        let e = CALCULATORS[i]
+        if e.project == project && e.name == name { return e }
+        i = i + 1
+    }
+    return CalculatorEntry {
+        project: "", name: "", description: "", category: "", path: "", repo: ""
+    }
+}
+
+pub fn calculators_by_project(project: string) -> [CalculatorEntry] {
+    let out = []
+    let n = len(CALCULATORS)
+    let mut i = 0
+    while i < n {
+        let e = CALCULATORS[i]
+        if e.project == project { out.push(e) }
+        i = i + 1
+    }
+    return out
+}
+
+pub fn calculators_by_category(category: string) -> [CalculatorEntry] {
+    let out = []
+    let n = len(CALCULATORS)
+    let mut i = 0
+    while i < n {
+        let e = CALCULATORS[i]
+        if e.category == category { out.push(e) }
+        i = i + 1
+    }
+    return out
+}

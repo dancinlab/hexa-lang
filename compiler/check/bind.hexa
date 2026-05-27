@@ -1,0 +1,1229 @@
+// HEXA Native Compiler — Phase B2 / S2: bind / scope resolve
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Walks a parsed Module and resolves every identifier reference to a unique
+// DefId. Per RFC-017 §3.1 S2 is fatal — undefined names abort compilation.
+// Per RFC-019 §6 we collect every miss (no early-stop) and surface them as
+// HX2001 diagnostics with did-you-mean suggestions (Levenshtein ≤ 2 over
+// every identifier currently in visible scope, mirroring resolve.hexa S1).
+//
+// Scope shape (flat, stage0-friendly):
+//   BindFrame { defs: [string], def_ids: [DefId] }   — parallel arrays
+//   BindScope { frames: [BindFrame], next_index }    — explicit stack
+//
+// NOTE: `scope` is a stage0 reserved keyword (gate/HEXA_RESERVED.md §1a),
+// so neither types nor parameter names use the bare word — types are
+// `BindScope` / `BindFrame` and parameters are spelled `sc`.
+//
+// Pre-pass: every Module.items[*] takes a top-level DefId in frames[0] so
+// fn / struct / enum / let can reference each other freely (forward refs).
+// Then we walk each item's body in a fresh function scope (params first).
+//
+// Notes:
+//   - This is COMPILER-side binding. Independent of self/type_checker.hexa's
+//     enum_all_variant_payload_types (RFC-020 in self/ tree).
+//   - DefId.module = Module.file (per the compiler entry contract).
+//   - 100% enum match — no string compares against ItemKind/ExprKind tags.
+
+import "../parse/ast.hexa"
+import "../diag/catalog.hexa"
+import "../diag/builder.hexa"
+import "../ir/hir.hexa"
+import "../lex/tokens.hexa"
+import "./resolve.hexa"
+
+// ── Scope structures ─────────────────────────────────────────
+
+pub struct BindFrame {
+    defs: [string],
+    def_ids: [DefId]
+}
+
+pub struct BindScope {
+    frames: [BindFrame],
+    next_index: i64
+}
+
+// ── RFC-074 Phase 2 — enum variant payload arity registry ───
+// Module-local lookup table built once per `bind()` call (reset on entry).
+// We do NOT thread the arity table through the walker — module-level state
+// matches the self/type_checker.hexa convention (enum_all_variant_payload_*).
+//
+// Layout (flat parallel arrays, indexed by variant ordinal across the module):
+//   _bind_enum_names[i]            : enum decl name (e.g. "Event")
+//   _bind_enum_variant_offsets[i]  : start index into _bind_enum_variant_*[]
+//   _bind_enum_variant_counts[i]   : number of variants in enum i
+//   _bind_enum_variant_names[j]    : variant name (e.g. "Click")
+//   _bind_enum_variant_arities[j]  : payload arity (= len(Param.typs)) — 0 unit / 1 single / N multi
+//
+// Arity is recovered from Param.typs.len; the parser populates this per
+// RFC-074 §3.1 (compiler/parse/parser.hexa parse_enum_item).
+let mut _bind_enum_names: [string] = []
+let mut _bind_enum_variant_offsets: [i64] = []
+let mut _bind_enum_variant_counts: [i64] = []
+let mut _bind_enum_variant_names: [string] = []
+let mut _bind_enum_variant_arities: [i64] = []
+
+fn _bind_enum_registry_reset() {
+    _bind_enum_names = []
+    _bind_enum_variant_offsets = []
+    _bind_enum_variant_counts = []
+    _bind_enum_variant_names = []
+    _bind_enum_variant_arities = []
+}
+
+fn _bind_register_enum_item(it: Item) {
+    if !_is_enum_kind(it.kind) { return }
+    _bind_enum_names.push(it.name)
+    _bind_enum_variant_offsets.push(len(_bind_enum_variant_names))
+    _bind_enum_variant_counts.push(len(it.params))
+    let mut vi = 0
+    while vi < len(it.params) {
+        let v = it.params[vi]
+        _bind_enum_variant_names.push(v.name)
+        _bind_enum_variant_arities.push(len(v.typs))
+        vi = vi + 1
+    }
+}
+
+// Returns the declared arity (≥ 0) for enum_name::variant_name, or -1 if
+// the enum or variant is not known. The -1 sentinel is the "skip" signal —
+// the caller treats it as "no arity claim" and emits no diagnostic, since
+// unknown enum heads are handled separately (HX2001 in _bind_walk_expr).
+fn _bind_lookup_variant_arity(enum_name: string, variant_name: string) -> i64 {
+    let mut ei = 0
+    while ei < len(_bind_enum_names) {
+        if _bind_enum_names[ei] == enum_name {
+            let off = _bind_enum_variant_offsets[ei]
+            let cnt = _bind_enum_variant_counts[ei]
+            let mut vi = 0
+            while vi < cnt {
+                if _bind_enum_variant_names[off + vi] == variant_name {
+                    return _bind_enum_variant_arities[off + vi]
+                }
+                vi = vi + 1
+            }
+            return -1
+        }
+        ei = ei + 1
+    }
+    return -1
+}
+
+// ── Helpers ──────────────────────────────────────────────────
+
+fn _bind_empty_fixit() -> FixIt {
+    return FixIt {
+        kind: FixItKind::None,
+        span: Span { file: "", line: 0, col: 0, len: 0 },
+        new_text: ""
+    }
+}
+
+fn _bind_miss_def_id() -> DefId {
+    return DefId { module: "", index: -1 }
+}
+
+// ── Scope helpers ────────────────────────────────────────────
+
+fn _new_scopes() -> BindScope {
+    return BindScope { frames: [], next_index: 0 }
+}
+
+fn _push_scope(sc: BindScope) -> BindScope {
+    let frame = BindFrame { defs: [], def_ids: [] }
+    let mut frames = sc.frames
+    frames.push(frame)
+    return BindScope { frames: frames, next_index: sc.next_index }
+}
+
+fn _pop_scope(sc: BindScope) -> BindScope {
+    let mut frames = sc.frames
+    let n = len(frames)
+    if n == 0 { return sc }
+    // pop last frame — stage0 array has no `pop` so build a smaller copy.
+    let mut next_frames = []
+    let mut i = 0
+    while i < n - 1 {
+        next_frames.push(frames[i])
+        i = i + 1
+    }
+    return BindScope { frames: next_frames, next_index: sc.next_index }
+}
+
+// Define `name` in the topmost frame and return the freshly allocated DefId.
+// The caller is responsible for module attribution — DefId.module is filled
+// by the bind() entry point; here we only mint the dense index.
+fn _define(sc: BindScope, name: string, mod_file: string) -> BindScope {
+    let n = len(sc.frames)
+    if n == 0 { return sc }
+    let mut frames = sc.frames
+    let top = frames[n - 1]
+    let mut new_defs = top.defs
+    let mut new_ids = top.def_ids
+    new_defs.push(name)
+    new_ids.push(DefId { module: mod_file, index: sc.next_index })
+    frames[n - 1] = BindFrame { defs: new_defs, def_ids: new_ids }
+    return BindScope { frames: frames, next_index: sc.next_index + 1 }
+}
+
+// Look up `name` walking the frame stack from innermost to outermost. Returns
+// a DefId with index=-1 on miss so callers can branch without exceptions.
+fn _bind_lookup(sc: BindScope, name: string) -> DefId {
+    let n = len(sc.frames)
+    let mut i = n - 1
+    while i >= 0 {
+        let fr = sc.frames[i]
+        let m = len(fr.defs)
+        let mut j = 0
+        while j < m {
+            if fr.defs[j] == name {
+                return fr.def_ids[j]
+            }
+            j = j + 1
+        }
+        i = i - 1
+    }
+    return _bind_miss_def_id()
+}
+
+// Collect every visible identifier across all frames — used for did-you-mean.
+fn _all_visible(sc: BindScope) -> [string] {
+    let mut out = []
+    let mut i = 0
+    while i < len(sc.frames) {
+        let fr = sc.frames[i]
+        let mut j = 0
+        while j < len(fr.defs) {
+            out.push(fr.defs[j])
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// Closest-name suggestion within Levenshtein cutoff. Mirrors resolve.hexa
+// _suggest_for but over plain string list rather than AtlasIndex.
+fn _suggest_name(sc: BindScope, name: string, cutoff: i64) -> string {
+    let cands = _all_visible(sc)
+    let mut best = ""
+    let mut best_d = cutoff + 1
+    let mut i = 0
+    while i < len(cands) {
+        let cand = cands[i]
+        if cand != name {
+            let d = levenshtein(name, cand)
+            if d < best_d {
+                best_d = d
+                best = cand
+            }
+        }
+        i = i + 1
+    }
+    if best_d <= cutoff { return best }
+    return ""
+}
+
+// ── ExprKind probes ──────────────────────────────────────────
+// Stage0 cannot derive Eq for enums — pattern-match like resolve.hexa.
+
+fn _bind_is_ident_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Ident -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Break -> false,
+        ExprKind::Continue -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
+    }
+}
+
+fn _bind_is_block_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Block -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Break -> false,
+        ExprKind::Continue -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
+    }
+}
+
+fn _is_for_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::For -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Break -> false,
+        ExprKind::Continue -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
+    }
+}
+
+fn _is_let_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Let -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Break -> false,
+        ExprKind::Continue -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
+    }
+}
+
+fn _bind_is_match_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Match -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Return -> false,
+        ExprKind::Break -> false,
+        ExprKind::Continue -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
+    }
+}
+
+fn _is_field_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Field -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Break -> false,
+        ExprKind::Continue -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
+    }
+}
+
+fn _is_enum_path_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::EnumPath -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Break -> false,
+        ExprKind::Continue -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
+    }
+}
+
+fn _is_struct_lit_kind(k: ExprKind) -> bool {
+    return match k {
+        // ArrayLit must NOT be classed as a struct-lit: the struct-lit
+        // branch descends f.children (the value under each field-name
+        // wrapper). For an array of struct-lits, e.children are the
+        // StructLit elements and f.children are their field-name Ident
+        // wrappers — descending them resolved `code:`/`title:`/… as free
+        // names (the 238 stage-2 self-compile HX2001 flood). Falling to
+        // the generic tail instead walks each element via _bind_walk_expr,
+        // so each StructLit element hits this branch correctly.
+        ExprKind::ArrayLit -> false,
+        ExprKind::StructLit -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Break -> false,
+        ExprKind::Continue -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
+    }
+}
+
+fn _bind_is_try_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Try -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Break -> false,
+        ExprKind::Continue -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
+    }
+}
+
+// RFC C1 — closure-expression probe.
+fn _bind_is_closure_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Closure -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Break -> false,
+        ExprKind::Continue -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false
+    }
+}
+
+fn _is_wildcard_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Wildcard -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Break -> false,
+        ExprKind::Continue -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
+    }
+}
+
+// ── Diagnostic emit ──────────────────────────────────────────
+
+fn _emit_hx2001(name: string, span: Span, suggest: string, out: array) {
+    let mut b = diag_new("HX2001")
+    b = diag_span(b, span)
+    b = diag_arg(b, "name", name)
+    if len(suggest) > 0 { b = diag_suggest(b, suggest) }
+    out.push(diag_emit(b))
+}
+
+// RFC-074 Phase 2 — HX2004 emitter: enum variant payload arity mismatch.
+fn _emit_hx2004(enum_name: string, variant_name: string, expected: i64, actual: i64, span: Span, out: array) {
+    let mut b = diag_new("HX2004")
+    b = diag_span(b, span)
+    b = diag_arg(b, "enum_name", enum_name)
+    b = diag_arg(b, "variant_name", variant_name)
+    b = diag_arg(b, "expected", to_string(expected))
+    b = diag_arg(b, "actual", to_string(actual))
+    let mut plural = "components"
+    if expected == 1 { plural = "component" }
+    b = diag_arg(b, "plural", plural)
+    out.push(diag_emit(b))
+}
+
+// ── `let` text decoder ──────────────────────────────────────
+// parse_let_expr stashes the binding name in `text`, prefixed with
+// "mut:" if it was declared mutable. Strip the prefix for binding.
+
+// RFC 085 Step B (2026-05-27): also strips the optional `|<type-name>`
+// suffix added by parse_let_expr for `let sm: T` syntax. Mirror of
+// ast_to_hir._hir_let_name — same logic so bind / hir layers see the
+// same effective let-name string.
+fn _bind_let_name(t: string) -> string {
+    let chars = t.chars()
+    let n = len(chars)
+    let mut start = 0
+    if n >= 4 && chars[0] == 'm' && chars[1] == 'u' && chars[2] == 't' && chars[3] == ':' {
+        start = 4
+    }
+    let mut out = ""
+    let mut i = start
+    while i < n {
+        if chars[i] == '|' { break }
+        out = out + to_string(chars[i])
+        i = i + 1
+    }
+    return out
+}
+
+// EnumPath text encodes "Enum::Variant"; we only need the "Enum" prefix to
+// look up — the variant is intra-enum and not a free identifier.
+fn _enum_head(t: string) -> string {
+    let chars = t.chars()
+    let n = len(chars)
+    let mut i = 0
+    let mut out = ""
+    while i < n - 1 {
+        if chars[i] == ':' && chars[i + 1] == ':' {
+            return out
+        }
+        out = out + to_string(chars[i])
+        i = i + 1
+    }
+    if i < n {
+        out = out + to_string(chars[i])
+    }
+    return out
+}
+
+// RFC-074 Phase 2 — extract the variant tail from "Enum::Variant" text.
+// Returns "" if no "::" separator is found.
+fn _enum_variant_tail(t: string) -> string {
+    let chars = t.chars()
+    let n = len(chars)
+    let mut i = 0
+    while i < n - 1 {
+        if chars[i] == ':' && chars[i + 1] == ':' {
+            let mut out = ""
+            let mut j = i + 2
+            while j < n {
+                out = out + to_string(chars[j])
+                j = j + 1
+            }
+            return out
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// ── Walker (collect-don't-stop) ──────────────────────────────
+//
+// Returns an updated BindScope (since stage0 has no by-reference structs we
+// thread state through return values). `out` is an `array` — Diagnostic
+// pushes mutate the underlying buffer the caller passed in.
+
+fn _bind_walk_expr(e: Expr, in_sc: BindScope, mod_file: string, out: array) -> BindScope {
+    let mut sc = in_sc
+
+    if _bind_is_ident_kind(e.kind) {
+        if len(e.text) > 0 && e.text != "_" {
+            let hit = _bind_lookup(sc, e.text)
+            if hit.index < 0 {
+                let suggest = _suggest_name(sc, e.text, 2)
+                _emit_hx2001(e.text, e.span, suggest, out)
+            }
+        }
+        return sc
+    }
+
+    if _is_wildcard_kind(e.kind) {
+        return sc
+    }
+
+    if _is_field_kind(e.kind) {
+        // Field access: child[0] is the receiver; field name is `text` and
+        // is NOT a free identifier — skip it.
+        if len(e.children) > 0 {
+            sc = _bind_walk_expr(e.children[0], sc, mod_file, out)
+        }
+        return sc
+    }
+
+    if _is_struct_lit_kind(e.kind) {
+        // Resolve the struct type name (text) at top level …
+        if len(e.text) > 0 {
+            let hit = _bind_lookup(sc, e.text)
+            if hit.index < 0 {
+                let suggest = _suggest_name(sc, e.text, 2)
+                _emit_hx2001(e.text, e.span, suggest, out)
+            }
+        }
+        // … and the field VALUES. The field-name child wraps the value as
+        // its only sub-child (parse_struct_lit_after_name). Field names are
+        // NOT free identifiers, so we descend into child.children only.
+        let mut i = 0
+        while i < len(e.children) {
+            let f = e.children[i]
+            let mut j = 0
+            while j < len(f.children) {
+                sc = _bind_walk_expr(f.children[j], sc, mod_file, out)
+                j = j + 1
+            }
+            i = i + 1
+        }
+        return sc
+    }
+
+    if _is_enum_path_kind(e.kind) {
+        let head = _enum_head(e.text)
+        if len(head) > 0 {
+            let hit = _bind_lookup(sc, head)
+            if hit.index < 0 {
+                let suggest = _suggest_name(sc, head, 2)
+                _emit_hx2001(head, e.span, suggest, out)
+            }
+            // RFC-074 Phase 2 — payload arity check (construction site).
+            // Compare the actual children count against the declared `typs`
+            // arity from the enum registry. Skip when the enum/variant is
+            // unknown (registry returns -1) — those are caught by HX2001 on
+            // the head above, no need to double-emit.
+            let tail = _enum_variant_tail(e.text)
+            if len(tail) > 0 {
+                let expected = _bind_lookup_variant_arity(head, tail)
+                if expected >= 0 {
+                    let actual = len(e.children)
+                    if expected != actual {
+                        _emit_hx2004(head, tail, expected, actual, e.span, out)
+                    }
+                }
+            }
+        }
+        // Payload children (when used as an expression, not pattern).
+        let mut i = 0
+        while i < len(e.children) {
+            sc = _bind_walk_expr(e.children[i], sc, mod_file, out)
+            i = i + 1
+        }
+        return sc
+    }
+
+    if _is_let_kind(e.kind) {
+        // Walk RHS first (let x = RHS) — RHS cannot reference `x`.
+        let mut i = 0
+        while i < len(e.children) {
+            sc = _bind_walk_expr(e.children[i], sc, mod_file, out)
+            i = i + 1
+        }
+        let nm = _bind_let_name(e.text)
+        if len(nm) > 0 {
+            sc = _define(sc, nm, mod_file)
+        }
+        return sc
+    }
+
+    if _bind_is_block_kind(e.kind) {
+        sc = _push_scope(sc)
+        let mut i = 0
+        while i < len(e.children) {
+            sc = _bind_walk_expr(e.children[i], sc, mod_file, out)
+            i = i + 1
+        }
+        sc = _pop_scope(sc)
+        return sc
+    }
+
+    if _is_for_kind(e.kind) {
+        // children[0] = iter, children[1] = body. Iter binding is on `text`.
+        if len(e.children) >= 1 {
+            sc = _bind_walk_expr(e.children[0], sc, mod_file, out)
+        }
+        sc = _push_scope(sc)
+        if len(e.text) > 0 {
+            sc = _define(sc, e.text, mod_file)
+        }
+        if len(e.children) >= 2 {
+            sc = _bind_walk_expr(e.children[1], sc, mod_file, out)
+        }
+        sc = _pop_scope(sc)
+        return sc
+    }
+
+    if _bind_is_try_kind(e.kind) {
+        // children[0] = try_body_block, children[1] = catch_body_block.
+        // catch_var binding (e.text, may be "_") is visible ONLY inside
+        // catch_body — mirror self/hexa_full.hexa::try_catch scoping.
+        if len(e.children) >= 1 {
+            sc = _push_scope(sc)
+            sc = _bind_walk_expr(e.children[0], sc, mod_file, out)
+            sc = _pop_scope(sc)
+        }
+        if len(e.children) >= 2 {
+            sc = _push_scope(sc)
+            if len(e.text) > 0 && e.text != "_" {
+                sc = _define(sc, e.text, mod_file)
+            }
+            sc = _bind_walk_expr(e.children[1], sc, mod_file, out)
+            sc = _pop_scope(sc)
+        }
+        return sc
+    }
+
+    if _bind_is_closure_kind(e.kind) {
+        // RFC C1 — closure-expression `fn(p0, p1, ...) { body }`.
+        // children = [param_0 .. param_{n-1}, body_block]; the body block is
+        // the LAST child. Closure params open a NEW scope; the params are
+        // visible only inside the body. Free variables referenced in the
+        // body that are NOT params resolve up the enclosing scope chain
+        // (normal _bind_lookup) — so a body ident like `captured` binds to
+        // the outer definition and does NOT error. C2 will walk the body to
+        // collect that capture set; C1 only guarantees binding succeeds.
+        sc = _push_scope(sc)
+        let n_children = len(e.children)
+        // every child except the last is a param Ident node (text = name,
+        // possibly `mut:`-prefixed). Define each into the closure scope.
+        let mut pi = 0
+        while pi < n_children - 1 {
+            let pnode = e.children[pi]
+            let pname = _bind_let_name(pnode.text)
+            if len(pname) > 0 && pname != "_" {
+                sc = _define(sc, pname, mod_file)
+            }
+            pi = pi + 1
+        }
+        // walk the body block (last child) with params + outer scope visible.
+        if n_children >= 1 {
+            sc = _bind_walk_expr(e.children[n_children - 1], sc, mod_file, out)
+        }
+        sc = _pop_scope(sc)
+        return sc
+    }
+
+    if _bind_is_match_kind(e.kind) {
+        // children layout: [scrutinee, pat0, body0, pat1, body1, ...]
+        if len(e.children) >= 1 {
+            sc = _bind_walk_expr(e.children[0], sc, mod_file, out)
+        }
+        let mut i = 1
+        while i + 1 < len(e.children) {
+            let pat = e.children[i]
+            let body = e.children[i + 1]
+            sc = _push_scope(sc)
+            sc = _bind_pattern(pat, sc, mod_file, out)
+            sc = _bind_walk_expr(body, sc, mod_file, out)
+            sc = _pop_scope(sc)
+            i = i + 2
+        }
+        return sc
+    }
+
+    // Generic recurse (Call, BinOp, UnOp, If, While, Return, Assign, Index,
+    // literals — all delegate to children).
+    let mut i = 0
+    while i < len(e.children) {
+        sc = _bind_walk_expr(e.children[i], sc, mod_file, out)
+        i = i + 1
+    }
+    return sc
+}
+
+// Bind pattern variables (binders + EnumPath payload binders). Pattern shape
+// from parse_match_pattern:
+//   - Wildcard          : binds nothing
+//   - LiteralInt/Bool/… : binds nothing (constant compare)
+//   - Ident             : a fresh binder for the whole scrutinee
+//   - EnumPath          : Variant or Variant(arg) — child Idents are binders
+fn _bind_pattern(p: Expr, in_sc: BindScope, mod_file: string, out: array) -> BindScope {
+    let mut sc = in_sc
+
+    if _is_wildcard_kind(p.kind) { return sc }
+
+    if _bind_is_ident_kind(p.kind) {
+        if len(p.text) > 0 && p.text != "_" {
+            sc = _define(sc, p.text, mod_file)
+        }
+        return sc
+    }
+
+    if _is_enum_path_kind(p.kind) {
+        // We DON'T resolve the enum head here — pattern context permits
+        // unresolved nominal types in stage0 (S3 will type-check them).
+        // Instead bind every Ident-like payload child as a fresh binder.
+        //
+        // RFC-074 Phase 2 — match-arm arity check. The pattern's
+        // children[] count must equal the variant's declared payload arity.
+        let pat_head = _enum_head(p.text)
+        let pat_tail = _enum_variant_tail(p.text)
+        if len(pat_head) > 0 && len(pat_tail) > 0 {
+            let pat_expected = _bind_lookup_variant_arity(pat_head, pat_tail)
+            if pat_expected >= 0 {
+                let pat_actual = len(p.children)
+                if pat_expected != pat_actual {
+                    _emit_hx2004(pat_head, pat_tail, pat_expected, pat_actual, p.span, out)
+                }
+            }
+        }
+        let mut i = 0
+        while i < len(p.children) {
+            let c = p.children[i]
+            if _bind_is_ident_kind(c.kind) {
+                if len(c.text) > 0 && c.text != "_" {
+                    sc = _define(sc, c.text, mod_file)
+                }
+            } else {
+                // Nested patterns aren't produced by parse_match_pattern
+                // today, but be defensive — recurse so we don't drop binders.
+                sc = _bind_pattern(c, sc, mod_file, out)
+            }
+            i = i + 1
+        }
+        return sc
+    }
+
+    // Literal / arbitrary expr pattern — no binders, but still walk so that
+    // any `Ident` references inside (rare) get checked against scope.
+    sc = _bind_walk_expr(p, sc, mod_file, out)
+    return sc
+}
+
+// ── ItemKind probes ──────────────────────────────────────────
+
+fn _is_fn_kind(k: ItemKind) -> bool {
+    return match k {
+        ItemKind::Fn -> true,
+        ItemKind::Let -> false,
+        ItemKind::Struct -> false,
+        ItemKind::Enum -> false,
+        ItemKind::Import -> false
+    }
+}
+
+fn _is_let_item_kind(k: ItemKind) -> bool {
+    return match k {
+        ItemKind::Let -> true,
+        ItemKind::Fn -> false,
+        ItemKind::Struct -> false,
+        ItemKind::Enum -> false,
+        ItemKind::Import -> false
+    }
+}
+
+fn _is_import_kind(k: ItemKind) -> bool {
+    return match k {
+        ItemKind::Import -> true,
+        ItemKind::Fn -> false,
+        ItemKind::Let -> false,
+        ItemKind::Struct -> false,
+        ItemKind::Enum -> false
+    }
+}
+
+// RFC-074 Phase 2 — used to gate registry population in _bind_register_enum_item.
+fn _is_enum_kind(k: ItemKind) -> bool {
+    return match k {
+        ItemKind::Enum -> true,
+        ItemKind::Fn -> false,
+        ItemKind::Let -> false,
+        ItemKind::Struct -> false,
+        ItemKind::Import -> false
+    }
+}
+
+// ── Public entry ─────────────────────────────────────────────
+
+// Built-in identifiers that are always in scope (host runtime intrinsics).
+// Stage1 punch list — without this list every builtin call surfaces as
+// HX2001 (unknown callee) and every stage-2 self-compile attempt floods
+// thousands of false-positive diagnostics. Names are kept as a flat array
+// so the prelude registration is O(N) once per module bind. Method-style
+// builtins (.push, .trim, .substring) are NOT in this list — they are
+// resolved as field accesses, not free identifiers.
+fn _bind_builtin_names() -> [string] {
+    // Full host-runtime builtin set — faithfully mirrored from the
+    // proven legacy registry self/codegen_c2.hexa::_is_builtin_name
+    // (156 names) unioned with the prior new-binder set. The prior list
+    // had only 45 entries → ~138 host builtins (net_*/term_*/pty_*/
+    // regex_*/tensor_*/crypto/json_*/…) that compiler/+self/ call were
+    // unresolved → the `<callee>` 594 HX2001 flood in stage-2 self-
+    // compile. ("true"/"false" carried from legacy are harmless as
+    // scope names — the parser emits KwTrue/KwFalse, never Ident.)
+    return [
+        // Free-call host builtins missing from the legacy-mirrored set —
+        // used as `join(a,b)` / `has_key(m,k)` / `append_file(p,s)` /
+        // `char_code_at(s,i)` in compiler/+self/ (legacy codegen_c2
+        // _is_builtin_name free-call forms; runtime hexa_str_char_code_at
+        // / hexa_map_contains_key / rt_append_file). Last HX2001 residual.
+        "append_file", "char_code_at", "has_key", "join",
+        // Step 5 codegen-inline builtins (4th re-land after e8c2dc1c wipe).
+        "__arr_raw_len", "__arr_set_cap", "__fd_write_bytes", "__map_raw_len", "__str_raw_len",
+        // Step 4 .c-none arith: raw integer divide/mod + libm-free float mod
+        // + float-add coerce (rt_div/rt_mod/rt_add_slow escapes). hexa_str_concat
+        // = the real C string-concat fn rt_add_slow's string branch calls direct.
+        "__raw_idiv", "__raw_imod", "__raw_fmod", "__raw_add_f", "hexa_str_concat",
+        // Step 4 .c-none comparison: 3-way ordering code + C int-eq code test
+        // (rt_cmp_lt/gt/le/ge escapes — self/runtime_core.c).
+        "__raw_cmp3", "__raw_code_is",
+        // Step 4 .c-none to_int: float→int truncate bridge + real str-parse C fn
+        // (rt_to_int escape — self/runtime_core.c).
+        "__raw_d2i", "hexa_str_parse_int",
+        "abs", "aes256_ctr_xor", "append", "args", "argv", "bcrypt_pbkdf", "bits_to_float", "byte_len", "bytes_to_f32_le",
+        "bytes", "bytes_to_f64_le", "ceil", "chacha20_poly1305_decrypt", "chacha20_poly1305_encrypt", "chacha20_xor", "chars", "clock_ms", "copy_file",
+        "cos", "crc32", "dict_keys", "ed25519_keypair", "ed25519_sign", "ed25519_verify", "env", "eprint",
+        "eprintln", "exec_pipe_open", "exec_stream_kill", "exec_with_status", "exec", "exit", "exp", "f32_to_bytes_le",
+        "f64_to_bytes_le", "false", "file_exists", "file_modtime", "file_size_native", "file_size", "float_to_bits", "floor", "format",
+        "getenv", "getpid", "hash_string", "http_get", "is_alpha", "is_alphanumeric", "is_digit", "json_decode",
+        "json_encode", "json_parse", "json_stringify", "len", "libsodium_available", "list_dir", "ln", "log",
+        "log10", "matmul", "max", "min", "mkdir", "mono_ns", "mount", "namespace_clone_const",
+        "nanos", "net_accept", "net_close", "net_connect", "net_listen", "net_read_bytes", "net_read_n", "net_read",
+        "net_recv_fd", "net_select", "net_send_fd", "net_set_nonblock", "net_set_timeout", "net_write_bytes", "net_write", "now_monotonic_s",
+        "now_unix_ms", "panic", "pivot_root", "poly1305_onetimeauth", "pop", "pow", "print", "println", "proc_fork",
+        "proc_reap_zombies", "proc_setsid", "proc_wait_flag_const", "proc_wait", "pty_forkexec", "pty_get_winsize", "pty_open", "pty_set_winsize",
+        "pty_tcgetattr", "pty_tcsetattr", "read_bytes_at", "read_file_bytes", "read_file", "read_line", "read_lines", "read_stdin",
+        "real_args", "regex_findall", "regex_match_full", "regex_match", "regex_replace", "regex_search", "regex_split", "remove_file",
+        "rename_file", "rms_norm", "round", "script_path", "setns", "sha256_bytes", "sha256_file", "sha256_hex",
+        "sha256", "sha512", "sin", "sleep_ms", "sleep_ns", "sleep_s", "softmax", "split",
+        "sqrt", "substring", "swiglu_vec", "tensor_add", "tensor_dot", "tensor_mul_scalar", "tensor_ones", "tensor_slice",
+        "tensor_zeros", "term_fd_close", "term_fd_poll", "term_fd_read", "term_fd_write", "term_getppid", "term_install_sigint", "term_install_sigwinch",
+        "term_isatty_stdin", "term_isatty_stdout", "term_poll_stdin", "term_pty_reap", "term_pty_spawn_sh", "term_raw_enter", "term_raw_restore", "term_read_byte",
+        "term_sigint_pending", "term_sigwinch_pending", "term_winsize_cols", "term_winsize_rows", "term_write_str", "time_ms", "to_bool", "to_float",
+        "to_int", "to_lower", "to_string", "to_upper", "trim", "true", "tty_isatty", "tty_ttyname",
+        "type_of", "u_floor", "umount", "unshare", "utc_compact_now", "utc_iso_format", "utc_iso_now", "utc_iso_parse",
+        "write_bytes_append_v", "write_bytes_append", "write_bytes_v", "write_bytes", "write_file", "x25519_keypair", "x25519_scalarmult",
+        // Interp-recognised aliases / commonly-used names that the
+        // legacy bind list missed; without them the typecheck rejects
+        // imported library code that uses these as builtins. The
+        // codegen's `_builtin_runtime_sym` is the second gate (any
+        // name still unmapped there fails at link time, not at run),
+        // so this list can be generous.
+        "str", "int", "float", "bool", "char_code", "from_char_code", "from_cstring", "cstring",
+        "lgamma", "assert", "nil",
+        "fma", "gelu", "hadamard", "input", "isnan", "isinf", "isfinite",
+        "is_empty", "is_error", "log2", "map_contains_key", "matvec", "mod", "one_hot",
+        "pad_left", "pad_right", "random", "tan", "tanh", "timestamp",
+        "delete_file", "str_trim_end", "str_trim_start",
+        "array_alloc", "array_count", "array_drop", "array_fill", "array_index_of",
+        "array_max", "array_min", "array_product", "array_reverse", "array_take",
+        "arange", "clamp", "clock", "deref", "exec_argv", "exec_capture",
+        "f32_bits", "f32_from_bits", "ham_free", "ham_pack", "hex", "bin",
+        "map_keys", "map_values", "map_entries", "phi_mi_pair", "phi_spatial",
+        "ptr_addr", "ptr_alloc", "ptr_free", "ptr_null", "ptr_offset", "ptr_read", "ptr_write",
+        "setenv", "silu", "struct_pack", "struct_unpack", "struct_free", "sum",
+        // R5 CGFAIL triage — free-call builtins missing from the legacy
+        // mirror. `env_var(name)` → hexa_env_var (runtime.c:10686);
+        // `now()` is interp's alias for `timestamp()` (hexa_full.hexa
+        // call_builtin: "timestamp"||"now"||"time_now"). Both surfaced as
+        // HX2001 in t_cmd_url_args_passthrough / t_exec_env_reproducible /
+        // t_multiarch_cpu_smoke. Codegen _builtin_runtime_sym maps them.
+        "env_var", "now",
+        // Low-level memory / pointer builtins — tier-2 (codegen_c2.hexa
+        // §G5/B3) already lowered these to hexa_ptr_* runtime symbols;
+        // tier-1 (compiler/) was missing the bind registration so a
+        // call surfaced as HX2001 before codegen. Used by
+        // self/ml/cpu_forward_tiny.hexa + self/ml/qwen14b.hexa (the
+        // hxqwen/serve smoke tests). Registration only — no interp /
+        // runtime semantic change. Each name has a matching
+        // _builtin_runtime_sym entry; without that the link (not the
+        // bind) would fail.
+        "alloc_raw", "free_raw", "ptr_from_int",
+        "write_f32", "write_i32", "write_i64", "deref_f32", "deref_i32",
+        "ptr_write_f32", "ptr_write_i32", "ptr_read_f32", "ptr_read_f64", "ptr_read_i32",
+        "ord",
+        // RUNTIME.md step-3 잔여 #4 pointer-eq inline builtins (cycle 100,
+        // 2026-05-22). `__vs_ptr_eq(a, b)` / `__map_ptr_eq(a, b)` lower to
+        // a single inline `hexa_bool((HX_VS(a) == HX_VS(b)))` etc in
+        // codegen_c2.hexa near pow site. Required so
+        // stdlib/runtime/numeric.hexa::rt_eq_valstruct + rt_eq_map_ptr can
+        // express raw struct-pointer compare from hexa source.
+        "__vs_ptr_eq", "__map_ptr_eq",
+        // RUNTIME.md step-3 cycle 107 — map basic-op opaque-pointer
+        // escape (잔여 #5 partial discharge: contains_key + keys + values
+        // + get hexa-ported, set/remove remain CORE-final).
+        "__map_has_cstr_v", "__map_get_cstr_v",
+        "__map_order_key_at", "__map_order_val_at",
+        // RUNTIME.md step-3 cycle 108 — map set/remove aliasing port
+        // (잔여 #5 full surface closure 6/6). Hexa-source wrappers
+        // rt_map_set + rt_map_remove in stdlib/runtime/numeric.hexa.
+        "__map_set_cstr_v", "__map_remove_cstr_v",
+        // RFC 071 P5++ — GPU matmul builtins. Source-level entry points
+        // that the HIR→MIR lowering pattern-synthesises into the
+        // STMT_LOAD + STMT_LOAD + STMT_BINOP("matmul"/_NT_a/_NT_b) +
+        // STMT_STORE MIR shape recognised by the NVPTX / ROCm / Metal
+        // matmul codegen lanes. See compiler/lower/hir_to_mir.hexa
+        // `gpu_matmul` call-branch synthesis and compiler/codegen/
+        // nvptx_target.hexa `_nvptx_mfunc_is_matmul_shape` (N86) /
+        // rocm_target.hexa `_rocm_mfunc_is_matmul_shape` /
+        // metal_target.hexa `_metal_mfunc_is_matmul_shape`.
+        "gpu_matmul", "gpu_matmul_NT_a", "gpu_matmul_NT_b"
+    ]
+}
+
+pub fn bind(module: Module) -> array {
+    let mut out = []
+    let mod_file = module.file
+
+    // RFC-074 Phase 2 — reset the per-module enum variant arity registry
+    // before the pre-pass populates it. `bind()` is called once per module;
+    // the registry's lifetime is exactly this call.
+    _bind_enum_registry_reset()
+
+    // ── Pre-pass: register host-runtime builtins so identifier lookups
+    // don't surface as HX2001. Anchored to mod_file so the same scope
+    // shape is exercised regardless of import topology.
+    let mut sc = _push_scope(_new_scopes())
+    let bnames = _bind_builtin_names()
+    let mut bi = 0
+    while bi < len(bnames) {
+        sc = _define(sc, bnames[bi], mod_file)
+        bi = bi + 1
+    }
+    // ── Pre-pass: top-level item names into the module-level scope.
+    let mut i = 0
+    while i < len(module.items) {
+        let it = module.items[i]
+        // RFC-074 Phase 2 — populate the enum variant arity registry while
+        // we walk top-level items. Done in the SAME pass to keep ordering
+        // simple — Enum items have no body to walk anyway.
+        _bind_register_enum_item(it)
+        if !_is_import_kind(it.kind) {
+            // Top-level `let mut X` carries it.name = "mut:X" (parser
+            // parse_let_item). Without stripping, the module scope held
+            // "mut:X" while every reference looks up "X" → HX2001 on
+            // every mutable module global (p_*/_g_* parser+overlay state,
+            // ~80 in stage-2 self-compile). _bind_let_name is a no-op on
+            // unprefixed Fn/Struct/Enum names, so this is safe for all
+            // item kinds — mirrors the let-EXPR branch (_bind_let_name).
+            let it_nm = _bind_let_name(it.name)
+            if len(it_nm) > 0 {
+                sc = _define(sc, it_nm, mod_file)
+            }
+        }
+        i = i + 1
+    }
+
+    // ── Main walk
+    let mut k = 0
+    while k < len(module.items) {
+        let it = module.items[k]
+        // Stage1 punch list C11 — items tagged @phase("parse_only")
+        // (e.g. the ~10K AtlasNode literals in
+        // compiler/atlas/embedded.gen.hexa) skip the bind body walk.
+        // Their NAMES are already in the module scope from the pre-pass
+        // above, so downstream lookups still resolve.
+        if item_is_parse_only(it) {
+            k = k + 1
+            continue
+        }
+        if _is_fn_kind(it.kind) {
+            // Function body lives in its own scope with params first.
+            sc = _push_scope(sc)
+            let mut p = 0
+            while p < len(it.params) {
+                let par = it.params[p]
+                if len(par.name) > 0 {
+                    sc = _define(sc, par.name, mod_file)
+                }
+                p = p + 1
+            }
+            sc = _bind_walk_expr(it.body, sc, mod_file, out)
+            sc = _pop_scope(sc)
+        } else if _is_let_item_kind(it.kind) {
+            // Top-level let: walk RHS in module scope. The name is already
+            // visible from the pre-pass; that matches "let foo = foo" being
+            // legal-but-silly across forward refs (the resolver doesn't try
+            // to enforce initialization order at S2).
+            sc = _bind_walk_expr(it.body, sc, mod_file, out)
+        } else {
+            // Struct / Enum / Import — body is the empty placeholder Expr
+            // (parse path). Nothing to walk.
+        }
+        k = k + 1
+    }
+
+    return out
+}

@@ -1,0 +1,55 @@
+// F-P1-EXEC-SYMTAB — P1 cycle 4 falsifier.
+//
+// After link_macho_arm64 with LC_SYMTAB populated + __LINKEDIT segment,
+// `nm` on the exec should show:
+//   - `_main` as `T` (External Text, defined in section)
+//   - extern_refs (`_hexa_set_args`, `_hexa_exit`) as `U` (Undefined)
+//
+// And `otool -l` should show the LC_SEGMENT_64 __LINKEDIT segment +
+// LC_SYMTAB with nsyms > 0 + LC_DYSYMTAB with nextdefsym > 0.
+
+import "../../../tool/hexa_ld.hexa"
+
+fn main() {
+    let p = parse_macho_obj("/tmp/corpus_trivial.ours.o")
+    let out_path = "/tmp/p1_c4_symtab.exec"
+    let objs: [ParsedObj] = [p]
+    let rc = link_macho_arm64(objs, out_path, "_main", 0)
+    if rc != 0 { println("FAIL: link rc=" + to_string(rc)); exit(1) }
+
+    let n = exec_capture("xcrun nm " + out_path + " 2>&1")
+    let n_out = to_string(n[0])
+    println("=== nm ===")
+    println(n_out)
+
+    let mut ok = true
+    if n_out.find("T _main") < 0 {
+        println("FAIL: expected `T _main` (defined external text) in nm output")
+        ok = false
+    }
+    if n_out.find("U _hexa_set_args") < 0 {
+        println("FAIL: expected `U _hexa_set_args` (undefined extern) in nm")
+        ok = false
+    }
+    if n_out.find("U _hexa_exit") < 0 {
+        println("FAIL: expected `U _hexa_exit` (undefined extern) in nm")
+        ok = false
+    }
+
+    let l = exec_capture("xcrun otool -l " + out_path + " 2>&1 | grep -E '(LINKEDIT|nsyms|nextdefsym|nundefsym)'")
+    let l_out = to_string(l[0])
+    println("=== otool -l (__LINKEDIT + sym counts) ===")
+    println(l_out)
+
+    if l_out.find("__LINKEDIT") < 0 {
+        println("FAIL: __LINKEDIT segment not present")
+        ok = false
+    }
+
+    if !ok { exit(2) }
+
+    let sz = exec_capture("wc -c < " + out_path + " | tr -d ' '")
+    println("F-P1-EXEC-SYMTAB PASS — symtab populated, nm sees _main T + 2 U externs")
+    println("  " + out_path + ": " + to_string(sz[0]).trim() + " bytes")
+    exit(0)
+}

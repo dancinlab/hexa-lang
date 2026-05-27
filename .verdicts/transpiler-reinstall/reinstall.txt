@@ -1,0 +1,128 @@
+================================================================================
+VERDICT — transpiler-reinstall (stale Mac transpiler regen, V4 bessel _Generic blocker)
+================================================================================
+date (UTC)  : 2026-05-25T19:33:17Z
+worktree    : /tmp/wt-transpiler  (branch transpiler-reinstall-head-2026-05-26)
+base        : origin/main @ 199901a04d533d93e1a9dfca1267492a1c19ad58
+build host  : mini (arm64 macOS 26.5, /usr/bin/clang)  — pool-route blocks local heavy clang
+artifact    : self/native/hexa_v2 + build/hexa_v2  (BOTH git-ignored build-output, NOT tracked)
+
+--------------------------------------------------------------------------------
+ROOT CAUSE (confirmed from HEAD source vs stale binary)
+--------------------------------------------------------------------------------
+HEAD self/codegen.hexa::cg_math_sym maps (VERIFY-KIT V4, 2026-05-26):
+  bessel_j0 -> hexa_math_j0   (line 347)   bessel_j1 -> hexa_math_j1 (line 348)
+  gamma     -> hexa_math_tgamma (343)      tgamma -> hexa_math_tgamma (344)
+These route through hexa runtime wrappers, AVOIDING the libm j0/j1 _Generic
+collision (hexa_call1(bessel_j0,x) vs bare libm j0).
+
+The BUILT Mac transpiler predates this fix. tool/verify_cli.hexa HEAD has full
+V4 special-fn support (gamma/erf/bessel via --tol, _recompute_float @2707,
+_gamma @1179 etc.), but the stale transpiler omits the codegen mapping -> the
+rebuilt bin/hexa-verify cannot recompute gamma/bessel (returns 🟠 INSUFFICIENT
+and does not even parse --tol for those exprs).
+
+--------------------------------------------------------------------------------
+BEFORE (stale transpiler fingerprints + broken verify)
+--------------------------------------------------------------------------------
+self/native/hexa_v2 : May 25 15:34:22 2026  1923000 bytes
+  sha256 = 875e2ad52777aa45948b59f452ff211832a86de18bd33cd03ab20d93103e8d77
+  hexa_math_j0 strings: 0   hexa_math_tgamma strings: 0
+build/hexa_v2       : May 25 18:11:06 2026  1922984 bytes
+  sha256 = df73659295879a34351a9c3f4dedf5e00335605ad2aaccf7c9d850de956cc6a2
+  hexa_math_j0 strings: 0   hexa_math_tgamma strings: 0
+
+bin/hexa-verify rebuilt with stale build/hexa_v2:
+  $ bin/hexa-verify --expr gamma 5 24 --tol 1e-6
+    error: to_int: trailing garbage in "--tol"
+  $ bin/hexa-verify --expr bessel_j0 0 1 --tol 1e-6
+    error: to_int: trailing garbage in "--tol"
+  $ bin/hexa-verify --expr sigma 6 12        (control, pre-V4 path)
+    tier = 🔵 SUPPORTED-FORMAL   (OK — unaffected)
+
+--------------------------------------------------------------------------------
+PLAN
+--------------------------------------------------------------------------------
+1. Backup self/native/hexa_v2 + build/hexa_v2 to /tmp/transpiler-bak-<ts>/.
+2. Fresh /tmp clone off origin/main on mini; regen transpiler (arm64 clang).
+3. scp back; atomic mv -f swap into both paths.
+4. Rebuild bin/hexa-verify end-to-end (bessel collision must be gone).
+5. Verify: gamma 5 24 --tol 1e-6 ->🟢 · bessel_j0 0 1 --tol 1e-6 ->🟢 · sigma 6 12 ->🔵.
+6. AFTER section appended below.
+
+--------------------------------------------------------------------------------
+REGEN (mini, arm64 macOS clang 21.0.0)
+--------------------------------------------------------------------------------
+fresh clone : /tmp/wt-transpiler-mini-20260525T193704Z (mini)
+clone HEAD  : c2154a15a0d159e496579bb2f3e51415d3c00b5f  (origin/main, advanced past 199901a0)
+recipe      : clang -O2 -c self/runtime.c -o self/runtime.o
+              clang -O2 -I <root> -I <root>/self <root>/self/native/hexa_cc.c \
+                    <root>/self/runtime.o -o <root>/build/hexa_v2
+            : (= self/main.hexa::cmd_cc macOS branch; transpiler SSOT = self/native/hexa_cc.c)
+            : built to BOTH build/hexa_v2 AND self/native/hexa_v2 (driver resolves
+              self/native/hexa_v2 first per installed driver's error-listed search order)
+built sha   : 114768bf6e9c187014a8b711a203b51512248114d5e63e777000fab8bbccba15
+            : 1923096 bytes · Mach-O arm64 · V4 strings count=2 (hexa_math_j0, hexa_math_tgamma)
+            : V4 mappings: hexa_math_erf erfc j0 j1 tgamma (all 5 present)
+
+--------------------------------------------------------------------------------
+AFTER — bin/hexa-verify built end-to-end on mini (HEAD V4 source + V4 transpiler)
+--------------------------------------------------------------------------------
+module_loader build: [build_hexa_module_loader] OK -> build/hexa_module_loader  (self-test PASS)
+verify build       : OK: built bin/hexa-verify  (smoke no-arg banner OK, rc=0)
+                     NO bessel/_Generic collision, NO undefined-symbol link error.
+
+  $ bin/hexa-verify --expr gamma 5 24 --tol 1e-6
+    verify --expr gamma(5.0)=24.0
+      calc   = 24.0  ≈ expected 24.0  (|Δ|=0.0 ≤ ε=1e-9)
+      tier   = 🟢 SUPPORTED-NUMERICAL  (hexa-native libm-class recompute, TECS-L n6-rep Tier2)
+  $ bin/hexa-verify --expr bessel_j0 0 1 --tol 1e-6
+    verify --expr bessel_j0(0.0)=1.0
+      calc   = 1.0  ≈ expected 1.0  (|Δ|=0.0 ≤ ε=1e-9)
+      tier   = 🟢 SUPPORTED-NUMERICAL  (hexa-native libm-class recompute, TECS-L n6-rep Tier2)
+  $ bin/hexa-verify --expr sigma 6 12
+    verify --expr sigma(6)=12
+      calc   = 12  == expected 12
+      tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+--------------------------------------------------------------------------------
+ATOMIC SWAP (local Mac operative location)
+--------------------------------------------------------------------------------
+target  : /Users/ghost/core/hexa-lang/{self/native,build}/hexa_v2
+          (the binaries the local `hexa` driver resolves — ~/.hx/bin/hexa ->
+           /Users/ghost/core/hexa-lang/hexa, install_dir = repo root)
+method  : cp staged binary adjacent (same FS) + mv -f  (atomic rename)
+before  : self/native/hexa_v2 = 875e2ad5...  build/hexa_v2 = df736592...  (V4 count=0)
+after   : self/native/hexa_v2 = 114768bf...  build/hexa_v2 = 114768bf...  (V4 count=2)
+
+backup  : /tmp/transpiler-bak-20260525T193344Z/
+            hexa_v2.self_native (875e2ad5...)  hexa_v2.build (df736592...)
+
+--------------------------------------------------------------------------------
+AFTER — bin/hexa-verify built LOCALLY (worktree V4 source + swapped V4 transpiler)
+--------------------------------------------------------------------------------
+worktree : /tmp/wt-transpiler  (origin/main @ 199901a0)
+build    : module_loader OK · OK: built bin/hexa-verify (no collision)
+  $ bin/hexa-verify --expr gamma 5 24 --tol 1e-6
+      calc = 24.0  ≈ 24.0  (|Δ|=0.0 ≤ ε=1e-9)   tier = 🟢 SUPPORTED-NUMERICAL
+  $ bin/hexa-verify --expr bessel_j0 0 1 --tol 1e-6
+      calc = 1.0   ≈ 1.0   (|Δ|=0.0 ≤ ε=1e-9)   tier = 🟢 SUPPORTED-NUMERICAL
+  $ bin/hexa-verify --expr sigma 6 12
+      calc = 12  == 12     tier = 🔵 SUPPORTED-FORMAL  (idempotent atlas skip)
+
+--------------------------------------------------------------------------------
+DISPOSITION
+--------------------------------------------------------------------------------
+git-tracked : NO — self/native/hexa_v2 + build/hexa_v2 are BOTH gitignored
+              build-output (`git check-ignore` confirms). => OPS SWAP, not a code
+              PR. Only this verdict + VERIFY-KIT.log.md note are committed (the
+              .verdicts/ tree IS tracked).
+rollback    : NOT needed — verify passed both on mini and locally. To revert:
+              cp /tmp/transpiler-bak-20260525T193344Z/hexa_v2.self_native \
+                 /Users/ghost/core/hexa-lang/self/native/hexa_v2  (+ .build -> build/).
+V8/V9 bootstrap-free : the swapped transpiler compiles HEAD self/main.hexa fully
+              (9827-line C) and all V4 special fns with NO bootstrap loop — a single
+              clang of self/native/hexa_cc.c against a fresh-clone is self-sufficient
+              (no chicken-egg interp dependency). Future regens just re-run that clang.
+error status: CLEAN (no 500, no throttle).
+

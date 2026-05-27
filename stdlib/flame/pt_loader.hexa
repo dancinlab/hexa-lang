@@ -1,0 +1,191 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/flame/pt_loader.hexa — flame Path-A cross-substrate ckpt loader
+//
+// archive/patches/pt-ckpt-cross-substrate-residual-readout.md Clause A.
+// anima §168-PHI-THRESHOLD-POSTHOC consumer (downstream-filed, upstream-
+// resolved per @D g7 inbox-pipeline + @D g_stdlib_ownership).
+//
+// ── Honest scope (g3) ──────────────────────────────────────────────────
+// This module does NOT parse PyTorch `.pt` pickle on the hexa side.
+// pickle is a Python-specific serialization with opcodes, references,
+// and per-class reduce hooks; writing a hexa parser would be ~2k LoC of
+// pure plumbing for zero substrate value and would break the @D g5
+// hexa-native-only contract by replicating CPython's protocol surface.
+//
+// Instead we adopt a **2-phase cross-substrate handoff**, with both
+// halves explicit and falsifiable:
+//
+//   Phase 1 (Python lane, owned by anima):
+//     A one-shot helper script `tools/pt_to_flat_bf16.py` (anima-side)
+//     reads a `.pt` state_dict via `torch.load(map_location="cpu")`,
+//     selects mappable backbone keys for the d=768·12L·V=256·nh=12·nkv=4
+//     config (tok_emb, gF, per-layer block params in flame layout
+//     order), flattens to BF16 little-endian, and emits ONE flat sidecar
+//     `<name>.flame.bf16` of exactly `m_total(d,nh,nkv,h,V,n_layer)`
+//     u16 elements. A sibling `<name>.flame.json` manifest records:
+//       { "config": {d, nh, nkv, h, V, n_layer},
+//         "n_elem": <int>, "dtype": "bf16-le",
+//         "key_order": [...],            ← reproducible flame layout
+//         "skipped_keys": [...],         ← MoE / PureFieldFFN / head_g
+//         "skip_reasons": {<key>: <reason>, ...} }
+//
+//   Phase 2 (hexa lane, this file):
+//     `flame_load_flat_bf16_state_dict(path, T, d, nh, nkv, h, V, n_layer)`
+//     opens the flat sidecar via the existing RFC 025/031 mmap path
+//     (`safetensors_mmap_open` works on any flat file — header_len
+//     bypass with `byte_off=0` is the supported invariant), expands
+//     `n_elem` BF16 → F32 into a flame `farr` sized exactly
+//     `m_total(...)` (the Path-A device-resident M pack), and returns
+//     the handle. Diagnostics live in `flame_pt_load_diag()`.
+//
+// Why this is honest (g3 over-claim 0):
+//   - We do NOT claim to import arbitrary `.pt` files.
+//   - We DO provide a deterministic, byte-stable contract: given a
+//     manifest + flat sidecar produced by Phase 1, Phase 2 returns the
+//     exact same farr bytes on every host (modulo BF16→F32 widening
+//     which is a fixed bit-shift, no rounding).
+//   - MoE / PureFieldFFN / dual head_g are surfaced as `skipped_keys`
+//     in the manifest, NOT silently dropped — matching the patch's
+//     "honest non-blocker" clause.
+//
+// ── Contract for anima Phase 1 script (out of this file, but pinned) ──
+// flame layout order (canonical, must match decoder_lib.hexa offsets):
+//   1. tok_emb [V·d]
+//   2. gF      [d]
+//   3. for l in 0..n_layer-1:
+//        block[l] [bp_total(d, nh, nkv, h)]
+//          internal order = decoder_block_lib bp_off_* sequence
+//          (q_w, k_w, v_w, o_w, gate_w, up_w, down_w, g1, g2, ...
+//          exact order is the SSOT of decoder_block_lib).
+//
+// ── Falsifiers (anima-side, when patch lands end-to-end) ──────────────
+//   F-PTLOAD-1: byte-equal sidecar → farr (mmap+BF16 widen is
+//               deterministic; this file's load is the only hexa-side
+//               variable).
+//   F-PTLOAD-2: backbone forward reproduces Python lane logits within
+//               fp64 rounding (max|Δ| < 1e-3). Driven by anima harness
+//               using `nn_decoder_fwd` + this loader.
+//
+// Authority:
+//   - @D g5 hexa-native-only (no pickle parser → pure-hexa stays clean).
+//   - @D g6 citation-enforced (no formula here; pure I/O + cite anchor).
+//   - @D g7 inbox-patches-pipeline (this file IS the upstream landing).
+//   - @D g_stdlib_ownership (stdlib/flame owned by hexa-lang; anima
+//     consumes via Python sidecar emitter + this hexa reader).
+// ════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/decoder_lib"
+
+// Skip-reason error codes (returned via flame_pt_load_diag()).
+// Values are stable for downstream harness pattern-matching.
+pub fn flame_pt_skip_moe() -> int          { return 1 }
+pub fn flame_pt_skip_purefield_ffn() -> int { return 2 }
+pub fn flame_pt_skip_head_g() -> int        { return 3 }
+pub fn flame_pt_skip_unknown_key() -> int   { return 4 }
+
+// Result codes (from flame_load_flat_bf16_state_dict).
+pub fn flame_pt_ok() -> int             { return 0 }
+pub fn flame_pt_err_open() -> int       { return -1 }
+pub fn flame_pt_err_size_mismatch() -> int { return -2 }
+pub fn flame_pt_err_alloc() -> int      { return -3 }
+
+// ── Module-level diagnostic state (last load) ─────────────────────────
+// Single-shot mutable; reset on each load call. Kept module-static
+// to avoid struct-return at this stage of the patch (additive-only).
+// Downstream anima harness should call load → predict → read diag,
+// not interleave two loads.
+let mut g_pt_last_rc        = 0
+let mut g_pt_last_n_elem    = 0
+let mut g_pt_last_byte_off  = 0
+let mut g_pt_last_handle    = -1
+let mut g_pt_last_path      = ""
+
+pub fn flame_pt_load_diag_rc() -> int      { return g_pt_last_rc }
+pub fn flame_pt_load_diag_n_elem() -> int  { return g_pt_last_n_elem }
+pub fn flame_pt_load_diag_path() -> string { return g_pt_last_path }
+
+// ── Phase-2 loader ─────────────────────────────────────────────────────
+// path: absolute path to the flat BF16 sidecar (`<name>.flame.bf16`)
+//       produced by anima's Phase-1 script. The sidecar is a raw stream
+//       of `m_total(d, nh, nkv, h, V, n_layer)` little-endian u16
+//       (BF16) elements with NO header bytes (byte_off = 0).
+// returns: a flame `farr` handle of size m_total filled with F32
+//          expansions of each BF16 element, OR a negative error code
+//          (one of flame_pt_err_*). Caller MUST check `rc < 0` and
+//          consult `flame_pt_load_diag_rc()` before use.
+//
+// Implementation note: we reuse the existing `safetensors_mmap_*`
+// primitives because they ALREADY do mmap+BF16→F32 widening on
+// arbitrary byte ranges (RFC 025 + RFC 031, runtime.c:3940-...). The
+// "safetensors" name is a historical artifact; the primitive is a
+// flat-file reader. Reusing it preserves @D g5 (no new runtime C
+// surface) and @D g6 (any future @cite on this path resolves to RFC
+// 031 already in the atlas).
+pub fn flame_load_flat_bf16_state_dict(path: string,
+                                       T: int, d: int, nh: int, nkv: int,
+                                       h: int, V: int, n_layer: int) -> int {
+    g_pt_last_path = path
+    g_pt_last_handle = -1
+    let need = m_total(d, nh, nkv, h, V, n_layer)
+    g_pt_last_n_elem = need
+
+    let mmap_h = safetensors_mmap_open(path)
+    if mmap_h < 0 {
+        g_pt_last_rc = flame_pt_err_open()
+        return flame_pt_err_open()
+    }
+    g_pt_last_handle = mmap_h
+
+    // The flat sidecar has no safetensors JSON header — bytes start at
+    // offset 0. Each BF16 element is 2 bytes; total expected size is
+    // `need * 2`. We do NOT trust the file beyond `need` u16 elements
+    // (excess silently ignored — same contract as RFC 031).
+    let sz = safetensors_mmap_size(mmap_h)
+    if sz < need * 2 {
+        g_pt_last_rc = flame_pt_err_size_mismatch()
+        safetensors_mmap_close(mmap_h)
+        return flame_pt_err_size_mismatch()
+    }
+    g_pt_last_byte_off = 0
+
+    // BF16 → F32 widening into a fresh farr of length `need`.
+    let M = safetensors_mmap_read_bf16_to_f32_farr(mmap_h, 0, need)
+    safetensors_mmap_close(mmap_h)
+    if M < 0 {
+        g_pt_last_rc = flame_pt_err_alloc()
+        return flame_pt_err_alloc()
+    }
+
+    g_pt_last_rc = flame_pt_ok()
+    return M
+}
+
+// ── Manifest hint emitter ─────────────────────────────────────────────
+// Returns the expected flat sidecar size in bytes for a given config.
+// anima Phase-1 script SHOULD call out to a flame binary (or replicate
+// this arithmetic) when writing `<name>.flame.json::n_elem` so the
+// Phase-2 size-mismatch check is the contract gate.
+pub fn flame_pt_expected_sidecar_bytes(d: int, nh: int, nkv: int,
+                                       h: int, V: int, n_layer: int) -> int {
+    let n = m_total(d, nh, nkv, h, V, n_layer)
+    return n * 2
+}
+
+// ── Deterministic shape check (Phase-2 self-test) ─────────────────────
+// Allocates a dummy farr at `m_total` and verifies non-negative handle
+// + farr_len matches `m_total`. Zero file I/O; pure shape/alloc oracle.
+// Returns 0 on success, negative on any deviation. The single unit
+// test required by the patch's "completion definition" calls this.
+pub fn flame_pt_loader_selftest(d: int, nh: int, nkv: int,
+                                h: int, V: int, n_layer: int) -> int {
+    let need = m_total(d, nh, nkv, h, V, n_layer)
+    if need <= 0 { return -10 }
+    let bytes = flame_pt_expected_sidecar_bytes(d, nh, nkv, h, V, n_layer)
+    if bytes != need * 2 { return -11 }
+    let probe = farr_zeros(need)
+    if probe < 0 { return -12 }
+    let _ = farr_free(probe)
+    return 0
+}

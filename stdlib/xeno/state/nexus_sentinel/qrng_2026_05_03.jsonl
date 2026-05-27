@@ -1,0 +1,6 @@
+{"ts":"2026-05-03T05:06:53Z","sentinel":"__NEXUS_QRNG_CURBY__","verdict":"PASS","bytes_count":64,"path":"modules/qrng/curby.hexa","note":"fixture-mock; live deferred (Twine/IPLD)"}
+{"ts":"2026-05-03T05:06:53Z","sentinel":"__NEXUS_QRNG_ANU__","verdict":"PASS","bytes_count":1024,"path":"modules/qrng/anu.hexa","note":"mock-default; live via NEXUS_QRNG_LIVE=1"}
+{"ts":"2026-05-03T05:06:53Z","sentinel":"__NEXUS_QRNG_NIST_BEACON__","verdict":"PASS","bytes_count":64,"path":"modules/qrng/nist_beacon.hexa","note":"fixture-mock; live JSON parses but ECDSA verify deferred"}
+{"ts":"2026-05-03T05:06:53Z","sentinel":"__NEXUS_QRNG_HARDWARE_QRNG__","verdict":"PASS","bytes_count":0,"path":"modules/qrng/hardware_qrng.hexa","note":"mock-default; live blocked $5K device"}
+{"ts":"2026-05-03T05:06:53Z","sentinel":"__NEXUS_QRNG_MOCK_QRNG__","verdict":"PASS","bytes_count":1000000000,"path":"modules/qrng/mock_qrng.hexa","note":"deterministic LCG"}
+{"ts":"2026-05-03T05:06:53Z","sentinel":"__NEXUS_QRNG_AGGREGATE__","verdict":"PASS","sources":5,"chain":"curby->anu->nist_beacon->hardware_qrng->mock_qrng","tier_coverage":"3/4 (T0,T1,T3)","path":"core/qrng/qrng_main.hexa"}

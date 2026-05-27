@@ -1,0 +1,78 @@
+// test/ftl_n6_constants_smoke.hexa — smoke for symbolic/ftl_n6_constants.hexa
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Reference values reproduced from .shared/calc/ftl_n6_constants.py
+// (GROUP1_CONSTANTS verify_known + GROUP2 GR coefficients + grade_match):
+//   mp/me = 1836.15267343 vs 6*pi^5  → err 0.00188% → STRONG
+//   sin^2(theta_W) = 0.23122 vs 3/13 → err 0.195%   → APPROXIMATE
+//   Hubble H0 = 73.04 vs sigma*n+mu=73 → err 0.0548% → STRONG
+//   ISCO coefficient 6           → best n6 EXACT (n / sigma/phi, err 0)
+//   Schwarzschild coefficient 2  → best n6 EXACT (phi, err 0)
+//   Photon-sphere coefficient 3  → best n6 EXACT (sigma/tau, err 0)
+//   grade_match ladder: 0→EXACT, 0.05→STRONG, 1.0→APPROXIMATE,
+//                       3.0→WEAK, 9.0→NO MATCH
+//
+// Run:  hexa run test/ftl_n6_constants_smoke.hexa
+// Sentinel: __FTL_N6_SMOKE__ PASS|FAIL on the final line.
+
+import "compiler/atlas/symbolic/ftl_n6_constants.hexa"
+
+let mut PASS = 0
+let mut FAIL = 0
+
+fn check(label: string, cond: bool) {
+    if cond {
+        PASS = PASS + 1
+        println("[PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("[FAIL] " + label)
+    }
+}
+
+// ── grade ladder thresholds ─────────────────────────────────────────────
+
+check("grade_match(0.0) == EXACT",        grade_match(0.0) == "EXACT")
+check("grade_match(0.05) == STRONG",      grade_match(0.05) == "STRONG")
+check("grade_match(1.0) == APPROXIMATE",  grade_match(1.0) == "APPROXIMATE")
+check("grade_match(3.0) == WEAK",         grade_match(3.0) == "WEAK")
+check("grade_match(9.0) == NO MATCH",     grade_match(9.0) == "NO MATCH")
+
+// ── GROUP1 known matches (verify_known) ─────────────────────────────────
+
+let pi = 3.141592653589793
+let mp_me = n6_verify_known(1836.15267343, 6.0 * pi * pi * pi * pi * pi)
+check("mp/me vs 6*pi^5 grade == STRONG", mp_me.grade == "STRONG")
+
+let sw = n6_verify_known(0.23122, 3.0 / 13.0)
+check("sin^2(theta_W) vs 3/13 grade == APPROXIMATE", sw.grade == "APPROXIMATE")
+
+let h0 = n6_verify_known(73.04, 73.0)
+check("Hubble H0 vs sigma*n+mu=73 grade == STRONG", h0.grade == "STRONG")
+
+// ── GROUP2 GR coefficients — exact divisors of 6 ────────────────────────
+
+let isco = n6_find_best_match(6.0)
+check("ISCO coeff 6 → EXACT", isco.grade == "EXACT")
+check("ISCO coeff 6 → error_pct == 0", isco.error_pct == 0.0)
+
+let schw = n6_find_best_match(2.0)
+check("Schwarzschild coeff 2 → EXACT", schw.grade == "EXACT")
+
+let phsp = n6_find_best_match(3.0)
+check("Photon-sphere coeff 3 → EXACT", phsp.grade == "EXACT")
+
+let n6t = n6_expr_table()
+check("n6_expr_table() non-empty (>= 50 exprs)", len(n6t) >= 50)
+
+println("")
+println("═══════════════════════════════════════════════════════════")
+println("  ftl_n6_constants smoke: PASS=" + str(PASS) + " FAIL=" + str(FAIL))
+println("═══════════════════════════════════════════════════════════")
+if FAIL > 0 {
+    println("__FTL_N6_SMOKE__ FAIL")
+} else {
+    println("__FTL_N6_SMOKE__ PASS")
+}

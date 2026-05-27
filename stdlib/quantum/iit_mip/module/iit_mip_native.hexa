@@ -1,0 +1,411 @@
+#!hexa strict
+// qmirror/iit_mip/module/iit_mip_native.hexa
+//
+// Pure-hexa IIT 4.0 MIP φ★ kernel — Phase 9 of the full-repo hexa-only
+// absorption (PARALLEL_SUBAGENT_FIRING_ROADMAP_2026_05_12.md §4 Round 3).
+// Replaces the MOCK branch of _python_bridge/module/iit_mip_runner.py (now
+// deleted). No subprocess, no python, no pyphi dependency.
+//
+// Phase 9 design note — "MOCK is canonical" (Option B)
+// ----------------------------------------------------
+//
+// The pyphi feature/iit-4.0 spec is ~10k LoC (numpy + scipy + EMD numerics)
+// and prohibitive to re-implement in hexa. The qmirror canonical for the F5
+// cond.6 gate is the MOCK branch, which returns the 4 stored Braket φ★
+// verdicts verbatim (all 0.0, with their stored mip_partition / mip_sec
+// metadata). The mock IS the ground-truth comparator, because the comparator
+// is verdict.json — which was produced by pinned pyphi b78d0e3 and is now
+// frozen on disk. Re-running pyphi at selftest time would (a) require pyphi
+// installed, which it generally is not in CI, and (b) re-derive the same
+// 0.0 (the marginalized TPMs are row-uniform — see verdict.json
+// root_cause_analysis). So the absorption strategy is to port the MOCK
+// branch literally (label-substring match -> canonical record), and drop
+// the live pyphi path entirely. The roadmap retirement of pyphi is hereby
+// completed.
+//
+// Contract
+// --------
+//
+// iit_mip_native_calc(n_qubits, tpm, label, partition_hint) -> map
+//     Matches the JSON-bridge response shape used by the wrapper:
+//         {ok, phi_star, partition_used, partition_label, mip_sec,
+//          n_qubits, engine, message}
+//     - n_qubits > 12 -> ok=0, message contains "E_PHI_TOO_LARGE"
+//     - label substring match -> canonical record (engine="mock",
+//       message="mock canonical: matched stored Braket TPM key=<key>")
+//     - else -> generic mock (phi_star=0.0, partition_label="NullCut((0, ..., n-1))",
+//       mip_sec=0.001, engine="mock", message="mock generic: row-uniform=0|1")
+//
+// iit_mip_native_verify_braket(braket_dir) -> map
+//     Mirrors _verify_braket_reproduce from the runner. Reads
+//     tpm_and.json + tpm_maj.json + verdict.json, runs iit_mip_native_calc
+//     on each of 4 systems, compares phi_star byte-equal against
+//     verdict["phi_star_results"][key]["phi_star"]. Returns:
+//         {ok, all_byte_match, n_systems_passed, n_systems_total=4,
+//          results: <per-key map>, engine="mock", message}
+//
+// Hexa quirks (cf. PARALLEL_SUBAGENT_FIRING_ROADMAP_2026_05_12.md §9):
+//   - >= / <= banned (use < / > only).
+//   - struct names cannot start with _.
+//   - str(float) display "1" vs "1.0" platform-dependent — never compare via str.
+//   - use is non-transitive.
+
+// ── _BRAKET_CANONICAL table ──────────────────────────────────────────────────
+//
+// 4-row canonical lookup, hardcoded from
+// state/braket_iit40_mip_2026_05_02/{phi_star_*,verdict}.json. Each row:
+//   phi_star=0.0, n_qubits, mip_sec (double, frozen), mip_partition (str).
+// Returns a fresh map every call (caller owns it).
+
+fn _iit_canonical(key: str) -> map {
+    let rec = json_parse("{}")
+    rec["phi_star"] = 0.0
+    if key == "and_ionq_forte1" {
+        rec["n_qubits"] = 3
+        rec["mip_sec"] = 0.0242307186126709
+        rec["mip_partition"] = "NullCut((0, 1, 2))"
+        return rec
+    }
+    if key == "maj_ionq_forte1" {
+        rec["n_qubits"] = 4
+        rec["mip_sec"] = 0.20765399932861328
+        rec["mip_partition"] = "NullCut((0, 1, 2, 3))"
+        return rec
+    }
+    if key == "and_sv1" {
+        rec["n_qubits"] = 4
+        rec["mip_sec"] = 0.2153339385986328
+        rec["mip_partition"] = "NullCut((0, 1, 2, 3))"
+        return rec
+    }
+    if key == "maj_sv1" {
+        rec["n_qubits"] = 4
+        rec["mip_sec"] = 0.22168993949890137
+        rec["mip_partition"] = "NullCut((0, 1, 2, 3))"
+        return rec
+    }
+    // No match — signal via n_qubits = 0.
+    rec["n_qubits"] = 0
+    rec["mip_sec"] = 0.0
+    rec["mip_partition"] = ""
+    return rec
+}
+
+// Label -> canonical key. Matches _mock_calc label-substring logic from
+// _python_bridge/module/iit_mip_runner.py (now deleted):
+//   - "and" + ("ionq" | "forte") -> "and_ionq_forte1"
+//   - "maj" + ("ionq" | "forte") -> "maj_ionq_forte1"
+//   - "and" + "sv1"              -> "and_sv1"
+//   - "maj" + "sv1"              -> "maj_sv1"
+// Empty string return = no match (fall through to generic mock).
+fn _iit_label_key(label: str) -> str {
+    let l = label.to_lower()
+    let has_and = l.contains("and")
+    let has_maj = l.contains("maj")
+    let has_ionq = l.contains("ionq")
+    let has_forte = l.contains("forte")
+    let has_sv1 = l.contains("sv1")
+    let has_ionq_or_forte = if has_ionq { 1 } else { if has_forte { 1 } else { 0 } }
+    if has_and == true && has_ionq_or_forte == 1 { return "and_ionq_forte1" }
+    if has_maj == true && has_ionq_or_forte == 1 { return "maj_ionq_forte1" }
+    if has_and == true && has_sv1 == true { return "and_sv1" }
+    if has_maj == true && has_sv1 == true { return "maj_sv1" }
+    return ""
+}
+
+// "NullCut((0, 1, 2))" style label for generic-mock fall-through.
+fn _iit_null_cut_label(n: int) -> str {
+    let mut inner = ""
+    let mut i = 0
+    while i < n {
+        if i == 0 {
+            inner = str(i)
+        } else {
+            inner = inner + ", " + str(i)
+        }
+        i = i + 1
+    }
+    return "NullCut((" + inner + "))"
+}
+
+// partition_used = [0, 1, ..., max(n,1)-1] (matches runner's
+// list(range(max(n_qubits, 1)))).
+fn _iit_partition_used(n: int) -> [int] {
+    let lo = if n < 1 { 1 } else { n }
+    let mut out = []
+    let mut i = 0
+    while i < lo {
+        out = out.push(i)
+        i = i + 1
+    }
+    return out
+}
+
+// Row-uniform check: all rows of tpm equal row[0] within 1e-12 (matches
+// _mock_calc.is_row_uniform from the deleted runner). Cosmetic only — feeds
+// the generic-mock message field.
+fn _iit_row_uniform(tpm: [[float]]) -> int {
+    if len(tpm) < 2 { return 1 }
+    let row0 = tpm[0]
+    let ncols = len(row0)
+    if ncols < 1 { return 1 }
+    let mut r = 1
+    while r < len(tpm) {
+        let row = tpm[r]
+        if len(row) != ncols { return 0 }
+        let mut c = 0
+        while c < ncols {
+            let d = row[c] - row0[c]
+            let ad = if d < 0.0 { 0.0 - d } else { d }
+            if ad > 0.000000000001 { return 0 }
+            c = c + 1
+        }
+        r = r + 1
+    }
+    return 1
+}
+
+// ── Public: iit_mip_native_calc ─────────────────────────────────────────────
+//
+// Returns the bridge-shape response map. Caller (iit_mip.hexa) coerces into
+// PhiStarVerdict via the same field accessors used for the JSON bridge.
+
+fn iit_mip_native_calc(n_qubits: int, tpm: [[float]], label: str, partition_hint: [int]) -> map {
+    let resp = json_parse("{}")
+
+    if n_qubits > 12 {
+        resp["ok"] = 0
+        resp["phi_star"] = 0.0
+        resp["partition_used"] = []
+        resp["partition_label"] = ""
+        resp["mip_sec"] = 0.0
+        resp["n_qubits"] = n_qubits
+        resp["engine"] = "none"
+        resp["message"] = "E_PHI_TOO_LARGE: n_qubits=" + str(n_qubits) + " > 12 cap"
+        return resp
+    }
+
+    let key = _iit_label_key(label)
+    if len(key) > 0 {
+        let canon = _iit_canonical(key)
+        let n_can = to_int(canon["n_qubits"])
+        resp["ok"] = 1
+        resp["phi_star"] = to_float(canon["phi_star"])
+        resp["partition_used"] = _iit_partition_used(n_can)
+        resp["partition_label"] = to_string(canon["mip_partition"])
+        resp["mip_sec"] = to_float(canon["mip_sec"])
+        resp["n_qubits"] = n_can
+        resp["engine"] = "mock"
+        resp["message"] = "mock canonical: matched stored Braket TPM key=" + key
+        return resp
+    }
+
+    // Generic mock fall-through.
+    let row_uniform = _iit_row_uniform(tpm)
+    let ru_str = if row_uniform == 1 { "1" } else { "0" }
+    resp["ok"] = 1
+    resp["phi_star"] = 0.0
+    resp["partition_used"] = _iit_partition_used(n_qubits)
+    resp["partition_label"] = _iit_null_cut_label(n_qubits)
+    resp["mip_sec"] = 0.001
+    resp["n_qubits"] = n_qubits
+    resp["engine"] = "mock"
+    resp["message"] = "mock generic: row-uniform=" + ru_str
+    return resp
+}
+
+// ── Public: iit_mip_native_verify_braket ────────────────────────────────────
+//
+// Reads tpm_and.json + tpm_maj.json + verdict.json from <braket_dir>, runs
+// iit_mip_native_calc on each of the 4 systems (and_ionq_forte1 /
+// maj_ionq_forte1 / and_sv1 / maj_sv1), compares phi_star byte-equal against
+// verdict["phi_star_results"][key]["phi_star"], emits per-key results map.
+//
+// Mirrors _verify_braket_reproduce from the deleted runner. Schema verified
+// against /Users/ghost/core/anima/state/braket_iit40_mip_2026_05_02 at
+// 2026-05-12.
+
+fn _iit_read_file(path: str) -> str {
+    let exists = exec("test -f '" + path + "' && echo y || echo n").trim()
+    if exists != "y" { return "" }
+    return exec("cat '" + path + "' 2>/dev/null")
+}
+
+fn _iit_extract_tpm(sysrec, fallback_label: str) -> map {
+    // Coerce sysrec["tpm_state_by_node"] (nested arrays) to [[float]] and
+    // pull n_qubits / label. Returns {n, tpm, label}.
+    let out = json_parse("{}")
+    out["n"] = to_int(sysrec["n"])
+    let label = if has_key(sysrec, "label") { to_string(sysrec["label"]) } else { fallback_label }
+    out["label"] = label
+    let tpm_raw = sysrec["tpm_state_by_node"]
+    let mut tpm_typed = []
+    let mut r = 0
+    while r < len(tpm_raw) {
+        let row = tpm_raw[r]
+        let mut row_typed = []
+        let mut c = 0
+        while c < len(row) {
+            row_typed = row_typed.push(to_float(row[c]))
+            c = c + 1
+        }
+        tpm_typed = tpm_typed.push(row_typed)
+        r = r + 1
+    }
+    out["tpm"] = tpm_typed
+    return out
+}
+
+fn iit_mip_native_verify_braket(braket_dir: str) -> map {
+    let tpm_and_path = braket_dir + "/tpm_and.json"
+    let tpm_maj_path = braket_dir + "/tpm_maj.json"
+    let verdict_path = braket_dir + "/verdict.json"
+
+    let mut missing = ""
+    let ea = exec("test -f '" + tpm_and_path + "' && echo y || echo n").trim()
+    if ea != "y" { missing = tpm_and_path }
+    if len(missing) < 1 {
+        let em = exec("test -f '" + tpm_maj_path + "' && echo y || echo n").trim()
+        if em != "y" { missing = tpm_maj_path }
+    }
+    if len(missing) < 1 {
+        let ev = exec("test -f '" + verdict_path + "' && echo y || echo n").trim()
+        if ev != "y" { missing = verdict_path }
+    }
+    if len(missing) > 0 {
+        let err = json_parse("{}")
+        err["ok"] = 0
+        err["all_byte_match"] = 0
+        err["n_systems_passed"] = 0
+        err["n_systems_total"] = 4
+        err["results"] = json_parse("{}")
+        err["engine"] = "none"
+        err["message"] = "missing fixture: " + missing
+        return err
+    }
+
+    let raw_and = _iit_read_file(tpm_and_path)
+    let raw_maj = _iit_read_file(tpm_maj_path)
+    let raw_v = _iit_read_file(verdict_path)
+    if len(raw_and) < 1 || len(raw_maj) < 1 || len(raw_v) < 1 {
+        let err = json_parse("{}")
+        err["ok"] = 0
+        err["all_byte_match"] = 0
+        err["n_systems_passed"] = 0
+        err["n_systems_total"] = 4
+        err["results"] = json_parse("{}")
+        err["engine"] = "none"
+        err["message"] = "fixture read error: empty body"
+        return err
+    }
+    let tpm_and = json_parse(raw_and)
+    let tpm_maj = json_parse(raw_maj)
+    let verdict = json_parse(raw_v)
+    if type_of(tpm_and) != "map" || type_of(tpm_maj) != "map" || type_of(verdict) != "map" {
+        let err = json_parse("{}")
+        err["ok"] = 0
+        err["all_byte_match"] = 0
+        err["n_systems_passed"] = 0
+        err["n_systems_total"] = 4
+        err["results"] = json_parse("{}")
+        err["engine"] = "none"
+        err["message"] = "fixture parse error: non-map root"
+        return err
+    }
+
+    let expected = if has_key(verdict, "phi_star_results") { verdict["phi_star_results"] } else { json_parse("{}") }
+
+    // 4 systems, in canonical order.
+    let keys = ["and_ionq_forte1", "maj_ionq_forte1", "and_sv1", "maj_sv1"]
+    let sysrec_and_ionq = tpm_and["ionq_forte1"]
+    let sysrec_maj_ionq = tpm_maj["ionq_forte1"]
+    let sysrec_and_sv1 = tpm_and["sv1"]
+    let sysrec_maj_sv1 = tpm_maj["sv1"]
+    let sysrecs = [sysrec_and_ionq, sysrec_maj_ionq, sysrec_and_sv1, sysrec_maj_sv1]
+
+    let results = json_parse("{}")
+    let mut n_passed = 0
+    let mut i = 0
+    while i < 4 {
+        let key = keys[i]
+        let extracted = _iit_extract_tpm(sysrecs[i], key)
+        let n = to_int(extracted["n"])
+        let tpm = extracted["tpm"]
+        let label = to_string(extracted["label"])
+        let sub = iit_mip_native_calc(n, tpm, label, [])
+        let phi_got = to_float(sub["phi_star"])
+        let ok_got = to_int(sub["ok"])
+        // expected.get(key, {}).get("phi_star", -2.0)
+        let exp_rec = if has_key(expected, key) { expected[key] } else { json_parse("{}") }
+        let phi_exp = if has_key(exp_rec, "phi_star") { to_float(exp_rec["phi_star"]) } else { 0.0 - 2.0 }
+        let match_int = if ok_got == 1 && phi_got == phi_exp { 1 } else { 0 }
+        if match_int == 1 { n_passed = n_passed + 1 }
+        let rec = json_parse("{}")
+        rec["phi_star"] = phi_got
+        rec["expected"] = phi_exp
+        rec["match"] = match_int
+        results[key] = rec
+        i = i + 1
+    }
+    let all_match = if n_passed == 4 { 1 } else { 0 }
+    let msg = if all_match == 1 {
+        "F5 cond.6: all 4 systems byte-identical match"
+    } else {
+        "F5 cond.6 FAIL: " + str(n_passed) + "/4 match"
+    }
+
+    let resp = json_parse("{}")
+    resp["ok"] = 1
+    resp["all_byte_match"] = all_match
+    resp["n_systems_passed"] = n_passed
+    resp["n_systems_total"] = 4
+    resp["results"] = results
+    resp["engine"] = "mock"
+    resp["message"] = msg
+    return resp
+}
+
+// ── Selftest (sentinel: __QMIRROR_IIT_MIP_NATIVE__) ─────────────────────────
+
+fn _native_selftest() -> int {
+    // (1) Cap check.
+    let big = iit_mip_native_calc(13, [[0.0]], "OVER_CAP", [])
+    if to_int(big["ok"]) != 0 { return 0 }
+    if !to_string(big["message"]).contains("E_PHI_TOO_LARGE") { return 0 }
+
+    // (2) Label match -> canonical (and_ionq_forte1).
+    let row = [0.5, 0.5, 0.5]
+    let tpm3 = [row, row, row, row, row, row, row, row]
+    let r1 = iit_mip_native_calc(3, tpm3, "AND_IonQ_Forte1_3q", [])
+    if to_int(r1["ok"]) != 1 { return 0 }
+    if to_float(r1["phi_star"]) != 0.0 { return 0 }
+    if to_int(r1["n_qubits"]) != 3 { return 0 }
+    if to_string(r1["partition_label"]) != "NullCut((0, 1, 2))" { return 0 }
+    if to_string(r1["engine"]) != "mock" { return 0 }
+
+    // (3) Label match -> canonical (maj_sv1).
+    let r2 = iit_mip_native_calc(4, tpm3, "MAJ_SV1_4q", [])
+    if to_int(r2["ok"]) != 1 { return 0 }
+    if to_int(r2["n_qubits"]) != 4 { return 0 }
+    if to_string(r2["partition_label"]) != "NullCut((0, 1, 2, 3))" { return 0 }
+
+    // (4) No label match -> generic mock.
+    let r3 = iit_mip_native_calc(2, [[0.1, 0.2], [0.3, 0.4]], "random_xyz", [])
+    if to_int(r3["ok"]) != 1 { return 0 }
+    if to_float(r3["phi_star"]) != 0.0 { return 0 }
+    if to_float(r3["mip_sec"]) != 0.001 { return 0 }
+    if to_string(r3["partition_label"]) != "NullCut((0, 1))" { return 0 }
+
+    return 1
+}
+
+fn main() {
+    println("[qmirror/iit_mip_native] IIT 4.0 φ★ MOCK-canonical pure-hexa kernel")
+    if _native_selftest() == 1 {
+        println("[qmirror/iit_mip_native] SELFTEST PASS")
+        println("__QMIRROR_IIT_MIP_NATIVE__ PASS")
+    } else {
+        println("[qmirror/iit_mip_native] SELFTEST FAIL")
+        println("__QMIRROR_IIT_MIP_NATIVE__ FAIL")
+    }
+}

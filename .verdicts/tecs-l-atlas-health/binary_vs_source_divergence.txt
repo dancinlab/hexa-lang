@@ -1,0 +1,19 @@
+ATLAS HEALTH AUDIT — binary-builtin vs source divergence (E2 finding)
+
+binary-builtin (installed hexa atlas lookup):
+  ATLAS_HASH = 
+  total nodes (audit) =   entries:        16101
+  verified-* prefix hits = 74
+  my E1 6 nodes findable = 0
+
+source embedded.gen.hexa (origin/main):
+  my E1 6 nodes present = 6
+
+FINDING: binary lookup ≠ source SSOT. E1 source-fold (axis E) does NOT propagate to
+`hexa atlas lookup` until the installed hexa binary is rebuilt to include the
+new embedded.gen.hexa. axis E E3 already documented register install-dir hazard;
+this E2 audit confirms the COMPLEMENTARY query-side staleness: binary lookup is
+frozen at last hexa binary build, source SSOT advances per fold.
+
+tier = 🟡 SUPPORTED-BY-CITATION (atlas audit reports merged/clean, drift=0 on its
+internal consistency, but binary≠source is an out-of-band divergence).

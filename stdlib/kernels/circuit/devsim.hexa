@@ -1,0 +1,245 @@
+#!hexa strict
+// stdlib/kernels/circuit/devsim.hexa — DEVSIM TCAD bridge (drift-diffusion device
+//                          physics) — hexa-native driver
+//
+// @version 0.1.0
+// @capabilities [locate, diode_iv]
+// @stability bridge GREEN (κ-41 — real 1-D Si PN-diode drift-diffusion
+//            I-V sweep runs end-to-end; selftest in devsim_test.hexa)
+// @since 2026-05-20
+//
+// CLEAN-ROOM PROVENANCE (demiurge/design.md D1 + D62 + D67)
+//   DEVSIM is Apache-2.0 (Juan E. Sanchez, 2013–;
+//   <https://github.com/devsim/devsim>, JOSS 10.21105/joss.03898). This
+//   module drives DEVSIM in script mode: it *generates* a DEVSIM Python
+//   script (the way `ngspice.hexa` generates a `.cir` netlist), writes
+//   it to a tempfile, spawns `python3 <script>`, and parses the printed
+//   `DEVSIM_IV <V> <I>` rows. No DEVSIM source is re-derived; only its
+//   published `simple_physics` / `model_create` helper API is called.
+//   Per D67 ("hexa-native 작성 .hexa") the SSOT is this `.hexa` file —
+//   the Python it emits is an ephemeral generated artifact, never a
+//   committed `.py` (mirrors ngspice.hexa's `.cir` discipline).
+//
+// ── Scope (κ-41 landed) ─────────────────────────────────────────────────
+//   devsim_locate()       — probe `python3 -c "import devsim"`; "" if absent
+//   devsim_diode_iv(...)  — REAL 1-D silicon PN-diode drift-diffusion I-V
+//                           sweep. This is the *bridge smoke*: it proves
+//                           hexa → DEVSIM → parsed measurement works
+//                           end-to-end against a genuine device-physics
+//                           solve (Poisson + electron/hole continuity).
+//
+//   OUT-OF-SCOPE (intentional — needs an external asset, NOT a stub):
+//     A Wolfspeed C3M0021120K-specific 2-D SiC-MOSFET mesh + datasheet
+//     IDS-VDS parity (Stage 4 absorbed=true) is deliberately absent —
+//     it requires the real Wolfspeed datasheet curves, which are an
+//     external asset the user must supply. Fabricating that parity
+//     would violate g3. devsim_diode_iv is the honest, fully-real
+//     deliverable for this κ; the SiC-MOSFET ramp arrives in the κ
+//     that has the datasheet.
+//
+// ── Public API ──────────────────────────────────────────────────────────
+//   pub struct DevsimRun {
+//     ok: int,                // 1 if the sweep ran + parsed
+//     device: str,            // device class label
+//     npts: int,              // I-V points returned
+//     iv_curve: [[float]],    // [[V_i, I_i], …]
+//     log: str                // captured stderr/stdout tail
+//   }
+//   pub fn devsim_locate() -> str
+//   pub fn devsim_diode_iv(vmax_mv: int, step_mv: int) -> DevsimRun
+//
+// Absorbs: DEVSIM (script-mode bridge — drift-diffusion device physics)
+// Used by: demiurge sscb domain (analyze + verify cells)
+// Sibling: wolfspeed (SPICE-side validation)
+
+// ─── typed surface ───────────────────────────────────────────────────────
+
+pub struct DevsimRun {
+    ok: int,
+    device: str,
+    npts: int,
+    iv_curve: [[float]],
+    log: str
+}
+
+// ─── tiny string helpers ─────────────────────────────────────────────────
+
+fn _shq(s: str) -> str {
+    let mut out = "'"
+    let mut i = 0
+    let n = len(s)
+    while i < n {
+        let ch = s.substring(i, i + 1)
+        if ch == "'" { out = out + "'\\''" } else { out = out + ch }
+        i = i + 1
+    }
+    out = out + "'"
+    return out
+}
+
+fn _split_ws(s: str) -> [str] {
+    let mut out: [str] = []
+    let mut cur = ""
+    let mut i = 0
+    let n = len(s)
+    while i < n {
+        let ch = s.substring(i, i + 1)
+        let is_sp = ch == " " || ch == "\t" || ch == "\r"
+        if is_sp {
+            if cur != "" { out = out.push(cur) }
+            cur = ""
+        } else {
+            cur = cur + ch
+        }
+        i = i + 1
+    }
+    if cur != "" { out = out.push(cur) }
+    return out
+}
+
+// ─── DEVSIM script generator ─────────────────────────────────────────────
+
+// Emit a DEVSIM Python script that builds a 1-D silicon PN-diode, solves
+// the equilibrium Poisson problem, then the coupled drift-diffusion
+// system, and sweeps the forward bias printing `DEVSIM_IV <V> <I>` rows.
+// Geometry: 10 µm device, junction at 5 µm, 1e18 cm⁻³ symmetric doping,
+// 300 K. This is the canonical DEVSIM diode flow (simple_physics helpers).
+fn _build_devsim_script(vmax_v: float, step_v: float) -> str {
+    let nl = "\n"
+    let mut s = "import devsim" + nl
+    s = s + "from devsim.python_packages.simple_physics import (" + nl
+    s = s + "    SetSiliconParameters, CreateSiliconPotentialOnly," + nl
+    s = s + "    CreateSiliconPotentialOnlyContact, CreateSiliconDriftDiffusion," + nl
+    s = s + "    CreateSiliconDriftDiffusionAtContact, GetContactBiasName)" + nl
+    s = s + "from devsim.python_packages.model_create import CreateNodeModel, CreateSolution" + nl
+    s = s + "dev = 'diode'" + nl
+    s = s + "reg = 'reg'" + nl
+    s = s + "devsim.create_1d_mesh(mesh='m')" + nl
+    s = s + "devsim.add_1d_mesh_line(mesh='m', pos=0,      ps=1e-7, tag='top')" + nl
+    s = s + "devsim.add_1d_mesh_line(mesh='m', pos=0.5e-5, ps=1e-9, tag='mid')" + nl
+    s = s + "devsim.add_1d_mesh_line(mesh='m', pos=1e-5,   ps=1e-7, tag='bot')" + nl
+    s = s + "devsim.add_1d_contact(mesh='m', name='top', tag='top', material='metal')" + nl
+    s = s + "devsim.add_1d_contact(mesh='m', name='bot', tag='bot', material='metal')" + nl
+    s = s + "devsim.add_1d_region(mesh='m', material='Silicon', region=reg, tag1='top', tag2='bot')" + nl
+    s = s + "devsim.finalize_mesh(mesh='m')" + nl
+    s = s + "devsim.create_device(mesh='m', device=dev)" + nl
+    s = s + "SetSiliconParameters(dev, reg, 300)" + nl
+    s = s + "devsim.set_parameter(device=dev, region=reg, name='taun', value=1e-8)" + nl
+    s = s + "devsim.set_parameter(device=dev, region=reg, name='taup', value=1e-8)" + nl
+    s = s + "CreateNodeModel(dev, reg, 'Acceptors', '1.0e18*step(0.5e-5-x)')" + nl
+    s = s + "CreateNodeModel(dev, reg, 'Donors',    '1.0e18*step(x-0.5e-5)')" + nl
+    s = s + "CreateNodeModel(dev, reg, 'NetDoping', 'Donors-Acceptors')" + nl
+    s = s + "CreateSiliconPotentialOnly(dev, reg)" + nl
+    s = s + "for c in ('top','bot'):" + nl
+    s = s + "    CreateSiliconPotentialOnlyContact(dev, reg, c)" + nl
+    s = s + "    devsim.set_parameter(device=dev, name=GetContactBiasName(c), value=0.0)" + nl
+    s = s + "devsim.solve(type='dc', absolute_error=1.0, relative_error=1e-10, maximum_iterations=30)" + nl
+    s = s + "CreateSolution(dev, reg, 'Electrons')" + nl
+    s = s + "CreateSolution(dev, reg, 'Holes')" + nl
+    s = s + "devsim.set_node_values(device=dev, region=reg, name='Electrons', init_from='IntrinsicElectrons')" + nl
+    s = s + "devsim.set_node_values(device=dev, region=reg, name='Holes', init_from='IntrinsicHoles')" + nl
+    s = s + "CreateSiliconDriftDiffusion(dev, reg)" + nl
+    s = s + "for c in ('top','bot'):" + nl
+    s = s + "    CreateSiliconDriftDiffusionAtContact(dev, reg, c)" + nl
+    s = s + "devsim.solve(type='dc', absolute_error=1e10, relative_error=1e-10, maximum_iterations=30)" + nl
+    s = s + "v = 0.0" + nl
+    s = s + "vmax = " + str(vmax_v) + nl
+    s = s + "dv = " + str(step_v) + nl
+    s = s + "while v < vmax + 1e-9:" + nl
+    s = s + "    devsim.set_parameter(device=dev, name=GetContactBiasName('top'), value=v)" + nl
+    s = s + "    devsim.solve(type='dc', absolute_error=1e10, relative_error=1e-10, maximum_iterations=40)" + nl
+    s = s + "    ec = devsim.get_contact_current(device=dev, contact='top', equation='ElectronContinuityEquation')" + nl
+    s = s + "    hc = devsim.get_contact_current(device=dev, contact='top', equation='HoleContinuityEquation')" + nl
+    s = s + "    print('DEVSIM_IV %.5f %.8e' % (v, ec + hc))" + nl
+    s = s + "    v += dv" + nl
+    return s
+}
+
+// ─── locate ──────────────────────────────────────────────────────────────
+
+// Probe for a usable DEVSIM. Returns the `python3` launch path if
+// `import devsim` succeeds, "" otherwise (honest gap — caller keeps
+// GATE_OPEN, never fabricates an I-V).
+pub fn devsim_locate() -> str {
+    let probe = to_string(exec("python3 -c 'import devsim' >/dev/null 2>&1 && command -v python3 || true")).trim()
+    if len(probe) > 0 { return probe }
+    return ""
+}
+
+// ─── diode I-V bridge ────────────────────────────────────────────────────
+
+// Run a real 1-D silicon PN-diode drift-diffusion forward-bias I-V sweep
+// through DEVSIM. vmax_mv / step_mv are in millivolts (ints — keeps the
+// CLI surface integer-clean). Returns a DevsimRun; ok=0 with an
+// explanatory log if DEVSIM is absent or the solve/parse fails — never
+// a fabricated curve (g3).
+pub fn devsim_diode_iv(vmax_mv: int, step_mv: int) -> DevsimRun {
+    let empty: [[float]] = []
+    let py = devsim_locate()
+    if py == "" {
+        return DevsimRun { ok: 0, device: "si_pn_diode_1d", npts: 0, iv_curve: empty,
+                           log: "devsim not importable (python3 -c 'import devsim' failed)" }
+    }
+    let vmax_v = (vmax_mv + 0.0) / 1000.0
+    let step_v = (step_mv + 0.0) / 1000.0
+    let script = _build_devsim_script(vmax_v, step_v)
+    let script_path = "/tmp/hexa_devsim_diode.py"
+    write_file(script_path, script)
+
+    let out = to_string(exec(_shq(py) + " " + _shq(script_path) + " 2>&1"))
+    let lines = out.split("\n")
+    let mut curve: [[float]] = []
+    let mut li = 0
+    while li < len(lines) {
+        let toks = _split_ws(lines[li])
+        if len(toks) == 3 {
+            if toks[0] == "DEVSIM_IV" {
+                let v = to_float(toks[1])
+                let i = to_float(toks[2])
+                curve = curve.push([v, i])
+            }
+        }
+        li = li + 1
+    }
+    let npts = len(curve)
+    if npts == 0 {
+        // Surface the tail of DEVSIM output so the failure is diagnosable.
+        let mut tail = ""
+        let total = len(lines)
+        let mut start = total - 8
+        if start < 0 { start = 0 }
+        let mut k = start
+        while k < total {
+            if tail == "" { tail = lines[k] } else { tail = tail + " | " + lines[k] }
+            k = k + 1
+        }
+        return DevsimRun { ok: 0, device: "si_pn_diode_1d", npts: 0, iv_curve: empty,
+                           log: "devsim ran but no DEVSIM_IV rows parsed; tail: " + tail }
+    }
+    return DevsimRun { ok: 1, device: "si_pn_diode_1d", npts: npts, iv_curve: curve,
+                       log: "ok" }
+}
+
+// ─── main (CLI smoke) ────────────────────────────────────────────────────
+
+fn main() {
+    let av = argv()
+    let mut vmax_mv = 600
+    let mut step_mv = 100
+    if len(av) >= 3 {
+        vmax_mv = to_int(av[1])
+        step_mv = to_int(av[2])
+    }
+    let run = devsim_diode_iv(vmax_mv, step_mv)
+    if run.ok == 0 {
+        println("DEVSIM_BRIDGE gap — " + run.log)
+        exit(3)
+    }
+    println("DEVSIM_BRIDGE ok device=" + run.device + " npts=" + str(run.npts))
+    let mut i = 0
+    while i < len(run.iv_curve) {
+        let row = run.iv_curve[i]
+        println("  V=" + str(row[0]) + " I=" + str(row[1]))
+        i = i + 1
+    }
+}

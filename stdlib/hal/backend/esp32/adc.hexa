@@ -1,0 +1,120 @@
+#!hexa strict
+// stdlib/hal/backend/esp32/adc.hexa — ESP32 ADC backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved. ★ analog
+//
+// Target:    ESP32 dual Xtensa LX6 @ 240 MHz.
+// Chip ref:  ESP32 Technical Reference Manual §31 SAR ADC Controller
+//            (2 SAR ADCs: ADC1 and ADC2; ADC2 shares pads with WiFi RF
+//            front-end so usable only when WiFi inactive).
+// Surface:   esp32_adc_{configure,read,close}(...)
+// Dispatch:  adc.hexa selects this via cfg-flag.
+//
+// MMIO layout:
+//
+//   SAR_ADC base = DR_REG_SARADC_BASE = 0x3FF48800
+//
+//   SAR_READ_CTRL_REG           0x000   ADC1 read mode + start trigger
+//                                         SAR1_CLK_DIV bits 7:0
+//                                         SAR1_DATA_INV bit 28
+//                                         SAR1_BIT_WIDTH bits 28:27 (0=9b..3=12b)
+//                                         SAR1_SAMPLE_NUM bits 18:11
+//   SAR_READ_STATUS1_REG        0x004   ADC1 sample done + 12-bit data
+//   SAR_MEAS_START1_REG         0x054   MEAS1_START_FORCE / MEAS1_START_SAR /
+//                                         MEAS1_DONE_SAR
+//                                         SAR1_EN_PAD bits 19:8 (12-bit per-ch enable)
+//   SAR_ATTEN1_REG              0x094   per-channel attenuation (2 bits/ch):
+//                                         0=0dB, 1=2.5dB, 2=6dB, 3=11dB
+//
+//   ADC2 (similar layout at +0x100 offset, plus WiFi RF arbitration regs).
+//
+// Channels:
+//   ADC1: 8 channels — pads GPIO32..GPIO39 (CH0..CH7).
+//   ADC2: 10 channels — pads GPIO0/2/4/12..15/25..27 (CH0..CH9).
+//
+// Resolution:    9..12 bits programmable (BIT_WIDTH).
+// Reference:     V_REF nominally 1.1 V (per-chip eFuse calibration);
+//                attenuation 0/2.5/6/11 dB scales the input range to
+//                ~0.1..3.1 V at 11dB.
+// Sample rate:   up to 2 MSPS in single-channel manual mode; ~200 kSPS
+//                with continuous DMA (per TRM §31.5).
+//
+// TODO:
+//   1. cfg-flag dispatch from stdlib/hal/adc.hexa.
+//   2. ADC1 vs ADC2 unit selection helper (ADC2 + WiFi conflict guard).
+//   3. attenuation auto-select from target voltage range.
+//   4. eFuse-based VREF calibration read (esp_adc_cal_get_vref equivalent).
+//   5. continuous-mode DMA path (DR_REG_I2S_BASE alias for ADC sampling).
+
+let MODULE_NAME = "esp32_adc"
+let SIGMA_SLOT  = 5
+let PHI_KIND    = "analog"   // ★ matches σ-slot analog peer
+
+let DR_REG_SARADC_BASE = 0x3FF48800
+
+// Key register offsets.
+let SAR_READ_CTRL_REG    = 0x000
+let SAR_READ_STATUS1_REG = 0x004
+let SAR_MEAS_START1_REG  = 0x054
+let SAR_ATTEN1_REG       = 0x094
+
+// Bit-width values: 0..3 → 9, 10, 11, 12 bits.
+let BIT_WIDTH_9   = 0
+let BIT_WIDTH_10  = 1
+let BIT_WIDTH_11  = 2
+let BIT_WIDTH_12  = 3   // default; matches σ(6)=12
+
+// Attenuation (input range scaling, ADC1 + ADC2):
+let ATTEN_0DB     = 0   // ~0.1..0.95 V range
+let ATTEN_2_5DB   = 1   // ~0.1..1.25 V
+let ATTEN_6DB     = 2   // ~0.15..1.75 V
+let ATTEN_11DB    = 3   // ~0.15..2.45 V (~3.1 V at saturation)
+
+// Channel limits.
+let ADC1_CH_MIN = 0   // CH0 = GPIO36 / SVP
+let ADC1_CH_MAX = 7   // CH7 = GPIO35
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn esp32_adc_configure(channel: int, atten: int) -> int {
+    if channel < ADC1_CH_MIN || channel > ADC1_CH_MAX { return -1 }
+    if atten < 0 || atten > 3 { return -2 }
+    // STUB: real impl would
+    //   1. enable SAR_ADC peri clock
+    //   2. set SAR_ATTEN1_REG: bits (channel*2)..((channel+1)*2-1) = atten
+    //   3. set SAR_READ_CTRL_REG.SAR1_BIT_WIDTH = BIT_WIDTH_12
+    //   4. set SAR_MEAS_START1_REG.SAR1_EN_PAD bit channel
+    //   5. configure pad as analog via RTC_IO controller (high-Z digital)
+    return channel
+}
+
+fn esp32_adc_read(channel: int) -> int {
+    if channel < ADC1_CH_MIN || channel > ADC1_CH_MAX { return -1 }
+    // STUB: real impl would
+    //   1. set SAR_MEAS_START1_REG.MEAS1_START_FORCE = 1
+    //   2. set SAR_MEAS_START1_REG.MEAS1_START_SAR = 1 (rising edge triggers)
+    //   3. spin until SAR_MEAS_START1_REG.MEAS1_DONE_SAR = 1
+    //   4. read SAR_READ_STATUS1_REG (12-bit value, 0..4095)
+    return 0
+}
+
+fn esp32_adc_close(channel: int) -> int {
+    if channel < ADC1_CH_MIN || channel > ADC1_CH_MAX { return -1 }
+    // STUB: clear SAR_MEAS_START1_REG.SAR1_EN_PAD bit channel; disable clock
+    return 0
+}
+
+fn esp32_adc_report(channel: int) -> str {
+    return "[esp32_adc sim] channel=" + str(channel) + " (skeleton stub — TODO MMIO)"
+}
+
+fn esp32_adc_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32_adc sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  SAR_ADC base=" + str(DR_REG_SARADC_BASE))
+    println("  ADC1: 8 channels (GPIO32..39); ADC2: 10 channels (WiFi-conflicted)")
+    println("  resolution: 9..12-bit (default 12); atten 0/2.5/6/11 dB")
+}

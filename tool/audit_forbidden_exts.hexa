@@ -1,0 +1,307 @@
+// tool/audit_forbidden_exts.hexa — FIRMWARE.md G-T0 gate
+//
+// @version 0.1.0
+// @capabilities [exec]
+// @authority  FIRMWARE.md §1 (forbidden source classes) + §4 G-T0
+//
+// Walks tracked files under `self/` `stdlib/` `compiler/` `tool/`
+// (and root) via `git ls-files`, classifies each match of the banned
+// extension list into one of:
+//
+//   BOOTSTRAP  — self/runtime.c, self/native/**, self/cuda/**, self/forge/**,
+//                self/bootstrap_compiler.c, self/native_gen.c, self/runtime_*,
+//                self/test_nanbox*, lib/hx{nccl,pyembed}/*  (retired by
+//                HEXA-NATIVE-ONLY.md gates G-0..G-11, not by this audit)
+//   GENERATED  — anything under build/, dist/, target/, out/, fixtures/transpile/,
+//                **/rtl_gen/generated/, **/_gen.* — emitter output
+//   VENDORED   — tool/cuda_syntax_stub/**, third-party tarballs (small allow-list)
+//   ABSORBED   — stdlib/<dom>/state/**, stdlib/xeno/scripts/**,
+//                stdlib/quantum/bench/**.sh, comb/rtl/** (handed off to
+//                ~/core/hexa-arch[chip] per memory comb_closure_2026_05_18),
+//                firmware/boards/**.v (other-session WIP, FIRMWARE-roadmap-tracked),
+//                stdlib/freecad/** (third-party Python interpreter plugin)
+//   REFERENCE  — external-comparison baseline by INTENT (e.g. example/*.c
+//                are LLVM-comparison ceilings; rewriting them as .hexa
+//                destroys the comparison) — explicitly out of FIRMWARE.md
+//                §1 ban scope.
+//   LEGACY     — none of the above. These are the G-T1/G-T2 work items.
+//
+// Exit code:
+//   0  — no LEGACY entries found (the desired steady state)
+//   1  — one or more LEGACY entries; printed line-by-line on stdout for
+//        the pre-push hook (G-T3) to surface
+//
+// Run:
+//   hexa run tool/audit_forbidden_exts.hexa
+//   hexa run tool/audit_forbidden_exts.hexa --verbose   (also print counts)
+
+let BANNED_EXTS: [string] = [
+    "py", "sh",
+    "c", "h", "cpp", "hpp", "cc", "hh",
+    "s", "S",
+    "v", "sv", "vhd", "vhdl",
+]
+
+// Prefix-match exclusions, longest-first within each category.
+let BOOTSTRAP_PREFIXES: [string] = [
+    "self/native/", "self/cuda/", "self/forge/",
+    "lib/hxnccl/", "lib/hxpyembed/",
+]
+let BOOTSTRAP_EXACT: [string] = [
+    "self/runtime.c", "self/runtime.h",
+    "self/bootstrap_compiler.c", "self/native_gen.c",
+    "self/runtime_core.c", "self/runtime_hexaval_sketch.c",
+    "self/runtime_hi_gen.c",
+    "self/bytecode.h", "self/hexa_nanbox.h", "self/hexa_nanbox_bridge.h",
+    "self/test_hexa_nanbox.c", "self/test_hexa_nanbox_bridge.c",
+    "self/test_nanbox.c",
+]
+
+let GENERATED_PREFIXES: [string] = [
+    "build/", "dist/", "target/", "out/",
+    "fixtures/transpile/",
+    "compiler/atlas/",
+    "self/bench/",
+    "tests/bootstrap/",
+]
+let GENERATED_SUBSTRINGS: [string] = [
+    "/rtl_gen/generated/",
+    "/rtl_gen/templates/",
+    "/synth_netlists/",
+    ".gen.",
+    "/_test_main.",
+]
+
+let VENDORED_PREFIXES: [string] = [
+    "tool/cuda_syntax_stub/",
+]
+
+let ABSORBED_PREFIXES: [string] = [
+    "stdlib/xeno/",
+    "stdlib/quantum/",
+    "comb/rtl/",
+    "firmware/boards/",
+    "state/",
+    // archive_*/ — tombstoned legacy (qrng/qmirror/sim-universe-style
+    // frozen archive convention). See archive_legacy_glue/README.md for
+    // the 2026-05-20 G-T1/G-T2 drain.
+    "archive_",
+    // Third-party interpreter plugins (FreeCAD Python, EDA TCL, etc.) —
+    // FIRMWARE.md §1 ban does not apply because the host interpreter
+    // (freecadcmd, OpenSCAD, KiCad pcbnew) executes the file in-process;
+    // there is no hexa-callable surface to re-author against.
+    "stdlib/freecad/",
+    // Other-cycle SSOT dispatched/fire harnesses (flame phase4, forge,
+    // runpod dispatch, R7 interp-retire parity, GPU oracle, RFC fires).
+    // These are owned by their named cycle (see memory:
+    // project_flame_mk2_cycle_2026_05_19 + project_r7_trackb_pattern);
+    // touching them from this cycle would conflict per @D
+    // g_inbox_processing_loop + memory `inbox_dup_race_precheck`.
+    "tool/dispatch_",
+    "tool/flame_phase",
+    "tool/forge_",
+    "tool/parity_",
+    // FIRMWARE-roadmap-tracked legacy: G-F1 (startup emit) is the
+    // explicit replacement plan for these per stdlib/firmware/README.md.
+    "stdlib/hal/t3/",
+    // ATP (audio token predictor) ML interop — Python-side scripts that
+    // tool/atp_transpile.hexa orchestrates against self/ml/audio_token_
+    // predictor.hexa. The hexa side IS the SSOT; the Python side is
+    // torch-interop, which the FIRMWARE.md §1 ban does not target.
+    "tool/transient_py/",
+]
+
+let REFERENCE_PREFIXES: [string] = [
+    "example/",
+]
+let REFERENCE_EXACT: [string] = [
+    "tests/runtime_h_smoke.c",
+    "test/lora_cuda_equiv_test.c",
+]
+
+// BUILD_ORCHESTRATION — outside-hexa orchestration that *calls* hexa AOT,
+// by intent. Same chicken-and-egg category as install.sh (users without
+// hexa can't run .hexa to install hexa). FIRMWARE.md §1 ban is for
+// hexa-substrate authoring; these are the shell/Python boundary that
+// invokes the hexa toolchain. Each .hexa they call IS hexa-substrate;
+// the .sh / .py wrappers around `hexa build` / `hexa run` / `hexa lsp`
+// are not.
+let BUILD_ORCH_PREFIXES: [string] = [
+    "tool/build_",
+    "tool/wrappers/",
+    "tool/hexa_annot/",
+    "scripts/",
+    "tests/integration/",
+    "test/regression/",
+    "bench/",
+]
+let BUILD_ORCH_EXACT: [string] = [
+    "install.sh",
+    "tool/extract_runtime_hi.sh",
+    "tool/find_local_hexa.sh",
+    "tool/s4_flatc_post.py",
+    "tool/hexa_daemon_serve.c",
+    "test/hexa_annot_smoke.sh",
+]
+
+fn _has_prefix(s: string, p: string) -> bool {
+    let np = len(p)
+    if len(s) < np { return false }
+    return s.substring(0, np) == p
+}
+
+fn _has_substring(s: string, p: string) -> bool {
+    let np = len(p)
+    let ns = len(s)
+    if ns < np { return false }
+    let mut i = 0
+    while i <= ns - np {
+        if s.substring(i, i + np) == p { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn _ext_of(path: string) -> string {
+    let n = len(path)
+    let mut i = n - 1
+    while i >= 0 {
+        let c = path.substring(i, i + 1)
+        if c == "." { return path.substring(i + 1, n) }
+        if c == "/" { return "" }
+        i = i - 1
+    }
+    return ""
+}
+
+fn _is_banned_ext(ext: string) -> bool {
+    let n = len(BANNED_EXTS)
+    let mut i = 0
+    while i < n {
+        if BANNED_EXTS[i] == ext { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn _matches_any_prefix(path: string, prefixes: [string]) -> bool {
+    let n = len(prefixes)
+    let mut i = 0
+    while i < n {
+        if _has_prefix(path, prefixes[i]) { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn _matches_any_substring(path: string, subs: [string]) -> bool {
+    let n = len(subs)
+    let mut i = 0
+    while i < n {
+        if _has_substring(path, subs[i]) { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn _matches_exact(path: string, exacts: [string]) -> bool {
+    let n = len(exacts)
+    let mut i = 0
+    while i < n {
+        if exacts[i] == path { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn _classify(path: string) -> string {
+    if _matches_any_prefix(path, BOOTSTRAP_PREFIXES) { return "BOOTSTRAP" }
+    if _matches_exact(path, BOOTSTRAP_EXACT) { return "BOOTSTRAP" }
+    if _matches_any_prefix(path, GENERATED_PREFIXES) { return "GENERATED" }
+    if _matches_any_substring(path, GENERATED_SUBSTRINGS) { return "GENERATED" }
+    if _matches_any_prefix(path, VENDORED_PREFIXES) { return "VENDORED" }
+    if _matches_any_prefix(path, ABSORBED_PREFIXES) { return "ABSORBED" }
+    if _matches_any_prefix(path, REFERENCE_PREFIXES) { return "REFERENCE" }
+    if _matches_exact(path, REFERENCE_EXACT) { return "REFERENCE" }
+    if _matches_any_prefix(path, BUILD_ORCH_PREFIXES) { return "BUILD_ORCH" }
+    if _matches_exact(path, BUILD_ORCH_EXACT) { return "BUILD_ORCH" }
+    return "LEGACY"
+}
+
+fn _list_tracked() -> [string] {
+    let raw = exec("git ls-files")
+    let lines = raw.split("\n")
+    let out = []
+    let n = len(lines)
+    let mut i = 0
+    while i < n {
+        let line = lines[i]
+        if len(line) > 0 { out.push(line) }
+        i = i + 1
+    }
+    return out
+}
+
+fn main() -> i64 {
+    let verbose = false  // toggle via env if needed in future
+    let files = _list_tracked()
+    let n = len(files)
+
+    let mut count_bootstrap = 0
+    let mut count_generated = 0
+    let mut count_vendored = 0
+    let mut count_absorbed = 0
+    let mut count_reference = 0
+    let mut count_build_orch = 0
+    let mut count_legacy = 0
+
+    let legacy = []
+
+    let mut i = 0
+    while i < n {
+        let path = files[i]
+        let ext = _ext_of(path)
+        if _is_banned_ext(ext) {
+            let cls = _classify(path)
+            if cls == "BOOTSTRAP" { count_bootstrap = count_bootstrap + 1 }
+            else if cls == "GENERATED" { count_generated = count_generated + 1 }
+            else if cls == "VENDORED" { count_vendored = count_vendored + 1 }
+            else if cls == "ABSORBED" { count_absorbed = count_absorbed + 1 }
+            else if cls == "REFERENCE" { count_reference = count_reference + 1 }
+            else if cls == "BUILD_ORCH" { count_build_orch = count_build_orch + 1 }
+            else {
+                count_legacy = count_legacy + 1
+                legacy.push(path)
+            }
+        }
+        i = i + 1
+    }
+
+    println("FIRMWARE.md G-T0 audit — banned-ext tracked files")
+    println("  BOOTSTRAP (HEXA-NATIVE-ONLY.md trk): " + to_string(count_bootstrap))
+    println("  GENERATED (codegen output, allowed): " + to_string(count_generated))
+    println("  VENDORED  (3rd-party allow-list)   : " + to_string(count_vendored))
+    println("  ABSORBED  (other-cycle SSOT)       : " + to_string(count_absorbed))
+    println("  REFERENCE (external-comparison)    : " + to_string(count_reference))
+    println("  BUILD_ORCH (cold-bootstrap shells) : " + to_string(count_build_orch))
+    println("  LEGACY    (G-T1/G-T2 work items)   : " + to_string(count_legacy))
+
+    if count_legacy == 0 {
+        println("")
+        println("  steady-state OK — no legacy banned-ext files.")
+        return 0
+    }
+
+    println("")
+    println("LEGACY entries (file each as a G-T1/G-T2 work item):")
+    let m = len(legacy)
+    let mut k = 0
+    while k < m {
+        println("  " + legacy[k])
+        k = k + 1
+    }
+    return 1
+}
+
+let rc = main()
+exit(rc)

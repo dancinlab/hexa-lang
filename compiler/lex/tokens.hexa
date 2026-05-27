@@ -1,0 +1,113 @@
+// HEXA Native Compiler — Tokens (Phase A0 skeleton)
+//
+// Lexer output. Token kinds are modeled with a `TokenKind` enum (variant-only,
+// no payload) — hexa stage0 supports payload-free enums + `Foo::Variant` paths
+// + `match`. Token still carries `text` and `span` for the actual lexeme bytes
+// and source location, so the variant tag captures only the syntactic class.
+//
+// Atlas reference tokens (PNode / CNode / LNode / ENode) are first-class —
+// RFC-017 S1 (atlas resolve) consumes them directly.
+
+// ── Span ──────────────────────────────────────────────────────
+
+pub struct Span {
+    file: string,
+    line: i64,
+    col: i64,
+    len: i64
+}
+
+// ── Token kind enum ───────────────────────────────────────────
+// Variant-only enum (no payloads) — payload data lives on the Token struct.
+
+pub enum TokenKind {
+    // Lexical
+    Ident,
+    Number,
+    String,
+    LParen,
+    RParen,
+    LBrace,
+    RBrace,
+    HashLBrace,    // #{ — hash-map literal opener (#{ "k": v, ... })
+    LBracket,
+    RBracket,
+    Char,          // 'c' / '\n' / etc. — A1.5
+    Comma,
+    Semicolon,
+    Colon,
+    ColonColon,    // :: enum path / module path — A1.5
+    Arrow,
+    FatArrow,
+    Eq,
+    EqEq,
+    Neq,
+    PlusEq,        // += compound assign — A1.5
+    MinusEq,       // -=
+    StarEq,        // *=
+    SlashEq,       // /=
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    Percent,
+    // Logical / bitwise / shift — expression-lowering port.
+    // Ref: self/parser.hexa precedence cascade + self/lexer.hexa maximal-munch.
+    AmpAmp,        // &&  logical and
+    PipePipe,      // ||  logical or
+    Amp,           // &   bitwise and
+    Pipe,          // |   bitwise or  (closure |x| still routes via primary — deferred sub-track)
+    Caret,         // ^   bitwise xor
+    Tilde,         // ~   bitwise not (unary prefix)
+    Bang,          // !   logical not (unary prefix; != stays Neq via maximal munch)
+    Shl,           // <<  shift left
+    Shr,           // >>  shift right
+    At,
+    Dot,
+
+    // Keywords
+    KwFn,
+    KwLet,
+    KwMut,
+    KwReturn,
+    KwBreak,
+    KwContinue,
+    KwIf,
+    KwElse,
+    KwWhile,
+    KwFor,
+    KwIn,
+    KwStruct,
+    KwEnum,        // enum decl — A1.5
+    KwMatch,       // match expr — A1.5
+    KwPub,
+    KwImport,
+    KwAs,
+    KwTrue,
+    KwFalse,
+    KwTry,         // try { ... } catch e { ... } — A1.6 (cycle h20)
+    KwCatch,       // catch e { ... } / catch(e) { ... }
+    KwThrow,       // throw <expr>
+
+    // Atlas tokens (RFC-017)
+    PNode,         // P[id]
+    CNode,         // C[id]
+    LNode,         // L[id]
+    ENode,         // E[id]
+
+    // Terminals
+    Newline,
+    Eof
+}
+
+// ── Token ─────────────────────────────────────────────────────
+
+pub struct Token {
+    kind: TokenKind,
+    text: string,
+    span: Span
+}

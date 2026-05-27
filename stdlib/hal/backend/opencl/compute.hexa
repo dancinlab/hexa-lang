@@ -1,0 +1,134 @@
+#!hexa strict
+// stdlib/hal/backend/opencl/compute.hexa — OpenCL backend
+//                                           — paper skeleton.
+//
+// Phase: skeleton / stub. Real OpenCL runtime integration is
+// downstream FFI scope (libOpenCL.so / OpenCL.framework on macOS).
+//
+// Target:    OpenCL 3.1.0 (canon §2 web-search 2026-05-08).
+// Runtime:   libOpenCL.so (Khronos ICD loader; clCreate* API set).
+// IR:        SPIR-V via clCreateProgramWithIL (OpenCL 2.1+ standard
+//            extension; required in OpenCL 3.0 baseline).
+// Hardware:  cross-vendor — Intel/AMD/Nvidia GPUs + CPUs + FPGAs +
+//            DSP accelerators. Each vendor ships its own ICD.
+// Surface:   ocl_{buffer_alloc,...,event_release}
+//
+// IR mapping: SPIR-V is the canonical OpenCL 3.0+ kernel input format;
+// CUDA-like ptxas path NOT supported (CUDA driver is closed-source).
+// Intel/AMD platforms also accept legacy CL-C source via clCreate-
+// ProgramWithSource — out of paper-tier scope.
+//
+// Memory tier mapping (compute.hexa TIER_* → OpenCL address space):
+//   TIER_PRIVATE  → __private  (per-work-item; default storage class)
+//   TIER_GROUP    → __local    (per-workgroup; clCreateBuffer with CL_MEM_*)
+//   TIER_DEVICE   → __global   (clCreateBuffer; main device DRAM)
+//   TIER_CONSTANT → __constant (read-only; small UBO-like region)
+//
+// Barrier scope mapping:
+//   SCOPE_SUBGROUP   → sub_group_barrier (CL_KHR_subgroups extension; OpenCL 2.1+)
+//   SCOPE_WORKGROUP  → barrier(CLK_LOCAL_MEM_FENCE | CLK_GLOBAL_MEM_FENCE)
+//   SCOPE_CLUSTER    → no native; emulate via global atomics
+//   SCOPE_GRID       → no native; emulate via persistent kernel
+//
+// Sub-group size: implementation-defined. Intel: 8/16/32 (preferred
+// reported by clGetKernelSubGroupInfo). AMD: 32/64. Nvidia (via
+// cl_khr_sub_groups): 32. sg_w should be queried at runtime from
+// CL_KERNEL_PREFERRED_WORK_GROUP_SIZE_MULTIPLE.
+
+let MODULE_NAME = "ocl_compute"
+let VENDOR_NAME = "opencl"
+
+let OCL_VERSION_MAJOR = 3
+let OCL_VERSION_MINOR = 1
+let OCL_VERSION_PATCH = 0
+
+let IR_PRIMARY = "spirv"   // OpenCL 3.0+ SPIR-V baseline
+
+let TIER_PRIVATE  = 0
+let TIER_GROUP    = 1
+let TIER_DEVICE   = 2
+let TIER_CONSTANT = 3
+
+let SCOPE_SUBGROUP  = 0
+let SCOPE_WORKGROUP = 1
+let SCOPE_CLUSTER   = 2
+let SCOPE_GRID      = 3
+
+// CL_MEM_* flags (paper ref).
+let CL_MEM_READ_WRITE = 1   // bit 0
+let CL_MEM_READ_ONLY  = 4   // bit 2
+let CL_MEM_WRITE_ONLY = 2   // bit 1
+let CL_MEM_USE_HOST_PTR = 8 // bit 3
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn ocl_buffer_alloc(tier: int, n_bytes: int) -> int {
+    if tier < 0 || tier > 3 { return -1 }
+    if n_bytes <= 0 { return -2 }
+    // STUB: clCreateBuffer(context, CL_MEM_*, n_bytes, NULL, &err)
+    return 0
+}
+
+fn ocl_buffer_h2d(handle: int, src_host: int, n_bytes: int) -> bool {
+    if handle < 0 || n_bytes <= 0 { return false }
+    // STUB: clEnqueueWriteBuffer(queue, mem, CL_FALSE, 0, n, src, 0, NULL, &event)
+    return true
+}
+
+fn ocl_buffer_d2h(handle: int, dst_host: int, n_bytes: int) -> bool {
+    if handle < 0 || n_bytes <= 0 { return false }
+    // STUB: clEnqueueReadBuffer
+    return true
+}
+
+fn ocl_buffer_free(handle: int) -> bool {
+    if handle < 0 { return false }
+    // STUB: clReleaseMemObject(mem)
+    return true
+}
+
+fn ocl_kernel_compile(ir: int, n_bytes: int) -> int {
+    if ir < 0 || n_bytes <= 0 { return -1 }
+    // STUB: clCreateProgramWithIL(context, spirv_blob, n_bytes, &err)
+    //       + clBuildProgram + clCreateKernel
+    return 0
+}
+
+fn ocl_kernel_release(handle: int) -> bool {
+    if handle < 0 { return false }
+    // STUB: clReleaseKernel + clReleaseProgram
+    return true
+}
+
+fn ocl_dispatch(kern: int, gx: int, gy: int, gz: int,
+                wx: int, wy: int, wz: int,
+                scope: int, dep: int, sg_w: int) -> int {
+    if kern < 0 { return -1 }
+    if scope < 0 || scope > 3 { return -2 }
+    // STUB: clEnqueueNDRangeKernel(queue, kernel, 3, NULL,
+    //                              global_size[3], local_size[3], 0, NULL, &event)
+    return 0
+}
+
+fn ocl_event_wait(event: int) -> bool {
+    if event < 0 { return false }
+    // STUB: clWaitForEvents(1, &event)
+    return true
+}
+
+fn ocl_event_release(event: int) -> bool {
+    if event < 0 { return false }
+    // STUB: clReleaseEvent(event)
+    return true
+}
+
+fn ocl_module_meta() -> [str] {
+    return [MODULE_NAME, VENDOR_NAME, IR_PRIMARY, "4"]
+}
+
+fn main() {
+    println("[ocl_compute sim] STUB skeleton — sim-first; FFI to libOpenCL.so TODO")
+    println("  OpenCL " + str(OCL_VERSION_MAJOR) + "." + str(OCL_VERSION_MINOR) + "." + str(OCL_VERSION_PATCH))
+    println("  IR: SPIR-V (OpenCL 3.0+ baseline) via clCreateProgramWithIL")
+    println("  cross-vendor: Intel/AMD/Nvidia/Apple/FPGA via Khronos ICD loader")
+}

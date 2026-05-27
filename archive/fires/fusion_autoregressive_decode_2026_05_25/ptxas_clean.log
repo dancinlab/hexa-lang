@@ -1,0 +1,182 @@
+# F-FUSION-AUTOREGRESSIVE-DECODE -- ptxas-clean log (axis E)
+# ptxas: CUDA 12.0 (Built Jan 6 2023), ubu-2 RTX 5070 sm_120 driver 580
+# date: 2026-05-25T14:00:35Z
+
+=== ASCII purity ===
+fused_decode.ptx: pure ASCII (OK)
+eager_decode.ptx: pure ASCII (OK)
+
+=== ptxas -arch=sm_80 fused_decode.ptx ===
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function 'decode_ffn_fused' for 'sm_80'
+ptxas info    : Function properties for decode_ffn_fused
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 27 registers, 16384 bytes smem, 396 bytes cmem[0]
+ptxas info    : Compiling entry function 'decode_attn_fused' for 'sm_80'
+ptxas info    : Function properties for decode_attn_fused
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 32 registers, 40960 bytes smem, 428 bytes cmem[0]
+FUSED_RC=0  (sm_80)
+
+=== ptxas -arch=sm_80 eager_decode.ptx ===
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function 'k17_residual_post_ffn' for 'sm_80'
+ptxas info    : Function properties for k17_residual_post_ffn
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 12 registers, 380 bytes cmem[0]
+ptxas info    : Compiling entry function 'k16_gemv_ffn_down' for 'sm_80'
+ptxas info    : Function properties for k16_gemv_ffn_down
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 25 registers, 384 bytes cmem[0]
+ptxas info    : Compiling entry function 'k15_silu' for 'sm_80'
+ptxas info    : Function properties for k15_silu
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 12 registers, 372 bytes cmem[0]
+ptxas info    : Compiling entry function 'k14_gemv_ffn_up' for 'sm_80'
+ptxas info    : Function properties for k14_gemv_ffn_up
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 25 registers, 384 bytes cmem[0]
+ptxas info    : Compiling entry function 'k13_rmsnorm_pre_ffn' for 'sm_80'
+ptxas info    : Function properties for k13_rmsnorm_pre_ffn
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 12 registers, 380 bytes cmem[0]
+ptxas info    : Compiling entry function 'k12_residual_post_attn' for 'sm_80'
+ptxas info    : Function properties for k12_residual_post_attn
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 12 registers, 380 bytes cmem[0]
+ptxas info    : Compiling entry function 'k11_gemv_o_proj' for 'sm_80'
+ptxas info    : Function properties for k11_gemv_o_proj
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 25 registers, 380 bytes cmem[0]
+ptxas info    : Compiling entry function 'k10_pv_dot' for 'sm_80'
+ptxas info    : Function properties for k10_pv_dot
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 26 registers, 384 bytes cmem[0]
+ptxas info    : Compiling entry function 'k9_softmax' for 'sm_80'
+ptxas info    : Function properties for k9_softmax
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 10 registers, 372 bytes cmem[0]
+ptxas info    : Compiling entry function 'k8_scale_div' for 'sm_80'
+ptxas info    : Function properties for k8_scale_div
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 8 registers, 368 bytes cmem[0]
+ptxas info    : Compiling entry function 'k7_qk_dot' for 'sm_80'
+ptxas info    : Function properties for k7_qk_dot
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 25 registers, 384 bytes cmem[0]
+ptxas info    : Compiling entry function 'k6_kv_append_v' for 'sm_80'
+ptxas info    : Function properties for k6_kv_append_v
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 10 registers, 376 bytes cmem[0]
+ptxas info    : Compiling entry function 'k5_kv_append_k' for 'sm_80'
+ptxas info    : Function properties for k5_kv_append_k
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 10 registers, 376 bytes cmem[0]
+ptxas info    : Compiling entry function 'k4_gemv_v_proj' for 'sm_80'
+ptxas info    : Function properties for k4_gemv_v_proj
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 25 registers, 380 bytes cmem[0]
+ptxas info    : Compiling entry function 'k3_gemv_k_proj' for 'sm_80'
+ptxas info    : Function properties for k3_gemv_k_proj
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 25 registers, 380 bytes cmem[0]
+ptxas info    : Compiling entry function 'k2_gemv_q_proj' for 'sm_80'
+ptxas info    : Function properties for k2_gemv_q_proj
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 25 registers, 380 bytes cmem[0]
+ptxas info    : Compiling entry function 'k1_rmsnorm_pre_attn' for 'sm_80'
+ptxas info    : Function properties for k1_rmsnorm_pre_attn
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 12 registers, 380 bytes cmem[0]
+EAGER_RC=0  (sm_80)
+
+=== ptxas -arch=sm_90 fused_decode.ptx ===
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function 'decode_ffn_fused' for 'sm_90'
+ptxas info    : Function properties for decode_ffn_fused
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 28 registers, 16384 bytes smem
+ptxas info    : Compiling entry function 'decode_attn_fused' for 'sm_90'
+ptxas info    : Function properties for decode_attn_fused
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 32 registers, 40960 bytes smem
+FUSED_RC=0  (sm_90)
+
+=== ptxas -arch=sm_90 eager_decode.ptx ===
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function 'k17_residual_post_ffn' for 'sm_90'
+ptxas info    : Function properties for k17_residual_post_ffn
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 12 registers
+ptxas info    : Compiling entry function 'k16_gemv_ffn_down' for 'sm_90'
+ptxas info    : Function properties for k16_gemv_ffn_down
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 25 registers
+ptxas info    : Compiling entry function 'k15_silu' for 'sm_90'
+ptxas info    : Function properties for k15_silu
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 12 registers
+ptxas info    : Compiling entry function 'k14_gemv_ffn_up' for 'sm_90'
+ptxas info    : Function properties for k14_gemv_ffn_up
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 25 registers
+ptxas info    : Compiling entry function 'k13_rmsnorm_pre_ffn' for 'sm_90'
+ptxas info    : Function properties for k13_rmsnorm_pre_ffn
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 12 registers
+ptxas info    : Compiling entry function 'k12_residual_post_attn' for 'sm_90'
+ptxas info    : Function properties for k12_residual_post_attn
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 12 registers
+ptxas info    : Compiling entry function 'k11_gemv_o_proj' for 'sm_90'
+ptxas info    : Function properties for k11_gemv_o_proj
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 25 registers
+ptxas info    : Compiling entry function 'k10_pv_dot' for 'sm_90'
+ptxas info    : Function properties for k10_pv_dot
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 28 registers
+ptxas info    : Compiling entry function 'k9_softmax' for 'sm_90'
+ptxas info    : Function properties for k9_softmax
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 10 registers
+ptxas info    : Compiling entry function 'k8_scale_div' for 'sm_90'
+ptxas info    : Function properties for k8_scale_div
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 8 registers
+ptxas info    : Compiling entry function 'k7_qk_dot' for 'sm_90'
+ptxas info    : Function properties for k7_qk_dot
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 25 registers
+ptxas info    : Compiling entry function 'k6_kv_append_v' for 'sm_90'
+ptxas info    : Function properties for k6_kv_append_v
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 10 registers
+ptxas info    : Compiling entry function 'k5_kv_append_k' for 'sm_90'
+ptxas info    : Function properties for k5_kv_append_k
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 10 registers
+ptxas info    : Compiling entry function 'k4_gemv_v_proj' for 'sm_90'
+ptxas info    : Function properties for k4_gemv_v_proj
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 25 registers
+ptxas info    : Compiling entry function 'k3_gemv_k_proj' for 'sm_90'
+ptxas info    : Function properties for k3_gemv_k_proj
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 25 registers
+ptxas info    : Compiling entry function 'k2_gemv_q_proj' for 'sm_90'
+ptxas info    : Function properties for k2_gemv_q_proj
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 25 registers
+ptxas info    : Compiling entry function 'k1_rmsnorm_pre_attn' for 'sm_90'
+ptxas info    : Function properties for k1_rmsnorm_pre_attn
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 12 registers
+EAGER_RC=0  (sm_90)
+
+=== sm_120 driver-JIT note ===
+ptxas 12.0 max arch = sm_90; sm_120 (RTX 5070) reached via cuModuleLoadDataEx
+  driver-JIT  (same path as F-FUSION-LAUNCH-AMORT / F-FUSION-ATTN-WMMA fires);
+  PTX bytecode is forward-compatible from sm_80 -> sm_120 (driver-JIT recompiles)
+  per RTX 5070 driver 580 (Blackwell architecture). Empirically validated by the
+  prior fires whose sm_80 PTX successfully cuLaunchKernel-d on the same host.

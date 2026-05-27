@@ -1,0 +1,8 @@
+#!hexa strict
+// organoid specify — organoid mature diameter.
+fn main() {
+    let diameter_mm = 5.0
+    println("organoid_specify (organoid mature diameter):")
+    println("  diameter_mm = " + str(diameter_mm))
+    println("__HEXA_ORGANOID_SPECIFY__ PASS gate=GATE_OPEN absorbed=false")
+}

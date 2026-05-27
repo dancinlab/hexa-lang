@@ -1,0 +1,75 @@
+#!hexa strict
+// tests/test_29_verb_inventory.hexa — 29 verbs / 6 groups inventory unit test.
+
+fn main() {
+    let root = exec("pwd").trim()
+
+    let verbs = [
+        // architecture (3)
+        "architecture", "isa_n6", "hexa1",
+        // design (5)
+        "design", "dse_pipeline", "rtl_gen", "eda", "verify_test",
+        // process (5)
+        "process", "materials", "wafer", "yield", "thermal_power",
+        // packaging (6)
+        "packaging", "advanced_packaging", "chip_3d", "hbm", "interconnect", "sc",
+        // accelerator (8)
+        "npu_n6", "pim", "photonic", "accel", "asic", "hexa_pim", "hexa_3d", "hexa_wafer",
+        // consciousness (2)
+        "conscious_chip", "conscious_soc"
+    ]
+
+    if verbs.len() != 29 {
+        println("[test_29_verb] FAIL — verb count " + str(verbs.len()) + " ≠ 29")
+        exit(1)
+    }
+    println("  [PASS] 29 verbs enumerated")
+
+    let mut missing_dirs: [str] = []
+    let mut missing_md: [str] = []
+    let mut missing_sandbox: [str] = []
+    for v in verbs {
+        let dir = root + "/" + v
+        if exec("[ -d \"" + dir + "\" ] && echo y || echo n").trim() != "y" {
+            missing_dirs = missing_dirs + [v]
+            continue
+        }
+        let any_md = exec("ls \"" + dir + "\"/*.md 2>/dev/null | head -1").trim()
+        if any_md.len() == 0 { missing_md = missing_md + [v] }
+        let any_sandbox = exec("ls \"" + dir + "\"/verify_*.hexa \"" + dir + "\"/" + v + ".hexa \"" + dir + "\"/chip_" + v + ".hexa \"" + dir + "\"/rtl_generator.hexa 2>/dev/null | head -1").trim()
+        if any_sandbox.len() == 0 { missing_sandbox = missing_sandbox + [v] }
+    }
+
+    if missing_dirs.len() != 0 {
+        println("[test_29_verb] FAIL — missing dirs: " + str(missing_dirs.len()))
+        for v in missing_dirs { println("    - " + v) }
+        exit(1)
+    }
+    println("  [PASS] all 29 verb directories present")
+
+    if missing_md.len() != 0 {
+        println("[test_29_verb] FAIL — missing .md spec: " + str(missing_md.len()))
+        for v in missing_md { println("    - " + v) }
+        exit(1)
+    }
+    println("  [PASS] all 29 verbs have at least one .md spec")
+
+    if missing_sandbox.len() != 0 {
+        println("[test_29_verb] FAIL — missing sandbox file: " + str(missing_sandbox.len()))
+        for v in missing_sandbox { println("    - " + v) }
+        exit(1)
+    }
+    println("  [PASS] all 29 verbs have a runnable sandbox (verify_*.hexa)")
+
+    // Group-by-group counts
+    let group_counts = [3, 5, 5, 6, 8, 2]
+    let mut total = 0
+    for c in group_counts { total = total + c }
+    if total != 29 {
+        println("[test_29_verb] FAIL — group sum ≠ 29")
+        exit(1)
+    }
+    println("  [PASS] group totals 3+5+5+6+8+2 = 29 (architecture/design/process/packaging/accelerator/consciousness)")
+
+    println("  4/4 inventory invariants PASS")
+}

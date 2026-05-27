@@ -1,0 +1,189 @@
+#!hexa strict
+// stdlib/hal/backend/ai_native/tsmc_n5.hexa — TSMC N5 PDK
+//                                              AI-native silicon backend
+//                                              — paper skeleton.
+//
+// Phase: skeleton / stub. Real synthesis (Synopsys DC / Cadence Genus) +
+// place-and-route (Innovus / ICC2) + tape-out are downstream scope and
+// require an active TSMC PDK licence + foundry MOU. Paper-tier stub
+// documents area/timing/power surface mapping for the 3 AI-native
+// silicon primitives on the TSMC N5 5nm node. Sim-first invariant
+// preserved (ai.hexa sim ships first; this is per-PDK silicon backend
+// metadata).
+//
+// Target:    TSMC N5 (5nm FinFET; current production node since 2020).
+//            High-density library; 6T standard cell.
+// Process:   5 nm FinFET, EUV-multipatterned, 1.2nm gate length effective.
+// Density:   ~8 M-gate/mm² (TSMC public density disclosure;
+//            web-searched 2026-05-08; ~16x SKY130 density).
+// Tape-out:  TSMC MPW shuttle ~$3M MOU per project; needs foundry licence
+//            + IP audit; first silicon ~9-12 months from tape-out.
+// IR:        none (this is a per-PDK silicon backend, not a compute IR;
+//            consumes RTL Verilog from ai_native_arch/doc/datasheet_*.md
+//            §6 [prov_regfile, promotion_counter_mmu, bt_id_decoder]).
+// Surface:   tsmc_n5_{tile_area, prov_regfile_area, mmu_area,
+//            bt_decoder_area, frequency_max, voltage_core,
+//            tile_meta, pdk_meta}.
+// Dispatch:  ai.hexa selects this via cfg-flag (`cfg ai_native_pdk = "tsmc_n5"`);
+//            paper-tier dispatch returns symbolic area/freq numbers.
+//
+// canon-aware (~/core/canon/domains/compute/ai-native-architecture/
+// analysis/btAI3_rtl_design.md §6 row "TSMC N5 5 nm" + hexa-chip
+// ai_native_arch/doc/datasheet_ai_native_arch.md §6 PDK area table).
+//
+// Phase G iter 9+2 / stdlib/hal v1.10.0 (per-PDK ai_native split,
+// TSMC N5 second since SKY130 v1.9.0 (35b14035) landed first as the
+// open-source baseline; N5 is the production-tier candidate).
+//
+// Architectural guard: paper-spec only — NOT FFI to Synopsys DC /
+// Cadence Genus / Innovus. canon §7.5 ("FFI는 downstream") +
+// roadmap §G.5. Per-PDK split commit policy continues from v1.9.0.
+
+let MODULE_NAME = "ai_native_tsmc_n5"
+let PDK_NAME    = "tsmc_n5"
+let PDK_TIER    = "proprietary"   // open-source / proprietary
+let PDK_NODE_NM = 5                // process node (nanometres)
+
+// ── PDK density disclosures (web-searched 2026-05-08) ────────────────
+// TSMC public N5 density disclosure: ~173 M-transistors/mm² (Apple A14,
+// TSMC investor day 2020), translates to ~8 M-effective-gate/mm² post
+// place-and-route at typical utilisation (gate-equivalent ~22T per cell).
+// HD library; 6T standard cell.
+let DENSITY_KGATE_PER_MM2  = 8000  // K-gates/mm² (~16x SKY130)
+let DENSITY_UTIL_BP        = 7000  // 70% basis-point post-P&R utilisation
+
+// ── core voltage / frequency band (TSMC N5 nominal HVT/RVT) ──────────
+let VCORE_MV      = 750    // 0.75V core (N5 nominal LVT/RVT band)
+let FREQ_MIN_MHZ  = 1500   // N5 typical floor for AI accelerator
+let FREQ_MAX_MHZ  = 2000   // N5 typical ceiling without aggressive DVFS
+
+// ── tile-level area placeholders (canon §6 + datasheet §6) ────────────
+// All in micro-mm² (μ-mm²) integer units to avoid float; divide by 1000
+// to get mm². Per-tile, σ²=144-entry MAC array dominant.
+// ~40x area shrink vs SKY130 (130 nm → 5 nm scaling factor ~26²/26 = 26
+// area scaling; ~40x density gain accounts for FinFET advantage).
+let MAC_ARRAY_AREA_UMM2     =   50000   // ~0.050 mm² (σ²=144 8b MACs at N5)
+let PROV_REGFILE_AREA_UMM2  =    1100   // ~0.0011 mm² (144 SFF + OR-tree)
+let MMU_AREA_UMM2           =     450   // ~0.00045 mm² (τ=4-bit × 144 ctr)
+let BT_DECODER_AREA_UMM2    =      25   // ~0.000025 mm² (3b → 7 one-hot, 5 gates)
+let TILE_AREA_UMM2          =   51575   // sum
+
+// ── chip-level area (n_tiles=6 from ai.hexa N_TILES) ──────────────────
+let N_TILES               = 6
+let CHIP_AREA_UMM2        = 309450      // 6 × 0.0516 mm² ≈ 0.31 mm²
+
+// ── overhead ratio (φ/σ_n = 1/36 = ~2.78% basis-point form 278) ──────
+let OVERHEAD_BP           = 278   // basis-points (1/36 ≈ 2.78%)
+
+// ── max die area constraint (TSMC MPW shuttle typical) ───────────────
+// TSMC MPW shuttle slot: 1 mm² is generous for AI demo; full chiplet
+// commonly 5-25 mm². At ~0.31 mm² for n_tiles=6, EASILY fits.
+let TSMC_MPW_LIMIT_UMM2   = 5000000     // 5 mm² typical MPW slot (10x our chip)
+
+// ── stub handlers ────────────────────────────────────────────────────
+
+// Returns per-tile area in micro-mm² for the requested block.
+// Tier IDs:
+//   0 = MAC array (σ²)
+//   1 = prov_regfile
+//   2 = promotion_counter_mmu
+//   3 = bt_id_decoder
+//   4 = whole tile
+fn tsmc_n5_tile_area(block_id: int) -> int {
+    if block_id == 0 { return MAC_ARRAY_AREA_UMM2 }
+    if block_id == 1 { return PROV_REGFILE_AREA_UMM2 }
+    if block_id == 2 { return MMU_AREA_UMM2 }
+    if block_id == 3 { return BT_DECODER_AREA_UMM2 }
+    if block_id == 4 { return TILE_AREA_UMM2 }
+    return -1
+}
+
+// Returns whole-chip area in μ-mm² (n_tiles × tile_area).
+fn tsmc_n5_chip_area() -> int {
+    return CHIP_AREA_UMM2
+}
+
+// Returns provenance overhead in basis-points (1/36 ≈ 278 bp).
+fn tsmc_n5_overhead_bp() -> int {
+    return OVERHEAD_BP
+}
+
+// Returns max frequency band [min, max] MHz.
+fn tsmc_n5_freq_band() -> [int] {
+    return [FREQ_MIN_MHZ, FREQ_MAX_MHZ]
+}
+
+// Returns core voltage in millivolts.
+fn tsmc_n5_vcore_mv() -> int {
+    return VCORE_MV
+}
+
+// Returns true if chip area fits the TSMC MPW shuttle.
+// At 0.31 mm² for n_tiles=6, comfortably under 5 mm² ceiling.
+fn tsmc_n5_fits_mpw_shuttle() -> bool {
+    return CHIP_AREA_UMM2 <= TSMC_MPW_LIMIT_UMM2
+}
+
+// Suggest a tape-out tile-count that fits MPW shuttle.
+// Returns max n_tiles such that n_tiles × TILE_AREA_UMM2 ≤ MPW_LIMIT.
+fn tsmc_n5_max_tiles_in_mpw() -> int {
+    return TSMC_MPW_LIMIT_UMM2 / TILE_AREA_UMM2
+}
+
+// Returns module metadata.
+fn tsmc_n5_module_meta() -> [str] {
+    return [MODULE_NAME, PDK_NAME, PDK_TIER, str(PDK_NODE_NM)]
+}
+
+// Returns PDK metadata (node + density + voltage).
+fn tsmc_n5_pdk_meta() -> [str] {
+    return [
+        PDK_NAME,
+        str(PDK_NODE_NM) + "nm",
+        str(DENSITY_KGATE_PER_MM2) + "K-gates/mm²",
+        str(VCORE_MV) + "mV"
+    ]
+}
+
+// ── invariant ledger (cross-check against canon §6 + datasheet §6) ────
+
+fn tsmc_n5_invariant_n_tiles() -> int { return N_TILES }
+fn tsmc_n5_invariant_overhead_bp() -> int { return OVERHEAD_BP }
+fn tsmc_n5_invariant_node_nm() -> int { return PDK_NODE_NM }
+
+// ── sim-first: report path ───────────────────────────────────────────
+
+fn tsmc_n5_report() -> str {
+    return "[ai_native tsmc_n5 sim] tile=" + str(TILE_AREA_UMM2) +
+           " μ-mm² · chip=" + str(CHIP_AREA_UMM2) +
+           " μ-mm² · freq=" + str(FREQ_MIN_MHZ) + "-" + str(FREQ_MAX_MHZ) + " MHz"
+}
+
+// ── bench / sim main ────────────────────────────────────────────────
+
+fn main() {
+    println("[ai_native tsmc_n5] stdlib/hal/backend/ai_native/tsmc_n5.hexa — paper-tier TSMC N5 backend")
+    println("  PDK: " + PDK_NAME + " (" + PDK_TIER + ", " + str(PDK_NODE_NM) + " nm FinFET)")
+    println("  density: " + str(DENSITY_KGATE_PER_MM2) + " K-gates/mm² (HD 6T cell, util " + str(DENSITY_UTIL_BP) + " bp)")
+    println("  Vcore: " + str(VCORE_MV) + " mV")
+    println("  freq band: [" + str(FREQ_MIN_MHZ) + ", " + str(FREQ_MAX_MHZ) + "] MHz")
+    println("  area per tile (μ-mm²):")
+    println("    MAC array (σ²=144): " + str(MAC_ARRAY_AREA_UMM2))
+    println("    prov_regfile      : " + str(PROV_REGFILE_AREA_UMM2))
+    println("    promotion_mmu     : " + str(MMU_AREA_UMM2))
+    println("    bt_id_decoder     : " + str(BT_DECODER_AREA_UMM2))
+    println("    TILE TOTAL        : " + str(TILE_AREA_UMM2) + " (~0.052 mm²)")
+    println("  chip area (n_tiles=" + str(N_TILES) + "): " + str(CHIP_AREA_UMM2) + " μ-mm² (~0.31 mm²)")
+    println("  overhead φ/σ_n: " + str(OVERHEAD_BP) + " bp (1/36 ≈ 2.78%)")
+    println("  TSMC MPW shuttle: " + str(TSMC_MPW_LIMIT_UMM2) + " μ-mm² (5 mm² typical slot)")
+    let fits = tsmc_n5_fits_mpw_shuttle()
+    if fits {
+        println("  fits MPW shuttle: YES at n_tiles=" + str(N_TILES) + " (max fits ≈ " + str(tsmc_n5_max_tiles_in_mpw()) + " tiles)")
+    } else {
+        println("  fits MPW shuttle: NO at n_tiles=" + str(N_TILES))
+    }
+    println("  arch guard: paper-spec only; FFI to Synopsys DC / Cadence Genus / Innovus downstream (canon §7.5).")
+    println("  gating: TSMC PDK licence + foundry MOU + IP audit + ~$3M MPW slot.")
+}
+
+main()

@@ -1,0 +1,193 @@
+#!hexa strict
+//
+// ribozyme/module/mg_sweep_audit.hexa — F-RB-3-c Mg²⁺ sweep analytic audit.
+//
+// HEXA-NATIVE port of _python_bridge/module/ribozyme_mg_sweep_audit.py
+// landed 2026-05-06 as the first R5 sunset migration (.roadmap.hexa_bio
+// §F R5 sunset path; trigger: stdlib gaps G1-G5 closed). Reduces the
+// "HEXA module + Python bridge" pair pattern by retiring the .py twin
+// while preserving R4 witness contract and R2 cycle-24 baseline.
+//
+// Closes F-RB-3-c sub-clause (.roadmap.ribozyme line 87). Existing
+// chemical-kinetics simulator records MG_MM=10.0 as metadata only; this
+// audit applies an analytic Hill-curve scaling of the cycle-24 k_cat/K_M
+// across the literature [Mg²⁺] sweep {1, 5, 10, 25 mM}.
+//
+// Hill model (Steitz 1993 hammerhead two-metal-ion mechanism):
+//   k_cat([Mg]) = k_cat_max * [Mg]^n / (K_Mg^n + [Mg]^n)
+//   n=2 (two-metal-ion cooperativity); K_Mg = 2 mM (Dahm-Uhlenbeck 1991).
+//
+// PASS criterion: margin ≥ 1 order vs Eigen-Hammes ceiling 10⁹ M⁻¹s⁻¹
+// at every [Mg²⁺] in the sweep.
+//
+// Per cross-cutting Require (R5) raw 9 hexa-only: hexa stdlib only.
+//
+// Usage:
+//   hexa run ribozyme/module/mg_sweep_audit.hexa --emit
+//   hexa run ribozyme/module/mg_sweep_audit.hexa --summary
+
+let MG_SWEEP_MM = [1.0, 5.0, 10.0, 25.0]
+let HILL_K_MG_MM = 2.0
+let HILL_N = 2.0
+let EIGEN_HAMMES_CEILING = 1.0e9
+let PASS_MARGIN_ORDERS = 1.0
+
+// Cycle-24 baseline at canonical Mg=10 mM (raw_77_ribozyme_kinetics_v1).
+let KCAT_OVER_KM_AT_10MM = 8.3278e4
+
+fn log10(x: float) -> float {
+    return log(x) / log(10.0)
+}
+
+fn hill_factor(mg_mm: float, k: float, n: float) -> float {
+    // Two-metal-ion Hill saturation factor at [Mg²⁺] = mg_mm.
+    let mg_n = pow(mg_mm, n)
+    let k_n = pow(k, n)
+    return mg_n / (k_n + mg_n)
+}
+
+fn hill_factor_default(mg_mm: float) -> float {
+    return hill_factor(mg_mm, HILL_K_MG_MM, HILL_N)
+}
+
+fn registry_path() -> string {
+    // ../../state/discovery_absorption/registry.jsonl relative to this file.
+    let cwd = exec("pwd").trim()
+    return cwd + "/state/discovery_absorption/registry.jsonl"
+}
+
+fn format_float(x: float, digits: int) -> string {
+    // Lightweight float→string with fixed digits (json round-trip uses
+    // to_string which already produces canonical repr; this helper exists
+    // for stderr human-readable formatting only).
+    return to_string(x)
+}
+
+// hexa map literals: `{}` for empty + `m["k"] = v` for assignment.
+// (Inline `{key: value}` syntax is not supported in this surface.)
+
+fn build_result_row(mg: float, f: float, kcat_KM: float, margin: float, pass_ok: bool) {
+    let row = {}
+    row["mg_mM"] = mg
+    row["hill_factor"] = f
+    row["kcat_over_KM"] = kcat_KM
+    row["margin_orders"] = margin
+    row["pass"] = pass_ok
+    return row
+}
+
+fn run_sweep() {
+    let canonical_factor = hill_factor_default(10.0)
+    let scale = KCAT_OVER_KM_AT_10MM / canonical_factor
+
+    let results = []
+    let mut all_pass = true
+    let mut i = 0
+    while i < len(MG_SWEEP_MM) {
+        let mg = MG_SWEEP_MM[i]
+        let f = hill_factor_default(mg)
+        let kcat_KM = scale * f
+        let mut margin = 0.0
+        if kcat_KM > 0.0 {
+            margin = log10(EIGEN_HAMMES_CEILING / kcat_KM)
+        }
+        let pass_ok = margin >= PASS_MARGIN_ORDERS
+        if !pass_ok { all_pass = false }
+        results.push(build_result_row(mg, f, kcat_KM, margin, pass_ok))
+        i = i + 1
+    }
+    let out = {}
+    out["results"] = results
+    out["all_pass"] = all_pass
+    out["scale"] = scale
+    return out
+}
+
+let HILL_REFERENCE = "Steitz 1993 two-metal-ion + Dahm-Uhlenbeck 1991 saturation"
+let RAW_91_DISCLOSURE = "Analytic Hill-curve audit — NOT a full kinetic re-simulation. Existing ribozyme_kinetics_simulation records MG_MM=10 as metadata only; full Mg-dependent rate constants are cycle-26+ work. This audit applies a literature-anchored Hill model (n=2, K_Mg=2 mM) to scale the cycle-24 canonical k_cat/K_M = 8.33e4 M-1 s-1 across the sweep. Margin remains > 1 order at all four [Mg] points."
+
+fn build_witness(sweep, audited_at: string) {
+    let mut verdict = "FAIL"
+    if sweep["all_pass"] { verdict = "PASS" }
+
+    let hill_model = {}
+    hill_model["n"] = HILL_N
+    hill_model["K_Mg_mM"] = HILL_K_MG_MM
+    hill_model["reference"] = HILL_REFERENCE
+
+    let f_rb_3_c = {}
+    f_rb_3_c["verdict"] = verdict
+    f_rb_3_c["sweep_mg_mM"] = MG_SWEEP_MM
+    f_rb_3_c["results"] = sweep["results"]
+    f_rb_3_c["pass_threshold_orders"] = PASS_MARGIN_ORDERS
+    f_rb_3_c["hill_model"] = hill_model
+    f_rb_3_c["raw_91_c3_disclose"] = RAW_91_DISCLOSURE
+
+    let subs = {}
+    subs["f_rb_3_c"] = f_rb_3_c
+
+    let w = {}
+    w["schema"] = "raw_77_ribozyme_subclause_direct_read_v3"
+    w["audited_at"] = audited_at
+    w["audit_kind"] = "f_rb_3_c_mg_sweep_analytic"
+    w["f_rb_3_subclauses"] = subs
+    w["raw_91_c3_disclose"] = RAW_91_DISCLOSURE
+    w["raw_77_append_only"] = true
+    w["raw_9_hexa_only"] = "hexa stdlib only (R5 sunset 2026-05-06)"
+    w["witness_ref"] = "state/discovery_absorption/registry.jsonl#raw_77_ribozyme_subclause_direct_read_v3"
+    return w
+}
+
+fn parse_argv(av) {
+    let r = {}
+    r["emit"] = false
+    r["summary"] = false
+    let mut i = 0
+    while i < len(av) {
+        let a = av[i]
+        if a == "--emit" { r["emit"] = true }
+        if a == "--summary" { r["summary"] = true }
+        i = i + 1
+    }
+    return r
+}
+
+fn main() {
+    let av = args()
+    let parsed = parse_argv(av)
+
+    let sweep = run_sweep()
+    let audited_at = utc_iso_now()
+    let witness = build_witness(sweep, audited_at)
+
+    if parsed["emit"] {
+        let line = json_encode(witness) + "\n"
+        let path = registry_path()
+        let last_slash = path.last_index_of("/")
+        let dir = path.substring(0, last_slash)
+        exec("mkdir -p " + dir)
+        append_file(path, line)
+        eprintln("emitted 1 witness row -> " + path)
+    }
+
+    if parsed["summary"] {
+        println(json_encode(witness))
+    } else {
+        let mut i = 0
+        while i < len(sweep["results"]) {
+            let r = sweep["results"][i]
+            eprintln("  Mg=" + to_string(r["mg_mM"]) + " mM  margin=" +
+                to_string(r["margin_orders"]) + " orders  pass=" + to_string(r["pass"]))
+            i = i + 1
+        }
+        let mut verdict = "FAIL"
+        if sweep["all_pass"] { verdict = "PASS" }
+        eprintln("verdict=" + verdict)
+    }
+
+    if sweep["all_pass"] {
+        exit(0)
+    } else {
+        exit(1)
+    }
+}

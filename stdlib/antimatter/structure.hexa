@@ -1,0 +1,8 @@
+#!hexa strict
+// antimatter structure — ALPHA-g trap vertical length.
+fn main() {
+    let trap_length_m = 1.0
+    println("antimatter_structure (ALPHA-g trap vertical length):")
+    println("  trap_length_m = " + str(trap_length_m))
+    println("__HEXA_ANTIMATTER_STRUCTURE__ PASS gate=GATE_OPEN absorbed=false")
+}

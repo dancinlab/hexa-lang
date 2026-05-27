@@ -1,0 +1,307 @@
+#!hexa strict
+// hexa-rtsc/verify/numerics_lattice_arithmetic.hexa — n=6 lattice
+// float-arithmetic precision floor (T2 cross-cutter, math_pure stability).
+//
+// Recipe §1 slot #13 — shared cross-cutter across all hexa-* projects.
+// Asserts that math_pure floating-point primitives reproduce every n=6
+// lattice anchor (σ, τ, φ, sopfr, J₂, Hc2, master identity, σ-φ, σ², σ³)
+// to within precision floor 1e-9 relative error.
+//
+// All other numerics_*.hexa scripts compose math_pure calls with these
+// same n=6 anchors. If math_pure drifts on the lattice constants, every
+// downstream T2 script becomes unreliable. This is the regression-lock
+// floor for the entire T2 numerical tier.
+//
+// Recipe §4 lint_numerics 5 invariants enforced.
+//
+// PASS = every n=6 anchor reproduced via math_pure with rel_err < 1e-9.
+// FAIL = any anchor drifts above precision floor (math_pure regression).
+//
+// Run:
+//     hexa run verify/numerics_lattice_arithmetic.hexa
+//
+// @no-lock-needed
+
+use "self/runtime/math_pure"
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+fn abs_f(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn rel_err(a: float, b: float) -> float {
+    let d = abs_f(a - b)
+    let abs_b = abs_f(b)
+    if abs_b < 1.0e-30 { return d }
+    return d / abs_b
+}
+
+// ─── n=6 lattice constants (integer SSOT + float counterpart) ──────────
+
+let SIGMA_INT: int = 12
+let TAU_INT:   int = 4
+let PHI_INT:   int = 2
+let SOPFR_INT: int = 5
+let J2_INT:    int = 24
+let N_INT:     int = 6
+let SIGMA_PHI_INT:    int = 10                  // σ-φ miniaturisation
+let SIGMA_SQ_INT:     int = 144                 // σ²
+let SIGMA_CUBED_INT:  int = 1728                // σ³
+let HC2_INT:          int = 48                  // σ·τ master gate
+
+let SIGMA: float = 12.0
+let TAU:   float = 4.0
+let PHI:   float = 2.0
+let SOPFR: float = 5.0
+let J2:    float = 24.0
+let N:     float = 6.0
+
+let TOL: float = 1.0e-9
+
+// ─── master identity σ·φ = n·τ = J₂ = 24 (float) ──────────────────────
+
+fn check_master_identity_float() {
+    let lhs = SIGMA * PHI
+    let rhs = N * TAU
+    _check(rel_err(lhs, 24.0) < TOL && rel_err(rhs, 24.0) < TOL,
+           "master identity σ·φ = n·τ = J₂ = 24 (float)",
+           "σ·φ=" + str(lhs) + " · n·τ=" + str(rhs))
+    _check(rel_err(lhs, J2) < TOL,
+           "master identity σ·φ = J₂ (float reproduction)",
+           "")
+}
+
+// ─── sqrt_pure(σ²) = σ round-trip ──────────────────────────────────────
+
+fn check_sqrt_round_trip() {
+    let s_squared = pow_pure(SIGMA, 2.0)
+    let s_back = sqrt_pure(s_squared)
+    _check(rel_err(s_back, SIGMA) < TOL,
+           "sqrt_pure(σ²) = σ round-trip (math_pure stability)",
+           "σ²=" + str(s_squared) + " · √(σ²)=" + str(s_back))
+    // Direct value: σ² = 144
+    _check(rel_err(s_squared, float(SIGMA_SQ_INT)) < TOL,
+           "σ² = pow_pure(12, 2) = 144 (anchor)",
+           "")
+}
+
+// ─── pow_pure(σ, k) cross-checks (σ², σ³, σ-φ powers) ─────────────────
+
+fn check_pow_chain() {
+    let s2 = pow_pure(SIGMA, 2.0)
+    let s3 = pow_pure(SIGMA, 3.0)
+    _check(rel_err(s2, 144.0) < TOL,
+           "pow_pure(σ, 2) = 144", "")
+    _check(rel_err(s3, float(SIGMA_CUBED_INT)) < TOL,
+           "pow_pure(σ, 3) = 1728 (Ω_RTSC fcc cell)", "")
+    let smp = float(SIGMA_PHI_INT)
+    let smp_sq = pow_pure(smp, 2.0)
+    _check(rel_err(smp_sq, 100.0) < TOL,
+           "pow_pure(σ-φ, 2) = 100 (miniaturisation squared)",
+           "")
+    let smp_cu = pow_pure(smp, 3.0)
+    _check(rel_err(smp_cu, 1000.0) < TOL,
+           "pow_pure(σ-φ, 3) = 1000 (n=6 decade-cube)",
+           "")
+}
+
+// ─── log10_pure(10^k) = k chain ────────────────────────────────────────
+
+fn check_log10_chain() {
+    let v1 = log10_pure(1.0e3)
+    let v2 = log10_pure(1.0e6)
+    let v3 = log10_pure(1.0e7)
+    _check(rel_err(v1, 3.0) < TOL,
+           "log10_pure(10³ = σ-φ³) = 3.0 (n/φ index)",
+           "")
+    _check(rel_err(v2, 6.0) < TOL,
+           "log10_pure(10⁶) = 6.0 (= n)",
+           "")
+    _check(rel_err(v3, 7.0) < TOL,
+           "log10_pure(10⁷) = 7.0",
+           "")
+    // log10(144) = 2 · log10(12) — multiplicativity
+    let lhs = log10_pure(144.0)
+    let rhs = 2.0 * log10_pure(SIGMA)
+    _check(rel_err(lhs, rhs) < TOL,
+           "log10_pure(σ²) = 2·log10_pure(σ) (multiplicativity)",
+           "lhs=" + str(lhs) + " · rhs=" + str(rhs))
+}
+
+// ─── exp_pure / log_pure round-trip ────────────────────────────────────
+
+fn check_exp_log_round_trip() {
+    let v1 = exp_pure(log_pure(SIGMA))
+    _check(rel_err(v1, SIGMA) < TOL,
+           "exp_pure(log_pure(σ)) = σ round-trip",
+           "")
+    let v2 = exp_pure(log_pure(J2))
+    _check(rel_err(v2, J2) < TOL,
+           "exp_pure(log_pure(J₂)) = J₂ round-trip",
+           "")
+    let v3 = log_pure(exp_pure(N))
+    _check(rel_err(v3, N) < TOL,
+           "log_pure(exp_pure(n)) = n round-trip",
+           "")
+}
+
+// ─── Half-integer power: sqrt(σ³) = σ^(3/2) ────────────────────────────
+
+fn check_half_integer_pow() {
+    let lhs = sqrt_pure(pow_pure(SIGMA, 3.0))
+    let rhs = pow_pure(SIGMA, 1.5)
+    _check(rel_err(lhs, rhs) < TOL,
+           "sqrt_pure(σ³) = pow_pure(σ, 1.5) (half-integer power)",
+           "")
+    _check(rel_err(lhs, SIGMA * sqrt_pure(SIGMA)) < TOL,
+           "σ^(3/2) = σ · √σ (factorisation)",
+           "")
+}
+
+// ─── Hc2 = σ·τ = 48 via float ──────────────────────────────────────────
+
+fn check_hc2_via_float() {
+    let hc2 = SIGMA * TAU
+    _check(rel_err(hc2, float(HC2_INT)) < TOL,
+           "Hc2 = σ·τ = 48 T (float)",
+           "")
+    // Also: J₂² / σ = 48
+    let path_b = (J2 * J2) / SIGMA
+    _check(rel_err(path_b, 48.0) < TOL,
+           "Hc2 alt path: J₂²/σ = 48 (float)",
+           "")
+}
+
+// ─── J₂² / 12 = 48 = (2σ)²/(2n) ──────────────────────────────────────
+
+fn check_j2_squared_factorisation() {
+    let lhs = pow_pure(J2, 2.0) / SIGMA
+    let rhs = pow_pure(2.0 * SIGMA, 2.0) / (2.0 * N)
+    _check(rel_err(lhs, rhs) < TOL,
+           "J₂²/σ = (2σ)²/(2n) (n=6 weekstone ③ float reproduction)",
+           "")
+    _check(rel_err(lhs, 48.0) < TOL,
+           "= 48 (Hc2 master gate)",
+           "")
+}
+
+// ─── π and trig anchors (math_pure pi_pure() floor) ───────────────────
+
+fn check_pi_anchor() {
+    let pi_val = pi_pure()
+    _check(rel_err(pi_val, 3.141592653589793) < TOL,
+           "pi_pure() = 3.14159... within precision floor",
+           "computed = " + str(pi_val))
+    // 2π appears in flux quantum / GL coherence formulas
+    let two_pi = 2.0 * pi_val
+    _check(rel_err(two_pi, 6.283185307179586) < TOL,
+           "2π = 6.28318... (flux quantum / GL coherence factor)",
+           "")
+}
+
+// ─── Identity sweep: every divisor ratio of 6 reproduces in float ─────
+
+fn check_divisor_ratios() {
+    // n/τ = 6/4 = 3/2 = 1.5
+    let n_over_tau = N / TAU
+    _check(rel_err(n_over_tau, 1.5) < TOL,
+           "n/τ = 6/4 = 1.5 (float)", "")
+    // σ/τ = 12/4 = 3 (Coulomb-pairing index)
+    let s_over_tau = SIGMA / TAU
+    _check(rel_err(s_over_tau, 3.0) < TOL,
+           "σ/τ = 12/4 = 3 (= n/φ Coulomb-pairing index)", "")
+    // n/φ = 6/2 = 3
+    let n_over_phi = N / PHI
+    _check(rel_err(n_over_phi, 3.0) < TOL,
+           "n/φ = 6/2 = 3", "")
+    _check(rel_err(s_over_tau, n_over_phi) < TOL,
+           "σ/τ = n/φ identity (= 3)", "")
+    // σ/J₂ = 12/24 = 1/2 = 1/φ
+    let s_over_j2 = SIGMA / J2
+    let one_over_phi = 1.0 / PHI
+    _check(rel_err(s_over_j2, one_over_phi) < TOL,
+           "σ/J₂ = 1/2 = 1/φ identity",
+           "")
+}
+
+let FALSIFIERS = [
+    "math_pure precision regression — any n=6 anchor float drifts > 1e-9 → DEMOTE math_pure floor",
+    "sqrt-pow round-trip break — sqrt_pure(σ²) ≠ σ within rel_err 1e-9 → DEMOTE sqrt_pure stability",
+    "exp-log round-trip break — exp_pure(log_pure(x)) ≠ x within rel_err 1e-9 → DEMOTE exp_pure stability",
+    "log10 multiplicativity break — log10(σ²) ≠ 2·log10(σ) within rel_err 1e-9 → DEMOTE log10 stability",
+    "π anchor drift — pi_pure() drifts > 1e-9 from 3.14159265358979 → DEMOTE pi_pure() floor",
+    "divisor ratio break — σ/τ ≠ n/φ ≠ 3 within rel_err 1e-9 → DEMOTE n=6 closed-form structure",
+]
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-rtsc — n=6 lattice float-arithmetic precision floor (math_pure)")
+    println("========================================================================")
+    println("  cross-cutter T2 (recipe §1 slot #13) — regression-lock floor for all")
+    println("  numerics_*.hexa scripts. Asserts every n=6 anchor reproduces in float")
+    println("  to within 1e-9 relative error.")
+    println("")
+
+    println("  master identity σ·φ = n·τ = J₂ = 24:")
+    check_master_identity_float()
+    println("")
+
+    println("  sqrt_pure round-trip:")
+    check_sqrt_round_trip()
+    println("")
+
+    println("  pow_pure chain (σ², σ³, (σ-φ)², (σ-φ)³):")
+    check_pow_chain()
+    println("")
+
+    println("  log10_pure chain (10³, 10⁶, 10⁷, multiplicativity):")
+    check_log10_chain()
+    println("")
+
+    println("  exp_pure / log_pure round-trip:")
+    check_exp_log_round_trip()
+    println("")
+
+    println("  half-integer power: sqrt(σ³) = σ^(3/2):")
+    check_half_integer_pow()
+    println("")
+
+    println("  Hc2 = σ·τ = 48 via float:")
+    check_hc2_via_float()
+    println("")
+
+    println("  J₂²/σ = (2σ)²/(2n) (weekstone ③ float):")
+    check_j2_squared_factorisation()
+    println("")
+
+    println("  π anchor (pi_pure() precision):")
+    check_pi_anchor()
+    println("")
+
+    println("  divisor ratios (n/τ, σ/τ, n/φ, σ/J₂):")
+    check_divisor_ratios()
+
+    println("")
+    println("  FALSIFIERS (" + str(FALSIFIERS.len()) + "):")
+    for f in FALSIFIERS { println("    ✗ " + f) }
+
+    println("========================================================================")
+    let pass_n = RUN - FAIL
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_RTSC_NUMERICS_LATTICE_ARITHMETIC__ FAIL")
+        exit(1)
+    }
+    println("  Cross-cutter locked: math_pure reproduces all n=6 anchors at 1e-9 floor.")
+    println("  All downstream numerics_*.hexa scripts inherit this stability guarantee.")
+    println("__HEXA_RTSC_NUMERICS_LATTICE_ARITHMETIC__ PASS")
+    exit(0)
+}

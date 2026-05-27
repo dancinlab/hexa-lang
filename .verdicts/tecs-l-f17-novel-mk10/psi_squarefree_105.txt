@@ -1,0 +1,3 @@
+verify --expr sigma(105)=192
+  calc   = 192  == expected 192
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)

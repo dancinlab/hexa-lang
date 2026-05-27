@@ -1,0 +1,300 @@
+// tool/resource_lint.hexa — .resource canonical SSOT validator
+//
+// @tool(slug="resource_lint", desc="validate .resource entries (kind whitelist + required fields + scoring-weight range + capabilities non-empty)")
+// @usage(hexa /Users/ghost/core/hexa-lang/tool/resource_lint.hexa [--list] [--path <file>])
+// @example(verify ~/core/hive/.resource is well-formed before the workload router consumes it — required fields per kind, scoring-weight in [0..1], capabilities non-empty)
+// @exit_codes(0=PASS, 1=violations found, 2=path not found / read error)
+//
+// usage:
+//   hexa tool/resource_lint.hexa                 — validate $PWD/.resource
+//   hexa tool/resource_lint.hexa --list          — dump parsed entries for debug
+//   hexa tool/resource_lint.hexa --path <file>   — validate explicit path
+//
+// rule: every <project>/.resource entry must have:
+//   - directive `resource <num> <status> "<name>"`
+//   - status ∈ {live, warn, new, deferred, convention}
+//   - kind ∈ {host, process, container, service}
+//     (host + process enforced today; container/service accepted as
+//     future placeholders)
+//   - kind=host required keys: slug, ssh-alias, capabilities,
+//     memory-budget, container, scoring-weight, why
+//   - kind=host optional keys: image (default container image for the
+//     /resource docker-ensure-container helper). MUST be non-empty if
+//     present; the field is omitted entirely for hosts whose container
+//     is created out-of-band.
+//   - kind=process required keys: pid, cmd, started, lease-ttl, why
+//     · pid / started positive integers
+//     · lease-ttl non-negative integer (0 = indefinite)
+//     · pgid (optional) positive integer if present
+//   - scoring-weight numeric, in [0.0, 1.0] inclusive
+//   - capabilities non-empty (csv-string)
+//
+// Pattern mirrors ai-config-ban ext_lint.hexa: same raw-format DSL parser,
+// same status whitelist, same kind-specific check dispatch.
+
+// ─── YAML SSOT loader (2026-05-07: raw-format DSL → YAML migration) ──────
+//
+// Sister to hive's resource/lint.hexa loader. Shells out to
+// `python3 $HOME/.hx/packages/resource/tool/yaml_dump.py <path>` per
+// dispatch.002.
+
+fn _load_resource(path: string) -> array {
+    let exists = to_string(exec("test -f '" + path + "' && echo y || echo n")).trim()
+    if exists != "y" { return [] }
+    let helper = env("HOME") + "/.hx/packages/resource/tool/yaml_dump.py"
+    let helper_exists = to_string(exec("test -f '" + helper + "' && echo y || echo n")).trim()
+    if helper_exists != "y" { return [] }
+    let cmd = "python3 '" + helper + "' '" + path + "' 2>/dev/null"
+    let raw = to_string(exec(cmd))
+    let lines = split(raw, "\n")
+    let mut rules = []
+    let mut cur_id = ""
+    let mut cur_status = ""
+    let mut cur_name = ""
+    let mut cur_keys = []
+    let mut has_rule = false
+    for line in lines {
+        if line == "---ENTRY---" {
+            if has_rule { rules.push([cur_id, cur_status, cur_name, cur_keys]) }
+            cur_id = ""
+            cur_status = ""
+            cur_name = ""
+            cur_keys = []
+            has_rule = true
+            continue
+        }
+        if !has_rule { continue }
+        let eq = line.index_of("=")
+        if eq <= 0 { continue }
+        let key = line.substring(0, eq)
+        let val = line.substring(eq + 1, len(line))
+        if key == "num" { cur_id = val }
+        else if key == "status" { cur_status = val }
+        else if key == "name" { cur_name = val }
+        else { cur_keys.push([key, val]) }
+    }
+    if has_rule { rules.push([cur_id, cur_status, cur_name, cur_keys]) }
+    return rules
+}
+
+fn _keys_first(keys: array, k: string) -> string {
+    for kv in keys {
+        if kv[0] == k { return kv[1] }
+    }
+    return ""
+}
+
+fn _valid_kind(k: string) -> bool {
+    if k == "host" || k == "process" || k == "container" || k == "service" { return true }
+    return false
+}
+
+// Parse a numeric string into float (best-effort). Returns NaN sentinel
+// (we use -1.0 as sentinel since scoring-weight is constrained ≥ 0).
+fn _parse_num(s: string) -> float {
+    let t = s.trim()
+    if len(t) == 0 { return -1.0 }
+    // Allow optional unit suffix (GiB/g/G) for memory-budget — we trim
+    // it here so this helper doubles for memory and scoring-weight.
+    let mut v = t
+    let suffixes = ["GiB", "MiB", "gib", "mib", "GB", "MB", "gb", "mb", "g", "G", "m", "M"]
+    for suf in suffixes {
+        if v.ends_with(suf) {
+            v = v.substring(0, len(v) - len(suf)).trim()
+            break
+        }
+    }
+    let n = to_float(v)
+    return n
+}
+
+fn _pwd() -> string {
+    let mut p = env("PWD")
+    if p == "" { p = to_string(exec("pwd")).trim() }
+    return p
+}
+
+fn _resource_path(explicit: string) -> string {
+    if len(explicit) > 0 { return explicit }
+    return _pwd() + "/.resource"
+}
+
+let _raw_args = args()
+let mut cli = []
+let mut _ai = 2
+while _ai < len(_raw_args) {
+    cli.push(_raw_args[_ai])
+    _ai = _ai + 1
+}
+
+let mut list_mode = false
+let mut path_arg = ""
+let mut i = 0
+while i < len(cli) {
+    let a = cli[i]
+    if a == "--list" { list_mode = true }
+    else if a == "--path" {
+        if i + 1 < len(cli) { path_arg = cli[i + 1]; i = i + 1 }
+    }
+    i = i + 1
+}
+
+let path = _resource_path(path_arg)
+let rules = _load_resource(path)
+
+if list_mode {
+    println("── .resource entries (" + to_string(len(rules)) + ") at " + path + " ──")
+    for r in rules {
+        let kind = _keys_first(r[3], "kind")
+        let slug = _keys_first(r[3], "slug")
+        println("  #" + r[0] + " [" + r[1] + "] kind=" + kind + " slug=" + slug + " — " + r[2])
+    }
+    exit(0)
+}
+
+if len(rules) == 0 {
+    let exists = to_string(exec("test -f '" + path + "' && echo y || echo n")).trim()
+    if exists != "y" {
+        eprintln("resource_lint: file not found at " + path +
+                 " — try: place a .resource at $PWD or pass --path <file>")
+        exit(2)
+    }
+    println("resource_lint: .resource empty — pass")
+    exit(0)
+}
+
+let mut errs = []
+
+for r in rules {
+    let id = r[0]
+    let keys = r[3]
+    let tag = "[resource #" + id + "] "
+
+    let kind = _keys_first(keys, "kind")
+    if kind == "" {
+        errs.push(tag + "missing required key: kind")
+    } else if !_valid_kind(kind) {
+        errs.push(tag + "invalid kind '" + kind + "' — whitelist: host container service")
+    }
+
+    let why = _keys_first(keys, "why")
+    if why == "" {
+        errs.push(tag + "missing required key: why")
+    }
+
+    if kind == "host" {
+        let slug = _keys_first(keys, "slug")
+        if slug == "" { errs.push(tag + "host kind requires 'slug'") }
+
+        let ssh_alias = _keys_first(keys, "ssh-alias")
+        if ssh_alias == "" { errs.push(tag + "host kind requires 'ssh-alias'") }
+
+        let caps = _keys_first(keys, "capabilities")
+        if caps == "" {
+            errs.push(tag + "host kind requires 'capabilities' (csv-string of capability tokens)")
+        } else if caps.trim() == "" {
+            errs.push(tag + "capabilities must be non-empty")
+        }
+
+        let mem = _keys_first(keys, "memory-budget")
+        if mem == "" {
+            errs.push(tag + "host kind requires 'memory-budget' (positive integer GiB)")
+        } else {
+            let mn = _parse_num(mem)
+            if mn <= 0.0 {
+                errs.push(tag + "memory-budget must be a positive number — got '" + mem + "'")
+            }
+        }
+
+        let container = _keys_first(keys, "container")
+        if container == "" {
+            errs.push(tag + "host kind requires 'container' (already-running container name)")
+        }
+
+        let sw = _keys_first(keys, "scoring-weight")
+        if sw == "" {
+            errs.push(tag + "host kind requires 'scoring-weight' (float in [0.0, 1.0])")
+        } else {
+            let swn = _parse_num(sw)
+            if swn < 0.0 || swn > 1.0 {
+                errs.push(tag + "scoring-weight must be in [0.0, 1.0] — got '" + sw + "'")
+            }
+        }
+
+        // Optional `image` field — used by the /resource
+        // docker-ensure-container helper to pick the base image when
+        // creating the container automatically. We never require it
+        // (containers may be created out-of-band) but if the field is
+        // PRESENT it must be non-empty — an empty image string would
+        // break docker run downstream and is almost certainly a typo.
+        let img_present = false
+        for kv in keys {
+            if kv[0] == "image" { img_present = true }
+        }
+        if img_present {
+            let img = _keys_first(keys, "image")
+            if img.trim() == "" {
+                errs.push(tag + "image, if present, must be non-empty (e.g. 'alpine:latest') — try: remove the field or set a registry/tag")
+            }
+        }
+    }
+
+    if kind == "process" {
+        let pid = _keys_first(keys, "pid")
+        if pid == "" {
+            errs.push(tag + "process kind requires 'pid' (positive integer OS pid)")
+        } else {
+            let pn = _parse_num(pid)
+            if pn <= 0.0 {
+                errs.push(tag + "pid must be a positive integer — got '" + pid + "'")
+            }
+        }
+
+        let cmd = _keys_first(keys, "cmd")
+        if cmd == "" {
+            errs.push(tag + "process kind requires 'cmd' (command string)")
+        }
+
+        let started = _keys_first(keys, "started")
+        if started == "" {
+            errs.push(tag + "process kind requires 'started' (unix epoch seconds)")
+        } else {
+            let sn = _parse_num(started)
+            if sn <= 0.0 {
+                errs.push(tag + "started must be a positive unix epoch — got '" + started + "'")
+            }
+        }
+
+        let ttl = _keys_first(keys, "lease-ttl")
+        if ttl == "" {
+            errs.push(tag + "process kind requires 'lease-ttl' (integer seconds; 0 = indefinite)")
+        } else {
+            let tn = _parse_num(ttl)
+            if tn < 0.0 {
+                errs.push(tag + "lease-ttl must be non-negative (0 = indefinite) — got '" + ttl + "'")
+            }
+        }
+
+        let pgid = _keys_first(keys, "pgid")
+        if pgid != "" {
+            let gn = _parse_num(pgid)
+            if gn <= 0.0 {
+                errs.push(tag + "pgid, if present, must be a positive integer — got '" + pgid + "'")
+            }
+        }
+    }
+}
+
+println("── resource_lint ── " + path)
+println("entries : " + to_string(len(rules)))
+
+if len(errs) == 0 {
+    println("PASS")
+    exit(0)
+}
+
+println("FAIL — " + to_string(len(errs)) + " violations")
+for e in errs {
+    eprintln("  " + e)
+}
+exit(1)

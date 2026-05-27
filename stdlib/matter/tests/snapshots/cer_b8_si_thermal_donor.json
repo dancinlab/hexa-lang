@@ -1,0 +1,29 @@
+{
+  "__fixture_tag__": "VENDORED SOURCE SNAPSHOT — peer-reviewed citation, frozen",
+  "gate_id": "cer_b8_si_thermal_donor",
+  "claim": {
+    "property": "thermal-donor concentration [TD] in CZ Si post-anneal",
+    "material": "Czochralski-grown silicon",
+    "value_range": [1.0e15, 1.0e16],
+    "unit": "cm^-3",
+    "condition": "anneal 450 C / 1 h, oxygen-rich CZ wafer, FTIR or Hall measurement"
+  },
+  "source": {
+    "kind": "PEER_REVIEWED",
+    "primary": "Kaiser & Frisch 1958 Phys. Rev. 112, 1546 — discovery of thermal donors in CZ Si",
+    "secondary": "Bullis 1995 SEMI MF1188 specification; Wijaranakula 1991 J. Electrochem. Soc.",
+    "citation": "Kaiser & Frisch 1958 Phys. Rev. 112, 1546 + SEMI MF1188 (Bullis 1995) — CZ Si thermal donors form at 450 C anneal, [TD] = 10^15 to 10^16 cm^-3"
+  },
+  "tolerance": {
+    "log10_abs": 0.5,
+    "unit": "log decades",
+    "basis": "thermal-donor formation kinetics vary with [O_i]; literature range spans ~1 decade"
+  },
+  "spec_doc": {
+    "path": "silicon/silicon.md",
+    "line_hint": "Si-L8 thermal donor anchor row"
+  },
+  "unproven": false,
+  "accessed": "2026-05-13",
+  "n6_lattice_fit_applied": false
+}

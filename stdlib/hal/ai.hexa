@@ -1,0 +1,183 @@
+#!hexa strict
+// stdlib/hal/ai.hexa — host-side AI-native dispatch primitive (provenance-aware).
+//
+// import:  use "stdlib/hal/ai"
+// φ:       digital (provenance-bit is a digital high/low; analog axis n/a)
+// lattice: NOT in the embedded σ=12 peripheral list (gpio/i2c/spi/...).
+//          NOT in the σ=12 GPGPU vendor × IR list (cuda/hip/sycl/...).
+//          AI-native is a **third separate axis**:
+//            σ=12 native MAC slots per tile (σ·φ = J₂ = 24 MAC/cycle)
+//            τ=4 pipeline stages (configure/start/serve/report)
+//            φ=2 provenance kinds (FACT / HYPOTHESIS)
+//            σ_n=72 → provenance overhead φ/σ_n = 1/36
+//            n_tiles = σ/φ = 6 native tiles per HEXA-AI chip
+//            peak σ²·φ = 288 MAC/cycle at the array level
+//            bt_coverage = sopfr(n)+φ = 7 (BT_541..547)
+//
+// canon-aware (~/core/canon/domains/compute/ai-native-architecture/
+// ai-native-architecture.md):
+//   - 3 silicon primitives:
+//        provenance-bit (1-bit FACT/HYPOTHESIS, OR-propagated)
+//        promotion-counter-MMU (write-barrier; (prov, grade) check)
+//        bt-id-isa (3-bit ISA opcode field; BT audit per MAC issuance)
+//   - 4 falsifiers (F-AI1 / F-AI2-A / F-AI2-B / F-AI2c-A) + 3 RTL silicon-tier
+//     (F-AI3-A overhead<3% / F-AI3-B counter width / F-AI3-C ISA fits 7 BTs).
+//
+// Phase G iter 7 of hexa-chip Phase G (Beyond-GPU AI-native architecture).
+// First .hexa MCU consumer to refactor onto this surface: hexa-chip
+// firmware/mcu/ai_native_host.hexa (Phase G iter 6, currently uses
+// core+gpio+intr+timer+uart directly; refactor to use hal::ai once stable).
+//
+// Surface kept paper-tier — actual silicon dispatch goes through
+// vendor-specific MMIO that a downstream backend would supply (analogous
+// to compute.hexa's vendor backend layer).
+
+let MODULE_NAME = "ai"
+let PHI_KIND    = "digital"
+
+// ── n=6 invariant constants (mirrors canon §2 + ai_native_arch §2) ───
+
+let SIGMA       = 12
+let PHI         = 2
+let TAU         = 4
+let SIGMA_N     = 72
+let J2          = 24
+let SOPFR_N     = 5
+
+// Derived:
+let N_TILES         = 6      // σ / φ
+let MACS_PER_TILE   = 24     // σ · φ = J₂
+let MACS_PER_ARRAY  = 288    // σ² · φ
+let BT_COVERAGE     = 7      // sopfr(n) + φ
+
+// ── provenance kinds (φ=2) ───────────────────────────────────────────
+let PROV_FACT       = 0   // verified upstream value
+let PROV_HYPOTHESIS = 1   // speculative / unverified value
+
+// ── promotion-counter MMU thresholds ([φ², σ] per canon §2 row 6/7) ──
+let THRESHOLD_MIN     = 4    // φ²
+let THRESHOLD_MAX     = 12   // σ
+let THRESHOLD_DEFAULT = 8    // mid-band; programmable
+
+// ── BT-id ISA field (3-bit; canon §3 of btAI3_rtl_design) ────────────
+let BT_RESERVED = 0    // 000 — reserved (no-BT)
+let BT_541      = 1    // 001 — Riemann zeros
+let BT_542      = 2    // 010 — P vs NP
+let BT_543      = 3    // 011 — Yang-Mills
+let BT_544      = 4    // 100 — Navier-Stokes
+let BT_545      = 5    // 101 — Hodge
+let BT_546      = 6    // 110 — BSD
+let BT_547      = 7    // 111 — Poincaré
+
+// ── lifecycle stages (τ=4) ───────────────────────────────────────────
+let STAGE_CONFIGURE = 0
+let STAGE_START     = 1
+let STAGE_SERVE     = 2
+let STAGE_REPORT    = 3
+
+// ── handle pool (≤ J₂/n = 4 default; consistent with σ=12 peripheral lattice) ─
+let DEFAULT_HANDLE_CEILING = 4
+
+// ─── dispatch surface ────────────────────────────────────────────────
+
+// Configure a tile for AI-native dispatch with the given threshold.
+// Returns tile_handle ≥ 0 on success, negative on validation failure.
+fn ai_configure_tile(tile_id: int, threshold: int) -> int {
+    if tile_id < 0 || tile_id >= N_TILES { return -1 }
+    if threshold < THRESHOLD_MIN || threshold > THRESHOLD_MAX { return -2 }
+    // STUB: real impl writes promotion_counter_mmu threshold register
+    //       per tile; clears prov_regfile to all FACT.
+    return tile_id
+}
+
+// Dispatch a kernel with provenance bit + grade + BT audit.
+// `prov_in` ∈ {PROV_FACT, PROV_HYPOTHESIS}.
+// `grade`  ∈ [0, σ]; compared against per-tile threshold by MMU.
+// `bt_id`  ∈ [BT_RESERVED, BT_547]; BT-id-isa 3-bit field.
+// Returns 0 on accept, 1 on refuse-write event, negative on validation.
+fn ai_dispatch_with_provenance(handle: int, prov_in: int, grade: int, bt_id: int) -> int {
+    if handle < 0 || handle >= N_TILES { return -1 }
+    if prov_in != PROV_FACT && prov_in != PROV_HYPOTHESIS { return -2 }
+    if grade < 0 || grade > SIGMA { return -3 }
+    if bt_id < BT_RESERVED || bt_id > BT_547 { return -4 }
+    // STUB: real impl
+    //   1. write prov_regfile entry with prov_in
+    //   2. issue MAC opcode with bt_id field
+    //   3. promotion_counter_mmu evaluates (prov == FACT ∧ grade ≥ threshold)
+    //   4. on refuse: emit refuse_event on bus, return 1
+    //   5. on accept: write_back and return 0
+    return 0
+}
+
+// Register a callback for BT audit events (per BT-id).
+// Returns true if registration succeeds.
+fn ai_register_bt_audit(bt_id: int, callback_name: str) -> bool {
+    if bt_id < BT_541 || bt_id > BT_547 { return false }
+    if callback_name.len() == 0 { return false }
+    // STUB: real impl appends (bt_id, callback) to BT ledger writer table.
+    return true
+}
+
+// Query the refuse_event counter (incremented by promotion_counter_mmu).
+// Returns the count since last clear. Used for F-AI2-B PASS-robust check.
+fn ai_query_refuse_count() -> int {
+    // STUB: real impl reads global refuse_event counter (ISR-incremented).
+    return 0
+}
+
+// Clear the refuse_event counter (typically at sweep boundary).
+fn ai_clear_refuse_count() -> bool {
+    // STUB: real impl writes 0 to the counter register.
+    return true
+}
+
+// Set per-tile threshold (re-programmable knob; range [φ², σ]).
+fn ai_set_threshold(tile_id: int, threshold: int) -> bool {
+    if tile_id < 0 || tile_id >= N_TILES { return false }
+    if threshold < THRESHOLD_MIN || threshold > THRESHOLD_MAX { return false }
+    return true
+}
+
+// Get peak throughput in MAC/cycle for the configured chip
+// (n_tiles · macs_per_tile = σ²·φ when fully populated).
+fn ai_peak_macs_per_cycle() -> int {
+    return N_TILES * MACS_PER_TILE
+}
+
+// Report peripheral metadata (matches stdlib/hal sigma-slot module convention,
+// but flagged as n/a-σslot since AI-native is on a separate lattice axis).
+fn ai_module_meta() -> [str] {
+    return [MODULE_NAME, "n/a-σslot", PHI_KIND, str(DEFAULT_HANDLE_CEILING)]
+}
+
+// ── invariant ledger (canon §2 mirror; T1 algebraic re-assertable) ──
+
+fn ai_invariant_n_tiles() -> int          { return N_TILES }            // σ/φ = 6
+fn ai_invariant_macs_per_tile() -> int    { return MACS_PER_TILE }       // σ·φ = 24 = J₂
+fn ai_invariant_macs_per_array() -> int   { return MACS_PER_ARRAY }      // σ²·φ = 288
+fn ai_invariant_bt_coverage() -> int      { return BT_COVERAGE }         // sopfr(n)+φ = 7
+fn ai_invariant_threshold_max() -> int    { return THRESHOLD_MAX }       // σ
+fn ai_invariant_threshold_min() -> int    { return THRESHOLD_MIN }       // φ²
+
+// ── sim-first: report path ───────────────────────────────────────────
+
+fn ai_report(handle: int) -> str {
+    if handle < 0 { return "[ai sim] invalid handle" }
+    return "[ai sim] handle=" + str(handle) + " (paper-tier; vendor backend TBD)"
+}
+
+// ── bench / sim main (tested via tests/test_ai_lattice_test.hexa eventually) ─
+
+fn main() {
+    println("[ai] stdlib/hal/ai.hexa — paper-tier AI-native dispatch surface")
+    println("  invariants: σ=" + str(SIGMA) + " φ=" + str(PHI) + " τ=" + str(TAU) +
+            " σ_n=" + str(SIGMA_N) + " J₂=" + str(J2))
+    println("  derived: n_tiles=" + str(N_TILES) + " macs/tile=" + str(MACS_PER_TILE) +
+            " macs/array=" + str(MACS_PER_ARRAY) + " bt_coverage=" + str(BT_COVERAGE))
+    println("  threshold range: [φ²=" + str(THRESHOLD_MIN) + ", σ=" + str(THRESHOLD_MAX) + "]")
+    println("  prov kinds: PROV_FACT=" + str(PROV_FACT) + " PROV_HYPOTHESIS=" + str(PROV_HYPOTHESIS))
+    println("  BTs: BT_541..BT_547 (canon §3; bt_coverage = sopfr(n)+φ = " + str(BT_COVERAGE) + ")")
+    println("  separate axis: NOT in σ=12 peripheral lattice; NOT in GPGPU σ=12 vendor×IR.")
+}
+
+main()

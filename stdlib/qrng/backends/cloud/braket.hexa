@@ -1,0 +1,99 @@
+#!hexa strict
+// stdlib/qrng/backends/cloud/braket.hexa — AWS Braket multi-backend QRNG aggregator (T2.d STUB_CREDENTIALED)
+//
+// @version 1.0.0
+// @capabilities [network, randomness, shell, credentials, aggregator]
+// @stability stub
+// @since 2026-05-16
+//
+// AWS Braket aggregator (IonQ Forte / Rigetti Aspen / IQM Garnet / QuEra Aquila
+// / OQC Lucy via single Braket SDK). Requires AWS credentials + amazon-braket-sdk.
+//
+//   (1) is_quantum=1 — aggregates real QPUs (per-backend assurance varies).
+//   (2) Live: AWS account + Braket service + AWS_ACCESS_KEY_ID/SECRET or AWS_PROFILE.
+//   (3) Free Tier covers simulators only; QPU billed per-shot.
+//   (4) Mock fixture byte-identical to mock_qrng.
+//
+// FALSIFIERS (frozen):
+//   F_BRAKET_01: meta shape — name=braket, tier=2, is_quantum=1, is_free=0
+//   F_BRAKET_02: secret-chain — AWS_ACCESS_KEY_ID+AWS_SECRET_ACCESS_KEY → AWS_PROFILE → ~/.aws/credentials
+//   F_BRAKET_03: live without credential + without mock → ok=0 cites secret
+//   F_BRAKET_04: mock fixture deterministic
+//
+// Source: ~/core/qrng/braket/module/braket.hexa @ v1.0.0 (RFC 044).
+
+use "stdlib/qrng/source"
+
+let BRAKET_NAME    = "braket"
+let BRAKET_TIER    = 2
+let BRAKET_BPS     = 100
+let BRAKET_VENDOR  = "aws_braket_aggregator_ionq_rigetti_iqm_quera_oqc"
+let BRAKET_SECRET_PRIMARY_A = "AWS_ACCESS_KEY_ID"
+let BRAKET_SECRET_PRIMARY_B = "AWS_SECRET_ACCESS_KEY"
+let BRAKET_SECRET_PROFILE   = "AWS_PROFILE"
+
+fn qrng_source_meta_braket() -> QrngSourceMeta {
+    return qrng_meta_make(
+        BRAKET_NAME, BRAKET_TIER, BRAKET_BPS,
+        1,    // cost_usd: per-shot QPU
+        0,    // lead_days
+        1,    // is_quantum (aggregator over real QPUs)
+        0,    // is_local: cloud
+        0,    // is_free: QPU paid
+        "STUB_CREDENTIALED",
+        BRAKET_VENDOR
+    )
+}
+
+fn _braket_env(name: str) -> str {
+    return exec("printenv " + name + " 2>/dev/null || true").trim()
+}
+
+fn _braket_resolve_secret_name() -> str {
+    let key_id = _braket_env(BRAKET_SECRET_PRIMARY_A)
+    let key_secret = _braket_env(BRAKET_SECRET_PRIMARY_B)
+    if len(key_id) > 0 { if len(key_secret) > 0 {
+        return BRAKET_SECRET_PRIMARY_A + "+" + BRAKET_SECRET_PRIMARY_B
+    } }
+    let profile = _braket_env(BRAKET_SECRET_PROFILE)
+    if len(profile) > 0 { return BRAKET_SECRET_PROFILE }
+    let home = _braket_env("HOME")
+    if len(home) > 0 {
+        let creds = home + "/.aws/credentials"
+        let exists = exec("[ -f " + creds + " ] && echo yes || echo no").trim()
+        if exists == "yes" { return "AWS_CREDENTIALS_DEFAULT_FILE" }
+    }
+    return ""
+}
+
+fn _braket_mock_fixture(n_bytes: int, seed: int) -> QrngBytes {
+    let mut s = if seed > 0 { seed } else { 12345 }
+    let mut bytes_ = []
+    let mut i = 0
+    while i < n_bytes {
+        s = (1664525 * s + 1013904223) % 4294967296
+        bytes_ = bytes_.push(s % 256)
+        i = i + 1
+    }
+    return qrng_bytes_ok(bytes_, "", "braket: mock fixture (NEXUS_QRNG_MOCK=1; byte-identical to mock_qrng)")
+}
+
+fn qrng_source_collect_braket(n_bytes: int, seed: int) -> QrngBytes {
+    if n_bytes < 1 { return qrng_bytes_fail("braket: n_bytes must be >= 1") }
+    let mock_n = _braket_env("NEXUS_QRNG_MOCK")
+    let mock_a = _braket_env("ANIMA_QRNG_MOCK")
+    let mock_q = _braket_env("QRNG_MOCK")
+    if mock_n == "1" { return _braket_mock_fixture(n_bytes, seed) }
+    if mock_a == "1" { return _braket_mock_fixture(n_bytes, seed) }
+    if mock_q == "1" { return _braket_mock_fixture(n_bytes, seed) }
+    let live = _braket_env("NEXUS_QRNG_LIVE")
+    let live_q = _braket_env("QRNG_LIVE")
+    if live != "1" { if live_q != "1" {
+        return qrng_bytes_fail("braket: live path gated — set NEXUS_QRNG_LIVE=1 (or NEXUS_QRNG_MOCK=1 for CI)")
+    } }
+    let secret = _braket_resolve_secret_name()
+    if len(secret) == 0 {
+        return qrng_bytes_fail("braket: credentials missing — set " + BRAKET_SECRET_PRIMARY_A + "+" + BRAKET_SECRET_PRIMARY_B + " or " + BRAKET_SECRET_PROFILE + ", or place ~/.aws/credentials")
+    }
+    return qrng_bytes_fail("braket: credentials resolved (" + secret + ") but in-process bridge not implemented; use consumer adapter (amazon-braket-sdk)")
+}

@@ -1,0 +1,10 @@
+// stdlib/math/rng_ctx.hexa — F1 (2026-05-10) backward-compat shim.
+//
+// Module relocated to stdlib/alloc/math/rng_ctx.hexa. RngCtx struct +
+// stream-derive helpers — depends on rng (core) and xxhash (core),
+// itself stores state in a struct and produces arrays; alloc tier.
+//
+// Sunset: removed after F4 absorptions complete.
+// New canonical path: stdlib/alloc/math/rng_ctx.hexa
+
+import "stdlib/alloc/math/rng_ctx.hexa"

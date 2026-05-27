@@ -1,0 +1,5 @@
+Numeric gate: hexa=PASS (max|d|=0 mism=0/65536) cublas=PASS (max|d|=0 mism=0/65536) tol=0.000703125 max_ref=0.0703125
+Shape M=256 N=256 K=256, reps=1000, warmup=10
+hexa-emit WMMA   mean=0.0082 ms  TFLOPS=4.0951
+cuBLAS GemmEx    mean=0.0041 ms  TFLOPS=8.2685
+ratio hexa/cublas = 0.4953  (cublas/hexa = 2.0191)

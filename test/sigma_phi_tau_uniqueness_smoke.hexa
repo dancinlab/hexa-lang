@@ -1,0 +1,93 @@
+// test/sigma_phi_tau_uniqueness_smoke.hexa — smoke for symbolic/sigma_phi_tau_uniqueness.hexa
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Reference values from the σ/φ/τ "n=6 unique" theorem family
+// (archive-TECS-L/.shared/calc, commit 4ee05c39):
+//   φ(6)=2, σ(6)=12, τ(6)=4
+//   THM-A  σ(n)=n·φ(n)            solutions in [1,N] = {1, 6}
+//   THM-B  τ(n)+2=n               solution = {6}; closed bound n ≤ 7
+//                                 (⌊(1+√3)²⌋ = 7); τ(n) ≤ 2√n holds
+//   THM-C  σ(n)(n+φ(n))=n·τ(n)²   unique n=6 among n>1  (96 = 96)
+//   THM-D  σ(n)·φ(n)=n·τ(n)       solutions = {1, 6}    (24 = 24)
+//   uniqueness_report: each predicate's solution set is n=6-unique
+//
+// Run:  hexa run test/sigma_phi_tau_uniqueness_smoke.hexa
+// Sentinel: __SPT_SMOKE__ PASS|FAIL on the final line.
+
+import "compiler/atlas/symbolic/sigma_phi_tau_uniqueness.hexa"
+
+let mut PASS = 0
+let mut FAIL = 0
+
+fn check(label: string, cond: bool) {
+    if cond {
+        PASS = PASS + 1
+        println("[PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("[FAIL] " + label)
+    }
+}
+
+fn _eq_set2(s: [int], a: int, b: int) -> bool {
+    return len(s) == 2 && s[0] == a && s[1] == b
+}
+fn _eq_set1(s: [int], a: int) -> bool {
+    return len(s) == 1 && s[0] == a
+}
+
+let LIM = 500
+
+// ── arithmetic primitives ───────────────────────────────────────────────
+check("spt_sigma(6) == 12", spt_sigma(6) == 12)
+check("spt_tau(6) == 4",    spt_tau(6) == 4)
+check("spt_phi(6) == 2",    spt_phi(6) == 2)
+check("spt_sigma(28) == 56", spt_sigma(28) == 56)
+check("spt_phi(12) == 4",   spt_phi(12) == 4)
+
+// ── THM-A : σ(n) = n·φ(n) ⟺ n ∈ {1,6} ───────────────────────────────────
+check("THM-A holds at n=1", thm_a_holds(1))
+check("THM-A holds at n=6", thm_a_holds(6))
+check("THM-A fails at n=28", !thm_a_holds(28))
+check("THM-A solutions [1,500] == {1,6}", _eq_set2(thm_a_solutions(LIM), 1, 6))
+
+// ── THM-B : τ(n)+2 = n ⟺ n=6 (closed bound n ≤ 7) ───────────────────────
+check("THM-B holds at n=6", thm_b_holds(6))
+check("THM-B fails at n=7", !thm_b_holds(7))
+check("THM-B upper bound == 7 (⌊(1+√3)²⌋)", thm_b_upper_bound() == 7)
+check("THM-B bound τ(n)≤2√n holds [1,500]", thm_b_bound_holds(LIM))
+check("THM-B solutions [1,500] == {6}", _eq_set1(thm_b_solutions(LIM), 6))
+
+// ── THM-C : σ(n)(n+φ(n)) = n·τ(n)² unique n=6 (n>1) ─────────────────────
+check("THM-C holds at n=6 (96=96)", thm_c_holds(6))
+check("THM-C fails at n=2", !thm_c_holds(2))
+check("THM-C solutions (n>1) [2,500] == {6}", _eq_set1(thm_c_solutions(LIM), 6))
+
+// ── THM-D : σ(n)·φ(n) = n·τ(n) ⟺ n ∈ {1,6} (24=24) ──────────────────────
+check("THM-D holds at n=1", thm_d_holds(1))
+check("THM-D holds at n=6", thm_d_holds(6))
+check("THM-D fails at n=12", !thm_d_holds(12))
+check("THM-D solutions [1,500] == {1,6}", _eq_set2(thm_d_solutions(LIM), 1, 6))
+
+// ── generic uniqueness report ───────────────────────────────────────────
+let rA = uniqueness_report(1, LIM)
+check("report THM-A: n_solutions==2, has_1, has_6, n6-unique",
+      rA.n_solutions == 2 && rA.has_1 && rA.has_6 && rA.is_n6_unique)
+let rB = uniqueness_report(2, LIM)
+check("report THM-B: n_solutions==1, has_6, n6-unique",
+      rB.n_solutions == 1 && rB.has_6 && rB.is_n6_unique && !rB.has_1)
+let rD = uniqueness_report(4, LIM)
+check("report THM-D: n_solutions==2, has_1, has_6, n6-unique",
+      rD.n_solutions == 2 && rD.has_1 && rD.has_6 && rD.is_n6_unique)
+
+println("")
+println("═══════════════════════════════════════════════════════════")
+println("  sigma_phi_tau_uniqueness smoke: PASS=" + str(PASS) + " FAIL=" + str(FAIL))
+println("═══════════════════════════════════════════════════════════")
+if FAIL > 0 {
+    println("__SPT_SMOKE__ FAIL")
+} else {
+    println("__SPT_SMOKE__ PASS")
+}

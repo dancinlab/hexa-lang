@@ -1,0 +1,230 @@
+#!hexa strict
+// stdlib/kernels/plasma/plasma_metrics_kernel.hexa — D80 g_hexa_only
+// pilot (demiurge AGENTS.tape @D g_hexa_only — ultimate form).
+//
+// Fifth sample of the hexa-native parity port pattern (after solar #1,
+// mc_transport #2, neural lif #3, graph bfs #3-parallel, urdf #4).
+// Clean-room hexa-native plasma-physics primitive
+// kernel mirroring the four cited "primary" plasma parameters of the
+// NRL Plasma Formulary (Debye / plasma-frequency / Larmor / Coulomb
+// logarithm). Substrate parity vs hand-mirrored Python `math` closed-
+// form lives in `plasma_metrics_kernel_test.hexa`.
+//
+// Sibling, not replacement: `plasma_metrics.hexa` (D72 ①a kernel) is
+// the live fusion-adapter consumer with the broader surface (ω_pe,
+// ω_pi, λ_D, ω_ce, ω_ci, v_th, v_A, gyroradius for D⁺). This
+// `_kernel.hexa` file is the D80 "small, reviewable, parity-test-able"
+// pilot file following the `solar_kernel.hexa` naming convention —
+// same kernel, slimmer surface, parity-tested at machine epsilon to
+// document the port pattern. The two files share the SAME constants
+// and SAME formulas (parity is bit-exact between them).
+//
+// Layer (ABSORPTION.md ① / demiurge design.md D72):
+//   ①a kernel — THIS FILE. Domain-agnostic. No ITER scenario, no
+//                device operating point — pure "given n_e, T, B,
+//                species → standard derived parameters".
+//   ①b adapter — fusion / space-plasma / Z-pinch / ionosphere
+//                domains supply the operating point + caveats.
+//
+// @version 0.1.0
+// @capabilities [pure]
+// @stability stage-2 substrate (clean-room re-derivation, no plasmapy
+//   call). Substrate parity vs hand-mirrored Python `math` closed-form
+//   verified by `plasma_metrics_kernel_test.hexa` on 8 sample points
+//   spanning 19 orders of magnitude in n_e (1e7 → 1e26 m⁻³) and 5
+//   orders in T_e (0.1 eV → 20 keV) — all 49 assertions PASS at
+//   ≤1e-12 relative (machine epsilon for IEEE 754 double).
+// @since 2026-05-20
+//
+// CLEAN-ROOM PROVENANCE (D80 first-principle / ABSORPTION.md Stage 2)
+//   This module carries NO plasmapy / NRL code — it implements the
+//   primary plasma parameters directly from textbook closed-form
+//   expressions:
+//     • λ_D, ω_p, r_L  — 1920s–1950s plasma-physics textbook algebra
+//       (Krall & Trivelpiece "Principles of Plasma Physics" 1973;
+//       Stix "Waves in Plasmas" 1992 — mathematical facts only).
+//     • ln Λ (Coulomb log) — NRL Plasma Formulary p.34 (2019 ed.)
+//       closed-form regime expression. NRL Formulary is a US-Govt
+//       public-release document (NRL/PU/6790–18–640); the algebraic
+//       expression is reproduced from first principles as a
+//       function-of-formula mirror, NOT a code paste.
+//
+//   - upstream code   : none (clean-room re-derivation)
+//   - upstream spec   : NRL Plasma Formulary 2019 ed., p.34
+//                       (thermal electron-ion Coulomb logarithm,
+//                        T_e > 10·Z² eV regime).
+//   - constants src   : CODATA 2022 recommended values
+//                       (https://physics.nist.gov/cuu/Constants/).
+//
+// HONESTY (g3 — non-negotiable, inherited by every caller):
+//   * The derived parameters ARE mathematical facts of the inputs.
+//     Given (n_e, T, B, Z), the outputs are what such a plasma WOULD
+//     have under the stated closed-form (cold-plasma, non-relativistic,
+//     fully-ionised single-species — all standard textbook
+//     assumptions).
+//   * BUT the inputs are user-supplied — this kernel does NOT claim a
+//     measured plasma. Any ①b adapter that consumes these primitives
+//     must keep gate=GATE_OPEN and absorbed=false at the record layer
+//     unless the inputs come from a real Thomson-scattering /
+//     interferometry / Langmuir-probe / magnetic-probe reading.
+//   * Coulomb logarithm: implements ONLY the T_e > 10·Z² eV regime
+//     (hot-plasma branch). Low-T regime (T_e < 10·Z² eV) is NOT
+//     implemented in this pilot — callers in that regime should
+//     return an error gate. Future follow-on can add the low-T branch
+//     using NRL p.34 case 1.
+//   * Substrate parity (`plasma_metrics_kernel_test.hexa`) only proves
+//     the PORT PATTERN. D80's record-layer `absorbed=true` flip needs
+//     the demiurge HexaNativeParityRef schema + a measured plasma
+//     oracle (out of scope here per g3).
+//
+// Surface (all SI inputs/outputs, double-precision float):
+//   pub fn lambda_d(t_e_ev, n_e_m3) -> m
+//   pub fn omega_pe(n_e_m3) -> rad/s
+//   pub fn omega_pi_deuteron(n_i_m3) -> rad/s
+//   pub fn larmor_e(t_e_ev, b_t) -> m
+//   pub fn larmor_deuteron(t_i_ev, b_t) -> m
+//   pub fn coulomb_log_ei_high_T(t_e_ev, n_e_m3, z) -> dimensionless
+
+use "stdlib/core/math/float"
+
+// ── physical constants (CODATA 2022, SI) ─────────────────────────────
+//
+// Identical to `plasma_metrics.hexa` — kept duplicate-by-design so
+// this pilot file is self-contained for review. The day a shared
+// `kernels/constants/codata.hexa` lands, both files import from it.
+
+/// Elementary charge [C] (exact per 2019 SI redefinition).
+pub fn elementary_charge() -> float { return 1.602176634e-19 }
+
+/// Boltzmann constant [J/K] (exact per 2019 SI redefinition).
+pub fn boltzmann() -> float { return 1.380649e-23 }
+
+/// Electron rest mass [kg] (CODATA 2022).
+pub fn electron_mass() -> float { return 9.1093837015e-31 }
+
+/// Deuteron (D+, ²H nucleus) rest mass [kg] (CODATA 2022).
+pub fn deuteron_mass() -> float { return 3.343583719e-27 }
+
+/// Vacuum electric permittivity [F/m] (CODATA 2022, measured).
+pub fn epsilon_0() -> float { return 8.8541878128e-12 }
+
+// ── primary parameter 1: Debye length ───────────────────────────────
+
+/// Electron Debye length [m].
+///   λ_D = sqrt(ε₀ · k_B · T_e / (n_e · e²))
+///       = sqrt(ε₀ · T_e_eV / (n_e · e))    (using k_B·T = T_eV · e)
+/// — characteristic electrostatic screening distance; quasineutrality
+/// holds for scales ≫ λ_D. Textbook (Krall & Trivelpiece ch.1).
+pub fn lambda_d(t_e_ev: float, n_e_m3: float) -> float {
+    let e = elementary_charge()
+    let eps0 = epsilon_0()
+    return sqrt(eps0 * t_e_ev / (n_e_m3 * e))
+}
+
+// ── primary parameter 2: plasma (Langmuir) frequency ────────────────
+
+/// Electron plasma frequency [rad/s].
+///   ω_pe = sqrt(n_e · e² / (ε₀ · m_e))
+/// — collective oscillation rate of electrons against fixed ion
+/// background; underpins screening, dispersion, refractive cutoff.
+pub fn omega_pe(n_e_m3: float) -> float {
+    let e = elementary_charge()
+    let m_e = electron_mass()
+    let eps0 = epsilon_0()
+    return sqrt(n_e_m3 * e * e / (eps0 * m_e))
+}
+
+/// Deuteron (D+, Z=1) plasma frequency [rad/s].
+///   ω_pi = sqrt(n_i · Z² · e² / (ε₀ · m_i))
+/// — ion analogue of ω_pe; relevant to ion-acoustic and lower-hybrid
+/// waves. Quasineutrality assumes n_i ≈ n_e for fully-ionised D+.
+pub fn omega_pi_deuteron(n_i_m3: float) -> float {
+    let e = elementary_charge()
+    let m_d = deuteron_mass()
+    let eps0 = epsilon_0()
+    return sqrt(n_i_m3 * e * e / (eps0 * m_d))
+}
+
+// ── primary parameter 3: Larmor (gyro) radius ────────────────────────
+
+/// Electron cyclotron (gyro) frequency [rad/s] (helper).
+///   ω_ce = e · B / m_e    (unsigned, |q|·B/m convention)
+pub fn omega_ce(b_t: float) -> float {
+    let e = elementary_charge()
+    let m_e = electron_mass()
+    return e * b_t / m_e
+}
+
+/// Deuteron cyclotron frequency [rad/s] (helper, Z=1).
+pub fn omega_ci_deuteron(b_t: float) -> float {
+    let e = elementary_charge()
+    let m_d = deuteron_mass()
+    return e * b_t / m_d
+}
+
+/// Electron thermal speed (most-probable Maxwellian) [m/s] (helper):
+///   v_th_e = sqrt(2 · T_e_eV · e / m_e)
+pub fn v_thermal_e(t_e_ev: float) -> float {
+    let e = elementary_charge()
+    let m_e = electron_mass()
+    return sqrt(2.0 * t_e_ev * e / m_e)
+}
+
+/// Deuteron thermal speed (most-probable Maxwellian) [m/s] (helper).
+pub fn v_thermal_deuteron(t_i_ev: float) -> float {
+    let e = elementary_charge()
+    let m_d = deuteron_mass()
+    return sqrt(2.0 * t_i_ev * e / m_d)
+}
+
+/// Electron Larmor (gyro) radius [m] — non-relativistic:
+///   r_Le = v_⊥ / ω_ce,   v_⊥ ≡ v_th_e (most-probable convention)
+/// At T_e = 10 keV plasmapy applies a ~2 % relativistic correction
+/// (γ ≈ 1.020 at v ≈ 0.2 c); this kernel reports the classical
+/// non-relativistic textbook value (Krall & Trivelpiece ch.2).
+pub fn larmor_e(t_e_ev: float, b_t: float) -> float {
+    return v_thermal_e(t_e_ev) / omega_ce(b_t)
+}
+
+/// Deuteron Larmor radius [m] — non-relativistic (v_th_D ≈ 10⁶ m/s
+/// ≪ c at T_i = 10 keV, so relativistic correction is negligible).
+pub fn larmor_deuteron(t_i_ev: float, b_t: float) -> float {
+    return v_thermal_deuteron(t_i_ev) / omega_ci_deuteron(b_t)
+}
+
+// ── primary parameter 4: Coulomb logarithm ───────────────────────────
+
+/// Thermal electron-ion Coulomb logarithm ln Λ_ei [dimensionless] —
+/// NRL Plasma Formulary 2019 ed., p.34, high-T regime:
+///   for T_i · m_e / m_i  <  T_e  >  10·Z² eV  :
+///     ln Λ_ei = 24 - ln(sqrt(n_e_cm⁻³) / T_e_eV)
+///             = 24 - 0.5·ln(n_e_cm⁻³) + ln(T_e_eV)
+/// — NRL convention uses CGS n_e [cm⁻³]; SI n_e [m⁻³] enters via
+/// n_e_cm⁻³ = n_e_m⁻³ · 1e-6.
+///
+/// Z = ion charge state (1 for H+ / D+ / T+, 2 for He²⁺, etc.).
+/// Caller is responsible for ensuring T_e > 10·Z² eV — outside that
+/// regime, NRL p.34 prescribes a DIFFERENT closed form (case 1) which
+/// this pilot does NOT implement; calling here at low T produces
+/// numerically-defined but physically-irrelevant output.
+///
+/// Range sanity: ln Λ ∈ [5, 30] across all physically-relevant
+/// laboratory and astrophysical plasmas. Below ~5 the weakly-coupled
+/// plasma approximation breaks down (strong coupling regime).
+pub fn coulomb_log_ei_high_T(t_e_ev: float, n_e_m3: float, z: float) -> float {
+    // NRL is regime-flagged on Z but the formula itself is Z-independent
+    // at high-T (the Z² scaling is absorbed into the regime threshold).
+    // We accept z as an explicit argument so call-sites can express the
+    // physical assumption; the value is not consumed by the formula in
+    // this regime (intentional — matches NRL eq. as written).
+    let _z = z   // accept-but-not-consumed at high-T regime
+    let n_e_cm3 = n_e_m3 * 1.0e-6
+    return 24.0 - log(sqrt(n_e_cm3) / t_e_ev)
+}
+
+// ── ①b adapter note ──────────────────────────────────────────────────
+//
+// Domain-specific aggregators (ITER core, JET D-T 1997, NSTX, SPARC,
+// solar corona, magnetosphere, Z-pinch operating points) live in
+// `stdlib/<domain>/` adapters — NOT here. This kernel is the
+// reusable, parity-tested primitive layer.

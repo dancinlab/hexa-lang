@@ -1,0 +1,137 @@
+#!hexa strict
+// stdlib/aura/n12_g33_dataset_extension.hexa — `aura + N12` V0 G33
+// Sleep-EDF measured-oracle를 BNCI Horizon + EEGBCI 데이터셋으로 확장.
+//
+// CONTEXT: V0 verify (G33 LANDED · Sleep-EDF mean_rel_err 8.4e-07 ·
+// D117 2nd cell · R8 4/4 CLOSURE) 은 1개 데이터셋. 추가 oracle
+// 데이터셋을 흡수해 hexa-native naive-DFT vs MNE-Welch parity의
+// generality를 증명.
+//
+// Honesty (g3 · @D d1 · @D d5):
+//   * V0 absorbed=true 유지 (Sleep-EDF closure 영구).
+//   * N12 추가 데이터셋: 각각 별도 absorption record · 통과 시
+//     V0의 spectral parity가 multiple datasets에 일반화 가능 증명.
+//
+// Sentinels:
+//   __HEXA_AURA_N12_G33_DATASET_EXTENSION__ PASS
+//   AURA_N12_G33_DATASET_EXTENSION_OK gate=GATE_OPEN absorbed=false
+
+let VERSION       = "0.1.0"
+let MODULE        = "aura-n12-g33-dataset-extension"
+let GEOMETRY_ID   = "aura_n12_g33_dataset_extension_v1"
+let RECORD_KIND   = "aura_n12_g33_dataset_extension_record"
+
+fn _existing_g33_block() -> [str] {
+    return [
+        "primary_oracle: PhysioNet Sleep-EDF Expanded (197 subjects · open clinical EEG)",
+        "metric: mean_rel_err 8.4e-07 (alpha-band integrated power · naive-DFT vs MNE Welch)",
+        "state: G33 LANDED · D117 2nd cell first-flip · R8 4/4 CLOSURE",
+        "substrate: stdlib/aura/sleep_edf_measured_oracle.py + _dft_alpha_band_batch.hexa",
+        "absorbed: true PERMANENTLY (V0 closure · pre-existing)",
+        "generality: SINGLE-dataset proof - extension to additional datasets is N12 scope",
+    ]
+}
+
+fn _bnci_horizon_block() -> [str] {
+    return [
+        "dataset: BNCI Horizon 2020 (BCI competition data · open · multiple subjects)",
+        "modality: motor-imagery EEG (different paradigm vs Sleep-EDF)",
+        "channels: 22-64 (vs Sleep-EDF's 2 Fpz-Cz + Pz-Oz)",
+        "sampling_rate: 250-500 Hz (matches AURA-100 spec)",
+        "absorption_target: same mean_rel_err threshold (≤ 1e-6 · alpha 8-13 Hz)",
+        "challenge: motor imagery has different power spectral profile (mu/beta dominant)",
+        "expected_outcome: parity should hold (DFT vs Welch is dataset-agnostic)",
+    ]
+}
+
+fn _eegbci_block() -> [str] {
+    return [
+        "dataset: EEGBCI (PhysioNet · MI-BCI · 109 subjects · 14 runs each)",
+        "modality: motor-imagery (left/right fist + feet + rest)",
+        "channels: 64 (10-10 international system)",
+        "sampling_rate: 160 Hz (lower than Sleep-EDF)",
+        "absorption_target: same mean_rel_err threshold across 8-30 Hz (alpha + beta)",
+        "challenge: lower sample rate → fewer spectral bins · edge-effect risk",
+        "expected_outcome: parity holds (DFT is fs-invariant in rel-err)",
+    ]
+}
+
+fn _extension_workflow_block() -> [str] {
+    return [
+        "step_1: download BNCI Horizon + EEGBCI to ~/.hx/data/ via MNE fetch utilities",
+        "step_2: preprocess (bandpass + notch + epoching) per existing pipeline",
+        "step_3: invoke _dft_alpha_band_batch.hexa per dataset (alpha-band integrated power)",
+        "step_4: MNE Welch oracle on same epochs (reference)",
+        "step_5: compute mean_rel_err per dataset · ratify per G33 acceptance threshold",
+        "step_6: emit aura_n12_dataset_extension_record per dataset (BNCI · EEGBCI)",
+        "step_7: registry → atlas if PASS · INBOX entry if FAIL (diagnose differences)",
+    ]
+}
+
+fn _acceptance_criteria_block() -> [str] {
+    return [
+        "threshold_primary: mean_rel_err ≤ 1e-6 (matches G33 8.4e-07 ceiling)",
+        "threshold_secondary: per-epoch max_rel_err ≤ 1e-5 (tail outlier guard)",
+        "fault_diagnosis: failure → INBOX entry with diagnosis (DFT bin alignment · windowing · scaling)",
+        "documentation: per-dataset parity report + epoch count + freq band coverage",
+        "publication: combined report (Sleep-EDF + BNCI + EEGBCI) → cross-dataset parity claim",
+        "atlas_node: 1 node per dataset (atlas key D_aura_<dataset> = mean_rel_err value)",
+    ]
+}
+
+fn _scope_caveats() -> [str] {
+    return [
+        "N12 dataset extension is a PLAN, NOT executed parity proofs.",
+        "Actual runs require: dataset download + ~hours compute per dataset.",
+        "Failure on a new dataset is a USEFUL OUTCOME (reveals DFT vs Welch divergence mode).",
+        "V0 G33 absorbed=true UNCHANGED by N12 extension (Sleep-EDF closure permanent).",
+        "absorbed=false PERMANENTLY (g3) - PLAN, NEVER an executed cross-dataset proof.",
+    ]
+}
+
+fn _emit_block(label: str, lines: [str]) {
+    print("# [" + label + "]")
+    let n = lines.len()
+    let mut i = 0
+    while i < n {
+        print("#   - " + lines[i])
+        i = i + 1
+    }
+    print("#")
+}
+
+fn _emit_header() {
+    print("# AURA N12 - V0 G33 dataset extension (BNCI Horizon + EEGBCI)")
+    print("# device_target = generality proof for naive-DFT vs MNE-Welch parity")
+    print("# version = " + VERSION)
+    print("# ringfence: plan - NOT executed parity proofs")
+    print("#")
+    _emit_block("existing_g33",         _existing_g33_block())
+    _emit_block("bnci_horizon",         _bnci_horizon_block())
+    _emit_block("eegbci",               _eegbci_block())
+    _emit_block("extension_workflow",   _extension_workflow_block())
+    _emit_block("acceptance_criteria",  _acceptance_criteria_block())
+}
+
+fn _emit_caveats() {
+    let c = _scope_caveats()
+    let n = c.len()
+    let mut i = 0
+    while i < n {
+        print("# scope_caveat: " + c[i])
+        i = i + 1
+    }
+}
+
+fn main() {
+    _emit_header()
+    _emit_caveats()
+
+    print("AURA_N12_G33_DATASET_EXTENSION_OK record_kind=" + RECORD_KIND
+        + " geometry_id=" + GEOMETRY_ID
+        + " gate=GATE_OPEN absorbed=false"
+        + " version=" + VERSION
+        + " primary_closure=V0_G33_Sleep-EDF datasets_added=BNCI+EEGBCI")
+
+    print("__HEXA_AURA_N12_G33_DATASET_EXTENSION__ PASS")
+}

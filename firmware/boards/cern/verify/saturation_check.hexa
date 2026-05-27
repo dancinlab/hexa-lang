@@ -1,0 +1,177 @@
+#!hexa strict
+// hexa-cern/verify/saturation_check.hexa — RSC self-stop signal.
+//
+// Recipe §7.4 priority 15 — the optional final script that confirms
+// the closure-depth-accumulation loop has reached saturation. Once
+// this passes, the RSC loop terminates per recipe §7.2 sat-1+sat-2
+// + §9 saturation handling.
+//
+// Two conditions:
+//   sat-1: every falsifier has T2 stack ≥ 3
+//   sat-2: §1 16-script inventory complete + lint_numerics passes
+//
+// PASS = both met → emit `__HEXA_CERN_RSC_SATURATED__ STOP` (the
+//        signal sentinel; CI / loop runners parse this and stop).
+// FAIL = either condition unmet → loop continues with next chunk.
+//
+// This script is NOT a numerics_*.hexa (so lint_numerics doesn't
+// audit it for math_pure import etc.). It's a meta-stop signal.
+//
+// Run:
+//   hexa run verify/saturation_check.hexa
+//
+// @no-lock-needed
+
+let HOME = env("HOME")
+
+fn _root() -> str {
+    let r = env("PETITE_CERN_ROOT")
+    if r.len() > 0 { return r }
+    let pwd = exec("pwd").trim()
+    if pwd.len() > 0 { return pwd }
+    return HOME + "/core/hexa-cern"
+}
+
+let ROOT = _root()
+let VERIFY_DIR = ROOT + "/verify"
+
+fn _exists(p: str) -> bool {
+    return file_exists(p)
+}
+
+fn shq(s: str) -> str {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+fn _hexa_bin() -> str {
+    // Use hexa.real directly: the wrapper at ~/.hx/bin/hexa (and `which hexa`
+    // alias) routes through the resource-toolkit TCP shim which is unreachable
+    // in offline/CI runs. hexa.real is the local interpreter binary.
+    let real = HOME + "/.hx/packages/hexa/hexa.real"  // @allow-devpath
+    if file_exists(real) { return real }
+    let h = exec("which hexa 2>/dev/null").trim()
+    if h.len() > 0 { return h }
+    return HOME + "/.hx/bin/hexa"  // @allow-devpath
+}
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ── F-PCERN T2 / T3 stacks (must match falsifier_check.hexa) ───────────
+let F1_T2 = ["numerics_sigma_cascade.hexa", "numerics_lhc_parity.hexa", "numerics_bending.hexa"]
+let F2_T2 = ["numerics_classical.hexa", "numerics_liouville.hexa", "numerics_se3_partial.hexa"]
+let F3_T2 = ["numerics_wakefield.hexa", "numerics_lwfa_parity.hexa", "numerics_lwfa_solver.hexa", "numerics_lwfa_relativistic.hexa", "numerics_beam_dynamics.hexa", "numerics_lwfa_scaling.hexa"]
+let F1_T3 = ["empirical_lhc_api.hexa"]
+let F2_T3 = ["empirical_classical_arxiv.hexa"]
+let F3_T3 = ["empirical_lwfa_hepdata.hexa"]
+
+fn _all_present(names: [str]) -> bool {
+    for n in names { if _exists(VERIFY_DIR + "/" + n) == false { return false } }
+    return names.len() > 0
+}
+
+fn check_sat_1_per_falsifier_t2_three() {
+    let ok1 = _all_present(F1_T2) && F1_T2.len() >= 3
+    let ok2 = _all_present(F2_T2) && F2_T2.len() >= 3
+    let ok3 = _all_present(F3_T2) && F3_T2.len() >= 3
+    _check(ok1, "F-PCERN-1 T2 ×" + str(F1_T2.len()) + " ≥ 3 (all present on disk)", "")
+    _check(ok2, "F-PCERN-2 T2 ×" + str(F2_T2.len()) + " ≥ 3 (all present on disk)", "")
+    _check(ok3, "F-PCERN-3 T2 ×" + str(F3_T2.len()) + " ≥ 3 (all present on disk)", "")
+}
+
+fn check_sat_3_per_falsifier_t3_one() {
+    // sat-3 (added 2026-05-08): each falsifier has ≥ 1 T3 (empirical) script.
+    let ok1 = _all_present(F1_T3) && F1_T3.len() >= 1
+    let ok2 = _all_present(F2_T3) && F2_T3.len() >= 1
+    let ok3 = _all_present(F3_T3) && F3_T3.len() >= 1
+    _check(ok1, "F-PCERN-1 T3 ×" + str(F1_T3.len()) + " ≥ 1 (full closure path)", "")
+    _check(ok2, "F-PCERN-2 T3 ×" + str(F2_T3.len()) + " ≥ 1 (full closure path)", "")
+    _check(ok3, "F-PCERN-3 T3 ×" + str(F3_T3.len()) + " ≥ 1 (full closure path)", "")
+}
+
+fn check_sat_2_inventory_lint() {
+    // Inventory check: numerics_*.hexa count ≥ 9 (recipe §1 numerical tier minimum).
+    let cmd = "ls " + VERIFY_DIR + "/numerics_*.hexa 2>/dev/null | wc -l | tr -d ' '"
+    let raw = exec(cmd).trim()
+    let inv_count = int(raw)
+    _check(inv_count >= 9,
+           "numerics_*.hexa inventory count ≥ 9  (recipe §1 minimum)",
+           "on-disk count = " + str(inv_count))
+
+    // Lint check: lint_numerics.hexa passes (= every numerics_* follows
+    // the 5 invariants).
+    let lint_cmd = "HEXA_SHIM_NO_DARWIN_LANDING=1 RESOURCE_LOCAL_HEXA=1 " + shq(_hexa_bin()) + " run " + shq(VERIFY_DIR + "/lint_numerics.hexa") +
+                   " >/dev/null 2>&1 && echo y || echo n"
+    let lint_out = exec(lint_cmd).trim()
+    _check(lint_out == "y",
+           "lint_numerics passes (5 invariants hold across every numerics_*.hexa)",
+           "")
+}
+
+fn check_required_scripts_present() {
+    let required = [
+        "lattice_check.hexa",
+        "cross_doc_audit.hexa",
+        "calc_wakefield.hexa",
+        "calc_sigma_cascade.hexa",
+        "calc_classical.hexa",
+        "falsifier_check.hexa",
+        "lint_numerics.hexa",
+        "numerics_lattice_arithmetic.hexa",
+        "numerics_cross_pillar.hexa",
+    ]
+    for s in required {
+        _check(_exists(VERIFY_DIR + "/" + s),
+               "required script present: " + s,
+               "")
+    }
+}
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-cern — RSC saturation check (recipe §7.2 sat-1 + sat-2 + §7.4 #15)")
+    println("========================================================================")
+    println("")
+
+    println("  sat-1 — per-falsifier T2 ≥ 3:")
+    check_sat_1_per_falsifier_t2_three()
+
+    println("")
+    println("  sat-2 — inventory + lint:")
+    check_sat_2_inventory_lint()
+
+    println("")
+    println("  sat-3 — per-falsifier T3 ≥ 1 (full closure):")
+    check_sat_3_per_falsifier_t3_one()
+
+    println("")
+    println("  required-scripts presence (recipe §1 backbone):")
+    check_required_scripts_present()
+
+    println("")
+    println("========================================================================")
+    let pass_n = RUN - FAIL
+    println("  " + str(pass_n) + "/" + str(RUN) + " saturation checks passed")
+    if FAIL > 0 {
+        println("__HEXA_CERN_RSC_SATURATED__ NOT_YET — " + str(FAIL) + " condition(s) missing")
+        println("  → loop continues. pick next chunk from recipe §7.4 priority table.")
+        exit(1)
+    }
+    println("__HEXA_CERN_RSC_SATURATED__ STOP")
+    println("")
+    println("  Full closure across F-PCERN-1/2/3:")
+    println("    T1 (algebraic)  ✓  via verify/calc_*.hexa")
+    println("    T2 (numerical)  ✓  via verify/numerics_*.hexa  (×3 each)")
+    println("    T3 (empirical)  ✓  via verify/empirical_*.hexa  (API+fixture)")
+    println("  Strict raw-data fit (Stage-1+ benchtop) deferred to v2.0.0.")
+    println("  RSC loop properly terminates at this point.")
+    exit(0)
+}

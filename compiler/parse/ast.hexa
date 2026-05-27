@@ -1,0 +1,210 @@
+// HEXA Native Compiler — AST (Phase A0 skeleton)
+//
+// Untyped abstract syntax tree produced by the parser. Atlas refs (P/C/L/E)
+// carry AtlasRef so the resolve pass (S1) can validate against the embedded
+// atlas const without re-lexing.
+//
+// Item.kind and Expr.kind use payload-free enums (`ItemKind`, `ExprKind`) —
+// hexa stage0 supports `enum Foo { A, B, C }` + `Foo::Variant` paths. Per-kind
+// payload data lives in the surrounding struct fields (`children`, `text`,
+// `atlas_ref`, etc.) since stage0 enum variants cannot carry payloads yet.
+//
+// RFC-074 Phase 2 (2026-05-20) — `Param.typs: [TypeRef]` adds the positional
+// multi-field enum payload carrier (§3.1.2 carrier-shape (b)). Single-field
+// sites (`typs.len ∈ {0,1}`) keep backward-compat with the legacy `typ` slot
+// — for arity 0 typs is empty and typ is empty_type; for arity 1 typs[0]
+// mirrors typ; for arity N≥2 typs carries N slots and typ holds typs[0] as a
+// legacy degraded projection. Consumers walking multi-field enum variants
+// MUST iterate `typs` (not `typ`). See RFC-074 §3.1 Phase 1+2.
+//
+// AtlasRef.kind and Annotation.name remain `string` — they are more dynamic
+// (e.g. annotation names extend over time per RFC-017 §5) and not exhaustive.
+
+import "../lex/tokens.hexa"
+
+// ── Atlas refs ────────────────────────────────────────────────
+
+pub struct AtlasRef {
+    kind: string,        // "P" | "C" | "L" | "E"
+    id: string,
+    span: Span
+}
+
+// ── Annotations (e.g. @law, @grace, @units, @discover) ────────
+
+pub struct Annotation {
+    name: string,        // "law" | "implements" | "units" | "verify" | "prove" | "grace" | "discover"
+    args: [Expr],
+    span: Span
+}
+
+// ── Types ─────────────────────────────────────────────────────
+
+pub struct TypeRef {
+    kind: string,        // "named" | "generic" | "fn" | "tuple" | "atlas_kind"
+    name: string,
+    args: [TypeRef],
+    span: Span
+}
+
+// ── Patterns (function params, let bindings) ─────────────────
+
+pub struct Param {
+    name: string,
+    typ: TypeRef,        // `type` is reserved in hexa stage0 → use `typ`
+    // RFC-074 Phase 2 — positional multi-field enum payload carrier.
+    //   function param / struct field : typs.len == 1, typs[0] == typ
+    //   enum variant arity 0          : typs.len == 0, typ empty_type
+    //   enum variant arity 1          : typs.len == 1, typs[0] == typ
+    //   enum variant arity N≥2        : typs.len == N, typ holds typs[0]
+    // Legacy single-slot readers see typ; multi-field consumers iterate typs.
+    typs: [TypeRef],
+    span: Span
+}
+
+// ── Expression kind enum ──────────────────────────────────────
+// Variant-only enum (no payloads) — payload shape lives on Expr fields.
+
+pub enum ExprKind {
+    LiteralInt,
+    LiteralFloat,
+    LiteralString,
+    LiteralBool,
+    LiteralChar,     // 'c' / '\n' — A1.5
+    Ident,
+    AtlasRef,
+    Call,
+    BinOp,
+    UnOp,
+    Block,
+    If,
+    While,
+    For,             // for x in iter { body } — A1.5
+    Match,           // match expr { pat -> body, ... } — A1.5
+    Return,
+    Break,           // break (loop control) — A1.5
+    Continue,        // continue (loop control) — A1.5
+    Let,
+    Assign,
+    Field,
+    Index,
+    StructLit,       // Foo { x: 1, y: 2 } — A1.5
+    EnumPath,        // Foo::Bar / Foo::Bar(payload) — A1.5
+    ArrayLit,        // [e0, e1, ...] / [] — children = elements
+    Wildcard,        // _ pattern — A1.5
+    Try,             // try { try_body } catch e { catch_body } — A1.6
+                     // children = [try_body_block, catch_body_block]
+                     // text     = catch_var_name (or "" for catch w/o binder)
+    Throw,           // throw <expr> — children = [value_expr]
+    Closure          // fn(p0, p1, ...) { body } — closure-expression, RFC C1
+                     // text     = decimal param count, e.g. "2"
+                     // children = [param_0, ..., param_{n-1}, body_block]
+                     //   param_i : ExprKind::Ident, text = param name,
+                     //             children = [type_expr] if `: T` annotated
+                     //             else children = []  (type optional, mirrors
+                     //             self/hexa_full.hexa parse_params)
+                     //   body    : ExprKind::Block (last child, always present)
+                     // Captures (free vars) are NOT collected here — C2 walks
+                     // the body subtree to build the capture set; C1 is parse/
+                     // check front-half only, codegen is deferred (HX1104).
+}
+
+// ── Expressions ──────────────────────────────────────────────
+// children[] is heterogeneous by `kind`; resolve pass interprets shape.
+
+pub struct Expr {
+    kind: ExprKind,
+    span: Span,
+    text: string,
+    // RFC PR-C piece 2: bare annotations (e.g. `@shared let sm: [f64; 256]`)
+    // attached to expression-position statements. Currently consumed by the
+    // GPU codegen path for `@shared` body-let → PTX `.shared` directive
+    // (piece 4+5). Default `[]` for every other Expr — propagates through
+    // HIR (`HExpr.annotations`) → MIR (`Local.space`).
+    annotations: [Annotation],
+    children: [Expr],
+    atlas_ref: AtlasRef
+}
+
+// ── Item kind enum ────────────────────────────────────────────
+
+pub enum ItemKind {
+    Fn,
+    Let,
+    Struct,
+    Enum,            // enum Color { Red, Green(i64) } — A1.5
+    Import
+}
+
+// ── Items ─────────────────────────────────────────────────────
+
+pub struct Item {
+    kind: ItemKind,
+    name: string,
+    span: Span,
+    annotations: [Annotation],
+    params: [Param],
+    return_type: TypeRef,
+    body: Expr,
+    is_pub: bool
+}
+
+// ── Module (top-level) ────────────────────────────────────────
+
+pub struct Module {
+    file: string,
+    items: [Item],
+    imports: [string]
+}
+
+// C11 helper.
+fn _ast_is_string_lit(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::LiteralString -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Break -> false,
+        ExprKind::Continue -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
+    }
+}
+
+pub fn item_is_parse_only(it: Item) -> bool {
+    let mut i = 0
+    while i < len(it.annotations) {
+        let a = it.annotations[i]
+        if a.name == "phase" {
+            if len(a.args) > 0 {
+                let arg0 = a.args[0]
+                if _ast_is_string_lit(arg0.kind) {
+                    if arg0.text == "parse_only" { return true }
+                }
+            }
+        }
+        i = i + 1
+    }
+    return false
+}

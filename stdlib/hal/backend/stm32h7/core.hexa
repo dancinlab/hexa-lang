@@ -1,0 +1,116 @@
+#!hexa strict
+// stdlib/hal/backend/stm32h7/core.hexa — STM32H7 core backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved. ★ FINAL per-vendor
+// peripheral — completes HW-12 (all 12 σ-slots) coverage for stm32h7.
+//
+// Target:    STMicroelectronics STM32H7 Cortex-M7 @ 480 MHz with FPU
+//            (single-precision + optional double via FPv5-D16) and L1
+//            I-cache (16 KB) + D-cache (16 KB).
+// Chip ref:  ARMv7-M ARM (DDI 0403E.e) + Cortex-M7 TRM + RM0433 §13/§14
+//            (RCC + PWR), §11.4 SCB, §11.5 cache (Cortex-M7-specific).
+// Surface:   stm32h7_core_{now_us,sleep_us,panic,critical_enter,critical_exit,
+//            cache_invalidate,cache_clean,reset}(...)
+// Dispatch:  core.hexa selects this via cfg-flag.
+//
+// MMIO layout:
+//
+//   System Control Block (SCB) — architectural at 0xE000ED00:
+//     SCB_CPUID                   0x000   processor ID (read-only)
+//     SCB_ICSR                    0x004   interrupt control state
+//     SCB_VTOR                    0x008   vector table offset
+//     SCB_AIRCR                   0x00C   reset request: write 0x05FA0004
+//     SCB_SCR                     0x010   SLEEPDEEP bit 2, SEVONPEND bit 4
+//     SCB_CCR                     0x014   IC bit 17 (I-cache enable),
+//                                          DC bit 16 (D-cache enable),
+//                                          BP bit 18 (branch prediction)
+//     SCB_CCSIDR                  0x080   cache size ID (read-only)
+//     SCB_CSSELR                  0x084   cache select for CCSIDR
+//     SCB_ICIALLU                 0xE000EF50   invalidate I-cache (write any)
+//     SCB_ICIMVAU                 0xE000EF58   invalidate I-cache by MVA
+//     SCB_DCISW                   0xE000EF60   invalidate D-cache by set/way
+//     SCB_DCCSW                   0xE000EF6C   clean D-cache by set/way
+//     SCB_DCCISW                  0xE000EF74   clean+invalidate D-cache by set/way
+//
+//   DWT (Data Watchpoint and Trace) — for now_us cycle counter:
+//     DWT_CTRL                    0xE0001000   bit 0 CYCCNTENA
+//     DWT_CYCCNT                  0xE0001004   32-bit cycle counter
+//
+//   PWR (Power) — RM0433 §6: 0x58024800
+//   RCC (Clock) — RM0433 §8: 0x58024400
+//
+// Critical section: Cortex-M `__disable_irq()` = CPSID i (PRIMASK=1).
+// Reset: write SCB_AIRCR with VECTKEY=0x05FA + SYSRESETREQ bit 2.
+// Cache mgmt: ICIALLU for all I-cache; loop DCISW over set/way for D-cache.
+
+let MODULE_NAME = "stm32h7_core"
+let SIGMA_SLOT  = 0
+let PHI_KIND    = "digital"
+
+let SCB_BASE     = 0xE000ED00
+let SCB_CPUID    = 0x000
+let SCB_VTOR     = 0x008
+let SCB_AIRCR    = 0x00C
+let SCB_SCR      = 0x010
+let SCB_CCR      = 0x014
+let SCB_ICIALLU  = 0xE000EF50
+let SCB_DCISW    = 0xE000EF60
+
+let DWT_CTRL     = 0xE0001000
+let DWT_CYCCNT   = 0xE0001004
+
+let SYSCLK_HZ    = 480000000   // STM32H7 max core clock
+
+let AIRCR_RESET_KEY = 0x05FA0004   // VECTKEY + SYSRESETREQ
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn stm32h7_core_now_us() -> int {
+    // STUB: read DWT_CYCCNT, divide by SYSCLK / 1e6
+    return 0
+}
+
+fn stm32h7_core_sleep_us(us: int) {
+    if us <= 0 { return }
+    // STUB: arm SysTick or TIM6 for `us` then WFI; OR busy-loop via DWT CYCCNT
+    //       polling for hard-real-time applications (no IRQ overhead).
+}
+
+fn stm32h7_core_panic(msg: str) {
+    // STUB: write msg to ITM_STIM_PORT0 (SWO) OR USART1; trigger BKPT #0
+    println("[stm32h7_core PANIC] " + msg)
+}
+
+fn stm32h7_core_critical_enter() -> int {
+    // STUB: read PRIMASK; CPSID i (set PRIMASK = 1); return prior PRIMASK
+    return 0
+}
+
+fn stm32h7_core_critical_exit(prior: int) {
+    // STUB: write PRIMASK = prior (restore via MSR PRIMASK, prior)
+}
+
+fn stm32h7_core_cache_invalidate() -> bool {
+    // STUB: write SCB_ICIALLU (any value) for I-cache; loop DCISW for D-cache
+    return true
+}
+
+fn stm32h7_core_cache_clean() -> bool {
+    // STUB: loop SCB_DCCSW over set/way to clean D-cache without invalidating
+    return true
+}
+
+fn stm32h7_core_reset() {
+    // STUB: write SCB_AIRCR = 0x05FA0004 (VECTKEY + SYSRESETREQ)
+}
+
+fn stm32h7_core_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[stm32h7_core sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  SCB=" + str(SCB_BASE) + " DWT_CYCCNT=" + str(DWT_CYCCNT))
+    println("  Cortex-M7 @ " + str(SYSCLK_HZ) + " Hz; L1 I+D cache 16KB each")
+    println("  cache mgmt: ICIALLU + DCISW set/way; reset: AIRCR.SYSRESETREQ")
+}

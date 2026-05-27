@@ -1,0 +1,323 @@
+#!hexa strict
+// stdlib/fusion/funnel.hexa — F-funnel · fusion design-point ranker
+// (FUSION.md §2.1 · mirror of NUCLEAR N11 funnel in stdlib/nuclear/sim.hexa).
+//
+// @version 0.1.0
+// @capabilities [pure, io]
+// @stability stage-2 substrate (closed-form Path A · libm-only). Consumes
+//   the landed F1/F2 closed-form kernel (PR #1012,
+//   stdlib/kernels/fusion_reactivity/reactivity.hexa) and ranks a small
+//   set of magnetic-confinement reactor operating points by an (a)×(b)
+//   composite coverage product. The `--expr` atoms registered in
+//   tool/verify_cli.hexa gate the funnel's own scoring functions.
+// @since 2026-05-25
+//
+// ── WHAT THIS IS (direct mirror of NUCLEAR N11) ──────────────────────────
+//   N11 enumerates a bounded (Z,N) candidate strip and scores each cell by
+//   a triangular accelerator-priority window over the (c) α-half-life gate;
+//   F-funnel enumerates a bounded set of fusion design points
+//   (reaction, T_keV, n_i, τ_E) and scores each cell by an (a)×(b)
+//   composite — (a) fuel reactivity coverage × (b) Lawson/Q margin
+//   coverage — then ranks descending → top-K engineering-priority JSON.
+//
+//   N11 sibling                       │  F-funnel here
+//   ──────────────────────────────────┼──────────────────────────────────
+//   c_gate_window_score (triangular)  │  f_reactivity_coverage / f_margin_coverage
+//   n11_alpha_cell (per-candidate)    │  f_funnel_cell (per-design-point)
+//   _write_n11_topk (top-K JSON)      │  _write_f_funnel_topk (top-K JSON)
+//   main() emits ranked JSON          │  main() emits ranked JSON
+//
+// ── HONEST COMPOSITE SCOPE (FUSION.md §2.1 — NON-NEGOTIABLE) ──────────────
+//   The composite is **(a)×(b) ONLY**:
+//     (a) fuel reactivity         ← Bosch-Hale ⟨σv⟩(T) (F1 kernel)
+//     (b) Lawson / Q margin       ← triple_product / ignition_margin /
+//                                    q_plasma_0d 0-D power balance (F2 kernel)
+//   The remaining FUSION gates are NOT in the composite and this funnel
+//   makes NO claim about them:
+//     (c) Grad-Shafranov equilibrium   — NOT scored here
+//     (d) MHD stability                — NOT scored here
+//     (f) tritium breeding ratio (TBR) — NOT scored here
+//   This is a 2-gate (a)×(b) COVERAGE product, NOT a 6-gate composite. The
+//   JSON `scope_caveats` states this and so does this comment.
+//
+// ── R4-CLASS HONESTY (FUSION governance · g3) ────────────────────────────
+//   • absorbed=false for ALL design points — every cell is sim-only. The
+//     JET measured-oracle (stdlib/fusion/jet_plasma_measured_oracle.py,
+//     absorbed=true) remains the ONLY absorbed=true fusion path.
+//   • ignition_margin ≥ 1 = the 0-D Lawson criterion crossing = DESIGN
+//     FEASIBILITY, NEVER "Q>1 achieved" / "ignition achieved" on a device.
+//   • τ_E is an ASSUMED design number, NOT a transport-simulated result.
+//   • The reactivity ⟨σv⟩(T) and the margin/Q it feeds ARE exact math
+//     facts of the Bosch-Hale fit + 0-D power balance GIVEN the inputs;
+//     the inputs (T, n, τ_E) are textbook design points, not device shots.
+//
+// ── CITATION / PROVENANCE ────────────────────────────────────────────────
+//   - reactivity ⟨σv⟩(T) + 0-D power balance : consumed VERBATIM from the
+//     F1/F2 kernel (PR #1012), which cites Bosch & Hale, Nucl. Fusion 32,
+//     611 (1992) [⟨σv⟩ fit] + Lawson 1957, Proc. Phys. Soc. B 70, 6
+//     [triple-product ignition statement]. NOT re-derived here.
+//   - ITER-class reference point : ITER Physics Basis, Nucl. Fusion 39
+//     (1999) / ITER design (n_e≈1e20 m⁻³, T≈10-20 keV, τ_E≈3 s class).
+//   - compact-HTS-class point : SPARC / ARC high-field-pathway class
+//     (Creely et al. 2020 J Plasma Phys 86, 865860502) — higher density,
+//     shorter τ_E design regime.
+
+use "stdlib/kernels/fusion_reactivity/reactivity"
+
+// ── (a)/(b) coverage scoring (closed-form, mirror N11 c_gate_window_score) ─
+//
+// N11 scores the (c) gate with a triangular window in log10-T over an
+// accelerator band, clamped to [0,1]. F-funnel scores TWO gates and
+// multiplies them:
+//
+//   (a) reactivity coverage = clamp( ⟨σv⟩(T) / ⟨σv⟩_ref , 0, 1 )
+//       — fraction of a reference D-T reactivity (the ⟨σv⟩ at the design
+//         T peak); a design point at or above the reference reactivity
+//         saturates the (a) gate at 1.0. ⟨σv⟩_ref ≤ 0 → 0.0 sentinel.
+//
+//   (b) Lawson/Q margin coverage = clamp( ignition_margin , 0, 1 )
+//       — the 0-D ignition margin (α-self-heating / confinement loss).
+//         margin ≥ 1 ⇒ 0-D ignition criterion crossed ⇒ (b) saturates at
+//         1.0 (DESIGN feasibility, NOT a device result — g3).
+//
+//   composite = (a) × (b)   — coverage product in [0,1]. A point ranks
+//       high ONLY when BOTH the fuel reactivity AND the Lawson margin are
+//       strong; a weak gate drags the product down (AND-like, mirrors the
+//       N11 multiplicative gate_coverage fold).
+
+/// Clamp a raw score to [0, 1] (shared helper for both coverage gates).
+fn _clamp01(x: float) -> float {
+    if x < 0.0 { return 0.0 }
+    if x > 1.0 { return 1.0 }
+    return x
+}
+
+/// (a) fuel-reactivity coverage: ⟨σv⟩ / ⟨σv⟩_ref clamped to [0,1].
+/// Both ⟨σv⟩ in the SAME units (cm³/s native Bosch-Hale). ref ≤ 0 → 0.0.
+/// This is the F-funnel sibling of N11's c_gate_window_score for gate (a).
+pub fn f_reactivity_coverage(sigma_v: float, sigma_v_ref: float) -> float {
+    if sigma_v_ref <= 0.0 { return 0.0 }
+    if sigma_v <= 0.0 { return 0.0 }
+    return _clamp01(sigma_v / sigma_v_ref)
+}
+
+/// (b) Lawson/Q margin coverage: the 0-D ignition margin clamped to [0,1].
+/// margin ≥ 1 ⇒ 0-D ignition criterion crossed ⇒ saturates at 1.0 (DESIGN
+/// feasibility, g3 — NOT "ignition achieved"). margin ≤ 0 → 0.0.
+pub fn f_margin_coverage(ignition_margin_val: float) -> float {
+    return _clamp01(ignition_margin_val)
+}
+
+/// (a)×(b) composite coverage product. The F-funnel ranking key.
+/// HONEST: 2-gate (a)×(b) coverage ONLY — (c) Grad-Shafranov / (d) MHD /
+/// (f) TBR are NOT folded in (FUSION.md §2.1). Returns a value in [0,1].
+pub fn f_funnel_composite(a_reactivity_cov: float, b_margin_cov: float) -> float {
+    return a_reactivity_cov * b_margin_cov
+}
+
+// ── per-design-point cell (mirror n11_alpha_cell) ────────────────────────
+//
+// A design point is (reaction=D-T fixed here, T_keV, n_i [m⁻³], τ_E [s]).
+// The cell chains the F1/F2 kernel:
+//   ⟨σv⟩    = sigma_v_dt(T)                                  (F1)
+//   P_fus   = p_fusion_dt_density(n_i, T)                    (F2)
+//   W       = w_thermal_density(n_i, n_i, T)  (n_e≈n_i)      (F2)
+//   margin  = ignition_margin(P_fus, W, τ_E, f_α)            (F2)
+//   triple  = triple_product(n_i, T, τ_E)                    (F2)
+//   Q       = q_plasma_0d(P_fus, W, τ_E, f_α)                (F2)
+//   (a)     = f_reactivity_coverage(⟨σv⟩, ⟨σv⟩_ref)
+//   (b)     = f_margin_coverage(margin)
+//   comp    = f_funnel_composite(a, b)
+
+struct FusionCell {
+    t_kev:        float,
+    n_i_m3:       float,
+    tau_e_s:      float,
+    sigma_v:      float,    // ⟨σv⟩ [cm³/s] (F1)
+    triple:       float,    // n·T·τ_E [m⁻³·keV·s] (F2)
+    margin:       float,    // 0-D ignition margin (F2)
+    q_plasma:     float,    // 0-D Q_plasma (F2; 1e30 sentinel ⇒ Q→∞ ignition)
+    a_score:      float,    // (a) reactivity coverage [0,1]
+    b_score:      float,    // (b) Lawson/Q margin coverage [0,1]
+    composite:    float,    // (a)×(b) coverage product [0,1]
+}
+
+/// Full F-funnel D-T cell scorer. Chains F1 ⟨σv⟩ + F2 power balance →
+/// (a)×(b) composite. sigma_v_ref is the reference reactivity for the (a)
+/// coverage normalization (typically ⟨σv⟩ at the D-T design peak ~ 64 keV,
+/// or the chosen campaign reference). Pure (no syscall).
+pub fn f_funnel_cell(t_kev: float, n_i_m3: float, tau_e_s: float,
+                     sigma_v_ref: float) -> FusionCell {
+    let sv = sigma_v_dt(t_kev)
+    let p_fus = p_fusion_dt_density(n_i_m3, t_kev)
+    let w = w_thermal_density(n_i_m3, n_i_m3, t_kev)
+    let f_alpha = dt_alpha_fraction()
+    let margin = ignition_margin(p_fus, w, tau_e_s, f_alpha)
+    let triple = triple_product(n_i_m3, t_kev, tau_e_s)
+    let q = q_plasma_0d(p_fus, w, tau_e_s, f_alpha)
+    let a = f_reactivity_coverage(sv, sigma_v_ref)
+    let b = f_margin_coverage(margin)
+    let comp = f_funnel_composite(a, b)
+    return FusionCell { t_kev: t_kev, n_i_m3: n_i_m3, tau_e_s: tau_e_s,
+                        sigma_v: sv, triple: triple, margin: margin,
+                        q_plasma: q, a_score: a, b_score: b,
+                        composite: comp }
+}
+
+// ── top-K JSON emit (NUCLEAR §6.1 schema, mirror _write_n11_topk) ────────
+//
+// Each record carries domain/verb/gate_type/absorbed/provisional/query/
+// scores/citations/scope_caveats — the FUSION analogue of the N11 schema.
+// gate_type="fusion-design-feasibility", absorbed=false hardcoded (R4).
+
+// One scored design point as a JSON object string.
+fn _f_cell_json(name: string, klass: string, t_kev: float, n_i_m3: float,
+                tau_e_s: float, sigma_v_ref: float) -> string {
+    let c = f_funnel_cell(t_kev, n_i_m3, tau_e_s, sigma_v_ref)
+    return "    {\n" +
+        "      \"name\": \"" + name + "\",\n" +
+        "      \"class\": \"" + klass + "\",\n" +
+        "      \"reaction\": \"D-T\",\n" +
+        "      \"gate_type\": \"fusion-design-feasibility\",\n" +
+        "      \"absorbed\": false,\n" +
+        "      \"provisional\": true,\n" +
+        "      \"query\": { \"T_keV\": " + to_string(t_kev) +
+        ", \"n_i_m3\": " + to_string(n_i_m3) +
+        ", \"tau_E_s\": " + to_string(tau_e_s) + " },\n" +
+        "      \"prediction\": { \"sigma_v_cm3_s\": " + to_string(c.sigma_v) +
+        ", \"triple_product_m3_keV_s\": " + to_string(c.triple) +
+        ", \"ignition_margin\": " + to_string(c.margin) +
+        ", \"q_plasma_0d\": " + to_string(c.q_plasma) + " },\n" +
+        "      \"scores\": { \"a_reactivity_coverage\": " +
+        to_string(c.a_score) +
+        ", \"b_lawson_q_margin_coverage\": " + to_string(c.b_score) +
+        ", \"composite_a_x_b\": " + to_string(c.composite) + " }\n" +
+        "    }"
+}
+
+// Build + write the F-funnel top-K record to <out_dir>/top_k.json. Rows
+// are pre-ordered by descending composite (a)×(b) — the engineering-
+// priority shortlist. Returns the path written.
+fn _write_f_funnel_topk(out_dir: string, sigma_v_ref: float) -> string {
+    let path = out_dir + "/top_k.json"
+
+    // Design-point candidate set, PRE-ORDERED by descending (a)×(b)
+    // composite (matches the main() console table computed ordering):
+    //   T=20 ITER  comp=0.4843  │ T=20 compact comp=0.4843  (a sat at high T;
+    //   T=15 ITER  comp=0.3065  │ T=15 compact(τ=0.7) 0.3065 │ both b=1.0)
+    //   T=15 compact(τ=0.6) comp=0.2939  │ T=10 ITER comp=0.1263 (b=0.994)
+    // ITER-class: n≈1e20, T 10-20 keV, τ_E≈3 s. Compact-HTS-class
+    // (SPARC/ARC pathway): higher density n≈3-4e20, shorter τ_E≈0.6-0.7 s.
+    // Within a composite tie, ITER-class (the canonical reference) ranks first.
+    let rows: [string] = [
+        _f_cell_json("ITER-class T=20 n=1e20 tau=3.0", "ITER-class",
+            20.0, 1.0e20, 3.0, sigma_v_ref),
+        _f_cell_json("compact-HTS T=20 n=3e20 tau=0.6", "compact-HTS-class",
+            20.0, 3.0e20, 0.6, sigma_v_ref),
+        _f_cell_json("ITER-class T=15 n=1e20 tau=3.0", "ITER-class",
+            15.0, 1.0e20, 3.0, sigma_v_ref),
+        _f_cell_json("compact-HTS T=15 n=4e20 tau=0.7", "compact-HTS-class",
+            15.0, 4.0e20, 0.7, sigma_v_ref),
+        _f_cell_json("compact-HTS T=15 n=3e20 tau=0.6", "compact-HTS-class",
+            15.0, 3.0e20, 0.6, sigma_v_ref),
+        _f_cell_json("ITER-class T=10 n=1e20 tau=3.0", "ITER-class",
+            10.0, 1.0e20, 3.0, sigma_v_ref),
+    ]
+    let mut body = "[\n"
+    let mut i = 0
+    while i < len(rows) {
+        body = body + rows[i]
+        if i + 1 < len(rows) { body = body + "," }
+        body = body + "\n"
+        i = i + 1
+    }
+    body = body + "  ]"
+
+    let json = "{\n" +
+        "  \"domain\": \"fusion\",\n" +
+        "  \"verb\": \"verify\",\n" +
+        "  \"kind\": \"f_design_point_funnel\",\n" +
+        "  \"producer\": \"funnel.hexa@fusion-F-funnel\",\n" +
+        "  \"absorbed\": false,\n" +
+        "  \"gate_type\": \"fusion-design-feasibility\",\n" +
+        "  \"provisional\": true,\n" +
+        "  \"query\": { \"reaction\": \"D-T\", \"sigma_v_ref_cm3_s\": " +
+        to_string(sigma_v_ref) +
+        ", \"composite\": \"(a)reactivity_coverage x (b)lawson_q_margin_coverage\" },\n" +
+        "  \"top_k_candidates\": " + body + ",\n" +
+        "  \"scope_caveats\": [\n" +
+        "    \"(i) sim != device-measurement: every design point is a " +
+        "0-D closed-form projection from assumed (T,n,tau_E); absorbed=false " +
+        "for all. The JET measured-oracle is the only absorbed=true fusion path.\",\n" +
+        "    \"(ii) composite = (a)x(b) COVERAGE ONLY: (a) fuel reactivity " +
+        "(Bosch-Hale <sigma·v>) x (b) Lawson/Q margin (triple_product / " +
+        "ignition_margin / q_plasma_0d). (c) Grad-Shafranov, (d) MHD, (f) TBR " +
+        "are NOT in the composite — this is a 2-gate product, NOT a 6-gate composite.\",\n" +
+        "    \"(iii) tau_E is an ASSUMED design number, NOT a transport-" +
+        "simulated result; ignition_margin >= 1 is the 0-D Lawson criterion " +
+        "crossing = DESIGN FEASIBILITY, NEVER 'Q>1 achieved' / 'ignition achieved'.\"\n" +
+        "  ],\n" +
+        "  \"citations\": [\n" +
+        "    \"Bosch & Hale 1992 Nucl. Fusion 32, 611 (<sigma·v> fit; F1 kernel)\",\n" +
+        "    \"Lawson 1957 Proc. Phys. Soc. B 70, 6 (triple-product ignition; F2 kernel)\",\n" +
+        "    \"ITER Physics Basis 1999 Nucl. Fusion 39 (ITER-class reference point)\",\n" +
+        "    \"Creely et al. 2020 J Plasma Phys 86, 865860502 (SPARC/ARC compact-HTS class)\",\n" +
+        "    \"PR #1012 stdlib/kernels/fusion_reactivity/reactivity.hexa (F1/F2 kernel consumed)\",\n" +
+        "    \"FUSION.md 2.1 (F-funnel) + NUCLEAR.md 6.2 (N11 mirror)\"\n" +
+        "  ],\n" +
+        "  \"recommendation\": \"top_k is a reactor operating-point " +
+        "engineering-priority shortlist by (a)x(b) coverage. absorbed=true " +
+        "requires a measured tokamak shot (JET-class oracle); design " +
+        "feasibility != device achievement (FUSION.md g3).\"\n" +
+        "}\n"
+
+    write_file(path, json)
+    return path
+}
+
+// ── console emit helper (mirror _emit_n11) ───────────────────────────────
+fn _emit_f(name: string, t_kev: float, n_i_m3: float, tau_e_s: float,
+           sigma_v_ref: float) {
+    let c = f_funnel_cell(t_kev, n_i_m3, tau_e_s, sigma_v_ref)
+    println("  " + name +
+            ": sigma_v=" + to_string(c.sigma_v) +
+            "  margin=" + to_string(c.margin) +
+            "  a=" + to_string(c.a_score) +
+            "  b=" + to_string(c.b_score) +
+            "  comp=" + to_string(c.composite))
+}
+
+fn main() {
+    println("[fusion+verify] funnel.hexa — FUSION.md §2.1 F-funnel " +
+            "(consumes F1/F2 kernel PR #1012)")
+    println("[fusion+verify · F-funnel] composite = (a)reactivity x (b)Lawson/Q " +
+            "margin — (a)x(b) ONLY (NOT (c)GS/(d)MHD/(f)TBR)")
+
+    // Reference reactivity for the (a) coverage normalization: the D-T
+    // ⟨σv⟩ near its design peak (~64 keV). Design points below this T
+    // carry an (a) coverage < 1; this anchors the reactivity gate.
+    let sigma_v_ref = sigma_v_dt(64.0)
+    println("[fusion+verify · F-funnel] sigma_v_ref = <sigma·v>_DT(64 keV) = " +
+            to_string(sigma_v_ref) + " cm^3/s (reactivity coverage anchor)")
+
+    // ── F-funnel design-point cells (mirror N11 funnel cells) ──────────
+    // ITER-class: n≈1e20, T 10-20 keV, τ_E≈3 s.
+    // compact-HTS-class (SPARC/ARC high-field pathway): n≈3-4e20, τ_E≈0.6-0.7 s.
+    println("[fusion+verify · F-funnel] D-T design points (sim-only, absorbed=false):")
+    _emit_f("ITER-class  T=10 n=1e20 tau=3.0", 10.0, 1.0e20, 3.0, sigma_v_ref)
+    _emit_f("ITER-class  T=15 n=1e20 tau=3.0", 15.0, 1.0e20, 3.0, sigma_v_ref)
+    _emit_f("ITER-class  T=20 n=1e20 tau=3.0", 20.0, 1.0e20, 3.0, sigma_v_ref)
+    _emit_f("compact-HTS T=15 n=3e20 tau=0.6", 15.0, 3.0e20, 0.6, sigma_v_ref)
+    _emit_f("compact-HTS T=15 n=4e20 tau=0.7", 15.0, 4.0e20, 0.7, sigma_v_ref)
+    _emit_f("compact-HTS T=20 n=3e20 tau=0.6", 20.0, 3.0e20, 0.6, sigma_v_ref)
+
+    // Emit the F-funnel top-K JSON record (NUCLEAR §6.1 schema mirror) to
+    // the untracked export dir exports/fusion/f_funnel/<iso_stamp>/.
+    let stamp = exec("date -u +%Y-%m-%dT%H-%M-%SZ").trim()
+    let out_dir = "exports/fusion/f_funnel/" + stamp
+    let _ = exec("mkdir -p " + out_dir)
+    let topk_path = _write_f_funnel_topk(out_dir, sigma_v_ref)
+    println("[fusion+verify · F-funnel] wrote top-K record → " + topk_path)
+    println("[fusion+verify · F-funnel] HONEST: (a)x(b) coverage ONLY · " +
+            "absorbed=false · margin>=1 = 0-D feasibility, NEVER 'Q>1 achieved'")
+}

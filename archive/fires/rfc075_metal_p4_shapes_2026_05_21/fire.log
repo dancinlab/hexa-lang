@@ -1,0 +1,11 @@
+device=Apple M3
+
+shape       max|d|    byte_mm    PASS/FAIL
+---------- --------- ---------- ---------
+vec_add     0.000000     0/1024   PASS
+vec_mul     0.000000     0/1024   PASS
+vec_scale   0.000000     0/1024   PASS
+
+F-RFC075-METAL-SHAPES-NUMERIC-EQ: PASS (all 3 shapes byte_eq across 1024 cells)
+wrote result.json (792 bytes)
+exit=0

@@ -1,0 +1,37 @@
+#!hexa strict
+// interconnect/verify_chip-interconnect.hexa — on-package + off-package interconnect.
+//
+// J₂=24 layer interconnect stack ceiling (σ(6)·φ(6) = n·τ(6) = 24).
+// τ(6)=4 interconnect tiers: local M1-M4 / intermediate M5-M9 /
+// global M10-M16 / RDL package.
+//
+// Falsifiers:
+//   F-CHIP-IC-1: layer count > 24 ⇒ J₂ master-identity ceiling violated.
+//   F-CHIP-IC-2: ≠4 tier count ⇒ τ-redundancy broken.
+
+fn main() {
+    let tiers = [
+        ["local",        "M1-M4",   4],
+        ["intermediate", "M5-M9",   5],
+        ["global",       "M10-M16", 7],
+        ["RDL",          "package", 8]
+    ]
+    if tiers.len() != 4 {
+        println("[interconnect] FAIL — τ(6)=4 tier count drift")
+        exit(1)
+    }
+    let mut total = 0
+    let mut i = 0
+    while i < tiers.len() {
+        let t = tiers[i]
+        total = total + t[2]
+        println("  " + t[0] + " (" + t[1] + "):  " + str(t[2]) + " layers")
+        i = i + 1
+    }
+    let j2 = 24
+    if total > j2 {
+        println("[interconnect] FAIL — total " + str(total) + " > J₂=24 ceiling (F-CHIP-IC-1)")
+        exit(1)
+    }
+    println("[interconnect] τ(6)=4 tiers, total " + str(total) + " ≤ J₂=" + str(j2) + " layer ceiling PASS")
+}

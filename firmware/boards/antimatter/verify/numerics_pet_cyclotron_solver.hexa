@@ -1,0 +1,257 @@
+#!hexa strict
+// hexa-antimatter/verify/numerics_pet_cyclotron_solver.hexa — ¹⁸F decay
+// ODE simulator + τ=4 batch-stack steady-state check.
+//
+// 3rd T2 stack for F-AM-1 (PET ¹⁸F regen rate).  Distinct from the
+// Verlet-symplectic solvers (factory_solver = 1-DOF, tabletop_solver
+// = 2-DOF Penning) — this script integrates a NON-symplectic linear
+// ODE: ¹⁸F radioactive decay dS/dt = -λS with τ=4 batch-stacking.
+//
+//   single-batch decay     S(t) = S₀ · exp(-λt)         λ = ln(2) / t½
+//   half-life check        S(t½) ≈ S₀ / 2
+//   τ=4 batch stacking     refresh σ·τ mg every (t½/τ) minutes
+//   steady-state stock     S_∞ ≈ σ·τ · Σ_{k=0..∞} 2^(-k/τ)
+//                                = σ·τ / (1 - 2^(-1/τ))
+//                                = 48 / (1 - 2^(-0.25))
+//                                ≈ 48 / 0.1591  ≈ 301.7 mg
+//
+// Numerical (Euler) vs closed-form analytic agreement on:
+//   1. exp(-λt)  via log_pure(2) ↔ Euler integration
+//   2. half-life: S(t½) ≈ 0.5·S₀ within ±0.5% rel
+//   3. batch-stack steady-state convergence
+//   4. math_pure stability floor
+//
+// Run: hexa run verify/numerics_pet_cyclotron_solver.hexa
+// Sentinel: __HEXA_ANTIMATTER_NUMERICS_PET_CYCLOTRON_SOLVER__ PASS
+//
+// Authority: pet_cyclotron/pet-cyclotron.md §1 WHY (¹⁸F t½ = 109.8 min,
+// τ=4 batch stack) · .roadmap.hexa_antimatter §A.4 F-AM-1.
+
+use "self/runtime/math_pure"
+
+let HOME = env("HOME")
+
+fn _root() -> str {
+    let r = env("HEXA_ANTIMATTER_ROOT")
+    if r.len() > 0 { return r }
+    let pwd = exec("pwd").trim()
+    if pwd.len() > 0 { return pwd }
+    return HOME + "/core/hexa-antimatter"
+}
+
+let ROOT = _root()
+
+fn _int_str(x: int) -> str { return "" + x }
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    if ok {
+        println("  [PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("  [FAIL] " + label)
+    }
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+fn _approx_eq(a: float, b: float, tol: float) -> bool {
+    return abs_pure(a - b) <= tol
+}
+
+fn _approx_rel(a: float, b: float, rel_tol: float) -> bool {
+    let aa = abs_pure(a)
+    let ab = abs_pure(b)
+    let denom = if aa > ab { aa } else { ab }
+    if denom == 0.0 { return abs_pure(a - b) <= rel_tol }
+    return abs_pure(a - b) / denom <= rel_tol
+}
+
+// ── n=6 lattice + ¹⁸F constants ──────────────────────────────────────────
+let SIGMA_F      = 12.0
+let TAU_F        = 4.0
+let PHI_F        = 2.0
+let T_HALF_MIN   = 109.8     // ¹⁸F half-life
+let STOCK_MG     = SIGMA_F * TAU_F   // 48 mg/season per HEXA-PET-01
+let LAMBDA_PER_MIN_REF = 0.006312    // ln(2) / 109.8
+
+let FALSIFIERS = [
+    "F-AM-1 T2×3: λ = ln(2)/t½ ≠ 6.312×10⁻³ /min ± 0.1% → t½ closure breaks",
+    "F-AM-1 T2×3: Euler decay S(t½) ≠ S₀/2 ± 0.5% → integrator unstable",
+    "F-AM-1 T2×3: Euler vs analytic exp(-λt) divergence > 0.1% → ODE error",
+    "F-AM-1 T2×3: τ=4 batch steady-state ≠ σ·τ/(1-2^(-1/τ)) ± 1% → stack chain retract",
+    "F-AM-1 T2×3: 4-cycle convergence within 1 t½ window not reached → spec retract",
+    "F-AM-1 T2×3: 2^(-1/τ) ≠ 0.8409 ± 1e-4 → τ=4 retention fraction retract",
+    "math_pure floor: log_pure(2)/t½ ↔ analytic mismatch → log_pure broken",
+]
+
+// ── λ from ln(2) / t½ via log_pure ───────────────────────────────────────
+
+fn lambda_per_min() -> float { return log_pure(2.0) / T_HALF_MIN }
+
+fn check_lambda() {
+    let l = lambda_per_min()
+    _check(_approx_rel(l, LAMBDA_PER_MIN_REF, 0.001),
+           "λ = ln(2) / 109.8 min = 6.312×10⁻³ /min  (HEXA-PET-01 retention)",
+           "λ = " + ("" + l))
+}
+
+// ── Euler integration of dS/dt = -λS ─────────────────────────────────────
+
+fn euler_decay(S0: float, lambda: float, t_end: float, n_steps: int) -> float {
+    let h = t_end / (1.0 * n_steps)
+    let mut S = S0
+    let mut i = 0
+    while i < n_steps {
+        S = S - lambda * S * h
+        i = i + 1
+    }
+    return S
+}
+
+fn check_half_life() {
+    // After t½ minutes, S should be ≈ S₀/2.  Use 1024 Euler steps to push
+    // truncation error well below 0.5% rel.
+    let lambda = lambda_per_min()
+    let S_end = euler_decay(STOCK_MG, lambda, T_HALF_MIN, 1024)
+    _check(_approx_rel(S_end, STOCK_MG / 2.0, 0.005),
+           "Euler S(t½) ≈ S₀/2 ± 0.5%  (single-batch decay)",
+           "S(109.8) = " + ("" + S_end) + " mg, expected ≈ " + ("" + (STOCK_MG / 2.0)))
+}
+
+fn check_euler_vs_analytic() {
+    // Pick a few sample t values; compare Euler S(t) with analytic
+    // S₀·exp(-λt) within 0.1% rel.
+    let lambda = lambda_per_min()
+    let t1 = 60.0
+    let S_eul = euler_decay(STOCK_MG, lambda, t1, 4096)
+    let S_ana = STOCK_MG * exp_pure(-lambda * t1)
+    _check(_approx_rel(S_eul, S_ana, 0.001),
+           "Euler vs analytic exp(-λt) at t=60 min  (within 0.1%)",
+           "Eul=" + ("" + S_eul) + " · ana=" + ("" + S_ana))
+}
+
+// ── τ=4 batch retention check ────────────────────────────────────────────
+
+fn check_tau_retention() {
+    // After 1/τ of a half-life, residual = 2^(-1/τ).  τ=4 → 2^(-0.25) ≈ 0.8409.
+    let r = pow_pure(2.0, -1.0 / TAU_F)
+    _check(_approx_rel(r, 0.8409, 0.0001),
+           "2^(-1/τ) ≈ 0.8409  (τ=4 batch retention per t½/τ refresh)",
+           "retained = " + ("" + r))
+    _check(r > 0.5,
+           "retention > 0.5  (stacking is meaningful)", "")
+}
+
+// ── τ=4 batch-stacking steady-state ──────────────────────────────────────
+
+fn check_batch_stack_steady_state() {
+    // Refresh: every (t½/τ) min, add σ·τ mg.  After many cycles, stock
+    // converges to S_∞ = σ·τ · Σ_{k=0..∞} 2^(-k/τ) = σ·τ / (1 - 2^(-1/τ)).
+    let r = pow_pure(2.0, -1.0 / TAU_F)
+    let S_inf_analytic = STOCK_MG / (1.0 - r)
+    // ≈ 48 / 0.1591 ≈ 301.74 mg
+    _check(_approx_rel(S_inf_analytic, 301.74, 0.001),
+           "S_∞ analytic = σ·τ / (1 - 2^(-1/τ)) ≈ 301.74 mg",
+           "S_∞ = " + ("" + S_inf_analytic) + " mg")
+
+    // Numerical: simulate 64 stacking cycles (r^64 = 2^(-16) ≈ 1.5e-5 residual).
+    let n_cycles = 64
+    let mut S = 0.0
+    let mut k = 0
+    while k < n_cycles {
+        S = S * r + STOCK_MG     // each cycle: decay residual + fresh batch
+        k = k + 1
+    }
+    _check(_approx_rel(S, S_inf_analytic, 0.001),
+           "Numerical stack convergence after 64 cycles ≈ S_∞ analytic (0.1%)",
+           "S_num = " + ("" + S) + " · S_∞ = " + ("" + S_inf_analytic))
+
+    // Convergence within τ=4 cycles: after 4 stacks, partial sum is
+    // S₀·(1 + r + r² + r³) = S₀·(1 - r⁴)/(1 - r) → already 50% of S_∞.
+    let mut S4 = 0.0
+    let mut k4 = 0
+    while k4 < 4 {
+        S4 = S4 * r + STOCK_MG
+        k4 = k4 + 1
+    }
+    let frac4 = S4 / S_inf_analytic
+    _check(frac4 >= 0.4 && frac4 <= 0.6,
+           "after τ=4 cycles, stock fills ~50% of S_∞ (geometric convergence)",
+           "S_4/S_∞ = " + ("" + frac4))
+}
+
+fn check_math_pure_floor() {
+    let l2 = log_pure(2.0)
+    _check(_approx_rel(l2, 0.6931472, 0.0001),
+           "log_pure(2) = 0.6931472 ± 1e-4", "ln 2 = " + ("" + l2))
+    let e1 = exp_pure(1.0)
+    _check(_approx_rel(e1, 2.71828, 0.0001),
+           "exp_pure(1) = e ≈ 2.71828", "e = " + ("" + e1))
+    let p = pow_pure(2.0, 10.0)
+    _check(_approx_eq(p, 1024.0, 0.000000001),
+           "pow_pure(2, 10) = 1024", "")
+}
+
+fn print_header() {
+    let lambda = lambda_per_min()
+    let r = pow_pure(2.0, -1.0 / TAU_F)
+    let S_inf = STOCK_MG / (1.0 - r)
+    println("")
+    println("  ¹⁸F decay + τ=4 batch-stacking simulator  (PET pillar)")
+    println("    t½  = " + ("" + T_HALF_MIN) + " min")
+    println("    λ   = ln(2)/t½ = " + ("" + lambda) + " /min")
+    println("    σ·τ batch    = " + ("" + STOCK_MG) + " mg/cycle  (HEXA-PET-01)")
+    println("    2^(-1/τ)     = " + ("" + r) + "  (per-cycle retention)")
+    println("    S_∞ analytic = " + ("" + S_inf) + " mg  (steady-state stock)")
+    println("")
+}
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-antimatter — numerics_pet_cyclotron_solver: ¹⁸F decay + τ=4 stack")
+    println("========================================================================")
+    println("  closes:  F-AM-1 T2 ×3 (PET pillar 3rd T2 — sat-1 3rd falsifier)")
+    println("  method:  Euler ODE for dS/dt = -λS + τ=4 batch refresh")
+    println("  pattern: distinct from Verlet-symplectic factory/tabletop solvers")
+    print_header()
+
+    println("  -- λ from ln(2) / t½ --")
+    check_lambda()
+
+    println("")
+    println("  -- single-batch half-life closure --")
+    check_half_life()
+
+    println("")
+    println("  -- Euler vs analytic exp(-λt) --")
+    check_euler_vs_analytic()
+
+    println("")
+    println("  -- τ=4 retention fraction 2^(-1/τ) --")
+    check_tau_retention()
+
+    println("")
+    println("  -- batch-stack steady state --")
+    check_batch_stack_steady_state()
+
+    println("")
+    println("  -- math_pure stability floor --")
+    check_math_pure_floor()
+
+    println("")
+    println("  FALSIFIERS (" + _int_str(len(FALSIFIERS)) + "):")
+    for f in FALSIFIERS { println("    ✗ " + f) }
+
+    println("========================================================================")
+    let pass_n = RUN - FAIL
+    println("  " + _int_str(pass_n) + "/" + _int_str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_ANTIMATTER_NUMERICS_PET_CYCLOTRON_SOLVER__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_ANTIMATTER_NUMERICS_PET_CYCLOTRON_SOLVER__ PASS")
+    exit(0)
+}

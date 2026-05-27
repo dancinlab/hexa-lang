@@ -1,0 +1,751 @@
+// Imports — `use "stdlib/http"` brought in by the brenda-soap-wire
+// extension (2026-05-25). The parse-surface above is intentionally
+// I/O-free; the SOAP layer below threads through `http_post_with_headers`
+// (curl shellout) for the live BRENDA endpoint. Tests stay OFFLINE —
+// the envelope synthesizer + response parser are pure-function gates.
+use "stdlib/http"
+
+// stdlib/bio/brenda.hexa — BRENDA enzyme DB client (parse-surface, cached-fixture build).
+//
+// HONESTY HEADER ────────────────────────────────────────────────────
+// BRENDA's official wire is a SOAP API gated on academic registration
+// (https://www.brenda-enzymes.org/soap.php) — email/password required,
+// not free-curl. The HTML page at
+//   https://www.brenda-enzymes.org/enzyme.php?ecno=<EC>
+// is human-readable, not a stable JSON endpoint.
+//
+// This module ships the *parse surface* + a cached synthetic fixture
+// (compiler/bridges/_cache/brenda.frozen.json). It does NOT plumb the
+// live SOAP wire — that is a follow-up milestone gated on credential
+// management. Per @D try-live-or-fallback and the `hexa verify` rubric:
+//   - parse-correctness oracle  →  🔵 SUPPORTED-FORMAL (deterministic)
+//   - live SOAP integration     →  🟠 INSUFFICIENT / DEFERRED
+//
+// TODO(brenda-soap-wire): wire SOAP2 client once secret-manager carries
+// `brenda.user` / `brenda.password`. Reference:
+//   - SOAP WSDL: https://www.brenda-enzymes.org/soap/brenda_zeep.py
+//   - REST-ish HTML: https://www.brenda-enzymes.org/enzyme.php?ecno=<EC>
+//   - Citation DOI: 10.1093/nar/gkaa1025  (Chang et al., NAR 2021)
+//
+// CACHED JSON SHAPE ─────────────────────────────────────────────────
+// Single flat object — one enzyme record per file. Keys mirror the
+// BRENDA SOAP2 field tags (`ecNumber`, `recommendedName`, `kmValue`,
+// `turnoverNumber`, `organism`, `substrate`, `phOptimum`,
+// `temperatureOptimum`) snake-cased and unit-suffixed where the SOAP
+// payload is unit-agnostic:
+//
+//   {
+//     "ec_number":             "3.1.1.7",
+//     "recommended_name":      "Acetylcholinesterase",
+//     "organism":              "Homo sapiens",
+//     "km_uM":                 92.5,        // KM in micromolar
+//     "kcat_per_s":            14000.0,     // turnover number, /s
+//     "substrate":             "acetylcholine",
+//     "ph_optimum":            8.0,
+//     "temperature_optimum_C": 37.0
+//   }
+//
+// Parser strategy: lightweight substring slicing (no full JSON parser
+// dep — same approach as stdlib/research/arxiv.hexa). Sufficient for
+// the flat single-record shape we control.
+
+struct BrendaEnzyme {
+    ec_number: string,
+    recommended_name: string,
+    organism: string,
+    km_uM: float,
+    kcat_per_s: float,
+    substrate: string,
+    ph_optimum: float,
+    temperature_optimum_C: float,
+}
+
+let BRENDA_FIXTURE = "compiler/bridges/_cache/brenda.frozen.json"
+let BRENDA_HTML_BASE = "https://www.brenda-enzymes.org/enzyme.php?ecno="
+
+// ── string utilities ────────────────────────────────────────────────
+
+fn _idx(hay: string, needle: string, from: int) -> int {
+    let n = len(hay)
+    let m = len(needle)
+    if m == 0 { return from }
+    if m > n { return -1 }
+    let mut i = from
+    while i + m <= n {
+        if hay.substring(i, i + m) == needle { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+fn _is_ws(c: string) -> bool {
+    return c == " " || c == "\t" || c == "\n" || c == "\r"
+}
+
+// Locate the value start for `"key"` — returns the index just past the
+// `:` and any whitespace. Returns -1 when the key is absent.
+fn _value_start(body: string, key: string) -> int {
+    let probe = "\"" + key + "\""
+    let k = _idx(body, probe, 0)
+    if k < 0 { return -1 }
+    let mut i = k + len(probe)
+    let n = len(body)
+    while i < n && _is_ws(body.substring(i, i + 1)) { i = i + 1 }
+    if i >= n || body.substring(i, i + 1) != ":" { return -1 }
+    i = i + 1
+    while i < n && _is_ws(body.substring(i, i + 1)) { i = i + 1 }
+    return i
+}
+
+// Read a JSON string value for `key`. Handles `\"` and `\\` escape
+// pairs (sufficient for our controlled fixture; we never embed
+// unicode escapes here).
+fn _str_field(body: string, key: string) -> string {
+    let s = _value_start(body, key)
+    if s < 0 { return "" }
+    if body.substring(s, s + 1) != "\"" { return "" }
+    let n = len(body)
+    let mut i = s + 1
+    let mut out = ""
+    while i < n {
+        let c = body.substring(i, i + 1)
+        if c == "\\" && i + 1 < n {
+            let nxt = body.substring(i + 1, i + 2)
+            if nxt == "\"" { out = out + "\"" }
+            else if nxt == "\\" { out = out + "\\" }
+            else if nxt == "n" { out = out + "\n" }
+            else if nxt == "t" { out = out + "\t" }
+            else { out = out + nxt }
+            i = i + 2
+        } else if c == "\"" {
+            return out
+        } else {
+            out = out + c
+            i = i + 1
+        }
+    }
+    return out
+}
+
+// Char-wise positive/negative float parser. Accepts optional sign,
+// integer part, fractional part, and `e[+/-]?digits` exponent.
+// Returns 0.0 on no-digit input — caller is responsible for the
+// "field missing" sentinel via `_value_start`.
+fn _parse_float_at(body: string, start: int) -> float {
+    let n = len(body)
+    let mut i = start
+    while i < n && _is_ws(body.substring(i, i + 1)) { i = i + 1 }
+    if i >= n { return 0.0 }
+    let mut sign = 1.0
+    let ch0 = body.substring(i, i + 1)
+    if ch0 == "+" { i = i + 1 }
+    else if ch0 == "-" { sign = 0.0 - 1.0; i = i + 1 }
+    let ord0 = ord("0")
+    let ord9 = ord("9")
+    let mut val = 0.0
+    let mut consumed = false
+    while i < n {
+        let c = ord(body.substring(i, i + 1))
+        if c < ord0 || c > ord9 { break }
+        val = val * 10.0 + to_float(c - ord0)
+        consumed = true
+        i = i + 1
+    }
+    if i < n && body.substring(i, i + 1) == "." {
+        i = i + 1
+        let mut pw = 0.1
+        while i < n {
+            let cf = ord(body.substring(i, i + 1))
+            if cf < ord0 || cf > ord9 { break }
+            val = val + to_float(cf - ord0) * pw
+            pw = pw / 10.0
+            consumed = true
+            i = i + 1
+        }
+    }
+    if consumed == false { return 0.0 }
+    if i < n {
+        let ce = body.substring(i, i + 1)
+        if ce == "e" || ce == "E" {
+            let mut j = i + 1
+            let mut exp_sign = 1
+            if j < n {
+                let cs = body.substring(j, j + 1)
+                if cs == "+" { j = j + 1 }
+                else if cs == "-" { exp_sign = 0 - 1; j = j + 1 }
+            }
+            let mut exp_val = 0
+            let mut exp_seen = false
+            while j < n {
+                let ce2 = ord(body.substring(j, j + 1))
+                if ce2 < ord0 || ce2 > ord9 { break }
+                exp_val = exp_val * 10 + (ce2 - ord0)
+                exp_seen = true
+                j = j + 1
+            }
+            if exp_seen {
+                let mut k = 0
+                let mut mult = 1.0
+                while k < exp_val {
+                    mult = mult * 10.0
+                    k = k + 1
+                }
+                if exp_sign < 0 { val = val / mult } else { val = val * mult }
+            }
+        }
+    }
+    return sign * val
+}
+
+fn _float_field(body: string, key: string) -> float {
+    let s = _value_start(body, key)
+    if s < 0 { return 0.0 }
+    return _parse_float_at(body, s)
+}
+
+// ── public surface ──────────────────────────────────────────────────
+
+// Pure parser. Accepts the flat JSON shape documented in the header.
+// Missing fields default to "" / 0.0 — callers needing strict presence
+// should re-validate against the header schema.
+pub fn brenda_parse(json_body: string) -> BrendaEnzyme {
+    let empty = BrendaEnzyme{
+        ec_number: "", recommended_name: "", organism: "",
+        km_uM: 0.0, kcat_per_s: 0.0, substrate: "",
+        ph_optimum: 0.0, temperature_optimum_C: 0.0,
+    }
+    if len(json_body) == 0 { return empty }
+    return BrendaEnzyme{
+        ec_number:             _str_field(json_body, "ec_number"),
+        recommended_name:      _str_field(json_body, "recommended_name"),
+        organism:              _str_field(json_body, "organism"),
+        km_uM:                 _float_field(json_body, "km_uM"),
+        kcat_per_s:            _float_field(json_body, "kcat_per_s"),
+        substrate:             _str_field(json_body, "substrate"),
+        ph_optimum:            _float_field(json_body, "ph_optimum"),
+        temperature_optimum_C: _float_field(json_body, "temperature_optimum_C"),
+    }
+}
+
+// Lookup by EC number. CURRENT BUILD: reads the cached frozen fixture
+// — there is exactly one record (EC 3.1.1.7 acetylcholinesterase).
+// Returns an empty record for any other EC until the SOAP wire lands.
+//
+// TODO(brenda-soap-wire): replace with SOAP2 round-trip — see header.
+pub fn brenda_lookup_by_ec(ec: string) -> BrendaEnzyme {
+    let empty = BrendaEnzyme{
+        ec_number: "", recommended_name: "", organism: "",
+        km_uM: 0.0, kcat_per_s: 0.0, substrate: "",
+        ph_optimum: 0.0, temperature_optimum_C: 0.0,
+    }
+    if len(ec) == 0 { return empty }
+    let body = read_file(BRENDA_FIXTURE)
+    if len(body) == 0 { return empty }
+    let rec = brenda_parse(body)
+    if rec.ec_number != ec { return empty }
+    return rec
+}
+
+// ══════════════════════════════════════════════════════════════════════
+//  SOAP wire — brenda-soap-wire-2026-05-25
+// ══════════════════════════════════════════════════════════════════════
+//
+// BRENDA의 공식 wire는 SOAP 1.1 + WS-Security UsernameToken (Password
+// = `md5(plaintext)` hex 32). https://www.brenda-enzymes.org/soap.php
+// 의 클라이언트 가이드와 zeep 레퍼런스 클라이언트(brenda_zeep.py)에
+// 명시. 이 섹션이 추가하는 것:
+//
+//   1. _md5_hex(s)             — RFC 1321 순수-hexa MD5 (32-bit ops,
+//                                 sha256/xxhash 와 같은 마스킹 idiom)
+//   2. brenda_soap_envelope    — XML SOAP 봉투 합성 (WS-Security 헤더
+//                                 포함). 입력 plaintext 비밀번호는
+//                                 항상 md5_hex 로 마스킹된 후 embed.
+//   3. brenda_soap_headers     — `text/xml; charset=utf-8` +
+//                                 `SOAPAction: "<ns>#<method>"`
+//   4. brenda_soap_unwrap      — XML 응답 → cycle-2 JSON-flat shape
+//                                 (regex-free, substring slicing)
+//   5. brenda_soap_fire_*      — live POST helpers (offline 테스트에서
+//                                 호출 안 함; CI/credential gate 후 실사용)
+//
+// Honesty: 실제 BRENDA 엔드포인트는 학술 등록 + email/password 필요.
+// 이 구현은 envelope 형태만 wire 표준을 따르고, 라이브 라운드트립은
+// 자격증명 매니저가 `brenda.user` / `brenda.password` 를 노출할 때
+// `brenda_soap_fire_*` 가 작동. 테스트는 envelope 합성 + 응답 unwrap
+// 의 deterministic 부분만 측정.
+
+let BRENDA_SOAP_ENDPOINT = "https://www.brenda-enzymes.org/soap/brenda_zeep.php"
+let BRENDA_SOAP_NS = "https://www.brenda-enzymes.org/soap/brenda_server.php"
+let BRENDA_MASK32 = 0xFFFFFFFF
+
+// ── 32-bit helpers (sha256/xxhash 와 동일 idiom; signed-int 흐름) ────
+
+fn _md5_pow2(n: int) -> int {
+    let mut r = 1
+    let mut i = 0
+    while i < n { r = r * 2; i = i + 1 }
+    return r
+}
+
+fn _md5_or(a: int, b: int) -> int {
+    return (a + b) - (a & b)
+}
+
+fn _md5_add32(a: int, b: int) -> int {
+    return (a + b) & BRENDA_MASK32
+}
+
+fn _md5_xor32(a: int, b: int) -> int {
+    return (a ^ b) & BRENDA_MASK32
+}
+
+fn _md5_not32(a: int) -> int {
+    return (BRENDA_MASK32 - (a & BRENDA_MASK32)) & BRENDA_MASK32
+}
+
+// 32-bit multiply via 16-bit limb split (signed-int safe).
+fn _md5_mul32(a: int, b: int) -> int {
+    let a32 = a & BRENDA_MASK32
+    let b32 = b & BRENDA_MASK32
+    let aL = a32 & 0xFFFF
+    let aH = a32 / 0x10000
+    let bL = b32 & 0xFFFF
+    let bH = b32 / 0x10000
+    let low = aL * bL
+    let mid = (aL * bH + aH * bL) & 0xFFFF
+    return (low + mid * 0x10000) & BRENDA_MASK32
+}
+
+// Left rotate by r (0..31).
+fn _md5_rotl32(x: int, r: int) -> int {
+    let v = x & BRENDA_MASK32
+    let sh = r % 32
+    if sh == 0 { return v }
+    let lo = (v * _md5_pow2(sh)) & BRENDA_MASK32
+    let hi = v / _md5_pow2(32 - sh)
+    return _md5_or(lo, hi) & BRENDA_MASK32
+}
+
+// MD5 nonlinear functions F/G/H/I (RFC 1321 §3.4).
+fn _md5_F(x: int, y: int, z: int) -> int {
+    // (x AND y) OR ((NOT x) AND z)
+    return _md5_or(x & y, _md5_not32(x) & z) & BRENDA_MASK32
+}
+
+fn _md5_G(x: int, y: int, z: int) -> int {
+    // (x AND z) OR (y AND (NOT z))
+    return _md5_or(x & z, y & _md5_not32(z)) & BRENDA_MASK32
+}
+
+fn _md5_H(x: int, y: int, z: int) -> int {
+    return _md5_xor32(_md5_xor32(x, y), z)
+}
+
+fn _md5_I(x: int, y: int, z: int) -> int {
+    // y XOR (x OR (NOT z))
+    return _md5_xor32(y, _md5_or(x, _md5_not32(z)))
+}
+
+// MD5 round step:
+//   a = b + rotl( a + f(b,c,d) + x[k] + t[i], s )
+// where f rotates F/G/H/I per round.
+fn _md5_step(round: int, a: int, b: int, c: int, d: int, x_k: int, t_i: int, s: int) -> int {
+    let mut f = 0
+    if round == 0 { f = _md5_F(b, c, d) }
+    else if round == 1 { f = _md5_G(b, c, d) }
+    else if round == 2 { f = _md5_H(b, c, d) }
+    else { f = _md5_I(b, c, d) }
+    let sum = _md5_add32(_md5_add32(_md5_add32(a, f), x_k), t_i)
+    return _md5_add32(b, _md5_rotl32(sum, s))
+}
+
+// MD5 round table — k index, s shift, t constant (RFC 1321 §3.4 + appendix).
+// Stored as flat arrays of length 64 indexed by step i = 0..63.
+
+fn _md5_table_K() -> array {
+    // Index permutation per round (RFC 1321 §3.4).
+    // Round 1 (i=0..15):  k = i
+    // Round 2 (i=16..31): k = (5*i + 1) mod 16
+    // Round 3 (i=32..47): k = (3*i + 5) mod 16
+    // Round 4 (i=48..63): k = (7*i)     mod 16
+    let mut t = []
+    let mut i = 0
+    while i < 16 { t = t + [i]; i = i + 1 }
+    let mut j = 16
+    while j < 32 { t = t + [(5 * j + 1) % 16]; j = j + 1 }
+    let mut k = 32
+    while k < 48 { t = t + [(3 * k + 5) % 16]; k = k + 1 }
+    let mut m = 48
+    while m < 64 { t = t + [(7 * m) % 16]; m = m + 1 }
+    return t
+}
+
+fn _md5_table_S() -> array {
+    // Shift amounts per RFC 1321 — repeating pattern within each round.
+    return [
+        7, 12, 17, 22,  7, 12, 17, 22,  7, 12, 17, 22,  7, 12, 17, 22,
+        5,  9, 14, 20,  5,  9, 14, 20,  5,  9, 14, 20,  5,  9, 14, 20,
+        4, 11, 16, 23,  4, 11, 16, 23,  4, 11, 16, 23,  4, 11, 16, 23,
+        6, 10, 15, 21,  6, 10, 15, 21,  6, 10, 15, 21,  6, 10, 15, 21
+    ]
+}
+
+fn _md5_table_T() -> array {
+    // T[i] = floor( 2^32 * abs(sin(i+1)) ) — RFC 1321 §appendix A.
+    // Hardcoded (sin transcendental + abs not always available pre-flame).
+    return [
+        0xD76AA478, 0xE8C7B756, 0x242070DB, 0xC1BDCEEE,
+        0xF57C0FAF, 0x4787C62A, 0xA8304613, 0xFD469501,
+        0x698098D8, 0x8B44F7AF, 0xFFFF5BB1, 0x895CD7BE,
+        0x6B901122, 0xFD987193, 0xA679438E, 0x49B40821,
+        0xF61E2562, 0xC040B340, 0x265E5A51, 0xE9B6C7AA,
+        0xD62F105D, 0x02441453, 0xD8A1E681, 0xE7D3FBC8,
+        0x21E1CDE6, 0xC33707D6, 0xF4D50D87, 0x455A14ED,
+        0xA9E3E905, 0xFCEFA3F8, 0x676F02D9, 0x8D2A4C8A,
+        0xFFFA3942, 0x8771F681, 0x6D9D6122, 0xFDE5380C,
+        0xA4BEEA44, 0x4BDECFA9, 0xF6BB4B60, 0xBEBFBC70,
+        0x289B7EC6, 0xEAA127FA, 0xD4EF3085, 0x04881D05,
+        0xD9D4D039, 0xE6DB99E5, 0x1FA27CF8, 0xC4AC5665,
+        0xF4292244, 0x432AFF97, 0xAB9423A7, 0xFC93A039,
+        0x655B59C3, 0x8F0CCC92, 0xFFEFF47D, 0x85845DD1,
+        0x6FA87E4F, 0xFE2CE6E0, 0xA3014314, 0x4E0811A1,
+        0xF7537E82, 0xBD3AF235, 0x2AD7D2BB, 0xEB86D391
+    ]
+}
+
+// Pad message bytes per RFC 1321 §3.1:
+//   append 0x80, then 0x00 until len % 64 == 56,
+//   then append 8-byte little-endian length-in-bits.
+fn _md5_pad(bytes: array) -> array {
+    let mut out = bytes
+    let bit_len = len(bytes) * 8
+    out = out + [0x80]
+    while (len(out) % 64) != 56 { out = out + [0] }
+    // 64-bit little-endian length (bytes are < 2^32 bits in practice;
+    // upper 4 bytes are zero for ≤ 512MB inputs — fits our use cases).
+    let len_lo = bit_len & BRENDA_MASK32
+    let mut i = 0
+    while i < 4 {
+        out = out + [(len_lo / _md5_pow2(i * 8)) & 0xFF]
+        i = i + 1
+    }
+    let mut j = 0
+    while j < 4 { out = out + [0]; j = j + 1 }
+    return out
+}
+
+// Read little-endian u32 from byte array at offset.
+fn _md5_read_u32_le(data: array, off: int) -> int {
+    let b0 = data[off] & 0xFF
+    let b1 = data[off + 1] & 0xFF
+    let b2 = data[off + 2] & 0xFF
+    let b3 = data[off + 3] & 0xFF
+    return _md5_or(_md5_or(b0, b1 * 0x100), _md5_or(b2 * 0x10000, b3 * 0x1000000))
+}
+
+// Convert string to UTF-8 byte array (ord() per char, ASCII-safe; the
+// BRENDA password contract is ASCII per docs).
+fn _md5_str_to_bytes(s: string) -> array {
+    let mut bytes = []
+    let mut i = 0
+    let n = len(s)
+    while i < n {
+        bytes = bytes + [ord(s.substring(i, i + 1)) & 0xFF]
+        i = i + 1
+    }
+    return bytes
+}
+
+fn _md5_u8_hex(b: int) -> string {
+    let hex_chars = "0123456789abcdef"
+    let hi = (b / 16) & 0xF
+    let lo = b & 0xF
+    return hex_chars.substring(hi, hi + 1) + hex_chars.substring(lo, lo + 1)
+}
+
+// Emit little-endian u32 as 8 hex chars (lower nibble-first byte order).
+fn _md5_u32_hex_le(v: int) -> string {
+    let v32 = v & BRENDA_MASK32
+    let b0 = v32 & 0xFF
+    let b1 = (v32 / 0x100) & 0xFF
+    let b2 = (v32 / 0x10000) & 0xFF
+    let b3 = (v32 / 0x1000000) & 0xFF
+    return _md5_u8_hex(b0) + _md5_u8_hex(b1) + _md5_u8_hex(b2) + _md5_u8_hex(b3)
+}
+
+// Pure-hexa MD5. Returns 32-char lowercase hex digest.
+// RFC 1321 test vectors confirmed:
+//   md5("")      = d41d8cd98f00b204e9800998ecf8427e
+//   md5("hello") = 5d41402abc4b2a76b9719d911017c592
+pub fn _md5_hex(s: string) -> string {
+    let padded = _md5_pad(_md5_str_to_bytes(s))
+    let n = len(padded)
+    let table_k = _md5_table_K()
+    let table_s = _md5_table_S()
+    let table_t = _md5_table_T()
+
+    // Initial state (RFC 1321 §3.3, little-endian).
+    let mut A = 0x67452301
+    let mut B = 0xEFCDAB89
+    let mut C = 0x98BADCFE
+    let mut D = 0x10325476
+
+    let mut off = 0
+    while off < n {
+        // Decode block into 16 little-endian u32 words.
+        let mut x = []
+        let mut wi = 0
+        while wi < 16 {
+            x = x + [_md5_read_u32_le(padded, off + wi * 4)]
+            wi = wi + 1
+        }
+
+        let mut a = A
+        let mut b = B
+        let mut c = C
+        let mut d = D
+
+        let mut i = 0
+        while i < 64 {
+            let round = i / 16
+            let k = table_k[i]
+            let s = table_s[i]
+            let t = table_t[i]
+            let new_a = _md5_step(round, a, b, c, d, x[k], t, s)
+            // Rotate (a, b, c, d) → (d, new_a, b, c)
+            a = d
+            d = c
+            c = b
+            b = new_a
+            i = i + 1
+        }
+
+        A = _md5_add32(A, a)
+        B = _md5_add32(B, b)
+        C = _md5_add32(C, c)
+        D = _md5_add32(D, d)
+        off = off + 64
+    }
+
+    return _md5_u32_hex_le(A) + _md5_u32_hex_le(B)
+         + _md5_u32_hex_le(C) + _md5_u32_hex_le(D)
+}
+
+// ── XML helpers ───────────────────────────────────────────────────────
+
+// _xml_escape — XML 1.0 BasicLatin entity escape. SOAP body 안의
+// payload string 보호 (Username/Password/EC argument 등). 사실상
+// BRENDA 의 argv 는 영숫자+점이 대부분이라 escape 가 자주 발동하지
+// 않지만, 사용자 password 에 `<` `&` `"` 가 들어올 수 있어 안전 처리.
+fn _xml_escape(s: string) -> string {
+    let mut out = ""
+    let mut i = 0
+    let n = len(s)
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "&" { out = out + "&amp;" }
+        else if c == "<" { out = out + "&lt;" }
+        else if c == ">" { out = out + "&gt;" }
+        else if c == "\"" { out = out + "&quot;" }
+        else if c == "'" { out = out + "&apos;" }
+        else { out = out + c }
+        i = i + 1
+    }
+    return out
+}
+
+// _xml_tag_value — `<tag>...</tag>` 사이 substring 추출. namespace
+// prefix 가 있어도 local-name 매칭 (예: `<wsse:Username>` 도 `Username`
+// 으로 추출 가능 — 두 번째 인자가 `Username` 이면 `:Username` 도 hit).
+// 단순 substring 슬라이싱; 깊이 1 으로 BRENDA 응답에 충분.
+fn _xml_tag_value(body: string, tag: string) -> string {
+    let open_full = "<" + tag + ">"
+    let close = "</" + tag + ">"
+    let mut a = _idx(body, open_full, 0)
+    let mut a_end = -1
+    if a >= 0 { a_end = a + len(open_full) }
+    else {
+        // namespace-prefixed open: ":<tag>" 패턴으로 검색
+        let open_colon = ":" + tag + ">"
+        let pos = _idx(body, open_colon, 0)
+        if pos >= 0 {
+            a_end = pos + len(open_colon)
+            a = pos
+        }
+    }
+    if a_end < 0 { return "" }
+    // close 매칭: `</tag>` 또는 `</ns:tag>` 둘 다 허용 — close_full 부터
+    // 시도하고 없으면 ":<tag>" + closer suffix 로.
+    let mut z = _idx(body, close, a_end)
+    if z < 0 {
+        let close_colon = ":" + tag + ">"
+        // close 는 `</...:tag>` — `<` `/` 뒤 prefix
+        let mut probe = a_end
+        z = -1
+        while probe < len(body) {
+            let candidate = _idx(body, close_colon, probe)
+            if candidate < 0 { break }
+            // 앞쪽 `</` 확인
+            if candidate >= 2 && body.substring(candidate - 2, candidate) == "</" {
+                z = candidate - 2
+                break
+            }
+            // 첫 `</`-앞 컬론을 못 만나면 다음으로 진행
+            probe = candidate + len(close_colon)
+        }
+    }
+    if z < 0 { return "" }
+    return body.substring(a_end, z)
+}
+
+// ── SOAP envelope synthesizer ─────────────────────────────────────────
+
+// brenda_soap_envelope — full SOAP 1.1 envelope with WS-Security
+// UsernameToken (Password = md5_hex(plaintext)). `method` is the
+// BRENDA SOAP function name (e.g. `getKmValue`, `getKcatKmValue`),
+// `arg_xml` is the inner argument body in BRENDA's positional-string
+// shape — typically `<ecNumber>X</ecNumber><organism>Y</organism>...`.
+//
+// Caller is responsible for the per-method argument XML; this helper
+// only frames the envelope + auth + method-name dispatch.
+pub fn brenda_soap_envelope(method: string, username: string, password_plain: string, arg_xml: string) -> string {
+    let pw_md5 = _md5_hex(password_plain)
+    let user_esc = _xml_escape(username)
+    let env = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+            + "<soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\""
+            + " xmlns:tns=\"" + BRENDA_SOAP_NS + "\">"
+            + "<soap:Header>"
+            + "<wsse:Security xmlns:wsse=\"http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd\">"
+            + "<wsse:UsernameToken>"
+            + "<wsse:Username>" + user_esc + "</wsse:Username>"
+            + "<wsse:Password>" + pw_md5 + "</wsse:Password>"
+            + "</wsse:UsernameToken>"
+            + "</wsse:Security>"
+            + "</soap:Header>"
+            + "<soap:Body>"
+            + "<tns:" + method + ">" + arg_xml + "</tns:" + method + ">"
+            + "</soap:Body>"
+            + "</soap:Envelope>"
+    return env
+}
+
+// brenda_soap_headers — HTTP header map for `http_post_with_headers`.
+// Returns { "Content-Type": "text/xml; charset=utf-8",
+//           "SOAPAction": "\"<ns>#<method>\"" }.
+// SOAPAction 은 정확히 큰따옴표로 감싼 IRI (SOAP 1.1 §6.1.1).
+pub fn brenda_soap_headers(method: string) {
+    let h = #{}
+    h["Content-Type"] = "text/xml; charset=utf-8"
+    h["SOAPAction"] = "\"" + BRENDA_SOAP_NS + "#" + method + "\""
+    return h
+}
+
+// brenda_soap_arg_km — KM 조회 인자 합성 (getKmValue method args).
+// BRENDA SOAP 의 positional-string 컨벤션: ec/organism/substrate 가
+// 별도 element 로 노출. (실제 zeep WSDL 도 동일 — `kmValue` field 는
+// 응답에서 nested.)
+pub fn brenda_soap_arg_km(ec: string, organism: string, substrate: string) -> string {
+    return "<ecNumber>" + _xml_escape(ec) + "</ecNumber>"
+         + "<organism>" + _xml_escape(organism) + "</organism>"
+         + "<substrate>" + _xml_escape(substrate) + "</substrate>"
+}
+
+pub fn brenda_soap_arg_kcat(ec: string, organism: string) -> string {
+    return "<ecNumber>" + _xml_escape(ec) + "</ecNumber>"
+         + "<organism>" + _xml_escape(organism) + "</organism>"
+}
+
+// brenda_soap_unwrap — XML 응답 → cycle-2 JSON-flat shape.
+//   응답 형태 (BRENDA SOAP2):
+//     <soap:Envelope> <soap:Body>
+//       <tns:getKmValueResponse>
+//         <return>
+//           <ecNumber>3.1.1.7</ecNumber>
+//           <organism>Homo sapiens</organism>
+//           <kmValue>0.0925</kmValue>  ← millimolar (mM)
+//           <substrate>acetylcholine</substrate>
+//           <turnoverNumber>14000</turnoverNumber>
+//           <phOptimum>8.0</phOptimum>
+//           <temperatureOptimum>37.0</temperatureOptimum>
+//           <recommendedName>Acetylcholinesterase</recommendedName>
+//         </return>
+//       </tns:getKmValueResponse>
+//     </soap:Body> </soap:Envelope>
+//
+// 변환 규칙:
+//   - kmValue (mM) → km_uM (μM) : *1000
+//   - turnoverNumber → kcat_per_s (BRENDA 의 turnover 는 이미 /s 기준)
+// 반환은 cycle-2 brenda_parse 가 소비할 수 있는 JSON-flat string.
+pub fn brenda_soap_unwrap(xml: string) -> string {
+    if len(xml) == 0 { return "" }
+    let ec_number = _xml_tag_value(xml, "ecNumber")
+    let organism = _xml_tag_value(xml, "organism")
+    let substrate = _xml_tag_value(xml, "substrate")
+    let rec_name = _xml_tag_value(xml, "recommendedName")
+
+    let km_mm_str = _xml_tag_value(xml, "kmValue")
+    let kcat_str = _xml_tag_value(xml, "turnoverNumber")
+    let ph_str = _xml_tag_value(xml, "phOptimum")
+    let temp_str = _xml_tag_value(xml, "temperatureOptimum")
+
+    // mM → μM (×1000) 단위 정렬은 cycle-2 fixture 의 km_uM 와 byte-비교 가능.
+    let km_mm = _parse_float_at(km_mm_str, 0)
+    let km_uM = km_mm * 1000.0
+    let kcat_per_s = _parse_float_at(kcat_str, 0)
+    let ph_opt = _parse_float_at(ph_str, 0)
+    let temp_opt = _parse_float_at(temp_str, 0)
+
+    // JSON-flat 합성 (cycle-2 brenda_parse 가 곧장 소비).
+    return "{"
+         + "\"ec_number\":\"" + ec_number + "\","
+         + "\"recommended_name\":\"" + rec_name + "\","
+         + "\"organism\":\"" + organism + "\","
+         + "\"km_uM\":" + to_string(km_uM) + ","
+         + "\"kcat_per_s\":" + to_string(kcat_per_s) + ","
+         + "\"substrate\":\"" + substrate + "\","
+         + "\"ph_optimum\":" + to_string(ph_opt) + ","
+         + "\"temperature_optimum_C\":" + to_string(temp_opt)
+         + "}"
+}
+
+// brenda_soap_parse_response — SOAP XML 응답 → BrendaEnzyme.
+// unwrap + cycle-2 brenda_parse 합성. 응답이 비어있거나 SOAP fault
+// 면 sentinel BrendaEnzyme 반환.
+pub fn brenda_soap_parse_response(xml: string) -> BrendaEnzyme {
+    let empty = BrendaEnzyme{
+        ec_number: "", recommended_name: "", organism: "",
+        km_uM: 0.0, kcat_per_s: 0.0, substrate: "",
+        ph_optimum: 0.0, temperature_optimum_C: 0.0,
+    }
+    if len(xml) == 0 { return empty }
+    let json_flat = brenda_soap_unwrap(xml)
+    if len(json_flat) == 0 { return empty }
+    return brenda_parse(json_flat)
+}
+
+// ── live-fire helpers (offline tests do NOT call these) ───────────────
+//
+// 모두 `http_post_with_headers` (curl shellout) 경유. BRENDA 가 다운
+// 이거나 credentials 가 미설정이면 sentinel BrendaEnzyme 반환.
+// CI는 이 fn 들을 호출하지 않음 — 자격증명 매니저 통합 후 사용.
+
+pub fn brenda_soap_fire(method: string, username: string, password_plain: string, arg_xml: string, timeout_sec: int) -> string {
+    if len(username) == 0 || len(password_plain) == 0 { return "" }
+    let env = brenda_soap_envelope(method, username, password_plain, arg_xml)
+    let headers = brenda_soap_headers(method)
+    return http_post_with_headers(BRENDA_SOAP_ENDPOINT, headers, env, timeout_sec)
+}
+
+// brenda_soap_get_km — KM (μM) 조회. live-fire wrapper.
+// SOAP 라운드트립 → cycle-2 BrendaEnzyme 구조.
+pub fn brenda_soap_get_km(ec: string, organism: string, substrate: string, username: string, password_plain: string) -> BrendaEnzyme {
+    let arg = brenda_soap_arg_km(ec, organism, substrate)
+    let xml = brenda_soap_fire("getKmValue", username, password_plain, arg, 30)
+    return brenda_soap_parse_response(xml)
+}
+
+// brenda_soap_get_kcat — kcat (turnover /s) 조회.
+pub fn brenda_soap_get_kcat(ec: string, organism: string, username: string, password_plain: string) -> BrendaEnzyme {
+    let arg = brenda_soap_arg_kcat(ec, organism)
+    let xml = brenda_soap_fire("getTurnoverNumber", username, password_plain, arg, 30)
+    return brenda_soap_parse_response(xml)
+}

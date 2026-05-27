@@ -1,0 +1,260 @@
+// compiler/atlas/symbolic/texas_sharpshooter.hexa — Bonferroni p-value kernel
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Hexa-native port of archive-TECS-L/texas_quantum.py (TECS-L absorption,
+// Wave 2 — manifest §Backlog #3, the canonical extract consumed by
+// texas_quantum / tesla_369_crossdomain / perfect_number_engine).
+//
+// The Texas-Sharpshooter test answers: "given a discovery's parameter
+// space, how likely is a chance hit, and does it survive a Bonferroni
+// multiple-comparison correction over the whole discovery set?"
+//
+// Ported (DETERMINISTIC core only):
+//   (1) divisor_sigma / triangular  — the two NT helpers used in scans.
+//   (2) scan_1d / scan_2d / scan_3d — exhaustive deterministic parameter
+//       sweeps returning (hits,total) for the eight project discoveries.
+//   (3) single_p = hits/total ; bonferroni_p = min(single_p·N, 1).
+//   (4) verdict(bonf_p): structural (<0.01) / weak (<0.05) / chance.
+//
+// The Monte-Carlo scan (scan_monte_carlo, np.random) is NOT ported — it is
+// non-deterministic (g1 deterministic-dispatch preference) and anti-bloat;
+// the two MC-only discoveries (#6 a^ln b+1≈π, #7 exp(1/2e)≈ζ(3)) are still
+// listed but their scan returns (0, MC_TRIALS) so the Bonferroni machinery
+// stays well-defined. All arithmetic exact; zero external dependency (g5).
+//
+// Cross-link: atlas/inbox/_tecsl_calculator_port_manifest.md §B / §Backlog #3 ·
+// symbolic/physics_constant_engine.hexa (deterministic-only sibling).
+
+fn _absf(x: float) -> float {
+    if x < 0.0 { return -x }
+    return x
+}
+
+fn _e() -> float { return 2.718281828459045 }
+
+// σ_k(n) = Σ_{d|n} d^k  — Python divisor_sigma (k=1 default here).
+pub fn divisor_sigma(n: int, k: int) -> int {
+    if n <= 0 { return 0 }
+    let mut s = 0
+    let mut d = 1
+    while d <= n {
+        if n % d == 0 {
+            if k == 0 {
+                s = s + 1
+            } else {
+                let mut term = 1
+                let mut e = 0
+                while e < k {
+                    term = term * d
+                    e = e + 1
+                }
+                s = s + term
+            }
+        }
+        d = d + 1
+    }
+    return s
+}
+
+// T(n) = n(n+1)/2
+pub fn triangular(n: int) -> int {
+    return n * (n + 1) / 2
+}
+
+fn _rel_err(v: float, target: float) -> float {
+    let denom = _absf(target)
+    let d = if denom > 0.000000000000001 { denom } else { 0.000000000000001 }
+    return _absf(v - target) / d
+}
+
+pub struct ScanResult {
+    hits: int,
+    total: int
+}
+
+// formula codes (replace the Python string-substring dispatch):
+//   1  "137 + 1/n"          1D over n∈[lo,hi]
+//   2  "n × e²"             1D
+//   3  "e + 1/n"            1D
+//   4  "sigma(n) × T(k)"    2D over (a,b)
+//   5  "a/b"                2D
+//   6  "a × b × c"          3D over (a,b,c)
+//   7  monte-carlo-only (a^ln b + 1)   → not deterministically scannable
+//   8  monte-carlo-only (exp(1/(a·b))) → not deterministically scannable
+
+pub struct Discovery {
+    name: string,
+    formula_code: int,
+    lo0: int, hi0: int,
+    lo1: int, hi1: int,
+    lo2: int, hi2: int,
+    target: float,
+    threshold: float
+}
+
+// The Python DISCOVERIES list (8 entries), param ranges flattened.
+pub fn discoveries() -> [Discovery] {
+    let mut d: [Discovery] = []
+    d.push(Discovery { name: "1/alpha = 137 + 1/28",  formula_code: 1,
+        lo0: 1, hi0: 1000, lo1: 0, hi1: 0, lo2: 0, hi2: 0,
+        target: 137.035999084, threshold: 0.001 })
+    d.push(Discovery { name: "m_p/m_e = sigma(6) x T(17)", formula_code: 4,
+        lo0: 1, hi0: 100, lo1: 1, hi1: 100, lo2: 0, hi2: 0,
+        target: 1836.15267343, threshold: 0.001 })
+    d.push(Discovery { name: "m_mu/m_e = 28 x e^2", formula_code: 2,
+        lo0: 1, hi0: 100, lo1: 0, hi1: 0, lo2: 0, hi2: 0,
+        target: 206.7682830, threshold: 0.001 })
+    d.push(Discovery { name: "m_tau/m_e = 3x19x61", formula_code: 6,
+        lo0: 1, hi0: 30, lo1: 1, hi1: 100, lo2: 1, hi2: 100,
+        target: 3477.48, threshold: 0.001 })
+    d.push(Discovery { name: "sin2_thetaW = 3/13", formula_code: 5,
+        lo0: 1, hi0: 20, lo1: 1, hi1: 200, lo2: 0, hi2: 0,
+        target: 0.23122, threshold: 0.005 })
+    d.push(Discovery { name: "e^(ln2.ln3)+1 = pi", formula_code: 7,
+        lo0: 0, hi0: 0, lo1: 0, hi1: 0, lo2: 0, hi2: 0,
+        target: 3.14159265, threshold: 0.0001 })
+    d.push(Discovery { name: "exp(1/(2e)) = zeta(3)", formula_code: 8,
+        lo0: 0, hi0: 0, lo1: 0, hi1: 0, lo2: 0, hi2: 0,
+        target: 1.2020569031, threshold: 0.0001 })
+    d.push(Discovery { name: "CMB = e + 1/137", formula_code: 3,
+        lo0: 1, hi0: 1000, lo1: 0, hi1: 0, lo2: 0, hi2: 0,
+        target: 2.7255, threshold: 0.001 })
+    return d
+}
+
+// MC discoveries get this nominal total so single_p stays well-defined.
+fn _mc_trials() -> int { return 100000 }
+
+fn _scan_1d(disc: Discovery) -> ScanResult {
+    let target = disc.target
+    let thr = disc.threshold
+    let mut hits = 0
+    let total = disc.hi0 - disc.lo0 + 1
+    let mut n = disc.lo0
+    while n <= disc.hi0 {
+        let nf = to_float(n)
+        let mut v = 0.0
+        if disc.formula_code == 1 { v = 137.0 + 1.0 / nf }
+        else if disc.formula_code == 2 { v = nf * _e() * _e() }
+        else if disc.formula_code == 3 { v = _e() + 1.0 / nf }
+        if _rel_err(v, target) < thr { hits = hits + 1 }
+        n = n + 1
+    }
+    return ScanResult { hits: hits, total: total }
+}
+
+fn _scan_2d(disc: Discovery) -> ScanResult {
+    let target = disc.target
+    let thr = disc.threshold
+    let r0 = disc.hi0 - disc.lo0 + 1
+    let r1 = disc.hi1 - disc.lo1 + 1
+    let total = r0 * r1
+    let mut hits = 0
+    let mut a = disc.lo0
+    while a <= disc.hi0 {
+        let mut b = disc.lo1
+        while b <= disc.hi1 {
+            let mut v = 0.0
+            let mut ok = true
+            if disc.formula_code == 4 {
+                v = to_float(divisor_sigma(a, 1) * triangular(b))
+            } else if disc.formula_code == 5 {
+                if b == 0 { ok = false } else { v = to_float(a) / to_float(b) }
+            }
+            if ok {
+                if _rel_err(v, target) < thr { hits = hits + 1 }
+            }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    return ScanResult { hits: hits, total: total }
+}
+
+fn _scan_3d(disc: Discovery) -> ScanResult {
+    let target = disc.target
+    let thr = disc.threshold
+    let r0 = disc.hi0 - disc.lo0 + 1
+    let r1 = disc.hi1 - disc.lo1 + 1
+    let r2 = disc.hi2 - disc.lo2 + 1
+    let total = r0 * r1 * r2
+    let mut hits = 0
+    let mut a = disc.lo0
+    while a <= disc.hi0 {
+        let mut b = disc.lo1
+        while b <= disc.hi1 {
+            let mut c = disc.lo2
+            while c <= disc.hi2 {
+                let v = to_float(a * b * c)
+                if _rel_err(v, target) < thr { hits = hits + 1 }
+                c = c + 1
+            }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    return ScanResult { hits: hits, total: total }
+}
+
+// run_single: deterministic scan dispatch. MC-only discoveries (code 7/8)
+// return (0, MC_TRIALS) — no deterministic enumeration exists.
+pub fn run_single(disc: Discovery) -> ScanResult {
+    let fc = disc.formula_code
+    if fc == 1 || fc == 2 || fc == 3 { return _scan_1d(disc) }
+    if fc == 4 || fc == 5 { return _scan_2d(disc) }
+    if fc == 6 { return _scan_3d(disc) }
+    return ScanResult { hits: 0, total: _mc_trials() }
+}
+
+// single p-value = hits / total
+pub fn single_p(disc: Discovery) -> float {
+    let r = run_single(disc)
+    if r.total == 0 { return 1.0 }
+    return to_float(r.hits) / to_float(r.total)
+}
+
+// Bonferroni-corrected p over a discovery-set of size n_total.
+pub fn bonferroni_p(p: float, n_total: int) -> float {
+    let bp = p * to_float(n_total)
+    if bp > 1.0 { return 1.0 }
+    return bp
+}
+
+// verdict ladder (Python verdict()):
+//   bonf_p < 0.01 → "structural" · < 0.05 → "weak" · else "chance"
+pub fn verdict(bonf_p: float) -> string {
+    if bonf_p < 0.01 { return "structural" }
+    if bonf_p < 0.05 { return "weak" }
+    return "chance"
+}
+
+pub struct TexasResult {
+    name: string,
+    hits: int,
+    total: int,
+    p_single: float,
+    p_bonf: float,
+    verdict: string
+}
+
+// run the full tribunal over all 8 discoveries (Bonferroni N = 8).
+pub fn run_all() -> [TexasResult] {
+    let ds = discoveries()
+    let n_total = len(ds)
+    let mut out: [TexasResult] = []
+    let mut i = 0
+    while i < len(ds) {
+        let d = ds[i]
+        let r = run_single(d)
+        let ps = if r.total == 0 { 1.0 } else { to_float(r.hits) / to_float(r.total) }
+        let pb = bonferroni_p(ps, n_total)
+        out.push(TexasResult {
+            name: d.name, hits: r.hits, total: r.total,
+            p_single: ps, p_bonf: pb, verdict: verdict(pb)
+        })
+        i = i + 1
+    }
+    return out
+}

@@ -1,0 +1,10 @@
+loaded PTX 1059 bytes
+cuModuleLoadDataEx FAILED
+JIT info log: 
+JIT err  log: ptxas application ptx input, line 24; error   : Arguments mismatch for instruction 'mov'
+ptxas application ptx input, line 28; error   : Predicate expression expected
+ptxas application ptx input, line 32; error   : Arguments mismatch for instruction 'mov'
+ptxas application ptx input, line 33; error   : Arguments mismatch for instruction 'add'
+ptxas application ptx input, line 35; error   : Arguments mismatch for instruction 'add'
+ptxas application ptx input, line 40; fatal   : Parsing error near '-': syntax error
+ptxas fatal   : Ptx assembly aborted due to errors

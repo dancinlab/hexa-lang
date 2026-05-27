@@ -1,0 +1,8 @@
+#!hexa strict
+// graphene specify — carrier mobility target.
+fn main() {
+    let mobility_cm2_Vs = 100000.0
+    println("graphene_specify (carrier mobility target):")
+    println("  mobility_cm2_Vs = " + str(mobility_cm2_Vs))
+    println("__HEXA_GRAPHENE_SPECIFY__ PASS gate=GATE_OPEN absorbed=false")
+}

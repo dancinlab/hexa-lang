@@ -1,0 +1,252 @@
+// ═══════════════════════════════════════════════════════════════════
+//  self/test_lowrank_mm.hexa — @lowrank matmul prototype tests
+// ═══════════════════════════════════════════════════════════════════
+
+// -- inlined from self/ml/lowrank_mm.hexa --
+// codegen import not wired for test files
+
+// ═══════════════════════════════════════════════════════════════════
+//  self/ml/lowrank_mm.hexa — @lowrank matmul prototype (pure .hexa)
+//
+//  AI-native CPU optimization P2-2: low-rank approximation matmul.
+//  W (M×N) ≈ U (M×r) · V (r×N). For r << min(M,N), computing
+//  (U @ (V @ X)) costs M·r·N + r·N·K FLOPs vs. dense M·N·K.
+//
+//  API:
+//    lowrank_mm(U, V, X, M, r, N, K)        -> Tensor [M x K]
+//    svd_truncated(W, M, N, r)              -> [U, V]  (power-iter rank-r)
+//    auto_lowrank_mm(W, X, M, N, K, r)      -> Tensor (factorize → lowrank)
+//
+//  @lowrank(r) attribute mirrors sparse_mm's @sparse(ratio) pattern.
+// ═══════════════════════════════════════════════════════════════════
+
+// ── lowrank matmul: (U @ V) @ X computed as U @ (V @ X) ─────────
+// U: [M x r], V: [r x N], X: [N x K]  →  out [M x K]
+@lowrank(32)
+fn lowrank_mm(U, V, X, M, r, N, K) {
+    // step1: T = V @ X    [r x N] @ [N x K] = [r x K]
+    let T = matmul(V, X, r, N, K)
+    // step2: out = U @ T  [M x r] @ [r x K] = [M x K]
+    let out = matmul(U, T, M, r, K)
+    tensor(out, [M, K])
+}
+
+// ── Truncated SVD via power iteration (rank-r approximation) ────
+// Naive, for correctness on small matrices only.
+// Returns [U (M×r flat), V (r×N flat)].
+fn svd_truncated(W, M, N, r) {
+    // Working copy of W (we deflate rank-1 at a time).
+    let mut R = []
+    let total = M * N
+    let mut i = 0
+    while i < total {
+        R.push(W[i])
+        i = i + 1
+    }
+    let mut U_out = []
+    let mut V_out = []
+    // zero-init U (M×r) and V (r×N)
+    let mut zu = 0
+    while zu < M * r { U_out.push(0.0); zu = zu + 1 }
+    let mut zv = 0
+    while zv < r * N { V_out.push(0.0); zv = zv + 1 }
+
+    let mut k = 0
+    while k < r {
+        // init v as unit vector e_0 of length N
+        let mut v = []
+        let mut vi = 0
+        while vi < N {
+            if vi == 0 { v.push(1.0) } else { v.push(0.0) }
+            vi = vi + 1
+        }
+        // power iteration: u = R v ; v = R^T u ; normalize
+        let mut iter = 0
+        let mut sigma = 0.0
+        let mut u = []
+        let mut uz = 0
+        while uz < M { u.push(0.0); uz = uz + 1 }
+        while iter < 50 {
+            // u = R @ v
+            let mut ri = 0
+            while ri < M {
+                let mut s = 0.0
+                let mut cj = 0
+                while cj < N {
+                    s = s + R[ri * N + cj] * v[cj]
+                    cj = cj + 1
+                }
+                u[ri] = s
+                ri = ri + 1
+            }
+            // normalize u
+            let mut nu = 0.0
+            let mut ui2 = 0
+            while ui2 < M { nu = nu + u[ui2] * u[ui2]; ui2 = ui2 + 1 }
+            if nu < 0.000000000001 { iter = 50 } else {
+                let inv_nu = 1.0 / sqrt(nu)
+                let mut ui3 = 0
+                while ui3 < M { u[ui3] = u[ui3] * inv_nu; ui3 = ui3 + 1 }
+                // v = R^T @ u
+                let mut vj = 0
+                while vj < N {
+                    let mut s2 = 0.0
+                    let mut rr = 0
+                    while rr < M {
+                        s2 = s2 + R[rr * N + vj] * u[rr]
+                        rr = rr + 1
+                    }
+                    v[vj] = s2
+                    vj = vj + 1
+                }
+                // sigma = ||v||, normalize v
+                let mut nv = 0.0
+                let mut vi2 = 0
+                while vi2 < N { nv = nv + v[vi2] * v[vi2]; vi2 = vi2 + 1 }
+                sigma = sqrt(nv)
+                if sigma < 0.000000000001 { iter = 50 } else {
+                    let inv_nv = 1.0 / sigma
+                    let mut vi3 = 0
+                    while vi3 < N { v[vi3] = v[vi3] * inv_nv; vi3 = vi3 + 1 }
+                }
+                iter = iter + 1
+            }
+        }
+        // Write column k of U (= sigma * u) and row k of V (= v)
+        let mut wi = 0
+        while wi < M {
+            U_out[wi * r + k] = sigma * u[wi]
+            wi = wi + 1
+        }
+        let mut wj = 0
+        while wj < N {
+            V_out[k * N + wj] = v[wj]
+            wj = wj + 1
+        }
+        // Deflate R := R - sigma * u v^T
+        let mut di = 0
+        while di < M {
+            let mut dj = 0
+            while dj < N {
+                R[di * N + dj] = R[di * N + dj] - sigma * u[di] * v[dj]
+                dj = dj + 1
+            }
+            di = di + 1
+        }
+        k = k + 1
+    }
+    let __ret = [U_out, V_out]
+    return __ret
+        zu = zu + 1
+}
+
+// ── Auto dispatch: W → SVD(r) → lowrank_mm ──────────────────────
+fn auto_lowrank_mm(W, X, M, N, K, r) {
+    let uv = svd_truncated(W, M, N, r)
+    let U = uv[0]
+    let V = uv[1]
+    lowrank_mm(U, V, X, M, r, N, K)
+}
+
+
+// -- end inlined --
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn approx_eq(a, b) {
+    let d = a - b
+    let ad = if d < 0.0 { -1.0 * d } else { d }
+    ad < 0.000001
+}
+
+fn tensors_equal(a, b) {
+    if len(a) != len(b) { return false }
+    let n = len(a)
+    let mut i = 0
+    while i < n {
+        if !approx_eq(a[i], b[i]) { return false }
+        i = i + 1
+    }
+    true
+}
+
+fn check(name, cond) {
+    if cond {
+        println("[PASS] " + name)
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name)
+        fail_count = fail_count + 1
+    }
+}
+
+println("═══════════════════════════════════════════════════════")
+println("  @lowrank matmul prototype tests")
+println("═══════════════════════════════════════════════════════")
+
+// ── Build an exact rank-2 W = U0 @ V0, with U0:4×2, V0:2×4 ─────
+// U0 = [[1,0],[2,1],[0,1],[1,1]]   (4×2)
+// V0 = [[1,2,3,4],[5,6,7,8]]       (2×4)
+// W  = U0 @ V0  (4×4), rank exactly 2
+let U0 = tensor([
+    1.0, 0.0,
+    2.0, 1.0,
+    0.0, 1.0,
+    1.0, 1.0
+], [4, 2])
+let V0 = tensor([
+    1.0, 2.0, 3.0, 4.0,
+    5.0, 6.0, 7.0, 8.0
+], [2, 4])
+let W_arr = matmul(U0, V0, 4, 2, 4)
+let W = tensor(W_arr, [4, 4])
+
+// Input X: 4×3
+let X = tensor([
+    1.0, 0.0, 2.0,
+    0.0, 1.0, 1.0,
+    2.0, 1.0, 0.0,
+    1.0, 2.0, 1.0
+], [4, 3])
+
+// ── Test 1: lowrank_mm (pre-factorized) matches dense matmul(W,X) ─
+let dense_ref_arr = matmul(W, X, 4, 4, 3)
+let dense_ref = tensor(dense_ref_arr)
+let lr = lowrank_mm(U0, V0, X, 4, 2, 4, 3)
+check("lowrank_mm(U0,V0,X) == matmul(W,X)", tensors_equal(lr, dense_ref))
+
+// ── Test 2: shape sanity [4 x 3] = 12 elements ────────────────
+check("lowrank_mm output length = 12", len(lr) == 12)
+
+// ── Test 3: auto_lowrank_mm via truncated SVD (r=2) ───────────
+let auto_out = auto_lowrank_mm(W, X, 4, 4, 3, 2)
+check("auto_lowrank_mm r=2 reconstructs dense", tensors_equal(auto_out, dense_ref))
+
+// ── Test 4: auto_lowrank_mm r=1 on rank-1 matrix ──────────────
+// W1 = [1,2,3] outer [1,1,1,1] → 4×3 rank-1
+let u1 = tensor([1.0, 1.0, 1.0, 1.0], [4, 1])
+let v1 = tensor([1.0, 2.0, 3.0], [1, 3])
+let W1_arr = matmul(u1, v1, 4, 1, 3)
+let W1 = tensor(W1_arr, [4, 3])
+let X2 = tensor([
+    1.0, 0.0,
+    0.0, 1.0,
+    1.0, 1.0
+], [3, 2])
+let ref1_arr = matmul(W1, X2, 4, 3, 2)
+let ref1 = tensor(ref1_arr)
+let auto1 = auto_lowrank_mm(W1, X2, 4, 3, 2, 1)
+check("auto_lowrank_mm r=1 on rank-1 matrix", tensors_equal(auto1, ref1))
+
+// ── Test 5: FLOPs advantage estimate (structural) ─────────────
+// Dense: M*N*K = 4*4*3 = 48 ; Lowrank: M*r*N + r*N*K = 4*2*4 + 2*4*3 = 32+24 = 56
+// For 4×4 it's actually MORE work (r not small enough). Verify formula only.
+let dense_flops = 4 * 4 * 3
+let lr_flops = 4 * 2 * 4 + 2 * 4 * 3
+check("flop formula sanity (dense=48, lr=56)", dense_flops == 48 && lr_flops == 56)
+
+println("═══════════════════════════════════════════════════════")
+println("  PASS: " + to_string(pass_count) + "  FAIL: " + to_string(fail_count))
+println("═══════════════════════════════════════════════════════")
+println(to_string(pass_count) + " passed")

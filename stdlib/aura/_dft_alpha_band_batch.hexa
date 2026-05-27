@@ -1,0 +1,137 @@
+// stdlib/aura/_dft_alpha_band_batch.hexa — κ-69 G33 batch wrapper
+// for hexa-native naive-DFT alpha-band (8-13 Hz) integrated PSD.
+//
+// Sibling pattern to `stdlib/energy/_solar_position_batch.hexa`
+// (G31 G29-β): one subprocess invocation processes N epochs of EEG
+// samples and returns one alpha-band integrated power per epoch.
+//
+// The producer side (`aura_mne.py` for κ-69 G33) reads PhysioNet
+// Sleep-EDF EEG epochs, writes them to a sidecar file, then invokes
+// THIS wrapper once with the sidecar path + epoch geometry. Output
+// is `n_epochs` floats on stdout, one per line, in epoch order
+// (no header).
+//
+// CLI shape:
+//   hexa run stdlib/aura/_dft_alpha_band_batch.hexa \
+//     <samples_path> <n_epochs> <samples_per_epoch> \
+//     <sfreq_hz> <alpha_lo_hz> <alpha_hi_hz>
+//
+// <samples_path>     ASCII file, one float per line, length
+//                    = n_epochs · samples_per_epoch. UV (or V — the
+//                    alpha integrator is scale-invariant in relative
+//                    error vs the Welch oracle).
+// <n_epochs>         number of epochs (rows) in the stream.
+// <samples_per_epoch> samples per epoch (DFT length N).
+// <sfreq_hz>         sampling frequency in Hz (used to map bin index
+//                    k → frequency f_k = k · sfreq / N).
+// <alpha_lo_hz>      lower edge of the alpha band (e.g. 8.0).
+// <alpha_hi_hz>      upper edge of the alpha band (e.g. 13.0).
+//
+// Output: <n_epochs> lines on stdout, one alpha_band_integrated_power
+//         per line. Power = Σ_{k: alpha_lo ≤ f_k ≤ alpha_hi} |X[k]|²
+//         where X = dft_naive(epoch_samples). This is the raw
+//         periodogram intensity (no window / no scaling) — the
+//         producer's MNE-Welch oracle on the SAME epoch carries the
+//         same convention via the kernel's `band_power_per_channel_v2`
+//         (no normalisation), so the relative error is invariant to
+//         the common scale.
+//
+// Exit: 0 on success, 2 on usage error, 3 on file-read error.
+//
+// HONESTY (g3 — non-negotiable):
+//   * The DFT is the textbook closed-form sum (see dft_naive.hexa
+//     header for clean-room provenance). 17/17 PASS @ rel_err≤1e-12
+//     vs the `math`-only Python companion `dft_naive.py`.
+//   * NO windowing is applied here — this is a *naive* periodogram,
+//     not Welch PSD. The MNE-Welch oracle the producer compares
+//     against applies Hann + segment averaging; the per-bin
+//     amplitude differs but the alpha-band INTEGRATED ratio is
+//     ≤ a few % when (a) the epoch is roughly stationary and
+//     (b) the integration window is wider than 1-2 bins. The
+//     `mean_rel_err ≤ 0.05` PASS gate (κ-69 G33 / D115) is the
+//     measured statement that this approximation is honest enough
+//     for the *alpha-band integrated power* axis.
+//   * NO subject identity, NO clinical interpretation — this is a
+//     spectral-arithmetic check on a public dataset (PhysioNet
+//     Sleep-EDF, CC-BY).
+
+use "stdlib/kernels/signal_proc/dft_naive"
+
+fn main() {
+    let argv = args()
+    let n = len(argv)
+    if n < 7 {
+        println(
+            "usage: hexa run _dft_alpha_band_batch.hexa "
+            + "<samples_path> <n_epochs> <samples_per_epoch> "
+            + "<sfreq_hz> <alpha_lo_hz> <alpha_hi_hz>")
+        exit(2)
+    }
+
+    let samples_path = argv[1]
+    let n_epochs = argv[2].to_int()
+    let samples_per_epoch = argv[3].to_int()
+    let sfreq = argv[4].to_float()
+    let alpha_lo = argv[5].to_float()
+    let alpha_hi = argv[6].to_float()
+
+    let total = n_epochs * samples_per_epoch
+    let text = read_file(samples_path)
+    let lines = text.split("\n")
+
+    // Parse `total` floats from `lines` (skip blank trailing line if
+    // any). One float per line (producer convention).
+    let mut samples: [float] = []
+    let mut idx = 0
+    while idx < len(lines) {
+        let ln = lines[idx].trim()
+        if len(ln) > 0 {
+            samples = samples.push(ln.to_float())
+        }
+        idx = idx + 1
+    }
+
+    if len(samples) < total {
+        println(
+            "FATAL _dft_alpha_band_batch: sidecar provided "
+            + str(len(samples)) + " floats, expected " + str(total))
+        exit(3)
+    }
+
+    // Per-epoch loop: slice samples, run dft_naive, integrate alpha band.
+    let nf = to_float(samples_per_epoch)
+    let mut e = 0
+    while e < n_epochs {
+        let start = e * samples_per_epoch
+        let mut epoch: [float] = []
+        let mut j = 0
+        while j < samples_per_epoch {
+            epoch = epoch.push(samples[start + j])
+            j = j + 1
+        }
+
+        let xri = dft_naive(epoch)
+        let xr = xri[0]
+        let xi = xri[1]
+
+        // Integrate power over bins whose f_k = k · sfreq / N lies in
+        // [alpha_lo, alpha_hi]. Real-input DFT is conjugate-symmetric
+        // (X[N-k] = conj(X[k])) — sum only the lower half (k <= N/2)
+        // so we don't double-count.
+        let half = samples_per_epoch / 2
+        let mut acc = 0.0
+        let mut k = 0
+        while k <= half {
+            let f_k = to_float(k) * sfreq / nf
+            if f_k >= alpha_lo {
+                if f_k <= alpha_hi {
+                    let pwr = xr[k] * xr[k] + xi[k] * xi[k]
+                    acc = acc + pwr
+                }
+            }
+            k = k + 1
+        }
+        println(str(acc))
+        e = e + 1
+    }
+}

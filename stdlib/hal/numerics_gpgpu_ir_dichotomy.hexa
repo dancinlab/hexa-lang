@@ -1,0 +1,257 @@
+#!hexa strict
+// stdlib/hal/numerics_gpgpu_ir_dichotomy.hexa — F-GPGPU-3 T2 numerical.
+//
+// Closes the T2 (numerical / fixture) tier of falsifier F-GPGPU-3
+// (φ=2 IR substrates: SPIR-V ∥ PTX; every vendor consumes ≥1;
+// falsifier_gpgpu_check.hexa registry).
+//
+// T1 (compute.hexa internal asserts + per-vendor IR_PRIMARY/IR_FALLBACK
+// declarations) closes the algebraic identity:
+//
+//   φ_gpgpu = 2 ⇒ {SPIR-V, PTX}
+//   ∀ vendor v: |{ir ∈ {SPIR-V, PTX} : v references ir}| ≥ 1
+//
+// T2 (this script) cross-checks the IR-vendor edge map NUMERICALLY by
+// reading each vendor backend's IR_PRIMARY + IR_FALLBACK string fields
+// and asserting:
+//
+//   1. φ_gpgpu cardinality = 2 (algebraic re-assert)
+//   2. Both IRs have ≥1 vendor consumer (no orphan IR)
+//   3. Every vendor has ≥1 IR consumer (no orphan vendor)
+//   4. Σ (vendor, IR) edges ≥ 6 (= 6 vendors × 1 IR floor)
+//   5. cuda is in PTX consumer set (canonical anchor; PTX-native vendor)
+//   6. opencl is in SPIR-V consumer set (canonical anchor; SPIR-V baseline)
+//
+// Vendor-IR consumption mapping (canon §3 + 2026-05-08 web-search):
+//   cuda    → ptx (primary), spirv (fallback via clspv)        [PTX, SPIR-V]
+//   hip     → amdgcn (primary), ptx (fallback for HIP-on-NV)   [PTX]
+//   sycl    → spirv (primary), ptx (fallback DPC++ NV path)    [PTX, SPIR-V]
+//   opencl  → spirv (primary; OpenCL 3.0+ baseline)            [SPIR-V]
+//   metal   → msl_air (primary), spirv (fallback)              [SPIR-V]
+//   webgpu  → wgsl (primary), spirv (fallback via Tint)        [SPIR-V]
+//
+// Native IRs (amdgcn/msl_air/wgsl) are NOT counted toward φ=2; they're
+// vendor-internal lowering targets. φ=2 is strictly {SPIR-V, PTX} per
+// canon §3.
+//
+// PASS = all 6 numerical identities hold against on-disk backend table.
+// FAIL = any identity drifts.
+//
+// Run:
+//   hexa run stdlib/hal/numerics_gpgpu_ir_dichotomy.hexa
+//
+// Cost: $0 (6 file-reads + grep; no compilation).
+//
+// Phase G iter 9+5+3; F-GPGPU-3 closure 33% → 67% (T1+T2 ✓; T3 deferred).
+// Pattern: numerics_phi_dichotomy.hexa (sister F-HAL-3 T2 fixture).
+
+// ─── n=6 lattice constants ────────────────────────────────────────────
+
+let PHI_GPGPU       = 2
+let GPGPU_VENDORS_N = 6
+
+// Aggregate floor: every vendor has ≥1 IR ⇒ Σ edges ≥ 6.
+let EDGE_FLOOR      = GPGPU_VENDORS_N
+
+// ─── vendor + canonical IR set ────────────────────────────────────────
+
+let VENDORS = [
+    "cuda", "hip", "sycl", "opencl", "metal", "webgpu"
+]
+
+// φ=2 canonical IR substrates (per canon §3).
+let CANONICAL_IRS = ["ptx", "spirv"]
+
+// ─── check harness ───────────────────────────────────────────────────
+
+let mut RUN  = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ─── helpers ─────────────────────────────────────────────────────────
+
+fn _root() -> str {
+    let env_root = env("HEXA_HAL_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _exists(p: str) -> bool {
+    let r = exec("[ -f \"" + p + "\" ] && echo y || echo n").trim()
+    return r == "y"
+}
+
+// Returns true if the source declares either IR_PRIMARY or IR_FALLBACK
+// with the value matching `ir` (one of "ptx", "spirv"). Tolerates either
+// "ir" appearing as bare `let IR_PRIMARY = "<ir>"` declarations or
+// references such as IR_PTX / IR_SPIRV constants in the body.
+fn _vendor_consumes_ir(src: str, ir: str) -> bool {
+    let lit_primary = "let IR_PRIMARY"
+    let lit_fall    = "let IR_FALLBACK"
+    // Look for either IR_PRIMARY = "ir" or IR_FALLBACK = "ir".
+    let needle = "\"" + ir + "\""
+    if src.contains(lit_primary) {
+        let i = src.index_of(lit_primary)
+        let line_end = src.index_of_from("\n", i)
+        let bound = if line_end > 0 { line_end } else { src.len() }
+        let line = src.slice(i, bound)
+        if line.contains(needle) { return true }
+    }
+    if src.contains(lit_fall) {
+        let i = src.index_of(lit_fall)
+        let line_end = src.index_of_from("\n", i)
+        let bound = if line_end > 0 { line_end } else { src.len() }
+        let line = src.slice(i, bound)
+        if line.contains(needle) { return true }
+    }
+    return false
+}
+
+// Count (vendor, IR) edges: for each vendor, +1 per canonical IR consumed.
+fn _count_edges(root: str) -> int {
+    let mut sum = 0
+    for v in VENDORS {
+        let p = root + "/stdlib/hal/backend/" + v + "/compute.hexa"
+        if !_exists(p) { continue }
+        let src = read_file(p)
+        for ir in CANONICAL_IRS {
+            if _vendor_consumes_ir(src, ir) { sum = sum + 1 }
+        }
+    }
+    return sum
+}
+
+// Per-vendor IR list (diagnostic).
+fn _vendor_irs(src: str) -> str {
+    let mut s = ""
+    for ir in CANONICAL_IRS {
+        if _vendor_consumes_ir(src, ir) { s = s + ir + " " }
+    }
+    return s
+}
+
+// Vendors that consume a given IR.
+fn _ir_consumers(root: str, ir: str) -> str {
+    let mut s = ""
+    for v in VENDORS {
+        let p = root + "/stdlib/hal/backend/" + v + "/compute.hexa"
+        if !_exists(p) { continue }
+        let src = read_file(p)
+        if _vendor_consumes_ir(src, ir) { s = s + v + " " }
+    }
+    return s
+}
+
+// ─── checks ──────────────────────────────────────────────────────────
+
+fn check_phi_eq_2() {
+    _check(PHI_GPGPU == 2 && CANONICAL_IRS.len() == 2,
+           "φ_gpgpu = 2 (canonical IRs: SPIR-V ∥ PTX)",
+           "got φ=" + str(PHI_GPGPU) + ", |IRs|=" + str(CANONICAL_IRS.len()))
+}
+
+fn check_both_irs_have_consumers(root: str) {
+    let mut bad = ""
+    for ir in CANONICAL_IRS {
+        let cons = _ir_consumers(root, ir)
+        if cons.len() == 0 { bad = bad + ir + "(orphan) " }
+    }
+    _check(bad.len() == 0,
+           "every canonical IR has ≥1 vendor consumer (no orphan IR)",
+           if bad.len() > 0 { "issues: " + bad } else {
+               "ptx → " + _ir_consumers(root, "ptx") + "  spirv → " + _ir_consumers(root, "spirv")
+           })
+}
+
+fn check_every_vendor_has_ir(root: str) {
+    let mut bad = ""
+    let mut detail = ""
+    for v in VENDORS {
+        let p = root + "/stdlib/hal/backend/" + v + "/compute.hexa"
+        if !_exists(p) { bad = bad + v + "(missing) "; continue }
+        let src = read_file(p)
+        let irs = _vendor_irs(src)
+        if irs.len() == 0 { bad = bad + v + "(no-canonical-ir) " }
+        else { detail = detail + v + "→[" + irs.trim() + "] " }
+    }
+    _check(bad.len() == 0,
+           "every vendor has ≥1 canonical IR consumer (no orphan vendor)",
+           if bad.len() > 0 { "issues: " + bad } else { detail })
+}
+
+fn check_edge_floor(root: str) {
+    let edges = _count_edges(root)
+    _check(edges >= EDGE_FLOOR,
+           "Σ (vendor, IR) edges ≥ " + str(EDGE_FLOOR) + " (= 6 vendors × 1 IR floor)",
+           "got " + str(edges))
+}
+
+fn check_cuda_anchors_ptx(root: str) {
+    let p = root + "/stdlib/hal/backend/cuda/compute.hexa"
+    if !_exists(p) {
+        _check(false, "cuda is in PTX consumer set (canonical anchor)", "cuda backend missing")
+        return
+    }
+    let src = read_file(p)
+    let ok = _vendor_consumes_ir(src, "ptx")
+    _check(ok,
+           "cuda anchors PTX (PTX-native vendor)",
+           if ok { "cuda IR_PRIMARY = ptx" } else { "cuda missing PTX in IR_* fields" })
+}
+
+fn check_opencl_anchors_spirv(root: str) {
+    let p = root + "/stdlib/hal/backend/opencl/compute.hexa"
+    if !_exists(p) {
+        _check(false, "opencl is in SPIR-V consumer set (canonical anchor)", "opencl backend missing")
+        return
+    }
+    let src = read_file(p)
+    let ok = _vendor_consumes_ir(src, "spirv")
+    _check(ok,
+           "opencl anchors SPIR-V (OpenCL 3.0+ baseline)",
+           if ok { "opencl IR_PRIMARY = spirv" } else { "opencl missing spirv in IR_* fields" })
+}
+
+// ─── main ────────────────────────────────────────────────────────────
+
+fn main() {
+    println("========================================================================")
+    println("  stdlib/hal — numerics_gpgpu_ir_dichotomy: F-GPGPU-3 T2 numerical")
+    println("========================================================================")
+    println("  vendors: " + str(VENDORS))
+    println("  φ_gpgpu = " + str(PHI_GPGPU) + " canonical IRs: " + str(CANONICAL_IRS))
+    println("  edge floor: " + str(EDGE_FLOOR) + " (= 6 vendors × 1 IR each minimum)")
+    println("")
+
+    let root = _root()
+
+    check_phi_eq_2()
+    check_both_irs_have_consumers(root)
+    check_every_vendor_has_ir(root)
+    check_edge_floor(root)
+    check_cuda_anchors_ptx(root)
+    check_opencl_anchors_spirv(root)
+
+    println("")
+    println("  FALSIFIER:")
+    println("    ✗ F-GPGPU-3: φ=2 IR substrates; every vendor ≥1 (cross-checked numerically)")
+
+    let pass_n = RUN - FAIL
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_LANG_HAL_NUMERICS_GPGPU_IR_DICHOTOMY__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_LANG_HAL_NUMERICS_GPGPU_IR_DICHOTOMY__ PASS")
+    exit(0)
+}
+
+main()

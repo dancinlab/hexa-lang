@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# hexa-cognitive — cognitive-module annotation extractor (AST-backed)
+# 25 annotation kinds across vision/audio/memory/emotion/plan.
+set -eu
+
+KINDS="vision,visual_cortex,saliency,gestalt,feature,audio,cochlea,pitch,timbre,prosody,episodic,semantic,working,procedural,consolidate,emotion,affect,mood,feeling,appraisal,plan,goal,hierarchy,decompose,replan"
+
+usage() {
+    cat >&2 <<EOF
+usage: hexa-cognitive [--kind <name>] <file.hexa> [file2.hexa ...]
+       hexa-cognitive [--kind ...] --dir <directory>
+  recognized kinds: ${KINDS//,/ }
+EOF
+    exit 1
+}
+
+case "${1:-}" in
+    -h|--help|"") usage ;;
+esac
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+. "${SCRIPT_DIR}/_ast_extract.sh"
+
+filter_kind=""
+ARGS=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --kind)
+            shift; [ $# -ge 1 ] || usage
+            ok=0
+            IFS=',' read -r -a _KINDS_ARR <<< "$KINDS"
+            for k in "${_KINDS_ARR[@]}"; do
+                if [ "$k" = "$1" ]; then ok=1; break; fi
+            done
+            if [ "$ok" -ne 1 ]; then echo "ERROR: invalid kind: $1" >&2; usage; fi
+            filter_kind="$1"
+            shift ;;
+        -h|--help) usage ;;
+        *) ARGS+=("$1"); shift ;;
+    esac
+done
+
+if ! resolve_files "${ARGS[@]}"; then exit 1; fi
+if [ ${#FILES[@]} -eq 0 ]; then
+    IFS=',' read -r -a _KS <<< "$KINDS"
+    empty=""
+    for k in "${_KS[@]}"; do empty="${empty}\"$k\":0,"; done
+    printf '{"version":"0.2","source":"ast","annotations":[],"summary":{%s"total":0}}\n' "$empty"
+    exit 0
+fi
+run_ast_extract | ast_emit_kindmap_json "$KINDS" "$filter_kind"

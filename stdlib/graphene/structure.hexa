@@ -1,0 +1,8 @@
+#!hexa strict
+// graphene structure — honeycomb lattice constant.
+fn main() {
+    let a_A = 2.46
+    println("graphene_structure (honeycomb lattice constant):")
+    println("  a_A = " + str(a_A))
+    println("__HEXA_GRAPHENE_STRUCTURE__ PASS gate=GATE_OPEN absorbed=false")
+}

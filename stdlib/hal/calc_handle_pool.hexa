@@ -1,0 +1,242 @@
+#!hexa strict
+// stdlib/hal/calc_handle_pool.hexa — F-HAL-4 T1 algebraic.
+//
+// Closes the T1 (algebraic) tier of falsifier F-HAL-4
+// (≤ J₂/n = 4 concurrent handles per module by default; intr/dma
+//  extend up to J₂=24 handles).
+//
+// Claim (closed-form, integer-arithmetic + per-module meta parse):
+//
+//   σ × τ           = 48   total default handle budget (12 × 4)
+//   J₂ × τ          = 96   canonical upper bound (Σ max_handles ≤ 96)
+//   intr.max_handle = 24   = J₂   (NVIC vector ceiling)
+//   dma.max_handle  = 24   = J₂   (DMA channel count ceiling)
+//   every other module.max_handle = 4 = J₂ / n   (default per-module)
+//
+// Implementation: read each module .hexa, regex-find the meta line
+// `fn <m>_module_meta()` and parse the 4th field (last array element)
+// from the `return [...]` body. core.hexa expresses it as
+// `str(LIFECYCLE_STAGES.len())` which evaluates to "4", so we treat
+// that source-token as the numeric 4 by structural recognition.
+//
+// Run:
+//   hexa run stdlib/hal/calc_handle_pool.hexa
+//
+// PASS = every algebraic identity holds AND every per-module meta
+//        parses to the expected ceiling.
+// FAIL = any mismatch.
+//
+// Cost: $0 (file reads + structural parse; no compilation).
+
+// ─── n=6 lattice constants ────────────────────────────────────────────
+
+let N        = 6
+let SIGMA_6  = 12
+let TAU_6    = 4
+let J2       = 24
+
+// ─── module roster (12 σ-slots) ───────────────────────────────────────
+
+let MODULES = [
+    "core", "gpio", "i2c", "spi", "uart",
+    "adc", "dac",
+    "pwm", "timer", "intr", "dma", "rtc"
+]
+
+// Modules whose handle ceiling extends to J₂=24 (vs default J₂/n=4).
+let EXTENDED_MODULES = ["intr", "dma"]
+
+// Expected per-module ceiling (matches README.md "Handle pool" §).
+let EXPECTED_DEFAULT  = 4
+let EXPECTED_EXTENDED = 24
+
+// ─── check harness ────────────────────────────────────────────────────
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ─── helpers ─────────────────────────────────────────────────────────
+
+fn _root() -> str {
+    let env_root = env("HEXA_HAL_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _exists(p: str) -> bool {
+    let r = exec("[ -f \"" + p + "\" ] && echo y || echo n").trim()
+    return r == "y"
+}
+
+fn _is_extended(m: str) -> bool {
+    for x in EXTENDED_MODULES {
+        if x == m { return true }
+    }
+    return false
+}
+
+// Parse module's max_handles from the `<m>_module_meta()` body.
+// Strategy: find `fn <m>_module_meta`, then locate the next `return [`,
+// walk to the matching `]`, take the last comma-separated field, strip
+// whitespace + quotes. Recognise the structural-token form
+// `str(LIFECYCLE_STAGES.len())` and resolve to TAU_6 = 4.
+//
+// Returns -1 on any parse failure.
+fn _parse_max_handles(src: str, m: str) -> int {
+    let needle = "fn " + m + "_module_meta"
+    let f_idx = src.index_of(needle)
+    if f_idx < 0 { return -1 }
+    // Find the next `return [` after the fn declaration.
+    let pat = "return ["
+    let mut i = f_idx
+    let scan = src.len()
+    let mut start = -1
+    while i < scan {
+        if i + pat.len() <= scan {
+            let snippet = src.substr(i, pat.len())
+            if snippet == pat { start = i + pat.len(); break }
+        }
+        i = i + 1
+    }
+    if start < 0 { return -1 }
+    // Walk forward to closing bracket, collecting last field.
+    let mut j = start
+    let mut last_comma = start - 1
+    let mut closed_at = -1
+    while j < scan {
+        let ch = src.char_at(j)
+        if ch == "]" { closed_at = j; break }
+        if ch == "," { last_comma = j }
+        j = j + 1
+    }
+    if closed_at < 0 { return -1 }
+    // Last field = (last_comma+1 .. closed_at), trimmed.
+    let field_start = last_comma + 1
+    let field_len   = closed_at - field_start
+    if field_len <= 0 { return -1 }
+    let raw = src.substr(field_start, field_len).trim()
+    // Strip surrounding quotes if literal string (e.g. "4" or "24").
+    let stripped = if raw.len() >= 2 && raw.char_at(0) == "\"" {
+        raw.substr(1, raw.len() - 2)
+    } else { raw }
+    // Structural token: str(LIFECYCLE_STAGES.len()) ⇒ τ(6) = 4.
+    if stripped.contains("LIFECYCLE_STAGES.len()") { return TAU_6 }
+    // Otherwise expect a bare integer literal.
+    if stripped.len() == 0 { return -1 }
+    return int(stripped)
+}
+
+// ─── checks ──────────────────────────────────────────────────────────
+
+fn check_module_count() {
+    let n = MODULES.len()
+    _check(n == SIGMA_6, "module roster length == σ(6) = " + str(SIGMA_6),
+           "got " + str(n))
+}
+
+fn check_default_budget() {
+    // σ × τ = 12 × 4 = 48 default handles total.
+    let lhs = SIGMA_6 * TAU_6
+    _check(lhs == 48, "σ × τ = 48 (default total handle budget)",
+           "got " + str(lhs))
+}
+
+fn check_upper_bound() {
+    // J₂ × τ = 24 × 4 = 96 (canonical upper bound for Σ max_handles).
+    let ub = J2 * TAU_6
+    _check(ub == 96, "J₂ × τ = 96 (canonical upper bound)",
+           "got " + str(ub))
+}
+
+fn check_default_ceiling_identity() {
+    // J₂ / n = τ(6) = 4 = default per-module ceiling.
+    let q = J2 / N
+    let ok = (q == TAU_6) && (q == EXPECTED_DEFAULT)
+    _check(ok, "J₂ / n = τ(6) = 4 (default per-module ceiling)",
+           "J₂/n=" + str(q))
+}
+
+// Per-module meta-parse rollup: every module declares the expected
+// ceiling AND Σ max_handles ≤ J₂ × τ = 96.
+fn check_per_module_ceilings(root: str) {
+    let mut sum = 0
+    let mut bad = 0
+    let mut intr_h = -1
+    let mut dma_h  = -1
+    for m in MODULES {
+        let path = root + "/stdlib/hal/" + m + ".hexa"
+        if !_exists(path) { bad = bad + 1; continue }
+        let src = read_file(path)
+        let h = _parse_max_handles(src, m)
+        if h < 0 { bad = bad + 1; continue }
+        sum = sum + h
+        if m == "intr" { intr_h = h }
+        if m == "dma"  { dma_h  = h }
+        let want = if _is_extended(m) { EXPECTED_EXTENDED } else { EXPECTED_DEFAULT }
+        let ok = h == want
+        let detail = "max_handles=" + str(h) + " expected=" + str(want)
+        _check(ok, m + ": meta max_handles == " + str(want), detail)
+    }
+    _check(bad == 0, "all 12 module metas parsed cleanly",
+           "parse failures: " + str(bad))
+
+    // intr / dma extension explicit asserts.
+    _check(intr_h == J2, "intr.max_handles = 24 = J₂",
+           "got " + str(intr_h))
+    _check(dma_h == J2, "dma.max_handles = 24 = J₂",
+           "got " + str(dma_h))
+
+    // Σ ≤ J₂ × τ = 96.
+    let ub = J2 * TAU_6
+    _check(sum <= ub, "Σ max_handles ≤ J₂ × τ = " + str(ub),
+           "Σ=" + str(sum))
+    // Σ should equal 10×4 + 2×24 = 88 in the canonical layout.
+    let expected_sum = (SIGMA_6 - EXTENDED_MODULES.len()) * EXPECTED_DEFAULT
+                       + EXTENDED_MODULES.len() * EXPECTED_EXTENDED
+    _check(sum == expected_sum,
+           "Σ max_handles == 10·4 + 2·24 = " + str(expected_sum),
+           "got " + str(sum))
+}
+
+// ─── main ────────────────────────────────────────────────────────────
+
+fn main() {
+    println("========================================================================")
+    println("  stdlib/hal — calc_handle_pool: F-HAL-4 T1 algebraic (J₂/n ceiling)")
+    println("========================================================================")
+    println("  n=" + str(N) + " σ=" + str(SIGMA_6) + " τ=" + str(TAU_6) +
+            " J₂=" + str(J2))
+    println("  modules (" + str(MODULES.len()) + "): " + str(MODULES))
+    println("  extended (J₂=24): " + str(EXTENDED_MODULES))
+    println("")
+
+    let root = _root()
+
+    check_module_count()
+    check_default_budget()
+    check_upper_bound()
+    check_default_ceiling_identity()
+    check_per_module_ceilings(root)
+
+    println("")
+    println("  FALSIFIER:")
+    println("    ✗ F-HAL-4: ≤ J₂/n = 4 concurrent handles per module (intr/dma extend)")
+
+    let pass_n = RUN - FAIL
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_LANG_HAL_CALC_HANDLE_POOL__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_LANG_HAL_CALC_HANDLE_POOL__ PASS")
+    exit(0)
+}

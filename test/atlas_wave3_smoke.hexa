@@ -1,0 +1,262 @@
+// HEXA Native Compiler — Wave 3 atlas audit smoke
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// absorbed from ~/core/hexa-matter/selftest/{hardwall_provenance,
+// falsifier_wellformed,cross_link_integrity}_audit.py (MIT,
+// hexa-matter v1.2.0).
+//
+// Exercises compiler/atlas/hardwall_audit.hexa,
+// compiler/atlas/falsifier_wellformed_audit.hexa, and
+// compiler/atlas/cross_link_audit.hexa against small synthetic fixtures.
+// Bypasses the overlay file and feeds AtlasNodes directly via the `_in`
+// variants so the test stays deterministic.
+//
+// Run:
+//   hexa run test/atlas_wave3_smoke.hexa
+//
+// Expected: RESULT: PASS
+
+use "compiler/atlas/parser"
+use "compiler/atlas/hardwall_audit"
+use "compiler/atlas/falsifier_wellformed_audit"
+use "compiler/atlas/cross_link_audit"
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok {
+        println("  PASS  " + label)
+    } else {
+        println("  FAIL  " + label)
+        fails.push(label)
+    }
+}
+
+fn _mk_node(kind: string, id: string, raw: string) -> AtlasNode {
+    return AtlasNode {
+        kind: kind,
+        id: id,
+        raw: raw,
+        source_file: "fixture",
+        source_line: 1,
+        grade: empty_grade(),
+        edges: empty_edges()
+    }
+}
+
+fn _mk_grade(value: i64, verified: bool, breakthrough: bool, hypothesis: bool) -> GradeInfo {
+    return GradeInfo {
+        value: value,
+        verified: verified,
+        breakthrough: breakthrough,
+        hypothesis: hypothesis
+    }
+}
+
+fn _mk_node_full(kind: string, id: string, raw: string, grade: GradeInfo, edges: EdgeInfo) -> AtlasNode {
+    return AtlasNode {
+        kind: kind,
+        id: id,
+        raw: raw,
+        source_file: "fixture",
+        source_line: 1,
+        grade: grade,
+        edges: edges
+    }
+}
+
+fn _edges_with_depends(depends: array) -> EdgeInfo {
+    return EdgeInfo {
+        depends_on: depends,
+        derives: [],
+        applications: [],
+        equivalents: [],
+        converges: [],
+        verified_by: [],
+        breakthroughs: []
+    }
+}
+
+fn _edges_with_verified_by(verifiers: array) -> EdgeInfo {
+    return EdgeInfo {
+        depends_on: [],
+        derives: [],
+        applications: [],
+        equivalents: [],
+        converges: [],
+        verified_by: verifiers,
+        breakthroughs: []
+    }
+}
+
+fn _main_smoke() {
+    println("wave-3 atlas audit smoke")
+    let fails = []
+
+    // ----------------------------------------------------------
+    // Fixture A — hardwall_audit
+    // ----------------------------------------------------------
+
+    // Bad: [10*] ceiling claim WITHOUT !! or |> provenance.
+    let hw_bad = _mk_node_full(
+        "C",
+        "MAT-bad-ceiling",
+        "@C MAT-bad-ceiling = 3695 K :: materials [10*]\n  => \"melting point claim, no provenance\"",
+        _mk_grade(10, true, false, false),
+        empty_edges()
+    )
+    // Good #1: [10*] with !! breakthrough flag (grade.breakthrough==true).
+    let hw_good1 = _mk_node_full(
+        "F",
+        "MAT-formula-good",
+        "@F MAT-formula-good = a*b :: math [10*!]\n  !! breakthrough log: cycle N6_R37",
+        _mk_grade(10, true, true, false),
+        empty_edges()
+    )
+    // Good #2: [10*] with |> verified_by edge.
+    let hw_good2 = _mk_node_full(
+        "C",
+        "MAT-verified-good",
+        "@C MAT-verified-good = 100 :: materials [10*]\n  |> verify_mat.py",
+        _mk_grade(10, true, false, false),
+        _edges_with_verified_by(["verify_mat.py"])
+    )
+    // Passthrough: lower grade — not a ceiling claim, not audited.
+    let hw_low = _mk_node_full(
+        "P",
+        "MAT-low-grade",
+        "@P MAT-low-grade = 1 :: foundation [7]",
+        _mk_grade(7, false, false, false),
+        empty_edges()
+    )
+
+    let hw_result = audit_hardwalls_in([hw_bad, hw_good1, hw_good2, hw_low])
+    println("  hardwall_audit: " + hw_result.summary)
+    _check("hardwall: 1 violation for un-traceable [10*]", len(hw_result.violations) == 1, fails)
+    _check("hardwall: fails (pass=false)", !hw_result.pass, fails)
+    if len(hw_result.violations) >= 1 {
+        let v = hw_result.violations[0]
+        _check("hardwall: violation cites the bad node id", v.node_id == "MAT-bad-ceiling", fails)
+    }
+    // Good-only batch — pass.
+    let hw_good_only = audit_hardwalls_in([hw_good1, hw_good2, hw_low])
+    _check("hardwall: good-only batch passes", hw_good_only.pass, fails)
+    _check("hardwall: good-only has 0 violations", len(hw_good_only.violations) == 0, fails)
+
+    // ----------------------------------------------------------
+    // Fixture B — falsifier_wellformed_audit
+    // ----------------------------------------------------------
+
+    // Good @?: well-formed falsifier triple — F-tag + deadline + type tag.
+    let fal_good = _mk_node(
+        "Q",
+        "Q-room-temp-sc",
+        "@? Q-room-temp-sc :: physics [3?]\n  falsifier: F-RTSC-1, measurement of resistance drop\n  until=2027-Q4"
+    )
+    // Bad #1: missing deadline.
+    let fal_bad_deadline = _mk_node(
+        "Q",
+        "Q-fusion-net-energy",
+        "@? Q-fusion-net-energy :: energy [3?]\n  falsifier: F-FUS-1, measurement of Q > 10"
+    )
+    // Bad #2: missing type tag (no measurement/proof/simulation/external).
+    let fal_bad_type = _mk_node(
+        "Q",
+        "Q-mystery",
+        "@? Q-mystery :: foundation [3?]\n  falsifier: F-MYST-1\n  until=2030-Q1"
+    )
+    // Bad #3: missing falsifier entirely.
+    let fal_bad_falsifier = _mk_node(
+        "Q",
+        "Q-no-falsifier",
+        "@? Q-no-falsifier :: cosmology [3?]\n  until=2099-Q4 measurement"
+    )
+    // Passthrough: not a @? node — not audited.
+    let fal_skip = _mk_node(
+        "P",
+        "p-skip",
+        "@P p-skip = 1 :: foundation [7]"
+    )
+
+    let fal_result = audit_falsifier_wellformed_in([fal_good, fal_bad_deadline, fal_bad_type, fal_bad_falsifier, fal_skip])
+    println("  falsifier_wellformed_audit: " + fal_result.summary)
+    _check("falsifier: 3 violations across 4 @? nodes", len(fal_result.violations) == 3, fails)
+    _check("falsifier: fails (pass=false)", !fal_result.pass, fails)
+
+    // Minimal subset: good + missing-deadline only = 1 violation.
+    let fal_pair = audit_falsifier_wellformed_in([fal_good, fal_bad_deadline])
+    _check("falsifier: good+missing-deadline = 1 violation", len(fal_pair.violations) == 1, fails)
+    _check("falsifier: good+missing-deadline fails", !fal_pair.pass, fails)
+    if len(fal_pair.violations) >= 1 {
+        let v = fal_pair.violations[0]
+        _check("falsifier: violation cites the missing-deadline id", v.node_id == "Q-fusion-net-energy", fails)
+    }
+    // Good-only: passes.
+    let fal_good_only = audit_falsifier_wellformed_in([fal_good])
+    _check("falsifier: good-only passes", fal_good_only.pass, fails)
+
+    // ----------------------------------------------------------
+    // Fixture C — cross_link_audit
+    // ----------------------------------------------------------
+
+    // Two valid anchors + one node with one valid ref + one dangling ref.
+    let cl_anchor1 = _mk_node(
+        "P",
+        "anchor_one",
+        "@P anchor_one = 1 :: foundation [11*]"
+    )
+    let cl_anchor2 = _mk_node(
+        "C",
+        "anchor_two",
+        "@C anchor_two = 2 :: foundation [10*]"
+    )
+    // Node with one valid <- ref + one dangling <- ref → 1 violation.
+    let cl_mixed = _mk_node_full(
+        "F",
+        "formula_mixed",
+        "@F formula_mixed = a*b :: math [10!]",
+        empty_grade(),
+        _edges_with_depends(["anchor_one", "nonexistent_target"])
+    )
+    // Node with all valid refs (1 <- to anchor_two) → 0 violations.
+    let cl_clean = _mk_node_full(
+        "R",
+        "rel_clean",
+        "@R rel_clean :: foundation [10*]",
+        empty_grade(),
+        _edges_with_depends(["anchor_two"])
+    )
+
+    let cl_result = audit_cross_links_in([cl_anchor1, cl_anchor2, cl_mixed, cl_clean])
+    println("  cross_link_audit: " + cl_result.summary)
+    _check("cross-link: 1 dangling reference detected", len(cl_result.violations) == 1, fails)
+    _check("cross-link: fails (pass=false)", !cl_result.pass, fails)
+    if len(cl_result.violations) >= 1 {
+        let v = cl_result.violations[0]
+        _check("cross-link: violation cites formula_mixed", v.node_id == "formula_mixed", fails)
+        _check("cross-link: violation reason mentions nonexistent_target", v.reason.index_of("nonexistent_target") >= 0, fails)
+    }
+    // Clean-only batch: passes.
+    let cl_clean_only = audit_cross_links_in([cl_anchor1, cl_anchor2, cl_clean])
+    _check("cross-link: clean batch passes", cl_clean_only.pass, fails)
+    _check("cross-link: clean batch has 0 violations", len(cl_clean_only.violations) == 0, fails)
+
+    // ----------------------------------------------------------
+    // Result
+    // ----------------------------------------------------------
+    println("")
+    if len(fails) == 0 {
+        println("RESULT: PASS")
+        exit(0)
+    } else {
+        println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
+        let mut i = 0
+        while i < len(fails) {
+            println("  - " + to_string(fails[i]))
+            i = i + 1
+        }
+        exit(1)
+    }
+}
+
+_main_smoke()

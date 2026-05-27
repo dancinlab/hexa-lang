@@ -1,0 +1,60 @@
+#!hexa strict
+// stdlib/hal/backend/esp32c6/dac.hexa — ESP32-C6 DAC backend — paper skeleton.
+//
+// Phase: skeleton / stub. **No native DAC on ESP32-C6** (continues
+// Espressif post-ESP32 trend; only original ESP32 had native 8-bit DAC).
+// LEDC-emulation fallback. Sim-first invariant preserved.
+//
+// Target:    ESP32-C6 RV32IMAC RISC-V @ 160 MHz.
+// Chip ref:  ESP32-C6 TRM — no DAC §; emulation via §11 LEDC.
+// Surface:   esp32c6_dac_{configure,write,close}(...)
+// Dispatch:  dac.hexa selects this via cfg-flag.
+//
+// LEDC-emulation: same approach as esp32c3/dac.hexa with C6's LEDC.
+// 6 LEDC channels × 4 timers; 1..14-bit duty resolution.
+// At APB=80 MHz: 12-bit DAC equivalent @ ≤19.5 kHz; 10-bit @ ≤78 kHz.
+
+let MODULE_NAME = "esp32c6_dac"
+let SIGMA_SLOT  = 6
+let PHI_KIND    = "analog"
+
+let VIRTUAL_UNIT_MIN = 0
+let VIRTUAL_UNIT_MAX = 5   // 6 LEDC channels on C6
+
+let RES_8BIT  = 8
+let RES_10BIT = 10
+let RES_12BIT = 12
+
+// ── stub handlers (route to LEDC PWM emulation) ───────────────────────
+
+fn esp32c6_dac_configure(unit: int, channel: int, resolution: int) -> int {
+    if unit < VIRTUAL_UNIT_MIN || unit > VIRTUAL_UNIT_MAX { return -1 }
+    if channel != 0 { return -2 }
+    if resolution != 8 && resolution != 10 && resolution != 12 { return -3 }
+    return unit * 12 + channel
+}
+
+fn esp32c6_dac_write(handle: int, value: int) -> bool {
+    if handle < 0 { return false }
+    if value < 0 || value > 0xFFFF { return false }
+    return true
+}
+
+fn esp32c6_dac_close(handle: int) -> bool {
+    if handle < 0 { return false }
+    return true
+}
+
+fn esp32c6_dac_report(handle: int) -> str {
+    return "[esp32c6_dac sim] handle=" + str(handle) + " (LEDC-emulation; no native DAC)"
+}
+
+fn esp32c6_dac_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32c6_dac sim] STUB skeleton — sim-first; LEDC-emulation (no native DAC)")
+    println("  strategy: esp32c6_pwm (LEDC) + external RC LPF; 6 channels × 4 timers")
+    println("  res × bw: 12-bit @ ≤19.5 kHz | 10-bit @ ≤78 kHz | 8-bit @ ≤312 kHz")
+}

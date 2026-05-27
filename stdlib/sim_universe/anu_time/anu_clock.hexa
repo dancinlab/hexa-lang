@@ -1,0 +1,199 @@
+// anu_clock.hexa — ANU byte stream → tick pump for ★19 ANU-Time universe
+//
+// 설계:
+//   - 캐시 (.anu_cache.bin) 직접 read_file. TTL 60s.
+//   - 소진 시 curl 직접 호출 (hexa-lang inline). rate_limit(429) 시 urandom fallback.
+//   - tick() 호출 = 다음 byte 소비. wall-clock ns 로그.
+//
+// ANU 제약:
+//   - 1 request/minute, 64 bytes/request → burst(64 tick 즉시) + quiet(60s)
+//
+// 공개 함수:
+//   anuc_init()                    → 상태 초기화
+//   anuc_next_byte() -> i64        → 다음 byte (0..255), 실패 -1
+//   anuc_source() -> string        → "cache" | "anu" | "urandom" | "fail"
+//   anuc_stream_pos() -> i64       → 버퍼 내 offset
+//   anuc_now_ns() -> i64           → 현재 wall-clock ns
+
+// ─── 전역 상태 ───
+let mut __anuc_hex: string = ""
+let mut __anuc_pos: i64 = 0
+let mut __anuc_source: string = ""
+let mut __anuc_total: i64 = 0
+let mut __anuc_last_cache_mtime: i64 = 0
+
+// ─── 시간 ───
+fn anuc_now_ns() -> i64 {
+    // R37/AN13/L3-PY violation — python3 time.time_ns() stubbed 2026-04-18
+    // Original: exec("/usr/bin/python3 -c 'import time; print(time.time_ns())'")
+    // Fallback: shell `date +%s%N` provides ns-resolution epoch (Linux) or s-resolution padded (mac).
+    // macOS-correct (date-percent-3n-macos-bypass-audit 2026-04-27): BSD date(1) does NOT support %N
+    // and emits literal "...N" while exiting 0; to_int catches → v=0 → all elapsed timings collapse.
+    // Detect via .contains("N") and fall through to date+%s padded with 9 zeros.
+    let mut r = ""
+    try { r = to_string(exec("date +%s%N 2>/dev/null")).trim() } catch e { r = "0" }
+    let mut v: i64 = 0
+    if r.len() > 0 && r.contains("N") == false {
+        try { v = to_int(r) } catch e { v = 0 }
+    }
+    if v <= 0 {
+        let mut sec_str = ""
+        try { sec_str = to_string(exec("date +%s")).trim() } catch e2 { sec_str = "" }
+        if sec_str.len() > 0 {
+            try { let sec = to_int(sec_str); v = sec * 1000000000 } catch e3 { v = 0 }
+        }
+    }
+    return v
+}
+
+fn anuc_now_epoch() -> i64 {
+    let mut r = ""
+    try { r = to_string(exec("date +%s")).trim() } catch e { r = "0" }
+    let mut v: i64 = 0
+    try { v = to_int(r) } catch e { v = 0 }
+    return v
+}
+
+fn _anuc_file_exists(path: string) -> bool {
+    let mut r = ""
+    try { r = to_string(exec("[ -f '" + path + "' ] && echo 1 || echo 0")).trim() } catch e { r = "0" }
+    return r == "1"
+}
+
+fn _anuc_file_mtime(path: string) -> i64 {
+    let mut r = ""
+    try { r = to_string(exec("stat -f '%m' '" + path + "' 2>/dev/null || stat -c '%Y' '" + path + "' 2>/dev/null")).trim() } catch e { r = "0" }
+    if r.len() == 0 { return 0 }
+    let mut v: i64 = 0
+    try { v = to_int(r) } catch e { v = 0 }
+    return v
+}
+
+fn _anuc_cache_path() -> string {
+    let mut home = ""
+    try { home = to_string(exec("printenv HOME")).trim() } catch e { home = "" }
+    return home + "/Dev/nexus/discovery/rng_lab/.anu_cache.bin"
+}
+
+// ─── 캐시 직접 읽기 ───
+fn _anuc_read_cache() -> string {
+    let path = _anuc_cache_path()
+    if !_anuc_file_exists(path) { return "" }
+    let mtime = _anuc_file_mtime(path)
+    let age = anuc_now_epoch() - mtime
+    if age > 60 { return "" }
+    let mut c = ""
+    try { c = read_file(path).trim() } catch e { c = "" }
+    if c.len() < 128 { return "" }
+    __anuc_last_cache_mtime = mtime
+    return c.substring(0, 128)
+}
+
+// ─── ANU direct fetch via python helper (JSON parse 안정) ───
+fn _anuc_fetch_anu() -> string {
+    // R37/AN13/L3-PY violation — python3 JSON parser for ANU QRNG stubbed 2026-04-18
+    // Original: curl ... | /usr/bin/python3 -c "import sys,json; ..." (hex-encode 64 bytes)
+    // No-op: return "" → caller falls back to _anuc_fetch_urandom() (line below).
+    eprintln("[R37] anu_clock._anuc_fetch_anu: python3 JSON parser disabled; using urandom fallback.")
+    return ""
+}
+
+// ─── urandom fallback (64 bytes hex) ───
+fn _anuc_fetch_urandom() -> string {
+    let tmp = "/tmp/anu_ur." + to_string(anuc_now_epoch()) + ".hex"
+    let cmd = "head -c 64 /dev/urandom | od -An -vtx1 | tr -d ' \\n' > " + tmp + "; cat " + tmp + "; rm -f " + tmp
+    let mut hex = ""
+    try { hex = to_string(exec(cmd)).trim() } catch e { hex = "" }
+    if hex.len() < 128 { return "" }
+    return hex.substring(0, 128)
+}
+
+fn _anuc_refresh() -> bool {
+    // 1) 캐시 확인 (60s TTL, 이전 버퍼와 다른 경우만 신선)
+    let cached = _anuc_read_cache()
+    if cached.len() >= 128 {
+        if cached != __anuc_hex {
+            __anuc_hex = cached
+            __anuc_pos = 0
+            __anuc_source = "cache"
+            return true
+        }
+        // 동일 버퍼 → fresh 필요 (cache still same data)
+    }
+    // 2) 직접 ANU fetch
+    let anu = _anuc_fetch_anu()
+    if anu.len() >= 128 {
+        __anuc_hex = anu
+        __anuc_pos = 0
+        __anuc_source = "anu"
+        return true
+    }
+    // 3) urandom fallback
+    let ur = _anuc_fetch_urandom()
+    if ur.len() >= 128 {
+        __anuc_hex = ur
+        __anuc_pos = 0
+        __anuc_source = "urandom"
+        return true
+    }
+    __anuc_source = "fail"
+    return false
+}
+
+// ─── 공개 ───
+fn anuc_init() {
+    __anuc_hex = ""
+    __anuc_pos = 0
+    __anuc_source = ""
+    __anuc_total = 0
+    __anuc_last_cache_mtime = 0
+}
+
+fn _hex_pair_to_int(h2: string) -> i64 {
+    let mut r = ""
+    try { r = to_string(exec("printf '%d' 0x" + h2 + " 2>/dev/null")).trim() } catch e { r = "0" }
+    if r.len() == 0 { return 0 }
+    let mut v: i64 = 0
+    try { v = to_int(r) } catch e { v = 0 }
+    if v < 0 { v = 0 }
+    if v > 255 { v = 255 }
+    return v
+}
+
+fn anuc_next_byte() -> i64 {
+    if __anuc_hex.len() < 128 || __anuc_pos >= 64 {
+        let ok = _anuc_refresh()
+        if !ok { return 0 - 1 }
+    }
+    let off = __anuc_pos * 2
+    let h2 = __anuc_hex.substring(off, off + 2)
+    let b = _hex_pair_to_int(h2)
+    __anuc_pos = __anuc_pos + 1
+    __anuc_total = __anuc_total + 1
+    return b
+}
+
+fn anuc_source() -> string { return __anuc_source }
+fn anuc_stream_pos() -> i64 { return __anuc_pos }
+fn anuc_total() -> i64 { return __anuc_total }
+
+// ─── 단독 self-test ───
+let _args = args()
+let mut standalone = true
+if _args.len() >= 2 {
+    if _args[1] == "lib" { standalone = false }
+}
+
+if standalone {
+    anuc_init()
+    println("# anu_clock self-test: 10 bytes")
+    let mut i = 0
+    while i < 10 {
+        let t0 = anuc_now_ns()
+        let b = anuc_next_byte()
+        let t1 = anuc_now_ns()
+        println("tick=" + to_string(i) + " byte=" + to_string(b) + " src=" + anuc_source() + " pos=" + to_string(anuc_stream_pos()) + " dt_ns=" + to_string(t1 - t0))
+        i = i + 1
+    }
+    println("# total bytes consumed: " + to_string(anuc_total()))
+}

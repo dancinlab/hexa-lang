@@ -1,0 +1,70 @@
+// HEXA Native Compiler — Wave 1 absorption: absolute_rules smoke
+//
+// Run:
+//   hexa run compiler/absolute_rules/static_index_test.hexa
+
+use "compiler/absolute_rules/embed"
+use "compiler/absolute_rules/embedded.gen"
+use "compiler/absolute_rules/static_index"
+
+fn _is_hex64(s: string) -> bool {
+    if len(s) != 64 { return false }
+    let mut i = 0
+    while i < 64 {
+        let c = s.substring(i, i + 1)
+        let ok = (c >= "0" && c <= "9") || (c >= "a" && c <= "f")
+        if !ok { return false }
+        i = i + 1
+    }
+    return true
+}
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok { println("  PASS  " + label) }
+    else { println("  FAIL  " + label); fails.push(label) }
+}
+
+fn main() {
+    println("wave1 absolute_rules embed smoke")
+    println("  hash:         " + ABSOLUTE_RULES_HASH)
+    println("  generated_at: " + ABSOLUTE_RULES_GENERATED_AT)
+    println("  source_count: " + to_string(ABSOLUTE_RULES_SOURCE_COUNT))
+    println("  entries:      " + to_string(len(ABSOLUTE_RULES)))
+
+    let fails = []
+    println("")
+    println("checks:")
+    _check("hash is 64-char hex",        _is_hex64(ABSOLUTE_RULES_HASH),                       fails)
+    _check("generated_at non-empty",     len(ABSOLUTE_RULES_GENERATED_AT) > 0,                 fails)
+    _check("source_count > 0",           ABSOLUTE_RULES_SOURCE_COUNT > 0,                      fails)
+    _check("entries match source_count", len(ABSOLUTE_RULES) == ABSOLUTE_RULES_SOURCE_COUNT,   fails)
+
+    let r1 = absolute_rules_lookup("R1")
+    _check("lookup(R1).id == R1",          r1.id == "R1",                                      fails)
+    _check("lookup(R1).level non-empty",   len(r1.level) > 0,                                  fails)
+
+    let common = absolute_rules_by_section("common")
+    _check("section common has entries",   len(common) > 0,                                    fails)
+
+    let miss = absolute_rules_lookup("ZZZ-NOT-A-RULE")
+    _check("lookup miss → id == \"\"",     miss.id == "",                                      fails)
+
+    println("")
+    if len(fails) == 0 {
+        println("RESULT: PASS (" + to_string(len(ABSOLUTE_RULES)) + "/" + to_string(ABSOLUTE_RULES_SOURCE_COUNT) + " entries, hash=" + ABSOLUTE_RULES_HASH.substring(0, 12) + "...)")
+        exit(0)
+    } else {
+        println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
+        exit(1)
+    }
+}
+
+let _av = argv()
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let s = to_string(_av[1])
+    if s.ends_with("/static_index_test.hexa") { return true }
+    if s == "static_index_test.hexa" { return true }
+    return false
+}
+if _is_main() { main() }

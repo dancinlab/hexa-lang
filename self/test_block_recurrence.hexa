@@ -1,0 +1,899 @@
+// ═══════════════════════════════════════════════════════════════════
+//  test_block_recurrence.hexa — Block Recurrence (#317)
+// ═══════════════════════════════════════════════════════════════════
+
+// -- inlined from self/ml/block_recurrence.hexa --
+// codegen import not wired for test files
+
+// ═══════════════════════════════════════════════════════════════════
+//  self/ml/block_recurrence.hexa — Block Recurrence (#317)
+//
+//  Block Recurrence (Hutchins et al., 2022 / Transformer-XL successor)
+//  Process sequence in fixed-size blocks, carry recurrent state
+//  (memory) between blocks. Each block attends to both current
+//  tokens and cached memory from the previous block.
+//
+//  Key concepts:
+//    Block size B : process B tokens at a time
+//    Memory       : top-K hidden states from previous block
+//    Attention    : [memory ; current_block] as KV, current_block as Q
+//    Gradient     : stop gradient at block boundary (optional)
+//
+//  Architecture:
+//    token_embed : D_model embedding per token
+//    Q = x * W_q    (D_model -> D_head)
+//    K = x * W_k    (D_model -> D_head)
+//    V = x * W_v    (D_model -> D_head)
+//    attn = softmax(Q * K^T / sqrt(D_head)) * V
+//    out  = attn * W_o + b_o    (D_head -> D_model)
+//
+//  API:
+//    br_init(D_model, D_head, block_size, mem_size, seed) -> model
+//    br_init_memory(model)                     -> memory (empty)
+//    br_process_block(model, memory, block)    -> [output, new_memory]
+//    br_attention_with_memory(model, query, memory, block_kv) -> output
+//    br_forward_sequence(model, tokens)        -> outputs (block by block)
+//    br_loss(model, tokens, targets)           -> float
+//    br_train_step(model, X, Y, lr)            -> model
+//
+//  AI-NATIVE attrs:
+//    @pure  (forward / loss)
+//    @hot   (training step)
+// ═══════════════════════════════════════════════════════════════════
+
+// ── math helpers ──────────────────────────────────────────────────
+
+fn br_abs(x) { if x < 0.0 { return 0.0 - x } return x }
+
+fn br_exp(x) {
+    let mut v = x
+    if v > 20.0 { v = 20.0 }
+    if v < -20.0 { v = -20.0 }
+    let mut result = 1.0
+    let mut term = 1.0
+    let mut i = 1
+    while i < 30 {
+        term = term * v / to_float(i)
+        result = result + term
+        i = i + 1
+    }
+    if result < 0.0 { return 0.0 }
+    return result
+}
+
+fn br_log(x) {
+    if x <= 0.0 { return -30.0 }
+    let mut v = x
+    let mut count = 0
+    while v > 2.0 {
+        v = v / 2.718281828
+        count = count + 1
+    }
+    while v < 0.5 {
+        v = v * 2.718281828
+        count = count - 1
+    }
+    let d = v - 1.0
+    let ln_v = d - d * d / 2.0 + d * d * d / 3.0 - d * d * d * d / 4.0
+    return to_float(count) + ln_v
+}
+
+fn br_sqrt(x) {
+    if x <= 0.0 { return 0.0 }
+    let mut g = x / 2.0
+    if g < 1.0 { g = 1.0 }
+    let mut _i = 0
+    while _i < 20 {
+        g = (g + x / g) / 2.0
+        _i = _i + 1
+    }
+    return g
+}
+
+fn br_tanh(x) {
+    let ep = br_exp(x)
+    let en = br_exp(0.0 - x)
+    return (ep - en) / (ep + en)
+}
+
+// ── array helpers ─────────────────────────────────────────────────
+
+fn br_zeros(n) {
+    let mut v = []
+    let mut _i = 0
+    while _i < n {
+    return v
+        _i = _i + 1
+}
+
+fn br_zeros_2d(rows, cols) {
+    let mut m = []
+    let mut _r = 0
+    while _r < rows {
+        let mut row = []
+        for _c in 0..cols { row = row + [0.0] }
+        m = m + [row]
+        _r = _r + 1
+    }
+    return m
+}
+
+fn br_lcg(state) {
+    return (state * 1103515245 + 12345) % 2147483648
+}
+
+fn br_uniform(state) {
+    let s = br_lcg(state)
+    return [to_float(s) / 2147483648.0, to_float(s)]
+}
+
+// ── softmax over a vector ─────────────────────────────────────────
+
+fn br_softmax(logits) {
+    let n = len(logits)
+    let mut mx = logits[0]
+    let mut i = 1
+    while i < n {
+    let mut out = br_zeros(n)
+    let mut sum = 0.0
+    for i in 0..n {
+        let e = br_exp(logits[i] - mx)
+        out[i] = e
+        sum = sum + e
+    }
+    if sum <= 0.0 { sum = 1.0e-12 }
+    for i in 0..n { out[i] = out[i] / sum }
+    return out
+        i = i + 1
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  br_init — initialise block recurrence model
+//
+//  Weights:
+//    W_q : D_model x D_head   (query projection)
+//    W_k : D_model x D_head   (key projection)
+//    W_v : D_model x D_head   (value projection)
+//    W_o : D_head  x D_model  (output projection)
+//    b_o : D_model
+//    W_emb : vocab_size(256) x D_model  (token embedding)
+// ═══════════════════════════════════════════════════════════════════
+fn br_init(D_model, D_head, block_size, mem_size, seed) {
+    let mut state = seed
+    if state <= 0 { state = 1 }
+    let vocab = 256
+
+    // Xavier-ish scale
+    let scale_qkv = 1.0 / br_sqrt(to_float(D_model))
+    let scale_o = 1.0 / br_sqrt(to_float(D_head))
+    let scale_emb = 0.1
+
+    // W_q: D_model x D_head
+    let mut W_q = br_zeros_2d(D_model, D_head)
+    let mut i = 0
+    while i < D_model {
+        for j in 0..D_head {
+            let u = br_uniform(state)
+            state = int(u[1])
+            if state <= 0 { state = 1 }
+            W_q[i][j] = (u[0] - 0.5) * scale_qkv
+        }
+        i = i + 1
+    }
+
+    // W_k: D_model x D_head
+    let mut W_k = br_zeros_2d(D_model, D_head)
+    let mut i = 0
+    while i < D_model {
+        for j in 0..D_head {
+            let u = br_uniform(state)
+            state = int(u[1])
+            if state <= 0 { state = 1 }
+            W_k[i][j] = (u[0] - 0.5) * scale_qkv
+        }
+        i = i + 1
+    }
+
+    // W_v: D_model x D_head
+    let mut W_v = br_zeros_2d(D_model, D_head)
+    let mut i = 0
+    while i < D_model {
+        for j in 0..D_head {
+            let u = br_uniform(state)
+            state = int(u[1])
+            if state <= 0 { state = 1 }
+            W_v[i][j] = (u[0] - 0.5) * scale_qkv
+        }
+        i = i + 1
+    }
+
+    // W_o: D_head x D_model
+    let mut W_o = br_zeros_2d(D_head, D_model)
+    let mut i = 0
+    while i < D_head {
+        for j in 0..D_model {
+            let u = br_uniform(state)
+            state = int(u[1])
+            if state <= 0 { state = 1 }
+            W_o[i][j] = (u[0] - 0.5) * scale_o
+        }
+        i = i + 1
+    }
+
+    let b_o = br_zeros(D_model)
+
+    // W_emb: vocab x D_model
+    let mut W_emb = br_zeros_2d(vocab, D_model)
+    let mut i = 0
+    while i < vocab {
+        for j in 0..D_model {
+            let u = br_uniform(state)
+            state = int(u[1])
+            if state <= 0 { state = 1 }
+            W_emb[i][j] = (u[0] - 0.5) * scale_emb
+        }
+        i = i + 1
+    }
+
+    // W_out: D_model x vocab (logit head)
+    let mut W_out = br_zeros_2d(D_model, vocab)
+    let mut i = 0
+    while i < D_model {
+        for j in 0..vocab {
+            let u = br_uniform(state)
+            state = int(u[1])
+            if state <= 0 { state = 1 }
+            W_out[i][j] = (u[0] - 0.5) * scale_emb
+        }
+        i = i + 1
+    }
+    let b_out = br_zeros(vocab)
+
+    return #{
+        "D_model": D_model,
+        "D_head": D_head,
+        "block_size": block_size,
+        "mem_size": mem_size,
+        "vocab": vocab,
+        "W_q": W_q,
+        "W_k": W_k,
+        "W_v": W_v,
+        "W_o": W_o,
+        "b_o": b_o,
+        "W_emb": W_emb,
+        "W_out": W_out,
+        "b_out": b_out
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  br_init_memory — empty memory (zero rows)
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn br_init_memory(model) {
+    return []
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  br_embed — look up token embedding
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn br_embed(model, tok) {
+    let W_emb = model["W_emb"]
+    let D_model = model["D_model"]
+    let idx = tok % model["vocab"]
+    let mut out = br_zeros(D_model)
+    let mut j = 0
+    while j < D_model {
+    return out
+        j = j + 1
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  br_project — matrix-vector: x[D_in] * W[D_in x D_out] -> [D_out]
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn br_project(x, W, D_in, D_out) {
+    let mut out = br_zeros(D_out)
+    let mut j = 0
+    while j < D_out {
+        let mut s = 0.0
+        for i in 0..D_in { s = s + x[i] * W[i][j] }
+        out[j] = s
+        j = j + 1
+    }
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  br_dot — dot product of two vectors
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn br_dot(a, b, n) {
+    let mut s = 0.0
+    let mut i = 0
+    while i < n {
+    return s
+        i = i + 1
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  br_attention_with_memory
+//    query   : single query vector [D_head]
+//    memory  : list of [D_model] hidden states from previous block
+//    block_kv: list of [D_model] hidden states from current block
+//
+//  KV = memory ++ block_kv
+//  Computes scaled dot-product attention:
+//    score_i = Q . K_i / sqrt(D_head)
+//    attn    = softmax(scores) . V
+//  Returns output projected back to D_model via W_o + b_o
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn br_attention_with_memory(model, query_vec, memory, block_kv) {
+    let D_model = model["D_model"]
+    let D_head = model["D_head"]
+    let W_q = model["W_q"]
+    let W_k = model["W_k"]
+    let W_v = model["W_v"]
+    let W_o = model["W_o"]
+    let b_o = model["b_o"]
+
+    // Q from query_vec
+    let q = br_project(query_vec, W_q, D_model, D_head)
+
+    // Combine memory + block_kv for KV
+    let kv_inputs = memory + block_kv
+    let n_kv = len(kv_inputs)
+
+    if n_kv == 0 {
+        // No context: return zeros
+        return br_zeros(D_model)
+    }
+
+    // Compute K, V for all kv positions
+    let mut keys = []
+    let mut vals = []
+    let mut i = 0
+    while i < n_kv {
+        let ki = br_project(kv_inputs[i], W_k, D_model, D_head)
+        let vi = br_project(kv_inputs[i], W_v, D_model, D_head)
+        keys = keys + [ki]
+        vals = vals + [vi]
+        i = i + 1
+    }
+
+    // Scaled dot-product attention scores
+    let scale = 1.0 / br_sqrt(to_float(D_head))
+    let mut scores = br_zeros(n_kv)
+    let mut i = 0
+    while i < n_kv {
+        scores[i] = br_dot(q, keys[i], D_head) * scale
+        i = i + 1
+    }
+
+    // Softmax over scores
+    let weights = br_softmax(scores)
+
+    // Weighted sum of values
+    let mut attn_out = br_zeros(D_head)
+    let mut i = 0
+    while i < n_kv {
+        for j in 0..D_head {
+            attn_out[j] = attn_out[j] + weights[i] * vals[i][j]
+        }
+        i = i + 1
+    }
+
+    // Output projection: D_head -> D_model
+    let mut out = br_zeros(D_model)
+    let mut j = 0
+    while j < D_model {
+        let mut s = b_o[j]
+        for i in 0..D_head { s = s + attn_out[i] * W_o[i][j] }
+        out[j] = s
+        j = j + 1
+    }
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  br_process_block — process one block of token embeddings
+//    memory : list of [D_model] from previous block
+//    block  : list of [D_model] hidden states (current block tokens)
+//
+//  Returns [output_list, new_memory]
+//    output_list : list of D_model vectors, one per token in block
+//    new_memory  : top mem_size hidden states from this block
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn br_process_block(model, memory, block) {
+    let D_model = model["D_model"]
+    let mem_size = model["mem_size"]
+    let B = len(block)
+
+    let mut outputs = []
+    // Build KV context incrementally within block
+    let mut block_kv = []
+    let mut t = 0
+    while t < B {
+        let query_vec = block[t]
+        // KV: memory from previous block + all current block tokens up to t
+        let attn_out = br_attention_with_memory(model, query_vec, memory, block_kv)
+        // Residual connection + tanh non-linearity
+        let mut h = br_zeros(D_model)
+        for j in 0..D_model {
+            h[j] = br_tanh(attn_out[j] + query_vec[j])
+        }
+        outputs = outputs + [h]
+        block_kv = block_kv + [block[t]]
+        t = t + 1
+    }
+
+    // New memory: last mem_size hidden states from outputs
+    let mut new_memory = []
+    let start = B - mem_size
+    let mut idx = 0
+    if start > 0 { idx = start }
+    while idx < B {
+        new_memory = new_memory + [outputs[idx]]
+        idx = idx + 1
+    }
+
+    return [outputs, new_memory]
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  br_forward_sequence — process full token sequence block by block
+//    tokens : list of integer token ids
+//
+//  Returns list of D_model hidden state vectors, one per token
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn br_forward_sequence(model, tokens) {
+    let D_model = model["D_model"]
+    let block_size = model["block_size"]
+    let n_tokens = len(tokens)
+
+    // Embed all tokens
+    let mut embeddings = []
+    let mut i = 0
+    while i < n_tokens {
+        let emb = br_embed(model, tokens[i])
+        embeddings = embeddings + [emb]
+        i = i + 1
+    }
+
+    let mut memory = br_init_memory(model)
+    let mut all_outputs = []
+    let mut pos = 0
+
+    while pos < n_tokens {
+        // Extract current block
+        let mut block = []
+        let mut end = pos + block_size
+        if end > n_tokens { end = n_tokens }
+        let mut t = pos
+        while t < end {
+            block = block + [embeddings[t]]
+            t = t + 1
+        }
+
+        let result = br_process_block(model, memory, block)
+        let outputs = result[0]
+        memory = result[1]
+
+        // Accumulate outputs
+        let n_out = len(outputs)
+        let mut i = 0
+        while i < n_out {
+            all_outputs = all_outputs + [outputs[i]]
+            i = i + 1
+        }
+
+        pos = end
+    }
+
+    return all_outputs
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  br_logits — compute vocab logits from hidden state
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn br_logits(model, hidden) {
+    let D_model = model["D_model"]
+    let vocab = model["vocab"]
+    let W_out = model["W_out"]
+    let b_out = model["b_out"]
+    let mut logits = br_zeros(vocab)
+    let mut v = 0
+    while v < vocab {
+        let mut s = b_out[v]
+        for j in 0..D_model { s = s + hidden[j] * W_out[j][v] }
+        logits[v] = s
+        v = v + 1
+    }
+    return logits
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  br_loss — cross-entropy loss over token sequence
+//    tokens  : input token ids [t0, t1, ..., t_{n-1}]
+//    targets : target token ids [y0, y1, ..., y_{n-1}]
+//    (typically targets = tokens shifted left by 1)
+//
+//  Returns average cross-entropy loss
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn br_loss(model, tokens, targets) {
+    let outputs = br_forward_sequence(model, tokens)
+    let n = len(targets)
+    let mut total = 0.0
+    let mut i = 0
+    while i < n {
+        let lg = br_logits(model, outputs[i])
+        let p = br_softmax(lg)
+        let tgt = targets[i] % model["vocab"]
+        let mut pt = p[tgt]
+        if pt < 1.0e-12 { pt = 1.0e-12 }
+        total = total + (0.0 - br_log(pt))
+        i = i + 1
+    }
+    if n == 0 { return 0.0 }
+    return total / to_float(n)
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  br_train_step — one step of gradient descent via finite differences
+//
+//  Numerical gradient: dL/dW_ij ~ (L(W+eps) - L(W-eps)) / (2*eps)
+//
+//  We perturb each parameter group and update:
+//    W_q, W_k, W_v, W_o, b_o, W_out, b_out
+// ═══════════════════════════════════════════════════════════════════
+@hot
+fn br_train_step(model, X, Y, lr) {
+    let D_model = model["D_model"]
+    let D_head = model["D_head"]
+    let vocab = model["vocab"]
+    let eps = 0.01
+    let inv_2eps = 1.0 / (2.0 * eps)
+    let base_loss = br_loss(model, X, Y)
+
+    // ── Helper: perturb a 2D weight, compute grad, update ──────
+    // We perturb a subset of parameters for efficiency
+    // For small models this is tractable
+
+    // W_q gradient
+    let mut W_q = model["W_q"]
+    let mut i = 0
+    while i < D_model {
+        for j in 0..D_head {
+            let orig = W_q[i][j]
+            W_q[i][j] = orig + eps
+            let mut m_plus = model
+            m_plus["W_q"] = W_q
+            let loss_plus = br_loss(m_plus, X, Y)
+            W_q[i][j] = orig - eps
+            m_plus["W_q"] = W_q
+            let loss_minus = br_loss(m_plus, X, Y)
+            let grad = (loss_plus - loss_minus) * inv_2eps
+            W_q[i][j] = orig - lr * grad
+        }
+        i = i + 1
+    }
+
+    // W_k gradient
+    let mut W_k = model["W_k"]
+    let mut i = 0
+    while i < D_model {
+        for j in 0..D_head {
+            let orig = W_k[i][j]
+            W_k[i][j] = orig + eps
+            let mut m_plus = model
+            m_plus["W_k"] = W_k
+            let loss_plus = br_loss(m_plus, X, Y)
+            W_k[i][j] = orig - eps
+            m_plus["W_k"] = W_k
+            let loss_minus = br_loss(m_plus, X, Y)
+            let grad = (loss_plus - loss_minus) * inv_2eps
+            W_k[i][j] = orig - lr * grad
+        }
+        i = i + 1
+    }
+
+    // W_v gradient
+    let mut W_v = model["W_v"]
+    let mut i = 0
+    while i < D_model {
+        for j in 0..D_head {
+            let orig = W_v[i][j]
+            W_v[i][j] = orig + eps
+            let mut m_plus = model
+            m_plus["W_v"] = W_v
+            let loss_plus = br_loss(m_plus, X, Y)
+            W_v[i][j] = orig - eps
+            m_plus["W_v"] = W_v
+            let loss_minus = br_loss(m_plus, X, Y)
+            let grad = (loss_plus - loss_minus) * inv_2eps
+            W_v[i][j] = orig - lr * grad
+        }
+        i = i + 1
+    }
+
+    // W_o gradient
+    let mut W_o = model["W_o"]
+    let mut i = 0
+    while i < D_head {
+        for j in 0..D_model {
+            let orig = W_o[i][j]
+            W_o[i][j] = orig + eps
+            let mut m_plus = model
+            m_plus["W_o"] = W_o
+            let loss_plus = br_loss(m_plus, X, Y)
+            W_o[i][j] = orig - eps
+            m_plus["W_o"] = W_o
+            let loss_minus = br_loss(m_plus, X, Y)
+            let grad = (loss_plus - loss_minus) * inv_2eps
+            W_o[i][j] = orig - lr * grad
+        }
+        i = i + 1
+    }
+
+    // b_o gradient
+    let mut b_o = model["b_o"]
+    let mut j = 0
+    while j < D_model {
+        let orig = b_o[j]
+        b_o[j] = orig + eps
+        let mut m_plus = model
+        m_plus["b_o"] = b_o
+        let loss_plus = br_loss(m_plus, X, Y)
+        b_o[j] = orig - eps
+        m_plus["b_o"] = b_o
+        let loss_minus = br_loss(m_plus, X, Y)
+        let grad = (loss_plus - loss_minus) * inv_2eps
+        b_o[j] = orig - lr * grad
+        j = j + 1
+    }
+
+    // W_out gradient (D_model x vocab — only update first 8 vocab entries for speed)
+    let mut W_out = model["W_out"]
+    let out_limit = 8
+    let mut i = 0
+    while i < D_model {
+        for j in 0..out_limit {
+            let orig = W_out[i][j]
+            W_out[i][j] = orig + eps
+            let mut m_plus = model
+            m_plus["W_out"] = W_out
+            let loss_plus = br_loss(m_plus, X, Y)
+            W_out[i][j] = orig - eps
+            m_plus["W_out"] = W_out
+            let loss_minus = br_loss(m_plus, X, Y)
+            let grad = (loss_plus - loss_minus) * inv_2eps
+            W_out[i][j] = orig - lr * grad
+        }
+        i = i + 1
+    }
+
+    // b_out gradient (only first 8)
+    let mut b_out = model["b_out"]
+    let mut j = 0
+    while j < out_limit {
+        let orig = b_out[j]
+        b_out[j] = orig + eps
+        let mut m_plus = model
+        m_plus["b_out"] = b_out
+        let loss_plus = br_loss(m_plus, X, Y)
+        b_out[j] = orig - eps
+        m_plus["b_out"] = b_out
+        let loss_minus = br_loss(m_plus, X, Y)
+        let grad = (loss_plus - loss_minus) * inv_2eps
+        b_out[j] = orig - lr * grad
+        j = j + 1
+    }
+
+    return #{
+        "D_model": D_model,
+        "D_head": D_head,
+        "block_size": model["block_size"],
+        "mem_size": model["mem_size"],
+        "vocab": vocab,
+        "W_q": W_q,
+        "W_k": W_k,
+        "W_v": W_v,
+        "W_o": W_o,
+        "b_o": b_o,
+        "W_emb": model["W_emb"],
+        "W_out": W_out,
+        "b_out": b_out
+    }
+}
+
+
+// -- end inlined --
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn check(name, cond) {
+    if cond {
+        println("[PASS] " + name)
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name)
+        fail_count = fail_count + 1
+    }
+}
+
+fn fabs_(x) { if x < 0.0 { return 0.0 - x } return x }
+fn approx_(a, b, eps) { return fabs_(a - b) < eps }
+
+println("=== Block Recurrence (#317) ===")
+
+// ── T1 init model shapes ──────────────────────────────────────
+let m1 = br_init(4, 3, 2, 2, 42)
+check("T1 D_model", m1["D_model"] == 4)
+check("T1 D_head", m1["D_head"] == 3)
+check("T1 block_size", m1["block_size"] == 2)
+check("T1 mem_size", m1["mem_size"] == 2)
+check("T1 W_q shape", len(m1["W_q"]) == 4 && len(m1["W_q"][0]) == 3)
+check("T1 W_k shape", len(m1["W_k"]) == 4 && len(m1["W_k"][0]) == 3)
+check("T1 W_v shape", len(m1["W_v"]) == 4 && len(m1["W_v"][0]) == 3)
+check("T1 W_o shape", len(m1["W_o"]) == 3 && len(m1["W_o"][0]) == 4)
+
+// ── T2 init memory is empty ───────────────────────────────────
+let mem0 = br_init_memory(m1)
+check("T2 init memory empty", len(mem0) == 0)
+
+// ── T3 embed produces correct dimension ───────────────────────
+let emb3 = br_embed(m1, 5)
+check("T3 embed dim", len(emb3) == 4)
+
+// ── T4 project computes correct dot product ───────────────────
+let test_x = [1.0, 0.0, 0.0, 0.0]
+let proj4 = br_project(test_x, m1["W_q"], 4, 3)
+check("T4 project dim", len(proj4) == 3)
+// proj should equal first row of W_q
+let mut proj4_ok = true
+let mut j = 0
+
+while j < 3 {
+    if fabs_(proj4[j] - m1["W_q"][0][j]) > 1.0e-9 { proj4_ok = false }
+}
+check("T4 project value", proj4_ok)
+
+// ── T5 dot product ────────────────────────────────────────────
+let d5 = br_dot([1.0, 2.0, 3.0], [4.0, 5.0, 6.0], 3)
+check("T5 dot product", approx_(d5, 32.0, 1.0e-6))
+
+// ── T6 attention with empty memory ────────────────────────────
+let query6 = br_embed(m1, 1)
+let block_kv6 = [br_embed(m1, 2), br_embed(m1, 3)]
+let attn6 = br_attention_with_memory(m1, query6, [], block_kv6)
+check("T6 attn output dim", len(attn6) == 4)
+
+// ── T7 attention with memory extends context ──────────────────
+let mem7 = [br_embed(m1, 10), br_embed(m1, 20)]
+let attn7 = br_attention_with_memory(m1, query6, mem7, block_kv6)
+check("T7 attn with mem dim", len(attn7) == 4)
+// With memory the output should differ from without memory
+let mut attn_differs = false
+let mut j = 0
+
+while j < 4 {
+    if fabs_(attn6[j] - attn7[j]) > 1.0e-9 { attn_differs = true }
+}
+check("T7 memory changes output", attn_differs)
+
+// ── T8 process block returns correct structure ────────────────
+let block8 = [br_embed(m1, 0), br_embed(m1, 1)]
+let res8 = br_process_block(m1, [], block8)
+let outs8 = res8[0]
+let mem8 = res8[1]
+check("T8 outputs len = block len", len(outs8) == 2)
+check("T8 output[0] dim", len(outs8[0]) == 4)
+check("T8 new memory len <= mem_size", len(mem8) <= 2)
+
+// ── T9 memory carries across blocks ──────────────────────────
+// Process two blocks; second block should get memory from first
+let block9a = [br_embed(m1, 5), br_embed(m1, 6)]
+let res9a = br_process_block(m1, [], block9a)
+let mem9a = res9a[1]
+check("T9 first block produces memory", len(mem9a) > 0)
+let block9b = [br_embed(m1, 7), br_embed(m1, 8)]
+let res9b_no_mem = br_process_block(m1, [], block9b)
+let res9b_with_mem = br_process_block(m1, mem9a, block9b)
+let mut mem_effect = false
+let mut j = 0
+
+while j < 4 {
+    if fabs_(res9b_no_mem[0][0][j] - res9b_with_mem[0][0][j]) > 1.0e-9 {
+        mem_effect = true
+    }
+}
+check("T9 memory affects next block", mem_effect)
+
+// ── T10 forward_sequence produces one output per token ────────
+let tokens10 = [0, 1, 2, 3, 4, 5]
+let out10 = br_forward_sequence(m1, tokens10)
+check("T10 forward outputs len", len(out10) == 6)
+check("T10 output[0] dim", len(out10[0]) == 4)
+
+// ── T11 softmax sums to 1 ────────────────────────────────────
+let sm11 = br_softmax([1.0, 2.0, 3.0])
+let mut sum11 = 0.0
+let mut i = 0
+
+while i < 3 { sum11 = sum11 + sm11[i] }
+check("T11 softmax sums to 1", approx_(sum11, 1.0, 1.0e-6))
+check("T11 softmax ordered", sm11[2] > sm11[1] && sm11[1] > sm11[0])
+
+// ── T12 logits have correct vocab dimension ──────────────────
+let lg12 = br_logits(m1, out10[0])
+check("T12 logits dim = vocab", len(lg12) == 256)
+
+// ── T13 loss is non-negative ─────────────────────────────────
+let loss13 = br_loss(m1, [0, 1, 2], [1, 2, 3])
+check("T13 loss >= 0", loss13 >= 0.0)
+
+// ── T14 loss of random model ~ ln(vocab) ────────────────────
+// Random model should produce ~uniform distribution, so loss ~ ln(256) ~ 5.55
+check("T14 initial loss reasonable", loss13 > 2.0 && loss13 < 10.0)
+
+// ── T15 deterministic init ───────────────────────────────────
+let m15a = br_init(4, 3, 2, 2, 99)
+let m15b = br_init(4, 3, 2, 2, 99)
+let out15a = br_forward_sequence(m15a, [0, 1, 2, 3])
+let out15b = br_forward_sequence(m15b, [0, 1, 2, 3])
+let mut det_ok = true
+let mut i = 0
+
+while i < 4 {
+    let mut j = 0
+
+    while j < 4 {
+        if fabs_(out15a[i][j] - out15b[i][j]) > 1.0e-9 { det_ok = false }
+    }
+}
+check("T15 deterministic", det_ok)
+
+// ── T16 training reduces loss ────────────────────────────────
+let m16 = br_init(4, 3, 2, 2, 42)
+let x16 = [0, 1, 2, 3]
+let y16 = [1, 2, 3, 4]
+let loss_before = br_loss(m16, x16, y16)
+let mut m16t = m16
+let mut _step = 0
+
+while _step < 3 {
+    m16t = br_train_step(m16t, x16, y16, 0.1)
+}
+let loss_after = br_loss(m16t, x16, y16)
+check("T16 loss decreases after training", loss_after < loss_before)
+println("  loss before: " + str(loss_before))
+println("  loss after:  " + str(loss_after))
+
+// ── T17 forward handles non-aligned block size ───────────────
+// 5 tokens with block_size 2 -> 3 blocks (2+2+1)
+let out17 = br_forward_sequence(m1, [10, 20, 30, 40, 50])
+check("T17 non-aligned len", len(out17) == 5)
+
+// ── T18 different sequences produce different outputs ────────
+let outA = br_forward_sequence(m1, [0, 0, 0, 0])
+let outB = br_forward_sequence(m1, [1, 1, 1, 1])
+let mut seq_differs = false
+let mut j = 0
+
+while j < 4 {
+    if fabs_(outA[0][j] - outB[0][j]) > 1.0e-9 { seq_differs = true }
+}
+check("T18 different tokens -> different output", seq_differs)
+
+println("")
+println("=== Block Recurrence summary ===")
+println("PASS: " + str(pass_count))
+println("FAIL: " + str(fail_count))
+println("TOTAL: " + str(pass_count + fail_count))

@@ -1,0 +1,172 @@
+// ═══════════════════════════════════════════════════════════════
+//  self/ml/kv_cache.hexa — Transformer KV-cache (flat 1D, immutable)
+//
+//  Layout:
+//    keys / values : flat 1D Tensor, size = n_layers * max_len * n_heads * head_dim
+//    index(layer, pos, h, d) = ((layer*max_len + pos)*n_heads + h)*head_dim + d
+//
+//  Pattern: immutable — append returns a NEW KVCache (new flat arrays copied).
+//  Rationale: complex index assignment (t[i][j][k] = v) 미지원 회피.
+//  flat 1D + per-append full copy 로 파서 안전 + slab 단위만 덮어씀.
+// ═══════════════════════════════════════════════════════════════
+
+struct KVCache {
+    keys: array,
+    values: array,
+    seq_len: int,
+    max_len: int,
+    n_layers: int,
+    n_heads: int,
+    head_dim: int
+}
+
+// ── flat index helper ─────────────────────────────────────────
+fn kv_cache_idx(layer, pos, h, d, max_len, n_heads, head_dim) {
+    return ((layer * max_len + pos) * n_heads + h) * head_dim + d
+}
+
+// ── constructor: allocate zero-filled flat tensors ────────────
+fn kv_cache_new(n_layers, max_len, n_heads, head_dim) {
+    let total = n_layers * max_len * n_heads * head_dim
+    let keys   = tensor_zeros(total)
+    let values = tensor_zeros(total)
+    return KVCache {
+        keys: keys,
+        values: values,
+        seq_len: 0,
+        max_len: max_len,
+        n_layers: n_layers,
+        n_heads: n_heads,
+        head_dim: head_dim
+    }
+}
+
+// ── append: returns NEW KVCache with slab (layer,pos) overwritten ──
+//    k_flat / v_flat length == n_heads * head_dim
+@hot
+fn kv_cache_append(cache: KVCache, layer, pos, k_flat, v_flat) {
+    let max_len  = cache.max_len
+    let n_heads  = cache.n_heads
+    let head_dim = cache.head_dim
+    let slab     = n_heads * head_dim
+    let total    = cache.n_layers * max_len * slab
+    let base     = ((layer * max_len + pos) * n_heads) * head_dim
+
+    // Copy keys/values into fresh arrays; overwrite the slab region.
+    let mut new_k = []
+    let mut new_v = []
+    let mut i = 0
+    while i < total {
+        let offset = i - base
+        if offset >= 0 {
+            if offset < slab {
+                new_k.push(k_flat[offset])
+                new_v.push(v_flat[offset])
+            } else {
+                new_k.push(cache.keys[i])
+                new_v.push(cache.values[i])
+            }
+        } else {
+            new_k.push(cache.keys[i])
+            new_v.push(cache.values[i])
+        }
+        i = i + 1
+    }
+
+    let advance_seq = pos + 1
+    let mut new_seq = cache.seq_len
+    if advance_seq > new_seq { new_seq = advance_seq }
+
+    return KVCache {
+        keys: tensor(new_k),
+        values: tensor(new_v),
+        seq_len: new_seq,
+        max_len: max_len,
+        n_layers: cache.n_layers,
+        n_heads: n_heads,
+        head_dim: head_dim
+    }
+}
+
+// ── reset: fresh zero-filled cache, same shape ────────────────
+fn kv_cache_reset(cache: KVCache) {
+    return kv_cache_new(cache.n_layers, cache.max_len, cache.n_heads, cache.head_dim)
+}
+
+// ── read helper: single element ───────────────────────────────
+fn kv_cache_get_key(cache: KVCache, layer, pos, h, d) {
+    let idx = kv_cache_idx(layer, pos, h, d, cache.max_len, cache.n_heads, cache.head_dim)
+    return cache.keys[idx]
+}
+
+fn kv_cache_get_val(cache: KVCache, layer, pos, h, d) {
+    let idx = kv_cache_idx(layer, pos, h, d, cache.max_len, cache.n_heads, cache.head_dim)
+    return cache.values[idx]
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  @test
+// ═══════════════════════════════════════════════════════════════
+
+@test fn test_kv_cache_append() {
+    let n_layers = 2
+    let max_len  = 4
+    let n_heads  = 2
+    let head_dim = 2
+    let slab     = n_heads * head_dim  // 4
+
+    let mut cache = kv_cache_new(n_layers, max_len, n_heads, head_dim)
+
+    // t=0, layer 0,1
+    let k0 = [1.0, 2.0, 3.0, 4.0]
+    let v0 = [10.0, 20.0, 30.0, 40.0]
+    cache = kv_cache_append(cache, 0, 0, k0, v0)
+    cache = kv_cache_append(cache, 1, 0, k0, v0)
+
+    // t=1, layer 0,1
+    let k1 = [5.0, 6.0, 7.0, 8.0]
+    let v1 = [50.0, 60.0, 70.0, 80.0]
+    cache = kv_cache_append(cache, 0, 1, k1, v1)
+    cache = kv_cache_append(cache, 1, 1, k1, v1)
+
+    if cache.seq_len != 2 { return false }
+
+    // layer 0 pos 0 head 0 dim 0 == 1.0
+    if kv_cache_get_key(cache, 0, 0, 0, 0) != 1.0 { return false }
+    // layer 0 pos 0 head 1 dim 1 == 4.0
+    if kv_cache_get_key(cache, 0, 0, 1, 1) != 4.0 { return false }
+    // layer 1 pos 1 head 1 dim 1 == 8.0
+    if kv_cache_get_key(cache, 1, 1, 1, 1) != 8.0 { return false }
+    // values: layer 1 pos 0 head 0 dim 2? dim is 0..1 — use dim 0 == 10.0
+    if kv_cache_get_val(cache, 1, 0, 0, 0) != 10.0 { return false }
+    // layer 0 pos 1 head 0 dim 1 == 60.0
+    if kv_cache_get_val(cache, 0, 1, 0, 1) != 60.0 { return false }
+
+    // untouched slot (layer 0 pos 2) must still be zero
+    if kv_cache_get_key(cache, 0, 2, 0, 0) != 0.0 { return false }
+    if kv_cache_get_val(cache, 1, 3, 1, 1) != 0.0 { return false }
+
+    return true
+}
+
+@test fn test_kv_cache_reset() {
+    let mut cache = kv_cache_new(1, 4, 1, 2)
+    let k = [1.0, 2.0]
+    let v = [3.0, 4.0]
+    cache = kv_cache_append(cache, 0, 0, k, v)
+    if cache.seq_len != 1 { return false }
+    cache = kv_cache_reset(cache)
+    if cache.seq_len != 0 { return false }
+    if kv_cache_get_key(cache, 0, 0, 0, 0) != 0.0 { return false }
+
+    cache = kv_cache_append(cache, 0, 0, k, v)
+    if cache.seq_len != 1 { return false }
+    if kv_cache_get_key(cache, 0, 0, 0, 1) != 2.0 { return false }
+    return true
+}
+
+// Smoke driver
+let _r1 = test_kv_cache_append()
+let _r2 = test_kv_cache_reset()
+println("kv_cache append: " + to_string(_r1))
+println("kv_cache reset : " + to_string(_r2))

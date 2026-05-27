@@ -1,0 +1,134 @@
+#!hexa strict
+// stdlib/hal/backend/esp32/uart.hexa — ESP32 UART backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    ESP32 dual Xtensa LX6 @ 240 MHz.
+// Chip ref:  ESP32 Technical Reference Manual §13 UART Controller
+//            (3 UARTs: UART0/UART1/UART2; UART0 is the boot console).
+// Surface:   esp32_uart_{configure,write_byte,read_byte,close}(...)
+// Dispatch:  uart.hexa selects this via cfg-flag.
+//
+// MMIO layout (per controller):
+//
+//   UART0:  base = DR_REG_UART_BASE  = 0x3FF40000   (boot console)
+//   UART1:  base = DR_REG_UART1_BASE = 0x3FF50000
+//   UART2:  base = DR_REG_UART2_BASE = 0x3FF6E000
+//
+//   UART_FIFO_REG               0x000   FIFO data port (read/write byte)
+//   UART_INT_RAW_REG            0x004
+//   UART_INT_ST_REG             0x008
+//   UART_INT_ENA_REG            0x00C
+//   UART_INT_CLR_REG            0x010
+//   UART_CLKDIV_REG             0x014   integer + fractional baud divisor:
+//                                         CLKDIV    bits 19:0
+//                                         CLKDIV_FRAG bits 23:20 (4-bit, /16)
+//   UART_AUTOBAUD_REG           0x018   auto-baud detect
+//   UART_STATUS_REG             0x01C   RXFIFO_CNT bits 23:0,
+//                                         TXFIFO_CNT bits 23:16
+//   UART_CONF0_REG              0x020   PARITY bit 0, PARITY_EN bit 1,
+//                                         BIT_NUM bits 3:2 (5..8 bit),
+//                                         STOP_BIT_NUM bits 5:4 (1, 1.5, 2),
+//                                         TXFIFO_RST bit 18,
+//                                         RXFIFO_RST bit 17
+//   UART_CONF1_REG              0x024   RX/TX FIFO threshold
+//   UART_LOWPULSE_REG           0x028
+//   UART_HIGHPULSE_REG          0x02C
+//   UART_RXD_CNT_REG            0x030
+//   UART_DATE_REG               0x078   IP version (read-only)
+//
+// Baud rate (when not in auto-baud):
+//   APB_CLK = 80 MHz default
+//   CLKDIV = floor(APB_CLK / baud)
+//   CLKDIV_FRAG = ((APB_CLK * 16 / baud) - CLKDIV * 16) & 0xF
+//
+//   e.g. 115200 baud:
+//     ratio = 80e6 / 115200 = 694.444
+//     CLKDIV = 694, CLKDIV_FRAG = round(0.444 * 16) = 7
+//     actual = 80e6 / (694 + 7/16) ≈ 115173 (0.02% error)
+//
+// Word length: 5..8 bits via CONF0_REG.BIT_NUM (0..3 maps to 5..8).
+//
+// TODO:
+//   1. cfg-flag dispatch from stdlib/hal/uart.hexa.
+//   2. baud divisor (CLKDIV + CLKDIV_FRAG) calc.
+//   3. polling tx/rx with FIFO threshold.
+//   4. flow control (CTS/RTS via UART_CONF0_REG bits 23..18).
+//   5. UART0 boot-console safety (don't disable if hosting OS REPL).
+
+let MODULE_NAME = "esp32_uart"
+let SIGMA_SLOT  = 4
+let PHI_KIND    = "digital"
+
+let DR_REG_UART_BASE  = 0x3FF40000   // UART0
+let DR_REG_UART1_BASE = 0x3FF50000   // UART1
+let DR_REG_UART2_BASE = 0x3FF6E000   // UART2
+
+// Key register offsets.
+let UART_FIFO_REG    = 0x000
+let UART_CLKDIV_REG  = 0x014
+let UART_STATUS_REG  = 0x01C
+let UART_CONF0_REG   = 0x020
+let UART_CONF1_REG   = 0x024
+
+let APB_CLK_HZ = 80000000
+
+// CONF0_REG.BIT_NUM values: 0=5b, 1=6b, 2=7b, 3=8b.
+let WLEN_5 = 0
+let WLEN_6 = 1
+let WLEN_7 = 2
+let WLEN_8 = 3
+
+// Standard baud rates.
+let BAUD_9600   = 9600
+let BAUD_115200 = 115200
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn esp32_uart_configure(unit: int, baud: int, word_bits: int) -> int {
+    if unit < 0 || unit > 2 { return -1 }
+    if baud < 110 || baud > 5000000 { return -2 }
+    if word_bits < 5 || word_bits > 8 { return -3 }
+    // STUB: real impl would
+    //   1. enable peri clock (DPORT_PERIP_CLK_EN bit per UART)
+    //   2. write UART_CLKDIV_REG: CLKDIV + CLKDIV_FRAG from APB / baud
+    //   3. write UART_CONF0_REG: BIT_NUM = word_bits-5, STOP_BIT_NUM=0 (1 stop),
+    //      PARITY_EN=0 (no parity)
+    //   4. clear FIFOs via UART_CONF0_REG.RXFIFO_RST + TXFIFO_RST pulse
+    //   5. route TX/RX via GPIO matrix (default UART0 = GPIO1/GPIO3)
+    return unit
+}
+
+fn esp32_uart_write_byte(unit: int, byte: int) -> int {
+    if unit < 0 || unit > 2 { return -1 }
+    if byte < 0 || byte > 255 { return -2 }
+    // STUB: spin until TXFIFO_CNT < 128 (full); write UART_FIFO_REG = byte
+    return 0
+}
+
+fn esp32_uart_read_byte(unit: int) -> int {
+    if unit < 0 || unit > 2 { return -1 }
+    // STUB: spin until RXFIFO_CNT > 0; read UART_FIFO_REG & 0xFF
+    return 0
+}
+
+fn esp32_uart_close(unit: int) -> int {
+    if unit < 0 || unit > 2 { return -1 }
+    // STUB: disable peri clock; do NOT close UART0 if it's the boot console.
+    return 0
+}
+
+fn esp32_uart_report(unit: int) -> str {
+    return "[esp32_uart sim] unit=" + str(unit) + " (skeleton stub — TODO MMIO)"
+}
+
+fn esp32_uart_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32_uart sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  UART0=" + str(DR_REG_UART_BASE) + " UART1=" + str(DR_REG_UART1_BASE) +
+            " UART2=" + str(DR_REG_UART2_BASE))
+    println("  default 115200 8N1 (APB=80 MHz; CLKDIV=694, FRAG=7)")
+}

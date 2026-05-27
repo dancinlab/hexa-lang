@@ -1,0 +1,90 @@
+// test/native_build/poc_rt_exit_drive.hexa
+//
+// PoC driver — chunk B/A bridge: hexa-emitted rt_exit .o + clang link + run.
+//
+// Heavy operations (`hexa build`, clang link, run, otool dump) — runs on
+// mac arm64 host. The PoC verifier:
+//   1. Builds the hexa producer (poc_rt_exit_obj_emit.hexa) → emit binary.
+//   2. Runs emit binary → writes /tmp/poc_rt_exit.o (hexa-native, NO clang).
+//   3. Links /tmp/poc_rt_exit.o with the trivial C caller → /tmp/poc_rt_exit_run.
+//   4. Runs the linked binary → expects exit code 42.
+//   5. Dumps `otool -tv` of the .o (proves bytes match rt_exit() decimals).
+//
+// Returns 0 on PASS, nonzero on any mismatch.
+
+fn poc_drive() {
+    let root = env("HEXA_LANG")
+    let mut hxroot = root
+    if len(hxroot) == 0 {
+        hxroot = exec("printf '%s' \"$HOME/core/hexa-lang\"")
+    }
+    let emit_src = hxroot + "/test/native_build/poc_rt_exit_obj_emit.hexa"
+    let caller_src = hxroot + "/test/native_build/poc_rt_exit_caller.c"
+    let emit_bin = "/tmp/poc_rt_exit_emit"
+    let obj = "/tmp/poc_rt_exit.o"
+    let linked = "/tmp/poc_rt_exit_run"
+
+    println("=== PoC chunk B/A bridge — hexa-emit rt_exit .o, link, run ===")
+
+    // [1/5] Build the hexa-native emit producer.
+    println("[1/5] hexa build " + emit_src + " -o " + emit_bin)
+    let _ = exec("rm -f '" + emit_bin + "' '" + obj + "' '" + linked + "' 2>/dev/null")
+    let build_out = exec("HEXA_MAC_BUILD_OK=1 hexa build '" + emit_src + "' -o '" + emit_bin + "' 2>&1 | tail -20")
+    println(build_out)
+    let chk1 = exec("test -x '" + emit_bin + "' && printf yes || printf no")
+    if chk1 != "yes" {
+        println("FAIL: emit binary not produced")
+        exit(1)
+    }
+    let sz1 = exec("wc -c < '" + emit_bin + "' | tr -d ' '")
+    println("  built " + emit_bin + " (" + sz1 + " bytes)")
+
+    // [2/5] Run the emit producer.
+    println("[2/5] " + emit_bin)
+    let run_out = exec("'" + emit_bin + "'")
+    println(run_out)
+    let chk2 = exec("test -f '" + obj + "' && printf yes || printf no")
+    if chk2 != "yes" {
+        println("FAIL: " + obj + " not produced")
+        exit(1)
+    }
+    let sz2 = exec("wc -c < '" + obj + "' | tr -d ' '")
+    println("  produced " + obj + " (" + sz2 + " bytes)")
+
+    // [3a/5] file(1) identifies the artifact as a Mach-O object.
+    println("[3a/5] file " + obj)
+    let fout = exec("file '" + obj + "'")
+    println(fout)
+
+    // [3b/5] otool -tv — disassembly proves bytes match rt_exit() decimals.
+    println("[3b/5] otool -tv " + obj + " (disassembly of __text)")
+    let otool_out = exec("otool -tv '" + obj + "' 2>&1 | head -30")
+    println(otool_out)
+
+    // [4/5] Link via clang (control oracle on link side only; f1/f2 — clang
+    // is NOT in the .o emit path).
+    println("[4/5] clang " + caller_src + " " + obj + " -o " + linked)
+    let link_out = exec("clang -arch arm64 -o '" + linked + "' '" + caller_src + "' '" + obj + "' 2>&1")
+    println(link_out)
+    let chk3 = exec("test -x '" + linked + "' && printf yes || printf no")
+    if chk3 != "yes" {
+        println("FAIL: link did not produce " + linked)
+        exit(1)
+    }
+    let _ = exec("codesign -s - '" + linked + "' 2>/dev/null; true")
+    let sz3 = exec("wc -c < '" + linked + "' | tr -d ' '")
+    println("  linked " + linked + " (" + sz3 + " bytes)")
+
+    // [5/5] Run and check exit code (capture via 'sh -c ...; echo $?').
+    println("[5/5] " + linked + " ; rc=$?")
+    let rc_str = exec("'" + linked + "'; printf '%s' \"$?\"")
+    println("  rc=" + rc_str)
+    if rc_str != "42" {
+        println("FAIL: expected rc=42 (passed to hexa_main), got " + rc_str)
+        exit(1)
+    }
+
+    println("=== PoC PASS — chunk B/A bridge end-to-end: rt_exit(42) ===")
+}
+
+poc_drive()

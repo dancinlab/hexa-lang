@@ -1,0 +1,195 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "hexa-bio/_python_bridge/spec/protac_ppi_cross_v1.schema.json",
+  "title": "protac_ppi_cross_v1 — CROSS-AXIS W4 output rows (PROTAC x PPI)",
+  "description": "Output schema for _python_bridge/module/protac_ppi_cross.py. CROSS-AXIS integration W4: a PROTAC's ternary complex IS a protein-protein interaction (target <-> E3 ligase) that the bifunctional linker NUCLEATES. The Bogan-Thorn binding-hotspot ledger (Bogan & Thorn, J. Mol. Biol. 280:1, 1998) that quantifies a disruptable PPI is EXACTLY what quantifies whether the PROTAC-induced ternary neo-interface is thermodynamically viable for productive ubiquitin transfer. For each (PPI interface, PROTAC scenario) pair, this cross takes a hotspot-cluster energy from ppi_sim.py (imported, not re-implemented - f3), converts it to a K_d(E3) floor for the equivalent neo-interface, applies the bivalent-linker effective-concentration pre-payment (Page & Jencks 1971), and sweeps protac_sim.ternary_fraction (imported, not re-implemented - f3) across an alpha ladder to find the smallest cooperativity alpha at which the ternary-fraction peak clears the productive-ternary threshold. KEY DISTINCTION FROM G3 (ppi_molecular_glue_cross): a PROTAC is BIVALENT (linker tethers two warheads, pre-paying part of the neo-interface cost); a molecular glue is MONOVALENT (no linker; all neo-interface free energy comes from cooperativity alpha). Every W4 row carries linker_cost_pre_paid=true and an explicit dG_linker contribution - we do NOT collapse PROTAC and glue into one model. This is a MODEL-LEVEL UNIFICATION of two energetic accountings - the hotspot-derived K_d(E3) floor multiplied through the cooperative-ternary fraction is a MODEL UPPER BOUND (J2-class honesty pattern), NOT a binding-affinity / DC50 / Dmax / immunogenic / therapeutic-efficacy claim (AGENTS.tape g8/f2). PPI is a SUB-AXIS :> QUANTUM core; PROTAC is a SUB-AXIS :> BIFUNCTIONAL expansion-main - neither is a hexa-bio core-5 axis. Cross is NOT a new axis (AXIS/HIERARCHY.tape unchanged).",
+  "type": "object",
+  "required": [
+    "schema",
+    "interface",
+    "interface_class",
+    "protac",
+    "e3_ligase",
+    "ppi_hotspot_cluster_kcal_per_mol",
+    "ppi_hotspot_energy_fraction",
+    "ppi_floor_respected",
+    "k_d_e3_hotspot_floor_nM",
+    "linker_cost_pre_paid",
+    "dg_linker_prepay_kcal_per_mol",
+    "k_d_e3_protac_effective_nM",
+    "alpha_required_for_productive_ternary",
+    "ternary_fraction_peak_at_alpha_required",
+    "productive_ternary_achievable",
+    "valency_kind",
+    "comparison_is_ranking",
+    "creates_a_new_axis",
+    "illustrative_only"
+  ],
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "protac_ppi_cross_v1"
+    },
+    "interface": {
+      "type": "string",
+      "description": "Interface identifier from the ppi_sim.py INTERFACE_PANEL (PPI hotspot ledger side)."
+    },
+    "interface_class": {
+      "type": "string",
+      "description": "Protein-protein interface structural class (bh3_helix_groove, alpha_helix_peptide_cleft, flat_diffuse_interface, etc.)."
+    },
+    "protac": {
+      "type": "string",
+      "description": "PROTAC scenario identifier from the protac_sim.py PROTAC_PANEL (PROTAC ternary side)."
+    },
+    "e3_ligase": {
+      "type": "string",
+      "description": "E3 ubiquitin ligase recruited by the PROTAC (CRBN, VHL, etc.) - from protac_sim panel."
+    },
+    "ppi_drug_precedent": {
+      "type": "string",
+      "description": "PPI-disruptor drug precedent for the modality (g3/f1 - venetoclax, navitoclax, never lattice-derived)."
+    },
+    "protac_drug_precedent": {
+      "type": "string",
+      "description": "PROTAC drug precedent for the modality (g3/f1 - ARV-471, ARV-110, VHL-BRD4 class, never lattice-derived)."
+    },
+    "n_hotspot_residues": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of Bogan-Thorn hotspot residues (ddG >= 2 kcal/mol) on the PPI interface."
+    },
+    "ppi_hotspot_cluster_kcal_per_mol": {
+      "type": "number",
+      "description": "Hotspot-cluster binding free energy from ppi_sim (kcal/mol; favourable so <= 0 for hotspot-driven, == 0 for flat). HOTSPOT FLOOR: PPI side of the cross."
+    },
+    "ppi_hotspot_energy_fraction": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Fraction of total interface ddG carried by hotspot residues (Bogan-Thorn)."
+    },
+    "ppi_hotspot_driven": {
+      "type": "boolean",
+      "description": "True iff hotspot_fraction >= 0.5 and >= 2 hotspot residues (ppi_sim definition)."
+    },
+    "ppi_floor_respected": {
+      "type": "boolean",
+      "description": "True iff the recovered hotspot-cluster magnitude does not exceed the full alanine-scan ledger (Bogan-Thorn floor cross-check)."
+    },
+    "temperature_K": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "Temperature used for the Gibbs free-energy -> K_d conversion (K)."
+    },
+    "rt_kcal_per_mol": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "RT in kcal/mol at temperature_K (~0.616 @ 310 K)."
+    },
+    "k_d_e3_hotspot_floor_nM": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "K_d(E3) floor for the equivalent target-E3 neo-interface, derived from the PPI hotspot-cluster energy via Gibbs K_d = exp(dG_hotspot_cluster / RT) and rescaled to nM. The K_d(E3) a PROTAC would see if its neo-interface mirrored the PPI's hotspot energetics - the floor a PROTAC neo-interface cannot beat absent the linker pre-payment."
+    },
+    "linker_cost_pre_paid": {
+      "type": "boolean",
+      "const": true,
+      "description": "Always true for W4. Marks the PROTAC's BIVALENT distinction from the MONOVALENT molecular glue (G3 ppi_molecular_glue_cross): the linker tethers the two warheads and pre-pays part of the target-E3 neo-interface cost via the Page-Jencks intramolecularity bonus. A monovalent glue has no linker - this flag would be structurally absent (not just false-by-default). Pairing this constant with creates_a_new_axis=false and the BIVALENT distinction note preserves the PROTAC vs glue distinction at the schema layer."
+    },
+    "linker_effective_conc_M": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "Bivalent-linker effective concentration C_eff (M) - class-typical illustrative value for PROTAC-class tethers (10 mM in the 1-100 mM literature range; Maniaci & Ciulli 2018). Bounded above by the water density limit ~55 M (Page & Jencks 1971)."
+    },
+    "intracellular_reference_conc_M": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "Intracellular target reference concentration C_ref (M) against which the intramolecular linker boost is benchmarked (1 uM = class-typical intracellular protein concentration)."
+    },
+    "dg_linker_prepay_kcal_per_mol": {
+      "type": "number",
+      "description": "Bivalent-linker pre-payment free energy dG_linker = -RT * ln(C_eff / C_ref) in kcal/mol. Negative = favourable. The Page-Jencks intramolecularity bonus the bivalent PROTAC linker contributes to the neo-interface free-energy ledger. STRUCTURALLY ABSENT for a monovalent glue (G3 cross)."
+    },
+    "linker_within_water_density_limit": {
+      "type": "boolean",
+      "description": "True iff |dG_linker| <= RT * ln(55 / C_ref) - the bivalent-tether effective concentration cannot exceed the water density limit (~55 M; Page & Jencks 1971)."
+    },
+    "k_d_e3_protac_effective_nM": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "Effective K_d(E3) the PROTAC ternary actually sees, AFTER the bivalent linker pre-payment: K_d(E3)_PROTAC_eff = K_d(E3)_floor * exp(dG_linker / RT). Strictly less than k_d_e3_hotspot_floor_nM (linker tightens K_d below the bare PPI floor)."
+    },
+    "kd_target_nM": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "PROTAC's POI-warhead binary K_d (nM) - reused verbatim from protac_sim panel entry (f3)."
+    },
+    "productive_ternary_peak_threshold": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 1,
+      "description": "Minimum ternary-fraction peak (across the deterministic [PROTAC] grid) at which the ubiquitin-transfer machinery achieves productive engagement. Class-typical illustrative threshold - NOT a fit. This is the COOPERATIVITY FLOOR (PROTAC ternary side of the cross)."
+    },
+    "alpha_ladder_max": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "Upper bound of the deterministic alpha cooperativity ladder."
+    },
+    "alpha_required_for_productive_ternary": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "REQUIRED COOPERATIVITY FLOOR. Smallest alpha in the deterministic ladder at which protac_sim.ternary_fraction's peak across protac_sim.PROTAC_CONC_GRID_NM clears productive_ternary_peak_threshold for the derived K_d(E3)_PROTAC_eff and the PROTAC's own K_d(target). The hotspot-derived K_d(E3) floor sets a LOWER BOUND on alpha_required (PPI hotspot real-limit). If no alpha in the ladder clears the threshold, this is set to alpha_ladder_max and productive_ternary_achievable is set to false."
+    },
+    "ternary_fraction_peak_at_alpha_required": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Peak ternary fraction across the [PROTAC] grid at alpha_required (from protac_sim.ternary_fraction)."
+    },
+    "protac_at_peak_nM": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "[PROTAC] (nM) at which the ternary-fraction peak occurs (hook-effect maximum)."
+    },
+    "productive_ternary_achievable": {
+      "type": "boolean",
+      "description": "True iff some alpha in the ladder clears productive_ternary_peak_threshold; false iff no alpha within the ladder ever clears the threshold (the PPI hotspot floor + linker pre-payment is below feasibility; PROTAC would need very long linker or VHL/CRBN-specific recruitment cheats)."
+    },
+    "transfer_efficiency": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "PROTAC ubiquitin-transfer geometric competence surrogate from protac_sim panel (POI-lysine -> E2~Ub presentation), in [0,1] - reused verbatim (f3)."
+    },
+    "valency_kind": {
+      "type": "string",
+      "const": "bivalent (linker tethers two warheads)",
+      "description": "Always 'bivalent ...' for W4. Marks the PROTAC's BIVALENT distinction from the MONOVALENT glue (G3). Schema-level safeguard that W4 is never collapsed with G3."
+    },
+    "distinct_from_monovalent_glue": {
+      "type": "string",
+      "description": "Prose statement of the BIVALENT-vs-MONOVALENT distinction from G3 ppi_molecular_glue_cross: PROTAC's linker pre-pays part of the neo-interface cost (Page-Jencks intramolecularity bonus); a glue has no linker and pays all neo-interface free energy via cooperativity alpha."
+    },
+    "unification_note": {
+      "type": "string",
+      "description": "Statement of the W4 model-level unification: PROTAC's ternary complex IS a PPI (target <-> E3) that the bivalent linker nucleates; same Bogan-Thorn hotspot ledger plus Guldberg-Waage mass action plus Page-Jencks bivalent linker pre-payment."
+    },
+    "comparison_is_ranking": {
+      "type": "boolean",
+      "const": false,
+      "description": "MUST be false. This cross is a model-level mapping between PPI hotspot floors and PROTAC cooperativity floors - never a ranking of PROTAC vs glue modalities, never a ranking of drugs, never an efficacy comparison."
+    },
+    "creates_a_new_axis": {
+      "type": "boolean",
+      "const": false,
+      "description": "MUST be false. Cross != new axis. PPI :> QUANTUM core (sub-axis); PROTAC :> BIFUNCTIONAL expansion-main (sub-axis). The hexa-bio core-5 + expansion-layer are UNCHANGED; AXIS/HIERARCHY.tape is unchanged."
+    },
+    "illustrative_only": {
+      "type": "boolean",
+      "const": true,
+      "description": "MUST be true. alpha_required and ternary occupancies are illustrative model outputs derived from literature-informed surrogate energetics, NOT predictions of real cooperativity, affinity, DC50/Dmax, immunogenicity or therapeutic accessibility. The hotspot-derived K_d(E3) floor multiplied through the cooperative-ternary fraction is a MODEL UPPER BOUND (J2-class honesty pattern), not a quantitative prediction."
+    }
+  },
+  "additionalProperties": true
+}

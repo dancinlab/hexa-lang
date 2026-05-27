@@ -1,0 +1,121 @@
+F-FUSION-ATTN-MULTIWARP  (round 10 of GPU sec10 GEMM-fusion / axis-A attention)
+================================================================================
+Date     : 2026-05-26
+Host     : ubu-2 RTX 5070 sm_120 driver 580 (48 SMs, 0% util / 5 MiB at fire start)
+Toolchain: nvcc/ptxas 12.0 (sm_120 NOT directly supported by 12.0; built
+           compute_90 PTX, NVIDIA driver JIT-compiled to sm_120 at load)
+Falsifier: A fused FlashAttention-2 kernel that breaks R9's latency-bound floor
+           via (a) larger Q-tile BM=32/64 processed by 2-4 warps per CTA (so
+           multiple wmma ops in flight hide the per-tile row-reduction latency),
+           (b) cp.async K/V double-buffering (prefetch next K/V tile while
+           computing current -- overlap HBM load latency with mma), (c) the R9
+           surfaced reg-S + smem-scratch-reduce softmax (NOT warp-shuffle -- R9
+           ruled that out), AND beats the cuBLAS-batched-GEMM+softmax+batched-
+           GEMM stack (fused_ms < cublas_stack_ms) on at least one (N,d) shape,
+           d=64. FALSIFIED if the wall is not strictly ABOVE cuBLAS-stack on any
+           shape.
+
+VERDICT  : 🟠 INSUFFICIENT (numeric PASS, new campaign best, does NOT cross 1.0x)
+           + the pre-registered WIN clause is 🔴 FALSIFIED on every shape.
+
+           The multi-warp BM=64 + cp.async double-buffer kernel is ptxas-clean,
+           numeric-PASS at all 4 shapes, and is the FASTEST fused attention
+           kernel of the entire campaign (best ratio 1.149x @ N=4096), but it
+           still does NOT beat cuBLAS-stack on any shape (1.149x-1.613x slower).
+           The pre-registered win condition fused_ms < cublas_stack_ms is NOT
+           met -> the WIN is FALSIFIED; the round is a quantified gap-closure.
+
+--------------------------------------------------------------------------------
+GEOMETRY
+--------------------------------------------------------------------------------
+  BM=64, d=64, 4 warps/CTA (block=128), grid=N/64. Each warp owns 16 INDEPENDENT
+  query rows (warp w -> rows [w*16 .. w*16+15]); no cross-warp softmax. The 4
+  warps SHARE one K/V tile per CTA (loaded once into smem -> no HBM traffic
+  multiplication). K/V tile (16x64 half) is DOUBLE-BUFFERED via cp.async.cg.
+
+  Inherited (NOT regressed):
+   - R8 m16n16k16 f32 accumulator row map {0,1,4,5}->lane/4 ; {2,3,6,7}->lane/4+8
+   - R9 acc->matrix_a repack = LOCAL reg move pa.x[i]=pa.x[i+8]=acc.x[i] (no shfl)
+   - R9 reg-S + reg-P + smem-SCRATCH row-reduce (NOT warp-shuffle)
+
+--------------------------------------------------------------------------------
+PTXAS (clean, 0 spill)
+--------------------------------------------------------------------------------
+  sm_80 : 91 registers, 14336 B smem, rc=0
+  sm_90a: 93 registers, 14336 B smem, rc=0
+  sm_90 : 93 registers, 14336 B smem, rc=0
+  sm_120: not supported by nvcc 12.0 -> compute_90 PTX + driver JIT (ran correct)
+  smem 14336 B << 49152 B per-block cap -> PASS (double-buffer K/V = 8192 B +
+  per-warp red_max/red_sum/o_dbg scratch).
+
+--------------------------------------------------------------------------------
+OCCUPANCY (reg-bound)
+--------------------------------------------------------------------------------
+  RTX 5070: 48 SMs, maxThreadsPerSM=1536, regsPerSM=65536, smemPerSM=102400,
+  maxBlocksPerSM=24. Model block=128, 93 regs/thread, 14336 B smem:
+    by-threads 12 | by-regs 5 | by-smem 7 | by-blocks 24  =>  5 CTAs/SM
+  5 CTAs/SM x 4 warps = 20 warps/SM (comparable to R9's 25 warps/SM single-warp;
+  occupancy is NOT the binding constraint -- consistent with R9's diagnosis).
+  grid=N/64 small: N=4096 -> 64 CTAs ~= 1.33 CTAs/SM (under-fills 48 SMs at
+  small N -- a contributing factor at N<=2048).
+
+--------------------------------------------------------------------------------
+NUMERIC CORRECTNESS (FIRST GATE: rel_rowscale <= 1e-2 + naninf==0)
+--------------------------------------------------------------------------------
+  N=512   rel_rowscale=5.414e-4  max_abs=4.426e-5  rms_rel=2.58e-4   naninf=0  PASS
+  N=1024  rel_rowscale=5.674e-4  max_abs=6.104e-5  rms_rel=2.653e-4  naninf=0  PASS
+  N=2048  rel_rowscale=6.105e-4  max_abs=3.411e-5  rms_rel=2.711e-4  naninf=0  PASS
+  N=4096  rel_rowscale=7.142e-4  max_abs=3.116e-5  rms_rel=2.721e-4  naninf=0  PASS
+  Bit-equivalent in tolerance to R8/R9 (same reg path) -> numeric gate CLEARED.
+
+--------------------------------------------------------------------------------
+TIMED WALL (cuEvent 20 warmup + 200 timed median; uncontended; ~0.4% repro)
+--------------------------------------------------------------------------------
+  N       cuBLAS-stack  R9 1-warp   R10 mw-noasync  R10 mw+cpasync   ratio(mw+cp)
+  512     0.015872      0.038208    0.034176        0.025600         1.613x
+  1024    0.030816      0.075040    0.058752        0.040352         1.309x
+  2048    0.061632      0.150528    0.109952        0.073088         1.186x
+  4096    0.189216      0.314496    0.303296        0.217344         1.149x   <-best
+
+  BEST RATIO = 1.149x @ N=4096 (= 14.9% BELOW cuBLAS-stack; campaign best).
+  GAP-CLOSURE: R9 best (same session) 1.662x @ N=4096 -> R10 1.149x. R10
+  mw+cpasync is 1.447x FASTER than R9 single-warp at N=4096 (0.2173 vs 0.3145).
+
+--------------------------------------------------------------------------------
+LEVER ISOLATION (controlled A/B: mw-noasync drops only cp.async)
+--------------------------------------------------------------------------------
+  cp.async lever : mw+cpasync is 1.34x/1.46x/1.50x/1.40x FASTER than mw-noasync
+                   at N=512/1024/2048/4096  -> the LARGER mover, every shape.
+  multiwarp lever: mw-noasync is 1.12x/1.28x/1.37x/1.04x FASTER than R9 1-warp
+                   -> real but smaller, and fades to 1.04x at N=4096.
+  => BOTH levers contribute; cp.async double-buffer is dominant. The multiwarp
+     lever alone would not have moved N=4096 (1.04x); cp.async overlapping the
+     HBM load with the mma pipeline is what closed most of the gap.
+
+--------------------------------------------------------------------------------
+RESIDUAL BOTTLENECK (why it still does not cross 1.0x)
+--------------------------------------------------------------------------------
+  The kernel is still latency-bound, but the exposed latency has moved from R9's
+  per-tile row-reduction to (1) the intra-warp QK^T-mma -> row-reduce -> P.V-mma
+  dependency chain that the 4 warps cannot fully hide (each warp still serializes
+  its own three phases), and (2) the per-K-tile __syncthreads barrier the shared
+  smem K/V double-buffer requires across all 4 warps. cuBLAS's two big tensor-core
+  GEMMs reach far higher TC pipeline utilization per launch. At d=64 the wmma
+  tile is only 4 d-tiles deep -> arithmetic intensity too low to saturate the
+  tensor cores; and grid=N/64 under-fills the 48 SMs at N<=2048.
+
+--------------------------------------------------------------------------------
+CONCLUSION
+--------------------------------------------------------------------------------
+  🟠 The @goal-v3 fusable-axis attention WIN is NOT achieved at d=64: the fused
+  multi-warp + cp.async kernel is the best fused attention of the campaign
+  (1.149x cuBLAS, gap-closed from R9's 1.662x by 77% of the way) but does not
+  cross 1.0x on any shape. cp.async double-buffer is the dominant lever; the
+  multi-warp lever helps but fades at large N. The residual is the intra-warp
+  3-phase dependency chain + low d=64 arithmetic intensity -- NOT bandwidth,
+  NOT occupancy. GPU.md sec10 attention axis-A box stays UNCHANGED. No paper
+  (orange). Next wedge candidates: 2-stage software pipeline that overlaps the
+  P.V mma of tile j with the QK^T mma of tile j+1 (break the intra-warp chain),
+  or a larger head dim d>=128 where arithmetic intensity may favor the fused
+  path (the cuBLAS S=NxN HBM round-trip cost grows but the fused TC utilization
+  also rises).

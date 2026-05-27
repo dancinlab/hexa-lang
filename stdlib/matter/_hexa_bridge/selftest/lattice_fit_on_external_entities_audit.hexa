@@ -1,0 +1,185 @@
+#!hexa strict
+// hexa-matter/_hexa_bridge/selftest/lattice_fit_on_external_entities_audit.hexa
+//
+// raw#10 C3 enforcement. hexa-native port of
+// `selftest/lattice_fit_on_external_entities_audit.py` (T2).
+//
+// The Python per-line rule is a triple test:
+//   (1) line has a (plain) lattice token   — Python `token in line`
+//   (2) line has a word-bounded vendor      — Python `\bVENDOR\b`
+//   (3) line is NOT a negation line         — case-insensitive marker substr
+//
+// All three are pushed into one shell pipeline, each a *lossless*
+// equivalent of the Python operation (interpreting 1149 candidate lines
+// × 61 vendors char-by-char in hexa is too slow):
+//   grep -rnF  <tokens>        ==  `token in line`     (fixed string)
+//   grep -E   '\b(vendors)\b'  ==  `re \bVENDOR\b`      (POSIX \w == ASCII)
+//   grep -ivF <neg-markers>    ==  `marker in line.lower()` (drop = negation)
+// hexa then only classifies the small surviving set post vs legacy.
+// stdlib-only; one exec.
+
+let ROOT_ENV = env("HEXA_MATTER_ROOT")
+
+fn shq(s: str) -> str { return "'" + s.replace("'", "'\\''") + "'" }
+
+fn root() -> str {
+    if ROOT_ENV.len() > 0 { return ROOT_ENV }
+    return exec("pwd").trim()
+}
+
+fn idx_of(s: str, ch: str) -> int {
+    let mut i = 0
+    while i < s.len() {
+        if s.substr(i, 1) == ch { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+let VENDOR_NAMES = ["Wacker", "Hemlock", "GCL", "Wolfspeed", "TSMC", "Samsung",
+    "Intel", "Merck", "Heraeus", "Ferrotec", "Topsil", "Siltronic", "ASML",
+    "DuPont", "Teijin", "Toray", "Hyosung", "DSM", "Dyneema", "Honeywell",
+    "Hitachi Metals", "TDK", "Arnold", "Vacuumschmelze", "Inconel",
+    "Special Metals", "Climeworks", "BASF", "Saint-Gobain", "Schott",
+    "Corning", "AGC", "NSG", "Ductal", "Cor-Tuf", "Heidelberg", "Lafarge",
+    "Holcim", "Stora Enso", "Mondi", "Sappi", "GIA", "ITER", "Kevlar",
+    "Vectran", "Nomex", "Heracron", "NdFeB", "SmCo", "Metglas", "Finemet",
+    "ASTM", "NIST", "CRC Handbook", "ASM Handbook", "SEMI", "ISO", "JIS",
+    "DIN", "AISI", "OECD"]
+
+let LATTICE_TOKENS = ["σ·τ", "sigma*tau", "sigma·tau", "σ·φ", "sigma*phi",
+    "sigma·phi", "n=6 lattice", "HEXA-n=6", "n·τ", "n*tau", "matches n=6",
+    "fits n=6", "= σ·", "= sigma*", "fits σ", "satisfies σ",
+    "satisfies sigma"]
+
+let NEG = ["✗", "do not write", "the temptation", "they have not heard",
+    "coincidence", "no n=6 lattice anchoring", "no lattice anchoring",
+    "not n=6 lattice outputs", "no n=6 lattice fit", "no lattice fit",
+    "no n=6 fit", "not a lattice", "not a lattice fit", "must not apply",
+    "raw#10 c3", "lattice_fit_on_external_entities",
+    "applies n=6 lattice formulas", "must not", "forbidden", "anti-pattern",
+    "lattice-fit on external entities"]
+
+let POST = ["silicon/silicon.md", "SILICON.md", "compound-semi/compound-semi.md",
+    "COMPOUND-SEMI.md", "perovskite/perovskite.md", "PEROVSKITE.md",
+    "2d-materials/2d-materials.md", "2D-MATERIALS.md", "mof/mof.md", "MOF.md",
+    "carbon/carbon.md", "GRAPHENE-CARBON.md", "elastomer/elastomer.md",
+    "ELASTOMER.md", "adhesive/adhesive.md", "ADHESIVE.md",
+    "liquid-crystal/liquid-crystal.md", "LIQUID-CRYSTAL.md",
+    "biodegradable-plastics/biodegradable-plastics.md",
+    "BIODEGRADABLE-PLASTICS.md", "wood-cellulose/wood-cellulose.md",
+    "WOOD-CELLULOSE.md", "superalloy/superalloy.md", "SUPERALLOY.md",
+    "magnetic-materials/magnetic-materials.md", "MAGNETIC-MATERIALS.md",
+    "glass-ceramic/glass-ceramic.md", "geopolymer/geopolymer.md",
+    "aerogel-foam/aerogel-foam.md", "ionic-liquid/ionic-liquid.md",
+    "refractory/refractory.md", "photoresist/photoresist.md",
+    "electrode-material/electrode-material.md", "AXIS.md",
+    "AXIS_CLOSURE_PLAN.md", "CLOSURE_RESIDUAL_BACKLOG.md",
+    "DECOMPOSITION_PLAN.md", "LESSONS.md", "RELEASE_NOTES_v1.0.0.md",
+    "RELEASE_NOTES_v1.1.0.md", "V1_2_0_HANDOFF.md", "USER_ACTION_REQUIRED.md",
+    "IMPORTED_FROM_CANON.md", "CERAMIC-ENGINEERING.md", "METALLURGY-DEEP.md",
+    "POLYMER-CHEMISTRY.md", "LATTICE_POLICY.md", "LIMIT_BREAKTHROUGH.md",
+    "INIT.md", "AGENTS.md", "README.md"]
+
+fn in_post(rel: str) -> bool {
+    let mut i = 0
+    while i < POST.len() {
+        if POST[i] == rel { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn main() {
+    println("hexa-matter/selftest/lattice_fit_on_external_entities_audit (hexa-native, T2)")
+    let r = root()
+    println("  root: " + r)
+    println("  post-policy file set: " + str(POST.len()) + " files (must be CLEAN)")
+    println("")
+
+    // (1) candidate lines bearing a lattice token (fixed-string == Python `in`)
+    let mut g = "cd " + shq(r) + " && grep -rnF --include='*.md' --exclude-dir=.git --exclude-dir=selftest --exclude-dir=__pycache__"
+    let mut i = 0
+    while i < LATTICE_TOKENS.len() {
+        g = g + " -e " + shq(LATTICE_TOKENS[i])
+        i = i + 1
+    }
+    g = g + " ."
+    // (2) keep only lines with a word-bounded vendor (ERE \b == Python \b, ASCII)
+    let mut vere = "\\b("
+    let mut v = 0
+    while v < VENDOR_NAMES.len() {
+        if v > 0 { vere = vere + "|" }
+        vere = vere + VENDOR_NAMES[v]
+        v = v + 1
+    }
+    vere = vere + ")\\b"
+    g = g + " | grep -E -e " + shq(vere)
+    // (3) drop negation lines (case-insensitive fixed-string == Python lower-substr)
+    g = g + " | grep -ivF"
+    let mut n = 0
+    while n < NEG.len() {
+        g = g + " -e " + shq(NEG[n])
+        n = n + 1
+    }
+    g = g + " 2>/dev/null"
+
+    let out = exec(g).trim()
+
+    let mut post_v = 0
+    let mut legacy_v = 0
+    let mut post_shown = 0
+    let mut legacy_files = 0
+    let mut legacy_seen: [str] = []
+
+    if out.len() > 0 {
+        let rows = out.split("\n")
+        let mut ci = 0
+        while ci < rows.len() {
+            let row = rows[ci]
+            if row.len() == 0 { ci = ci + 1; continue }
+            let c1 = idx_of(row, ":")
+            if c1 < 0 { ci = ci + 1; continue }
+            let mut rel = row.substr(0, c1)
+            let rest1 = row.substr(c1 + 1, row.len() - c1 - 1)
+            let c2 = idx_of(rest1, ":")
+            if c2 < 0 { ci = ci + 1; continue }
+            let lineno = rest1.substr(0, c2)
+            let content = rest1.substr(c2 + 1, rest1.len() - c2 - 1)
+            if rel.len() >= 2 && rel.substr(0, 2) == "./" { rel = rel.substr(2, rel.len() - 2) }
+
+            if in_post(rel) {
+                post_v = post_v + 1
+                if post_shown < 20 {
+                    let mut sh = content.trim()
+                    if sh.len() > 140 { sh = sh.substr(0, 140) }
+                    println("    [FAIL] " + rel + ":" + lineno + "  " + sh)
+                    post_shown = post_shown + 1
+                }
+            } else {
+                legacy_v = legacy_v + 1
+                let mut already = false
+                let mut s = 0
+                while s < legacy_seen.len() {
+                    if legacy_seen[s] == rel { already = true }
+                    s = s + 1
+                }
+                if already == false {
+                    legacy_seen.push(rel)
+                    legacy_files = legacy_files + 1
+                }
+            }
+            ci = ci + 1
+        }
+    }
+
+    println("  post-policy violations: " + str(post_v))
+    println("")
+    println("  legacy canon-imported violations (REPORT only): " + str(legacy_v) + " line(s) in " + str(legacy_files) + " file(s)")
+    println("")
+    if post_v > 0 {
+        println("__HEXA_MATTER_LATTICE_FIT_AUDIT__ FAIL  (post-policy violations: " + str(post_v) + "; legacy: " + str(legacy_v) + ")")
+        exit(1)
+    }
+    println("__HEXA_MATTER_LATTICE_FIT_AUDIT__ PASS  (post-policy clean; legacy known: " + str(legacy_v) + " line(s) in " + str(legacy_files) + " canon-imported file(s))")
+}

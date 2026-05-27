@@ -1,0 +1,6 @@
+=== E33 : hexa verify --expr sigma 7 8 ===
+verify --expr sigma(7)=8
+  calc   = 8  == expected 8
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+  absorb = ⚠ atlas register did NOT confirm fold; invocation:
+           hexa atlas register --from-verify sigma 7 8

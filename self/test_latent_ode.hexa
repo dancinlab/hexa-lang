@@ -1,0 +1,485 @@
+// ═══════════════════════════════════════════════════════════════
+//  test_latent_ode.hexa — Latent ODE / Neural CDE (#260) tests
+//
+//  Verifies:
+//    1. Linear field output length
+//    2. Euler constant-decay exact limit
+//    3. Euler vs RK4 accuracy on linear ODE
+//    4. Encoder output shape
+//    5. Decoder output shape
+//    6. End-to-end forward shape
+//    7. Linear interp at endpoints
+//    8. Linear interp at midpoint
+//    9. Linear interp clamping outside range
+//   10. Neural CDE zero driving → z stays
+//   11. Neural CDE monotone driving → z changes
+//   12. Multi-step ODE with zero initial → stays zero (b=0)
+//
+//  Run: ./hexa self/test_latent_ode.hexa
+// ═══════════════════════════════════════════════════════════════
+
+// -- inlined from self/ml/latent_ode.hexa --
+// codegen import not wired for test files
+
+// ═══════════════════════════════════════════════════════════════
+//  self/ml/latent_ode.hexa — Latent ODE / Neural CDE (#260)
+//
+//  Irregular time-series differential-equation model.
+//
+//  Architecture:
+//    1. Encoder: RNN over observed (t_k, y_k) → z_0 (latent state)
+//    2. ODE:     dz/dt = f_theta(z)     integrated Euler / RK4
+//    3. Decoder: ẑ(t) → y_hat(t)       linear projection
+//
+//  Neural CDE variant:
+//    dz/dt = f_theta(z) * dX/dt         (driven by continuous interpolation X(t))
+//
+//  Implements:
+//    1. Simple GRU-like encoder (tanh update cell)
+//    2. Linear latent ODE field (can be swapped for Neural network)
+//    3. Euler & RK4 integrators
+//    4. Decoder (affine projection)
+//    5. Latent ODE forward: encode → integrate → decode at query times
+//    6. Neural CDE dynamics driven by linear interpolation of observations
+//
+//  Also exports helpers for irregular-time linear interpolation
+//
+//  AI-NATIVE attrs:
+//    @pure  — step functions are stateless
+//    @hot   — integrator inner step
+// ═══════════════════════════════════════════════════════════════
+
+// ── helpers ───────────────────────────────────────────────────
+fn lode_abs(x) {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn lode_zeros(n) {
+    let mut v = []
+    let mut _i = 0
+    while _i < n {
+    return v
+        _i = _i + 1
+}
+
+fn lode_zeros2d(m, n) {
+    let mut w = []
+    let mut _i = 0
+    while _i < m {
+    return w
+        _i = _i + 1
+}
+
+fn lode_hash(seed, i, j) {
+    let h = (seed * 2654435761 + i * 1315423911 + j * 731) % 10007
+    return to_float(h) / 10007.0 - 0.5
+}
+
+@pure
+fn lode_tanh(x) {
+    let mut v = x
+    if v > 20.0 { v = 20.0 }
+    if v < (0.0 - 20.0) { v = 0.0 - 20.0 }
+    let e2 = exp(2.0 * v)
+    return (e2 - 1.0) / (e2 + 1.0)
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  (1) Linear latent ODE field
+//    dz/dt = A @ z + b
+// ═══════════════════════════════════════════════════════════════
+@pure
+fn lode_linear_field(z, A, b, d) {
+    let mut dz = lode_zeros(d)
+    let mut i = 0
+    while i < d {
+        let mut acc = b[i]
+        for j in 0..d {
+            acc = acc + A[i][j] * z[j]
+        }
+        dz[i] = acc
+        i = i + 1
+    }
+    return dz
+}
+
+@pure
+fn lode_tanh_field(z, A, b, d) {
+    let mut dz = lode_zeros(d)
+    let mut i = 0
+    while i < d {
+        let mut acc = b[i]
+        for j in 0..d {
+            acc = acc + A[i][j] * z[j]
+        }
+        dz[i] = lode_tanh(acc)
+        i = i + 1
+    }
+    return dz
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  (2) Euler step + integrate across interval
+// ═══════════════════════════════════════════════════════════════
+@hot
+fn lode_euler_linear(z0, t0, t1, n_steps, A, b, d) {
+    let dur = t1 - t0
+    let dt = dur / to_float(n_steps)
+    let mut z = lode_zeros(d)
+    let mut i = 0
+    while i < d {
+    for _s in 0..n_steps {
+        let dz = lode_linear_field(z, A, b, d)
+        for i in 0..d {
+            z[i] = z[i] + dt * dz[i]
+        }
+    }
+    return z
+        i = i + 1
+}
+
+// RK4 for linear field
+@hot
+fn lode_rk4_linear(z0, t0, t1, n_steps, A, b, d) {
+    let dur = t1 - t0
+    let dt = dur / to_float(n_steps)
+    let half = dt / 2.0
+    let mut z = lode_zeros(d)
+    let mut i = 0
+    while i < d {
+    for _s in 0..n_steps {
+        let k1 = lode_linear_field(z, A, b, d)
+        let mut z2 = lode_zeros(d)
+        for i in 0..d { z2[i] = z[i] + half * k1[i] }
+        let k2 = lode_linear_field(z2, A, b, d)
+        let mut z3 = lode_zeros(d)
+        for i in 0..d { z3[i] = z[i] + half * k2[i] }
+        let k3 = lode_linear_field(z3, A, b, d)
+        let mut z4 = lode_zeros(d)
+        for i in 0..d { z4[i] = z[i] + dt * k3[i] }
+        let k4 = lode_linear_field(z4, A, b, d)
+        for i in 0..d {
+            z[i] = z[i] + (dt / 6.0) * (k1[i] + 2.0 * k2[i] + 2.0 * k3[i] + k4[i])
+        }
+    }
+    return z
+        i = i + 1
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  (3) Simple GRU-like encoder
+//    h_t = tanh(W_h @ h_{t-1} + W_x @ x_t + b)
+//  Takes irregular (t_k, y_k) pairs and produces a final latent z0.
+// ═══════════════════════════════════════════════════════════════
+fn lode_init_encoder(input_dim, hidden_dim, seed) {
+    let mut Wh = lode_zeros2d(hidden_dim, hidden_dim)
+    let mut Wx = lode_zeros2d(hidden_dim, input_dim)
+    let mut b = lode_zeros(hidden_dim)
+    let mut i = 0
+    while i < hidden_dim {
+        for j in 0..hidden_dim {
+            Wh[i][j] = 0.3 * lode_hash(seed, i, j)
+        }
+        for j in 0..input_dim {
+            Wx[i][j] = 0.3 * lode_hash(seed + 3, i, j)
+        }
+        b[i] = 0.1 * lode_hash(seed + 7, i, 0)
+        i = i + 1
+    }
+    let enc = #{
+        "Wh": Wh,
+        "Wx": Wx,
+        "b": b,
+        "input_dim": input_dim,
+        "hidden_dim": hidden_dim
+    }
+    return enc
+}
+
+// Encode sequence of y_t — ignores time for simplicity here
+// (Neural CDE variant handles irregular times via interpolation)
+fn lode_encode(encoder, ys) {
+    let T = len(ys)
+    let hidden = encoder["hidden_dim"]
+    let input_dim = encoder["input_dim"]
+    let Wh = encoder["Wh"]
+    let Wx = encoder["Wx"]
+    let b = encoder["b"]
+    let mut h = lode_zeros(hidden)
+    let mut t = 0
+    while t < T {
+        let y_t = ys[t]
+        let mut h_new = lode_zeros(hidden)
+        for i in 0..hidden {
+            let mut acc = b[i]
+            for j in 0..hidden {
+                acc = acc + Wh[i][j] * h[j]
+            }
+            for j in 0..input_dim {
+                acc = acc + Wx[i][j] * y_t[j]
+            }
+            h_new[i] = lode_tanh(acc)
+        }
+        h = h_new
+        t = t + 1
+    }
+    return h
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  (4) Decoder: linear projection z → y_hat
+// ═══════════════════════════════════════════════════════════════
+fn lode_init_decoder(latent_dim, out_dim, seed) {
+    let mut W = lode_zeros2d(out_dim, latent_dim)
+    let mut b = lode_zeros(out_dim)
+    let mut i = 0
+    while i < out_dim {
+        for j in 0..latent_dim {
+            W[i][j] = 0.5 * lode_hash(seed, i, j)
+        }
+        b[i] = 0.1 * lode_hash(seed + 5, i, 0)
+        i = i + 1
+    }
+    let dec = #{
+        "W": W,
+        "b": b,
+        "latent_dim": latent_dim,
+        "out_dim": out_dim
+    }
+    return dec
+}
+
+fn lode_decode(decoder, z) {
+    let out_dim = decoder["out_dim"]
+    let latent_dim = decoder["latent_dim"]
+    let W = decoder["W"]
+    let b = decoder["b"]
+    let mut y = lode_zeros(out_dim)
+    let mut i = 0
+    while i < out_dim {
+        let mut acc = b[i]
+        for j in 0..latent_dim {
+            acc = acc + W[i][j] * z[j]
+        }
+        y[i] = acc
+        i = i + 1
+    }
+    return y
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  (5) Latent ODE forward:
+//    z0 = encode(y_observed)
+//    z(t_q) = ODE integrate(z0, t0, t_q)
+//    y_q = decode(z(t_q))
+// ═══════════════════════════════════════════════════════════════
+fn lode_forward(encoder, decoder, A, b_field, d, ys_observed, t0, t_query, n_steps) {
+    let z0 = lode_encode(encoder, ys_observed)
+    // truncate encoder hidden to latent dim d
+    let mut z_start = lode_zeros(d)
+    let mut i = 0
+    while i < d {
+        if i < len(z0) { z_start[i] = z0[i] }
+        i = i + 1
+    }
+    let z_final = lode_euler_linear(z_start, t0, t_query, n_steps, A, b_field, d)
+    let y_hat = lode_decode(decoder, z_final)
+    return y_hat
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  (6) Linear interpolation of irregular observations
+//  ts: [T] sorted, ys: [T x dim]
+//  Returns y at query time t_q using linear interp (clamped outside range)
+// ═══════════════════════════════════════════════════════════════
+fn lode_linear_interp(ts, ys, t_q) {
+    let T = len(ts)
+    let dim = len(ys[0])
+    if T == 0 { return [] }
+    if t_q <= ts[0] { return ys[0] }
+    if t_q >= ts[T - 1] { return ys[T - 1] }
+    // find interval
+    let mut idx = 0
+    let mut i = 0
+    while i < (T - 1) {
+        if ts[i] <= t_q && t_q <= ts[i + 1] {
+            idx = i
+        }
+        i = i + 1
+    }
+    let t_lo = ts[idx]
+    let t_hi = ts[idx + 1]
+    let span = t_hi - t_lo
+    let alpha = (t_q - t_lo) / span
+    let mut result = lode_zeros(dim)
+    let mut k = 0
+    while k < dim {
+        result[k] = (1.0 - alpha) * ys[idx][k] + alpha * ys[idx + 1][k]
+        k = k + 1
+    }
+    return result
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  (7) Neural CDE inner loop (1D driving signal):
+//    dz/dt = (A @ z + b) * dX/dt
+//  Euler integration over a sequence of (t_k, X_k) irregular samples.
+//  X interpolated linearly between samples.
+// ═══════════════════════════════════════════════════════════════
+fn lode_neural_cde(z0, ts, X_samples, A, b_field, d, inner_steps) {
+    let T = len(ts)
+    let mut z = lode_zeros(d)
+    let mut i = 0
+    while i < d {
+
+    for t in 0..(T - 1) {
+        let t_a = ts[t]
+        let t_b = ts[t + 1]
+        let X_a = X_samples[t]
+        let X_b = X_samples[t + 1]
+        let span = t_b - t_a
+        if span > 1.0e-12 {
+            let dX_dt = (X_b - X_a) / span
+            let dt = span / to_float(inner_steps)
+            for _s in 0..inner_steps {
+                let fz = lode_linear_field(z, A, b_field, d)
+                for i in 0..d {
+                    z[i] = z[i] + dt * fz[i] * dX_dt
+                }
+            }
+        }
+    }
+    return z
+        i = i + 1
+}
+
+
+// -- end inlined --
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn check(name, cond) {
+    if cond {
+        println("[PASS] " + name)
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name)
+        fail_count = fail_count + 1
+    }
+}
+
+fn fabs(x) {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn approx(a, b, eps) {
+    return fabs(a - b) < eps
+}
+
+println("═══════════════════════════════════════════════════════")
+println("  Latent ODE / Neural CDE (#260) Test Suite")
+println("═══════════════════════════════════════════════════════")
+
+// ── Test 1: Linear field ────────────────────────────────────
+let d = 2
+let A = [[0.0, 0.0 - 1.0], [1.0, 0.0]]  // rotation
+let b0 = [0.0, 0.0]
+let z = [1.0, 0.0]
+let dz = lode_linear_field(z, A, b0, d)
+check("field output length = d", len(dz) == 2)
+check("rotation field: dz[0] = 0*1 + (-1)*0 = 0", approx(dz[0], 0.0, 1.0e-10))
+check("rotation field: dz[1] = 1*1 + 0*0 = 1", approx(dz[1], 1.0, 1.0e-10))
+
+// ── Test 2: Euler on decay (z' = -z, exact exp(-1)) ─────────
+let A_decay = [[0.0 - 1.0]]
+let b_decay = [0.0]
+let z0_decay = [1.0]
+let z_end = lode_euler_linear(z0_decay, 0.0, 1.0, 1000, A_decay, b_decay, 1)
+let exact = exp(0.0 - 1.0)
+check("euler decay close to exp(-1)", fabs(z_end[0] - exact) < 1.0e-2)
+
+// ── Test 3: RK4 more accurate than Euler (fewer steps) ─────
+let z_euler = lode_euler_linear(z0_decay, 0.0, 1.0, 20, A_decay, b_decay, 1)
+let z_rk4 = lode_rk4_linear(z0_decay, 0.0, 1.0, 20, A_decay, b_decay, 1)
+let err_euler = fabs(z_euler[0] - exact)
+let err_rk4 = fabs(z_rk4[0] - exact)
+check("rk4 more accurate than euler", err_rk4 < err_euler)
+check("rk4 sub-1e-6", err_rk4 < 1.0e-5)
+
+// ── Test 4: Encoder shape ───────────────────────────────────
+let enc = lode_init_encoder(2, 4, 42)
+let ys = [[1.0, 0.5], [0.8, 0.4], [0.6, 0.3]]
+let h_out = lode_encode(enc, ys)
+check("encoder output length = hidden_dim", len(h_out) == 4)
+
+// ── Test 5: Decoder shape ───────────────────────────────────
+let dec = lode_init_decoder(4, 2, 7)
+let y_out = lode_decode(dec, h_out)
+check("decoder output length = out_dim", len(y_out) == 2)
+
+// ── Test 6: End-to-end forward ──────────────────────────────
+// latent dim = 2, field of small drift
+let A_drift = [[0.0, 0.0], [0.0, 0.0]]
+let b_drift = [0.1, 0.1]
+// Encoder: input_dim=2, hidden=4; we truncate to d=2 inside forward
+// Decoder: latent=2, out=2
+let dec2 = lode_init_decoder(2, 2, 9)
+let y_hat = lode_forward(enc, dec2, A_drift, b_drift, 2, ys, 0.0, 1.0, 10)
+check("forward output length = 2", len(y_hat) == 2)
+
+// ── Test 7: Linear interp endpoints ─────────────────────────
+let ts = [0.0, 1.0, 2.0]
+let ys_t = [[1.0], [2.0], [4.0]]
+let y_at_0 = lode_linear_interp(ts, ys_t, 0.0)
+let y_at_2 = lode_linear_interp(ts, ys_t, 2.0)
+check("interp at t=0 = first", approx(y_at_0[0], 1.0, 1.0e-12))
+check("interp at t=2 = last", approx(y_at_2[0], 4.0, 1.0e-12))
+
+// ── Test 8: Linear interp midpoint ──────────────────────────
+let y_at_05 = lode_linear_interp(ts, ys_t, 0.5)
+let y_at_15 = lode_linear_interp(ts, ys_t, 1.5)
+check("interp 0.5 = 1.5", approx(y_at_05[0], 1.5, 1.0e-12))
+check("interp 1.5 = 3.0", approx(y_at_15[0], 3.0, 1.0e-12))
+
+// ── Test 9: Interp clamp outside range ──────────────────────
+let y_below = lode_linear_interp(ts, ys_t, 0.0 - 1.0)
+let y_above = lode_linear_interp(ts, ys_t, 5.0)
+check("below range clamps to first", approx(y_below[0], 1.0, 1.0e-12))
+check("above range clamps to last", approx(y_above[0], 4.0, 1.0e-12))
+
+// ── Test 10: Neural CDE — zero driving signal ───────────────
+// X constant → dX/dt = 0 → z unchanged
+let ts_cde = [0.0, 0.5, 1.0]
+let X_const = [3.0, 3.0, 3.0]
+let A_id = [[1.0, 0.0], [0.0, 1.0]]
+let b_zero = [0.0, 0.0]
+let z0_cde = [0.5, 0.5]
+let z_cde = lode_neural_cde(z0_cde, ts_cde, X_const, A_id, b_zero, 2, 5)
+check("cde zero driving: z unchanged [0]", approx(z_cde[0], 0.5, 1.0e-8))
+check("cde zero driving: z unchanged [1]", approx(z_cde[1], 0.5, 1.0e-8))
+
+// ── Test 11: Neural CDE — linear driving (non-trivial) ──────
+let X_rise = [0.0, 0.5, 1.0]
+let z_cde_r = lode_neural_cde(z0_cde, ts_cde, X_rise, A_id, b_zero, 2, 5)
+// With A = I, dz/dt = z * dX/dt. X rises from 0→1, so z should grow.
+check("cde rising driving: z[0] grew", z_cde_r[0] > 0.5)
+check("cde rising driving: z[1] grew", z_cde_r[1] > 0.5)
+
+// ── Test 12: Zero initial + zero b → z stays zero ──────────
+let z0_zero = [0.0, 0.0]
+let z_stay = lode_euler_linear(z0_zero, 0.0, 1.0, 10, A_id, b_zero, 2)
+check("zero state stays zero [0]", approx(z_stay[0], 0.0, 1.0e-12))
+check("zero state stays zero [1]", approx(z_stay[1], 0.0, 1.0e-12))
+
+// ═══════════════════════════════════════════════════════════════
+println("")
+println("pass=" + to_string(pass_count) + " fail=" + to_string(fail_count))
+if fail_count == 0 {
+    println("ALL PASS")
+} else {
+    println("FAILED")
+}
+println(to_string(pass_count) + " passed")

@@ -1,0 +1,32 @@
+# OEIS O5 -- TECS-L F11 cross-link ledger
+# method: synthesis / crosslink (no new hexa verify; links + reuse-edge from O4 PR #1138)
+# source: .verdicts/oeis-atlas-fold/fold_ledger.txt (O4, 7 distinct BLUE theorem links)
+# date: 2026-05-26
+# ASCII-only (commons g3). Docs+NEXUS only -- no atlas fold (O4 owns the fold).
+
+=== 7 OEIS <-> hexa-fn provenance links (from O4) ===
+# col: hexa_fn  oeis_id  atlas_status  consumed_by_TECS-L
+sigma     A000203  ALREADY-PRESENT @P sigma [11*]   M1/M3/M6/M10 (sigma*phi=n*tau locus, sigma=2n perfect)
+tau       A000005  ALREADY-PRESENT @P tau   [11*]   M1/M3/M5/M10 (tau=string dim, identity)
+phi       A000010  ALREADY-PRESENT @P phi   [10*]   M1/M3/M10 (euler totient in identity)
+mu        A008683  ALREADY-PRESENT @P mu    [10*]   M4 (n=6 characterization, mobius ground)
+aliquot   A001065  NEWLY-FOLDED    @F oeis-A001065  M6 (aliquot(6)=6 perfect-number hypothesis)
+sigma_2   A001157  NEWLY-FOLDED    @F oeis-A001157  axis-F F3 (OEIS reverse-lookup hit)
+sigma_3   A001158  NEWLY-FOLDED    @F oeis-A001158  catalogue cross-check (sigma_k 2-op route)
+# sigma_0 == tau (A000005 shared; 8 pairs collapse to 7 distinct theorems)
+
+=== reuse edge (g67 intra-project reuse lattice) ===
+# nodes = domains; edge = reuse
+node  OEIS    PROVIDES  verified arithmetic-fn provenance (7 OEIS<->hexa links)
+node  TECS-L  REUSED    OEIS sigma/tau/phi/mu provenance for n=6 identity work (M1-M10)
+edge  TECS-L --reuses--> OEIS  (7 provenance links: A000203/A000005/A000010/A008683 + A001065/A001157/A001158)
+recorded_in  repo-root NEXUS.tape section 3b (domain-node OEIS/TECS-L + domain-reuse-edge de1)
+
+=== closures ===
+TECS-L axis-F F11  (OEIS reuse cite -- downstream consumer of OEIS-domain provenance)  CLOSED [x]
+OEIS O5            (TECS-L F11 cross-link + NEXUS.tape reuse edge)                       CLOSED [x]
+
+=== SUMMARY ===
+# O5 = synthesis/crosslink. No new atlas fold (embedded.gen.hexa untouched -- O4 owns it).
+# Deliverables: TECS-L.md F11 [x] + NEXUS.tape sec3b reuse edge + OEIS/docs/o5-tecs-crosslink.md.
+# status: GREEN -- 7 OEIS<->hexa provenance links cross-linked to TECS-L F11 + NEXUS.tape reuse edge (g67).

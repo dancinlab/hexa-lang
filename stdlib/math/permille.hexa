@@ -1,0 +1,9 @@
+// stdlib/math/permille.hexa — F1 (2026-05-10) backward-compat shim.
+//
+// Module relocated to stdlib/core/math/permille.hexa. Pure fixed-point
+// arithmetic at scale=1000 — target-agnostic.
+//
+// Sunset: removed after F4 absorptions complete.
+// New canonical path: stdlib/core/math/permille.hexa
+
+import "stdlib/core/math/permille.hexa"

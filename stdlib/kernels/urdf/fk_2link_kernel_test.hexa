@@ -1,0 +1,142 @@
+// stdlib/kernels/urdf/fk_2link_kernel_test.hexa — D80 g_hexa_only #3
+// Stage 3 parity check (ABSORPTION.md §"hexa 포팅 단계").
+//
+// Cross-checks the clean-room hexa-native 2-link planar forward-
+// kinematics derivation in `fk_2link_kernel.hexa` against a numpy
+// 2.0.x oracle captured on 2026-05-20 from a Python 3 run on
+// darwin-arm64. Reference configurations span:
+//   • zero       — both joints at 0, arm fully extended along +x
+//   • 90° base   — first joint 90°, second 0°, arm along +y
+//   • fold       — second joint π, link 2 folds back on link 1
+//   • right-angle q=[π/2, −π/2] — orientation cancels back to 0
+//   • asymmetric L1=2, L2=0.5, q=[0.3, −0.7] — generic case
+// — 5 samples covering the full configuration envelope.
+//
+// Tolerances:
+//   • End-effector (x, y, θ_ee) — both sides run the SAME closed-form
+//     2R chain in double precision; expect agreement to ~1e-14
+//     relative (last-bit IEEE-754 jitter only).
+//   • SE(3) translation column — same algorithm, same tolerance.
+//   • SE(3) rotation 2×2 submatrix — same tolerance.
+//
+// D80 spec calls for ±0.1 % parity (1e-3); we exceed that by ~11
+// orders of magnitude because the closed form is one line of trig.
+// Reporting the tighter actual gap is more honest than gating on the
+// spec ceiling (the spec ceiling exists for ports of DIFFERENT
+// algorithms — e.g. urdfpy's general-tree walk vs textbook 2R closed
+// form — where small operation-order divergences compound).
+
+use "stdlib/kernels/urdf/fk_2link_kernel"
+
+let mut pass_count = 0
+let mut total_count = 0
+let mut failed = ""
+
+fn check(name: str, cond: bool) {
+    total_count = total_count + 1
+    if cond {
+        pass_count = pass_count + 1
+    } else {
+        if failed == "" { failed = name }
+    }
+}
+
+fn fabs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn rel_err(got: float, want: float) -> float {
+    if fabs(want) < 1e-12 { return fabs(got - want) }
+    return fabs(got - want) / fabs(want)
+}
+
+fn check_close(name: str, got: float, want: float, tol: float) {
+    let e = rel_err(got, want)
+    check(name, e < tol)
+}
+
+fn main() {
+    // Tolerance: 1e-14 relative — bit-identical 2R chain in double.
+    let tol = 0.00000000000001
+
+    // ── Sample 1: zero pose, L1 = L2 = 1, q = [0, 0] ─────────────────
+    //   Arm fully extended along +x; x=2, y=0, θ_ee=0.
+    let r1 = fk_2link(1.0, 1.0, 0.0, 0.0)
+    check_close("S1 x  (zero pose)",     r1[0], 2.0, tol)
+    // y = 0 exactly → abs check
+    check("S1 y  (zero pose, exact 0)",  fabs(r1[1]) < 1e-15)
+    check("S1 θ_ee (zero pose, exact 0)", fabs(r1[2]) < 1e-15)
+
+    // ── Sample 2: 90° base, L1 = L2 = 1, q = [π/2, 0] ─────────────────
+    //   Arm rotated to +y; x ≈ 0 (1.22e-16 numpy noise), y = 2,
+    //   θ_ee = π/2.
+    let r2 = fk_2link(1.0, 1.0, 1.5707963267948966, 0.0)
+    // x is sin(π/2)·0 + cos(π/2)·... ; numerically tiny, not exact 0
+    check("S2 x  (90° base, ~0 ≤ 1e-15)", fabs(r2[0]) < 1e-15)
+    check_close("S2 y  (90° base)",      r2[1], 2.0, tol)
+    check_close("S2 θ_ee (90° base)",    r2[2],
+                1.5707963267948966, tol)
+
+    // ── Sample 3: fold, L1 = L2 = 1, q = [0, π] ──────────────────────
+    //   Link 2 folds back; x = 0, y ≈ 0 (1.22e-16 noise), θ_ee = π.
+    let r3 = fk_2link(1.0, 1.0, 0.0, 3.141592653589793)
+    // x = 1 + cos(π) = 1 + (-1) = 0 exactly? In IEEE doubles, yes —
+    // 1.0 + (-1.0) is bit-exactly 0. But cos(π) is not bit-exactly
+    // -1 (it's -1 + tiny eps via libm). So allow the tiny gap.
+    check("S3 x  (fold, ≤ 1e-15)",       fabs(r3[0]) < 1e-15)
+    check("S3 y  (fold, ≤ 1e-15)",       fabs(r3[1]) < 1e-15)
+    check_close("S3 θ_ee (fold)",        r3[2],
+                3.141592653589793, tol)
+
+    // ── Sample 4: right-angle, q = [π/2, −π/2] ───────────────────────
+    //   Link 1 to +y, link 2 to +x → end at (1, 1), θ_ee = 0.
+    let r4 = fk_2link(1.0, 1.0, 1.5707963267948966, -1.5707963267948966)
+    check_close("S4 x  (right-angle)",   r4[0], 1.0, tol)
+    check_close("S4 y  (right-angle)",   r4[1], 1.0, tol)
+    check("S4 θ_ee (right-angle, ~0)",   fabs(r4[2]) < 1e-15)
+
+    // ── Sample 5: asymmetric L1=2, L2=0.5, q=[0.3, −0.7] ─────────────
+    //   Generic operating point; oracle from numpy 2.0.x.
+    let r5 = fk_2link(2.0, 0.5, 0.3, -0.7)
+    check_close("S5 x  (asym)",          r5[0],
+                2.37120347525265451, tol)
+    check_close("S5 y  (asym)",          r5[1],
+                0.396331242168353859, tol)
+    check_close("S5 θ_ee (asym)",        r5[2],
+                -0.399999999999999967, tol)
+
+    // ── SE(3) parity (bonus) — confirms 4×4 matmul matches the
+    //    closed-form (x, y) and gives Rz(θ_ee) as the 2×2 rot block.
+
+    // S5 SE(3): pos = (x, y, 0); rot = [[cos(θ_ee), -sin(θ_ee)],
+    //                                    [sin(θ_ee),  cos(θ_ee)]]
+    let T5 = fk_2link_se3(2.0, 0.5, 0.3, -0.7)
+    // row-major 4×4: T[i*4+j]; translation column = T[0*4+3] etc.
+    check_close("S5 SE3 pos x",   T5[3],  2.37120347525265451, tol)
+    check_close("S5 SE3 pos y",   T5[7],  0.396331242168353859, tol)
+    check("S5 SE3 pos z (~0)",    fabs(T5[11]) < 1e-15)
+    check("S5 SE3 row3=[0,0,0,1] last",
+          fabs(T5[15] - 1.0) < 1e-15)
+    check_close("S5 SE3 rot[0,0] = cos(θ_ee)", T5[0],
+                0.921060994002885103, tol)
+    check_close("S5 SE3 rot[0,1] = -sin(θ_ee)", T5[1],
+                0.389418342308650411, tol)
+    check_close("S5 SE3 rot[1,0] = sin(θ_ee)",  T5[4],
+                -0.389418342308650411, tol)
+    check_close("S5 SE3 rot[1,1] = cos(θ_ee)",  T5[5],
+                0.921060994002885103, tol)
+
+    // S4 right-angle: rot should be identity (θ_ee = 0 mod 2π).
+    let T4 = fk_2link_se3(1.0, 1.0,
+                           1.5707963267948966, -1.5707963267948966)
+    check_close("S4 SE3 pos x (=1)",  T4[3],  1.0, tol)
+    check_close("S4 SE3 pos y (=1)",  T4[7],  1.0, tol)
+    check("S4 SE3 rot[0,0] ≈ 1",      fabs(T4[0] - 1.0) < 1e-14)
+    check("S4 SE3 rot[0,1] ≈ 0",      fabs(T4[1]) < 1e-14)
+    check("S4 SE3 rot[1,1] ≈ 1",      fabs(T4[5] - 1.0) < 1e-14)
+
+    print("fk_2link_kernel_test: " + str(pass_count) + "/" + str(total_count))
+    if failed != "" {
+        print("FAILED: " + failed)
+    } else {
+        print("PASS")
+    }
+}

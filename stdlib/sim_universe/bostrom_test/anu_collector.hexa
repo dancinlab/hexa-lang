@@ -1,0 +1,183 @@
+// anu_collector.hexa — ANU QRNG byte stream collector for Bostrom test
+//
+// 목표: n_req 의 ANU 샘플을 수집. 1 req/min 절대 준수.
+// ANU 먼저, 실패 시 full gap(65s) 기다린 후 재시도.
+// 연속 MAX_FAIL 번 실패하면 urandom 로 폴백하되 "urandom" 태그.
+// 캐시 60s 이내면 재사용 (이전 mtime 과 다를 때만).
+//
+// 사용:
+//   hexa anu_collector.hexa <out_hex_file> <n_requests> [gap_sec=65] [max_fail=3]
+
+let _args = args()
+if _args.len() < 3 {
+    println("usage: anu_collector.hexa <out_hex> <n_req> [gap_sec] [max_fail]")
+    exit(1)
+}
+let out_hex = _args[1]
+let n_req = to_int(_args[2])
+let mut gap_sec: i64 = 65
+if _args.len() >= 4 { gap_sec = to_int(_args[3]) }
+let mut max_fail: i64 = 3
+if _args.len() >= 5 { max_fail = to_int(_args[4]) }
+
+let meta_path = out_hex + ".meta.jsonl"
+let cache_path = env_var("HOME") + "/Dev/nexus/sim_bridge/godel_q/.anu_cache.bin"
+
+fn now_epoch() -> i64 {
+    let mut r = ""
+    try { r = to_string(exec("date +%s")).trim() } catch e { r = "0" }
+    let mut v: i64 = 0
+    try { v = to_int(r) } catch e { v = 0 }
+    return v
+}
+
+fn cache_mtime(path: string) -> i64 {
+    let mut r = ""
+    try { r = to_string(exec("stat -f '%m' '" + path + "' 2>/dev/null || stat -c '%Y' '" + path + "' 2>/dev/null")).trim() } catch e { r = "0" }
+    if r.len() == 0 { return 0 }
+    let mut v: i64 = 0
+    try { v = to_int(r) } catch e { v = 0 }
+    return v
+}
+
+fn read_cache_if_fresh(path: string, max_age: i64, prev_mtime: i64) -> string {
+    let m = cache_mtime(path)
+    if m == prev_mtime { return "" }
+    let age = now_epoch() - m
+    if age > max_age { return "" }
+    let mut c = ""
+    try { c = read_file(path).trim() } catch e { c = "" }
+    if c.len() < 128 { return "" }
+    return c.substring(0, 128)
+}
+
+// hexa-native JSON extractor for ANU response shape:
+//   {"type":"string","length":N,"size":S,"data":["hex1","hex2",...],"success":true}
+// no python3 needed — R37/AN13/L3-PY satisfied by direct string slicing.
+fn _extract_anu_hex(json: string) -> string {
+    if json.index_of("\"success\":true") < 0 { return "" }
+    let needle = "\"data\":["
+    let i = json.index_of(needle)
+    if i < 0 { return "" }
+    let start = i + needle.len()
+    let rest = json.substring(start, json.len())
+    let end = rest.index_of("]")
+    if end < 0 { return "" }
+    let arr = rest.substring(0, end)
+    let mut hex = arr.replace("\"", "")
+    hex = hex.replace(",", "")
+    hex = hex.replace(" ", "")
+    return hex.trim()
+}
+
+fn fetch_anu(cache: string) -> string {
+    // 2026-04-25 R37/AN13/L3-PY 충족 후 unstub. python3 미사용, 순수 hexa 문자열 슬라이싱.
+    // request: length=8 entries x size=16 hex chars = 128 hex (= 64 bytes) per fetch.
+    // ANU API rate limit: 1 req/min — caller (do_sleep gap) 가 강제.
+    let cmd = "curl -s --max-time 30 'https://qrng.anu.edu.au/API/jsonI.php?length=8&type=hex16&size=16'"
+    let mut out = ""
+    try { out = to_string(exec(cmd)) } catch e { out = "" }
+    if out.len() == 0 {
+        eprintln("[anu] fetch failed: empty curl response (network down or rate-limit)")
+        return ""
+    }
+    let hex = _extract_anu_hex(out)
+    if hex.len() != 128 {
+        eprintln("[anu] fetch parsed but length != 128 (got " + to_string(hex.len()) + "); raw response head: " + out.substring(0, 80))
+        return ""
+    }
+    // write cache so cache-hit path can reuse within 60s window
+    try { write_file(cache, hex) } catch e {}
+    return hex
+}
+
+fn fetch_urandom() -> string {
+    let mut hex = ""
+    try { hex = to_string(exec("head -c 64 /dev/urandom | od -An -vtx1 | tr -d ' \\n'")).trim() } catch e { hex = "" }
+    if hex.len() < 128 { return "" }
+    return hex.substring(0, 128)
+}
+
+fn do_sleep(secs: i64) {
+    if secs <= 0 { return }
+    try { exec("sleep " + to_string(secs)) } catch e {}
+}
+
+// ─── init output ───
+try { write_file(out_hex, "") } catch e {}
+try { write_file(meta_path, "") } catch e {}
+
+let mut prev_cache_mtime: i64 = 0
+let mut consecutive_fail: i64 = 0
+let t_start = now_epoch()
+println("# bostrom collector start: n_req=" + to_string(n_req) + " gap=" + to_string(gap_sec) + "s max_fail=" + to_string(max_fail))
+
+let mut i: i64 = 0
+while i < n_req {
+    // 1) try cache (fresh <60s, mtime differs from last)
+    let cached = read_cache_if_fresh(cache_path, 55, prev_cache_mtime)
+    let mut hex = ""
+    let mut src = ""
+    if cached.len() >= 128 {
+        hex = cached
+        src = "cache"
+        prev_cache_mtime = cache_mtime(cache_path)
+        consecutive_fail = 0
+    } else {
+        // 2) direct ANU fetch
+        let anu = fetch_anu(cache_path)
+        if anu.len() >= 128 {
+            hex = anu
+            src = "anu"
+            prev_cache_mtime = cache_mtime(cache_path)
+            consecutive_fail = 0
+        } else {
+            // 3) failed — retry after gap unless we exceed max_fail
+            consecutive_fail = consecutive_fail + 1
+            println("ANU fail #" + to_string(consecutive_fail) + " (i=" + to_string(i) + ") waiting " + to_string(gap_sec) + "s")
+            if consecutive_fail > max_fail {
+                // fallback urandom — tagged
+                let ur = fetch_urandom()
+                if ur.len() >= 128 {
+                    hex = ur
+                    src = "urandom"
+                    consecutive_fail = 0
+                }
+            } else {
+                do_sleep(gap_sec)
+                continue
+            }
+        }
+    }
+
+    if hex.len() < 128 {
+        println("HARD FAIL i=" + to_string(i))
+        break
+    }
+
+    let now = now_epoch()
+    let line = "{\"i\":" + to_string(i) + ",\"t\":" + to_string(now) + ",\"src\":\"" + src + "\",\"hex\":\"" + hex + "\"}\n"
+    try {
+        let prev = read_file(out_hex)
+        write_file(out_hex, prev + hex)
+    } catch e {
+        try { write_file(out_hex, hex) } catch e2 {}
+    }
+    try {
+        let prev = read_file(meta_path)
+        write_file(meta_path, prev + line)
+    } catch e {
+        try { write_file(meta_path, line) } catch e2 {}
+    }
+    println("req=" + to_string(i) + " src=" + src + " t=" + to_string(now - t_start))
+    i = i + 1
+
+    // sleep between requests (only for ANU; cache paths are cheap)
+    if src == "anu" {
+        do_sleep(gap_sec)
+    } else if src == "urandom" {
+        do_sleep(gap_sec)
+    }
+}
+
+println("# done. total_bytes=" + to_string(i * 64) + " duration_s=" + to_string(now_epoch() - t_start))

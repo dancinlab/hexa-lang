@@ -1,0 +1,102 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// flame_pt_ckpt_readout_test.hexa — patch landing smoke
+//
+// Covers archive/patches/pt-ckpt-cross-substrate-residual-readout.md:
+//   Clause A: pt_loader shape oracle (file-free, alloc-only).
+//   Clause B: nn_decoder_fwd_with_readout returns a fresh d-len farr
+//             at both "final" and per-layer indices, with handles
+//             distinct from Mc / M (no aliasing).
+//
+// SCOPE (g3 honest): syntactic + alloc-shape only. Full F-PTLOAD-*
+// and F-PHIREAD-* falsifiers live on the anima side (downstream
+// consumer; needs a real .pt + flat-sidecar fixture which this repo
+// does not ship). This test exists so the patch markdown has a single
+// in-repo deterministic gate.
+// ════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/decoder_lib"
+use "stdlib/flame/pt_loader"
+
+fn must(cond: bool, label: string) {
+    if cond == false {
+        println("FAIL " + label)
+        exit(1)
+    }
+}
+
+fn main() {
+    // anima §168 production config: d=768, nh=12, nkv=4, h=64, V=256,
+    // n_layer=12. We use a TINY mirror (d=32, nh=2, nkv=1, h=16, V=8,
+    // n_layer=2) so the test is millisecond-scale; the contract is
+    // shape-only, not numerical, so any positive config exercises it.
+    let d = 32
+    let nh = 2
+    let nkv = 1
+    let h = 16
+    let V = 8
+    let n_layer = 2
+    let T = 4
+
+    // ── Clause A: pt_loader self-test (alloc-only) ────────────────────
+    let st = flame_pt_loader_selftest(d, nh, nkv, h, V, n_layer)
+    must(st == 0, "pt_loader selftest")
+
+    let expect_bytes = flame_pt_expected_sidecar_bytes(d, nh, nkv, h, V, n_layer)
+    let expect_elem = m_total(d, nh, nkv, h, V, n_layer)
+    must(expect_bytes == expect_elem * 2, "sidecar byte = 2 * n_elem")
+
+    // ── Clause B: readout returns a fresh d-len handle ────────────────
+    // Build a minimal valid M/Mc and exercise both "final" and per-layer
+    // index. We allocate zeros for ids/M/cos/sin — content doesn't
+    // matter for the SHAPE contract (no NaN-propagating ops at d=32
+    // size; rms ≥ eps holds since gF is zero everywhere and the eps
+    // floor of 1e-6 prevents div-by-zero).
+    //
+    // To keep this test self-contained (no embed-init), we set ids
+    // entries to 0 (a valid token id in 0..V-1). M = zeros means
+    // tok_emb is all 0 → zr is all 0 → ms = 0 → inv = 1/sqrt(eps)
+    // (finite). zT_scratch[i] = gF[i] * xn[i] = 0 * 0 = 0. logits[k]
+    // = 0. No NaN.
+    let ids = farr_zeros(T)
+    let M = farr_zeros(m_total(d, nh, nkv, h, V, n_layer))
+    let Mc = farr_zeros(mc_total(T, d, nh, nkv, h, V, n_layer))
+    let cos_t = farr_zeros(T * h)
+    let sin_t = farr_zeros(T * h)
+    must(ids >= 0 && M >= 0 && Mc >= 0, "alloc handles >= 0")
+
+    // "final" residual hook
+    let r_final = nn_decoder_fwd_with_readout(ids, M, Mc, cos_t, sin_t,
+                                              T, d, nh, nkv, h, V, n_layer,
+                                              flame_decoder_readout_final())
+    must(r_final >= 0, "readout final handle valid")
+    must(r_final != M, "readout final not aliased to M")
+    must(r_final != Mc, "readout final not aliased to Mc")
+    must(farr_len(r_final) == d, "readout final len = d")
+
+    // Per-layer hook (layer 0)
+    let r_l0 = nn_decoder_fwd_with_readout(ids, M, Mc, cos_t, sin_t,
+                                           T, d, nh, nkv, h, V, n_layer, 0)
+    must(r_l0 >= 0, "readout layer0 handle valid")
+    must(r_l0 != r_final, "readout layer0 != readout final (fresh alloc)")
+    must(farr_len(r_l0) == d, "readout layer0 len = d")
+
+    // Sentinel: layer_idx == n_layer aliases "final".
+    let r_alias = nn_decoder_fwd_with_readout(ids, M, Mc, cos_t, sin_t,
+                                              T, d, nh, nkv, h, V, n_layer,
+                                              n_layer)
+    must(r_alias >= 0, "readout alias handle valid")
+    must(farr_len(r_alias) == d, "readout alias len = d")
+
+    let _ = farr_free(r_final)
+    let _ = farr_free(r_l0)
+    let _ = farr_free(r_alias)
+    let _ = farr_free(ids)
+    let _ = farr_free(M)
+    let _ = farr_free(Mc)
+    let _ = farr_free(cos_t)
+    let _ = farr_free(sin_t)
+
+    println("OK pt-ckpt-cross-substrate-residual-readout shape smoke")
+}

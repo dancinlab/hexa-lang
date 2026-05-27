@@ -1,0 +1,55 @@
+#!hexa strict
+// stdlib/yosys/liberty.hexa — Liberty (.lib) cell-library parser (CLEAN-ROOM skeleton)
+//
+// @version 0.0.1-skeleton
+// @capabilities [liberty, parse, cell-library, sky130]
+// @stability skeleton (rfc_006 §4 module-4 of 7; bodies pending §5 gate)
+// @since 2026-05-19
+//
+// CLEAN-ROOM PROVENANCE (design.md Decision 1 — public-surface clean-room)
+//   This module re-derives the *public surface* of Yosys' Liberty
+//   parser by inspection of upstream + the Liberty Technical Library
+//   reference manual only. No upstream code is copied.
+//
+//   - upstream code     : passes/techmap/libparse.cc (recursive-descent
+//                                                     liberty parser)
+//                         passes/techmap/libparse.h  (token / node types)
+//   - upstream manual   : https://yosyshq.readthedocs.io/projects/yosys/
+//                          (techmap section)
+//   - upstream license  : ISC (YosysHQ; LICENSE)
+//   - upstream repo     : https://github.com/YosysHQ/yosys
+//   - format reference  : Liberty Reference Manual (Synopsys; publicly
+//                          distributed format spec — file structure +
+//                          attribute grammar are not copyrightable
+//                          interface, the implementation is)
+//   - SKY130 corpus     : https://github.com/google/skywater-pdk
+//                          libraries/sky130_fd_sc_hd/latest/lib/
+//                          sky130_fd_sc_hd__tt_025C_1v80.lib (gate §5
+//                          target standard-cell library)
+//
+// rfc_006 §4: module-4 of 7. Parses the Liberty timing/area/power
+// model of a target standard-cell library into a typed CellLibrary
+// struct consumed by dfflibmap (passes.hexa) and abc_map (abc_map.hexa).
+// The minimum field set required by gate §5: cell name, area
+// attribute, pin direction + function, cell category (combinational
+// / sequential).
+//
+// Honest scope:
+//   This parser handles the SUBSET of Liberty syntax needed for SKY130
+//   `sky130_fd_sc_hd__tt_025C_1v80.lib` synthesis. Full Liberty
+//   (statistical timing, non-linear delay tables, leakage tables,
+//   etc.) is OUT OF SCOPE — area + functional model only.
+//   Reproducing the rfc_006 §5 area oracle (61,763 / 93,609 µm²)
+//   requires *area attribute* parsing to be exact; timing-table parsing
+//   may be approximated.
+
+fn main() {
+    // Skeleton phase — no body landed yet (rfc_048 raw-91 doctrine).
+    // Self-test will: parse the SKY130 sky130_fd_sc_hd lib file,
+    // assert cell count matches the published PDK headline (~430
+    // cells for hd variant), pick 5-10 representative cells
+    // (inv_1, nand2_1, nor2_1, dfxtp_1, mux2_1) and check area
+    // values against PDK headline numbers within 0.1%.
+    println("stdlib/yosys/liberty.hexa: TBD-STUB (rfc_006 §4 module-4)");
+    exit(91);  // rfc_048 raw-91 — TBD-stub-hit, do not wire in
+}

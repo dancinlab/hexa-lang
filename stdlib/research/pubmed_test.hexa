@@ -1,0 +1,70 @@
+// stdlib/research/pubmed_test.hexa — measured-oracle gate for the PubMed
+// stdlib client.
+//
+// Determinism strategy: parse the captured `compiler/bridges/_cache/
+// pubmed.frozen.xml` fixture (2026-05-24 snapshot of efetch on PMID=1 —
+// the first PubMed entry, a 1975 Biochemical Medicine paper on formate
+// assay in methanol poisoning, 4 authors, DOI present, no AbstractText).
+// No network at test runtime.
+
+use "stdlib/research/pubmed"
+
+let FIXTURE = "compiler/bridges/_cache/pubmed.frozen.xml"
+
+fn _fail(label: string, want: string, got: string) {
+    println("FAIL: " + label)
+    println("  want: " + want)
+    println("  got : " + got)
+    exit(1)
+}
+
+fn _expect_eq(label: string, want: string, got: string) {
+    if want != got { _fail(label, want, got) }
+}
+
+fn _expect_eq_i(label: string, want: int, got: int) {
+    if want != got { _fail(label, to_string(want), to_string(got)) }
+}
+
+fn main() {
+    let xml = read_file(FIXTURE)
+    if len(xml) == 0 {
+        println("FAIL: fixture missing: " + FIXTURE)
+        exit(1)
+    }
+
+    let papers = pubmed_parse_efetch(xml)
+    _expect_eq_i("article count", 1, len(papers))
+
+    let p0 = papers[0]
+    _expect_eq("p0.pmid",     "1",                                                          p0.pmid)
+    _expect_eq("p0.title",    "Formate assay in body fluids: application in methanol poisoning.", p0.title)
+    _expect_eq("p0.abstract", "",                                                           p0.abstract)
+    _expect_eq("p0.journal",  "Biochemical medicine",                                       p0.journal)
+    _expect_eq("p0.year",     "1975",                                                       p0.year)
+    _expect_eq("p0.doi",      "10.1016/0006-2944(75)90147-7",                               p0.doi)
+
+    _expect_eq_i("p0.author count", 4, len(p0.authors))
+    _expect_eq("p0.authors[0]", "Makar, A B",    p0.authors[0])
+    _expect_eq("p0.authors[1]", "McMartin, K E", p0.authors[1])
+    _expect_eq("p0.authors[2]", "Palese, M",     p0.authors[2])
+    _expect_eq("p0.authors[3]", "Tephly, T R",   p0.authors[3])
+
+    // ── pubmed_parse_esearch on a synthetic IdList ────────────────────
+    let esearch_xml = "<?xml version=\"1.0\"?><eSearchResult><Count>3</Count><IdList><Id>1</Id><Id>42</Id><Id>123456</Id></IdList></eSearchResult>"
+    let ids = pubmed_parse_esearch(esearch_xml)
+    _expect_eq_i("esearch id count", 3, len(ids))
+    _expect_eq("ids[0]", "1",      ids[0])
+    _expect_eq("ids[1]", "42",     ids[1])
+    _expect_eq("ids[2]", "123456", ids[2])
+
+    // ── empty / error path ───────────────────────────────────────
+    let empties = pubmed_parse_efetch("")
+    _expect_eq_i("empty body → 0 papers", 0, len(empties))
+    let no_ids = pubmed_parse_esearch("")
+    _expect_eq_i("empty esearch → 0 ids", 0, len(no_ids))
+    let no_pmid = pubmed_fetch("")
+    _expect_eq("fetch('') sentinel", "", no_pmid.pmid)
+
+    println("PASS: pubmed parse_efetch + parse_esearch + empty-path oracles (1 entry, 7 fields + 4 authors + 3 esearch ids)")
+}

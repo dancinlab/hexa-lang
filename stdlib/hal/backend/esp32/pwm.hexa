@@ -1,0 +1,93 @@
+#!hexa strict
+// stdlib/hal/backend/esp32/pwm.hexa — ESP32 PWM backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    ESP32 dual Xtensa LX6 @ 240 MHz.
+// Chip ref:  ESP32 TRM §13 LED_PWM (LEDC) — 16 channels (8 high-speed
+//            + 8 low-speed) × 4 timers; §17 MCPWM — 2 modules × 3
+//            operators × 2 outputs = 12 motor-control PWM channels.
+// Surface:   esp32_pwm_{configure,start,set_duty,set_freq,stop}(...)
+// Dispatch:  pwm.hexa selects this via cfg-flag. This stub uses LEDC
+//            (general-purpose PWM); MCPWM (motor control) is a
+//            separate σ-slot extension out of v0.9.0 scope.
+//
+// MMIO layout (LEDC):
+//
+//   LEDC:  base = DR_REG_LEDC_BASE = 0x3FF59000
+//
+//   LEDC_HSCH<n>_CONF0_REG     0x000 + 0x14·n   high-speed channel n config
+//   LEDC_HSCH<n>_HPOINT_REG    0x004 + 0x14·n   high point (always 0 typically)
+//   LEDC_HSCH<n>_DUTY_REG      0x008 + 0x14·n   duty value (Q.4 fixed-point)
+//   LEDC_HSCH<n>_CONF1_REG     0x00C + 0x14·n   duty fading config
+//   LEDC_HSCH<n>_DUTY_R_REG    0x010 + 0x14·n   read-back duty
+//   ...8 high-speed channels at 0x000..0x09F, 8 low-speed at 0x0A0..0x13F
+//
+//   LEDC_HSTIMER<n>_CONF_REG   0x140 + 0x08·n   timer n: divider + duty resolution
+//   LEDC_HSTIMER<n>_VALUE_REG  0x144 + 0x08·n   timer n current count
+//   ...4 high-speed timers + 4 low-speed timers
+//
+// Resolution: 1..20 bit duty (LEDC_TIMER_CONF.DUTY_RESOLUTION).
+// Frequency = LEDC_clk / (DIV · 2^DUTY_RESOLUTION).
+// LEDC clock source: APB (80 MHz) or REF_TICK (1 MHz).
+
+let MODULE_NAME = "esp32_pwm"
+let SIGMA_SLOT  = 7
+let PHI_KIND    = "digital"
+
+let DR_REG_LEDC_BASE = 0x3FF59000
+
+let LEDC_HSCH0_CONF0_REG  = 0x000
+let LEDC_HSCH0_DUTY_REG   = 0x008
+let LEDC_HSTIMER0_CONF_REG = 0x140
+
+let APB_CLK_HZ = 80000000
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn esp32_pwm_configure(gen: int, channel: int, freq_hz: int) -> int {
+    if gen < 0 || gen > 7 { return -1 }       // 8 high-speed channels (or use low-speed too)
+    if channel < 0 || channel > 0 { return -2 }   // 1 channel per LEDC ch (no A/B)
+    if freq_hz < 1 || freq_hz > 40000000 { return -3 }
+    // STUB: pick HS timer 0..3; compute DIV + DUTY_RESOLUTION from freq_hz
+    //       and target duty granularity; bind channel to timer via CONF0
+    return gen * 12 + channel
+}
+
+fn esp32_pwm_start(handle: int) -> bool {
+    if handle < 0 { return false }
+    // STUB: enable channel via LEDC_HSCH<n>_CONF0_REG.SIG_OUT_EN
+    return true
+}
+
+fn esp32_pwm_set_duty(handle: int, duty_x100: int) -> bool {
+    if handle < 0 { return false }
+    if duty_x100 < 0 || duty_x100 > 10000 { return false }
+    // STUB: DUTY_REG = (1 << DUTY_RESOLUTION) * duty_x100 / 10000
+    //       (note: LEDC duty is Q.4 fixed-point — shift left by 4)
+    return true
+}
+
+fn esp32_pwm_set_freq(handle: int, freq_hz: int) -> bool {
+    if handle < 0 || freq_hz < 1 { return false }
+    return true
+}
+
+fn esp32_pwm_stop(handle: int) -> bool {
+    if handle < 0 { return false }
+    return true
+}
+
+fn esp32_pwm_report(handle: int) -> str {
+    return "[esp32_pwm sim] handle=" + str(handle) + " (skeleton stub — TODO MMIO)"
+}
+
+fn esp32_pwm_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32_pwm sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  LEDC=" + str(DR_REG_LEDC_BASE) + "  (16 channels × 8 timers; 1..20-bit duty)")
+    println("  MCPWM (motor control) deferred to separate σ-slot extension")
+}

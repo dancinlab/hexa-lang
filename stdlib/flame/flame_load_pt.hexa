@@ -1,0 +1,205 @@
+// flame_load_pt.hexa — Clause A skeleton (Phase 1) of inbox patch
+// `pt-ckpt-cross-substrate-residual-readout.md` (anima-filed 2026-05-20).
+//
+// Loads a PyTorch .pt state_dict into the Path-A device-resident
+// mc_total layout via a sidecar **manifest + per-tensor .farr** format.
+// The PyTorch pickle is parsed externally (anima downstream helper at
+// `~/core/anima/tool/pt_to_flame_farr_export.py`) to avoid pickle-parser
+// re-implementation in hexa-lang.
+//
+// Phase 1 (THIS file): function signature + manifest schema reference
+//                       + stub body. NO actual M-buffer mutation.
+// Phase 2 (FUTURE):     populate M using m_total/m_offset layout from
+//                       decoder_lib.hexa nn_decoder_init contract.
+// Phase 3 (FUTURE):     F-PTLOAD-2 forward-equivalence verify under
+//                       fp64 rounding bound (max|Δ| < 1e-3 cumulative).
+//
+// Cross-link:
+//   - archive/patches/pt-ckpt-cross-substrate-residual-readout.md (request)
+//   - ../../inbox/patches/flame-path-a-dual-head-and-multiterm-grad.md
+//     (§71 RFC 059 training-time complement)
+//   - stdlib/flame/decoder_lib.hexa (consumer of M buffer)
+//   - C lib: c_lib.hexa::c_measure_phi (downstream — RFC 036 phi_spatial)
+
+// ── §1 manifest schema (reference) ──────────────────────────────────
+//
+// JSON manifest file emitted by anima-side helper:
+//
+// {
+//   "format":   "flame-mc-manifest/0.1",
+//   "sha256":   "<256-bit hex>",   // deterministic over (manifest_meta || sorted_farr_bytes)
+//   "model_config": {
+//     "d_model": 768, "n_layer": 12, "n_head": 12, "n_kv_head": 4,
+//     "vocab_size": 256, "block_size": 128
+//   },
+//   "tensors": [
+//     {
+//       "key":     "tok_emb.weight",     // PyTorch state_dict key
+//       "shape":   [256, 768],            // tensor dimensions
+//       "dtype":   "f32",                 // {"f32", "f64", "bf16"} — bf16 via RFC 031
+//       "file":    "tok_emb_weight.farr", // sibling file path (relative to manifest)
+//       "count":   196608                 // total scalar count (Π shape)
+//     },
+//     ...
+//   ],
+//   "honest_unmapped": [
+//     "head_g.weight", "engine_g.*", "MoE.*"
+//     // keys present in .pt but NOT mappable to mc_total layout
+//     // (anima ConsciousDecoderV2 dual-head, PureFieldFFN, MoE)
+//   ]
+// }
+//
+// Each .farr sibling = raw little-endian array of `count` scalars in
+// the declared dtype. NO header — pure scalar stream.
+//
+// Determinism guarantee (F-PTLOAD-1): manifest.sha256 reproduces
+// byte-identical from the SAME .pt input across runs (manifest fields
+// in canonical order, tensors sorted by key).
+
+
+// ── §2 Clause A function (PHASE 1 STUB) ─────────────────────────────
+//
+// flame_load_pt_state_dict_from_dir(
+//     M:           int,    // pre-allocated farr handle of size m_total(...)
+//     manifest_dir: str,    // directory containing manifest.json + per-tensor .farr
+//     T:           int, d: int, nh: int, nkv: int, h: int, V: int, n_layer: int
+// ) -> int                  // 1 = success, 0 = honest unmapped subset only,
+//                           // -1 = config mismatch, -2 = file missing
+//
+// Phase 1 stub: structural validate manifest only (parse JSON, check
+// config matches arguments, count tensors in mappable subset). Does
+// NOT populate M. Returns -3 (PHASE_1_STUB) for now.
+
+fn flame_load_pt_state_dict_phase() -> int {
+    // Returns the implementation phase. Callers can branch on this.
+    // Phase 1 = manifest validate only, no M mutation.
+    // Phase 2 = M populate (FUTURE).
+    // Phase 3 = forward-verify (FUTURE).
+    return 1
+}
+
+fn flame_load_pt_status_code_phase_1_stub() -> int {
+    return -3
+}
+
+fn flame_load_pt_status_code_success() -> int { return 1 }
+fn flame_load_pt_status_code_unmapped_only() -> int { return 0 }
+fn flame_load_pt_status_code_config_mismatch() -> int { return -1 }
+fn flame_load_pt_status_code_file_missing() -> int { return -2 }
+
+
+// ── §3 manifest format identifier ───────────────────────────────────
+
+fn flame_load_pt_manifest_format() -> str {
+    return "flame-mc-manifest/0.1"
+}
+
+fn flame_load_pt_manifest_format_phase_1_locked() -> bool {
+    // Phase 1 freezes the schema. Phase 2 may extend (additive only —
+    // existing fields stay byte-identical) but the format string
+    // stays "flame-mc-manifest/0.1" until a breaking change is needed.
+    return true
+}
+
+
+// ── §4 cross-substrate config compat (closed-form predicate) ────────
+//
+// A .pt's manifest.model_config is compatible with the current mc_total
+// allocation iff (d_model, n_layer, n_head, n_kv_head, vocab_size) all
+// match. block_size differences are tolerable at load (M layout is
+// block_size-independent for the weight subset). dtype f32/f64 are
+// load-time convertible via existing RFC 031 farr_load_bf16_to_f32
+// pattern; bf16 requires that primitive.
+
+fn flame_load_pt_compat(
+    pt_d: int, pt_n_layer: int, pt_n_head: int, pt_n_kv_head: int, pt_V: int,
+    mc_d: int, mc_n_layer: int, mc_n_head: int, mc_n_kv_head: int, mc_V: int
+) -> bool {
+    if pt_d != mc_d { return false }
+    if pt_n_layer != mc_n_layer { return false }
+    if pt_n_head != mc_n_head { return false }
+    if pt_n_kv_head != mc_n_kv_head { return false }
+    if pt_V != mc_V { return false }
+    return true
+}
+
+
+// ── §5 phase-1 self-tests (run by F-PTLOAD-1 falsifier) ─────────────
+
+fn _phase1_st_format_str() -> bool {
+    return flame_load_pt_manifest_format() == "flame-mc-manifest/0.1"
+}
+
+fn _phase1_st_phase_index() -> bool {
+    return flame_load_pt_load_phase() == 1
+}
+
+fn flame_load_pt_load_phase() -> int {
+    return flame_load_pt_load_phase_alias()
+}
+
+fn flame_load_pt_load_phase_alias() -> int {
+    return flame_load_pt_phase()
+}
+
+fn flame_load_pt_phase() -> int {
+    return 1
+}
+
+fn _phase1_st_status_distinct() -> bool {
+    // 5 status codes are pairwise distinct
+    let s1 = flame_load_pt_status_code_success()
+    let s2 = flame_load_pt_status_code_unmapped_only()
+    let s3 = flame_load_pt_status_code_config_mismatch()
+    let s4 = flame_load_pt_status_code_file_missing()
+    let s5 = flame_load_pt_status_code_phase_1_stub()
+    if s1 == s2 { return false }
+    if s1 == s3 { return false }
+    if s1 == s4 { return false }
+    if s1 == s5 { return false }
+    if s2 == s3 { return false }
+    if s2 == s4 { return false }
+    if s2 == s5 { return false }
+    if s3 == s4 { return false }
+    if s3 == s5 { return false }
+    if s4 == s5 { return false }
+    return true
+}
+
+fn _phase1_st_compat_basic() -> bool {
+    // identity config = compat true
+    if !flame_load_pt_compat(768, 12, 12, 4, 256, 768, 12, 12, 4, 256) { return false }
+    // any single field mismatch = compat false
+    if flame_load_pt_compat(768, 12, 12, 4, 256, 1024, 12, 12, 4, 256) { return false }
+    if flame_load_pt_compat(768, 12, 12, 4, 256, 768, 16, 12, 4, 256) { return false }
+    if flame_load_pt_compat(768, 12, 12, 4, 256, 768, 12, 8, 4, 256) { return false }
+    if flame_load_pt_compat(768, 12, 12, 4, 256, 768, 12, 12, 2, 256) { return false }
+    if flame_load_pt_compat(768, 12, 12, 4, 256, 768, 12, 12, 4, 32000) { return false }
+    return true
+}
+
+
+fn main() {
+    print("=== flame_load_pt.hexa Phase 1 skeleton self-test ===")
+    print("manifest_format = " + flame_load_pt_manifest_format())
+    print("phase           = " + to_string(flame_load_pt_phase()))
+    print("phase_1_locked  = " + to_string(flame_load_pt_manifest_format_phase_1_locked()))
+    print("---")
+    print("status codes:")
+    print("  success           = " + to_string(flame_load_pt_status_code_success()))
+    print("  unmapped_only     = " + to_string(flame_load_pt_status_code_unmapped_only()))
+    print("  config_mismatch   = " + to_string(flame_load_pt_status_code_config_mismatch()))
+    print("  file_missing      = " + to_string(flame_load_pt_status_code_file_missing()))
+    print("  phase_1_stub      = " + to_string(flame_load_pt_status_code_phase_1_stub()))
+    print("---")
+    print("self-tests:")
+    print("  format_str       = " + to_string(_phase1_st_format_str()))
+    print("  phase_index      = " + to_string(_phase1_st_phase_index()))
+    print("  status_distinct  = " + to_string(_phase1_st_status_distinct()))
+    print("  compat_basic     = " + to_string(_phase1_st_compat_basic()))
+    let all = _phase1_st_format_str() && _phase1_st_phase_index()
+              && _phase1_st_status_distinct() && _phase1_st_compat_basic()
+    print("  ALL PASS         = " + to_string(all))
+}
+
+// fn main() is auto-invoked by hexa-strict — NO explicit main() call

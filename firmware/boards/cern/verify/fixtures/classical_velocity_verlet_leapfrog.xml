@@ -1,0 +1,83 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<feed xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/" xmlns:arxiv="http://arxiv.org/schemas/atom" xmlns="http://www.w3.org/2005/Atom">
+  <id>https://arxiv.org/api/E4J1qSeYHOfRv6gJhrRPmv71qNU</id>
+  <title>arXiv Query: search_query=all:velocity OR all:verlet OR all:leapfrog&amp;id_list=&amp;start=0&amp;max_results=3</title>
+  <updated>2026-05-07T15:25:24Z</updated>
+  <link href="https://arxiv.org/api/query?search_query=all:velocity+OR+(all:verlet+OR+all:leapfrog)&amp;start=0&amp;max_results=3&amp;id_list=" type="application/atom+xml"/>
+  <opensearch:itemsPerPage>3</opensearch:itemsPerPage>
+  <opensearch:totalResults>103372</opensearch:totalResults>
+  <opensearch:startIndex>0</opensearch:startIndex>
+  <entry>
+    <id>http://arxiv.org/abs/2008.11810v1</id>
+    <title>A Magnetic Velocity Verlet Method</title>
+    <updated>2020-08-26T20:54:27Z</updated>
+    <link href="https://arxiv.org/abs/2008.11810v1" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/2008.11810v1" rel="related" type="application/pdf" title="pdf"/>
+    <summary>We discuss an extension of the velocity Verlet method that accurately approximates the kinetic-energy-conserving charged particle motion that comes from magnetic forcing. For a uniform magnetic field, the method is shown to conserve both particle kinetic energy and magnetic dipole moment better than midpoint Runge-Kutta. We then use the magnetic velocity Verlet method to generate trapped particle trajectories, both in a cylindrical magnetic mirror machine setup, and for dipolar fields like the earth's magnetic field. Finally, the method is used to compute an example of (single) mirror motion in the presence of a magnetic monopole field, where the trajectory can be described in closed form.</summary>
+    <category term="physics.class-ph" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="physics.comp-ph" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2020-08-26T20:54:27Z</published>
+    <arxiv:comment>To appear, American Journal of Physics</arxiv:comment>
+    <arxiv:primary_category term="physics.class-ph"/>
+    <author>
+      <name>A. Chambliss</name>
+    </author>
+    <author>
+      <name>J. Franklin</name>
+    </author>
+    <arxiv:doi>10.1119/10.0001876</arxiv:doi>
+    <link rel="related" href="https://doi.org/10.1119/10.0001876" title="doi"/>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/1803.05761v5</id>
+    <title>Stability of velocity-Verlet- and Liouville-operator-derived algorithms to integrate non-Hamiltonian systems</title>
+    <updated>2018-09-12T05:02:55Z</updated>
+    <link href="https://arxiv.org/abs/1803.05761v5" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/1803.05761v5" rel="related" type="application/pdf" title="pdf"/>
+    <summary>We investigate the difference between the velocity Verlet and the Liouville-operator-derived (LOD) algorithms by studying two non-Hamiltonian systems, one dissipative and the other conservative, for which the Jacobian of the transformation can be determined exactly. For the two systems, we demonstrate that (1) the velocity Verlet scheme fails to integrate the former system while the first- and second-order LOD schemes succeed, (2) some first-order LOD fails to integrate the latter system while the velocity Verlet and the other first- and second-order schemes succeed. We have shown that the LOD schemes are stable for the former system by determining the explicit forms of the shadow Hamiltonians which are exactly conserved by the schemes. We have shown that Jacobian of the velocity Verlet scheme for the former system and that of the first-order LOD scheme for the latter system are always smaller than the exact values, and therefore, the schemes are unstable. The decomposition-order dependence of LOD schemes is also considered.</summary>
+    <category term="physics.comp-ph" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2018-03-14T10:09:29Z</published>
+    <arxiv:comment>11 pages, 8 figures. New results are added</arxiv:comment>
+    <arxiv:primary_category term="physics.comp-ph"/>
+    <author>
+      <name>Hiroshi Watanabe</name>
+    </author>
+    <arxiv:doi>10.1063/1.5030034</arxiv:doi>
+    <link rel="related" href="https://doi.org/10.1063/1.5030034" title="doi"/>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/1101.0463v1</id>
+    <title>Radial velocity follow-up of CoRoT transiting exoplanets</title>
+    <updated>2011-01-03T08:03:41Z</updated>
+    <link href="https://arxiv.org/abs/1101.0463v1" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/1101.0463v1" rel="related" type="application/pdf" title="pdf"/>
+    <summary>We report on the results from the radial-velocity follow-up program performed to establish the planetary nature and to characterize the transiting candidates discovered by the space mission CoRoT. We use the SOPHIE at OHP, HARPS at ESO and the HIRES at Keck spectrographs to collect spectra and high- precision radial velocity (RV) measurements for several dozens dif- ferent candidates from CoRoT. We have measured the Rossiter- McLaughlin effect of several confirmed planets, especially CoRoT- 1b which revealed that it is another highly inclined system. Such high-precision RV data are necessary for the discovery of new tran- siting planets. Furthermore, several low mass planet candidates have emerged from our Keck and HARPS data.</summary>
+    <category term="astro-ph.EP" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2011-01-03T08:03:41Z</published>
+    <arxiv:comment>10 pages, 7 figures. Proceeding of Haute Provence Observatory Colloquium (23-27 August 2010)</arxiv:comment>
+    <arxiv:primary_category term="astro-ph.EP"/>
+    <author>
+      <name>A. Santerne</name>
+    </author>
+    <author>
+      <name>M. Endl</name>
+    </author>
+    <author>
+      <name>A. Hatzes</name>
+    </author>
+    <author>
+      <name>F. Bouchy</name>
+    </author>
+    <author>
+      <name>C. Moutou</name>
+    </author>
+    <author>
+      <name>M. Deleuil</name>
+    </author>
+    <author>
+      <name>the CoRoT radial velocity team</name>
+    </author>
+    <arxiv:doi>10.1051/epjconf/20101102001</arxiv:doi>
+    <link rel="related" href="https://doi.org/10.1051/epjconf/20101102001" title="doi"/>
+  </entry>
+</feed>

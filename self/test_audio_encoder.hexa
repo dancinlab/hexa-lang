@@ -1,0 +1,1453 @@
+// ═══════════════════════════════════════════════════════════════
+//  test_audio_encoder.hexa — Whisper-style Audio Encoder tests (#131)
+//
+//  Tests (35 total):
+//    T1  default config has correct keys
+//    T2  custom config creation
+//    T3  normalize audio scales to [-1,1]
+//    T4  normalize silence (zeros) unchanged
+//    T5  resample identity (same rate)
+//    T6  resample downsampling preserves length ratio
+//    T7  resample upsampling preserves length ratio
+//    T8  pad_or_trim pads short signal
+//    T9  pad_or_trim trims long signal
+//    T10 pad_or_trim identity for exact length
+//    T11 padding mask correct shape
+//    T12 padding mask correct values
+//    T13 hann window correct length
+//    T14 hann window endpoints near zero
+//    T15 hann window peak at center
+//    T16 stft_frame returns re/im pair
+//    T17 stft output shape correct
+//    T18 mel filterbank shape correct
+//    T19 mel filterbank row sums non-negative
+//    T20 mel spectrogram shape correct
+//    T21 log_mel applies log transform
+//    T22 gelu(0) = 0
+//    T23 gelu positive for positive input
+//    T24 conv1d output shape correct
+//    T25 conv frontend output has d_model channels
+//    T26 sinusoidal PE shape correct
+//    T27 sinusoidal PE varies across positions
+//    T28 layer norm zero mean
+//    T29 layer norm unit variance
+//    T30 softmax sums to 1
+//    T31 encoder block preserves shape
+//    T32 encoder stacked layers preserves shape
+//    T33 projection changes dimension
+//    T34 full pipeline produces output
+//    T35 audio duration calculation correct
+//
+//  Run: cargo run --release -- self/test_audio_encoder.hexa
+// ═══════════════════════════════════════════════════════════════
+
+// -- inlined from self/ml/audio_encoder.hexa --
+// codegen import not wired for test files
+
+// ═══════════════════════════════════════════════════════════════════
+//  self/ml/audio_encoder.hexa — Whisper-style Audio Encoder
+//
+//  Implements a complete audio encoding pipeline for speech input:
+//    1. Mel spectrogram   — STFT -> mel filterbank -> log-mel
+//    2. Conv1D frontend   — two 1D convolution layers for feature extraction
+//    3. Sinusoidal positional embedding for audio frames
+//    4. Transformer encoder blocks (LayerNorm -> MHSA -> FFN)
+//    5. Audio projection  — map encoder output to LLM hidden dimension
+//    6. Preprocessing     — resample to target sample rate, normalize
+//    7. Feature extraction pipeline: raw audio -> mel -> conv -> enc -> proj
+//    8. Configurable: n_mels, n_fft, hop_length, num_layers, d_model
+//    9. Padding/masking   — variable-length audio inputs
+//
+//  API:
+//    ae_default_config()            -> config map
+//    ae_make_config(n_mels, n_fft, hop_length, d_model, num_heads,
+//                   num_layers, d_ff, proj_dim, sample_rate) -> config
+//    ae_normalize_audio(samples)    -> [float]
+//    ae_resample(samples, src_rate, tgt_rate) -> [float]
+//    ae_hann_window(size)           -> [float]
+//    ae_stft_frame(signal, offset, n_fft, window) -> [re, im]
+//    ae_stft(signal, n_fft, hop)    -> [[mag]] (frames x n_fft/2+1)
+//    ae_mel_filterbank(n_mels, n_fft, sr) -> [[float]] (n_mels x bins)
+//    ae_mel_spectrogram(signal, n_fft, hop, n_mels, sr) -> [[float]]
+//    ae_log_mel(mel_spec)           -> [[float]]
+//    ae_conv1d(input, kernel, bias, stride) -> [[float]]
+//    ae_gelu(x)                     -> float
+//    ae_conv_frontend(log_mel, cfg) -> [[float]] (frames x d_model)
+//    ae_sinusoidal_pe(max_len, d_model) -> [[float]]
+//    ae_layer_norm(x, eps)          -> [float]
+//    ae_mhsa(Q, K, V, d_model, num_heads) -> [[float]]
+//    ae_ffn(x, d_model, d_ff)      -> [[float]]
+//    ae_encoder_block(x, d_model, num_heads, d_ff) -> [[float]]
+//    ae_encoder(x, num_layers, d_model, num_heads, d_ff) -> [[float]]
+//    ae_project(x, d_in, d_out)    -> [[float]]
+//    ae_pad_or_trim(signal, target_len) -> [float]
+//    ae_make_padding_mask(actual_len, total_len) -> [int]
+//    ae_full_pipeline(raw_audio, config) -> [[float]]
+//
+//  AI-NATIVE attrs:
+//    @pure     — no side effects
+//    @hot      — called every forward pass
+//    @fuse     — mel + conv + encoder fused pipeline
+// ═══════════════════════════════════════════════════════════════════
+
+// ── math helpers ────────────────────────────────────────────────
+
+fn ae_abs(x) {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn ae_sqrt(x) {
+    if x <= 0.0 { return 0.0 }
+    let mut g = x / 2.0
+    if g < 1.0 { g = 1.0 }
+    let mut _i = 0
+    while _i < 40 {
+        g = (g + x / g) / 2.0
+        _i = _i + 1
+    }
+    return g
+}
+
+fn ae_exp(x) {
+    let mut v = x
+    if v > 20.0 { v = 20.0 }
+    if v < -20.0 { v = -20.0 }
+    let mut result = 1.0
+    let mut term = 1.0
+    let mut i = 1
+    while i < 30 {
+        term = term * v / to_float(i)
+        result = result + term
+        i = i + 1
+    }
+    if result < 0.0 { return 0.0 }
+    return result
+}
+
+fn ae_log(x) {
+    if x <= 0.0 { return -20.0 }
+    // Newton iteration for ln(x): converge via y_{n+1} = y_n + 2*(x - exp(y_n))/(x + exp(y_n))
+    let mut y = 0.0
+    // initial guess using range reduction
+    let mut z = x
+    let mut shift = 0.0
+    let ln2 = 0.6931471805599453
+    let mut _i = 0
+    while _i < 20 {
+        if z > 2.0 {
+            z = z / 2.0
+            shift = shift + ln2
+        }
+        _i = _i + 1
+    }
+    let mut _i = 0
+    while _i < 20 {
+        if z < 0.5 {
+            z = z * 2.0
+            shift = shift - ln2
+        }
+        _i = _i + 1
+    }
+    // now z is in [0.5, 2.0], compute ln(z)
+    y = z - 1.0
+    let mut _i = 0
+    while _i < 30 {
+        let ey = ae_exp(y)
+        if ey < 1.0e-15 { y = y + 1.0 }
+        y = y + 2.0 * (z - ey) / (z + ey)
+        _i = _i + 1
+    }
+    return y + shift
+}
+
+fn ae_sin(x) {
+    let pi = 3.141592653589793
+    // reduce to [-pi, pi]
+    let mut v = x
+    let mut _i = 0
+    while _i < 20 {
+        if v > pi { v = v - 2.0 * pi }
+        _i = _i + 1
+    }
+    let mut _i = 0
+    while _i < 20 {
+        if v < 0.0 - pi { v = v + 2.0 * pi }
+        _i = _i + 1
+    }
+    // Taylor series sin(v) = v - v^3/3! + v^5/5! - ...
+    let mut result = 0.0
+    let mut term = v
+    let mut n = 0
+    while n < 15 {
+        result = result + term
+        term = 0.0 - term * v * v / to_float((2 * n + 2) * (2 * n + 3))
+        n = n + 1
+    }
+    return result
+}
+
+fn ae_cos(x) {
+    let pi = 3.141592653589793
+    return ae_sin(x + pi / 2.0)
+}
+
+fn ae_max_f(a, b) {
+    if a > b { return a }
+    return b
+}
+
+fn ae_min_f(a, b) {
+    if a < b { return a }
+    return b
+}
+
+fn ae_floor_int(x) {
+    let i = to_int(x)
+    if to_float(i) > x { return i - 1 }
+    return i
+}
+
+// ── array helpers ───────────────────────────────────────────────
+
+fn ae_zeros(n) {
+    let mut v = []
+    let mut _i = 0
+    while _i < n {
+    return v
+        _i = _i + 1
+}
+
+fn ae_zeros_int(n) {
+    let mut v = []
+    let mut _i = 0
+    while _i < n {
+    return v
+        _i = _i + 1
+}
+
+fn ae_zeros_2d(rows, cols) {
+    let mut m = []
+    let mut _i = 0
+    while _i < rows {
+        let mut row = []
+        for _j in 0..cols { row = row + [0.0] }
+        m = m + [row]
+        _i = _i + 1
+    }
+    return m
+}
+
+fn ae_ones(n) {
+    let mut v = []
+    let mut _i = 0
+    while _i < n {
+    return v
+        _i = _i + 1
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Configuration
+// ═══════════════════════════════════════════════════════════════════
+
+@pure
+fn ae_default_config() {
+    return #{
+        "n_mels": 80,
+        "n_fft": 400,
+        "hop_length": 160,
+        "d_model": 64,
+        "num_heads": 4,
+        "num_layers": 2,
+        "d_ff": 128,
+        "proj_dim": 64,
+        "sample_rate": 16000,
+        "max_audio_len": 480000
+    }
+}
+
+@pure
+fn ae_make_config(n_mels, n_fft, hop_length, d_model, num_heads, num_layers, d_ff, proj_dim, sample_rate) {
+    return #{
+        "n_mels": n_mels,
+        "n_fft": n_fft,
+        "hop_length": hop_length,
+        "d_model": d_model,
+        "num_heads": num_heads,
+        "num_layers": num_layers,
+        "d_ff": d_ff,
+        "proj_dim": proj_dim,
+        "sample_rate": sample_rate,
+        "max_audio_len": sample_rate * 30
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Audio Preprocessing — normalize + resample
+// ═══════════════════════════════════════════════════════════════════
+
+@pure
+fn ae_normalize_audio(samples) {
+    let n = len(samples)
+    if n == 0 { return [] }
+    // find max absolute value
+    let mut mx = 0.0
+    let mut i = 0
+    while i < n {
+        let a = ae_abs(samples[i])
+        if a > mx { mx = a }
+        i = i + 1
+    }
+    if mx < 1.0e-10 { return samples }
+    let mut out = ae_zeros(n)
+    let mut i = 0
+    while i < n {
+        out[i] = samples[i] / mx
+        i = i + 1
+    }
+    return out
+}
+
+@pure
+fn ae_resample(samples, src_rate, tgt_rate) {
+    if src_rate == tgt_rate { return samples }
+    let n_in = len(samples)
+    if n_in == 0 { return [] }
+    let ratio = to_float(tgt_rate) / to_float(src_rate)
+    let n_out = ae_floor_int(to_float(n_in) * ratio)
+    if n_out <= 0 { return [0.0] }
+    let mut out = ae_zeros(n_out)
+    let mut i = 0
+    while i < n_out {
+        let src_pos = to_float(i) / ratio
+        let idx = ae_floor_int(src_pos)
+        let frac = src_pos - to_float(idx)
+        if idx + 1 < n_in {
+            out[i] = samples[idx] * (1.0 - frac) + samples[idx + 1] * frac
+        } else {
+            if idx < n_in {
+                out[i] = samples[idx]
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Padding / Trimming for variable-length audio
+// ═══════════════════════════════════════════════════════════════════
+
+@pure
+fn ae_pad_or_trim(signal, target_len) {
+    let n = len(signal)
+    if n == target_len { return signal }
+    if n > target_len {
+        // trim
+        let mut out = ae_zeros(target_len)
+        let mut i = 0
+        while i < target_len {
+            out[i] = signal[i]
+            i = i + 1
+        }
+        return out
+    }
+    // pad with zeros
+    let mut out = ae_zeros(target_len)
+    let mut i = 0
+    while i < n {
+        out[i] = signal[i]
+        i = i + 1
+    }
+    return out
+}
+
+@pure
+fn ae_make_padding_mask(actual_len, total_len) {
+    let mut mask = ae_zeros_int(total_len)
+    let mut i = 0
+    while i < total_len {
+        if i < actual_len {
+            mask[i] = 1
+        }
+        i = i + 1
+    }
+    return mask
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Hann Window
+// ═══════════════════════════════════════════════════════════════════
+
+@pure
+fn ae_hann_window(size) {
+    let pi = 3.141592653589793
+    let mut w = ae_zeros(size)
+    let mut i = 0
+    while i < size {
+        w[i] = 0.5 * (1.0 - ae_cos(2.0 * pi * to_float(i) / to_float(size)))
+        i = i + 1
+    }
+    return w
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  STFT — Short-Time Fourier Transform
+//
+//  Returns magnitude spectrogram: [num_frames, n_fft/2+1]
+//  Each frame: apply window, compute DFT magnitudes
+// ═══════════════════════════════════════════════════════════════════
+
+@pure
+fn ae_stft_frame(signal, offset, n_fft, window) {
+    // extract windowed frame
+    let mut frame = ae_zeros(n_fft)
+    let sig_len = len(signal)
+    let mut i = 0
+    while i < n_fft {
+        let idx = offset + i
+        if idx < sig_len {
+            frame[i] = signal[idx] * window[i]
+        }
+        i = i + 1
+    }
+    // DFT for bins 0..n_fft/2+1
+    let n_bins = n_fft / 2 + 1
+    let mut re = ae_zeros(n_bins)
+    let mut im = ae_zeros(n_bins)
+    let pi2 = 2.0 * 3.141592653589793
+    let mut k = 0
+    while k < n_bins {
+        let mut sr = 0.0
+        let mut si = 0.0
+        for n in 0..n_fft {
+            let angle = pi2 * to_float(k) * to_float(n) / to_float(n_fft)
+            sr = sr + frame[n] * ae_cos(angle)
+            si = si - frame[n] * ae_sin(angle)
+        }
+        re[k] = sr
+        im[k] = si
+        k = k + 1
+    }
+    return [re, im]
+}
+
+@pure @hot
+fn ae_stft(signal, n_fft, hop) {
+    let sig_len = len(signal)
+    let window = ae_hann_window(n_fft)
+    let n_bins = n_fft / 2 + 1
+    // compute number of frames
+    let mut num_frames = 0
+    if sig_len >= n_fft {
+        num_frames = (sig_len - n_fft) / hop + 1
+    }
+    if num_frames <= 0 { num_frames = 1 }
+    let mut mag = ae_zeros_2d(num_frames, n_bins)
+    let mut f = 0
+    while f < num_frames {
+        let offset = f * hop
+        let ri = ae_stft_frame(signal, offset, n_fft, window)
+        let re = ri[0]
+        let im = ri[1]
+        for k in 0..n_bins {
+            mag[f][k] = ae_sqrt(re[k] * re[k] + im[k] * im[k])
+        }
+        f = f + 1
+    }
+    return mag
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Mel Filterbank — triangular filters in mel scale
+//
+//  mel(f) = 2595 * log10(1 + f/700)
+//  Returns: [n_mels, n_fft/2+1] filter matrix
+// ═══════════════════════════════════════════════════════════════════
+
+@pure
+fn ae_hz_to_mel(hz) {
+    return 2595.0 * ae_log(1.0 + hz / 700.0) / 2.302585092994046
+}
+
+@pure
+fn ae_mel_to_hz(mel) {
+    let log10_base = 2.302585092994046
+    return 700.0 * (ae_exp(mel * log10_base / 2595.0) - 1.0)
+}
+
+@pure
+fn ae_mel_filterbank(n_mels, n_fft, sr) {
+    let n_bins = n_fft / 2 + 1
+    let f_max = to_float(sr) / 2.0
+    let mel_min = ae_hz_to_mel(0.0)
+    let mel_max = ae_hz_to_mel(f_max)
+    // n_mels + 2 equally spaced mel points
+    let num_points = n_mels + 2
+    let mut mel_points = ae_zeros(num_points)
+    let mut i = 0
+    while i < num_points {
+        mel_points[i] = mel_min + to_float(i) * (mel_max - mel_min) / to_float(num_points - 1)
+        i = i + 1
+    }
+    // convert back to Hz
+    let mut hz_points = ae_zeros(num_points)
+    let mut i = 0
+    while i < num_points {
+        hz_points[i] = ae_mel_to_hz(mel_points[i])
+        i = i + 1
+    }
+    // convert Hz to FFT bin indices (float)
+    let mut bin_points = ae_zeros(num_points)
+    let mut i = 0
+    while i < num_points {
+        bin_points[i] = hz_points[i] * to_float(n_fft) / to_float(sr)
+        i = i + 1
+    }
+    // build triangular filters
+    let mut fb = ae_zeros_2d(n_mels, n_bins)
+    let mut m = 0
+    while m < n_mels {
+        let f_left = bin_points[m]
+        let f_center = bin_points[m + 1]
+        let f_right = bin_points[m + 2]
+        for k in 0..n_bins {
+            let fk = to_float(k)
+            if fk >= f_left && fk <= f_center {
+                let denom = f_center - f_left
+                if denom > 0.0 {
+                    fb[m][k] = (fk - f_left) / denom
+                }
+            }
+            if fk > f_center && fk <= f_right {
+                let denom = f_right - f_center
+                if denom > 0.0 {
+                    fb[m][k] = (f_right - fk) / denom
+                }
+            }
+        }
+        m = m + 1
+    }
+    return fb
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Mel Spectrogram: STFT magnitude -> mel filterbank -> mel energies
+//  Returns: [num_frames, n_mels]
+// ═══════════════════════════════════════════════════════════════════
+
+@pure @hot
+fn ae_mel_spectrogram(signal, n_fft, hop, n_mels, sr) {
+    let stft_mag = ae_stft(signal, n_fft, hop)
+    let num_frames = len(stft_mag)
+    let n_bins = n_fft / 2 + 1
+    let fb = ae_mel_filterbank(n_mels, n_fft, sr)
+    // mel = stft_mag @ fb^T  =>  [frames, n_bins] x [n_mels, n_bins]^T = [frames, n_mels]
+    let mut mel = ae_zeros_2d(num_frames, n_mels)
+    let mut f = 0
+    while f < num_frames {
+        for m in 0..n_mels {
+            let mut s = 0.0
+            for k in 0..n_bins {
+                s = s + stft_mag[f][k] * fb[m][k]
+            }
+            mel[f][m] = s
+        }
+        f = f + 1
+    }
+    return mel
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Log-Mel: apply log(max(x, 1e-10)) to mel spectrogram
+// ═══════════════════════════════════════════════════════════════════
+
+@pure
+fn ae_log_mel(mel_spec) {
+    let num_frames = len(mel_spec)
+    if num_frames == 0 { return [] }
+    let n_mels = len(mel_spec[0])
+    let mut out = ae_zeros_2d(num_frames, n_mels)
+    let mut f = 0
+    while f < num_frames {
+        for m in 0..n_mels {
+            let v = ae_max_f(mel_spec[f][m], 1.0e-10)
+            out[f][m] = ae_log(v)
+        }
+        f = f + 1
+    }
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Conv1D — 1D convolution over [frames, channels_in]
+//
+//  kernel: [kernel_size, channels_in, channels_out]  (simulated as nested)
+//  bias: [channels_out]
+//  stride: int
+//  Returns: [out_frames, channels_out]
+// ═══════════════════════════════════════════════════════════════════
+
+@pure
+fn ae_gelu(x) {
+    // GELU(x) ~ x * 0.5 * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
+    // We use sigmoid approximation: GELU(x) ~ x * sigmoid(1.702 * x)
+    let sig = 1.0 / (1.0 + ae_exp(0.0 - 1.702 * x))
+    return x * sig
+}
+
+@pure
+fn ae_relu(x) {
+    if x > 0.0 { return x }
+    return 0.0
+}
+
+@pure @hot
+fn ae_conv1d(input, kernel_size, ch_in, ch_out, stride, weights, bias) {
+    // input: [frames, ch_in]
+    // weights: flat array of size [kernel_size * ch_in * ch_out]
+    //   indexed: w[k * ch_in * ch_out + c_in * ch_out + c_out]
+    // bias: [ch_out]
+    let n_frames = len(input)
+    let mut out_frames = 0
+    if n_frames >= kernel_size {
+        out_frames = (n_frames - kernel_size) / stride + 1
+    }
+    if out_frames <= 0 { return [[0.0]] }
+    let mut out = ae_zeros_2d(out_frames, ch_out)
+    let mut f = 0
+    while f < out_frames {
+        let start = f * stride
+        for co in 0..ch_out {
+            let mut s = bias[co]
+            for k in 0..kernel_size {
+                let fi = start + k
+                if fi < n_frames {
+                    for ci in 0..ch_in {
+                        let w_idx = k * ch_in * ch_out + ci * ch_out + co
+                        s = s + input[fi][ci] * weights[w_idx]
+                    }
+                }
+            }
+            out[f][co] = ae_gelu(s)
+        }
+        f = f + 1
+    }
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Conv1D Frontend — Two convolution layers (Whisper-style)
+//
+//  Conv1: kernel=3, stride=1, in=n_mels, out=d_model
+//  Conv2: kernel=3, stride=2, in=d_model, out=d_model
+//  Returns: [out_frames, d_model]
+// ═══════════════════════════════════════════════════════════════════
+
+@pure
+fn ae_init_weights(size, seed) {
+    // deterministic pseudo-random initialization
+    let mut w = ae_zeros(size)
+    let mut i = 0
+    while i < size {
+        let mut h = (i + 1) * 2654435761 + seed * 7919
+        h = h % 1000003
+        if h < 0 { h = 0 - h }
+        // scale to [-0.1, 0.1]
+        w[i] = (to_float(h % 10000) / 10000.0 - 0.5) * 0.2
+        i = i + 1
+    }
+    return w
+}
+
+@pure
+fn ae_init_bias(size) {
+    return ae_zeros(size)
+}
+
+@pure @hot
+fn ae_conv_frontend(log_mel, n_mels, d_model) {
+    // Conv1: kernel=3, stride=1, n_mels -> d_model
+    let k1_size = 3 * n_mels * d_model
+    let w1 = ae_init_weights(k1_size, 101)
+    let b1 = ae_init_bias(d_model)
+    let h1 = ae_conv1d(log_mel, 3, n_mels, d_model, 1, w1, b1)
+    // Conv2: kernel=3, stride=2, d_model -> d_model
+    let k2_size = 3 * d_model * d_model
+    let w2 = ae_init_weights(k2_size, 202)
+    let b2 = ae_init_bias(d_model)
+    let h2 = ae_conv1d(h1, 3, d_model, d_model, 2, w2, b2)
+    return h2
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Sinusoidal Positional Embedding
+//
+//  PE(pos, 2i)   = sin(pos / 10000^(2i/d_model))
+//  PE(pos, 2i+1) = cos(pos / 10000^(2i/d_model))
+//  Returns: [max_len, d_model]
+// ═══════════════════════════════════════════════════════════════════
+
+@pure
+fn ae_sinusoidal_pe(max_len, d_model) {
+    let mut pe = ae_zeros_2d(max_len, d_model)
+    let log10000 = ae_log(10000.0)
+    let mut pos = 0
+    while pos < max_len {
+        for i in 0..(d_model / 2) {
+            let angle = to_float(pos) * ae_exp(0.0 - to_float(2 * i) * log10000 / to_float(d_model))
+            pe[pos][2 * i] = ae_sin(angle)
+            if 2 * i + 1 < d_model {
+                pe[pos][2 * i + 1] = ae_cos(angle)
+            }
+        }
+        pos = pos + 1
+    }
+    return pe
+}
+
+@pure
+fn ae_add_pe(x, pe) {
+    let n = len(x)
+    let d = len(x[0])
+    let mut out = ae_zeros_2d(n, d)
+    let mut i = 0
+    while i < n {
+        for j in 0..d {
+            if i < len(pe) {
+                out[i][j] = x[i][j] + pe[i][j]
+            } else {
+                out[i][j] = x[i][j]
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Layer Normalization
+// ═══════════════════════════════════════════════════════════════════
+
+@pure
+fn ae_layer_norm(x, eps) {
+    let d = len(x)
+    // mean
+    let mut mu = 0.0
+    let mut i = 0
+    while i < d {
+    mu = mu / to_float(d)
+    // variance
+    let mut var = 0.0
+    for i in 0..d {
+        let diff = x[i] - mu
+        var = var + diff * diff
+    }
+    var = var / to_float(d)
+    let std = ae_sqrt(var + eps)
+    let mut out = ae_zeros(d)
+    for i in 0..d {
+        out[i] = (x[i] - mu) / std
+    }
+    return out
+        i = i + 1
+}
+
+@pure
+fn ae_layer_norm_2d(mat, eps) {
+    let n = len(mat)
+    let mut out = []
+    let mut i = 0
+    while i < n {
+        out = out + [ae_layer_norm(mat[i], eps)]
+        i = i + 1
+    }
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Softmax over a vector
+// ═══════════════════════════════════════════════════════════════════
+
+@pure
+fn ae_softmax(logits) {
+    let n = len(logits)
+    let mut mx = logits[0]
+    let mut i = 1
+    while i < n {
+        if logits[i] > mx { mx = logits[i] }
+        i = i + 1
+    }
+    let mut exps = ae_zeros(n)
+    let mut z = 0.0
+    let mut i = 0
+    while i < n {
+        exps[i] = ae_exp(logits[i] - mx)
+        z = z + exps[i]
+        i = i + 1
+    }
+    let mut out = ae_zeros(n)
+    let mut i = 0
+    while i < n {
+        out[i] = exps[i] / z
+        i = i + 1
+    }
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Multi-Head Self-Attention (MHSA)
+//
+//  Input: x [seq_len, d_model]
+//  Splits d_model into num_heads heads of size d_k = d_model / num_heads
+//  Returns: [seq_len, d_model]
+// ═══════════════════════════════════════════════════════════════════
+
+@pure
+fn ae_linear(x, d_in, d_out, seed) {
+    // x: [d_in]
+    // weight: [d_in * d_out] — deterministic init
+    let w = ae_init_weights(d_in * d_out, seed)
+    let mut out = ae_zeros(d_out)
+    let mut j = 0
+    while j < d_out {
+        let mut s = 0.0
+        for i in 0..d_in {
+            s = s + x[i] * w[i * d_out + j]
+        }
+        out[j] = s
+        j = j + 1
+    }
+    return out
+}
+
+@pure @hot
+fn ae_mhsa(x, d_model, num_heads) {
+    let seq_len = len(x)
+    let d_k = d_model / num_heads
+    if d_k <= 0 { return x }
+    let scale = 1.0 / ae_sqrt(to_float(d_k))
+    // project Q, K, V
+    let mut Q = ae_zeros_2d(seq_len, d_model)
+    let mut K = ae_zeros_2d(seq_len, d_model)
+    let mut V = ae_zeros_2d(seq_len, d_model)
+    let mut i = 0
+    while i < seq_len {
+        Q[i] = ae_linear(x[i], d_model, d_model, 301)
+        K[i] = ae_linear(x[i], d_model, d_model, 302)
+        V[i] = ae_linear(x[i], d_model, d_model, 303)
+        i = i + 1
+    }
+    // per-head attention
+    let mut out = ae_zeros_2d(seq_len, d_model)
+    let mut h = 0
+    while h < num_heads {
+        let h_start = h * d_k
+        // compute attention scores for this head
+        for qi in 0..seq_len {
+            let mut scores = ae_zeros(seq_len)
+            for ki in 0..seq_len {
+                let mut dot = 0.0
+                for d in 0..d_k {
+                    dot = dot + Q[qi][h_start + d] * K[ki][h_start + d]
+                }
+                scores[ki] = dot * scale
+            }
+            let attn = ae_softmax(scores)
+            // weighted sum of V
+            for d in 0..d_k {
+                let mut s = 0.0
+                for vi in 0..seq_len {
+                    s = s + attn[vi] * V[vi][h_start + d]
+                }
+                out[qi][h_start + d] = s
+            }
+        }
+        h = h + 1
+    }
+    // output projection
+    let mut projected = ae_zeros_2d(seq_len, d_model)
+    let mut i = 0
+    while i < seq_len {
+        projected[i] = ae_linear(out[i], d_model, d_model, 304)
+        i = i + 1
+    }
+    return projected
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Feed-Forward Network (FFN)
+//
+//  FFN(x) = GELU(xW1 + b1)W2 + b2
+//  Returns: [seq_len, d_model]
+// ═══════════════════════════════════════════════════════════════════
+
+@pure @hot
+fn ae_ffn(x, d_model, d_ff) {
+    let seq_len = len(x)
+    let mut out = ae_zeros_2d(seq_len, d_model)
+    let mut i = 0
+    while i < seq_len {
+        // first linear: d_model -> d_ff
+        let h = ae_linear(x[i], d_model, d_ff, 401)
+        // GELU activation
+        let mut h_act = ae_zeros(d_ff)
+        for j in 0..d_ff {
+            h_act[j] = ae_gelu(h[j])
+        }
+        // second linear: d_ff -> d_model
+        let w2 = ae_init_weights(d_ff * d_model, 402)
+        for j in 0..d_model {
+            let mut s = 0.0
+            for k in 0..d_ff {
+                s = s + h_act[k] * w2[k * d_model + j]
+            }
+            out[i][j] = s
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Transformer Encoder Block
+//
+//  Block(x) = x + MHSA(LN(x))
+//  Block(x) = x + FFN(LN(x))  (pre-norm style)
+// ═══════════════════════════════════════════════════════════════════
+
+@pure @hot
+fn ae_encoder_block(x, d_model, num_heads, d_ff) {
+    let seq_len = len(x)
+    let eps = 1.0e-5
+    // sub-block 1: LN + MHSA + residual
+    let ln1 = ae_layer_norm_2d(x, eps)
+    let attn_out = ae_mhsa(ln1, d_model, num_heads)
+    let mut h = ae_zeros_2d(seq_len, d_model)
+    let mut i = 0
+    while i < seq_len {
+        for j in 0..d_model {
+            h[i][j] = x[i][j] + attn_out[i][j]
+        }
+        i = i + 1
+    }
+    // sub-block 2: LN + FFN + residual
+    let ln2 = ae_layer_norm_2d(h, eps)
+    let ffn_out = ae_ffn(ln2, d_model, d_ff)
+    let mut out = ae_zeros_2d(seq_len, d_model)
+    let mut i = 0
+    while i < seq_len {
+        for j in 0..d_model {
+            out[i][j] = h[i][j] + ffn_out[i][j]
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Full Encoder — stacked transformer blocks
+// ═══════════════════════════════════════════════════════════════════
+
+@pure @hot
+fn ae_encoder(x, num_layers, d_model, num_heads, d_ff) {
+    let mut h = x
+    let mut _l = 0
+    while _l < num_layers {
+        h = ae_encoder_block(h, d_model, num_heads, d_ff)
+        _l = _l + 1
+    }
+    // final layer norm
+    let eps = 1.0e-5
+    return ae_layer_norm_2d(h, eps)
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Audio Projection — map d_model to proj_dim (LLM hidden dim)
+//
+//  Simple linear projection: [seq_len, d_model] -> [seq_len, proj_dim]
+// ═══════════════════════════════════════════════════════════════════
+
+@pure
+fn ae_project(x, d_in, d_out) {
+    let seq_len = len(x)
+    let mut out = ae_zeros_2d(seq_len, d_out)
+    let mut i = 0
+    while i < seq_len {
+        out[i] = ae_linear(x[i], d_in, d_out, 501)
+        i = i + 1
+    }
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Full Pipeline: raw audio -> mel -> conv -> encoder -> projection
+//
+//  config: map from ae_default_config or ae_make_config
+//  Returns: [out_frames, proj_dim]
+// ═══════════════════════════════════════════════════════════════════
+
+@fuse @hot
+fn ae_full_pipeline(raw_audio, config) {
+    let n_mels = config["n_mels"]
+    let n_fft = config["n_fft"]
+    let hop = config["hop_length"]
+    let d_model = config["d_model"]
+    let num_heads = config["num_heads"]
+    let num_layers = config["num_layers"]
+    let d_ff = config["d_ff"]
+    let proj_dim = config["proj_dim"]
+    let sr = config["sample_rate"]
+    // 1. Normalize
+    let normed = ae_normalize_audio(raw_audio)
+    // 2. Mel spectrogram
+    let mel = ae_mel_spectrogram(normed, n_fft, hop, n_mels, sr)
+    // 3. Log-mel
+    let lm = ae_log_mel(mel)
+    // 4. Conv frontend
+    let conv_out = ae_conv_frontend(lm, n_mels, d_model)
+    // 5. Positional embedding
+    let num_frames = len(conv_out)
+    let pe = ae_sinusoidal_pe(num_frames, d_model)
+    let with_pe = ae_add_pe(conv_out, pe)
+    // 6. Transformer encoder
+    let enc_out = ae_encoder(with_pe, num_layers, d_model, num_heads, d_ff)
+    // 7. Projection
+    let projected = ae_project(enc_out, d_model, proj_dim)
+    return projected
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Utility: compute audio duration in seconds
+// ═══════════════════════════════════════════════════════════════════
+
+@pure
+fn ae_audio_duration_sec(num_samples, sample_rate) {
+    if sample_rate <= 0 { return 0.0 }
+    return to_float(num_samples) / to_float(sample_rate)
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Utility: compute number of output frames from audio length
+// ═══════════════════════════════════════════════════════════════════
+
+@pure
+fn ae_num_output_frames(num_samples, n_fft, hop) {
+    if num_samples < n_fft { return 1 }
+    let stft_frames = (num_samples - n_fft) / hop + 1
+    // after conv frontend: conv1 (k=3,s=1) -> stft_frames-2
+    //                       conv2 (k=3,s=2) -> (stft_frames-2-2)/2
+    let after_c1 = stft_frames - 2
+    if after_c1 <= 2 { return 1 }
+    let after_c2 = (after_c1 - 2) / 2
+    if after_c2 <= 0 { return 1 }
+    return after_c2
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Masked attention helper — apply padding mask to encoder output
+//  Sets padded frame outputs to zero
+// ═══════════════════════════════════════════════════════════════════
+
+@pure
+fn ae_apply_padding_mask(enc_out, mask) {
+    let n = len(enc_out)
+    let d = len(enc_out[0])
+    let mut out = ae_zeros_2d(n, d)
+    let mut i = 0
+    while i < n {
+        if i < len(mask) && mask[i] == 1 {
+            for j in 0..d {
+                out[i][j] = enc_out[i][j]
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+println("[audio_encoder] loaded — Whisper-style mel + conv1d + transformer encoder + projection")
+
+
+// -- end inlined --
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn check(name, cond) {
+    if cond {
+        println("[PASS] " + name)
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name)
+        fail_count = fail_count + 1
+    }
+}
+
+fn t_abs(x) {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn approx(a, b, eps) {
+    return t_abs(a - b) < eps
+}
+
+// ── helper: generate synthetic audio (sine wave) ────────────
+fn make_sine_wave(n_samples, freq, sr) {
+    let pi = 3.141592653589793
+    let mut out = ae_zeros(n_samples)
+    let mut i = 0
+
+    while i < n_samples {
+        out[i] = ae_sin(2.0 * pi * freq * to_float(i) / to_float(sr))
+    }
+    return out
+}
+
+println("=======================================================")
+println("  Audio Encoder Test Suite (#131)")
+println("=======================================================")
+
+// ═══════════════════════════════════════════════════════════════
+//  T1: default config has correct keys
+// ═══════════════════════════════════════════════════════════════
+let cfg = ae_default_config()
+check("T1 default config n_mels=80", cfg["n_mels"] == 80)
+check("T1b default config d_model=64", cfg["d_model"] == 64)
+
+// ═══════════════════════════════════════════════════════════════
+//  T2: custom config creation
+// ═══════════════════════════════════════════════════════════════
+let custom_cfg = ae_make_config(40, 512, 256, 128, 8, 4, 256, 128, 22050)
+check("T2 custom config n_mels=40", custom_cfg["n_mels"] == 40)
+check("T2b custom config sample_rate=22050", custom_cfg["sample_rate"] == 22050)
+
+// ═══════════════════════════════════════════════════════════════
+//  T3: normalize audio scales to [-1,1]
+// ═══════════════════════════════════════════════════════════════
+let raw = [0.5, -1.0, 0.25, 0.75, -0.5]
+let normed = ae_normalize_audio(raw)
+let mut max_val = 0.0
+let mut i = 0
+
+while i < len(normed) {
+    let a = t_abs(normed[i])
+    if a > max_val { max_val = a }
+}
+check("T3 normalize max abs = 1.0", approx(max_val, 1.0, 0.001))
+
+// ═══════════════════════════════════════════════════════════════
+//  T4: normalize silence (zeros) unchanged
+// ═══════════════════════════════════════════════════════════════
+let silence = [0.0, 0.0, 0.0, 0.0]
+let normed_silence = ae_normalize_audio(silence)
+check("T4 silence unchanged", approx(normed_silence[0], 0.0, 1.0e-10))
+
+// ═══════════════════════════════════════════════════════════════
+//  T5: resample identity (same rate)
+// ═══════════════════════════════════════════════════════════════
+let sig5 = [1.0, 2.0, 3.0, 4.0, 5.0]
+let resampled_same = ae_resample(sig5, 16000, 16000)
+check("T5 resample identity length", len(resampled_same) == 5)
+
+// ═══════════════════════════════════════════════════════════════
+//  T6: resample downsampling preserves length ratio
+// ═══════════════════════════════════════════════════════════════
+let sig6 = make_sine_wave(100, 440.0, 16000)
+let resampled_down = ae_resample(sig6, 16000, 8000)
+check("T6 downsample len ~ half", len(resampled_down) == 50)
+
+// ═══════════════════════════════════════════════════════════════
+//  T7: resample upsampling preserves length ratio
+// ═══════════════════════════════════════════════════════════════
+let sig7 = make_sine_wave(50, 440.0, 8000)
+let resampled_up = ae_resample(sig7, 8000, 16000)
+check("T7 upsample len ~ double", len(resampled_up) == 100)
+
+// ═══════════════════════════════════════════════════════════════
+//  T8: pad_or_trim pads short signal
+// ═══════════════════════════════════════════════════════════════
+let short_sig = [1.0, 2.0, 3.0]
+let padded = ae_pad_or_trim(short_sig, 6)
+check("T8 padded length=6", len(padded) == 6)
+check("T8b padded[0] preserved", approx(padded[0], 1.0, 0.001))
+check("T8c padded[5] = 0", approx(padded[5], 0.0, 0.001))
+
+// ═══════════════════════════════════════════════════════════════
+//  T9: pad_or_trim trims long signal
+// ═══════════════════════════════════════════════════════════════
+let long_sig = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+let trimmed = ae_pad_or_trim(long_sig, 3)
+check("T9 trimmed length=3", len(trimmed) == 3)
+check("T9b trimmed[2] = 3.0", approx(trimmed[2], 3.0, 0.001))
+
+// ═══════════════════════════════════════════════════════════════
+//  T10: pad_or_trim identity for exact length
+// ═══════════════════════════════════════════════════════════════
+let exact_sig = [1.0, 2.0, 3.0]
+let identity = ae_pad_or_trim(exact_sig, 3)
+check("T10 identity length=3", len(identity) == 3)
+
+// ═══════════════════════════════════════════════════════════════
+//  T11: padding mask correct shape
+// ═══════════════════════════════════════════════════════════════
+let mask = ae_make_padding_mask(3, 5)
+check("T11 mask length=5", len(mask) == 5)
+
+// ═══════════════════════════════════════════════════════════════
+//  T12: padding mask correct values
+// ═══════════════════════════════════════════════════════════════
+check("T12 mask[0]=1", mask[0] == 1)
+check("T12b mask[2]=1", mask[2] == 1)
+check("T12c mask[3]=0", mask[3] == 0)
+check("T12d mask[4]=0", mask[4] == 0)
+
+// ═══════════════════════════════════════════════════════════════
+//  T13: hann window correct length
+// ═══════════════════════════════════════════════════════════════
+let win = ae_hann_window(16)
+check("T13 hann window length=16", len(win) == 16)
+
+// ═══════════════════════════════════════════════════════════════
+//  T14: hann window endpoints near zero
+// ═══════════════════════════════════════════════════════════════
+check("T14 hann window[0] near 0", t_abs(win[0]) < 0.01)
+
+// ═══════════════════════════════════════════════════════════════
+//  T15: hann window peak at center
+// ═══════════════════════════════════════════════════════════════
+let mid = len(win) / 2
+check("T15 hann window peak at center", win[mid] > 0.9)
+
+// ═══════════════════════════════════════════════════════════════
+//  T16: stft_frame returns re/im pair
+// ═══════════════════════════════════════════════════════════════
+let test_sig16 = make_sine_wave(32, 1000.0, 16000)
+let frame_ri = ae_stft_frame(test_sig16, 0, 16, ae_hann_window(16))
+check("T16 stft_frame returns 2 arrays", len(frame_ri) == 2)
+check("T16b re length = n_fft/2+1", len(frame_ri[0]) == 9)
+
+// ═══════════════════════════════════════════════════════════════
+//  T17: stft output shape correct
+// ═══════════════════════════════════════════════════════════════
+let test_sig17 = make_sine_wave(160, 440.0, 16000)
+let stft_out = ae_stft(test_sig17, 32, 16)
+let n_bins_17 = 32 / 2 + 1
+let expected_frames_17 = (160 - 32) / 16 + 1
+check("T17 stft num_frames correct", len(stft_out) == expected_frames_17)
+check("T17b stft n_bins correct", len(stft_out[0]) == n_bins_17)
+
+// ═══════════════════════════════════════════════════════════════
+//  T18: mel filterbank shape correct
+// ═══════════════════════════════════════════════════════════════
+let fb = ae_mel_filterbank(8, 32, 16000)
+check("T18 filterbank rows = n_mels", len(fb) == 8)
+check("T18b filterbank cols = n_fft/2+1", len(fb[0]) == 17)
+
+// ═══════════════════════════════════════════════════════════════
+//  T19: mel filterbank row sums non-negative
+// ═══════════════════════════════════════════════════════════════
+let mut all_nonneg = true
+let mut m = 0
+
+while m < len(fb) {
+    let mut row_sum = 0.0
+    let mut k = 0
+
+    while k < len(fb[m]) {
+        if fb[m][k] < 0.0 { all_nonneg = false }
+        row_sum = row_sum + fb[m][k]
+    }
+}
+check("T19 filterbank all values >= 0", all_nonneg)
+
+// ═══════════════════════════════════════════════════════════════
+//  T20: mel spectrogram shape correct
+// ═══════════════════════════════════════════════════════════════
+let test_sig20 = make_sine_wave(320, 440.0, 16000)
+let mel20 = ae_mel_spectrogram(test_sig20, 32, 16, 8, 16000)
+check("T20 mel spectrogram frames > 0", len(mel20) > 0)
+check("T20b mel spectrogram n_mels=8", len(mel20[0]) == 8)
+
+// ═══════════════════════════════════════════════════════════════
+//  T21: log_mel applies log transform
+// ═══════════════════════════════════════════════════════════════
+let lm21 = ae_log_mel(mel20)
+check("T21 log_mel same num frames", len(lm21) == len(mel20))
+check("T21b log_mel same n_mels", len(lm21[0]) == len(mel20[0]))
+// log of values >= 0 should have some negative values (log < 0 for x < 1)
+let mut has_negative = false
+let mut f = 0
+
+while f < len(lm21) {
+    let mut m = 0
+
+    while m < len(lm21[f]) {
+        if lm21[f][m] < 0.0 { has_negative = true }
+    }
+}
+check("T21c log_mel has negative values (log of small numbers)", has_negative)
+
+// ═══════════════════════════════════════════════════════════════
+//  T22: GELU(0) = 0
+// ═══════════════════════════════════════════════════════════════
+check("T22 gelu(0)=0", approx(ae_gelu(0.0), 0.0, 0.01))
+
+// ═══════════════════════════════════════════════════════════════
+//  T23: GELU positive for positive input
+// ═══════════════════════════════════════════════════════════════
+check("T23 gelu(2.0) > 0", ae_gelu(2.0) > 0.0)
+
+// ═══════════════════════════════════════════════════════════════
+//  T24: conv1d output shape correct
+// ═══════════════════════════════════════════════════════════════
+// input: [10 frames, 4 channels], kernel=3, stride=1, out_ch=8
+let conv_in = ae_zeros_2d(10, 4)
+let mut i = 0
+
+while i < 10 {
+    let mut j = 0
+
+    while j < 4 {
+        conv_in[i][j] = to_float(i * 4 + j) * 0.1
+    }
+}
+let w24 = ae_init_weights(3 * 4 * 8, 999)
+let b24 = ae_zeros(8)
+let conv_out24 = ae_conv1d(conv_in, 3, 4, 8, 1, w24, b24)
+let expected_out_frames = (10 - 3) / 1 + 1
+check("T24 conv1d out frames = 8", len(conv_out24) == expected_out_frames)
+check("T24b conv1d out channels = 8", len(conv_out24[0]) == 8)
+
+// ═══════════════════════════════════════════════════════════════
+//  T25: conv frontend output has d_model channels
+// ═══════════════════════════════════════════════════════════════
+// use small log_mel: [20 frames, 8 mels]
+let lm25 = ae_zeros_2d(20, 8)
+let mut f = 0
+
+while f < 20 {
+    let mut m = 0
+
+    while m < 8 {
+        lm25[f][m] = to_float(f * 8 + m) * 0.01
+    }
+}
+let d_model_25 = 16
+let frontend_out = ae_conv_frontend(lm25, 8, d_model_25)
+check("T25 conv frontend out channels = d_model", len(frontend_out[0]) == d_model_25)
+check("T25b conv frontend out frames > 0", len(frontend_out) > 0)
+
+// ═══════════════════════════════════════════════════════════════
+//  T26: sinusoidal PE shape correct
+// ═══════════════════════════════════════════════════════════════
+let pe26 = ae_sinusoidal_pe(10, 8)
+check("T26 PE rows = max_len", len(pe26) == 10)
+check("T26b PE cols = d_model", len(pe26[0]) == 8)
+
+// ═══════════════════════════════════════════════════════════════
+//  T27: sinusoidal PE varies across positions
+// ═══════════════════════════════════════════════════════════════
+let mut pe_differs = false
+let mut j = 0
+
+while j < 8 {
+    if t_abs(pe26[0][j] - pe26[5][j]) > 0.001 {
+        pe_differs = true
+    }
+}
+check("T27 PE differs across positions", pe_differs)
+
+// ═══════════════════════════════════════════════════════════════
+//  T28: layer norm zero mean
+// ═══════════════════════════════════════════════════════════════
+let v28 = [1.0, 3.0, 5.0, 7.0]
+let ln28 = ae_layer_norm(v28, 1.0e-5)
+let mut mean28 = 0.0
+let mut i = 0
+
+while i < len(ln28) { mean28 = mean28 + ln28[i] }
+mean28 = mean28 / to_float(len(ln28))
+check("T28 layer norm mean ~ 0", t_abs(mean28) < 0.01)
+
+// ═══════════════════════════════════════════════════════════════
+//  T29: layer norm unit variance
+// ═══════════════════════════════════════════════════════════════
+let mut var29 = 0.0
+let mut i = 0
+
+while i < len(ln28) {
+    var29 = var29 + (ln28[i] - mean28) * (ln28[i] - mean28)
+}
+var29 = var29 / to_float(len(ln28))
+check("T29 layer norm variance ~ 1", t_abs(var29 - 1.0) < 0.1)
+
+// ═══════════════════════════════════════════════════════════════
+//  T30: softmax sums to 1
+// ═══════════════════════════════════════════════════════════════
+let logits30 = [1.0, 2.0, 3.0, 0.5]
+let sm30 = ae_softmax(logits30)
+let mut sm_sum = 0.0
+let mut i = 0
+
+while i < len(sm30) { sm_sum = sm_sum + sm30[i] }
+check("T30 softmax sums to 1", approx(sm_sum, 1.0, 0.001))
+
+// ═══════════════════════════════════════════════════════════════
+//  T31: encoder block preserves shape
+// ═══════════════════════════════════════════════════════════════
+let d31 = 8
+let seq31 = 4
+let x31 = ae_zeros_2d(seq31, d31)
+let mut i = 0
+
+while i < seq31 {
+    let mut j = 0
+
+    while j < d31 {
+        x31[i][j] = to_float(i * d31 + j) * 0.01
+    }
+}
+let enc_block_out = ae_encoder_block(x31, d31, 2, 16)
+check("T31 encoder block rows preserved", len(enc_block_out) == seq31)
+check("T31b encoder block cols preserved", len(enc_block_out[0]) == d31)
+
+// ═══════════════════════════════════════════════════════════════
+//  T32: encoder stacked layers preserves shape
+// ═══════════════════════════════════════════════════════════════
+let enc32 = ae_encoder(x31, 2, d31, 2, 16)
+check("T32 encoder rows preserved", len(enc32) == seq31)
+check("T32b encoder cols preserved", len(enc32[0]) == d31)
+
+// ═══════════════════════════════════════════════════════════════
+//  T33: projection changes dimension
+// ═══════════════════════════════════════════════════════════════
+let proj33 = ae_project(x31, d31, 4)
+check("T33 projection rows preserved", len(proj33) == seq31)
+check("T33b projection cols = d_out", len(proj33[0]) == 4)
+
+// ═══════════════════════════════════════════════════════════════
+//  T34: full pipeline produces output
+// ═══════════════════════════════════════════════════════════════
+// Use small config for speed
+let small_cfg = ae_make_config(4, 16, 8, 8, 2, 1, 16, 4, 16000)
+let test_audio = make_sine_wave(256, 440.0, 16000)
+let pipeline_out = ae_full_pipeline(test_audio, small_cfg)
+check("T34 pipeline output frames > 0", len(pipeline_out) > 0)
+check("T34b pipeline output dim = proj_dim", len(pipeline_out[0]) == 4)
+
+// ═══════════════════════════════════════════════════════════════
+//  T35: audio duration calculation correct
+// ═══════════════════════════════════════════════════════════════
+let dur = ae_audio_duration_sec(16000, 16000)
+check("T35 1s audio duration", approx(dur, 1.0, 0.001))
+
+// ═══════════════════════════════════════════════════════════════
+//  Summary
+// ═══════════════════════════════════════════════════════════════
+println("")
+println("=== audio_encoder test summary ===")
+println("PASS: " + str(pass_count))
+println("FAIL: " + str(fail_count))
+println("TOTAL: " + str(pass_count + fail_count))

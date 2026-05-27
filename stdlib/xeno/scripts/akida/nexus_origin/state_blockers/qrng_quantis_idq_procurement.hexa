@@ -1,0 +1,16 @@
+slug qrng-quantis-idq-procurement
+status blocked
+priority 90
+target external-procurement
+why ID Quantique Quantis IDQ commercial hardware 4 Mbit/sec QRNG procurement + driver + binding
+fire-host local
+fire-cmd echo "blocked on procurement chain: 1-decision 2-purchase 3-ship 4-driver 5-mount 6-binding 7-hexa-wrapper"
+interval 604800
+attempts-log state/blockers/qrng_quantis_idq_procurement.attempts.jsonl
+omega-stop fixpoint-convergence
+prereq-list purchase-decision / vendor-procurement / Korea-shipping-2-4-weeks / driver-install / physical-mount / C-library-binding / hexa-wrapper
+cost-estimate-usd 1000-10000
+resolution-metric β-source-mix-includes-quantis
+resolution-op eq
+resolution-value true
+resolution-fallback hardware operational + Quantis CLI entropy test passes

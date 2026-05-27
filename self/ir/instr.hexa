@@ -1,0 +1,505 @@
+// ═══════════════════════════════════════════════════════════
+//  self/ir/instr.hexa — HEXA-IR SSA Instructions
+//  Port of src/ir/instr.rs (1:1, semantics-preserving)
+//  ValueId, BlockId, FuncId, Instruction, Operand,
+//  BasicBlock, IrFunction, IrModule
+// ═══════════════════════════════════════════════════════════
+
+// ── SSA / CFG ids ───────────────────────────────────────────
+// Ids are simple integers in Hexa; constructors exist for parity.
+
+fn value_id(n) {
+    return n
+}
+
+fn block_id(n) {
+    return n
+}
+
+fn func_id(n) {
+    return n
+}
+
+fn value_id_to_string(v) {
+    return "%" + to_string(v)
+}
+
+fn block_id_to_string(b) {
+    return "bb" + to_string(b)
+}
+
+fn func_id_to_string(f) {
+    return "@" + to_string(f)
+}
+
+// ── CmpKind ─────────────────────────────────────────────────
+enum CmpKind {
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge
+}
+
+fn cmp_kind_to_string(k) {
+    return match k {
+        Eq -> "eq",
+        Ne -> "ne",
+        Lt -> "lt",
+        Le -> "le",
+        Gt -> "gt",
+        Ge -> "ge"
+    }
+}
+
+// ── Operand (tagged struct) ─────────────────────────────────
+// RFC-020 B1 status (2026-05-10): the struct + string-kind discriminator
+// is intentionally retained. RFC-020 A5 landed enum payload variants in
+// self/hexa_full.hexa, but the current `hexa run` interpreter binary
+// (build/hexa_interp.real and the remote ubu-1 mirror) still resolves
+// payload-bound names to `val_void`, so a full sum-type migration of
+// Operand would silently break every downstream consumer.
+//
+// Audited consumers that read .kind / .a / .b / .cmp directly (must move
+// in lock-step with the migration):
+//   - self/ir/print.hexa             (12 kind branches in print_operand)
+//   - self/codegen/mod.hexa          (~80 sites: regalloc + arm64/x86 emit)
+//   - self/codegen/test_regalloc_coverage.hexa
+//
+// Planned sum-type shape (single-field payload, RFC-020 §5):
+//   struct PhiData    { block: int, value_id: int }
+//   struct SwitchCase { case_val: int, target_bb: int }
+//   struct CmpData    { kind: string }
+//   enum Operand {
+//       Value(int), ImmI64(int), ImmF64(float), ImmBool(bool),
+//       Block(int), Func(int), FieldIdx(int), StringRef(int),
+//       Phi(PhiData), Switch(SwitchCase), Cmp(CmpData), Param(int)
+//   }
+//
+// TODO (RFC-020 B1 follow-up): once `build/hexa_interp.real` is rebuilt
+// from self/hexa_full.hexa and confirms payload destructuring at runtime,
+// (1) replace the struct below with the enum, (2) rewrite constructors
+// to enum variants, (3) sweep print.hexa and codegen/mod.hexa to use
+// `match op { ... }` instead of `op.kind == "..."`, (4) drop the
+// kind/a/b/cmp fallback fields, (5) re-run self/test_enum_payload_full.hexa
+// + self/test_ir_match_enum_try.hexa to confirm 15/15 + 53/53.
+struct Operand {
+    kind: string,   // "value" | "imm_i64" | "imm_f64" | "imm_bool" | "block" |
+                    // "func" | "field_idx" | "string_ref" | "phi_entry" |
+                    // "switch_case" | "cmp" | "param"
+    a: int,         // primary payload (ValueId/ImmI64/BlockId/FuncId/idx/case-val)
+    b: int,         // secondary (phi block or switch target)
+    cmp: string     // cmp kind string when kind=="cmp"
+}
+
+fn op_value(v) {
+    return Operand { kind: "value", a: v, b: 0, cmp: "" }
+}
+
+fn op_imm_i64(n) {
+    return Operand { kind: "imm_i64", a: n, b: 0, cmp: "" }
+}
+
+fn op_imm_bool(b) {
+    let v = 0
+    if b {
+        v = 1
+    }
+    return Operand { kind: "imm_bool", a: v, b: 0, cmp: "" }
+}
+
+fn op_block(bb) {
+    return Operand { kind: "block", a: bb, b: 0, cmp: "" }
+}
+
+fn op_func(f) {
+    return Operand { kind: "func", a: f, b: 0, cmp: "" }
+}
+
+fn op_field_idx(i) {
+    return Operand { kind: "field_idx", a: i, b: 0, cmp: "" }
+}
+
+fn op_string_ref(i) {
+    return Operand { kind: "string_ref", a: i, b: 0, cmp: "" }
+}
+
+fn op_phi_entry(bb, v) {
+    return Operand { kind: "phi_entry", a: v, b: bb, cmp: "" }
+}
+
+fn op_switch_case(val, bb) {
+    return Operand { kind: "switch_case", a: val, b: bb, cmp: "" }
+}
+
+fn op_cmp(kind_str) {
+    return Operand { kind: "cmp", a: 0, b: 0, cmp: kind_str }
+}
+
+fn op_param(i) {
+    return Operand { kind: "param", a: i, b: 0, cmp: "" }
+}
+
+// ── Instruction ─────────────────────────────────────────────
+struct Instruction {
+    result: int,        // ValueId
+    op: string,         // opcode mnemonic (use opcode_to_string)
+    operands: array,    // array of Operand
+    ty: string          // IrType kind string (use ir_ty_to_string)
+}
+
+fn make_instruction(result, op, operands, ty) {
+    return Instruction {
+        result: result,
+        op: op,
+        operands: operands,
+        ty: ty
+    }
+}
+
+// ── BasicBlock ──────────────────────────────────────────────
+struct BasicBlock {
+    id: int,
+    name: string,
+    instructions: array,    // array of Instruction
+    preds: array,           // array of BlockId
+    succs: array            // array of BlockId
+}
+
+fn make_basic_block(id, name) {
+    return BasicBlock {
+        id: id,
+        name: name,
+        instructions: [],
+        preds: [],
+        succs: []
+    }
+}
+
+// terminator: last instruction if it is a terminator opcode
+fn block_is_terminated(b) {
+    let n = len(b.instructions)
+    if n == 0 {
+        return false
+    }
+    let last = b.instructions[n - 1]
+    let op = last.op
+    if op == "jump" {
+        return true
+    }
+    if op == "branch" {
+        return true
+    }
+    if op == "ret" {
+        return true
+    }
+    if op == "switch" {
+        return true
+    }
+    return false
+}
+
+// ── IrFunction ──────────────────────────────────────────────
+struct IrFunction {
+    id: int,
+    name: string,
+    params: array,          // array of [name, IrType-kind-string]
+    ret_type: string,       // IrType kind string (always "i64" at dispatch)
+    blocks: array,          // array of BasicBlock
+    next_value: int,
+    next_block: int,
+    // P7-6 struct_idx: optional struct name of the return value for
+    // `let x = make_point()` → env type-tag propagation. "" when the
+    // function returns a non-struct / unknown. Populated during Pass 1
+    // by frontends when FnDecl.ret_type annotation matches a registered
+    // struct name.
+    ret_struct: string
+}
+
+fn make_ir_function(id, name, params, ret_type) {
+    return IrFunction {
+        id: id,
+        name: name,
+        params: params,
+        ret_type: ret_type,
+        blocks: [],
+        next_value: 0,
+        next_block: 0,
+        ret_struct: ""
+    }
+}
+
+// Sets the return-struct tag on a previously-registered function.
+// Idempotent — last write wins. Silent if fn_idx is out of range.
+fn module_set_fn_ret_struct(m, fn_idx: int, struct_name: string) {
+    if fn_idx < 0 { return 0 }
+    if fn_idx >= len(m.functions) { return 0 }
+    m.functions[fn_idx].ret_struct = struct_name
+    return 0
+}
+
+// Reads the return-struct tag. Returns "" if unset or fn_idx invalid.
+fn module_get_fn_ret_struct(m, fn_idx: int) -> string {
+    if fn_idx < 0 { return "" }
+    if fn_idx >= len(m.functions) { return "" }
+    return m.functions[fn_idx].ret_struct
+}
+
+fn func_next_value_id(f) {
+    return f.next_value
+}
+
+fn func_fresh_value(f) {
+    let id = f.next_value
+    f.next_value = f.next_value + 1
+    return id
+}
+
+fn func_fresh_block(f, name) {
+    let id = f.next_block
+    f.next_block = f.next_block + 1
+    push(f.blocks, make_basic_block(id, name))
+    return id
+}
+
+fn func_instr_count(f) {
+    let total = 0
+    let i = 0
+    while i < len(f.blocks) {
+        total = total + len(f.blocks[i].instructions)
+        i = i + 1
+    }
+    return total
+}
+
+fn func_entry_block(f) {
+    if len(f.blocks) == 0 {
+        return 0
+    }
+    return f.blocks[0]
+}
+
+// ── IrModule ────────────────────────────────────────────────
+struct Global {
+    name: string,
+    ty: string,         // IrType kind
+    has_init: bool,     // replacement for Option<Operand>
+    is_const: bool
+}
+
+struct IrModule {
+    name: string,
+    functions: array,       // array of IrFunction
+    globals: array,         // array of Global
+    string_pool: array,     // array of string
+    next_func: int,
+    // P7-6 Field struct_idx: struct decl registry for field-name→idx
+    // resolution. Parallel arrays so entry i = (struct_names[i],
+    // struct_fields[i] = array<string>, struct_field_types[i] =
+    // array<string>). Populated by Pass 1 of native_build (and future
+    // frontends); consumed by Field/StructInit lowering to replace the
+    // hardcoded idx=0 / positional-order fallback.
+    //
+    // struct_field_types enables chained Field access resolution
+    // (a.b.c): knowing b's declared type lets us resolve c against the
+    // next struct's registry entry. "" entries mean untyped (legacy
+    // parse) so chaining stops at that field and idx=0 fallback kicks
+    // in — no regression vs the names-only era.
+    struct_names:       array,   // array of string
+    struct_fields:      array,   // array of array<string>
+    struct_field_types: array,   // array of array<string>
+    // P7-6 EnumPath lowering: payload-free enum variant registry.
+    // Parallel arrays — entry i = (enum_names[i], enum_variants[i] =
+    // array<string>). Variant tag = positional index within variants.
+    // Populated by Pass 1 (EnumDecl nodes); consumed by nb_lower_expr
+    // EnumPath branch to emit bld_const_i64(variant_idx). Match arm
+    // patterns of the form `EnumName::Variant` flow through the same
+    // path and compare equal against the scrutinee.
+    //
+    // Payload-carrying variants (EnumPath{left=pattern} or items=[...])
+    // still land in the generic pattern path — destructure requires a
+    // per-variant field-type table which is deferred to a follow-up.
+    enum_names:    array,        // array of string
+    enum_variants: array         // array of array<string>
+}
+
+fn make_ir_module(name) {
+    return IrModule {
+        name: name,
+        functions: [],
+        globals: [],
+        string_pool: [],
+        next_func: 0,
+        struct_names: [],
+        struct_fields: [],
+        struct_field_types: [],
+        enum_names: [],
+        enum_variants: []
+    }
+}
+
+// ── Struct decl registry (P7-6 field_idx resolution prep) ────────
+// Idempotent: re-registering same name overwrites field list + types.
+// field_types may be passed as [] when types are unavailable — the
+// per-field type slots fall back to "" so chain-resolution treats the
+// struct as names-only. Full-typed callers get chain support.
+fn module_add_struct(m, struct_name: string, field_names: array) -> int {
+    return module_add_struct_typed(m, struct_name, field_names, [])
+}
+
+fn module_add_struct_typed(m, struct_name: string, field_names: array, field_types: array) -> int {
+    // Normalize types to same length as names (pad with "").
+    let n = len(field_names)
+    let mut norm_types = []
+    let mut k = 0
+    while k < n {
+        let t = if k < len(field_types) { field_types[k] } else { "" }
+        norm_types.push(t)
+        k = k + 1
+    }
+    let mut i = 0
+    while i < len(m.struct_names) {
+        if m.struct_names[i] == struct_name {
+            m.struct_fields[i] = field_names
+            m.struct_field_types[i] = norm_types
+            return i
+        }
+        i = i + 1
+    }
+    push(m.struct_names, struct_name)
+    push(m.struct_fields, field_names)
+    push(m.struct_field_types, norm_types)
+    return len(m.struct_names) - 1
+}
+
+// Returns the list of field names for a struct, or [] if unknown.
+fn module_find_struct_fields(m, struct_name: string) -> array {
+    let mut i = 0
+    while i < len(m.struct_names) {
+        if m.struct_names[i] == struct_name {
+            return m.struct_fields[i]
+        }
+        i = i + 1
+    }
+    return []
+}
+
+// Returns the positional index of a field within a struct, or -1 if
+// the struct or field is unknown. Callers MUST treat -1 as "fallback
+// to idx=0" or as an explicit error depending on invocation context.
+fn module_find_field_idx(m, struct_name: string, field_name: string) -> int {
+    let fields = module_find_struct_fields(m, struct_name)
+    let mut i = 0
+    while i < len(fields) {
+        if fields[i] == field_name {
+            return i
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+// Returns the declared type of a field, or "" if unknown or untyped.
+// Used by chain-resolution (a.b.c): given the struct of `a` and the
+// field name `b`, the return value is the struct name of b, which
+// becomes the struct context for resolving `c`.
+fn module_find_field_type(m, struct_name: string, field_name: string) -> string {
+    let mut i = 0
+    while i < len(m.struct_names) {
+        if m.struct_names[i] == struct_name {
+            let fields = m.struct_fields[i]
+            let types  = m.struct_field_types[i]
+            let mut j = 0
+            while j < len(fields) {
+                if fields[j] == field_name {
+                    if j < len(types) { return types[j] }
+                    return ""
+                }
+                j = j + 1
+            }
+            return ""
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// ── Enum decl registry (P7-6 EnumPath lowering, payload-free) ────
+// Idempotent: re-registering same enum overwrites the variant list.
+// Variant tag = positional index within the registered variant array.
+fn module_add_enum(m, enum_name: string, variant_names: array) -> int {
+    let mut i = 0
+    while i < len(m.enum_names) {
+        if m.enum_names[i] == enum_name {
+            m.enum_variants[i] = variant_names
+            return i
+        }
+        i = i + 1
+    }
+    push(m.enum_names, enum_name)
+    push(m.enum_variants, variant_names)
+    return len(m.enum_names) - 1
+}
+
+// Returns the positional tag of a variant, or -1 if unknown. Callers
+// treat -1 as "not a registered enum" and fall back (e.g. the C-era
+// symbol-literal path, or a conservative match-wildcard).
+fn module_find_variant_idx(m, enum_name: string, variant_name: string) -> int {
+    let mut i = 0
+    while i < len(m.enum_names) {
+        if m.enum_names[i] == enum_name {
+            let vs = m.enum_variants[i]
+            let mut j = 0
+            while j < len(vs) {
+                if vs[j] == variant_name {
+                    return j
+                }
+                j = j + 1
+            }
+            return -1
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+fn module_add_function(m, name, params, ret_type) {
+    let id = m.next_func
+    m.next_func = m.next_func + 1
+    push(m.functions, make_ir_function(id, name, params, ret_type))
+    return id
+}
+
+fn module_find_function(m, name) {
+    let i = 0
+    while i < len(m.functions) {
+        if m.functions[i].name == name {
+            return i
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+fn module_intern_string(m, s) {
+    let i = 0
+    while i < len(m.string_pool) {
+        if m.string_pool[i] == s {
+            return i
+        }
+        i = i + 1
+    }
+    let idx = len(m.string_pool)
+    push(m.string_pool, s)
+    return idx
+}
+
+fn module_add_global(m, name, ty, is_const) {
+    push(m.globals, Global {
+        name: name,
+        ty: ty,
+        has_init: false,
+        is_const: is_const
+    })
+}

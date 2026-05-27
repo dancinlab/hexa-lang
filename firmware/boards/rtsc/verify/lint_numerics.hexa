@@ -1,0 +1,278 @@
+#!hexa strict
+// hexa-rtsc/verify/lint_numerics.hexa — recipe §4 5-invariant lint for
+// every verify/numerics_*.hexa script (meta tier, slot #15).
+//
+// Recipe §4 declares 5 invariants every numerics_*.hexa MUST satisfy so
+// that downstream T2 evidence is structurally uniform across the
+// hexa-rtsc fleet (and across all hexa-* projects sharing the recipe):
+//
+//   (1) `use "self/runtime/math_pure"`              import (no raw float)
+//   (2) `__HEXA_RTSC_<NAME>__` sentinel + ` PASS`   suffix on success path
+//   (3) `let FALSIFIERS = [...]`                    falsifier-mapping array
+//   (4) `exit(0)`                                   terminal success call
+//   (5) `let mut RUN = 0` + `let mut FAIL = 0`      sentinel counters
+//
+// Plus the inventory invariant:
+//
+//   (6) NUMERICS_SCRIPTS array declared below       == on-disk glob count
+//                                                    of verify/numerics_*.hexa
+//
+// (6) is the structural lock that prevents drift between this lint
+// (registered list) and the actual verify/ directory (truth on disk).
+// If a contributor adds a numerics_*.hexa without bumping the array
+// here, the lint fails — forcing wire-up.
+//
+// PASS = every numerics_*.hexa on disk satisfies (1)-(5) AND the
+//        registered NUMERICS_SCRIPTS array matches the glob exactly
+//        (no missing, no extra).
+// FAIL = any invariant violation on any file, OR mismatch between
+//        registered list and on-disk glob.
+//
+// Run:
+//     hexa run verify/lint_numerics.hexa     # exit 0 = lint clean
+//
+// Authority: recipe §4 (5 invariants) + recipe §1 (slot #15, meta tier).
+// Sister of hexa-cern's verify/lint_numerics.hexa (same contract).
+//
+// @no-lock-needed
+
+use "self/runtime/math_pure"
+
+let VERSION = "1.0.0"
+
+// ─── path / IO helpers ──────────────────────────────────────────────────
+
+let HOME = env("HOME")
+let HEXA_RTSC_ROOT_ENV = env("HEXA_RTSC_ROOT")
+
+fn _root() -> str {
+    if HEXA_RTSC_ROOT_ENV.len() > 0 { return HEXA_RTSC_ROOT_ENV }
+    let pwd = exec("pwd").trim()
+    if pwd.len() > 0 { return pwd }
+    return HOME + "/core/hexa-rtsc"
+}
+
+let ROOT = _root()
+let VERIFY_DIR = ROOT + "/verify"
+
+fn read_file(path: str) -> str {
+    return exec("cat " + path + " 2>/dev/null")
+}
+
+fn file_exists(path: str) -> bool {
+    let r = exec("[ -f '" + path + "' ] && echo yes || echo no").trim()
+    return r == "yes"
+}
+
+// ─── check harness (5 invariants × N scripts) ──────────────────────────
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ─── registered numerics inventory (must match verify/numerics_*.hexa glob) ─
+
+// SSOT: when a new numerics_*.hexa is committed, append it here AND to
+// cli/hexa-rtsc.hexa cmd_verify SCRIPTS + verify/run_all.hexa SCRIPTS +
+// tests/test_calculators.hexa CALCULATORS. Recipe §2 step 4 (wire).
+
+let NUMERICS_SCRIPTS: [str] = [
+    "numerics_bcs.hexa",
+    "numerics_bcs_parity.hexa",
+    "numerics_bcs_solver.hexa",
+    "numerics_mcmillan.hexa",
+    "numerics_mcmillan_parity.hexa",
+    "numerics_mcmillan_solver.hexa",
+    "numerics_hc2_48t.hexa",
+    "numerics_hc2_48t_parity.hexa",
+    "numerics_hc2_48t_solver.hexa",
+    "numerics_lk99.hexa",
+    "numerics_lk99_parity.hexa",
+    "numerics_lk99_solver.hexa",
+    "numerics_lk99_dft.hexa",
+    "numerics_tdgl_vortex.hexa",
+    "numerics_whh_full.hexa",
+    "numerics_lattice_arithmetic.hexa",
+    "numerics_cross_pillar.hexa",
+]
+
+// ─── falsifier mapping (anchors lint into preregister surface) ──────────
+
+let FALSIFIERS: [str] = [
+    "F-RTSC-1: numerics_lk99 + numerics_lk99_parity must satisfy invariants (1)-(5)",
+    "F-RTSC-2: numerics_mcmillan + numerics_mcmillan_parity must satisfy invariants (1)-(5)",
+    "F-RTSC-3: numerics_hc2_48t + numerics_hc2_48t_parity must satisfy invariants (1)-(5)",
+    "F-SC-1/2/3: numerics_bcs + numerics_bcs_parity must satisfy invariants (1)-(5)",
+    "cross-cutter: numerics_lattice_arithmetic must satisfy invariants (1)-(5)",
+    "cross-cutter: numerics_cross_pillar must satisfy invariants (1)-(5)",
+    "drift-lock: NUMERICS_SCRIPTS array len == on-disk verify/numerics_*.hexa glob len",
+]
+
+// ─── invariant (1)-(5) per-file checks ─────────────────────────────────
+
+fn _sentinel_name(filename: str) -> str {
+    // numerics_bcs_parity.hexa → BCS_PARITY
+    let mut s = filename
+    if s.starts_with("numerics_") { s = s.replace("numerics_", "") }
+    if s.ends_with(".hexa")       { s = s.replace(".hexa", "") }
+    return s.to_upper()
+}
+
+fn check_invariant_1(filename: str, body: str) {
+    let needle = "use \"self/runtime/math_pure\""
+    let ok = body.contains(needle)
+    _check(ok, filename + " · (1) math_pure import",
+           if ok { "" } else { "missing: " + needle })
+}
+
+fn check_invariant_2(filename: str, body: str) {
+    let nm = _sentinel_name(filename)
+    let pass_sentinel = "__HEXA_RTSC_NUMERICS_" + nm + "__ PASS"
+    let ok = body.contains(pass_sentinel)
+    _check(ok, filename + " · (2) sentinel `" + pass_sentinel + "`",
+           if ok { "" } else { "missing PASS sentinel" })
+}
+
+fn check_invariant_3(filename: str, body: str) {
+    let ok = body.contains("FALSIFIERS")
+    _check(ok, filename + " · (3) FALSIFIERS array declared",
+           if ok { "" } else { "missing token: FALSIFIERS" })
+}
+
+fn check_invariant_4(filename: str, body: str) {
+    let ok = body.contains("exit(0)")
+    _check(ok, filename + " · (4) exit(0) on PASS path",
+           if ok { "" } else { "missing token: exit(0)" })
+}
+
+fn check_invariant_5(filename: str, body: str) {
+    let run_ok  = body.contains("let mut RUN = 0")
+    let fail_ok = body.contains("let mut FAIL = 0")
+    let ok = run_ok && fail_ok
+    let mut detail = ""
+    if !run_ok  { detail = "missing `let mut RUN = 0`" }
+    if !fail_ok {
+        if detail.len() > 0 { detail = detail + " + " }
+        detail = detail + "missing `let mut FAIL = 0`"
+    }
+    _check(ok, filename + " · (5) RUN/FAIL counters", detail)
+}
+
+fn lint_one(filename: str) {
+    let path = VERIFY_DIR + "/" + filename
+    if !file_exists(path) {
+        _check(false, filename + " · file present on disk",
+               "expected at " + path)
+        return
+    }
+    let body = read_file(path)
+    if body.len() == 0 {
+        _check(false, filename + " · file readable + non-empty",
+               "cat returned empty")
+        return
+    }
+    check_invariant_1(filename, body)
+    check_invariant_2(filename, body)
+    check_invariant_3(filename, body)
+    check_invariant_4(filename, body)
+    check_invariant_5(filename, body)
+}
+
+// ─── invariant (6) — registered ↔ on-disk drift lock ───────────────────
+
+fn check_inventory_drift() {
+    let raw = exec("ls " + VERIFY_DIR + "/numerics_*.hexa 2>/dev/null").trim()
+    let mut on_disk: [str] = []
+    if raw.len() > 0 {
+        let lines = raw.split("\n")
+        for ln in lines {
+            let t = ln.trim()
+            if t.len() == 0 { continue }
+            // basename
+            let parts = t.split("/")
+            let bn = parts[parts.len() - 1]
+            on_disk = on_disk + [bn]
+        }
+    }
+    let disk_n = on_disk.len()
+    let reg_n  = NUMERICS_SCRIPTS.len()
+    _check(disk_n == reg_n,
+           "(6) NUMERICS_SCRIPTS len (" + str(reg_n) +
+           ") == on-disk glob len (" + str(disk_n) + ")",
+           if disk_n == reg_n { "" }
+           else { "registered=" + str(reg_n) + " disk=" + str(disk_n) +
+                  " — bump NUMERICS_SCRIPTS array (recipe §2 step 4)" })
+
+    // bidirectional: each registered must exist on disk
+    for r in NUMERICS_SCRIPTS {
+        let mut found = false
+        for d in on_disk {
+            if d == r { found = true; break }
+        }
+        _check(found, "(6) registered `" + r + "` exists on disk",
+               if found { "" } else { "registered but no file at verify/" + r })
+    }
+
+    // bidirectional: each on-disk file must be registered
+    for d in on_disk {
+        let mut found = false
+        for r in NUMERICS_SCRIPTS {
+            if d == r { found = true; break }
+        }
+        _check(found, "(6) on-disk `" + d + "` registered in NUMERICS_SCRIPTS",
+               if found { "" } else { "file present but not registered — append to array" })
+    }
+}
+
+// ─── main ───
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-rtsc — verify/numerics_*.hexa 5-invariant lint")
+    println("========================================================================")
+    println("  source: " + VERIFY_DIR)
+    println("  recipe: docs/runnable_surface_recipe.md §4 (5 invariants) + §1 slot #15")
+    println("")
+    println("  Invariants enforced per file:")
+    println("    (1) use \"self/runtime/math_pure\"   import (no raw float)")
+    println("    (2) __HEXA_RTSC_<NAME>__ PASS        sentinel suffix")
+    println("    (3) FALSIFIERS                        array declared")
+    println("    (4) exit(0)                           terminal success call")
+    println("    (5) let mut RUN/FAIL = 0              counters")
+    println("    (6) NUMERICS_SCRIPTS                  bidirectional drift-lock vs. on-disk glob")
+    println("")
+    println("  FALSIFIERS (" + str(FALSIFIERS.len()) + "):")
+    for f in FALSIFIERS { println("    ✗ " + f) }
+    println("")
+
+    println("  Per-file lint (" + str(NUMERICS_SCRIPTS.len()) + " registered):")
+    for filename in NUMERICS_SCRIPTS {
+        println("")
+        println("  --- " + filename + " ---")
+        lint_one(filename)
+    }
+
+    println("")
+    println("  Inventory drift-lock (registered ↔ on-disk):")
+    check_inventory_drift()
+
+    println("")
+    println("========================================================================")
+    let pass_n = RUN - FAIL
+    println("  " + str(pass_n) + "/" + str(RUN) + " lint checks passed")
+    if FAIL > 0 {
+        println("  numerics lint FAILED — fix invariant violations before commit.")
+        println("__HEXA_RTSC_LINT_NUMERICS__ FAIL")
+        exit(1)
+    }
+    println("  All " + str(NUMERICS_SCRIPTS.len()) + " numerics_*.hexa scripts conform to recipe §4.")
+    println("__HEXA_RTSC_LINT_NUMERICS__ PASS")
+    exit(0)
+}

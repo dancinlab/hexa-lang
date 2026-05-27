@@ -1,0 +1,1042 @@
+// @allow-bare-exec-file
+// L1→L3 marker (RFC 063 § P3, 2026-05-20):
+//   - `as` fork site (line ~836): L1 → **L3 RETIRING** — the
+//     `--backend=native` path (default for arm64-apple-darwin obj emit)
+//     uses `compiler/emit/macho_arm64.hexa::pack_lir + serialize` and
+//     forks 0 external tools (F-P3-ZERO-EXTERN-OBJ measured 2026-05-20).
+//     `as` fork remains as the `--backend=system` opt-out path.
+//   - `ld` fork site (line ~885): L1 → L3-RETIRING — `tool/hexa_ld.hexa`
+//     replaces `ld` for static-link with synthetic stubs (F-P1-RUNEQ
+//     measured). Real-runtime link still uses `ld` (follow-up RFC).
+//   - `xcrun --show-sdk-path` (line ~882): L1 keeper — OS sysroot
+//     probe, no native equivalent.
+// Intrinsified sites use `compiler/intrinsics/intrinsics.hexa`.
+// HEXA Native Compiler — Entry Point (Phase A1+B1+B2+B3+B3+B4+lower+codegen+emit)
+//
+// Authoritative design: SPEC.yaml + RFC-018 §2 (pipeline order).
+//
+// Pipeline order (RFC-018 §2):
+//   lex → parse → resolve(S1) → bind(S2) → types(S3) → units(S5) →
+//   citation(S8) → lower(AST→HIR) → lower_hir(HIR→MIR) →
+//   codegen(MIR→LIR target-specific) → emit(LIR→.s) → assemble → link
+//
+// Invocation:
+//   hexa run compiler/main.hexa [flags] SOURCE.hexa
+//
+// Targets (Decision 1, parallel dual):
+//   arm64-apple-darwin     (primary dev environment)
+//   x86_64-linux-gnu       (CI / docker / runners)
+//
+// The atlas index is loaded via static_atlas() — empty fallback in v1
+// (Phase A4 will wire the real embedded const arrays). Resolve / citation
+// passes both accept an empty index gracefully.
+
+import "./lex/lexer.hexa"
+import "./parse/parser.hexa"
+import "./atlas/static_index.hexa"
+import "./atlas/merger.hexa"
+import "./check/resolve.hexa"
+import "./check/bind.hexa"
+import "./check/types.hexa"
+import "./check/units.hexa"
+import "./check/citation.hexa"
+import "./lower/ast_to_hir.hexa"
+import "./lower/hir_to_mir.hexa"
+import "./optimize/const_fold.hexa"
+import "./optimize/dce.hexa"
+import "./optimize/inline.hexa"
+import "./codegen/arm64_darwin.hexa"
+import "./codegen/x86_64_linux.hexa"
+import "./codegen/thumbv7em_eabihf.hexa"
+import "./codegen/stream.hexa"
+// RFC 055 055-P3 — NVPTX (hexa-src -> PTX) codegen target. Sibling to the
+// CPU targets above; the dispatch branch routes --target=nvptx64-nvidia-
+// cuda-sm90/sm80 to codegen_nvptx_sm90/sm80 and emits .ptx text (no
+// assemble/link — ptxas is downstream, RFC 055 §6.2). The CPU dispatch
+// branches are byte-identically untouched — F-RFC055-CPU-CODEGEN-
+// UNTOUCHED holds by construction (new `else if`, no edit to existing).
+import "./codegen/nvptx_target.hexa"
+import "./check/target_gate.hexa"
+// RUNTIME.md step-2 cycle 1 POC — port `hxlcl_isalnum`/`_isalpha`
+// from self/runtime.c (cycle 59 C-source) to hexa source. The thin
+// C shims in runtime.c now delegate to `rt_isalnum`/`rt_isalpha`
+// via the standard HexaVal calling convention.
+import "../stdlib/runtime/ctype.hexa"
+import "../stdlib/runtime/math.hexa"
+import "../stdlib/runtime/thread.hexa"
+import "../stdlib/runtime/net.hexa"
+import "../stdlib/runtime/posix.hexa"
+import "../stdlib/runtime/numeric.hexa"
+import "../stdlib/runtime/io.hexa"
+import "./emit/asm.hexa"
+import "./emit/macho_arm64.hexa"
+import "./diag/catalog.hexa"
+import "./diag/builder.hexa"
+import "./diag/render.hexa"
+// TODO(L2): import "./intrinsics/intrinsics.hexa" — companion task #56 module not yet parser-stable; deferred.
+
+// ── Version / banner ────────────────────────────────────────────
+
+let HEXA_VERSION = "hexa 0.0.1 (phase A1+B1+B2+B3+B3+B4+lower+codegen+emit+optimize)"
+
+// ── argv normalization ─────────────────────────────────────────
+// The hexa driver hands us argv shaped one of:
+//   [argv0, script.hexa, user...]                 (direct invocation)
+//   [argv0, "run", script.hexa, user...]          (via `hexa run`)
+//   [argv0, "run", "compiler/main.hexa", user...]
+// Strategy: scan the raw argv for the FIRST `*.hexa` token, treat that
+// as the script, and start user args at the very next slot. This mirrors
+// tool/roadmap_auto_dispatch.hexa main() (2026-04-19 fix).
+
+fn _ends_with_hexa(s: string) -> bool {
+    let cs = s.chars()
+    let n = len(cs)
+    if n < 5 { return false }
+    if cs[n - 5] != '.' { return false }
+    if cs[n - 4] != 'h' { return false }
+    if cs[n - 3] != 'e' { return false }
+    if cs[n - 2] != 'x' { return false }
+    if cs[n - 1] != 'a' { return false }
+    return true
+}
+
+fn _normalize_argv() -> [string] {
+    let raw = args()
+    let mut user_start = 1
+    let mut found = false
+    let mut i = 0
+    while i < len(raw) {
+        if _ends_with_hexa(raw[i]) {
+            user_start = i + 1
+            found = true
+            i = len(raw)
+        } else {
+            i = i + 1
+        }
+    }
+    if !found {
+        if len(raw) >= 3 && (raw[1] == "run" || raw[1] == "eval") {
+            user_start = 3
+        } else {
+            user_start = 2
+        }
+    }
+    let mut out: [string] = []
+    let mut j = user_start
+    while j < len(raw) {
+        out.push(raw[j])
+        j = j + 1
+    }
+    return out
+}
+
+// ── Target detection ───────────────────────────────────────────
+
+fn detect_default_target() -> string {
+    // TODO(L2): replace with host_target() intrinsic (compiler/intrinsics/intrinsics.hexa, task 56) once parser-stable.
+    let uname = exec("uname -sm 2>/dev/null").trim()
+    if uname == "Darwin arm64" { return "arm64-apple-darwin" }
+    if uname == "Linux x86_64" { return "x86_64-linux-gnu" }
+    if uname == "Linux aarch64" { return "arm64-linux-gnu" }
+    return "arm64-apple-darwin"
+}
+
+// ── Help / Version ─────────────────────────────────────────────
+
+fn print_help() {
+    println("hexa-compiler — native compiler driver (RFC-018)")
+    println("")
+    println("usage:")
+    println("  hexa run compiler/main.hexa [FLAGS] SOURCE.hexa")
+    println("")
+    println("flags:")
+    println("  -o OUT                 output binary path (default: a.out)")
+    println("  --target=TRIPLE        arm64-apple-darwin | x86_64-linux-gnu | thumbv7em-none-eabihf | nvptx64-nvidia-cuda-sm{80,90} (default: detected)")
+    println("  --emit=KIND            asm | obj | exec   (default: exec)")
+    println("  --error-format=MODE    pretty | short | json | github (default: pretty)")
+    println("  --linker=KIND          hexa | system     (default: system; hexa_ld not yet landed)")
+    println("  --opt=LEVEL            0 | 1 | 2 | 3     (default: 0, or $HEXA_OPT_LEVEL)")
+    println("  --stream               fused per-function codegen (lower RSS; arm64, no --opt)")
+    println("  --keep-temp            do not remove the per-build intermediate dir (default: off)")
+    println("  -v, --verbose          print build-temp dir and intermediate paths to stderr")
+    println("  --strict-citations     treat S8 citation diagnostics as fatal (default: off)")
+    println("  --no-strict-citations  demote S8 citation diagnostics to warnings (default)")
+    println("  --ignore-errors        proceed to codegen despite typecheck errors (bootstrap escape; HEXA_IGNORE_ERRORS=1)")
+    println("  --version              print version and exit")
+    println("  --help                 print this help and exit")
+    println("")
+    println("optimization levels (--opt=LEVEL):")
+    println("  0  none         fastest compile; no MIR optimizations (default)")
+    println("  1  basic        const_fold only")
+    println("  2  default      const_fold + dce")
+    println("  3  aggressive   inline_small + const_fold + dce (2-pass)")
+    println("")
+    println("example:")
+    println("  hexa run compiler/main.hexa --opt=2 --emit=exec -o hello src/hello.hexa")
+    println("")
+    println("notes:")
+    println("  * The driver invokes the system `as` and `ld` programs. Linker paths")
+    println("    are best-effort defaults and may need user-side tweaks (see")
+    println("    --linker=system raw-emit comment in compiler/main.hexa).")
+    println("  * `--emit=asm` writes assembly to OUT, `--emit=obj` writes a relocatable")
+    println("    object, `--emit=exec` (default) produces a linked executable.")
+    println("  * Intermediate `.s`/`.o` files go to a per-build dir")
+    println("    `${TMPDIR:-/tmp}/hexa-<pid>-<nanos>/` (Gap-7 collision fix).")
+    println("    The directory is removed on success unless `--keep-temp` is set;")
+    println("    on assembler/linker failure it is kept for triage.")
+}
+
+fn print_version() {
+    println(HEXA_VERSION)
+}
+
+// ── Diagnostic rendering ──────────────────────────────────────
+
+fn _is_error_severity(s: Severity) -> bool {
+    return match s {
+        Severity::Error -> true,
+        Severity::Warning -> false,
+        Severity::Note -> false
+    }
+}
+
+fn _render_one(d: Diagnostic, mode: string) -> string {
+    if mode == "short" { return render_short(d) }
+    if mode == "json" { return render_json(d) }
+    if mode == "github" { return render_github(d) }
+    return render_pretty(d)
+}
+
+fn _render_all(diags: array, mode: string) {
+    let mut i = 0
+    while i < len(diags) {
+        eprintln(_render_one(diags[i], mode))
+        i = i + 1
+    }
+}
+
+fn _has_errors(diags: array) -> bool {
+    let mut i = 0
+    while i < len(diags) {
+        if _is_error_severity(diags[i].severity) { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// ── Filename helpers ──────────────────────────────────────────
+
+fn _basename_no_ext(path: string) -> string {
+    let cs = path.chars()
+    let n = len(cs)
+    let mut start = 0
+    let mut i = 0
+    while i < n {
+        if cs[i] == '/' { start = i + 1 }
+        i = i + 1
+    }
+    let mut end = n
+    let mut j = start
+    while j < n {
+        if cs[j] == '.' { end = j }
+        j = j + 1
+    }
+    let mut out = ""
+    let mut k = start
+    while k < end {
+        out = out + to_string(cs[k])
+        k = k + 1
+    }
+    if len(out) == 0 { return "out" }
+    return out
+}
+
+// ── Build-temp directory helper (Gap-7 fix) ───────────────────
+//
+// Returns a per-build directory for intermediate `.s` / `.o` files,
+// avoiding the prior collision where same-basename sources (e.g.
+// `tests/m0/hello.hexa` and `lib/hello.hexa`) clashed at
+// `/tmp/hello.s`.
+//
+// Naming scheme:
+//   ${TMPDIR:-/tmp}/hexa-<pid>-<nanos>/
+//
+// where <pid> is from `echo $$` (the shell expands the parent shell PID,
+// which is unique per `exec()` invocation in the host hexa process tree)
+// and <nanos> is `date +%s%N` (Linux) with a `%s` + awk-rand fallback
+// for macOS BSD `date` (which lacks %N).
+//
+// POSIX-only: relies on `mkdir -p`, `echo $$`, `date`, and `awk`.
+// No bashisms in any emitted shell command.
+
+fn _build_temp_dir(_source_path: string) -> string {
+    let tdir_env = env("TMPDIR")
+    let mut tbase = "/tmp"
+    if len(tdir_env) > 0 {
+        // Strip a single trailing `/` if present (TMPDIR on macOS ends in `/`).
+        let tcs = tdir_env.chars()
+        let tn = len(tcs)
+        if tn > 0 && tcs[tn - 1] == '/' {
+            let mut tb = ""
+            let mut ti = 0
+            while ti < tn - 1 {
+                tb = tb + to_string(tcs[ti])
+                ti = ti + 1
+            }
+            tbase = tb
+        } else {
+            tbase = tdir_env
+        }
+    }
+    // TODO(L2): replace echo-$$ with a getpid intrinsic (compiler/intrinsics/intrinsics.hexa candidate).
+    let pid = exec("echo $$").trim()
+    // TODO(L2): replace with now_ns() intrinsic (compiler/intrinsics/intrinsics.hexa, task 56) once parser-stable.
+    // `date +%s%N` works on Linux; macOS BSD `date` lacks %N and emits
+    // the literal `N`. Detect that and fall back to `%s` + awk-rand.
+    let mut stamp = exec("date +%s%N 2>/dev/null").trim()
+    let scs = stamp.chars()
+    let sn = len(scs)
+    if sn == 0 || scs[sn - 1] == 'N' {
+        let secs = exec("date +%s 2>/dev/null").trim()
+        let rnd = exec("awk 'BEGIN{srand();printf \"%09d\", int(rand()*1000000000)}'").trim()
+        stamp = secs + rnd
+    }
+    let dir = tbase + "/hexa-" + pid + "-" + stamp
+    // TODO(L2): replace with mkdir_p() intrinsic (compiler/intrinsics/intrinsics.hexa, task 56) once parser-stable.
+    let _mk = exec("mkdir -p '" + dir + "' 2>/dev/null")
+    return dir
+}
+
+// ── Atlas v1 (Phase A4 wired) ─────────────────────────────────
+// Phase A4 wires static_atlas() to the real embedded const arrays from
+// compiler/atlas/embedded.gen.hexa (committed fixture on a clean
+// checkout; replaced by `hexa run tool/atlas_embed_gen.hexa <root>` for
+// production builds). The empty-fallback caveat is gone — atlas.hash is
+// non-empty and source_count > 0 in normal operation. Unresolved
+// P/C/L/E refs still surface as HX1042 diagnostics (atlas miss, not a
+// missing-atlas pseudo-success).
+
+fn _load_atlas() -> AtlasIndex {
+    return static_atlas()
+}
+
+// ── Driver entry ──────────────────────────────────────────────
+
+let user_argv = _normalize_argv()
+
+// Defaults
+let mut out_path = "a.out"
+let mut target = detect_default_target()
+let mut emit_kind = "exec"
+let mut error_format = "pretty"
+let mut linker_kind = "system"
+// RFC 063 § P0+P3 (S7) — `--backend=native` selects the hexa-native
+// Mach-O arm64 object emitter (`compiler/emit/macho_arm64.hexa
+// ::pack_lir + serialize`) instead of writing `.s` text and forking
+// `as`. After P0 closure (F-P0-OBJEQ corpus 4/4 byte-eq, 2026-05-20)
+// the default flips to `native` for arm64-apple-darwin obj emit;
+// `--backend=system` retains the legacy path as opt-out.
+//
+// Resolution order (highest precedence first):
+//   1. `--backend=<value>` CLI flag (explicit user override)
+//   2. `HEXA_BACKEND` env var (wrapper / CI override)
+//   3. Auto-flip per P3: native default when target=arm64-darwin obj
+//   4. Fallback: "system" (legacy clang path)
+let mut backend_kind = "system"
+let mut backend_kind_user_set = false
+// HEXA_BACKEND env var pre-seeds the choice. Empty env value is
+// treated as unset (passes through to auto-flip + fallback).
+let _backend_env = env("HEXA_BACKEND")
+if len(_backend_env) > 0 {
+    backend_kind = _backend_env
+    backend_kind_user_set = true
+}
+let mut source_path = ""
+let mut keep_temp = false
+let mut verbose = false
+
+// --stream: F3 streaming codegen (PLAN-stage3-footprint.md). Fuses the
+// per-function lower_hir / codegen / emit passes so only one function's
+// IR is resident — cuts the self-compile RSS. arm64-apple-darwin only.
+let mut stream_mode = false
+let _stream_env = env("HEXA_STREAM")
+if _stream_env == "1" { stream_mode = true }
+
+// HEXA_CG_PROFILE=1 — S1-step-1 codegen instrumentation (compiler/PLAN.md
+// #18). Emits per-phase wall-clock timing to stderr for lower_hir
+// (HIR->MIR), MIR-opt, codegen (MIR->LIR) and emit (LIR->asm). The probe
+// localises the super-linear codegen cost without changing any output:
+// when the env var is unset every cg_profile* call is a silent no-op
+// (gated on `cg_profile` — no mono_ns() syscall, no stderr write).
+let mut cg_profile = false
+let _cgp_env = env("HEXA_CG_PROFILE")
+if _cgp_env == "1" { cg_profile = true }
+// Stage1 punch list Gap 13: `--strict-citations` defaults OFF. While compiler/
+// source is not yet fully cite-bound (every implementation function would
+// need an @implements/@discover annotation otherwise), we run citation_check
+// for signal but DOWNGRADE its Errors to Warnings so they don't gate
+// stage1 reach. Pass `--strict-citations` (or set `HEXA_STRICT_CITATIONS=1`)
+// to restore RFC-017 §3.1 S8 fatal-citation semantics.
+let mut strict_citations = false
+let _strict_env = env("HEXA_STRICT_CITATIONS")
+if _strict_env == "1" { strict_citations = true }
+
+// Stage1 punch list — `--ignore-errors` lets codegen proceed despite
+// type-check Errors. Bootstrap-only escape hatch: lets stage 2 self-compile
+// produce a binary while typechecker maturity catches up. Set
+// HEXA_IGNORE_ERRORS=1 to default-on.
+let mut ignore_errors = false
+let _ie_env = env("HEXA_IGNORE_ERRORS")
+if _ie_env == "1" { ignore_errors = true }
+
+// --opt=LEVEL default: $HEXA_OPT_LEVEL if set+parseable (0..3), else 0.
+let _opt_env = env("HEXA_OPT_LEVEL")
+let mut opt_level: i64 = 0
+if len(_opt_env) > 0 {
+    let _ev = to_int(_opt_env)
+    if _ev > -1 && _ev < 4 { opt_level = _ev }
+}
+
+// Parse flags. We accept both `-o OUT` (two-arg) and `--target=TRIPLE`
+// (single equals form). Unknown flags are ignored with a warning so future
+// flags don't break old wrappers.
+let mut want_help = false
+let mut want_version = false
+// RFC 070 G7-A.native K2.2 — `--shared` flag (forwarded by self/main.hexa's
+// `cmd_build` when `HEXA_BACKEND=native + --shared`). Overlays
+// `codegen_options_default()` with `opts.shared = 1` to gate the GOT-load
+// emit-body branches in arm64_darwin + x86_64_linux back-ends.
+let mut shared_flag = false
+let mut ai = 0
+while ai < len(user_argv) {
+    let a = user_argv[ai]
+    if a == "--help" || a == "-h" {
+        want_help = true
+        ai = ai + 1
+    } else if a == "--version" || a == "-V" {
+        want_version = true
+        ai = ai + 1
+    } else if a == "-o" {
+        if ai + 1 < len(user_argv) {
+            out_path = user_argv[ai + 1]
+            ai = ai + 2
+        } else {
+            eprintln("hexa-compiler: -o requires an argument")
+            exit(2)
+        }
+    } else if len(a) >= 9 && a.substring(0, 9) == "--target=" {
+        target = a.substring(9, len(a))
+        ai = ai + 1
+    } else if len(a) >= 7 && a.substring(0, 7) == "--emit=" {
+        emit_kind = a.substring(7, len(a))
+        ai = ai + 1
+    } else if len(a) >= 15 && a.substring(0, 15) == "--error-format=" {
+        error_format = a.substring(15, len(a))
+        ai = ai + 1
+    } else if len(a) >= 9 && a.substring(0, 9) == "--linker=" {
+        linker_kind = a.substring(9, len(a))
+        ai = ai + 1
+    } else if len(a) >= 10 && a.substring(0, 10) == "--backend=" {
+        // S7 P0 — `--backend=native` routes `--emit=obj` through the
+        // hexa-side Mach-O writer. Any other value (incl. "system")
+        // keeps the legacy `as`/clang path. P3 (2026-05-20): explicit
+        // user-set flag wins over the default flip applied below.
+        backend_kind = a.substring(10, len(a))
+        backend_kind_user_set = true
+        ai = ai + 1
+    } else if len(a) > 5 && a.substring(0, 6) == "--opt=" {
+        opt_level = to_int(a.substring(6, len(a)))
+        ai = ai + 1
+    } else if a == "--stream" {
+        stream_mode = true
+        ai = ai + 1
+    } else if a == "--shared" {
+        // RFC 070 G7-A.native K2.2 — overlay opts.shared = 1. See block
+        // comment at `shared_flag` decl. Native back-ends gate GOT-load
+        // (arm64 adrp+ldr / x86_64 RIP-rel GOTPCREL) on this.
+        shared_flag = true
+        ai = ai + 1
+    } else if a == "--keep-temp" {
+        keep_temp = true
+        ai = ai + 1
+    } else if a == "-v" {
+        verbose = true
+        ai = ai + 1
+    } else if a == "--verbose" {
+        verbose = true
+        ai = ai + 1
+    } else if a == "--strict-citations" {
+        // Gap 13: opt back into RFC-017 §3.1 S8 fatal-citation semantics.
+        strict_citations = true
+        ai = ai + 1
+    } else if a == "--no-strict-citations" {
+        strict_citations = false
+        ai = ai + 1
+    } else if a == "--ignore-errors" {
+        // Bootstrap escape: codegen even if typecheck errors present.
+        ignore_errors = true
+        ai = ai + 1
+    } else if len(a) >= 1 && a.chars()[0] == '-' {
+        eprintln("hexa-compiler: warning: unknown flag `" + a + "` (ignored)")
+        ai = ai + 1
+    } else {
+        if len(source_path) == 0 {
+            source_path = a
+        } else {
+            eprintln("hexa-compiler: warning: extra positional `" + a + "` (ignored)")
+        }
+        ai = ai + 1
+    }
+}
+
+if want_help { print_help(); exit(0) }
+if want_version { print_version(); exit(0) }
+
+// RFC 063 § P3 — flip the default. If user didn't explicitly set
+// `--backend=`, default to `native` for arm64-apple-darwin obj emit
+// (post-P0-closure 2026-05-20). Opt-out via `--backend=system`.
+if !backend_kind_user_set
+    && target == "arm64-apple-darwin"
+    && emit_kind == "obj" {
+    backend_kind = "native"
+}
+
+if len(source_path) == 0 {
+    eprintln("hexa-compiler: missing SOURCE.hexa")
+    eprintln("  run `hexa run compiler/main.hexa --help` for usage")
+    exit(2)
+}
+
+// ── Read source ──────────────────────────────────────────────
+// Handle file-not-found gracefully. `read_file` raises on miss in stage0,
+// so we probe with file_exists first (matches tool/*.hexa convention).
+
+if !file_exists(source_path) {
+    eprintln("hexa-compiler: cannot open `" + source_path + "`: file not found")
+    exit(2)
+}
+
+let source = to_string(read_file(source_path))
+
+// ── Stage1 punch list A1: per-phase host arena reset ─────────────
+// Stage 0 host (hexa_real / hexa_interp.real) holds every str-arena
+// allocation for the whole process lifetime, so a 25,932-line spliced
+// super-module from Gap 1 (multi-file load) drives RSS past the 2 GB
+// cap before any structured diagnostic surfaces. Phase boundaries
+// drop the bump-arena scratch via runtime side-channel hooks
+// (see self/runtime.c hexa_env_var "__HEXA_ARENA_PHASE_RESET__"
+// and doc/stage0_arena_phases.md).
+//
+// Hand-off contract: phase N produces a slim heap-resident result
+// (Module / Diagnostic[] / HModule / MModule / LModule / asm_text)
+// that lives in array_store / map_store / struct_store. Bump-arena
+// strings used as scratch during phase N (path concat, diag message
+// fragments, struct-literal __type__ keys, etc.) are reclaimed in
+// O(blocks) by the reset. The hexa-side carrier is unaffected.
+//
+// Best-effort: when running on a stage-0 binary that predates these
+// hooks, the env() lookups return "" and phase_reset becomes a
+// silent no-op — the pipeline still runs, just without the arena
+// reclaim. New stage-0 builds (post-2026-05-10) wire the hooks.
+fn phase_reset(name: string) {
+    let _ = env("__HEXA_ARENA_PHASE_RESET__")
+    if verbose {
+        let _ = env("__HEXA_PHASE_LOG__" + name)
+    }
+}
+
+fn phase_log(name: string) {
+    if verbose {
+        let _ = env("__HEXA_PHASE_LOG__" + name)
+    }
+}
+
+// ── HEXA_CG_PROFILE — per-phase codegen wall-clock probe (S1-step-1) ──
+//
+// Companion to phase_reset/phase_log. Where those reclaim the bump arena
+// at phase boundaries, cg_profile_mark records a CLOCK_MONOTONIC reading
+// (mono_ns() — TAG_INT nanoseconds, runtime.c hexa_mono_ns) and emits the
+// delta since the previous mark to stderr as a `CG_PROFILE` row. The
+// probe is fully gated on the module-scope `cg_profile` flag: when
+// HEXA_CG_PROFILE is unset there is no mono_ns() syscall and no stderr
+// write — zero behavior change, zero cost.
+//
+// `_cg_last_ns` holds the previous mark; cg_profile_begin seeds it so the
+// first delta is measured from pipeline entry, not from 0.
+let mut _cg_last_ns: i64 = 0
+
+fn cg_profile_begin() {
+    if cg_profile {
+        _cg_last_ns = mono_ns()
+        eprintln("CG_PROFILE  phase=begin              delta_ms=0")
+    }
+}
+
+// cg_profile_mark(label) — print ms elapsed since the previous mark and
+// re-seed the cursor. `label` names the phase that JUST COMPLETED.
+fn cg_profile_mark(label: string) {
+    if cg_profile {
+        let now = mono_ns()
+        let delta_ns = now - _cg_last_ns
+        let delta_ms = delta_ns / 1000000
+        _cg_last_ns = now
+        eprintln("CG_PROFILE  phase=" + label
+            + "  delta_ms=" + to_string(delta_ms))
+    }
+}
+
+// ── Pipeline ─────────────────────────────────────────────────
+
+phase_log("pipeline_start")
+let tokens = lex(source, source_path)
+phase_log("post_lex")
+let module = parse(tokens, source_path)
+if verbose {
+    eprintln("hexa-compiler: parsed " + to_string(len(module.items))
+        + " top-level item(s) (multi-file flat-splice; Stage 1 Gap 1)")
+}
+// Phase boundary 1: lex+parse done. `tokens` is local to this scope and
+// becomes unreachable after the next slot is bound; drop the arena scratch
+// (paths, scratch strings) before the analysis passes start allocating
+// their own diagnostic message strings. The Module is a struct in
+// struct_store, immune to bump-arena rewind.
+phase_reset("post_parse")
+
+// Atlas: A4 wired — real index from compiler/atlas/embedded.gen.hexa.
+let atlas = _load_atlas()
+
+// Stage1 punch list C14: type as `[Diagnostic]` instead of bare `array` so
+// stage0 stores concrete Diagnostic structs in array_store rather than boxing
+// each through the generic value slot. Real compiles emit thousands of diag
+// candidates; the typed form is cheaper to push/iterate.
+let mut diags: [Diagnostic] = []
+
+// Stage1 punch list Gap 5 + Gap 1: drain parser-stage diagnostics
+// (HX0011/HX0012 brace-shape, HX0010 import-not-found) FIRST so parse-time
+// errors surface ahead of any downstream cascade. The parser still produces
+// a best-effort Module on miss, so later passes still run — multi-error
+// policy per RFC-019 §6. A missing import surfaces as a precise S0 error
+// instead of cascading into HX2001 floods downstream.
+let r0 = parse_diags()
+let mut k0 = 0
+while k0 < len(r0) { diags.push(r0[k0]); k0 = k0 + 1 }
+
+// F3 — target_gate_check. When --target is `*-none-*` (bare-metal),
+// any host-stdlib import surfaces as HX1110 BEFORE atlas resolve runs
+// so the user gets a clean firmware-ABI signal rather than a cascade
+// of resolve-time misses (host stdlib modules may not even be present
+// in an embedded checkout). See compiler/check/target_gate.hexa.
+let r_gate = target_gate_check(module, target)
+let mut kg = 0
+while kg < len(r_gate) { diags.push(r_gate[kg]); kg = kg + 1 }
+
+let r1 = resolve(module, atlas)
+let mut k = 0
+while k < len(r1) { diags.push(r1[k]); k = k + 1 }
+
+let r2 = bind(module)
+k = 0
+while k < len(r2) { diags.push(r2[k]); k = k + 1 }
+
+let r3 = type_check(module)
+k = 0
+while k < len(r3) { diags.push(r3[k]); k = k + 1 }
+
+let r4 = unit_check(module)
+k = 0
+while k < len(r4) { diags.push(r4[k]); k = k + 1 }
+
+// Stage1 punch list C12: gate the entire S8 citation walk on
+// `--strict-citations` (or HEXA_STRICT_CITATIONS=1) instead of demoting
+// each diag per-iteration. The walk over every Item × annotation × body
+// L-ref is ~3K items × ~30 nodes worth of work on a real compile and
+// produces nothing observable when soft mode is in effect — skipping it
+// outright is equivalent in user-visible behaviour to the prior per-diag
+// downgrade (every produced diag would have been demoted to a Warning,
+// then re-rendered; we now emit no Warnings instead, which matches the
+// soft-mode intent: "compiler/ source is not yet fully cite-bound").
+//
+// Pass --strict-citations (or set HEXA_STRICT_CITATIONS=1) to opt back
+// into RFC-017 §3.1 S8 fatal-citation semantics.
+if strict_citations {
+    let r5 = citation_check(module, atlas)
+    k = 0
+    while k < len(r5) {
+        diags.push(r5[k])
+        k = k + 1
+    }
+}
+
+// Always render whatever diagnostics we collected (warnings first, then
+// — if errors — bail out before lowering / codegen).
+_render_all(diags, error_format)
+
+if _has_errors(diags) {
+    if ignore_errors {
+        eprintln("hexa-compiler: " + to_string(len(diags)) + " diagnostic(s); --ignore-errors set, proceeding to codegen")
+    } else {
+        eprintln("hexa-compiler: " + to_string(len(diags)) + " diagnostic(s); aborting before codegen")
+        exit(1)
+    }
+}
+
+// Phase boundary 2: parse + all analysis passes done. The Module + diags
+// arrays are slim (heap-resident structs in their own stores). Drop the
+// arena scratch — every diag message fragment, every type-printer string,
+// every citation-key concatenation — before lower starts pumping HIR
+// fragments through the same arena.
+phase_reset("post_check")
+
+// ── Lower → MIR → LIR ────────────────────────────────────────
+
+let hmodule = lower(module, atlas)
+
+// Stage1 Gap 14: drain lower-pass diagnostics (HX1100 closure-capture).
+// Warnings only — we render them but do not abort, since closure
+// conversion is a Gap 14.1 follow-up.
+let lr_diags = lower_diags()
+if len(lr_diags) > 0 {
+    let mut ld: array = []
+    let mut lk = 0
+    while lk < len(lr_diags) { ld.push(lr_diags[lk]); lk = lk + 1 }
+    _render_all(ld, error_format)
+}
+
+// Phase boundary 3: AST→HIR done. The Module (AST) is no longer needed
+// for the rest of the pipeline (lower_hir / opt / codegen / emit work
+// off MModule). The Module struct stays bound for the lifetime of the
+// driver fn but is not walked again — its arena-scratch field strings
+// (label names, lower-internal helper IDs) can be released. HModule is
+// itself heap-resident.
+phase_reset("post_lower_ast_to_hir")
+
+// MIR module shape fingerprint — total stmt count across all funcs.
+// Hoisted to a standalone item (was inline in the lower→emit stmt run)
+// so the F3 streaming gate below can wrap that stmt run without
+// enclosing a fn declaration.
+fn _mmod_stmt_count(m: MModule) -> i64 {
+    let mut total: i64 = 0
+    let mut fi = 0
+    while fi < len(m.funcs) {
+        let f = m.funcs[fi]
+        let mut bi = 0
+        while bi < len(f.blocks) {
+            total = total + len(f.blocks[bi].stmts)
+            bi = bi + 1
+        }
+        fi = fi + 1
+    }
+    return total
+}
+
+// ── F3 streaming gate (PLAN-stage3-footprint.md) ─────────────
+// --stream (or HEXA_STREAM=1), arm64-apple-darwin only: fuse the
+// per-function lower_hir / codegen / emit passes so only one function's
+// MFunc/LFunc is resident at a time — no MModule/LModule whole-program
+// carrier (the 10-16GB self-compile driver). Other targets + the
+// non-stream path keep the legacy whole-module pipeline, including the
+// MIR optimizer (which the streaming path does not yet run).
+let mut asm_text = ""
+if stream_mode && target == "arm64-apple-darwin" {
+    if opt_level > 0 {
+        eprintln("hexa-compiler: --stream uses the fused per-function path; "
+            + "--opt is not applied (omit --stream for the MIR optimizer)")
+    }
+    cg_profile_begin()
+    asm_text = codegen_emit_streaming(hmodule, target)
+    // S1-step-1 — the --stream path fuses lower/codegen/emit per-function
+    // so there is one combined mark rather than four phase boundaries.
+    cg_profile_mark("stream_fused")
+    phase_reset("post_emit_asm")
+} else {
+    // S1-step-1 codegen profile — seed the wall-clock cursor at the
+    // entry of the lower/opt/codegen/emit pipeline (post-frontend).
+    cg_profile_begin()
+    let mut mmodule = lower_hir(hmodule)
+    cg_profile_mark("lower_hir")
+
+    // #14 — drain Lower-cluster diagnostics (HX1101/HX1102/HX1103) so they
+    // surface in CLI alongside parser/check/units diags. hir_to_mir.hexa
+    // accumulates into a module-scope buffer (`_lr_diag`); we drain once
+    // after lower_hir returns. hir_to_mir_diags() returns the same array
+    // reference each call, so a second invocation would double-push —
+    // keep this as the single drain site for the buffer.
+    let _lr_d = hir_to_mir_diags()
+    let mut _lk = 0
+    while _lk < len(_lr_d) { diags.push(_lr_d[_lk]); _lk = _lk + 1 }
+
+    // Render the HIR→MIR diagnostics and abort before codegen if any are
+    // fatal. The pre-codegen `_has_errors` gate at the top of this file
+    // ran BEFORE lower_hir, so HX1101/HX1102/HX1103/HX1104 (emitted only
+    // during HIR→MIR) would otherwise reach codegen and produce a wrong
+    // or empty binary instead of failing visibly. Closure-expression
+    // codegen deferral (HX1104, RFC C1) relies on this abort: a closure
+    // program must STOP here with the accurate "closure codegen not yet
+    // implemented" message, not silently emit asm.
+    if len(_lr_d) > 0 {
+        let mut _lrd_only: array = []
+        let mut _lj = 0
+        while _lj < len(_lr_d) { _lrd_only.push(_lr_d[_lj]); _lj = _lj + 1 }
+        _render_all(_lrd_only, error_format)
+        if _has_errors(_lrd_only) {
+            if ignore_errors {
+                eprintln("hexa-compiler: " + to_string(len(_lr_d)) + " HIR->MIR diagnostic(s); --ignore-errors set, proceeding to codegen")
+            } else {
+                eprintln("hexa-compiler: " + to_string(len(_lr_d)) + " HIR->MIR diagnostic(s); aborting before codegen")
+                exit(1)
+            }
+        }
+    }
+
+    // Phase boundary 4: HIR→MIR done. `hmodule` still bound but unread by
+    // later phases; arena scratch built during hir_to_mir (block label
+    // concat, MIR debug strings) reclaimable.
+    phase_reset("post_lower_hir_to_mir")
+
+    // MIR optimizer (RFC-018 §9 v1) — gated by --opt=LEVEL / $HEXA_OPT_LEVEL.
+    //   0 none  /  1 const_fold  /  2 const_fold + dce  /  3 inline + 2-pass
+    let pre_opt_stmts = _mmod_stmt_count(mmodule)
+
+    if opt_level > 0 { mmodule = const_fold(mmodule) }
+    if opt_level > 1 { mmodule = dce(mmodule) }
+    if opt_level > 2 {
+        mmodule = inline_small(mmodule)
+        mmodule = const_fold(mmodule)
+        mmodule = dce(mmodule)
+    }
+    // S1-step-1 — MIR-opt phase boundary (no-op at --opt=0, but the
+    // _mmod_stmt_count walk above still runs; measure it regardless).
+    cg_profile_mark("mir_opt")
+
+    if opt_level > 0 && verbose {
+        let post_opt_stmts = _mmod_stmt_count(mmodule)
+        if post_opt_stmts != pre_opt_stmts {
+            eprintln("hexa-compiler: --opt=" + to_string(opt_level)
+                + " changed module shape (stmts " + to_string(pre_opt_stmts)
+                + " -> " + to_string(post_opt_stmts)
+                + "); expected if optimization is effective")
+        }
+    }
+
+    // Stage1 punch list C15: single if-expression binding for the
+    // per-target codegen branch.
+    //
+    // RFC 055 055-P3 — NVPTX is the fourth target, sibling to the three
+    // CPU targets. The CPU `else if` branches are byte-identically
+    // untouched (F-RFC055-CPU-CODEGEN-UNTOUCHED). The NVPTX branch is
+    // added BEFORE the unsupported-target fallthrough so an explicit
+    // --target=nvptx64-* lands here, not in the error message.
+    // RFC 070 G7-A.native impl — entry signature lifted to accept
+    // `CodegenOptions`. Today the compiler driver passes the default
+    // (opts.shared == 0, target_triple == ""); the `--shared` flag
+    // wiring (G7-A.flag-wire, origin `66b055c4`) is NOT yet on this
+    // branch, so there is no per-invocation override surface here. The
+    // NEXT cycle that adds the flag through to `cmd_build` will fill
+    // in `target_triple` from `target` and forward `bopts[4]` as
+    // `shared`. Default-construct keeps emit byte-identical (verified
+    // by F-RFC055-CPU-CODEGEN-UNTOUCHED on `--target=nvptx64-*`).
+    // RFC 070 G7-A.native K2.2 — overlay opts.shared from CLI flag.
+    // Default (shared_flag == false) keeps emit byte-identical to pre-K2
+    // output for every existing caller (verified by F-RFC055-CPU-CODEGEN-
+    // UNTOUCHED on `--target=nvptx64-*`); `--shared` flips the GOT-load
+    // branch in both arm64_darwin + x86_64_linux emit-body (D1 `8fdb29e2`,
+    // D2 `b62809f8`).
+    let mut __cg_opts = codegen_options_default()
+    if shared_flag {
+        __cg_opts = CodegenOptions { shared: 1, target_triple: __cg_opts.target_triple }
+    }
+    let lmodule = if target == "arm64-apple-darwin" {
+        codegen_arm64_darwin(mmodule, __cg_opts)
+    } else if target == "x86_64-linux-gnu" {
+        codegen_x86_64_linux(mmodule, __cg_opts)
+    } else if target == "thumbv7em-none-eabihf" {
+        // F3 — bare-metal Cortex-M4F target (hexa-rtsc, hexa-chip,
+        // hexa-cern firmware boards). Soft-float fallback variant
+        // (`-eabi`) is a tier_2 follow-up; v1 ships hf only.
+        codegen_thumbv7em_eabihf(mmodule)
+    } else if target == NVPTX_TARGET_SM90 {
+        codegen_nvptx_sm90(mmodule)
+    } else if target == NVPTX_TARGET_SM80 {
+        codegen_nvptx_sm80(mmodule)
+    } else {
+        eprintln("hexa-compiler: unsupported --target=" + target)
+        eprintln("  supported: arm64-apple-darwin | x86_64-linux-gnu | thumbv7em-none-eabihf | nvptx64-nvidia-cuda-sm90 | nvptx64-nvidia-cuda-sm80")
+        exit(2)
+    }
+
+    // Phase boundary 5: codegen done. MModule no longer read; its block
+    // label strings + opcode mnemonics from the per-fn lower can be
+    // released before emit_asm allocates the rendered assembly text.
+    phase_reset("post_codegen")
+    // S1-step-1 — codegen (MIR->LIR) phase boundary. This is the phase
+    // PLAN.md #18 flags as super-linear; the prior cycle removed the
+    // arm64 stmt-loop O(N^2), the residual lives in lower_hir.
+    cg_profile_mark("codegen")
+
+    // ── Emit OBJ (native, RFC 063 § P0) ─────────────────────────
+    //
+    // When `--backend=native` and `target=arm64-apple-darwin`, write
+    // the Mach-O `.o` directly via `pack_lir` + `serialize`. Skips
+    // `.s` text + `as`/clang fork entirely. Branches early — out_path
+    // is final and we exit here.
+    if emit_kind == "obj" && backend_kind == "native" && target == "arm64-apple-darwin" {
+        let obj_data = pack_lir(lmodule)
+        let obj_bytes = serialize(obj_data)
+        write_bytes(out_path, obj_bytes)
+        if verbose {
+            eprintln("hexa-compiler: emitted Mach-O .o via native backend ("
+                     + to_string(len(obj_bytes)) + " bytes) to " + out_path)
+        }
+        exit(0)
+    }
+
+    // RFC 055 055-P3 — NVPTX uses the PTX text emit pass, not the CPU
+    // emit_asm renderer (PTX's operand surface differs from the CPU
+    // LOperand reg/imm/mem encoding — see nvptx_target.hexa §6.2 note).
+    // PTX is also the final artifact (ptxas downstream is external),
+    // so the assemble/link chain is bypassed below; write_file lands
+    // the .ptx and the driver exits.
+    if target == NVPTX_TARGET_SM90 || target == NVPTX_TARGET_SM80 {
+        asm_text = emit_ptx(lmodule)
+    } else {
+        asm_text = emit_asm(lmodule)
+    }
+    // S1-step-1 — emit (LIR->asm text) phase boundary.
+    cg_profile_mark("emit_asm")
+
+    // Phase boundary 6: emit done. asm_text is the final bytestring that
+    // gets written to disk; reset is safe (nothing downstream of write
+    // reads from the arena). Logs the final phase RSS for budget probes.
+    phase_reset("post_emit_asm")
+}
+
+// ── Emit ASM ─────────────────────────────────────────────────
+
+// RFC 055 055-P3 — for the NVPTX target the PTX text IS the final
+// artifact (ptxas/cubin is downstream, external to hexa). There is no
+// system `as`/`ld` step; write the .ptx and exit, regardless of the
+// requested --emit kind. The CPU emit_kind == "asm" branch below is
+// reached only for CPU targets and is byte-identically untouched.
+if target == NVPTX_TARGET_SM90 || target == NVPTX_TARGET_SM80 {
+    write_file(out_path, asm_text)
+    exit(0)
+}
+
+if emit_kind == "asm" {
+    write_file(out_path, asm_text)
+    exit(0)
+}
+
+let stem = _basename_no_ext(source_path)
+let tmp_dir = _build_temp_dir(source_path)
+let asm_path = tmp_dir + "/" + stem + ".s"
+let obj_path = tmp_dir + "/" + stem + ".o"
+
+if verbose {
+    eprintln("hexa-compiler: build-temp dir: " + tmp_dir)
+    eprintln("hexa-compiler:   asm: " + asm_path)
+    eprintln("hexa-compiler:   obj: " + obj_path)
+}
+
+write_file(asm_path, asm_text)
+
+// ── Assemble (system `as`) ───────────────────────────────────
+//
+// Best-effort assembly invocation — the driver delegates target-specific
+// flag selection to the system assembler. On macOS `as` is part of Xcode
+// command-line tools; on Linux it ships with binutils. If `as` isn't on
+// PATH the user sees a non-zero exit from the shell exec wrapper, which
+// we surface verbatim.
+
+let as_cmd = "as " + asm_path + " -o " + obj_path + " 2>&1"
+// L1 → L3-RETIRING (RFC 063 § P3, 2026-05-20): replaced by
+// `compiler/emit/macho_arm64.hexa::pack_lir + serialize` when
+// `--backend=native` (default for arm64-apple-darwin obj emit).
+// This `as` fork runs only for `--backend=system` opt-out path.
+let as_out = exec(as_cmd)
+// TODO(L2): replace with file_exists intrinsic candidate.
+let as_status = exec("test -f " + obj_path + " && echo ok || echo fail").trim()
+if as_status != "ok" {
+    eprintln("hexa-compiler: assembler failed:")
+    eprintln("  command: " + as_cmd)
+    eprintln(as_out)
+    eprintln("hexa-compiler: build-temp dir kept for triage: " + tmp_dir)
+    // Gap-5 (commit 0c5283ff): wrappers may translate exit(2) to RC=0;
+    // drop a sentinel next to OUT so harnesses can detect failure
+    // independently of $?. See compiler/main.hexa Gap-5 commit message.
+    write_file(out_path + ".compile_failed",
+        "stage=as\ncmd=" + as_cmd + "\n" + as_out + "\n")
+    exit(2)
+}
+
+if emit_kind == "obj" {
+    // TODO(L2): replace with copy_file intrinsic candidate (compiler/intrinsics/intrinsics.hexa).
+    exec("cp -f " + obj_path + " " + out_path)
+    if !keep_temp {
+        // TODO(L2): replace with rm_rf intrinsic candidate (compiler/intrinsics/intrinsics.hexa).
+        exec("rm -rf '" + tmp_dir + "' 2>/dev/null")
+    } else if verbose {
+        eprintln("hexa-compiler: --keep-temp: leaving " + tmp_dir + " in place")
+    }
+    exit(0)
+}
+
+// ── Link (system `ld`) ───────────────────────────────────────
+//
+// IMPORTANT: linker invocation is BEST-EFFORT and may need user-side
+// path tweaks. Stage0 has no linker-path discovery, and libc's location
+// varies by distro. The defaults below cover stock macOS (Xcode CLT) and
+// stock Debian/Ubuntu x86_64. If your box differs:
+//   * macOS: ensure `xcrun --show-sdk-path` resolves; otherwise pass
+//     --linker=hexa once that lands, or pre-link the .o yourself.
+//   * Linux: confirm /usr/lib/x86_64-linux-gnu/crt1.o exists; on Alpine
+//     or static-only setups this path will not be present.
+// The --linker=hexa branch is reserved for the in-tree linker (not yet
+// landed); fall back to system in v1.
+
+let mut ld_cmd = ""
+if target == "arm64-apple-darwin" {
+    // L1 keeper: xcrun is an external SDK probe; future intrinsic candidate (sysroot probe).
+    let sdk = exec("xcrun --show-sdk-path 2>/dev/null").trim()
+    let mut sdk_arg = ""
+    if len(sdk) > 0 { sdk_arg = " -syslibroot " + sdk }
+    ld_cmd = "ld -o " + out_path + " " + obj_path + " -lSystem" + sdk_arg + " -arch arm64 -e _main 2>&1"
+} else if target == "x86_64-linux-gnu" {
+    ld_cmd = "ld -o " + out_path + " " + obj_path
+        + " /usr/lib/x86_64-linux-gnu/crt1.o"
+        + " -lc"
+        + " -dynamic-linker /lib64/ld-linux-x86-64.so.2"
+        + " 2>&1"
+} else {
+    eprintln("hexa-compiler: no linker recipe for target=" + target)
+    exit(2)
+}
+
+if linker_kind == "hexa" {
+    eprintln("hexa-compiler: warning: --linker=hexa not yet implemented; falling back to system")
+}
+
+// L1 keeper: external linker invocation; replaced when hexa_ld lands.
+let ld_out = exec(ld_cmd)
+// TODO(L2): replace with file_exists intrinsic candidate.
+let ld_status = exec("test -f " + out_path + " && echo ok || echo fail").trim()
+if ld_status != "ok" {
+    eprintln("hexa-compiler: linker failed:")
+    eprintln("  command: " + ld_cmd)
+    eprintln(ld_out)
+    eprintln("hexa-compiler: hint: linker paths are best-effort. See compiler/main.hexa")
+    eprintln("  for the recipe and adjust crt1.o / dynamic-linker / SDK root paths.")
+    eprintln("hexa-compiler: build-temp dir kept for triage: " + tmp_dir)
+    // Gap-5 (commit 0c5283ff): sentinel for wrapper-RC translation.
+    write_file(out_path + ".compile_failed",
+        "stage=ld\ncmd=" + ld_cmd + "\n" + ld_out + "\n")
+    exit(2)
+}
+
+if !keep_temp {
+    // TODO(L2): replace with rm_rf intrinsic candidate (compiler/intrinsics/intrinsics.hexa).
+    exec("rm -rf '" + tmp_dir + "' 2>/dev/null")
+} else if verbose {
+    eprintln("hexa-compiler: --keep-temp: leaving " + tmp_dir + " in place")
+}
+exit(0)

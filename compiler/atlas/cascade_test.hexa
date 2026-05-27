@@ -1,0 +1,163 @@
+// HEXA Native Compiler — Atlas cascade + falsifier accessor regression test
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Covers compiler/atlas/cascade.hexa:
+//   * node_falsifier extracts `falsifier:` / `= ` / `=` forms + quoted-prose
+//   * node_falsifier returns "" for nodes without a falsifier (additive)
+//   * cascade_candidates finds nodes citing a falsified id via each edge type
+//   * cascade_candidates never lists the falsified node itself
+//
+// Run:
+//   hexa run compiler/atlas/cascade_test.hexa
+
+use "compiler/atlas/parser"
+use "compiler/atlas/cascade"
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok {
+        println("  PASS  " + label)
+    } else {
+        println("  FAIL  " + label)
+        fails.push(label)
+    }
+}
+
+fn _find_by_id(arr: array, id: string) -> AtlasNode {
+    let mut i = 0
+    while i < len(arr) {
+        let n = arr[i]
+        if n.id == id { return n }
+        i = i + 1
+    }
+    return AtlasNode {
+        kind: "",
+        id: "",
+        raw: "",
+        source_file: "",
+        source_line: 0,
+        grade: empty_grade(),
+        edges: empty_edges()
+    }
+}
+
+fn _hit_via(hits: array, id: string) -> string {
+    let mut i = 0
+    while i < len(hits) {
+        let h = hits[i]
+        if h.id == id { return h.via }
+        i = i + 1
+    }
+    return ""
+}
+
+fn main() {
+    println("atlas cascade + falsifier accessor test")
+    let fails = []
+
+    // Fixture: root is `theorem_a`. b depends_on it, c is verified_by it,
+    // d == it, e -> it, f cites nothing. Two carry falsifier clauses.
+    let body = "@L theorem_a :: math [10*]\n" +
+        "  falsifier: counterexample at n=7\n" +
+        "@L derived_b :: math [9*]\n" +
+        "  <- theorem_a\n" +
+        "@L verified_c :: math [9*]\n" +
+        "  |> theorem_a\n" +
+        "@L equiv_d :: math [9*]\n" +
+        "  == theorem_a\n" +
+        "@L derives_e :: math [9*]\n" +
+        "  -> theorem_a\n" +
+        "@L lonely_f :: math [9*]\n" +
+        "  <- something_else\n" +
+        "@? hyp_g :: math [3?]\n" +
+        "  \"falsifier: byte-diff > 0 → FAIL\"\n" +
+        "@L plain_h = a*b :: math [9*]\n" +
+        "  <- theorem_a\n"
+    let nodes = parse_atlas_string(body, "test.n6")
+    _check("8 nodes parsed", len(nodes) == 8, fails)
+
+    // ── node_falsifier ──
+    let a = _find_by_id(nodes, "theorem_a")
+    _check("theorem_a falsifier extracted",
+        node_falsifier(a) == "counterexample at n=7", fails)
+    _check("theorem_a has_falsifier", node_has_falsifier(a), fails)
+
+    let g = _find_by_id(nodes, "hyp_g")
+    _check("hyp_g quoted-prose falsifier extracted",
+        node_falsifier(g) == "byte-diff > 0 → FAIL", fails)
+
+    let lonely = _find_by_id(nodes, "lonely_f")
+    _check("lonely_f no falsifier → empty", node_falsifier(lonely) == "", fails)
+    _check("lonely_f has_falsifier false", !node_has_falsifier(lonely), fails)
+
+    // `=` and `= ` variants
+    let body2 = "@L t1 :: math [9*]\n  falsifier = direct eq form\n" +
+        "@L t2 :: math [9*]\n  falsifier=tight form\n"
+    let n2 = parse_atlas_string(body2, "t2.n6")
+    let t1 = _find_by_id(n2, "t1")
+    let t2 = _find_by_id(n2, "t2")
+    _check("falsifier = form", node_falsifier(t1) == "direct eq form", fails)
+    _check("falsifier= form", node_falsifier(t2) == "tight form", fails)
+
+    // ── cascade_candidates ──
+    let hits = cascade_candidates("theorem_a", nodes)
+    // Expect: derived_b (depends_on), verified_c (verified_by),
+    // equiv_d (equivalents), derives_e (derives), plain_h (depends_on).
+    // NOT lonely_f, NOT theorem_a itself.
+    _check("5 cascade candidates", len(hits) == 5, fails)
+    _check("derived_b via depends_on",
+        _hit_via(hits, "derived_b") == "depends_on", fails)
+    _check("verified_c via verified_by",
+        _hit_via(hits, "verified_c") == "verified_by", fails)
+    _check("equiv_d via equivalents",
+        _hit_via(hits, "equiv_d") == "equivalents", fails)
+    _check("derives_e via derives",
+        _hit_via(hits, "derives_e") == "derives", fails)
+    _check("plain_h via depends_on",
+        _hit_via(hits, "plain_h") == "depends_on", fails)
+    _check("lonely_f NOT a candidate", _hit_via(hits, "lonely_f") == "", fails)
+    _check("theorem_a NOT self-cascade",
+        _hit_via(hits, "theorem_a") == "", fails)
+
+    // Empty / unknown id → no candidates.
+    _check("empty id → 0 candidates",
+        len(cascade_candidates("", nodes)) == 0, fails)
+    _check("unknown id → 0 candidates",
+        len(cascade_candidates("nonexistent_xyz", nodes)) == 0, fails)
+
+    // Render does not crash and reports the count.
+    let txt = cascade_to_text("theorem_a", hits)
+    _check("cascade_to_text mentions count",
+        txt.index_of("5 node(s)") >= 0, fails)
+
+    println("")
+    if len(fails) == 0 {
+        println("RESULT: PASS")
+        exit(0)
+    } else {
+        println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
+        let mut i = 0
+        while i < len(fails) {
+            println("  - " + to_string(fails[i]))
+            i = i + 1
+        }
+        exit(1)
+    }
+}
+
+// --- is_main guard ---------------------------------------------------------
+
+let _av = argv()
+
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let script = to_string(_av[1])
+    if script.ends_with("/cascade_test.hexa") { return true }
+    if script == "cascade_test.hexa" { return true }
+    return false
+}
+
+if _is_main() {
+    main()
+}

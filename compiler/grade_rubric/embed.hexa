@@ -1,0 +1,37 @@
+// HEXA Native Compiler — Wave 1 absorption: grade rubric embed
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Source SSOT:
+//   ~/core/nexus/config/grade_rubric.json
+//
+// JSON shape (relevant fields):
+//   primitives        : {n, sigma, tau, phi, sopfr, J2}
+//   grades            : [{grade: int, stage: str, emoji: str, criteria: str}]
+//   verify_mapping    : {EXACT: int, CLOSE: int, WEAK: int, MISS: int}
+//   promotion         : {"9_to_10": str, "10_to_11": str, ...}
+//   demotion          : {"no_evidence": str, "transcendental_exact": str}
+//
+// Primary embed = the 13 grade rows. The auxiliary tables (verify_mapping,
+// promotion, demotion) ship alongside as small string-keyed kv arrays so
+// consumers don't have to re-read JSON.
+
+@phase("parse_only")
+pub struct GradeRubricEntry {
+    grade: i64,
+    stage: string,
+    emoji: string,
+    criteria: string
+}
+
+// Generic kv row used for verify_mapping / promotion / demotion. value_kind
+// is one of "i64" or "string"; consumers pick the right field.
+@phase("parse_only")
+pub struct GradeRubricKv {
+    table: string,
+    key: string,
+    value_kind: string,
+    value_str: string,
+    value_i64: i64
+}

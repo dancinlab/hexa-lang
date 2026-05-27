@@ -1,0 +1,4 @@
+module=modules/qrng/nist_beacon.hexa
+ts=2026-05-03T05:05:24Z
+selftest_tail=__QRNG_NIST_BEACON__ PASS
+status=IMPLEMENTED

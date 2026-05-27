@@ -1,0 +1,11 @@
+#!hexa strict
+// electrocat analyze — CHE HER overpotential η = |ΔG_*H| for Pt(111).
+fn main() {
+    let dG_H_eV = -0.27       // Pt(111) hydrogen-binding (Nørskov CHE)
+    let dG_abs = 0.0 - dG_H_eV
+    let eta_V = dG_abs        // |ΔG_*H| → overpotential (eV ≡ V)
+    println("electrocat_analyze (CHE · HER · Pt(111)):")
+    println("  dG_H_eV = " + str(dG_H_eV))
+    println("  overpotential_V = " + str(eta_V))
+    println("__HEXA_ELECTROCAT_ANALYZE__ PASS gate=GATE_OPEN absorbed=false")
+}

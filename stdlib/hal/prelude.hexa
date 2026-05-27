@@ -1,0 +1,48 @@
+#!hexa strict
+// stdlib/hal/prelude.hexa — umbrella convenience import.
+//
+// `use "stdlib/hal/prelude"` brings in all 12 σ-slot peripherals at
+// once. Useful for bench / sim / test code. Production embedded code
+// should prefer per-module imports (see README.md).
+//
+// HAL = Hardware Abstraction Layer (Rust embedded-hal / ARM CMSIS / ST HAL convention).
+
+use "stdlib/hal/core"
+use "stdlib/hal/gpio"
+use "stdlib/hal/i2c"
+use "stdlib/hal/spi"
+use "stdlib/hal/uart"
+use "stdlib/hal/adc"
+use "stdlib/hal/dac"
+use "stdlib/hal/pwm"
+use "stdlib/hal/timer"
+use "stdlib/hal/intr"
+use "stdlib/hal/dma"
+use "stdlib/hal/rtc"
+
+// ── prelude metadata ──────────────────────────────────────────────────
+
+let PRELUDE_VERSION = "0.0.1"
+let SIGMA_TOTAL = 12   // σ(6) — total module count
+let TAU         = 4    // τ(6) — lifecycle stages
+let PHI         = 2    // φ(6) — digital | analog
+let J2          = 24   // J₂   — handle pool
+
+let DIGITAL_MODULES = ["core", "gpio", "i2c", "spi", "uart", "pwm", "timer", "intr", "dma", "rtc"]
+let ANALOG_MODULES  = ["adc", "dac"]
+
+fn prelude_module_count() -> int { return DIGITAL_MODULES.len() + ANALOG_MODULES.len() }
+
+fn prelude_assert_n6_lattice() -> bool {
+    let total = prelude_module_count()
+    let dig   = DIGITAL_MODULES.len()
+    let ana   = ANALOG_MODULES.len()
+    return total == SIGMA_TOTAL && ana == PHI && (dig + ana) == SIGMA_TOTAL
+}
+
+fn prelude_summary() -> str {
+    return "stdlib/hal prelude v" + PRELUDE_VERSION +
+           " — σ=" + str(SIGMA_TOTAL) +
+           " (" + str(DIGITAL_MODULES.len()) + " digital + " + str(ANALOG_MODULES.len()) + " analog)" +
+           ", τ=" + str(TAU) + ", φ=" + str(PHI) + ", J₂=" + str(J2)
+}

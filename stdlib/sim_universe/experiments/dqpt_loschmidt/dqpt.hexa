@@ -1,0 +1,684 @@
+#!hexa strict
+// dqpt-loschmidt/module/dqpt.hexa — exact dynamical-quantum-phase-transition
+// (DQPT) module: Loschmidt-echo non-analyticities after a TFIM quench.
+//
+// @tool(slug="dqpt", desc="Exact dynamical quantum phase transitions in the transverse-field Ising chain (Heyl-Polkovnikov-Kehrein, PRL 110 135704 2013). Two cross-checked routes: (A) exact 2^N state-vector quench G_N(t)=<psi0|e^{-iH(g1)t}|psi0> with the fvd Trotter/power-iteration engine idiom (N<=24); (B) the exact free-fermion closed-form rate function lambda_inf(t)=-(1/2pi)int ln[1-sin^2(2 Delta_k) sin^2(eps1 t)] dk reaching N->inf, with analytic critical times t*_n=t*(n+1/2). hexa-native (builtin sin/cos/sqrt, no numpy/qutip).")
+// @usage(hexa run dqpt-loschmidt/module/dqpt.hexa [--g0 0.5] [--g1 2.0] [--N 10] [--tmax 4.0] [--dt 0.01] [--nk 4000] [--rate [--exact]] [--critical-times] [--scan] [--json] [--selftest])  // Route A exact 2^N, N<=24
+// @exit_codes(0=PASS selftest/run ok, 1=usage error, 2=physics acceptance FAIL)
+// @sentinel(__SIM_UNIVERSE_DQPT__ PASS|FAIL N=<n> g0=<a> g1=<b> tstar=<t> norm_drift=<d>)
+// @origin(Heyl, Polkovnikov & Kehrein, Phys. Rev. Lett. 110, 135704 (2013); DOI 10.1103/PhysRevLett.110.135704; arXiv:1206.2505 — see AGENTS.tape @X x_heyl_dqpt, MODULE/dqpt-loschmidt.md)
+// @abstraction(pure-hexa: closed-form k-integral (Route B) + exact 2^N complex state vector with 2nd-order Trotter (Route A); no python bridge)
+// @paradigm(structural — TFIM diagonal Z_jZ_{j+1} energies precomputed; transverse g*sigma^x via exact 2-level rotations)
+// @idempotence(deterministic float output, 6-digit decimal emission for byte-eq seal)
+//
+// Model (Heyl-Polkovnikov-Kehrein 2013), J = hbar = 1:
+//   H(g) = -Sum_j sigma^z_j sigma^z_{j+1}  -  g Sum_j sigma^x_j      (ring PBC)
+//   equilibrium QCP at g_c = 1 (ferro g<1  <->  para g>1).
+//   dispersion        eps_g(k) = 2 sqrt(1 + g^2 - 2 g cos k)
+//   Bogoliubov angle  cos(2 theta_g(k)) = (g - cos k) / sqrt(1 + g^2 - 2 g cos k)
+//   quench g0 -> g1:  Delta_k = theta_{g1}(k) - theta_{g0}(k)
+//   closed form       |G(t)|^2 = Prod_{k>0} [ 1 - sin^2(2 Delta_k) sin^2(eps_{g1}(k) t) ]
+//   rate function     lambda_inf(t) = -(1/2pi) Int_0^pi ln[ 1 - sin^2(2 Delta_k) sin^2(eps_{g1} t) ] dk
+//   DQPT (quench across g=1): real k* with cos(2 Delta_{k*})=0, i.e.
+//     cos k* = (1 + g0 g1) / (g0 + g1)  in (-1,1)  ->  non-analytic kinks at
+//     t*_n = t*(n + 1/2),  t* = pi / eps_{g1}(k*) ,  n = 0,1,2,...
+//   no real k*  ->  lambda_inf(t) smooth (no DQPT; control case).
+//
+// HONEST SCOPE (governance @D g1 honest-caveat-first / @D g19):
+//   EXACT 2^N UNITARY quench (finite N, Route A) PLUS the EXACT TFIM
+//   free-fermion closed form (N->inf, Route B). The DQPT non-analyticities
+//   are SHARP ONLY in the N->inf limit; finite-N lambda_N(t) has rounded
+//   near-kinks (stated, not faked — the closed form is the route to the
+//   true cusp, exactly as HPK Fig. 1-2). NOT decoherent. NOT a generic
+//   (non-integrable) model's exact thermodynamic limit — only the
+//   integrable TFIM free-fermion case is closed-form. 2^N memory wall
+//   => Route-A ceiling N<=24 (same as fvd).
+// QRNG disclosure (governance @D g5): closed form + unitary propagation +
+//   deterministic power iteration — NO entropy is drawn.
+//   entropy_source = "deterministic-exact".
+
+// ─── constants / scalar helpers ───
+
+fn _pi() -> f64 { return 3.14159265358979323846 }
+fn _two_pi() -> f64 { return 6.28318530717958647692 }
+fn _abs_f(x: f64) -> f64 { if x < 0.0 { return 0.0 - x } return x }
+
+fn _sqrt_f(x: f64) -> f64 { if x <= 0.0 { return 0.0 } return sqrt(x) }
+
+// Natural log via the atanh series: ln(x) = 2 Sum_{n odd} u^n/n,
+//   u = (m-1)/(m+1) after a binary mantissa split m = x / 2^e, m in [1,2).
+//   |u| <= 1/3 on [1,2] -> the odd-power series converges fast and UNIFORMLY
+//   (no catastrophic slow-down for x just below 1, unlike the plain
+//   alternating (x-1)^k/k series used in fvd.hexa — that one carries a ~0.018
+//   spurious offset for arguments near 1, which would forge a fake DQPT
+//   rate-function floor here since the closed-form integrand sits near 1).
+fn _ln(x: f64) -> f64 {
+    if x <= 0.0 { return 0.0 - 1.0e9 }
+    let mut m = x
+    let mut e: i64 = 0
+    while m >= 2.0 { m = m / 2.0; e = e + 1 }
+    while m < 1.0 { m = m * 2.0; e = e - 1 }
+    let u = (m - 1.0) / (m + 1.0)
+    let u2 = u * u
+    let mut term = u
+    let mut s = 0.0
+    let mut k: i64 = 1
+    while k <= 41 {
+        s = s + term / to_float(k)
+        term = term * u2
+        k = k + 2
+    }
+    return 2.0 * s + to_float(e) * 0.69314718055994530942
+}
+
+// 6-decimal fixed emission for idempotent byte-eq output (mirrors fvd _r6).
+fn _r6(x: f64) -> string {
+    let scaled = x * 1000000.0
+    let rounded = if scaled >= 0.0 { to_int(scaled + 0.5) } else { to_int(scaled - 0.5) }
+    let int_part = rounded / 1000000
+    let frac_part = rounded - int_part * 1000000
+    let abs_frac = if frac_part < 0 { 0 - frac_part } else { frac_part }
+    let mut frac_str = to_string(abs_frac)
+    while len(frac_str) < 6 { frac_str = "0" + frac_str }
+    let sign = if x < 0.0 && int_part == 0 { "-" } else { "" }
+    return sign + to_string(int_part) + "." + frac_str
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// ─── Route B: exact free-fermion closed form (N -> inf) ───
+// ══════════════════════════════════════════════════════════════════════
+
+// eps_g(k) = 2 sqrt(1 + g^2 - 2 g cos k)
+fn _eps(g: f64, k: f64) -> f64 {
+    return 2.0 * _sqrt_f(1.0 + g * g - 2.0 * g * cos(k))
+}
+
+// cos(2 theta_g(k)) = (g - cos k) / sqrt(1 + g^2 - 2 g cos k)
+//   = 2 (g - cos k) / eps_g(k).  sin(2 theta) = 2 sin k / eps_g(k)
+//   (consistent branch: theta in [0,pi/2], sin(2 theta) >= 0 for k in (0,pi)).
+fn _cos2theta(g: f64, k: f64) -> f64 {
+    let denom = _sqrt_f(1.0 + g * g - 2.0 * g * cos(k))
+    if denom < 1.0e-12 { return 1.0 }
+    return (g - cos(k)) / denom
+}
+fn _sin2theta(g: f64, k: f64) -> f64 {
+    let denom = _sqrt_f(1.0 + g * g - 2.0 * g * cos(k))
+    if denom < 1.0e-12 { return 0.0 }
+    return sin(k) / denom
+}
+
+// sin^2(2 Delta_k), Delta_k = theta_{g1}(k) - theta_{g0}(k).
+//   cos(2 Delta) = cos2th(g1) cos2th(g0) + sin2th(g1) sin2th(g0)
+//   sin^2(2 Delta) = 1 - cos^2(2 Delta)
+fn _sin2_2delta(g0: f64, g1: f64, k: f64) -> f64 {
+    let c = _cos2theta(g1, k) * _cos2theta(g0, k) + _sin2theta(g1, k) * _sin2theta(g0, k)
+    let s2 = 1.0 - c * c
+    if s2 < 0.0 { return 0.0 }
+    return s2
+}
+
+// lambda_inf(t) = -(1/2pi) Int_0^pi ln[ 1 - sin^2(2 Delta_k) sin^2(eps1(k) t) ] dk
+//   composite trapezoid, nk subintervals. The integrand -> -inf only on a
+//   measure-zero set (k=k*, t=t*_n); the trapezoid on a dense grid stays
+//   finite and converges to the (finite) intensive rate function.
+fn _lambda_inf(g0: f64, g1: f64, t: f64, nk: i64) -> f64 {
+    let pi = _pi()
+    let h = pi / to_float(nk)
+    let mut acc: f64 = 0.0
+    let mut i: i64 = 0
+    while i <= nk {
+        let k = to_float(i) * h
+        let st = sin(_eps(g1, k) * t)
+        let arg = 1.0 - _sin2_2delta(g0, g1, k) * st * st
+        let safe = if arg < 1.0e-12 { 1.0e-12 } else { arg }
+        let v = _ln(safe)
+        let w = if i == 0 || i == nk { 0.5 } else { 1.0 }
+        acc = acc + w * v
+        i = i + 1
+    }
+    let integral = acc * h
+    return 0.0 - integral / _two_pi()
+}
+
+// DQPT critical mode: cos k* = (1 + g0 g1) / (g0 + g1).
+//   real k* in (0,pi) exists  iff  |cos k*| < 1  iff the quench crosses g=1
+//   (g0<1<g1 or g1<1<g0). Returns k* (or -1 if no DQPT).
+fn _kstar(g0: f64, g1: f64) -> f64 {
+    let denom = g0 + g1
+    if _abs_f(denom) < 1.0e-12 { return 0.0 - 1.0 }
+    let ck = (1.0 + g0 * g1) / denom
+    if ck >= 1.0 || ck <= 0.0 - 1.0 { return 0.0 - 1.0 }
+    // acos via a few Newton steps on cos(x) - ck = 0, seed pi/2.
+    let mut x = _pi() / 2.0
+    let mut it: i64 = 0
+    while it < 60 {
+        let f = cos(x) - ck
+        let df = 0.0 - sin(x)
+        if _abs_f(df) < 1.0e-14 { break }
+        x = x - f / df
+        if x < 0.0 { x = 1.0e-6 }
+        if x > _pi() { x = _pi() - 1.0e-6 }
+        it = it + 1
+    }
+    return x
+}
+
+// t* = pi / eps_{g1}(k*) ; t*_n = t* (n + 1/2).
+fn _tstar(g0: f64, g1: f64) -> f64 {
+    let ks = _kstar(g0, g1)
+    if ks < 0.0 { return 0.0 - 1.0 }
+    let e = _eps(g1, ks)
+    if e < 1.0e-12 { return 0.0 - 1.0 }
+    return _pi() / e
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// ─── Route A: exact 2^N state-vector TFIM quench (finite N <= 24) ───
+//   Reuses the fvd/module/fvd.hexa engine idiom (read-only study):
+//   flat 2^N complex state, precomputed diagonal, exact 2-level transverse
+//   rotations, 2nd-order Strang-Trotter, alloc-free power iteration.
+// ══════════════════════════════════════════════════════════════════════
+
+let mut __N: i64 = 8
+let mut __D: i64 = 256
+let mut __p2: [i64] = []
+let mut __re: [f64] = []          // state vector real, length D
+let mut __im: [f64] = []          // state vector imag, length D
+let mut __diag: [f64] = []        // TFIM diagonal D(b) = -Sum_j z_j z_{j+1}
+let mut __psi0_re: [f64] = []     // initial ground state |psi0> (real), length D
+let mut __pv: [f64] = []          // power-iteration vector (alloc-free)
+let mut __phv: [f64] = []         // H psi scratch (alloc-free)
+
+fn _build_pow2(n: i64) {
+    __p2 = []
+    let mut v: i64 = 1
+    let mut k: i64 = 0
+    while k <= n { __p2.push(v); v = v * 2; k = k + 1 }
+}
+
+fn _bit(b: i64, j: i64) -> i64 { return (b / __p2[j]) % 2 }
+
+// TFIM diagonal: D(b) = -Sum_j z_j z_{j+1}, z = 2*bit-1, ring PBC.
+fn _diag_tfim(b: i64) -> f64 {
+    let n = __N
+    let mut e: f64 = 0.0
+    let mut j: i64 = 0
+    while j < n {
+        let jn = (j + 1) % n
+        let zj = to_float(2 * _bit(b, j) - 1)
+        let zk = to_float(2 * _bit(b, jn) - 1)
+        e = e - zj * zk
+        j = j + 1
+    }
+    return e
+}
+
+fn _build_diag() {
+    __diag = []
+    let mut b: i64 = 0
+    while b < __D { __diag.push(_diag_tfim(b)); b = b + 1 }
+}
+
+fn _zero_state() {
+    __re = []
+    __im = []
+    let mut b: i64 = 0
+    while b < __D { __re.push(0.0); __im.push(0.0); b = b + 1 }
+}
+
+fn _norm2() -> f64 {
+    let mut s: f64 = 0.0
+    let mut b: i64 = 0
+    while b < __D { s = s + __re[b] * __re[b] + __im[b] * __im[b]; b = b + 1 }
+    return s
+}
+
+// U_diag(tau): amp_b *= exp(-i diag[b] tau)
+fn _apply_diag(tau: f64) {
+    let mut b: i64 = 0
+    while b < __D {
+        let phi = __diag[b] * tau
+        let c = cos(phi)
+        let sg = sin(phi)
+        let r = __re[b]
+        let m = __im[b]
+        __re[b] = c * r + sg * m
+        __im[b] = c * m - sg * r
+        b = b + 1
+    }
+}
+
+// U_x(dt) = Prod_j exp(-i g sigma^x_j dt); per site exact 2-level rotation
+//   M = [[c,-i s],[-i s,c]], theta = g dt (coefficient g on sigma^x_j).
+fn _apply_transverse(g: f64, dt: f64) {
+    let theta = g * dt
+    let c = cos(theta)
+    let sg = sin(theta)
+    let mut j: i64 = 0
+    while j < __N {
+        let pj = __p2[j]
+        let mut b: i64 = 0
+        while b < __D {
+            if (b / pj) % 2 == 0 {
+                let q = b + pj
+                let rp = __re[b]
+                let ip = __im[b]
+                let rq = __re[q]
+                let iq = __im[q]
+                __re[b] = c * rp + sg * iq
+                __im[b] = c * ip - sg * rq
+                __re[q] = sg * ip + c * rq
+                __im[q] = (0.0 - sg) * rp + c * iq
+            }
+            b = b + 1
+        }
+        j = j + 1
+    }
+}
+
+// 2nd-order Strang-Trotter step exp(-iH dt): diag(dt/2) X(dt) diag(dt/2).
+fn _trotter_step(g: f64, dt: f64) {
+    _apply_diag(dt / 2.0)
+    _apply_transverse(g, dt)
+    _apply_diag(dt / 2.0)
+}
+
+// H(g) psi  (real ground state of a real-symmetric H): reads __pv -> __phv.
+//   H = diag(D) - g Sum_j sigma^x_j  (note the MINUS: -g coefficient).
+fn _ensure_pbuf() {
+    if len(__pv) == __D && len(__phv) == __D { return }
+    __pv = []
+    __phv = []
+    let mut b: i64 = 0
+    while b < __D { __pv.push(0.0); __phv.push(0.0); b = b + 1 }
+}
+
+fn _hpsi_into(g: f64) {
+    let mut b: i64 = 0
+    while b < __D { __phv[b] = __diag[b] * __pv[b]; b = b + 1 }
+    let mut j: i64 = 0
+    while j < __N {
+        let pj = __p2[j]
+        let mut k: i64 = 0
+        while k < __D {
+            if (k / pj) % 2 == 0 {
+                let q = k + pj
+                __phv[k] = __phv[k] - g * __pv[q]
+                __phv[q] = __phv[q] - g * __pv[k]
+            }
+            k = k + 1
+        }
+        j = j + 1
+    }
+}
+
+// Ground state of H(g) via power iteration on (C*I - H): largest |C-E| ->
+// lowest E. Tight C = max(diag) + g*N + margin. Alloc-free; deterministic
+// seed (no QRNG, @D g5). Writes the result into __psi0_re.
+fn _ground_state(g: f64, iters: i64) {
+    let mut dmax: f64 = __diag[0]
+    let mut bb: i64 = 1
+    while bb < __D { if __diag[bb] > dmax { dmax = __diag[bb] } bb = bb + 1 }
+    let c_shift = dmax + _abs_f(g) * to_float(__N) + 2.0
+
+    _ensure_pbuf()
+    let mut b: i64 = 0
+    while b < __D {
+        let tilt = if b % 3 == 0 { 1.0 } else { 0.5 }
+        __pv[b] = tilt
+        b = b + 1
+    }
+    let mut nn: f64 = 0.0
+    b = 0
+    while b < __D { nn = nn + __pv[b] * __pv[b]; b = b + 1 }
+    let mut inv = 1.0 / _sqrt_f(nn)
+    b = 0
+    while b < __D { __pv[b] = __pv[b] * inv; b = b + 1 }
+
+    let mut it: i64 = 0
+    while it < iters {
+        _hpsi_into(g)
+        let mut s2: f64 = 0.0
+        b = 0
+        while b < __D {
+            let nw = c_shift * __pv[b] - __phv[b]
+            __pv[b] = nw
+            s2 = s2 + nw * nw
+            b = b + 1
+        }
+        inv = 1.0 / _sqrt_f(s2)
+        b = 0
+        while b < __D { __pv[b] = __pv[b] * inv; b = b + 1 }
+        it = it + 1
+    }
+    __psi0_re = []
+    b = 0
+    while b < __D { __psi0_re.push(__pv[b]); b = b + 1 }
+}
+
+// G_N(t) = <psi0|psi(t)> ; returns |G_N(t)|^2 (psi0 real).
+fn _loschmidt_sq() -> f64 {
+    let mut gr: f64 = 0.0
+    let mut gi: f64 = 0.0
+    let mut b: i64 = 0
+    while b < __D {
+        gr = gr + __psi0_re[b] * __re[b]
+        gi = gi + __psi0_re[b] * __im[b]
+        b = b + 1
+    }
+    return gr * gr + gi * gi
+}
+
+// lambda_N(t*) for a finite chain: prepare |psi0>=GS(g0), evolve with H(g1)
+// to time t, return -(1/N) ln |G_N(t)|^2.  Returns also the norm drift via
+// the global state (caller reads _norm2()).
+fn _lambda_N(g0: f64, g1: f64, t: f64, dt: f64, iters: i64) -> f64 {
+    _build_diag()
+    _ground_state(g0, iters)          // |psi0> = GS of H(g0)
+    _zero_state()
+    let mut b: i64 = 0
+    while b < __D { __re[b] = __psi0_re[b]; b = b + 1 }   // psi(0) = psi0
+    let nsteps = to_int(t / dt + 0.5)
+    let mut step: i64 = 0
+    while step < nsteps {
+        _trotter_step(g1, dt)         // evolve with H(g1)
+        step = step + 1
+    }
+    let ls = _loschmidt_sq()
+    let safe = if ls < 1.0e-300 { 1.0e-300 } else { ls }
+    return (0.0 - _ln(safe)) / to_float(__N)
+}
+
+// ─── numeric curvature: |d^2 lambda_inf / dt^2| at t (central, step ht) ───
+fn _curv_inf(g0: f64, g1: f64, t: f64, ht: f64, nk: i64) -> f64 {
+    let lm = _lambda_inf(g0, g1, t - ht, nk)
+    let l0 = _lambda_inf(g0, g1, t, nk)
+    let lp = _lambda_inf(g0, g1, t + ht, nk)
+    return _abs_f((lp - 2.0 * l0 + lm) / (ht * ht))
+}
+
+// Mean |lambda_N(t) - lambda_inf(t)| over OFF-CUSP sample times — the
+// physically sound A<->B metric. Right AT a cusp t*_n, |G_N|^2 has a sharp
+// rounded near-zero whose depth oscillates strongly with N (the finite-N
+// rounding of a true non-analyticity — EXPECTED, @D g19, not faked). Away
+// from the cusps lambda_N converges cleanly to the closed-form lambda_inf;
+// that off-cusp agreement IS the Route-A<->B cross-check (HPK Fig. 2).
+// __N/__D/__p2 must already be set for the target N; nk for the closed form.
+fn _ab_offcusp_err(g0: f64, g1: f64, ts: f64, dt: f64, iters: i64, nk: i64) -> f64 {
+    // 8 off-cusp sample times in units of t* (skip windows around the
+    // half-integer multiples 0.5, 1.5, ... where the cusps sit).
+    let fr: [f64] = [0.12, 0.22, 0.34, 0.70, 0.85, 1.18, 1.70, 1.85]
+    let mut s: f64 = 0.0
+    let mut c: f64 = 0.0
+    let mut i: i64 = 0
+    while i < len(fr) {
+        let t = fr[i] * ts
+        let li = _lambda_inf(g0, g1, t, nk)
+        let ln = _lambda_N(g0, g1, t, dt, iters)
+        s = s + _abs_f(ln - li)
+        c = c + 1.0
+        i = i + 1
+    }
+    return s / c
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// ─── CLI ───
+// ══════════════════════════════════════════════════════════════════════
+
+fn _print_help() {
+    println("usage: hexa run dqpt-loschmidt/module/dqpt.hexa [--g0 0.5] [--g1 2.0]")
+    println("       [--N 10] [--tmax 4.0] [--dt 0.01] [--nk 4000]")
+    println("       [--rate [--exact]] [--critical-times] [--scan] [--json] [--selftest]")
+    println("modes: (default) selftest · --rate lambda(t) trajectory ·")
+    println("       --critical-times analytic t*_n · --scan kink vs quench amplitude")
+    println("routes: B = exact TFIM free-fermion closed form (N->inf);")
+    println("        A = exact 2^N state-vector quench (N<=24, with --exact)")
+    println("note: DQPT kinks are SHARP only at N->inf (closed form). finite-N")
+    println("      lambda_N has rounded near-kinks (stated, not faked) — @D g19.")
+    println("origin: Heyl-Polkovnikov-Kehrein PRL 110 135704 (2013); arXiv:1206.2505")
+}
+
+fn main() -> void {
+    let raw = args()
+    let mut cli: [str] = []
+    let mut ai = 2
+    while ai < len(raw) { cli.push(raw[ai]); ai = ai + 1 }
+
+    let mut g0: f64 = 0.5
+    let mut g1: f64 = 2.0
+    let mut nN: i64 = 10
+    let mut tmax: f64 = 4.0
+    let mut dt: f64 = 0.01
+    let mut nk: i64 = 4000
+    let mut do_rate: bool = false
+    let mut do_ct: bool = false
+    let mut do_scan: bool = false
+    let mut do_exact: bool = false
+    let mut json_mode: bool = false
+    let mut selftest: bool = false
+
+    let mut i = 0
+    while i < len(cli) {
+        let a = cli[i]
+        if a == "lib" { i = i + 1; continue }
+        else if a == "--g0" { if i + 1 < len(cli) { i = i + 1; g0 = to_float(cli[i]) } }
+        else if a == "--g1" { if i + 1 < len(cli) { i = i + 1; g1 = to_float(cli[i]) } }
+        else if a == "--N" { if i + 1 < len(cli) { i = i + 1; nN = to_int(cli[i]) } }
+        else if a == "--tmax" { if i + 1 < len(cli) { i = i + 1; tmax = to_float(cli[i]) } }
+        else if a == "--dt" { if i + 1 < len(cli) { i = i + 1; dt = to_float(cli[i]) } }
+        else if a == "--nk" { if i + 1 < len(cli) { i = i + 1; nk = to_int(cli[i]) } }
+        else if a == "--rate" { do_rate = true }
+        else if a == "--critical-times" { do_ct = true }
+        else if a == "--scan" { do_scan = true }
+        else if a == "--exact" { do_exact = true }
+        else if a == "--json" { json_mode = true }
+        else if a == "--selftest" { selftest = true }
+        else if a == "--help" || a == "-h" { _print_help(); exit(0) }
+        else { eprintln("dqpt: unknown arg `" + a + "`"); exit(1) }
+        i = i + 1
+    }
+
+    if nN < 2 { nN = 2 }
+    if nN > 24 { nN = 24 }                 // 2^N memory wall (same as fvd)
+    if nk < 100 { nk = 100 }
+    __N = nN
+    __D = 1
+    let mut kk: i64 = 0
+    while kk < __N { __D = __D * 2; kk = kk + 1 }
+    _build_pow2(__N)
+
+    // ─── --critical-times ───
+    if do_ct {
+        let ks = _kstar(g0, g1)
+        let crosses = (g0 < 1.0 && g1 > 1.0) || (g1 < 1.0 && g0 > 1.0)
+        if ks < 0.0 {
+            if json_mode {
+                println("{ \"tool\": \"dqpt\", \"mode\": \"critical-times\",")
+                println("  \"g0\": " + _r6(g0) + ", \"g1\": " + _r6(g1) + ",")
+                println("  \"dqpt\": false, \"reason\": \"quench stays on one side of g=1 (no real k*)\" }")
+            } else {
+                println("dqpt --critical-times — Heyl-Polkovnikov-Kehrein 2013, TFIM g0=" + _r6(g0) + " -> g1=" + _r6(g1))
+                println("  NO DQPT: quench stays on one side of g=1 (no real k*); lambda_inf(t) is smooth.")
+            }
+            println("__SIM_UNIVERSE_DQPT__ PASS N=" + to_string(__N) + " g0=" + _r6(g0) + " g1=" + _r6(g1) + " tstar=na norm_drift=0.000000")
+            exit(0)
+        }
+        let ts = _tstar(g0, g1)
+        if json_mode {
+            println("{ \"tool\": \"dqpt\", \"mode\": \"critical-times\",")
+            println("  \"g0\": " + _r6(g0) + ", \"g1\": " + _r6(g1) + ",")
+            println("  \"crosses_gc\": " + (if crosses { "true" } else { "false" }) + ",")
+            println("  \"kstar\": " + _r6(ks) + ", \"tstar\": " + _r6(ts) + ",")
+            let mut js = "  \"critical_times\": ["
+            let mut n: i64 = 0
+            while n < 5 {
+                js = js + _r6(ts * (to_float(n) + 0.5))
+                if n < 4 { js = js + ", " }
+                n = n + 1
+            }
+            println(js + "] }")
+        } else {
+            println("dqpt --critical-times — Heyl-Polkovnikov-Kehrein 2013, TFIM g0=" + _r6(g0) + " -> g1=" + _r6(g1))
+            println("  quench crosses g=1: " + (if crosses { "YES — DQPT expected" } else { "no" }))
+            println("  k* = " + _r6(ks) + "  (cos k* = (1+g0 g1)/(g0+g1))")
+            println("  t* = pi/eps_{g1}(k*) = " + _r6(ts))
+            let mut n: i64 = 0
+            while n < 5 {
+                println("  t*_" + to_string(n) + " = t*(" + to_string(n) + "+1/2) = " + _r6(ts * (to_float(n) + 0.5)))
+                n = n + 1
+            }
+        }
+        println("__SIM_UNIVERSE_DQPT__ PASS N=" + to_string(__N) + " g0=" + _r6(g0) + " g1=" + _r6(g1) + " tstar=" + _r6(ts) + " norm_drift=0.000000")
+        exit(0)
+    }
+
+    // ─── --scan: kink presence vs quench amplitude (sweep g1, fixed g0) ───
+    if do_scan {
+        println("dqpt --scan — kink vs quench amplitude (fixed g0=" + _r6(g0) + ", sweep g1)")
+        println("  g1     crosses_gc  k*        t*_0      (DQPT?)")
+        let gs: [f64] = [0.3, 0.6, 0.9, 1.2, 1.6, 2.0, 3.0, 5.0]
+        let mut idx: i64 = 0
+        while idx < len(gs) {
+            let gg = gs[idx]
+            let ks = _kstar(g0, gg)
+            let ts = _tstar(g0, gg)
+            let crosses = (g0 < 1.0 && gg > 1.0) || (gg < 1.0 && g0 > 1.0)
+            let kss = if ks < 0.0 { "na      " } else { _r6(ks) }
+            let tss = if ts < 0.0 { "na      " } else { _r6(ts * 0.5) }
+            println("  " + _r6(gg) + "  " + (if crosses { "yes       " } else { "no        " }) + " " + kss + "  " + tss + "  " + (if ks >= 0.0 { "DQPT" } else { "smooth" }))
+            idx = idx + 1
+        }
+        println("  (DQPT iff the quench crosses the QCP g=1; t*_0 = t*/2)")
+        println("__SIM_UNIVERSE_DQPT__ PASS N=" + to_string(__N) + " g0=" + _r6(g0) + " g1=scan tstar=scan norm_drift=0.000000")
+        exit(0)
+    }
+
+    // ─── --rate: lambda(t) trajectory (Route B closed form; +A with --exact) ───
+    if do_rate {
+        let ts = _tstar(g0, g1)
+        println("dqpt --rate — Loschmidt rate lambda(t), TFIM g0=" + _r6(g0) + " -> g1=" + _r6(g1))
+        if ts >= 0.0 { println("  analytic t*_0 = " + _r6(ts * 0.5) + "  t*_1 = " + _r6(ts * 1.5)) }
+        else { println("  no DQPT (quench stays on one side of g=1)") }
+        if do_exact {
+            println("  t        lambda_inf   lambda_N(N=" + to_string(__N) + ")")
+        } else {
+            println("  t        lambda_inf")
+        }
+        let nsamp: i64 = 24
+        let step = tmax / to_float(nsamp)
+        let mut s: i64 = 1
+        while s <= nsamp {
+            let t = to_float(s) * step
+            let li = _lambda_inf(g0, g1, t, nk)
+            if do_exact {
+                let ln = _lambda_N(g0, g1, t, dt, 200)
+                println("  " + _r6(t) + "  " + _r6(li) + "  " + _r6(ln))
+            } else {
+                println("  " + _r6(t) + "  " + _r6(li))
+            }
+            s = s + 1
+        }
+        println("  (Route B = exact N->inf closed form; Route A = exact 2^N quench, rounded near-kinks)")
+        println("__SIM_UNIVERSE_DQPT__ PASS N=" + to_string(__N) + " g0=" + _r6(g0) + " g1=" + _r6(g1) + " tstar=" + (if ts >= 0.0 { _r6(ts) } else { "na" }) + " norm_drift=0.000000")
+        exit(0)
+    }
+
+    // ─── default / --selftest: invariants (a)-(d) ───
+    // Fixed config: quench g0=50 -> g1=0 (crosses the QCP g=1; DQPT
+    // expected). This is the textbook clean case: |psi0> = ground state of
+    // H(g0~inf) is the unique product state |->...-> (deep paramagnet),
+    // H(g1=0) = -Sum Z_jZ_{j+1} is the classical Ising point. Both routes
+    // are well-defined (no ferro-phase ground-state degeneracy ambiguity),
+    // giving a clean Route-A<->B cross-check. Analytic: cos k*=(1+g0 g1)/
+    // (g0+g1)=1/g0->0 => k*=pi/2, eps_{g1=0}=2, t*=pi/2, t*_n=t*(n+1/2).
+    let sg0: f64 = 50.0
+    let sg1: f64 = 0.0
+    let snk: i64 = 4000
+    let ts = _tstar(sg0, sg1)              // analytic t* ( = pi/2 )
+    let ts0 = ts * 0.5                     // t*_0 = t*(0 + 1/2)
+
+    // (b) closed-form cusp at t*_0: the curvature |d^2 lambda_inf/dt^2|
+    //     diverges at the non-analytic point. Verify it spikes AT t*_0
+    //     versus a smooth off-cusp reference.
+    let ht = ts * 0.02
+    let curv_at = _curv_inf(sg0, sg1, ts0, ht, snk)
+    let curv_off = _curv_inf(sg0, sg1, ts0 * 0.40, ht, snk)
+    let ok_kink = curv_at > 5.0 * curv_off && curv_at > 1.0
+
+    // (c) A<->B convergence (HEADLINE): mean |lambda_N - lambda_inf| over
+    //     OFF-CUSP times. Right at a cusp |G_N|^2 has a rounded near-zero
+    //     whose depth oscillates with N (the EXPECTED finite-N rounding of
+    //     the genuine non-analyticity — @D g19, stated not faked). Away from
+    //     the cusps lambda_N converges cleanly to the closed form; that is
+    //     the bona-fide Route-A<->B cross-check (HPK Fig. 2 / qdarwin A<->B).
+    __N = 6; __D = 64; _build_pow2(6)
+    let e6 = _ab_offcusp_err(sg0, sg1, ts, 0.004, 220, snk)
+    let drift6 = _abs_f(_norm2() - 1.0)
+
+    __N = 8; __D = 256; _build_pow2(8)
+    let e8 = _ab_offcusp_err(sg0, sg1, ts, 0.004, 240, snk)
+
+    __N = 10; __D = 1024; _build_pow2(10)
+    let e10 = _ab_offcusp_err(sg0, sg1, ts, 0.004, 280, snk)
+    let drift10 = _abs_f(_norm2() - 1.0)
+
+    // (a) unitarity: the alloc-free Trotter propagator conserves norm.
+    let ok_unitary = drift10 < 1.0e-3 && drift6 < 1.0e-3
+
+    // headline: errors small AND monotone-decreasing N=6 -> 8 -> 10
+    // (the rounded near-kink at the cusp is excluded — that's the @D g19
+    // honest finite-N effect). Floor ~1e-3 is the 2nd-order Trotter dt error.
+    let ok_conv = e8 < e6 && e10 < e8 && e10 < 5.0e-3
+
+    // (d) control: quench g0=0.4 -> g1=0.8 (both < 1) — no real k*, smooth.
+    let cks = _kstar(0.4, 0.8)
+    let ctl_curv_a = _curv_inf(0.4, 0.8, 1.2, 0.05, snk)
+    let ctl_curv_b = _curv_inf(0.4, 0.8, 2.4, 0.05, snk)
+    let ok_control = cks < 0.0 && ctl_curv_a < 1.0 && ctl_curv_b < 1.0
+
+    let pass = ok_kink && ok_conv && ok_unitary && ok_control
+
+    if json_mode {
+        println("{")
+        println("  \"tool\": \"dqpt\", \"mode\": \"selftest\",")
+        println("  \"entropy_source\": \"deterministic-exact\",")
+        println("  \"quench\": { \"g0\": 50.000000, \"g1\": 0.000000 },")
+        println("  \"tstar\": " + _r6(ts) + ", \"tstar_0\": " + _r6(ts0) + ",")
+        println("  \"curv_at_kink\": " + _r6(curv_at) + ", \"curv_off_kink\": " + _r6(curv_off) + ",")
+        println("  \"ab_offcusp_err_N6\": " + _r6(e6) + ",")
+        println("  \"ab_offcusp_err_N8\": " + _r6(e8) + ",")
+        println("  \"ab_offcusp_err_N10\": " + _r6(e10) + ",")
+        println("  \"norm_drift\": " + _r6(drift10) + ",")
+        println("  \"control_kstar\": " + _r6(cks) + ", \"control_curv\": " + _r6(ctl_curv_a) + ",")
+        println("  \"ok_kink\": " + (if ok_kink { "true" } else { "false" }) + ",")
+        println("  \"ok_convergence\": " + (if ok_conv { "true" } else { "false" }) + ",")
+        println("  \"ok_unitary\": " + (if ok_unitary { "true" } else { "false" }) + ",")
+        println("  \"ok_control\": " + (if ok_control { "true" } else { "false" }) + ",")
+        println("  \"scope\": \"EXACT 2^N unitary quench (N<=24) + EXACT TFIM free-fermion closed form (N->inf) — kinks sharp only at N->inf; NOT decoherent; TFIM-integrable only\",")
+        println("  \"pass\": " + (if pass { "true" } else { "false" }))
+        println("}")
+    } else {
+        println("dqpt selftest — exact dynamical quantum phase transitions (Heyl-Polkovnikov-Kehrein 2013)")
+        println("  TFIM quench g0=50 -> g1=0 (crosses QCP g=1; DQPT expected)")
+        println("  analytic   : k*=pi/2  t* = pi/eps_{g1}(k*) = " + _r6(ts) + "  ->  t*_0 = " + _r6(ts0))
+        println("  (b) kink   : curvature@t*_0=" + _r6(curv_at) + " >> off-cusp=" + _r6(curv_off) + " (" + (if ok_kink { "OK — closed-form cusp" } else { "FAIL" }) + ")")
+        println("  (c) A<->B  : mean off-cusp |lambda_N - lambda_inf|  (HEADLINE)")
+        println("        N=6  err=" + _r6(e6) + "   N=8  err=" + _r6(e8) + "   N=10 err=" + _r6(e10))
+        println("               monotone-decreasing -> 0: " + (if ok_conv { "OK — finite-N -> closed form" } else { "FAIL" }))
+        println("               (rounded near-kink AT the cusp is the honest finite-N effect — @D g19)")
+        println("  (a) unitary: norm_drift(N=10)=" + _r6(drift10) + " (" + (if ok_unitary { "OK" } else { "FAIL" }) + ")")
+        println("  (d) control: g0=0.4 -> g1=0.8 (both <1) no real k*, smooth (" + (if ok_control { "OK — no DQPT" } else { "FAIL" }) + ")")
+        println("  entropy    : deterministic-exact (closed form + unitary + power iteration; no QRNG; g5)")
+        println("  scope      : EXACT 2^N unitary quench (N<=24) + EXACT TFIM free-fermion")
+        println("               closed form (N->inf). Kinks SHARP only at N->inf; finite-N")
+        println("               lambda_N has rounded near-kinks. NOT decoherent; TFIM-")
+        println("               integrable only — NOT a generic model's exact TD limit. @D g19")
+    }
+    if pass {
+        println("__SIM_UNIVERSE_DQPT__ PASS N=10 g0=" + _r6(sg0) + " g1=" + _r6(sg1) + " tstar=" + _r6(ts) + " norm_drift=" + _r6(drift10))
+        exit(0)
+    }
+    println("__SIM_UNIVERSE_DQPT__ FAIL N=10 g0=" + _r6(sg0) + " g1=" + _r6(sg1) + " tstar=" + _r6(ts) + " norm_drift=" + _r6(drift10))
+    exit(2)
+}

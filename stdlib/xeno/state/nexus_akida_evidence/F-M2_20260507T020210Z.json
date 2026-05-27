@@ -1,0 +1,15 @@
+{
+  "falsifier_id": "F-M2",
+  "measured_ts": "2026-05-07T02:02:10Z",
+  "measured_value": {
+    "spike_gzip_ratio": 0.511793,
+    "random_gzip_ratio": 1.000307875,
+    "delta": -0.488514875,
+    "n_bytes": 8000000,
+    "promotion_eligible": false
+  },
+  "verdict": "PLAUSIBLE-PASS",
+  "raw_log_path": "/Users/ghost/core/nexus/state/akida_evidence/F-M2_20260507T020210Z.json",
+  "hardware_present": false,
+  "command": "scripts/akida/spike_compress.py --simulate"
+}

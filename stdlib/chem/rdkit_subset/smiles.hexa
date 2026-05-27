@@ -1,0 +1,476 @@
+// stdlib/chem/rdkit_subset/smiles.hexa — RDKit-subset SMILES parser
+// (Tier-2 cycle 1, TTR M3 docking input prep).
+//
+// Ships: parse_smiles → Molecule (atoms + bonds + ring_count + formula).
+// Subset: linear chains, branches `(...)`, bonds `= #` (single implicit),
+// aromatic lowercase `c1ccccc1` (order=4 internally), ring closures
+// 1-9, bracketed atoms `[N+] [O-] [NH3] [OH-]`, implicit-H by valence.
+//
+// Deferred (NOT in this PR): logP (Crippen), HBA/HBD, TPSA, 2D/3D coords,
+// canonical SMILES out, SMARTS, stereo (@, /, \), wildcards (*),
+// multi-component (.), isotopes, two-digit ring closures (%10).
+//
+// Style: linear scan + parallel growing arrays (avoids in-place struct
+// mutation in arrays). Final Atom/Bond records built once at the end.
+
+struct Atom {
+    symbol: string,
+    charge: int,
+    hcount: int,
+    aromatic: bool,
+}
+
+struct Bond {
+    a: int,
+    b: int,
+    order: int,
+    aromatic: bool,
+}
+
+struct Molecule {
+    atoms: [Atom],
+    bonds: [Bond],
+    ring_count: int,
+    formula: string,
+}
+
+// ── small helpers ────────────────────────────────────────────────────
+
+fn _is_upper(c: string) -> bool {
+    return c >= "A" && c <= "Z"
+}
+
+fn _is_lower(c: string) -> bool {
+    return c >= "a" && c <= "z"
+}
+
+fn _is_digit(c: string) -> bool {
+    return c >= "0" && c <= "9"
+}
+
+fn _digit_val(c: string) -> int {
+    if c == "0" { return 0 }
+    if c == "1" { return 1 }
+    if c == "2" { return 2 }
+    if c == "3" { return 3 }
+    if c == "4" { return 4 }
+    if c == "5" { return 5 }
+    if c == "6" { return 6 }
+    if c == "7" { return 7 }
+    if c == "8" { return 8 }
+    if c == "9" { return 9 }
+    return 0
+}
+
+fn _to_upper(c: string) -> string {
+    if c == "c" { return "C" }
+    if c == "n" { return "N" }
+    if c == "o" { return "O" }
+    if c == "s" { return "S" }
+    if c == "p" { return "P" }
+    if c == "b" { return "B" }
+    return c
+}
+
+// Two-letter element symbol (Cl, Br, Si). Caller falls back to single.
+fn _two_letter(s: string) -> bool {
+    return s == "Cl" || s == "Br" || s == "Si"
+}
+
+// Read consecutive digits at s[start..]; returns (value, new_cursor).
+// default_v is returned when no digit is present at the cursor.
+struct IntRead {
+    value: int,
+    cursor: int,
+}
+fn _read_uint(s: string, start: int, default_v: int) -> IntRead {
+    let n = len(s)
+    let mut pos = start
+    if pos >= n || _is_digit(s.substring(pos, pos + 1)) == false {
+        let no_digit = IntRead{
+            value: default_v,
+            cursor: pos,
+        }
+        return no_digit
+    }
+    let mut k = 0
+    while pos < n && _is_digit(s.substring(pos, pos + 1)) {
+        k = k * 10 + _digit_val(s.substring(pos, pos + 1))
+        pos = pos + 1
+    }
+    let out = IntRead{
+        value: k,
+        cursor: pos,
+    }
+    return out
+}
+
+// ── bracketed-atom parser  [N+]  [O-]  [NH3]  [OH-]  ────────────────
+
+struct BracketAtom {
+    symbol: string,
+    aromatic: bool,
+    charge: int,
+    explH: int,
+    next_i: int,
+}
+
+fn _parse_bracket(s: string, start: int) -> BracketAtom {
+    // s[start] is `[`. Consume up to and including `]`. Leading digits
+    // are isotope (deferred — silently skipped). Symbol: 1-2 letters,
+    // aromatic when first is lowercase.
+    let n = len(s)
+    let mut i = start + 1
+    while i < n && _is_digit(s.substring(i, i + 1)) { i = i + 1 }
+    let mut sym = ""
+    let mut aromatic = false
+    if i < n {
+        let c0 = s.substring(i, i + 1)
+        if _is_lower(c0) {
+            aromatic = true
+            sym = _to_upper(c0)
+            i = i + 1
+        } else {
+            if _is_upper(c0) {
+                if i + 1 < n {
+                    let c1 = s.substring(i + 1, i + 2)
+                    let pair = c0 + c1
+                    if _two_letter(pair) {
+                        sym = pair
+                        i = i + 2
+                    } else {
+                        sym = c0
+                        i = i + 1
+                    }
+                } else {
+                    sym = c0
+                    i = i + 1
+                }
+            }
+        }
+    }
+    let mut explH = 0
+    let mut charge = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "]" { i = i + 1; break }
+        if c == "H" {
+            let r = _read_uint(s, i + 1, 1)
+            explH = r.value
+            i = r.cursor
+            continue
+        }
+        if c == "+" {
+            let r = _read_uint(s, i + 1, 1)
+            charge = r.value
+            i = r.cursor
+            continue
+        }
+        if c == "-" {
+            let r = _read_uint(s, i + 1, 1)
+            charge = 0 - r.value
+            i = r.cursor
+            continue
+        }
+        // Stereochemistry / chirality `@` etc. — skip silently (deferred).
+        i = i + 1
+    }
+    let out = BracketAtom{
+        symbol: sym,
+        aromatic: aromatic,
+        charge: charge,
+        explH: explH,
+        next_i: i,
+    }
+    return out
+}
+
+// ── main parser ──────────────────────────────────────────────────────
+
+pub fn parse_smiles(smiles: string) -> Molecule {
+    let mut syms: [string]  = []
+    let mut charges: [int]  = []
+    let mut explHs: [int]   = []
+    let mut aroms: [bool]   = []
+    let mut degree: [int]   = []   // bond-order sum incident on each atom
+
+    let mut b_a: [int]      = []
+    let mut b_b: [int]      = []
+    let mut b_order: [int]  = []
+    let mut b_arom: [bool]  = []
+
+    // ring_open[k] = atom index that opened ring k (or -1 if not open)
+    let mut ring_open: [int]   = []
+    let mut ring_bond: [int]   = []   // pending bond order for ring closure
+    let mut k = 0
+    while k < 10 { ring_open.push(-1); ring_bond.push(0); k = k + 1 }
+
+    // Branch stack: when we hit `(`, push the index of the atom we're
+    // currently growing from. When `)`, pop it back as prev.
+    let mut branch_stack: [int] = []
+
+    let mut prev: int = -1
+    let mut pending_bond = 0      // 0 = default (single/aromatic), else 1/2/3
+    let mut pending_aromatic = false
+    let mut ring_count = 0
+
+    let n = len(smiles)
+    let mut i = 0
+    while i < n {
+        let c = smiles.substring(i, i + 1)
+
+        // Branch open.
+        if c == "(" {
+            if prev < 0 {
+                // malformed — recover silently (SMILES validity is not
+                // this PR's contract; the docking pipeline pre-screens).
+                i = i + 1
+                continue
+            }
+            branch_stack.push(prev)
+            i = i + 1
+            continue
+        }
+        if c == ")" {
+            if len(branch_stack) > 0 {
+                prev = branch_stack[len(branch_stack) - 1]
+                branch_stack = branch_stack.slice(0, len(branch_stack) - 1)
+            }
+            i = i + 1
+            continue
+        }
+
+        // Bond operator.
+        if c == "=" { pending_bond = 2; i = i + 1; continue }
+        if c == "#" { pending_bond = 3; i = i + 1; continue }
+        if c == "-" { pending_bond = 1; i = i + 1; continue }
+        if c == ":" { pending_bond = 4; pending_aromatic = true; i = i + 1; continue }
+
+        // Ring closure digit.
+        if _is_digit(c) {
+            let r = _digit_val(c)
+            if ring_open[r] < 0 {
+                // open
+                ring_open[r] = prev
+                ring_bond[r] = pending_bond
+                ring_count = ring_count + 1
+            } else {
+                // close: emit bond between ring_open[r] and prev
+                let a = ring_open[r]
+                let b = prev
+                let mut ord = pending_bond
+                if ord == 0 && ring_bond[r] > 0 { ord = ring_bond[r] }
+                let mut arom = false
+                if ord == 0 {
+                    if aroms[a] && aroms[b] { ord = 4; arom = true } else { ord = 1 }
+                } else { if ord == 4 { arom = true } }
+                b_a.push(a); b_b.push(b); b_order.push(ord); b_arom.push(arom)
+                let inc = if ord == 4 { 1 } else { ord }
+                degree[a] = degree[a] + inc
+                degree[b] = degree[b] + inc
+                ring_open[r] = -1
+                ring_bond[r] = 0
+            }
+            pending_bond = 0
+            pending_aromatic = false
+            i = i + 1
+            continue
+        }
+
+        // Bracketed atom.
+        if c == "[" {
+            let ba = _parse_bracket(smiles, i)
+            i = ba.next_i
+            syms.push(ba.symbol); charges.push(ba.charge); explHs.push(ba.explH)
+            aroms.push(ba.aromatic); degree.push(0)
+            let new_idx = len(syms) - 1
+            if prev >= 0 {
+                let mut ord = pending_bond
+                let mut arom = pending_aromatic
+                if ord == 0 {
+                    if aroms[prev] && ba.aromatic { ord = 4; arom = true } else { ord = 1 }
+                } else { if ord == 4 { arom = true } }
+                b_a.push(prev); b_b.push(new_idx); b_order.push(ord); b_arom.push(arom)
+                let inc = if ord == 4 { 1 } else { ord }
+                degree[prev] = degree[prev] + inc
+                degree[new_idx] = degree[new_idx] + inc
+            }
+            prev = new_idx
+            pending_bond = 0
+            pending_aromatic = false
+            continue
+        }
+
+        // Bare-atom (organic subset). Two-letter (Cl, Br) first.
+        let mut sym = ""
+        let mut aromatic = false
+        if _is_upper(c) {
+            sym = c; i = i + 1
+            if i < n {
+                let pair = c + smiles.substring(i, i + 1)
+                if _two_letter(pair) { sym = pair; i = i + 1 }
+            }
+        } else {
+            if _is_lower(c) {
+                aromatic = true; sym = _to_upper(c); i = i + 1
+            } else {
+                // Stereo, whitespace, etc. — skip silently.
+                i = i + 1; continue
+            }
+        }
+
+        syms.push(sym); charges.push(0); explHs.push(-1)
+        aroms.push(aromatic); degree.push(0)
+        let new_idx = len(syms) - 1
+        if prev >= 0 {
+            let mut ord = pending_bond
+            let mut arom = pending_aromatic
+            if ord == 0 {
+                if aroms[prev] && aromatic { ord = 4; arom = true } else { ord = 1 }
+            } else { if ord == 4 { arom = true } }
+            b_a.push(prev); b_b.push(new_idx); b_order.push(ord); b_arom.push(arom)
+            let inc = if ord == 4 { 1 } else { ord }
+            degree[prev] = degree[prev] + inc
+            degree[new_idx] = degree[new_idx] + inc
+        }
+        prev = new_idx
+        pending_bond = 0
+        pending_aromatic = false
+    }
+
+    // ── implicit-H completion ────────────────────────────────────────
+    // For bare atoms (explH==-1): h = valence(±charge) - degree. Aromatic
+    // C/N/P/B get +1 to `degree` because we count each aromatic bond as
+    // order 1 (it's really 1.5; +1 covers the two shared halves).
+    let mut atoms: [Atom] = []
+    let mut ai = 0
+    while ai < len(syms) {
+        let sym = syms[ai]
+        let mut h = explHs[ai]
+        if h < 0 {
+            let v = _default_valence(sym)
+            let mut used = degree[ai]
+            if aroms[ai] {
+                if sym == "C" || sym == "N" || sym == "P" || sym == "B" {
+                    used = used + 1
+                }
+            }
+            let q = charges[ai]
+            let mut adj_v = v + q   // +Q gives N+ valence 4; -Q lowers O- to 1
+            let mut implicit_h = adj_v - used
+            if implicit_h < 0 { implicit_h = 0 }
+            h = implicit_h
+        }
+        let atom = Atom{
+            symbol: sym,
+            charge: charges[ai],
+            hcount: h,
+            aromatic: aroms[ai],
+        }
+        atoms.push(atom)
+        ai = ai + 1
+    }
+
+    let mut bonds: [Bond] = []
+    let mut bi = 0
+    while bi < len(b_a) {
+        let bnd = Bond{
+            a: b_a[bi],
+            b: b_b[bi],
+            order: b_order[bi],
+            aromatic: b_arom[bi],
+        }
+        bonds.push(bnd)
+        bi = bi + 1
+    }
+
+    let formula = _build_formula(atoms)
+    let mol = Molecule{
+        atoms: atoms,
+        bonds: bonds,
+        ring_count: ring_count,
+        formula: formula,
+    }
+    return mol
+}
+
+// Same as atomic_weights.default_valence — duplicated here so smiles.hexa
+// has no cross-file `use` for parser-only valence logic (kept private).
+fn _default_valence(symbol: string) -> int {
+    if symbol == "C"  { return 4 }
+    if symbol == "N"  { return 3 }
+    if symbol == "O"  { return 2 }
+    if symbol == "S"  { return 2 }
+    if symbol == "P"  { return 3 }
+    if symbol == "F"  { return 1 }
+    if symbol == "Cl" { return 1 }
+    if symbol == "Br" { return 1 }
+    if symbol == "I"  { return 1 }
+    if symbol == "B"  { return 3 }
+    return 0
+}
+
+// Build canonical "Hill" formula: C first, H next, then others
+// alphabetical. Implicit + explicit H are summed.
+fn _build_formula(atoms: [Atom]) -> string {
+    // tally — parallel arrays keys/counts (handful of elements, linear scan OK)
+    let mut keys: [string] = []
+    let mut counts: [int]  = []
+    let mut k = 0
+    while k < len(atoms) {
+        _tally(keys, counts, atoms[k].symbol, 1)
+        let h = atoms[k].hcount
+        if h > 0 { _tally(keys, counts, "H", h) }
+        k = k + 1
+    }
+    // Hill order: C first, H next, then alphabetical for the rest.
+    let mut order: [string] = []
+    if _has(keys, "C") { order.push("C") }
+    if _has(keys, "H") { order.push("H") }
+    let mut rest: [string] = []
+    let mut ii = 0
+    while ii < len(keys) {
+        let kk = keys[ii]
+        if kk != "C" && kk != "H" { rest.push(kk) }
+        ii = ii + 1
+    }
+    // insertion sort (≤ 10 elements in realistic drug-like molecules)
+    let mut a = 1
+    while a < len(rest) {
+        let mut b = a
+        while b > 0 && rest[b - 1] > rest[b] {
+            let tmp = rest[b - 1]; rest[b - 1] = rest[b]; rest[b] = tmp
+            b = b - 1
+        }
+        a = a + 1
+    }
+    let mut r = 0
+    while r < len(rest) { order.push(rest[r]); r = r + 1 }
+    let mut out = ""
+    let mut o = 0
+    while o < len(order) {
+        let s = order[o]
+        let mut cidx = 0
+        while cidx < len(keys) && keys[cidx] != s { cidx = cidx + 1 }
+        let c = counts[cidx]
+        out = out + s
+        if c > 1 { out = out + to_string(c) }
+        o = o + 1
+    }
+    return out
+}
+
+fn _tally(keys: [string], counts: [int], s: string, n: int) {
+    let mut j = 0
+    while j < len(keys) {
+        if keys[j] == s { counts[j] = counts[j] + n; return }
+        j = j + 1
+    }
+    keys.push(s); counts.push(n)
+}
+
+fn _has(keys: [string], s: string) -> bool {
+    let mut j = 0
+    while j < len(keys) { if keys[j] == s { return true }; j = j + 1 }
+    return false
+}

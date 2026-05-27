@@ -1,0 +1,124 @@
+// HEXA Native Compiler — Wave 2.1 atlas audit smoke
+//
+// @version 0.1.0
+// @capabilities [pure, fs_read, fs_write]
+//
+// Exercises compiler/atlas/audit.hexa against the overlay sandbox (we
+// don't pull in the multi-MB rodata embed; that smoke lives in
+// static_index_test.hexa).
+//
+// Run:
+//   hexa run compiler/atlas/audit_test.hexa
+
+use "compiler/atlas/parser"
+use "compiler/atlas/merger"
+use "compiler/atlas/overlay"
+use "compiler/atlas/audit"
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok {
+        println("  PASS  " + label)
+    } else {
+        println("  FAIL  " + label)
+        fails.push(label)
+    }
+}
+
+fn _setup_sandbox() -> string {
+    let base = "/tmp/atlas_audit_test_smoke"
+    exec("rm -rf '" + base + "' 2>/dev/null; mkdir -p '" + base + "/.hx/data'")
+    setenv("HOME", base)
+    return base
+}
+
+fn main() {
+    println("wave-2.1 atlas audit smoke")
+
+    let sandbox = _setup_sandbox()
+    overlay_reset_cache()
+
+    let fails = []
+
+    // Seed the overlay with a representative mix: 9 kinds + 1 dup + 1 orphan.
+    let batch = [
+        "@P alpha_audit = 1 :: foundation [11*]\n  -> beta_audit\n  |> verify.py",
+        "@C beta_audit = 2 :: foundation [10*]\n  <- alpha_audit",
+        "@L gamma_audit :: physics [9?]\n  <- alpha_audit",
+        "@E exp_audit :: meta [10*]\n  |> exp.py",
+        "@F formula_audit = a*b :: math [10!]\n  <- alpha_audit, missing_ref_audit",
+        "@R rel_audit :: foundation [10*]\n  == alpha_audit",
+        "@S sym_audit :: topology [10*]",
+        "@X cross_audit :: crossing [8]\n  -> alpha_audit",
+        "@? q_audit :: cosmology [3?]",
+        "@P beta_audit = duplicate :: foundation [10]  // duplicate (kind C overlap on diff kind)"
+    ]
+    overlay_append_lines(batch)
+    overlay_reset_cache()
+
+    let rep = audit_overlay()
+    println("  overlay entries: " + to_string(rep.entry_count))
+    println("  P=" + to_string(rep.p_count) + " C=" + to_string(rep.c_count) + " L=" + to_string(rep.l_count) + " E=" + to_string(rep.e_count) + " F=" + to_string(rep.f_count) + " R=" + to_string(rep.r_count) + " S=" + to_string(rep.s_count) + " X=" + to_string(rep.x_count) + " Q=" + to_string(rep.q_count))
+    println("  breakthrough=" + to_string(rep.breakthrough_count) + " verified=" + to_string(rep.verified_count) + " hypothesis=" + to_string(rep.hypothesis_count))
+    println("  orphans=" + to_string(rep.orphan_count) + " dups=" + to_string(rep.dup_count))
+
+    _check("entries >= 10", rep.entry_count >= 10, fails)
+    _check("P count >= 2 (alpha + duplicate)", rep.p_count >= 2, fails)
+    _check("C count >= 1", rep.c_count >= 1, fails)
+    _check("L count >= 1", rep.l_count >= 1, fails)
+    _check("E count >= 1", rep.e_count >= 1, fails)
+    _check("F count >= 1", rep.f_count >= 1, fails)
+    _check("R count >= 1", rep.r_count >= 1, fails)
+    _check("S count >= 1", rep.s_count >= 1, fails)
+    _check("X count >= 1", rep.x_count >= 1, fails)
+    _check("Q count >= 1", rep.q_count >= 1, fails)
+    _check("breakthrough >= 1 (formula_audit [10!])", rep.breakthrough_count >= 1, fails)
+    _check("hypothesis >= 1 (gamma + q_audit [?])", rep.hypothesis_count >= 1, fails)
+    _check("verified >= 1 ([10*]/[11*])", rep.verified_count >= 1, fails)
+    _check("orphan >= 1 (missing_ref_audit)", rep.orphan_count >= 1, fails)
+    _check("grade_buckets non-empty", len(rep.grade_buckets) >= 1, fails)
+
+    // JSON serializer round-trip — check it produces parseable looking output.
+    let js = audit_to_json(rep)
+    _check("audit_to_json starts with '{'", js.substring(0, 1) == "{", fails)
+    _check("audit_to_json contains scope:overlay", js.index_of("\"scope\":\"overlay\"") >= 0, fails)
+    _check("audit_to_json contains kind_counts", js.index_of("\"kind_counts\":") >= 0, fails)
+    _check("audit_to_json contains grade_histogram", js.index_of("\"grade_histogram\":") >= 0, fails)
+
+    // Text rendering.
+    let txt = audit_to_text(rep)
+    _check("audit_to_text mentions atlas audit", txt.index_of("atlas audit:") >= 0, fails)
+
+    // audit_rodata + audit_merged smoke (just confirm they don't crash —
+    // rodata content is unpredictable from here).
+    // NOTE: we skip rodata in this test to avoid the multi-MB embed parse;
+    // the audit code path is exercised by audit_overlay.
+
+    println("")
+    if len(fails) == 0 {
+        println("RESULT: PASS")
+        exec("rm -rf '" + sandbox + "' 2>/dev/null")
+        exit(0)
+    } else {
+        println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
+        let mut i = 0
+        while i < len(fails) {
+            println("  - " + to_string(fails[i]))
+            i = i + 1
+        }
+        exit(1)
+    }
+}
+
+let _av = argv()
+
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let script = to_string(_av[1])
+    if script.ends_with("/audit_test.hexa") { return true }
+    if script == "audit_test.hexa" { return true }
+    return false
+}
+
+if _is_main() {
+    main()
+}

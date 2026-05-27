@@ -1,0 +1,176 @@
+// tool/lint_macho_gate.hexa — LINT-MACHO-1 (warn-only on macOS)
+//
+// usage:
+//   hexa tool/lint_macho_gate.hexa                  — scan cwd, warn-only
+//   hexa tool/lint_macho_gate.hexa --root=<dir>     — scan <dir>
+//   hexa tool/lint_macho_gate.hexa --selftest       — internal selftest
+//
+// Scans .hexa source files for `exec("hexa run …")`-style invocations that
+// do NOT carry the `--Mach-O` flag. On macOS hosts, such calls go through
+// the stage0 interpreter rather than native Mach-O codegen — usually fine
+// for hooks/probes, but worth flagging so the intent is explicit.
+//
+// Phase B is warn-only (exit 0 always, no enforcement). Phase C may
+// promote this rule to block-1 once the hook layer is migrated.
+//
+// Output: one LINT-MACHO-1 line per finding on stdout, plus a JSON
+// summary trailer (schema: hexa.lint_macho_gate.v1). ENGLISH ONLY.
+
+fn _default_root() -> string {
+    return to_string(exec("pwd")).trim()
+}
+
+fn _is_macos() -> bool {
+    let u = to_string(exec("uname -s 2>/dev/null")).trim()
+    return u == "Darwin"
+}
+
+fn _scan_files(root: string) -> array {
+    let cmd = "find " + root + " -path '*/.git' -prune -o -path '*/.hx' -prune -o -path '*/node_modules' -prune -o -path '*/target' -prune -o -name '*.hexa' -type f -print 2>/dev/null"
+    let raw_out = to_string(exec(cmd))
+    let lines = split(raw_out, "\n")
+    let files = []
+    for ln in lines {
+        let t = ln.trim()
+        if t == "" { continue }
+        files.push(t)
+    }
+    return files
+}
+
+fn _line_is_exec_hexa_run(line: string) -> bool {
+    // Match exec("…hexa run…") or exec("…$HOME/.hx/bin/hexa run…")
+    // or exec("…hexa batch…"). Conservative substring tests; we want to
+    // catch the common shape, not all exec call sites.
+    let l = line
+    if !l.contains("exec(") { return false }
+    let has_run   = l.contains("hexa run") || l.contains("hexa batch")
+    let has_path  = l.contains("/hexa run") || l.contains("/hexa batch")
+    if !has_run && !has_path { return false }
+    return true
+}
+
+fn _line_has_macho(line: string) -> bool {
+    return line.contains("--Mach-O") || line.contains("HEXA_TARGET_MACHO=1")
+}
+
+fn _scan_file(path: string) -> array {
+    let raw_out = to_string(exec("cat '" + path + "' 2>/dev/null"))
+    let lines = split(raw_out, "\n")
+    let hits = []
+    let mut lineno = 0
+    for ln in lines {
+        lineno = lineno + 1
+        if !_line_is_exec_hexa_run(ln) { continue }
+        if _line_has_macho(ln) { continue }
+        let h = {}
+        h["file"] = path
+        h["line"] = lineno
+        h["text"] = ln.trim()
+        hits.push(h)
+    }
+    return hits
+}
+
+fn _esc(s: string) -> string {
+    let mut r = s.replace("\\", "\\\\")
+    r = r.replace("\"", "\\\"")
+    return r
+}
+
+fn _emit(hit: object) {
+    println("LINT-MACHO-1 " + to_string(hit["file"]) + ":" + to_string(hit["line"]) + ": hexa CLI without --Mach-O on macOS — " + to_string(hit["text"]))
+}
+
+fn _render_summary(hits: array, root: string, host_macos: bool) -> string {
+    let mut s = "{\"schema\":\"hexa.lint_macho_gate.v1\""
+    s = s + ",\"tool\":\"tool/lint_macho_gate.hexa\""
+    s = s + ",\"rule\":\"LINT-MACHO-1\""
+    s = s + ",\"mode\":\"warn\""
+    s = s + ",\"phase\":\"B\""
+    let mut macos_str = "false"
+    if host_macos { macos_str = "true" }
+    s = s + ",\"host_macos\":" + macos_str
+    s = s + ",\"root\":\"" + _esc(root) + "\""
+    s = s + ",\"finding_count\":" + to_string(len(hits))
+    let mut sev = "pass"
+    if len(hits) > 0 { sev = "warn" }
+    s = s + ",\"severity\":\"" + sev + "\""
+    s = s + ",\"findings\":["
+    let mut i = 0
+    while i < len(hits) {
+        if i > 0 { s = s + "," }
+        let h = hits[i]
+        s = s + "{\"file\":\"" + _esc(to_string(h["file"])) + "\""
+        s = s + ",\"line\":" + to_string(h["line"])
+        s = s + ",\"text\":\"" + _esc(to_string(h["text"])) + "\"}"
+        i = i + 1
+    }
+    s = s + "]}"
+    return s
+}
+
+fn cmd_selftest() -> i64 {
+    println("[lint_macho_gate selftest]")
+    if !_line_is_exec_hexa_run("let r = exec(\"hexa run foo.hexa\")") { println("[lint_macho_gate selftest] FAIL detect basic"); return 1 }
+    if _line_is_exec_hexa_run("let r = exec(\"echo hi\")") { println("[lint_macho_gate selftest] FAIL false positive"); return 1 }
+    if !_line_has_macho("exec(\"hexa run --Mach-O foo.hexa\")") { println("[lint_macho_gate selftest] FAIL macho flag"); return 1 }
+    if _line_has_macho("exec(\"hexa run foo.hexa\")") { println("[lint_macho_gate selftest] FAIL macho absent"); return 1 }
+    if _esc("a\"b") != "a\\\"b" { println("[lint_macho_gate selftest] FAIL esc"); return 1 }
+    println("[lint_macho_gate selftest] OK")
+    return 0
+}
+
+fn _parse_root(argv: array) -> string {
+    let mut i = 0
+    while i < len(argv) {
+        let a = argv[i]
+        if a.startswith("--root=") {
+            return a.substring(7, len(a))
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+fn main() -> int {
+    let argv = args()
+    if len(argv) > 1 {
+        let mut k = 1
+        while k < len(argv) {
+            if argv[k] == "--selftest" || argv[k] == "selftest" { exit(cmd_selftest()) }
+            k = k + 1
+        }
+    }
+
+    let mut root = _parse_root(argv)
+    if root == "" { root = _default_root() }
+    let host_macos = _is_macos()
+
+    let files = _scan_files(root)
+    let all_hits = []
+    let mut i = 0
+    while i < len(files) {
+        let hs = _scan_file(files[i])
+        let mut j = 0
+        while j < len(hs) {
+            all_hits.push(hs[j])
+            j = j + 1
+        }
+        i = i + 1
+    }
+
+    // Emit one LINT-MACHO-1 line per finding (warn-only).
+    let mut k = 0
+    while k < len(all_hits) {
+        _emit(all_hits[k])
+        k = k + 1
+    }
+
+    println(_render_summary(all_hits, root, host_macos))
+
+    // Warn-only: always exit 0 in Phase B.
+    return 0
+}
+
+main()

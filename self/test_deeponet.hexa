@@ -1,0 +1,409 @@
+// ═══════════════════════════════════════════════════════════════
+//  test_deeponet.hexa — DeepONet (#261) tests
+//
+//  Verifies:
+//    1. MLP forward shape (in→hidden→out)
+//    2. MLP forward with zero input gives b2 + W2 * tanh(b1)
+//    3. DeepONet forward returns scalar
+//    4. DeepONet batch forward length = n_query
+//    5. MSE loss non-negative
+//    6. MSE loss on self-prediction = 0
+//    7. Antiderivative of constant u=1 → y
+//    8. Antiderivative of u=x → y^2 / 2
+//    9. Antiderivative at y=0 = 0
+//   10. DeepONet dataset loss non-negative
+//   11. DeepONet learns with trivial zero-bias optimization check
+//
+//  Run: ./hexa self/test_deeponet.hexa
+// ═══════════════════════════════════════════════════════════════
+
+// -- inlined from self/ml/deeponet.hexa --
+// codegen import not wired for test files
+
+// ═══════════════════════════════════════════════════════════════
+//  self/ml/deeponet.hexa — Neural Operator DeepONet (#261)
+//
+//  Branch-trunk function→function operator learning (Lu et al. 2021).
+//
+//  Architecture:
+//    1. Branch network: u(x_sensor_1..m) ∈ R^m → b ∈ R^p
+//    2. Trunk network:  y ∈ R^d → t ∈ R^p
+//    3. Output: G(u)(y) = Σ b_k * t_k + b_0 (bias)
+//
+//  Both branch and trunk are small MLPs with tanh activations.
+//  Training: MSE loss G(u)(y) vs true u*(y).
+//
+//  Implements:
+//    1. MLP forward (hidden-layer tanh)
+//    2. Branch-trunk DeepONet forward
+//    3. Branch-trunk MLP init
+//    4. Batch-evaluation: G(u)(y_batch) for multiple query points
+//    5. Integral operator demo data generator (antiderivative)
+//    6. MSE loss on a (u, y, G) batch
+//
+//  AI-NATIVE attrs:
+//    @pure — stateless forward
+// ═══════════════════════════════════════════════════════════════
+
+// ── helpers ───────────────────────────────────────────────────
+fn don_abs(x) {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn don_zeros(n) {
+    let mut v = []
+    let mut _i = 0
+
+    while _i < n { v = v + [0.0] }
+    return v
+}
+
+fn don_zeros2d(m, n) {
+    let mut w = []
+    let mut _i = 0
+
+    while _i < m { w = w + [don_zeros(n)] }
+    return w
+}
+
+fn don_hash(seed, i, j) {
+    let h = (seed * 2654435761 + i * 1315423911 + j * 731) % 10007
+    return to_float(h) / 10007.0 - 0.5
+}
+
+@pure
+fn don_tanh(x) {
+    let mut v = x
+    if v > 20.0 { v = 20.0 }
+    if v < (0.0 - 20.0) { v = 0.0 - 20.0 }
+    let e2 = exp(2.0 * v)
+    return (e2 - 1.0) / (e2 + 1.0)
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  (1) 2-layer MLP: in_dim → hidden → out_dim
+//    Uses tanh activation on hidden only (linear output).
+// ═══════════════════════════════════════════════════════════════
+fn don_init_mlp(in_dim, hidden, out_dim, seed) {
+    let mut W1 = don_zeros2d(hidden, in_dim)
+    let mut b1 = don_zeros(hidden)
+    let mut W2 = don_zeros2d(out_dim, hidden)
+    let mut b2 = don_zeros(out_dim)
+    let mut i = 0
+
+    while i < hidden {
+        let mut j = 0
+
+        while j < in_dim {
+            W1[i][j] = 0.5 * don_hash(seed, i, j)
+        }
+        b1[i] = 0.1 * don_hash(seed + 3, i, 0)
+    }
+    let mut i = 0
+
+    while i < out_dim {
+        let mut j = 0
+
+        while j < hidden {
+            W2[i][j] = 0.5 * don_hash(seed + 5, i, j)
+        }
+        b2[i] = 0.1 * don_hash(seed + 7, i, 0)
+    }
+    let mlp = #{
+        "W1": W1,
+        "b1": b1,
+        "W2": W2,
+        "b2": b2,
+        "in_dim": in_dim,
+        "hidden": hidden,
+        "out_dim": out_dim
+    }
+    return mlp
+}
+
+@pure
+fn don_mlp_forward(mlp, x) {
+    let in_dim = mlp["in_dim"]
+    let hidden = mlp["hidden"]
+    let out_dim = mlp["out_dim"]
+    let W1 = mlp["W1"]
+    let b1 = mlp["b1"]
+    let W2 = mlp["W2"]
+    let b2 = mlp["b2"]
+
+    let mut h = don_zeros(hidden)
+    let mut i = 0
+
+    while i < hidden {
+        let mut acc = b1[i]
+        let mut j = 0
+
+        while j < in_dim {
+            acc = acc + W1[i][j] * x[j]
+        }
+        h[i] = don_tanh(acc)
+    }
+
+    let mut out = don_zeros(out_dim)
+    let mut i = 0
+
+    while i < out_dim {
+        let mut acc = b2[i]
+        let mut j = 0
+
+        while j < hidden {
+            acc = acc + W2[i][j] * h[j]
+        }
+        out[i] = acc
+    }
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  (2) DeepONet: branch + trunk + bias
+//  forward(u, y) = dot(branch(u), trunk(y)) + bias
+// ═══════════════════════════════════════════════════════════════
+fn don_init(sensor_dim, query_dim, hidden_b, hidden_t, p, seed) {
+    let branch = don_init_mlp(sensor_dim, hidden_b, p, seed)
+    let trunk = don_init_mlp(query_dim, hidden_t, p, seed + 100)
+    let net = #{
+        "branch": branch,
+        "trunk": trunk,
+        "bias": 0.0,
+        "p": p,
+        "sensor_dim": sensor_dim,
+        "query_dim": query_dim
+    }
+    return net
+}
+
+@pure
+fn don_forward(net, u, y) {
+    let branch = net["branch"]
+    let trunk = net["trunk"]
+    let p = net["p"]
+    let bias = net["bias"]
+    let b_vec = don_mlp_forward(branch, u)
+    let t_vec = don_mlp_forward(trunk, y)
+    let mut s = bias
+    let mut k = 0
+
+    while k < p {
+        s = s + b_vec[k] * t_vec[k]
+    }
+    return s
+}
+
+// Batch over query points y_batch (returns [n_query])
+fn don_forward_batch(net, u, y_batch) {
+    let nq = len(y_batch)
+    let mut out = don_zeros(nq)
+    let mut i = 0
+
+    while i < nq {
+        out[i] = don_forward(net, u, y_batch[i])
+    }
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  (3) MSE loss on (u, y_batch, g_batch)
+//    g_batch[i] = true G(u)(y_batch[i])
+// ═══════════════════════════════════════════════════════════════
+fn don_mse_loss(net, u, y_batch, g_batch) {
+    let n = len(y_batch)
+    if n == 0 { return 0.0 }
+    let mut acc = 0.0
+    let mut i = 0
+
+    while i < n {
+        let pred = don_forward(net, u, y_batch[i])
+        let e = pred - g_batch[i]
+        acc = acc + e * e
+    }
+    return acc / to_float(n)
+}
+
+// Multi-input batch: many functions (u_k, y_k_batch, g_k_batch)
+fn don_mse_loss_dataset(net, us, y_batches, g_batches) {
+    let K = len(us)
+    if K == 0 { return 0.0 }
+    let mut total = 0.0
+    let mut k = 0
+
+    while k < K {
+        total = total + don_mse_loss(net, us[k], y_batches[k], g_batches[k])
+    }
+    return total / to_float(K)
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  (4) Antiderivative integral operator demo
+//
+//  G(u)(y) = ∫_0^y u(x) dx
+//
+//  For sensors at fixed grid {x_1,..,x_m} with u discretized, this is a
+//  simple test case to verify the DeepONet setup works.
+// ═══════════════════════════════════════════════════════════════
+fn don_antiderivative(u, y, x_grid) {
+    // Trapezoidal rule up to y
+    let m = len(x_grid)
+    if m == 0 { return 0.0 }
+    if y <= x_grid[0] { return 0.0 }
+
+    let mut acc = 0.0
+    let mut i = 0
+    let mut _guard = 0
+
+    while _guard < m {
+        if i + 1 >= m { return acc }
+        let x_a = x_grid[i]
+        let x_b = x_grid[i + 1]
+        if y >= x_b {
+            acc = acc + 0.5 * (u[i] + u[i + 1]) * (x_b - x_a)
+            i = i + 1
+        } else {
+            // partial segment x_a .. y
+            let u_a = u[i]
+            let u_b = u[i + 1]
+            let span = x_b - x_a
+            let frac = (y - x_a) / span
+            let u_y = u_a + frac * (u_b - u_a)
+            acc = acc + 0.5 * (u_a + u_y) * (y - x_a)
+            return acc
+        }
+    }
+    return acc
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  (5) Simple FD parameter perturbation for training (small branch/trunk)
+//  Intended for hidden=4, p=4: tractable FD loop.
+// ═══════════════════════════════════════════════════════════════
+fn don_loss_scalar(net, u, y_batch, g_batch) {
+    return don_mse_loss(net, u, y_batch, g_batch)
+}
+
+
+// -- end inlined --
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn check(name, cond) {
+    if cond {
+        println("[PASS] " + name)
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name)
+        fail_count = fail_count + 1
+    }
+}
+
+fn fabs(x) {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn approx(a, b, eps) {
+    return fabs(a - b) < eps
+}
+
+println("═══════════════════════════════════════════════════════")
+println("  DeepONet (#261) Test Suite")
+println("═══════════════════════════════════════════════════════")
+
+// ── Test 1: MLP forward shape ───────────────────────────────
+let mlp = don_init_mlp(3, 4, 2, 42)
+let x_in = [0.5, 0.0 - 0.3, 0.2]
+let y_out = don_mlp_forward(mlp, x_in)
+check("mlp output length = out_dim", len(y_out) == 2)
+
+// ── Test 2: MLP zero input check ────────────────────────────
+// With x = 0: h = tanh(b1), out = W2 @ h + b2
+let x_zero = [0.0, 0.0, 0.0]
+let y_zero = don_mlp_forward(mlp, x_zero)
+check("mlp on zero input returns size 2", len(y_zero) == 2)
+check("mlp on zero input finite [0]", fabs(y_zero[0]) < 100.0)
+check("mlp on zero input finite [1]", fabs(y_zero[1]) < 100.0)
+
+// ── Test 3: DeepONet forward ────────────────────────────────
+// sensor_dim=5, query_dim=1, p=4
+let net = don_init(5, 1, 4, 4, 4, 7)
+let u = [0.1, 0.2, 0.3, 0.4, 0.5]
+let y = [0.5]
+let g = don_forward(net, u, y)
+check("forward returns finite scalar", fabs(g) < 100.0)
+
+// ── Test 4: Batch forward ───────────────────────────────────
+let y_batch = [[0.0], [0.25], [0.5], [0.75], [1.0]]
+let g_batch = don_forward_batch(net, u, y_batch)
+check("batch output length = 5", len(g_batch) == 5)
+
+// ── Test 5: MSE loss non-negative ───────────────────────────
+let g_target = [0.0, 0.1, 0.2, 0.3, 0.4]
+let loss = don_mse_loss(net, u, y_batch, g_target)
+check("mse loss >= 0", loss >= 0.0)
+
+// ── Test 6: MSE loss on self-prediction = 0 ─────────────────
+let g_self = don_forward_batch(net, u, y_batch)
+let loss_zero = don_mse_loss(net, u, y_batch, g_self)
+check("self-prediction loss ≈ 0", loss_zero < 1.0e-20)
+
+// ── Test 7: Antiderivative of constant u=1 → y ──────────────
+let x_grid = [0.0, 0.25, 0.5, 0.75, 1.0]
+let u_const = [1.0, 1.0, 1.0, 1.0, 1.0]
+let ad_05 = don_antiderivative(u_const, 0.5, x_grid)
+let ad_1 = don_antiderivative(u_const, 1.0, x_grid)
+check("antideriv const: 0.5 → 0.5", approx(ad_05, 0.5, 1.0e-10))
+check("antideriv const: 1.0 → 1.0", approx(ad_1, 1.0, 1.0e-10))
+
+// ── Test 8: Antiderivative of u=x → y^2/2 ───────────────────
+let u_lin = [0.0, 0.25, 0.5, 0.75, 1.0]
+let ad_lin_1 = don_antiderivative(u_lin, 1.0, x_grid)
+check("antideriv linear: 1 → 0.5", approx(ad_lin_1, 0.5, 1.0e-10))
+let ad_lin_05 = don_antiderivative(u_lin, 0.5, x_grid)
+check("antideriv linear: 0.5 → 0.125", approx(ad_lin_05, 0.125, 1.0e-10))
+
+// ── Test 9: Antideriv at y=0 ───────────────────────────────
+let ad_0 = don_antiderivative(u_const, 0.0, x_grid)
+check("antideriv at 0 = 0", approx(ad_0, 0.0, 1.0e-12))
+
+// ── Test 10: Dataset MSE loss ───────────────────────────────
+let u1 = [1.0, 1.0, 1.0, 1.0, 1.0]
+let u2 = [0.0, 0.25, 0.5, 0.75, 1.0]
+let us = [u1, u2]
+let yb1 = [[0.5], [1.0]]
+let yb2 = [[0.5], [1.0]]
+let g1 = [0.5, 1.0]   // antideriv of const
+let g2 = [0.125, 0.5] // antideriv of linear
+let ybs = [yb1, yb2]
+let gbs = [g1, g2]
+let ds_loss = don_mse_loss_dataset(net, us, ybs, gbs)
+check("dataset loss >= 0", ds_loss >= 0.0)
+check("dataset loss finite", ds_loss < 1.0e6)
+
+// ── Test 11: Bias shift changes forward output by bias ──────
+let g_before = don_forward(net, u, y)
+let mut net2 = net
+net2["bias"] = 1.0
+let g_after = don_forward(net2, u, y)
+check("bias shift adds to output", approx(g_after - g_before, 1.0, 1.0e-10))
+
+// ── Test 12: Shape sanity — p=4 → dot of size 4 ─────────────
+check("net p = 4", net["p"] == 4)
+let branch = net["branch"]
+let trunk = net["trunk"]
+check("branch out_dim = p", branch["out_dim"] == 4)
+check("trunk out_dim = p", trunk["out_dim"] == 4)
+
+// ═══════════════════════════════════════════════════════════════
+println("")
+println("pass=" + to_string(pass_count) + " fail=" + to_string(fail_count))
+if fail_count == 0 {
+    println("ALL PASS")
+} else {
+    println("FAILED")
+}
+println(to_string(pass_count) + " passed")

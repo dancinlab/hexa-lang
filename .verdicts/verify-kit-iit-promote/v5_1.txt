@@ -1,0 +1,86 @@
+VERIFY-KIT V5.1 -- anima Phi engine promote to stdlib/consciousness/iit4
+========================================================================
+date    : 2026-05-26
+slug    : verify-kit-iit-promote
+group   : VERIFY-KIT
+method  : promote (no new algorithm; copy + self-contain anima Phi engine)
+tier    : YELLOW (promote-only; wire = V5.2, calibrate = V5.3)
+
+SCOPE
+  V5 (IIT Phi engine n<=8 exact, PyPhi calibrate, anima g61) died twice on
+  rate-limit when attempted whole. V5.1 = smallest slice = PROMOTE the existing
+  anima faithful-Phi engine into hexa-lang stdlib. No new algorithm. No
+  verify_cli wiring (that is V5.2). No PyPhi calibration (that is V5.3).
+
+1. LOCATE (read-only grep)
+  Canonical anima Phi sources found:
+    ~/core/anima/HEXAD/LIFE/lib/phi_native.hexa
+        RFC 036 spatial-Phi MIP-EI. ZERO imports (fully self-contained).
+        ALREADY promoted to hexa-lang stdlib/consciousness/phi_spatial.hexa.
+    ~/core/anima/HEXAD/LIFE/lib/phi_helper.hexa
+        thin surface (phi_with / phi_default). imports c_lib.hexa + phi_native.
+    ~/core/anima/.claude/worktrees/agent-*/HEXAD/LIFE/state/
+        h278_faithful_phi_2026_05_25/run_h278.hexa
+        H_278 "faithful exact MIP-EI Phi n=8" -- the small-N exact MIP that V5
+        targets. 608-line RUN-HARNESS (fn main + CA experiment). Reusable engine
+        core = _build_mi_matrix, _cross_cut, _size_a, _faithful_phi_from_mi.
+        Only in anima worktrees (NOT committed to anima main).
+
+  Existing hexa-lang stdlib/consciousness/ (already on main, NOT touched):
+    phi_spatial.hexa  -- proxy spatial-Phi (= phi_native promote)
+    iit4_bigphi/_complex/_distinction/_relation/_tpm/_bounded.hexa
+                      -- full per-mechanism IIT 4.0 engine suite
+
+  GAP that V5.1 fills: the faithful small-N exact MIP-EI Phi (H_278 core), as
+  a self-contained reusable engine in the iit4/ subdir V5 names. The proxy
+  (max(n-1,1) norm) is already promoted; the faithful (true MIP + small-side
+  min(|A|,|B|) norm) was only in an anima run-harness.
+
+2. PROMOTE (g61/g68)
+  NEW: stdlib/consciousness/iit4/faithful_phi.hexa
+    - faithful Phi* core promoted byte-faithful from H_278:
+        iit4_faithful_phi_from_mi  (exact MIP-EI: argmin cross-cut MI over
+                                    2^(n-1) bipartitions / min(|A|,|B|))
+        iit4_build_mi_matrix       (pairwise MI matrix, RFC 036 estimator)
+        iit4_faithful_phi          (byte-faithful entry; n<=8 exact, n>8 panic)
+    - SELF-CONTAINED: the anima original called the c_phi_mi_pair RFC 036
+      BUILTIN + anima-local life_phi_nbins() (phi_helper <- c_lib). This promote
+      BUNDLES the pure-hexa MI estimator (ported byte-equal from sibling
+      phi_native.hexa: _iit4_mi_pair / _iit4_bin_values / _iit4_entropy) so the
+      engine has ZERO external deps -- no builtin, no anima-local import.
+      n_bins is an explicit caller arg.
+    - provenance header (1 line):
+        # promoted from anima HEXAD/LIFE state/h278_faithful_phi_2026_05_25/
+          run_h278.hexa (g61 shared substrate)
+    - parse-gate: PASS (hexa parse -> "OK: ... parses cleanly")
+
+3. RECORD REUSE EDGE (g68 star form)
+  NEXUS.tape section 1 provides[]: added @X p_iit4
+    primitive = iit4_faithful_phi / iit4_faithful_phi_from_mi / iit4_build_mi_matrix
+    origin    = folded from anima HEXAD/LIFE H_278 faithful-Phi engine
+                (g68 cross-repo, g61 shared substrate)
+    consumers = VERIFY-KIT V5, ARXIV A2 (wiring = V5.2)
+
+ANIMA-LOCAL DEPS (blocked V5.2 wire considerations)
+  - The promoted file has NONE (bundled the MI estimator -> zero deps).
+  - The anima ORIGINAL run_h278.hexa depended on:
+      c_phi_mi_pair   -- RFC 036 builtin (EXISTS in hexa-lang runtime; an
+                         alternative wiring path is to call the builtin instead
+                         of the bundled estimator; recommend byte-eq check).
+      life_phi_nbins() -- anima-local (phi_helper <- c_lib); promoted file
+                         replaces this with an explicit n_bins arg.
+
+V5.2 / V5.3 READINESS
+  V5.2 (wire hexa verify):
+    - thread iit4_faithful_phi into tool/verify_cli.hexa _recompute path.
+    - INTERFACE GAP: verify CLI args are scalars; Phi needs a flat state farr
+      (n x dim). An input adapter (farr-from-args or a state literal) must be
+      designed -- this is the real V5.2 work, not in V5.1 scope.
+  V5.3 (PyPhi calibrate):
+    - numeric cross-check vs PyPhi on n<=8 substrate.
+    - HONEST CARVE-OUT (from H_278): faithful = exact-MIP-EI small-N; it is
+      FAITHFUL-ER than phi_spatial but NOT full per-mechanism IIT 4.0
+      (= stdlib/consciousness/iit4_bigphi.hexa). Keep that distinction at
+      calibration time.
+
+VERDICT: V5.1 promote DONE. tier = YELLOW. V5 [ ] NOT flipped (promote only).

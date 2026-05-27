@@ -1,0 +1,317 @@
+// @allow-bare-exec-file
+// HEXA Native Compiler — RFC-021 daemon v0: Unix-socket server
+//
+// @version 0.1.0
+// @capabilities [pure, fs_read, fs_write, exec]
+//
+// First-cut implementation of RFC-021 §13's suggested deliverable:
+// minimal `hexa daemon serve` that listens on a Unix socket and
+// answers two ops — atlas.lookup and shutdown. v0 is single-threaded
+// (sequential accept) and shells out to `socat` for the socket
+// listener, because stage0 hexa lacks libc bind/listen FFI.
+//
+// === v0 socket-layer choice (DOCUMENTED limitation, not a flaw) ============
+//
+//   We exec() `socat UNIX-LISTEN:<sock>,fork EXEC:'<self> daemon handle-line'`
+//   as a long-lived background process. socat handles the accept loop and
+//   forks per connection; each forked child execs the compiler binary with
+//   the `daemon handle-line` subcommand, which reads one JSON line from
+//   stdin, dispatches, writes one JSON response line to stdout, and exits.
+//
+//   Why not mkfifo: the verify recipe uses `nc -U <sock>`, which requires
+//   a real Unix-domain socket. mkfifo would work for a single producer/
+//   consumer pair but does not bind to AF_UNIX, so `nc -U` cannot connect.
+//
+//   Why not native bind/listen: stage0 hexa has no libc FFI for the
+//   socket(2) / bind(2) / listen(2) syscalls. Adding one would gate the
+//   v0 deliverable on intrinsic work the RFC explicitly defers to v1.
+//
+//   Cost in v0: each handler invocation is a fresh process — atlas is
+//   re-loaded per request via static_atlas() (which is cheap, O(1)
+//   const-array materialization, no I/O — see compiler/atlas/static_index.hexa).
+//   This loses the resident-process amortisation RFC-021 §1.2 motivates,
+//   but proves the wire protocol end-to-end. v1 will keep the process
+//   resident by replacing the socat shellout with libc-FFI accept().
+//
+// === Dispatch ==============================================================
+//
+//   Per accepted line, decode_request → switch on op:
+//     "atlas.lookup" → call lookup(static_atlas(), kind, id), respond ok+result
+//     "shutdown"     → write a shutdown-marker file, respond ok, exit handler;
+//                      the main daemon loop notices the marker and exits.
+//     other          → respond {"status":"error","error":"unknown_op"}
+//
+// === Lifecycle ============================================================
+//
+//   daemon_serve(sock, idle_s) runs forever until either:
+//     - shutdown marker appears (set by a `{"op":"shutdown"}` request), or
+//     - idle_timeout_s seconds elapse with no handler activity, or
+//     - SIGTERM/SIGINT (delivered to the foreground process).
+//
+//   On exit it removes the socket file and the marker file.
+//
+// === Op surface (v0) ======================================================
+//
+//   atlas.lookup — read-only atlas node retrieval. v0 loads static_atlas()
+//                  per request. Atlas hot-reload (RFC-021 §6) is v1.
+//   shutdown     — clean exit. No drain semantics in v0.
+
+import "./proto.hexa"
+import "../atlas/static_index.hexa"
+import "../atlas/merger.hexa"
+import "../atlas/parser.hexa"
+
+// --- helpers ---------------------------------------------------------------
+
+// _now_unix — epoch seconds. Stage0 has no clock intrinsic; shell out.
+fn _now_unix() -> i64 {
+    let s = exec("date +%s 2>/dev/null").trim()
+    return to_int(s)
+}
+
+// _file_exists_safe — wrap file_exists for path strings. file_exists
+// is the stage0 builtin; this thin wrapper exists only for grep-friendly
+// call sites in the daemon code paths.
+fn _file_exists_safe(path: string) -> bool {
+    return file_exists(path)
+}
+
+// _shutdown_marker_path — colocated next to the socket. Removed on
+// daemon exit so a fresh start is clean.
+fn _shutdown_marker_path(sock: string) -> string {
+    return sock + ".shutdown"
+}
+
+// _activity_marker_path — touched by every handler invocation; idle
+// timeout watches its mtime.
+fn _activity_marker_path(sock: string) -> string {
+    return sock + ".active"
+}
+
+// _last_activity_unix — read epoch from the activity marker's stat
+// mtime. Returns 0 on miss (treated as "no activity yet" → uses
+// daemon-start time).
+fn _last_activity_unix(sock: string) -> i64 {
+    let p = _activity_marker_path(sock)
+    if !file_exists(p) { return 0 }
+    // Portable mtime probe: GNU stat uses %Y, BSD stat uses -f %m.
+    let s1 = exec("stat -f %m '" + p + "' 2>/dev/null").trim()
+    if len(s1) > 0 {
+        let v1 = to_int(s1)
+        if v1 > 0 { return v1 }
+    }
+    let s2 = exec("stat -c %Y '" + p + "' 2>/dev/null").trim()
+    if len(s2) > 0 {
+        let v2 = to_int(s2)
+        if v2 > 0 { return v2 }
+    }
+    return 0
+}
+
+// _ensure_parent_dir — mkdir -p the directory containing `path`.
+fn _ensure_parent_dir(path: string) {
+    let cs = path.chars()
+    let n = len(cs)
+    let mut last_slash = -1
+    let mut i = 0
+    while i < n {
+        if cs[i] == '/' { last_slash = i }
+        i = i + 1
+    }
+    if last_slash <= 0 { return }
+    let mut dir = ""
+    let mut j = 0
+    while j < last_slash {
+        dir = dir + to_string(cs[j])
+        j = j + 1
+    }
+    let _ = exec("mkdir -p '" + dir + "' 2>/dev/null")
+}
+
+// _self_handler_command — synthesize the per-connection handler command.
+// v0 model: socat EXEC's this string; each invocation reads one line
+// from stdin, writes one response line to stdout, and exits.
+//
+// Discovery order (must resolve to a LOCAL interpreter — remote
+// dispatchers like the `hexa-r` TCP-compute wrapper will mangle
+// flag arguments and break the handler):
+//   1. $HEXA_DAEMON_HANDLER_CMD — explicit override (tests, packaging).
+//   2. $HOME/.hx/bin/hexa_real — canonical local interpreter binary.
+//   3. $HOME/.hx/packages/hexa/hexa.real — fallback bundle path.
+//   4. `hexa run` — last resort. Will fail in dev environments where
+//      `hexa` is aliased to a remote runner.
+fn _self_handler_command() -> string {
+    let over = env("HEXA_DAEMON_HANDLER_CMD")
+    if len(over) > 0 { return over }
+    let cwd = exec("pwd").trim()
+    let home = env("HOME")
+    let bin1 = home + "/.hx/bin/hexa_real"
+    if file_exists(bin1) {
+        return bin1 + " run " + cwd + "/compiler/main.hexa daemon handle-line"
+    }
+    let bin2 = home + "/.hx/packages/hexa/hexa.real"
+    if file_exists(bin2) {
+        return bin2 + " run " + cwd + "/compiler/main.hexa daemon handle-line"
+    }
+    return "hexa run " + cwd + "/compiler/main.hexa daemon handle-line"
+}
+
+// --- handler (per-connection) ---------------------------------------------
+
+// daemon_handle_line — invoked once per accepted connection by the
+// socat EXEC child. Reads one line from stdin, dispatches, writes one
+// JSON response line to stdout, returns. The caller (socat child)
+// exits after this returns.
+//
+// `socket_path` is needed so the shutdown op can drop the marker file
+// in the right place; we pass it via the HEXA_DAEMON_SOCKET env var
+// which daemon_serve sets before exec'ing socat.
+pub fn daemon_handle_line() -> i64 {
+    let sock = env("HEXA_DAEMON_SOCKET")
+    // Touch the activity marker so the daemon's idle timer resets.
+    if len(sock) > 0 {
+        let _t = exec("touch '" + _activity_marker_path(sock) + "' 2>/dev/null")
+    }
+
+    // Read one line from stdin. Stage0 has no read_stdin_line builtin;
+    // shell out via cat with a 1-line cap.
+    let line = exec("head -n 1").trim()
+    if len(line) == 0 {
+        println(encode_error("empty_request"))
+        return 0
+    }
+
+    let req = decode_request(line)
+    if req.op == "atlas.lookup" {
+        let idx = static_atlas()
+        let node = lookup(idx, req.kind, req.id)
+        // node.kind == "" when lookup miss; we still respond ok with the
+        // empty kind so the client sees a structured "not found" rather
+        // than a protocol error.
+        println(encode_ok_lookup(node.kind, node.id, node.raw))
+        return 0
+    }
+    if req.op == "shutdown" {
+        if len(sock) > 0 {
+            write_file(_shutdown_marker_path(sock), "shutdown\n")
+        }
+        println(encode_ok_simple())
+        return 0
+    }
+    if len(req.op) == 0 {
+        println(encode_error("malformed_request"))
+        return 0
+    }
+    println(encode_error("unknown_op"))
+    return 0
+}
+
+// --- server (long-lived) ---------------------------------------------------
+
+// daemon_serve — main entry. Spawns socat in fork mode as a background
+// process, then polls for shutdown / idle. Returns the daemon exit code
+// (0 on graceful shutdown, non-zero on bind failure).
+pub fn daemon_serve(socket_path: string, idle_timeout_s: i64) -> i64 {
+    if len(socket_path) == 0 {
+        eprintln("hexa-daemon: socket path must be non-empty")
+        return 2
+    }
+
+    // Ensure parent dir, scrub stale socket / markers.
+    _ensure_parent_dir(socket_path)
+    let _r1 = exec("rm -f '" + socket_path + "' 2>/dev/null")
+    let _r2 = exec("rm -f '" + _shutdown_marker_path(socket_path) + "' 2>/dev/null")
+    let _r3 = exec("rm -f '" + _activity_marker_path(socket_path) + "' 2>/dev/null")
+
+    // Verify socat is on PATH; if not, the daemon cannot serve in v0.
+    let socat_check = exec("command -v socat 2>/dev/null").trim()
+    if len(socat_check) == 0 {
+        eprintln("hexa-daemon: `socat` not found on PATH (required for v0 socket layer)")
+        eprintln("  install via: brew install socat (macOS) or apt install socat (linux)")
+        return 3
+    }
+
+    let handler_cmd = _self_handler_command()
+    eprintln("hexa-daemon v0: socket=" + socket_path)
+    eprintln("hexa-daemon v0: idle-timeout=" + to_string(idle_timeout_s) + "s")
+    eprintln("hexa-daemon v0: handler=" + handler_cmd)
+    eprintln("hexa-daemon v0: ops=atlas.lookup,shutdown")
+
+    // Start socat in fork mode as a backgrounded process. The HEXA_DAEMON_SOCKET
+    // env var is propagated so handler children know where to drop the
+    // shutdown marker.
+    //
+    // -T 60 sets per-connection timeout; we don't want a hung client to
+    // wedge a worker. The fork EXEC handler reads stdin, writes stdout,
+    // and the kernel relays both directions over the AF_UNIX peer.
+    let pid_file = socket_path + ".pid"
+    let log_file = socket_path + ".socat.log"
+    let _start_cmd = "HEXA_DAEMON_SOCKET='" + socket_path + "' "
+        + "socat -T 60 UNIX-LISTEN:'" + socket_path + "',fork,reuseaddr "
+        + "'EXEC:" + handler_cmd + ",pipes' "
+        + ">'" + log_file + "' 2>&1 & "
+        + "echo $! > '" + pid_file + "'"
+    let _bg = exec(_start_cmd)
+
+    // @allow-bare-exec-file
+    // @allow-silent-exit-file
+    // Give socat a moment to bind. file_exists() returns false for
+    // non-regular paths in stage0 hexa (Unix-domain sockets included),
+    // so we probe via `test -S`. Up to ~10s of one-second ticks.
+    let mut bind_wait = 0
+    let mut bound = false
+    while bind_wait < 10 {
+        let probe = exec("test -S '" + socket_path + "' && echo y || echo n").trim()
+        if probe == "y" {
+            bound = true
+            bind_wait = 9999
+        } else {
+            let _s = exec("sleep 1")
+            bind_wait = bind_wait + 1
+        }
+    }
+    if !bound {
+        eprintln("hexa-daemon: socat failed to bind socket within ~10s")
+        eprintln("  see " + log_file + " for socat output")
+        return 4
+    }
+
+    let start_unix = _now_unix()
+    let mut last_active = start_unix
+    let mut exit_code = 0
+    let mut stop = false
+    while !stop {
+        // Poll every 1s. v0 is intentionally low-resolution; v1 will
+        // use a kqueue/inotify watcher.
+        let _s = exec("sleep 1")
+        let now = _now_unix()
+        let last = _last_activity_unix(socket_path)
+        if last > last_active { last_active = last }
+
+        // Shutdown marker check.
+        if file_exists(_shutdown_marker_path(socket_path)) {
+            eprintln("hexa-daemon: shutdown requested")
+            stop = true
+        } else if idle_timeout_s > 0 && (now - last_active) >= idle_timeout_s {
+            eprintln("hexa-daemon: idle for "
+                + to_string(now - last_active) + "s (limit "
+                + to_string(idle_timeout_s) + "s); exiting")
+            stop = true
+        }
+    }
+
+    // Tear down socat.
+    if file_exists(pid_file) {
+        let pid = to_string(read_file(pid_file)).trim()
+        if len(pid) > 0 {
+            let _k = exec("kill " + pid + " 2>/dev/null")
+            // Allow socat a moment to release the socket before removing it.
+            let _w = exec("sleep 0.2")
+        }
+    }
+    let _c1 = exec("rm -f '" + socket_path + "' 2>/dev/null")
+    let _c2 = exec("rm -f '" + _shutdown_marker_path(socket_path) + "' 2>/dev/null")
+    let _c3 = exec("rm -f '" + _activity_marker_path(socket_path) + "' 2>/dev/null")
+    let _c4 = exec("rm -f '" + pid_file + "' 2>/dev/null")
+    return exit_code
+}

@@ -1,0 +1,229 @@
+// multiverse/module/bio_variant/core_conservation_mi.hexa
+//   Mutual information on σ(6)=12 catalytic-core conservation across the
+//   M-variant ensemble.
+//
+// Goal: For each pair of positions (p1, p2) within the 12-nt catalytic core,
+// compute MI(base@p1; base@p2) across the M variants. Aggregate as:
+//   - mean MI across all C(12,2)=66 position pairs
+//   - max MI pair (= strongest co-conservation pair)
+//   - per-position conservation entropy H(p) = -Σ p(b)·log p(b)
+//
+// Interpretation: in canonical conservation regime (all variants close to
+// canonical), MI between conserved positions is high (most variants have the
+// same base). In free regime (uniform random bases), MI ≈ 0.
+//
+// hexa-bio σ(6)=12 STRUCTURAL-EXACT claim → this MI is a structural-side
+// witness; functional load-bearing requires F-RB-2 Bayesian audit (deadline
+// 2026-09-28) — see bio_variant/README.md §"Toy-lattice scope" item 4.
+//
+// Usage:
+//   hexa core_conservation_mi.hexa <variants_tsv> <out_json>
+//
+// Reuses the plug-in MI estimator pattern from
+// `multiverse/module/mi_calc.hexa` (4-base alphabet here, vs 4-energy-bin).
+
+const CORE_LEN: i64 = 12
+const NBASES: i64 = 4
+const LOG_SCALE: i64 = 1000
+
+fn log_scaled(num: i64, den: i64) -> i64 {
+    if num <= 0 { return 0 - 20000 }
+    if den <= 0 { return 20000 }
+    let r = num * LOG_SCALE / den
+    if r <= 0 { return 0 - 20000 }
+    let mut x = r
+    let mut l2: i64 = 0
+    if x >= LOG_SCALE {
+        let mut tmp = x
+        while tmp >= (LOG_SCALE * 2) { tmp = tmp / 2; l2 = l2 + 1 }
+        let frac = tmp - LOG_SCALE
+        let f = frac
+        let log2_frac = f - (f * f / (2 * LOG_SCALE))
+        let total_log2 = l2 * LOG_SCALE + log2_frac
+        return total_log2 * 693 / LOG_SCALE
+    } else {
+        let mut tmp = x
+        while tmp * 2 <= LOG_SCALE { tmp = tmp * 2; l2 = l2 + 1 }
+        let frac = tmp - LOG_SCALE
+        let f = frac
+        let log2_frac = f - (f * f / (2 * LOG_SCALE))
+        let total_log2 = log2_frac - l2 * LOG_SCALE
+        return total_log2 * 693 / LOG_SCALE
+    }
+}
+
+fn base_idx(c: string) -> i64 {
+    if c == "A" { return 0 }
+    if c == "C" { return 1 }
+    if c == "G" { return 2 }
+    if c == "U" { return 3 }
+    return 0
+}
+
+// Parse variants TSV: extracts column 3 (core_seq) for each variant.
+fn parse_variant_seqs(path: string) -> [[i64]] {
+    let mut raw = ""
+    try { raw = read_file(path) } catch e { raw = "" }
+    let mut all_seqs: [[i64]] = []
+    let lines = raw.split("\n")
+    let mut i = 0
+    while i < lines.len() {
+        let line = lines[i].trim()
+        if line.len() > 0 {
+            let parts = line.split("\t")
+            if parts.len() >= 3 {
+                let seq_str = parts[2].trim()
+                if seq_str.len() == CORE_LEN {
+                    let mut seq: [i64] = []
+                    let mut p = 0
+                    while p < CORE_LEN {
+                        let c = seq_str.substring(p, p + 1)
+                        seq.push(base_idx(c))
+                        p = p + 1
+                    }
+                    all_seqs.push(seq)
+                }
+            }
+        }
+        i = i + 1
+    }
+    return all_seqs
+}
+
+// Single-position entropy H(p) in nats × LOG_SCALE
+fn position_entropy(all_seqs: [[i64]], pos: i64) -> i64 {
+    let M = all_seqs.len()
+    if M == 0 { return 0 }
+    let mut counts: [i64] = []
+    let mut k = 0
+    while k < NBASES { counts.push(0); k = k + 1 }
+    let mut i = 0
+    while i < M {
+        let b = all_seqs[i][pos]
+        counts[b] = counts[b] + 1
+        i = i + 1
+    }
+    let mut h: i64 = 0
+    let mut b = 0
+    while b < NBASES {
+        let cb = counts[b]
+        if cb > 0 {
+            let lg = log_scaled(cb, M)   // log(p_b) = log(cb/M)
+            h = h - (cb * lg / M)
+        }
+        b = b + 1
+    }
+    return h
+}
+
+// Pairwise MI(p1, p2) in nats × LOG_SCALE
+fn pair_mi(all_seqs: [[i64]], p1: i64, p2: i64) -> i64 {
+    let M = all_seqs.len()
+    if M == 0 { return 0 }
+    let mut joint: [i64] = []
+    let mut k = 0
+    while k < NBASES * NBASES { joint.push(0); k = k + 1 }
+    let mut px: [i64] = []
+    let mut a = 0
+    while a < NBASES { px.push(0); a = a + 1 }
+    let mut py: [i64] = []
+    let mut b = 0
+    while b < NBASES { py.push(0); b = b + 1 }
+    let mut i = 0
+    while i < M {
+        let bx = all_seqs[i][p1]
+        let by = all_seqs[i][p2]
+        joint[bx * NBASES + by] = joint[bx * NBASES + by] + 1
+        px[bx] = px[bx] + 1
+        py[by] = py[by] + 1
+        i = i + 1
+    }
+    let mut mi: i64 = 0
+    let mut bxi = 0
+    while bxi < NBASES {
+        let pxb = px[bxi]
+        if pxb > 0 {
+            let mut byi = 0
+            while byi < NBASES {
+                let pyb = py[byi]
+                let pxy = joint[bxi * NBASES + byi]
+                if pxy > 0 && pyb > 0 {
+                    let log_term = log_scaled(pxy * M, pxb * pyb)
+                    mi = mi + (pxy * log_term / M)
+                }
+                byi = byi + 1
+            }
+        }
+        bxi = bxi + 1
+    }
+    return mi
+}
+
+// CLI entrypoint
+let _args = args()
+if _args.len() < 3 {
+    println("usage: hexa core_conservation_mi.hexa <variants_tsv> <out_json>")
+} else {
+    let variants_tsv = _args[1]
+    let out_json = _args[2]
+
+    let all_seqs = parse_variant_seqs(variants_tsv)
+    let M = all_seqs.len()
+    println("[core_conservation_mi] M=" + to_string(M) + " core_len=" + to_string(CORE_LEN))
+
+    if M < 3 {
+        println("[core_conservation_mi] ERROR: need M>=3 variants for non-degenerate MI")
+    } else {
+        // Per-position entropy
+        let mut entropies: [i64] = []
+        let mut p = 0
+        while p < CORE_LEN {
+            let h = position_entropy(all_seqs, p)
+            entropies.push(h)
+            p = p + 1
+        }
+
+        // Pairwise MI over C(CORE_LEN, 2) = 66 pairs
+        let mut mi_values: [i64] = []
+        let mut sum_mi: i64 = 0
+        let mut max_mi: i64 = 0 - 9999
+        let mut max_mi_p1: i64 = 0
+        let mut max_mi_p2: i64 = 0
+        let mut a = 0
+        while a < CORE_LEN {
+            let mut b = a + 1
+            while b < CORE_LEN {
+                let mi_v = pair_mi(all_seqs, a, b)
+                mi_values.push(mi_v)
+                sum_mi = sum_mi + mi_v
+                if mi_v > max_mi { max_mi = mi_v; max_mi_p1 = a; max_mi_p2 = b }
+                b = b + 1
+            }
+            a = a + 1
+        }
+        let pair_count = mi_values.len()
+        let mean_mi = if pair_count > 0 { sum_mi / pair_count } else { 0 }
+
+        // Sum entropies (informational diversity over the 12 positions)
+        let mut sum_h: i64 = 0
+        let mut hi = 0
+        while hi < entropies.len() { sum_h = sum_h + entropies[hi]; hi = hi + 1 }
+        let mean_h = sum_h / entropies.len()
+
+        // Build per-position entropy CSV-style
+        let mut h_str = "["
+        let mut k = 0
+        while k < entropies.len() {
+            if k > 0 { h_str = h_str + "," }
+            h_str = h_str + to_string(entropies[k])
+            k = k + 1
+        }
+        h_str = h_str + "]"
+
+        let json = "{\"M\":" + to_string(M) + ",\"core_len\":" + to_string(CORE_LEN) + ",\"sigma_6\":12,\"pair_count\":" + to_string(pair_count) + ",\"mean_mi_scaled\":" + to_string(mean_mi) + ",\"max_mi_scaled\":" + to_string(max_mi) + ",\"max_mi_pair\":[" + to_string(max_mi_p1) + "," + to_string(max_mi_p2) + "],\"mean_position_entropy_scaled\":" + to_string(mean_h) + ",\"per_position_entropy_scaled\":" + h_str + ",\"scale\":1000,\"log_unit\":\"nats\"}\n"
+        try { write_file(out_json, json) } catch e {}
+        println("[core_conservation_mi] mean_MI_scaled=" + to_string(mean_mi) + " max_MI_scaled=" + to_string(max_mi) + " (positions " + to_string(max_mi_p1) + "," + to_string(max_mi_p2) + ")")
+        println("[core_conservation_mi] mean_position_H_scaled=" + to_string(mean_h) + " (theoretical max ln(4)≈1386 for uniform 4-base)")
+        println("[core_conservation_mi] wrote " + out_json)
+    }
+}

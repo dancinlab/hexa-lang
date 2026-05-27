@@ -1,0 +1,526 @@
+// ═══════════════════════════════════════════════════════════
+//  self/codegen_c.hexa — HEXA → C 코드 생성 백엔드
+//  Phase 4: AST → C 소스코드 → gcc → 네이티브 바이너리
+//  Rust/Cranelift 완전 대체
+// ═══════════════════════════════════════════════════════════
+
+fn codegen_c(ast) {
+    // perf: chunks.push + join — avoid O(n²) string concat
+    let mut fwd_parts = []
+    let mut fn_parts = []
+    let mut main_parts = []
+
+    let mut i = 0
+    while i < len(ast) {
+        let node = ast[i]
+        if node.kind == "FnDecl" {
+            fwd_parts.push(gen_fn_forward(node) + "\n")
+            fn_parts.push(gen_fn_decl(node) + "\n\n")
+        } else if node.kind == "ExternFnDecl" {
+            fwd_parts.push(gen_extern_fn_decl(node) + "\n")
+        } else if node.kind == "EnumDecl" {
+            fn_parts.push(gen_enum_decl(node) + "\n")
+        } else if node.kind == "StructDecl" {
+            fn_parts.push(gen_struct_decl_c(node) + "\n")
+        } else {
+            main_parts.push(gen_stmt(node, 1))
+        }
+        i = i + 1
+    }
+
+    let mut out_parts = []
+    out_parts.push("#include <stdio.h>\n")
+    out_parts.push("#include <stdlib.h>\n")
+    out_parts.push("#include <string.h>\n")
+    out_parts.push("#include <setjmp.h>\n\n")
+    // Try/catch runtime support
+    out_parts.push("static jmp_buf __hexa_jmpbuf[64];\n")
+    out_parts.push("static int __hexa_jmp_sp = 0;\n")
+    out_parts.push("static long __hexa_err_val = 0;\n\n")
+    out_parts.push(fwd_parts.join(""))
+    out_parts.push("\n")
+    out_parts.push(fn_parts.join(""))
+    out_parts.push("int main() {\n")
+    out_parts.push(main_parts.join(""))
+    out_parts.push("    return 0;\n")
+    out_parts.push("}\n")
+    return out_parts.join("")
+}
+
+// ── Function generation ──────────────────────────────────
+
+fn gen_fn_forward(node) {
+    let params = gen_params_c(node.params)
+    return "long " + node.name + "(" + params + ");"
+}
+
+fn gen_fn_decl(node) {
+    let params = gen_params_c(node.params)
+    // perf: chunks.push + join — avoid O(n²) string concat
+    let mut chunks = []
+    chunks.push("long " + node.name + "(" + params + ") {\n")
+    let mut bi = 0
+    while bi < len(node.body) {
+        chunks.push(gen_stmt(node.body[bi], 1))
+        bi = bi + 1
+    }
+    chunks.push("}\n")
+    return chunks.join("")
+}
+
+// Generate extern function declaration.
+// If @symbol("c_name") is set (node.value), emit the C symbol name.
+// Also emits a #define alias so hexa name maps to C symbol name.
+fn gen_extern_fn_decl(node) {
+    let c_sym = node.value
+    if c_sym == "" {
+        c_sym = node.name
+    }
+    let params = gen_params_c(node.params)
+    let ret = "long"
+    if node.ret_type == "Void" || node.ret_type == "" {
+        ret = "void"
+    }
+    let mut out = "extern " + ret + " " + c_sym + "(" + params + ");"
+    // If hexa name differs from C symbol, emit a macro alias
+    if c_sym != node.name {
+        out = out + "\n#define " + node.name + " " + c_sym
+    }
+    return out
+}
+
+fn gen_params_c(params) {
+    if len(params) == 0 { return "void" }
+    let mut parts = []
+    let mut i = 0
+    while i < len(params) {
+        let p = params[i]
+        if type_of(p) == "string" {
+            parts.push("long " + p)
+        } else {
+            parts.push("long " + p.name)
+        }
+        i = i + 1
+    }
+    return parts.join(", ")
+}
+
+// ── Statement generation ─────────────────────────────────
+
+fn indent(n) {
+    // perf: chunks.push + join — avoid O(n²) string concat
+    let mut parts = []
+    let mut i = 0
+    while i < n {
+        parts.push("    ")
+        i = i + 1
+    }
+    return parts.join("")
+}
+
+// decreases node — structural
+fn gen_stmt(node, depth) {
+    let pad = indent(depth)
+    let k = node.kind
+
+    if k == "LetStmt" || k == "LetMutStmt" {
+        let init = "0"
+        if type_of(node.left) != "string" {
+            init = gen_expr(node.left)
+        }
+        return pad + "long " + node.name + " = " + init + ";\n"
+    }
+
+    if k == "ConstStmt" {
+        let init = gen_expr(node.left)
+        return pad + "const long " + node.name + " = " + init + ";\n"
+    }
+
+    if k == "AssignStmt" {
+        let lhs = gen_expr(node.left)
+        let rhs = gen_expr(node.right)
+        return pad + lhs + " = " + rhs + ";\n"
+    }
+
+    if k == "ReturnStmt" {
+        if type_of(node.left) != "string" {
+            return pad + "return " + gen_expr(node.left) + ";\n"
+        }
+        return pad + "return 0;\n"
+    }
+
+    if k == "ExprStmt" {
+        let expr = node.left
+        if type_of(expr) != "string" && expr.kind == "IfExpr" {
+            // perf: chunks.push + join — avoid O(n²) string concat
+            let mut chunks = []
+            chunks.push(pad + "if (" + gen_expr(expr.cond) + ") {\n")
+            let mut ti = 0
+            while ti < len(expr.then_body) {
+                chunks.push(gen_stmt(expr.then_body[ti], depth + 1))
+                ti = ti + 1
+            }
+            chunks.push(pad + "}")
+            if type_of(expr.else_body) != "string" && len(expr.else_body) > 0 {
+                chunks.push(" else {\n")
+                let mut ei = 0
+                while ei < len(expr.else_body) {
+                    chunks.push(gen_stmt(expr.else_body[ei], depth + 1))
+                    ei = ei + 1
+                }
+                chunks.push(pad + "}")
+            }
+            chunks.push("\n")
+            return chunks.join("")
+        }
+        if type_of(expr) != "string" {
+            // Check for println call
+            if expr.kind == "Call" {
+                let callee = expr.left
+                if type_of(callee) != "string" && callee.kind == "Ident" && callee.name == "println" {
+                    if len(expr.args) > 0 {
+                        let arg = expr.args[0]
+                        return pad + "printf(\"%ld\\n\", (long)(" + gen_expr(arg) + "));\n"
+                    }
+                    return pad + "printf(\"\\n\");\n"
+                }
+            }
+            return pad + gen_expr(expr) + ";\n"
+        }
+        return ""
+    }
+
+    if k == "WhileStmt" {
+        // perf: chunks.push + join — avoid O(n²) string concat
+        let mut chunks = []
+        chunks.push(pad + "while (" + gen_expr(node.cond) + ") {\n")
+        let mut wi = 0
+        while wi < len(node.body) {
+            chunks.push(gen_stmt(node.body[wi], depth + 1))
+            wi = wi + 1
+        }
+        chunks.push(pad + "}\n")
+        return chunks.join("")
+    }
+
+    if k == "ForStmt" {
+        // for i in 0..N → for (long i = 0; i < N; i++)
+        let iter = node.iter_expr
+        if type_of(iter) != "string" && iter.kind == "Range" {
+            let start = gen_expr(iter.left)
+            let end_val = gen_expr(iter.right)
+            // perf: chunks.push + join — avoid O(n²) string concat
+            let mut chunks = []
+            chunks.push(pad + "for (long " + node.name + " = " + start + "; " + node.name + " < " + end_val + "; " + node.name + "++) {\n")
+            let mut fi = 0
+            while fi < len(node.body) {
+                chunks.push(gen_stmt(node.body[fi], depth + 1))
+                fi = fi + 1
+            }
+            chunks.push(pad + "}\n")
+            return chunks.join("")
+        }
+        return pad + "/* unsupported for */\n"
+    }
+
+    if k == "MatchStmt" || k == "MatchExpr" {
+        return gen_match_stmt_c(node, depth)
+    }
+
+    if k == "TryCatchStmt" || k == "TryCatch" {
+        return gen_try_catch_c(node, depth)
+    }
+
+    if k == "ThrowStmt" {
+        return pad + "{ __hexa_err_val = " + gen_expr(node.left) + "; longjmp(__hexa_jmpbuf[__hexa_jmp_sp - 1], 1); }\n"
+    }
+
+    if k == "BreakStmt" {
+        return pad + "break;\n"
+    }
+
+    if k == "ContinueStmt" {
+        return pad + "continue;\n"
+    }
+
+    return pad + "/* " + k + " */\n"
+}
+
+// ── Enum declaration → C #define constants ──────────────
+
+fn gen_enum_decl(node) {
+    let name = node.name
+    let mut parts = []
+    parts.push("// enum " + name + "\n")
+    let mut i = 0
+    while i < len(node.variants) {
+        let v = node.variants[i]
+        parts.push("#define " + name + "_" + v.name + " " + to_string(i) + "\n")
+        i = i + 1
+    }
+    return parts.join("")
+}
+
+// ── Struct declaration → C struct ───────────────────────
+
+fn gen_struct_decl_c(node) {
+    let name = node.name
+    let mut parts = []
+    parts.push("typedef struct {\n")
+    let mut i = 0
+    while i < len(node.fields) {
+        let f = node.fields[i]
+        if type_of(f) == "string" {
+            parts.push("    long " + f + ";\n")
+        } else {
+            parts.push("    long " + f.name + ";\n")
+        }
+        i = i + 1
+    }
+    parts.push("} " + name + ";\n")
+    return parts.join("")
+}
+
+// ── Match statement → if-else chain ─────────────────────
+
+fn gen_match_stmt_c(node, depth) {
+    let pad = indent(depth)
+    let scrutinee = gen_expr(node.left)
+
+    let mut chunks = []
+    chunks.push(pad + "{\n")
+    let pad2 = indent(depth + 1)
+    chunks.push(pad2 + "long __match_val = " + scrutinee + ";\n")
+
+    let mut ai = 0
+    while ai < len(node.arms) {
+        let arm = node.arms[ai]
+        let pat = arm.left
+        let is_wildcard = (type_of(pat) != "string" && pat.kind == "Wildcard")
+
+        if is_wildcard {
+            if ai > 0 {
+                chunks.push(" else {\n")
+            } else {
+                chunks.push(pad2 + "{\n")
+            }
+        } else {
+            let cond = gen_match_cond_c(pat, "__match_val")
+            if ai == 0 {
+                chunks.push(pad2 + "if (" + cond + ") {\n")
+            } else {
+                chunks.push(" else if (" + cond + ") {\n")
+            }
+        }
+
+        // Arm body
+        let mut bi = 0
+        while bi < len(arm.body) {
+            chunks.push(gen_stmt(arm.body[bi], depth + 2))
+            bi = bi + 1
+        }
+        chunks.push(pad2 + "}")
+        ai = ai + 1
+    }
+    chunks.push("\n" + pad + "}\n")
+    return chunks.join("")
+}
+
+fn gen_match_cond_c(pat, scrutinee_var) {
+    if type_of(pat) == "string" {
+        return "1"
+    }
+    let k = pat.kind
+    if k == "Wildcard" { return "1" }
+    if k == "IntLit" { return "(" + scrutinee_var + " == " + pat.value + ")" }
+    if k == "BoolLit" {
+        if pat.value == "true" { return "(" + scrutinee_var + " == 1)" }
+        return "(" + scrutinee_var + " == 0)"
+    }
+    if k == "EnumPath" {
+        return "(" + scrutinee_var + " == " + pat.name + "_" + pat.value + ")"
+    }
+    // Fallback: compare expression
+    return "(" + scrutinee_var + " == " + gen_expr(pat) + ")"
+}
+
+// ── Match as expression (value-producing) ───────────────
+
+fn gen_match_expr_c(node) {
+    let scrutinee = gen_expr(node.left)
+    let arms = node.arms
+    return gen_match_ternary_c(arms, scrutinee, 0)
+}
+
+// decreases arms — structural
+fn gen_match_ternary_c(arms, scrut, idx) {
+    if idx >= len(arms) {
+        return "0"
+    }
+    let arm = arms[idx]
+    let pat = arm.left
+    let is_wildcard = (type_of(pat) != "string" && pat.kind == "Wildcard")
+    let val = gen_arm_value_c(arm.body)
+
+    if is_wildcard || idx == len(arms) - 1 {
+        if is_wildcard { return val }
+        let cond = gen_match_cond_c(pat, scrut)
+        return "(" + cond + " ? " + val + " : 0)"
+    }
+
+    let cond = gen_match_cond_c(pat, scrut)
+    let rest = gen_match_ternary_c(arms, scrut, idx + 1)
+    return "(" + cond + " ? " + val + " : " + rest + ")"
+}
+
+fn gen_arm_value_c(body) {
+    if type_of(body) == "string" || len(body) == 0 {
+        return "0"
+    }
+    let last = body[len(body) - 1]
+    if last.kind == "ExprStmt" {
+        return gen_expr(last.left)
+    }
+    if last.kind == "ReturnStmt" {
+        if type_of(last.left) != "string" {
+            return gen_expr(last.left)
+        }
+    }
+    return "0"
+}
+
+// ── Try/catch → setjmp/longjmp ──────────────────────────
+
+fn gen_try_catch_c(node, depth) {
+    let pad = indent(depth)
+    let pad2 = indent(depth + 1)
+    let mut chunks = []
+    chunks.push(pad + "{\n")
+    chunks.push(pad2 + "if (setjmp(__hexa_jmpbuf[__hexa_jmp_sp++]) == 0) {\n")
+
+    // try body
+    let try_body = node.body
+    if type_of(try_body) != "string" {
+        let mut ti = 0
+        while ti < len(try_body) {
+            chunks.push(gen_stmt(try_body[ti], depth + 2))
+            ti = ti + 1
+        }
+    }
+    // Also support node.left as try body (parser variation)
+    if type_of(try_body) == "string" && type_of(node.left) != "string" {
+        let alt_body = node.left
+        if type_of(alt_body) != "string" {
+            let mut ti = 0
+            while ti < len(alt_body) {
+                chunks.push(gen_stmt(alt_body[ti], depth + 2))
+                ti = ti + 1
+            }
+        }
+    }
+    chunks.push(pad2 + "    __hexa_jmp_sp--;\n")
+    chunks.push(pad2 + "} else {\n")
+    chunks.push(pad2 + "    __hexa_jmp_sp--;\n")
+
+    // catch variable
+    if node.name != "" && node.name != "_" {
+        chunks.push(pad2 + "    long " + node.name + " = __hexa_err_val;\n")
+    }
+
+    // catch body: try else_body first, then right
+    let catch_body = node.else_body
+    if type_of(catch_body) != "string" {
+        let mut ci = 0
+        while ci < len(catch_body) {
+            chunks.push(gen_stmt(catch_body[ci], depth + 2))
+            ci = ci + 1
+        }
+    }
+    if type_of(catch_body) == "string" && type_of(node.right) != "string" {
+        let alt_catch = node.right
+        let mut ci = 0
+        while ci < len(alt_catch) {
+            chunks.push(gen_stmt(alt_catch[ci], depth + 2))
+            ci = ci + 1
+        }
+    }
+    chunks.push(pad2 + "}\n")
+    chunks.push(pad + "}\n")
+    return chunks.join("")
+}
+
+// ── Expression generation ────────────────────────────────
+
+// decreases node — structural
+fn gen_expr(node) {
+    let k = node.kind
+
+    if k == "IntLit" { return node.value }
+    if k == "FloatLit" { return node.value }
+    if k == "BoolLit" {
+        if node.value == "true" { return "1" }
+        return "0"
+    }
+    if k == "StringLit" { return "\"" + node.value + "\"" }
+    if k == "Ident" { return node.name }
+
+    if k == "BinOp" {
+        let l = gen_expr(node.left)
+        let r = gen_expr(node.right)
+        let op = node.op
+        if op == "&&" { return "(" + l + " && " + r + ")" }
+        if op == "||" { return "(" + l + " || " + r + ")" }
+        return "(" + l + " " + op + " " + r + ")"
+    }
+
+    if k == "UnaryOp" {
+        return "(" + node.op + gen_expr(node.left) + ")"
+    }
+
+    if k == "Call" {
+        let callee = node.left
+        if type_of(callee) != "string" && callee.kind == "Ident" {
+            let name = callee.name
+            let mut arg_strs = []
+            let mut ai = 0
+            while ai < len(node.args) {
+                arg_strs.push(gen_expr(node.args[ai]))
+                ai = ai + 1
+            }
+            return name + "(" + arg_strs.join(", ") + ")"
+        }
+        return "/* call */"
+    }
+
+    if k == "IfExpr" {
+        let c = gen_expr(node.cond)
+        let t = gen_expr(node.then_body[0].left)
+        if type_of(node.else_body) != "string" && len(node.else_body) > 0 {
+            let e = gen_expr(node.else_body[0].left)
+            return "(" + c + " ? " + t + " : " + e + ")"
+        }
+        return "(" + c + " ? " + t + " : 0)"
+    }
+
+    if k == "MatchExpr" {
+        return gen_match_expr_c(node)
+    }
+
+    if k == "EnumPath" {
+        return node.name + "_" + node.value
+    }
+
+    if k == "Field" {
+        return gen_expr(node.left) + "." + node.name
+    }
+
+    if k == "Index" {
+        return gen_expr(node.left) + "[" + gen_expr(node.right) + "]"
+    }
+
+    return "/* expr:" + k + " */"
+}
+
+// ── Entry point ──────────────────────────────────────────
+println("=== HEXA → C Code Generator ===")
+println("Ready for Phase 4 self-hosting")

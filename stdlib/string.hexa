@@ -1,0 +1,14 @@
+// stdlib/string.hexa — F1 (2026-05-10) backward-compat shim.
+//
+// Module relocated to stdlib/core/string.hexa under Option C
+// stdlib_core_split (SPEC.yaml firmware_evolution.roadmap.F1).
+// String predicates + small concat helpers operate on the runtime
+// string primitive only — no syscall, no platform assumption.
+// String concatenation does allocate, but the runtime owns that
+// allocation; from the firmware perspective these primitives are
+// available wherever a string runtime exists, so we classify as core.
+//
+// Sunset: removed after F4 absorptions complete.
+// New canonical path: stdlib/core/string.hexa
+
+import "stdlib/core/string.hexa"

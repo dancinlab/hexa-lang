@@ -1,0 +1,508 @@
+#!/usr/bin/env bash
+# ═══════════════════════════════════════════════════════════════════════════
+#  bin/xeno — xeno 🛸 CLI single entry point (topic-dispatched)
+#
+#  PURPOSE
+#    Standalone CLI for non-GPU exotic compute substrate (silicon neuromorphic
+#    + organoid + quantum + random). Bridges to anima + nexus via local path
+#    resolution; fallback to local SSOT only when sister repos unreachable.
+#
+#  TOPICS (8)
+#    status      — global health (xeno repo + 4 source repo reachability)
+#    connect     — bridge probe (anima | nexus | hive | hexa-brain)
+#    invoke      — passthrough (xeno invoke anima <args> | xeno invoke nexus <args>)
+#    fallback    — degraded mode (local SSOT only — raw 91 honest C3 fail-loud)
+#    list        — substrate inventory (7 substrates + roadmap status)
+#    roadmap     — substrate roadmap dispatch (xeno roadmap akida|loihi3|...|qrng)
+#    falsifier   — 12-falsifier harness (anima/nexus/hive merged) [TODO Phase 1.5]
+#    cycle       — Akida Cloud D+0/D+1 cycle dispatch [TODO Phase 1.5]
+#
+#  USAGE
+#    xeno                       → alias for `xeno status`
+#    xeno --version             → print "xeno 0.1.0"
+#    xeno --help                → topic list
+#    xeno <topic>               → topic-level help
+#    xeno <topic> <subcmd> ...  → dispatch
+#
+#  EXIT CODES
+#    0 — success
+#    1 — subcommand error
+#    2 — unknown topic
+#    91 — connection failed, fail-loud (raw 91 honest C3 — silent skip BANNED)
+#
+#  DESIGN
+#    raw#15 — no-hardcode (paths resolved via XENO/HOME)
+#    bedrock mk2 — fallback pattern: degraded mode emits warning, exit 91
+# ═══════════════════════════════════════════════════════════════════════════
+
+set -euo pipefail
+
+VERSION="0.1.0"
+
+# ─── Path resolution (raw#15 no-hardcode) ──────────────────────────────────
+XENO_ROOT="${XENO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+ANIMA_ROOT="${ANIMA_ROOT:-$HOME/core/anima}"
+NEXUS_ROOT="${NEXUS_ROOT:-$HOME/core/nexus}"
+HIVE_ROOT="${HIVE_ROOT:-$HOME/core/hive}"
+HEXA_BRAIN_ROOT="${HEXA_BRAIN_ROOT:-$HOME/core/hexa-brain}"
+
+# ─── Color (raw#15 — TTY-aware) ─────────────────────────────────────────────
+if [[ -t 1 ]]; then
+  RED=$'\033[31m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'; CYAN=$'\033[36m'; BOLD=$'\033[1m'; RESET=$'\033[0m'
+else
+  RED=""; GREEN=""; YELLOW=""; CYAN=""; BOLD=""; RESET=""
+fi
+
+# ─── Connection probe (returns 0=ok, 91=fail-loud) ─────────────────────────
+probe_repo() {
+  local name="$1" root="$2" entry="${3:-}"
+  if [[ ! -d "$root" ]]; then
+    echo "${RED}✗ $name${RESET} unreachable (path missing: $root)" >&2
+    return 91
+  fi
+  if [[ ! -d "$root/.git" ]]; then
+    echo "${YELLOW}△ $name${RESET} path exists but not a git repo: $root" >&2
+    return 91
+  fi
+  if [[ -n "$entry" && ! -x "$root/$entry" ]]; then
+    echo "${YELLOW}△ $name${RESET} entry not executable: $root/$entry" >&2
+    return 91
+  fi
+  echo "${GREEN}✓ $name${RESET} reachable: $root"
+  return 0
+}
+
+# ─── Fallback emission (raw 91 honest C3 fail-loud, NOT silent skip) ───────
+emit_fallback_warning() {
+  local failed_repo="$1"
+  cat >&2 <<EOF
+
+${BOLD}${YELLOW}━━━ xeno fallback mode ━━━${RESET}
+${YELLOW}Reason${RESET}      : ${failed_repo} unreachable
+${YELLOW}Mode${RESET}        : local-ssot-only (xeno repo standalone)
+${YELLOW}Available${RESET}   : ${XENO_ROOT}/{roadmaps,scripts,state,docs}
+${YELLOW}Unavailable${RESET} : sister repo passthrough (${failed_repo} bridge disabled)
+${YELLOW}Resolution${RESET}  : restore ${failed_repo} OR set ${failed_repo^^}_ROOT to alt path
+${YELLOW}raw 91 honest C3${RESET}: silent skip BANNED — this warning is mandatory
+${BOLD}${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━${RESET}
+
+EOF
+}
+
+# ─── Topics ─────────────────────────────────────────────────────────────────
+
+cmd_status() {
+  echo "${BOLD}${CYAN}xeno 🛸 status${RESET}  (xeno $VERSION)"
+  echo "  root  : $XENO_ROOT"
+  if [[ -d "$XENO_ROOT/.git" ]]; then
+    local branch commit
+    branch=$(cd "$XENO_ROOT" && git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "?")
+    commit=$(cd "$XENO_ROOT" && git rev-parse --short HEAD 2>/dev/null || echo "?")
+    echo "  git   : $branch @ $commit"
+  fi
+  echo
+  echo "${BOLD}sister repos${RESET}:"
+  probe_repo "anima      " "$ANIMA_ROOT" "bin/anima"        || true
+  probe_repo "nexus      " "$NEXUS_ROOT" "bin/nexus-cli"    || true
+  probe_repo "hive       " "$HIVE_ROOT"  ""                 || true
+  probe_repo "hexa-brain " "$HEXA_BRAIN_ROOT" ""            || true
+  echo
+  echo "${BOLD}substrate inventory${RESET}:"
+  for r in akida loihi3 northpole finalspark cortical_labs ionq qrng; do
+    if [[ -f "$XENO_ROOT/roadmaps/.roadmap.$r" ]]; then
+      local lines
+      lines=$(wc -l < "$XENO_ROOT/roadmaps/.roadmap.$r" | tr -d ' ')
+      echo "  ${GREEN}✓${RESET} $r  ($lines lines)"
+    else
+      echo "  ${RED}✗${RESET} $r  (roadmap missing)"
+    fi
+  done
+}
+
+cmd_connect() {
+  local target="${1:-}"
+  if [[ -z "$target" ]]; then
+    echo "${BOLD}xeno connect${RESET} <anima|nexus|hive|hexa-brain|all>" >&2
+    return 2
+  fi
+  case "$target" in
+    anima)      probe_repo "anima"      "$ANIMA_ROOT"      "bin/anima"     || { emit_fallback_warning "anima"; return 91; } ;;
+    nexus)      probe_repo "nexus"      "$NEXUS_ROOT"      "bin/nexus-cli" || { emit_fallback_warning "nexus"; return 91; } ;;
+    hive)       probe_repo "hive"       "$HIVE_ROOT"       ""              || { emit_fallback_warning "hive"; return 91; } ;;
+    hexa-brain) probe_repo "hexa-brain" "$HEXA_BRAIN_ROOT" ""              || { emit_fallback_warning "hexa-brain"; return 91; } ;;
+    all)
+      local rc=0
+      probe_repo "anima"      "$ANIMA_ROOT"      "bin/anima"     || rc=$((rc | 1))
+      probe_repo "nexus"      "$NEXUS_ROOT"      "bin/nexus-cli" || rc=$((rc | 2))
+      probe_repo "hive"       "$HIVE_ROOT"       ""              || rc=$((rc | 4))
+      probe_repo "hexa-brain" "$HEXA_BRAIN_ROOT" ""              || rc=$((rc | 8))
+      [[ $rc -ne 0 ]] && emit_fallback_warning "$rc"
+      return $rc
+      ;;
+    *) echo "unknown target: $target (expected: anima|nexus|hive|hexa-brain|all)" >&2; return 2 ;;
+  esac
+}
+
+cmd_invoke() {
+  local target="${1:-}"
+  shift || true
+  if [[ -z "$target" ]]; then
+    echo "${BOLD}xeno invoke${RESET} <anima|nexus> [args...]" >&2
+    return 2
+  fi
+  case "$target" in
+    anima)
+      if [[ ! -x "$ANIMA_ROOT/bin/anima" ]]; then
+        emit_fallback_warning "anima"
+        return 91
+      fi
+      exec "$ANIMA_ROOT/bin/anima" "$@"
+      ;;
+    nexus)
+      if [[ ! -x "$NEXUS_ROOT/bin/nexus-cli" ]]; then
+        emit_fallback_warning "nexus"
+        return 91
+      fi
+      exec "$NEXUS_ROOT/bin/nexus-cli" "$@"
+      ;;
+    *) echo "unknown invoke target: $target (expected: anima|nexus)" >&2; return 2 ;;
+  esac
+}
+
+cmd_fallback() {
+  echo "${BOLD}${YELLOW}xeno 🛸 fallback mode${RESET} (local SSOT only)"
+  echo
+  echo "Available locally without sister repos:"
+  echo "  ${GREEN}✓${RESET} ${XENO_ROOT}/roadmaps/   — 7 substrate roadmaps"
+  echo "  ${GREEN}✓${RESET} ${XENO_ROOT}/scripts/    — akida runner + 12-falsifier harness (copies)"
+  echo "  ${GREEN}✓${RESET} ${XENO_ROOT}/state/      — evidence + state (87 files)"
+  echo "  ${GREEN}✓${RESET} ${XENO_ROOT}/design/kick/ — omega cycle witness (14)"
+  echo "  ${GREEN}✓${RESET} ${XENO_ROOT}/n6/         — atlas appends (10)"
+  echo "  ${GREEN}✓${RESET} ${XENO_ROOT}/docs/       — setup + cycle docs (5)"
+  echo
+  echo "${YELLOW}NOT available in fallback${RESET}:"
+  echo "  - anima Phi pipeline live execution"
+  echo "  - nexus 216 lenses / drill / blowup"
+  echo "  - hive omega cycle integration"
+  echo "  - hexa-brain EEG live spec link"
+  echo
+  echo "${BOLD}raw 91 honest C3${RESET}: this fallback is fail-loud (NOT silent)."
+}
+
+cmd_list() {
+  echo "${BOLD}xeno 🛸 substrate inventory${RESET}"
+  echo
+  printf "%-16s %-8s %s\n" "substrate" "lines" "vendor / source"
+  printf "%-16s %-8s %s\n" "---------" "-----" "---------------"
+  for r in akida loihi3 northpole finalspark cortical_labs ionq qrng; do
+    if [[ -f "$XENO_ROOT/roadmaps/.roadmap.$r" ]]; then
+      local lines
+      lines=$(wc -l < "$XENO_ROOT/roadmaps/.roadmap.$r" | tr -d ' ')
+      case "$r" in
+        akida)         printf "  %-14s %-8s %s\n" "$r" "$lines" "BrainChip AKD1000 (silicon neuromorphic)" ;;
+        loihi3)        printf "  %-14s %-8s %s\n" "$r" "$lines" "Intel (silicon neuromorphic)" ;;
+        northpole)     printf "  %-14s %-8s %s\n" "$r" "$lines" "IBM (silicon neuromorphic)" ;;
+        finalspark)    printf "  %-14s %-8s %s\n" "$r" "$lines" "FinalSpark (organoid)" ;;
+        cortical_labs) printf "  %-14s %-8s %s\n" "$r" "$lines" "Cortical Labs DishBrain (organoid)" ;;
+        ionq)          printf "  %-14s %-8s %s\n" "$r" "$lines" "IonQ (quantum gate)" ;;
+        qrng)          printf "  %-14s %-8s %s\n" "$r" "$lines" "QRNG (quantum random)" ;;
+      esac
+    fi
+  done
+}
+
+cmd_roadmap() {
+  local r="${1:-}"
+  if [[ -z "$r" ]]; then cmd_list; return 0; fi
+  local f="$XENO_ROOT/roadmaps/.roadmap.$r"
+  if [[ -f "$f" ]]; then
+    cat "$f"
+  else
+    echo "no roadmap: $r" >&2
+    echo "available: akida loihi3 northpole finalspark cortical_labs ionq qrng" >&2
+    return 1
+  fi
+}
+
+cmd_falsifier() {
+  local sub="${1:-list}"
+  shift || true
+  local nexus_origin="$XENO_ROOT/scripts/akida/nexus_origin"
+  case "$sub" in
+    list)
+      echo "${BOLD}xeno 🛸 falsifier inventory${RESET}  (nexus 12-falsifier harness, copy SSOT)"
+      echo
+      printf "%-7s %-25s %-12s %s\n" "F-id" "category" "hardware" "evidence"
+      printf "%-7s %-25s %-12s %s\n" "----" "--------" "--------" "--------"
+      local ev_dir="$XENO_ROOT/state/nexus_akida_evidence"
+      for fid in F-C F-L7 F-M2 F-M3a F-L1 F-L1+ F-L6 F-M1 F-M3b F-M4 F-A F-B; do
+        local cat="" hw="" ev=""
+        case "$fid" in
+          F-C)    cat="architectural";        hw="no" ;;
+          F-L7)   cat="QRNG entropy";          hw="no" ;;
+          F-M2)   cat="gzip compression";      hw="partial" ;;
+          F-M3a)  cat="dispatch routing";      hw="no" ;;
+          F-L1)   cat="J/op energy";           hw="${YELLOW}YES${RESET}" ;;
+          F-L1+)  cat="sub-Landauer sparsity"; hw="${YELLOW}YES${RESET}" ;;
+          F-L6)   cat="Lyapunov sweep";        hw="${YELLOW}YES${RESET}" ;;
+          F-M1)   cat="Gödel-q disagreement";  hw="${YELLOW}YES${RESET}" ;;
+          F-M3b)  cat="Phi substrate-invar";   hw="${YELLOW}YES${RESET}" ;;
+          F-M4)   cat="trace equivalence";     hw="${YELLOW}YES${RESET}" ;;
+          F-A)    cat="blowup phase-7";        hw="${YELLOW}YES${RESET}" ;;
+          F-B)    cat="check_* hot-loop";      hw="${YELLOW}YES${RESET}" ;;
+        esac
+        if [[ -d "$ev_dir" ]]; then
+          local file
+          file=$(ls "$ev_dir"/${fid}_*.json 2>/dev/null | tail -1)
+          if [[ -n "$file" ]]; then
+            ev="$(basename "$file")"
+          else
+            ev="${RED}—${RESET}"
+          fi
+        fi
+        printf "%-7s %-25s %-22s %s\n" "$fid" "$cat" "$hw" "$ev"
+      done
+      ;;
+    run)
+      local fid="${1:-}"
+      if [[ -z "$fid" ]]; then echo "usage: xeno falsifier run <F-id>" >&2; return 2; fi
+      local runner="$nexus_origin/runner.py"
+      if [[ ! -f "$runner" ]]; then
+        echo "${RED}runner.py missing${RESET} at $runner" >&2
+        emit_fallback_warning "nexus_origin"
+        return 91
+      fi
+      shift
+      echo "${CYAN}→ dispatch via xeno copy${RESET}: $runner $fid $*"
+      cd "$nexus_origin" && exec python3 runner.py "$fid" "$@"
+      ;;
+    all)
+      local runner="$nexus_origin/runner.py"
+      if [[ ! -f "$runner" ]]; then echo "${RED}runner.py missing${RESET}" >&2; return 91; fi
+      echo "${CYAN}→ dispatch all eligible falsifiers${RESET}: $runner $*"
+      cd "$nexus_origin" && exec python3 runner.py "$@"
+      ;;
+    *) echo "usage: xeno falsifier {list | run <F-id> [args] | all [args]}" >&2; return 2 ;;
+  esac
+}
+
+# ─── Path detection (own 35 — AKD1000 primary, Akida Cloud fallback) ───────
+detect_akida_path() {
+  # Probe physical AKD1000 chip via akida package; rc==0 → primary
+  if python3 -c "import akida; devs = akida.devices(); assert len(devs) > 0" 2>/dev/null; then
+    echo "primary"
+  else
+    echo "fallback"
+  fi
+}
+
+cmd_cycle() {
+  local sub="${1:-status}"
+  shift || true
+  case "$sub" in
+    status)
+      echo "${BOLD}xeno 🛸 Akida cycle status${RESET}  (own 35: AKD1000 primary, Akida Cloud fallback)"
+      echo
+      local path
+      path=$(detect_akida_path)
+      if [[ "$path" == "primary" ]]; then
+        echo "  ${GREEN}● PRIMARY active${RESET}: AKD1000 physical chip (RPi5 dev kit / host.rpi5-akida)"
+        python3 -c "import akida; print('  akida pkg :', akida.__version__); print('  devices  :', akida.devices())" 2>&1 | head -3
+      else
+        echo "  ${YELLOW}○ PRIMARY unavailable${RESET}: AKD1000 chip 미수신/probe 실패 (.roadmap.akida akida.blk.1)"
+        echo "  ${BOLD}${YELLOW}● FALLBACK active${RESET}: Akida Cloud (Colfax-hosted)"
+      fi
+      echo
+      echo "${BOLD}fallback (Akida Cloud)${RESET}:"
+      local rstart rend
+      rstart=$(secret get akida_cloud.reservation_start 2>/dev/null || echo "?")
+      rend=$(secret get akida_cloud.reservation_end 2>/dev/null || echo "?")
+      echo "  reservation : $rstart → $rend"
+      local now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+      echo "  now (UTC)   : $now"
+      echo "  ssh alias   : $(secret get akida_cloud.ssh_alias 2>/dev/null || echo akida-cloud)"
+      echo "  ssh proxy   : $(secret get akida_cloud.ssh_proxy_host 2>/dev/null || echo ?):$( secret get akida_cloud.ssh_proxy_port 2>/dev/null || echo ?)"
+      echo "  ssh key     : $(secret get akida_cloud.ssh_key_path 2>/dev/null || echo ?)"
+      echo
+      echo "${BOLD}primary (AKD1000 physical)${RESET}:"
+      echo "  workspace   : host.rpi5-akida (~/core/.workspace, registered post-arrival)"
+      echo "  hardware    : RPi5 + AKD1000 M.2 dev kit (\$1,495, 주문 2026-04-29, ETA 미확정)"
+      echo "  registrar   : nexus scripts/akida/host_register.sh (event-driven, F-L1 PASS evidence required)"
+      echo
+      echo "${BOLD}phases${RESET}:"
+      echo "  D-1  prep      : xeno cycle prep    (P1 tarball + P0b smoke + freeze)"
+      echo "  D+0  start     : xeno cycle connect → upload → run  (path detect 자동)"
+      echo "  D+1  end       : xeno cycle exfil → verdict"
+      echo "  primary trigger: chip 도착 → host_register.sh fire → cycle path auto-flip"
+      ;;
+    primary)
+      local sub2="${1:-status}"
+      shift || true
+      case "$sub2" in
+        status|probe)
+          local path; path=$(detect_akida_path)
+          if [[ "$path" == "primary" ]]; then
+            echo "${GREEN}✓ AKD1000 PRIMARY available${RESET}"
+            python3 -c "import akida; print('  pkg:', akida.__version__); print('  devices:', akida.devices())" 2>&1
+            return 0
+          else
+            echo "${YELLOW}○ AKD1000 PRIMARY unavailable${RESET} — chip 미수신 또는 akida package 미설치"
+            echo "  fallback path active (Akida Cloud)"
+            return 91
+          fi
+          ;;
+        register)
+          # Run nexus host_register.sh for primary path (host.rpi5-akida)
+          local hr="$NEXUS_ROOT/scripts/akida/host_register.sh"
+          if [[ ! -x "$hr" ]]; then echo "${RED}host_register.sh missing${RESET}: $hr" >&2; return 1; fi
+          echo "${CYAN}→ register host.rpi5-akida (PRIMARY)${RESET}"
+          exec "$hr" "$@"
+          ;;
+        run)
+          # Local primary fire (chip + RPi5 environment)
+          local runner="$NEXUS_ROOT/scripts/akida/runner.py"
+          if [[ ! -f "$runner" ]]; then echo "${RED}runner.py missing${RESET}: $runner" >&2; return 1; fi
+          echo "${GREEN}→ PRIMARY run${RESET}: $runner --hardware $*"
+          cd "$NEXUS_ROOT/scripts/akida" && exec python3 runner.py --hardware "$@"
+          ;;
+        *) echo "usage: xeno cycle primary {status | probe | register | run [args]}" >&2; return 2 ;;
+      esac
+      ;;
+    prep)
+      local script="$XENO_ROOT/scripts/d1_prep/d1_prep_all.sh"
+      if [[ ! -x "$script" ]]; then echo "${RED}D-1 prep script missing${RESET}: $script" >&2; return 1; fi
+      exec "$script" "$@"
+      ;;
+    connect)
+      local alias_n
+      alias_n=$(secret get akida_cloud.ssh_alias 2>/dev/null || echo akida-cloud)
+      echo "${CYAN}→ ssh $alias_n${RESET}"
+      exec ssh "$alias_n" "$@"
+      ;;
+    upload)
+      local script="$XENO_ROOT/scripts/d1_prep/p1_tarball.sh"
+      if [[ ! -x "$script" ]]; then echo "${RED}upload script missing${RESET}: $script" >&2; return 1; fi
+      exec "$script" upload "$@"
+      ;;
+    exfil)
+      local script="$XENO_ROOT/scripts/d1_prep/p6_exfil.sh"
+      if [[ ! -x "$script" ]]; then echo "${RED}exfil script missing${RESET}: $script" >&2; return 1; fi
+      exec "$script" "$@"
+      ;;
+    run)
+      local script="$XENO_ROOT/scripts/d1_prep/d0_run_all.sh"
+      if [[ ! -x "$script" ]]; then echo "${RED}D+0 run script missing${RESET}: $script" >&2; return 1; fi
+      exec "$script" "$@"
+      ;;
+    probe|capabilities|measure)
+      # Generation-aware Akida device probe / capability matrix / honest measurement.
+      # Delegates to scripts/akida/cycle_runner.py — SSOT for all akida access.
+      local cr="$XENO_ROOT/scripts/akida/cycle_runner.py"
+      if [[ ! -f "$cr" ]]; then echo "${RED}cycle_runner.py missing${RESET}: $cr" >&2; return 1; fi
+      exec python3 "$cr" "$sub" "$@"
+      ;;
+    remote)
+      # Run cycle_runner inside the Akida Cloud session over ssh — for callers
+      # (anima/nexus runners) that want hardware access without direct akida import.
+      local rsub="${1:-probe}"
+      shift || true
+      local alias_n
+      alias_n=$(secret get akida_cloud.ssh_alias 2>/dev/null || echo akida-cloud)
+      local conda_py='/home/guest/.conda/envs/akida_env/bin/python3'
+      local cr_remote='~/work/xeno/scripts/akida/cycle_runner.py'
+      # Quote each forwarded arg for remote shell safety
+      local fwd=""
+      for a in "$@"; do fwd+=" $(printf '%q' "$a")"; done
+      ssh -o BatchMode=yes "$alias_n" \
+        "$conda_py $cr_remote $rsub$fwd"
+      ;;
+    verdict)
+      local rdir="${1:-$HOME/core/anima/state/akida_cloud_d0_2026_05_09}"
+      if [[ ! -d "$rdir" ]]; then echo "${RED}verdict dir missing${RESET}: $rdir" >&2; return 1; fi
+      echo "${BOLD}xeno cycle verdict${RESET}  (results dir: $rdir)"
+      local pass_count=0 fail_count=0
+      for f in "$rdir"/F-*_*.json; do
+        [[ -f "$f" ]] || continue
+        if grep -q '"verdict": *"PASS"' "$f"; then pass_count=$((pass_count + 1))
+        elif grep -q '"verdict": *"FAIL"' "$f"; then fail_count=$((fail_count + 1))
+        fi
+      done
+      echo "  PASS=$pass_count  FAIL=$fail_count"
+      if [[ $fail_count -eq 0 && $pass_count -gt 0 ]]; then
+        echo "${GREEN}__AKIDA_R__ PASS${RESET}"
+      else
+        echo "${RED}__AKIDA_R__ FAIL${RESET}  (or insufficient evidence)"
+      fi
+      ;;
+    *) echo "usage: xeno cycle {status | primary <sub> | prep | connect | upload | run | exfil | verdict | probe | capabilities | measure | remote <sub> [args]}" >&2; return 2 ;;
+  esac
+}
+
+cmd_help() {
+  cat <<EOF
+${BOLD}xeno 🛸${RESET} — non-GPU exotic compute substrate CLI ($VERSION)
+
+${BOLD}USAGE${RESET}
+  xeno [topic] [args...]
+
+${BOLD}TOPICS${RESET}
+  status       global health (xeno + 4 source repo reachability + 7 substrate inventory)
+  connect      bridge probe (anima | nexus | hive | hexa-brain | all)
+  invoke       passthrough (xeno invoke anima <args> | xeno invoke nexus <args>)
+  fallback     degraded mode info (local SSOT only)
+  list         substrate inventory (7 substrates × roadmap status)
+  roadmap      show substrate roadmap (xeno roadmap akida)
+  falsifier    12-falsifier harness (list | run <F-id> | all) — nexus copy SSOT
+  cycle        Akida cycle dispatcher — own 35: AKD1000 PRIMARY + Cloud FALLBACK
+                 status | primary {status,probe,register,run} | prep | connect | upload | run | exfil | verdict
+                 probe | capabilities | measure       (generation-aware, --akida-gen {auto,1,2,3,...})
+                 remote {probe,capabilities,measure}  (run cycle_runner inside Akida Cloud over ssh)
+  --version    print version
+  --help       this text
+
+${BOLD}EXIT CODES${RESET}
+  0   success
+  1   subcommand error
+  2   unknown topic / malformed
+  91  connection failed (raw 91 honest C3 fail-loud — silent skip BANNED)
+
+${BOLD}ENV${RESET}
+  XENO_ROOT (default: \$HOME/core/xeno)
+  ANIMA_ROOT (default: \$HOME/core/anima)
+  NEXUS_ROOT (default: \$HOME/core/nexus)
+  HIVE_ROOT (default: \$HOME/core/hive)
+  HEXA_BRAIN_ROOT (default: \$HOME/core/hexa-brain)
+
+${BOLD}EXAMPLES${RESET}
+  xeno
+  xeno status
+  xeno connect anima
+  xeno connect all
+  xeno invoke anima status
+  xeno roadmap akida
+  xeno fallback
+
+${BOLD}TRINITY (anima own 32/33/34) compliance${RESET}
+  xeno is execution lane — separate from anima trinity (philosophy/law/hypothesis).
+  Cross-check anima trinity before action; bundle-domain extension forbidden.
+EOF
+}
+
+# ─── Dispatch ───────────────────────────────────────────────────────────────
+main() {
+  case "${1:-status}" in
+    --version|-V) echo "xeno $VERSION" ;;
+    --help|-h|help) cmd_help ;;
+    status)        shift; cmd_status "$@" ;;
+    connect)       shift; cmd_connect "$@" ;;
+    invoke)        shift; cmd_invoke "$@" ;;
+    fallback)      shift; cmd_fallback "$@" ;;
+    list)          shift; cmd_list "$@" ;;
+    roadmap)       shift; cmd_roadmap "$@" ;;
+    falsifier)    shift; cmd_falsifier "$@" ;;
+    cycle)        shift; cmd_cycle "$@" ;;
+    *) echo "unknown topic: $1" >&2; cmd_help >&2; return 2 ;;
+  esac
+}
+
+main "$@"

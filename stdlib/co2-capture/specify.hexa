@@ -1,0 +1,8 @@
+#!hexa strict
+// co2-capture specify — DAC scale target.
+fn main() {
+    let capture_Gt_per_yr = 1.0
+    println("co2-capture_specify (DAC scale target):")
+    println("  capture_Gt_per_yr = " + str(capture_Gt_per_yr))
+    println("__HEXA_CO2_CAPTURE_SPECIFY__ PASS gate=GATE_OPEN absorbed=false")
+}

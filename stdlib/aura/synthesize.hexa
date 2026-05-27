@@ -1,0 +1,199 @@
+#!hexa strict
+// stdlib/aura/synthesize.hexa — `aura + synthesize` producer (hexa-native).
+//
+// LAYER: per-verb cell producer. Emits an aura_synthesize_record-shaped
+// sentinel carrying the deployable-bundle skeleton — firmware image
+// pointer (Zephyr / nRF Connect SDK build) + DSP pipeline manifest
+// (MNE-Python preprocessing graph) — TEMPLATE only.
+//
+// CONTEXT: AURA = post-aural / temporal-bone clip wearable BCI.
+// aura.demi [cell.synthesize] wires substrate=hexa → this script.
+// Actual cross-compile happens at firmware domain (D73 cellrun);
+// MNE-Python pipeline EMIT happens at analyze cell (V4); this cell
+// produces only the DEPLOYABLE BUNDLE skeleton + integration pointers.
+//
+// Citations (domains/aura.md §2):
+//   * Zephyr RTOS (Apache-2.0) — embedded OS · BLE controller variant
+//   * nRF Connect SDK (Nordic · BSD-3) — nRF52/53/54 toolchain
+//   * MCUboot (Apache-2.0) — signed image bootloader
+//   * west + cmake — Zephyr meta-build + Ninja generator
+//   * MNE-Python pipeline (analyze cell V4)
+//
+// Honesty (g3 · @D d1 · aura.demi line 116-120):
+//   * measurement_gate = GATE_OPEN permanently
+//   * absorbed = false PERMANENTLY — synthesize skeleton is bundle
+//     pointer assembly, NEVER a built/signed deployable. The actual
+//     firmware cross-compile lives at firmware domain (D73 cellrun);
+//     the actual signal-processing pipeline emit lives at analyze.
+//
+// Sentinels:
+//   __HEXA_AURA_SYNTHESIZE__ PASS                  — dispatcher loaded
+//   AURA_SYNTHESIZE_OK gate=GATE_OPEN absorbed=false  — cellrun parse line
+//
+// Pattern: mirrors stdlib/aura/specify + structure + design + analyze .hexa.
+
+let VERSION       = "0.1.0"
+let MODULE        = "aura-synthesize"
+let GEOMETRY_ID   = "aura_synthesize_v1"
+let RECORD_KIND   = "aura_synthesize_record"
+
+// ─── firmware bundle pointer block (Zephyr / nRF Connect SDK) ─────────
+
+fn _firmware_bundle_block() -> [str] {
+    return [
+        "build pointer: firmware domain D73 cellrun owns the cross-compile",
+        "SDK: nRF Connect SDK (Nordic · BSD-3 · Apache-2.0 · Zephyr RTOS)",
+        "build tool: west + cmake + ninja (Zephyr meta-build)",
+        "signing: MCUboot (Apache-2.0) — ed25519 OR RSA-2048 key option",
+        "OTA: SMP server (Zephyr) — BLE-based image upload + verify",
+        "release artifact: <board>_<rev>_<git-sha>.signed.bin (post-sign)",
+    ]
+}
+
+// ─── DSP pipeline manifest block (analyze cell integration) ───────────
+
+fn _dsp_pipeline_block() -> [str] {
+    return [
+        "pipeline emit: V4 analyze cell territory (stdlib/aura/analyze.hexa)",
+        "preprocessing: bandpass 0.5-50 Hz + notch 50/60 Hz mains",
+        "epoching: window 2-30 s sliding (alpha/beta/gamma analysis)",
+        "feature extract: Welch PSD band-power + alpha-band integrated power",
+        "naive-DFT companion: _dft_alpha_band_batch.hexa (G33 LANDED · hexa parity)",
+        "output format: JSONL stream over BLE GATT custom EEG service",
+    ]
+}
+
+// ─── deployable bundle skeleton block ─────────────────────────────────
+
+fn _bundle_skeleton_block() -> [str] {
+    return [
+        "bundle layout: <release>/{firmware.signed.bin, dsp_manifest.json, README.md}",
+        "manifest version pin: BLE GATT service UUID + Battery + DIS + custom EEG",
+        "compatibility matrix: SoC option × Zephyr version × MNE-Python version",
+        "release notes: git short SHA + signed digest + reproducibility hash",
+        "rollback path: MCUboot dual-slot keeps previous signed image",
+        "integrity: SHA-256 over bundle + MCUboot signature over firmware",
+    ]
+}
+
+// ─── CI integration block (build + sign + publish) ────────────────────
+
+fn _ci_block() -> [str] {
+    return [
+        "CI target: GitHub Actions (matrix: nRF52840 + nRF5340 + nRF54L15)",
+        "build job: west update + cmake + ninja + imgtool sign",
+        "test job: smoke-test on QEMU (Zephyr native_posix or qemu_cortex_m3)",
+        "lint job: shellcheck + clang-tidy + checkpatch.pl (Zephyr style)",
+        "artifact publish: GitHub Releases (signed bin + SBOM)",
+    ]
+}
+
+// ─── D5 substance: illustrative build + bundle target artifacts ──────
+
+fn _firmware_build_real_block() -> [str] {
+    return [
+        "build_command: west init -m https://github.com/dancinlab/aura-firmware && west update",
+        "cmake_invocation: 'west build -b nrf5340dk/nrf5340/cpuapp --sysbuild -- -DCONF_FILE=prj.conf'",
+        "image_sign: 'west sign -t imgtool -- --key bootloader/mcuboot/root-ec-p256.pem'",
+        "expected_artifact: build/zephyr/zephyr.signed.bin (~120-180 kB · post-MCUboot wrap)",
+        "expected_flash_use: ~40-60% of 1MB internal flash (Zephyr + BLE + ADS1299 driver + app)",
+        "expected_ram_use: ~50-70 kB of 512 kB SRAM (BLE stack + 16-ch ring buffer + threads)",
+    ]
+}
+
+fn _dsp_bundle_real_block() -> [str] {
+    return [
+        "manifest_path: release/dsp_manifest.json (version + GATT UUID + sample_rate + filter coefs)",
+        "filter_coefs: bandpass FIR 0.5-50Hz N=151 taps (Hamming window · 250 Hz fs)",
+        "notch_60_coefs: IIR 2nd-order biquad Q=30 · pre-computed numerator/denominator",
+        "alpha_extract: scipy.signal.welch nperseg=500 noverlap=250 → integrate 8-13 Hz",
+        "stream_format: JSONL · 1 epoch (2 s · 500 samples) per line · timestamp + 16-ch raw + 16-ch alpha",
+        "version_pin: bumped on filter / GATT service / firmware-protocol change (semver)",
+    ]
+}
+
+fn _release_bundle_real_block() -> [str] {
+    return [
+        "bundle_layout: release/{firmware.signed.bin, dsp_manifest.json, README.md, SBOM.spdx}",
+        "compat_matrix: SoC(nRF52840/5340/54L15) × Zephyr(3.5/3.6/3.7) × MNE(1.6/1.7)",
+        "release_notes_template: git short SHA + signed digest + reproducibility hash",
+        "rollback: MCUboot dual-slot keeps previous signed image · OTA SMP rollback command",
+        "integrity_check: SHA-256(bundle.tar.gz) + MCUboot ed25519 signature over firmware",
+        "publish_target: GitHub Releases v0.x.y tag + draft release notes",
+    ]
+}
+
+fn _ci_real_block() -> [str] {
+    return [
+        "workflow_file: .github/workflows/aura-firmware.yml (matrix CI)",
+        "matrix_targets: nRF52840 (BLE 5.0 mature) + nRF5340 (5.3 dual-core) + nRF54L15 (5.4 next-gen)",
+        "qemu_test: 'west build -b qemu_cortex_m3 && west test' + native_posix smoke (no HW)",
+        "lint_jobs: shellcheck on scripts + clang-tidy on driver C + checkpatch.pl on Zephyr",
+        "secret_management: GitHub Actions secrets for MCUboot signing key (not in repo)",
+        "release_step: imgtool sign + tar.gz bundle + gh release create + SBOM upload",
+    ]
+}
+
+fn _scope_caveats() -> [str] {
+    return [
+        "Zephyr / nRF Connect SDK firmware build pointer - actual cross-compile happens at firmware domain (D73 cellrun).",
+        "MNE signal-processing pipeline emit = analyze cell territory; synthesize emits the deployable bundle skeleton only.",
+        "measurement_gate = GATE_OPEN permanently - synthesize skeleton is not an absorption claim (g3).",
+        "absorbed=false PERMANENTLY (g3) - bundle pointer assembly, NEVER a built/signed deployable.",
+        "D5 substantive blocks (firmware_build_real / dsp_bundle_real / release_bundle_real / ci_real) are ILLUSTRATIVE build artifact targets, NOT a flashed device nor a signed release. Real artifacts live downstream at firmware D73 + release pipeline.",
+    ]
+}
+
+// ─── emit helpers ─────────────────────────────────────────────────────
+
+fn _emit_block(label: str, lines: [str]) {
+    print("# [" + label + "]")
+    let n = lines.len()
+    let mut i = 0
+    while i < n {
+        print("#   - " + lines[i])
+        i = i + 1
+    }
+    print("#")
+}
+
+fn _emit_header() {
+    print("# AURA SYNTHESIZE — deployable bundle skeleton (firmware pointer + DSP pipeline)")
+    print("# device_target = post-aural / temporal-bone clip BCI")
+    print("# version = " + VERSION)
+    print("#")
+    _emit_block("firmware_bundle",  _firmware_bundle_block())
+    _emit_block("dsp_pipeline",     _dsp_pipeline_block())
+    _emit_block("bundle_skeleton",  _bundle_skeleton_block())
+    _emit_block("ci_integration",   _ci_block())
+
+    // ─── D5 substantive blocks (illustrative build artifact targets) ──
+    _emit_block("firmware_build_real",  _firmware_build_real_block())
+    _emit_block("dsp_bundle_real",      _dsp_bundle_real_block())
+    _emit_block("release_bundle_real",  _release_bundle_real_block())
+    _emit_block("ci_real",              _ci_real_block())
+}
+
+fn _emit_caveats() {
+    let c = _scope_caveats()
+    let n = c.len()
+    let mut i = 0
+    while i < n {
+        print("# scope_caveat: " + c[i])
+        i = i + 1
+    }
+}
+
+// ─── main entry ───────────────────────────────────────────────────────
+
+fn main() {
+    _emit_header()
+    _emit_caveats()
+
+    print("AURA_SYNTHESIZE_OK record_kind=" + RECORD_KIND
+        + " geometry_id=" + GEOMETRY_ID
+        + " gate=GATE_OPEN absorbed=false"
+        + " version=" + VERSION)
+
+    print("__HEXA_AURA_SYNTHESIZE__ PASS")
+}

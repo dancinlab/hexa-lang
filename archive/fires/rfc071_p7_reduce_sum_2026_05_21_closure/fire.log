@@ -1,0 +1,37 @@
+RFC 071 P7 N59 reduce_sum source-to-silicon CLOSURE fire log
+==============================================================
+
+date:    2026-05-21
+host:    macOS arm64 (driver build) + ubu-2 (silicon)
+device:  NVIDIA GeForce RTX 5070 (sm_120a JIT from sm_80 PTX)
+kernel:  reduce_sum (1×1×1 grid, 1×1×1 block — single-thread reduce)
+
+driver build:
+  /tmp/hexa-build build self/main.hexa -o /tmp/hexa_n64_driver  =>  OK
+
+ptx emit:
+  /tmp/hexa_n64_driver build compiler/codegen/nvptx_p7_reduce_sum_test.hexa --target=nvptx64-nvidia-cuda-sm80
+  =>  out: nvptx_p7_reduce_sum_test.hexa.ptx (1726 B)
+
+silicon fire (ubu-2):
+  scp ptx + host -> /tmp/
+  gcc host_reduce_sum.c -lcuda -lm -o host_reduce_sum
+  ./host_reduce_sum nvptx_p7_reduce_sum_test.hexa.ptx
+  ===============================================
+  Device: NVIDIA GeForce RTX 5070
+  PTX loaded OK
+  Kernel reduce_sum resolved
+  expected = 512.5
+  got      = 512.5
+  abs_err  = 0.0000e+00
+  ulp_err  = 0.0000
+  PASS: ulp_err=0.0000
+  ===============================================
+
+lower_test regression:
+  28/28 PASS preserved.
+
+falsifiers:
+  F-RFC071-NVPTX-E2E-PTXAS-CLEAN          PASS  (JIT info empty, JIT err empty)
+  F-RFC071-NVPTX-E2E-LAUNCH               PASS  (cuLaunchKernel + cuCtxSynchronize OK)
+  F-RFC071-E2E-REDUCE-SUM-NUMERIC-EQ      PASS  (ulp_err=0 << 4 ULP gate)

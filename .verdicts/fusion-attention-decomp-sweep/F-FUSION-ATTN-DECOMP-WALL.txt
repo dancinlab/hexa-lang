@@ -1,0 +1,53 @@
+F-FUSION-ATTN-DECOMP-WALL -- Round-5 KV-split (flash-decoding) decomposition sweep
+verdict tier: ORANGE quantified-partial -> closed-negative characterization
+host: ubu-2 RTX 5070 sm_120 (48 SMs, 12GB), clean (0% util, 0 compute procs), $0 LOCAL
+nvcc/ptxas 12.0.140, arch sm_90a JIT->sm_120
+note: hexa verify (g5) BROKEN on both ubu hosts; correctness settled via compiled
+f64-ref harness (CUDA-C nvcuda::wmma oracle, 2-kernel partial+LSE-merge). stdout verbatim.
+
+=== cuBLAS-TC 3-launch baseline (denominator) ===
+cublas_tc_3launch median_ms=0.016608  (N=512 d=64, 20 warmup + 200 timed)
+cublas_tc_3launch median_ms=0.030656  (N=1024 d=64, 20 warmup + 200 timed)
+cublas_tc_3launch median_ms=0.061696  (N=2048 d=64, 20 warmup + 200 timed)
+cublas_tc_3launch median_ms=0.188672  (N=4096 d=64, 20 warmup + 200 timed)
+
+=== round-4 single-kernel reference (BQ16 BK256, reproduced this fire) ===
+N=512  fused_wmma median_ms=0.056768  rel_rowscale=0.000629789  numeric=PASS
+N=1024 fused_wmma median_ms=0.115520  rel_rowscale=0.00056447   numeric=PASS
+N=2048 fused_wmma median_ms=0.245184  rel_rowscale=0.000630477  numeric=PASS
+N=4096 fused_wmma median_ms=0.957216  rel_rowscale=0.000714212  numeric=PASS
+
+=== KV-split base smoke (N=512, Bq=16, BK=256) -- kv=1 EXACTLY matches round-4 ===
+DECOMP N=512 Bq=16 kvsplit=1 bk=256  ctas_partial=32 ctas_merge=32 (vs 48 SMs)  max_abs=4.02796e-05 rel_rowscale=0.000629789 rms_rel=0.000264096 numeric=PASS
+DECOMP_WALL N=512 Bq=16 kvsplit=1 bk=256 fused_ms=0.145760 numeric=PASS
+DECOMP N=512 Bq=16 kvsplit=2 bk=256  ctas_partial=64 ctas_merge=32 (vs 48 SMs)  max_abs=4.10096e-05 rel_rowscale=0.000629789 rms_rel=0.000261229 numeric=PASS
+DECOMP_WALL N=512 Bq=16 kvsplit=2 bk=256 fused_ms=0.084224 numeric=PASS
+DECOMP N=512 Bq=16 kvsplit=4 bk=128  ctas_partial=128 ctas_merge=32 (vs 48 SMs)  max_abs=3.81768e-05 rel_rowscale=0.00057842 rms_rel=0.000253329 numeric=PASS
+DECOMP_WALL N=512 Bq=16 kvsplit=4 bk=128 fused_ms=0.057632 numeric=PASS
+
+=== KV-split effect @ N=512 Bq=16 (occupancy 32->128 CTAs closes the gap) ===
+kv= 1 BK=256 -> 0.1458ms  occ= 32 CTAs  ratio=8.78x  (under-occupied)
+kv= 2 BK=256 -> 0.0844ms  occ= 64 CTAs  ratio=5.08x
+kv= 4 BK=128 -> 0.0576ms  occ=128 CTAs  ratio=3.47x  (OPTIMUM; parity w/ round-4 single-kernel 0.0568)
+kv= 8 BK=64  -> 0.0700ms  occ=256 CTAs  ratio  REGRESS (over-subscription + merge)
+kv=16 BK=32  -> 0.0925ms  occ=512 CTAs  ratio  REGRESS
+
+=== OPTIMUM PER SHAPE (153 configs swept, ALL numeric PASS) ===
+N=512:  OPT Bq16 kv4 BK128 fused=0.0576ms ratio_vs_cublas=3.47x occ=128CTAs | kv=1_best=0.1458ms(occ32) intra_speedup=2.53x | round4_single=0.0568ms(3.42x)
+N=1024: OPT Bq32 kv4 BK256 fused=0.1804ms ratio_vs_cublas=5.88x occ=128CTAs | kv=1_best=0.2822ms(occ64) intra_speedup=1.56x | round4_single=0.1155ms(3.77x)
+N=2048: OPT Bq64 kv4 BK256 fused=0.6675ms ratio_vs_cublas=10.82x occ=128CTAs | kv=1_best=0.6699ms(occ128) intra_speedup=1.00x | round4_single=0.2452ms(3.97x)
+N=4096: OPT Bq16 kv8 BK256 fused=2.4850ms ratio_vs_cublas=13.17x occ=2048CTAs | kv=1_best=2.6251ms(occ256) intra_speedup=1.06x | round4_single=0.9572ms(5.07x)
+
+best_overall: N=512 Bq16 kv4 BK128 fused=0.0576ms ratio=3.47x
+win_condition (ratio<=0.70, >=30% faster): NOT MET. win=false.
+
+=== VERDICT ===
+KV-split CLOSES the small-N occupancy gap (N=512: 32->128 CTAs, intra-framework
+2.53x, reaching parity with round-4 single-kernel) -- the user hypothesis is
+CONFIRMED for the under-occupied regime. But KV-split is a SMALL-N-ONLY lever:
+its occupancy benefit saturates once N alone fills the 48 SMs, while its partial-O
+HBM round-trip cost grows as O(N*split*d) -- at N>=2048 it is net-NEGATIVE vs the
+round-4 single-kernel (2.7x worse @ N=2048). No decomposition of hand-PTX
+flash-attn beats cuBLAS (best 3.47x). The GEMM-tile-efficiency wall (round-4) is
+CONFIRMED fundamental; KV-split trades occupancy for HBM traffic and does not
+breach it. section10 NOT flipped. ORANGE -> closed-negative.

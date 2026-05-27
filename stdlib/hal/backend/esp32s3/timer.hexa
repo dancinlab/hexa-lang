@@ -1,0 +1,97 @@
+#!hexa strict
+// stdlib/hal/backend/esp32s3/timer.hexa — ESP32-S3 timer backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    ESP32-S3 Xtensa LX7 dual-core @ 240 MHz.
+// Chip ref:  ESP32-S3 TRM §15 Timer Group (2 groups × 2 timers each =
+//            4 × 54-bit GP timers; same pattern as ESP32 but 54-bit).
+// Surface:   esp32s3_timer_{configure,start,stop,now_ticks,set_callback}(...)
+// Dispatch:  timer.hexa selects this via cfg-flag.
+//
+// MMIO layout (peripheral region 0x6000xxxx, Xtensa LX7):
+//
+//   TIMG0:  base = DR_REG_TIMERGROUP0_BASE = 0x6001F000
+//   TIMG1:  base = DR_REG_TIMERGROUP1_BASE = 0x60020000
+//
+//   TIMG_T0CONFIG_REG          0x000   same layout as ESP32 / C3
+//   TIMG_T0LO_REG              0x004   counter low 32 bits
+//   TIMG_T0HI_REG              0x008   counter high 22 bits (54-bit total)
+//   TIMG_T0UPDATE_REG          0x00C
+//   TIMG_T0ALARMLO_REG         0x010
+//   TIMG_T0ALARMHI_REG         0x014
+//   TIMG_T0LOAD_LO_REG         0x018
+//   TIMG_T0LOAD_REG            0x020
+//   TIMG_T1*                   0x024..0x044   (timer 1 of group)
+//
+// At 240 MHz core / 80 MHz APB with DIVIDER=80, tick = 1 µs; 54-bit
+// counter wraps after ~571 years.
+
+let MODULE_NAME = "esp32s3_timer"
+let SIGMA_SLOT  = 8
+let PHI_KIND    = "digital"
+
+let DR_REG_TIMERGROUP0_BASE = 0x6001F000
+let DR_REG_TIMERGROUP1_BASE = 0x60020000
+
+let TIMG_T0CONFIG_REG  = 0x000
+let TIMG_T0LO_REG      = 0x004
+let TIMG_T0HI_REG      = 0x008
+let TIMG_T0UPDATE_REG  = 0x00C
+let TIMG_T0ALARMLO_REG = 0x010
+let TIMG_T0LOAD_REG    = 0x020
+
+let APB_CLK_HZ = 80000000
+
+let MODE_ONESHOT  = 0
+let MODE_PERIODIC = 1
+let MODE_CAPTURE  = 2
+let MODE_PWM      = 3
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn esp32s3_timer_configure(idx: int, mode: int, period_us: int) -> int {
+    if idx < 0 || idx > 3 { return -1 }   // 4 timers across 2 groups
+    if mode < 0 || mode > 3 { return -2 }
+    if period_us < 1 { return -3 }
+    return idx
+}
+
+fn esp32s3_timer_start(handle: int) -> bool {
+    if handle < 0 || handle > 3 { return false }
+    return true
+}
+
+fn esp32s3_timer_stop(handle: int) -> bool {
+    if handle < 0 || handle > 3 { return false }
+    return true
+}
+
+fn esp32s3_timer_now_ticks(handle: int) -> int {
+    if handle < 0 { return -1 }
+    return 0
+}
+
+fn esp32s3_timer_set_callback(handle: int, period_us: int) -> bool {
+    if handle < 0 || handle > 3 { return false }
+    return true
+}
+
+fn esp32s3_timer_clear(handle: int) -> bool {
+    if handle < 0 || handle > 3 { return false }
+    return true
+}
+
+fn esp32s3_timer_report(handle: int) -> str {
+    return "[esp32s3_timer sim] handle=" + str(handle) + " (skeleton stub — TODO MMIO)"
+}
+
+fn esp32s3_timer_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32s3_timer sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  TIMG0=" + str(DR_REG_TIMERGROUP0_BASE) + " TIMG1=" + str(DR_REG_TIMERGROUP1_BASE))
+    println("  4 × 54-bit GP timers (2 groups × 2)")
+}

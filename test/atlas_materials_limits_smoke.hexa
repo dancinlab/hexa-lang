@@ -1,0 +1,134 @@
+// test/atlas_materials_limits_smoke.hexa — hexa-matter LIMIT_BREAKTHROUGH absorption smoke test
+//
+// Verifies the atlas rodata mirror in compiler/atlas/materials_limits.gen.hexa:
+//
+//   * MATERIALS_LIMITS holds 24 @C nodes (12 §2 row + §3 sub-rows).
+//   * 3 spot-check rows pin their canonical value substring:
+//       diamond_thermal_k        — 2200 W/m*K (NIST natural)
+//       hales_packing            — 0.7405    (Kepler / Hales 2017)
+//       frenkel_shear            — E / 10    (Frenkel 1926 sigma_th)
+//   * materials_limits_by_class("HARD_WALL"), ("SOFT_WALL"),
+//     ("BREAKABLE_WITH_TECH"), ("UNCLEAR") partition the 24 rows without
+//     overlap (sum of partitions == total).
+//
+// Run:
+//   hexa run test/atlas_materials_limits_smoke.hexa
+//
+// Absorbed alongside compiler/atlas/materials_limits.gen.hexa
+// (MIT, hexa-matter v1.2.0, dancinlab 2026-05-14).
+
+use "compiler/atlas/parser"
+use "compiler/atlas/materials_limits.gen"
+
+fn _check(label: string, ok: bool, fails) {
+    if ok {
+        println("  PASS  " + label)
+    } else {
+        println("  FAIL  " + label)
+        fails.push(label)
+    }
+}
+
+// Locate a node by id (linear scan; 24 entries).
+fn _find(nodes, id: string) -> AtlasNode {
+    let n = len(nodes)
+    let mut i = 0
+    while i < n {
+        let node = nodes[i]
+        if node.id == id { return node }
+        i = i + 1
+    }
+    return AtlasNode {
+        kind: "", id: "", raw: "", source_file: "", source_line: 0,
+        grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false },
+        edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] }
+    }
+}
+
+// Substring-spot: returns true if a row's raw payload contains `needle`.
+fn _row_has(nodes, id: string, needle: string) -> bool {
+    let node = _find(nodes, id)
+    if node.kind == "" { return false }
+    return node.raw.contains(needle)
+}
+
+fn main() {
+    let fails = []
+
+    println("materials_limits absorption smoke — hexa-matter Wave-M")
+
+    let limits = materials_limits()
+
+    // T1: row count.
+    _check("MATERIALS_LIMITS count == 24", len(limits) == 24, fails)
+    _check("materials_limits_count() == 24", materials_limits_count() == 24, fails)
+
+    // T2: every node is kind="C" (atlas constant).
+    let mut all_c = true
+    let mut i = 0
+    while i < len(limits) {
+        if limits[i].kind != "C" { all_c = false }
+        i = i + 1
+    }
+    _check("all rows kind == C", all_c, fails)
+
+    // T3: spot-check values per absorption plan.
+    _check("frenkel_shear: 'sigma_th ~ E / 10' present",
+           _row_has(limits, "materials_limits.frenkel_shear", "sigma_th ~ E / 10"), fails)
+    _check("frenkel_shear: '20 GPa' present",
+           _row_has(limits, "materials_limits.frenkel_shear", "20 GPa"), fails)
+
+    _check("diamond_thermal_k: '2200 W/m*K' present",
+           _row_has(limits, "materials_limits.diamond_thermal_k", "2200 W/m*K"), fails)
+    _check("diamond_thermal_k: class HARD_WALL",
+           _row_has(limits, "materials_limits.diamond_thermal_k", "class: HARD_WALL"), fails)
+
+    _check("hales_packing: '0.7405' present",
+           _row_has(limits, "materials_limits.hales_packing", "0.7405"), fails)
+    _check("hales_packing: 'Hales 2017' citation",
+           _row_has(limits, "materials_limits.hales_packing", "Hales T.C., Forum Math. Pi 5, e2 (2017)"), fails)
+
+    // T4: presence of every plan-named id.
+    _check("row mohs_diamond present",
+           _find(limits, "materials_limits.mohs_diamond").kind == "C", fails)
+    _check("row os_density present",
+           _find(limits, "materials_limits.os_density").kind == "C", fails)
+    _check("row gibbs_entropy_mixing present",
+           _find(limits, "materials_limits.gibbs_entropy_mixing").kind == "C", fails)
+
+    // T5: by-class partition.
+    let hard = materials_limits_by_class("HARD_WALL")
+    let soft = materials_limits_by_class("SOFT_WALL")
+    let break_tech = materials_limits_by_class("BREAKABLE_WITH_TECH")
+    let unclear = materials_limits_by_class("UNCLEAR")
+
+    let n_hard = len(hard)
+    let n_soft = len(soft)
+    let n_break = len(break_tech)
+    let n_unclear = len(unclear)
+    let total = n_hard + n_soft + n_break + n_unclear
+
+    println("  INFO  class partition: HARD=" + to_string(n_hard) + " SOFT=" + to_string(n_soft) + " BREAKABLE=" + to_string(n_break) + " UNCLEAR=" + to_string(n_unclear))
+
+    _check("by_class partition sums to 24", total == 24, fails)
+    _check("HARD_WALL bucket non-empty", n_hard > 0, fails)
+    _check("SOFT_WALL bucket non-empty", n_soft > 0, fails)
+    _check("BREAKABLE_WITH_TECH bucket non-empty", n_break > 0, fails)
+
+    // T6: unrecognized class returns empty.
+    let nope = materials_limits_by_class("NOT_A_REAL_CLASS")
+    _check("by_class('NOT_A_REAL_CLASS') == []", len(nope) == 0, fails)
+
+    let nf = len(fails)
+    println("")
+    if nf == 0 {
+        println("materials_limits smoke: PASS")
+    } else {
+        println("materials_limits smoke: FAIL — " + to_string(nf) + " check(s) failed")
+        let mut k = 0
+        while k < nf {
+            println("  - " + to_string(fails[k]))
+            k = k + 1
+        }
+    }
+}

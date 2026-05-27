@@ -1,0 +1,688 @@
+// F-FUSION-AUTOREGRESSIVE-DECODE -- eager per-op per-token decode (axis E
+// BASELINE).  Models the PyTorch / vLLM eager autoregressive decode path:
+// each transformer-decoder layer step is launched as its own kernel, every
+// intermediate tensor round-trips through HBM.
+//
+// Per layer per token, eager issues (>= 20 kernel launches):
+//
+//   k1  rmsnorm_pre_attn         x[d]            -> x_norm[d]
+//   k2  gemv_q_proj              x_norm -> q[d]
+//   k3  gemv_k_proj              x_norm -> k[d]
+//   k4  gemv_v_proj              x_norm -> v[d]
+//   k5  kv_cache_append_k        k     -> K_cache[L,*]
+//   k6  kv_cache_append_v        v     -> V_cache[L,*]
+//   k7  qk_dot                   q .K_cache^T -> S[L+1]
+//   k8  scale_div_sqrt           S /= sqrt(head_dim)
+//   k9  softmax                  S -> P[L+1]
+//   k10 pv_dot                   P .V_cache    -> attn_out[d]
+//   k11 gemv_o_proj              attn_out      -> y_attn[d]
+//   k12 residual_add_post_attn   x_in + y_attn -> hidden[d]
+//   k13 rmsnorm_pre_ffn          hidden        -> h_norm[d]
+//   k14 gemv_ffn_up              h_norm        -> ffn_up[4d]
+//   k15 silu                     ffn_up        -> silu_out[4d]
+//   k16 gemv_ffn_down            silu_out      -> ffn_down[d]
+//   k17 residual_add_post_ffn    hidden + ffn_down -> h_out[d]
+//
+// = 17 explicit kernels at minimum.  Real PyTorch eager often issues
+// MORE -- e.g. an extra contiguous() copy after each GEMV; per-head splits
+// of QKV (3 GEMVs becoming 12*3 = 36 if you go per-head); aten reductions
+// triggering helper kernels; cublas heuristics splitting GEMV into multiple
+// CUDA streams.  vLLM's batched-prefill fuses SOME of these, but for
+// per-token batch=1 decode (post-first-token) the eager-equivalent path
+// is dominated by per-op launches.
+//
+// We emit ONE representative kernel per logical op to keep the PTX file
+// readable; ptxas validates each independently and the structural-oracle
+// counts launches as the K kernels emitted in this file.
+//
+// Pure ASCII.
+
+.version 7.8
+.target sm_80
+.address_size 64
+
+// ---------- k1: rmsnorm_pre_attn ----------
+.visible .entry k1_rmsnorm_pre_attn (
+    .param .u64 x,
+    .param .u64 scale,
+    .param .u64 y,           // x_norm out
+    .param .u32 d
+)
+{
+    .reg .u64 %rd<8>;
+    .reg .u32 %r<4>;
+    .reg .pred %p1;
+    .reg .f32 %f<8>;
+    mov.u32 %r0, %tid.x;
+    ld.param.u32 %r1, [d];
+    setp.ge.u32 %p1, %r0, %r1;
+    @%p1 bra $k1_exit;
+    ld.param.u64 %rd0, [x];
+    ld.param.u64 %rd1, [scale];
+    ld.param.u64 %rd2, [y];
+    cvt.u64.u32 %rd3, %r0;
+    shl.b64 %rd4, %rd3, 2;
+    add.u64 %rd5, %rd0, %rd4;
+    ld.global.f32 %f0, [%rd5];
+    // production would compute global RMS via a separate reduction kernel;
+    // here we encode a placeholder unit-scale (still a real op).
+    add.u64 %rd6, %rd1, %rd4;
+    ld.global.f32 %f1, [%rd6];
+    mul.f32 %f2, %f0, %f1;
+    add.u64 %rd7, %rd2, %rd4;
+    st.global.f32 [%rd7], %f2;
+$k1_exit:
+    ret;
+}
+
+// ---------- k2: gemv_q_proj ----------
+.visible .entry k2_gemv_q_proj (
+    .param .u64 x_norm,
+    .param .u64 w_q,
+    .param .u64 q_out,
+    .param .u32 d
+)
+{
+    .reg .u64 %rd<12>;
+    .reg .u32 %r<6>;
+    .reg .pred %p1;
+    .reg .f32 %f<6>;
+    mov.u32 %r0, %tid.x;
+    ld.param.u32 %r1, [d];
+    setp.ge.u32 %p1, %r0, %r1;
+    @%p1 bra $k2_exit;
+    ld.param.u64 %rd0, [x_norm];
+    ld.param.u64 %rd1, [w_q];
+    ld.param.u64 %rd2, [q_out];
+    mov.f32 %f0, 0f00000000;
+    mov.u32 %r2, 0;
+    cvt.u64.u32 %rd3, %r0;
+    cvt.u64.u32 %rd4, %r1;
+    mul.lo.u64 %rd5, %rd3, %rd4;
+    shl.b64 %rd6, %rd5, 2;
+    add.u64 %rd7, %rd1, %rd6;
+$k2_loop:
+    cvt.u64.u32 %rd8, %r2;
+    shl.b64 %rd9, %rd8, 2;
+    add.u64 %rd10, %rd0, %rd9;
+    ld.global.f32 %f1, [%rd10];
+    add.u64 %rd11, %rd7, %rd9;
+    ld.global.f32 %f2, [%rd11];
+    fma.rn.f32 %f0, %f1, %f2, %f0;
+    add.u32 %r2, %r2, 1;
+    setp.lt.u32 %p1, %r2, %r1;
+    @%p1 bra $k2_loop;
+    shl.b64 %rd8, %rd3, 2;
+    add.u64 %rd9, %rd2, %rd8;
+    st.global.f32 [%rd9], %f0;
+$k2_exit:
+    ret;
+}
+
+// ---------- k3: gemv_k_proj ----------
+.visible .entry k3_gemv_k_proj (
+    .param .u64 x_norm,
+    .param .u64 w_k,
+    .param .u64 k_out,
+    .param .u32 d
+)
+{
+    .reg .u64 %rd<12>;
+    .reg .u32 %r<6>;
+    .reg .pred %p1;
+    .reg .f32 %f<6>;
+    mov.u32 %r0, %tid.x;
+    ld.param.u32 %r1, [d];
+    setp.ge.u32 %p1, %r0, %r1;
+    @%p1 bra $k3_exit;
+    ld.param.u64 %rd0, [x_norm];
+    ld.param.u64 %rd1, [w_k];
+    ld.param.u64 %rd2, [k_out];
+    mov.f32 %f0, 0f00000000;
+    mov.u32 %r2, 0;
+    cvt.u64.u32 %rd3, %r0;
+    cvt.u64.u32 %rd4, %r1;
+    mul.lo.u64 %rd5, %rd3, %rd4;
+    shl.b64 %rd6, %rd5, 2;
+    add.u64 %rd7, %rd1, %rd6;
+$k3_loop:
+    cvt.u64.u32 %rd8, %r2;
+    shl.b64 %rd9, %rd8, 2;
+    add.u64 %rd10, %rd0, %rd9;
+    ld.global.f32 %f1, [%rd10];
+    add.u64 %rd11, %rd7, %rd9;
+    ld.global.f32 %f2, [%rd11];
+    fma.rn.f32 %f0, %f1, %f2, %f0;
+    add.u32 %r2, %r2, 1;
+    setp.lt.u32 %p1, %r2, %r1;
+    @%p1 bra $k3_loop;
+    shl.b64 %rd8, %rd3, 2;
+    add.u64 %rd9, %rd2, %rd8;
+    st.global.f32 [%rd9], %f0;
+$k3_exit:
+    ret;
+}
+
+// ---------- k4: gemv_v_proj ----------
+.visible .entry k4_gemv_v_proj (
+    .param .u64 x_norm,
+    .param .u64 w_v,
+    .param .u64 v_out,
+    .param .u32 d
+)
+{
+    .reg .u64 %rd<12>;
+    .reg .u32 %r<6>;
+    .reg .pred %p1;
+    .reg .f32 %f<6>;
+    mov.u32 %r0, %tid.x;
+    ld.param.u32 %r1, [d];
+    setp.ge.u32 %p1, %r0, %r1;
+    @%p1 bra $k4_exit;
+    ld.param.u64 %rd0, [x_norm];
+    ld.param.u64 %rd1, [w_v];
+    ld.param.u64 %rd2, [v_out];
+    mov.f32 %f0, 0f00000000;
+    mov.u32 %r2, 0;
+    cvt.u64.u32 %rd3, %r0;
+    cvt.u64.u32 %rd4, %r1;
+    mul.lo.u64 %rd5, %rd3, %rd4;
+    shl.b64 %rd6, %rd5, 2;
+    add.u64 %rd7, %rd1, %rd6;
+$k4_loop:
+    cvt.u64.u32 %rd8, %r2;
+    shl.b64 %rd9, %rd8, 2;
+    add.u64 %rd10, %rd0, %rd9;
+    ld.global.f32 %f1, [%rd10];
+    add.u64 %rd11, %rd7, %rd9;
+    ld.global.f32 %f2, [%rd11];
+    fma.rn.f32 %f0, %f1, %f2, %f0;
+    add.u32 %r2, %r2, 1;
+    setp.lt.u32 %p1, %r2, %r1;
+    @%p1 bra $k4_loop;
+    shl.b64 %rd8, %rd3, 2;
+    add.u64 %rd9, %rd2, %rd8;
+    st.global.f32 [%rd9], %f0;
+$k4_exit:
+    ret;
+}
+
+// ---------- k5: kv_cache_append_k ----------
+.visible .entry k5_kv_append_k (
+    .param .u64 k_new,
+    .param .u64 k_cache,
+    .param .u32 cache_pos,
+    .param .u32 d
+)
+{
+    .reg .u64 %rd<8>;
+    .reg .u32 %r<4>;
+    .reg .pred %p1;
+    .reg .f32 %f0;
+    mov.u32 %r0, %tid.x;
+    ld.param.u32 %r1, [d];
+    setp.ge.u32 %p1, %r0, %r1;
+    @%p1 bra $k5_exit;
+    ld.param.u64 %rd0, [k_new];
+    ld.param.u64 %rd1, [k_cache];
+    ld.param.u32 %r2, [cache_pos];
+    cvt.u64.u32 %rd2, %r0;
+    shl.b64 %rd3, %rd2, 2;
+    add.u64 %rd4, %rd0, %rd3;
+    ld.global.f32 %f0, [%rd4];
+    cvt.u64.u32 %rd5, %r2;
+    cvt.u64.u32 %rd6, %r1;
+    mul.lo.u64 %rd7, %rd5, %rd6;
+    add.u64 %rd5, %rd7, %rd2;
+    shl.b64 %rd6, %rd5, 2;
+    add.u64 %rd7, %rd1, %rd6;
+    st.global.f32 [%rd7], %f0;
+$k5_exit:
+    ret;
+}
+
+// ---------- k6: kv_cache_append_v ----------
+.visible .entry k6_kv_append_v (
+    .param .u64 v_new,
+    .param .u64 v_cache,
+    .param .u32 cache_pos,
+    .param .u32 d
+)
+{
+    .reg .u64 %rd<8>;
+    .reg .u32 %r<4>;
+    .reg .pred %p1;
+    .reg .f32 %f0;
+    mov.u32 %r0, %tid.x;
+    ld.param.u32 %r1, [d];
+    setp.ge.u32 %p1, %r0, %r1;
+    @%p1 bra $k6_exit;
+    ld.param.u64 %rd0, [v_new];
+    ld.param.u64 %rd1, [v_cache];
+    ld.param.u32 %r2, [cache_pos];
+    cvt.u64.u32 %rd2, %r0;
+    shl.b64 %rd3, %rd2, 2;
+    add.u64 %rd4, %rd0, %rd3;
+    ld.global.f32 %f0, [%rd4];
+    cvt.u64.u32 %rd5, %r2;
+    cvt.u64.u32 %rd6, %r1;
+    mul.lo.u64 %rd7, %rd5, %rd6;
+    add.u64 %rd5, %rd7, %rd2;
+    shl.b64 %rd6, %rd5, 2;
+    add.u64 %rd7, %rd1, %rd6;
+    st.global.f32 [%rd7], %f0;
+$k6_exit:
+    ret;
+}
+
+// ---------- k7: qk_dot  (S[i] = q . K_cache[i, :]) ----------
+.visible .entry k7_qk_dot (
+    .param .u64 q,
+    .param .u64 k_cache,
+    .param .u64 s_out,
+    .param .u32 head_dim,
+    .param .u32 cache_len_plus1
+)
+{
+    .reg .u64 %rd<10>;
+    .reg .u32 %r<6>;
+    .reg .pred %p1;
+    .reg .f32 %f<4>;
+    mov.u32 %r0, %tid.x;
+    ld.param.u32 %r1, [cache_len_plus1];
+    setp.ge.u32 %p1, %r0, %r1;
+    @%p1 bra $k7_exit;
+    ld.param.u64 %rd0, [q];
+    ld.param.u64 %rd1, [k_cache];
+    ld.param.u64 %rd2, [s_out];
+    ld.param.u32 %r2, [head_dim];
+    mov.f32 %f0, 0f00000000;
+    mov.u32 %r3, 0;
+    cvt.u64.u32 %rd3, %r0;
+    cvt.u64.u32 %rd4, %r2;
+    mul.lo.u64 %rd5, %rd3, %rd4;
+    shl.b64 %rd6, %rd5, 2;
+    add.u64 %rd7, %rd1, %rd6;
+$k7_loop:
+    cvt.u64.u32 %rd8, %r3;
+    shl.b64 %rd9, %rd8, 2;
+    add.u64 %rd5, %rd0, %rd9;
+    ld.global.f32 %f1, [%rd5];
+    add.u64 %rd6, %rd7, %rd9;
+    ld.global.f32 %f2, [%rd6];
+    fma.rn.f32 %f0, %f1, %f2, %f0;
+    add.u32 %r3, %r3, 1;
+    setp.lt.u32 %p1, %r3, %r2;
+    @%p1 bra $k7_loop;
+    shl.b64 %rd8, %rd3, 2;
+    add.u64 %rd9, %rd2, %rd8;
+    st.global.f32 [%rd9], %f0;
+$k7_exit:
+    ret;
+}
+
+// ---------- k8: scale_div_sqrt ----------
+.visible .entry k8_scale_div (
+    .param .u64 s,
+    .param .f32 inv_sqrt_hd,
+    .param .u32 n
+)
+{
+    .reg .u64 %rd<4>;
+    .reg .u32 %r<4>;
+    .reg .pred %p1;
+    .reg .f32 %f<4>;
+    mov.u32 %r0, %tid.x;
+    ld.param.u32 %r1, [n];
+    setp.ge.u32 %p1, %r0, %r1;
+    @%p1 bra $k8_exit;
+    ld.param.u64 %rd0, [s];
+    ld.param.f32 %f1, [inv_sqrt_hd];
+    cvt.u64.u32 %rd1, %r0;
+    shl.b64 %rd2, %rd1, 2;
+    add.u64 %rd3, %rd0, %rd2;
+    ld.global.f32 %f2, [%rd3];
+    mul.f32 %f3, %f2, %f1;
+    st.global.f32 [%rd3], %f3;
+$k8_exit:
+    ret;
+}
+
+// ---------- k9: softmax (single-warp; production splits across multiple blocks) ----------
+.visible .entry k9_softmax (
+    .param .u64 s_in,
+    .param .u64 p_out,
+    .param .u32 n
+)
+{
+    .reg .u64 %rd<6>;
+    .reg .u32 %r<4>;
+    .reg .pred %p1;
+    .reg .f32 %f<6>;
+    mov.u32 %r0, %tid.x;
+    ld.param.u32 %r1, [n];
+    setp.ge.u32 %p1, %r0, %r1;
+    @%p1 bra $k9_exit;
+    ld.param.u64 %rd0, [s_in];
+    ld.param.u64 %rd1, [p_out];
+    cvt.u64.u32 %rd2, %r0;
+    shl.b64 %rd3, %rd2, 2;
+    add.u64 %rd4, %rd0, %rd3;
+    ld.global.f32 %f0, [%rd4];
+    ex2.approx.f32 %f1, %f0;             // exp approx via ex2 (real softmax
+                                         // needs max+norm; structural op)
+    add.u64 %rd5, %rd1, %rd3;
+    st.global.f32 [%rd5], %f1;
+$k9_exit:
+    ret;
+}
+
+// ---------- k10: pv_dot  (attn_out[t] = sum_i P[i] * V_cache[i, t]) ----------
+.visible .entry k10_pv_dot (
+    .param .u64 p,
+    .param .u64 v_cache,
+    .param .u64 attn_out,
+    .param .u32 cache_len_plus1,
+    .param .u32 d
+)
+{
+    .reg .u64 %rd<10>;
+    .reg .u32 %r<6>;
+    .reg .pred %p1;
+    .reg .f32 %f<4>;
+    mov.u32 %r0, %tid.x;
+    ld.param.u32 %r1, [d];
+    setp.ge.u32 %p1, %r0, %r1;
+    @%p1 bra $k10_exit;
+    ld.param.u64 %rd0, [p];
+    ld.param.u64 %rd1, [v_cache];
+    ld.param.u64 %rd2, [attn_out];
+    ld.param.u32 %r2, [cache_len_plus1];
+    mov.f32 %f0, 0f00000000;
+    mov.u32 %r3, 0;
+$k10_loop:
+    cvt.u64.u32 %rd3, %r3;
+    cvt.u64.u32 %rd4, %r1;
+    mul.lo.u64 %rd5, %rd3, %rd4;
+    cvt.u64.u32 %rd6, %r0;
+    add.u64 %rd7, %rd5, %rd6;
+    shl.b64 %rd8, %rd7, 2;
+    add.u64 %rd9, %rd1, %rd8;
+    ld.global.f32 %f1, [%rd9];
+    shl.b64 %rd5, %rd3, 2;
+    add.u64 %rd6, %rd0, %rd5;
+    ld.global.f32 %f2, [%rd6];
+    fma.rn.f32 %f0, %f1, %f2, %f0;
+    add.u32 %r3, %r3, 1;
+    setp.lt.u32 %p1, %r3, %r2;
+    @%p1 bra $k10_loop;
+    cvt.u64.u32 %rd3, %r0;
+    shl.b64 %rd4, %rd3, 2;
+    add.u64 %rd5, %rd2, %rd4;
+    st.global.f32 [%rd5], %f0;
+$k10_exit:
+    ret;
+}
+
+// ---------- k11: gemv_o_proj ----------
+.visible .entry k11_gemv_o_proj (
+    .param .u64 attn_out,
+    .param .u64 w_o,
+    .param .u64 y_attn,
+    .param .u32 d
+)
+{
+    .reg .u64 %rd<12>;
+    .reg .u32 %r<6>;
+    .reg .pred %p1;
+    .reg .f32 %f<6>;
+    mov.u32 %r0, %tid.x;
+    ld.param.u32 %r1, [d];
+    setp.ge.u32 %p1, %r0, %r1;
+    @%p1 bra $k11_exit;
+    ld.param.u64 %rd0, [attn_out];
+    ld.param.u64 %rd1, [w_o];
+    ld.param.u64 %rd2, [y_attn];
+    mov.f32 %f0, 0f00000000;
+    mov.u32 %r2, 0;
+    cvt.u64.u32 %rd3, %r0;
+    cvt.u64.u32 %rd4, %r1;
+    mul.lo.u64 %rd5, %rd3, %rd4;
+    shl.b64 %rd6, %rd5, 2;
+    add.u64 %rd7, %rd1, %rd6;
+$k11_loop:
+    cvt.u64.u32 %rd8, %r2;
+    shl.b64 %rd9, %rd8, 2;
+    add.u64 %rd10, %rd0, %rd9;
+    ld.global.f32 %f1, [%rd10];
+    add.u64 %rd11, %rd7, %rd9;
+    ld.global.f32 %f2, [%rd11];
+    fma.rn.f32 %f0, %f1, %f2, %f0;
+    add.u32 %r2, %r2, 1;
+    setp.lt.u32 %p1, %r2, %r1;
+    @%p1 bra $k11_loop;
+    shl.b64 %rd8, %rd3, 2;
+    add.u64 %rd9, %rd2, %rd8;
+    st.global.f32 [%rd9], %f0;
+$k11_exit:
+    ret;
+}
+
+// ---------- k12: residual_add_post_attn ----------
+.visible .entry k12_residual_post_attn (
+    .param .u64 x_in,
+    .param .u64 y_attn,
+    .param .u64 hidden,
+    .param .u32 d
+)
+{
+    .reg .u64 %rd<6>;
+    .reg .u32 %r<4>;
+    .reg .pred %p1;
+    .reg .f32 %f<4>;
+    mov.u32 %r0, %tid.x;
+    ld.param.u32 %r1, [d];
+    setp.ge.u32 %p1, %r0, %r1;
+    @%p1 bra $k12_exit;
+    ld.param.u64 %rd0, [x_in];
+    ld.param.u64 %rd1, [y_attn];
+    ld.param.u64 %rd2, [hidden];
+    cvt.u64.u32 %rd3, %r0;
+    shl.b64 %rd4, %rd3, 2;
+    add.u64 %rd5, %rd0, %rd4;
+    ld.global.f32 %f0, [%rd5];
+    add.u64 %rd5, %rd1, %rd4;
+    ld.global.f32 %f1, [%rd5];
+    add.f32 %f2, %f0, %f1;
+    add.u64 %rd5, %rd2, %rd4;
+    st.global.f32 [%rd5], %f2;
+$k12_exit:
+    ret;
+}
+
+// ---------- k13: rmsnorm_pre_ffn ----------
+.visible .entry k13_rmsnorm_pre_ffn (
+    .param .u64 hidden,
+    .param .u64 scale,
+    .param .u64 h_norm,
+    .param .u32 d
+)
+{
+    .reg .u64 %rd<6>;
+    .reg .u32 %r<4>;
+    .reg .pred %p1;
+    .reg .f32 %f<4>;
+    mov.u32 %r0, %tid.x;
+    ld.param.u32 %r1, [d];
+    setp.ge.u32 %p1, %r0, %r1;
+    @%p1 bra $k13_exit;
+    ld.param.u64 %rd0, [hidden];
+    ld.param.u64 %rd1, [scale];
+    ld.param.u64 %rd2, [h_norm];
+    cvt.u64.u32 %rd3, %r0;
+    shl.b64 %rd4, %rd3, 2;
+    add.u64 %rd5, %rd0, %rd4;
+    ld.global.f32 %f0, [%rd5];
+    add.u64 %rd5, %rd1, %rd4;
+    ld.global.f32 %f1, [%rd5];
+    mul.f32 %f2, %f0, %f1;
+    add.u64 %rd5, %rd2, %rd4;
+    st.global.f32 [%rd5], %f2;
+$k13_exit:
+    ret;
+}
+
+// ---------- k14: gemv_ffn_up ----------
+.visible .entry k14_gemv_ffn_up (
+    .param .u64 h_norm,
+    .param .u64 w_up,
+    .param .u64 ffn_up,
+    .param .u32 d,
+    .param .u32 four_d
+)
+{
+    .reg .u64 %rd<12>;
+    .reg .u32 %r<6>;
+    .reg .pred %p1;
+    .reg .f32 %f<6>;
+    mov.u32 %r0, %tid.x;
+    ld.param.u32 %r1, [four_d];
+    setp.ge.u32 %p1, %r0, %r1;
+    @%p1 bra $k14_exit;
+    ld.param.u64 %rd0, [h_norm];
+    ld.param.u64 %rd1, [w_up];
+    ld.param.u64 %rd2, [ffn_up];
+    ld.param.u32 %r2, [d];
+    mov.f32 %f0, 0f00000000;
+    mov.u32 %r3, 0;
+    cvt.u64.u32 %rd3, %r0;
+    cvt.u64.u32 %rd4, %r2;
+    mul.lo.u64 %rd5, %rd3, %rd4;
+    shl.b64 %rd6, %rd5, 2;
+    add.u64 %rd7, %rd1, %rd6;
+$k14_loop:
+    cvt.u64.u32 %rd8, %r3;
+    shl.b64 %rd9, %rd8, 2;
+    add.u64 %rd10, %rd0, %rd9;
+    ld.global.f32 %f1, [%rd10];
+    add.u64 %rd11, %rd7, %rd9;
+    ld.global.f32 %f2, [%rd11];
+    fma.rn.f32 %f0, %f1, %f2, %f0;
+    add.u32 %r3, %r3, 1;
+    setp.lt.u32 %p1, %r3, %r2;
+    @%p1 bra $k14_loop;
+    shl.b64 %rd8, %rd3, 2;
+    add.u64 %rd9, %rd2, %rd8;
+    st.global.f32 [%rd9], %f0;
+$k14_exit:
+    ret;
+}
+
+// ---------- k15: silu ----------
+.visible .entry k15_silu (
+    .param .u64 ffn_up,
+    .param .u64 silu_out,
+    .param .u32 four_d
+)
+{
+    .reg .u64 %rd<4>;
+    .reg .u32 %r<4>;
+    .reg .pred %p1;
+    .reg .f32 %f<8>;
+    mov.u32 %r0, %tid.x;
+    ld.param.u32 %r1, [four_d];
+    setp.ge.u32 %p1, %r0, %r1;
+    @%p1 bra $k15_exit;
+    ld.param.u64 %rd0, [ffn_up];
+    ld.param.u64 %rd1, [silu_out];
+    cvt.u64.u32 %rd2, %r0;
+    shl.b64 %rd3, %rd2, 2;
+    add.u64 %rd0, %rd0, %rd3;
+    ld.global.f32 %f0, [%rd0];
+    neg.f32 %f1, %f0;
+    ex2.approx.f32 %f2, %f1;
+    add.f32 %f3, %f2, 0f3F800000;
+    div.approx.f32 %f4, %f0, %f3;
+    add.u64 %rd1, %rd1, %rd3;
+    st.global.f32 [%rd1], %f4;
+$k15_exit:
+    ret;
+}
+
+// ---------- k16: gemv_ffn_down ----------
+.visible .entry k16_gemv_ffn_down (
+    .param .u64 silu_out,
+    .param .u64 w_down,
+    .param .u64 ffn_down,
+    .param .u32 d,
+    .param .u32 four_d
+)
+{
+    .reg .u64 %rd<12>;
+    .reg .u32 %r<6>;
+    .reg .pred %p1;
+    .reg .f32 %f<6>;
+    mov.u32 %r0, %tid.x;
+    ld.param.u32 %r1, [d];
+    setp.ge.u32 %p1, %r0, %r1;
+    @%p1 bra $k16_exit;
+    ld.param.u64 %rd0, [silu_out];
+    ld.param.u64 %rd1, [w_down];
+    ld.param.u64 %rd2, [ffn_down];
+    ld.param.u32 %r2, [four_d];
+    mov.f32 %f0, 0f00000000;
+    mov.u32 %r3, 0;
+    cvt.u64.u32 %rd3, %r0;
+    cvt.u64.u32 %rd4, %r2;
+    mul.lo.u64 %rd5, %rd3, %rd4;
+    shl.b64 %rd6, %rd5, 2;
+    add.u64 %rd7, %rd1, %rd6;
+$k16_loop:
+    cvt.u64.u32 %rd8, %r3;
+    shl.b64 %rd9, %rd8, 2;
+    add.u64 %rd10, %rd0, %rd9;
+    ld.global.f32 %f1, [%rd10];
+    add.u64 %rd11, %rd7, %rd9;
+    ld.global.f32 %f2, [%rd11];
+    fma.rn.f32 %f0, %f1, %f2, %f0;
+    add.u32 %r3, %r3, 1;
+    setp.lt.u32 %p1, %r3, %r2;
+    @%p1 bra $k16_loop;
+    shl.b64 %rd8, %rd3, 2;
+    add.u64 %rd9, %rd2, %rd8;
+    st.global.f32 [%rd9], %f0;
+$k16_exit:
+    ret;
+}
+
+// ---------- k17: residual_add_post_ffn ----------
+.visible .entry k17_residual_post_ffn (
+    .param .u64 hidden,
+    .param .u64 ffn_down,
+    .param .u64 h_out,
+    .param .u32 d
+)
+{
+    .reg .u64 %rd<6>;
+    .reg .u32 %r<4>;
+    .reg .pred %p1;
+    .reg .f32 %f<4>;
+    mov.u32 %r0, %tid.x;
+    ld.param.u32 %r1, [d];
+    setp.ge.u32 %p1, %r0, %r1;
+    @%p1 bra $k17_exit;
+    ld.param.u64 %rd0, [hidden];
+    ld.param.u64 %rd1, [ffn_down];
+    ld.param.u64 %rd2, [h_out];
+    cvt.u64.u32 %rd3, %r0;
+    shl.b64 %rd4, %rd3, 2;
+    add.u64 %rd5, %rd0, %rd4;
+    ld.global.f32 %f0, [%rd5];
+    add.u64 %rd5, %rd1, %rd4;
+    ld.global.f32 %f1, [%rd5];
+    add.f32 %f2, %f0, %f1;
+    add.u64 %rd5, %rd2, %rd4;
+    st.global.f32 [%rd5], %f2;
+$k17_exit:
+    ret;
+}

@@ -1,0 +1,124 @@
+// stdlib/cluster/core_knn.hexa
+//
+// k-Nearest-Neighbor classifier. RFC-037 design-override reified — second wave
+// of the clustering stdlib promotion, built on top of stdlib/cluster/core_
+// distance.hexa. Iterative k-means is deferred to a follow-up cycle.
+//
+// Scope (this module):
+//   - knn_predict(train_x, train_y, query, k, dist_fn_id) -> int
+//
+// `dist_fn_id` is an enum-style int rather than a first-class function handle
+// — hexa first-class fn handles are friction-heavy, so we dispatch on a small
+// switch (0=euclidean, 1=manhattan, 2=cosine). Cosine is treated as a distance
+// by negating similarity, so "nearest" remains monotone-by-min across all three.
+//
+// Tie-breaks: stable on first-seen-label (training-order priority); k larger
+// than the dataset is clamped to len(train_x). An empty training set returns 0
+// (caller's responsibility to detect; same defined-fallback discipline as
+// core_distance.hexa).
+
+import "stdlib/cluster/core_distance.hexa"
+
+pub let KNN_DIST_EUCLIDEAN: int = 0
+pub let KNN_DIST_MANHATTAN: int = 1
+pub let KNN_DIST_COSINE:    int = 2
+
+// Dispatch a distance under the dist_fn_id enum. Cosine is converted to a
+// distance via (1 - similarity) so the universal "smaller is nearer" rule
+// holds.
+fn _knn_distance(a: [float], b: [float], dist_fn_id: int) -> float {
+    if dist_fn_id == KNN_DIST_MANHATTAN { return manhattan(a, b) }
+    if dist_fn_id == KNN_DIST_COSINE {
+        let sim = cosine_similarity(a, b)
+        // sentinel -2.0 from cosine_similarity → push to "very far" so it loses
+        // any nearest-neighbor competition cleanly.
+        if sim < 0.0 - 1.5 { return 1000000.0 }
+        return 1.0 - sim
+    }
+    // Default + KNN_DIST_EUCLIDEAN.
+    return euclidean(a, b)
+}
+
+// Majority-vote among a parallel pair of (label, distance) arrays of length k.
+// On a tie the label that appeared first wins (training-order priority).
+fn _knn_majority_vote(labels_k: [int], k: int) -> int {
+    if k <= 0 { return 0 }
+    let mut best_label = labels_k[0]
+    let mut best_count = 1
+    let mut i = 0
+    while i < k {
+        let candidate = labels_k[i]
+        // Count occurrences of `candidate` in [0, k).
+        let mut count = 0
+        let mut j = 0
+        while j < k {
+            if labels_k[j] == candidate { count = count + 1 }
+            j = j + 1
+        }
+        if count > best_count {
+            best_count = count
+            best_label = candidate
+        }
+        i = i + 1
+    }
+    return best_label
+}
+
+// k-NN classifier. Predicts a label for `query` by majority-voting the labels
+// of the k training points with smallest distance under dist_fn_id.
+pub fn knn_predict(train_x: [[float]],
+                   train_y: [int],
+                   query: [float],
+                   k: int,
+                   dist_fn_id: int) -> int {
+    let n = len(train_x)
+    if n == 0 { return 0 }
+    if n != len(train_y) { return 0 }
+
+    // Clamp k into [1, n].
+    let mut k_eff = k
+    if k_eff > n { k_eff = n }
+    if k_eff < 1 { k_eff = 1 }
+
+    // Selection-style top-k by repeated argmin with marking. (n is the training
+    // set size, which is small for stdlib smoke purposes; a heap-based variant
+    // can be a follow-up if profiling demands it.)
+    let mut used = [false]
+    // Resize `used` to n by appending false.
+    let mut u = 1
+    while u < n {
+        used = used + [false]
+        u = u + 1
+    }
+
+    let mut topk_labels = [0]
+    // Pre-size topk_labels to k_eff with zeros (will be overwritten).
+    let mut t = 1
+    while t < k_eff {
+        topk_labels = topk_labels + [0]
+        t = t + 1
+    }
+
+    let mut picked = 0
+    while picked < k_eff {
+        let mut best_idx = 0 - 1
+        let mut best_dist = 0.0
+        let mut i = 0
+        while i < n {
+            if used[i] == false {
+                let d = _knn_distance(train_x[i], query, dist_fn_id)
+                if best_idx < 0 || d < best_dist {
+                    best_dist = d
+                    best_idx = i
+                }
+            }
+            i = i + 1
+        }
+        if best_idx < 0 { return 0 }
+        used[best_idx] = true
+        topk_labels[picked] = train_y[best_idx]
+        picked = picked + 1
+    }
+
+    return _knn_majority_vote(topk_labels, k_eff)
+}

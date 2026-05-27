@@ -1,0 +1,11 @@
+device=Apple M3
+
+shape       max|d|      max_ulp    byte_mm    status
+---------- ----------- --------- ---------- --------
+vec_exp     0.00000024      2     312/1024   PASS_LOW_ULP
+vec_log     0.00000048      3     496/1024   PASS_LOW_ULP
+vec_sin     0.00000012      2     441/1024   PASS_LOW_ULP
+vec_cos     0.00000012      2     439/1024   PASS_LOW_ULP
+
+F-RFC075-METAL-TRANSCENDENTAL-NUMERIC-EQ: PASS (max_ulp within tolerance)
+wrote result.json (1097 bytes)

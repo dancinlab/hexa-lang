@@ -1,0 +1,258 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "hexa-bio/_python_bridge/spec/oligonucleotide_ribotac_cross_v1.schema.json",
+  "title": "oligonucleotide_ribotac_cross_v1 — CROSS-AXIS W3 output rows (OLIGONUCLEOTIDE x RIBOTAC)",
+  "description": "Output schema for _python_bridge/module/oligonucleotide_ribotac_cross.py. CROSS-AXIS W3: the OLIGONUCLEOTIDE axis (antisense oligonucleotide / siRNA, SantaLucia 1998 nearest-neighbor duplex thermodynamics) is run side-by-side with the RIBOTAC sub-axis (Disney-lab class, mass-action bifunctional recruitment of endogenous RNase-L for catalytic multi-turnover cleavage). Same RNA-target CLASS (both modalities target RNA), opposite TURNOVER REGIME (ASO is STOICHIOMETRIC — one ASO molecule blocks at most one transcript via RNase-H recruitment or steric block, gets consumed; RIBOTAC is CATALYTIC multi-turnover — one RIBOTAC turns over many RNA molecules via recruited RNase-L). Both parent simulators are IMPORTED, never reimplemented (governance f3). The PASS sentinel certifies IN-SILICO simulator+metadata internal consistency ONLY (g8/f2) — never a therapeutic, clinical, regulatory, immunogenic, knockdown, efficacy, or modality-superiority claim. CRITICAL HONESTY: this is a COMPARISON, NOT A RANKING. The two model signals are NOT commensurable (Tm in deg C and N_RNA_blocked for the stoichiometric ASO path vs Kd/k_cat in nM/s and N_RNA_cleaved for the catalytic RIBOTAC path — different units on different real limits). Nusinersen / patisiran / inclisiran (FDA-approved ASO and siRNA drugs) and Disney-lab RIBOTACs (research-stage, NO FDA-approved RIBOTAC) are NOT competing modalities to be ranked here — they target different RNA biology questions. Modalities are described by their own precedent (g3/f1/f_lattice_fit — never lattice-derived). OLIGONUCLEOTIDE is an expansion-main axis (NOT core-5); RIBOTAC is a SUB-AXIS :> BIFUNCTIONAL (also NOT core-5). The cross does NOT create a new axis.",
+  "type": "object",
+  "required": [
+    "schema",
+    "row_kind",
+    "modality",
+    "target_name",
+    "rna_target_class",
+    "turnover_regime",
+    "drug_precedent",
+    "modality_stage",
+    "model_signal_name",
+    "model_signal_value",
+    "model_signal_units",
+    "real_limit_anchor",
+    "real_limit_citations",
+    "lattice_stance",
+    "comparison_is_ranking",
+    "signals_commensurable",
+    "illustrative_only",
+    "creates_a_new_axis",
+    "in_silico_only"
+  ],
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "oligonucleotide_ribotac_cross_v1"
+    },
+    "row_kind": {
+      "type": "string",
+      "enum": ["oligonucleotide", "ribotac"],
+      "description": "Which axis pathway this row represents. The two pathways share the same RNA-target CLASS but differ in TURNOVER REGIME — they are NOT collapsed into a single rate."
+    },
+    "modality": {
+      "type": "string",
+      "enum": ["OLIGONUCLEOTIDE", "RIBOTAC"],
+      "description": "Modality label. OLIGONUCLEOTIDE = antisense oligonucleotide / siRNA path; RIBOTAC = bifunctional RNase-L-recruiting catalytic path."
+    },
+    "target_name": {
+      "type": "string",
+      "description": "Panel target identifier — paired between the OLIGONUCLEOTIDE and RIBOTAC rows for the same RNA target."
+    },
+    "paired_target_name": {
+      "type": "string",
+      "description": "Echo of target_name used to assert OLIGONUCLEOTIDE + RIBOTAC rows are paired per target."
+    },
+    "rna_target_class": {
+      "type": "string",
+      "description": "The shared RNA-target class (e.g. 'structured RNA target — pre-miRNA / structured hairpin'). Common ground is the SHARED TARGET CLASS, NOT a shared metric."
+    },
+    "turnover_regime": {
+      "type": "string",
+      "enum": ["stoichiometric", "catalytic"],
+      "description": "Turnover regime — the axis on which the two pathways disagree. OLIGONUCLEOTIDE row: STOICHIOMETRIC (N_RNA_blocked = N_ASO_molecules; one ASO blocks at most one transcript via RNase-H recruitment or steric block, then is consumed). RIBOTAC row: CATALYTIC (N_RNA_cleaved = k_cat * t_exposure; one RIBOTAC molecule recruits RNase-L for many turnovers)."
+    },
+    "turnover_regime_description": {
+      "type": "string",
+      "description": "Human-readable description of the turnover regime for this row."
+    },
+    "drug_precedent": {
+      "type": "string",
+      "description": "Own modality precedent (g3/f1/f_lattice_fit — never lattice-derived). OLIGONUCLEOTIDE: nusinersen / Spinraza (ASO, FDA 2016, intrathecal SMN2 splice-switching), patisiran / Onpattro (siRNA, FDA 2018, hereditary ATTR amyloidosis), inclisiran / Leqvio (siRNA, FDA 2021, hypercholesterolemia). RIBOTAC: Disney-lab RNase-L-recruiting bifunctional class (Costales 2018 JACS 140:6741; Costales 2020 PNAS 117:2406) — RESEARCH-STAGE, no FDA-approved RIBOTAC."
+    },
+    "modality_stage": {
+      "type": "string",
+      "description": "Development stage of the modality. OLIGONUCLEOTIDE: approved (multiple FDA-approved ASO and siRNA drugs since 2016). RIBOTAC: research-stage (no approved RIBOTAC)."
+    },
+    "mechanism": {
+      "type": "string",
+      "description": "How this modality acts on the RNA target."
+    },
+    "model_signal_name": {
+      "type": "string",
+      "description": "Name of the in-silico model-computed signal for this modality. The two signals are NOT commensurable across rows."
+    },
+    "model_signal_value": {
+      "type": "number",
+      "description": "The model-computed signal value. NOT comparable across modalities — the OLIGONUCLEOTIDE row reports Tm (deg C) + N_RNA_blocked; the RIBOTAC row reports Kd (nM) + N_RNA_cleaved. Different units on different real limits."
+    },
+    "model_signal_units": {
+      "type": "string",
+      "description": "Units / interpretation of model_signal_value."
+    },
+    "model_signal_detail": {
+      "type": "object",
+      "description": "Modality-specific breakdown of the model signal. For OLIGONUCLEOTIDE: SantaLucia NN thermodynamics (dH, dS, dG37, Tm) + stoichiometric N_blocked. For RIBOTAC: mass-action ternary occupancy (Kd1, Kd2, alpha, ternary_fraction) + catalytic N_cleaved = k_cat * t_exposure.",
+      "additionalProperties": true
+    },
+    "n_rna_neutralized_per_drug_molecule": {
+      "type": "number",
+      "minimum": 0,
+      "description": "RNA copies neutralized per drug molecule under this modality's mechanism. OLIGONUCLEOTIDE (stoichiometric) bounded above by 1.0 per ASO event; RIBOTAC (catalytic) equal to ternary_fraction * turnover_number (multi-turnover advantage). VALUES ARE NOT COMMENSURABLE across rows — they measure different physical events (transcript-blocking vs RNase-L-cleavage)."
+    },
+    "real_limit_anchor": {
+      "type": "string",
+      "description": "The real physical/thermodynamic limit this modality's signal is anchored to (g1 — real-limits-first). OLIGONUCLEOTIDE: nucleic-acid duplex hybridization thermodynamics (nearest-neighbor base-pair stacking free energy bounds duplex stability). RIBOTAC: catalytic multiple-turnover (a genuine catalyst has turnover number > 1) + mass-action law (bound fractions <= 1)."
+    },
+    "real_limit_citations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string"},
+      "description": "Non-empty literature citation list for the modality's real-limit anchor(s). OLIGONUCLEOTIDE: SantaLucia 1998 PNAS 95:1460. RIBOTAC: Costales 2018 JACS 140:6741, Costales 2020 PNAS 117:2406, Cornish-Bowden 2012 Fundamentals of Enzyme Kinetics 4e, Guldberg & Waage 1864 (mass action)."
+    },
+    "lattice_stance": {
+      "type": "string",
+      "description": "Explicit statement that no n=6 lattice arithmetic is used in this row (g2 lattice-is-tool, g3 honesty-external, f1 / f_lattice_fit). No Tm / dG / Kd / k_cat / N here is derived from sigma/tau/phi/J2."
+    },
+    "comparison_is_ranking": {
+      "type": "boolean",
+      "const": false,
+      "description": "MUST be false. This deliverable is a descriptive side-by-side comparison; it is NEVER a ranking of the modalities or drugs. Nusinersen/patisiran/inclisiran (FDA-approved) and Disney-lab RIBOTACs (research-stage) are not competing modalities to be ranked here."
+    },
+    "signals_commensurable": {
+      "type": "boolean",
+      "const": false,
+      "description": "MUST be false. The OLIGONUCLEOTIDE model signal (Tm in deg C + N_blocked, stoichiometric) and the RIBOTAC model signal (Kd in nM + N_cleaved, catalytic) live in DIFFERENT UNITS on DIFFERENT real limits and CANNOT be ranked against each other."
+    },
+    "illustrative_only": {
+      "type": "boolean",
+      "const": true,
+      "description": "MUST be true. Sequences, K_d / k_cat / alpha / t_exposure values and Tm anchors are illustrative literature-informed surrogates — NOT fits to a specific compound and NOT a wet-lab measurement (g8/f2)."
+    },
+    "creates_a_new_axis": {
+      "type": "boolean",
+      "const": false,
+      "description": "MUST be false. This cross does NOT create a new axis. The core-5 axes (QUANTUM / WEAVE / NANOBOT / RIBOZYME / VIROCAPSID) are UNCHANGED; OLIGONUCLEOTIDE remains an expansion-main axis and RIBOTAC remains a sub-axis :> BIFUNCTIONAL (also an expansion-main)."
+    },
+    "in_silico_only": {
+      "type": "boolean",
+      "const": true,
+      "description": "MUST be true — the row certifies in-silico simulator+metadata consistency only (g8/f2), never a therapeutic / clinical / regulatory / immunogenic / knockdown / efficacy claim."
+    },
+
+    "oligo_sequence_5to3": {
+      "type": "string",
+      "pattern": "^[ACGT]+$",
+      "description": "[oligonucleotide row only] ASO sequence 5'->3' (DNA alphabet; U->T accepted by the parent NN engine). The ASO is the reverse complement of the RNA-target region it would hybridize."
+    },
+    "oligo_length_nt": {
+      "type": "integer",
+      "minimum": 2,
+      "description": "[oligonucleotide row only] Length of the ASO (nt)."
+    },
+    "duplex_dH_kcal_mol": {
+      "type": "number",
+      "description": "[oligonucleotide row only] Duplex enthalpy from the SantaLucia 1998 unified NN sum (kcal/mol)."
+    },
+    "duplex_dS_cal_mol_K": {
+      "type": "number",
+      "description": "[oligonucleotide row only] Duplex entropy from the SantaLucia 1998 unified NN sum (cal/mol/K)."
+    },
+    "duplex_dG37_kcal_mol": {
+      "type": "number",
+      "description": "[oligonucleotide row only] Duplex free energy at 37 deg C (kcal/mol)."
+    },
+    "duplex_Tm_celsius": {
+      "type": "number",
+      "description": "[oligonucleotide row only] van 't Hoff two-state Tm at 0.4 uM strand, 1 M Na+ (deg C). 1 M Na+ is the SantaLucia standard state and is non-physiological."
+    },
+    "n_aso_molecules": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "[oligonucleotide row only] Illustrative ASO-molecule count used to compute the stoichiometric N_RNA_blocked under the 1-ASO-blocks-1-transcript ceiling."
+    },
+    "n_rna_blocked_stoichiometric": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "[oligonucleotide row only] N_RNA_blocked under the stoichiometric model = N_aso_molecules (one ASO blocks at most one transcript; the ASO is consumed / sequestered). Real-limit floor: stoichiometric binder has turnover number = 1 by definition."
+    },
+
+    "rna_target_seq": {
+      "type": "string",
+      "pattern": "^[ACGU]+$",
+      "description": "[ribotac row only] RNA-target sequence (A/C/G/U) for the RIBOTAC pathway."
+    },
+    "rna_length_nt": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "[ribotac row only] Length of the RNA target (nt)."
+    },
+    "dot_bracket": {
+      "type": "string",
+      "description": "[ribotac row only] Vienna dot-bracket secondary structure of the target RNA (parent RIBOZYME-axis Nussinov solver, imported via ribotac_sim — no fork at any remove)."
+    },
+    "num_base_pairs": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "[ribotac row only] Number of base pairs in the dot-bracket structure."
+    },
+    "k_d1_nM": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "[ribotac row only] Dissociation constant of the RNA-binding warhead to the target (nM)."
+    },
+    "k_d2_nM": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "[ribotac row only] Intrinsic dissociation constant of the recruiter warhead to RNase-L (nM)."
+    },
+    "alpha": {
+      "type": "number",
+      "minimum": 1,
+      "description": "[ribotac row only] Linker-tethered ternary cooperativity factor (>= 1)."
+    },
+    "k_d2_effective_nM": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "[ribotac row only] Effective second-site Kd = K_d2 / alpha (nM)."
+    },
+    "binary_fraction": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "[ribotac row only] Mass-action occupancy of the binary Target.R complex (Guldberg & Waage 1864 real-limit; bounded by 1.0)."
+    },
+    "rnase_site_fraction": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "[ribotac row only] Mass-action occupancy of the RNase-L recruiter site given the binary complex."
+    },
+    "ternary_fraction": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "[ribotac row only] Ternary Target.R.RNase-L fraction = binary_fraction * rnase_site_fraction."
+    },
+    "k_cat_per_s": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "[ribotac row only] Recruited-RNase-L catalytic turnover rate for the bound RNA (1/s)."
+    },
+    "t_exposure_s": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "[ribotac row only] Exposure window over which turnovers accumulate (s)."
+    },
+    "turnover_number": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "[ribotac row only] Catalytic turnover number N = k_cat * t_exposure. Real-limit: a genuine catalyst has N > 1 (Cornish-Bowden 2012)."
+    },
+    "n_rna_cleaved_catalytic": {
+      "type": "number",
+      "minimum": 0,
+      "description": "[ribotac row only] N_RNA_cleaved = k_cat * t_exposure (the catalytic multiple-turnover count per RIBOTAC molecule). Real-limit: catalytic turnover > 1 (vs stoichiometric N = 1)."
+    },
+    "is_catalytic": {
+      "type": "boolean",
+      "description": "[ribotac row only] True iff turnover_number > 1 — the defining RIBOTAC catalytic property."
+    }
+  },
+  "additionalProperties": true
+}

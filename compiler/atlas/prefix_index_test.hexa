@@ -1,0 +1,238 @@
+// HEXA Native Compiler — Wave 2.4 prefix_index correctness + cache test
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write]
+//
+// Verifies that `prefix_lookup` (the new bucket-cache path) returns
+// exactly the same node set as `atlas_prefix_linear` (the pre-Wave-2.4
+// canonical sweep) for a representative spread of prefixes, and that
+// the cache rebuilds on overlay file-size change.
+//
+// Ported from FU2 prefix bench (commit fd368a54). CC0-1.0.
+//
+// Run:
+//   hexa run compiler/atlas/prefix_index_test.hexa
+
+use "compiler/atlas/parser"
+use "compiler/atlas/merger"
+use "compiler/atlas/static_index"
+use "compiler/atlas/overlay"
+use "compiler/atlas/prefix_index"
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok {
+        println("  PASS  " + label)
+    } else {
+        println("  FAIL  " + label)
+        fails.push(label)
+    }
+}
+
+// _id_set_equal — order-independent equality on the (kind, id) pairs of
+// two AtlasNode arrays. Two prefix-scan paths must produce the same SET
+// even if the iteration order through buckets differs from the linear
+// sweep.
+fn _id_set_equal(a: array, b: array) -> bool {
+    if len(a) != len(b) { return false }
+    let na = len(a)
+    let mut i = 0
+    while i < na {
+        let ai = a[i]
+        let mut found = false
+        let mut j = 0
+        while j < len(b) {
+            let bj = b[j]
+            if bj.id == ai.id && bj.kind == ai.kind {
+                found = true
+                break
+            }
+            j = j + 1
+        }
+        if !found { return false }
+        i = i + 1
+    }
+    return true
+}
+
+// _setup_sandbox — hermetic HOME so overlay path resolves into /tmp.
+fn _setup_sandbox() -> string {
+    let base = "/tmp/atlas_prefix_index_test"
+    exec("rm -rf '" + base + "' 2>/dev/null; mkdir -p '" + base + "/.hx/data'")
+    setenv("HOME", base)
+    return base
+}
+
+fn main() {
+    println("wave 2.4 prefix_index correctness + cache test")
+
+    let sandbox = _setup_sandbox()
+    overlay_reset_cache()
+    invalidate_prefix_index()
+
+    let fails = []
+    let mut pass: i64 = 0
+    let mut total: i64 = 0
+
+    println("")
+    println("sandbox HOME: " + sandbox)
+
+    // ─── Correctness: 5 representative prefixes ───────────────────────
+    println("")
+    println("scenario 1: bucket vs linear parity (5 prefixes)")
+
+    // Mix: 1-char (forces linear fallback), 2-char dense, longer sparse.
+    let prefixes = [
+        "n",
+        "sigma",
+        "phi",
+        "consciousness",
+        "meta_falsifier"
+    ]
+
+    let mut p = 0
+    while p < len(prefixes) {
+        let pref = prefixes[p]
+        let bucket_hits = prefix_lookup(pref)
+        let linear_hits = atlas_prefix_linear(pref)
+
+        total = total + 1
+        let same = _id_set_equal(bucket_hits, linear_hits)
+        if same {
+            pass = pass + 1
+            _check("parity prefix=" + pref
+                + " bucket=" + to_string(len(bucket_hits))
+                + " linear=" + to_string(len(linear_hits)), true, fails)
+        } else {
+            _check("parity prefix=" + pref
+                + " bucket=" + to_string(len(bucket_hits))
+                + " linear=" + to_string(len(linear_hits))
+                + " — DIFFER", false, fails)
+        }
+        p = p + 1
+    }
+
+    // ─── Cache invalidation: overlay grows → cache rebuilds ───────────
+    println("")
+    println("scenario 2: cache invalidation on overlay append")
+
+    // Force a cache build for a known prefix.
+    let before = prefix_lookup("phase24")
+    let before_count = len(before)
+
+    // Append a fresh overlay node whose id starts with "phase24" — the
+    // bucket cache MUST observe the change because the overlay file
+    // grew (size fingerprint).
+    let new_node = AtlasNode {
+        kind: "P",
+        id: "phase24_cache_probe",
+        raw: "@P phase24_cache_probe = 1 :: wave24 [cache_probe]",
+        source_file: "atlas.overlay.n6",
+        source_line: 1,
+        grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false },
+        edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] }
+    }
+    overlay_append(new_node)
+    overlay_reset_cache()  // make overlay_load_cached re-stat on next call
+
+    let after = prefix_lookup("phase24")
+    let after_count = len(after)
+
+    total = total + 1
+    if after_count == before_count + 1 {
+        pass = pass + 1
+        _check("prefix_lookup picked up overlay append (was "
+            + to_string(before_count) + " → now " + to_string(after_count) + ")", true, fails)
+    } else {
+        _check("prefix_lookup picked up overlay append (was "
+            + to_string(before_count) + " → now " + to_string(after_count)
+            + ", expected " + to_string(before_count + 1) + ")", false, fails)
+    }
+
+    // And the parity check still holds post-rebuild.
+    let bucket_after = prefix_lookup("phase24")
+    let linear_after = atlas_prefix_linear("phase24")
+    total = total + 1
+    if _id_set_equal(bucket_after, linear_after) {
+        pass = pass + 1
+        _check("post-invalidation parity prefix=phase24 (bucket "
+            + to_string(len(bucket_after)) + " == linear "
+            + to_string(len(linear_after)) + ")", true, fails)
+    } else {
+        _check("post-invalidation parity prefix=phase24 (bucket "
+            + to_string(len(bucket_after)) + " != linear "
+            + to_string(len(linear_after)) + ")", false, fails)
+    }
+
+    // ─── Perf sanity (low fidelity): bucket faster than linear ────────
+    println("")
+    println("scenario 3: perf sanity (bucket vs linear, 5 iters each)")
+
+    // Warm both paths.
+    let _w1 = prefix_lookup("sigma")
+    let _w2 = atlas_prefix_linear("sigma")
+
+    let mut t0 = time_ms()
+    let mut k = 0
+    while k < 5 {
+        let _r = prefix_lookup("sigma")
+        k = k + 1
+    }
+    let bucket_ms = time_ms() - t0
+
+    t0 = time_ms()
+    k = 0
+    while k < 5 {
+        let _r = atlas_prefix_linear("sigma")
+        k = k + 1
+    }
+    let linear_ms = time_ms() - t0
+
+    println("  bucket  5x: " + to_string(bucket_ms) + " ms")
+    println("  linear  5x: " + to_string(linear_ms) + " ms")
+
+    // Tolerate noise — we only assert bucket isn't worse than 2x linear
+    // (the bench evidence shows linear is seconds-per-call, so a real
+    // regression here would be many orders of magnitude). Hard-asserting
+    // bucket < linear would be flaky on small fixtures; the parity tests
+    // above are the load-bearing checks.
+    total = total + 1
+    if bucket_ms <= linear_ms * 2 {
+        pass = pass + 1
+        _check("bucket wall <= 2x linear wall (sanity)", true, fails)
+    } else {
+        _check("bucket wall <= 2x linear wall (sanity) — bucket="
+            + to_string(bucket_ms) + " linear=" + to_string(linear_ms), false, fails)
+    }
+
+    println("")
+    println(to_string(pass) + "/" + to_string(total) + " PASS")
+    if len(fails) == 0 {
+        println("RESULT: PASS")
+        exec("rm -rf '" + sandbox + "' 2>/dev/null")
+        exit(0)
+    } else {
+        println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
+        let mut i = 0
+        while i < len(fails) {
+            println("  - " + to_string(fails[i]))
+            i = i + 1
+        }
+        exit(1)
+    }
+}
+
+// --- is_main guard ---------------------------------------------------------
+
+let _av = argv()
+
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let script = to_string(_av[1])
+    if script.ends_with("/prefix_index_test.hexa") { return true }
+    if script == "prefix_index_test.hexa" { return true }
+    return false
+}
+
+if _is_main() {
+    main()
+}

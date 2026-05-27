@@ -1,0 +1,120 @@
+# .roadmap.hexa_cern — repo-overall tracker
+
+> Cross-cutting state: invariant lattice, release cadence, cycle history,
+> deadlines, pointers. Sister of `hexa-fusion` / `hexa-ufo` / `hexa-antimatter` /
+> `hexa-rtsc` under `dancinlab` org.
+
+**Last sync**: 2026-05-08 · **Current release**: v1.0.0 (v1.1.0 RSC code-layer FINAL on `main`) · **Branch**: `main`
+
+---
+
+## §0 Terminal goal — benchtop CERN (1 GeV/m wakefield + σ-cascade 6-order)
+
+hexa-cern 도착지 = **벤치톱 1 GeV/m laser-plasma wakefield 가속 실증 + σ-cascade 6-order accelerator 100 MeV → 7 TeV (LHC parity) 경로 closed-form**.
+
+DoD:
+1. `mini` (HEXA-MINI-ACCEL) 100 MeV 벤치톱 실증 (외부 collab 또는 simulation parity).
+2. `parent` (HEXA-PACCEL) σ-cascade 6-order integration 이론 spec 완성.
+3. `classical` (HEXA-CLASSIC-ACCEL) Lagrangian/Hamiltonian τ=4 phase 가속 모드 검증.
+
+## §A.1 Invariant lattice (n=6)
+
+```
+σ(6) · φ(6) = n · τ(6) = J₂ = 24
+   12   ·   2  =  6  ·   4  = 24
+```
+
+| Symbol | Value | Role | Accelerator projection |
+|--------|-------|------|------------------------|
+| σ(6)   | 12    | sigma — cardinality bin | σ-cascade 6-order = 7 TeV (12·σ·... LHC parity) |
+| τ(6)   | 4     | tau — state quartet | 4 acceleration phases (laser pump / wakefield bubble / electron capture / extraction) |
+| φ(6)   | 2     | phi — verdict bit | electron / positron beam |
+| J₂     | 24    | Mathieu / Leech | benchtop 1 GeV/m × σ·φ = 24 GeV ceiling per stage |
+
+## §A.2 Release cadence
+
+| Version | Date | Status | Highlights |
+|---------|------|--------|------------|
+| v1.0.0 | 2026-05-06 | RELEASED | 3-pillar 시드 (mini + parent + classical) + cli placeholder + cern_baseline 비교 표 |
+| v1.1.0-pre | 2026-05-07 | superseded | `.hexa` runnable surface seed — verify/ 6 scripts. |
+| v1.1.0 | 2026-05-08 | RSC code-layer FINAL on `main` | 16+ verify/ scripts (T1 ×3 + T2 ×11 + T3 ×3 + meta ×3). All 3 falsifiers 100% bookkeeping closure. saturation_check 17/17 → `__HEXA_CERN_RSC_SATURATED__ STOP`. cli verify all 22/22. tests 4/4 (individually). |
+| v1.2.0 | ~2026-10 | planned | `parent` σ-cascade 6-order 분석 spec 보강 (T1/T2 within RSC, T3 still bookkeeping). |
+| v2.0.0 | ~2027-Q1 | ASPIRATIONAL | Stage-1+ benchtop raw-data fit. **Out of RSC code-layer**; see §A.6. |
+
+## §A.3 Cycle history
+
+- **Cycle 0 (2026-05-06)** — v1.0.0 initial extraction from canon@c0f1f570. Commit `ec15584`. 13 files.
+- **Cycle 1 (2026-05-07)** — v1.1.0-pre `.hexa` runnable surface lands. Adds:
+  - `verify/lattice_check.hexa` (23/23 PASS)
+  - `verify/cross_doc_audit.hexa` (11/11 PASS)
+  - `verify/calc_wakefield.hexa` (6/6 PASS, mini pillar)
+  - `verify/calc_sigma_cascade.hexa` (8/8 PASS, parent pillar)
+  - `verify/calc_classical.hexa` (11/11 PASS, classical pillar)
+  - `verify/falsifier_check.hexa` (3/3 falsifiers registered)
+  - `cli/hexa-cern.hexa verify [<sub>]` subcommand (6-runner aggregator)
+  - `build/Makefile` + `build/header.tex` (3-PDF rebuild — all 3 PDFs build clean)
+  - `tests/test_{lattice,calculators,cli_verify,all}.hexa` (4/4 PASS)
+  - 0 `.py` added — all new code is `.hexa`.
+
+## §A.4 Falsifier preregister
+
+- **F-PCERN-1** — σ-cascade 6-order = LHC 7 TeV 도달 closed-form expression, LHC 측정과 일치?
+- **F-PCERN-2** — classical Hamiltonian-Lagrangian τ=4 phase 가속 모드 실증 (mini accelerator simulation)?
+- **F-PCERN-3** — 1 GeV/m laser-plasma wakefield (DESY/SLAC ref) closed-form fit?
+
+## §A.5 Pending decisions
+
+- mini → parent → classical 3-pillar 의 .hexa CLI dispatch order.
+- hexa-antimatter cross-link (PET-cyclotron 실증 가속기 cousin 으로 연계 강도).
+- hexa-ufo Stage-3 propulsion 의존 spec 시점.
+- §A.6 Step-1 외부 collab 후보 (DESY / SLAC / KEK) 중 1 곳 선정 시점.
+
+## §A.6 Stage-1+ hardware path  (post-RSC, **out of code-layer scope**)
+
+RSC (verify/* `.hexa`) 가 닫을 수 없는 영역. v1.1.0 100% closure 이후
+v2.0.0 까지의 하드웨어/외부-bound 단계. 본 path 는 `.hexa` 가 아니라
+funding · 외부 검증 · 실제 빔 실험으로 진행.
+
+| step | 내용 | 시점 (목표) | RSC 가능? | 결과물 |
+|:----:|:----|:-----------|:---------:|:-------|
+| 1 | 외부 collab 결정 (DESY / SLAC / KEK 중 1 곳) | 2026-Q3 | ✗ | MOU / 합의서 |
+| 2 | Funding round (PW-class fiber 레이저 + 48 T RT-SC + 진단계) | 2026-Q4 | ✗ | grant / 투자 commitment |
+| 3 | Stage-1 시뮬레이션 parity (full LWFA solver + 빔 동역학 numerical) | ~2026-08 | **부분 가능** (.hexa T2 보강) | numerics_lwfa_relativistic.hexa 류, simulation parity 보고서 |
+| 4 | Stage-2/3 실제 benchtop 빌드 + 빔 실증 (years out) | ~2027-Q1+ | ✗ | 펌웨어 · HDL · PCB · BOM · 캘리브레이션 로그 · raw shot 데이터 |
+
+Step 3 까지가 본 repo 가 직접 다룰 수 있는 마지막 layer. Step 1 / 2 / 4
+는 hardware-ops · 외부-stakeholder · multi-month 작업으로 cron / loop
+firing 으로 닫히지 않음. 본 §A.6 는 `tracking only` — 진행 시 Cycle 항목
+(§A.3) 에 cross-referenced.
+
+**현재 (2026-05-08) 상태**: 모든 step 미착수. v2.0.0 = 종이 위 설계.
+mini/doc/mini-accelerator.md §X.4 "FIRST-IN-WORLD proposal" 4 줄 spec
+이 빌드 후보 BOM 의 출발점.
+
+### §A.6.1 추천 작업 순서 (A → B → C → D)
+
+§A.6 step 1/2/4 가 외부-bound 인 동안에도 본 repo 안에서 진행 가능한
+사전 작업 4 단계. 펌웨어/HW 가 실제로 나오는 시점은 D 단계 이후이며,
+A → B → C 는 "v2.0.0 빌드 직전" 까지 본 repo 가 자체적으로 닫을 수 있는
+범위.
+
+| 단계 | 내용 | 결과물 | 외부 HW 필요? | RSC 가능? | 가치 |
+|:----:|:----|:------|:------------:|:---------:|:----|
+| A | **종이 설계 강화** — `mini/doc/benchtop_v0_design.md` (§X.4 4 줄 → 풀 BOM + 블록 다이어그램 + 인터페이스 표 + 안전 명세) | `.md` 1~3 개 + ASCII/TikZ 그림 | ✗ | ✓ docs-layer | funding pitch deck 직전까지 |
+| B | **Stage-1 simulation parity** (= §A.6 Step 3) — 상대론적 LWFA solver + 빔 동역학 numerical, FBPIC/Smilei published case parity | `verify/numerics_lwfa_relativistic.hexa` 류 1~3 개 | ✗ | ✓ partial-RSC | 외부 collab 미팅 카드 |
+| C | **Sim-펌웨어** — 레이저 트리거 / DAC-ADC 체인을 sim-only 로 모델링, hardware-in-the-loop 없이 동작 | `firmware/sim/*.hexa` (또는 `*.c` + cmocka) | ✗ | 부분 ✓ | 실제 MCU 펌웨어의 prototype layer |
+| D | **HDL / MCU skeleton** — FPGA 타이밍 컨트롤러 (Verilog) + MCU 레이저 드라이버 (Rust/C). 컴파일 OK, flash 대상 없음 | `firmware/hdl/*.v` + `firmware/mcu/*.rs` + Vivado / Cargo-embedded 셋업 | ✗ 지금 / ✓ 나중 | ✗ | 보드 도착 시점에 시작 |
+
+**추천 commit cadence**:
+
+- A 만 → 1~2 commit, 1 일
+- A + B → +2~4 commit, 2~3 일 (Stage-1 sim parity 까지)
+- A + B + C → +1 주 (sim-펌웨어 데모 가능)
+- D → 보류 권장 (보드 미존재 → 검증 불가; toolchain heavy)
+
+A / B 는 본 repo 회귀 invariants 를 깨지 않음 — saturation_check 17/17
+PASS 유지, falsifier_check 100% closure 유지, cli verify all ≥ 22 (새
+T2 추가 시 count 증가, monotone non-decreasing). 절대 PASS→FAIL 전환
+없음. C 는 처음으로 `.hexa` 외 파일이
+들어가는 단계 — 별도 디렉토리 (`firmware/sim/`) 로 격리. D 는 별도 repo
+또는 `firmware/` 의 별 sub-tree 분리 권장.

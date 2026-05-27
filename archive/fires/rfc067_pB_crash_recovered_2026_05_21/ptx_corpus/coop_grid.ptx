@@ -1,0 +1,10 @@
+.version 7.0
+.target sm_80
+.address_size 64
+.visible .entry coop_test()
+{
+    .reg .b32 %r<2>;
+    mov.u32 %r0, %tid.x;
+    bar.sync 0;
+    ret;
+}

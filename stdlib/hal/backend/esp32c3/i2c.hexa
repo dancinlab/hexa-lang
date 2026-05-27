@@ -1,0 +1,105 @@
+#!hexa strict
+// stdlib/hal/backend/esp32c3/i2c.hexa — ESP32-C3 I2C backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    ESP32-C3 RV32IMC RISC-V @ 160 MHz.
+// Chip ref:  ESP32-C3 Technical Reference Manual §17 I²C Controller
+//            (single I2C0 on C3; ESP32 has 2, ESP32-S3 has 2).
+// Surface:   esp32c3_i2c_{configure,start,write,read,stop}(...)
+// Dispatch:  i2c.hexa selects this via cfg-flag.
+//
+// MMIO layout (programmable command queue, same architecture as ESP32):
+//
+//   I2C0:  base = DR_REG_I2C_EXT_BASE = 0x60013000  (only I2C on C3)
+//
+//   I2C_SCL_LOW_PERIOD_REG     0x000   SCL low half-bit count
+//   I2C_CTR_REG                0x004   master mode, MS_MODE bit 4,
+//                                        TRANS_START bit 5
+//   I2C_SR_REG                 0x008   status: BUS_BUSY / ARB_LOST /
+//                                        TX_FIFO_CNT / RX_FIFO_CNT
+//   I2C_TO_REG                 0x00C   timeout cycles (SCL stuck guard)
+//   I2C_SCL_HIGH_PERIOD_REG    0x018   SCL high half-bit count
+//   I2C_FIFO_DATA_REG          0x01C   shared TX/RX FIFO (32 deep on C3)
+//   I2C_INT_RAW_REG            0x024
+//   I2C_INT_CLR_REG            0x028
+//   I2C_INT_ENA_REG            0x02C
+//   I2C_INT_STATUS_REG         0x030
+//   I2C_COMD<n>_REG            0x058 + 4·n   command queue (16 deep)
+//                                              opcode (RSTART/WRITE/READ/
+//                                              STOP/END) + ack + byte_num
+//
+// Speed grades: std 100 kbit/s, fast 400 kbit/s, fast-plus 1 Mbit/s.
+//
+// FIFO depth on ESP32-C3: 32 entries (vs 16 on ESP32-S2). Command
+// queue depth: 16 entries (same as ESP32 family).
+
+let MODULE_NAME = "esp32c3_i2c"
+let SIGMA_SLOT  = 2
+let PHI_KIND    = "digital"
+
+let DR_REG_I2C_EXT_BASE = 0x60013000
+
+let I2C_SCL_LOW_PERIOD_REG  = 0x000
+let I2C_CTR_REG             = 0x004
+let I2C_SR_REG              = 0x008
+let I2C_TO_REG              = 0x00C
+let I2C_SCL_HIGH_PERIOD_REG = 0x018
+let I2C_FIFO_DATA_REG       = 0x01C
+let I2C_COMD0_REG           = 0x058
+
+let CMD_RSTART = 0
+let CMD_WRITE  = 1
+let CMD_READ   = 2
+let CMD_STOP   = 3
+let CMD_END    = 4
+
+let SPEED_STD_100K  = 100000
+let SPEED_FAST_400K = 400000
+let SPEED_FASTP_1M  = 1000000
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn esp32c3_i2c_configure(unit: int, speed_hz: int) -> int {
+    if unit != 0 { return -1 }   // only I2C0 on C3
+    if speed_hz < 1000 || speed_hz > 1000000 { return -2 }
+    // STUB: enable peri clock, set MS_MODE=1, compute SCL periods
+    return unit
+}
+
+fn esp32c3_i2c_start(unit: int, addr: int) -> int {
+    if unit != 0 { return -1 }
+    if addr < 0 || addr > 0x7F { return -2 }
+    // STUB: build COMD0=RSTART, COMD1=WRITE(addr), set TRANS_START
+    return 0
+}
+
+fn esp32c3_i2c_write(handle: int, byte: int) -> int {
+    if byte < 0 || byte > 255 { return -1 }
+    // STUB: push byte into FIFO, append COMD WRITE
+    return 0
+}
+
+fn esp32c3_i2c_read(handle: int) -> int {
+    // STUB: append COMD READ, drain FIFO_DATA_REG
+    return -1
+}
+
+fn esp32c3_i2c_stop(handle: int) -> int {
+    // STUB: append COMD STOP, set TRANS_START, spin on BUS_BUSY=0
+    return 0
+}
+
+fn esp32c3_i2c_report(handle: int) -> str {
+    return "[esp32c3_i2c sim] handle=" + str(handle) + " (skeleton stub — TODO MMIO)"
+}
+
+fn esp32c3_i2c_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32c3_i2c sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  I2C0=" + str(DR_REG_I2C_EXT_BASE) + "  (single I2C controller on C3)")
+    println("  command queue depth 16, FIFO depth 32, std/fast/fast-plus")
+}

@@ -1,0 +1,105 @@
+// test/congruence_chain_engine_smoke.hexa — smoke for symbolic/congruence_chain_engine.hexa
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Reference values reproduced from archive-TECS-L/congruence_chain_engine.py
+// (print_detail / print_table / "Why N=1 is Special" block):
+//   Γ₀(1)=SL(2,Z): μ=1, cusps=1, e2=1, e3=1, genus=0
+//   Γ₀(6):  μ=12, cusps=4, e2=0, e3=0, genus=0
+//   Γ₀(11): genus=1 (elliptic curve)
+//   Γ₀(13): μ=14, cusps=2, e2=2, e3=2, genus=0
+//   Γ₀(28): μ=48, cusps=6, genus=2
+//   factorize(360) = 2^3 · 3^2 · 5
+//   euler_phi(6)=2, σ₁(6)=12, σ₀(6)=4
+//   isotropy_lcm(1) = lcm{1,2,3} = 6  (first perfect number — N=1 self-ref)
+//   kronecker_symbol(-1, 5) = 1, kronecker_symbol(-3, 7) = 1
+//   dim S_2(Γ₀(11)) = genus(11) = 1
+//
+// Run:  hexa run test/congruence_chain_engine_smoke.hexa
+// Sentinel: __CCE_SMOKE__ PASS|FAIL on the final line.
+
+import "compiler/atlas/symbolic/congruence_chain_engine.hexa"
+
+let mut PASS = 0
+let mut FAIL = 0
+
+fn check(label: string, cond: bool) {
+    if cond {
+        PASS = PASS + 1
+        println("[PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("[FAIL] " + label)
+    }
+}
+
+// ── factorize / divisor functions ───────────────────────────────────────
+
+let f360 = factorize(360)
+check("factorize(360) has 3 distinct primes (2,3,5)", len(f360.primes) == 3)
+check("factorize(360) primes[0]=2 exp[0]=3", f360.primes[0] == 2 && f360.exps[0] == 3)
+check("factorize(360) primes[1]=3 exp[1]=2", f360.primes[1] == 3 && f360.exps[1] == 2)
+check("factorize(360) primes[2]=5 exp[2]=1", f360.primes[2] == 5 && f360.exps[2] == 1)
+
+check("euler_phi(6) == 2", euler_phi(6) == 2)
+check("sigma_k(6,1) [σ₁] == 12", sigma_k(6, 1) == 12)
+check("sigma_k(6,0) [σ₀=τ] == 4", sigma_k(6, 0) == 4)
+check("mobius(6) == 1 (squarefree, 2 primes)", mobius(6) == 1)
+check("mobius(12) == 0 (2² | 12)", mobius(12) == 0)
+check("divisors(28) == {1,2,4,7,14,28}", len(divisors(28)) == 6)
+
+// ── Kronecker / Jacobi ──────────────────────────────────────────────────
+
+check("kronecker_symbol(-1, 5) == 1",  kronecker_symbol(-1, 5) == 1)
+check("kronecker_symbol(-1, 7) == -1", kronecker_symbol(-1, 7) == -1)
+check("kronecker_symbol(-3, 7) == 1",  kronecker_symbol(-3, 7) == 1)
+check("jacobi_symbol(2, 15) == 1",     jacobi_symbol(2, 15) == 1)
+
+// ── Γ₀(N) invariants ────────────────────────────────────────────────────
+
+check("Γ₀(1) μ == 1",       gamma0_index(1) == 1)
+check("Γ₀(1) cusps == 1",   gamma0_cusps(1) == 1)
+check("Γ₀(1) e2 == 1",      gamma0_elliptic2(1) == 1)
+check("Γ₀(1) e3 == 1",      gamma0_elliptic3(1) == 1)
+check("Γ₀(1) genus == 0",   gamma0_genus(1) == 0)
+
+check("Γ₀(6) μ == 12",      gamma0_index(6) == 12)
+check("Γ₀(6) cusps == 4",   gamma0_cusps(6) == 4)
+check("Γ₀(6) e2 == 0",      gamma0_elliptic2(6) == 0)
+check("Γ₀(6) e3 == 0",      gamma0_elliptic3(6) == 0)
+check("Γ₀(6) genus == 0",   gamma0_genus(6) == 0)
+
+check("Γ₀(11) genus == 1 (elliptic curve)", gamma0_genus(11) == 1)
+check("Γ₀(13) μ == 14",     gamma0_index(13) == 14)
+check("Γ₀(13) cusps == 2",  gamma0_cusps(13) == 2)
+check("Γ₀(13) e2 == 2",     gamma0_elliptic2(13) == 2)
+check("Γ₀(13) e3 == 2",     gamma0_elliptic3(13) == 2)
+check("Γ₀(13) genus == 0",  gamma0_genus(13) == 0)
+check("Γ₀(28) μ == 48",     gamma0_index(28) == 48)
+check("Γ₀(28) cusps == 6",  gamma0_cusps(28) == 6)
+check("Γ₀(28) genus == 2",  gamma0_genus(28) == 2)
+
+// ── dim S_k + forcing chain ─────────────────────────────────────────────
+
+check("dim S_2(Γ₀(11)) == genus(11) == 1", dim_cusp_forms(2, 11) == 1)
+check("dim S_2(Γ₀(6)) == 0 (genus 0)",     dim_cusp_forms(2, 6) == 0)
+
+check("isotropy_lcm(1) == 6 (lcm{1,2,3}, first perfect number — N=1 self-ref)",
+      isotropy_lcm(1) == 6)
+check("isotropy_lcm(6) == 1 (e2=e3=0 ⇒ only identity)",
+      isotropy_lcm(6) == 1)
+
+let fc1 = forcing_chain(1)
+check("forcing_chain(1).iso_lcm == 6", fc1.iso_lcm == 6)
+check("forcing_chain(1).sigma_1 == 1", fc1.sigma_1 == 1)
+
+println("")
+println("═══════════════════════════════════════════════════════════")
+println("  congruence_chain_engine smoke: PASS=" + str(PASS) + " FAIL=" + str(FAIL))
+println("═══════════════════════════════════════════════════════════")
+if FAIL > 0 {
+    println("__CCE_SMOKE__ FAIL")
+} else {
+    println("__CCE_SMOKE__ PASS")
+}

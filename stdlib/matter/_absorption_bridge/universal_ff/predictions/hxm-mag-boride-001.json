@@ -1,0 +1,39 @@
+{
+  "__fixture_tag__": "VENDORED UNIVERSAL-FF PREDICTION — frozen CHGNet relax output (real computation, ubu-1 RTX 5070), not measurement",
+  "candidate_id": "hxm-mag-boride-001",
+  "novel_section": "§3.5 (REE-free magnets)",
+  "target_property": "structural stability + magnetic moment of the C16 (FeCoNiMn)2B ordered approximant of the Beeson quinary high-entropy boride",
+  "predicted_value": 0.64,
+  "predicted_unit": "uB/atom (mean |magnetic moment| per atom, CHGNet 0.4.2 prediction on the relaxed C16 ordered approximant)",
+  "computation": {
+    "model": "CHGNet 0.4.2 (real local computation — NOT a vendored-from-literature proxy)",
+    "host": "ubu-1 (Linux x86_64, NVIDIA RTX 5070 12 GB, torch 2.12+cu130)",
+    "date": "2026-05-18",
+    "structure": "C16 / CuAl2-type / I4-mcm M2B; M-8h sublattice ordered-decorated Fe/Co/Ni/Mn (ordered approximant of the quaternary (FeCoNiMn)2B 50 nm film named in Beeson 2025)",
+    "relax": "CHGNet StructOptimizer; input a=5.05 c=4.25 A -> relaxed a=5.023 c=4.230 A",
+    "E_per_atom_eV": -7.5901,
+    "abs_magmom_per_atom_mean_uB": 0.64,
+    "abs_magmom_total_uB": 7.68,
+    "reference_Fe2B_C16_control": "pure Fe2B C16, same run: E/atom -8.111 eV, |magmom| 1.318 uB/atom, relaxed a=5.05 c=4.25 A"
+  },
+  "model": "CHGNet 0.4.2",
+  "model_caveat": "CHGNet predicts atomistic energy/forces/|magmom| on a 12-atom ORDERED approximant. (1) The real Beeson candidate is a DISORDERED quinary (FeCoNiMnCr)2B high-entropy boride; this approximant is the quaternary (FeCoNiMn)2B named-film composition, ordered — a structural proxy, not the candidate itself. (2) CHGNet |magmom| does NOT resolve FM vs AFM easy-axis ordering — 0.64 uB/atom confirms the phase is magnetic but not its anisotropy. (3) NNP energy is not a measurement.",
+  "proxy_source": "CHGNet 0.4.2 real relaxation + property prediction executed on ubu-1 (2026-05-18); structure prototype = C16 I4/mcm M2B (CuAl2-type) per Beeson et al. 2025 Adv. Mater. DOI 10.1002/adma.202516135 and Fe2B crystallographic refinements; no numeric value vendored from a paper — the figures are this run's CHGNet output.",
+  "falsifier_relation": "PARTIAL",
+  "falsifier_id": "F-MAG-4",
+  "falsifier_text": "thin-film K1 < 1.0 MJ/m3 at 300 K OR bulk-scale synthesis not demonstrated -> FAIL",
+  "falsifier_note": "CHGNet does not output magnetocrystalline anisotropy K1, so F-MAG-4 CANNOT be evaluated by this NNP run. The run establishes only: the C16 ordered approximant relaxes stably (lattice within 0.5% of the Beeson film) AND retains a non-zero magnetic moment. K1 and bulk synthesis remain UNVERIFIED.",
+  "accessed": "2026-05-18",
+  "n6_lattice_fit_applied": false,
+  "is_measurement": false,
+  "is_external_verification": false,
+  "tier": "Tier-2",
+  "unproven_markers_preserved": [
+    "Beeson C16 high-entropy boride bulk (BH)max UNVERIFIED — measured on thin-film only (combinatorial sputter)",
+    "exact disordered quinary (FeCoNiMnCr)2B composition + site occupancy UNVERIFIED — this run uses a quaternary ORDERED approximant",
+    "FM vs AFM easy-axis ordering UNVERIFIED — CHGNet |magmom| does not resolve it",
+    "magnetocrystalline anisotropy K1 UNVERIFIED — outside CHGNet output"
+  ],
+  "honesty_caveats": "SIM-NNP status: real CHGNet computation, NOT a measurement and NOT a proxy-from-literature. The approximant is a structural model of the Beeson candidate, not the candidate. Does NOT promote to EXTERNAL-VERIFIED. boride-001 advances DESIGN -> SIM-NNP on: (a) stable C16 relaxation, (b) retained magnetic moment. K1 / FM-ordering / bulk synthesis stay out-of-repo (CLOSURE_RESIDUAL_BACKLOG §C-MET C-MET-3).",
+  "license_note": "CHGNet is BSD-licensed (Deng et al. 2023 Nat. Mach. Intell. 5:1031); structure prototype from peer-reviewed crystallography. No n=6 lattice-fit applied."
+}

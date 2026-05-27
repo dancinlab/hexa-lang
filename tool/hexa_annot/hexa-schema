@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+# hexa-schema — @schema(type="...") + struct fields → JSON Schema metadata
+# (AST-backed).
+#
+# Usage:
+#   hexa-schema <file.hexa> [<file2>...]
+#   hexa-schema --dir <dir>
+set -eu
+
+usage() {
+    cat >&2 <<EOF
+usage: hexa-schema <file.hexa> [<file2>...]
+       hexa-schema --dir <dir>
+EOF
+    exit 2
+}
+
+case "${1:-}" in
+    -h|--help|"") usage ;;
+esac
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+. "${SCRIPT_DIR}/_ast_extract.sh"
+
+if ! resolve_files "$@"; then exit 2; fi
+if [ ${#FILES[@]} -eq 0 ]; then
+    printf '{"version":"0.2","source":"ast","schemas":[]}\n'
+    exit 0
+fi
+
+TMP_TSV=$(mktemp -t hexa_schema.XXXXXX)
+trap 'rm -f "$TMP_TSV"' EXIT
+run_ast_extract > "$TMP_TSV"
+
+awk '
+function jesc(s,   r) { r = s; gsub(/\\/, "\\\\", r); gsub(/"/, "\\\"", r); return r }
+function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
+function decode_esc(s,   out, i, n, c, nc) {
+    out = ""; n = length(s); i = 1
+    while (i <= n) {
+        c = substr(s, i, 1)
+        if (c == "\\" && i < n) {
+            nc = substr(s, i + 1, 1)
+            if (nc == "n")  { out = out "\n"; i += 2; continue }
+            if (nc == "r")  { out = out "\r"; i += 2; continue }
+            if (nc == "t")  { out = out "\t"; i += 2; continue }
+            if (nc == "\\") { out = out "\\"; i += 2; continue }
+        }
+        out = out c; i++
+    }
+    return out
+}
+function kv_extract(raw, key,    s, pat, pos, rest, val, n, i, c, nc) {
+    s = raw
+    pat = "(^|[ \\t,(])" key "[ \\t]*[=:][ \\t]*"
+    pos = match(s, pat)
+    if (pos == 0) return ""
+    rest = substr(s, pos + RLENGTH)
+    sub(/^[ \t]+/, "", rest)
+    if (substr(rest, 1, 1) == "\"") {
+        val = ""; i = 2; n = length(rest)
+        while (i <= n) {
+            c = substr(rest, i, 1)
+            if (c == "\"") break
+            val = val c; i++
+        }
+        return val
+    }
+    if (match(rest, /[,)[:space:]]/)) return substr(rest, 1, RSTART - 1)
+    return rest
+}
+function fetch_fields(file, name,    cmd, ln, fields, c, fn_, ft, f) {
+    cmd = "awk -v want=\"" name "\" \047/^[ \\t]*struct[ \\t]+[A-Za-z_]/ { hdr=$0; sub(/^[ \\t]*struct[ \\t]+/, \"\", hdr); sub(/[ \\t{].*$/, \"\", hdr); if (hdr == want) { found=1; next } } found && /^[ \\t]*\\}/ { exit } found { print }\047 \"" file "\""
+    fields = ""
+    while ((cmd | getline ln) > 0) {
+        f = trim(ln)
+        sub(/\/\/.*$/, "", f)
+        sub(/,$/, "", f)
+        f = trim(f)
+        if (f == "") continue
+        c = index(f, ":")
+        if (c > 0) {
+            fn_ = trim(substr(f, 1, c - 1))
+            ft = trim(substr(f, c + 1))
+            if (fields != "") fields = fields ","
+            fields = fields "{\"name\":\"" jesc(fn_) "\",\"type\":\"" jesc(ft) "\"}"
+        }
+    }
+    close(cmd)
+    return fields
+}
+BEGIN { FS = "\t"; n_schemas = 0 }
+/^# error\t/ { next }
+{
+    kind = $1; tgtk = $2; name = $3; file = $4; line = $5; raw = decode_esc($6)
+    if (kind != "schema") next
+    if (tgtk != "struct") next
+    n_schemas++
+    type_v[n_schemas] = kv_extract(raw, "type")
+    schema_name[n_schemas] = name
+    schema_file[n_schemas] = file
+    schema_line[n_schemas] = line
+}
+END {
+    body = ""
+    for (i = 1; i <= n_schemas; i++) {
+        if (i > 1) body = body ","
+        fields_json = fetch_fields(schema_file[i], schema_name[i])
+        body = body "{"
+        body = body "\"type\":\""   jesc(type_v[i]) "\""
+        body = body ",\"struct\":\"" jesc(schema_name[i]) "\""
+        body = body ",\"file\":\""   jesc(schema_file[i]) "\""
+        body = body ",\"line\":"     schema_line[i]
+        body = body ",\"fields\":[" fields_json "]"
+        body = body "}"
+    }
+    printf("{\"version\":\"0.2\",\"source\":\"ast\",\"schemas\":[%s]}\n", body)
+}' "$TMP_TSV"

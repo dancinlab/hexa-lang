@@ -1,0 +1,10 @@
+# O3 per-hit verify — phi <-> A000010 (Euler totient)
+# OEIS A000010 first-10 tuple (from O2 sweep): 1,1,2,2,4,2,6,4,6,4
+# verb: hexa verify --expr phi <n> <expected>  (3-arg VERIFY, VERIFY-KIT V2-era CLI)
+# tier: BLUE (canonical-source direct hexa-native recompute)
+
+$ hexa verify --expr phi 9 6
+verify --expr phi(9)=6
+  calc   = 6  == expected 6
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+  absorb = · already in atlas — idempotent skip (default · @D g69)

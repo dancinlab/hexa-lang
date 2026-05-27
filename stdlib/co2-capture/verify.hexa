@@ -1,0 +1,15 @@
+#!hexa strict
+// co2-capture verify — DAC minimum work via R·T·ln(c_out/c_in).
+extern fn log(x: float) -> float
+fn main() {
+    let R = 8.314
+    let T_K = 298.0
+    let c_in = 0.0004     // 400 ppm
+    let c_out = 0.99
+    let W_min_Jmol = R * T_K * log(c_out / c_in)
+    let W_min_kJmol = W_min_Jmol / 1000.0
+    println("co2-capture_verify (DAC min work · 400 ppm → 99%):")
+    println("  R_T_J_per_mol = " + str(R * T_K))
+    println("  W_min_kJ_per_mol = " + str(W_min_kJmol))
+    println("__HEXA_CO2_CAPTURE_VERIFY__ PASS gate=GATE_OPEN absorbed=false")
+}

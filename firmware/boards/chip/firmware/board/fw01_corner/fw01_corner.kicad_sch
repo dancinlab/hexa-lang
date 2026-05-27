@@ -1,0 +1,172 @@
+(kicad_sch
+	(version 20231120)
+	(generator "eeschema")
+	(generator_version "8.0")
+	(uuid "f1c0a000-0001-4c0e-9ae0-f01c00111111")
+	(paper "A3")
+
+	(title_block
+		(title "fw01_corner — Process σ=12 Corner-Bias Test Board")
+		(date "2026-05-09")
+		(rev "0.1-PARTIAL")
+		(company "hexa-chip / Phase E iter 3")
+		(comment 1 "Partial root sheet — paper-tier capture; full ratsnest deferred.")
+		(comment 2 "Source: firmware/board/fw01_corner/schematic_paper.md")
+		(comment 3 "Stack-up: 4-layer FR-4 (sig/GND/PWR/sig); 1.6mm; SI@25MHz")
+		(comment 4 "Power chain: 5V buck → 1.8V LDO → 1.2V LDO (see power_chain.md)")
+	)
+
+	; ─────────────────────────────────────────────────────────────────
+	; lib_symbols section — minimal stubs for the 8 major components.
+	; (Full pin tables / footprint refs deferred to iter 4+.)
+	; ─────────────────────────────────────────────────────────────────
+
+	(lib_symbols
+		(symbol "MCU_ST_STM32G4:STM32G474VEHx"
+			(power)
+			(pin_names (offset 1.016))
+			(in_bom yes)
+			(on_board yes)
+			(property "Reference" "U1" (at 0 0 0))
+			(property "Value" "STM32G474VEH6" (at 0 -2.54 0))
+			(property "Description" "Host MCU — Cortex-M4F @ 170 MHz; USB-C; SPI1/2/3; FDCAN" (at 0 0 0))
+		)
+		(symbol "FPGA_Lattice:LFE5UM-85F-BG381"
+			(in_bom yes) (on_board yes)
+			(property "Reference" "U2" (at 0 0 0))
+			(property "Value" "LFE5UM-85F-8BG381C" (at 0 -2.54 0))
+			(property "Description" "Lattice ECP5 — DAC ramp + ADC capture + DUT BIST control" (at 0 0 0))
+		)
+		(symbol "DAC_AD:AD5676R"
+			(in_bom yes) (on_board yes)
+			(property "Reference" "U3" (at 0 0 0))
+			(property "Value" "AD5676R" (at 0 -2.54 0))
+			(property "Description" "16-ch 16b DAC — corner-bias drivers; 0-5V analog" (at 0 0 0))
+		)
+		(symbol "ADC_AD:ADS131M08"
+			(in_bom yes) (on_board yes)
+			(property "Reference" "U4" (at 0 0 0))
+			(property "Value" "ADS131M08IPBSR" (at 0 -2.54 0))
+			(property "Description" "8-ch 24b ΣΔ ADC — DUT readback; diff ±2.5V" (at 0 0 0))
+		)
+		(symbol "Regulator_Switching:LMR16030"
+			(in_bom yes) (on_board yes)
+			(property "Reference" "U5" (at 0 0 0))
+			(property "Value" "LMR16030PADDA" (at 0 -2.54 0))
+			(property "Description" "Buck regulator — Vin 5-60V → 5.0V/3A" (at 0 0 0))
+		)
+		(symbol "Regulator_Linear:LM317"
+			(in_bom yes) (on_board yes)
+			(property "Reference" "U6" (at 0 0 0))
+			(property "Value" "LM317" (at 0 -2.54 0))
+			(property "Description" "LDO — 5.0V → 1.8V (ECP5 VCCIO)" (at 0 0 0))
+		)
+		(symbol "Regulator_Linear:LP3878"
+			(in_bom yes) (on_board yes)
+			(property "Reference" "U7" (at 0 0 0))
+			(property "Value" "LP3878-ADJ" (at 0 -2.54 0))
+			(property "Description" "LDO — 1.8V → 1.2V (ECP5 VCCINT core)" (at 0 0 0))
+		)
+		(symbol "Connector:USB_C_Receptacle"
+			(in_bom yes) (on_board yes)
+			(property "Reference" "J1" (at 0 0 0))
+			(property "Value" "USB-C" (at 0 -2.54 0))
+			(property "Description" "USB-C host port (FS USB to STM32G474)" (at 0 0 0))
+		)
+	)
+
+	; ─────────────────────────────────────────────────────────────────
+	; component instances (placement only; no pin-level wires yet).
+	; Spatial layout: top-left → MCU; center → FPGA; right → DAC/ADC;
+	; bottom → power chain; left edge → USB-C.
+	; ─────────────────────────────────────────────────────────────────
+
+	(symbol (lib_id "Connector:USB_C_Receptacle") (at 30.48 50.80 0)
+		(unit 1) (in_bom yes) (on_board yes) (dnp no)
+		(uuid "10000001-0000-4000-8000-000000000001")
+		(property "Reference" "J1" (at 30.48 45.72 0))
+		(property "Value" "USB-C" (at 30.48 55.88 0))
+		(instances (project "fw01_corner" (path "/f1c0a000-0001-4c0e-9ae0-f01c00111111" (reference "J1") (unit 1))))
+	)
+
+	(symbol (lib_id "MCU_ST_STM32G4:STM32G474VEHx") (at 76.20 50.80 0)
+		(unit 1) (in_bom yes) (on_board yes) (dnp no)
+		(uuid "10000002-0000-4000-8000-000000000002")
+		(property "Reference" "U1" (at 76.20 35.56 0))
+		(property "Value" "STM32G474VEH6" (at 76.20 66.04 0))
+		(instances (project "fw01_corner" (path "/f1c0a000-0001-4c0e-9ae0-f01c00111111" (reference "U1") (unit 1))))
+	)
+
+	(symbol (lib_id "FPGA_Lattice:LFE5UM-85F-BG381") (at 152.40 50.80 0)
+		(unit 1) (in_bom yes) (on_board yes) (dnp no)
+		(uuid "10000003-0000-4000-8000-000000000003")
+		(property "Reference" "U2" (at 152.40 25.40 0))
+		(property "Value" "LFE5UM-85F-8BG381C" (at 152.40 76.20 0))
+		(instances (project "fw01_corner" (path "/f1c0a000-0001-4c0e-9ae0-f01c00111111" (reference "U2") (unit 1))))
+	)
+
+	(symbol (lib_id "DAC_AD:AD5676R") (at 215.90 35.56 0)
+		(unit 1) (in_bom yes) (on_board yes) (dnp no)
+		(uuid "10000004-0000-4000-8000-000000000004")
+		(property "Reference" "U3" (at 215.90 25.40 0))
+		(property "Value" "AD5676R" (at 215.90 45.72 0))
+		(instances (project "fw01_corner" (path "/f1c0a000-0001-4c0e-9ae0-f01c00111111" (reference "U3") (unit 1))))
+	)
+
+	(symbol (lib_id "ADC_AD:ADS131M08") (at 215.90 76.20 0)
+		(unit 1) (in_bom yes) (on_board yes) (dnp no)
+		(uuid "10000005-0000-4000-8000-000000000005")
+		(property "Reference" "U4" (at 215.90 66.04 0))
+		(property "Value" "ADS131M08IPBSR" (at 215.90 86.36 0))
+		(instances (project "fw01_corner" (path "/f1c0a000-0001-4c0e-9ae0-f01c00111111" (reference "U4") (unit 1))))
+	)
+
+	(symbol (lib_id "Regulator_Switching:LMR16030") (at 50.80 130.18 0)
+		(unit 1) (in_bom yes) (on_board yes) (dnp no)
+		(uuid "10000006-0000-4000-8000-000000000006")
+		(property "Reference" "U5" (at 50.80 120.02 0))
+		(property "Value" "LMR16030PADDA" (at 50.80 140.34 0))
+		(instances (project "fw01_corner" (path "/f1c0a000-0001-4c0e-9ae0-f01c00111111" (reference "U5") (unit 1))))
+	)
+
+	(symbol (lib_id "Regulator_Linear:LM317") (at 114.30 130.18 0)
+		(unit 1) (in_bom yes) (on_board yes) (dnp no)
+		(uuid "10000007-0000-4000-8000-000000000007")
+		(property "Reference" "U6" (at 114.30 120.02 0))
+		(property "Value" "LM317" (at 114.30 140.34 0))
+		(instances (project "fw01_corner" (path "/f1c0a000-0001-4c0e-9ae0-f01c00111111" (reference "U6") (unit 1))))
+	)
+
+	(symbol (lib_id "Regulator_Linear:LP3878") (at 177.80 130.18 0)
+		(unit 1) (in_bom yes) (on_board yes) (dnp no)
+		(uuid "10000008-0000-4000-8000-000000000008")
+		(property "Reference" "U7" (at 177.80 120.02 0))
+		(property "Value" "LP3878-ADJ" (at 177.80 140.34 0))
+		(instances (project "fw01_corner" (path "/f1c0a000-0001-4c0e-9ae0-f01c00111111" (reference "U7") (unit 1))))
+	)
+
+	; ─────────────────────────────────────────────────────────────────
+	; net labels — only the major rails / control buses (paper-tier).
+	; ─────────────────────────────────────────────────────────────────
+
+	(label "VBUS_5V"  (at  50.80 110.49 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "20000001-0000-4000-8000-000000000001"))
+	(label "VCC_5V0"  (at  76.20 110.49 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "20000002-0000-4000-8000-000000000002"))
+	(label "VCC_1V8"  (at 114.30 110.49 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "20000003-0000-4000-8000-000000000003"))
+	(label "VCC_1V2"  (at 177.80 110.49 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "20000004-0000-4000-8000-000000000004"))
+	(label "SPI1_*"   (at 110.00  50.80 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "20000005-0000-4000-8000-000000000005"))
+	(label "SPI2_*"   (at 188.00  50.80 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "20000006-0000-4000-8000-000000000006"))
+	(label "SPI3_*"   (at 188.00  35.56 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "20000007-0000-4000-8000-000000000007"))
+	(label "USB_DP"   (at  35.56  50.80 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "20000008-0000-4000-8000-000000000008"))
+	(label "USB_DM"   (at  35.56  53.34 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "20000009-0000-4000-8000-000000000009"))
+	(label "ADC_IN[7:0]"  (at 240.00  76.20 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "20000010-0000-4000-8000-000000000010"))
+	(label "DAC_OUT[15:0]" (at 240.00 35.56 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "20000011-0000-4000-8000-000000000011"))
+	(label "THERMAL_TRIP" (at 152.40 25.00 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "20000012-0000-4000-8000-000000000012"))
+
+	; ─────────────────────────────────────────────────────────────────
+	; sheet_instances — single root sheet.
+	; ─────────────────────────────────────────────────────────────────
+
+	(sheet_instances
+		(path "/" (page "1"))
+	)
+)

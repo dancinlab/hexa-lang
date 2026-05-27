@@ -1,0 +1,69 @@
+// RFC 068 P4 -- f16 vec-add launchable PTX (hand-emit for first fire).
+//
+// Canonical f16 element-wise vector add:
+//   c[i] = a[i] + b[i]   for i in [0, n)
+//
+// PTX 8.x: `ld.global` / `st.global` do not accept the `.f16` type
+// modifier directly; the canonical pattern is .b16 storage + mov.b16
+// bitcast to .f16 for arithmetic. The .f16 type is used by `add.f16`
+// (and the rest of the FP arithmetic family) on the register operands.
+//
+// This kernel matches what `nvcc` emits for `__half a + __half b;` on
+// sm_80. Hexa codegen P4 prereq (PR #186) emits `ld.global.f16` /
+// `st.global.f16` -- which is the RFC 068 P3 codegen-side correctness
+// statement at the MIR-level abstraction. At the PTX-text level, the
+// concrete bytes need to go through `.b16` storage; a Shape-A follow-on
+// will reconcile the codegen mnemonic to PTX-valid `.b16` ld/st +
+// mov.b16 bitcast.
+//
+// Address arithmetic: gid is u32 (`%tid.x` + block offset), widened to
+// u64, multiplied by 2 (sizeof(f16) = 2 bytes), added to each base.
+
+.version 7.8
+.target sm_80
+.address_size 64
+
+.visible .entry f16_vadd (
+    .param .u64 a,
+    .param .u64 b,
+    .param .u64 c,
+    .param .u64 n
+)
+{
+    .reg .u64 %rd<10>;
+    .reg .u32 %r<10>;
+    .reg .pred %p1;
+    .reg .b16 %h<5>;
+    .reg .f16 %fh<5>;
+
+    ld.param.u64 %rd0, [a];
+    ld.param.u64 %rd1, [b];
+    ld.param.u64 %rd2, [c];
+    ld.param.u64 %rd3, [n];
+
+    mov.u32 %r0, %ctaid.x;
+    mov.u32 %r1, %ntid.x;
+    mov.u32 %r2, %tid.x;
+    mad.lo.s32 %r3, %r0, %r1, %r2;
+
+    cvt.s32.s64 %r4, %rd3;
+    setp.ge.s32 %p1, %r3, %r4;
+    @%p1 bra $exit;
+
+    cvt.u64.u32 %rd4, %r3;
+    shl.b64 %rd5, %rd4, 1;
+    add.u64 %rd6, %rd0, %rd5;
+    add.u64 %rd7, %rd1, %rd5;
+    add.u64 %rd8, %rd2, %rd5;
+
+    ld.global.b16 %h0, [%rd6];
+    ld.global.b16 %h1, [%rd7];
+    mov.b16 %fh0, %h0;
+    mov.b16 %fh1, %h1;
+    add.f16 %fh2, %fh0, %fh1;
+    mov.b16 %h2, %fh2;
+    st.global.b16 [%rd8], %h2;
+
+$exit:
+    ret;
+}

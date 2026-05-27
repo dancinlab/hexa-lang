@@ -1,0 +1,56 @@
+// RFC 055 055-P0 - hexa-native NVPTX emit | target=nvptx64-nvidia-cuda-sm80
+.version 7.8
+.target sm_80
+.address_size 64
+
+.visible .entry vadd (
+    .param .u64 vadd_param_0,  // a: [f64]  (device-resident farr base)
+    .param .u64 vadd_param_1,  // b: [f64]  (device-resident farr base)
+    .param .u64 vadd_param_2,  // c: [f64]  (device-resident farr base)
+    .param .u64 vadd_param_3  // n: i64    (element count)
+)
+{
+    .reg .u32 %r0;
+    .reg .u32 %r1;
+    .reg .u32 %r2;
+    .reg .u32 %r3;
+    .reg .u32 %r4;
+    .reg .u64 %rd0;
+    .reg .u64 %rd1;
+    .reg .u64 %rd2;
+    .reg .u64 %rd3;
+    .reg .u64 %rd4;
+    .reg .u64 %rd5;
+    .reg .u64 %rd6;
+    .reg .u64 %rd7;
+    .reg .u64 %rd8;
+    .reg .pred %p0;
+    .reg .f64 %fd0;
+    .reg .f64 %fd1;
+    .reg .f64 %fd2;
+$L_0:
+    ld.param.u64 %rd0, [vadd_param_0];  // load a base ptr
+    ld.param.u64 %rd1, [vadd_param_1];  // load b base ptr
+    ld.param.u64 %rd2, [vadd_param_2];  // load c base ptr
+    ld.param.u64 %rd3, [vadd_param_3];  // load n (i64 length)
+    mov.u32 %r0, %ctaid.x;  // gpu_block_id_x()
+    mov.u32 %r1, %ntid.x;  // gpu_block_dim_x()
+    mov.u32 %r2, %tid.x;  // gpu_thread_id_x()
+    mad.lo.s32 %r3, %r0, %r1, %r2;  // gid = block_id * block_dim + thread_id
+    cvt.u32.u64 %r4, %rd3;  // n (i64 -> u32 truncate for cmp)
+    setp.lt.s32 %p0, %r3, %r4;  // p0 = (gid < n)
+    @!%p0 bra $L_END;  // skip OOB lane
+$L_BODY:
+    cvt.u64.u32 %rd4, %r3;  // widen gid -> u64
+    mul.lo.u64 %rd5, %rd4, 8;  // byte offset = gid * 8
+    add.u64 %rd6, %rd0, %rd5;  // &a[gid]
+    add.u64 %rd7, %rd1, %rd5;  // &b[gid]
+    add.u64 %rd8, %rd2, %rd5;  // &c[gid]
+    ld.global.f64 %fd0, [%rd6];  // av = a[gid]
+    ld.global.f64 %fd1, [%rd7];  // bv = b[gid]
+    add.f64 %fd2, %fd0, %fd1;  // sum = av + bv  (vec-add: exact FP64, no reduction)
+    st.global.f64 [%rd8], %fd2;  // c[gid] = sum
+$L_END:
+    ret;  // return from kernel
+}
+

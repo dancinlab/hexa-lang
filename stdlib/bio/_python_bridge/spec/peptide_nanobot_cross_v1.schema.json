@@ -1,0 +1,145 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "hexa-bio/_python_bridge/spec/peptide_nanobot_cross_v1.schema.json",
+  "title": "peptide_nanobot_cross_v1 — CROSS-AXIS W1a output rows",
+  "description": "Output schema for _python_bridge/module/peptide_nanobot_cross.py. CROSS-AXIS integration W1a: a peptide covalently attached to a DNA-origami / C0b nanostructure displays only the conformation it pre-organizes into, so the NANOBOT core-5 axis's display orientation is bounded by the PEPTIDE :> WEAVE sub-axis's Zimm-Bragg helix-coil cooperative pre-organization. For each device in a deterministic peptide-decorated-nanostructure panel, the PEPTIDE sub-axis's helix-coil partition (peptide_sim.py, imported verbatim — no fork; Zimm-Bragg 1959 / Lifson-Roig 1961) computes the fractional helicity theta_H, and a display-orientation-constraint score (= theta_H ∈ [0,1]) is gated against an illustrative display-orientation gate. CRITICAL RESEARCH-STAGE HONESTY: peptide-decorated DNA nanostructures are an ACTIVE RESEARCH FIELD (Pinheiro / Bertozzi-lab-style peptide-DNA conjugates; Schmidt-Mende-style peptide-decorated nanostructures) but are NOT an FDA-approved drug class. No FDA-approved peptide-decorated DNA nanobot therapeutic exists. The peptide panel and the theta_H→display-orientation-constraint mapping are illustrative modeling choices. In-silico simulator-consistency only (AGENTS.tape g8/f2) — NOT a structural / binding / display-orientation / nanodevice-function / therapeutic / regulatory claim. No theta_H / constraint / count is derived from the n=6 lattice (g2/f_lattice_fit). Modality precedent is researcher-class (Rothemund 2006 DNA origami + peptide-DNA conjugate research), NEVER lattice-derived (g3/f1). A cross-axis bridge is NOT a new axis: the hexa-bio core-5 set (QUANTUM, WEAVE, NANOBOT, RIBOZYME, VIROCAPSID) is UNCHANGED.",
+  "type": "object",
+  "required": [
+    "schema",
+    "device_id",
+    "attached_peptide_sequence",
+    "n_residues",
+    "anchor_position",
+    "nanobot_axis_source",
+    "peptide_model",
+    "sigma_nucleation",
+    "fractional_helicity_theta_h",
+    "independent_residue_helicity_sigma_to_1",
+    "cooperativity_suppresses_helix",
+    "display_orientation_constraint",
+    "display_orientation_gate",
+    "display_orientation_margin",
+    "oriented_display",
+    "illustrative_only",
+    "creates_a_new_axis",
+    "research_stage_modality"
+  ],
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "peptide_nanobot_cross_v1"
+    },
+    "device_id": {
+      "type": "string",
+      "description": "Identifier of the peptide-decorated DNA nanostructure from the deterministic device panel."
+    },
+    "device_note": {
+      "type": "string",
+      "description": "Illustrative design note describing the nanostructure-class + attached-peptide-class."
+    },
+    "attached_peptide_sequence": {
+      "type": "string",
+      "pattern": "^[ACDEFGHIKLMNPQRSTVWY]+$",
+      "description": "Single-letter amino-acid sequence of the peptide covalently attached to the DNA nanostructure."
+    },
+    "n_residues": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Number of residues in the attached peptide."
+    },
+    "anchor_position": {
+      "type": "string",
+      "description": "Illustrative anchor position on the DNA nanostructure (e.g. staple 5'-amine, staple 3'-azide)."
+    },
+    "nanobot_axis_source": {
+      "type": "string",
+      "description": "Path to the NANOBOT core axis source whose DNA-nanotech modality basis is read as structural text (actuation logic untouched — f3)."
+    },
+    "nanobot_axis_role": {
+      "type": "string",
+      "description": "Role of the NANOBOT core-5 axis (DNA-nanotechnology actuation)."
+    },
+    "modality_basis_cited_by_axis": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1,
+      "description": "DNA-nanotech modality citations the NANOBOT axis declares for itself (Rothemund 2006 DNA origami / Seeman 1982 immobile junctions) — own precedent, never lattice-derived (g3/f1)."
+    },
+    "peptide_model": {
+      "type": "string",
+      "description": "The PEPTIDE :> WEAVE sub-axis model string — must reference Zimm-Bragg helix-coil theory."
+    },
+    "sigma_nucleation": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 1,
+      "description": "Zimm-Bragg helix-nucleation parameter sigma (<< 1 makes the helix-coil transition cooperative)."
+    },
+    "partition_Z": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "Zimm-Bragg partition function Z = Σ σ^(#nucleations) * Π s_i — must be strictly positive."
+    },
+    "fractional_helicity_theta_h": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Boltzmann-weighted Zimm-Bragg fractional helicity theta_H ∈ [0,1] of the attached peptide."
+    },
+    "independent_residue_helicity_sigma_to_1": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "sigma → 1 (no nucleation cost) independent-residue baseline helicity, used as a closed-form cross-check (theta_H ≤ this baseline always)."
+    },
+    "cooperativity_suppresses_helix": {
+      "type": "boolean",
+      "description": "True iff theta_H ≤ sigma→1 baseline (a nucleation penalty can only suppress helix)."
+    },
+    "display_orientation_constraint": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Display-orientation-constraint score for the attached peptide ∈ [0,1]: 0 = unoriented flexible tether, 1 = rigid pre-organized rod. Defined as theta_H by construction."
+    },
+    "display_orientation_constraint_in_unit_interval": {
+      "type": "boolean",
+      "const": true,
+      "description": "Must be true — display_orientation_constraint is a fraction by construction."
+    },
+    "display_orientation_gate": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Display-orientation gate: oriented_display iff display_orientation_constraint ≥ this gate. Illustrative fixed value, NOT lattice-derived."
+    },
+    "display_orientation_margin": {
+      "type": "number",
+      "description": "display_orientation_constraint minus display_orientation_gate. Non-negative iff oriented_display."
+    },
+    "oriented_display": {
+      "type": "boolean",
+      "description": "True iff display_orientation_constraint ≥ display_orientation_gate — the PEPTIDE-axis Zimm-Bragg bound on the NANOBOT-axis display orientation."
+    },
+    "in_silico_caveat": {
+      "type": "string",
+      "description": "Restatement that every row is in-silico simulator-consistency only (g8/f2)."
+    },
+    "illustrative_only": {
+      "type": "boolean",
+      "const": true,
+      "description": "Always true — the peptide panel, sigma nucleation parameter, and theta_H→display-orientation-constraint mapping are illustrative; the row is not a prediction of real peptide-decorated-nanostructure behaviour."
+    },
+    "creates_a_new_axis": {
+      "type": "boolean",
+      "const": false,
+      "description": "Always false — this cross rests on existing :> WEAVE PEPTIDE sub-axis + core NANOBOT axis; core-5 set (QUANTUM, WEAVE, NANOBOT, RIBOZYME, VIROCAPSID) is UNCHANGED."
+    },
+    "research_stage_modality": {
+      "type": "boolean",
+      "const": true,
+      "description": "Always true — peptide-decorated DNA nanostructures are an active research field but NOT an FDA-approved drug class. There is no FDA-approved peptide-decorated DNA nanobot therapeutic. The modality precedent is researcher-class (Pinheiro / Bertozzi-lab-style peptide-DNA conjugates; Schmidt-Mende-style peptide-decorated nanostructures), never a drug-class claim."
+    }
+  },
+  "additionalProperties": true
+}

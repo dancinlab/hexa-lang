@@ -1,0 +1,106 @@
+#!hexa strict
+// stdlib/hal/backend/esp32s3/intr.hexa — ESP32-S3 IRQ backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    ESP32-S3 Xtensa LX7 dual-core @ 240 MHz (PRO + APP CPUs).
+// Chip ref:  ESP32-S3 TRM §6 Interrupt Matrix; Xtensa LX7 ISA.
+// Surface:   esp32s3_intr_{configure,attach,enable,disable,clear}(...)
+// Dispatch:  intr.hexa selects this via cfg-flag.
+//
+// Architecture: same interrupt matrix concept as ESP32 (LX6) but
+// with LX7 cores and updated peripheral IRQ count (~99 sources on
+// S3 vs ~70 on original ESP32). Same Xtensa-level priority scheme
+// (1..7) and same per-core mux register pattern.
+//
+// MMIO layout:
+//
+//   INTERRUPT base = 0x600C2000   (note: ESP32-S3 moved DPORT-style
+//                                   intr regs to a dedicated INTERRUPT
+//                                   peripheral region, like ESP32-C3,
+//                                   instead of the original ESP32's
+//                                   DPORT @ 0x3FF00000)
+//
+//   INTERRUPT_CORE0_<peripheral>_MAP_REG    PRO_CPU peripheral routing
+//   INTERRUPT_CORE1_<peripheral>_MAP_REG    APP_CPU peripheral routing
+//   INTERRUPT_CORE<n>_INTR_STATUS_REG_<m>   per-CPU bitmap of asserted IRQs
+//
+// Xtensa LX7 internal: 32 CPU interrupt lines × 7 priority levels
+// (same envelope as LX6). Vector entry points at IRAM @ Xtensa-level
+// vector offsets:
+//   level 1: 0x40000180   level 2: 0x40000200   level 3: 0x40000280
+//   level 4: 0x40000300   level 5: 0x40000380 (NMI)
+//
+// Priority mapping (sim 4-level → Xtensa 7-level):
+//   PRIO_HIGH (0) → Xtensa level 4
+//   PRIO_REAL_T (1) → Xtensa level 3
+//   PRIO_NORMAL (2) → Xtensa level 1
+//   PRIO_LOW (3) → Xtensa level 1 + software tail-chain
+//
+// Versus original ESP32: same architecture, more peripherals (99 vs 70),
+// new INTERRUPT register region (0x600C2000 vs DPORT 0x3FF00000),
+// same dual-core PRO/APP split.
+
+let MODULE_NAME = "esp32s3_intr"
+let SIGMA_SLOT  = 9
+let PHI_KIND    = "digital"
+
+let DR_REG_INTERRUPT_BASE = 0x600C2000
+
+let XTENSA_VECTOR_LEVEL1 = 0x40000180
+let XTENSA_VECTOR_LEVEL2 = 0x40000200
+let XTENSA_VECTOR_LEVEL3 = 0x40000280
+let XTENSA_VECTOR_LEVEL4 = 0x40000300
+let XTENSA_VECTOR_NMI    = 0x40000380
+
+let MAX_PERIPHERAL_IRQ = 99   // S3 peripheral source count
+let MAX_XTENSA_IRQ     = 32
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn esp32s3_intr_configure(vector: int, priority: int) -> int {
+    if vector < 0 || vector > 23 { return -1 }
+    if priority < 0 || priority > 3 { return -2 }
+    // STUB: write INTERRUPT_CORE0_<peri>_MAP_REG = chosen Xtensa CPU IRQ
+    return vector
+}
+
+fn esp32s3_intr_attach(handle: int, name: str) -> bool {
+    if handle < 0 { return false }
+    // STUB: install ISR at Xtensa vector entry; route via dispatcher
+    return true
+}
+
+fn esp32s3_intr_enable(handle: int) -> bool {
+    if handle < 0 || handle > 23 { return false }
+    // STUB: WSR INTENABLE bit; CPU-internal mask
+    return true
+}
+
+fn esp32s3_intr_disable(handle: int) -> bool {
+    if handle < 0 || handle > 23 { return false }
+    // STUB: clear INTENABLE bit
+    return true
+}
+
+fn esp32s3_intr_clear(handle: int) -> bool {
+    if handle < 0 || handle > 23 { return false }
+    // STUB: WSR INTCLEAR for edge-triggered; clear peripheral status reg
+    //       for level-triggered sources.
+    return true
+}
+
+fn esp32s3_intr_report(handle: int) -> str {
+    return "[esp32s3_intr sim] handle=" + str(handle) + " (skeleton stub — TODO MMIO)"
+}
+
+fn esp32s3_intr_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32s3_intr sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  INTERRUPT base=" + str(DR_REG_INTERRUPT_BASE) + " (Xtensa LX7 matrix)")
+    println("  ~99 peripheral IRQs (vs ESP32's 70); 32 CPU IRQ × 7 prio levels")
+    println("  dual-core PRO + APP, separate matrices")
+}

@@ -1,0 +1,463 @@
+#!hexa strict
+// verify/all.hexa — unified orchestrator for the verify/ surface.
+//
+// Runs the verifiers + the selftest sweep in sequence and aggregates
+// PASS/FAIL into a single exit code:
+//
+//   verify/n6_arithmetic.hexa     →  __HEXA_ANTIMATTER_VERIFY_N6__
+//   verify/cross_doc_audit.hexa   →  __HEXA_ANTIMATTER_VERIFY_DOCS__
+//   verify/release_ladder.hexa    →  __HEXA_ANTIMATTER_VERIFY_LADDER__
+//   verify/calc_factory.hexa      →  __HEXA_ANTIMATTER_CALC_FACTORY__
+//   verify/calc_tabletop.hexa     →  __HEXA_ANTIMATTER_CALC_TABLETOP__
+//   verify/calc_pet_cyclotron.hexa → __HEXA_ANTIMATTER_CALC_PET_CYCLOTRON__
+//   verify/numerics_factory.hexa  →  __HEXA_ANTIMATTER_NUMERICS_FACTORY__
+//   verify/numerics_tabletop.hexa →  __HEXA_ANTIMATTER_NUMERICS_TABLETOP__
+//   verify/numerics_pet_cyclotron.hexa → __HEXA_ANTIMATTER_NUMERICS_PET_CYCLOTRON__
+//   verify/numerics_factory_parity.hexa → __HEXA_ANTIMATTER_NUMERICS_FACTORY_PARITY__
+//   verify/numerics_tabletop_parity.hexa → __HEXA_ANTIMATTER_NUMERICS_TABLETOP_PARITY__
+//   verify/numerics_pet_cyclotron_parity.hexa → __HEXA_ANTIMATTER_NUMERICS_PET_CYCLOTRON_PARITY__
+//   verify/numerics_factory_solver.hexa → __HEXA_ANTIMATTER_NUMERICS_FACTORY_SOLVER__
+//   verify/numerics_tabletop_solver.hexa → __HEXA_ANTIMATTER_NUMERICS_TABLETOP_SOLVER__
+//   verify/numerics_pet_cyclotron_solver.hexa → __HEXA_ANTIMATTER_NUMERICS_PET_CYCLOTRON_SOLVER__
+//   verify/numerics_cross_pillar.hexa → __HEXA_ANTIMATTER_NUMERICS_CROSS_PILLAR__
+//   verify/numerics_lattice_arithmetic.hexa → __HEXA_ANTIMATTER_NUMERICS_LATTICE_ARITHMETIC__
+//   verify/falsifier_check.hexa   →  __HEXA_ANTIMATTER_FALSIFIER__
+//   verify/lint_numerics.hexa     →  __HEXA_ANTIMATTER_LINT_NUMERICS__
+//   verify/calc_break_even.hexa   →  __HEXA_ANTIMATTER_CALC_BREAK_EVEN__
+//   verify/numerics_break_even.hexa → __HEXA_ANTIMATTER_NUMERICS_BREAK_EVEN__
+//   verify/numerics_break_even_parity.hexa → __HEXA_ANTIMATTER_NUMERICS_BREAK_EVEN_PARITY__
+//   verify/numerics_break_even_solver.hexa → __HEXA_ANTIMATTER_NUMERICS_BREAK_EVEN_SOLVER__
+//   verify/empirical_pet_inspire.hexa → __HEXA_ANTIMATTER_EMPIRICAL_PET_INSPIRE__
+//   verify/empirical_tabletop_inspire.hexa → __HEXA_ANTIMATTER_EMPIRICAL_TABLETOP_INSPIRE__
+//   verify/empirical_dirac_inspire.hexa → __HEXA_ANTIMATTER_EMPIRICAL_DIRAC_INSPIRE__
+//   verify/empirical_break_even_inspire.hexa → __HEXA_ANTIMATTER_EMPIRICAL_BREAK_EVEN_INSPIRE__
+//   verify/numerics_pet_realistic.hexa → __HEXA_ANTIMATTER_NUMERICS_PET_REALISTIC__
+//   verify/numerics_tabletop_relativistic.hexa → __HEXA_ANTIMATTER_NUMERICS_TABLETOP_RELATIVISTIC__
+//   verify/numerics_dirac_precision.hexa → __HEXA_ANTIMATTER_NUMERICS_DIRAC_PRECISION__
+//   verify/numerics_break_even_thrust.hexa → __HEXA_ANTIMATTER_NUMERICS_BREAK_EVEN_THRUST__
+//   firmware/sim/cyclotron_trigger.hexa → __HEXA_ANTIMATTER_FIRMWARE_CYCLOTRON_TRIGGER__
+//   firmware/sim/penning_rf.hexa → __HEXA_ANTIMATTER_FIRMWARE_PENNING_RF__
+//   firmware/sim/atomic_clock_counter.hexa → __HEXA_ANTIMATTER_FIRMWARE_ATOMIC_CLOCK__
+//   firmware/sim/thrust_acquisition.hexa → __HEXA_ANTIMATTER_FIRMWARE_THRUST_ACQ__
+//   verify/firmware_phase_d_lint.hexa → __HEXA_ANTIMATTER_FIRMWARE_PHASE_D__
+//   verify/saturation_check.hexa  →  __HEXA_ANTIMATTER_RSC_SATURATED__ STOP
+//   selftest/selftest.hexa        →  __HEXA_ANTIMATTER_SELFTEST__
+//
+// Patterned on hexa-sscb/verify/sscb_verify.py — single-command sweep.
+//
+// Run:
+//     hexa run verify/all.hexa            # exit 0 = every verifier PASS
+//     hexa run verify/all.hexa --quiet    # one-line summary only
+
+fn root() -> str {
+    let r = env("HEXA_ANTIMATTER_ROOT")
+    if r.len() > 0 { return r }
+    return exec("pwd").trim()
+}
+
+fn quiet_mode(a: [str]) -> bool {
+    let mut i = 0
+    while i < len(a) {
+        if a[i] == "--quiet" || a[i] == "-q" { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// Resolve the hexa interpreter binary.  On Mac the dispatch shim
+// (`hexa run`) refuses bare-host exec and silently produces no output;
+// fall back to the real interpreter directly when present.
+fn _hexa_bin() -> str {
+    let direct = env("HOME") + "/.hx/packages/hexa/build/hexa_interp.real"
+    let probe = exec("test -x \"" + direct + "\" && echo OK").trim()
+    if probe == "OK" { return direct }
+    // Last resort: shim with both env overrides.
+    return "HEXA_SHIM_NO_DARWIN_LANDING=1 RESOURCE_LOCAL_HEXA=1 hexa run"
+}
+
+let HEXA_BIN = _hexa_bin()
+
+fn run_step(name: str, path: str, sentinel: str, quiet: bool) -> bool {
+    if !quiet {
+        println("")
+        println("--- " + name + " ---")
+    }
+    let out = exec(HEXA_BIN + " " + path + " 2>&1")
+    if !quiet {
+        println(out.trim())
+    }
+    return out.contains(sentinel)
+}
+
+fn main() {
+    let r = root()
+    let q = quiet_mode(args())
+    println("========================================================================")
+    println("  hexa-antimatter — verify/all (38-step orchestrator)")
+    println("  root: " + r)
+    println("========================================================================")
+
+    let mut pass_count = 0
+    let mut tot = 0
+    let mut summary: [str] = []
+
+    tot = tot + 1
+    if run_step("n6_arithmetic", r + "/verify/n6_arithmetic.hexa",
+                "__HEXA_ANTIMATTER_VERIFY_N6__ PASS", q) {
+        pass_count = pass_count + 1
+        summary = summary + ["  [PASS] verify/n6_arithmetic"]
+    } else {
+        summary = summary + ["  [FAIL] verify/n6_arithmetic"]
+    }
+
+    tot = tot + 1
+    if run_step("cross_doc_audit", r + "/verify/cross_doc_audit.hexa",
+                "__HEXA_ANTIMATTER_VERIFY_DOCS__ PASS", q) {
+        pass_count = pass_count + 1
+        summary = summary + ["  [PASS] verify/cross_doc_audit"]
+    } else {
+        summary = summary + ["  [FAIL] verify/cross_doc_audit"]
+    }
+
+    tot = tot + 1
+    if run_step("release_ladder", r + "/verify/release_ladder.hexa",
+                "__HEXA_ANTIMATTER_VERIFY_LADDER__ PASS", q) {
+        pass_count = pass_count + 1
+        summary = summary + ["  [PASS] verify/release_ladder"]
+    } else {
+        summary = summary + ["  [FAIL] verify/release_ladder"]
+    }
+
+    tot = tot + 1
+    if run_step("calc_factory", r + "/verify/calc_factory.hexa",
+                "__HEXA_ANTIMATTER_CALC_FACTORY__ PASS", q) {
+        pass_count = pass_count + 1
+        summary = summary + ["  [PASS] verify/calc_factory  (T1 algebraic, F-AM-3)"]
+    } else {
+        summary = summary + ["  [FAIL] verify/calc_factory"]
+    }
+
+    tot = tot + 1
+    if run_step("calc_tabletop", r + "/verify/calc_tabletop.hexa",
+                "__HEXA_ANTIMATTER_CALC_TABLETOP__ PASS", q) {
+        pass_count = pass_count + 1
+        summary = summary + ["  [PASS] verify/calc_tabletop  (T1 algebraic, F-AM-2)"]
+    } else {
+        summary = summary + ["  [FAIL] verify/calc_tabletop"]
+    }
+
+    tot = tot + 1
+    if run_step("calc_pet_cyclotron", r + "/verify/calc_pet_cyclotron.hexa",
+                "__HEXA_ANTIMATTER_CALC_PET_CYCLOTRON__ PASS", q) {
+        pass_count = pass_count + 1
+        summary = summary + ["  [PASS] verify/calc_pet_cyclotron  (T1 algebraic, F-AM-1)"]
+    } else {
+        summary = summary + ["  [FAIL] verify/calc_pet_cyclotron"]
+    }
+
+    tot = tot + 1
+    if run_step("numerics_factory", r + "/verify/numerics_factory.hexa",
+                "__HEXA_ANTIMATTER_NUMERICS_FACTORY__ PASS", q) {
+        pass_count = pass_count + 1
+        summary = summary + ["  [PASS] verify/numerics_factory  (T2 numerical, F-AM-3)"]
+    } else {
+        summary = summary + ["  [FAIL] verify/numerics_factory"]
+    }
+
+    tot = tot + 1
+    if run_step("numerics_tabletop", r + "/verify/numerics_tabletop.hexa",
+                "__HEXA_ANTIMATTER_NUMERICS_TABLETOP__ PASS", q) {
+        pass_count = pass_count + 1
+        summary = summary + ["  [PASS] verify/numerics_tabletop  (T2 numerical, F-AM-2)"]
+    } else {
+        summary = summary + ["  [FAIL] verify/numerics_tabletop"]
+    }
+
+    tot = tot + 1
+    if run_step("numerics_pet_cyclotron", r + "/verify/numerics_pet_cyclotron.hexa",
+                "__HEXA_ANTIMATTER_NUMERICS_PET_CYCLOTRON__ PASS", q) {
+        pass_count = pass_count + 1
+        summary = summary + ["  [PASS] verify/numerics_pet_cyclotron  (T2 numerical, F-AM-1)"]
+    } else {
+        summary = summary + ["  [FAIL] verify/numerics_pet_cyclotron"]
+    }
+
+    tot = tot + 1
+    if run_step("numerics_factory_parity", r + "/verify/numerics_factory_parity.hexa",
+                "__HEXA_ANTIMATTER_NUMERICS_FACTORY_PARITY__ PASS", q) {
+        pass_count = pass_count + 1
+        summary = summary + ["  [PASS] verify/numerics_factory_parity  (T2×2, F-AM-3 ref parity)"]
+    } else {
+        summary = summary + ["  [FAIL] verify/numerics_factory_parity"]
+    }
+
+    tot = tot + 1
+    if run_step("numerics_tabletop_parity", r + "/verify/numerics_tabletop_parity.hexa",
+                "__HEXA_ANTIMATTER_NUMERICS_TABLETOP_PARITY__ PASS", q) {
+        pass_count = pass_count + 1
+        summary = summary + ["  [PASS] verify/numerics_tabletop_parity  (T2×2, F-AM-2 ref parity)"]
+    } else {
+        summary = summary + ["  [FAIL] verify/numerics_tabletop_parity"]
+    }
+
+    tot = tot + 1
+    if run_step("numerics_pet_cyclotron_parity", r + "/verify/numerics_pet_cyclotron_parity.hexa",
+                "__HEXA_ANTIMATTER_NUMERICS_PET_CYCLOTRON_PARITY__ PASS", q) {
+        pass_count = pass_count + 1
+        summary = summary + ["  [PASS] verify/numerics_pet_cyclotron_parity  (T2×2, F-AM-1 ref parity)"]
+    } else {
+        summary = summary + ["  [FAIL] verify/numerics_pet_cyclotron_parity"]
+    }
+
+    tot = tot + 1
+    if run_step("numerics_factory_solver", r + "/verify/numerics_factory_solver.hexa",
+                "__HEXA_ANTIMATTER_NUMERICS_FACTORY_SOLVER__ PASS", q) {
+        pass_count = pass_count + 1
+        summary = summary + ["  [PASS] verify/numerics_factory_solver  (T2×3, F-AM-3 Verlet)"]
+    } else {
+        summary = summary + ["  [FAIL] verify/numerics_factory_solver"]
+    }
+
+    tot = tot + 1
+    if run_step("numerics_tabletop_solver", r + "/verify/numerics_tabletop_solver.hexa",
+                "__HEXA_ANTIMATTER_NUMERICS_TABLETOP_SOLVER__ PASS", q) {
+        pass_count = pass_count + 1
+        summary = summary + ["  [PASS] verify/numerics_tabletop_solver  (T2×3, F-AM-2 2-DOF)"]
+    } else {
+        summary = summary + ["  [FAIL] verify/numerics_tabletop_solver"]
+    }
+
+    tot = tot + 1
+    if run_step("numerics_pet_cyclotron_solver", r + "/verify/numerics_pet_cyclotron_solver.hexa",
+                "__HEXA_ANTIMATTER_NUMERICS_PET_CYCLOTRON_SOLVER__ PASS", q) {
+        pass_count = pass_count + 1
+        summary = summary + ["  [PASS] verify/numerics_pet_cyclotron_solver  (T2×3, F-AM-1 ¹⁸F decay)"]
+    } else {
+        summary = summary + ["  [FAIL] verify/numerics_pet_cyclotron_solver"]
+    }
+
+    tot = tot + 1
+    if run_step("numerics_cross_pillar", r + "/verify/numerics_cross_pillar.hexa",
+                "__HEXA_ANTIMATTER_NUMERICS_CROSS_PILLAR__ PASS", q) {
+        pass_count = pass_count + 1
+        summary = summary + ["  [PASS] verify/numerics_cross_pillar  (T2 cross-cutter, F-AM-1/2/3/4)"]
+    } else {
+        summary = summary + ["  [FAIL] verify/numerics_cross_pillar"]
+    }
+
+    tot = tot + 1
+    if run_step("numerics_lattice_arithmetic", r + "/verify/numerics_lattice_arithmetic.hexa",
+                "__HEXA_ANTIMATTER_NUMERICS_LATTICE_ARITHMETIC__ PASS", q) {
+        pass_count = pass_count + 1
+        summary = summary + ["  [PASS] verify/numerics_lattice_arithmetic  (math_pure stability floor)"]
+    } else {
+        summary = summary + ["  [FAIL] verify/numerics_lattice_arithmetic"]
+    }
+
+    tot = tot + 1
+    if run_step("falsifier_check", r + "/verify/falsifier_check.hexa",
+                "__HEXA_ANTIMATTER_FALSIFIER__ PASS", q) {
+        pass_count = pass_count + 1
+        summary = summary + ["  [PASS] verify/falsifier_check  (4/4 F-AM closure tracker)"]
+    } else {
+        summary = summary + ["  [FAIL] verify/falsifier_check"]
+    }
+
+    tot = tot + 1
+    if run_step("lint_numerics", r + "/verify/lint_numerics.hexa",
+                "__HEXA_ANTIMATTER_LINT_NUMERICS__ PASS", q) {
+        pass_count = pass_count + 1
+        summary = summary + ["  [PASS] verify/lint_numerics  (5-invariant grep-lint)"]
+    } else {
+        summary = summary + ["  [FAIL] verify/lint_numerics"]
+    }
+
+    tot = tot + 1
+    if run_step("calc_break_even", r + "/verify/calc_break_even.hexa",
+                "__HEXA_ANTIMATTER_CALC_BREAK_EVEN__ PASS", q) {
+        pass_count = pass_count + 1
+        summary = summary + ["  [PASS] verify/calc_break_even  (T1 algebraic, F-AM-4)"]
+    } else {
+        summary = summary + ["  [FAIL] verify/calc_break_even"]
+    }
+
+    tot = tot + 1
+    if run_step("numerics_break_even", r + "/verify/numerics_break_even.hexa",
+                "__HEXA_ANTIMATTER_NUMERICS_BREAK_EVEN__ PASS", q) {
+        pass_count = pass_count + 1
+        summary = summary + ["  [PASS] verify/numerics_break_even  (T2 numerical, F-AM-4)"]
+    } else {
+        summary = summary + ["  [FAIL] verify/numerics_break_even"]
+    }
+
+    tot = tot + 1
+    if run_step("numerics_break_even_parity", r + "/verify/numerics_break_even_parity.hexa",
+                "__HEXA_ANTIMATTER_NUMERICS_BREAK_EVEN_PARITY__ PASS", q) {
+        pass_count = pass_count + 1
+        summary = summary + ["  [PASS] verify/numerics_break_even_parity  (T2×2, F-AM-4 4-program parity)"]
+    } else {
+        summary = summary + ["  [FAIL] verify/numerics_break_even_parity"]
+    }
+
+    tot = tot + 1
+    if run_step("numerics_break_even_solver", r + "/verify/numerics_break_even_solver.hexa",
+                "__HEXA_ANTIMATTER_NUMERICS_BREAK_EVEN_SOLVER__ PASS", q) {
+        pass_count = pass_count + 1
+        summary = summary + ["  [PASS] verify/numerics_break_even_solver  (T2×3, F-AM-4 Tsiolkovsky)"]
+    } else {
+        summary = summary + ["  [FAIL] verify/numerics_break_even_solver"]
+    }
+
+    tot = tot + 1
+    if run_step("empirical_pet_inspire", r + "/verify/empirical_pet_inspire.hexa",
+                "__HEXA_ANTIMATTER_EMPIRICAL_PET_INSPIRE__ PASS", q) {
+        pass_count = pass_count + 1
+        summary = summary + ["  [PASS] verify/empirical_pet_inspire  (T3 paper-feed, F-AM-1)"]
+    } else {
+        summary = summary + ["  [FAIL] verify/empirical_pet_inspire"]
+    }
+
+    tot = tot + 1
+    if run_step("empirical_tabletop_inspire", r + "/verify/empirical_tabletop_inspire.hexa",
+                "__HEXA_ANTIMATTER_EMPIRICAL_TABLETOP_INSPIRE__ PASS", q) {
+        pass_count = pass_count + 1
+        summary = summary + ["  [PASS] verify/empirical_tabletop_inspire  (T3 paper-feed, F-AM-2)"]
+    } else {
+        summary = summary + ["  [FAIL] verify/empirical_tabletop_inspire"]
+    }
+
+    tot = tot + 1
+    if run_step("empirical_dirac_inspire", r + "/verify/empirical_dirac_inspire.hexa",
+                "__HEXA_ANTIMATTER_EMPIRICAL_DIRAC_INSPIRE__ PASS", q) {
+        pass_count = pass_count + 1
+        summary = summary + ["  [PASS] verify/empirical_dirac_inspire  (T3 paper-feed, F-AM-3)"]
+    } else {
+        summary = summary + ["  [FAIL] verify/empirical_dirac_inspire"]
+    }
+
+    tot = tot + 1
+    if run_step("empirical_break_even_inspire", r + "/verify/empirical_break_even_inspire.hexa",
+                "__HEXA_ANTIMATTER_EMPIRICAL_BREAK_EVEN_INSPIRE__ PASS", q) {
+        pass_count = pass_count + 1
+        summary = summary + ["  [PASS] verify/empirical_break_even_inspire  (T3 paper-feed, F-AM-4)"]
+    } else {
+        summary = summary + ["  [FAIL] verify/empirical_break_even_inspire"]
+    }
+
+    tot = tot + 1
+    if run_step("numerics_pet_realistic", r + "/verify/numerics_pet_realistic.hexa",
+                "__HEXA_ANTIMATTER_NUMERICS_PET_REALISTIC__ PASS", q) {
+        pass_count = pass_count + 1
+        summary = summary + ["  [PASS] verify/numerics_pet_realistic  (T2×4 Stage-1, F-AM-1)"]
+    } else {
+        summary = summary + ["  [FAIL] verify/numerics_pet_realistic"]
+    }
+
+    tot = tot + 1
+    if run_step("numerics_tabletop_relativistic", r + "/verify/numerics_tabletop_relativistic.hexa",
+                "__HEXA_ANTIMATTER_NUMERICS_TABLETOP_RELATIVISTIC__ PASS", q) {
+        pass_count = pass_count + 1
+        summary = summary + ["  [PASS] verify/numerics_tabletop_relativistic  (T2×4 Stage-1, F-AM-2)"]
+    } else {
+        summary = summary + ["  [FAIL] verify/numerics_tabletop_relativistic"]
+    }
+
+    tot = tot + 1
+    if run_step("numerics_dirac_precision", r + "/verify/numerics_dirac_precision.hexa",
+                "__HEXA_ANTIMATTER_NUMERICS_DIRAC_PRECISION__ PASS", q) {
+        pass_count = pass_count + 1
+        summary = summary + ["  [PASS] verify/numerics_dirac_precision  (T2×4 Stage-1, F-AM-3)"]
+    } else {
+        summary = summary + ["  [FAIL] verify/numerics_dirac_precision"]
+    }
+
+    tot = tot + 1
+    if run_step("numerics_break_even_thrust", r + "/verify/numerics_break_even_thrust.hexa",
+                "__HEXA_ANTIMATTER_NUMERICS_BREAK_EVEN_THRUST__ PASS", q) {
+        pass_count = pass_count + 1
+        summary = summary + ["  [PASS] verify/numerics_break_even_thrust  (T2×4 Stage-1, F-AM-4)"]
+    } else {
+        summary = summary + ["  [FAIL] verify/numerics_break_even_thrust"]
+    }
+
+    tot = tot + 1
+    if run_step("firmware_cyclotron_trigger", r + "/firmware/sim/cyclotron_trigger.hexa",
+                "__HEXA_ANTIMATTER_FIRMWARE_CYCLOTRON_TRIGGER__ PASS", q) {
+        pass_count = pass_count + 1
+        summary = summary + ["  [PASS] firmware/sim/cyclotron_trigger  (Phase C sim, F-AM-1)"]
+    } else {
+        summary = summary + ["  [FAIL] firmware/sim/cyclotron_trigger"]
+    }
+
+    tot = tot + 1
+    if run_step("firmware_penning_rf", r + "/firmware/sim/penning_rf.hexa",
+                "__HEXA_ANTIMATTER_FIRMWARE_PENNING_RF__ PASS", q) {
+        pass_count = pass_count + 1
+        summary = summary + ["  [PASS] firmware/sim/penning_rf  (Phase C sim, F-AM-2)"]
+    } else {
+        summary = summary + ["  [FAIL] firmware/sim/penning_rf"]
+    }
+
+    tot = tot + 1
+    if run_step("firmware_atomic_clock_counter", r + "/firmware/sim/atomic_clock_counter.hexa",
+                "__HEXA_ANTIMATTER_FIRMWARE_ATOMIC_CLOCK__ PASS", q) {
+        pass_count = pass_count + 1
+        summary = summary + ["  [PASS] firmware/sim/atomic_clock_counter  (Phase C sim, F-AM-3)"]
+    } else {
+        summary = summary + ["  [FAIL] firmware/sim/atomic_clock_counter"]
+    }
+
+    tot = tot + 1
+    if run_step("firmware_thrust_acquisition", r + "/firmware/sim/thrust_acquisition.hexa",
+                "__HEXA_ANTIMATTER_FIRMWARE_THRUST_ACQ__ PASS", q) {
+        pass_count = pass_count + 1
+        summary = summary + ["  [PASS] firmware/sim/thrust_acquisition  (Phase C sim, F-AM-4)"]
+    } else {
+        summary = summary + ["  [FAIL] firmware/sim/thrust_acquisition"]
+    }
+
+    tot = tot + 1
+    if run_step("firmware_phase_d_lint", r + "/verify/firmware_phase_d_lint.hexa",
+                "__HEXA_ANTIMATTER_FIRMWARE_PHASE_D__ PASS", q) {
+        pass_count = pass_count + 1
+        summary = summary + ["  [PASS] verify/firmware_phase_d_lint  (Phase D inventory + invariants)"]
+    } else {
+        summary = summary + ["  [FAIL] verify/firmware_phase_d_lint"]
+    }
+
+    tot = tot + 1
+    if run_step("saturation_check", r + "/verify/saturation_check.hexa",
+                "__HEXA_ANTIMATTER_RSC_SATURATED__ STOP", q) {
+        pass_count = pass_count + 1
+        summary = summary + ["  [PASS] verify/saturation_check  (RSC self-stop signal)"]
+    } else {
+        summary = summary + ["  [FAIL] verify/saturation_check"]
+    }
+
+    tot = tot + 1
+    if run_step("selftest", r + "/selftest/selftest.hexa",
+                "__HEXA_ANTIMATTER_SELFTEST__ PASS", q) {
+        pass_count = pass_count + 1
+        summary = summary + ["  [PASS] selftest/selftest (3-verb sweep)"]
+    } else {
+        summary = summary + ["  [FAIL] selftest/selftest"]
+    }
+
+    println("")
+    println("========================================================================")
+    println("  hexa-antimatter — verify/all summary")
+    println("========================================================================")
+    let mut i = 0
+    while i < len(summary) {
+        println(summary[i])
+        i = i + 1
+    }
+    println("")
+    println("  " + ("" + pass_count) + "/" + ("" + tot) + " verifiers PASS")
+    if pass_count == tot {
+        println("__HEXA_ANTIMATTER_VERIFY_ALL__ PASS")
+    } else {
+        println("__HEXA_ANTIMATTER_VERIFY_ALL__ FAIL")
+        exit(1)
+    }
+}

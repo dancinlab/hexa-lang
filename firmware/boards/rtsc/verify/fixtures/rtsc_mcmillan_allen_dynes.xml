@@ -1,0 +1,64 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<feed xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/" xmlns:arxiv="http://arxiv.org/schemas/atom" xmlns="http://www.w3.org/2005/Atom">
+  <id>https://arxiv.org/api/mzTSQ1NqTNTE4HzT4ZyrqSRdcsQ</id>
+  <title>arXiv Query: search_query=all:McMillan OR all:Allen-Dynes OR all:electron-phonon OR all:coupling OR all:superconductor&amp;id_list=&amp;start=0&amp;max_results=3</title>
+  <updated>2026-05-07T20:53:25Z</updated>
+  <link href="https://arxiv.org/api/query?search_query=all:McMillan+OR+(all:Allen-Dynes+OR+(all:electron-phonon+OR+(all:coupling+OR+all:superconductor)))&amp;start=0&amp;max_results=3&amp;id_list=" type="application/atom+xml"/>
+  <opensearch:itemsPerPage>3</opensearch:itemsPerPage>
+  <opensearch:totalResults>265694</opensearch:totalResults>
+  <opensearch:startIndex>0</opensearch:startIndex>
+  <entry>
+    <id>http://arxiv.org/abs/1210.0499v2</id>
+    <title>Electron-phonon superconductivity and charge density wave instability in the layered titanium-based pnictide BaTi$_2$Sb$_2$O</title>
+    <updated>2013-02-15T18:46:49Z</updated>
+    <link href="https://arxiv.org/abs/1210.0499v2" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/1210.0499v2" rel="related" type="application/pdf" title="pdf"/>
+    <summary>I present the results of first principles calculations of the phonon dispersions and electron-phonon coupling for BaTi$_2$Sb$_2$O. The phonon dispersions show a weak lattice instability near the zone corners that leads to a charge-density wave phase. The calculations of the electron-phonon coupling reveal strong coupling, especially to the in-plane Ti modes. The total coupling is large enough to readily explain the superconductivity in this compound. As the Fermi surfaces are disconnected with different orbital character weights, this compound is likely to host a multiband superconductivity.</summary>
+    <category term="cond-mat.supr-con" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2012-10-01T18:41:44Z</published>
+    <arxiv:comment>Added the phonon dispersions and electron-phonon coupling for the distorted structure</arxiv:comment>
+    <arxiv:primary_category term="cond-mat.supr-con"/>
+    <author>
+      <name>Alaska Subedi</name>
+    </author>
+    <arxiv:doi>10.1103/PhysRevB.87.054506</arxiv:doi>
+    <link rel="related" href="https://doi.org/10.1103/PhysRevB.87.054506" title="doi"/>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/1103.4020v2</id>
+    <title>Vibrational spectrum and electron-phonon coupling of doped solid picene from first principles</title>
+    <updated>2011-07-25T15:26:01Z</updated>
+    <link href="https://arxiv.org/abs/1103.4020v2" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/1103.4020v2" rel="related" type="application/pdf" title="pdf"/>
+    <summary>We study superconductivity in doped solid picene (C22H14) with linear response calculations of the phonon spectrum and electron-phonon (ep) interaction. We show that the coupling of the high-energy C bond-stretching phonons to the π molecular orbitals for a doping of ~3 electrons per picene molecule is sufficiently strong to reproduce the experimental Tc of 18 K within Migdal-Eliashberg theory. For hole doping, we predict a similar coupling leading to a maximum Tc of 6 K. However, we argue that, due to its molecular nature, picene may belong to the same class of strongly correlated ep superconductors as fullerides. We propose several experimental tests for this hypothesis and suggest that intercalated hydrocarbons with different arrangements and numbers of benzene rings may be used to study the interplay between ep interaction and strong electronic correlations in the highly nonadiabatic limit.</summary>
+    <category term="cond-mat.supr-con" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2011-03-21T14:15:28Z</published>
+    <arxiv:comment>Replaced with the final version. Previous version had the title "Solid picene: a possible exotic electron-phonon superconductor"</arxiv:comment>
+    <arxiv:primary_category term="cond-mat.supr-con"/>
+    <arxiv:journal_ref>Phys. Rev. B 84, 020508(R) (2011)</arxiv:journal_ref>
+    <author>
+      <name>Alaska Subedi</name>
+    </author>
+    <author>
+      <name>Lilia Boeri</name>
+    </author>
+    <arxiv:doi>10.1103/PhysRevB.84.020508</arxiv:doi>
+    <link rel="related" href="https://doi.org/10.1103/PhysRevB.84.020508" title="doi"/>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2101.12084v1</id>
+    <title>Phonon Self-Energy Effects in Migdal-Eliashberg Theory</title>
+    <updated>2021-01-28T16:09:41Z</updated>
+    <link href="https://arxiv.org/abs/2101.12084v1" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/2101.12084v1" rel="related" type="application/pdf" title="pdf"/>
+    <summary>Recent work on an electron-phonon model in two-dimensions is reviewed and some new results are presented. We utilize both Quantum Monte Carlo simulations and Migdal-Eliashberg theory. The type of electron-ion coupling considered is on-site. Competing instabilities are charge density wave (CDW) and singlet superconductivity. When the electron band is half-filled, the charge density wave dominates. Away from half-filling CDW correlations actually suppress superconductivity.</summary>
+    <category term="cond-mat.supr-con" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2021-01-28T16:09:41Z</published>
+    <arxiv:comment>First appeared in 1991 in a conference proceedings, Electron--Phonon Interaction in Oxide Superconductors, edited by R. Baquero (World Scientific, Singapore, 1991) p.167. Since this source is relatively inaccessible, this arXiv version has been provided</arxiv:comment>
+    <arxiv:primary_category term="cond-mat.supr-con"/>
+    <arxiv:journal_ref>in Electron-Phonon Interaction in Oxide Superconductors, edited by R. Baquero (World Scientific, Singapore, 1991) p.167</arxiv:journal_ref>
+    <author>
+      <name>F. Marsiglio</name>
+    </author>
+  </entry>
+</feed>

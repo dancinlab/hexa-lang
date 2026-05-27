@@ -1,0 +1,250 @@
+#!hexa strict
+// hexa-cern/verify/numerics_classical.hexa — classical pillar symplectic stub.
+//
+// Beyond `verify/calc_classical.hexa` (algebraic identities only), this
+// script does the smallest piece of REAL classical mechanics: a leapfrog
+// (Verlet) symplectic integrator on a 1-DOF harmonic oscillator H = ½(p²+q²)
+// over **one full period** divided into τ = 4 phase quadrants
+// (pump · bubble · capture · extract — phase 0..π/2..π..3π/2..2π).
+//
+// Symplectic integrators preserve phase-space volume (Liouville's theorem).
+// Leapfrog conserves a SHADOW Hamiltonian H̃ = H + O(Δt²), so energy at the
+// closing of one period bounds back to the initial value with error
+// O(Δt²) — independent of period count. This is the nontrivial property
+// that separates symplectic methods from generic Runge-Kutta.
+//
+// PASS = energy drift after τ=4 phases stays below the leapfrog
+// truncation bound and no quadrant breaks the Liouville volume.
+//
+// Stage-1+ integrator (full SE(3) 6-DOF symplectic, with conserved
+// momentum / angular momentum) is the v1.2.0 target.
+//
+// Authority: classical/doc/classical-mechanics-accelerator.md
+// (Hamilton phase-space dim = σ = 12 anchor) + .roadmap.hexa_cern §A.4
+// F-PCERN-2 (classical Hamiltonian τ=4 phase mode demonstration).
+//
+// Run:
+//   hexa run verify/numerics_classical.hexa
+//
+// @no-lock-needed
+
+use "self/runtime/math_pure"
+
+let HOME = env("HOME")
+
+fn _root() -> str {
+    let r = env("PETITE_CERN_ROOT")
+    if r.len() > 0 { return r }
+    let pwd = exec("pwd").trim()
+    if pwd.len() > 0 { return pwd }
+    return HOME + "/core/hexa-cern"
+}
+
+let ROOT = _root()
+let DOC_CLASSICAL = ROOT + "/classical/doc/classical-mechanics-accelerator.md"
+
+fn _read(p: str) -> str {
+    if file_exists(p) == false { return "" }
+    return read_file(p)
+}
+
+fn _has(t: str, s: str) -> bool {
+    if t.len() == 0 { return false }
+    return t.find(s) >= 0
+}
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ── n=6 lattice ──────────────────────────────────────────────────────────
+let TAU = 4
+let SIGMA = 12
+
+// ── leapfrog parameters ──────────────────────────────────────────────────
+// Harmonic oscillator: q'' = -ω²q with ω = 1, so period T = 2π.
+// Use 4·N steps per period (N steps per phase quadrant), Δt = T/(4N) = π/(2N).
+let STEPS_PER_QUADRANT = 256                       // total 1024 steps over 1 period
+let TOTAL_STEPS = 4 * STEPS_PER_QUADRANT
+let OMEGA = 1.0
+let PERIOD = 2.0 * 3.14159265358979323846
+
+fn dt() -> float {
+    return PERIOD / (4.0 * 256.0)   // = π / (2·256)
+}
+
+fn energy(q: float, p: float) -> float {
+    return 0.5 * (p * p + OMEGA * OMEGA * q * q)
+}
+
+// One leapfrog step: kick ½ · drift · kick ½  (velocity Verlet form).
+fn leapfrog_step(q: float, p: float, h: float) -> [float] {
+    let half = 0.5 * h
+    let p_half = p - OMEGA * OMEGA * q * half
+    let q_new = q + p_half * h
+    let p_new = p_half - OMEGA * OMEGA * q_new * half
+    return [q_new, p_new]
+}
+
+// ── per-quadrant integration ─────────────────────────────────────────────
+// Run STEPS_PER_QUADRANT leapfrog steps and return [q, p, max_drift].
+fn integrate_quadrant(q0: float, p0: float, h: float) -> [float] {
+    let mut q = q0
+    let mut p = p0
+    let E0 = energy(q, p)
+    let mut max_drift = 0.0
+    let mut i = 0
+    while i < STEPS_PER_QUADRANT {
+        let r = leapfrog_step(q, p, h)
+        q = r[0]
+        p = r[1]
+        let E = energy(q, p)
+        let d = (E - E0) / E0
+        let abs_d = if d < 0.0 { -d } else { d }
+        if abs_d > max_drift { max_drift = abs_d }
+        i = i + 1
+    }
+    return [q, p, max_drift]
+}
+
+// ── checks ───────────────────────────────────────────────────────────────
+
+fn print_header() {
+    println("")
+    println("  Harmonic oscillator H = ½(p² + ω²q²),  ω = 1,  T = 2π.")
+    println("  Initial state: (q, p) = (1, 0)  →  E_0 = 0.5")
+    println("  Δt = T / " + str(TOTAL_STEPS) + " = π / 512  (" + str(STEPS_PER_QUADRANT) + " steps × τ=4 quadrants)")
+    println("")
+}
+
+fn check_period_closure(q_final: float, p_final: float, q0: float, p0: float) {
+    // After exactly 1 period, leapfrog returns to (q0, p0) up to O(Δt²).
+    let dq = q_final - q0
+    let dp = p_final - p0
+    let r2 = dq * dq + dp * dp
+    let r = sqrt_pure(r2)
+    let h = dt()
+    // Theoretical bound: amplitude error per period for leapfrog ≈ (ω·Δt)² / 24
+    let bound = h * h / 24.0 * 100.0  // very loose 100× headroom
+    _check(r <= bound,
+           "1-period closure: |Δstate| ≤ leapfrog O(Δt²) bound",
+           "|Δstate| = " + str(r) + ", bound = " + str(bound))
+}
+
+fn check_energy_conservation(max_drift: float) {
+    // Symplectic schemes bound the SHADOW Hamiltonian, so energy oscillates
+    // around H but never drifts secularly. Per-step drift ≤ Δt² / 12 (loose).
+    let h = dt()
+    let bound = h * h * 10.0   // 10× headroom over the formal Δt²/12 bound
+    _check(max_drift <= bound,
+           "energy drift bounded by O(Δt²)  (symplectic shadow Hamiltonian)",
+           "max |ΔE/E| = " + str(max_drift) + ", bound = " + str(bound))
+}
+
+fn check_tau_four_quadrants(qs: [float], ps: [float]) {
+    // After each τ=4 quadrant the phase angle should advance by π/2.
+    // Initial (q,p) = (1, 0), so:
+    //   after Q1 (π/2): (q, p) ≈ (0, -1)
+    //   after Q2 (π):   (q, p) ≈ (-1, 0)
+    //   after Q3 (3π/2):(q, p) ≈ (0, 1)
+    //   after Q4 (2π):  (q, p) ≈ (1, 0)
+    let tol = 0.005
+    let q1_ok = (qs[0] > -tol && qs[0] < tol) && (ps[0] > -1.0 - tol && ps[0] < -1.0 + tol)
+    let q2_ok = (qs[1] > -1.0 - tol && qs[1] < -1.0 + tol) && (ps[1] > -tol && ps[1] < tol)
+    let q3_ok = (qs[2] > -tol && qs[2] < tol) && (ps[2] > 1.0 - tol && ps[2] < 1.0 + tol)
+    let q4_ok = (qs[3] > 1.0 - tol && qs[3] < 1.0 + tol) && (ps[3] > -tol && ps[3] < tol)
+    _check(q1_ok, "phase 1 (pump): (q, p) ≈ (0, -1) at π/2",     "(" + str(qs[0]) + ", " + str(ps[0]) + ")")
+    _check(q2_ok, "phase 2 (bubble): (q, p) ≈ (-1, 0) at π",     "(" + str(qs[1]) + ", " + str(ps[1]) + ")")
+    _check(q3_ok, "phase 3 (capture): (q, p) ≈ (0, 1) at 3π/2",  "(" + str(qs[2]) + ", " + str(ps[2]) + ")")
+    _check(q4_ok, "phase 4 (extract): (q, p) ≈ (1, 0) at 2π",    "(" + str(qs[3]) + ", " + str(ps[3]) + ")")
+}
+
+fn check_classical_doc_phase_anchor() {
+    let txt = _read(DOC_CLASSICAL)
+    // Spec mentions Hamilton canonical or τ=4 / phases somewhere.
+    let ok = (_has(txt, "Hamilton") || _has(txt, "Lagrangian")) && _has(txt, "phase")
+    _check(ok, "classical doc anchors Hamiltonian + phase-space content", "")
+}
+
+fn check_tau_count() {
+    _check(TAU == 4,
+           "τ(6) = 4  acceleration phases (pump · bubble · capture · extract)",
+           "")
+}
+
+fn check_phase_space_dim() {
+    // 1-DOF oscillator has phase-space dim 2.  σ = 12 is for the full SE(3)
+    // 6-DOF system.  Surface this so future Stage-2+ integrator picks the
+    // right dimensionality.
+    _check(2 < SIGMA,
+           "1-DOF phase-space dim = 2 ⊆ σ = 12 (SE(3) full system)",
+           "this stub uses 1-DOF; v1.2.0 target = full 6-DOF symplectic")
+}
+
+let FALSIFIERS = [
+    "1-period |Δstate| > Δt² bound -> leapfrog implementation broken",
+    "max |ΔE/E| > 10·Δt² -> non-symplectic drift (energy secular leak)",
+    "any quadrant phase point > 0.5% off canonical (q,p) -> integrator phase wrong",
+    "τ ≠ 4 -> n=6 perfect-number τ(6) breaks (sanity floor)",
+    "real numerical Verlet step diverges -> Δt too large for ω = 1 oscillator",
+]
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-cern classical — symplectic leapfrog stub (1-DOF, τ=4 quadrants)")
+    println("  (Stage-2+ full SE(3) 6-DOF symplectic integrator: v1.2.0 target)")
+    println("========================================================================")
+    print_header()
+
+    // Initial state: q = 1, p = 0  →  E_0 = 0.5
+    let q0 = 1.0
+    let p0 = 0.0
+    let h = dt()
+    let mut q = q0
+    let mut p = p0
+    let mut max_global_drift = 0.0
+    let mut qs = [0.0, 0.0, 0.0, 0.0]
+    let mut ps = [0.0, 0.0, 0.0, 0.0]
+
+    // Integrate four τ-phase quadrants, sampling state at each closure.
+    let mut k = 0
+    while k < TAU {
+        let r = integrate_quadrant(q, p, h)
+        q = r[0]
+        p = r[1]
+        let drift = r[2]
+        if drift > max_global_drift { max_global_drift = drift }
+        qs[k] = q
+        ps[k] = p
+        println("  · phase " + str(k + 1) + " end:  (q, p) = (" + str(q) + ", " + str(p) + "), max |ΔE/E| in quadrant = " + str(drift))
+        k = k + 1
+    }
+    println("")
+
+    check_tau_count()
+    check_phase_space_dim()
+    check_tau_four_quadrants(qs, ps)
+    check_period_closure(q, p, q0, p0)
+    check_energy_conservation(max_global_drift)
+    check_classical_doc_phase_anchor()
+
+    println("")
+    println("  FALSIFIERS (" + str(len(FALSIFIERS)) + "):")
+    for f in FALSIFIERS { println("    ✗ " + f) }
+    println("========================================================================")
+    let pass_n = RUN - FAIL
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_CERN_NUMERICS_CLASSICAL__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_CERN_NUMERICS_CLASSICAL__ PASS")
+    exit(0)
+}

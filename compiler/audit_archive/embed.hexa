@@ -1,0 +1,38 @@
+// HEXA Native Compiler — Phase 1-extension absorption: audit archive (D13)
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Source SSOT:
+//   ~/core/nexus/logs/nexus_cli.log   (jsonl)
+//
+// Per absorption doctrine v2 rule 3, the nexus CLI audit log tail is
+// absorbed as a frozen archive — historical record of invocations as
+// of regen time. We do NOT track live audits; that surface stays in
+// nexus.
+//
+// Schema per nexus_cli_spec.json#audit.fields:
+//   ts (string, ISO-8601)
+//   caller (string)
+//   subcmd (string)
+//   args (string)
+//   exit_code (i64)
+//   duration_ms (i64, optional → 0 when absent)
+//
+// We embed the last N rows such that the total emitted file stays under
+// ~100 KB (cap configured in the generator). When the source file is
+// missing, the generator halts and emits nothing — we do NOT invent
+// data.
+//
+// In addition to the per-row entries we expose two derived caches:
+//   AUDIT_ARCHIVE_TS_FIRST / _TS_LAST — bracket the embedded window.
+
+@phase("parse_only")
+pub struct AuditLogEntry {
+    ts: string,
+    caller: string,
+    subcmd: string,
+    args: string,
+    exit_code: i64,
+    duration_ms: i64
+}

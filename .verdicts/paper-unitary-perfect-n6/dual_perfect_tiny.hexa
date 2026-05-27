@@ -1,0 +1,23 @@
+// dual_perfect_tiny.hexa — N=12 smoke for the sweep logic.
+use "stdlib/core/math"
+
+fn main() {
+    let N = 12
+    let n = 1
+    let dual_count = 0
+    println("tiny sweep n=1..12")
+    while n <= N {
+        let s = sigma(n)
+        let ss = sigma_star(n)
+        let two_n = 2 * n
+        println("n=" + str(n) + " sigma=" + str(s) + " sigma_star=" + str(ss))
+        if s == two_n {
+            if ss == two_n {
+                dual_count = dual_count + 1
+                println("DUAL-PERFECT n=" + str(n))
+            }
+        }
+        n = n + 1
+    }
+    println("dual_count=" + str(dual_count))
+}

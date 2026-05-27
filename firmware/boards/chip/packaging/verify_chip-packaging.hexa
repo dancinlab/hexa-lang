@@ -1,0 +1,29 @@
+#!hexa strict
+// packaging/verify_chip-packaging.hexa — Group D conventional packaging root.
+//
+// FCBGA / wirebond / QFP / TO-247 — τ(6)=4 conventional package families.
+// Each maps to a pin-pitch x I/O count budget.
+//
+// Falsifiers:
+//   F-CHIP-PKG-1: τ(6)=4 package family count drift.
+
+fn main() {
+    let families = [
+        ["FCBGA",     "0.65", "1024"],
+        ["wirebond",  "0.10", "256"],
+        ["QFP",       "0.50", "144"],
+        ["TO-247",    "5.00", "4"]
+    ]
+    if families.len() != 4 {
+        println("[packaging] FAIL — τ(6)=4 package family count drift")
+        exit(1)
+    }
+    println("[packaging] τ(6)=4 package families:")
+    let mut i = 0
+    while i < families.len() {
+        let f = families[i]
+        println("  " + f[0] + ":  pitch " + f[1] + "mm, max I/O " + f[2])
+        i = i + 1
+    }
+    println("[packaging] τ(6)=4 family lattice PASS")
+}

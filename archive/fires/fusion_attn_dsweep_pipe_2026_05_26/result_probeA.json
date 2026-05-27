@@ -1,0 +1,39 @@
+{
+  "round": 11,
+  "probe": "A — head_dim sweep",
+  "falsifier": "F-FUSION-ATTN-DSWEEP-PIPE",
+  "slug": "fusion-attention-dsweep-pipe",
+  "date": "2026-05-26",
+  "host": "ubu-2 RTX 5070 sm_120 driver 580 (48 SMs, 0% util / 5 MiB at every fire)",
+  "toolchain": "nvcc/ptxas 12.0 -arch=sm_90a (sm_120 via compute_90 PTX + driver JIT)",
+  "kernel": "fa_dsweep — R10 multi-warp BM=64 + cp.async K/V double-buffer, parameterized over head_dim D; DTILES=D/16",
+  "baseline": "cuBLAS-TC FP16 3-launch stack (GemmStridedBatchedEx x2 TENSOR_OP + OPTIMIZED block-per-row parallel softmax). NOTE: an earlier NAIVE one-thread-per-row softmax was a 13x-slower STRAWMAN (softmax alone 2.15 ms @ N=4096) — REJECTED; the fair optimized softmax matches R10's recorded baseline ballpark (0.176 vs R10 0.189 ms @ N=4096 d=64).",
+  "ptxas": {
+    "d64":  {"sm_80": {"regs": 91,  "smem": 14336, "spill": 0}, "sm_90a": {"regs": 93,  "smem": 14336, "spill": 0}},
+    "d128": {"sm_80": {"regs": 148, "smem": 22528, "spill": 0}, "sm_90a": {"regs": 155, "smem": 22528, "spill": 0}},
+    "d256": {"sm_80": {"regs": 247, "smem": 38912, "spill": 0}, "sm_90a": {"regs": 246, "smem": 38912, "spill": 0}},
+    "smem_cap_check": "max 38912 B @ d=256 << 49152 B per-block cap PASS; 0 spill at every d"
+  },
+  "numeric_gate": {
+    "metric": "per-row-scaled rel <= 1e-2 vs f64 CPU ref + NaN/Inf hard-fail (naninf==0)",
+    "d64":  {"1024": {"rel": 5.674e-4, "naninf": 0, "pass": true}, "2048": {"rel": 6.105e-4, "naninf": 0, "pass": true}, "4096": {"rel": 7.142e-4, "naninf": 0, "pass": true}},
+    "d128": {"1024": {"rel": 5.817e-4, "naninf": 0, "pass": true}, "2048": {"rel": 6.013e-4, "naninf": 0, "pass": true}, "4096": {"rel": 6.158e-4, "naninf": 0, "pass": true}},
+    "d256": {"1024": {"rel": 5.788e-4, "naninf": 0, "pass": true}, "2048": {"rel": 5.650e-4, "naninf": 0, "pass": true}, "4096": {"rel": 5.849e-4, "naninf": 0, "pass": true}},
+    "note": "ALL 9 (N,d) shapes numeric PASS; d=64 reproduces R10's numbers exactly (faithful generalization)"
+  },
+  "timed_median_ms": {
+    "_method": "cuEvent 20 warmup + 200 timed median, GPU uncontended (0% at start)",
+    "fused":      {"d64": {"1024": 0.040352, "2048": 0.073088, "4096": 0.217408}, "d128": {"1024": 0.071040, "2048": 0.128352, "4096": 0.408960}, "d256": {"1024": 0.128352, "2048": 0.232800, "4096": 0.785728}},
+    "cublas_tc":  {"d64": {"1024": 0.032832, "2048": 0.059648, "4096": 0.176224}, "d128": {"1024": 0.033056, "2048": 0.076736, "4096": 0.233440}, "d256": {"1024": 0.043264, "2048": 0.101664, "4096": 0.354368}}
+  },
+  "ratio_fused_over_cublas": {
+    "d64":  {"1024": 1.229, "2048": 1.225, "4096": 1.234},
+    "d128": {"1024": 2.149, "2048": 1.673, "4096": 1.752},
+    "d256": {"1024": 2.967, "2048": 2.290, "4096": 2.217}
+  },
+  "best_ratio": {"value": 1.225, "shape": "d=64 N=2048", "meaning": "22.5% ABOVE cuBLAS-TC stack (fused SLOWER); never crosses 1.0x"},
+  "d_trend_verdict": "FALSIFIED IN THE WRONG DIRECTION. Pre-registered hypothesis: d>=128 raises fused arithmetic intensity -> CROSS below 1.0x. OBSERVED: ratio WORSENS monotonically with d (d64 ~1.23x -> d128 ~1.75x -> d256 ~2.22x). cuBLAS's two big GEMMs are dominated by the d-INDEPENDENT N*N S HBM round-trip, so cuBLAS barely slows as d grows (0.176->0.233->0.354 ms @ N=4096). The fused per-warp serial d-tile loop (DTILES mma + scale_o + repack on the critical dependency chain) scales LINEARLY with d and degrades (0.217->0.409->0.786 ms). The d-lever moves the wrong way.",
+  "verdict": "ORANGE (closed-negative on the d-lever). Numeric PASS all 9 shapes; best ratio 1.225x @ d=64 N=2048 NEVER crosses 1.0x; the d-trend DIVERGES from a crossover. The d-lever is RULED OUT — raising head_dim does NOT close the fused-vs-cuBLAS gap, it widens it. Best-d for the compute-pipeline probe (B) = d=64 (closest to cuBLAS).",
+  "section10_flip": "NO (no 1.0x cross)",
+  "paper": "NO (orange)"
+}

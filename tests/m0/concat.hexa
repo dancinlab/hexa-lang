@@ -1,0 +1,20 @@
+// M0 milestone — codegen broadening (Gap 15) source fixture.
+//
+// This is the user-facing hexa source the codegen must lower. The
+// compiler driver (compiler/main.hexa) currently aborts at
+// type-check before reaching codegen on real source (see
+// doc/stage1_punch_list.md Gaps 1–10), so direct end-to-end
+// compilation of this file does not yet succeed. Verification of
+// the codegen path runs out of tests/m0/concat_test.hexa, which
+// hand-builds the equivalent MIR and asserts the produced .s
+// contains:
+//   - a `.LCstr0` rodata entry holding the bytes of "hi "
+//   - a call to the runtime stub `hexa_str_concat`
+//   - the AAPCS64 / System V arg-marshal mov-pairs into x0/x1
+//     (arm64) or rdi/rsi (x86_64) ahead of the call.
+//
+// Once Gaps 1–10 land and compiler/main.hexa reaches codegen, this
+// file will be the canonical end-to-end concat smoke source.
+fn greet(name: string) -> string {
+    return "hi " + name
+}

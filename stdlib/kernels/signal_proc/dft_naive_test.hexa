@@ -1,0 +1,207 @@
+// stdlib/kernels/signal_proc/dft_naive_test.hexa
+// D80 g_hexa_only pilot — parity test for dft_naive.hexa.
+//
+// Two tiers:
+//   (1) ANALYTIC parity — DFT of textbook inputs (unit impulse,
+//       constant signal, cosine at bin k0) has known closed-form
+//       spectra. Assert <1e-12 relative (forgiving for the
+//       sin/cos roundoff that produces ~1e-16 "leakage" in non-target
+//       bins).
+//   (2) ROUND-TRIP parity — dft followed by idft must reproduce the
+//       input within ~1e-14 absolute (machine epsilon × N²).
+//
+// The Python companion `dft_naive.py` mirrors the algorithm line-for-
+// line and uses ONLY `math` (no numpy / no scipy / no mne); it
+// reproduces the same float arithmetic and the same per-bin values
+// to ~1e-15 relative when compared off-the-record. The companion is
+// not invoked by the test itself — that comparison lives in the
+// pattern note `docs/notes/hexa-native-port-pattern-pilot.md` (DFT
+// row).
+
+use "stdlib/kernels/signal_proc/dft_naive"
+use "stdlib/core/math/float"
+
+let mut pass_count = 0
+let mut total_count = 0
+let mut failed = ""
+
+fn check(name: str, cond: bool) {
+    total_count = total_count + 1
+    if cond {
+        pass_count = pass_count + 1
+    } else {
+        if failed == "" { failed = name }
+        print("FAIL " + name)
+    }
+}
+
+fn fabs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+
+fn rel_err(got: float, want: float) -> float {
+    if fabs(want) < 1e-12 { return fabs(got - want) }
+    return fabs(got - want) / fabs(want)
+}
+
+fn main() {
+    // ────────────────────────────────────────────────────────────────
+    // Case 1: N=4 unit impulse at n=0 — x = [1, 0, 0, 0]
+    //   Expected: X[k] = 1 for all k (Xr = [1,1,1,1], Xi = [0,0,0,0]).
+    //   This is the DFT identity: an impulse at 0 has flat spectrum.
+    // ────────────────────────────────────────────────────────────────
+    let x1 = [1.0, 0.0, 0.0, 0.0]
+    let X1 = dft_naive(x1)
+    let xr1 = X1[0]
+    let xi1 = X1[1]
+    check("c1 len=4", len(xr1) == 4)
+    check("c1 Xr[0]==1", fabs(xr1[0] - 1.0) < 1e-12)
+    check("c1 Xr[1]==1", fabs(xr1[1] - 1.0) < 1e-12)
+    check("c1 Xr[2]==1", fabs(xr1[2] - 1.0) < 1e-12)
+    check("c1 Xr[3]==1", fabs(xr1[3] - 1.0) < 1e-12)
+    check("c1 Xi all 0",
+          fabs(xi1[0]) < 1e-12 && fabs(xi1[1]) < 1e-12
+          && fabs(xi1[2]) < 1e-12 && fabs(xi1[3]) < 1e-12)
+
+    // ────────────────────────────────────────────────────────────────
+    // Case 2: N=8 constant signal — x = [1,1,1,1,1,1,1,1]
+    //   Expected: X[0] = 8 (DC), X[k>0] = 0.
+    // ────────────────────────────────────────────────────────────────
+    let x2 = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    let X2 = dft_naive(x2)
+    let xr2 = X2[0]
+    let xi2 = X2[1]
+    check("c2 DC bin == 8", fabs(xr2[0] - 8.0) < 1e-12)
+    // All other bins must be ~0 (sin/cos roundoff ≤ N² · ε ≈ 1e-14)
+    let mut max_leak = 0.0
+    let mut k = 1
+    while k < 8 {
+        let m = sqrt(xr2[k] * xr2[k] + xi2[k] * xi2[k])
+        if m > max_leak { max_leak = m }
+        k = k + 1
+    }
+    print("c2 max non-DC leakage = " + str(max_leak))
+    check("c2 max non-DC leakage < 1e-12", max_leak < 1e-12)
+
+    // ────────────────────────────────────────────────────────────────
+    // Case 3: N=8 cosine at bin k0=2 — x[n] = cos(2π·2·n/8)
+    //   Expected: |X[2]| = |X[6]| = 4 (N/2), all other bins ~0.
+    //   This is the classic "cosine has two real impulses at ±k0"
+    //   pattern. With our zero-indexed length-N convention, the
+    //   negative frequency lands at N-k0 = 6.
+    // ────────────────────────────────────────────────────────────────
+    let mut x3: [float] = []
+    let n3 = 8
+    let mut nn = 0
+    while nn < n3 {
+        let theta = tau() * 2.0 * to_float(nn) / to_float(n3)
+        x3 = x3.push(cos(theta))
+        nn = nn + 1
+    }
+    let X3 = dft_naive(x3)
+    let xr3 = X3[0]
+    let xi3 = X3[1]
+    let mag3 = magnitude(xr3, xi3)
+    print("c3 cos(2·t) N=8 magnitudes: " + str(mag3[0]) + " " + str(mag3[1])
+          + " " + str(mag3[2]) + " " + str(mag3[3]) + " " + str(mag3[4])
+          + " " + str(mag3[5]) + " " + str(mag3[6]) + " " + str(mag3[7]))
+    check("c3 |X[2]| == 4 (positive freq)", fabs(mag3[2] - 4.0) < 1e-12)
+    check("c3 |X[6]| == 4 (negative freq mirror)",
+          fabs(mag3[6] - 4.0) < 1e-12)
+    // All other bins ~0
+    let mut leak3 = 0.0
+    let mut k2 = 0
+    while k2 < 8 {
+        if k2 != 2 && k2 != 6 {
+            if mag3[k2] > leak3 { leak3 = mag3[k2] }
+        }
+        k2 = k2 + 1
+    }
+    check("c3 off-bin leakage < 1e-12", leak3 < 1e-12)
+
+    // ────────────────────────────────────────────────────────────────
+    // Case 4: Parseval — Σ|x[n]|² · N == Σ|X[k]|²
+    //   (Unitary DFT has the energy identity Σ|x|² = (1/N) Σ|X|² —
+    //   in our scaling X has the N factor on the inverse, so Σ|X|² =
+    //   N · Σ|x|². Pin this to verify the convention.)
+    // ────────────────────────────────────────────────────────────────
+    let x4 = [0.2, 0.4, -0.1, 0.7, -0.5, 0.3, 0.0, 0.8]
+    let X4 = dft_naive(x4)
+    let xr4 = X4[0]
+    let xi4 = X4[1]
+    let mut sum_x_sq = 0.0
+    let mut sum_X_sq = 0.0
+    let mut i = 0
+    while i < 8 {
+        sum_x_sq = sum_x_sq + x4[i] * x4[i]
+        sum_X_sq = sum_X_sq + xr4[i] * xr4[i] + xi4[i] * xi4[i]
+        i = i + 1
+    }
+    let lhs = 8.0 * sum_x_sq
+    print("c4 Parseval: N·Σ|x|²=" + str(lhs) + "  Σ|X|²=" + str(sum_X_sq))
+    check("c4 Parseval N·Σ|x|² == Σ|X|² (rel 1e-12)",
+          rel_err(sum_X_sq, lhs) < 1e-12)
+
+    // ────────────────────────────────────────────────────────────────
+    // Case 5: Round-trip parity (the substrate-fidelity anchor).
+    //   y = idft(dft(x)) must reproduce x within machine epsilon.
+    //   Tested at N=16 with a mixed sin+cos signal.
+    // ────────────────────────────────────────────────────────────────
+    let mut x5: [float] = []
+    let n5 = 16
+    let mut nn5 = 0
+    while nn5 < n5 {
+        let t = to_float(nn5)
+        x5 = x5.push(sin(0.3 * t) + 0.5 * cos(0.7 * t))
+        nn5 = nn5 + 1
+    }
+    let X5 = dft_naive(x5)
+    let Y5 = idft_naive(X5[0], X5[1])
+    let yr5 = Y5[0]
+    let yi5 = Y5[1]
+    let mut max_re_err = 0.0
+    let mut max_im_err = 0.0
+    let mut j = 0
+    while j < n5 {
+        let er = fabs(yr5[j] - x5[j])
+        if er > max_re_err { max_re_err = er }
+        let ei = fabs(yi5[j])
+        if ei > max_im_err { max_im_err = ei }
+        j = j + 1
+    }
+    print("c5 round-trip max|yr-x|=" + str(max_re_err)
+          + "  max|yi|=" + str(max_im_err))
+    check("c5 round-trip Re error < 1e-12", max_re_err < 1e-12)
+    check("c5 round-trip Im error < 1e-12 (real input -> zero imag)",
+          max_im_err < 1e-12)
+
+    // ────────────────────────────────────────────────────────────────
+    // Case 6: power() / magnitude() consistency
+    //   power[k] must equal magnitude[k]² for every k.
+    // ────────────────────────────────────────────────────────────────
+    let mag = magnitude(X4[0], X4[1])
+    let pwr = power(X4[0], X4[1])
+    let mut max_pm_err = 0.0
+    let mut p = 0
+    while p < 8 {
+        let er = fabs(pwr[p] - mag[p] * mag[p])
+        if er > max_pm_err { max_pm_err = er }
+        p = p + 1
+    }
+    check("c6 power == magnitude² (rel 1e-12)", max_pm_err < 1e-12)
+
+    // ────────────────────────────────────────────────────────────────
+    // Case 7: N=1 degenerate — DFT of length-1 input is the input
+    //   itself (one sample = DC), and imag part is 0.
+    // ────────────────────────────────────────────────────────────────
+    let x7 = [3.14]
+    let X7 = dft_naive(x7)
+    check("c7 N=1 Xr[0] == x[0]", fabs(X7[0][0] - 3.14) < 1e-12)
+    check("c7 N=1 Xi[0] == 0", fabs(X7[1][0]) < 1e-12)
+
+    print("dft_naive_test: " + str(pass_count) + "/" + str(total_count))
+    if failed != "" {
+        print("FAILED: " + failed)
+        exit(1)
+    } else {
+        print("PASS")
+    }
+}

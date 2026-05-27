@@ -1,0 +1,64 @@
+ω-ZERO-DENSITY THEOREM — VERIFY SWEEP (g5, hexa verify --expr, verbatim)
+========================================================================
+D(n) = sigma(n)*phi(n) - n*tau(n)
+Theorem: D(n)=0 ⟺ n ∈ {1,6}.
+Falsifier F-OMEGA-ZERO-DENSITY: ∃ n∉{1,6} with D(n)=0 ⟹ FALSIFIED.
+
+Each σ, φ, τ value below is an independent `hexa verify --expr` run, all
+🔵 SUPPORTED-FORMAL (hexa-native closed-form, g_self_verify · TECS-L Tier1).
+D(n) is the integer combination of the three verified values.
+
+------------------------------------------------------------------------
+ZERO LOCUS (the claimed exact zero set)
+------------------------------------------------------------------------
+
+n=1  (ω=0, trivial):   sigma(1)=1 🔵   phi(1)=1 🔵   tau(1)=1 🔵
+    D(1) = 1*1 - 1*1 = 0                         ← ZERO ✓
+
+n=6  (ω=2, 1st perfect): sigma(6)=12 🔵  phi(6)=2 🔵  tau(6)=4 🔵
+    D(6) = 12*2 - 6*4 = 24 - 24 = 0              ← ZERO ✓
+
+------------------------------------------------------------------------
+FALSIFIER SWEEP  (every n∉{1,6} must give D≠0)
+------------------------------------------------------------------------
+
+n=2   (ω=1, prime):    sigma=3   phi=1   tau=2     [all 🔵]
+    D(2) = 3*1 - 2*2 = 3 - 4 = -1                ← ≠0 ✓
+
+n=7   (ω=1, prime):    sigma=8   phi=6   tau=2     [all 🔵]
+    D(7) = 8*6 - 7*2 = 48 - 14 = 34              ← ≠0 ✓
+
+n=8   (ω=1, 2^3):      sigma=15  phi=4   tau=4     [all 🔵]
+    D(8) = 15*4 - 8*4 = 60 - 32 = 28             ← ≠0 ✓
+
+n=12  (ω=2, 2^2*3):    sigma=28  phi=4   tau=6     [all 🔵]
+    D(12) = 28*4 - 12*6 = 112 - 72 = 40          ← ≠0 ✓
+
+n=28  (ω=2, 2nd perfect): sigma=56 phi=12 tau=6    [all 🔵]
+    D(28) = 56*12 - 28*6 = 672 - 168 = 504       ← ≠0 ✓  (classic falsifier dies)
+
+n=30  (ω=3, 2*3*5):    sigma=72  phi=8   tau=8     [all 🔵]
+    D(30) = 72*8 - 30*8 = 576 - 240 = 336        ← ≠0 ✓
+
+n=60  (ω=3, 2^2*3*5):  sigma=168 phi=16  tau=12    [all 🔵]
+    D(60) = 168*16 - 60*12 = 2688 - 720 = 1968   ← ≠0 ✓
+
+n=210 (ω=4, primorial 2*3*5*7): sigma=576 phi=48 tau=16  [all 🔵]
+    D(210) = 576*48 - 210*16 = 27648 - 3360 = 24288   ← ≠0 ✓
+
+n=2310 (ω=5, primorial): sigma=6912 phi=480 tau=32  [all 🔵]
+    D(2310) = 6912*480 - 2310*32 = 3317760 - 73920 = 3243840  ← ≠0 ✓
+
+n=30030 (ω=6, primorial): sigma=96768 phi=5760 tau=64  [all 🔵 — see omega_extra2 verdicts]
+    D(30030) = 96768*5760 - 30030*64 = 557383680 - 1921920 = 555461760  ← ≠0 ✓
+
+------------------------------------------------------------------------
+RESULT
+------------------------------------------------------------------------
+Zero locus over the sampled n (ω∈[0,6], primes, prime powers, both first
+perfect numbers, primorials 2#..13#) = EXACTLY {1,6}.
+F-OMEGA-ZERO-DENSITY SURVIVES (no n∉{1,6} with D=0 found).
+The exhaustive n=1..200 statement is closed by the g(p,a)-product proof
+(see CLOSED_FORM.md): the only sub-unity factor on the prime-power locus is
+g(2,1)=3/4, cancelled uniquely by g(3,1)=4/3 → n=6; n=1 trivial; nothing
+else. ω(n)≥3 ⟹ ∏g>1 strictly ⟹ D≠0.

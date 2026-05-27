@@ -1,0 +1,47 @@
+# pyproject.toml — hexa-matter research-bridge optional dependency declaration.
+#
+# Phase F (2026-05-13): external-literature absorption for hexa-matter
+# material specs. Each module accepts `--selftest`; optional deps
+# (requests / feedparser / beautifulsoup4) gate live-mode paths and fall back
+# to stdlib SKIP cleanly when missing.
+#
+# Install all optional deps:
+#     pip install -e ".[all]"
+#
+# Install only one stack (per-domain):
+#     pip install -e ".[web]"          # requests + beautifulsoup4 — richer HTML parsing
+#     pip install -e ".[feeds]"        # feedparser — RSS/Atom parsing convenience
+#
+# Stdlib-only fallback path is honored in every module. A module SKIPs cleanly
+# when its optional dep is missing — the harness counts SKIP as PASS.
+#
+# CRITICAL DISCIPLINE: no module makes a live network call during --selftest.
+# Live mode is gated behind explicit `--live` flag.
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hexa-matter-research-bridge"
+version = "0.1.0"
+description = "External-literature absorption bridge for hexa-matter (arxiv + vendor + RSS + patent; offline-replay selftest)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [
+    { name = "박민우", email = "nerve011235@gmail.com" },
+]
+keywords = ["materials", "arxiv", "patent", "vendor-datasheet", "rss", "research-absorption", "hexa-family"]
+
+[project.optional-dependencies]
+web   = ["requests>=2.28.0", "beautifulsoup4>=4.11.0"]
+feeds = ["feedparser>=6.0.0"]
+all = [
+    "requests>=2.28.0",
+    "beautifulsoup4>=4.11.0",
+    "feedparser>=6.0.0",
+]
+
+[tool.setuptools]
+packages = []

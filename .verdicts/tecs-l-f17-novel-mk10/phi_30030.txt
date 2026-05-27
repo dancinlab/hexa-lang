@@ -1,0 +1,3 @@
+verify --expr euler_phi(30030)=5760
+  calc   = 5760  == expected 5760
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)

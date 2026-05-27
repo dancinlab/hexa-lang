@@ -1,0 +1,3469 @@
+// HEXA Native Compiler — Phase B5 / Lower: HIR → MIR
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Converts a typed HModule into an MModule (CFG + SSA form).
+//
+//   pub fn lower_hir(module: HModule) -> MModule
+//
+// Pipeline (RFC-018 §2):
+//   HIR → lower_hir → MIR → mono → ssa → optimize → LIR
+//
+// Memory model (RFC-018 §5, v1 = arena only):
+//   Each MFunc opens a fresh function arena. arena_root holds the root
+//   arena id; v1 keeps a single arena per function. Globals (atlas
+//   rodata) get arena_id = 0.
+//
+// SSA discipline:
+//   Every Local is assigned exactly once. When a value flows out of
+//   multiple branches we emit a phi-style STMT_ASSIGN with op="phi"
+//   carrying the per-pred Operand list. v1 keeps lowering simple — most
+//   if/while/match arms terminate via STMT_RETURN so phis are rare.
+
+import "../ir/hir.hexa"
+import "../ir/mir.hexa"
+import "../diag/builder.hexa"
+import "../diag/catalog.hexa"
+
+// ── Lower-pass diagnostic sink (Stage1 punch list C16) ───────
+// Module-level mutable buffer for hir_to_mir-only diagnostics, mirroring
+// the ast_to_hir `l_diags` convention from Gap 14. The driver in
+// compiler/main.hexa drains via `hir_to_mir_diags()` after `lower_hir`
+// returns. Cleared on every `lower_hir` entry so repeated compiles in
+// the same process do not leak emissions across runs.
+pub let mut _lr_diag: array = []
+
+pub fn hir_to_mir_diags() -> array {
+    return _lr_diag
+}
+
+// ── RFC closure C2 — synthetic lambda accumulator ────────────
+// Closure-expressions (HExpr kind "closure") are lambda-lifted: each one
+// becomes a top-level synthetic MFunc named `__hexa_lambda_<N>`. The
+// closure-expression site itself lowers to an env-array build plus a
+// `hexa_closure_new` call producing a TAG_CLOSURE value. Lifted MFuncs
+// can't be returned through the per-function `_lower_hexpr` recursion, so
+// they accumulate here and `lower_hir` appends them to MModule.funcs after
+// the user functions. Counter is monotonic per `lower_hir` call (reset on
+// entry, like `_lr_diag`) so lambda names are stable + collision-free.
+pub let mut _lr_lambdas: [MFunc] = []
+pub let mut _lr_lambda_ctr: i64 = 0
+
+// STMT_* constants come from compiler/ir/mir.hexa as `pub let`. The
+// previous local mirror was needed when stage0's interpreter did not
+// propagate transitive `pub let` bindings across the long import chain;
+// after Stage1 Gap 1 (multi-file splice) the bindings now resolve once
+// at the canonical site, so the local mirror has been removed (Stage1
+// punch-list C1 — duplicate top-level lets collide post-splice).
+
+// ── Sentinels ────────────────────────────────────────────────
+
+fn _miss_local() -> Local {
+    return Local { id: -1, arena_id: 0, type_id: 0, name_hint: "", precision: "", space: "" }
+}
+
+fn _const_int_op(v: i64) -> Operand {
+    return Operand {
+        kind: "const_int",
+        local_id: -1,
+        int_val: v,
+        float_val: 0.0,
+        str_val: "",
+        global_id: -1
+    }
+}
+
+// Bool literal operand -- TAG_BOOL (=2), payload 0/1. literal_bool
+// previously lowered to _const_int_op (TAG_INT), so `true`/`false`
+// constants carried the wrong tag. hexa_eq returns false on a
+// tag mismatch, so a TAG_INT `true` never compared equal to the
+// TAG_BOOL result of `==` / `!=` / a comparison -- silently
+// flipping any `bool_a == bool_lit` predicate. Mirrors the
+// literal_char fix below (char literals -> TAG_STR for hexa_eq)
+// and codegen_c2.hexa:3233 (`true` -> hexa_bool(1)).
+fn _const_bool_op(v: i64) -> Operand {
+    return Operand {
+        kind: "const_bool",
+        local_id: -1,
+        int_val: v,
+        float_val: 0.0,
+        str_val: "",
+        global_id: -1
+    }
+}
+
+fn _const_float_op(v: f64) -> Operand {
+    return Operand {
+        kind: "const_float",
+        local_id: -1,
+        int_val: 0,
+        float_val: v,
+        str_val: "",
+        global_id: -1
+    }
+}
+
+// Like _const_float_op but ALSO carries the literal's original source
+// text (e.g. "0.15415067982725836"). The codegen's float-pool emits a
+// `.double` directive — if we go through `to_string(float_val)` the
+// stage0 default print truncates to ~6 digits, so a 17-digit literal
+// loses precision (~3e-7 drift) and an `approx(width(6),
+// 0.15415067982725836, 1e-9)` test fails. Threading the original text
+// through preserves the assembler's parse fidelity.
+fn _const_float_op_with_text(v: f64, text: string) -> Operand {
+    return Operand {
+        kind: "const_float",
+        local_id: -1,
+        int_val: 0,
+        float_val: v,
+        str_val: text,
+        global_id: -1
+    }
+}
+
+// Void literal operand — emitted when a bare `nil` Ident reaches the
+// lowering stage. Codegen (arm64_darwin.hexa) recognises this kind and
+// emits the TAG_VOID/payload-0 pair. Bind list at compiler/check/bind.hexa
+// already accepts `nil` as a known name; this provides the value-level
+// translation. Mirrors the hexat codegen_c2 path
+// (self/codegen_c2.hexa:3262 `if node.name == "nil" → hexa_void()`).
+fn _const_void_op() -> Operand {
+    return Operand {
+        kind: "const_void",
+        local_id: -1,
+        int_val: 0,
+        float_val: 0.0,
+        str_val: "",
+        global_id: -1
+    }
+}
+
+fn _const_str_op(s: string) -> Operand {
+    return Operand {
+        kind: "const_str",
+        local_id: -1,
+        int_val: 0,
+        float_val: 0.0,
+        // F6 P0c — forced copy: caller passes the HIR node's `.text`
+        // handle (hmodule outlives the streaming loop). substring(0,len)
+        // allocates a fresh buffer so the MFunc owns this string and can
+        // be freed without dangling hmodule. PLAN-stage3-footprint-F6.md.
+        str_val: s.substring(0, len(s)),
+        global_id: -1
+    }
+}
+
+fn _local_op(id: i64) -> Operand {
+    return Operand {
+        kind: "local",
+        local_id: id,
+        int_val: 0,
+        float_val: 0.0,
+        str_val: "",
+        global_id: -1
+    }
+}
+
+fn _global_op(id: i64, name: string) -> Operand {
+    return Operand {
+        kind: "global",
+        local_id: -1,
+        int_val: 0,
+        float_val: 0.0,
+        str_val: name,
+        global_id: id
+    }
+}
+
+// ── Type id interning ────────────────────────────────────────
+
+fn _type_id_of(t: Type) -> i64 {
+    if t.kind == "i64" { return 1 }
+    if t.kind == "i32" { return 2 }
+    if t.kind == "f64" { return 3 }
+    if t.kind == "f32" { return 4 }
+    if t.kind == "bool" { return 5 }
+    if t.kind == "string" { return 6 }
+    if t.kind == "char" { return 7 }
+    if t.kind == "unit" { return 8 }
+    // PR-A (GPU sweep #1284) — array element-kind preservation.
+    // type_id range 101-104 = array of {i64, i32, f64, f32}. nvptx
+    // IndexGet/IndexSet sites decode this to drive the ld/st/add
+    // mnemonic banks. Before this fix `[i64]` arrays defaulted to
+    // type_id=0 → unclassified → F64 default → silent miscompile
+    // (ld.global.f64/add.f64/st.global.f64 on integer storage). The
+    // 100+ range stays disjoint from the 1-8 scalar range so every
+    // existing scalar consumer is byte-identical. Non-array types
+    // (struct/closure/etc) and arrays of non-primitive element types
+    // continue to return 0 — unchanged.
+    if t.kind == "array" && len(t.args) >= 1 {
+        let ek = t.args[0].kind
+        if ek == "i64" { return 101 }
+        if ek == "i32" { return 102 }
+        if ek == "f64" { return 103 }
+        if ek == "f32" { return 104 }
+    }
+    return 0
+}
+
+// ── Local-name binding (HIR ident → MIR Local) ──────────────
+
+pub struct LocalBinding {
+    name: string,
+    local_id: i64
+}
+
+// S1-step-2 (#18) — codegen super-linear fix.
+//
+// Previously LowerCtx carried the growing accumulator arrays (locals /
+// blocks / bindings) BY VALUE. Every _lower_hexpr recursion returned a
+// fresh LowerCtx literal, so hexa deep-cloned all three arrays once per
+// statement -> O(N^2) on a sequential-let body (measured: lower_hir
+// 15/63/372 ms at N=100/200/400).
+//
+// Fix: the accumulators move to module scope (mirroring the existing
+// `_lr_diag` / `_lr_lambdas` convention). LowerCtx now holds ONLY scalar
+// fields, which are cheap to copy -- threading a LowerCtx no longer
+// touches the O(N) arrays. The helper functions still take/return a
+// LowerCtx so the call graph and threading order are byte-identical;
+// they just mutate the module arrays in place instead of cloning.
+//
+// Nesting: a closure body lowers into a fresh ctx (_lower_closure's
+// `lctx`). Because the arrays are now module scope, _lower_closure must
+// SAVE the enclosing function's arrays, swap in empty ones for the
+// lambda body, build the lambda MFunc from them, then RESTORE the
+// enclosing arrays before lowering the closure site. _lr_ctx_save /
+// _lr_ctx_restore do exactly that. _lower_fn clears them per fn.
+pub let mut _lr_locals: [Local] = []
+pub let mut _lr_blocks: [Block] = []
+pub let mut _lr_bindings: [LocalBinding] = []
+// frame_starts was already dead (init empty, copied, never read); kept
+// as a module-scope array so dropping the field is not a separate
+// behavioural change.
+pub let mut _lr_frame_starts: [i64] = []
+// Module-level globals -- set once per module in lower_hir, then
+// read-only for the rest of the pass (every fn / closure body shares).
+pub let mut _lr_globals: [Local] = []
+
+pub struct LowerCtx {
+    next_local: i64,
+    next_block: i64,
+    next_arena: i64,
+    arena_root: i64,
+    cur_block: i64,
+    has_returned: bool
+}
+
+// Snapshot of the module-scope accumulators -- used to save/restore the
+// array set across a nested lowering scope (a closure body).
+struct LowerArrays {
+    locals: [Local],
+    blocks: [Block],
+    bindings: [LocalBinding],
+    frame_starts: [i64]
+}
+
+fn _lr_ctx_save() -> LowerArrays {
+    return LowerArrays {
+        locals: _lr_locals,
+        blocks: _lr_blocks,
+        bindings: _lr_bindings,
+        frame_starts: _lr_frame_starts
+    }
+}
+
+fn _lr_ctx_restore(saved: LowerArrays) {
+    _lr_locals = saved.locals
+    _lr_blocks = saved.blocks
+    _lr_bindings = saved.bindings
+    _lr_frame_starts = saved.frame_starts
+}
+
+// Reset the module accumulators IN PLACE for a new fn-lowering scope.
+// `.truncate(0)` keeps the SAME backing buffer (only HX_ARR_LEN is zeroed)
+// -- so the buffer stays heap-resident. Reassigning `= []` instead would
+// allocate a FRESH empty array; a `[]` literal evaluated inside a function
+// under a live fn-arena mark is arena-backed (cap < 0), and a module-scope
+// global must never hold an arena buffer -- the buffer is freed on the
+// callee arena rewind, leaving _lr_* dangling (observed: `map key 'id' not
+// found` then a heapify stack overflow). truncate-in-place avoids that.
+// The module arrays are first allocated at MODULE scope (mark_top == 0 ->
+// heap); they stay heap for the whole pass.
+fn _lr_ctx_clear() {
+    _lr_locals.truncate(0)
+    _lr_blocks.truncate(0)
+    _lr_bindings.truncate(0)
+    _lr_frame_starts.truncate(0)
+}
+
+// Swap in a FRESH (independent) array set for a nested lowering scope --
+// used only by _lower_closure for the lifted-lambda body. The caller must
+// have _lr_ctx_save'd the enclosing arrays first: a truncate would corrupt
+// them (the save copies the handle, not the buffer), so the lambda body
+// needs genuinely separate arrays. These fresh `[]` are arena-backed, but
+// the lambda's MFunc is heapified when it is pushed onto _lr_lambdas, which
+// promotes the lambda's locals/blocks to the heap before the enclosing
+// arrays are restored -- so the arena buffers are safely abandoned.
+fn _lr_ctx_fresh() {
+    _lr_locals = []
+    _lr_blocks = []
+    _lr_bindings = []
+    _lr_frame_starts = []
+}
+
+// Renamed from _new_ctx to avoid stage0 last-import-wins shadow
+// collision with compiler/check/types.hexa::_new_ctx (Gap 4 fix --
+// silenced 211 'map key not found' warnings during M0 smoke).
+fn _new_lower_ctx() -> LowerCtx {
+    return LowerCtx {
+        next_local: 0,
+        next_block: 0,
+        next_arena: 1,
+        arena_root: 1,
+        cur_block: 0,
+        has_returned: false
+    }
+}
+
+fn _fresh_local(ctx: LowerCtx, t: Type, hint: string) -> LowerCtx {
+    let id = ctx.next_local
+    let l = Local {
+        id: id,
+        arena_id: ctx.arena_root,
+        type_id: _type_id_of(t),
+        name_hint: hint,
+        precision: "",
+        space: ""
+    }
+    _lr_locals.push(l)
+    return LowerCtx {
+        next_local: id + 1,
+        next_block: ctx.next_block,
+        next_arena: ctx.next_arena,
+        arena_root: ctx.arena_root,
+        cur_block: ctx.cur_block,
+        has_returned: ctx.has_returned
+    }
+}
+
+// PR-C piece 3 — variant that stamps the Local's `space` tag (e.g.
+// "shared") from a body-level `@shared let sm: [f64; N]` source.
+// Only Let lowering routes through this; every other `_fresh_local`
+// caller stays on the default `space: ""` path.
+fn _fresh_local_with_space(ctx: LowerCtx, t: Type, hint: string,
+                            space: string) -> LowerCtx {
+    let id = ctx.next_local
+    let l = Local {
+        id: id,
+        arena_id: ctx.arena_root,
+        type_id: _type_id_of(t),
+        name_hint: hint,
+        precision: "",
+        space: space
+    }
+    _lr_locals.push(l)
+    return LowerCtx {
+        next_local: id + 1,
+        next_block: ctx.next_block,
+        next_arena: ctx.next_arena,
+        arena_root: ctx.arena_root,
+        cur_block: ctx.cur_block,
+        has_returned: ctx.has_returned
+    }
+}
+
+// PR-C piece 3 — Extract the GPU memory `space` ("shared" / "") from a
+// HIR Let's annotations. Today we only recognize bare `@shared`; future
+// banks (`@constant`, `@texture`) plug in here.
+fn _space_from_let_anns(anns: [Annotation]) -> string {
+    let mut i = 0
+    while i < len(anns) {
+        if anns[i].name == "shared" {
+            return "shared"
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// RFC 068 P2 helpers — Mixed-precision MIR layer.
+//
+// `_precision_from_typ_kind` — map an HIR Type.kind ("f16" / "bf16" /
+// "f32" / "f64" / etc.) onto the per-Local precision tag the NVPTX
+// codegen consumes. f64 (and every non-low-precision kind) returns ""
+// so the classifier falls through to the default op-name rules — i.e.
+// zero behavior change for the byte-eq f64-default path.
+//
+// `_op_with_precision` — when a precision tag is present and the binop
+// is one of the arithmetic ops `add` / `sub` / `mul` / `div` / `fma`,
+// return the suffixed opcode (`add_f16` / `add_bf16` / `add_f32`) the
+// classifier op-name rules also recognize. Comparison ops (lt / le /
+// gt / ge / eq / ne) stay plain — they produce a PRED dst, not an
+// f16/bf16/f32 dst, so a suffix on the op would mis-classify.
+//
+// `div` siblings (N57 follow-on) join `add`/`sub`/`mul` even though
+// `_nvptx_binop_mnemonic` does NOT yet ship a `div.f64` / `div.<prec>`
+// row (the FP64 default still falls through to the `055-P0 unsupported
+// binop` honest stub; cf. `nvptx_p6_vec_div_test.hexa`). Wiring the
+// synthesis here UNBLOCKS the future flame bf16/f16 path: once a
+// `div.rn.f32` / `div.bf16` mnemonic row lands, the HIR→MIR layer
+// already produces the right opcode + dst.precision tag — no second
+// pass through this fn. Same idempotency applies to the Metal target,
+// which currently only consumes `matmul_bf16` (N41 / N51 shape-match)
+// but will pick up generic `div_bf16` once a Metal binop-emit pass
+// joins the existing matmul-shape recognisers.
+//
+// `_update_local_precision` — replace the Local in ctx.locals with one
+// whose `precision` field carries the tag. Codegen reads `s.dst.precision`
+// directly off the Stmt, but downstream passes that iterate `mfn.locals`
+// (e.g. unroll renumbering — `s.dst.id + offset`) see the tag too.
+fn _precision_from_typ_kind(kind: string) -> string {
+    if kind == "f16"  { return ".f16" }
+    if kind == "bf16" { return ".bf16" }
+    if kind == "f32"  { return ".f32" }
+    return ""
+}
+
+fn _op_with_precision(base: string, precision: string) -> string {
+    if len(precision) == 0 { return base }
+    // Normalize the frontend HIR binop spelling (`+` / `-` / `*` / `/`)
+    // onto the MIR mnemonic the classifier op-name rules consume
+    // (`add_f16` / `sub_f16` / `mul_f16` / `div_f16`). Then suffix by
+    // precision. Comparison ops (lt / le / gt / ge / eq / ne) keep the
+    // plain op because their dst is a PRED (predicate register), not
+    // an f16/bf16/f32 — a suffix would mis-classify those Locals.
+    //
+    // `div` joined the synth list per N57 (`8e9f91da`): the codegen
+    // mnemonic table (`_nvptx_binop_mnemonic`) does not yet ship a
+    // `div.<prec>` row, but adding the HIR→MIR synthesis NOW means the
+    // future codegen-side div row (or a Metal `div_bf16` shape-match)
+    // sees the right opcode + dst.precision tag the moment it lands —
+    // no second pass through this fn. F-RFC055-CPU-CODEGEN-UNTOUCHED
+    // is preserved: CPU targets never see a `div_<prec>` opcode
+    // because the frontend type-check forces FP64 by default in CPU
+    // scope, so this is a pure GPU-path addition.
+    let mut canon = base
+    if base == "+" { canon = "add" }
+    if base == "-" { canon = "sub" }
+    if base == "*" { canon = "mul" }
+    if base == "/" { canon = "div" }
+    if canon == "add" || canon == "sub" || canon == "mul" || canon == "div" || canon == "fma" {
+        if precision == ".f16"  { return canon + "_f16" }
+        if precision == ".bf16" { return canon + "_bf16" }
+        if precision == ".f32"  { return canon + "_f32" }
+    }
+    return base
+}
+
+// (RFC 068 P2) `_update_local_precision` helper removed — the
+// module-scope `_lr_locals` accumulator on current main makes it
+// unnecessary; the binop case mutates `_lr_locals[...]` in place
+// instead. The lookup-by-id walker pattern stays inline at the call
+// site for clarity.
+
+
+fn _new_block(ctx: LowerCtx) -> LowerCtx {
+    let id = ctx.next_block
+    let b = Block { id: id, stmts: [], preds: [], succs: [] }
+    _lr_blocks.push(b)
+    return LowerCtx {
+        next_local: ctx.next_local,
+        next_block: id + 1,
+        next_arena: ctx.next_arena,
+        arena_root: ctx.arena_root,
+        cur_block: ctx.cur_block,
+        has_returned: ctx.has_returned
+    }
+}
+
+fn _set_cur_block(ctx: LowerCtx, id: i64) -> LowerCtx {
+    return LowerCtx {
+        next_local: ctx.next_local,
+        next_block: ctx.next_block,
+        next_arena: ctx.next_arena,
+        arena_root: ctx.arena_root,
+        cur_block: id,
+        has_returned: false
+    }
+}
+
+fn _push_stmt_to(ctx: LowerCtx, block_id: i64, s: Stmt) -> LowerCtx {
+    let mut i = 0
+    while i < len(_lr_blocks) {
+        if _lr_blocks[i].id == block_id {
+            // S1-step-2: mutate the Block's `stmts` array IN PLACE rather
+            // than rebuilding the Block and writing it back with
+            // `_lr_blocks[i] = Block{...}`. hexa arrays are shared handles,
+            // so `_lr_blocks[i].stmts.push(s)` grows the same array the
+            // stored Block already holds. The old write-back used
+            // hexa_array_set, which (unlike hexa_array_push) does NOT
+            // heapify the value — a Block constructed in a deep callee
+            // frame and array_set into the module-scope `_lr_blocks` is
+            // freed on that frame's arena rewind, leaving a dangling slot.
+            // `.push` heapifies the pushed Stmt, so in-place growth is safe.
+            _lr_blocks[i].stmts.push(s)
+            break
+        }
+        i = i + 1
+    }
+    return LowerCtx {
+        next_local: ctx.next_local,
+        next_block: ctx.next_block,
+        next_arena: ctx.next_arena,
+        arena_root: ctx.arena_root,
+        cur_block: ctx.cur_block,
+        has_returned: ctx.has_returned
+    }
+}
+
+fn _push_stmt(ctx: LowerCtx, s: Stmt) -> LowerCtx {
+    return _push_stmt_to(ctx, ctx.cur_block, s)
+}
+
+fn _add_edge(ctx: LowerCtx, from_id: i64, to_id: i64) -> LowerCtx {
+    let mut i = 0
+    while i < len(_lr_blocks) {
+        // S1-step-2: in-place edge growth (see _push_stmt_to). `.succs` /
+        // `.preds` are shared array handles on the stored Block; pushing to
+        // them needs no Block write-back, and `.push` heapifies the i64 id.
+        if _lr_blocks[i].id == from_id {
+            _lr_blocks[i].succs.push(to_id)
+        }
+        if _lr_blocks[i].id == to_id {
+            _lr_blocks[i].preds.push(from_id)
+        }
+        i = i + 1
+    }
+    return LowerCtx {
+        next_local: ctx.next_local,
+        next_block: ctx.next_block,
+        next_arena: ctx.next_arena,
+        arena_root: ctx.arena_root,
+        cur_block: ctx.cur_block,
+        has_returned: ctx.has_returned
+    }
+}
+
+fn _set_returned(ctx: LowerCtx, v: bool) -> LowerCtx {
+    return LowerCtx {
+        next_local: ctx.next_local,
+        next_block: ctx.next_block,
+        next_arena: ctx.next_arena,
+        arena_root: ctx.arena_root,
+        cur_block: ctx.cur_block,
+        has_returned: v
+    }
+}
+
+// Resolve break/continue sentinel STMT_BR targets (emitted by
+// _lower_hexpr's "break"/"continue" handlers) to the enclosing loop's
+// real block ids: -7001 → after_id (loop exit), -7002 → header_id
+// (loop test). Runs at the end of every while-lowering. Nested loops
+// resolve innermost-first — the inner while's lowering runs this over
+// its own body before the outer fixup ever sees those sentinels, so
+// each break/continue binds to its tightest loop. Mirrors the
+// _push_stmt_to block-rebuild idiom; also wires the CFG edge so
+// regalloc / liveness sees the jump (parity with the back-edge path).
+//
+// scope_min: only patch sentinels in blocks with id >= scope_min. Block
+// ids are strictly monotonic (_new_block), so every block belonging to
+// THIS loop's header/body/after structure has id >= header_id, while a
+// sentinel that belongs to an ENCLOSING loop — emitted by a `continue`
+// that textually precedes this (sibling) inner loop within the same
+// outer body — lives in a pre-existing block with id < header_id. Without
+// this guard the inner loop's patch wrongly captures the outer loop's
+// continue, jumping it into the inner header and skipping any code
+// between the `continue` and the inner loop (e.g. `let mut dense = []`),
+// leaving that local uninitialized → non-deterministic tag-garbage crash.
+fn _patch_loop_sentinels(ctx: LowerCtx, after_id: i64, header_id: i64, scope_min: i64) -> LowerCtx {
+    let mut ef: [i64] = []
+    let mut et: [i64] = []
+    let mut i = 0
+    while i < len(_lr_blocks) {
+        let b = _lr_blocks[i]
+        if b.id < scope_min { i = i + 1; continue }
+        let stmts = b.stmts
+        // Build the patched statement list in a fresh local first; only if
+        // a sentinel was actually rewritten do we rebuild the block's
+        // `stmts` array in place. S1-step-2: we cannot `stmts[j] = Stmt{}`
+        // a patched statement back — hexa_array_set does not heapify, so a
+        // Stmt built in this callee frame would dangle once `_lr_blocks` is
+        // a module global and this frame's arena rewinds. Instead we
+        // truncate the (shared) stmts array and re-`.push` every element;
+        // `.push` heapifies each one, so the rebuilt list is heap-safe.
+        let mut rebuilt: [Stmt] = []
+        let mut changed = false
+        let mut j = 0
+        while j < len(stmts) {
+            let s = stmts[j]
+            if s.kind == STMT_BR && (s.target_block == -7001 || s.target_block == -7002) {
+                let mut tgt = header_id
+                if s.target_block == -7001 { tgt = after_id }
+                rebuilt.push(Stmt {
+                    kind: s.kind,
+                    dst: s.dst,
+                    op: s.op,
+                    args: s.args,
+                    target_block: tgt,
+                    target_block_else: s.target_block_else
+                })
+                ef.push(b.id)
+                et.push(tgt)
+                changed = true
+            } else {
+                rebuilt.push(s)
+            }
+            j = j + 1
+        }
+        if changed {
+            _lr_blocks[i].stmts.truncate(0)
+            let mut r = 0
+            while r < len(rebuilt) {
+                _lr_blocks[i].stmts.push(rebuilt[r])
+                r = r + 1
+            }
+        }
+        i = i + 1
+    }
+    let mut ctx2 = ctx
+    let mut e = 0
+    while e < len(ef) {
+        ctx2 = _add_edge(ctx2, ef[e], et[e])
+        e = e + 1
+    }
+    return ctx2
+}
+
+// ── Bindings ────────────────────────────────────────────────
+
+fn _bind(ctx: LowerCtx, name: string, local_id: i64) -> LowerCtx {
+    _lr_bindings.push(LocalBinding { name: name, local_id: local_id })
+    return ctx
+}
+
+fn _rebind(ctx: LowerCtx, name: string, local_id: i64) -> LowerCtx {
+    // SSA-rename for `name`. S1-step-2: append a shadowing binding instead
+    // of `_lr_bindings[i] = LocalBinding{...}`. _mir_lookup scans from the
+    // tail and returns the FIRST match, so the freshly-pushed binding wins
+    // — semantically identical to an in-place replace. We must append
+    // rather than array_set because hexa_array_set does not heapify, and a
+    // LocalBinding built in this callee frame would dangle once stored into
+    // the module-scope `_lr_bindings` and this frame's arena rewinds.
+    // `.push` heapifies the value, so the appended binding is heap-safe.
+    // Nothing ever pops `_lr_bindings` (the frame_starts mechanism is
+    // unused), so the shadowed entry is inert.
+    _lr_bindings.push(LocalBinding { name: name, local_id: local_id })
+    return ctx
+}
+
+fn _mir_lookup(ctx: LowerCtx, name: string) -> i64 {
+    let mut i = len(_lr_bindings) - 1
+    while i >= 0 {
+        if _lr_bindings[i].name == name {
+            return _lr_bindings[i].local_id
+        }
+        i = i - 1
+    }
+    return -1
+}
+
+// Module-level global lookup by source name (lexical fallback when no
+// local/param binding matches). Returns the global id (== index into
+// MModule.globals matching the module-scope `_lr_globals`) or -1 if not
+// a global.
+fn _mir_lookup_global(ctx: LowerCtx, name: string) -> i64 {
+    let mut i = 0
+    while i < len(_lr_globals) {
+        if _lr_globals[i].name_hint == name {
+            return _lr_globals[i].id
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+// ── Result of expression lowering ───────────────────────────
+
+pub struct LowerExprResult {
+    ctx: LowerCtx,
+    operand: Operand,
+    has_value: bool
+}
+
+fn _no_value(ctx: LowerCtx) -> LowerExprResult {
+    return LowerExprResult {
+        ctx: ctx,
+        operand: _const_int_op(0),
+        has_value: false
+    }
+}
+
+fn _value(ctx: LowerCtx, op: Operand) -> LowerExprResult {
+    return LowerExprResult { ctx: ctx, operand: op, has_value: true }
+}
+
+// ── Diagnostic emit helpers (Stage1 punch list C5/C10/C16) ──
+
+fn _emit_hx1101(name: string, sp: Span) {
+    let mut b = diag_new("HX1101")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "name", name)
+    _lr_diag.push(diag_emit(b))
+}
+
+fn _emit_hx1102(kind: string, sp: Span) {
+    let mut b = diag_new("HX1102")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "kind", kind)
+    _lr_diag.push(diag_emit(b))
+}
+
+fn _emit_hx1103(kind: string, sp: Span) {
+    let mut b = diag_new("HX1103")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "kind", kind)
+    _lr_diag.push(diag_emit(b))
+}
+
+// RFC C1 — closure codegen is DEFERRED to RFC C2/C3. A closure-expression
+// `fn(params){body}` parses and type/bind-checks in C1, but the HIR→MIR
+// indirect-call lowering + arm64 codegen are not implemented yet. Emit a
+// dedicated diagnostic so a closure-using program fails with an ACCURATE
+// message ("closure codegen not yet implemented") instead of the misleading
+// HX2001 "undefined name fn" (the pre-C1 state) or a generic HX1103.
+fn _emit_hx1104(sp: Span) {
+    let mut b = diag_new("HX1104")
+    b = diag_span(b, sp)
+    _lr_diag.push(diag_emit(b))
+}
+
+// Set of HExpr kinds the lowering core dispatches on explicitly. Used
+// by the default fall-through to distinguish "shape we know but didn't
+// produce a value for" (e.g. a side-effect-only block) from "shape we
+// genuinely don't handle" (HX1103 trigger). Kept in sync with the
+// branches in `_lower_hexpr` below.
+fn _is_known_hexpr_kind(k: string) -> bool {
+    if k == "literal_int" { return true }
+    if k == "literal_float" { return true }
+    if k == "literal_string" { return true }
+    if k == "literal_bool" { return true }
+    if k == "literal_char" { return true }
+    if k == "ident" { return true }
+    if k == "atlas_ref" { return true }
+    if k == "binop" { return true }
+    if k == "unop" { return true }
+    if k == "call" { return true }
+    if k == "return" { return true }
+    if k == "break" { return true }
+    if k == "continue" { return true }
+    if k == "let" { return true }
+    if k == "assign" { return true }
+    if k == "block" { return true }
+    if k == "if" { return true }
+    if k == "while" { return true }
+    if k == "match" { return true }
+    if k == "struct_lit" { return true }
+    if k == "enum_path" { return true }
+    if k == "field" { return true }
+    if k == "index" { return true }
+    if k == "wildcard" { return true }
+    if k == "field_lit" { return true }
+    if k == "try" { return true }
+    if k == "throw" { return true }
+    if k == "closure" { return true }
+    return false
+}
+
+// ── RFC closure C2 — free-variable analysis ─────────────────
+// A closure's free variables are the identifiers in its body that resolve
+// to the ENCLOSING function's scope (not the closure's own params, not
+// names introduced by `let` inside the body, and not module globals — a
+// global is reachable from the lifted lambda by name without an env slot).
+// `gen2_collect_free` in self/codegen_c2.hexa is the tier-2 reference.
+//
+// Membership test for a string in a [string] list.
+fn _str_list_has(xs: [string], s: string) -> bool {
+    let mut i = 0
+    while i < len(xs) {
+        if xs[i] == s { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// Recursive walker: collect free idents of `e` into `acc` (ordered, deduped),
+// given `bound` = names already bound in scope (closure params + body lets).
+// `enc` is the enclosing-scope ctx — an ident counts as free only if it
+// resolves to an enclosing local binding (a true capture); a name that is
+// only a global / top-level fn is left alone (the lambda reaches it directly).
+fn _collect_free(e: HExpr, bound: [string], acc: [string],
+                 enc: LowerCtx) -> [string] {
+    let mut out = acc
+    let k = e.kind
+    if k == "ident" {
+        let nm = _strip_mut_prefix(e.text)
+        if !_str_list_has(bound, nm) && !_str_list_has(out, nm) {
+            // capture only enclosing LOCALS — _mir_lookup matches a
+            // local/param binding in the enclosing ctx. Globals resolve
+            // via _mir_lookup_global and are intentionally NOT captured.
+            if _mir_lookup(enc, nm) >= 0 { out.push(nm) }
+        }
+        return out
+    }
+    // `let` inside the body introduces a new bound name for the REST of
+    // the enclosing block. v1 keeps it simple: add the let name to `bound`
+    // for the whole subtree walk (over-approximates scope slightly but is
+    // safe — a body-local never needs capturing regardless of position).
+    let mut bound2 = bound
+    if k == "let" {
+        let lnm = _strip_mut_prefix(e.text)
+        if len(lnm) > 0 && !_str_list_has(bound2, lnm) { bound2.push(lnm) }
+    }
+    // A nested closure: its own params shadow within its body. The nested
+    // body still references the OUTER closure's captures transitively, so
+    // we keep walking — names bound by the nested closure's params get
+    // added to `bound2` so they don't leak as captures of the outer one.
+    if k == "closure" {
+        let nkid = len(e.children)
+        let mut ci = 0
+        while ci < nkid - 1 {
+            let pnm = _strip_mut_prefix(e.children[ci].text)
+            if len(pnm) > 0 && !_str_list_has(bound2, pnm) { bound2.push(pnm) }
+            ci = ci + 1
+        }
+    }
+    let mut i = 0
+    while i < len(e.children) {
+        out = _collect_free(e.children[i], bound2, out, enc)
+        i = i + 1
+    }
+    return out
+}
+
+// ── HExpr lowering core ─────────────────────────────────────
+
+fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
+    let k = e.kind
+
+    // ── literals ────────────────────────────────────────────
+    if k == "literal_int" {
+        let v = _parse_int(e.text)
+        return _value(ctx, _const_int_op(v))
+    }
+    if k == "literal_float" {
+        // The literal's source text (e.g. "16.0") rides through HIR
+        // unparsed; convert to f64 here via the runtime to_float
+        // builtin. Prior implementation passed `0.0` unconditionally,
+        // so every float literal in any program lowered to 0.0 — math
+        // builtins like sqrt(16.0) appeared to "do nothing", but the
+        // value was being clobbered at MIR build time, not codegen.
+        // Pass the original e.text alongside the parsed f64 so the
+        // codegen float-pool can preserve full literal precision in
+        // the emitted `.double` directive.
+        return _value(ctx, _const_float_op_with_text(to_float(e.text), e.text))
+    }
+    if k == "literal_string" {
+        return _value(ctx, _const_str_op(e.text))
+    }
+    if k == "literal_bool" {
+        let mut v: i64 = 0
+        if e.text == "true" { v = 1 }
+        return _value(ctx, _const_bool_op(v))
+    }
+    if k == "literal_char" {
+        // Char literals are TAG_STR (a single-char string), NOT TAG_INT/
+        // TAG_CHAR. The runtime represents chars as single-char strings
+        // (`s.chars()` / hexa_str_chars yields TAG_STR elements), so a
+        // char literal must also be TAG_STR for `cs[i] != '.'` to compare
+        // equal — mirrors the hexat reference codegen (self/codegen_c2
+        // .hexa:3247 "char literals must also be TAG_STR for hexa_eq").
+        // e.text is the already-escape-decoded single-char body (parser
+        // ExprKind::LiteralChar). Previously _const_int_op(0) made EVERY
+        // char literal == 0, so e.g. _ends_with_hexa()'s `cs[n-5] != '.'`
+        // was always true → self-host argv parsing broke.
+        return _value(ctx, _const_str_op(e.text))
+    }
+
+    // ── ident ───────────────────────────────────────────────
+    if k == "ident" {
+        // `nil` literal — emit TAG_VOID directly. Bind list at
+        // compiler/check/bind.hexa:780 accepts `nil` as a known name, but
+        // _mir_lookup/_mir_lookup_global don't define a value for it so
+        // it would fall through to _emit_hx1101 + _no_value (TAG_INT 0,
+        // producing `type_of(nil) == "int"` instead of "void"). Mirror
+        // the hexat codegen_c2 fast-path (self/codegen_c2.hexa:3262).
+        if e.text == "nil" {
+            return _value(ctx, _const_void_op())
+        }
+        let id = _mir_lookup(ctx, e.text)
+        if id >= 0 {
+            return _value(ctx, _local_op(id))
+        }
+        // Fall back to module-level global before HX1101: a `let mut g`
+        // at module scope is visible in every fn body without an
+        // explicit local binding.
+        let gid = _mir_lookup_global(ctx, e.text)
+        if gid >= 0 {
+            return _value(ctx, _global_op(gid, e.text))
+        }
+        // Stage1 punch list C5 — unbound ident in lower is fatal.
+        // Previously returned `_const_int_op(0)`, masking cross-file
+        // resolution failures introduced by the Gap 1 splice.
+        _emit_hx1101(e.text, e.span)
+        return _no_value(ctx)
+    }
+
+    // ── atlas ref → STMT_ASSIGN with global Operand ─────────
+    if k == "atlas_ref" {
+        let mut ctx2 = _fresh_local(ctx, e.typ, "atlas_" + e.atlas.ref_kind + "_" + e.atlas.id)
+        let dst = _lr_locals[len(_lr_locals) - 1]
+        let mut args: [Operand] = []
+        args.push(_global_op(e.atlas.atlas_index, e.atlas.ref_kind + "[" + e.atlas.id + "]"))
+        let s = Stmt {
+            kind: STMT_ASSIGN,
+            dst: dst,
+            op: "atlas",
+            args: args,
+            target_block: -1,
+            target_block_else: -1
+        }
+        ctx2 = _push_stmt(ctx2, s)
+        return _value(ctx2, _local_op(dst.id))
+    }
+
+    // ── logical && / || — short-circuit via control flow ──
+    // BINOP unconditionally evaluates both children at MIR build
+    // time, so `b != 0 && a % b == 0` would still run `a % b` when
+    // b == 0 (triggering "modulo by zero"). The codegen's later
+    // truthy-cbz pattern only chooses which already-evaluated
+    // operand to load; it can't undo side effects. Lower the
+    // logical op as `if a { b } else { a }` (&&) / `if a { a } else
+    // { b }` (||) directly here so `b` is only evaluated when
+    // needed.
+    if k == "binop" && len(e.children) >= 2 {
+        if e.text == "&&" || e.text == "||" || e.text == "and" || e.text == "or" {
+            let lr = _lower_hexpr(ctx, e.children[0])
+            let entry_id = lr.ctx.cur_block
+            let mut ctx_pre = _fresh_local(lr.ctx, e.typ, "sc_val")
+            let sc_val = _lr_locals[len(_lr_locals) - 1]
+            ctx_pre = _new_block(ctx_pre)
+            let then_id = _lr_blocks[len(_lr_blocks) - 1].id
+            ctx_pre = _new_block(ctx_pre)
+            let else_id = _lr_blocks[len(_lr_blocks) - 1].id
+            let mut br_args: [Operand] = []
+            br_args.push(lr.operand)
+            let br = Stmt {
+                kind: STMT_BR_COND,
+                dst: _miss_local(),
+                op: "",
+                args: br_args,
+                target_block: then_id,
+                target_block_else: else_id
+            }
+            let mut ctx2 = _push_stmt_to(ctx_pre, entry_id, br)
+            ctx2 = _add_edge(ctx2, entry_id, then_id)
+            ctx2 = _add_edge(ctx2, entry_id, else_id)
+            let is_or = (e.text == "||" || e.text == "or")
+            // truthy-arm: && stores rhs (b); || stores lhs (a)
+            ctx2 = _set_cur_block(ctx2, then_id)
+            let mut then_op = lr.operand
+            if !is_or {
+                let br2 = _lower_hexpr(ctx2, e.children[1])
+                ctx2 = br2.ctx
+                then_op = br2.operand
+            }
+            let mut ta: [Operand] = []
+            ta.push(then_op)
+            let cp_then = Stmt {
+                kind: STMT_ASSIGN,
+                dst: sc_val,
+                op: "sc_val",
+                args: ta,
+                target_block: -1,
+                target_block_else: -1
+            }
+            ctx2 = _push_stmt(ctx2, cp_then)
+            let then_end = ctx2.cur_block
+            // falsy-arm: && stores lhs (a); || stores rhs (b)
+            ctx2 = _set_cur_block(ctx2, else_id)
+            let mut else_op = lr.operand
+            if is_or {
+                let br3 = _lower_hexpr(ctx2, e.children[1])
+                ctx2 = br3.ctx
+                else_op = br3.operand
+            }
+            let mut ea: [Operand] = []
+            ea.push(else_op)
+            let cp_else = Stmt {
+                kind: STMT_ASSIGN,
+                dst: sc_val,
+                op: "sc_val",
+                args: ea,
+                target_block: -1,
+                target_block_else: -1
+            }
+            ctx2 = _push_stmt(ctx2, cp_else)
+            let else_end = ctx2.cur_block
+            // join
+            ctx2 = _new_block(ctx2)
+            let join_id = _lr_blocks[len(_lr_blocks) - 1].id
+            let br_t = Stmt {
+                kind: STMT_BR,
+                dst: _miss_local(),
+                op: "",
+                args: [],
+                target_block: join_id,
+                target_block_else: -1
+            }
+            ctx2 = _push_stmt_to(ctx2, then_end, br_t)
+            ctx2 = _add_edge(ctx2, then_end, join_id)
+            let br_e = Stmt {
+                kind: STMT_BR,
+                dst: _miss_local(),
+                op: "",
+                args: [],
+                target_block: join_id,
+                target_block_else: -1
+            }
+            ctx2 = _push_stmt_to(ctx2, else_end, br_e)
+            ctx2 = _add_edge(ctx2, else_end, join_id)
+            ctx2 = _set_cur_block(ctx2, join_id)
+            return _value(ctx2, _local_op(sc_val.id))
+        }
+    }
+    // RFC 068 marker — Mixed-precision MIR layer. This is the seam where
+    // RFC 068 P1 (`F-RFC068-PRECISION-PROPAGATE`) adds the precision-tag
+    // dispatcher and P2 (`F-RFC068-OPCODE-SUFFIX`) rewrites the emitted
+    // STMT_BINOP op from `add` to `add_f16` / `add_bf16` / `add_f32`
+    // when the dst Local has an explicit precision annotation. See
+    // `docs/rfc/rfc_drafts_2026_05_20/rfc_068_mixed_precision_mir_layer.md`
+    // §3 P1/P2.
+    //
+    // ── binop → STMT_BINOP ──────────────────────────────────
+    if k == "binop" {
+        if len(e.children) < 2 { return _no_value(ctx) }
+        let lr = _lower_hexpr(ctx, e.children[0])
+        let rr = _lower_hexpr(lr.ctx, e.children[1])
+        let mut ctx2 = _fresh_local(rr.ctx, e.typ, "t")
+        // RFC 068 P2 — F-RFC068-OPCODE-SUFFIX. Thread the result type's
+        // precision (f16/bf16/f32) onto the dst Local AND onto the binop
+        // op name. f64 → empty precision ("" classifier-driven default,
+        // op stays plain `add`/`sub`/`mul`). The classifier
+        // (`_nvptx_classify_local_for_stmt`) reads dst.precision first,
+        // so the reg-bank routing works whether the suffix is on the
+        // op or the tag. We set both for symmetry with PR #123's
+        // op-name rules and PR #148's precision-tag short-circuit.
+        // Module-scope-array variant: read raw dst from `_lr_locals`
+        // (current main's accumulator) and mutate `_lr_locals` in place
+        // so downstream walks see the precision tag too.
+        let raw_dst = _lr_locals[len(_lr_locals) - 1]
+        let dst_precision = _precision_from_typ_kind(e.typ.kind)
+        let dst = Local {
+            id: raw_dst.id,
+            arena_id: raw_dst.arena_id,
+            type_id: raw_dst.type_id,
+            name_hint: raw_dst.name_hint,
+            precision: dst_precision,
+            space: ""
+        }
+        _lr_locals[len(_lr_locals) - 1] = dst
+        let op_name = _op_with_precision(e.text, dst_precision)
+        let mut args: [Operand] = []
+        args.push(lr.operand)
+        args.push(rr.operand)
+        let s = Stmt {
+            kind: STMT_BINOP,
+            dst: dst,
+            op: op_name,
+            args: args,
+            target_block: -1,
+            target_block_else: -1
+        }
+        ctx2 = _push_stmt(ctx2, s)
+        return _value(ctx2, _local_op(dst.id))
+    }
+
+    // ── unop → STMT_UNOP ───────────────────────────────────
+    if k == "unop" {
+        if len(e.children) < 1 { return _no_value(ctx) }
+        let r = _lower_hexpr(ctx, e.children[0])
+        // INBOX 2026-05-27 #3 (fold) - `-<const>` folds to a single
+        // const_float / const_int operand so codegen never sees STMT_UNOP
+        // for a literal-only negation. Closes the NVPTX `-1.0e308` / `-1`
+        // literal case independently of the per-target STMT_UNOP arm
+        // (that arm still handles register-neg `-x`).
+        //
+        // For floats we flip the IEEE-754 sign bit (bit 63) instead of
+        // `0.0 - v`, so `-0.0`, `-NaN`, `-Inf` literals all negate exactly
+        // (sign-of-zero preservation · PR #1686 follow-up). `float_to_bits`
+        // / `bits_to_float` are real 4-surface builtins (PR #1678).
+        if e.text == "-" {
+            if r.operand.kind == "const_float" {
+                let bits = float_to_bits(r.operand.float_val)
+                let SIGN_BIT: i64 = 1 << 63
+                return _value(r.ctx, _const_float_op(bits_to_float(bits ^ SIGN_BIT)))
+            }
+            if r.operand.kind == "const_int" {
+                return _value(r.ctx, _const_int_op(0 - r.operand.int_val))
+            }
+        }
+        let mut ctx2 = _fresh_local(r.ctx, e.typ, "t")
+        let dst = _lr_locals[len(_lr_locals) - 1]
+        let mut args: [Operand] = []
+        args.push(r.operand)
+        let s = Stmt {
+            kind: STMT_UNOP,
+            dst: dst,
+            op: e.text,
+            args: args,
+            target_block: -1,
+            target_block_else: -1
+        }
+        ctx2 = _push_stmt(ctx2, s)
+        return _value(ctx2, _local_op(dst.id))
+    }
+
+    // ── call → STMT_CALL ───────────────────────────────────
+    if k == "call" {
+        let mut ctx_r = ctx
+        let mut callee_text = ""
+        let mut arg_ops: [Operand] = []
+        // RFC closure C2 — indirect-call detection. A call whose callee is
+        // a VALUE (a local-bound closure, or a closure-expression invoked
+        // in place) dispatches through the runtime hexa_callN family rather
+        // than a direct `bl <symbol>`. The discriminator mirrors tier-2's
+        // `_is_known_fn_global`: a callee ident that resolves to a LOCAL
+        // binding (let / param) is a closure value — top-level fn names are
+        // never bound as locals. A closure-expression callee is also
+        // indirect. Field-method calls + plain named-fn calls are unchanged.
+        let mut is_indirect = false
+        let mut callee_op = _const_int_op(0)
+        if len(e.children) > 0 {
+            let callee0 = e.children[0]
+            if callee0.kind == "ident" {
+                let cn = _strip_mut_prefix(callee0.text)
+                if _mir_lookup(ctx_r, cn) >= 0 {
+                    is_indirect = true
+                    callee_op = _local_op(_mir_lookup(ctx_r, cn))
+                } else if _mir_lookup_global(ctx_r, cn) >= 0 {
+                    // A module-level `let` (not a `fn` — only ITEM_LET
+                    // names get a global slot) bound to a closure value:
+                    // dispatch indirectly through the global Operand,
+                    // never `bl <symbol>`. Mirrors tier-2 codegen_c2 —
+                    // a callee ident absent from `_known_fn_globals`
+                    // (which holds fn declarations only) falls through
+                    // to the hexa_callN indirect path. Without this a
+                    // top-level `let clo = fn(...)` call emitted a
+                    // direct `bl _clo` → linker `_clo undefined`.
+                    is_indirect = true
+                    callee_op = _global_op(_mir_lookup_global(ctx_r, cn), cn)
+                }
+            } else if callee0.kind == "closure" {
+                let cr = _lower_hexpr(ctx_r, callee0)
+                ctx_r = cr.ctx
+                is_indirect = true
+                callee_op = cr.operand
+            }
+        }
+        if is_indirect {
+            // args[0] = callee value; args[1..] = call arguments.
+            let mut ia_ops: [Operand] = []
+            ia_ops.push(callee_op)
+            let mut ai = 1
+            while ai < len(e.children) {
+                let r = _lower_hexpr(ctx_r, e.children[ai])
+                ctx_r = r.ctx
+                ia_ops.push(r.operand)
+                ai = ai + 1
+            }
+            let mut ictx = _fresh_local(ctx_r, e.typ, "call_ret")
+            let idst = _lr_locals[len(_lr_locals) - 1]
+            let isr = Stmt {
+                kind: STMT_CALL_INDIRECT,
+                dst: idst,
+                op: "",
+                args: ia_ops,
+                target_block: -1,
+                target_block_else: -1
+            }
+            ictx = _push_stmt(ictx, isr)
+            return _value(ictx, _local_op(idst.id))
+        }
+        if len(e.children) > 0 {
+            let callee = e.children[0]
+            callee_text = callee.text
+            // Method call `recv.m(args)`: the callee is a Field
+            // (kind="field", text=m, children=[recv]). The receiver is
+            // the FIRST argument to the dispatched builtin
+            // (hexa_array_push(recv,item), hexa_str_substring(recv,…),
+            // …) — mirrors legacy gen2_method_builtin(obj_expr,…).
+            // Without this the receiver was dropped → e.g.
+            // parts.push("'") called hexa_array_push("'", garbage)
+            // → realloc on a non-heap pointer → SIGABRT.
+            if callee.kind == "field" && len(callee.children) > 0 {
+                let rr = _lower_hexpr(ctx_r, callee.children[0])
+                ctx_r = rr.ctx
+                arg_ops.push(rr.operand)
+            }
+        }
+        let mut i = 1
+        while i < len(e.children) {
+            let r = _lower_hexpr(ctx_r, e.children[i])
+            ctx_r = r.ctx
+            arg_ops.push(r.operand)
+            i = i + 1
+        }
+        // RFC 071 P5++ — `gpu_matmul(c, a, b, M, N, K)` builtin synthesis.
+        // The user-facing builtin is the source-level entry point that
+        // closes the matmul-tier source-to-silicon path:
+        //
+        //     @gpu_kernel fn matmul_kernel(a, b, c, M, N, K) {
+        //         gpu_matmul(c, a, b, M, N, K)
+        //     }
+        //
+        // lowers to the synthetic STMT_LOAD + STMT_LOAD + STMT_BINOP("matmul")
+        // + STMT_STORE MIR shape that the NVPTX `_nvptx_mfunc_is_matmul_shape`
+        // recogniser keys on (and the parallel ROCm `_rocm_mfunc_is_matmul_shape`
+        // + Metal `_metal_mfunc_is_matmul_shape` lanes). The codegen layer
+        // ignores the actual operand identities for this shape — it emits a
+        // hardcoded 6-`u64` param bank (`<name>_param_0..5`) keyed off the
+        // MFunc name + reads dims from `ld.param.u64 %rd3..5`. The synthesis
+        // here therefore needs to satisfy exactly the structural-match check
+        // (kinds + binop op string), not the operand semantics.
+        //
+        // `gpu_matmul_NT_a` / `gpu_matmul_NT_b` follow the same pattern with
+        // the binop op string swapped for the transposed-A / transposed-B
+        // shape recognisers; codegen emits `wmma.load.a.col` / `wmma.mma.col.col`
+        // (NT_a) or `wmma.load.b.row` / `wmma.mma.row.row` (NT_b).
+        //
+        // Honest scope: this cycle wires the HIR→MIR builtin so a hexa-source
+        // `gpu_matmul(...)` call produces the matmul-shape MIR. The NVPTX-side
+        // emit functions (`_nvptx_emit_matmul_module` + family) were added in
+        // N86 (commit 6b2b10c0) and SILENT-WIPED on this worktree's main
+        // ancestry by N88 (e9c89904, 424-line revert via the documented
+        // `feedback_worktree_merge_silent_filedrop` pattern). Source-level
+        // parse + HIR→MIR synthesis lands here; silicon-fire is BLOCKED until
+        // the N86 codegen lane is restored by the parallel N99 worktree.
+        if callee_text == "gpu_matmul" || callee_text == "gpu_matmul_NT_a" || callee_text == "gpu_matmul_NT_b" {
+            if len(arg_ops) >= 3 {
+                let binop_op = callee_text.substring(4, len(callee_text))  // strip "gpu_" prefix → "matmul" / "matmul_NT_a" / "matmul_NT_b"
+                let c_op = arg_ops[0]
+                let a_op = arg_ops[1]
+                let b_op = arg_ops[2]
+                // STMT_LOAD va ← a
+                let mut ctx_mm = _fresh_local(ctx_r, e.typ, "matmul_va")
+                let va = _lr_locals[len(_lr_locals) - 1]
+                let mut la: [Operand] = []
+                la.push(a_op)
+                let s_la = Stmt {
+                    kind: STMT_LOAD,
+                    dst: va,
+                    op: "",
+                    args: la,
+                    target_block: -1,
+                    target_block_else: -1
+                }
+                ctx_mm = _push_stmt(ctx_mm, s_la)
+                // STMT_LOAD vb ← b
+                ctx_mm = _fresh_local(ctx_mm, e.typ, "matmul_vb")
+                let vb = _lr_locals[len(_lr_locals) - 1]
+                let mut lb: [Operand] = []
+                lb.push(b_op)
+                let s_lb = Stmt {
+                    kind: STMT_LOAD,
+                    dst: vb,
+                    op: "",
+                    args: lb,
+                    target_block: -1,
+                    target_block_else: -1
+                }
+                ctx_mm = _push_stmt(ctx_mm, s_lb)
+                // STMT_BINOP("matmul"/"matmul_NT_a"/"matmul_NT_b")(va, vb) → vc
+                ctx_mm = _fresh_local(ctx_mm, e.typ, "matmul_vc")
+                let vc = _lr_locals[len(_lr_locals) - 1]
+                let mut ba: [Operand] = []
+                ba.push(_local_op(va.id))
+                ba.push(_local_op(vb.id))
+                let s_bo = Stmt {
+                    kind: STMT_BINOP,
+                    dst: vc,
+                    op: binop_op,
+                    args: ba,
+                    target_block: -1,
+                    target_block_else: -1
+                }
+                ctx_mm = _push_stmt(ctx_mm, s_bo)
+                // STMT_STORE c ← vc
+                let mut st: [Operand] = []
+                st.push(c_op)
+                st.push(_local_op(vc.id))
+                let s_st = Stmt {
+                    kind: STMT_STORE,
+                    dst: _miss_local(),
+                    op: "",
+                    args: st,
+                    target_block: -1,
+                    target_block_else: -1
+                }
+                ctx_mm = _push_stmt(ctx_mm, s_st)
+                return _no_value(ctx_mm)
+            }
+        }
+        let mut ctx2 = _fresh_local(ctx_r, e.typ, "call_ret")
+        let dst = _lr_locals[len(_lr_locals) - 1]
+        let s = Stmt {
+            kind: STMT_CALL,
+            dst: dst,
+            op: callee_text,
+            args: arg_ops,
+            target_block: -1,
+            target_block_else: -1
+        }
+        ctx2 = _push_stmt(ctx2, s)
+        return _value(ctx2, _local_op(dst.id))
+    }
+
+    // ── return → STMT_RETURN ───────────────────────────────
+    if k == "return" {
+        let mut args: [Operand] = []
+        let mut ctx2 = ctx
+        if len(e.children) > 0 {
+            let r = _lower_hexpr(ctx2, e.children[0])
+            ctx2 = r.ctx
+            args.push(r.operand)
+        }
+        let s = Stmt {
+            kind: STMT_RETURN,
+            dst: _miss_local(),
+            op: "",
+            args: args,
+            target_block: -1,
+            target_block_else: -1
+        }
+        ctx2 = _push_stmt(ctx2, s)
+        ctx2 = _set_returned(ctx2, true)
+        return _no_value(ctx2)
+    }
+
+    // ── break / continue → sentinel STMT_BR, patched by the
+    // enclosing while-lowering (see _patch_loop_sentinels). Sentinel
+    // targets -7001 (break → loop `after`) / -7002 (continue → loop
+    // `header`) are well outside any real block id (≥0) or the -1
+    // non-branch marker. Like return, this terminates the block
+    // (_set_returned) so no fall-through back-edge is appended after.
+    // Nested loops bind innermost: the inner while's lowering runs its
+    // own _patch_loop_sentinels during the outer body lowering, so
+    // inner sentinels are resolved to concrete ids before the outer
+    // fixup runs and only ever sees its own level's sentinels.
+    if k == "break" {
+        let s = Stmt {
+            kind: STMT_BR,
+            dst: _miss_local(),
+            op: "",
+            args: [],
+            target_block: -7001,
+            target_block_else: -1
+        }
+        let mut ctx2 = _push_stmt(ctx, s)
+        ctx2 = _set_returned(ctx2, true)
+        return _no_value(ctx2)
+    }
+    if k == "continue" {
+        let s = Stmt {
+            kind: STMT_BR,
+            dst: _miss_local(),
+            op: "",
+            args: [],
+            target_block: -7002,
+            target_block_else: -1
+        }
+        let mut ctx2 = _push_stmt(ctx, s)
+        ctx2 = _set_returned(ctx2, true)
+        return _no_value(ctx2)
+    }
+
+    // ── let → STMT_ASSIGN, bind name to dst ────────────────
+    if k == "let" {
+        let nm = _strip_mut_prefix(e.text)
+        let mut ctx2 = ctx
+        let mut rhs_op = _const_int_op(0)
+        if len(e.children) > 0 {
+            let r = _lower_hexpr(ctx2, e.children[0])
+            ctx2 = r.ctx
+            rhs_op = r.operand
+        }
+        let mut rhs_t = Type {
+            kind: "?", def: DefId { module: "", index: -1 },
+            args: [], ret: [], domain: "", unit: ""
+        }
+        if len(e.children) > 0 { rhs_t = e.children[0].typ }
+        // PR-C piece 3 — propagate `@shared` (and friends) onto the MIR
+        // Local's `space` tag so NVPTX codegen can later emit a `.shared`
+        // directive. Non-let lowerings stay on plain `_fresh_local`.
+        //
+        // RFC 085 Step C (2026-05-27): for SHARED-bank lets with an
+        // `Array:<N>` type annotation (from `let sm: [T; N]` syntax,
+        // captured by parse_let_expr + parse_type), thread the count
+        // into the MIR Local's `name_hint` as a `:<N>` suffix. NVPTX
+        // classify_locals Pass 0.5 reads the suffix to compute the
+        // exact `.shared .align 8 .b8 _hexa_sh_<fn>[<N*8>]` size instead
+        // of the hardcoded 2048 B default. Non-array or untyped lets
+        // keep `name_hint = nm` and Pass 0.5 falls back to the default.
+        let space = _space_from_let_anns(e.annotations)
+        let mut hint = nm
+        if space == "shared" {
+            let type_text = _hir_let_type_text(e.text)
+            let arr_prefix = "Array:"
+            if len(type_text) > len(arr_prefix) {
+                let head = type_text.substring(0, len(arr_prefix))
+                if head == arr_prefix {
+                    let count_str = type_text.substring(len(arr_prefix), len(type_text))
+                    hint = nm + ":" + count_str
+                }
+            }
+        }
+        ctx2 = _fresh_local_with_space(ctx2, rhs_t, hint, space)
+        let dst = _lr_locals[len(_lr_locals) - 1]
+        let mut args: [Operand] = []
+        args.push(rhs_op)
+        let s = Stmt {
+            kind: STMT_ASSIGN,
+            dst: dst,
+            op: "let",
+            args: args,
+            target_block: -1,
+            target_block_else: -1
+        }
+        ctx2 = _push_stmt(ctx2, s)
+        if len(nm) > 0 { ctx2 = _bind(ctx2, nm, dst.id) }
+        return _no_value(ctx2)
+    }
+
+    // ── assign (i = i + 1, ...) ────────────────────────────
+    //
+    // For an already-bound simple variable, mutate its EXISTING local
+    // in place (shared stack slot) rather than SSA-renaming to a fresh
+    // local. SSA-rename without loop-header phi nodes makes a `while`
+    // condition forever re-read the pre-loop value of the loop-carried
+    // variable (the header lowers the test once against the old binding
+    // while the body rebinds to a fresh local) → infinite loop. The
+    // arm64/x86_64 backends model each local id as one fixed stack slot
+    // with store/reload, so an in-place store is the correct
+    // loop-carried-update lowering and is strictly more correct for
+    // straight-line reassignment too. First-assignment / non-ident lhs
+    // keep the fresh-local + rebind path (safe fallback).
+    if k == "assign" {
+        if len(e.children) < 2 { return _no_value(ctx) }
+        let lhs = e.children[0]
+        // ── index-set: `arr[i] = v` / `map[k] = v` ─────────────
+        // The prior path lowered an index lhs the same way as an
+        // ident lhs (fresh local + rebind), which silently dropped
+        // the store on the actual container — every `d["k"] = v`
+        // left the map empty (caught while sweeping
+        // test/regress_dict_keys_let_bind.hexa through aprime_cc).
+        // Route through hexa_index_set(container, key, val); the
+        // runtime dispatches arrays via hexa_array_set and unwraps
+        // VALSTRUCT, mirroring the existing index-get path
+        // (7b00bd54).
+        if lhs.kind == "index" && len(lhs.children) >= 2 {
+            let br = _lower_hexpr(ctx, lhs.children[0])
+            let kr = _lower_hexpr(br.ctx, lhs.children[1])
+            let rr2 = _lower_hexpr(kr.ctx, e.children[1])
+            let mut args: [Operand] = []
+            args.push(br.operand)
+            args.push(kr.operand)
+            args.push(rr2.operand)
+            let s = Stmt {
+                kind: STMT_ASSIGN,
+                dst: _miss_local(),
+                op: "index_set",
+                args: args,
+                target_block: -1,
+                target_block_else: -1
+            }
+            let ctx_s = _push_stmt(rr2.ctx, s)
+            return _no_value(ctx_s)
+        }
+        let rr = _lower_hexpr(ctx, e.children[1])
+        let mut ctx2 = rr.ctx
+        let mut dst = _miss_local()
+        let mut did_reuse = false
+        let mut is_global = false
+        if len(lhs.text) > 0 {
+            let existing = _mir_lookup(ctx2, lhs.text)
+            if existing >= 0 {
+                let mut li = 0
+                while li < len(_lr_locals) {
+                    if _lr_locals[li].id == existing {
+                        dst = _lr_locals[li]
+                        did_reuse = true
+                        break
+                    }
+                    li = li + 1
+                }
+            } else {
+                // No local binding; check for a module-level global.
+                // Emit STMT_ASSIGN with a sentinel global dst (arena_id
+                // -999, id = global_id) — the backend recognises this
+                // sentinel and emits a `.data` global store instead of
+                // a stack-slot store.
+                let gid = _mir_lookup_global(ctx2, lhs.text)
+                if gid >= 0 {
+                    dst = Local {
+                        id: gid,
+                        arena_id: -999,
+                        type_id: _type_id_of(e.children[1].typ),
+                        name_hint: lhs.text,
+        precision: "",
+        space: ""
+                    }
+                    is_global = true
+                }
+            }
+        }
+        if !did_reuse && !is_global {
+            ctx2 = _fresh_local(ctx2, e.children[1].typ, lhs.text)
+            dst = _lr_locals[len(_lr_locals) - 1]
+        }
+        let mut args: [Operand] = []
+        args.push(rr.operand)
+        let s = Stmt {
+            kind: STMT_ASSIGN,
+            dst: dst,
+            op: "assign",
+            args: args,
+            target_block: -1,
+            target_block_else: -1
+        }
+        ctx2 = _push_stmt(ctx2, s)
+        if !did_reuse && !is_global && len(lhs.text) > 0 {
+            ctx2 = _rebind(ctx2, lhs.text, dst.id)
+        }
+        return _no_value(ctx2)
+    }
+
+    // ── block: lower children sequentially in current block ─
+    if k == "block" {
+        let mut ctx2 = ctx
+        let mut last_op = _const_int_op(0)
+        let mut last_has = false
+        let mut i = 0
+        while i < len(e.children) {
+            if ctx2.has_returned { break }
+            let r = _lower_hexpr(ctx2, e.children[i])
+            ctx2 = r.ctx
+            last_op = r.operand
+            last_has = r.has_value
+            i = i + 1
+        }
+        if last_has { return _value(ctx2, last_op) }
+        return _no_value(ctx2)
+    }
+
+    // ── if → STMT_BR_COND + then/else/after blocks ─────────
+    if k == "if" {
+        if len(e.children) < 2 { return _no_value(ctx) }
+        let cr = _lower_hexpr(ctx, e.children[0])
+        let entry_id = cr.ctx.cur_block
+
+        // Pre-allocate an if-value join temp. `let x = if cond { A }
+        // else { B }` previously fell through to a const-0 default
+        // (the if branch always returned `_no_value`), so any `if`
+        // used as an expression silently bound x to 0. Both arms now
+        // copy their operand into this shared slot at end-of-branch
+        // and the join block returns it.
+        let mut ctx_pre = _fresh_local(cr.ctx, e.typ, "if_val")
+        let if_val = _lr_locals[len(_lr_locals) - 1]
+
+        let mut ctx2 = _new_block(ctx_pre)
+        let then_id = _lr_blocks[len(_lr_blocks) - 1].id
+        ctx2 = _new_block(ctx2)
+        let else_id = _lr_blocks[len(_lr_blocks) - 1].id
+
+        let has_else = len(e.children) >= 3
+
+        let mut br_args: [Operand] = []
+        br_args.push(cr.operand)
+        let br = Stmt {
+            kind: STMT_BR_COND,
+            dst: _miss_local(),
+            op: "",
+            args: br_args,
+            target_block: then_id,
+            target_block_else: else_id
+        }
+        ctx2 = _push_stmt_to(ctx2, entry_id, br)
+        ctx2 = _add_edge(ctx2, entry_id, then_id)
+        ctx2 = _add_edge(ctx2, entry_id, else_id)
+
+        // then-branch
+        ctx2 = _set_cur_block(ctx2, then_id)
+        let tr = _lower_hexpr(ctx2, e.children[1])
+        ctx2 = tr.ctx
+        let then_returned = ctx2.has_returned
+        let then_end_block = ctx2.cur_block
+        let then_has = tr.has_value
+
+        // else-branch (or fall through to else_id)
+        let mut else_returned = false
+        let mut else_end_block = else_id
+        let mut er_op = _const_int_op(0)
+        let mut else_has = false
+        if has_else {
+            ctx2 = _set_cur_block(ctx2, else_id)
+            let er = _lower_hexpr(ctx2, e.children[2])
+            ctx2 = er.ctx
+            else_returned = ctx2.has_returned
+            else_end_block = ctx2.cur_block
+            er_op = er.operand
+            else_has = er.has_value
+        }
+
+        if has_else {
+            if then_returned && else_returned {
+                ctx2 = _set_returned(ctx2, true)
+                return _no_value(ctx2)
+            }
+            ctx2 = _new_block(ctx2)
+            let join_id = _lr_blocks[len(_lr_blocks) - 1].id
+            let both_yield = then_has && else_has && !then_returned && !else_returned
+            if !then_returned {
+                // Copy the then-arm value into the shared if_val slot
+                // before branching to the join.
+                if both_yield {
+                    let mut ta: [Operand] = []
+                    ta.push(tr.operand)
+                    let cps = Stmt {
+                        kind: STMT_ASSIGN,
+                        dst: if_val,
+                        op: "if_val",
+                        args: ta,
+                        target_block: -1,
+                        target_block_else: -1
+                    }
+                    ctx2 = _push_stmt_to(ctx2, then_end_block, cps)
+                }
+                let br_then = Stmt {
+                    kind: STMT_BR,
+                    dst: _miss_local(),
+                    op: "",
+                    args: [],
+                    target_block: join_id,
+                    target_block_else: -1
+                }
+                ctx2 = _push_stmt_to(ctx2, then_end_block, br_then)
+                ctx2 = _add_edge(ctx2, then_end_block, join_id)
+            }
+            if !else_returned {
+                if both_yield {
+                    let mut ea: [Operand] = []
+                    ea.push(er_op)
+                    let cps = Stmt {
+                        kind: STMT_ASSIGN,
+                        dst: if_val,
+                        op: "if_val",
+                        args: ea,
+                        target_block: -1,
+                        target_block_else: -1
+                    }
+                    ctx2 = _push_stmt_to(ctx2, else_end_block, cps)
+                }
+                let br_else = Stmt {
+                    kind: STMT_BR,
+                    dst: _miss_local(),
+                    op: "",
+                    args: [],
+                    target_block: join_id,
+                    target_block_else: -1
+                }
+                ctx2 = _push_stmt_to(ctx2, else_end_block, br_else)
+                ctx2 = _add_edge(ctx2, else_end_block, join_id)
+            }
+            ctx2 = _set_cur_block(ctx2, join_id)
+            if both_yield {
+                return _value(ctx2, _local_op(if_val.id))
+            }
+            return _no_value(ctx2)
+        }
+
+        // No-else: else_id IS the after block. Stage1 punch list C9 —
+        // mirror the has_else recompute so `else_end_block` reflects the
+        // current cur_block after the then-branch lower; today this is a
+        // defensive parallel to the `then_end_block` recompute at line
+        // ~710 (block IDs are stable, so the value is unchanged in the
+        // common case), but it keeps the no-else path consistent with
+        // the has_else path for downstream consumers reading the var.
+        else_end_block = ctx2.cur_block
+        if !then_returned {
+            let br_then = Stmt {
+                kind: STMT_BR,
+                dst: _miss_local(),
+                op: "",
+                args: [],
+                target_block: else_id,
+                target_block_else: -1
+            }
+            ctx2 = _push_stmt_to(ctx2, then_end_block, br_then)
+            ctx2 = _add_edge(ctx2, then_end_block, else_id)
+        }
+        ctx2 = _set_cur_block(ctx2, else_id)
+        return _no_value(ctx2)
+    }
+
+    // ── while → header + body + after blocks ───────────────
+    if k == "while" {
+        if len(e.children) < 2 { return _no_value(ctx) }
+        let from_id = ctx.cur_block
+
+        let mut ctx2 = _new_block(ctx)
+        let header_id = _lr_blocks[len(_lr_blocks) - 1].id
+        ctx2 = _new_block(ctx2)
+        let body_id = _lr_blocks[len(_lr_blocks) - 1].id
+        ctx2 = _new_block(ctx2)
+        let after_id = _lr_blocks[len(_lr_blocks) - 1].id
+
+        let br0 = Stmt {
+            kind: STMT_BR,
+            dst: _miss_local(),
+            op: "",
+            args: [],
+            target_block: header_id,
+            target_block_else: -1
+        }
+        ctx2 = _push_stmt_to(ctx2, from_id, br0)
+        ctx2 = _add_edge(ctx2, from_id, header_id)
+
+        ctx2 = _set_cur_block(ctx2, header_id)
+        let cr = _lower_hexpr(ctx2, e.children[0])
+        ctx2 = cr.ctx
+        let mut br_args: [Operand] = []
+        br_args.push(cr.operand)
+        let br = Stmt {
+            kind: STMT_BR_COND,
+            dst: _miss_local(),
+            op: "",
+            args: br_args,
+            target_block: body_id,
+            target_block_else: after_id
+        }
+        ctx2 = _push_stmt(ctx2, br)
+        ctx2 = _add_edge(ctx2, header_id, body_id)
+        ctx2 = _add_edge(ctx2, header_id, after_id)
+
+        ctx2 = _set_cur_block(ctx2, body_id)
+        let br_b = _lower_hexpr(ctx2, e.children[1])
+        ctx2 = br_b.ctx
+        // Resolve any break/continue sentinels emitted while lowering
+        // this loop body to this loop's after/header (innermost-first).
+        // scope_min = header_id: only this loop's own structure/body
+        // blocks (id >= header_id) are eligible — a `continue` that
+        // belongs to an enclosing loop but textually precedes this
+        // (sibling) inner loop lives in an earlier block (id < header_id)
+        // and must NOT be captured here (it is patched by the outer
+        // loop's own _patch_loop_sentinels later).
+        ctx2 = _patch_loop_sentinels(ctx2, after_id, header_id, header_id)
+        if !ctx2.has_returned {
+            let body_end = ctx2.cur_block
+            let back = Stmt {
+                kind: STMT_BR,
+                dst: _miss_local(),
+                op: "",
+                args: [],
+                target_block: header_id,
+                target_block_else: -1
+            }
+            ctx2 = _push_stmt_to(ctx2, body_end, back)
+            ctx2 = _add_edge(ctx2, body_end, header_id)
+        }
+        ctx2 = _set_cur_block(ctx2, after_id)
+        return _no_value(ctx2)
+    }
+
+    // ── try { try_body } catch e { catch_body } — cycle h20 ──
+    //
+    // CFG layout (entry = ctx.cur_block):
+    //
+    //   entry:
+    //       STMT_TRY_SETJMP target_block=try_id  target_block_else=catch_id
+    //         (allocates a per-try jmp_buf slot in the fn frame, calls
+    //          _setjmp; on first call falls through (BR try_id), on
+    //          longjmp-resumed (nonzero return) BRs to catch_id)
+    //   try_id:
+    //       <try_body>                          ; may early-return
+    //       STMT_TRY_POP                        ; normal exit out of try
+    //       BR after_id
+    //   catch_id:
+    //       STMT_TRY_LAST_ERR -> dst=catch_err_local  ; HexaVal __hexa_last_error()
+    //       <catch_body>                        ; (catch_var=text bound to catch_err_local)
+    //       BR after_id (unless catch returned)
+    //   after_id:
+    //       <fall-through to whatever follows>
+    //
+    // Mirrors self/codegen_c2.hexa::TryCatch lowering, but explicit CFG.
+    // The runtime symbols (_setjmp · __hexa_try_push · __hexa_try_pop ·
+    // __hexa_last_error · hexa_throw) all live in self/runtime.c and are
+    // already linked into aprime-built binaries via runtime.c inline.
+    if k == "try" {
+        if len(e.children) < 2 { return _no_value(ctx) }
+        let entry_id = ctx.cur_block
+
+        let mut ctx2 = _new_block(ctx)
+        let try_id = _lr_blocks[len(_lr_blocks) - 1].id
+        ctx2 = _new_block(ctx2)
+        let catch_id = _lr_blocks[len(_lr_blocks) - 1].id
+        ctx2 = _new_block(ctx2)
+        let after_id = _lr_blocks[len(_lr_blocks) - 1].id
+
+        // STMT_TRY_SETJMP in the entry block — target_block=try_id is the
+        // normal/first-time fall-through; target_block_else=catch_id is
+        // where we land if longjmp-resumed (setjmp returned nonzero).
+        let sj = Stmt {
+            kind: STMT_TRY_SETJMP,
+            dst: _miss_local(),
+            op: "",
+            args: [],
+            target_block: try_id,
+            target_block_else: catch_id
+        }
+        ctx2 = _push_stmt_to(ctx2, entry_id, sj)
+        ctx2 = _add_edge(ctx2, entry_id, try_id)
+        ctx2 = _add_edge(ctx2, entry_id, catch_id)
+
+        // ── try-body block ─────────────────────────────────────
+        ctx2 = _set_cur_block(ctx2, try_id)
+        let tr = _lower_hexpr(ctx2, e.children[0])
+        ctx2 = tr.ctx
+        let try_returned = ctx2.has_returned
+        let try_end_block = ctx2.cur_block
+        if !try_returned {
+            // Normal exit: pop the try stack, branch to after.
+            let pop = Stmt {
+                kind: STMT_TRY_POP,
+                dst: _miss_local(),
+                op: "",
+                args: [],
+                target_block: -1,
+                target_block_else: -1
+            }
+            ctx2 = _push_stmt_to(ctx2, try_end_block, pop)
+            let br_after = Stmt {
+                kind: STMT_BR,
+                dst: _miss_local(),
+                op: "",
+                args: [],
+                target_block: after_id,
+                target_block_else: -1
+            }
+            ctx2 = _push_stmt_to(ctx2, try_end_block, br_after)
+            ctx2 = _add_edge(ctx2, try_end_block, after_id)
+        }
+
+        // ── catch-body block ───────────────────────────────────
+        // Reset has_returned (try-body's `return` doesn't dominate catch).
+        ctx2 = _set_returned(ctx2, false)
+        ctx2 = _set_cur_block(ctx2, catch_id)
+        // Allocate `catch_err_local`, fill via STMT_TRY_LAST_ERR.
+        ctx2 = _fresh_local(ctx2, e.typ, "catch_err")
+        let catch_err_local = _lr_locals[len(_lr_locals) - 1]
+        let le = Stmt {
+            kind: STMT_TRY_LAST_ERR,
+            dst: catch_err_local,
+            op: "",
+            args: [],
+            target_block: -1,
+            target_block_else: -1
+        }
+        ctx2 = _push_stmt(ctx2, le)
+        // Bind catch_var (e.text) to catch_err_local so any reference inside
+        // catch_body resolves to it.
+        if len(e.text) > 0 && e.text != "_" {
+            ctx2 = _bind(ctx2, e.text, catch_err_local.id)
+        }
+        let cr = _lower_hexpr(ctx2, e.children[1])
+        ctx2 = cr.ctx
+        let catch_returned = ctx2.has_returned
+        let catch_end_block = ctx2.cur_block
+        if !catch_returned {
+            let br_after = Stmt {
+                kind: STMT_BR,
+                dst: _miss_local(),
+                op: "",
+                args: [],
+                target_block: after_id,
+                target_block_else: -1
+            }
+            ctx2 = _push_stmt_to(ctx2, catch_end_block, br_after)
+            ctx2 = _add_edge(ctx2, catch_end_block, after_id)
+        }
+
+        // After both arms returned, the try/catch terminator carries
+        // through. Otherwise reset has_returned (one path falls through).
+        if try_returned && catch_returned {
+            ctx2 = _set_returned(ctx2, true)
+        } else {
+            ctx2 = _set_returned(ctx2, false)
+        }
+        ctx2 = _set_cur_block(ctx2, after_id)
+        return _no_value(ctx2)
+    }
+
+    // ── throw <expr> → STMT_THROW ──────────────────────────
+    // Mirrors self/codegen_c2.hexa::ThrowStmt — call hexa_throw with the
+    // value HexaVal. The runtime longjmps to the most-recently-pushed
+    // try frame, or exits(1) with the value if no try is active.
+    if k == "throw" {
+        let mut ctx_r = ctx
+        let mut args: [Operand] = []
+        if len(e.children) > 0 {
+            let r = _lower_hexpr(ctx_r, e.children[0])
+            ctx_r = r.ctx
+            args.push(r.operand)
+        } else {
+            // bare `throw` — emit hexa_throw(hexa_str("error")) at codegen,
+            // so we pass a sentinel const_str here.
+            args.push(_const_str_op("error"))
+        }
+        let s = Stmt {
+            kind: STMT_THROW,
+            dst: _miss_local(),
+            op: "",
+            args: args,
+            target_block: -1,
+            target_block_else: -1
+        }
+        let mut ctx2 = _push_stmt(ctx_r, s)
+        // hexa_throw never returns to its caller (longjmp or exit). Mark
+        // the block as terminated so any trailing fall-through edges are
+        // suppressed — same handling as STMT_RETURN.
+        ctx2 = _set_returned(ctx2, true)
+        return _no_value(ctx2)
+    }
+
+    // ── closure-expression — RFC closure C2 (lambda lift) ──────
+    // Lower `fn(params){body}` by lambda-lifting: synthesise a top-level
+    // MFunc `__hexa_lambda_<N>` whose params are (__env, <closure params>);
+    // its body is the closure body with each captured identifier read from
+    // __env via hexa_array_get. The closure-expression itself lowers to an
+    // env-array build (the captured values in fixed order) plus a
+    // `hexa_closure_new` value producing a TAG_CLOSURE HexaVal. Mirrors
+    // self/codegen_c2.hexa::gen2_lambda_expr exactly.
+    if k == "closure" {
+        return _lower_closure(ctx, e)
+    }
+
+    // ── match: sequence of STMT_BR_COND testing tag ─────────
+    //
+    // Stage1 Gap 14 + punch list C10: arm-pattern coverage:
+    //   - "wildcard"       → unconditional STMT_BR to arm
+    //   - "ident"          → bind scrut to ident name in arm
+    //   - "enum_path"      → tag-equality test; payload binders bound to scrut
+    //   - "literal_int"    → integer-constant-equality test
+    //   - "literal_string" → string-constant-equality test
+    //   - "struct_pattern" → operand-equality test on field sub-patterns
+    //   - other            → HX1102 emit + general operand-equality test fallback
+    if k == "match" {
+        if len(e.children) < 1 { return _no_value(ctx) }
+        let sr = _lower_hexpr(ctx, e.children[0])
+        let scrut_op = sr.operand
+        let mut ctx2 = sr.ctx
+
+        // #25 — match as an EXPRESSION (e.g. `return match k {...}` /
+        // `let s = match …`) must carry each arm's result value out to
+        // the join. Pre-#25 the arm body was lowered but its operand was
+        // discarded and the whole match returned `_no_value` (const_int
+        // 0) — so `tag_of`'s `match k { TokenKind::X -> "X", … }` always
+        // produced "0", which made `same_kind`/`at_eof` always true and a
+        // self-compiled ap2 parsed 0 items. Allocate one result local;
+        // each taken arm copies its value into it (op="bind" → plain
+        // dst=arg0 copy in every backend); the join returns it.
+        ctx2 = _fresh_local(ctx2, e.typ, "match_result")
+        let match_res = _lr_locals[len(_lr_locals) - 1]
+
+        ctx2 = _new_block(ctx2)
+        let join_id = _lr_blocks[len(_lr_blocks) - 1].id
+
+        let mut idx = 1
+        while idx + 1 < len(e.children) {
+            let pat = e.children[idx]
+            let body = e.children[idx + 1]
+
+            ctx2 = _new_block(ctx2)
+            let arm_id = _lr_blocks[len(_lr_blocks) - 1].id
+            let mut next_id = join_id
+            let is_last = (idx + 2 >= len(e.children))
+            if !is_last {
+                ctx2 = _new_block(ctx2)
+                next_id = _lr_blocks[len(_lr_blocks) - 1].id
+            }
+
+            let cur_block_id = ctx2.cur_block
+            if pat.kind == "wildcard" {
+                let br = Stmt {
+                    kind: STMT_BR,
+                    dst: _miss_local(),
+                    op: "",
+                    args: [],
+                    target_block: arm_id,
+                    target_block_else: -1
+                }
+                ctx2 = _push_stmt_to(ctx2, cur_block_id, br)
+                ctx2 = _add_edge(ctx2, cur_block_id, arm_id)
+            } else if pat.kind == "ident" && len(pat.text) > 0 && pat.text != "_" {
+                let br = Stmt {
+                    kind: STMT_BR,
+                    dst: _miss_local(),
+                    op: "",
+                    args: [],
+                    target_block: arm_id,
+                    target_block_else: -1
+                }
+                ctx2 = _push_stmt_to(ctx2, cur_block_id, br)
+                ctx2 = _add_edge(ctx2, cur_block_id, arm_id)
+            } else if pat.kind == "enum_path" {
+                let tag_v = _path_hash(pat.text)
+                // enum_path is map-backed ({"__tag": hash, "__pN": …},
+                // 5008ac18). Extract the discriminant via the symmetric
+                // map-get (op="field" → hexa_map_get, 3-backend codegen)
+                // BEFORE the tag compare. Was: cmp scrut_op (the whole
+                // map) vs int → always false after the map-backed switch.
+                let mut ctx3 = _fresh_local(ctx2, pat.typ, "scrut_tag")
+                let tag_dst = _lr_locals[len(_lr_locals) - 1]
+                let mut tag_args: [Operand] = []
+                tag_args.push(scrut_op)
+                tag_args.push(_const_str_op("__tag"))
+                let tag_get = Stmt {
+                    kind: STMT_ASSIGN,
+                    dst: tag_dst,
+                    op: "field",
+                    args: tag_args,
+                    target_block: -1,
+                    target_block_else: -1
+                }
+                ctx3 = _push_stmt(ctx3, tag_get)
+                ctx3 = _fresh_local(ctx3, pat.typ, "tag_eq")
+                let cmp_dst = _lr_locals[len(_lr_locals) - 1]
+                let mut cmp_args: [Operand] = []
+                cmp_args.push(_local_op(tag_dst.id))
+                cmp_args.push(_const_int_op(tag_v))
+                let cmp = Stmt {
+                    kind: STMT_BINOP,
+                    dst: cmp_dst,
+                    op: "==",
+                    args: cmp_args,
+                    target_block: -1,
+                    target_block_else: -1
+                }
+                ctx3 = _push_stmt(ctx3, cmp)
+                let mut br_args: [Operand] = []
+                br_args.push(_local_op(cmp_dst.id))
+                let br = Stmt {
+                    kind: STMT_BR_COND,
+                    dst: _miss_local(),
+                    op: "",
+                    args: br_args,
+                    target_block: arm_id,
+                    target_block_else: next_id
+                }
+                ctx3 = _push_stmt(ctx3, br)
+                ctx3 = _add_edge(ctx3, ctx3.cur_block, arm_id)
+                ctx3 = _add_edge(ctx3, ctx3.cur_block, next_id)
+                ctx2 = ctx3
+            } else if pat.kind == "literal_int" {
+                // Stage1 punch list C10 — integer-literal pattern.
+                let v = _parse_int(pat.text)
+                let mut ctx3 = _fresh_local(ctx2, pat.typ, "lit_eq")
+                let cmp_dst = _lr_locals[len(_lr_locals) - 1]
+                let mut cmp_args: [Operand] = []
+                cmp_args.push(scrut_op)
+                cmp_args.push(_const_int_op(v))
+                let cmp = Stmt {
+                    kind: STMT_BINOP,
+                    dst: cmp_dst,
+                    op: "==",
+                    args: cmp_args,
+                    target_block: -1,
+                    target_block_else: -1
+                }
+                ctx3 = _push_stmt(ctx3, cmp)
+                let mut br_args: [Operand] = []
+                br_args.push(_local_op(cmp_dst.id))
+                let br = Stmt {
+                    kind: STMT_BR_COND,
+                    dst: _miss_local(),
+                    op: "",
+                    args: br_args,
+                    target_block: arm_id,
+                    target_block_else: next_id
+                }
+                ctx3 = _push_stmt(ctx3, br)
+                ctx3 = _add_edge(ctx3, ctx3.cur_block, arm_id)
+                ctx3 = _add_edge(ctx3, ctx3.cur_block, next_id)
+                ctx2 = ctx3
+            } else if pat.kind == "literal_string" {
+                // Stage1 punch list C10 — string-literal pattern. Operand
+                // equality lowers to STMT_BINOP `==`; codegen handles the
+                // string-compare via the same path as runtime `==` on strings.
+                let mut ctx3 = _fresh_local(ctx2, pat.typ, "lit_eq")
+                let cmp_dst = _lr_locals[len(_lr_locals) - 1]
+                let mut cmp_args: [Operand] = []
+                cmp_args.push(scrut_op)
+                cmp_args.push(_const_str_op(pat.text))
+                let cmp = Stmt {
+                    kind: STMT_BINOP,
+                    dst: cmp_dst,
+                    op: "==",
+                    args: cmp_args,
+                    target_block: -1,
+                    target_block_else: -1
+                }
+                ctx3 = _push_stmt(ctx3, cmp)
+                let mut br_args: [Operand] = []
+                br_args.push(_local_op(cmp_dst.id))
+                let br = Stmt {
+                    kind: STMT_BR_COND,
+                    dst: _miss_local(),
+                    op: "",
+                    args: br_args,
+                    target_block: arm_id,
+                    target_block_else: next_id
+                }
+                ctx3 = _push_stmt(ctx3, br)
+                ctx3 = _add_edge(ctx3, ctx3.cur_block, arm_id)
+                ctx3 = _add_edge(ctx3, ctx3.cur_block, next_id)
+                ctx2 = ctx3
+            } else if pat.kind == "struct_pattern" {
+                // Stage1 punch list C10 — struct-pattern. v0: take an
+                // unconditional STMT_BR to the arm (the structural match
+                // succeeds by shape; field-binding happens below in the
+                // arm-entry block). Field sub-patterns are bound there.
+                let br = Stmt {
+                    kind: STMT_BR,
+                    dst: _miss_local(),
+                    op: "",
+                    args: [],
+                    target_block: arm_id,
+                    target_block_else: -1
+                }
+                ctx2 = _push_stmt_to(ctx2, cur_block_id, br)
+                ctx2 = _add_edge(ctx2, cur_block_id, arm_id)
+            } else {
+                // Stage1 punch list C10 — truly unknown pattern shape.
+                // Emit HX1102 with the kind so the gap surfaces, then fall
+                // through to the general operand-equality test so the rest
+                // of the match still lowers (defensive recovery).
+                _emit_hx1102(pat.kind, pat.span)
+                let pr = _lower_hexpr(ctx2, pat)
+                ctx2 = pr.ctx
+                let mut ctx3 = _fresh_local(ctx2, pat.typ, "tag_eq")
+                let cmp_dst = _lr_locals[len(_lr_locals) - 1]
+                let mut cmp_args: [Operand] = []
+                cmp_args.push(scrut_op)
+                cmp_args.push(pr.operand)
+                let cmp = Stmt {
+                    kind: STMT_BINOP,
+                    dst: cmp_dst,
+                    op: "==",
+                    args: cmp_args,
+                    target_block: -1,
+                    target_block_else: -1
+                }
+                ctx3 = _push_stmt(ctx3, cmp)
+                let mut br_args: [Operand] = []
+                br_args.push(_local_op(cmp_dst.id))
+                let br = Stmt {
+                    kind: STMT_BR_COND,
+                    dst: _miss_local(),
+                    op: "",
+                    args: br_args,
+                    target_block: arm_id,
+                    target_block_else: next_id
+                }
+                ctx3 = _push_stmt(ctx3, br)
+                ctx3 = _add_edge(ctx3, ctx3.cur_block, arm_id)
+                ctx3 = _add_edge(ctx3, ctx3.cur_block, next_id)
+                ctx2 = ctx3
+            }
+
+            // Position cur_block on the arm; emit per-pattern bindings
+            // (ident pat → bind name to scrut; enum_path → bind each
+            // payload child name to scrut for v0 — the structural extract
+            // is a Gap 15 follow-up).
+            ctx2 = _set_cur_block(ctx2, arm_id)
+            if pat.kind == "ident" && len(pat.text) > 0 && pat.text != "_" {
+                let mut ctx_a = _fresh_local(ctx2, pat.typ, pat.text)
+                let dst_a = _lr_locals[len(_lr_locals) - 1]
+                let mut a: [Operand] = []
+                a.push(scrut_op)
+                let s = Stmt {
+                    kind: STMT_ASSIGN,
+                    dst: dst_a,
+                    op: "bind",
+                    args: a,
+                    target_block: -1,
+                    target_block_else: -1
+                }
+                ctx_a = _push_stmt(ctx_a, s)
+                ctx_a = _bind(ctx_a, pat.text, dst_a.id)
+                ctx2 = ctx_a
+            } else if pat.kind == "enum_path" {
+                // RFC-074 Phase 3 + Phase 5 (compiler/ tree) — multi-arg payload destructure.
+                //
+                // Phase 5 storage-swap (this cycle): the producer (enum_path
+                // arm, this file L2210-2255) now stores the payload as a
+                // single contiguous array under one positional key
+                // "__payload" when arity >= 2 — the per-cell "__p<i>" map
+                // slot layout from Phase 3 was a transitional shape. The
+                // pattern destructure must extract symmetrically: arity >= 2
+                // walks `__payload` once (single field-get) then index-gets
+                // each cell by integer ordinal (array_get).
+                //
+                // Arity 0 / 1 is unchanged — those keep the legacy per-slot
+                // "__p0" field-get (which is the construction shape for
+                // arity 1, op="struct_lit"); zero behavior delta on the
+                // single-field path that A1-A5 already byte-eq-validated.
+                if len(pat.children) >= 2 {
+                    // Multi-cell: pull the contiguous payload array out
+                    // ONCE via the existing map-backed `field` op, then
+                    // index_get each binder slot by integer ordinal. This
+                    // collapses N "__p<i>" map lookups + N hash compares
+                    // into 1 map lookup + N O(1) array_get's per match-arm
+                    // (same per-arm complexity, fewer string-key hashes).
+                    let mut ctx_p = _fresh_local(ctx2, pat.typ, "payload")
+                    let pdst = _lr_locals[len(_lr_locals) - 1]
+                    let mut pa: [Operand] = []
+                    pa.push(scrut_op)
+                    pa.push(_const_str_op("__payload"))
+                    let ps = Stmt {
+                        kind: STMT_ASSIGN,
+                        dst: pdst,
+                        op: "field",
+                        args: pa,
+                        target_block: -1,
+                        target_block_else: -1
+                    }
+                    ctx_p = _push_stmt(ctx_p, ps)
+                    ctx2 = ctx_p
+                    let payload_op = _local_op(pdst.id)
+                    let mut pi = 0
+                    while pi < len(pat.children) {
+                        let pc = pat.children[pi]
+                        if pc.kind == "ident" && len(pc.text) > 0 && pc.text != "_" {
+                            let mut ctx_b = _fresh_local(ctx2, pc.typ, pc.text)
+                            let dst_b = _lr_locals[len(_lr_locals) - 1]
+                            let mut a2: [Operand] = []
+                            a2.push(payload_op)
+                            a2.push(_const_int_op(pi))
+                            let s2 = Stmt {
+                                kind: STMT_ASSIGN,
+                                dst: dst_b,
+                                op: "index",
+                                args: a2,
+                                target_block: -1,
+                                target_block_else: -1
+                            }
+                            ctx_b = _push_stmt(ctx_b, s2)
+                            ctx_b = _bind(ctx_b, pc.text, dst_b.id)
+                            ctx2 = ctx_b
+                        }
+                        pi = pi + 1
+                    }
+                } else {
+                    // Arity 0 / 1 — legacy per-slot extract preserved.
+                    let mut pi = 0
+                    while pi < len(pat.children) {
+                        let pc = pat.children[pi]
+                        if pc.kind == "ident" && len(pc.text) > 0 && pc.text != "_" {
+                            let mut ctx_b = _fresh_local(ctx2, pc.typ, pc.text)
+                            let dst_b = _lr_locals[len(_lr_locals) - 1]
+                            let mut a2: [Operand] = []
+                            a2.push(scrut_op)
+                            a2.push(_const_str_op("__p" + to_string(pi)))
+                            let s2 = Stmt {
+                                kind: STMT_ASSIGN,
+                                dst: dst_b,
+                                op: "field",
+                                args: a2,
+                                target_block: -1,
+                                target_block_else: -1
+                            }
+                            ctx_b = _push_stmt(ctx_b, s2)
+                            ctx_b = _bind(ctx_b, pc.text, dst_b.id)
+                            ctx2 = ctx_b
+                        }
+                        pi = pi + 1
+                    }
+                }
+            } else if pat.kind == "struct_pattern" {
+                // Stage1 punch list C10 — bind each named struct-field
+                // sub-pattern. A "field_lit"-shaped child (text=field name,
+                // children=[binding-ident]) lowers to a field extract on
+                // scrut. Bare-ident children mirror enum-path binding.
+                let mut pi = 0
+                while pi < len(pat.children) {
+                    let pc = pat.children[pi]
+                    let mut bind_name = ""
+                    let mut field_text = ""
+                    if pc.kind == "field_lit" {
+                        field_text = pc.text
+                        if len(pc.children) > 0 && pc.children[0].kind == "ident" {
+                            bind_name = pc.children[0].text
+                        } else {
+                            bind_name = pc.text
+                        }
+                    } else if pc.kind == "ident" && len(pc.text) > 0 && pc.text != "_" {
+                        bind_name = pc.text
+                        field_text = pc.text
+                    }
+                    if len(bind_name) > 0 {
+                        let mut ctx_b = _fresh_local(ctx2, pc.typ, bind_name)
+                        let dst_b = _lr_locals[len(_lr_locals) - 1]
+                        let mut a2: [Operand] = []
+                        a2.push(scrut_op)
+                        let s2 = Stmt {
+                            kind: STMT_ASSIGN,
+                            dst: dst_b,
+                            op: "field." + field_text,
+                            args: a2,
+                            target_block: -1,
+                            target_block_else: -1
+                        }
+                        ctx_b = _push_stmt(ctx_b, s2)
+                        ctx_b = _bind(ctx_b, bind_name, dst_b.id)
+                        ctx2 = ctx_b
+                    }
+                    pi = pi + 1
+                }
+            }
+            let br_b = _lower_hexpr(ctx2, body)
+            ctx2 = br_b.ctx
+            if !ctx2.has_returned {
+                let arm_end = ctx2.cur_block
+                // #25 — carry the arm's value to the match join. Only
+                // when the body actually produced one (a `return …` arm
+                // sets has_returned and never reaches here; a bare
+                // statement-style arm has has_value=false → leave the
+                // result local untouched, matching the legacy no-value
+                // behaviour for statement-position match).
+                if br_b.has_value {
+                    let res_copy = Stmt {
+                        kind: STMT_ASSIGN,
+                        dst: match_res,
+                        op: "bind",
+                        args: [br_b.operand],
+                        target_block: -1,
+                        target_block_else: -1
+                    }
+                    ctx2 = _push_stmt_to(ctx2, arm_end, res_copy)
+                }
+                let to_join = Stmt {
+                    kind: STMT_BR,
+                    dst: _miss_local(),
+                    op: "",
+                    args: [],
+                    target_block: join_id,
+                    target_block_else: -1
+                }
+                ctx2 = _push_stmt_to(ctx2, arm_end, to_join)
+                ctx2 = _add_edge(ctx2, arm_end, join_id)
+            }
+
+            ctx2 = _set_cur_block(ctx2, next_id)
+            idx = idx + 2
+        }
+
+        ctx2 = _set_cur_block(ctx2, join_id)
+        return _value(ctx2, _local_op(match_res.id))
+    }
+
+    // ── struct_lit → STMT_ASSIGN op="struct_lit" with field operands ─
+    //
+    // Stage1 Gap 14 (idiom 3): nested-struct construction. Children are
+    // HExpr{kind="field_lit", text=field_name, children=[value]}. We
+    // recurse the values (so a Bar nested inside Foo emits its own
+    // struct_lit assignment first, then Foo references that local).
+    if k == "struct_lit" {
+        // MIR shape (codegen contract): args = [ type_name_str,
+        //   key0_str, val0, key1_str, val1, ... ] so the backend can
+        //   emit hexa_struct_pack_map(type, n, keys, vals). Previously
+        //   field NAMES + type were dropped (values-only) → struct_lit
+        //   was uncodegennable. field_lit HExpr.text is the field name
+        //   (ast_to_hir.hexa:1673). Bounded by source field count.
+        let mut ctx2 = ctx
+        let mut field_ops: [Operand] = []
+        field_ops.push(_const_str_op(e.text))
+        let mut i = 0
+        while i < len(e.children) {
+            let f = e.children[i]
+            if f.kind == "field_lit" && len(f.children) > 0 {
+                field_ops.push(_const_str_op(f.text))
+                let r = _lower_hexpr(ctx2, f.children[0])
+                ctx2 = r.ctx
+                field_ops.push(r.operand)
+            } else {
+                field_ops.push(_const_str_op(""))
+                let r = _lower_hexpr(ctx2, f)
+                ctx2 = r.ctx
+                field_ops.push(r.operand)
+            }
+            i = i + 1
+        }
+        ctx2 = _fresh_local(ctx2, e.typ, "struct_" + e.text)
+        let dst = _lr_locals[len(_lr_locals) - 1]
+        let s = Stmt {
+            kind: STMT_ASSIGN,
+            dst: dst,
+            op: "struct_lit",
+            args: field_ops,
+            target_block: -1,
+            target_block_else: -1
+        }
+        ctx2 = _push_stmt(ctx2, s)
+        return _value(ctx2, _local_op(dst.id))
+    }
+
+    // ── array_lit: [e0, e1, ...] → STMT_ASSIGN op="array_lit" args=[elems]
+    //
+    // Direct mirror of struct_lit minus the field_lit unwrap (array
+    // elements are plain child exprs, no field names). codegen lowers
+    // op="array_lit" to a hexa_array_new + per-element hexa_array_push
+    // sequence. Element count is grammar-capped at 1024 (parser HX0013
+    // truncates over-cap literals to zero children), so this loop is
+    // O(n) bounded — the compile-path O(n²) is structurally impossible.
+    if k == "array_lit" {
+        let mut ctx2 = ctx
+        let mut elem_ops: [Operand] = []
+        let mut i = 0
+        while i < len(e.children) {
+            let r = _lower_hexpr(ctx2, e.children[i])
+            ctx2 = r.ctx
+            elem_ops.push(r.operand)
+            i = i + 1
+        }
+        ctx2 = _fresh_local(ctx2, e.typ, "array")
+        let dst = _lr_locals[len(_lr_locals) - 1]
+        let s = Stmt {
+            kind: STMT_ASSIGN,
+            dst: dst,
+            op: "array_lit",
+            args: elem_ops,
+            target_block: -1,
+            target_block_else: -1
+        }
+        ctx2 = _push_stmt(ctx2, s)
+        return _value(ctx2, _local_op(dst.id))
+    }
+
+    // ── enum_path → constructor (constant tag + lowered payload) ─
+    //
+    // Stage1 Gap 14 (idiom 1 producer side): variant construction.
+    // Tag is a deterministic hash of the path text (matches the match
+    // arm comparison in the same pass).
+    //
+    // RFC 074 Phase 4 (compiler/ tree) — multi-cell payload op split.
+    // RFC 074 Phase 5 (compiler/ tree) — contiguous payload storage.
+    //
+    // Single-cell payload (arity 0 or 1) keeps the proven 3-backend
+    // `struct_lit` op (a351b1c9/87f3c073/5dfc5e32) so the byte-eq
+    // legacy path is preserved verbatim — single-arg enum values still
+    // lower to the same MIR shape as before this cycle.
+    //
+    // Multi-cell payload (arity >= 2) lifts to a distinct `enum_ctor`
+    // op AND now packs every payload cell into a SINGLE contiguous
+    // array stored under the positional key "__payload" — Phase 5
+    // storage swap. The per-cell "__p<i>" map slot layout from
+    // Phase 3/4 was a transitional shape; Phase 5 collapses N map slots
+    // into 1 array slot, replacing N string-keyed hash inserts with
+    // 1 string-keyed hash + N O(1) `hexa_array_push` calls.
+    //
+    // Backend impact is zero: enum_ctor still walks a pairwise
+    // [type_str, k_i, v_i, ...] arg list with the proven map_new +
+    // per-pair map_set loop (133f4a0a). The producer now emits only
+    // TWO pairs (("__tag", hash) and ("__payload", payload_array_op))
+    // and pre-lowers the payload children to a single array_lit STMT.
+    // The proper sum-typed MTag/MPack carrier (RFC §3.2) is a future
+    // sub-cycle; Phase 5 is storage swap only.
+    //
+    // Match-arm destructure side (L1985-2078 above) is symmetric:
+    // arity >= 2 now extracts the payload array once via the existing
+    // field op ("__payload"), then index-gets each binder ordinal.
+    if k == "enum_path" {
+        let mut ctx2 = ctx
+        if len(e.children) >= 2 {
+            // RFC 074 Phase 5 — multi-cell contiguous payload.
+            // (1) pre-lower every payload child, collect operands.
+            let mut elem_ops: [Operand] = []
+            let mut ic = 0
+            while ic < len(e.children) {
+                let r = _lower_hexpr(ctx2, e.children[ic])
+                ctx2 = r.ctx
+                elem_ops.push(r.operand)
+                ic = ic + 1
+            }
+            // (2) emit a fresh array_lit STMT containing all payload cells.
+            ctx2 = _fresh_local(ctx2, e.typ, "payload")
+            let pdst = _lr_locals[len(_lr_locals) - 1]
+            let ps = Stmt {
+                kind: STMT_ASSIGN,
+                dst: pdst,
+                op: "array_lit",
+                args: elem_ops,
+                target_block: -1,
+                target_block_else: -1
+            }
+            ctx2 = _push_stmt(ctx2, ps)
+            // (3) emit the enum_ctor with two pairs: __tag + __payload.
+            let mut args: [Operand] = []
+            args.push(_const_str_op("enum_" + e.text))
+            args.push(_const_str_op("__tag"))
+            args.push(_const_int_op(_path_hash(e.text)))
+            args.push(_const_str_op("__payload"))
+            args.push(_local_op(pdst.id))
+            ctx2 = _fresh_local(ctx2, e.typ, "enum_" + e.text)
+            let dst = _lr_locals[len(_lr_locals) - 1]
+            let s = Stmt {
+                kind: STMT_ASSIGN,
+                dst: dst,
+                op: "enum_ctor",
+                args: args,
+                target_block: -1,
+                target_block_else: -1
+            }
+            ctx2 = _push_stmt(ctx2, s)
+            return _value(ctx2, _local_op(dst.id))
+        }
+        // Arity 0 / 1 — legacy struct_lit / per-slot path preserved.
+        let mut args: [Operand] = []
+        args.push(_const_str_op("enum_" + e.text))
+        args.push(_const_str_op("__tag"))
+        args.push(_const_int_op(_path_hash(e.text)))
+        let mut i = 0
+        while i < len(e.children) {
+            args.push(_const_str_op("__p" + to_string(i)))
+            let r = _lower_hexpr(ctx2, e.children[i])
+            ctx2 = r.ctx
+            args.push(r.operand)
+            i = i + 1
+        }
+        ctx2 = _fresh_local(ctx2, e.typ, "enum_" + e.text)
+        let dst = _lr_locals[len(_lr_locals) - 1]
+        let s = Stmt {
+            kind: STMT_ASSIGN,
+            dst: dst,
+            op: "struct_lit",
+            args: args,
+            target_block: -1,
+            target_block_else: -1
+        }
+        ctx2 = _push_stmt(ctx2, s)
+        return _value(ctx2, _local_op(dst.id))
+    }
+
+    // ── field: base.name → STMT_ASSIGN op="field" args=[base] ─
+    if k == "field" {
+        // Map-backed access symmetric to the map-backed struct/enum
+        // constructor: op="field", args=[base, "<name>"_str] → codegen
+        // emits hexa_map_get(base, key). (Was op="field."+name with the
+        // name fused into the op string — reshaped so the key rides as
+        // a const_str operand resolving to a .rodata label = the
+        // hexa_map_get const char* key ABI. "field." op had no consumer
+        // yet, so the reshape is safe.)
+        if len(e.children) < 1 { return _no_value(ctx) }
+        let r = _lower_hexpr(ctx, e.children[0])
+        let mut ctx2 = _fresh_local(r.ctx, e.typ, "field_" + e.text)
+        let dst = _lr_locals[len(_lr_locals) - 1]
+        let mut args: [Operand] = []
+        args.push(r.operand)
+        args.push(_const_str_op(e.text))
+        let s = Stmt {
+            kind: STMT_ASSIGN,
+            dst: dst,
+            op: "field",
+            args: args,
+            target_block: -1,
+            target_block_else: -1
+        }
+        ctx2 = _push_stmt(ctx2, s)
+        return _value(ctx2, _local_op(dst.id))
+    }
+
+    // ── index: base[idx] → STMT_ASSIGN op="index" args=[base, idx] ─
+    if k == "index" {
+        if len(e.children) < 2 { return _no_value(ctx) }
+        let lr = _lower_hexpr(ctx, e.children[0])
+        let rr = _lower_hexpr(lr.ctx, e.children[1])
+        let mut ctx2 = _fresh_local(rr.ctx, e.typ, "idx")
+        let dst = _lr_locals[len(_lr_locals) - 1]
+        let mut args: [Operand] = []
+        args.push(lr.operand)
+        args.push(rr.operand)
+        let s = Stmt {
+            kind: STMT_ASSIGN,
+            dst: dst,
+            op: "index",
+            args: args,
+            target_block: -1,
+            target_block_else: -1
+        }
+        ctx2 = _push_stmt(ctx2, s)
+        return _value(ctx2, _local_op(dst.id))
+    }
+
+    // ── Default: lower children, no value. ──────────────────
+    // Truly-unknown HExpr kinds emit HX1103 (Stage1 punch list C16). Known
+    // value-less shapes (e.g. side-effect blocks) still recurse silently.
+    if !_is_known_hexpr_kind(k) {
+        _emit_hx1103(k, e.span)
+    }
+    let mut ctx_d = ctx
+    let mut i = 0
+    while i < len(e.children) {
+        let r = _lower_hexpr(ctx_d, e.children[i])
+        ctx_d = r.ctx
+        i = i + 1
+    }
+    return _no_value(ctx_d)
+}
+
+// ── RFC closure C2 — closure-expression lowering ────────────
+// `e` is a HExpr kind "closure": children = [param_0 .. param_{n-1},
+// body_block]; e.text = decimal param count. `enc` is the enclosing
+// function's lowering ctx (used for free-var capture resolution).
+//
+// Produces:
+//   1. a synthetic top-level MFunc `__hexa_lambda_<N>` appended to
+//      `_lr_lambdas`. Its params are (__env, p_0 .. p_{n-1}); its body
+//      prologue reads each captured value out of __env via op="index"
+//      (hexa_index_get → hexa_array_get for arrays), then lowers the
+//      closure body block with params + captures bound.
+//   2. at the closure site: an env-array build (op="array_lit" over the
+//      capture operands in fixed order) + an op="closure_new" STMT_ASSIGN
+//      yielding the TAG_CLOSURE value.
+fn _lower_closure(enc: LowerCtx, e: HExpr) -> LowerExprResult {
+    let nc = len(e.children)
+    let mut npar = 0
+    if nc >= 1 { npar = nc - 1 }   // last child = body block
+
+    // closure param names (strip any `mut:` prefix the parser may add).
+    let mut pnames: [string] = []
+    let mut pi = 0
+    while pi < npar {
+        pnames.push(_strip_mut_prefix(e.children[pi].text))
+        pi = pi + 1
+    }
+
+    // free-variable analysis on the body — captures, in source order.
+    let mut free: [string] = []
+    if nc >= 1 {
+        free = _collect_free(e.children[nc - 1], pnames, [], enc)
+    }
+    let nfree = len(free)
+
+    // ── 1. build the synthetic lambda MFunc ──────────────────
+    let lam_id = _lr_lambda_ctr
+    _lr_lambda_ctr = _lr_lambda_ctr + 1
+    let lam_name = "__hexa_lambda_" + to_string(lam_id)
+
+    let any_t = Type {
+        kind: "?", def: DefId { module: "", index: -1 },
+        args: [], ret: [], domain: "", unit: ""
+    }
+
+    // S1-step-2: the lambda body lowers into a FRESH array set. Save the
+    // enclosing fn's module-scope accumulators, swap in empty ones for the
+    // lambda, then restore the enclosing arrays before the closure site is
+    // lowered below. _lr_globals is module-wide and read-only, so the
+    // lambda body's _mir_lookup_global still resolves the same globals the
+    // enclosing fn sees (no per-ctx `globals` seed needed any more).
+    let _lr_saved_arrays = _lr_ctx_save()
+    _lr_ctx_fresh()
+    let mut lctx = _new_lower_ctx()
+    lctx = _new_block(lctx)
+    let lam_entry = _lr_blocks[len(_lr_blocks) - 1].id
+    lctx = _set_cur_block(lctx, lam_entry)
+
+    // params: __env first, then the closure params (env-first ABI — see
+    // runtime hexa_callN). Bind each by source name.
+    let mut lam_params: [Local] = []
+    lctx = _fresh_local(lctx, any_t, "__env")
+    let env_param = _lr_locals[len(_lr_locals) - 1]
+    lam_params.push(env_param)
+    lctx = _bind(lctx, "__env", env_param.id)
+    pi = 0
+    while pi < npar {
+        lctx = _fresh_local(lctx, any_t, pnames[pi])
+        let pl = _lr_locals[len(_lr_locals) - 1]
+        lam_params.push(pl)
+        if len(pnames[pi]) > 0 { lctx = _bind(lctx, pnames[pi], pl.id) }
+        pi = pi + 1
+    }
+
+    // env-unpack prologue: capture i ← hexa_array_get(__env, i).
+    let mut fi = 0
+    while fi < nfree {
+        lctx = _fresh_local(lctx, any_t, free[fi])
+        let cap_l = _lr_locals[len(_lr_locals) - 1]
+        let mut ga: [Operand] = []
+        ga.push(_local_op(env_param.id))
+        ga.push(_const_int_op(fi))
+        let gs = Stmt {
+            kind: STMT_ASSIGN,
+            dst: cap_l,
+            op: "index",
+            args: ga,
+            target_block: -1,
+            target_block_else: -1
+        }
+        lctx = _push_stmt(lctx, gs)
+        lctx = _bind(lctx, free[fi], cap_l.id)
+        fi = fi + 1
+    }
+
+    // lower the closure body block in the lambda ctx.
+    if nc >= 1 {
+        let br = _lower_hexpr(lctx, e.children[nc - 1])
+        lctx = br.ctx
+        if !lctx.has_returned {
+            let mut ra: [Operand] = []
+            if br.has_value { ra.push(br.operand) }
+            let rs = Stmt {
+                kind: STMT_RETURN,
+                dst: _miss_local(),
+                op: "",
+                args: ra,
+                target_block: -1,
+                target_block_else: -1
+            }
+            lctx = _push_stmt(lctx, rs)
+        }
+    } else {
+        let rs = Stmt {
+            kind: STMT_RETURN,
+            dst: _miss_local(),
+            op: "",
+            args: [],
+            target_block: -1,
+            target_block_else: -1
+        }
+        lctx = _push_stmt(lctx, rs)
+    }
+
+    let lam_func = MFunc {
+        name: lam_name,
+        params: lam_params,
+        return_local: _miss_local(),
+        locals: _lr_locals,
+        blocks: _lr_blocks,
+        entry_block: lam_entry,
+        arena_root: lctx.arena_root,
+        def_line: e.span.line,
+        gpu_kind: GPU_KIND_CPU
+    }
+    _lr_lambdas.push(lam_func)
+    // restore the enclosing fn's accumulators before lowering the site.
+    _lr_ctx_restore(_lr_saved_arrays)
+
+    // ── 2. lower the closure SITE in the enclosing ctx ───────
+    // env array: hexa_array_new() then push each captured value, in the
+    // SAME order _collect_free returned them (== the env-unpack order).
+    let mut ctx2 = enc
+    let mut env_args: [Operand] = []
+    fi = 0
+    while fi < nfree {
+        let cap_id = _mir_lookup(ctx2, free[fi])
+        if cap_id >= 0 {
+            env_args.push(_local_op(cap_id))
+        } else {
+            // global capture fallback — should not normally arise (free
+            // analysis skips globals) but stay safe rather than emit a
+            // dangling operand.
+            let gid = _mir_lookup_global(ctx2, free[fi])
+            if gid >= 0 {
+                env_args.push(_global_op(gid, free[fi]))
+            } else {
+                env_args.push(_const_int_op(0))
+            }
+        }
+        fi = fi + 1
+    }
+    ctx2 = _fresh_local(ctx2, any_t, "clo_env")
+    let env_l = _lr_locals[len(_lr_locals) - 1]
+    let env_s = Stmt {
+        kind: STMT_ASSIGN,
+        dst: env_l,
+        op: "array_lit",
+        args: env_args,
+        target_block: -1,
+        target_block_else: -1
+    }
+    ctx2 = _push_stmt(ctx2, env_s)
+
+    // closure value: op="closure_new", args = [env_array, lambda_name_str,
+    // arity_int]. The codegen reads args[1].str_val (symbol) + args[2].int_val
+    // (arity) and emits `bl _hexa_closure_new` with the lifted fn pointer.
+    ctx2 = _fresh_local(ctx2, e.typ, "clo_val")
+    let clo_l = _lr_locals[len(_lr_locals) - 1]
+    let mut clo_args: [Operand] = []
+    clo_args.push(_local_op(env_l.id))
+    clo_args.push(_const_str_op(lam_name))
+    clo_args.push(_const_int_op(npar))
+    let clo_s = Stmt {
+        kind: STMT_ASSIGN,
+        dst: clo_l,
+        op: "closure_new",
+        args: clo_args,
+        target_block: -1,
+        target_block_else: -1
+    }
+    ctx2 = _push_stmt(ctx2, clo_s)
+    return _value(ctx2, _local_op(clo_l.id))
+}
+
+// ── Helpers ─────────────────────────────────────────────────
+
+// Stable per-string hash used to assign a deterministic discriminant
+// to enum variant paths ("Color::Red") in the match-on-enum lowering.
+// Stage1: real enum-discriminant tables are a Gap 15 follow-up; until
+// then this function gives every distinct path text a distinct (with
+// high probability) i64 tag.
+fn _path_hash(s: string) -> i64 {
+    let cs = s.chars()
+    let n = len(cs)
+    let mut h: i64 = 5381
+    let mut i = 0
+    while i < n {
+        let c = cs[i]
+        let mut code: i64 = 1
+        if c == ':' { code = 58 }
+        else if c == '_' { code = 95 }
+        else if c == 'a' || c == 'A' { code = 97 }
+        else if c == 'b' || c == 'B' { code = 98 }
+        else if c == 'c' || c == 'C' { code = 99 }
+        else if c == 'd' || c == 'D' { code = 100 }
+        else if c == 'e' || c == 'E' { code = 101 }
+        else if c == 'f' || c == 'F' { code = 102 }
+        else if c == 'g' || c == 'G' { code = 103 }
+        else if c == 'h' || c == 'H' { code = 104 }
+        else if c == 'i' || c == 'I' { code = 105 }
+        else if c == 'l' || c == 'L' { code = 108 }
+        else if c == 'n' || c == 'N' { code = 110 }
+        else if c == 'o' || c == 'O' { code = 111 }
+        else if c == 'r' || c == 'R' { code = 114 }
+        else if c == 's' || c == 'S' { code = 115 }
+        else if c == 't' || c == 'T' { code = 116 }
+        else if c == 'u' || c == 'U' { code = 117 }
+        else { code = 90 + i }
+        h = ((h * 33) + code) & 2147483647
+        i = i + 1
+    }
+    return h
+}
+
+// RFC 085 Step B sibling fix — also strips the `|<type-name>` suffix
+// added by parse_let_expr (parser.hexa) for `let sm: T` syntax. Without
+// this strip the binding name registered via `_bind(ctx, nm, dst.id)`
+// would include the type suffix, breaking every subsequent scope lookup
+// of the let variable. (Discovered: F-SHARED-512-NUMERIC fire emit had
+// `div.rn.f64 %fd, 0, 2;` instead of `div.s64 %rd_stride, %rd_stride, 2;`
+// because `stride` lookup returned a const_int(0) fallback.)
+fn _strip_mut_prefix(t: string) -> string {
+    let chars = t.chars()
+    let n = len(chars)
+    let mut start = 0
+    if n >= 4 && chars[0] == 'm' && chars[1] == 'u' && chars[2] == 't' && chars[3] == ':' {
+        start = 4
+    }
+    let mut out = ""
+    let mut i = start
+    while i < n {
+        if chars[i] == '|' { break }
+        out = out + to_string(chars[i])
+        i = i + 1
+    }
+    return out
+}
+
+fn _mir_digit_val(c: char) -> i64 {
+    if c == '0' { return 0 }
+    if c == '1' { return 1 }
+    if c == '2' { return 2 }
+    if c == '3' { return 3 }
+    if c == '4' { return 4 }
+    if c == '5' { return 5 }
+    if c == '6' { return 6 }
+    if c == '7' { return 7 }
+    if c == '8' { return 8 }
+    if c == '9' { return 9 }
+    return -1
+}
+
+fn _parse_int(t: string) -> i64 {
+    let chars = t.chars()
+    let n = len(chars)
+    if n == 0 { return 0 }
+    let mut i = 0
+    let mut neg = false
+    if chars[0] == '-' {
+        neg = true
+        i = 1
+    }
+    let mut v: i64 = 0
+    while i < n {
+        let d = _mir_digit_val(chars[i])
+        if d >= 0 { v = v * 10 + d }
+        i = i + 1
+    }
+    if neg { return -v }
+    return v
+}
+
+// ── RFC 071 P5++ follow-on (N100→N101) — nested-loop matmul auto-synth ──
+//
+// `gpu_matmul(c, a, b, M, N, K)` (N100, commit 261bfb29) closed the
+// source-to-silicon path when the user opts in explicitly via the
+// builtin call. This helper closes the same path for the natural
+// hexa source shape — a triple-nested for-loop with an accumulator —
+// so users do NOT need to know about the `gpu_matmul` builtin to hit
+// the WMMA emit lane:
+//
+//     @gpu_kernel
+//     fn matmul_naive(a: [f16], b: [f16], c: [f32], M: i32, N: i32, K: i32) {
+//         for i in 0..M {
+//             for j in 0..N {
+//                 var sum: f32 = 0.0
+//                 for k in 0..K {
+//                     sum += a[i * K + k] * b[k * N + j]
+//                 }
+//                 c[i * N + j] = sum
+//             }
+//         }
+//     }
+//
+// The C19 `_desugar_for` (`compiler/lower/ast_to_hir.hexa`) rewrites
+// each `for x in iter { body }` into an index-into-array `while` shape
+// BEFORE hir_to_mir sees the body. The fn body that arrives here is
+// therefore:
+//
+//     block { block { let __for_it_*, let __for_idx_*, while { ... } } }
+//
+// nested THREE levels deep (one wrapper per source for-loop). The
+// matcher below walks this canonical desugared shape ONLY — any
+// non-canonical wrapping (manual `if i < M` bounds-check, hoisted
+// stride variables, a `try`/`match`, swapped loop order, accumulator
+// pre-init outside the j-loop, two innermost reductions in parallel)
+// falls through to the normal nested-while lowering with zero
+// behaviour change. Per @D g3 the matcher is conservative on purpose;
+// fuzzier shapes are follow-on territory.
+//
+// The synthesis path itself mirrors the N100 call-branch intercept
+// (1135-1235 in this file): STMT_LOAD a → va, STMT_LOAD b → vb,
+// STMT_BINOP("matmul")(va, vb) → vc, STMT_STORE c ← vc. Codegen does
+// NOT care about the operand identities — `_nvptx_mfunc_is_matmul_shape`
+// matches purely on the kind sequence + binop op string + MFunc.gpu_kind;
+// it then emits a hardcoded 6-`u64` param bank keyed off the MFunc
+// name. The op string is always plain "matmul"; the NT_a / NT_b
+// transposed variants require an explicit `gpu_matmul_NT_*` builtin
+// (no source-loop pattern is canonical enough to discriminate the
+// transpose direction unambiguously).
+//
+// CPU codegen safety: `_lr_locals` / `_lr_blocks` are only touched
+// when ALL of (i) the fn carries `@gpu_kernel`, (ii) the param list
+// matches the canonical (a, b, c, M, N, K) shape, AND (iii) the body
+// HIR matches the desugared triple-nested-for-loop matmul template.
+// A CPU fn with arbitrary triple-nested loops is unaffected
+// (F-RFC055-CPU-CODEGEN-UNTOUCHED contract preserved).
+
+// `_hir_has_gpu_kernel_annotation` — true iff the HItem carries the
+// `@gpu_kernel` annotation. The bind/check pass synthesises this
+// annotation from the source-level `@gpu_kernel` decorator; an
+// implicit-CPU fn returns false.
+fn _hir_has_gpu_kernel_annotation(it: HItem) -> bool {
+    let mut i = 0
+    while i < len(it.annotations) {
+        if it.annotations[i].name == "gpu_kernel" { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// `_hir_param_name` — recover the source-level param name from the
+// optional `param_names` annotation. Returns "" if not declared (e.g.
+// param-name preservation pass disabled, or the annotation predates
+// the param-recovery work).
+fn _hir_param_name(it: HItem, idx: i64) -> string {
+    let mut i = 0
+    while i < len(it.annotations) {
+        let a = it.annotations[i]
+        if a.name == "param_names" {
+            if idx >= 0 && idx < len(a.args) {
+                return a.args[idx].text
+            }
+            return ""
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// `_hir_is_for_idx_let` — true iff the HExpr is the `let __for_idx_*`
+// the desugar produces. The text prefix is the desugar's invariant
+// (`__for_idx_` followed by the per-for uid).
+fn _hir_is_for_idx_let(e: HExpr) -> bool {
+    if e.kind != "let" { return false }
+    let nm = e.text
+    let cs = nm.chars()
+    if len(cs) < 11 { return false }
+    // Prefix check: "__for_idx_"
+    if cs[0] != '_' { return false }
+    if cs[1] != '_' { return false }
+    if cs[2] != 'f' { return false }
+    if cs[3] != 'o' { return false }
+    if cs[4] != 'r' { return false }
+    if cs[5] != '_' { return false }
+    if cs[6] != 'i' { return false }
+    if cs[7] != 'd' { return false }
+    if cs[8] != 'x' { return false }
+    if cs[9] != '_' { return false }
+    return true
+}
+
+// `_hir_is_for_it_let` — companion: `let __for_it_*`.
+fn _hir_is_for_it_let(e: HExpr) -> bool {
+    if e.kind != "let" { return false }
+    let nm = e.text
+    let cs = nm.chars()
+    if len(cs) < 10 { return false }
+    if cs[0] != '_' { return false }
+    if cs[1] != '_' { return false }
+    if cs[2] != 'f' { return false }
+    if cs[3] != 'o' { return false }
+    if cs[4] != 'r' { return false }
+    if cs[5] != '_' { return false }
+    if cs[6] != 'i' { return false }
+    if cs[7] != 't' { return false }
+    if cs[8] != '_' { return false }
+    return true
+}
+
+// `_hir_is_desugared_for_block` — true iff the HExpr is the canonical
+// desugared `for x in iter { body }` shape:
+//
+//     block {
+//         let __for_it_*  = <iter>
+//         let __for_idx_* = 0
+//         while ...      // body picks up the loop var + index increment
+//     }
+//
+// Conservative: requires EXACTLY 3 children in that order. Anything
+// the desugar didn't emit (extra prelude `let`, hoisted stride) falls
+// through.
+fn _hir_is_desugared_for_block(e: HExpr) -> bool {
+    if e.kind != "block" { return false }
+    if len(e.children) != 3 { return false }
+    if !_hir_is_for_it_let(e.children[0]) { return false }
+    if !_hir_is_for_idx_let(e.children[1]) { return false }
+    if e.children[2].kind != "while" { return false }
+    return true
+}
+
+// `_hir_desugared_for_while_body` — given a desugared for-block (per
+// `_hir_is_desugared_for_block`), return the inner block lifted out
+// of the synthetic `while` (i.e. the user-supplied loop body PLUS the
+// implicit `let <x> = __for_it_*[__for_idx_*]` head + the `__for_idx_
+// += 1` tail). Caller is responsible for the desugared-for-block
+// invariant.
+fn _hir_desugared_for_while_body(e: HExpr) -> HExpr {
+    // children[2] is the synthetic while; its second child is the body.
+    let wh = e.children[2]
+    if len(wh.children) < 2 { return _hir_empty_expr_holder() }
+    return wh.children[1]
+}
+
+// Helper — produce an empty placeholder HExpr (kind ""), used only as
+// a "no match" sentinel when the matcher bails out half-way through.
+fn _hir_empty_expr_holder() -> HExpr {
+    return HExpr {
+        kind: "",
+        span: Span { file: "", line: 0, col: 0, len: 0 },
+        typ: Type { kind: "", def: DefId { module: "", index: -1 }, args: [], ret: [], domain: "", unit: "" },
+        text: "",
+        children: [],
+        atlas: AtlasBinding { ref_kind: "", id: "", atlas_index: -1, atlas_hash: "" },
+        def: DefId { module: "", index: -1 },
+        annotations: []
+    }
+}
+
+// `_hir_is_nested_matmul_body` — true iff the fn body is the canonical
+// triple-nested-for desugared shape (outer-i wraps middle-j wraps
+// inner-k, with sum-accumulator + store) the WMMA matmul codegen lane
+// is keyed on. Conservative: ALL of the following must hold:
+//
+//   * Fn body = `block` containing the outer desugared-for-block.
+//   * Outer for-while body splices to: [let i, <middle-for-block>,
+//     <idx incr>]. (len == 3 — the standard `_build_for_body` shape.)
+//   * Middle for-block is itself a desugared-for-block.
+//   * Middle for-while body splices to: [let j, let sum = 0.0,
+//     <inner-for-block>, assign c[…] = sum, <idx incr>]. (len == 5 —
+//     accumulator declared in middle, store right after the inner
+//     loop closes.)
+//   * Inner for-block is itself a desugared-for-block.
+//   * Inner for-while body splices to: [let k, <sum += a[…]*b[…]>,
+//     <idx incr>]. (len == 3 — single-stmt body.)
+//   * The middle-body's stmts[1] `let sum` rhs is a float literal
+//     (the standard 0.0 accumulator init).
+//   * The inner-body's stmts[1] is an `assign` of `sum` with rhs a
+//     `*` binop between two `index` exprs (the a/b loads).
+//   * The middle-body's stmts[3] is an `assign` whose lhs is an
+//     `index` expr (the c[i*N+j] store).
+//
+// Anything else (compound `+=` not desugared yet, bounds-check
+// wrapper, accumulator hoisted outside j-loop, transposed-input
+// variant) fails the match → fall through to the normal nested-while
+// lowering with zero behaviour change.
+fn _hir_is_nested_matmul_body(body: HExpr) -> bool {
+    if body.kind != "block" { return false }
+    if len(body.children) != 1 { return false }
+    let outer = body.children[0]
+    if !_hir_is_desugared_for_block(outer) { return false }
+    let outer_body = _hir_desugared_for_while_body(outer)
+    if outer_body.kind != "block" { return false }
+    if len(outer_body.children) != 3 { return false }
+    if outer_body.children[0].kind != "let" { return false }     // let i = __for_it_X[__for_idx_X]
+    let middle = outer_body.children[1]
+    if !_hir_is_desugared_for_block(middle) { return false }
+    // outer_body.children[2] is the outer __for_idx_X = __for_idx_X + 1 assign.
+    let middle_body = _hir_desugared_for_while_body(middle)
+    if middle_body.kind != "block" { return false }
+    if len(middle_body.children) != 5 { return false }
+    if middle_body.children[0].kind != "let" { return false }    // let j = __for_it_Y[__for_idx_Y]
+    if middle_body.children[1].kind != "let" { return false }    // let sum = 0.0
+    let inner = middle_body.children[2]
+    if !_hir_is_desugared_for_block(inner) { return false }
+    if middle_body.children[3].kind != "assign" { return false } // c[i*N+j] = sum
+    // middle_body.children[4] is the middle __for_idx_Y += 1.
+    // Validate the c-store has an index-expr LHS (otherwise it's e.g.
+    // a bare scalar assign, not the matmul-shape result write).
+    let cstore = middle_body.children[3]
+    if len(cstore.children) < 2 { return false }
+    if cstore.children[0].kind != "index" { return false }
+    let inner_body = _hir_desugared_for_while_body(inner)
+    if inner_body.kind != "block" { return false }
+    if len(inner_body.children) != 3 { return false }
+    if inner_body.children[0].kind != "let" { return false }     // let k = __for_it_Z[__for_idx_Z]
+    if inner_body.children[1].kind != "assign" { return false }  // sum = sum + a[i*K+k] * b[k*N+j]
+    // inner_body.children[2] is the inner __for_idx_Z += 1.
+    // Validate the accumulator rhs is a `*` binop of two index exprs
+    // (the a/b loads). The parser lowers `sum += rhs` into an Assign
+    // with text "+=" whose rhs is the rhs literal; the equivalent
+    // explicit form `sum = sum + a*b` produces a `+` binop rhs that
+    // contains the `*` binop as its right child. Accept BOTH shapes
+    // by looking at the deepest `*` binop in the rhs subtree.
+    let acc = inner_body.children[1]
+    if len(acc.children) < 2 { return false }
+    let acc_rhs = acc.children[1]
+    if !_hir_rhs_contains_mul_of_two_indexes(acc_rhs) { return false }
+    return true
+}
+
+// `_hir_rhs_contains_mul_of_two_indexes` — find a `*` binop anywhere
+// in the rhs subtree whose two operands are `index` exprs. Walks at
+// most one level past a leading `+` (the `sum = sum + a*b` form) plus
+// the `*` itself. Conservative — any other shape (e.g. a fused MAC
+// helper call, three-input dot product expansion) fails the match.
+fn _hir_rhs_contains_mul_of_two_indexes(e: HExpr) -> bool {
+    if e.kind == "binop" && e.text == "*" && len(e.children) == 2 {
+        if e.children[0].kind == "index" && e.children[1].kind == "index" {
+            return true
+        }
+    }
+    if e.kind == "binop" && e.text == "+" && len(e.children) == 2 {
+        // Walk the `sum + a*b` shape — recurse on each child once,
+        // bounded depth, no allocation.
+        if _hir_rhs_contains_mul_of_two_indexes(e.children[0]) { return true }
+        if _hir_rhs_contains_mul_of_two_indexes(e.children[1]) { return true }
+    }
+    return false
+}
+
+// `_synthesize_matmul_skeleton` — emit the 4-stmt MIR matmul-shape
+// skeleton (STMT_LOAD a → va, STMT_LOAD b → vb, STMT_BINOP("matmul")
+// (va, vb) → vc, STMT_STORE c ← vc) into the current block, mirroring
+// the N100 call-branch synthesis. Operands `a_op` / `b_op` / `c_op`
+// are the lowered param Operands (each from a `_local_op(params[k].id)`
+// at the _lower_fn entry binding). Returns the updated LowerCtx.
+fn _synthesize_matmul_skeleton(ctx_in: LowerCtx, t_kid: Type, a_op: Operand, b_op: Operand, c_op: Operand) -> LowerCtx {
+    let mut ctx_mm = _fresh_local(ctx_in, t_kid, "matmul_va")
+    let va = _lr_locals[len(_lr_locals) - 1]
+    let mut la: [Operand] = []
+    la.push(a_op)
+    let s_la = Stmt {
+        kind: STMT_LOAD,
+        dst: va,
+        op: "",
+        args: la,
+        target_block: -1,
+        target_block_else: -1
+    }
+    ctx_mm = _push_stmt(ctx_mm, s_la)
+    ctx_mm = _fresh_local(ctx_mm, t_kid, "matmul_vb")
+    let vb = _lr_locals[len(_lr_locals) - 1]
+    let mut lb: [Operand] = []
+    lb.push(b_op)
+    let s_lb = Stmt {
+        kind: STMT_LOAD,
+        dst: vb,
+        op: "",
+        args: lb,
+        target_block: -1,
+        target_block_else: -1
+    }
+    ctx_mm = _push_stmt(ctx_mm, s_lb)
+    ctx_mm = _fresh_local(ctx_mm, t_kid, "matmul_vc")
+    let vc = _lr_locals[len(_lr_locals) - 1]
+    let mut ba: [Operand] = []
+    ba.push(_local_op(va.id))
+    ba.push(_local_op(vb.id))
+    let s_bo = Stmt {
+        kind: STMT_BINOP,
+        dst: vc,
+        op: "matmul",
+        args: ba,
+        target_block: -1,
+        target_block_else: -1
+    }
+    ctx_mm = _push_stmt(ctx_mm, s_bo)
+    let mut st: [Operand] = []
+    st.push(c_op)
+    st.push(_local_op(vc.id))
+    let s_st = Stmt {
+        kind: STMT_STORE,
+        dst: _miss_local(),
+        op: "",
+        args: st,
+        target_block: -1,
+        target_block_else: -1
+    }
+    ctx_mm = _push_stmt(ctx_mm, s_st)
+    return ctx_mm
+}
+
+// ── Function lowering ───────────────────────────────────────
+
+fn _lower_fn(it: HItem, mglobals: [Local]) -> MFunc {
+    // S1-step-2: each fn lowers into a fresh module-scope array set.
+    // Module globals come from `_lr_globals` (set once in lower_hir);
+    // `mglobals` is retained as a parameter for call-site compatibility.
+    _lr_ctx_clear()
+    let mut ctx = _new_lower_ctx()
+    ctx = _new_block(ctx)
+    let entry_id = _lr_blocks[len(_lr_blocks) - 1].id
+    ctx = _set_cur_block(ctx, entry_id)
+
+    let mut params: [Local] = []
+    let mut p = 0
+    while p < len(it.sig_params) {
+        let pt = it.sig_params[p]
+        ctx = _fresh_local(ctx, pt, "param" + to_string(p))
+        let l = _lr_locals[len(_lr_locals) - 1]
+        params.push(l)
+        ctx = _bind(ctx, "param" + to_string(p), l.id)
+        p = p + 1
+    }
+    // Recover real param names from optional "param_names" annotation.
+    let mut ann_i = 0
+    while ann_i < len(it.annotations) {
+        let a = it.annotations[ann_i]
+        if a.name == "param_names" {
+            let mut q = 0
+            while q < len(a.args) && q < len(params) {
+                let nm = a.args[q].text
+                if len(nm) > 0 {
+                    ctx = _bind(ctx, nm, params[q].id)
+                }
+                q = q + 1
+            }
+        }
+        ann_i = ann_i + 1
+    }
+
+    // RFC 071 P5++ follow-on (N101) — nested-loop matmul auto-synth.
+    // BEFORE the normal body lowering, peek at (i) the fn-level
+    // `@gpu_kernel` annotation, (ii) the canonical (a, b, c, M, N, K)
+    // param-name shape, AND (iii) the HIR body matching the canonical
+    // desugared triple-nested-for matmul template. If ALL three hold,
+    // synthesize the 4-stmt STMT_LOAD + STMT_LOAD + STMT_BINOP("matmul")
+    // + STMT_STORE skeleton directly (mirrors N100's call-branch
+    // intercept at L1198-1235) and skip the normal body lowering. If
+    // any predicate fails, fall through to `_lower_hexpr(ctx, it.body)`
+    // unchanged (CPU codegen is byte-eq; arbitrary CPU triple-nested
+    // loops are unaffected; the F-RFC055-CPU-CODEGEN-UNTOUCHED
+    // contract is preserved).
+    //
+    // The 4-stmt skeleton is what the NVPTX/ROCm/Metal matmul-shape
+    // recognisers key on; the operand identities are ignored by codegen
+    // (it emits a hardcoded 6-`u64` `.param` bank keyed off the MFunc
+    // name + reads dims from `ld.param.u64 %rd3..5`). The synthetic
+    // body therefore replaces ALL nested-loop MIR — codegen sees
+    // exactly the same shape as `gpu_matmul(c, a, b, M, N, K)`.
+    let mut matmul_synthesised = false
+    if _hir_has_gpu_kernel_annotation(it) {
+        if len(params) >= 3 {
+            let n0 = _hir_param_name(it, 0)
+            let n1 = _hir_param_name(it, 1)
+            let n2 = _hir_param_name(it, 2)
+            if n0 == "a" && n1 == "b" && n2 == "c" {
+                if _hir_is_nested_matmul_body(it.body) {
+                    let a_op = _local_op(params[0].id)
+                    let b_op = _local_op(params[1].id)
+                    let c_op = _local_op(params[2].id)
+                    ctx = _synthesize_matmul_skeleton(ctx, it.body.typ, a_op, b_op, c_op)
+                    matmul_synthesised = true
+                }
+            }
+        }
+    }
+
+    // Body lowering — either the normal recursive lower, or a no-op
+    // for the synthesised matmul case (skeleton + trailing implicit
+    // STMT_RETURN mirror the N100 case-f shape exactly).
+    let mut br_has_value = false
+    let mut br_operand: Operand = _const_int_op(0)
+    if !matmul_synthesised {
+        let br = _lower_hexpr(ctx, it.body)
+        ctx = br.ctx
+        br_has_value = br.has_value
+        br_operand = br.operand
+    }
+
+    if !ctx.has_returned {
+        let mut args: [Operand] = []
+        if br_has_value { args.push(br_operand) }
+        let s = Stmt {
+            kind: STMT_RETURN,
+            dst: _miss_local(),
+            op: "",
+            args: args,
+            target_block: -1,
+            target_block_else: -1
+        }
+        ctx = _push_stmt(ctx, s)
+    }
+
+    let ret_local = _miss_local()
+    // RFC 055 055-P3c — propagate the HIR FnDecl's `@gpu_kernel` /
+    // `@gpu_device` annotation to MFunc.gpu_kind so the NVPTX codegen
+    // can partition the module's functions. CPU codegen targets ignore
+    // the field (F-RFC055-CPU-CODEGEN-UNTOUCHED holds; the CPU emit
+    // path is byte-identical when no @gpu_* function is present).
+    let mut __gpu_kind = GPU_KIND_CPU
+    let mut __ai = 0
+    while __ai < len(it.annotations) {
+        let __an = it.annotations[__ai].name
+        if __an == "gpu_kernel" { __gpu_kind = GPU_KIND_KERNEL }
+        if __an == "gpu_device" { __gpu_kind = GPU_KIND_DEVICE }
+        __ai = __ai + 1
+    }
+    return MFunc {
+        // F6 P0c-2 — forced copy: it.name is the HItem's name handle
+        // (hmodule outlives the streaming loop). PLAN-stage3-footprint-F6.md.
+        name: it.name.substring(0, len(it.name)),
+        params: params,
+        return_local: ret_local,
+        locals: _lr_locals,
+        blocks: _lr_blocks,
+        entry_block: entry_id,
+        arena_root: ctx.arena_root,
+        // #13 DWARF .loc — carry the fn-definition source line through to
+        // codegen so it can emit a `.loc 1 <line> 0` directive.
+        def_line: it.span.line,
+        gpu_kind: __gpu_kind
+    }
+}
+
+// ── Public entry ────────────────────────────────────────────
+
+pub fn lower_hir(module: HModule) -> MModule {
+    _lr_diag = []
+    // RFC closure C2 — reset the synthetic-lambda accumulator so repeated
+    // compiles in the same process do not leak lifted MFuncs / counter
+    // state across runs (same discipline as `_lr_diag`).
+    _lr_lambdas = []
+    _lr_lambda_ctr = 0
+    // Two-pass: collect all module-level globals first so every fn body
+    // can resolve any global by name regardless of textual order
+    // (parser may put `fn main` before or after a `let mut g = …`).
+    let mut globals: [Local] = []
+    let mut k = 0
+    while k < len(module.items) {
+        let itk = module.items[k]
+        if itk.kind == "ITEM_LET" {
+            // Strip `mut:` prefix the parser uses on mutable lets so the
+            // name_hint matches identifier text inside fn bodies.
+            let mut nm = itk.name
+            if len(nm) >= 4 && nm.substring(0, 4) == "mut:" {
+                nm = nm.substring(4, len(nm))
+            }
+            let l = Local {
+                id: len(globals),
+                arena_id: 0,
+                type_id: _type_id_of(itk.sig_return),
+                name_hint: nm,
+        precision: "",
+        space: ""
+            }
+            globals.push(l)
+        }
+        k = k + 1
+    }
+    // S1-step-2: publish the module globals to module scope so every
+    // _lower_fn / closure body resolves them via `_lr_globals` without
+    // threading a per-ctx `globals` array.
+    _lr_globals = globals
+    let mut funcs: [MFunc] = []
+    let mut fn_names: [string] = []
+    let mut i = 0
+    while i < len(module.items) {
+        let it = module.items[i]
+        if it.kind == "ITEM_FN" {
+            // First-wins fn dedup (mirrors the bind pre-pass that
+            // resolves duplicate pub symbols across imported files
+            // with a first-wins skip). Without this skip the second
+            // copy of e.g. `pub fn absf` from two atlas modules
+            // makes it through to codegen and the assembler errors
+            // on `_absf already defined`. Bind only suppressed the
+            // typed env entry; the items list still carried both.
+            // last-wins variant trialled (sweep #11) — no net gain
+            // on the atlas verifier DIFFs (those have a different
+            // root cause), and surfaced interp-timing variance —
+            // so reverted to first-wins for simplicity.
+            let mut already = false
+            let mut nj = 0
+            while nj < len(fn_names) {
+                if fn_names[nj] == it.name { already = true; break }
+                nj = nj + 1
+            }
+            if !already {
+                let f = _lower_fn(it, globals)
+                funcs.push(f)
+                fn_names.push(it.name.substring(0, len(it.name)))
+            }
+        }
+        i = i + 1
+    }
+    // RFC closure C2 — append every synthetic lambda lifted out of a
+    // closure-expression during the user-function lowering above. They are
+    // ordinary top-level MFuncs from codegen's point of view; emitting them
+    // after the user functions keeps `__hexa_lambda_<N>` symbols defined for
+    // the `hexa_closure_new` references planted at the closure sites.
+    let mut li = 0
+    while li < len(_lr_lambdas) {
+        funcs.push(_lr_lambdas[li])
+        li = li + 1
+    }
+    return MModule {
+        file: module.file,
+        funcs: funcs,
+        globals: globals
+    }
+}

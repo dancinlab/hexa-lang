@@ -1,0 +1,284 @@
+// ═══════════════════════════════════════════════════════════════
+//  build_hexa_cli_linux.hexa — cross-build the hexa CLI dispatcher
+//  (self/main.hexa → build/hexa_linux_<arch>) for Linux from macOS.
+//
+//  Pairs with build_hexat_linux.hexa:
+//    - build_hexat_linux.hexa    transpiler only    (.hexa → .c)
+//    - build_hexa_cli_linux.hexa   full CLI driver    (run/build/cc/…)
+//
+//  Output: self-contained static ELF, drop-in replacement for the
+//  Rust /opt/homebrew/bin/hexa driver — closes anima roadmap-67 M5
+//  deliverable (hxa-20260423-003 결손-A / 결손-F).
+//
+//  Usage:
+//    hexa tool/build_hexa_cli_linux.hexa [--target=arm64|x86_64] [-o path]
+//
+//  Default target: host arch auto-detect
+//    - macOS arm64 host       → arm64
+//    - any other (x86_64/etc) → x86_64
+//
+//  Env:
+//    LINUX_CC      compiler override (overrides target → cc mapping)
+//    EXTRA_CFLAGS  append to cflags
+//
+//  Compiler mapping:
+//    arm64  → aarch64-linux-musl-gcc
+//    x86_64 → x86_64-linux-musl-gcc
+//
+//  Pipeline:
+//    1. self/native/hexat self/main.hexa build/stage1/main.c
+//       (regenerates the dispatch C from the current main.hexa SSOT)
+//    2. <musl-gcc> -static -I self build/stage1/main.c → ELF
+//
+//  Background: 2026-04-25 Mac jetsam SIGKILL — hive policy now
+//  forbids Mac-host bare hexa execution and routes everything through
+//  Linux containers with hard CPU/RAM caps. Both arm64 and x86_64 ELFs
+//  must be built so a multi-arch runner image can be assembled.
+// ═══════════════════════════════════════════════════════════════
+
+fn run_ok(cmd) {
+    let r = exec_with_status(cmd)
+    if r[1] != 0 {
+        eprintln("FAILED: " + cmd)
+        if r[0] != "" { eprintln(r[0]) }
+        exit(1)
+    }
+    r[0]
+}
+
+// host_arch_to_linux_target: pure mapping helper — given the output
+// of `uname -m`, return the canonical linux target token used by this
+// tool. Default rule: macOS arm64 → arm64; everything else → x86_64.
+fn host_arch_to_linux_target(uname_m) -> string {
+    if uname_m == "arm64" { return "arm64" }
+    if uname_m == "aarch64" { return "arm64" }
+    return "x86_64"
+}
+
+// target_to_cc: target token → musl cross-compiler binary name.
+fn target_to_cc(target) -> string {
+    if target == "arm64" { return "aarch64-linux-musl-gcc" }
+    return "x86_64-linux-musl-gcc"
+}
+
+// default_out_path: build/hexa_linux_<arch> derivation.
+fn default_out_path(repo_root, target) -> string {
+    return repo_root + "/build/hexa_linux_" + target
+}
+
+// ── minimal selftest ─────────────────────────────────────────
+// Exercises the pure arg-parsing / default-derivation logic that
+// the heavy build path depends on (no cross-compiler required).
+fn cmd_selftest() -> i64 {
+    println("[build_hexa_cli_linux selftest]")
+    let mut fails = 0
+
+    // T1: default out_path derivation — when -o omitted and target=x86_64,
+    //     path is "<repo>/build/hexa_linux_x86_64"
+    let repo = "/tmp/fake_repo"
+    let t1_out = default_out_path(repo, "x86_64")
+    if t1_out != "/tmp/fake_repo/build/hexa_linux_x86_64" {
+        eprintln("  FAIL T1 default out_path: " + t1_out)
+        fails = fails + 1
+    } else { println("  OK   T1 default out_path derivation") }
+
+    // T2: -o override — arg[ai+1] is captured verbatim
+    let fake_args = ["hexa", "tool/build_hexa_cli_linux.hexa", "-o", "/custom/hexa"]
+    let mut out2 = ""
+    let mut ai = 2
+    while ai < len(fake_args) {
+        let a = fake_args[ai]
+        if a == "-o" && (ai + 1) < len(fake_args) {
+            ai = ai + 1
+            out2 = fake_args[ai]
+        }
+        ai = ai + 1
+    }
+    if out2 != "/custom/hexa" {
+        eprintln("  FAIL T2 -o override: " + out2)
+        fails = fails + 1
+    } else { println("  OK   T2 -o override parsing") }
+
+    // T3: cc default for x86_64 target
+    let t3_cc = target_to_cc("x86_64")
+    if t3_cc != "x86_64-linux-musl-gcc" {
+        eprintln("  FAIL T3 cc default x86_64: " + t3_cc)
+        fails = fails + 1
+    } else { println("  OK   T3 x86_64 cc default") }
+
+    // T4: host_arch_to_linux_target — uname=arm64 → "arm64"
+    let t4 = host_arch_to_linux_target("arm64")
+    if t4 != "arm64" {
+        eprintln("  FAIL T4 host_arch arm64: " + t4)
+        fails = fails + 1
+    } else { println("  OK   T4 host_arch arm64 → arm64") }
+
+    // T5: host_arch_to_linux_target — uname=x86_64 → "x86_64"
+    let t5 = host_arch_to_linux_target("x86_64")
+    if t5 != "x86_64" {
+        eprintln("  FAIL T5 host_arch x86_64: " + t5)
+        fails = fails + 1
+    } else { println("  OK   T5 host_arch x86_64 → x86_64") }
+
+    // T6: --target=arm64 → cc = aarch64-linux-musl-gcc
+    let t6_cc = target_to_cc("arm64")
+    if t6_cc != "aarch64-linux-musl-gcc" {
+        eprintln("  FAIL T6 target=arm64 cc: " + t6_cc)
+        fails = fails + 1
+    } else { println("  OK   T6 target=arm64 → aarch64-linux-musl-gcc") }
+
+    // T7: default out_path for target=arm64 → build/hexa_linux_arm64
+    let t7_out = default_out_path(repo, "arm64")
+    if t7_out != "/tmp/fake_repo/build/hexa_linux_arm64" {
+        eprintln("  FAIL T7 default out arm64: " + t7_out)
+        fails = fails + 1
+    } else { println("  OK   T7 default out_path target=arm64") }
+
+    // T8: aarch64 uname (linux convention) also maps to arm64
+    let t8 = host_arch_to_linux_target("aarch64")
+    if t8 != "arm64" {
+        eprintln("  FAIL T8 host_arch aarch64: " + t8)
+        fails = fails + 1
+    } else { println("  OK   T8 host_arch aarch64 → arm64") }
+
+    if fails != 0 { return 1 }
+    println("[build_hexa_cli_linux selftest] OK")
+    return 0
+}
+
+fn main() {
+    let args = argv()
+
+    // Pre-scan for --selftest first (no side effects)
+    let mut _sti = 2
+    while _sti < len(args) {
+        if args[_sti] == "--selftest" || args[_sti] == "selftest" {
+            exit(cmd_selftest())
+        }
+        _sti = _sti + 1
+    }
+
+    // Arg parsing: -o <path>, --target=<arch>, --target <arch>
+    let mut out_path = ""
+    let mut target = ""
+    let mut ai = 2
+    while ai < len(args) {
+        let a = args[ai]
+        if a == "-o" && (ai + 1) < len(args) {
+            ai = ai + 1
+            out_path = args[ai]
+        } else if a == "--target" && (ai + 1) < len(args) {
+            ai = ai + 1
+            target = args[ai]
+        } else if len(a) >= 9 && a.substring(0, 9) == "--target=" {
+            target = a.substring(9, len(a))
+        }
+        ai = ai + 1
+    }
+
+    let repo_root = exec_with_status("pwd")[0].trim()
+    let uname_s = exec_with_status("uname -s")[0].trim()
+    let uname_m = exec_with_status("uname -m")[0].trim()
+
+    // Normalize target
+    if target == "" {
+        target = host_arch_to_linux_target(uname_m)
+    }
+    if target == "aarch64" { target = "arm64" }
+    if target == "amd64" { target = "x86_64" }
+    if target != "arm64" && target != "x86_64" {
+        eprintln("error: unknown --target=" + target + " (expected arm64 or x86_64)")
+        exit(1)
+    }
+
+    if out_path == "" {
+        out_path = default_out_path(repo_root, target)
+    }
+
+    let mut cc = env("LINUX_CC")
+    if cc == "" {
+        if uname_s == "Darwin" {
+            cc = target_to_cc(target)
+        } else {
+            // Native Linux: musl cross still preferred for static; fallback
+            // to plain `cc` only when cross toolchain is absent.
+            cc = target_to_cc(target)
+        }
+    }
+
+    let extra_cflags = env("EXTRA_CFLAGS")
+    let hexat = repo_root + "/self/native/hexat"
+    let main_hexa = repo_root + "/self/main.hexa"
+    let stage1_c = repo_root + "/build/stage1/main.c"
+    let inc = repo_root + "/self"
+
+    println("=== hexa CLI → linux/" + target + " (static ELF) ===")
+    println("  source : " + main_hexa)
+    println("  dispatch : " + stage1_c)
+    println("  output : " + out_path)
+    println("  target : " + target)
+    println("  cc     : " + cc)
+
+    if !file_exists(hexat) {
+        eprintln("error: self/native/hexat missing — run tool/build_hexat_linux.hexa or bootstrap first")
+        exit(1)
+    }
+    if !file_exists(main_hexa) {
+        eprintln("error: source missing: " + main_hexa)
+        exit(1)
+    }
+
+    let cc_check = exec_with_status("which " + cc + " 2>/dev/null")
+    if cc_check[1] != 0 || cc_check[0].trim() == "" {
+        eprintln("error: compiler not found: " + cc)
+        eprintln("  brew install FiloSottile/musl-cross/musl-cross")
+        eprintln("  brew install FiloSottile/musl-cross/musl-cross --with-aarch64")
+        exit(1)
+    }
+
+    run_ok("mkdir -p " + exec_with_status("dirname '" + out_path + "'")[0].trim())
+    run_ok("mkdir -p " + repo_root + "/build/stage1")
+
+    // Step 1: regenerate dispatch C from main.hexa via the host hexat.
+    //   Using the host binary (arm64 on macOS) is fine — it's a pure
+    //   text-to-text transpile; the output .c is platform-neutral.
+    println("")
+    println("[1/2] transpile main.hexa → stage1/main.c (host hexat)")
+    run_ok(hexat + " " + main_hexa + " " + stage1_c)
+
+    // Step 2: cross-compile with musl static.
+    //   -D_GNU_SOURCE + -std=gnu11 : glibc/musl POSIX+GNU extensions
+    //      (strdup/popen/pclose/fopen_w etc. expected by runtime.c)
+    //   -static -lm -ldl : self-contained ELF, no runtime deps
+    //   -Wno-trigraphs : hexa codegen emits `??` byte patterns in regexes
+    let cflags = "-O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs"
+    let ldflags = "-static -lm -ldl"
+    let cmd = cc + " " + cflags + " " + extra_cflags + " -I " + inc + " " + stage1_c + " -o " + out_path + " " + ldflags
+    println("")
+    println("[2/2] cross-compile (linux/" + target + ")")
+    println("  " + cmd)
+    run_ok(cmd)
+
+    let file_info = exec_with_status("file " + out_path)[0].trim()
+    let size = exec_with_status("wc -c < '" + out_path + "' | tr -d ' '")[0].trim()
+    let sha = exec_with_status("shasum -a 256 " + out_path + " | awk '{print $1}'")[0].trim()
+
+    println("")
+    println("=== BUILD OK ===")
+    println("  path   : " + out_path)
+    println("  target : linux/" + target)
+    println("  size   : " + size + " bytes")
+    println("  sha256 : " + sha)
+    println("  file   : " + file_info)
+    println("")
+    println("deploy:")
+    println("  scp " + out_path + " root@<pod>:/opt/hexa/bin/hexa")
+    println("  ssh root@<pod> 'chmod +x /opt/hexa/bin/hexa && /opt/hexa/bin/hexa version'")
+    println("")
+    println("docker runner image (multi-arch):")
+    println("  hexa tool/build_runner_image.hexa   # builds arm64+x86_64")
+    println("")
+    println("smoke on pod:")
+    println("  echo 'fn main() { println(\"hello from linux\") }' > /tmp/hi.hexa")
+    println("  /opt/hexa/bin/hexa run /tmp/hi.hexa")
+}

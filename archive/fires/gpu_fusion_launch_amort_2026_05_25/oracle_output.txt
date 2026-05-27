@@ -1,0 +1,32 @@
+=== F-FUSION-LAUNCH-AMORT -- $0 structural + projection oracle ===
+chain: y = residual + scale * GeLU(a*x + b)  (mul,add,gelu,mul-scale,add-resid)
+
+[1] LAUNCH COUNT
+    fused    = 1 launch
+    baseline = 5 launches
+    ratio    = 5.0x fewer launches (fused)
+
+[2] HBM TRAFFIC (per element)
+    fused    = 2 read + 1 write = 3 transfers
+    baseline = 6 read + 5 write = 11 transfers
+    ratio    = 3.66667x more HBM traffic (baseline)
+
+[3] CLOSED-FORM PROJECTION (measured per-launch L=1us, BW=200GB/s)
+    launch-bound (n small) pct_faster -> 1 - 1/5 = 80.0%
+    bandwidth-bound (n inf) pct_faster -> 1 - 3/11 = 72.7273%
+    closed-form 30%-crossover n* = -26595.7 (NEGATIVE => no crossover)
+    => >= 30% advantage is UNCONDITIONAL across all n>0 (both regimes)
+
+[4] pct_faster(n) sample points
+    n=64       -> 79.9796%
+    n=256      -> 79.919%
+    n=1024     -> 79.6864%
+    n=4096     -> 78.8894%
+    n=16384    -> 76.9534%
+    n=65536    -> 74.6%
+    n=1048576  -> 72.8816%
+
+VERDICT: F-FUSION-LAUNCH-AMORT structural advantage PROVEN
+  launch 1<5, HBM 3<11; >=30% wall win UNCONDITIONAL (launch-bound 80%, bw-bound 72.7%)
+  TIER: blue (structural + closed-form projection) -- timed wall DEFERRED-to-serial
+ORACLE_EXIT=0

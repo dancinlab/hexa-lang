@@ -1,0 +1,108 @@
+// F-FUSION-LAUNCH-AMORT -- fused 5-op elementwise chain, SINGLE kernel launch.
+//
+// Computes  y = residual + scale * GeLU(a*x + b)
+// over a tensor of n f32 elements, broken into 5 logical ops that a
+// per-op (eager / library) stack would issue as 5 separate kernels:
+//
+//   (1) mul         t1 = a * x
+//   (2) add         t2 = t1 + b
+//   (3) gelu        t3 = GeLU(t2)              (tanh-approx, PTX tanh.approx.f32)
+//   (4) mul-scale   t4 = scale * t3
+//   (5) add-resid   y  = residual + t4
+//
+// FUSED: all 5 ops live in ONE kernel body -- the tensor x is read ONCE
+// from HBM and y is written ONCE; t1..t4 stay in registers (never touch HBM).
+// vs the per-op baseline (baseline_chain.ptx): 5 launches, each round-tripping
+// the working tensor through HBM (5 reads + 5 writes, k5 reads residual too).
+//
+// scale (s), bias (b), mul-coeff (a) are passed as scalar params; the
+// residual tensor is r[i]. GeLU tanh approximation (Hendrycks & Gimpel):
+//   GeLU(u) = 0.5 * u * (1 + tanh( sqrt(2/pi) * (u + 0.044715 * u^3) ))
+//   k0 = sqrt(2/pi) = 0.7978845608028654   (hex 0f3F4C422A)
+//   k1 = 0.044715                          (hex 0f3D372713)
+//
+// Pure ASCII (driver-JIT ptxas rejects non-ASCII PTX comments).
+//
+// Params: x (f32*), r (f32*), y (f32*), a (f32), b (f32), s (f32), n (s32)
+.version 7.8
+.target sm_80
+.address_size 64
+
+.visible .entry fused_chain (
+    .param .u64 x,
+    .param .u64 r,
+    .param .u64 y,
+    .param .f32 a,
+    .param .f32 b,
+    .param .f32 s,
+    .param .u32 n
+)
+{
+    .reg .u64  %rd<12>;
+    .reg .u32  %r<8>;
+    .reg .pred %p1;
+    .reg .f32  %f<24>;
+
+    ld.param.u64 %rd0, [x];
+    ld.param.u64 %rd1, [r];
+    ld.param.u64 %rd2, [y];
+    ld.param.f32 %f0,  [a];
+    ld.param.f32 %f1,  [b];
+    ld.param.f32 %f2,  [s];
+    ld.param.u32 %r0,  [n];
+
+    // global index i = ctaid.x * ntid.x + tid.x
+    mov.u32 %r1, %ctaid.x;
+    mov.u32 %r2, %ntid.x;
+    mov.u32 %r3, %tid.x;
+    mad.lo.s32 %r4, %r1, %r2, %r3;
+
+    setp.ge.s32 %p1, %r4, %r0;
+    @%p1 bra $exit;
+
+    // byte offset = i * 4
+    cvt.u64.u32 %rd3, %r4;
+    shl.b64 %rd4, %rd3, 2;
+    add.u64 %rd5, %rd0, %rd4;       // &x[i]
+    add.u64 %rd6, %rd1, %rd4;       // &r[i]
+    add.u64 %rd7, %rd2, %rd4;       // &y[i]
+
+    // single HBM read of the input tensor
+    ld.global.f32 %f3, [%rd5];     // x[i]
+    ld.global.f32 %f4, [%rd6];     // residual[i]
+
+    // (1) mul:  t1 = a * x
+    mul.f32 %f5, %f0, %f3;
+    // (2) add:  u = t1 + b
+    add.f32 %f6, %f5, %f1;         // u = a*x + b   (the GeLU pre-activation)
+
+    // (3) gelu(u) via tanh approx
+    //   u3 = u*u*u
+    mul.f32 %f7, %f6, %f6;         // u^2
+    mul.f32 %f8, %f7, %f6;         // u^3
+    //   inner = u + 0.044715 * u^3
+    mul.f32 %f9, %f8, 0f3D372713;  // 0.044715f * u^3
+    add.f32 %f10, %f6, %f9;        // u + 0.044715*u^3
+    //   arg = sqrt(2/pi) * inner
+    mul.f32 %f11, %f10, 0f3F4C422A; // 0.7978845608f * inner
+    //   th = tanh(arg)
+    tanh.approx.f32 %f12, %f11;
+    //   one_plus = 1 + th
+    add.f32 %f13, %f12, 0f3F800000; // + 1.0f
+    //   half_u = 0.5 * u
+    mul.f32 %f14, %f6, 0f3F000000;  // 0.5f * u
+    //   gelu = half_u * one_plus
+    mul.f32 %f15, %f14, %f13;       // t3 = GeLU(u)
+
+    // (4) mul-by-scale: t4 = s * gelu
+    mul.f32 %f16, %f2, %f15;
+
+    // (5) add-residual: y = residual + t4
+    add.f32 %f17, %f4, %f16;
+
+    // single HBM write of the output tensor
+    st.global.f32 [%rd7], %f17;
+
+$exit:
+    ret;
+}

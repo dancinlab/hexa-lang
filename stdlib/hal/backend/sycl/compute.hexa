@@ -1,0 +1,130 @@
+#!hexa strict
+// stdlib/hal/backend/sycl/compute.hexa — SYCL / oneAPI backend
+//                                        — paper skeleton.
+//
+// Phase: skeleton / stub. Real SYCL runtime integration is downstream
+// FFI scope (Intel oneAPI DPC++ / AdaptiveCpp / Codeplay ComputeCpp).
+//
+// Target:    SYCL 2020 rev 11 (canon §2 web-search 2026-05-08).
+// Runtime:   Intel oneAPI DPC++ runtime (libsycl.so) — vendor-neutral
+//            spec; runs on Intel/Nvidia/AMD/Intel-iGPU/CPU SPIR-V targets.
+// IR:        SPIR-V (preferred; native to oneAPI via Intel Graphics
+//            Compiler) OR PTX (via clspv → CUDA path on Nvidia).
+// Hardware:  Intel Xe / Arc / Data Center GPU Max + Intel iGPUs +
+//            Nvidia/AMD GPUs (via cross-vendor SPIR-V) + CPUs (Intel
+//            OpenCL CPU runtime).
+// Surface:   sycl_{buffer_alloc,...,event_release}
+//
+// IR mapping: SPIR-V is the canonical SYCL output; PTX path requires
+// SPIRV-LLVM-Translator + ptxas. SPIR-V workflow on Intel:
+//   1. clang++ -fsycl -fsycl-targets=spir64
+//   2. resulting binary embeds SPIR-V in special ELF section
+//   3. SYCL runtime calls clCreateProgramWithIL (OpenCL 2.1+)
+//
+// Memory tier mapping (compute.hexa TIER_* → SYCL access targets):
+//   TIER_PRIVATE  → access::target::local      (per-work-item; private mem)
+//   TIER_GROUP    → access::target::local      (per-workgroup; SLM)
+//   TIER_DEVICE   → access::target::device     (sycl::buffer; main GPU mem)
+//   TIER_CONSTANT → access::target::constant_buffer (UBO)
+//
+// (SYCL distinguishes PRIVATE from local memory by allocation site;
+// stack-local vs work-group-local. Both via local accessor token.)
+//
+// Barrier scope mapping:
+//   SCOPE_SUBGROUP   → sycl::group_barrier(sub_group)
+//   SCOPE_WORKGROUP  → sycl::group_barrier(group)
+//   SCOPE_CLUSTER    → no native SYCL primitive; emulate via persistent
+//                       kernel + atomic flag (similar to HIP)
+//   SCOPE_GRID       → no native; same emulation
+//
+// Sub-group width: SYCL `sub_group_size` is implementation-defined
+// (8/16/32 on Intel; 32 on Nvidia via CUDA backend; 32/64 on AMD).
+// sg_w must match the target's preferred sub_group_size attribute
+// (or use sycl::sub_group_size enum).
+
+let MODULE_NAME = "sycl_compute"
+let VENDOR_NAME = "sycl"
+
+let SYCL_SPEC_YEAR = 2020
+let SYCL_SPEC_REV  = 11
+
+let IR_PRIMARY  = "spirv"
+let IR_FALLBACK = "ptx"
+
+let TIER_PRIVATE  = 0
+let TIER_GROUP    = 1
+let TIER_DEVICE   = 2
+let TIER_CONSTANT = 3
+
+let SCOPE_SUBGROUP  = 0
+let SCOPE_WORKGROUP = 1
+let SCOPE_CLUSTER   = 2
+let SCOPE_GRID      = 3
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn sycl_buffer_alloc(tier: int, n_bytes: int) -> int {
+    if tier < 0 || tier > 3 { return -1 }
+    if n_bytes <= 0 { return -2 }
+    // STUB: sycl::buffer<T>(range<1>(n_bytes)); access via accessor
+    return 0
+}
+
+fn sycl_buffer_h2d(handle: int, src_host: int, n_bytes: int) -> bool {
+    if handle < 0 || n_bytes <= 0 { return false }
+    // STUB: queue.memcpy(devbuf, host, n_bytes)
+    return true
+}
+
+fn sycl_buffer_d2h(handle: int, dst_host: int, n_bytes: int) -> bool {
+    if handle < 0 || n_bytes <= 0 { return false }
+    return true
+}
+
+fn sycl_buffer_free(handle: int) -> bool {
+    if handle < 0 { return false }
+    // STUB: sycl::buffer destructor (RAII)
+    return true
+}
+
+fn sycl_kernel_compile(ir: int, n_bytes: int) -> int {
+    if ir < 0 || n_bytes <= 0 { return -1 }
+    // STUB: sycl::kernel from SPIR-V via clCreateProgramWithIL
+    return 0
+}
+
+fn sycl_kernel_release(handle: int) -> bool {
+    if handle < 0 { return false }
+    return true
+}
+
+fn sycl_dispatch(kern: int, gx: int, gy: int, gz: int,
+                 wx: int, wy: int, wz: int,
+                 scope: int, dep: int, sg_w: int) -> int {
+    if kern < 0 { return -1 }
+    if scope < 0 || scope > 3 { return -2 }
+    // STUB: queue.parallel_for(nd_range<3>(global, local), kernel)
+    return 0
+}
+
+fn sycl_event_wait(event: int) -> bool {
+    if event < 0 { return false }
+    // STUB: queue.wait() OR event.wait()
+    return true
+}
+
+fn sycl_event_release(event: int) -> bool {
+    if event < 0 { return false }
+    return true
+}
+
+fn sycl_module_meta() -> [str] {
+    return [MODULE_NAME, VENDOR_NAME, IR_PRIMARY, "4"]
+}
+
+fn main() {
+    println("[sycl_compute sim] STUB skeleton — sim-first; FFI to libsycl.so TODO")
+    println("  SYCL " + str(SYCL_SPEC_YEAR) + " rev " + str(SYCL_SPEC_REV) + " (oneAPI DPC++)")
+    println("  IR: SPIR-V (primary; via Intel Graphics Compiler) | PTX (via SPIRV-LLVM)")
+    println("  scopes: sub_group_barrier / group_barrier; CLUSTER+GRID via persistent kernel")
+}

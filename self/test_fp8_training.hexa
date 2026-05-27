@@ -1,0 +1,543 @@
+// ═══════════════════════════════════════════════════════════════
+//  test_fp8_training.hexa — FP8 Training (#188) verification
+//
+//  Tests (30):
+//    T1  fp8_e4m3_max returns 448.0
+//    T2  fp8_e5m2_max returns 57344.0
+//    T3  fp8_amax finds max absolute value
+//    T4  fp8_amax with negative values
+//    T5  fp8_amax all zeros returns 0.0
+//    T6  fp8_compute_scale correct ratio
+//    T7  fp8_compute_scale near-zero returns epsilon
+//    T8  fp8_e4m3_quantize clamps to [-448, 448]*scale
+//    T9  fp8_e4m3_quantize preserves small values
+//    T10 fp8_e4m3_quantize preserves length
+//    T11 fp8_e5m2_quantize clamps to [-57344, 57344]*scale
+//    T12 fp8_e5m2_quantize wider range than E4M3
+//    T13 fp8_dynamic_scale from history
+//    T14 fp8_dynamic_scale empty history
+//    T15 fp8_update_amax_history appends
+//    T16 fp8_update_amax_history trims to window
+//    T17 fp8_overflow_detected true for overflow
+//    T18 fp8_overflow_detected false within range
+//    T19 fp8_loss_scaling multiplies correctly
+//    T20 fp8_memory_ratio is 0.5
+//    T21 fp8_quantize_error zero for identical
+//    T22 fp8_quantize_error positive for different
+//    T23 fp8_forward output size MxN
+//    T24 fp8_forward identity-like matmul
+//    T25 fp8_backward gradient shapes correct
+//    T26 fp8_backward grad_w nonzero
+//    T27 fp8_train_step loss decreases
+//    T28 fp8_train_step params change
+//    T29 fp8_train_step amax history grows
+//    T30 fp8_quantize_error E4M3 < E5M2 for small values
+//
+//  run: ./hexa self/test_fp8_training.hexa
+// ═══════════════════════════════════════════════════════════════
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn check(name, cond) {
+    if cond {
+        println("[PASS] " + name)
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name)
+        fail_count = fail_count + 1
+    }
+}
+
+fn fabs(x) { if x < 0.0 { return 0.0 - x } return x }
+fn approx(a, b, eps) { return fabs(a - b) < eps }
+
+// ── inlined from fp8_training.hexa ──────────────────────────────
+
+fn fp8_abs(x) {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn fp8_max(a, b) {
+    if a > b { return a }
+    return b
+}
+
+fn fp8_min(a, b) {
+    if a < b { return a }
+    return b
+}
+
+fn fp8_clamp(x, lo, hi) {
+    if x < lo { return lo }
+    if x > hi { return hi }
+    return x
+}
+
+fn fp8_round(x) {
+    if x >= 0.0 {
+        return to_float(to_int(x + 0.5))
+    }
+    return to_float(to_int(x - 0.5))
+}
+
+fn fp8_zeros(n) {
+    let mut v = []
+    let mut _i = 0
+
+    while _i < n { v = v + [0.0] }
+    return v
+}
+
+fn fp8_sqrt(x) {
+    if x <= 0.0 { return 0.0 }
+    let mut g = x / 2.0
+    if g < 1.0 { g = 1.0 }
+    let mut _i = 0
+
+    while _i < 30 {
+        g = (g + x / g) / 2.0
+    }
+    return g
+}
+
+fn fp8_e4m3_max() { return 448.0 }
+fn fp8_e5m2_max() { return 57344.0 }
+
+fn fp8_amax(values, n) {
+    let mut mx = 0.0
+    let mut i = 0
+
+    while i < n {
+        let a = fp8_abs(values[i])
+        if a > mx { mx = a }
+    }
+    return mx
+}
+
+fn fp8_compute_scale(values, n, max_val) {
+    let amax = fp8_amax(values, n)
+    if amax < 1.0e-12 { return 1.0e-12 }
+    return amax / max_val
+}
+
+fn fp8_dynamic_scale(amax_history, max_val) {
+    let n = len(amax_history)
+    if n == 0 { return 1.0e-12 }
+    let mut mx = amax_history[0]
+    let mut i = 1
+
+    while i < n {
+        if amax_history[i] > mx { mx = amax_history[i] }
+    }
+    if mx < 1.0e-12 { return 1.0e-12 }
+    return mx / max_val
+}
+
+fn fp8_update_amax_history(history, new_amax, window) {
+    let mut h = history + [new_amax]
+    let n = len(h)
+    if n <= window { return h }
+    let mut trimmed = []
+    let start = n - window
+    let mut i = start
+
+    while i < n {
+        trimmed = trimmed + [h[i]]
+    }
+    return trimmed
+}
+
+fn fp8_e4m3_quantize(values, n, scale) {
+    let mut out = fp8_zeros(n)
+    let mx = fp8_e4m3_max()
+    let safe_scale = fp8_max(scale, 1.0e-12)
+    let mut i = 0
+
+    while i < n {
+        let scaled = values[i] / safe_scale
+        let clamped = fp8_clamp(fp8_round(scaled), 0.0 - mx, mx)
+        out[i] = clamped * safe_scale
+    }
+    return out
+}
+
+fn fp8_e5m2_quantize(values, n, scale) {
+    let mut out = fp8_zeros(n)
+    let mx = fp8_e5m2_max()
+    let safe_scale = fp8_max(scale, 1.0e-12)
+    let mut i = 0
+
+    while i < n {
+        let scaled = values[i] / safe_scale
+        let clamped = fp8_clamp(fp8_round(scaled), 0.0 - mx, mx)
+        out[i] = clamped * safe_scale
+    }
+    return out
+}
+
+fn fp8_overflow_detected(values, n, max_val) {
+    let mut i = 0
+
+    while i < n {
+        if fp8_abs(values[i]) > max_val {
+            return true
+        }
+    }
+    return false
+}
+
+fn fp8_loss_scaling(loss, scale_factor) {
+    return loss * scale_factor
+}
+
+fn fp8_memory_ratio() {
+    return 0.5
+}
+
+fn fp8_quantize_error(original, quantized, n) {
+    if n <= 0 { return 0.0 }
+    let mut sum_sq = 0.0
+    let mut i = 0
+
+    while i < n {
+        let diff = original[i] - quantized[i]
+        sum_sq = sum_sq + diff * diff
+    }
+    return sum_sq / to_float(n)
+}
+
+fn fp8_forward(input, weight, M, N, K, scale_in, scale_w) {
+    let q_in = fp8_e4m3_quantize(input, M * K, scale_in)
+    let q_w = fp8_e4m3_quantize(weight, K * N, scale_w)
+    let mut out = fp8_zeros(M * N)
+    let mut i = 0
+
+    while i < M {
+        let mut j = 0
+
+        while j < N {
+            let mut acc = 0.0
+            let mut k = 0
+
+            while k < K {
+                acc = acc + q_in[i * K + k] * q_w[k * N + j]
+            }
+            out[i * N + j] = acc
+        }
+    }
+    return out
+}
+
+fn fp8_backward(grad_output, input, weight, M, N, K) {
+    let scale_g = fp8_compute_scale(grad_output, M * N, fp8_e5m2_max())
+    let scale_i = fp8_compute_scale(input, M * K, fp8_e5m2_max())
+    let scale_w = fp8_compute_scale(weight, K * N, fp8_e5m2_max())
+
+    let q_grad = fp8_e5m2_quantize(grad_output, M * N, scale_g)
+    let q_in = fp8_e5m2_quantize(input, M * K, scale_i)
+    let q_w = fp8_e5m2_quantize(weight, K * N, scale_w)
+
+    let mut grad_w = fp8_zeros(K * N)
+    let mut k = 0
+
+    while k < K {
+        let mut j = 0
+
+        while j < N {
+            let mut acc = 0.0
+            let mut m = 0
+
+            while m < M {
+                acc = acc + q_in[m * K + k] * q_grad[m * N + j]
+            }
+            grad_w[k * N + j] = acc
+        }
+    }
+
+    let mut grad_in = fp8_zeros(M * K)
+    let mut i = 0
+
+    while i < M {
+        let mut k = 0
+
+        while k < K {
+            let mut acc = 0.0
+            let mut j = 0
+
+            while j < N {
+                acc = acc + q_grad[i * N + j] * q_w[k * N + j]
+            }
+            grad_in[i * K + k] = acc
+        }
+    }
+
+    return [grad_w, grad_in]
+}
+
+fn fp8_mse_loss(pred, target, n) {
+    if n <= 0 { return 0.0 }
+    let mut s = 0.0
+    let mut i = 0
+
+    while i < n {
+        let d = pred[i] - target[i]
+        s = s + d * d
+    }
+    return s / to_float(n)
+}
+
+fn fp8_mse_grad(pred, target, n) {
+    let mut g = fp8_zeros(n)
+    let inv_n = 2.0 / to_float(n)
+    let mut i = 0
+
+    while i < n {
+        g[i] = (pred[i] - target[i]) * inv_n
+    }
+    return g
+}
+
+fn fp8_train_step(params, input, target, lr, amax_hist) {
+    let K = 2
+    let N = 2
+    let M = 2
+    let n_out = M * N
+
+    let scale_in = fp8_compute_scale(input, M * K, fp8_e4m3_max())
+    let scale_w = fp8_compute_scale(params, K * N, fp8_e4m3_max())
+
+    let pred = fp8_forward(input, params, M, N, K, scale_in, scale_w)
+    let loss = fp8_mse_loss(pred, target, n_out)
+
+    let grad_out = fp8_mse_grad(pred, target, n_out)
+    let grads = fp8_backward(grad_out, input, params, M, N, K)
+    let grad_w = grads[0]
+
+    let mut new_params = fp8_zeros(K * N)
+    let mut i = 0
+
+    while i < (K * N) {
+        new_params[i] = params[i] - lr * grad_w[i]
+    }
+
+    let new_amax = fp8_amax(pred, n_out)
+    let new_hist = fp8_update_amax_history(amax_hist, new_amax, 16)
+
+    return [new_params, loss, new_hist]
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  TESTS
+// ═══════════════════════════════════════════════════════════════
+
+// T1: fp8_e4m3_max returns 448.0
+check("T1 fp8_e4m3_max = 448.0", approx(fp8_e4m3_max(), 448.0, 0.001))
+
+// T2: fp8_e5m2_max returns 57344.0
+check("T2 fp8_e5m2_max = 57344.0", approx(fp8_e5m2_max(), 57344.0, 0.001))
+
+// T3: fp8_amax finds max absolute value
+let t3_vals = [1.0, 5.0, 3.0, 2.0]
+check("T3 fp8_amax([1,5,3,2]) = 5", approx(fp8_amax(t3_vals, 4), 5.0, 0.001))
+
+// T4: fp8_amax with negative values
+let t4_vals = [1.0, -7.0, 3.0, -2.0]
+check("T4 fp8_amax with negatives = 7", approx(fp8_amax(t4_vals, 4), 7.0, 0.001))
+
+// T5: fp8_amax all zeros returns 0.0
+let t5_vals = [0.0, 0.0, 0.0]
+check("T5 fp8_amax all zeros = 0", approx(fp8_amax(t5_vals, 3), 0.0, 0.001))
+
+// T6: fp8_compute_scale correct ratio
+// amax([10, 20, 30]) = 30, scale = 30/448
+let t6_vals = [10.0, 20.0, 30.0]
+let t6_scale = fp8_compute_scale(t6_vals, 3, 448.0)
+check("T6 compute_scale = amax/max_val", approx(t6_scale, 30.0 / 448.0, 0.0001))
+
+// T7: fp8_compute_scale near-zero returns epsilon
+let t7_vals = [0.0, 0.0]
+let t7_scale = fp8_compute_scale(t7_vals, 2, 448.0)
+check("T7 compute_scale near-zero -> epsilon", t7_scale < 0.001)
+
+// T8: fp8_e4m3_quantize clamps to range
+let t8_vals = [1000.0, -1000.0, 50.0]
+let t8_scale = 1.0
+let t8_q = fp8_e4m3_quantize(t8_vals, 3, t8_scale)
+// After quant, value/scale should be clamped to [-448, 448]*scale
+check("T8 E4M3 quant clamps large positive", t8_q[0] <= 448.0 * t8_scale + 0.01)
+check("T8b E4M3 quant clamps large negative", t8_q[1] >= -448.0 * t8_scale - 0.01)
+
+// T9: fp8_e4m3_quantize preserves small values (within range)
+let t9_vals = [1.0, 2.0, 3.0]
+let t9_scale = 1.0
+let t9_q = fp8_e4m3_quantize(t9_vals, 3, t9_scale)
+check("T9 E4M3 quant preserves 1.0", approx(t9_q[0], 1.0, 0.5))
+check("T9b E4M3 quant preserves 3.0", approx(t9_q[2], 3.0, 0.5))
+
+// T10: fp8_e4m3_quantize preserves length
+let t10_vals = [1.0, 2.0, 3.0, 4.0, 5.0]
+let t10_q = fp8_e4m3_quantize(t10_vals, 5, 1.0)
+check("T10 E4M3 quant preserves length = 5", len(t10_q) == 5)
+
+// T11: fp8_e5m2_quantize clamps to E5M2 range
+let t11_vals = [100000.0, -100000.0]
+let t11_q = fp8_e5m2_quantize(t11_vals, 2, 1.0)
+check("T11 E5M2 quant clamps large positive", t11_q[0] <= 57344.0 + 0.01)
+check("T11b E5M2 quant clamps large negative", t11_q[1] >= -57344.0 - 0.01)
+
+// T12: fp8_e5m2_quantize has wider range than E4M3
+// 500.0 overflows E4M3 but fits E5M2
+let t12_vals = [500.0]
+let t12_e4m3 = fp8_e4m3_quantize(t12_vals, 1, 1.0)
+let t12_e5m2 = fp8_e5m2_quantize(t12_vals, 1, 1.0)
+check("T12 E4M3 clips 500 to 448", t12_e4m3[0] <= 448.0 + 0.01)
+check("T12b E5M2 preserves 500", approx(t12_e5m2[0], 500.0, 1.0))
+
+// T13: fp8_dynamic_scale from history
+let t13_hist = [10.0, 20.0, 15.0, 25.0]
+let t13_ds = fp8_dynamic_scale(t13_hist, 448.0)
+// max(history) = 25, scale = 25/448
+check("T13 dynamic_scale = max(hist)/max_val", approx(t13_ds, 25.0 / 448.0, 0.0001))
+
+// T14: fp8_dynamic_scale empty history
+let t14_ds = fp8_dynamic_scale([], 448.0)
+check("T14 dynamic_scale empty -> epsilon", t14_ds < 0.001)
+
+// T15: fp8_update_amax_history appends
+let t15_hist = [1.0, 2.0, 3.0]
+let t15_updated = fp8_update_amax_history(t15_hist, 4.0, 8)
+check("T15 amax history grows by 1", len(t15_updated) == 4)
+check("T15b last element is new amax", approx(t15_updated[3], 4.0, 0.001))
+
+// T16: fp8_update_amax_history trims to window
+let t16_hist = [1.0, 2.0, 3.0, 4.0]
+let t16_updated = fp8_update_amax_history(t16_hist, 5.0, 3)
+check("T16 history trimmed to window=3", len(t16_updated) == 3)
+check("T16b oldest dropped, newest present", approx(t16_updated[2], 5.0, 0.001))
+check("T16c second element is 4.0", approx(t16_updated[1], 4.0, 0.001))
+
+// T17: fp8_overflow_detected true when exceeding range
+let t17_vals = [100.0, 500.0, 200.0]
+check("T17 overflow detected for 500 > 448", fp8_overflow_detected(t17_vals, 3, 448.0) == true)
+
+// T18: fp8_overflow_detected false within range
+let t18_vals = [100.0, 200.0, 300.0]
+check("T18 no overflow for max=300 < 448", fp8_overflow_detected(t18_vals, 3, 448.0) == false)
+
+// T19: fp8_loss_scaling multiplies correctly
+let t19_loss = fp8_loss_scaling(2.5, 1024.0)
+check("T19 loss_scaling 2.5 * 1024 = 2560", approx(t19_loss, 2560.0, 0.01))
+
+// T20: fp8_memory_ratio is 0.5
+check("T20 memory_ratio = 0.5", approx(fp8_memory_ratio(), 0.5, 0.001))
+
+// T21: fp8_quantize_error zero for identical arrays
+let t21_a = [1.0, 2.0, 3.0]
+check("T21 quant_error identical = 0", approx(fp8_quantize_error(t21_a, t21_a, 3), 0.0, 0.001))
+
+// T22: fp8_quantize_error positive for different arrays
+let t22_a = [1.0, 2.0, 3.0]
+let t22_b = [1.1, 2.2, 3.3]
+let t22_err = fp8_quantize_error(t22_a, t22_b, 3)
+check("T22 quant_error different > 0", t22_err > 0.0)
+// MSE = ((0.1^2 + 0.2^2 + 0.3^2) / 3) = (0.01+0.04+0.09)/3 = 0.04667
+check("T22b quant_error correct MSE", approx(t22_err, 0.04667, 0.01))
+
+// T23: fp8_forward output size MxN
+// M=2, K=3, N=2 -> output size = 2*2 = 4
+let t23_input = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0]
+let t23_weight = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+let t23_out = fp8_forward(t23_input, t23_weight, 2, 2, 3, 1.0, 1.0)
+check("T23 forward output size = M*N = 4", len(t23_out) == 4)
+
+// T24: fp8_forward identity-like matmul
+// A=[[1,0],[0,1]], B=[[5,3],[7,2]], expect C ~ [[5,3],[7,2]]
+let t24_a = [1.0, 0.0, 0.0, 1.0]
+let t24_b = [5.0, 3.0, 7.0, 2.0]
+let t24_out = fp8_forward(t24_a, t24_b, 2, 2, 2, 1.0, 1.0)
+check("T24 identity matmul [0,0] ~ 5", approx(t24_out[0], 5.0, 1.0))
+check("T24b identity matmul [1,1] ~ 2", approx(t24_out[3], 2.0, 1.0))
+
+// T25: fp8_backward gradient shapes correct
+// M=2, N=2, K=2 -> grad_w: K*N=4, grad_in: M*K=4
+let t25_grad_out = [0.1, 0.2, 0.3, 0.4]
+let t25_input = [1.0, 2.0, 3.0, 4.0]
+let t25_weight = [0.5, 0.3, 0.1, 0.4]
+let t25_grads = fp8_backward(t25_grad_out, t25_input, t25_weight, 2, 2, 2)
+let t25_grad_w = t25_grads[0]
+let t25_grad_in = t25_grads[1]
+check("T25 grad_w length = K*N = 4", len(t25_grad_w) == 4)
+check("T25b grad_in length = M*K = 4", len(t25_grad_in) == 4)
+
+// T26: fp8_backward grad_w nonzero
+let mut t26_any_nonzero = false
+let mut i = 0
+
+while i < 4 {
+    if fabs(t25_grad_w[i]) > 0.0001 { t26_any_nonzero = true }
+}
+check("T26 grad_w has nonzero elements", t26_any_nonzero)
+
+// T27: fp8_train_step loss decreases over steps
+// Input: 2x2 identity, target: 2x2 diagonal [3,0,0,3]
+let mut t27_params = [1.0, 0.0, 0.0, 1.0]
+let t27_input = [1.0, 0.0, 0.0, 1.0]
+let t27_target = [3.0, 0.0, 0.0, 3.0]
+let mut t27_hist = [1.0]
+let t27_step1 = fp8_train_step(t27_params, t27_input, t27_target, 0.01, t27_hist)
+let t27_loss1 = t27_step1[1]
+t27_params = t27_step1[0]
+t27_hist = t27_step1[2]
+// run more steps
+let mut _s = 0
+
+while _s < 20 {
+    let step_r = fp8_train_step(t27_params, t27_input, t27_target, 0.01, t27_hist)
+    t27_params = step_r[0]
+    t27_hist = step_r[2]
+}
+let t27_step_last = fp8_train_step(t27_params, t27_input, t27_target, 0.01, t27_hist)
+let t27_loss_last = t27_step_last[1]
+check("T27 loss decreases after training", t27_loss_last < t27_loss1)
+
+// T28: fp8_train_step params change from initial
+let t28_params = [1.0, 0.0, 0.0, 1.0]
+let t28_input = [2.0, 1.0, 1.0, 2.0]
+let t28_target = [5.0, 3.0, 3.0, 5.0]
+let t28_result = fp8_train_step(t28_params, t28_input, t28_target, 0.01, [1.0])
+let t28_new_params = t28_result[0]
+let mut t28_changed = false
+let mut i = 0
+
+while i < 4 {
+    if fabs(t28_new_params[i] - t28_params[i]) > 0.0001 { t28_changed = true }
+}
+check("T28 params change after train step", t28_changed)
+
+// T29: fp8_train_step amax history grows
+let t29_params = [1.0, 0.0, 0.0, 1.0]
+let t29_input = [1.0, 0.5, 0.5, 1.0]
+let t29_target = [2.0, 1.0, 1.0, 2.0]
+let t29_hist_in = [0.5, 0.6]
+let t29_result = fp8_train_step(t29_params, t29_input, t29_target, 0.01, t29_hist_in)
+let t29_hist_out = t29_result[2]
+check("T29 amax history grows by 1", len(t29_hist_out) == 3)
+
+// T30: E4M3 has better precision (lower error) than E5M2 for small values
+let t30_vals = [0.5, 1.0, 1.5, 2.0, 2.5]
+let t30_scale = 1.0
+let t30_e4m3 = fp8_e4m3_quantize(t30_vals, 5, t30_scale)
+let t30_e5m2 = fp8_e5m2_quantize(t30_vals, 5, t30_scale)
+let t30_err_e4m3 = fp8_quantize_error(t30_vals, t30_e4m3, 5)
+let t30_err_e5m2 = fp8_quantize_error(t30_vals, t30_e5m2, 5)
+// E4M3 has 3 mantissa bits vs E5M2 2 bits -> E4M3 should have less error
+check("T30 E4M3 error <= E5M2 error for small values", t30_err_e4m3 <= t30_err_e5m2 + 0.01)
+
+// ═══════════════════════════════════════════════════════════════
+println("")
+println("=== fp8_training (#188) test summary ===")
+println("PASS: " + str(pass_count))
+println("FAIL: " + str(fail_count))
+println("TOTAL: " + str(pass_count + fail_count))

@@ -1,0 +1,79 @@
+// HEXA Native Compiler — Phase 1-extension absorption: status archive smoke
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Run:
+//   hexa run compiler/status_archive/static_index_test.hexa
+
+use "compiler/status_archive/embed"
+use "compiler/status_archive/embedded.gen"
+use "compiler/status_archive/static_index"
+
+fn _is_hex64(s: string) -> bool {
+    if len(s) != 64 { return false }
+    let mut i = 0
+    while i < 64 {
+        let c = s.substring(i, i + 1)
+        let ok = (c >= "0" && c <= "9") || (c >= "a" && c <= "f")
+        if !ok { return false }
+        i = i + 1
+    }
+    return true
+}
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok { println("  PASS  " + label) }
+    else { println("  FAIL  " + label); fails.push(label) }
+}
+
+fn main() {
+    println("phase1-ext status archive embed smoke")
+    println("  hash:         " + STATUS_ARCHIVE_HASH)
+    println("  generated_at: " + STATUS_ARCHIVE_GENERATED_AT)
+    println("  source_dir:   " + STATUS_ARCHIVE_SOURCE_DIR)
+    println("  source_count: " + to_string(STATUS_ARCHIVE_SOURCE_COUNT))
+    println("  entries:      " + to_string(len(STATUS_MARKERS)))
+
+    let fails = []
+    println("")
+    println("checks:")
+    _check("hash is 64-char hex",                _is_hex64(STATUS_ARCHIVE_HASH),                    fails)
+    _check("generated_at non-empty",             len(STATUS_ARCHIVE_GENERATED_AT) > 0,              fails)
+    _check("source_count > 0",                   STATUS_ARCHIVE_SOURCE_COUNT > 0,                   fails)
+    _check("entries match source_count",         len(STATUS_MARKERS) == STATUS_ARCHIVE_SOURCE_COUNT, fails)
+    _check("entries > 100",                      len(STATUS_MARKERS) > 100,                         fails)
+    _check("source_dir set",                     len(STATUS_ARCHIVE_SOURCE_DIR) > 0,                fails)
+
+    // First entry sanity.
+    let first = STATUS_MARKERS[0]
+    _check("first entry name non-empty",         len(first.name) > 0,                               fails)
+    _check("first entry mtime >= 0",             first.mtime_epoch >= 0,                            fails)
+    _check("first entry size >= 0",              first.size_bytes >= 0,                             fails)
+
+    let miss = status_archive_lookup("NOT-A-REAL-MARKER-FILENAME-zzz")
+    _check("lookup miss → name == \"\"",        miss.name == "",                                   fails)
+    _check("lookup miss → mtime == 0",          miss.mtime_epoch == 0,                             fails)
+
+    // status_archive_count consistency.
+    _check("count() == len()",                   status_archive_count() == len(STATUS_MARKERS),     fails)
+
+    println("")
+    if len(fails) == 0 {
+        println("RESULT: PASS (" + to_string(len(STATUS_MARKERS)) + "/" + to_string(STATUS_ARCHIVE_SOURCE_COUNT) + " markers, hash=" + STATUS_ARCHIVE_HASH.substring(0, 12) + "...)")
+        exit(0)
+    } else {
+        println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
+        exit(1)
+    }
+}
+
+let _av = argv()
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let s = to_string(_av[1])
+    if s.ends_with("/static_index_test.hexa") { return true }
+    if s == "static_index_test.hexa" { return true }
+    return false
+}
+if _is_main() { main() }

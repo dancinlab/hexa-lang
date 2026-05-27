@@ -1,0 +1,465 @@
+// stdlib/cockpit/cellrun_test.hexa — selftest for the generic verb-cell
+// dispatcher (Phase A scaffold, branch-only).
+//
+// Run:
+//   hexa run stdlib/cockpit/cellrun_test.hexa
+//
+// Covers (each is a one-line PASS/FAIL plus aggregate at bottom):
+//   T1 — missing manifest        → cell_run() returns 2 (honest skip).
+//   T2 — missing deps            → cell_run() returns 3 (honest skip).
+//   T3 — successful mock spawn   → cell_run() returns 0 + JSON record
+//                                   emitted under fixture exports dir.
+//   T4 — emitted JSON has the shape we documented (record_id +
+//        record_kind + provenance with absorbed + measurement_gate +
+//        scope_caveats).
+//   T5 — quote-aware splitter: scope_caveats with internal comma in
+//        one element stays as ONE element (Phase B bug #1 regression
+//        guard).
+//   T6 — empty scope_caveats array `[]` parses to length 0.
+//   T7 — Korean caveats with `(` `)` and internal commas (mirrors
+//        domains/sscb.demi on demiurge main) — count is preserved.
+//   T8 — python_candidates resolves to first present binary
+//        (Phase B bug #3 regression guard — macOS /usr/bin/python3 is
+//        3.9.6 too-old; manifest must prefer python3.13).
+//   T9 — python_candidates with ALL-missing candidates → rc=3 honest-skip
+//        with "no python candidate resolved" log line.
+//
+// Fixtures are built on the fly under /tmp/hexa_cellrun_test_<pid>/.
+
+use "stdlib/io"
+use "stdlib/cockpit/cellrun"
+
+// ─── tiny test runner ──────────────────────────────────────────────
+
+let mut _pass = 0
+let mut _total = 0
+let mut _first_fail = ""
+
+fn check(name: string, cond: bool) {
+    _total = _total + 1
+    if cond {
+        _pass = _pass + 1
+        println("  PASS " + name)
+    } else {
+        if _first_fail == "" { _first_fail = name }
+        println("  FAIL " + name)
+    }
+}
+
+// ─── fixture authoring ─────────────────────────────────────────────
+
+fn _quote(s: string) -> string {
+    return "'" + s + "'"
+}
+
+fn _setup_root() -> string {
+    let pid = to_string(exec("echo $$").trim())
+    let root = "/tmp/hexa_cellrun_test_" + pid
+    let _ = exec("rm -rf " + _quote(root))
+    let _ = exec("mkdir -p " + _quote(root + "/domains"))
+    let _ = exec("mkdir -p " + _quote(root + "/exports"))
+    let _ = exec("mkdir -p " + _quote(root + "/hexa-lang/stdlib/mock"))
+    return root
+}
+
+fn _build_roots(root: string) {
+    // setenv() is a no-op in the current hexa-lang runtime (runtime.c
+    // hxlcl_setenv is a stub — see cellrun.hexa header), so we pass
+    // an explicit `roots` map into cell_run_with_roots instead of
+    // relying on HEXA_CELLRUN_* env vars.
+    let r = json_parse("{}")
+    r["demi_root"] = root + "/domains"
+    r["exports_root"] = root + "/exports"
+    r["hexa_lang_root"] = root + "/hexa-lang"
+    return r
+}
+
+// Build a minimal sscb.demi manifest for the analyze cell.
+fn _write_manifest(root: string, with_dep: string) {
+    let path = root + "/domains/sscb.demi"
+    let mut body = "[cell.analyze]\n"
+    body = body + "substrate     = bash\n"
+    body = body + "script        = stdlib/mock/echo.sh\n"
+    body = body + "record_kind   = sscb_mock_record\n"
+    body = body + "output_dir    = exports/sscb/mock\n"
+    body = body + "required_deps = " + with_dep + "\n"
+    body = body + "gate_default  = OPEN\n"
+    body = body + "absorbed_default = false\n"
+    body = body + "scope_caveats = [\n"
+    body = body + "  \"mock-substrate\",\n"
+    body = body + "  \"no-real-engine\",\n"
+    body = body + "]\n"
+    let _ = write_text(path, body)
+}
+
+// Build a tiny bash script that just succeeds + writes a sentinel.
+fn _write_mock_script(root: string) {
+    let path = root + "/hexa-lang/stdlib/mock/echo.sh"
+    let body = "#!/usr/bin/env bash\necho \"mock spawn ok for $1\" > \"$1/_mock_sentinel.txt\"\nexit 0\n"
+    let _ = write_text(path, body)
+    let _ = exec("chmod +x " + _quote(path))
+}
+
+// ─── T1: missing manifest ──────────────────────────────────────────
+
+fn t1_missing_manifest(root: string) {
+    println("\nT1 — missing manifest → honest-skip (rc=2)")
+    // Clear any prior manifest.
+    let _ = exec("rm -f " + _quote(root + "/domains/sscb.demi"))
+    let rc = cell_run_with_roots("sscb", "analyze", _build_roots(root))
+    check("T1 rc == 2 (manifest missing)", rc == 2)
+}
+
+// ─── T2: missing deps ──────────────────────────────────────────────
+
+fn t2_missing_deps(root: string) {
+    println("\nT2 — required dep missing → honest-skip (rc=3)")
+    // Manifest declares a bogus dep that command -v will never find.
+    _write_manifest(root, "nonexistent_binary_xyzzy_42")
+    _write_mock_script(root)
+    let rc = cell_run_with_roots("sscb", "analyze", _build_roots(root))
+    check("T2 rc == 3 (deps missing)", rc == 3)
+}
+
+// ─── T3: successful spawn + record emit ────────────────────────────
+
+fn t3_success(root: string) -> string {
+    println("\nT3 — successful spawn + record emit (rc=0)")
+    // Re-write manifest with no required deps so the dep check passes.
+    _write_manifest(root, "")
+    _write_mock_script(root)
+    let rc = cell_run_with_roots("sscb", "analyze", _build_roots(root))
+    check("T3 rc == 0 (success)", rc == 0)
+
+    // Locate the record. exports/sscb/mock/<stamp>/<record_id>.json
+    let lookup = exec("ls -1t " + _quote(root + "/exports/sscb/mock") + " 2>/dev/null | head -1").trim()
+    let stamp_dir = root + "/exports/sscb/mock/" + lookup
+    let record_glob = exec("ls -1 " + _quote(stamp_dir) + "/sscb_mock_record_*.json 2>/dev/null | head -1").trim()
+    check("T3 record file present", file_exists(record_glob))
+    check("T3 mock sentinel present (proves substrate ran)",
+          file_exists(stamp_dir + "/_mock_sentinel.txt"))
+    return record_glob
+}
+
+// ─── T4: emitted JSON shape ────────────────────────────────────────
+
+fn t4_record_shape(record_path: string) {
+    println("\nT4 — record JSON shape")
+    if !file_exists(record_path) {
+        check("T4 record file readable", false)
+        return
+    }
+    let raw = read_text(record_path)
+    check("T4 record non-empty", len(raw) > 0)
+
+    let obj = json_parse(raw)
+    check("T4 record_kind == sscb_mock_record",
+          has_key(obj, "record_kind") && to_string(obj["record_kind"]) == "sscb_mock_record")
+    check("T4 has record_id",
+          has_key(obj, "record_id") && len(to_string(obj["record_id"])) > 0)
+    check("T4 has produced_at_utc",
+          has_key(obj, "produced_at_utc") && len(to_string(obj["produced_at_utc"])) > 0)
+    check("T4 has payload", has_key(obj, "payload"))
+
+    if has_key(obj, "payload") {
+        let payload = obj["payload"]
+        check("T4 payload.substrate == bash",
+              has_key(payload, "substrate") && to_string(payload["substrate"]) == "bash")
+        check("T4 payload has provenance", has_key(payload, "provenance"))
+        if has_key(payload, "provenance") {
+            let prov = payload["provenance"]
+            check("T4 provenance.measurement_gate == OPEN",
+                  has_key(prov, "measurement_gate") && to_string(prov["measurement_gate"]) == "OPEN")
+            check("T4 provenance.absorbed == false",
+                  has_key(prov, "absorbed") && to_string(prov["absorbed"]) == "false")
+            check("T4 provenance has 2 scope_caveats",
+                  has_key(prov, "scope_caveats") && len(prov["scope_caveats"]) == 2)
+        }
+    }
+}
+
+// ─── T5/T6/T7: quote-aware _split_csv (Phase B bug #1) ─────────────
+//
+// These tests exercise the manifest loader directly via load_manifest_at
+// rather than going through cell_run_with_roots — we want to assert on
+// the parsed scope_caveats array shape, not on substrate spawn.
+
+fn _write_caveat_manifest(root: string, domain: string, body_caveats: string) -> string {
+    let path = root + "/domains/" + domain + ".demi"
+    let mut body = "[cell.analyze]\n"
+    body = body + "substrate     = bash\n"
+    body = body + "script        = stdlib/mock/echo.sh\n"
+    body = body + "record_kind   = mock_record\n"
+    body = body + "output_dir    = exports/mock\n"
+    body = body + "required_deps =\n"
+    body = body + "gate_default  = OPEN\n"
+    body = body + "absorbed_default = false\n"
+    body = body + body_caveats
+    let _ = write_text(path, body)
+    return path
+}
+
+fn t5_internal_comma(root: string) {
+    println("\nT5 — quoted caveat with internal comma stays as 1 element")
+    let caveats = "scope_caveats = [\n"
+        + "  \"clean comma-free caveat\",\n"
+        + "  \"caveat with, internal comma\",\n"
+        + "]\n"
+    let _ = _write_caveat_manifest(root, "t5dom", caveats)
+    let mf = load_manifest_at(root + "/domains", "t5dom", "analyze")
+    check("T5 manifest parses _ok", mf["_ok"] == "true")
+    let cv = mf["scope_caveats"]
+    check("T5 caveats length == 2 (NOT 3 fragmented)", len(cv) == 2)
+    if len(cv) == 2 {
+        check("T5 [0] preserved verbatim",
+              to_string(cv[0]) == "clean comma-free caveat")
+        check("T5 [1] internal comma preserved",
+              to_string(cv[1]) == "caveat with, internal comma")
+    }
+}
+
+fn t6_empty_caveats(root: string) {
+    println("\nT6 — empty scope_caveats `[]` → length 0")
+    // Single-line empty array.
+    let caveats = "scope_caveats = []\n"
+    let _ = _write_caveat_manifest(root, "t6dom", caveats)
+    let mf = load_manifest_at(root + "/domains", "t6dom", "analyze")
+    check("T6 manifest parses _ok", mf["_ok"] == "true")
+    let cv = mf["scope_caveats"]
+    check("T6 caveats length == 0", len(cv) == 0)
+}
+
+fn t7_korean_caveats(root: string) {
+    println("\nT7 — Korean caveats with (), internal commas (sscb.demi pattern)")
+    // Mirrors domains/sscb.demi [cell.analyze] shape: 3 caveats each
+    // with one or more internal commas + parens + non-ASCII chars.
+    let caveats = "scope_caveats = [\n"
+        + "  \"ngspice transient — generic Ron/Roff SiC switch, datasheet 흡수 아님 (g3).\",\n"
+        + "  \"snubber (100 nF · 5 Ω) generic-not-engineered — interrupt_ratio ~0.35 at 1.5 µs not buggy, honest gap.\",\n"
+        + "  \"measurement_gate = GATE_OPEN 영구 (단일점 sim, device model 미흡수). UL 489I 별도 게이트.\",\n"
+        + "]\n"
+    let _ = _write_caveat_manifest(root, "t7dom", caveats)
+    let mf = load_manifest_at(root + "/domains", "t7dom", "analyze")
+    check("T7 manifest parses _ok", mf["_ok"] == "true")
+    let cv = mf["scope_caveats"]
+    check("T7 caveats length == 3 (NOT 6 fragmented)", len(cv) == 3)
+    if len(cv) == 3 {
+        check("T7 [0] contains 'datasheet 흡수 아님'",
+              to_string(cv[0]).index_of("datasheet 흡수 아님") >= 0)
+        check("T7 [1] contains 'honest gap'",
+              to_string(cv[1]).index_of("honest gap") >= 0)
+        check("T7 [2] contains 'UL 489I 별도 게이트'",
+              to_string(cv[2]).index_of("UL 489I 별도 게이트") >= 0)
+    }
+}
+
+// ─── T8/T9: python_candidates substrate resolution (Phase B bug #3) ─
+//
+// These tests exercise resolve_substrate_bin + the dispatcher's rc=3
+// path. T8 builds a manifest with `python_candidates = python3.13,
+// python3.12, python3` and asserts the resolver returns one of those
+// (whichever is present on the host — at least `python3` always is on
+// any POSIX dev box). T9 builds a manifest with two bogus candidates
+// and asserts the dispatcher returns rc=3 (no python resolved).
+//
+// T8 calls resolve_substrate_bin DIRECTLY (avoids spawning python on a
+// bash echo script). T9 goes end-to-end through cell_run_with_roots
+// since we want the rc=3 honest-skip log path verified.
+
+fn _write_python_manifest(root: string, domain: string,
+                          candidates: string) -> string {
+    let path = root + "/domains/" + domain + ".demi"
+    let mut body = "[cell.analyze]\n"
+    body = body + "substrate     = python3\n"
+    body = body + "python_candidates = " + candidates + "\n"
+    body = body + "script        = stdlib/mock/echo.sh\n"
+    body = body + "record_kind   = py_mock_record\n"
+    body = body + "output_dir    = exports/py_mock\n"
+    body = body + "required_deps =\n"
+    body = body + "gate_default  = OPEN\n"
+    body = body + "absorbed_default = false\n"
+    body = body + "scope_caveats = []\n"
+    let _ = write_text(path, body)
+    return path
+}
+
+fn t8_python_candidates_resolves(root: string) {
+    println("\nT8 — python_candidates resolves to first present binary")
+    let _ = _write_python_manifest(root, "t8dom",
+        "python3.13, python3.12, python3")
+    let mf = load_manifest_at(root + "/domains", "t8dom", "analyze")
+    check("T8 manifest parses _ok", mf["_ok"] == "true")
+    check("T8 manifest carries python_candidates",
+          has_key(mf, "python_candidates"))
+    let bin = resolve_substrate_bin(mf)
+    check("T8 resolver returned non-empty", len(bin) > 0)
+    // Whichever python is present on this host MUST be one of the three.
+    let ok = bin == "python3.13" || bin == "python3.12" || bin == "python3"
+    check("T8 resolved binary is one of the candidates", ok)
+    // Diagnostic: which one did we pick?
+    println("  T8 resolved → " + bin)
+    // On macOS dev boxes python3.13 from Homebrew is the intended pick;
+    // we don't HARD-assert that (CI Linux runners may not have 3.13),
+    // but log it for the test report.
+}
+
+fn t9_python_candidates_all_missing(root: string) {
+    println("\nT9 — python_candidates all missing → rc=3 honest-skip")
+    let _ = _write_python_manifest(root, "t9dom",
+        "nonexistent_python_xyz1, nonexistent_python_xyz2")
+    // Also need a script that exists, so dep check + script lookup pass
+    // BEFORE substrate resolution runs (resolve_substrate_bin is called
+    // before script_abs lookup → rc=3 triggers first regardless, but
+    // belt-and-braces).
+    _write_mock_script(root)
+    let rc = cell_run_with_roots("t9dom", "analyze", _build_roots(root))
+    check("T9 rc == 3 (no python candidate resolved)", rc == 3)
+
+    // Also directly assert resolver returns empty string.
+    let mf = load_manifest_at(root + "/domains", "t9dom", "analyze")
+    let bin = resolve_substrate_bin(mf)
+    check("T9 resolver returns empty string when all missing",
+          len(bin) == 0)
+}
+
+// ─── T10/T11: D113 payload flattening (sibling .meta.json roll-up) ──
+//
+// D113 (demiurge design.md 3c49cfd · ARCH §4.5 · constitution R2 §1.2.2):
+// cellrun's emit_record mirrors a sibling `*.meta.json::measurements{}`
+// block into `payload.measurements` (top-level) for downstream consumer
+// compatibility (cockpit chat panel · RTSC view3D · legacy producer
+// shape). Sibling file stays untouched; `payload.measurements_source`
+// cites the sibling filename (relative to run_dir) for provenance.
+// Absent sibling ⇒ both fields OMITTED (not null).
+
+fn _write_mock_script_with_meta(root: string) {
+    // Variant of _write_mock_script that also emits a sibling
+    // `mock_v1.meta.json` with a `measurements{}` block — exercises the
+    // D113 roll-up path. Filename `mock_v1.meta.json` matches the
+    // *.meta.json glob from cellrun.hexa::_find_sibling_meta.
+    let path = root + "/hexa-lang/stdlib/mock/echo_meta.sh"
+    let body = "#!/usr/bin/env bash\n" +
+        "echo \"mock spawn ok for $1\" > \"$1/_mock_sentinel.txt\"\n" +
+        "cat > \"$1/mock_v1.meta.json\" <<EOF\n" +
+        "{\"toolchain\":\"mock@1.0\",\"measurements\":{\"rise_time\":1.53,\"interrupt_ratio\":0.350}}\n" +
+        "EOF\n" +
+        "exit 0\n"
+    let _ = write_text(path, body)
+    let _ = exec("chmod +x " + _quote(path))
+}
+
+fn _write_meta_manifest(root: string, domain: string, script_rel: string) -> string {
+    // Manifest that points at echo_meta.sh so emit_record sees a sibling
+    // *.meta.json after the substrate runs. record_kind reused as
+    // "mock_meta_record" so the record-locator probe still works.
+    let path = root + "/domains/" + domain + ".demi"
+    let mut body = "[cell.analyze]\n"
+    body = body + "substrate     = bash\n"
+    body = body + "script        = " + script_rel + "\n"
+    body = body + "record_kind   = mock_meta_record\n"
+    body = body + "output_dir    = exports/" + domain + "/mock\n"
+    body = body + "required_deps =\n"
+    body = body + "gate_default  = OPEN\n"
+    body = body + "absorbed_default = false\n"
+    body = body + "scope_caveats = [\"mock D113 fixture\"]\n"
+    let _ = write_text(path, body)
+    return path
+}
+
+fn t10_payload_measurements_rollup(root: string) {
+    println("\nT10 — sibling *.meta.json::measurements → payload.measurements + payload.measurements_source")
+    _write_mock_script_with_meta(root)
+    let _ = _write_meta_manifest(root, "t10dom", "stdlib/mock/echo_meta.sh")
+
+    let rc = cell_run_with_roots("t10dom", "analyze", _build_roots(root))
+    check("T10 rc == 0 (success)", rc == 0)
+
+    // Locate the emitted record.
+    let lookup = exec("ls -1t " + _quote(root + "/exports/t10dom/mock") + " 2>/dev/null | head -1").trim()
+    let stamp_dir = root + "/exports/t10dom/mock/" + lookup
+    let record_glob = exec("ls -1 " + _quote(stamp_dir) + "/mock_meta_record_*.json 2>/dev/null | head -1").trim()
+    check("T10 record file present", file_exists(record_glob))
+
+    if !file_exists(record_glob) { return }
+    let raw = read_text(record_glob)
+    let obj = json_parse(raw)
+    check("T10 payload present", has_key(obj, "payload"))
+    if !has_key(obj, "payload") { return }
+    let payload = obj["payload"]
+    check("T10 payload.measurements present (D113 roll-up)",
+          has_key(payload, "measurements"))
+    check("T10 payload.measurements_source present (provenance cite)",
+          has_key(payload, "measurements_source"))
+    if has_key(payload, "measurements_source") {
+        check("T10 measurements_source == mock_v1.meta.json",
+              to_string(payload["measurements_source"]) == "mock_v1.meta.json")
+    }
+    if has_key(payload, "measurements") {
+        let m = payload["measurements"]
+        check("T10 measurements.rise_time present + correct",
+              has_key(m, "rise_time"))
+        check("T10 measurements.interrupt_ratio present + correct",
+              has_key(m, "interrupt_ratio"))
+    }
+
+    // Verify sibling file UNCHANGED (g3 source-of-truth preserved).
+    let sibling_path = stamp_dir + "/mock_v1.meta.json"
+    check("T10 sibling .meta.json preserved (g3)", file_exists(sibling_path))
+}
+
+fn t11_no_sibling_meta_omits_fields(root: string) {
+    println("\nT11 — no sibling *.meta.json → payload.measurements + measurements_source OMITTED")
+    // Reuse the plain mock script (no meta.json) + a fresh manifest.
+    _write_mock_script(root)
+    let _ = _write_meta_manifest(root, "t11dom", "stdlib/mock/echo.sh")
+
+    let rc = cell_run_with_roots("t11dom", "analyze", _build_roots(root))
+    check("T11 rc == 0 (success)", rc == 0)
+
+    let lookup = exec("ls -1t " + _quote(root + "/exports/t11dom/mock") + " 2>/dev/null | head -1").trim()
+    let stamp_dir = root + "/exports/t11dom/mock/" + lookup
+    let record_glob = exec("ls -1 " + _quote(stamp_dir) + "/mock_meta_record_*.json 2>/dev/null | head -1").trim()
+    check("T11 record file present", file_exists(record_glob))
+
+    if !file_exists(record_glob) { return }
+    let raw = read_text(record_glob)
+    let obj = json_parse(raw)
+    if !has_key(obj, "payload") { return }
+    let payload = obj["payload"]
+    // Both fields MUST be ABSENT (key missing · not present-but-null).
+    check("T11 payload.measurements ABSENT (honest)",
+          !has_key(payload, "measurements"))
+    check("T11 payload.measurements_source ABSENT (honest)",
+          !has_key(payload, "measurements_source"))
+}
+
+// ─── main ──────────────────────────────────────────────────────────
+
+fn main() {
+    println("== cellrun_test (Phase A scaffold selftest) ==")
+
+    let root = _setup_root()
+    println("fixture root: " + root)
+
+    t1_missing_manifest(root)
+    t2_missing_deps(root)
+    let rec_path = t3_success(root)
+    t4_record_shape(rec_path)
+    t5_internal_comma(root)
+    t6_empty_caveats(root)
+    t7_korean_caveats(root)
+    t8_python_candidates_resolves(root)
+    t9_python_candidates_all_missing(root)
+    t10_payload_measurements_rollup(root)
+    t11_no_sibling_meta_omits_fields(root)
+
+    println("")
+    println("cellrun_test: " + to_string(_pass) + "/" + to_string(_total))
+    if _first_fail == "" {
+        println("PASS")
+        exit(0)
+    } else {
+        println("FAIL — first: " + _first_fail)
+        exit(1)
+    }
+}

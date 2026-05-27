@@ -1,0 +1,141 @@
+// compiler/codegen/stream.hexa — F2: streaming per-function codegen+emit
+//
+// Authoritative design: PLAN-stage3-footprint.md F2.
+//
+// The legacy back-half runs three sequential whole-module passes —
+// lower_hir (→ MModule), codegen (→ LModule), emit_asm (→ asm text) —
+// each retaining its full output array. On the 25,932-line self-compile
+// that is three whole-program carriers resident at once → 10-16 GB RSS.
+//
+// codegen_emit_streaming fuses the three already-per-function loops into
+// ONE: each function is lowered (HIR→MIR), codegen'd (MIR→LIR) and
+// emitted (LIR→text) before the next is touched, so only one function's
+// MFunc/LFunc is live at a time. Paired with the rt 32-L Val-arena scope
+// (wired by the caller — PLAN F4) each function's IR is reclaimed once
+// its asm text is appended; the f4b597a7 heapify-envelope fix keeps that
+// per-iteration heapify O(1).
+//
+// Byte-identical to the legacy path by construction:
+//   * the per-function loop visits items in the same order, so the
+//     ArmStrTab (insertion-ordered label assignment) is bit-identical;
+//   * a function only references its own string literals, so lowering
+//     func i against a strtab holding funcs[0..i] is equivalent to
+//     lowering it against the complete table;
+//   * header / .text / .rodata emission mirrors emit_asm exactly.
+//
+// Scope: arm64-apple-darwin only (the stage-3 verdict is arm64-first).
+// Other targets fall back to the legacy whole-module path — see
+// compiler/main.hexa's `--stream` gate.
+
+import "../ir/hir.hexa"
+import "../lower/hir_to_mir.hexa"
+import "./arm64_darwin.hexa"
+import "../emit/asm.hexa"
+
+// Streaming codegen+emit for arm64-apple-darwin. Consumes the HModule
+// directly and returns the final assembly text — no MModule or LModule
+// whole-program carrier is ever materialised.
+pub fn codegen_emit_streaming(hmodule: HModule, target: string) -> string {
+    let modhash = _arm64_modhash(hmodule.file)
+    let mut st = ArmStrTab { keys: [], labels: [], fkeys: [], flabels: [], ftexts: [] }
+
+    // F4 — fragments accumulate in an array, joined once at the end.
+    // `out = out + frag` re-copies the whole accumulator every function,
+    // i.e. O(N·T) transient bytes on an N-function compile (the legacy
+    // emit_asm has the same shape — PLAN-stage3-footprint.md Finding §2).
+    // `parts.push` is O(1) amortised; `parts.join("")` is a single
+    // length-summed malloc + memcpy (hexa_str_join) — O(T) total, and
+    // byte-identical to the left-fold of `+`.
+    let mut parts: [string] = []
+
+    // ---- header (mirrors emit_asm; arm64-darwin needs no syntax dirs) ----
+    parts.push(_comment_marker(target).trim() + " hexa-lang emit pass — target=" + target + "\n")
+    parts.push(_comment_marker(target).trim() + " source: " + hmodule.file + "\n")
+    // #13 DWARF — `.file 1 "<source>"` (mirrors emit_asm); pairs with the
+    // per-fn `.loc` directive _emit_func emits. Thumb skipped.
+    if !_is_thumb(target) {
+        parts.push(".file 1 \"" + hmodule.file + "\"\n")
+    }
+    parts.push(_text_section_directive(target) + "\n")
+
+    // F6 option A — A5 wiring (PLAN-stage3-footprint-F6-optA.md).
+    // Per-iteration PUSH/POP reclaims mfunc/lfunc; per-call region
+    // toggles route st/frag escapes to malloc.
+    //
+    // A5.3 double gate (2026-05-16):
+    //   - HEXA_STREAM_RECLAIM=1 — explicit opt-in (default OFF).
+    //     The runtime defaults the val arena to ON (S7-B), so an
+    //     arena-only gate would activate the reclaim path on every
+    //     default invocation. The A6 sanity SIGSEGV at _new_block
+    //     under default showed that A1/A2 still have correctness gaps
+    //     under arena=1 that need debugging; until that's resolved,
+    //     force OFF by default so `--stream` stays byte-identical to
+    //     legacy.
+    //   - env("__HEXA_ARENA_ENABLED__") == "1" — val arena must be on
+    //     for the toggles to do anything anyway.
+    // Both required ⇒ default `--stream` is a clean byte-identical
+    // no-op; explicit opt-in (HEXA_STREAM_RECLAIM=1) exercises the
+    // reclaim path for measurement / further debug.
+    let _stream_reclaim = (env("HEXA_STREAM_RECLAIM") == "1") && (env("__HEXA_ARENA_ENABLED__") == "1")
+
+    // ---- streaming .text: one function's HIR/MIR/LIR live at a time ----
+    let mut i = 0
+    while i < len(hmodule.items) {
+        let it = hmodule.items[i]
+        if it.kind == "ITEM_FN" {
+            // Iter F1 scope — pushes only when val arena is on.
+            if _stream_reclaim { let _p = env("__HEXA_ARENA_PUSH__") }
+
+            // HIR→MIR for this one function. mfunc lands in iter F1.
+            if _stream_reclaim { let _r1 = env("__HEXA_ARENA_RETURN_REGION_ON__") }
+            let mfunc = _lower_fn(it, [])
+
+            // Intern this function's string literals into st — st must
+            // survive the POP, so route its return to malloc.
+            if _stream_reclaim { let _r2 = env("__HEXA_ARENA_RETURN_REGION_OFF__") }
+            st = _arm_strtab_collect_fn(st, mfunc)
+
+            // MIR→LIR for this one function. lfunc lands in iter F1.
+            if _stream_reclaim { let _r3 = env("__HEXA_ARENA_RETURN_REGION_ON__") }
+            let lfunc = _arm64_lower_func(mfunc, st, modhash)
+
+            // LIR→text. The asm fragment must survive POP — route to malloc.
+            // A5.2 (2026-05-16): compute frag + check lfunc.target match
+            // INSIDE the iter scope (must read lfunc before POP) but
+            // DEFER parts.push to AFTER the POP — otherwise the
+            // items[] growth allocation lands in the iter arena and POP
+            // wipes it (A6 1차 측정의 빈-출력 버그).
+            if _stream_reclaim { let _r4 = env("__HEXA_ARENA_RETURN_REGION_OFF__") }
+            let mut frag = ""
+            let mut emit_it = false
+            if lfunc.target == target {
+                frag = _emit_func(target, lfunc)
+                emit_it = true
+            }
+
+            // POP reclaims mfunc/lfunc and the iteration's transient
+            // scratch. frag (malloc-resident under RETURN_REGION_OFF)
+            // and emit_it (primitive) survive on the C local stack.
+            if _stream_reclaim { let _q = env("__HEXA_ARENA_POP__") }
+
+            // parts.push runs AFTER pop — items[] growth allocates in
+            // the outer (codegen_emit_streaming) frame, safely.
+            if emit_it {
+                parts.push(frag)
+            }
+        }
+        i = i + 1
+    }
+
+    // ---- .rodata: emitted once from the fully-accumulated strtab ----
+    let rodata = _strtab_to_rodata(st)
+    if len(rodata) > 0 {
+        let header_ro = _rodata_section_directive(target)
+        let mut ri = 0
+        while ri < len(rodata) {
+            parts.push(_emit_section(target, rodata[ri], header_ro))
+            ri = ri + 1
+        }
+    }
+    return parts.join("")
+}

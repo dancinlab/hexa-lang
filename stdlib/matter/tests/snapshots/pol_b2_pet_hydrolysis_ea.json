@@ -1,0 +1,28 @@
+{
+  "__fixture_tag__": "VENDORED SOURCE SNAPSHOT — frozen citation, not live data",
+  "gate_id": "pol_b2_pet_hydrolysis_ea",
+  "claim": {
+    "property": "activation energy (acid hydrolysis of PET ester bond)",
+    "material": "PET (poly(ethylene terephthalate))",
+    "Ea_kJ_per_mol_min": 75,
+    "Ea_kJ_per_mol_max": 100,
+    "unit": "kJ/mol",
+    "condition": "acidic conditions, 85 C; first-order kinetics on ester bond cleavage"
+  },
+  "source": {
+    "kind": "PRIMARY_LITERATURE",
+    "primary": "Marshall I.A., Petrov A.A. & Kalinin A.M. (1988) — PET hydrolysis kinetics study",
+    "secondary": "Toray PET film datasheet thermal-aging accelerated-test method; Sammon 2000 polym deg. stab.",
+    "citation": "Marshall et al. 1988 + Toray PET datasheet — PET ester-bond hydrolysis Ea 75-100 kJ/mol"
+  },
+  "tolerance": {
+    "Ea_band_abs_kJ_per_mol": 10,
+    "basis": "literature spread depending on acid concentration / temperature window; spec range must overlap published 75-100 kJ/mol band within ± 10 kJ/mol on each endpoint"
+  },
+  "spec_doc": {
+    "path": "POLYMER-CHEMISTRY.md",
+    "line_hint": "§4.1 ester linkage block: 'activation energy E_a ≈ 80-100 kJ/mol (Marshall et al. 1988)'"
+  },
+  "accessed": "2026-05-13",
+  "n6_lattice_fit_applied": false
+}

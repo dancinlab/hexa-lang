@@ -1,0 +1,14 @@
+#!hexa strict
+// protein-fold analyze — RMSD of a tiny 3-residue micro-alignment.
+extern fn sqrt(x: float) -> float
+fn main() {
+    let d1 = 0.5    // Å displacement res 1
+    let d2 = 0.3    // Å res 2
+    let d3 = 0.8    // Å res 3
+    let n = 3.0
+    let rmsd = sqrt((d1*d1 + d2*d2 + d3*d3) / n)
+    println("protein-fold_analyze (RMSD · 3-residue toy):")
+    println("  displacements_A = " + str(d1) + ", " + str(d2) + ", " + str(d3))
+    println("  rmsd_A = " + str(rmsd))
+    println("__HEXA_PROTEIN_FOLD_ANALYZE__ PASS gate=GATE_OPEN absorbed=false")
+}

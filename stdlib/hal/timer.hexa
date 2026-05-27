@@ -1,0 +1,58 @@
+#!hexa strict
+// stdlib/hal/timer/timer.hexa — σ-slot 8: hardware timer.
+//
+// import:  use "stdlib/hal/timer"
+// φ:       digital
+// handles: ≤ 4 timers × τ=4 capture/compare channels = J₂/n × τ = 16.
+//
+// canon-aware: σ-φ=10 prescaler stages mirrors HBM σ-φ=10 ladder.
+// Mode set: ONESHOT / PERIODIC / CAPTURE / PWM-DRIVE = τ=4 modes.
+
+let MODULE_NAME = "timer"
+let SIGMA_SLOT  = 8
+let PHI_KIND    = "digital"
+
+let MODE_ONESHOT  = 0
+let MODE_PERIODIC = 1
+let MODE_CAPTURE  = 2
+let MODE_PWM      = 3   // drives external PWM generator
+
+fn timer_configure(idx: int, mode: int, period_us: int) -> int {
+    if idx < 0 || idx > 3 { return -1 }
+    if mode < 0 || mode > 3 { return -2 }
+    if period_us < 1 { return -3 }
+    return idx
+}
+
+fn timer_start(handle: int) -> bool { return handle >= 0 }
+fn timer_stop(handle: int)  -> bool { return handle >= 0 }
+
+fn timer_now_ticks(handle: int) -> int {
+    if handle < 0 { return -1 }
+    let s = exec("date +%N").trim()
+    if s.len() == 0 { return 0 }
+    return int(s) / 1000   // microseconds-ish
+}
+
+fn timer_set_callback(handle: int, period_us: int) -> bool {
+    if handle < 0 { return false }
+    println("[timer sim] handle " + str(handle) + " period=" + str(period_us) + "us callback registered")
+    return true
+}
+
+fn timer_clear(handle: int) -> bool { return handle >= 0 }
+
+fn timer_report(handle: int) -> str {
+    if handle < 0 { return "timer: invalid" }
+    return "timer: idx " + str(handle) + " ok (sim)"
+}
+
+fn timer_open(idx: int, mode: int, period_us: int) -> int {
+    let h = timer_configure(idx, mode, period_us)
+    if h < 0 { return h }
+    if !timer_start(h) { return -4 }
+    return h
+}
+
+fn timer_close(handle: int) -> bool { return handle >= 0 }
+fn timer_module_meta() -> [str] { return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"] }

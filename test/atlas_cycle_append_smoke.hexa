@@ -1,0 +1,125 @@
+// test/atlas_cycle_append_smoke.hexa — D4 log-append automation smoke
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Exercises the pure formatting / validation / cycle-number-scan functions
+// of tool/atlas_cycle_append.hexa against in-memory fixtures (no disk
+// touch of atlas/MAIN.log.tape — true unit smoke). Run:
+//
+//   hexa run test/atlas_cycle_append_smoke.hexa
+//
+// Expected: `atlas_cycle_append smoke: PASS` and exit 0.
+
+use "tool/atlas_cycle_append"
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok {
+        println("  PASS  " + label)
+    } else {
+        println("  FAIL  " + label)
+        fails.push(label)
+    }
+}
+
+fn _contains(haystack: string, needle: string) -> bool {
+    return haystack.index_of(needle) >= 0
+}
+
+fn main() {
+    println("atlas_cycle_append smoke")
+    let fails = []
+
+    // ── Fixture A: synthetic existing log with cycle_030 + cycle_031.
+    //              build_entry_from_draft should pick cycle_032 (max+1).
+    let fake_log = "#!/usr/bin/env tape\n# header\n\n@A cycle_030 := \"x\" :: cycle [d=2026-05-15 active]\n  trigger = \"t\"\n\n@A cycle_031 := \"y\" :: cycle [d=2026-05-15 active]\n  trigger = \"t\"\n"
+
+    let good_draft = "# Title: Phase 3 cycle 032 — smoke fixture entry\n\n## trigger\nsmoke test fixture\n\n## scope\nLine one of scope.\nLine two of scope.\nLine three.\n\n## files\nfile_a.hexa\nfile_b.hexa\n\n## verifier_run_result\nfixture: 1/1 PASS\n\n## governance_check\ng_arch_vs_log_split (append-only respected)\ng5 (hexa-native)\n\n## note\nclosing note line.\n"
+
+    let built = build_entry_from_draft(good_draft, fake_log, "2026-05-15")
+    let err = to_string(built[0])
+    let entry = to_string(built[1])
+    let cyc = to_string(built[2])
+
+    _check("(a) good draft: no error", err == "", fails)
+    _check("(a) good draft: next cycle is 032 (max 031 + 1)", cyc == "032", fails)
+    _check("(a) emitted entry contains `@A cycle_032 :=`",
+           _contains(entry, "@A cycle_032 :="), fails)
+    _check("(a) emitted entry has `:: cycle [d=2026-05-15 active]`",
+           _contains(entry, ":: cycle [d=2026-05-15 active]"), fails)
+    _check("(a) entry contains all 5 required fields",
+           _contains(entry, "  trigger ") &&
+           _contains(entry, "  scope <<~EOF") &&
+           _contains(entry, "  files <<~EOF") &&
+           _contains(entry, "  verifier_run_result <<~EOF") &&
+           _contains(entry, "  governance_check <<~EOF"), fails)
+    _check("(a) multi-line scope uses <<~EOF heredoc",
+           _contains(entry, "  scope <<~EOF\n    Line one of scope."), fails)
+    _check("(a) heredoc closed with `  EOF`",
+           _contains(entry, "\n  EOF"), fails)
+    _check("(a) single-line trigger uses `field = \"...\"` form",
+           _contains(entry, "  trigger = \"smoke test fixture\""), fails)
+    _check("(a) optional note section emitted",
+           _contains(entry, "  note = \"closing note line.\""), fails)
+    _check("(a) header separator generated",
+           _contains(entry, "# ─── Cycle 032 — appended via tool/atlas_cycle_append"), fails)
+
+    // ── Fixture B: missing `## files` section → validator must reject
+    //              with a SPECIFIC error citing the section name.
+    let bad_draft_b = "# Title: bad B\n\n## trigger\nx\n\n## scope\ny\n\n## verifier_run_result\nz\n\n## governance_check\nw\n"
+    let built_b = build_entry_from_draft(bad_draft_b, fake_log, "2026-05-15")
+    let err_b = to_string(built_b[0])
+    _check("(b) missing files section is rejected", err_b != "", fails)
+    _check("(b) error message names the missing section",
+           _contains(err_b, "files"), fails)
+
+    // ── Fixture C: missing Title → reject.
+    let bad_draft_c = "## trigger\nx\n\n## scope\ny\n\n## files\nf\n\n## verifier_run_result\nz\n\n## governance_check\nw\n"
+    let built_c = build_entry_from_draft(bad_draft_c, fake_log, "2026-05-15")
+    let err_c = to_string(built_c[0])
+    _check("(c) missing Title is rejected", err_c != "", fails)
+    _check("(c) error mentions Title",
+           _contains(err_c, "Title"), fails)
+
+    // ── Fixture D: empty required section (## scope empty) → reject.
+    let bad_draft_d = "# Title: empty scope\n\n## trigger\nx\n\n## scope\n\n## files\nf\n\n## verifier_run_result\nz\n\n## governance_check\nw\n"
+    let built_d = build_entry_from_draft(bad_draft_d, fake_log, "2026-05-15")
+    let err_d = to_string(built_d[0])
+    _check("(d) empty scope section is rejected", err_d != "", fails)
+    _check("(d) error mentions `scope` and `empty`",
+           _contains(err_d, "scope") && _contains(err_d, "empty"), fails)
+
+    // ── Fixture E: log with NO cycle_NNN entries → next should be 001.
+    let empty_log = "#!/usr/bin/env tape\n# header only\n"
+    let built_e = build_entry_from_draft(good_draft, empty_log, "2026-05-15")
+    let cyc_e = to_string(built_e[2])
+    _check("(e) empty log: next cycle is 001", cyc_e == "001", fails)
+
+    // ── Fixture F: log with cycle_099 → next is 100 (3-digit boundary).
+    let log_99 = "#!/usr/bin/env tape\n@A cycle_099 := \"x\" :: cycle [d=2026-05-15 active]\n  trigger = \"t\"\n"
+    let built_f = build_entry_from_draft(good_draft, log_99, "2026-05-15")
+    let cyc_f = to_string(built_f[2])
+    _check("(f) cycle_099 → next is 100", cyc_f == "100", fails)
+
+    // ── Fixture G: log with non-sorted entries → max still wins.
+    let log_unsorted = "#!/usr/bin/env tape\n@A cycle_007 := \"x\" :: cycle [d=2026-05-15 active]\n  trigger = \"t\"\n\n@A cycle_042 := \"y\" :: cycle [d=2026-05-15 active]\n  trigger = \"t\"\n\n@A cycle_015 := \"z\" :: cycle [d=2026-05-15 active]\n  trigger = \"t\"\n"
+    let built_g = build_entry_from_draft(good_draft, log_unsorted, "2026-05-15")
+    let cyc_g = to_string(built_g[2])
+    _check("(g) unsorted log: max(7,42,15)+1 = 043",
+           cyc_g == "043", fails)
+
+    // ── Result.
+    println("")
+    if len(fails) == 0 {
+        println("atlas_cycle_append smoke: PASS")
+        exit(0)
+    } else {
+        println("atlas_cycle_append smoke: FAIL — " + to_string(len(fails)) + " check(s) failed")
+        let mut i = 0
+        while i < len(fails) {
+            println("  - " + to_string(fails[i]))
+            i = i + 1
+        }
+        exit(1)
+    }
+}

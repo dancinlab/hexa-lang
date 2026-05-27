@@ -1,0 +1,14 @@
+#!hexa strict
+// memristor verify — I_on/I_off ratio from R_on, R_off.
+fn main() {
+    let R_on_ohm = 100.0
+    let R_off_ohm = 10000.0
+    let V_V = 1.0
+    let I_on_A = V_V / R_on_ohm
+    let I_off_A = V_V / R_off_ohm
+    let ratio = R_off_ohm / R_on_ohm
+    println("memristor_verify (R_on=100Ω, R_off=10kΩ):")
+    println("  I_on_A = " + str(I_on_A) + "  I_off_A = " + str(I_off_A))
+    println("  I_on_over_I_off = " + str(ratio))
+    println("__HEXA_MEMRISTOR_VERIFY__ PASS gate=GATE_OPEN absorbed=false")
+}

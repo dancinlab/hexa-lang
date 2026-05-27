@@ -1,0 +1,18 @@
+Device: NVIDIA GeForce RTX 5070 sm_120
+CUDA driver=13000 runtime=12000
+loaded hexa-PY PTX shape 4096 (sgemm_4warp_swizzle_4096x4096_grid)
+  shape 4096: regs/thd=64, shmem=8192 B, max_thd_per_block=1024
+loaded hexa-PY PTX shape 6144 (sgemm_4warp_swizzle_6144x6144_grid)
+  shape 6144: regs/thd=64, shmem=8192 B, max_thd_per_block=1024
+loaded hexa-PY PTX shape 8192 (sgemm_4warp_swizzle_8192x8192_grid)
+  shape 8192: regs/thd=64, shmem=8192 B, max_thd_per_block=1024
+Device VRAM free=11601.19 MB total=11772.44 MB
+[M=4096] allocating 128.00 MB device memory (A=32768 KB + B=32768 KB + C=65536 KB)
+[M=4096] cuBLAS HGEMM            median=1.962112 ms  std=0.003484  min=1.953760  max=1.965248  TFLOPS= 70.0464
+[M=4096] hexa-PY 4warp+swizzle   median=2.397312 ms  std=0.002290  min=2.392960  max=2.405408  TFLOPS= 57.3304  ratio=0.8185  maxabs=0.0000  maxrel=0.0000  CTAs=4096  regs=64
+[M=6144] allocating 288.00 MB device memory (A=73728 KB + B=73728 KB + C=147456 KB)
+[M=6144] cuBLAS HGEMM            median=6.549760 ms  std=0.011454  min=6.546560  max=6.580096  TFLOPS= 70.8204
+[M=6144] hexa-PY 4warp+swizzle   median=28.023488 ms  std=1.095655  min=25.756865  max=30.421215  TFLOPS= 16.5524  ratio=0.2337  maxabs=0.0000  maxrel=0.0000  CTAs=9216  regs=64
+[M=8192] allocating 512.00 MB device memory (A=131072 KB + B=131072 KB + C=262144 KB)
+[M=8192] cuBLAS HGEMM            median=24.046112 ms  std=5.305438  min=15.525088  max=31.572832  TFLOPS= 45.7251
+[M=8192] hexa-PY 4warp+swizzle   median=79.055504 ms  std=1.946778  min=78.883934  max=88.217567  TFLOPS= 13.9081  ratio=0.3042  maxabs=0.0000  maxrel=0.0000  CTAs=16384  regs=64

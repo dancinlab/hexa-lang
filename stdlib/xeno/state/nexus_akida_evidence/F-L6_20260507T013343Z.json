@@ -1,0 +1,50 @@
+{
+  "falsifier_id": "F-L6",
+  "measured_ts": "2026-05-07T01:33:43Z",
+  "measured_value": {
+    "sweep": [
+      {
+        "rate_hz": 1.0,
+        "lambda_max": NaN,
+        "n_samples": 233
+      },
+      {
+        "rate_hz": 3.0,
+        "lambda_max": NaN,
+        "n_samples": 224
+      },
+      {
+        "rate_hz": 10.0,
+        "lambda_max": NaN,
+        "n_samples": 224
+      },
+      {
+        "rate_hz": 30.0,
+        "lambda_max": NaN,
+        "n_samples": 225
+      },
+      {
+        "rate_hz": 100.0,
+        "lambda_max": NaN,
+        "n_samples": 227
+      },
+      {
+        "rate_hz": 300.0,
+        "lambda_max": NaN,
+        "n_samples": 232
+      },
+      {
+        "rate_hz": 1000.0,
+        "lambda_max": NaN,
+        "n_samples": 657
+      }
+    ],
+    "rates_in_edge_of_chaos_band": [],
+    "band": "[-0.05, +0.05]",
+    "promotion_eligible": false
+  },
+  "verdict": "PLAUSIBLE-FAIL",
+  "raw_log_path": "/Users/ghost/core/nexus/state/akida_evidence/F-L6_20260507T013343Z.json",
+  "hardware_present": false,
+  "command": "scripts/akida/lyapunov_sweep.py --simulate"
+}

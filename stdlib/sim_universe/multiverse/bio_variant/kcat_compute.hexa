@@ -1,0 +1,150 @@
+// multiverse/module/bio_variant/kcat_compute.hexa
+//   Per-variant k_cat surrogate (Eyring TST + Hamming-distance ΔΔG model).
+//
+// Canonical anchor (hexa-bio F-RB-4 cycle 24 C0b PASS):
+//   ΔG‡ = 21.0 kcal/mol, T = 310 K, k_cat = 0.5995 min⁻¹ ≈ 0.01009 s⁻¹.
+//   k_eyring = (kT/h) · exp(-ΔG‡/RT), prefactor = 6.4594e12 s⁻¹.
+//
+// Variant model:
+//   ΔΔG_pen = δ · d_hamming   (kcal/mol; δ default = 1.5 kcal/mol per mismatch)
+//   ΔG‡_var = 21.0 + ΔΔG_pen
+//   For each (variant, world) pair, add Gaussian-flavored noise:
+//     ε_world ∈ [-σ, +σ], σ default = 0.5 kcal/mol (local perturbation)
+//   k_cat_var_world = (kT/h) · exp(-(ΔG‡_var + ε_world)/RT)
+//
+// Output: log10(k_cat_per_s) × 1000 (scaled fixed-point).
+//   canonical: log10(0.01009) ≈ -1.996, scaled = -1996.
+//
+// Usage:
+//   hexa kcat_compute.hexa <variants_tsv> <W_worlds> <out_file>
+//     reads M variants from <variants_tsv> (output of ribozyme_variants.hexa)
+//     writes M lines, each "variant_idx\thamming_d\t<W comma-separated log10_kcat_scaled>"
+//
+
+const RT_310K_SCALED: i64 = 616          // R*T = 0.6157 kcal/mol * 1000
+const DELTA_G_REF_SCALED: i64 = 21000    // 21.0 kcal/mol * 1000
+const DELTA_G_PER_MISMATCH_SCALED: i64 = 1500   // 1.5 kcal/mol * 1000
+const NOISE_SIGMA_SCALED: i64 = 500      // 0.5 kcal/mol * 1000
+// log10(prefactor kT/h at 310K) = log10(6.4594e12) ≈ 12.8101
+// → log10_k_cat = 12.8101 + log10(exp(-x/RT)) = 12.8101 - x/(RT*ln(10))
+// where ln(10) ≈ 2.3026, so log10_k_cat = 12.8101 - x / (0.6157 * 2.3026)
+//                                       = 12.8101 - x / 1.4180   (kcal/mol → log10)
+// Scaled: PREFACTOR_LOG10_SCALED = 12810
+// RT*ln10 scaled = 1418
+const PREFACTOR_LOG10_SCALED: i64 = 12810
+const RT_LN10_SCALED: i64 = 1418
+
+fn abs_i(x: i64) -> i64 { if x < 0 { return 0 - x } return x }
+
+// Per-variant per-world deterministic pseudo-noise in [-σ, σ]
+// Uses LCG seeded from (variant_idx, world_idx) so reruns reproduce.
+fn noise_kcal_scaled(variant_idx: i64, world_idx: i64) -> i64 {
+    let mut state = variant_idx * 2654435761 + world_idx * 40503
+    state = state * 1103515245 + 12345
+    let r = state % 2001     // r ∈ [0, 2000]
+    let centered = r - 1000  // ∈ [-1000, 1000]
+    // scale to [-σ, σ]
+    let n = centered * NOISE_SIGMA_SCALED / 1000
+    return n
+}
+
+// log10(k_cat_per_s) scaled ×1000 from ΔG‡ scaled.
+fn log10_kcat_from_dG_scaled(dG_scaled: i64) -> i64 {
+    // log10_k = PREFACTOR_LOG10 - dG / (RT * ln10)
+    let delta = dG_scaled * 1000 / RT_LN10_SCALED
+    return PREFACTOR_LOG10_SCALED - delta
+}
+
+// API: kcat_per_world(variant_d, variant_idx, W) → [W log10_kcat_scaled values]
+fn kcat_per_world(variant_d: i64, variant_idx: i64, W: i64) -> [i64] {
+    let mut out: [i64] = []
+    let base_dG = DELTA_G_REF_SCALED + variant_d * DELTA_G_PER_MISMATCH_SCALED
+    let mut w = 0
+    while w < W {
+        let noise = noise_kcal_scaled(variant_idx, w)
+        let dG_eff = base_dG + noise
+        let log10_k = log10_kcat_from_dG_scaled(dG_eff)
+        out.push(log10_k)
+        w = w + 1
+    }
+    return out
+}
+
+// parse variants TSV: returns parallel arrays [idx, d, ...]
+fn parse_variants(tsv: string) -> [[i64]] {
+    let mut idxs: [i64] = []
+    let mut ds: [i64] = []
+    let lines = tsv.split("\n")
+    let mut i = 0
+    while i < lines.len() {
+        let line = lines[i].trim()
+        if line.len() > 0 {
+            let parts = line.split("\t")
+            if parts.len() >= 2 {
+                let mut vi: i64 = 0
+                let mut vd: i64 = 0
+                try { vi = to_int(parts[0].trim()) } catch e { vi = 0 }
+                try { vd = to_int(parts[1].trim()) } catch e { vd = 0 }
+                idxs.push(vi)
+                ds.push(vd)
+            }
+        }
+        i = i + 1
+    }
+    let mut out: [[i64]] = []
+    out.push(idxs)
+    out.push(ds)
+    return out
+}
+
+// CLI entrypoint
+let _args = args()
+if _args.len() < 4 {
+    println("usage: hexa kcat_compute.hexa <variants_tsv> <W_worlds> <out_file>")
+} else {
+    let variants_tsv = _args[1]
+    let mut W = 50
+    try { W = to_int(_args[2]) } catch e { W = 50 }
+    let out_file = _args[3]
+
+    let mut raw = ""
+    try { raw = read_file(variants_tsv) } catch e { raw = "" }
+    if raw.len() == 0 {
+        println("[kcat_compute] ERROR: cannot read variants tsv " + variants_tsv)
+    } else {
+        let parsed = parse_variants(raw)
+        let idxs = parsed[0]
+        let ds = parsed[1]
+        let M = idxs.len()
+        println("[kcat_compute] M=" + to_string(M) + " W=" + to_string(W) + " noise_sigma_kcal=0.5 dG_per_mismatch_kcal=1.5")
+
+        let mut output_text = ""
+        let mut i = 0
+        while i < M {
+            let vi = idxs[i]
+            let vd = ds[i]
+            let kcats = kcat_per_world(vd, vi, W)
+            // emit: "<idx>\t<d>\t<v1>,<v2>,...,<vW>"
+            let mut row = to_string(vi) + "\t" + to_string(vd) + "\t"
+            let mut w = 0
+            while w < kcats.len() {
+                if w > 0 { row = row + "," }
+                row = row + to_string(kcats[w])
+                w = w + 1
+            }
+            output_text = output_text + row + "\n"
+            i = i + 1
+        }
+        try { write_file(out_file, output_text) } catch e {}
+        println("[kcat_compute] wrote " + out_file + " (M=" + to_string(M) + " variants × W=" + to_string(W) + " worlds; log10(k_cat/s) scaled ×1000)")
+        // Print canonical (variant 0) summary
+        if M > 0 {
+            let v0 = kcat_per_world(ds[0], idxs[0], W)
+            let mut sum: i64 = 0
+            let mut k = 0
+            while k < v0.len() { sum = sum + v0[k]; k = k + 1 }
+            let mean = sum / v0.len()
+            println("  variant_0 (d=0) mean log10_kcat_scaled = " + to_string(mean) + " (canonical reference ≈ -1996)")
+        }
+    }
+}

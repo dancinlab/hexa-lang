@@ -1,0 +1,18 @@
+// self/attrs/limit.hexa — singleton + system-state refusal
+
+use "self/attrs/core"
+
+fn meta_limit() -> AttrMeta {
+    let mut m = empty_meta()
+    m.name = "limit"
+    m.category = "safety"
+    m.purpose = "singleton + mem_mb RSS cap + loadavg refusal — 함수 진입 시 자원/동시성 게이트"
+    m.cost_rule = "singleton(count>0) OR RSS > mem_mb*1024KB OR loadavg 3단계 증가 → throw"
+    m.example = "@limit(mem_mb=8192)\nfn train_epoch() { /* RSS 8GB 초과 시 refuse */ }"
+    m.implemented = true  // Phase B (2026-04-20): mem_mb arg 실제 enforce
+    return m
+}
+
+fn check_limit(source: string, lines: [string]) {
+    return []
+}

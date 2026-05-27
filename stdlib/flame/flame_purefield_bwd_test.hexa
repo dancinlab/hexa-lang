@@ -1,0 +1,180 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/flame/flame_purefield_bwd_test.hexa — RFC 059 §3 P1②-b (purefield)
+//
+// PureFieldFFN: out = E_A(x) − E_G(x), each E = Linear_in → GELU → Linear_out.
+// This is the ONLY op of P1②-b that needs genuinely-new math: the GELU
+// primitive backward. We use the EXACT (erf-based) GELU in BOTH the forward
+// and the backward (GELU(x)=x·Φ(x), GELU'(x)=Φ(x)+x·φ(x), Φ=0.5(1+erf(x/√2)),
+// φ=exp(−x²/2)/√(2π)) so the central-diff grad-check is self-consistent (RFC
+// 059 §3 + flame float-eval byte-eq hazard: match the bwd to the fwd).
+//
+// New ag_tape kind ag_k_purefield()=15 + recorder ag_purefield + reverse arm.
+//
+// Falsifier:
+//
+//   F-RFC059B-PUREFIELD-GRADCHECK   out = E_A(x) − E_G(x); seed a downstream
+//                                   loss L = ½·Σ_j w[j]·out[j]² (arbitrary
+//                                   smooth scalar). The reverse-mode analytic
+//                                   grad ∂L/∂{x, Wa_in, Wa_out, Wg_in, Wg_out}
+//                                   matches central finite-diff at ε=1e-5.
+//                                   Gate: rel ≤ 1e-6 (RFC 059 §6.2). Probes
+//                                   all FOUR expert weights + shared x.
+// ════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/nn_lib"
+use "stdlib/flame/flame_math"
+use "stdlib/flame/ag_tape"
+
+fn nn_abs(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+// downstream scalar loss L = ½·Σ_j w[j]·out[j]²  (smooth, arbitrary weights
+// w to break symmetry). dL/dout[j] = w[j]·out[j].
+fn down_loss(out: int, w: int, d: int) -> float {
+    let mut L = 0.0
+    let mut j = 0
+    while j < d {
+        let oj = t_get(out, j)
+        L = L + 0.5 * t_get(w, j) * oj * oj
+        j = j + 1
+    }
+    return L
+}
+
+// full forward L(x, Wa_in, Wa_out, Wg_in, Wg_out) for finite-diff (host).
+fn loss_eval(x: int, Wa_in: int, Wa_out: int, Wg_in: int, Wg_out: int,
+             w: int, d: int, h: int) -> float {
+    let out = t_zeros(d)
+    let gA = t_zeros(h)
+    let aA = t_zeros(h)
+    let gG = t_zeros(h)
+    let aG = t_zeros(h)
+    nn_purefield_fwd(x, Wa_in, Wa_out, Wg_in, Wg_out, out, gA, aA, gG, aG, d, h)
+    let L = down_loss(out, w, d)
+    t_free(out); t_free(gA); t_free(aA); t_free(gG); t_free(aG)
+    return L
+}
+
+// which: 0=x, 1=Wa_in, 2=Wa_out, 3=Wg_in, 4=Wg_out
+fn central_diff(x: int, Wa_in: int, Wa_out: int, Wg_in: int, Wg_out: int,
+                w: int, d: int, h: int, which: int, idx: int, eps: float) -> float {
+    let p = if which == 0 { x }
+            else if which == 1 { Wa_in }
+            else if which == 2 { Wa_out }
+            else if which == 3 { Wg_in }
+            else { Wg_out }
+    let saved = t_get(p, idx)
+    t_set(p, idx, saved + eps)
+    let lp = loss_eval(x, Wa_in, Wa_out, Wg_in, Wg_out, w, d, h)
+    t_set(p, idx, saved - eps)
+    let lm = loss_eval(x, Wa_in, Wa_out, Wg_in, Wg_out, w, d, h)
+    t_set(p, idx, saved)
+    return (lp - lm) / (2.0 * eps)
+}
+
+fn rel_err(analytic: float, fd: float) -> float {
+    let atol = 0.000001
+    let denom = if nn_abs(fd) > atol { nn_abs(fd) } else { atol }
+    return nn_abs(analytic - fd) / denom
+}
+
+println("=== flame RFC 059 §3 P1②-b — purefield (erf-GELU) backward selftest (CPU oracle) ===")
+
+let mut pass = 0
+let total = 1
+
+let d = 4
+let h = 6
+
+let x = t_zeros(d)
+let Wa_in = t_zeros(d * h)
+let Wa_out = t_zeros(h * d)
+let Wg_in = t_zeros(d * h)
+let Wg_out = t_zeros(h * d)
+let w = t_zeros(d)
+
+let mut e = 0
+while e < d * h {
+    t_set(Wa_in, e, to_float((e * 7) % 23 - 11) * 0.031 + 0.05)
+    t_set(Wa_out, e, to_float((e * 5) % 19 - 9) * 0.027 - 0.03)
+    t_set(Wg_in, e, to_float((e * 11) % 29 - 14) * 0.023 + 0.02)
+    t_set(Wg_out, e, to_float((e * 3) % 17 - 8) * 0.029 - 0.04)
+    e = e + 1
+}
+let mut xi = 0
+while xi < d {
+    t_set(x, xi, to_float(xi - 1) * 0.041 + 0.08)
+    t_set(w, xi, to_float(xi + 1) * 0.37)     // asymmetric downstream weights
+    xi = xi + 1
+}
+
+// analytic: forward purefield node, seed downstream dL/dout = w·out, walk.
+let tp = ag_t_begin(2)
+let out = ag_purefield(tp, x, Wa_in, Wa_out, Wg_in, Wg_out, d, h)
+let dout = t_zeros(d)
+let mut j = 0
+while j < d {
+    t_set(dout, j, t_get(w, j) * t_get(out, j))   // dL/dout[j] = w[j]·out[j]
+    j = j + 1
+}
+ag_seed_grad(tp, out, dout)
+ag_backward_reg(tp, out, t_zeros(d))
+let g_x  = ag_grad(tp, x)
+let g_ai = ag_grad(tp, Wa_in)
+let g_ao = ag_grad(tp, Wa_out)
+let g_gi = ag_grad(tp, Wg_in)
+let g_go = ag_grad(tp, Wg_out)
+let L = down_loss(out, w, d)
+print("      downstream L = ½Σ w·out² = "); println(L)
+t_free(dout)
+
+let eps = 0.00001
+let mut worst = 0.0
+
+// probe: x[0], x[2], Wa_in[5], Wa_out[11], Wg_in[7], Wg_out[3]
+let fx0 = central_diff(x, Wa_in, Wa_out, Wg_in, Wg_out, w, d, h, 0, 0, eps)
+let fx2 = central_diff(x, Wa_in, Wa_out, Wg_in, Wg_out, w, d, h, 0, 2, eps)
+let fai = central_diff(x, Wa_in, Wa_out, Wg_in, Wg_out, w, d, h, 1, 5, eps)
+let fao = central_diff(x, Wa_in, Wa_out, Wg_in, Wg_out, w, d, h, 2, 11, eps)
+let fgi = central_diff(x, Wa_in, Wa_out, Wg_in, Wg_out, w, d, h, 3, 7, eps)
+let fgo = central_diff(x, Wa_in, Wa_out, Wg_in, Wg_out, w, d, h, 4, 3, eps)
+let r_x0 = rel_err(t_get(g_x, 0), fx0)
+let r_x2 = rel_err(t_get(g_x, 2), fx2)
+let r_ai = rel_err(t_get(g_ai, 5), fai)
+let r_ao = rel_err(t_get(g_ao, 11), fao)
+let r_gi = rel_err(t_get(g_gi, 7), fgi)
+let r_go = rel_err(t_get(g_go, 3), fgo)
+if r_x0 > worst { worst = r_x0 }
+if r_x2 > worst { worst = r_x2 }
+if r_ai > worst { worst = r_ai }
+if r_ao > worst { worst = r_ao }
+if r_gi > worst { worst = r_gi }
+if r_go > worst { worst = r_go }
+print("      x[0]      analytic="); print(t_get(g_x, 0));   print(" fd="); print(fx0); print(" rel="); println(r_x0)
+print("      x[2]      analytic="); print(t_get(g_x, 2));   print(" fd="); print(fx2); print(" rel="); println(r_x2)
+print("        (x is SHARED — accumulates E_A(+1) + E_G(−1) dx paths)")
+print("      Wa_in[5]  analytic="); print(t_get(g_ai, 5));  print(" fd="); print(fai); print(" rel="); println(r_ai)
+print("      Wa_out[11] analytic="); print(t_get(g_ao, 11)); print(" fd="); print(fao); print(" rel="); println(r_ao)
+print("      Wg_in[7]  analytic="); print(t_get(g_gi, 7));  print(" fd="); print(fgi); print(" rel="); println(r_gi)
+print("      Wg_out[3] analytic="); print(t_get(g_go, 3));  print(" fd="); print(fgo); print(" rel="); println(r_go)
+
+print("      worst rel-error (x+4 weights, 6 probes) = "); println(worst)
+if worst <= 0.000001 {
+    println("PASS  F-RFC059B-PUREFIELD-GRADCHECK   purefield erf-GELU bwd rel ≤ 1e-6 (RFC 059 §3)")
+    pass = pass + 1
+} else {
+    print("FAIL  F-RFC059B-PUREFIELD-GRADCHECK   worst rel="); print(worst); println(" (>1e-6)")
+}
+ag_t_free_state(tp); ag_t_free_reg(tp); ag_t_end(tp)
+
+t_free(x); t_free(Wa_in); t_free(Wa_out); t_free(Wg_in); t_free(Wg_out); t_free(w)
+
+print("=== ")
+print(pass)
+print("/")
+print(total)
+println(" PASS ===")

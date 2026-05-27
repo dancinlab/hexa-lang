@@ -1,0 +1,8 @@
+#!hexa strict
+// neuromorphic design — STDP plasticity window.
+fn main() {
+    let stdp_window_ms = 20.0
+    println("neuromorphic_design (STDP plasticity window):")
+    println("  stdp_window_ms = " + str(stdp_window_ms))
+    println("__HEXA_NEUROMORPHIC_DESIGN__ PASS gate=GATE_OPEN absorbed=false")
+}

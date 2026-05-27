@@ -1,0 +1,134 @@
+#!hexa strict
+// qmirror/ghz_mermin/module/ghz_mermin.hexa — GHZ-3 Mermin-witness (cond.10 / F-QM-2-GHZ-10)
+// STANDALONE: lives under qmirror/ghz_mermin/module/ (canonical layout 2026-05-05).
+//
+// @tool(slug="qmirror_ghz_mermin", desc="GHZ-3 Mermin-witness inequality on the pure-hexa state-vector kernel. Builds |GHZ_3>=H_0+CNOT_01+CNOT_12 then samples 4 measurement bases (XXX,XYY,YXY,YYX) per trial; aggregates Mermin operator M = <XXX> - <XYY> - <YXY> - <YYX>. Analytic GHZ_3 result: M = +4.0 (quantum bound 4.0; classical bound 2.0). Default: n_shots=1024 per basis, n_trials=30.")
+// @usage(hexa run qmirror/ghz_mermin/module/ghz_mermin.hexa --selftest)
+// @sentinel(__QMIRROR_GHZ_MERMIN__ <PASS|FAIL>)
+//
+// Spec ref: anima/docs/qmirror_2_axes_spec_2026_05_03.md §2 (axis 2, cond.10)
+// Falsifier: F-QM-2-GHZ-10 — M_mean in [3.7, 4.0] over 30 trials AND M_min > 3.5
+//
+// Phase 5b absorption (2026-05-12): the python bridge (numpy_native fallback in
+// _python_bridge/module/ghz_mermin_runner.py) is retired. All sampling /
+// correlator math is in ghz_mermin_native.hexa against the engine_aer pure-hexa
+// state_vector kernel. Zero subprocess, zero python, zero qiskit.
+//
+// Sign convention (task spec): M = <XXX> - <XYY> - <YXY> - <YYX>
+//   For |GHZ_3> = (|000>+|111>)/sqrt(2):
+//     <XXX> = +1, <XYY> = <YXY> = <YYX> = -1
+//     M_analytic = 1 - (-1) - (-1) - (-1) = +4.0
+//   (The qmirror_2_axes_spec doc uses the sign-flipped form
+//    M = <XYY>+<YXY>+<YYX>-<XXX> = -4; same |M|=4.)
+
+use "./ghz_mermin_native.hexa"
+
+struct GhzMerminVerdict {
+    ok:          int,
+    verdict:     str,        // "PASS" | "FAIL"
+    M_mean:      float,
+    M_std:       float,
+    M_min:       float,
+    M_max:       float,
+    E_XXX:       float,
+    E_XYY:       float,
+    E_YXY:       float,
+    E_YYX:       float,
+    n_shots:     int,
+    n_trials:    int,
+    engine:      str,
+    message:     str
+}
+
+fn ghz_verdict_fail(reason: str) -> GhzMerminVerdict {
+    return GhzMerminVerdict {
+        ok: 0, verdict: "FAIL",
+        M_mean: 0.0, M_std: 0.0, M_min: 0.0, M_max: 0.0,
+        E_XXX: 0.0, E_XYY: 0.0, E_YXY: 0.0, E_YYX: 0.0,
+        n_shots: 0, n_trials: 0, engine: "none",
+        message: reason
+    }
+}
+
+// Public: run GHZ-3 Mermin witness with n_shots per basis * n_trials repeats.
+// Returns GhzMerminVerdict { M_mean, M_std, M_min, M_max, per-basis E_*, verdict, ok }.
+fn ghz_mermin_run(n_shots: int, n_trials: int, seed: int) -> GhzMerminVerdict {
+    if n_shots < 1 {
+        return ghz_verdict_fail("ghz_mermin: n_shots > 0 required")
+    }
+    if n_trials < 1 {
+        return ghz_verdict_fail("ghz_mermin: n_trials > 0 required")
+    }
+
+    let n = ghz_mermin_native_run(n_shots, n_trials, seed)
+    if n.ok != 1 {
+        return ghz_verdict_fail(n.message)
+    }
+    return GhzMerminVerdict {
+        ok: 1,
+        verdict: n.verdict,
+        M_mean: n.M_mean,
+        M_std:  n.M_std,
+        M_min:  n.M_min,
+        M_max:  n.M_max,
+        E_XXX:  n.E_XXX,
+        E_XYY:  n.E_XYY,
+        E_YXY:  n.E_YXY,
+        E_YYX:  n.E_YYX,
+        n_shots: n.n_shots,
+        n_trials: n.n_trials,
+        engine: n.engine,
+        message: n.message
+    }
+}
+
+fn _abs_ghz(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+// F-QM-2-GHZ-10 falsifier check, applied to an already-computed verdict.
+// (The witness is run exactly once per process — the hexa interpreter does
+// not GC long loop temporaries, so re-running 1024 shots * 4 bases * 30
+// trials a second time would trip the RSS cap.) On the pure-hexa kernel,
+// GHZ-3 is a simultaneous eigenstate of the 4 Mermin Pauli strings, so every
+// shot returns the analytic eigenvalue and M = +4.0 exactly to numerical
+// precision: M_mean in [3.7, 4.0], M_min > 3.5.
+fn _ghz_selftest_ok(v: GhzMerminVerdict) -> int {
+    if v.ok != 1 { return 0 }
+    if v.verdict != "PASS" { return 0 }
+    if v.M_mean < 3.7 { return 0 }
+    let tol_hi = 0.000001
+    if v.M_mean > 4.0 + tol_hi { return 0 }
+    if v.M_min  < 3.5 { return 0 }
+    // Per-basis sanity: E_XXX ~ +1, E_XYY = E_YXY = E_YYX ~ -1 (eigenstate, no shot noise).
+    if _abs_ghz(v.E_XXX - 1.0) > 0.1 { return 0 }
+    if _abs_ghz(v.E_XYY + 1.0) > 0.1 { return 0 }
+    if _abs_ghz(v.E_YXY + 1.0) > 0.1 { return 0 }
+    if _abs_ghz(v.E_YYX + 1.0) > 0.1 { return 0 }
+    return 1
+}
+
+fn main() {
+    println("[qmirror/ghz_mermin] GHZ-3 Mermin-witness inequality")
+    println("  spec: F-QM-2-GHZ-10  M = <XXX> - <XYY> - <YXY> - <YYX>")
+    println("  band: M in [3.7, 4.0]; quantum 4.0; classical 2.0")
+    let v = ghz_mermin_run(1024, 30, 20260503)
+    println("  engine     = " + v.engine)
+    println("  M_mean     = " + str(v.M_mean) + "   (analytic +4.0)")
+    println("  M_std      = " + str(v.M_std))
+    println("  M_min      = " + str(v.M_min))
+    println("  M_max      = " + str(v.M_max))
+    println("  E(XXX)     = " + str(v.E_XXX) + "   (analytic +1)")
+    println("  E(XYY)     = " + str(v.E_XYY) + "   (analytic -1)")
+    println("  E(YXY)     = " + str(v.E_YXY) + "   (analytic -1)")
+    println("  E(YYX)     = " + str(v.E_YYX) + "   (analytic -1)")
+    println("  verdict    = " + v.verdict)
+    if _ghz_selftest_ok(v) == 1 {
+        println("[qmirror/ghz_mermin] SELFTEST PASS (F-QM-2-GHZ-10 cleared)")
+        println("__QMIRROR_GHZ_MERMIN__ PASS")
+    } else {
+        println("[qmirror/ghz_mermin] SELFTEST FAIL (F-QM-2-GHZ-10 falsifier triggered)")
+        println("__QMIRROR_GHZ_MERMIN__ FAIL")
+    }
+}

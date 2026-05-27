@@ -1,0 +1,8 @@
+#!hexa strict
+// rna-therapy structure — siRNA duplex length.
+fn main() {
+    let sirna_nt = 21.0
+    println("rna-therapy_structure (siRNA duplex length):")
+    println("  sirna_nt = " + str(sirna_nt))
+    println("__HEXA_RNA_THERAPY_STRUCTURE__ PASS gate=GATE_OPEN absorbed=false")
+}

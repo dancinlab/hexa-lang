@@ -1,0 +1,161 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/dancinlab/hexa-bio/case_studies/bcl2_portfolio/portfolio_v1.schema.json",
+  "title": "BCL-2 / hematologic malignancies portfolio case-study witness (v1)",
+  "description": "In-silico simulator-consistency witness for the BCL-2 portfolio case study — a one-disease pilot composing one existing sub-axis sim (PPI :> QUANTUM) for two BH3-mimetic small-molecule PPI inhibitors of the BCL-2 family: venetoclax / Venclexta (FDA-approved 2016, CDER) and navitoclax / ABT-263 (clinical-stage, NOT FDA-approved — honestly flagged via fda_approval_status='clinical_stage' and null fda_year/fda_center). The schema deliberately separates `in_scope_drugs` (axis-mapped BH3-mimetic small molecules — the parent PPI sim cites both by name) from `research_stage_negatives` (BCL-2 PROTACs, macrocyclic / stapled-peptide BH3-mimetics, CAR-T cell therapies): an honest portfolio acknowledges what it does NOT model. The in_scope structure ENFORCES the approved-vs-clinical-stage distinction structurally, not as a comment. NEVER a therapeutic, clinical, oncology, efficacy, regulatory, or portfolio-recommendation claim (g8 / f2). NEVER a molecular-glue claim for the BH3-mimetics (they are PPI disruptors). NOT the deferred 200-disease re-mapping.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "case_study_id",
+    "ts",
+    "disease",
+    "in_scope_drugs",
+    "research_stage_negatives",
+    "cross_axis_touch_points",
+    "honesty",
+    "acceptance",
+    "sentinel"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"type": "string", "const": "bcl2_portfolio_v1"},
+    "case_study_id":  {"type": "string", "const": "bcl2_portfolio.v1"},
+    "ts":             {"type": "string", "minLength": 1},
+    "disease": {
+      "type": "object",
+      "required": ["name", "abbreviation"],
+      "additionalProperties": true,
+      "properties": {
+        "name": {"type": "string"},
+        "abbreviation": {"type": "string", "const": "BCL2"},
+        "target_family": {"type": "string"}
+      }
+    },
+    "in_scope_drugs": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {"$ref": "#/definitions/in_scope_drug"}
+    },
+    "research_stage_negatives": {
+      "type": "array",
+      "minItems": 3,
+      "items": {"$ref": "#/definitions/research_stage_negative"}
+    },
+    "cross_axis_touch_points": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "module", "note"],
+        "additionalProperties": true,
+        "properties": {
+          "id": {"type": "string"},
+          "module": {"type": "string"},
+          "note": {"type": "string"}
+        }
+      }
+    },
+    "honesty": {
+      "type": "object",
+      "required": [
+        "in_silico_only",
+        "core_5_unchanged",
+        "no_fork_of_sister_sims",
+        "one_disease_pilot_not_200_disease_remap",
+        "research_stage_negatives_listed_honestly",
+        "clinical_stage_drug_marked_honestly",
+        "not_a_molecular_glue_claim",
+        "no_lattice_derivation",
+        "statement"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "in_silico_only": {"const": true},
+        "core_5_unchanged": {"const": true},
+        "no_fork_of_sister_sims": {"const": true},
+        "one_disease_pilot_not_200_disease_remap": {"const": true},
+        "research_stage_negatives_listed_honestly": {"const": true},
+        "clinical_stage_drug_marked_honestly": {"const": true},
+        "not_a_molecular_glue_claim": {"const": true},
+        "no_lattice_derivation": {"const": true},
+        "statement": {"type": "string", "minLength": 1}
+      }
+    },
+    "acceptance": {
+      "type": "object",
+      "required": ["criteria", "pass_count", "total", "verdict"],
+      "additionalProperties": true,
+      "properties": {
+        "verdict": {"type": "string", "enum": ["PASS", "FAIL"]}
+      }
+    },
+    "sentinel": {
+      "type": "string",
+      "enum": ["__BCL2_PORTFOLIO__ PASS", "__BCL2_PORTFOLIO__ FAIL"]
+    }
+  },
+  "definitions": {
+    "in_scope_drug": {
+      "type": "object",
+      "required": [
+        "drug", "brand", "sponsor", "fda_approval_status",
+        "fda_year", "fda_center", "fda_application",
+        "modality", "axis_mapping", "real_limit_anchor",
+        "drug_precedent_refs", "sim_run", "in_silico_only"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "drug": {"type": "string", "minLength": 1},
+        "brand": {"type": "string", "minLength": 1},
+        "sponsor": {"type": "string", "minLength": 1},
+        "fda_approval_status": {
+          "type": "string",
+          "enum": ["approved", "clinical_stage"],
+          "description": "Honest approval status. 'approved' rows must carry a non-null fda_year + fda_center='CDER'; 'clinical_stage' rows MUST carry null fda_year and null fda_center (no fabricated approval)."
+        },
+        "fda_year": {"type": ["integer", "null"], "minimum": 1970, "maximum": 2100},
+        "fda_center": {"type": ["string", "null"], "enum": ["CDER", null]},
+        "fda_application": {"type": ["string", "null"]},
+        "modality": {"type": "string"},
+        "axis_mapping": {
+          "type": "object",
+          "required": ["axis", "parent_axis", "axis_layer"],
+          "additionalProperties": true,
+          "properties": {
+            "axis": {"type": "string", "const": "PPI"},
+            "parent_axis": {"type": "string"},
+            "axis_layer": {"type": "string"}
+          }
+        },
+        "real_limit_anchor": {"type": "string", "minLength": 1},
+        "drug_precedent_refs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string"}
+        },
+        "sim_run": {"type": "object"},
+        "in_silico_only": {"const": true}
+      }
+    },
+    "research_stage_negative": {
+      "type": "object",
+      "required": [
+        "candidate_class", "fda_approved", "status",
+        "reason", "in_scope", "reported_not_run"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "candidate_class": {"type": "string"},
+        "axis_in_repo": {"type": ["string", "null"]},
+        "fda_approved": {"const": false},
+        "fda_center_if_filed": {"type": "string"},
+        "status": {"type": "string"},
+        "reason": {"type": "string"},
+        "in_scope": {"const": false},
+        "reported_not_run": {"const": true},
+        "unplaced_precedent_in_repo": {"type": "string"}
+      }
+    }
+  }
+}

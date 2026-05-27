@@ -1,0 +1,217 @@
+// stdlib/kernels/orbital/kepler_2body_kernel.hexa — D80 g_hexa_only
+// pilot (demiurge AGENTS.tape @D g_hexa_only — ultimate form).
+//
+// One of the D80 g_hexa_only pilots — following the same provenance
+// + parity template as `stdlib/kernels/solar/solar_kernel.hexa`,
+// `stdlib/kernels/mc_transport/mc_slab_demo.hexa`,
+// `stdlib/kernels/graph/bfs_topo_kernel.hexa`,
+// `stdlib/kernels/neural/lif_kernel.hexa`, and
+// `stdlib/kernels/urdf/fk_2link_kernel.hexa`. Clean-room
+// hexa-native Kepler two-body closed-form propagator: given a
+// central-body GM, an orbit's semi-major axis + eccentricity, and a
+// time since periapsis, solve Kepler's equation by Newton–Raphson
+// (5 steps suffice to machine precision for e ≤ 0.7) and reduce to
+// in-plane cartesian coordinates.
+//
+// Layer (ABSORPTION.md ① / demiurge design.md D72):
+//   ①a kernel — THIS FILE. Domain-agnostic. No TLE, no NORAD set,
+//                no ground observer, no SGP4 perturbations — pure
+//                "given (μ, a, e, t) over a Kepler two-body, where
+//                is the body in its orbital plane".
+//   ①b adapter — none yet for the 2-body closed-form. The existing
+//                SGP4 propagator (`sgp4_kernel.py` + Skyfield) stays
+//                the ①a kernel for FULL satellite propagation
+//                (J2/drag/lunar); the day a hexa-native SGP4 port
+//                lands, this 2-body kernel becomes its inner closed-
+//                form solver (an SGP4 mean-element step is, modulo
+//                perturbations, a Kepler equation solve per epoch).
+//
+// @version 0.1.0
+// @capabilities [pure]
+// @stability stage-2 substrate (clean-room re-derivation, no poliastro
+//   or astropy call). Substrate parity against Python's `math` library
+//   reference (numpy 2.0, Python 3.x on darwin-arm64) verified by
+//   `kepler_2body_kernel_test.hexa` for 5 timesteps × 5 eccentricities
+//   over (a=7000 km LEO, GM_earth) to <1e-12 relative on E / ν / r /
+//   x / y (well inside the 1e-10 D80 tolerance ceiling).
+// @since 2026-05-20
+//
+// CLEAN-ROOM PROVENANCE
+//   This module carries NO poliastro / astropy / spice code — it
+//   implements the textbook Kepler equation closed-form directly
+//   from Vallado "Fundamentals of Astrodynamics and Applications"
+//   (4th ed., 2013) §2.2 and Curtis "Orbital Mechanics for
+//   Engineering Students" (3rd ed., 2014) §3.6. Both algorithms are
+//   mathematical-fact closed-form expressions; no proprietary or
+//   copyrighted source.
+//
+//   - upstream code   : none (clean-room re-derivation)
+//   - upstream spec   : J.Kepler, "Astronomia Nova" (1609); Newton-
+//                       Raphson iteration on M = E − e·sin(E)
+//                       (textbook standard).
+//                       Vallado, Algorithm 2 (Kepler's Eq, NR), p.65.
+//                       Curtis, §3.6 (true anomaly from E), p.149.
+//   - parity baseline : Python `math` (libm) closed-form on
+//                       darwin-arm64, Python 3.x, numpy 2.0.
+//
+// HONESTY (g3 — non-negotiable, inherited by every caller):
+//   * Computed (E, ν, r, x, y) IS the algorithm output — both sides
+//     run the SAME closed-form Newton-Raphson Kepler solve in IEEE-
+//     754 double precision; given identical (μ, a, e, t) they MUST
+//     agree to last-bit-of-double across hosts. The parity test
+//     asserts <1e-12 relative.
+//   * BUT the two-body Kepler model assumes a POINT-MASS central
+//     body and no perturbations — for a real satellite around Earth,
+//     J2 oblateness (~1 km/orbit drift), atmospheric drag (LEO),
+//     lunar/solar third-body (GEO+) and solar radiation pressure
+//     (high-area-to-mass) all matter. SGP4 (the current
+//     `sgp4_kernel.py`) bundles those perturbations. This kernel is
+//     the *unperturbed* baseline — useful for synthetic tests,
+//     mission design at coarse altitude, and as the inner solve for
+//     a future hexa-native SGP4 port.
+//   * Parabolic (e=1) and hyperbolic (e>1) orbits are NOT in scope
+//     — Newton-Raphson on M=E−e·sin(E) only converges for elliptical
+//     orbits (0 ≤ e < 1). Hyperbolic Kepler equation uses
+//     M=e·sinh(F)−F (a separate solve, a separate kernel). The
+//     kernel returns NaN-like sentinel behavior outside [0, 1); the
+//     ①b adapter must gate.
+//   * Substrate parity (`kepler_2body_kernel_test.hexa`) only proves
+//     the PORT PATTERN — D80's record-layer `absorbed=true` flip
+//     needs the demiurge HexaNativeParityRef schema + a measured
+//     ephemeris oracle (out of scope here per g3).
+//
+// Surface (all SI; angles in radians; in-plane cartesian):
+//   pub fn kepler_solve_E(M: float, ecc: float, n_iters: int) -> float
+//   pub fn mean_anomaly(mu: float, a: float, t: float) -> float
+//   pub fn true_anomaly(E: float, ecc: float) -> float
+//   pub fn radius(a: float, ecc: float, E: float) -> float
+//   pub fn propagate(mu, a, ecc, t) -> [E, nu, r, x, y]   (5-float array)
+//
+// NOTE on parameter name: the stdlib `math/float` module exports a
+// constant function `e()` (Euler's number); we historically used
+// `ecc` for eccentricity to dodge a codegen identifier-resolution
+// bug (param `e` shadowed by stdlib `e()` → broken `hexa_fn_new`
+// emit). That bug was fixed in self/codegen_c2.hexa on 2026-05-20
+// (helper `_gen2_should_autowrap_fnref` respects local scope), so
+// the `ecc` name is now legacy-stable rather than load-bearing.
+
+use "stdlib/core/math/float"
+use "stdlib/core/math/wrap_pi"
+// Angle-normalization primitive lifted to stdlib on 2026-05-20
+// alongside the codegen-A fix. The previous in-kernel inline copy
+// is retired — stdlib `wrap_pi` preserves both +π and −π boundaries
+// (Python `math.fmod` parity).
+
+// ── Kepler equation solve ────────────────────────────────────────────
+
+/// Newton-Raphson solve of Kepler's equation M = E − e·sin(E).
+/// Returns E (rad).
+///
+///   f(E)   = E − e·sin(E) − M
+///   f'(E)  = 1 − e·cos(E)
+///   E_{k+1} = E_k − f(E_k) / f'(E_k)
+///
+/// Initial guess E₀ = M (good for moderate e; for e > 0.8 a better
+/// seed like E₀ = M + e·sin(M) speeds convergence — but at 5 NR steps
+/// the simple seed already saturates double precision for e ≤ 0.7,
+/// verified by `kepler_2body_kernel_test.hexa`).
+///
+/// Domain: 0 ≤ e < 1 (elliptical). For e=1 (parabolic) or e>1
+/// (hyperbolic) the iteration may stall or diverge — the kernel does
+/// NOT guard (callers / ①b adapters own the eccentricity gate).
+///
+/// `n_iters` fixed-count loop (no convergence test) — 5 steps suffice
+/// to <1e-15 relative for e ≤ 0.7 starting from E₀=M, due to NR's
+/// quadratic convergence (one good step ≈ doubles correct digits).
+pub fn kepler_solve_E(M: float, ecc: float, n_iters: int) -> float {
+    let M_wrapped = wrap_pi(M)
+    let mut E = M_wrapped
+    let mut i = 0
+    while i < n_iters {
+        let f  = E - ecc * sin(E) - M_wrapped
+        let fp = 1.0 - ecc * cos(E)
+        E = E - f / fp
+        i = i + 1
+    }
+    return E
+}
+
+// ── orbital-element conversions ──────────────────────────────────────
+
+/// Mean anomaly M (rad) at time t (s) since periapsis, given μ (m³/s²)
+/// and semi-major axis a (m).
+///   n = sqrt(μ / a³)      (mean motion, rad/s)
+///   M = n · t              (unwrapped)
+///
+/// Caller may pass the unwrapped value into `kepler_solve_E` — that
+/// function wraps internally.
+pub fn mean_anomaly(mu: float, a: float, t: float) -> float {
+    let n = sqrt(mu / (a * a * a))
+    return n * t
+}
+
+/// True anomaly ν (rad) from eccentric anomaly E and eccentricity e.
+/// Standard half-angle identity (Vallado eq. 2-14, Curtis 3.13b):
+///   tan(ν/2) = sqrt((1+e)/(1−e)) · tan(E/2)
+/// Implemented via atan2 to keep the quadrant correct in (-π, π].
+///
+///   ν = 2 · atan2(sqrt(1+e)·sin(E/2),
+///                 sqrt(1−e)·cos(E/2))
+pub fn true_anomaly(E: float, ecc: float) -> float {
+    let half_E = 0.5 * E
+    let s = sqrt(1.0 + ecc) * sin(half_E)
+    let c = sqrt(1.0 - ecc) * cos(half_E)
+    return 2.0 * atan2(s, c)
+}
+
+/// Orbital radius r (m) from semi-major axis a (m), eccentricity e,
+/// and eccentric anomaly E (rad):
+///   r = a · (1 − e·cos(E))
+/// (Vallado eq. 2-13.)
+pub fn radius(a: float, ecc: float, E: float) -> float {
+    return a * (1.0 - ecc * cos(E))
+}
+
+// ── full propagator ──────────────────────────────────────────────────
+
+/// Closed-form Kepler 2-body propagation. Returns 5 doubles packed in
+/// a fixed-length array:
+///   [E_rad, nu_rad, r_m, x_m, y_m]
+/// where (x, y) are in-plane cartesian with the focus at the origin
+/// and periapsis on the +x axis (standard perifocal frame, P-Q plane
+/// per Vallado Fig.2-6).
+///
+/// Inputs:
+///   mu — central-body gravitational parameter GM (m³/s²)
+///   a  — semi-major axis (m, > 0)
+///   e  — eccentricity (0 ≤ e < 1, elliptical only)
+///   t  — time since periapsis (s; may be negative or > orbital period
+///        — the kernel wraps via wrap_pi internally)
+///
+/// Uses a fixed 5-step Newton-Raphson — sufficient to <1e-12 relative
+/// across the test grid (5 timesteps × 5 eccentricities up to e=0.7);
+/// see `kepler_2body_kernel_test.hexa`.
+pub fn propagate(mu: float, a: float, ecc: float, t: float) -> [float] {
+    let M  = mean_anomaly(mu, a, t)
+    let E  = kepler_solve_E(M, ecc, 5)
+    let nu = true_anomaly(E, ecc)
+    let r  = radius(a, ecc, E)
+    let x  = r * cos(nu)
+    let y  = r * sin(nu)
+    return [E, nu, r, x, y]
+}
+
+// ── ①b adapter note ──────────────────────────────────────────────────
+//
+// A future `stdlib/space/kepler_2body.hexa` ①b adapter would supply
+// the central-body GM table (Earth / Moon / Mars / Sun / Jupiter),
+// a periapsis epoch + inclination / RAAN / argument-of-periapsis
+// rotation into the inertial frame, and the honesty caveats for
+// THAT specific orbit (J2 ignored, drag ignored, ...). This kernel
+// only ports the closed-form 2-body math (Kepler solve + perifocal
+// reduction); inclination / RAAN / ω rotation into ECI is the
+// adapter layer's responsibility (3 cheap rotation matrices).
+//
+// A future hexa-native SGP4 port would call this kernel as its inner
+// closed-form step (SGP4 mean-element propagation = Kepler equation
+// solve per epoch, modulo the J2 / drag / lunar perturbation series).

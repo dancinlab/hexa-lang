@@ -1,0 +1,61 @@
+# firmware/mcu/Cargo.toml — STM32F4 firmware workspace
+#
+# §A.6.1 Phase D+ deliverable.  Verified-compile only.
+#
+# Build (host-side tests only — works today):
+#   cargo test
+#
+# Build (cross-compile for embedded — requires thumbv7em-none-eabihf target):
+#   rustup target add thumbv7em-none-eabihf
+#   cargo build --release --target thumbv7em-none-eabihf
+#
+# Flash (REFUSED per honesty contract — no board):
+#   cargo flash --release --chip STM32F407VGTx   # would fail without board
+
+[package]
+name = "hexa-rtsc-firmware"
+version = "0.1.0"
+edition = "2021"
+authors = ["dancinlife <nerve011235@gmail.com>"]
+license = "MIT"
+description = "hexa-rtsc Phase D+ MCU firmware (synthesis chamber + calorimetry)"
+
+[lib]
+name = "hexa_rtsc_firmware"
+path = "lib.rs"
+
+[[bin]]
+name = "chamber_drv"
+path = "chamber_drv.rs"
+
+[[bin]]
+name = "calorimetry_drv"
+path = "calorimetry_drv.rs"
+
+[dependencies]
+# Embedded core (only used in #[no_std] paths)
+cortex-m       = { version = "0.7", optional = true }
+cortex-m-rt    = { version = "0.7", optional = true }
+embedded-hal   = { version = "1.0", optional = true }
+nb             = { version = "1.1", optional = true }
+panic-halt     = { version = "0.2", optional = true }
+# Note: stm32f4xx-hal omitted from dev (large, host-incompatible).
+# Add when actually flashing: stm32f4xx-hal = { version = "0.17", features = ["stm32f407"] }
+
+[dev-dependencies]
+# Host-side tests only
+
+[features]
+default = []
+embedded = ["cortex-m", "cortex-m-rt", "embedded-hal", "nb", "panic-halt"]
+
+[profile.release]
+opt-level     = "s"      # size-optimize for embedded
+lto           = true
+codegen-units = 1
+debug         = true     # keep debug symbols for gdb-multiarch
+panic         = "abort"
+
+[profile.dev]
+opt-level     = 0
+debug         = true

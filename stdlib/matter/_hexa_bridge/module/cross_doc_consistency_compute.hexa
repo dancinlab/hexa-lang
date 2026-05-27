@@ -1,0 +1,146 @@
+#!hexa strict
+// hexa-matter/_hexa_bridge/module/cross_doc_consistency_compute.hexa
+//
+// Cross-doc consistency: verb counts in hexa.toml [verbs], the README
+// badge, and the filesystem verb directories must agree. Stage-1
+// hexa-native port of the Phase E python_bridge module
+// `_python_bridge/module/cross_doc_consistency_compute.py`.
+//
+// stdlib-only. File reads go through `exec` (hexa-native shell builtin,
+// not a python shell-out). Python `re` is replaced by hexa string
+// split/contains — exact for this module's quote/number extraction.
+// License: MIT (Phase E).
+
+let ROOT_ENV = env("HEXA_MATTER_ROOT")
+
+fn shq(s: str) -> str {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+fn repo_root() -> str {
+    if ROOT_ENV.len() > 0 { return ROOT_ENV }
+    return exec("pwd").trim()
+}
+
+// extract every "..."-quoted token from one line (odd split indices).
+fn quoted_tokens(line: str) -> [str] {
+    let parts = line.split("\"")
+    let mut out: [str] = []
+    let mut i = 1
+    while i < parts.len() {
+        out.push(parts[i])
+        i = i + 2
+    }
+    return out
+}
+
+fn has_str(xs: [str], v: str) -> bool {
+    let mut i = 0
+    while i < xs.len() {
+        if xs[i] == v { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// unique verb names declared in the hexa.toml [verbs] block.
+// Block ends at the next "[section]" header.
+fn toml_verbs(toml: str) -> [str] {
+    let raw = exec("cat " + shq(toml) + " 2>/dev/null")
+    let lines = raw.split("\n")
+    let mut verbs: [str] = []
+    let mut inblock = false
+    let mut ended = false
+    let mut i = 0
+    while i < lines.len() {
+        if ended == false {
+            let s = lines[i].trim()
+            if inblock == false {
+                if s.contains("[verbs]") { inblock = true }
+            } else {
+                if s.len() > 0 && s.substr(0, 1) == "[" {
+                    ended = true
+                } else {
+                    if s.contains("=") && s.contains("[") && s.contains("]") {
+                        let toks = quoted_tokens(s)
+                        let mut t = 0
+                        while t < toks.len() {
+                            if has_str(verbs, toks[t]) == false { verbs.push(toks[t]) }
+                            t = t + 1
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    return verbs
+}
+
+// parse README badge `verbs-NN-...` (leading digits after the marker).
+fn count_readme_verbs(readme: str) -> int {
+    let raw = exec("cat " + shq(readme) + " 2>/dev/null")
+    let mark = "verbs-"
+    if raw.contains(mark) {
+        let after = raw.split(mark)[1]
+        let ds = "0123456789"
+        let mut digits = ""
+        let mut i = 0
+        let mut stop = false
+        while i < after.len() {
+            if stop == false {
+                let ch = after.substr(i, 1)
+                if ds.contains(ch) { digits = digits + ch } else { stop = true }
+            }
+            i = i + 1
+        }
+        if digits.len() > 0 { return int(digits) }
+    }
+    return 0
+}
+
+// count declared verb dirs that exist on disk with >= 1 .md file.
+fn count_verb_dirs(root: str, verbs: [str]) -> int {
+    let mut n = 0
+    let mut k = 0
+    while k < verbs.len() {
+        let d = root + "/" + verbs[k]
+        let chk = exec("[ -d " + shq(d) + " ] && ls " + shq(d) + "/*.md >/dev/null 2>&1 && echo yes || echo no").trim()
+        if chk == "yes" { n = n + 1 }
+        k = k + 1
+    }
+    return n
+}
+
+fn main() {
+    println("hexa-matter cross_doc_consistency_compute (hexa-native, Stage-1 port)")
+    let root = repo_root()
+    println("  using repo root = " + root)
+
+    let toml = root + "/hexa.toml"
+    let readme = root + "/README.md"
+
+    let verbs = toml_verbs(toml)
+    let c_toml = verbs.len()
+    let c_readme = count_readme_verbs(readme)
+    let c_dirs = count_verb_dirs(root, verbs)
+
+    println("  hexa.toml [verbs]     -> " + str(c_toml))
+    println("  README badge          -> " + str(c_readme))
+    println("  filesystem dirs       -> " + str(c_dirs))
+
+    let mut bad = 0
+    if c_toml < 1 { bad = bad + 1 }
+    if c_toml == c_readme && c_readme == c_dirs {
+        println("  [PASS] all sources agree on " + str(c_toml) + " verbs")
+    } else {
+        println("  [FAIL] counts disagree")
+        bad = bad + 1
+    }
+
+    if bad > 0 {
+        println("__HEXA_MATTER_CROSS_DOC_CONSISTENCY_COMPUTE__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_MATTER_CROSS_DOC_CONSISTENCY_COMPUTE__ PASS")
+}

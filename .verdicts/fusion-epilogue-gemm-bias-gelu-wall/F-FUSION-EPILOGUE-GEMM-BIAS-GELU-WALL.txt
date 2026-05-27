@@ -1,0 +1,95 @@
+F-FUSION-EPILOGUE-GEMM-BIAS-GELU-WALL — BC3 timed silicon wall verdict
+========================================================================
+Date:    2026-05-27
+Tier:    🔴 FALSIFIED (closed-negative; paper_negative_ok terminal)
+Branch:  bc3-timed-wall-2026-05-27
+Host:    ubu-2 RTX 5070 sm_120 (driver 580, ptxas 12.0)
+Method:  cuEvent 20 warmup + 200 timed median, GPU 0% util pre-fire
+
+PRE-REGISTERED FALSIFIER
+-------------------------
+F-FUSION-EPILOGUE-GEMM-BIAS-GELU-WALL: the fused hexa-emit kernel
+computing GeLU(A @ B + bias) in a single launch must beat the
+cuBLAS-using NN-stack baseline (cublasSgemm + bias_add_kernel +
+gelu_kernel = 3 launches) by ≥ 1.5× wall on at least one realistic
+FFN shape AND match the f64 CPU reference to rel-err ≤ 1e-2.
+
+EVIDENCE — wall sweep
+---------------------
+shape              fused_ms    cublas3_ms   ratio    finding
+256x256x256        0.026016    0.016544     0.636    fused 1.57x slower
+512x512x512        0.136416    0.035104     0.257    fused 3.89x slower
+1024x1024x1024     1.002912    0.120032     0.120    fused 8.36x slower
+2048x2048x2048     7.922464    0.751840     0.095    fused 10.54x slower
+4096x4096x4096     78.982689   6.610816     0.084    fused 11.95x slower
+4096x11008x4096    225.769852  16.641792    0.074    fused 13.57x slower (FFN)
+
+All 6 shapes FAIL the ≥ 1.5× gate. Direction is INVERTED — fused
+is slower, gap GROWS with size (1.57× → 13.57×).
+
+EVIDENCE — numeric correctness
+------------------------------
+max_abs ≤ 4e-7 across all shapes (per f64 CPU ref).
+max_rel ≤ 1e-2 PASS for shapes ≥ 1024³ (per-row-scaled).
+max_rel > 1e-2 at 256/512 is a METRIC ARTIFACT — the naive
+|err|/(|want|+1e-6) inflates on near-zero GELU outputs (same as
+round-3 attention). max_abs ~3e-7 confirms both kernels match f64
+ref to FP32 ULP at peak magnitudes; wall result unaffected.
+
+ROOT CAUSE (closed-negative finding)
+-------------------------------------
+Naive 16×16 single-warp scalar-fma GEMM inside the fused kernel vs
+cuBLAS-grade SGEMM (mma.sync.f32.f32 tiling, double-buffer, swizzle,
+warp specialization). The GEMM efficiency gap is 1.5-10× per shape;
+the fusion's structural moat (1 launch + 1× M·N C-write vs 3
+launches + 3× M·N C-write = 66.667% reduction by construction) is
+real but DOMINATED.
+
+This is the SAME pattern as the round-3/4/5/7 attention falsifications:
+"structural launches + HBM reduction proven closed-form does NOT
+convert to wall when the inner GEMM is naive". Attention rounds had
+ratio trajectory 9.4-15.5× → 3.4-5.0× → 3.47× → 5.3-6.9× (regression).
+BC3 epilogue ratio 1.57-13.57× joins this family.
+
+RULED-OUT AXIS
+--------------
+Epilogue-fusion structural moat ALONE is insufficient. The fusion-
+AxisA-breadth wins (LayerNorm 66%/RMSNorm 59%/Softmax 65%/SwiGLU 63%
+and launch-amort 73-76%) all fired with LIGHT inner kernels (no
+GEMM). When the inner work is a GEMM, the inner-loop efficiency
+dominates the structural launch/HBM moat by orders of magnitude.
+
+NEXT-ROUND WEDGE
+----------------
+Transplant the N204 standalone-GEMM roofline toolkit (mma.sync.f32.f32
+tile + 64×64 + double-buffer + swizzle) into the epilogue-fusion
+kernel's inner GEMM. The unop keystone closed earlier this cycle
+(PR #1686 + silicon fire PR #1691) clears the negative-literal
+hazard along this path (bias/threshold sentinels). Round-7 BC4 had
+the same wedge (round-7 N204 toolkit transplant attempt) FALSIFIED
+on the attention axis due to smem occupancy collapse — the GEMM-
+fusion (epilogue) axis is DIFFERENT (no Q/K/V/V^T/S/P/O simultaneous
+smem residency), so the toolkit may transplant cleanly here.
+
+SECTION 10 BOX IMPACT
+---------------------
+§10 "≥ 30% whole-program fusion advantage" stays [x] via
+F-FUSION-LAUNCH-AMORT-WALL (73-76% above eager, light inner kernels)
++ F-FUSION-AXISA-BREADTH (LayerNorm/RMSNorm/Softmax/SwiGLU
+59-72%). BC3 GEMM-fusion is a SEPARATE axis where the moat doesn't
+convert; the §10 closure is GENERAL across light-inner-kernel
+workloads but explicitly NOT across naive-GEMM-fusion workloads.
+
+NO PAPER
+--------
+RED closed-negative re-confirmation of the structural-moat-doesn't-
+convert-with-naive-GEMM pattern (5th instance: attention rounds 3/4/5/7
++ this BC3 epilogue). paper_significance gate fails on novelty.
+
+ARTIFACTS
+---------
+- tool/fusion_epilogue_fused_timed.c
+- tool/fusion_epilogue_cublas_timed.c
+- archive/fires/fusion_epilogue_timed_wall_2026_05_27/result.json
+- archive/fires/fusion_epilogue_timed_wall_2026_05_27/timed_fire.log (full sweep stdout)
+- This file: .verdicts/fusion-epilogue-gemm-bias-gelu-wall/F-FUSION-EPILOGUE-GEMM-BIAS-GELU-WALL.txt

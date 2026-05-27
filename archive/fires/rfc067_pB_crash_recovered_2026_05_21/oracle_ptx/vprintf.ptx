@@ -1,0 +1,22 @@
+.version 7.0
+.target sm_80
+.address_size 64
+.extern .func (.param .b32 func_retval0) vprintf (.param .b64 fmt, .param .b64 args);
+.global .align 1 .b8 _fmt[5] = {72, 105, 10, 0, 0};
+.visible .entry hexa_print_smoke()
+{
+    .reg .b64 %rd1, %rd2;
+    .reg .b32 %r1;
+    mov.u64 %rd1, _fmt;
+    cvta.global.u64 %rd1, %rd1;
+    mov.u64 %rd2, 0;
+    {
+        .param .b64 fmt_p;
+        .param .b64 args_p;
+        .param .b32 retval_p;
+        st.param.b64 [fmt_p+0], %rd1;
+        st.param.b64 [args_p+0], %rd2;
+        call.uni (retval_p), vprintf, (fmt_p, args_p);
+    }
+    ret;
+}

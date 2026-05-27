@@ -1,0 +1,124 @@
+// absorbed from ~/core/hexa-bio/quantum/module/n6_lattice_check.hexa (Apache-2.0, hexa-bio v1.1.0)
+//
+// compiler/n6_lattice/axis_table.hexa — frozen rodata: the 5-axis n=6 invariant
+// reference table (RIBOZYME / VIROCAPSID / NANOBOT / WEAVE / QUANTUM).
+//
+// Each row records the canonical meaning of sigma(6)=12 / tau(6)=4 / phi(6)=2 /
+// J2=24 for one of the 5 hexa-bio axes. hexa-lang consumes this read-only;
+// extending the set to non-bio axes (e.g. hexa-chip isa_n6) is a separate
+// audit per the upstream "5-axis count lock" (hexa-bio hexa.toml [closure]).
+
+import "compiler/n6_lattice/verify.hexa"
+
+pub struct N6Axis {
+    name:           string,
+    sigma_meaning:  string,
+    sigma:          int,
+    tau_meaning:    string,
+    tau:            int,
+    phi_meaning:    string,
+    phi:            int,
+    J2_meaning:     string,
+    J2:             int
+}
+
+// ── Canonical 5-axis rodata ─────────────────────────────────────────────
+
+pub fn n6_axes() -> [N6Axis] {
+    return [
+        N6Axis {
+            name:          "RIBOZYME",
+            sigma_meaning: "12-nt catalytic core (Symons 1981 hammerhead)",
+            sigma:         12,
+            tau_meaning:   "4-state reaction ladder (substrate/TS/cleaved/released)",
+            tau:           4,
+            phi_meaning:   "cleaved-vs-intact phosphodiester binary",
+            phi:           2,
+            J2_meaning:    "trigonal-bipyramidal phosphate TS pose-equivalence",
+            J2:            24
+        },
+        N6Axis {
+            name:          "VIROCAPSID",
+            sigma_meaning: "12-pentamer for T=1 icosahedral capsid (Caspar-Klug)",
+            sigma:         12,
+            tau_meaning:   "4 assembly states (apo/dimer/trimer/closed)",
+            tau:           4,
+            phi_meaning:   "open-vs-closed cage binary",
+            phi:           2,
+            J2_meaning:    "icosahedral 24-fold symmetry (T=1 fold)",
+            J2:            24
+        },
+        N6Axis {
+            name:          "NANOBOT",
+            sigma_meaning: "12 actuation nodes (mechanical degrees of freedom)",
+            sigma:         12,
+            tau_meaning:   "4-state actuation ladder (rest/load/work/release)",
+            tau:           4,
+            phi_meaning:   "engaged-vs-released binary",
+            phi:           2,
+            J2_meaning:    "actuation-cycle 24-step sequence",
+            J2:            24
+        },
+        N6Axis {
+            name:          "WEAVE",
+            sigma_meaning: "12 base-pair turn (DNA helix structural period)",
+            sigma:         12,
+            tau_meaning:   "4-base alphabet (A/T/G/C)",
+            tau:           4,
+            phi_meaning:   "duplex-vs-single-strand binary",
+            phi:           2,
+            J2_meaning:    "double-helix 24-fold helical symmetry (B-DNA period)",
+            J2:            24
+        },
+        N6Axis {
+            name:          "QUANTUM",
+            sigma_meaning: "H2 6-Pauli expansion (Kandala 2017) x 2 qubits = 12 ops",
+            sigma:         12,
+            tau_meaning:   "H2 ansatz d=1 hardware-efficient (Ry-Ry-CNOT-Ry-Ry, 4 params)",
+            tau:           4,
+            phi_meaning:   "binary fold-marker via best_idx (0 vs other)",
+            phi:           2,
+            J2_meaning:    "sigma*tau = H2 falsifier evaluation surface area",
+            J2:            24
+        }
+    ]
+}
+
+// ── Convenience accessors ───────────────────────────────────────────────
+
+pub fn n6_axis_by_name(name: string) -> N6Axis {
+    let xs = n6_axes()
+    let mut i = 0
+    while i < len(xs) {
+        if xs[i].name == name { return xs[i] }
+        i = i + 1
+    }
+    // Sentinel "unknown" row keeps the return type total; callers should
+    // check name == "unknown" rather than rely on null/none.
+    return N6Axis {
+        name:          "unknown",
+        sigma_meaning: "",
+        sigma:         0,
+        tau_meaning:   "",
+        tau:           0,
+        phi_meaning:   "",
+        phi:           0,
+        J2_meaning:    "",
+        J2:            0
+    }
+}
+
+// check_axis(name) — verify the row's literals satisfy the n=6 master
+// identity (sigma * phi = n * tau = J2 = 24 for n=6). Returns false on
+// unknown name or any drift.
+pub fn check_axis(name: string) -> bool {
+    let row = n6_axis_by_name(name)
+    if row.name == "unknown" { return false }
+    if row.sigma != 12 { return false }
+    if row.tau   != 4  { return false }
+    if row.phi   != 2  { return false }
+    if row.J2    != 24 { return false }
+    // Defer the master-identity arithmetic to verify.hexa for a single
+    // source of truth on the lattice constants.
+    return verify_master_identity()
+}

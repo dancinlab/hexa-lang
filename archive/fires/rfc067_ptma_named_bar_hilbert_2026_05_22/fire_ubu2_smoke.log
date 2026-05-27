@@ -1,0 +1,10 @@
+Device: NVIDIA GeForce RTX 5070 sm_120
+{
+  "sm": "sm_120",
+  "mismatch": 256,
+  "total_cells": 256,
+  "first_mismatch_idx": 0,
+  "got": 2.000000,
+  "exp": 3.000000,
+  "verdict": "TMA_SMOKE_MISMATCH"
+}

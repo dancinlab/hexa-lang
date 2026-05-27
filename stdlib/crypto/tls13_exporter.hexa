@@ -1,0 +1,64 @@
+// HEXA Standard Library — crypto/tls13_exporter
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// TLS 1.3 exporter + resumption master secrets (RFC 8446 §7.1 + §7.5) — pure
+// hexa. Derives:
+//   - exporter_master_secret      = Derive-Secret(master, "exp master", H(CH..server Finished))
+//   - resumption_master_secret    = Derive-Secret(master, "res master", H(CH..client Finished))
+//   - early_exporter_master_secret= Derive-Secret(early,  "e exp master", H(""))
+// And provides the RFC 8446 §7.5 exporter:
+//   tls13_export(secret, label, context_hash, length) — extract app keying material
+// let-mut idiom (#1506).
+//
+// Surface:
+//   pub fn tls13_exporter_master_secret(master: [int], thash: [int]) -> [int]
+//   pub fn tls13_resumption_master_secret(master: [int], thash: [int]) -> [int]
+//   pub fn tls13_early_exporter_master_secret(early: [int], thash_empty: [int]) -> [int]
+//   pub fn tls13_export(exporter_secret: [int], label: [int], context_hash: [int], length: int) -> [int]
+
+use "stdlib/crypto/tls13_keyschedule"
+
+@pure
+pub fn tls13_exporter_master_secret(master: [int], thash: [int]) -> [int] {
+    // "exp master" = 65 78 70 20 6d 61 73 74 65 72
+    let label = [0x65, 0x78, 0x70, 0x20, 0x6d, 0x61, 0x73, 0x74, 0x65, 0x72]
+    return tls13_derive_secret(master, label, thash)
+}
+
+@pure
+pub fn tls13_resumption_master_secret(master: [int], thash: [int]) -> [int] {
+    // "res master" = 72 65 73 20 6d 61 73 74 65 72
+    let label = [0x72, 0x65, 0x73, 0x20, 0x6d, 0x61, 0x73, 0x74, 0x65, 0x72]
+    return tls13_derive_secret(master, label, thash)
+}
+
+@pure
+pub fn tls13_early_exporter_master_secret(early: [int], thash_empty: [int]) -> [int] {
+    // "e exp master" = 65 20 65 78 70 20 6d 61 73 74 65 72
+    let label = [0x65, 0x20, 0x65, 0x78, 0x70, 0x20, 0x6d, 0x61, 0x73, 0x74, 0x65, 0x72]
+    return tls13_derive_secret(early, label, thash_empty)
+}
+
+// RFC 8446 §7.5 exporter:
+//   TLS-Exporter(label, context, L) =
+//     HKDF-Expand-Label( Derive-Secret(exporter_master_secret, label, ""),
+//                        "exporter", Hash(context), L )
+// `context_hash` is Hash(context); caller hashes the context bytes first.
+@pure
+pub fn tls13_export(exporter_secret: [int], label: [int], context_hash: [int], length: int) -> [int] {
+    // S = Derive-Secret(exporter_master_secret, label, Hash(""))
+    // The standard reads Derive-Secret(exporter, label, "") which expands the empty-msg hash.
+    // Caller passes the SHA-256("") for the empty inner ctx; we expose only the full form.
+    let mut empty: [int] = []
+    let mut i = 0
+    // sha256-of-empty (32 bytes) — well-known constant
+    let zh = [0xe3,0xb0,0xc4,0x42, 0x98,0xfc,0x1c,0x14, 0x9a,0xfb,0xf4,0xc8, 0x99,0x6f,0xb9,0x24,
+              0x27,0xae,0x41,0xe4, 0x64,0x9b,0x93,0x4c, 0xa4,0x95,0x99,0x1b, 0x78,0x52,0xb8,0x55]
+    while i < 32 { empty.push(zh[i]); i = i + 1 }
+    let s = tls13_derive_secret(exporter_secret, label, empty)
+    // "exporter" = 65 78 70 6f 72 74 65 72
+    let exporter_label = [0x65, 0x78, 0x70, 0x6f, 0x72, 0x74, 0x65, 0x72]
+    return tls13_expand_label(s, exporter_label, context_hash, length)
+}

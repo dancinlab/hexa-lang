@@ -1,0 +1,367 @@
+#!hexa strict
+// stdlib/yosys/yosys.hexa — dispatcher / `hexa yosys` entry (CLEAN-ROOM)
+//
+// @version 0.0.2
+// @capabilities [dispatcher, cli]
+// @stability phase-a (rfc_006 §4 module-7 of 7) — all 6 module bodies
+//   landed; `read-verilog` / `write-verilog` route into real frontend/
+//   backend; `synth` runs the full hexa-native pipeline (read_verilog
+//   → passes → liberty → abc_map → write_verilog) and honestly
+//   reports the §5 gate state. ABC subprocess: D18 bounded; SKY130
+//   library: g3-required at synth time — both checked fail-loud.
+// @since 2026-05-19 (.stub) · body landed 2026-05-19 · all-modules-
+//   wired 2026-05-19
+//
+// CLEAN-ROOM PROVENANCE (design.md Decision 1 — public-surface clean-room)
+//   Re-derives the *public surface* of Yosys' main loop + script driver
+//   by inspection of upstream + manual only. No upstream code copied.
+//   This is the `hexa yosys <subcmd>` entry point — a thin orchestrator
+//   that routes into read_verilog / passes / liberty / abc_map /
+//   write_verilog (each carrying its own per-module clean-room header).
+//
+//   - upstream code    : kernel/yosys.cc · frontends/script/script.cc
+//   - upstream manual  : yosyshq.readthedocs.io/projects/yosys cmd index
+//   - upstream license : ISC (YosysHQ)
+//   - dispatcher idiom : hexa-lang rfc_048 §3 raw-91 · rfc_047 §4
+//   - toolchain limits : no `match`, no tuples (rfc_003 finding) —
+//                        int/struct idioms only
+//   - absorbed substrate (D18) : ABC bounded-subprocess (abc_map.hexa)
+//
+// CLI surface (rfc_006 §4 module-7):
+//   hexa yosys                    default = help
+//   hexa yosys --help, -h         subcmd listing
+//   hexa yosys --version, -v      print version
+//   hexa yosys selftest           dispatcher routing self-test
+//   hexa yosys read-verilog <f>   Verilog -> RTLIL (frontend body)
+//   hexa yosys synth <opts>       full flow (gated — rfc_006 §5)
+//   hexa yosys write-verilog <i> <o>
+//                                 round-trip a Verilog file through
+//                                 read_verilog -> write_verilog
+//
+// Exit codes (rfc_006, mirroring rfc_001 §7.3):
+//   0  ok · 1 user error (bad args / missing input) · 2 runtime error
+//   90 measurement gate OPEN (no absorbed claim — rfc_006 §5)
+//   91 TBD stub hit (rfc_048 raw-91 — should not occur post-phase-a)
+
+use "stdlib/kernels/logic_synth/rtlil"
+use "stdlib/kernels/logic_synth/read_verilog"
+use "stdlib/kernels/logic_synth/passes"
+use "stdlib/kernels/logic_synth/liberty"
+use "stdlib/kernels/logic_synth/abc_map"
+use "stdlib/kernels/logic_synth/write_verilog"
+
+let VERSION = "0.0.2"
+
+// ─── argv helpers ────────────────────────────────────────────────────────
+
+fn _find_after(a: [str], key: str) -> str {
+    let n = len(a)
+    let mut i = 0
+    while i < n {
+        if a[i] == key {
+            if i + 1 < n { return a[i + 1] }
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// ─── handlers ────────────────────────────────────────────────────────────
+
+fn cmd_help() -> int {
+    println("hexa yosys — RTL->netlist flow (rfc_006 §4 module-7)")
+    println("")
+    println("  yosys                          help (default)")
+    println("  yosys --help, -h               this help")
+    println("  yosys --version, -v            print version")
+    println("  yosys selftest                 dispatcher routing self-test")
+    println("  yosys read-verilog <file>      Verilog -> RTLIL summary")
+    println("  yosys write-verilog <in> <out> round-trip Verilog file")
+    println("  yosys synth --top <t> [--lib <lib.lib>] <input.v...>")
+    println("                                 full flow (gated — rfc_006 §5)")
+    println("")
+    println("exit: 0 ok · 1 user-err · 2 runtime · 90 gate-open · 91 TBD")
+    return 0
+}
+
+// CLEAN-ROOM: read-verilog handler — read the input file, parse, print
+// a per-module summary (wires/cells), exit 0 on success. Fail-loud on
+// missing arg or parse error.
+fn cmd_read_verilog(argv: [str]) -> int {
+    let path = _find_after(argv, "read-verilog")
+    if path == "" {
+        println("yosys read-verilog: usage: read-verilog <file>")
+        return 1
+    }
+    let r = read_verilog_file(path)
+    if r.ok != 1 {
+        println("yosys read-verilog: " + r.message)
+        return 2
+    }
+    println("yosys read-verilog: " + path + " parsed OK")
+    let mut i = 0
+    while i < len(r.design.modules) {
+        let m = r.design.modules[i]
+        println("  module " + m.name
+            + ": wires=" + str(len(m.wires))
+            + " cells=" + str(len(m.cells))
+            + " connects=" + str(len(m.connect_lhs)))
+        i = i + 1
+    }
+    return 0
+}
+
+// CLEAN-ROOM: write-verilog handler — read a Verilog file, emit it back
+// out (round-trip in the current subset). Useful as a smoke test.
+fn cmd_write_verilog(argv: [str]) -> int {
+    let n = len(argv)
+    let mut idx = 0 - 1
+    let mut i = 0
+    while i < n {
+        if argv[i] == "write-verilog" { idx = i }
+        i = i + 1
+    }
+    if idx < 0 { return 1 }
+    if idx + 2 >= n {
+        println("yosys write-verilog: usage: write-verilog <input.v> <output.v>")
+        return 1
+    }
+    let in_path = argv[idx + 1]
+    let out_path = argv[idx + 2]
+    let r = read_verilog_file(in_path)
+    if r.ok != 1 {
+        println("yosys write-verilog: read failed: " + r.message)
+        return 2
+    }
+    let w = write_verilog_file(r.design, out_path)
+    println("yosys write-verilog: wrote " + str(w.bytes) + " bytes to " + out_path)
+    return 0
+}
+
+// CLEAN-ROOM: synth handler — the rfc_006 §5 gate path:
+//   read_verilog → hierarchy -auto-top → proc → flatten → opt →
+//   techmap → dfflibmap → abc_map (D18) → opt_clean → write_verilog
+// Returns 0 only when the WHOLE flow succeeds AND the input files exist
+// AND ABC + a Liberty library are both available. Otherwise honest
+// codes: 1 = user error, 2 = runtime error, 90 = §5 gate OPEN (no
+// absorbed claim; D18 substrate missing or §5 area-oracle unmeasured).
+fn cmd_synth(argv: [str]) -> int {
+    let top = _find_after(argv, "--top")
+    let lib_path = _find_after(argv, "--lib")
+    // collect positional input files: anything after `synth` that's
+    // not a flag-value pair we already consumed.
+    let n = len(argv)
+    let mut idx = 0 - 1
+    let mut i = 0
+    while i < n {
+        if argv[i] == "synth" { idx = i }
+        i = i + 1
+    }
+    let mut inputs: [str] = []
+    let mut j = idx + 1
+    while j < n {
+        let t = argv[j]
+        if t == "--top" { j = j + 2; continue }
+        if t == "--lib" { j = j + 2; continue }
+        if t.substring(0, 2) == "--" { j = j + 1; continue }
+        inputs = inputs.push(t)
+        j = j + 1
+    }
+    if len(inputs) == 0 {
+        println("yosys synth: usage: synth --top <name> [--lib <lib.lib>] <input.v...>")
+        return 1
+    }
+    if top == "" {
+        println("yosys synth: --top <name> required")
+        return 1
+    }
+
+    // ── stage 1: read_verilog over each input, building one Design.
+    let mut d = rtlil_new_design("synth")
+    let mut fi = 0
+    while fi < len(inputs) {
+        let r = read_verilog_file(inputs[fi])
+        if r.ok != 1 {
+            println("yosys synth: read_verilog failed on " + inputs[fi] + ": " + r.message)
+            return 2
+        }
+        let mut mi = 0
+        while mi < len(r.design.modules) {
+            d = rtlil_design_add(d, r.design.modules[mi])
+            mi = mi + 1
+        }
+        fi = fi + 1
+    }
+
+    // ── stage 2: hierarchy / proc / flatten / opt / techmap / dfflibmap / opt_clean
+    let rh = pass_hierarchy_top(d, top)
+    if rh.ok != 1 {
+        println("yosys synth: hierarchy: " + rh.message); return 2
+    }
+    let rp = pass_proc(rh.design)
+    if rp.ok != 1 { println("yosys synth: proc: " + rp.message); return 2 }
+    let rf = pass_flatten(rp.design)
+    if rf.ok != 1 { println("yosys synth: flatten: " + rf.message); return 2 }
+    let ro = pass_opt(rf.design)
+    if ro.ok != 1 { println("yosys synth: opt: " + ro.message); return 2 }
+    let rt = pass_techmap_sky130(ro.design)
+    if rt.ok != 1 { println("yosys synth: techmap: " + rt.message); return 2 }
+    let rd = pass_dfflibmap_sky130(rt.design)
+    if rd.ok != 1 { println("yosys synth: dfflibmap: " + rd.message); return 2 }
+
+    // ── stage 3: abc_map (D18). If ABC is absent OR a Liberty file
+    // was not supplied OR the library file is missing, this is the
+    // §5 gate-OPEN exit (90 — no absorbed claim).
+    let bin = abc_binary_path()
+    if bin == "" {
+        println("yosys synth: rfc_006 §5 gate OPEN — D18 substrate `abc` not on PATH.")
+        println("  install berkeley-abc (https://github.com/berkeley-abc/abc) to close the substrate side.")
+        println("  cited oracle: d4 ≈ 61762.99 µm² · d6 ≈ 93608.53 µm² · ratio 1.5156× (rfc_006 §5)")
+        return 90
+    }
+    if lib_path == "" {
+        println("yosys synth: rfc_006 §5 gate OPEN — no Liberty library supplied (--lib required for §5 area oracle).")
+        return 90
+    }
+    let r_abc = abc_map(rd.design, lib_path, "/tmp/_hexa_yosys_synth")
+    if r_abc.ok != 1 {
+        println("yosys synth: abc_map: " + r_abc.message); return 2
+    }
+    let rc = pass_opt_clean(r_abc.design)
+    if rc.ok != 1 { println("yosys synth: opt_clean: " + rc.message); return 2 }
+
+    // ── stage 4: area sum against the supplied library (the §5 oracle).
+    let cell_lib = parse_liberty_file(lib_path)
+    if cell_lib.ok != 1 {
+        println("yosys synth: liberty parse: " + cell_lib.message); return 2
+    }
+    let mut names: [str] = []
+    let mut counts: [int] = []
+    let mut mi = 0
+    while mi < len(rc.design.modules) {
+        let cells = rc.design.modules[mi].cells
+        let mut ci = 0
+        while ci < len(cells) {
+            let ct = cells[ci].cell_type
+            // upsert
+            let mut found = 0 - 1
+            let mut k = 0
+            while k < len(names) {
+                if names[k] == ct { found = k }
+                k = k + 1
+            }
+            if found < 0 {
+                names = names.push(ct)
+                counts = counts.push(1)
+            } else {
+                let mut new_counts: [int] = []
+                let mut kk = 0
+                while kk < len(counts) {
+                    if kk == found {
+                        new_counts = new_counts.push(counts[kk] + 1)
+                    } else {
+                        new_counts = new_counts.push(counts[kk])
+                    }
+                    kk = kk + 1
+                }
+                counts = new_counts
+            }
+            ci = ci + 1
+        }
+        mi = mi + 1
+    }
+    let total_area = lib_total_area(cell_lib, names, counts)
+
+    // ── stage 5: emit gate-level Verilog.
+    let w = write_verilog(rc.design)
+
+    println("yosys synth: pipeline OK — top=" + top
+        + " cells_post_synth=" + str(rc.cells_after)
+        + " emitted_bytes=" + str(w.bytes)
+        + " total_area_um2=" + str(total_area))
+    println("  gate §5 area-oracle reference: d4 ≈ 61762.99 µm² · d6 ≈ 93608.53 µm²"
+        + " · ratio 1.5156×")
+    return 0
+}
+
+fn cmd_selftest() -> int {
+    println("yosys selftest: dispatcher routing only — per-module fn main() "
+        + "self-tests run via `hexa run stdlib/yosys/<mod>.hexa` (each prints "
+        + "n/n PASS).")
+    return 0
+}
+
+// argv shape: [..., "yosys", <subcmd>, <args...>].
+fn cmd_yosys(argv: [str]) -> int {
+    let n = len(argv)
+    let mut idx = 0 - 1
+    let mut i = 0
+    while i < n {
+        if argv[i] == "yosys" { idx = i }
+        i = i + 1
+    }
+    if idx < 0 { return cmd_help() }
+    if idx + 1 >= n { return cmd_help() }
+    let sub = argv[idx + 1]
+    if sub == "--help" { return cmd_help() }
+    if sub == "-h" { return cmd_help() }
+    if sub == "--version" { println(VERSION); return 0 }
+    if sub == "-v" { println(VERSION); return 0 }
+    if sub == "selftest" { return cmd_selftest() }
+    if sub == "read-verilog" { return cmd_read_verilog(argv) }
+    if sub == "synth" { return cmd_synth(argv) }
+    if sub == "write-verilog" { return cmd_write_verilog(argv) }
+    println("yosys: unknown subcommand: " + sub)
+    return 1
+}
+
+// ─── self-test (`hexa run stdlib/yosys/yosys.hexa`) ──────────────────────
+
+fn main() {
+    let mut fails = 0
+    let mut total = 0
+
+    total = total + 1
+    if cmd_yosys(["x", "yosys", "--version"]) != 0 {
+        println("FAIL version_exit0"); fails = fails + 1
+    }
+    total = total + 1
+    if cmd_yosys(["x", "yosys", "--help"]) != 0 {
+        println("FAIL help_exit0"); fails = fails + 1
+    }
+    total = total + 1
+    if cmd_yosys(["x", "yosys"]) != 0 {
+        println("FAIL nosub_help_exit0"); fails = fails + 1
+    }
+    total = total + 1
+    if cmd_yosys(["x", "yosys", "zzz"]) != 1 {
+        println("FAIL unknown_exit1"); fails = fails + 1
+    }
+    total = total + 1
+    if cmd_yosys(["x", "yosys", "selftest"]) != 0 {
+        println("FAIL selftest_exit0"); fails = fails + 1
+    }
+    total = total + 1
+    // synth with no inputs is a user error (1), NOT a gate-open (90).
+    if cmd_yosys(["x", "yosys", "synth"]) != 1 {
+        println("FAIL synth_no_inputs_user_err"); fails = fails + 1
+    }
+    total = total + 1
+    // read-verilog with no path is user error (1).
+    if cmd_yosys(["x", "yosys", "read-verilog"]) != 1 {
+        println("FAIL readverilog_no_path_user_err"); fails = fails + 1
+    }
+    total = total + 1
+    // write-verilog with no args is user error.
+    if cmd_yosys(["x", "yosys", "write-verilog"]) != 1 {
+        println("FAIL writeverilog_no_args_user_err"); fails = fails + 1
+    }
+
+    if fails > 0 {
+        println("yosys dispatcher selftest: "
+            + str(total - fails) + "/" + str(total) + " — FAIL")
+        exit(1)
+    }
+    println("yosys dispatcher selftest: "
+        + str(total) + "/" + str(total) + " PASS")
+}

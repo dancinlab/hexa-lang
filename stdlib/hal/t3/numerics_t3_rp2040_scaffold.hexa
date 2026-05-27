@@ -1,0 +1,182 @@
+#!hexa strict
+// stdlib/hal/t3/numerics_t3_rp2040_scaffold.hexa — T3a (scaffold-tier) check.
+//
+// Phase: paper-tier T3 scaffold verification. Asserts the cross-compile
+// scaffold for the RP2040 T3 harness exists on disk in the expected
+// layout. Does NOT execute the harness; that's T3b (run-tier) via
+// numerics_t3_rp2040_renode.hexa (v1.3.0+).
+//
+// PASS criterion: every scaffold file present (Makefile + linker +
+// boot.s + harness_main.c + Renode .resc + this script's parent README).
+// FAIL: any scaffold file missing.
+//
+// Note: this script does NOT lift F-HAL closure to 100% on its own.
+// Per the recipe, T3 closure ✓ requires T3b run-tier (Renode-captured
+// log with sentinel). T3a scaffold-tier is a precondition for T3b
+// landing in v1.3.0+.
+//
+// Run:
+//   hexa run stdlib/hal/t3/numerics_t3_rp2040_scaffold.hexa
+//
+// Cost: $0 (file existence checks only).
+
+let MODULE_NAME = "t3_rp2040_scaffold"
+
+// ─── expected scaffold files (relative to stdlib/hal/) ─────────────────
+
+let SCAFFOLD_FILES = [
+    "t3/README.md",
+    "t3/Makefile.rp2040",
+    "t3/linker_rp2040.ld",
+    "t3/boot_rp2040.s",
+    "t3/harness_main.c",
+    "t3/renode_rp2040.resc"
+]
+
+// Expected sentinel string — must appear in harness_main.c source.
+let HARNESS_SENTINEL = "__T3_RP2040__ PASS gpio_toggle_5x_observed"
+
+// ─── check harness ────────────────────────────────────────────────────
+
+let mut RUN  = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ─── helpers ─────────────────────────────────────────────────────────
+
+fn _root() -> str {
+    let env_root = env("HEXA_HAL_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _exists(p: str) -> bool {
+    let r = exec("[ -f \"" + p + "\" ] && echo y || echo n").trim()
+    return r == "y"
+}
+
+// ─── checks ──────────────────────────────────────────────────────────
+
+fn check_scaffold_files_present(root: str) {
+    let mut n_present = 0
+    let mut bad = ""
+    for f in SCAFFOLD_FILES {
+        let p = root + "/stdlib/hal/" + f
+        if _exists(p) { n_present = n_present + 1 }
+        else { bad = bad + f + " " }
+    }
+    _check(n_present == SCAFFOLD_FILES.len(),
+           "T3 scaffold: all " + str(SCAFFOLD_FILES.len()) + " files present",
+           if bad.len() > 0 { "missing: " + bad } else { str(n_present) + "/" + str(SCAFFOLD_FILES.len()) })
+}
+
+fn check_harness_has_sentinel(root: str) {
+    let p = root + "/stdlib/hal/t3/harness_main.c"
+    if !_exists(p) {
+        _check(false, "harness_main.c contains T3 sentinel string", "harness file missing")
+        return
+    }
+    let src = read_file(p)
+    let has = src.contains(HARNESS_SENTINEL)
+    _check(has,
+           "harness_main.c contains sentinel: \"" + HARNESS_SENTINEL + "\"",
+           if !has { "sentinel string not found in source" } else { "found" })
+}
+
+fn check_makefile_target_arm(root: str) {
+    let p = root + "/stdlib/hal/t3/Makefile.rp2040"
+    if !_exists(p) { _check(false, "Makefile targets arm-none-eabi", "missing"); return }
+    let src = read_file(p)
+    let has_prefix = src.contains("arm-none-eabi-")
+    let has_cpu    = src.contains("cortex-m0plus")
+    _check(has_prefix && has_cpu,
+           "Makefile.rp2040 targets arm-none-eabi-* + cortex-m0plus",
+           if !has_prefix { "ARM_GCC_PREFIX not set" }
+           else if !has_cpu { "cortex-m0plus flag not present" }
+           else { "both present" })
+}
+
+fn check_linker_memory_layout(root: str) {
+    let p = root + "/stdlib/hal/t3/linker_rp2040.ld"
+    if !_exists(p) { _check(false, "linker.ld declares FLASH+RAM regions", "missing"); return }
+    let src = read_file(p)
+    let has_flash = src.contains("FLASH (rx)") && src.contains("0x10000000")
+    let has_ram   = src.contains("RAM   (rwx)") && src.contains("0x20000000")
+    _check(has_flash && has_ram,
+           "linker_rp2040.ld declares FLASH @ 0x10000000 + RAM @ 0x20000000",
+           if !has_flash { "FLASH region missing" }
+           else if !has_ram { "RAM region missing" }
+           else { "both present" })
+}
+
+fn check_boot_armv6m_thumb(root: str) {
+    let p = root + "/stdlib/hal/t3/boot_rp2040.s"
+    if !_exists(p) { _check(false, "boot.s declares ARMv6-M / thumb", "missing"); return }
+    let src = read_file(p)
+    let has_thumb = src.contains(".thumb")
+    let has_cpu   = src.contains("cortex-m0plus")
+    let has_reset = src.contains("_reset_handler")
+    _check(has_thumb && has_cpu && has_reset,
+           "boot_rp2040.s declares .thumb + cortex-m0plus + _reset_handler",
+           "")
+}
+
+fn check_renode_loads_elf(root: str) {
+    let p = root + "/stdlib/hal/t3/renode_rp2040.resc"
+    if !_exists(p) { _check(false, "Renode .resc loads ELF + captures UART log", "missing"); return }
+    let src = read_file(p)
+    let has_load   = src.contains("LoadELF")
+    let has_uart   = src.contains("uart0")
+    let has_logfile = src.contains("logFile") || src.contains("console-log")
+    _check(has_load && has_uart && has_logfile,
+           "renode_rp2040.resc declares LoadELF + uart0 + logFile",
+           "")
+}
+
+// ─── main ────────────────────────────────────────────────────────────
+
+fn main() {
+    println("========================================================================")
+    println("  stdlib/hal — numerics_t3_rp2040_scaffold: T3a scaffold-tier")
+    println("========================================================================")
+    println("  scaffold files: " + str(SCAFFOLD_FILES))
+    println("")
+
+    let root = _root()
+
+    check_scaffold_files_present(root)
+    check_harness_has_sentinel(root)
+    check_makefile_target_arm(root)
+    check_linker_memory_layout(root)
+    check_boot_armv6m_thumb(root)
+    check_renode_loads_elf(root)
+
+    println("")
+    println("  T3 TIER STATUS:")
+    println("    T3a (scaffold-tier): this script — checks scaffold completeness")
+    println("    T3b (run-tier):      numerics_t3_rp2040_renode.hexa (v1.3.0+)")
+    println("                         requires actual Renode run + UART log capture")
+    println("                         with sentinel '" + HARNESS_SENTINEL + "'.")
+    println("")
+    println("  Per recipe §3, T3 closure ✓ in falsifier_check.hexa requires T3b.")
+    println("  v1.2.0 lands T3a only — F<n>_T3 stays empty until T3b verified.")
+
+    let pass_n = RUN - FAIL
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_LANG_HAL_T3_RP2040_SCAFFOLD__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_LANG_HAL_T3_RP2040_SCAFFOLD__ PASS")
+    exit(0)
+}
+
+main()

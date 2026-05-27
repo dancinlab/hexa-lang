@@ -1,0 +1,87 @@
+// Smoke test — stdlib/signal/voss_mccartney (Voss-McCartney 1/f^β generator).
+//
+// Import-based canonical test. NOTE: single-file `hexa build` does NOT flatten
+// `import "stdlib/..."` (undefined link symbols) — algorithm correctness is
+// verified via a self-contained build (see PR), this file is the importable
+// regression harness once cross-import flatten lands (M5-style rebootstrap).
+
+import "stdlib/signal/voss_mccartney.hexa"
+
+fn _check_flag(name: string, ok: int) -> int {
+    if ok == 1 {
+        println("PASS " + name)
+        return 0
+    }
+    println("FAIL " + name)
+    return 1
+}
+
+fn _abs_f(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn main() {
+    let mut fails = 0
+
+    let seed = 0xA17C209
+    let n = 64
+
+    // ── length == n ──
+    let white = gen_1fbeta(0.0, seed, n)
+    fails = fails + _check_flag("len==n", if farr_len(white) == n { 1 } else { 0 })
+
+    // ── finite + in roughly [-1, 1] for β=0 (white: weights all 1, mean of
+    //    N_OCT i.i.d. uniforms in [-1,1] → bounded by [-1,1]) ──
+    let mut finite_ok = 1
+    let mut range_ok = 1
+    let mut i = 0
+    while i < n {
+        let v = farr_get(white, i)
+        // NaN is not equal to itself; ±inf has abs() > 1e30
+        if v == v { } else { finite_ok = 0 }
+        if _abs_f(v) > 1.0e30 { finite_ok = 0 }
+        if _abs_f(v) > 1.0 { range_ok = 0 }
+        i = i + 1
+    }
+    fails = fails + _check_flag("white_finite", finite_ok)
+    fails = fails + _check_flag("white_in_[-1,1]", range_ok)
+
+    // ── determinism: same (β, seed, n) → byte-equal output ──
+    let white2 = gen_1fbeta(0.0, seed, n)
+    let mut det_ok = 1
+    let mut d = 0
+    while d < n {
+        if farr_get(white, d) == farr_get(white2, d) { } else { det_ok = 0 }
+        d = d + 1
+    }
+    fails = fails + _check_flag("deterministic_byte_equal", det_ok)
+
+    // ── pink (β=1.0) produces a finite, non-degenerate signal ──
+    let pink = gen_1fbeta(1.0, seed, n)
+    let mut pink_finite = 1
+    let mut mn = farr_get(pink, 0)
+    let mut mx = mn
+    let mut p = 0
+    while p < n {
+        let v = farr_get(pink, p)
+        if v == v { } else { pink_finite = 0 }
+        if v < mn { mn = v }
+        if v > mx { mx = v }
+        p = p + 1
+    }
+    fails = fails + _check_flag("pink_finite", pink_finite)
+    // non-degenerate: not a flat constant signal
+    fails = fails + _check_flag("pink_nonconstant", if (mx - mn) > 0.0 { 1 } else { 0 })
+
+    let _ = farr_free(white)
+    let _ = farr_free(white2)
+    let _ = farr_free(pink)
+
+    if fails == 0 {
+        println("ALL PASS — stdlib/signal/voss_mccartney")
+    } else {
+        println("FAILURES: " + to_string(fails))
+        exit(1)
+    }
+}

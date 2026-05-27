@@ -1,0 +1,115 @@
+// absorbed from ~/core/hexa-bio/quantum/module/n6_lattice_check.hexa (Apache-2.0, hexa-bio v1.1.0)
+//
+// compiler/n6_lattice/cross_check.hexa — cross-axis drift detector.
+//
+// Iterates n6_axes() and asserts each row's literal sigma/tau/phi/J2 match
+// the canonical n=6 lattice constants. Prints a per-axis summary plus an
+// aggregate verdict. This is the pure-hexa-lang analogue of hexa-bio's
+// n6_lattice_check.hexa drift detector, minus the sister-repo dispatcher
+// hop (the upstream version shells out to each axis's `n6` subcommand;
+// this version stays inside the rodata table because hexa-lang does not
+// host the bio axis dispatchers).
+
+import "compiler/n6_lattice/axis_table.hexa"
+import "compiler/n6_lattice/verify.hexa"
+
+pub struct CrossCheckRow {
+    name:        string,
+    sigma_ok:    bool,
+    tau_ok:      bool,
+    phi_ok:      bool,
+    J2_ok:       bool,
+    all_ok:      bool
+}
+
+pub struct CrossCheckResult {
+    verdict:     string,
+    n_pass:      int,
+    n_total:     int,
+    rows:        [CrossCheckRow],
+    sigma_drift: int,
+    tau_drift:   int,
+    phi_drift:   int,
+    J2_drift:    int
+}
+
+pub fn cross_check() -> CrossCheckResult {
+    let xs = n6_axes()
+    let mut rows: [CrossCheckRow] = []
+    let mut sigma_drift = 0
+    let mut tau_drift   = 0
+    let mut phi_drift   = 0
+    let mut J2_drift    = 0
+    let mut n_pass      = 0
+    let mut i = 0
+    while i < len(xs) {
+        let row = xs[i]
+        let s_ok = row.sigma == 12
+        let t_ok = row.tau   == 4
+        let p_ok = row.phi   == 2
+        let j_ok = row.J2    == 24
+        if !s_ok { sigma_drift = sigma_drift + 1 }
+        if !t_ok { tau_drift   = tau_drift + 1 }
+        if !p_ok { phi_drift   = phi_drift + 1 }
+        if !j_ok { J2_drift    = J2_drift + 1 }
+        let all_ok = s_ok && t_ok && p_ok && j_ok
+        if all_ok { n_pass = n_pass + 1 }
+        rows.push(CrossCheckRow {
+            name:     row.name,
+            sigma_ok: s_ok,
+            tau_ok:   t_ok,
+            phi_ok:   p_ok,
+            J2_ok:    j_ok,
+            all_ok:   all_ok
+        })
+        i = i + 1
+    }
+    let n_total = len(xs)
+    // Aggregate verdict: literal table OK AND lattice master identity OK.
+    let mut verdict = "FAIL"
+    if n_pass == n_total {
+        if verify_master_identity() { verdict = "PASS" }
+    }
+    return CrossCheckResult {
+        verdict:     verdict,
+        n_pass:      n_pass,
+        n_total:     n_total,
+        rows:        rows,
+        sigma_drift: sigma_drift,
+        tau_drift:   tau_drift,
+        phi_drift:   phi_drift,
+        J2_drift:    J2_drift
+    }
+}
+
+pub fn print_cross_check(r: CrossCheckResult) {
+    println("[n6_lattice/cross_check] n=6 invariant cross-axis drift detector")
+    println("  canonical: sigma(6)=12  tau(6)=4  phi(6)=2  J2=24")
+    println("")
+    let mut i = 0
+    while i < len(r.rows) {
+        let row = r.rows[i]
+        let mut mark = "FAIL"
+        if row.all_ok { mark = "PASS" }
+        println("  [" + mark + "] " + row.name
+                + "  sigma_ok=" + str(row.sigma_ok)
+                + "  tau_ok=" + str(row.tau_ok)
+                + "  phi_ok=" + str(row.phi_ok)
+                + "  J2_ok="  + str(row.J2_ok))
+        i = i + 1
+    }
+    println("")
+    println("  literal-value drift across " + str(r.n_total) + " axes:")
+    println("    sigma drift = " + str(r.sigma_drift) + "/" + str(r.n_total))
+    println("    tau   drift = " + str(r.tau_drift)   + "/" + str(r.n_total))
+    println("    phi   drift = " + str(r.phi_drift)   + "/" + str(r.n_total))
+    println("    J2    drift = " + str(r.J2_drift)    + "/" + str(r.n_total))
+    println("")
+    println("  --- summary --- " + str(r.n_pass) + " / " + str(r.n_total)
+            + " axes consistent -> verdict: " + r.verdict)
+    if r.verdict == "PASS" {
+        println("__N6_LATTICE_CROSS_CHECK__ PASS")
+    } else {
+        println("__N6_LATTICE_CROSS_CHECK__ FAIL")
+    }
+}

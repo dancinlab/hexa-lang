@@ -1,0 +1,801 @@
+// ═══════════════════════════════════════════════════════════════════
+//  test_backward_fuse.hexa — ROI #102 correctness suite
+//
+//  Validates self/ai_native/backward_fuse.hexa:
+//      - Op constructors (tags 0..6)
+//      - forward_chain / forward_chain_states on each op
+//      - backward_chain_naive == backward_chain_fused element-wise
+//      - Closed-form identities per op (add, mul, relu, tanh, sigmoid)
+//      - Empty chain → identity (dx = dz)
+//      - Single-element input
+//      - Long mixed chain random-seed parity
+//      - detect_fusable_chain (all defined tags are fusable)
+//      - rewrite_chain (identity)
+//      - naive_bwd_alloc_count / fused_bwd_alloc_count
+// ═══════════════════════════════════════════════════════════════════
+
+// -- inlined from self/ai_native/backward_fuse.hexa --
+// codegen import not wired for test files
+
+// ═══════════════════════════════════════════════════════════════════
+//  self/ai_native/backward_fuse.hexa — AI-native ROI #102
+//
+//  @backward_fuse — chain-rule fusion for pointwise backward passes.
+//
+//  Motivation:
+//      Training hot paths thread a sequence of layer backward calls
+//      like
+//          dy  = f3.bwd(dz)
+//          dx  = f2.bwd(dy)
+//          dx0 = f1.bwd(dx)
+//      When every fN is pointwise (derivative depends only on the
+//      corresponding forward input x_i), naive backward allocates a
+//      full gradient tensor between every stage — K allocations,
+//      2·N·K round-trips, plus pressure on the allocator for every
+//      call site. Fusion keeps the gradient in a scalar register and
+//      walks the chain top-down inside a single loop per element.
+//
+//  Fusion strategy:
+//      Per output element i, starting from g = dz[i], sweep ops in
+//      reverse order applying f_k'(x_k_i) · g. The intermediate g is
+//      scalar-local, so the fused path allocates exactly ONE output
+//      array regardless of chain depth.
+//
+//  Op encoding (struct + tag int — enum is not in hexa grammar):
+//      tag 0 = add_const    fwd: y = x + c          dy/dx = 1
+//      tag 1 = sub_const    fwd: y = x - c          dy/dx = 1
+//      tag 2 = mul_const    fwd: y = x · c          dy/dx = c
+//      tag 3 = relu         fwd: y = max(x, 0)      dy/dx = (x>0)?1:0
+//      tag 4 = tanh         fwd: y = tanh(x)        dy/dx = 1 - tanh²(x)
+//      tag 5 = sigmoid      fwd: y = σ(x)           dy/dx = σ(x)·(1-σ(x))
+//      tag 6 = identity     fwd: y = x              dy/dx = 1
+//
+//  Public API:
+//      op_bwd_add_const(c)                   -> Op
+//      op_bwd_sub_const(c)                   -> Op
+//      op_bwd_mul_const(c)                   -> Op        // aka scale
+//      op_bwd_relu()                         -> Op
+//      op_bwd_tanh()                         -> Op
+//      op_bwd_sigmoid()                      -> Op
+//      op_bwd_identity()                     -> Op
+//
+//      forward_chain(x, ops)                 -> [float]
+//      forward_chain_states(x, ops)          -> [[float]]  (per-stage x_k)
+//      backward_chain_naive(dz, x, ops)      -> [float]
+//      backward_chain_fused(dz, x, ops)      -> [float]
+//
+//      detect_fusable_chain(ops)             -> bool
+//      rewrite_chain(ops)                    -> ops        // no-op if fusable,
+//                                                         // else identity
+//      naive_bwd_alloc_count(ops)            -> int        // len(ops)
+//      fused_bwd_alloc_count(ops)            -> int        // 1
+//
+//  Numerical contract:
+//      backward_chain_fused(dz, x, ops)
+//        ≡ backward_chain_naive(dz, x, ops)
+//      element-wise within tol 1e-6 for any finite dz, x, pointwise
+//      op chain. Holds regardless of chain length.
+//
+//  Allocation contract:
+//      naive : len(ops) arrays allocated for the backward sweep
+//              (one gradient tensor per stage)
+//      fused : exactly 1 array (the final dx)
+//
+//  Grammar cautions (HX3):
+//      - no bit-ops in math paths; arithmetic only
+//      - no struct literal in `if` head (use `let op = ops[j]` first)
+//      - `and`/`or` → `&&`/`||`
+//      - `@attr pub fn` unsupported → `@attr fn _impl` + `pub fn` fwd
+//      - slice `arr[(i+1)..j]` needs parens on additions
+//      - abs → use abs_pure from math_pure.hexa
+//
+//  AI-native attrs:
+//      @hot            — backward passes dominate training wall time
+//      @backward_fuse  — marker: intermediate grad tensors removed
+//      @pure           — no side effects beyond the returned array
+// ═══════════════════════════════════════════════════════════════════
+
+// ── Op struct + constructors ───────────────────────────────────────
+
+pub struct BwdOp {
+    tag: int,
+    c: float
+}
+
+pub fn op_bwd_add_const(c) {
+    return BwdOp { tag: 0, c: c }
+}
+
+pub fn op_bwd_sub_const(c) {
+    return BwdOp { tag: 1, c: c }
+}
+
+pub fn op_bwd_mul_const(c) {
+    return BwdOp { tag: 2, c: c }
+}
+
+pub fn op_bwd_relu() {
+    return BwdOp { tag: 3, c: 0.0 }
+}
+
+pub fn op_bwd_tanh() {
+    return BwdOp { tag: 4, c: 0.0 }
+}
+
+pub fn op_bwd_sigmoid() {
+    return BwdOp { tag: 5, c: 0.0 }
+}
+
+pub fn op_bwd_identity() {
+    return BwdOp { tag: 6, c: 0.0 }
+}
+
+// ── helpers ────────────────────────────────────────────────────────
+
+// bf102_fabs → abs_pure (math_pure.hexa)
+
+fn bf102_zeros_1d(n) {
+    let mut v = []
+    let mut _i = 0
+    while _i < n {
+        v.push(0.0)
+        _i = _i + 1
+    }
+    return v
+}
+
+// Sigmoid, numerically safe — clamp input to [-40, 40] so exp stays finite.
+fn bf102_sigmoid_scalar(x) {
+    let mut c = x
+    if c >  40.0 { c =  40.0 }
+    if c < -40.0 { c = -40.0 }
+    return 1.0 / (1.0 + exp(0.0 - c))
+}
+
+// ── forward scalar (one op) ───────────────────────────────────────
+
+fn bf102_fwd_scalar(x, op) {
+    let t = op.tag
+    if t == 0 {
+        return x + op.c
+    } else if t == 1 {
+        return x - op.c
+    } else if t == 2 {
+        return x * op.c
+    } else if t == 3 {
+        if x < 0.0 { return 0.0 }
+        return x
+    } else if t == 4 {
+        return tanh(x)
+    } else if t == 5 {
+        return bf102_sigmoid_scalar(x)
+    } else if t == 6 {
+        return x
+    }
+    return x
+}
+
+// ── derivative scalar: given the FORWARD input x_k for op k, return
+//    dy/dx_k evaluated at that point. This is the local Jacobian
+//    that the chain rule multiplies into the incoming upstream grad.
+fn bf102_deriv_scalar(x, op) {
+    let t = op.tag
+    if t == 0 {
+        return 1.0
+    } else if t == 1 {
+        return 1.0
+    } else if t == 2 {
+        return op.c
+    } else if t == 3 {
+        // relu': step function. Boundary at 0 defined as 0 (standard).
+        if x > 0.0 { return 1.0 }
+        return 0.0
+    } else if t == 4 {
+        // tanh'(x) = 1 - tanh²(x)
+        let y = tanh(x)
+        return 1.0 - y * y
+    } else if t == 5 {
+        // sigmoid'(x) = σ(x) · (1 - σ(x))
+        let s = bf102_sigmoid_scalar(x)
+        return s * (1.0 - s)
+    } else if t == 6 {
+        return 1.0
+    }
+    return 1.0
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  forward_chain(x, ops) — applied op-by-op, returning only the final
+//  activation y. Useful for end-to-end checks where no training-time
+//  cache of intermediates is needed.
+// ═══════════════════════════════════════════════════════════════════
+pub fn forward_chain(x, ops) {
+    let n = len(x)
+    let k = len(ops)
+    let mut out = bf102_zeros_1d(n)
+    let mut i = 0
+    while i < n {
+        let mut v = x[i]
+        for j in 0..k {
+            v = bf102_fwd_scalar(v, ops[j])
+        }
+        out[i] = v
+        i = i + 1
+    }
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  forward_chain_states(x, ops) — record the per-stage pre-op input
+//  at every layer. states[k] = x_k = input fed into op k. Length is
+//  k+1 so that states[0] = x and states[k] = y. The backward pass
+//  consumes states[0..k] to evaluate local Jacobians.
+//
+//  Allocation: k+1 arrays of length N. This is the standard activation
+//  cache that PyTorch/JAX etc. keep around between fwd and bwd. Both
+//  the naive and fused backward paths consume it; the fusion question
+//  is only about what gets allocated INSIDE the backward sweep.
+// ═══════════════════════════════════════════════════════════════════
+pub fn forward_chain_states(x, ops) {
+    let n = len(x)
+    let k = len(ops)
+
+    // states[0] = x (copy so the caller's array is untouched)
+    let mut states = []
+    let mut cur = bf102_zeros_1d(n)
+    let mut i = 0
+    while i < n {
+        cur[i] = x[i]
+        i = i + 1
+    }
+    states.push(cur)
+
+    let mut j = 0
+    while j < k {
+        let src = states[j]
+        let mut nxt = bf102_zeros_1d(n)
+        let mut i = 0
+        while i < n {
+            nxt[i] = bf102_fwd_scalar(src[i], ops[j])
+            i = i + 1
+        }
+        states.push(nxt)
+        j = j + 1
+    }
+    return states
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  backward_chain_naive(dz, x, ops) — stage-by-stage backward.
+//
+//  Mirrors a naive autograd: walks `ops` in REVERSE, producing a
+//  fresh [float] of length N at every stage. For a chain of length K
+//  this allocates K gradient tensors (one per layer).
+//
+//  Semantics:
+//      states = forward_chain_states(x, ops)
+//      g = dz
+//      for k in K-1 .. 0:
+//          x_k = states[k]
+//          g   = [ deriv(x_k[i], ops[k]) · g[i]  for i in 0..N ]
+//      return g
+// ═══════════════════════════════════════════════════════════════════
+pub fn backward_chain_naive(dz, x, ops) {
+    let n = len(x)
+    let k = len(ops)
+
+    let states = forward_chain_states(x, ops)
+
+    // Seed grad = copy of dz so the caller's buffer stays untouched.
+    let mut g = bf102_zeros_1d(n)
+    let mut i = 0
+    while i < n {
+        g[i] = dz[i]
+        i = i + 1
+    }
+
+    // Reverse sweep: k-1, k-2, ..., 0 — explicit alloc per stage.
+    let mut j = k - 1
+    while j >= 0 {
+        let xk = states[j]
+        let op = ops[j]
+        let mut gnext = bf102_zeros_1d(n)
+        let mut i = 0
+        while i < n {
+            gnext[i] = bf102_deriv_scalar(xk[i], op) * g[i]
+            i = i + 1
+        }
+        g = gnext
+        j = j - 1
+    }
+    return g
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  backward_chain_fused(dz, x, ops) — fused chain-rule sweep.
+//
+//  For each element i we multiply the reverse chain of local
+//  derivatives in a scalar accumulator; the full dx is written once.
+//
+//  Allocation budget: exactly 1 array (the returned dx). The forward
+//  state array is assumed already cached by the training harness —
+//  it is NOT part of this backward kernel's allocation account.
+//  (Same convention as PyTorch: .backward() does not re-allocate the
+//  activations it reads.)
+//
+//  Loop structure:
+//      for i in 0..N:
+//          g = dz[i]
+//          for k in K-1 .. 0:
+//              g = deriv(states[k][i], ops[k]) · g
+//          dx[i] = g
+//
+//  `g` is a register-local scalar across the k loop, so the K-1
+//  intermediate tensors the naive path allocates collapse to zero.
+// ═══════════════════════════════════════════════════════════════════
+@hot @backward_fuse @pure
+fn backward_chain_fused_impl(dz, x, ops) {
+    let n = len(x)
+    let k = len(ops)
+
+    // Empty chain → identity: dx = dz.
+    if k == 0 {
+        let mut out0 = bf102_zeros_1d(n)
+        let mut i = 0
+        while i < n {
+            out0[i] = dz[i]
+            i = i + 1
+        }
+        return out0
+    }
+
+    // Need per-stage forward inputs for the local Jacobians.
+    let states = forward_chain_states(x, ops)
+
+    let mut dx = bf102_zeros_1d(n)
+    let mut i = 0
+    while i < n {
+        let mut g = dz[i]
+        let mut j = k - 1
+        while j >= 0 {
+            let xk = states[j]
+            let op = ops[j]
+            g = bf102_deriv_scalar(xk[i], op) * g
+            j = j - 1
+        }
+        dx[i] = g
+        i = i + 1
+    }
+    return dx
+}
+
+pub fn backward_chain_fused(dz, x, ops) {
+    return backward_chain_fused_impl(dz, x, ops)
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  AST-level fusability detector + rewriter.
+//
+//  detect_fusable_chain(ops):
+//      Returns true iff every op in the chain is pointwise (i.e. its
+//      derivative depends only on the scalar at the same index). All
+//      tags 0..6 currently qualify; any future op whose derivative
+//      cross-couples indices (softmax, layernorm, etc.) would return
+//      false and prevent the rewrite.
+//
+//  rewrite_chain(ops):
+//      When fusable, returns `ops` unchanged — the rewriter signals
+//      that the *caller* should dispatch backward_chain_fused instead
+//      of backward_chain_naive. When not fusable, returns `ops` also
+//      (identity rewrite) — the caller keeps the naive path. The
+//      split exists so higher-level passes can insert a marker /
+//      graph-surgery hook here without changing the calling
+//      convention.
+// ═══════════════════════════════════════════════════════════════════
+pub fn detect_fusable_chain(ops) {
+    let k = len(ops)
+    let mut j = 0
+    while j < k {
+        let op = ops[j]
+        let t = op.tag
+        // all currently-defined tags 0..6 are pointwise
+        if t < 0 || t > 6 {
+            return false
+        }
+        j = j + 1
+    }
+    return true
+}
+
+pub fn rewrite_chain(ops) {
+    // Identity rewrite. Fusability is a property of `ops`; the caller
+    // dispatches fused vs naive based on detect_fusable_chain(ops).
+    return ops
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Allocation accounting for tests / bench reporting.
+//      naive : K gradient tensors in the backward sweep
+//      fused : 1 gradient tensor (the returned dx)
+// ═══════════════════════════════════════════════════════════════════
+pub fn naive_bwd_alloc_count(ops) {
+    let k = len(ops)
+    if k == 0 { return 1 }
+    return k
+}
+
+pub fn fused_bwd_alloc_count(ops) {
+    return 1
+}
+
+
+// -- end inlined --
+
+let mut pass_count = 0
+let mut fail_count = 0
+let mut max_abs_diff_global = 0.0
+
+fn check(name, cond) {
+    if cond {
+        println("[PASS] " + name)
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name)
+        fail_count = fail_count + 1
+    }
+}
+
+fn fabs_t(x) {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn vec_close(a, b, eps) {
+    if len(a) != len(b) { return false }
+    let mut i = 0
+
+    while i < len(a) {
+        if fabs_t(a[i] - b[i]) > eps { return false }
+    }
+    return true
+}
+
+fn vec_max_diff(a, b) {
+    let mut mx = 0.0
+    let mut i = 0
+
+    while i < len(a) {
+        let d = fabs_t(a[i] - b[i])
+        if d > mx { mx = d }
+    }
+    return mx
+}
+
+fn update_global_max(d) {
+    if d > max_abs_diff_global { max_abs_diff_global = d }
+}
+
+// deterministic LCG
+fn lcg_step(state) {
+    let a = 1103515245
+    let c = 12345
+    let m = 2147483648
+    return (state * a + c) % m
+}
+
+fn rand_vec(n, seed) {
+    let mut state = seed
+    let mut v = []
+    let mut _i = 0
+
+    while _i < n {
+        state = lcg_step(state)
+        let r = (state % 1000) * 0.004 - 2.0
+        v = v + [r]
+    }
+    return v
+}
+
+fn sigmoid_scalar(x) {
+    let mut c = x
+    if c >  40.0 { c =  40.0 }
+    if c < -40.0 { c = -40.0 }
+    return 1.0 / (1.0 + exp(0.0 - c))
+}
+
+// ══════════════════════════════════════════════════════════════════
+println("═══════════════════════════════════════════════════════")
+println("  ROI #102 backward_fuse — chained bwd single kernel")
+println("═══════════════════════════════════════════════════════")
+
+let tol = 1.0e-6
+
+// ── T01  Op constructor tags ─────────────────────────────────────
+check("T01 add_const tag==0",    op_bwd_add_const(1.5).tag == 0)
+check("T01 sub_const tag==1",    op_bwd_sub_const(1.5).tag == 1)
+check("T01 mul_const tag==2",    op_bwd_mul_const(1.5).tag == 2)
+check("T01 relu tag==3",         op_bwd_relu().tag == 3)
+check("T01 tanh tag==4",         op_bwd_tanh().tag == 4)
+check("T01 sigmoid tag==5",      op_bwd_sigmoid().tag == 5)
+check("T01 identity tag==6",     op_bwd_identity().tag == 6)
+
+// ── T02  forward_chain: add_const ────────────────────────────────
+let x2 = [1.0, 2.0, 3.0]
+let ops2 = [op_bwd_add_const(10.0)]
+let fc2 = forward_chain(x2, ops2)
+check("T02 add_const fwd[0]", fabs_t(fc2[0] - 11.0) < tol)
+check("T02 add_const fwd[1]", fabs_t(fc2[1] - 12.0) < tol)
+check("T02 add_const fwd[2]", fabs_t(fc2[2] - 13.0) < tol)
+
+// ── T03  forward_chain: mul_const (scale) ────────────────────────
+let ops3 = [op_bwd_mul_const(3.0)]
+let fc3 = forward_chain(x2, ops3)
+check("T03 mul_const fwd[0]", fabs_t(fc3[0] - 3.0) < tol)
+check("T03 mul_const fwd[1]", fabs_t(fc3[1] - 6.0) < tol)
+check("T03 mul_const fwd[2]", fabs_t(fc3[2] - 9.0) < tol)
+
+// ── T04  forward_chain: relu zeroes negatives ────────────────────
+let x4 = [0.0 - 1.0, 0.5, 0.0 - 3.0, 2.0]
+let ops4 = [op_bwd_relu()]
+let fc4 = forward_chain(x4, ops4)
+check("T04 relu fwd[0]", fabs_t(fc4[0] - 0.0) < tol)
+check("T04 relu fwd[1]", fabs_t(fc4[1] - 0.5) < tol)
+check("T04 relu fwd[2]", fabs_t(fc4[2] - 0.0) < tol)
+check("T04 relu fwd[3]", fabs_t(fc4[3] - 2.0) < tol)
+
+// ── T05  forward_chain_states — length k+1, states[0] == x copy ──
+let x5 = [0.5, 1.0]
+let ops5 = [op_bwd_mul_const(2.0), op_bwd_add_const(1.0)]
+let st5 = forward_chain_states(x5, ops5)
+check("T05 states length == k+1", len(st5) == 3)
+check("T05 states[0] == x copy", vec_close(st5[0], x5, tol))
+// states[1] = mul by 2 → [1.0, 2.0]
+check("T05 states[1][0] == 1.0", fabs_t(st5[1][0] - 1.0) < tol)
+check("T05 states[1][1] == 2.0", fabs_t(st5[1][1] - 2.0) < tol)
+// states[2] = add 1 → [2.0, 3.0]
+check("T05 states[2][0] == 2.0", fabs_t(st5[2][0] - 2.0) < tol)
+check("T05 states[2][1] == 3.0", fabs_t(st5[2][1] - 3.0) < tol)
+
+// ── T06  Empty chain: backward_chain_fused returns dz copy ───────
+let dz6 = [0.7, 0.3, 0.5]
+let x6  = [1.0, 2.0, 3.0]
+let dx6 = backward_chain_fused(dz6, x6, [])
+check("T06 empty chain dx == dz", vec_close(dx6, dz6, tol))
+
+// ── T07  Empty chain: naive also returns dz copy ─────────────────
+let dx7 = backward_chain_naive(dz6, x6, [])
+check("T07 empty chain naive dx == dz", vec_close(dx7, dz6, tol))
+
+// ── T08  add_const backward: d(x+c)/dx = 1 → dx == dz ────────────
+let dz8  = [1.0, 2.0, 3.0]
+let x8   = [0.1, 0.2, 0.3]
+let ops8 = [op_bwd_add_const(99.0)]
+let dx8_n = backward_chain_naive(dz8, x8, ops8)
+let dx8_f = backward_chain_fused(dz8, x8, ops8)
+check("T08 add_const naive dx == dz", vec_close(dx8_n, dz8, tol))
+check("T08 add_const fused dx == dz", vec_close(dx8_f, dz8, tol))
+update_global_max(vec_max_diff(dx8_n, dx8_f))
+
+// ── T09  sub_const backward: d(x-c)/dx = 1 → dx == dz ────────────
+let ops9 = [op_bwd_sub_const(5.0)]
+let dx9_n = backward_chain_naive(dz8, x8, ops9)
+let dx9_f = backward_chain_fused(dz8, x8, ops9)
+check("T09 sub_const naive dx == dz", vec_close(dx9_n, dz8, tol))
+check("T09 sub_const fused dx == dz", vec_close(dx9_f, dz8, tol))
+update_global_max(vec_max_diff(dx9_n, dx9_f))
+
+// ── T10  mul_const backward: d(cx)/dx = c → dx == c·dz ───────────
+let ops10 = [op_bwd_mul_const(4.0)]
+let dx10_n = backward_chain_naive(dz8, x8, ops10)
+let dx10_f = backward_chain_fused(dz8, x8, ops10)
+let mut expect10 = []
+let mut i = 0
+
+while i < len(dz8) {
+    expect10 = expect10 + [4.0 * dz8[i]]
+}
+check("T10 mul_const naive == 4·dz",  vec_close(dx10_n, expect10, tol))
+check("T10 mul_const fused == 4·dz",  vec_close(dx10_f, expect10, tol))
+update_global_max(vec_max_diff(dx10_n, dx10_f))
+
+// ── T11  relu backward: step at x>0 ──────────────────────────────
+let dz11  = [1.0, 1.0, 1.0, 1.0]
+let x11   = [0.0 - 1.0, 0.5, 0.0 - 0.01, 2.0]
+let ops11 = [op_bwd_relu()]
+let dx11_n = backward_chain_naive(dz11, x11, ops11)
+let dx11_f = backward_chain_fused(dz11, x11, ops11)
+// Expected: [0, 1, 0, 1]
+let expect11 = [0.0, 1.0, 0.0, 1.0]
+check("T11 relu naive step",  vec_close(dx11_n, expect11, tol))
+check("T11 relu fused step",  vec_close(dx11_f, expect11, tol))
+update_global_max(vec_max_diff(dx11_n, dx11_f))
+
+// ── T12  relu boundary at x=0 maps to 0 ──────────────────────────
+let dz12  = [1.0]
+let x12   = [0.0]
+let dx12  = backward_chain_fused(dz12, x12, [op_bwd_relu()])
+check("T12 relu at x=0 → 0", fabs_t(dx12[0] - 0.0) < tol)
+
+// ── T13  tanh backward matches closed form 1-tanh²(x) ────────────
+let dz13 = [1.0, 1.0, 1.0]
+let x13  = [0.0, 0.5, 1.0]
+let ops13 = [op_bwd_tanh()]
+let dx13_n = backward_chain_naive(dz13, x13, ops13)
+let dx13_f = backward_chain_fused(dz13, x13, ops13)
+let mut expect13 = []
+let mut i = 0
+
+while i < len(x13) {
+    let y = tanh(x13[i])
+    expect13 = expect13 + [1.0 - y * y]
+}
+check("T13 tanh naive matches closed form", vec_close(dx13_n, expect13, tol))
+check("T13 tanh fused matches closed form", vec_close(dx13_f, expect13, tol))
+update_global_max(vec_max_diff(dx13_n, dx13_f))
+
+// ── T14  sigmoid backward matches σ(x)·(1-σ(x)) ──────────────────
+let dz14 = [1.0, 1.0, 1.0]
+let x14  = [0.0 - 1.0, 0.0, 1.0]
+let ops14 = [op_bwd_sigmoid()]
+let dx14_n = backward_chain_naive(dz14, x14, ops14)
+let dx14_f = backward_chain_fused(dz14, x14, ops14)
+let mut expect14 = []
+let mut i = 0
+
+while i < len(x14) {
+    let s = sigmoid_scalar(x14[i])
+    expect14 = expect14 + [s * (1.0 - s)]
+}
+check("T14 sigmoid naive matches closed form", vec_close(dx14_n, expect14, tol))
+check("T14 sigmoid fused matches closed form", vec_close(dx14_f, expect14, tol))
+update_global_max(vec_max_diff(dx14_n, dx14_f))
+
+// ── T15  identity backward: dx == dz ─────────────────────────────
+let ops15 = [op_bwd_identity()]
+let dx15_n = backward_chain_naive(dz8, x8, ops15)
+let dx15_f = backward_chain_fused(dz8, x8, ops15)
+check("T15 identity naive dx == dz", vec_close(dx15_n, dz8, tol))
+check("T15 identity fused dx == dz", vec_close(dx15_f, dz8, tol))
+
+// ── T16  Two-op chain: mul(2) then mul(3) → dx = 6·dz ────────────
+let ops16 = [op_bwd_mul_const(2.0), op_bwd_mul_const(3.0)]
+let dz16  = [0.5, -0.5, 1.0]
+let x16   = [0.1, 0.2, 0.3]
+let dx16_n = backward_chain_naive(dz16, x16, ops16)
+let dx16_f = backward_chain_fused(dz16, x16, ops16)
+let mut expect16 = []
+let mut i = 0
+
+while i < len(dz16) {
+    expect16 = expect16 + [6.0 * dz16[i]]
+}
+check("T16 mul·mul naive == 6·dz", vec_close(dx16_n, expect16, tol))
+check("T16 mul·mul fused == 6·dz", vec_close(dx16_f, expect16, tol))
+update_global_max(vec_max_diff(dx16_n, dx16_f))
+
+// ── T17  Three-op chain: add then mul then relu ──────────────────
+// fwd: v0=x, v1=x+1, v2=2(x+1), v3=relu(2(x+1))
+// bwd: dx = 1 · 2 · step(2(x+1)) · dz
+let ops17 = [op_bwd_add_const(1.0), op_bwd_mul_const(2.0), op_bwd_relu()]
+let x17   = [0.0 - 2.0, 0.0 - 0.5, 0.0, 0.5, 2.0]
+let dz17  = [1.0, 1.0, 1.0, 1.0, 1.0]
+let dx17_n = backward_chain_naive(dz17, x17, ops17)
+let dx17_f = backward_chain_fused(dz17, x17, ops17)
+check("T17 add·mul·relu naive == fused", vec_close(dx17_n, dx17_f, tol))
+update_global_max(vec_max_diff(dx17_n, dx17_f))
+
+// ── T18  Single-element input ────────────────────────────────────
+let dz18  = [2.0]
+let x18   = [1.0]
+let ops18 = [op_bwd_mul_const(5.0)]
+let dx18  = backward_chain_fused(dz18, x18, ops18)
+check("T18 single-elem N=1",  len(dx18) == 1)
+check("T18 single-elem value", fabs_t(dx18[0] - 10.0) < tol)
+
+// ── T19  Long mixed chain — random seed parity ───────────────────
+let seeds19 = [7, 13, 23, 41, 61]
+let sizes19 = [4, 8, 16, 32, 64]
+let mut k = 0
+
+while k < 5 {
+    let n  = sizes19[k]
+    let sd = seeds19[k]
+    let x  = rand_vec(n, sd * 3)
+    let dz = rand_vec(n, sd * 5)
+    // Mixed chain of seven ops — one of each kind.
+    let ops = [
+        op_bwd_add_const(0.25),
+        op_bwd_mul_const(0.5),
+        op_bwd_tanh(),
+        op_bwd_sub_const(0.1),
+        op_bwd_relu(),
+        op_bwd_sigmoid(),
+        op_bwd_identity()
+    ]
+    let dxn = backward_chain_naive(dz, x, ops)
+    let dxf = backward_chain_fused(dz, x, ops)
+    let ok  = vec_close(dxn, dxf, tol)
+    update_global_max(vec_max_diff(dxn, dxf))
+    check("T19 mixed chain fused==naive N=" + to_string(n)
+          + " seed=" + to_string(sd), ok)
+}
+
+// ── T20  detect_fusable_chain — all defined tags ─────────────────
+let all_ops = [
+    op_bwd_add_const(1.0),
+    op_bwd_sub_const(1.0),
+    op_bwd_mul_const(1.0),
+    op_bwd_relu(),
+    op_bwd_tanh(),
+    op_bwd_sigmoid(),
+    op_bwd_identity()
+]
+check("T20 all defined ops are fusable", detect_fusable_chain(all_ops))
+
+// ── T21  detect_fusable_chain — empty chain is fusable ───────────
+check("T21 empty chain is fusable", detect_fusable_chain([]))
+
+// ── T22  detect_fusable_chain — invalid tag rejected ─────────────
+let bad = [BwdOp { tag: 42, c: 0.0 }]
+check("T22 invalid tag NEG", !detect_fusable_chain(bad))
+
+// ── T23  detect_fusable_chain — negative tag rejected ────────────
+let bad2 = [BwdOp { tag: 0 - 1, c: 0.0 }]
+check("T23 negative tag NEG", !detect_fusable_chain(bad2))
+
+// ── T24  rewrite_chain — identity (fusable passes through) ───────
+let rw = rewrite_chain(all_ops)
+check("T24 rewrite_chain length preserved", len(rw) == len(all_ops))
+let mut tags_match = true
+let mut i = 0
+
+while i < len(rw) {
+    if rw[i].tag != all_ops[i].tag { tags_match = false }
+}
+check("T24 rewrite_chain tags preserved", tags_match)
+
+// ── T25  Allocation accounting — naive = len(ops) (or 1 if empty) ─
+check("T25 naive alloc(7-op) == 7",  naive_bwd_alloc_count(all_ops)  == 7)
+check("T25 naive alloc(empty) == 1", naive_bwd_alloc_count([])       == 1)
+check("T25 fused alloc(7-op) == 1",  fused_bwd_alloc_count(all_ops)  == 1)
+check("T25 fused alloc(empty) == 1", fused_bwd_alloc_count([])       == 1)
+
+// ── T26  dz = 0 → dx = 0 for any chain ───────────────────────────
+let dz26 = [0.0, 0.0, 0.0]
+let x26  = [1.0, 2.0, 3.0]
+let dx26 = backward_chain_fused(dz26, x26, all_ops)
+let mut all_zero = true
+let mut i = 0
+
+while i < len(dx26) {
+    if fabs_t(dx26[i]) > tol { all_zero = false }
+}
+check("T26 dz=0 → dx=0", all_zero)
+
+// ── T27  Deep chain — 10× mul_const(1.0) → dx == dz ──────────────
+let ops27 = [
+    op_bwd_mul_const(1.0), op_bwd_mul_const(1.0),
+    op_bwd_mul_const(1.0), op_bwd_mul_const(1.0),
+    op_bwd_mul_const(1.0), op_bwd_mul_const(1.0),
+    op_bwd_mul_const(1.0), op_bwd_mul_const(1.0),
+    op_bwd_mul_const(1.0), op_bwd_mul_const(1.0)
+]
+let dz27 = [0.7, 0.3, 0.9]
+let x27  = [1.0, 2.0, 3.0]
+let dx27 = backward_chain_fused(dz27, x27, ops27)
+check("T27 deep mul(1)×10 dx == dz", vec_close(dx27, dz27, tol))
+
+// ── T28  Global max_abs_diff across all fused-vs-naive checks ────
+check("T28 global max_abs_diff ≤ 1e-6",
+      max_abs_diff_global <= tol)
+
+// ══════════════════════════════════════════════════════════════════
+println("═══════════════════════════════════════════════════════")
+println("  max_abs_diff = " + to_string(max_abs_diff_global))
+println("  Results: " + to_string(pass_count) + " PASS / "
+        + to_string(fail_count) + " FAIL")
+println("═══════════════════════════════════════════════════════")
+
+if fail_count == 0 {
+    println("[ALL PASS] ROI #102 backward_fuse verified")
+}
