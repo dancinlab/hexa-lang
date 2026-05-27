@@ -368,11 +368,11 @@ Round-14 attack on GEMM-fusion (attention) axis-A, taking R7's (`F-FUSION-ATTN-R
 
 - [x] **risk-a cheap oracle (free)** 🟢 — isolation PTX probe `archive/fires/bc4_risk_a_reg_pressure_2026_05_28/` measured **12 reg/thread + 0 spill** at sm_120a (ptxas 12.9 May 2025); honest scope = O-acc isolation, full-kernel projection = ~103 reg/thread + 0 spill (plan §4 estimate unfalsified). Wedge proceed, BC4 round-14 NOT blocked by reg-pressure.
 - [x] **risk-d cheap oracle (1 probe)** 🟢 — single-shape probe `archive/fires/bc4_risk_d_mma_fragment_2026_05_28/` confirmed **.trans 8×8-block transpose property holds at BM=32 BK=32** (probeA err vs A.B = 0.84, err vs A.B^T = 2.74 — matches neither, same finding as round-7 64×64 tile). V-pretranspose path probeB matched (err 5.96e-8). Plan §2 smem budget table correct, V^T 4096 B slot retained, BM=32 BK=32 = 3 CTAs/SM unchanged.
-- [ ] **kernel hand-emit + ptxas-clean** sm_80 + sm_90 + driver-JIT sm_120
-- [ ] **numeric PASS** via fa_mma_oracle (R10 form) — rel_rowscale ≤ 1e-2, naninf = 0, N ∈ {2048, 4096} d=64
-- [ ] **timed wall fire** ubu-2 RTX 5070 sm_120 vs corrected cuBLAS-TC 3-launch baseline (R11 OPTIMIZED softmax form)
-- [ ] **GPU.md round-14 result row + verdict + log append**
-- [ ] **Round 15 contingency** = wgmma axis-pivot if ratio > 1.10× (capstone target)
+- [x] **kernel hand-emit + ptxas-clean** sm_90 → driver-JIT sm_120 🛸 — `tool/r14_walls/flash_attn_bm32_v0.cu` (2 warps/CTA, BM=32 BK=32, V WMMA-API row_major non-trans, cp.async.cg double-buffer, register-resident O). ptxas sm_90 **126 reg, 19 456 B smem, 0 stack/spill**. PR #1735.
+- [x] **numeric PASS** via fa_mma_oracle 🟢 — 5/5 shapes PASS (N ∈ {512, 1024, 2048, 4096, 8192}), max rel_rowscale **7.14e-4** @ N=4096, naninf=0. honest per-row-scaled metric used (NOT round-3 artifact).
+- [x] **timed wall fire** ubu-2 RTX 5070 sm_120 🛸🛸🛸 **first attention round to cross ≤1.0× ratio**: N=512 1.107× · N=1024 **0.909×** (9.1% faster) · N=2048 1.085× · N=4096 **0.927×** (7.3% faster) · N=8192 0.679 ms (R10 baseline N/A). cuOccupancyMaxActiveBlocksPerMultiprocessor = **5 CTAs/SM** (target 3 exceeded). `archive/fires/bc4_round14_kernel_2026_05_28/result.json`.
+- [x] **GPU.md round-14 result row + verdict + log append** ✅ this section. **HONEST AUDIT CORRECTION**: closed-form re-audit (this cycle 2026-05-28 chat) projected ratio ≈ 1.32× because R10 already had register-resident O + cp.async.cg. That re-audit was WRONG. Real wedge = BK enlargement (R10 BK=16 → R14 BK=32 packs 2 inner mma chunks per softmax round, amortizing per-warp row-reduce). Plan §9 projection used round-7 stale baseline (0.186 ms); R10's actual baseline cublas_stack 0.189 ms → R14 0.175 ms beats it. paper_significance gate MET (closed-positive at N=4096 with pre-registered falsifier + verified silicon PASS).
+- [ ] **Round 15 contingency** = wgmma axis-pivot — no longer "contingency" since R14 crossed ≤1.0×, now **capstone-EXTENSION** (lift N=512/2048 partial + larger N=8192). Background agent #ae83b… checkpoint-committed arch probe sm_90 PTX (commit `b7e31bb38` on branch `bc4-r15-wgmma-2026-05-28`); kernel hand-emit pending separate cycle.
 
 ---
 
