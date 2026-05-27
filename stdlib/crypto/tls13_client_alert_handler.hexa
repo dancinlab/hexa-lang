@@ -1,0 +1,112 @@
+// HEXA Standard Library — crypto/tls13_client_alert_handler
+//
+// @version 0.1.0
+// @capabilities [network, ffi]
+//
+// TLS 1.3 client ALERT record parser — RFC 8446 §6.
+//
+// RUNTIME.flip.md B1.tls13-alert-handler: parse a received TLS record whose
+// outer content_type = 0x15 (Alert) into a (level, description) pair so the
+// driver can decide between session continuation (warning) and abort (fatal).
+//
+// Alert record body (RFC 8446 §6):
+//   struct { AlertLevel level; AlertDescription description; } Alert;
+//   AlertLevel       ∈ { warning(1), fatal(2) }
+//   AlertDescription ∈ { close_notify(0), unexpected_message(10),
+//                        bad_record_mac(20), handshake_failure(40),
+//                        illegal_parameter(47), decode_error(50),
+//                        decrypt_error(51), ... }
+// Per RFC 8446 §5.1 / §6, alert payload occupies the 2 bytes immediately
+// after the 5-byte TLS record header — so rec[5] = level, rec[6] = desc.
+//
+// Surface:
+//   tls13_alert_level_warning() -> int           (= 1)
+//   tls13_alert_level_fatal()   -> int           (= 2)
+//   tls13_alert_desc_close_notify()        -> int (= 0)
+//   tls13_alert_desc_unexpected_message()  -> int (= 10)
+//   tls13_alert_desc_bad_record_mac()      -> int (= 20)
+//   tls13_alert_desc_handshake_failure()   -> int (= 40)
+//   tls13_alert_desc_illegal_parameter()   -> int (= 47)
+//   tls13_alert_desc_decode_error()        -> int (= 50)
+//   tls13_alert_desc_decrypt_error()       -> int (= 51)
+//
+//   tls13_client_parse_alert_record(rec: [int]) -> Tls13AlertOutcome
+//     Validate record header (≥ 5 bytes, content_type = 0x15), then read
+//     2-byte alert body. `kind` discriminator:
+//       "ok"               — header + body parsed, level/description filled
+//       "short-record"     — len(rec) < 5
+//       "non-alert-record" — content_type != 0x15 (error_got = ct received)
+//       "short-alert"      — header ok but len(rec) < 7 (body truncated)
+//
+// Out-of-scope (sibling files / follow-ups):
+//   - decrypting an alert delivered inside an encrypted record
+//     (tls13_client_record_io.tls13_open_app_record handles outer AEAD;
+//      pass its inner_plaintext + inner_content_type to a future
+//      tls13_parse_inner_alert helper)
+//   - mapping description codes to human strings (diagnostic-layer; this
+//     module stays bytes-in / int-out for codegen stability)
+
+use "stdlib/crypto/tls13_wire"
+
+// TLS 1.3 record content type for Alert (RFC 8446 §5.1).
+let _TLS_REC_ALERT_LOCAL: int = 0x15
+
+// Parsed Alert record outcome. `kind` discriminates the case; on "ok" both
+// level and description are filled. error_got carries diagnostic info for
+// the non-ok branches (received content_type, or actual length for
+// short-record / short-alert).
+struct Tls13AlertOutcome {
+    kind:        str,
+    level:       int,
+    description: int,
+    error_got:   int
+}
+
+// RFC 8446 §6 AlertLevel constants.
+pub fn tls13_alert_level_warning() -> int { return 1 }
+pub fn tls13_alert_level_fatal()   -> int { return 2 }
+
+// RFC 8446 §6 common AlertDescription constants (subset most likely to
+// surface during a fresh handshake / app-data IO loop).
+pub fn tls13_alert_desc_close_notify()       -> int { return 0 }
+pub fn tls13_alert_desc_unexpected_message() -> int { return 10 }
+pub fn tls13_alert_desc_bad_record_mac()     -> int { return 20 }
+pub fn tls13_alert_desc_handshake_failure()  -> int { return 40 }
+pub fn tls13_alert_desc_illegal_parameter()  -> int { return 47 }
+pub fn tls13_alert_desc_decode_error()       -> int { return 50 }
+pub fn tls13_alert_desc_decrypt_error()      -> int { return 51 }
+
+// Helper: build an Tls13AlertOutcome populated only with error-class fields.
+fn _alert_error(kind: str, got: int) -> Tls13AlertOutcome {
+    return Tls13AlertOutcome {
+        kind:        kind,
+        level:       0,
+        description: 0,
+        error_got:   got
+    }
+}
+
+// Validate the outer record header, then read the 2-byte Alert body.
+// Returns a Tls13AlertOutcome discriminated by `kind`. The caller decides
+// whether to close the connection (fatal, or close_notify) or continue
+// (warning with non-close_notify description — rare in TLS 1.3).
+pub fn tls13_client_parse_alert_record(rec: [int]) -> Tls13AlertOutcome {
+    if len(rec) < 5 {
+        return _alert_error("short-record", len(rec))
+    }
+    let ct = tls13_record_type(rec, 0)
+    if ct != _TLS_REC_ALERT_LOCAL {
+        return _alert_error("non-alert-record", ct)
+    }
+    if len(rec) < 7 {
+        return _alert_error("short-alert", len(rec))
+    }
+    let level = rec[5] & 0xFF
+    let desc  = rec[6] & 0xFF
+    return Tls13AlertOutcome {
+        kind:        "ok",
+        level:       level,
+        description: desc,
+        error_got:   0
+    }
+}
