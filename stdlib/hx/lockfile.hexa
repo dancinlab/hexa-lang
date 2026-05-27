@@ -1,0 +1,140 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  stdlib/hx/lockfile.hexa — TOML-like lockfile read/write
+//
+//  @module(slug="hx/lockfile", desc="Lockfile parse + render for hx package
+//                                    manager — TOML-like single-line entries")
+//  @usage(use "stdlib/hx/lockfile"; let entries = lockfile_parse(content); ...)
+//
+//  ── module governance metadata ─────────────────────────────────────────────
+//  @version 0.1.0
+//  @capabilities [lockfile_render_entry, lockfile_render, lockfile_parse]
+//  @stability preview
+//  @since 2026-05-28
+//  @maintainer hexa-core
+//  @priority P0
+//
+//  ── PROBLEM (RUNTIME.flip B8.hx-lockfile) ──────────────────────────────────
+//
+//  The hx package manager needs a way to persist resolved dependency snapshots
+//  (name + version + content hash) across invocations so repeated installs
+//  are reproducible. This module is the read/write half — a tiny, line-oriented,
+//  TOML-flavored format that any consumer can produce and consume without a
+//  heavyweight TOML parser. Pure: no shell, no fs, no network — just string
+//  rendering + parsing. The caller owns the I/O.
+//
+//  ── PUBLIC API ─────────────────────────────────────────────────────────────
+//
+//   struct LockEntry { name: str, version: str, hash: str }
+//
+//   lockfile_render_entry(e: LockEntry) -> str
+//       Render a single entry as one TOML-like line:
+//         name = "X" version = "Y" hash = "Z"
+//       No trailing newline. No escaping — names/versions/hashes are
+//       expected to be ASCII identifiers / dotted versions / hex digests.
+//
+//   lockfile_render(entries: [LockEntry]) -> str
+//       Render every entry on its own line, joined by "\n", with a single
+//       trailing "\n". An empty array renders as "".
+//
+//   lockfile_parse(content: str) -> [LockEntry]
+//       Split `content` on "\n". For each non-blank line, naively extract
+//       the `name = "..."`, `version = "..."`, `hash = "..."` tokens via
+//       substring scanning. Lines missing any of the three fields are
+//       SKIPPED (best-effort — never panics). Returns the array of entries
+//       in source order.
+//
+//  ── FORMAT NOTES ───────────────────────────────────────────────────────────
+//   · One entry per line; field order is fixed at render time but the
+//     parser locates each field independently so manually-edited files with
+//     re-ordered fields still parse.
+//   · Quote character is the ASCII double quote (0x22). No escapes are
+//     interpreted (a literal `\"` inside a value will end the field early —
+//     by convention hx inputs do not contain quotes).
+//   · Blank lines are tolerated; whitespace inside `name = "..."` (between
+//     the equals and the quote) is NOT — the parser keys off the exact
+//     literal `name = "` / `version = "` / `hash = "` token prefixes.
+//
+//  ── See also ──────────────────────────────────────────────────────────────
+//   · stdlib/hx/semver.hexa          — sibling, ships alongside (B8.hx-semver)
+//   · RUNTIME.flip.md §B8            — backlog entry
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── lock entry ─────────────────────────────────────────────────────────────
+
+pub struct LockEntry {
+    name: str,
+    version: str,
+    hash: str
+}
+
+// ── tiny pure string helpers (self-contained — no stdlib import) ───────────
+
+// Index of first occurrence of substring `needle` in `s` starting at `from`,
+// or -1 if not found.
+fn _lf_index_from(s: str, needle: str, from: int) -> int {
+    let ln = len(needle)
+    if ln == 0 { return from }
+    let ls = len(s)
+    if from < 0 { return -1 }
+    let mut i = from
+    let last = ls - ln
+    while i < last + 1 {
+        if s.substring(i, i + ln) == needle { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+// Extract the quoted value that follows `key` in `line`. Returns
+// #{ "ok": bool, "v": str }. The token sought is exactly `<key> = "` and
+// the value runs until the next `"`. If either anchor is missing, ok=false.
+fn _lf_field(line: str, key: str) -> map {
+    let anchor = key + " = \""
+    let p = _lf_index_from(line, anchor, 0)
+    if p < 0 { return #{ "ok": false, "v": "" } }
+    let start = p + len(anchor)
+    let q = _lf_index_from(line, "\"", start)
+    if q < 0 { return #{ "ok": false, "v": "" } }
+    return #{ "ok": true, "v": line.substring(start, q) }
+}
+
+// ── render ─────────────────────────────────────────────────────────────────
+
+pub fn lockfile_render_entry(e: LockEntry) -> str {
+    return "name = \"" + e.name + "\" version = \"" + e.version + "\" hash = \"" + e.hash + "\""
+}
+
+pub fn lockfile_render(entries: [LockEntry]) -> str {
+    if len(entries) == 0 { return "" }
+    let mut out = ""
+    let mut i = 0
+    while i < len(entries) {
+        if i > 0 { out = out + "\n" }
+        out = out + lockfile_render_entry(entries[i])
+        i = i + 1
+    }
+    return out + "\n"
+}
+
+// ── parse ──────────────────────────────────────────────────────────────────
+
+pub fn lockfile_parse(content: str) -> [LockEntry] {
+    let mut out: [LockEntry] = []
+    if type_of(content) != "string" { return out }
+    if len(content) == 0 { return out }
+    let lines = content.split("\n")
+    let mut i = 0
+    while i < len(lines) {
+        let line = lines[i]
+        i = i + 1
+        if len(line.trim()) == 0 { continue }
+        let n = _lf_field(line, "name")
+        if !n["ok"] { continue }
+        let v = _lf_field(line, "version")
+        if !v["ok"] { continue }
+        let h = _lf_field(line, "hash")
+        if !h["ok"] { continue }
+        out.push(LockEntry{ name: n["v"], version: v["v"], hash: h["v"] })
+    }
+    return out
+}
