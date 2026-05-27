@@ -73,6 +73,9 @@ pub fn calc_is_float_fn(fn_name: string) -> bool {
         || fn_name == "london_penetration_depth" || fn_name == "thermo_critical_field"
         || fn_name == "condensation_energy" || fn_name == "bcs_gap_zero"
         || fn_name == "pippard_coherence"
+        // Superconductivity tranche 3 (RTSC #16 Type-II + multi-band · INBOX #1624 · 2026-05-27):
+        || fn_name == "london_hc1" || fn_name == "bean_critical_current"
+        || fn_name == "two_band_lambda_eff"
         // Antiproton pair-production threshold (ANTIMATTER ⓵생성 · 2026-05-25):
         || fn_name == "pair_threshold_kinetic" || fn_name == "pair_threshold_total"
         // AD/ELENA deceleration-ladder relativistic kinematics (ANTIMATTER ⓶감속 · 2026-05-25):

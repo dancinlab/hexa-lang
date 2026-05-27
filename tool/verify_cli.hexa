@@ -349,6 +349,9 @@ fn cmd_rubric() {
     println("             london_penetration_depth(n_s) → sqrt(m_e/(μ₀·n_s·e²))  (London penetration depth λ_L, RTSC #15, 1-arg)")
     println("             thermo_critical_field(Hc0,T,Tc) → Hc0·(1-(T/Tc)²)   (Tuyn parabolic critical field, RTSC #15, 3-arg)")
     println("             condensation_energy(Bc0)    → Bc0²/(2μ₀)           (SC condensation energy density, RTSC #15, 1-arg)")
+    println("             london_hc1(λ_L,κ)          → (Φ₀/4πλ_L²)(ln κ+0.5)  (Type-II lower critical field Hc1, RTSC #16, 2-arg)")
+    println("             bean_critical_current(Jc,d) → Jc·d/2               (Bean critical-state magnetization, RTSC #16, 2-arg)")
+    println("             two_band_lambda_eff(λσ,λπ,λi) → larger 2-band root  (MgB₂-type effective coupling, RTSC #16, 3-arg)")
     println("             bcs_gap_zero(Tc)            → 1.764·k_B·Tc         (BCS zero-T energy gap Δ(0), RTSC, 1-arg)")
     println("             pippard_coherence(v_F,Tc)   → ħ·v_F/(π·1.764·k_B·Tc)  (Pippard intrinsic coherence ξ₀, RTSC #15, 2-arg)")
     println("             viola_seaborg_log10_t(Z,Qα) → (aZ+b)/√Qα+(cZ+d)     (Viola-Seaborg α-decay log10 T₁/₂[s], NUCLEAR N7/N11, 2-arg)")
@@ -1666,6 +1669,46 @@ fn _thermo_critical_field(hc_zero: float, temp_k: float, tc_k: float) -> float {
 fn _condensation_energy(bc_zero_t: float) -> float {
     let mu0 = 1.25663706212e-6
     return bc_zero_t * bc_zero_t / (2.0 * mu0)
+}
+
+// Type-II lower critical field Hc1(0) (London-vortex onset):
+//   Hc1(0) = (Φ₀ / (4π·λ_L²)) · (ln κ + 0.5)
+// 2-arg (λ_L in metres, κ = λ_L/ξ dimensionless → Hc1 in tesla). Tinkham 1996
+// Eq.5.10. CODATA 2018 Φ₀ = h/2e = 2.067833848e-15 Wb. Source: λ_L=200 nm, κ=2
+// → 2.067833848e-15/(4π·4e-14)·(ln2+0.5) ≈ 0.00505 T (5.05 mT, typical Type-II).
+// INBOX #1624 — closes RTSC paper §Limitations device-side Hc1 gap.
+fn _london_hc1(lambda_l_m: float, kappa: float) -> float {
+    if lambda_l_m <= 0.0 { return _NOCALC_F }
+    if kappa <= 0.0 { return _NOCALC_F }
+    let phi0 = 2.067833848e-15
+    let four_pi = 12.56637061435917295385
+    return (phi0 / (four_pi * lambda_l_m * lambda_l_m)) * (log(kappa) + 0.5)
+}
+
+// Bean critical-state model magnetization (full-penetration slab):
+//   M = Jc · d / 2
+// 2-arg (Jc in A/m², slab thickness d in metres → M in A/m). Bean 1962 PRL
+// 8:250 (critical-state model). Source: Jc=1e10 A/m², d=1e-6 m → M = 5000 A/m
+// (typical thin-film high-Tc value). INBOX #1624 — RTSC Jc-side surface.
+fn _bean_critical_current(jc_a_m2: float, d_m: float) -> float {
+    if jc_a_m2 < 0.0 { return _NOCALC_F }
+    if d_m < 0.0 { return _NOCALC_F }
+    return jc_a_m2 * d_m / 2.0
+}
+
+// Two-band (MgB₂-type) effective electron-phonon coupling λ_eff:
+//   λ_eff = (λ_σ + λ_π)/2 + sqrt( ((λ_σ − λ_π)/2)² + λ_inter² )
+// 3-arg (intra-band σ, intra-band π, inter-band coupling). Larger root of the
+// 2×2 coupling matrix (Suhl-Matthias-Walker 1959 PRL 3:552 two-band BCS). Feed
+// λ_eff into allen_dynes_tc for the multi-band Tc. Source: MgB₂ λ_σ=1.0,
+// λ_π=0.4, λ_inter=0.05 → 0.7 + sqrt(0.09+0.0025) = 0.7+0.3041 = 1.0041.
+// INBOX #1624 — closes RTSC paper §Limitations single-band assumption.
+fn _two_band_lambda_eff(lambda_sigma: float, lambda_pi: float, lambda_inter: float) -> float {
+    if lambda_sigma < 0.0 { return _NOCALC_F }
+    if lambda_pi < 0.0 { return _NOCALC_F }
+    let avg = (lambda_sigma + lambda_pi) / 2.0
+    let half_diff = (lambda_sigma - lambda_pi) / 2.0
+    return avg + sqrt(half_diff * half_diff + lambda_inter * lambda_inter)
 }
 
 // ── Antiproton pair-production threshold (ANTIMATTER ⓵생성) ────────────
@@ -3361,6 +3404,18 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, a2: float, a3: float,
     }
     if fn_name == "condensation_energy" {
         return _condensation_energy(a0)
+    }
+    if fn_name == "london_hc1" {
+        if argc < 2 { return _NOCALC_F }
+        return _london_hc1(a0, a1)
+    }
+    if fn_name == "bean_critical_current" {
+        if argc < 2 { return _NOCALC_F }
+        return _bean_critical_current(a0, a1)
+    }
+    if fn_name == "two_band_lambda_eff" {
+        if argc < 3 { return _NOCALC_F }
+        return _two_band_lambda_eff(a0, a1, a2)
     }
     if fn_name == "bcs_gap_zero" {
         return _bcs_gap_zero(a0)
