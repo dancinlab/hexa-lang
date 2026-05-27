@@ -1,0 +1,146 @@
+// HEXA Standard Library — lsp/completion_doc_extract
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// LSP completion-item doc extraction — RUNTIME.flip B8.
+//
+// Convention:
+//   - A `///` (triple-slash) comment line directly above a `pub fn` line is
+//     the canonical LSP doc. Consecutive `///` lines (no blank or other
+//     content between them) form one docstring, joined with newlines in
+//     source order.
+//   - Fallback: if no `///` is present, the immediately-preceding contiguous
+//     block of `//` (single-slash, non-`///`) comment lines is used.
+//
+// Pure: no I/O. Caller passes the already-split source as `[str]` plus the
+// 0-based index of the `pub fn` line. Returns "" when nothing applies.
+//
+// Surface:
+//   pub fn lsp_extract_triple_slash_doc(source_lines: [str], pub_fn_line_index: int) -> str
+//   pub fn lsp_extract_inline_double_slash_doc(source_lines: [str], pub_fn_line_index: int) -> str
+//   pub fn lsp_doc_combine(triple: str, inline: str) -> str
+
+// Strip leading ASCII spaces and tabs.
+fn _ltrim(s: str) -> str {
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        let ch = char_at(s, i)
+        if ch != " " && ch != "\t" { break }
+        i = i + 1
+    }
+    if i == 0 { return s }
+    let mut out = ""
+    let mut j = i
+    while j < n {
+        out = out + char_at(s, j)
+        j = j + 1
+    }
+    return out
+}
+
+// True when `s` begins with `prefix` (after `char_at` comparison).
+fn _starts_with(s: str, prefix: str) -> bool {
+    let pn = len(prefix)
+    if pn > len(s) { return false }
+    let mut i = 0
+    while i < pn {
+        if char_at(s, i) != char_at(prefix, i) { return false }
+        i = i + 1
+    }
+    return true
+}
+
+// Drop the leading marker (e.g. "///" or "//") and one optional space.
+fn _strip_marker(line: str, marker_len: int) -> str {
+    let n = len(line)
+    let mut i = marker_len
+    if i < n {
+        let ch = char_at(line, i)
+        if ch == " " { i = i + 1 }
+    }
+    let mut out = ""
+    let mut j = i
+    while j < n {
+        out = out + char_at(line, j)
+        j = j + 1
+    }
+    return out
+}
+
+// Join a list of stripped doc fragments with newlines, in source order.
+fn _join_lines(parts: [str]) -> str {
+    let m = len(parts)
+    if m == 0 { return "" }
+    let mut out = parts[0]
+    let mut i = 1
+    while i < m {
+        out = out + "\n" + parts[i]
+        i = i + 1
+    }
+    return out
+}
+
+// Collect a contiguous run of `///` lines immediately above the pub-fn line.
+// Stop at any non-`///` line (including blank, plain `//`, or code).
+pub fn lsp_extract_triple_slash_doc(source_lines: [str], pub_fn_line_index: int) -> str {
+    if pub_fn_line_index <= 0 { return "" }
+    if pub_fn_line_index > len(source_lines) { return "" }
+    let mut i = pub_fn_line_index - 1
+    let collected = []
+    while i >= 0 {
+        let line = _ltrim(source_lines[i])
+        if !_starts_with(line, "///") { break }
+        // `////` (4+ slashes) is treated as still triple-slash doc; preserve any
+        // additional content past the standard 3-char marker.
+        let stripped = _strip_marker(line, 3)
+        collected.push(stripped)
+        i = i - 1
+    }
+    let n = len(collected)
+    if n == 0 { return "" }
+    // `collected` is bottom-up; reverse into source order.
+    let ordered = []
+    let mut k = n - 1
+    while k >= 0 {
+        ordered.push(collected[k])
+        k = k - 1
+    }
+    return _join_lines(ordered)
+}
+
+// Fallback: collect the contiguous block of plain `//` (non-`///`) lines
+// immediately above the pub-fn line. Stops at the first blank, `///`, or
+// code line. Returns "" if none.
+pub fn lsp_extract_inline_double_slash_doc(source_lines: [str], pub_fn_line_index: int) -> str {
+    if pub_fn_line_index <= 0 { return "" }
+    if pub_fn_line_index > len(source_lines) { return "" }
+    let mut i = pub_fn_line_index - 1
+    let collected = []
+    while i >= 0 {
+        let line = _ltrim(source_lines[i])
+        if !_starts_with(line, "//") { break }
+        if _starts_with(line, "///") { break }
+        let stripped = _strip_marker(line, 2)
+        collected.push(stripped)
+        i = i - 1
+    }
+    let n = len(collected)
+    if n == 0 { return "" }
+    let ordered = []
+    let mut k = n - 1
+    while k >= 0 {
+        ordered.push(collected[k])
+        k = k - 1
+    }
+    return _join_lines(ordered)
+}
+
+// Prefer the triple-slash doc; fall back to the inline `//` block.
+// Returns "" only when both are empty.
+pub fn lsp_doc_combine(triple: str, inline: str) -> str {
+    if len(triple) > 0 { return triple }
+    if len(inline) > 0 { return inline }
+    return ""
+}
