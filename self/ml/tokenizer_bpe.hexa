@@ -47,7 +47,7 @@ fn build_byte_to_char() {
             table.push(chr(i))
         } else {
             // Non-printable bytes get mapped to 256+ range
-            table.push(chr(256 + i))
+            table.push(from_char_code(256 + i))
         }
         i = i + 1
     }
