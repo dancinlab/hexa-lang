@@ -4,6 +4,20 @@
 > 어떤 파일을 hexa-native 로 포팅 가능한지(layer ①) vs 어떤 파일이 정직한 floor
 > 로 C 에 남아야 하는지(layer ③/②) 를 판별한다. **어떤 `.c` 도 수정/삭제하지 않음.**
 
+> **⚠ 범위 정정 (B9.6h · 2026-05-28)**: 본 감사는 `self/native/*.c` (28 floor 파일)
+> 만 다룬다. 전-repo `.c` 분포 스캔 결과, repo 전체 `.c` 카운트의 **bulk 은
+> runtime/vendor floor 가 아니라 DEAD experiment scaffolding** 이었음 —
+> `archive/fires/` 87 (GPU-fire host wrapper: cuBLAS baseline · wmma host ·
+> roofline · rfc067 sgemm host · rfc071 silicon) + `tool/` probe-host 68
+> (adamw/exp/layernorm/logsumexp/probe_*/r067-r070/sweep). 이들은 fire harness
+> 일 뿐 — valuable findings 는 `result.json`/`.verdicts/`/papers/`.ptx` 에 보존됨.
+> **B9.6h 가 verify-dead 후 127 파일 삭제 (`.c` 226→99 · A merged #1823 / B #1825
+> / C #1826)**. KEPT-LIVE: flame_phase4* byte-eq battery(`verify_all.sh` 동적
+> 컴파일) · sscb/hal firmware(Makefile) · hxpyembed/hxnccl(cmake/@link) ·
+> self/cuda·self/forge(build/dispatch) 등. 즉 "clean `.c` 삭제 고갈" 결론은
+> `self/native/` 에만 국한된 좁은 결론이었고, floor 와 무관한 dead harness 가
+> 대량 존재했다.
+
 ## 배경 — 레이어 정의
 
 RUNTIME.md north-star("`.hexa`-ONLY · zero `.c`") 와 step3/step4 메모리
