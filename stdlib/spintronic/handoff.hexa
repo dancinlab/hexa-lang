@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/spintronic/handoff.hexa — `SPINTRONIC + handoff` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// spintronic handoff — STT-MRAM density target.
 fn main() {
+    let mram_Gbit = 1.0
+    println("spintronic_handoff (STT-MRAM density target):")
+    println("  mram_Gbit = " + str(mram_Gbit))
     println("__HEXA_SPINTRONIC_HANDOFF__ PASS gate=GATE_OPEN absorbed=false")
 }

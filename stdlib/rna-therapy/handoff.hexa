@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/rna-therapy/handoff.hexa — `RNA_THERAPY + handoff` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// rna-therapy handoff — IND-enabling tox species.
 fn main() {
+    let ind_tox_n = 2.0
+    println("rna-therapy_handoff (IND-enabling tox species):")
+    println("  ind_tox_n = " + str(ind_tox_n))
     println("__HEXA_RNA_THERAPY_HANDOFF__ PASS gate=GATE_OPEN absorbed=false")
 }

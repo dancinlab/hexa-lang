@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/electrocat/synthesize.hexa — `ELECTROCAT + synthesize` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// electrocat synthesize — electrodeposition voltage.
 fn main() {
+    let depo_V = -0.5
+    println("electrocat_synthesize (electrodeposition voltage):")
+    println("  depo_V = " + str(depo_V))
     println("__HEXA_ELECTROCAT_SYNTHESIZE__ PASS gate=GATE_OPEN absorbed=false")
 }

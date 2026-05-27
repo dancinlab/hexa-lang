@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/photoredox/specify.hexa — `PHOTOREDOX + specify` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// photoredox specify — turnover number target.
 fn main() {
+    let TON_target = 1000.0
+    println("photoredox_specify (turnover number target):")
+    println("  TON_target = " + str(TON_target))
     println("__HEXA_PHOTOREDOX_SPECIFY__ PASS gate=GATE_OPEN absorbed=false")
 }

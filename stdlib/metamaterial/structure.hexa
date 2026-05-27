@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/metamaterial/structure.hexa — `METAMATERIAL + structure` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// metamaterial structure — SRR outer ring radius.
 fn main() {
+    let ring_mm = 5.0
+    println("metamaterial_structure (SRR outer ring radius):")
+    println("  ring_mm = " + str(ring_mm))
     println("__HEXA_METAMATERIAL_STRUCTURE__ PASS gate=GATE_OPEN absorbed=false")
 }

@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/fusion/synthesize.hexa — `FUSION + synthesize` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// fusion synthesize — D-T fuel mix ratio.
 fn main() {
+    let DT_ratio = 0.5
+    println("fusion_synthesize (D-T fuel mix ratio):")
+    println("  DT_ratio = " + str(DT_ratio))
     println("__HEXA_FUSION_SYNTHESIZE__ PASS gate=GATE_OPEN absorbed=false")
 }

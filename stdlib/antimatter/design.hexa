@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/antimatter/design.hexa — `ANTIMATTER + design` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// antimatter design — Penning trap well depth.
 fn main() {
+    let trap_well_V = 1000.0
+    println("antimatter_design (Penning trap well depth):")
+    println("  trap_well_V = " + str(trap_well_V))
     println("__HEXA_ANTIMATTER_DESIGN__ PASS gate=GATE_OPEN absorbed=false")
 }

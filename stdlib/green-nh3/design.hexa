@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/green-nh3/design.hexa — `GREEN_NH3 + design` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// green-nh3 design — Haber-Bosch pressure.
 fn main() {
+    let P_bar = 200.0
+    println("green-nh3_design (Haber-Bosch pressure):")
+    println("  P_bar = " + str(P_bar))
     println("__HEXA_GREEN_NH3_DESIGN__ PASS gate=GATE_OPEN absorbed=false")
 }

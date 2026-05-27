@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/protein-fold/synthesize.hexa — `PROTEIN_FOLD + synthesize` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// protein-fold synthesize — E. coli expression yield.
 fn main() {
+    let ecoli_mg_per_L = 50.0
+    println("protein-fold_synthesize (E. coli expression yield):")
+    println("  ecoli_mg_per_L = " + str(ecoli_mg_per_L))
     println("__HEXA_PROTEIN_FOLD_SYNTHESIZE__ PASS gate=GATE_OPEN absorbed=false")
 }

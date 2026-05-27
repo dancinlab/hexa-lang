@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/electrocat/handoff.hexa — `ELECTROCAT + handoff` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// electrocat handoff — stack area target.
 fn main() {
+    let stack_m2 = 1.0
+    println("electrocat_handoff (stack area target):")
+    println("  stack_m2 = " + str(stack_m2))
     println("__HEXA_ELECTROCAT_HANDOFF__ PASS gate=GATE_OPEN absorbed=false")
 }

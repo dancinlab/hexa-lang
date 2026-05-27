@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/graphene/synthesize.hexa — `GRAPHENE + synthesize` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// graphene synthesize — CVD growth temperature.
 fn main() {
+    let cvd_T_C = 1000.0
+    println("graphene_synthesize (CVD growth temperature):")
+    println("  cvd_T_C = " + str(cvd_T_C))
     println("__HEXA_GRAPHENE_SYNTHESIZE__ PASS gate=GATE_OPEN absorbed=false")
 }

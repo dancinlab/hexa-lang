@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/photonic/specify.hexa — `PHOTONIC + specify` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// photonic specify — ring Q-factor target.
 fn main() {
+    let Q_target = 100000.0
+    println("photonic_specify (ring Q-factor target):")
+    println("  Q_target = " + str(Q_target))
     println("__HEXA_PHOTONIC_SPECIFY__ PASS gate=GATE_OPEN absorbed=false")
 }

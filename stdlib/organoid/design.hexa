@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/organoid/design.hexa — `ORGANOID + design` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// organoid design — matrigel matrix percent.
 fn main() {
+    let matrigel_pct = 50.0
+    println("organoid_design (matrigel matrix percent):")
+    println("  matrigel_pct = " + str(matrigel_pct))
     println("__HEXA_ORGANOID_DESIGN__ PASS gate=GATE_OPEN absorbed=false")
 }

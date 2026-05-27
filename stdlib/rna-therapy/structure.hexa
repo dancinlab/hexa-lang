@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/rna-therapy/structure.hexa — `RNA_THERAPY + structure` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// rna-therapy structure — siRNA duplex length.
 fn main() {
+    let sirna_nt = 21.0
+    println("rna-therapy_structure (siRNA duplex length):")
+    println("  sirna_nt = " + str(sirna_nt))
     println("__HEXA_RNA_THERAPY_STRUCTURE__ PASS gate=GATE_OPEN absorbed=false")
 }

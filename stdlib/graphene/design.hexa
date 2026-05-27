@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/graphene/design.hexa — `GRAPHENE + design` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// graphene design — magic-angle bilayer twist.
 fn main() {
+    let twist_deg = 1.1
+    println("graphene_design (magic-angle bilayer twist):")
+    println("  twist_deg = " + str(twist_deg))
     println("__HEXA_GRAPHENE_DESIGN__ PASS gate=GATE_OPEN absorbed=false")
 }

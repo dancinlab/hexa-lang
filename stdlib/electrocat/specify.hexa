@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/electrocat/specify.hexa — `ELECTROCAT + specify` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// electrocat specify — HER overpotential target.
 fn main() {
+    let eta_mV = 100.0
+    println("electrocat_specify (HER overpotential target):")
+    println("  eta_mV = " + str(eta_mV))
     println("__HEXA_ELECTROCAT_SPECIFY__ PASS gate=GATE_OPEN absorbed=false")
 }

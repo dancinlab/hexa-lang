@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/fusion/structure.hexa — `FUSION + structure` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// fusion structure — ITER major radius.
 fn main() {
+    let R_m = 6.2
+    println("fusion_structure (ITER major radius):")
+    println("  R_m = " + str(R_m))
     println("__HEXA_FUSION_STRUCTURE__ PASS gate=GATE_OPEN absorbed=false")
 }

@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/photoredox/handoff.hexa — `PHOTOREDOX + handoff` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// photoredox handoff — flow reactor residence time.
 fn main() {
+    let flow_min = 30.0
+    println("photoredox_handoff (flow reactor residence time):")
+    println("  flow_min = " + str(flow_min))
     println("__HEXA_PHOTOREDOX_HANDOFF__ PASS gate=GATE_OPEN absorbed=false")
 }

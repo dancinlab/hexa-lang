@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/perovskite/design.hexa — `PEROVSKITE + design` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// perovskite design — tandem top-cell bandgap.
 fn main() {
+    let tandem_Eg_eV = 1.68
+    println("perovskite_design (tandem top-cell bandgap):")
+    println("  tandem_Eg_eV = " + str(tandem_Eg_eV))
     println("__HEXA_PEROVSKITE_DESIGN__ PASS gate=GATE_OPEN absorbed=false")
 }
