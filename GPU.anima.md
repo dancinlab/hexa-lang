@@ -27,7 +27,7 @@
 | 5 | §5a **AdamW step fusion** (grad·m·v·param 1 kernel) | ★★★ | launch-bound dominated, layer 수만큼 작은 op chain |
 | 6 | §5k **flame layer-fused training** (fwd+bwd+AdamW 1 kernel) | ★★★★★ long-term | 위 1-5 의 ultimate fusion. 시간 큼 |
 | 7 | §5a **MoE dispatch+GEMM+reduce** (Qwen-MoE 등) | ★★ | MoE 모델만 해당 |
-| 8 | **unop literal-neg close** (INBOX #1665, keystone 풀림) | ★★ indirect | softmax max-shift 같은 음수 리터럴 kernel 직접 작성 unblock |
+| 8 | **unop literal-neg close** ✅ ALREADY-CLOSED (PR #1686 머지 2026-05-27) | ★★ indirect | codegen 4-layer silicon round-trip 종결 — 음수 리터럴 kernel 직접 작성 unblock |
 | 9 | §5g **per-call-site precision** (BF16/FP32 혼합) | ★★ | BC4·RFC 049 시너지 — embed FP32 + GEMM BF16 |
 | 10 | §5j **top-k + GEMM fusion** | ★ | 학습은 거의 영향 없음 (inference sampling 영역) |
 | 11 | §5l **standalone cubin embed** | ☆ | 학습 wall 무관 (deploy 후속) |

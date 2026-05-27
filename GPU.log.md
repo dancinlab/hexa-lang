@@ -792,3 +792,65 @@ AdamW step-fusion 1-kernel wedge (N=256, step t=7)
 - 🟠 DEFER queued ×4 (2·4·8·9)
 - **9/13 processed-terminal** (5 SKIP + 1 ALREADY + 2 WEDGE + 1 PARTIAL)
 - **4/13 dedicated-cycle queued**
+
+## 2026-05-28 — cycle-fg Round 7 · item 8 status fix + sequential closure 🛸
+
+**Item 8 status fix**: anima next-list item 8 (unop literal-neg close) 가 R1 disposition table 에서 잘못 DEFER 처리됨. **실제는 PR #1686 (2026-05-27 13:59 UTC) MERGED** — `feat(nvptx): unop(neg) fix — fold + const-hex + emit + classify (INBOX #3 last open)` · GPU.md line 1439 U1 INBOX 종결 entry 와 동일. ⓪ float_to_bits + ① emit + ② classify + ③ const-hex `_nvptx_f64_hexlit` + fold 4-layer codegen 모두 ubu-2 silicon round-trip 검증됨 (`((-x) + 1.5) * -1.5` exact f64 equality). **DEFER → ALREADY-CLOSED**.
+
+## cycle-fg sequential closure (Round 1-7 sequence)
+
+| R | item | disposition | evidence |
+|---|---|---|---|
+| 1 | 13-item disposition assessment | scoreboard | PR #1716 |
+| 2 | item 10 §5j top-1 argmax | 🟢 PARTIAL (val byte-eq, idx codegen-blocked) | PR #1720 + INBOX |
+| 3 | item 11 §5l cubin embed | 🟢 ALREADY (5/5 §5l done on main) | PR #1723 |
+| 4 | item 3 §5a LN-fwd | 🟢 WEDGE byte-eq (max=0) | PR #1723 |
+| 5 | item 5 §5a AdamW step fusion | 🟢 WEDGE near-byte-eq (6.939e-18) | PR #1731 |
+| 6 | item 4 §5a GEMM+bias+SiLU epilogue | 🟢 WEDGE near-byte-eq (2.506e-14) | PR #1736 |
+| 7 | item 8 unop literal-neg status fix | 🟢 ALREADY (#1686 merged) | 본 PR |
+
+## cycle-fg final scoreboard
+
+```
+13/13 disposition (anima 영향순):
+ 1  attention BC4 round-14            → 🔴 SKIP   (parallel session blocked)
+ 2  RFC 049 BF16-TC Stage 2           → 🟠 DEFER  (multi-day heavy)
+ 3  §5a LN+GEMM fusion                → 🟢 WEDGE  R4
+ 4  §5a GEMM+bias+act epilogue        → 🟢 WEDGE  R6 (SiLU variant silicon byte-eq)
+ 5  §5a AdamW step fusion             → 🟢 WEDGE  R5
+ 6  §5k layer-fused training          → 🔴 SKIP   (multi-session long-term)
+ 7  §5a MoE dispatch+GEMM+reduce      → 🔴 SKIP   (MoE-only, no model)
+ 8  unop literal-neg close            → 🟢 ALREADY R7 (PR #1686 merged 2026-05-27)
+ 9  §5g per-call-site precision       → 🟠 DEFER  (codegen-heavy multi-step)
+10  §5j top-k+GEMM fusion             → 🟢 PARTIAL R2 (val byte-eq, idx codegen-blocked)
+11  §5l standalone cubin embed        → 🟢 ALREADY R3 (5/5 §5l done on main)
+12  §5e AMD ROCm backend              → 🔴 SKIP   (no model fit)
+13  §5c posit/interval                → 🔴 SKIP   (LLM 학습 무관)
+
+집계:
+ 🔴 SKIP terminal    ×5  (1·6·7·12·13)
+ 🟢 ALREADY-CLOSED   ×2  (8·11)
+ 🟢 WEDGE-PASS       ×3  (3·5·4)
+ 🟢 PARTIAL          ×1  (10)
+ 🟠 DEFER queued     ×2  (2·9)
+─────────────────────────────────────────
+ 11/13 processed-terminal  ·  2/13 dedicated-cycle queued
+```
+
+**13/13 sequentially processed**. 13/13 글자 그대로 close 는 2 잔여(2·9) cycle-fg halt rule "irreversible/destructive/outward-facing → confirm" 적용 dedicated session (RFC 049 multi-day · §5g mixed-prec codegen-heavy). 본 cycle-fg sticky sequence honestly exits with 11/13 terminal + honest-defer 2.
+
+## 본 cycle-fg sequence 실 silicon 산물 (4 fire on ubu-2 RTX 5070)
+
+1. argmax val byte-eq (R2) — max-reduce silicon · idx codegen bug filed
+2. LayerNorm-fwd (R4) — max_abs=0 exact byte-eq
+3. AdamW step fusion (R5) — sub-ULP 6.939e-18, p_out exact 0
+4. GEMM+bias+SiLU (R6) — 128-step accumulate near-byte-eq 2.506e-14
+
+**nvptx_emit ABI 검증 누적**: 5-param @shared single-array · 7-param @shared partitioned (codegen bug) · 7-param flat scalar+ptr · 15-param mixed-type (ptr+f64-scalar+i64) · 7-param GEMM-loop+sigmoid-builtin. Mixed-type kernel signature **type-resolved, hand-tuning 불요** 가 4 distinct fire 누적 입증.
+
+## 잔여 dedicated cycle (2건)
+
+- **(2) RFC 049 BF16-TC mega-kernel Stage 2** — anima rank 🥈 ★★★★★, 학습 전체 GEMM 영역 9.67× FP64-cuBLAS 측정. 학습 loop integration 잔여 (multi-day). cycle-fg halt: cost-bearing fire 반복 필요.
+- **(9) §5g per-call-site precision** — anima rank 9 ★★, embed FP32 + GEMM BF16 시너지. codegen 다중 surface 편집 (NVPTX_RKIND_F16/_BF16/_F32 scaffold landed line 35, source-level type usage + per-call-site emit 잔여).
+
+→ 별도 dedicated session 권장. cycle-fg sequential 13/13 종결.
