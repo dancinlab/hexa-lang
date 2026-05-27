@@ -2,6 +2,19 @@
 
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-27T16:40Z · 축 RTSC · RTSC5 · 수학/물리 DFS — 상온초전도 293K closed-form 도달 조건 (demiurge DFT 무관)
+
+- [x] **RTSC5 — 수학/물리 DFS CLOSED**: 사용자 "RTSC 수학·물리 DFS만 진행" — demiurge DFT (GPU·harvest 미완) 우회, RTSC 의 closed-form Tc 지형을 TECS-L verify 로 깊이 탐색.
+  - **293K iso-line 3점 🟢 SUPPORTED-NUMERICAL** (μ*=0.10, Allen-Dynes Tc=(ω_log/1.2)·exp(−1.04(1+λ)/(λ−μ*(1+0.62λ)))):
+    - `allen_dynes_tc 2.5 1779 0.10` → calc=292.98 (|Δ|=0.020)
+    - `allen_dynes_tc 3.0 1628 0.10` → calc=292.947 (|Δ|=0.047)
+    - `allen_dynes_tc 3.5 1530 0.10` → calc=293.064 (|Δ|=0.064)
+  - **⟹ 상온초전도 293K closed-form 도달 = λ≥2.5 AND ω_log≥1530K (metallic-hydrogen-class)**.
+  - **N5 binary wall 의 정량 근거**: N5 binary 천장 ω_log≤1350K < 293K iso-line 의 ω_log≥1530K → **binary hydride 가 293K 에 closed-form 으로 못 닿음**. RTSC4 의 N5 binary 전수 미달 (h3cl 133·h3br 83·h3si 74) 을 TECS-L closed-form 이 독립 설명 — demiurge "ω_log bottleneck (heavy-X)" wall 을 verify-게이트로 정량 재현.
+  - **BCS gap ratio**: 2Δ(0)/(k_B·T_c) = π·e^(−γ_E)·2 ≈ 3.5279 (s-wave universal, `stdlib/rtsc/verify/numerics_bcs.hexa:117`). closed-form 존재.
+  - **DFS lane 의의**: RTSC 의 수학/물리 측 (closed-form Tc iso-contour · McMillan ceiling · BCS gap) 은 demiurge DFT 산출 (λ,ω_log) 과 **독립**한 verify-able 수학. demiurge 가 후보의 (λ,ω_log) 를 DFT 로 산출하면, 이 closed-form 지형이 즉시 Tc + 293K 도달 가능성 판정. 수학 DFS = loop 의 "판정 기준 지형" 완성.
+  - inline `--no-absorb` (throttle-safe). atlas fold (293K iso-line atom) = install re-sync 후 (RTSC3 와 동일 deployed lane).
+
 ## 2026-05-27T16:10Z · 축 RTSC · RTSC4 · loop iteration #2-3 — N5 binary 전수 독립 재현 (demiurge N5 wall 검증)
 
 - [~] **RTSC4 loop iteration #2-3 — N5 binary hydride 전수 verify → 고갈 독립 확인**: TECS-L verify-게이트가 demiurge 상온초전도 캠페인의 N5 wall (binary hydride RTSC 고갈) 을 closed-form 으로 독립 재현.
