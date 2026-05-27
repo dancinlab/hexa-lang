@@ -28,7 +28,7 @@ flip 캠페인이 안전 quick-win 을 고갈시킨 뒤 남는 진짜 바닥의 
 |------|------|---------|
 | **F1** perf-floor (hxflash/hxlayer/hxvdsp) | 🔴 **TERMINAL** | 측정 285x ML 회귀 → irreducible perf-floor (`F1-perf-floor.txt`) |
 | **F2** vendor/OS-ABI FFI (19 layer-③) | 🔴 **TERMINAL** | audit #1809 — 순수 로직 0, ABI 경계 (`F2-vendor-ffi.txt`) |
-| **F3** runtime-core (640/548 fn · self-emit 20/640 · EASY-phase DONE) | 🟠 **LIVE FRONTIER** | genuinely-portable · easy-leaf 고갈 → HARD-phase ~620 fn (reloc·call·syscall·HexaVal·GC) expert serial · inc 4 LANDED |
+| **F3** runtime-core (640/548 fn · self-emit 20/640 = **shadow**, 0 activated) | 🟠 **LIVE FRONTIER** | genuinely-portable · easy-leaf shadow-emit DONE → **ACTIVATION 미시작**(static+`#define` 가 link-override 차단 · 경로 A 인프라 필요) → HARD-phase ~620 fn expert serial |
 | **F4** sha256 (exec_argv_sha256.c) | 🟢 **RESOLVED→F3** | runtime.c `#include` 조각 · 포팅 타깃 FIPS-검증 (`F4-sha256.txt`) |
 | **F5** boot-asm (3 `.s`) | 🔴 **TERMINAL** | audit #1810 — vector-table 데이터 섹션, RFC 063/064 gated (`F5-boot-asm.txt`) |
 | **F6** bootstrap seed (hexa_cc.c) | 🔴 **TERMINAL** | irreducible bootstrap FLOOR (B9.8) |
@@ -183,6 +183,96 @@ runtime.c 조각이라 F3 로 fold (mis-split 해소). **F3 만이 진짜 open**
     open 작업. terminal verdict (🔵/🟢/🔴) 부여 불가 (= `feedback-no-over-closure`).
     단일 foreground 세션이 50-70 PR campaign 을 닫을 수 없음 = 정직한 multi-session
     잔여. floor doc 의 honest 종착 = F3 가 유일 open frontier 로 정밀 특정된 상태.
+
+  - 🔑 **ACTIVATION RUNBOOK — self-emit primitive 를 LIVE runtime 에 실제 주입하는 법
+    (2026-05-28 go/no-go 조사 · `rt_memset` 대상 · 결론 = BLOCKED → expert 인프라 필요)**
+
+    **핵심 발견 — 왜 increment 1-4 가 전부 "`.c` UNCHANGED" 인가 (= shadow 의 정체)**:
+    `self/codegen/runtime_arm64.hexa` 는 **어디서도 `use` 되지 않음** (전수 grep 확인 —
+    참조처는 전부 `test/native_build/*` POC 의 코멘트 + byte 복사본뿐). `compiler/main.hexa`·
+    빌드 레시피(`tool/build_hexa_cli.hexa`)·codegen(`self/codegen.hexa`) 어느 곳도 이 파일의
+    `[int]` 바이트를 빌드 산출물에 **주입하는 경로가 0개**. 즉 increment 1-4 는 검증된
+    machine-code 카탈로그를 쌓은 것이지, runtime 의 어떤 바이트도 교체하지 않았다 — 정직하게
+    "토대" 일 뿐 활성화(activation)는 아직 시작도 안 됨. `rt_arena_*`(#1252/#1297/#1315)도
+    동일 — `.o` emit+link+RUN POC(`poc_arena_bundle_emit.hexa` → rc=42)였을 뿐 `runtime.c`
+    에서 `rt_arena_*` 호출처는 0개(grep 확인). **arena 도 활성화된 적 없음 · 동일 shadow 신분.**
+
+    **LIVE runtime 이 memset 을 얻는 실제 경로 (3단계 C 메커니즘)**:
+    1. compiled hexa 코드의 `memset()` 호출 → C 백엔드(`self/codegen.hexa` C-transpile,
+       L947 `#include "runtime.c"`/`runtime.h`)가 `memset` 심볼로 emit.
+    2. `runtime.c` L1505 `#define memset(p,c,n) hxlcl_memset(...)` → 모든 호출이
+       `hxlcl_memset` 로 치환.
+    3. `runtime.c` L301 `static void * __attribute__((noinline)) hxlcl_memset(...)` —
+       **파일-로컬 static** 함수. clang 이 TU 내부 직접 호출로 컴파일. `runtime.c` +
+       `runtime_core.c` 두 TU 가 각자 헤더 통해 자체 static 사본을 가짐(L3693 등).
+    빌드: `clang -O2 main_native.c runtime.c -o driver` (build_hexa_cli.hexa L342) +
+    `clang ... module_loader.c runtime.c` (L328) — `runtime.c` 가 일반 C TU 로 링크됨.
+
+    **왜 link-level override 가 불가능한가 (= 진짜 BLOCKER)**:
+    - `hxlcl_memset` 이 **`static`** 이라 외부 심볼이 아님 → hexa-emit `.o` 를 아무리 잘
+      만들어 ahead-link 해도 linker 가 static 호출을 가로챌 수 없음.
+    - `#define memset hxlcl_memset` 때문에 호출이 직접-호출로 박힘 → weak-symbol/PLT
+      간접화 여지 없음.
+    - "0 externs" freestanding 목표(B9.3/RFC 063)가 바로 이 static+`#define` 설계를
+      강제 — libc `memset` extern 을 끌어오지 않으려는 의도이므로, 역으로 외부 `.o`
+      주입 슬롯도 닫혀 있음.
+
+    **활성화에 이미 LANDED 된 인프라 (재사용 가능 — 새로 만들 필요 없음)**:
+    - `[int]` → linkable `.o`: `self/codegen/macho.hexa::macho_obj_wrap_v3`(N-text-symbol +
+      `__const` + reloc) · `macho_obj_wrap_v3_rw`(R+W data). 검증됨(otool-clean · nm · link).
+    - C 와의 link 패턴: `test/native_build/poc_rt_exit_caller.c` —
+      `extern void hexa_main(long); ... clang caller.c /tmp/x.o -o run` → rc=42 PASS.
+    - native linker: `tool/hexa_ld.hexa`(P1 scaffold · PAGE21/PAGEOFF12 reloc).
+    - rt_memset ABI 적합성 확인: `strb w1,[x0,x3]` 루프가 x0 를 절대 수정 안 함 → `ret`
+      시 x0=dst 그대로 → C `void* memset(void*,int,size_t)` 의 반환값 규약과 **호환 ✓**.
+
+    **활성화 메커니즘 — 두 갈래 (둘 다 신규 작업 필요)**:
+
+    *경로 A — 외부 심볼 + ahead-link (작은 인프라 · rt_memset 에 최적)*:
+    1. `runtime.c`: `hxlcl_memset` 의 `static` 제거 + `#define memset hxlcl_memset` 를
+       **약 심볼/조건부**로 — `#ifndef HEXA_RT_SELFEMIT` 가드. 동시에 `runtime_core.c`
+       의 사본도 동일 처리(두 TU 모두 영향 · ⚠ runtime.c 는 WIPE-PRONE, regen 후 re-grep 필수).
+    2. 신규 emit 드라이버 `test/native_build/emit_hxlcl_memset_o.hexa`: `rt_memset()` 바이트를
+       `macho_obj_wrap` 로 감싸 심볼명 `_hxlcl_memset` (Mach-O underscore)로 export →
+       `/tmp/hxlcl_memset.o`.
+    3. 빌드 레시피에 step 추가: `HEXA_RT_SELFEMIT=1` 일 때 emit 드라이버 실행 →
+       `.o` 산출 → `clang ... runtime.c hxlcl_memset.o -o driver` 로 ahead-link(또는
+       `tool/hexa_ld.hexa` 로 순수-hexa link). external `_hxlcl_memset` 가 C 사본을 대체.
+    4. ⚠ 함정: 두 TU(runtime.c + runtime_core.c)가 같은 external 심볼을 공유해야 함 →
+       한 TU 만 non-static 로, 나머지는 extern 선언. 또는 양쪽 다 extern + 단일 `.o` 정의.
+    5. **regen + fixpoint**: emit 드라이버는 `compiler/main.hexa` 가 `use` 하지 않으므로
+       `hexa cc --regen`(hexa_cc.c 재생성)에 직접 영향 0 — 단 `runtime.c` 본문을 건드리면
+       그 TU 를 링크하는 모든 바이너리가 재빌드되어야 함. fixpoint = `gen2.s ≡ gen3.s`
+       byte-identical 재확인(`tool/fixpoint_compare.hexa`). ⚠ regen heavy → Mac OOM 시
+       `pool on mini`(arm64) 로 offload · **ubu 는 arm64 byte-diff 산출 불가 → regen 금지**.
+
+    *경로 B — call-site inline emit (큰 인프라 · 범용 D 클래스 대비)*:
+    codegen 이 `memset` 호출을 만날 때 C `memset(...)` 대신 self-emit 바이트를 call-site 에
+    직접 inline(또는 native 백엔드에서 `bl _rt_memset` + 번들된 text section). 이는
+    `self/codegen.hexa` C-transpile 경로 + native 백엔드(`self/native_gen.c`) 양쪽에 신규
+    emit 분기 필요 — HexaVal-repr(D 클래스) 활성화의 본체이기도 하므로, leaf 1개에 쓰기엔
+    과대. rt_memset 활성화에는 경로 A 가 정답.
+
+    **honest effort 추정 (경로 A · rt_memset 단건)**:
+    - 인프라 신규: emit-`.o` 드라이버 1개(기존 POC 복제 · ~0.5d) + 빌드 레시피 step +
+      `HEXA_RT_SELFEMIT` 가드 + 2-TU extern 정합 + regen/fixpoint 1 라운드. **~2-3d expert**,
+      그 중 위험 구간 = (1) 2-TU static→extern 정합(runtime.c WIPE-prone), (2) freestanding
+      "0 externs" 회귀(외부 심볼 추가가 0-extern 불변식을 깨는지 — `nm` 로 재확인), (3)
+      ahead-link 순서가 모든 다운스트림 빌드(driver·module_loader·hexat)에 일관 적용.
+    - 단, **첫 활성화는 템플릿이 됨** → 이후 leaf 활성화는 드라이버 복제 + 심볼명만 변경
+      (~0.5d/개). 즉 경로 A 가 한 번 green 이면 16 easy-leaf 전부 빠르게 활성화 가능.
+
+    **어떤 클래스를 unblock 하나**: 경로 A 활성화 템플릿은 **A(reloc-bound) 中 reloc-FREE
+    leaf 전량 + 현 16 easy-leaf** 를 즉시 활성화 경로에 올림(self-emit→`.o`→ahead-link).
+    reloc 필요한 state-bound(A 나머지)·call-bound(B)·syscall(C)·HexaVal(D)·GC(E)는
+    경로 A 만으로 부족 — 각 클래스 인프라(reloc-emit 배선·calling-conv·syscall-ABI·repr
+    layout·GC 통합)가 별도 선행. 즉 경로 A = **"link 슬롯을 여는" 토대 인프라**이고, 그
+    위에 클래스별 emit 가 쌓임.
+
+    **go/no-go 결론**: rt_memset 활성화는 **BOUNDED 하지만 새 인프라(경로 A) 필요 · 단일
+    increment 로 force 하지 않음**. 이번 조사는 "shadow → live" 의 정확한 메커니즘·파일·
+    위험·effort 를 특정해 expert 작업을 actionable build-plan 으로 전환함. 다음 expert
+    increment = 경로 A 의 emit-`.o` 드라이버 + 2-TU extern 가드 + regen/fixpoint(1 PR).
 
 ### F4 — sha256 entangled
 
