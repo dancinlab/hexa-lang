@@ -1,0 +1,59 @@
+// HEXA Standard Library — core/option_result_map
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Map combinators for Option / Result. Pure additive surface on top of the
+// canonical `stdlib/core/option_result` enum + helper module (PR #1732 →
+// `Option { Some(v), None }` / `Result { Ok(v), Err(e) }` + 8 `opt_*` /
+// `res_*` helpers).
+//
+// Frontier RUNTIME.flip B4.option-map. Sibling combinator modules follow:
+//   - B4.option-and-then   (`option_result_chain.hexa`   — monadic bind)
+//   - B4.option-or-else    (`option_result_or_else.hexa` — fallback chains)
+//   - B4.option-collect    (`option_result_collect.hexa` — list short-circuit)
+//   - B4.option-to-bool    (`option_result_predicates.hexa` — equality probes)
+//
+// Surface:
+//   pub fn opt_map(o: Option, f) -> Option        — Some(v) → Some(f(v)) ; None → None
+//   pub fn res_map(r: Result, f) -> Result        — Ok(v)   → Ok(f(v))   ; Err(e) → Err(e)
+//   pub fn res_map_err(r: Result, f) -> Result    — Err(e)  → Err(f(e))  ; Ok(v)  → Ok(v)
+//
+// Design notes:
+//   - `f` is a callable parameter passed by value, matching the existing
+//     `opt_unwrap_or(o, default)` parameter shape in `option_result.hexa`.
+//     Plain `f(v)` call form per the language's existing function-value
+//     application surface.
+//   - `match` arm form mirrors `option_result.hexa` exactly:
+//     `Option::Some(v) => Option::Some(f(v))` / `Option::None => Option::None`.
+//   - Pure-additive — no edits to `option_result.hexa`. Importers `use` both
+//     modules side-by-side.
+
+use "stdlib/core/option_result"
+
+// -- Option map --
+
+pub fn opt_map(o: Option, f) -> Option {
+    return match o {
+        Option::Some(v) => Option::Some(f(v)),
+        Option::None => Option::None
+    }
+}
+
+// -- Result map (Ok-side) --
+
+pub fn res_map(r: Result, f) -> Result {
+    return match r {
+        Result::Ok(v) => Result::Ok(f(v)),
+        Result::Err(e) => Result::Err(e)
+    }
+}
+
+// -- Result map (Err-side) --
+
+pub fn res_map_err(r: Result, f) -> Result {
+    return match r {
+        Result::Ok(v) => Result::Ok(v),
+        Result::Err(e) => Result::Err(f(e))
+    }
+}
