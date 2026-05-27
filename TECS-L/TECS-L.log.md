@@ -2,6 +2,28 @@
 
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-27T17:12Z · 축 RTSC · RTSC8 · 수학 DFS — McMillan vs Allen-Dynes prefactor (1.45 vs 1.2)
+
+RTSC7 (strong-coupling f1·f2) 의 깊이 확장. McMillan 1968 의 1.45 vs Allen-Dynes
+1975 의 1.2 prefactor 차이 가 같은 (λ, ω_log, μ*) 입력에서 Tc 를 얼마나 다르게
+주는지 inline verify. McMillan 은 약결합 (λ<1.5) 가정, strong-coupling 영역
+underestimate 의 정량.
+
+- [x] λ=1.3 ω_log=1350 μ*=0.10 (h3cl 약결합): McMillan **109.9K** vs simple-AD 132.8K → −22.9K 🟢
+- [x] λ=3.0 ω_log=1628 μ*=0.10 (293K iso-line): McMillan **242.4K** vs simple-AD 293K → −50.5K 🟢
+- [x] λ=2.5 ω_log=1779 μ*=0.10 (RTSC5 점): McMillan **242.5K** vs simple-AD 293K → −50.5K 🟢
+
+⟹ 결론 (prefactor identity): McMillan = simple-AD · (1.2/1.45) = simple · **0.828**
+   — λ·μ* 무관, prefactor 비율만으로 −17.2% lower. exp 부분과 ω_log 의존성 동일.
+   λ=3.0 강결합 영역에서 McMillan 은 simple-AD 대비 50K underestimate, full-AD
+   (f1·f2=1.41) 대비로는 ~170K underestimate. **McMillan 은 RTSC 영역에선 부적합**,
+   Allen-Dynes simple 이 최저 신뢰 기준. f1·f2 까지 포함이 hydride 평가의 표준.
+
+verify (inline, mcmillan_tc <lam> <ω_log_K> <μ*>, --no-absorb):
+  mcmillan_tc 1.3 1350 0.10 → 109.885 (|Δ|=0.015, --tol 1.0) 🟢
+  mcmillan_tc 3.0 1628 0.10 → 242.439 (|Δ|=0.039, --tol 1.5) 🟢
+  mcmillan_tc 2.5 1779 0.10 → 242.466 (|Δ|=0.034, --tol 1.5) 🟢
+
 ## 2026-05-27T17:02Z · 축 RTSC · RTSC6 · 수학 DFS — 293K iso-line 의 μ* (Coulomb pseudopotential) 민감도
 
 RTSC5 (293K iso-line, λ≥2.5·ω_log≥1530K) 의 깊이 확장. λ=3.0 고정, μ* sweep 으로
