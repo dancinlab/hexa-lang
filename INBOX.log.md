@@ -1,5 +1,13 @@
 # INBOX — log
 
+## 2026-05-28 — ✅ RESOLVED #1676 · `hexa_cuda_available` strong override under `#ifdef HEXA_CUDA` (`self/runtime.c`)
+
+2026-05-27 anima H100 fire 가 보고한 weak-stub-only gap 봉인. `self/runtime.c:13472-13473` 의 두 weak stub (`hexa_cuda_available` · `hexa_cuda_device_count`) 를 `#ifdef HEXA_CUDA` 로 gate — CUDA 빌드에서는 strong override 가 실 디바이스 probe (`_hx_cuda_runtime_available` · `_hx_cuda_device_count_impl`) 로 delegate, no-CUDA 빌드는 기존 weak stub 그대로 (byte-identical).
+
+**심볼 확인**: 두 extern 모두 `self/runtime.c:8405-8406` 에 이미 `#ifdef HEXA_CUDA` 하위로 선언, body 는 `self/cuda/runtime_cuda.c:248,255` 에 strong export 존재. INBOX 본문에서 "확인 필요" 로 남았던 `_hx_cuda_device_count_impl` 도 실재 → 둘 다 delegate.
+
+**검증**: `gcc -fsyntax-only -I. self/runtime.c` clean (no-CUDA 경로 13 warn = 사전존재, 0 error). cuBLAS 경로 unblock 됐는지 = 다음 GPU fire round 의 oracle. branch `inbox-1676-cuda-glue-a`.
+
 ## 2026-05-28T — ✅ RESOLVED #1734 · resolver shape-B/C arms (`stdlib/cloud/runpod.hexa::_runpod_get_ssh_port_cli`)
 
 `_runpod_get_ssh_port_cli` 는 shape-A (`ssh.ip`+`ssh.port`) 만 매칭 → anima M3 4축 fire 가 hit 한 shape-C (`runpodctl pod get -o json` of v0.5+ = top-level `publicIp` + `ports[].{type=="ssh"}.port`) 에서 fall-through 해 GraphQL API arm 으로 떨어졌고, 그 arm 은 API key 가 필요해 dispatcher 경로에서 "resolver 부재" 처럼 보임.

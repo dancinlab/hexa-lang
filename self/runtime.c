@@ -13469,8 +13469,19 @@ __attribute__((weak)) HexaVal hexa_ptr_write(HexaVal ptr_v, HexaVal off_v, HexaV
     *(int64_t*)(uintptr_t)(p + (uint64_t)off) = HX_IS_INT(val_v) ? HX_INT(val_v) : 0;
     return hexa_void();
 }
+#ifdef HEXA_CUDA
+/* INBOX #1676 (2026-05-27, anima H100 fire) — strong overrides for the
+ * HEXA_CUDA build. Without these, the weak stubs below win and
+ * `cuda_available()` returns 0 even with a real GPU + cuBLAS link,
+ * silently routing every dispatch site to the CPU fallback. Externs
+ * forward-declared at runtime.c:8405-8406; bodies live in
+ * self/cuda/runtime_cuda.c (lines 248, 255). */
+HexaVal hexa_cuda_available(void)    { return hexa_int(_hx_cuda_runtime_available()); }
+HexaVal hexa_cuda_device_count(void) { return hexa_int(_hx_cuda_device_count_impl()); }
+#else
 __attribute__((weak)) HexaVal hexa_cuda_available(void) { return hexa_int(0); }
 __attribute__((weak)) HexaVal hexa_cuda_device_count(void) { return hexa_int(0); }
+#endif
 __attribute__((weak)) HexaVal hexa_mono_ns(void) {
     struct timespec ts;
     hxlcl_clock_gettime(CLOCK_MONOTONIC, &ts);
