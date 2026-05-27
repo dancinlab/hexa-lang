@@ -1,0 +1,36 @@
+#!hexa strict
+// stdlib/component/specify.hexa — `component + specify` producer (hexa-native · N24 pilot).
+//
+// LAYER: per-verb cell producer · AURA N24 per-verb migration pilot.
+// Mirrors stdlib/aura/specify.hexa sentinel convention. Replaces the
+// legacy stdlib/component/specify.py during the .py → .hexa migration.
+//
+// Sentinels:
+//   __HEXA_COMPONENT_SPECIFY__ PASS
+//   COMPONENT_SPECIFY_OK gate=GATE_OPEN absorbed=false
+
+let VERSION       = "0.1.0"
+let MODULE        = "component-specify"
+let RECORD_KIND   = "component_specify_record"
+
+fn _scope_caveats() -> [str] {
+    return [
+        "component specify producer (hexa-native · N24 migration pilot) — spec skeleton TEMPLATE.",
+        "measurement_gate = GATE_OPEN — spec skeleton is not an absorption claim (g3).",
+        "absorbed=false PERMANENTLY (g3) — pilot producer, full verb-cell suite is follow-up.",
+    ]
+}
+
+fn main() {
+    print("# COMPONENT SPECIFY — hexa-native producer (N24 per-verb migration pilot)")
+    print("# version = " + VERSION)
+    let c = _scope_caveats()
+    let n = c.len()
+    let mut i = 0
+    while i < n {
+        print("# scope_caveat: " + c[i])
+        i = i + 1
+    }
+    print("COMPONENT_SPECIFY_OK record_kind=" + RECORD_KIND + " gate=GATE_OPEN absorbed=false version=" + VERSION)
+    print("__HEXA_COMPONENT_SPECIFY__ PASS")
+}
