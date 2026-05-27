@@ -105,3 +105,27 @@ fat binary, standalone cubin embed, top-k+GEMM fusion 등. 각각 별도 codegen
 구현 사이클 필요 (1-turn flip 불가). "완주"의 정직한 의미 = 입증된 moat 종결 +
 미구현분은 open 로드맵 유지. open=0 강제는 over-claim 이므로 안 함.
 HGEMM≥1024 scale-up(725) + whole-program-fusion≥30%(727, §10 criterion)도 측정 잔여.
+
+## 2026-05-27 — "GPU 완주" 버킷 A 실구현 #1: LogSumExp custom-reduction 🟢 silicon PASS
+
+사용자 (1) 선택(버킷 A 항목별 실구현) 수행. §5j "custom reductions(LogSumExp)" 를
+실제 @gpu_kernel 로 작성 + ubu-2 silicon fire 로 종결.
+
+- 커널 = numerically-stable LogSumExp `m + log(sum exp(a-m))` — 이미 landing된
+  3 idiom 조합: block tree-reduce MAX/SUM(#1323) + f64 exp(#1333) + f64 log(#1429).
+  cuBLAS 는 SUM/MAX 만 → max-shift+exp+log+sum 체인은 hand-emit.
+- emit 경로 정정: `hexa build --target=nvptx64` 는 `_build_nvptx_emit_driver` 하드게이트
+  (GATED, self/main.hexa:2337) 라 PTX 0 — **그러나 `compiler/cli/nvptx_emit.hexa`
+  (전용 드라이버, ubu-2 prebuilt `/tmp/nvptx_emit`) 가 진짜 source→PTX 경로**
+  (lex→parse→lower→lower_hir→codegen_emit_ptx_for_sm, phase=P3). 앞선 "드라이버 부재"
+  진단은 잘못 — build_nvptx.hexa(stub sibling) 만 보고 nvptx_emit.hexa(real) 를 놓쳤음.
+- fire: ubu-2 RTX 5070, 11685 B PTX(ASCII-clean), host=tool/logsumexp_f64_host.c
+  → **rel_err=1.721e-10 < 1e-7** (got 8.22295212163 vs libm 8.22295212305), FIRE_EXIT=0.
+  🟢 SUPPORTED-NUMERICAL. artifact=`archive/fires/gpu_logsumexp_custom_reduce_2026_05_27/`.
+
+§5j 700 [x] flip (evidence-linked, over-closure guard 준수). §5 open 46 → 45.
+
+**부수 발견 (codegen gap, INBOX filed)**: 원래 pad sentinel `-1.0e308` (unary-neg
+float literal) 이 `// RFC 055 055-P0 - unsupported stmt kind: unop` + 미정의 `%fd14`
+→ ptxas reject. NVPTX codegen 이 unop(neg) 미emit. `a[0]` (유효원소 ≤max) 로 워크어라운드
+(semantic 동일). 진짜 fix = nvptx_target.hexa unop arm 추가(neg.f64) — INBOX 2026-05-27.

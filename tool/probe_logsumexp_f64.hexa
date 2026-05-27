@@ -19,11 +19,13 @@ fn probe_logsumexp_f64(a: [f64], out: [f64], n: i64) {
     @shared let sm: [f64; 256] = []
     let mut tid: i64 = to_i64(gpu_thread_id_x())
 
-    // load for max-reduce (pad lanes >= n with a very-negative sentinel)
+    // load for max-reduce. pad lanes >= n with a[0] (a valid element <= max,
+    // so the max is unchanged). a[0] avoids a unary-neg literal sentinel —
+    // NVPTX codegen does not yet emit unop(neg) (see INBOX 2026-05-27).
     if tid < n {
         sm[to_i64(tid)] = a[to_i64(tid)]
     } else {
-        sm[to_i64(tid)] = -1.0e308
+        sm[to_i64(tid)] = a[0]
     }
     gpu_barrier()
 

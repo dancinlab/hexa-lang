@@ -697,7 +697,7 @@ PR #189/#190/#191 fires used direct one-shot bash; sustained automation needs he
 - [x] **FlashAttention-style fused softmax + attention** — already a paper-derived pattern; cuBLAS doesn't cover the attention-block pattern directly (xformers / FlashAttention 별도 library). **REALIZED** → §1h `F-FUSION-ATTENTION-FLASH` landed (single-kernel fused attention, structural-formal)
 - [x] **Online softmax** — single-pass numerically stable softmax (cuBLAS = no softmax at all). **REALIZED** → round-7 BC4 FlashAttention v3 (명시 "online softmax + warp-specialized") + §1h flash-attention fires
 - [ ] **Block-sparse / structured-sparse GEMM** — cuBLAS = dense only (sparse is cuSPARSE 별도)
-- [ ] **Custom reductions** — cuBLAS has SUM/MAX; arbitrary reduction (LogSumExp / soft-argmax) hand-written
+- [x] **Custom reductions** — cuBLAS has SUM/MAX; arbitrary reduction (LogSumExp / soft-argmax) hand-written. **🟢 SILICON-VALIDATED 2026-05-27** (`F-GPU-LOGSUMEXP-CUSTOM-REDUCE-NUMERIC`): single-kernel numerically-stable LogSumExp `m + log(sum exp(a-m))` composed from block tree-reduce MAX/SUM (#1323) + f64 exp (#1333) + f64 log (#1429), fired on ubu-2 RTX 5070 vs CPU libm → **rel_err=1.721e-10 < 1e-7** (~580× inside envelope). Emit via `compiler/cli/nvptx_emit.hexa` (source→PTX P3). Artifact: `archive/fires/gpu_logsumexp_custom_reduce_2026_05_27/` (probe + host + PTX + result). Surfaced NVPTX unop(neg) codegen gap (worked around, filed INBOX)
 - [ ] **Top-k / argmax fused with GEMM** — cuBLAS = GEMM only; hexa can fuse arbitrary epilogue
 
 ### 5k — Domain-specific kernel libraries (whole-program co-design)
