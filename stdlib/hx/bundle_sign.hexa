@@ -1,0 +1,198 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  stdlib/hx/bundle_sign.hexa — Ed25519 manifest format + canonical message
+//
+//  @module(slug="hx/bundle_sign", desc="Bundle manifest (name + version +
+//                                        sha256 + ed25519 pubkey + signature)
+//                                        + canonical sign-message builder")
+//  @usage(use "stdlib/hx/bundle_sign"; let msg = bundle_manifest_canonical_message(name, ver, sha); ...)
+//
+//  ── module governance metadata ─────────────────────────────────────────────
+//  @version 0.1.0
+//  @capabilities [bundle_manifest_canonical_message, bundle_manifest_render,
+//                 bundle_manifest_parse, bundle_sign_verify_outcome_kind]
+//  @stability preview
+//  @since 2026-05-28
+//  @maintainer hexa-core
+//  @priority P0
+//
+//  ── PROBLEM (RUNTIME.flip B8.hx-bundle-sign) ───────────────────────────────
+//
+//  The hx package manager needs a tamper-evident manifest format for signed
+//  release bundles. A bundle = (name, version, sha256 of the tarball). A
+//  signed bundle = that triple plus an Ed25519 pubkey + signature over a
+//  canonical sign-message derived from the triple. This module provides the
+//  format half — canonical message bytes, manifest struct, render + parse,
+//  and a completeness classifier. Actual signing/verifying lives in
+//  stdlib/crypto/ed25519 (the caller composes both surfaces). Pure: no
+//  shell, no fs, no network, no crypto bulk — just bytes + string i/o.
+//
+//  ── PUBLIC API ─────────────────────────────────────────────────────────────
+//
+//   struct BundleManifest {
+//       name: str, version: str, sha256_hex: str,
+//       ed25519_pubkey_hex: str, ed25519_signature_hex: str
+//   }
+//
+//   bundle_manifest_canonical_message(name, version, sha256_hex) -> [int]
+//       Return the UTF-8 byte sequence "(name)@(version):(sha256_hex)" —
+//       this is what gets fed into ed25519_sign / ed25519_verify. Fixed
+//       canonical layout so signing/verification is deterministic. No
+//       trailing newline. Bytes are 0–255 ints (char_code & 0xFF).
+//
+//   bundle_manifest_render(m: BundleManifest) -> str
+//       Render the manifest as five key=value lines (TOML-flavored,
+//       same dialect as stdlib/hx/lockfile.hexa):
+//           name = "<n>"
+//           version = "<v>"
+//           sha256 = "<h>"
+//           pubkey = "<pk>"
+//           signature = "<sig>"
+//       Each line terminated by "\n" (including the last).
+//
+//   bundle_manifest_parse(content: str) -> BundleManifest
+//       Best-effort parse of the five key=value lines back into a
+//       BundleManifest. Missing fields default to "". Field order in the
+//       input is free — the parser locates each token independently.
+//       Never panics (mirrors lockfile_parse's tolerance contract).
+//
+//   bundle_sign_verify_outcome_kind(sig_present, pubkey_present, hash_present) -> str
+//       Classify manifest completeness for the Ed25519 verify path. Returns:
+//           "complete"          — all three flags true
+//           "missing-hash"      — hash absent (precedence #1)
+//           "missing-pubkey"    — pubkey absent
+//           "missing-signature" — signature absent
+//           "empty"             — all three absent
+//       Precedence chosen so the most foundational missing piece (the
+//       hash — without it the canonical message itself is undefined)
+//       surfaces first. This classifier is metadata only; actual crypto
+//       verification is the caller's `ed25519_verify(pubk, msg, sig)` call.
+//
+//  ── FORMAT NOTES ───────────────────────────────────────────────────────────
+//   · Canonical sign-message layout = "name@version:sha256_hex" UTF-8 bytes.
+//     The "@" and ":" separators are ASCII single bytes (0x40, 0x3A) so
+//     decoding is unambiguous. Pre-image collisions across distinct
+//     (name, version, sha) triples require a name or version embedding
+//     the literal separators — by convention hx forbids that.
+//   · Manifest render dialect mirrors stdlib/hx/lockfile.hexa: TOML-flavored
+//     single-line key="value" tokens. One field per line (vs lockfile's
+//     entries-on-one-line) so a manifest is human-eyeballable.
+//   · No escapes interpreted. By convention hex digests/pubkeys/signatures
+//     are ASCII-hex; names/versions are dotted identifiers.
+//
+//  ── See also ──────────────────────────────────────────────────────────────
+//   · stdlib/hx/semver.hexa          — sibling (B8.hx-semver)
+//   · stdlib/hx/lockfile.hexa        — sibling (B8.hx-lockfile)
+//   · stdlib/crypto/ed25519.hexa     — actual sign/verify (composed by caller)
+//   · RUNTIME.flip.md §B8            — backlog entry
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── manifest struct ────────────────────────────────────────────────────────
+
+pub struct BundleManifest {
+    name: str,
+    version: str,
+    sha256_hex: str,
+    ed25519_pubkey_hex: str,
+    ed25519_signature_hex: str
+}
+
+// ── tiny pure string helpers (self-contained — no stdlib import) ───────────
+
+// Index of first occurrence of substring `needle` in `s` starting at `from`,
+// or -1 if not found. Mirrors stdlib/hx/lockfile.hexa's _lf_index_from.
+fn _bs_index_from(s: str, needle: str, from: int) -> int {
+    let ln = len(needle)
+    if ln == 0 { return from }
+    let ls = len(s)
+    if from < 0 { return -1 }
+    let mut i = from
+    let last = ls - ln
+    while i < last + 1 {
+        if s.substring(i, i + ln) == needle { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+// Extract the quoted value that follows `key` in `s`. Returns
+// #{ "ok": bool, "v": str }. The token sought is exactly `<key> = "` and
+// the value runs until the next `"`. If either anchor is missing, ok=false.
+// Same field-locator dialect as stdlib/hx/lockfile.hexa's _lf_field.
+fn _bs_field(s: str, key: str) -> map {
+    let anchor = key + " = \""
+    let p = _bs_index_from(s, anchor, 0)
+    if p < 0 { return #{ "ok": false, "v": "" } }
+    let start = p + len(anchor)
+    let q = _bs_index_from(s, "\"", start)
+    if q < 0 { return #{ "ok": false, "v": "" } }
+    return #{ "ok": true, "v": s.substring(start, q) }
+}
+
+// ── canonical sign-message ─────────────────────────────────────────────────
+
+// String → UTF-8 byte array (ASCII/UTF-8 passthrough). Mirrors
+// stdlib/ckpt/format.hexa's str_to_bytes — kept private here so this module
+// stays self-contained (B8 hx siblings ship one-by-one without cross deps).
+fn _bs_str_to_bytes(s: str) -> [int] {
+    let mut out: [int] = []
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        out.push(char_code(s, i) & 0xFF)
+        i = i + 1
+    }
+    return out
+}
+
+pub fn bundle_manifest_canonical_message(name: str, version: str, sha256_hex: str) -> [int] {
+    let msg = name + "@" + version + ":" + sha256_hex
+    return _bs_str_to_bytes(msg)
+}
+
+// ── render ─────────────────────────────────────────────────────────────────
+
+pub fn bundle_manifest_render(m: BundleManifest) -> str {
+    return "name = \"" + m.name + "\"\n" +
+           "version = \"" + m.version + "\"\n" +
+           "sha256 = \"" + m.sha256_hex + "\"\n" +
+           "pubkey = \"" + m.ed25519_pubkey_hex + "\"\n" +
+           "signature = \"" + m.ed25519_signature_hex + "\"\n"
+}
+
+// ── parse ──────────────────────────────────────────────────────────────────
+
+pub fn bundle_manifest_parse(content: str) -> BundleManifest {
+    let n = _bs_field(content, "name")
+    let v = _bs_field(content, "version")
+    let h = _bs_field(content, "sha256")
+    let pk = _bs_field(content, "pubkey")
+    let sg = _bs_field(content, "signature")
+    let mut name_v = ""
+    let mut version_v = ""
+    let mut sha_v = ""
+    let mut pk_v = ""
+    let mut sg_v = ""
+    if n["ok"] { name_v = n["v"] }
+    if v["ok"] { version_v = v["v"] }
+    if h["ok"] { sha_v = h["v"] }
+    if pk["ok"] { pk_v = pk["v"] }
+    if sg["ok"] { sg_v = sg["v"] }
+    return BundleManifest{
+        name: name_v,
+        version: version_v,
+        sha256_hex: sha_v,
+        ed25519_pubkey_hex: pk_v,
+        ed25519_signature_hex: sg_v
+    }
+}
+
+// ── completeness classifier ────────────────────────────────────────────────
+
+pub fn bundle_sign_verify_outcome_kind(sig_present: bool, pubkey_present: bool, hash_present: bool) -> str {
+    if sig_present && pubkey_present && hash_present { return "complete" }
+    if !sig_present && !pubkey_present && !hash_present { return "empty" }
+    if !hash_present { return "missing-hash" }
+    if !pubkey_present { return "missing-pubkey" }
+    if !sig_present { return "missing-signature" }
+    return "complete"
+}
