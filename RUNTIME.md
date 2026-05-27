@@ -2348,16 +2348,25 @@ framing-① (nm aprime 0 externs) 측정-충족 이후 — framing-② (source z
 
 ### TLS 1.3 handshake state-machine loop — socket 와이어링 (multi-PR)
 
-- [ ] **ClientHello 송신 + ServerHello 수신 round-trip 드라이버** — stdlib/net/socket
-      위에 첫 핸드셰이크 round-trip; 모든 프리미티브 준비됨. **LANE-BUSY**: 36
-      `feat-tls13-*` sub-branch 활성 (e.g. `feat-tls13-clienthello` @ 9d29b123 body
-      builder); state-machine 결합 PR 부재.
-- [ ] **key-schedule 도출 + EncryptedExtensions/Certificate parse 와이어** — x509_chain
-      + tls13_keyschedule 활용. **LANE-BUSY**: 모든 프리미티브 PR 완료
-      (RUNTIME.md Phase 3 ②), 단일 도출-와이어 PR 부재.
-- [ ] **Finished verify_data + app-record send/recv** — tls13_record + tls13_finished
-      + AEAD seal/open 와이어. **LANE-BUSY**: `feat-tls13-finished` @ f3acab97
-      (verify_data 빌더) 존재, socket 와이어링 PR 부재.
+- [~] **ClientHello 송신 + ServerHello 수신 round-trip 드라이버** — stdlib/net/socket
+      위에 첫 핸드셰이크 round-trip; 모든 프리미티브 준비됨. **WIRE LANDED · NET
+      TEST PENDING** via PR #1724 (`stdlib/crypto/tls13_client_driver.hexa` —
+      `tls13_record_wrap`, `tls13_client_connect_send_ch`,
+      `tls13_client_recv_server_hello`, `tls13_client_roundtrip_x25519`). 잔여 =
+      외부 TLS 서버 대상 실측 round-trip + multi-packet ServerHello 시 net_read_n
+      env.hexa 등록.
+- [~] **key-schedule 도출 + EncryptedExtensions/Certificate parse 와이어** —
+      x509_chain + tls13_keyschedule 활용. **KEY-SCHEDULE WIRE LANDED** via PR
+      #1725 (`stdlib/crypto/tls13_client_keyschedule_wire.hexa` —
+      `tls13_sh_extract_x25519_share`, `tls13_client_derive_handshake_keys`,
+      `Tls13HandshakeKeys` 10-field struct). 잔여 = EncryptedExtensions /
+      Certificate / CertVerify parse-after-AEAD-open 와이어.
+- [~] **Finished verify_data + app-record send/recv** — tls13_record + tls13_finished
+      + AEAD seal/open 와이어. **CRYPTO + IO HALVES LANDED** via PR #1726
+      (`tls13_client_finished_wire.hexa` — verify_data + app-traffic keys) + PR
+      #1728 (`tls13_client_record_io.hexa` — seal/send + recv/open). 잔여 =
+      sequence-number 관리 가 caller 외부 책임으로 남음 (의도된 설계 — driver
+      glue 책임).
 
 ### hexa-lang language features (HEXA-LANG.log open)
 
