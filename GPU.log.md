@@ -704,3 +704,46 @@ codegen inconsistency".
 검증). 완전 close 는 codegen offset fix 후. cycle-fg 10번 = PARTIAL.
 
 No LLVM. No C-transpile. `compiler/codegen/*.hexa` UNTOUCHED in this cycle.
+
+## 2026-05-28 — cycle-fg round 3 (item 11 status fix) + round 4 (§5a LN-fwd wedge 🟢 byte-eq)
+
+### Round 3 — item 11 §5l cubin embed: status correction
+Round 1 disposition tier 가 "🟢 PARTIAL adjacent" 였으나, 실제 main 검사 결과
+**§5l 5/5 항목 모두 이미 `[x]` silicon-validated** (2026-05-28 multi-arch fat
+binary PASS 와 함께 같은 fire 에서 동시 close). item 11 = 🟢 **ALREADY-CLOSED**
+(adjacent 가 아니라 fully done).
+
+### Round 4 — item 3 §5a LN+GEMM wedge: LN-fwd 1-kernel 🟢 byte-eq
+
+cycle-fg round 4 = anima-impact 3번 §5a LayerNorm + GEMM fusion 의 wedge =
+**LayerNorm-fwd 1-kernel byte-eq** silicon. cuBLAS 는 norm 자체가 없으므로
+LN-only 1-kernel 도 cuBLAS-relative 격차 evidence.
+
+**fire**: ubu-2 RTX 5070, N=256
+- max_abs_err = **0** · max_rel_err = **0** ← byte-eq across all 256 outputs
+- ref: mean = 0.6948..., var = 0.7189..., inv = 1.1793...
+- FIRE_RC=0 · ASCII-clean · 2× rsqrt emit · 7705 B PTX
+
+**verdict**: 🟢 SUPPORTED-NUMERICAL byte-eq · §5a LN-fwd sub-wedge fully
+validated. artifact = `archive/fires/gpu_layernorm_wedge_2026_05_28/`
+(probe + host + PTX + result).
+
+**알고리즘**: 2-pass tree reduce (mean → var) + normalize. LogSumExp(#1657)
+패턴 직접 응용 — sm[0] broadcast read 만 사용 (argmax round 2 의 +K
+partition-offset codegen 함정 회피). rsqrt(var + 1e-5) = PR #1335 rsqrt-f64
+재사용.
+
+**§5a 상태**: LN-fwd 1-kernel byte-eq wedge 추가. 완전 "LN+GEMM" fusion close
+는 GEMM tile + LN reduce 묶기 = 별 fire 필요. 본 wedge = LN-fwd 자체 evidence.
+cycle-fg 3번 = WEDGE-PASS (LN portion).
+
+### cycle-fg 13/13 progress (round 4 후)
+- 🔴 SKIP terminal ×5  (items 1, 6, 7, 12, 13)
+- 🟢 ALREADY-CLOSED ×1 (item 11 · round 3 status fix)
+- 🟢 WEDGE-PASS ×1    (item 3 · round 4 LN-fwd byte-eq)
+- 🟢 PARTIAL ×1       (item 10 · round 2 argmax val byte-eq, idx codegen-blocked)
+- 🟠 DEFER queued ×5  (items 2, 4, 5, 8, 9)
+- **8/13 processed-terminal** (5 SKIP + 1 ALREADY + 1 WEDGE + 1 PARTIAL)
+- **5/13 dedicated-cycle queued**
+
+No LLVM. No C-transpile. `compiler/codegen/*.hexa` UNTOUCHED in this cycle.
