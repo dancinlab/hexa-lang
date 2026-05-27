@@ -3950,7 +3950,7 @@ fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
         let mut si = 0
         while si < len(blk.stmts) {
             let s = blk.stmts[si]
-            if s.kind == STMT_ASSIGN || s.kind == STMT_BINOP || s.kind == STMT_CALL {
+            if s.kind == STMT_ASSIGN || s.kind == STMT_BINOP || s.kind == STMT_CALL || s.kind == STMT_UNOP {
                 // Void-return guard: STMT_CALL with `dst._miss_local()`
                 // (id < 0) - e.g. `gpu_barrier()` - produces no value
                 // and must not get a spurious `.reg` declaration. Skip.
@@ -3963,6 +3963,22 @@ fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
                     }
                     if !dup {
                         let mut kind = _nvptx_classify_local_for_stmt(s)
+                        // INBOX #1665 ② — STMT_UNOP "neg" dst inherits the
+                        // source operand's reg bank (sign-flip stays in the
+                        // same bank). Without this the F64 default would
+                        // mis-classify integer neg, and an F64-typed source
+                        // operand (already in `%fd<id>`) would still register
+                        // the dst in %fd while the classifier default would
+                        // accidentally agree — but the inheritance is needed
+                        // for the i32/i64 case + future fp16/bf16/f32 cases.
+                        if s.kind == STMT_UNOP && len(s.args) >= 1 && s.args[0].kind == "local" {
+                            let ku = _nvptx_lookup_kind_for_local(regs, s.args[0].local_id)
+                            if ku == NVPTX_RKIND_U64 || ku == NVPTX_RKIND_U32 ||
+                               ku == NVPTX_RKIND_F32 || ku == NVPTX_RKIND_F16 ||
+                               ku == NVPTX_RKIND_BF16 || ku == NVPTX_RKIND_F64 {
+                                kind = ku
+                            }
+                        }
                         // RFC 071 P4+ (N59 G4 sibling) - operand-kind
                         // inference for arithmetic STMT_BINOP. When the
                         // classifier-by-op default is F64 (no precision
