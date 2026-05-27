@@ -214,15 +214,21 @@ coarse item 을 audit-grounded atomic 으로 분해 (2026-05-28).
 
 실측 현재 상태 (2026-05-28, origin/main):
 - `.o` = **0** ✅ (#1808 build-artifact 제거로 달성)
-- `.s` = **4** (1 removable + 3 irreducible boot-floor · #1810 audit)
-- `.c` = **230** (`self/*.c` 44 + `self/native/*.c` 32 + 기타). north-star
+- `.s` = **3** (3 irreducible boot-floor · B9.1a 로 dead fixture 1개 제거)
+- `.c` = **229** (`self/*.c` 44 + `self/native/*.c` 32 + 기타). north-star
   충족 시 `find . -name '*.c' -o -name '*.s' -o -name '*.o'` 가 비어야 함.
 
-⚠ 정직 명제: `.c`-zero 의 *진짜* enabler 는 **B9.6 codegen self-emit** — hexa
-reimpl (B9.2/B9.4/B9.5) 은 source 일 뿐, codegen 이 machine-code 로 self-emit
-해야 `.c` 가 dead 가 되어 삭제 가능. 일부(arena/GC/HexaVal repr)는 irreducible
-bootstrap FLOOR (B9.8 terminal). 따라서 본 batch 는 *additive reimpl wave* (병렬
-안전) + *serial codegen-wire wave* (B9.6, 비병렬) 2-track.
+⚠ **핵심 정정 (2026-05-28 scoping 3/3 + dup-race precheck 후)**: `.c`-zero 의
+진짜 병목은 reimpl 부재가 **아니다** — portable layer① 의 대부분(sha256·regex·
+json·tokenizer·sha512·hkdf)은 **이미 hexa 로 존재**. `.c` 가 남는 이유는:
+1. **codegen-wire 갭 (B9.6)** — 기존 hexa reimpl 이 machine-code 로 self-emit 안 됨
+   → runtime 은 여전히 `.c` 버전 사용 (SERIAL · wipe-prone · 비병렬).
+2. **GC/repr/arena FLOOR (B9.8)** — ~240 fn, irreducible bootstrap seed, infra-gated.
+3. **vendor FFI (③)** — ~69 fn (native 19 + runtime 50), 포팅 ≠ 삭제 (영구 바닥).
+
+→ **additive reimpl track 은 사실상 고갈** (blowfish 1개만 net-new). 남은 진짜 일은
+B9.6 serial codegen-wire (~50-70 PR / 15-25 세션 · #1812 추정) + FLOOR infra.
+병렬 fan-out 으로 닫히지 않음.
 
 ### B9.0 — scoping audits (wave 0 · DONE)
 
@@ -232,13 +238,15 @@ bootstrap FLOOR (B9.8 terminal). 따라서 본 batch 는 *additive reimpl wave* 
 - [x] **B9.0b-asm-floor-audit** — `.s` 4개 분류 (#1810). 1 removable
       (`stage_1_forced.s` dead fixture) + 3 boot-floor (vector-table · RFC
       063/064 lowering gated). `@asm` 존재하나 codegen lowering no-op.
-- [ ] **B9.0c-runtime-c-fn-audit** — `runtime{,_core}.c` fn-level layer 분류
-      (running). B9.4 atomic 분해의 입력.
+- [x] **B9.0c-runtime-c-fn-audit** — `runtime{,_core}.c` fn-level layer 분류
+      (#1812). ~640 fn = ①120 portable(19%) / ②190 syscall(30%) / ③50 FFI(8%) /
+      **GC-FLOOR 240(38%)**. 정직 추정: 전체 포팅 50-70 PR / 15-25 세션, FLOOR 가
+      절반 + infra-gated.
 
 ### B9.1 — `.s` zero (4 → 0)
 
-- [ ] **B9.1a-stage1-forced-rm** — `tests/bootstrap/stage_1_forced.s` git rm.
-      dead fixture (실참조 0 · `as` reject · #1810 verdict). quick win → `.s` 4→3.
+- [x] **B9.1a-stage1-forced-rm** — `tests/bootstrap/stage_1_forced.s` git rm
+      DONE. dead fixture (실참조 0 · `as` reject · #1810 verdict). `.s` 4→3.
 - [ ] **B9.1b-boot-rp2040-floor** — `boot_rp2040.s` (Cortex-M0+). irreducible
       vector-table boot-floor. RFC 063/064 `@interrupt`/`@target` lowering 전엔
       불가 → honest-floor 문서화 (closed-neg until RFC).
@@ -248,15 +256,23 @@ bootstrap FLOOR (B9.8 terminal). 따라서 본 batch 는 *additive reimpl wave* 
 
 ### B9.2 — runtime.c portable-fn hexa reimpl (layer ① · additive + oracle)
 
-NEW `stdlib/runtime/*.hexa` 파일 = conflict-free fan-out. 각 항목 = reimpl +
-byte/value oracle fixture. 실제 삭제는 B9.6 wire 후.
+⚠ **DUP-RACE 발견 (2026-05-28 precheck · g61)**: portable layer① 의 상당수가 이미
+hexa 로 존재 → reimpl 신규작성은 redundant. `.c` 가 남은 진짜 이유는 reimpl 부재가
+**아니라** codegen-wire 갭 (B9.6). 따라서 B9.2 대부분은 reimpl 이 아닌 **wire 작업**
+(B9.6) 으로 재분류.
 
-- [ ] **B9.2a-array-ops** — `farr`/`hexa_array` (~98 fn) → `array_ops.hexa`
-- [ ] **B9.2b-string-ops** — `hexa_str` (~10 fn) → `string_ops.hexa`
-- [ ] **B9.2c-regex-engine** — `hexa_regex` (~6 fn) → `regex_engine.hexa`
-- [ ] **B9.2d-json-codec** — `_js`/`_jp` serialize/parse (~14 fn) → `json_codec.hexa`
-- [ ] **B9.2e-autodiff-tape** — `hexa_ad` (~12 fn) → `autodiff_tape.hexa`
-- [ ] **B9.2f-safetensors-io** — `hexa_safetensors` (~16 fn) → `safetensors_io.hexa`
+- [⛔DUP] **B9.2c-regex-engine** — `stdlib/regex/mod.hexa`·`native.hexa` 이미 존재
+      → 신규 reimpl 불필요. gap = codegen-wire (B9.6).
+- [⛔DUP] **B9.2d-json-codec** — `self/rt/json.hexa`·`stdlib/alloc/json.hexa`·
+      `self/runtime/json_mini_pure.hexa` 이미 존재 → wire 갭만.
+- [ ] **B9.2a-array-ops** — `farr`/`hexa_array` (~98 fn) → `array_ops.hexa`.
+      ※ 신규작성 전 dup 재확인 (다수가 codegen-emit 형태로 존재 가능).
+- [ ] **B9.2b-string-ops** — `hexa_str` (~10 fn). ※ `stdlib/runtime/ctype.hexa`
+      일부 커버 — 갭만 채움.
+- [ ] **B9.2e-autodiff-tape** — `hexa_ad` (~12 fn). ※ `stdlib/flame/` autodiff
+      존재 — dup 확인 필요.
+- [ ] **B9.2f-safetensors-io** — `hexa_safetensors` (~16 fn). ※ flame safetensors
+      reader 존재 가능 — dup 확인 필요.
 
 ### B9.3 — runtime.c layer-② svc surface (inline svc · kernel ABI)
 
@@ -269,14 +285,17 @@ byte/value oracle fixture. 실제 삭제는 B9.6 wire 후.
 - [ ] **B9.4-expand** — `#B9.0c` audit 착지 후 portable bucket 을 atomic 으로
       분해 (~150 portable of 548; HexaVal repr·arena·GC 는 B9.8 FLOOR 제외).
 
-### B9.5 — native/*.c layer-① port (gated on #1809 · ~7 realistic)
+### B9.5 — native/*.c layer-① port (gated on #1809 · dup-race 후 1 genuine)
 
-- [ ] **B9.5a-tokenizer-bpe** — `hxtok.c` BPE 토크나이저 (libc-only pure) →
-      `stdlib/runtime/tokenizer_bpe.hexa`
-- [ ] **B9.5b-sha256-core** — `exec_argv_sha256.c` (FIPS 180-4) →
-      `stdlib/crypto/sha256_core.hexa`
-- [ ] **B9.5c-blowfish** — `crypto_blowfish.c` (π-seeded bcrypt) →
-      `stdlib/crypto/blowfish.hexa`
+⚠ **DUP-RACE (2026-05-28)**: ~7 realistic 중 2개가 이미 hexa 존재 → blowfish 만 net-new.
+
+- [⛔DUP] **B9.5a-tokenizer-bpe** — `self/ml/tokenizer_bpe.hexa`·`qwen_bpe.hexa`
+      이미 존재. native `hxtok.c` 삭제 = wire 갭 (B9.6), reimpl 아님.
+- [⛔DUP] **B9.5b-sha256-core** — `stdlib/core/hash/sha256.hexa`·`stdlib/crypto/`
+      이미 존재. wire 갭만.
+- [ ] **B9.5c-blowfish** — `crypto_blowfish.c` (pi-seeded bcrypt) →
+      `stdlib/crypto/blowfish.hexa`. **유일 genuine reimpl** (hexa 부재 +
+      `self/stdlib/ssh/keyfile.hexa` 실호출). FAN-OUT 진행중.
       (③19 = honest FFI floor · 포팅 대상 아님)
 
 ### B9.6 — codegen self-emit (genuine `.c`-delete route · SERIAL · non-parallel)
