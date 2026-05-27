@@ -1,0 +1,39 @@
+// HEXA Standard Library — crypto/tls13_encrypted_extensions
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// TLS 1.3 EncryptedExtensions message parser (RFC 8446 §4.3.1) — pure hexa.
+// The simplest handshake message in TLS 1.3: just a 2-byte length prefix
+// followed by the Extensions vector. Sent by the server immediately after
+// ServerHello to carry non-key-share extensions (server_name, alpn, etc.).
+// let-mut idiom (#1506).
+//
+// Structure (RFC 8446 §4.3.1):
+//   struct { Extension extensions<0..2^16-1>; } EncryptedExtensions;
+//
+// Surface (body = the EE message body, NOT including the 4-byte HS header):
+//   pub fn tls13_ee_extensions_length(body: [int]) -> int       — uint16 vector length
+//   pub fn tls13_ee_extensions_offset(body: [int]) -> int       — offset of first Extension TLV (= 2)
+//   pub fn tls13_ee_build(extensions_concat: [int]) -> [int]    — wrap with uint16 length
+
+@pure
+pub fn tls13_ee_extensions_length(body: [int]) -> int {
+    return ((body[0] & 0xFF) << 8) | (body[1] & 0xFF)
+}
+
+@pure
+pub fn tls13_ee_extensions_offset(body: [int]) -> int {
+    return 2
+}
+
+@pure
+pub fn tls13_ee_build(extensions_concat: [int]) -> [int] {
+    let n = len(extensions_concat)
+    let mut o: [int] = []
+    o.push((n >> 8) & 0xFF)
+    o.push(n & 0xFF)
+    let mut i = 0
+    while i < n { o.push(extensions_concat[i]); i = i + 1 }
+    return o
+}
