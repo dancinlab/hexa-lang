@@ -2,6 +2,20 @@
 
 ## 2026-05-27 — flame-P2b Qwen BPE = anima DECODER MoE-fresh scale-gate · 양 토크나이저 모듈 모두 실측 결함
 
+## 2026-05-27T11:15Z — ✅ RESOLVED: RTSC tranche-3 fn (Hc1·Jc·multi-band) 직접구현 (PR #1641)
+
+INBOX #1624 (RTSC fn 추가 요청) self-RESOLVED — 사용자 "INBOX fix this session".
+3 fn 4-surface 등록 (verify_cli fn body + dispatch + help + calc_dispatch float-fn SSOT):
+
+- `london_hc1(λ_L, κ)` → Hc1(0)=(Φ₀/4πλ_L²)(ln κ+0.5) — verify (200nm,2)=0.0049084 T 🟢
+- `bean_critical_current(Jc, d)` → M=Jc·d/2 — verify (1e10,1µm)=5000 A/m 🟢
+- `two_band_lambda_eff(λσ,λπ,λi)` → MgB₂ 2-band larger root — verify (1.0,0.4,0.05)=1.00414 🟢
+
+검증 = HEXA_LANG=worktree 로 module 해석 강제 (calc_dispatch float-fn 목록 등록 필수 — 미등록 시
+to_int trailing garbage on scientific-notation arg). RTSC paper §Limitations single-band
+assumption + device-side Hc1/Jc gap 가 lane-내 closure 가능.
+
+
 ## 2026-05-27T19:25Z — RTSC fn 추가 요청 (Hc1 · Jc · multi-band Eliashberg)
 
 RTSC math DFS lane closure (RTSC5-30, 18 PR) 후 추가 발견을 위한 verify_cli
