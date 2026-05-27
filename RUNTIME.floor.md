@@ -28,7 +28,7 @@ flip 캠페인이 안전 quick-win 을 고갈시킨 뒤 남는 진짜 바닥의 
 |------|------|---------|
 | **F1** perf-floor (hxflash/hxlayer/hxvdsp) | 🔴 **TERMINAL** | 측정 285x ML 회귀 → irreducible perf-floor (`F1-perf-floor.txt`) |
 | **F2** vendor/OS-ABI FFI (19 layer-③) | 🔴 **TERMINAL** | audit #1809 — 순수 로직 0, ABI 경계 (`F2-vendor-ffi.txt`) |
-| **F3** runtime-core (640/548 fn · self-emit 20/640 shadow · **1 ACTIVATED** = `rt_memset`) | 🟠 **LIVE FRONTIER** | genuinely-portable · 경로 A 인프라 LANDED → `rt_memset` LIVE-주입 (HEXA_RT_SELFEMIT 가드 · default 0-extern 보존) → 활성화 **템플릿 입증** · HARD-phase ~620 fn expert serial |
+| **F3** runtime-core (640/548 fn · self-emit 20/640 shadow · **12 ACTIVATED** = memset+11 leaf) | 🟠 **LIVE FRONTIER** | genuinely-portable · Path-A 템플릿 스케일아웃 → reloc-free leaf 12 LIVE-주입 (HEXA_RT_SELFEMIT 가드 · default 0-extern 보존 byte-identical) · 4 SKIP (C 대상 부재) · HARD-phase ~620 fn expert serial |
 | **F4** sha256 (exec_argv_sha256.c) | 🟢 **RESOLVED→F3** | runtime.c `#include` 조각 · 포팅 타깃 FIPS-검증 (`F4-sha256.txt`) |
 | **F5** boot-asm (3 `.s`) | 🔴 **TERMINAL** | audit #1810 — vector-table 데이터 섹션, RFC 063/064 gated (`F5-boot-asm.txt`) |
 | **F6** bootstrap seed (hexa_cc.c) | 🔴 **TERMINAL** | irreducible bootstrap FLOOR (B9.8) |
@@ -302,6 +302,47 @@ runtime.c 조각이라 F3 로 fold (mis-split 해소). **F3 만이 진짜 open**
       regen surface 불변.
     - `.c` 카운트는 아직 안 줄어듦 (runtime.c 에 639 primitive 잔존) — 단 **활성화
       템플릿이 입증됨**: 이후 leaf 활성화 = emit 드라이버 복제 + 심볼명 변경 (~0.5d/개).
+
+    **✅✅ BATCH-ACTIVATED (2026-05-28 · B9.6a-7 · Path-A 템플릿 스케일아웃 · #PR)** —
+    rt_memset 단건(#1836)에서 입증된 Path-A 템플릿을 reloc-free leaf 전량에 일괄 적용.
+    **11 추가 활성화** → 총 **12/640 LIVE-주입** (memset + memcmp · memcpy · memmove ·
+    strcmp · strncmp · strchr · strrchr · strcpy · strncpy · strcat · strlen).
+    - **활성화 11 (각 `hxlcl_<name>` C 사본을 self-emit 바이트로 link-override)**:
+      memcmp(52B) · memcpy(32B) · memmove(64B) · strcmp(48B) · strncmp(56B) ·
+      strchr(44B) · strrchr(44B) · strcpy(28B) · strncpy(56B) · strcat(48B) ·
+      strlen(44B · `rt_str_len` → C `hxlcl_strlen`, 심볼명만 상이).
+    - **SKIP 4 (C 카운터파트 부재 → 활성화 대상 자체가 없음, force 안 함)**:
+      `rt_clz`·`rt_ctz`·`rt_bswap` = runtime.c 에 `hxlcl_*` 명명 함수 0개 (override 슬롯
+      없음); `rt_popcount` = `__builtin_popcountll` 인라인(L6486)만 존재 · 명명된
+      `hxlcl_popcount` 심볼 없음 → ld override 불가. (이들은 활성화할 C 대상이 없어
+      SKIP — shadow 카탈로그로 잔류.)
+    - **ABI 검증 (각 leaf 별 레지스터 규약 = C 시그니처 일치 · mismatch 0)**: 전 leaf
+      x0..x2 인자 순서 일치 · 반환 x0/w0 일치 (memcpy/memmove/strcpy/strncpy/strcat 는
+      x0=dst 절대 미변경 → C `void*/char*` 반환규약 ✓ · memcmp/strcmp/strncmp 는 w0
+      signed-diff ✓ · strchr/strrchr 는 x0=ptr/NULL ✓ · strlen 은 x0=len ✓). caveat
+      (정직): (i) strchr/strrchr 는 NULL-입력 가드 없음 (C strchr(NULL) = UB → 비-NULL
+      호출 byte-identical); (ii) memmove 는 `dst<=src` 분기(C 본문 `dst<src`) — dst==src
+      에서 forward no-op copy = 출력 동일. 둘 다 활성화 진행(실 호출 동작 동일).
+    - **dual-build 증거 (mini · arm64 macOS · 실제 빌드 레시피 산출 driver + module_loader)**:
+      (a) default (가드 off) — 12 `hxlcl_*` 전부 local `t` · undefined(libc-extern) set =
+          driver 58 / module_loader 56 · **origin/main baseline 과 byte-identical
+          (diff IDENTICAL · 양 바이너리)** → 0-extern 불변식 보존.
+      (b) HEXA_RT_SELFEMIT=1 — 12 `_hxlcl_*` 전부 strong `T` (self-emit `.o` 12개에서
+          resolve) · BUILD OK + smoke 3/3 PASS (--version · parse · build round-trip) ·
+          guarded driver 가 실 소스 250-line 파일 parse rc=0 · LIVE disasm spot-check
+          (memset 7-instr · strrchr 11-instr · memcmp subs+2-ret) = self-emit 소스 바이트
+          정확 일치.
+      추가 standalone 오라클 (`test/native_build/poc_hxlcl_leaves_caller.c`) = 11 self-emit
+      `.o` ahead-link 후 libc ground-truth 대비 전 케이스 PASS (rc=0).
+    - **빌드 레시피 정정**: selfemit emit 블록을 step 0(hexat bootstrap) **이후**로 이동
+      (emit 에 hexat 필요 · `-DHEXA_RT_SELFEMIT` 는 hexat 빌드엔 미적용 → 부트스트랩
+      트랜스파일러는 default static 런타임으로 빌드). #1836 의 단건 블록 = 12-leaf 루프로
+      일반화 + 이동 (refactor · 무삭제).
+    - **fixpoint 무위험**: 11 emit 드라이버 전부 `compiler/main.hexa` `use` 0 (grep 확인) →
+      `hexa_cc.c` regen 무관. runtime.c diff = 순수 가드 추가 (deletion 0).
+    - `.c` 카운트는 여전히 안 줄어듦 (runtime.c 가 나머지 primitive 보유) — 활성화는
+      default-off OPT-IN 가드라 freestanding 산출물 불변. 다음 = state-bound(reloc 필요)
+      leaf 활성화 (Path-A 만으로 부족 · reloc-emit 배선 선행).
 
 ### F4 — sha256 entangled
 

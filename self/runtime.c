@@ -120,12 +120,25 @@ static int  hxlcl_clock_gettime(int clk, void *ts);  /* re-decl: cycle 65 syscal
 // textually overrides any residual libc strlen / memcmp / strcmp
 // references in macro expansions / inline header bodies that the
 // perl substitution couldn't reach.
+// F3 ACTIVATION RUNBOOK · Path A — hxlcl_strlen self-emit slot.
+// DEFAULT (guard off): file-local `static` body (0-libc-extern preserved).
+// HEXA_RT_SELFEMIT: `extern`, resolved by emit_hxlcl_strlen_o.hexa's .o
+// (rt_str_len's 40 bytes). See the hxlcl_memset slot below for the full
+// rationale. ABI: strlen(x0=s) -> x0=len, matches rt_str_len.
+#ifdef HEXA_RT_SELFEMIT
+extern size_t hxlcl_strlen(const char *s);
+#else
 static size_t __attribute__((noinline)) hxlcl_strlen(const char *s) {
     if (!s) return 0;
     size_t n = 0;
     while (((const volatile char *)s)[n]) n++;
     return n;
 }
+#endif
+// F3 ACTIVATION RUNBOOK · Path A — hxlcl_memcmp self-emit slot (rt_memcmp, 52 B).
+#ifdef HEXA_RT_SELFEMIT
+extern int hxlcl_memcmp(const void *a, const void *b, size_t n);
+#else
 static int __attribute__((noinline)) hxlcl_memcmp(const void *a, const void *b, size_t n) {
     const unsigned char *pa = (const unsigned char *)a;
     const unsigned char *pb = (const unsigned char *)b;
@@ -135,6 +148,11 @@ static int __attribute__((noinline)) hxlcl_memcmp(const void *a, const void *b, 
     }
     return 0;
 }
+#endif
+// F3 ACTIVATION RUNBOOK · Path A — hxlcl_strcmp self-emit slot (rt_strcmp, 48 B).
+#ifdef HEXA_RT_SELFEMIT
+extern int hxlcl_strcmp(const char *a, const char *b);
+#else
 static int __attribute__((noinline)) hxlcl_strcmp(const char *a, const char *b) {
     for (size_t i = 0; ; i++) {
         unsigned char ca = (unsigned char)a[i];
@@ -143,10 +161,15 @@ static int __attribute__((noinline)) hxlcl_strcmp(const char *a, const char *b) 
         if (ca == 0) return 0;
     }
 }
+#endif
 // Cycle 47: `strcat` unhook. Same loop pattern in `hxlcl_strcat` body
 // would let clang's libcall recognizer convert it back to `strcat` +
 // `strlen`; the volatile read on the dest scan defeats that, mirroring
 // the cycle-46 helpers. Returns dest per C99 strcat semantics.
+// F3 ACTIVATION RUNBOOK · Path A — hxlcl_strcat self-emit slot (rt_strcat, 48 B).
+#ifdef HEXA_RT_SELFEMIT
+extern char *hxlcl_strcat(char *dest, const char *src);
+#else
 static char *__attribute__((noinline)) hxlcl_strcat(char *dest, const char *src) {
     char *p = dest;
     while (((const volatile char *)p)[0]) p++;
@@ -158,7 +181,12 @@ static char *__attribute__((noinline)) hxlcl_strcat(char *dest, const char *src)
     p[i] = '\0';
     return dest;
 }
+#endif
 // Cycle 47 batch: strncmp, strstr, strrchr, strchr, strdup, strndup.
+// F3 ACTIVATION RUNBOOK · Path A — hxlcl_strncmp self-emit slot (rt_strncmp, 56 B).
+#ifdef HEXA_RT_SELFEMIT
+extern int hxlcl_strncmp(const char *a, const char *b, size_t n);
+#else
 static int __attribute__((noinline)) hxlcl_strncmp(const char *a, const char *b, size_t n) {
     for (size_t i = 0; i < n; i++) {
         unsigned char ca = (unsigned char)a[i];
@@ -168,6 +196,13 @@ static int __attribute__((noinline)) hxlcl_strncmp(const char *a, const char *b,
     }
     return 0;
 }
+#endif
+// F3 ACTIVATION RUNBOOK · Path A — hxlcl_strchr self-emit slot (rt_strchr, 44 B).
+// NOTE: rt_strchr has no NULL-input guard (the C body's `if (!s)` is dropped);
+// C strchr(NULL,...) is UB anyway, so non-NULL callers are byte-identical.
+#ifdef HEXA_RT_SELFEMIT
+extern const char *hxlcl_strchr(const char *s, int c);
+#else
 static const char *__attribute__((noinline)) hxlcl_strchr(const char *s, int c) {
     if (!s) return NULL;
     unsigned char target = (unsigned char)c;
@@ -177,6 +212,12 @@ static const char *__attribute__((noinline)) hxlcl_strchr(const char *s, int c) 
         if (x == 0) return (target == 0) ? (s + i) : NULL;
     }
 }
+#endif
+// F3 ACTIVATION RUNBOOK · Path A — hxlcl_strrchr self-emit slot (rt_strrchr, 44 B).
+// NOTE: rt_strrchr has no NULL-input guard (same UB caveat as hxlcl_strchr).
+#ifdef HEXA_RT_SELFEMIT
+extern const char *hxlcl_strrchr(const char *s, int c);
+#else
 static const char *__attribute__((noinline)) hxlcl_strrchr(const char *s, int c) {
     if (!s) return NULL;
     unsigned char target = (unsigned char)c;
@@ -187,6 +228,7 @@ static const char *__attribute__((noinline)) hxlcl_strrchr(const char *s, int c)
         if (x == 0) return last;
     }
 }
+#endif
 static const char *__attribute__((noinline)) hxlcl_strstr(const char *h, const char *n) {
     if (!h || !n) return NULL;
     if (n[0] == 0) return h;
@@ -292,12 +334,17 @@ static void __attribute__((noinline)) hxlcl_bzero(void *s, size_t n) {
     }
 }
 // Cycle 49 batch — memory triple + Tier-A.1 stragglers.
+// F3 ACTIVATION RUNBOOK · Path A — hxlcl_memcpy self-emit slot (rt_memcpy, 32 B).
+#ifdef HEXA_RT_SELFEMIT
+extern void *hxlcl_memcpy(void *dst, const void *src, size_t n);
+#else
 static void *__attribute__((noinline)) hxlcl_memcpy(void *dst, const void *src, size_t n) {
     unsigned char *d = (unsigned char *)dst;
     const unsigned char *s = (const unsigned char *)src;
     for (size_t i = 0; i < n; i++) d[i] = s[i];
     return dst;
 }
+#endif
 /* F3 ACTIVATION RUNBOOK · Path A — hxlcl_memset self-emit slot.
  *
  * DEFAULT build (HEXA_RT_SELFEMIT undefined): the file-local `static`
@@ -325,6 +372,13 @@ static void *__attribute__((noinline)) hxlcl_memset(void *s, int c, size_t n) {
     return s;
 }
 #endif
+// F3 ACTIVATION RUNBOOK · Path A — hxlcl_memmove self-emit slot (rt_memmove, 64 B).
+// NOTE: rt_memmove uses `dst <= src ? forward` (vs C body `dst < src`); the two
+// differ only at dst==src, where a forward copy of identical bytes is a no-op —
+// output byte-identical to the early-return C path.
+#ifdef HEXA_RT_SELFEMIT
+extern void *hxlcl_memmove(void *dst, const void *src, size_t n);
+#else
 static void *__attribute__((noinline)) hxlcl_memmove(void *dst, const void *src, size_t n) {
     unsigned char *d = (unsigned char *)dst;
     const unsigned char *s = (const unsigned char *)src;
@@ -336,18 +390,29 @@ static void *__attribute__((noinline)) hxlcl_memmove(void *dst, const void *src,
     }
     return dst;
 }
+#endif
+// F3 ACTIVATION RUNBOOK · Path A — hxlcl_strncpy self-emit slot (rt_strncpy, 56 B).
+#ifdef HEXA_RT_SELFEMIT
+extern char *hxlcl_strncpy(char *dst, const char *src, size_t n);
+#else
 static char *__attribute__((noinline)) hxlcl_strncpy(char *dst, const char *src, size_t n) {
     size_t i = 0;
     for (; i < n && src[i]; i++) dst[i] = src[i];
     for (; i < n; i++) dst[i] = '\0';
     return dst;
 }
+#endif
+// F3 ACTIVATION RUNBOOK · Path A — hxlcl_strcpy self-emit slot (rt_strcpy, 28 B).
+#ifdef HEXA_RT_SELFEMIT
+extern char *hxlcl_strcpy(char *dst, const char *src);
+#else
 static char *__attribute__((noinline)) hxlcl_strcpy(char *dst, const char *src) {
     size_t i = 0;
     while (((const volatile char *)src)[i]) { dst[i] = src[i]; i++; }
     dst[i] = '\0';
     return dst;
 }
+#endif
 static const char *__attribute__((noinline)) hxlcl_strerror(int errnum) {
     switch (errnum) {
         case 0: return "no error";

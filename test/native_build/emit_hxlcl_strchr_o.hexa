@@ -1,0 +1,258 @@
+// test/native_build/emit_hxlcl_strchr_o.hexa
+//
+// F3 ACTIVATION RUNBOOK · Path A · batch-activate `rt_strchr` —
+// production-wire the self-emitted strchr over the C `hxlcl_strchr`.
+//
+// EMITS a Mach-O .o exporting strong external symbol `_hxlcl_strchr` whose body is
+// rt_strchr's verbatim machine-code (44 bytes). Under HEXA_RT_SELFEMIT=1,
+// self/runtime.c declares `hxlcl_strchr` as `extern`, and ld64 binds the
+// `bl _hxlcl_strchr` callsites to this .o's strong symbol. Cloned from the proven
+// emit_hxlcl_memset_o.hexa template (#1836); only the bytes, the symbol name,
+// and the sanity-check offsets differ.
+//
+// ── ABI ──
+//   const char* strchr(s=x0,c=x1) -> x0 ptr-to-first-c or NULL. No NULL-input guard (C UB).
+//   No relocation, no arena state, no HexaVal touch.
+//
+// ── HONESTY ──
+//   - the bytes are character-identical to self/codegen/runtime_arm64.hexa::
+//     rt_strchr() — clang appears ONLY as the link-side oracle, never in emit.
+//   - HEXA_RT_SELFEMIT=1 gates the build append; unset = no behavior change
+//     (default build keeps `static` = 0-libc-extern invariant preserved).
+//   - no binaries committed.
+//
+// SELF-CONTAINED (no `use`): the local repo has no compiled module_loader, so
+// multi-`use` programs link-fail (same rationale as emit_hxlcl_memset_o.hexa).
+
+// ═══════════════════════════════════════════════════════════════════
+// Inlined from self/codegen/runtime_arm64.hexa::rt_strchr
+// 11 instructions, 44 bytes (verbatim).
+// ═══════════════════════════════════════════════════════════════════
+fn rt_strchr_bytes() -> [int] {
+    let mut c = []
+    // mov x2, #0  (index i)          0xD2800002
+    c.push(2); c.push(0); c.push(128); c.push(210)
+    // loop: ldrb w3, [x0, x2]        0x38626803
+    c.push(3); c.push(104); c.push(98); c.push(56)
+    // cmp w3, w1                     0x6B01007F
+    c.push(127); c.push(0); c.push(1); c.push(107)
+    // b.eq found (+4 instrs = +16)   0x54000080
+    c.push(128); c.push(0); c.push(0); c.push(84)
+    // cbz w3, notfound (+5 = +20)    0x340000A3
+    c.push(163); c.push(0); c.push(0); c.push(52)
+    // add x2, x2, #1                 0x91000442
+    c.push(66); c.push(4); c.push(0); c.push(145)
+    // b loop (-5 instrs = -20)       0x17FFFFFB
+    c.push(251); c.push(255); c.push(255); c.push(23)
+    // found: add x0, x0, x2          0x8B020000
+    c.push(0); c.push(0); c.push(2); c.push(139)
+    // ret                            0xD65F03C0
+    c.push(192); c.push(3); c.push(95); c.push(214)
+    // notfound: mov x0, #0           0xD2800000
+    c.push(0); c.push(0); c.push(128); c.push(210)
+    // ret                            0xD65F03C0
+    c.push(192); c.push(3); c.push(95); c.push(214)
+    return c
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Inlined Mach-O obj_wrap (constants + helpers), symbol-parameterized.
+// Identical structure to emit_hxlcl_memset_o.hexa; the exported symbol
+// is `_hxlcl_strchr` (strtab_size = 1 + 13).
+// ═══════════════════════════════════════════════════════════════════
+fn mh_magic_64_v() -> int { return 0xFEEDFACF }
+fn mh_object_v() -> int { return 1 }
+fn cpu_type_arm64_v() -> int { return 0x0100000C }
+fn cpu_subtype_all_v() -> int { return 0 }
+fn lc_segment_64_v() -> int { return 0x19 }
+fn lc_symtab_v() -> int { return 0x02 }
+fn lc_build_version_v() -> int { return 0x32 }
+fn s_attr_pure_v() -> int { return 0x80000000 }
+fn s_attr_some_v() -> int { return 0x00000400 }
+fn n_ext_v() -> int { return 0x01 }
+fn n_sect_v() -> int { return 0x0e }
+
+fn align_to_v(val: int, align: int) -> int {
+    return (val + align - 1) / align * align
+}
+
+fn push_u16_le_v(buf: [int], val: int) -> [int] {
+    return buf.push(val % 256).push((val / 256) % 256)
+}
+
+fn push_u32_le_v(buf: [int], val: int) -> [int] {
+    return buf.push(val % 256).push((val / 256) % 256).push((val / 65536) % 256).push((val / 16777216) % 256)
+}
+
+fn push_u64_le_v(buf: [int], val: int) -> [int] {
+    let mut b = push_u32_le_v(buf, val % 0x100000000)
+    return push_u32_le_v(b, val / 0x100000000)
+}
+
+// Pushes the exported symbol name bytes (without the leading/trailing NUL).
+fn push_symbol_name(buf: [int]) -> [int] {
+    let mut b = buf
+    b.push(95)
+    b.push(104)
+    b.push(120)
+    b.push(108)
+    b.push(99)
+    b.push(108)
+    b.push(95)
+    b.push(115)
+    b.push(116)
+    b.push(114)
+    b.push(99)
+    b.push(104)
+    b.push(114)
+    return b
+}
+
+fn macho_obj_wrap_sym(code: [int], main_offset: int) -> [int] {
+    let mut out = []
+    let code_size = len(code)
+
+    let header_size = 32
+    let segment_cmd_size = 152
+    let symtab_cmd_size = 24
+    let build_version_cmd_size = 24
+    let sizeofcmds = segment_cmd_size + symtab_cmd_size + build_version_cmd_size
+
+    let code_offset = align_to_v(header_size + sizeofcmds, 8)
+    let symtab_offset = align_to_v(code_offset + code_size, 4)
+    let nlist_size = 16
+    let strtab_offset = symtab_offset + nlist_size
+    // strtab = NUL + "_hxlcl_strchr" + NUL = 1 + 13 = 14 bytes.
+    let strtab_size = 1 + 13
+
+    // Mach-O Header (32 bytes)
+    out = push_u32_le_v(out, mh_magic_64_v())
+    out = push_u32_le_v(out, cpu_type_arm64_v())
+    out = push_u32_le_v(out, cpu_subtype_all_v())
+    out = push_u32_le_v(out, mh_object_v())
+    out = push_u32_le_v(out, 3)
+    out = push_u32_le_v(out, sizeofcmds)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+
+    // LC_SEGMENT_64
+    out = push_u32_le_v(out, lc_segment_64_v())
+    out = push_u32_le_v(out, segment_cmd_size)
+    let mut i = 0
+    while i < 16 { out.push(0); i = i + 1 }
+    out = push_u64_le_v(out, 0)
+    out = push_u64_le_v(out, align_to_v(strtab_offset + strtab_size, 8))
+    out = push_u64_le_v(out, code_offset)
+    out = push_u64_le_v(out, strtab_offset + strtab_size - code_offset)
+    out = push_u32_le_v(out, 7)
+    out = push_u32_le_v(out, 7)
+    out = push_u32_le_v(out, 1)
+    out = push_u32_le_v(out, 0)
+
+    // Section header: __text (80 bytes)
+    out.push(95); out.push(95); out.push(116); out.push(101); out.push(120); out.push(116)
+    let mut j = 0
+    while j < 10 { out.push(0); j = j + 1 }
+    out.push(95); out.push(95); out.push(84); out.push(69); out.push(88); out.push(84)
+    j = 0
+    while j < 10 { out.push(0); j = j + 1 }
+    out = push_u64_le_v(out, 0)
+    out = push_u64_le_v(out, code_size)
+    out = push_u32_le_v(out, code_offset)
+    out = push_u32_le_v(out, 2)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, s_attr_pure_v() + s_attr_some_v())
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+
+    // LC_SYMTAB
+    out = push_u32_le_v(out, lc_symtab_v())
+    out = push_u32_le_v(out, symtab_cmd_size)
+    out = push_u32_le_v(out, symtab_offset)
+    out = push_u32_le_v(out, 1)
+    out = push_u32_le_v(out, strtab_offset)
+    out = push_u32_le_v(out, strtab_size)
+
+    // LC_BUILD_VERSION
+    out = push_u32_le_v(out, lc_build_version_v())
+    out = push_u32_le_v(out, build_version_cmd_size)
+    out = push_u32_le_v(out, 1)
+    out = push_u32_le_v(out, 0x000E0000)
+    out = push_u32_le_v(out, 0x000E0000)
+    out = push_u32_le_v(out, 0)
+
+    // Pad to code_offset
+    while len(out) < code_offset { out.push(0) }
+
+    // Code section
+    let mut k = 0
+    while k < len(code) { out.push(code[k]); k = k + 1 }
+
+    // Pad to symtab_offset
+    while len(out) < symtab_offset { out.push(0) }
+
+    // Symbol table: nlist_64 (16 bytes)
+    out = push_u32_le_v(out, 1)
+    out.push(n_sect_v() + n_ext_v())
+    out.push(1)
+    out = push_u16_le_v(out, 0)
+    out = push_u64_le_v(out, main_offset)
+
+    // String table — NUL + "_hxlcl_strchr" + NUL (14 bytes)
+    out.push(0)
+    out = push_symbol_name(out)
+    out.push(0)
+
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Driver
+// ═══════════════════════════════════════════════════════════════════
+fn emit_hxlcl_strchr_o() {
+    println("[wire] F3 Path A · rt_strchr native override — _hxlcl_strchr")
+
+    let code = rt_strchr_bytes()
+    if len(code) != 44 {
+        println("FAIL: rt_strchr expected 44 bytes, got " + to_string(len(code)))
+        return
+    }
+    println("  rt_strchr bytes: " + to_string(len(code)) + " (44 expected)")
+
+    // first instr sanity at offset 0
+    if code[0] != 2 || code[1] != 0 || code[2] != 128 || code[3] != 210 {
+        println("FAIL: first-instr prefix mismatch")
+        return
+    }
+    // ret trailer (c0 03 5f d6) at offset 40
+    if code[40] != 192 || code[41] != 3 || code[42] != 95 || code[43] != 214 {
+        println("FAIL: ret trailer mismatch")
+        return
+    }
+    println("  prefix + ret trailer OK")
+
+    let obj = macho_obj_wrap_sym(code, 0)
+    println("  obj_wrap size  : " + to_string(len(obj)) + " bytes total")
+
+    // MH_MAGIC_64 LE at offset 0 (0xFEEDFACF -> cf fa ed fe)
+    if obj[0] != 0xcf || obj[1] != 0xfa || obj[2] != 0xed || obj[3] != 0xfe {
+        println("FAIL: MH_MAGIC_64 mismatch")
+        return
+    }
+    if obj[12] != 1 {
+        println("FAIL: filetype not MH_OBJECT")
+        return
+    }
+    println("  MH_MAGIC_64 + MH_OBJECT OK")
+
+    let out_path = env_var("HEXA_HXLCL_STRCHR_O")
+    let mut dest = out_path
+    if dest == "" { dest = "build/poc/hxlcl_strchr.o" }
+    write_bytes(dest, obj)
+    println("  wrote          : " + dest)
+    println("[wire] EMIT OK — link via build recipe with HEXA_RT_SELFEMIT=1")
+}
+
+emit_hxlcl_strchr_o()
