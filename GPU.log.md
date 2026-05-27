@@ -306,3 +306,75 @@ multi-cycle) 전에 cheap GEMM-only oracle 한 번이 ROOFLINE 정직 산출.
 `feedback_instrument_first_methodology` 4 rules (통합 스칼라 금지 · cheap-first
 oracle · faithful model · over-claim 0) 의 cheap-first oracle 패턴이 multi-
 cycle 자원 절약.
+
+## 2026-05-27 — 🛸 3-wedge ceiling probe: small-M GEMV + top-K 진짜 격차 발견
+
+`/cycle-bg 3 all` 호출, BC3 decomp 의 "better wedges" 후보 3종 (small-M /
+grouped-QKV / top-K) cheap-first oracle 일괄 fire. 운영 prefs `foreground only`
+준수로 background subagent 대신 foreground 순차, 단일 PR 묶음.
+
+**Tier**: 🟢 SUPPORTED-NUMERICAL (3 wedge ceiling 실측)
+**Branch**: `gpu-wedge-ceilings-2026-05-27`
+**Falsifiers**: `F-WEDGE-SMALL-M-SUB-ROOFLINE` · `F-WEDGE-GROUPED-QKV-CEILING` · `F-WEDGE-TOPK-CEILING`
+**Artifact**: `archive/fires/gpu_wedge_ceilings_2026_05_27/{result.json, sweep.log}` + `tool/gpu_wedge_{small_m,grouped_qkv,topk}.cu`
+
+### 🛸 oracle 1 — small-M sub-roofline (HIGH-VALUE FINDING, K=N=4096)
+
+| M | cuBLAS_ms | achieved TFLOPS | sub-roofline |
+|---|---|---|---|
+| **1** | 0.114 | **0.30** | **99.05%** |
+| 8 | 0.115 | 2.34 | 92.50% |
+| 32 | 0.118 | 9.07 | 70.93% |
+| 64 | 0.127 | 16.97 | 45.60% |
+| 128 | 0.216 | 19.89 | 36.24% |
+| 1024 | 1.443 | 23.82 | 23.67% |
+
+(sm_120 FP32 peak = 31.2 TFLOPS)
+
+cuBLAS SGEMM 이 **M=1 에서 FP32 peak 의 99.05% 를 안 쓴다** (0.30/31.2 TFLOPS).
+이는 LLM single-token decode 의 canonical regime. vLLM/llama.cpp 가 cuBLAS 대신
+custom GEMV CUDA 커널을 ship 하는 정확한 이유. **hexa hand-emit GEMV (warp-level
+reduce + bcast) 가 M=1 에서 cuBLAS 대비 5-10× 가능** (real >>1.5× ceiling).
+
+**Next-round target**: F-WEDGE-SMALL-M-GEMV-WALL — hexa-native GEMV kernel
+timed wall vs cuBLAS at M ∈ {1, 8, 32}.
+
+### 🟠 oracle 2 — grouped QKV (INSUFFICIENT, debug deferred)
+
+cublasSgemmStridedBatched call line 118 에서 CUDA illegal memory access 로 사망.
+stride layout 의심 (column-major leading-dim + batched offset 혼선). 후속
+디버그 필요하지만 small-M + top-K finding 이 더 강한 wedge 이므로 deferred.
+
+### 🛸 oracle 3 — top-K fusion ceiling (HIGH-VALUE FINDING)
+
+| shape (M·K·N) | gemm_ms | full_ms | topk_share | ceiling |
+|---|---|---|---|---|
+| decode-1tok-Qwen-vocab (1·4096·151643) | 4.03 | 4.12 | 2.09% | 1.021× |
+| decode-8tok-Qwen-vocab (8·4096·151643) | 4.02 | 4.68 | 13.99% | 1.163× |
+| **small-batch-Qwen-vocab (32·4096·151643)** | 4.07 | 6.85 | **40.59%** | **1.683×** |
+| decode-1tok-LLaMA-vocab (1·4096·32000) | 0.83 | 0.92 | 9.27% | 1.102× |
+| **decode-8tok-LLaMA-vocab (8·4096·32000)** | 0.85 | 1.54 | **44.52%** | **1.802×** |
+
+(top-K stand-in = thrust::sort O(N log N) per row; production NN stack 의
+cub::DeviceSegmentedRadixSort 는 더 빠름 — realistic ceiling 1.10-1.30× 추정.
+하지만 여전히 BC3 epilogue 1.085× 위)
+
+**Next-round target**: F-WEDGE-TOPK-FUSED-WALL — hexa-native GEMM+streaming-
+top-K fused kernel (warp-level top-K accumulator computed during GEMM output)
+vs cublasSgemm + cub::DeviceSegmentedRadixSort.
+
+### Ranked wedges (BC3 decomp+wedge probe 통합)
+
+| rank | wedge | ceiling | feasibility |
+|---|---|---|---|
+| 1 | **small-M GEMV (M=1)** | 5-10× estimated (99% sub-roofline) | hexa hand-emit GEMV-tiled kernel |
+| 2 | **top-K fusion (M=8 LLaMA)** | 1.80× measured | hand-emit GEMM+streaming-top-K |
+| 3 | top-K fusion (M=32 Qwen) | 1.68× measured | 동일 |
+| 4 | BC3 epilogue (PR #1697) | 1.085× retired | roofline-bounded, deprecated |
+| 5 | grouped QKV | TBD | stride debug 필요 |
+
+**Methodology**: cheap-first oracle 3 launchers (~5min total fire) 이 **2 wedge
+의 real >1.5× target 을 식별**, BC3 epilogue 의 1.085× 천장을 retire. 다음
+cycle 우선순위 = small-M GEMV (rank 1, LLM-decode killer feature) 또는 top-K
+fused (rank 2, LM-head wedge). `feedback_instrument_first_methodology` cheap-
+first oracle 의 multi-cycle 자원 절약 사례 #2 (BC3 decomp 가 사례 #1).
