@@ -215,10 +215,16 @@ coarse item 을 audit-grounded atomic 으로 분해 (2026-05-28).
 실측 현재 상태 (2026-05-28, origin/main):
 - `.o` = **0** ✅ (#1808 build-artifact 제거로 달성)
 - `.s` = **3** (3 irreducible boot-floor · B9.1a 로 dead fixture 1개 제거)
-- `.c` = **229** (`self/*.c` 44 + `self/native/*.c` 31 + 기타). north-star
+- `.c` = **228** (`self/*.c` 44 + `self/native/*.c` 30 + 기타). north-star
   충족 시 `find . -name '*.c' -o -name '*.s' -o -name '*.o'` 가 비어야 함.
-  🎯 **첫 실제 감소 달성** — `crypto_blowfish.c` 삭제 (B9.6c · #1816 · 230→229).
-  codegen-wire 레시피 end-to-end 입증 (fixpoint byte-identical).
+  🎯 **세션 2개 실제 삭제** — `crypto_blowfish.c` (B9.6c · #1816 · wire+regen) +
+  `v565_grad_analysis.c` (B9.6d · #1818 · dead git-rm). 230→228.
+
+⚠ **파일-수 vs 함수-수 구조 인사이트 (중요)**: `.c` *파일* 카운트는 파일 전체가
+삭제될 때만 감소. `runtime.c`/`runtime_core.c` 는 각 1파일이지만 640/548 fn 을
+**전부** 포팅해야 삭제 가능 (= FLOOR, multi-session). 따라서 단기 파일-삭제는
+standalone `native/*.c` 에서만 나옴 — 그리고 그 중 **clean 케이스(blowfish 1-caller
+wire · v565 dead-rm)는 이미 고갈**. 잔여 native/*.c 삭제는 전부 substantial port:
 
 ⚠ **핵심 정정 (2026-05-28 scoping 3/3 + dup-race precheck 후)**: `.c`-zero 의
 진짜 병목은 reimpl 부재가 **아니다** — portable layer① 의 대부분(sha256·regex·
@@ -323,10 +329,21 @@ fan-out 불가, serial 진행.
       - 나머지 native ③19 = vendor FFI (포팅≠삭제 · 영구 바닥).
       - blowfish 가 유일한 깔끔한 1-caller 케이스였음. 다음 `.c` 삭제는 per-file
         caller-count + name-match 분석 선행 必 (clean 케이스 추가 탐색 = B9.6d).
-- [ ] **B9.6d-next-clean-c-delete** — native/runtime `.c` 중 추가 clean 1-caller +
-      name-match 삭제 후보를 per-file 분석으로 발굴 (sha256 류 다중-caller 는 별도
-      대규모 rewire 트랙). 입증된 7-surface 레시피 재사용.
-- [x] **B9.6e-hxtok-c-delete** — 🎯 **실제 `.c` 삭제 DONE (228→227)**.
+- [x] **B9.6d-next-clean-c-delete** — `v565_grad_analysis.c` 삭제 DONE (#1818 ·
+      229→228). DEAD 1-off harness (only `main()`, dlopen consumer, 빌드 레시피
+      無, 0 caller) → pure `git rm`, 가장 깔끔한 케이스. **이후 clean DEAD/1-caller
+      파일-삭제 후보 고갈 확정.**
+
+      **잔여 native/*.c 삭제 = 전부 substantial multi-session port (clean 아님)**:
+      - ~~`hxtok.c`~~ — **B9.6e 에서 dead-file git-rm 으로 해결 (port 아님)** ↓
+      - `hxvocoder.c`/`hxflash_linux.c`/`hxlayer_linux.c`/`hxvdsp_linux.c` — layer①
+        port · 각 dedicated build script + ml FFI consumer (rewrite+rewire)
+      - `exec_argv_sha256.c` — sha256 builtin 다중 core-compiler caller + 이름불일치
+        (대규모 rewire 트랙)
+      - vendor FFI ③19 (CUDA/openssl/sodium/OS-ABI) — irreducible 영구 바닥
+      - `runtime.c`/`runtime_core.c` — 640/548 fn FLOOR (전부 포팅해야 파일 삭제)
+- [x] **B9.6e-hxtok-c-delete** — 🎯 **실제 `.c` 삭제 DONE (228→227)**. (B9.6d 의
+      "hxtok = port 필요" 예측은 정밀 audit 으로 반증됨 — port 아닌 dead-file.)
       `self/native/hxtok.c`(750L)+`hxtok.h`(49L) Qwen2.5 BPE C 라이브러리 삭제.
       정밀 audit: standalone shim — `tool/`·`*.json`·`*.sh` 빌드 스크립트 0건,
       `.so`/`.dylib` 아티팩트 0건, 전 repo `HxTok`/`hxtok_*` FFI 호출 0건 (유일
