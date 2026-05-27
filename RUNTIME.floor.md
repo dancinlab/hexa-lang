@@ -84,10 +84,21 @@ flip 캠페인이 안전 quick-win 을 고갈시킨 뒤 남는 진짜 바닥의 
 
 ### F5 — `.s` boot-floor (RFC 063/064 gated)
 
-- [ ] **F5 boot-asm** — `boot_rp2040.s` · `boot_stm32h7.s` · `startup_stm32f429.s`
+- [x] **F5 boot-asm** — `boot_rp2040.s` · `boot_stm32h7.s` · `startup_stm32f429.s`
+      — 🔴 **IRREDUCIBLE BOOT-FLOOR TERMINAL** (honest-floor · audit #1810 ·
+      `.verdicts/runtime-floor-closure/F5-boot-asm.txt`)
   - 고정-link-주소 vector-table (CPU reset fetch). `@asm` 는 inline escape hatch 라
     vector-table data section emit 불가 → RFC 063/064 `@interrupt`/`@target`
     lowering 선행 필수.
+  - **종결 (2026-05-28)**: audit #1810 권위 분류 — 3 파일 전부 `.vector_table`/
+    `.isr_vector` **데이터 섹션** (함수 본문 아님), reset 시 CPU 가 고정 link 주소
+    (FLASH 0x10000100 / 0x08000000)에서 직접 fetch. `@asm`(wfi/dsb 인라인 escape)로는
+    구조적으로 표현 불가. codegen.hexa:1851 이 `@interrupt/@target` 을 인식하나 lowering
+    은 RFC 063/064 deferred(no-op). north-star "minimal per-arch .s asm STAYS ·
+    zero .c NOT zero asm" 의 irreducible asm 바닥 그 자체. **re-open flag**: RFC
+    063/064 가 vector-table data-section lowering 을 1급 처리하면 zero-.s 도달 가능.
+    F1(perf)·F2(vendor-ABI) 와 동일 closure 형태 (현 capability irreducible + 미래
+    enabler re-open).
 
 ### F6 — bootstrap seed (terminal)
 
