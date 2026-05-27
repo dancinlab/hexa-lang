@@ -15,7 +15,15 @@
 //     — hash32 = 32-byte SHA-256 of the message
 //     — r, s   = 32-byte big-endian signature components
 //
-// Verified vector (python `cryptography` cross-impl):
+// STATUS: algorithm complete · perf-pending. The implementation uses the
+// general shift-and-subtract mod-reduce (correctness-first); a real KAT
+// against a python-cryptography reference signature times out >300s in the
+// hexa runtime because each point-double / point-add allocates new 16-limb
+// arrays through value-immutable [int] paths (3840 mul-mod × ~25K basic
+// ops × allocation overhead). The math is correct (single-mod-reduce probes
+// match python on small inputs); a follow-up PR with Solinas P-256 fast
+// reduction for mod-p plus Barrett reduction for mod-n is required to land
+// a passing KAT. Pair test vector retained for that follow-up:
 //   Q  = (d8cd12ea5c67f2f8a00c1124893edcfa6754c4d6cede6be13bdf2295c810a97f,
 //         a5a89d2d2a360c0ca9a4d6c7c9ed4b28d3e199d6627f2e696d689c310a5b0f48)
 //   h  = fd47ff53199bfd87caf367ea24bc085a77d6f6d38c05f009bec5ff72e248098b
