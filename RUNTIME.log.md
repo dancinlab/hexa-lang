@@ -1,6 +1,43 @@
 # RUNTIME — log
 
-Append-only history sister of `RUNTIME.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
+Append-only history sister of `RUNTIME.md`. Each entry starts with `## 2026-05-27T15:30Z — 🛸 "완주" 세션: crypto stack 대량 완주 + #1506 codegen fix
+
+`/goal 완주` 순차-foreground 실행. compile-light net-new + 1-compile-verify 가능한
+모든 next-list 항목 완주. 잔존 = 다중-compile-verify 가 mac fork-storm 을 유발하는
+heavy 항목 (ed25519/TLS) — 환경 제약상 mac 단일 세션 외.
+
+### 완주된 항목 (이번 세션, 12 PR)
+
+- [x] **Phase 2 More-math** — stdlib/core/special.hexa (gamma/beta/erf, Lanczos+A&S, 12/12) #1502
+- [x] **Phase 2 Time-format** — stdlib/time/civil.hexa (ISO8601/RFC3339, Hinnant, 10/10) #1504
+- [x] **Phase 3 chacha20** — stdlib/crypto/chacha20.hexa (RFC 8439, 7/7) #1505
+- [x] **#1506 codegen fix** — sha256/hmac `let`→`let mut` compiled-path SIGSEGV 복구 #1514
+      (근본: immutable `let` 배열 index-write + hot-loop 스칼라 재대입 miscompile.
+       CI 2-step 은 통과해 회귀 은폐. 전체 sha256/hmac/pbkdf2/HKDF 스택 unblock)
+- [x] **Phase 2 crypto-helpers COMPLETE** — 4/4 KAT verified:
+      pbkdf2 (RFC6070 120fb6cf) · HKDF (RFC5869-A.1 3cb25f25) #1507/#1518 ·
+      HMAC-DRBG (NIST SP800-90A e528e9ab 128B) #1520 · scrypt (RFC7914 77d65762 64B) #1521
+- [x] **Phase 3 x25519** — stdlib/crypto/x25519.hexa (Montgomery ladder GF(2^255−19),
+      TweetNaCl 16-limb 포트, RFC7748 §5.2/§6.1 + ECDH 3/3) #1522.
+      포트 버그 수정: car25519(full-c subtract, c−1 propagate) · sel25519(full -1 mask)
+
+### 잔존 (mac fork-storm 제약 — 비-mac 검증 경로 필요)
+
+- [ ] **crypto-bulk ed25519** — SHA-512(64-bit modular, ~150 LoC) + Edwards 곡선 점연산
+      (~250 LoC). net-new ~400 LoC, 다중 검증-compile 필요 → mac fork-storm.
+      SHA-512 의 mod-2^64 산술이 hexa 64-bit signed int 오버플로 처리 미검증(32-bit limb 분할 필요할 수).
+- [ ] **TLS 1.3 state machine** — crypto primitives + record layer + handshake FSM, 거대.
+- [ ] **Threading** — green-thread vs C-pthread, architectural 결정 (코드 아님).
+- [ ] **#2 link-test (macho_v3) · #9 hexac** — build-gated.
+
+### fork-storm 교훈 (2회 발생)
+
+각 crypto 검증의 `hexa run`(hexat→clang→hexa.real spawn)이 burst. x25519 ladder 디버깅에
+반복 compile → storm. 메모리 [[reference_let_array_indexwrite_miscompile]] 의 let-mut 규율로
+첫-시도 통과율을 높였으나, ed25519 같은 대형은 여전히 다중-iter 필요. 비-mac 검증
+(ubu 원격 또는 dedicated build 세션) 이 heavy crypto 의 안전한 경로.
+
+## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
 ## 2026-05-27T05:50Z — 🛸 next-list closure final: 8/9 + #9 5/6 · #2 emit-unblock landed
 
