@@ -506,6 +506,8 @@ HexaVal hexa_math_log(HexaVal x);                                               
 HexaVal hexa_math_exp(HexaVal x);                                                  /* runtime.c:2153 */
 HexaVal hexa_math_abs(HexaVal x);                                                  /* runtime.c:2154 */
 HexaVal hexa_math_sqrt(HexaVal x);                                                 /* runtime.c:2155 */
+HexaVal hexa_float_to_bits(HexaVal x);                                             /* f64->bits reinterpret (INBOX 2026-05-27) */
+HexaVal hexa_bits_to_float(HexaVal x);                                             /* bits->f64 reinterpret (INBOX 2026-05-27) */
 HexaVal hexa_math_floor(HexaVal x);                                                /* runtime.c:2156 */
 HexaVal hexa_math_ceil(HexaVal x);                                                 /* runtime.c:2157 */
 HexaVal hexa_random(void);                                                         /* runtime.c:2531 — PRNG [0,1) */
