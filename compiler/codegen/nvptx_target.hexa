@@ -653,6 +653,7 @@ fn _nvptx_is_math_intrinsic(op: string) -> bool {
     if op == "tanh"     { return true }
     if op == "sigmoid"  { return true }
     if op == "pow"      { return true }
+    if op == "atan"     { return true }
     if op == "abs"      { return true }
     return false
 }
@@ -662,7 +663,7 @@ fn _nvptx_is_math_intrinsic(op: string) -> bool {
 // for a non-math op (caller should not have routed it here).
 fn _nvptx_math_arity(op: string) -> i64 {
     if op == "max" || op == "min" || op == "pow" { return 2 }
-    if op == "sqrt" || op == "rsqrt" || op == "rsqrt_rn" || op == "exp" || op == "log" || op == "sin" || op == "cos" || op == "tan" || op == "tanh" || op == "sigmoid" || op == "abs" { return 1 }
+    if op == "sqrt" || op == "rsqrt" || op == "rsqrt_rn" || op == "exp" || op == "log" || op == "sin" || op == "cos" || op == "tan" || op == "tanh" || op == "sigmoid" || op == "atan" || op == "abs" { return 1 }
     return 0
 }
 
@@ -2597,6 +2598,110 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
                     out.push(_nvptx_instr(PTX_OP_MUL_F64, pe11, "pow f64: dst = exp(y·log x) = x^y"))
                     return out
                 }
+                // atan f64 — Abramowitz & Stegun 4.4.49 (9-term, |ε| < 1e-8)
+                // with reciprocal range reduction so the polynomial only ever
+                // runs on z ∈ [0,1]:
+                //   ax    = |x|
+                //   z     = min(ax, 1/ax)            ∈ [0,1]
+                //   atan(z) = z·(A0 + w(A1 + … w·A8)),  w = z²   (A&S 4.4.49)
+                //   if ax > 1:  result = π/2 - atan(z)   (selp on the pred)
+                //   atan(x) = copysign(result, x)        (odd function)
+                //
+                // The reciprocal fold keeps the polynomial argument bounded so
+                // the documented A&S error bound holds across all of ℝ. One
+                // predicate (ax>1) selects the π/2-complement branch — the
+                // only divergent op, and it is a `selp` (no actual branch).
+                //
+                // Scratch: ax · recip · z · w · poly · hi (.f64) + pred (.pred).
+                if s.op == "atan" && dst_kind == NVPTX_RKIND_F64 {
+                    let x_reg    = _nvptx_operand_text_kinds(s.args[0], kinds)
+                    let ax_reg   = _nvptx_reg_atanf64_ax(s.dst.id)
+                    let rc_reg   = _nvptx_reg_atanf64_recip(s.dst.id)
+                    let z_reg    = _nvptx_reg_atanf64_z(s.dst.id)
+                    let w_reg    = _nvptx_reg_atanf64_w(s.dst.id)
+                    let poly_reg = _nvptx_reg_atanf64_poly(s.dst.id)
+                    let hi_reg   = _nvptx_reg_atanf64_hi(s.dst.id)
+                    let pr_reg   = _nvptx_reg_pred(s.dst.id)
+                    // step 1: ax = |x|; recip = 1/ax; z = min(ax, recip) ∈ [0,1]
+                    let mut q1 = []
+                    q1.push(_nvptx_op(ax_reg))
+                    q1.push(_nvptx_op(x_reg))
+                    out.push(_nvptx_instr("abs.f64", q1, "atan f64: ax = |x|"))
+                    let mut q2 = []
+                    q2.push(_nvptx_op(rc_reg))
+                    q2.push(_nvptx_op(ax_reg))
+                    out.push(_nvptx_instr("rcp.rn.f64", q2, "atan f64: recip = 1/ax"))
+                    let mut q3 = []
+                    q3.push(_nvptx_op(z_reg))
+                    q3.push(_nvptx_op(ax_reg))
+                    q3.push(_nvptx_op(rc_reg))
+                    out.push(_nvptx_instr("min.f64", q3, "atan f64: z = min(ax, 1/ax) ∈ [0,1]"))
+                    // step 2: w = z²
+                    let mut q4 = []
+                    q4.push(_nvptx_op(w_reg))
+                    q4.push(_nvptx_op(z_reg))
+                    q4.push(_nvptx_op(z_reg))
+                    out.push(_nvptx_instr(PTX_OP_MUL_F64, q4, "atan f64: w = z²"))
+                    // step 3: Horner P(w) = A0 + w(A1 + w(A2 + … w·A8))
+                    let mut qh0 = []
+                    qh0.push(_nvptx_op(poly_reg))
+                    qh0.push(_nvptx_op(PTX_ATANF64_A8_HEXF64))
+                    out.push(_nvptx_instr("mov.f64", qh0, "atan f64 Horner: p = A8"))
+                    let mut qhc: [string] = []
+                    qhc.push(PTX_ATANF64_A7_HEXF64)
+                    qhc.push(PTX_ATANF64_A6_HEXF64)
+                    qhc.push(PTX_ATANF64_A5_HEXF64)
+                    qhc.push(PTX_ATANF64_A4_HEXF64)
+                    qhc.push(PTX_ATANF64_A3_HEXF64)
+                    qhc.push(PTX_ATANF64_A2_HEXF64)
+                    qhc.push(PTX_ATANF64_A1_HEXF64)
+                    qhc.push(PTX_F64_ONE_HEXF64)
+                    let mut qhi = 0
+                    while qhi < len(qhc) {
+                        let mut qhf = []
+                        qhf.push(_nvptx_op(poly_reg))
+                        qhf.push(_nvptx_op(w_reg))
+                        qhf.push(_nvptx_op(poly_reg))
+                        qhf.push(_nvptx_op(qhc[qhi]))
+                        out.push(_nvptx_instr(PTX_OP_FMA_RN_F64, qhf, "atan f64 Horner step"))
+                        qhi = qhi + 1
+                    }
+                    // step 4: poly = z · P(w) = atan(z)
+                    let mut q5 = []
+                    q5.push(_nvptx_op(poly_reg))
+                    q5.push(_nvptx_op(z_reg))
+                    q5.push(_nvptx_op(poly_reg))
+                    out.push(_nvptx_instr(PTX_OP_MUL_F64, q5, "atan f64: poly = z·P(w) = atan(z)"))
+                    // step 5: hi = π/2 - poly  (the ax>1 complement)
+                    let mut q6 = []
+                    q6.push(_nvptx_op(hi_reg))
+                    q6.push(_nvptx_op(poly_reg))
+                    out.push(_nvptx_instr("neg.f64", q6, "atan f64: -atan(z)"))
+                    let mut q7 = []
+                    q7.push(_nvptx_op(hi_reg))
+                    q7.push(_nvptx_op(hi_reg))
+                    q7.push(_nvptx_op(PTX_PI_HALF_HEXF64))
+                    out.push(_nvptx_instr("add.f64", q7, "atan f64: hi = π/2 - atan(z)"))
+                    // step 6: pred = (ax > 1); res = pred ? hi : poly
+                    let mut q8 = []
+                    q8.push(_nvptx_op(pr_reg))
+                    q8.push(_nvptx_op(ax_reg))
+                    q8.push(_nvptx_op(PTX_F64_ONE_HEXF64))
+                    out.push(_nvptx_instr("setp.gt.f64", q8, "atan f64: pred = ax > 1"))
+                    let mut q9 = []
+                    q9.push(_nvptx_op(poly_reg))
+                    q9.push(_nvptx_op(hi_reg))
+                    q9.push(_nvptx_op(poly_reg))
+                    q9.push(_nvptx_op(pr_reg))
+                    out.push(_nvptx_instr("selp.f64", q9, "atan f64: res = (ax>1) ? π/2-atan(z) : atan(z)"))
+                    // step 7: dst = copysign(res, x)  (odd function)
+                    let mut q10 = []
+                    q10.push(_nvptx_op(dst_reg))
+                    q10.push(_nvptx_op(x_reg))
+                    q10.push(_nvptx_op(poly_reg))
+                    out.push(_nvptx_instr("copysign.f64", q10, "atan f64: dst = sign(x)·atan(|x|)"))
+                    return out
+                }
                 // sin f64 — argument range-reduction + odd-Taylor polynomial.
                 //
                 //   n  = round(x / π)                 (cvt.rni — nearest int)
@@ -4185,6 +4290,18 @@ fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
                     regs.push(PReg { name: _nvptx_reg_powf64_yl(s.dst.id), kind: NVPTX_RKIND_F64, frag_role: "", frag_dtype: "", frag_layout: "" })
                 }
             }
+            if s.kind == STMT_CALL && s.op == "atan" && s.dst.id >= 0 {
+                let dka = _nvptx_lookup_kind_for_local(regs, s.dst.id)
+                if dka == NVPTX_RKIND_F64 {
+                    regs.push(PReg { name: _nvptx_reg_atanf64_ax(s.dst.id),    kind: NVPTX_RKIND_F64,  frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_atanf64_recip(s.dst.id), kind: NVPTX_RKIND_F64,  frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_atanf64_z(s.dst.id),     kind: NVPTX_RKIND_F64,  frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_atanf64_w(s.dst.id),     kind: NVPTX_RKIND_F64,  frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_atanf64_poly(s.dst.id),  kind: NVPTX_RKIND_F64,  frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_atanf64_hi(s.dst.id),    kind: NVPTX_RKIND_F64,  frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_pred(s.dst.id),          kind: NVPTX_RKIND_PRED, frag_role: "", frag_dtype: "", frag_layout: "" })
+                }
+            }
             if s.kind == STMT_CALL && s.op == "sin" && s.dst.id >= 0 {
                 let dks = _nvptx_lookup_kind_for_local(regs, s.dst.id)
                 if dks == NVPTX_RKIND_F64 {
@@ -5442,6 +5559,28 @@ fn _nvptx_reg_powf64_lx(id: i64) -> string {
 }
 fn _nvptx_reg_powf64_yl(id: i64) -> string {
     return "%fd_pow_yl_" + to_string(id)
+}
+
+// atan f64 scratch (RFC 055 §13, A&S 4.4.49) — declared in the atan Pass
+// of `_nvptx_classify_locals`; consumed at the `s.op == "atan"` emit site.
+// ax · recip · z · w · poly · hi (.f64) + a .pred reg via _nvptx_reg_pred.
+fn _nvptx_reg_atanf64_ax(id: i64) -> string {
+    return "%fd_atan_ax_" + to_string(id)
+}
+fn _nvptx_reg_atanf64_recip(id: i64) -> string {
+    return "%fd_atan_recip_" + to_string(id)
+}
+fn _nvptx_reg_atanf64_z(id: i64) -> string {
+    return "%fd_atan_z_" + to_string(id)
+}
+fn _nvptx_reg_atanf64_w(id: i64) -> string {
+    return "%fd_atan_w_" + to_string(id)
+}
+fn _nvptx_reg_atanf64_poly(id: i64) -> string {
+    return "%fd_atan_poly_" + to_string(id)
+}
+fn _nvptx_reg_atanf64_hi(id: i64) -> string {
+    return "%fd_atan_hi_" + to_string(id)
 }
 
 // sin f64 polynomial scratch (RFC 055 §13 trig family) — declared in

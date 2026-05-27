@@ -202,6 +202,21 @@ pub let PTX_PI_LO_HEXF64: string      = "0d3CA1A62633145C07"  // π - π_double 
 pub let PTX_F64_NEG_TWO_HEXF64: string = "0dC000000000000000" // -2.0 (sign = 1 - 2·parity)
 pub let PTX_F64_ONE_HEXF64: string    = "0d3FF0000000000000"  // 1.0 (tanh/sigmoid (1±t) terms)
 pub let PTX_F64_HALF_HEXF64: string   = "0d3FE0000000000000"  // 0.5 (sigmoid = 0.5 + 0.5·tanh(x/2))
+
+// ── atan f64 polynomial (RFC 055 §13) — Abramowitz & Stegun 4.4.49 ──
+// arctan(z), |z|≤1, |ε| < 1e-8 (9-term odd minimax). For |x|>1 use the
+// reciprocal identity atan(x) = π/2 - atan(1/x). atan is odd → copysign.
+//   atan(z) = z·(A0 + w(A1 + w(A2 + … w·A8))),  w = z²
+// A0 = 1.0 reuses PTX_F64_ONE_HEXF64. Hex via perl pack("d>")/unpack("Q>").
+pub let PTX_ATANF64_A1_HEXF64: string = "0dBFD5554D72204448"  // -0.3333314528
+pub let PTX_ATANF64_A2_HEXF64: string = "0d3FC9977C9B288755"  //  0.1999355085
+pub let PTX_ATANF64_A3_HEXF64: string = "0dBFC22FF8E008E644"  // -0.1420889944
+pub let PTX_ATANF64_A4_HEXF64: string = "0d3FBB47B06AC4D989"  //  0.1065626393
+pub let PTX_ATANF64_A5_HEXF64: string = "0dBFB3462E8D8711AD"  // -0.0752896400
+pub let PTX_ATANF64_A6_HEXF64: string = "0d3FA5F83FB7E8F47D"  //  0.0429096138
+pub let PTX_ATANF64_A7_HEXF64: string = "0dBF908DC039C4DC63"  // -0.0161657367
+pub let PTX_ATANF64_A8_HEXF64: string = "0d3F677AE9349F5F7A"  //  0.0028662257
+pub let PTX_PI_HALF_HEXF64: string    = "0d3FF921FB54442D18"  //  π/2 (reciprocal correction)
 pub let PTX_SINF64_C0_HEXF64: string  = "0d3FF0000000000000"  // 1
 pub let PTX_SINF64_C1_HEXF64: string  = "0dBFC5555555555555"  // -1/6
 pub let PTX_SINF64_C2_HEXF64: string  = "0d3F81111111111111"  // 1/120
