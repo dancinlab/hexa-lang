@@ -1,0 +1,111 @@
+// HEXA Standard Library — core/trait_design_fixture
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Trait dispatch design fixture — documents the planned API surface for
+// `Add` / `Sub` / `Eq` / `Ord` core traits (frontier 18-list #8). The actual
+// trait-dispatch typechecker + monomorphization is a multi-PR compiler
+// campaign (RFC #532 design landed, scaffold branch
+// `rfc-082-impl-a-trait-bound-scaffold-2026-05-23` active). This file pins
+// the **caller-facing concrete-type wrappers** so callers can compile
+// against a stable surface while the polymorphic trait dispatch lands.
+//
+// Frontier 18-list #8 (RUNTIME.md): "trait core 4종 (`Add`/`Sub`/`Eq`/`Ord`)
+// dispatch — coherence/orphan rule 결정 동반."
+//
+// What this file is NOT:
+//   - it is NOT a trait declaration (the compiler doesn't yet parse `trait` /
+//     `impl` syntax for user-level types)
+//   - it does NOT enable polymorphic dispatch over user types
+//   - it does NOT exercise the coherence/orphan rule decision
+//
+// What this file IS:
+//   - the concrete-monomorphic `_int` / `_float` / `_str` instantiations of
+//     the planned 4-trait surface, ready to be replaced by a single generic
+//     `add[T: Add](a: T, b: T)` etc. when the typechecker gains trait support
+//   - a parse-clean fixture that the trait-impl campaign can A/B test against
+//   - a documentation of intended semantics per type (e.g. `Eq` for floats
+//     is the BIT-level eq, not == — NaN handling per RFC §X)
+//
+// Planned trait surface (RFC #532):
+//
+//   trait Add[T] { fn add(self, other: T) -> T }
+//   trait Sub[T] { fn sub(self, other: T) -> T }
+//   trait Eq     { fn eq(self, other) -> bool }
+//   trait Ord    { fn cmp(self, other) -> int }   // -1 / 0 / 1
+//
+// Coherence/orphan rule (D2 decision pending):
+//   - "trait impls live with the trait OR with the type, never elsewhere"
+//   - blocks 3rd-party from impl'ing 3rd-party trait for 3rd-party type
+//   - matches Rust/Swift convention; stricter than Go/Haskell
+
+// -- Add — monomorphic int / float / str (concatenate) --
+
+@pure
+pub fn add_int(a: int, b: int) -> int {
+    return a + b
+}
+
+@pure
+pub fn add_float(a: float, b: float) -> float {
+    return a + b
+}
+
+@pure
+pub fn add_str(a: str, b: str) -> str {
+    return a + b
+}
+
+// -- Sub — int / float (str sub is not meaningful) --
+
+@pure
+pub fn sub_int(a: int, b: int) -> int {
+    return a - b
+}
+
+@pure
+pub fn sub_float(a: float, b: float) -> float {
+    return a - b
+}
+
+// -- Eq — int / float / str (Eq returns bool) --
+// NOTE — float eq: per RFC § value-eq, returns BIT-level equality (NaN != NaN).
+
+@pure
+pub fn eq_int(a: int, b: int) -> bool {
+    return a == b
+}
+
+@pure
+pub fn eq_float(a: float, b: float) -> bool {
+    return a == b
+}
+
+@pure
+pub fn eq_str(a: str, b: str) -> bool {
+    return a == b
+}
+
+// -- Ord — int / float / str — returns -1 / 0 / 1 --
+
+@pure
+pub fn cmp_int(a: int, b: int) -> int {
+    if a < b { return -1 }
+    if a > b { return 1 }
+    return 0
+}
+
+@pure
+pub fn cmp_float(a: float, b: float) -> int {
+    if a < b { return -1 }
+    if a > b { return 1 }
+    return 0
+}
+
+@pure
+pub fn cmp_str(a: str, b: str) -> int {
+    if a < b { return -1 }
+    if a > b { return 1 }
+    return 0
+}
