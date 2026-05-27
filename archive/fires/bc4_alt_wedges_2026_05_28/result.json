@@ -1,0 +1,32 @@
+{
+  "falsifier": "F-FUSION-ATTN-ALT-WEDGES-A-B",
+  "campaign": "BC4 alt wedges A (BM=16 BK=64) + B (BM=64 BK=16) — wedge space exploration around R14 capstone",
+  "date": "2026-05-28",
+  "verdict_tier": "RED — both alts FALSIFIED vs R14 (R14 BM=32 BK=32 confirmed local optimum)",
+  "host": "ubu-2 RTX 5070 sm_120 (driver 580, ptxas 12.9)",
+  "alt_a_bm16_bk64": {
+    "kernel": "tool/r14_walls/flash_attn_bm16_bk64_v0.cu (1 warp/CTA, block=32, grid=N/16)",
+    "ptxas": "sm_90: 176 registers, 34304 B smem, 0 stack/spill",
+    "occupancy_per_sm": 2,
+    "numeric": "5/5 PASS rel_rowscale ≤ 7.14e-4 naninf=0",
+    "sweep": [
+      {"N": 512,  "alt_a_ms": 0.017696, "r14_ms": 0.017600, "cublas_ms": 0.015872, "alt_a_ratio_vs_cublas": 1.115, "alt_a_vs_r14": "1.005× (similar)"},
+      {"N": 1024, "alt_a_ms": 0.030880, "r14_ms": 0.028032, "cublas_ms": 0.030816, "alt_a_ratio_vs_cublas": 1.002, "alt_a_vs_r14": "1.102× (worse)"},
+      {"N": 2048, "alt_a_ms": 0.105856, "r14_ms": 0.066848, "cublas_ms": 0.061632, "alt_a_ratio_vs_cublas": 1.718, "alt_a_vs_r14": "1.583× (much worse)"},
+      {"N": 4096, "alt_a_ms": 0.302976, "r14_ms": 0.175456, "cublas_ms": 0.189216, "alt_a_ratio_vs_cublas": 1.601, "alt_a_vs_r14": "1.727× (much worse)"},
+      {"N": 8192, "alt_a_ms": 1.184000, "r14_ms": 0.678816, "cublas_ms": null,     "alt_a_ratio_vs_cublas": null,  "alt_a_vs_r14": "1.744× (much worse)"}
+    ],
+    "verdict": "FALSIFIED — single warp/CTA reduces occupancy from R14's 5 CTAs/SM to 2, dominating the smaller-tile + larger-BK trade. BM=16 wedge is NOT a viable alt."
+  },
+  "alt_b_bm64_bk16": {
+    "note": "BM=64 BK=16 = R10's exact geometry — already measured in archive/fires/fusion_attn_multiwarp_2026_05_26/result.json",
+    "r10_best_ratio_at_N4096": 1.149,
+    "r14_capstone_at_N4096": 0.927,
+    "alt_b_vs_r14": "1.240× worse",
+    "verdict": "FALSIFIED — R10 baseline IS alt-B; R14 BM=32 BK=32 strictly dominates at N=1024+4096 capstone shapes."
+  },
+  "finding": "R14 BM=32 BK=32 confirmed as LOCAL OPTIMUM in the (BM, BK) space exploration. Both directional moves (smaller BM=16 + larger BK=64, OR larger BM=64 + smaller BK=16) regress. The 5-CTAs/SM occupancy + BK=32 softmax amortization combo is the wedge sweet spot.",
+  "closes": "GPU.attention.md ## deferred items: 'BM=16 BK=64 alt wedge A' + 'BM=64 BK=16 alt wedge B' — both retired as FALSIFIED",
+  "next_action": "wgmma (capstone-extension) still has independent potential (different ATOMIC tile from wmma, AI ceiling differs); selective TMA + FP8 likewise. (BM, BK) sweep space is now exhausted.",
+  "preserves": ["g3 over-claim 0", "paper_negative_ok terminal", "feedback_closure_is_physical_limit"]
+}
