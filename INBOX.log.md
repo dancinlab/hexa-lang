@@ -14,7 +14,7 @@
 
 | 모듈 | macOS arm64 | Linux C 백엔드 |
 |---|---|---|
-| `self/ml/tokenizer_bpe` (chr→from_char_code) | ⚠ **encode PARTIAL (#1556 forward only)** | ⚠ encode PARTIAL — #1556 이 forward(`build_byte_to_char`) 만 fix, **decode 측 새 결함**: bpe_decode 의 byte-indexed `slice(j,j+1)` 가 multi-byte 'Ġ' 못 받음 → 'Ġ' literal 출력 (실 Qwen 측정, 본 entry 아래 #1556 측정 섹션) |
+| `self/ml/tokenizer_bpe` (encode+decode UTF-8-aware) | ✅ **FULL RESOLVED** (#1556 encode + decode codepoint-aware) | ✅ FULL RESOLVED — `bpe_decode` 가 UTF-8 lead byte 검사(b0≥240→4B / ≥224→3B / ≥192→2B / else 1B)로 codepoint-aware `slice(j, j+clen)` iteration. ubu-2 실 Qwen V=151643 round-trip **PASS** (본 entry 끝 measurement 참조) |
 | `self/ml/qwen_bpe` (from_char_code UTF-8-aware, 1030L) | **Segfault 11** (mini, toy fixture vocab 파싱 #200 직후) | 7MB 실 tokenizer.json 240s 타임아웃 (perf/hang) |
 
 **근본원인 (chr 결함, tokenizer_bpe 측) ✅ FIXED #1556**: `self/runtime.c:5336` `hexa_chr_byte` 가 `s[0] = (char)(code & 0xFF)` 로 명시적 byte 절단 → `chr(288) == chr(32)` 실측. tokenizer_bpe 의 `build_byte_to_char` 가 GPT-2 byte-level 인코딩(byte 32 → codepoint U+0120 'Ġ', 2-byte UTF-8)을 위해 `chr(256+i)` 호출하나 절단으로 collapse → 256 distinct char 불가 → 공백/비-ASCII 손상. **#1556 1-line root-cause fix**: tokenizer_bpe 가 `chr(256+i)` → `from_char_code(256+i)` (UTF-8-aware 인코더, 5304+) 사용 → 256 distinct char 정확 생성. chr 자체는 byte-only 유지 (blast radius 0). runtime 변경 0, tokenizer 1줄.
@@ -60,7 +60,29 @@ else { text = text + c }                         // ← fallthrough: raw bytes p
 
 **측정 evidence (실 Qwen, 151643 vocab, ubu-2 2026-05-27)**: encode 측 5 tokens 정확 생성하나 decode 시 'Ġ' 그대로 — 이전 chr 절단 결함(`!`) 과 별개의 새 결함 노출. ③ 완전 해소엔 decode 측 추가 fix 필요. g73 honest: #1556 은 **encode side 만 fix**, round-trip 미해결.
 
-**참조**: anima #1517 (flame-P2b origin demand-signal · DECODER MoE-fresh scale-gate) · anima #1537 (loader+가드) · hexa-lang #1527 #1533 #1549 (선결 fix landed) · hexa-lang **#1556** (③ 1-line root-cause fix) · `GPU.md` flame-P2b 라인.
+## ✅ ③ FULL RESOLVED — decode 측 codepoint-aware iteration fix LANDED + 실측 PASS (2026-05-27)
+
+`bpe_decode` 의 byte-indexed `slice(j, j+1)` → UTF-8 lead-byte 검사로 codepoint-aware `slice(j, j+clen)` 로 갱신 (`b0≥240→4B · ≥224→3B · ≥192→2B · else 1B`, ASCII clen=1 — common path zero-change). 본 fix 가 origin/main `946b193d` 의 `self/ml/tokenizer_bpe.hexa:422-460` 에 land.
+
+**실 Qwen round-trip 측정 (ubu-2 Linux, 갱신된 tokenizer_bpe.hexa, regen+swap+run)**:
+
+```
+vocab_size = 151643                                              ✅
+n_toks = 5                                                       ✅ encode
+decoded=[consciousness emerges from cells]                       ✅ ← 공백 정확 복원!
+FULL ROUNDTRIP: PASS
+```
+
+진척 시퀀스 (g73 honest):
+```
+chr 절단(원본) → '!' literal
+#1556 encode fix → 'Ġ' literal
+#1556 + decode codepoint-aware → ' ' (공백) ✅
+```
+
+**flame-P2b ③ correct Qwen round-trip = 완전 해소.** anima #1537 loader 의 `flame_bpe_roundtrip` 가드가 이제 TRUE 반환 → 3B Qwen hexa-native 학습 path 정상화. qwen_bpe segfault path 2 는 alt-path 잔존 (canonical 은 tokenizer_bpe 로 확정).
+
+**참조**: anima #1517 (flame-P2b origin demand-signal · DECODER MoE-fresh scale-gate) · anima #1537 (loader+가드) · hexa-lang #1527 #1533 #1549 (선결 fix landed) · hexa-lang **#1556** (encode 측 chr→from_char_code) + **decode 측 codepoint-aware iteration fix** (LANDED, 본 entry 측정 evidence) · `GPU.md` flame-P2b 라인.
 
 ## 2026-05-27 — ✅FIXED(deploy) ~/.hx/bin/hexa shim stale = #1149 fork-guard 미배포 (fork-storm 근본)
 
