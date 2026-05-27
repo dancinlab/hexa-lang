@@ -1,0 +1,46 @@
+// INBOX #1703 — paren-less line continuation with leading Minus.
+//
+// Before the parser fix (self/parser.hexa parse_addition newline-continuation
+// kinds whitelist), a let-binding whose RHS spanned a Newline followed by a
+// leading `-` token silently dropped the continuation term:
+//
+//     let a = 10 + 5
+//             - 3      // ← silently parsed as separate `-3` expression stmt
+//     // a == 15 (WRONG — expected 12)
+//
+// The fix extends `p_continue_bin_op(["Plus", "Minus"])` so that a Newline
+// followed by either `+` OR `-` continues the additive expression. The
+// "unary-ambiguous" framing that previously excluded Minus only applies at
+// expression-START position; inside the parse_addition while-loop a complete
+// left operand has already been consumed, so a leading Minus on the next
+// line is unambiguously binary.
+//
+// This test exercises the four corner cases:
+//   (a) `+ \n - x` — was BUG, must continue as `... - x`
+//   (b) `- \n - x` — was BUG, must continue as `... - x`
+//   (c) `+ \n + x` — pre-existing PASS, must remain working
+//   (d) `* \n / x` — pre-existing PASS (multiplication tier already covered)
+
+fn main() {
+    // (a) + then leading -
+    let a = 10 + 5
+            - 3
+    // (b) - then leading -
+    let d = 10 - 5
+            - 2
+    // (c) + then leading + (regression guard)
+    let e = 1 + 2
+            + 3
+    // (d) * then leading / (regression guard — multiplication tier)
+    let m = 12 * 2
+            / 4
+
+    print("a=" + a.to_string())
+    print("d=" + d.to_string())
+    print("e=" + e.to_string())
+    print("m=" + m.to_string())
+
+    let ok = a == 12 && d == 3 && e == 6 && m == 6
+    // Expected: a=12 d=3 e=6 m=6 OK
+    if ok { print("OK") } else { print("FAIL") }
+}
