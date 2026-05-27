@@ -2,6 +2,31 @@
 
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-27T17:20Z · 축 RTSC · RTSC9 · 수학 DFS — λ→∞ asymptotic Tc/ω_log 천장 (closed-form 절대 하한)
+
+RTSC8 (McMillan prefactor) 의 깊이 확장. Allen-Dynes simple 의 λ→∞ 점근 한계
+closed-form 유도 + inline verify. denom = λ − μ*(1+0.62λ) → λ→∞ 시
+denom/λ → 1 − 0.62μ*, exp_arg → −1.04/(1−0.62μ*). 따라서:
+
+   Tc/ω_log → exp(−1.04 / (1 − 0.62·μ*)) / 1.2     (λ→∞ asymptote)
+
+- [x] μ*=0.0001 (μ*=0 극한): λ=10000 ω_log=1000 → 294.496K 🟢 → asymptote **0.2945·ω_log** = Allen-Dynes 절대상한
+- [x] μ*=0.10: λ=10000 ω_log=1000 → 274.944K 🟢 → asymptote **0.2749·ω_log**, 293K 도달 minimum ω_log = **1066K**
+- [x] 293K iso-line @ asymptote: λ=10000 ω_log=1066 μ*=0.10 → 293.091K 🟢 (1066K 가 closed-form 절대 최저 ω_log)
+
+⟹ 결론 (절대 하한 vs 실제 천장):
+   - **closed-form 절대 하한 (λ→∞)**: μ*=0.10 → ω_log ≥ 1066K
+   - **실제 천장 (finite λ=2.5)**: μ*=0.10 → ω_log ≥ 1530K (RTSC5)
+   - binary h3cl ω_log=1350K → 1066K (절대 하한) < 1350K < 1530K (finite λ=2.5)
+     ⟹ binary 의 ω_log 자체는 absolute floor 통과. 진짜 wall = **λ 한계**
+     (binary 화학적으로 λ ≲ 2.5). λ→∞ 가능하면 binary 도 293K 가능했지만 비물리.
+   RTSC4 N5 wall 의 mechanistic 최종 root = (1) λ-ω_log trade-off + (2) λ 자체 한계.
+
+verify (inline, allen_dynes_tc <lam> <ω_log_K> <μ*>, --no-absorb):
+  allen_dynes_tc 10000 1000 0.0001 → 294.496 (|Δ|=0.006, --tol 1.0) 🟢
+  allen_dynes_tc 10000 1000 0.10   → 274.944 (|Δ|=0.074, --tol 1.0) 🟢
+  allen_dynes_tc 10000 1066 0.10   → 293.091 (|Δ|=0.051, --tol 1.0) 🟢
+
 ## 2026-05-27T17:12Z · 축 RTSC · RTSC8 · 수학 DFS — McMillan vs Allen-Dynes prefactor (1.45 vs 1.2)
 
 RTSC7 (strong-coupling f1·f2) 의 깊이 확장. McMillan 1968 의 1.45 vs Allen-Dynes
