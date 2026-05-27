@@ -479,6 +479,25 @@ fan-out 불가, serial 진행.
       + arena 4-fn = **15/640**. ⚠ **simple-leaf 공급 감소 신호** — 남은 순수-루프 leaf 는
       `rt_strcat`(strlen+strcpy 합성) · bit-op(`clz`/`popcount`/byteswap) 정도; 그 다음은
       reloc 필요한 state-bound primitive → 최후가 HexaVal repr/GC core (hard floor).
+
+      🧱 **increment 4 — final 5 simple-leaf primitives self-emit LANDED (EASY-PHASE
+      종료 · `.c` 카운트 UNCHANGED)**. increment 3 의 string leaf 에 이어 마지막 simple
+      leaf 5종을 한 배치로: `rt_strcat(dst,src)` 12-instr 48 B (strlen-scan + strcpy 합성 ·
+      dst 반환) · `rt_clz(x)` 2-instr 8 B (native CLZ · clz(0)=64) · `rt_ctz(x)` 3-instr
+      12 B (RBIT+CLZ · ctz(0)=64) · `rt_popcount(x)` 5-instr 20 B (NEON CNT+ADDV 8-lane
+      horizontal sum) · `rt_bswap(x)` 2-instr 8 B (native REV · 64-bit 바이트 역순). 전부
+      순수 register/memory · reloc 無 · `_arena_state` 無 · HexaVal/GC 無. 검증(동일 3-layer):
+      (1) interp self-test ALL CHECKS PASS (HEXA_VAL_ARENA=0 · size·4-align·RET trailer·
+      signature instr — `strb w4,[x2,x3]`/`clz`/`rbit`/`cnt v0.8b`/`rev`), (2) `as -arch
+      arm64` 권위 disasm 과 **5종 전부 byte-identical** (파일 c.push 자동 대조 스크립트), (3)
+      **JIT-exec 실제 동작 PASS** (MAP_JIT + icache invalidate · clz/ctz/popcount/bswap 다중
+      입력 + 경계값 0/0xFF.../MSB-set · strcat empty-src/dst 엣지 · libc 대조). shadow 모듈이라
+      `compiler/main.hexa` `use` 無 = fixpoint 무위험. self-emit leaf 누적 = 16 + arena 4-fn
+      = **20/640**. ✅ **EASY/HARD phase boundary 도달** — cold-batchable simple-leaf 고갈
+      (전수조사: 순수 register/memory leaf 더 없음). 남은 ~620 fn = HARD phase 5 클래스
+      (A reloc-bound state · B calling-conv composite · C syscall-ABI · D HexaVal-repr 본체 ·
+      E GC-coupled) — 신규 codegen 인프라 필요 · expert serial · cold fan-out 부적합.
+      상세 분해 = RUNTIME.floor.md F3 PHASE-BOUNDARY MAP.
 - [ ] **B9.6b-runtime-primitive-emit** — 잔여 runtime primitive self-emit
       (chunk-A wire-plan)
 

@@ -28,7 +28,7 @@ flip 캠페인이 안전 quick-win 을 고갈시킨 뒤 남는 진짜 바닥의 
 |------|------|---------|
 | **F1** perf-floor (hxflash/hxlayer/hxvdsp) | 🔴 **TERMINAL** | 측정 285x ML 회귀 → irreducible perf-floor (`F1-perf-floor.txt`) |
 | **F2** vendor/OS-ABI FFI (19 layer-③) | 🔴 **TERMINAL** | audit #1809 — 순수 로직 0, ABI 경계 (`F2-vendor-ffi.txt`) |
-| **F3** runtime-core (640/548 fn · self-emit 15/640) | 🟠 **LIVE FRONTIER** | genuinely-portable · 50-70 PR multi-session · inc 3 LANDED (`F3-frontier.txt`) |
+| **F3** runtime-core (640/548 fn · self-emit 20/640 · EASY-phase DONE) | 🟠 **LIVE FRONTIER** | genuinely-portable · easy-leaf 고갈 → HARD-phase ~620 fn (reloc·call·syscall·HexaVal·GC) expert serial · inc 4 LANDED |
 | **F4** sha256 (exec_argv_sha256.c) | 🟢 **RESOLVED→F3** | runtime.c `#include` 조각 · 포팅 타깃 FIPS-검증 (`F4-sha256.txt`) |
 | **F5** boot-asm (3 `.s`) | 🔴 **TERMINAL** | audit #1810 — vector-table 데이터 섹션, RFC 063/064 gated (`F5-boot-asm.txt`) |
 | **F6** bootstrap seed (hexa_cc.c) | 🔴 **TERMINAL** | irreducible bootstrap FLOOR (B9.8) |
@@ -139,6 +139,46 @@ runtime.c 조각이라 F3 로 fold (mis-split 해소). **F3 만이 진짜 open**
     = **15/640**. **다음 후보 (⚠ simple-leaf 공급 감소 신호)**: 남은 순수-루프 leaf 는
     `rt_strcat`(strlen+strcpy 합성) · bit-op(`clz`/`popcount`/byteswap) 정도로 줄어듦 →
     그 다음은 reloc 필요한 state-bound primitive → **최후가 HexaVal repr/GC core (hard floor)**.
+  - 🧱 **increment 4 LANDED — final 5 simple-leaf primitive self-emit (EASY-PHASE 종료)**
+    (`runtime_arm64.hexa` 확장 · increment-3 의 string leaf 에 이어 마지막 simple leaf 5종):
+    `rt_strcat` (12-instr 48 B · strlen-scan + strcpy 합성 · dst 반환) · `rt_clz` (2-instr
+    8 B · native CLZ · clz(0)=64) · `rt_ctz` (3-instr 12 B · RBIT+CLZ · ctz(0)=64) ·
+    `rt_popcount` (5-instr 20 B · NEON CNT+ADDV 8-lane) · `rt_bswap` (2-instr 8 B · native
+    REV · 64-bit 바이트 역순). 전부 순수 register/memory — reloc 無 · `_arena_state` 無 ·
+    HexaVal/GC 無 (rt_memset 와 동급 leaf). 3-layer 검증: interp self-test ALL CHECKS PASS
+    (HEXA_VAL_ARENA=0) + `as -arch arm64` 5종 byte-identical (파일 c.push 자동 대조 스크립트) +
+    JIT-exec 실제 동작 PASS (MAP_JIT + icache invalidate · clz/ctz/popcount/bswap 다중 입력 +
+    경계값 0 · strcat empty-src/dst 엣지 · libc 대조). shadow 모듈이라 `compiler/main.hexa` 가
+    `use` 안 함 = `hexa_cc.c` regen 무관 = fixpoint 무위험 · **`.c` 카운트 UNCHANGED** (토대
+    누적). 이로써 self-emit 된 leaf = 16 (memset·str_len·memcmp·memcpy·memmove·strcmp·strncmp·
+    strchr·strrchr·strcpy·strncpy·strcat·clz·ctz·popcount·bswap) + arena 4-fn = **20/640**.
+    이 배치로 **cold-batchable simple-leaf 공급 = 고갈** — 남은 후보 전수조사 결과 순수
+    register/memory leaf 는 더 없음 (`hxlcl_strstr` 도 가능하나 nested-loop 한계효용 낮음 ·
+    `hxlcl_strdup/strndup` 은 malloc 호출 = reloc-bound = HARD). **이 지점이 EASY/HARD
+    phase boundary** — 아래 PHASE-BOUNDARY MAP 참조.
+  - 🗺️ **PHASE-BOUNDARY MAP (F3 = EASY-phase DONE at 20/640 · HARD-phase = ~620 fn)**
+    — easy-leaf phase 가 여기서 종료됨을 정밀 특정. 남은 ~620 primitive 는 **cold-batchable
+    아님** (전담 expert + 신규 codegen 인프라 필요). 클래스별 분해 (대략치):
+    - **(A) reloc-bound state primitive (~30-50 fn)** — `_arena_state` 류 module-global 을
+      `adrp+add` PAGE21/PAGEOFF12 reloc 으로 참조하는 leaf. 인프라 LANDED (`rt_arena_*` 4-fn ·
+      `tool/hexa_ld.hexa` reloc 방출) 이나 **각 신규 global 마다 reloc 레코드 짝 수동 배선** 필요 —
+      cold fan-out 부적합. 필요 인프라 Z = linker reloc-emit 확장 + per-symbol 배선 검수.
+    - **(B) call-bound composite (~60-100 fn)** — `hxlcl_strdup`/`strndup`/`atoll`/`strtoll` 처럼
+      다른 runtime fn(`malloc`·`atof`) 을 **call** 하는 비-leaf. 호출 규약(stp/blr/ldp frame +
+      ARM64 calling convention) + call-target reloc 필요. 필요 인프라 Z = calling-convention
+      codegen + BL/ADRP-target reloc.
+    - **(C) syscall-bound I/O (~40-60 fn)** — fork/execvp/popen/fopen/read/write 래퍼. svc 패턴은
+      LANDED (`rt_exit`·`rt_arena_init` mmap) 이나 errno·struct-arg·다단 syscall 시퀀스가 fn별
+      상이 — 개별 신중 작업. 필요 인프라 Z = syscall-ABI struct marshalling.
+    - **(D) HexaVal-repr 생성자/접근자 (~350-450 fn · HARD FLOOR 본체)** — `hexa_int`/`hexa_float`/
+      `hexa_string`/`valstruct_*`/배열 ops 등 NaN-box repr 을 **생성·태깅·역참조** 하는 코어.
+      B9.6a 의 진짜 본체이자 가장 위험한 단위 — repr 레이아웃 전체를 codegen 이 알아야 함.
+    - **(E) GC/arena-coupled (~30-50 fn)** — reclaim·mark·clone·arena lifecycle. (D) 의 repr +
+      (A) 의 state 양쪽에 결합 — 가장 마지막. 필요 인프라 Z = GC 통합 codegen.
+    **요약**: easy-leaf phase = **DONE (20/640, 모두 byte-eq + JIT-exec 검증)**. hard phase =
+    **~620 fn**, 5 클래스 (A reloc · B calling-conv · C syscall-ABI · D HexaVal-repr · E GC) —
+    각각 신규 codegen 인프라 필요, **cold-batchable 아님 · expert human-guided serial** (#1812
+    의 50-70 PR 추정과 정합). F3 의 [ ] 유지 근거 = 이 hard phase 가 실제 open 작업이기 때문.
   - **WHY [ ] 유지 (not over-closure)**: F3 는 irreducible 아님 — 실제 포팅 가능한
     open 작업. terminal verdict (🔵/🟢/🔴) 부여 불가 (= `feedback-no-over-closure`).
     단일 foreground 세션이 50-70 PR campaign 을 닫을 수 없음 = 정직한 multi-session
