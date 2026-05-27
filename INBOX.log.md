@@ -13,10 +13,11 @@
 >   - `CRASHED` = `STOP <n>` (n≠0) / `Error in routine` / non-zero prterun exit
 >   `cloud poll`/`tail` 가 이 3-tier 를 exit code 로 반영 (현 0=clean-only 외에 3=resumable · 4=crashed). caller (watcher / /system) 가 false-DONE 회피.
 
-### gap 2 — `cloud exec` transient gateway-255 ↔ fatal pod-down 미분류
-> **증상** (vast ssh9/ssh6): ~20분 sustained SSH-proxy outage. `nc -zv` TCP **open** · `cloud list` 계약 **live** · 그러나 `cloud exec`/`copy-to` 모두 **exit 255** (SSH handshake fail). 20분 후 자연 회복 (transient gateway fault, pod 정상). 키(id_vast_anima)·네트워크 정상.
-> **현 동작**: exit 255 = generic "ssh transport drop" (cloud-guard 가 "Stop retrying" 권고). transient(게이트웨이) vs fatal(pod-dead) 구분 없음 → caller 가 "재시도 가능" vs "down/reconcile" 결정 못 함.
-> **recommend**: 255 sub-classification — `255 ∧ TCP-open(nc) ∧ contract-live(list)` = `TRANSIENT-GATEWAY` (retry-with-backoff 권고) · `255 ∧ TCP-closed` = `POD-DOWN` (reconcile/down 권고). `cloud exec --probe` 또는 exit code 분기 (255=generic / 5=transient-gateway / 6=pod-down).
+### gap 2 — `cloud exec` 가 unknown `--flag` 를 positional host 로 silent-오파싱 → 혼란스러운 255 (정정됨 2026-05-28)
+> ⚠ **정정 (PREVIOUS DIAGNOSIS WAS WRONG)**: 이 항목은 처음 "vast ~20분 SSH-proxy outage (transient gateway fault)" 로 진단됐으나, 후속 agent 가 **오진**을 규명. 실제 원인 = `hexa cloud exec --cmd '...'` 처럼 **존재하지 않는 `--cmd` 플래그**를 준 것 → CLI 가 positional `<host> [conn] -- <argv>` 문법이라 `--cmd` 를 **host 로 파싱** → 그 "호스트"로 ssh 시도 → exit 255. `nc TCP-open + contract-live + 255` 증상이 "게이트웨이 outage" 처럼 보였으나 실은 **caller 의 malformed argv**. 정확한 positional 호출 (`cloud exec root@ssh9.vast.ai --port 15988 --insecure -- '<cmd>'`)은 즉시 연결됨. pod 는 내내 정상이었음. "20분 outage" = 그 시간 동안 agent 가 `--cmd` 형태로 반복 시도한 것.
+> **진짜 gap (재진단)**: `cloud exec` 가 **unknown/unsupported `--flag` 를 조용히 positional 인자(host)로 흡수** → 사용자가 의도한 cmd 가 host 로 둔갑 → 디버깅 어려운 255. 이게 실제 친 함정.
+> **recommend (정정)**: `cloud exec` argv 파서가 (a) **알 수 없는 `--flag` 를 reject + usage 출력** (positional host 로 silent 흡수 금지) · (b) host 위치 토큰이 `--`로 시작하면 명시 에러 (`'--cmd' looks like a flag, not a host — exec uses positional <host> -- <argv>`). 이게 255-혼란의 근본.
+> **부차 (여전히 유효)**: 진짜 transport 255 (TCP-closed=pod-down vs TCP-open+contract-live=transient)의 sub-classification 은 일반적으로 여전히 유용 — 단 본 항목의 "20분 outage" 는 그 증거가 아니었음 (오진). transient-vs-fatal 분류는 별개의 nice-to-have 로 격하, argv-flag-reject 가 P1.
 
 ### gap 3 — `cloud preflight` walltime sizing (DFT/phonon) — GPU-mem stub 확장
 > **증상**: Mg₂IrH₆ (9-atom metallic Ir-d, 2×2×2 q) 의 `max_seconds=80000`(22h) 이 ~3× 과소 → rep#9 에서 timeout. recover 로 손실 0 이지만 1-stop 발생.
