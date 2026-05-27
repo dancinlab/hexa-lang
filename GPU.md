@@ -630,91 +630,91 @@ PR #189/#190/#191 fires used direct one-shot bash; sustained automation needs he
 
 ### 5a — Fusion that cuBLAS can't do
 
-- **GEMM + epilogue fusion** — GEMM + bias_add + ReLU + dropout in single kernel (cuBLAS-LT does some, but limited). **STRUCTURAL FINDING 2026-05-25** (`F-FUSION-EPILOGUE-GEMM-BIAS-GELU`): fused `GeLU(A@B + bias)` hexa-emit kernel proven (by `$0` deterministic oracle, compiled hexa) to use **1 launch + 1× M×N HBM C-write** vs cuBLAS-using stack **3 + 3×** = **66.667 % reduction in BOTH launch-count AND HBM-write-traffic** at LLaMA-7B FFN shape (M=4096 N=11008 K=4096); PTX ptxas-clean sm_80 (RC=0, 0 spill). 🔵 structural-formal. Timed wall DEFERRED to serial follow-up. Artifact: `archive/fires/fusion_epilogue_gemm_bias_gelu_2026_05_25/`
-- **Attention scoring fusion** — Q@K^T + softmax + V@ in single kernel (flash-attn pattern)
-- **MoE dispatch + GEMM + reduce** — single kernel from gate to output
-- **LayerNorm + GEMM fusion** — pre-layer-norm fused with GEMM weights
-- **AdamW step fusion** — optimizer + parameter update fused with gradient compute
+- [ ] **GEMM + epilogue fusion** — GEMM + bias_add + ReLU + dropout in single kernel (cuBLAS-LT does some, but limited). **STRUCTURAL FINDING 2026-05-25** (`F-FUSION-EPILOGUE-GEMM-BIAS-GELU`): fused `GeLU(A@B + bias)` hexa-emit kernel proven (by `$0` deterministic oracle, compiled hexa) to use **1 launch + 1× M×N HBM C-write** vs cuBLAS-using stack **3 + 3×** = **66.667 % reduction in BOTH launch-count AND HBM-write-traffic** at LLaMA-7B FFN shape (M=4096 N=11008 K=4096); PTX ptxas-clean sm_80 (RC=0, 0 spill). 🔵 structural-formal. Timed wall DEFERRED to serial follow-up. Artifact: `archive/fires/fusion_epilogue_gemm_bias_gelu_2026_05_25/`
+- [ ] **Attention scoring fusion** — Q@K^T + softmax + V@ in single kernel (flash-attn pattern)
+- [ ] **MoE dispatch + GEMM + reduce** — single kernel from gate to output
+- [ ] **LayerNorm + GEMM fusion** — pre-layer-norm fused with GEMM weights
+- [ ] **AdamW step fusion** — optimizer + parameter update fused with gradient compute
 
 ### 5b — Compile-time specialization
 
-- **Static shape specialization** — known-(M,N,K) kernels avoid all runtime branches
-- **Dead-output elimination** — masked outputs / pruned channels removed at compile time
-- **Sparsity-pattern specialization** — block-sparse / structured-sparse layouts as compile-time facts
-- **Mixed-precision auto-selection** — picker chooses dtype per layer based on compile-time error analysis
+- [ ] **Static shape specialization** — known-(M,N,K) kernels avoid all runtime branches
+- [ ] **Dead-output elimination** — masked outputs / pruned channels removed at compile time
+- [ ] **Sparsity-pattern specialization** — block-sparse / structured-sparse layouts as compile-time facts
+- [ ] **Mixed-precision auto-selection** — picker chooses dtype per layer based on compile-time error analysis
 
 ### 5c — Custom dtypes / non-IEEE arithmetic
 
-- **n=6 lattice primitives** — RFC 057 / hexa-arch chip — non-binary lattice math on GPU
-- **Posit arithmetic** — variable-precision posit emit
-- **Interval arithmetic** — error-bounded compute
-- **Stochastic rounding** — quantization-friendly random rounding
+- [ ] **n=6 lattice primitives** — RFC 057 / hexa-arch chip — non-binary lattice math on GPU
+- [ ] **Posit arithmetic** — variable-precision posit emit
+- [ ] **Interval arithmetic** — error-bounded compute
+- [ ] **Stochastic rounding** — quantization-friendly random rounding
 
 ### 5d — Whole-program autograd-aware
 
 - [x] **flame `ag_tape` / `ag_derive`** — already SD1-SD6 landed (PRs in main history)
-- **GPU kernel fusion across autograd boundaries** — forward + backward kernels fused
-- **Compile-time gradient symbolic simplification** — vs PyTorch's autograd runtime tape
+- [ ] **GPU kernel fusion across autograd boundaries** — forward + backward kernels fused
+- [ ] **Compile-time gradient symbolic simplification** — vs PyTorch's autograd runtime tape
 
 ### 5e — Non-NVIDIA hardware
 
-- **Apple M-series Metal Performance Shaders** — Apple-silicon GPUs (currently flame uses CPU on M-series)
-- **AMD MI300 / MI350** — ROCm HIP backend
-- **Intel Xe / Arc** — oneAPI / Level Zero
-- **Multi-vendor unified kernel** — same `@gpu_kernel` lowered to multiple backends
+- [ ] **Apple M-series Metal Performance Shaders** — Apple-silicon GPUs (currently flame uses CPU on M-series)
+- [ ] **AMD MI300 / MI350** — ROCm HIP backend
+- [ ] **Intel Xe / Arc** — oneAPI / Level Zero
+- [ ] **Multi-vendor unified kernel** — same `@gpu_kernel` lowered to multiple backends
 
 ### 5f — Launch-overhead amortization (PyTorch eager / library-call stacks lose here)
 
 - [x] **flame d=768·12L transformer — 20-43% faster than PyTorch eager** — already measured (`project_flame_phase4d9_closure`). PyTorch eager pays per-op kernel launch overhead; cuBLAS calls cost ≥5 μs each. Hexa whole-program fusion eliminates the per-op launch path
 - [x] **F-FUSION-LAUNCH-AMORT — fused 5-op chain $0 oracle + ptxas-clean (2026-05-25, §1h)** 🛸 — isolated launch-amortization case: fused `y = residual + scale·GeLU(a·x+b)` (mul·add·gelu·mul-scale·add-resid) in **1 launch / 3 HBM transfers per elem** vs per-op baseline **5 launches / 11 transfers**. Deterministic oracle (exit 0) + closed-form projection from measured L=1 µs (§1g): launch-bound 80%, bandwidth-bound 72.7%, **≥30% UNCONDITIONAL across all n** (30%-crossover n\* negative). ptxas-clean sm_80 both modules (0 spill). Timed silicon wall DEFERRED-to-serial. Artifact: `archive/fires/gpu_fusion_launch_amort_2026_05_25/`
-- **No PyBind11 / no ATen dispatch overhead** — cuBLAS via PyTorch goes through Python → C++ Tensor → ATen → CUDA stream → cuBLAS handle. Hexa-emit directly compiled into the binary
-- **Static kernel selection** — cuBLAS-LT runtime heuristic picks an algorithm; hexa compile-time selects + bakes the algorithm
-- **Single-shot binary** — no shared library boundary, no `cudaGetSymbolAddress`, no driver-level dispatch table
+- [ ] **No PyBind11 / no ATen dispatch overhead** — cuBLAS via PyTorch goes through Python → C++ Tensor → ATen → CUDA stream → cuBLAS handle. Hexa-emit directly compiled into the binary
+- [ ] **Static kernel selection** — cuBLAS-LT runtime heuristic picks an algorithm; hexa compile-time selects + bakes the algorithm
+- [ ] **Single-shot binary** — no shared library boundary, no `cudaGetSymbolAddress`, no driver-level dispatch table
 
 ### 5g — Operator-specific surgical override
 
-- **Replace one kernel mid-pipeline** — cuBLAS is monolithic API; hexa codegen lets a single GEMM in a chain be hand-tuned while the rest of the pipeline stays unchanged
-- **Per-call-site precision** — same logical GEMM compiled with different precision per call site (cuBLAS forces uniform-handle precision)
-- **Mixed-precision in single kernel** — f16 A × f16 B → f32 accum → bf16 store, all in one kernel; cuBLAS API forces handle-uniform dtype
-- **Custom layout / striding** — cuBLAS has limited stride options; hexa per-kernel custom layouts (e.g., interleaved tile arrangements)
+- [ ] **Replace one kernel mid-pipeline** — cuBLAS is monolithic API; hexa codegen lets a single GEMM in a chain be hand-tuned while the rest of the pipeline stays unchanged
+- [ ] **Per-call-site precision** — same logical GEMM compiled with different precision per call site (cuBLAS forces uniform-handle precision)
+- [ ] **Mixed-precision in single kernel** — f16 A × f16 B → f32 accum → bf16 store, all in one kernel; cuBLAS API forces handle-uniform dtype
+- [ ] **Custom layout / striding** — cuBLAS has limited stride options; hexa per-kernel custom layouts (e.g., interleaved tile arrangements)
 
 ### 5h — Compile-time error / safety analysis
 
-- **Static overflow check** — known input ranges + arithmetic chain → compile-time overflow risk warning (cuBLAS = runtime only, often silent)
-- **Compile-time NaN-Inf propagation reasoning** — track which operations could introduce NaN/Inf based on input domain analysis
-- **Numerical-stability lint** — flag patterns like `large - small` that lose precision; cuBLAS users have no static signal
-- **Determinism-mode at compile-time** — `@deterministic` annotation switches to deterministic-reduction emit at codegen; cuBLAS's `CUBLAS_PEDANTIC_MATH` is a runtime flag that costs perf
+- [ ] **Static overflow check** — known input ranges + arithmetic chain → compile-time overflow risk warning (cuBLAS = runtime only, often silent)
+- [ ] **Compile-time NaN-Inf propagation reasoning** — track which operations could introduce NaN/Inf based on input domain analysis
+- [ ] **Numerical-stability lint** — flag patterns like `large - small` that lose precision; cuBLAS users have no static signal
+- [ ] **Determinism-mode at compile-time** — `@deterministic` annotation switches to deterministic-reduction emit at codegen; cuBLAS's `CUBLAS_PEDANTIC_MATH` is a runtime flag that costs perf
 
 ### 5i — Source-level visibility + ergonomics
 
-- **`.so` blob vs source emit** — cuBLAS is closed-source binary; hexa users see + modify the emit path. Bug-fix loop: cuBLAS = file ticket + wait; hexa = patch source + rebuild
-- **`hexa gpu disasm`** — view exact SASS via `cuobjdump`; cuBLAS too but harder to correlate to user code (the high-level mapping is lost in the closed binary)
-- **Single-language stack** — host + device + autograd all in hexa-lang; cuBLAS-using stacks need Python/C++/CUDA polyglot
-- **No vendor-lock-in path** — hexa codegen targets backend-agnostic IR; cuBLAS hard-binds to NVIDIA
+- [ ] **`.so` blob vs source emit** — cuBLAS is closed-source binary; hexa users see + modify the emit path. Bug-fix loop: cuBLAS = file ticket + wait; hexa = patch source + rebuild
+- [ ] **`hexa gpu disasm`** — view exact SASS via `cuobjdump`; cuBLAS too but harder to correlate to user code (the high-level mapping is lost in the closed binary)
+- [ ] **Single-language stack** — host + device + autograd all in hexa-lang; cuBLAS-using stacks need Python/C++/CUDA polyglot
+- [ ] **No vendor-lock-in path** — hexa codegen targets backend-agnostic IR; cuBLAS hard-binds to NVIDIA
 
 ### 5j — Algorithmic flexibility (cuBLAS = limited operator surface)
 
-- **FlashAttention-style fused softmax + attention** — already a paper-derived pattern; cuBLAS doesn't cover the attention-block pattern directly (xformers / FlashAttention 별도 library)
-- **Online softmax** — single-pass numerically stable softmax (cuBLAS = no softmax at all)
-- **Block-sparse / structured-sparse GEMM** — cuBLAS = dense only (sparse is cuSPARSE 별도)
-- **Custom reductions** — cuBLAS has SUM/MAX; arbitrary reduction (LogSumExp / soft-argmax) hand-written
-- **Top-k / argmax fused with GEMM** — cuBLAS = GEMM only; hexa can fuse arbitrary epilogue
+- [ ] **FlashAttention-style fused softmax + attention** — already a paper-derived pattern; cuBLAS doesn't cover the attention-block pattern directly (xformers / FlashAttention 별도 library)
+- [ ] **Online softmax** — single-pass numerically stable softmax (cuBLAS = no softmax at all)
+- [ ] **Block-sparse / structured-sparse GEMM** — cuBLAS = dense only (sparse is cuSPARSE 별도)
+- [ ] **Custom reductions** — cuBLAS has SUM/MAX; arbitrary reduction (LogSumExp / soft-argmax) hand-written
+- [ ] **Top-k / argmax fused with GEMM** — cuBLAS = GEMM only; hexa can fuse arbitrary epilogue
 
 ### 5k — Domain-specific kernel libraries (whole-program co-design)
 
 - [x] **flame `ag_*` autograd-aware GEMM family** — SD1-SD10 vjp registry landed; GEMM kernels know about gradients (memory: `project_flame_mk2_cycle_2026_05_19`)
-- **sim_universe lattice GEMM** — non-binary lattice arithmetic on GPU (RFC 057 bridge)
-- **quantum amplitude-update kernels** — `stdlib/quantum` state-vector simulation (cuBLAS = no amplitude ops)
-- **flame layer-fused training kernel** — forward + backward + AdamW + grad-clip in single kernel emit
-- **NN-specific HEXA primitives** — `softmax`, `layer_norm`, `RoPE`, `swiglu` as first-class compiler-aware ops
+- [ ] **sim_universe lattice GEMM** — non-binary lattice arithmetic on GPU (RFC 057 bridge)
+- [ ] **quantum amplitude-update kernels** — `stdlib/quantum` state-vector simulation (cuBLAS = no amplitude ops)
+- [ ] **flame layer-fused training kernel** — forward + backward + AdamW + grad-clip in single kernel emit
+- [ ] **NN-specific HEXA primitives** — `softmax`, `layer_norm`, `RoPE`, `swiglu` as first-class compiler-aware ops
 
 ### 5l — Edge / embedded / standalone deployment
 
-- **Standalone cubin embed** — `hexa build` produces a binary with embedded `.cubin`; no separate cuBLAS .so dependency
-- **AOT compilation** — kernel compiled once at build time; no runtime cuBLAS JIT
-- **Multi-arch fat binary** — embed PTX for sm_70 + sm_80 + sm_90 in one cubin via hexa codegen
-- **NVIDIA-runtime-free deployment** — minimal driver-only deployment surface (no cuBLAS/cuDNN required)
-- **Containerized cubin** — single-binary container without `libcublas.so.12` dependency
+- [ ] **Standalone cubin embed** — `hexa build` produces a binary with embedded `.cubin`; no separate cuBLAS .so dependency
+- [ ] **AOT compilation** — kernel compiled once at build time; no runtime cuBLAS JIT
+- [ ] **Multi-arch fat binary** — embed PTX for sm_70 + sm_80 + sm_90 in one cubin via hexa codegen
+- [ ] **NVIDIA-runtime-free deployment** — minimal driver-only deployment surface (no cuBLAS/cuDNN required)
+- [ ] **Containerized cubin** — single-binary container without `libcublas.so.12` dependency
 
 ### 5m — Measured wins to-date (g3-honest claims)
 
@@ -722,9 +722,9 @@ PR #189/#190/#191 fires used direct one-shot bash; sustained automation needs he
 - [x] **cp.async pipelining ~7% slower than no-async at K=64**: honest negative perf measurement (PR #207) — proves the codegen path works + sets the boundary where cp.async overhead amortizes (large K)
 - [x] **WMMA + multi-warp grid + multi-K-tile + cp.async + tf32**: 5 distinct WMMA-family kernel patterns all silicon-validated max\|Δ\|=0 vs FP32 reference (PRs #191/#205/#206/#207/#213)
 - [x] **HGEMM throughput vs cuBLAS at M=N=K=256**: hexa-emit **4.0960 TFLOPS** vs cuBLAS GemmEx **8.1907 TFLOPS** = **ratio 0.500 ±0.0002** (6-run variance, sub-0.1% std). Closure criterion "≥ 50% of cuBLAS HGEMM" **MET at this shape** (PR #214). Caveat (g3): single shape; at larger M/N/K cuBLAS's k-loop unroll + ILP + shared-memory pipelining advantages compound; this single data point does NOT generalize. Multi-tile cp.async (PR #207) not yet integrated into this perf kernel — natural next-cycle.
-- **HGEMM at M=N=K≥1024**: pending — scale-up + cp.async integration to test if 0.50× ratio holds or degrades at large shapes (where cuBLAS optimizations matter)
+- [ ] **HGEMM at M=N=K≥1024**: pending — scale-up + cp.async integration to test if 0.50× ratio holds or degrades at large shapes (where cuBLAS optimizations matter)
 - [x] **PyTorch eager d=1024 12L FP32 PROXY baseline on RTX 5070**: median 1-step wall = **116.286 ms** (std 0.104 ms = 0.089 % of median; peak 5,060 MiB) at d=1024 n_layer=12 batch=2 seq=512 FP32 Adam eager. RFC 072 P1 (this PR). Caveat (g3): this is the L4 ladder rung — RFC 072 §2 spec (d=2048+ 12L) **does not fit** the 12 GB consumer-GPU envelope on PyTorch eager (50,257-token embed+head alone occupies ~5 GiB Adam-state overhead); d=4096 24L full-spec baseline requires H100 80GB multi-session. F-RFC072-WALL-PT-PROXY MEASURED · F-RFC072-WALL-PT-FULL DEFERRED.
-- **Whole-program-fusion ≥ 30% over cuBLAS-using stack on a representative LLM workload** — sustained across model variants (flame d=768 partially measured)
+- [ ] **Whole-program-fusion ≥ 30% over cuBLAS-using stack on a representative LLM workload** — sustained across model variants (flame d=768 partially measured)
 
 ---
 
