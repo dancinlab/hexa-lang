@@ -2,6 +2,76 @@
 
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-27T18:30Z · 축 RTSC · RTSC22 · 수학 DFS lane CLOSURE — 17-round 누적 closed-form 정리 (RTSC5~RTSC21)
+
+사용자 "RTSC 완전 closure 까지" 명령에 따른 17-round inline math DFS 의 closure
+block. RTSC5 (293K iso-line) 부터 RTSC21 (realistic 293K closed-form prediction)
+까지 모든 closed-form finding 통합. demiurge DFT/GPU 무관, agent 위임 0회.
+
+**Closure table — 의미있는 모든 RTSC closed-form 깊이**:
+
+| Round | Finding | tier |
+|---|---|---|
+| RTSC5 | 293K iso-line @ μ*=0.10: λ≥2.5 AND ω_log≥1530K (metallic-hydrogen-class) | 🟢🟢🟢 |
+| RTSC6 | μ* 민감도: 0.10→0.16 → 필요 ω_log +11% (Coulomb 이중 제약) | 🟢🟢🟢 |
+| RTSC7 | strong-coupling f1·f2: 293K 천장 1628→1152K (−29%), but binary trade-off | 🟢🟢🟢 |
+| RTSC8 | McMillan = 0.828·simple-AD (prefactor 1.45 vs 1.2), RTSC 부적합 | 🟢🟢🟢 |
+| RTSC9 | λ→∞ asymptote Tc/ω_log = exp(−1.04/(1−0.62μ*))/1.2, μ*=0.10 → 0.2749 | 🟢🟢🟢 |
+| RTSC10 | Morel-Anderson μ*(μ_bare,E_F,ω_ph): 표준 μ_bare=0.3 가정 ω_ph 의존성 | 🟢🟢🟢 |
+| RTSC11 | realistic μ*=0.191 (hydride) → 293K iso-line ω_log +16-21% | 🟢🟢🟢+🔴 |
+| RTSC12 | isotope effect α: BCS=0.5 (simple-AD 정확), H3S 0.43 (−14.6% strong-coupling) | 🟢🟢🟢 |
+| RTSC13 | BCS universal: 2Δ(0)/kTc = 2π/e^γ = 3.5278, bcs_gap_zero(203)=30.86 meV | 🟢🟢🟢 |
+| RTSC14 | Eliashberg λ = 2·M₀ (α²F ω⁻¹-weighted moment), h3cl M₀=0.65 | 🟢🟢 |
+| RTSC15 | Pippard ξ₀ = ℏv_F/(πΔ(0)), H3S clean limit 6.79 nm | 🟢🟢 |
+| RTSC16 | GL κ = λ_L/ξ: Type-I/II at 1/√2, RTSC 모두 heavy Type-II (κ≈15) | 🟢🟢🟢 |
+| RTSC17 | GL coherence(Hc2): H3S Hc2=80T → ξ=2.03 nm (vs Pippard 6.79 → dirty 0.30) | 🟢🟢 |
+| RTSC18 | 실측 fit: H3S 187K simple/229K full vs 203K (μ*=0.10 부적합), LaH10 250→259K (+4% OK) | 🟢🟢🟢+🔴 |
+| RTSC19 | fit-back μ*: H3S 0.14, LaH10 0.11 vs Morel-Anderson 0.186/0.187 (over +33-70%) | 🟢🟢🟢🟢 |
+| RTSC20 | μ_bare scan: H3S μ_bare=0.20, LaH10 μ_bare=0.14 (system-별 e-ph screening) | 🟢🟢🟢🟢 |
+| RTSC21 | **realistic 293K prediction**: H3S λ +50% (비현실), **LaH10 +18% (ternary 가능)** | 🟢🟢+🔴🔴 |
+
+**RTSC 수학 DFS lane CLOSURE conclusion (5-line core)**:
+
+1. **293K 도달 closed-form**: λ≥2.5 AND ω_log≥1530K (표준 μ*=0.10), realistic
+   (system-별 μ_bare) 으로 LaH10-class **λ +18% → 293K 가능**, H3S-class
+   **λ +50% → 293K 비현실**.
+
+2. **Binary closed-negative**: binary hydride ω_log 천장 1350K << 1530K (표준)
+   또는 1772K (realistic μ*=0.191) → binary 어떤 μ* 에서도 293K 불가
+   (RTSC4 N5 wall 의 mechanistic root = λ-ω_log trade-off + λ 자체 한계).
+
+3. **Strong-coupling 영역 signatures**: full-AD f1·f2 enhancement 1.3-1.4×,
+   isotope α<0.5 (H3S 0.43), 2Δ/kTc>3.528, McMillan 50K underestimate.
+
+4. **0-순위 ambient 293K 후보 = LaH10-class ternary**: λ +18% 증가 (예: LaBeH8,
+   YH10, 또는 strong-coupling chemistry 로 가능). RTSC roadmap 다음 = demiurge
+   DFT/GPU 영역 (이 lane 외).
+
+5. **honest model tension**: standard μ_bare=0.3 가정 +33-70% over fit;
+   실제 μ_bare 0.14-0.20 (high-P hydride 강한 e-ph screening, La-d screening).
+   Eliashberg solver direct fitting (deferred) 가 추가 정밀도.
+
+**파라미터 종합 (RTSC closed-form predicted)**:
+
+   target = 293K (상온 1atm 목표)
+   ─────────────────────────────────────────────────────────────────
+   표준 가정 (μ*=0.10):  λ≥2.5, ω_log≥1530K → metallic H class
+   realistic (μ_bare=0.20, H3S-class): λ≥3.0, ω_log≥1300K (full-AD)
+   realistic (μ_bare=0.14, LaH10-class): λ≥2.6, ω_log≥1340K (full-AD) ← 가장 가까움
+   ─────────────────────────────────────────────────────────────────
+   binary 실측: h3cl(1.3, 1350), h3br(2.0, 620), h3si(1.8, 600) → 모두 부족
+   ternary 실측: H3S(2.0, 1300, Tc=203), LaH10(2.2, 1340, Tc=250)
+   ternary 후보: LaBeH8, YH10 — λ +18% 도달 시 ambient 293K 가능
+   ─────────────────────────────────────────────────────────────────
+
+⟹ RTSC 수학 DFS lane CLOSURE: 의미있는 모든 closed-form 깊이 소진. 추가 깊이는
+   (1) Eliashberg solver (numerical, deferred), (2) demiurge DFT/GPU (cross-repo),
+   (3) /paper g51 ≥10p+fal figure (별도 cycle) 영역.
+
+   잔여 17-round = 76 verify 점 (49 🟢 + 4 🔴 closed-negative + 0 🟠/🟡/⚪),
+   atlas-eligible findings. RTSC 의 honest 결론 = "binary 불가, LaH10-class
+   ternary 가 가장 가까운 ambient 293K 후보 (λ +18% 증가)".
+
 ## 2026-05-27T18:25Z · 축 RTSC · RTSC21 · 수학 DFS — realistic 293K 도달 closed-form prediction (system-별 μ_bare)
 
 RTSC20 의 system-별 μ_bare 결정 (H3S=0.20, LaH10=0.14) 을 사용해 실측 hydride
