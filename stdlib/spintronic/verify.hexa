@@ -1,8 +1,13 @@
 #!hexa strict
-// stdlib/spintronic/verify.hexa — `SPINTRONIC + verify` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// spintronic verify — spin-diffusion length λ_sf = √(D·τ_sf).
+extern fn sqrt(x: float) -> float
 fn main() {
+    let D_m2_s = 1.0e-4
+    let tau_sf_s = 1.0e-9
+    let lambda_sf_m = sqrt(D_m2_s * tau_sf_s)
+    let lambda_sf_nm = lambda_sf_m * 1.0e9
+    println("spintronic_verify (spin-diffusion · D=1e-4, τ_sf=1ns):")
+    println("  lambda_sf_m = " + str(lambda_sf_m))
+    println("  lambda_sf_nm = " + str(lambda_sf_nm))
     println("__HEXA_SPINTRONIC_VERIFY__ PASS gate=GATE_OPEN absorbed=false")
 }

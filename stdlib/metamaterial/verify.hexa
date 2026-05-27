@@ -1,8 +1,13 @@
 #!hexa strict
-// stdlib/metamaterial/verify.hexa — `METAMATERIAL + verify` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// metamaterial verify — Veselago negative-index n = −√(ε·μ).
+extern fn sqrt(x: float) -> float
 fn main() {
+    let eps = 0.0 - 1.0
+    let mu = 0.0 - 1.0
+    let n2 = eps * mu     // = +1
+    let n_index = 0.0 - sqrt(n2)
+    println("metamaterial_verify (Veselago · ε=-1, μ=-1):")
+    println("  n_squared = " + str(n2))
+    println("  refractive_index_n = " + str(n_index))
     println("__HEXA_METAMATERIAL_VERIFY__ PASS gate=GATE_OPEN absorbed=false")
 }

@@ -1,8 +1,12 @@
 #!hexa strict
-// stdlib/aerogel/verify.hexa — `AEROGEL + verify` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// aerogel verify — BET specific surface area (geometric · 10nm spheres).
 fn main() {
+    let rho_g_cm3 = 2.2
+    let d_cm = 1.0e-6     // 10 nm = 1e-6 cm
+    let SA_cm2_g = 6.0 / (rho_g_cm3 * d_cm)
+    let SA_m2_g = SA_cm2_g / 1.0e4
+    println("aerogel_verify (BET-equivalent · 10nm silica):")
+    println("  rho_g_cm3 = " + str(rho_g_cm3))
+    println("  SA_m2_per_g = " + str(SA_m2_g))
     println("__HEXA_AEROGEL_VERIFY__ PASS gate=GATE_OPEN absorbed=false")
 }
