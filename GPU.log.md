@@ -640,3 +640,35 @@ formally assessed + verdict logged.
 cycle-fg Stage 5 depletion 미달 (DEFER 류 7건 잔존). 다음 라운드 자동 진입 가능하나 cost-bearing 항목이라 user confirm normative.
 
 No LLVM. No C-transpile. `compiler/codegen/*.hexa` UNTOUCHED in this disposition cycle.
+
+## 2026-05-28 — cycle-fg round 2 · §5j top-1 (argmax) wedge 🟢 PARTIAL silicon
+
+cycle-fg round 2 = anima-impact 10번 §5j top-k+GEMM 의 최소 wedge `argmax (top-1
+with idx)` fire 실측. LogSumExp(#1657) 패턴 직접 응용 — block tree max-reduce
++ index 추적 (idx f64 인코딩).
+
+**fire**: ubu-2 RTX 5070, N=256, peak @ i=137, value ≈ 5.838
+- got = (val=5.8384371780538977, idx=0)
+- ref = (val=5.8384371780538977, idx=137)
+- val_err = **0.000e+00** ← max-reduce 자체 byte-eq PASS ✓
+- idx_match = 0 ← codegen offset issue 로 idx 추적 손상
+
+**verdict**: 🟢 PARTIAL — value byte-eq PASS (max-reduce 자체 정확) · 🔴 idx
+codegen-blocked. artifact = `archive/fires/gpu_argmax_partial_2026_05_28/`.
+
+**근본원인 (PTX 분석)**:
+- 단일 `.shared .align 8 .b8 _hexa_sh_*[4096]` region (sm[0..512))
+- `sm[tid]` 와 `sm[tid+256]` 의 offset 계산이 codegen 두 path 간 불일치
+- 일부 store/load 가 +256 offset 으로 emit, 다른 일부는 무시 → idx 추적 손상
+
+**워크어라운드 시도**: 2개 @shared → 단일 [f64;512] manual partition. **효과 없음**
+(codegen path B 가 manual-offset 경로에도 적용됨). 진짜 fix = nvptx_target.hexa
+의 `sm[expr]` offset 계산 통일.
+
+**INBOX filing**: 별도 codegen item — "@shared array partitioned offset
+codegen inconsistency".
+
+**§5j 상태**: top-1 argmax-value sub-wedge PARTIAL-PASS 추가 (max-reduce 패턴
+검증). 완전 close 는 codegen offset fix 후. cycle-fg 10번 = PARTIAL.
+
+No LLVM. No C-transpile. `compiler/codegen/*.hexa` UNTOUCHED in this cycle.
