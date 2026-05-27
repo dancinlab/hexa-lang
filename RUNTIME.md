@@ -2370,9 +2370,13 @@ framing-① (nm aprime 0 externs) 측정-충족 이후 — framing-② (source z
 
 ### hexa-lang language features (HEXA-LANG.log open)
 
-- [ ] **Option/Result enum surface + `?` propagation typechecker** — `pop()`/
-      `get()`/`find()` 반환채널 마이그레이션 동반. **RFC-ONLY**: `inbox/r14-kk-
-      option-prelude-rfc-2026-05-23` @ ef00ed5a (RFC patch); impl PR 부재.
+- [~] **Option/Result enum surface + `?` propagation typechecker** — `pop()`/
+      `get()`/`find()` 반환채널 마이그레이션 동반. **ENUM + HELPER LANDED** via
+      PR #1732 (`stdlib/core/option_result.hexa` — `Option`/`Result` single-
+      payload enum + 8 helper fn `opt_*`/`res_*`). 잔여 = `?` propagation
+      typechecker (compiler/check) · stdlib `pop()`/`get()`/`find()` 반환채널
+      마이그레이션 · prelude auto-import · generic type parameters
+      Option<T>/Result<T,E> (typechecker parametric 지원 시).
 - [ ] **trait core 4종 (`Add`/`Sub`/`Eq`/`Ord`) dispatch** — coherence/orphan
       rule 결정 동반. **RFC-ONLY**: #532 (`inbox(patches): trait dyn dispatch
       &dyn Trait design RFC (PROBE r14-GGGG)`) 머지됨; scaffold branch
@@ -2382,11 +2386,12 @@ framing-① (nm aprime 0 externs) 측정-충족 이후 — framing-② (source z
 
 ### phase-H linker future generalizations (macOS 잔여는 ZERO · 미래용)
 
-- [ ] **lazy-bind 옵션화** — 현재 모든 import 가 `__got` non-lazy; lazy bind
-      변종 추가 (선택). **FUTURE-DEFERRED**: macOS standard 잔여 ZERO, 변종 트리거
-      등장 시 작업.
-- [ ] **scattered relocation + TLV thread-locals** — rare path 지원.
-      **FUTURE-DEFERRED**: rare path, trigger 등장 시.
+- [~] **lazy-bind 옵션화** — 현재 모든 import 가 `__got` non-lazy; lazy bind
+      변종 추가 (선택). **FUTURE-DEFERRED-FORMAL**: macOS standard 잔여 ZERO, 변종
+      트리거 등장 시 작업 — 현재로선 closed-negative-future (NO_PR_NEEDED 표지).
+- [~] **scattered relocation + TLV thread-locals** — rare path 지원.
+      **FUTURE-DEFERRED-FORMAL**: rare path, trigger (3rd-party dynamic library
+      또는 thread-local 의존 모듈) 등장 시 — 현재로선 closed-negative-future.
 - [x] **multi-dylib (3rd-party — Metal/CUDA 시점)** — **CLOSED-NEGATIVE (#1674)**:
       macOS standard 엔 불필요 (`docs(RUNTIME): multi-dylib ordinal = CLOSED-NEGATIVE`
       머지됨 — `ec9cfbab`). GPU/외부 dylib 등장 시점에만 재개. 등록된 closed-neg
@@ -2394,17 +2399,22 @@ framing-① (nm aprime 0 externs) 측정-충족 이후 — framing-② (source z
 
 ### GPU / COMPILER 후속 (도메인 active 레인)
 
-- [ ] **GPU: function-body ExprKind::Let 의 Expr struct annotations 부재** —
+- [~] **GPU: function-body ExprKind::Let 의 Expr struct annotations 부재** —
       F-GPU-SWEEP-SHARED-REDUCE-NUMERIC falsifier 의 next gap.
-      **GPU-DOMAIN**: RUNTIME 외 도메인 — `GPU.md` 의 active 레인. NO-COMMITS-YET.
+      **WRONG-DOMAIN-CROSSREF**: RUNTIME 외 도메인 — `GPU.md` 의 active 레인 (참고:
+      memory `project-gpu-codegen-baseline-2026-05-26`). RUNTIME 컨텍스트로 트래킹
+      불필요; GPU 도메인 next-list 에서 추적되어야 함.
 - [x] **GPU: exp polynomial · to_int root-fix (sub-PR-C)** — math 도메인 후속.
       **to_int root-fix LANDED** via PR #1334 (`fix(self/codegen): to_int/int
       root-fix — statement-expression single-eval (closes double-eval miscompile
       family)`, 2026-05-26) + #1279/#1280 (flame large-vocab GPU-port fix +
       discovery log). exp polynomial 은 `nvptx-exp-polynomial` branch 활성
       (GPU 도메인). to_int family CLOSED.
-- [ ] **COMPILER: gen3 idempotent 확장** — S5 closed (#1058) 이후 옵션; gen2 ≡ gen3
-      byte-eq 확장 증명. **HEAVY-OPTIONAL**: build run 30+ min, optional 표시.
+- [~] **COMPILER: gen3 idempotent 확장** — S5 closed (#1058) 이후 옵션; gen2 ≡ gen3
+      byte-eq 확장 증명. **HEAVY-OPTIONAL-DEFERRED-FORMAL**: build run 30+ min,
+      현재 우선순위 낮음. S3 fixpoint 가 byte-eq 증명을 충분히 커버 (memory
+      `project-s3-fixpoint-full-closure-2026-05-20`); gen3 는 stronger statement
+      이지만 marginal value — full self-host 빌드 안정성 입증 시 자동 closure.
 
 ### infra / CI gates (INBOX open · cross-cutting)
 
@@ -2422,11 +2432,14 @@ framing-① (nm aprime 0 externs) 측정-충족 이후 — framing-② (source z
       CI gate. 동반: #1187 (codegen `hexa_farr32_*` emit fix) · #1206
       (inbox/notes Linux CI build gate) · #1291 (regen hexa_cc.c pick-up direct
       calls). INBOX #4 closed.
-- [ ] **preflight v2 DFT/HPC 축 (RFC 091 witness)** — 외부 자원 의존 (DFT/MD
-      메모리 산정 + rent 전 GPU vs CPU-HPC 판단 자동화). **RFC-LANDED · IMPL-PENDING**:
-      RFC #653 (`RFC 091 hexa-cloud preflight v2 — DFT/HPC workload axis (sibling
-      of RFC 088)`, 2026-05-23) 머지됨. impl PR 부재 — 외부 자원 dep (DFT job
-      샘플 + GPU/CPU baseline 측정).
+- [~] **preflight v2 DFT/HPC 축 (RFC 091 witness)** — 외부 자원 의존 (DFT/MD
+      메모리 산정 + rent 전 GPU vs CPU-HPC 판단 자동화). **CLOSED-FORM HALF
+      LANDED** via PR #1730 (`stdlib/cloud/preflight_dft.hexa` —
+      `tls_dft_rank_memory_gib` + `tls_dft_speedup_at_rank` +
+      `tls_dft_mpi_sweet_spot` + 3 struct). RFC §2.3 closed-form 매핑. 잔여 =
+      WorkloadKind enum CLI 와이어 (§2.1) · dual-marker sentinel + log-pattern
+      watcher (§2.4) · cross-backend symptom diff (§2.5) · 실 DFT job 측정
+      검증 (외부 자원 dep).
 
 ## Methodology checkpoints (per-cycle)
 
