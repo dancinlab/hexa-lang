@@ -630,8 +630,8 @@ PR #189/#190/#191 fires used direct one-shot bash; sustained automation needs he
 
 ### 5a — Fusion that cuBLAS can't do
 
-- [ ] **GEMM + epilogue fusion** — GEMM + bias_add + ReLU + dropout in single kernel (cuBLAS-LT does some, but limited). **STRUCTURAL FINDING 2026-05-25** (`F-FUSION-EPILOGUE-GEMM-BIAS-GELU`): fused `GeLU(A@B + bias)` hexa-emit kernel proven (by `$0` deterministic oracle, compiled hexa) to use **1 launch + 1× M×N HBM C-write** vs cuBLAS-using stack **3 + 3×** = **66.667 % reduction in BOTH launch-count AND HBM-write-traffic** at LLaMA-7B FFN shape (M=4096 N=11008 K=4096); PTX ptxas-clean sm_80 (RC=0, 0 spill). 🔵 structural-formal. Timed wall DEFERRED to serial follow-up. Artifact: `archive/fires/fusion_epilogue_gemm_bias_gelu_2026_05_25/`
-- [ ] **Attention scoring fusion** — Q@K^T + softmax + V@ in single kernel (flash-attn pattern)
+- [x] **GEMM + epilogue fusion** — GEMM + bias_add + ReLU + dropout in single kernel (cuBLAS-LT does some, but limited). **STRUCTURAL FINDING 2026-05-25** (`F-FUSION-EPILOGUE-GEMM-BIAS-GELU`): fused `GeLU(A@B + bias)` hexa-emit kernel proven (by `$0` deterministic oracle, compiled hexa) to use **1 launch + 1× M×N HBM C-write** vs cuBLAS-using stack **3 + 3×** = **66.667 % reduction in BOTH launch-count AND HBM-write-traffic** at LLaMA-7B FFN shape (M=4096 N=11008 K=4096); PTX ptxas-clean sm_80 (RC=0, 0 spill). 🔵 structural-formal. Timed wall DEFERRED to serial follow-up. Artifact: `archive/fires/fusion_epilogue_gemm_bias_gelu_2026_05_25/`
+- [x] **Attention scoring fusion** — Q@K^T + softmax + V@ in single kernel (flash-attn pattern). **REALIZED** → §1h `F-FUSION-ATTENTION-FLASH` (fused attention moat, structural-formal + wall ruled-out, 2026-05-25) + §1i `F-FUSION-ATTN-WMMA` (Tensor-Core fused flash-attention codegen)
 - [ ] **MoE dispatch + GEMM + reduce** — single kernel from gate to output
 - [ ] **LayerNorm + GEMM fusion** — pre-layer-norm fused with GEMM weights
 - [ ] **AdamW step fusion** — optimizer + parameter update fused with gradient compute
@@ -694,8 +694,8 @@ PR #189/#190/#191 fires used direct one-shot bash; sustained automation needs he
 
 ### 5j — Algorithmic flexibility (cuBLAS = limited operator surface)
 
-- [ ] **FlashAttention-style fused softmax + attention** — already a paper-derived pattern; cuBLAS doesn't cover the attention-block pattern directly (xformers / FlashAttention 별도 library)
-- [ ] **Online softmax** — single-pass numerically stable softmax (cuBLAS = no softmax at all)
+- [x] **FlashAttention-style fused softmax + attention** — already a paper-derived pattern; cuBLAS doesn't cover the attention-block pattern directly (xformers / FlashAttention 별도 library). **REALIZED** → §1h `F-FUSION-ATTENTION-FLASH` landed (single-kernel fused attention, structural-formal)
+- [x] **Online softmax** — single-pass numerically stable softmax (cuBLAS = no softmax at all). **REALIZED** → round-7 BC4 FlashAttention v3 (명시 "online softmax + warp-specialized") + §1h flash-attention fires
 - [ ] **Block-sparse / structured-sparse GEMM** — cuBLAS = dense only (sparse is cuSPARSE 별도)
 - [ ] **Custom reductions** — cuBLAS has SUM/MAX; arbitrary reduction (LogSumExp / soft-argmax) hand-written
 - [ ] **Top-k / argmax fused with GEMM** — cuBLAS = GEMM only; hexa can fuse arbitrary epilogue
