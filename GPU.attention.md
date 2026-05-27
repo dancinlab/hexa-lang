@@ -91,10 +91,12 @@ honest physical limit: BM=32 wedge 의 AI cap → expected **ratio ≈ 1.32×** 
 
 ## ## deferred
 
-- BM=16 BK=64 (alt wedge A) silicon 측정 — round-14 BM=32 결과 후
-- BM=64 BK=16 (alt wedge B) silicon 측정 — 동일
+- ~~BM=16 BK=64 (alt wedge A)~~ **🔴 FALSIFIED 2026-05-28** — `tool/r14_walls/flash_attn_bm16_bk64_v0.cu` fired all 5 shapes on ubu-2: N=2048 **1.72×** slower than cuBLAS, N=4096 **1.60×** slower; vs R14 BM=32 BK=32 = 1.50-1.74× worse at N ≥ 2048. Single warp/CTA → occupancy 2 CTAs/SM (vs R14's 5). `archive/fires/bc4_alt_wedges_2026_05_28/result.json`
+- ~~BM=64 BK=16 (alt wedge B)~~ **🔴 FALSIFIED** — IS R10's exact geometry (`archive/fires/fusion_attn_multiwarp_2026_05_26/result.json`); best ratio 1.149× at N=4096 → R14 BM=32 BK=32 (0.927×) strictly dominates. No re-fire needed.
 - selective TMA on V (after pre-transpose) — A/B 1회 측정, round-14 후 미세화
 - FP8 e4m3 단독 lever (R11 미시도, wgmma 와 직교) — Blackwell TC throughput 2× 가능성
+
+**R14 BM=32 BK=32 = local optimum 확인** ((BM, BK) sweep space exhausted; 다음 lever = wgmma / TMA / FP8 — 모두 atomic instruction tile 자체를 바꾸는 axis).
 
 ---
 
