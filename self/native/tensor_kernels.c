@@ -149,22 +149,16 @@ HexaVal hexa_f64_to_bytes_le(HexaVal val) {
     return arr;
 }
 
-/* f64↔i64 IEEE-754 bit-cast (nanbox bit-pack keystone + NVPTX const→0d-hex
- * prereq · INBOX 2026-05-27). Union-pun mirrors the existing patterns in
- * runtime.c:2444 (TAG_FLOAT → int64_t bits) and runtime.c:432. Pure value
- * reinterpret — no allocation, no array wrap.
+/* hexa_float_to_bits / hexa_bits_to_float — REMOVED from this file.
+ * Two parallel PRs landed the same INBOX #1668: PR #1677 (acc8435a) put
+ * the weak `__attribute__((weak))` defs in self/runtime.c, and PR #1678
+ * (1636dc10) put strong defs here in tensor_kernels.c. tensor_kernels.c
+ * is #include'd into runtime.c (see comments at runtime.c:2881 / :3100),
+ * so within one TU the strong+weak pair triggered `redefinition` errors
+ * that broke origin/main builds. Canonical placement = runtime.c weak
+ * (PR #1677); the strong dup is removed here. INBOX dup-race precheck
+ * miss (memory: [[feedback_inbox_dup_race_precheck]]).
  */
-HexaVal hexa_float_to_bits(HexaVal val) {
-    union { double d; int64_t i; } u;
-    u.d = __hx_to_double(val);
-    return hexa_int(u.i);
-}
-
-HexaVal hexa_bits_to_float(HexaVal val) {
-    union { double d; int64_t i; } u;
-    u.i = HX_IS_INT(val) ? HX_INT(val) : (int64_t)__hx_to_double(val);
-    return hexa_float(u.d);
-}
 
 HexaVal hexa_bytes_to_f64_le(HexaVal arr, HexaVal offset) {
     int64_t off = HX_IS_INT(offset) ? HX_INT(offset) : 0;
