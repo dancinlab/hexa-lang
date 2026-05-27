@@ -1,0 +1,85 @@
+// HEXA Standard Library — crypto/tls13_pre_shared_key
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// TLS 1.3 pre_shared_key extension (RFC 8446 §4.2.11) — pure hexa. The
+// last complex standard extension: the ClientHello carries an OfferedPsks
+// (identities + binders) and the ServerHello echoes a selected_identity.
+// MUST be the LAST extension in the ClientHello. let-mut idiom (#1506).
+//
+// Structure (RFC 8446 §4.2.11):
+//   struct { opaque identity<1..2^16-1>; uint32 obfuscated_ticket_age; } PskIdentity;
+//   opaque PskBinderEntry<32..255>;
+//   struct {
+//       PskIdentity identities<7..2^16-1>;
+//       PskBinderEntry binders<33..2^16-1>;
+//   } OfferedPsks;
+//   // server_hello form: uint16 selected_identity
+//
+// Surface:
+//   pub fn tls13_ext_psk_client(identities: [[int]], ticket_ages: [int], binders: [[int]]) -> [int]
+//   pub fn tls13_ext_psk_server(selected_identity: int) -> [int]
+
+let _TLS_EXT_PRE_SHARED_KEY: int = 0x0029
+
+@pure
+pub fn tls13_ext_psk_client(identities: [[int]], ticket_ages: [int], binders: [[int]]) -> [int] {
+    // identities block = uint16 total || (uint16 id_len || id || uint32 ticket_age)*
+    let mut id_entries: [int] = []
+    let mut k = 0
+    while k < len(identities) {
+        let id = identities[k]
+        let il = len(id)
+        id_entries.push((il >> 8) & 0xFF)
+        id_entries.push(il & 0xFF)
+        let mut j = 0
+        while j < il { id_entries.push(id[j]); j = j + 1 }
+        let age = ticket_ages[k]
+        id_entries.push((age >> 24) & 0xFF)
+        id_entries.push((age >> 16) & 0xFF)
+        id_entries.push((age >> 8) & 0xFF)
+        id_entries.push(age & 0xFF)
+        k = k + 1
+    }
+    // binders block = uint16 total || (uint8 binder_len || binder)*
+    let mut bnd_entries: [int] = []
+    k = 0
+    while k < len(binders) {
+        let b = binders[k]
+        let bl = len(b)
+        bnd_entries.push(bl & 0xFF)
+        let mut j = 0
+        while j < bl { bnd_entries.push(b[j]); j = j + 1 }
+        k = k + 1
+    }
+    // assemble inner = uint16 id_total || id_entries || uint16 bnd_total || bnd_entries
+    let idl = len(id_entries)
+    let bnl = len(bnd_entries)
+    let mut inner: [int] = []
+    inner.push((idl >> 8) & 0xFF)
+    inner.push(idl & 0xFF)
+    let mut i = 0
+    while i < idl { inner.push(id_entries[i]); i = i + 1 }
+    inner.push((bnl >> 8) & 0xFF)
+    inner.push(bnl & 0xFF)
+    i = 0
+    while i < bnl { inner.push(bnd_entries[i]); i = i + 1 }
+    // outer Extension TLV
+    let il = len(inner)
+    let mut o: [int] = []
+    o.push((_TLS_EXT_PRE_SHARED_KEY >> 8) & 0xFF)
+    o.push(_TLS_EXT_PRE_SHARED_KEY & 0xFF)
+    o.push((il >> 8) & 0xFF)
+    o.push(il & 0xFF)
+    i = 0
+    while i < il { o.push(inner[i]); i = i + 1 }
+    return o
+}
+
+@pure
+pub fn tls13_ext_psk_server(selected_identity: int) -> [int] {
+    return [(_TLS_EXT_PRE_SHARED_KEY >> 8) & 0xFF, _TLS_EXT_PRE_SHARED_KEY & 0xFF,
+            0, 2,
+            (selected_identity >> 8) & 0xFF, selected_identity & 0xFF]
+}
