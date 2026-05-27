@@ -215,8 +215,9 @@ coarse item 을 audit-grounded atomic 으로 분해 (2026-05-28).
 실측 현재 상태 (2026-05-28, origin/main):
 - `.o` = **0** ✅ (#1808 build-artifact 제거로 달성)
 - `.s` = **3** (3 irreducible boot-floor · B9.1a 로 dead fixture 1개 제거)
-- `.c` = **229** (`self/*.c` 44 + `self/native/*.c` 32 + 기타). north-star
+- `.c` = **230** (`self/*.c` 44 + `self/native/*.c` 32 + 기타). north-star
   충족 시 `find . -name '*.c' -o -name '*.s' -o -name '*.o'` 가 비어야 함.
+  ※ 첫 실제 감소 후보 = `crypto_blowfish.c` (B9.6c · blowfish RUNEQ 입증 #1814).
 
 ⚠ **핵심 정정 (2026-05-28 scoping 3/3 + dup-race precheck 후)**: `.c`-zero 의
 진짜 병목은 reimpl 부재가 **아니다** — portable layer① 의 대부분(sha256·regex·
@@ -293,9 +294,10 @@ hexa 로 존재 → reimpl 신규작성은 redundant. `.c` 가 남은 진짜 이
       이미 존재. native `hxtok.c` 삭제 = wire 갭 (B9.6), reimpl 아님.
 - [⛔DUP] **B9.5b-sha256-core** — `stdlib/core/hash/sha256.hexa`·`stdlib/crypto/`
       이미 존재. wire 갭만.
-- [ ] **B9.5c-blowfish** — `crypto_blowfish.c` (pi-seeded bcrypt) →
-      `stdlib/crypto/blowfish.hexa`. **유일 genuine reimpl** (hexa 부재 +
-      `self/stdlib/ssh/keyfile.hexa` 실호출). FAN-OUT 진행중.
+- [x] **B9.5c-blowfish** — `crypto_blowfish.c` (pi-seeded bcrypt) →
+      `stdlib/crypto/blowfish.hexa` DONE (#1814). 🟢 **RUNEQ 입증** — hexa
+      `bcrypt_pbkdf` 가 C builtin `hexa_bcrypt_pbkdf` 와 byte-identical
+      (`e0497b73…93f23f7c`). 17/17 KAT PASS · ssh/keyfile API 정확 일치 · no-DUP.
       (③19 = honest FFI floor · 포팅 대상 아님)
 
 ### B9.6 — codegen self-emit (genuine `.c`-delete route · SERIAL · non-parallel)
@@ -304,6 +306,16 @@ hexa 로 존재 → reimpl 신규작성은 redundant. `.c` 가 남은 진짜 이
 해야 runtime.c 가 dead. wipe-prone + rebuild + fixpoint 필요 → 격리-worktree 병렬
 fan-out 불가, serial 진행.
 
+- [ ] **B9.6c-blowfish-c-delete** — 🎯 **첫 실제 `.c` 삭제 (230→229)**. blowfish
+      RUNEQ (#1814) 가 byte-identical hexa 대체본을 입증했으므로, 4-surface builtin
+      제거로 `crypto_blowfish.c` 를 dead 화:
+      1. `compiler/check/bind.hexa:1055` — allowlist 에서 `bcrypt_pbkdf` 제거
+      2. `self/codegen.hexa:6971-72` — emit branch 제거
+      3. `self/codegen.hexa:10180` — `_is_builtin_name` 제거
+      4. `self/stdlib/ssh/keyfile.hexa` — `use "stdlib/crypto/blowfish"` rewire
+      → regen (mini arm64 · `cc --regen` ubu l-value버그로 불가) → fixpoint →
+      `crypto_blowfish.c` git rm + build-recipe 갱신. SERIAL · wipe-prone ·
+      phase-h codegen 에이전트와 codegen.hexa 경합 주의.
 - [ ] **B9.6a-hexaval-repr-emit** — HexaVal repr 생성자 codegen self-emit
       (`self/codegen/runtime_arm64.hexa` 확장; `rt_arena_*` 4 fn LANDED 패턴)
 - [ ] **B9.6b-runtime-primitive-emit** — 잔여 runtime primitive self-emit
