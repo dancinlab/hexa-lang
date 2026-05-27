@@ -66,11 +66,17 @@ pub fn x509_signature(cert: [int]) -> [int] {
 // extract the raw subjectPublicKey bytes from the SPKI BIT STRING
 @pure
 pub fn x509_subject_public_key(cert: [int]) -> [int] {
-    // navigate to SPKI: outer.value[0] = TBS; TBS.value child index 6 = SPKI
+    // navigate to SPKI. TBS children: [0]version?, serial, sigAlg, issuer,
+    // validity, subject, SPKI. The version field is OPTIONAL (RFC 5280:
+    // `version [0] EXPLICIT Version DEFAULT v1`) — present in v3 certs (tag
+    // 0xA0), absent in v1. So SPKI is the 7th child when version is present,
+    // the 6th when it is not. Detect by the first child's tag.
     let tbs_o = _tbs_offset(cert)
     let mut c = der_value_start(cert, tbs_o)    // first TBS child
+    let mut skip = 5                            // v1: serial is child 0 → 5 hops to SPKI
+    if (der_tag(cert, c) & 0xFF) == 0xA0 { skip = 6 }   // v3: skip [0]version too
     let mut k = 0
-    while k < 6 { c = der_next(cert, c); k = k + 1 }
+    while k < skip { c = der_next(cert, c); k = k + 1 }
     // c is now at SPKI; its 2nd child = subjectPublicKey BIT STRING
     let spki_v = der_value_start(cert, c)
     let alg = spki_v                            // 1st SPKI child = algId
