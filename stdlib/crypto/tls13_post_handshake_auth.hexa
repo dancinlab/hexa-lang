@@ -1,0 +1,22 @@
+// HEXA Standard Library — crypto/tls13_post_handshake_auth
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// TLS 1.3 post_handshake_auth extension (RFC 8446 §4.2.6) — pure hexa.
+// Sent by the client in ClientHello to indicate willingness to perform
+// post-handshake client authentication (the server may later send a
+// CertificateRequest after the handshake completes). Empty payload.
+// let-mut idiom (#1506).
+//
+// Structure (RFC 8446 §4.2.6): empty extension_data.
+//
+// Surface:
+//   pub fn tls13_ext_post_handshake_auth() -> [int]
+
+let _TLS_EXT_POST_HANDSHAKE_AUTH: int = 0x0031
+
+@pure
+pub fn tls13_ext_post_handshake_auth() -> [int] {
+    return [(_TLS_EXT_POST_HANDSHAKE_AUTH >> 8) & 0xFF, _TLS_EXT_POST_HANDSHAKE_AUTH & 0xFF, 0, 0]
+}
