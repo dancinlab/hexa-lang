@@ -35,6 +35,17 @@ fn flame_bpe_corpus_load(merges_path: string, vocab_path: string, corpus_path: s
 // Round-trip self-check: decode(encode(text)) == text. Honest tokenizer
 // sanity before a costly fire — a mismatch means the corpus would train on
 // a lossy id stream.
+//
+// ⚠ KNOWN LIMITATION (flame-P2b ③ finding, 2026-05-27): against a REAL
+// GPT-2/Qwen vocab this returns false for whitespace/non-ASCII text. Root
+// cause is upstream: hexa `chr(n)` truncates n to a byte (chr(288) ==
+// chr(32)), so tokenizer_bpe's build_byte_to_char can't produce the 256
+// DISTINCT chars the byte-level scheme needs (chr(256+i) collapses to
+// chr(i)) — space's byte-char collides with a literal 0x20 and corrupts.
+// Toy vocab (ASCII, no spaces) round-trips fine; real Qwen does not until
+// hexa gains Unicode chr/char_code. Filed: inbox/notes (hexa-chr-unicode).
+// USE THIS GUARD before any fire — a false return = do NOT train on this
+// id stream.
 fn flame_bpe_roundtrip(tok, text: string) -> bool {
     let ids = bpe_encode(tok, text)
     return bpe_decode(tok, ids) == text
