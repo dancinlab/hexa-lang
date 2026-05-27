@@ -1,0 +1,65 @@
+// HEXA Standard Library — core/option_result_iter
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Option/Result → 0-or-1 length array iter-adapter. Pure additive sibling
+// of `stdlib/core/option_result.hexa` — bridges the Option/Result enum
+// surface to the array world so callers can uniformly fold/flatten over
+// zero-or-one element sequences without unwrapping.
+//
+// RUNTIME.flip B4.option-iter-adapter.
+//
+// Surface:
+//   pub fn opt_iter_int(o: Option) -> [int]
+//     — Option::Some(v) → [v]; Option::None → [].
+//   pub fn opt_iter_str(o: Option) -> [str]
+//     — same shape for strings.
+//   pub fn res_iter_int(r: Result) -> [int]
+//     — Result::Ok(v) → [v]; Result::Err(_) → [].
+//   pub fn res_iter_str(r: Result) -> [str]
+//     — same shape for strings.
+//
+// Design notes:
+//   - Monomorphic int / str variants because the typechecker lacks
+//     parametric generics; mirrors the convention established by sibling
+//     `option_result_predicates.hexa` (frontier B4 cluster).
+//   - Mirrors Rust's `Option::iter` / `Result::iter` semantics — a
+//     0-or-1 element sequence that lets Option/Result compose with
+//     array-style flatten/concat pipelines.
+//   - Same `match`-with-return idiom as sibling helpers; no fallthrough,
+//     no allocation beyond the single-element happy path.
+
+use "stdlib/core/option_result"
+
+// -- Option iter-adapter --
+
+pub fn opt_iter_int(o: Option) -> [int] {
+    return match o {
+        Option::Some(v) => [v],
+        Option::None => []
+    }
+}
+
+pub fn opt_iter_str(o: Option) -> [str] {
+    return match o {
+        Option::Some(v) => [v],
+        Option::None => []
+    }
+}
+
+// -- Result iter-adapter --
+
+pub fn res_iter_int(r: Result) -> [int] {
+    return match r {
+        Result::Ok(v) => [v],
+        Result::Err(_) => []
+    }
+}
+
+pub fn res_iter_str(r: Result) -> [str] {
+    return match r {
+        Result::Ok(v) => [v],
+        Result::Err(_) => []
+    }
+}
