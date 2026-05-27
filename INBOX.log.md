@@ -1,5 +1,30 @@
 # INBOX — log
 
+## 2026-05-27 — hexa-lsp stdlib 심볼 인덱싱 부재 → flame/forge primitive 미발견 (anima M4b scope-check 교훈)
+
+**발견 맥락**: anima M4b pilot(DECODER MoE-fresh 학습 스택)을 작성하며 모든 matmul 을
+손으로 짠 scalar 삼중루프(`for i,j,k: acc += A·B`)로 구현 → flame 이 이미 제공하는
+`farr_matmul` / `farr_matmul_gpu`(RFC-040 cuBLAS Dgemm)를 안 씀. H100 발사 직전
+scope-check 에서야 발견: 스칼라 경로는 (a) GPU 유휴(device-farr/cuBLAS 미사용)
+(b) pilot 규모(d=2048·12L·T=512 ≈ 10^14 ops)에서 CPU 비현실 → 발사 무의미. 뒤늦게 잡음.
+
+**LSP 각도 (요청/제안)**
+- hexa-lsp 는 이걸 진단으로 못 잡는다 — 손루프는 문법·타입·심볼 다 정상인 유효 코드이지,
+  "stdlib primitive 재발명" 은 에러가 아니다(아키텍처/g1 위반). LSP diagnostics 범위 밖.
+- **그러나** completion / workspace-symbols 가 stdlib(flame·forge) pub fn 을 인덱싱하면
+  `farr_` 입력 시 `farr_matmul`·`farr_matmul_gpu` 가 떠서 발견 가능. → hexa-lsp 가 모든
+  stdlib pub fn(flame + forge + 전체)을 심볼 인덱스에 넣는지 점검 요청. **라이브러리별 별도
+  LSP 불필요** — 단일 hexa-lsp 가 전부 커버(flame/forge 는 별도 언어가 아닌 hexa 라이브러리).
+- (선택) 아키텍처 lint 규칙: inline triple-loop matmul 패턴 → `farr_matmul` 제안. LSP
+  diagnostics 가 아닌 별도 linter rule(g61 stdlib-dup 체커 확장 후보).
+
+**핵심 한계 (정직)**: completion 은 "손 뻗을 때"만 도움 — 작성자가 `farr_` 를 칠 생각조차
+안 하고 `for` 부터 쓰면 무용. 진짜 해법은 도구가 아니라 **compute 작성 전 stdlib 탐색 습관**
+(g0/g1) + toy→scale 전환 시 아키텍처 재질문. 자동화 난망 — 작성자 규율 영역.
+
+**severity**: enhancement(LSP 심볼 인덱싱) + process-finding(cross-cutting 작성 규율).
+**참조**: anima `CORE/DECODER/flame_mm.hexa`(#1100, mm dispatch 토대) · M4b Phase 4-gpu 포팅 진행 중.
+
 ## 2026-05-27 — flame-P2b Qwen BPE = anima DECODER MoE-fresh scale-gate · 양 토크나이저 모듈 모두 실측 결함
 
 ## 2026-05-27T11:15Z — ✅ RESOLVED: RTSC tranche-3 fn (Hc1·Jc·multi-band) 직접구현 (PR #1641)
