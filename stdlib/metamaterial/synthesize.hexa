@@ -1,8 +1,0 @@
-#!hexa strict
-// metamaterial synthesize — photolithography feature.
-fn main() {
-    let photolitho_um = 1.0
-    println("metamaterial_synthesize (photolithography feature):")
-    println("  photolitho_um = " + str(photolitho_um))
-    println("__HEXA_METAMATERIAL_SYNTHESIZE__ PASS gate=GATE_OPEN absorbed=false")
-}

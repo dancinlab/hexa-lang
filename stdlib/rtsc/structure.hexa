@@ -1,8 +1,0 @@
-#!hexa strict
-// rtsc structure — H3S Im-3m lattice constant.
-fn main() {
-    let H3S_a_A = 3.0
-    println("rtsc_structure (H3S Im-3m lattice constant):")
-    println("  H3S_a_A = " + str(H3S_a_A))
-    println("__HEXA_RTSC_STRUCTURE__ PASS gate=GATE_OPEN absorbed=false")
-}

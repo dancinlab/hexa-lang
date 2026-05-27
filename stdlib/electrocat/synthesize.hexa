@@ -1,8 +1,0 @@
-#!hexa strict
-// electrocat synthesize — electrodeposition voltage.
-fn main() {
-    let depo_V = -0.5
-    println("electrocat_synthesize (electrodeposition voltage):")
-    println("  depo_V = " + str(depo_V))
-    println("__HEXA_ELECTROCAT_SYNTHESIZE__ PASS gate=GATE_OPEN absorbed=false")
-}

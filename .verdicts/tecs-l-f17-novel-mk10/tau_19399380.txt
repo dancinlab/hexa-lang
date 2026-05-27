@@ -1,3 +1,0 @@
-verify --expr tau(19399380)=384
-  calc   = 384  == expected 384
-  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)

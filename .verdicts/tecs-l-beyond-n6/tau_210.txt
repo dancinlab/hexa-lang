@@ -1,4 +1,0 @@
-$ hexa verify --expr tau 210 16
-verify --expr tau(210)=16
-  calc   = 16  == expected 16
-  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)

@@ -1,8 +1,0 @@
-#!hexa strict
-// fusion synthesize — D-T fuel mix ratio.
-fn main() {
-    let DT_ratio = 0.5
-    println("fusion_synthesize (D-T fuel mix ratio):")
-    println("  DT_ratio = " + str(DT_ratio))
-    println("__HEXA_FUSION_SYNTHESIZE__ PASS gate=GATE_OPEN absorbed=false")
-}

@@ -1,8 +1,0 @@
-#!hexa strict
-// qubit handoff — qubit array size target.
-fn main() {
-    let array_qubits = 1000.0
-    println("qubit_handoff (qubit array size target):")
-    println("  array_qubits = " + str(array_qubits))
-    println("__HEXA_QUBIT_HANDOFF__ PASS gate=GATE_OPEN absorbed=false")
-}

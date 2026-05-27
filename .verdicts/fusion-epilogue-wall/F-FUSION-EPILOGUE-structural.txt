@@ -1,5 +1,0 @@
-# F-FUSION-EPILOGUE — structural+correctness (round-1 harness has NO timing); wall DEFERRED (fused GEMM naive, needs TC-GEMM) — 2026-05-25
-[FUSED]
-F-FUSION-EPILOGUE-GEMM-BIAS-GELU fused PASS -- shape M=4096 N=11008 K=4096 launches=1 hbm_C_writes=1 max_rel=1.23206e-06 max_abs=1.93208e-07 checked=4096/45088768
-[CUBLAS-BASELINE cublasSgemm+bias+gelu]
-F-FUSION-EPILOGUE-GEMM-BIAS-GELU baseline PASS -- shape M=4096 N=11008 K=4096 launches=3 hbm_C_writes=3 max_rel=1.32708e-06 max_abs=2.08109e-07 checked=4096/45088768

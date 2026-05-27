@@ -1,7 +1,0 @@
-CM0 — n=6 lattice backbone (cite TECS-L M2/M5 + sopfr gap)
-
-sigma(6)=12   BLUE SUPPORTED-FORMAL  (cite M2 .verdicts/tecs-l-arith-stdlib + main-tree verify calc=12)
-tau(6)=4      BLUE  (cite M2)
-phi(6)=2      BLUE  (cite M2)
-sopfr(6)=5    ORANGE INSUFFICIENT — "calculator system has NO path for sopfr" (verify_cli _recompute whitelist gap -> INBOX candidate; honest, NOT a verified value)
-master identity: sigma(6)*phi(6) = 12*2 = 24 = 6*4 = n*tau(6)  [integer assembly; 3 lattice components BLUE, sopfr is a calculator-gap]

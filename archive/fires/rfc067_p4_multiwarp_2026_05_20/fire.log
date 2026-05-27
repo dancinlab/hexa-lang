@@ -1,1 +1,0 @@
-F-RFC067-MULTIWARP-GRID-NUMERIC PASS -- M=64 N=64 K=64 max|d|=0 tol=0.000703125 mismatches=0/4096 max_abs_ref=0.0703125 zeros_hc=768

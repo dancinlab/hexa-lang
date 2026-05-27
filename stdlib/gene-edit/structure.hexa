@@ -1,8 +1,0 @@
-#!hexa strict
-// gene-edit structure — guide RNA length.
-fn main() {
-    let guide_bp = 20.0
-    println("gene-edit_structure (guide RNA length):")
-    println("  guide_bp = " + str(guide_bp))
-    println("__HEXA_GENE_EDIT_STRUCTURE__ PASS gate=GATE_OPEN absorbed=false")
-}

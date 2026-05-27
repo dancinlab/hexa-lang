@@ -1,8 +1,0 @@
-// tool/probe_cos_f64.hexa — F-COSF64-NUMERIC kernel (#1464 silicon validation)
-@gpu_kernel
-fn cos_f64_probe(a: [f64], c: [f64], n: i64) {
-    let mut tid: i64 = to_i64(gpu_thread_id_x())
-    if tid < n {
-        c[to_i64(tid)] = cos(a[to_i64(tid)])
-    }
-}

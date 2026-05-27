@@ -1,4 +1,0 @@
-fn add_marker(cls) { cls.marker = "yes" return cls }
-@add_marker
-class M { }
-print(M.marker)

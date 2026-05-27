@@ -1,5 +1,0 @@
-$ hexa verify --expr sigma 120 360
-verify --expr sigma(120)=360
-  calc   = 360  == expected 360
-  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
-  absorb = · already in atlas — idempotent skip (default · @D g69)

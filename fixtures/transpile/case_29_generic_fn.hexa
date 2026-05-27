@@ -1,3 +1,0 @@
-fn id<T>(x: T) -> T { return x }
-print(id(7))
-print(id("s"))

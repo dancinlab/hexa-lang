@@ -1,3 +1,0 @@
-verify --expr phi(30)=8
-  calc   = 8  == expected 8
-  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)

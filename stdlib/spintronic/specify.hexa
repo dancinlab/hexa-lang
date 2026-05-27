@@ -1,8 +1,0 @@
-#!hexa strict
-// spintronic specify — TMR ratio target.
-fn main() {
-    let TMR_pct = 100.0
-    println("spintronic_specify (TMR ratio target):")
-    println("  TMR_pct = " + str(TMR_pct))
-    println("__HEXA_SPINTRONIC_SPECIFY__ PASS gate=GATE_OPEN absorbed=false")
-}

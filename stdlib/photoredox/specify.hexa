@@ -1,8 +1,0 @@
-#!hexa strict
-// photoredox specify — turnover number target.
-fn main() {
-    let TON_target = 1000.0
-    println("photoredox_specify (turnover number target):")
-    println("  TON_target = " + str(TON_target))
-    println("__HEXA_PHOTOREDOX_SPECIFY__ PASS gate=GATE_OPEN absorbed=false")
-}

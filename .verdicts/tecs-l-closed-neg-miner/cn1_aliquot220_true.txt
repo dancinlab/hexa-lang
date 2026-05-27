@@ -1,5 +1,0 @@
-$ hexa verify --expr aliquot 220 284
-verify --expr aliquot(220)=284
-  calc   = 284  == expected 284
-  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
-  absorb = · already in atlas — idempotent skip (default · @D g69)

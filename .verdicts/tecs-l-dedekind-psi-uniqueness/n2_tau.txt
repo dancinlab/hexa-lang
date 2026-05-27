@@ -1,3 +1,0 @@
-verify --expr tau(2)=2
-  calc   = 2  == expected 2
-  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)

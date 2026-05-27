@@ -1,3 +1,0 @@
-verify --expr gamma0_index(37)=38
-  calc   = 38  == expected 38
-  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)

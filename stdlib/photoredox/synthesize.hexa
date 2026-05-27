@@ -1,8 +1,0 @@
-#!hexa strict
-// photoredox synthesize — ligand stoichiometry.
-fn main() {
-    let ligand_ratio = 3.0
-    println("photoredox_synthesize (ligand stoichiometry):")
-    println("  ligand_ratio = " + str(ligand_ratio))
-    println("__HEXA_PHOTOREDOX_SYNTHESIZE__ PASS gate=GATE_OPEN absorbed=false")
-}

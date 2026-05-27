@@ -1,7 +1,0 @@
-=== flame Phase 4-D-1 source (d=768·12L scaled — GPU dispatch target, BUILD ONLY on M-Mac) ===
-  corpus: /Users/ghost/core/anima/training/corpus_consciousness_v1.jsonl
-  size: 151943 bytes (V=256 byte-level vocab)
-  d768·12L config: T=1024 d=768 nh=12 nkv=4 h=3072 n_layer=12
-  nsamp=4 stride=4096 n_steps=20
-  model size: 104024832 doubles
-  cache size: 346842881 doubles

@@ -1,8 +1,0 @@
-#!hexa strict
-// neuromorphic specify — energy-per-spike target.
-fn main() {
-    let E_spike_pJ = 1.0
-    println("neuromorphic_specify (energy-per-spike target):")
-    println("  E_spike_pJ = " + str(E_spike_pJ))
-    println("__HEXA_NEUROMORPHIC_SPECIFY__ PASS gate=GATE_OPEN absorbed=false")
-}

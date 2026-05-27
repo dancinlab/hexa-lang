@@ -1,6 +1,0 @@
-// tests/regression/anima_bug3/mod_a.hexa
-use "mod_b"
-
-fn mod_a_hi() {
-    return mod_b_hi() + 1
-}

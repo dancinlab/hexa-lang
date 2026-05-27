@@ -1,8 +1,0 @@
-#!hexa strict
-// perovskite design — tandem top-cell bandgap.
-fn main() {
-    let tandem_Eg_eV = 1.68
-    println("perovskite_design (tandem top-cell bandgap):")
-    println("  tandem_Eg_eV = " + str(tandem_Eg_eV))
-    println("__HEXA_PEROVSKITE_DESIGN__ PASS gate=GATE_OPEN absorbed=false")
-}

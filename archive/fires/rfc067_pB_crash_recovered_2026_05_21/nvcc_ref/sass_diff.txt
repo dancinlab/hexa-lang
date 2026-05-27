@@ -1,4 +1,0 @@
-nvcc_ptx_rc=0
-nvcc_ref_sass_instr=80
-hexa_step1_sass_instr=80
-hexa_to_nvcc_sass_ratio=1.000

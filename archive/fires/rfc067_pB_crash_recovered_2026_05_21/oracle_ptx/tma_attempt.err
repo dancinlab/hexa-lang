@@ -1,2 +1,0 @@
-ptxas tma_attempt.ptx, line 11; error   : State space incorrect for instruction 'cp.async.bulk'
-ptxas fatal   : Ptx assembly aborted due to errors

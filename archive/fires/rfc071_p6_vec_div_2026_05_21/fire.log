@@ -1,7 +1,0 @@
-loaded PTX 2085 bytes
-JIT info: ptxas info    : 0 bytes gmem
-ptxas info    : Compiling entry function 'vec_div' for 'sm_120a'
-ptxas info    : Function properties for vec_div
-ptxas         .     0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
-ptxas info    : Used 26 registers, used 0 barriers
-ptxas info    : Compile time = 24.580 ms

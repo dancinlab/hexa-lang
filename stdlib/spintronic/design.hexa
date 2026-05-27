@@ -1,8 +1,0 @@
-#!hexa strict
-// spintronic design — CoFeB free layer.
-fn main() {
-    let free_nm = 1.5
-    println("spintronic_design (CoFeB free layer):")
-    println("  free_nm = " + str(free_nm))
-    println("__HEXA_SPINTRONIC_DESIGN__ PASS gate=GATE_OPEN absorbed=false")
-}

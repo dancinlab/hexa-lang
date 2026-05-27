@@ -1,8 +1,0 @@
-#!hexa strict
-// photonic synthesize — SOI device-layer thickness.
-fn main() {
-    let soi_nm = 220.0
-    println("photonic_synthesize (SOI device-layer thickness):")
-    println("  soi_nm = " + str(soi_nm))
-    println("__HEXA_PHOTONIC_SYNTHESIZE__ PASS gate=GATE_OPEN absorbed=false")
-}

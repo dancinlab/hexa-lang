@@ -1,4 +1,0 @@
-def greet(name="world"):
-    return name
-print(greet())
-print(greet("hexa"))

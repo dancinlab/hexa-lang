@@ -1,5 +1,0 @@
-tb_quench
-build/
-*.vcd
-*.bit
-*.lst

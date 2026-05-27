@@ -1,8 +1,0 @@
-#!hexa strict
-// fusion structure — ITER major radius.
-fn main() {
-    let R_m = 6.2
-    println("fusion_structure (ITER major radius):")
-    println("  R_m = " + str(R_m))
-    println("__HEXA_FUSION_STRUCTURE__ PASS gate=GATE_OPEN absorbed=false")
-}

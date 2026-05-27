@@ -1,4 +1,0 @@
-$ hexa verify --expr sigma 120 240
-verify --expr sigma(120)=240
-  calc   = 360  != expected 240
-  tier   = 🔴 FALSIFIED  (calc deterministically disagrees — TECS-L result-agnostic closed negative)

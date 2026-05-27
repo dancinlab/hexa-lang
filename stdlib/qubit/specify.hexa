@@ -1,8 +1,0 @@
-#!hexa strict
-// qubit specify — transition frequency target.
-fn main() {
-    let f01_target_GHz = 5.0
-    println("qubit_specify (transition frequency target):")
-    println("  f01_target_GHz = " + str(f01_target_GHz))
-    println("__HEXA_QUBIT_SPECIFY__ PASS gate=GATE_OPEN absorbed=false")
-}

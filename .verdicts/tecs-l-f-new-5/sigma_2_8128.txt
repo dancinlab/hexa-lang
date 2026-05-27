@@ -1,3 +1,0 @@
-verify --expr sigma_2(8128)=87403980
-  calc   = 88085930  != expected 87403980
-  tier   = 🔴 FALSIFIED  (calc deterministically disagrees — TECS-L result-agnostic closed negative)

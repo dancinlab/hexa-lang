@@ -1,8 +1,0 @@
-#!hexa strict
-// fusion design — ITER toroidal field.
-fn main() {
-    let B_T = 5.3
-    println("fusion_design (ITER toroidal field):")
-    println("  B_T = " + str(B_T))
-    println("__HEXA_FUSION_DESIGN__ PASS gate=GATE_OPEN absorbed=false")
-}

@@ -1,8 +1,0 @@
-#!hexa strict
-// perovskite handoff — module area target.
-fn main() {
-    let module_area_m2 = 1.0
-    println("perovskite_handoff (module area target):")
-    println("  module_area_m2 = " + str(module_area_m2))
-    println("__HEXA_PEROVSKITE_HANDOFF__ PASS gate=GATE_OPEN absorbed=false")
-}

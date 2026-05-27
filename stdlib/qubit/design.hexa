@@ -1,8 +1,0 @@
-#!hexa strict
-// qubit design — transmon EJ/EC ratio target.
-fn main() {
-    let EJ_EC_target = 50.0
-    println("qubit_design (transmon EJ/EC ratio target):")
-    println("  EJ_EC_target = " + str(EJ_EC_target))
-    println("__HEXA_QUBIT_DESIGN__ PASS gate=GATE_OPEN absorbed=false")
-}

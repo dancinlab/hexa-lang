@@ -1,5 +1,0 @@
-=== E27 : hexa verify --expr pow 4 3 64 ===
-verify --expr pow(4,3)=64
-  tier   = 🟠 INSUFFICIENT
-  reason = calculator system has NO path for 'pow'
-  gap    = extend tool/verify_cli.hexa::_recompute (계산기시스템 개선 후보)

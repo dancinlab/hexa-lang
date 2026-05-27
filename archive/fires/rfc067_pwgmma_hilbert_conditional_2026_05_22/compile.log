@@ -1,2 +1,0 @@
-(skipped) ubu-2 sm_120 cannot execute wgmma; no nvcc build attempted.
-See ptxas_info.log for sm_90a PASS + sm_120a REJECT.

@@ -1,6 +1,0 @@
-M(6) omega-decomp: {1}->+1, primes<=6 {2,3,5}->-3, sqfree omega=2 {6}->+1; sum=-1
-  calc   = -1  == expected -1
-  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
-
-n=6 specific observation: sqfree omega=2 set ∩ [1,6] = {6} (singleton)
-thus M(6) - M(5) = mu(6) = +1, the FIRST positive jump after run of negatives

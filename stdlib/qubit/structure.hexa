@@ -1,8 +1,0 @@
-#!hexa strict
-// qubit structure — Josephson junction area.
-fn main() {
-    let junction_area_nm2 = 10000.0
-    println("qubit_structure (Josephson junction area):")
-    println("  junction_area_nm2 = " + str(junction_area_nm2))
-    println("__HEXA_QUBIT_STRUCTURE__ PASS gate=GATE_OPEN absorbed=false")
-}

@@ -1,6 +1,0 @@
-=== E18 : hexa verify --expr first_cusp_form_weight 11 2 ===
-verify --expr first_cusp_form_weight(11)=2
-  calc   = 2  == expected 2
-  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
-  absorb = ⚠ atlas register did NOT confirm fold; invocation:
-           hexa atlas register --from-verify first_cusp_form_weight 11 2

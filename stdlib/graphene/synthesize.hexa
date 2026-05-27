@@ -1,8 +1,0 @@
-#!hexa strict
-// graphene synthesize — CVD growth temperature.
-fn main() {
-    let cvd_T_C = 1000.0
-    println("graphene_synthesize (CVD growth temperature):")
-    println("  cvd_T_C = " + str(cvd_T_C))
-    println("__HEXA_GRAPHENE_SYNTHESIZE__ PASS gate=GATE_OPEN absorbed=false")
-}
