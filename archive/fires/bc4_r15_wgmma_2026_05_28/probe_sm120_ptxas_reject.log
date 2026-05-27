@@ -1,0 +1,17 @@
+== wgmma probe — sm_120 native build (rejected by ptxas-12.9) ==
+host: ubu-2 (RTX 5070 Blackwell)
+toolchain: cuda-12.9 nvcc 12.9.86
+
+-- Build: nvcc -O2 -gencode arch=compute_120,code=sm_120 -Xptxas=-v wgmma_numeric_probe.cu --
+ptxas /tmp/tmpxft_001dc3af_00000000-6_wgmma_numeric_probe.ptx, line 96; error   : Instruction 'wgmma.mma_async with floating point types' not supported on .target 'sm_120'
+ptxas /tmp/tmpxft_001dc3af_00000000-6_wgmma_numeric_probe.ptx, line 96; error   : Instruction 'wgmma.mma_async with floating point types' not supported on .target 'sm_120'
+ptxas /tmp/tmpxft_001dc3af_00000000-6_wgmma_numeric_probe.ptx, line 96; error   : Instruction 'wgmma.mma_async with floating point types' cannot be compiled for architecture 'sm_120'
+ptxas /tmp/tmpxft_001dc3af_00000000-6_wgmma_numeric_probe.ptx, line 100; error   : Instruction 'wgmma.commit_group' not supported on .target 'sm_120'
+ptxas /tmp/tmpxft_001dc3af_00000000-6_wgmma_numeric_probe.ptx, line 100; error   : Instruction 'wgmma.commit_group' not supported on .target 'sm_120'
+ptxas /tmp/tmpxft_001dc3af_00000000-6_wgmma_numeric_probe.ptx, line 100; error   : Instruction 'wgmma.commit_group' cannot be compiled for architecture 'sm_120'
+ptxas /tmp/tmpxft_001dc3af_00000000-6_wgmma_numeric_probe.ptx, line 104; error   : Instruction 'wgmma.wait_group' not supported on .target 'sm_120'
+ptxas /tmp/tmpxft_001dc3af_00000000-6_wgmma_numeric_probe.ptx, line 104; error   : Instruction 'wgmma.wait_group' not supported on .target 'sm_120'
+ptxas /tmp/tmpxft_001dc3af_00000000-6_wgmma_numeric_probe.ptx, line 104; error   : Instruction 'wgmma.wait_group' cannot be compiled for architecture 'sm_120'
+ptxas fatal   : Ptx assembly aborted due to errors
+
+VERDICT: wgmma family (mma_async + commit_group + wait_group) explicitly REJECTED for sm_120 by ptxas-12.9. Blackwell uses tcgen05.mma (5th-gen tensor core, different opcode + operand layout), not wgmma.

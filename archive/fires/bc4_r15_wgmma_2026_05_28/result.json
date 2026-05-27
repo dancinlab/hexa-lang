@@ -1,0 +1,51 @@
+{
+  "falsifier": "F-FUSION-ATTN-WGMMA-WALL",
+  "campaign": "BC4 round-15 timed silicon wall — sm_90 async warpgroup MMA (wgmma.mma_async)",
+  "date": "2026-05-28",
+  "verdict_tier": "RED — hardware-blocked (honest closed-negative; rule-out one axis per paper_negative_ok)",
+  "host": "ubu-2 RTX 5070 sm_120 Blackwell (driver 580.159.03, nvcc 12.9.86 + nvcc 12.0)",
+  "arch_supported": false,
+  "arch_supported_reason": "wgmma is Hopper-exclusive (sm_90a). RTX 5070 = Blackwell = sm_120. ptxas-12.9 explicitly rejects: 'wgmma.mma_async with floating point types cannot be compiled for architecture sm_120'. Blackwell's analogous async tensor-core path is tcgen05.mma — a different instruction family with different operand layout (5th-gen tensor cores), not a wgmma drop-in.",
+  "probes": {
+    "sm90a_build": "PASS — nvcc 12.9 -gencode arch=compute_90a,code=sm_90a compiles wgmma.mma_async.sync.aligned.m64n32k16.f32.f16.f16 cleanly. ptxas 42 registers, 0 spill, 1 barrier. SASS confirms HGMMA.64x32x16.F32 instruction in cubin.",
+    "sm90a_driver_jit_to_sm120": "RUNS but SILENTLY NOPs — kernel launches OK (no CUDA_ERROR_NO_BINARY_FOR_GPU 209) but ALL outputs zero. CPU reference sum=1956.87, GPU sum=0.00, nonzero=0/2048 floats. Driver forward-compat from sm_90 PTX to sm_120 SASS does NOT translate wgmma → Blackwell tensor-core ops.",
+    "sm120_build": "FAIL — ptxas explicitly: 'wgmma.mma_async with floating point types cannot be compiled for architecture sm_120' (also wgmma.commit_group + wgmma.wait_group rejected). Confirms wgmma is NOT part of Blackwell PTX surface."
+  },
+  "ptxas_v_sm90a": {
+    "arch": "sm_90a",
+    "registers": 42,
+    "spill_stores_bytes": 0,
+    "spill_loads_bytes": 0,
+    "barriers": 1,
+    "smem_bytes": 0,
+    "stack_bytes": 0,
+    "verdict": "ptxas clean — no spill, no stack — kernel itself is well-formed"
+  },
+  "occupancy_per_sm": null,
+  "occupancy_target": 3,
+  "occupancy_met": null,
+  "numeric_PASS_all_shapes": false,
+  "wall_sweep": [],
+  "vs_r14_at_N4096": "NOT-MEASURED — kernel could not execute (hardware-blocked)",
+  "vs_cublas_at_each_N": [],
+  "capstone_status": "CANNOT-TEST on ubu-2 RTX 5070. Would require Hopper hardware (H100/H200/H800 = sm_90) to attempt. Without Hopper access, BC4 R14 (BM=32 BK=32, 0.927× at N=4096) remains capstone.",
+  "evidence_files": {
+    "probe_kernel": "tool/r15_walls/wgmma_probe.cu",
+    "numeric_probe_kernel": "tool/r15_walls/wgmma_numeric_probe.cu",
+    "sm90a_build_run_log": "archive/fires/bc4_r15_wgmma_2026_05_28/probe_sm90a_run.log",
+    "sm120_ptxas_reject_log": "archive/fires/bc4_r15_wgmma_2026_05_28/probe_sm120_ptxas_reject.log"
+  },
+  "ruled_out_axis": "wgmma capstone wedge — the ONE remaining attention lever R11 had ruled-out / not-tried — is now CONFIRMED-RULED-OUT on RTX 5070 (Blackwell). Not because the wedge is bad, but because the host hardware is wrong generation for the instruction.",
+  "honest_note": "Following paper_negative_ok + g3 over-claim 0: this is a publishable closed-negative finding — wgmma cannot be tested on Blackwell. The pre-registered falsifier F-FUSION-ATTN-WGMMA-WALL collapses to 'hardware-blocked, NOT instruction-failed'. R11's note that wgmma was 'ruled-out / not-tried' was correct in spirit but the ruling-out reason was hardware unavailability, not algorithmic. R14 capstone (PR #1735) stands as the BC4 attention closure.",
+  "compute_capability_mapping": {
+    "Hopper (H100/H200/H800)":     "sm_90a — wgmma SUPPORTED",
+    "Ada Lovelace (RTX 40xx)":     "sm_89 — wgmma NOT supported (uses standard mma.sync)",
+    "Blackwell (RTX 50xx / B100/B200)": "sm_120 / sm_100 — tcgen05.mma INSTEAD of wgmma (different opcode, different operand layout, 5th-gen tensor cores)"
+  },
+  "next_lever_in_cycle_all": "Pivot to FP8 GEMM (item 5 in /cycle-all queue) — also a tensor-core acceleration path but uses .e4m3/.e5m2 inputs through mma.sync.aligned (NOT wgmma). FP8 is supported on sm_89+ (Ada/Hopper/Blackwell) including RTX 5070. Alternative future path: tcgen05.mma for Blackwell-native async warpgroup MMA (would require ubu-2-specific re-investigation as analogous capstone-extension).",
+  "preserves": [
+    "g3 over-claim 0 — honest RED tier per measurement, not faked PASS",
+    "paper_negative_ok — closed-negative is publishable: rules-out wgmma-on-Blackwell axis deterministically",
+    "feedback_closure_is_physical_limit — physical limit here is hardware-instruction-incompatibility (Hopper vs Blackwell), not algorithmic ceiling"
+  ]
+}

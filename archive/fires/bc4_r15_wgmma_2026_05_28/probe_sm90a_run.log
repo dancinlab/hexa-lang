@@ -1,0 +1,25 @@
+== wgmma probe — sm_90a build + sm_120 driver-JIT run on ubu-2 RTX 5070 ==
+host: ubu-2 (NVIDIA GeForce RTX 5070, compute_cap 12.0 = sm_120 Blackwell, driver 580.159.03)
+toolchain: cuda-12.9 nvcc 12.9.86
+
+-- Build: nvcc -O2 -gencode arch=compute_90a,code=sm_90a -Xptxas=-v wgmma_numeric_probe.cu --
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function 'wgmma_gemm_kernel' for 'sm_90a'
+ptxas info    : Function properties for wgmma_gemm_kernel
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 42 registers, used 1 barriers
+ptxas info    : Compile time = 11.694 ms
+BUILD-EXIT=0  (sm_90a build CLEAN — wgmma accepted by ptxas)
+
+-- SASS inspection (cuobjdump --dump-sass) --
+/*10b0*/                   HGMMA.64x32x16.F32 R24, gdesc [UR4], RZ, !UPT, gsb0 ;  /* 0x00600000041879f0 */
+(confirmed: HGMMA Hopper warpgroup MMA instruction emitted in sm_90a cubin)
+
+-- Runtime: ./wgmma_numeric_probe (driver-JIT sm_90→sm_120 forward-compat) --
+Launch verdict: OK
+GPU outputs: nonzero=0/2048  max_abs=0.0000  sum=0.0000
+CPU ref:                                 sum=1956.8679
+WGMMA_NUMERIC_PROBE: FAIL — output all zero (wgmma silently NOPs on sm_120 Blackwell)
+RUN-EXIT=2
+
+VERDICT: Hardware-blocked. wgmma is Hopper-exclusive (sm_90a). Driver forward-compat from sm_90 PTX to sm_120 SASS does NOT translate wgmma → Blackwell tensor-core path. Launch succeeds (no error 209) but instruction silently NOPs.
