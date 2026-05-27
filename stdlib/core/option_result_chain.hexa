@@ -1,0 +1,51 @@
+// HEXA Standard Library — core/option_result_chain
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Monadic bind combinators for Option / Result — `opt_and_then` /
+// `res_and_then`. Pure additive on top of `option_result.hexa` (canonical
+// Option / Result enum + helper functions).
+//
+// RUNTIME.flip.md B4.option-and-then — sibling of `option_result_map.hexa`
+// (B4.option-map). These are the second wave of post-#7 Option/Result
+// combinators (map · and_then · or_else · collect · predicates · iter).
+//
+// Surface:
+//   pub fn opt_and_then(o: Option, f) -> Option
+//     — if Some(v), return f(v) (which must itself return Option); else
+//       None. f is `(value) -> Option`.
+//   pub fn res_and_then(r: Result, f) -> Result
+//     — if Ok(v), return f(v) (which must return Result); else pass Err
+//       through unchanged.
+//
+// Design notes:
+//   - Bind is the canonical monadic chain operator (Haskell `>>=`, Rust
+//     `Option::and_then` / `Result::and_then`). The callback already
+//     returns the wrapped type, so this is flatten ∘ map, not just map.
+//   - `opt_*` / `res_*` prefix per `option_result.hexa` convention.
+//   - `f` is untyped (function value) — the compiler's function-value
+//     dispatch handles the call; parametric Option<T> / Result<T, E>
+//     types are deferred to the typechecker work.
+//   - No `throw` on this surface: bind is total — None / Err pass through
+//     without invoking the callback.
+
+use "stdlib/core/option_result"
+
+// -- Option monadic bind --
+
+pub fn opt_and_then(o: Option, f) -> Option {
+    return match o {
+        Option::Some(v) => f(v),
+        Option::None => Option::None
+    }
+}
+
+// -- Result monadic bind --
+
+pub fn res_and_then(r: Result, f) -> Result {
+    return match r {
+        Result::Ok(v) => f(v),
+        Result::Err(e) => Result::Err(e)
+    }
+}
