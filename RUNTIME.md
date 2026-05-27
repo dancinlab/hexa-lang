@@ -2374,8 +2374,14 @@ framing-① (nm aprime 0 externs) 측정-충족 이후 — framing-② (source z
 
 ### infra / CI gates (INBOX open · cross-cutting)
 
-- [ ] **CI 에 `stdlib/**/*_test.hexa` runner 추가** — module_loader flatten + 빌드 +
-      run all stdlib tests (inbox/notes/stdlib_module_test_and_builtin_findings).
+- [~] **CI 에 `stdlib/**/*_test.hexa` runner 추가** — **PARTIALLY LANDED** via PR
+      #1271 (`feat(tool+ci): stdlib_selftest_aggregate --ci-gate`, 2026-05-26):
+      `tool/stdlib_selftest_aggregate.hexa --ci-gate` opt-in marker `// @ci_gate`
+      + `bootstrap.yml` 3-runner (macos-arm64 · linux-x86_64 · linux-arm64) wire
+      랜딩됨. 현재 coverage **4/166** (`pod_registry_guard_test`,
+      `ssh_config_test`, `early_life_check_test`, `reconcile_test` — 모두
+      pure/network-free). 후속 = coverage 확대 (pure-test 식별 → marker 추가;
+      자기-갱신 incremental). INBOX #5① closed via #1271.
 - [ ] **forge/farr32 codegen→clang smoke (Linux build gate)** — 5-fire 캐스케이드
       의 farr32 emit 갭을 사전 차단하는 CI gate (inbox/notes/linux-ci-build-gate).
 - [ ] **preflight v2 DFT/HPC 축 (RFC 091 witness)** — 외부 자원 의존 (DFT/MD
