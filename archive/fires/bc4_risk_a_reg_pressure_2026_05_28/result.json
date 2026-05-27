@@ -1,0 +1,28 @@
+{
+  "falsifier": "F-FUSION-ATTN-BM32-RISK-A-REG-PRESSURE",
+  "date": "2026-05-28",
+  "host": "ubu-2 RTX 5070 sm_120 driver 580 (ptxas only -- no GPU execution)",
+  "toolchain": "ptxas /usr/local/cuda-12.9/bin/ptxas (Built May 27 2025)",
+  "ptxas_arch": "sm_120a",
+  "ptxas_version": "12.9 (CUDA 12.9, May 2025 build)",
+  "verdict_tier": "GREEN",
+  "achieved_reg_per_thread": 12,
+  "achieved_spill_bytes": 0,
+  "stack_frame_bytes": 0,
+  "spill_store_bytes": 0,
+  "spill_load_bytes": 0,
+  "plan_estimate_reg_per_thread": 103,
+  "plan_estimate_spill_bytes": 0,
+  "verdict": "wedge proceed",
+  "honest_scope": "Isolation probe measures ONLY the BM=32 O-accumulator pattern (16 fp32 regs per thread declared, ptxas coalesced to 12 actual physical regs due to single-warp scope + no surrounding QK/softmax live ranges). Full-kernel reg count = this isolated O-accumulator footprint PLUS R10's 91-reg tile-load/QK/softmax overhead, projected by plan section 4 to ~103 reg/thread + 0 spill. Probe confirms (a) no spill under sm_120a, (b) PTX is syntactically valid for sm_120a, (c) accumulator-direct-to-global store pattern compiles cleanly (no smem stage required). The full-kernel claim of <=255 reg/thread is unfalsified by this probe; the probe falsifies only the WORST-case scenario of catastrophic spill, which did not occur.",
+  "ptxas_raw_stderr_excerpt": [
+    "ptxas info    : 0 bytes gmem",
+    "ptxas info    : Compiling entry function 'probe_bm32_oreg' for 'sm_120a'",
+    "ptxas info    : Function properties for probe_bm32_oreg",
+    "    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads",
+    "ptxas info    : Used 12 registers, used 0 barriers",
+    "ptxas info    : Compile time = 2.649 ms",
+    "EXIT=0"
+  ],
+  "implication_for_bc4_round14": "Risk-a CLEARED for cheap-first oracle gate. BC4 round-14 silicon fire (flash_attn_bm32_occupancy_v0) is NOT BLOCKED by reg-pressure concern at the BM=32 O-reg shape. Round-14 should proceed with __launch_bounds__(128, 3) as plan section 4 recommended; if actual full-kernel ptxas reports >255 reg or any spill, that is a separate falsifier (F-FUSION-ATTN-BM32-OCCUPANCY-WALL primary) that emerges only at full-kernel build."
+}
