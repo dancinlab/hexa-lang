@@ -1,0 +1,22 @@
+// tool/probe_atan_f64.hexa — F-ATANF64-NUMERIC kernel
+//
+// PR #1524 (RFC 055 §13 f64 atan, A&S 4.4.49 + reciprocal reduction) —
+// terminal numeric falsifier on ubu-2 RTX 5070 driver-JIT. Computes
+// c[i] = atan(a[i]) over a dense f64 range that spans BOTH the direct
+// polynomial domain (|x|≤1) and the reciprocal-fold domain (|x|>1) so
+// the π/2-complement selp branch is exercised. Host compares against CPU
+// libm atan with tolerance max_abs_err < 1e-7 (abs, since atan(0)=0
+// makes a relative metric ill-defined near the origin).
+//
+// Input shape (host-side): N = 256, blockDim = 256, gridDim = 1.
+// a[i] = (i / N) * 16.0 - 8.0  (range [-8, +8) — covers |x|>1 fold).
+//
+// Single-block to match gpu_thread_id_x()'s block-local semantics.
+
+@gpu_kernel
+fn atan_f64_probe(a: [f64], c: [f64], n: i64) {
+    let mut tid: i64 = to_i64(gpu_thread_id_x())
+    if tid < n {
+        c[to_i64(tid)] = atan(a[to_i64(tid)])
+    }
+}
