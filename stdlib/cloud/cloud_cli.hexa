@@ -888,6 +888,10 @@ fn main() {
                 + ",\"log\":" + _mh_json_str(r.logfile)
                 + ",\"tail_cmd\":" + _mh_json_str("hexa cloud tail " + host + " " + r.logfile)
                 + "}")
+            // ghost-pod 방지 (sidecar pod-monitor 0.1.4 + cloud@0.4.0 + PR #1699) —
+            // fire/nohup 가 ./pods.json 자동 register 안 하므로 caller-MUST-call.
+            // advisory line emit (parse 안 함; 사람·agent 둘 다 읽음).
+            println("[cloud] 📋 ledger: hexa cloud dispatch add <jid> " + str(r.pid) + " \"$(pwd)\" --host " + host + "  # cwd ./pods.json 에 등록 (commons g57)")
         }
         if r.ok == 1 {
             let rc = _cloud_early_life_check(host, ssh_opts, r.pid, early_life)
@@ -937,6 +941,9 @@ fn main() {
                 + ",\"log\":" + _mh_json_str(r.logfile)
                 + ",\"tail_cmd\":" + _mh_json_str("hexa cloud tail " + host + " " + r.logfile)
                 + "}")
+            // ghost-pod 방지 (sidecar pod-monitor 0.1.4 + cloud@0.4.0 + PR #1699) —
+            // fire 가 ./pods.json 자동 register 안 하므로 caller-MUST-call advisory.
+            println("[cloud] 📋 ledger: hexa cloud dispatch add <jid> " + str(r.pid) + " \"$(pwd)\" --host " + host + "  # cwd ./pods.json 에 등록 (commons g57)")
         }
         if r.ok == 1 {
             let rc = _cloud_early_life_check(host, ssh_opts, r.pid, early_life)
