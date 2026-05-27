@@ -1,0 +1,125 @@
+// HEXA Standard Library — build/cache_lookup_remote
+//
+// @version 0.1.0
+// @capabilities [pure, ffi]
+//
+// Thin HTTP client for a remote distributed build cache (B-갈래
+// RUNTIME.flip §B8.distributed-cache-lookup-remote). The shape:
+// content-addressable storage indexed by a fingerprint (SHA-256 of
+// source + flags + compiler version per sibling `cache_fingerprint`)
+// served as plain `.bin` blobs under `<base_url>/cache/<fp>.bin`.
+//
+// Why a stub-shaped client now?
+//   The compiler campaign already has the URL/ETag shape pinned by
+//   RFC; only the wire call is deferred until `stdlib/net/http_client`
+//   exposes a header-aware GET (the current curl shim does body-only
+//   and a status-aware variant, but no `If-None-Match` injection).
+//   Landing the URL helpers + the result shape NOW lets call-sites
+//   (cache-lookup orchestrator) compile against a stable surface;
+//   the fetch fn just returns kind="stub-not-wired" until swap-day.
+//
+// Why @capabilities [pure, ffi]?
+//   The URL/header builders are pure string composition (no IO).
+//   The fetch fn is declared `ffi` because the eventual wire call
+//   will reach out to `stdlib/net/http_client::http_get(...)` (curl
+//   shell-out today, native HTTPS later) — i.e. the network capability
+//   is inherited transitively, but the immediate body has no IO yet.
+//
+// Tradeoffs (honest-caveat):
+//   · No actual fetch yet — kind="stub-not-wired" is returned by
+//     cache_remote_fetch until the http_client surface lands.
+//   · ETag injection format is the literal RFC-7232 `If-None-Match:
+//     "<etag>"` (quotes around the validator). prev_etag="" means
+//     unconditional GET (caller decides whether to send the header).
+//   · status_code semantics on the future swap: 200 → kind="hit"
+//     (body filled), 304 → kind="miss-not-modified" (body empty,
+//     etag echoed back), 404 → kind="miss-404", other → kind=
+//     "fetch-error". Stub returns status_code=0.
+//   · body is `[int]` (byte vector) not `string` — cache blobs are
+//     opaque binary (codegen object files, atlas shards, …) and may
+//     contain NUL; routing through string truncates them. Stub
+//     returns an empty `[int]`.
+//
+// Follow-up:
+//   Once `stdlib/net/http_client` provides a header-aware GET (e.g.
+//   `http_get_with_headers(url, headers, timeout_sec)` returning
+//   {status, body_bytes, etag}), swap the cache_remote_fetch body
+//   to call it. The CacheRemoteFetchResult shape is forward-stable.
+
+// Result shape returned by cache_remote_fetch.
+// kind ∈ {"hit", "miss-not-modified", "miss-404",
+//         "fetch-error", "stub-not-wired"}.
+// body  = response body bytes (empty `[int]` unless kind=="hit").
+// status_code = raw HTTP status (0 when fetch never reached server).
+// etag = ETag header echoed back by server (empty when absent).
+pub struct CacheRemoteFetchResult {
+    kind: str,
+    body: [int],
+    status_code: int,
+    etag: str
+}
+
+// cache_remote_url — canonical cache slot URL.
+//   base_url    — e.g. "https://cache.example.org"
+//   fingerprint — SHA-256 hex from stdlib/build/cache_fingerprint
+//   returns     — base_url + "/cache/" + fingerprint + ".bin"
+//
+// Path layout: <base>/cache/<fp>.bin. The `.bin` suffix is fixed so
+// the server can serve as static content-type=application/octet-stream
+// without per-key MIME inference. fingerprint is content-addressable
+// so the slot is immutable — a 200 OK body bytes ARE the cached blob.
+@pure
+pub fn cache_remote_url(base_url: str, fingerprint: str) -> str {
+    return base_url + "/cache/" + fingerprint + ".bin"
+}
+
+// cache_remote_etag_header — conditional-GET header line.
+//   etag    — opaque validator from a prior response's ETag header
+//   returns — `If-None-Match: "<etag>"` (RFC-7232 §3.1)
+//
+// The double-quotes around <etag> are mandatory per RFC-7232 (strong
+// validator form). Callers should pass the etag value WITHOUT the
+// surrounding quotes — this fn adds them.
+//
+// Stub note: empty etag still produces `If-None-Match: ""`. The
+// caller decides whether to send the header at all (skip on the
+// first request when no prior etag is known).
+@pure
+pub fn cache_remote_etag_header(etag: str) -> str {
+    return "If-None-Match: \"" + etag + "\""
+}
+
+// cache_remote_fetch — STUB: HTTP GET a remote cache slot.
+//   url       — slot URL (cache_remote_url output)
+//   prev_etag — previous ETag for conditional GET; "" = unconditional
+//   returns   — CacheRemoteFetchResult
+//
+// Wire status: NOT YET WIRED. Always returns kind="stub-not-wired"
+// with body=[], status_code=0, etag="". The signature is stable so
+// call-sites can be written against this fn today; the body will
+// swap to a real HTTP call once stdlib/net/http_client exposes a
+// header-aware GET (see file-level Follow-up note).
+//
+// Future wired behavior:
+//   - prev_etag != "" → send `If-None-Match: "<prev_etag>"`.
+//   - 200 OK   → kind="hit",                body=bytes,    etag=resp.etag
+//   - 304 NM   → kind="miss-not-modified",  body=[],       etag=prev_etag
+//   - 404      → kind="miss-404",           body=[],       etag=""
+//   - other    → kind="fetch-error",        body=[],       etag=""
+//   - no rsp   → kind="fetch-error",        status_code=0, etag=""
+//
+// `ffi` capability is declared on the file (not the fn) because the
+// eventual swap reaches stdlib/net/http_client which itself shells
+// out to curl (or, post-native-TLS, a socket FFI).
+pub fn cache_remote_fetch(url: str, prev_etag: str) -> CacheRemoteFetchResult {
+    // Reference args so static analysis sees them used; pure no-op
+    // until the http_client swap lands.
+    let _url_len = len(url)
+    let _etag_len = len(prev_etag)
+    return CacheRemoteFetchResult {
+        kind: "stub-not-wired",
+        body: [],
+        status_code: 0,
+        etag: ""
+    }
+}
