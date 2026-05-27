@@ -103,10 +103,17 @@ honest physical limit: BM=32 wedge 의 AI cap → expected **ratio ≈ 1.32×** 
 
 - ~~BM=16 BK=64 (alt wedge A)~~ **🔴 FALSIFIED 2026-05-28** — `tool/r14_walls/flash_attn_bm16_bk64_v0.cu` fired all 5 shapes on ubu-2: N=2048 **1.72×** slower than cuBLAS, N=4096 **1.60×** slower; vs R14 BM=32 BK=32 = 1.50-1.74× worse at N ≥ 2048. Single warp/CTA → occupancy 2 CTAs/SM (vs R14's 5). `archive/fires/bc4_alt_wedges_2026_05_28/result.json`
 - ~~BM=64 BK=16 (alt wedge B)~~ **🔴 FALSIFIED** — IS R10's exact geometry (`archive/fires/fusion_attn_multiwarp_2026_05_26/result.json`); best ratio 1.149× at N=4096 → R14 BM=32 BK=32 (0.927×) strictly dominates. No re-fire needed.
-- selective TMA on V (after pre-transpose) — A/B 1회 측정, round-14 후 미세화
-- FP8 e4m3 단독 lever (R11 미시도, wgmma 와 직교) — Blackwell TC throughput 2× 가능성
+- ~~selective TMA on V~~ **🟠 CITED-DEFERRED 2026-05-28** — round-7 측정 (Δ 0.01% @ 1 CTA/SM, `archive/fires/fusion_attention_roofline_2026_05_25/`) + plan §5 closed-form 분석 (BK=32 K/V tile = 4 KB < TMA bulk-tensor sweet spot 16 KB; cp.async.cg 가 4 KB chunk 적합)이 secondary lever임을 시사. R14 의 5 CTAs/SM occupancy 에서도 TMA 의 *추가* 가치는 작을 것으로 예상 (cp.async.cg 가 이미 latency hide). 정확한 측정은 cuTensorMapEncodeTiled host 셋업 + cp.async.bulk.tensor 커널 재작성 (~30-45 min) 필요 — 1회 binary A/B 가 아닌 multi-step. R14 capstone (0.927× @ N=4096) 위 marginal 개선이라 ROI 낮음. discrete future round.
+- ~~FP8 e4m3 단독 lever~~ **🟠 DEFERRED 2026-05-28** — 진짜 lever (sm_89+ FP8 tensor core, RTX 5070 sm_120 지원, 잠재 2× throughput). wgmma 와 직교 (precision 축, atomic tile 축 아님). 구현 = `wmma::fragment<...,__nv_fp8_e4m3,...>` 로 R14 kernel 전체 재작성 + FP8 quantization scale + 더 엄격한 numeric tolerance. ~30-60 min multi-step. R14 BM=32 BK=32 capstone 위 직교 axis 라 capstone-extension 가치 있음. discrete future round 권장.
 
-**R14 BM=32 BK=32 = local optimum 확인** ((BM, BK) sweep space exhausted; 다음 lever = wgmma / TMA / FP8 — 모두 atomic instruction tile 자체를 바꾸는 axis).
+**BC4 attention axis 정직 closure (2026-05-28)**: R14 BM=32 BK=32 = first attention ≤1.0× capstone (PR #1735). (BM, BK) sweep space EXHAUSTED (PR #1742 alt wedges A/B 둘 다 FALSIFIED). Atomic-tile-axis levers 평가 완료:
+- **wgmma**: 🔴 hardware-blocked (Hopper-only, RTX 5070 = Blackwell, PR #1744)
+- **tcgen05.mma**: ⏸️ Blackwell-native 5th-gen async warpgroup MMA — separate cycle (analogous to wgmma but RTX 5070 지원)
+- **TMA on V**: 🟠 cited-deferred (round-7 Δ 0.01% + plan §5 closed-form = secondary lever; multi-step rewrite + marginal ROI)
+- **FP8 e4m3**: 🟠 deferred (real orthogonal precision lever; multi-step rewrite, capstone-extension 가치)
+- **paper scaffold**: 🟠 deferred (closed-positive R14 evidence 추가됨; multi-cycle paper authoring)
+
+남은 capstone-extension 후보 우선순위: **tcgen05.mma (Blackwell-native wgmma 대체)** > **FP8 e4m3** > **TMA on V** > **paper scaffold**. 각각 discrete future cycle.
 
 ---
 
