@@ -13,17 +13,22 @@
 //   pub fn ed25519_sign(seed: [int], msg: [int]) -> [int]        — 64-byte signature
 //   pub fn ed25519_verify(pubk: [int], msg: [int], sig: [int]) -> bool
 //
-// VERIFY STATUS (2026-05-27): parse-clean + RUNS (pubkey 53ms, sign/verify
-// complete fast). Fixed an infinite loop (missing i+=1 in the S=r+k*a reduce).
-// Round-trip KAT currently FAILS (verify rejects a self-produced valid sig) —
-// a subtle math bug remains (candidate sites: _unpackneg sign/sqrt, _modL, or
-// the verify S·B−k·A equation). tampered/wrong-msg correctly reject. The shared
-// field arith (_M/_car) is x25519-verified; the Edwards-layer bug is isolated
-// to sign/verify. CORRECTNESS-DEBUG pending — code lands runnable, not yet KAT-clean.
-// Reference (RFC 8032 §7.1 TEST 1):
-//   seed = 9d61b19deffebc3fd6a85e8d2a3a3e7b...60ee1d535919db (32B)
-//   pub  = d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a
-//   sig(empty msg) = e5564300...8e7a100b (64B)
+// VERIFY STATUS (2026-05-27): KAT-CLEAN. Two Edwards-layer bugs found + fixed:
+//   1. _pack25519 conditional-subtract: cswap operands were (subtracted, orig)
+//      so for value<p it kept the subtracted garbage → base point packed to
+//      7e..66 (vs std 5866..66) and 0*B to p+1 (vs neutral 0100..00).
+//   2. _unpackneg sqrt-ratio: the x candidate needs num*den^3 but the port
+//      multiplied den only twice (num*den^2) → x failed x^2*den==num → unpack
+//      always returned valid=0 → verify rejected EVERY sig (the false tell).
+// After both fixes, validated byte-exact against a reference ed25519
+// implementation (python `cryptography`) AND the canonical RFC 8032 vector:
+//   keygen/sign byte-exact vs reference for a fixed seed (pub 658532f5.. ·
+//      sig ffb4c8bf..) · self round-trip sign→verify = true · tamper/wrong-msg
+//      rejected · RFC 8032 vector verify(pub d75a9801.. , empty msg,
+//      sig e5564300..8e7a100b) = true. The shared field arith (_M/_car) is the
+//      same x25519-verified code; _pack25519/_unpackneg are ed25519-unique
+//      (x25519 packs differently) which is why x25519's RFC vector never caught
+//      these. See @ci_gate _ed25519_kat_test below.
 
 use "stdlib/crypto/sha512"
 
