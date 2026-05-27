@@ -1,0 +1,63 @@
+// HEXA Standard Library — crypto/x509_auto
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// X.509 signature-algorithm auto-dispatch — pure hexa. Reads a cert's
+// signatureAlgorithm OID (the 2nd child of the outer Certificate SEQUENCE)
+// and routes self-verification to the right primitive: Ed25519 (x509_min) or
+// ECDSA-P256 (x509_p256). A single entry point `x509_verify_self_auto` that
+// handles both cert families. let-mut idiom (#1506).
+//
+// Recognized signatureAlgorithm OIDs:
+//   Ed25519        1.3.101.112          OID value bytes 2b 65 70
+//   ecdsa-SHA256   1.2.840.10045.4.3.2  OID value bytes 2a 86 48 ce 3d 04 03 02
+//
+// Surface:
+//   pub fn x509_cert_sig_alg(cert: [int]) -> int   — 0=Ed25519, 1=ECDSA-P256, -1=unknown
+//   pub fn x509_verify_self_auto(cert: [int]) -> bool
+
+use "stdlib/crypto/asn1_der"
+use "stdlib/crypto/x509_min"
+use "stdlib/crypto/x509_p256"
+
+let X509_ALG_ED25519: int = 0
+let X509_ALG_ECDSA_P256: int = 1
+
+// detect the signatureAlgorithm OID → algorithm id
+@pure
+pub fn x509_cert_sig_alg(cert: [int]) -> int {
+    // outer SEQUENCE → 1st child = TBS, 2nd child = signatureAlgorithm SEQ
+    let tbs_o = der_value_start(cert, 0)
+    let sig_alg = der_next(cert, tbs_o)
+    if (der_tag(cert, sig_alg) & 0xFF) != 0x30 { return -1 }
+    // 1st child of sigAlg SEQ = the OID
+    let oid_o = der_value_start(cert, sig_alg)
+    if (der_tag(cert, oid_o) & 0xFF) != 0x06 { return -1 }
+    let v = der_value_start(cert, oid_o)
+    let n = der_value_len(cert, oid_o)
+    // Ed25519: 3-byte OID 2b 65 70
+    if n == 3 {
+        if (cert[v] & 0xFF) == 0x2b && (cert[v+1] & 0xFF) == 0x65 && (cert[v+2] & 0xFF) == 0x70 {
+            return X509_ALG_ED25519
+        }
+    }
+    // ecdsa-with-SHA256: 8-byte OID 2a 86 48 ce 3d 04 03 02
+    if n == 8 {
+        if (cert[v] & 0xFF) == 0x2a && (cert[v+1] & 0xFF) == 0x86 && (cert[v+2] & 0xFF) == 0x48
+            && (cert[v+3] & 0xFF) == 0xce && (cert[v+4] & 0xFF) == 0x3d && (cert[v+5] & 0xFF) == 0x04
+            && (cert[v+6] & 0xFF) == 0x03 && (cert[v+7] & 0xFF) == 0x02 {
+            return X509_ALG_ECDSA_P256
+        }
+    }
+    return -1
+}
+
+// auto-dispatching self-verify: routes by signatureAlgorithm OID
+@pure
+pub fn x509_verify_self_auto(cert: [int]) -> bool {
+    let alg = x509_cert_sig_alg(cert)
+    if alg == X509_ALG_ED25519 { return x509_verify_self_ed25519(cert) }
+    if alg == X509_ALG_ECDSA_P256 { return x509_verify_self_p256(cert) }
+    return false
+}
