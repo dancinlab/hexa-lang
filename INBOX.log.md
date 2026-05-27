@@ -1,5 +1,16 @@
 # INBOX — log
 
+## 2026-05-27 — M4b GPU fire 런북 검증 (transpile --c-only → CUDA runtime → Vast.ai · #1659 deadlock 정정)
+
+> **정정**: #1659 는 "RunPod ↔ cloud-guard deadlock"으로 fire 불가처럼 읽히나 **fire 는 achievable**. RunPod resolver 갭은 real(유효)이나 **Vast.ai 직접-IP** 로 우회. anima M4b pilot end-to-end 검증 런북 (ref `tool/dispatch_agtape_d768_fire.sh`):
+
+**검증 런북** (hexat-CUDA-build 불필요 · private-repo clone 불필요):
+1. transpile(Mac): `HEXA_MAC_BUILD_OK=1 hexa build <pilot>.hexa --c-only -o <out>` → flatten된 self-contained C. ⚠ output `/tmp` 밑이면 Darwin 가드 거부 → repo 경로 + HEXA_MAC_BUILD_OK=1.
+2. transport=Vast.ai(RunPod ✗): `vastai show instance <id>` → ssh_host/port 직접 → `hexa cloud exec root@<host> --port <n> --insecure` 작동(H100 80GB).
+3. runtime bundle scp: self/runtime.c·runtime_core.c·runtime_hi_gen.c·runtime.h·cuda/runtime_cuda.c·cuda/runtime_bf16.c·forge/forge_tier_v1.{c,h}·native/*.{c,h} + trainer.c.
+4. CUDA build(pod): `nvcc -O2 -std=c++14 -DHEXA_CUDA -arch=sm_90 -x cu -c self/cuda/runtime_cuda.c -o runtime_cuda.o` → `clang -DHEXA_CUDA -I self -I /usr/local/cuda/include -fbracket-depth=4096 trainer.c self/runtime.c runtime_cuda.o -L/usr/local/cuda/lib64 -lcublas -lcudart -lcudart_static -ldl -lrt -lm -lpthread -lstdc++ -o trainer`.
+5. run + nvidia-smi + harvest (d768 패턴). farr_matmul_gpu = runtime_cuda.c(-DHEXA_CUDA) cuBLAS Dgemm. severity: docs.
+
 ## 2026-05-27 — hexa cloud: RunPod pod-id → SSH-host resolver 부재 (cloud-guard 와 deadlock)
 
 > **블로커 (anima M4b Phase 4-fire 발사 차단)**: RunPod H100 pod 를 `runpodctl pod create` 로 띄운 뒤(id=r2afs2es6q8aln, RUNNING), 프로비저닝하려면 `hexa cloud {exec|copy-to|...}` 의 `<host>` = resolved SSH 목적지(`root@<public-ip> --port <n>`)가 필요. 그런데 그 public-ip:port 를 얻을 길이 막힘:
