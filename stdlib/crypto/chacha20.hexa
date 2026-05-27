@@ -1,0 +1,106 @@
+// HEXA Standard Library — crypto/chacha20
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// ChaCha20 stream cipher (RFC 8439) — pure hexa, no libc/libsodium. Adds
+// the chacha20 leg of RUNTIME.md Phase 3 "crypto bulk" (layer ① — crypto
+// ALGORITHMS are hexa-native per Policy 2026-05-26). The sha256 leg is
+// already done (stdlib/core/hash/sha256.hexa); x25519/ed25519 (curve25519
+// field arithmetic over 2^255−19) remain heavier follow-ups.
+//
+// 32-bit masked arithmetic (& 0xFFFFFFFF); native & | ^ << >> operators.
+//
+// Surface:
+//   pub fn chacha20_block(key: [int], counter: int, nonce: [int]) -> [int]
+//       — 64-byte keystream block. key=32 bytes, nonce=12 bytes.
+//   pub fn chacha20_encrypt(key: [int], counter: int, nonce: [int], data: [int]) -> [int]
+//       — XOR data with the keystream (encrypt == decrypt).
+//
+// Verified vector (RFC 8439 §2.3.2): key=00..1f, counter=1,
+//   nonce=00:00:00:09:00:00:00:4a:00:00:00:00 → first keystream word 0xe4e7f110.
+
+let _CC_M32: int = 0xFFFFFFFF
+
+@pure
+fn _rotl32(x: int, n: int) -> int {
+    return ((x << n) | (x >> (32 - n))) & _CC_M32
+}
+
+// Little-endian 4 bytes at offset → 32-bit word.
+@pure
+fn _le32(b: [int], o: int) -> int {
+    return (b[o] | (b[o+1] << 8) | (b[o+2] << 16) | (b[o+3] << 24)) & _CC_M32
+}
+
+// One ChaCha quarter-round on state slots a,b,c,d (mutating a 16-int array
+// via returned copy — hexa arrays are by-ref so in-place index writes stick).
+fn _qr(s: [int], a: int, b: int, c: int, d: int) {
+    s[a] = (s[a] + s[b]) & _CC_M32;  s[d] = _rotl32(s[d] ^ s[a], 16)
+    s[c] = (s[c] + s[d]) & _CC_M32;  s[b] = _rotl32(s[b] ^ s[c], 12)
+    s[a] = (s[a] + s[b]) & _CC_M32;  s[d] = _rotl32(s[d] ^ s[a], 8)
+    s[c] = (s[c] + s[d]) & _CC_M32;  s[b] = _rotl32(s[b] ^ s[c], 7)
+}
+
+@pure
+pub fn chacha20_block(key: [int], counter: int, nonce: [int]) -> [int] {
+    // initial state: 4 constants + 8 key + 1 counter + 3 nonce
+    let mut st: [int] = []
+    st.push(0x61707865); st.push(0x3320646e); st.push(0x79622d32); st.push(0x6b206574)
+    let mut i = 0
+    while i < 8 { st.push(_le32(key, i * 4)); i = i + 1 }
+    st.push(counter & _CC_M32)
+    i = 0
+    while i < 3 { st.push(_le32(nonce, i * 4)); i = i + 1 }
+
+    // working copy
+    let mut x: [int] = []
+    i = 0
+    while i < 16 { x.push(st[i]); i = i + 1 }
+
+    // 20 rounds = 10 × (4 column QR + 4 diagonal QR)
+    let mut r = 0
+    while r < 10 {
+        _qr(x, 0, 4, 8, 12)
+        _qr(x, 1, 5, 9, 13)
+        _qr(x, 2, 6, 10, 14)
+        _qr(x, 3, 7, 11, 15)
+        _qr(x, 0, 5, 10, 15)
+        _qr(x, 1, 6, 11, 12)
+        _qr(x, 2, 7, 8, 13)
+        _qr(x, 3, 4, 9, 14)
+        r = r + 1
+    }
+
+    // add original state, serialize little-endian → 64 bytes
+    let mut out: [int] = []
+    i = 0
+    while i < 16 {
+        let v = (x[i] + st[i]) & _CC_M32
+        out.push(v & 0xFF)
+        out.push((v >> 8) & 0xFF)
+        out.push((v >> 16) & 0xFF)
+        out.push((v >> 24) & 0xFF)
+        i = i + 1
+    }
+    return out
+}
+
+@pure
+pub fn chacha20_encrypt(key: [int], counter: int, nonce: [int], data: [int]) -> [int] {
+    let n = len(data)
+    let mut out: [int] = []
+    let mut i = 0
+    let mut blk: [int] = []
+    let mut blk_ctr = 0 - 1
+    while i < n {
+        let ctr = counter + (i / 64)
+        if ctr != blk_ctr {
+            blk = chacha20_block(key, ctr, nonce)
+            blk_ctr = ctr
+        }
+        out.push((data[i] ^ blk[i % 64]) & 0xFF)
+        i = i + 1
+    }
+    return out
+}
