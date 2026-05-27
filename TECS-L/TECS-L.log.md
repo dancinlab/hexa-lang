@@ -2,6 +2,32 @@
 
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-27T17:08Z · 축 RTSC · RTSC7 · 수학 DFS — strong-coupling (allen_dynes_full f1·f2) 의 293K 천장 이동
+
+RTSC6 (μ* 민감도) 의 깊이 확장. Allen-Dynes 의 strong-coupling correction f1·f2
+(Allen-Dynes 1975) 가 binary hydride 의 ω_log 천장을 얼마나 끌어내리는지 정량.
+4-arg `allen_dynes_full(lam, ω_log, ω̄₂, μ*)`, r=ω̄₂/ω_log=1.5 가정.
+
+- [x] h3br 재현: λ=2.0 ω_log=620 ω̄₂=930 μ*=0.13 → full **99.6K** 🟢
+       (simple-AD 83.2K → +19%, f1·f2=1.197; demiurge "≈110K" 와 r 가정 범위 일치)
+- [x] h3cl strong-coupling: λ=1.3 ω_log=1350 ω̄₂=2025 μ*=0.10 → full **148.1K** 🟢
+       (simple 132.8K → +11.5%, binary 최고 ω_log 의 strong-coupling 천장)
+- [x] 293K full-천장: λ=3.0 ω_log=**1152K** ω̄₂=1728 μ*=0.10 → 293.2K 🟢
+       (simple-AD 의 1628K 천장이 strong-coupling 으로 **1152K (−29%)** 로 낮아짐)
+
+⟹ 결론 (이중 wall): strong-coupling f1·f2 가 293K 도달 ω_log 천장을 30% 낮추지만,
+   binary hydride 는 (λ↑ ⟺ ω_log↓) trade-off 라서 (λ=3.0, ω_log=1152) 조합 자체에
+   도달 못함:
+   - h3cl (λ=1.3, ω_log=1350): ω_log 충분하나 λ 부족 → full=148K
+   - h3br (λ=2.0, ω_log=620):  λ 중간이나 ω_log 부족 → full=99.6K
+   진짜 binary wall = (1) ω_log 절대 천장 + (2) λ-ω_log trade-off (hydride 화학 한계).
+   RTSC4 N5 wall 의 mechanistic 기원 = trade-off, ω_log 천장은 partial closure.
+
+verify (inline, allen_dynes_full <lam> <ω_log_K> <ω̄₂_K> <μ*>, --no-absorb):
+  allen_dynes_full 2.0 620 930 0.13 → 99.6348 (|Δ|=0.035, --tol 1.5) 🟢
+  allen_dynes_full 1.3 1350 2025 0.10 → 148.136 (|Δ|=0.064, --tol 1.5) 🟢
+  allen_dynes_full 3.0 1152 1728 0.10 → 293.209 (|Δ|=0.209, --tol 2.0) 🟢
+
 ## 2026-05-27T17:02Z · 축 RTSC · RTSC6 · 수학 DFS — 293K iso-line 의 μ* (Coulomb pseudopotential) 민감도
 
 RTSC5 (293K iso-line, λ≥2.5·ω_log≥1530K) 의 깊이 확장. λ=3.0 고정, μ* sweep 으로
