@@ -1,0 +1,36 @@
+F-GPU-ARGMAX-PARTIAL-VAL-PASS-IDX-CODEGEN-BLOCKED — §5j top-1 wedge
+==================================================================
+host    : ubu-2  NVIDIA GeForce RTX 5070  driver 580.159.03  (sm_120, sm_80 PTX JIT)
+date    : 2026-05-28
+kernel  : tool/probe_argmax_f64.hexa  (@gpu_kernel, single block, N=256)
+emit    : /tmp/nvptx_emit probe_argmax_f64.hexa -> .ptx  (phase=P3, 6448 B)
+host_c  : tool/argmax_f64_host.c  (cuModuleLoadDataEx + CPU argmax compare)
+
+input   : a[i] = sin(0.13*i)*cos(0.07*(i+1)) + (i==137 ? 5.0 : 0.0)
+          single peak at i=137 (value ~5.838)
+
+RESULT (silicon):
+  got = (val=5.8384371780538977, idx=0)
+  ref = (val=5.8384371780538977, idx=137)
+  val_err = 0.000e+00  ← byte-eq PASS (max-reduce 자체 정확)
+  idx_match = 0        ← FAIL (codegen offset issue)
+
+VERDICT: 🟢 PARTIAL — value byte-eq PASS · 🔴 idx codegen-blocked
+
+ROOT CAUSE (PTX 분석):
+- 단일 .shared 4096 B region `_hexa_sh_probe_argmax_f64[4096]` (sm[0..512))
+- sm[tid] 와 sm[tid+256] 의 offset 계산이 일관되지 못함:
+    Path A (correct, e.g. L80-82): mul.lo.s64 %rd_idxs_addr, <idx_reg>, 8
+    Path B (wrong, e.g. L88-89):   reuses %rd_idx_off_11_8 (= tid*8) for sm[tid+256]
+- 일부 store/load 가 +256 offset 무시 → sm[256+tid] 가 sm[tid] 와 같은 주소로 emit
+- 결과: idx 추적이 손상 (특정 instances 에서 잘못된 addr 로 write)
+
+WORKAROUND TRIED: 2개 @shared → 단일 [f64;512] manual-offset partition.
+효과 없음 (codegen path B 가 같은 root cause 적용).
+
+WEDGE 의미:
+- max-reduce 자체는 byte-eq 정확 — LogSumExp(#1657) 와 일치 패턴
+- §5j "fused (value, index) reduction" 완전 close 는 codegen offset fix 후 가능
+- 본 fire 는 "argmax-value" sub-wedge 로 partial-PASS 기록
+
+FILED: codegen offset issue → INBOX (별 항목)

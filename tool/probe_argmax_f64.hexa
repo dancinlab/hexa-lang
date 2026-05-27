@@ -15,19 +15,23 @@
 //
 // Host compares to CPU argmax; tolerance value 1e-12 (sv is byte-eq), idx exact.
 
+// NVPTX codegen note: 2개 @shared array 가 같은 base offset 으로 매핑되는
+// 버그 (sv/si 충돌) 가 1st fire 에서 확인됨 — `.shared .align 8 .b8 _hexa_sh_*[4096]`
+// 단일 region 에 두 array 가 같은 addr 로 store. Workaround: 단일 [f64; 512]
+// manual-offset partition (values [0..256), indices [256..512)). 이 버그는
+// INBOX 별도 filing — 자매 = INBOX #1665 unop family.
 @gpu_kernel
 fn probe_argmax_f64(a: [f64], out_val: [f64], out_idx: [f64], n: i64) {
-    @shared let sv: [f64; 256] = []
-    @shared let si: [f64; 256] = []
+    @shared let sm: [f64; 512] = []
     let mut tid: i64 = to_i64(gpu_thread_id_x())
 
     // load (pad with a[0] / idx 0 — neutral for max with tracked idx)
     if tid < n {
-        sv[to_i64(tid)] = a[to_i64(tid)]
-        si[to_i64(tid)] = to_f64(tid)
+        sm[to_i64(tid)] = a[to_i64(tid)]
+        sm[to_i64(tid) + 256] = to_f64(tid)
     } else {
-        sv[to_i64(tid)] = a[0]
-        si[to_i64(tid)] = 0.0
+        sm[to_i64(tid)] = a[0]
+        sm[to_i64(tid) + 256] = 0.0
     }
     gpu_barrier()
 
@@ -35,11 +39,11 @@ fn probe_argmax_f64(a: [f64], out_val: [f64], out_idx: [f64], n: i64) {
     let mut stride: i64 = 128
     while stride > 0 {
         if tid < stride {
-            let x: f64 = sv[to_i64(tid)]
-            let y: f64 = sv[to_i64(tid) + stride]
+            let x: f64 = sm[to_i64(tid)]
+            let y: f64 = sm[to_i64(tid) + stride]
             if y > x {
-                sv[to_i64(tid)] = y
-                si[to_i64(tid)] = si[to_i64(tid) + stride]
+                sm[to_i64(tid)] = y
+                sm[to_i64(tid) + 256] = sm[to_i64(tid) + stride + 256]
             }
         }
         gpu_barrier()
@@ -47,7 +51,7 @@ fn probe_argmax_f64(a: [f64], out_val: [f64], out_idx: [f64], n: i64) {
     }
 
     if tid == 0 {
-        out_val[0] = sv[0]
-        out_idx[0] = si[0]
+        out_val[0] = sm[0]
+        out_idx[0] = sm[256]
     }
 }
