@@ -92,10 +92,15 @@ honest physical limit: BM=32 wedge 의 AI cap → expected **ratio ≈ 1.32×** 
    - R11's "wgmma ruled-out / not-tried" note CONFIRMED — reason is hardware unavailability, not algorithm
    - R14 BM=32 BK=32 (PR #1735) stays as **BC4 attention capstone**
 
-### Round-15+ next levers
+### Round-15+ next levers (deferred items promoted to milestones)
 
-- [ ] **tcgen05.mma** — Blackwell-native 5th-gen tensor-core async warpgroup MMA (sm_120/sm_100). Analogous to wgmma but supported on RTX 5070. Separate capstone-extension candidate.
-- [ ] **FP8 e4m3** — tensor-core throughput 2× via reduced-precision GEMM (sm_89+ supported; works on RTX 5070). Item 5 in /cycle-all queue, directly pivoted from wgmma RED.
+- [ ] **tcgen05.mma** 🛸 priority 1 — Blackwell-native 5th-gen tensor-core async warpgroup MMA (sm_120/sm_100). Analogous to wgmma but supported on RTX 5070. capstone-extension candidate (wgmma 대체). PTX ISA 8.7+ 학습 + sm_120-specific inline PTX 필요. ~60-90min discrete cycle.
+- [ ] **FP8 e4m3** priority 2 — tensor-core throughput 2× via reduced-precision GEMM (sm_89+ supported; works on RTX 5070). orthogonal precision axis (wgmma 와 직교). `wmma::fragment<...,__nv_fp8_e4m3,...>` R14 kernel 재작성 + quantization scale + 더 엄격한 numeric tolerance. ~60min discrete cycle.
+- [ ] **TMA on V** priority 3 — promoted from `## deferred` 2026-05-28. round-7 측정 (Δ 0.01% @ 1 CTA/SM) + plan §5 closed-form (BK=32 = 4 KB < TMA sweet spot 16 KB) = secondary lever; multi-step rewrite (cuTensorMapEncodeTiled host + cp.async.bulk.tensor body). marginal ROI 위 R14 capstone. ~45min discrete cycle.
+- [ ] **paper draft v1** priority 4a — PR #1751 scaffolded `PAPER/bc4-attention-bm32-capstone/`. 작성 = §statement/§method/§verification/§finding/§implications. 본 axis 13-PR campaign + 5-instance cheap-first oracle + AI-aware roofline rule 5 archetype. ~1hr discrete cycle.
+- [ ] **paper figures ≥1 fal.ai** priority 4b — wedge trajectory diagram (R3 9.4× → R7 5.3× → R10 1.149× → R14 0.927×) + sweep table heatmap. ~30min discrete cycle.
+- [ ] **paper references ≥10** priority 4c — Dao 2022 FlashAttention, Williams 2009 Roofline, Vaswani 2017 Attention, NVIDIA CUDA Programming Guide PTX ISA 8.7, etc. ~30min via `/paper bib add`.
+- [ ] **paper lint + compile + arxiv-prep** priority 4d — `/paper lint .` + `/paper compile .` + `/paper arxiv-prep .`. ~30min discrete cycle.
 
 ---
 
