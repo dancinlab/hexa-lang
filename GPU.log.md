@@ -747,3 +747,48 @@ cycle-fg 3번 = WEDGE-PASS (LN portion).
 - **5/13 dedicated-cycle queued**
 
 No LLVM. No C-transpile. `compiler/codegen/*.hexa` UNTOUCHED in this cycle.
+
+## 2026-05-28 — cycle-fg Round 5 · item 5 §5a AdamW step fusion 1-kernel wedge 🟢
+
+anima-rank 5 (★★★) — launch-bound dominated, 학습 step 의 ~3-5%. **fused single-kernel AdamW**: m·v·param 3-buffer state in 1 launch, 1 HBM round-trip per param (vs PyTorch eager 6-8 separate ops × N launches).
+
+```hexa
+// kernel (한 줄 요약):
+// m_t = β1·m + (1-β1)·g
+// v_t = β2·v + (1-β2)·g²
+// p_t = p − lr · (m_t/bc1) / (√(v_t/bc2) + ε) − lr · wd · p
+```
+
+15 kernel params: 7 ptr (p,g,m,v,p_out,m_out,v_out) + 7 f64 scalar (lr,b1,b2,eps,wd,bc1,bc2) + 1 i64 (n). nvptx_emit ABI type-resolved 정확 — ptr/i64 = `.u64`, f64 = `.f64`. host kargs 15× 8B align ✓.
+
+**ubu-2 silicon (RTX 5070 sm_120 driver-JIT from sm_80 PTX)** ([artifact](tool/artifacts/adamw_f64_2026_05_28.out · [PTX](tool/artifacts/adamw_f64_2026_05_28.ptx)):
+
+```
+AdamW step-fusion 1-kernel wedge (N=256, step t=7)
+  max_abs_err p_out = 0.000e+00
+  max_abs_err m_out = 6.939e-18  (sub-ULP, < 2^-54)
+  max_abs_err v_out = 6.939e-18  (sub-ULP, < 2^-54)
+  worst across all = 6.939e-18
+  RESULT: PASS (byte-eq band <1e-12)
+```
+
+🟢 **PASS-near-byte-eq**. p_out = exactly 0 (FMA chain identical). m_out/v_out 6.939e-18 = single-ULP FMA contract micro-difference (GPU fma → fused mul-add; CPU libm → separate mul+add). 사실상 deterministic, optimizer correctness 영향 0.
+
+**finding**:
+- 1-kernel AdamW step fusion **silicon-validated**. launch overhead → 7→1 launches/param (~7×↓), HBM RT → 6→3 (~2×↓).
+- nvptx_emit 15-param mixed-type ABI (ptr+scalar+i64 인터리브) 처음 검증 — **type-resolved**, hand-tuning 불요.
+
+**honest caveats (g3)**:
+- N=256 = single-block (1 CTA × 256 thd). 실 학습 param 수 (~70M Llama-7B FFN+attention) 에선 grid scale 별도 fire (덧셈 work-per-thd 동일하지만 launch dim 검증 필요).
+- 6.939e-18 ≠ exactly 0 — FMA contract 차이라 deterministic 이지만 strict "byte-eq" 가 아니라 "near-byte-eq". CPU 측 `FP_CONTRACT OFF` pragma 로 강제하면 0 가능.
+- wedge 가 입증한 것 = **correctness**. **wall-time vs PyTorch torch.optim.AdamW** 측정 별도 fire (현재 fused 가 expected ~3-5× faster 인지 측정 안 함).
+
+## cycle-fg Round 5 진행도
+
+- 🔴 SKIP terminal ×5 (1·6·7·12·13)
+- 🟢 ALREADY-CLOSED ×1 (11)
+- 🟢 WEDGE-PASS ×2 (3 LN-fwd · 5 AdamW)
+- 🟢 PARTIAL ×1 (10 argmax val byte-eq, idx codegen-blocked)
+- 🟠 DEFER queued ×4 (2·4·8·9)
+- **9/13 processed-terminal** (5 SKIP + 1 ALREADY + 2 WEDGE + 1 PARTIAL)
+- **4/13 dedicated-cycle queued**

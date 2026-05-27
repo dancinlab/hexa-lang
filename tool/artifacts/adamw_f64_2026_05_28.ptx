@@ -1,0 +1,160 @@
+// RFC 055 055-P0 - hexa-native NVPTX emit | target=nvptx64-nvidia-cuda-sm80
+.version 7.0
+.target sm_80
+.address_size 64
+
+.visible .entry probe_adamw_f64 (
+    .param .u64 probe_adamw_f64_param_0,
+    .param .u64 probe_adamw_f64_param_1,
+    .param .u64 probe_adamw_f64_param_2,
+    .param .u64 probe_adamw_f64_param_3,
+    .param .u64 probe_adamw_f64_param_4,
+    .param .u64 probe_adamw_f64_param_5,
+    .param .u64 probe_adamw_f64_param_6,
+    .param .u64 probe_adamw_f64_param_7,
+    .param .u64 probe_adamw_f64_param_8,
+    .param .u64 probe_adamw_f64_param_9,
+    .param .u64 probe_adamw_f64_param_10,
+    .param .u64 probe_adamw_f64_param_11,
+    .param .u64 probe_adamw_f64_param_12,
+    .param .u64 probe_adamw_f64_param_13,
+    .param .u64 probe_adamw_f64_param_14
+)
+{
+    .reg .f64 %fd7;
+    .reg .f64 %fd8;
+    .reg .f64 %fd9;
+    .reg .f64 %fd10;
+    .reg .f64 %fd11;
+    .reg .f64 %fd12;
+    .reg .f64 %fd13;
+    .reg .u64 %rd14;
+    .reg .u32 %r15;
+    .reg .u64 %rd16;
+    .reg .u64 %rd17;
+    .reg .pred %p18;
+    .reg .f64 %fd20;
+    .reg .f64 %fd21;
+    .reg .f64 %fd22;
+    .reg .f64 %fd23;
+    .reg .f64 %fd24;
+    .reg .f64 %fd25;
+    .reg .f64 %fd26;
+    .reg .f64 %fd27;
+    .reg .f64 %fd28;
+    .reg .f64 %fd29;
+    .reg .f64 %fd30;
+    .reg .f64 %fd31;
+    .reg .f64 %fd32;
+    .reg .f64 %fd33;
+    .reg .f64 %fd34;
+    .reg .f64 %fd35;
+    .reg .f64 %fd36;
+    .reg .f64 %fd37;
+    .reg .f64 %fd38;
+    .reg .f64 %fd39;
+    .reg .f64 %fd40;
+    .reg .f64 %fd41;
+    .reg .f64 %fd42;
+    .reg .f64 %fd43;
+    .reg .f64 %fd44;
+    .reg .f64 %fd45;
+    .reg .f64 %fd46;
+    .reg .f64 %fd47;
+    .reg .f64 %fd48;
+    .reg .f64 %fd49;
+    .reg .f64 %fd50;
+    .reg .f64 %fd51;
+    .reg .f64 %fd52;
+    .reg .f64 %fd53;
+    .reg .f64 %fd54;
+    .reg .f64 %fd55;
+    .reg .f64 %fd56;
+    .reg .u64 %rd0;
+    .reg .u64 %rd1;
+    .reg .u64 %rd2;
+    .reg .u64 %rd3;
+    .reg .u64 %rd4;
+    .reg .u64 %rd5;
+    .reg .u64 %rd6;
+    .reg .u64 %rd_idxa_20;
+    .reg .u64 %rd_idxa_22;
+    .reg .u64 %rd_idxa_24;
+    .reg .u64 %rd_idxa_26;
+    .reg .u64 %rd_idxs_addr;
+    .reg .u64 %rd_idx_off_17_8;
+$L_0:
+    ld.param.u64 %rd0, [probe_adamw_f64_param_0];  // load kernel param 0 into reg
+    ld.param.u64 %rd1, [probe_adamw_f64_param_1];  // load kernel param 1 into reg
+    ld.param.u64 %rd2, [probe_adamw_f64_param_2];  // load kernel param 2 into reg
+    ld.param.u64 %rd3, [probe_adamw_f64_param_3];  // load kernel param 3 into reg
+    ld.param.u64 %rd4, [probe_adamw_f64_param_4];  // load kernel param 4 into reg
+    ld.param.u64 %rd5, [probe_adamw_f64_param_5];  // load kernel param 5 into reg
+    ld.param.u64 %rd6, [probe_adamw_f64_param_6];  // load kernel param 6 into reg
+    ld.param.f64 %fd7, [probe_adamw_f64_param_7];  // load kernel param 7 into reg
+    ld.param.f64 %fd8, [probe_adamw_f64_param_8];  // load kernel param 8 into reg
+    ld.param.f64 %fd9, [probe_adamw_f64_param_9];  // load kernel param 9 into reg
+    ld.param.f64 %fd10, [probe_adamw_f64_param_10];  // load kernel param 10 into reg
+    ld.param.f64 %fd11, [probe_adamw_f64_param_11];  // load kernel param 11 into reg
+    ld.param.f64 %fd12, [probe_adamw_f64_param_12];  // load kernel param 12 into reg
+    ld.param.f64 %fd13, [probe_adamw_f64_param_13];  // load kernel param 13 into reg
+    ld.param.u64 %rd14, [probe_adamw_f64_param_14];  // load kernel param 14 into reg
+    mov.u32 %r15, %tid.x;  // gpu_thread_id_x()
+    cvt.s64.s32 %rd16, %r15;  // to_i64 (s32 to s64)
+    mov.u64 %rd17, %rd16;  // assign
+    setp.ge.s64 %p18, %rd17, %rd14;  // cmp >=
+    @%p18 bra $L_1;  // br_cond true -> $L_1
+    bra $L_2;  // br_cond false -> $L_2
+$L_1:
+    ret;  // return
+$L_2:
+    mul.lo.s64 %rd_idx_off_17_8, %rd17, 8;  // shared idx byte off = idx * 8
+    add.s64 %rd_idxa_20, %rd_idx_off_17_8, %rd0;  // index addr = shared_off + base
+    ld.global.f64 %fd20, [%rd_idxa_20];  // ld base[idx] (f64)
+    mov.f64 %fd21, %fd20;  // assign
+    add.s64 %rd_idxa_22, %rd_idx_off_17_8, %rd1;  // index addr = shared_off + base
+    ld.global.f64 %fd22, [%rd_idxa_22];  // ld base[idx] (f64)
+    mov.f64 %fd23, %fd22;  // assign
+    add.s64 %rd_idxa_24, %rd_idx_off_17_8, %rd2;  // index addr = shared_off + base
+    ld.global.f64 %fd24, [%rd_idxa_24];  // ld base[idx] (f64)
+    mov.f64 %fd25, %fd24;  // assign
+    add.s64 %rd_idxa_26, %rd_idx_off_17_8, %rd3;  // index addr = shared_off + base
+    ld.global.f64 %fd26, [%rd_idxa_26];  // ld base[idx] (f64)
+    mov.f64 %fd27, %fd26;  // assign
+    sub.f64 %fd28, 1.0, %fd8;  // binop -
+    mov.f64 %fd29, %fd28;  // assign
+    sub.f64 %fd30, 1.0, %fd9;  // binop -
+    mov.f64 %fd31, %fd30;  // assign
+    mul.f64 %fd32, %fd8, %fd25;  // binop *
+    mul.f64 %fd33, %fd29, %fd23;  // binop *
+    add.f64 %fd34, %fd32, %fd33;  // binop +
+    mov.f64 %fd35, %fd34;  // assign
+    mul.f64 %fd36, %fd23, %fd23;  // binop *
+    mov.f64 %fd37, %fd36;  // assign
+    mul.f64 %fd38, %fd9, %fd27;  // binop *
+    mul.f64 %fd39, %fd31, %fd37;  // binop *
+    add.f64 %fd40, %fd38, %fd39;  // binop +
+    mov.f64 %fd41, %fd40;  // assign
+    div.rn.f64 %fd42, %fd35, %fd12;  // binop /
+    mov.f64 %fd43, %fd42;  // assign
+    div.rn.f64 %fd44, %fd41, %fd13;  // binop /
+    mov.f64 %fd45, %fd44;  // assign
+    sqrt.rn.f64 %fd46, %fd45;  // math sqrt
+    mov.f64 %fd47, %fd46;  // assign
+    add.f64 %fd48, %fd47, %fd10;  // binop +
+    mov.f64 %fd49, %fd48;  // assign
+    mul.f64 %fd50, %fd7, %fd43;  // binop *
+    div.rn.f64 %fd51, %fd50, %fd49;  // binop /
+    mul.f64 %fd52, %fd7, %fd11;  // binop *
+    mul.f64 %fd53, %fd52, %fd21;  // binop *
+    add.f64 %fd54, %fd51, %fd53;  // binop +
+    mov.f64 %fd55, %fd54;  // assign
+    sub.f64 %fd56, %fd21, %fd55;  // binop -
+    add.s64 %rd_idxs_addr, %rd_idx_off_17_8, %rd4;  // index_set addr = shared_off + base
+    st.global.f64 [%rd_idxs_addr], %fd56;  // st base[idx] = val (f64)
+    add.s64 %rd_idxs_addr, %rd_idx_off_17_8, %rd5;  // index_set addr = shared_off + base
+    st.global.f64 [%rd_idxs_addr], %fd35;  // st base[idx] = val (f64)
+    add.s64 %rd_idxs_addr, %rd_idx_off_17_8, %rd6;  // index_set addr = shared_off + base
+    st.global.f64 [%rd_idxs_addr], %fd41;  // st base[idx] = val (f64)
+    ret;  // return
+}
