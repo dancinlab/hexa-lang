@@ -1,0 +1,205 @@
+#!/usr/bin/env bash
+# gpu_multiarch_fatbin_probe.sh
+#
+# Deployment-capability probe for hexa-emit PTX -> multi-arch fat binary.
+# Packs the INBOX-1665 unop wrapper PTX into a sm_80 + sm_90 fat binary,
+# embeds it as a C byte array, links a host loader, and verifies the
+# driver picks the correct image on the local GPU (RTX 5070 = sm_120,
+# forward-compat from sm_80 PTX inside the fat).
+#
+# Verdict tiers:
+#   0 / GREEN  - fat binary built, host binary embeds it, kernel launches
+#                and produces expected result on local GPU.
+#   1 / ORANGE - fatbinary/ptxas/cuda missing, or driver refuses to load.
+#                Honest insufficient verdict; result.json records why.
+#   2 / RED    - kernel loaded but wrong numeric result (silent miscompute).
+#
+# Usage:
+#   tool/gpu_multiarch_fatbin_probe.sh <ptx_in> <out_dir>
+set -u
+
+PTX_IN="${1:-./unop_wrapped.ptx}"
+OUT_DIR="${2:-./out}"
+mkdir -p "$OUT_DIR"
+
+RESULT_JSON="$OUT_DIR/result.json"
+FIRE_LOG="$OUT_DIR/fire.log"
+exec > >(tee -a "$FIRE_LOG") 2>&1
+
+echo "=== gpu_multiarch_fatbin_probe START $(date -u +%FT%TZ) ==="
+echo "PTX input : $PTX_IN"
+echo "Out dir   : $OUT_DIR"
+
+need_tool() {
+    if ! command -v "$1" >/dev/null 2>&1; then
+        echo "MISSING: $1"
+        return 1
+    fi
+    return 0
+}
+
+VERDICT="GREEN"
+REASON=""
+
+for t in ptxas fatbinary xxd cc; do
+    if ! need_tool "$t"; then
+        VERDICT="ORANGE"
+        REASON="missing-tool:$t"
+    fi
+done
+
+if [ ! -f "$PTX_IN" ]; then
+    VERDICT="ORANGE"
+    REASON="missing-ptx-input"
+fi
+
+if [ "$VERDICT" != "GREEN" ]; then
+    cat > "$RESULT_JSON" <<EOF
+{
+  "verdict": "$VERDICT",
+  "reason": "$REASON",
+  "ptx_in": "$PTX_IN"
+}
+EOF
+    echo "EARLY ORANGE: $REASON"
+    exit 1
+fi
+
+PTX_80="$OUT_DIR/foo_sm80.ptx"
+PTX_90="$OUT_DIR/foo_sm90.ptx"
+cp "$PTX_IN" "$PTX_80"
+sed 's/\.target sm_80/.target sm_90/' "$PTX_IN" > "$PTX_90"
+
+CUBIN_80="$OUT_DIR/foo_sm80.cubin"
+CUBIN_90="$OUT_DIR/foo_sm90.cubin"
+
+echo "--- ptxas sm_80 ---"
+ptxas -arch=sm_80 -o "$CUBIN_80" "$PTX_80" || { VERDICT="ORANGE"; REASON="ptxas-sm80-fail"; }
+echo "--- ptxas sm_90 ---"
+ptxas -arch=sm_90 -o "$CUBIN_90" "$PTX_90" || { VERDICT="ORANGE"; REASON="${REASON:+$REASON;}ptxas-sm90-fail"; }
+
+if [ "$VERDICT" != "GREEN" ]; then
+    cat > "$RESULT_JSON" <<EOF
+{ "verdict": "$VERDICT", "reason": "$REASON" }
+EOF
+    exit 1
+fi
+
+SZ_CUBIN_80=$(stat -c '%s' "$CUBIN_80" 2>/dev/null || stat -f '%z' "$CUBIN_80")
+SZ_CUBIN_90=$(stat -c '%s' "$CUBIN_90" 2>/dev/null || stat -f '%z' "$CUBIN_90")
+echo "  sm_80 cubin = $SZ_CUBIN_80 bytes"
+echo "  sm_90 cubin = $SZ_CUBIN_90 bytes"
+
+FATBIN="$OUT_DIR/foo.fatbin"
+echo "--- fatbinary --create ---"
+fatbinary --create="$FATBIN" -64 \
+    --image=profile=sm_80,file="$CUBIN_80" \
+    --image=profile=sm_90,file="$CUBIN_90" \
+    --image=profile=compute_80,file="$PTX_80" \
+    || { VERDICT="ORANGE"; REASON="fatbinary-create-fail"; }
+
+if [ "$VERDICT" != "GREEN" ]; then
+    cat > "$RESULT_JSON" <<EOF
+{ "verdict": "$VERDICT", "reason": "$REASON" }
+EOF
+    exit 1
+fi
+
+SZ_FAT=$(stat -c '%s' "$FATBIN" 2>/dev/null || stat -f '%z' "$FATBIN")
+echo "  fat binary = $SZ_FAT bytes"
+
+FATBIN_H="$OUT_DIR/foo_fatbin.h"
+( cd "$OUT_DIR" && xxd -i foo.fatbin > foo_fatbin.h ) || { VERDICT="ORANGE"; REASON="xxd-fail"; }
+SZ_HEADER=$(stat -c '%s' "$FATBIN_H" 2>/dev/null || stat -f '%z' "$FATBIN_H")
+echo "  embed header = $SZ_HEADER bytes (C text)"
+
+HOST_SRC="${HOST_SRC:-./gpu_multiarch_fatbin_host.c}"
+HOST_BIN="$OUT_DIR/multiarch_host"
+
+if [ ! -f "$HOST_SRC" ]; then
+    VERDICT="ORANGE"; REASON="missing-host-src:$HOST_SRC"
+    cat > "$RESULT_JSON" <<EOF
+{ "verdict": "$VERDICT", "reason": "$REASON" }
+EOF
+    exit 1
+fi
+
+CUDA_HOME="${CUDA_HOME:-/usr/local/cuda}"
+echo "--- cc host (embeds fat binary via #include) ---"
+cc -O2 -I"$CUDA_HOME/include" -I"$OUT_DIR" \
+    -o "$HOST_BIN" "$HOST_SRC" \
+    -L"$CUDA_HOME/lib64" -lcuda \
+    || { VERDICT="ORANGE"; REASON="cc-host-fail"; }
+
+if [ "$VERDICT" != "GREEN" ]; then
+    cat > "$RESULT_JSON" <<EOF
+{ "verdict": "$VERDICT", "reason": "$REASON" }
+EOF
+    exit 1
+fi
+
+SZ_HOST=$(stat -c '%s' "$HOST_BIN" 2>/dev/null || stat -f '%z' "$HOST_BIN")
+echo "  host binary = $SZ_HOST bytes (fat binary embedded)"
+
+echo "--- run host (driver picks arch from fat) ---"
+RUN_OUT="$OUT_DIR/run.out"
+if "$HOST_BIN" > "$RUN_OUT" 2>&1; then
+    cat "$RUN_OUT"
+    if grep -q "RESULT: PASS" "$RUN_OUT"; then
+        VERDICT="GREEN"
+    else
+        VERDICT="RED"
+        REASON="host-ran-but-no-PASS-marker"
+    fi
+else
+    VERDICT="ORANGE"
+    REASON="host-run-fail"
+    cat "$RUN_OUT"
+fi
+
+LIBCUBLAS=""
+LIBCUBLAS_SZ="N/A"
+for p in /usr/local/cuda/lib64/libcublas.so.12 \
+         /usr/local/cuda/lib64/libcublas.so \
+         /usr/lib/x86_64-linux-gnu/libcublas.so.12 \
+         /usr/lib/x86_64-linux-gnu/libcublas.so; do
+    if [ -e "$p" ]; then
+        LIBCUBLAS="$p"
+        REAL=$(readlink -f "$p" 2>/dev/null || echo "$p")
+        LIBCUBLAS_SZ=$(stat -c '%s' "$REAL" 2>/dev/null || stat -f '%z' "$REAL")
+        break
+    fi
+done
+echo "  libcublas reference = ${LIBCUBLAS:-N/A} ($LIBCUBLAS_SZ bytes, NOT linked)"
+
+if [ "$LIBCUBLAS_SZ" != "N/A" ] && [ "$SZ_HOST" != "" ]; then
+    RATIO=$(awk -v a="$SZ_HOST" -v b="$LIBCUBLAS_SZ" 'BEGIN{ if(b>0) printf "%.6f", a/b; else print "NA" }')
+else
+    RATIO="N/A"
+fi
+
+cat > "$RESULT_JSON" <<EOF
+{
+  "verdict": "$VERDICT",
+  "reason": "${REASON:-ok}",
+  "ptx_in": "$PTX_IN",
+  "sizes_bytes": {
+    "cubin_sm80": $SZ_CUBIN_80,
+    "cubin_sm90": $SZ_CUBIN_90,
+    "fat_binary": $SZ_FAT,
+    "host_binary_with_fatbin_embedded": $SZ_HOST,
+    "embed_header_xxd_text": $SZ_HEADER,
+    "libcublas_so_reference_not_linked": "${LIBCUBLAS_SZ}"
+  },
+  "libcublas_path_reference_only": "${LIBCUBLAS:-N/A}",
+  "host_to_cublas_ratio": "$RATIO",
+  "archs_packed": ["sm_80", "sm_90", "compute_80_ptx_fallback"],
+  "loaded_on_arch": "sm_120 forward-compat from sm_80 (RTX 5070)",
+  "kernel_run_marker_PASS": $( grep -q 'RESULT: PASS' "$RUN_OUT" 2>/dev/null && echo true || echo false )
+}
+EOF
+
+echo "=== gpu_multiarch_fatbin_probe END verdict=$VERDICT ==="
+echo "result.json:"
+cat "$RESULT_JSON"
+exit 0

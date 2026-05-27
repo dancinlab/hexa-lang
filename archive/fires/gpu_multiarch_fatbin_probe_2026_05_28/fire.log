@@ -1,0 +1,41 @@
+=== gpu_multiarch_fatbin_probe START 2026-05-27T15:35:39Z ===
+PTX input : ./unop_wrapped.ptx
+Out dir   : ./out
+--- ptxas sm_80 ---
+--- ptxas sm_90 ---
+  sm_80 cubin = 2472 bytes
+  sm_90 cubin = 2688 bytes
+--- fatbinary --create ---
+  fat binary = 5664 bytes
+  embed header = 34997 bytes (C text)
+--- cc host (embeds fat binary via #include) ---
+  host binary = 22592 bytes (fat binary embedded)
+--- run host (driver picks arch from fat) ---
+multi-arch fatbin host loader
+  device     : NVIDIA GeForce RTX 5070
+  capability : sm_120
+  fatbin size: 5664 bytes (embedded in host binary)
+  load       : OK (driver picked image for sm_120)
+  kernel     : x=-2.000 -> y=-5.250000 (want=-5.250000)
+  RESULT: PASS (exact f64 equality, multi-arch fatbin loaded)
+  libcublas reference = /usr/local/cuda/lib64/libcublas.so.12 (105140976 bytes, NOT linked)
+=== gpu_multiarch_fatbin_probe END verdict=GREEN ===
+result.json:
+{
+  "verdict": "GREEN",
+  "reason": "ok",
+  "ptx_in": "./unop_wrapped.ptx",
+  "sizes_bytes": {
+    "cubin_sm80": 2472,
+    "cubin_sm90": 2688,
+    "fat_binary": 5664,
+    "host_binary_with_fatbin_embedded": 22592,
+    "embed_header_xxd_text": 34997,
+    "libcublas_so_reference_not_linked": "105140976"
+  },
+  "libcublas_path_reference_only": "/usr/local/cuda/lib64/libcublas.so.12",
+  "host_to_cublas_ratio": "0.000215",
+  "archs_packed": ["sm_80", "sm_90", "compute_80_ptx_fallback"],
+  "loaded_on_arch": "sm_120 forward-compat from sm_80 (RTX 5070)",
+  "kernel_run_marker_PASS": true
+}

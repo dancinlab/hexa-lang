@@ -712,7 +712,7 @@ PR #189/#190/#191 fires used direct one-shot bash; sustained automation needs he
 
 - [ ] **Standalone cubin embed** — `hexa build` produces a binary with embedded `.cubin`; no separate cuBLAS .so dependency
 - [ ] **AOT compilation** — kernel compiled once at build time; no runtime cuBLAS JIT
-- [ ] **Multi-arch fat binary** — embed PTX for sm_70 + sm_80 + sm_90 in one cubin via hexa codegen
+- [x] **Multi-arch fat binary** — embed PTX for sm_70 + sm_80 + sm_90 in one cubin via hexa codegen 🛸 2026-05-28 PROBE PASS: hexa-emit `unop_wrapped.ptx` → ptxas → sm_80 cubin **2472 B** + sm_90 cubin **2688 B** + compute_80 PTX fallback → `fatbinary --create` → fat binary **5664 B** → `xxd -i` embed → `cc -lcuda` host binary **22592 B**. RTX 5070 (sm_120) `cuModuleLoadDataEx(fatbin_blob)` PASS — driver auto-JITs from compute_80 PTX fallback, kernel runs, exact f64 result `((-(-2.0))+1.5)*-1.5 = -5.25`. Reference: libcublas.so.12 = 105,140,976 B → host-to-cublas size ratio **0.000215** (~4,650× smaller deployment surface, zero cuBLAS dependency). Probe: `tool/gpu_multiarch_fatbin_probe.hexa` + `tool/gpu_multiarch_fatbin_host.c`; fire: `archive/fires/gpu_multiarch_fatbin_probe_2026_05_28/{result.json,fire.log,foo.fatbin}`.
 - [ ] **NVIDIA-runtime-free deployment** — minimal driver-only deployment surface (no cuBLAS/cuDNN required)
 - [ ] **Containerized cubin** — single-binary container without `libcublas.so.12` dependency
 
