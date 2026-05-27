@@ -527,9 +527,43 @@ dyld bind) 를 닫는다. 핵심 차이: 데이터 임포트는 점프 트램폴
   PoC 넷 모두 새 linker 로 PASS.
 
 - **잔여 (다음 chunk-B inc 후보)**:
-  - **multi-dylib ordinal mapping** (위와 동일 — libSystem 외 dylib).
+  - **multi-dylib ordinal mapping** — 🔴 **CLOSED-NEGATIVE: macOS 에 불필요**
+    (아래 참조). 한때 "phase-H 의 마지막 코드 잔여" 로 plan 됐으나 실측 falsified.
   - **lazy-bind 옵션화** (현재는 모두 non-lazy via `__got`).
   - **scattered relocation** + **TLV thread-locals**.
+
+#### 🔴 multi-dylib ordinal — CLOSED-NEGATIVE (2026-05-27 · macOS 불필요)
+
+당초 가정: `tool/hexa_ld.hexa` 가 모든 import 를 `lib_ordinal=1`(libSystem)
+로 강제하므로, libm 심볼(`_cos` 등)은 별도 `/usr/lib/libm.dylib` ordinal 2
+LC_LOAD_DYLIB 가 필요하다. → 그래서 dylib registry + `classify_import_ordinal`
++ 다중 LC_LOAD_DYLIB emit 5-step 을 구현하려 했다.
+
+**Falsifier (g5 · 결정적):** 표준 libm/libc 심볼이 libSystem 외 dylib 바인딩을
+요구하는가?
+
+```
+$ ls /usr/lib/libm.dylib                         # 디스크에 존재하지 않음
+ls: /usr/lib/libm.dylib: No such file or directory
+# 26 libm fn(cos sin tan acos asin atan atan2 exp exp2 log log10 log2 sqrt
+#   cbrt pow floor ceil round trunc fmod fabs hypot erf sinh cosh tanh)
+# + 5 libc fn(malloc memset snprintf free printf) 사용 프로그램:
+$ clang broad.c -o broad && otool -L broad | tail -n +2 | wc -l
+       1                                           # ← LC_LOAD_DYLIB 1개
+        /usr/lib/libSystem.B.dylib (...)           #    (유일)
+```
+
+**결론 (ruled-out axis):** 현대 macOS 는 개별 dylib 을 디스크 파일이 아니라
+**dyld shared cache** 에 두고 libm/libc 를 libSystem 으로 re-export 한다.
+모든 표준 libm+libc 심볼이 단일 `/usr/lib/libSystem.B.dylib` umbrella(ordinal
+1)로 바인딩되므로, 기존 단일-dylib 링커가 **이미** 런타임이 쓰는 모든 표준
+심볼(libm `_acos` 등 161 undefineds 포함)을 정확히 커버한다. plan 의
+libm.dylib-ordinal-2 전제는 falsified. multi-dylib 는 런타임이 **libSystem
+이 아닌 3rd-party dylib**(예: Metal/CUDA GPU backend, 외부 framework)를
+링크하게 될 때만 필요한 future generalization 이지 RUNTIME 완주 블로커가
+아니다. → phase-H 링커(`tool/hexa_ld.hexa`)는 **macOS 기준 코드 잔여 없음**;
+zero-`.c` 의 마지막 관문은 step 4 `runtime_core.c`(HexaVal repr) self-emit
+제거(architectural)로 좁혀진다.
 
 ### 넷째 increment (2026-05-26 · 🛸 emit-side reloc — `macho_obj_wrap_v2` 2-symbol .o + PAGE21/PAGEOFF12 RUN)
 
