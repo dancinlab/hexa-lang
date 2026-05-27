@@ -1,0 +1,54 @@
+// stdlib/flame/flame_bpe_corpus_lib.hexa — BPE corpus tokenization for flame
+//
+// Wires self/ml/tokenizer_bpe (Qwen-format BPE: merges.txt + vocab.json)
+// into flame's training corpus path. Replaces the byte-level fallback
+// (read_file_bytes -> V=256) that flame_d*_corpus_test.hexa uses for lack
+// of a BPE step: returns an int token-id array in [0, vocab_size) with the
+// SAME shape the byte path produced, so downstream windowing
+//   t_set(IDS, s*T + p, to_float(ids[off + p]))
+// is unchanged — only V grows from 256 to the real BPE vocab (e.g. Qwen
+// V=151936), enabling 3B-scale hexa-native training.
+//
+// flame-P2b. Unblocked by #1527 (gen2 free-fn `trim` codegen lowering —
+// tokenizer_bpe uses free-fn `trim`, which the Linux C backend could not
+// compile before) + #1533 (bootstrap hexa_cc.c regen making #1527 live).
+use "self/ml/tokenizer_bpe"
+
+// Load a Qwen-format BPE tokenizer + encode a corpus file into token ids.
+// Returns #{ tok, ids, n_toks, vocab_size }:
+//   - ids        plain ints in [0, vocab_size) — feed exactly like raw bytes
+//   - n_toks     len(ids)
+//   - vocab_size set V to this (replaces the V=256 byte fallback)
+//   - tok        the loaded tokenizer (for round-trip / decode)
+fn flame_bpe_corpus_load(merges_path: string, vocab_path: string, corpus_path: string) {
+    let tok = bpe_load(merges_path, vocab_path)
+    let raw = read_file(corpus_path)
+    let ids = bpe_encode(tok, raw)
+    return #{
+        "tok": tok,
+        "ids": ids,
+        "n_toks": len(ids),
+        "vocab_size": bpe_vocab_size(tok)
+    }
+}
+
+// Round-trip self-check: decode(encode(text)) == text. Honest tokenizer
+// sanity before a costly fire — a mismatch means the corpus would train on
+// a lossy id stream.
+fn flame_bpe_roundtrip(tok, text: string) -> bool {
+    let ids = bpe_encode(tok, text)
+    return bpe_decode(tok, ids) == text
+}
+
+// All ids in [0, vocab_size)? flame's tok_emb lookup indexes the weight
+// buffer by token id, so an out-of-range id is an out-of-bounds read.
+// Guard the encoded corpus before training.
+fn flame_bpe_ids_in_vocab(ids, vocab_size: int) -> bool {
+    let mut i = 0
+    while i < len(ids) {
+        let v = ids[i]
+        if v < 0 || v >= vocab_size { return false }
+        i = i + 1
+    }
+    return true
+}

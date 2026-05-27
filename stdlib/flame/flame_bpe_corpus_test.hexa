@@ -1,0 +1,75 @@
+// stdlib/flame/flame_bpe_corpus_test.hexa — flame-P2b BPE corpus loader test
+//
+// CI-safe (no external Qwen artifacts): writes a minimal byte-level BPE
+// tokenizer (single-byte-char vocab, zero merges) + a tiny corpus to /tmp,
+// then exercises flame_bpe_corpus_load end-to-end. Single-byte-char vocab +
+// no merges makes bpe_encode/bpe_decode an exact identity round-trip for any
+// ASCII text (GPT-2 byte_to_char maps printable ASCII 33..126 to itself),
+// so the asserts are deterministic.
+//
+// The real Qwen V=151936 round-trip (③) is validated out-of-band against the
+// local Qwen vocab.json/merges.txt — too large to commit as a CI fixture.
+//
+// Run: hexa run stdlib/flame/flame_bpe_corpus_test.hexa
+use "self/ml/tokenizer_bpe"
+use "stdlib/flame/flame_bpe_corpus_lib"
+
+let mut PASS = 0
+let mut FAIL = 0
+
+fn check_true(label, cond) {
+    if cond {
+        PASS = PASS + 1
+    } else {
+        println("  FAIL: " + label)
+        FAIL = FAIL + 1
+    }
+}
+
+fn check_eq_int(label, got, want) {
+    if got == want {
+        PASS = PASS + 1
+    } else {
+        println("  FAIL: " + label + " got=" + str(got) + " want=" + str(want))
+        FAIL = FAIL + 1
+    }
+}
+
+fn main() {
+    println("=== flame_bpe_corpus_test ===")
+
+    // ── write minimal Qwen-format fixtures ──
+    // vocab: byte-chars h,e,l,o -> ids 0..3 (printable ASCII map to self)
+    let vocab_path = "/tmp/flame_bpe_test_vocab.json"
+    let merges_path = "/tmp/flame_bpe_test_merges.txt"
+    let corpus_path = "/tmp/flame_bpe_test_corpus.txt"
+    let _ = write_file(vocab_path, "{\"h\": 0, \"e\": 1, \"l\": 2, \"o\": 3}")
+    let _ = write_file(merges_path, "#version: 0.2\n")   // header only, zero merges
+    let _ = write_file(corpus_path, "hello")
+
+    // ── exercise the loader ──
+    let r = flame_bpe_corpus_load(merges_path, vocab_path, corpus_path)
+    let ids = r["ids"]
+
+    check_eq_int("vocab_size == 4", r["vocab_size"], 4)
+    check_eq_int("n_toks == 5 (h,e,l,l,o)", r["n_toks"], 5)
+    check_eq_int("ids[0] == h(0)", ids[0], 0)
+    check_eq_int("ids[1] == e(1)", ids[1], 1)
+    check_eq_int("ids[2] == l(2)", ids[2], 2)
+    check_eq_int("ids[3] == l(2)", ids[3], 2)
+    check_eq_int("ids[4] == o(3)", ids[4], 3)
+
+    // ── flame-relevant guard: every id in [0, V) (tok_emb safety) ──
+    check_true("all ids in vocab", flame_bpe_ids_in_vocab(ids, r["vocab_size"]))
+
+    // ── round-trip: decode(encode(text)) == text ──
+    check_true("round-trip 'hello'", flame_bpe_roundtrip(r["tok"], "hello"))
+    check_true("round-trip 'ohello'", flame_bpe_roundtrip(r["tok"], "ohello"))
+
+    println("PASS=" + str(PASS) + " FAIL=" + str(FAIL))
+    if FAIL == 0 {
+        println("FLAME-BPE-CORPUS: PASS")
+    } else {
+        println("FLAME-BPE-CORPUS: FAIL")
+    }
+}
