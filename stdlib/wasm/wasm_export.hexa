@@ -1,0 +1,115 @@
+// HEXA Standard Library — wasm/wasm_export
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// WebAssembly Export section entry emitter.
+//
+// Frontier flip B7 (RUNTIME.flip.md): "export entry (name + kind=0/1/2/3 +
+// index) — stdlib byte-table sibling of `wasm_section_header.hexa` /
+// `wasm_leb128.hexa`. Pure additive — emit-only, no parsing."
+//
+// Wasm Export entry wire format (canonical, wasm-core spec §5.5.10):
+//   name  : vec(byte)   = uleb128(len(name_bytes)) || name_bytes  (UTF-8)
+//   kind  : u8          = 0 (func) · 1 (table) · 2 (memory) · 3 (global)
+//   index : uleb128(u32)
+//
+// Export section body wire format:
+//   uleb128(len(entries)) || entry_0_bytes || entry_1_bytes || …
+//
+// The section-header wrapper ((section_id : u8) || uleb128(size) || body)
+// is provided by sibling `stdlib/wasm/wasm_section_header.hexa` —
+// `wasm_section_emit(SECTION_EXPORT, wasm_export_section_emit([...]))`.
+//
+// Surface:
+//   pub let WASM_EXPORT_KIND_FUNC: int = 0
+//   pub let WASM_EXPORT_KIND_TABLE: int = 1
+//   pub let WASM_EXPORT_KIND_MEMORY: int = 2
+//   pub let WASM_EXPORT_KIND_GLOBAL: int = 3
+//   pub fn wasm_export_emit(name: str, kind: int, index: int) -> [int]
+//   pub fn wasm_export_section_emit(entries: [[int]]) -> [int]
+//
+// uleb128 note: this file inlines a small-N uleb128 encoder (handles
+// values 0 .. 2^28-1 — up to 4 LEB bytes — sufficient for every
+// realistic name-length / export-index / entry-count). Mirrors the
+// `_wasm_uleb128_small` pattern already used by
+// `stdlib/wasm/wasm_section_header.hexa`. Follow-up: swap for
+// `wasm_uleb128_encode` from sibling `stdlib/wasm/wasm_leb128` once the
+// stdlib cross-file import surface stabilizes.
+
+// ─── export-kind constants ──────────────────────────────────────────────
+
+pub let WASM_EXPORT_KIND_FUNC: int = 0
+pub let WASM_EXPORT_KIND_TABLE: int = 1
+pub let WASM_EXPORT_KIND_MEMORY: int = 2
+pub let WASM_EXPORT_KIND_GLOBAL: int = 3
+
+// ─── inline small-N uleb128 ─────────────────────────────────────────────
+
+// Emit 7-bit groups, low-bit-first, with continuation bit (0x80) set on
+// every non-final byte. `value == 0` short-circuits to [0]. Negative
+// inputs return [] (callers gate range upstream — wasm uleb128 is
+// unsigned by definition).
+@pure
+fn _wasm_uleb128_small(value: int) -> [int] {
+    let mut v = value
+    let mut out: [int] = []
+    if v < 0 { return out }
+    while true {
+        let low = v & 0x7f
+        let rest = v >> 7
+        if rest == 0 {
+            out = out + [low]
+            return out
+        }
+        out = out + [low | 0x80]
+        v = rest
+    }
+    return out
+}
+
+// ─── export entry emission ─────────────────────────────────────────────
+
+// Encode one Export section entry:
+//   uleb128(len(name_bytes)) || name_bytes || kind || uleb128(index)
+//
+// `name` is encoded as UTF-8 bytes via `s[i]` code-point indexing —
+// for ASCII names (the realistic stdlib case) this is identity. Multi-
+// byte UTF-8 sequences land as their already-byte-decomposed
+// code-points; full UTF-8 transcoding is out of scope for this
+// scaffold (callers passing non-ASCII export names gate upstream).
+@pure
+pub fn wasm_export_emit(name: str, kind: int, index: int) -> [int] {
+    let name_len = len(name)
+    let size_bytes = _wasm_uleb128_small(name_len)
+    let mut out: [int] = []
+    for b in size_bytes { out = out + [b] }
+    let mut i = 0
+    while i < name_len {
+        out = out + [name[i]]
+        i = i + 1
+    }
+    out = out + [kind]
+    let index_bytes = _wasm_uleb128_small(index)
+    for b in index_bytes { out = out + [b] }
+    return out
+}
+
+// ─── export section body emission ──────────────────────────────────────
+
+// Emit the Export section body (no section-id / no outer size prefix —
+// wrap with `wasm_section_emit(SECTION_EXPORT, ...)` to land on the wire):
+//   uleb128(len(entries)) || entry_0_bytes || entry_1_bytes || …
+//
+// Each `entries[i]` is an already-encoded `wasm_export_emit` result.
+@pure
+pub fn wasm_export_section_emit(entries: [[int]]) -> [int] {
+    let count = len(entries)
+    let count_bytes = _wasm_uleb128_small(count)
+    let mut out: [int] = []
+    for b in count_bytes { out = out + [b] }
+    for entry in entries {
+        for b in entry { out = out + [b] }
+    }
+    return out
+}
