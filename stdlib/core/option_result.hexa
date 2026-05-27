@@ -1,0 +1,148 @@
+// HEXA Standard Library — core/option_result
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Canonical Option / Result enum surface + handler helper functions. Pure
+// hexa using the language's existing single-payload enum variant support
+// (memory `project_hexa_lang_enum_payload_works` — single-field works,
+// multi-field deferred).
+//
+// Frontier 18-list #7 (RUNTIME.md): "Option/Result enum surface + `?`
+// propagation typechecker — `pop()` / `get()` / `find()` 반환채널 마이그레이션
+// 동반." This PR delivers the **canonical Option/Result enum + helper fns**;
+// the `?` propagation typechecker (compiler/check/) is a sibling follow-up
+// (multi-PR language-feature campaign).
+//
+// Inbox cross-ref: `inbox/r14-kk-option-prelude-rfc-2026-05-23` (RFC patch
+// merged earlier, but stdlib module never landed).
+//
+// Surface:
+//   enum Option { Some(value), None }
+//   enum Result { Ok(value), Err(error) }
+//
+//   pub fn opt_some(v) -> Option         — Option::Some(v) constructor
+//   pub fn opt_none() -> Option          — Option::None
+//   pub fn opt_is_some(o: Option) -> bool
+//   pub fn opt_is_none(o: Option) -> bool
+//   pub fn opt_unwrap(o: Option)         — extract value or throw on None
+//   pub fn opt_unwrap_or(o: Option, default)
+//
+//   pub fn res_ok(v) -> Result
+//   pub fn res_err(e) -> Result
+//   pub fn res_is_ok(r: Result) -> bool
+//   pub fn res_is_err(r: Result) -> bool
+//   pub fn res_unwrap(r: Result)         — extract Ok or throw on Err
+//   pub fn res_unwrap_or(r: Result, default)
+//
+// Out-of-scope (sibling follow-up — frontier #7 closure):
+//   - `?` propagation typechecker (compiler/check/bind.hexa + checker.hexa)
+//   - migrate stdlib `pop()` / `get()` / `find()` return channels to Option
+//   - prelude auto-import of Some / None / Ok / Err (RFC patch design)
+//   - generic type parameters for Option<T> / Result<T, E> when the
+//     typechecker gains parametric support
+//
+// Design notes:
+//   - Bare `enum Option { Some(v), None }` form per compiler/parse/parser.hexa
+//     test fixtures (the canonical fixture for single-field payload enum).
+//   - `opt_*` / `res_*` prefix on helpers per stdlib convention (no name
+//     collision with built-in `int` / `float` / `str` constructors).
+//   - `throw` on unwrap-of-empty matches the compiler-internal fixture style.
+
+enum Option {
+    Some(value),
+    None
+}
+
+enum Result {
+    Ok(value),
+    Err(error)
+}
+
+// -- Option constructors --
+
+pub fn opt_some(v) -> Option {
+    return Option::Some(v)
+}
+
+pub fn opt_none() -> Option {
+    return Option::None
+}
+
+// -- Option predicates --
+
+pub fn opt_is_some(o: Option) -> bool {
+    return match o {
+        Option::Some(_) => true,
+        Option::None => false
+    }
+}
+
+pub fn opt_is_none(o: Option) -> bool {
+    return match o {
+        Option::Some(_) => false,
+        Option::None => true
+    }
+}
+
+// -- Option accessors --
+
+pub fn opt_unwrap(o: Option) {
+    return match o {
+        Option::Some(v) => v,
+        Option::None => {
+            throw "opt_unwrap on Option::None"
+        }
+    }
+}
+
+pub fn opt_unwrap_or(o: Option, default) {
+    return match o {
+        Option::Some(v) => v,
+        Option::None => default
+    }
+}
+
+// -- Result constructors --
+
+pub fn res_ok(v) -> Result {
+    return Result::Ok(v)
+}
+
+pub fn res_err(e) -> Result {
+    return Result::Err(e)
+}
+
+// -- Result predicates --
+
+pub fn res_is_ok(r: Result) -> bool {
+    return match r {
+        Result::Ok(_) => true,
+        Result::Err(_) => false
+    }
+}
+
+pub fn res_is_err(r: Result) -> bool {
+    return match r {
+        Result::Ok(_) => false,
+        Result::Err(_) => true
+    }
+}
+
+// -- Result accessors --
+
+pub fn res_unwrap(r: Result) {
+    return match r {
+        Result::Ok(v) => v,
+        Result::Err(e) => {
+            throw "res_unwrap on Result::Err"
+        }
+    }
+}
+
+pub fn res_unwrap_or(r: Result, default) {
+    return match r {
+        Result::Ok(v) => v,
+        Result::Err(_) => default
+    }
+}
