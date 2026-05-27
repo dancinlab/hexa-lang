@@ -2328,12 +2328,12 @@ framing-① (nm aprime 0 externs) 측정-충족 이후 — framing-② (source z
 
 ### RUNTIME source-zero-.c — phase-H self-emit 캠페인 (multi-session)
 
-- [ ] **rt_arena/alloc/reset/release 머신코드 self-emit** — HexaVal repr 첫 piece;
-      `phase-h-inc*` 브랜치에서 진행중인 레인 (병렬 에이전트 경합 회피).
-      **PARTIAL-PROGRESS**: `rt_arena_init` x1-clobber fix landed #1252 (2026-05-26),
-      `rt_arena_*` adr→adrp+add widening #1297/#1315 landed; 형제 lane phase-H inc5
-      `__got` dyld DATA import landed #1348. 잔여 = alloc/reset/release 머신코드
-      self-emit (multi-session, lane-busy 다중 에이전트).
+- [x] **rt_arena/alloc/reset/release 머신코드 self-emit** — **LANDED**: 4 fn 모두
+      `self/codegen/runtime_arm64.hexa` 에 raw byte push self-emit 으로 구현됨
+      (`rt_arena_init` L1157 19-inst 76B · `rt_arena_alloc` L1268 · `rt_arena_reset`
+      L1339 · `rt_arena_release` L1375). 부수 fix: x1-clobber fix #1252 · adr→adrp+add
+      widening #1297/#1315 · 형제 lane phase-H inc5 `__got` dyld DATA import
+      #1348. RUNTIME.md L2331 stale-flag — flip 으로 정정.
 - [~] **runtime_core.c 의 548 fn 중 순수-logic 1개 hexa-native 포팅** — `gmtime_r`
       류 후속; runtime.c wipe-prone (surgical edit + grep 검증).
       **SEMANTICS-FIXTURE LANDED · CODEGEN-PORT REMAINING**: candidate fns
@@ -2384,10 +2384,14 @@ framing-① (nm aprime 0 externs) 측정-충족 이후 — framing-② (source z
       typechecker (compiler/check) · stdlib `pop()`/`get()`/`find()` 반환채널
       마이그레이션 · prelude auto-import · generic type parameters
       Option<T>/Result<T,E> (typechecker parametric 지원 시).
-- [ ] **trait core 4종 (`Add`/`Sub`/`Eq`/`Ord`) dispatch** — coherence/orphan
-      rule 결정 동반. **RFC-ONLY**: #532 (`inbox(patches): trait dyn dispatch
-      &dyn Trait design RFC (PROBE r14-GGGG)`) 머지됨; scaffold branch
-      `rfc-082-impl-a-trait-bound-scaffold-2026-05-23` 활성; impl PR 부재.
+- [~] **trait core 4종 (`Add`/`Sub`/`Eq`/`Ord`) dispatch** — coherence/orphan
+      rule 결정 동반. **CONCRETE-MONOMORPHIC FIXTURE LANDED · TRAIT-DISPATCH
+      CAMPAIGN PENDING**: `stdlib/core/trait_design_fixture.hexa` 가 4-trait ×
+      3-type (int/float/str) 의 concrete-monomorphic 와이어를 pin (`add_int/
+      float/str`, `sub_int/float`, `eq_*`, `cmp_*` 11 fn). 같은 RFC scaffold
+      branch `rfc-082-impl-a-trait-bound-scaffold-2026-05-23` 와 #532 RFC 가
+      polymorphic dispatch 추가 시 본 fixture 가 A/B target. 잔여 = typechecker
+      generic 지원 + coherence/orphan rule D2 결정 + monomorphization pass.
 - [~] **TLS CA bundle 배포 결정 (D2+)** — TLS handshake 와 함께.
       **API-STUB LANDED · POLICY-PENDING**: `stdlib/crypto/tls_ca_bundle.hexa`
       caller-facing surface (`tls_ca_bundle_source/count/pem/verify_chain` +
