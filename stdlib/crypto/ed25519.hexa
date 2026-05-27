@@ -117,7 +117,13 @@ fn _pack25519(a: [int]) -> [int] {
         t[15] = t[15] - 0x7fff - ((t[14] >> 16) & 1)
         let b = (t[15] >> 16) & 1
         t[14] = t[14] & 0xffff
-        let sw = _cswap_gf(t, m, 1 - b)
+        // FIX: TweetNaCl convention has t=original, m=subtracted, then sel(t,m,1-b)
+        // outputs t. Here t holds the SUBTRACTED value and m the ORIGINAL, so the
+        // cswap operands must be (m=orig, t=sub) — taking np keeps orig when value<p
+        // (b=1→1-b=0→no swap→np=m) and the subtracted when value>=p (b=0→swap→np=t).
+        // The prior (t, m) order was doubly-inverted: it took the subtracted garbage
+        // for value<p, so 0*B packed to p+1 and the base point to 7e.. not 58..
+        let sw = _cswap_gf(m, t, 1 - b)
         m = []; let mut k = 0; while k < 16 { m.push(sw[k]); k = k + 1 }
         j = j + 1
     }
