@@ -94,12 +94,15 @@ fn _sha512_k() -> [int] {
     ]
 }
 
+// SHA-512 compression core (FIPS 180-4) — runs the padding + 80-round block
+// loop from a caller-supplied initial hash vector, returning the final 8
+// [hi,lo] words. Shared by SHA-512 (sha512_iv, full 64-byte digest) and
+// SHA-384 (sha384_iv, 48-byte truncation).
 @pure
-pub fn sha512_bytes(msg: [int]) -> [int] {
-    // initial H[0..7] as [hi,lo]
+fn _sha512_compress(msg: [int], h_init: [[int]]) -> [[int]] {
     let mut h: [[int]] = [
-        [0x6a09e667,0xf3bcc908], [0xbb67ae85,0x84caa73b], [0x3c6ef372,0xfe94f82b], [0xa54ff53a,0x5f1d36f1],
-        [0x510e527f,0xade682d1], [0x9b05688c,0x2b3e6c1f], [0x1f83d9ab,0xfb41bd6b], [0x5be0cd19,0x137e2179]
+        h_init[0], h_init[1], h_init[2], h_init[3],
+        h_init[4], h_init[5], h_init[6], h_init[7]
     ]
     let k = _sha512_k()
 
@@ -164,10 +167,32 @@ pub fn sha512_bytes(msg: [int]) -> [int] {
         b = b + 1
     }
 
-    // emit 64 bytes (8 words × 8 bytes, big-endian)
+    return h
+}
+
+@pure
+fn _sha512_iv() -> [[int]] {
+    return [
+        [0x6a09e667,0xf3bcc908], [0xbb67ae85,0x84caa73b], [0x3c6ef372,0xfe94f82b], [0xa54ff53a,0x5f1d36f1],
+        [0x510e527f,0xade682d1], [0x9b05688c,0x2b3e6c1f], [0x1f83d9ab,0xfb41bd6b], [0x5be0cd19,0x137e2179]
+    ]
+}
+
+// SHA-384 IV (FIPS 180-4 §5.3.4)
+@pure
+fn _sha384_iv() -> [[int]] {
+    return [
+        [0xcbbb9d5d,0xc1059ed8], [0x629a292a,0x367cd507], [0x9159015a,0x3070dd17], [0x152fecd8,0xf70e5939],
+        [0x67332667,0xffc00b31], [0x8eb44a87,0x68581511], [0xdb0c2e0d,0x64f98fa7], [0x47b5481d,0xbefa4fa4]
+    ]
+}
+
+// emit nwords × 8 bytes big-endian
+@pure
+fn _emit_words(h: [[int]], nwords: int) -> [int] {
     let mut out: [int] = []
     let mut wi = 0
-    while wi < 8 {
+    while wi < nwords {
         let hi = h[wi][0]
         let lo = h[wi][1]
         out.push((hi >> 24) & 0xFF); out.push((hi >> 16) & 0xFF); out.push((hi >> 8) & 0xFF); out.push(hi & 0xFF)
@@ -175,6 +200,17 @@ pub fn sha512_bytes(msg: [int]) -> [int] {
         wi = wi + 1
     }
     return out
+}
+
+@pure
+pub fn sha512_bytes(msg: [int]) -> [int] {
+    return _emit_words(_sha512_compress(msg, _sha512_iv()), 8)
+}
+
+// SHA-384 (FIPS 180-4) — SHA-512 core with the SHA-384 IV, truncated to 48 bytes.
+@pure
+pub fn sha384_bytes(msg: [int]) -> [int] {
+    return _emit_words(_sha512_compress(msg, _sha384_iv()), 6)
 }
 
 let _SH_HEX: string = "0123456789abcdef"
