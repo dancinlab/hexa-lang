@@ -129,3 +129,54 @@ HGEMM≥1024 scale-up(725) + whole-program-fusion≥30%(727, §10 criterion)도 
 float literal) 이 `// RFC 055 055-P0 - unsupported stmt kind: unop` + 미정의 `%fd14`
 → ptxas reject. NVPTX codegen 이 unop(neg) 미emit. `a[0]` (유효원소 ≤max) 로 워크어라운드
 (semantic 동일). 진짜 fix = nvptx_target.hexa unop arm 추가(neg.f64) — INBOX 2026-05-27.
+
+## 2026-05-27 — 🛸 INBOX #1665 NVPTX unop 4-layer silicon-fire 종결 (U1, round-4)
+
+직전 LogSumExp fire 의 "부수 발견" INBOX 항목을 silicon 레벨로 완료. 사용자 골 "cuBLAS
+뛰어넘기 — fusion + IO-aware" 의 첫 라운드 (작은 것부터 — keystone 풀렸으니 fold+
+const-hex 한 사이클) 권고 따라 수행. 음수 float 리터럴 unblock 으로 다음 GPU fire
+전반의 함정 제거.
+
+**Codegen 4-layer**: PR #1686 (6e25e69b) 가 parallel-session 에서 머지 — ⓪ `float_to_bits`
+runtime builtin (PR #1678) + ① STMT_UNOP `neg.<ty>` emit arm + ② classifier roster
+extension + ③ `_nvptx_f64_hexlit` (`const_float` → `0d<16-hex>` via float_to_bits) +
+fold (`unop("neg", literal_float(N))` → `const_float(-N)`). #1686 본문에 "Follow-up —
+actual GPU fire on ubu-2 ... Belongs to a fresh GPU cycle" 로 silicon fire 절반 명시
+deferred. 본 entry = 그 deferred silicon 절반 종결.
+
+**Tier**: 🟢 SUPPORTED-NUMERICAL (silicon round-trip exact f64 equality)
+**Falsifier**: `F-NVPTX-UNOP-NEG-FLOAT-LITERAL`
+**Verdict**: `.verdicts/nvptx-unop-neg-float-literal/F-NVPTX-UNOP-NEG-FLOAT-LITERAL.txt`
+**Artifacts**: `archive/fires/nvptx_unop_close_2026_05_27/{unop_wrapped.ptx, unop_wrapped_host.c}`
+
+**Silicon evidence** (ubu-2 RTX 5070 sm_120, driver 580, ptxas 12.0):
+
+```
+ptxas -arch=sm_80 unop_wrapped.ptx → rc=0
+./unop_wrapped_host →
+  input   x = -2
+  want    y = -5.25
+  got     y = -5.25
+  RESULT: PASS (exact f64 equality)
+```
+
+**Computation chain** — `((-x) + 1.5) * -1.5` with x=-2.0:
+- step 1: `neg.f64 %fd1, %fd0` → 2.0 (register-neg, layer ①)
+- step 2: `add.f64 %fd2, %fd1, 0d3FF8000000000000` → 3.5 (+1.5 hex, layer ③)
+- step 3: `mul.f64 %fd3, %fd2, 0dBFF8000000000000` → -5.25 (-1.5 hex, layer ③, bug #1663 closed)
+
+**Bug closure**: PR #1663 가 `to_string(-1.0e308)` decimal `1e+308` 렌더 → ptxas
+`Arguments mismatch for instruction 'mov'` 진단. #1686 의 `_nvptx_f64_hexlit` 로
+모든 `const_float` 가 부호·magnitude 무관 canonical `0d<16-hex>` 렌더 + 본 fire 가
+silicon 실측 확인 → bug #1663 full close.
+
+**다음 GPU fire 가 받는 효과**: BC3 GEMM+bias+act fused timed silicon wall 사이클 시
+음수 bias/threshold 리터럴 자유 사용. §5j top-k+GEMM fusion 의 `-inf` sentinel.
+§5g per-call-site precision 의 mixed-prec single kernel 음수 상수. §5j LogSumExp
+`a[0]` workaround 제거 가능.
+
+**Honest scope**: dup-race — 본 사이클 진입과 평행하여 다른 세션이 codegen 4-layer
+를 #1686 으로 선착 머지 (`feedback_inbox_dup_race_precheck`). 동일 codegen 작업 PR
+#1687 은 close, silicon-fire + 문서만 본 PR 로 분리 진입. silicon fire 의 PTX 본문은
+#1686 codegen 의 출력과 byte-identical 한 surface (3 emit form 모두 동일) — 검증은
+교차 적용 valid.
