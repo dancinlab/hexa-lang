@@ -652,6 +652,7 @@ fn _nvptx_is_math_intrinsic(op: string) -> bool {
     if op == "tan"      { return true }
     if op == "tanh"     { return true }
     if op == "sigmoid"  { return true }
+    if op == "pow"      { return true }
     if op == "abs"      { return true }
     return false
 }
@@ -660,7 +661,7 @@ fn _nvptx_is_math_intrinsic(op: string) -> bool {
 // sqrt / rsqrt / exp / log / abs; 2 for binary max / min). Returns 0
 // for a non-math op (caller should not have routed it here).
 fn _nvptx_math_arity(op: string) -> i64 {
-    if op == "max" || op == "min" { return 2 }
+    if op == "max" || op == "min" || op == "pow" { return 2 }
     if op == "sqrt" || op == "rsqrt" || op == "rsqrt_rn" || op == "exp" || op == "log" || op == "sin" || op == "cos" || op == "tan" || op == "tanh" || op == "sigmoid" || op == "abs" { return 1 }
     return 0
 }
@@ -2384,6 +2385,218 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
                     out.push(_nvptx_instr(PTX_OP_FMA_RN_F64, l15, "log f64: dst = kf*ln2 + log(m)"))
                     return out
                 }
+                // pow f64 — pow(x, y) = exp(y · log(x)), x > 0. Composes the
+                // two fire-validated §13 transcendentals: the log arm (IEEE
+                // bit-extract + atanh series) computes log(x) into an
+                // intermediate, then y·log(x), then the exp arm (range-
+                // reduce + degree-10 Horner) yields the result. Both cores
+                // are INLINED (log + exp scratch reused on this dst.id) so
+                // pow is a single straight-line block — no call, branch-free.
+                //
+                // Domain: x > 0 (matches CPU libm pow for the positive-base
+                // path; x ≤ 0 with non-integer y is NaN in IEEE pow anyway).
+                // Accuracy: log (~3 ulp) propagated through y· then exp
+                // (~1 ulp) → a few ulp; ample for kernel use (gamma /
+                // softplus / x^a feature maps).
+                //
+                // Scratch: log's 6 regs (m·y·y2·p·b·k) + exp's 7 regs
+                // (t·kf·r·p·pow2k·k·b) + pow's lx (log result) · yl
+                // (y·log x). Declared in the pow Pass of classify_locals.
+                if s.op == "pow" && dst_kind == NVPTX_RKIND_F64 {
+                    let x_reg  = _nvptx_operand_text_kinds(s.args[0], kinds)
+                    let y_reg  = _nvptx_operand_text_kinds(s.args[1], kinds)
+                    let lx_reg = _nvptx_reg_powf64_lx(s.dst.id)
+                    let yl_reg = _nvptx_reg_powf64_yl(s.dst.id)
+                    // log scratch
+                    let lm_reg  = _nvptx_reg_logf64_m(s.dst.id)
+                    let ly_reg  = _nvptx_reg_logf64_y(s.dst.id)
+                    let ly2_reg = _nvptx_reg_logf64_y2(s.dst.id)
+                    let lp_reg  = _nvptx_reg_logf64_p(s.dst.id)
+                    let lb_reg  = _nvptx_reg_logf64_b(s.dst.id)
+                    let lk_reg  = _nvptx_reg_logf64_k(s.dst.id)
+                    // exp scratch
+                    let et_reg     = _nvptx_reg_expf64_t(s.dst.id)
+                    let ekf_reg    = _nvptx_reg_expf64_kf(s.dst.id)
+                    let er_reg     = _nvptx_reg_expf64_r(s.dst.id)
+                    let ep_reg     = _nvptx_reg_expf64_p(s.dst.id)
+                    let epow2k_reg = _nvptx_reg_expf64_pow2k(s.dst.id)
+                    let ek_reg     = _nvptx_reg_expf64_k(s.dst.id)
+                    let eb_reg     = _nvptx_reg_expf64_b(s.dst.id)
+                    // ═══ log(x) → lx_reg (mirror of the §13 log arm) ═══
+                    let mut p1 = []
+                    p1.push(_nvptx_op(lb_reg))
+                    p1.push(_nvptx_op(x_reg))
+                    out.push(_nvptx_instr("mov.b64", p1, "pow f64 log: bits = bit-cast x"))
+                    let mut p2 = []
+                    p2.push(_nvptx_op(lk_reg))
+                    p2.push(_nvptx_op(lb_reg))
+                    p2.push(_nvptx_op(PTX_F64_MANT_BITS))
+                    out.push(_nvptx_instr("shr.s64", p2, "pow f64 log: k_raw = bits >> 52"))
+                    let mut p3 = []
+                    p3.push(_nvptx_op(lk_reg))
+                    p3.push(_nvptx_op(lk_reg))
+                    p3.push(_nvptx_op(PTX_F64_EXP_BIAS))
+                    out.push(_nvptx_instr("sub.s64", p3, "pow f64 log: k = k_raw - 1023"))
+                    let mut p5 = []
+                    p5.push(_nvptx_op(lb_reg))
+                    p5.push(_nvptx_op(lb_reg))
+                    p5.push(_nvptx_op(PTX_F64_MANT_MASK))
+                    out.push(_nvptx_instr("and.b64", p5, "pow f64 log: keep mantissa bits"))
+                    let mut p6 = []
+                    p6.push(_nvptx_op(lb_reg))
+                    p6.push(_nvptx_op(lb_reg))
+                    p6.push(_nvptx_op(PTX_F64_ONE_EXP))
+                    out.push(_nvptx_instr("or.b64", p6, "pow f64 log: set exponent bias = 1023"))
+                    let mut p7 = []
+                    p7.push(_nvptx_op(lm_reg))
+                    p7.push(_nvptx_op(lb_reg))
+                    out.push(_nvptx_instr("mov.b64", p7, "pow f64 log: m = bit-cast, m in [1,2)"))
+                    let mut p8 = []
+                    p8.push(_nvptx_op(ly_reg))
+                    p8.push(_nvptx_op(lm_reg))
+                    p8.push(_nvptx_op(PTX_LOGF64_C0_HEXF64))
+                    out.push(_nvptx_instr(PTX_OP_SUB_F64, p8, "pow f64 log: m - 1"))
+                    let mut p9 = []
+                    p9.push(_nvptx_op(lm_reg))
+                    p9.push(_nvptx_op(lm_reg))
+                    p9.push(_nvptx_op(PTX_LOGF64_C0_HEXF64))
+                    out.push(_nvptx_instr("add.f64", p9, "pow f64 log: m + 1"))
+                    let mut p10 = []
+                    p10.push(_nvptx_op(ly_reg))
+                    p10.push(_nvptx_op(ly_reg))
+                    p10.push(_nvptx_op(lm_reg))
+                    out.push(_nvptx_instr("div.rn.f64", p10, "pow f64 log: y = (m-1)/(m+1)"))
+                    let mut p11 = []
+                    p11.push(_nvptx_op(ly2_reg))
+                    p11.push(_nvptx_op(ly_reg))
+                    p11.push(_nvptx_op(ly_reg))
+                    out.push(_nvptx_instr(PTX_OP_MUL_F64, p11, "pow f64 log: y² = y*y"))
+                    let mut ph0 = []
+                    ph0.push(_nvptx_op(lp_reg))
+                    ph0.push(_nvptx_op(PTX_LOGF64_C5_HEXF64))
+                    out.push(_nvptx_instr("mov.f64", ph0, "pow f64 log Horner: p = C5"))
+                    let mut phc: [string] = []
+                    phc.push(PTX_LOGF64_C4_HEXF64)
+                    phc.push(PTX_LOGF64_C3_HEXF64)
+                    phc.push(PTX_LOGF64_C2_HEXF64)
+                    phc.push(PTX_LOGF64_C1_HEXF64)
+                    phc.push(PTX_LOGF64_C0_HEXF64)
+                    let mut phi = 0
+                    while phi < len(phc) {
+                        let mut phf = []
+                        phf.push(_nvptx_op(lp_reg))
+                        phf.push(_nvptx_op(ly2_reg))
+                        phf.push(_nvptx_op(lp_reg))
+                        phf.push(_nvptx_op(phc[phi]))
+                        out.push(_nvptx_instr(PTX_OP_FMA_RN_F64, phf, "pow f64 log Horner step"))
+                        phi = phi + 1
+                    }
+                    let mut p12 = []
+                    p12.push(_nvptx_op(lp_reg))
+                    p12.push(_nvptx_op(ly_reg))
+                    p12.push(_nvptx_op(lp_reg))
+                    out.push(_nvptx_instr(PTX_OP_MUL_F64, p12, "pow f64 log: y * P"))
+                    let mut p13 = []
+                    p13.push(_nvptx_op(lp_reg))
+                    p13.push(_nvptx_op(lp_reg))
+                    p13.push(_nvptx_op(PTX_F64_TWO_HEXF64))
+                    out.push(_nvptx_instr(PTX_OP_MUL_F64, p13, "pow f64 log: 2*y*P = log(m)"))
+                    let mut p14 = []
+                    p14.push(_nvptx_op(ly2_reg))
+                    p14.push(_nvptx_op(lk_reg))
+                    out.push(_nvptx_instr("cvt.rn.f64.s64", p14, "pow f64 log: kf = (f64) k"))
+                    let mut p15 = []
+                    p15.push(_nvptx_op(lx_reg))
+                    p15.push(_nvptx_op(ly2_reg))
+                    p15.push(_nvptx_op(PTX_LN2_HEXF64))
+                    p15.push(_nvptx_op(lp_reg))
+                    out.push(_nvptx_instr(PTX_OP_FMA_RN_F64, p15, "pow f64: lx = log(x) = kf*ln2 + log(m)"))
+                    // ═══ yl = y · log(x) ═══
+                    let mut pyl = []
+                    pyl.push(_nvptx_op(yl_reg))
+                    pyl.push(_nvptx_op(y_reg))
+                    pyl.push(_nvptx_op(lx_reg))
+                    out.push(_nvptx_instr(PTX_OP_MUL_F64, pyl, "pow f64: yl = y · log(x)"))
+                    // ═══ exp(yl) → dst (mirror of the §13 exp arm) ═══
+                    let mut pe1 = []
+                    pe1.push(_nvptx_op(et_reg))
+                    pe1.push(_nvptx_op(yl_reg))
+                    pe1.push(_nvptx_op(PTX_LOG2E_HEXF64))
+                    out.push(_nvptx_instr(PTX_OP_MUL_F64, pe1, "pow f64 exp: t = yl*log2e"))
+                    let mut pe2 = []
+                    pe2.push(_nvptx_op(ekf_reg))
+                    pe2.push(_nvptx_op(et_reg))
+                    out.push(_nvptx_instr("cvt.rni.f64.f64", pe2, "pow f64 exp: kf = round(t)"))
+                    let mut pe3 = []
+                    pe3.push(_nvptx_op(ek_reg))
+                    pe3.push(_nvptx_op(ekf_reg))
+                    out.push(_nvptx_instr("cvt.rni.s64.f64", pe3, "pow f64 exp: k = (s64) kf"))
+                    let mut pe4 = []
+                    pe4.push(_nvptx_op(et_reg))
+                    pe4.push(_nvptx_op(ekf_reg))
+                    pe4.push(_nvptx_op(PTX_LN2_HI_HEXF64))
+                    out.push(_nvptx_instr(PTX_OP_MUL_F64, pe4, "pow f64 exp: t = kf*ln2_hi"))
+                    let mut pe5 = []
+                    pe5.push(_nvptx_op(er_reg))
+                    pe5.push(_nvptx_op(yl_reg))
+                    pe5.push(_nvptx_op(et_reg))
+                    out.push(_nvptx_instr(PTX_OP_SUB_F64, pe5, "pow f64 exp: r = yl - kf*ln2_hi"))
+                    let mut pe6 = []
+                    pe6.push(_nvptx_op(et_reg))
+                    pe6.push(_nvptx_op(ekf_reg))
+                    pe6.push(_nvptx_op(PTX_LN2_LO_HEXF64))
+                    out.push(_nvptx_instr(PTX_OP_MUL_F64, pe6, "pow f64 exp: t = kf*ln2_lo"))
+                    let mut pe7 = []
+                    pe7.push(_nvptx_op(er_reg))
+                    pe7.push(_nvptx_op(er_reg))
+                    pe7.push(_nvptx_op(et_reg))
+                    out.push(_nvptx_instr(PTX_OP_SUB_F64, pe7, "pow f64 exp: r -= kf*ln2_lo"))
+                    let mut peh0 = []
+                    peh0.push(_nvptx_op(ep_reg))
+                    peh0.push(_nvptx_op(PTX_EXPF64_C10_HEXF64))
+                    out.push(_nvptx_instr("mov.f64", peh0, "pow f64 exp Horner: p = C10"))
+                    let mut pehc: [string] = []
+                    pehc.push(PTX_EXPF64_C9_HEXF64)
+                    pehc.push(PTX_EXPF64_C8_HEXF64)
+                    pehc.push(PTX_EXPF64_C7_HEXF64)
+                    pehc.push(PTX_EXPF64_C6_HEXF64)
+                    pehc.push(PTX_EXPF64_C5_HEXF64)
+                    pehc.push(PTX_EXPF64_C4_HEXF64)
+                    pehc.push(PTX_EXPF64_C3_HEXF64)
+                    pehc.push(PTX_EXPF64_C2_HEXF64)
+                    pehc.push(PTX_EXPF64_C1_HEXF64)
+                    pehc.push(PTX_EXPF64_C0_HEXF64)
+                    let mut pehi = 0
+                    while pehi < len(pehc) {
+                        let mut pehf = []
+                        pehf.push(_nvptx_op(ep_reg))
+                        pehf.push(_nvptx_op(er_reg))
+                        pehf.push(_nvptx_op(ep_reg))
+                        pehf.push(_nvptx_op(pehc[pehi]))
+                        out.push(_nvptx_instr(PTX_OP_FMA_RN_F64, pehf, "pow f64 exp Horner step"))
+                        pehi = pehi + 1
+                    }
+                    let mut pe8 = []
+                    pe8.push(_nvptx_op(eb_reg))
+                    pe8.push(_nvptx_op(ek_reg))
+                    pe8.push(_nvptx_op("1023"))
+                    out.push(_nvptx_instr("add.s64", pe8, "pow f64 exp: b = k + 1023"))
+                    let mut pe9 = []
+                    pe9.push(_nvptx_op(eb_reg))
+                    pe9.push(_nvptx_op(eb_reg))
+                    pe9.push(_nvptx_op("52"))
+                    out.push(_nvptx_instr("shl.b64", pe9, "pow f64 exp: b <<= 52"))
+                    let mut pe10 = []
+                    pe10.push(_nvptx_op(epow2k_reg))
+                    pe10.push(_nvptx_op(eb_reg))
+                    out.push(_nvptx_instr("mov.b64", pe10, "pow f64 exp: pow2k = bit-cast b"))
+                    let mut pe11 = []
+                    pe11.push(_nvptx_op(dst_reg))
+                    pe11.push(_nvptx_op(ep_reg))
+                    pe11.push(_nvptx_op(epow2k_reg))
+                    out.push(_nvptx_instr(PTX_OP_MUL_F64, pe11, "pow f64: dst = exp(y·log x) = x^y"))
+                    return out
+                }
                 // sin f64 — argument range-reduction + odd-Taylor polynomial.
                 //
                 //   n  = round(x / π)                 (cvt.rni — nearest int)
@@ -3949,6 +4162,29 @@ fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
                     regs.push(PReg { name: _nvptx_reg_logf64_k(s.dst.id),  kind: NVPTX_RKIND_U64, frag_role: "", frag_dtype: "", frag_layout: "" })
                 }
             }
+            if s.kind == STMT_CALL && s.op == "pow" && s.dst.id >= 0 {
+                let dkp = _nvptx_lookup_kind_for_local(regs, s.dst.id)
+                if dkp == NVPTX_RKIND_F64 {
+                    // log core scratch (reused by the inlined log(x))
+                    regs.push(PReg { name: _nvptx_reg_logf64_m(s.dst.id),  kind: NVPTX_RKIND_F64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_logf64_y(s.dst.id),  kind: NVPTX_RKIND_F64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_logf64_y2(s.dst.id), kind: NVPTX_RKIND_F64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_logf64_p(s.dst.id),  kind: NVPTX_RKIND_F64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_logf64_b(s.dst.id),  kind: NVPTX_RKIND_U64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_logf64_k(s.dst.id),  kind: NVPTX_RKIND_U64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    // exp core scratch (reused by the inlined exp(y·log x))
+                    regs.push(PReg { name: _nvptx_reg_expf64_t(s.dst.id),     kind: NVPTX_RKIND_F64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_expf64_kf(s.dst.id),    kind: NVPTX_RKIND_F64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_expf64_r(s.dst.id),     kind: NVPTX_RKIND_F64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_expf64_p(s.dst.id),     kind: NVPTX_RKIND_F64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_expf64_pow2k(s.dst.id), kind: NVPTX_RKIND_F64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_expf64_k(s.dst.id),     kind: NVPTX_RKIND_U64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_expf64_b(s.dst.id),     kind: NVPTX_RKIND_U64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    // pow-specific scratch
+                    regs.push(PReg { name: _nvptx_reg_powf64_lx(s.dst.id), kind: NVPTX_RKIND_F64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_powf64_yl(s.dst.id), kind: NVPTX_RKIND_F64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                }
+            }
             if s.kind == STMT_CALL && s.op == "sin" && s.dst.id >= 0 {
                 let dks = _nvptx_lookup_kind_for_local(regs, s.dst.id)
                 if dks == NVPTX_RKIND_F64 {
@@ -5195,6 +5431,17 @@ fn _nvptx_reg_logf64_b(id: i64) -> string {
 }
 fn _nvptx_reg_logf64_k(id: i64) -> string {
     return "%rd_log_k_" + to_string(id)
+}
+
+// pow f64 scratch (RFC 055 §13) — declared in the pow Pass of
+// `_nvptx_classify_locals`; consumed at the `s.op == "pow"` emit site.
+// lx (= log(x) intermediate) · yl (= y·log(x)) — both .f64. The log +
+// exp cores reuse _nvptx_reg_logf64_* / _nvptx_reg_expf64_* on this dst.id.
+fn _nvptx_reg_powf64_lx(id: i64) -> string {
+    return "%fd_pow_lx_" + to_string(id)
+}
+fn _nvptx_reg_powf64_yl(id: i64) -> string {
+    return "%fd_pow_yl_" + to_string(id)
 }
 
 // sin f64 polynomial scratch (RFC 055 §13 trig family) — declared in
