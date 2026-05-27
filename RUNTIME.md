@@ -2189,14 +2189,22 @@ unit. Registered as milestones so the next cycle can pick them up.
       on 128×16-bit limbs; sig^e mod n (square-and-multiply, e=65537 → ~17
       squarings → ~1s) + EMSA-PKCS1-v1_5 check. KAT-clean vs python-cryptography
       (valid verify true, tampered rejected). 3rd cert-sig algorithm (with
-      Ed25519 + ECDSA-P256). RSA-PSS variant + RSA-cert OID dispatch = follow-up.
+      Ed25519 + ECDSA-P256). RSA-PSS variant = follow-up.
+- [x] **X.509 sig-alg auto-dispatch + v1/v3 robustness** — DONE (#1664 · #1667).
+      `x509_verify_self_auto(cert)` reads the signatureAlgorithm OID and routes
+      to the matching family (Ed25519 / ECDSA-P256 / RSA-PKCS1-SHA256). Plus the
+      RFC 5280 optional `[0]`version fix: `x509_subject_public_key` /
+      `x509_validity_dates` detect the 0xA0 tag and adjust the TBS-child hop, so
+      both v1 (no version field) and v3 certs parse. Verified vs openssl 3.6 (v3)
+      + LibreSSL (v1) self-signed certs: 3 families × {v1,v3} = 5/5 verify=true,
+      alg detection 0/1/2 exact. Closes the RSA/ECDSA "OID dispatch" follow-up.
 - [x] **ECDSA-P256 verify perf** — DONE (#1653). Solinas P-256 fast reduction
       (FIPS 186-4 D.2 · `_reduce_p256`) on the scalar-mult mod-p path (~30 ops
       vs ~25K) brought a full verify from >300s timeout to ~3s. KAT-clean:
       verify=true on a python-cryptography reference sig, tampered-r rejected;
       reduction kernel isolation-verified (3 random T mod p pairs byte-exact).
       ECDSA-P256 is now the 2nd usable cert-sig algorithm (alongside Ed25519);
-      X.509 chain validation can extend to P-256 certs (follow-up).
+      P-256 X.509 certs now verify via the auto-dispatch (see X.509 line above).
 - [ ] **threading** — architectural decision: green threads in hexa (M:N
       scheduler over `@asm` context-switch) vs. keep C pthread FFI. Blocks any
       concurrent runtime story.
