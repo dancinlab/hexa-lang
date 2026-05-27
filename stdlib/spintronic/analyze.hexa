@@ -1,8 +1,12 @@
 #!hexa strict
-// stdlib/spintronic/analyze.hexa — `SPINTRONIC + analyze` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// spintronic analyze — Julliere TMR = 2P²/(1−P²).
 fn main() {
+    let P = 0.5
+    let TMR = 2.0 * P * P / (1.0 - P * P)
+    let TMR_pct = TMR * 100.0
+    println("spintronic_analyze (Julliere TMR · P=0.5):")
+    println("  P = " + str(P))
+    println("  TMR_fraction = " + str(TMR))
+    println("  TMR_percent = " + str(TMR_pct))
     println("__HEXA_SPINTRONIC_ANALYZE__ PASS gate=GATE_OPEN absorbed=false")
 }

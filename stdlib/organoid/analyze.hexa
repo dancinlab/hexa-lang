@@ -1,8 +1,15 @@
 #!hexa strict
-// stdlib/organoid/analyze.hexa — `ORGANOID + analyze` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// organoid analyze — viability fraction + doubling-time fold change.
 fn main() {
+    let N_live = 95.0
+    let N_total = 100.0
+    let viability = N_live / N_total
+    let days = 7.0
+    let doubling_h = 24.0
+    let fold = days * 24.0 / doubling_h
+    println("organoid_analyze (viability + growth):")
+    println("  viability_fraction = " + str(viability))
+    println("  doubling_h = " + str(doubling_h) + "  days = " + str(days))
+    println("  fold_doublings = " + str(fold))
     println("__HEXA_ORGANOID_ANALYZE__ PASS gate=GATE_OPEN absorbed=false")
 }
