@@ -1,0 +1,74 @@
+#!/bin/sh
+# tool/gpu_sass_diff — J1 round-4 PTX → SASS instruction-histogram diff
+#
+# A $0 perf oracle (per the PTX_DIFF perf-oracle pattern): compiles two
+# .ptx files through ptxas + nvdisasm, extracts the per-opcode SASS
+# instruction histogram for each, and prints a side-by-side diff. Lets
+# you compare two codegen variants (e.g. hexa-emit vs nvcc -ptx) by
+# instruction mix WITHOUT a GPU run — bandwidth-bound kernels with equal
+# histograms are equivalent; a divergent histogram localizes the perf
+# gap (extra ld/st, missing FMA fusion, unroll delta).
+#
+# Usage:
+#   gpu_sass_diff <a.ptx> <b.ptx> [-arch=sm_80]
+#
+# Default arch sm_80. Honors $PTXAS / $NVDISASM env overrides.
+#
+# Closes GPU.md round-4 milestone J1.
+
+set -eu
+
+if [ $# -lt 2 ]; then
+  echo "usage: gpu_sass_diff <a.ptx> <b.ptx> [-arch=sm_80]" >&2
+  exit 2
+fi
+
+A="$1"; B="$2"; shift 2
+ARCH="sm_80"
+if [ $# -ge 1 ]; then
+  case "$1" in
+    -arch=*) ARCH="${1#-arch=}" ;;
+  esac
+fi
+
+PTXAS="${PTXAS:-ptxas}"
+NVDISASM="${NVDISASM:-nvdisasm}"
+
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+
+# Build a per-opcode count table for one .ptx → "<count> <opcode>" lines.
+# nvdisasm prints SASS like "/*0010*/  FADD R2, R3, R4 ;" — the opcode is
+# the first all-caps token after the address comment. Strip predicates
+# (@P0) and address comments, take the mnemonic, drop any .modifiers.
+histogram() {
+  "$PTXAS" "$1" -arch="$ARCH" -o "$TMP/cubin" 2>/dev/null
+  "$NVDISASM" "$TMP/cubin" 2>/dev/null \
+    | sed -n 's:^[[:space:]]*/\*[0-9a-fA-F]*\*/[[:space:]]*::p' \
+    | sed 's/^@![A-Za-z0-9]* //; s/^@[A-Za-z0-9]* //' \
+    | awk '{ op=$1; sub(/\..*/, "", op); if (op ~ /^[A-Z]/) print op }' \
+    | sort | uniq -c | awk '{ printf "%s %s\n", $2, $1 }' | sort
+}
+
+histogram "$A" > "$TMP/ha"
+histogram "$B" > "$TMP/hb"
+
+echo "=== SASS histogram diff ($ARCH) ==="
+echo "  A = $A"
+echo "  B = $B"
+echo "---"
+printf "%-20s %8s %8s %8s\n" "opcode" "A" "B" "Δ(B-A)"
+
+# join on opcode (col 1); missing side = 0. Emit only rows where counts differ,
+# plus a totals line.
+join -a1 -a2 -e 0 -o '0,1.2,2.2' "$TMP/ha" "$TMP/hb" | while read -r op ca cb; do
+  d=$((cb - ca))
+  if [ "$d" -ne 0 ]; then
+    printf "%-20s %8d %8d %+8d\n" "$op" "$ca" "$cb" "$d"
+  fi
+done
+
+ta=$(awk '{s+=$2} END{print s+0}' "$TMP/ha")
+tb=$(awk '{s+=$2} END{print s+0}' "$TMP/hb")
+echo "---"
+printf "%-20s %8d %8d %+8d\n" "TOTAL" "$ta" "$tb" "$((tb - ta))"
