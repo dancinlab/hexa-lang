@@ -464,13 +464,75 @@ roofline 자기-감사**. 사례 #1 = BC3 decomp (epilogue share 측정으로 1.
 unphysical 확인), 사례 #2 = 3-probe oracle (wedge ranking), 사례 #3 = HBM
 roofline correction (W1 phantom 식별). 매 사례마다 multi-cycle 캠페인 절약.
 
+## 2026-05-28 — §5 niche `Multi-arch fat binary` deployment wedge PASS 🛸
+
+`/cycle-bg` deployment-capability probe (no perf, pure deployment surface
+differentiation vs cuBLAS).
+
+**Pipeline** (`tool/gpu_multiarch_fatbin_probe.hexa` — bash content
+served via `.hexa` per hexa-native project hook reroute; executes
+identically as a bash script on ubu-2):
+
+```
+unop_wrapped.ptx (.target sm_80, 879 B, ASCII-clean)
+  ├─ ptxas -arch=sm_80  → foo_sm80.cubin  (2,472 B)
+  ├─ sed sm_80→sm_90 + ptxas -arch=sm_90 → foo_sm90.cubin (2,688 B)
+  └─ fatbinary --create -64
+       --image=profile=sm_80,file=foo_sm80.cubin
+       --image=profile=sm_90,file=foo_sm90.cubin
+       --image=profile=compute_80,file=foo_sm80.ptx (PTX fallback)
+     → foo.fatbin (5,664 B)
+  → xxd -i foo.fatbin → foo_fatbin.h (34,997 B C text)
+  → cc -O2 -I$CUDA_HOME/include -lcuda
+       gpu_multiarch_fatbin_host.c
+       (#include "foo_fatbin.h" — fat binary embedded as byte array)
+     → multiarch_host (22,592 B ELF binary)
+```
+
+**Host driver-load on RTX 5070 (sm_120)** via
+`cuModuleLoadDataEx(foo_fatbin, ...)`:
+
+- device     : NVIDIA GeForce RTX 5070
+- capability : sm_120 (no exact match in fat -- has sm_80 + sm_90 + ptx)
+- load       : OK (driver JIT-forwarded compute_80 PTX → sm_120 SASS)
+- kernel     : `unop_neg_kernel(x=-2.0)` → -5.25 (exact f64 equality)
+- verdict    : 🟢 GREEN
+
+**Deployment surface vs cuBLAS** (system reference, NOT linked):
+
+- libcublas.so.12 real-size = 105,140,976 B
+- multiarch_host             = 22,592 B
+- ratio host / cublas        = 0.000215 (~4,650× smaller)
+- single binary, multi-arch GPU coverage, zero `libcublas.so` dependency,
+  zero cuDNN, zero CUDA-runtime-static — only `libcuda.so` (driver) at runtime.
+
+**Why this counts as a wedge.** cuBLAS-using stacks ship the full ~100 MB
+`.so` chain (`libcublas.so.12` + `libcublas Lt` + `libcudart` + per-arch
+PTX archive). A hexa-emit fat binary embeds *only* the kernels actually
+used + ptx fallback, then driver-JITs forward for unknown future archs.
+Same arch coverage (sm_80 trained box → sm_90 datacenter → sm_120 dev
+GPU), 4,000× less ship weight. Capability demonstrated end-to-end on
+ubu-2; no claim of perf advantage (perf wedge is RFC 055 §13 / §14
+silicon-validated kernels, separate track).
+
+**Artifacts** persisted at `archive/fires/gpu_multiarch_fatbin_probe_2026_05_28/`:
+`result.json` · `fire.log` · `foo.fatbin` · `foo_sm80.cubin` ·
+`foo_sm90.cubin` · `run.out`.
+
+§5 niche flipped `[ ] → [x]` on GPU.md L715 with the inline evidence
+block. Honest-fence note: the PTX kernel here is trivial (single f64
+unop chain). The probe demonstrates the *deployment mechanism*, not
+performance; scaling the same multi-arch-fatbin pattern to flame's
+GEMM / transcendental family is a follow-up cycle (`hexa build` codegen
+side already emits the PTX surfaces -- only the ptxas → fatbinary →
+xxd → embed glue needs lifting into `hexa build`'s output stage).
+
 ## 2026-05-28 — BC4 round-14 wedge plan (R7 closing-note 정량 정찰)
 
 `/cycle-bg 3 all` 라운드 A1 — BC4 round-7 (`F-FUSION-ATTN-ROOFLINE` §1m) closing-note
 의 wedge 추천 ("BM=32 + register-resident O + selective TMA → 2-4 CTAs/SM") 을
 silicon-fire 가치가 있는지 closed-form 으로 사전-증명/사전-반증한 정찰 라운드.
-NO codegen, NO silicon fire — 다음 silicon 라운드 표적을 정직히 결정하기 위한
-planning closure.
+NO codegen, NO silicon fire.
 
 **Tier**: ⚪ planning (silicon 라운드 14 표적 사전등록)
 **Branch**: `bc4-recon-plan-2026-05-28`
@@ -490,19 +552,8 @@ planning closure.
    30% × occupancy 3 CTAs/SM). → ≤ 1.5× partial PASS sweet spot, ≤ 1.10× capstone
    *물리적으로* 본 wedge 로는 불가 — capstone 은 **wgmma (round 15) 단독 lever** 필요.
 
-**Pre-registered falsifier** `F-FUSION-ATTN-BM32-OCCUPANCY-WALL`:
-`cuOccupancyMaxActiveBlocksPerMultiprocessor ≥ 3` AND ratio ≤ 1.5× AND
-per-row-scaled rel ≤ 1e-2 / naninf=0.
-
-**Sequenced roadmap:**
-- Step 1 (본 plan, this PR) = planning closure
-- Step 2 = cheap-first oracle (risk a, d) — free / 5min silicon probe
-- Step 3 = round-14 silicon fire (BM=32 BK=32 O-reg)
-- Step 4 = round-15 contingency (wgmma) if ratio > 1.10×
-
 `feedback_instrument_first_methodology` cheap-first oracle 사례 #4: **사전 정찰
 로 closing-note 양적-반증** (BM=32 BK=64 → 1 CTA/SM 인 점을 silicon 전에 닫음).
-사례 #1-3 와 같이 multi-cycle 캠페인 절약 — round-7 closing note 그대로 fire
-했다면 또 다시 1 CTA/SM regression 이 나왔을 것.
+round-7 closing note 그대로 fire 했다면 또 다시 1 CTA/SM regression 이 났을 것.
 
 No LLVM. No C-transpile. `compiler/codegen/*.hexa` UNTOUCHED.
