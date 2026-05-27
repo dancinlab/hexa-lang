@@ -249,3 +249,60 @@ gate 의 novelty 미달.
 (별도 fire). 본 entry 는 ① wall clause (timed silicon) 의 FALSIFIED finding 만.
 GPU.md round-7 BC3 [x] 는 paper_negative_ok terminal 로 유지하되 honest
 inline annotation 추가 (BC4 의 "round-7 5.3x slower break-even" 컨벤션 미러).
+
+## 2026-05-27 — 🟢 BC3 gap decomposition: ≥1.5× claim was unphysical (round-7 follow-up)
+
+직전 BC3 timed wall FALSIFIED 결과 (1.57-13.57× slower) 의 원인을 분해하기 위한
+cheap-first oracle (`feedback_instrument_first_methodology`). cuBLAS standalone
+SGEMM (epilogue 없음) 을 같은 6 shape 에서 timed 측정해서 두 비율로 갭을 분해.
+
+**Tier**: 🟢 SUPPORTED-NUMERICAL (measured decomposition)
+**Branch**: `bc3-gemm-decomp-2026-05-27`
+**Falsifier**: `F-FUSION-EPILOGUE-DECOMP`
+**Artifact**: `archive/fires/fusion_epilogue_gemm_decomp_2026_05_27/{result.json, gemmonly_sweep.log}` + `tool/fusion_epilogue_cublas_gemmonly.cu`
+
+**Decomposition** (ubu-2 RTX 5070 sm_120, cuEvent 20w/200m):
+
+| shape | fused_ms | gemm_only | cublas3 | GEMM-eff gap | epi share | fusion ceiling |
+|---|---|---|---|---|---|---|
+| 256³ | 0.026 | 0.013 | 0.017 | 2.07× | 23.97% | **1.32×** |
+| 512³ | 0.136 | 0.027 | 0.035 | 5.02× | 22.61% | **1.29×** |
+| 1024³ | 1.003 | 0.108 | 0.120 | 9.33× | 10.43% | **1.12×** |
+| 2048³ | 7.922 | 0.706 | 0.752 | 11.21× | 6.04% | **1.06×** |
+| 4096³ | 78.983 | 6.136 | 6.611 | 12.90× | 7.36% | **1.08×** |
+| FFN 4096×11008×4096 | 225.770 | 15.358 | 16.642 | 14.72× | 7.86% | **1.085×** |
+
+- `GEMM-eff gap = fused_ms / gemm_only` (pure inner-loop efficiency)
+- `epi share = (cublas3 - gemm_only) / cublas3 × 100%` (epilogue overhead in baseline)
+- `fusion ceiling = cublas3 / gemm_only` (max speedup if fused matches cuBLAS GEMM exactly)
+
+**Key finding** (`feedback_closure_is_physical_limit`): ≥1.5× target 자체가 **물리
+roofline 위**. cuBLAS-3 의 92% 가 GEMM (large shape) 이고 epilogue 가 8% 만
+차지하므로, **perfect fusion 이라도 1.085× 가 최대** (FFN-shape). 작은 shape
+일수록 epilogue 비중 ↑ (256³ 의 24%, 천장 1.32×). 모든 shape M·N ≥ 1024 에서
+1.5× 는 물리적으로 불가능.
+
+**Honest closure target 재정의**: BC3 의 정직한 닫힘 = ratio 가 fusion ceiling
+에 근접 (1.06-1.32× shape-dependent, 1.5× 가 아님). 원 claim 은 ROOFLINE 위반.
+
+**Next-wedge feasibility 재평가**: N204 roofline GEMM 툴킷 transplant 의 best-case
+가 1.085× FFN (cuBLAS 매칭) 이라 multi-cycle 캠페인 spend 가 ceiling-bounded.
+직전 BC3 round 의 "1.085× 천장" 인식 BEFORE 가 cost-bearing 캠페인 회피 — 
+`feedback_instrument_first_methodology` 의 cheap-first oracle 패턴.
+
+**대체 wedge 후보** (더 큰 fusion ceiling):
+- **BC4 attention**: inner work 가 더 무거움 (online softmax + 2 GEMMs + HBM
+  dependency chain). cuBLAS-TC 3-launch 의 더 큰 부분이 epilogue + HBM round-trip.
+  round-7 5.3-6.9× FALSIFIED 였으나 (occupancy collapse), wedge ceiling 자체는
+  BC3 보다 높음.
+- **Small-M batch inference**: MoE expert dispatch 등에서 M 작고 K·N 큰 shape,
+  epilogue share ↑ → fusion ceiling ↑.
+- **§5j top-k+GEMM fusion**: top-k 가 N 차원 reduction + GEMM 결과 의존. cuBLAS
+  에선 분리 launch + intermediate K×top_K HBM round-trip → epilogue share 가
+  크고 fusion ceiling 1.5-2× 가능 (top_K << N 일 때).
+
+**Methodology lesson**: cost-bearing fire (e.g., N204 toolkit transplant
+multi-cycle) 전에 cheap GEMM-only oracle 한 번이 ROOFLINE 정직 산출.
+`feedback_instrument_first_methodology` 4 rules (통합 스칼라 금지 · cheap-first
+oracle · faithful model · over-claim 0) 의 cheap-first oracle 패턴이 multi-
+cycle 자원 절약.
