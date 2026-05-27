@@ -356,8 +356,9 @@ fn _unpackneg(pk: [int]) -> [int] {
     let den6 = _M(den4, den2)
     let mut x = _M(_M(num, den6), den)
     x = _pow2523(x)
-    x = _M(_M(x, num), den)
-    x = _M(x, den)
+    x = _M(_M(x, num), den)   // t*num*den
+    x = _M(x, den)            // t*num*den^2
+    x = _M(x, den)            // t*num*den^3  (TweetNaCl M(r[0],t,den) — was MISSING)
     let chk = _M(_S(x), den)
     let mut xx = _gfc(x)
     if _neq25519(chk, num) != 0 { xx = _M(x, _gf_I()) }
