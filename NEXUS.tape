@@ -15,7 +15,7 @@
   scope    = "cross-project STAR hub (@D g68) — all repos draw from here · NOT a peer inter-project mesh"
   ssot     = "this file (NEXUS.tape) + compiler/atlas/embedded.gen.hexa (live atom registry)"
   governs  = "commons @D g67 (intra-project reuse) + g68 (shared substrate hub)"
-  topology = "star: 8 consumer repos -> hexa-lang (demiurge, anima, airgenome, echoes, ghost, growth, forge, hexa-codex)"
+  topology = "star: 3 bidirectional peers <-> hexa-lang (demiurge, anima, phanes) · unidirectional consumers open-ended (peer NEXUS.tape SSOT, not enumerated here)"
 
 # === 1. provides[] registry — stable stdlib module families ===
 
@@ -55,7 +55,12 @@
   origin    = "folded from anima HEXAD/LIFE H_278 faithful-Φ engine (g68 cross-repo · g61 shared substrate)"
   evidence  = "VERIFY-KIT V5.1 promote · .verdicts/verify-kit-iit-promote/v5_1.txt · self-contained (zero anima-local deps)"
 
-# === 2. hub -> consumer star edges (from-hexa · verified by sibling NEXUS.tape evidence) ===
+@X p_kick := "hexa kick engine (OUROBOROS discovery loop)" :: provides [active]
+  primitive = "hexa kick --seed/--rounds/--engine · 36-lens gap drill · auto-fold to atlas on verify"
+  consumers = "phanes (Hosted autonomous-discovery platform — server-side hexa kick driver)"
+  evidence  = "phanes DESIGN.log.md L93/L102/L196/L224 · CHANGELOG t_downstream_discipline (consume hexa kick, patch upstream)"
+
+# === 2. hub <-> peer star edges (bidirectional peers only · unidirectional consumers tracked at peer NEXUS.tape) ===
 
 @X e1 := "stdlib/material/magnet -> demiurge" :: reuse-edge [active]
   provides  = "hexa-lang stdlib/material/magnet"
@@ -75,11 +80,17 @@
   reused_by = "demiurge ANTIMATTER (V4 ledger 7/7 process stages closed)"
   evidence  = "demiurge ANTIMATTER.md · 7 merged PRs (#157·#158·#159·#162·#164·#166·#168)"
 
-@X e4 := "compiler/atlas -> ALL projects" :: reuse-edge [active]
+@X e4 := "compiler/atlas <-> bidirectional peers" :: reuse-edge [active]
   provides  = "compiler/atlas (live verified-atom registry)"
   primitive = "embedded.gen.hexa SSOT + atlas CLI"
-  reused_by = "demiurge · anima · airgenome · echoes · ghost · growth · forge · hexa-codex"
-  evidence  = "every NEXUS.tape's discovery-substrate pointer · 22+ atoms folded by ANTIMATTER alone"
+  reused_by = "demiurge · anima · phanes (3 bidirectional peers) — unidirectional consumers open-ended, peer NEXUS.tape SSOT"
+  evidence  = "22+ atoms folded by ANTIMATTER alone · demiurge UFO atoms fold-back · phanes hexa kick auto-fold"
+
+@X e5 := "hexa kick engine -> phanes" :: reuse-edge [active]
+  provides  = "hexa-lang hexa kick engine (OUROBOROS discovery loop)"
+  primitive = "hexa kick --seed/--rounds · auto-fold verified atoms to atlas"
+  reused_by = "phanes (server-side hexa kick driver · tenant objective+verifier -> OUROBOROS loop -> verified catalog)"
+  evidence  = "phanes DESIGN.log.md L93/L102/L196 · CHANGELOG t_downstream_discipline · README built-on pointer"
 
 # === 3. candidate edges (stdlib families with no project NEXUS.tape edge yet) ===
 
@@ -120,24 +131,26 @@
   query     = "hexa atlas stats · hexa atlas lookup <id> · hexa atlas lookup --prefix=<p>"
   policy    = "this NEXUS.tape lists STABLE module-level provides; per-atom discoveries are atlas-backed (not enumerated here · keeps NEXUS.tape stable as stdlib grows)"
 
-@N n2 := "consumer star — 8 distinct projects draw from this hub" :: note [active]
-  consumers = "demiurge · anima · airgenome · echoes(=canon) · ghost · growth · forge · hexa-codex"
+@N n2 := "peer star — 3 bidirectional peers <-> hexa-lang (unidirectional consumers open-ended)" :: note [active]
+  peers       = "demiurge · anima · phanes (bidirectional — hexa-lang knows them, they know hexa-lang)"
+  consumers   = "airgenome · echoes · hexa-codex · ... (unidirectional, hexa-lang DOES NOT enumerate — peer NEXUS.tape's from-hexa[] is SSOT)"
+  scope_rule  = "hub records hub<->peer only. peer-peer mesh (e.g. {demiurge,anima,phanes}<->echoes) lives in peer NEXUS.tape, NOT here. keeps hub SSOT stable."
   graph <<~STAR
-                       +---------- hexa-lang stdlib + atlas ----------+
-                       |    (canonical code home d3 · shared SSOT)    |
-                       +----------------------+-----------------------+
-                                              |
-              +----------------+--------------+--------------+----------------+
-              |                |              |              |                |
-              v                v              v              v                v
-          demiurge          anima         airgenome        ghost           growth
-              ^                ^              ^              ^                ^
-              |                |              |              |                |
-          (from-hexa: each repo's NEXUS.tape records what it consumes from the hub)
-                                              ^
-                              +---------------+---------------+
-                              |               |               |
-                            echoes          forge        hexa-codex
+              +---------- hexa-lang stdlib + atlas + kick ----------+
+              |        (canonical code home d3 · shared SSOT)       |
+              +----------------------+------------------------------+
+                                     ^ ^ ^   (bidirectional)
+                                     v v v
+                  +------------------+---+----+------------------+
+                  v                      v                       v
+              demiurge                 anima                   phanes
+                                                                 :
+                                                          (open-ended
+                  ^                      ^                  unidirectional
+                  |                      |                  consumers — hexa
+              airgenome · echoes · hexa-codex · ...         doesn't know,
+                                                            peer NEXUS.tape
+                                                            is SSOT)
   STAR
 
 @N n3 := "usage protocol — atlas-first + hub-consume (g67 + g68)" :: note [active]
