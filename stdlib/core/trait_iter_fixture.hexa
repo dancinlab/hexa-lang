@@ -1,0 +1,117 @@
+// HEXA Standard Library — core/trait_iter_fixture
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Iterator cursor fixture — `iter_next` pattern for array iteration
+// without an explicit index variable. Pure additive sibling of
+// `stdlib/core/trait_design_fixture.hexa` (frontier B5.trait-iter).
+//
+// RUNTIME.flip B5.trait-iter.
+//
+// Surface (monomorphic int / str — typechecker lacks parametric generics):
+//   struct IterIntState { items: [int], pos: int }
+//   struct IterStrState { items: [str], pos: int }
+//   pub fn iter_int_new(items: [int]) -> IterIntState
+//   pub fn iter_int_has_next(it: IterIntState) -> bool
+//   pub fn iter_int_next(it: IterIntState) -> int
+//   pub fn iter_int_advance(it: IterIntState) -> IterIntState
+//   (analogous iter_str_new / has_next / next / advance for [str])
+//
+// Design notes:
+//   - Immutable cursor progression — `iter_int_advance` returns a NEW
+//     IterIntState with `pos = pos + 1` rather than mutating in place.
+//     Avoids mutable state and matches `@pure` capability.
+//   - `iter_int_next` returns the CURRENT item only; the caller drives
+//     progression by calling `iter_int_advance` separately. This split
+//     (peek-then-advance) keeps both fns pure and total under the
+//     `iter_int_has_next` precondition.
+//   - Mirrors Rust's `Iterator::next` shape pulled apart into pure
+//     peek + advance, the same pattern used by lens-style immutable
+//     cursors (e.g. Haskell `uncons`).
+//   - Monomorphic int / str variants because the typechecker lacks
+//     parametric generics; mirrors the convention established by sibling
+//     `trait_design_fixture.hexa` and `option_result_iter.hexa`
+//     (frontier B4/B5 cluster).
+//
+// Usage idiom (loop without an explicit index):
+//
+//     let it0 = iter_int_new(items)
+//     // while iter_int_has_next(it):
+//     //     let v = iter_int_next(it)
+//     //     // ... use v ...
+//     //     it = iter_int_advance(it)
+//
+// Planned trait surface (RFC §iter — future):
+//
+//   trait Iter[T] {
+//       fn has_next(self) -> bool
+//       fn next(self)     -> T
+//       fn advance(self)  -> Self
+//   }
+
+// -- Iter — [int] cursor --
+
+struct IterIntState {
+    items: [int],
+    pos:   int
+}
+
+@pure
+pub fn iter_int_new(items: [int]) -> IterIntState {
+    return IterIntState {
+        items: items,
+        pos:   0
+    }
+}
+
+@pure
+pub fn iter_int_has_next(it: IterIntState) -> bool {
+    return it.pos < len(it.items)
+}
+
+@pure
+pub fn iter_int_next(it: IterIntState) -> int {
+    return it.items[it.pos]
+}
+
+@pure
+pub fn iter_int_advance(it: IterIntState) -> IterIntState {
+    return IterIntState {
+        items: it.items,
+        pos:   it.pos + 1
+    }
+}
+
+// -- Iter — [str] cursor --
+
+struct IterStrState {
+    items: [str],
+    pos:   int
+}
+
+@pure
+pub fn iter_str_new(items: [str]) -> IterStrState {
+    return IterStrState {
+        items: items,
+        pos:   0
+    }
+}
+
+@pure
+pub fn iter_str_has_next(it: IterStrState) -> bool {
+    return it.pos < len(it.items)
+}
+
+@pure
+pub fn iter_str_next(it: IterStrState) -> str {
+    return it.items[it.pos]
+}
+
+@pure
+pub fn iter_str_advance(it: IterStrState) -> IterStrState {
+    return IterStrState {
+        items: it.items,
+        pos:   it.pos + 1
+    }
+}
