@@ -1,0 +1,174 @@
+// HEXA Standard Library — lsp/completion_pub_fn_index
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Walk a `.hexa` source body and index every `pub fn` declaration with its
+// signature line and the immediately-preceding single-line `//` docstring
+// (RUNTIME.flip B8.lsp-completion-pub-fn-index). Pure additive — caller
+// arranges the directory walk (e.g. via stdlib `read_file` + `list_dir`
+// over `stdlib/**/*.hexa`) and feeds each file's full text plus its path
+// to `lsp_pub_fn_index_scan_text`. The text-level scan keeps this module
+// independent of any filesystem capability — same approach as the sibling
+// scan-tools in `stdlib/cert/json_scan.hexa` and `stdlib/stdlib_cli.hexa`.
+//
+// Recognised forms (first column, NO leading whitespace — matches the
+// stdlib convention that `pub fn` declarations are always file-scope):
+//
+//   pub fn <name>(<params>) -> <ret> {
+//   pub fn <name>(<params>) -> <ret>
+//   pub fn <name>(<params>) {
+//   pub fn <name>(<params>)
+//
+// The signature returned is the WHOLE line minus the leading `pub ` prefix
+// and minus any trailing `{` (with trailing whitespace trimmed). This
+// matches the spec for `lsp_pub_fn_signature_parse`.
+//
+// Docstring rule: any single `//` line *immediately* preceding the
+// `pub fn` line (no blank line between them) is captured verbatim
+// (with the `//` prefix and one leading space removed). Multi-line
+// doc blocks fold to the FIRST such immediately-preceding line — keep
+// the LSP completion preview narrow per the spec ("first-line doc").
+//
+// Surface:
+//   struct PubFnEntry { name, signature, file_path, first_line_doc }
+//   pub fn lsp_pub_fn_index_scan_text(file_path, source_text) -> [PubFnEntry]
+//   pub fn lsp_pub_fn_signature_parse(line) -> string
+//   pub fn lsp_pub_fn_extract_name(signature) -> string
+//
+// Capability profile: pure — string scan only, no I/O, no globals.
+
+struct PubFnEntry {
+    name: string,
+    signature: string,
+    file_path: string,
+    first_line_doc: string,
+}
+
+// ───────────────────────────────────────────────────────────────────
+// Internal helpers (parse-only; no I/O)
+// ───────────────────────────────────────────────────────────────────
+
+// Strip ASCII whitespace from both ends. Mirror of `_trim` in
+// stdlib/stdlib_cli.hexa — duplicated here to keep this module
+// dependency-free (sibling scan-tools follow the same convention).
+@pure
+fn _lsp_trim(s: string) -> string {
+    let n = len(s)
+    let mut a = 0
+    while a < n {
+        let c = s.substring(a, a + 1)
+        if c != " " && c != "\t" && c != "\r" { break }
+        a = a + 1
+    }
+    let mut b = n
+    while b > a {
+        let c = s.substring(b - 1, b)
+        if c != " " && c != "\t" && c != "\r" { break }
+        b = b - 1
+    }
+    return s.substring(a, b)
+}
+
+// Linear substring search starting at `from`. Returns -1 if not found.
+@pure
+fn _lsp_index_of(hay: string, needle: string, from: int) -> int {
+    let n = len(hay)
+    let m = len(needle)
+    if m == 0 { return from }
+    if m > n { return -1 }
+    let mut i = from
+    while i + m <= n {
+        if hay.substring(i, i + m) == needle { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+// ───────────────────────────────────────────────────────────────────
+// Public surface
+// ───────────────────────────────────────────────────────────────────
+
+// Strip leading `pub ` and any trailing `{` from a `pub fn ...` line.
+// Whitespace around the result is trimmed; the inner shape is left
+// untouched so the LSP can render the signature verbatim.
+@pure
+pub fn lsp_pub_fn_signature_parse(line: string) -> string {
+    let trimmed = _lsp_trim(line)
+    let mut s = trimmed
+    if s.starts_with("pub ") {
+        s = s.substring(4, len(s))
+    }
+    // Drop a trailing `{` (with any whitespace before it).
+    let mut n = len(s)
+    while n > 0 {
+        let c = s.substring(n - 1, n)
+        if c == " " || c == "\t" || c == "\r" { n = n - 1; continue }
+        if c == "{" { n = n - 1; continue }
+        break
+    }
+    return _lsp_trim(s.substring(0, n))
+}
+
+// Pull the bare identifier from a signature string. Expects a `fn `
+// keyword followed by the name followed by `(`. Returns "" if the
+// shape is unrecognised — caller treats that as "skip this line".
+@pure
+pub fn lsp_pub_fn_extract_name(signature: string) -> string {
+    let fn_at = _lsp_index_of(signature, "fn ", 0)
+    if fn_at < 0 { return "" }
+    let name_start = fn_at + 3
+    let n = len(signature)
+    if name_start >= n { return "" }
+    let paren_at = _lsp_index_of(signature, "(", name_start)
+    if paren_at < 0 { return "" }
+    return _lsp_trim(signature.substring(name_start, paren_at))
+}
+
+// Walk `source_text` line-by-line and emit one `PubFnEntry` per
+// file-scope `pub fn ...` declaration. `first_line_doc` is the
+// `//` comment line immediately preceding the declaration with
+// the `//` prefix (and one space, when present) stripped; empty
+// string when no such line precedes.
+//
+// The scan ignores indented `pub fn` lines — stdlib convention
+// places `pub fn` at column 0, and an indented match is almost
+// always a nested impl/test stub that should not appear in the
+// global completion index.
+@pure
+pub fn lsp_pub_fn_index_scan_text(file_path: string, source_text: string) -> [PubFnEntry] {
+    let lines = source_text.split("\n")
+    let total = len(lines)
+    let mut out: [PubFnEntry] = []
+    let mut i = 0
+    while i < total {
+        let line = lines[i]
+        if line.starts_with("pub fn ") {
+            let sig = lsp_pub_fn_signature_parse(line)
+            let name = lsp_pub_fn_extract_name(sig)
+            if len(name) > 0 {
+                let mut doc = ""
+                if i > 0 {
+                    let prev = _lsp_trim(lines[i - 1])
+                    if prev.starts_with("//") {
+                        // Drop the `//` and a single leading space, if any.
+                        let mut d = prev.substring(2, len(prev))
+                        if len(d) > 0 && d.substring(0, 1) == " " {
+                            d = d.substring(1, len(d))
+                        }
+                        doc = d
+                    }
+                }
+                let entry = PubFnEntry {
+                    name: name,
+                    signature: sig,
+                    file_path: file_path,
+                    first_line_doc: doc,
+                }
+                out = out + [entry]
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
