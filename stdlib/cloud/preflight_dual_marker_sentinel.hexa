@@ -1,0 +1,154 @@
+// stdlib/cloud/preflight_dual_marker_sentinel.hexa — pre-job + post-job
+// dual-marker sentinel for remote-dispatch jobs.
+//
+// Purpose: detect silent-kill / truncation of a dispatched job by bracketing
+// the job's stdout/stderr stream with a START_MARKER token (emitted by the
+// wrapper script BEFORE the job) and an END_MARKER token (emitted AFTER the
+// job, carrying the exit code). The post-run watcher scans the log text for
+// BOTH markers and reports the outcome — both-present means the job ran to
+// completion; missing either marker means the stream was cut.
+//
+// Origin: RFC 091 §2.4 (preflight dual-marker sentinel). Pure additive —
+// emit two tokens, scan for two prefixes. No external LLM, no pod-spinup,
+// no network egress.
+//
+// Style: matches sibling `stdlib/cloud/preflight.hexa` (closed-form helpers,
+// integer arithmetic, struct-returning queries, [pure] capability).
+//
+// Capabilities: [pure] — no I/O, no allocations beyond returned values.
+
+// ── marker emitters ──────────────────────────────────────────────────
+
+// preflight_sentinel_start_marker — emit the START token for `job_id`.
+//
+// Returns: "<<<PREFLIGHT_START:" + job_id + ":" + <epoch-seconds> + ">>>"
+//
+// The epoch field is a placeholder (0) at hexa-stdlib emit time; the
+// real-use wrapper script (POSIX sh / bash) is expected to substitute
+// the current `date +%s` value before stamping the log. The watcher
+// matches on the marker PREFIX so the exact epoch field is opaque.
+//
+// Capabilities: [pure]
+pub fn preflight_sentinel_start_marker(job_id: str) -> str {
+    // Fixed timestamp placeholder — wrapper script injects real epoch.
+    return "<<<PREFLIGHT_START:" + job_id + ":" + to_string(0) + ">>>"
+}
+
+// preflight_sentinel_end_marker — emit the END token for `job_id`.
+//
+// Returns: "<<<PREFLIGHT_END:" + job_id + ":exit=" + <exit_code> + ">>>"
+//
+// The exit code is the literal int value (negative codes allowed,
+// e.g. -1 for "killed before exit"). The watcher matches on the
+// marker PREFIX, treating the exit field as opaque.
+//
+// Capabilities: [pure]
+pub fn preflight_sentinel_end_marker(job_id: str, exit_code: int) -> str {
+    return "<<<PREFLIGHT_END:" + job_id + ":exit=" + to_string(exit_code) + ">>>"
+}
+
+// ── outcome record ──────────────────────────────────────────────────
+
+// PreflightSentinelOutcome — terminal verdict of the dual-marker scan.
+//
+// kind ∈ {"both-present", "start-only", "end-only", "neither", "exit-nonzero"}
+//   - both-present  = START + END both seen; exit_code == 0
+//   - exit-nonzero  = START + END both seen; exit_code != 0
+//   - start-only    = START seen, END absent → job stream was cut after start
+//   - end-only      = END seen, START absent → log truncated from the front
+//   - neither       = no marker present → wrapper never fired (no dispatch?)
+//
+// start_found / end_found mirror the marker presence for caller logic.
+// exit_code carries the END marker's exit field, or 0 if END was absent.
+pub struct PreflightSentinelOutcome {
+    kind:        str,
+    start_found: bool,
+    end_found:   bool,
+    exit_code:   int
+}
+
+// ── watcher ──────────────────────────────────────────────────────────
+
+// preflight_sentinel_watch — scan `log_text` for the START + END markers
+// scoped to `job_id`, and return a terminal-verdict outcome record.
+//
+// Match strategy: prefix-only. The watcher checks for
+//   START prefix = "<<<PREFLIGHT_START:" + job_id + ":"
+//   END   prefix = "<<<PREFLIGHT_END:"   + job_id + ":exit="
+// using `str.contains`. The trailing epoch / exit-code fields are opaque
+// — the watcher does NOT parse them out (exit_code in the outcome is the
+// END-marker exit value when both markers are present; otherwise 0).
+//
+// Pure: zero I/O, no allocations beyond the returned struct.
+//
+// Capabilities: [pure]
+pub fn preflight_sentinel_watch(log_text: str, job_id: str) -> PreflightSentinelOutcome {
+    let start_prefix = "<<<PREFLIGHT_START:" + job_id + ":"
+    let end_prefix   = "<<<PREFLIGHT_END:"   + job_id + ":exit="
+
+    let start_found = log_text.contains(start_prefix)
+    let end_found   = log_text.contains(end_prefix)
+
+    // Best-effort exit code extraction: when END is present, scan the
+    // segment after the END prefix up to the closing ">>>" or a non-digit
+    // (skipping a leading '-' for negative codes).
+    let mut exit_code = 0
+    if end_found {
+        // Locate END prefix start, then read digits after `exit=`.
+        let n     = len(log_text)
+        let pn    = len(end_prefix)
+        let mut i = 0
+        let mut found_at = -1
+        while i + pn <= n {
+            if log_text.substring(i, i + pn) == end_prefix {
+                found_at = i + pn
+                i = n  // break
+            } else {
+                i = i + 1
+            }
+        }
+        if found_at >= 0 {
+            let mut j = found_at
+            let mut sign = 1
+            if j < n && log_text.substring(j, j + 1) == "-" {
+                sign = -1
+                j = j + 1
+            }
+            let mut v = 0
+            let mut any = 0
+            while j < n {
+                let cc = char_code(log_text.substring(j, j + 1))
+                if cc >= 48 && cc <= 57 {
+                    v = v * 10 + (cc - 48)
+                    any = 1
+                    j = j + 1
+                } else {
+                    j = n  // break
+                }
+            }
+            if any == 1 {
+                exit_code = sign * v
+            }
+        }
+    }
+
+    let mut kind = "neither"
+    if start_found && end_found {
+        if exit_code == 0 {
+            kind = "both-present"
+        } else {
+            kind = "exit-nonzero"
+        }
+    } else if start_found {
+        kind = "start-only"
+    } else if end_found {
+        kind = "end-only"
+    }
+
+    return PreflightSentinelOutcome {
+        kind:        kind,
+        start_found: start_found,
+        end_found:   end_found,
+        exit_code:   exit_code
+    }
+}
