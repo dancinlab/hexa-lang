@@ -1,5 +1,32 @@
 # INBOX — log
 
+## 2026-05-28 — 🟠 OPEN · hexa cloud — 3 terminal/transport classification gaps (from demiurge RTSC 11-job campaign)
+
+데모더지 RTSC DFT 캠페인 (11 pod/pool 잡 · vast + ubu pool) 운영 중 `hexa cloud` 의 terminal/transport 판정에서 3 gap 노출. 모두 verbatim evidence 보유.
+
+### gap 1 — `cloud poll` / `cloud tail --until` 가 exit-code/STOP 미인지 → walltime-stop 을 SUCCESS 로 오판
+> **증상** (Mg₂IrH₆ phonon, ubu-2): ph.x 가 22.5h WALL 돌다 `max_seconds=80000` 도달 → QE 가 `Maximum CPU time exceeded` 후 **"JOB DONE."** 줄 출력 (QE routine 정상종료 print) + 직후 `STOP 1` ×6 + `prterun ... exit code 1`. dyn1=0 bytes (q-point 1 미완 · rep#9 중단). 즉 **timed-out-resumable** 인데 `JOB DONE` 마커만 보면 SUCCESS.
+> **현 동작**: `cloud tail --until` default regex = `JOB DONE|OOMKilled|Traceback|crash` → "JOB DONE" 매칭 → exit 0 (clean end) 보고. 실제론 비정상 종료 + 재개 필요.
+> **recommend**: terminal taxonomy 3분류 —
+>   - `DONE` = terminal-marker ∧ trailing exit 0 ∧ no `STOP <n>`/`Error in routine`/`Maximum CPU time`
+>   - `TIMEOUT-RESUMABLE` = `Maximum CPU time exceeded` / `max_seconds` (recover 파일 있으면 재개)
+>   - `CRASHED` = `STOP <n>` (n≠0) / `Error in routine` / non-zero prterun exit
+>   `cloud poll`/`tail` 가 이 3-tier 를 exit code 로 반영 (현 0=clean-only 외에 3=resumable · 4=crashed). caller (watcher / /system) 가 false-DONE 회피.
+
+### gap 2 — `cloud exec` transient gateway-255 ↔ fatal pod-down 미분류
+> **증상** (vast ssh9/ssh6): ~20분 sustained SSH-proxy outage. `nc -zv` TCP **open** · `cloud list` 계약 **live** · 그러나 `cloud exec`/`copy-to` 모두 **exit 255** (SSH handshake fail). 20분 후 자연 회복 (transient gateway fault, pod 정상). 키(id_vast_anima)·네트워크 정상.
+> **현 동작**: exit 255 = generic "ssh transport drop" (cloud-guard 가 "Stop retrying" 권고). transient(게이트웨이) vs fatal(pod-dead) 구분 없음 → caller 가 "재시도 가능" vs "down/reconcile" 결정 못 함.
+> **recommend**: 255 sub-classification — `255 ∧ TCP-open(nc) ∧ contract-live(list)` = `TRANSIENT-GATEWAY` (retry-with-backoff 권고) · `255 ∧ TCP-closed` = `POD-DOWN` (reconcile/down 권고). `cloud exec --probe` 또는 exit code 분기 (255=generic / 5=transient-gateway / 6=pod-down).
+
+### gap 3 — `cloud preflight` walltime sizing (DFT/phonon) — GPU-mem stub 확장
+> **증상**: Mg₂IrH₆ (9-atom metallic Ir-d, 2×2×2 q) 의 `max_seconds=80000`(22h) 이 ~3× 과소 → rep#9 에서 timeout. recover 로 손실 0 이지만 1-stop 발생.
+> **현 동작**: `cloud preflight` = GPU mem-budget 만 (RFC 091 stub).
+> **recommend**: `cloud preflight --kind dft-phonon --atoms N --nq M [--metallic]` → 닫힌형 `max_seconds` 추정 (atoms × n_q × metallic-factor) + "recover=.true. 전제 넉넉히 설정" 권고. 사전 under-size flag.
+
+**공통 가치**: gap 1·2 가 caller(watcher/`/system` 관제탑)의 terminal 오판을 근본 차단 — 현재는 caller 마다 `grep "JOB DONE" + STOP 모순` 휴리스틱 재작성 (데모더지 watcher 가 polymorph false-DONE 으로 1회 오탐). CLI 가 3-tier exit code 를 주면 caller 단순화 + 정합.
+
+**evidence 파일** (demiurge): `~/rtsc_mg2irh6_polymorph/ph.out` (JOB DONE + STOP 1 + Maximum CPU) · `pods.temp.json` (11-job manifest) · sidecar `/system` 0.2.0 (이 gap 들의 caller-side workaround 현황).
+
 ## 2026-05-28T — 🟠 OPEN · cloud forget — accept ssh-form / IP / alias pod_id (registry cleanup asymmetry)
 
 `hexa cloud reconcile` 는 GHOST 후보로 numeric provider-id 외에 ssh-form (`root@141.195.21.87` · `ssh1.vast.ai` · `root@ssh9.vast.ai`) + alias (`ubu-2`) + edge-case (`--help` adopted ghost) 까지 모두 잡아 표시하는데, `hexa cloud forget <pod_id>` 는 numeric provider-id 만 허용 (`registry: refusing non-pod-id 'root@<ip>' (expected a provider instance-id; use cloud adopt <id> to track an existing pod)`). 결과 cleanup loop 가 절반만 동작 — anima session 에서 36 GHOST 중 16 만 forget 성공 (numeric only), 20 ssh-form 은 모두 거부.
