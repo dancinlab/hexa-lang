@@ -1,0 +1,57 @@
+// HEXA Standard Library — crypto/x509_chain
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// X.509 certificate chain validation orchestrator (RFC 5280 §6 minimal) —
+// pure hexa. Composes the verified x509_min (TBS / sig / pubkey extract +
+// Ed25519 sig verify) with x509_validity (UTCTime/GeneralizedTime + window
+// check) to validate a multi-cert Ed25519 chain end-to-end:
+//   - each intermediate cert's signature verifies under its issuer's pubkey
+//   - the topmost cert's signature verifies under the supplied trust anchor
+//   - every cert is within its notBefore..notAfter window at `now`
+//
+// RSA / ECDSA chain support waits on those signature primitives landing.
+// let-mut idiom (#1506).
+//
+// Surface:
+//   pub fn x509_chain_verify_ed25519(
+//       chain: [[int]],        — DER certs; chain[0]=leaf, chain[N-1]=topmost
+//       trust_anchor_pub: [int], — issuer pubkey of chain[N-1] (or chain[N-1].pubkey for self-signed root)
+//       now: [int]               — [Y,M,D,h,m,s]
+//   ) -> bool
+
+use "stdlib/crypto/x509_min"
+use "stdlib/crypto/x509_validity"
+use "stdlib/crypto/ed25519"
+
+@pure
+pub fn x509_chain_verify_ed25519(chain: [[int]], trust_anchor_pub: [int], now: [int]) -> bool {
+    let n = len(chain)
+    if n < 1 { return false }
+    let mut i = 0
+    while i < n {
+        let cert = chain[i]
+        // 1. validity window
+        if !x509_validity_contains(cert, now) { return false }
+        // 2. signature against the next cert's pubkey (or trust anchor for topmost)
+        let tbs = x509_tbs_bytes(cert)
+        let sig = x509_signature(cert)
+        if len(sig) != 64 { return false }
+        let mut issuer_pub: [int] = []
+        if i + 1 < n {
+            // next cert in chain is the issuer
+            let mut j = 0
+            let next_pk = x509_subject_public_key(chain[i + 1])
+            while j < len(next_pk) { issuer_pub.push(next_pk[j]); j = j + 1 }
+        } else {
+            // topmost cert: issuer is the trust anchor
+            let mut j = 0
+            while j < len(trust_anchor_pub) { issuer_pub.push(trust_anchor_pub[j]); j = j + 1 }
+        }
+        if len(issuer_pub) != 32 { return false }
+        if !ed25519_verify(issuer_pub, tbs, sig) { return false }
+        i = i + 1
+    }
+    return true
+}
