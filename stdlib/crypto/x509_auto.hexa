@@ -5,13 +5,14 @@
 //
 // X.509 signature-algorithm auto-dispatch — pure hexa. Reads a cert's
 // signatureAlgorithm OID (the 2nd child of the outer Certificate SEQUENCE)
-// and routes self-verification to the right primitive: Ed25519 (x509_min) or
-// ECDSA-P256 (x509_p256). A single entry point `x509_verify_self_auto` that
-// handles both cert families. let-mut idiom (#1506).
+// and routes self-verification to the right primitive: Ed25519 (x509_min),
+// ECDSA-P256 (x509_p256), or RSA-PKCS#1-v1.5/SHA-256 (x509_rsa). A single entry
+// point `x509_verify_self_auto` handling all three cert families. let-mut (#1506).
 //
 // Recognized signatureAlgorithm OIDs:
 //   Ed25519        1.3.101.112          OID value bytes 2b 65 70
 //   ecdsa-SHA256   1.2.840.10045.4.3.2  OID value bytes 2a 86 48 ce 3d 04 03 02
+//   sha256WithRSA  1.2.840.113549.1.1.11 OID value bytes 2a 86 48 86 f7 0d 01 01 0b
 //
 // Surface:
 //   pub fn x509_cert_sig_alg(cert: [int]) -> int   — 0=Ed25519, 1=ECDSA-P256, -1=unknown
@@ -20,9 +21,11 @@
 use "stdlib/crypto/asn1_der"
 use "stdlib/crypto/x509_min"
 use "stdlib/crypto/x509_p256"
+use "stdlib/crypto/x509_rsa"
 
 let X509_ALG_ED25519: int = 0
 let X509_ALG_ECDSA_P256: int = 1
+let X509_ALG_RSA_PKCS1_SHA256: int = 2
 
 // detect the signatureAlgorithm OID → algorithm id
 @pure
@@ -50,6 +53,14 @@ pub fn x509_cert_sig_alg(cert: [int]) -> int {
             return X509_ALG_ECDSA_P256
         }
     }
+    // sha256WithRSAEncryption: 9-byte OID 2a 86 48 86 f7 0d 01 01 0b
+    if n == 9 {
+        if (cert[v] & 0xFF) == 0x2a && (cert[v+1] & 0xFF) == 0x86 && (cert[v+2] & 0xFF) == 0x48
+            && (cert[v+3] & 0xFF) == 0x86 && (cert[v+4] & 0xFF) == 0xf7 && (cert[v+5] & 0xFF) == 0x0d
+            && (cert[v+6] & 0xFF) == 0x01 && (cert[v+7] & 0xFF) == 0x01 && (cert[v+8] & 0xFF) == 0x0b {
+            return X509_ALG_RSA_PKCS1_SHA256
+        }
+    }
     return -1
 }
 
@@ -59,5 +70,6 @@ pub fn x509_verify_self_auto(cert: [int]) -> bool {
     let alg = x509_cert_sig_alg(cert)
     if alg == X509_ALG_ED25519 { return x509_verify_self_ed25519(cert) }
     if alg == X509_ALG_ECDSA_P256 { return x509_verify_self_p256(cert) }
+    if alg == X509_ALG_RSA_PKCS1_SHA256 { return x509_verify_self_rsa(cert) }
     return false
 }
