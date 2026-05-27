@@ -298,12 +298,33 @@ static void *__attribute__((noinline)) hxlcl_memcpy(void *dst, const void *src, 
     for (size_t i = 0; i < n; i++) d[i] = s[i];
     return dst;
 }
+/* F3 ACTIVATION RUNBOOK · Path A — hxlcl_memset self-emit slot.
+ *
+ * DEFAULT build (HEXA_RT_SELFEMIT undefined): the file-local `static`
+ * definition below is used — clang inlines TU-internal calls and pulls in
+ * ZERO libc `memset` extern (preserves the B9.3/RFC-063 0-libc-extern
+ * freestanding invariant). This is the unchanged behavior.
+ *
+ * SELF-EMIT build (HEXA_RT_SELFEMIT defined): `hxlcl_memset` becomes an
+ * `extern` declaration (no body here); the strong external `_hxlcl_memset`
+ * symbol is provided by the hexa-emitted Mach-O .o
+ * (test/native_build/emit_hxlcl_memset_o.hexa → rt_memset's 28 bytes),
+ * ahead-linked. ld64 binds every `bl _hxlcl_memset` callsite to the
+ * self-emitted bytes — the C runtime's memset is replaced end-to-end.
+ *
+ * The .o's symbol is an OPT-IN self-emit extern, NOT a libc extern; the
+ * default build (guard off) must keep the libc-extern count unchanged.
+ */
+#ifdef HEXA_RT_SELFEMIT
+extern void *hxlcl_memset(void *s, int c, size_t n);
+#else
 static void *__attribute__((noinline)) hxlcl_memset(void *s, int c, size_t n) {
     unsigned char *p = (unsigned char *)s;
     unsigned char v = (unsigned char)c;
     for (size_t i = 0; i < n; i++) p[i] = v;
     return s;
 }
+#endif
 static void *__attribute__((noinline)) hxlcl_memmove(void *dst, const void *src, size_t n) {
     unsigned char *d = (unsigned char *)dst;
     const unsigned char *s = (const unsigned char *)src;

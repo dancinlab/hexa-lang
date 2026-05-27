@@ -285,6 +285,40 @@ fn _do_build(repo_root: string) {
         ldflags = "-lpthread -lm -ldl"
     }
 
+    // ── F3 ACTIVATION RUNBOOK · Path A — self-emit runtime primitive override.
+    //
+    // DEFAULT (HEXA_RT_SELFEMIT unset): no change. runtime.c keeps the
+    // `static` hxlcl_memset; the driver/module_loader libc-extern set is
+    // unchanged (0-extern invariant preserved — guard is strictly OPT-IN).
+    //
+    // OPT-IN (HEXA_RT_SELFEMIT=1, arm64 Mach-O only): compile runtime.c with
+    // -DHEXA_RT_SELFEMIT (hxlcl_memset becomes an `extern` declaration), emit
+    // the hexa-native .o that exports the strong `_hxlcl_memset` symbol from
+    // rt_memset's self-emitted bytes, and ahead-link it into both binaries.
+    // ld64 binds every `bl _hxlcl_memset` callsite to the self-emit .o — the
+    // C runtime's memset is replaced by hexa-emitted machine code end-to-end.
+    let mut selfemit_obj = ""
+    if env_var("HEXA_RT_SELFEMIT") != "" {
+        if uname != "Darwin" {
+            eprintln("  warn: HEXA_RT_SELFEMIT only supports arm64 Mach-O (Darwin) — ignored")
+        } else {
+            println("[selfemit] F3 Path A — rt_memset → _hxlcl_memset native override")
+            cflags = cflags + " -DHEXA_RT_SELFEMIT"
+            let emit_hexa = repo_root + "/test/native_build/emit_hxlcl_memset_o.hexa"
+            _must_exist(emit_hexa, "emit_hxlcl_memset_o.hexa (F3 Path A emit driver)")
+            let emit_drv = repo_root + "/build/selfemit/emit_hxlcl_memset"
+            selfemit_obj = repo_root + "/build/selfemit/hxlcl_memset.o"
+            let _ = exec("mkdir -p " + _shq(repo_root + "/build/selfemit"))
+            // The emit driver itself is built with the DEFAULT (guard-off)
+            // runtime so it never depends on the symbol it is producing.
+            let emit_c = repo_root + "/build/selfemit/emit_hxlcl_memset.c"
+            _run(_shq(hexat) + " " + _shq(emit_hexa) + " " + _shq(emit_c), "transpile emit driver")
+            _run(cc + " -O2 -std=c11 -D_GNU_SOURCE -Wno-trigraphs -fbracket-depth=4096 -I " + _shq(inc) + " " + _shq(emit_c) + " " + _shq(runtime_c) + " -o " + _shq(emit_drv) + " " + ldflags, "compile emit driver")
+            _run("HEXA_HXLCL_MEMSET_O=" + _shq(selfemit_obj) + " " + _shq(emit_drv), "emit hxlcl_memset.o")
+            _must_exist(selfemit_obj, "hxlcl_memset.o (self-emit output)")
+        }
+    }
+
     // ── Step 0: bootstrap the transpiler artifact (CANON M3b · Go 1.4 C-seed).
     //   The transpiler is no longer a committed binary — build it per-machine
     //   from the arch-neutral hexa_cc.c so it is never arch-mismatched. The
@@ -325,7 +359,9 @@ fn _do_build(repo_root: string) {
         _run(_shq(hexat) + " " + _shq(ml_hexa) + " " + _shq(ml_c), "transpile module_loader.hexa")
 
         println("[2/5] compile hexa_module_loader (stage-1 flattener)")
-        _run(cc + " " + cflags + " " + _shq(ml_c) + " " + _shq(runtime_c) + " -o " + _shq(ml_out) + " " + ldflags, "compile module_loader")
+        let mut ml_selfemit = ""
+        if selfemit_obj != "" { ml_selfemit = " " + _shq(selfemit_obj) }
+        _run(cc + " " + cflags + " " + _shq(ml_c) + " " + _shq(runtime_c) + ml_selfemit + " -o " + _shq(ml_out) + " " + ldflags, "compile module_loader")
 
         println("[3/5] flatten main.hexa            → " + main_expanded)
         _run(_shq(ml_out) + " " + _shq(main_hexa) + " " + _shq(main_expanded), "flatten main.hexa")
@@ -339,7 +375,9 @@ fn _do_build(repo_root: string) {
 
     // ── Step 4: compile driver (runtime.c appended as 2nd TU)
     println("[4/5] compile hexa_cli_driver")
-    _run(cc + " " + cflags + " " + _shq(main_c) + " " + _shq(runtime_c) + " -o " + _shq(driver_out) + " " + ldflags, "compile driver")
+    let mut drv_selfemit = ""
+    if selfemit_obj != "" { drv_selfemit = " " + _shq(selfemit_obj) }
+    _run(cc + " " + cflags + " " + _shq(main_c) + " " + _shq(runtime_c) + drv_selfemit + " -o " + _shq(driver_out) + " " + ldflags, "compile driver")
 
     // ── Step 4b: Darwin codesign
     if uname == "Darwin" {
