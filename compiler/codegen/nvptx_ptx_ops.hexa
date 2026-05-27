@@ -200,6 +200,7 @@ pub let PTX_INV_PI_HEXF64: string     = "0d3FD45F306DC9C883"  // 1/π
 pub let PTX_PI_HI_HEXF64: string      = "0d400921FB54442D18"  // π (nearest double)
 pub let PTX_PI_LO_HEXF64: string      = "0d3CA1A62633145C07"  // π - π_double (Cody-Waite residual)
 pub let PTX_F64_NEG_TWO_HEXF64: string = "0dC000000000000000" // -2.0 (sign = 1 - 2·parity)
+pub let PTX_F64_ONE_HEXF64: string    = "0d3FF0000000000000"  // 1.0 (tanh/sigmoid (1±t) terms)
 pub let PTX_SINF64_C0_HEXF64: string  = "0d3FF0000000000000"  // 1
 pub let PTX_SINF64_C1_HEXF64: string  = "0dBFC5555555555555"  // -1/6
 pub let PTX_SINF64_C2_HEXF64: string  = "0d3F81111111111111"  // 1/120
