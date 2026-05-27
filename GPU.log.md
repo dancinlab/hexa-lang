@@ -2,6 +2,44 @@
 
 > SSOT = `GPU.md`(snapshot: @goal + `- [ ]` milestones) + 본 `GPU.log.md`(append-only step log). closure rationale·design note·tier disposition 은 여기에 누적한다. 산재 `tool/*_DESIGN*.md` / `*_CLOSURE*.md` 신규 작성 금지 (단일 SSOT).
 
+## 2026-05-28 — §5l 4-of-5 closure: standalone cubin + driver-only deployment
+
+`F-GPU-STANDALONE-CUBIN` (deployment-capability probe) — ubu-2 RTX 5070 driver 580.159.03 / CUDA 12.9 / sm_120.
+
+**probe**: `tool/gpu_standalone_cubin_probe.hexa` (hexa-native, stdlib/cloud) + `tool/gpu_standalone_cubin_host.c` (driver-only host C). 흐름 = ptxas AOT → xxd-embed → `cuModuleLoadData` → 수치 round-trip + ldd 비교.
+
+**fire result** (`archive/fires/gpu_standalone_cubin_probe_2026_05_28/result.json`):
+
+```
+ptx_size_bytes        =   879
+cubin_size_bytes      =  5328  (sm_120)
+standalone_bin_size   = 22176  (-lcuda only)
+cublas_bin_size       = 30832  (-lcublas -lcudart)
+standalone_dyn_libs   =     6  ←  libcuda.so.1 + libc/m/dl/pthread/rt
+cublas_dyn_libs       =     9  ←  libcublas.so.12 + libcublasLt.so.12 + libcudart.so.12 + ...
+standalone has libcudart  = 0  ✅
+standalone has libcublas  = 0  ✅
+standalone has libcuda    = 1  ✅
+numeric_roundtrip_rc      = 0  ✅  x=-2.0 → y=-5.25 exact f64
+verdict: PASS
+```
+
+**§5l 진행** (`GPU.md` line 711-): 4/5 PASS · 1 OPEN
+
+- [x] Standalone cubin embed
+- [x] AOT compilation
+- [ ] Multi-arch fat binary (next: fatbin per-SM emit)
+- [x] NVIDIA-runtime-free deployment
+- [x] Containerized cubin
+
+**honest caveats (g3)**:
+1. `.cubin` 은 1 SM 바인딩 — multi-SM 배포 시 fatbin 또는 PTX-fallback (`cuModuleLoadDataEx` driver JIT) 필요. driver-only 링크 표면은 양쪽 다 유지.
+2. probe 는 `sm_80` PTX 소스 → ptxas `-arch=sm_120` 컴파일 — `.target sm_80` 은 PTX 측 minimum만 의미. 처음 sm_80 cubin 시도는 `CUDA_ERROR_NO_BINARY_FOR_GPU` (209) — 5070 은 sm_120 이라 binary forward-compat 불가. 첫 fail → sm_120 재컴파일 PASS = honest cycle.
+3. 비교 launcher (`tool/fusion_epilogue_cublas_timed.c`) 는 CUDA `<<<>>>` 문법 포함 → nvcc `-x cu` 로 빌드 (.c 확장자에도 device-side syntax 해석되도록).
+4. probe 후 cleanup (`/tmp/gpu_standalone_cubin_probe_2026_05_28` on ubu-2) 은 다음 fire 시 `rm -rf` 로 자동 처리됨.
+
+**PR**: `gpu-standalone-cubin-probe-2026-05-28` branch, `tool/gpu_standalone_cubin_probe.hexa` + `tool/gpu_standalone_cubin_host.c` + 5 archive artifacts + GPU.md/GPU.log.md.
+
 ## 2026-05-27 — 산재 closure doc 4개 → 본 log 일원화
 
 도메인 SSOT 컨벤션 교정. 아래 산재 doc 의 내용을 본 log 로 흡수 후 제거:
