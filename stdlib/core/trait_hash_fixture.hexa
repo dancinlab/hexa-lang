@@ -1,0 +1,93 @@
+// HEXA Standard Library — core/trait_hash_fixture
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Trait `Hash` design fixture — documents the planned API surface for the
+// `Hash` core trait (RUNTIME.flip B5.trait-hash). The actual trait-dispatch
+// typechecker + monomorphization is a multi-PR compiler campaign (RFC #532
+// design landed, scaffold branch
+// `rfc-082-impl-a-trait-bound-scaffold-2026-05-23` active). This file pins
+// the **caller-facing concrete-type wrappers** so collection backends
+// (HashMap / HashSet / dedup pass / module-loader cache-key) can compile
+// against a stable surface while the polymorphic trait dispatch lands.
+//
+// RUNTIME.flip B5.trait-hash spec:
+//   `hash_int(n)` / `hash_str(s)` (FNV-1a) / `hash_array_int(a)` for
+//   collection backing.
+//
+// What this file is NOT:
+//   - it is NOT a trait declaration (the compiler doesn't yet parse `trait` /
+//     `impl` syntax for user-level types)
+//   - it does NOT enable polymorphic dispatch over user types
+//   - it does NOT exercise the coherence/orphan rule decision
+//
+// What this file IS:
+//   - the concrete-monomorphic `_int` / `_str` / `_array_int` instantiations
+//     of the planned `Hash` trait surface, ready to be replaced by a single
+//     generic `hash[T: Hash](v: T) -> int` when the typechecker gains trait
+//     support
+//   - a parse-clean fixture that the trait-impl campaign can A/B test against
+//   - a documentation of intended hash semantics per type (FNV-1a 32-bit
+//     variant — the 64-bit constants `14695981039346656037` /
+//     `1099511628211` overflow hexa-lang's signed-`int` literal range, so we
+//     use the well-known 32-bit constants `2166136261` / `16777619` instead;
+//     the algorithm and avalanche behavior are otherwise identical)
+//
+// Planned trait surface (RFC #532, mirrors trait_design_fixture):
+//
+//   trait Hash { fn hash(self) -> int }
+//
+// Coherence/orphan rule (D2 decision pending) — see
+// trait_design_fixture.hexa for the shared decision context.
+//
+// FNV-1a 32-bit reference:
+//   FNV_OFFSET_BASIS_32 = 2166136261
+//   FNV_PRIME_32        = 16777619
+//   for each byte b: hash = (hash ^ b) * FNV_PRIME_32
+
+// -- Hash — int — identity hash (caller may post-process for distribution) --
+// NOTE — identity hash is intentional: callers that need stronger avalanche
+// can compose with `hash_str` over a decimal/hex rendering of `n`. The
+// `_int` variant stays branch-free + cheap for the common collection-key path.
+
+@pure
+pub fn hash_int(n: int) -> int {
+    return n
+}
+
+// -- Hash — str — FNV-1a 32-bit over string code-points --
+// We iterate `s[i]` (code-point per index) under FNV-1a — for ASCII-only
+// inputs this is byte-identical to the canonical byte-stream FNV-1a; for
+// non-ASCII it diverges from the byte form but stays a deterministic,
+// well-distributed function of the string contents.
+
+@pure
+pub fn hash_str(s: str) -> int {
+    let mut h: int = 2166136261
+    let mut i: int = 0
+    let n: int = len(s)
+    while i < n {
+        h = (h ^ s[i]) * 16777619
+        i = i + 1
+    }
+    return h
+}
+
+// -- Hash — [int] — FNV-1a 32-bit over array elements --
+// Same FNV-1a mix as `hash_str`, but XORed against each `int` element
+// directly (no byte decomposition — the int's bit-pattern is the unit
+// being mixed). Two `[int]` values with the same length + same element
+// sequence hash equal; differing elements diverge after the first XOR.
+
+@pure
+pub fn hash_array_int(a: [int]) -> int {
+    let mut h: int = 2166136261
+    let mut i: int = 0
+    let n: int = len(a)
+    while i < n {
+        h = (h ^ a[i]) * 16777619
+        i = i + 1
+    }
+    return h
+}
