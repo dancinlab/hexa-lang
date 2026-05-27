@@ -1105,3 +1105,49 @@ Brainstorm rounds R1-R8 ≈ 35min · summary doc ≈ 15min · INBOX batch + TECS
 - **0 atlas fold** (no atoms — brainstorm yields seeds, not closed atoms)
 - **#78 unitary-perfect 🛸** is brainstorm-time projection, not yet verified — F27 fires it
 - **R8 not a true 8th round** — 4 candidates all reorganizations of R1-R7, depletion criterion met at R7-R8 boundary
+
+---
+
+## RTSC3 — closed-negative atlas 1급 흡수 CLOSED (2026-05-27)
+
+**@goal-link**: 축 RTSC loop 의 atlas-기억 — 이미 falsified 된 후보를 atlas lookup 으로 인지해 재dispatch 방지 (g63 "FALSIFIED is a CLOSED negative · never skipped" 구조적 enforcement).
+
+### 진단 정정 (parent snapshot stale)
+
+Parent 진단은 `--from-falsify` 미구현 + demiurge closed-negative stranded 를 전제했으나, **실측 결과 둘 다 이미 해소됨**:
+- `tool/atlas_cli.hexa cmd_register` 에 `--from-falsify`/`--from-citation`/`--from-defer`/`--from-fence` 6-tier full arm 존재 (옵션 A — 새 node kind 불필요, falsify/citation/defer→@F · fence→@X). 헬퍼 `_build_raw_falsified`(L1745) + `_fold_into_embedded`(L1837).
+- demiurge **5 closed-negative 전부 embedded.gen.hexa 1급 folded** (L8233-8237).
+- 출처: **PR #1503 (`f2330a29` on origin/main)** — "register 6-tier full + 8 RTSC verdict 등록". 내 브랜치 base 에 이미 머지됨.
+
+### s1 — `--from-falsify` arm (upstream)
+
+옵션 A (`--from-falsify` arm) 채택 = #1503 에서 이미 landed. `hexa parse tool/atlas_cli.hexa` = **OK** (syntactic 검증). manual splice 불필요 (arm 이 canonical path).
+
+### s2 — demiurge closed-negative atlas 1급 (lookup 검증 ✅)
+
+`HEXA_ATLAS_EMBED=<repo>/compiler/atlas hexa atlas lookup <id>` 로 5건 전부 lookup:
+
+| id | tier | falsifier | cite |
+|---|---|---|---|
+| `falsified-mg2irh6_ambient_stable` | 🔴 FALSIFIED | F-N6-1 | demiurge#247 |
+| `falsified-li2cuh6_ambient_stable` | 🔴 FALSIFIED | F-N6-2 | demiurge#275 |
+| `falsified-mg2pth6_ambient_stable` | 🔴 FALSIFIED | rtsc-mg2pth6 | demiurge-RTSC.log |
+| `falsified-mgb2h_superlattice_stable` | 🔴 FALSIFIED | rtsc-mgb2h | demiurge-RTSC.log |
+| `falsified-h3o_6cubed_converged` | 🔴 FALSIFIED | rtsc-h3o-undersample | demiurge#286 |
+
+각 노드 `closed_negative = true` + `falsifier =` + `cite =` field 보존 (g63 1급 저장).
+
+### s3 — closure bookkeeping
+
+- INBOX.log.md 2 gap entry RESOLVED: T04:05Z (atlas 1급 closed-negative 부재) + T04:15Z (6-tier symmetric).
+- TECS-L.md RTSC3 `[x]`.
+
+### 막힌 upstream (정직 INBOX, source-fix 불필요)
+
+live `~/.hx/bin/hexa` 가 dispatch 하는 install 패키지 `~/.hx/packages/hexa-lang` 가 **#1241 (ec1cd33) 에 frozen** (main #1520+). → 기본 embed 에서 `register --from-falsify` / `verify allen_dynes_tc` / `lookup falsified-*` 전부 stale-miss. **코드 버그 아님** — install-channel sync lag. source SSOT(main) 정상. INBOX T06:30Z 등록 (install re-sync + `bin/hexa-atlas` pool-offload rebuild 권고). 회피 = `HEXA_ATLAS_EMBED` env override (검증 완료).
+
+### RTSC4 loop 운전 준비도
+
+- verify-gate source 정상: `tool/verify_cli.hexa` allen_dynes_tc/mcmillan_tc/allen_dynes_full compute+verify path 존재 (`hexa parse` OK), RTSC1 #1517 anchor 🟢.
+- atlas-기억 작동: 🔴 closed-negative lookup-able → loop 이 falsified 후보 skip 가능.
+- **READY** (단, RTSC4 활성 실행은 install re-sync 후 live binary 에서 verify-gate 가 🟢 반환해야 throttle-safe inline 운전 가능 — 현재는 worktree SSOT 직접 lookup 만 검증).

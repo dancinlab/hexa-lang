@@ -1,5 +1,19 @@
 # INBOX — log
 
+## 2026-05-27T06:30Z — `~/.hx/packages/hexa-lang` install stale @ #1241 (ec1cd33) — atlas/verify arms invisible (TECS-L RTSC3 upstream)
+
+**severity: medium** — live `~/.hx/bin/hexa` 가 dispatch 하는 atlas/verify 소스가 install 패키지 `~/.hx/packages/hexa-lang/tool/{atlas_cli,verify_cli}.hexa` 이며, 이 패키지는 **#1241 (ec1cd33) 에 frozen** (main 은 #1520+). 결과:
+- `hexa atlas register --from-falsify …` → "no discovery arm selected" (falsify/citation/defer/fence 4 arm 부재 — #1503 미반영)
+- `hexa verify --expr allen_dynes_tc 1.135 1254.2 0.10` → 🟠 INSUFFICIENT "no path" (allen_dynes_tc calc-path 부재 — #1517 미반영)
+- `hexa atlas lookup falsified-mg2irh6_ambient_stable` (default embed) → not found (stale embedded.gen.hexa)
+
+**진단**: 코드 버그 아님 — `hx install hexa-lang` 가 #1241 이후 재실행 안 됨 (install-channel sync lag). source SSOT (main) 은 정상. 회피: `HEXA_ATLAS_EMBED=<repo>/compiler/atlas hexa atlas lookup <id>` 로 worktree/main 의 embedded.gen.hexa 직접 읽으면 5 closed-negative 모두 lookup OK (검증 완료). `bin/hexa-atlas` sub-binary 도 부재 (build_hexa_atlas.sh 미실행 · Mac 24GB SIGKILL risk → pool offload 권장).
+
+**제안 fix**: (a) install-channel 재sync (`hx install hexa-lang` @ main HEAD — 별도 release 작업) · (b) `bin/hexa-atlas` rebuild = `tool/build_hexa_atlas.sh` 를 pool ubu/mini offload (Mac local 금지, heavy flat). source-fix 불필요 (이미 main).
+
+- [ ] **install 패키지 #1241→HEAD sync** — atlas/verify arms 활성화
+- [ ] **`bin/hexa-atlas` rebuild (pool offload)** — atlas sub-binary fast-path 복구
+
 ## 2026-05-27 — ✅RESOLVED stdlib/core/hash sha256/hmac compiled-path SIGSEGV (`let`-reassign → `let mut` fix)
 
 **RESOLVED 2026-05-27**: root cause = immutable `let` array with index-write (`let w=[]; w[ci]=…`) + scalar `let`-reassign across the 64-round loop → compiled `hexa run` miscompile/SIGSEGV. Fix = `let mut` + in-place `.push()` (sha256_digest_bytes + hmac_sha256_bytes). Verified: sha256("abc")=ba7816bf… + HMAC + PBKDF2 RFC6070 (120fb6cf…) all PASS on compiled path. Unblocks pbkdf2/HKDF.
@@ -697,6 +711,8 @@ STATUS
 
 ## 2026-05-27T04:15Z — atlas 6 tier symmetric registration (PR #1449 후속 broadening)
 
+**✅ RESOLVED 2026-05-27 (PR #1503 · f2330a29 on main, TECS-L RTSC3 confirm)** — `--from-citation` · `--from-defer` · `--from-falsify` · `--from-fence` 4 arm 전부 `tool/atlas_cli.hexa cmd_register` 에 landed (옵션 A 채택, 새 node kind 불필요 — falsify/citation/defer → @F · fence → @X). 각 arm 이 closed-negative/citation/defer/fence 를 `_build_raw_*` + `_fold_into_embedded` 로 embedded.gen.hexa SSOT 에 직접 splice. `hexa parse tool/atlas_cli.hexa` = OK. 잔여 (개별 INBOX 후속, RTSC3 범위 밖): tier-breakdown stats surface · `lookup --tier <T>` filter · bulk migration script.
+
 **severity: high** — PR #1449는 🔴 FALSIFIED만 처리. 사용자 통찰: "모든 tier가 다 있어야 될 듯". g5 rubric은 본래 **6-element complete set** (🔵 🟢 🟡 🟠 🔴 ⚪) — atlas register는 현재 2/6만 지원.
 
 ### 현재 매트릭스
@@ -778,6 +794,8 @@ hexa atlas stats --tier-breakdown
 - [ ] **migration script** — 기존 atlas_fold_pending / fence-log / citation-list 일괄 import
 
 ## 2026-05-27T04:05Z — atlas 1급 closed-negative 부재 (g63 structural gap)
+
+**✅ RESOLVED 2026-05-27 (PR #1503 · f2330a29 on main, TECS-L RTSC3 confirm)** — 옵션 A (`--from-falsify` arm) 채택. demiurge 5 closed-negative 전부 atlas 1급 (🔴 FALSIFIED) splice 완료 + lookup 검증: `falsified-mg2irh6_ambient_stable` (F-N6-1·demiurge#247) · `falsified-li2cuh6_ambient_stable` (F-N6-2·#275) · `falsified-mg2pth6_ambient_stable` (rtsc-mg2pth6) · `falsified-mgb2h_superlattice_stable` (rtsc-mgb2h) · `falsified-h3o_6cubed_converged` (rtsc-h3o-undersample·#286). `closed_negative = true` + `falsifier =` + `cite =` field 보존. g63 enforcement 작동 — atlas lookup 으로 already-falsified candidate 인지 가능 → 재dispatch 방지. (binary-stale upstream 잔여: live `~/.hx/bin/hexa` 가 #1503 이전 → `HEXA_ATLAS_EMBED=<repo>/compiler/atlas` env override 로 lookup 가능 · 별도 INBOX 항목 hexa-atlas binary rebuild.)
 
 **severity: high** — atlas SSOT (`compiler/atlas/embedded.gen.hexa`, n6/atlas.n6)가 🟢/🔵 SUPPORTED 노드만 1급 저장. 🔴 FALSIFIED는 별도 markdown (RTSC `atlas_fold_pending.md`)에 stranded → 후속 session/agent가 atlas만 lookup하면 already-falsified candidate를 모르고 재dispatch 가능 (g63 "FALSIFIED is a CLOSED negative · never skipped" 명시 위배).
 
