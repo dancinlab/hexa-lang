@@ -22,6 +22,24 @@ flip 캠페인이 안전 quick-win 을 고갈시킨 뒤 남는 진짜 바닥의 
 세션 quick-win (flip): 4 파일 삭제 — blowfish(wire+🟢RUNEQ #1816) · v565(dead #1818)
 · hxtok(dead #1820) · hxvocoder(dead #1821).
 
+## 🧱 floor closure 상태 (2026-05-28 — F1-F6 종결 pass)
+
+| 항목 | 상태 | verdict |
+|------|------|---------|
+| **F1** perf-floor (hxflash/hxlayer/hxvdsp) | 🔴 **TERMINAL** | 측정 285x ML 회귀 → irreducible perf-floor (`F1-perf-floor.txt`) |
+| **F2** vendor/OS-ABI FFI (19 layer-③) | 🔴 **TERMINAL** | audit #1809 — 순수 로직 0, ABI 경계 (`F2-vendor-ffi.txt`) |
+| **F3** runtime-core (640/548 fn) | 🟠 **LIVE FRONTIER** | genuinely-portable · 50-70 PR multi-session (`F3-frontier.txt`) |
+| **F4** sha256 (exec_argv_sha256.c) | 🟢 **RESOLVED→F3** | runtime.c `#include` 조각 · 포팅 타깃 FIPS-검증 (`F4-sha256.txt`) |
+| **F5** boot-asm (3 `.s`) | 🔴 **TERMINAL** | audit #1810 — vector-table 데이터 섹션, RFC 063/064 gated (`F5-boot-asm.txt`) |
+| **F6** bootstrap seed (hexa_cc.c) | 🔴 **TERMINAL** | irreducible bootstrap FLOOR (B9.8) |
+
+**honest 100% closure = 5/6 terminal + F3 단일 frontier 로 정밀 특정.** F1·F2·F5·F6
+= irreducible/honest-floor closed-negative (각각 미래 enabler re-open flag). F4 =
+runtime.c 조각이라 F3 로 fold (mis-split 해소). **F3 만이 진짜 open** — irreducible 이
+아닌 portable codegen self-emit campaign (enabler `rt_arena_*` 4-fn LANDED 입증).
+단일 세션 종결 불가 = 정직한 multi-session 잔여 (`feedback-closure-is-physical-limit`).
+모든 verdict = `.verdicts/runtime-floor-closure/` raw 명령 출력 verbatim (g5 claim_verify).
+
 ## floor 분류 (F1–F6)
 
 ### F1 — perf-floor (port 금지 · 285x 회귀)
@@ -69,11 +87,26 @@ flip 캠페인이 안전 quick-win 을 고갈시킨 뒤 남는 진짜 바닥의 
 ### F3 — runtime FLOOR (codegen self-emit · 핵심)
 
 - [ ] **F3 runtime-core** — `self/runtime.c` · `self/runtime_core.c` (640/548 fn)
+      — 🟠 **THE SINGLE LIVE FLOOR FRONTIER** (genuinely-portable · multi-session ·
+      NOT irreducible — F1/F2/F5/F6 terminal + F4 folded here, so F3 IS the only
+      remaining `.hexa`-only blocker)
   - 파일 각 1개지만 **전 함수** codegen self-emit 후에야 삭제 가능.
   - 경로: B9.6a (HexaVal repr 생성자 emit · `rt_arena_*` 4-fn LANDED 패턴) →
     B9.6b (잔여 runtime primitive emit) → runtime.c dead.
   - 추정 **50-70 PR · expert serial** (#1812). regen+fixpoint · phase-h codegen
     에이전트와 경합 · **cold fan-out 부적합** (전담 신중 작업).
+  - **enabler 입증 (2026-05-28 precheck · `.verdicts/runtime-floor-closure/F3-frontier.txt`)**:
+    self-emit 패턴 LANDED — `self/codegen/runtime_arm64.hexa` 에 `rt_arena_init/
+    alloc/reset/release` (L1157/1268/1339/1375) 포함 16 self-emit fn. dup-race
+    precheck: codegen self-emit 작업 중인 open PR 0 (활성 브랜치는 전부 B9 flip
+    quick-win/doc 트랙 — F3 와 직교). **다음 단위 = B9.6a HexaVal repr 생성자 emit**
+    (`hexa_int/float/bool/str` tagged-union 생성자 → runtime_arm64.hexa hexa-emit-bytes).
+    각 단위 = emit-path 라 `gen1≡gen2` byte-eq fixpoint 검증 필수 (regen heavy →
+    ubu route). F4 sha256 ① port (FIPS-검증된 stdlib 타깃) 도 이 campaign 의 한 단위.
+  - **WHY [ ] 유지 (not over-closure)**: F3 는 irreducible 아님 — 실제 포팅 가능한
+    open 작업. terminal verdict (🔵/🟢/🔴) 부여 불가 (= `feedback-no-over-closure`).
+    단일 foreground 세션이 50-70 PR campaign 을 닫을 수 없음 = 정직한 multi-session
+    잔여. floor doc 의 honest 종착 = F3 가 유일 open frontier 로 정밀 특정된 상태.
 
 ### F4 — sha256 entangled
 
