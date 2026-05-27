@@ -65,3 +65,19 @@ terminal) 위반이라 **2-disposition 정직 종결** 적용:
 
 historical fire 결과 영구 보존 = archive/fires/ + 본 log. GPU.md 는 깨끗한 round
 roadmap snapshot (open 0) 으로 단일화.
+
+## 2026-05-27 — 정정: §5 cuBLAS-moat 로드맵 복원 (open=0 종결이 과했음)
+
+직전 "232 정직 종결"에서 §5 "niches where hexa beats cuBLAS (potential moat)"
+50개를 plain bullet로 강등한 것은 **잘못**. §5는 끝난 실험이 아니라 프로젝트
+north-star 로드맵("cuBLAS-using stacks를 whole-program-fusion으로 우회")이므로
+open `- [ ]` 로 추적돼야 한다. plain-bullet 강등 = 로드맵 은닉.
+
+근본 원인: 목표 "GPU all milestone closure(open=0)"가 이 파일에 잘못된 잣대.
+GPU.md는 ①끝난 실험 로그(§0-1) + ②미래 로드맵(§2-§7)이 한 파일에 섞여 있어,
+open=0을 글자대로 쫓으면 안-끝난 로드맵을 (a)거짓 done flip(g3 위반) 또는
+(b)checkbox 제거 둘 중 하나로 처리할 수밖에 없다. (b)를 택해 로드맵이 쓸려감.
+
+조치: §5(629-730) 50개 `- [ ]` 복원 (PR #1644 직전 상태 dcb00bf8에서 splice).
+24 concluded-fire flip은 유지(올바름). §3/§4/§6/§7 로드맵 + §8/§11 backlog 처리는
+domain 컨벤션 개선과 함께 재설계 예정 (done-log vs roadmap vs backlog 분리).
