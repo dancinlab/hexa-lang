@@ -1,5 +1,34 @@
 # INBOX — log
 
+## 2026-05-28 — hexa multi-line expression continuation silent miscompute (parens 밖 줄바꿈)
+
+> **발견 맥락 (anima bench #4 TURING-MITOSIS · PR #1127)**: 2D 32×32 Gierer-Meinhardt 반응-확산 PDE Euler 적분기 작성 중, 활성자/억제자 갱신식의 **paren 밖 줄바꿈된 산술 expression** 이 컴파일러 오류 없이 silent 잘못 계산됨. ρ=1 control sim (대칭 IC, 균일 정상상태로 감쇠해야 정상) 이 var ~10^236 까지 blow-up. smoke test 는 single-line 형태라 통과 → 풀 bench 의 multi-line 형태에서만 차이 발생.
+
+**재현 패턴 (구체적인 expr 형태)**: anima 측 초기 RD 코드는 lap 항과 reaction 항을 한 줄로 합치며 산술 연산자가 다음 줄 시작에 놓이는 형태였다 — 예 (paraphrase):
+```hexa
+// 의도 (수학적): du/dt = Du * lap_u + u^2/v - u
+let du_dt = Du * (u[ip][j] + u[im][j] + u[i][jp] + u[i][jm] - 4.0 * u[i][j])
+          + (u[i][j] * u[i][j]) / v[i][j]
+          - u[i][j]
+```
+이 형태에서 transpile / interpret 후 du_dt 가 의도한 합이 아닌 다른 값으로 평가됨 (정확히 어느 절이 누락/오배치 되는지는 미특정 — 표면 결과 = ρ=1 에서 10^118+ 발산). 동일 식을 **paren 으로 감싸 한 줄로** 작성하거나, 연산자를 라인의 끝(전 줄 trailing operator)으로 두면 정상 평가 → ρ_c=7.0 측정 성공 (PR #1127 머지 본 코드 line 269-270 형태):
+```hexa
+let lap_u = u[_idx(i - 1, j)] + u[_idx(i + 1, j)] + u[_idx(i, j - 1)] + u[_idx(i, j + 1)] - 4.0 * center_u
+let react_u = (center_u * center_u) / center_v - center_u
+let du_dt = Du * lap_u + react_u
+```
+즉 회피책 = (a) 전체 expression 을 한 줄로 두기, 또는 (b) sub-expression 을 named let-binding 으로 쪼개 각 줄 단독으로 평가시키기.
+
+**severity**: **high (silent)** — 컴파일러가 syntax error 도, 런타임 trap 도, type-check warning 도 내지 않음. 값만 silently 틀림. 같은 패턴이 PDE/적분기/누적합 등 paren-heavy 산술 코드 전반에 잠복 가능 (특히 활성자-억제자 RD · gradient descent update · forward pass 결합식).
+
+**요청 (택1)**:
+- (a) **lexer/parser 가 paren-less line-continuation 을 거부** — 산술 expression 이 명백히 미완(다음 줄에 leading binary operator 가 오는 형태)인데 paren 밖이라면 syntax error 로 reject. 작성자가 명시적으로 paren 으로 감싸거나 한 줄로 두도록 강제.
+- (b) **또는 ASI(automatic semicolon insertion) 가 산술 expression 끝에서 정확히 break** — 현재는 "줄바꿈 = statement end" 와 "leading operator → continuation" 사이의 결정이 silent 하게 잘못 내려지는 것으로 보임. ASI 규칙을 명문화하고 산술 expression 의 line-continuation 조건을 결정적(deterministic)으로.
+
+**검증 (요청 후)**: `let x = 1 + 2\n        + 3` (3 칸 들여쓰기 leading `+`) 형태 minimal repro 를 (a) 에선 reject, (b) 에선 (1+2+3)=6 으로 결정적 평가하는 단위 테스트 추가.
+
+**참조**: anima PR #1127 (bench/turing_mitosis · merged 2026-05-28). 부수 — anima 측 회피책은 PR 본 코드에 이미 반영 (한 줄 또는 named-let 분해), 추가 patch 없음. hexa 측 (a) 또는 (b) 가 landing 되면 anima 회피책은 그대로 두되 silent-miscompute 위험만 제거됨.
+
 ## 2026-05-27 — HEXA_CUDA 빌드인데 cuda_available()==0 (weak stub strong-override 부재 → cuBLAS 경로 unreachable)
 
 > **root cause (anima M4b GPU fire smoke 실측)**: H100 pod 에서 `nvcc -DHEXA_CUDA runtime_cuda.c` + `clang -DHEXA_CUDA ... -lcublas -lcuda` 로 빌드+실행 RC=0 성공했으나 `cuda_available()==0` → GPU 미사용(CPU fallback). 원인: `self/runtime.c:13472` 의 `__attribute__((weak)) HexaVal hexa_cuda_available(void){ return hexa_int(0); }` 가 **strong override 없이** 그대로 등록됨(`runtime.c:12203 cuda_available=hexa_fn_new(hexa_cuda_available)`). `runtime_cuda.c:248` 에 실 디바이스 체크 `_hx_cuda_runtime_available()`(cudaGetDeviceCount) 가 있으나, **HEXA_CUDA 하에서 `hexa_cuda_available` 를 `_hx_cuda_runtime_available()` 로 잇는 strong glue 가 self/ 전체에 부재** (grep `HexaVal hexa_cuda_available` non-weak = runtime.h 선언만). 결과: -DHEXA_CUDA 여도 cuda_available 영원히 0.
