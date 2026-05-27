@@ -1,0 +1,180 @@
+// HEXA Standard Library — crypto/tls13_client_zero_rtt_data
+//
+// @version 0.1.0
+// @capabilities [network, ffi]
+//
+// TLS 1.3 client 0-RTT early-data SEND wire (RFC 8446 §4.2.10).
+//
+// RUNTIME.flip.md B1.tls13-zero-rtt-data: pure-additive client-side state-
+// machine guard + early-data record send wire. Complements the pre-landed
+// extension encoder (stdlib/crypto/tls13_early_data — empty body for CH/EE,
+// uint32 max_early_data_size for NewSessionTicket).
+//
+// State machine (RFC 8446 §4.2.10):
+//   NONE     — no PSK / no early-data offered. MUST NOT send 0-RTT.
+//   OFFERED  — ClientHello included early_data + pre_shared_key; client has
+//              derived client_early_traffic_secret and the c_early_key/iv;
+//              awaiting server response. May send 0-RTT NOW.
+//   ACCEPTED — server EncryptedExtensions echoed early_data. Continue sending
+//              until EndOfEarlyData, then switch to client_handshake_traffic.
+//   REJECTED — server omitted early_data (or sent HRR). Anything already on
+//              the wire is dropped silently; no further 0-RTT permitted.
+//
+// Guard policy: tls13_client_early_data_guard() returns can_send = true only
+// when (has_psk && phase == OFFERED && has_early_traffic_secret). All other
+// combinations return can_send = false with a categorical reason code so the
+// driver can log + decide whether to fall back to 1-RTT.
+//
+// Wire send path: 0-RTT records are AEAD-sealed with client_early_traffic key
+// schedule (NOT client_handshake) and use OUTER content_type = 0x17 ApplicationData
+// (TLS 1.3 record disguise rule) with the inner_content_type indicating the
+// real payload class (0x17 AppData for user data, 0x16 Handshake for the
+// EndOfEarlyData message that terminates the 0-RTT epoch).
+//
+// Surface:
+//   TLS_EXT_EARLY_DATA                       — 0x002a, extension code point
+//   TLS13_EARLY_DATA_PHASE_NONE              — 0, no PSK / not offered
+//   TLS13_EARLY_DATA_PHASE_OFFERED           — 1, sent in CH, awaiting server
+//   TLS13_EARLY_DATA_PHASE_ACCEPTED          — 2, server EE echoed early_data
+//   TLS13_EARLY_DATA_PHASE_REJECTED          — 3, server omitted / HRR
+//   struct Tls13EarlyDataGuard { kind, can_send, phase, reason }
+//   tls13_client_early_data_guard(phase, has_psk, has_early_traffic_secret)
+//   tls13_client_send_early_data(conn, c_early_key, c_early_iv, seq, payload)
+//   tls13_client_send_end_of_early_data(conn, c_early_key, c_early_iv, seq)
+//
+// Out-of-scope (sibling files / follow-ups):
+//   - client_early_traffic_secret derivation (tls13_keyschedule / traffic_secrets)
+//   - 0-RTT replay protection / max_early_data_size enforcement (driver layer)
+//   - server-side accept/reject decoding (tls13_encrypted_extensions parser)
+
+use "stdlib/crypto/tls13_wire"
+use "stdlib/crypto/tls13_client_record_io"
+use "stdlib/net/socket"
+
+let TLS_EXT_EARLY_DATA: int = 0x002a
+
+let TLS13_EARLY_DATA_PHASE_NONE:     int = 0
+let TLS13_EARLY_DATA_PHASE_OFFERED:  int = 1
+let TLS13_EARLY_DATA_PHASE_ACCEPTED: int = 2
+let TLS13_EARLY_DATA_PHASE_REJECTED: int = 3
+
+// Inner TLSInnerPlaintext content types (RFC 8446 §5.2). Declared locally to
+// keep this file standalone; values are fixed by the RFC.
+let _TLS_REC_HANDSHAKE_LOCAL:        int = 0x16
+let _TLS_REC_APPLICATION_DATA_LOCAL: int = 0x17
+
+// HandshakeType.end_of_early_data = 5 (RFC 8446 §4.5 / §B.3).
+let _TLS_HS_END_OF_EARLY_DATA: int = 5
+
+// Result of the 0-RTT send precondition check.
+//   kind ∈ { "ok", "no-psk", "phase-not-offered", "phase-rejected" }
+struct Tls13EarlyDataGuard {
+    kind:     str,
+    can_send: bool,
+    phase:    int,
+    reason:   str
+}
+
+// Gate: may the client send a 0-RTT record right now?
+// Returns can_send = true iff all three preconditions hold:
+//   - has_psk                       — a resumption PSK was selected
+//   - phase == OFFERED              — ClientHello included early_data and
+//                                     server's verdict has not landed yet
+//   - has_early_traffic_secret      — client_early_traffic key schedule done
+pub fn tls13_client_early_data_guard(
+    phase:                      int,
+    has_psk:                    bool,
+    has_early_traffic_secret:   bool
+) -> Tls13EarlyDataGuard {
+    if !has_psk {
+        return Tls13EarlyDataGuard {
+            kind:     "no-psk",
+            can_send: false,
+            phase:    phase,
+            reason:   "0-RTT requires a resumption PSK (RFC 8446 §4.2.10)"
+        }
+    }
+    if phase == TLS13_EARLY_DATA_PHASE_REJECTED {
+        return Tls13EarlyDataGuard {
+            kind:     "phase-rejected",
+            can_send: false,
+            phase:    phase,
+            reason:   "server rejected 0-RTT (early_data omitted from EE / HRR)"
+        }
+    }
+    if phase != TLS13_EARLY_DATA_PHASE_OFFERED {
+        return Tls13EarlyDataGuard {
+            kind:     "phase-not-offered",
+            can_send: false,
+            phase:    phase,
+            reason:   "early_data extension was not offered in ClientHello"
+        }
+    }
+    if !has_early_traffic_secret {
+        return Tls13EarlyDataGuard {
+            kind:     "phase-not-offered",
+            can_send: false,
+            phase:    phase,
+            reason:   "client_early_traffic_secret not yet derived"
+        }
+    }
+    return Tls13EarlyDataGuard {
+        kind:     "ok",
+        can_send: true,
+        phase:    phase,
+        reason:   "all preconditions met"
+    }
+}
+
+// Seal `payload` under the client_early_traffic key schedule and ship it as
+// a TLS 1.3 application-record with inner_content_type = 0x17 (AppData).
+// Returns the next sequence number (seq + 1) for caller-side chaining.
+//
+// Caller is responsible for having verified tls13_client_early_data_guard()
+// before invoking this — the function itself does NOT re-check phase (the
+// AEAD key MUST be the early key; once handed in, the wire is committed).
+pub fn tls13_client_send_early_data(
+    conn:           int,
+    c_early_key:    [int],
+    c_early_iv:     [int],
+    seq:            int,
+    payload:        [int]
+) -> int {
+    let record = tls13_seal_app_record(
+        c_early_key,
+        c_early_iv,
+        seq,
+        _TLS_REC_APPLICATION_DATA_LOCAL,
+        payload
+    )
+    socket_write(conn, record)
+    return seq + 1
+}
+
+// Build the EndOfEarlyData handshake message (msg_type = 5, body length = 0),
+// AEAD-seal it under the client_early_traffic key schedule with
+// inner_content_type = 0x16 (Handshake), and ship it. This message terminates
+// the 0-RTT epoch — after sending, the client MUST switch to
+// client_handshake_traffic_secret for all subsequent records.
+//
+// Returns the next sequence number (seq + 1). Note that this is the LAST
+// record on the early-key sequence; the next record begins a fresh
+// (handshake-key) sequence starting at 0.
+pub fn tls13_client_send_end_of_early_data(
+    conn:         int,
+    c_early_key:  [int],
+    c_early_iv:   [int],
+    seq:          int
+) -> int {
+    // HandshakeMessage = header(4) || body(0)
+    let hs_header = tls13_hs_header(_TLS_HS_END_OF_EARLY_DATA, 0)
+    let record = tls13_seal_app_record(
+        c_early_key,
+        c_early_iv,
+        seq,
+        _TLS_REC_HANDSHAKE_LOCAL,
+        hs_header
+    )
+    socket_write(conn, record)
+    return seq + 1
+}
