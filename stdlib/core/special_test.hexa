@@ -1,0 +1,26 @@
+// HEXA Standard Library — core/special self-test
+// @ci_gate
+use "stdlib/core/special"
+let mut pass = 0
+let mut total = 0
+fn ck(name: string, got: float, want: float, tol: float) {
+    total = total + 1
+    let d = if got > want { got - want } else { want - got }
+    if d <= tol { pass = pass + 1 } else { println("FAIL " + name + " got=" + to_string(got)) }
+}
+fn main() {
+    ck("gamma5", gamma_fn(5.0), 24.0, 0.001)
+    ck("gamma_half", gamma_fn(0.5), 1.7724538509, 0.0001)
+    ck("gamma1", gamma_fn(1.0), 1.0, 0.0001)
+    ck("gamma6", gamma_fn(6.0), 120.0, 0.01)
+    ck("lgamma10", lgamma_pos(10.0), 12.8018274801, 0.0001)
+    ck("beta23", beta_fn(2.0, 3.0), 0.0833333333, 0.0001)
+    ck("beta_half", beta_fn(0.5, 0.5), 3.14159265, 0.001)
+    ck("erf0", erf_fn(0.0), 0.0, 0.0000001)
+    ck("erf1", erf_fn(1.0), 0.8427007929, 0.0001)
+    ck("erf_neg1", erf_fn(0.0-1.0), 0.0-0.8427007929, 0.0001)
+    ck("erf2", erf_fn(2.0), 0.9953222650, 0.0001)
+    ck("erfc0", erfc_fn(0.0), 1.0, 0.0000001)
+    println("special self-test: " + to_string(pass) + "/" + to_string(total))
+    if pass == total { println("PASS") } else { println("FAILED") }
+}

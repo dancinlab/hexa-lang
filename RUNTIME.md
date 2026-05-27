@@ -2158,7 +2158,9 @@ correctness (per M10/M16; see cycle-69 catalog + PR #251/#426 analysis)
       `concurrent_serve.hexa`. HTTP/2 still open.
 - [ ] Threading (green threads in hexa or keep C pthread?) — architectural decision.
 - [ ] Crypto helpers: HMAC-DRBG, scrypt, pbkdf2 (slow path)
-- [ ] More math (gamma, beta, erf — for stdlib/quantum, sim_universe)
+- [x] More math (gamma, beta, erf) — stdlib/core/special.hexa net-new 2026-05-27:
+      lgamma_pos/gamma_fn (Lanczos g=7) · beta_fn · erf_fn/erfc_fn (A&S 7.1.26).
+      Pure hexa (exp/log/sqrt/sin builtins), 12/12 self-test PASS (special_test.hexa @ci_gate).
 - [ ] Time format (ISO 8601, RFC 3339)
 
 ## Phase 3 — Tier-C application primitives (16+ cycles OR deferred)
