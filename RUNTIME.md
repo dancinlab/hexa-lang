@@ -2382,8 +2382,12 @@ framing-① (nm aprime 0 externs) 측정-충족 이후 — framing-② (source z
       `ssh_config_test`, `early_life_check_test`, `reconcile_test` — 모두
       pure/network-free). 후속 = coverage 확대 (pure-test 식별 → marker 추가;
       자기-갱신 incremental). INBOX #5① closed via #1271.
-- [ ] **forge/farr32 codegen→clang smoke (Linux build gate)** — 5-fire 캐스케이드
-      의 farr32 emit 갭을 사전 차단하는 CI gate (inbox/notes/linux-ci-build-gate).
+- [x] **forge/farr32 codegen→clang smoke (Linux build gate)** — **LANDED** via PR
+      #1274 (`test+ci(forge): farr32 codegen→clang smoke — Linux #1187 regression
+      gate (INBOX #4)`, 2026-05-26). 5-fire 캐스케이드의 farr32 emit 갭 사전 차단
+      CI gate. 동반: #1187 (codegen `hexa_farr32_*` emit fix) · #1206
+      (inbox/notes Linux CI build gate) · #1291 (regen hexa_cc.c pick-up direct
+      calls). INBOX #4 closed.
 - [ ] **preflight v2 DFT/HPC 축 (RFC 091 witness)** — 외부 자원 의존 (DFT/MD
       메모리 산정 + rent 전 GPU vs CPU-HPC 판단 자동화).
 
