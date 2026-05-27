@@ -2161,7 +2161,10 @@ correctness (per M10/M16; see cycle-69 catalog + PR #251/#426 analysis)
 - [x] More math (gamma, beta, erf) — stdlib/core/special.hexa net-new 2026-05-27:
       lgamma_pos/gamma_fn (Lanczos g=7) · beta_fn · erf_fn/erfc_fn (A&S 7.1.26).
       Pure hexa (exp/log/sqrt/sin builtins), 12/12 self-test PASS (special_test.hexa @ci_gate).
-- [ ] Time format (ISO 8601, RFC 3339)
+- [x] Time format (ISO 8601, RFC 3339) — stdlib/time/civil.hexa net-new 2026-05-27:
+      civil_from_days/days_from_civil (Howard Hinnant) + iso8601_format_native +
+      rfc3339_format_native + iso8601_parse_native. Pure hexa, 0 libc (existing
+      stdlib/time/iso8601.hexa was a libc-backed utc_iso_* wrapper). 10/10 PASS.
 
 ## Phase 3 — Tier-C application primitives (16+ cycles OR deferred)
 
