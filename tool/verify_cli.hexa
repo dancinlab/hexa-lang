@@ -1675,7 +1675,7 @@ fn _condensation_energy(bc_zero_t: float) -> float {
 //   Hc1(0) = (Φ₀ / (4π·λ_L²)) · (ln κ + 0.5)
 // 2-arg (λ_L in metres, κ = λ_L/ξ dimensionless → Hc1 in tesla). Tinkham 1996
 // Eq.5.10. CODATA 2018 Φ₀ = h/2e = 2.067833848e-15 Wb. Source: λ_L=200 nm, κ=2
-// → 2.067833848e-15/(4π·4e-14)·(ln2+0.5) ≈ 0.00505 T (5.05 mT, typical Type-II).
+// → 2.067833848e-15/(4π·4e-14)·(ln2+0.5) ≈ 0.0049084 T (4.91 mT, typical Type-II).
 // INBOX #1624 — closes RTSC paper §Limitations device-side Hc1 gap.
 fn _london_hc1(lambda_l_m: float, kappa: float) -> float {
     if lambda_l_m <= 0.0 { return _NOCALC_F }
