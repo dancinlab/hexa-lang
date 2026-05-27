@@ -409,6 +409,14 @@ fan-out 불가, serial 진행.
       "irreducible-core FLOOR" terminal 과 일치. 미래 codegen 이 100% self-emit
       하면 re-open.
 
+### → 별도 도메인 split: `RUNTIME.floor.md`
+
+B9.6 의 irreducible / perf-floor / multi-session 항목(perf-kernel 285x · vendor-FFI
+③19 · runtime 640/548-fn FLOOR · sha256-entangled · `.s` boot-floor · bootstrap
+seed)은 **`RUNTIME.floor.md`** 자매 도메인으로 분리(2026-05-28, 사용자 지시).
+flip = quick-win 안전 삭제 캠페인(거의 종결), floor = 물리 바닥 전담. B9.6a/b
+codegen self-emit 가 그 바닥의 단일 enabler.
+
 ## cross-domain handoff (B-갈래 → 별도 도메인)
 
 The B-갈래 (HEXA-LANG · GPU · TECS-L · PROBE · ARXIV) handoff items DO NOT
