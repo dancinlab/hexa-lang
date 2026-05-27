@@ -1,0 +1,158 @@
+// RFC 055 055-P0 - hexa-native NVPTX emit | target=nvptx64-nvidia-cuda-sm80
+.version 7.0
+.target sm_80
+.address_size 64
+
+.visible .entry probe_gemm_bias_silu_f64 (
+    .param .u64 probe_gemm_bias_silu_f64_param_0,
+    .param .u64 probe_gemm_bias_silu_f64_param_1,
+    .param .u64 probe_gemm_bias_silu_f64_param_2,
+    .param .u64 probe_gemm_bias_silu_f64_param_3,
+    .param .u64 probe_gemm_bias_silu_f64_param_4,
+    .param .u64 probe_gemm_bias_silu_f64_param_5,
+    .param .u64 probe_gemm_bias_silu_f64_param_6
+)
+{
+    .reg .u64 %rd4;
+    .reg .u64 %rd5;
+    .reg .u64 %rd6;
+    .reg .u32 %r7;
+    .reg .u64 %rd8;
+    .reg .u64 %rd9;
+    .reg .u64 %rd10;
+    .reg .u64 %rd11;
+    .reg .pred %p12;
+    .reg .u64 %rd14;
+    .reg .u64 %rd15;
+    .reg .u64 %rd16;
+    .reg .u64 %rd17;
+    .reg .f64 %fd18;
+    .reg .u64 %rd19;
+    .reg .pred %p20;
+    .reg .u64 %rd21;
+    .reg .u64 %rd22;
+    .reg .f64 %fd23;
+    .reg .f64 %fd24;
+    .reg .u64 %rd25;
+    .reg .u64 %rd26;
+    .reg .f64 %fd27;
+    .reg .f64 %fd28;
+    .reg .f64 %fd29;
+    .reg .f64 %fd30;
+    .reg .u64 %rd31;
+    .reg .f64 %fd32;
+    .reg .f64 %fd33;
+    .reg .f64 %fd34;
+    .reg .f64 %fd35;
+    .reg .f64 %fd36;
+    .reg .u64 %rd0;
+    .reg .u64 %rd1;
+    .reg .u64 %rd2;
+    .reg .u64 %rd3;
+    .reg .u64 %rd_idxa_23;
+    .reg .u64 %rd_idxa_27;
+    .reg .u64 %rd_idxa_32;
+    .reg .u64 %rd_idxs_addr;
+    .reg .f64 %fd_exp_t_35;
+    .reg .f64 %fd_exp_kf_35;
+    .reg .f64 %fd_exp_r_35;
+    .reg .f64 %fd_exp_p_35;
+    .reg .f64 %fd_exp_pow2k_35;
+    .reg .u64 %rd_exp_k_35;
+    .reg .u64 %rd_exp_b_35;
+    .reg .f64 %fd_sig_ax_35;
+    .reg .f64 %fd_sig_tval_35;
+    .reg .f64 %fd_sig_num_35;
+    .reg .f64 %fd_sig_den_35;
+$L_0:
+    ld.param.u64 %rd0, [probe_gemm_bias_silu_f64_param_0];  // load kernel param 0 into reg
+    ld.param.u64 %rd1, [probe_gemm_bias_silu_f64_param_1];  // load kernel param 1 into reg
+    ld.param.u64 %rd2, [probe_gemm_bias_silu_f64_param_2];  // load kernel param 2 into reg
+    ld.param.u64 %rd3, [probe_gemm_bias_silu_f64_param_3];  // load kernel param 3 into reg
+    ld.param.u64 %rd4, [probe_gemm_bias_silu_f64_param_4];  // load kernel param 4 into reg
+    ld.param.u64 %rd5, [probe_gemm_bias_silu_f64_param_5];  // load kernel param 5 into reg
+    ld.param.u64 %rd6, [probe_gemm_bias_silu_f64_param_6];  // load kernel param 6 into reg
+    mov.u32 %r7, %tid.x;  // gpu_thread_id_x()
+    cvt.s64.s32 %rd8, %r7;  // to_i64 (s32 to s64)
+    mov.u64 %rd9, %rd8;  // assign
+    mul.lo.s64 %rd10, %rd4, %rd5;  // binop *
+    mov.u64 %rd11, %rd10;  // assign
+    setp.ge.s64 %p12, %rd9, %rd11;  // cmp >=
+    @%p12 bra $L_1;  // br_cond true -> $L_1
+    bra $L_2;  // br_cond false -> $L_2
+$L_1:
+    ret;  // return
+$L_2:
+    div.s64 %rd14, %rd9, %rd5;  // binop /
+    mov.u64 %rd15, %rd14;  // assign
+    rem.s64 %rd16, %rd9, %rd5;  // binop %
+    mov.u64 %rd17, %rd16;  // assign
+    mov.f64 %fd18, 0.0;  // assign
+    mov.u64 %rd19, 0;  // assign
+    bra $L_3;  // br -> $L_3
+$L_3:
+    setp.lt.s64 %p20, %rd19, %rd6;  // cmp <
+    @%p20 bra $L_4;  // br_cond true -> $L_4
+    bra $L_5;  // br_cond false -> $L_5
+$L_4:
+    mul.lo.s64 %rd21, %rd15, %rd6;  // binop *
+    add.s64 %rd22, %rd21, %rd19;  // binop +
+    mul.lo.s64 %rd_idxa_23, %rd22, 8;  // index byte off = idx * 8
+    add.s64 %rd_idxa_23, %rd_idxa_23, %rd0;  // index addr = base + off
+    ld.global.f64 %fd23, [%rd_idxa_23];  // ld base[idx] (f64)
+    mov.f64 %fd24, %fd23;  // assign
+    mul.lo.s64 %rd25, %rd19, %rd5;  // binop *
+    add.s64 %rd26, %rd25, %rd17;  // binop +
+    mul.lo.s64 %rd_idxa_27, %rd26, 8;  // index byte off = idx * 8
+    add.s64 %rd_idxa_27, %rd_idxa_27, %rd1;  // index addr = base + off
+    ld.global.f64 %fd27, [%rd_idxa_27];  // ld base[idx] (f64)
+    mov.f64 %fd28, %fd27;  // assign
+    mul.f64 %fd29, %fd24, %fd28;  // binop *
+    add.f64 %fd30, %fd18, %fd29;  // binop +
+    mov.f64 %fd18, %fd30;  // assign
+    add.s64 %rd31, %rd19, 1;  // binop +
+    mov.u64 %rd19, %rd31;  // assign
+    bra $L_3;  // br -> $L_3
+$L_5:
+    mul.lo.s64 %rd_idxa_32, %rd17, 8;  // index byte off = idx * 8
+    add.s64 %rd_idxa_32, %rd_idxa_32, %rd2;  // index addr = base + off
+    ld.global.f64 %fd32, [%rd_idxa_32];  // ld base[idx] (f64)
+    add.f64 %fd33, %fd18, %fd32;  // binop +
+    mov.f64 %fd34, %fd33;  // assign
+    abs.f64 %fd_sig_ax_35, %fd34;  // sigmoid f64: |x|
+    neg.f64 %fd_sig_ax_35, %fd_sig_ax_35;  // sigmoid f64: u = -|x| (= -2*|x/2|)
+    mul.f64 %fd_exp_t_35, %fd_sig_ax_35, 0d3FF71547652B82FE;  // sigmoid f64 exp: t = u*log2e
+    cvt.rni.f64.f64 %fd_exp_kf_35, %fd_exp_t_35;  // sigmoid f64 exp: kf = round(t)
+    cvt.rni.s64.f64 %rd_exp_k_35, %fd_exp_kf_35;  // sigmoid f64 exp: k = (s64) kf
+    mul.f64 %fd_exp_t_35, %fd_exp_kf_35, 0d3FE62E42FEE00000;  // sigmoid f64 exp: t = kf*ln2_hi
+    sub.f64 %fd_exp_r_35, %fd_sig_ax_35, %fd_exp_t_35;  // sigmoid f64 exp: r = u - kf*ln2_hi
+    mul.f64 %fd_exp_t_35, %fd_exp_kf_35, 0d3DEA39EF35793C76;  // sigmoid f64 exp: t = kf*ln2_lo
+    sub.f64 %fd_exp_r_35, %fd_exp_r_35, %fd_exp_t_35;  // sigmoid f64 exp: r -= kf*ln2_lo
+    mov.f64 %fd_exp_p_35, 0d3E927E4FB7789F5C;  // sigmoid f64 exp Horner: p = C10
+    fma.rn.f64 %fd_exp_p_35, %fd_exp_r_35, %fd_exp_p_35, 0d3EC71DE3A556C734;  // sigmoid f64 exp Horner step
+    fma.rn.f64 %fd_exp_p_35, %fd_exp_r_35, %fd_exp_p_35, 0d3EFA01A01A01A01A;  // sigmoid f64 exp Horner step
+    fma.rn.f64 %fd_exp_p_35, %fd_exp_r_35, %fd_exp_p_35, 0d3F2A01A01A01A01A;  // sigmoid f64 exp Horner step
+    fma.rn.f64 %fd_exp_p_35, %fd_exp_r_35, %fd_exp_p_35, 0d3F56C16C16C16C17;  // sigmoid f64 exp Horner step
+    fma.rn.f64 %fd_exp_p_35, %fd_exp_r_35, %fd_exp_p_35, 0d3F81111111111111;  // sigmoid f64 exp Horner step
+    fma.rn.f64 %fd_exp_p_35, %fd_exp_r_35, %fd_exp_p_35, 0d3FA5555555555555;  // sigmoid f64 exp Horner step
+    fma.rn.f64 %fd_exp_p_35, %fd_exp_r_35, %fd_exp_p_35, 0d3FC5555555555555;  // sigmoid f64 exp Horner step
+    fma.rn.f64 %fd_exp_p_35, %fd_exp_r_35, %fd_exp_p_35, 0d3FE0000000000000;  // sigmoid f64 exp Horner step
+    fma.rn.f64 %fd_exp_p_35, %fd_exp_r_35, %fd_exp_p_35, 0d3FF0000000000000;  // sigmoid f64 exp Horner step
+    fma.rn.f64 %fd_exp_p_35, %fd_exp_r_35, %fd_exp_p_35, 0d3FF0000000000000;  // sigmoid f64 exp Horner step
+    add.s64 %rd_exp_b_35, %rd_exp_k_35, 1023;  // sigmoid f64 exp: b = k + 1023
+    shl.b64 %rd_exp_b_35, %rd_exp_b_35, 52;  // sigmoid f64 exp: b <<= 52
+    mov.b64 %fd_exp_pow2k_35, %rd_exp_b_35;  // sigmoid f64 exp: pow2k = bit-cast b
+    mul.f64 %fd_sig_tval_35, %fd_exp_p_35, %fd_exp_pow2k_35;  // sigmoid f64: t = exp(-|x|)
+    neg.f64 %fd_sig_num_35, %fd_sig_tval_35;  // sigmoid f64: -t
+    add.f64 %fd_sig_num_35, %fd_sig_num_35, 0d3FF0000000000000;  // sigmoid f64: num = 1 - t
+    add.f64 %fd_sig_den_35, %fd_sig_tval_35, 0d3FF0000000000000;  // sigmoid f64: den = 1 + t
+    div.rn.f64 %fd_sig_num_35, %fd_sig_num_35, %fd_sig_den_35;  // sigmoid f64: (1-t)/(1+t) = tanh(|x/2|)
+    copysign.f64 %fd_sig_den_35, %fd34, %fd_sig_num_35;  // sigmoid f64: tanh(x/2) = sign(x)*tanh(|x/2|)
+    mul.f64 %fd35, %fd_sig_den_35, 0d3FE0000000000000;  // sigmoid f64: 0.5*tanh(x/2)
+    add.f64 %fd35, %fd35, 0d3FE0000000000000;  // sigmoid f64: + 0.5 = 1/(1+e^-x)
+    mul.f64 %fd36, %fd34, %fd35;  // binop *
+    mul.lo.s64 %rd_idxs_addr, %rd9, 8;  // index_set byte off = idx * 8
+    add.s64 %rd_idxs_addr, %rd_idxs_addr, %rd3;  // index_set addr = base + off
+    st.global.f64 [%rd_idxs_addr], %fd36;  // st base[idx] = val (f64)
+    ret;  // return
+}

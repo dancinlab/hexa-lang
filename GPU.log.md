@@ -792,3 +792,48 @@ AdamW step-fusion 1-kernel wedge (N=256, step t=7)
 - 🟠 DEFER queued ×4 (2·4·8·9)
 - **9/13 processed-terminal** (5 SKIP + 1 ALREADY + 2 WEDGE + 1 PARTIAL)
 - **4/13 dedicated-cycle queued**
+
+## 2026-05-28 — cycle-fg Round 6 · item 4 §5a GEMM+bias+SiLU epilogue 1-kernel wedge 🟢
+
+anima-rank 4 (★★★★) — FFN 25-35% step wall. BC3 timed wall 🔴 falsified 2026-05-27 (1.085× ceiling, NOT ≥1.5×). 본 라운드 = wall 측정이 아닌 **correctness silicon path 확장** — 기존 GELU structural oracle (PR #1645, $0-count + ptxas-clean) 위에 **SiLU/Swish variant silicon numeric byte-eq** 첫 추가.
+
+```hexa
+// fused single-kernel:
+//   acc = Σ_k A[m,k] * B[k,n]   (GEMM inner-product, K=128 muladd)
+//   z   = acc + bias[n]          (epilogue 1: bias)
+//   y[m,n] = z * sigmoid(z)      (epilogue 2: SiLU/Swish, Llama default)
+```
+
+Shape M=4 N=64 K=128 → 256 threads exact-fit single CTA. 7 kernel params (4 ptr + 3 i64).
+
+**ubu-2 silicon (RTX 5070 sm_120 driver-JIT from sm_80 PTX)** ([artifact](tool/artifacts/gemm_bias_silu_f64_2026_05_28.out) · [PTX](tool/artifacts/gemm_bias_silu_f64_2026_05_28.ptx)):
+
+```
+GEMM+bias+SiLU 1-kernel wedge (M=4 N=64 K=128, 256 outputs)
+  max_abs_err = 2.506e-14
+  mean_abs_err = 4.594e-15
+  ref_abs_max  = 0.2167  → max_rel_err = 1.157e-13
+  RESULT: PASS (byte-eq band <1e-12)
+```
+
+🟢 **PASS-near-byte-eq** (worst 2.506e-14 = 128-step GEMM accumulate sub-ULP, single-ULP×128 muladd FMA contract micro-diff).
+
+**finding**:
+- **Llama SwiGLU/SiLU 의 actual numeric path** silicon-validated (기존 GELU structural 보완).
+- nvptx_emit 이 GEMM inner-loop (`while k < K`) + bias-add + builtin `sigmoid` 호출을 **single kernel scope 에 type-correctly emit**. 7-param mixed-type ABI (4 ptr + 3 i64).
+- GELU structural+SiLU numeric 양변 silicon evidence → §5a GEMM+epilogue line 647 milestone 의 broader-than-GELU claim 강화.
+
+**honest caveats (g3)**:
+- N=256 = single CTA, K=128 small. 실 FFN (M=4096 N=11008 K=4096) 에선 grid-stride loop + cp.async 추가 (별도 fire — BC3 N204 transplant 로드맵).
+- **timed wall NOT measured this round** — BC3 1.085× honest ceiling (PR #1697 decomp) 그대로 유지. wedge 가 입증한 것 = correctness, NOT wall advantage.
+- worst 2.506e-14 ≠ 0 = GPU fma vs CPU separate mul/add FMA-contract micro-diff (Round 5 AdamW와 동일 family).
+
+## cycle-fg Round 6 진행도
+
+- 🔴 SKIP terminal ×5 (1·6·7·12·13)
+- 🟢 ALREADY-CLOSED ×1 (11)
+- 🟢 WEDGE-PASS ×3 (3 LN-fwd · 5 AdamW · 4 GEMM+SiLU)
+- 🟢 PARTIAL ×1 (10 argmax val byte-eq)
+- 🟠 DEFER queued ×3 (2·8·9)
+- **10/13 processed-terminal** (5 SKIP + 1 ALREADY + 3 WEDGE + 1 PARTIAL)
+- **3/13 dedicated-cycle queued**
