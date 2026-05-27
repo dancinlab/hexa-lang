@@ -2,6 +2,27 @@
 
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-27T17:02Z · 축 RTSC · RTSC6 · 수학 DFS — 293K iso-line 의 μ* (Coulomb pseudopotential) 민감도
+
+RTSC5 (293K iso-line, λ≥2.5·ω_log≥1530K) 의 깊이 확장. λ=3.0 고정, μ* sweep 으로
+293K 도달에 필요한 ω_log 가 Coulomb repulsion 에 어떻게 의존하는지 closed-form 정량.
+demiurge DFT/GPU 무관 · inline verify (`hexa verify --expr ... --no-absorb`, throttle-safe).
+
+- [x] μ*=0.10 → ω_log 1628K → Allen-Dynes Tc=292.947 🟢 (RTSC5 기준점)
+- [x] μ*=0.13 → ω_log 1712K → Tc=293.027 🟢 (+84K)
+- [x] μ*=0.16 → ω_log 1806K → Tc=293.037 🟢 (+178K)
+
+⟹ 결론: Coulomb pseudopotential μ* 가 0.10→0.16 으로 커지면 293K 도달에 필요한
+   ω_log 가 1628→1806K (+11%) 상승. 상온초전도 = (낮은 μ*) AND (높은 λ·ω_log) 의
+   이중 제약 — Coulomb 반발이 클수록 더 강한 포논 스펙트럼(ω_log) 필요.
+   N5 binary hydride 천장 ω_log≤1350K < 1628K (μ*=0.10 최소조건) 이므로 binary 로는
+   어떤 μ* 값에서도 293K 불가 — RTSC4 N5 wall 의 μ*-독립 재확인.
+
+verify (inline, allen_dynes_tc <lam> <omega_log_K> <mustar>, --no-absorb):
+  allen_dynes_tc 3.0 1628 0.10 → 292.947 (|Δ|=0.047, --tol 1.5) 🟢
+  allen_dynes_tc 3.0 1712 0.13 → 293.027 (|Δ|=0.027, --tol 1.5) 🟢
+  allen_dynes_tc 3.0 1806 0.16 → 293.037 (|Δ|=0.037, --tol 2.0) 🟢
+
 ## 2026-05-27T16:40Z · 축 RTSC · RTSC5 · 수학/물리 DFS — 상온초전도 293K closed-form 도달 조건 (demiurge DFT 무관)
 
 - [x] **RTSC5 — 수학/물리 DFS CLOSED**: 사용자 "RTSC 수학·물리 DFS만 진행" — demiurge DFT (GPU·harvest 미완) 우회, RTSC 의 closed-form Tc 지형을 TECS-L verify 로 깊이 탐색.
