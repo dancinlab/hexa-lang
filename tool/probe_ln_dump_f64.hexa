@@ -1,0 +1,53 @@
+// §5a LN+GEMM NaN isolation diagnostic (Round 9 cycle-fg)
+//
+// R8 LN+GEMM combined wedge → all-NaN. This probe isolates the cause:
+// IDENTICAL Phase 1a-1c to R8 (LN reduce + sm[tid]=normed scratch), but
+// Phase 2 = direct self-thread dump `y[tid] = sm[tid]` (NO cross-thread read).
+//
+//   NaN here  → LN reduce / sm round-trip is the culprit (compare vs R4)
+//   clean here → R8's Phase 2 cross-thread sm[k] read in while-loop is culprit
+
+@gpu_kernel
+fn probe_ln_dump_f64(x: [f64], y: [f64], N: i64) {
+    @shared let sm: [f64; 256] = []
+    let mut tid: i64 = to_i64(gpu_thread_id_x())
+
+    // Phase 1a: sum reduce
+    if tid < N { sm[tid] = x[tid] } else { sm[tid] = 0.0 }
+    gpu_barrier()
+    let mut stride: i64 = 128
+    while stride > 0 {
+        if tid < stride { sm[tid] = sm[tid] + sm[tid + stride] }
+        gpu_barrier()
+        stride = stride / 2
+    }
+    let mean: f64 = sm[0] / to_f64(N)
+    gpu_barrier()
+
+    // Phase 1b: var reduce
+    if tid < N {
+        let d: f64 = x[tid] - mean
+        sm[tid] = d * d
+    } else { sm[tid] = 0.0 }
+    gpu_barrier()
+    stride = 128
+    while stride > 0 {
+        if tid < stride { sm[tid] = sm[tid] + sm[tid + stride] }
+        gpu_barrier()
+        stride = stride / 2
+    }
+    let var: f64 = sm[0] / to_f64(N)
+    let inv: f64 = rsqrt(var + 0.00001)
+    gpu_barrier()
+
+    // Phase 1c: store normed into sm (IDENTICAL to R8)
+    if tid < N {
+        sm[tid] = (x[tid] - mean) * inv
+    } else { sm[tid] = 0.0 }
+    gpu_barrier()
+
+    // Phase 2 DIAGNOSTIC: self-thread dump (NO cross-thread read)
+    if tid < N {
+        y[tid] = sm[tid]
+    }
+}

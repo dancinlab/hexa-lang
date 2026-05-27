@@ -1,0 +1,50 @@
+// §5a LN+GEMM combined v2 — to_i64() @shared-index workaround (Round 9c)
+//
+// R8 NaN root-cause = bare i64 var `sm[tid]` index in @shared miscompiles.
+// R4 LN-fwd (PASS) wrapped EVERY @shared index in to_i64(). This v2 applies
+// the SAME workaround to the combined LN+GEMM kernel — every sm[...] index
+// is to_i64()-wrapped. If PASS → root cause confirmed + workaround established.
+
+@gpu_kernel
+fn probe_ln_gemm_v2_f64(x: [f64], W: [f64], y: [f64], N: i64, M: i64) {
+    @shared let sm: [f64; 256] = []
+    let mut tid: i64 = to_i64(gpu_thread_id_x())
+
+    if tid < N { sm[to_i64(tid)] = x[to_i64(tid)] } else { sm[to_i64(tid)] = 0.0 }
+    gpu_barrier()
+    let mut stride: i64 = 128
+    while stride > 0 {
+        if tid < stride { sm[to_i64(tid)] = sm[to_i64(tid)] + sm[to_i64(tid) + stride] }
+        gpu_barrier()
+        stride = stride / 2
+    }
+    let mean: f64 = sm[0] / to_f64(N)
+    gpu_barrier()
+
+    let xi: f64 = x[to_i64(tid)]
+    let diff0: f64 = xi - mean
+    if tid < N { sm[to_i64(tid)] = diff0 * diff0 } else { sm[to_i64(tid)] = 0.0 }
+    gpu_barrier()
+    stride = 128
+    while stride > 0 {
+        if tid < stride { sm[to_i64(tid)] = sm[to_i64(tid)] + sm[to_i64(tid) + stride] }
+        gpu_barrier()
+        stride = stride / 2
+    }
+    let var: f64 = sm[0] / to_f64(N)
+    let inv: f64 = rsqrt(var + 0.00001)
+    gpu_barrier()
+
+    if tid < N { sm[to_i64(tid)] = (x[to_i64(tid)] - mean) * inv } else { sm[to_i64(tid)] = 0.0 }
+    gpu_barrier()
+
+    if tid < M {
+        let mut acc: f64 = 0.0
+        let mut k: i64 = 0
+        while k < N {
+            acc = acc + W[k * M + tid] * sm[to_i64(k)]
+            k = k + 1
+        }
+        y[to_i64(tid)] = acc
+    }
+}

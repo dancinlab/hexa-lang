@@ -1,0 +1,52 @@
+// §5a LN NaN pinpoint — stats dump (Round 9b)
+//
+// Dumps GPU mean/var/inv into stats[0..2] + normed into y[tid].
+// Pinpoints which step first produces NaN: sum-reduce(mean) / var-reduce(var)
+// / rsqrt(inv) / Phase-1c normed.
+
+@gpu_kernel
+fn probe_ln_diag2_f64(x: [f64], y: [f64], stats: [f64], N: i64) {
+    @shared let sm: [f64; 256] = []
+    let mut tid: i64 = to_i64(gpu_thread_id_x())
+
+    if tid < N { sm[tid] = x[tid] } else { sm[tid] = 0.0 }
+    gpu_barrier()
+    let mut stride: i64 = 128
+    while stride > 0 {
+        if tid < stride { sm[tid] = sm[tid] + sm[tid + stride] }
+        gpu_barrier()
+        stride = stride / 2
+    }
+    let mean: f64 = sm[0] / to_f64(N)
+    gpu_barrier()
+
+    if tid < N {
+        let d: f64 = x[tid] - mean
+        sm[tid] = d * d
+    } else { sm[tid] = 0.0 }
+    gpu_barrier()
+    stride = 128
+    while stride > 0 {
+        if tid < stride { sm[tid] = sm[tid] + sm[tid + stride] }
+        gpu_barrier()
+        stride = stride / 2
+    }
+    let var: f64 = sm[0] / to_f64(N)
+    let inv: f64 = rsqrt(var + 0.00001)
+    gpu_barrier()
+
+    if tid == 0 {
+        stats[0] = mean
+        stats[1] = var
+        stats[2] = inv
+    }
+
+    if tid < N {
+        sm[tid] = (x[tid] - mean) * inv
+    } else { sm[tid] = 0.0 }
+    gpu_barrier()
+
+    if tid < N {
+        y[tid] = sm[tid]
+    }
+}

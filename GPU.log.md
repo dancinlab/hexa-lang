@@ -989,3 +989,31 @@ LN+GEMM 1-kernel wedge (N=256 M=64, 64 outputs)
 - 본 라운드 = closed-negative finding (paper_negative_ok rule = 🔴 FALSIFIED 이 publishable category 이지만 codegen bug 라 paper 보다는 INBOX fix-cycle 으로 라우팅).
 - 7-round 13/13 closure(11/13 terminal + 2/13 DEFER) → **8-round 12/13 terminal** (R8 = closed-negative codegen finding on §5a LN+GEMM combined milestone).
 - §5a LN+GEMM combined milestone (line 636) 는 `[ ]` 유지 — root cause INBOX fix 후 다음 cycle 에서 wedge 재시도.
+
+## 2026-05-28 — cycle-fg Round 9 · R8 LN+GEMM NaN root-cause 5-fire isolation 🔬
+
+"all go" 자율 — R8 closed-negative 의 codegen miscompile 을 5-fire diagnostic 으로 정밀 narrowing. ubu-2 RTX 5070 sm_120, 전부 driver-JIT from sm_80.
+
+| fire | probe | variant | result |
+|---|---|---|---|
+| 9a | `probe_ln_dump_f64` | self-dump (no cross-thread read), bare-tid | NaN 256/256 |
+| 9b | `probe_ln_diag2_f64` | stats dump, bare-tid | **GPU mean=NaN** (첫 sum-reduce) |
+| 9c | `probe_ln_gemm_v2_f64` | to_i64()-wrapped every sm index | NaN 64/64 |
+| 9d | `probe_ln_dump_v2_f64` | to_i64 + self-dump + 3-param | NaN 256/256 |
+| 9e | `probe_ln_gemm_v3_f64` | separate 2nd @shared `sm2[256]` | NaN 64/64 |
+
+**기각된 가설** (R8 INBOX 의 2 hypothesis 둘 다 틀림):
+- ❌ (b) cross-thread sm[k] read — 9a self-dump (no cross-thread) 도 NaN
+- ❌ (a) bare-tid index / to_i64 wrapper — 9c·9d to_i64 도 NaN
+- ❌ param count — 9d 3-param 도 NaN (R4 도 3-param 인데 PASS)
+- ❌ sm reuse — 9e 별도 sm2 array 도 NaN
+
+**확정 narrowing**: R4 `probe_layernorm_f64` (PASS, max_abs=0) 와 모든 NaN-variant 의 유일한 구조 차이 = **normalize 결과를 @shared 에 store 하는 3rd @shared-write phase**. R4 는 normalize → global y 직행 (@shared 는 2 reduce scratch 로만, 3rd write 전무). 모든 NaN-variant 는 reduce 후 `sm[tid]=normed` (또는 `sm2[tid]=normed`) 3rd @shared-write 가 있음.
+
+→ **root cause = nvptx_emit 이 "2 reduce-loop @shared 소비 후 추가 @shared store-then-read (3rd write-phase)" lifecycle 을 miscompile** — `st.shared` address-reg 가 reduce-loop 의 stale reg 를 재사용하거나 base offset 을 잃어 NaN/garbage 전파. Round 2 argmax @shared partition-offset bug 와 같은 @shared-lifecycle family.
+
+**finding (negative, paper_negative_ok)**: 5-fire 로 4 hypothesis 기각 + root cause 를 단일 구조 축 (3rd @shared-write phase) 으로 정밀 격리. INBOX entry 갱신 (actionable fix-path: PTX st.shared/ld.shared address-reg lifecycle 분석). artifacts `tool/artifacts/ln_{dump,diag2,gemm_v2,dump_v2,gemm_v3}_f64_2026_05_28.ptx` + `ln_gemm_diag_2026_05_28.out` (5-fire transcript).
+
+**halt**: cycle-fg "step failed → STOP" + 1-fire wedge 영역 밖 (codegen 정밀 PTX 분석 필요). §5a LN+GEMM combined milestone (line 636) `[ ]` 유지. dedicated codegen session 으로 handoff.
+
+cycle-fg sequence after R9: R8 closed-negative → R9 5-fire root-cause isolation (codegen miscompile 정밀 격리, fix 는 dedicated session).
