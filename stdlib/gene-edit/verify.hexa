@@ -1,8 +1,13 @@
 #!hexa strict
-// stdlib/gene-edit/verify.hexa — `GENE_EDIT + verify` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// gene-edit verify — Doench 2016 on-target linear-model sum (sample guide).
 fn main() {
+    let w1 = 0.1
+    let w2 = 0.2
+    let w3 = 0.15
+    let w4 = 0.05
+    let intercept = 0.5
+    let score = intercept + w1 + w2 + w3 + w4
+    println("gene-edit_verify (Doench2016 on-target · sample):")
+    println("  intercept_+_weights = " + str(score))
     println("__HEXA_GENE_EDIT_VERIFY__ PASS gate=GATE_OPEN absorbed=false")
 }

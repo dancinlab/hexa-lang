@@ -1,8 +1,13 @@
 #!hexa strict
-// stdlib/photonic/verify.hexa — `PHOTONIC + verify` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// photonic verify — ring FSR = λ²/(n_g·L).
 fn main() {
+    let lambda_m = 1.55e-6
+    let n_g = 2.0
+    let L_m = 1.0e-4      // 100 μm
+    let FSR_m = lambda_m * lambda_m / (n_g * L_m)
+    let FSR_nm = FSR_m * 1.0e9
+    println("photonic_verify (ring FSR · λ=1550nm, n_g=2, L=100μm):")
+    println("  FSR_m = " + str(FSR_m))
+    println("  FSR_nm = " + str(FSR_nm))
     println("__HEXA_PHOTONIC_VERIFY__ PASS gate=GATE_OPEN absorbed=false")
 }

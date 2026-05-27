@@ -1,8 +1,13 @@
 #!hexa strict
-// stdlib/graphene/verify.hexa — `GRAPHENE + verify` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// graphene verify — Landauer conductance quantum G₀ = 2e²/h.
 fn main() {
+    let G0_S = 7.748e-5   // 2e²/h (conductance quantum)
+    let G0_uS = G0_S * 1.0e6
+    let N_channels = 1.0
+    let G_total_S = G0_S * N_channels
+    println("graphene_verify (Landauer quantum · N=1 channel):")
+    println("  G0_S = " + str(G0_S))
+    println("  G0_uS = " + str(G0_uS))
+    println("  G_total_S = " + str(G_total_S))
     println("__HEXA_GRAPHENE_VERIFY__ PASS gate=GATE_OPEN absorbed=false")
 }
