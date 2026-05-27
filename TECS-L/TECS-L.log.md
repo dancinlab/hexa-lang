@@ -2,6 +2,30 @@
 
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-27T17:35Z · 축 RTSC · RTSC11 · 수학 DFS — realistic μ*=0.191 (Morel-Anderson hydride) 에서 293K iso-line 재계산
+
+RTSC10 + RTSC5 합성. RTSC10 의 Morel-Anderson μ*(μ_bare=0.3, E_F=10000, ω_ph=1500)
+=0.191 (h3cl-scale hydride 의 realistic Coulomb pseudopotential) 을 사용해 RTSC5
+의 293K iso-line 을 재계산. 표준 μ*=0.10 가정 대비 ω_log 요구 증가량 정량.
+
+- [x] λ=2.5 μ*=0.191 → ω_log **2145K** = 293.032K 🟢 (RTSC5 μ*=0.10 의 1779K → +21%)
+- [x] λ=3.0 μ*=0.191 → ω_log **1915K** = 292.885K 🟢 (RTSC5 의 1628K → +18%)
+- [x] λ=3.5 μ*=0.191 → ω_log **1772K** = 293.154K 🟢 (RTSC5 의 1530K → +16%)
+- [x] λ=3.5 μ*=0.191 ω_log=1800 → 297.787K 🔴 (FALSIFIED 충분조건, 1772 정확점에서 28K over)
+
+⟹ 결론 (realistic shift): hydride realistic μ*=0.191 적용시 RTSC5 iso-line 의
+   ω_log 요구가 평균 **+18%** 증가:
+   - 표준 (μ*=0.10): λ=2.5/1779 · 3.0/1628 · 3.5/1530
+   - realistic (μ*=0.191): λ=2.5/2145 · 3.0/1915 · 3.5/1772
+   binary h3cl ω_log=1350K << realistic minimum 1772K → **gap +422K** (vs 표준
+   +180K). N5 wall 이 realistic μ* 에서 ~2.3× 더 두꺼움.
+
+verify (inline, --no-absorb):
+  allen_dynes_tc 2.5 2145 0.191 → 293.032 🟢
+  allen_dynes_tc 3.0 1915 0.191 → 292.885 🟢
+  allen_dynes_tc 3.5 1772 0.191 → 293.154 🟢
+  allen_dynes_tc 3.5 1800 0.191 → 297.787 🔴 (closed-negative)
+
 ## 2026-05-27T17:28Z · 축 RTSC · RTSC10 · 수학 DFS — Morel-Anderson μ* 의 ω_ph 의존성 (표준 μ*=0.10 가정의 재검토)
 
 RTSC9 (λ→∞ asymptote) 의 깊이 확장. Coulomb pseudopotential μ* 는 단순 상수가
