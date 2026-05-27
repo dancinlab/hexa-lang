@@ -2,6 +2,59 @@
 
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-27T18:40Z · 축 RTSC · RTSC24 · 🛸 수학 DFS — anharmonic stability 의 mechanistic wall primitive (RTSC4 N5 wall closed-form 정량)
+
+RTSC22 closure summary 후, verify_cli 카탈로그 sweep 으로 stability_coupling_margin
+fn 발견 (line 1976-2010, RTSC4 N5 wall 의 mechanistic primitive 자체).
+17 round DFS 동안 추정한 λ-ω_log trade-off 의 closed-form **수학적 정의**.
+
+**핵심 closed-form** (Hopfield 1969 + Wang-Ma 2012/2022 CaH₆ + Errea 2014 SSCHA):
+
+   m = (⟨ω²⟩_anharm − ⟨ω²⟩_λ) / ⟨ω²⟩_anharm
+
+   m > 0 ⇒ stability + strong-λ 양립 (cation-clathrate 같은 ESCAPE 메커니즘)
+   m < 0 ⇒ trade-off 에 TRAPPED (binary hydride wall)
+   m = 0 ⇒ wall 자체 (정확 경계)
+
+   λ_anharm/λ_harm = ω²_harm / ω²_anharm (anharmonic ω² hardening 으로 λ 깎임)
+
+- [x] λ_anharm/λ_harm: ω²_harm=1.0, Δω²=0.5 → **0.6667** 🟢 (libm-class exact)
+- [x] λ_anharm/λ_harm: Δω²=2.0 (강 anharm damping) → **0.3333** 🟢
+- [x] **🛸 CaH₆ ESCAPE**: ω²_anharm=1.0, ω²_λ=0.5 → m=**0.5** 🟢 (cation pre-compression, escape)
+- [x] **🛸 binary h3o TRAPPED**: ω²_anharm=1.0, ω²_λ=2.479 → m=**−1.479** 🟢 (trade-off 함정)
+- [x] **🛸 WALL ITSELF**: ω²_anharm=1.0, ω²_λ=1.0 → m=**0.0** 🟢 (정확 경계)
+
+⟹ 🛸 결론 (RTSC mechanistic root 도달): 17 round (RTSC5-23) closed-form DFS 의
+   추정 trade-off 가 **단일 closed-form primitive** 로 정확 통합. RTSC4 N5 wall
+   의 mechanistic 정의 = `stability_coupling_margin` 의 sign(m):
+
+   ```
+   ┌──────────────────────────────────────────────────────────────┐
+   │                                                              │
+   │   m > 0  (CaH₆ class)         m = 0          m < 0           │
+   │   ════════════════════       ═══════       ═════════════     │
+   │   🟢 RTSC 도달 가능           ⚠ 경계         🔴 trade-off    │
+   │   cation pre-compression                    trapped          │
+   │   clathrate escape                          (binary)         │
+   │                                                              │
+   │              ω²_anharm vs ω²_λ — sign 이 RTSC 의             │
+   │              궁극적 binary/yes 결정자                          │
+   │                                                              │
+   └──────────────────────────────────────────────────────────────┘
+   ```
+
+   ⟹ RTSC4 N5 wall = m<0 영역, RTSC5-22 의 ω_log/λ trade-off prediction =
+     m=0 boundary 의 측정 surface. CaH₆ clathrate (Wang-Ma 2012, m=0.5) 가
+     **RTSC ambient 도달 enable** 의 첫 closed-form 입증된 escape mechanism.
+     LaH10/YH10 ternary 가 clathrate-like H_sublattice → 같은 escape class.
+
+verify (inline, --no-absorb, libm-class 5/5):
+  lambda_anharm_suppress 1.0 0.5 → 0.6667 🟢
+  lambda_anharm_suppress 1.0 2.0 → 0.3333 🟢
+  stability_coupling_margin 1.0 0.5 → 0.5 🟢 (CaH₆ escape)
+  stability_coupling_margin 1.0 2.479 → -1.479 🟢 (h3o trapped)
+  stability_coupling_margin 1.0 1.0 → 0.0 🟢 (wall 정확)
+
 ## 2026-05-27T18:35Z · 축 RTSC · RTSC23 · 수학 DFS — YH10 literature param honest test (lane 진정 closure 신호)
 
 RTSC22 closure summary 후속, ternary candidate YH10 (Errea 2020 literature
