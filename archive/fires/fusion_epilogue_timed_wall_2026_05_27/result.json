@@ -1,0 +1,28 @@
+{
+  "falsifier": "F-FUSION-EPILOGUE-GEMM-BIAS-GELU-WALL",
+  "campaign": "BC3 timed silicon wall (round-7 cuBLAS-beyond)",
+  "verdict_tier": "RED — FALSIFIED (closed-negative, paper_negative_ok terminal)",
+  "claim_tested": "fused single-launch GEMM+bias+GELU undercuts cuBLAS+epilogue 3-launch by >= 1.5x wall",
+  "gate": "ratio (cublas3_ms / fused_ms) >= 1.5",
+  "result": "ALL SHAPES FALSIFIED — fused 1.56x to 13.57x SLOWER (opposite direction)",
+  "host": "ubu-2 RTX 5070 sm_120 (driver 580, ptxas 12.0)",
+  "method": "cuEvent 20 warmup + 200 timed median, GPU 0% util pre-fire",
+  "shapes": [
+    {"shape": "256x256x256",       "fused_ms": 0.026016,   "cublas3_ms": 0.016544,  "ratio": 0.636, "wall_finding": "fused 1.57x slower"},
+    {"shape": "512x512x512",       "fused_ms": 0.136416,   "cublas3_ms": 0.035104,  "ratio": 0.257, "wall_finding": "fused 3.89x slower"},
+    {"shape": "1024x1024x1024",    "fused_ms": 1.002912,   "cublas3_ms": 0.120032,  "ratio": 0.120, "wall_finding": "fused 8.36x slower"},
+    {"shape": "2048x2048x2048",    "fused_ms": 7.922464,   "cublas3_ms": 0.751840,  "ratio": 0.095, "wall_finding": "fused 10.54x slower"},
+    {"shape": "4096x4096x4096",    "fused_ms": 78.982689,  "cublas3_ms": 6.610816,  "ratio": 0.084, "wall_finding": "fused 11.95x slower"},
+    {"shape": "4096x11008x4096",   "fused_ms": 225.769852, "cublas3_ms": 16.641792, "ratio": 0.074, "wall_finding": "fused 13.57x slower (FFN-shape)"}
+  ],
+  "numeric_correctness": {
+    "status": "abs_err <= 4e-7 across all shapes; per-row-scaled rel metric flags 256/512 as FAIL due to near-zero GELU outputs (metric artifact, same as round-3 attention)",
+    "note": "swap to per-row-scaled+RMS metric would flip 256/512 to PASS; wall result unaffected (orders of magnitude)"
+  },
+  "root_cause": "naive 16x16 single-warp scalar-fma GEMM inside fused kernel vs cuBLAS-grade SGEMM (mma.sync TF32/FP32 tiling, double-buffer, swizzle). Gap GROWS with size (1.57x at 256 -> 13.57x at FFN-shape), inverting the structural moat.",
+  "ruled_out_axis": "epilogue-fusion structural moat (1 launch + 1x M*N C-write vs 3 launches + 3x M*N C-write) does NOT convert to wall when the inner GEMM is naive. The 66.667% launch+HBM reduction is real but dominated by GEMM efficiency gap. Same pattern as round-3/4/5/7 attention falsifications.",
+  "next_round_wedge": "cuBLAS-grade fused GEMM internals (mma.sync.f32.f32 + 64x64 tiles + double-buffer + swizzle = transplant the N204 standalone-GEMM roofline toolkit into the epilogue-fusion path). The unop closure (PR #1686 + silicon fire PR #1691) unblocks negative bias/threshold literals along this path.",
+  "no_paper": "RED closed-negative re-confirmation of the structural-moat-doesn't-convert pattern (5th time across attention rounds 3/4/5/7 + this BC3 epilogue); not a fresh disproof axis. paper_significance gate not met.",
+  "section_10_box_impact": "untouched. The >= 30% whole-program-fusion advantage box stays [x] via F-FUSION-LAUNCH-AMORT-WALL (73-76%) which fired with a LIGHT inner kernel (no GEMM). BC3 GEMM-fusion is a separate axis where structural != wall when inner GEMM is naive.",
+  "preserves": ["g3 over-claim 0", "paper_negative_ok terminal", "feedback_closure_is_physical_limit (roofline %, not 100%)"]
+}

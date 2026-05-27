@@ -1448,7 +1448,7 @@ CLAIMS.tape entries: `fusion_layerblock_cross_layer_structural` (🔵) +
 > cuBLAS는 standalone GEMM에서 roofline 천장. fused operator + IO-aware algorithm + sm_90+ TMA 로만 의미있는 격차. round-3~7 attention 회귀 lesson 흡수.
 - [x] BC1 cuBLAS bridge baseline measurement (sm_80 A100, sm_90 H100, sm_120 RTX 5070) — roofline % per arch
 - [x] BC2 CUTLASS-style standalone GEMM (mma.sync + ldmatrix + double-buffer + ping-pong) — match cuBLAS 95-100%
-- [x] BC3 GEMM+bias+activation fused kernel (single launch) — cuBLAS 2-launch 대비 >=1.5x
+- [x] BC3 GEMM+bias+activation fused kernel (single launch) — cuBLAS 3-launch 대비 >=1.5x **🔴 timed wall FALSIFIED 2026-05-27** (구조 PASS 🔵 66.667% launch+HBM 감소 + ptxas-clean #1645 유지; 실측 wall 1.57x-13.57x SLOWER across 256³ to FFN 4096×11008×4096 — naive 16×16 single-warp GEMM 이 cuBLAS SGEMM 에 order of magnitude 짐, structural moat 실측 미전환). round-3/4/5/7 attention falsification 패턴(structural ≠ wall when inner GEMM naive)의 5번째 instance. next-wedge=N204 roofline-GEMM 툴킷(mma.sync + 64×64 + double-buffer) 의 epilogue-fusion 전환. verdict `.verdicts/fusion-epilogue-gemm-bias-gelu-wall/F-FUSION-EPILOGUE-GEMM-BIAS-GELU-WALL.txt`; artifacts `archive/fires/fusion_epilogue_timed_wall_2026_05_27/`
 - [x] BC4 FlashAttention v3 hexa-native (online softmax + warp-specialized) — cuBLAS-TC 3-launch 대비 >=1.5x (round-7 5.3x slower break-even)
 - [x] BC5 sm_90 TMA (cp.async.bulk.tensor) + producer/consumer warp split — H100 specific 추가 1.5-2x
 - [x] BC6 mixed-precision bf16 GEMM + fp8 weight storage — 메모리 50% 절감 end-to-end 1.3-1.8x

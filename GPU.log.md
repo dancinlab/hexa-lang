@@ -180,3 +180,72 @@ silicon 실측 확인 → bug #1663 full close.
 #1687 은 close, silicon-fire + 문서만 본 PR 로 분리 진입. silicon fire 의 PTX 본문은
 #1686 codegen 의 출력과 byte-identical 한 surface (3 emit form 모두 동일) — 검증은
 교차 적용 valid.
+
+## 2026-05-27 — 🔴 BC3 GEMM+bias+GELU fused timed wall FALSIFIED (round-7)
+
+직전 unop closure 후속 라운드 — 사용자 골 "cuBLAS 뛰어넘기 — fusion + IO-aware"
+의 BC3 timed silicon wall (구조 PASS 위 실측 add) 진입. 구조 oracle 은 2026-05-25
+landing 시 🔵 66.667% launch+HBM 감소 + ptxas-clean sm_80 으로 closure, 실측 wall
+은 "DEFERRED to serial follow-up on ubu-2" 로 명시 deferred 상태였음. 본 entry =
+그 deferred 실측 절반 수행 후 honest closed-negative finding.
+
+**Tier**: 🔴 FALSIFIED (closed-negative, paper_negative_ok terminal)
+**Branch**: `bc3-timed-wall-2026-05-27`
+**Falsifier**: `F-FUSION-EPILOGUE-GEMM-BIAS-GELU-WALL`
+**Verdict**: `.verdicts/fusion-epilogue-gemm-bias-gelu-wall/F-FUSION-EPILOGUE-GEMM-BIAS-GELU-WALL.txt`
+**Artifacts**: `archive/fires/fusion_epilogue_timed_wall_2026_05_27/{result.json, timed_fire.log}` + `tool/fusion_epilogue_{fused,cublas}_timed.c`
+
+**Silicon evidence** (ubu-2 RTX 5070 sm_120, driver 580, ptxas 12.0, cuEvent 20w/200m):
+
+| shape | fused_ms | cublas3_ms | ratio | finding |
+|---|---|---|---|---|
+| 256³ | 0.026 | 0.017 | 0.636 | fused 1.57× slower |
+| 512³ | 0.136 | 0.035 | 0.257 | fused 3.89× slower |
+| 1024³ | 1.003 | 0.120 | 0.120 | fused 8.36× slower |
+| 2048³ | 7.922 | 0.752 | 0.095 | fused 10.54× slower |
+| 4096³ | 78.983 | 6.611 | 0.084 | fused 11.95× slower |
+| FFN 4096×11008×4096 | 225.770 | 16.642 | 0.074 | fused 13.57× slower |
+
+ALL 6 shapes 1.5× gate FAIL — 방향 INVERTED, gap 이 size 와 함께 GROWS (1.57× →
+13.57×). 256/512³ 의 max_rel "FAIL" 은 metric artifact (near-zero GELU output 의
+per-row-scaled rel inflation, round-3 attention 과 동일 패턴 — max_abs ≤ 4e-7
+이라 numeric 자체는 OK). wall 결과는 metric 무관.
+
+**Root cause (closed-negative finding)**: fused 커널의 inner GEMM 이 naive 16×16
+single-warp scalar-fma. cuBLAS SGEMM 은 mma.sync.f32.f32 tiling + double-buffer +
+swizzle + warp specialization. GEMM efficiency gap 이 1.5-10× per shape, fusion
+의 구조적 moat (1 launch + 1× M·N C-write vs 3 launches + 3× M·N C-write =
+66.667% 감소 by construction) 을 dominate.
+
+**Ruled-out axis (5번째 instance)**: 이는 round-3/4/5/7 attention falsification
+의 동일 패턴: "structural launches + HBM reduction proven closed-form does NOT
+convert to wall when the inner GEMM is naive". Attention 궤적 9.4-15.5× →
+3.4-5.0× → 3.47× → 5.3-6.9×. BC3 epilogue 1.57-13.57× 가 5번째 instance 로 합류.
+
+**Fusion-AxisA-breadth 와 대비** — LayerNorm 66%/RMSNorm 59%/Softmax 65%/SwiGLU
+63% + launch-amort 73-76% 는 모두 LIGHT inner kernel (no GEMM) 로 wall 성공.
+inner work 가 GEMM 인 순간 inner-loop efficiency 가 structural moat 을 orders of
+magnitude 로 dominate. §10 box 의 ≥30% closure 는 light-inner-kernel 워크로드
+일반화는 OK, naive-GEMM-fusion 으로는 명시적 NOT.
+
+**Next-round wedge**: N204 standalone-GEMM roofline 툴킷 (mma.sync.f32.f32 +
+64×64 tile + double-buffer + swizzle) 의 epilogue-fusion 전환. 직전 unop closure
+(PR #1686 + #1691 silicon-fire) 가 negative bias/threshold sentinel literal
+unblock 으로 이 wedge path 의 곁가지 함정 제거 완료. round-7 BC4 의 동일 wedge
+가 attention 에서는 smem occupancy collapse 로 FALSIFIED 였으나 (Q/K/V/V^T/S/P/O
+simultaneous residency), GEMM-fusion 의 epilogue 축은 smem residency 가 다름
+(A/B tiles + C accumulator + bias vector) — toolkit 이 cleanly transplant 할
+가능성 有.
+
+**§10 box impact**: untouched. ≥30% whole-program-fusion advantage 는
+F-FUSION-LAUNCH-AMORT-WALL (73-76%) + F-FUSION-AXISA-BREADTH (4/4 PASS,
+59-72%) 의 light-inner-kernel general 증거로 유지. BC3 GEMM-fusion 은 별도 축
+에서 closed-negative, §10 closure 명시적으로 영향 없음.
+
+**No paper**: RED closed-negative re-confirmation (5번째 instance). paper_significance
+gate 의 novelty 미달.
+
+**Honest scope**: structural ⓪ (🔵 66.667%, #1645) + ptxas-clean 은 PRESERVED
+(별도 fire). 본 entry 는 ① wall clause (timed silicon) 의 FALSIFIED finding 만.
+GPU.md round-7 BC3 [x] 는 paper_negative_ok terminal 로 유지하되 honest
+inline annotation 추가 (BC4 의 "round-7 5.3x slower break-even" 컨벤션 미러).
