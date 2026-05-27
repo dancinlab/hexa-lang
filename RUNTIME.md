@@ -4772,27 +4772,52 @@ the 8 잔여 items have settled to:
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,760 B
 
-## L-multi-dylib 잔여 plan (next-session implementable spec) — 2026-05-27
+## 🔴 L-multi-dylib — CLOSED-NEGATIVE: macOS phase-H 에 불필요 (2026-05-27)
 
-phase-H 가 default-flip(#1354) 까지 도달했고, 마지막 1개 잔여 = hexa_ld 의 **multi-dylib ordinal 지원**. 현재 `tool/hexa_ld.hexa` 가 모든 import 를 `lib_ordinal=1`(libSystem) 로 강제 → libm/libc++/외부 framework 등 다른 dylib 의 심볼 unsupported.
+**한때 "phase-H 의 마지막 코드 잔여" 로 plan 되었으나, 실측으로 macOS 에선
+필요 없음이 확정됐다 (closed-negative).** 당초 가정: `tool/hexa_ld.hexa` 가
+모든 import 를 `lib_ordinal=1`(libSystem) 로 강제하므로 libm 심볼(`_cos`
+등)은 별도 `/usr/lib/libm.dylib` ordinal 2 가 필요하다 — 그래서 LC_LOAD_DYLIB
+다중 emit + ordinal 분류기를 구현하려 했다.
 
-### 구현 단위 (5 step)
-1. **LC_LOAD_DYLIB 다중 emit** — `_emit_lc_load_dylib(out, path)` 함수화. 현재 line ~1746-1747 의 단일 libSystem 호출을 list-driven 으로 (배열 `lib_paths` 순회).
-2. **dylib registry** — `lib_paths = ["/usr/lib/libSystem.B.dylib", "/usr/lib/libm.dylib", ...]`. 인덱스+1 = ordinal (1-based, ord=0 reserved).
-3. **symbol → ordinal 분류 휴리스틱** — 새 `classify_import_ordinal(name) -> int` 함수. libm 표준 set(`_cos _sin _tan _asin _acos _atan _atan2 _exp _exp2 _log _log10 _log2 _sqrt _cbrt _pow _floor _ceil _round _trunc _fmod _fabs _hypot _erf _gamma _lgamma _sinh _cosh _tanh _asinh _acosh _atanh _expm1 _log1p`) → ord=2; 나머지 → ord=1.
-4. **chained_fixups imports table 업데이트** — line ~1905-1906 의 `lib_ordinal:8` 비트필드를 `classify_import_ordinal(name)` 결과로 채움. 현재는 hardcoded 1.
-5. **sizeofcmds 재계산** — 추가 LC_LOAD_DYLIB 마다 cmd_size += len("/usr/lib/...") + padding 반영. `mh_sizeofcmds` 갱신.
+### Falsifier + 실측 (g5 · 결정적)
 
-### 검증 (g5)
-- 테스트 .o: `bl _write` (libSystem) + `bl _cos` (libm) 두 import 사용.
-- 링크: `hexa run tool/hexa_ld.hexa -o out --lc-main _start test.o`.
-- `otool -l out`: LC_LOAD_DYLIB 2개 (libSystem · libm) + LC_DYLD_CHAINED_FIXUPS bind 2 imports (각 ord=1·2).
-- 실행: cos(0)=1.0 활용 → exit 1 또는 stdout 확인 → 정상.
-- no-regression: 기존 PoC(#1276/#1282/#1286/#1307/#1348) 4 개 전부 PASS (libSystem-only 케이스는 ord=1 default 유지).
+falsifier = "표준 libm/libc 심볼이 libSystem 외의 dylib 바인딩을 요구하는가?"
 
-### 잔여
-- 다른 dylib(libc++/Foundation/CoreFoundation 등)은 별도 axis (각 분류 set + ord 추가).
-- 분류 휴리스틱 missing case → fallback to libSystem(ord=1) + WARN log.
-- 정밀 plan, 한 세션 foreground 추정 ~2-4h 구현 + 검증.
+```
+$ ls /usr/lib/libm.dylib              # 존재하지 않음 (no on-disk file)
+ls: /usr/lib/libm.dylib: No such file or directory
 
-→ phase-H 의 사실상 마지막 코드 잔여. 이 후 chunk-B 의 hexa-native object→exe 전 구간이 모든 libSystem-class dylib 까지 cover.
+# 26 libm fn (cos sin tan acos asin atan atan2 exp exp2 log log10 log2
+#   sqrt cbrt pow floor ceil round trunc fmod fabs hypot erf sinh cosh tanh)
+# + 5 libc fn (malloc memset snprintf free printf) 사용하는 프로그램:
+$ clang broad.c -o broad && otool -L broad
+        /usr/lib/libSystem.B.dylib (...)      # ← 유일한 LC_LOAD_DYLIB
+$ otool -L broad | tail -n +2 | wc -l
+       1
+```
+
+**결과: 모든 표준 libm + libc 심볼이 단일 `/usr/lib/libSystem.B.dylib`
+umbrella(ordinal 1) 로 바인딩된다.** 현대 macOS 는 개별 dylib 을 디스크
+파일이 아니라 **dyld shared cache** 안에 두고, libm/libc 를 libSystem 으로
+re-export 한다. 따라서 기존 단일-dylib 링커가 **이미** 런타임이 쓰는 모든
+표준 심볼(libm `_acos` 등 161개 포함)을 ordinal 1 로 정확히 커버한다.
+
+### 결론 — 닫힌 음성 (ruled-out axis)
+
+- multi-dylib ordinal mapping 은 **phase-H 의 macOS zero-`.c` 목표에 블로커가
+  아니다.** plan 의 5-step / libm.dylib ordinal 2 전제는 falsified.
+- 진짜 미래 필요조건 = 런타임이 **libSystem 이 아닌 3rd-party dylib**
+  (예: Metal/CUDA GPU backend, 외부 framework) 를 링크하게 될 때 뿐. 그건
+  GPU/feature 축의 future generalization 이지 RUNTIME 완주 잔여가 아니다.
+- 그러므로 phase-H 링커(`tool/hexa_ld.hexa`)는 macOS 런타임 기준 **코드
+  잔여 없음**. inc1~inc5(BRANCH26 → PAGE21/12 → multisection → dyld 함수
+  import → dyld 데이터 import) 로 object→exe 전 구간이 libSystem-class
+  심볼 전체를 cover 한다.
+
+### RUNTIME 완주의 실제 남은 블로커 (재확인)
+
+multi-dylib 가 빠지면서 zero-`.c` 의 잔여는 step 4 **runtime_core.c (281 KB ·
+HexaVal tagged-union repr + arena/GC floor) 의 hexa-native self-emit 제거**
+하나로 좁혀진다 — architectural, 다중세션 (phase-H 백엔드가 HexaVal repr 을
+C struct 없이 머신코드로 직접 emit 해야 함). 이것이 `@goal` 의 마지막 관문.
