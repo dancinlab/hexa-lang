@@ -1,5 +1,19 @@
 # INBOX — log
 
+## 2026-05-27 — hexa cloud: RunPod pod-id → SSH-host resolver 부재 (cloud-guard 와 deadlock)
+
+> **블로커 (anima M4b Phase 4-fire 발사 차단)**: RunPod H100 pod 를 `runpodctl pod create` 로 띄운 뒤(id=r2afs2es6q8aln, RUNNING), 프로비저닝하려면 `hexa cloud {exec|copy-to|...}` 의 `<host>` = resolved SSH 목적지(`root@<public-ip> --port <n>`)가 필요. 그런데 그 public-ip:port 를 얻을 길이 막힘:
+> - `runpodctl ssh ...` → **cloud-guard 차단** (raw rented-GPU remote-exec/transfer)
+> - `curl https://api.runpod.io/graphql ...` (runtime.ports 조회) → **cloud-guard 차단** (raw HTTP API call)
+> - `runpodctl get/list pod` (lifecycle, 허용) → tabular 출력에 **runtime IP:port 미표시**
+> → cloud-guard 는 "hexa cloud 만 쓰라" 하는데, hexa cloud 는 IP 를 resolve 못 하고(pod-id 인자 없음), IP discovery 대안은 전부 guard 차단 = **deadlock**. pod 를 띄워도 연결 불가 → $3.29/hr 출혈만, remove 로 정지(~$0.5 손실).
+
+**요청 (택1 또는 병행)**
+- [ ] **hexa cloud 에 RunPod resolve 추가** — `cloud run/exec/... <runpod:POD_ID>` 또는 `cloud resolve <POD_ID>` 가 runpodctl/API 로 runtime.ports(publicIp + 22/tcp publicPort)를 조회해 ssh host 자동 구성. cloud-guard 내부(허용 경로)에서 수행.
+- [ ] **또는 cloud-guard 가 read-only runtime-ports 조회를 허용** — `runpodctl get pod -o json` 의 runtime.ports 또는 GraphQL `pod{runtime{ports{ip publicPort privatePort type}}}` 같은 비-exec/비-transfer GET 은 lifecycle 'get/show' 범주로 통과시킴 (현재 raw HTTP 라는 이유로 차단).
+
+**현황**: anima M4b GPU 포팅(cuBLAS mm) 5/5 + backward 6/6 실측 PASS (byte-identical) → fire 는 코드가 아니라 이 transport-resolve 갭에만 막힘. resolver 생기면 즉시 발사 가능. severity: high (runpod fire 경로 전체 차단).
+
 ## 2026-05-27 — hexa-lsp stdlib 심볼 인덱싱 부재 → flame/forge primitive 미발견 (anima M4b scope-check 교훈)
 
 **발견 맥락**: anima M4b pilot(DECODER MoE-fresh 학습 스택)을 작성하며 모든 matmul 을
