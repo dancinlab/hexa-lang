@@ -1,5 +1,17 @@
 # INBOX — log
 
+## 2026-05-27 — RESOLVED(우회): RunPod resolver 갭 → Vast.ai 직접-IP + transpile-dispatch 로 fire 경로 확보
+
+> **위 RunPod resolver 갭(아래 항목)은 Vast.ai 경로로 우회 해결됨** — anima M4b Phase 4-fire 의 실 발사 recipe 가 end-to-end 확인됨(코드 transpile + transport + CUDA build 레퍼런스 전부 검증). RunPod resolver 는 여전히 별개 enhancement 로 유효하나 fire 는 더 이상 그것에 막히지 않음.
+>
+> **작동하는 CUDA fire recipe (canonical = `tool/dispatch_agtape_d768_fire.sh` 패턴)**:
+> 1. **transport = Vast.ai 직접-IP** (RunPod ✗ resolver 갭). `vastai show instance <id>` → `ssh_host`/`ssh_port` → `hexa cloud exec root@ssh<N>.vast.ai --port <port> --insecure` 작동 실증 (H100 80GB · nvcc 12.6 · cublas_v2.h · remote exit 0).
+> 2. **transpile (Mac)**: `HEXA_MAC_BUILD_OK=1 hexa build <trainer>.hexa --c-only -o <out>` → `build/artifacts/<trainer>.c` (모든 import flatten, self-contained C). ⚠ 출력경로 `/tmp` 금지(Mac panic-trigger 가드) — worktree 경로 사용.
+> 3. **scp**: trainer.c + runtime 파일셋 (`self/runtime.c` · `runtime_hi_gen.c` · `runtime_core.c` · `runtime.h` · `cuda/runtime_cuda.c` · `cuda/runtime_bf16.c` · `forge/forge_tier_v1.{c,h}` · `native/*.{c,h}`) — tar 번들 권장.
+> 4. **build (pod)**: `nvcc -O2 -std=c++14 -DHEXA_CUDA -arch=sm_90 -x cu -c self/cuda/runtime_cuda.c -o runtime_cuda.o` → `clang -O2 -DHEXA_CUDA -I self -I /usr/local/cuda/include -fbracket-depth=4096 trainer.c self/runtime.c runtime_cuda.o -L/usr/local/cuda/lib64 -lcublas -lcudart -ldl -lrt -lm -lpthread -lstdc++ -o trainer` → `./trainer`. `farr_matmul_gpu` 가 `-DHEXA_CUDA` 로 cuBLAS Dgemm 경로 활성, `cuda_available()==1`.
+>
+> → **개선 제안 (편의)**: 이 4-step 을 `hexa cloud` 가 `cloud fire <trainer.hexa> --gpu` 로 한방에 캡슐화하면 매 fire 마다 hand-roll 불필요. 현재는 `tool/dispatch_agtape_d768_fire.sh` 가 그 역할(trainer.c 변수만 치환).
+
 ## 2026-05-27 — hexa cloud: RunPod pod-id → SSH-host resolver 부재 (cloud-guard 와 deadlock)
 
 > **블로커 (anima M4b Phase 4-fire 발사 차단)**: RunPod H100 pod 를 `runpodctl pod create` 로 띄운 뒤(id=r2afs2es6q8aln, RUNNING), 프로비저닝하려면 `hexa cloud {exec|copy-to|...}` 의 `<host>` = resolved SSH 목적지(`root@<public-ip> --port <n>`)가 필요. 그런데 그 public-ip:port 를 얻을 길이 막힘:
