@@ -2,3 +2,4 @@
 @V := "papers" :: index
 
 @paper rtsc-ambient-roadmap := "./rtsc-ambient-roadmap"
+@paper bc4-attention-bm32-capstone := "./PAPER/bc4-attention-bm32-capstone"
