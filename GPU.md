@@ -1423,6 +1423,16 @@ CLAIMS.tape entries: `fusion_layerblock_cross_layer_structural` (🔵) +
 - [x] J1 gpu_sass_diff tool — PTX instruction histogram diff perf oracle, host shell
 - [x] I1 ubu-2 bootstrap link 영구 fix — cuda fns NULL + hexa_exit stub 정식 패치, E1-E4 unblock
 
+## round-5 next-list (2026-05-27) — libm-tight + 역삼각 + f32 port + flame backlog
+> 9-family silicon validation 100% complete (atan 1.33e-8, tanh 3.06e-14, sigmoid 2.27e-14, sin/cos/tan/exp/log/pow ALL PASS). 자연 확장: 정확도 ↑ + 영역 확대 + flame backlog.
+- [ ] L1 sin/cos/log libm-tight (Cody-Waite split + minimax 계수) — 1e-9 tolerance까지, 현재 spec(1e-5/1e-4) 한계 해소
+- [ ] L2 asin/acos f64 polynomial — RFC 055 §13 역삼각 family 완성 (atan에 짝)
+- [ ] L3 erf/erfc f64 (Gaussian CDF) — statistics ML, attention 패딩 마스크 등
+- [ ] L4 f32 9-family port — ex2.approx.f32 등 fast-math 우위, perf 5-10×
+- [ ] F2C flame PyTorch .pt loader — pickle 파서 + tensor 역직렬화 (anima warm-start)
+- [ ] F3A flame bnb 8-bit quant — int8 weight quant/dequant + GPU kernel
+- [ ] F3B flame cross-attn op + ag_tape backward — encoder-decoder attention autograd
+
 ## flame V3 port (from INBOX #2 — P1 학습-정확도 코어 COMPLETE, P2/P3 여기로 이관 2026-05-27)
 > P1 코어 landed: full-position CE forward (#1481) + RFC 059 backward design (#1487) + P1②-a/b/c backward impl (#1489/1491/1492), 전부 grad-check 🔵. anima ConsciousDecoderV3 학습-정확도 경로 완결. 아래는 저우선(차단 아님, byte-level fallback 동작) enhancement.
 - [ ] flame-P2a rope base 인자화 — `nn_rope_build_tables` base 10000 하드코딩 → 파라미터화 (Qwen=50000). trivial, parse-gate 검증
