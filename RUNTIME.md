@@ -2159,7 +2159,7 @@ correctness (per M10/M16; see cycle-69 catalog + PR #251/#426 analysis)
 - [ ] Threading (green threads in hexa or keep C pthread?) — architectural decision.
 - [~] Crypto helpers: pbkdf2 + HKDF ✓VERIFIED (stdlib/crypto/pbkdf2.hexa + pbkdf2_test.hexa
       @ci_gate — PBKDF2 RFC6070 120fb6cf… + HKDF RFC5869-A.1 3cb25f25… PASS on compiled
-      path post-#1506). HMAC-DRBG/scrypt remain.
+      path post-#1506). HMAC-DRBG ✓VERIFIED (stdlib/crypto/hmac_drbg.hexa, NIST SP800-90A KAT e528e9ab… PASS); scrypt remains.
 - [x] More math (gamma, beta, erf) — stdlib/core/special.hexa net-new 2026-05-27:
       lgamma_pos/gamma_fn (Lanczos g=7) · beta_fn · erf_fn/erfc_fn (A&S 7.1.26).
       Pure hexa (exp/log/sqrt/sin builtins), 12/12 self-test PASS (special_test.hexa @ci_gate).
