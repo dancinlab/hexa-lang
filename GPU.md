@@ -362,6 +362,20 @@ The round-11 attack taking R10's (#1135) two next-wedges literally — two coupl
 
 ---
 
+### 1p — F-FUSION-ATTN-BM32-OCCUPANCY — register-resident O + BM=32 + cp.async wedge (round 14, planned 2026-05-28) ⚪ planned
+
+Round-14 attack on GEMM-fusion (attention) axis-A, taking R7's (`F-FUSION-ATTN-ROOFLINE` §1m closing note) wedge *quantitatively* — the closing note recommended "BM=32 + register-resident O → 2-4 CTAs/SM"; the closed-form planning round (`docs/notes/bc4-attention-smem-residency-wedge-plan-2026-05-28.md`) refined this to **BM=32 BK=32** (smem 30 720 B = 3 CTAs/SM @ O-reg; the original BM=32 BK=64 form was 1 CTA/SM, quantitatively falsified before silicon). Pre-registered falsifier **F-FUSION-ATTN-BM32-OCCUPANCY-WALL**: `cuOccupancyMaxActiveBlocksPerMultiprocessor ≥ 3` AND ratio ≤ **1.5×** vs cuBLAS-TC 3-launch @ N ∈ {2048, 4096} d=64 AND per-row-scaled rel ≤ 1e-2 / naninf=0. HONEST closed-form roofline projection: BM=32 AI=31 (HGEMM-ridge 30%) × occupancy 3 CTAs/SM → expected ratio **≈ 1.32×** — sweet spot for ≤ 1.5× partial PASS, NOT ≤ 1.10× capstone (which requires wgmma axis-pivot, round 15).
+
+- [ ] **risk-a cheap oracle (free)** — patch R10 PTX to O-reg form → `ptxas -arch=sm_120a -v` once → confirm reg/thread < 255 (expected ~103) + 0-spill
+- [ ] **risk-d cheap oracle (1 probe)** — re-run round-7 mma-fragment-map probe for BM=32 BK=32 → confirm V-pretranspose still required
+- [ ] **kernel hand-emit + ptxas-clean** sm_80 + sm_90 + driver-JIT sm_120
+- [ ] **numeric PASS** via fa_mma_oracle (R10 form) — rel_rowscale ≤ 1e-2, naninf = 0, N ∈ {2048, 4096} d=64
+- [ ] **timed wall fire** ubu-2 RTX 5070 sm_120 vs corrected cuBLAS-TC 3-launch baseline (R11 OPTIMIZED softmax form)
+- [ ] **GPU.md round-14 result row + verdict + log append**
+- [ ] **Round 15 contingency** = wgmma axis-pivot if ratio > 1.10× (capstone target)
+
+---
+
 ### 1l — F-FUSION-AXISA-BREADTH — whole-program-fusion moat across the NN elementwise/norm surface (2026-05-25) 🛸🛸
 
 Broadens the §10 moat (already `[x]` via the launch-amort wall, §1h / PR #1028) from ONE workload to the **NN elementwise/reduction surface**: LayerNorm · RMSNorm · Softmax · SwiGLU. Each = a fused 1-kernel vs an eager multi-launch baseline, timed on ubu-2 RTX 5070 sm_120 (uncontended 0% util, 20 warmup + 200 timed median), numeric vs an f64 CPU reference using the **HONEST per-row-scaled RMS rel metric** (tol 1e-2 — avoids the round-3 attention near-zero false-FAIL). Pre-registered falsifier per workload: fused (1 launch) beats eager by ≥30% wall. `hexa verify` (g5) is BROKEN on both ubu hosts — correctness settled via the compiled f64-ref harness, stdout persisted verbatim.
