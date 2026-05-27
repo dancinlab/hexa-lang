@@ -29,6 +29,7 @@
 //    ssh_keyfile_load_ed25519(path) -> { pk:[32], sk:[64] } | { error }
 
 use "self/stdlib/ssh/wire"   // ssh_get_u32 / ssh_get_string
+use "stdlib/crypto/blowfish" // bcrypt_pbkdf — hexa-native KDF (was runtime builtin)
 
 let _SSH_OPENSSH_MAGIC = "openssh-key-v1"
 

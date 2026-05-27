@@ -398,7 +398,6 @@ HexaVal hexa_ed25519_sign(HexaVal priv, HexaVal msg);                /* native/c
 HexaVal hexa_x25519_keypair(void);                                   /* native/crypto_sodium.c:181 */
 HexaVal hexa_x25519_scalarmult(HexaVal scalar, HexaVal point);       /* native/crypto_sodium.c:198 */
 HexaVal hexa_aes256_ctr_xor(HexaVal key, HexaVal iv, HexaVal data);  /* native/crypto_openssl.c:20 (HEXA_HAS_OPENSSL) */
-HexaVal hexa_bcrypt_pbkdf(HexaVal pass, HexaVal salt, HexaVal rounds, HexaVal keylen); /* native/crypto_blowfish.c:457 */
 
 /* exec stream (long-running child process IO) */
 HexaVal hexa_exec_stream_open(HexaVal cmd);                          /* runtime.c:11961 */
