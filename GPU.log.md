@@ -564,3 +564,33 @@ performance; scaling the same multi-arch-fatbin pattern to flame's
 GEMM / transcendental family is a follow-up cycle (`hexa build` codegen
 side already emits the PTX surfaces -- only the ptxas → fatbinary →
 xxd → embed glue needs lifting into `hexa build`'s output stage).
+
+## 2026-05-28 — BC4 round-14 wedge plan (R7 closing-note 정량 정찰)
+
+`/cycle-bg 3 all` 라운드 A1 — BC4 round-7 (`F-FUSION-ATTN-ROOFLINE` §1m) closing-note
+의 wedge 추천 ("BM=32 + register-resident O + selective TMA → 2-4 CTAs/SM") 을
+silicon-fire 가치가 있는지 closed-form 으로 사전-증명/사전-반증. NO codegen, NO
+silicon fire.
+
+**Tier**: ⚪ planning (silicon 라운드 14 표적 사전등록)
+**Branch**: `bc4-recon-plan-v3-2026-05-28`
+**Deliverable**: `docs/notes/bc4-attention-smem-residency-wedge-plan-2026-05-28.md`
+
+**핵심 결론 (5 줄):**
+
+1. R7 closing-note 의 **BM=32 BK=64** wedge 는 O-reg 적용해도 **1 CTA/SM** (smem
+   57 344 B > optin 102 400 B 의 절반) — *quantitatively falsified before silicon*.
+2. **진짜 wedge = BM=32 BK=32** (smem 30 720 B → **3 CTAs/SM**, reg-bound 4 CTAs/SM,
+   min = 3). BM=16 BK=64 (2 CTAs/SM) + BM=64 BK=16 (4 CTAs/SM) 도 보조 A/B.
+3. Register pressure check: R10 의 91 reg/thd 베이스 + 16 fp32 reg (O-reg @ BM=32)
+   = ~103 reg/thd ≪ 255 한계. 0-spill 유지 기대.
+4. Selective TMA = secondary lever (BK=32 K-tile = 4 KB 가 TMA sweet-spot 16 KB
+   미만). 주된 lever 는 O-reg + occupancy 회복.
+5. **HONEST roofline projection: expected ratio ≈ 1.32×** (BM=32 AI=31 = HGEMM-ridge
+   30% × occupancy 3 CTAs/SM). → ≤ 1.5× partial PASS sweet spot, ≤ 1.10× capstone
+   *물리적으로* 본 wedge 로는 불가 — capstone 은 **wgmma (round 15) 단독 lever** 필요.
+
+`feedback_instrument_first_methodology` cheap-first oracle 사례 #4: **사전 정찰
+로 closing-note 양적-반증** (BM=32 BK=64 → 1 CTA/SM 인 점을 silicon 전에 닫음).
+
+No LLVM. No C-transpile. `compiler/codegen/*.hexa` UNTOUCHED.
