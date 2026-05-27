@@ -2359,8 +2359,10 @@ framing-① (nm aprime 0 externs) 측정-충족 이후 — framing-② (source z
 - [ ] **lazy-bind 옵션화** — 현재 모든 import 가 `__got` non-lazy; lazy bind
       변종 추가 (선택).
 - [ ] **scattered relocation + TLV thread-locals** — rare path 지원.
-- [ ] **multi-dylib (3rd-party — Metal/CUDA 시점)** — macOS standard 엔 불필요
-      (closed-neg #1674); GPU/외부 dylib 등장 시점에만.
+- [x] **multi-dylib (3rd-party — Metal/CUDA 시점)** — **CLOSED-NEGATIVE (#1674)**:
+      macOS standard 엔 불필요 (`docs(RUNTIME): multi-dylib ordinal = CLOSED-NEGATIVE`
+      머지됨 — `ec9cfbab`). GPU/외부 dylib 등장 시점에만 재개. 등록된 closed-neg
+      이므로 `- [ ]` 유지가 stale-flag — flip 으로 정정.
 
 ### GPU / COMPILER 후속 (도메인 active 레인)
 
