@@ -1,0 +1,36 @@
+# F2 — vendor / OS-ABI FFI (19 layer-③ files) — TERMINAL closed-negative
+# verdict tier: 🔴 FALSIFIED (portability hypothesis) → irreducible FFI/OS-ABI floor
+# authoritative source: docs/runtime_native_c_layer_audit.md (audit #1809)
+# captured 2026-05-28 on origin/main worktree.
+
+# All 19 layer-③ files confirmed present on disk:
+$ for f in crypto_openssl crypto_sodium hxblas_linux hxccl_linux hxlmhead_linux \
+          hxqwen14b hxqwen32b lora_cuda_host gpu_codegen_stub hxffi_slot fp_init \
+          mount namespace net pty term_ffi thread signal_flock proc_fork wait \
+          exec_pipe persistent_pipe; do ls self/native/$f.c; done
+# → all present (22 candidate files; 19 are the canonical layer-③ set per audit).
+
+# 11/28 self/native/*.c carry vendor markers (cuda|cublas|nccl|openssl|EVP_|sodium|dlopen):
+$ grep -rln 'cuda\|cublas\|nccl\|openssl\|EVP_\|sodium\|dlopen' self/native/*.c | wc -l
+11
+
+# AUTHORITATIVE classification (audit #1809, docs/runtime_native_c_layer_audit.md):
+#   layer ③ (FFI/OS-ABI floor) = 19 files, 59%:
+#     vendor crypto ABI : crypto_openssl (-lcrypto) · crypto_sodium (-lsodium)
+#     vendor GPU/BLAS   : hxblas_linux (-lopenblas) · hxccl_linux (NCCL) ·
+#                         hxlmhead_linux (cblas) · hxqwen14b/32b (CUDA/cuBLAS)
+#     FFI infra         : hxffi_slot (out-pointer slot)
+#     OS kernel ABI     : mount · namespace · net · persistent_pipe · proc_fork ·
+#                         pty · signal_flock · term_ffi · thread · wait · exec_pipe
+#
+# FINDING (closure-is-physical-limit):
+#   Audit verdict — "③ vendor FFI / OS ABI: 순수 로직이 없어 hexa 로 재작성할
+#   대상 자체가 없음 → FFI 경계로 정당, C 에 유지." There is NO pure-logic body
+#   to port: each file is a thin binding to a proprietary vendor binary ABI
+#   (CUDA/cuBLAS/NCCL/OpenBLAS/OpenSSL/libsodium) or a kernel syscall wrapper.
+#   The svc/dlopen boundary is the irreducible @asm-floor analog (north-star
+#   "Target = zero .c, NOT zero asm"). B9.3 svc-emit targets runtime.c internal
+#   helpers (hexa_exec/term/host), NOT these standalone FFI modules — orthogonal.
+# VERDICT: 🔴 IRREDUCIBLE FFI/OS-ABI FLOOR — terminal. Same tier as #1674
+#   (multi-dylib closed-neg) + B2.ca-system-fficacert closed-neg. Re-open only
+#   if hexa codegen learns to emit a vendor ABI directly (not on any roadmap).

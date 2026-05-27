@@ -42,7 +42,8 @@ flip 캠페인이 안전 quick-win 을 고갈시킨 뒤 남는 진짜 바닥의 
 
 ### F2 — vendor / OS-ABI FFI (irreducible boundary)
 
-- [ ] **F2 vendor-ffi** — 19 파일:
+- [x] **F2 vendor-ffi** — 🔴 **IRREDUCIBLE FFI/OS-ABI FLOOR TERMINAL**
+      (closed-negative · audit #1809 · `.verdicts/runtime-floor-closure/F2-vendor-ffi.txt`)
   - crypto: `crypto_openssl.c` · `crypto_sodium.c`
   - CUDA/GPU: `hxblas_linux` · `hxccl_linux` · `hxlmhead_linux` · `hxqwen14b` ·
     `hxqwen32b` · `lora_cuda_host` · `gpu_codegen_stub`
@@ -53,6 +54,17 @@ flip 캠페인이 안전 quick-win 을 고갈시킨 뒤 남는 진짜 바닥의 
   - **enabler**: hexa inline-svc/FFI emit (B9.3 svc surface) 이 syscall-shim 일부를
     닫을 수 있음. vendor blob(CUDA/openssl)은 영구 FFI 바닥(또는 hexa 가 직접 ABI
     emit 학습 시 흡수).
+  - **종결 (2026-05-28)**: audit #1809 권위 분류 — 19 canonical layer-③ 파일 =
+    "순수 로직이 없어 hexa 로 재작성할 대상 자체가 없음" → FFI 경계로 정당, C 유지.
+    벤더 바이너리 ABI(CUDA/cuBLAS/NCCL/OpenBLAS/OpenSSL/libsodium) + 커널 syscall
+    래퍼 + `fp_init`(② MXCSR/FPCR 제어레지스터 = hexa 표현 불가). svc/dlopen 경계 =
+    north-star "zero .c, NOT zero asm" 의 @asm-floor 짝. #1674 multi-dylib·
+    B2.ca-system closed-neg 와 동일 tier. **B9.3 svc-emit 는 runtime.c 내부 헬퍼
+    (hexa_exec/term/host) 대상 — 이 standalone FFI 모듈과 직교**.
+  - ⚠ **port-track 잔여 (floor 아님 → F3/layer-① 로 이관)**: `lora_cuda_host` 의
+    CPU-reference 산술부 + `gpu_codegen_stub` 의 빈 contract 는 audit layer-① —
+    FFI 경계가 아니라 codegen-self-emit/stdlib-flame 포팅 대상. F2 의 ③ 경계는
+    terminal 이나 이 ① 비트들은 F3 campaign 으로 추적 (이중계상 방지).
 
 ### F3 — runtime FLOOR (codegen self-emit · 핵심)
 
