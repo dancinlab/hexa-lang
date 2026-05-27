@@ -1,5 +1,31 @@
 # INBOX — log
 
+## 2026-05-27 — flame-P2b Qwen BPE = anima DECODER MoE-fresh scale-gate · 양 토크나이저 모듈 모두 실측 결함
+
+**severity: medium** — anima DECODER MoE-fresh(toy PASS, anima #1033)의 3B Qwen scale 검증이 hexa-native train stack 의 BPE 토크나이저 결함으로 막힘. flame-P2b 와이어링(loader, anima #1537) 자체는 land, 가드(`flame_bpe_roundtrip`)가 양 결함을 결정론적 검출 → 가짜 closure 아님 (g73). 본 fix 이후 3B Qwen hexa-native 학습 unblock.
+
+**진행 (2026-05-27)**:
+- ✅ #1527 — gen2 C 백엔드 free-fn `trim` codegen lowering (cross-backend parity, Mac 동작 vs Linux undeclared 불일치 해소). 12 LoC, `.trim()` 메서드 경로(self/codegen.hexa:3942/7190 `cg_string_sym("str_trim")=rt_str_trim`)와 동일 lowering. ubu-2 end-to-end 검증: tokenizer_bpe `use` 체인 컴파일+round-trip PASS.
+- ✅ #1533 — `self/native/hexa_cc.c` bootstrap 재생성 (#1527 + 누적 4443줄 catch-up 라이브). self-host fixpoint **gen1==gen2 byte-identical** 검증 (ubu-2 Linux, sanity 포함).
+- ✅ anima #1537 — `stdlib/flame/flame_bpe_corpus_lib.hexa` BPE-corpus 로더 + `flame_bpe_roundtrip`/`flame_bpe_ids_in_vocab` 가드. CI 테스트 10/10 PASS (toy vocab 단일-byte-char round-trip).
+- ✅ #1549 — `test/t53_qwen_bpe.hexa` fixture 경로 오타 (`tests/fixtures/` → `test/fixtures/`). t53 silent FAIL 원인.
+
+**잔여 — flame-P2b ③ correct Qwen round-trip = hexa-lang 도메인 깊은 fix 필요 (실측 결함, 양 후보 모듈)**:
+
+| 모듈 | macOS arm64 | Linux C 백엔드 |
+|---|---|---|
+| `self/ml/tokenizer_bpe` (chr 기반) | (동일 chr 결함 예상) | round-trip FALSE — 실측 `consciousness!emerges!from!cells` (공백 손상) |
+| `self/ml/qwen_bpe` (from_char_code UTF-8-aware, 1030L) | **Segfault 11** (mini, toy fixture vocab 파싱 #200 직후) | 7MB 실 tokenizer.json 240s 타임아웃 (perf/hang) |
+
+**근본원인 (chr 결함, tokenizer_bpe 측)**: `self/runtime.c:5336` `hexa_chr_byte` 가 `s[0] = (char)(code & 0xFF)` 로 명시적 byte 절단 → `chr(288) == chr(32)` 실측 (`char_code(chr(288),0)=32`, `len(chr(288))=1`). tokenizer_bpe 의 `build_byte_to_char` 는 GPT-2 byte-level 인코딩(byte 32 → codepoint U+0120 'Ġ', 2-byte UTF-8)을 위해 `chr(256+i)` 호출하나 절단으로 collapse → 256 distinct char 불가 → 공백/비-ASCII 손상. (`from_char_code` 는 5304+ UTF-8 인코더로 정상이므로 qwen_bpe 는 chr 결함 회피, 단 별도 segfault 보유).
+
+**세 fix 경로 (any one resolves ③)**:
+1. **hexa `chr`/`char_code` Unicode 화** — `chr(n>255)` 가 code point 로 UTF-8 인코딩 (`from_char_code` 와 의미 통합). 단 hexa string 모델이 byte-native (HX_STRLEN/slice/char_code 전부 byte 인덱싱) 이라 단독 fix 로는 부족 (tokenizer 가 per-char `slice(j,j+1)` 사용 — multi-byte char 가 byte-단위로 잘림). codepoint-aware string 으로 가면 blast radius 비현실적.
+2. **`tokenizer_bpe` byte-domain 재설계 (g0/g1 권장)** — `bpe_load` 에서 Qwen vocab 의 GPT-2-codepoint 키를 UTF-8-decode + GPT-2-역매핑으로 **raw byte string** 정규화 → 이후 byte 도메인 토큰화 (chr(≤255) 만 사용). runtime 변경 0, tokenizer_bpe.hexa 자족적 변경. self/ml/qwen_bpe 의 byte_to_str/str_to_byte 가 GPT-2-역매핑 reference 로 재사용 가능.
+3. **`qwen_bpe` 디버그** — vocab #200 직후 SIGSEGV 메모리 안전성 (Mac arm64 실측) + Linux 실-스케일 perf (`get_merge_rank` linear-scan, 151388 merges = O(n²) 추정). path-fix 된 t53 (post-#1549) 로 재현 가능.
+
+**참조**: anima #1517 (flame-P2b origin demand-signal · DECODER MoE-fresh scale-gate) · anima #1537 (loader+가드) · hexa-lang #1527 #1533 #1549 (선결 fix landed) · `GPU.md` flame-P2b 라인.
+
 ## 2026-05-27 — ✅FIXED(deploy) ~/.hx/bin/hexa shim stale = #1149 fork-guard 미배포 (fork-storm 근본)
 
 배포된 `~/.hx/bin/hexa` 가 2줄 bare `exec hexa.real "$@"` 로 stale — 소스 shim(repo root `hexa`, HEAD)의 #1149 재귀-깊이 가드(HEXA_DEPTH cap 32) + hxv2 우선 + argv0-shadow(#866) 보호가 전부 deploy 에서 누락. 결과: 나선형 `hexa→sh→hexa-atlas→sh→hexa→…` 재진입이 무한정 가능 → process-table 벽 = fork-storm (2026-05-27 세션 중 crypto 검증 반복 compile 시 2회 발생).
