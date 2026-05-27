@@ -2157,9 +2157,9 @@ correctness (per M10/M16; see cycle-69 catalog + PR #251/#426 analysis)
       `http_client.hexa`/`http_server.hexa`, `websocket_native.hexa`,
       `concurrent_serve.hexa`. HTTP/2 still open.
 - [ ] Threading (green threads in hexa or keep C pthread?) — architectural decision.
-- [~] Crypto helpers: pbkdf2 + HKDF code (stdlib/crypto/pbkdf2.hexa net-new, RFC 8018/5869,
-      parse-clean, over existing hmac_sha256_bytes) — runtime-verify ✅ (PBKDF2 RFC6070 120fb6cf… PASS after #1506 fix — sha256/hmac
-      let→let-mut compiled-path repair). HMAC-DRBG/scrypt remain.
+- [~] Crypto helpers: pbkdf2 + HKDF ✓VERIFIED (stdlib/crypto/pbkdf2.hexa + pbkdf2_test.hexa
+      @ci_gate — PBKDF2 RFC6070 120fb6cf… + HKDF RFC5869-A.1 3cb25f25… PASS on compiled
+      path post-#1506). HMAC-DRBG/scrypt remain.
 - [x] More math (gamma, beta, erf) — stdlib/core/special.hexa net-new 2026-05-27:
       lgamma_pos/gamma_fn (Lanczos g=7) · beta_fn · erf_fn/erfc_fn (A&S 7.1.26).
       Pure hexa (exp/log/sqrt/sin builtins), 12/12 self-test PASS (special_test.hexa @ci_gate).
