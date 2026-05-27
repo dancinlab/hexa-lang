@@ -2330,35 +2330,54 @@ framing-① (nm aprime 0 externs) 측정-충족 이후 — framing-② (source z
 
 - [ ] **rt_arena/alloc/reset/release 머신코드 self-emit** — HexaVal repr 첫 piece;
       `phase-h-inc*` 브랜치에서 진행중인 레인 (병렬 에이전트 경합 회피).
+      **PARTIAL-PROGRESS**: `rt_arena_init` x1-clobber fix landed #1252 (2026-05-26),
+      `rt_arena_*` adr→adrp+add widening #1297/#1315 landed; 형제 lane phase-H inc5
+      `__got` dyld DATA import landed #1348. 잔여 = alloc/reset/release 머신코드
+      self-emit (multi-session, lane-busy 다중 에이전트).
 - [ ] **runtime_core.c 의 548 fn 중 순수-logic 1개 hexa-native 포팅** — `gmtime_r`
       류 후속; runtime.c wipe-prone (surgical edit + grep 검증).
+      **DEFERRED — wipe-prone risk**: memory `feedback-runtime-c-deploy-regen-wipe`
+      에 따라 surgical edit 이 후속 deploy-regen 커밋에 silent-wipe 될 수 있음
+      (json \uXXXX fix 가 3번 land 한 사례). 4-agent 공유 worktree 환경에선 충돌
+      위험 高 — 격리 worktree + surgical fence + 직후 grep 검증 필수.
 - [ ] **Linux self-host 잔여 17 syscall** — read/write/open/close/mkdir/dup2/lseek/
       select/poll/wait4/getpid/getuid/kill/fcntl/ioctl/stat/fstat/mmap/gettimeofday/
       exit 의 `#if Darwin-arm64 / #else libc` 패턴 → `svc #0x80` 인라인. Phase-1
-      반복 적용.
+      반복 적용. **NO-COMMITS-YET** (only #1079 signal_flock svc-trap → libc-fallback,
+      separate axis); multi-PR Linux campaign 미시작 — Mac unblock 무영향.
 
 ### TLS 1.3 handshake state-machine loop — socket 와이어링 (multi-PR)
 
 - [ ] **ClientHello 송신 + ServerHello 수신 round-trip 드라이버** — stdlib/net/socket
-      위에 첫 핸드셰이크 round-trip; 모든 프리미티브 준비됨.
+      위에 첫 핸드셰이크 round-trip; 모든 프리미티브 준비됨. **LANE-BUSY**: 36
+      `feat-tls13-*` sub-branch 활성 (e.g. `feat-tls13-clienthello` @ 9d29b123 body
+      builder); state-machine 결합 PR 부재.
 - [ ] **key-schedule 도출 + EncryptedExtensions/Certificate parse 와이어** — x509_chain
-      + tls13_keyschedule 활용.
+      + tls13_keyschedule 활용. **LANE-BUSY**: 모든 프리미티브 PR 완료
+      (RUNTIME.md Phase 3 ②), 단일 도출-와이어 PR 부재.
 - [ ] **Finished verify_data + app-record send/recv** — tls13_record + tls13_finished
-      + AEAD seal/open 와이어.
+      + AEAD seal/open 와이어. **LANE-BUSY**: `feat-tls13-finished` @ f3acab97
+      (verify_data 빌더) 존재, socket 와이어링 PR 부재.
 
 ### hexa-lang language features (HEXA-LANG.log open)
 
 - [ ] **Option/Result enum surface + `?` propagation typechecker** — `pop()`/
-      `get()`/`find()` 반환채널 마이그레이션 동반.
+      `get()`/`find()` 반환채널 마이그레이션 동반. **RFC-ONLY**: `inbox/r14-kk-
+      option-prelude-rfc-2026-05-23` @ ef00ed5a (RFC patch); impl PR 부재.
 - [ ] **trait core 4종 (`Add`/`Sub`/`Eq`/`Ord`) dispatch** — coherence/orphan
-      rule 결정 동반.
+      rule 결정 동반. **RFC-ONLY**: #532 (`inbox(patches): trait dyn dispatch
+      &dyn Trait design RFC (PROBE r14-GGGG)`) 머지됨; scaffold branch
+      `rfc-082-impl-a-trait-bound-scaffold-2026-05-23` 활성; impl PR 부재.
 - [ ] **TLS CA bundle 배포 결정 (D2+)** — TLS handshake 와 함께.
+      **POLICY-DEFERRED**: D2+ 결정 항목 (코딩 unblocked, 정책 결정 대기).
 
 ### phase-H linker future generalizations (macOS 잔여는 ZERO · 미래용)
 
 - [ ] **lazy-bind 옵션화** — 현재 모든 import 가 `__got` non-lazy; lazy bind
-      변종 추가 (선택).
+      변종 추가 (선택). **FUTURE-DEFERRED**: macOS standard 잔여 ZERO, 변종 트리거
+      등장 시 작업.
 - [ ] **scattered relocation + TLV thread-locals** — rare path 지원.
+      **FUTURE-DEFERRED**: rare path, trigger 등장 시.
 - [x] **multi-dylib (3rd-party — Metal/CUDA 시점)** — **CLOSED-NEGATIVE (#1674)**:
       macOS standard 엔 불필요 (`docs(RUNTIME): multi-dylib ordinal = CLOSED-NEGATIVE`
       머지됨 — `ec9cfbab`). GPU/외부 dylib 등장 시점에만 재개. 등록된 closed-neg
@@ -2368,9 +2387,15 @@ framing-① (nm aprime 0 externs) 측정-충족 이후 — framing-② (source z
 
 - [ ] **GPU: function-body ExprKind::Let 의 Expr struct annotations 부재** —
       F-GPU-SWEEP-SHARED-REDUCE-NUMERIC falsifier 의 next gap.
-- [ ] **GPU: exp polynomial · to_int root-fix (sub-PR-C)** — math 도메인 후속.
+      **GPU-DOMAIN**: RUNTIME 외 도메인 — `GPU.md` 의 active 레인. NO-COMMITS-YET.
+- [x] **GPU: exp polynomial · to_int root-fix (sub-PR-C)** — math 도메인 후속.
+      **to_int root-fix LANDED** via PR #1334 (`fix(self/codegen): to_int/int
+      root-fix — statement-expression single-eval (closes double-eval miscompile
+      family)`, 2026-05-26) + #1279/#1280 (flame large-vocab GPU-port fix +
+      discovery log). exp polynomial 은 `nvptx-exp-polynomial` branch 활성
+      (GPU 도메인). to_int family CLOSED.
 - [ ] **COMPILER: gen3 idempotent 확장** — S5 closed (#1058) 이후 옵션; gen2 ≡ gen3
-      byte-eq 확장 증명.
+      byte-eq 확장 증명. **HEAVY-OPTIONAL**: build run 30+ min, optional 표시.
 
 ### infra / CI gates (INBOX open · cross-cutting)
 
@@ -2389,7 +2414,10 @@ framing-① (nm aprime 0 externs) 측정-충족 이후 — framing-② (source z
       (inbox/notes Linux CI build gate) · #1291 (regen hexa_cc.c pick-up direct
       calls). INBOX #4 closed.
 - [ ] **preflight v2 DFT/HPC 축 (RFC 091 witness)** — 외부 자원 의존 (DFT/MD
-      메모리 산정 + rent 전 GPU vs CPU-HPC 판단 자동화).
+      메모리 산정 + rent 전 GPU vs CPU-HPC 판단 자동화). **RFC-LANDED · IMPL-PENDING**:
+      RFC #653 (`RFC 091 hexa-cloud preflight v2 — DFT/HPC workload axis (sibling
+      of RFC 088)`, 2026-05-23) 머지됨. impl PR 부재 — 외부 자원 dep (DFT job
+      샘플 + GPU/CPU baseline 측정).
 
 ## Methodology checkpoints (per-cycle)
 
