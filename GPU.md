@@ -1422,6 +1422,7 @@ CLAIMS.tape entries: `fusion_layerblock_cross_layer_structural` (🔵) +
 - [x] F8 atan f64 polynomial — 역삼각, RFC 055 §13 확장
 - [x] J1 gpu_sass_diff tool — PTX instruction histogram diff perf oracle, host shell
 - [x] I1 ubu-2 bootstrap link 영구 fix — cuda fns NULL + hexa_exit stub 정식 패치, E1-E4 unblock
+- [x] **U1 INBOX #1665 NVPTX unop 4-layer closure — register-neg + const-hex + fold 🛸** — `let x = -3.14` 음수-float-리터럴 codegen gap 종결. ⓪ float_to_bits builtin(PR #1677) keystone 위에 ① STMT_UNOP `neg.<ty>` emit arm + ② classifier roster + ③ const_float→`0d<16-hex>` (pure-float bit-extract, bootstrap-state independent) + fold (`unop("neg", literal_float(N))` → `const_float(-N)`) 4-layer 한 사이클 닫음. **silicon fire ubu-2 RTX 5070 sm_120**: ptxas rc=0 (sm_80 grammar) + numeric round-trip x=-2.0 → y=-5.25 exact f64 equality. PR 미머지(branch `nvptx-unop-close-2026-05-27`). 다음 GPU fire 전반의 음수 리터럴 함정 제거 → BC3 GEMM+bias+act fused timed wall · §5j top-k+GEMM fusion 등 후속 fire unblock. verdict `.verdicts/nvptx-unop-neg-float-literal/F-NVPTX-UNOP-NEG-FLOAT-LITERAL.txt`; artifacts `archive/fires/nvptx_unop_close_2026_05_27/`
 
 ## round-5 next-list (2026-05-27) — libm-tight + 역삼각 + f32 port + flame backlog
 > 9-family silicon validation 100% complete (atan 1.33e-8, tanh 3.06e-14, sigmoid 2.27e-14, sin/cos/tan/exp/log/pow ALL PASS). 자연 확장: 정확도 ↑ + 영역 확대 + flame backlog.

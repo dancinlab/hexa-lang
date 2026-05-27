@@ -129,3 +129,53 @@ HGEMM≥1024 scale-up(725) + whole-program-fusion≥30%(727, §10 criterion)도 
 float literal) 이 `// RFC 055 055-P0 - unsupported stmt kind: unop` + 미정의 `%fd14`
 → ptxas reject. NVPTX codegen 이 unop(neg) 미emit. `a[0]` (유효원소 ≤max) 로 워크어라운드
 (semantic 동일). 진짜 fix = nvptx_target.hexa unop arm 추가(neg.f64) — INBOX 2026-05-27.
+
+## 2026-05-27 — 🛸 INBOX #1665 NVPTX unop 4-layer 마감 (U1, round-4)
+
+직전 LogSumExp fire 의 "부수 발견" INBOX 항목을 한 사이클로 닫음. 사용자 골 "cuBLAS
+뛰어넘기 — fusion + IO-aware" 의 첫 라운드 (작은 것부터 — keystone 풀렸으니 fold+
+const-hex 한 사이클) 권고 따라 수행. 음수 float 리터럴 unblock 으로 다음 GPU fire
+전반의 함정 제거.
+
+**Tier**: 🟢 SUPPORTED-NUMERICAL (silicon round-trip exact equality)
+**Branch**: `nvptx-unop-close-2026-05-27` (commits c19cba3b · fcf24297 · 1a702780)
+**Falsifier**: `F-NVPTX-UNOP-NEG-FLOAT-LITERAL`
+**Verdict**: `.verdicts/nvptx-unop-neg-float-literal/F-NVPTX-UNOP-NEG-FLOAT-LITERAL.txt`
+**Artifacts**: `archive/fires/nvptx_unop_close_2026_05_27/{unop_wrapped.ptx, unop_wrapped_host.c}` + `compiler/codegen/nvptx_unop_probe.hexa` (standalone codegen verifier)
+
+**4 layers closed**:
+- ⓪ `float_to_bits` runtime builtin — PR #1677 (acc8435a, 직전 사이클 keystone)
+- ① STMT_UNOP `neg.<ty>` emit arm in `_nvptx_lower_stmt` + `_nvptx_unop_mnemonic_for_kind` (`neg.f64`/`neg.s32`/`neg.s64`/`neg.f32`/`neg.f16`/`neg.bf16`)
+- ② classifier roster — `_nvptx_classify_locals` Pass 1 walk extended to STMT_UNOP + dst kind inherits source operand bank
+- ③ const_float → PTX `0d<16-hex>` via `_nvptx_f64_imm_hex` (pure-float IEEE 754 bit extraction — `bootstrap-state independent` 으로 #1677 builtin path activation 대기 안 함)
+- fold — `hir_to_mir.hexa` unop arm: `unop("neg", literal_float(N))` → `const_float(-N)` (literal-neg 케이스에서 STMT_UNOP 우회)
+
+**Silicon evidence** (ubu-2 RTX 5070 sm_120, driver 580, ptxas 12.0):
+
+```
+ptxas -arch=sm_80 unop_wrapped.ptx → rc=0
+./unop_wrapped_host →
+  input   x = -2
+  want    y = -5.25
+  got     y = -5.25
+  RESULT: PASS (exact f64 equality)
+```
+
+**Computation chain**: `((-x) + 1.5) * -1.5` with x=-2.0:
+- step 1: `neg.f64 %fd1, %fd0` → 2.0 (register-neg, layer ①)
+- step 2: `add.f64 %fd2, %fd1, 0d3FF8000000000000` → 3.5 (+1.5 hex, layer ③)
+- step 3: `mul.f64 %fd3, %fd2, 0dBFF8000000000000` → -5.25 (-1.5 hex, layer ③, bug #1663 closed)
+
+**Bug closure**: PR #1663 가 `to_string(-1.0e308)` 가 decimal `1e+308` 로 렌더 →
+ptxas `Arguments mismatch for instruction 'mov'` 진단. pure-float-extract
+`_nvptx_f64_imm_hex` 로 모든 const_float 가 부호·magnitude 무관 canonical
+`0d<16-hex>` 로 렌더 → bug #1663 full close.
+
+**다음 GPU fire 가 받는 효과**: BC3 GEMM+bias+act fused timed silicon wall 사이클
+시 음수 bias/threshold 리터럴 자유 사용. §5j top-k+GEMM fusion 의 `-inf` sentinel.
+§5g per-call-site precision 의 mixed-prec single kernel 음수 상수 등.
+
+**Pre-existing infra note**: `compiler/codegen/nvptx_lower_test.hexa` standalone
+build 가 origin/main 에서 이미 실패 (`_hir_let_type_text` flatten gap — ast_to_hir
+에 정의되나 hir_to_mir 호출, ast_to_hir 추가 import 시 Atlas type redefinition
+cascade). 본 사이클 무관, 검증은 `nvptx_unop_probe.hexa` 신규 standalone 으로 우회.
