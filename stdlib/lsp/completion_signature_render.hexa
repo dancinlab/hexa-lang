@@ -1,0 +1,88 @@
+// HEXA Standard Library — lsp/completion_signature_render
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// LSP `textDocument/completion` response signature renderer.
+//
+// Frontier flip B8 (RUNTIME.flip.md): "render `fn name(param: T, …) → R`
+// for textDocument/completion response. Pure additive — formatting only,
+// no parsing, no I/O."
+//
+// Companion to `stdlib/lsp/completion_pub_fn_index.hexa` (concurrent
+// shipment): that file owns the index/lookup surface; this file owns the
+// presentation surface (label · detail · insertText). Together they form
+// the minimal stdlib seam the LSP frontend needs to assemble a
+// CompletionItem JSON object.
+//
+// Surface:
+//   pub fn lsp_render_completion_label(name: str, signature: str) -> str
+//     — primary completion label, e.g. "foo(x: int, y: float) -> str".
+//   pub fn lsp_render_completion_detail(file_path: str, signature: str) -> str
+//     — "detail" field for hover preview: "<file_path>\n<signature>".
+//   pub fn lsp_render_completion_insert_text(name: str, param_count: int) -> str
+//     — snippet-style insert text:
+//         param_count == 0 → "foo()"
+//         param_count == 1 → "foo(${1:})"
+//         param_count == 2 → "foo(${1:}, ${2:})"
+//         …                → "foo(${1:}, ${2:}, …, ${N:})"
+//
+// LSP wire mapping (informational — this file is presentation-only, the
+// frontend assembles the actual JSON):
+//   CompletionItem.label      ← lsp_render_completion_label(name, sig)
+//   CompletionItem.detail     ← lsp_render_completion_detail(path, sig)
+//   CompletionItem.insertText ← lsp_render_completion_insert_text(name, n)
+//   CompletionItem.insertTextFormat ← 2  (Snippet — required for ${1:})
+//
+// The snippet format `${N:}` is the LSP-standard tabstop placeholder
+// (LSP §Snippet Syntax). Empty default text keeps the placeholder
+// distraction-free; the editor jumps to ${1:} first, then ${2:}, etc.
+
+// ─── label: "<name><signature>" ────────────────────────────────────────
+
+// Concatenate the bare function name and its rendered signature into a
+// single completion-list label. `signature` is expected to already carry
+// the leading "(" / trailing ") -> R" — this function does NOT inject
+// parens or arrows, keeping it lossless for callers that pre-format.
+@pure
+pub fn lsp_render_completion_label(name: str, signature: str) -> str {
+    return name + signature
+}
+
+// ─── detail: "<file_path>\n<signature>" ────────────────────────────────
+
+// Render the "detail" hover-preview field: the originating file path on
+// line 1, the full signature on line 2. Most LSP clients render this as
+// a small popover next to the completion list — the two-line layout
+// keeps the source location distinguishable from the signature.
+@pure
+pub fn lsp_render_completion_detail(file_path: str, signature: str) -> str {
+    return file_path + "\n" + signature
+}
+
+// ─── insertText: snippet-style "<name>(${1:}, ${2:}, …)" ──────────────
+
+// Build the snippet-style insert text the editor splices when the user
+// accepts the completion. Zero-param functions get a bare "name()" —
+// the cursor lands after the close-paren. Non-zero-param functions get
+// numbered tabstops "${1:}", "${2:}", … the editor jumps between on
+// Tab. Empty placeholder defaults keep the snippet visually minimal.
+//
+// Negative `param_count` is clamped to zero (defensive — caller bug).
+@pure
+pub fn lsp_render_completion_insert_text(name: str, param_count: int) -> str {
+    if param_count <= 0 {
+        return name + "()"
+    }
+    let mut out = name + "("
+    let mut i = 1
+    while i <= param_count {
+        if i > 1 {
+            out = out + ", "
+        }
+        out = out + "${" + str(i) + ":}"
+        i = i + 1
+    }
+    out = out + ")"
+    return out
+}
