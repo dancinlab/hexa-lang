@@ -2,6 +2,16 @@
 
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-27T14:35Z · 축 F · F27 · Phase 1 finite-arithmetic NOVEL — multiply-perfect · superperfect · HCN (6/6 🔵, n=6 위치 관측)
+
+- [x] **F27 multiply-perfect / superperfect / HCN family — 6/6 🔵 SUPPORTED-FORMAL** (F26 priority shortlist Phase 1, existing primitive 로 verify-able). `--no-absorb` inline verify (agent throttle 우회, main-tree). cycle 3 의 "cache race" 진단이 진짜 auto-absorb hang 였음 재확인 — `--no-absorb` 로 main-tree verify 정상.
+  - **3-perfect**: σ(120)=360=3·120 🔵 · σ(672)=2016=3·672 🔵
+  - **4-perfect**: σ(30240)=120960=4·30240 🔵
+  - **superperfect**: σ(σ(16))=σ(31)=32=2·16 🔵 (2^(p-1) family, 2^5−1=31 prime)
+  - **HCN**: τ(6)=4 🔵 — **n=6 = 4th highly-composite number** (1·2·4·6, τ record-setter)
+  - **n=6 위치 관측**: n=6 = 2-perfect (perfect) minimal = multiply-perfect tower 의 시작점 (2-perfect→3-perfect 120→4-perfect 30240). n=6 ∉ superperfect (closed-negative 후보: superperfect ∩ perfect 분리). n=6 = 4th HCN (축 0 강화).
+  - verdict: inline `hexa verify --expr sigma/tau <n> <v> --no-absorb` 6/6 PASS. atlas fold = 다음 round (manual splice embedded.gen.hexa, multiply-perfect witness atoms). 다음 seed (F28): 5-perfect 14182439040 (bignum) · superperfect∩perfect closed-negative 명시 · HCN τ-record sweep [1,60] · SHCN.
+
 ## 2026-05-27T07:00Z · 축 F · F23 · 강점 복귀 (finite-arithmetic) + F18 weight-4 RECOVERY multilayer 시각
 
 - [x] F23 — **finite-arithmetic 강점 복귀 + F18 weight-4 generalization (2026-05-27)**: 4-task batch (s1+s2+s3+s4 + atlas fold + log).
