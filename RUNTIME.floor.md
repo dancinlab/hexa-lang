@@ -77,10 +77,20 @@ flip 캠페인이 안전 quick-win 을 고갈시킨 뒤 남는 진짜 바닥의 
 
 ### F4 — sha256 entangled
 
-- [ ] **F4 sha256** — `exec_argv_sha256.c`
+- [x] **F4 sha256** — `exec_argv_sha256.c` — 🟢 **RESOLVED → F3** (decompose + de-risk ·
+      `.verdicts/runtime-floor-closure/F4-sha256.txt`)
   - `sha256`/`sha256_file` builtin 을 핵심 컴파일러 다수가 직접 호출 (falsifier ·
     hexa_ld · main · codegen) + stdlib 이름 불일치(`sha256` vs `sha256_hex`) +
     exec-shim 번들. 대규모 multi-caller rewire (blowfish 7-surface 레시피 확장).
+  - **종결 (2026-05-28)**: `exec_argv_sha256.c` 는 **standalone 파일이 아니라
+    runtime.c 의 `#include` 조각** (runtime.c:12483) → blowfish/v565 처럼 git-rm
+    불가, **F4 ⊂ F3 (runtime FLOOR)** 로 재분류. 3-concern 번들 분해:
+    - `hexa_exec_argv`(fork/execvp · shell-injection-safe) = ③ syscall 바닥 → F3 잔류 (terminal).
+    - `hexa_sha256/_file/_bytes`·`hexa_sha1` = ① portable. **포팅 타깃 FIPS-180-4
+      검증 🟢** — `sha256_hex("abc")` 빌드+실행 = `ba7816bf…015ad` (shasum 동일).
+      30+ 코어 호출처 codegen rewire 는 F3 B9.6 self-emit 으로 fold (이중계상 방지).
+  - F4 는 mis-split 이었음 (runtime.c 조각). 독립 floor 항목으로서는 resolved;
+    실제 open 작업(sha port + caller rewire)은 정당한 홈 **F3** 로 이관.
 
 ### F5 — `.s` boot-floor (RFC 063/064 gated)
 
