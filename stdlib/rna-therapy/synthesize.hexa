@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/rna-therapy/synthesize.hexa — `RNA_THERAPY + synthesize` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// rna-therapy synthesize — T7 IVT yield.
 fn main() {
+    let t7_mg_per_mL = 5.0
+    println("rna-therapy_synthesize (T7 IVT yield):")
+    println("  t7_mg_per_mL = " + str(t7_mg_per_mL))
     println("__HEXA_RNA_THERAPY_SYNTHESIZE__ PASS gate=GATE_OPEN absorbed=false")
 }

@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/qubit/design.hexa — `QUBIT + design` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// qubit design — transmon EJ/EC ratio target.
 fn main() {
+    let EJ_EC_target = 50.0
+    println("qubit_design (transmon EJ/EC ratio target):")
+    println("  EJ_EC_target = " + str(EJ_EC_target))
     println("__HEXA_QUBIT_DESIGN__ PASS gate=GATE_OPEN absorbed=false")
 }

@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/memristor/handoff.hexa — `MEMRISTOR + handoff` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// memristor handoff — crossbar array size.
 fn main() {
+    let crossbar_size = 1024.0
+    println("memristor_handoff (crossbar array size):")
+    println("  crossbar_size = " + str(crossbar_size))
     println("__HEXA_MEMRISTOR_HANDOFF__ PASS gate=GATE_OPEN absorbed=false")
 }

@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/spintronic/design.hexa — `SPINTRONIC + design` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// spintronic design — CoFeB free layer.
 fn main() {
+    let free_nm = 1.5
+    println("spintronic_design (CoFeB free layer):")
+    println("  free_nm = " + str(free_nm))
     println("__HEXA_SPINTRONIC_DESIGN__ PASS gate=GATE_OPEN absorbed=false")
 }

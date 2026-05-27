@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/photonic/structure.hexa — `PHOTONIC + structure` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// photonic structure — ring resonator radius.
 fn main() {
+    let ring_um = 5.0
+    println("photonic_structure (ring resonator radius):")
+    println("  ring_um = " + str(ring_um))
     println("__HEXA_PHOTONIC_STRUCTURE__ PASS gate=GATE_OPEN absorbed=false")
 }

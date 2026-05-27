@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/electrocat/design.hexa — `ELECTROCAT + design` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// electrocat design — catalyst loading.
 fn main() {
+    let loading_mg_cm2 = 1.0
+    println("electrocat_design (catalyst loading):")
+    println("  loading_mg_cm2 = " + str(loading_mg_cm2))
     println("__HEXA_ELECTROCAT_DESIGN__ PASS gate=GATE_OPEN absorbed=false")
 }

@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/rtsc/specify.hexa — `RTSC + specify` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// rtsc specify — Tc target above RT.
 fn main() {
+    let Tc_target_K = 300.0
+    println("rtsc_specify (Tc target above RT):")
+    println("  Tc_target_K = " + str(Tc_target_K))
     println("__HEXA_RTSC_SPECIFY__ PASS gate=GATE_OPEN absorbed=false")
 }

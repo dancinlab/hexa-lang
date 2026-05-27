@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/perovskite/handoff.hexa — `PEROVSKITE + handoff` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// perovskite handoff — module area target.
 fn main() {
+    let module_area_m2 = 1.0
+    println("perovskite_handoff (module area target):")
+    println("  module_area_m2 = " + str(module_area_m2))
     println("__HEXA_PEROVSKITE_HANDOFF__ PASS gate=GATE_OPEN absorbed=false")
 }

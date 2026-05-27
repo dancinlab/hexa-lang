@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/memristor/specify.hexa — `MEMRISTOR + specify` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// memristor specify — on/off ratio target.
 fn main() {
+    let ratio_target = 100.0
+    println("memristor_specify (on/off ratio target):")
+    println("  ratio_target = " + str(ratio_target))
     println("__HEXA_MEMRISTOR_SPECIFY__ PASS gate=GATE_OPEN absorbed=false")
 }

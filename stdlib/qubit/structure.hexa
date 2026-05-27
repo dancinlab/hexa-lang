@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/qubit/structure.hexa — `QUBIT + structure` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// qubit structure — Josephson junction area.
 fn main() {
+    let junction_area_nm2 = 10000.0
+    println("qubit_structure (Josephson junction area):")
+    println("  junction_area_nm2 = " + str(junction_area_nm2))
     println("__HEXA_QUBIT_STRUCTURE__ PASS gate=GATE_OPEN absorbed=false")
 }

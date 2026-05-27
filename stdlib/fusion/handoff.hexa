@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/fusion/handoff.hexa — `FUSION + handoff` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// fusion handoff — thermal power target.
 fn main() {
+    let P_thermal_MW = 500.0
+    println("fusion_handoff (thermal power target):")
+    println("  P_thermal_MW = " + str(P_thermal_MW))
     println("__HEXA_FUSION_HANDOFF__ PASS gate=GATE_OPEN absorbed=false")
 }

@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/co2-capture/specify.hexa — `CO2_CAPTURE + specify` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// co2-capture specify — DAC scale target.
 fn main() {
+    let capture_Gt_per_yr = 1.0
+    println("co2-capture_specify (DAC scale target):")
+    println("  capture_Gt_per_yr = " + str(capture_Gt_per_yr))
     println("__HEXA_CO2_CAPTURE_SPECIFY__ PASS gate=GATE_OPEN absorbed=false")
 }

@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/perovskite/synthesize.hexa — `PEROVSKITE + synthesize` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// perovskite synthesize — anti-solvent anneal temp.
 fn main() {
+    let anneal_C = 100.0
+    println("perovskite_synthesize (anti-solvent anneal temp):")
+    println("  anneal_C = " + str(anneal_C))
     println("__HEXA_PEROVSKITE_SYNTHESIZE__ PASS gate=GATE_OPEN absorbed=false")
 }

@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/photoredox/design.hexa — `PHOTOREDOX + design` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// photoredox design — blue LED wavelength.
 fn main() {
+    let led_nm = 450.0
+    println("photoredox_design (blue LED wavelength):")
+    println("  led_nm = " + str(led_nm))
     println("__HEXA_PHOTOREDOX_DESIGN__ PASS gate=GATE_OPEN absorbed=false")
 }

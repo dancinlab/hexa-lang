@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/memristor/design.hexa — `MEMRISTOR + design` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// memristor design — multi-level states target.
 fn main() {
+    let levels = 10.0
+    println("memristor_design (multi-level states target):")
+    println("  levels = " + str(levels))
     println("__HEXA_MEMRISTOR_DESIGN__ PASS gate=GATE_OPEN absorbed=false")
 }

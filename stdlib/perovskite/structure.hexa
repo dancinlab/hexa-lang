@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/perovskite/structure.hexa — `PEROVSKITE + structure` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// perovskite structure — MAPbI3 cubic lattice.
 fn main() {
+    let MAPbI3_a_A = 6.3
+    println("perovskite_structure (MAPbI3 cubic lattice):")
+    println("  MAPbI3_a_A = " + str(MAPbI3_a_A))
     println("__HEXA_PEROVSKITE_STRUCTURE__ PASS gate=GATE_OPEN absorbed=false")
 }

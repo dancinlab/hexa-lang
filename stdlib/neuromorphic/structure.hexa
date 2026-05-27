@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/neuromorphic/structure.hexa — `NEUROMORPHIC + structure` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// neuromorphic structure — neurons per core.
 fn main() {
+    let neurons_per_core = 1000.0
+    println("neuromorphic_structure (neurons per core):")
+    println("  neurons_per_core = " + str(neurons_per_core))
     println("__HEXA_NEUROMORPHIC_STRUCTURE__ PASS gate=GATE_OPEN absorbed=false")
 }

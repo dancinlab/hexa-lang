@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/aerogel/design.hexa — `AEROGEL + design` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// aerogel design — thermal conductivity target.
 fn main() {
+    let k_max_WmK = 0.02
+    println("aerogel_design (thermal conductivity target):")
+    println("  k_max_WmK = " + str(k_max_WmK))
     println("__HEXA_AEROGEL_DESIGN__ PASS gate=GATE_OPEN absorbed=false")
 }

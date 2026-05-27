@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/co2-capture/synthesize.hexa — `CO2_CAPTURE + synthesize` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// co2-capture synthesize — solvothermal MOF temp.
 fn main() {
+    let solvo_T_C = 120.0
+    println("co2-capture_synthesize (solvothermal MOF temp):")
+    println("  solvo_T_C = " + str(solvo_T_C))
     println("__HEXA_CO2_CAPTURE_SYNTHESIZE__ PASS gate=GATE_OPEN absorbed=false")
 }

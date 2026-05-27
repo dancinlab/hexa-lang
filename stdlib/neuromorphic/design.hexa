@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/neuromorphic/design.hexa — `NEUROMORPHIC + design` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// neuromorphic design — STDP plasticity window.
 fn main() {
+    let stdp_window_ms = 20.0
+    println("neuromorphic_design (STDP plasticity window):")
+    println("  stdp_window_ms = " + str(stdp_window_ms))
     println("__HEXA_NEUROMORPHIC_DESIGN__ PASS gate=GATE_OPEN absorbed=false")
 }

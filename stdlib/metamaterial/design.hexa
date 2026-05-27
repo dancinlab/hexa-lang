@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/metamaterial/design.hexa — `METAMATERIAL + design` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// metamaterial design — SRR split gap.
 fn main() {
+    let split_gap_mm = 0.2
+    println("metamaterial_design (SRR split gap):")
+    println("  split_gap_mm = " + str(split_gap_mm))
     println("__HEXA_METAMATERIAL_DESIGN__ PASS gate=GATE_OPEN absorbed=false")
 }

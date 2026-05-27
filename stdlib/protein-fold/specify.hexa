@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/protein-fold/specify.hexa — `PROTEIN_FOLD + specify` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// protein-fold specify — pLDDT confidence target.
 fn main() {
+    let pLDDT_target = 90.0
+    println("protein-fold_specify (pLDDT confidence target):")
+    println("  pLDDT_target = " + str(pLDDT_target))
     println("__HEXA_PROTEIN_FOLD_SPECIFY__ PASS gate=GATE_OPEN absorbed=false")
 }

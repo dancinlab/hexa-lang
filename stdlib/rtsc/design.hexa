@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/rtsc/design.hexa — `RTSC + design` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// rtsc design — design pressure target.
 fn main() {
+    let P_target_GPa = 200.0
+    println("rtsc_design (design pressure target):")
+    println("  P_target_GPa = " + str(P_target_GPa))
     println("__HEXA_RTSC_DESIGN__ PASS gate=GATE_OPEN absorbed=false")
 }

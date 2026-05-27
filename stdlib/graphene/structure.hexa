@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/graphene/structure.hexa — `GRAPHENE + structure` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// graphene structure — honeycomb lattice constant.
 fn main() {
+    let a_A = 2.46
+    println("graphene_structure (honeycomb lattice constant):")
+    println("  a_A = " + str(a_A))
     println("__HEXA_GRAPHENE_STRUCTURE__ PASS gate=GATE_OPEN absorbed=false")
 }

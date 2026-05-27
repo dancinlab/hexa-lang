@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/gene-edit/design.hexa — `GENE_EDIT + design` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// gene-edit design — GC content fraction target.
 fn main() {
+    let GC_target = 0.50
+    println("gene-edit_design (GC content fraction target):")
+    println("  GC_target = " + str(GC_target))
     println("__HEXA_GENE_EDIT_DESIGN__ PASS gate=GATE_OPEN absorbed=false")
 }

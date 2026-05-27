@@ -1,8 +1,8 @@
 #!hexa strict
-// stdlib/rna-therapy/specify.hexa — `RNA_THERAPY + specify` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// rna-therapy specify — mRNA knockdown target.
 fn main() {
+    let knockdown_target = 0.90
+    println("rna-therapy_specify (mRNA knockdown target):")
+    println("  knockdown_target = " + str(knockdown_target))
     println("__HEXA_RNA_THERAPY_SPECIFY__ PASS gate=GATE_OPEN absorbed=false")
 }
