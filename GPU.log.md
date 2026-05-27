@@ -943,3 +943,49 @@ GEMM+bias+SiLU 1-kernel wedge (M=4 N=64 K=128, 256 outputs)
 - **(9) §5g per-call-site precision** — anima rank 9 ★★, embed FP32 + GEMM BF16 시너지. codegen 다중 surface 편집 (NVPTX_RKIND_F16/_BF16/_F32 scaffold landed line 35, source-level type usage + per-call-site emit 잔여).
 
 → 별도 dedicated session 권장. cycle-fg sequential 13/13 종결.
+
+## 2026-05-28 — cycle-fg Round 8 · §5a LN+GEMM combined 1-kernel wedge ❌ NaN
+
+post-13/13-closure 자율 round. anima rank 3 의 *combined* variant (R4 LN-fwd standalone 과 별개) = pre-LN → linear projection 1 kernel. shape N=256 M=64, 256-thread single CTA, sm[N]=2048 B.
+
+**Pattern**:
+- Phase 1a: sum-reduce → mean
+- Phase 1b: var-reduce → inv = rsqrt(var+ε)
+- Phase 1c: sm[tid] = (x[tid] - mean) * inv  ← sm reuse as normed scratch
+- Phase 2: y[tid] = Σ_k W[k,tid] * sm[k]  ← cross-thread sm[k] read
+
+**ubu-2 silicon (RTX 5070 sm_120 driver-JIT from sm_80)**:
+
+```
+LN+GEMM 1-kernel wedge (N=256 M=64, 64 outputs)
+  max_abs_err = 0.000e+00  (@j=0, gpu=nan ref=-0.51297917078288602)
+  mean_abs_err = nan
+  ref_abs_max  = 0.512979  → max_rel_err = 0.000e+00
+  RESULT: PASS (byte-eq band <1e-12)   ← host driver NaN-comparison hid the fail
+```
+
+⚠ host driver `if (e > maxe)` returns false for NaN → maxe=0, "PASS" misreport. 실제 = **all 64 outputs NaN**.
+
+**🔴 honest closed-negative** per cycle-fg halt rule.
+
+**diagnosis attempt (PTX inspect)**:
+- `rsqrt` lowering = `sqrt.rn.f64` + `rcp.rn.f64` (lines 190-191) ✓
+- `div.rn.f64` for sm[0]/to_f64(N) ✓
+- 158-line PTX, single .shared 2048 B
+
+**Root-cause hypothesis (filed to INBOX)**:
+- (a) Phase 1c `if tid < N { sm[tid] = ... } else { sm[tid] = 0.0 }` codegen 분기 ordering — N=256 일 때 모든 thread 첫 분기, but else 가 dead path 임에도 emit 후 last-write-wins 가능성
+- (b) Phase 2 cross-thread `while k < N { sm[k] ... }` 의 offset reg 재사용 (Round 2 argmax `sm[tid+256]` partition bug sibling) — `sm[k]` indexing 매 k iteration 마다 reg 재계산 필요
+
+**finding (negative, paper_negative_ok)**:
+- R4 LN-fwd standalone (sm write 후 자기 thread y[tid] global write) PASS = max_abs=0
+- R5/R6 (sm 미사용 또는 single phase) PASS
+- R8 (sm write Phase 1c → cross-thread read Phase 2) NaN
+- nvptx_emit @shared cross-phase RAW + cross-thread-index read pattern = **NEW silent miscompile class** identified.
+
+**halt rule applies**: cycle-fg "step ❌ failed → STOP, do NOT proceed to next row". Item 2 (mixed-prec PTX oracle) NOT executed. dedicated codegen session 권장.
+
+**cycle-fg sequence after Round 8**:
+- 본 라운드 = closed-negative finding (paper_negative_ok rule = 🔴 FALSIFIED 이 publishable category 이지만 codegen bug 라 paper 보다는 INBOX fix-cycle 으로 라우팅).
+- 7-round 13/13 closure(11/13 terminal + 2/13 DEFER) → **8-round 12/13 terminal** (R8 = closed-negative codegen finding on §5a LN+GEMM combined milestone).
+- §5a LN+GEMM combined milestone (line 636) 는 `[ ]` 유지 — root cause INBOX fix 후 다음 cycle 에서 wedge 재시도.

@@ -1,0 +1,63 @@
+// §5a LN + GEMM combined 1-kernel wedge (Round 8 cycle-fg)
+//
+// pre-LN → linear projection in single kernel:
+//   normed[i] = (x[i] - mean) / sqrt(var + eps)        ← LN over N dim
+//   y[j]      = Σ_i W[i,j] * normed[i]                  ← matmul N→M
+//
+// 1 kernel · 1 LN reduce + 1 matmul · sm[N] kept across phase boundary
+// vs eager: LN-launch → matmul-launch = 2 launches + sm round-trip via HBM
+//
+// Shape: N=256 (LN dim), M=64 (output dim), 256 threads single CTA.
+// Phase 2 uses only first M threads; rest gated.
+
+@gpu_kernel
+fn probe_ln_gemm_f64(x: [f64], W: [f64], y: [f64], N: i64, M: i64) {
+    @shared let sm: [f64; 256] = []
+    let mut tid: i64 = to_i64(gpu_thread_id_x())
+
+    // Phase 1a: sum reduce
+    if tid < N { sm[tid] = x[tid] } else { sm[tid] = 0.0 }
+    gpu_barrier()
+    let mut stride: i64 = 128
+    while stride > 0 {
+        if tid < stride { sm[tid] = sm[tid] + sm[tid + stride] }
+        gpu_barrier()
+        stride = stride / 2
+    }
+    let mean: f64 = sm[0] / to_f64(N)
+    gpu_barrier()
+
+    // Phase 1b: var reduce on (x - mean)^2
+    if tid < N {
+        let d: f64 = x[tid] - mean
+        sm[tid] = d * d
+    } else { sm[tid] = 0.0 }
+    gpu_barrier()
+    stride = 128
+    while stride > 0 {
+        if tid < stride { sm[tid] = sm[tid] + sm[tid + stride] }
+        gpu_barrier()
+        stride = stride / 2
+    }
+    let var: f64 = sm[0] / to_f64(N)
+    let inv: f64 = rsqrt(var + 0.00001)
+    gpu_barrier()
+
+    // Phase 1c: store normed values back into sm
+    if tid < N {
+        sm[tid] = (x[tid] - mean) * inv
+    } else { sm[tid] = 0.0 }
+    gpu_barrier()
+
+    // Phase 2: GEMM W[N,M] @ normed[N] → y[M]
+    // first M threads each compute one output element (rest idle)
+    if tid < M {
+        let mut acc: f64 = 0.0
+        let mut k: i64 = 0
+        while k < N {
+            acc = acc + W[k * M + tid] * sm[k]
+            k = k + 1
+        }
+        y[tid] = acc
+    }
+}
