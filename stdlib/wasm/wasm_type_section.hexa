@@ -1,0 +1,127 @@
+// HEXA Standard Library — wasm/wasm_type_section
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// WebAssembly Type section emitter (RUNTIME.flip B7.wasm-type-section).
+// Function-signature encoder + Type-section body builder. Pure additive,
+// sibling of:
+//   stdlib/wasm/wasm_leb128.hexa         — ULEB128 / SLEB128 codec
+//   stdlib/wasm/wasm_section_header.hexa — magic / version / section emit
+//
+// Wasm binary format — Type section (id=1) holds the `functype` table that
+// every Function / Import / Indirect-call refers to by index. Each entry
+// encodes the parameter and result value-type vectors of one function
+// signature.
+//
+//   functype       := 0x60 vec(valtype) vec(valtype)
+//                                 ^ params           ^ results
+//   vec(valtype)   := uleb128(N) || valtype_0 || valtype_1 || ... || valtype_{N-1}
+//
+// valtype bytes (wasm 1.0 core, §5.3.1):
+//   0x7F  i32
+//   0x7E  i64
+//   0x7D  f32
+//   0x7C  f64
+//
+// Full Type section body (before wrapping with `wasm_section_emit(1, ...)`):
+//
+//   type_section_body := uleb128(M) || functype_0 || functype_1 || ... || functype_{M-1}
+//
+// Reference fixture (single functype `add: (i32, i32) -> i32`):
+//
+//   functype_bytes = [0x60, 0x02, 0x7F, 0x7F, 0x01, 0x7F]
+//   type_section_body([functype_bytes]) =
+//     [0x01,                                    // count=1
+//      0x60, 0x02, 0x7F, 0x7F, 0x01, 0x7F]      // the one functype
+//
+// Surface:
+//   pub fn wasm_functype_emit(params: [int], results: [int]) -> [int]
+//       — `0x60 || uleb128(len(params)) || params... || uleb128(len(results)) || results...`
+//   pub fn wasm_type_section_emit(functypes: [[int]]) -> [int]
+//       — Type-section body: `uleb128(len(functypes)) || functype_0 || functype_1 || ...`
+//
+// Caller wraps the body with `wasm_section_emit(1, body)` from the
+// sibling `stdlib/wasm/wasm_section_header` module to produce the full
+// on-the-wire section (`section_id || uleb128(len(body)) || body`).
+//
+// Inlined uleb128 stub. Sibling `stdlib/wasm/wasm_leb128.hexa` exports
+// `wasm_uleb128_encode`, but to keep this scaffold parse-clean without
+// depending on cross-file `use` resolution (and consistent with the
+// already-shipped `wasm_section_header.hexa` which inlines the same
+// stub — see its `_wasm_uleb128_small`), we inline a small-N encoder.
+// The stub is correct for the vector counts realistic for a wasm Type
+// section (a wasm 1.0 module is capped well under 2^28 functypes).
+//
+// Capability profile: pure — no I/O, no globals, allocation only of
+// the returned byte array.
+
+// -- inlined uleb128 (small-N) --
+// Identical algorithm to sibling `wasm_uleb128_encode` (and to the
+// `_wasm_uleb128_small` inline in `wasm_section_header.hexa`): emit
+// 7-bit groups low-first, set the continuation bit (0x80) on every
+// byte except the last. Returns an empty vector on negative input —
+// vector lengths in wasm are unsigned and a negative count is a
+// caller bug.
+@pure
+fn _wasm_ts_uleb128(value: int) -> [int] {
+    let mut v = value
+    let mut out: [int] = []
+    if v < 0 { return out }
+    while true {
+        let low = v & 0x7f
+        let rest = v >> 7
+        if rest == 0 {
+            out = out + [low]
+            return out
+        }
+        out = out + [low | 0x80]
+        v = rest
+    }
+    return out
+}
+
+// -- functype emit --
+// `0x60 || uleb128(len(params)) || params... || uleb128(len(results)) || results...`
+// Caller passes `params` / `results` as arrays of raw valtype bytes
+// (0x7F=i32 · 0x7E=i64 · 0x7D=f32 · 0x7C=f64). This module does not
+// validate the byte values — keeping the surface a transparent byte
+// concatenator. Range-check upstream if the input source is untrusted.
+@pure
+pub fn wasm_functype_emit(params: [int], results: [int]) -> [int] {
+    let mut out: [int] = [0x60]
+    let pn = len(params)
+    let pn_bytes = _wasm_ts_uleb128(pn)
+    for b in pn_bytes { out = out + [b] }
+    let mut i = 0
+    while i < pn { out = out + [params[i]]; i = i + 1 }
+    let rn = len(results)
+    let rn_bytes = _wasm_ts_uleb128(rn)
+    for b in rn_bytes { out = out + [b] }
+    i = 0
+    while i < rn { out = out + [results[i]]; i = i + 1 }
+    return out
+}
+
+// -- Type section body emit --
+// `uleb128(len(functypes)) || functype_0 || functype_1 || ... || functype_{M-1}`
+// Returns the Type-section *body* only (no section-id, no length prefix).
+// Caller wraps with `wasm_section_emit(1, body)` for the full on-the-wire
+// section. Functypes are already-encoded byte arrays (typically from
+// `wasm_functype_emit`); this fn just length-prefixes and concatenates.
+@pure
+pub fn wasm_type_section_emit(functypes: [[int]]) -> [int] {
+    let mut out: [int] = []
+    let m = len(functypes)
+    let count_bytes = _wasm_ts_uleb128(m)
+    for b in count_bytes { out = out + [b] }
+    let mut i = 0
+    while i < m {
+        let ft = functypes[i]
+        let n = len(ft)
+        let mut j = 0
+        while j < n { out = out + [ft[j]]; j = j + 1 }
+        i = i + 1
+    }
+    return out
+}
