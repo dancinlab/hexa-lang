@@ -463,3 +463,46 @@ oracle 의 roofline-aware 적용으로 phantom wedge 회피.
 roofline 자기-감사**. 사례 #1 = BC3 decomp (epilogue share 측정으로 1.5×
 unphysical 확인), 사례 #2 = 3-probe oracle (wedge ranking), 사례 #3 = HBM
 roofline correction (W1 phantom 식별). 매 사례마다 multi-cycle 캠페인 절약.
+
+## 2026-05-28 — BC4 round-14 wedge plan (R7 closing-note 정량 정찰)
+
+`/cycle-bg 3 all` 라운드 A1 — BC4 round-7 (`F-FUSION-ATTN-ROOFLINE` §1m) closing-note
+의 wedge 추천 ("BM=32 + register-resident O + selective TMA → 2-4 CTAs/SM") 을
+silicon-fire 가치가 있는지 closed-form 으로 사전-증명/사전-반증한 정찰 라운드.
+NO codegen, NO silicon fire — 다음 silicon 라운드 표적을 정직히 결정하기 위한
+planning closure.
+
+**Tier**: ⚪ planning (silicon 라운드 14 표적 사전등록)
+**Branch**: `bc4-recon-plan-2026-05-28`
+**Deliverable**: `docs/notes/bc4-attention-smem-residency-wedge-plan-2026-05-28.md`
+
+**핵심 결론 (5 줄):**
+
+1. R7 closing-note 의 **BM=32 BK=64** wedge 는 O-reg 적용해도 **1 CTA/SM** (smem
+   57 344 B > optin 102 400 B 의 절반) — *quantitatively falsified before silicon*.
+2. **진짜 wedge = BM=32 BK=32** (smem 30 720 B → **3 CTAs/SM**, reg-bound 4 CTAs/SM,
+   min = 3). BM=16 BK=64 (2 CTAs/SM) + BM=64 BK=16 (4 CTAs/SM) 도 보조 A/B.
+3. Register pressure check: R10 의 91 reg/thd 베이스 + 16 fp32 reg (O-reg @ BM=32)
+   = ~103 reg/thd ≪ 255 한계. 0-spill 유지 기대.
+4. Selective TMA = secondary lever (BK=32 K-tile = 4 KB 가 TMA sweet-spot 16 KB
+   미만). 주된 lever 는 O-reg + occupancy 회복.
+5. **HONEST roofline projection: expected ratio ≈ 1.32×** (BM=32 AI=31 = HGEMM-ridge
+   30% × occupancy 3 CTAs/SM). → ≤ 1.5× partial PASS sweet spot, ≤ 1.10× capstone
+   *물리적으로* 본 wedge 로는 불가 — capstone 은 **wgmma (round 15) 단독 lever** 필요.
+
+**Pre-registered falsifier** `F-FUSION-ATTN-BM32-OCCUPANCY-WALL`:
+`cuOccupancyMaxActiveBlocksPerMultiprocessor ≥ 3` AND ratio ≤ 1.5× AND
+per-row-scaled rel ≤ 1e-2 / naninf=0.
+
+**Sequenced roadmap:**
+- Step 1 (본 plan, this PR) = planning closure
+- Step 2 = cheap-first oracle (risk a, d) — free / 5min silicon probe
+- Step 3 = round-14 silicon fire (BM=32 BK=32 O-reg)
+- Step 4 = round-15 contingency (wgmma) if ratio > 1.10×
+
+`feedback_instrument_first_methodology` cheap-first oracle 사례 #4: **사전 정찰
+로 closing-note 양적-반증** (BM=32 BK=64 → 1 CTA/SM 인 점을 silicon 전에 닫음).
+사례 #1-3 와 같이 multi-cycle 캠페인 절약 — round-7 closing note 그대로 fire
+했다면 또 다시 1 CTA/SM regression 이 나왔을 것.
+
+No LLVM. No C-transpile. `compiler/codegen/*.hexa` UNTOUCHED.
