@@ -130,6 +130,22 @@ A binary appears only when every fatal stage passes. The atlas (4.2 MB) is baked
 
 ### Where it beats cuBLAS-using stacks structurally (whole-program fusion · cuBLAS cannot express)
 
+`cuBLAS` ships a champion *part* (the GEMM kernel itself, already at roofline), but cannot fuse adjacent ops — each op pays a separate kernel launch + a full HBM round-trip. hexa codegen sees the whole expression and emits one kernel that keeps intermediates in registers / shared memory:
+
+```
+cuBLAS-using stack (current default — 3 ops = 3 launches, 3 HBM round-trips):
+  ┌──GEMM──┐         ┌──bias──┐         ┌──GeLU──┐
+  │ launch │ → HBM → │ launch │ → HBM → │ launch │ → HBM
+  └────────┘         └────────┘         └────────┘
+
+hexa fusion (whole-program — one kernel, registers/shmem reused):
+  ┌──── GEMM + bias + GeLU ────┐
+  │  1 launch · 1 HBM write    │ → HBM            (F-FUSION-EPILOGUE-GEMM-BIAS-GELU)
+  └────────────────────────────┘                  66.667 % launch + HBM-write reduction
+```
+
+The same mechanic generalises: GEMM-epilogue, norm surface, attention block, autoregressive decode chain — every place where cuBLAS forces "stop the GEMM, write to HBM, hand off to the next op" hexa can keep the value in registers.
+
 | finding | reduction / win | tier |
 |---|---|---|
 | `F-FUSION-EPILOGUE-GEMM-BIAS-GELU` | **66.667 % launch + HBM-write reduction** (3 launches → 1) @ LLaMA-7B FFN shape, ptxas-clean sm_80 | 🔵 structural-formal |
