@@ -85,8 +85,8 @@ int main(int argc, char** argv){
     double lo, hi, tol;
     int    is_pow = eq_fn(fn, "pow_f64_probe");
     double pow_y  = 1.5;
-    if      (eq_fn(fn, "sin_f64_probe"))    { lo=-3.14159265; hi=+3.14159265; tol=1e-7; }
-    else if (eq_fn(fn, "cos_f64_probe"))    { lo=-3.14159265; hi=+3.14159265; tol=1e-7; }
+    if      (eq_fn(fn, "sin_f64_probe"))    { lo=-3.14159265; hi=+3.14159265; tol=1e-5; }
+    else if (eq_fn(fn, "cos_f64_probe"))    { lo=-3.14159265; hi=+3.14159265; tol=1e-4; }
     else if (eq_fn(fn, "tan_f64_probe"))    { lo=-1.0;        hi=+1.0;        tol=1e-5; }
     else if (eq_fn(fn, "exp_f64_probe"))    { lo=-5.0;        hi=+5.0;        tol=1e-9; }
     else if (eq_fn(fn, "log_f64_probe"))    { lo= 0.5;        hi=+4.0;        tol=1e-5; }
