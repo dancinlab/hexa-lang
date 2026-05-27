@@ -1,0 +1,103 @@
+// HEXA Standard Library — posix/posix_signal_numbers
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// POSIX signal number tables — Linux + Darwin — for the 15 canonical POSIX
+// signals (RUNTIME.flip.md B3.posix-signal-numbers). This file is the
+// data-table half of the posix runtime surface: a hexa-native constant-table
+// per OS, ready for inline kill/raise emission per memory
+// `feedback-runtime-c-deploy-regen-wipe`.
+//
+// Sibling of stdlib/posix/linux_syscalls.hexa + stdlib/posix/darwin_syscalls.hexa.
+// 100% hexa-self. Pure additive.
+//
+// Numbers cited from kernel/libc uapi headers:
+//   asm-generic/signal.h                                 (Linux 6.x)
+//   xnu/bsd/sys/signal.h (Darwin) — sys/signal.h         (xnu 11.x)
+//
+// Cross-platform divergence notes (the three values that differ):
+//   SIGBUS : Linux=7,  Darwin=10
+//   SIGUSR1: Linux=10, Darwin=30
+//   SIGUSR2: Linux=12, Darwin=31
+// All other signals in the canonical 15 share numbers across the two OSes.
+//
+// Surface:
+//   pub fn posix_signal_linux(name: str) -> int    — Linux signal number (or -1)
+//   pub fn posix_signal_darwin(name: str) -> int   — Darwin signal number (or -1)
+//   pub fn posix_signal_names() -> [str]           — the 15 names in canonical order
+//
+// All three lookups are tiny string-match dispatches. Signal numbers are part
+// of the kernel ABI and never re-numbered on either OS, so this table is
+// durable.
+//
+// Canonical 15-signal ordering (matches RUNTIME.flip.md B3 spec):
+//   HUP · INT · QUIT · ILL · TRAP · ABRT · BUS · FPE · KILL · USR1 ·
+//   SEGV · USR2 · PIPE · ALRM · TERM
+
+@pure
+pub fn posix_signal_names() -> [str] {
+    return [
+        "SIGHUP",
+        "SIGINT",
+        "SIGQUIT",
+        "SIGILL",
+        "SIGTRAP",
+        "SIGABRT",
+        "SIGBUS",
+        "SIGFPE",
+        "SIGKILL",
+        "SIGUSR1",
+        "SIGSEGV",
+        "SIGUSR2",
+        "SIGPIPE",
+        "SIGALRM",
+        "SIGTERM"
+    ]
+}
+
+// Linux signal numbers (asm-generic/signal.h — Linux 6.x).
+// Most architectures share asm-generic; alpha/mips/parisc/sparc diverge but
+// are not currently targeted by the hexa-lang self-host campaign.
+@pure
+pub fn posix_signal_linux(name: str) -> int {
+    if name == "SIGHUP" { return 1 }
+    if name == "SIGINT" { return 2 }
+    if name == "SIGQUIT" { return 3 }
+    if name == "SIGILL" { return 4 }
+    if name == "SIGTRAP" { return 5 }
+    if name == "SIGABRT" { return 6 }
+    if name == "SIGBUS" { return 7 }
+    if name == "SIGFPE" { return 8 }
+    if name == "SIGKILL" { return 9 }
+    if name == "SIGUSR1" { return 10 }
+    if name == "SIGSEGV" { return 11 }
+    if name == "SIGUSR2" { return 12 }
+    if name == "SIGPIPE" { return 13 }
+    if name == "SIGALRM" { return 14 }
+    if name == "SIGTERM" { return 15 }
+    return -1
+}
+
+// Darwin signal numbers (xnu bsd/sys/signal.h — xnu 11.x).
+// Darwin inherits the historical 4.3BSD numbering, which diverges from
+// Linux's asm-generic numbering for SIGBUS / SIGUSR1 / SIGUSR2.
+@pure
+pub fn posix_signal_darwin(name: str) -> int {
+    if name == "SIGHUP" { return 1 }
+    if name == "SIGINT" { return 2 }
+    if name == "SIGQUIT" { return 3 }
+    if name == "SIGILL" { return 4 }
+    if name == "SIGTRAP" { return 5 }
+    if name == "SIGABRT" { return 6 }
+    if name == "SIGBUS" { return 10 }
+    if name == "SIGFPE" { return 8 }
+    if name == "SIGKILL" { return 9 }
+    if name == "SIGUSR1" { return 30 }
+    if name == "SIGSEGV" { return 11 }
+    if name == "SIGUSR2" { return 31 }
+    if name == "SIGPIPE" { return 13 }
+    if name == "SIGALRM" { return 14 }
+    if name == "SIGTERM" { return 15 }
+    return -1
+}
