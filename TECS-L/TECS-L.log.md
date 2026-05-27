@@ -2,6 +2,17 @@
 
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-27T16:10Z · 축 RTSC · RTSC4 · loop iteration #2-3 — N5 binary 전수 독립 재현 (demiurge N5 wall 검증)
+
+- [~] **RTSC4 loop iteration #2-3 — N5 binary hydride 전수 verify → 고갈 독립 확인**: TECS-L verify-게이트가 demiurge 상온초전도 캠페인의 N5 wall (binary hydride RTSC 고갈) 을 closed-form 으로 독립 재현.
+  - **#2 h3si**: `allen_dynes_tc(1.8, 600, 0.13) = 74.0692K` 🟢 (|Δ|=0.031, demiurge ~78K) → M8 judge 74<293 미달 ❌
+  - **#3 h3cl**: `allen_dynes_tc(1.3, 1350, 0.10) = 132.778K` 🟢 (|Δ|=0.022, demiurge ~140K) → M8 judge 133<293 미달 ❌
+  - (#1 h3br: 83.2256K, 위 entry)
+  - **N5 binary 전수 (h3cl 132.8 · h3br 83.2 · h3si 74.1) 모두 <200K → N5 고갈 독립 확인** = demiurge `N5_wall_redefinition.md` 의 "binary 는 RTSC 에 대해 고갈" wall 을 TECS-L verify-게이트가 독립 재현. loop 가 실제 material-discovery wall 검증.
+  - **simple AD < full AD 일관 gap**: h3cl 132.8/140 · h3br 83.2/110 · h3si 74.1/78 — TECS-L simple Allen-Dynes (3-arg) 가 demiurge full (4-arg, strong-coupling f1·f2, λ>1.5 영역) 보다 일관되게 낮음. RTSC loop 정밀 운전 = `allen_dynes_full` 권고 (RTSC2 audit 의 4-arg arm).
+  - **다음**: N6 ternary funnel — demiurge Li₂CuH₆ ambient (DISPATCH LIVE, harvest pending) 의 DFT (λ,ω_log) 산출 후 TECS-L verify. N5→N6 전환은 demiurge DFT 데이터 의존 (cross-repo, GPU). TECS-L loop frontier = N5 고갈 확인까지 완료.
+  - inline `--no-absorb` (throttle-safe). install re-sync (live binary) + N6 demiurge DFT = 영구 운전 잔여.
+
 ## 2026-05-27T15:40Z · 축 RTSC · RTSC4 · loop 첫 iteration 실증 — h3br verify→judge→다음 (메커니즘 전체 작동)
 
 - [~] **RTSC4 — TECS-L loop 연속 운전 iteration #1 실증** (영구 lane, 메커니즘 전체 작동):
