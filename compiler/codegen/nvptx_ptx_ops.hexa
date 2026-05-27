@@ -1,35 +1,35 @@
-// HEXA Native Compiler — Codegen / NVPTX PTX opcode table  [RFC 055 Stage 1 scaffold]
+// HEXA Native Compiler - Codegen / NVPTX PTX opcode table  [RFC 055 Stage 1 scaffold]
 //
 // @version 0.0.1
 // @capabilities [pure]
 //
-// SCAFFOLD ONLY — RFC 055 Stage-1 (055-P0). Zero behavior change: nothing
+// SCAFFOLD ONLY - RFC 055 Stage-1 (055-P0). Zero behavior change: nothing
 // in the compiler imports or calls this file yet. It exists so a later
 // implementation cycle (055-P0/P1) has a fixed structural target.
 //
 // This file enumerates the PTX (NVIDIA Parallel Thread eXecution virtual
 // ISA) mnemonics the NVPTX codegen target lowers MIR into. PTX is a
-// stable virtual-ISA text format — the hexa compiler emits PTX text
+// stable virtual-ISA text format - the hexa compiler emits PTX text
 // DIRECTLY (RFC 055 §6.2): no LLVM IR, no LLVM NVPTX backend. This honors
-// @D f2 "llvm-c-transpile-backend" — see falsifier F-RFC055-NO-LLVM.
+// @D f2 "llvm-c-transpile-backend" - see falsifier F-RFC055-NO-LLVM.
 //
 // The first implementable slice (RFC 055 §6.6) is the FP64 arithmetic
-// subset only — enough to lower a vector-add and a naive GEMM. Tensor
+// subset only - enough to lower a vector-add and a naive GEMM. Tensor
 // Core MMA (wmma/wgmma), texture/surface ops, atomics, cp.async are each
 // later sub-phases (RFC 055 §8).
 //
 // PTX mnemonics, special-register names, and warp size (32) below are
-// NVIDIA hardware facts cited from the NVIDIA PTX ISA documentation —
+// NVIDIA hardware facts cited from the NVIDIA PTX ISA documentation -
 // never derived from the n=6 lattice (@D f1).
-//   ref: NVIDIA PTX ISA — https://docs.nvidia.com/cuda/parallel-thread-execution/
+//   ref: NVIDIA PTX ISA - https://docs.nvidia.com/cuda/parallel-thread-execution/
 
 // ── Address spaces (PTX state spaces) ─────────────────────────
 //
 // A GPU target needs multiple memory address spaces the CPU targets
 // never modelled (RFC 055 §6.3). Each PTX load/store is qualified by
 // the state space of its operand.
-pub let PTX_SPACE_GLOBAL: string   = "global"     // device DRAM — farr args
-pub let PTX_SPACE_SHARED: string   = "shared"     // per-block scratchpad — @shared locals
+pub let PTX_SPACE_GLOBAL: string   = "global"     // device DRAM - farr args
+pub let PTX_SPACE_SHARED: string   = "shared"     // per-block scratchpad - @shared locals
 pub let PTX_SPACE_LOCAL: string    = "local"      // per-thread spill space
 pub let PTX_SPACE_CONST: string    = "const"      // read-only constant bank
 pub let PTX_SPACE_PARAM: string    = "param"      // kernel parameter bank
@@ -48,16 +48,16 @@ pub let PTX_SREG_LANEID: string = "%laneid"   // lane index within warp
 // NVIDIA hardware fact: a warp is 32 threads. Cited constant, not derived.
 pub let PTX_WARP_SIZE: i64 = 32
 
-// ── PTX FP64 arithmetic mnemonics (first slice — RFC 055 §6.6) ──
+// ── PTX FP64 arithmetic mnemonics (first slice - RFC 055 §6.6) ──
 pub let PTX_OP_LD_GLOBAL_F64: string  = "ld.global.f64"
 pub let PTX_OP_ST_GLOBAL_F64: string  = "st.global.f64"
 // RFC 068 P4 codegen↔silicon reconcile (PR #189 finding):
-// ptxas (CUDA 12.0) rejects `ld.global.f16` / `st.global.f16` —
+// ptxas (CUDA 12.0) rejects `ld.global.f16` / `st.global.f16` -
 // even though PTX ISA §8.7 spec lists `.f16` as a valid type for ld/st.
 // Canonical NVIDIA-emitted code for `__half` ld/st uses `.b16` storage
 // (the raw 16-bit container type) which ptxas accepts and silently
 // type-casts to the `.reg .f16` register operand. The same applies to
-// bf16 → `.b16` storage (the bf16 reg type itself fails to parse in
+// bf16 -> `.b16` storage (the bf16 reg type itself fails to parse in
 // PTX 7.8 on older toolkits, so the bf16 codegen path stays minimal).
 // `.f32` and `.f64` work directly with their own type tags.
 pub let PTX_OP_LD_GLOBAL_F16: string  = "ld.global.b16"
@@ -66,17 +66,17 @@ pub let PTX_OP_LD_GLOBAL_BF16: string = "ld.global.b16"
 pub let PTX_OP_ST_GLOBAL_BF16: string = "st.global.b16"
 pub let PTX_OP_LD_GLOBAL_F32: string  = "ld.global.f32"
 pub let PTX_OP_ST_GLOBAL_F32: string  = "st.global.f32"
-// RFC 068 §3 fp8 scaffold — Hopper-class (sm_90+) e4m3 / e5m2 ld/st.
+// RFC 068 §3 fp8 scaffold - Hopper-class (sm_90+) e4m3 / e5m2 ld/st.
 // PTX has no native `.e4m3` / `.e5m2` ld/st type tag; both variants use
-// `.b8` raw container storage (matching the f16/bf16 → `.b16` PR #189
+// `.b8` raw container storage (matching the f16/bf16 -> `.b16` PR #189
 // pattern). The fp8 INTERPRETATION lives in the consumer opcode
 // (`cvt.rn.f16.e4m3` / `wmma.mma.sync...e4m3.e4m3.f32`), not the ld/st.
 //   ref: PTX ISA 8.7 §5.4.1 (raw container types) + §9.7.13.5 (fp8 WMMA).
-// SCAFFOLD-ONLY — no silicon fire in this cycle; sub-byte ABI work
+// SCAFFOLD-ONLY - no silicon fire in this cycle; sub-byte ABI work
 // (kernel-arg packing, addr alignment) is a follow-on cycle.
 pub let PTX_OP_LD_GLOBAL_F8: string   = "ld.global.b8"
 pub let PTX_OP_ST_GLOBAL_F8: string   = "st.global.b8"
-// PR-A (GPU sweep #1284) — integer global ld/st mnemonics. PTX ISA 8.7
+// PR-A (GPU sweep #1284) - integer global ld/st mnemonics. PTX ISA 8.7
 // §8.7 accepts `.u64` / `.u32` / `.s64` / `.s32` as ld/st type tags
 // (the type semantics for ld/st are signedness-agnostic; `.u`/`.s` are
 // interchangeable for the storage operation, the consuming opcode picks
@@ -94,56 +94,56 @@ pub let PTX_OP_ADD_F64: string        = "add.f64"
 pub let PTX_OP_SUB_F64: string        = "sub.f64"
 pub let PTX_OP_MUL_F64: string        = "mul.f64"
 pub let PTX_OP_FMA_RN_F64: string     = "fma.rn.f64"   // round-to-nearest FMA
-// PTX ISA 8.7 §9.7.1.4 — `div.<ty>` REQUIRES an explicit rounding suffix.
+// PTX ISA 8.7 §9.7.1.4 - `div.<ty>` REQUIRES an explicit rounding suffix.
 // For FP64 the only native mode is `div.rn.f64` (IEEE round-to-nearest);
 // `div.approx.f64` / `div.full.f64` do NOT exist (those are FP32-only).
 pub let PTX_OP_DIV_RN_F64: string     = "div.rn.f64"
 
-// ── PTX floating-point math intrinsics (RFC 055 §13 — NN-stack math) ──
+// ── PTX floating-point math intrinsics (RFC 055 §13 - NN-stack math) ──
 // PTX ISA 9.7.3 floating-point ops. The EXACT ones (sqrt.rn / max / min /
-// abs) are IEEE round-to-nearest → byte-eq verifiable against the CPU
+// abs) are IEEE round-to-nearest -> byte-eq verifiable against the CPU
 // libm reference. The APPROX ones (rsqrt.approx.f32, ex2.approx.f32) are
-// hardware-approximation units → validated within a relative tolerance
+// hardware-approximation units -> validated within a relative tolerance
 // (~2^-23) rather than byte-eq. These close the softmax (exp / max),
 // RMSNorm / LayerNorm (sqrt / rsqrt), and attention (max) math gaps for
 // the `@gpu_kernel` source-to-silicon path.
-pub let PTX_OP_SQRT_RN_F32: string    = "sqrt.rn.f32"   // EXACT — IEEE round-to-nearest sqrt (f32)
-pub let PTX_OP_SQRT_RN_F64: string    = "sqrt.rn.f64"   // EXACT — IEEE round-to-nearest sqrt (f64)
-pub let PTX_OP_RSQRT_APPROX_F32: string = "rsqrt.approx.f32"  // APPROX — fast reciprocal-sqrt (f32 only; ~2^-23 rel)
-pub let PTX_OP_MAX_F32: string        = "max.f32"       // EXACT — IEEE max (f32)
-pub let PTX_OP_MAX_F64: string        = "max.f64"       // EXACT — IEEE max (f64)
-pub let PTX_OP_MIN_F32: string        = "min.f32"       // EXACT — IEEE min (f32)
-pub let PTX_OP_MIN_F64: string        = "min.f64"       // EXACT — IEEE min (f64)
-pub let PTX_OP_MAX_S32: string        = "max.s32"       // EXACT — signed-int max (s32)
-pub let PTX_OP_MAX_S64: string        = "max.s64"       // EXACT — signed-int max (s64)
-pub let PTX_OP_MIN_S32: string        = "min.s32"       // EXACT — signed-int min (s32)
-pub let PTX_OP_MIN_S64: string        = "min.s64"       // EXACT — signed-int min (s64)
-pub let PTX_OP_ABS_F32: string        = "abs.f32"       // EXACT — abs (f32)
-pub let PTX_OP_ABS_F64: string        = "abs.f64"       // EXACT — abs (f64)
+pub let PTX_OP_SQRT_RN_F32: string    = "sqrt.rn.f32"   // EXACT - IEEE round-to-nearest sqrt (f32)
+pub let PTX_OP_SQRT_RN_F64: string    = "sqrt.rn.f64"   // EXACT - IEEE round-to-nearest sqrt (f64)
+pub let PTX_OP_RSQRT_APPROX_F32: string = "rsqrt.approx.f32"  // APPROX - fast reciprocal-sqrt (f32 only; ~2^-23 rel)
+pub let PTX_OP_MAX_F32: string        = "max.f32"       // EXACT - IEEE max (f32)
+pub let PTX_OP_MAX_F64: string        = "max.f64"       // EXACT - IEEE max (f64)
+pub let PTX_OP_MIN_F32: string        = "min.f32"       // EXACT - IEEE min (f32)
+pub let PTX_OP_MIN_F64: string        = "min.f64"       // EXACT - IEEE min (f64)
+pub let PTX_OP_MAX_S32: string        = "max.s32"       // EXACT - signed-int max (s32)
+pub let PTX_OP_MAX_S64: string        = "max.s64"       // EXACT - signed-int max (s64)
+pub let PTX_OP_MIN_S32: string        = "min.s32"       // EXACT - signed-int min (s32)
+pub let PTX_OP_MIN_S64: string        = "min.s64"       // EXACT - signed-int min (s64)
+pub let PTX_OP_ABS_F32: string        = "abs.f32"       // EXACT - abs (f32)
+pub let PTX_OP_ABS_F64: string        = "abs.f64"       // EXACT - abs (f64)
 pub let PTX_OP_MUL_F32: string        = "mul.f32"       // f32 multiply (used in exp decomposition premul)
-pub let PTX_OP_EX2_APPROX_F32: string = "ex2.approx.f32"  // APPROX — 2^x hardware unit (f32; basis of exp via x*log2e)
+pub let PTX_OP_EX2_APPROX_F32: string = "ex2.approx.f32"  // APPROX - 2^x hardware unit (f32; basis of exp via x*log2e)
 // log2(e) = 1.4426950408889634, the premul factor that converts e^x into
-// 2^(x·log2e) so the hardware `ex2.approx.f32` unit can evaluate it.
+// 2^(x*log2e) so the hardware `ex2.approx.f32` unit can evaluate it.
 // Hex-float literal form (0d<16 hex digits>) is the PTX-canonical way to
-// embed an exact f64 immediate — the assembler decodes it bit-for-bit.
+// embed an exact f64 immediate - the assembler decodes it bit-for-bit.
 pub let PTX_LOG2E_HEXF64: string      = "0d3FF71547652B82FE"  // log2(e) as IEEE-754 f64 bits
 
-// ── PTX f64 exp(x) polynomial constants (RFC 055 §13 — closes f64 stub) ──
+// ── PTX f64 exp(x) polynomial constants (RFC 055 §13 - closes f64 stub) ──
 //
 // PTX has no native f64 `ex2` / `exp` unit (ex2.approx is f32-only), so
 // f64 exp(x) decomposes via classic range-reduction + Taylor polynomial:
 //
 //   k = round(x * log2(e))                  // integer scaling factor
-//   r = x - k * ln(2)                       // |r| <= ln(2)/2 ≈ 0.347
+//   r = x - k * ln(2)                       // |r| <= ln(2)/2 ~ 0.347
 //   poly(r) = sum_{n=0..10} r^n / n!        // Horner FMA chain
 //   result  = poly(r) * 2^k                 // 2^k via bit-pattern reinterpret
 //
 // The double-double ln(2) decomposition `ln2_hi + ln2_lo` matches the
-// canonical fdlibm / musl / glibc constants — `ln2_hi + ln2_lo` sums to
+// canonical fdlibm / musl / glibc constants - `ln2_hi + ln2_lo` sums to
 // the true IEEE-754 double-precision ln(2) to a hair under 1 ulp, so the
 // reduction `r = (x - k*ln2_hi) - k*ln2_lo` keeps the catastrophic-
 // cancellation tail bounded.
-//   ref: fdlibm `e_exp.c` — same ln2_hi/ln2_lo pair.
+//   ref: fdlibm `e_exp.c` - same ln2_hi/ln2_lo pair.
 pub let PTX_LN2_HI_HEXF64: string     = "0d3FE62E42FEE00000"  // ln(2) hi half (6.93147180369123816e-01)
 pub let PTX_LN2_LO_HEXF64: string     = "0d3DEA39EF35793C76"  // ln(2) lo half (1.90821492927058770e-10)
 
@@ -167,16 +167,16 @@ pub let PTX_EXPF64_C0_HEXF64: string  = "0d3FF0000000000000"  // 1          (= 1
 pub let PTX_F64_EXP_BIAS: string      = "1023"
 pub let PTX_F64_MANT_BITS: string     = "52"
 
-// ── PTX f64 log(x) polynomial constants (RFC 055 §13 — closes f64 stub) ──
+// ── PTX f64 log(x) polynomial constants (RFC 055 §13 - closes f64 stub) ──
 //
 // PTX has no native f64 lg2/log. Decompose:
 //   x = 2^k * m,   m in [1, 2)        (extract via IEEE bit-pattern)
 //   y = (m - 1) / (m + 1),  |y| < 1/3
-//   log(m) = 2*y*(1 + y²/3 + y⁴/5 + y⁶/7 + y⁸/9 + y¹⁰/11)   atanh series
+//   log(m) = 2*y*(1 + y^2/3 + y^4/5 + y^6/7 + y^8/9 + y^10/11)   atanh series
 //   log(x) = k * ln(2) + log(m)
 //
-// Hex literals — verified via python3 `struct.pack("<d", v)`.
-pub let PTX_LN2_HEXF64: string        = "0d3FE62E42FEFA39EF"  // ln(2)  (single literal; exp uses ln2_hi+ln2_lo Cody-Waite split — log path needs less precision)
+// Hex literals - verified via python3 `struct.pack("<d", v)`.
+pub let PTX_LN2_HEXF64: string        = "0d3FE62E42FEFA39EF"  // ln(2)  (single literal; exp uses ln2_hi+ln2_lo Cody-Waite split - log path needs less precision)
 pub let PTX_LOGF64_C0_HEXF64: string  = "0d3FF0000000000000"  // 1
 pub let PTX_LOGF64_C1_HEXF64: string  = "0d3FD5555555555555"  // 1/3
 pub let PTX_LOGF64_C2_HEXF64: string  = "0d3FC999999999999A"  // 1/5
@@ -185,28 +185,28 @@ pub let PTX_LOGF64_C4_HEXF64: string  = "0d3FBC71C71C71C71C"  // 1/9
 pub let PTX_LOGF64_C5_HEXF64: string  = "0d3FB745D1745D1746"  // 1/11
 
 // IEEE-754 f64 bit-pattern extraction masks (range-reduction for log):
-//   PTX_F64_MANT_MASK   — mantissa bits (bits 51..0)
-//   PTX_F64_ONE_EXP     — bias-shifted "1.0" exponent bits (0x3FF0000000000000)
+//   PTX_F64_MANT_MASK   - mantissa bits (bits 51..0)
+//   PTX_F64_ONE_EXP     - bias-shifted "1.0" exponent bits (0x3FF0000000000000)
 pub let PTX_F64_MANT_MASK: string     = "0x000FFFFFFFFFFFFF"
 pub let PTX_F64_ONE_EXP: string       = "0x3FF0000000000000"
 pub let PTX_F64_TWO_HEXF64: string    = "0d4000000000000000"  // 2.0 (final 2*y*P scaling)
 
 // ── sin f64 polynomial (RFC 055 §13 trig family) ──────────────
-// Range reduction: n = round(x/π); r = x - n*π (Cody-Waite 2-part);
-// sin(x) = (-1)^n * P(r²)·r where
-//   P(z) = 1 - z/6 + z²/120 - z³/5040 + z⁴/362880   (z = r²)
-// Hex literals — verified via python3 `struct.pack("<d", v)`.
-pub let PTX_INV_PI_HEXF64: string     = "0d3FD45F306DC9C883"  // 1/π
-pub let PTX_PI_HI_HEXF64: string      = "0d400921FB54442D18"  // π (nearest double)
-pub let PTX_PI_LO_HEXF64: string      = "0d3CA1A62633145C07"  // π - π_double (Cody-Waite residual)
-pub let PTX_F64_NEG_TWO_HEXF64: string = "0dC000000000000000" // -2.0 (sign = 1 - 2·parity)
+// Range reduction: n = round(x/pi); r = x - n*pi (Cody-Waite 2-part);
+// sin(x) = (-1)^n * P(r^2)*r where
+//   P(z) = 1 - z/6 + z^2/120 - z^3/5040 + z^4/362880   (z = r^2)
+// Hex literals - verified via python3 `struct.pack("<d", v)`.
+pub let PTX_INV_PI_HEXF64: string     = "0d3FD45F306DC9C883"  // 1/pi
+pub let PTX_PI_HI_HEXF64: string      = "0d400921FB54442D18"  // pi (nearest double)
+pub let PTX_PI_LO_HEXF64: string      = "0d3CA1A62633145C07"  // pi - pi_double (Cody-Waite residual)
+pub let PTX_F64_NEG_TWO_HEXF64: string = "0dC000000000000000" // -2.0 (sign = 1 - 2*parity)
 pub let PTX_F64_ONE_HEXF64: string    = "0d3FF0000000000000"  // 1.0 (tanh/sigmoid (1±t) terms)
-pub let PTX_F64_HALF_HEXF64: string   = "0d3FE0000000000000"  // 0.5 (sigmoid = 0.5 + 0.5·tanh(x/2))
+pub let PTX_F64_HALF_HEXF64: string   = "0d3FE0000000000000"  // 0.5 (sigmoid = 0.5 + 0.5*tanh(x/2))
 
-// ── atan f64 polynomial (RFC 055 §13) — Abramowitz & Stegun 4.4.49 ──
-// arctan(z), |z|≤1, |ε| < 1e-8 (9-term odd minimax). For |x|>1 use the
-// reciprocal identity atan(x) = π/2 - atan(1/x). atan is odd → copysign.
-//   atan(z) = z·(A0 + w(A1 + w(A2 + … w·A8))),  w = z²
+// ── atan f64 polynomial (RFC 055 §13) - Abramowitz & Stegun 4.4.49 ──
+// arctan(z), |z|<=1, |ε| < 1e-8 (9-term odd minimax). For |x|>1 use the
+// reciprocal identity atan(x) = pi/2 - atan(1/x). atan is odd -> copysign.
+//   atan(z) = z*(A0 + w(A1 + w(A2 + … w*A8))),  w = z^2
 // A0 = 1.0 reuses PTX_F64_ONE_HEXF64. Hex via perl pack("d>")/unpack("Q>").
 pub let PTX_ATANF64_A1_HEXF64: string = "0dBFD5554D72204448"  // -0.3333314528
 pub let PTX_ATANF64_A2_HEXF64: string = "0d3FC9977C9B288755"  //  0.1999355085
@@ -216,7 +216,7 @@ pub let PTX_ATANF64_A5_HEXF64: string = "0dBFB3462E8D8711AD"  // -0.0752896400
 pub let PTX_ATANF64_A6_HEXF64: string = "0d3FA5F83FB7E8F47D"  //  0.0429096138
 pub let PTX_ATANF64_A7_HEXF64: string = "0dBF908DC039C4DC63"  // -0.0161657367
 pub let PTX_ATANF64_A8_HEXF64: string = "0d3F677AE9349F5F7A"  //  0.0028662257
-pub let PTX_PI_HALF_HEXF64: string    = "0d3FF921FB54442D18"  //  π/2 (reciprocal correction)
+pub let PTX_PI_HALF_HEXF64: string    = "0d3FF921FB54442D18"  //  pi/2 (reciprocal correction)
 pub let PTX_SINF64_C0_HEXF64: string  = "0d3FF0000000000000"  // 1
 pub let PTX_SINF64_C1_HEXF64: string  = "0dBFC5555555555555"  // -1/6
 pub let PTX_SINF64_C2_HEXF64: string  = "0d3F81111111111111"  // 1/120
@@ -224,11 +224,11 @@ pub let PTX_SINF64_C3_HEXF64: string  = "0dBF2A01A01A01A01A"  // -1/5040
 pub let PTX_SINF64_C4_HEXF64: string  = "0d3EC71DE3A556C734"  // 1/362880
 
 // ── cos f64 polynomial (RFC 055 §13 trig family) ──────────────
-// Same range reduction as sin (n = round(x/π); r = x - n·π); cos is
+// Same range reduction as sin (n = round(x/pi); r = x - n*pi); cos is
 // even so the final r-multiply is dropped:
-//   cos(x) = (-1)^n · Q(r²)
-//   Q(z) = 1 - z/2 + z²/24 - z³/720 + z⁴/40320   (z = r²)
-// Hex literals — verified via python3 `struct.pack("<d", v)`.
+//   cos(x) = (-1)^n * Q(r^2)
+//   Q(z) = 1 - z/2 + z^2/24 - z^3/720 + z^4/40320   (z = r^2)
+// Hex literals - verified via python3 `struct.pack("<d", v)`.
 pub let PTX_COSF64_C0_HEXF64: string  = "0d3FF0000000000000"  // 1
 pub let PTX_COSF64_C1_HEXF64: string  = "0dBFE0000000000000"  // -1/2
 pub let PTX_COSF64_C2_HEXF64: string  = "0d3FA5555555555555"  // 1/24
@@ -240,7 +240,7 @@ pub let PTX_OP_MOV_U32: string        = "mov.u32"      // read sreg / move
 pub let PTX_OP_ADD_S32: string        = "add.s32"
 pub let PTX_OP_MUL_LO_S32: string     = "mul.lo.s32"
 pub let PTX_OP_MAD_LO_S32: string     = "mad.lo.s32"
-pub let PTX_OP_CVT_U64_U32: string    = "cvt.u64.u32"  // widen index → address
+pub let PTX_OP_CVT_U64_U32: string    = "cvt.u64.u32"  // widen index -> address
 pub let PTX_OP_SETP_LT_S32: string    = "setp.lt.s32"  // predicate compare
 
 // ── PTX control / synchronization ─────────────────────────────
@@ -248,10 +248,10 @@ pub let PTX_OP_BAR_SYNC: string       = "bar.sync"     // block-wide barrier
 pub let PTX_OP_BRA: string            = "bra"          // branch
 pub let PTX_OP_RET: string            = "ret"          // return from entry/func
 
-// ── PTX atomics (RFC 055 §12 P4+ — gpu/SPEC.md §5) ────────────
+// ── PTX atomics (RFC 055 §12 P4+ - gpu/SPEC.md §5) ────────────
 pub let PTX_OP_ATOM_ADD_F64: string   = "atom.add.f64"  // global-mem FP64 atomic add (returns old)
 
-// ── PTX warp-level data movement (RFC 055 §12 P4+ — gpu/SPEC.md §5) ──
+// ── PTX warp-level data movement (RFC 055 §12 P4+ - gpu/SPEC.md §5) ──
 pub let PTX_OP_SHFL_SYNC_IDX_B32: string = "shfl.sync.idx.b32"  // warp-lane shuffle by source-lane idx; ref NVIDIA PTX ISA 9.7.13.4
 pub let PTX_OP_SHFL_SYNC_BFLY_B32: string = "shfl.sync.bfly.b32"  // warp-lane shuffle by XOR lane-mask; ref NVIDIA PTX ISA 9.7.13.4 (closes N70 GAP-A, restored after silent-wipe by 7671d7db)
 
@@ -266,7 +266,7 @@ pub let PTX_VERSION_DIRECTIVE: string = ".version"
 pub let PTX_TARGET_DIRECTIVE: string  = ".target"
 pub let PTX_ADDRSIZE_DIRECTIVE: string = ".address_size"
 
-// PtxOpEntry — one row of the informational PTX opcode table. Mirrors
+// PtxOpEntry - one row of the informational PTX opcode table. Mirrors
 // the per-target opcode-table pattern (RFC 055 §3 / lir.hexa note).
 pub struct PtxOpEntry {
     mnemonic: string,    // PTX mnemonic, e.g. "fma.rn.f64"
@@ -275,7 +275,7 @@ pub struct PtxOpEntry {
     note: string         // human-readable role
 }
 
-// _ptx_op_entry — PtxOpEntry constructor.
+// _ptx_op_entry - PtxOpEntry constructor.
 fn _ptx_op_entry(mnemonic: string, arity: i64, space: string, note: string) -> PtxOpEntry {
     return PtxOpEntry {
         mnemonic: mnemonic,
@@ -285,10 +285,10 @@ fn _ptx_op_entry(mnemonic: string, arity: i64, space: string, note: string) -> P
     }
 }
 
-// ptx_fp64_slice_ops — the FP64-arithmetic-subset opcode table for the
+// ptx_fp64_slice_ops - the FP64-arithmetic-subset opcode table for the
 // RFC 055 first implementable slice (055-P0/P1).
 //
-// RFC 055 Stage 1 — informational scaffold only. The 055-P0 codegen
+// RFC 055 Stage 1 - informational scaffold only. The 055-P0 codegen
 // cycle consumes this table to validate emitted mnemonics; today it is
 // unreferenced (zero behavior change).
 pub fn ptx_fp64_slice_ops() -> [PtxOpEntry] {
@@ -300,7 +300,7 @@ pub fn ptx_fp64_slice_ops() -> [PtxOpEntry] {
     t.push(_ptx_op_entry(PTX_OP_ADD_F64, 3, "", "FP64 add"))
     t.push(_ptx_op_entry(PTX_OP_SUB_F64, 3, "", "FP64 subtract"))
     t.push(_ptx_op_entry(PTX_OP_MUL_F64, 3, "", "FP64 multiply"))
-    t.push(_ptx_op_entry(PTX_OP_DIV_RN_F64, 3, "", "FP64 divide, round-to-nearest (IEEE; ISA §9.7.1.4 — only FP64 div mode)"))
+    t.push(_ptx_op_entry(PTX_OP_DIV_RN_F64, 3, "", "FP64 divide, round-to-nearest (IEEE; ISA §9.7.1.4 - only FP64 div mode)"))
     t.push(_ptx_op_entry(PTX_OP_FMA_RN_F64, 4, "", "FP64 fused multiply-add, round-to-nearest"))
     t.push(_ptx_op_entry(PTX_OP_BAR_SYNC, 1, "", "block-wide barrier"))
     t.push(_ptx_op_entry(PTX_OP_ATOM_ADD_F64, 3, PTX_SPACE_GLOBAL, "FP64 atomic add (returns old)"))
