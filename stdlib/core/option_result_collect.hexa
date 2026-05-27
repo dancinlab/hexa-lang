@@ -1,0 +1,66 @@
+// HEXA Standard Library — core/option_result_collect
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// `collect_results` / `collect_options` — array-of-container ⇒ container-of-
+// array, with first-failure short-circuit. Pure additive over the canonical
+// `option_result` enum surface (sibling module). No mutation of inputs, no
+// I/O — purely value-shape transforms.
+//
+// Frontier RUNTIME.flip.md milestone **B4.option-collect**.
+//
+// Surface:
+//   pub fn collect_results(rs: [Result]) -> Result
+//     — if any element is Err(e), short-circuit return Err(e);
+//       else return Ok([v0, v1, ...]) over the unwrapped Ok values.
+//
+//   pub fn collect_options(os: [Option]) -> Option
+//     — if any element is None, short-circuit return None;
+//       else return Some([v0, v1, ...]) over the unwrapped Some values.
+//
+// Design notes:
+//   - Same style as `stdlib/core/option_result.hexa` siblings — bare
+//     `while i < len(rs)` loop + `match` per element (no fancy combinators).
+//   - Uses `use "stdlib/core/option_result"` for the enum + ctor helpers.
+//   - First-Err / first-None wins; downstream elements not inspected
+//     (matches Rust `Result::collect` / `Option::collect` semantics).
+//   - Pure: no `throw`, no I/O, no global mutation.
+
+use "stdlib/core/option_result"
+
+pub fn collect_results(rs: [Result]) -> Result {
+    var acc = []
+    var i = 0
+    while i < len(rs) {
+        let r = rs[i]
+        match r {
+            Result::Ok(v) => {
+                acc.push(v)
+            }
+            Result::Err(e) => {
+                return Result::Err(e)
+            }
+        }
+        i = i + 1
+    }
+    return Result::Ok(acc)
+}
+
+pub fn collect_options(os: [Option]) -> Option {
+    var acc = []
+    var i = 0
+    while i < len(os) {
+        let o = os[i]
+        match o {
+            Option::Some(v) => {
+                acc.push(v)
+            }
+            Option::None => {
+                return Option::None
+            }
+        }
+        i = i + 1
+    }
+    return Option::Some(acc)
+}
