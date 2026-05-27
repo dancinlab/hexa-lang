@@ -1,0 +1,130 @@
+// stdlib/cloud/preflight_log_pattern_watcher.hexa — pattern matchers for
+// early termination detection in pod / training logs.
+//
+// Purpose: scan a captured log buffer (stdout/stderr tail or full log) for
+// well-known fatal signal substrings — OOM, NaN/Inf divergence, deadlock
+// heuristics, segfault, killed — so the watchdog / dispatcher can terminate
+// a doomed run before it burns more pod-minutes.
+//
+// Capabilities: [pure]. No I/O, no allocation beyond returned struct, no
+// external LLM, no network. Closed-form substring scan on the input str.
+//
+// Origin: RUNTIME.flip.md B6.preflight-log-pattern-watcher — cah6-class
+// diagnostic siblings of preflight.hexa (closed-form GPU memory budget).
+//
+// Surface:
+//   preflight_log_has_oom(log)       -> bool
+//   preflight_log_has_nan(log)       -> bool
+//   preflight_log_has_deadlock(log)  -> bool
+//   preflight_log_has_segfault(log)  -> bool
+//   preflight_log_has_killed(log)    -> bool
+//   preflight_log_classify(log)      -> PreflightLogPatternHit
+//
+// Detection is substring-based: cheap, false-positive-tolerant, and the
+// only signal a generic log tail reliably carries. The caller (watchdog /
+// dispatch) is expected to confirm with a richer signal (exit code, pod
+// state) before tearing down the run.
+
+// PreflightLogPatternHit — single classification result.
+//   kind ∈ {"oom", "nan", "deadlock", "segfault", "killed", "none"}
+//   marker_text — the substring that triggered the hit (empty when "none")
+//   matched     — true iff a pattern fired
+struct PreflightLogPatternHit {
+    kind:        str,
+    marker_text: str,
+    matched:     bool
+}
+
+// preflight_log_has_oom — true if any canonical OOM marker is present.
+// Covers Linux kernel OOM, Kubernetes OOMKilled, glibc / CUDA messages.
+pub fn preflight_log_has_oom(log: str) -> bool {
+    if log.contains("Out of memory")        { return true }
+    if log.contains("OOMKilled")            { return true }
+    if log.contains("Cannot allocate memory") { return true }
+    if log.contains("CUDA out of memory")   { return true }
+    return false
+}
+
+// preflight_log_has_nan — true if a NaN / Inf divergence signal is present.
+// DFT / training runs typically print "nan" or "NaN" in loss / grad output;
+// "Inf" catches the overflow companion. Case-sensitive on the canonical
+// printf form — we don't lowercase the whole log (cost) and the lowercase
+// "nan" is what NumPy / PyTorch / libc actually emit.
+pub fn preflight_log_has_nan(log: str) -> bool {
+    if log.contains("nan") { return true }
+    if log.contains("NaN") { return true }
+    if log.contains("Inf") { return true }
+    return false
+}
+
+// preflight_log_has_deadlock — true on heuristic deadlock / stall markers.
+// Not a proof of deadlock — the caller should confirm with a wall-clock
+// progress check. We only catch the loud variants here.
+pub fn preflight_log_has_deadlock(log: str) -> bool {
+    if log.contains("deadlock")    { return true }
+    if log.contains("stuck for")   { return true }
+    if log.contains("no progress") { return true }
+    return false
+}
+
+// preflight_log_has_segfault — true on segfault / bus-error markers.
+// Covers libc-emitted strings and bare signal mnemonics (some runtimes
+// print "SIGSEGV" rather than the long form).
+pub fn preflight_log_has_segfault(log: str) -> bool {
+    if log.contains("Segmentation fault") { return true }
+    if log.contains("SIGSEGV")            { return true }
+    if log.contains("Bus error")          { return true }
+    return false
+}
+
+// preflight_log_has_killed — true if the process was killed externally.
+// Includes the canonical shell-printed "Killed", the explicit signal name,
+// and the bash exit-code form "exit 137" (= 128 + SIGKILL).
+pub fn preflight_log_has_killed(log: str) -> bool {
+    if log.contains("Killed")   { return true }
+    if log.contains("SIGKILL")  { return true }
+    if log.contains("exit 137") { return true }
+    return false
+}
+
+// preflight_log_classify — try each matcher in priority order and return
+// the first hit. Priority chosen so that the more diagnostic kind wins
+// over a downstream consequence (e.g. OOM precedes the SIGKILL that the
+// kernel then sends; segfault precedes the shell's "Killed" line).
+//
+// Order: oom → nan → deadlock → segfault → killed → none.
+pub fn preflight_log_classify(log: str) -> PreflightLogPatternHit {
+    if preflight_log_has_oom(log) {
+        return PreflightLogPatternHit {
+            kind: "oom", marker_text: "Out of memory / OOMKilled / CUDA OOM",
+            matched: true
+        }
+    }
+    if preflight_log_has_nan(log) {
+        return PreflightLogPatternHit {
+            kind: "nan", marker_text: "nan / NaN / Inf",
+            matched: true
+        }
+    }
+    if preflight_log_has_deadlock(log) {
+        return PreflightLogPatternHit {
+            kind: "deadlock", marker_text: "deadlock / stuck for / no progress",
+            matched: true
+        }
+    }
+    if preflight_log_has_segfault(log) {
+        return PreflightLogPatternHit {
+            kind: "segfault", marker_text: "Segmentation fault / SIGSEGV / Bus error",
+            matched: true
+        }
+    }
+    if preflight_log_has_killed(log) {
+        return PreflightLogPatternHit {
+            kind: "killed", marker_text: "Killed / SIGKILL / exit 137",
+            matched: true
+        }
+    }
+    return PreflightLogPatternHit {
+        kind: "none", marker_text: "", matched: false
+    }
+}
