@@ -2340,11 +2340,15 @@ framing-① (nm aprime 0 externs) 측정-충족 이후 — framing-② (source z
       에 따라 surgical edit 이 후속 deploy-regen 커밋에 silent-wipe 될 수 있음
       (json \uXXXX fix 가 3번 land 한 사례). 4-agent 공유 worktree 환경에선 충돌
       위험 高 — 격리 worktree + surgical fence + 직후 grep 검증 필수.
-- [ ] **Linux self-host 잔여 17 syscall** — read/write/open/close/mkdir/dup2/lseek/
+- [~] **Linux self-host 잔여 17 syscall** — read/write/open/close/mkdir/dup2/lseek/
       select/poll/wait4/getpid/getuid/kill/fcntl/ioctl/stat/fstat/mmap/gettimeofday/
       exit 의 `#if Darwin-arm64 / #else libc` 패턴 → `svc #0x80` 인라인. Phase-1
-      반복 적용. **NO-COMMITS-YET** (only #1079 signal_flock svc-trap → libc-fallback,
-      separate axis); multi-PR Linux campaign 미시작 — Mac unblock 무영향.
+      반복 적용. **DATA-TABLE HALF LANDED** via PR #1738
+      (`stdlib/posix/linux_syscalls.hexa` — arm64 asm-generic/unistd.h +
+      x86_64 syscall_64.tbl, 18-syscall × 2-arch lookup) + Darwin sibling
+      (`stdlib/posix/darwin_syscalls.hexa` — xnu bsd/kern/syscalls.master).
+      잔여 = runtime/native `_hxlcl_syscall*_cf` dispatch 와이어 (Linux 호스트
+      필요) · per-syscall calling convention 표 · errno encoding 변환.
 
 ### TLS 1.3 handshake state-machine loop — socket 와이어링 (multi-PR)
 
