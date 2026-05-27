@@ -1,0 +1,100 @@
+// HEXA Standard Library — posix/posix_errno
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// POSIX errno number tables — Linux + Darwin — for the 14 canonical errors
+// listed in RUNTIME.flip.md B3.posix-errno-encoding. This file is the
+// data-table sibling of `linux_syscalls.hexa` / `darwin_syscalls.hexa`:
+// a hexa-native constant-table per platform, ready for cross-platform
+// errno lookup without `<errno.h>` header dependency.
+//
+// Frontier flip B3 (RUNTIME.flip.md): "posix errno encoding — Linux + Darwin
+// 동일 이름이 서로 다른 정수값을 갖는다 (대표예: EAGAIN — Linux=11, Darwin=35).
+// errno → name 매핑은 platform-specific table 필요."
+//
+// Numbers cited from the canonical platform headers:
+//   Linux:  include/uapi/asm-generic/errno-base.h + asm-generic/errno.h  (Linux 6.x)
+//   Darwin: bsd/sys/errno.h                                              (xnu)
+//
+// Cross-platform note: EAGAIN diverges (Linux=11, Darwin=35). The other 13
+// canonical errors in this subset happen to share values across both
+// platforms. Larger errno surfaces (EWOULDBLOCK, EDEADLK, ENAMETOOLONG, …)
+// diverge more aggressively — extend this table per call-site as the
+// runtime self-host campaign needs them.
+//
+// Surface:
+//   pub fn posix_errno_linux(name: str) -> int   — Linux errno value (or -1)
+//   pub fn posix_errno_darwin(name: str) -> int  — Darwin errno value (or -1)
+//   pub fn posix_errno_names() -> [str]          — the 14 names in canonical order
+//
+// All three lookups are tiny string-match dispatches. Values come from the
+// platform uapi headers; errno numbers are ABI-stable per platform (never
+// re-numbered) so this table is durable.
+//
+// Canonical 14 (RUNTIME.flip B3 ordering):
+//   EAGAIN · ENOENT · EINVAL · EBADF · ENOMEM · EACCES · EPERM ·
+//   EIO · ENXIO · EFAULT · EEXIST · EISDIR · ENOTDIR · EMFILE
+
+@pure
+pub fn posix_errno_names() -> [str] {
+    return [
+        "EAGAIN",
+        "ENOENT",
+        "EINVAL",
+        "EBADF",
+        "ENOMEM",
+        "EACCES",
+        "EPERM",
+        "EIO",
+        "ENXIO",
+        "EFAULT",
+        "EEXIST",
+        "EISDIR",
+        "ENOTDIR",
+        "EMFILE"
+    ]
+}
+
+// Linux errno values (asm-generic/errno-base.h + asm-generic/errno.h — Linux 6.x).
+// Shared across all Linux architectures (arm64, x86_64, riscv64, …).
+@pure
+pub fn posix_errno_linux(name: str) -> int {
+    if name == "EPERM" { return 1 }
+    if name == "ENOENT" { return 2 }
+    if name == "EIO" { return 5 }
+    if name == "ENXIO" { return 6 }
+    if name == "EBADF" { return 9 }
+    if name == "EAGAIN" { return 11 }
+    if name == "ENOMEM" { return 12 }
+    if name == "EACCES" { return 13 }
+    if name == "EFAULT" { return 14 }
+    if name == "EEXIST" { return 17 }
+    if name == "ENOTDIR" { return 20 }
+    if name == "EISDIR" { return 21 }
+    if name == "EINVAL" { return 22 }
+    if name == "EMFILE" { return 24 }
+    return -1
+}
+
+// Darwin errno values (bsd/sys/errno.h — xnu).
+// Shared across all Darwin architectures (arm64, x86_64).
+// EAGAIN=35 diverges from Linux=11; the other 13 in this subset match.
+@pure
+pub fn posix_errno_darwin(name: str) -> int {
+    if name == "EPERM" { return 1 }
+    if name == "ENOENT" { return 2 }
+    if name == "EIO" { return 5 }
+    if name == "ENXIO" { return 6 }
+    if name == "EBADF" { return 9 }
+    if name == "ENOMEM" { return 12 }
+    if name == "EACCES" { return 13 }
+    if name == "EFAULT" { return 14 }
+    if name == "EEXIST" { return 17 }
+    if name == "ENOTDIR" { return 20 }
+    if name == "EISDIR" { return 21 }
+    if name == "EINVAL" { return 22 }
+    if name == "EMFILE" { return 24 }
+    if name == "EAGAIN" { return 35 }
+    return -1
+}
