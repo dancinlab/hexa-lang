@@ -28,7 +28,7 @@ flip 캠페인이 안전 quick-win 을 고갈시킨 뒤 남는 진짜 바닥의 
 |------|------|---------|
 | **F1** perf-floor (hxflash/hxlayer/hxvdsp) | 🔴 **TERMINAL** | 측정 285x ML 회귀 → irreducible perf-floor (`F1-perf-floor.txt`) |
 | **F2** vendor/OS-ABI FFI (19 layer-③) | 🔴 **TERMINAL** | audit #1809 — 순수 로직 0, ABI 경계 (`F2-vendor-ffi.txt`) |
-| **F3** runtime-core (640/548 fn · self-emit 20/640 = **shadow**, 0 activated) | 🟠 **LIVE FRONTIER** | genuinely-portable · easy-leaf shadow-emit DONE → **ACTIVATION 미시작**(static+`#define` 가 link-override 차단 · 경로 A 인프라 필요) → HARD-phase ~620 fn expert serial |
+| **F3** runtime-core (640/548 fn · self-emit 20/640 shadow · **1 ACTIVATED** = `rt_memset`) | 🟠 **LIVE FRONTIER** | genuinely-portable · 경로 A 인프라 LANDED → `rt_memset` LIVE-주입 (HEXA_RT_SELFEMIT 가드 · default 0-extern 보존) → 활성화 **템플릿 입증** · HARD-phase ~620 fn expert serial |
 | **F4** sha256 (exec_argv_sha256.c) | 🟢 **RESOLVED→F3** | runtime.c `#include` 조각 · 포팅 타깃 FIPS-검증 (`F4-sha256.txt`) |
 | **F5** boot-asm (3 `.s`) | 🔴 **TERMINAL** | audit #1810 — vector-table 데이터 섹션, RFC 063/064 gated (`F5-boot-asm.txt`) |
 | **F6** bootstrap seed (hexa_cc.c) | 🔴 **TERMINAL** | irreducible bootstrap FLOOR (B9.8) |
@@ -273,6 +273,35 @@ runtime.c 조각이라 F3 로 fold (mis-split 해소). **F3 만이 진짜 open**
     increment 로 force 하지 않음**. 이번 조사는 "shadow → live" 의 정확한 메커니즘·파일·
     위험·effort 를 특정해 expert 작업을 actionable build-plan 으로 전환함. 다음 expert
     increment = 경로 A 의 emit-`.o` 드라이버 + 2-TU extern 가드 + regen/fixpoint(1 PR).
+
+    **✅ ACTIVATED (2026-05-28 · B9.6a-6 · 경로 A LANDED · #PR)** — rt_memset 가
+    runtime 의 첫 LIVE-주입 primitive 가 됨. 정정: runtime_core.c 는 별도 TU 가 아니라
+    runtime.c 에 `#include` 되는 단일 TU (runbook 의 "2-TU extern 정합" 위험은 미발생 —
+    `#define memset` L1505 < `#include "runtime_core.c"` L1570 이므로 core 호출처도 동일
+    `hxlcl_memset` 심볼로 resolve). 구현:
+    - `self/runtime.c`: `hxlcl_memset` 를 `#ifdef HEXA_RT_SELFEMIT` 가드. **default
+      (가드 off) = 기존 `static` 정의 그대로** (0-libc-extern 불변식 보존 · OPT-IN);
+      가드 on = `extern` 선언 (body 無) → `.o` 가 심볼 제공.
+    - `test/native_build/emit_hxlcl_memset_o.hexa`: rt_memset 의 28 self-emit 바이트를
+      `macho_obj_wrap` 로 감싸 strong external `_hxlcl_memset` (13 B · strtab 1+13) export.
+      (검증된 `poc_rt_exit_obj_emit.hexa`/`emit_hexa_exit_native_o.hexa` 템플릿 복제 —
+      심볼명·바이트만 변경).
+    - `tool/build_hexa_cli.hexa`: `HEXA_RT_SELFEMIT=1` 시 emit 드라이버(default-runtime
+      로 빌드) → `.o` 산출 → driver + module_loader 양쪽 ahead-link.
+    - **dual-build 증거 (mini · arm64 macOS · 실제 빌드 레시피 산출 `hexa_module_loader`)**:
+      (a) default — `_hxlcl_memset` = local `t` · undefined(libc-extern) set = 55 ·
+          origin/main baseline 과 **byte-identical (diff IDENTICAL)** → 0-extern 보존.
+      (b) HEXA_RT_SELFEMIT=1 — `_hxlcl_memset` = strong `T` (self-emit `.o` 에서 resolve) ·
+          live 바이너리 disasm = rt_memset 28-B 루프 정확 일치 · undefined set = **55 동일**
+          (diff IDENTICAL) · flatten 출력 default 와 **byte-identical**.
+      (driver 바이너리는 fresh-clone stale-hexat `float_to_bits`/`os_getuid` 미선언으로
+      compile 실패 — origin/main 에서도 **동일 재현** = 본 변경과 무관한 선재 이슈.
+      module_loader 가 runtime.c 를 동일하게 링크 → 동등 증명 surface.)
+    - **fixpoint 무위험**: emit 드라이버는 `compiler/main.hexa` `use` 0 (grep 확인) →
+      `hexa_cc.c` regen 무관. runtime.c diff = 순수 가드 추가 (deletion 0) → default
+      regen surface 불변.
+    - `.c` 카운트는 아직 안 줄어듦 (runtime.c 에 639 primitive 잔존) — 단 **활성화
+      템플릿이 입증됨**: 이후 leaf 활성화 = emit 드라이버 복제 + 심볼명 변경 (~0.5d/개).
 
 ### F4 — sha256 entangled
 
