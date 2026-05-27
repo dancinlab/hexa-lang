@@ -8,7 +8,17 @@
 
 **요청 (택1)**: (a) runtime.c 에 `#ifdef HEXA_CUDA` 강한 `hexa_cuda_available(){ return hexa_int(_hx_cuda_runtime_available()); }` (+ hexa_cuda_device_count 동일) 추가 — weak stub 은 `#else`. (b) 또는 runtime_cuda.c 가 strong `hexa_cuda_available`/`hexa_cuda_device_count` 제공(weak override). 검증: rfc040 gpu smoke `F-RFC040-GPU-AVAIL cuda_available()==1` 가 실 GPU 에서 PASS 해야 함(현재 main 에선 0 반환 의심).
 
-**부수 finding**: anima `CORE/DECODER/flame_mm_smoke.hexa` (origin/main) 가 죽은 `/private/tmp/wt-gpu1/...` worktree-local import 보유(#1100 커밋 잔존) — anima 측 정정 필요(transpile 시 sed 우회). severity: high (cuBLAS 경로 전면 차단).
+**✅ CONFIRMED FIX (2026-05-27, anima M4b H100 실증)**: option **(a)** 가 정답임을 별도 glue.c 로 실증. clang source 목록에 아래 strong override 추가 = weak stub link-time 제압 (undefined-ref 0, clean link):
+```c
+#include "self/runtime.h"
+extern int _hx_cuda_runtime_available(void);
+extern int _hx_cuda_device_count_impl(void);
+HexaVal hexa_cuda_available(void)    { return hexa_int(_hx_cuda_runtime_available()); }
+HexaVal hexa_cuda_device_count(void) { return hexa_int(_hx_cuda_device_count_impl()); }
+```
+H100 80GB 실측: `cuda_available()==1` · `farr_matmul_gpu` 1024² cuBLAS Dgemm = CPU oracle `farr_matmul` 와 **max\|Δ\|=0.0 byte-identical** · GPU util **50% / 635MiB**. → option (a) 를 runtime.c `#ifdef HEXA_CUDA` 로 landing 하면 별도 glue 불요. (anima 측 증명 harness = `CORE/DECODER/cublas_probe.hexa`, PR #1119.) 단 `_hx_cuda_device_count_impl` 심볼명은 runtime_cuda.c 실제 export 명 확인 필요(없으면 `_hx_cuda_runtime_available` 만으로도 dispatch 충분).
+
+**부수 finding (RESOLVED)**: anima `CORE/DECODER/flame_mm_smoke.hexa`·`v3_moe_bwd_lib_smoke.hexa` 의 죽은 `/private/tmp/wt-gpu1/...` import → anima #1117 로 canonical 경로 정정 완료. severity: high (cuBLAS 경로 전면 차단) → glue 로 우회 + (a) landing 대기.
 
 ## 2026-05-27 — M4b GPU fire 런북 검증 (transpile --c-only → CUDA runtime → Vast.ai · #1659 deadlock 정정)
 
@@ -20,6 +30,14 @@
 3. runtime bundle scp: self/runtime.c·runtime_core.c·runtime_hi_gen.c·runtime.h·cuda/runtime_cuda.c·cuda/runtime_bf16.c·forge/forge_tier_v1.{c,h}·native/*.{c,h} + trainer.c.
 4. CUDA build(pod): `nvcc -O2 -std=c++14 -DHEXA_CUDA -arch=sm_90 -x cu -c self/cuda/runtime_cuda.c -o runtime_cuda.o` → `clang -DHEXA_CUDA -I self -I /usr/local/cuda/include -fbracket-depth=4096 trainer.c self/runtime.c runtime_cuda.o -L/usr/local/cuda/lib64 -lcublas -lcudart -lcudart_static -ldl -lrt -lm -lpthread -lstdc++ -o trainer`.
 5. run + nvidia-smi + harvest (d768 패턴). farr_matmul_gpu = runtime_cuda.c(-DHEXA_CUDA) cuBLAS Dgemm. severity: docs.
+
+## 2026-05-27 — real-BPE GPU fire 의 toolchain 통합 갭 (flame_bpe_corpus_lib resolve + ml/tokenizer_bpe 번들 + corpus 경로)
+
+> **finding (anima M4b real-BPE trainer fire 준비)**: synthetic pilot(BPE 미사용)은 위 런북으로 GPU fire 성공(cuBLAS engage 확정). 그러나 **real-BPE trainer**(`use "stdlib/flame/flame_bpe_corpus_lib"` → `use "self/ml/tokenizer_bpe"`)는 3개 추가 갭:
+
+1. **transpile resolve**: `hexa build --c-only` 의 stdlib root 가 `~/.hx/packages/hexa` symlink → `~/core/hexa-lang` **working tree**(HEXA_LANG/HEXA_STDLIB_ROOT unset 시). working tree 가 `flame_bpe_corpus_lib` 없는 브랜치면 `FATAL module not found`. origin/main 파일을 `~/.hx/packages/hexa-lang/`(별도 real dir)에 복사해도 resolver 가 symlink 쪽을 써서 무효. → resolver 가 어느 root 를 쓰는지 결정적이지 않음. 요청: `HEXA_STDLIB_ROOT` env 를 transpile 경로가 확실히 존중하도록(현재 baked-in root 우선 의심) + `hexa --version`/doc 에 active stdlib root 노출.
+2. **runtime 번들**: real-BPE trainer 는 `self/ml/tokenizer_bpe` 빌트인(`build_byte_to_char` 등) 필요 → 위 런북 step 3 번들(self/runtime.c·cuda/*·forge/*·native/*)에 `self/ml/tokenizer_bpe.{c,h}`(+ 그 의존 ml/*) 미포함 시 clang `undefined symbol`. 요청: GPU fire 번들 표준 목록에 `self/ml/*` 추가 명시.
+3. **corpus 경로**: trainer 가 merges.txt·vocab.json·corpus.jsonl 를 Mac abs-path 하드코딩 → pod scp 후 sed 필요(anima 측 정정 가능, hexa 무관). severity: medium (synthetic fire 는 OK, real-BPE 학습 run 만 차단).
 
 ## 2026-05-27 — hexa cloud: RunPod pod-id → SSH-host resolver 부재 (cloud-guard 와 deadlock)
 
