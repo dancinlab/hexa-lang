@@ -1,0 +1,464 @@
+// HEXA Standard Library — crypto/p256
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// NIST P-256 (secp256r1) ECDSA signature verification — pure hexa. The
+// second standard TLS 1.3 / X.509 cert signature algorithm alongside
+// Ed25519. Big-integer arithmetic on 16×16-bit limb arrays (little-endian)
+// so all partial products fit in 64-bit. General shift-and-subtract
+// reduction (correctness first; verify is not perf-critical). let-mut (#1506).
+//
+// Surface:
+//   pub fn p256_verify(qx: [int], qy: [int], hash32: [int], r: [int], s: [int]) -> bool
+//     — qx, qy = 32-byte big-endian public key coords
+//     — hash32 = 32-byte SHA-256 of the message
+//     — r, s   = 32-byte big-endian signature components
+//
+// Verified vector (python `cryptography` cross-impl):
+//   Q  = (d8cd12ea5c67f2f8a00c1124893edcfa6754c4d6cede6be13bdf2295c810a97f,
+//         a5a89d2d2a360c0ca9a4d6c7c9ed4b28d3e199d6627f2e696d689c310a5b0f48)
+//   h  = fd47ff53199bfd87caf367ea24bc085a77d6f6d38c05f009bec5ff72e248098b
+//   r  = 3942734098db690178360e457be60458f367302aab354ae504227dc273772219
+//   s  = b18a0b8bdd11d23680283d72dec23f15359cbb86089a3367c37fede21cb0da35
+
+// === Big-int: 16 × 16-bit limbs, little-endian (limb[0] = LSB) ===
+
+@pure
+fn _zeros() -> [int] {
+    let mut o: [int] = []
+    let mut i = 0
+    while i < 16 { o.push(0); i = i + 1 }
+    return o
+}
+
+@pure
+fn _be32_to_limbs(b: [int]) -> [int] {
+    // 32 big-endian bytes → 16 little-endian 16-bit limbs.
+    let mut o = _zeros()
+    let mut i = 0
+    while i < 16 {
+        // limb i covers bytes [30-2i, 31-2i] (high then low) of the big-endian input
+        let hi = b[30 - 2 * i] & 0xFF
+        let lo = b[31 - 2 * i] & 0xFF
+        o[i] = (hi << 8) | lo
+        i = i + 1
+    }
+    return o
+}
+
+@pure
+fn _limbs_to_be32(a: [int]) -> [int] {
+    let mut o: [int] = []
+    let mut i = 0
+    while i < 32 { o.push(0); i = i + 1 }
+    i = 0
+    while i < 16 {
+        o[30 - 2 * i] = (a[i] >> 8) & 0xFF
+        o[31 - 2 * i] = a[i] & 0xFF
+        i = i + 1
+    }
+    return o
+}
+
+@pure
+fn _copy(a: [int]) -> [int] {
+    let mut o: [int] = []
+    let mut i = 0
+    while i < len(a) { o.push(a[i]); i = i + 1 }
+    return o
+}
+
+@pure
+fn _cmp(a: [int], b: [int]) -> int {
+    // compare two 16-limb numbers; +1 if a>b, -1 if a<b, 0 if equal
+    let mut i = 15
+    while i >= 0 {
+        if a[i] > b[i] { return 1 }
+        if a[i] < b[i] { return -1 }
+        i = i - 1
+    }
+    return 0
+}
+
+@pure
+fn _is_zero(a: [int]) -> bool {
+    let mut i = 0
+    while i < len(a) { if a[i] != 0 { return false }; i = i + 1 }
+    return true
+}
+
+@pure
+fn _add16(a: [int], b: [int]) -> [int] {
+    // 16-limb add → 17 limbs (last is carry)
+    let mut o: [int] = []
+    let mut c = 0
+    let mut i = 0
+    while i < 16 {
+        let t = a[i] + b[i] + c
+        o.push(t & 0xFFFF)
+        c = (t >> 16) & 1
+        i = i + 1
+    }
+    o.push(c)
+    return o
+}
+
+@pure
+fn _sub16(a: [int], b: [int]) -> [int] {
+    // 16-limb a - b → 17 limbs (last is borrow as -1 if negative, else 0)
+    let mut o: [int] = []
+    let mut br = 0
+    let mut i = 0
+    while i < 16 {
+        let t = a[i] - b[i] - br
+        if t < 0 {
+            o.push((t + 0x10000) & 0xFFFF)
+            br = 1
+        } else {
+            o.push(t & 0xFFFF)
+            br = 0
+        }
+        i = i + 1
+    }
+    o.push(0 - br)
+    return o
+}
+
+@pure
+fn _shl_n(a: [int], n: int) -> [int] {
+    // left-shift by n LIMBs (each 16 bits); pad with zeros
+    let mut o: [int] = []
+    let mut i = 0
+    while i < n { o.push(0); i = i + 1 }
+    i = 0
+    while i < len(a) { o.push(a[i]); i = i + 1 }
+    return o
+}
+
+// 16-limb × 16-limb → 32-limb (schoolbook). Each output limb stays < 2^32 < 2^63 in 64-bit.
+@pure
+fn _mul(a: [int], b: [int]) -> [int] {
+    let mut acc: [int] = []
+    let mut k = 0
+    while k < 32 { acc.push(0); k = k + 1 }
+    let mut i = 0
+    while i < 16 {
+        let mut j = 0
+        let mut carry = 0
+        while j < 16 {
+            let t = acc[i + j] + a[i] * b[j] + carry
+            acc[i + j] = t & 0xFFFF
+            carry = t >> 16
+            j = j + 1
+        }
+        acc[i + 16] = acc[i + 16] + carry
+        i = i + 1
+    }
+    return acc
+}
+
+// === Constants (P-256, FIPS 186-4 D.1.2.3) ===
+
+// p = 2^256 − 2^224 + 2^192 + 2^96 − 1
+//   = ffffffff 00000001 00000000 00000000 00000000 ffffffff ffffffff ffffffff (big-endian)
+@pure
+fn _P() -> [int] {
+    return _be32_to_limbs([0xff,0xff,0xff,0xff, 0x00,0x00,0x00,0x01, 0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x00,
+                          0x00,0x00,0x00,0x00, 0xff,0xff,0xff,0xff, 0xff,0xff,0xff,0xff, 0xff,0xff,0xff,0xff])
+}
+// n = group order
+@pure
+fn _N() -> [int] {
+    return _be32_to_limbs([0xff,0xff,0xff,0xff, 0x00,0x00,0x00,0x00, 0xff,0xff,0xff,0xff, 0xff,0xff,0xff,0xff,
+                          0xbc,0xe6,0xfa,0xad, 0xa7,0x17,0x9e,0x84, 0xf3,0xb9,0xca,0xc2, 0xfc,0x63,0x25,0x51])
+}
+// b
+@pure
+fn _Bc() -> [int] {
+    return _be32_to_limbs([0x5a,0xc6,0x35,0xd8, 0xaa,0x3a,0x93,0xe7, 0xb3,0xeb,0xbd,0x55, 0x76,0x98,0x86,0xbc,
+                          0x65,0x1d,0x06,0xb0, 0xcc,0x53,0xb0,0xf6, 0x3b,0xce,0x3c,0x3e, 0x27,0xd2,0x60,0x4b])
+}
+@pure
+fn _Gx() -> [int] {
+    return _be32_to_limbs([0x6b,0x17,0xd1,0xf2, 0xe1,0x2c,0x42,0x47, 0xf8,0xbc,0xe6,0xe5, 0x63,0xa4,0x40,0xf2,
+                          0x77,0x03,0x7d,0x81, 0x2d,0xeb,0x33,0xa0, 0xf4,0xa1,0x39,0x45, 0xd8,0x98,0xc2,0x96])
+}
+@pure
+fn _Gy() -> [int] {
+    return _be32_to_limbs([0x4f,0xe3,0x42,0xe2, 0xfe,0x1a,0x7f,0x9b, 0x8e,0xe7,0xeb,0x4a, 0x7c,0x0f,0x9e,0x16,
+                          0x2b,0xce,0x33,0x57, 0x6b,0x31,0x5e,0xce, 0xcb,0xb6,0x40,0x68, 0x37,0xbf,0x51,0xf5])
+}
+
+// === Modular arithmetic (general modulus m, 16-limb) ===
+
+// shift-and-subtract reduction: t (32-limb) mod m (16-limb) → 16-limb.
+// Iterate from MSB of t down: shift accumulator left 1, OR in next bit,
+// if acc >= m subtract m. O(256) iterations.
+@pure
+fn _mod_reduce(t: [int], m: [int]) -> [int] {
+    let mut acc = _zeros()
+    let mut bit = 511
+    while bit >= 0 {
+        // shift acc left by 1 bit (across 16 limbs)
+        let mut carry = 0
+        let mut i = 0
+        while i < 16 {
+            let v = (acc[i] << 1) | carry
+            acc[i] = v & 0xFFFF
+            carry = (v >> 16) & 1
+            i = i + 1
+        }
+        // OR in bit `bit` of t
+        let limb = bit >> 4
+        let off = bit & 15
+        acc[0] = acc[0] | ((t[limb] >> off) & 1)
+        // if acc >= m, subtract
+        if _cmp(acc, m) >= 0 {
+            let s = _sub16(acc, m)
+            i = 0
+            while i < 16 { acc[i] = s[i]; i = i + 1 }
+        }
+        bit = bit - 1
+    }
+    return acc
+}
+
+@pure
+fn _add_mod(a: [int], b: [int], m: [int]) -> [int] {
+    let s = _add16(a, b)
+    // build 17-limb t and reduce (pad m with one zero in shift-and-subtract is not needed;
+    // do conditional subtract since a,b < m → a+b < 2m).
+    let mut r: [int] = []
+    let mut i = 0
+    while i < 16 { r.push(s[i]); i = i + 1 }
+    // if carry-out or r >= m, subtract m
+    if s[16] != 0 || _cmp(r, m) >= 0 {
+        let d = _sub16(r, m)
+        i = 0
+        while i < 16 { r[i] = d[i]; i = i + 1 }
+    }
+    return r
+}
+
+@pure
+fn _sub_mod(a: [int], b: [int], m: [int]) -> [int] {
+    let s = _sub16(a, b)
+    let mut r: [int] = []
+    let mut i = 0
+    while i < 16 { r.push(s[i]); i = i + 1 }
+    if s[16] != 0 {
+        // borrowed → r is a - b + 2^256. add m to wrap into [0, m).
+        let d = _add16(r, m)
+        i = 0
+        while i < 16 { r[i] = d[i]; i = i + 1 }
+    }
+    return r
+}
+
+@pure
+fn _mul_mod(a: [int], b: [int], m: [int]) -> [int] {
+    let t = _mul(a, b)
+    return _mod_reduce(t, m)
+}
+
+@pure
+fn _pow_mod(a: [int], e: [int], m: [int]) -> [int] {
+    // square-and-multiply, MSB first (e is a 16-limb little-endian number)
+    let mut result = _zeros()
+    result[0] = 1
+    let mut bit = 255
+    while bit >= 0 {
+        result = _mul_mod(result, result, m)
+        let limb = bit >> 4
+        let off = bit & 15
+        if ((e[limb] >> off) & 1) == 1 {
+            result = _mul_mod(result, a, m)
+        }
+        bit = bit - 1
+    }
+    return result
+}
+
+@pure
+fn _inv_mod(a: [int], m: [int]) -> [int] {
+    // Fermat: a^(m-2) mod m  (m is prime here; both p and n are prime)
+    let mut e: [int] = []
+    let mut i = 0
+    while i < 16 { e.push(m[i]); i = i + 1 }
+    // subtract 2 — m[0] is even nonzero for both p and n, so just decrement low limb
+    e[0] = e[0] - 2
+    return _pow_mod(a, e, m)
+}
+
+// === Point arithmetic (affine; "point at infinity" represented as both coords zero) ===
+// Edwards/Weierstrass: y^2 = x^3 - 3x + b mod p
+
+@pure
+fn _is_infinity(x: [int], y: [int]) -> bool {
+    return _is_zero(x) && _is_zero(y)
+}
+
+@pure
+fn _point_double(x: [int], y: [int]) -> [int] {
+    let p = _P()
+    if _is_zero(y) { let mut o: [int] = []; let mut i = 0; while i < 16 { o.push(0); i = i + 1 }; i = 0; while i < 16 { o.push(0); i = i + 1 }; return o }
+    // s = (3x^2 - 3) / (2y) mod p   (since a=-3, slope = (3x^2 + a)/(2y))
+    let three = _zeros(); let mut t3 = three; t3[0] = 3
+    let xx = _mul_mod(x, x, p)
+    let num1 = _mul_mod(t3, xx, p)
+    let num = _sub_mod(num1, t3, p)
+    let two_y = _add_mod(y, y, p)
+    let inv = _inv_mod(two_y, p)
+    let s = _mul_mod(num, inv, p)
+    // x3 = s^2 - 2x
+    let s2 = _mul_mod(s, s, p)
+    let two_x = _add_mod(x, x, p)
+    let x3 = _sub_mod(s2, two_x, p)
+    // y3 = s(x - x3) - y
+    let diff = _sub_mod(x, x3, p)
+    let prod = _mul_mod(s, diff, p)
+    let y3 = _sub_mod(prod, y, p)
+    let mut out: [int] = []
+    let mut i = 0
+    while i < 16 { out.push(x3[i]); i = i + 1 }
+    i = 0
+    while i < 16 { out.push(y3[i]); i = i + 1 }
+    return out
+}
+
+@pure
+fn _point_add(x1: [int], y1: [int], x2: [int], y2: [int]) -> [int] {
+    if _is_infinity(x1, y1) {
+        let mut out: [int] = []
+        let mut i = 0
+        while i < 16 { out.push(x2[i]); i = i + 1 }
+        i = 0
+        while i < 16 { out.push(y2[i]); i = i + 1 }
+        return out
+    }
+    if _is_infinity(x2, y2) {
+        let mut out: [int] = []
+        let mut i = 0
+        while i < 16 { out.push(x1[i]); i = i + 1 }
+        i = 0
+        while i < 16 { out.push(y1[i]); i = i + 1 }
+        return out
+    }
+    if _cmp(x1, x2) == 0 {
+        if _cmp(y1, y2) == 0 { return _point_double(x1, y1) }
+        // P + (-P) = O
+        let mut out: [int] = []
+        let mut i = 0
+        while i < 32 { out.push(0); i = i + 1 }
+        return out
+    }
+    let p = _P()
+    // s = (y2 - y1) / (x2 - x1)
+    let dy = _sub_mod(y2, y1, p)
+    let dx = _sub_mod(x2, x1, p)
+    let inv = _inv_mod(dx, p)
+    let s = _mul_mod(dy, inv, p)
+    // x3 = s^2 - x1 - x2
+    let s2 = _mul_mod(s, s, p)
+    let t = _sub_mod(s2, x1, p)
+    let x3 = _sub_mod(t, x2, p)
+    // y3 = s(x1 - x3) - y1
+    let diff = _sub_mod(x1, x3, p)
+    let prod = _mul_mod(s, diff, p)
+    let y3 = _sub_mod(prod, y1, p)
+    let mut out: [int] = []
+    let mut i = 0
+    while i < 16 { out.push(x3[i]); i = i + 1 }
+    i = 0
+    while i < 16 { out.push(y3[i]); i = i + 1 }
+    return out
+}
+
+@pure
+fn _scalar_mult(k: [int], px: [int], py: [int]) -> [int] {
+    let mut rx = _zeros()
+    let mut ry = _zeros()
+    let mut bit = 255
+    while bit >= 0 {
+        let dbl = _point_double(rx, ry)
+        let mut i = 0
+        while i < 16 { rx[i] = dbl[i]; i = i + 1 }
+        i = 0
+        while i < 16 { ry[i] = dbl[16 + i]; i = i + 1 }
+        let limb = bit >> 4
+        let off = bit & 15
+        if ((k[limb] >> off) & 1) == 1 {
+            let sum = _point_add(rx, ry, px, py)
+            i = 0
+            while i < 16 { rx[i] = sum[i]; i = i + 1 }
+            i = 0
+            while i < 16 { ry[i] = sum[16 + i]; i = i + 1 }
+        }
+        bit = bit - 1
+    }
+    let mut out: [int] = []
+    let mut i = 0
+    while i < 16 { out.push(rx[i]); i = i + 1 }
+    i = 0
+    while i < 16 { out.push(ry[i]); i = i + 1 }
+    return out
+}
+
+// === ECDSA verify ===
+
+@pure
+pub fn p256_verify(qx_be: [int], qy_be: [int], hash_be: [int], r_be: [int], s_be: [int]) -> bool {
+    let n = _N()
+    let qx = _be32_to_limbs(qx_be)
+    let qy = _be32_to_limbs(qy_be)
+    let h = _be32_to_limbs(hash_be)
+    let r = _be32_to_limbs(r_be)
+    let s = _be32_to_limbs(s_be)
+    // 1 ≤ r, s ≤ n-1
+    if _is_zero(r) { return false }
+    if _is_zero(s) { return false }
+    if _cmp(r, n) >= 0 { return false }
+    if _cmp(s, n) >= 0 { return false }
+    // e = hash (reduce mod n in case hash >= n; H is already 256-bit so reduce)
+    let mut h_pad: [int] = []
+    let mut i = 0
+    while i < 16 { h_pad.push(h[i]); i = i + 1 }
+    while i < 32 { h_pad.push(0); i = i + 1 }
+    let e = _mod_reduce(h_pad, n)
+    // w = s^-1 mod n
+    let w = _inv_mod(s, n)
+    // u1 = e*w mod n, u2 = r*w mod n
+    let u1 = _mul_mod(e, w, n)
+    let u2 = _mul_mod(r, w, n)
+    // R = u1*G + u2*Q
+    let g_mul = _scalar_mult(u1, _Gx(), _Gy())
+    let mut g_mul_x: [int] = []; let mut g_mul_y: [int] = []
+    i = 0
+    while i < 16 { g_mul_x.push(g_mul[i]); i = i + 1 }
+    i = 0
+    while i < 16 { g_mul_y.push(g_mul[16 + i]); i = i + 1 }
+    let q_mul = _scalar_mult(u2, qx, qy)
+    let mut q_mul_x: [int] = []; let mut q_mul_y: [int] = []
+    i = 0
+    while i < 16 { q_mul_x.push(q_mul[i]); i = i + 1 }
+    i = 0
+    while i < 16 { q_mul_y.push(q_mul[16 + i]); i = i + 1 }
+    let sum = _point_add(g_mul_x, g_mul_y, q_mul_x, q_mul_y)
+    let mut rx: [int] = []
+    i = 0
+    while i < 16 { rx.push(sum[i]); i = i + 1 }
+    let mut ry: [int] = []
+    i = 0
+    while i < 16 { ry.push(sum[16 + i]); i = i + 1 }
+    // R == infinity → fail
+    if _is_zero(rx) && _is_zero(ry) { return false }
+    // R.x mod n must equal r
+    let rx_padded = _zeros()
+    let mut rx_32: [int] = []
+    i = 0
+    while i < 16 { rx_32.push(rx[i]); i = i + 1 }
+    while i < 32 { rx_32.push(0); i = i + 1 }
+    let rx_mod_n = _mod_reduce(rx_32, n)
+    return _cmp(rx_mod_n, r) == 0
+}
