@@ -574,6 +574,27 @@ runtime.c 조각이라 F3 로 fold (mis-split 해소). **F3 만이 진짜 open**
     은 RFC 063/064 deferred(no-op). north-star "minimal per-arch .s asm STAYS ·
     zero .c NOT zero asm" 의 irreducible asm 바닥 그 자체. **re-open flag**: RFC
     063/064 가 vector-table data-section lowering 을 1급 처리하면 zero-.s 도달 가능.
+
+  - 📘 **RFC 063/064 RUNBOOK (B9.S-1 정밀 정찰 · 2026-05-28)** — re-open 시 actionable:
+    - **현 상태 (verbatim grep)**: `self/codegen.hexa` = hexa→C 트랜스파일러, 임베디드
+      코드젠 0 (`.word`/`.section`/`vector_table`/`thumb`/ELF 매치 0건); :1851 이
+      `@interrupt`/`@target` 인식하나 comment-only, HexaVal fn C codegen 으로 fallthrough.
+      `compiler/codegen/thumbv7em_eabihf.hexa` 존재하나 thumbv7em (M7/M4) 타깃, M0+ 미지원,
+      symbol-relocated word-array emitter 0, `@interrupt` 처리 0. firmware 빌드
+      (`Makefile.rp2040`) 는 `arm-none-eabi-as/gcc/ld` 직접 호출 — hexa 미경유.
+    - **5 components 필요**:
+      1. `@interrupt`/`@vector_table` slot-id parse + symbol resolution (~2-3d)
+      2. symbol-address word-array data-section emitter w/ relocs (~3-4d · **핵심 갭**)
+      3. ARMv6-M reset-prologue lowering (~2-4d)
+      4. ELF/raw-bin target + linker-script slot (~2-3d) — class-A Mach-O reloc 인프라
+         (#1839)는 format-mismatch 라 직접 재사용 불가
+      5. 빌드 rewire + **BYTE-IDENTICAL `arm-none-eabi-as` byte-diff 검증** + `git rm` (~1d)
+    - **최소-노력 경로** (`.s`-text route · `as` 가 reloc/literal-pool 처리): **~5-7d expert**
+    - **full ELF-native 경로**: ~12-16d expert
+    - **first re-open 증분 scope**: Component 1 + `.s`-text vector generator + byte-diff
+      oracle = 단일 PR
+    - ⚠ **byte-correctness 절대 mandate**: 잘못된 reset vector = MCU silent 부팅 실패
+    - rp2040 padding 주석 정정: `.rept 28` after 4 words = **128 B = 0x80** (not 0x100)
     F1(perf)·F2(vendor-ABI) 와 동일 closure 형태 (현 capability irreducible + 미래
     enabler re-open).
 
