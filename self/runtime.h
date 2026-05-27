@@ -677,6 +677,8 @@ HexaVal hexa_f32_to_bytes_le(HexaVal val);     /* native/tensor_kernels.c:107 */
 HexaVal hexa_bytes_to_f32_le(HexaVal arr, HexaVal offset);     /* native/tensor_kernels.c:120 */
 HexaVal hexa_f64_to_bytes_le(HexaVal val);     /* native/tensor_kernels.c:139 */
 HexaVal hexa_bytes_to_f64_le(HexaVal arr, HexaVal offset);     /* native/tensor_kernels.c:152 */
+HexaVal hexa_float_to_bits(HexaVal val);     /* native/tensor_kernels.c (f64↔i64 reinterpret) */
+HexaVal hexa_bits_to_float(HexaVal val);     /* native/tensor_kernels.c (i64↔f64 reinterpret) */
 HexaVal hexa_bytes_to_f32_le_v(HexaVal arr, HexaVal offset);     /* native/tensor_kernels.c:176 */
 HexaVal hexa_bytes_to_f64_le_v(HexaVal arr, HexaVal offset);     /* native/tensor_kernels.c:200 */
 HexaVal hexa_struct_pack_f32(HexaVal* args, int nargs);     /* native/tensor_kernels.c:241 */

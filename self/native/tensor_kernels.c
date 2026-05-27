@@ -149,6 +149,23 @@ HexaVal hexa_f64_to_bytes_le(HexaVal val) {
     return arr;
 }
 
+/* f64↔i64 IEEE-754 bit-cast (nanbox bit-pack keystone + NVPTX const→0d-hex
+ * prereq · INBOX 2026-05-27). Union-pun mirrors the existing patterns in
+ * runtime.c:2444 (TAG_FLOAT → int64_t bits) and runtime.c:432. Pure value
+ * reinterpret — no allocation, no array wrap.
+ */
+HexaVal hexa_float_to_bits(HexaVal val) {
+    union { double d; int64_t i; } u;
+    u.d = __hx_to_double(val);
+    return hexa_int(u.i);
+}
+
+HexaVal hexa_bits_to_float(HexaVal val) {
+    union { double d; int64_t i; } u;
+    u.i = HX_IS_INT(val) ? HX_INT(val) : (int64_t)__hx_to_double(val);
+    return hexa_float(u.d);
+}
+
 HexaVal hexa_bytes_to_f64_le(HexaVal arr, HexaVal offset) {
     int64_t off = HX_IS_INT(offset) ? HX_INT(offset) : 0;
     if (!HX_IS_ARRAY(arr)) return hexa_float(0.0);

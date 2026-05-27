@@ -6184,6 +6184,14 @@ fn gen2_expr(node) {
             if name == "bytes_to_f64_le" {
                 return "hexa_bytes_to_f64_le(" + gen2_expr(node.args[0]) + ", " + gen2_expr(node.args[1]) + ")"
             }
+            // f64↔i64 reinterpret (IEEE-754 bit-cast — nanbox bit-pack
+            // keystone + NVPTX f64 const→0d-hex prereq · INBOX 2026-05-27).
+            if name == "float_to_bits" {
+                return "hexa_float_to_bits(" + gen2_expr(node.args[0]) + ")"
+            }
+            if name == "bits_to_float" {
+                return "hexa_bits_to_float(" + gen2_expr(node.args[0]) + ")"
+            }
             // (FIX-2 unblock) _v variants removed — interpreter dispatch
             // now inlines the TAG_VALSTRUCT unwrap loop in self/hexa_full.hexa
             // and calls the non-_v C builtin directly. Keeps the runtime
@@ -10055,6 +10063,9 @@ fn _is_builtin_name(name) {
     if name == "bytes_to_f32_le" { return true }
     if name == "f64_to_bytes_le" { return true }
     if name == "bytes_to_f64_le" { return true }
+    // f64↔i64 reinterpret — INBOX 2026-05-27 nanbox keystone + NVPTX prereq.
+    if name == "float_to_bits" { return true }
+    if name == "bits_to_float" { return true }
     if name == "net_listen" { return true }
     if name == "net_accept" { return true }
     if name == "net_close" { return true }

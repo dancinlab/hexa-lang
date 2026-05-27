@@ -220,13 +220,14 @@ fn nan_stack_get(self: NanStack, idx: int) -> NanBoxed {
 }
 
 // ── Bit conversion helpers (runtime intrinsics) ────────────────
-
-fn float_to_bits(f: float) -> int {
-    // Runtime intrinsic: reinterpret f64 as i64
-    return 0
-}
-
-fn bits_to_float(bits: int) -> float {
-    // Runtime intrinsic: reinterpret i64 as f64
-    return 0.0
-}
+//
+// `float_to_bits` / `bits_to_float` are 4-surface codegen builtins (mirrors
+// the `f64_to_bytes_le` family): the call sites in this file resolve to
+// `hexa_float_to_bits` / `hexa_bits_to_float` C bridges via
+//   ① codegen.hexa emit branch (gen2_expr)
+//   ② codegen.hexa `_is_builtin_name` purity flag
+//   ③ self/native/tensor_kernels.c union-pun bridge
+//   ④ compiler/check/bind.hexa allowlist (HX2001 exemption)
+// No source-level `fn float_to_bits` decl needed — bind allows callers to
+// reference the bare name. The previous `return 0` / `return 0.0` stubs are
+// gone because they silently broke nanbox bit-packing (INBOX 2026-05-27).
