@@ -1,0 +1,353 @@
+// stdlib/cloud/pods_local.hexa — per-project active pod/job manifest.
+//
+// File: ./pods.json (cwd-local · per-project SSOT, NOT global).
+//   Sibling to and DISTINCT from pod_registry.hexa's global append-only
+//   $HOME/.hexa-cloud/pods.jsonl (billing / orphan defense). This module
+//   serves the operator's manual work-tracking view: "what jobs are running
+//   in THIS project right now, on which pod, with what verdict" — one file
+//   per repo so each project (demiurge, anima, hexa-lang, ...) carries its
+//   own dispatch state under its own working tree.
+//
+// Schema (update-form — overwrite, not append):
+//   {
+//     "version": "1.0",
+//     "last_updated_utc": "<ISO-8601>",
+//     "pods": { "<pod-id>": {"host":"...","provider":"vast|runpod|local-pool",...} },
+//     "jobs": { "<job-id>": {"pod":"...","dir":"...","kind":"...","stage":"...",
+//                            "pid":N,"watcher":"...","watcher_output":"...",
+//                            "started_utc":"...","verdict":"PENDING|PASS|FAIL|DOWN|...",
+//                            "verdict_utc":"..."} }
+//   }
+//
+// Write hardening (mirrors pool.hexa _save / stdlib/cloud/pod_registry):
+//   1. atomic write — temp in same dir + `mv -f` rename(2)
+//   2. .bak rotation — snapshot prior state before each write
+//   3. last_updated_utc auto-stamp — stale detection
+//
+// Concurrent writers within a single project are rare (one operator
+// session per repo); we do not flock — atomic rename + .bak recovery is
+// sufficient for the observed pattern. Cross-project isolation is
+// structural (different cwd → different file).
+//
+// Public surface — called from cloud_cli.hexa `pods` / `dispatch` verbs.
+
+use "stdlib/alloc/json"
+use "stdlib/alloc/json_object"
+
+// ── paths / time ─────────────────────────────────────────────────────
+
+fn _pl_path() -> str {
+    return "./pods.json"
+}
+
+fn _pl_now_iso() -> str {
+    return exec("date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null").trim()
+}
+
+fn _pl_path_exists(path: str) -> bool {
+    let r = exec_capture("test -e " + path + " && echo y")
+    return r[0] == "y\n"
+}
+
+fn _pl_empty() {
+    return json_parse("{\"version\":\"1.0\",\"last_updated_utc\":\"\",\"pods\":{},\"jobs\":{}}")
+}
+
+// ── load / save ──────────────────────────────────────────────────────
+
+fn _pl_load() {
+    let path = _pl_path()
+    if !_pl_path_exists(path) { return _pl_empty() }
+    let raw = read_file(path)
+    if len(raw.trim()) == 0 {
+        let bak = path + ".bak"
+        if _pl_path_exists(bak) {
+            let braw = read_file(bak)
+            if len(braw.trim()) > 0 { return json_parse(braw) }
+        }
+        return _pl_empty()
+    }
+    return json_parse(raw)
+}
+
+fn _pl_save(root) {
+    let path = _pl_path()
+    let _ = json_object_set(root, "last_updated_utc", _pl_now_iso())
+    if _pl_path_exists(path) {
+        let _ = exec_capture("cp -p " + path + " " + path + ".bak")
+    }
+    // mktemp in cwd (same fs as target → atomic rename(2))
+    let tr = exec_capture("mktemp ./pods.json.XXXXXX")
+    let tmp = tr[0].trim()
+    write_file(tmp, json_dump_pretty(root, 2) + "\n")
+    let _ = exec_capture("mv -f " + tmp + " " + path)
+}
+
+// ── string formatting helpers (local, ASCII-only widths) ─────────────
+
+fn _pl_pad(s: str, n: int) -> str {
+    let mut r = s
+    while len(r) < n { r = r + " " }
+    return r
+}
+
+// ── verb runners (called from cloud_cli.hexa) ────────────────────────
+
+// pods_local_print_table — bare `cloud pods` (full) or `cloud dispatch active`
+// (filter_pending = PENDING only). Returns 0.
+pub fn pods_local_print_table(filter_pending: bool) -> int {
+    let root = _pl_load()
+    let pods = json_object_get_object(root, "pods")
+    let jobs = json_object_get_object(root, "jobs")
+    let job_ids = json_object_keys(jobs)
+    let pod_ids = json_object_keys(pods)
+    let ts_raw = json_object_get_str(root, "last_updated_utc", "")
+    let mut ts = ts_raw
+    if len(ts_raw) == 0 { ts = "—" }
+    let mut suffix = ""
+    if filter_pending { suffix = "  (active = verdict=PENDING)" }
+    println("cloud pods (./pods.json · last_updated " + ts + ")" + suffix)
+    println("  pods=" + str(len(pod_ids)) + "   jobs=" + str(len(job_ids)))
+    if len(job_ids) == 0 { return 0 }
+
+    let mut wid = 6
+    let mut wpod = 3
+    let mut wkind = 4
+    let mut wstage = 5
+    let mut wver = 7
+    let mut i = 0
+    while i < len(job_ids) {
+        let jid = job_ids[i]
+        let j = json_object_get(jobs, jid)
+        if len(jid) > wid { wid = len(jid) }
+        let p = json_object_get_str(j, "pod", "-")
+        if len(p) > wpod { wpod = len(p) }
+        let k = json_object_get_str(j, "kind", "-")
+        if len(k) > wkind { wkind = len(k) }
+        let s = json_object_get_str(j, "stage", "-")
+        if len(s) > wstage { wstage = len(s) }
+        let v = json_object_get_str(j, "verdict", "PENDING")
+        if len(v) > wver { wver = len(v) }
+        i = i + 1
+    }
+    println("  " + _pl_pad("job-id", wid) + "  " + _pl_pad("pod", wpod) + "  " + _pl_pad("kind", wkind) + "  " + _pl_pad("stage", wstage) + "  " + _pl_pad("verdict", wver) + "  dir")
+    i = 0
+    while i < len(job_ids) {
+        let jid = job_ids[i]
+        let j = json_object_get(jobs, jid)
+        let v = json_object_get_str(j, "verdict", "PENDING")
+        if !(filter_pending && v != "PENDING") {
+            let p = json_object_get_str(j, "pod", "-")
+            let k = json_object_get_str(j, "kind", "-")
+            let s = json_object_get_str(j, "stage", "-")
+            let d = json_object_get_str(j, "dir", "-")
+            println("  " + _pl_pad(jid, wid) + "  " + _pl_pad(p, wpod) + "  " + _pl_pad(k, wkind) + "  " + _pl_pad(s, wstage) + "  " + _pl_pad(v, wver) + "  " + d)
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+// pods_local_tree — `cloud dispatch tree`: pod-grouped ASCII (orphan jobs
+// at the tail under their own section).
+pub fn pods_local_tree() -> int {
+    let root = _pl_load()
+    let pods = json_object_get_object(root, "pods")
+    let jobs = json_object_get_object(root, "jobs")
+    let pod_ids = json_object_keys(pods)
+    let job_ids = json_object_keys(jobs)
+    let ts_raw = json_object_get_str(root, "last_updated_utc", "")
+    let mut ts = ts_raw
+    if len(ts_raw) == 0 { ts = "—" }
+    println("cloud pods tree (./pods.json · " + ts + ")")
+    if len(pod_ids) == 0 && len(job_ids) == 0 {
+        println("  (empty)")
+        return 0
+    }
+    let mut pi = 0
+    while pi < len(pod_ids) {
+        let pid = pod_ids[pi]
+        let pod = json_object_get(pods, pid)
+        let host = json_object_get_str(pod, "host", "-")
+        let provider = json_object_get_str(pod, "provider", "-")
+        println("├── pod " + pid + " · " + provider + " · " + host)
+        let mut ji = 0
+        while ji < len(job_ids) {
+            let jid = job_ids[ji]
+            let j = json_object_get(jobs, jid)
+            if json_object_get_str(j, "pod", "") == pid {
+                let v = json_object_get_str(j, "verdict", "PENDING")
+                let k = json_object_get_str(j, "kind", "-")
+                let s = json_object_get_str(j, "stage", "-")
+                println("│   ├── " + jid + " · " + k + "/" + s + " [" + v + "]")
+            }
+            ji = ji + 1
+        }
+        pi = pi + 1
+    }
+    let mut printed_orphan = false
+    let mut ji = 0
+    while ji < len(job_ids) {
+        let jid = job_ids[ji]
+        let j = json_object_get(jobs, jid)
+        let p = json_object_get_str(j, "pod", "")
+        if len(p) == 0 || !json_object_has(pods, p) {
+            if !printed_orphan {
+                println("└── (orphan jobs — pod-id not in pods map)")
+                printed_orphan = true
+            }
+            let v = json_object_get_str(j, "verdict", "PENDING")
+            let k = json_object_get_str(j, "kind", "-")
+            let s = json_object_get_str(j, "stage", "-")
+            println("    ├── " + jid + " · pod=" + p + " · " + k + "/" + s + " [" + v + "]")
+        }
+        ji = ji + 1
+    }
+    return 0
+}
+
+// pods_local_add — `cloud dispatch add <job-id> <pod-id> <dir> [--host=H
+// --provider=P --kind=K --stage=S --pid=N --watcher=W --watcher-output=P
+// --verdict=V]`. Job entry is OVERWRITTEN (update-form); use verdict for
+// in-place verdict-only edits. Auto-stubs pod entry on first reference.
+// `av` is the full argv from main(); `idx` is the position of the first
+// positional argument (job-id).
+pub fn pods_local_add(av, idx: int) -> int {
+    if idx + 2 >= len(av) {
+        println("usage: cloud dispatch add <job-id> <pod-id> <dir> [--host=H --provider=P --kind=K --stage=S --pid=N --watcher=W --watcher-output=P --verdict=V]")
+        return 2
+    }
+    let jid = av[idx]
+    let pid = av[idx + 1]
+    let dir = av[idx + 2]
+    let mut host = ""
+    let mut provider = ""
+    let mut kind = ""
+    let mut stage = ""
+    let mut pid_n = 0
+    let mut watcher = ""
+    let mut woutput = ""
+    let mut verdict = "PENDING"
+    let mut i = idx + 3
+    while i < len(av) {
+        let a = av[i]
+        if a.starts_with("--host=") { host = a.substring(7, len(a)) }
+        if a.starts_with("--provider=") { provider = a.substring(11, len(a)) }
+        if a.starts_with("--kind=") { kind = a.substring(7, len(a)) }
+        if a.starts_with("--stage=") { stage = a.substring(8, len(a)) }
+        if a.starts_with("--pid=") { pid_n = to_int(a.substring(6, len(a))) }
+        if a.starts_with("--watcher=") { watcher = a.substring(10, len(a)) }
+        if a.starts_with("--watcher-output=") { woutput = a.substring(17, len(a)) }
+        if a.starts_with("--verdict=") { verdict = a.substring(10, len(a)) }
+        i = i + 1
+    }
+    let root = _pl_load()
+    let pods = json_object_get_object(root, "pods")
+    if !json_object_has(pods, pid) {
+        let p = json_parse("{}")
+        if len(host) > 0 { let _ = json_object_set(p, "host", host) }
+        if len(provider) > 0 { let _ = json_object_set(p, "provider", provider) }
+        let _ = json_object_set(p, "registered_utc", _pl_now_iso())
+        let _ = json_object_set(pods, pid, p)
+    } else {
+        let p = json_object_get(pods, pid)
+        if len(host) > 0 { let _ = json_object_set(p, "host", host) }
+        if len(provider) > 0 { let _ = json_object_set(p, "provider", provider) }
+    }
+    let jobs = json_object_get_object(root, "jobs")
+    let j = json_parse("{}")
+    let _ = json_object_set(j, "pod", pid)
+    let _ = json_object_set(j, "dir", dir)
+    if len(kind) > 0 { let _ = json_object_set(j, "kind", kind) }
+    if len(stage) > 0 { let _ = json_object_set(j, "stage", stage) }
+    if pid_n > 0 { let _ = json_object_set(j, "pid", pid_n) }
+    if len(watcher) > 0 { let _ = json_object_set(j, "watcher", watcher) }
+    if len(woutput) > 0 { let _ = json_object_set(j, "watcher_output", woutput) }
+    let _ = json_object_set(j, "started_utc", _pl_now_iso())
+    let _ = json_object_set(j, "verdict", verdict)
+    let _ = json_object_set(jobs, jid, j)
+    _pl_save(root)
+    println("dispatch: " + jid + " → pod " + pid + " [" + verdict + "]")
+    return 0
+}
+
+// pods_local_verdict — `cloud dispatch verdict <job-id> <status>`: rewrite
+// only the verdict + verdict_utc fields, preserving everything else.
+pub fn pods_local_verdict(jid: str, status: str) -> int {
+    let root = _pl_load()
+    let jobs = json_object_get_object(root, "jobs")
+    if !json_object_has(jobs, jid) {
+        println("dispatch: no such job: " + jid)
+        return 1
+    }
+    let j = json_object_get(jobs, jid)
+    let prev = json_object_get_str(j, "verdict", "PENDING")
+    let _ = json_object_set(j, "verdict", status)
+    let _ = json_object_set(j, "verdict_utc", _pl_now_iso())
+    _pl_save(root)
+    println("dispatch: " + jid + " · " + prev + " → " + status)
+    return 0
+}
+
+// pods_local_rm — `cloud dispatch rm <target>`: deletes a job (first
+// match) or a pod (refuses if jobs are still pinned to it — caller must
+// `rm` those first or flip their verdict).
+pub fn pods_local_rm(target: str) -> int {
+    let root = _pl_load()
+    let jobs = json_object_get_object(root, "jobs")
+    if json_object_has(jobs, target) {
+        let _ = json_object_delete(jobs, target)
+        _pl_save(root)
+        println("dispatch: removed job " + target)
+        return 0
+    }
+    let pods = json_object_get_object(root, "pods")
+    if !json_object_has(pods, target) {
+        println("dispatch: no such job or pod: " + target)
+        return 1
+    }
+    let job_ids = json_object_keys(jobs)
+    let mut i = 0
+    while i < len(job_ids) {
+        let j = json_object_get(jobs, job_ids[i])
+        if json_object_get_str(j, "pod", "") == target {
+            println("dispatch: refusing to rm pod '" + target + "' — job '" + job_ids[i] + "' still pinned to it (rm jobs first or set their verdict to DOWN)")
+            return 1
+        }
+        i = i + 1
+    }
+    let _ = json_object_delete(pods, target)
+    _pl_save(root)
+    println("dispatch: removed pod " + target)
+    return 0
+}
+
+// pods_local_dispatch — `cloud dispatch [tree|active|add|verdict|rm] ...`
+// sub-router. Bare `cloud dispatch` renders the full table (same as
+// `cloud pods`).
+pub fn pods_local_dispatch(av, idx: int) -> int {
+    if idx >= len(av) {
+        return pods_local_print_table(false)
+    }
+    let sub = av[idx]
+    if sub == "tree" { return pods_local_tree() }
+    if sub == "active" { return pods_local_print_table(true) }
+    if sub == "add" { return pods_local_add(av, idx + 1) }
+    if sub == "verdict" {
+        if idx + 2 >= len(av) {
+            println("usage: cloud dispatch verdict <job-id> <status>")
+            return 2
+        }
+        return pods_local_verdict(av[idx + 1], av[idx + 2])
+    }
+    if sub == "rm" {
+        if idx + 1 >= len(av) {
+            println("usage: cloud dispatch rm <job-id|pod-id>")
+            return 2
+        }
+        return pods_local_rm(av[idx + 1])
+    }
+    println("usage: cloud dispatch [tree|active|add|verdict|rm] ...")
+    println("       cloud dispatch                  # full table (same as `cloud pods`)")
+    return 2
+}

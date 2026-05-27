@@ -13,6 +13,7 @@ use "stdlib/cloud/watchdog"
 use "stdlib/cloud/vast"
 use "stdlib/cloud/runpod"
 use "stdlib/cloud/dft_dispatch"
+use "stdlib/cloud/pods_local"
 
 fn _cloud_help() {
     println("hexa cloud — structured-argv remote dispatch (cycle A)")
@@ -48,6 +49,14 @@ fn _cloud_help() {
     println("  cloud watchdog  [--threshold-min N] [--util-cap-pct N] [--kill]  idle-pod autokill sweep (DRY-RUN default)")
     println("  cloud dft-run   <deck-dir> [--go] [--query Q] [--walltime-h N] [--identity P] [--image I] [--disk G] [--owner T]")
     println("                                                         guarded DFT el-ph (QE) dispatch; PREVIEW ($0) unless --go. deck: relax.in·ph.in·scf.in.head·scf.in.tail·pseudo/")
+    println("  cloud pods                                              full work table from cwd's ./pods.json (per-project active pod/job manifest)")
+    println("  cloud dispatch [tree|active|add|verdict|rm]            manage ./pods.json (update-form): bare = full table")
+    println("    add     <job-id> <pod-id> <dir> [--host=H --provider=P --kind=K --stage=S --pid=N --watcher=W --watcher-output=P --verdict=V]")
+    println("    verdict <job-id> <status>                            rewrite verdict + verdict_utc only (preserve other fields)")
+    println("    rm      <job-id|pod-id>                              delete (refuses pod rm while jobs are still pinned)")
+    println("    active                                               only verdict=PENDING jobs")
+    println("    tree                                                 pod-grouped ASCII (orphan jobs at tail)")
+    println("                                                         (distinct from `cloud orphans` — that scans GLOBAL ~/.hexa-cloud/pods.jsonl billing/orphan registry; `pods`/`dispatch` is the per-project work view)")
     println("  cloud help | version")
     println("")
     println("connection flags [conn] (before `--`):")
@@ -683,7 +692,7 @@ fn main() {
     while i < len(av) {
         let t = av[i]
         if si < 0 {
-            if t == "rent" || t == "up" || t == "down" || t == "destroy" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "fire" || t == "poll" || t == "tail" || t == "watch" || t == "ssh-port" || t == "resolve" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "adopt" || t == "forget" || t == "dft-run" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
+            if t == "rent" || t == "up" || t == "down" || t == "destroy" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "fire" || t == "poll" || t == "tail" || t == "watch" || t == "ssh-port" || t == "resolve" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "adopt" || t == "forget" || t == "dft-run" || t == "pods" || t == "dispatch" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
                 si = i
                 sub = t
             }
@@ -766,6 +775,25 @@ fn main() {
         // Encodes the demiurge RTSC checklist (dft_dispatch.hexa, INBOX #1249).
         let rc = dft_run(av, si + 1)
         exit(rc)
+    }
+    if sub == "pods" {
+        // Per-project active pod/job work manifest at cwd's ./pods.json.
+        // Bare form = full table render (operator's "what is running here
+        // right now?" view). Distinct from `cloud orphans` / pod_registry
+        // (global ~/.hexa-cloud/pods.jsonl — billing/orphan defense).
+        exit(pods_local_print_table(false))
+    }
+    if sub == "dispatch" {
+        // Manage the per-project ./pods.json manifest:
+        //   bare      → full table (same as `cloud pods`)
+        //   tree      → pod-grouped ASCII (orphans at tail)
+        //   active    → verdict=PENDING jobs only
+        //   add       → add/overwrite a job entry (auto-stubs pod entry)
+        //   verdict   → rewrite verdict + verdict_utc (preserve other fields)
+        //   rm        → delete a job (then pod, refused if pod has pinned jobs)
+        // update-form: each add rewrites the full job entry; verdict touches
+        // only the verdict fields; rm deletes. Atomic write + .bak rotation.
+        exit(pods_local_dispatch(av, si + 1))
     }
     if sub == "run" {
         if si + 1 >= len(av) {
