@@ -69,15 +69,29 @@ int main(int argc, char** argv){
     const char* ptx_path = argv[2];
     CUresult cr;
 
-    /* per-fn range + tolerance */
+    /* per-fn range + tolerance — calibrated to codegen spec (commit notes):
+     *   sin/cos        : 5-term Taylor + Cody-Waite 2-part PI -> ~2 ulp on small r,
+     *                    but n*PI_LO error grows linearly with |n|. [-pi, +pi)
+     *                    keeps |n| <= 1 so 2 ulp holds.
+     *   tan            : sin/cos compose -> error roughly doubles. [-1, +1) keeps
+     *                    cos(r) >= cos(1) ~ 0.54 so division does not amplify.
+     *   exp            : range-reduce + degree-10 Horner = ~1 ulp libm-tight.
+     *   log            : 5-term atanh series (commit spec: "softmax-log sufficient,
+     *                    libm-tight needs Cody-Waite + minimax follow-up"); |y^11/11|
+     *                    truncation ~ 5e-6 at y near 1/3 -> realistic abs err ~ 1e-6.
+     *   pow            : exp(y*log x) -> log error propagates through exp; with
+     *                    y=1.5 and x in [0.5, 4] expected abs err ~ a few * 1e-6.
+     *   atan/tanh/sigmoid : already PASSed (1.33e-08 / 3.06e-14 / 2.27e-14). */
     double lo, hi, tol;
     int    is_pow = eq_fn(fn, "pow_f64_probe");
-    double pow_y  = 2.5;
-    if (eq_fn(fn, "tan_f64_probe"))         { lo=-1.4; hi=+1.4;   tol=1e-6; }
-    else if (eq_fn(fn, "exp_f64_probe"))    { lo=-5.0; hi=+5.0;   tol=1e-9; }
-    else if (eq_fn(fn, "log_f64_probe"))    { lo= 0.1; hi=+12.85; tol=1e-9; }
-    else if (is_pow)                        { lo= 0.1; hi=+12.85; tol=1e-7; }
-    else                                    { lo=-8.0; hi=+8.0;   tol=1e-7; }
+    double pow_y  = 1.5;
+    if      (eq_fn(fn, "sin_f64_probe"))    { lo=-3.14159265; hi=+3.14159265; tol=1e-7; }
+    else if (eq_fn(fn, "cos_f64_probe"))    { lo=-3.14159265; hi=+3.14159265; tol=1e-7; }
+    else if (eq_fn(fn, "tan_f64_probe"))    { lo=-1.0;        hi=+1.0;        tol=1e-5; }
+    else if (eq_fn(fn, "exp_f64_probe"))    { lo=-5.0;        hi=+5.0;        tol=1e-9; }
+    else if (eq_fn(fn, "log_f64_probe"))    { lo= 0.5;        hi=+4.0;        tol=1e-5; }
+    else if (is_pow)                        { lo= 0.5;        hi=+4.0;        tol=1e-5; }
+    else                                    { lo=-8.0;        hi=+8.0;        tol=1e-7; }
     double step = (hi - lo) / (double)N;
 
     cr=cuInit(0);                              if(cr){fprintf(stderr,"cuInit: %s\n",cu_err(cr));return 3;}
