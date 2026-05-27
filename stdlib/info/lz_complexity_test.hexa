@@ -1,0 +1,71 @@
+// stdlib/info/lz_complexity_test — self-test for lz_complexity.
+// Verifies the module compiles and produces correct values on 4 oracles:
+//   1. empty                         -> LZ = 0
+//   2. constant seq (1,1,...,1 ×10)  -> LZ = 0.4          (LZ-canonical, 4 distinct
+//                                        prefixes "1","1_1","1_1_1","1_1_1_1") ≪ 1.0
+//   3. all-distinct (1..10)          -> LZ = 1.0          (full diversity)
+//   4. alternating (1,2,1,2,...×10)  -> LZ = 0.5          (5 distinct LZ phrases)
+// Verifies: flat collapse signal (LZ ≪ distinct) AND ordering flat < alt < distinct.
+//
+// Self-contained (no cross-stdlib import beyond the unit under test).
+
+import "stdlib/info/lz_complexity.hexa"
+
+fn _fabs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+
+fn _close(name: string, got: float, want: float, tol: float) -> int {
+    let d = _fabs(got - want)
+    if d < tol {
+        println("PASS " + name + " got=" + to_string(got) + " want=" + to_string(want))
+        return 0
+    }
+    println("FAIL " + name + " got=" + to_string(got) + " want=" + to_string(want) + " tol=" + to_string(tol))
+    return 1
+}
+
+fn _between(name: string, got: float, lo: float, hi: float) -> int {
+    if got > lo && got < hi {
+        println("PASS " + name + " got=" + to_string(got) + " in (" + to_string(lo) + "," + to_string(hi) + ")")
+        return 0
+    }
+    println("FAIL " + name + " got=" + to_string(got) + " not in (" + to_string(lo) + "," + to_string(hi) + ")")
+    return 1
+}
+
+fn main() {
+    let mut fails = 0
+
+    // 1. empty -> 0
+    let empty_seq = []
+    fails = fails + _close("empty", lz_complexity(empty_seq), 0.0, 0.0000001)
+
+    // 2. constant length-10 -> LZ-canonical 4 phrases / 10 = 0.4
+    let flat = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+    let lz_flat = lz_complexity(flat)
+    fails = fails + _close("flat-10", lz_flat, 0.4, 0.0000001)
+
+    // 3. all-distinct length-10 -> 1.0
+    let distinct = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    let lz_distinct = lz_complexity(distinct)
+    fails = fails + _close("distinct-10", lz_distinct, 1.0, 0.0000001)
+
+    // 4. alternating (1,2,1,2,...×10) -> 5 LZ phrases / 10 = 0.5
+    let alt = [1, 2, 1, 2, 1, 2, 1, 2, 1, 2]
+    let lz_alt = lz_complexity(alt)
+    fails = fails + _close("alt-10", lz_alt, 0.5, 0.0000001)
+
+    // 5. ordering invariant: flat < alt < distinct (the core collapse signal)
+    if lz_flat < lz_alt && lz_alt < lz_distinct {
+        println("PASS ordering flat(" + to_string(lz_flat) + ") < alt(" + to_string(lz_alt) + ") < distinct(" + to_string(lz_distinct) + ")")
+    } else {
+        println("FAIL ordering flat=" + to_string(lz_flat) + " alt=" + to_string(lz_alt) + " distinct=" + to_string(lz_distinct))
+        fails = fails + 1
+    }
+
+    if fails == 0 {
+        println("ALL PASS — stdlib/info/lz_complexity")
+    } else {
+        println("FAILURES: " + to_string(fails))
+        exit(1)
+    }
+}
