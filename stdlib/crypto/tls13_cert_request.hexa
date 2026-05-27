@@ -1,0 +1,61 @@
+// HEXA Standard Library — crypto/tls13_cert_request
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// TLS 1.3 CertificateRequest message build/parse (RFC 8446 §4.3.2) — pure
+// hexa. Sent by the server (post-EncryptedExtensions) to request client
+// authentication. let-mut idiom (#1506).
+//
+// Structure (RFC 8446 §4.3.2):
+//   struct {
+//       opaque certificate_request_context<0..2^8-1>;
+//       Extension extensions<2..2^16-1>;
+//   } CertificateRequest;
+//
+// Surface (body = the CR message body, NOT including the 4-byte HS header):
+//   pub fn tls13_cr_build(context: [int], extensions_concat: [int]) -> [int]
+//   pub fn tls13_cr_context_length(body: [int]) -> int
+//   pub fn tls13_cr_context(body: [int]) -> [int]
+//   pub fn tls13_cr_extensions_length(body: [int]) -> int
+//   pub fn tls13_cr_extensions_offset(body: [int]) -> int
+
+@pure
+pub fn tls13_cr_build(context: [int], extensions_concat: [int]) -> [int] {
+    let mut o: [int] = []
+    let cl = len(context)
+    o.push(cl & 0xFF)
+    let mut i = 0
+    while i < cl { o.push(context[i]); i = i + 1 }
+    let el = len(extensions_concat)
+    o.push((el >> 8) & 0xFF)
+    o.push(el & 0xFF)
+    i = 0
+    while i < el { o.push(extensions_concat[i]); i = i + 1 }
+    return o
+}
+
+@pure
+pub fn tls13_cr_context_length(body: [int]) -> int {
+    return body[0] & 0xFF
+}
+
+@pure
+pub fn tls13_cr_context(body: [int]) -> [int] {
+    let n = tls13_cr_context_length(body)
+    let mut c: [int] = []
+    let mut i = 0
+    while i < n { c.push(body[1 + i]); i = i + 1 }
+    return c
+}
+
+@pure
+pub fn tls13_cr_extensions_length(body: [int]) -> int {
+    let cl = tls13_cr_context_length(body)
+    return ((body[1 + cl] & 0xFF) << 8) | (body[2 + cl] & 0xFF)
+}
+
+@pure
+pub fn tls13_cr_extensions_offset(body: [int]) -> int {
+    return 3 + tls13_cr_context_length(body)
+}
