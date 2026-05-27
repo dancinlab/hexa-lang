@@ -28,7 +28,7 @@ flip 캠페인이 안전 quick-win 을 고갈시킨 뒤 남는 진짜 바닥의 
 |------|------|---------|
 | **F1** perf-floor (hxflash/hxlayer/hxvdsp) | 🔴 **TERMINAL** | 측정 285x ML 회귀 → irreducible perf-floor (`F1-perf-floor.txt`) |
 | **F2** vendor/OS-ABI FFI (19 layer-③) | 🔴 **TERMINAL** | audit #1809 — 순수 로직 0, ABI 경계 (`F2-vendor-ffi.txt`) |
-| **F3** runtime-core (640/548 fn · self-emit 20/640 shadow · **12 ACTIVATED** = memset+11 leaf · class-A reloc 경로 PROVEN) | 🟠 **LIVE FRONTIER** | genuinely-portable · Path-A 템플릿 스케일아웃 → reloc-free leaf 12 LIVE-주입 (HEXA_RT_SELFEMIT 가드 · default 0-extern 보존 byte-identical) · 4 SKIP (C 대상 부재) · class-A reloc 인프라 COMPLETE+PROVEN (arena adrp+add link+run rc=0 · 실 blocker=per-primitive PORT) · HARD-phase ~620 fn expert serial |
+| **F3** runtime-core (640/548 fn · self-emit 20/640 shadow · **12 ACTIVATED** = memset+11 leaf · class-A reloc 경로 PROVEN) | 🟠 **LIVE FRONTIER** | genuinely-portable · Path-A 템플릿 스케일아웃 → reloc-free leaf 12 LIVE-주입 (HEXA_RT_SELFEMIT 가드 · default 0-extern 보존 byte-identical) · 4 SKIP (C 대상 부재) · class-A reloc 인프라 COMPLETE+PROVEN (arena adrp+add link+run rc=0 · 실 blocker=per-primitive PORT) · class-D(~350-450 fn HARD-본체) = struct-repr(NaN-box 아님 · 미션전제 정정) · 3-분할 sub-plan 특정 · 단일-increment no-go(struct-return ABI emit 부재+접근자 매크로 슬롯無+rt#38 선행) · HARD-phase ~620 fn expert serial |
 | **F4** sha256 (exec_argv_sha256.c) | 🟢 **RESOLVED→F3** | runtime.c `#include` 조각 · 포팅 타깃 FIPS-검증 (`F4-sha256.txt`) |
 | **F5** boot-asm (3 `.s`) | 🔴 **TERMINAL** | audit #1810 — vector-table 데이터 섹션, RFC 063/064 gated (`F5-boot-asm.txt`) |
 | **F6** bootstrap seed (hexa_cc.c) | 🔴 **TERMINAL** | irreducible bootstrap FLOOR (B9.8) |
@@ -443,6 +443,104 @@ runtime.c 조각이라 F3 로 fold (mis-split 해소). **F3 만이 진짜 open**
     "needs reloc infra" → **"infra DONE + PROVEN · 남은 건 per-primitive PORT (대개 D 와 결합)"**
     으로 정밀 재분류. 다음 expert increment = runtime.c 의 reloc-bound clean-leaf 슬롯을 식별/생성
     (또는 arena 를 live 배선) 후 위 5-step PORT 레시피로 1-PR 활성화.
+
+  - 🔑 **CLASS-D RECIPE — HexaVal-repr 생성자/접근자 frontier (~350-450 fn · HARD FLOOR 본체)
+    (2026-05-28 go/no-go 조사 · 결론 = **단일-increment self-emit 불가 · 경로 B(call-site
+    inline emit) 본체 인프라 선행 · "~350-450 vague" → 아래 구조적 sub-plan 으로 특정**)**
+
+    **핵심 발견 ① — LIVE runtime 의 HexaVal 은 NaN-box 가 아니라 16-byte tagged-union struct**:
+    조사 전제(미션)는 "NaN-boxed 64-bit value · `hexa_int`/`hexa_tag` 가 shift/mask pure bit-op"
+    였으나, **실제 live repr 은 그렇지 않다.** `self/runtime.h` L79-92 의 `HexaVal` =
+    `struct { HexaTag tag; union { int64_t i; double f; int b; char* s; HexaArr* …; }; }` —
+    `sizeof(HexaVal) == 16` (4-B enum tag + 4-B pad + 8-B union; clang `/tmp/sz` 실측). 접근은
+    전부 **struct 필드 access** (`HX_TAG(v)=(v).tag` · `HX_INT(v)=(v).i` · `HX_STR(v)=(v).s`,
+    runtime.h L151-163 매크로) — shift/mask 가 아님.
+    - **NaN-box 는 design-only · 미배선**: `self/hexa_nanbox.h` (229 L · `typedef uint64_t HexaV`)
+      에 진짜 NaN-box (`hexa_nb_int32`/`hexa_nb_tag`/`hexa_nb_kind`/`hexa_nb_as_*` · 28 `static
+      inline`) 가 있으나, 파일 헤더 L4-6 가 명시: **"NOT yet wired into runtime.c — encoding
+      specification ... to be adopted in rt#38-B"**. L51-54: "rt#38-B will redefine
+      `typedef uint64_t HexaVal;` ... ~2100 sites across 6 C files". 즉 NaN-box 전환(rt#38)은
+      **별도 미착수 multi-session 리팩터**이고, F3 의 현 class-D 는 **struct repr** 을 대상으로 함.
+    - **함의**: 미션이 가정한 "pure-bitop class-D leaf" (`hexa_tag` shift/mask 등) 는 **현
+      코드베이스에 존재하지 않는다**. NaN-box 의 `hexa_nb_tag`(`(v&MASK)>>47`) 가 그 형태지만
+      header-only `static inline` (named external symbol 0개 · §아래 ③) + 미배선이라 활성화 슬롯이
+      애초에 없음. struct repr 의 `HX_TAG` 도 매크로(함수 아님) → 동일하게 슬롯 없음.
+
+    **핵심 발견 ② — class-D 의 "가장 단순한" primitive 도 struct-return 라 leaf-ABI 와 단절**:
+    가장 단순한 class-D 후보 = `hexa_int`/`hexa_float`/`hexa_bool`/`hexa_void` (runtime_core.c
+    L1281-1284 · 각 1-line `return (HexaVal){.tag=…, .i=…};`). 이들은 **외부 심볼**(`static`
+    아님 → 활성화 슬롯 ✓) 이지만 **16-byte struct 를 값으로 반환** → ARM64 AAPCS 에서 `x0:x1`
+    **레지스터 페어** 반환 (clang `-S` 실측: `hexa_int` = `mov x1, x0` / `mov x0, #0` / `ret`
+    — x0=tag, x1=payload). 이는 현 self-emit leaf 16종의 ABI (단일 x0 반환)와 **근본적으로 다른
+    호출 규약**. self-emit 카탈로그(`self/codegen/runtime_arm64.hexa` · 30 `fn rt_*`) 의 **모든**
+    함수가 코멘트에 "**no HexaVal touch**" 로 명시 — struct-return 또는 HexaVal-aware emit 은
+    **카탈로그에 1개도 없음**. 즉 가장 단순한 class-D 조차 신규 emit capability 필요.
+
+    **핵심 발견 ③ — class-D 활성화 슬롯 분류 (named-external vs inline-only)**:
+    Path-A (link-override) 는 ① 명명된 external 심볼 + ② self-emittable 바이트 둘 다 필요. class-D 는
+    슬롯 유형이 갈림:
+    - **(D-ctor) 생성자 = 명명 external 함수 ✓ 슬롯 있음** — `hexa_int`/`hexa_float`/`hexa_bool`/
+      `hexa_void`/`hexa_str`/`hexa_enum_str`/`hexa_array_new`/… (runtime_core.c 에 `HexaVal
+      hexa_*(…)` 정의). Path-A link-override 슬롯은 **열려 있으나** struct-return ABI emit
+      (x0:x1 페어 + tag 상수 + payload 배치) 인프라가 self-emit 카탈로그에 부재 (발견 ②).
+    - **(D-accessor) 접근자/술어 = 매크로 inline-only ✗ 슬롯 없음** — `HX_TAG`/`HX_INT`/`HX_STR`/
+      `HX_IS_INT`/`HX_IS_STR`/… (runtime.h L151-163 `#define`) 는 **명명 함수 0개** → ld
+      override 불가 (rt_popcount/`__builtin_*` inline 과 동일 신분, B9.6a-7 SKIP 4 와 동류).
+      이들은 **경로 B (call-site inline emit) 로만** 활성화 가능 — codegen 이 `(v).tag` field
+      load 를 self-emit 바이트로 직접 방출. NaN-box `hexa_nb_*` 도 전부 `static inline` →
+      동일하게 inline-only.
+    - **(D-deref) 역참조/복합 = struct-ABI + heap 결합** — `hexa_str`(intern + strdup) ·
+      `hexa_array_push`(realloc) · `valstruct_*`(malloc + field stores) · `hexa_struct_pack_map`
+      등은 struct-return **AND** malloc/arena/deref → class-B(call-bound)·E(GC) 와 결합 = 가장
+      깊음.
+
+    **pure-bitop vs alloc-coupled 분할 (struct repr 기준 · 미션 축 재정의)**:
+    미션의 "pure-bitop vs alloc-coupled" 축은 NaN-box 전제였으나, struct repr 에서는 아래로 재맵:
+    - **(분할 1) struct-build, no-alloc** (~10-20 fn) — `hexa_int`/`hexa_float`/`hexa_bool`/
+      `hexa_void`/`hexa_char`/`hexa_enum_str` 등. malloc/deref 無 · 순수 16-B struct compose.
+      **이론상 가장 단순하나** struct-return ABI emit 필요 (발견 ②) → leaf-ABI 와 단절.
+    - **(분할 2) field-load 접근자** (~30-50 fn 상당의 매크로) — `HX_TAG`/`HX_INT`/`HX_IS_*`.
+      `(v).tag` 단일 필드 load + (술어면) compare. **연산 자체는 사소**하나 inline-only(슬롯 ✗)
+      라 경로 B 만 가능.
+    - **(분할 3) alloc-coupled** (~300-400 fn · 본체) — `hexa_str`/`hexa_array_*`/`valstruct_*`/
+      map ops. struct-return + malloc/arena/realloc/deref → class-B/E 와 얽힘 = 최후.
+
+    **inline-vs-link 판정 (per-class-D)**:
+    - 생성자(D-ctor): **link-override 가능 (슬롯 ✓)** 단 struct-return emit 인프라 선행. 경로 A
+      변형 (struct-ABI 지원 추가) 또는 경로 B 둘 다 후보.
+    - 접근자/술어(D-accessor): **link-override 불가 (매크로 · 슬롯 ✗) → 경로 B 전용**.
+    - 복합/역참조(D-deref): **경로 B + class-B/E 인프라** (calling-conv + GC) 동시 선행.
+
+    **왜 단일 foreground increment 로 self-emit/activate 불가 (honest no-go)**:
+    1. **struct-return ABI emit 부재** — self-emit 카탈로그에 16-B struct 를 x0:x1 로 구성/반환하는
+       emit 가 0개. 가장 단순한 `hexa_int` 조차 이 신규 capability 없이 바이트를 못 만든다.
+    2. **접근자는 매크로 → 활성화 슬롯 자체가 없음** — Path-A(link-override)가 원천 불가, 경로 B
+       (call-site inline emit · codegen C-transpile + native 백엔드 양쪽 신규 분기 · RUNTIME.floor.md
+       경로 B 항목 L251-256) 의 본체 인프라가 선행. 이는 "큰 인프라" 로 이미 분류됨.
+    3. **repr 레이아웃 전체를 codegen 이 알아야** (PHASE-BOUNDARY MAP L177) — tag enum 값 · union
+       오프셋 · struct 크기를 emit 측이 hard-code → repr 변경(rt#38 NaN-box 전환)과 충돌 위험.
+       NaN-box 전환이 선행되면 class-D 가 pure-bitop leaf 로 붕괴(미션 가정이 그제서야 성립)하므로,
+       **class-D 의 올바른 순서 = rt#38 NaN-box 전환을 먼저 평가** (struct repr 에 self-emit 를
+       박으면 rt#38 때 전량 폐기). 이것이 class-D 를 "가장 마지막 · 가장 위험" 으로 두는 진짜 이유.
+
+    **per-primitive effort 추정 (class-D)**:
+    - **인프라 선행 (공통)**: struct-return ABI emit (경로 A 변형) 또는 call-site inline emit
+      (경로 B 본체) — codegen C-transpile + native 백엔드 양쪽 신규 emit 분기. **~1-2주 expert**
+      (B9.6a 본체 · 가장 위험). 또는 **rt#38 NaN-box 전환 선평가** (~2100 site · multi-session)
+      후 class-D 가 pure-bitop leaf 로 단순화되면 재평가.
+    - **인프라 후 (분할 1 생성자)**: ~10-20 fn · 인프라 green 후 각 ~0.5-1d (tag 상수 + payload
+      배치만 상이).
+    - **(분할 2 접근자)**: ~30-50 매크로 · 경로 B inline emit green 후 각 ~0.3d (단일 field load).
+    - **(분할 3 alloc-coupled)**: ~300-400 fn · class-B(calling-conv) + class-E(GC) 인프라
+      **동시** 선행 → class-D 단독 추정 무의미 (얽힘) · #1812 의 50-70 PR 추정의 본체.
+
+    **go/no-go 결론**: class-D self-emit/activate 는 **단일 increment 로 force 불가** (honest
+    no-go). 이유 = (1) 가장 단순한 생성자도 struct-return ABI emit 부재, (2) 접근자는 매크로라
+    link-override 슬롯 없음(경로 B 본체 선행), (3) repr-layout coupling 이 rt#38 NaN-box 전환과
+    충돌 — class-D 의 올바른 첫 수순은 **rt#38 (struct→NaN-box uint64) 전환을 먼저 평가**해
+    pure-bitop leaf 로 단순화할지 결정하는 것. 이번 조사는 "~350-450 vague" 를 **3-분할
+    (struct-build / field-load / alloc-coupled) + inline-vs-link 판정 + rt#38 선행 의존성** 의
+    구조적 sub-plan 으로 특정함. runtime.c 무변경 · 0-extern 중립 · regen/fixpoint 무위험 (doc-only).
 
 ### F4 — sha256 entangled
 
