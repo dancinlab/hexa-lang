@@ -2,6 +2,42 @@
 
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-27T18:13Z · 축 RTSC · RTSC19 · 수학 DFS — H3S/LaH10 realistic μ* fit-back + Morel-Anderson tension
+
+RTSC18 의 closed-negative 후속. full-AD 가 실측 Tc 도달하는 μ* 를 fit-back 으로
+추출 → Morel-Anderson μ_bare=0.3 가정과 비교 → honest tension 발견.
+
+- [x] **H3S fit-back**: full-AD(λ=2.0, ω_log=1300, ω̄₂=1950, **μ*=0.14**) → **202.4K** 🟢
+       (실측 203K @ 155 GPa, fit Δ < 1K)
+- [x] **LaH10 fit-back**: full-AD(λ=2.2, ω_log=1340, ω̄₂=2010, **μ*=0.11**) → **251.2K** 🟢
+       (실측 250K @ 170 GPa, fit Δ < 2K)
+- [x] **Morel-Anderson H3S** (μ_bare=0.3, E_F=10000, ω_ph=1300) → μ*=**0.186** 🟢
+       (vs fit-back 0.14, **+33% over**)
+- [x] **Morel-Anderson LaH10** (μ_bare=0.3, E_F=10000, ω_ph=1340) → μ*=**0.187** 🟢
+       (vs fit-back 0.11, **+70% over**)
+
+⟹ 결론 (honest model tension):
+   | system | fit-back μ* (실측 fit) | Morel-Anderson μ*_(μ_bare=0.3) | gap |
+   |---|---|---|---|
+   | H3S | **0.14** | 0.186 | +33% |
+   | LaH10 | **0.11** | 0.187 | +70% |
+
+   → **μ_bare=0.3 standard 가정이 실측과 안 맞음** (over-estimate). 두 가설:
+   (a) 실제 μ_bare 더 작음 (high-pressure hydride 의 강한 e-ph screening,
+       μ_bare~0.2 추정), or
+   (b) Morel-Anderson Tolmachev log 가 high-ω_ph regime 에서 부적합 →
+       Eliashberg solver (numerical, deferred) 필요.
+
+   RTSC10 의 표준 μ_bare=0.3 가정도 honest 재검토 대상. RTSC paper 후속 = (a)
+   μ_bare scan 으로 hydride family 의 e-ph screening 정량 또는 (b) Eliashberg
+   spectral function α²F 의 direct fitting (Carbotte 1990 RMP).
+
+verify (inline, --no-absorb):
+  allen_dynes_full 2.0 1300 1950 0.14 → 202.426  🟢 (H3S fit-back)
+  allen_dynes_full 2.2 1340 2010 0.11 → 251.210  🟢 (LaH10 fit-back)
+  morel_anderson_mustar 0.3 10000 1300 → 0.186097  🟢 (H3S Morel-Anderson)
+  morel_anderson_mustar 0.3 10000 1340 → 0.187152  🟢 (LaH10 Morel-Anderson)
+
 ## 2026-05-27T18:05Z · 축 RTSC · RTSC18 · 수학 DFS — 실측 hydride (H3S 203K, LaH10 250K) Allen-Dynes fit
 
 RTSC11+17 의 깊이 확장. 실측된 두 high-Tc hydride (H3S Drozdov 2015 Tc=203K @ 155
