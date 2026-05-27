@@ -1,0 +1,89 @@
+// HEXA Standard Library — crypto/blowfish self-test
+// @ci_gate
+//
+// Known-answer tests for the pure-hexa Blowfish port + bcrypt_pbkdf.
+//
+// Blowfish ECB vectors — Eric Young's SSLeay/OpenSSL bf_ecb test set
+// (the canonical reference vectors, key + plaintext + ciphertext all
+// 8 bytes / 64 bits):
+//   key=0000000000000000 pt=0000000000000000 ct=4EF997456198DD78
+//   key=FFFFFFFFFFFFFFFF pt=FFFFFFFFFFFFFFFF ct=51866FD5B85ECB8A
+//   key=3000000000000000 pt=1000000000000001 ct=7D856F9A613063F2
+//
+// A vector's 8 key bytes map to the [int] key array; the 64-bit block is
+// split into two big-endian 32-bit halves (xl = high word, xr = low word).
+
+use "stdlib/crypto/blowfish"
+
+let mut pass = 0
+let mut total = 0
+
+fn ck(name: string, got: int, want: int) {
+    total = total + 1
+    if got == want { pass = pass + 1 } else {
+        println("FAIL " + name + " got=" + to_string(got) + " want=" + to_string(want))
+    }
+}
+
+// Run one ECB known-answer vector: 8 key bytes, plaintext (xl,xr), expected (xl,xr).
+fn ecb_vec(name: string, key: [int], pxl: int, pxr: int, exl: int, exr: int) {
+    let ctx = blowfish_key_schedule(key)
+    let enc = blowfish_encrypt_block(ctx, pxl, pxr)
+    ck(name + ".enc.hi", enc[0], exl)
+    ck(name + ".enc.lo", enc[1], exr)
+    // round-trip: decrypt(encrypt(pt)) == pt
+    let dec = blowfish_decrypt_block(ctx, enc[0], enc[1])
+    ck(name + ".rt.hi", dec[0], pxl)
+    ck(name + ".rt.lo", dec[1], pxr)
+}
+
+fn main() {
+    // Vector 1: all-zero key + plaintext.
+    ecb_vec("v0",
+        [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+        0x00000000, 0x00000000,
+        0x4EF99745, 0x6198DD78)
+
+    // Vector 2: all-ones key + plaintext.
+    ecb_vec("v1",
+        [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
+        0xFFFFFFFF, 0xFFFFFFFF,
+        0x51866FD5, 0xB85ECB8A)
+
+    // Vector 3: SSLeay vector with distinct key/plaintext bytes.
+    ecb_vec("v2",
+        [0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+        0x10000000, 0x00000001,
+        0x7D856F9A, 0x613063F2)
+
+    // bcrypt_pbkdf smoke: deterministic, correct length, non-trivial output.
+    let pw = [0x70, 0x61, 0x73, 0x73]              // "pass"
+    let salt = [0x73, 0x61, 0x6C, 0x74, 0x73, 0x61, 0x6C, 0x74,
+                0x73, 0x61, 0x6C, 0x74, 0x73, 0x61, 0x6C, 0x74]  // "saltsaltsaltsalt"
+    let dk = bcrypt_pbkdf(pw, salt, 4, 48)
+    ck("bcrypt.len", len(dk), 48)
+    // Determinism: a second call with identical inputs must match byte-for-byte.
+    let dk2 = bcrypt_pbkdf(pw, salt, 4, 48)
+    let mut all_eq = 1
+    let mut i = 0
+    while i < len(dk) {
+        if dk[i] != dk2[i] { all_eq = 0 }
+        i = i + 1
+    }
+    ck("bcrypt.deterministic", all_eq, 1)
+    // Output must not be all-zero (would indicate the KDF never ran).
+    let mut nonzero = 0
+    i = 0
+    while i < len(dk) {
+        if dk[i] != 0 { nonzero = 1 }
+        i = i + 1
+    }
+    ck("bcrypt.nonzero", nonzero, 1)
+    // Bad inputs return [] (the keyfile's `type_of != array` guard still
+    // sees an array, but len 0 → mis-decrypt rather than crash).
+    ck("bcrypt.bad_rounds", len(bcrypt_pbkdf(pw, salt, 0, 48)), 0)
+    ck("bcrypt.bad_keylen", len(bcrypt_pbkdf(pw, salt, 4, 0)), 0)
+
+    println("blowfish self-test: " + to_string(pass) + "/" + to_string(total))
+    if pass == total { println("PASS") } else { println("FAILED") }
+}
