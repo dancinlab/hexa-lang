@@ -2170,10 +2170,17 @@ correctness (per M10/M16; see cycle-69 catalog + PR #251/#426 analysis)
 
 ## Phase 3 — Tier-C application primitives (16+ cycles OR deferred)
 
-- [~] crypto bulk: chacha20 ✓(RFC 8439) · sha256 ✓(pre-existing) · x25519 ✓(RFC 7748 3/3) · sha512 ✓(FIPS180-4) ·
-      ed25519 ◐(stdlib/crypto/ed25519.hexa parse-clean, TweetNaCl Edwards port over verified
-      x25519 field arith + sha512; runtime KAT perf-pending >150s). crypto-bulk: 4.5/5
-- [ ] networking full: TLS 1.3 in hexa? (very heavy)
+- [x] crypto bulk: chacha20 ✓(RFC 8439) · sha256 ✓ · x25519 ✓(RFC 7748) · sha512 ✓(FIPS180-4) ·
+      ed25519 ✓(RFC 8032 KAT-clean #1539 — fixed _pack25519 cswap inversion + _unpackneg
+      den^3) · poly1305 ✓(RFC 8439 §2.5.2) · chacha20poly1305 AEAD ✓(§2.8.2) · aes128/aes256 ✓
+      (FIPS-197) · aes128gcm/aes256gcm ✓(NIST SP800-38D). crypto-bulk COMPLETE (5/5 + AEADs).
+- [~] networking full: TLS 1.3 in hexa — protocol byte format + crypto derivation COMPLETE
+      (2026-05-27 segment 2, ~56 PRs): all 9 handshake messages build+parse, all 17 standard
+      extensions, full key-schedule + secret tree (early→handshake→master · traffic · exporter ·
+      resumption · binder · Finished · CertVerify), 3 AEAD cipher suites, SHA-256/384/512 ×
+      HMAC/HKDF, ASN.1 DER + X.509 Ed25519 chain validation. REMAINING: socket-driven handshake
+      state-machine loop (IO event integration, multi-PR) + RSA/ECDSA-P256 cert sig verify
+      (P-256 algorithm on branch feat-p256-verify, perf-pending Solinas/Barrett).
 - [x] GPU kernels (hxcuda_*.cu, hxblas_*) — **vendor C ABI** = FFI terminal state
       per `Policy DECIDED 2026-05-26 Option A` (below). Layer ③ irreducible-external
       interface — FFI is the CORRECT closure, not a violation. CUDA driver
