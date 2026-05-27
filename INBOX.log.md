@@ -14,7 +14,7 @@
 
 | 모듈 | macOS arm64 | Linux C 백엔드 |
 |---|---|---|
-| `self/ml/tokenizer_bpe` (chr→from_char_code) | ✅ **FIXED (#1556)** | ✅ FIXED (#1556) — `build_byte_to_char` 가 `from_char_code(256+i)` 사용으로 UTF-8 'Ġ' 정확 생성, chr 절단 결함 1-line 해소 |
+| `self/ml/tokenizer_bpe` (chr→from_char_code) | ⚠ **encode PARTIAL (#1556 forward only)** | ⚠ encode PARTIAL — #1556 이 forward(`build_byte_to_char`) 만 fix, **decode 측 새 결함**: bpe_decode 의 byte-indexed `slice(j,j+1)` 가 multi-byte 'Ġ' 못 받음 → 'Ġ' literal 출력 (실 Qwen 측정, 본 entry 아래 #1556 측정 섹션) |
 | `self/ml/qwen_bpe` (from_char_code UTF-8-aware, 1030L) | **Segfault 11** (mini, toy fixture vocab 파싱 #200 직후) | 7MB 실 tokenizer.json 240s 타임아웃 (perf/hang) |
 
 **근본원인 (chr 결함, tokenizer_bpe 측) ✅ FIXED #1556**: `self/runtime.c:5336` `hexa_chr_byte` 가 `s[0] = (char)(code & 0xFF)` 로 명시적 byte 절단 → `chr(288) == chr(32)` 실측. tokenizer_bpe 의 `build_byte_to_char` 가 GPT-2 byte-level 인코딩(byte 32 → codepoint U+0120 'Ġ', 2-byte UTF-8)을 위해 `chr(256+i)` 호출하나 절단으로 collapse → 256 distinct char 불가 → 공백/비-ASCII 손상. **#1556 1-line root-cause fix**: tokenizer_bpe 가 `chr(256+i)` → `from_char_code(256+i)` (UTF-8-aware 인코더, 5304+) 사용 → 256 distinct char 정확 생성. chr 자체는 byte-only 유지 (blast radius 0). runtime 변경 0, tokenizer 1줄.
@@ -25,6 +25,40 @@
 3. **`qwen_bpe` 디버그** (path 2 잔존) — vocab #200 직후 SIGSEGV 메모리 안전성 (Mac arm64 실측) + Linux 실-스케일 perf (`get_merge_rank` linear-scan, 151388 merges = O(n²) 추정). path-fix 된 t53 (post-#1549) 로 재현 가능. tokenizer_bpe 가 #1556 으로 unblock 됐으므로 qwen_bpe 는 alt-path 로 강등 (canonical Qwen tokenizer 가 둘 중 어느 쪽인지 maintainer 결정).
 
 **다음 검증** (#1556 land 후 ③ 1/2 unblock — 실 Qwen round-trip 테스트 라운드 권장): mini/ubu-2 에서 path-fix된 t53 (toy fixture) + 실 Qwen tokenizer.json round-trip → 공백 round-trip TRUE 확인 시 ③ 완전 해소.
+
+## #1556 실 Qwen round-trip 측정 (2026-05-27, ubu-2) — ⚠ encode 측만 fix, decode 측 새 결함 노출
+
+`#1556` 의 `chr(256+i)` → `from_char_code(256+i)` patch 를 ubu-2 wt-3081fe78(local cache, pre-#1556 origin) 에 수동 적용 + regen + main build/hexat swap + Qwen real round-trip 측정:
+
+```
+[tokenizer_bpe] loaded 151387 merges, 151643 vocab in 196.192 ms  ✅ load OK
+vocab_size = 151643                                                ✅
+encode "consciousness emerges from cells" → n_toks = 5             ✅ encode OK
+decoded = [consciousnessĠemergesĠfromĠcells]                       ❌ 'Ġ' literal
+TOKENIZER_BPE-1556-ROUNDTRIP: FAIL
+```
+
+**진단 (decode 측 새 결함)**: `#1556` 은 `build_byte_to_char` (forward) 만 fix — encode 측 byte 32 → 'Ġ'(U+0120, UTF-8 2-byte) 매핑은 정확. 그러나 `bpe_decode` (`self/ml/tokenizer_bpe.hexa:422+`) 의 loop:
+
+```hexa
+let c = token_str.slice(j, j + 1)               // ← BYTE-INDEXED slice
+let byte_val = bpe_char_to_byte(char_to_byte, c)
+if byte_val >= 0 { text = text + chr(byte_val) }
+else { text = text + c }                         // ← fallthrough: raw bytes preserved
+```
+
+`slice(j, j+1)` 가 **byte-indexed** (hexa string 모델 byte-native, HX_STRLEN/slice 전부 byte 단위). 'Ġ' 는 0xC4 0xA0 (2 bytes). j=0 → slice = 1-byte "0xC4" → `char_to_byte` table 의 entries(`from_char_code(288)` = full 'Ġ' = 2-byte string)와 byte-equal 비교 실패 → -1 → else 분기 `text = text + c` 로 raw byte (0xC4) 추가. j=1 → 0xA0 동일. 결과: 'Ġ' 의 2-byte 가 그대로 text 에 누적 → 출력 시 'Ġ' literal 표시.
+
+즉 **#1556 의 forward (encode)는 fix**, **decode 측 multi-byte UTF-8 char iteration 결함**은 별개로 잔존. 이전 chr 절단(`!`)이 'Ġ' literal 로 바뀌었을 뿐 round-trip 여전히 깨짐.
+
+**추가 fix 경로 (#1557 후보)**:
+1. **`bpe_decode` codepoint-aware iteration** — `slice(j, j+1)` 대신 UTF-8 byte-pattern 검사 (b0<0x80=1B / 0xC0-0xDF=2B / 0xE0-0xEF=3B / 0xF0+=4B) 로 multi-byte char 묶기. 단 모든 GPT-2 char(U+0080..U+0143) 가 2-byte 라 분기 단순.
+2. **`char_to_byte` byte-keyed lookup 보강** — 각 multi-byte char 의 *첫 byte* 를 키로 추가 entry (단 충돌 가능, 복잡).
+3. **`bpe_decode` 전체 raw-byte 출력** — token_str 자체가 GPT-2-encoded UTF-8 이므로, char-to-byte 역매핑 대신 직접 byte 스트림 처리 후 일괄 UTF-8 decode.
+
+(1) 이 가장 자연스러움 — 4-5줄 추가. blast radius 0 (decode loop 내부 한정).
+
+**측정 evidence (실 Qwen, 151643 vocab, ubu-2 2026-05-27)**: encode 측 5 tokens 정확 생성하나 decode 시 'Ġ' 그대로 — 이전 chr 절단 결함(`!`) 과 별개의 새 결함 노출. ③ 완전 해소엔 decode 측 추가 fix 필요. g73 honest: #1556 은 **encode side 만 fix**, round-trip 미해결.
 
 **참조**: anima #1517 (flame-P2b origin demand-signal · DECODER MoE-fresh scale-gate) · anima #1537 (loader+가드) · hexa-lang #1527 #1533 #1549 (선결 fix landed) · hexa-lang **#1556** (③ 1-line root-cause fix) · `GPU.md` flame-P2b 라인.
 
