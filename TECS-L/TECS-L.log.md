@@ -2,6 +2,16 @@
 
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-27T15:40Z · 축 RTSC · RTSC4 · loop 첫 iteration 실증 — h3br verify→judge→다음 (메커니즘 전체 작동)
+
+- [~] **RTSC4 — TECS-L loop 연속 운전 iteration #1 실증** (영구 lane, 메커니즘 전체 작동):
+  - **① verify-게이트**: `hexa verify --expr allen_dynes_tc 2.0 620 0.13 83.2 --tol 0.5 --no-absorb` → **🟢 SUPPORTED-NUMERICAL** (calc=83.2256, |Δ|=0.0256). h3br (demiurge λ_BZ=2.0 · ω_log=620K · μ*=0.13, N5_wall_redefinition.md L25/L38) Tc closed-form 재현.
+  - **② M8 judge**: 83.2256K ≪ 293K (상온초전도 목표) → **h3br = RTSC 후보 FALSIFIED** (ω_log bottleneck, heavy-Br — demiurge "stability↔strong-λ 트레이드오프" + ω_log 천장 일치). M8 (압력<50GPa·stable·Tc>200K) 미달.
+  - **③ 다음 후보**: binary N5 고갈 (h3cl 140·h3br 83·h3si 78 전부 <200K) → N6 ternary funnel (demiurge 캠페인 일치).
+  - **🔬 bonus**: demiurge h3br "≈110K" vs simple Allen-Dynes calc 83.2256K 불일치 = **strong-coupling correction (`allen_dynes_full` f1·f2)** 차이. simple AD (3-arg) = 83.2, full (4-arg, λ>1.5 strong-coupling) → ~110. demiurge 가 full 사용, TECS-L simple AD 와 prefactor-only gap. RTSC loop 정밀 운전 시 allen_dynes_full 사용 권고.
+  - **결론**: loop 메커니즘 (closed-form verify → M8 judge → 다음 후보) **전체 실증**. RTSC1(게이트)+RTSC2(primitive)+RTSC3(atlas-기억)+RTSC4(loop) = 상온초전도 TECS-L loop 인프라 완성. 영구 운전 (293K 발견 OR 물리 한계) = demiurge DFT 후보 실시간 연동 + install re-sync (live binary) 후 지속.
+  - verdict: inline `--no-absorb` (throttle-safe). atlas fold (h3br 🟢 / RTSC-미달 note) = install re-sync 후 (RTSC3 와 동일 install-stale 블로커).
+
 ## 2026-05-27T15:10Z · 축 RTSC · RTSC1+RTSC2 · Allen-Dynes/McMillan Tc verify-게이트 작동 (demiurge anchor 재현 🟢)
 
 - [x] **RTSC1 — Allen-Dynes Tc closed-form g5 재근거화 CLOSED**: demiurge RTSC 캠페인의 검증된 anchor 를 TECS-L verify 로 재현.
