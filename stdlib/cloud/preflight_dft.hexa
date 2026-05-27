@@ -1,0 +1,174 @@
+// HEXA Standard Library — cloud/preflight_dft
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// DFT/HPC preflight v2 — workload-axis sibling of stdlib/cloud/preflight.hexa
+// (which targets LLM training). This file implements RFC 091 §2.3 closed-form
+// MPI rank sweet-spot + per-rank memory estimate for plane-wave DFT (Quantum
+// ESPRESSO style) workloads.
+//
+// Frontier 18-list #18 (RUNTIME.md): "preflight v2 DFT/HPC 축 (RFC 091 witness)
+// — 외부 자원 의존 (DFT/MD 메모리 산정 + rent 전 GPU vs CPU-HPC 판단 자동화)."
+//
+// RFC reference: docs/rfc/rfc_drafts_2026_05_24/rfc_091_hexa_cloud_preflight_v2_dft_hpc.md
+// (PR #653 — 2026-05-23). This PR is the **closed-form half**: pure-formula
+// memory + rank estimators with no IO. The CLI integration + WorkloadKind
+// enum sweep + symptom-diff watcher (§2.4 / §2.5) is a sibling follow-up.
+//
+// Surface (3 fn · 2 struct):
+//   tls_dft_rank_memory_gib(spec: DftSpec) -> int  — per-rank memory estimate in GiB
+//   tls_dft_mpi_sweet_spot(spec, node) -> DftRankRecommend
+//   tls_dft_speedup_at_rank(serial_fraction_pct, np) -> int  — Amdahl in basis-points (×100)
+//
+// Notes on integer-only arithmetic:
+//   hexa-lang stdlib favors integer arithmetic where physically reasonable;
+//   serial_fraction is encoded in basis-points (15.0% = 1500 bp) and speedups
+//   are returned in basis-points (1.0× = 10000 bp). Memory is in MiB internally
+//   and rounded up to GiB at the boundary.
+
+// Plane-wave DFT workload descriptor — minimum fields for RFC 091 §2.3 closed-form.
+// All fields are integer (atom count, basis count, k-points, spin channels).
+struct DftSpec {
+    n_atoms:        int,  // number of atoms in unit cell
+    n_basis_pw:     int,  // plane-wave basis size (G-vector count at Ecut)
+    n_kpoints:      int,  // irreducible k-point count after symmetry reduction
+    n_spin:         int,  // 1 (closed-shell) or 2 (collinear spin-polarized)
+    n_electrons:    int,  // electron count (informational)
+    cutoff_ry:      int,  // plane-wave kinetic-energy cutoff in Rydberg (e.g. 80)
+    method_id:      int   // 0=SCF, 1=phonon-Sternheimer, 2=NSCF, 3=PHonon-DFPT
+}
+
+// Node descriptor — total memory budget for the rank sweet-spot computation.
+struct DftNodeSpec {
+    total_mem_gib: int,  // node memory budget (single MPI node)
+    n_cpu_cores:   int,  // physical core count
+    has_gpu:       int,  // 0 / 1 — informational; rank-sweet-spot is CPU-MPI focused
+    gpu_mem_gib:   int   // when has_gpu=1, per-GPU memory
+}
+
+// Recommendation returned by tls_dft_mpi_sweet_spot.
+struct DftRankRecommend {
+    kind:              str,   // ok / too-few-ranks / mem-bound-zero / serial-only
+    recommended_np:    int,   // sweet-spot MPI rank count
+    upper_by_atoms:    int,   // RFC 091 §2.3 step 1 — atom-count upper bound
+    upper_by_mem:      int,   // step 2 — memory-budget upper bound
+    per_rank_mem_gib:  int,   // step 2 — estimated per-rank memory (GiB)
+    efficiency_bp:     int,   // step 4 — Amdahl efficiency at recommended_np, basis-points
+    amdahl_limit_bp:   int    // asymptotic 1 / serial_fraction in basis-points (e.g. 6667 for 15%)
+}
+
+// Closed-form per-rank memory estimate (GiB), plane-wave DFT.
+//
+// Heuristic derived from QE empirical fits + RFC 091 §1.1 cah6 cost mechanism:
+//   - SCF wavefunction memory dominates: ~ 16 bytes (complex double) × n_basis ×
+//     n_bands × n_kpoints × n_spin, where n_bands ≈ n_electrons (occupied + buffer).
+//   - Sternheimer/DFPT adds a 6× multiplier (3 cartesian × 2 dual response vectors).
+//   - Add a 1.3× safety overhead for FFT scratch buffers + diagonalizer workspace.
+//
+// Output: ceil(memory_mib / 1024), minimum 1.
+@pure
+pub fn tls_dft_rank_memory_gib(spec: DftSpec) -> int {
+    // bands ≈ n_electrons rounded up to even (closed-shell) — minimum 8 for tiny cells.
+    let mut n_bands = spec.n_electrons
+    if n_bands < 8 { n_bands = 8 }
+    // wavefunction bytes per (basis × band × k × spin): 16 (complex double).
+    let mut bytes = 16 * spec.n_basis_pw
+    bytes = bytes * n_bands
+    bytes = bytes * spec.n_kpoints
+    bytes = bytes * spec.n_spin
+    // DFPT response-vector multiplier (3 cartesian × 2 dual).
+    if spec.method_id == 1 { bytes = bytes * 6 }
+    if spec.method_id == 3 { bytes = bytes * 6 }
+    // 1.3× FFT scratch + diagonalizer workspace (encoded as +30%).
+    bytes = bytes + bytes / 3
+    // Bytes → MiB (round up).
+    let mib = (bytes + 1048575) / 1048576
+    let gib = (mib + 1023) / 1024
+    if gib < 1 { return 1 }
+    return gib
+}
+
+// Amdahl speedup at np ranks (basis-points: 10000 = 1.0×).
+// speedup(np) = 1 / (s + (1-s)/np) ; s = serial_fraction_pct / 100.
+@pure
+pub fn tls_dft_speedup_at_rank(serial_fraction_pct: int, np: int) -> int {
+    if np < 1 { return 10000 }
+    if serial_fraction_pct <= 0 { return np * 10000 }
+    // s_bp = serial_fraction in basis-points (e.g. 15 pct → 1500 bp)
+    let s_bp = serial_fraction_pct * 100
+    // 1.0 in basis-points = 10000.
+    // denom_bp = s_bp + (10000 - s_bp) / np
+    let denom_bp = s_bp + (10000 - s_bp) / np
+    if denom_bp <= 0 { return 0 }
+    // speedup = 10000 / (denom_bp / 10000) = 10000 * 10000 / denom_bp
+    return 100000000 / denom_bp
+}
+
+// RFC 091 §2.3 MPI sweet-spot — combine atom + memory upper bounds + Amdahl efficiency.
+// Reference: 7-atom QE phonon hit comm-bound deadlock @ np=16, sweet spot @ np=8.
+@pure
+pub fn tls_dft_mpi_sweet_spot(spec: DftSpec, node: DftNodeSpec) -> DftRankRecommend {
+    // Step 1 — atom-count upper bound. Heuristic: ≥ 1 atom per rank.
+    let upper_by_atoms = spec.n_atoms
+    // Step 2 — per-rank memory bound.
+    let per_rank = tls_dft_rank_memory_gib(spec)
+    let upper_by_mem = node.total_mem_gib / per_rank
+    // Step 3 — combined upper bound.
+    let mut upper = upper_by_atoms
+    if upper_by_mem < upper { upper = upper_by_mem }
+    // Step 4 — Amdahl serial fraction. Empirically 15% for QE Sternheimer; ~5% for
+    // ground-state SCF; ~20% for NSCF band-structure. Encoded as percent integer.
+    let mut serial_pct = 15
+    if spec.method_id == 0 { serial_pct = 5 }
+    if spec.method_id == 2 { serial_pct = 20 }
+    if spec.method_id == 3 { serial_pct = 18 }
+    // Asymptotic Amdahl limit (1 / s) in basis-points.
+    let amdahl_limit = 10000 * 100 / serial_pct
+    // Diagnostic kinds.
+    if upper_by_mem < 1 {
+        return DftRankRecommend {
+            kind: "mem-bound-zero",
+            recommended_np: 0,
+            upper_by_atoms: upper_by_atoms,
+            upper_by_mem: upper_by_mem,
+            per_rank_mem_gib: per_rank,
+            efficiency_bp: 0,
+            amdahl_limit_bp: amdahl_limit
+        }
+    }
+    if upper < 2 {
+        return DftRankRecommend {
+            kind: "too-few-ranks",
+            recommended_np: 1,
+            upper_by_atoms: upper_by_atoms,
+            upper_by_mem: upper_by_mem,
+            per_rank_mem_gib: per_rank,
+            efficiency_bp: 10000,
+            amdahl_limit_bp: amdahl_limit
+        }
+    }
+    // Step 5 — pick highest np with efficiency ≥ 70% (7000 bp).
+    let target_eff_bp = 7000
+    let mut best = 1
+    let mut best_eff = 10000
+    let mut np = 1
+    while np <= upper {
+        let s = tls_dft_speedup_at_rank(serial_pct, np)
+        let eff = s / np
+        if eff >= target_eff_bp {
+            best = np
+            best_eff = eff
+        }
+        np = np + 1
+    }
+    return DftRankRecommend {
+        kind: "ok",
+        recommended_np: best,
+        upper_by_atoms: upper_by_atoms,
+        upper_by_mem: upper_by_mem,
+        per_rank_mem_gib: per_rank,
+        efficiency_bp: best_eff,
+        amdahl_limit_bp: amdahl_limit
+    }
+}
