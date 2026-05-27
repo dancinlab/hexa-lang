@@ -38,6 +38,7 @@ fn _cloud_help() {
     println("  cloud watch     <host> <pid> [conn] [--interval N] [--max-wait S] [--then-down <id> [--provider P]]")
     println("                                                         loop poll until pid dies (exit 0) / max-wait (124); optional teardown")
     println("  cloud ssh-port  <id> [--provider P]                    print live ssh host:port of a pod (vast|runpod)")
+    println("  cloud resolve   <id> [--provider P]                    alias of ssh-port — pod-id → ssh host:port for run/copy-to")
     println("  cloud copy-to   <host> <local> <remote> [conn] [-r] [--verify-sha]  upload file/dir (scp; -r=tree; sha256 check)")
     println("  cloud copy-from <host> <remote> <local> [conn] [--resume] [--verify-sha]  download (scp; --resume=rsync; sha256 check)")
     println("  cloud orphans   [--hours N]                            list tracked pods, flag stale (>N h, default 6)")
@@ -682,7 +683,7 @@ fn main() {
     while i < len(av) {
         let t = av[i]
         if si < 0 {
-            if t == "rent" || t == "up" || t == "down" || t == "destroy" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "fire" || t == "poll" || t == "tail" || t == "watch" || t == "ssh-port" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "adopt" || t == "forget" || t == "dft-run" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
+            if t == "rent" || t == "up" || t == "down" || t == "destroy" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "fire" || t == "poll" || t == "tail" || t == "watch" || t == "ssh-port" || t == "resolve" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "adopt" || t == "forget" || t == "dft-run" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
                 si = i
                 sub = t
             }
@@ -698,7 +699,7 @@ fn main() {
         return
     }
     if sub == "version" || sub == "--version" || sub == "-v" {
-        println("hexa cloud 0.3.3 — rent/adopt auto-inject vast key → ~/.ssh/config (#1155 zero-flag) · [0.3.2: --identity flag · 0.3.1: registry guard #1229 · 0.3.0: dft-run]")
+        println("hexa cloud 0.3.4 — `resolve` alias of ssh-port (pod-id → ssh host:port; INBOX runpod transport-resolve) · [0.3.3: rent/adopt vast-key ssh-config autoinject #1155 · 0.3.2: --identity · 0.3.1: registry guard #1229 · 0.3.0: dft-run]")
         return
     }
     if sub == "rent" || sub == "up" {
@@ -986,9 +987,16 @@ fn main() {
         }
         exit(rc)
     }
-    if sub == "ssh-port" {
+    if sub == "ssh-port" || sub == "resolve" {
+        // `resolve` is a discoverable alias of `ssh-port`: turn a provider
+        // pod-id into the live ssh endpoint (host + port) so the result can
+        // be fed to `cloud run/exec/copy-to <root@ip> --port <n>`. A live
+        // RunPod fire-path agent reached for the name `resolve` and, finding
+        // no such verb in a stale 0.1.0 binary, mis-diagnosed a transport
+        // deadlock (INBOX 2026-05-27) — the resolver (runpod_get_ssh_port)
+        // already existed under `ssh-port`; only the deployed bin was stale.
         if si + 1 >= len(av) {
-            println("[cloud] ssh-port: missing <id> — usage: cloud ssh-port <id> [--provider vast|runpod]")
+            println("[cloud] " + sub + ": missing <id> — usage: cloud " + sub + " <id> [--provider vast|runpod]")
             exit(2)
         }
         let id = av[si + 1]
