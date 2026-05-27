@@ -459,6 +459,26 @@ fan-out 불가, serial 진행.
       동작 PASS** (memcmp 부호차·len0; memcpy no-overrun·len0; memmove overlap fwd/bwd
       둘 다 정확; strcmp eq/less/more/prefix/empty). leaf-first 순서 진행 — 다음 후보는
       reloc 필요한 state-bound primitive, 최후가 HexaVal repr/GC core (hard floor).
+
+      🧱 **increment 3 — 5 reloc-free leaf string primitives self-emit LANDED
+      (foundational · `.c` 카운트 UNCHANGED)**. increment 2 의 4종에 이어 동급 string
+      leaf 5종을 한 배치로: `rt_strncmp(a,b,len)` 14-instr 56 B (bounded 비교 · len OR
+      NUL 종단 · rt_strcmp 의 길이-제한 형제) · `rt_strchr(s,c)` 11-instr 44 B (첫 발생
+      포인터 · 부재 시 NULL · NUL 매칭 가능) · `rt_strrchr(s,c)` 11-instr 44 B (마지막
+      발생 포인터 · 최근 매치를 x4 에 유지) · `rt_strcpy(dst,src)` 7-instr 28 B (NUL-종단
+      복사 · dst 반환) · `rt_strncpy(dst,src,len)` 14-instr 56 B (bounded 복사 + NUL 패드 ·
+      copy-loop→pad-loop 2-phase · 정확한 C semantics). 전부 순수 register/memory 루프 ·
+      reloc 無 · `_arena_state` 無 · HexaVal/GC 無. 검증(동일 3-layer): (1) interp self-test
+      ALL CHECKS PASS (HEXA_VAL_ARENA=0 · size·4-align·RET trailer·signature instr —
+      `subs`/`add x0,x0,x2`/`add x4,x0,x2`/`strb w3`/`strb wzr`), (2) `as -arch arm64`
+      권위 disasm 과 **5종 전부 byte-identical** (파일 c.push 자동 대조 스크립트), (3)
+      **JIT-exec 실제 동작 PASS** (MAP_JIT + icache invalidate · libc 레퍼런스 대조 ·
+      strncmp len0/NUL-stop/bounded-prefix; strchr/strrchr first/last/absent→NULL/NUL;
+      strcpy 반환=dst·NUL 종단; strncpy 짧은-src NUL 패드·긴-src 절단·len0 no-op). shadow
+      모듈이라 `compiler/main.hexa` `use` 無 = fixpoint 무위험. self-emit leaf 누적 = 11
+      + arena 4-fn = **15/640**. ⚠ **simple-leaf 공급 감소 신호** — 남은 순수-루프 leaf 는
+      `rt_strcat`(strlen+strcpy 합성) · bit-op(`clz`/`popcount`/byteswap) 정도; 그 다음은
+      reloc 필요한 state-bound primitive → 최후가 HexaVal repr/GC core (hard floor).
 - [ ] **B9.6b-runtime-primitive-emit** — 잔여 runtime primitive self-emit
       (chunk-A wire-plan)
 
