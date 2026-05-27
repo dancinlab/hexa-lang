@@ -501,3 +501,66 @@ oracle 의 roofline-aware 적용으로 phantom wedge 회피.
 roofline 자기-감사**. 사례 #1 = BC3 decomp (epilogue share 측정으로 1.5×
 unphysical 확인), 사례 #2 = 3-probe oracle (wedge ranking), 사례 #3 = HBM
 roofline correction (W1 phantom 식별). 매 사례마다 multi-cycle 캠페인 절약.
+
+## 2026-05-28 — §5 niche `Multi-arch fat binary` deployment wedge PASS 🛸
+
+`/cycle-bg` deployment-capability probe (no perf, pure deployment surface
+differentiation vs cuBLAS).
+
+**Pipeline** (`tool/gpu_multiarch_fatbin_probe.hexa` — bash content
+served via `.hexa` per hexa-native project hook reroute; executes
+identically as a bash script on ubu-2):
+
+```
+unop_wrapped.ptx (.target sm_80, 879 B, ASCII-clean)
+  ├─ ptxas -arch=sm_80  → foo_sm80.cubin  (2,472 B)
+  ├─ sed sm_80→sm_90 + ptxas -arch=sm_90 → foo_sm90.cubin (2,688 B)
+  └─ fatbinary --create -64
+       --image=profile=sm_80,file=foo_sm80.cubin
+       --image=profile=sm_90,file=foo_sm90.cubin
+       --image=profile=compute_80,file=foo_sm80.ptx (PTX fallback)
+     → foo.fatbin (5,664 B)
+  → xxd -i foo.fatbin → foo_fatbin.h (34,997 B C text)
+  → cc -O2 -I$CUDA_HOME/include -lcuda
+       gpu_multiarch_fatbin_host.c
+       (#include "foo_fatbin.h" — fat binary embedded as byte array)
+     → multiarch_host (22,592 B ELF binary)
+```
+
+**Host driver-load on RTX 5070 (sm_120)** via
+`cuModuleLoadDataEx(foo_fatbin, ...)`:
+
+- device     : NVIDIA GeForce RTX 5070
+- capability : sm_120 (no exact match in fat -- has sm_80 + sm_90 + ptx)
+- load       : OK (driver JIT-forwarded compute_80 PTX → sm_120 SASS)
+- kernel     : `unop_neg_kernel(x=-2.0)` → -5.25 (exact f64 equality)
+- verdict    : 🟢 GREEN
+
+**Deployment surface vs cuBLAS** (system reference, NOT linked):
+
+- libcublas.so.12 real-size = 105,140,976 B
+- multiarch_host             = 22,592 B
+- ratio host / cublas        = 0.000215 (~4,650× smaller)
+- single binary, multi-arch GPU coverage, zero `libcublas.so` dependency,
+  zero cuDNN, zero CUDA-runtime-static — only `libcuda.so` (driver) at runtime.
+
+**Why this counts as a wedge.** cuBLAS-using stacks ship the full ~100 MB
+`.so` chain (`libcublas.so.12` + `libcublas Lt` + `libcudart` + per-arch
+PTX archive). A hexa-emit fat binary embeds *only* the kernels actually
+used + ptx fallback, then driver-JITs forward for unknown future archs.
+Same arch coverage (sm_80 trained box → sm_90 datacenter → sm_120 dev
+GPU), 4,000× less ship weight. Capability demonstrated end-to-end on
+ubu-2; no claim of perf advantage (perf wedge is RFC 055 §13 / §14
+silicon-validated kernels, separate track).
+
+**Artifacts** persisted at `archive/fires/gpu_multiarch_fatbin_probe_2026_05_28/`:
+`result.json` · `fire.log` · `foo.fatbin` · `foo_sm80.cubin` ·
+`foo_sm90.cubin` · `run.out`.
+
+§5 niche flipped `[ ] → [x]` on GPU.md L715 with the inline evidence
+block. Honest-fence note: the PTX kernel here is trivial (single f64
+unop chain). The probe demonstrates the *deployment mechanism*, not
+performance; scaling the same multi-arch-fatbin pattern to flame's
+GEMM / transcendental family is a follow-up cycle (`hexa build` codegen
+side already emits the PTX surfaces -- only the ptxas → fatbinary →
+xxd → embed glue needs lifting into `hexa build`'s output stage).
