@@ -1,0 +1,5 @@
+LN+GEMM 1-kernel wedge (N=256 M=64, 64 outputs)
+  max_abs_err = 0.000e+00  (@j=0, gpu=nan ref=-0.51297917078288602)
+  mean_abs_err = nan
+  ref_abs_max  = 0.512979  → max_rel_err = 0.000e+00
+  RESULT: PASS (byte-eq band <1e-12)
