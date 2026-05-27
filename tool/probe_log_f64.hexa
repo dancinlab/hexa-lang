@@ -1,0 +1,8 @@
+// tool/probe_log_f64.hexa — F-LOGF64-NUMERIC kernel (#1429 silicon validation)
+@gpu_kernel
+fn log_f64_probe(a: [f64], c: [f64], n: i64) {
+    let mut tid: i64 = to_i64(gpu_thread_id_x())
+    if tid < n {
+        c[to_i64(tid)] = log(a[to_i64(tid)])
+    }
+}

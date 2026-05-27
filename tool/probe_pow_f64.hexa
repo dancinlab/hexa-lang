@@ -1,0 +1,8 @@
+// tool/probe_pow_f64.hexa — F-POWF64-NUMERIC kernel (#1501 silicon validation)
+@gpu_kernel
+fn pow_f64_probe(a: [f64], b: [f64], c: [f64], n: i64) {
+    let mut tid: i64 = to_i64(gpu_thread_id_x())
+    if tid < n {
+        c[to_i64(tid)] = pow(a[to_i64(tid)], b[to_i64(tid)])
+    }
+}
