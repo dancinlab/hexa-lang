@@ -2457,6 +2457,59 @@ framing-① (nm aprime 0 externs) 측정-충족 이후 — framing-② (source z
       watcher (§2.4) · cross-backend symptom diff (§2.5) · 실 DFT job 측정
       검증 (외부 자원 dep).
 
+## frontier next list (2026-05-28 등록 · 12 milestones · post-18-list depletion)
+
+frontier 18-list (PR #1682) 가 100% closure 도달 (LANDED `[x]` 4 · PARTIAL
+`[~]` 14 · OPEN 0) 후 새 12-항목 batch. 3 갈래로 구성: (A) RUNTIME 잔여
+architectural · (B) cross-domain handoff · (C) brainstorm-divergence
+candidates. 각 항목 = 단일-PR 또는 명시된 multi-PR.
+
+### 갈래 A — RUNTIME 잔여 architectural (3 항목)
+
+- [ ] **phase-H HEXA_BACKEND flip** — `HEXA_BACKEND=native` 가 사용자 코드는
+      27/27 sound (memory `project-hexa-selfhosted-state-2026-05-26`); 잔여 =
+      runtime FLOOR (HexaVal repr · arena · GC) 의 C→hexa 교체 + hexa-native
+      링커 (`tool/hexa_ld` phase-h-inc*). multi-session lane (지금 phase-H
+      inc5+ 활성).
+- [ ] **TLS 1.3 state-machine 전체 와이어 (top-level driver)** — frontier
+      #4/#5/#6 의 4 stdlib 파일 (#1724·#1725·#1726·#1728) 을 결합해 single
+      `tls13_client_handshake(host, port, hostname)` 드라이버 fn 으로 와이어.
+      외부 TLS 서버 대상 실측 round-trip 포함.
+- [ ] **threading 결정 + skeleton** — green threads (M:N over `@asm` ctx
+      switch) vs C pthread FFI. RFC 결정 + minimal skeleton (1 worker queue
+      + spawn/join). concurrent_serve 가 현재 blocking — non-blocking 으로
+      옮길 수 있는 first usage.
+
+### 갈래 B — cross-domain handoff (5 항목 · 다른 도메인)
+
+- [ ] **HEXA-LANG 도메인 63% → 80%** — 가장 진행도 낮은 도메인. Native
+      compiler core 미해결 항목 (HEXA-LANG.md `- [ ]` 17 개 추정). 별도
+      domain 활성 시 핸들.
+- [ ] **GPU 도메인 87% → 95%** — NVPTX silicon idiom 잔여 (frontier sweep:
+      function-body ExprKind::Let annotations · exp polynomial · cuBLAS roofline
+      비교). 별도 domain 활성 시 핸들.
+- [ ] **TECS-L 91% → 100% (우주 법칙 5 대축)** — R1/R2/R3 cite 🔵 + honest
+      🟠. calc-gap #1230 closure. 별도 domain.
+- [ ] **PROBE 77% (r15 next-list seed)** — r14 closure 이후 r15 seed (40-lens
+      sweep). `/probe` skill 또는 별도 domain.
+- [ ] **ARXIV 75% (verifiable claim extraction)** — arxiv 논문 → atlas atom
+      추출 파이프라인 잔여 작업. 별도 domain.
+
+### 갈래 C — brainstorm-divergence (4 항목 · 신규 frontier)
+
+- [ ] **WebAssembly target backend (sm_wasm32 sibling)** — 현재 NVPTX +
+      arm64-Darwin + x86_64-Linux 만. wasm32 emit 으로 browser/edge 배포 enable.
+      RFC scaffold + first vec-add kernel.
+- [ ] **LSP completion: stdlib-aware fn lookup** — 현재 LSP keyword SSOT (#856)
+      만; pub fn 시그니처/예제 completion 부재. `stdlib/**/*.hexa` 인덱싱 + LSP
+      `textDocument/completion` 응답 와이어.
+- [ ] **distributed compile cache (compiler/cache · pool 호스트 간)** — 4-agent
+      공유 worktree 환경에서 incremental build 의 cache 가 호스트-로컬만.
+      ubu-1/ubu-2/mini 간 cache fingerprint share + invalidation.
+- [ ] **hexa-native package manager (hx install · publish · audit)** —
+      `hx install hexa-lang` 만 manual. dancinlab marketplace 와 deeper
+      integration (semver · lockfile · signed bundle).
+
 ## Methodology checkpoints (per-cycle)
 
 For each Tier-A sub-phase:
