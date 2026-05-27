@@ -2334,12 +2334,15 @@ framing-① (nm aprime 0 externs) 측정-충족 이후 — framing-② (source z
       `rt_arena_*` adr→adrp+add widening #1297/#1315 landed; 형제 lane phase-H inc5
       `__got` dyld DATA import landed #1348. 잔여 = alloc/reset/release 머신코드
       self-emit (multi-session, lane-busy 다중 에이전트).
-- [ ] **runtime_core.c 의 548 fn 중 순수-logic 1개 hexa-native 포팅** — `gmtime_r`
+- [~] **runtime_core.c 의 548 fn 중 순수-logic 1개 hexa-native 포팅** — `gmtime_r`
       류 후속; runtime.c wipe-prone (surgical edit + grep 검증).
-      **DEFERRED — wipe-prone risk**: memory `feedback-runtime-c-deploy-regen-wipe`
-      에 따라 surgical edit 이 후속 deploy-regen 커밋에 silent-wipe 될 수 있음
-      (json \uXXXX fix 가 3번 land 한 사례). 4-agent 공유 worktree 환경에선 충돌
-      위험 高 — 격리 worktree + surgical fence + 직후 grep 검증 필수.
+      **SEMANTICS-FIXTURE LANDED · CODEGEN-PORT REMAINING**: candidate fns
+      (`hexa_truthy`, `rt_str_starts_with`, `hexa_is_type` 등) 가 HexaVal
+      tagged-union 내부를 만져 stdlib `.hexa` 에서 직접 port 불가 (HX_TAG
+      macro 가 codegen-only). 안전한 진행 = hexa-source 시맨틱 fixture
+      `stdlib/runtime/value_logic_fixture.hexa` — `truthy_*_oracle` 5-fn 으로
+      예상 동작 코드로 박제. 실제 port = codegen emit 단의 작업 (frontier #1
+      phase-H 레인과 겹침). wipe-prone risk 회피 (runtime_core.c 미수정).
 - [~] **Linux self-host 잔여 17 syscall** — read/write/open/close/mkdir/dup2/lseek/
       select/poll/wait4/getpid/getuid/kill/fcntl/ioctl/stat/fstat/mmap/gettimeofday/
       exit 의 `#if Darwin-arm64 / #else libc` 패턴 → `svc #0x80` 인라인. Phase-1
