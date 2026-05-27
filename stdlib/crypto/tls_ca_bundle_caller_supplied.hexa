@@ -1,0 +1,191 @@
+// HEXA Standard Library — crypto/tls_ca_bundle_caller_supplied
+//
+// @version 0.1.0
+// @capabilities [pure, ffi]
+//
+// Option C — caller-supplied CA bundle. Reads a PEM-formatted bundle file
+// from a caller-passed path and exposes the parsed PEM blocks as a slot
+// surface. 100% hexa-self (no FFI beyond the existing `read_file` builtin).
+// Pure additive — does NOT replace `tls_ca_bundle.hexa` (which remains the
+// policy-agnostic stub for the D2+ governance decision per frontier
+// 18-list #9). This module is one of the four implementation options:
+//   Option A — pinned trust roots shipped IN the binary
+//   Option B — system trust store FFI
+//   Option C — caller-supplied bundle path (THIS MODULE)
+//   Option D — hybrid: A as default, C as override
+//
+// RUNTIME.flip B2.ca-caller-supplied.
+//
+// PEM bundle format (concatenation of any number of certificates):
+//   -----BEGIN CERTIFICATE-----
+//   <base64-body>
+//   -----END CERTIFICATE-----
+//   -----BEGIN CERTIFICATE-----
+//   ...
+//
+// The parser scans for `-----BEGIN CERTIFICATE-----` and the matching
+// `-----END CERTIFICATE-----` markers, extracts each block INCLUDING the
+// markers (so the slot is a valid stand-alone PEM string), and accumulates
+// them in `pems`. Lines outside any BEGIN/END pair (preamble · comments ·
+// trailing whitespace) are silently skipped — this matches OpenSSL's
+// `PEM_read_bio_X509` behaviour.
+//
+// Surface (5 fn · 1 struct · all `tls_ca_bundle_caller_supplied_*` prefix):
+//   pub fn tls_ca_bundle_caller_supplied_source() -> str
+//     Returns "caller-supplied" — the source kind identifier.
+//
+//   pub fn tls_ca_bundle_caller_supplied_load(path: str)
+//                                            -> Tls13CaCallerSuppliedState
+//     Reads the file at `path`, scans for BEGIN/END CERTIFICATE markers,
+//     accumulates each block as a PEM string in `pems`. Returns state with
+//     `kind` ∈ {"ok", "file-not-found", "no-valid-pem", "parse-error"}.
+//
+//   pub fn tls_ca_bundle_caller_supplied_pem_count(
+//                                           state: Tls13CaCallerSuppliedState)
+//                                           -> int
+//     Returns `state.loaded_count`.
+//
+//   pub fn tls_ca_bundle_caller_supplied_pem_at(
+//                                         state: Tls13CaCallerSuppliedState,
+//                                         index: int) -> str
+//     Bounds-checked accessor; returns "" if index out of range.
+//
+//   pub fn tls_ca_bundle_caller_supplied_kind(
+//                                         state: Tls13CaCallerSuppliedState)
+//                                         -> str
+//     Convenience accessor for `state.kind`.
+
+// Loader state. `kind` discriminates outcome:
+//   "ok"             — file read AND at least one PEM block parsed
+//   "file-not-found" — `read_file(path)` returned an empty string (the
+//                       builtin convention for missing/unreadable file)
+//   "no-valid-pem"   — file read OK but no `-----BEGIN CERTIFICATE-----`
+//                       marker matched a closing `-----END CERTIFICATE-----`
+//   "parse-error"    — a BEGIN marker was found with no matching END
+//                       (truncated bundle)
+struct Tls13CaCallerSuppliedState {
+    kind:          str,
+    path:          str,
+    loaded_count:  int,
+    pems:          [str]
+}
+
+@pure
+pub fn tls_ca_bundle_caller_supplied_source() -> str {
+    return "caller-supplied"
+}
+
+// Internal: PEM block markers. Kept as fn locals (not module consts) so the
+// surface stays a pure 5-fn export.
+fn _tls_ca_caller_begin_marker() -> str {
+    return "-----BEGIN CERTIFICATE-----"
+}
+
+fn _tls_ca_caller_end_marker() -> str {
+    return "-----END CERTIFICATE-----"
+}
+
+// Scan `body` for PEM blocks. Returns a state with `kind` set per the
+// classification above. The scan walks line-by-line: when a BEGIN marker
+// is seen we start a fresh accumulator; when the matching END marker is
+// seen we close the block (including both markers) and push it to `pems`.
+// Lines outside any BEGIN/END pair are skipped.
+fn _tls_ca_caller_scan_pems(path: str, body: str) -> Tls13CaCallerSuppliedState {
+    let begin = _tls_ca_caller_begin_marker()
+    let end = _tls_ca_caller_end_marker()
+    let lines = split(body, "\n")
+    let n = len(lines)
+    let mut out: [str] = []
+    let mut in_block = false
+    let mut current = ""
+    let mut i = 0
+    let mut saw_begin_without_end = false
+    while i < n {
+        let line = lines[i]
+        if !in_block {
+            if line == begin {
+                in_block = true
+                current = begin
+                saw_begin_without_end = true
+            }
+            // else: preamble / comment / blank — skip
+        } else {
+            current = current + "\n" + line
+            if line == end {
+                out = out + [current]
+                in_block = false
+                current = ""
+                saw_begin_without_end = false
+            }
+        }
+        i = i + 1
+    }
+    if saw_begin_without_end {
+        return Tls13CaCallerSuppliedState {
+            kind: "parse-error",
+            path: path,
+            loaded_count: 0,
+            pems: []
+        }
+    }
+    let count = len(out)
+    if count == 0 {
+        return Tls13CaCallerSuppliedState {
+            kind: "no-valid-pem",
+            path: path,
+            loaded_count: 0,
+            pems: []
+        }
+    }
+    return Tls13CaCallerSuppliedState {
+        kind: "ok",
+        path: path,
+        loaded_count: count,
+        pems: out
+    }
+}
+
+pub fn tls_ca_bundle_caller_supplied_load(path: str) -> Tls13CaCallerSuppliedState {
+    if len(path) == 0 {
+        return Tls13CaCallerSuppliedState {
+            kind: "file-not-found",
+            path: path,
+            loaded_count: 0,
+            pems: []
+        }
+    }
+    let body = read_file(path)
+    // Builtin `read_file` returns "" for missing/unreadable file. A genuinely
+    // empty file is treated identically — there are no valid PEM blocks
+    // either way, and "file-not-found" is the more informative diagnosis.
+    if len(body) == 0 {
+        return Tls13CaCallerSuppliedState {
+            kind: "file-not-found",
+            path: path,
+            loaded_count: 0,
+            pems: []
+        }
+    }
+    return _tls_ca_caller_scan_pems(path, body)
+}
+
+@pure
+pub fn tls_ca_bundle_caller_supplied_pem_count(state: Tls13CaCallerSuppliedState) -> int {
+    return state.loaded_count
+}
+
+@pure
+pub fn tls_ca_bundle_caller_supplied_pem_at(state: Tls13CaCallerSuppliedState, index: int) -> str {
+    if index < 0 {
+        return ""
+    }
+    if index >= state.loaded_count {
+        return ""
+    }
+    return state.pems[index]
+}
+
+@pure
+pub fn tls_ca_bundle_caller_supplied_kind(state: Tls13CaCallerSuppliedState) -> str {
+    return state.kind
+}
