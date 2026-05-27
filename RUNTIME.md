@@ -2168,6 +2168,33 @@ correctness (per M10/M16; see cycle-69 catalog + PR #251/#426 analysis)
       rfc3339_format_native + iso8601_parse_native. Pure hexa, 0 libc (existing
       stdlib/time/iso8601.hexa was a libc-backed utc_iso_* wrapper). 10/10 PASS.
 
+## Next frontier — post-segment-2 remaining work (registered 2026-05-27)
+
+The single-session-closeable lanes (crypto/TLS protocol byte format + crypto
+derivation, runtime C-source-logic port) are DRAINED. These are the genuine
+remaining items — each is multi-PR / architectural, NOT a single verifiable
+unit. Registered as milestones so the next cycle can pick them up.
+
+- [ ] **phase-H hexa-native backend (HEXA_BACKEND flip)** — the `.c none` decision
+      point. codegen self-emits the HexaVal tagged-union repr + arena/GC floor
+      as machine code (no C struct, no C-source memory primitives; `@asm` syscall +
+      fused-fma floor only). Unblocks runtime_core.c elimination. Reference:
+      `project-hexa-selfhosted-state-2026-05-26` (de-risked VIABLE) + the
+      `phase-h-inc4-dyld-write` linker work. Multi-session architectural.
+- [ ] **TLS 1.3 handshake state-machine loop** — wire the ~56 landed protocol
+      pieces (ClientHello compose → record send → ServerHello parse → key-schedule
+      derive → EncryptedExtensions/Certificate/CertVerify/Finished → app records)
+      into a socket-driven client driver over `stdlib/net/socket`. Multi-PR series.
+- [ ] **RSA-PSS / RSA-PKCS#1 v1.5 cert signature verify** — for real-world X.509
+      chains (most CA certs are RSA). Needs bignum modexp (large unit).
+- [ ] **ECDSA-P256 verify perf** — add Solinas P-256 fast reduction (mod p) +
+      Barrett reduction (mod n) to the algorithm on branch `feat-p256-verify` so
+      the verify KAT completes within practical time (currently >300s timeout
+      with general shift-and-subtract mod-reduce). ~200 lines, then KAT-land.
+- [ ] **threading** — architectural decision: green threads in hexa (M:N
+      scheduler over `@asm` context-switch) vs. keep C pthread FFI. Blocks any
+      concurrent runtime story.
+
 ## Phase 3 — Tier-C application primitives (16+ cycles OR deferred)
 
 - [x] crypto bulk: chacha20 ✓(RFC 8439) · sha256 ✓ · x25519 ✓(RFC 7748) · sha512 ✓(FIPS180-4) ·
