@@ -1,0 +1,115 @@
+// HEXA Standard Library — crypto/tls13_record
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// TLS 1.3 record-protection layer (RFC 8446 §5.2 + §7.3) — pure hexa, the
+// data-protection half of TLS 1.3 (it needs no socket / handshake state).
+// Derives per-direction traffic key+iv from a traffic secret (Expand-Label,
+// RFC 8446 §7.3) and seals/opens records with ChaCha20-Poly1305 AEAD over a
+// per-record nonce (write_iv XOR seq, RFC 8446 §5.3). Builds on the verified
+// stdlib/crypto/{tls13_keyschedule, chacha20poly1305}. let-mut idiom (#1506).
+//
+// Surface:
+//   pub fn tls13_traffic_key(secret: [int], length: int) -> [int]   — Expand-Label "key"
+//   pub fn tls13_traffic_iv(secret: [int]) -> [int]                 — Expand-Label "iv" (12 bytes)
+//   pub fn tls13_record_nonce(iv: [int], seq: int) -> [int]         — iv XOR seq(64-bit BE, low 8)
+//   pub fn tls13_record_aad(inner_len: int) -> [int]                — 5-byte TLSCiphertext header
+//   pub fn tls13_record_seal(key: [int], iv: [int], seq: int, aad: [int], pt: [int]) -> [int]
+//   pub fn tls13_record_open(key: [int], iv: [int], seq: int, aad: [int], ct_tag: [int]) -> [int]
+//   pub fn tls13_record_open_verify(key: [int], iv: [int], seq: int, aad: [int], ct_tag: [int]) -> bool
+//
+// Verified vector (RFC 8448 §3, server_handshake_traffic_secret):
+//   secret = b67b7d690cc16c4e75e54213cb2d37b4e9c912bcded9105d42befd59d391ad38
+//   key(16, AES-128) = 3fce516009c21727d0f2e4e86ee403bc   (RFC documented)
+//   iv (12)          = 5d313eb2671276ee13000b30           (RFC documented)
+// The Expand-Label primitive is itself RFC 8448 §3 verified (tls13_keyschedule).
+
+use "stdlib/crypto/tls13_keyschedule"
+use "stdlib/crypto/chacha20poly1305"
+
+// Traffic key = HKDF-Expand-Label(Secret, "key", "", length). RFC 8446 §7.3.
+@pure
+pub fn tls13_traffic_key(secret: [int], length: int) -> [int] {
+    // "key" = 6b 65 79
+    let label = [0x6b, 0x65, 0x79]
+    let ctx: [int] = []
+    return tls13_expand_label(secret, label, ctx, length)
+}
+
+// Traffic IV = HKDF-Expand-Label(Secret, "iv", "", 12). RFC 8446 §7.3.
+@pure
+pub fn tls13_traffic_iv(secret: [int]) -> [int] {
+    // "iv" = 69 76
+    let label = [0x69, 0x76]
+    let ctx: [int] = []
+    return tls13_expand_label(secret, label, ctx, 12)
+}
+
+// Per-record nonce = write_iv XOR (seq as 64-bit big-endian in the low 8 bytes).
+// RFC 8446 §5.3. iv is 12 bytes; seq occupies bytes 4..11.
+@pure
+pub fn tls13_record_nonce(iv: [int], seq: int) -> [int] {
+    let mut nonce: [int] = []
+    let mut i = 0
+    while i < len(iv) { nonce.push(iv[i]); i = i + 1 }
+    // write seq big-endian into the last 8 bytes
+    let mut v = seq
+    let mut j = 0
+    while j < 8 {
+        let pos = len(nonce) - 1 - j           // from the tail
+        let byte = v & 0xFF
+        nonce[pos] = (nonce[pos] ^ byte) & 0xFF
+        v = v >> 8
+        j = j + 1
+    }
+    return nonce
+}
+
+// TLSCiphertext record header (the AEAD additional data). RFC 8446 §5.2:
+//   opaque_type = application_data(0x17) ‖ legacy_version(0x0303) ‖ uint16 length
+// `inner_len` = length of the encrypted_record = |plaintext|+1(content type)+16(tag).
+@pure
+pub fn tls13_record_aad(inner_len: int) -> [int] {
+    let mut aad: [int] = []
+    aad.push(0x17)
+    aad.push(0x03)
+    aad.push(0x03)
+    aad.push((inner_len >> 8) & 0xFF)
+    aad.push(inner_len & 0xFF)
+    return aad
+}
+
+// Seal a record: ciphertext ‖ 16-byte tag, AEAD over (aad, plaintext) with the
+// per-record nonce. RFC 8446 §5.2.
+@pure
+pub fn tls13_record_seal(key: [int], iv: [int], seq: int, aad: [int], pt: [int]) -> [int] {
+    let nonce = tls13_record_nonce(iv, seq)
+    return chacha20poly1305_encrypt(key, nonce, aad, pt)
+}
+
+// Verify a sealed record's tag (split ct_tag into ct‖tag, run the AEAD MAC check).
+@pure
+pub fn tls13_record_open_verify(key: [int], iv: [int], seq: int, aad: [int], ct_tag: [int]) -> bool {
+    let n = len(ct_tag)
+    if n < 16 { return false }
+    let nonce = tls13_record_nonce(iv, seq)
+    let mut ct: [int] = []
+    let mut i = 0
+    while i < n - 16 { ct.push(ct_tag[i]); i = i + 1 }
+    let mut tag: [int] = []
+    i = n - 16
+    while i < n { tag.push(ct_tag[i]); i = i + 1 }
+    return chacha20poly1305_verify(key, nonce, aad, ct, tag)
+}
+
+// Open a record → plaintext (call _open_verify FIRST; this does no auth check).
+@pure
+pub fn tls13_record_open(key: [int], iv: [int], seq: int, aad: [int], ct_tag: [int]) -> [int] {
+    let nonce = tls13_record_nonce(iv, seq)
+    let n = len(ct_tag)
+    let mut ct: [int] = []
+    let mut i = 0
+    while i < n - 16 { ct.push(ct_tag[i]); i = i + 1 }
+    return chacha20poly1305_decrypt(key, nonce, aad, ct)
+}
