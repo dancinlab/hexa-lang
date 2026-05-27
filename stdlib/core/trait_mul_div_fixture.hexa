@@ -1,0 +1,70 @@
+// HEXA Standard Library — core/trait_mul_div_fixture
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Trait dispatch design fixture — documents the planned API surface for
+// `Mul` / `Div` / `Rem` core traits (RUNTIME.flip B5.trait-mul-div, sibling
+// of B5.trait-design which landed `Add`/`Sub`/`Eq`/`Ord` via PR #1752). The
+// actual trait-dispatch typechecker + monomorphization is a multi-PR
+// compiler campaign (RFC #532 design landed, scaffold branch
+// `rfc-082-impl-a-trait-bound-scaffold-2026-05-23` active). This file pins
+// the **caller-facing concrete-type wrappers** so callers can compile
+// against a stable surface while the polymorphic trait dispatch lands.
+//
+// RUNTIME.flip B5.trait-mul-div spec:
+//   `mul_int/float`, `div_int/float`, `rem_int` monomorphic.
+//
+// What this file is NOT:
+//   - it is NOT a trait declaration (the compiler doesn't yet parse `trait` /
+//     `impl` syntax for user-level types)
+//   - it does NOT enable polymorphic dispatch over user types
+//   - it does NOT exercise the coherence/orphan rule decision
+//
+// What this file IS:
+//   - the concrete-monomorphic `_int` / `_float` instantiations of the
+//     planned 3-trait surface (`Mul` / `Div` / `Rem`), ready to be replaced
+//     by a single generic `mul[T: Mul](a: T, b: T)` etc. when the
+//     typechecker gains trait support
+//   - a parse-clean fixture that the trait-impl campaign can A/B test against
+//   - a documentation of intended semantics per type (e.g. `Rem` is integer
+//     modulo only — float fmod left for a follow-up)
+//
+// Planned trait surface (RFC #532):
+//
+//   trait Mul[T] { fn mul(self, other: T) -> T }
+//   trait Div[T] { fn div(self, other: T) -> T }
+//   trait Rem[T] { fn rem(self, other: T) -> T }
+//
+// Coherence/orphan rule (D2 decision pending) — see trait_design_fixture.
+
+// -- Mul — monomorphic int / float --
+
+@pure
+pub fn mul_int(a: int, b: int) -> int {
+    return a * b
+}
+
+@pure
+pub fn mul_float(a: float, b: float) -> float {
+    return a * b
+}
+
+// -- Div — int / float (caller-side divide-by-zero check expected) --
+
+@pure
+pub fn div_int(a: int, b: int) -> int {
+    return a / b
+}
+
+@pure
+pub fn div_float(a: float, b: float) -> float {
+    return a / b
+}
+
+// -- Rem — int modulo (float fmod deferred to follow-up) --
+
+@pure
+pub fn rem_int(a: int, b: int) -> int {
+    return a % b
+}
