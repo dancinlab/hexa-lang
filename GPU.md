@@ -710,11 +710,11 @@ PR #189/#190/#191 fires used direct one-shot bash; sustained automation needs he
 
 ### 5l — Edge / embedded / standalone deployment
 
-- [ ] **Standalone cubin embed** — `hexa build` produces a binary with embedded `.cubin`; no separate cuBLAS .so dependency
-- [ ] **AOT compilation** — kernel compiled once at build time; no runtime cuBLAS JIT
+- [x] **Standalone cubin embed** — `hexa build` produces a binary with embedded `.cubin`; no separate cuBLAS .so dependency. **🟢 SILICON-VALIDATED 2026-05-28** (`F-GPU-STANDALONE-CUBIN`): `tool/gpu_standalone_cubin_probe.hexa` → ptxas sm_120 (`unop_wrapped.ptx` 879 B → `unop.cubin` 5328 B) → xxd-embed into 22176-byte host binary → `cuModuleLoadData` from libcuda.so.1 → numeric round-trip `x=-2.0 → y=-5.25` exact f64 PASS. Artifact: `archive/fires/gpu_standalone_cubin_probe_2026_05_28/{result.json, fire.log, ldd_standalone.txt, ldd_cublas_using.txt, unop_cubin_data.h}`.
+- [x] **AOT compilation** — kernel compiled once at build time; no runtime cuBLAS JIT. **🟢 SILICON-VALIDATED 2026-05-28** (same probe): ptxas runs at probe-time, embedded cubin loaded with `cuModuleLoadData` (binary form, no driver JIT pass). Cubin portability caveat (g3-honest): a `.cubin` binds to one SM — multi-SM deploy needs a fatbin (one cubin per SM) or PTX-fallback via `cuModuleLoadDataEx` (driver JIT). The driver-only link surface holds for both routes.
 - [ ] **Multi-arch fat binary** — embed PTX for sm_70 + sm_80 + sm_90 in one cubin via hexa codegen
-- [ ] **NVIDIA-runtime-free deployment** — minimal driver-only deployment surface (no cuBLAS/cuDNN required)
-- [ ] **Containerized cubin** — single-binary container without `libcublas.so.12` dependency
+- [x] **NVIDIA-runtime-free deployment** — minimal driver-only deployment surface (no cuBLAS/cuDNN required). **🟢 SILICON-VALIDATED 2026-05-28** (same probe): standalone host `ldd` shows **6 dyn libs · libcuda.so.1 + libc/libm/libdl/libpthread/librt + ld-linux** (zero occurrences of `libcudart`, zero of `libcublas`); cuBLAS-using launcher (`tool/fusion_epilogue_cublas_timed.c` rebuilt as `.cu`) shows **9 dyn libs INCLUDING libcublas.so.12 + libcublasLt.so.12 + libcudart.so.12**. All 14 driver API symbols (`cuInit`, `cuModuleLoadData`, `cuLaunchKernel`, `cuMemAlloc`, `cuMemcpyHtoD/DtoH`, etc) live in libcuda.so.1.
+- [x] **Containerized cubin** — single-binary container without `libcublas.so.12` dependency. **🟢 SILICON-VALIDATED 2026-05-28** (same probe): standalone binary is 22176 B (vs cuBLAS launcher 30832 B), runtime deps = libcuda.so.1 only (always ships with NVIDIA driver, no separate cuBLAS install). Minimum-viable container = host binary + libcuda shim (driver already on host); cuBLAS-using container must additionally bundle ~750 MB of `libcublas*.so` / `libcudart*.so` / `libnvJitLink.so` runtime.
 
 ### 5m — Measured wins to-date (g3-honest claims)
 

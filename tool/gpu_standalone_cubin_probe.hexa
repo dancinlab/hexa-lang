@@ -32,13 +32,13 @@ fn _wstr(p: str, s: str) {
     write_file(p, s)
 }
 
-fn main(av: [str]) {
+fn main() {
     let host = "ubu-2"
     let remote_dir = "/tmp/gpu_standalone_cubin_probe_2026_05_28"
 
-    let repo_root = exec_capture("pwd").stdout_
-    // Trim trailing newline (exec_capture preserves stdout verbatim).
-    let mut rr = repo_root
+    // exec_capture returns [stdout, stderr, exit_code].
+    let pwd_res = exec_capture("pwd")
+    let mut rr = to_string(pwd_res[0])
     let rn = len(rr)
     if rn > 0 {
         if rr.substring(rn - 1, rn) == "\n" {
@@ -108,8 +108,15 @@ fn main(av: [str]) {
         "which ptxas\n" +
         "ptxas --version | head -2\n" +
         "echo\n" +
-        "echo '===== STEP A: ptxas PTX -> cubin (AOT, sm_80) ====='\n" +
-        "ptxas -arch=sm_80 -o unop.cubin unop_wrapped.ptx\n" +
+        "echo '===== STEP A: ptxas PTX -> cubin (AOT, sm_120 to match RTX 5070) ====='\n" +
+        "# Honest note: a .cubin is the binary-form output of ptxas and is NOT\n" +
+        "# forward-compatible across SMs — it binds to one compute capability.\n" +
+        "# To deploy across multiple SMs you either (a) ship a fatbin with one\n" +
+        "# cubin per SM, or (b) ship the PTX text and let the driver JIT it on\n" +
+        "# first load (cuModuleLoadDataEx).  This probe uses route (a) with a\n" +
+        "# single sm_120 cubin matching the ubu-2 RTX 5070; the deployment-\n" +
+        "# surface claim (-lcuda only, no cublas/cudart) holds either way.\n" +
+        "ptxas -arch=sm_120 -o unop.cubin unop_wrapped.ptx\n" +
         "ls -la unop_wrapped.ptx unop.cubin\n" +
         "PTX_SIZE=$(wc -c < unop_wrapped.ptx)\n" +
         "CUBIN_SIZE=$(wc -c < unop.cubin)\n" +
@@ -131,12 +138,22 @@ fn main(av: [str]) {
         "ldd gpu_standalone_cubin_host | tee ldd_standalone.txt\n" +
         "echo\n" +
         "echo '===== STEP E: build cuBLAS-using launcher for comparison ====='\n" +
-        "nvcc -O2 -o fusion_cublas_timed fusion_epilogue_cublas_timed.c -lcublas -lcudart\n" +
-        "CUBLAS_BIN_SIZE=$(wc -c < fusion_cublas_timed)\n" +
+        "# The .c file actually contains CUDA <<<>>> launch syntax — feed it\n" +
+        "# to nvcc as a .cu via -x cu so the device-side syntax is parsed.\n" +
+        "set +e\n" +
+        "nvcc -O2 -x cu -o fusion_cublas_timed fusion_epilogue_cublas_timed.c -lcublas -lcudart 2>&1 | tail -20\n" +
+        "CUBLAS_BUILD_RC=$?\n" +
+        "set -e\n" +
+        "if [ -f fusion_cublas_timed ]; then CUBLAS_BIN_SIZE=$(wc -c < fusion_cublas_timed); else CUBLAS_BIN_SIZE=0; fi\n" +
         "echo CUBLAS_BIN_SIZE=$CUBLAS_BIN_SIZE\n" +
+        "echo CUBLAS_BUILD_RC=$CUBLAS_BUILD_RC\n" +
         "echo\n" +
         "echo '===== STEP F: ldd cuBLAS-using launcher (expected: libcublas + libcudart + ...) ====='\n" +
-        "ldd fusion_cublas_timed | tee ldd_cublas_using.txt\n" +
+        "if [ -f fusion_cublas_timed ]; then\n" +
+        "  ldd fusion_cublas_timed | tee ldd_cublas_using.txt\n" +
+        "else\n" +
+        "  echo 'no cuBLAS binary built (CUBLAS_BUILD_RC='$CUBLAS_BUILD_RC')' | tee ldd_cublas_using.txt\n" +
+        "fi\n" +
         "echo\n" +
         "echo '===== STEP G: RUN standalone host -- numeric round-trip ====='\n" +
         "set +e\n" +

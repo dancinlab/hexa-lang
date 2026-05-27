@@ -14,10 +14,17 @@
 // PASS = exact f64 equality (all rationals, no rounding error).
 //
 // Build:
-//   cc -O2 -o gpu_standalone_cubin_host \
-//      gpu_standalone_cubin_host.c -lcuda
+//   ptxas -arch=sm_<NN> -o unop.cubin unop_wrapped.ptx
+//   xxd -i unop.cubin > unop_cubin_data.h
+//   sed -i 's/unop_cubin\[\]/unop_cubin_data[]/g; s/unop_cubin_len/unop_cubin_data_len/g' unop_cubin_data.h
+//   cc -O2 -o gpu_standalone_cubin_host gpu_standalone_cubin_host.c -lcuda
 //
 // Link surface: -lcuda only. NOT -lcudart. NOT -lcublas.
+//
+// Cubin portability note: a .cubin binds to ONE compute capability. For
+// multi-SM deploy either ship a fatbin (one cubin per arch) or ship PTX
+// text + cuModuleLoadDataEx (driver JIT). The -lcuda-only link surface
+// holds for both routes — this probe demonstrates route (a).
 
 #include <stdio.h>
 #include <stdlib.h>
