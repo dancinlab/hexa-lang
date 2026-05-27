@@ -253,11 +253,36 @@ fn _nvptx_reg_shfl_mask(id: i64) -> string {
     return "%shfl_mask_" + to_string(id)
 }
 
+// _nvptx_f64_imm_hex — render an FP64 value as the PTX hex-immediate
+// form `0d<16-hex-digits>`. PTX FP64 literals do NOT accept a decimal
+// `-1.5` form (ptxas: "Arguments mismatch for instruction 'mov'") nor
+// scientific `1e+308` (the `e+` form is unsupported); the only portable
+// shape is the 18-character `0d`-prefixed big-endian IEEE 754 bit
+// pattern (PTX ISA §A.2). Closes #1665 ③ const-hex on top of #1677's
+// `float_to_bits` runtime builtin. Sign-extension of arithmetic `>>`
+// is masked away per-nibble (`& 15` selects the low 4 bits regardless
+// of sign).
+fn _nvptx_f64_imm_hex(f: float) -> string {
+    let bits = float_to_bits(f)
+    let hex_chars = "0123456789ABCDEF"
+    let mut result = "0d"
+    let mut i = 0
+    while i < 16 {
+        let shift = 60 - i * 4
+        let nibble = (bits >> shift) & 15
+        result = result + hex_chars[nibble]
+        i = i + 1
+    }
+    return result
+}
+
 // _nvptx_operand_text - render one MIR Operand as a PTX operand string
 // for the FP64-arithmetic subset (RFC 055 §6.6).
 //
 //   local       -> the value's PTX virtual register (`%fd<id>`).
-//   const_float -> a PTX FP64 immediate (decimal literal).
+//   const_float -> a PTX FP64 immediate as `0d<16-hex>` (no decimal form;
+//                  ptxas rejects `-1.5` / `1e+308` — the hex form is the
+//                  only portable shape, see `_nvptx_f64_imm_hex`).
 //   const_int   -> a PTX integer immediate.
 //
 // RFC 055 055-P0 - const_str / global operands are out of the FP64
@@ -268,7 +293,7 @@ fn _nvptx_operand_text(o: Operand) -> string {
         return _nvptx_reg_f64(o.local_id)
     }
     if o.kind == "const_float" {
-        return to_string(o.float_val)
+        return _nvptx_f64_imm_hex(o.float_val)
     }
     if o.kind == "const_int" {
         return to_string(o.int_val)
@@ -288,7 +313,7 @@ fn _nvptx_operand_text_kinds(o: Operand, kinds: [PReg]) -> string {
         return _nvptx_lookup_reg_for_local(kinds, o.local_id)
     }
     if o.kind == "const_float" {
-        return to_string(o.float_val)
+        return _nvptx_f64_imm_hex(o.float_val)
     }
     if o.kind == "const_int" {
         return to_string(o.int_val)
@@ -620,6 +645,30 @@ fn _nvptx_binop_mnemonic_for_kind(op: string, kind: string) -> string {
         if op == "shr" || op == ">>" { return "shr.s64" }
     }
     return _nvptx_binop_mnemonic(op)
+}
+
+// _nvptx_unop_mnemonic_for_kind — INBOX #1665 ① emit arm + ② register-neg.
+// Map a MIR STMT_UNOP opcode + dst kind to its PTX mnemonic. Integer
+// register-neg uses signed-integer banks (`neg.s32` / `neg.s64`); FP
+// banks pick the matching width (`neg.f64` / `neg.f32` / `neg.f16` /
+// `neg.bf16`). PTX `neg.<ty>` flips the sign bit in-register — a 1-instr
+// op with the same dst+src bank, no precision change (PTX ISA §9.7.1.3).
+// Returns "" when the opcode is outside the supported unop surface
+// (caller emits an honest stub). Used by the STMT_UNOP body branch in
+// `_nvptx_lower_stmt`. Companion: `_nvptx_operand_text_kinds` for const
+// folding — a constant operand (a `FloatLit` lowered into `const_float`)
+// emits via `_nvptx_f64_imm_hex` upstream, so a literal `-3.14` lowers
+// through the neg instr's source-operand path with the hex bit pattern
+// of `3.14` and the sign-flip happens on the GPU register.
+fn _nvptx_unop_mnemonic_for_kind(op: string, kind: string) -> string {
+    if op != "neg" && op != "-" { return "" }
+    if kind == NVPTX_RKIND_U32 { return "neg.s32" }
+    if kind == NVPTX_RKIND_U64 { return "neg.s64" }
+    if kind == NVPTX_RKIND_F32 { return "neg.f32" }
+    if kind == NVPTX_RKIND_F16 { return "neg.f16" }
+    if kind == NVPTX_RKIND_BF16 { return "neg.bf16" }
+    // F64 default — every other (incl. unclassified default-F64) bank.
+    return "neg.f64"
 }
 
 // ── RFC 055 §13 - floating-point math intrinsics (NN-stack) ───────────
@@ -1189,6 +1238,31 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
                 // RFC 055 055-P0 - binop outside the FP64 arithmetic
                 // subset (e.g. div / bitwise). Honest stub.
                 out.push(_nvptx_instr("//", [], "RFC 055 055-P0 - unsupported binop: " + s.op))
+            }
+        }
+        return out
+    }
+    // INBOX #1665 ① — STMT_UNOP body branch. Closes the NVPTX unop gap
+    // (PRs #1663 + #1665 dependency chain on top of #1677's float_to_bits
+    // builtin). `neg` is the only unop the HIR→MIR layer emits today
+    // (a source-level `-x` lowers to `unop("neg", x)`); the dst+src
+    // are 1-arg same-bank, so the emit is a single `neg.<ty>` instr.
+    // PTX ISA §9.7.1.3 — `neg.<ty> dst, src` flips the sign bit and is
+    // legal on `.s32/.s64/.f16/.bf16/.f32/.f64` banks. A literal source
+    // (`unop("neg", FloatLit(3.14))`) renders through
+    // `_nvptx_operand_text_kinds` → `_nvptx_f64_imm_hex` so the immediate
+    // is the canonical `0d<16-hex>` shape (closes ③ const-hex).
+    if s.kind == STMT_UNOP {
+        if len(s.args) >= 1 {
+            let dst_kind = _nvptx_lookup_kind_for_local(kinds, s.dst.id)
+            let mnem = _nvptx_unop_mnemonic_for_kind(s.op, dst_kind)
+            if len(mnem) > 0 {
+                let mut a = []
+                a.push(_nvptx_op(_nvptx_lookup_reg_for_local(kinds, s.dst.id)))
+                a.push(_nvptx_op(_nvptx_operand_text_kinds(s.args[0], kinds)))
+                out.push(_nvptx_instr(mnem, a, "unop " + s.op))
+            } else {
+                out.push(_nvptx_instr("//", [], "INBOX #1665 - unsupported unop: " + s.op))
             }
         }
         return out
@@ -3450,6 +3524,30 @@ fn _nvptx_classify_local_for_stmt(s: Stmt) -> string {
         if s.op == "add_bf16" { return NVPTX_RKIND_BF16 }
         if s.op == "add_f32" { return NVPTX_RKIND_F32 }
         // Arithmetic binops - the 055-P0 FP64 subset (default).
+        return NVPTX_RKIND_F64
+    }
+    // INBOX #1665 ② dst classify — STMT_UNOP "neg" propagates the
+    // operand's reg bank to the dst Local. Without this arm the
+    // unop dst would not appear in the PReg roster and `_nvptx_lower_stmt`'s
+    // `_nvptx_lookup_reg_for_local` would fall back to `%fd<id>` while
+    // the actual emit needs (say) `%r<id>` for an integer neg — ptxas
+    // would reject "Unknown symbol %fdN" or a bank-mismatch on the
+    // mnemonic. The source operand bank is the authoritative kind for
+    // sign-flip (it is the same width + family before and after).
+    if s.kind == STMT_UNOP {
+        if len(s.args) >= 1 && s.args[0].kind == "local" {
+            // _nvptx_lookup_kind_for_local can't be called here (it
+            // needs the full PReg roster, which Pass 1 is still building).
+            // Fall back to F64 — the common case — and let Pass-1's
+            // type_id-aware rule re-classify integer cases through
+            // STMT_ASSIGN tags. The STMT_UNOP emit branch picks the
+            // final mnemonic from the resolved dst kind at lower time.
+            return NVPTX_RKIND_F64
+        }
+        // Literal-operand unop (a fold opportunity — caller can collapse
+        // `unop("neg", FloatLit(x))` into `FloatLit(-x)` at HIR→MIR — but
+        // the codegen layer stays correct without that fold: emit a
+        // const-loaded neg-f64 path).
         return NVPTX_RKIND_F64
     }
     if s.kind == STMT_CALL {

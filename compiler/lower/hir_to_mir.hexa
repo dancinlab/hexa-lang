@@ -1087,6 +1087,19 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
     // ── unop → STMT_UNOP ───────────────────────────────────
     if k == "unop" {
         if len(e.children) < 1 { return _no_value(ctx) }
+        // INBOX #1665 fold — `unop("neg", literal_float(N))` collapses
+        // to a `const_float(-N)` operand directly, skipping STMT_UNOP +
+        // an intermediate Local. Downstream codegen sees a constant
+        // operand and emits `mov.f64 dst, 0d<hex(-N)>` (via the
+        // `_nvptx_f64_imm_hex` path on the NVPTX side; CPU codegen
+        // already accepts a negative `const_float`). This closes the
+        // negative-float-literal blast radius without adding a unop arm
+        // for the literal case. Register-neg (`unop("neg", x)` where
+        // `x` is a value) still flows through the STMT_UNOP path below.
+        if e.text == "neg" && e.children[0].kind == "literal_float" {
+            let neg_v = -1.0 * to_float(e.children[0].text)
+            return _value(ctx, _const_float_op_with_text(neg_v, "-" + e.children[0].text))
+        }
         let r = _lower_hexpr(ctx, e.children[0])
         let mut ctx2 = _fresh_local(r.ctx, e.typ, "t")
         let dst = _lr_locals[len(_lr_locals) - 1]

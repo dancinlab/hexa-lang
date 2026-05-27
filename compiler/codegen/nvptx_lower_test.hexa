@@ -1171,6 +1171,95 @@ fn _test_math_inherit() -> bool {
     return ok
 }
 
+// ── Case 41 — INBOX #1665 STMT_UNOP "neg" + const_float hex ──────────
+//
+// Closes the NVPTX unop gap (PRs #1663 + #1665 dependency chain on top
+// of #1677's `float_to_bits` builtin). Covers BOTH:
+//   ① register-neg — `STMT_UNOP("neg", local)` lowers to `neg.f64
+//     %fd_dst, %fd_src;` (PTX ISA §9.7.1.3, sign-bit flip, same bank).
+//   ③ const-hex — `const_float` operands render as `0d<16-hex>` via
+//     `_nvptx_f64_imm_hex` (uses `float_to_bits` runtime builtin from
+//     PR #1677). ptxas rejects decimal `-1.5` / scientific `1e+308`;
+//     the hex form is the only portable shape.
+//
+// Fixture: `t = -a` followed by `r = t + 1.5` so the emitted PTX
+// surfaces BOTH the `neg.f64` and a constant float operand. The
+// numeric value of 1.5 in IEEE 754 is `0x3FF8000000000000`.
+
+fn _stmt_unop(dst: Local, op: string, a: Operand) -> Stmt {
+    let mut xs = []
+    xs.push(a)
+    return Stmt {
+        kind: STMT_UNOP, dst: dst, op: op, args: xs,
+        target_block: -1, target_block_else: -1
+    }
+}
+
+fn _op_const_float(v: f64) -> Operand {
+    return Operand {
+        kind: "const_float", local_id: -1,
+        int_val: 0, float_val: v, str_val: "", global_id: -1
+    }
+}
+
+fn _build_case_unop_neg() -> MModule {
+    let a = _local(0, "a")       // f64 param → %fd0
+    let t = _local(1, "t")       // STMT_UNOP "neg" dst → %fd1
+    let r = _local(2, "r")       // STMT_BINOP "add" dst → %fd2
+
+    let mut s0 = []
+    s0.push(_stmt_unop(t, "neg", _op_local(a.id)))
+    s0.push(_stmt_binop(r, "add", _op_local(t.id), _op_const_float(1.5)))
+    s0.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+
+    let mut params = []
+    params.push(a)
+    let mut locals = []
+    locals.push(a)
+    locals.push(t)
+    locals.push(r)
+
+    let mf = MFunc {
+        name: "unop_neg_smoke",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_unop_neg.hexa", funcs: fns, globals: [] }
+}
+
+fn _test_unop_neg() -> bool {
+    let mut ok = true
+    let ptx = codegen_emit_ptx_sm80(_build_case_unop_neg())
+    println("")
+    println("── emitted PTX (INBOX #1665 STMT_UNOP neg + const-hex, sm_80) ──")
+    println(ptx)
+    // ① register-neg — `neg.f64 %fd1, %fd0;` (sign flip on F64 bank).
+    ok = _check(ok, ptx, "neg.f64 %fd1, %fd0", "STMT_UNOP neg.f64 register form")
+    // ③ const-hex — 1.5 renders as 0d3FF8000000000000 (PTX FP64 immediate).
+    ok = _check(ok, ptx, "0d3FF8000000000000", "const_float 1.5 → PTX hex immediate")
+    // Negative guards — no decimal float text + no unsupported-unop stub.
+    if _contains(ptx, "add.f64 %fd2, %fd1, 1.5") {
+        println("  FAIL: decimal float `1.5` leaked into PTX (must be 0d hex)")
+        ok = false
+    }
+    if _contains(ptx, "INBOX #1665 - unsupported unop") {
+        println("  FAIL: STMT_UNOP fell through to honest stub")
+        ok = false
+    }
+    return ok
+}
+
 // ── Driver ───────────────────────────────────────────────────────────
 
 fn main() {
@@ -1218,11 +1307,12 @@ fn main() {
     let ok_mf32  = _test_math_f32()
     let ok_mf64  = _test_math_f64()
     let ok_minh  = _test_math_inherit()
+    let ok_uneg  = _test_unop_neg()
 
     println("")
     println("══════════════════════════════════════════════")
-    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_shuff64 && ok_shufm64 && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_mwc && ok_iadd && ok_mm && ok_mta && ok_mtb && ok_tma && ok_tmae && ok_mf32 && ok_mf64 && ok_minh {
-        println("PASS: RFC 055 + RFC 067 + RFC 068 P1/P2/P3/P4-codegen + RFC 068 §3 fp8 scaffold + RFC 069 + RFC 071 P3+/P5+ + N71-B FP64 warp-shuffle (+u64 mask narrow) + N73 mixed-width int setp (u32<u64 widen) + RFC 067 N202 TMA scaffold + RFC 067 N206 TMA matmul emit + RFC 055 §13 math intrinsics (sqrt/max/min/exp/abs/rsqrt) + PR-A [i64] kernel int-bank — 40/40 cases (incl. matmul + matmul_NT_a + matmul_NT_b + FP64 warp-shuffle composition + mixed-width cmp widen + TMA codegen scaffold + TMA matmul emit + math f32/f64/inherit + [i64] iadd int-bank)")
+    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_shuff64 && ok_shufm64 && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_mwc && ok_iadd && ok_mm && ok_mta && ok_mtb && ok_tma && ok_tmae && ok_mf32 && ok_mf64 && ok_minh && ok_uneg {
+        println("PASS: RFC 055 + RFC 067 + RFC 068 P1/P2/P3/P4-codegen + RFC 068 §3 fp8 scaffold + RFC 069 + RFC 071 P3+/P5+ + N71-B FP64 warp-shuffle (+u64 mask narrow) + N73 mixed-width int setp (u32<u64 widen) + RFC 067 N202 TMA scaffold + RFC 067 N206 TMA matmul emit + RFC 055 §13 math intrinsics (sqrt/max/min/exp/abs/rsqrt) + PR-A [i64] kernel int-bank + INBOX #1665 STMT_UNOP neg + const-hex — 41/41 cases (incl. matmul + matmul_NT_a + matmul_NT_b + FP64 warp-shuffle composition + mixed-width cmp widen + TMA codegen scaffold + TMA matmul emit + math f32/f64/inherit + [i64] iadd int-bank + unop neg + 0d-hex float immediate)")
     } else {
         println("FAIL: RFC 055 smoke not satisfied.")
         if !ok_br   { println("      STMT_BR FAILED") }
@@ -1265,9 +1355,10 @@ fn main() {
         if !ok_mf32 { println("      RFC 055 §13 math f32 family FAILED") }
         if !ok_mf64 { println("      RFC 055 §13 math f64 family + honest stubs FAILED") }
         if !ok_minh { println("      RFC 055 §13 math operand-kind inheritance FAILED") }
+        if !ok_uneg { println("      INBOX #1665 STMT_UNOP neg + const-hex FAILED") }
     }
     println("══════════════════════════════════════════════")
-    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_shuff64 && ok_shufm64 && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_mwc && ok_iadd && ok_mm && ok_mta && ok_mtb && ok_tma && ok_tmae && ok_mf32 && ok_mf64 && ok_minh) { exit(1) }
+    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_shuff64 && ok_shufm64 && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_mwc && ok_iadd && ok_mm && ok_mta && ok_mtb && ok_tma && ok_tmae && ok_mf32 && ok_mf64 && ok_minh && ok_uneg) { exit(1) }
 }
 
 // ── Case 9 — 055-P4 gpu_warp_shuffle(v, lane) intrinsic ───────────────
