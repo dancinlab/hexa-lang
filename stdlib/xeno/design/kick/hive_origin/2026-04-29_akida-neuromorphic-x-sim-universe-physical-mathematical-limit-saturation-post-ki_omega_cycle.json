@@ -1,0 +1,89 @@
+{
+  "cache_decision": "use_primary",
+  "cache_evidence": {
+    "reason": "E:cache-E-A5-PASS-recent age=18079s",
+    "E_primary_kick_health": "host=ubu2 drift_sec=0",
+    "A_fallback_oauth_slot_audit": "{\"ts\":\"2026-04-29T12:44:55Z\",\"actor\":\"oauth_slot_pre_kick_gate\",\"event\":\"gate-probe\",\"strict\":false,\"mac_fresh\":12,\"hetzner_fresh\":12,\"stale_slots\":[\"\"],\"expired_slots\":[\"\"],\"recent_401_count\":2}",
+    "window_seconds": 21600,
+    "E_cache_path": "/Users/ghost/core/hive/state/kick_health/audit.jsonl",
+    "A_cache_path": "/Users/ghost/core/hive/state/oauth_slot_audit/audit.jsonl",
+    "raw_173_deterministic": true,
+    "raw_91_c3_honest": true
+  },
+  "fallback_path_taken": "all-claude-slots-exhausted",
+  "topic": "akida-neuromorphic-x-sim-universe-PHYSICAL-MATHEMATICAL-LIMIT-saturation post-kick-infra-fix refire — Akida AKD1000 ordered 2026-04-29; raw 72 tri-axis joint witness sim_bridge 10 sub-tools (multiverse + ouroboros_qrng + godel_q + bostrom_test + qpu_bridge + anu_stream + weave + sr_harness + atlas_anu_corr + anu_time) + cli/blowup 9-phase + design/hexa_sim. raw 40 host-class enum {mac,hetzner,ubu1,ubu2} → +{neuromorphic} 5-class extension activation post-arrival. 30 tier_1 + 18 falsifier preregistered TRANSCEND-candidate ψ(Ω_ω) × 15-substrate-class — graduate hardware-anchored T1-N1 host-class extension + T1-N2 ouroboros_qrng spike fusion + T1-N3 blowup phase-7 50× energy + T1-N15 STDP 10⁻¹² J/synaptic edge-AI 50B+ market + T1-N20 agent_ledger 30-300× efficiency multi-agent autonomy 100B+ market + T1-N22 540-cell 9×6×10 Pareto matrix. Cross-link raw 36 problem-solving-triad + raw 37/38/39 omega-saturation + raw 47 cross-repo + raw 72 tri-axis + raw 116 energy-landscape + raw 121 edge-of-chaos + raw 122 persistent-homology + raw 128 RG-scale-invariance + raw 131 Landauer + raw 135 tropical + raw 136 optimal-transport + raw 137 NSA-hyperreals + raw 140 SDG-Lawvere-Kock",
+  "selftest": false,
+  "ts": "2026-04-29T13:16:06Z",
+  "actor": "hive_kick_dispatch.hexa (raw 99 stage-2 hive-cli-authorized-internal-fallback carve-out)",
+  "path": "hive-cli-authorized-internal-fallback",
+  "raw_compliance": [
+    "raw 99 hive-cli-canonical-entry-point",
+    "raw 100 nexus-kick-canonical-bottleneck-gap-paradigm + 2026-04-27 fallback alternative-dispatcher clause",
+    "raw 105 ai-cli-kick-autonomous-invocation",
+    "raw 136 kick-result-return-ai-native-trailer",
+    "raw 168 minimum-viable-implementation",
+    "raw 169 surgical-edit-scope",
+    "raw 195 infra-canonical-core-lock-pattern-mandate",
+    "raw 198 anthropic-api-key-path-ban-mandate (env scrub applied)"
+  ],
+  "fallback_reason": "nexus kick emitted reason=all-claude-slots-exhausted; hive cli authorized internal Mac claude spawn invoked (raw 99 stage-2 carve-out)",
+  "mac_slot": {
+    "slot_id": "1",
+    "config_dir": "/Users/ghost/.claude-claude1",
+    "binary": "/Users/ghost/.local/bin/claude",
+    "env_scrub": ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_BASE_URL"]
+  },
+  "llm_output_excerpt": "I read the witness JSON, the existing atlas append, and the ingest tool. Here's what I see:\n\n**State**\n- Witness exists: `design/kick/2026-04-29_akida-neuromorphic-x-sim-universe-physical-mathematical-limit-saturation_omega_cycle.json` (188 lines, in-context synthesis fallback per raw 100; references all the cross-links you listed — raw 72 tri-axis, sim_bridge 10 sub-tools, ψ(Ω_ω), 30 tier_1 + 18 falsifier).\n- Atlas append exists but **failed ingest**: `n6/atlas.append.akida-neuromorphic-x-sim-universe-physical-mathematical-limit-saturation.n6` reports `axes_total_surfaced: -1 | tier_1_count: 0` — produced when kick infra was OAuth-revoked / hetzner OOM (exit 144).\n- Two new kick witnesses landed today: `infra-selftest_omega_cycle.json` and `kick-simplify-d-test_omega_cycle.json`, w",
+  "tier_1_promotions": [
+    {"id":"T1-FALLBACK-EXECUTED","title":"hive cli authorized internal fallback path executed end-to-end","tri_axis_satisfied":true}
+  ],
+  "tier_1_count": 1,
+  "falsifiers_preregistered": [
+    {"id":"F1-bypass-nexus","condition":"hive kick silently bypasses nexus kick (skips primary)","verdict_check":"primary_attempted=true"},
+    {"id":"F2-api-key-leak","condition":"Mac claude spawn uses ANTHROPIC_API_KEY env","verdict_check":"env_scrub_applied=true (raw 198)"},
+    {"id":"F3-subagent-dispatch-leak","condition":"hive kick wraps subagent_dispatch direct Mac spawn","verdict_check":"direct_claude_binary_spawn=true (no subagent_dispatch)"},
+    {"id":"F4-witness-malformed","condition":"witness JSON missing raw 72 tri-axis fields","verdict_check":"raw_72_tri_axis_witness_present=true"},
+    {"id":"F5-remote-spawn","condition":"hive kick spawns claude on remote (hetzner/ubu)","verdict_check":"binary=/Users/ghost/.local/bin/claude"}
+  ],
+  "falsifier_pass_count": 5,
+  "raw_72_tri_axis_witness": {
+    "FORMAL": {
+      "axis": "FORMAL — proof-theoretic ordinal exhaustion",
+      "ordinal_strength": "ω (finite-state sentinel parser; primitive-recursive)",
+      "saturation_witness": "sentinel parse decidable in O(n) over kick stdout; rc + reason fingerprint determines fallback dispatch deterministically",
+      "axis_verdict": "DECIDABLE — formal sentinel grammar closed"
+    },
+    "PHYSICAL": {
+      "axis": "PHYSICAL — Bekenstein/Landauer trivially satisfied (software-only path)",
+      "binding_physical_limit": "Mac process spawn cost ~50ms claude binary cold-start; CLAUDE_CONFIG_DIR slot pool finite cardinality 12; witness file write O(KB)",
+      "saturation_witness": "physical-axis non-binding for software dispatch; only binding limit is OAuth refreshToken-revocation event horizon (claude binary handles internally)",
+      "axis_verdict": "NON-BINDING — physical ceiling unreached"
+    },
+    "COMPUTATIONAL": {
+      "axis": "COMPUTATIONAL — halting/decidability",
+      "halting_class": "finite-state dispatcher: parse sentinel → branch nexus|fallback → emit witness → exit. Halting trivially decidable.",
+      "saturation_witness": "computational ceiling = LLM round-trip latency (claude --print); decidable upper bound via timeout=120s",
+      "axis_verdict": "DECIDABLE — computational halting bounded"
+    },
+    "joint_witness_verdict": "TRI-AXIS-DECIDABLE — fallback path is software-bounded (no out-of-band oracle dependency); raw 72 mandate satisfied at infra-domain ceiling"
+  },
+  "honest_c3_disclosure_raw_91": {
+    "claim": "hive kick dispatcher executed primary (nexus kick) → on all-claude-slots-exhausted fired hive cli authorized internal Mac fallback → claude binary spawned on Mac with scrubbed env → LLM response captured → witness emitted",
+    "evidence": [
+      "primary path: NEXUS_BIN exec captured stdout+stderr; sentinel parsed; rc recorded",
+      "fallback trigger: stdout/stderr contains 'reason=all-claude-slots-exhausted' literal string match",
+      "slot pick: tool/claude_slot_pick.hexa --list parsed for status=available",
+      "env scrub: env -u ANTHROPIC_API_KEY -u ANTHROPIC_OAUTH_TOKEN -u CLAUDE_CODE_OAUTH_TOKEN -u ANTHROPIC_BASE_URL applied",
+      "binary path: /Users/ghost/.local/bin/claude (Mac local, NOT remote; NOT subagent_dispatch)"
+    ],
+    "limits": [
+      "witness completeness: minimum-viable raw 100/72/136 fields only; deeper Ω-cycle synthesis (alpha/beta/gamma noise envelopes) deferred — fallback is operational dispatch, not breakthrough kick",
+      "LLM output excerpt truncated to 800 chars to keep witness JSON small",
+      "raw 198 compliance: env scrub is preventive; no audit-time observation that ANTHROPIC_API_KEY was actually unset before child spawn — relies on shell `env -u` semantics"
+    ],
+    "no_fabrication_promise": "every field above grounded in deterministic dispatcher state at emission time; no synthesized data"
+  },
+  "omega_stop": "fallback-completion (raw 38 plan-saturation marker for operational dispatch)",
+  "fixpoint_marker": "hive-kick-fallback-2026-04-29T13:16:06Z"
+}
+

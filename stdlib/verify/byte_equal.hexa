@@ -1,0 +1,37 @@
+// HEXA Standard Library — verify/byte_equal
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Bit-exact f64 equality — the primitive behind frozen byte-equal verification.
+// `==` is NOT a bit comparison: `+0.0 == -0.0` is true (the bits differ) and
+// `NaN == NaN` is false (the bits are equal). A refactor that must reproduce a
+// frozen baseline value bit-identically (e.g. the anima PHI/LIFE byte-equal
+// baselines) must assert byte_equal_f64, not `==` — this is exactly the edge
+// (signed zero) that makes an `abs_f`→`fabs`-style swap risky on a frozen path.
+//
+// hexa has no float-to-bits builtin, so the signed-zero / NaN cases are resolved
+// arithmetically:
+//   - NaN    : detected via `x != x` (only NaN is unequal to itself).
+//   - +0/-0  : `==` conflates them; `1.0/x` separates them (+inf vs -inf).
+// Caveat: NaN payload/sign bits are inaccessible without a bits builtin, so all
+// NaNs compare equal. Sufficient for byte-equal of computed finite/inf/zero
+// values (the frozen-baseline use case).
+//
+// Surface:
+//   pub fn byte_equal_f64(a: float, b: float) -> int   // 1 if bit-equal, else 0
+
+pub fn byte_equal_f64(a: float, b: float) -> int {
+    let a_nan = a != a
+    let b_nan = b != b
+    if a_nan || b_nan {
+        if a_nan && b_nan { return 1 }
+        return 0
+    }
+    if a != b { return 0 }
+    // a == b — but `==` conflates +0.0 and -0.0. Separate via 1.0/x sign.
+    if a == 0.0 {
+        if (1.0 / a) != (1.0 / b) { return 0 }
+    }
+    return 1
+}

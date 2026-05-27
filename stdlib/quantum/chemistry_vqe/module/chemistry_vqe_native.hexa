@@ -1,0 +1,877 @@
+#!hexa strict
+// qmirror/chemistry_vqe/module/chemistry_vqe_native.hexa
+//
+// Pure-hexa molecular VQE kernel — Phase 10 of the full-repo hexa-only
+// absorption (PARALLEL_SUBAGENT_FIRING_ROADMAP_2026_05_12.md §4 Round 3).
+// Replaces _python_bridge/module/chemistry_vqe_runner.py (now deleted). No
+// subprocess, no python, no qiskit / qiskit-nature / pyscf at runtime.
+//
+// ─── F-QM-CHEM-N5 (H2 STO-3G/0.74Å spectroscopic-accuracy gate) ────────────
+//
+// The cond.14 N5 gate compares an exact-statevector UCCSD VQE energy to a
+// PySCF FCI runtime reference at |E - E_FCI| < 1 µHa. The qiskit-nature
+// pipeline (PySCFDriver + ParityMapper + 2-qubit reduction + UCCSD + HF init
+// + LieTrotter exp(-i θ G_k)) emits a canonical 5-term Hamiltonian and
+// 3-parameter UCCSD ansatz that are byte-stable for this molecule / basis /
+// bond length. We hardcode both as constants (extracted offline from the
+// retired runner @ 2026-05-12, qiskit-nature 0.7.2 + pyscf 2.13.0), then
+// reproduce the VQE energy minimisation in pure hexa against the engine_aer
+// state_vector kernel. The Hamiltonian coefficients are an intrinsic
+// property of the molecule + basis + bond length, not a property of qiskit-
+// nature — switching libraries (or computing them by hand from Szabo &
+// Ostlund integrals) would give the same numbers to ≪ 1 µHa.
+//
+// ─── algorithm ─────────────────────────────────────────────────────────────
+//
+// 1. Hamiltonian (parity-mapped, 2-qubit reduced, qiskit endian char[0]=q1,
+//    char[1]=q0; values in Hartree, includes nuclear+frozen-core shift):
+//
+//        H = constant_shift * I
+//          + sum_k coeff_k * P_k                       (5 Pauli terms)
+//
+//    The constant_shift is the qiskit-nature `active_problem.hamiltonian
+//    .constants.values()` sum (nuclear repulsion + transformer constants).
+//    For H2/STO-3G/0.74Å there is no FreezeCore — constant_shift is the
+//    bare nuclear repulsion 1/R = 1/0.74 Å·bohr⁻¹ projected into Hartree.
+//
+// 2. HF initial state: parity-mapped 2-particle/2-spatial-orbital H2 reduces
+//    to |01⟩ on 2 qubits (q0=1, q1=0). Equivalently: X on q0 applied to
+//    |00⟩.
+//
+// 3. UCCSD ansatz: 3 excitation operators (singles + double, in this order):
+//        G_0 = 1·IY            (single 0→1)
+//        G_1 = -1·YI           (single 2→3)
+//        G_2 = -0.5·XY + 0.5·YX (double (0,2)→(1,3))
+//    Bound circuit: |ψ(θ)⟩ = U_2(θ_2) · U_1(θ_1) · U_0(θ_0) · |HF⟩
+//    where U_k(θ) = exp(-i θ G_k). All three single-string exponentials are
+//    pure rotations because every Pauli P satisfies P² = I, so
+//        exp(-i θ P) = cos(θ) I - i sin(θ) P.
+//    For G_2 = -0.5 XY + 0.5 YX: XY and YX commute (verified offline), so
+//        exp(-i θ_2 (-0.5 XY + 0.5 YX))
+//          = exp(i θ_2/2 · XY) · exp(-i θ_2/2 · YX).
+//
+// 4. Pauli expectation: for each H term P_k with coefficient c_k, compute
+//    <ψ|P_k|ψ> via direct amplitude permutation (Z = phase ±1, X = bit flip,
+//    Y = bit flip + i·(-1)^bit phase). E_op = Σ c_k · <ψ|P_k|ψ>. Total
+//    energy E(θ) = E_op + constant_shift.
+//
+// 5. Nelder-Mead optimiser (local, pure scalar arithmetic, ~50-80 iters on
+//    H2). Initial simplex: θ_0 = [0,0,0] + initial_step·e_i. Termination:
+//    |best - worst| < tol OR max_iter exceeded. Direct port of the retired
+//    runner's _nelder_mead (deterministic, no PRNG needed for H2 since
+//    seed=None).
+//
+// ─── numerical-precision note ──────────────────────────────────────────────
+//
+// The retired runner converges to delta_uHa = 0.0005 (51 iters, qiskit
+// Statevector + LieTrotter reps=1). The Trotter step is single-rep, so its
+// own discretisation error is the ceiling. Our analytic exp(-i θ G_k) is
+// exact for each single-string operator (and for the commuting 2-term G_2),
+// so the only departure from qiskit's bound state vector is single-Trotter
+// truncation in qiskit (which we reproduce by also applying U_0, U_1, U_2
+// sequentially — i.e., the same Trotter expansion). Result: byte-equivalent
+// energy to ≪ 1 µHa.
+//
+// ─── hexa quirks honored ───────────────────────────────────────────────────
+//   - >= / <= banned — strict < / > only.
+//   - struct names cannot start with _.
+//   - apply_single in state_vector.hexa mutates state.re/.im in place; we
+//     never reuse a StateVector after passing it through a gate.
+//   - Loop-bounded math (~150 NM steps · ~5 Pauli evals · O(1) work each)
+//     well under the 768MB RSS cap.
+
+use "../../engine_aer/module/state_vector.hexa"
+use "../../engine_aer/module/gates.hexa"
+
+// ── canonical hardcoded constants for H2 / STO-3G / R=0.74 Å ──────────────
+//
+// Extracted offline from _python_bridge/module/chemistry_vqe_runner.py
+// (now deleted) @ 2026-05-12 via:
+//   from chemistry_vqe_runner import _build_active_problem
+//   info = _build_active_problem(molecule='h2', r_angstrom=0.74, basis='sto3g')
+//   info['sparse_op'].to_list()
+//   info['constant_shift']
+// qiskit-nature 0.7.2, pyscf 2.13.0.
+
+fn h2_constant_shift_ha() -> float {
+    return 0.7151043390810812
+}
+
+// FCI reference: pyscf 2.13.0 RHF + FCI at H2/STO-3G/R=0.74 Å. This is the
+// runtime FCI emitted by the retired runner's _fci_reference() at the
+// timestamp of canonical-constant extraction (2026-05-12). Hardcoded as
+// the spectroscopic-accuracy gate comparator (1 µHa tolerance).
+fn h2_fci_ref_ha() -> float {
+    return 0.0 - 1.137283834488502
+}
+
+fn h2_n_qubits() -> int { return 2 }
+fn h2_n_pauli_terms() -> int { return 5 }
+fn h2_n_parameters() -> int { return 3 }
+
+// Pauli labels for the 5 Hamiltonian terms (qiskit endian, char[0]=q_high).
+fn h2_pauli_labels() -> [str] {
+    return ["II", "IZ", "ZI", "ZZ", "XX"]
+}
+
+// Coefficients for the 5 Hamiltonian terms. Order matches h2_pauli_labels().
+fn h2_pauli_coeffs() -> [float] {
+    return [
+        0.0 - 1.053421076916521,
+        0.39484436335590256,
+        0.0 - 0.39484436335590256,
+        0.0 - 0.011246157150820696,
+        0.1812104620151967
+    ]
+}
+
+// ── public result struct ──────────────────────────────────────────────────
+
+struct ChemVqeNative {
+    ok:               int,
+    verdict:          str,        // "PASS" | "FAIL"
+    molecule:         str,
+    n_qubits:         int,
+    n_pauli_terms:    int,
+    n_parameters:     int,
+    energy_Ha:        float,
+    ref_energy_Ha:    float,
+    ref_kind:         str,
+    delta_uHa:        float,
+    n_iter:           int,
+    converged:        int,
+    wall_seconds:     float,
+    engine:           str,
+    message:          str
+}
+
+fn chem_native_fail(reason: str) -> ChemVqeNative {
+    return ChemVqeNative {
+        ok: 0, verdict: "FAIL",
+        molecule: "h2", n_qubits: 0, n_pauli_terms: 0, n_parameters: 0,
+        energy_Ha: 0.0, ref_energy_Ha: 0.0, ref_kind: "none",
+        delta_uHa: 0.0, n_iter: 0, converged: 0, wall_seconds: 0.0,
+        engine: "none", message: reason
+    }
+}
+
+fn cv_abs(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+// ── HF state preparation ─────────────────────────────────────────────────
+//
+// Parity-mapped H2 (2 spatial orbitals, (1,1) particles, 2-qubit reduction)
+// HF is |01⟩ in the q1q0 basis (q0=1, q1=0). The HartreeFock circuit emits
+// U(π, 0, π) on q0, which is the X gate up to global phase.
+
+fn cv_build_hf_state() -> StateVector {
+    let n = h2_n_qubits()
+    let sv = state_zero(n)
+    let g = gate_x()
+    return apply_single(sv, g.re, g.im, 0, n)
+}
+
+// ── single-Pauli-string exponentials ─────────────────────────────────────
+//
+// exp(-i θ G) for G a single Pauli string with G² = I:
+//     exp(-i θ G) = cos(θ) · I - i sin(θ) · G
+// Implementation for our specific operators on n=2 qubits, by direct
+// amplitude permutation. Returns a fresh (re, im) pair — never aliases the
+// input.
+
+// Helpers — fresh-array copies of state amplitudes.
+fn cv_clone_arr(a: [float]) -> [float] {
+    let n = len(a)
+    let mut out = []
+    let mut i = 0
+    while i < n {
+        out = out.push(a[i])
+        i = i + 1
+    }
+    return out
+}
+
+// State after applying exp(-i θ · Y_q): RY(2θ) on qubit q. RY is an
+// existing single-qubit gate, so dispatch to apply_single. Wraps in a fresh
+// allocation by going through gate_ry() (which returns new arrays).
+fn cv_apply_exp_minus_i_theta_Y_on_q(state: StateVector, theta: float, q: int) -> StateVector {
+    let n = h2_n_qubits()
+    let g = gate_ry(2.0 * theta)
+    // apply_single mutates state.re / state.im in place per the aliasing
+    // note; caller passes a fresh clone for the *first* gate of the chain.
+    return apply_single(state, g.re, g.im, q, n)
+}
+
+// exp(-i θ G) where G is XY on (q1, q0) — qiskit endian. cos(θ) I -i sin(θ) XY.
+// XY|i⟩ acts as: X on q1 flips bit1; Y on q0 flips bit0 with phase i·(-1)^b0.
+// Net: XY|i⟩ = i·(-1)^b0 · |i ^ 3⟩.
+// (i sin θ) · (XY|i⟩) contributes -sin(θ)·(-1)^b0 · |i^3⟩ to the real part
+// (since -i sin(θ) · i = sin(θ), but with the sign from b0 ↦ -1 for b0=1).
+// Wait — recompute: contribution to out[j] = (-i sin θ) · (i·(-1)^b0) · amp[i]
+//                 = sin θ · (-1)^b0 · amp[i].
+fn cv_apply_exp_minus_i_theta_XY(state: StateVector, theta: float) -> StateVector {
+    let n = h2_n_qubits()
+    let mut dim = 1
+    let mut k = 0
+    while k < n {
+        dim = dim * 2
+        k = k + 1
+    }
+    let c = cos(theta)
+    let s = sin(theta)
+    // Stage the output in fresh [float] arrays (dim=4 — boxed-array cost is
+    // trivial here), then wrap into a fresh farr-backed StateVector via
+    // state_from_arrays. We never alias the input state.
+    let mut out_re = []
+    let mut out_im = []
+    let mut z = 0
+    while z < dim {
+        out_re = out_re.push(0.0)
+        out_im = out_im.push(0.0)
+        z = z + 1
+    }
+    let mut i = 0
+    while i < dim {
+        let sre = amp_re_at(state, i)
+        let sim = amp_im_at(state, i)
+        // cos(θ) · I contribution
+        out_re[i] = out_re[i] + c * sre
+        out_im[i] = out_im[i] + c * sim
+        // -i sin(θ) · XY contribution to out[j] where j = i XOR 3
+        let j = i ^ 3
+        let b0 = i & 1
+        let sign = if b0 == 0 { 1.0 } else { 0.0 - 1.0 }
+        // (-i sin θ) · (i · sign) · amp[i] = sign · sin θ · amp[i]
+        out_re[j] = out_re[j] + sign * s * sre
+        out_im[j] = out_im[j] + sign * s * sim
+        i = i + 1
+    }
+    return state_from_arrays(out_re, out_im)
+}
+
+// exp(-i θ · YX): YX|i⟩ = i·(-1)^b1 · |i^3⟩ (Y on q1 contributes phase
+// based on bit1; X on q0 flips bit0). Same structure as XY but with the
+// sign keyed on b1 instead of b0.
+fn cv_apply_exp_minus_i_theta_YX(state: StateVector, theta: float) -> StateVector {
+    let n = h2_n_qubits()
+    let mut dim = 1
+    let mut k = 0
+    while k < n {
+        dim = dim * 2
+        k = k + 1
+    }
+    let c = cos(theta)
+    let s = sin(theta)
+    let mut out_re = []
+    let mut out_im = []
+    let mut z = 0
+    while z < dim {
+        out_re = out_re.push(0.0)
+        out_im = out_im.push(0.0)
+        z = z + 1
+    }
+    let mut i = 0
+    while i < dim {
+        let sre = amp_re_at(state, i)
+        let sim = amp_im_at(state, i)
+        out_re[i] = out_re[i] + c * sre
+        out_im[i] = out_im[i] + c * sim
+        let j = i ^ 3
+        let b1 = (i >> 1) & 1
+        let sign = if b1 == 0 { 1.0 } else { 0.0 - 1.0 }
+        out_re[j] = out_re[j] + sign * s * sre
+        out_im[j] = out_im[j] + sign * s * sim
+        i = i + 1
+    }
+    return state_from_arrays(out_re, out_im)
+}
+
+// ── UCCSD ansatz builder ─────────────────────────────────────────────────
+//
+// Apply U_2(θ_2) · U_1(θ_1) · U_0(θ_0) to HF state, where
+//     U_0 = exp(-i θ_0 · IY)          (Y on q0)
+//     U_1 = exp(-i θ_1 · (-YI))       (Y on q1, sign flipped)
+//     U_2 = exp(-i θ_2 · (-0.5 XY + 0.5 YX))
+//         = exp(i θ_2/2 · XY) · exp(-i θ_2/2 · YX)
+// Returns a fresh StateVector. Internal state mutation is fine because
+// every input is built fresh in this function.
+
+fn cv_uccsd_h2_ansatz(theta0: float, theta1: float, theta2: float) -> StateVector {
+    let n = h2_n_qubits()
+    // HF state, fresh allocation.
+    let hf = cv_build_hf_state()
+
+    // U_0 = exp(-i θ_0 · IY) = RY(2 θ_0) on q0. apply_single mutates in
+    // place, but hf was just allocated and is not aliased.
+    let s1 = cv_apply_exp_minus_i_theta_Y_on_q(hf, theta0, 0)
+
+    // U_1 = exp(-i θ_1 · (-YI)) = exp(+i θ_1 · YI) = exp(-i (-θ_1) · YI)
+    //     = RY(-2 θ_1) on q1.
+    let s2 = cv_apply_exp_minus_i_theta_Y_on_q(s1, 0.0 - theta1, 1)
+
+    // U_2 = exp(i θ_2/2 · XY) · exp(-i θ_2/2 · YX)
+    //     = exp(-i (-θ_2/2) · XY) · exp(-i θ_2/2 · YX).
+    // Apply in left-to-right multiplication order: rightmost (YX) acts on
+    // state first, then XY.
+    let s3 = cv_apply_exp_minus_i_theta_YX(s2, theta2 / 2.0)
+    let s4 = cv_apply_exp_minus_i_theta_XY(s3, 0.0 - theta2 / 2.0)
+    return s4
+}
+
+// ── Pauli expectation ────────────────────────────────────────────────────
+//
+// Compute <ψ|P|ψ> for a 2-qubit Pauli string P = P_q1 ⊗ P_q0 (qiskit endian:
+// label char 0 = q_high, char 1 = q_low). Returns a real number (for our
+// real-symmetric H2 Hamiltonian the imaginary part is exactly 0).
+
+fn cv_char_at(s: str, i: int) -> str {
+    return s.substring(i, i + 1)
+}
+
+// Compute Pauli applied to |i⟩: returns (j, phase_re, phase_im) for the
+// equation P|i⟩ = (phase_re + i·phase_im) · |j⟩. Encoded as a 3-int return
+// would be cleaner but hexa structs are cheap; we inline the logic in the
+// expectation function to avoid allocation per amplitude.
+
+fn cv_pauli_expectation(re: [float], im: [float], label: str) -> float {
+    let nstates = len(re)
+    let p1 = cv_char_at(label, 0)
+    let p0 = cv_char_at(label, 1)
+
+    // sum_re + i·sum_im = <ψ|Pψ> = Σ_i conj(ψ_i) · (Pψ)_i
+    let mut sum_re = 0.0
+    let mut sum_im = 0.0
+
+    let mut i = 0
+    while i < nstates {
+        let b0 = i & 1
+        let b1 = (i >> 1) & 1
+
+        // Phase + permuted index after applying P to |i⟩.
+        let mut j = i
+        let mut phase_re = 1.0
+        let mut phase_im = 0.0
+
+        // q0
+        if p0 == "X" {
+            j = j ^ 1
+        }
+        if p0 == "Y" {
+            j = j ^ 1
+            // multiply phase by (i · (-1)^b0)
+            // (a + ib) · (i · s) = (-b·s) + i·(a·s) where s = (-1)^b0
+            let s = if b0 == 0 { 1.0 } else { 0.0 - 1.0 }
+            let new_re = 0.0 - phase_im * s
+            let new_im = phase_re * s
+            phase_re = new_re
+            phase_im = new_im
+        }
+        if p0 == "Z" {
+            if b0 == 1 {
+                phase_re = 0.0 - phase_re
+                phase_im = 0.0 - phase_im
+            }
+        }
+        // q1
+        if p1 == "X" {
+            j = j ^ 2
+        }
+        if p1 == "Y" {
+            j = j ^ 2
+            let s = if b1 == 0 { 1.0 } else { 0.0 - 1.0 }
+            let new_re = 0.0 - phase_im * s
+            let new_im = phase_re * s
+            phase_re = new_re
+            phase_im = new_im
+        }
+        if p1 == "Z" {
+            if b1 == 1 {
+                phase_re = 0.0 - phase_re
+                phase_im = 0.0 - phase_im
+            }
+        }
+
+        // (Pψ)_j contribution from amp[i]: (phase_re + i phase_im) · ψ_i
+        // Pψ_j_inc_re = phase_re · re[i] - phase_im · im[i]
+        // Pψ_j_inc_im = phase_re · im[i] + phase_im · re[i]
+        let ppj_re = phase_re * re[i] - phase_im * im[i]
+        let ppj_im = phase_re * im[i] + phase_im * re[i]
+
+        // Add conj(ψ_j) · (this term) to running sum.
+        // conj(a+ib)·(c+id) = (a·c + b·d) + i(a·d - b·c).
+        sum_re = sum_re + re[j] * ppj_re + im[j] * ppj_im
+        sum_im = sum_im + re[j] * ppj_im - im[j] * ppj_re
+
+        i = i + 1
+    }
+    // For Hermitian Hamiltonian, <ψ|H|ψ> is real. We return just sum_re.
+    return sum_re
+}
+
+// ── total energy ─────────────────────────────────────────────────────────
+
+fn cv_energy(theta0: float, theta1: float, theta2: float) -> float {
+    let psi = cv_uccsd_h2_ansatz(theta0, theta1, theta2)
+    // Materialize once — cv_pauli_expectation operates on flat [float] arrays
+    // and is called 5 times (one per Pauli term).
+    let psi_re = state_re_array(psi)
+    let psi_im = state_im_array(psi)
+    let _ = state_free(psi)
+    let labels = h2_pauli_labels()
+    let coeffs = h2_pauli_coeffs()
+    let mut e_op = 0.0
+    let mut k = 0
+    while k < 5 {
+        let exp_k = cv_pauli_expectation(psi_re, psi_im, labels[k])
+        e_op = e_op + coeffs[k] * exp_k
+        k = k + 1
+    }
+    return e_op + h2_constant_shift_ha()
+}
+
+// Wrapper for NM: takes a 3-element theta vector and returns scalar E.
+fn cv_energy_vec(theta: [float]) -> float {
+    return cv_energy(theta[0], theta[1], theta[2])
+}
+
+// ── Nelder-Mead optimiser ────────────────────────────────────────────────
+//
+// Port of _nelder_mead from the retired runner (n=3, deterministic, no PRNG).
+// Simplex is stored as parallel arrays of points (3 floats each) and energies.
+
+// Insertion sort by energy ascending. n+1 = 4 points for our problem;
+// O(n²) is trivial.
+fn cv_simplex_sort(pts_x0: [float], pts_x1: [float], pts_x2: [float], pts_f: [float]) -> map {
+    let n = len(pts_f)
+    let mut x0 = cv_clone_arr(pts_x0)
+    let mut x1 = cv_clone_arr(pts_x1)
+    let mut x2 = cv_clone_arr(pts_x2)
+    let mut fs = cv_clone_arr(pts_f)
+    let mut i = 1
+    while i < n {
+        let key_x0 = x0[i]
+        let key_x1 = x1[i]
+        let key_x2 = x2[i]
+        let key_f = fs[i]
+        let mut j = i - 1
+        // Use a flag instead of `break` (avoid relying on break semantics).
+        let mut stop = 0
+        while stop == 0 {
+            if j < 0 {
+                stop = 1
+            } else {
+                if fs[j] > key_f {
+                    x0[j + 1] = x0[j]
+                    x1[j + 1] = x1[j]
+                    x2[j + 1] = x2[j]
+                    fs[j + 1] = fs[j]
+                    j = j - 1
+                } else {
+                    stop = 1
+                }
+            }
+        }
+        x0[j + 1] = key_x0
+        x1[j + 1] = key_x1
+        x2[j + 1] = key_x2
+        fs[j + 1] = key_f
+        i = i + 1
+    }
+    let out = json_parse("{}")
+    out["x0"] = x0
+    out["x1"] = x1
+    out["x2"] = x2
+    out["f"] = fs
+    return out
+}
+
+// Run Nelder-Mead on cv_energy_vec with n=3 parameters. Returns map with
+// best_theta, best_f, n_iter, converged.
+fn cv_nelder_mead(initial_step: float, max_iter: int, tol: float) -> map {
+    let n = 3
+    // Initial simplex (n+1 = 4 points): θ_0 = [0,0,0], then θ_0 + step·e_i.
+    let mut x0 = [0.0, initial_step, 0.0, 0.0]
+    let mut x1 = [0.0, 0.0, initial_step, 0.0]
+    let mut x2 = [0.0, 0.0, 0.0, initial_step]
+    let mut fs = [
+        cv_energy(x0[0], x1[0], x2[0]),
+        cv_energy(x0[1], x1[1], x2[1]),
+        cv_energy(x0[2], x1[2], x2[2]),
+        cv_energy(x0[3], x1[3], x2[3])
+    ]
+
+    let mut converged = 0
+    let mut it = 0
+    let mut done = 0
+    while done == 0 {
+        if it < max_iter {
+            // ok
+        } else {
+            done = 1
+        }
+        if done == 0 {
+            let sorted = cv_simplex_sort(x0, x1, x2, fs)
+            x0 = sorted["x0"]
+            x1 = sorted["x1"]
+            x2 = sorted["x2"]
+            fs = sorted["f"]
+
+            let best_f = fs[0]
+            let worst_f = fs[3]
+            let spread = if (worst_f - best_f) < 0.0 { 0.0 - (worst_f - best_f) } else { worst_f - best_f }
+            if spread < tol {
+                converged = 1
+                done = 1
+            }
+            if done == 0 {
+                // Centroid of best 3 (exclude worst).
+                let c0 = (x0[0] + x0[1] + x0[2]) / 3.0
+                let c1 = (x1[0] + x1[1] + x1[2]) / 3.0
+                let c2 = (x2[0] + x2[1] + x2[2]) / 3.0
+                let wx0 = x0[3]
+                let wx1 = x1[3]
+                let wx2 = x2[3]
+                // Reflection.
+                let r0 = c0 + (c0 - wx0)
+                let r1 = c1 + (c1 - wx1)
+                let r2 = c2 + (c2 - wx2)
+                let f_refl = cv_energy(r0, r1, r2)
+
+                // Standard NM branch: if best <= f_refl < second_worst, accept.
+                // second_worst = fs[n-1] = fs[2] (0-indexed; n=3 => index 2).
+                let f_second = fs[2]
+                let f_best = fs[0]
+                if f_best < f_refl + 0.0 || f_best == f_refl {
+                    // f_best <= f_refl
+                    if f_refl < f_second {
+                        x0[3] = r0
+                        x1[3] = r1
+                        x2[3] = r2
+                        fs[3] = f_refl
+                    } else {
+                        // f_refl >= f_second  -> contraction branch
+                        let cn0 = c0 + 0.5 * (wx0 - c0)
+                        let cn1 = c1 + 0.5 * (wx1 - c1)
+                        let cn2 = c2 + 0.5 * (wx2 - c2)
+                        let f_contr = cv_energy(cn0, cn1, cn2)
+                        if f_contr < worst_f {
+                            x0[3] = cn0
+                            x1[3] = cn1
+                            x2[3] = cn2
+                            fs[3] = f_contr
+                        } else {
+                            // Shrink toward best.
+                            let bx0 = x0[0]
+                            let bx1 = x1[0]
+                            let bx2 = x2[0]
+                            let mut q = 1
+                            while q < 4 {
+                                let nv0 = bx0 + 0.5 * (x0[q] - bx0)
+                                let nv1 = bx1 + 0.5 * (x1[q] - bx1)
+                                let nv2 = bx2 + 0.5 * (x2[q] - bx2)
+                                x0[q] = nv0
+                                x1[q] = nv1
+                                x2[q] = nv2
+                                fs[q] = cv_energy(nv0, nv1, nv2)
+                                q = q + 1
+                            }
+                        }
+                    }
+                } else {
+                    // f_refl < f_best  -> expand
+                    let e0 = c0 + 2.0 * (c0 - wx0)
+                    let e1 = c1 + 2.0 * (c1 - wx1)
+                    let e2 = c2 + 2.0 * (c2 - wx2)
+                    let f_exp = cv_energy(e0, e1, e2)
+                    if f_exp < f_refl {
+                        x0[3] = e0
+                        x1[3] = e1
+                        x2[3] = e2
+                        fs[3] = f_exp
+                    } else {
+                        x0[3] = r0
+                        x1[3] = r1
+                        x2[3] = r2
+                        fs[3] = f_refl
+                    }
+                }
+                it = it + 1
+            }
+        }
+    }
+    let sorted_final = cv_simplex_sort(x0, x1, x2, fs)
+    let x0f = sorted_final["x0"]
+    let x1f = sorted_final["x1"]
+    let x2f = sorted_final["x2"]
+    let ff = sorted_final["f"]
+
+    let out = json_parse("{}")
+    out["theta0"] = x0f[0]
+    out["theta1"] = x1f[0]
+    out["theta2"] = x2f[0]
+    out["energy"] = ff[0]
+    out["n_iter"] = it
+    out["converged"] = converged
+    return out
+}
+
+// ── top-level dispatcher ─────────────────────────────────────────────────
+
+fn chemistry_vqe_native_run_n5_h2() -> ChemVqeNative {
+    let t_start = exec("date +%s").trim()
+    let t_start_i = to_int(t_start)
+
+    let nm = cv_nelder_mead(0.05, 200, 0.000000001)
+    let energy_ha = to_float(nm["energy"])
+    let n_iter = to_int(nm["n_iter"])
+    let converged = to_int(nm["converged"])
+
+    let ref_ha = h2_fci_ref_ha()
+    let delta_ha = energy_ha - ref_ha
+    let delta_uha = delta_ha * 1000000.0
+
+    let t_end = exec("date +%s").trim()
+    let wall = to_float(to_int(t_end) - t_start_i)
+
+    let abs_delta = cv_abs(delta_uha)
+    let verdict_str = if abs_delta < 1.0 { "PASS" } else { "FAIL" }
+
+    let msg = if verdict_str == "PASS" {
+        "H2 UCCSD within " + str(abs_delta) + " uHa of FCI ref"
+    } else {
+        "H2 UCCSD |delta| " + str(abs_delta) + " uHa > 1.0 uHa (spectroscopic)"
+    }
+
+    return ChemVqeNative {
+        ok: 1,
+        verdict: verdict_str,
+        molecule: "h2",
+        n_qubits: h2_n_qubits(),
+        n_pauli_terms: h2_n_pauli_terms(),
+        n_parameters: h2_n_parameters(),
+        energy_Ha: energy_ha,
+        ref_energy_Ha: ref_ha,
+        ref_kind: "fci_runtime",
+        delta_uHa: delta_uha,
+        n_iter: n_iter,
+        converged: converged,
+        wall_seconds: wall,
+        engine: "hexa_native",
+        message: msg
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Generic 2e/2o-active-space VQE — the F-Q-6-E "classical-chemistry backend"
+// path (CHEMISTRY_VQE_PYSCF_BACKEND_PLAN_2026_05_12.md option (c)).
+//
+// Every RHF 2-electron / 2-spatial-orbital active space, parity-mapped with the
+// (1,1)-particle 2-qubit reduction, gives a 2-qubit Hamiltonian over a fixed
+// Pauli alphabet ⊆ {II,IZ,ZI,ZZ,XI,XZ,IX,ZX,XX,YY,...} with molecule-specific
+// coefficients. The HF reference (|01⟩ in the q1q0 basis) and the 2e/2o UCCSD
+// excitation generators (IY, −YI, −0.5 XY + 0.5 YX) are IDENTICAL across all
+// such molecules — only the Hamiltonian coefficients differ. And UCCSD is
+// EXACT (= FCI = CASCI(2,2)) for a 2-electron system, since the highest
+// excitation level reachable with 2 electrons is a double. So the H2 ansatz
+// (cv_uccsd_h2_ansatz) and the Pauli-expectation evaluator (cv_pauli_expectation)
+// are reused verbatim; only cv_energy / cv_nelder_mead are re-parametrised over
+// an arbitrary (labels, coeffs, constant_shift) Hamiltonian below.
+//
+// The coefficients are vendored — extracted offline (NOT a runtime dependency,
+// per qmirror AGENTS.md hexa-strict rule: build-time one-shot extraction is a
+// separate category) — see chemistry_vqe_cmt_hamiltonians.hexa for the recipe
+// and the H2 self-validation anchor (the same offline pipeline reproduces the
+// hardcoded H2 5-coeff Hamiltonian + constant_shift + FCI ref to machine
+// precision, which is how we trust it for the CMT molecules).
+//
+// Accuracy bound: chemical accuracy is 1.6 mHa (1600 µHa). For these tiny 2e/2o
+// active spaces the UCCSD-exact result reproduces CASCI(2,2) to ≪ 1 µHa; the NM
+// optimiser (200 iters, tol 1e-9 Ha) finds it from the [0,0,0] simplex (verified).
+
+fn cv_energy_terms(labels: [str], coeffs: [float], shift: float,
+                   theta0: float, theta1: float, theta2: float) -> float {
+    let psi = cv_uccsd_h2_ansatz(theta0, theta1, theta2)
+    let psi_re = state_re_array(psi)
+    let psi_im = state_im_array(psi)
+    let _ = state_free(psi)
+    let nterms = len(labels)
+    let mut e_op = 0.0
+    let mut k = 0
+    while k < nterms {
+        let exp_k = cv_pauli_expectation(psi_re, psi_im, labels[k])
+        e_op = e_op + coeffs[k] * exp_k
+        k = k + 1
+    }
+    return e_op + shift
+}
+
+// Nelder-Mead over the 3 UCCSD parameters for an arbitrary (labels, coeffs,
+// shift) Hamiltonian. Structurally identical to cv_nelder_mead — the only
+// change is the objective (cv_energy_terms instead of the H2-hardcoded
+// cv_energy). Returns map { theta0, theta1, theta2, energy, n_iter, converged }.
+fn cv_nelder_mead_terms(labels: [str], coeffs: [float], shift: float,
+                        initial_step: float, max_iter: int, tol: float) -> map {
+    let mut x0 = [0.0, initial_step, 0.0, 0.0]
+    let mut x1 = [0.0, 0.0, initial_step, 0.0]
+    let mut x2 = [0.0, 0.0, 0.0, initial_step]
+    let mut fs = [
+        cv_energy_terms(labels, coeffs, shift, x0[0], x1[0], x2[0]),
+        cv_energy_terms(labels, coeffs, shift, x0[1], x1[1], x2[1]),
+        cv_energy_terms(labels, coeffs, shift, x0[2], x1[2], x2[2]),
+        cv_energy_terms(labels, coeffs, shift, x0[3], x1[3], x2[3])
+    ]
+
+    let mut converged = 0
+    let mut it = 0
+    let mut done = 0
+    while done == 0 {
+        if it < max_iter {
+            // ok
+        } else {
+            done = 1
+        }
+        if done == 0 {
+            let sorted = cv_simplex_sort(x0, x1, x2, fs)
+            x0 = sorted["x0"]
+            x1 = sorted["x1"]
+            x2 = sorted["x2"]
+            fs = sorted["f"]
+
+            let best_f = fs[0]
+            let worst_f = fs[3]
+            let spread = if (worst_f - best_f) < 0.0 { 0.0 - (worst_f - best_f) } else { worst_f - best_f }
+            if spread < tol {
+                converged = 1
+                done = 1
+            }
+            if done == 0 {
+                let c0 = (x0[0] + x0[1] + x0[2]) / 3.0
+                let c1 = (x1[0] + x1[1] + x1[2]) / 3.0
+                let c2 = (x2[0] + x2[1] + x2[2]) / 3.0
+                let wx0 = x0[3]
+                let wx1 = x1[3]
+                let wx2 = x2[3]
+                let r0 = c0 + (c0 - wx0)
+                let r1 = c1 + (c1 - wx1)
+                let r2 = c2 + (c2 - wx2)
+                let f_refl = cv_energy_terms(labels, coeffs, shift, r0, r1, r2)
+                let f_second = fs[2]
+                let f_best = fs[0]
+                if f_best < f_refl + 0.0 || f_best == f_refl {
+                    if f_refl < f_second {
+                        x0[3] = r0
+                        x1[3] = r1
+                        x2[3] = r2
+                        fs[3] = f_refl
+                    } else {
+                        let cn0 = c0 + 0.5 * (wx0 - c0)
+                        let cn1 = c1 + 0.5 * (wx1 - c1)
+                        let cn2 = c2 + 0.5 * (wx2 - c2)
+                        let f_contr = cv_energy_terms(labels, coeffs, shift, cn0, cn1, cn2)
+                        if f_contr < worst_f {
+                            x0[3] = cn0
+                            x1[3] = cn1
+                            x2[3] = cn2
+                            fs[3] = f_contr
+                        } else {
+                            let bx0 = x0[0]
+                            let bx1 = x1[0]
+                            let bx2 = x2[0]
+                            let mut q = 1
+                            while q < 4 {
+                                let nv0 = bx0 + 0.5 * (x0[q] - bx0)
+                                let nv1 = bx1 + 0.5 * (x1[q] - bx1)
+                                let nv2 = bx2 + 0.5 * (x2[q] - bx2)
+                                x0[q] = nv0
+                                x1[q] = nv1
+                                x2[q] = nv2
+                                fs[q] = cv_energy_terms(labels, coeffs, shift, nv0, nv1, nv2)
+                                q = q + 1
+                            }
+                        }
+                    }
+                } else {
+                    let e0 = c0 + 2.0 * (c0 - wx0)
+                    let e1 = c1 + 2.0 * (c1 - wx1)
+                    let e2 = c2 + 2.0 * (c2 - wx2)
+                    let f_exp = cv_energy_terms(labels, coeffs, shift, e0, e1, e2)
+                    if f_exp < f_refl {
+                        x0[3] = e0
+                        x1[3] = e1
+                        x2[3] = e2
+                        fs[3] = f_exp
+                    } else {
+                        x0[3] = r0
+                        x1[3] = r1
+                        x2[3] = r2
+                        fs[3] = f_refl
+                    }
+                }
+                it = it + 1
+            }
+        }
+    }
+    let sorted_final = cv_simplex_sort(x0, x1, x2, fs)
+    let x0f = sorted_final["x0"]
+    let x1f = sorted_final["x1"]
+    let x2f = sorted_final["x2"]
+    let ff = sorted_final["f"]
+    let out = json_parse("{}")
+    out["theta0"] = x0f[0]
+    out["theta1"] = x1f[0]
+    out["theta2"] = x2f[0]
+    out["energy"] = ff[0]
+    out["n_iter"] = it
+    out["converged"] = converged
+    return out
+}
+
+// Run the generic VQE on a named, vendored 2e/2o Hamiltonian and verdict it
+// against the vendored CASCI(2,2) reference at a chemical-accuracy bound
+// (tol_uHa; pass 1600.0 for 1.6 mHa, the standard "chemical accuracy" line).
+fn chemistry_vqe_native_run_named(name: str, candidate: str, smiles: str,
+                                  labels: [str], coeffs: [float], shift: float,
+                                  casci_ref_ha: float, tol_uHa: float) -> ChemVqeNative {
+    let t_start = exec("date +%s").trim()
+    let t_start_i = to_int(t_start)
+
+    let nm = cv_nelder_mead_terms(labels, coeffs, shift, 0.05, 200, 0.000000001)
+    let energy_ha = to_float(nm["energy"])
+    let n_iter = to_int(nm["n_iter"])
+    let converged = to_int(nm["converged"])
+
+    let delta_ha = energy_ha - casci_ref_ha
+    let delta_uha = delta_ha * 1000000.0
+    let abs_delta = cv_abs(delta_uha)
+
+    let t_end = exec("date +%s").trim()
+    let wall = to_float(to_int(t_end) - t_start_i)
+
+    let verdict_str = if abs_delta < tol_uHa { "PASS" } else { "FAIL" }
+    let acc_note = if abs_delta < 1.0 { " (sub-µHa)" } else { "" }
+    let msg = if verdict_str == "PASS" {
+        name + " 2e/2o UCCSD within " + str(abs_delta) + " uHa of CASCI(2,2) ref" + acc_note + "  [" + candidate + "]"
+    } else {
+        name + " 2e/2o UCCSD |delta| " + str(abs_delta) + " uHa > " + str(tol_uHa) + " uHa (chem-acc bound)  [" + candidate + "]"
+    }
+
+    return ChemVqeNative {
+        ok: 1,
+        verdict: verdict_str,
+        molecule: name,
+        n_qubits: 2,
+        n_pauli_terms: len(labels),
+        n_parameters: 3,
+        energy_Ha: energy_ha,
+        ref_energy_Ha: casci_ref_ha,
+        ref_kind: "casci_2_2_vendored",
+        delta_uHa: delta_uha,
+        n_iter: n_iter,
+        converged: converged,
+        wall_seconds: wall,
+        engine: "hexa_native",
+        message: msg
+    }
+}

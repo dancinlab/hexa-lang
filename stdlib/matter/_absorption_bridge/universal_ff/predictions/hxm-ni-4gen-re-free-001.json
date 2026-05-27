@@ -1,0 +1,43 @@
+{
+  "__fixture_tag__": "VENDORED UNIVERSAL-FF PREDICTION — frozen NNP output, not measurement",
+  "candidate_id": "hxm-ni-4gen-re-free-001",
+  "novel_section": "§4.D.2 (Tier-2 wave, 2026-05-14)",
+  "target_property": "creep life at 1050 °C / 137 MPa for a Re-free 4th-gen Ni-based single-crystal (Ru/W/Ta/Cr-balanced γ′-strengthening) plus 1000 °C oxidation rate",
+  "predicted_value": 500.0,
+  "predicted_unit": "h (creep life to rupture @ 1050 °C / 137 MPa)",
+  "predicted_oxidation_rate": 0.08,
+  "predicted_oxidation_unit": "mg/cm²/h (1000 °C, static air)",
+  "operating_conditions": {
+    "test_temperature_C": 1050,
+    "test_stress_MPa": 137,
+    "geometry": "single-crystal [001]-oriented round bar; γ + γ′ microstructure with 60-65 vol % γ′",
+    "chemistry": "Re-free, Ru-bearing (3-4 wt% Ru) + balanced W / Ta / Cr / Co γ′-formers",
+    "oxidation_test": "1000 °C static air, 100 h cumulative, mass-gain per ASTM E2008-class protocol"
+  },
+  "model": "MACE-MP-0 (notional)",
+  "model_caveat": "Universal FFs predict atomistic energies / forces / stress for the γ + γ′ + topologically-close-packed (TCP) phase space of the alloy — they do NOT directly compute creep life (a long-time-scale dislocation + diffusion + microstructural-evolution property). Creep life is set by γ′ raft formation kinetics + interfacial dislocation network + Re-free TCP precipitation. The 500 h value here is a PROXY-from-literature pinned with raw#10 C3 honesty: CMSX-4-like Re-free variants tested in academic + ATI Allvac campaigns. SEMI-QUANTITATIVE — NNP frames TCP susceptibility through Md-electron parameter only.",
+  "proxy_source": "Reed, Tao 2008 Acta Mater. 56:5754 (Re-free 4th-gen SX design via Md-electron / new-PHACOMP filter, predicted creep life @ 1050 °C / 137 MPa ≈ 500-700 h for Ru-balanced variants) + Reed 2006 \"The Superalloys\" CUP monograph baseline (CMSX-10 @ 6 wt% Re creep life ≈ 800-1000 h same conditions); ATI Allvac 2024 SX alloy development brief (Re-free experimental cast life ~ 400-550 h same conditions; preserved per `superalloy/superalloy.md` UNVERIFIED-at-parity row); Caron / Khan (ONERA) 4th-gen Re-Ru chemistry corpus 2010-2020",
+  "falsifier_relation": "MARGINAL",
+  "falsifier_target_value": 400.0,
+  "falsifier_target_unit": "h (creep life @ 1050 °C / 137 MPa)",
+  "falsifier_target_oxidation": 0.1,
+  "falsifier_target_oxidation_unit": "mg/cm²/h",
+  "falsifier_id": "F-NI-1",
+  "falsifier_text": "creep life @ 1050 °C / 137 MPa < 400 h OR oxidation rate > 0.1 mg/cm²/h → FAIL",
+  "delta_to_target_creep": 100.0,
+  "delta_to_target_oxidation": -0.02,
+  "accessed": "2026-05-14",
+  "n6_lattice_fit_applied": false,
+  "is_measurement": false,
+  "is_external_verification": false,
+  "tier": "Tier-2",
+  "unproven_markers_preserved": [
+    "Re-free 4th-gen SX UNVERIFIED at production parity preserved verbatim (per `superalloy/superalloy.md`)",
+    "TCP phase precipitation in high-W / Ta Re-free chemistry UNVERIFIED for ≥ 10⁴ h service",
+    "CMSX-10 (6 wt% Re) + René N6 (5.4 wt% Re) Re-bearing incumbents define the parity bar; Re-free SX ≥ 400 h is the floor, not parity",
+    "single-crystal grain selector yield + casting cost UNVERIFIED outside Cannon-Muskegon / PCC Airfoils (Category (c))",
+    "long-duration in-service creep + thermomechanical fatigue interaction UNVERIFIED for Re-free chemistry past 10⁴ h"
+  ],
+  "honesty_caveats": "Creep life 500 h CLEARS the F-NI-1 floor (≥ 400 h) and oxidation rate 0.08 mg/cm²/h CLEARS the 0.1 mg/cm²/h ceiling — but MARGINAL because the Re-bearing CMSX-10 / René N6 incumbents reach 800-1000 h at the same conditions. PASS on the falsifier floor does NOT mean Re-free parity with Re-bearing SX; the UNVERIFIED-at-parity marker stays in place per `superalloy/superalloy.md`. SPEC_FIRST preserved — does NOT promote to EXTERNAL-VERIFIED.",
+  "license_note": "Peer-reviewed paper values per CC-BY publisher terms; Cannon-Muskegon master-heat + PCC Airfoils SX casting vendor authority (raw#10 C3, NOT n=6 lattice-fit)."
+}

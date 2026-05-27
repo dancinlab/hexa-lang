@@ -1,0 +1,121 @@
+// stdlib/kernels/wind/power_curve_kernel_test.hexa — G41 substrate parity
+//
+// Cross-implementation parity: hexa-native power_curve_kernel vs a Python
+// reference of the SAME IEC 61400-12-1 cubic-interpolation curve
+// (generated 2026-05-22 on pool:ubu-2 · python3). Reference turbine:
+// cut-in 3, rated 12, cut-out 25 m/s, P_rated 2000 kW.
+//
+// kappa-71 R10 G41 substrate floor (design.md D120 Energy/wind). Establishes
+// the wind kernel parity BEFORE it serves as a measured-oracle hexa-native
+// side (mirror of G31 substrate-establishment pattern).
+//
+// v0.2.0 addition: power_curve_segments parity vs the same 6-point
+// principled-breakpoint subset of the Vestas V90-2.0MW manufacturer
+// table used by stdlib/energy/iec_vs_vestas_v90_oracle_v2.py (G41 D122
+// kernel refinement).
+
+use "stdlib/kernels/wind/power_curve_kernel"
+
+let mut pass_count = 0
+let mut total_count = 0
+let mut failed = ""
+
+fn fabs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn rel_err(got: float, want: float) -> float {
+    if fabs(want) < 1.0e-12 { return fabs(got - want) }
+    return fabs(got - want) / fabs(want)
+}
+
+fn check(name: str, got: float, want: float, tol: float) {
+    total_count = total_count + 1
+    let e = rel_err(got, want)
+    if e <= tol {
+        pass_count = pass_count + 1
+        println("  PASS " + name + " got=" + to_string(got) + " want=" + to_string(want) + " rel=" + to_string(e))
+    } else {
+        if failed == "" { failed = name }
+        println("  FAIL " + name + " got=" + to_string(got) + " want=" + to_string(want) + " rel=" + to_string(e))
+    }
+}
+
+fn main() {
+    println("[parity] power_curve_kernel.hexa — IEC 61400-12 cubic-interp + segments (G41 substrate v0.2.0)")
+    let ci = 3.0
+    let vr = 12.0
+    let co = 25.0
+    let pr = 2000.0
+    let tol = 1.0e-9
+
+    // ─── power_curve (10 points · cut-in / cubic / rated / cut-out) ───────
+    check("v=0_below_cutin",  power_curve(0.0,  ci, vr, co, pr), 0.0,            tol)
+    check("v=2_below_cutin",  power_curve(2.0,  ci, vr, co, pr), 0.0,            tol)
+    check("v=4_cubic",        power_curve(4.0,  ci, vr, co, pr), 43.5038212816,  tol)
+    check("v=6_cubic",        power_curve(6.0,  ci, vr, co, pr), 222.2222222222, tol)
+    check("v=8_cubic",        power_curve(8.0,  ci, vr, co, pr), 570.2527924750, tol)
+    check("v=10_cubic",       power_curve(10.0, ci, vr, co, pr), 1144.0329218107, tol)
+    check("v=12_rated",       power_curve(12.0, ci, vr, co, pr), 2000.0,         tol)
+    check("v=14_rated",       power_curve(14.0, ci, vr, co, pr), 2000.0,         tol)
+    check("v=24_rated",       power_curve(24.0, ci, vr, co, pr), 2000.0,         tol)
+    check("v=26_above_cutout", power_curve(26.0, ci, vr, co, pr), 0.0,           tol)
+
+    // ─── air-density correction (thin air rho=1.0 → curve shifts right) ───
+    check("density_v10_rho1.0", power_curve_density_corrected(10.0, 1.0, ci, vr, co, pr), 928.0735221778, 1.0e-6)
+    let vcorr = air_density_corrected_speed(10.0, 1.0)
+    check("vcorr_v10_rho1.0",   vcorr, 9.3459037434, 1.0e-6)
+
+    // ─── power_curve_segments — 6pt Vestas V90-2.0MW principled subset ────
+    // Breakpoints (vs, ps) = sparse subset of the 24-point manufacturer
+    // table used by iec_vs_vestas_v90_oracle_v2.py (G41 D122). Honesty
+    // contract: the oracle measures interpolation error against the FULL
+    // 24-point table — these 6 breakpoints intentionally do NOT include
+    // the intermediate v=5,6,8,9,11,13 points so the measurement error is
+    // genuine modeling error (NOT numeric-equivalence · D110/D122 g3).
+    let vs: [float] = [4.0, 7.0, 10.0, 12.0, 14.0, 15.0]
+    let ps: [float] = [66.0, 457.0, 1296.0, 1818.0, 1980.0, 2000.0]
+    let v_co = 25.0
+
+    // Below first breakpoint → 0 (cut-in implicit)
+    check("seg_v=2_below_first",   power_curve_segments(2.0,  vs, ps, v_co), 0.0,    tol)
+    check("seg_v=3.9_just_below",  power_curve_segments(3.9,  vs, ps, v_co), 0.0,    tol)
+
+    // Exact-match at breakpoints
+    check("seg_v=4_bkpt",          power_curve_segments(4.0,  vs, ps, v_co), 66.0,   tol)
+    check("seg_v=7_bkpt",          power_curve_segments(7.0,  vs, ps, v_co), 457.0,  tol)
+    check("seg_v=10_bkpt",         power_curve_segments(10.0, vs, ps, v_co), 1296.0, tol)
+    check("seg_v=12_bkpt",         power_curve_segments(12.0, vs, ps, v_co), 1818.0, tol)
+    check("seg_v=14_bkpt",         power_curve_segments(14.0, vs, ps, v_co), 1980.0, tol)
+    check("seg_v=15_bkpt_plateau", power_curve_segments(15.0, vs, ps, v_co), 2000.0, tol)
+
+    // Linear interpolation between breakpoints (Python ref · pool:ubu-2)
+    // v=5.5 in [4,7]: 66 + (457-66)*(5.5-4)/(7-4) = 66 + 391*1.5/3 = 66 + 195.5 = 261.5
+    check("seg_v=5.5_interp_4_7",  power_curve_segments(5.5,  vs, ps, v_co), 261.5,  tol)
+    // v=8.5 in [7,10]: 457 + (1296-457)*(8.5-7)/(10-7) = 457 + 839*1.5/3 = 457 + 419.5 = 876.5
+    check("seg_v=8.5_interp_7_10", power_curve_segments(8.5,  vs, ps, v_co), 876.5,  tol)
+    // v=11 in [10,12]: 1296 + (1818-1296)*(11-10)/(12-10) = 1296 + 522/2 = 1557
+    check("seg_v=11_interp_10_12", power_curve_segments(11.0, vs, ps, v_co), 1557.0, tol)
+    // v=13 in [12,14]: 1818 + (1980-1818)*(13-12)/(14-12) = 1818 + 162/2 = 1899
+    check("seg_v=13_interp_12_14", power_curve_segments(13.0, vs, ps, v_co), 1899.0, tol)
+    // v=14.5 in [14,15]: 1980 + (2000-1980)*(14.5-14)/(15-14) = 1990
+    check("seg_v=14.5_interp_14_15", power_curve_segments(14.5, vs, ps, v_co), 1990.0, tol)
+
+    // Plateau past last breakpoint
+    check("seg_v=18_plateau",      power_curve_segments(18.0, vs, ps, v_co), 2000.0, tol)
+    check("seg_v=20_plateau",      power_curve_segments(20.0, vs, ps, v_co), 2000.0, tol)
+    check("seg_v=25_at_cutout",    power_curve_segments(25.0, vs, ps, v_co), 2000.0, tol)
+
+    // Above cut-out → 0
+    check("seg_v=26_above_cutout", power_curve_segments(26.0, vs, ps, v_co), 0.0,    tol)
+    check("seg_v=30_above_cutout", power_curve_segments(30.0, vs, ps, v_co), 0.0,    tol)
+
+    // Density-corrected segments smoke (Python ref · pool:ubu-2)
+    // v_corr = 10 * (1.0/1.225)^(1/3) = 9.34590374339597
+    // segments at v_corr in [7,10]: 457 + (1296-457)*(v_corr-7)/(10-7)
+    //   = 457 + 839 * 2.34590374339597 / 3 = 1113.0710802364
+    check("seg_density_v10_rho1.0",
+          power_curve_segments_density_corrected(10.0, 1.0, vs, ps, v_co),
+          1113.0710802364, 1.0e-6)
+
+    println("[parity] " + to_string(pass_count) + "/" + to_string(total_count) + " PASS")
+    if failed != "" { println("[parity] FIRST FAIL: " + failed) }
+}

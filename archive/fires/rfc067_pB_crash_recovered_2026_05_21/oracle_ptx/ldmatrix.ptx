@@ -1,0 +1,13 @@
+.version 7.0
+.target sm_80
+.address_size 64
+.shared .align 16 .b8 _sh[512];
+.visible .entry hexa_ldmatrix()
+{
+    .reg .b64 %rd1;
+    .reg .b32 %r1, %r2, %r3, %r4;
+    mov.u64 %rd1, _sh;
+    cvta.shared.u64 %rd1, %rd1;
+    ldmatrix.sync.aligned.x4.m8n8.shared.b16 {%r1, %r2, %r3, %r4}, [%rd1];
+    ret;
+}

@@ -1,0 +1,26 @@
+metric,unit,M_4096,M_6144,M_8192,notes
+n130_ratio_vs_cublas,ratio,0.819,0.234,0.304,N130 result.json end-to-end
+n130_hexa_tflops,TFLOPS,57.330,16.552,13.908,N130 result.json
+n130_cublas_tflops,TFLOPS,70.046,70.820,45.725,N130 result.json (M=8192 cuBLAS dipped too)
+working_set_bytes,MB,64,144,256,A(M*K*2B) + B(K*N*2B) hex-FP16 only
+l2_capacity,MB,32,32,32,RTX 5070 (GB205) L2
+working_set_over_l2,ratio,2.0,4.5,8.0,working_set / 32MB
+l2_hit_rate_pct,%,98.07,56.72,50.44,lts__t_sector_hit_rate.pct mean of 4 runs
+l1tex_hit_rate_pct,%,2.62,1.76,1.33,l1tex__t_sector_hit_rate.pct
+dram_bytes_per_launch_MB,MB,127,6470,17464,dram__bytes.sum mean of 4 runs
+dram_throughput_pct_peak,%,6.45,33.83,33.34,dram__throughput.avg.pct_of_peak_sustained_elapsed
+dram_bandwidth_GBps,GB/s,42.7,223.9,220.7,Memory Throughput from MemoryWorkloadAnalysis
+compute_sm_throughput_pct,%,40.43,14.00,12.16,Compute (SM) Throughput
+l2_cache_throughput_pct,%,92.77,32.83,28.52,L2 Cache Throughput (occupancy of L2 ports)
+l1tex_cache_throughput_pct,%,82.97,28.53,24.64,L1/TEX Cache Throughput
+mem_pipes_busy_pct,%,25.61,8.83,7.65,LSU+TEX pipes utilization
+eligible_warps_per_sched,warp,1.51,0.10,0.10,SchedulerStats; 1.51 implied from 18.91% eligible rate
+issue_slot_eligible_pct,%,18.91,6.52,5.63,One or More Eligible (issue-slot)
+issue_slot_no_eligible_pct,%,81.09,93.48,94.37,No Eligible (issue-slot stall)
+warp_cycles_per_issued_inst,cycle,41.18,121.94,141.53,latency / dependency wait per instruction issue
+smsp_cycles_active_pct,%,99.22,99.86,99.94,SMSP cycles_active vs peak elapsed (SMs ALWAYS busy)
+achieved_occupancy_pct,%,64.88,66.28,66.36,SM occupancy ≈ 32/48 warps (unchanged across shapes)
+active_warps_per_sm,warp,31.14,31.81,31.85,sm__warps_active.avg.per_cycle_active (~constant)
+theoretical_occupancy_pct,%,66.67,66.67,66.67,Limited by register pressure (64 regs/thd, 8 blocks/SM)
+inst_executed_total_M,Minst,249,839,1987,smsp__inst_executed.sum (millions); 8.0x at 8192 vs 4096 ≈ M^3 ratio
+gpc_cycles_elapsed_M,Mcycle,6.92,67.26,184.03,gpc__cycles_elapsed.max; 26.6x slower at M=8192 vs 4096

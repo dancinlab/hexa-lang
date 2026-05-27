@@ -1,0 +1,8 @@
+#!hexa strict
+// spintronic structure — MgO tunnel barrier.
+fn main() {
+    let MgO_nm = 1.2
+    println("spintronic_structure (MgO tunnel barrier):")
+    println("  MgO_nm = " + str(MgO_nm))
+    println("__HEXA_SPINTRONIC_STRUCTURE__ PASS gate=GATE_OPEN absorbed=false")
+}

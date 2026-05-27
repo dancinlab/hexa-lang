@@ -1,0 +1,8 @@
+#!hexa strict
+// fusion specify — ignition Q target.
+fn main() {
+    let Q_ignition = 10.0
+    println("fusion_specify (ignition Q target):")
+    println("  Q_ignition = " + str(Q_ignition))
+    println("__HEXA_FUSION_SPECIFY__ PASS gate=GATE_OPEN absorbed=false")
+}

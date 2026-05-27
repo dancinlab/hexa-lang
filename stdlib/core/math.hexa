@@ -1,0 +1,377 @@
+// HEXA Standard Library — math
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// n=6 수학 유틸리티
+
+pub fn abs(x) -> int {
+    if x < 0 { -x } else { x }
+}
+
+pub fn max(a, b) -> int {
+    if a > b { a } else { b }
+}
+
+pub fn min(a, b) -> int {
+    if a < b { a } else { b }
+}
+
+pub fn clamp(x, lo, hi) -> int {
+    if x < lo { lo } else if x > hi { hi } else { x }
+}
+
+pub fn gcd(a, b) -> int {
+    let x = abs(a)
+    let y = abs(b)
+    while y != 0 {
+        let t = y
+        y = x % y
+        x = t
+    }
+    x
+}
+
+pub fn lcm(a, b) -> int {
+    if a == 0 || b == 0 { 0 } else { abs(a * b) / gcd(a, b) }
+}
+
+pub fn pow(base, exp) -> int {
+    let result = 1
+    let i = 0
+    while i < exp {
+        result = result * base
+        i = i + 1
+    }
+    result
+}
+
+pub fn factorial(n) -> int {
+    let result = 1
+    let i = 2
+    while i <= n {
+        result = result * i
+        i = i + 1
+    }
+    result
+}
+
+pub fn is_prime(n) -> bool {
+    if n < 2 { return false }
+    if n < 4 { return true }
+    if n % 2 == 0 || n % 3 == 0 { return false }
+    let i = 5
+    while i * i <= n {
+        if n % i == 0 || n % (i + 2) == 0 { return false }
+        i = i + 6
+    }
+    true
+}
+
+// mersenne(p) = M_p = 2^p - 1, the p-th Mersenne number.
+pub fn mersenne(p) -> int {
+    pow(2, p) - 1
+}
+
+// lucas_lehmer(p) — Lucas–Lehmer primality test for the Mersenne number
+// M_p = 2^p - 1.  For prime p > 2, M_p is prime ⟺ S_{p-2} ≡ 0 (mod M_p),
+// where S_0 = 4 and S_{k+1} = S_k² − 2.  Edge case: M_2 = 3 is prime, and
+// the test runs zero iterations there, so handle p == 2 explicitly.
+//
+// Pure-integer: S_k is reduced mod M_p every step, so it stays < M_p; for
+// p ≤ 31 the product S_k*S_k fits in i64 (M_13 = 8191 → S_k < 8191,
+// S_k² < 6.7e7).  Returns true iff M_p is prime.  (p < 2 → false; the
+// caller is expected to pass a prime exponent — p composite makes M_p
+// composite trivially, but this routine only attests the LL residue.)
+pub fn lucas_lehmer(p) -> bool {
+    if p < 2 { return false }
+    if p == 2 { return true }
+    let m = pow(2, p) - 1
+    let s = 4
+    let k = 0
+    while k < p - 2 {
+        s = (s * s - 2) % m
+        k = k + 1
+    }
+    s == 0
+}
+
+// Modular arithmetic helpers for deterministic Miller–Rabin primality
+// (`is_prime_det` below). Pure-i64; mul_mod uses Russian-peasant
+// doubling so a*b ≡ a*b (mod n) never materializes as a full i64×i64
+// product (which would overflow for n > 2^32).
+
+fn _add_mod(a, b, n) -> int {
+    // 0 ≤ a < n, 0 ≤ b < n, n < 2^62. Avoids i64 overflow even when
+    // a + b would exceed 2^63 − 1, by computing the gap n − b first.
+    if a >= n - b { return a - (n - b) }
+    return a + b
+}
+
+// All mutable locals below use `let mut` rather than the legacy
+// rebinding `let` form. Plain `let foo = …; foo = …` interacts with
+// the codegen's module-global comptime-fold table — every binding of
+// `foo` across the program shares one fold slot, so a function call
+// (which may bind same-named locals in another function) can leave a
+// stale literal in the slot and freeze `foo` at its initial value
+// (see memory `reference_comptime_fold_shadow_family` — D17 #724,
+// F-FOLD #797 family; reproduced live in this file's outer witness
+// loop at is_prime_det during initial bring-up). `let mut` opts the
+// binding out of the fold table entirely, so the rebind is honored.
+pub fn mul_mod(a, b, n) -> int {
+    if n == 1 { return 0 }
+    let mut res = 0
+    let mut x = a % n
+    if x < 0 { x = x + n }
+    let mut y = b % n
+    if y < 0 { y = y + n }
+    while y > 0 {
+        if y % 2 == 1 { res = _add_mod(res, x, n) }
+        x = _add_mod(x, x, n)
+        y = y / 2
+    }
+    res
+}
+
+pub fn pow_mod(base, exp, n) -> int {
+    if n == 1 { return 0 }
+    let mut res = 1
+    let mut b = base % n
+    if b < 0 { b = b + n }
+    let mut e = exp
+    while e > 0 {
+        if e % 2 == 1 { res = mul_mod(res, b, n) }
+        b = mul_mod(b, b, n)
+        e = e / 2
+    }
+    res
+}
+
+// Miller–Rabin "composite witness" check for a single base `a`.
+// Pre: n is odd, n > 2, and n − 1 = 2^r · d with d odd.
+// Returns true iff `a` proves n composite (strong-pseudoprime witness);
+// false if a is non-witness (n is probably prime by a).
+fn _mr_is_composite_witness(a, n, d, r) -> bool {
+    let mut x = pow_mod(a, d, n)
+    if x == 1 || x == n - 1 { return false }
+    let mut mi = 1
+    while mi < r {
+        x = mul_mod(x, x, n)
+        if x == n - 1 { return false }
+        mi = mi + 1
+    }
+    true
+}
+
+// is_prime_det(n) — deterministic primality for ALL n in i64 range.
+//
+// Uses the 12-witness Miller–Rabin set {2,3,5,7,11,13,17,19,23,29,31,37},
+// which deterministically decides primality for every n < 3.317·10^24
+// — far above the i64 ceiling (2^63 − 1 ≈ 9.22·10^18). Composite n
+// always has at least one witness in this set; i64 cannot reach the
+// next pseudoprime barrier (3.317·10^24).
+//
+// Cost: O(12 · log n · (log n)²) bit-ops, vs the trial-division
+// `is_prime` above which is O(√n) — det-MR wins decisively for
+// n > ~10^8 (√10^8 = 10^4 iters; det-MR ~80·log²n ≈ 6000 mul_mod ops).
+//
+// Closes F6 D(n) = σφ − nτ sweep gate beyond 10^8 (the primality
+// frontier called out in INBOX `stdlib/number/primality.hexa 일반
+// 결정형 부재` — TECS-L F2 /gap R5 seed Rank 3, 2026-05-26). The
+// trial-division `is_prime` above remains the default for small n so
+// existing callers avoid mul_mod overhead at toy sizes.
+pub fn is_prime_det(n) -> bool {
+    if n < 2 { return false }
+    if n == 2 || n == 3 { return true }
+    if n % 2 == 0 { return false }
+
+    // factor n − 1 = 2^r · d with d odd
+    let mut d = n - 1
+    let mut r = 0
+    while d % 2 == 0 {
+        d = d / 2
+        r = r + 1
+    }
+
+    let witnesses = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37]
+    let mut wi = 0
+    while wi < 12 {
+        let a = witnesses[wi]
+        if a >= n { return true }
+        if _mr_is_composite_witness(a, n, d, r) { return false }
+        wi = wi + 1
+    }
+    true
+}
+
+// n=6 number theory
+pub fn sigma(n) -> int {
+    let sum = 0
+    let i = 1
+    while i <= n {
+        if n % i == 0 { sum = sum + i }
+        i = i + 1
+    }
+    sum
+}
+
+// sigma_star(n) = Σ_{d||n} d — sum of UNITARY divisors.
+// d||n ⟺ d|n AND gcd(d, n/d) = 1 (d and its cofactor are coprime).
+// Multiplicative; σ*(p^a) = p^a + 1 (the only unitary divisors of p^a
+// are 1 and p^a). n=6 is the smallest unitary-perfect: σ*(6) = 12 = 2·6.
+pub fn sigma_star(n) -> int {
+    let sum = 0
+    let i = 1
+    while i <= n {
+        if n % i == 0 {
+            if gcd(i, n / i) == 1 { sum = sum + i }
+        }
+        i = i + 1
+    }
+    sum
+}
+
+// sigma_3(n) = Σ_{d|n} d³ — sum of cubes of divisors (OEIS A001158).
+// σ_3 = sigma_k(·,3); multiplicative, σ_3(p^a) = (p^(3(a+1))−1)/(p³−1).
+// σ_3(6) = 1+8+27+216 = 252. Integer-exact (no float); the single-arg NAME
+// `sigma_3` closes the verify_cli calc-gap #1230 (2-op `sigma_k 6 3` already
+// worked; this gives the canonical 1-arg surface).
+pub fn sigma_3(n) -> int {
+    let sum = 0
+    let i = 1
+    while i <= n {
+        if n % i == 0 { sum = sum + i * i * i }
+        i = i + 1
+    }
+    sum
+}
+
+// omega_big(n) = Ω(n) — number of prime factors of n WITH multiplicity
+// (OEIS A001222). Ω(p^a)=a, additive over prime powers; Ω(1)=0. Trial
+// division to √x; the residual x>1 is one final prime. Backs liouville().
+pub fn omega_big(n) -> int {
+    let count = 0
+    let x = n
+    let d = 2
+    while d * d <= x {
+        while x % d == 0 {
+            count = count + 1
+            x = x / d
+        }
+        d = d + 1
+    }
+    if x > 1 { count = count + 1 }
+    count
+}
+
+// liouville(n) = λ(n) = (−1)^Ω(n) — the Liouville function (OEIS A008836).
+// Completely multiplicative; λ(p^a)=(−1)^a, λ(1)=1. Returns +1 / −1.
+// λ(6)=λ(2·3)=(−1)²=1; λ(8)=λ(2³)=(−1)³=−1.
+pub fn liouville(n) -> int {
+    if omega_big(n) % 2 == 0 { 1 } else { -1 }
+}
+
+// liouville_summatory(n) = L(n) = Σ_{k=1}^{n} λ(k) (OEIS A002819).
+// Polya conjecture (L(n)≤0 ∀n>1) was FALSIFIED at n=906150257 (Tanaka 1980;
+// Haselgrove 1958, Lehman 1960) — a classical closed-negative. L(2)=0, L(6)=0.
+pub fn liouville_summatory(n) -> int {
+    let sum = 0
+    let k = 1
+    while k <= n {
+        sum = sum + liouville(k)
+        k = k + 1
+    }
+    sum
+}
+
+// fibonacci_mod(k, m) = F_k mod m (F_0=0, F_1=1). Iterative (a,b) pairs;
+// no big-int needed since every value is reduced mod m each step.
+pub fn fibonacci_mod(k, m) -> int {
+    if m <= 0 { return 0 }
+    let a = 0
+    let b = 1
+    let i = 0
+    while i < k {
+        let t = (a + b) % m
+        a = b
+        b = t
+        i = i + 1
+    }
+    a
+}
+
+// pisano_period(n) = π(n) — period of the Fibonacci sequence taken mod n
+// (OEIS A001175). Iterate (a,b)=(0,1)→(b,(a+b) mod n) counting steps until
+// the pair returns to (0,1). π(2)=3, π(3)=8, π(6)=lcm(3,8)=24, π(10)=60.
+pub fn pisano_period(n) -> int {
+    if n <= 1 { return 1 }
+    let a = 0
+    let b = 1
+    let period = 0
+    while true {
+        let t = (a + b) % n
+        a = b
+        b = t
+        period = period + 1
+        if a == 0 && b == 1 { return period }
+    }
+    period
+}
+
+pub fn euler_phi(n) -> int {
+    if n == 1 { return 1 }
+    let count = 0
+    let i = 1
+    while i < n {
+        if gcd(i, n) == 1 { count = count + 1 }
+        i = i + 1
+    }
+    count
+}
+
+// phi — canonical short name (matches `hexa verify --expr phi`),
+// alias of euler_phi. Euler totient φ(n) = #{1≤k≤n : gcd(k,n)=1}.
+pub fn phi(n) -> int {
+    euler_phi(n)
+}
+
+pub fn tau(n) -> int {
+    let count = 0
+    let i = 1
+    while i <= n {
+        if n % i == 0 { count = count + 1 }
+        i = i + 1
+    }
+    count
+}
+
+// sopfr(n) = Σ p·mult(p) — sum of prime factors with repetition.
+// Trial division up to √x; the residual x>1 is the final prime factor.
+// sopfr(1)=0 (empty product), sopfr(prime p)=p.
+pub fn sopfr(n) -> int {
+    let sum = 0
+    let x = n
+    let d = 2
+    while d * d <= x {
+        while x % d == 0 {
+            sum = sum + d
+            x = x / d
+        }
+        d = d + 1
+    }
+    if x > 1 { sum = sum + x }
+    sum
+}
+
+pub fn fib(n) -> int {
+    let a = 0
+    let b = 1
+    let i = 0
+    while i < n {
+        let t = a + b
+        a = b
+        b = t
+        i = i + 1
+    }
+    a
+}

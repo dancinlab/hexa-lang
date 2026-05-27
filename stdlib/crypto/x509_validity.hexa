@@ -1,0 +1,108 @@
+// HEXA Standard Library — crypto/x509_validity
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// X.509 validity parsing (RFC 5280 §4.1.2.5) — pure hexa. Decode the cert's
+// Validity SEQUENCE (two times: notBefore, notAfter), each either an
+// ASN.1 UTCTime (tag 0x17, "YYMMDDHHMMSSZ" ASCII) or GeneralizedTime (tag
+// 0x18, "YYYYMMDDHHMMSSZ" ASCII). Bridges the asn1_der decoder + the
+// minimal cert parser (x509_min) toward chain validation. let-mut (#1506).
+//
+// Surface:
+//   pub fn x509_parse_time(b: [int], o: int) -> [int]   — [year, month, day, hour, min, sec]
+//   pub fn x509_validity_dates(cert: [int]) -> [int]    — flat [nb_Y, nb_M, nb_D, nb_h, nb_m, nb_s, na_Y, na_M, na_D, na_h, na_m, na_s]
+//   pub fn x509_time_le(a: [int], b: [int]) -> bool
+//   pub fn x509_validity_contains(cert: [int], now: [int]) -> bool
+//
+// UTCTime year: YY in 00..49 → 2000..2049; YY in 50..99 → 1950..1999 (RFC 5280).
+
+use "stdlib/crypto/asn1_der"
+
+// parse an ASCII decimal of `n` chars at offset off → int
+@pure
+fn _dec(b: [int], off: int, n: int) -> int {
+    let mut v = 0
+    let mut i = 0
+    while i < n {
+        v = v * 10 + ((b[off + i] - 0x30) & 0xFF)
+        i = i + 1
+    }
+    return v
+}
+
+// Parse a time TLV (UTCTime or GeneralizedTime) at offset o (offset of its tag).
+// Returns [year, month, day, hour, min, sec].
+@pure
+pub fn x509_parse_time(b: [int], o: int) -> [int] {
+    let tag = der_tag(b, o)
+    let v = der_value_start(b, o)
+    let mut year = 0
+    let mut idx = 0
+    if tag == 0x17 {
+        // UTCTime: YYMMDDHHMMSSZ
+        let yy = _dec(b, v, 2)
+        if yy < 50 { year = 2000 + yy } else { year = 1900 + yy }
+        idx = 2
+    } else {
+        // GeneralizedTime: YYYYMMDDHHMMSSZ
+        year = _dec(b, v, 4)
+        idx = 4
+    }
+    let mo = _dec(b, v + idx, 2)
+    let da = _dec(b, v + idx + 2, 2)
+    let hh = _dec(b, v + idx + 4, 2)
+    let mi = _dec(b, v + idx + 6, 2)
+    let se = _dec(b, v + idx + 8, 2)
+    return [year, mo, da, hh, mi, se]
+}
+
+// extract both not_before / not_after from a DER cert. Validity follows
+// [0]version?, serial, sigAlg, issuer. The version field is OPTIONAL (RFC
+// 5280: `[0] EXPLICIT DEFAULT v1`) — present in v3 (tag 0xA0), absent in v1.
+// So Validity is the 5th TBS child in v3, the 4th in v1.
+@pure
+pub fn x509_validity_dates(cert: [int]) -> [int] {
+    let tbs_o = der_value_start(cert, 0)
+    let mut c = der_value_start(cert, tbs_o)
+    let mut skip = 3                            // v1: serial is child 0 → 3 hops to Validity
+    if (der_tag(cert, c) & 0xFF) == 0xA0 { skip = 4 }   // v3: skip [0]version too
+    let mut k = 0
+    while k < skip { c = der_next(cert, c); k = k + 1 }
+    // c is at the Validity SEQUENCE
+    let v_start = der_value_start(cert, c)
+    let nb = x509_parse_time(cert, v_start)
+    let nb_end = der_next(cert, v_start)
+    let na = x509_parse_time(cert, nb_end)
+    let mut out: [int] = []
+    let mut i = 0
+    while i < 6 { out.push(nb[i]); i = i + 1 }
+    i = 0
+    while i < 6 { out.push(na[i]); i = i + 1 }
+    return out
+}
+
+// lexicographic <= for two [Y,M,D,h,m,s] tuples
+@pure
+pub fn x509_time_le(a: [int], b: [int]) -> bool {
+    let mut i = 0
+    while i < 6 {
+        if a[i] < b[i] { return true }
+        if a[i] > b[i] { return false }
+        i = i + 1
+    }
+    return true  // equal counts as <=
+}
+
+// is `now` within the cert's [notBefore, notAfter] window?
+@pure
+pub fn x509_validity_contains(cert: [int], now: [int]) -> bool {
+    let d = x509_validity_dates(cert)
+    let mut nb: [int] = []
+    let mut na: [int] = []
+    let mut i = 0
+    while i < 6 { nb.push(d[i]); i = i + 1 }
+    i = 0
+    while i < 6 { na.push(d[6 + i]); i = i + 1 }
+    return x509_time_le(nb, now) && x509_time_le(now, na)
+}

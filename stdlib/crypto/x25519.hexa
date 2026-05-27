@@ -1,0 +1,269 @@
+// HEXA Standard Library — crypto/x25519
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// X25519 ECDH (RFC 7748) — pure hexa, no libc/libsodium. Curve25519
+// scalar multiplication via the Montgomery ladder over GF(2^255−19),
+// ported from the TweetNaCl 16-limb `gf` representation (each limb a
+// 16-bit-ish int64 with lazy carry). Adds the x25519 leg of RUNTIME.md
+// Phase 3 "crypto bulk" (layer ① — algorithms hexa-native). let-mut
+// idiom (#1506-safe).
+//
+// Surface:
+//   pub fn x25519(scalar: [int], point: [int]) -> [int]   — 32-byte shared u-coord
+//   pub fn x25519_base(scalar: [int]) -> [int]            — scalar · basepoint(9)
+//
+// Verified vector (RFC 7748 §5.2):
+//   scalar = a546e36b…ba449ac4, u = e6db6867…d0ab1c4c
+//     → c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552
+
+let _X_M16: int = 0xFFFF
+
+// gf = 16 limbs. Add / Sub / lazy.
+@pure
+fn _gf0() -> [int] {
+    let mut g: [int] = []
+    let mut i = 0
+    while i < 16 { g.push(0); i = i + 1 }
+    return g
+}
+@pure
+fn _gf_copy(a: [int]) -> [int] {
+    let mut g: [int] = []
+    let mut i = 0
+    while i < 16 { g.push(a[i]); i = i + 1 }
+    return g
+}
+@pure
+fn _gf_add(a: [int], b: [int]) -> [int] {
+    let mut o = _gf0()
+    let mut i = 0
+    while i < 16 { o[i] = a[i] + b[i]; i = i + 1 }
+    return o
+}
+@pure
+fn _gf_sub(a: [int], b: [int]) -> [int] {
+    let mut o = _gf0()
+    let mut i = 0
+    while i < 16 { o[i] = a[i] - b[i]; i = i + 1 }
+    return o
+}
+
+// carry-reduce a gf in place (TweetNaCl car25519). The +65536 bias makes
+// the floor-division behave like an arithmetic >>16 over negative limbs;
+// the carry PROPAGATED is (c−1) (cancels the bias), but the value
+// SUBTRACTED from this limb is the full c<<16.
+@pure
+fn _car(a: [int]) -> [int] {
+    let mut o = _gf_copy(a)
+    let mut i = 0
+    while i < 16 {
+        o[i] = o[i] + 65536            // bias → positive, floor-div = >>16
+        let c = o[i] / 65536           // TweetNaCl's c (full)
+        o[i] = o[i] - c * 65536        // reduce this limb to [0,65536)
+        if i < 15 {
+            o[i+1] = o[i+1] + (c - 1)  // propagate c−1 (bias-corrected)
+        } else {
+            o[0] = o[0] + 38 * (c - 1) // wrap: 2^256 ≡ 38 mod p
+        }
+        i = i + 1
+    }
+    return o
+}
+
+@pure
+fn _gf_mul(a: [int], b: [int]) -> [int] {
+    // schoolbook into 31 temps, fold high limbs by 38, then 2× carry.
+    let mut t: [int] = []
+    let mut i = 0
+    while i < 31 { t.push(0); i = i + 1 }
+    i = 0
+    while i < 16 {
+        let mut j = 0
+        while j < 16 {
+            t[i+j] = t[i+j] + a[i] * b[j]
+            j = j + 1
+        }
+        i = i + 1
+    }
+    i = 0
+    while i < 15 {
+        t[i] = t[i] + 38 * t[i+16]
+        i = i + 1
+    }
+    let mut o: [int] = []
+    i = 0
+    while i < 16 { o.push(t[i]); i = i + 1 }
+    o = _car(o)
+    o = _car(o)
+    return o
+}
+
+@pure
+fn _gf_sq(a: [int]) -> [int] { return _gf_mul(a, a) }
+
+// inverse via p-2 power chain (TweetNaCl inv25519).
+@pure
+fn _gf_inv(a: [int]) -> [int] {
+    let mut c = _gf_copy(a)
+    let mut i = 253
+    while i >= 0 {
+        c = _gf_sq(c)
+        if i != 2 && i != 4 { c = _gf_mul(c, a) }
+        i = i - 1
+    }
+    return c
+}
+
+// conditional swap of p,q when b==1 (constant-time form, value-returning).
+@pure
+fn _sel(p: [int], q: [int], b: int) -> [int] {
+    // returns [p'(16) ‖ q'(16)]. Mask MUST cover all bits of the limb
+    // difference (limbs aren't reduced to 16 bits at every sel point);
+    // TweetNaCl uses c = ~(b−1) = full -1/0, not a 16-bit mask.
+    let c = 0 - b              // b=1 → -1 (all bits), b=0 → 0
+    let mut np: [int] = []
+    let mut nq: [int] = []
+    let mut i = 0
+    while i < 16 {
+        let t = c & (p[i] ^ q[i])
+        np.push(p[i] ^ t)
+        nq.push(q[i] ^ t)
+        i = i + 1
+    }
+    let mut out: [int] = []
+    i = 0
+    while i < 16 { out.push(np[i]); i = i + 1 }
+    i = 0
+    while i < 16 { out.push(nq[i]); i = i + 1 }
+    return out
+}
+
+@pure
+fn _unpack(n: [int]) -> [int] {
+    let mut o = _gf0()
+    let mut i = 0
+    while i < 16 {
+        o[i] = n[2*i] + (n[2*i+1] << 8)
+        i = i + 1
+    }
+    o[15] = o[15] & 0x7FFF
+    return o
+}
+
+@pure
+fn _pack(a: [int]) -> [int] {
+    let mut m = _car(_car(_car(a)))
+    // final reduction: subtract p twice, select
+    let mut j = 0
+    while j < 2 {
+        let mut t = _gf_copy(m)
+        t[0] = t[0] - 0xffed
+        let mut i = 1
+        while i < 15 {
+            t[i] = t[i] - 0xffff - ((t[i-1] >> 16) & 1)
+            t[i-1] = t[i-1] & 0xffff
+            i = i + 1
+        }
+        t[15] = t[15] - 0x7fff - ((t[14] >> 16) & 1)
+        let b = (t[15] >> 16) & 1
+        t[14] = t[14] & 0xffff
+        // select m = (b? m : t)
+        let sel = _sel(t, m, b)
+        let mut k = 0
+        m = []
+        while k < 16 { m.push(sel[k]); k = k + 1 }
+        j = j + 1
+    }
+    let mut out: [int] = []
+    let mut i = 0
+    while i < 16 {
+        out.push(m[i] & 0xFF)
+        out.push((m[i] >> 8) & 0xFF)
+        i = i + 1
+    }
+    return out
+}
+
+@pure
+pub fn x25519(scalar: [int], point: [int]) -> [int] {
+    // clamp scalar
+    let mut z: [int] = []
+    let mut i = 0
+    while i < 32 { z.push(scalar[i] & 0xFF); i = i + 1 }
+    z[0] = z[0] & 248
+    z[31] = z[31] & 127
+    z[31] = z[31] | 64
+
+    let x = _unpack(point)
+    let mut a = _gf0(); a[0] = 1
+    let mut b = _gf_copy(x)
+    let mut c = _gf0()
+    let mut d = _gf0(); d[0] = 1
+    let _121665 = _gf0()
+    // a121665 constant
+    let mut k121665 = _gf0(); k121665[0] = 0xDB41; k121665[1] = 1
+
+    let mut pos = 254
+    while pos >= 0 {
+        let bit = (z[pos >> 3] >> (pos & 7)) & 1
+        let s1 = _sel(a, b, bit)
+        a = []; b = []
+        let mut q = 0
+        while q < 16 { a.push(s1[q]); q = q + 1 }
+        q = 0
+        while q < 16 { b.push(s1[16+q]); q = q + 1 }
+        let s2 = _sel(c, d, bit)
+        c = []; d = []
+        q = 0
+        while q < 16 { c.push(s2[q]); q = q + 1 }
+        q = 0
+        while q < 16 { d.push(s2[16+q]); q = q + 1 }
+
+        let e = _gf_add(a, c)
+        a = _gf_sub(a, c)
+        c = _gf_add(b, d)
+        b = _gf_sub(b, d)
+        d = _gf_sq(e)
+        let f = _gf_sq(a)
+        a = _gf_mul(c, a)
+        c = _gf_mul(b, e)
+        let ee = _gf_add(a, c)
+        a = _gf_sub(a, c)
+        b = _gf_sq(a)
+        c = _gf_sub(d, f)
+        a = _gf_mul(c, k121665)
+        a = _gf_add(a, d)
+        c = _gf_mul(c, a)
+        a = _gf_mul(d, f)
+        d = _gf_mul(b, x)
+        b = _gf_sq(ee)
+
+        let s3 = _sel(a, b, bit)
+        a = []; b = []
+        q = 0
+        while q < 16 { a.push(s3[q]); q = q + 1 }
+        q = 0
+        while q < 16 { b.push(s3[16+q]); q = q + 1 }
+        let s4 = _sel(c, d, bit)
+        c = []; d = []
+        q = 0
+        while q < 16 { c.push(s4[q]); q = q + 1 }
+        q = 0
+        while q < 16 { d.push(s4[16+q]); q = q + 1 }
+        pos = pos - 1
+    }
+    c = _gf_inv(c)
+    a = _gf_mul(a, c)
+    return _pack(a)
+}
+
+@pure
+pub fn x25519_base(scalar: [int]) -> [int] {
+    let mut bp: [int] = []
+    let mut i = 0
+    while i < 32 { bp.push(0); i = i + 1 }
+    bp[0] = 9
+    return x25519(scalar, bp)
+}

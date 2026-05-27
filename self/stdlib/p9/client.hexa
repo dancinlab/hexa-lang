@@ -1,0 +1,109 @@
+// ═══════════════════════════════════════════════════════════
+//  self/stdlib/p9/client.hexa -- 9P2000.L client side (MVP)
+//
+//  Pairs with stdlib/p9/codec.hexa + stdlib/p9/server.hexa.
+//  Transport: a connected fd (AF_UNIX or TCP) where the client
+//  uses net_write to send framed messages and net_read to receive.
+//  Caller is responsible for opening the socket via net_connect /
+//  net_accept. The fd-passing constructor keeps the client simple
+//  + works over any byte-pipe (sshfs's `cpu` transport could pipe
+//  through `ssh`'s stdin/stdout with a small wrapper).
+//
+//  Surface:
+//    P9Client struct: { fd, next_tag }
+//    p9_client_new(fd) -> P9Client
+//    p9_client_version(c, msize, version) -> map
+//    p9_client_attach(c, fid, afid, uname, aname, uid) -> map (qid)
+//    p9_client_open(c, fid, mode) -> map (qid, iounit)
+//    p9_client_read(c, fid, offset, count) -> [int] | { error }
+//    p9_client_clunk(c, fid) -> 0 | { error }
+//
+//  Twalk + Twrite are exposed via the underlying codec; the MVP
+//  facade focuses on the dial / read / cleanup happy path that
+//  pool stage-B / cpu port needs first.
+
+use "self/stdlib/p9/codec"
+
+pub struct P9Client {
+    fd: int,
+    next_tag: int
+}
+
+pub fn p9_client_new(fd: int) -> P9Client {
+    return P9Client { fd: fd, next_tag: 1 }
+}
+
+fn _alloc_tag(c: P9Client) -> int {
+    let t = c.next_tag
+    let mut n = t + 1
+    if n > 65534 { n = 1 }
+    c.next_tag = n
+    return t
+}
+
+// Send/recv use the NUL-safe byte-array variants (net_write_bytes /
+// net_read_bytes) — 9P frames carry size-u32 LE so the upper bytes
+// are typically NUL, which would truncate the C-string fast path.
+fn _send_frame(c: P9Client, frame: [int]) -> int {
+    let n = net_write_bytes(c.fd, frame)
+    if n < 0 { return -1 }
+    return 0
+}
+
+fn _recv_frame(c: P9Client) -> [int] {
+    return net_read_bytes(c.fd, 65536)
+}
+
+fn _xchg(c: P9Client, req: [int]) -> any {
+    let rc = _send_frame(c, req)
+    if rc != 0 { return #{ "type": "transport_error", "errno": -rc } }
+    let reply = _recv_frame(c)
+    if len(reply) < 7 { return #{ "type": "transport_error", "errno": -1 } }
+    return p9_decode(reply)
+}
+
+pub fn p9_client_version(c: P9Client, msize: int, version: string) -> any {
+    return _xchg(c, p9_enc_tversion(NOTAG, msize, version))
+}
+
+pub fn p9_client_attach(c: P9Client, fid: int, afid: int, uname: string, aname: string, uid: int) -> any {
+    let tag = _alloc_tag(c)
+    return _xchg(c, p9_enc_tattach(tag, fid, afid, uname, aname, uid))
+}
+
+pub fn p9_client_walk(c: P9Client, fid: int, newfid: int, wnames: [string]) -> any {
+    let tag = _alloc_tag(c)
+    return _xchg(c, p9_enc_twalk(tag, fid, newfid, wnames))
+}
+
+pub fn p9_client_open(c: P9Client, fid: int, mode: int) -> any {
+    let tag = _alloc_tag(c)
+    return _xchg(c, p9_enc_topen(tag, fid, mode))
+}
+
+pub fn p9_client_read(c: P9Client, fid: int, offset: int, count: int) -> any {
+    let tag = _alloc_tag(c)
+    let r = _xchg(c, p9_enc_tread(tag, fid, offset, count))
+    let t = str(r["type"])
+    if t == "Rread"  { return r["data"] }
+    if t == "Rerror" { return #{ "error": r["ecode"] } }
+    return #{ "error": -1 }
+}
+
+pub fn p9_client_write(c: P9Client, fid: int, offset: int, data: [int]) -> any {
+    let tag = _alloc_tag(c)
+    let r = _xchg(c, p9_enc_twrite(tag, fid, offset, data))
+    let t = str(r["type"])
+    if t == "Rwrite" { return r["count"] }
+    if t == "Rerror" { return #{ "error": r["ecode"] } }
+    return #{ "error": -1 }
+}
+
+pub fn p9_client_clunk(c: P9Client, fid: int) -> any {
+    let tag = _alloc_tag(c)
+    let r = _xchg(c, p9_enc_tclunk(tag, fid))
+    let t = str(r["type"])
+    if t == "Rclunk" { return 0 }
+    if t == "Rerror" { return #{ "error": r["ecode"] } }
+    return #{ "error": -1 }
+}

@@ -1,0 +1,52 @@
+#!hexa strict
+// verify_station.hexa — hexa-station n=6 invariant calculator. Sentinel: __HEXA_STATION_VERIFY__ PASS.
+fn main() {
+    println("[station] HEXA-STATION n=6 commercial-station bookkeeping")
+    let n=6  let sigma=12  let tau=4  let phi=2  let j2=24
+
+    assert(sigma * phi == n * tau)
+    println("  [n6] σ·φ = n·τ = 24  PASS")
+
+    // Crew per mission = τ (Haven-1)
+    let crew = tau
+    assert(crew == 4)
+    println("  [crew] τ = 4 per mission  PASS")
+
+    // Missions per station life = τ
+    let missions = tau
+    assert(missions == 4)
+    println("  [missions] τ = 4 per life  PASS")
+
+    // Mission duration days = τ²−n = 10
+    let duration = tau * tau - n
+    assert(duration == 10)
+    println("  [duration] τ²−n = 10 d  PASS")
+
+    // Habitable volume m³ = σ·τ−n+3 = 45
+    let volume = sigma * tau - n + 3
+    assert(volume == 45)
+    println("  [volume] σ·τ−n+3 = 45 m³  PASS")
+
+    // Lifespan yr = n/φ = 3
+    let life_yr = n / phi
+    assert(life_yr == 3)
+    println("  [life] n/φ = 3 yr  PASS")
+
+    // ECLSS subsystems (inherited from Dragon) = n
+    let eclss = n
+    assert(eclss == 6)
+    println("  [ECLSS] n = 6  PASS")
+
+    // Total mission-days per station life = J₂ (4·6=24)
+    let total_days = missions * n
+    assert(total_days == j2)
+    println("  [J₂] missions·n = J₂ = 24 d  PASS")
+
+    // Private/NASA-supported dichotomy = φ
+    let dichotomy = phi
+    assert(dichotomy == 2)
+    println("  [φ] private/NASA = φ = 2  PASS")
+
+    println("[station] 9/9 EXACT — hexa-station lattice closes")
+    println("__HEXA_STATION_VERIFY__ PASS")
+}

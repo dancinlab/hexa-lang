@@ -1,0 +1,98 @@
+// HEXA Standard Library — crypto/pbkdf2
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// PBKDF2-HMAC-SHA256 (RFC 8018 / PKCS #5 v2.1) + HKDF-SHA256 (RFC 5869) —
+// pure hexa over the existing hexa-native HMAC-SHA256 (stdlib/core/hash/
+// hmac.hexa). Adds the pbkdf2 leg of RUNTIME.md Phase 2 "Crypto helpers:
+// HMAC-DRBG, scrypt, pbkdf2" (layer ① — algorithms hexa-native). scrypt
+// (memory-hard) + HMAC-DRBG remain heavier follow-ups.
+//
+// Surface:
+//   pub fn pbkdf2_hmac_sha256(password: [int], salt: [int], iters: int, dklen: int) -> [int]
+//   pub fn hkdf_sha256(ikm: [int], salt: [int], info: [int], length: int) -> [int]
+//
+// Verified vectors:
+//   PBKDF2(P="password", S="salt", c=1, dkLen=32)
+//     = 120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b
+//   PBKDF2(P="password", S="salt", c=2, dkLen=32)
+//     = ae4d0c95af6b46d32d0adff928f06dd02a303f8ef3c251dfd6e2d85a95474c43
+
+use "stdlib/core/hash/hmac"
+
+let _PB_HLEN: int = 32   // SHA-256 output size
+
+// big-endian INT_32 block index
+@pure
+fn _int32be(i: int) -> [int] {
+    return [(i >> 24) & 0xFF, (i >> 16) & 0xFF, (i >> 8) & 0xFF, i & 0xFF]
+}
+
+@pure
+fn _xor_into(acc: [int], add: [int]) -> [int] {
+    let mut out: [int] = []
+    let mut i = 0
+    while i < len(acc) { out.push((acc[i] ^ add[i]) & 0xFF); i = i + 1 }
+    return out
+}
+
+@pure
+pub fn pbkdf2_hmac_sha256(password: [int], salt: [int], iters: int, dklen: int) -> [int] {
+    let mut dk: [int] = []
+    let nblocks = (dklen + _PB_HLEN - 1) / _PB_HLEN
+    let mut blk = 1
+    while blk <= nblocks {
+        // U1 = HMAC(P, S || INT_32_BE(blk))
+        let mut salt_blk: [int] = []
+        let mut si = 0
+        while si < len(salt) { salt_blk.push(salt[si]); si = si + 1 }
+        let ib = _int32be(blk)
+        salt_blk.push(ib[0]); salt_blk.push(ib[1]); salt_blk.push(ib[2]); salt_blk.push(ib[3])
+        let mut u = hmac_sha256_bytes(password, salt_blk)
+        let mut t = u
+        // U2..Uc, XOR-accumulate into T
+        let mut j = 1
+        while j < iters {
+            u = hmac_sha256_bytes(password, u)
+            t = _xor_into(t, u)
+            j = j + 1
+        }
+        let mut bi = 0
+        while bi < len(t) { dk.push(t[bi]); bi = bi + 1 }
+        blk = blk + 1
+    }
+    // truncate to dklen
+    return dk.slice(0, dklen)
+}
+
+// HKDF-SHA256 (RFC 5869): extract-then-expand.
+@pure
+pub fn hkdf_sha256(ikm: [int], salt: [int], info: [int], length: int) -> [int] {
+    // extract: PRK = HMAC(salt, IKM). salt empty → 32 zero bytes.
+    let mut s = salt
+    if len(s) == 0 {
+        s = []
+        let mut z = 0
+        while z < _PB_HLEN { s.push(0); z = z + 1 }
+    }
+    let prk = hmac_sha256_bytes(s, ikm)
+    // expand: T(i) = HMAC(PRK, T(i-1) || info || i)
+    let n = (length + _PB_HLEN - 1) / _PB_HLEN
+    let mut okm: [int] = []
+    let mut prev: [int] = []
+    let mut i = 1
+    while i <= n {
+        let mut msg: [int] = []
+        let mut pi = 0
+        while pi < len(prev) { msg.push(prev[pi]); pi = pi + 1 }
+        let mut ii = 0
+        while ii < len(info) { msg.push(info[ii]); ii = ii + 1 }
+        msg.push(i & 0xFF)
+        prev = hmac_sha256_bytes(prk, msg)
+        let mut bi = 0
+        while bi < len(prev) { okm.push(prev[bi]); bi = bi + 1 }
+        i = i + 1
+    }
+    return okm.slice(0, length)
+}

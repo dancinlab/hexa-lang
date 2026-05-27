@@ -1,0 +1,142 @@
+{
+  "fire_id": "rfc071_p5_multi_kernel_2026_05_21",
+  "falsifier_pass": [
+    "F-RFC071-E2E-MULTI-KERNEL-NUMERIC-EQ",
+    "F-RFC071-NVPTX-E2E-PTXAS-CLEAN",
+    "F-RFC071-NVPTX-E2E-LAUNCH",
+    "F-RFC071-MULTI-ENTRY-PTX-EMIT"
+  ],
+  "falsifier_fail": [],
+  "status_overall": "PASS",
+  "status_jit_load": "PASS",
+  "status_get_function_vec_add": "PASS",
+  "status_get_function_vec_mul": "PASS",
+  "status_launch_vec_add": "PASS",
+  "status_launch_vec_mul": "PASS",
+  "status_numeric_vec_add": "PASS",
+  "status_numeric_vec_mul": "PASS",
+  "headline": "Multi-@gpu_kernel-per-file source-to-silicon pipeline GENERALISES — one source emits one PTX with two .visible .entry, both kernels bit-exact under shared inputs",
+  "branch": "main",
+  "head_sha": "5facfedcfa768e6a833ae5dc0e0662d92cb76fba",
+  "N": 1024,
+  "kernels": {
+    "vec_add": {
+      "status": "PASS",
+      "max_abs_diff": 0,
+      "byte_mismatch": 0,
+      "first_mis": -1,
+      "c_0": 2.9647833402501771,
+      "ref_0": 2.9647833402501771,
+      "ptxas_registers": 16,
+      "ptxas_stack_bytes": 0,
+      "ptxas_spill_stores": 0,
+      "ptxas_spill_loads": 0,
+      "ptxas_barriers": 0,
+      "ptxas_compile_time_ms": 1.278
+    },
+    "vec_mul": {
+      "status": "PASS",
+      "max_abs_diff": 0,
+      "byte_mismatch": 0,
+      "first_mis": -1,
+      "c_0": 2.1032052170878326,
+      "ref_0": 2.1032052170878326,
+      "ptxas_registers": 16,
+      "ptxas_stack_bytes": 0,
+      "ptxas_spill_stores": 0,
+      "ptxas_spill_loads": 0,
+      "ptxas_barriers": 0,
+      "ptxas_compile_time_ms": 2.007
+    }
+  },
+  "lcg_seed": "0x0123456789abcdef",
+  "lcg_a_0": 1.1753414355242713,
+  "lcg_b_0": 1.789441904725906,
+  "cross_check": {
+    "vec_mul_c0_matches_n50": true,
+    "n50_c0": 2.1032052170878326,
+    "note": "LCG seed identical to N34 + N50 → element 0 of vec_mul C buffer is byte-identical to the standalone N50 fixture's c[0]. Cross-fire reproducibility evidence."
+  },
+
+  "context": {
+    "fixture": "compiler/codegen/nvptx_p5_multi_kernel_test.hexa",
+    "predecessor_fires": [
+      "rfc071_p4_n34_numeric_eq_pass_2026_05_21 (N34 vec-add single-kernel)",
+      "rfc071_p4_n50_vec_mul_e2e_2026_05_21 (N50 vec-mul single-kernel)"
+    ],
+    "ptx_path": "multi_kernel.sm_80.ptx",
+    "ptx_size_bytes": 4043,
+    "ptx_md5": "6f7a767ed872f5b08c98b74ebafb2dce",
+    "ptx_size_vs_2x_single": "4043 = ~14-byte header (`.version 7.0\\n.target sm_80\\n.address_size 64\\n`) + 2 entries; vec_add body 2026 bytes (N34=2428 included extra register decls trail) + vec_mul body 2017 bytes; deduplicates header",
+    "target_sm": "sm_80",
+    "device": "NVIDIA GeForce RTX 5070 (sm_120a JIT)",
+    "driver_version": "580.126.09",
+    "host": "ubu-2 (summer-B650M-K)",
+    "block_dim": "1x1024x1",
+    "grid_dim": "1x1x1",
+    "driver_binary": "/tmp/hexa_n50_driver (1611936 B Mach-O arm64, build artifact from N50 cycle — same hexa_v2 self-host gen, reused since no compiler-source edits in this cycle)",
+    "module_loader": "build/hexa_module_loader (required by HEXA_MODULE_LOADER per reference_hexa_module_loader_env_2026_05_20)"
+  },
+
+  "ptx_substring_asserts": {
+    ".visible .entry vec_add (count=1)": true,
+    ".visible .entry vec_mul (count=1)": true,
+    "total_visible_entry_count": 2,
+    ".target sm_80": true,
+    "add.f64 (count=1, in vec_add body)": true,
+    "mul.f64 (count=1, in vec_mul body)": true,
+    "ld.global.f64 (count=4, 2 per kernel)": true,
+    "st.global.f64 (count=2, 1 per kernel)": true,
+    "setp.lt.s64 (count=2, bounds check per kernel)": true,
+    "@%p11 (predicate branch per kernel)": true,
+    "ld.param.u64 (8 instances total, 4 per kernel)": true,
+    "pure_ascii": true,
+    "non_ascii_byte_count": 0
+  },
+
+  "ptxas_compile_log_excerpt": [
+    "ptxas info    : Compiling entry function 'vec_mul' for 'sm_120a'",
+    "ptxas         .     0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads",
+    "ptxas info    : Used 16 registers, used 0 barriers",
+    "ptxas info    : Compile time = 2.007 ms",
+    "ptxas info    : Compiling entry function 'vec_add' for 'sm_120a'",
+    "ptxas         .     0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads",
+    "ptxas info    : Used 16 registers, used 0 barriers",
+    "ptxas info    : Compile time = 1.278 ms"
+  ],
+
+  "multi_kernel_generalisation_evidence": {
+    "claim": "MFunc partition + _nvptx_codegen iterator + emit_ptx joiner correctly handle N>1 @gpu_kernel functions in one source — no codegen edits required",
+    "verified_paths": [
+      "Parse: 2 @gpu_kernel decls accepted by lex+parse+lower+lower_hir (single hexa parse-gate PASS)",
+      "Filter (nvptx_target.hexa:2391-2412): `while i < len(module.funcs)` keeps both gpu_kind=KERNEL MFuncs",
+      "Lower-per-MFunc: _nvptx_lower_func called twice with distinct mfn (different name + body op)",
+      "Emit (`_emit_ptx_versioned` / `emit_ptx`): header emitted ONCE, both LFunc bodies concatenated via `parts.push(_emit_ptx_func(module.funcs[i]))` loop",
+      "Module-level identifiers correctly scoped per kernel (param_0..3 prefix uses kernel name)",
+      "cuModuleLoadDataEx accepts multi-entry PTX (ptxas info shows TWO 'Compiling entry function' lines)",
+      "cuModuleGetFunction resolves both 'vec_add' and 'vec_mul' from one module handle",
+      "Independent launches do not cross-contaminate device state (each kernel allocates+frees its own da/db/dc)",
+      "FP64 add+mul bit-exact vs CPU ref (IEEE 754 correctly-rounded single ops, no FMA contraction since each kernel has only one arith op)"
+    ],
+    "verdict": "GENERALISED — source-to-silicon pipeline transparently handles multi-kernel modules. Bottleneck IS NOT a per-module single-kernel constraint."
+  },
+
+  "honest_scope_g3": {
+    "no_compiler_edits": "Pure fixture + artifact cycle. No edits to compiler/, self/, stdlib/, or any source under codegen/. Verified: `git status -- compiler/ self/ stdlib/` clean delta vs HEAD on entry.",
+    "driver_reuse": "Reused /tmp/hexa_n50_driver (Mach-O arm64 from N50 cycle). PTX emission succeeds because Path B (_build_nvptx_emit_driver) was already wired in N35+N45 — N55 exercises THE SAME pipeline with an N=2-kernel input, no rebuild needed.",
+    "ptx_size_observation": "Header is 14 bytes single-instance. Per-kernel body ~2020 bytes. Multi-kernel PTX size scales near-linearly with kernel count (no per-kernel hidden global emission).",
+    "ptxas_emit_order": "ptxas-info shows vec_mul compiled BEFORE vec_add despite source order vec_add THEN vec_mul. This is ptxas internal scheduling — order in the .ptx text IS source order (vec_add at L6, vec_mul at L61). No semantic effect.",
+    "cross_module_register_aliasing": "Both kernels reuse the same SSA-style register names (%rd0..%fd18). Safe because each `.entry` body is a self-contained scope per PTX ISA — registers are per-function, not module-global. Confirmed by ptxas accepting + JIT compiling both.",
+    "ipc_isolation": "Per-kernel cuMemAlloc/Free in fire_kernel() means vec_mul does NOT inherit vec_add's device buffers. Each kernel gets fresh memset(0xee) sentinel; both produce PASS independently.",
+    "no_gap_surfaced": "F-RFC071-E2E-MULTI-KERNEL-NUMERIC-EQ PASS first try. No partial emit (e.g., 1-entry PTX), no missing cuModuleGetFunction handle, no numeric drift. Generalisation gap from N34/N50 single-kernel fixtures CLOSED."
+  },
+
+  "rc": 0,
+  "artifacts": {
+    "fixture_hexa": "/Users/ghost/core/hexa-lang/compiler/codegen/nvptx_p5_multi_kernel_test.hexa",
+    "ptx": "multi_kernel.sm_80.ptx",
+    "host_c": "host_multi.c",
+    "fire_log": "fire.log",
+    "result_json": "result.json"
+  }
+}

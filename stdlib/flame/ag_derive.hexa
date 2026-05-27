@@ -1,0 +1,370 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/flame/ag_derive.hexa — flame autograd-auto Sub-Deliverable 1
+// (RFC 043, scoping note docs/notes/2026-05-20-flame-autograd-auto-scoping.md)
+//
+// PURPOSE — Source-to-source reverse-mode AD via a vjp-rule registry
+// (Option B in the scoping note). SD1 lands the registry data structure
+// + ONE rule for `farr_matmul` (the linear-fwd primitive). The derived
+// bwd MUST be byte-identical (max|Δ| = 0.0) to the existing hand-written
+// `nn_linear_bwd` reference — that is the SD1 gate
+// (F-RFC043-AUTOGRAD-AUTO-MATMUL-BYTE-EQ).
+//
+// SCOPE (g3 — what this file IS and IS NOT):
+//   IS  : a manually-keyed rule registry. `ag_derive_register(op_kind,
+//         …)` installs a rule; `matmul_bwd_auto(x, W, dy, …)` looks up
+//         the matmul rule and invokes it.
+//   IS  : the rule for `farr_matmul` whose closed-form vjp is the
+//         chain-rule application
+//           y     = x · W                (forward: matmul)
+//           dW    = xᵀ · dy              (vjp wrt W)
+//           dx    = dy · Wᵀ              (vjp wrt x)
+//         This is the standard analytic vjp pair for matmul (see e.g.
+//         Tapenade/Zygote/JAX literature; equivalently c3_outer + c3_
+//         matvec_t in anima d_train3_lib.hexa, the cross-repo verified
+//         reference). The rule's emitted body reduces in the same
+//         ikj-style order as the hand-written `nn_linear_bwd` so the
+//         floating-point sum order matches byte-for-byte.
+//   NOT : true AST-driven derivation from the source of `nn_linear_fwd`
+//         (the scoping note "honest stop-condition" — SD5 if compile-
+//         time AST introspection lands; SD1 keys rules by op_kind).
+//   NOT : integrated into ag_tape's `ag_backward_reg` dispatch — that is
+//         SD4. SD1 verifies the rule's output standalone vs
+//         `nn_linear_bwd`.
+//   NOT : bias-grad. `nn_linear_bwd` also produces `db`; SD1's
+//         `matmul_bwd_auto` covers ONLY the matmul vjp pair {dW, dx},
+//         because the bias is a separate fwd primitive (broadcast-add,
+//         not matmul) — its vjp rule will land separately as SD2's
+//         `add_bwd_auto`.
+//
+// Hexa-native CPU only ($0). Strict-lint: @raw117_exempt (flame stdlib
+// convention; the formula prose above carries the atlas-derivation
+// citation, mirroring the @raw117_exempt header in nn_lib.hexa /
+// ag_tape.hexa).
+//
+// Atlas anchor (g6 — the formula's derivation):
+//   - Closed-form vjp of matmul = chain-rule application
+//     · dx = ∂L/∂x = (∂L/∂y) · (∂y/∂x) = dy · Wᵀ
+//     · dW = ∂L/∂W = (∂L/∂y) · (∂y/∂W) = xᵀ · dy
+//   - The closed-form coincides with anima d_train3_lib.hexa
+//     `c3_matvec_t` (input-grad) + `c3_outer` (W-grad accumulator),
+//     which `nn_lib::nn_linear_bwd` reproduces ikj-fashion in the
+//     hand-written reference.
+//   - Citation: hexa-lang.atlas (built-in) "matmul-vjp = transpose
+//     × upstream" — the rule's `bwd` body reproduces the algebra
+//     without re-deriving it (the algebra IS the registry value).
+// ════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/flame_math"
+
+// ─── op-kind IDs (registry keys) ───────────────────────────────────────
+// Match ag_tape's ag_k_* ID space ONLY for the ops where a rule exists.
+// SD1 claimed `ag_derive_k_matmul` (1); SD2 claims `ag_derive_k_add` (2)
+// for the broadcast bias-add primitive (the `+ b` half of nn_linear_fwd,
+// surfaced as the `farr_add`-bias vjp). SD3 claims `ag_derive_k_silu_gate`
+// (3) for the elementwise gated-SiLU primitive `s[i] = silu(a[i]) · b[i]`
+// (SwiGLU's nonlinear middle stage; corresponds to ag_tape's
+// `ag_k_silu_gate` = 11). Future SDs claim additional kinds in lockstep.
+// We do NOT reuse ag_tape's literals because ag_derive is a
+// self-contained registry — adding a rule for op_kind X here MUST be a
+// deliberate edit, not "whatever ag_tape happens to use".
+pub fn ag_derive_k_matmul()    -> int { return 1 }
+pub fn ag_derive_k_add()       -> int { return 2 }
+pub fn ag_derive_k_silu_gate() -> int { return 3 }
+// Reserved for future SDs (do not invoke yet — registry rejects unknown):
+//   4 = rmsnorm, 5 = rope, 6 = lmhead, 7 = swiglu, 8 = embed,
+//   9 = attn, 10 = slice, 11 = rope_mh, 12 = rmsnorm_mh,
+//   13 = attn_dt — later SDs will register these.
+
+// ─── registry: flat farr-backed table ──────────────────────────────────
+// Layout: a single farr where each "slot" is 4 cells:
+//   [op_kind, registered_flag, reserved, reserved]
+// Slot index ≡ op_kind − 1 (so matmul → slot 0). 16-slot table is
+// vastly more than SD1 needs but matches the 13 op_kinds the scoping
+// note enumerates (and leaves room for SD2's add + SD3 expansion).
+//
+// The registry stores op-kind presence (a manually-keyed lookup). The
+// rule's BODY is a separate `pub fn` per kind — dispatch is via the
+// kind-id switch in `matmul_bwd_auto` (and future siblings), which the
+// registry guards: "lookup says present → call the body; lookup says
+// absent → fault".
+//
+// Why a flat farr (not a struct array): the scoping note constrains
+// SD1 to flame stdlib idiom (farr-backed, ag_tape style). This mirrors
+// how ag_tape's tape itself is a flat farr of {kind, ids…, dims…}.
+
+fn _ag_derive_slots() -> int { return 16 }
+fn _ag_derive_stride() -> int { return 4 }
+
+pub fn ag_derive_registry_new() -> int {
+    let n = _ag_derive_slots() * _ag_derive_stride()
+    let r = t_zeros(n)
+    return r
+}
+
+pub fn ag_derive_register(reg: int, op_kind: int) -> int {
+    let slots = _ag_derive_slots()
+    if op_kind < 1 { return 0 }
+    if op_kind > slots { return 0 }
+    let base = (op_kind - 1) * _ag_derive_stride()
+    t_set(reg, base + 0, to_float(op_kind))
+    t_set(reg, base + 1, 1.0)
+    return 1
+}
+
+pub fn ag_derive_is_registered(reg: int, op_kind: int) -> int {
+    let slots = _ag_derive_slots()
+    if op_kind < 1 { return 0 }
+    if op_kind > slots { return 0 }
+    let base = (op_kind - 1) * _ag_derive_stride()
+    let flag = t_get(reg, base + 1)
+    if flag == 1.0 { return 1 }
+    return 0
+}
+
+// ─── rule body: matmul vjp (op_kind = 1) ───────────────────────────────
+// Closed-form chain-rule application — the registry's payload for
+// `farr_matmul`. Reduction order chosen to match `nn_linear_bwd` (and
+// equivalently `ref_linear_bwd` in flame_nn_test.hexa) byte-for-byte:
+//   · dW[d,c] = Σ_b x[b,d] · dy[b,c]    (outer dimension `d`, inner `c`,
+//                                         innermost reduction `b`)
+//   · dx[b,d] = Σ_c dy[b,c] · W[d,c]    (outer dimension `b`, inner `d`,
+//                                         innermost reduction `c`)
+// Same loop nesting + same scalar-multiplication associativity ⇒ same
+// IEEE-754 last-bit ⇒ max|Δ| = 0.0 vs the hand-written reference.
+//
+// Caller-allocated outputs (dW_out, dx_out) — writes in place; this
+// keeps the surface aligned with `nn_linear_bwd` so the byte-eq oracle
+// compares like-for-like and SD2/SD4 can swap the call sites without
+// reshaping the surrounding code.
+pub fn ag_derive_matmul_bwd_body(x: int, W: int, dy: int,
+                                 dW_out: int, dx_out: int,
+                                 B: int, D: int, C: int) {
+    // dW = xᵀ · dy  — outer (d, c), inner-most reduction over b.
+    let mut d = 0
+    while d < D {
+        let mut c = 0
+        while c < C {
+            let mut acc = 0.0
+            let mut bi = 0
+            while bi < B {
+                acc = acc + t_get(x, bi * D + d) * t_get(dy, bi * C + c)
+                bi = bi + 1
+            }
+            t_set(dW_out, d * C + c, acc)
+            c = c + 1
+        }
+        d = d + 1
+    }
+    // dx = dy · Wᵀ  — outer (b, d), inner-most reduction over c.
+    let mut b2 = 0
+    while b2 < B {
+        let mut d2 = 0
+        while d2 < D {
+            let mut acc2 = 0.0
+            let mut c2 = 0
+            while c2 < C {
+                acc2 = acc2 + t_get(dy, b2 * C + c2) * t_get(W, d2 * C + c2)
+                c2 = c2 + 1
+            }
+            t_set(dx_out, b2 * D + d2, acc2)
+            d2 = d2 + 1
+        }
+        b2 = b2 + 1
+    }
+}
+
+// ─── public entry: matmul_bwd_auto ─────────────────────────────────────
+// Consume the rule registry. Lookup the matmul rule; if registered,
+// invoke its body. If NOT registered, write zeros (the SD1 test
+// registers the rule, so this is the success path; absence is a
+// deliberate fault to surface integration bugs in SD4).
+pub fn matmul_bwd_auto(reg: int, x: int, W: int, dy: int,
+                       dW_out: int, dx_out: int,
+                       B: int, D: int, C: int) -> int {
+    if ag_derive_is_registered(reg, ag_derive_k_matmul()) == 0 {
+        return 0
+    }
+    ag_derive_matmul_bwd_body(x, W, dy, dW_out, dx_out, B, D, C)
+    return 1
+}
+
+// ─── rule body: broadcast bias-add vjp (op_kind = 2) ───────────────────
+// SD2 — the bias half of `nn_linear_fwd` (y = x · W + b), surfaced
+// here as the `farr_add` broadcast-bias vjp. The fwd primitive is the
+// per-row bias broadcast that nn_linear_fwd applies AFTER the matmul:
+//   y[i, j] = x_plus_W[i, j] + b[j]    for i ∈ [0,B), j ∈ [0,C)
+// where b is a length-C vector broadcast across all B rows.
+//
+// Closed-form vjp (chain-rule + broadcast adjoint = reduce-sum):
+//   · dx[i, j] = ∂L/∂x[i, j] = dy[i, j]                  (identity)
+//   · db[j]    = ∂L/∂b[j]    = Σ_i dy[i, j]              (reduce-sum
+//                                                          along axis=0,
+//                                                          the broadcast
+//                                                          axis)
+// The reduce-sum is the adjoint of broadcast — a standard result
+// (Tapenade/Zygote/JAX `unbroadcast`; equivalently the `db` block in
+// `nn_lib::nn_linear_bwd` lines 129–140 of the reference). The dx
+// portion is purely the upstream gradient (x and b enter the fwd
+// strictly additively, so ∂y/∂x ≡ identity), which is why SD2 only
+// returns `db` as the derived output — the dx for this primitive IS
+// the upstream `dy`, no new tensor needed.
+//
+// Reduction order chosen to match `nn_linear_bwd`'s db loop byte-for-
+// byte:
+//   · db[j] = Σ_i dy[i,j]    (outer dimension j ∈ [0,C),
+//                              innermost reduction i ∈ [0,B))
+// Same loop nesting + same scalar-add associativity ⇒ identical IEEE-754
+// last-bit accumulator trajectory ⇒ max|Δ| = 0.0 vs the hand-written
+// reference (the SD2 byte-eq gate).
+//
+// Caller-allocated output (db_out, length C). Writes in place; the
+// surface mirrors the `db_out` slot of `nn_linear_bwd` so the byte-eq
+// oracle compares like-for-like.
+//
+// Note on the `x` and `b` arguments: the closed-form vjp does NOT read
+// `x` or `b` themselves (only their shape via B, C). They are kept in
+// the signature for parallelism with `ag_derive_matmul_bwd_body` and
+// to lock the surface SD4 will integrate against; the body discards
+// them via the `let _ = ` idiom isn't needed (parameters that aren't
+// read incur no cost in hexa).
+pub fn ag_derive_add_bwd_body(x: int, b: int, dy: int,
+                              db_out: int,
+                              B: int, C: int) {
+    // db[j] = Σ_i dy[i,j]  — outer j ∈ [0,C), inner reduction i ∈ [0,B).
+    // Identical loop nest to nn_lib::nn_linear_bwd lines 129–140.
+    let mut j = 0
+    while j < C {
+        let mut acc = 0.0
+        let mut i = 0
+        while i < B {
+            acc = acc + t_get(dy, i * C + j)
+            i = i + 1
+        }
+        t_set(db_out, j, acc)
+        j = j + 1
+    }
+}
+
+// ─── public entry: add_bwd_auto ────────────────────────────────────────
+// Consume the rule registry. Lookup the broadcast bias-add rule; if
+// registered, invoke its body. If NOT registered, return 0 (deliberate
+// fault — surfaces SD4 integration bugs).
+//
+// SD2 returns ONLY `db` (the broadcast-axis reduce-sum). The
+// `dx`-equivalent for a pure-add primitive is the upstream gradient
+// `dy` verbatim (identity adjoint) — callers consuming this rule in
+// SD4's tape integration will route `dy` through to whatever consumed
+// `x` upstream without copying. Keeping the surface minimal (no
+// `dx_out`) avoids an O(B·C) byte-eq-irrelevant memcpy and matches
+// the `ag_k_add`-residual recorder shape in `ag_tape`.
+//
+// Signature mirrors `ag_derive_add_bwd_body` (x, b, dy, db_out, B, C).
+// The fwd-input ids (x, b) are not read by the closed-form vjp but
+// stay in the surface so SD4 can pivot to a future AST-extracted rule
+// that DOES inspect them (Decision 12 + SD5 expansion).
+pub fn add_bwd_auto(reg: int, x: int, b: int, dy: int,
+                    db_out: int,
+                    B: int, C: int) -> int {
+    if ag_derive_is_registered(reg, ag_derive_k_add()) == 0 {
+        return 0
+    }
+    ag_derive_add_bwd_body(x, b, dy, db_out, B, C)
+    return 1
+}
+
+// ─── rule body: elementwise silu_gate vjp (op_kind = 3) ────────────────
+// SD3 — the gated-SiLU elementwise primitive at the core of SwiGLU:
+//   forward: s[i] = silu(a[i]) · b[i]                  i ∈ [0, len)
+// where silu(x) = x · σ(x), σ(x) = 1 / (1 + exp(−x)).
+//
+// Closed-form vjp (product rule + chain rule):
+//   · da[i] = ∂L/∂a[i] = ds[i] · b[i] · silu'(a[i])
+//   · db[i] = ∂L/∂b[i] = ds[i] · silu(a[i])
+// where silu'(x) = σ(x) + x · σ(x) · (1 − σ(x))        (product-rule
+//                                                       expansion of
+//                                                       x · σ(x)).
+// This is the standard analytic vjp pair for a gated SiLU primitive
+// (see anima d_train3_lib.hexa c3_swiglu_bwd; equivalently
+// `nn_lib::nn_swiglu_bwd` lines 446–452 + `ag_tape::ag_backward_reg`
+// silu_gate case lines 742–757, both of which encode the same
+// closed-form). The rule's body uses the SAME `dt_exp`-based sigmoid
+// (`flame_math::dt_exp`) as `ag_tape`'s `_ag_sigmoid`/`_ag_silu_grad`/
+// `_ag_silu`, which is what makes byte-eq possible:
+//   - `nn_lib::_nn_sigmoid` uses raw `exp` (libm) — NOT byte-eq with
+//     ag_tape's reference.
+//   - `flame_math::dt_exp` is the hexa-native range-reduced Taylor
+//     replica used throughout flame's autograd path (RFC 043 Decision
+//     12 — hand-Taylor transcendental replicas matching anima).
+//   - Therefore the SD3 byte-eq oracle MUST reduce its reference via
+//     the same `dt_exp`-based silu/silu_grad helpers; the SD3 test
+//     mirrors `ag_tape`'s `_ag_silu_grad`/`_ag_silu` locally so the
+//     two sides traverse identical IEEE-754 operations.
+//
+// Reduction order: elementwise — no inter-index reduction. The loop
+// touches each i ∈ [0, len) exactly once in increasing order, writing
+// da[i] and db[i] in the SAME order as `ag_tape::ag_backward_reg`'s
+// silu_gate dispatch (lines 749–754). Same ops in same order ⇒
+// identical IEEE-754 last-bit ⇒ max|Δ| = 0.0.
+//
+// Caller-allocated outputs (da_out, db_out — both length `len`). The
+// surface mirrors the recorded {a, b, s, len} signature of
+// `ag_tape::ag_silu_gate` so SD4 can pivot the recorder to call this
+// rule in place of the inline backward case without reshaping
+// callers.
+
+fn _ag_derive_sigmoid(x: float) -> float {
+    return 1.0 / (1.0 + dt_exp(0.0 - x))
+}
+fn _ag_derive_silu(x: float) -> float {
+    return x * _ag_derive_sigmoid(x)
+}
+fn _ag_derive_silu_grad(x: float) -> float {
+    let sg = _ag_derive_sigmoid(x)
+    return sg + x * sg * (1.0 - sg)
+}
+
+pub fn ag_derive_silu_gate_bwd_body(a: int, b: int, ds: int,
+                                    da_out: int, db_out: int,
+                                    len: int) {
+    // da[i] = ds[i] · b[i] · silu'(a[i])
+    // db[i] = ds[i] · silu(a[i])
+    // Identical inner sequence to ag_tape::ag_backward_reg silu_gate
+    // case (lines 749–754).
+    let mut i = 0
+    while i < len {
+        let av  = t_get(a, i)
+        let dsk = t_get(ds, i)
+        t_set(da_out, i, dsk * t_get(b, i) * _ag_derive_silu_grad(av))
+        t_set(db_out, i, dsk * _ag_derive_silu(av))
+        i = i + 1
+    }
+}
+
+// ─── public entry: silu_gate_bwd_auto ──────────────────────────────────
+// Consume the rule registry. Lookup the silu_gate rule; if registered,
+// invoke its body. If NOT registered, return 0 (deliberate fault —
+// surfaces SD4 integration bugs the same way SD1/SD2 do).
+//
+// SD3 returns BOTH `da` and `db` — unlike SD2's bias-add (which
+// piggy-backs on the upstream gradient for the dx-half), the gated-SiLU
+// vjp produces independent gradients for both inputs. This matches the
+// `ag_k_silu_gate` recorder shape (two input ids a, b in the recorded
+// node) and the `_ag_reg_acc` accumulation in `ag_tape`'s backward
+// dispatch (both a and b receive accumulated gradients).
+//
+// Signature mirrors `ag_derive_silu_gate_bwd_body`: (a, b, ds,
+// da_out, db_out, len). The fwd-output `s` is not needed for the bwd
+// (the closed-form vjp reads a, b, ds only — `s` is part of the fwd
+// record purely for completeness of the tape state, just like in
+// `ag_tape`'s recorder).
+pub fn silu_gate_bwd_auto(reg: int, a: int, b: int, ds: int,
+                          da_out: int, db_out: int,
+                          len: int) -> int {
+    if ag_derive_is_registered(reg, ag_derive_k_silu_gate()) == 0 {
+        return 0
+    }
+    ag_derive_silu_gate_bwd_body(a, b, ds, da_out, db_out, len)
+    return 1
+}

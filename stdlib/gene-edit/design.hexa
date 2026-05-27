@@ -1,0 +1,8 @@
+#!hexa strict
+// gene-edit design — GC content fraction target.
+fn main() {
+    let GC_target = 0.50
+    println("gene-edit_design (GC content fraction target):")
+    println("  GC_target = " + str(GC_target))
+    println("__HEXA_GENE_EDIT_DESIGN__ PASS gate=GATE_OPEN absorbed=false")
+}

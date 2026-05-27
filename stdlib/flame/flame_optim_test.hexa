@@ -1,0 +1,113 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/flame/flame_optim_test.hexa — flame Phase 3-A selftest
+//
+// Falsifier (RFC 043 §Verification):
+//   F-RFC043-OPTIM-EQ : opt_adamw_step 가 ag_adamw_step (autograd_lib)
+//                       과 byte-equal trajectory (둘 다 같은 builtin
+//                       `adamw_step` 호출). 동일 (W, m, v, gW, η, β₁,
+//                       β₂, ε, wd, t) 에서 두 wrapper 의 최종 (W, m, v)
+//                       는 max|Δ| = 0.0.
+//
+// 본 falsifier 는 wrapper-level invariant 만 검증. 깊은 검증 (
+// trajectory ≡ RFC 034 oracle) 은 transitively 상속됨: Phase 1 selftest
+// 의 F-RFC043-AG-TRAJ-ORACLE 이 이미 ag_adamw_step 의 20-step
+// trajectory 를 RFC 034 의 loss[0]/loss[19] 와 bit-equal 검증; 동일
+// builtin 사용하므로 opt_adamw_step 도 byte-eq.
+// ════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/autograd_lib"
+use "stdlib/flame/optim_lib"
+
+fn _opt_abs(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn max_dev_farr_opt(a: int, b: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n {
+        let d = _opt_abs(t_get(a, i) - t_get(b, i))
+        if d > m { m = d }
+        i = i + 1
+    }
+    return m
+}
+
+// 둘 다 같은 (W, m, v) 의 사본 위에서 동일 (gW, hyperparams, t) 로
+// 호출 → 최종 (W, m, v) 가 byte-equal 인지 확인.
+fn check_optim_eq() -> int {
+    let n = 12
+    let lr = 0.05
+    let b1 = 0.9
+    let b2 = 0.999
+    let eps = 0.00000001
+    let wd = 0.01
+
+    // 동일 seed 로 W, m, v, gW 초기화 두 벌.
+    let W_ag = t_zeros(n); t_fill_lcg(W_ag, n, 42, 0.5)
+    let m_ag = t_zeros(n); t_fill_lcg(m_ag, n, 100, 0.01)
+    let v_ag = t_zeros(n); t_fill_lcg(v_ag, n, 200, 0.0001)
+    let gW_ag = t_zeros(n); t_fill_lcg(gW_ag, n, 300, 0.1)
+
+    let W_opt = t_zeros(n); t_fill_lcg(W_opt, n, 42, 0.5)
+    let m_opt = t_zeros(n); t_fill_lcg(m_opt, n, 100, 0.01)
+    let v_opt = t_zeros(n); t_fill_lcg(v_opt, n, 200, 0.0001)
+    let gW_opt = t_zeros(n); t_fill_lcg(gW_opt, n, 300, 0.1)
+
+    // 10-step trajectory (각 step 에서 동일 gW; t 증가).
+    let mut step = 1
+    while step <= 10 {
+        ag_adamw_step(W_ag, gW_ag, m_ag, v_ag, n, lr, b1, b2, eps, wd, step)
+        opt_adamw_step(W_opt, gW_opt, m_opt, v_opt, n, lr, b1, b2, eps, wd, step)
+        step = step + 1
+    }
+
+    let W_dev = max_dev_farr_opt(W_ag, W_opt, n)
+    let m_dev = max_dev_farr_opt(m_ag, m_opt, n)
+    let v_dev = max_dev_farr_opt(v_ag, v_opt, n)
+
+    let _ = t_free(W_ag); let _ = t_free(m_ag); let _ = t_free(v_ag); let _ = t_free(gW_ag)
+    let _ = t_free(W_opt); let _ = t_free(m_opt); let _ = t_free(v_opt); let _ = t_free(gW_opt)
+
+    let out = t_zeros(3)
+    t_set(out, 0, W_dev)
+    t_set(out, 1, m_dev)
+    t_set(out, 2, v_dev)
+    return out
+}
+
+// ── entrypoint ─────────────────────────────────────────────────────────
+println("=== flame Phase 3-A selftest (optim_lib: AdamW thin wrapper, compiled-native) ===")
+
+let mut pass = 0
+let total = 1
+
+let r = check_optim_eq()
+let dW = t_get(r, 0)
+let dm = t_get(r, 1)
+let dv = t_get(r, 2)
+if dW == 0.0 {
+    if dm == 0.0 {
+        if dv == 0.0 {
+            println("PASS  F-RFC043-OPTIM-EQ  max|{W, m, v}_opt − {W, m, v}_ag| = 0.0 (byte-eq · 10-step trajectory; same builtin adamw_step)")
+            pass = pass + 1
+        } else { print("FAIL  F-RFC043-OPTIM-EQ  v dev="); print(dv); println("") }
+    } else { print("FAIL  F-RFC043-OPTIM-EQ  m dev="); print(dm); println("") }
+} else {
+    print("FAIL  F-RFC043-OPTIM-EQ  W dev="); print(dW); println("")
+}
+
+println("")
+print("=== flame Phase 3-A: ")
+print(pass)
+print("/")
+print(total)
+println(" PASS ===")
+if pass == total {
+    println("PASS — flame optim_lib AdamW thin wrapper byte-eq to autograd_lib ag_adamw_step (same builtin). Phase 3-B (decoder_block composition) next.")
+} else {
+    println("FAIL — flame Phase 3-A not landable")
+}

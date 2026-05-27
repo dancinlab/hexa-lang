@@ -1,0 +1,99 @@
+// HEXA Standard Library — codec/hex
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Hex (base16) encode/decode — pure hexa, no libc dependency. Closes
+// RUNTIME.md Phase 2 stdlib primitive (Bytes ↔ string codec subset).
+//
+// Surface:
+//   pub fn hex_encode(bytes: [int]) -> string         (lowercase, no separator)
+//   pub fn hex_encode_upper(bytes: [int]) -> string   (uppercase)
+//   pub fn hex_decode(s: string) -> [int]             (case-insensitive)
+//   pub fn hex_encode_str(s: string) -> string        (utf-8 bytes → hex)
+//   pub fn hex_decode_str(s: string) -> string        (hex → bytes-as-string)
+//
+// Invariants:
+//   • Encoder zero-pads each byte to 2 hex digits.
+//   • Decoder ignores whitespace (\t, \n, \r, ' ') and ':' separators.
+//   • Odd-length input or non-hex digit → returns [] (empty).
+
+let _HEX_LO: string = "0123456789abcdef"
+let _HEX_UP: string = "0123456789ABCDEF"
+
+@pure
+fn _hex_nibble(c: int) -> int {
+    if c >= 48 && c <= 57  { return c - 48 }       // 0-9
+    if c >= 65 && c <= 70  { return c - 65 + 10 }  // A-F
+    if c >= 97 && c <= 102 { return c - 97 + 10 }  // a-f
+    return -1
+}
+
+@pure
+fn _hex_encode_table(bytes: [int], table: string) -> string {
+    let n = len(bytes)
+    let mut out: [int] = []
+    let mut i = 0
+    while i < n {
+        let b = bytes[i] & 0xFF
+        out.push(table.byte_at(b / 16))
+        out.push(table.byte_at(b % 16))
+        i = i + 1
+    }
+    return bytes_to_str(out)
+}
+
+@pure
+pub fn hex_encode(bytes: [int]) -> string {
+    return _hex_encode_table(bytes, _HEX_LO)
+}
+
+@pure
+pub fn hex_encode_upper(bytes: [int]) -> string {
+    return _hex_encode_table(bytes, _HEX_UP)
+}
+
+@pure
+pub fn hex_decode(s: string) -> [int] {
+    let n = byte_len(s)
+    if n == 0 { return [] }
+    let mut nibbles: [int] = []
+    let mut i = 0
+    while i < n {
+        let c = s.byte_at(i)
+        if c == 9 || c == 10 || c == 13 || c == 32 || c == 58 {
+            // whitespace or ':' separator — skip
+        } else {
+            let v = _hex_nibble(c)
+            if v < 0 { return [] }
+            nibbles.push(v)
+        }
+        i = i + 1
+    }
+    let m = len(nibbles)
+    if m % 2 != 0 { return [] }
+    let mut out: [int] = []
+    let mut j = 0
+    while j < m {
+        out.push((nibbles[j] * 16) + nibbles[j+1])
+        j = j + 2
+    }
+    return out
+}
+
+@pure
+pub fn hex_encode_str(s: string) -> string {
+    let n = byte_len(s)
+    let mut bytes: [int] = []
+    let mut i = 0
+    while i < n {
+        bytes.push(s.byte_at(i))
+        i = i + 1
+    }
+    return hex_encode(bytes)
+}
+
+@pure
+pub fn hex_decode_str(s: string) -> string {
+    return bytes_to_str(hex_decode(s))
+}

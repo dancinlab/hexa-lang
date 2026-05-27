@@ -1,0 +1,48 @@
+{
+  "all_pass" : true,
+  "campaign" : "rfc075_metal_transcendental_2026_05_21",
+  "device" : "Apple M3",
+  "falsifier_F_RFC075_METAL_TRANSCENDENTAL_NUMERIC_EQ" : "PASS",
+  "N" : 1024,
+  "rows" : [
+    {
+      "byte_mismatch" : 312,
+      "max_abs_diff" : 2.384185791015625e-07,
+      "max_ulp" : 2,
+      "shape" : "vec_exp",
+      "status" : "PASS_LOW_ULP",
+      "ulp_tolerance" : 8
+    },
+    {
+      "byte_mismatch" : 496,
+      "max_abs_diff" : 4.76837158203125e-07,
+      "max_ulp" : 3,
+      "shape" : "vec_log",
+      "status" : "PASS_LOW_ULP",
+      "ulp_tolerance" : 8
+    },
+    {
+      "byte_mismatch" : 441,
+      "max_abs_diff" : 1.1920928955078125e-07,
+      "max_ulp" : 2,
+      "shape" : "vec_sin",
+      "status" : "PASS_LOW_ULP",
+      "ulp_tolerance" : 8
+    },
+    {
+      "byte_mismatch" : 439,
+      "max_abs_diff" : 1.1920928955078125e-07,
+      "max_ulp" : 2,
+      "shape" : "vec_cos",
+      "status" : "PASS_LOW_ULP",
+      "ulp_tolerance" : 8
+    }
+  ],
+  "seed_hex" : "0x12345678",
+  "shapes_tested" : [
+    "vec_exp",
+    "vec_log",
+    "vec_sin",
+    "vec_cos"
+  ]
+}

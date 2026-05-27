@@ -1,0 +1,21 @@
+// tool/probe_tanh_f64.hexa — F-TANHF64-NUMERIC kernel
+//
+// PR #1495 (RFC 055 §13 f64 tanh ML activation, sign*(1-t)/(1+t) with
+// t=exp(-2|x|)) — silicon falsifier on ubu-2 RTX 5070 driver-JIT.
+// Computes c[i] = tanh(a[i]) over a range that exercises both the
+// near-zero linear regime and the |x| > 4 saturation tail. Host compares
+// against CPU libm tanh with tolerance max_abs_err < 1e-7 (absolute,
+// because tanh(0)=0 makes a relative metric ill-defined near origin).
+//
+// Input shape (host-side): N = 256, blockDim = 256, gridDim = 1.
+// a[i] = (i / N) * 16.0 - 8.0  (range [-8, +8) — covers saturation).
+//
+// Mirror of tool/probe_atan_f64.hexa (#1536) — same single-block layout.
+
+@gpu_kernel
+fn tanh_f64_probe(a: [f64], c: [f64], n: i64) {
+    let mut tid: i64 = to_i64(gpu_thread_id_x())
+    if tid < n {
+        c[to_i64(tid)] = tanh(a[to_i64(tid)])
+    }
+}

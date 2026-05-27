@@ -1,0 +1,60 @@
+// HEXA Standard Library — crypto/tls13_certverify
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// TLS 1.3 CertificateVerify signed-data construction (RFC 8446 §4.4.3) — the
+// last pure-logic cryptographic piece of TLS 1.3 handshake authentication.
+// Constructs the bytes a Certificate's private key signs:
+//
+//   signed_content = 0x20 × 64           // 64 octets of value 0x20 (space)
+//                  ‖ context_string       // "TLS 1.3, {server,client} CertificateVerify"
+//                  ‖ 0x00                 // separator
+//                  ‖ Transcript-Hash(handshake_context, Certificate)
+//
+// The actual signature uses the cert's algorithm (Ed25519 / ECDSA-P256 /
+// RSA-PSS); pair this construction with stdlib/crypto/ed25519 for the
+// Ed25519 cipher suite (TLS_ECDHE_ED25519). let-mut idiom (#1506).
+//
+// Surface:
+//   pub fn tls13_certverify_server_content(thash: [int]) -> [int]
+//   pub fn tls13_certverify_client_content(thash: [int]) -> [int]
+//   pub fn tls13_certverify_content(label: [int], thash: [int]) -> [int]
+
+// "TLS 1.3, server CertificateVerify"
+@pure
+fn _label_server() -> [int] {
+    return [0x54,0x4c,0x53,0x20,0x31,0x2e,0x33,0x2c,0x20,0x73,0x65,0x72,0x76,0x65,0x72,
+            0x20,0x43,0x65,0x72,0x74,0x69,0x66,0x69,0x63,0x61,0x74,0x65,0x56,0x65,0x72,0x69,0x66,0x79]
+}
+
+// "TLS 1.3, client CertificateVerify"
+@pure
+fn _label_client() -> [int] {
+    return [0x54,0x4c,0x53,0x20,0x31,0x2e,0x33,0x2c,0x20,0x63,0x6c,0x69,0x65,0x6e,0x74,
+            0x20,0x43,0x65,0x72,0x74,0x69,0x66,0x69,0x63,0x61,0x74,0x65,0x56,0x65,0x72,0x69,0x66,0x79]
+}
+
+// Generic constructor — caller supplies the exact label bytes.
+@pure
+pub fn tls13_certverify_content(label: [int], thash: [int]) -> [int] {
+    let mut out: [int] = []
+    let mut i = 0
+    while i < 64 { out.push(0x20); i = i + 1 }   // 64 spaces
+    i = 0
+    while i < len(label) { out.push(label[i]); i = i + 1 }
+    out.push(0)                                   // separator
+    i = 0
+    while i < len(thash) { out.push(thash[i]); i = i + 1 }
+    return out
+}
+
+@pure
+pub fn tls13_certverify_server_content(thash: [int]) -> [int] {
+    return tls13_certverify_content(_label_server(), thash)
+}
+
+@pure
+pub fn tls13_certverify_client_content(thash: [int]) -> [int] {
+    return tls13_certverify_content(_label_client(), thash)
+}

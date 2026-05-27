@@ -1,0 +1,46 @@
+// AUTO-GENERATED — do not edit. Regenerate via tool/hexad_embed_gen.hexa
+//
+// Wave 1 absorption: hexad CDESM constants static embed (D2).
+// Source: config/hexad_constants.json in nexus repo
+
+use "compiler/hexad/embed"
+
+@phase("parse_only")
+pub let HEXAD_HASH: string = "6c6c8e9a89a1465062f83dd6da626ff5b0ff737b04aa282ea56a293acf3ec028"
+@phase("parse_only")
+pub let HEXAD_GENERATED_AT: string = "2026-05-12T22:12:22Z"
+@phase("parse_only")
+pub let HEXAD_SOURCE_COUNT: i64 = 29
+
+@phase("parse_only")
+pub let HEXAD_CONSTANTS: [HexadConstantEntry] = [
+    HexadConstantEntry { group: "psi", key: "balance", kind: "f64", value_f64: 0.5, value_i64: 0, value_str_list: [] },
+    HexadConstantEntry { group: "psi", key: "alpha", kind: "f64", value_f64: 0.014, value_i64: 0, value_str_list: [] },
+    HexadConstantEntry { group: "psi", key: "steps", kind: "f64", value_f64: 4.33, value_i64: 0, value_str_list: [] },
+    HexadConstantEntry { group: "psi", key: "entropy", kind: "f64", value_f64: 0.998, value_i64: 0, value_str_list: [] },
+    HexadConstantEntry { group: "psi", key: "f_critical", kind: "f64", value_f64: 0.1, value_i64: 0, value_str_list: [] },
+    HexadConstantEntry { group: "psi", key: "coupling", kind: "f64", value_f64: 0.014, value_i64: 0, value_str_list: [] },
+    HexadConstantEntry { group: "gates", key: "train", kind: "f64", value_f64: 1.0, value_i64: 0, value_str_list: [] },
+    HexadConstantEntry { group: "gates", key: "infer", kind: "f64", value_f64: 0.6, value_i64: 0, value_str_list: [] },
+    HexadConstantEntry { group: "gates", key: "micro", kind: "f64", value_f64: 0.001, value_i64: 0, value_str_list: [] },
+    HexadConstantEntry { group: "channels", key: "names", kind: "string_list", value_f64: 0.0, value_i64: 0, value_str_list: ["c", "d", "w", "s", "m", "e"] },
+    HexadConstantEntry { group: "channels", key: "n_total", kind: "i64", value_f64: 0.0, value_i64: 6, value_str_list: [] },
+    HexadConstantEntry { group: "channels", key: "n_phase1", kind: "i64", value_f64: 0.0, value_i64: 1, value_str_list: [] },
+    HexadConstantEntry { group: "channels", key: "n_phase2", kind: "i64", value_f64: 0.0, value_i64: 2, value_str_list: [] },
+    HexadConstantEntry { group: "channels", key: "n_phase3", kind: "i64", value_f64: 0.0, value_i64: 6, value_str_list: [] },
+    HexadConstantEntry { group: "model", key: "default_c_dim", kind: "i64", value_f64: 0.0, value_i64: 128, value_str_list: [] },
+    HexadConstantEntry { group: "model", key: "default_d_model", kind: "i64", value_f64: 0.0, value_i64: 384, value_str_list: [] },
+    HexadConstantEntry { group: "model", key: "default_hub_dim", kind: "i64", value_f64: 0.0, value_i64: 8, value_str_list: [] },
+    HexadConstantEntry { group: "model", key: "default_vocab_size", kind: "i64", value_f64: 0.0, value_i64: 4096, value_str_list: [] },
+    HexadConstantEntry { group: "model", key: "default_n_cells", kind: "i64", value_f64: 0.0, value_i64: 64, value_str_list: [] },
+    HexadConstantEntry { group: "model", key: "default_seq_len", kind: "i64", value_f64: 0.0, value_i64: 16, value_str_list: [] },
+    HexadConstantEntry { group: "model", key: "narrative_max_history", kind: "i64", value_f64: 0.0, value_i64: 50, value_str_list: [] },
+    HexadConstantEntry { group: "sigma", key: "n6", kind: "i64", value_f64: 0.0, value_i64: 6, value_str_list: [] },
+    HexadConstantEntry { group: "sigma", key: "sigma_n6", kind: "i64", value_f64: 0.0, value_i64: 12, value_str_list: [] },
+    HexadConstantEntry { group: "sigma", key: "phi_n6", kind: "i64", value_f64: 0.0, value_i64: 2, value_str_list: [] },
+    HexadConstantEntry { group: "sigma", key: "tau_n6", kind: "i64", value_f64: 0.0, value_i64: 4, value_str_list: [] },
+    HexadConstantEntry { group: "", key: "ln2", kind: "f64", value_f64: 0.693147, value_i64: 0, value_str_list: [] },
+    HexadConstantEntry { group: "thresholds", key: "narrative_min", kind: "f64", value_f64: 0.2, value_i64: 0, value_str_list: [] },
+    HexadConstantEntry { group: "thresholds", key: "phi_preservation_min_ratio", kind: "f64", value_f64: 0.5, value_i64: 0, value_str_list: [] },
+    HexadConstantEntry { group: "thresholds", key: "delta_finite_max", kind: "f64", value_f64: 1e+30, value_i64: 0, value_str_list: [] }
+]

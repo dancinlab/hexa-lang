@@ -1,0 +1,109 @@
+#!hexa strict
+// stdlib/hal/backend/stm32h7/dma.hexa — STM32H7 DMA backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    STMicroelectronics STM32H7 Cortex-M7 @ 480 MHz.
+// Chip ref:  RM0433 §15 DMA1/DMA2 + §16 BDMA + §17 MDMA.
+//            STM32H7 has THREE DMA peripherals: MDMA, BDMA, DMA1/2.
+// Surface:   stm32h7_dma_{configure,start,wait,abort}(...)
+// Dispatch:  dma.hexa selects this via cfg-flag.
+//
+// MMIO layout (all 3 DMA peripherals):
+//
+//   MDMA:  base = 0x52000000   (Master DMA, 16 channels, AHB/AXI master)
+//                              Highest perf — connects all 7 bus masters.
+//                              Per-channel block descriptors (CTBR/CCR/...).
+//
+//   BDMA:  base = 0x58025400   (Basic DMA, 8 channels in D3 domain)
+//                              Limited to D3 SRAM4 + low-power peripherals.
+//
+//   DMA1:  base = 0x40020000   (8 streams, multiplexed via DMAMUX1)
+//   DMA2:  base = 0x40020400   (8 streams, multiplexed via DMAMUX1)
+//   DMAMUX1: base = 0x40020800 (request-line multiplexer)
+//
+//   Per-stream registers (DMA1/DMA2):
+//     SxCR    0x10 + 0x18·n   stream config:
+//                              EN bit 0 (enable)
+//                              DIR bits 7:6 (00=P→M, 01=M→P, 10=M→M)
+//                              CIRC bit 8 (circular)
+//                              PSIZE bits 12:11 (peri data size)
+//                              MSIZE bits 14:13 (mem data size)
+//                              PL bits 17:16 (priority)
+//   SxNDTR  0x14 + 0x18·n   number of data items
+//   SxPAR   0x18 + 0x18·n   peripheral address
+//   SxM0AR  0x1C + 0x18·n   mem 0 address
+//   SxM1AR  0x20 + 0x18·n   mem 1 address (double-buffer)
+//   SxFCR   0x24 + 0x18·n   FIFO control
+//
+// Total channel envelope: MDMA 16 + BDMA 8 + DMA1 8 + DMA2 8 = 40.
+// Sim caps at J₂=24, so the backend exposes a subset.
+
+let MODULE_NAME = "stm32h7_dma"
+let SIGMA_SLOT  = 10
+let PHI_KIND    = "digital"
+
+let MDMA_BASE     = 0x52000000
+let BDMA_BASE     = 0x58025400
+let DMA1_BASE     = 0x40020000
+let DMA2_BASE     = 0x40020400
+let DMAMUX1_BASE  = 0x40020800
+
+// DMA1/2 stream register offsets (DMA1 has 8 streams, n=0..7).
+let DMA_S0_CR_OFFSET   = 0x10
+let DMA_S0_NDTR_OFFSET = 0x14
+let DMA_S0_PAR_OFFSET  = 0x18
+let DMA_S0_M0AR_OFFSET = 0x1C
+
+let DIR_MEM_TO_MEM = 0
+let DIR_MEM_TO_PER = 1
+let DIR_PER_TO_MEM = 2
+let DIR_PER_TO_PER = 3
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn stm32h7_dma_configure(channel: int, direction: int, width: int) -> int {
+    if channel < 0 || channel > 23 { return -1 }
+    if direction < 0 || direction > 3 { return -2 }
+    if width != 1 && width != 2 && width != 4 { return -3 }
+    // STUB: route channel 0..7 → DMA1 stream, 8..15 → DMA2 stream,
+    //       16..23 → MDMA channel; configure SxCR.DIR, PSIZE, MSIZE,
+    //       PL; set DMAMUX1_CnCR with peripheral request line.
+    return channel
+}
+
+fn stm32h7_dma_start(handle: int, src: int, dst: int, n_bytes: int) -> bool {
+    if handle < 0 || handle > 23 { return false }
+    if n_bytes <= 0 { return false }
+    // STUB: write SxPAR = src (or dst, depending on direction);
+    //       SxM0AR = the other; SxNDTR = n_bytes / width;
+    //       set SxCR.EN = 1 to start.
+    return true
+}
+
+fn stm32h7_dma_wait(handle: int) -> bool {
+    if handle < 0 || handle > 23 { return false }
+    // STUB: spin on SxCR.EN=0 OR poll DMA_LISR/HISR transfer-complete flag
+    return true
+}
+
+fn stm32h7_dma_abort(handle: int) -> bool {
+    if handle < 0 || handle > 23 { return false }
+    // STUB: clear SxCR.EN; spin on EN read-back = 0
+    return true
+}
+
+fn stm32h7_dma_report(handle: int) -> str {
+    return "[stm32h7_dma sim] handle=" + str(handle) + " (skeleton stub — TODO MMIO)"
+}
+
+fn stm32h7_dma_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[stm32h7_dma sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  MDMA=" + str(MDMA_BASE) + " BDMA=" + str(BDMA_BASE) +
+            " DMA1=" + str(DMA1_BASE) + " DMA2=" + str(DMA2_BASE))
+    println("  total 40 ch (MDMA 16 + BDMA 8 + DMA1 8 + DMA2 8); sim caps at J₂=24")
+}

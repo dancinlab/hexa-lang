@@ -1,0 +1,13 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "hexa-bio/nanobot/spec/bayesian_audit_v1.schema.json",
+  "title": "raw_77_nanobot_bayesian_audit_v1 — MVP wrapper",
+  "description": "Session-internal MVP wrapper for nanobot Bayesian audit v1. Permissive registry-coverage spec.",
+  "type": "object",
+  "required": ["schema", "ts"],
+  "properties": {
+    "schema": {"type": "string", "const": "raw_77_nanobot_bayesian_audit_v1"},
+    "ts": {"type": "string"}
+  },
+  "additionalProperties": true
+}

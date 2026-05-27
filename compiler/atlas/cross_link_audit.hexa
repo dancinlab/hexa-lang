@@ -1,0 +1,150 @@
+// HEXA Native Compiler — Wave 3 doctrine audit (cross-link integrity)
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// absorbed from ~/core/hexa-matter/selftest/cross_link_integrity_audit.py
+// (MIT, hexa-matter v1.2.0).
+//
+// hexa-lang adaptation: instead of verifying file-path references in
+// CROSS_LINK.md + sister-repo URL form + NOVEL.md candidate invariants,
+// this audit operates on the structured atlas graph. For every overlay
+// (or arbitrary) node, every reference on its edges must resolve to a
+// node that actually exists in the supplied corpus. Specifically:
+//
+//   * `<-` depends_on   — each id must be in the corpus
+//   * `==` equivalents  — each id must be in the corpus
+//   * `~>` converges    — each id must be in the corpus
+//   * `->` derives      — each id must be in the corpus
+//
+// Dangling references (the cited id has no matching node) are logged
+// as violations. `=>` applications and `|>` verified_by are free-form
+// payloads (URLs, scripts, prose) — they are NOT id references and are
+// skipped.
+//
+// The audit returns the same AuditResult shape as external_entity_audit
+// so callers can compose / aggregate it.
+
+use "compiler/atlas/parser"
+use "compiler/atlas/external_entity_audit"   // for AuditResult + Violation types
+
+// --- helpers ---------------------------------------------------------------
+
+// Build an id-presence set as an array of ids (we do linear search; node
+// counts in tests/overlay are small enough — the overlay corpus is on
+// the order of hundreds of entries).
+fn _collect_ids(nodes: array) -> array {
+    let out = []
+    let mut i = 0
+    while i < len(nodes) {
+        let n = nodes[i]
+        if len(n.id) > 0 { out.push(n.id) }
+        i = i + 1
+    }
+    return out
+}
+
+fn _id_present(ids: array, want: string) -> bool {
+    let mut i = 0
+    while i < len(ids) {
+        if to_string(ids[i]) == want { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// Reduce an edge-payload string to a bare id. Edge payloads come in
+// shapes like `alpha_audit` / `alpha_audit, beta_audit` / `alpha_audit
+// // comment`. parse_edge_lines already splits on commas + trims; here
+// we further strip a trailing inline `//` comment and any whitespace.
+fn _normalize_ref(s: string) -> string {
+    let n = len(s)
+    let mut end = n
+    // Strip trailing `//...` comment if present.
+    let idx = s.index_of("//")
+    if idx >= 0 { end = idx }
+    let mut j = end
+    while j > 0 {
+        let c = s.substring(j - 1, j)
+        if c == " " || c == "\t" { j = j - 1 } else { break }
+    }
+    return s.substring(0, j)
+}
+
+// Append all dangling references of one edge-bucket to `out`.
+fn _scan_bucket(node_id: string, bucket_name: string, refs: array, ids: array, out: array) {
+    let mut i = 0
+    while i < len(refs) {
+        let raw_ref = to_string(refs[i])
+        let r = _normalize_ref(raw_ref)
+        if len(r) == 0 {
+            i = i + 1
+            continue
+        }
+        if !_id_present(ids, r) {
+            out.push(Violation {
+                node_id: node_id,
+                reason: "FAIL: dangling " + bucket_name + " reference -> `" + r + "`",
+                span_start: -1,
+                span_end: -1
+            })
+        }
+        i = i + 1
+    }
+}
+
+// --- core audit ------------------------------------------------------------
+
+fn _scan_cross_links(node: AtlasNode, ids: array, out: array) {
+    _scan_bucket(node.id, "<-", node.edges.depends_on, ids, out)
+    _scan_bucket(node.id, "->", node.edges.derives,    ids, out)
+    _scan_bucket(node.id, "==", node.edges.equivalents, ids, out)
+    _scan_bucket(node.id, "~>", node.edges.converges,  ids, out)
+    // NOTE: applications (=>) and verified_by (|>) are not id refs — skipped.
+    // breakthroughs (!!) are free-form notes too — skipped.
+}
+
+// --- public API ------------------------------------------------------------
+
+// audit_cross_links_in — workhorse audit. Caller hands in the corpus
+// (the same array is used both as "nodes to check" and "id namespace").
+// Wrapper `audit_cross_links()` lives in audit_wave3_main.hexa.
+pub fn audit_cross_links_in(nodes: array) -> AuditResult {
+    let ids = _collect_ids(nodes)
+    let violations = []
+    let mut i = 0
+    while i < len(nodes) {
+        _scan_cross_links(nodes[i], ids, violations)
+        i = i + 1
+    }
+    let pass = len(violations) == 0
+    let summary = if pass {
+        "cross_link_audit PASS — " + to_string(len(nodes)) + " nodes scanned, 0 dangling references"
+    } else {
+        "cross_link_audit FAIL — " + to_string(len(violations)) + " dangling reference(s) across " +
+        to_string(len(nodes)) + " nodes"
+    }
+    return AuditResult {
+        pass: pass,
+        violations: violations,
+        summary: summary
+    }
+}
+
+// cross_link_audit_to_text — human-readable rendering.
+pub fn cross_link_audit_to_text(r: AuditResult) -> string {
+    let parts = []
+    parts.push(r.summary)
+    parts.push("\n")
+    let mut i = 0
+    while i < len(r.violations) {
+        let v = r.violations[i]
+        parts.push("  [FAIL] ")
+        parts.push(v.node_id)
+        parts.push("  ")
+        parts.push(v.reason)
+        parts.push("\n")
+        i = i + 1
+    }
+    return parts.join("")
+}

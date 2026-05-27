@@ -1,0 +1,403 @@
+#!/usr/bin/env python3
+"""RFC 067 PS -- TILE128 on top of N77 PP stack (ldmatrix.x4 + cp.async.cg vec16).
+
+Hypothesis: larger output tile per CTA (128x128 instead of N77's 64x64) yields
+            more output per CTA -> fewer total CTAs -> better SM utilisation at
+            large shapes, especially M=1024/1536 where N77 still trails cuBLAS.
+
+  N77 baseline: 36.06 TFLOPS @ M=1536, ratio 0.533 vs cuBLAS HGEMM 67.65
+  PS variant:   128x128 output tile per CTA, 32 warps (1024 thd/CTA)
+                each warp computes 16x32 = 4x mma.m16n8k16 per K-step (reuses A frag)
+
+Warp grid (32 warps in 8x4):
+  m_tile = warp >> 2  in [0, 8)   -- 16 rows per warp -> 128 rows / CTA
+  n_tile = warp & 3   in [0, 4)   -- 32 cols per warp -> 128 cols / CTA
+
+Per warp (32 lanes):
+  ldmatrix.x4 of A      ->  4x b16 frags (16x16 fp16)        -- SAME as N77, reused twice
+  ldmatrix.x4.trans of B_lo  ->  4x b16 frags (cols n_tile*32+0..15)
+  ldmatrix.x4.trans of B_hi  ->  4x b16 frags (cols n_tile*32+16..31)
+  4x mma.m16n8k16 per K-step:
+    (A,B_lo[0,2]) -> acc_lo_left  (8 f32)
+    (A,B_lo[1,3]) -> acc_lo_right (8 f32)
+    (A,B_hi[0,2]) -> acc_hi_left  (8 f32)
+    (A,B_hi[1,3]) -> acc_hi_right (8 f32)
+  Total accumulator: 16 f32 / lane.
+
+Shared-mem layout (DOUBLE-BUFFERED, 16 KB):
+  _tg_a: 2 slabs * 128 rows * 16 K-elem fp16 * 2 B = 2 * 4096 B = 8192 B
+  _tg_b: 2 slabs * 128 cols * 16 K-elem fp16 * 2 B = 2 * 4096 B = 8192 B
+  Intra-slab offset of row r, col_q c in {0,1}: r*32 + c*16
+
+Cooperative load (vec16 cp.async.cg, 1024 thd/CTA):
+  A: tid in [0, 256)    vec_idx = tid          -> 256 vec16 loads = 256*16 = 4096 B
+  B: tid in [256, 512)  vec_idx = tid - 256    -> 256 vec16 loads = 4096 B
+  tid in [512, 1024): idle for cp.async; participate in mma+bar.sync
+
+  Per-vec arithmetic (active tid):
+    vec_idx = tid & 255         in [0, 256)
+    row     = vec_idx >> 1      in [0, 128)
+    col_q   = vec_idx & 1       in {0,1}
+
+Honest-scope caveats:
+  - 1024 thd/CTA -> max 1 CTA/SM on RTX 5070 (sm_120, 1536 thd/SM cap)
+    vs N77's 512 thd -> potentially 3 CTA/SM (regs/shmem permitting).
+    Less occupancy but 4x output/CTA -> may win if compute-bound.
+  - 16 f32 acc/lane vs N77's 8 -> ~8 more regs / thread. ptxas may still fit.
+  - For small M (256/384), fewer CTAs may starve SMs (RTX 5070 has 40 SMs;
+    M=256 needs only (256/128)^2 = 4 CTAs -> 4/40 occupancy waste). Honest negative
+    expected at small M; the gain is at large M.
+
+What's UNCHANGED vs N77:
+  - mma instr (m16n8k16.row.col.f32.f16.f16.f32)
+  - ldmatrix variants (x4 for A row-layout, x4.trans for B col-layout)
+  - Shared-mem row pitch (32 B per row of 16 fp16)
+  - Double-buffer + cp.async.commit_group/wait_group pattern
+  - K-step = 16 fp16 elements
+"""
+
+import sys
+from pathlib import Path
+
+
+def gen(S: int) -> str:
+    assert S % 128 == 0, f"S={S} must be divisible by 128 for tile128"
+    # CTA tile bytes (M-axis): 128 rows
+    a_ctay_byte = 128 * S * 2          # ctaid.y stride: 128 rows * S K-cols * 2 B (A row-major fp16)
+    b_ctax_byte = 128 * S * 2          # ctaid.x stride: 128 cols * S K-rows * 2 B (B col-major fp16)
+    c_ctay_byte = 128 * S * 4          # C is f32, 128 rows
+    c_warpm_byte = 16 * S * 4          # 16 C rows per warp m_tile
+    ab_row_b = S * 2                   # one A row / B col stride (fp16 bytes)
+
+    return f"""// RFC 067 PS perf HGEMM hexa-emit -- TILE128 (128x128 output / CTA) -- M=N=K={S}.
+//
+// On top of N77 (PP) stack:
+//   N77 stack:  ldmatrix.x4 + mma.m16n8k16 + cp.async.cg vec16, 64x64 tile, 16 warps
+//               peak 36.06 TFLOPS @ M=1536, ratio 0.533 vs cuBLAS HGEMM 67.65.
+//   PS (this):  same primitives, but 128x128 output per CTA, 32 warps (1024 thd/CTA).
+//
+// Per warp: 16 rows x 32 cols = 4 mma.m16n8k16 / K-step (reuses A frag across 2 N sub-tiles).
+//
+// Layout:
+//   A row-major     [M={S} x K={S}] f16. Row stride = {S} elem = {ab_row_b} B.
+//   B col-major     [K={S} x N={S}] f16. Col stride = {S} elem = {ab_row_b} B.
+//   C row-major out [M={S} x N={S}] f32. Row stride = {S} elem = {S*4} B.
+//
+// CTA tile bytes: ctaid.y -> 128 M-rows ({a_ctay_byte} B from A base),
+//                 ctaid.x -> 128 N-cols ({b_ctax_byte} B from B base).
+// Grid: gx = N/128, gy = M/128.
+
+.version 8.0
+.target sm_90
+.address_size 64
+
+.shared .align 16 .b8 _tg_a[8192];
+.shared .align 16 .b8 _tg_b[8192];
+
+.visible .entry sgemm_tile128_{S}x{S}_grid (
+    .param .u64 a,
+    .param .u64 b,
+    .param .u64 c,
+    .param .u64 k_tiles
+)
+{{
+    .reg .u64 %rd<32>;
+    .reg .u32 %r<96>;
+    .reg .pred %p1;
+    .reg .pred %pmore;
+    .reg .pred %pload_a;
+    .reg .pred %pload_b;
+    .reg .b32 %ra<4>;
+    .reg .b32 %rbl<4>;
+    .reg .b32 %rbh<4>;
+    .reg .f32 %fc<16>;
+
+    ld.param.u64 %rd0, [a];
+    ld.param.u64 %rd1, [b];
+    ld.param.u64 %rd2, [c];
+    ld.param.u64 %rd3, [k_tiles];
+
+    mov.u32 %r10, %ctaid.y;
+    mov.u32 %r11, %ctaid.x;
+
+    mov.u32 %r1, %tid.x;
+    shr.u32 %r2, %r1, 5;        // warp id in [0, 32)
+    shr.u32 %r3, %r2, 2;        // m_tile = warp >> 2  in [0, 8)
+    and.b32 %r4, %r2, 3;        // n_tile = warp & 3   in [0, 4)
+    and.b32 %r50, %r1, 31;      // lane id
+
+    // Vectorised cooperative-load predicates / indexing.
+    //   load_a active for tid in [0, 256)
+    //   load_b active for tid in [256, 512)
+    //   In either case: vec_idx = tid & 255  (0..255)
+    //                   row     = vec_idx >> 1     in [0, 128)
+    //                   col_q   = vec_idx & 1      in {{0,1}}
+    setp.lt.u32 %pload_a, %r1, 256;
+    setp.lt.u32 %pload_b, %r1, 512;
+
+    and.b32 %r12, %r1, 255;     // vec_idx
+    shr.u32 %r13, %r12, 1;      // row in [0, 128)
+    and.b32 %r14, %r12, 1;      // col_q in {{0,1}}
+    shl.b32 %r15, %r14, 4;      // col_q * 16  (byte offset within 32-B row)
+
+    // A_cta base = a + ctaid.y * {a_ctay_byte}
+    mul.lo.u32 %r5, %r10, {a_ctay_byte};
+    cvt.u64.u32 %rd4, %r5;
+    add.u64 %rd10, %rd0, %rd4;
+
+    // B_cta base = b + ctaid.x * {b_ctax_byte}
+    mul.lo.u32 %r5, %r11, {b_ctax_byte};
+    cvt.u64.u32 %rd5, %r5;
+    add.u64 %rd11, %rd1, %rd5;
+
+    // Per-thread global-load offset (excluding k-step advance):
+    //   row * {ab_row_b} + col_q * 16
+    mul.lo.u32 %r16, %r13, {ab_row_b};
+    add.u32 %r16, %r16, %r15;
+    cvt.u64.u32 %rd14, %r16;
+    add.u64 %rd14, %rd10, %rd14;        // %rd14 = A_cta + row*{ab_row_b} + col_q*16
+
+    cvt.u64.u32 %rd15, %r16;
+    add.u64 %rd15, %rd11, %rd15;        // %rd15 = B_cta + row*{ab_row_b} + col_q*16
+
+    // Per-thread intra-slab shared-mem store offset:
+    //   row*32 + col_q*16   in {{0..4080}} step 16
+    shl.b32 %r17, %r13, 5;              // row * 32
+    add.u32 %r17, %r17, %r15;           // + col_q*16
+
+    mov.u32 %r18, _tg_a;
+    mov.u32 %r20, _tg_b;
+
+    // Per-warp shared-mem READ base offsets:
+    //   A read base: m_tile * 16 rows * 32 B/row = m_tile * 512
+    //   B read base lo: n_tile * 32 cols * 32 B/col + 0  = n_tile * 1024
+    //   B read base hi: n_tile * 1024 + 16 cols * 32 B/col = n_tile * 1024 + 512
+    mul.lo.u32 %r22, %r3, 512;          // A_base = m_tile * 512
+    mul.lo.u32 %r24, %r4, 1024;         // B_lo_base = n_tile * 1024
+    add.u32 %r25, %r24, 512;            // B_hi_base = n_tile * 1024 + 512
+
+    // ldmatrix per-lane intra-subtile address (16x16 fragment):
+    //   g = lane >> 3;   r = lane & 7
+    //   row_idx = (g >> 1) * 8 + r   in [0..15]
+    //   col_off = (g & 1) * 16
+    //   ld_off  = row_idx * 32 + col_off
+    shr.u32 %r51, %r50, 3;
+    and.b32 %r52, %r50, 7;
+    shr.u32 %r53, %r51, 1;
+    shl.b32 %r54, %r53, 3;
+    add.u32 %r55, %r54, %r52;
+    and.b32 %r56, %r51, 1;
+    shl.b32 %r57, %r56, 4;
+    shl.b32 %r58, %r55, 5;
+    add.u32 %r59, %r58, %r57;
+
+    // C base address.
+    //   C_warp_base = c + ctaid.y * {c_ctay_byte}     (128 M-rows per ctaid.y)
+    //                   + m_tile * {c_warpm_byte}      (16 M-rows per m_tile)
+    //                   + ctaid.x * 512               (128 N-cols * 4 B = 512 B per ctaid.x)
+    //                   + n_tile * 128                (32 N-cols * 4 B = 128 B per n_tile)
+    mul.lo.u32 %r5, %r10, {c_ctay_byte};
+    mul.lo.u32 %r6, %r3, {c_warpm_byte};
+    add.u32 %r7, %r5, %r6;
+    mul.lo.u32 %r8, %r11, 512;
+    add.u32 %r7, %r7, %r8;
+    mul.lo.u32 %r8, %r4, 128;
+    add.u32 %r7, %r7, %r8;
+    cvt.u64.u32 %rd6, %r7;
+    add.u64 %rd12, %rd2, %rd6;
+
+    // Init accumulator -- 16 f32 = 4 m16n8k16 calls (2 N sub-tiles * 2 m16n8 halves).
+    mov.f32 %fc0,  0f00000000;
+    mov.f32 %fc1,  0f00000000;
+    mov.f32 %fc2,  0f00000000;
+    mov.f32 %fc3,  0f00000000;
+    mov.f32 %fc4,  0f00000000;
+    mov.f32 %fc5,  0f00000000;
+    mov.f32 %fc6,  0f00000000;
+    mov.f32 %fc7,  0f00000000;
+    mov.f32 %fc8,  0f00000000;
+    mov.f32 %fc9,  0f00000000;
+    mov.f32 %fc10, 0f00000000;
+    mov.f32 %fc11, 0f00000000;
+    mov.f32 %fc12, 0f00000000;
+    mov.f32 %fc13, 0f00000000;
+    mov.f32 %fc14, 0f00000000;
+    mov.f32 %fc15, 0f00000000;
+
+    cvt.s32.s64 %r0, %rd3;
+
+    mov.u32 %r30, 0;                     // current slot
+
+    setp.le.s32 %p1, %r0, 0;
+    @%p1 bra $epilogue;
+
+    // ---- PROLOGUE: issue K=0 prefetch into slot 0 ----
+    // A dst = _tg_a + 0 + %r17
+    add.u32 %r40, %r18, %r17;
+    @%pload_a cp.async.cg.shared.global [%r40], [%rd14], 16;
+
+    // B dst = _tg_b + 0 + %r17 ; tid in [256, 512) only.
+    add.u32 %r41, %r20, %r17;
+    @%pload_a bra $skip_b_prologue;
+    @%pload_b cp.async.cg.shared.global [%r41], [%rd15], 16;
+$skip_b_prologue:
+    cp.async.commit_group;
+
+    add.u64 %rd14, %rd14, 32;            // advance by K_TILE_BYTES = 16*2 = 32 B
+    add.u64 %rd15, %rd15, 32;
+
+$kloop:
+    setp.le.s32 %p1, %r0, 0;
+    @%p1 bra $epilogue;
+
+    setp.gt.s32 %pmore, %r0, 1;
+    @!%pmore bra $no_prefetch;
+
+    xor.b32 %r31, %r30, 1;
+    shl.b32 %r32, %r31, 12;              // next_slot * 4096   (slab size = 4096 B)
+
+    add.u32 %r40, %r18, %r32;
+    add.u32 %r40, %r40, %r17;
+    @%pload_a cp.async.cg.shared.global [%r40], [%rd14], 16;
+
+    add.u32 %r41, %r20, %r32;
+    add.u32 %r41, %r41, %r17;
+    @%pload_a bra $skip_b_kick;
+    @%pload_b cp.async.cg.shared.global [%r41], [%rd15], 16;
+$skip_b_kick:
+
+    cp.async.commit_group;
+    cp.async.wait_group 1;
+    bra $consume;
+
+$no_prefetch:
+    cp.async.wait_all;
+
+$consume:
+    bar.sync 0;
+
+    // Slab base + per-warp 16x16 subtile offset.
+    shl.b32 %r34, %r30, 12;              // current_slot * 4096
+    add.u32 %r35, %r18, %r34;            // A slab base in shmem
+    add.u32 %r35, %r35, %r22;            //   + m_tile * 512  (warp's 16-row band)
+    add.u32 %r36, %r20, %r34;            // B slab base in shmem
+    add.u32 %r37, %r36, %r25;            // B_hi base
+    add.u32 %r36, %r36, %r24;            // B_lo base
+
+    add.u32 %r60, %r35, %r59;            // ldmatrix.x4 A addr
+    add.u32 %r61, %r36, %r59;            // ldmatrix.x4.trans B_lo addr
+    add.u32 %r62, %r37, %r59;            // ldmatrix.x4.trans B_hi addr
+
+    ldmatrix.sync.aligned.m8n8.x4.shared.b16
+        {{%ra0, %ra1, %ra2, %ra3}}, [%r60];
+
+    ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16
+        {{%rbl0, %rbl1, %rbl2, %rbl3}}, [%r61];
+
+    ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16
+        {{%rbh0, %rbh1, %rbh2, %rbh3}}, [%r62];
+
+    // 4x mma.m16n8k16 per K-step.
+    //   A frag (4x b16) reused across all 4 mma.
+    //   Per N-sub-tile (16 cols): 2 m16n8 halves (left/right).
+    //     B_lo (cols 0..15 within 32-col N sub-tile) -> mma_lo_left, mma_lo_right
+    //     B_hi (cols 16..31 within 32-col N sub-tile) -> mma_hi_left, mma_hi_right
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {{%fc0, %fc1, %fc2, %fc3}},
+        {{%ra0, %ra1, %ra2, %ra3}},
+        {{%rbl0, %rbl2}},
+        {{%fc0, %fc1, %fc2, %fc3}};
+
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {{%fc4, %fc5, %fc6, %fc7}},
+        {{%ra0, %ra1, %ra2, %ra3}},
+        {{%rbl1, %rbl3}},
+        {{%fc4, %fc5, %fc6, %fc7}};
+
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {{%fc8, %fc9, %fc10, %fc11}},
+        {{%ra0, %ra1, %ra2, %ra3}},
+        {{%rbh0, %rbh2}},
+        {{%fc8, %fc9, %fc10, %fc11}};
+
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {{%fc12, %fc13, %fc14, %fc15}},
+        {{%ra0, %ra1, %ra2, %ra3}},
+        {{%rbh1, %rbh3}},
+        {{%fc12, %fc13, %fc14, %fc15}};
+
+    bar.sync 0;
+
+    add.u64 %rd14, %rd14, 32;
+    add.u64 %rd15, %rd15, 32;
+
+    xor.b32 %r30, %r30, 1;
+    sub.s32 %r0, %r0, 1;
+    bra $kloop;
+
+$epilogue:
+    // mma.m16n8k16 D-frag store.
+    //   Per lane, the 4 f32 outputs of one mma.m16n8k16 land at:
+    //     group = lane >> 2; col_q = lane & 3
+    //     row0 = group;      col_base = col_q * 2
+    //     row1 = group + 8;  col_base = col_q * 2
+    //   So per-lane:
+    //     out[row0, col_base + 0] = fc[0]
+    //     out[row0, col_base + 1] = fc[1]
+    //     out[row1, col_base + 0] = fc[2]
+    //     out[row1, col_base + 1] = fc[3]
+    //   For the 4 mma sub-tiles, the N-col base offsets (relative to warp's N start):
+    //     mma_lo_left:    n_off = 0     (cols 0..7 of 32-col warp tile)
+    //     mma_lo_right:   n_off = 8     (cols 8..15)
+    //     mma_hi_left:    n_off = 16    (cols 16..23)
+    //     mma_hi_right:   n_off = 24    (cols 24..31)
+    shr.u32 %r70, %r50, 2;               // group = lane >> 2  in [0,8)
+    and.b32 %r71, %r50, 3;               // col_q = lane & 3   in [0,4)
+    mul.lo.u32 %r72, %r70, {S*4};        // group * row_stride_bytes (S * 4 B)
+    shl.b32 %r73, %r71, 3;               // col_q * 2 * 4 = col_q * 8
+    add.u32 %r74, %r72, %r73;
+    cvt.u64.u32 %rd20, %r74;
+    add.u64 %rd20, %rd12, %rd20;         // base = C_warp + group*S*4 + col_q*8
+
+    add.u64 %rd21, %rd20, {8*S*4};       // base for row1 (group+8)
+
+    // mma_lo_left (cols 0..7):
+    st.global.f32 [%rd20 +     0], %fc0;
+    st.global.f32 [%rd20 +     4], %fc1;
+    st.global.f32 [%rd21 +     0], %fc2;
+    st.global.f32 [%rd21 +     4], %fc3;
+
+    // mma_lo_right (cols 8..15):  +32 B = 8 * 4 B
+    st.global.f32 [%rd20 +    32], %fc4;
+    st.global.f32 [%rd20 +    36], %fc5;
+    st.global.f32 [%rd21 +    32], %fc6;
+    st.global.f32 [%rd21 +    36], %fc7;
+
+    // mma_hi_left (cols 16..23): +64 B
+    st.global.f32 [%rd20 +    64], %fc8;
+    st.global.f32 [%rd20 +    68], %fc9;
+    st.global.f32 [%rd21 +    64], %fc10;
+    st.global.f32 [%rd21 +    68], %fc11;
+
+    // mma_hi_right (cols 24..31): +96 B
+    st.global.f32 [%rd20 +    96], %fc12;
+    st.global.f32 [%rd20 +   100], %fc13;
+    st.global.f32 [%rd21 +    96], %fc14;
+    st.global.f32 [%rd21 +   100], %fc15;
+
+    ret;
+}}
+"""
+
+
+# 6 shapes -- 128-aligned (256/384/512/768/1024/1536 all divisible by 128).
+SHAPES = [256, 384, 512, 768, 1024, 1536]
+
+if __name__ == "__main__":
+    outdir = Path(__file__).resolve().parent
+    for S in SHAPES:
+        assert S % 128 == 0, f"S={S} not 128-aligned"
+        p = outdir / f"sgemm_tile128_{S}x{S}_grid.ptx"
+        p.write_text(gen(S))
+        print(f"wrote {p.name} ({len(p.read_text())} bytes)")
+    print(f"total {len(SHAPES)} shapes")

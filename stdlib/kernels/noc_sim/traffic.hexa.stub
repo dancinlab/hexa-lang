@@ -1,0 +1,90 @@
+#!hexa strict
+// stdlib/booksim/traffic.hexa — synthetic-traffic generators (CLEAN-ROOM)
+//
+// @version 0.0.1-skeleton
+// @capabilities [traffic, permutation, random]
+// @stability skeleton (no bodies — TBD; pending rfc_001 §8 GREEN)
+// @since 2026-05-18
+//
+// CLEAN-ROOM PROVENANCE (design.md Decision 1)
+//   Re-derives the public surface of BookSim2's TrafficPattern hierarchy:
+//   - upstream code   : src/traffic.cpp:48-194  (TrafficPattern::New dispatch),
+//                       :230-250 (TransposeTrafficPattern::dest),
+//                       :289-308 (TornadoTrafficPattern::dest),
+//                       :380-396 (UniformRandomTrafficPattern::dest)
+//   - upstream spec   : doc/manual.tex §traffic_patterns
+//   - upstream license: BSD-2-Clause (Stanford 2007-2015)
+//   - upstream commit : 28f43299f1706a3160ffac721ca461d74eb6e618
+//   - external theorem: Dally & Towles, PPIN §3 (traffic-pattern taxonomy);
+//                       tornado is the canonical adversarial-bisection
+//                       stressor (rfc_001 §3, §9).
+//   No code copied from upstream.
+//
+// Source: rfc_001 §3 minimal subset.
+
+use "stdlib/qrng/router"   // for uniform's per-call random choice
+
+// ─── public types ────────────────────────────────────────────────────────
+
+// The three traffic kinds in rfc_001 §3 minimal subset.
+// CLEAN-ROOM (traffic.cpp:48-194 TrafficPattern::New string dispatch).
+enum TrafficKind {
+    UNIFORM,        // uniform random — traffic.cpp:380-396
+    TRANSPOSE,      // bit-transpose permutation — traffic.cpp:230-250
+    TORNADO,        // adversarial-bisection rotate-by-((k+1)/2-1) — traffic.cpp:289-308
+}
+
+// Single traffic specification — pure data, no state.
+// k, n, xr mirror BookSim2's per-traffic-pattern arguments per
+// doc/manual.tex §traffic_patterns table.
+struct TrafficSpec {
+    kind:  TrafficKind,
+    k:     int,         // radix per dimension (e.g. 8 for an 8x8 mesh)
+    n:     int,         // dimension count   (e.g. 2 for a 2-D mesh)
+    xr:    int,         // concentration     (1 unless cmesh; rfc_001 chip scope = 1)
+    seed:  int,         // RNG seed for uniform's per-call choice (deterministic reproduction)
+}
+
+// ─── per-kind destination functions ─────────────────────────────────────
+
+// Uniform random destination, any node 0..N-1 (N = k^n * xr).
+// CLEAN-ROOM (traffic.cpp:380-396): wraps RandomInt(N-1).
+// Uses stdlib/qrng router for the RNG (LCG fallback if qrng degraded).
+fn traffic_dest_uniform(spec: TrafficSpec, source: int) -> int {
+    // TBD body — pending rfc_001 §8 GREEN (rfc_003 Phase B).
+    return 0
+}
+
+// Bit-transpose permutation destination — deterministic per source.
+// CLEAN-ROOM (traffic.cpp:230-250 DigitPermutationTrafficPattern subclass +
+//             BitPermutationTrafficPattern::dest dispatch via _shift):
+//   for the matrix-style transpose, dest = top half bits ↔ bottom half bits.
+fn traffic_dest_transpose(spec: TrafficSpec, source: int) -> int {
+    // TBD body — pending rfc_001 §8 GREEN (rfc_003 Phase E).
+    return 0
+}
+
+// Tornado — the adversarial-bisection stressor (rfc_001 §9 + §3).
+// CLEAN-ROOM (traffic.cpp:295-308): per-digit rotate-by-((xr*k+1)/2 - 1).
+//   for n=2, k=8, xr=1: rotation = ((8+1)/2 - 1) = 3 → each row sends to the
+//   node 3 hops "around the diagonal" — maximum bisection pressure.
+fn traffic_dest_tornado(spec: TrafficSpec, source: int) -> int {
+    // TBD body — pending rfc_001 §8 GREEN (rfc_003 Phase E).
+    return 0
+}
+
+// ─── dispatch ──────────────────────────────────────────────────────────
+
+// Generic dispatch — re-derives traffic.cpp:48-194 TrafficPattern::New
+// string switch. Returns -1 on invalid spec (caller must check; not a
+// raw-91 condition because the caller's CLI parser already validated).
+fn traffic_dest(spec: TrafficSpec, source: int) -> int {
+    // TBD body — pending rfc_001 §8 GREEN.
+    return -1
+}
+
+// Helper: total node count N = k^n * xr (for sanity checks).
+fn traffic_node_count(spec: TrafficSpec) -> int {
+    // TBD body — pending rfc_001 §8 GREEN.
+    return 0
+}

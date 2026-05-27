@@ -1,0 +1,64 @@
+#!hexa strict
+// hexa-matter/_hexa_bridge/selftest/mof_dac_economics_honesty_audit.hexa
+//
+// MOF "$100/t CO₂ DAC" UNPROVEN-preservation gate. hexa-native port of
+// `selftest/mof_dac_economics_honesty_audit.py` (T2). mof/mof.md must
+// carry: (a) $100/t + UNPROVEN, (b) Climeworks $600-1000/t baseline,
+// (c) a policy / amine-sorbent reference. stdlib-only; exec file read.
+//
+// Stage-1: Python `re` `$?100[/\s]*[/]?\s*t` etc. → substring set —
+// exact for mof.md's wording. Stage-2 → stdlib/regex digit-shape.
+
+let ROOT_ENV = env("HEXA_MATTER_ROOT")
+
+fn shq(s: str) -> str { return "'" + s.replace("'", "'\\''") + "'" }
+
+fn root() -> str {
+    if ROOT_ENV.len() > 0 { return ROOT_ENV }
+    return exec("pwd").trim()
+}
+
+fn main() {
+    println("hexa-matter/selftest/mof_dac_economics_honesty_audit (hexa-native, T2)")
+    let spec = root() + "/mof/mof.md"
+    let ex = exec("[ -f " + shq(spec) + " ] && echo y || echo n").trim()
+    if ex != "y" {
+        println("  [FAIL] mof/mof.md missing")
+        println("__HEXA_MATTER_MOF_DAC_HONESTY__ FAIL")
+        exit(1)
+    }
+    let text = exec("cat " + shq(spec) + " 2>/dev/null")
+    let mut fail = 0
+
+    let has_100 = text.contains("100/t") || text.contains("100 /t") || text.contains("$100") || text.contains("100 USD")
+    let has_unproven = text.contains("UNPROVEN")
+    if has_100 && has_unproven {
+        println("  [PASS] $100/t MOF DAC claim + UNPROVEN tag both present")
+    } else {
+        println("  [FAIL] $100/t=" + str(has_100) + " UNPROVEN=" + str(has_unproven))
+        fail = fail + 1
+    }
+
+    let has_cw = text.contains("Climeworks")
+    let has_base = text.contains("600-1000") || text.contains("600–1000") || text.contains("600 – 1000") || text.contains("600-1,000")
+    if has_cw && has_base {
+        println("  [PASS] Climeworks $600-1000/t empirical baseline named")
+    } else {
+        println("  [FAIL] Climeworks=" + str(has_cw) + " 600-1000=" + str(has_base))
+        fail = fail + 1
+    }
+
+    let has_policy = text.contains("LIMIT_BREAKTHROUGH") || text.contains("amine")
+    if has_policy {
+        println("  [PASS] policy / amine-sorbent reference present")
+    } else {
+        println("  [FAIL] no LIMIT_BREAKTHROUGH or amine reference")
+        fail = fail + 1
+    }
+
+    if fail > 0 {
+        println("__HEXA_MATTER_MOF_DAC_HONESTY__ FAIL  (" + str(fail) + " missing honesty anchors)")
+        exit(1)
+    }
+    println("__HEXA_MATTER_MOF_DAC_HONESTY__ PASS")
+}

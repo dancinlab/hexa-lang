@@ -1,0 +1,11 @@
+# comb T1-B-oracle: graph-level NoC distance (no wire model)
+# columns: N k R D_mesh D_hex 3*avgD_mesh 3*avgD_hex
+N=64 k=8 R=4 D_mesh=14 D_hex=8 3*avgD_mesh=16 3*avgD_hex=8
+N=100 k=10 R=5 D_mesh=18 D_hex=10 3*avgD_mesh=20 3*avgD_hex=10
+N=256 k=16 R=8 D_mesh=30 D_hex=16 3*avgD_mesh=32 3*avgD_hex=16
+N=400 k=20 R=11 D_mesh=38 D_hex=22 3*avgD_mesh=40 3*avgD_hex=22
+N=900 k=30 R=16 D_mesh=58 D_hex=32 3*avgD_mesh=60 3*avgD_hex=32
+N=1024 k=32 R=17 D_mesh=62 D_hex=34 3*avgD_mesh=64 3*avgD_hex=34
+N=2500 k=50 R=28 D_mesh=98 D_hex=56 3*avgD_mesh=100 3*avgD_hex=56
+N=10000 k=100 R=57 D_mesh=198 D_hex=114 3*avgD_mesh=200 3*avgD_hex=114
+# asymptotic D_hex/D_mesh -> 1/sqrt(3) ; numeric verify in T1A_verify.txt

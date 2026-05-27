@@ -1,0 +1,152 @@
+// HEXA Native Compiler — Parser smoke test (Phase A1)
+//
+// Lex + parse a couple inline snippets and dump a one-line summary so we can
+// eyeball that recursive descent produced sane Module/Item/Expr trees. No
+// asserts beyond the count check so the test fails loudly on shape drift.
+
+import "../lex/tokens.hexa"
+import "../lex/lexer.hexa"
+import "./ast.hexa"
+import "./parser.hexa"
+
+fn item_kind_str(k: ItemKind) -> string {
+    return match k {
+        ItemKind::Fn -> "Fn",
+        ItemKind::Let -> "Let",
+        ItemKind::Struct -> "Struct",
+        ItemKind::Enum -> "Enum",
+        ItemKind::Import -> "Import"
+    }
+}
+
+fn token_kind_str(k: TokenKind) -> string {
+    return match k {
+        TokenKind::Ident -> "Ident",
+        TokenKind::Number -> "Number",
+        TokenKind::String -> "String",
+        TokenKind::PNode -> "P",
+        TokenKind::CNode -> "C",
+        TokenKind::LNode -> "L",
+        TokenKind::ENode -> "E",
+        TokenKind::KwFn -> "fn",
+        TokenKind::KwLet -> "let",
+        TokenKind::KwStruct -> "struct",
+        TokenKind::KwImport -> "import",
+        TokenKind::KwPub -> "pub",
+        TokenKind::At -> "@",
+        TokenKind::Eof -> "EOF",
+        _ -> "_"
+    }
+}
+
+fn dump_module(label: string, src: string) {
+    println("── " + label + " ──")
+    let toks = lex(src, "<inline>")
+    println("  tokens=" + to_string(len(toks)))
+    let m = parse(toks, "<inline>")
+    println("  items=" + to_string(len(m.items)) + " imports=" + to_string(len(m.imports)))
+    let mut i = 0
+    while i < len(m.items) {
+        let it = m.items[i]
+        let mut ann_count = len(it.annotations)
+        let mut suffix = ""
+        if it.is_pub { suffix = " (pub)" }
+        if ann_count > 0 { suffix = suffix + " ann=" + to_string(ann_count) }
+        println("    [" + to_string(i) + "] " + item_kind_str(it.kind) + " " + it.name + suffix)
+        i = i + 1
+    }
+    let diags = parse_diags()
+    if len(diags) > 0 {
+        println("  parse_diags=" + to_string(len(diags)))
+        let mut d = 0
+        while d < len(diags) {
+            let dg = diags[d]
+            println("    <" + dg.code + "> " + dg.message)
+            d = d + 1
+        }
+    }
+}
+
+fn case_basic_fn() {
+    let src = "fn add(a: i64, b: i64) -> i64 { return a + b }\nfn main() -> i64 { return add(1, 2) }"
+    dump_module("case 1: fn / call / arithmetic", src)
+}
+
+fn case_atlas_and_annotation() {
+    let src = "@law(P[force-balance])\npub fn equilibrium(x: f64) -> f64 { return x * P[gravity-const] }"
+    dump_module("case 2: @law + atlas refs", src)
+}
+
+fn case_struct_let_import() {
+    let src = "import \"std/io\"\npub struct Vec3 { x: f64, y: f64, z: f64 }\nlet origin: Vec3 = zero()\nfn norm(v: Vec3) -> f64 { let s = v.x * v.x; return s }"
+    dump_module("case 3: import / struct / let / field", src)
+}
+
+// A1.5 follow-ups — exercise the extensions added by parser.hexa:
+//   enum decl + match expression / struct literal / for-loop / assignment.
+
+fn case_enum_and_match() {
+    let src = "enum Color { Red, Green(i64), Blue }\nfn describe(c: Color) -> i64 { return match c { Color::Red -> 1, Color::Green(n) -> n, _ -> 0 } }"
+    dump_module("case 4: enum + match", src)
+}
+
+// RFC-074 Phase 2 fixture — multi-field positional enum payload (arity ≥ 2)
+// parses cleanly. Each variant Param row has `typs[]` matching the declared
+// arity (0 / 1 / 2 / 3 in this fixture). Construction + match destructure
+// both round-trip through the parser; bind/type-check arity verification
+// fires HX2004 on mismatch (see bind.hexa _bind_lookup_variant_arity).
+fn case_enum_multi_field() {
+    let src = "enum Event { Unit, Click(i64, i64), Triple(i64, i64, i64), Tag(string) }\nfn handle(e: Event) -> i64 { return match e { Event::Unit -> 0, Event::Click(x, y) -> x + y, Event::Triple(a, b, c) -> a + b + c, Event::Tag(s) -> 1 } }"
+    dump_module("case 4b: RFC-074 multi-field enum payload (arity 0/1/2/3)", src)
+}
+
+fn case_struct_literal() {
+    let src = "struct Pt { x: i64, y: i64 }\nfn make() -> Pt { return Pt { x: 1, y: 2 } }"
+    dump_module("case 5: struct literal", src)
+}
+
+fn case_for_loop() {
+    let src = "fn sum(xs: [i64]) -> i64 { let mut s = 0; for x in xs { s = s + x }; return s }"
+    dump_module("case 6: for-loop", src)
+}
+
+fn case_assignment() {
+    let src = "fn step() -> i64 { let mut n = 1; n = n + 1; n += 2; return n }"
+    dump_module("case 7: assignment + compound assign", src)
+}
+
+// Stage1 punch list Gap 6 — error-recovery cases. Each malformed source
+// should emit the brace diag AND let the parser resynchronize so the
+// next top-level item still parses (visible as a non-zero items count).
+
+fn case_missing_open_brace() {
+    // Missing `{` for fn body — HX0011 fires; without resync the parser
+    // would try to parse `return 0 }` as the body and absorb the rest.
+    // After resync we expect 1× HX0011 and items >= 1.
+    let src = "fn main() return 0 }\nfn after() -> i64 { return 1 }"
+    dump_module("case h: missing { (HX0011 + resync)", src)
+}
+
+fn case_missing_close_brace() {
+    // Missing `}` for fn body — HX0012 fires; resync at next `fn` keyword
+    // so `next()` parses as its own item rather than being eaten as part
+    // of `main`'s body. Expect 1× HX0012 and items == 2.
+    let src = "fn main() { return 0   fn next() {}"
+    dump_module("case i: missing } (HX0012 + resync)", src)
+}
+
+println("══════════════════════════════════════════════")
+println("  HEXA Compiler — Parser Smoke Test (A1)")
+println("══════════════════════════════════════════════")
+case_basic_fn()
+case_atlas_and_annotation()
+case_struct_let_import()
+case_enum_and_match()
+case_enum_multi_field()
+case_struct_literal()
+case_for_loop()
+case_assignment()
+case_missing_open_brace()
+case_missing_close_brace()
+println("══════════════════════════════════════════════")
+println("  done.")

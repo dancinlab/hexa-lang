@@ -1,0 +1,144 @@
+// stdlib/dynlink_caps.hexa — RFC 070 G7-D capability manifest + ABI stamp (host-side gate)
+//
+// @cite RFC 070 §3.C capability gate
+// @cite RFC 070 §3.D ABI version stamp
+// @cite RFC 070 §4.6  G7-D scaffold (design decision LOCKED — in-source @plugin attribute)
+// @cite RFC 070 §4.6.2 fixed 12-byte ABI stamp record layout
+// @cite RFC 070 §4.6.4 F-D1/F-D2 falsifier contracts
+//
+// STATUS: SKELETON ONLY (G7-D.scaffold sub-cycle).
+//   - fn signatures + struct shapes locked
+//   - bodies STUBBED (return 0 / empty); G7-D.impl populates them
+//   - no parser/codegen wiring this cycle
+//   - no import into stdlib/dynlink.hexa (which itself is G7-C scope, not yet created)
+//   - no falsifier harness (G7-D.impl ships tool/g7d_falsify.sh)
+//
+// DESIGN ANCHORS:
+//   - capability authoring = @plugin(capabilities = ["net.outbound.https", ...]) in-source
+//     attribute on the dispatch fn (§4.6.1; (A) over (B) sidecar .hexa.cap.tape).
+//   - ABI stamp = fixed 12-byte record (u32 runtime_version + u64 nanbox_layout_hash, LE)
+//     so the host can validate compat WITHOUT first parsing HXC (which itself depends on
+//     a stable HexaVal ABI). §4.6.2.
+//   - capability manifest = HXC v2 payload in __HEXA,__cap (Mach-O) / .hexa.cap (ELF)
+//     section. §3.C + §4.6.2 schema.
+
+// ──────────────────────────────────────────────────────────────────────
+// Section names (per RFC 070 §3.C — Mach-O 16-byte segment+section name limit respected)
+// ──────────────────────────────────────────────────────────────────────
+
+pub fn dynlink_caps_section_name_machO() -> string {
+    return "__HEXA,__cap"  // 12 chars, within 16-byte limit
+}
+
+pub fn dynlink_caps_section_name_elf() -> string {
+    return ".hexa.cap"
+}
+
+pub fn dynlink_abi_section_name_machO() -> string {
+    return "__HEXA,__abi"
+}
+
+pub fn dynlink_abi_section_name_elf() -> string {
+    return ".hexa.abi"
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Record shapes (LOCKED at G7-D.scaffold; populated at G7-D.impl)
+// ──────────────────────────────────────────────────────────────────────
+
+// ABI stamp — fixed 12-byte LE record (RFC 070 §4.6.2).
+// runtime_version = self/runtime.c HEXA_RUNTIME_VERSION (semver-packed:
+//                   major<<16 | minor<<8 | patch)
+// nanbox_layout_hash = SHA-256[0..8] over canonical NanBox tag enum literal +
+//                      payload sizeof list; compiler-emitted at build time.
+struct AbiStamp {
+    runtime_version: int,       // u32 logical, hexa int wide enough
+    nanbox_layout_hash: int,    // u64 logical
+}
+
+// Capability manifest — HXC v2 payload in __cap section (RFC 070 §4.6.2 schema).
+// plugin_id MUST equal the sole exported symbol (<plugin_id>_dispatch) per §3.B
+// fat-single-symbol convention.
+// capabilities[] verbatim from @plugin(capabilities=[...]) attribute on dispatch fn,
+// sorted ascending for determinism.
+// rfc_version = RFC 070 revision number (this RFC = 1).
+struct CapManifest {
+    plugin_id: string,
+    capabilities: [string],
+    rfc_version: int,
+    compiler_id: string,        // audit trail; not gated on
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Host-side gate (SKELETON — bodies = G7-D.impl)
+// ──────────────────────────────────────────────────────────────────────
+
+// dynlink_check_abi_compat — RFC 070 F-D1 implementation hook.
+// Reads .hexa.abi / __HEXA,__abi (12 B); compares against host's compiled-in
+// (runtime_version, nanbox_layout_hash). On mismatch: sets hexa_dlerror to
+// a string matching /^ABI: (host v.+ vs plugin v.+|nanbox_layout_hash mismatch .+)$/
+// and returns 0. On PASS: returns 1.
+//
+// SKELETON: returns 0 (== "always refuse" — fails closed). G7-D.impl wires
+// the actual 12 B read + compare.
+pub fn dynlink_check_abi_compat(so_path: string) -> int {
+    // G7-D.impl:
+    //   1. mmap so_path (or read header + section table)
+    //   2. locate __HEXA,__abi (Mach-O) or .hexa.abi (ELF) section
+    //   3. read 12 B LE -> (rv: u32, nlh: u64)
+    //   4. compare rv == HEXA_RUNTIME_VERSION && nlh == HEXA_NANBOX_LAYOUT_HASH
+    //   5. on fail: hexa_dlerror_set("ABI: host v... vs plugin v...") ; return 0
+    //   6. on pass: return 1
+    return 0
+}
+
+// dynlink_parse_cap_manifest — RFC 070 §3.C HXC v2 parse hook.
+// Reads .hexa.cap / __HEXA,__cap (variable length HXC v2 payload); decodes
+// CapManifest. On parse error: returns empty struct (all fields zero/empty).
+// G7-D.impl wires the HXC v2 decode (per @D g_hxc).
+pub fn dynlink_parse_cap_manifest(so_path: string) -> CapManifest {
+    // G7-D.impl:
+    //   1. mmap + locate __cap section
+    //   2. hxc_v2_decode(payload) -> typed CapManifest
+    //   3. validate plugin_id matches expected single exported symbol
+    //   4. validate rfc_version is recognised (currently == 1)
+    return CapManifest{
+        plugin_id: "",
+        capabilities: [],
+        rfc_version: 0,
+        compiler_id: "",
+    }
+}
+
+// dynlink_check_cap_grant — RFC 070 F-D2 implementation hook.
+// For each declared capability c in manifest.capabilities, checks the host's
+// grant_table. On any ungranted c: sets hexa_dlerror to "CAP: <c> not granted"
+// (first ungranted in sort order) and returns 0. On PASS: returns 1.
+//
+// SKELETON: returns 0 (fails closed). G7-D.impl wires:
+//   - host config -> grant_table[string] (env var HEXA_PLUGIN_GRANTS or
+//     $WILSON_CONFIG_DIR/plugin_grants.tape)
+//   - sorted iteration matching F-D2 contract
+pub fn dynlink_check_cap_grant(manifest: CapManifest, grant_table: [string]) -> int {
+    // G7-D.impl:
+    //   for each c in manifest.capabilities (sorted ascending):
+    //       if !grant_table.contains(c):
+    //           hexa_dlerror_set("CAP: " + c + " not granted")
+    //           return 0
+    //   return 1
+    return 0
+}
+
+// dynlink_full_gate — combined F-D1 + F-D2 check, used by hexa_dlopen (G7-C).
+// SKELETON: returns 0 (fails closed; matches "no .so passes the gate until
+// G7-D.impl lands the real check").
+pub fn dynlink_full_gate(so_path: string, grant_table: [string]) -> int {
+    if dynlink_check_abi_compat(so_path) == 0 {
+        return 0
+    }
+    let m = dynlink_parse_cap_manifest(so_path)
+    if dynlink_check_cap_grant(m, grant_table) == 0 {
+        return 0
+    }
+    return 1
+}

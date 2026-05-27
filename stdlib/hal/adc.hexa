@@ -1,0 +1,67 @@
+#!hexa strict
+// stdlib/hal/adc/adc.hexa — σ-slot 5: analog read.  ★ φ=analog
+//
+// import:  use "stdlib/hal/adc"
+// φ:       analog
+// handles: ≤ 4 converters, each with σ=12 channels max (multiplexed).
+//
+// canon-aware (~/core/canon/domains/compute/chip-thermal-power):
+//   - canon TDP Egyptian split 1/2 + 1/3 + 1/6 = 1 informs the ADC
+//     "thermal sensor" use case: 6 sensors per core, sampled in
+//     τ=4 stages (sample/convert/filter/report).
+
+let MODULE_NAME = "adc"
+let SIGMA_SLOT  = 5
+let PHI_KIND    = "analog"   // ★ one of two analog modules
+
+// ── resolution grades (canon σ-aligned ladder) ────────────────────────
+let RES_8BIT   = 8
+let RES_10BIT  = 10
+let RES_12BIT  = 12   // σ(6) — n=6-aligned default
+let RES_14BIT  = 14
+let RES_16BIT  = 16
+let RES_24BIT  = 24   // J₂ (premium / sigma-delta)
+
+fn adc_configure(unit: int, channel: int, resolution: int) -> int {
+    if unit < 0 || unit > 3 { return -1 }
+    if channel < 0 || channel > 11 { return -2 }   // σ(6)=12 channels per unit
+    if resolution < 8 || resolution > 24 { return -3 }
+    return unit * 12 + channel
+}
+
+fn adc_start(handle: int) -> bool { return handle >= 0 }
+
+fn adc_read(handle: int) -> int {
+    if handle < 0 { return -1 }
+    // sim: return synthetic mid-scale reading
+    return 2048   // mid 12-bit
+}
+
+fn adc_read_mv(handle: int) -> int {
+    if handle < 0 { return -1 }
+    let raw = adc_read(handle)
+    return raw * 3300 / 4096   // 12-bit, 3.3V Vref
+}
+
+fn adc_sample_average(handle: int, n_samples: int) -> int {
+    if handle < 0 || n_samples <= 0 { return -1 }
+    let mut sum = 0
+    let mut i = 0
+    while i < n_samples { sum = sum + adc_read(handle); i = i + 1 }
+    return sum / n_samples
+}
+
+fn adc_report(handle: int) -> str {
+    if handle < 0 { return "adc: invalid" }
+    return "adc: ch " + str(handle) + " ok (sim mid-scale)"
+}
+
+fn adc_open(unit: int, channel: int) -> int {
+    let h = adc_configure(unit, channel, RES_12BIT)
+    if h < 0 { return h }
+    if !adc_start(h) { return -4 }
+    return h
+}
+
+fn adc_close(handle: int) -> bool { return handle >= 0 }
+fn adc_module_meta() -> [str] { return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"] }

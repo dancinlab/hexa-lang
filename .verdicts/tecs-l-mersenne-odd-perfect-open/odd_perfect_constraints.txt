@@ -1,0 +1,138 @@
+ODD PERFECT NUMBER — open problem · known lower-bound table (TECS-L axis B MR7)
+================================================================================
+
+THE OPEN QUESTION.
+  Does any ODD perfect number exist?
+  Equivalently: does there exist an odd positive integer n with sigma(n) = 2n?
+  Status: OPEN.  No proof of existence; no proof of non-existence.
+
+  Complement to Euclid-Euler (TECS-L MR1):
+    EVEN perfect numbers <=>  n = 2^(p-1) * M_p, M_p = 2^p - 1 a Mersenne prime
+                              (Euclid IX.36 sufficiency + Euler 1849 necessity).
+  No analogous characterization is known for the odd case. MR7 documents the
+  modern lower bounds + structural constraints WITHOUT claiming closure.
+
+  TECS-L g5 verdict tier  =  ORANGE INSUFFICIENT/DEFERRED.
+  Reason: the known bounds are LOWER bounds (search lower bounds and structural
+  necessary conditions) — they do NOT constitute a proof of non-existence.
+  No g5 closed-form path settles existence at this time.
+
+
+MODERN KNOWN CONSTRAINTS (necessary conditions for any odd perfect n).
+================================================================================
+
+  Constraint                                          Bound / Form           Source
+  --------------------------------------------------  ---------------------  ----------------------
+  Magnitude lower bound                               n > 10^1500            Ochem-Rao 2012
+  Distinct prime factor count   omega(n)              omega(n) >= 9          Nielsen 2015
+    (same, if 3 does NOT divide n)                    omega(n) >= 12         Nielsen 2015
+  Largest prime factor          P(n)                  P(n) >= 10^8           Goto-Ohno 2008
+  Second-largest prime factor                         >= 10^4                Iannucci 1999
+  Third-largest prime factor                          >= 10^2                Iannucci 2000
+  Total prime factor count      Omega(n)              Omega(n) >= 101        Ochem-Rao 2014
+  Euler form (structure)                              n = p^a * q_1^(2 b_1)  Euler 1849
+                                                          * ... * q_k^(2 b_k)
+                                                      with p == a == 1 (mod 4)
+                                                      and p prime, p NOT in {q_i}
+
+  Each row is a NECESSARY CONDITION: any odd perfect n (if one exists) must
+  satisfy it. None of them, jointly or individually, rules out existence.
+
+
+EULER FORM (1849) — structural constraint.
+================================================================================
+  Every odd perfect number n (if any) is of the form
+        n = p^a * q_1^(2 b_1) * q_2^(2 b_2) * ... * q_k^(2 b_k),
+  where
+    - p, q_1, ..., q_k are distinct odd primes,
+    - p == 1 (mod 4)         (the "special" prime),
+    - a == 1 (mod 4),
+    - b_i >= 1 for all i,
+    - the q_i are pairwise distinct and distinct from p.
+
+  Equivalently: in the prime factorisation of n, exactly ONE prime power
+  has an exponent congruent to 1 mod 4 (the "Euler prime" p^a), and every
+  other prime power has an EVEN exponent.
+
+  This is the deepest unconditional structural fact known.  It does not
+  bound the omega / Omega / magnitude axes on its own — those are handled
+  by the rows of the table above.
+
+
+WHY THIS MILESTONE IS ORANGE (not paper-eligible).
+================================================================================
+  - paper_gate (project.tape @D paper_gate): a paper requires a TERMINAL
+    verdict (BLUE formal / GREEN numerical / RED closed-negative) AND
+    pre-registered falsifier + real measurement (paper_significance).
+  - MR7 is, by construction, neither terminal nor closed.  Each constraint
+    above is a citation to an external bound; no closed-form computation
+    in hexa verify can settle the existence question.
+  - Therefore MR7 is filed as ORANGE INSUFFICIENT/DEFERRED — honest scope
+    statement so the TECS-L domain does not over-claim closure on its
+    axis B (MERSENNE) line.
+  - paper-ineligible by gate.  No PAPER/<slug>/ scaffolded.
+
+
+CROSS-LINKS WITHIN TECS-L.
+================================================================================
+  MR1  (Euclid-Euler) ........ EVEN perfect numbers, fully characterised.
+                               MR7 is the OPEN complement of MR1.
+  MR2..MR6 ................... all 🔵 / 🟢 / 🔴 closures sit on the EVEN side
+                               via M_p Mersenne primes.  The ODD side is
+                               unreachable by the same construction.
+  Reverse-direction closures
+  in MR1/MR6 ................. show p prime ⇏ M_p prime (M_11=23*89 etc.) —
+                               i.e. even the EVEN side does not run free.
+                               The ODD side is qualitatively further from
+                               closure (no construction at all).
+
+
+HONEST SCOPE STATEMENT (the entire purpose of MR7).
+================================================================================
+  TECS-L claims NO closure on the existence of odd perfect numbers.
+  Lower bounds and structural necessary conditions are cited above with
+  their original references; no hexa-native recomputation is added (none
+  exists for an open problem of this magnitude).  This artifact exists to
+  prevent over-claim: axis B (MERSENNE) is honest about which lines are
+  closed (MR1-MR6) and which remain open (MR7).
+
+
+REFERENCES.
+================================================================================
+  Euclid (c. 300 BCE).            Elements, Book IX, Proposition 36.
+  Euler, L. (1849, posth.).       De numeris amicabilibus.
+                                  Commentationes arithmeticae 2, 627-636.
+  Iannucci, D. E. (1999).         The second largest prime divisor of an odd
+                                  perfect number exceeds ten thousand.
+                                  Math. Comp. 68, 1749-1760.
+  Iannucci, D. E. (2000).         The third largest prime divisor of an odd
+                                  perfect number exceeds one hundred.
+                                  Math. Comp. 69, 867-879.
+  Goto, T. and Ohno, Y. (2008).   Odd perfect numbers have a prime factor
+                                  exceeding 10^8.  Math. Comp. 77, 1859-1868.
+  Ochem, P. and Rao, M. (2012).   Odd perfect numbers are greater than
+                                  10^1500.  Math. Comp. 81, 1869-1877.
+  Ochem, P. and Rao, M. (2014).   On the number of prime factors of an odd
+                                  perfect number.  Math. Comp. 83, 2435-2439.
+  Nielsen, P. P. (2007).          Odd perfect numbers have at least nine
+                                  distinct prime factors.  Math. Comp. 76,
+                                  2109-2126.
+  Nielsen, P. P. (2015).          Odd perfect numbers, Diophantine equations,
+                                  and upper bounds.  Math. Comp. 84,
+                                  2549-2567.
+  Acquaah, P. and Konyagin, S.    On prime factors of odd perfect numbers.
+        (2012).                   Int. J. Number Theory 8, 1537-1540.
+
+
+SYNTHESIS VERDICT.
+================================================================================
+  Tier   = ORANGE INSUFFICIENT/DEFERRED   (open problem · paper-ineligible by gate)
+  Method = citation (synthesis of published lower bounds + necessary forms;
+           no hexa verify of existence — none possible at present)
+  Scope  = lower-bound table + Euler form + cross-link to MR1 (EVEN side)
+  Open   = entirety of the existence question; this is the explicit honest
+           scope statement that axis B (MERSENNE) does NOT claim closure
+           on the odd case.
+
+  This artifact is the DELIBERATE 🟠 of TECS-L axis B — its purpose is to
+  forbid over-claim, not to fake closure. paper_gate excludes 🟠; no paper.

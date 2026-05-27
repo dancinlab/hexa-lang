@@ -1,0 +1,428 @@
+#!hexa strict
+// stdlib/kernels/fusion_reactivity/reactivity.hexa — ①a fusion-reactivity kernel
+// (demiurge design.md D72 2-layer STDLIB restructure · FUSION.md F1/F2).
+//
+// Clean-room hexa-native closed-form thermonuclear-reactivity kernel.
+// Domain-AGNOSTIC: only the standard Bosch-Hale ⟨σv⟩(T) reactivity
+// parametrization (Maxwellian-averaged fusion reaction rate) + the
+// classic 0-D plasma-power-balance algebra (Lawson triple product /
+// ignition criterion / Q_plasma). NO device operating point, NO ITER
+// caveat — the ①b adapter `stdlib/fusion/reactivity.hexa` owns the
+// operating point + the g3 honesty gate. This is the kernel sibling of
+// `kernels/plasma/plasma_metrics.hexa` under D72.
+//
+// @version 0.2.0
+// @capabilities [pure]
+// @stability stage-2 substrate (closed-form Path A · libm-only). Parity
+//   anchor = Bosch & Hale's own Table VIII tabulated ⟨σv⟩ (the paper's
+//   verification column); the `--expr` atoms in tool/verify_cli.hexa gate
+//   the identity against those tabulated values.
+// @since 2026-05-25
+//
+// 2-layer (ABSORPTION.md ①):
+//   ①a kernel  — THIS FILE. Domain-independent Bosch-Hale ⟨σv⟩ algebra +
+//                Lawson / Q_plasma 0-D power balance. Pure functions.
+//   ①b adapter — `stdlib/fusion/reactivity.hexa`. Owns the fusion
+//                operating point (D-T at a given T_i, an ITER-class triple
+//                product point) + the g3 honesty header.
+//
+// ── PROVENANCE / CITATION (FUSION governance · NUCLEAR §3.3 honest-cite) ─
+//   The reactivity parametrization + ALL fit coefficients are taken
+//   VERBATIM from the canonical reference; they are NOT re-derived
+//   (re-derivation of a published fit = mis-cite). Closed-form Path A —
+//   no solver, no ML, libm-only (sqrt / exp / pow).
+//
+//   - reactivity model + coefficients :
+//       H.-S. Bosch & G. M. Hale, "Improved formulas for fusion
+//       cross-sections and thermal reactivities", Nucl. Fusion 32, 611
+//       (1992), DOI 10.1088/0029-5515/32/4/I07.
+//       Eqs. (12)-(14) / Table VII (fit parameters) / Table VIII
+//       (tabulated ⟨σv⟩ verification column, ion temperatures 0.2-50 keV).
+//   - Lawson criterion / triple product :
+//       J. D. Lawson, "Some criteria for a power producing thermonuclear
+//       reactor", Proc. Phys. Soc. B 70, 6 (1957). The n·T·τ_E triple-
+//       product form is the textbook 0-D ignition statement — mathematical
+//       identity of the volumetric power balance, not a proprietary fit.
+//
+// ── BOSCH-HALE PARAMETRIZATION (verbatim, Nucl. Fusion 32, 611, Eq. 12) ─
+//   ⟨σv⟩ = C1 · θ · √( ξ / (m_r c² · T³) ) · exp(−3·ξ)        [cm³/s]
+//     θ = T / ( 1 − T·(C2 + T·(C4 + T·C6)) / (1 + T·(C3 + T·(C5 + T·C7))) )
+//         — Bosch-Hale Eq. 13 (the DIVISION form: θ = T / (1 − num/den)).
+//           The Table VIII tabulated ⟨σv⟩ column is the verification anchor
+//           (reproduces e.g. D-T 1.136e-16 cm³/s at 10 keV).
+//     ξ = (B_G² / (4·θ))^(1/3)                                (Eq. 14)
+//   with T = T_i in keV, B_G in √keV, m_r c² in keV. The fit coefficients
+//   C1..C7 + B_G + m_r c² are reaction-specific (Table VII). ⟨σv⟩ is in
+//   cm³/s when T is in keV — the paper's native units, kept here so the
+//   Table VIII check column applies directly (an SI m³/s view is one
+//   ×1e-6 conversion away — see ⟨σv⟩_*_m3 helpers).
+//
+// HONESTY (g3 — non-negotiable):
+//   • The reactivity ⟨σv⟩(T) IS a mathematical fact of the Bosch-Hale fit
+//     — given an ion temperature T, the formula returns the Maxwellian-
+//     averaged reaction rate that fit WOULD give. The kernel is exact.
+//   • BUT a reactivity at an assumed T_i, or a Q_plasma computed from an
+//     assumed (n, T, τ_E) operating point, is a SIM input — NOT a device
+//     measurement. Any consumer keeps gate=GATE_OPEN / absorbed=false
+//     unless n/T/τ_E come from a measured tokamak shot (the JET measured-
+//     oracle is the only absorbed=true fusion path). "Q>1" from these
+//     formulae is DESIGN FEASIBILITY, never "ignition achieved".
+
+use "stdlib/core/math/float"
+
+// ── Bosch-Hale Table VII fit coefficients (VERBATIM, Nucl. Fusion 32,
+//    611 (1992) Table VII) ───────────────────────────────────────────────
+//
+// Column order matches the paper's Table VII:
+//   T(d,n)⁴He [D-T] · ³He(d,p)⁴He [D-³He] · D(d,p)T · D(d,n)³He.
+// B_G in √keV, m_r c² in keV. Reproduced digit-for-digit — NOT refit.
+
+// ---- T(d,n)⁴He  ( D-T )  -------------------------------------------------
+fn _dt_bg() -> float    { return 34.3827 }
+fn _dt_mrc2() -> float  { return 1124656.0 }
+fn _dt_c1() -> float    { return 1.17302e-9 }
+fn _dt_c2() -> float    { return 1.51361e-2 }
+fn _dt_c3() -> float    { return 7.51886e-2 }
+fn _dt_c4() -> float    { return 4.60643e-3 }
+fn _dt_c5() -> float    { return 1.35000e-2 }
+fn _dt_c6() -> float    { return 0.0 - 1.06750e-4 }
+fn _dt_c7() -> float    { return 1.36600e-5 }
+
+// ---- ³He(d,p)⁴He  ( D-³He )  --------------------------------------------
+fn _dhe3_bg() -> float   { return 68.7508 }
+fn _dhe3_mrc2() -> float { return 1124572.0 }
+fn _dhe3_c1() -> float   { return 5.51036e-10 }
+fn _dhe3_c2() -> float   { return 6.41918e-3 }
+fn _dhe3_c3() -> float   { return 0.0 - 2.02896e-3 }
+fn _dhe3_c4() -> float   { return 0.0 - 1.91080e-5 }
+fn _dhe3_c5() -> float   { return 1.35776e-4 }
+fn _dhe3_c6() -> float   { return 0.0 }
+fn _dhe3_c7() -> float   { return 0.0 }
+
+// ---- D(d,p)T  ( D-D, proton+triton branch )  ----------------------------
+fn _ddp_bg() -> float    { return 31.3970 }
+fn _ddp_mrc2() -> float  { return 937814.0 }
+fn _ddp_c1() -> float    { return 5.65718e-12 }
+fn _ddp_c2() -> float    { return 3.41267e-3 }
+fn _ddp_c3() -> float    { return 1.99167e-3 }
+fn _ddp_c4() -> float    { return 0.0 }
+fn _ddp_c5() -> float    { return 1.05060e-5 }
+fn _ddp_c6() -> float    { return 0.0 }
+fn _ddp_c7() -> float    { return 0.0 }
+
+// ---- D(d,n)³He  ( D-D, neutron+³He branch )  ----------------------------
+fn _ddn_bg() -> float    { return 31.3970 }
+fn _ddn_mrc2() -> float  { return 937814.0 }
+fn _ddn_c1() -> float    { return 5.43360e-12 }
+fn _ddn_c2() -> float    { return 5.85778e-3 }
+fn _ddn_c3() -> float    { return 7.68222e-3 }
+fn _ddn_c4() -> float    { return 0.0 }
+fn _ddn_c5() -> float    { return 0.0 - 2.96400e-6 }
+fn _ddn_c6() -> float    { return 0.0 }
+fn _ddn_c7() -> float    { return 0.0 }
+
+// ── Bosch-Hale ⟨σv⟩ core evaluator (Eqs. 12-14, verbatim) ────────────────
+//
+// θ = T·(1 − T·(C2+T·(C4+T·C6)) / (1+T·(C3+T·(C5+T·C7))))   (Eq. 13)
+// ξ = (B_G² / (4·θ))^(1/3)                                  (Eq. 14)
+// ⟨σv⟩ = C1·θ·√(ξ/(m_r c²·T³))·exp(−3·ξ)                    (Eq. 12) [cm³/s]
+//
+// T = ion temperature in keV. Returns 0.0 for T ≤ 0 (no thermonuclear
+// reactivity below threshold — sentinel mirrors the NaN-free convention
+// of stdlib/nuclear/sim.hexa). Pure libm (sqrt / exp / pow).
+fn _bosch_hale_sigma_v(t_kev: float, bg: float, mrc2: float,
+                       c1: float, c2: float, c3: float, c4: float,
+                       c5: float, c6: float, c7: float) -> float {
+    if t_kev <= 0.0 { return 0.0 }
+    let t = t_kev
+    // θ (Eq. 13) — the printed nested-Horner numerator / denominator.
+    let num = t * (c2 + t * (c4 + t * c6))
+    let den = 1.0 + t * (c3 + t * (c5 + t * c7))
+    let theta = t / (1.0 - num / den)
+    // ξ (Eq. 14) — Gamow-scaled cube root.
+    let xi = pow(bg * bg / (4.0 * theta), 1.0 / 3.0)
+    // ⟨σv⟩ (Eq. 12) [cm³/s].
+    return c1 * theta * sqrt(xi / (mrc2 * t * t * t)) * exp(0.0 - 3.0 * xi)
+}
+
+// ── public reactivity surface — ⟨σv⟩(T_i [keV]) in cm³/s ─────────────────
+//
+// Native Bosch-Hale units: T in keV, ⟨σv⟩ in cm³/s. These are the columns
+// of Table VIII (the paper's own verification table). Below each reaction's
+// validity floor (Table VII T_i range) the fit is extrapolated — the caller
+// should respect the range (D-T 0.2-100 keV, D-³He 0.5-190 keV, D-D
+// 0.2-100 keV); T ≤ 0 returns the 0.0 sentinel.
+
+/// D-T  [T(d,n)⁴He] thermonuclear reactivity ⟨σv⟩ [cm³/s], T_i in keV.
+/// Bosch-Hale Table VIII anchor: T=10 keV → 1.136e-16, T=20 keV → 4.330e-16.
+pub fn sigma_v_dt(t_kev: float) -> float {
+    return _bosch_hale_sigma_v(t_kev, _dt_bg(), _dt_mrc2(),
+        _dt_c1(), _dt_c2(), _dt_c3(), _dt_c4(), _dt_c5(), _dt_c6(), _dt_c7())
+}
+
+/// D-³He  [³He(d,p)⁴He] reactivity ⟨σv⟩ [cm³/s], T_i in keV.
+/// Bosch-Hale Table VIII anchor: T=10 keV → 2.126e-19, T=20 keV → 3.482e-18.
+pub fn sigma_v_dhe3(t_kev: float) -> float {
+    return _bosch_hale_sigma_v(t_kev, _dhe3_bg(), _dhe3_mrc2(),
+        _dhe3_c1(), _dhe3_c2(), _dhe3_c3(), _dhe3_c4(), _dhe3_c5(),
+        _dhe3_c6(), _dhe3_c7())
+}
+
+/// D-D proton branch  [D(d,p)T] reactivity ⟨σv⟩ [cm³/s], T_i in keV.
+/// Bosch-Hale Table VIII anchor: T=10 keV → 5.781e-19, T=20 keV → 2.399e-18.
+pub fn sigma_v_ddp(t_kev: float) -> float {
+    return _bosch_hale_sigma_v(t_kev, _ddp_bg(), _ddp_mrc2(),
+        _ddp_c1(), _ddp_c2(), _ddp_c3(), _ddp_c4(), _ddp_c5(),
+        _ddp_c6(), _ddp_c7())
+}
+
+/// D-D neutron branch  [D(d,n)³He] reactivity ⟨σv⟩ [cm³/s], T_i in keV.
+/// Bosch-Hale Table VIII anchor: T=10 keV → 6.023e-19, T=20 keV → 2.603e-18.
+pub fn sigma_v_ddn(t_kev: float) -> float {
+    return _bosch_hale_sigma_v(t_kev, _ddn_bg(), _ddn_mrc2(),
+        _ddn_c1(), _ddn_c2(), _ddn_c3(), _ddn_c4(), _ddn_c5(),
+        _ddn_c6(), _ddn_c7())
+}
+
+/// Total D-D reactivity ⟨σv⟩ [cm³/s] = sum of the two (≈50/50) branches.
+/// Bosch-Hale Table VIII "DDtotal" anchor: T=10 keV → 1.180e-18 (the sum
+/// 5.781e-19 + 6.023e-19 = 1.180e-18), T=20 keV → 5.002e-18.
+pub fn sigma_v_dd_total(t_kev: float) -> float {
+    return sigma_v_ddp(t_kev) + sigma_v_ddn(t_kev)
+}
+
+// ── SI convenience views (cm³/s → m³/s, factor 1e-6) ─────────────────────
+//
+// 1 cm³ = 1e-6 m³, so ⟨σv⟩[m³/s] = ⟨σv⟩[cm³/s] · 1e-6. Provided so the
+// power-balance kernel below (which is SI throughout) can consume a single
+// consistent unit. The cm³/s functions remain the verification surface.
+pub fn sigma_v_dt_m3(t_kev: float) -> float   { return sigma_v_dt(t_kev) * 1.0e-6 }
+pub fn sigma_v_dhe3_m3(t_kev: float) -> float { return sigma_v_dhe3(t_kev) * 1.0e-6 }
+pub fn sigma_v_ddp_m3(t_kev: float) -> float  { return sigma_v_ddp(t_kev) * 1.0e-6 }
+pub fn sigma_v_ddn_m3(t_kev: float) -> float  { return sigma_v_ddn(t_kev) * 1.0e-6 }
+
+// ── F1 (aneutronic) — p-¹¹B  [¹¹B(p,α)αα]  thermonuclear reactivity ───────
+//
+// The D-T-beyond fuel axis. p-¹¹B is the canonical ANEUTRONIC reaction:
+//   p + ¹¹B → 3 α + 8.7 MeV   (no primary neutron, charged-particle output).
+// Bosch-Hale does NOT cover p-¹¹B — its ⟨σv⟩ is dominated by a BROAD/narrow
+// resonance pair (a sharp 148 keV CM resonance + the broad 0.6 MeV one), so
+// the smooth Bosch-Hale θ/ξ Padé form mis-fits it. The CITED parametrization
+// is the Nevins & Swain framework (see provenance below).
+//
+// ── PROVENANCE / CITATION (FUSION governance · NUCLEAR §3.3 honest-cite) ─
+//   Cross-section / S-factor parametrization (VERBATIM coefficients, NOT
+//   re-derived — re-derivation of a published fit = mis-cite):
+//   - W. M. Nevins & R. Swain, "The thermonuclear fusion rate coefficient
+//       for p-¹¹B reactions", Nucl. Fusion 40, 865 (2000),
+//       DOI 10.1088/0029-5515/40/4/310. Establishes the S(E)/E·exp(−√(E_G/E))
+//       astrophysical-S-factor framework + the dominant 148 keV (CM) and
+//       0.6 MeV resonances for the p-¹¹B reactivity.
+//   - The verbatim low-energy S-factor coefficients (C₀,C₁,C₂ + the 148 keV
+//       Breit-Wigner amplitude A_L / centre E_L / width δE_L), the Gamow
+//       energy E_G = 22.589 MeV, and the reduced-mass energy μc² = 859 526
+//       keV are taken from the Tentori & Belloni (Nucl. Fusion 63, 086001,
+//       2023) high-accuracy update / arXiv:2601.00241 Table I, which
+//       "preserves the physical structure of the Nevins-Swain framework"
+//       (their words) — i.e. the same S(E)/E·exp(−√(E_G/E)) parametrization.
+//       Eq. numbers: σ(E)=S(E)/E·exp(−√(E_G/E))  [their Eq. 1];
+//       S₁(E)=C₀+C₁E+C₂E²+A_L/((E−E_L)²+δE_L²)   [their Eq. 3, E≤0.4 MeV];
+//       ⟨σv⟩=√(8/π)/(μ^½(k_BT)^{3/2})·∫σ E e^{−E/k_BT}dE  [their Eq. 6].
+//
+// HONESTY (g3 / d6 — non-negotiable):
+//   • p-¹¹B is ANEUTRONIC (clean, charged-particle product) BUT it has a
+//     HIGH ignition threshold: the Maxwellian-averaged ⟨σv⟩ rises slowly and
+//     does not peak until T ≈ 250–300 keV (an order of magnitude hotter than
+//     the D-T optimum ~65 keV), and at those temperatures the plasma is
+//     bremsstrahlung-CHALLENGED (P_brem can exceed P_fus). THIS KERNEL IS
+//     REACTIVITY ONLY — it is NOT an ignition-feasibility or net-energy
+//     claim. Whether p-¹¹B can ignite is an OPEN energy-balance question
+//     (Nevins 1998; Putvinski 2019; Tentori-Belloni 2023 disagree). Any
+//     consumer keeps absorbed=false.
+//   • The closed-form, UNIT-UNAMBIGUOUS, VERBATIM verification surface here
+//     is the Gamow tunnelling factor + the S-factor (incl. the 148 keV
+//     resonance) + the relative cross-section shape σ(E)=S(E)/E·Gamow —
+//     these gate the parametrization exactly (the `--expr` atoms below).
+//     The Maxwellian-averaged ⟨σv⟩(T) below is a deterministic fixed-node
+//     quadrature OVER that verbatim cross-section (libm-only, no solver);
+//     its absolute scale carries the S-factor's published unit convention
+//     and is offered as a reactivity SHAPE, not a tabulated-value claim.
+
+/// p-¹¹B Gamow energy E_G [keV] (Nevins-Swain framework; E_G = 22.589 MeV).
+/// Sets the Coulomb-barrier tunnelling factor exp(−√(E_G/E)).
+fn _pb11_e_gamow() -> float { return 22589.0 }
+
+/// p-¹¹B reduced-mass energy μc² [keV] (Nevins-Swain framework).
+fn _pb11_mrc2() -> float { return 859526.0 }
+
+/// Gamow (Coulomb-barrier tunnelling) factor for p-¹¹B at CM energy E [keV]:
+///   P_Gamow(E) = exp(−√(E_G/E)) ,  E_G = 22 589 keV  (Nevins-Swain Eq. 1).
+/// Closed-form, exact, unit-unambiguous. E ≤ 0 → 0.0 sentinel.
+pub fn pb11_gamow_factor(e_kev: float) -> float {
+    if e_kev <= 0.0 { return 0.0 }
+    return exp(0.0 - sqrt(_pb11_e_gamow() / e_kev))
+}
+
+/// p-¹¹B astrophysical S-factor S₁(E) for the low-energy branch E ≤ 400 keV
+/// (Tentori-Belloni Table I / Nevins-Swain framework, Eq. 3, VERBATIM):
+///   S₁(E) = C₀ + C₁·E + C₂·E² + A_L / ((E−E_L)² + δE_L²)
+///   C₀ = 197, C₁ = 0.240, C₂ = 2.31e-4 ,
+///   A_L = 1.82e4, E_L = 148 keV (the dominant CM resonance), δE_L = 2.35.
+/// E in keV. The Lorentzian term is the verbatim 148 keV Breit-Wigner
+/// resonance that gives p-¹¹B its (narrow) reactivity peak. E ≤ 0 → 0.0.
+pub fn pb11_s_factor(e_kev: float) -> float {
+    if e_kev <= 0.0 { return 0.0 }
+    let de = e_kev - 148.0
+    let lorentz = 1.82e4 / (de * de + 2.35 * 2.35)
+    return 197.0 + 0.240 * e_kev + 2.31e-4 * e_kev * e_kev + lorentz
+}
+
+/// p-¹¹B (relative) cross-section shape σ(E) = S(E)/E · exp(−√(E_G/E))
+/// (Nevins-Swain Eq. 1), low-energy branch (E ≤ 400 keV S-factor). Closed-
+/// form, carries the published S-factor units (a reactivity SHAPE input,
+/// not an absolute barn value). E ≤ 0 → 0.0 sentinel.
+pub fn pb11_sigma_shape(e_kev: float) -> float {
+    if e_kev <= 0.0 { return 0.0 }
+    return pb11_s_factor(e_kev) / e_kev * pb11_gamow_factor(e_kev)
+}
+
+/// p-¹¹B Maxwellian-averaged thermonuclear reactivity ⟨σv⟩(T) — deterministic
+/// fixed-node midpoint quadrature of Nevins-Swain Eq. 6 over the verbatim
+/// low-energy cross-section shape σ(E)=S(E)/E·exp(−√(E_G/E)):
+///   ⟨σv⟩ ∝ (k_BT)^{-3/2} · ∫₀^{∞} σ(E)·E·exp(−E/k_BT) dE
+/// T in keV. N = 600 nodes out to 50·T (the Maxwellian tail is exp-killed).
+/// Returns the integral moment in the kernel's NATIVE relative units (the
+/// √(8/π)/√μc² prefactor and the S-factor unit convention are folded into
+/// the scaled views). Resonance-dominated → rises slowly, peaks ≈250-300 keV
+/// (the high-threshold honesty note above applies). T ≤ 0 → 0.0 sentinel.
+pub fn pb11_reactivity_moment(t_kev: float) -> float {
+    if t_kev <= 0.0 { return 0.0 }
+    let e_max = 50.0 * t_kev
+    let n = 600
+    let h = e_max / 600.0
+    let mut acc = 0.0
+    let mut i = 0
+    while i < n {
+        let e = (to_float(i) + 0.5) * h           // midpoint node [keV]
+        let integrand = pb11_sigma_shape(e) * e * exp(0.0 - e / t_kev)
+        acc = acc + integrand * h
+        i = i + 1
+    }
+    // (k_BT)^{-3/2} Maxwellian normalization (T in keV).
+    return acc * pow(t_kev, 0.0 - 1.5)
+}
+
+/// p-¹¹B reactivity moment scaled ×1e6 — magnified convenience view. NOTE:
+/// the RAW `pb11_reactivity_moment` is ALREADY O(1e-4 .. 5e-2) in native
+/// units — far above the absolute ε=1e-9 floor — so the raw moment is the
+/// discriminating, full-precision verify gate at ALL T (it is 🟢 at
+/// T=50/100/123/300 keV). This ×1e6 view lifts the low-T tail to O(100)
+/// for human-readable parity tables, but the moment grows ~500× from
+/// T=50→300 keV, so at high T the ×1e6 value O(5e4) sits at the ABSOLUTE-ε
+/// float-floor (|Δ|/value ~1e-12 ⇒ |Δ| ~1e-8 > 1e-9): use the RAW moment as
+/// the gate for T ≳ 100 keV. The quadrature is deterministic either way.
+/// T ≤ 0 → 0.0 sentinel.
+pub fn pb11_reactivity_moment_e6(t_kev: float) -> float {
+    if t_kev <= 0.0 { return 0.0 }
+    return pb11_reactivity_moment(t_kev) * 1.0e6
+}
+
+// ── F2 — Lawson triple product / 0-D power balance / Q_plasma ────────────
+//
+// Classic 0-D (volume-averaged) thermonuclear power balance for a 50/50
+// D-T plasma. Closed-form algebraic identities — NO transport solver. All
+// SI unless noted. Provenance: Lawson 1957 (Proc. Phys. Soc. B 70, 6) for
+// the triple-product ignition statement; the power-density bookkeeping is
+// the textbook volumetric balance (Wesson "Tokamaks", Freidberg "Plasma
+// Physics and Fusion Energy") — mathematical identities, not a fit.
+
+/// D-T fusion energy release per reaction [J].
+///   E_DT = 17.59 MeV = 17.59 × 1.602176634e-13 J.
+/// 17.59 MeV is the canonical D + T → ⁴He(3.5 MeV) + n(14.1 MeV) Q-value.
+pub fn e_dt_joule() -> float { return 17.59e6 * 1.602176634e-19 }
+
+/// Fraction of D-T fusion energy carried by the charged α (stays in
+/// plasma, heats it): E_α / E_DT = 3.5 MeV / 17.59 MeV.
+pub fn dt_alpha_fraction() -> float { return 3.5e6 / 17.59e6 }
+
+/// Volumetric D-T fusion power density [W/m³] for a 50/50 D-T mix at
+/// total ion density n_i (m⁻³) and ion temperature T_i (keV):
+///   P_fus = n_D · n_T · ⟨σv⟩ · E_DT ,  n_D = n_T = n_i/2
+///         = (n_i²/4) · ⟨σv⟩_m3 · E_DT
+/// (the 1/4 is the 50/50-mix distinct-species pair count; identical-species
+/// D-D would carry 1/2·n²·⟨σv⟩ instead — distinct here, no double-count).
+pub fn p_fusion_dt_density(n_i_m3: float, t_kev: float) -> float {
+    if n_i_m3 <= 0.0 { return 0.0 }
+    if t_kev <= 0.0 { return 0.0 }
+    let n_half = n_i_m3 / 2.0
+    return n_half * n_half * sigma_v_dt_m3(t_kev) * e_dt_joule()
+}
+
+/// Plasma thermal energy density [J/m³] for n_e electrons + n_i ions, both
+/// at temperature T (keV), each species carrying (3/2)·k·T:
+///   W = (3/2)·(n_e + n_i)·(T_keV · 1.602176634e-16 J/keV)
+/// For a quasineutral pure-D-T plasma n_e ≈ n_i, so W = 3·n_i·k T.
+pub fn w_thermal_density(n_e_m3: float, n_i_m3: float, t_kev: float) -> float {
+    let kt_j = t_kev * 1.602176634e-16   // keV → J (1 keV = 1.602176634e-16 J)
+    return 1.5 * (n_e_m3 + n_i_m3) * kt_j
+}
+
+/// Lawson TRIPLE PRODUCT n_i·T_i·τ_E in SI-ish mixed units [m⁻³·keV·s] —
+/// the standard fusion figure of merit. Pure product (identity).
+pub fn triple_product(n_i_m3: float, t_kev: float, tau_e_s: float) -> float {
+    return n_i_m3 * t_kev * tau_e_s
+}
+
+/// Q_plasma = P_fusion / P_heat — the 0-D plasma energy gain.
+///   Q = P_fus / P_heat ,  with P_heat the external heating power.
+/// Q→∞ ⇒ ignition (α-heating self-sustains). Q=1 ⇒ scientific breakeven.
+/// HONEST: Q computed from an assumed (n,T,τ_E) is DESIGN FEASIBILITY, not
+/// a measured shot — never "ignition achieved" (FUSION governance).
+/// P_heat ≤ 0 → 0.0 sentinel (caller gates upstream).
+pub fn q_plasma(p_fusion_w: float, p_heat_w: float) -> float {
+    if p_heat_w <= 0.0 { return 0.0 }
+    return p_fusion_w / p_heat_w
+}
+
+/// 0-D steady-state Q_plasma from a volume-averaged operating point, with
+/// the confinement loss balanced by α-self-heating + external heating:
+///   P_loss = W / τ_E         (energy-confinement loss density)
+///   P_α    = f_α · P_fus     (α power retained in plasma)
+///   steady state: P_heat = P_loss − P_α   (external must cover the rest)
+///   Q = P_fus / P_heat = P_fus / (W/τ_E − f_α·P_fus)
+/// When the denominator ≤ 0 the α-heating alone exceeds the loss ⇒
+/// IGNITION regime; we return a large sentinel (1.0e30) flagging Q→∞
+/// (self-sustained), NOT a fabricated finite number. All densities [W/m³].
+/// HONEST: a textbook (n,T,τ_E) point → absorbed=false; "ignition" here is
+/// the 0-D criterion crossing, a DESIGN statement, never a device result.
+pub fn q_plasma_0d(p_fusion_density_w: float, w_density_j: float,
+                   tau_e_s: float, alpha_fraction: float) -> float {
+    if tau_e_s <= 0.0 { return 0.0 }
+    let p_loss = w_density_j / tau_e_s
+    let p_alpha = alpha_fraction * p_fusion_density_w
+    let p_heat = p_loss - p_alpha
+    if p_heat <= 0.0 { return 1.0e30 }   // α-heating ≥ loss ⇒ Q→∞ (ignition)
+    return p_fusion_density_w / p_heat
+}
+
+/// Lawson IGNITION margin (dimensionless): ratio of α-self-heating power to
+/// the confinement loss, both volumetric. ignited ⇔ ratio ≥ 1.
+///   margin = (f_α · P_fus) / (W / τ_E)
+/// margin ≥ 1 ⇒ ignition (α-heating sustains the plasma without external
+/// power); margin < 1 ⇒ external heating required. The classic Lawson
+/// criterion in self-heating-vs-loss form. τ_E ≤ 0 → 0.0 sentinel.
+pub fn ignition_margin(p_fusion_density_w: float, w_density_j: float,
+                       tau_e_s: float, alpha_fraction: float) -> float {
+    if tau_e_s <= 0.0 { return 0.0 }
+    let p_loss = w_density_j / tau_e_s
+    if p_loss <= 0.0 { return 0.0 }
+    return (alpha_fraction * p_fusion_density_w) / p_loss
+}
+
+// ── ①b adapter note ──────────────────────────────────────────────────────
+//
+// The fusion operating point (D-T at a chosen T_i, an ITER-class triple-
+// product reference) + the g3 honesty gate (sim input ≠ device measurement;
+// gate=GATE_OPEN / absorbed=false for textbook inputs) live in the ①b
+// adapter `stdlib/fusion/reactivity.hexa`, NOT in this domain-agnostic
+// kernel.

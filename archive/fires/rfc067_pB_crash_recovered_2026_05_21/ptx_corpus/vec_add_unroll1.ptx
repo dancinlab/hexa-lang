@@ -1,0 +1,46 @@
+// RFC 069 P4 -- vec-add unroll=1 baseline (1 element per thread).
+// c[i] = a[i] + b[i]  for i = tid + ctaid*ntid
+.version 7.8
+.target sm_80
+.address_size 64
+
+.visible .entry vec_add_unroll1 (
+    .param .u64 a,
+    .param .u64 b,
+    .param .u64 c,
+    .param .u64 n
+)
+{
+    .reg .u64 %rd<10>;
+    .reg .u32 %r<10>;
+    .reg .pred %p1;
+    .reg .f64 %fd<5>;
+
+    ld.param.u64 %rd0, [a];
+    ld.param.u64 %rd1, [b];
+    ld.param.u64 %rd2, [c];
+    ld.param.u64 %rd3, [n];
+
+    mov.u32 %r0, %ctaid.x;
+    mov.u32 %r1, %ntid.x;
+    mov.u32 %r2, %tid.x;
+    mad.lo.s32 %r3, %r0, %r1, %r2;
+
+    cvt.s32.s64 %r4, %rd3;
+    setp.ge.s32 %p1, %r3, %r4;
+    @%p1 bra $exit;
+
+    cvt.u64.u32 %rd4, %r3;
+    shl.b64 %rd5, %rd4, 3;          // *8 for f64
+    add.u64 %rd6, %rd0, %rd5;
+    add.u64 %rd7, %rd1, %rd5;
+    add.u64 %rd8, %rd2, %rd5;
+
+    ld.global.f64 %fd0, [%rd6];
+    ld.global.f64 %fd1, [%rd7];
+    add.f64 %fd2, %fd0, %fd1;
+    st.global.f64 [%rd8], %fd2;
+
+$exit:
+    ret;
+}

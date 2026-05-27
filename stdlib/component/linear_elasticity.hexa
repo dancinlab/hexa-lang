@@ -1,0 +1,192 @@
+// stdlib/component/linear_elasticity.hexa — Stage 2 hexa-native port
+// of the structural portion of `component + verify` (D66 / κ-44 in
+// demiurge/design.md).
+//
+// SCOPE (g3 — honest, narrow):
+//   Closed-form 1D self-weight elasticity of a uniform rectangular
+//   column standing on a fully-clamped base (u = 0 on z = 0), free
+//   on top, loaded ONLY by gravity (body force ρg downward). All SI:
+//   lengths in METERS, stresses in PASCALS, displacement in METERS.
+//
+//   Same die proxy as the Stage-1 substrate
+//   (`stdlib/component/gmsh_skfem.py`): a 10×10×2 mm silicon box,
+//   textbook Si at 300 K (ρ = 2329 kg/m³, E = 169 GPa, ν = 0.22).
+//   This module gives the closed-form analytic answer the Stage-1
+//   FEM structural solve can be compared against (Stage-3 parity).
+//
+// WHAT IS STAGE 2 HERE (clean-room re-derivation, no Python spawn):
+//   - 1D self-weight column closed-form (Fourier of elasticity:
+//     integrate the axial stress / strain along the column)
+//   - identical inputs to the Stage-1 substrate run
+//   - outputs:
+//       u_max  — tip displacement magnitude (m)
+//       σ_zz_base — peak axial stress at the clamped base (Pa);
+//                   for a uniaxial state von Mises σ_vM = |σ_zz|
+//
+// WHAT IS NOT STAGE 2 (deferred):
+//   - 3D FEM (mesh + sparse linear solver) — the FEM also captures
+//     the lateral Poisson stress near the fully-clamped base, which
+//     a 1D column model cannot; that needs a hexa-lang sparse-solver
+//     stdlib
+//   - external tractions, thermal-structural coupling, dynamics
+//   - mesh convergence — this module has no mesh
+//
+// CLEAN-ROOM re-derivation (no scikit-fem code touched):
+//   A column of height L, cross-section A, density ρ, modulus E,
+//   standing on a clamped base (z = 0), free top (z = L), loaded
+//   only by gravity g (−z):
+//
+//   Axial force balance — the material above height z weighs
+//   ρ g A (L − z), so the axial stress is
+//       σ_zz(z) = ρ g (L − z)            (compressive)
+//       σ_zz(0) = ρ g L                  (peak, at the base)
+//   For a uniaxial stress state the von Mises stress equals the
+//   magnitude of the single nonzero principal stress:
+//       σ_vM(z) = |σ_zz(z)|              ⇒  σ_vM_base = ρ g L
+//
+//   Axial strain (Hooke, uniaxial):  ε_zz(z) = σ_zz(z) / E
+//   Tip displacement = integral of strain along the column:
+//       u(L) = ∫₀ᴸ ε_zz dz = (ρ g / E) ∫₀ᴸ (L − z) dz
+//            = (ρ g / E) · L² / 2
+//       ⇒  u_max = ρ g L² / (2 E)
+//
+// PARITY (Stage 3, against the Stage-1 FEM substrate run on the
+// same die proxy box, captured 2026-05-20 AFTER the κ-44 structural
+// fix — scikit-fem 12.0.1 built-in linear_elasticity model + the
+// corrected interleaved-DOF mapping; an earlier hand-rolled form
+// was ~44× too soft and is no longer used):
+//
+//   FEM 3D (scikit-fem 12.0.1, 686 nodes / 2232 tets):
+//       u_max      = 2.796e-13 m
+//       σ_vM_max   = 38.37 Pa
+//   1D analytic (this module):
+//       u_max      = 2.703e-13 m
+//       σ_zz_base  = 45.68 Pa
+//
+//   u_max parity diff   = (2.796 − 2.703)/2.796 ≈ 3.3 %  <  5 %  ✓
+//       — a clean apples-to-apples comparison (tip displacement is
+//         dominated by axial compression; 3D Poisson at the base
+//         shifts it only slightly).
+//   σ parity diff       = (45.68 − 38.37)/45.68 ≈ 16 %
+//       — NOT apples-to-apples: σ_zz_base is the analytic peak AT
+//         z = 0, while the FEM's σ_vM_max is evaluated at element
+//         CENTROIDS (the lowest centroid sits ~0.15-0.2 mm above
+//         the base, where ρg(L−z) is already smaller) and is a von
+//         Mises value that near the clamp also carries the lateral
+//         Poisson stress. So a wider 25 % consistency band is the
+//         honest gate for σ, not the 5 % used for u_max.
+//
+// HONESTY (g3 — non-negotiable):
+//   This module's output is a *first hexa-native witness* of the
+//   structural verdict. It is NOT an absorbed component verdict —
+//   the geometry is a TOY box, the material is textbook Si, only
+//   the gravity-only load case is covered, and the 1D model omits
+//   the 3D Poisson stress field. measurement_gate stays GATE_OPEN
+//   and absorbed = false ALWAYS until (real STEP + measured
+//   material + 3D FEM + mesh convergence + 3rd-party signoff
+//   cross-check) all land. The Stage-3 parity ✓ above is *between
+//   the FEM substrate and this 1D analytic*, NOT between either of
+//   them and a measured component.
+
+
+// ─── helpers ──────────────────────────────────────────────────────
+
+fn fabs(x: float) -> float {
+    if x < 0.0 { return -x }
+    return x
+}
+
+
+// ─── closed-form 1D self-weight elasticity ────────────────────────
+
+// Peak axial stress at the clamped base of a self-loaded column
+// (z = 0). σ_zz(0) = ρ g L. For the uniaxial state this is also the
+// von Mises stress at the base.
+fn sigma_zz_base(
+    density_kg_per_m3: float,
+    gravity_m_per_s2:  float,
+    length_z_m:        float
+) -> float {
+    return density_kg_per_m3 * gravity_m_per_s2 * length_z_m
+}
+
+// Tip displacement magnitude of a self-loaded column clamped at the
+// base. u_max = ρ g L² / (2 E).
+fn tip_displacement(
+    density_kg_per_m3: float,
+    gravity_m_per_s2:  float,
+    length_z_m:        float,
+    youngs_pa:         float
+) -> float {
+    let rho_g = density_kg_per_m3 * gravity_m_per_s2
+    return rho_g * length_z_m * length_z_m / (2.0 * youngs_pa)
+}
+
+
+// ─── self-test ────────────────────────────────────────────────────
+//
+// Runs the closed-form on the canonical die proxy box and checks
+// parity against the recorded (post-fix) Stage-1 FEM substrate run.
+
+fn main() {
+    // Canonical inputs — must match
+    // stdlib/component/gmsh_skfem.py::{GEOMETRY, MATERIAL, LOAD}.
+    let length_z   = 0.002         // 2 mm   (z, gravity direction)
+    let density    = 2329.0        // kg/m³  textbook Si
+    let youngs     = 169.0e9       // Pa     textbook Si
+    let gravity    = 9.80665       // m/s²   standard gravity
+
+    // Stage-1 FEM substrate reference values, captured 2026-05-20
+    // AFTER the κ-44 structural fix (scikit-fem 12.0.1 built-in
+    // linear_elasticity + corrected interleaved-DOF mapping, mesh
+    // 686 nodes / 2232 tets):
+    let fem_u_max     = 2.796e-13   // m
+    let fem_sigma_vm  = 38.37       // Pa
+
+    // 1D closed-form
+    let u_max     = tip_displacement(density, gravity, length_z, youngs)
+    let sigma_zz  = sigma_zz_base(density, gravity, length_z)
+
+    // parity
+    let diff_u     = fabs(u_max - fem_u_max) / fem_u_max
+    let diff_sigma = fabs(sigma_zz - fem_sigma_vm) / sigma_zz
+
+    println("hexa-native 1D self-weight elasticity — "
+            + "die_proxy_box_v1 (Stage 2)")
+    println("  inputs: ρ=2329 kg/m³ · g=9.80665 m/s² · L_z=2 mm · "
+            + "E=169 GPa")
+    println("  u_max         = " + str(u_max)    + " m")
+    println("  σ_zz_base     = " + str(sigma_zz) + " Pa  (= σ_vM, uniaxial)")
+    println("---")
+    println("  FEM u_max     = " + str(fem_u_max)    + " m")
+    println("  FEM σ_vM_max  = " + str(fem_sigma_vm) + " Pa")
+    println("  parity diff u = " + str(diff_u     * 100.0) + " %  "
+            + "(gate 5 % — apples-to-apples)")
+    println("  parity diff σ = " + str(diff_sigma * 100.0) + " %  "
+            + "(gate 25 % — centroid-vs-base + vM-vs-axial)")
+
+    let mut pass_count = 0
+    let mut total_count = 0
+
+    // u_max: clean apples-to-apples — 5 % gate.
+    total_count = total_count + 1
+    if diff_u < 0.05 {
+        pass_count = pass_count + 1
+    }
+
+    // σ: not apples-to-apples (see header) — 25 % consistency gate.
+    total_count = total_count + 1
+    if diff_sigma < 0.25 {
+        pass_count = pass_count + 1
+    }
+
+    if pass_count == total_count {
+        println("__COMPONENT_ELAST_1D_STAGE2__ PASS ("
+                + str(pass_count) + "/" + str(total_count)
+                + ") — Stage 3 structural parity ✓ vs scikit-fem 12.0.1")
+    } else {
+        println("__COMPONENT_ELAST_1D_STAGE2__ FAIL ("
+                + str(pass_count) + "/" + str(total_count)
+                + ")")
+    }
+}

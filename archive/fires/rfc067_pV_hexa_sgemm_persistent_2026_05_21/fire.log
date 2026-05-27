@@ -1,0 +1,20 @@
+Device: NVIDIA GeForce RTX 5070 sm_120  SMs=48
+CUDA driver=13000 runtime=12000
+loaded hexa-PV PTX shape 256 (sgemm_persistent_256x256_grid)
+loaded hexa-PV PTX shape 384 (sgemm_persistent_384x384_grid)
+loaded hexa-PV PTX shape 512 (sgemm_persistent_512x512_grid)
+loaded hexa-PV PTX shape 768 (sgemm_persistent_768x768_grid)
+loaded hexa-PV PTX shape 1024 (sgemm_persistent_1024x1024_grid)
+loaded hexa-PV PTX shape 1536 (sgemm_persistent_1536x1536_grid)
+[M= 256] cuBLAS HGEMM             median=0.006736 ms  std=0.001168  min=0.004832  max=0.013920  TFLOPS=  4.9814
+[M= 256] hexa-PV V1 persistent    median=0.007232 ms  std=0.000747  min=0.006048  max=0.011872  TFLOPS=  4.6397  ratio=0.9314  maxabs=0.0000  maxrel=0.0000  grid=16/16 tiles(1/CTA)
+[M= 384] cuBLAS HGEMM             median=0.006752 ms  std=0.001170  min=0.006464  max=0.012896  TFLOPS= 16.7722
+[M= 384] hexa-PV V1 persistent    median=0.009136 ms  std=0.000700  min=0.008128  max=0.012768  TFLOPS= 12.3956  ratio=0.7391  maxabs=0.0000  maxrel=0.0000  grid=36/36 tiles(1/CTA)
+[M= 512] cuBLAS HGEMM             median=0.010848 ms  std=0.000417  min=0.010368  max=0.013056  TFLOPS= 24.7452
+[M= 512] hexa-PV V1 persistent    median=0.015904 ms  std=0.000639  min=0.014432  max=0.019008  TFLOPS= 16.8785  ratio=0.6821  maxabs=0.0000  maxrel=0.0000  grid=64/64 tiles(1/CTA)
+[M= 768] cuBLAS HGEMM             median=0.019040 ms  std=0.000493  min=0.017920  max=0.023008  TFLOPS= 47.5824
+[M= 768] hexa-PV V1 persistent    median=0.030976 ms  std=0.000659  min=0.029056  max=0.033408  TFLOPS= 29.2475  ratio=0.6147  maxabs=0.0000  maxrel=0.0000  grid=144/144 tiles(1/CTA)
+[M=1024] cuBLAS HGEMM             median=0.039488 ms  std=0.000445  min=0.037792  max=0.042432  TFLOPS= 54.3832
+[M=1024] hexa-PV V1 persistent    median=0.074016 ms  std=0.000581  min=0.072512  max=0.076320  TFLOPS= 29.0138  ratio=0.5335  maxabs=0.0000  maxrel=0.0000  grid=256/256 tiles(1/CTA)
+[M=1536] cuBLAS HGEMM             median=0.108864 ms  std=0.000931  min=0.106784  max=0.110176  TFLOPS= 66.5763
+[M=1536] hexa-PV V1 persistent    median=0.201776 ms  std=0.000684  min=0.200640  max=0.203296  TFLOPS= 35.9198  ratio=0.5395  maxabs=0.0000  maxrel=0.0000  grid=384/576 tiles(2/CTA)

@@ -1,0 +1,42 @@
+// HEXA Native Compiler — Wave 1 absorption: completion criterion static index
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+//   pub fn completion_criterion() -> CompletionCriterion
+//   pub fn breakthrough_threshold() -> i64
+//   pub fn is_forbidden(token: string) -> bool
+//   pub fn is_allowed(token: string) -> bool
+
+use "compiler/completion_criterion/embed"
+use "compiler/completion_criterion/embedded.gen"
+
+pub fn completion_criterion() -> CompletionCriterion {
+    return COMPLETION_CRITERION
+}
+
+pub fn breakthrough_threshold() -> i64 {
+    return COMPLETION_CRITERION.breakthrough_threshold
+}
+
+pub fn is_forbidden(token: string) -> bool {
+    let arr = COMPLETION_CRITERION.forbidden
+    let n = len(arr)
+    let mut i = 0
+    while i < n {
+        if arr[i] == token { return true }
+        i = i + 1
+    }
+    return false
+}
+
+pub fn is_allowed(token: string) -> bool {
+    let arr = COMPLETION_CRITERION.allowed
+    let n = len(arr)
+    let mut i = 0
+    while i < n {
+        if arr[i] == token { return true }
+        i = i + 1
+    }
+    return false
+}

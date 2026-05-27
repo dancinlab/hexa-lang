@@ -1,0 +1,132 @@
+// compiler/atlas/symbolic/pascal_perfect.hexa — Pascal triangle / perfect-number
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Hexa-native port of pascal_perfect.py from archive-TECS-L/.shared/calc
+// (commit 4ee05c39; TECS-L absorption Wave 3 — manifest §Backlog #11).
+//
+// Closed-form / verdict-gating kernels (no plotting / no random texas):
+//   binomial C(n,k)                  multiplicative descent
+//   pascal_row(n)                    [C(n,0)..C(n,n)]
+//   row_sum(n)  = Σ C(n,k) = 2ⁿ      (binomial theorem)
+//   alt_sum(n)  = Σ (−1)ᵏ C(n,k) = 0  for n ≥ 1
+//   hockey_stick : Σ_{i=r}^{n} C(i,r) = C(n+1, r+1)   (identity)
+//   perfect_is_triangular : every even perfect number
+//        P = 2^{p−1}(2^p−1) = C(2^p, 2) = T(2^p−1)   (closed-form proof)
+//   row6_entropy_bits : Shannon entropy of B(6,½) = row-6/64
+//        — REAL limit anchor (Shannon entropy, LATTICE_POLICY §1.2 / g3)
+//
+// n=6 ties: row 6 = [1,6,15,20,15,6,1], Σ=64=2⁶, C(6,2)=15=2^τ(6)−1,
+// P1=6=C(4,2)=C(2², 2) with Mersenne exponent p=2.
+//
+// Zero external dependency (g5). Cross-link: manifest §C / §Backlog #11.
+
+pub fn pp_binomial(n: int, k: int) -> int {
+    if k < 0 || k > n { return 0 }
+    let mut kk = k
+    if kk > n - kk { kk = n - kk }
+    let mut num = 1
+    let mut den = 1
+    let mut i = 0
+    while i < kk {
+        num = num * (n - i)
+        den = den * (i + 1)
+        i = i + 1
+    }
+    return num / den
+}
+
+pub fn pp_pascal_row(n: int) -> [int] {
+    let mut row: [int] = []
+    let mut k = 0
+    while k <= n {
+        row.push(pp_binomial(n, k))
+        k = k + 1
+    }
+    return row
+}
+
+// Σ_k C(n,k) = 2ⁿ
+pub fn pp_row_sum(n: int) -> int {
+    let r = pp_pascal_row(n)
+    let mut s = 0
+    let mut i = 0
+    while i < len(r) {
+        s = s + r[i]
+        i = i + 1
+    }
+    return s
+}
+pub fn pp_pow2(n: int) -> int {
+    let mut r = 1
+    let mut i = 0
+    while i < n {
+        r = r * 2
+        i = i + 1
+    }
+    return r
+}
+pub fn pp_row_sum_is_pow2(n: int) -> bool {
+    return pp_row_sum(n) == pp_pow2(n)
+}
+
+// Σ_k (−1)ᵏ C(n,k) = 0 for n ≥ 1, = 1 for n = 0
+pub fn pp_alt_sum(n: int) -> int {
+    let r = pp_pascal_row(n)
+    let mut s = 0
+    let mut i = 0
+    while i < len(r) {
+        let mut sign = 1
+        if i % 2 != 0 { sign = -1 }
+        s = s + sign * r[i]
+        i = i + 1
+    }
+    return s
+}
+
+// hockey-stick : Σ_{i=r}^{n} C(i,r) = C(n+1, r+1)
+pub fn pp_hockey_stick_lhs(n: int, r: int) -> int {
+    let mut s = 0
+    let mut i = r
+    while i <= n {
+        s = s + pp_binomial(i, r)
+        i = i + 1
+    }
+    return s
+}
+pub fn pp_hockey_stick_holds(n: int, r: int) -> bool {
+    return pp_hockey_stick_lhs(n, r) == pp_binomial(n + 1, r + 1)
+}
+
+// every even perfect number P = 2^{p−1}(2^p−1) equals C(2^p, 2) = T(2^p−1).
+pub fn pp_even_perfect(p: int) -> int {
+    let mp = pp_pow2(p) - 1                 // Mersenne candidate 2^p − 1
+    return pp_pow2(p - 1) * mp
+}
+pub fn pp_perfect_is_triangular(p: int) -> bool {
+    let perfect = pp_even_perfect(p)
+    let twop = pp_pow2(p)
+    // C(2^p, 2) and triangular T(2^p−1) = (2^p−1)·2^p/2
+    return perfect == pp_binomial(twop, 2)
+        && perfect == ((twop - 1) * twop) / 2
+}
+
+// Shannon entropy (bits) of binomial B(n, ½) row distribution.
+// REAL-limit anchor (Shannon entropy) — g3 verification-anchor-real-limit.
+pub fn pp_row_entropy_bits(n: int) -> float {
+    let r = pp_pascal_row(n)
+    let total = to_float(pp_pow2(n))
+    let mut h = 0.0
+    let mut i = 0
+    while i < len(r) {
+        let c = to_float(r[i])
+        if c > 0.0 {
+            let pk = c / total
+            // log2(pk) = ln(pk)/ln(2)
+            h = h - pk * (ln(pk) / ln(2.0))
+        }
+        i = i + 1
+    }
+    return h
+}

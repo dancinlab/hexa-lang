@@ -1,0 +1,94 @@
+// stdlib/info/transfer_entropy_test — self-test for transfer_entropy proxy.
+//
+// Oracles (3):
+//   1. independent streams      → TE_fwd ≈ TE_bwd (no asymmetry)
+//   2. lagged driver-driven     → TE_fwd ≫ TE_bwd (causal asymmetry)
+//   3. length < 2               → TE = 0
+//
+// Self-contained (no cross-stdlib import beyond the unit under test).
+
+import "stdlib/info/transfer_entropy.hexa"
+
+fn _fabs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+
+// LCG for deterministic [0,1) noise (Numerical Recipes constants).
+fn _lcg(seed: int, n: int) -> array {
+    let a = 1103515245
+    let c = 12345
+    let m = 2147483648
+    let mut s = seed
+    let mut out = []
+    let mut i = 0
+    while i < n {
+        s = (a * s + c) % m
+        if s < 0 { s = s + m }
+        out = append(out, (s + 0.0) / (m + 0.0))
+        i = i + 1
+    }
+    return out
+}
+
+fn main() {
+    let mut fails = 0
+
+    // 1. empty + length-1 → 0
+    let zero1 = transfer_entropy([], [], 8)
+    if zero1 == 0.0 {
+        println("PASS empty TE=0")
+    } else {
+        println("FAIL empty TE=" + to_string(zero1))
+        fails = fails + 1
+    }
+    let zero2 = transfer_entropy([0.5], [0.5], 8)
+    if zero2 == 0.0 {
+        println("PASS length-1 TE=0")
+    } else {
+        println("FAIL length-1 TE=" + to_string(zero2))
+        fails = fails + 1
+    }
+
+    // 2. Independent streams → low MI both directions (≈ symmetric noise floor).
+    let drv_a = _lcg(42, 300)
+    let drv_b = _lcg(99, 300)
+    let te_indep_fwd = transfer_entropy(drv_a, drv_b, 8)
+    let te_indep_bwd = transfer_entropy(drv_b, drv_a, 8)
+    let indep_asym = _fabs(te_indep_fwd - te_indep_bwd)
+    if indep_asym < 0.3 {
+        println("PASS independent symmetric: fwd=" + to_string(te_indep_fwd) + " bwd=" + to_string(te_indep_bwd) + " |Δ|=" + to_string(indep_asym))
+    } else {
+        println("FAIL independent symmetric |Δ|=" + to_string(indep_asym))
+        fails = fails + 1
+    }
+
+    // 3. Lagged driver: driven[t+1] = 0.7·drv_a[t] + 0.3·noise[t+1].
+    let noise = _lcg(7, 300)
+    let mut driven = [0.5]
+    let mut t = 0
+    while t < 299 {
+        driven = append(driven, 0.7 * drv_a[t] + 0.3 * noise[t + 1])
+        t = t + 1
+    }
+    let te_fwd = transfer_entropy(drv_a, driven, 8)     // driver_t → driven_{t+1}: HIGH
+    let te_bwd = transfer_entropy(driven, drv_a, 8)     // driven_t → driver_{t+1}: ≈ 0
+    if te_fwd > te_bwd {
+        println("PASS causal asymmetry: fwd=" + to_string(te_fwd) + " > bwd=" + to_string(te_bwd))
+    } else {
+        println("FAIL causal asymmetry: fwd=" + to_string(te_fwd) + " ≤ bwd=" + to_string(te_bwd))
+        fails = fails + 1
+    }
+
+    let causal_asym_ratio = (te_fwd - te_bwd) / (te_fwd + te_bwd + 1.0e-12)
+    if causal_asym_ratio > 0.3 {
+        println("PASS asymmetry-ratio (fwd-bwd)/(fwd+bwd)=" + to_string(causal_asym_ratio) + " > 0.3")
+    } else {
+        println("FAIL asymmetry-ratio " + to_string(causal_asym_ratio) + " ≤ 0.3")
+        fails = fails + 1
+    }
+
+    if fails == 0 {
+        println("ALL PASS — stdlib/info/transfer_entropy")
+    } else {
+        println("FAILURES: " + to_string(fails))
+        exit(1)
+    }
+}

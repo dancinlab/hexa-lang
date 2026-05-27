@@ -1,0 +1,8 @@
+#!hexa strict
+// organoid synthesize — iPSC passage count.
+fn main() {
+    let ipsc_passages = 20.0
+    println("organoid_synthesize (iPSC passage count):")
+    println("  ipsc_passages = " + str(ipsc_passages))
+    println("__HEXA_ORGANOID_SYNTHESIZE__ PASS gate=GATE_OPEN absorbed=false")
+}

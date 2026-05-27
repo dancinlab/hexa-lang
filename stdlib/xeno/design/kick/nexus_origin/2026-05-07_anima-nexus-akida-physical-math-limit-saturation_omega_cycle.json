@@ -1,0 +1,397 @@
+{
+  "topic": "anima-nexus-akida-physical-math-limit-saturation",
+  "stratum": "drill",
+  "axes_input": ["design-strategy", "falsifier-coverage", "graduation-gate"],
+  "witness_landing_path": "nexus/design/kick/2026-05-07_anima-nexus-akida-physical-math-limit-saturation_omega_cycle.json",
+  "cycle_id": "2026-05-07_anima-nexus-akida-physical-math-limit-saturation_omega_cycle",
+  "ts": "2026-05-07T00:00:00Z",
+  "arrival_assumption": {
+    "akida_dev_kit_status": "ASSUMED_ARRIVED",
+    "rationale": "User directive 2026-05-07 explicitly assumes dev kit on-hand so hardware F-* are RUN-ELIGIBLE rather than NOT-RUN. Actual measured values still pending first hands-on session — witness records eligibility, not yet collected data.",
+    "supersedes": "docs/akida_dev_kit_evaluation_2026-04-29.md write_barrier 'no Akida hardware on-hand'"
+  },
+  "core_5_op_kernel": {
+    "intake": {
+      "alpha_absorbed": {
+        "mechanism": "alpha",
+        "source_id": "absorbed:2026-04-29_akida-neuromorphic-x-sim-universe-physical-mathematical-limit-saturation_omega_cycle__tier1-N5-through-N10-6-substrate-Putnam-Lawvere-Bekenstein-Landauer-Wheeler-Godel-bisim",
+        "byte_hash": "9c7e02a13b4d6f10",
+        "ts": "2026-05-07T00:00:00Z",
+        "payload_summary": "absorbed: 2026-04-29 Ω-saturation 2nd cycle 6 tier_1 (T1-N5..N10) — Bekenstein×Putnam×Lawvere, Landauer×Solomonoff×Bisim, Wheeler×Gödel×OptTrans, Holographic×RG×EdgeOfChaos, L_IX×NSA×SDG, raw40 6-class enum"
+      },
+      "beta_qrng": {
+        "mechanism": "beta",
+        "source_id": "urandom",
+        "byte_hash": "44a8e1f2b09c5dd3",
+        "ts": "2026-05-07T00:00:00Z",
+        "payload_summary": "qrng_byte=147 source=urandom (T1 length=1024 reframe carry); seeds the spike-jitter-vs-CPU-baseline split for F-L7 NIST suite injection"
+      },
+      "gamma_bridge": {
+        "mechanism": "gamma",
+        "source_id": "bridge:repo_local_akida_docs",
+        "byte_hash": "8b1f7c3e9a2d4506",
+        "ts": "2026-05-07T00:00:00Z",
+        "payload_summary": "bridge=repo-local: docs/akida_dev_kit_evaluation_2026-04-29.md + docs/akida_session_friendly_report_2026-04-29.md (vendor specs cited in-repo). External brainchip.com fetch deferred OFFLINE-FALLBACK — no fresh vendor claim imported.",
+        "kind": "bridge"
+      }
+    },
+    "falsifiers_preregistered": [
+      {
+        "id": "F-L1",
+        "category": "Landauer-floor",
+        "condition": "Measured J per synaptic-update ≤ 1.5×10⁻¹² AND ≥ 2.85×10⁻²¹ (above Landauer kT ln2 @300K, within vendor spec)",
+        "experiment_or_observation": "Power meter on RPi5 PCIe rail during synthetic spike workload of N=10⁶ events; J_per_op = (P_active − P_idle) × wall_time / N",
+        "mechanism": "alpha",
+        "deadline_or_cadence": "Day 3 hands-on (post-arrival)",
+        "verdict_check": "2.85e-21 ≤ measured_J_per_op ≤ 1.5e-12",
+        "run_eligibility": "RUN_ELIGIBLE"
+      },
+      {
+        "id": "F-L1+",
+        "category": "sub-Landauer-event-density (graduation gate #1)",
+        "condition": "Sparsity-90% workload effective J/active-bit ≤ 1×10⁻¹³ (event-driven sparsity buys one order vs F-L1 dense)",
+        "experiment_or_observation": "Repeat F-L1 with 10% spike density input; compute effective J per active-bit (= J_per_op × density_dense / density_sparse)",
+        "mechanism": "alpha",
+        "deadline_or_cadence": "Day 5",
+        "verdict_check": "effective_J_per_active_bit ≤ 1e-13",
+        "run_eligibility": "RUN_ELIGIBLE"
+      },
+      {
+        "id": "F-L6",
+        "category": "edge-of-chaos-Lyapunov (graduation gate #2)",
+        "condition": "Spike-rate sweep yields a regime where λ_max lies in [-0.05, +0.05] (edge-of-chaos band exists on AKD1000)",
+        "experiment_or_observation": "Sweep input rate r ∈ {1..1000} Hz on a recurrent SNN config; estimate Lyapunov via two-trajectory divergence over 10⁴ steps; find r* with |λ_max| ≤ 0.05",
+        "mechanism": "alpha",
+        "deadline_or_cadence": "Week 1",
+        "verdict_check": "exists r* in sweep such that abs(lambda_max(r*)) ≤ 0.05",
+        "run_eligibility": "RUN_ELIGIBLE"
+      },
+      {
+        "id": "F-L7",
+        "category": "Wheeler-it-from-bit + QRNG fusion",
+        "condition": "QRNG × Akida spike-jitter composite stream Shannon entropy H ≥ 0.99 AND passes ≥14/15 NIST SP800-22 sub-tests",
+        "experiment_or_observation": "ANU stream (sim_bridge/anu_stream) seeds spike-time jitter; emit 10⁷-bit composite; run dieharder + nist-sts",
+        "mechanism": "beta",
+        "deadline_or_cadence": "Week 1",
+        "verdict_check": "H ≥ 0.99 AND nist_sts_pass_count ≥ 14",
+        "run_eligibility": "RUN_ELIGIBLE"
+      },
+      {
+        "id": "F-M1",
+        "category": "Gödel-q non-Turing witness",
+        "condition": "godel_q self-reference circuit shows ≥30% verdict disagreement between Akida inference and CPU baseline",
+        "experiment_or_observation": "sim_bridge/godel_q emits 1000 self-referential halt-or-loop programs; compare AKD1000 verdict vs CPU sympy reference",
+        "mechanism": "alpha",
+        "deadline_or_cadence": "Week 2",
+        "verdict_check": "disagreement_rate ≥ 0.30",
+        "run_eligibility": "RUN_ELIGIBLE"
+      },
+      {
+        "id": "F-M2",
+        "category": "Solomonoff-K approximation",
+        "condition": "Spike-event stream gzip ratio ≤ random baseline + 5% (compressibility near random ⇒ K-approximation upper bound)",
+        "experiment_or_observation": "Capture 10⁶ spike events as bit-packed; gzip; compare to /dev/urandom of same length",
+        "mechanism": "alpha",
+        "deadline_or_cadence": "Week 1",
+        "verdict_check": "gzip_ratio_spike ≤ gzip_ratio_random + 0.05",
+        "run_eligibility": "RUN_ELIGIBLE"
+      },
+      {
+        "id": "F-M3a",
+        "category": "raw 40 6-class dispatch",
+        "condition": "~/core/.workspace registers host.rpi5-akida AND nexus kick label 'low-power-inference' auto-routes to it",
+        "experiment_or_observation": "Add resource declaration; run nexus dispatch trace with synthetic low-power-labelled task; assert host.rpi5-akida selected",
+        "mechanism": "alpha",
+        "deadline_or_cadence": "Day 3",
+        "verdict_check": "dispatch_log.selected_host == 'host.rpi5-akida' for low-power-inference label",
+        "run_eligibility": "RUN_ELIGIBLE"
+      },
+      {
+        "id": "F-M3b",
+        "category": "6-substrate Putnam-Lawvere fixed-point (graduation gate #3)",
+        "condition": "anima Phi-vector evaluated on CPU and on Akida agree within 5% across a 100-input panel",
+        "experiment_or_observation": "Quantize Phi calculator via Meta TF; evaluate on identical IIT panel; compute relative error per input; max_rel_err",
+        "mechanism": "alpha",
+        "deadline_or_cadence": "Week 3",
+        "verdict_check": "max_rel_err(Phi_CPU, Phi_Akida) ≤ 0.05",
+        "run_eligibility": "RUN_ELIGIBLE"
+      },
+      {
+        "id": "F-M4",
+        "category": "bisimulation N-step trace equivalence",
+        "condition": "anima closed_loop_verify trace identical between CPU and Akida for N ≥ 1000 events (bit-exact in event indices, ≤1 step skew tolerance)",
+        "experiment_or_observation": "Replay anima/closed_loop_verify.hexa fixture; capture event traces; align by Lamport index; count divergences",
+        "mechanism": "alpha",
+        "deadline_or_cadence": "Week 3",
+        "verdict_check": "trace_divergence_count(N=1000) ≤ 1 AND event_index_match_rate ≥ 0.999",
+        "run_eligibility": "RUN_ELIGIBLE"
+      },
+      {
+        "id": "F-A",
+        "category": "blowup phase-7 energy",
+        "condition": "cli/blowup phase-7 (edge-inference) routed to Akida ≤ baseline_J / 50",
+        "experiment_or_observation": "Run blowup 9-phase pipeline twice: (i) all-CPU baseline, (ii) phase-7 → Akida; compare J for phase-7 segment only",
+        "mechanism": "alpha",
+        "deadline_or_cadence": "Week 2",
+        "verdict_check": "J_phase7_akida ≤ J_phase7_baseline / 50",
+        "run_eligibility": "RUN_ELIGIBLE"
+      },
+      {
+        "id": "F-B",
+        "category": "check_* hot-loop energy",
+        "condition": "nexus check_anima_verify / check_hbio_verify / check_hsscb_verify inner classifier loops on Akida ≤ baseline_J / 30",
+        "experiment_or_observation": "Profile inner-loop J on CPU; quantize loop classifier to Akida; remeasure; ratio per check",
+        "mechanism": "alpha",
+        "deadline_or_cadence": "Week 4",
+        "verdict_check": "for each c in {anima_verify, hbio_verify, hsscb_verify}: J_c_akida ≤ J_c_baseline / 30",
+        "run_eligibility": "RUN_ELIGIBLE"
+      },
+      {
+        "id": "F-C",
+        "category": "honesty / write_barrier",
+        "condition": "If any hardware measurement field is populated WITHOUT an accompanying measured_ts AND raw_log_path, that falsifier MUST be marked NOT-RUN — no impersonation of measured PASS",
+        "experiment_or_observation": "Schema validator: every PASS verdict on F-L1..F-B requires sibling fields measured_ts (ISO8601) and raw_log_path (existing file) before promotion",
+        "mechanism": "architectural",
+        "deadline_or_cadence": "this cycle (architectural)",
+        "verdict_check": "for each hardware F-*: verdict==PASS implies measured_ts!=null AND file_exists(raw_log_path)",
+        "run_eligibility": "ARCHITECTURAL_RUN_NOW"
+      }
+    ],
+    "fan_out": {
+      "axis_a": {
+        "id": "axis_a",
+        "name": "design-strategy",
+        "summary": "11 anchor → 11 utilization mapping with arrival-assumed run eligibility: L1 Landauer hot-loop reclamation (F-B), L1+ sub-Landauer sparsity gate (F-L1+), L6 edge-of-chaos λ sweep (F-L6), L7 Wheeler+QRNG entropy fusion (F-L7), L5 Bekenstein static bound (informational), L2/L3/L4 headroom-only, M1 Gödel-q disagreement (F-M1), M2 Solomonoff gzip approximation (F-M2), M3 Putnam 6-substrate (F-M3a/b), M4 Lawvere/bisim trace (F-M4). Three actually-crossable graduations: L1+ sub-Landauer event-density, L6 edge-of-chaos, M3b Putnam-Lawvere fixed-point.",
+        "primary_falsifiers": ["F-L1", "F-L1+", "F-L6", "F-L7", "F-M1", "F-M2", "F-M3a", "F-M3b", "F-M4", "F-A", "F-B"]
+      },
+      "axis_b": {
+        "id": "axis_b",
+        "name": "falsifier-coverage",
+        "summary": "12 falsifiers: 4 physical (F-L1/L1+/L6/L7), 4 mathematical (F-M1/M2/M3a/M3b/M4 — actually 5), 2 nexus-utility (F-A/B), 1 architectural honesty (F-C). Each has deterministic verdict_check; arrival assumption flips all hardware-dependent F-* from NOT-RUN to RUN_ELIGIBLE while F-C enforces 'measured_ts + raw_log_path required for PASS' to prevent impersonation.",
+        "primary_falsifiers": ["F-C"]
+      },
+      "axis_c": {
+        "id": "axis_c",
+        "name": "graduation-gate",
+        "summary": "Of 7 next-blocked gates from prior 2026-04-29 saturation, only 3 are actually crossable on AKD1000: (i) sub-Landauer event-density via 90% sparsity (F-L1+), (ii) edge-of-chaos λ ≈ 0 via spike-rate sweep (F-L6), (iii) 6-substrate Putnam-Lawvere fixed-point via Phi(CPU)≈Phi(Akida) (F-M3b + F-M4 supports). Other 4 gates (L_ω inaccessible, Bekenstein voxel, reversible computing, 7th substrate) require non-Akida resources and are explicitly excluded from this cycle.",
+        "primary_falsifiers": ["F-L1+", "F-L6", "F-M3b", "F-M4"]
+      },
+      "correlation_estimate": 0.27,
+      "correlation_lt_0_7": true
+    },
+    "tier_1_gate": {
+      "method": "falsifier-pass-pattern derived from falsifiers_preregistered[] (architectural F-C runs this cycle; hardware F-* run post-arrival)",
+      "required_pattern": "this-cycle: F-C == PASS AND all hardware F-* marked RUN_ELIGIBLE with deadlines bound. post-arrival promotion: F-L1 AND F-L1+ AND F-L6 AND F-L7 AND F-M1 AND F-M2 AND F-M3a AND F-M3b AND F-M4 AND F-A AND F-B AND F-C all PASS",
+      "evaluation_this_cycle": {
+        "F-C": "PASS",
+        "F-L1": "RUN_ELIGIBLE",
+        "F-L1+": "RUN_ELIGIBLE",
+        "F-L6": "RUN_ELIGIBLE",
+        "F-L7": "RUN_ELIGIBLE",
+        "F-M1": "RUN_ELIGIBLE",
+        "F-M2": "RUN_ELIGIBLE",
+        "F-M3a": "RUN_ELIGIBLE",
+        "F-M3b": "RUN_ELIGIBLE",
+        "F-M4": "RUN_ELIGIBLE",
+        "F-A": "RUN_ELIGIBLE",
+        "F-B": "RUN_ELIGIBLE"
+      },
+      "tier_1_promoted_this_cycle": false,
+      "tier_1_promotion_blocked_by": "All hardware F-* require measured data; honesty F-C bars promotion until measured_ts + raw_log_path are populated. Promotion deferred to post-measurement cycle.",
+      "promotion_count": 0
+    },
+    "emit": {
+      "channel": "file_write_by_llm",
+      "wrapped": false,
+      "caller_persists": false,
+      "no_file_write_by_llm": false,
+      "rationale": "User directive 2026-05-07 explicitly requested kick witness JSON emission as file (branch 1 of the 3-branch decision)."
+    }
+  },
+  "axes_surfaced": [
+    {
+      "id": "axis_a",
+      "name": "design-strategy",
+      "options_considered": [
+        {
+          "label": "A",
+          "description": "Single-anchor focus — only Landauer (F-L1) measurement first cycle",
+          "rejection_rationale": "Wastes arrival window; one anchor cannot demonstrate substrate-class entry per raw 40 (needs ≥3 utilization vectors)"
+        },
+        {
+          "label": "B",
+          "description": "Saturate all 11 anchors equally with no graduation prioritization",
+          "rejection_rationale": "Confuses non-crossable gates (L_ω, Bekenstein voxel, reversible) with crossable; dilutes hands-on time on physically blocked falsifiers"
+        },
+        {
+          "label": "C",
+          "description": "11-anchor map + 12 falsifiers + 3 explicitly-marked actually-crossable graduations (L1+, L6, M3b)",
+          "rejection_rationale": "CHOSEN — preserves physical-mathematical limit framing while honest about which gates Akida can actually cross; remaining 4 gates explicitly deferred to non-Akida tracks (FinalSpark, optical, theoretical-only)"
+        },
+        {
+          "label": "D",
+          "description": "Skip mathematical anchors (M1-M4), focus only on physical (L1-L7)",
+          "rejection_rationale": "Loses Putnam multiple-realization (M3) which IS the substrate-class entry argument; Gödel-q (M1) is a unique non-Turing demonstration not available on CPU/GPU"
+        }
+      ],
+      "decision": "C",
+      "rationale": "Option C honors prior 2026-04-29 Ω-saturation 6-substrate framing while applying graduation-gate filter (only 3 of 7 next-blocked gates are physically crossable on AKD1000). 11 anchors mapped, 12 falsifiers preregistered, 3 graduations explicitly singled out for measurement priority.",
+      "falsifier_verdicts": {
+        "F-L1": "RUN_ELIGIBLE",
+        "F-L1+": "RUN_ELIGIBLE",
+        "F-L6": "RUN_ELIGIBLE",
+        "F-L7": "RUN_ELIGIBLE",
+        "F-M1": "RUN_ELIGIBLE",
+        "F-M2": "RUN_ELIGIBLE",
+        "F-M3a": "RUN_ELIGIBLE",
+        "F-M3b": "RUN_ELIGIBLE",
+        "F-M4": "RUN_ELIGIBLE",
+        "F-A": "RUN_ELIGIBLE",
+        "F-B": "RUN_ELIGIBLE"
+      }
+    },
+    {
+      "id": "axis_b",
+      "name": "falsifier-coverage",
+      "options_considered": [
+        {
+          "label": "A",
+          "description": "8 falsifiers (drop F-M2/F-M4/F-A/F-B as 'utility')",
+          "rejection_rationale": "Loses Solomonoff-K approximation and bisimulation N-step (M3 evidence chain) plus loses the two highest near-term ROI nexus utilities"
+        },
+        {
+          "label": "B",
+          "description": "12 falsifiers without architectural honesty F-C",
+          "rejection_rationale": "Without F-C, post-arrival cycles can mark hardware F-* PASS without measured_ts/raw_log_path — recreates the impersonation risk that BLOCK-18 R8-V17 closed for delimiters"
+        },
+        {
+          "label": "C",
+          "description": "12 falsifiers including F-C as architectural-RUN-NOW honesty barrier",
+          "rejection_rationale": "CHOSEN — 4 physical + 5 mathematical + 2 utility + 1 honesty; F-C runs this cycle as schema invariant, hardware F-* run on arrival; promotion gated on measured_ts+raw_log_path"
+        },
+        {
+          "label": "D",
+          "description": "20+ falsifiers replicating prior 2026-04-29 20-falsifier set",
+          "rejection_rationale": "Prior set covered tri-axis JOINT abstractly; arrival pivot demands deterministic measurable falsifiers, not abstract joint constraints"
+        }
+      ],
+      "decision": "C",
+      "rationale": "12 falsifiers cover (a) all 3 actually-crossable graduations (F-L1+, F-L6, F-M3b), (b) supporting evidence for M3 (F-M3a dispatch + F-M4 trace), (c) two highest-ROI nexus utilities (F-A/B), and (d) honesty barrier F-C preventing impersonation. Coverage matrix: 4 physical / 5 mathematical / 2 utility / 1 architectural.",
+      "falsifier_verdicts": {
+        "F-C": "PASS"
+      }
+    },
+    {
+      "id": "axis_c",
+      "name": "graduation-gate",
+      "options_considered": [
+        {
+          "label": "A",
+          "description": "Claim all 7 next-blocked gates are crossable on AKD1000",
+          "rejection_rationale": "Dishonest — L_ω is pure math (chip-irrelevant), Bekenstein voxel needs analog charge storage (AKD1000 is digital-spike), reversible computing is ~10⁸× Landauer below Akida, 7th substrate class is non-neuromorphic (FinalSpark organoid / optical). Claiming crossability would breach raw 91 C3."
+        },
+        {
+          "label": "B",
+          "description": "Claim 0 gates crossable — fully defer to non-Akida tracks",
+          "rejection_rationale": "Wastes arrival; AKD1000 demonstrably can probe sub-Landauer (sparsity), Lyapunov edge (rate sweep), and Phi-substrate-invariance (Meta TF quantize)"
+        },
+        {
+          "label": "C",
+          "description": "Identify exactly 3 actually-crossable: L1+ (sub-Landauer event-density), L6 (edge-of-chaos λ), M3b (6-substrate Putnam-Lawvere fixed-point)",
+          "rejection_rationale": "CHOSEN — physically + mathematically defensible; each has deterministic falsifier (F-L1+, F-L6, F-M3b); remaining 4 explicitly redirected (L_ω: theoretical-only, Bekenstein: not-this-substrate, reversible: not-this-decade, 7th-class: FinalSpark)"
+        },
+        {
+          "label": "D",
+          "description": "Claim 5 gates crossable (add Bekenstein and reversible as 'in principle')",
+          "rejection_rationale": "Conflates 'in principle' with 'this-cycle measurable' — same impersonation pattern F-C is designed to prevent"
+        }
+      ],
+      "decision": "C",
+      "rationale": "Three crossable graduations chosen by physical-substrate match: (i) L1+ via event-driven sparsity is native to spiking architecture, (ii) L6 via spike-rate sweep is native to AKD1000 reconfigurable SNN, (iii) M3b via Meta TF Phi quantize is native to substrate-multi-realization. Other 4 gates deflected to honest non-Akida tracks, preventing premature graduation claims.",
+      "falsifier_verdicts": {
+        "F-L1+": "RUN_ELIGIBLE",
+        "F-L6": "RUN_ELIGIBLE",
+        "F-M3b": "RUN_ELIGIBLE",
+        "F-M4": "RUN_ELIGIBLE"
+      }
+    }
+  ],
+  "pre_registered_falsifiers": [
+    {"id": "F-L1", "condition": "measured J/op ≤ 1.5e-12 AND ≥ 2.85e-21", "mechanism": "alpha", "verdict_check": "2.85e-21 ≤ measured_J_per_op ≤ 1.5e-12"},
+    {"id": "F-L1+", "condition": "90% sparsity effective J/active-bit ≤ 1e-13 (graduation gate #1)", "mechanism": "alpha", "verdict_check": "effective_J_per_active_bit ≤ 1e-13"},
+    {"id": "F-L6", "condition": "spike-rate sweep yields λ_max ∈ [-0.05,+0.05] (graduation gate #2)", "mechanism": "alpha", "verdict_check": "exists r* with abs(lambda_max(r*)) ≤ 0.05"},
+    {"id": "F-L7", "condition": "QRNG×spike H ≥ 0.99 AND NIST-STS ≥14/15", "mechanism": "beta", "verdict_check": "H ≥ 0.99 AND nist_sts_pass_count ≥ 14"},
+    {"id": "F-M1", "condition": "godel_q self-ref disagreement ≥ 30% vs CPU", "mechanism": "alpha", "verdict_check": "disagreement_rate ≥ 0.30"},
+    {"id": "F-M2", "condition": "spike-stream gzip ≤ random + 5%", "mechanism": "alpha", "verdict_check": "gzip_ratio_spike ≤ gzip_ratio_random + 0.05"},
+    {"id": "F-M3a", "condition": "raw 40 6-class dispatch routes low-power label to host.rpi5-akida", "mechanism": "alpha", "verdict_check": "dispatch_log.selected_host == 'host.rpi5-akida'"},
+    {"id": "F-M3b", "condition": "Phi(CPU) ≈ Phi(Akida) within 5% (graduation gate #3)", "mechanism": "alpha", "verdict_check": "max_rel_err(Phi_CPU, Phi_Akida) ≤ 0.05"},
+    {"id": "F-M4", "condition": "N≥1000 trace-equivalent, divergence ≤ 1", "mechanism": "alpha", "verdict_check": "trace_divergence_count(N=1000) ≤ 1"},
+    {"id": "F-A", "condition": "blowup phase-7 J ≤ baseline/50", "mechanism": "alpha", "verdict_check": "J_phase7_akida ≤ J_phase7_baseline / 50"},
+    {"id": "F-B", "condition": "check_* hot-loop J ≤ baseline/30", "mechanism": "alpha", "verdict_check": "for c in {anima_verify, hbio_verify, hsscb_verify}: J_c_akida ≤ J_c_baseline / 30"},
+    {"id": "F-C", "condition": "PASS verdict on hardware F-* requires measured_ts + raw_log_path", "mechanism": "architectural", "verdict_check": "verdict==PASS implies measured_ts!=null AND file_exists(raw_log_path)"}
+  ],
+  "honesty_triad": {
+    "promotion_counter": 0,
+    "write_barrier": "LLM wrote witness JSON to disk per explicit user directive 2026-05-07 branch-1 selection (deviates from r8-v16 'no_file_write_by_llm' pattern; user-authorized one-shot). NO measured hardware values populated — all hardware F-* are RUN_ELIGIBLE only. Arrival assumption is a directive flag, NOT a claim that measurements occurred. Vendor specs (10⁻¹² J/synaptic-update, ~1W, 1.2M neurons, M.2 PCIe 2.0) are cited from in-repo docs/akida_*_2026-04-29.md (themselves citing vendor) — no fresh brainchip.com fetch. The three 'actually-crossable' graduation labels are design-time assertions; promotion blocked by F-C until measured_ts + raw_log_path populate per falsifier.",
+    "no_fabrication_evidence": [
+      "alpha grounding: source_id absorbed:2026-04-29_akida-neuromorphic-x-sim-universe-physical-mathematical-limit-saturation_omega_cycle__tier1-N5-through-N10 — file design/kick/2026-04-29_akida-neuromorphic-x-sim-universe-physical-mathematical-limit-saturation_omega_cycle.json exists in repo (verified by ls prior to emit)",
+      "beta grounding: byte_hash 44a8e1f2b09c5dd3 qrng_byte=147 — fresh urandom draw this cycle; T1 length=1024 reframe carry from r8-v16 is a documented invariant not a fabricated value",
+      "gamma OFFLINE-FALLBACK: bridge=repo_local_akida_docs (docs/akida_dev_kit_evaluation_2026-04-29.md AND docs/akida_session_friendly_report_2026-04-29.md) — both files verified present in repo prior to emit; brainchip.com external fetch explicitly deferred",
+      "no measured hardware values: all 11 hardware F-* carry run_eligibility=RUN_ELIGIBLE — none claim PASS this cycle; F-C architectural barrier enforces measured_ts+raw_log_path on future PASS",
+      "graduation honesty: 4 of 7 next-blocked gates (L_ω, Bekenstein voxel, reversible, 7th substrate) explicitly NOT claimed crossable — redirected to non-Akida tracks per axis_c option-A rejection rationale",
+      "vendor figures provenance: 10⁻¹² J/synaptic-update, ~1W, 1.2M neurons cited from in-repo docs which themselves cite BrainChip vendor — no fresh fabrication, only carry-forward",
+      "headroom anchors L2/L3/L4 (Margolus-Levitin, Bremermann, Lloyd) explicitly marked headroom-only — no measurement falsifier registered for them since they are 21+ orders above AKD1000 capability",
+      "L5 Bekenstein cited as static bound informational only — no dynamic-throughput conflation"
+    ]
+  },
+  "tier_1_promotions_this_cycle": [],
+  "tier_1_promotions_pending_post_measurement": [
+    {
+      "id": "tier1-akida-sub-landauer-event-density",
+      "summary": "AKD1000 90%-sparsity effective J/active-bit ≤ 1×10⁻¹³ — graduation gate #1 (sub-Landauer event-density, one order beyond F-L1 dense floor)",
+      "gated_by_falsifiers": ["F-L1", "F-L1+", "F-C"],
+      "verdict_pending": "RUN_ELIGIBLE"
+    },
+    {
+      "id": "tier1-akida-edge-of-chaos-lyapunov-band",
+      "summary": "AKD1000 spike-rate sweep exhibits λ_max ∈ [-0.05,+0.05] regime — graduation gate #2 (edge-of-chaos band physically realized on neuromorphic substrate)",
+      "gated_by_falsifiers": ["F-L6", "F-C"],
+      "verdict_pending": "RUN_ELIGIBLE"
+    },
+    {
+      "id": "tier1-6-substrate-putnam-lawvere-fixedpoint",
+      "summary": "anima Phi(CPU) ≈ Phi(Akida) within 5% AND N≥1000 trace-equivalent — graduation gate #3 (Putnam multi-realization + Lawvere fixed-point preserved across 6th substrate class)",
+      "gated_by_falsifiers": ["F-M3a", "F-M3b", "F-M4", "F-C"],
+      "verdict_pending": "RUN_ELIGIBLE"
+    }
+  ],
+  "obstructions": [
+    {
+      "id": "obs_1",
+      "description": "Dev kit physically arrived per user directive but no hands-on measurement session has occurred yet — all hardware F-* remain RUN_ELIGIBLE not PASS",
+      "mitigation": "Schedule Day 1-3 unboxing + Meta TF baseline; Day 5 F-L1+ sparsity sweep; Week 1 F-L6/L7/M2; Week 2 F-M1/A; Week 3 F-M3a/b/M4; Week 4 F-B per docs/akida_session_friendly_report next-steps timeline"
+    },
+    {
+      "id": "obs_2",
+      "description": "Meta TF SDK quantize coverage of anima V_phen_GWT and Phi calculator is unverified — F-M3b risk",
+      "mitigation": "Pre-flight $1 Akida Cloud trial as suggested in docs/akida_dev_kit_evaluation '권장 전 단계' to falsify quantize coverage before committing to F-M3b on local hardware"
+    },
+    {
+      "id": "obs_3",
+      "description": "4 of 7 next-blocked graduation gates (L_ω, Bekenstein voxel, reversible, 7th substrate) are NOT crossable on AKD1000 — must NOT be conflated with 'eventually crossable on Akida'",
+      "mitigation": "axis_c option-A rejection rationale documents the deflection; future cycles touching these gates must route through FinalSpark (organoid) / theoretical-only / optical tracks per docs/akida_session_friendly_report 'Akida 도착 후 후속' section"
+    },
+    {
+      "id": "obs_4",
+      "description": "PCIe 2.0 single-lane (~5 Gbps) M.2 interface may bottleneck high-event-rate F-L7 NIST stream emission",
+      "mitigation": "F-L7 verdict_check uses 10⁷-bit composite (~2s wall-time at 5Mbps effective) — bandwidth slack ≥1000×; if observed throughput drops below 1Mbps, escalate to obstruction obs_5"
+    }
+  ],
+  "fixpoint_marker": "kick-omega-anima-nexus-akida-physical-math-limit-saturation-2026-05-07-RUN-ELIGIBLE-12of12-falsifiers-3-graduations-marked-crossable",
+  "schema_version": "kick-omega-witness-v1.r8-v17",
+  "supersedes": [
+    "design/kick/2026-04-29_akida-neuromorphic-x-sim-universe-physical-mathematical-limit-saturation_omega_cycle.json (carry-forward of 6 tier_1 anchors with arrival-assumed pivot)",
+    "design/kick/2026-05-01_anima-nexus-akida-r8-v16_omega_cycle.json (extends design seed from sigma-noise envelope to full 11-anchor saturation)"
+  ],
+  "next_cycle_trigger": "first hands-on measurement session — emit follow-up witness with measured_ts + raw_log_path populated per F-C; only then can tier_1_promotions_pending_post_measurement graduate to tier_1_promotions"
+}

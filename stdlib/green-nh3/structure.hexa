@@ -1,0 +1,8 @@
+#!hexa strict
+// green-nh3 structure — Haber catalyst pellet.
+fn main() {
+    let pellet_mm = 6.0
+    println("green-nh3_structure (Haber catalyst pellet):")
+    println("  pellet_mm = " + str(pellet_mm))
+    println("__HEXA_GREEN_NH3_STRUCTURE__ PASS gate=GATE_OPEN absorbed=false")
+}

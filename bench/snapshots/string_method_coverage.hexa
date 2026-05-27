@@ -1,0 +1,68 @@
+// bench/snapshots/string_method_coverage.hexa — anima roadmap M4 exit criterion
+// (hxa-20260423-003 결손-E).
+//
+// Covers the string methods whose codegen dispatch landed between commits
+// 968900b8 (Phase C.2 fixpoint) and now. Keep assertions tight — the
+// bootstrap loop reads failures here to detect codegen regressions.
+//
+// Usage: hexa run bench/snapshots/string_method_coverage.hexa
+// Exit 0 on PASS, 1 on FAIL.
+
+fn assert_eq(label, got, want) {
+    if got == want { return }
+    println("FAIL " + label + ": got=[" + got + "] want=[" + want + "]")
+    exit(1)
+}
+
+fn assert_int_eq(label, got, want) {
+    if got == want { return }
+    println("FAIL " + label + ": got=" + str(got) + " want=" + str(want))
+    exit(1)
+}
+
+fn main() {
+    let s = "hello/world/foo.txt"
+    assert_int_eq("last_index_of('/')", s.last_index_of("/"), 11)
+    assert_int_eq("rfind('/')",        s.rfind("/"),          11)
+    assert_int_eq("find('/')",         s.find("/"),           5)
+    assert_int_eq("index_of('/')",     s.index_of("/"),       5)
+    assert_int_eq("last_index_of('.')", s.last_index_of("."), 15)
+
+    // pad_start / pad_end — JS/Python naming aliases reusing the runtime
+    // hexa_str_pad_left / hexa_str_pad_right primitives.
+    assert_eq("pad_start 5,'0'",  "42".pad_start(5, "0"),   "00042")
+    assert_eq("pad_end 5,'*'",    "42".pad_end(5, "*"),     "42***")
+    assert_eq("pad_start short",  "hi".pad_start(1, "0"),   "hi")
+    assert_eq("pad_end multi",    "ab".pad_end(6, "xy"),    "abxyxy")
+
+    // char_at / char_code_at — byte-indexed single-char access.
+    let az = "AZ09"
+    assert_eq("char_at 0",         az.char_at(0),           "A")
+    assert_eq("char_at 3",         az.char_at(3),           "9")
+    assert_eq("char_at OOB",       az.char_at(99),          "")
+    assert_int_eq("char_code_at 0",   az.char_code_at(0),   65)
+    assert_int_eq("char_code_at 3",   az.char_code_at(3),   57)
+    assert_int_eq("char_code_at OOB", az.char_code_at(99),  -1)
+
+    // center — hxa-003 M1-lite dep. Even split, odd-remainder-right, multi-char pad.
+    assert_eq("center even",       "hi".center(8, "-"),     "---hi---")
+    assert_eq("center odd-right",  "ab".center(7, "-"),     "--ab---")
+    assert_eq("center multi-pad",  "x".center(5, "ab"),     "abxab")
+
+    // index_of(sub, start) — hxa-20260423-012 fix. 2-arg form honors start.
+    assert_int_eq("index_of start=1",  "abc-abc".index_of("abc", 1),  4)
+
+    // repeat — hxa-003 M1-lite migration target. Count<=0 empty, multi-char OK.
+    assert_eq("repeat 5 dash",     "-".repeat(5),           "-----")
+    assert_eq("repeat 3 multi",    "ab".repeat(3),          "ababab")
+    assert_eq("repeat 0 empty",    "x".repeat(0),           "")
+
+    // lines — hxa-003 M1-lite migration target. Split on '\n'.
+    let ln_multi = "a\nb\nc".lines()
+    assert_int_eq("lines 3 parts",    len(ln_multi),        3)
+    assert_eq("lines[1]",              ln_multi[1],         "b")
+    let ln_trailing = "a\n".lines()
+    assert_int_eq("lines trailing \\n", len(ln_trailing),   2)
+
+    println("PASS string_method_coverage")
+}

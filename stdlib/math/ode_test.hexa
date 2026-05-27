@@ -1,0 +1,109 @@
+// stdlib/math/ode_test.hexa — measured analytic oracles for ode.hexa.
+//
+// Each test compares the numeric integrator against a closed-form
+// analytic solution. No network, no python shellout. All tolerances
+// declared inline next to the assertion.
+//
+//   T1 RK4 exp_decay     y(10) vs exp(-5)         tol 1.0e-4
+//   T2 RK45 exp_decay    y(10) vs exp(-5)         tol 1.0e-6
+//   T3 RK4 logistic      y(t) vs K/(1+(K/y0-1)exp(-rt))  tol 1.0e-5
+//   T4 Saddle-node scan  p_bif vs 0               tol bracket [-0.05, +0.05]
+
+import "ode.hexa"
+
+let mut pass_count = 0
+let mut total = 0
+let mut first_fail = ""
+
+fn abs_f(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn check(name: string, cond: bool, detail: string) {
+    total = total + 1
+    if cond {
+        pass_count = pass_count + 1
+        println("  ok : " + name + " " + detail)
+    } else {
+        if first_fail == "" { first_fail = name }
+        println("  FAIL " + name + " " + detail)
+    }
+}
+
+// ── T1 — RK4 exponential decay ──────────────────────────────────────
+let name1 = "T1 rk4 exp_decay k=0.5, t∈[0,10], h=0.01"
+let k = 0.5
+let traj1 = ode_rk4("exp_decay", 1.0, 0.0, 10.0, 0.01, [k])
+let n1 = len(traj1)
+let last1 = traj1[n1 - 1]
+let y1_num = last1[1]
+let y1_ref = exp(0.0 - 5.0)            // = exp(-k * t1) with k=0.5, t1=10
+let err1 = abs_f(y1_num - y1_ref)
+check(name1, err1 <= 1.0e-4,
+      "y_num=" + to_string(y1_num) + " y_ref=" + to_string(y1_ref)
+      + " |err|=" + to_string(err1))
+
+// ── T2 — RK45 adaptive exponential decay ────────────────────────────
+let name2 = "T2 rk45_adaptive exp_decay atol=1e-8"
+let traj2 = ode_rk45_adaptive("exp_decay", 1.0, 0.0, 10.0, 1.0e-8, 1.0e-8, [k])
+let n2 = len(traj2)
+let last2 = traj2[n2 - 1]
+let y2_num = last2[1]
+let err2 = abs_f(y2_num - y1_ref)
+check(name2, err2 <= 1.0e-6,
+      "steps=" + to_string(n2)
+      + " y_num=" + to_string(y2_num)
+      + " |err|=" + to_string(err2))
+
+// ── T3 — RK4 logistic ────────────────────────────────────────────────
+//   y' = r y (1 - y/K),  y(t) = K / (1 + (K/y0 - 1) * exp(-r t))
+let name3 = "T3 rk4 logistic r=0.4 K=10 y0=0.5 t∈[0,20] h=0.005"
+let r3 = 0.4
+let K3 = 10.0
+let y0_3 = 0.5
+let traj3 = ode_rk4("logistic", y0_3, 0.0, 20.0, 0.005, [r3, K3])
+let n3 = len(traj3)
+let last3 = traj3[n3 - 1]
+let t3_end = last3[0]
+let y3_num = last3[1]
+let y3_ref = K3 / (1.0 + (K3 / y0_3 - 1.0) * exp(0.0 - r3 * t3_end))
+let err3 = abs_f(y3_num - y3_ref)
+check(name3, err3 <= 1.0e-5,
+      "t=" + to_string(t3_end)
+      + " y_num=" + to_string(y3_num)
+      + " y_ref=" + to_string(y3_ref)
+      + " |err|=" + to_string(err3))
+
+// ── T4 — Saddle-node bifurcation scan ────────────────────────────────
+//   f(y,p) = p - y²; equilibria y* = ±√p for p > 0, none for p < 0.
+//   Bifurcation: p = 0. Scan from -0.5 to +0.5 with 401 steps
+//   (dp = 0.0025); assert at least one detected p_bif inside [-0.05, +0.05].
+let name4 = "T4 saddle_node scan p∈[-0.5,+0.5] 401 steps"
+let bifs = ode_saddle_node_scan("saddle", 0.7, 0.0 - 0.5, 0.5, 401, [])
+let nb = len(bifs)
+let mut in_bracket = false
+let mut closest = 1.0e9
+let mut bi = 0
+while bi < nb {
+    let p = bifs[bi]
+    let a = abs_f(p)
+    if a < closest { closest = a }
+    if p >= 0.0 - 0.05 {
+        if p <= 0.05 { in_bracket = true }
+    }
+    bi = bi + 1
+}
+check(name4, in_bracket,
+      "n_bif=" + to_string(nb) + " closest=" + to_string(closest))
+
+// ── Verdict ──────────────────────────────────────────────────────────
+println("")
+if pass_count == total {
+    println("PASS: ode " + to_string(pass_count) + "/" + to_string(total))
+    exit(0)
+} else {
+    println("FAIL: ode first=" + first_fail
+            + " (" + to_string(pass_count) + "/" + to_string(total) + ")")
+    exit(1)
+}

@@ -1,0 +1,86 @@
+#!hexa strict
+// pet_cyclotron/pet_cyclotron.hexa — ¹⁸F β⁺ on-site regeneration wired module.
+//
+// Materialises HEXA-PET candidate spec (R = σ-φ = 10 cm, B = σ·τ = 48 T,
+// stock = σ·τ = 48 mg/season ¹⁸F, 1/σ³ cost reduction, 2e9 e+/s/mg
+// conversion). SSOT: pet_cyclotron/pet-cyclotron.md.
+//
+// Run:
+//     hexa run pet_cyclotron/pet_cyclotron.hexa
+//
+// Sentinel: __HEXA_ANTIMATTER_PET_CYCLOTRON__ PASS
+
+let SIGMA = 12
+let TAU   = 4
+let PHI   = 2
+let N     = 6
+
+// HEXA-PET locked constants (n=6 arithmetic)
+let R_CYCLO_CM       = SIGMA - PHI          // 10 cm radius
+let B_FIELD_T        = SIGMA * TAU          // 48 T RT-SC
+let STOCK_MG_SEASON  = SIGMA * TAU          // 48 mg / season ¹⁸F
+let COST_REDUCTION   = SIGMA * SIGMA * SIGMA  // 1/σ³ cost ratio (vs HEXA-TABLETOP 1/σ⁶ total)
+let BATCH_STACK      = TAU                  // τ=4 batch stacking
+let VAC_SUPPRESSION  = SIGMA * SIGMA * TAU  // σ²·τ = 576x vacuum
+let DAILY_HBAR_S     = SIGMA * SIGMA * SIGMA  // σ³ = 1728 H̄/s/24h cascade
+let EPLUS_PER_S_MG   = "2e9"               // (atomic; not n=6 derivable on its own)
+
+// SSOT context numbers
+let SSOT_HALF_LIFE_MIN  = "109.8 min  (¹⁸F)"
+let SSOT_MED_FIELD_T    = "1.5 T  (medical PET coil)"
+let SSOT_MED_RADIUS_M   = "0.5–1.5 m  (Varian/IBA)"
+let SSOT_MED_18F_COST   = "$4 M/season  (¹⁸F-FDG)"
+
+fn json_mode(a: [str]) -> bool {
+    let mut i = 0
+    while i < len(a) {
+        if a[i] == "--json" { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn pet_run(a: [str]) {
+    if json_mode(a) {
+        let mut js = "{\"verb\":\"pet_cyclotron\",\"wired\":true,"
+        js = js + "\"radius_cm\":" + ("" + R_CYCLO_CM) + ","
+        js = js + "\"b_field_T\":" + ("" + B_FIELD_T) + ","
+        js = js + "\"stock_mg_per_season\":" + ("" + STOCK_MG_SEASON) + ","
+        js = js + "\"cost_reduction\":" + ("" + COST_REDUCTION) + ","
+        js = js + "\"batch_stack\":" + ("" + BATCH_STACK) + ","
+        js = js + "\"vac_suppression\":" + ("" + VAC_SUPPRESSION) + ","
+        js = js + "\"daily_hbar_per_s\":" + ("" + DAILY_HBAR_S) + ","
+        js = js + "\"e_plus_per_s_mg\":\"" + EPLUS_PER_S_MG + "\""
+        js = js + "}"
+        println(js)
+        println("__HEXA_ANTIMATTER_PET_CYCLOTRON__ PASS")
+        return
+    }
+    println("hexa-antimatter pet_cyclotron — ¹⁸F β⁺ on-site regeneration (WIRED)")
+    println("  declarative SSOT: pet_cyclotron/pet-cyclotron.md")
+    println("")
+    println("  HEXA-PET locked constants (n=6 arithmetic):")
+    println("    radius R       σ-φ  = " + ("" + R_CYCLO_CM)      + " cm")
+    println("    field  B       σ·τ  = " + ("" + B_FIELD_T)       + " T (RT-SC)")
+    println("    stock          σ·τ  = " + ("" + STOCK_MG_SEASON) + " mg / season ¹⁸F")
+    println("    cost ratio     1/σ³ = 1/" + ("" + COST_REDUCTION) + " (this domain solo)")
+    println("    batch stack    τ    = " + ("" + BATCH_STACK)     + " (½-life mitigation)")
+    println("    vac suppress   σ²·τ = " + ("" + VAC_SUPPRESSION) + "x (vs medical 10⁻³ Torr)")
+    println("    daily H̄/s     σ³   ≈ " + ("" + DAILY_HBAR_S)    + " (anti-H synthesis cascade)")
+    println("    e⁺ conversion       = " + EPLUS_PER_S_MG + " e⁺/s/mg (atomic)")
+    println("")
+    println("  vs medical PET (SSOT):")
+    println("    half-life      : " + SSOT_HALF_LIFE_MIN)
+    println("    medical B      : " + SSOT_MED_FIELD_T + "  → HEXA " + ("" + B_FIELD_T) + " T  (×" + ("" + (B_FIELD_T / 2)) + ")")
+    println("    medical R      : " + SSOT_MED_RADIUS_M + "  → HEXA " + ("" + R_CYCLO_CM) + " cm  (×1/5–15)")
+    println("    medical $      : " + SSOT_MED_18F_COST + "  → HEXA σ³ reduction")
+    println("")
+    println("  honest C3: this domain is the path-(c) ¹⁸F PET recycle of HEXA-")
+    println("  TABLETOP §9.2; n=6 expressions lock R/B/stock onto a single")
+    println("  axis but no clinical PET cyclotron operation is performed.")
+    println("__HEXA_ANTIMATTER_PET_CYCLOTRON__ PASS")
+}
+
+fn main() {
+    pet_run(args())
+}

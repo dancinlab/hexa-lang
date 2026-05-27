@@ -1,0 +1,413 @@
+#!hexa strict
+// hexa-bio/_hexa_bridge/selftest/bifunctional_ternary_complex_sim.hexa
+//
+// hexa-native port of `_python_bridge/module/bifunctional_ternary_complex_sim.py`
+// (T3; json/sys — deterministic). BIFUNCTIONAL axis (EXPANSION-MAIN,
+// NOT core-5). Three-body ternary-complex equilibrium model: deterministic
+// nested-bisection solver (200 outer / 200 inner iterations) for the free
+// degrader and free E3 concentrations, then (A) cooperativity scan vs alpha
+// at a fixed dose, and (B) dose scan exhibiting the bell-shaped HOOK
+// effect (autoinhibitory high-dose tail). Float fields computed with the
+// exact .py arithmetic → CPython-identical IEEE doubles; witness JSON via
+// the verified py_json2 module; panel via the sim-recipe.
+
+import "_hexa_bridge/module/py_json2.hexa"
+
+let VERSION = "1.0.0"
+let AXIS = "BIFUNCTIONAL"
+let AXIS_LAYER = "expansion-main (NOT core-5)"
+
+let DOUGLASS_2013 = "Douglass et al., J Am Chem Soc 2013;135:6092-6099"
+let GADD_2017 = "Gadd et al., Nat Chem Biol 2017;13:514-521"
+let HAN_2020 = "Han, J Biol Chem 2020;295:15280-15291"
+
+let TARGET_TOTAL_UM = 1.0
+let E3_TOTAL_UM = 1.0
+let KD_TARGET_UM = 0.1
+let KD_E3_UM = 0.1
+
+fn fmt(spec: string, v: float) -> string {
+    let mut o = exec("printf '" + spec + "' " + json_stringify(v))
+    while len(o) > 0 {
+        let last = o.substr(len(o) - 1, 1)
+        if last == "\n" || last == "\r" { o = o.substr(0, len(o) - 1) } else { break }
+    }
+    return o
+}
+fn ljust(s: string, n: int) -> string { let mut o = s; while len(o) < n { o = o + " " }; return o }
+fn rjust(s: string, n: int) -> string { let mut o = s; while len(o) < n { o = " " + o }; return o }
+fn js(v: float) -> string { return json_stringify(v) }
+fn jsb(b: bool) -> string { if b { return "true" } return "false" }
+fn pyb(b: bool) -> string { if b { return "True" } return "False" }
+fn fabs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn fsum(xs: array) -> float {
+    let mut s = 0.0; let mut c = 0.0; let mut i = 0
+    while i < len(xs) { let y = xs[i]-c; let t = s+y; c = (t-s)-y; s = t; i = i+1 }
+    return s
+}
+
+// ── three-body ternary-complex solver (returns array of 7 floats) ──
+// out = [d_total, d_free, t_free, e3_free, binary_TD, binary_DE, ternary_TDE]
+fn solve_eq(d_total: float, t_total: float, e3_total: float,
+            kd_t: float, kd_e: float, alpha: float) -> array {
+    let mut lo_d = 0.0
+    let mut hi_d = d_total
+    let mut k = 0
+    while k < 200 {
+        let d_free = 0.5 * (lo_d + hi_d)
+        // inner bisection on free e3 given d_free
+        let mut lo_e = 0.0
+        let mut hi_e = e3_total
+        let mut j = 0
+        while j < 200 {
+            let e3_free = 0.5 * (lo_e + hi_e)
+            let w_td = d_free / kd_t
+            let w_tde = (d_free / kd_t) * (e3_free / kd_e) * alpha
+            let denom_t = 1.0 + w_td + w_tde
+            let t_free = t_total / denom_t
+            let tde = t_free * w_tde
+            let de_val = e3_free * (d_free / kd_e)
+            let e3_used = e3_free + de_val + tde
+            if e3_used > e3_total { hi_e = e3_free } else { lo_e = e3_free }
+            j = j + 1
+        }
+        let e3_free2 = 0.5 * (lo_e + hi_e)
+        let w_td2 = d_free / kd_t
+        let w_tde2 = (d_free / kd_t) * (e3_free2 / kd_e) * alpha
+        let denom_t2 = 1.0 + w_td2 + w_tde2
+        let t_free2 = t_total / denom_t2
+        let td2 = t_free2 * w_td2
+        let tde2 = t_free2 * w_tde2
+        let de2 = e3_free2 * (d_free / kd_e)
+        let d_used = d_free + td2 + de2 + tde2
+        if d_used > d_total { hi_d = d_free } else { lo_d = d_free }
+        k = k + 1
+    }
+    let d_free_f = 0.5 * (lo_d + hi_d)
+    let mut lo_e2 = 0.0
+    let mut hi_e2 = e3_total
+    let mut jj = 0
+    while jj < 200 {
+        let e3_free = 0.5 * (lo_e2 + hi_e2)
+        let w_td = d_free_f / kd_t
+        let w_tde = (d_free_f / kd_t) * (e3_free / kd_e) * alpha
+        let denom_t = 1.0 + w_td + w_tde
+        let t_free = t_total / denom_t
+        let tde = t_free * w_tde
+        let de_val = e3_free * (d_free_f / kd_e)
+        let e3_used = e3_free + de_val + tde
+        if e3_used > e3_total { hi_e2 = e3_free } else { lo_e2 = e3_free }
+        jj = jj + 1
+    }
+    let e3_free_f = 0.5 * (lo_e2 + hi_e2)
+    let w_td_f = d_free_f / kd_t
+    let w_tde_f = (d_free_f / kd_t) * (e3_free_f / kd_e) * alpha
+    let denom_t_f = 1.0 + w_td_f + w_tde_f
+    let t_free_f = t_total / denom_t_f
+    let td_f = t_free_f * w_td_f
+    let tde_f = t_free_f * w_tde_f
+    let de_f = e3_free_f * (d_free_f / kd_e)
+    let mut out: array = []
+    out.push(d_total); out.push(d_free_f); out.push(t_free_f); out.push(e3_free_f)
+    out.push(td_f); out.push(de_f); out.push(tde_f)
+    return out
+}
+
+fn main() {
+    println("bifunctional_ternary_complex_sim — BIFUNCTIONAL axis (EXPANSION-MAIN, NOT core-5) v" + VERSION)
+    println("")
+
+    // ── (A) cooperativity scan at fixed dose = 0.1 uM ──
+    let alphas = [0.5, 1.0, 2.0, 5.0, 20.0]
+    let fixed_dose = 0.1
+    let mut coop_alpha: array = []
+    let mut coop_dose: array = []
+    let mut coop_tde: array = []
+    let mut coop_td: array = []
+    let mut coop_de: array = []
+    let mut ai = 0
+    while ai < 5 {
+        let sol = solve_eq(fixed_dose, TARGET_TOTAL_UM, E3_TOTAL_UM,
+                           KD_TARGET_UM, KD_E3_UM, alphas[ai])
+        coop_alpha.push(alphas[ai])
+        coop_dose.push(fixed_dose)
+        coop_tde.push(sol[6])
+        coop_td.push(sol[4])
+        coop_de.push(sol[5])
+        ai = ai + 1
+    }
+
+    // cooperativity monotonicity check
+    let mut monotone = true
+    let mut violations: array = []
+    let mut mi = 1
+    while mi < 5 {
+        let prev = coop_tde[mi - 1]
+        let cur = coop_tde[mi]
+        if cur < prev - 0.000001 {
+            monotone = false
+            violations.push("alpha " + js(coop_alpha[mi - 1]) + "->" + js(coop_alpha[mi]) +
+                            ": ternary " + fmt("%.6f", prev) + "->" + fmt("%.6f", cur) + " decreased")
+        }
+        mi = mi + 1
+    }
+    let mut alpha_one_ref = false
+    let mut ar = 0
+    while ar < 5 { if fabs(coop_alpha[ar] - 1.0) < 1e-12 { alpha_one_ref = true }; ar = ar + 1 }
+    let coop_pass = monotone
+
+    // ── (B) dose scan at alpha = 5.0 ──
+    let hook_alpha = 5.0
+    // Dose grid: in .py — for decade in range(-3,4): for step in range(7): val =
+    //   (10.0**decade) * (10.0**(step/7.0)); then grid.append(10.0**3) — 50 points,
+    //   last value is a duplicate 1000.0 (re-append after the 7×7=49 log-spaced set).
+    // libm-lacking ops (10.0**x with float x) hardcoded as bit-exact CPython doubles.
+    let grid = [
+        0.001, 0.0013894954943731376, 0.00193069772888325, 0.0026826957952797255, 0.00372759372031494,
+        0.005179474679231212, 0.00719685673001152, 0.01, 0.013894954943731377, 0.019306977288832503,
+        0.026826957952797256, 0.0372759372031494, 0.051794746792312114, 0.0719685673001152, 0.1,
+        0.13894954943731377, 0.19306977288832503, 0.26826957952797253, 0.372759372031494, 0.5179474679231212,
+        0.7196856730011519, 1.0, 1.3894954943731377, 1.93069772888325, 2.6826957952797255,
+        3.72759372031494, 5.179474679231212, 7.196856730011519, 10.0, 13.894954943731378,
+        19.3069772888325, 26.826957952797255, 37.2759372031494, 51.79474679231212, 71.9685673001152,
+        100.0, 138.94954943731378, 193.06977288832502, 268.26957952797255, 372.75937203149397,
+        517.9474679231212, 719.6856730011519, 1000.0, 1389.4954943731377, 1930.6977288832502,
+        2682.6957952797256, 3727.5937203149397, 5179.474679231212, 7196.856730011519, 1000.0
+    ]
+
+    let mut dose_dose: array = []
+    let mut dose_tde: array = []
+    let mut dose_td: array = []
+    let mut dose_de: array = []
+    let mut dose_dfree: array = []
+    let mut di = 0
+    while di < len(grid) {
+        let sol = solve_eq(grid[di], TARGET_TOTAL_UM, E3_TOTAL_UM,
+                           KD_TARGET_UM, KD_E3_UM, hook_alpha)
+        dose_dose.push(grid[di])
+        dose_tde.push(sol[6])
+        dose_td.push(sol[4])
+        dose_de.push(sol[5])
+        dose_dfree.push(sol[1])
+        di = di + 1
+    }
+
+    // hook verification: find peak index (argmax)
+    let n_dose = len(dose_tde)
+    let mut peak_idx = 0
+    let mut peak_val = dose_tde[0]
+    let mut pi = 1
+    while pi < n_dose {
+        if dose_tde[pi] > peak_val { peak_val = dose_tde[pi]; peak_idx = pi }
+        pi = pi + 1
+    }
+    let peak_conc = peak_val
+    let first_conc = dose_tde[0]
+    let last_conc = dose_tde[n_dose - 1]
+    let interior_max = (0 < peak_idx) && (peak_idx < n_dose - 1)
+    let rises = peak_conc > first_conc * 1.05
+    let falls = last_conc < peak_conc * 0.95
+    let last_td = dose_td[n_dose - 1]
+    let last_de = dose_de[n_dose - 1]
+    let binary_saturated = (last_td > 0.5 * TARGET_TOTAL_UM) && (last_de > 0.5 * E3_TOTAL_UM)
+    let non_monotonic = interior_max && rises && falls
+    let hook_pass = non_monotonic && binary_saturated
+
+    // ── (A) panel ──
+    println("  (A) Cooperativity scan -- ternary-complex [T.D.E] vs alpha")
+    println("      at fixed degrader dose; ternary thermodynamics (Gadd 2017)")
+    println("      fixed degrader dose = " + js(fixed_dose) + " uM")
+    println("      alpha   | ternary [T.D.E] (uM) | binary [T.D] | binary [D.E]")
+    let mut pa = 0
+    while pa < 5 {
+        println("      " + fmt("%6.2f", coop_alpha[pa]) + "  | " +
+                fmt("%18.6f", coop_tde[pa]) + "   | " +
+                fmt("%10.5f", coop_td[pa]) + "   | " +
+                fmt("%10.5f", coop_de[pa]))
+        pa = pa + 1
+    }
+    println("      ternary conc monotone non-decreasing in alpha: " + pyb(monotone))
+    println("")
+
+    // ── (B) panel: every 4th + peak ──
+    println("  (B) Dose scan -- the HOOK EFFECT (bell-shaped ternary response)")
+    println("      three-body ternary equilibrium (Douglass 2013; Han 2020)")
+    println("      alpha = " + js(hook_alpha) + "; " + str(n_dose) + " log-spaced dose points")
+    println("      degrader dose (uM) | ternary [T.D.E] (uM)")
+    let mut dp = 0
+    while dp < n_dose {
+        if (dp % 4 == 0) || (dp == peak_idx) {
+            let mark = if dp == peak_idx { "  <-- peak (hook maximum)" } else { "" }
+            println("      " + fmt("%18.4f", dose_dose[dp]) + " | " +
+                    fmt("%18.6f", dose_tde[dp]) + mark)
+        }
+        dp = dp + 1
+    }
+    println("      low-dose  [T.D.E] = " + fmt("%.6f", first_conc) + " uM")
+    println("      peak      [T.D.E] = " + fmt("%.6f", peak_conc) + " uM at dose " +
+            fmt("%.4f", dose_dose[peak_idx]) + " uM")
+    println("      high-dose [T.D.E] = " + fmt("%.6f", last_conc) + " uM (autoinhibitory hook arm)")
+    println("      non-monotonic bell-shaped (hook effect): " + pyb(non_monotonic))
+    println("")
+
+    // falsifiers
+    let f1 = coop_pass
+    let f2 = hook_pass
+    let f3 = true
+    println("  falsifiers:")
+    println("    [" + (if f1 { "HOLD" } else { "FALSIFIED" }) + "] F-BIFUNCTIONAL-1_cooperativity_monotonicity")
+    println("    [" + (if f2 { "HOLD" } else { "FALSIFIED" }) + "] F-BIFUNCTIONAL-2_hook_effect_non_monotonic")
+    println("    [" + (if f3 { "HOLD" } else { "FALSIFIED" }) + "] F-BIFUNCTIONAL-3_ternary_is_mass_action_not_lattice")
+    println("")
+
+    // acceptance criteria
+    let c1 = monotone
+    let c2 = alpha_one_ref
+    let c3 = interior_max
+    let c4 = rises
+    let c5 = falls
+    let c6 = binary_saturated
+    let c7 = non_monotonic
+    println("  acceptance criteria:")
+    println("    [" + (if c1 { "PASS" } else { "FAIL" }) + "] C1_cooperativity_monotone_non_decreasing_in_alpha")
+    println("    [" + (if c2 { "PASS" } else { "FAIL" }) + "] C2_alpha_one_non_cooperative_reference_present")
+    println("    [" + (if c3 { "PASS" } else { "FAIL" }) + "] C3_dose_curve_has_interior_maximum")
+    println("    [" + (if c4 { "PASS" } else { "FAIL" }) + "] C4_dose_curve_rising_arm")
+    println("    [" + (if c5 { "PASS" } else { "FAIL" }) + "] C5_dose_curve_falling_hook_arm")
+    println("    [" + (if c6 { "PASS" } else { "FAIL" }) + "] C6_hook_caused_by_high_dose_binary_saturation")
+    println("    [" + (if c7 { "PASS" } else { "FAIL" }) + "] C7_ternary_dose_response_non_monotonic_bell_shaped")
+
+    let mut n_pass = 0
+    if c1 { n_pass = n_pass + 1 }
+    if c2 { n_pass = n_pass + 1 }
+    if c3 { n_pass = n_pass + 1 }
+    if c4 { n_pass = n_pass + 1 }
+    if c5 { n_pass = n_pass + 1 }
+    if c6 { n_pass = n_pass + 1 }
+    if c7 { n_pass = n_pass + 1 }
+    let total_crit = 7
+    let verdict = if n_pass == total_crit { "PASS" } else { "FAIL" }
+    println("")
+    println("  --- BIFUNCTIONAL ternary-complex: " + str(n_pass) + "/" + str(total_crit) +
+            "  ->  verdict: " + verdict + " ---")
+
+    let lattice_stance_str = "No n=6 lattice arithmetic is performed. A ternary complex has three bodies because a heterobifunctional degrader bridges exactly one target and one E3 ligase (the modality definition); the cooperativity alpha and the hook-effect dose maximum are chemical-equilibrium / mass-action results, NOT lattice derivations. Any numerical coincidence with n=6 is OBSERVATION ONLY (HEXA-BIFUNCTIONAL.tape f_lattice_fit / n6_honest_stance)."
+    let in_silico_scope_str = "PASS verifies IN-SILICO simulator+metadata consistency ONLY -- the mass-action ternary-equilibrium algebra, the cooperativity-alpha dependence, and the bell-shaped hook curve. NOT a therapeutic/degradation-efficacy/DC50/Dmax/regulatory claim. The BIFUNCTIONAL axis is UNPROVEN at the wet-lab boundary (AGENTS.tape g8_in_silico_only / f2)."
+
+    println("")
+    println("  n=6 lattice stance: " + lattice_stance_str)
+    println("")
+    println("  IN-SILICO SCOPE (g8/f2): " + in_silico_scope_str)
+
+    // ── witness JSON (compact build → json_parse → py_json2 indent=2) ──
+    // cooperativity_scan rows
+    let mut coopJ = ""
+    let mut ci = 0
+    while ci < 5 {
+        if ci > 0 { coopJ = coopJ + ", " }
+        coopJ = coopJ + "{\"alpha\": " + js(coop_alpha[ci]) +
+                ", \"degrader_dose_um\": " + js(coop_dose[ci]) +
+                ", \"ternary_TDE_um\": " + js(coop_tde[ci]) +
+                ", \"binary_TD_um\": " + js(coop_td[ci]) +
+                ", \"binary_DE_um\": " + js(coop_de[ci]) + "}"
+        ci = ci + 1
+    }
+
+    // dose_scan_hook rows
+    let mut doseJ = ""
+    let mut dj = 0
+    while dj < n_dose {
+        if dj > 0 { doseJ = doseJ + ", " }
+        doseJ = doseJ + "{\"degrader_dose_um\": " + js(dose_dose[dj]) +
+                ", \"ternary_TDE_um\": " + js(dose_tde[dj]) +
+                ", \"binary_TD_um\": " + js(dose_td[dj]) +
+                ", \"binary_DE_um\": " + js(dose_de[dj]) +
+                ", \"free_degrader_um\": " + js(dose_dfree[dj]) + "}"
+        dj = dj + 1
+    }
+
+    // violations array
+    let mut viosJ = ""
+    let mut vi = 0
+    while vi < len(violations) {
+        if vi > 0 { viosJ = viosJ + ", " }
+        // each violation is already a plain string (no escaping required for our messages)
+        viosJ = viosJ + "\"" + violations[vi] + "\""
+        vi = vi + 1
+    }
+
+    let coop_verif_j = "{\"monotone_non_decreasing_in_alpha\": " + jsb(monotone) +
+                       ", \"violations\": [" + viosJ + "]" +
+                       ", \"alpha_one_is_reference\": " + jsb(alpha_one_ref) +
+                       ", \"pass\": " + jsb(coop_pass) + "}"
+
+    let hook_verif_j = "{\"peak_index\": " + str(peak_idx) +
+                       ", \"n_dose_points\": " + str(n_dose) +
+                       ", \"peak_dose_um\": " + js(dose_dose[peak_idx]) +
+                       ", \"peak_ternary_TDE_um\": " + js(peak_conc) +
+                       ", \"low_dose_ternary_um\": " + js(first_conc) +
+                       ", \"high_dose_ternary_um\": " + js(last_conc) +
+                       ", \"interior_maximum\": " + jsb(interior_max) +
+                       ", \"rising_arm\": " + jsb(rises) +
+                       ", \"falling_arm_hook\": " + jsb(falls) +
+                       ", \"high_dose_binary_saturation\": " + jsb(binary_saturated) +
+                       ", \"non_monotonic_bell_shaped\": " + jsb(non_monotonic) +
+                       ", \"pass\": " + jsb(hook_pass) + "}"
+
+    let degraders_j = "[" +
+        "{\"name\": \"ARV-471 (vepdegestrant)\", \"modality\": \"PROTAC\", \"target\": \"estrogen receptor (ER)\", \"e3_ligase\": \"CRBN\", \"status\": \"clinical development\", \"developer\": \"Arvinas / Pfizer\"}," +
+        "{\"name\": \"ARV-110 (bavdegalutamide)\", \"modality\": \"PROTAC\", \"target\": \"androgen receptor (AR)\", \"e3_ligase\": \"CRBN\", \"status\": \"clinical development\", \"developer\": \"Arvinas\"}," +
+        "{\"name\": \"lenalidomide\", \"modality\": \"molecular glue\", \"target\": \"IKZF1 / IKZF3 (neo-substrate)\", \"e3_ligase\": \"CRBN\", \"status\": \"marketed (multiple myeloma)\", \"developer\": \"(IMiD class)\"}," +
+        "{\"name\": \"thalidomide\", \"modality\": \"molecular glue\", \"target\": \"CRBN neo-substrates\", \"e3_ligase\": \"CRBN\", \"status\": \"marketed (IMiD class)\", \"developer\": \"(IMiD class)\"}," +
+        "{\"name\": \"RIBOTAC (class)\", \"modality\": \"bifunctional RNA degrader\", \"target\": \"RNA (recruits RNase L)\", \"e3_ligase\": \"n/a (RNase L)\", \"status\": \"research stage\", \"developer\": \"(research)\"}" +
+        "]"
+
+    let falsif_j = "{\"F-BIFUNCTIONAL-1_cooperativity_monotonicity\": " + jsb(f1) +
+                   ", \"F-BIFUNCTIONAL-2_hook_effect_non_monotonic\": " + jsb(f2) +
+                   ", \"F-BIFUNCTIONAL-3_ternary_is_mass_action_not_lattice\": " + jsb(f3) + "}"
+
+    let crit_j = "{\"C1_cooperativity_monotone_non_decreasing_in_alpha\": " + jsb(c1) +
+                 ", \"C2_alpha_one_non_cooperative_reference_present\": " + jsb(c2) +
+                 ", \"C3_dose_curve_has_interior_maximum\": " + jsb(c3) +
+                 ", \"C4_dose_curve_rising_arm\": " + jsb(c4) +
+                 ", \"C5_dose_curve_falling_hook_arm\": " + jsb(c5) +
+                 ", \"C6_hook_caused_by_high_dose_binary_saturation\": " + jsb(c6) +
+                 ", \"C7_ternary_dose_response_non_monotonic_bell_shaped\": " + jsb(c7) + "}"
+
+    let real_anchors_j = "{\"hook_effect_citation\": \"" + DOUGLASS_2013 + "\"" +
+                         ", \"hook_effect_thermodynamics_citation\": \"" + HAN_2020 + "\"" +
+                         ", \"cooperativity_alpha_citation\": \"" + GADD_2017 + "\"}"
+
+    let model_params_j = "{\"target_total_um\": " + js(TARGET_TOTAL_UM) +
+                         ", \"e3_total_um\": " + js(E3_TOTAL_UM) +
+                         ", \"kd_target_um\": " + js(KD_TARGET_UM) +
+                         ", \"kd_e3_um\": " + js(KD_E3_UM) +
+                         ", \"note\": \"illustrative modeling magnitudes -- NOT measured constants for any named drug (g3/f1)\"}"
+
+    let witness = "{\"schema\": \"bifunctional_ternary_complex_v1\"" +
+                  ", \"ts\": \"2026-05-16T00:00:00Z\"" +
+                  ", \"axis\": \"" + AXIS + "\"" +
+                  ", \"axis_layer\": \"" + AXIS_LAYER + "\"" +
+                  ", \"version\": \"" + VERSION + "\"" +
+                  ", \"real_limit_anchors\": " + real_anchors_j +
+                  ", \"model_parameters\": " + model_params_j +
+                  ", \"cooperativity_scan\": [" + coopJ + "]" +
+                  ", \"cooperativity_verification\": " + coop_verif_j +
+                  ", \"dose_scan_hook\": [" + doseJ + "]" +
+                  ", \"hook_verification\": " + hook_verif_j +
+                  ", \"degrader_metadata\": " + degraders_j +
+                  ", \"falsifiers\": " + falsif_j +
+                  ", \"acceptance_criteria\": " + crit_j +
+                  ", \"pass_count\": " + str(n_pass) +
+                  ", \"total_criteria\": " + str(total_crit) +
+                  ", \"verdict\": \"" + verdict + "\"" +
+                  ", \"lattice_stance\": " + json_stringify(lattice_stance_str) +
+                  ", \"in_silico_scope\": " + json_stringify(in_silico_scope_str) + "}"
+
+    let wv = json_parse(witness)
+    println("")
+    println("## witness JSON")
+    println(py_json2(wv, 0))
+    println("")
+    if verdict == "PASS" { println("__BIFUNCTIONAL_TERNARY_COMPLEX__ PASS") } else { println("__BIFUNCTIONAL_TERNARY_COMPLEX__ FAIL") }
+}

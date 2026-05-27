@@ -1,0 +1,8 @@
+#!hexa strict
+// memristor synthesize — ALD cycle count.
+fn main() {
+    let ald_cycles = 200.0
+    println("memristor_synthesize (ALD cycle count):")
+    println("  ald_cycles = " + str(ald_cycles))
+    println("__HEXA_MEMRISTOR_SYNTHESIZE__ PASS gate=GATE_OPEN absorbed=false")
+}

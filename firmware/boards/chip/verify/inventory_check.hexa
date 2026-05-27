@@ -1,0 +1,259 @@
+#!hexa strict
+// hexa-chip/verify/inventory_check.hexa — 29-verb / 6-group inventory audit.
+//
+// Mirrors hexa-sscb/verify/cross_doc_audit.py (presence-style asserts).
+// Confirms:
+//   1. All 29 verb directories present at $HEXA_CHIP_ROOT (or pwd).
+//   2. Each verb dir contains a canonical spec .md with the right name.
+//   3. Group totals match the line-by-line hexa.toml manifest:
+//        architecture(3) + design(5) + process(5) + packaging(6)
+//        + accelerator(8) + consciousness(2) = 29
+//   4. cli/hexa-chip.hexa enumerates the same 29 verbs (string match).
+//
+// Exit 0 = every check passes. Exit 1 = inventory drift.
+//
+// Cost: $0 (read-only stat + grep on local repo).
+
+fn _root() -> str {
+    let env_root = env("HEXA_CHIP_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _has_dir(p: str) -> bool {
+    let r = exec("[ -d \"" + p + "\" ] && echo y || echo n").trim()
+    return r == "y"
+}
+
+fn _has_file(p: str) -> bool {
+    let r = exec("[ -f \"" + p + "\" ] && echo y || echo n").trim()
+    return r == "y"
+}
+
+fn _has_any_md(dir: str) -> bool {
+    let r = exec("ls \"" + dir + "\"/*.md 2>/dev/null | head -1").trim()
+    return r.len() > 0
+}
+
+// (verb, group, expected canonical .md basename — chip-<verb> with
+// hyphens for compound verbs, mirroring canon/domains/compute/
+// extraction names listed in README.md §Verbs).
+let GROUPS = [
+    ["architecture",       "architecture"],
+    ["isa_n6",             "architecture"],
+    ["hexa1",              "architecture"],
+    ["design",             "design"],
+    ["dse_pipeline",       "design"],
+    ["rtl_gen",            "design"],
+    ["eda",                "design"],
+    ["verify_test",        "design"],
+    ["process",            "process"],
+    ["materials",          "process"],
+    ["wafer",              "process"],
+    ["yield",              "process"],
+    ["thermal_power",      "process"],
+    ["packaging",          "packaging"],
+    ["advanced_packaging", "packaging"],
+    ["chip_3d",            "packaging"],
+    ["hbm",                "packaging"],
+    ["interconnect",       "packaging"],
+    ["sc",                 "packaging"],
+    ["npu_n6",             "accelerator"],
+    ["pim",                "accelerator"],
+    ["photonic",           "accelerator"],
+    ["accel",              "accelerator"],
+    ["asic",               "accelerator"],
+    ["hexa_pim",           "accelerator"],
+    ["hexa_3d",            "accelerator"],
+    ["hexa_wafer",         "accelerator"],
+    ["conscious_chip",     "consciousness"],
+    ["conscious_soc",      "consciousness"]
+]
+
+let GROUP_NAMES = [
+    "architecture", "design", "process",
+    "packaging", "accelerator", "consciousness"
+]
+let GROUP_EXPECTED = [3, 5, 5, 6, 8, 2]
+
+fn _group_index(g: str) -> int {
+    let mut i = 0
+    while i < GROUP_NAMES.len() {
+        if GROUP_NAMES[i] == g { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+fn check_dir_presence(root: str) -> [str] {
+    let mut missing: [str] = []
+    let mut i = 0
+    while i < GROUPS.len() {
+        let v = GROUPS[i][0]
+        if !_has_dir(root + "/" + v) {
+            missing = missing + [v]
+        }
+        i = i + 1
+    }
+    return missing
+}
+
+fn check_spec_md_presence(root: str) -> [str] {
+    let mut missing: [str] = []
+    let mut i = 0
+    while i < GROUPS.len() {
+        let v = GROUPS[i][0]
+        let dir = root + "/" + v
+        if !_has_any_md(dir) {
+            missing = missing + [v]
+        }
+        i = i + 1
+    }
+    return missing
+}
+
+fn check_group_totals() -> [str] {
+    let mut counts: [int] = [0, 0, 0, 0, 0, 0]
+    let mut i = 0
+    while i < GROUPS.len() {
+        let g = GROUPS[i][1]
+        let idx = _group_index(g)
+        if idx >= 0 { counts[idx] = counts[idx] + 1 }
+        i = i + 1
+    }
+    let mut errors: [str] = []
+    let mut k = 0
+    while k < GROUP_NAMES.len() {
+        if counts[k] != GROUP_EXPECTED[k] {
+            errors = errors + [GROUP_NAMES[k] + ": " + str(counts[k]) + " ≠ expected " + str(GROUP_EXPECTED[k])]
+        }
+        k = k + 1
+    }
+    return errors
+}
+
+fn check_cli_enumerates_29(root: str) -> [str] {
+    let cli = root + "/cli/hexa-chip.hexa"
+    let mut missing: [str] = []
+    if !_has_file(cli) {
+        missing = missing + ["(cli/hexa-chip.hexa absent)"]
+        return missing
+    }
+    let text = read_file(cli)
+    let mut i = 0
+    while i < GROUPS.len() {
+        let v = GROUPS[i][0]
+        // Verb is enumerated when "<v>" appears as a quoted token in the file.
+        let needle = "\"" + v + "\""
+        if !text.contains(needle) {
+            missing = missing + [v]
+        }
+        i = i + 1
+    }
+    return missing
+}
+
+fn _has_flag(args: [str], flag: str) -> bool {
+    for x in args {
+        if x == flag { return true }
+    }
+    return false
+}
+
+fn _user_args() -> [str] {
+    let raw = args()
+    let mut sidx = -1
+    let mut i = 0
+    while i < raw.len() {
+        if raw[i].ends_with(".hexa") { sidx = i; break }
+        i = i + 1
+    }
+    let mut out: [str] = []
+    let mut j = sidx + 1
+    if sidx < 0 { j = 0 }
+    while j < raw.len() {
+        out = out + [raw[j]]
+        j = j + 1
+    }
+    return out
+}
+
+fn main() {
+    let ua = _user_args()
+    let json_mode = _has_flag(ua, "--json")
+    let root = _root()
+
+    let missing_dirs = check_dir_presence(root)
+    let missing_md   = check_spec_md_presence(root)
+    let group_errors = check_group_totals()
+    let missing_cli  = check_cli_enumerates_29(root)
+
+    let total_failed =
+        missing_dirs.len() +
+        missing_md.len() +
+        group_errors.len() +
+        missing_cli.len()
+
+    if json_mode {
+        let mut js = "{\"tool\":\"hexa-chip/verify/inventory_check.hexa\","
+        js = js + "\"schema\":\"hexa-chip/inventory/v1\","
+        js = js + "\"root\":\"" + root + "\","
+        js = js + "\"verbs_total\":29,"
+        js = js + "\"groups_total\":6,"
+        js = js + "\"missing_dirs\":" + str(missing_dirs.len()) + ","
+        js = js + "\"missing_specs\":" + str(missing_md.len()) + ","
+        js = js + "\"group_total_errors\":" + str(group_errors.len()) + ","
+        js = js + "\"cli_missing_verbs\":" + str(missing_cli.len()) + ","
+        js = js + "\"ok\":"
+        if total_failed == 0 { js = js + "true" } else { js = js + "false" }
+        js = js + "}"
+        println(js)
+        if total_failed == 0 { return }
+        exit(1)
+    }
+
+    println("========================================================================")
+    println("  hexa-chip — 29-verb / 6-group inventory audit")
+    println("========================================================================")
+    println("  root: " + root)
+    println("")
+
+    // 1. directory presence
+    if missing_dirs.len() == 0 {
+        println("  [PASS] all 29 verb directories present")
+    } else {
+        println("  [FAIL] missing verb directories (" + str(missing_dirs.len()) + "):")
+        for v in missing_dirs { println("         - " + v) }
+    }
+
+    // 2. spec .md presence
+    if missing_md.len() == 0 {
+        println("  [PASS] every verb directory has at least one .md spec")
+    } else {
+        println("  [FAIL] verbs missing .md spec (" + str(missing_md.len()) + "):")
+        for v in missing_md { println("         - " + v) }
+    }
+
+    // 3. group totals
+    if group_errors.len() == 0 {
+        println("  [PASS] group totals: 3+5+5+6+8+2 = 29 (architecture/design/process/packaging/accelerator/consciousness)")
+    } else {
+        println("  [FAIL] group total drift:")
+        for e in group_errors { println("         - " + e) }
+    }
+
+    // 4. CLI enumerates 29
+    if missing_cli.len() == 0 {
+        println("  [PASS] cli/hexa-chip.hexa enumerates all 29 verbs")
+    } else {
+        println("  [FAIL] cli/hexa-chip.hexa missing verbs:")
+        for v in missing_cli { println("         - " + v) }
+    }
+    println("========================================================================")
+    if total_failed == 0 {
+        println("  PASS — inventory holds (29 verbs / 6 groups, dirs+specs+CLI agree)")
+        return
+    }
+    println("  FAIL — inventory drift detected (" + str(total_failed) + " issue(s))")
+    exit(1)
+}

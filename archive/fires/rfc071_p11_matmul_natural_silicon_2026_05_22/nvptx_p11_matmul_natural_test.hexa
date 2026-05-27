@@ -1,0 +1,69 @@
+// compiler/codegen/nvptx_p11_matmul_natural_test.hexa
+// RFC 071 P11 — NATURAL-LOOP matmul source-to-silicon fixture
+//
+// @version 0.0.1
+// @capabilities [pure]
+// @phase("parse_only")
+//
+// SISTER to `nvptx_p10_matmul_test.hexa` (which exercises the explicit
+// `gpu_matmul(c, a, b, M, N, K)` BUILTIN synthesis path, N100/N129).
+// This P11 fixture exercises the NATURAL hexa source shape — a plain
+// triple-nested for-loop with a scalar accumulator — so the user does
+// NOT need to know about the `gpu_matmul` builtin to reach the WMMA
+// emit lane. It targets the N143 HIR→MIR auto-synth matcher
+// (`_hir_is_nested_matmul_body` + `_synthesize_matmul_skeleton`),
+// which detects the canonical desugared triple-for shape and rewrites
+// it into the SAME synthetic STMT_LOAD + STMT_LOAD + STMT_BINOP
+// ("matmul") + STMT_STORE skeleton that the NVPTX
+// `_nvptx_mfunc_is_matmul_shape` recogniser (N128, intact) keys on.
+//
+// SOURCE-SHAPE CONTRACT (the exact form the N143 matcher accepts; see
+// `_hir_is_nested_matmul_body` in compiler/lower/hir_to_mir.hexa and
+// mir_test.hexa `_build_case_g`):
+//   * `@gpu_kernel` annotation on the fn.
+//   * param list `(a, b, c, M, N, K)`.
+//   * fn body = single top-level for-expr (block of 1 child).
+//   * outer-for body: [ let i = …, <middle-for>, idx-inc ]  (3 children)
+//   * middle-for body: [ let j = …, let sum = 0.0, <inner-for>,
+//                        c[i*N+j] = sum, idx-inc ]            (5 children)
+//   * inner-for body: [ let k = …, sum += a[i*K+k]*b[k*N+j],
+//                       idx-inc ]                             (3 children)
+//   * the accumulator rhs must contain a `*` binop of two `index`
+//     exprs (the a/b loads) — `_hir_rhs_contains_mul_of_two_indexes`.
+//
+// LOAD-BEARING SUM-INIT FORM (per N153 finding): the parser REJECTS
+// `var sum: f32 = 0.0` (a TYPED local inside @gpu_kernel) with
+// `Parse error unexpected Colon`. Use the UNTYPED `var sum = 0.0`
+// (or `let sum = 0.0`) literal-float init, which the C19 `_desugar_for`
+// + bind lower into the `let sum = 0.0` HIR node the matcher expects.
+//
+// HONEST SCOPE (@D g3):
+//   * `hexa parse` rc=0 expected (parse-gate, syntactic only).
+//   * Emit-time auto-synth (HIR→MIR) requires the N143 matcher to be
+//     PRESENT in compiler/lower/hir_to_mir.hexa. If the matcher is
+//     wiped (the silent-wipe hazard), this source falls through to the
+//     normal scalar nested-while lowering and NO `wmma.*` PTX is
+//     emitted — the auto-synth has NOT fired.
+//   * On a tree where N143 is present, the emit substring contract is
+//     IDENTICAL to P10/N129: `.visible .entry matmul_naive` +
+//     `wmma.load.a` + `wmma.load.b` + `wmma.mma` + `wmma.store.d`.
+//     Silicon-fire numeric equivalence vs CPU FP32 reference at
+//     M=N=K=64 (≤4 ULP) is the F-RFC071-NVPTX-MATMUL-NATURAL-LOOP-
+//     SOURCE-TO-SILICON falsifier.
+
+// ── The kernel (gpu/SPEC.md §2 — @gpu_kernel must return void) ───────
+// NO `gpu_matmul(...)` builtin call — pure natural triple-loop. The
+// kernel name `matmul_naive` mirrors mir_test.hexa `_build_case_g`.
+
+@gpu_kernel
+fn matmul_naive(a: [f16], b: [f16], c: [f32], M: i32, N: i32, K: i32) {
+    for i in 0..M {
+        for j in 0..N {
+            var sum = 0.0
+            for k in 0..K {
+                sum += a[i * K + k] * b[k * N + j]
+            }
+            c[i * N + j] = sum
+        }
+    }
+}

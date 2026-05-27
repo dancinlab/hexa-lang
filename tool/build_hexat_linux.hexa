@@ -1,0 +1,165 @@
+// ═══════════════════════════════════════════════════════════════
+//  build_hexat_linux.hexa — cross-build hexat transpiler for
+//  linux/x86_64 from macOS. Output = self-contained static ELF
+//  that can run on any linux/amd64 host (anima CLM pods, H100, etc.)
+//
+//  Usage:
+//    hexa tool/build_hexat_linux.hexa [-o build/hexat_linux]
+//
+//  Env:
+//    LINUX_CC      compiler (default x86_64-linux-musl-gcc on Darwin)
+//    EXTRA_CFLAGS  append to cflags
+// ═══════════════════════════════════════════════════════════════
+
+fn run_ok(cmd) {
+    let r = exec_with_status(cmd)
+    if r[1] != 0 {
+        eprintln("FAILED: " + cmd)
+        if r[0] != "" { eprintln(r[0]) }
+        exit(1)
+    }
+    r[0]
+}
+
+// ── minimal selftest ─────────────────────────────────────────
+fn cmd_selftest() -> i64 {
+    println("[build_hexat_linux selftest]")
+    let mut fails = 0
+
+    // T1: default out_path derivation
+    let repo = "/tmp/fake_repo"
+    let mut out_path = ""
+    if out_path == "" {
+        out_path = repo + "/build/hexat_linux"
+    }
+    if out_path != "/tmp/fake_repo/build/hexat_linux" {
+        eprintln("  FAIL T1 default out_path: " + out_path)
+        fails = fails + 1
+    } else { println("  OK   T1 default out_path derivation") }
+
+    // T2: -o override parsing
+    let fake_args = ["hexa", "tool/build_hexat_linux.hexa", "-o", "/custom/hv2"]
+    let mut out2 = ""
+    let mut ai = 2
+    while ai < len(fake_args) {
+        let a = fake_args[ai]
+        if a == "-o" && (ai + 1) < len(fake_args) {
+            ai = ai + 1
+            out2 = fake_args[ai]
+        }
+        ai = ai + 1
+    }
+    if out2 != "/custom/hv2" {
+        eprintln("  FAIL T2 -o override: " + out2)
+        fails = fails + 1
+    } else { println("  OK   T2 -o override parsing") }
+
+    // T3: non-Darwin defaults cc to "cc"
+    let uname = "Linux"
+    let mut cc = ""
+    if cc == "" {
+        if uname == "Darwin" { cc = "x86_64-linux-musl-gcc" } else { cc = "cc" }
+    }
+    if cc != "cc" {
+        eprintln("  FAIL T3 Linux cc default: " + cc)
+        fails = fails + 1
+    } else { println("  OK   T3 Linux cc default") }
+
+    if fails != 0 { return 1 }
+    println("[build_hexat_linux selftest] OK")
+    return 0
+}
+
+fn main() {
+    let args = argv()
+    let mut _sti = 2
+    while _sti < len(args) {
+        if args[_sti] == "--selftest" || args[_sti] == "selftest" {
+            exit(cmd_selftest())
+        }
+        _sti = _sti + 1
+    }
+    let mut out_path = ""
+    let mut ai = 2
+    while ai < len(args) {
+        let a = args[ai]
+        if a == "-o" && (ai + 1) < len(args) {
+            ai = ai + 1
+            out_path = args[ai]
+        }
+        ai = ai + 1
+    }
+
+    let repo_root = exec_with_status("pwd")[0].trim()
+    let uname = exec_with_status("uname -s")[0].trim()
+
+    if out_path == "" {
+        out_path = repo_root + "/build/hexat_linux"
+    }
+
+    let mut cc = env("LINUX_CC")
+    if cc == "" {
+        if uname == "Darwin" {
+            cc = "x86_64-linux-musl-gcc"
+        } else {
+            cc = "cc"
+        }
+    }
+
+    let extra_cflags = env("EXTRA_CFLAGS")
+    let src = repo_root + "/self/native/hexa_cc.c"
+    let inc = repo_root + "/self"
+
+    println("=== hexat → linux/x86_64 (static ELF) ===")
+    println("  src    : " + src)
+    println("  output : " + out_path)
+    println("  cc     : " + cc)
+
+    if !file_exists(src) {
+        eprintln("error: source missing: " + src)
+        exit(1)
+    }
+
+    let cc_check = exec_with_status("which " + cc + " 2>/dev/null")
+    if cc_check[1] != 0 || cc_check[0].trim() == "" {
+        eprintln("error: compiler not found: " + cc)
+        eprintln("  brew install FiloSottile/musl-cross/musl-cross")
+        exit(1)
+    }
+
+    run_ok("mkdir -p " + exec_with_status("dirname '" + out_path + "'")[0].trim())
+
+    // hexa_cc.c heads with `#include "runtime.h"` (prototype-only header for
+    // the AOT user.c speed path) — that pulls in NO runtime function bodies,
+    // so compiling it alone fails to link (`undefined reference to hexa_str`,
+    // `__hexa_fn_arena_return`, …). The standalone transpiler binary needs the
+    // bodies, which live in runtime.c (it textually `#include`s runtime_core.c).
+    // Amalgamate by swapping the head include runtime.h → runtime.c into a temp
+    // TU, then compile THAT. (This swap was the missing step that let the
+    // committed hexat_linux_x86_64 binary drift stale vs the runtime source —
+    // the #634/#748 _hx_self_rss_bytes fscanf→syscall fix never reached it,
+    // re-introducing the mem-cap-transpile SIGSEGV on Linux pool hosts.)
+    let amalgam = "/tmp/hexa_cc_amalgam_linux.c"
+    run_ok("sed 's|#include \"runtime.h\"|#include \"runtime.c\"|' " + src + " > " + amalgam)
+
+    let cflags = "-O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs"
+    let cmd = cc + " " + cflags + " " + extra_cflags + " -I " + inc + " " + amalgam + " -o " + out_path + " -static -lm"
+    println("  " + cmd)
+    run_ok(cmd)
+    run_ok("rm -f " + amalgam)
+
+    let file_info = exec_with_status("file " + out_path)[0].trim()
+    let size = exec_with_status("wc -c < '" + out_path + "' | tr -d ' '")[0].trim()
+    let sha = exec_with_status("shasum -a 256 " + out_path + " | awk '{print $1}'")[0].trim()
+
+    println("")
+    println("=== BUILD OK ===")
+    println("  path   : " + out_path)
+    println("  size   : " + size + " bytes")
+    println("  sha256 : " + sha)
+    println("  file   : " + file_info)
+    println("")
+    println("anima pod deploy:")
+    println("  scp " + out_path + " root@anima-clm-pod:/opt/hexa/bin/hexat")
+    println("  ssh root@anima-clm-pod 'chmod +x /opt/hexa/bin/hexat && /opt/hexa/bin/hexat --help'")
+}

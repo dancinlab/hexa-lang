@@ -1,0 +1,592 @@
+// self/attrs/publish.hexa — 논문.md 자동 배포 attr
+//
+// ─────────────────────────────────────────────────────────────────────────
+// [DEPRECATED 2026-04-28] — paper 자동 배포 분기 폐기
+// ─────────────────────────────────────────────────────────────────────────
+// 사용자 directive (2026-04-28): "모든 프로젝트에 paper 관련 배포 방법은 폐기".
+// 본 attribute 는 paper 전용 (@doc(type=paper) 검증 + domains.json upsert
+// + git add/commit/push) 이었으며, 단일 진입점은 papers CLI 로 일원화됨.
+//
+// 후속 사용처:
+//   - paper 등록/배포: /Users/ghost/core/papers/upload_all_unpublished.hexa
+//                     /Users/ghost/core/papers/tool/osf_publish.hexa
+//                     /Users/ghost/core/papers/tool/zenodo_publish.hexa
+//   - .workspace mandate: papers CLI 단일 진입점 (own 9 sister)
+//
+// 폐기 정책:
+//   - 파일 보존 (history preservation, attribute 자체는 등록부에 살아있음)
+//   - run_publish / publish_md 진입 시 즉시 abort + papers CLI 안내
+//   - check_publish 는 deprecation warn 추가 (lint 단계에서 가시화)
+//   - meta_publish.implemented = false 로 표시 (attrs.json 재생성 시 반영)
+//
+// 과거 동작 (참고용, 더이상 실행되지 않음):
+//   <!-- @doc(type=paper) -->
+//   <!-- @publish(auto=true, push=false) -->
+//
+//   흐름 (auto=true):
+//     1. @doc(type=paper) 위반 0 검증 (전제)
+//     2. domains.json upsert (nexus 공유 SSOT)
+//     3. git status 깨끗 확인 + md + domains.json 만 변경됐는지 검사
+//     4. git add + commit (한글 메시지)
+//     5. push=true 이면 branch==main 에서만 git push
+// ─────────────────────────────────────────────────────────────────────────
+
+use "self/attrs/core"
+use "self/attrs/_lib/error_catalog"
+use "self/attrs/_lib/rules_loader"
+use "self/attrs/doc"
+use "self/attrs/_domain/axes"
+use "self/attrs/_publish_registry"
+use "self/stdlib/law_io"
+
+// HX11 AI-native SELF-FORMAT — `.publish-rules.json` (프로젝트) / 글로벌
+// `/Users/ghost/Dev/nexus/tool/config/publish_rules.json` 에서 커밋 메시지
+// 템플릿 / push 정책 / branch allow list / registry 경로 주입.
+
+fn _global_publish_rules_path() -> string {
+    return "/Users/ghost/Dev/nexus/tool/config/publish_rules.json"
+}
+
+pub fn find_publish_rules(source: string) {
+    return find_attr_rules(source, "publish", _global_publish_rules_path())
+}
+
+// rules → push allowed branches (default ["main"])
+pub fn publish_allowed_branches(rules) {
+    if has_key(rules, "rules") {
+        let r = rules["rules"]
+        if has_key(r, "push") {
+            let p = r["push"]
+            if has_key(p, "allowed_branches") { return p["allowed_branches"] }
+        }
+    }
+    return ["main"]
+}
+
+// rules → registry path (default nexus)
+pub fn publish_registry_path(rules) -> string {
+    if has_key(rules, "rules") {
+        let r = rules["rules"]
+        if has_key(r, "registry") {
+            let reg = r["registry"]
+            if has_key(reg, "path") { return reg["path"] }
+        }
+    }
+    return "/Users/ghost/Dev/nexus/n6/docs/domains.json"
+}
+
+// rules → commit 메시지 템플릿 (create|update)
+// {axis} {name_ko} {entry_id} {mk_target} {md_rel} 플레이스홀더 치환
+pub fn publish_commit_template(rules, op: string) -> string {
+    if has_key(rules, "rules") {
+        let r = rules["rules"]
+        if has_key(r, "commit_message") {
+            let cm = r["commit_message"]
+            let k = if op == "created" { "create_template" } else { "update_template" }
+            if has_key(cm, k) { return cm[k] }
+        }
+    }
+    if op == "created" {
+        return "feat({axis}): {name_ko} 도메인 신규 등록 (@publish)"
+    }
+    return "chore({axis}): {entry_id} {mk_target} 업데이트 (@publish)"
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// meta
+// ─────────────────────────────────────────────────────────────────────────
+
+fn meta_publish() {
+    let mut m = empty_meta()
+    m.name = "publish"
+    m.category = "meta"
+    m.purpose = "[DEPRECATED 2026-04-28] paper 자동 배포 — papers CLI 로 일원화 (own 9)"
+    m.cost_rule = "DEPRECATED — run_publish/publish_md 호출 시 즉시 abort. papers CLI 사용."
+    m.side_effect = "[DEPRECATED] 과거: domains.json 쓰기 + git add/commit + (opt) git push"
+    m.requires = "[DEPRECATED] 과거: @doc(type=paper) 검증 0 위반, git repo 감지 성공"
+    m.auto_test = "[DEPRECATED] 과거: dog-robot 시드 도메인 — auto=true push=false"
+    m.example = "// [DEPRECATED] papers CLI 로 이전 — /Users/ghost/core/papers/upload_all_unpublished.hexa"
+    m.implemented = false
+    return m
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 선언 감지 — @publish(auto=..., push=...) 파싱
+// ─────────────────────────────────────────────────────────────────────────
+
+// ctx map 반환: { "declared": bool, "auto": bool, "push": bool }
+// default: auto=false, push=false (명시적 opt-in)
+fn detect_publish_decl(lines) {
+    let mut out = #{}
+    out["declared"] = false
+    out["auto"] = false
+    out["push"] = false
+
+    let mut i = 0
+    for line in lines {
+        i = i + 1
+        if i > 50 { break }
+        let t = line.trim()
+        let is_comment = t.starts_with("//") || t.starts_with("<!--") || t.starts_with("#")
+        if !is_comment { continue }
+        let idx = t.index_of("@publish(")
+        if idx < 0 { continue }
+        let after = t.substring(idx + 9, len(t))
+        let cp = after.index_of(")")
+        if cp < 0 { continue }
+        let body = after.substring(0, cp)
+        out["declared"] = true
+        let parts = body.split(",")
+        for p in parts {
+            let kv = p.trim()
+            if kv.starts_with("auto=") {
+                let v = kv.substring(5, len(kv)).trim()
+                out["auto"] = v == "true"
+            }
+            if kv.starts_with("push=") {
+                let v = kv.substring(5, len(kv)).trim()
+                out["push"] = v == "true"
+            }
+        }
+        return out
+    }
+    return out
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// git 유틸 — exec 래퍼
+// ─────────────────────────────────────────────────────────────────────────
+
+// md 파일의 git repo root 감지 — `git -C <dir> rev-parse --show-toplevel`
+// 반환: repo root 절대경로 또는 "" (실패)
+fn _git_repo_root(md_path: string) -> string {
+    // dirname: 마지막 / 이전
+    let mut dir = md_path
+    let last_slash = _last_index_of(md_path, "/")
+    if last_slash > 0 {
+        dir = md_path.substring(0, last_slash)
+    }
+    if dir == "" { return "" }
+    let cmd = "git -C '" + dir + "' rev-parse --show-toplevel 2>/dev/null"
+    let raw = to_string(exec(cmd)).trim()
+    return raw
+}
+
+fn _last_index_of(s: string, needle: string) -> int {
+    let mut found = -1
+    let mut i = 0
+    let sn = len(s)
+    let nn = len(needle)
+    if nn == 0 || sn < nn { return -1 }
+    while i <= sn - nn {
+        if s.substring(i, i + nn) == needle { found = i }
+        i = i + 1
+    }
+    return found
+}
+
+// 현재 브랜치 이름
+fn _git_branch(repo: string) -> string {
+    let cmd = "git -C '" + repo + "' rev-parse --abbrev-ref HEAD 2>/dev/null"
+    return to_string(exec(cmd)).trim()
+}
+
+// `git status --porcelain` 전체 — ""=clean
+fn _git_status_all(repo: string) -> string {
+    let cmd = "git -C '" + repo + "' status --porcelain 2>/dev/null"
+    return to_string(exec(cmd)).trim()
+}
+
+// 특정 파일의 status 라인 — ""=변경 없음
+fn _git_status_file(repo: string, rel: string) -> string {
+    let cmd = "git -C '" + repo + "' status --porcelain -- '" + rel + "' 2>/dev/null"
+    return to_string(exec(cmd)).trim()
+}
+
+// 절대경로 → repo root 기준 상대경로
+// macOS symlink (/tmp → /private/tmp) 대응: common-suffix 방식.
+// repo 의 basename (마지막 세그먼트) 을 abs 에서 찾아 그 뒤를 잘라낸다.
+fn _rel_path(repo: string, abs: string) -> string {
+    // 1차: straight prefix 매칭 (가장 흔한 경우)
+    let rlen = len(repo)
+    if len(abs) > rlen {
+        let head = abs.substring(0, rlen)
+        if head == repo {
+            let mut rest = abs.substring(rlen, len(abs))
+            if rest.starts_with("/") { rest = rest.substring(1, len(rest)) }
+            return rest
+        }
+    }
+    // 2차: symlink 차이 — repo 의 basename 으로 anchor
+    let rparts = repo.split("/")
+    let aparts = abs.split("/")
+    let mut i = len(rparts) - 1
+    let mut anchor = ""
+    while i >= 0 {
+        if rparts[i] != "" { anchor = rparts[i]; break }
+        i = i - 1
+    }
+    if anchor == "" { return abs }
+    let mut found = -1
+    let mut j = 0
+    while j < len(aparts) {
+        if aparts[j] == anchor { found = j }
+        j = j + 1
+    }
+    if found < 0 { return abs }
+    let mut pieces = []
+    let mut k = found + 1
+    while k < len(aparts) {
+        if aparts[k] != "" { pieces.push(aparts[k]) }
+        k = k + 1
+    }
+    return pieces.join("/")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 커밋 메시지 템플릿 (한글) — HX11 rules 주입
+// ─────────────────────────────────────────────────────────────────────────
+
+// 단순 치환 — s 안의 {key} 를 val 로 교체 (모든 occurrence)
+fn _tpl_subst(s: string, key: string, val: string) -> string {
+    let needle = "{" + key + "}"
+    let mut out = ""
+    let mut from = 0
+    let n = len(s)
+    let nn = len(needle)
+    if nn == 0 { return s }
+    while from < n {
+        let idx = s.substring(from, n).index_of(needle)
+        if idx < 0 {
+            out = out + s.substring(from, n)
+            break
+        }
+        let abs_idx = from + idx
+        out = out + s.substring(from, abs_idx) + val
+        from = abs_idx + nn
+    }
+    return out
+}
+
+// rules 에서 body_lines 꺼내기 (없으면 default)
+fn _commit_body_lines(rules) {
+    if has_key(rules, "rules") {
+        let r = rules["rules"]
+        if has_key(r, "commit_message") {
+            let cm = r["commit_message"]
+            if has_key(cm, "body_lines") { return cm["body_lines"] }
+        }
+    }
+    return [
+        "- @doc(type=paper) 위반 0 확인",
+        "- domains.json entry id: {entry_id}",
+        "- md: {md_rel}",
+        "- 자동 실행: @publish(auto=true) attr"
+    ]
+}
+
+fn _commit_msg(ctx, op: string, entry_id: string, md_rel: string) -> string {
+    let axis = if has_key(ctx, "axis") { ctx["axis"] } else { "compute" }
+    let name_ko = if has_key(ctx, "name_ko") { ctx["name_ko"] } else { entry_id }
+    let mk_target = if has_key(ctx, "mk_target") { ctx["mk_target"] } else { "mk1" }
+
+    // rules 로드 — ctx 에 "source" 있으면 우선, 없으면 cwd 기준
+    let src = if has_key(ctx, "source") { ctx["source"] } else { "" }
+    let rules = find_publish_rules(src)
+
+    // subject 템플릿
+    let tpl = publish_commit_template(rules, op)
+    let mut subject = tpl
+    subject = _tpl_subst(subject, "axis", axis)
+    subject = _tpl_subst(subject, "name_ko", name_ko)
+    subject = _tpl_subst(subject, "entry_id", entry_id)
+    subject = _tpl_subst(subject, "mk_target", mk_target)
+    subject = _tpl_subst(subject, "md_rel", md_rel)
+
+    let body_tpl = _commit_body_lines(rules)
+    let mut parts = []
+    parts.push(subject)
+    parts.push("")
+    for bl in body_tpl {
+        let mut line = bl
+        line = _tpl_subst(line, "axis", axis)
+        line = _tpl_subst(line, "name_ko", name_ko)
+        line = _tpl_subst(line, "entry_id", entry_id)
+        line = _tpl_subst(line, "mk_target", mk_target)
+        line = _tpl_subst(line, "md_rel", md_rel)
+        parts.push(line)
+    }
+    return parts.join("\n")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 메인 orchestration
+// ─────────────────────────────────────────────────────────────────────────
+
+// 반환 map: { status, op, entry_id, commit, push, notes[] }
+//   status ∈ { "ok", "dry_run", "noop", "error" }
+//   op     ∈ { "created", "updated", "" }
+//   notes  — 진행 로그 (stdout 출력용)
+fn run_publish(md_path: string, ctx) {
+    let mut rv = #{}
+    rv["status"] = "deprecated"
+    rv["op"] = ""
+    rv["entry_id"] = ""
+    rv["commit"] = ""
+    rv["push"] = ""
+    let mut notes = []
+
+    // [DEPRECATED 2026-04-28] paper 자동 배포 분기 폐기
+    // 사용자 directive: "모든 프로젝트에 paper 관련 배포 방법은 폐기"
+    // papers CLI 단일 진입점으로 위임 (own 9 sister, .workspace mandate).
+    notes.push("DEPRECATED: @publish 는 2026-04-28 자로 폐기됨")
+    notes.push("paper 배포 단일 진입점: papers CLI")
+    notes.push("  - /Users/ghost/core/papers/upload_all_unpublished.hexa")
+    notes.push("  - /Users/ghost/core/papers/tool/osf_publish.hexa")
+    notes.push("  - /Users/ghost/core/papers/tool/zenodo_publish.hexa")
+    notes.push("md_path 인자: " + md_path)
+    rv["notes"] = notes
+    return rv
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// [DEPRECATED 2026-04-28] 과거 orchestration 본체 — 호출되지 않음 (history)
+// ─────────────────────────────────────────────────────────────────────────
+fn _run_publish_deprecated(md_path: string, ctx) {
+    let mut rv = #{}
+    rv["status"] = "error"
+    rv["op"] = ""
+    rv["entry_id"] = ""
+    rv["commit"] = ""
+    rv["push"] = ""
+    let mut notes = []
+
+    // 0. 선행: ctx 기본값 + md 존재
+    if !file_exists(md_path) {
+        notes.push("ERROR: md 파일 없음 — " + md_path)
+        rv["notes"] = notes
+        return rv
+    }
+
+    let auto = if has_key(ctx, "auto") { ctx["auto"] } else { false }
+    let push = if has_key(ctx, "push") { ctx["push"] } else { false }
+    let entry_id = if has_key(ctx, "id") { ctx["id"] } else { "" }
+    rv["entry_id"] = entry_id
+
+    // 1. 전제 검증 — @doc(type=paper) 0 위반
+    let mut raw = ""
+    try {
+        raw = to_string(read_file(md_path))
+    } catch e {
+        notes.push("ERROR: md 읽기 실패 — " + md_path)
+        rv["notes"] = notes
+        return rv
+    }
+    let lines = raw.split("\n")
+    // check_doc(source, lines) — source 는 md 파일 경로 (프로젝트 rules 탐색용)
+    let violations = check_doc(md_path, lines)
+    if len(violations) > 0 {
+        notes.push("ABORT: @doc 위반 " + to_string(len(violations)) + "건 — publish 불가")
+        let mut i = 0
+        for v in violations {
+            i = i + 1
+            if i > 3 { break }
+            notes.push("  · " + fmt_msg(v))
+        }
+        rv["notes"] = notes
+        return rv
+    }
+    notes.push("OK: @doc(type=paper) 위반 0 확인")
+
+    // 2. git repo 감지
+    let repo = _git_repo_root(md_path)
+    if repo == "" {
+        notes.push("ERROR: git repo 미감지 — md 상위에 .git 없음")
+        rv["notes"] = notes
+        return rv
+    }
+    notes.push("OK: git repo — " + repo)
+
+    let md_rel = _rel_path(repo, md_path)
+
+    // 3. branch 확인 (push=true 면 allowed_branches 한정) — HX11 rules 주입
+    let p_rules = find_publish_rules(md_path)
+    let allowed = publish_allowed_branches(p_rules)
+    let branch = _git_branch(repo)
+    notes.push("branch: " + branch)
+    if push {
+        let mut ok = false
+        for b in allowed { if b == branch { ok = true } }
+        if !ok {
+            notes.push("ERROR: push=true 는 " + join(allowed, "|") + " branch 에서만 허용 — 현재: " + branch)
+            rv["notes"] = notes
+            return rv
+        }
+    }
+
+    // 4. 무관 파일 dirty 검사 (md + domains.json 만 허용)
+    //    dry-run 이든 실행이든 일관되게 사전 체크 — 검사만 읽기-전용
+    let dirty = _git_status_all(repo)
+    let domains_json_path = "/Users/ghost/Dev/nexus/n6/docs/domains.json"
+    let mut unrelated = []
+    if dirty != "" {
+        let dlines = dirty.split("\n")
+        for dl in dlines {
+            // porcelain: 'XY PATH' where XY is 2-char status (may include space).
+            // trim() 이 선행 공백을 제거하므로 space-index 기반 파싱 사용.
+            if dl == "" { continue }
+            // 첫 공백 이후가 path 의 시작 (status 는 1-2글자, space 로 구분)
+            let sp = dl.index_of(" ")
+            let mut p = ""
+            if sp < 0 {
+                // status 만 있는 라인 — skip
+                continue
+            }
+            // 연속 공백 skip → path 시작
+            let mut k = sp
+            while k < len(dl) && dl.substring(k, k+1) == " " { k = k + 1 }
+            if k >= len(dl) { continue }
+            p = dl.substring(k, len(dl)).trim()
+            if p == "" { continue }
+            let abs_p = repo + "/" + p
+            // md_path 자체는 허용. domains.json 은 nexus 레포라 이 repo 의 dirty 가 아님.
+            if abs_p == md_path { continue }
+            if p == md_rel { continue }
+            unrelated.push(p)
+        }
+    }
+    if len(unrelated) > 0 {
+        notes.push("ABORT: 무관 dirty 파일 " + to_string(len(unrelated)) + "개 — publish 전 정리 필요")
+        let mut i = 0
+        for u in unrelated {
+            i = i + 1
+            if i > 5 { break }
+            notes.push("  · " + u)
+        }
+        rv["notes"] = notes
+        return rv
+    }
+    notes.push("OK: repo clean (md 외 dirty 없음)")
+
+    // 5. ctx 에 md_rel_path + source 주입 (registry + rules 탐색 용)
+    let mut ctx2 = ctx
+    ctx2["md_rel_path"] = md_rel
+    if !has_key(ctx2, "source") { ctx2["source"] = md_path }
+
+    // ─ dry-run 분기 ──────────────────────────────────────────
+    if !auto {
+        let exists = registry_has(entry_id)
+        let op = if exists { "updated" } else { "created" }
+        rv["op"] = op
+        rv["status"] = "dry_run"
+        let msg = _commit_msg(ctx2, op, entry_id, md_rel)
+        notes.push("DRY-RUN: auto=false — 실제 실행 없음")
+        notes.push("예정 op: " + op)
+        notes.push("예정 commit subject: " + msg.split("\n")[0])
+        if push { notes.push("예정 push: origin " + branch) }
+        rv["notes"] = notes
+        return rv
+    }
+
+    // ─ 실제 실행 ────────────────────────────────────────────
+
+    // 6. domains.json upsert
+    let up_status = registry_upsert(ctx2)
+    if up_status != "created" && up_status != "updated" {
+        notes.push("ERROR: domains.json 쓰기 실패 — " + up_status)
+        rv["notes"] = notes
+        return rv
+    }
+    rv["op"] = up_status
+    notes.push("OK: domains.json " + up_status)
+
+    // 7. md 실제 변경 여부 — 변경 없고 domains.json 도 멱등이면 noop
+    let md_status = _git_status_file(repo, md_rel)
+    if md_status == "" && up_status == "updated" {
+        // 변경 없음 — md 그대로 + 레지스트리 타임스탬프만 touch
+        notes.push("NOOP: md 변경 없음 + registry 만 갱신")
+        rv["status"] = "noop"
+        rv["notes"] = notes
+        return rv
+    }
+
+    // 8. git add + commit
+    let add_cmd = "git -C '" + repo + "' add '" + md_rel + "' 2>&1"
+    let add_out = to_string(exec(add_cmd)).trim()
+    if add_out != "" { notes.push("git add: " + add_out) }
+
+    // commit message 를 임시파일로 전달 — heredoc 회피 + 이스케이프 안전
+    let msg = _commit_msg(ctx2, up_status, entry_id, md_rel)
+    let tmp_msg = "/tmp/_hexa_publish_msg_" + to_string(timestamp()) + ".txt"
+    let mut wok = true
+    try { safe_write_file(tmp_msg, msg) } catch e { wok = false }
+    if !wok {
+        notes.push("ERROR: commit msg 임시 파일 쓰기 실패")
+        rv["notes"] = notes
+        return rv
+    }
+    let commit_cmd = "git -C '" + repo + "' commit -F '" + tmp_msg + "' 2>&1"
+    let commit_out = to_string(exec(commit_cmd)).trim()
+    exec("rm -f '" + tmp_msg + "'")
+    rv["commit"] = commit_out
+    notes.push("git commit:")
+    notes.push(commit_out)
+
+    // commit 성공 판정 — "nothing to commit" 포함 시도 noop 처리
+    if commit_out.contains("nothing to commit") {
+        notes.push("NOOP: nothing to commit")
+        rv["status"] = "noop"
+        rv["notes"] = notes
+        return rv
+    }
+
+    // 9. push (opt-in, main 한정)
+    if push {
+        let push_cmd = "git -C '" + repo + "' push origin main 2>&1"
+        let push_out = to_string(exec(push_cmd)).trim()
+        rv["push"] = push_out
+        notes.push("git push:")
+        notes.push(push_out)
+    } else {
+        notes.push("SKIP push: push=false (로컬 commit 만)")
+    }
+
+    rv["status"] = "ok"
+    rv["notes"] = notes
+    return rv
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// lint-side check (registry 요구사항) — 위반 대신 no-op
+// @publish 는 실행 orchestration 이므로 check 는 공백 반환
+// ─────────────────────────────────────────────────────────────────────────
+
+fn check_publish(source: string, lines: [string]) {
+    let mut out = []
+    let decl = detect_publish_decl(lines)
+    if !decl["declared"] { return out }
+
+    // [DEPRECATED 2026-04-28] @publish 선언 자체에 대한 deprecation 경고
+    // 사용자 directive: "모든 프로젝트에 paper 관련 배포 방법은 폐기"
+    // 단일 진입점: papers CLI (/Users/ghost/core/papers/upload_all_unpublished.hexa)
+    out.push(mk_msg_k("publish", "warn", source, 1,
+        "[DEPRECATED] @publish 폐기 (2026-04-28) — papers CLI 사용 (papers/upload_all_unpublished.hexa)",
+        "publish_deprecated"))
+    return out
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 편의 entry: md 경로만 주고 자동 실행
+//
+// 사용 (다른 .hexa 에서):
+//   use "self/attrs/publish"
+//   let ctx = #{ "id": "dog-robot", "axis": "life", "name_ko": "강아지 로봇" }
+//   let rv = publish_md("/path/to/dog-robot.md", ctx)
+//   for n in rv["notes"] { println(n) }
+// ─────────────────────────────────────────────────────────────────────────
+
+fn publish_md(md_path: string, ctx) {
+    // [DEPRECATED 2026-04-28] paper 자동 배포 폐기 — papers CLI 위임
+    // run_publish 가 즉시 deprecation notes 와 함께 abort 함.
+    return run_publish(md_path, ctx)
+}

@@ -1,0 +1,18 @@
+#!hexa strict
+// stdlib/perovskite/analyze.hexa — `perovskite + analyze` producer (hexa-native).
+// Goldschmidt tolerance t=(rA+rX)/√2(rB+rX) + octahedral μ=rB/rX for MAPbI3
+// (effective ionic radii, Å). Geometric formability screen — cellrun writes
+// the manifest record. GATE_OPEN / absorbed=false (g3): NOT a measured phase.
+extern fn sqrt(x: float) -> float
+
+fn main() {
+    let rA = 2.17
+    let rB = 1.19
+    let rX = 2.20
+    let t = (rA + rX) / (sqrt(2.0) * (rB + rX))
+    let mu = rB / rX
+    println("perovskite_analyze (MAPbI3 · Goldschmidt screen):")
+    println("  tolerance_t = " + str(t))
+    println("  octahedral_mu = " + str(mu))
+    println("__HEXA_PEROVSKITE_ANALYZE__ PASS gate=GATE_OPEN absorbed=false")
+}

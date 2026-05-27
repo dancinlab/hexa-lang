@@ -1,0 +1,1201 @@
+// ===================================================================
+//  test_squeeze_llm.hexa — SqueezeLLM verification (ML #100)
+//
+//  Validates sensitivity-based non-uniform quantization in
+//  self/ml/squeeze_llm.hexa. Covers sensitivity computation,
+//  k-means codebook, int3/int4 quantize/dequant, forward pass,
+//  error metrics, edge cases.
+//
+//  Run:  ./hexa self/test_squeeze_llm.hexa
+// ===================================================================
+
+// -- inlined from self/ml/squeeze_llm.hexa --
+// codegen import not wired for test files
+
+// ===================================================================
+//  squeeze_llm.hexa — SqueezeLLM: Sensitivity-based Non-uniform
+//  Quantization (ML #100)
+//
+//  Reference: Kim et al. 2023 "SqueezeLLM: Dense-and-Sparse
+//  Quantization" (UC Berkeley).
+//
+//  Core idea:
+//    Uniform quantization wastes bits on low-sensitivity regions and
+//    under-represents high-sensitivity weights. SqueezeLLM computes
+//    per-weight sensitivity (Fisher/Hessian diagonal), then builds a
+//    non-uniform codebook via density-weighted k-means clustering.
+//    Each weight maps to a codebook index (int3/int4) and is
+//    reconstructed by lookup.
+//
+//  Algorithm:
+//    1. Compute per-weight sensitivity  s[i] = h[i] * w[i]^2
+//       where h[i] is the diagonal Hessian (Fisher approx).
+//    2. Build a 1-D codebook of K entries (K=8 for int3, K=16 for
+//       int4) by density-weighted k-means:  each weight contributes
+//       mass proportional to its sensitivity, so important weights
+//       pull centroids toward them.
+//    3. Assign each weight to its nearest centroid -> int3/int4 code.
+//    4. Dequantize by codebook lookup.
+//
+//  API:
+//    sq_sensitivity(W, calib, in_dim)         -> [float] per-weight
+//    sq_kmeans_init(W, sens, k)               -> [float] centroids
+//    sq_kmeans_step(W, sens, centroids)        -> [float] new centroids
+//    sq_build_codebook(W, sens, k, iters)     -> SqCodebook
+//    sq_quantize(W, n_out, n_in, calib, bits) -> SqTensor
+//    sq_dequantize(st)                        -> [float]
+//    sq_forward(st, x)                        -> [float] y = W * x
+//    sq_error_stats(W, st)                    -> SqStats
+//
+//  Storage format (SqTensor):
+//    n_out      : int           output rows
+//    n_in       : int           input columns
+//    bits       : int           3 or 4
+//    codebook   : [float]       K centroids (K = 2^bits)
+//    codes      : [int]         per-weight codebook index (flat)
+//    sens       : [float]       per-weight sensitivity (for reference)
+//
+//  Pure hexa -- no external dependencies.
+// ===================================================================
+
+// ── Constants ────────────────────────────────────────────────────
+@pure fn SQ_DEFAULT_ITERS() { return 20 }
+@pure fn SQ_DAMP() { return 0.01 }
+
+// ── Result structs ───────────────────────────────────────────────
+struct SqCodebook {
+    centroids: array,
+    k: int
+}
+
+struct SqTensor {
+    n_out: int,
+    n_in: int,
+    bits: int,
+    codebook: array,
+    codes: array,
+    sens: array
+}
+
+struct SqStats {
+    mse: float,
+    max_err: float,
+    snr: float
+}
+
+// ── Math helpers (private, prefixed _sq to avoid collision) ──────
+fn _sq_abs(x) {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn _sq_max(a, b) {
+    if a >= b { return a }
+    return b
+}
+
+fn _sq_min(a, b) {
+    if a <= b { return a }
+    return b
+}
+
+fn _sq_clamp(v, lo, hi) {
+    if v < lo { return lo }
+    if v > hi { return hi }
+    return v
+}
+
+fn _sq_round(x) {
+    if x >= 0.0 { return int(x + 0.5) }
+    return int(x - 0.5)
+}
+
+fn _sq_log10(x) {
+    if x <= 0.0 { return -999.0 }
+    let mut v = x
+    let mut result = 0.0
+    while v >= 10.0 {
+        v = v / 10.0
+        result = result + 1.0
+    }
+    while v < 1.0 {
+        v = v * 10.0
+        result = result - 1.0
+    }
+    let t = (v - 1.0) / (v + 1.0)
+    let t2 = t * t
+    let ln_v = 2.0 * (t + t * t2 / 3.0 + t * t2 * t2 / 5.0 + t * t2 * t2 * t2 / 7.0 + t * t2 * t2 * t2 * t2 / 9.0)
+    result = result + ln_v / 2.302585
+    return result
+}
+
+// ===================================================================
+//  sq_hessian_diag(calib, in_dim) -> [float]
+//
+//  Diagonal Hessian from calibration data (Fisher approximation).
+//  calib is flat [nsamples x in_dim].  Returns length-in_dim array.
+//  Matches GPTQ hessian construction with dampening.
+// ===================================================================
+fn sq_hessian_diag(calib, in_dim) {
+    let n = len(calib)
+    let nsamples = n / in_dim
+    let mut h = []
+    let mut c = 0
+    while c < in_dim {
+        h = h + [0.0]
+        c = c + 1
+    }
+    let mut s = 0
+    while s < nsamples {
+        let base = s * in_dim
+        c = 0
+        while c < in_dim {
+            let v = calib[base + c]
+            h[c] = h[c] + v * v
+            c = c + 1
+        }
+        s = s + 1
+    }
+    let norm = 2.0 / _sq_max(to_float(nsamples), 1.0)
+    let mut mean_d = 0.0
+    c = 0
+    while c < in_dim {
+        h[c] = h[c] * norm
+        mean_d = mean_d + h[c]
+        c = c + 1
+    }
+    mean_d = mean_d / _sq_max(to_float(in_dim), 1.0)
+    let damp = SQ_DAMP() * mean_d
+    c = 0
+    while c < in_dim {
+        h[c] = h[c] + damp
+        c = c + 1
+    }
+    return h
+}
+
+// ===================================================================
+//  sq_sensitivity(W, n_out, n_in, calib) -> [float]
+//
+//  Per-weight sensitivity:  s[r, c] = h[c] * w[r, c]^2
+//  where h is the column-wise Hessian diagonal. Flat output,
+//  same layout as W (row-major, n_out * n_in).
+//
+//  If calib is empty, falls back to uniform h = [1, 1, ...].
+// ===================================================================
+fn sq_sensitivity(W, n_out, n_in, calib) {
+    let n = n_out * n_in
+    let mut h = []
+    if len(calib) == 0 {
+        let mut c = 0
+        while c < n_in {
+            h = h + [1.0]
+            c = c + 1
+        }
+    } else {
+        h = sq_hessian_diag(calib, n_in)
+    }
+    let mut sens = []
+    let mut i = 0
+    while i < n {
+        let col = i % n_in
+        let w = W[i]
+        sens = sens + [h[col] * w * w]
+        i = i + 1
+    }
+    return sens
+}
+
+// ===================================================================
+//  sq_kmeans_init(W, sens, k) -> [float]
+//
+//  Initialize k centroids for density-weighted k-means.
+//  Strategy: sort a copy of the weights and pick k evenly-spaced
+//  data points as initial centroids. This ensures centroids start
+//  where actual data lives, avoiding empty-cluster problems that
+//  arise with linear spacing on gapped distributions.
+// ===================================================================
+fn sq_kmeans_init(W, sens, k) {
+    let n = len(W)
+    if n == 0 { return [] }
+    if k == 1 {
+        // Sensitivity-weighted mean
+        let mut sw_sum = 0.0
+        let mut s_sum = 0.0
+        let mut i = 0
+        while i < n {
+            sw_sum = sw_sum + sens[i] * W[i]
+            s_sum = s_sum + sens[i]
+            i = i + 1
+        }
+        let mut wmean = 0.0
+        if s_sum > 0.0 { wmean = sw_sum / s_sum }
+        return [wmean]
+    }
+    // Copy and sort weights (insertion sort -- O(n^2), fine for quant)
+    let mut sorted = []
+    let mut i = 0
+    while i < n {
+        sorted = sorted + [W[i]]
+        i = i + 1
+    }
+    i = 1
+    while i < n {
+        let mut j = i
+        while j > 0 {
+            if sorted[j - 1] <= sorted[j] { break }
+            let tmp = sorted[j - 1]
+            sorted[j - 1] = sorted[j]
+            sorted[j] = tmp
+            j = j - 1
+        }
+        i = i + 1
+    }
+    // Pick k evenly-spaced data points from sorted weights
+    let mut centroids = []
+    let mut ci = 0
+    while ci < k {
+        let mut idx = 0
+        if k > 1 {
+            idx = ci * (n - 1) / (k - 1)
+        }
+        centroids = centroids + [sorted[idx]]
+        ci = ci + 1
+    }
+    return centroids
+}
+
+// ===================================================================
+//  sq_kmeans_step(W, sens, centroids) -> [float]
+//
+//  One iteration of density-weighted k-means.
+//  Assignment: each weight -> nearest centroid.
+//  Update: new centroid = sum(sens[i]*w[i]) / sum(sens[i]) for
+//  weights assigned to that cluster. Sensitivity weighting ensures
+//  high-importance weights have proportionally more pull.
+// ===================================================================
+fn sq_kmeans_step(W, sens, centroids) {
+    let n = len(W)
+    let k = len(centroids)
+    // Accumulators for each cluster
+    let mut c_sum = []
+    let mut c_weight = []
+    let mut j = 0
+    while j < k {
+        c_sum = c_sum + [0.0]
+        c_weight = c_weight + [0.0]
+        j = j + 1
+    }
+    // Assign each weight to nearest centroid and accumulate
+    let mut i = 0
+    while i < n {
+        let w = W[i]
+        let s = sens[i]
+        let mut best_j = 0
+        let mut best_d = _sq_abs(w - centroids[0])
+        j = 1
+        while j < k {
+            let d = _sq_abs(w - centroids[j])
+            if d < best_d {
+                best_d = d
+                best_j = j
+            }
+            j = j + 1
+        }
+        c_sum[best_j] = c_sum[best_j] + s * w
+        c_weight[best_j] = c_weight[best_j] + s
+        i = i + 1
+    }
+    // New centroids (keep old if cluster is empty)
+    let mut new_c = []
+    j = 0
+    while j < k {
+        if c_weight[j] > 0.0 {
+            new_c = new_c + [c_sum[j] / c_weight[j]]
+        } else {
+            new_c = new_c + [centroids[j]]
+        }
+        j = j + 1
+    }
+    return new_c
+}
+
+// ===================================================================
+//  sq_build_codebook(W, sens, k, iters) -> SqCodebook
+//
+//  Build a k-entry codebook via density-weighted k-means.
+//  k = 2^bits (8 for int3, 16 for int4).
+// ===================================================================
+fn sq_build_codebook(W, sens, k, iters) {
+    let mut centroids = sq_kmeans_init(W, sens, k)
+    let mut it = 0
+    while it < iters {
+        centroids = sq_kmeans_step(W, sens, centroids)
+        it = it + 1
+    }
+    // Sort centroids ascending for deterministic ordering
+    let mut i = 1
+    while i < k {
+        let mut j = i
+        while j > 0 {
+            if centroids[j - 1] <= centroids[j] { break }
+            let tmp = centroids[j - 1]
+            centroids[j - 1] = centroids[j]
+            centroids[j] = tmp
+            j = j - 1
+        }
+        i = i + 1
+    }
+    return SqCodebook { centroids: centroids, k: k }
+}
+
+// ===================================================================
+//  sq_assign(W, codebook) -> [int]
+//
+//  Assign each weight to the nearest codebook centroid.
+//  Returns flat array of codebook indices (0..k-1).
+// ===================================================================
+fn sq_assign(W, codebook) {
+    let n = len(W)
+    let k = codebook.k
+    let cents = codebook.centroids
+    let mut codes = []
+    let mut i = 0
+    while i < n {
+        let w = W[i]
+        let mut best_j = 0
+        let mut best_d = _sq_abs(w - cents[0])
+        let mut j = 1
+        while j < k {
+            let d = _sq_abs(w - cents[j])
+            if d < best_d {
+                best_d = d
+                best_j = j
+            }
+            j = j + 1
+        }
+        codes = codes + [best_j]
+        i = i + 1
+    }
+    return codes
+}
+
+// ===================================================================
+//  sq_quantize(W, n_out, n_in, calib, bits) -> SqTensor
+//
+//  Full SqueezeLLM quantization pipeline:
+//    1. Compute per-weight sensitivity
+//    2. Build density-weighted codebook (k = 2^bits)
+//    3. Assign each weight to codebook entry
+//
+//  bits: 3 (int3, K=8) or 4 (int4, K=16).
+//  calib: flat [nsamples x n_in] calibration activations (may be []).
+// ===================================================================
+fn sq_quantize(W, n_out, n_in, calib, bits) {
+    let n = n_out * n_in
+    let k = 1
+    // compute 2^bits
+    let mut kval = 1
+    let mut b = 0
+    while b < bits {
+        kval = kval * 2
+        b = b + 1
+    }
+    let sens = sq_sensitivity(W, n_out, n_in, calib)
+    let codebook = sq_build_codebook(W, sens, kval, SQ_DEFAULT_ITERS())
+    let codes = sq_assign(W, codebook)
+    return SqTensor {
+        n_out: n_out,
+        n_in: n_in,
+        bits: bits,
+        codebook: codebook.centroids,
+        codes: codes,
+        sens: sens
+    }
+}
+
+// ===================================================================
+//  sq_dequantize(st) -> [float]
+//
+//  Reconstruct the weight matrix via codebook lookup.
+//  W_hat[i] = codebook[codes[i]]
+// ===================================================================
+fn sq_dequantize(st) {
+    let n = st.n_out * st.n_in
+    let mut out = []
+    let mut i = 0
+    while i < n {
+        let code = st.codes[i]
+        out = out + [st.codebook[code]]
+        i = i + 1
+    }
+    return out
+}
+
+// ===================================================================
+//  sq_forward(st, x) -> [float]
+//
+//  Matrix-vector product y = W * x using codebook dequantization
+//  on the fly (dequantize-to-register pattern). x has length n_in,
+//  output has length n_out.
+// ===================================================================
+fn sq_forward(st, x) {
+    let n_out = st.n_out
+    let n_in = st.n_in
+    let cb = st.codebook
+    let mut y = []
+    let mut r = 0
+    while r < n_out {
+        let base = r * n_in
+        let mut acc = 0.0
+        let mut c = 0
+        while c < n_in {
+            let code = st.codes[base + c]
+            let w = cb[code]
+            acc = acc + w * x[c]
+            c = c + 1
+        }
+        y = y + [acc]
+        r = r + 1
+    }
+    return y
+}
+
+// ===================================================================
+//  sq_matmul_ref(W, n_out, n_in, x) -> [float]
+//
+//  Naive FP32 reference matmul for tests.
+// ===================================================================
+fn sq_matmul_ref(W, n_out, n_in, x) {
+    let mut y = []
+    let mut r = 0
+    while r < n_out {
+        let base = r * n_in
+        let mut acc = 0.0
+        let mut c = 0
+        while c < n_in {
+            acc = acc + W[base + c] * x[c]
+            c = c + 1
+        }
+        y = y + [acc]
+        r = r + 1
+    }
+    return y
+}
+
+// ===================================================================
+//  sq_error_stats(W, st) -> SqStats
+//
+//  MSE / max-err / SNR (dB) between original W and codebook
+//  reconstruction.
+// ===================================================================
+fn sq_error_stats(W, st) {
+    let deq = sq_dequantize(st)
+    let n = len(W)
+    let mut sse = 0.0
+    let mut mx = 0.0
+    let mut sig = 0.0
+    let mut i = 0
+    while i < n {
+        let e = _sq_abs(W[i] - deq[i])
+        sse = sse + e * e
+        if e > mx { mx = e }
+        sig = sig + W[i] * W[i]
+        i = i + 1
+    }
+    let mse = sse / _sq_max(to_float(n), 1.0)
+    let mut snr = 999.0
+    if sse > 0.0 {
+        let ratio = sig / sse
+        snr = 10.0 * _sq_log10(ratio)
+    }
+    return SqStats { mse: mse, max_err: mx, snr: snr }
+}
+
+// ===================================================================
+//  sq_codebook_stats(st) -> (float, float, float)
+//
+//  Return (min, max, spread) of codebook centroids.
+// ===================================================================
+fn sq_codebook_min(st) {
+    let k = len(st.codebook)
+    let mut mn = st.codebook[0]
+    let mut i = 1
+    while i < k {
+        if st.codebook[i] < mn { mn = st.codebook[i] }
+        i = i + 1
+    }
+    return mn
+}
+
+fn sq_codebook_max(st) {
+    let k = len(st.codebook)
+    let mut mx = st.codebook[0]
+    let mut i = 1
+    while i < k {
+        if st.codebook[i] > mx { mx = st.codebook[i] }
+        i = i + 1
+    }
+    return mx
+}
+
+fn sq_codebook_spread(st) {
+    return sq_codebook_max(st) - sq_codebook_min(st)
+}
+
+// ===================================================================
+//  sq_sensitivity_stats(sens) -> (mean, max)
+// ===================================================================
+fn sq_sens_mean(sens) {
+    let n = len(sens)
+    if n == 0 { return 0.0 }
+    let mut s = 0.0
+    let mut i = 0
+    while i < n {
+        s = s + sens[i]
+        i = i + 1
+    }
+    return s / to_float(n)
+}
+
+fn sq_sens_max(sens) {
+    let n = len(sens)
+    if n == 0 { return 0.0 }
+    let mut mx = sens[0]
+    let mut i = 1
+    while i < n {
+        if sens[i] > mx { mx = sens[i] }
+        i = i + 1
+    }
+    return mx
+}
+
+// ===================================================================
+//  sq_summary(name, W, st) — debug print
+// ===================================================================
+fn sq_summary(name, W, st) {
+    let err = sq_error_stats(W, st)
+    let n = st.n_out * st.n_in
+    let k = len(st.codebook)
+    println("[squeeze] " + name + ": " + to_string(st.n_out) + "x" + to_string(st.n_in) + " bits=" + to_string(st.bits) + " k=" + to_string(k))
+    println("  n=" + to_string(n) + " mse=" + to_string(err.mse) + " max_err=" + to_string(err.max_err) + " snr=" + to_string(err.snr) + "dB")
+    return err
+}
+
+
+// -- end inlined --
+
+// ── Tally ────────────────────────────────────────────────────────
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn check(name, cond) {
+    if cond {
+        println("[PASS] " + name)
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name)
+        fail_count = fail_count + 1
+    }
+}
+
+// ── Math helpers (prefix t_ to avoid collision) ──────────────────
+fn t_abs(x) {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn t_approx(a, b, eps) {
+    return t_abs(a - b) < eps
+}
+
+fn t_max_err(orig, deq) {
+    let n = len(orig)
+    let mut mx = 0.0
+    let mut i = 0
+    while i < n {
+        let e = t_abs(orig[i] - deq[i])
+        if e > mx { mx = e }
+        i = i + 1
+    }
+    return mx
+}
+
+// ── PRNG (LCG) — deterministic test data ────────────────────────
+let mut _TRNG = 2026
+
+fn t_rand() {
+    _TRNG = (_TRNG * 1103515245 + 12345) % 2147483648
+    return _TRNG
+}
+
+fn t_rand_float() {
+    let r = t_rand()
+    return (to_float(r) / 1073741824.0) - 1.0
+}
+
+fn t_rand_vec(n) {
+    let mut out = []
+    let mut i = 0
+    while i < n {
+        out = out + [t_rand_float()]
+        i = i + 1
+    }
+    return out
+}
+
+// ===================================================================
+//  Test 1: Hessian diagonal is positive and dampened
+// ===================================================================
+fn test_hessian_positive() {
+    let calib = [
+        1.0, 2.0, 0.0, -1.0,
+        0.5, 1.0, 0.1, 0.0,
+        2.0, 0.0, -1.0, 0.5
+    ]
+    let h = sq_hessian_diag(calib, 4)
+    check("hessian.len", len(h) == 4)
+    let mut all_pos = true
+    let mut i = 0
+    while i < 4 {
+        if h[i] <= 0.0 { all_pos = false }
+        i = i + 1
+    }
+    check("hessian.all_positive", all_pos)
+    // Column 0 has largest activation sum: 1^2 + 0.5^2 + 2^2 = 5.25
+    check("hessian.col0_>_col2", h[0] > h[2])
+}
+
+// ===================================================================
+//  Test 2: Sensitivity is non-negative and reflects weight magnitude
+// ===================================================================
+fn test_sensitivity_basic() {
+    let W = [0.0, 1.0, -2.0, 0.5, 3.0, -0.1, 0.0, 0.0]
+    let sens = sq_sensitivity(W, 2, 4, [])
+    check("sens.len", len(sens) == 8)
+    // All sensitivities >= 0  (h * w^2 >= 0)
+    let mut all_nn = true
+    let mut i = 0
+    while i < 8 {
+        if sens[i] < 0.0 { all_nn = false }
+        i = i + 1
+    }
+    check("sens.non_negative", all_nn)
+    // Zero weight -> zero sensitivity
+    check("sens.zero_w_zero_s", sens[0] == 0.0)
+    // |W[2]|=2 > |W[1]|=1 in same column class -> sens[2] > sens[1]
+    check("sens.large_w_large_s", sens[2] > sens[1])
+}
+
+// ===================================================================
+//  Test 3: Sensitivity with calibration data
+// ===================================================================
+fn test_sensitivity_with_calib() {
+    let W = [1.0, 1.0, 1.0, 1.0]
+    // Calibration: column 0 has large activation, col 1 small
+    let calib = [
+        5.0, 0.1, 0.1, 0.1,
+        4.0, 0.2, 0.1, 0.1
+    ]
+    let sens = sq_sensitivity(W, 1, 4, calib)
+    check("sens_calib.len", len(sens) == 4)
+    // Column 0 should have highest sensitivity (largest hessian * w^2)
+    check("sens_calib.col0_dominant", sens[0] > sens[1])
+    check("sens_calib.col0_>_col2", sens[0] > sens[2])
+}
+
+// ===================================================================
+//  Test 4: K-means init covers weight range
+// ===================================================================
+fn test_kmeans_init_range() {
+    let W = [-1.0, -0.5, 0.0, 0.5, 1.0]
+    let sens = [1.0, 1.0, 1.0, 1.0, 1.0]
+    let centroids = sq_kmeans_init(W, sens, 4)
+    check("init.len", len(centroids) == 4)
+    // First centroid should be near wmin (-1.0)
+    check("init.first_near_min", t_approx(centroids[0], -1.0, 0.01))
+    // Last centroid should be near wmax (1.0)
+    check("init.last_near_max", t_approx(centroids[3], 1.0, 0.01))
+}
+
+// ===================================================================
+//  Test 5: K-means step converges toward weighted mean
+// ===================================================================
+fn test_kmeans_step_convergence() {
+    // All weights at 0.5 with high sensitivity -> centroids should converge to 0.5
+    let W = [0.5, 0.5, 0.5, 0.5]
+    let sens = [10.0, 10.0, 10.0, 10.0]
+    let init_c = [-1.0, 0.0, 1.0, 2.0]
+    let c1 = sq_kmeans_step(W, sens, init_c)
+    // After one step, the centroid nearest 0.5 should move toward it
+    // All weights go to centroid 1 (init=0.0, nearest to 0.5)
+    check("step.centroid_moves_to_data", t_abs(c1[1] - 0.5) < 0.01)
+}
+
+// ===================================================================
+//  Test 6: Build codebook produces sorted centroids
+// ===================================================================
+fn test_codebook_sorted() {
+    _TRNG = 42
+    let W = t_rand_vec(32)
+    let sens = []
+    let mut i = 0
+    while i < 32 {
+        sens = sens + [1.0]
+        i = i + 1
+    }
+    let cb = sq_build_codebook(W, sens, 8, 10)
+    check("codebook.k", cb.k == 8)
+    check("codebook.centroids_len", len(cb.centroids) == 8)
+    // Verify sorted ascending
+    let mut sorted = true
+    i = 1
+    while i < 8 {
+        if cb.centroids[i] < cb.centroids[i - 1] { sorted = false }
+        i = i + 1
+    }
+    check("codebook.sorted_asc", sorted)
+}
+
+// ===================================================================
+//  Test 7: int4 quantize produces valid codes [0, 15]
+// ===================================================================
+fn test_int4_code_range() {
+    _TRNG = 100
+    let W = t_rand_vec(4 * 8)
+    let st = sq_quantize(W, 4, 8, [], 4)
+    check("int4.bits", st.bits == 4)
+    check("int4.codebook_len", len(st.codebook) == 16)
+    check("int4.codes_len", len(st.codes) == 32)
+    let mut ok = true
+    let mut i = 0
+    while i < 32 {
+        if st.codes[i] < 0 { ok = false }
+        if st.codes[i] > 15 { ok = false }
+        i = i + 1
+    }
+    check("int4.codes_in_[0,15]", ok)
+}
+
+// ===================================================================
+//  Test 8: int3 quantize produces valid codes [0, 7]
+// ===================================================================
+fn test_int3_code_range() {
+    _TRNG = 200
+    let W = t_rand_vec(3 * 6)
+    let st = sq_quantize(W, 3, 6, [], 3)
+    check("int3.bits", st.bits == 3)
+    check("int3.codebook_len", len(st.codebook) == 8)
+    check("int3.codes_len", len(st.codes) == 18)
+    let mut ok = true
+    let mut i = 0
+    while i < 18 {
+        if st.codes[i] < 0 { ok = false }
+        if st.codes[i] > 7 { ok = false }
+        i = i + 1
+    }
+    check("int3.codes_in_[0,7]", ok)
+}
+
+// ===================================================================
+//  Test 9: Dequantize shape matches original
+// ===================================================================
+fn test_dequantize_shape() {
+    _TRNG = 300
+    let W = t_rand_vec(3 * 8)
+    let st = sq_quantize(W, 3, 8, [], 4)
+    let deq = sq_dequantize(st)
+    check("deq.len", len(deq) == 24)
+}
+
+// ===================================================================
+//  Test 10: Dequantize values come from codebook
+// ===================================================================
+fn test_dequantize_from_codebook() {
+    _TRNG = 400
+    let W = t_rand_vec(2 * 4)
+    let st = sq_quantize(W, 2, 4, [], 4)
+    let deq = sq_dequantize(st)
+    // Every dequantized value must be a codebook centroid
+    let mut ok = true
+    let mut i = 0
+    while i < 8 {
+        let v = deq[i]
+        let mut found = false
+        let mut j = 0
+        while j < len(st.codebook) {
+            if t_abs(v - st.codebook[j]) < 0.0001 { found = true }
+            j = j + 1
+        }
+        if found == false { ok = false }
+        i = i + 1
+    }
+    check("deq.values_from_codebook", ok)
+}
+
+// ===================================================================
+//  Test 11: int4 round-trip MSE is bounded
+// ===================================================================
+fn test_int4_mse_bounded() {
+    _TRNG = 500
+    let W = t_rand_vec(4 * 16)
+    let st = sq_quantize(W, 4, 16, [], 4)
+    let stats = sq_error_stats(W, st)
+    check("int4.mse_<_0.1", stats.mse < 0.1)
+    check("int4.snr_>_0dB", stats.snr > 0.0)
+}
+
+// ===================================================================
+//  Test 12: int3 has higher MSE than int4 (fewer centroids)
+// ===================================================================
+fn test_int3_vs_int4_quality() {
+    _TRNG = 600
+    let W = t_rand_vec(4 * 16)
+    _TRNG = 600
+    let W2 = t_rand_vec(4 * 16)
+    let st3 = sq_quantize(W, 4, 16, [], 3)
+    let st4 = sq_quantize(W2, 4, 16, [], 4)
+    let stats3 = sq_error_stats(W, st3)
+    let stats4 = sq_error_stats(W2, st4)
+    // int4 (16 centroids) should generally have lower MSE than int3 (8)
+    check("int3_vs_int4.int4_better_snr", stats4.snr >= stats3.snr)
+}
+
+// ===================================================================
+//  Test 13: Forward shape matches n_out
+// ===================================================================
+fn test_forward_shape() {
+    _TRNG = 700
+    let n_out = 5
+    let n_in = 8
+    let W = t_rand_vec(n_out * n_in)
+    let st = sq_quantize(W, n_out, n_in, [], 4)
+    let mut x = []
+    let mut i = 0
+    while i < n_in {
+        x = x + [1.0]
+        i = i + 1
+    }
+    let y = sq_forward(st, x)
+    check("forward.shape", len(y) == n_out)
+}
+
+// ===================================================================
+//  Test 14: Forward matches dequantize * x
+// ===================================================================
+fn test_forward_matches_dequant() {
+    _TRNG = 800
+    let n_out = 3
+    let n_in = 6
+    let W = t_rand_vec(n_out * n_in)
+    let st = sq_quantize(W, n_out, n_in, [], 4)
+    let x = [1.0, -0.5, 0.25, 0.0, 2.0, -1.0]
+    let y_fwd = sq_forward(st, x)
+    // Reference: dequantize then multiply
+    let deq = sq_dequantize(st)
+    let mut y_ref = []
+    let mut r = 0
+    while r < n_out {
+        let mut acc = 0.0
+        let mut c = 0
+        while c < n_in {
+            acc = acc + deq[r * n_in + c] * x[c]
+            c = c + 1
+        }
+        y_ref = y_ref + [acc]
+        r = r + 1
+    }
+    let mut ok = true
+    let mut i = 0
+    while i < n_out {
+        if t_abs(y_fwd[i] - y_ref[i]) > 0.0001 { ok = false }
+        i = i + 1
+    }
+    check("forward.matches_dequant", ok)
+}
+
+// ===================================================================
+//  Test 15: All-zero weights roundtrip to zero
+// ===================================================================
+fn test_zero_weights() {
+    let W = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    let st = sq_quantize(W, 2, 4, [], 4)
+    let deq = sq_dequantize(st)
+    let mut all_zero = true
+    let mut i = 0
+    while i < 8 {
+        if t_abs(deq[i]) > 0.001 { all_zero = false }
+        i = i + 1
+    }
+    check("zero_weights.roundtrip", all_zero)
+}
+
+// ===================================================================
+//  Test 16: Constant weights reconstruct within tolerance
+// ===================================================================
+fn test_constant_weights() {
+    let mut W = []
+    let mut i = 0
+    while i < 16 {
+        W = W + [0.7]
+        i = i + 1
+    }
+    let st = sq_quantize(W, 1, 16, [], 4)
+    let deq = sq_dequantize(st)
+    let err = t_max_err(W, deq)
+    // Constant weight: codebook should include a centroid near 0.7
+    check("const_weights.err_small", err < 0.05)
+}
+
+// ===================================================================
+//  Test 17: Sensitivity stats helpers
+// ===================================================================
+fn test_sens_stats() {
+    let sens = [1.0, 2.0, 3.0, 4.0]
+    let mean = sq_sens_mean(sens)
+    let mx = sq_sens_max(sens)
+    check("sens_stats.mean", t_approx(mean, 2.5, 0.01))
+    check("sens_stats.max", t_approx(mx, 4.0, 0.01))
+}
+
+// ===================================================================
+//  Test 18: Codebook spread covers weight range
+// ===================================================================
+fn test_codebook_covers_range() {
+    let W = [-2.0, -1.0, 0.0, 1.0, 2.0, -2.0, -1.0, 0.0]
+    let st = sq_quantize(W, 2, 4, [], 4)
+    let cb_min = sq_codebook_min(st)
+    let cb_max = sq_codebook_max(st)
+    // Codebook should span close to the weight range [-2, 2]
+    check("codebook.min_<=_wmin+0.5", cb_min <= -1.5)
+    check("codebook.max_>=_wmax-0.5", cb_max >= 1.5)
+}
+
+// ===================================================================
+//  Test 19: Non-uniform advantage -- skewed weights benefit
+// ===================================================================
+fn test_nonuniform_advantage() {
+    // Two distinct clusters with different sensitivity weights.
+    // Cluster A: 12 weights near 0.0 with HIGH sensitivity
+    // Cluster B: 4 weights near 1.0 with LOW sensitivity
+    // Density-weighted k-means should allocate MORE centroids to cluster A.
+    let W = [
+        0.01, 0.02, -0.01, 0.03, -0.02, 0.01, -0.03, 0.02,
+        0.01, -0.01, 0.02, -0.02, 0.95, 0.98, 1.02, 1.05
+    ]
+    // High sensitivity for cluster A, low for cluster B
+    let sens = [
+        100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0,
+        100.0, 100.0, 100.0, 100.0, 0.01, 0.01, 0.01, 0.01
+    ]
+    let cb = sq_build_codebook(W, sens, 8, 20)
+    // Count centroids in [-0.1, 0.1] -- the high-sensitivity dense region
+    let mut near_zero = 0
+    let mut i = 0
+    while i < 8 {
+        if t_abs(cb.centroids[i]) < 0.1 { near_zero = near_zero + 1 }
+        i = i + 1
+    }
+    // With strong sensitivity weighting, most centroids should cluster
+    // near the high-sensitivity region. At least 3 of 8 near zero.
+    check("nonuniform.dense_region_centroids_>=_3", near_zero >= 3)
+}
+
+// ===================================================================
+//  Test 20: Calibration improves sensitivity-weighted error
+// ===================================================================
+fn test_calib_improves_quality() {
+    _TRNG = 900
+    let n_out = 2
+    let n_in = 8
+    let W = t_rand_vec(n_out * n_in)
+    // Calibration with one dominant column
+    let mut calib = []
+    let mut s = 0
+    while s < 4 {
+        let mut c = 0
+        while c < n_in {
+            if c == 0 {
+                calib = calib + [5.0]
+            } else {
+                calib = calib + [0.1]
+            }
+            c = c + 1
+        }
+        s = s + 1
+    }
+    let st_calib = sq_quantize(W, n_out, n_in, calib, 4)
+    // With calibration, column 0 should have higher sensitivity
+    check("calib.col0_high_sens", st_calib.sens[0] > st_calib.sens[1])
+}
+
+// ===================================================================
+//  Test 21: Error stats SNR is non-negative for random data
+// ===================================================================
+fn test_error_stats_snr() {
+    _TRNG = 1000
+    let W = t_rand_vec(4 * 8)
+    let st = sq_quantize(W, 4, 8, [], 4)
+    let stats = sq_error_stats(W, st)
+    check("stats.snr_>=_0", stats.snr >= 0.0)
+    check("stats.mse_>=_0", stats.mse >= 0.0)
+    check("stats.max_err_>=_0", stats.max_err >= 0.0)
+}
+
+// ===================================================================
+//  Test 22: Larger matrix with calibration
+// ===================================================================
+fn test_larger_matrix_calib() {
+    _TRNG = 1100
+    let n_out = 8
+    let n_in = 16
+    let W = t_rand_vec(n_out * n_in)
+    let calib = t_rand_vec(4 * n_in)
+    let st = sq_quantize(W, n_out, n_in, calib, 4)
+    check("larger.n_out", st.n_out == n_out)
+    check("larger.n_in", st.n_in == n_in)
+    check("larger.codes_len", len(st.codes) == n_out * n_in)
+    let stats = sq_error_stats(W, st)
+    check("larger.mse_<_0.1", stats.mse < 0.1)
+}
+
+// ===================================================================
+//  Test 23: Forward with zero input gives zero output
+// ===================================================================
+fn test_forward_zero_input() {
+    _TRNG = 1200
+    let W = t_rand_vec(3 * 4)
+    let st = sq_quantize(W, 3, 4, [], 4)
+    let x = [0.0, 0.0, 0.0, 0.0]
+    let y = sq_forward(st, x)
+    let mut all_zero = true
+    let mut i = 0
+    while i < 3 {
+        if t_abs(y[i]) > 0.0001 { all_zero = false }
+        i = i + 1
+    }
+    check("forward_zero.all_zero", all_zero)
+}
+
+// ===================================================================
+//  Test 24: Codebook with single centroid (k=1, bits=0 edge)
+//           We test the builder directly with k=2 (minimum useful).
+// ===================================================================
+fn test_codebook_k2() {
+    let W = [-1.0, 1.0, -1.0, 1.0]
+    let sens = [1.0, 1.0, 1.0, 1.0]
+    let cb = sq_build_codebook(W, sens, 2, 10)
+    check("k2.centroids_len", len(cb.centroids) == 2)
+    // One centroid near -1, one near +1
+    check("k2.centroid_0_neg", cb.centroids[0] < 0.0)
+    check("k2.centroid_1_pos", cb.centroids[1] > 0.0)
+}
+
+// ===================================================================
+//  Test 25: Assign maps each weight to nearest centroid
+// ===================================================================
+fn test_assign_nearest() {
+    let W = [-0.9, 0.1, 0.9, -0.1]
+    let mut sens = []
+    let mut i = 0
+    while i < 4 {
+        sens = sens + [1.0]
+        i = i + 1
+    }
+    let cb = sq_build_codebook(W, sens, 4, 15)
+    let codes = sq_assign(W, cb)
+    check("assign.len", len(codes) == 4)
+    // Each code should map to the nearest centroid
+    let mut ok = true
+    i = 0
+    while i < 4 {
+        let w = W[i]
+        let assigned_c = cb.centroids[codes[i]]
+        let d_assigned = t_abs(w - assigned_c)
+        // Check no other centroid is closer
+        let mut j = 0
+        while j < cb.k {
+            let d_other = t_abs(w - cb.centroids[j])
+            if d_other < d_assigned - 0.0001 { ok = false }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    check("assign.nearest_centroid", ok)
+}
+
+// ===================================================================
+//  Test 26: Sensitivity weighting pulls centroid toward important weights
+// ===================================================================
+fn test_sensitivity_weighted_centroids() {
+    // Two clusters: w=0.1 (low sens) and w=0.9 (high sens)
+    let W = [0.1, 0.1, 0.1, 0.9]
+    let sens = [0.01, 0.01, 0.01, 100.0]
+    let cb = sq_build_codebook(W, sens, 2, 20)
+    // The high-sensitivity weight (0.9) should pull a centroid very close
+    let mut close_to_09 = false
+    let mut i = 0
+    while i < 2 {
+        if t_abs(cb.centroids[i] - 0.9) < 0.05 { close_to_09 = true }
+        i = i + 1
+    }
+    check("sens_weight.centroid_near_0.9", close_to_09)
+}
+
+// ===================================================================
+//  Test 27: Empty sensitivity falls back gracefully
+// ===================================================================
+fn test_empty_calib_fallback() {
+    let W = [0.5, -0.5, 0.25, -0.25]
+    let st = sq_quantize(W, 1, 4, [], 4)
+    check("empty_calib.codebook_exists", len(st.codebook) == 16)
+    let deq = sq_dequantize(st)
+    check("empty_calib.deq_len", len(deq) == 4)
+    let err = t_max_err(W, deq)
+    check("empty_calib.err_bounded", err < 0.2)
+}
+
+// ===================================================================
+//  Run all tests
+// ===================================================================
+fn main() {
+    println("=== test_squeeze_llm.hexa — SqueezeLLM Non-uniform Quantization (ML #100) ===")
+    test_hessian_positive()
+    test_sensitivity_basic()
+    test_sensitivity_with_calib()
+    test_kmeans_init_range()
+    test_kmeans_step_convergence()
+    test_codebook_sorted()
+    test_int4_code_range()
+    test_int3_code_range()
+    test_dequantize_shape()
+    test_dequantize_from_codebook()
+    test_int4_mse_bounded()
+    test_int3_vs_int4_quality()
+    test_forward_shape()
+    test_forward_matches_dequant()
+    test_zero_weights()
+    test_constant_weights()
+    test_sens_stats()
+    test_codebook_covers_range()
+    test_nonuniform_advantage()
+    test_calib_improves_quality()
+    test_error_stats_snr()
+    test_larger_matrix_calib()
+    test_forward_zero_input()
+    test_codebook_k2()
+    test_assign_nearest()
+    test_sensitivity_weighted_centroids()
+    test_empty_calib_fallback()
+    println("")
+    println("=== RESULT ===")
+    println("  PASS: " + str(pass_count))
+    println("  FAIL: " + str(fail_count))
+    if fail_count == 0 {
+        println("=== ALL SQUEEZE_LLM TESTS PASSED ===")
+    } else {
+        println("=== SOME TESTS FAILED ===")
+    }
+}
+
+main()

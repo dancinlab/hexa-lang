@@ -1,0 +1,112 @@
+// nubase_parity_fetch.hexa — live IAEA NSDC fetcher for the NUCLEAR
+// Round-2 B bulk parity validator (companion to
+// nubase_parity_validation.hexa). Refreshes the measured alpha-emitter
+// snapshot embedded in that validator.
+//
+// Honest sourcing (NUCLEAR.md S3.3 — no fabrication): live fetch of
+// MEASURED Q_alpha + measured T_1/2(alpha), VERBATIM from NUBASE2020 /
+// AME2020 as served by the IAEA Nuclear Structure & Decay Data service
+// (nds.iaea.org/relnsd/v1, CSV ground_states endpoint).
+//   - Network-gated: per-nuclide curl via stdlib/net http_get_status;
+//     status==0 (DNS/TLS/timeout) => honest-skip that nuclide, NEVER a
+//     fabricated value. If EVERY nuclide fails (offline), the run prints
+//     a "gate_type=network-fail" banner and emits 0 kept rows.
+//   - Filter: decay_1=="A" (alpha primary) AND measured Q_alpha>0 AND
+//     measured T_1/2>0. Partial-alpha branch correction applied so the
+//     validator compares predicted-partial-alpha vs measured-partial-alpha.
+//   - Records me_systematics (Y => mass excess extrapolated) so the parity
+//     report can caveat partially-circular SHE rows.
+// Citation: Kondev/Wang/Huang/Naimi/Audi NUBASE2020 (Chinese Phys C 45
+//   (2021) 030001) + Wang/Huang/Kondev/Audi/Naimi AME2020 (030003);
+//   arxiv:2105.01035.
+//
+// Run (canonical root, mini / POOL_DISABLE=1):
+//   POOL_DISABLE=1 ./hexa run --no-sentinel \
+//     stdlib/nuclear/nubase_parity_fetch.hexa
+// Emits a TSV snapshot to stdout: nuclide Z N A Q_alpha_MeV
+// log10_T_alpha_s alpha_branch_pct me_systematics. Paste the kept rows
+// into nubase_parity_validation.hexa's embedded ds_* arrays to refresh.
+
+use "stdlib/net/http_client"
+
+let NSDC_BASE = "https://nds.iaea.org/relnsd/v1/data?fields=ground_states&nuclides="
+
+// CSV ground_states column indices (0-based) as served by NSDC v1:
+//   0=z 1=n 2=symbol 16=half_life_sec 18=decay_1 19=decay_1_%
+//   36=qa(keV) 50=me_systematics
+fn _col(parts: [string], idx: int) -> string {
+    if idx < 0 { return "" }
+    if idx >= len(parts) { return "" }
+    return parts[idx]
+}
+
+fn main() {
+    let nuclides = ["144nd", "146sm", "147sm", "148sm", "148gd", "150gd", "152gd", "154dy", "156dy",
+        "174hf", "186os", "190pt", "209bi", "208po", "209po", "210po", "211po", "212po",
+        "214po", "216po", "218po", "211at", "215at", "217at", "218rn", "219rn", "220rn",
+        "222rn", "221fr", "223fr", "221ra", "222ra", "223ra", "224ra", "226ra", "225ac",
+        "227ac", "227th", "228th", "229th", "230th", "232th", "231pa", "232u", "233u",
+        "234u", "235u", "236u", "238u", "237np", "236pu", "238pu", "239pu", "240pu",
+        "242pu", "244pu", "241am", "243am", "242cm", "243cm", "244cm", "245cm", "246cm",
+        "248cm", "247bk", "249cf", "250cf", "251cf", "252cf", "253es", "254es", "252fm",
+        "253fm", "255fm", "257fm", "256md", "254no", "255no", "259no", "255lr", "256rf",
+        "259rf", "260sg", "263sg", "266hs", "267hs", "270hs", "270ds", "272rg", "285cn",
+        "286fl", "288fl", "289fl", "290lv", "294og"]
+
+    println("# nubase_parity_fetch — IAEA NSDC live (NUBASE2020/AME2020)")
+    println("# cols: nuclide\tZ\tN\tA\tQ_alpha_MeV\tlog10_T_alpha_s\talpha_branch_pct\tme_systematics")
+    let n = len(nuclides)
+    let mut i = 0
+    let mut kept = 0
+    let mut net_fail = 0
+    let mut skipped = 0
+    while i < n {
+        let nuc = nuclides[i]
+        let url = NSDC_BASE + nuc
+        let res = http_get_status(url, 20)
+        i = i + 1
+        if res["ok"] == false {
+            net_fail = net_fail + 1
+            println("# SKIP " + nuc + " gate_type=network-fail status=" + to_string(res["status"]))
+            continue
+        }
+        let body = to_string(res["body"])
+        let rows = body.split("\n")
+        if len(rows) < 2 { skipped = skipped + 1  println("# SKIP " + nuc + " no-data") continue }
+        // first data row is rows[1]; header is rows[0] (must start with "z").
+        let hdr = rows[0]
+        if hdr.substring(0, 1) != "z" { skipped = skipped + 1  println("# SKIP " + nuc + " count-only") continue }
+        let parts = rows[1].split(",")
+        let z_s = _col(parts, 0)
+        let n_s = _col(parts, 1)
+        let hl_s = _col(parts, 16)
+        let d1 = _col(parts, 18)
+        let d1pct_s = _col(parts, 19)
+        let qa_s = _col(parts, 36)
+        let mesys = _col(parts, 50)
+        if d1 != "A" { skipped = skipped + 1  println("# SKIP " + nuc + " alpha-not-primary(" + d1 + ")") continue }
+        let qa_keV = to_float(qa_s)
+        let hl = to_float(hl_s)
+        if qa_keV <= 0.0 { skipped = skipped + 1  println("# SKIP " + nuc + " missing-Q") continue }
+        if hl <= 0.0 { skipped = skipped + 1  println("# SKIP " + nuc + " missing-T") continue }
+        let Z = to_int(z_s)
+        let Nn = to_int(n_s)
+        let A = Z + Nn
+        let Q_MeV = qa_keV / 1000.0
+        let log10_T_total = log10(hl)
+        // partial-alpha correction
+        let d1pct = to_float(d1pct_s)
+        let mut log10_T_alpha = log10_T_total
+        if d1pct > 0.0 { log10_T_alpha = log10_T_total - log10(d1pct / 100.0) }
+        println(nuc + "\t" + to_string(Z) + "\t" + to_string(Nn) + "\t" + to_string(A)
+                + "\t" + to_string(Q_MeV) + "\t" + to_string(log10_T_alpha)
+                + "\t" + to_string(d1pct) + "\t" + mesys)
+        kept = kept + 1
+    }
+    println("#===")
+    println("# kept=" + to_string(kept) + " skipped=" + to_string(skipped) + " network-fail=" + to_string(net_fail))
+    if kept == 0 {
+        println("# gate_type=network-fail — 0 measured rows (offline?). Embedded snapshot in")
+        println("#   nubase_parity_validation.hexa remains the cited fallback (NUCLEAR.md S3.3 honest-skip).")
+    }
+}

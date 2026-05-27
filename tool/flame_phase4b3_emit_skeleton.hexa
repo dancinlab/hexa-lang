@@ -1,0 +1,309 @@
+// ════════════════════════════════════════════════════════════════════════
+// tool/flame_phase4b3_emit_skeleton.hexa — Phase 4-B-3-1 emitter scaffold
+//
+// Reads a Phase 4-B-2 IPCP-rewritten source, locates literal-tuple
+// block call sites (per Phase 4-B-1 scaffold), and emits PROSPECTIVE
+// C kernel signatures + skeleton body to a header file. No actual
+// body emission yet — this is the design-validation scaffold per
+// PHASE4B3_EMISSION_DESIGN.md "Phase 4-B-3-1".
+//
+// Falsifier:
+//   F-RFC047-EMIT-SKELETON-SHIPS  emitter produces expected signatures
+//                                 for every literal-tuple call site
+//   F-RFC047-EMIT-SKELETON-COMPILES generated .h file compiles standalone
+//                                  via `clang -c -I self`
+//
+// Usage:
+//   hexa run tool/flame_phase4b3_emit_skeleton.hexa <ipcp.hexa> [<out.h>]
+//
+// Output: build/artifacts/flame_phase4b3_emitted.h (or argv[2])
+// ════════════════════════════════════════════════════════════════════════
+
+let argv = args()
+if len(argv) < 2 {
+    println("usage: hexa run tool/flame_phase4b3_emit_skeleton.hexa <ipcp.hexa> [<out.h>]")
+    exit(1)
+}
+
+let src_path = argv[1]
+let mut out_path = "build/artifacts/flame_phase4b3_emitted.h"
+if len(argv) >= 3 { out_path = argv[2] }
+
+let src = read_file(src_path)
+if len(src) == 0 {
+    println("error: cannot read " + src_path)
+    exit(1)
+}
+
+println("=== flame Phase 4-B-3-1 emitter scaffold (RFC 047) ===")
+println("  input  : " + src_path)
+println("  output : " + out_path)
+println("")
+
+// ── 1. Reuse Phase 4-B-1 scaffold's call-site detection ──────────────
+//
+// Locate every nn_decoder_block_fwd(... 16, 32, 4, 2, 64) and
+// nn_decoder_block_bwd(... 16, 32, 4, 2, 64) call site. Extract the
+// 5-tuple as literals (these are post-IPCP, so they ARE literals).
+
+fn idx_of_from(haystack, needle, start) {
+    let n = len(haystack)
+    let m = len(needle)
+    if m == 0 { return start }
+    if start < 0 { return -1 }
+    let limit = n - m
+    let mut i = start
+    while i <= limit {
+        if haystack.substring(i, i + m) == needle { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+fn gather_call_balanced(text, start_idx) {
+    let n = len(text)
+    let mut depth = 1
+    let mut i = start_idx
+    let mut out = ""
+    while i < n {
+        let ch = text.substring(i, i + 1)
+        if ch == "(" { depth = depth + 1 }
+        if ch == ")" {
+            depth = depth - 1
+            if depth == 0 { return out }
+        }
+        out = out + ch
+        i = i + 1
+    }
+    return ""
+}
+
+fn split_args_balanced(arg_text) {
+    let mut out = []
+    let mut buf = ""
+    let mut depth = 0
+    let mut i = 0
+    let n = len(arg_text)
+    while i < n {
+        let ch = arg_text.substring(i, i + 1)
+        if ch == "(" { depth = depth + 1; buf = buf + ch }
+        else if ch == "[" { depth = depth + 1; buf = buf + ch }
+        else if ch == "{" { depth = depth + 1; buf = buf + ch }
+        else if ch == ")" { depth = depth - 1; buf = buf + ch }
+        else if ch == "]" { depth = depth - 1; buf = buf + ch }
+        else if ch == "}" { depth = depth - 1; buf = buf + ch }
+        else if ch == "," {
+            if depth == 0 { out.push(buf.trim()); buf = "" }
+            else { buf = buf + ch }
+        } else { buf = buf + ch }
+        i = i + 1
+    }
+    if len(buf.trim()) > 0 { out.push(buf.trim()) }
+    return out
+}
+
+fn is_id_char(c) {
+    let oc = ord(c)
+    if oc >= 48 && oc <= 57 { return true }
+    if oc >= 65 && oc <= 90 { return true }
+    if oc >= 97 && oc <= 122 { return true }
+    if oc == 95 { return true }
+    return false
+}
+
+fn is_integer_literal(s) {
+    let t = s.trim()
+    let nt = len(t)
+    if nt == 0 { return false }
+    let digits = "0123456789"
+    let mut i = 0
+    if t.substring(0, 1) == "-" {
+        if nt == 1 { return false }
+        i = 1
+    }
+    while i < nt {
+        let ch = t.substring(i, i + 1)
+        if !digits.contains(ch) { return false }
+        i = i + 1
+    }
+    return true
+}
+
+fn djb2(s) {
+    let mut h = 5381
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        h = ((h * 33) + ord(s.substring(i, i + 1))) & 2147483647
+        i = i + 1
+    }
+    return h
+}
+
+fn djb2_hex(n) {
+    if n == 0 { return "0" }
+    let mut x = n
+    let hex_chars = "0123456789abcdef"
+    let mut out = ""
+    while x > 0 {
+        let nyb = x & 15
+        out = hex_chars.substring(nyb, nyb + 1) + out
+        x = x >> 4
+    }
+    return out
+}
+
+fn dims_hash_of(T, d, nh, nkv, h) {
+    return djb2("T=" + T + ",d=" + d + ",nh=" + nh + ",nkv=" + nkv + ",h=" + h)
+}
+
+// ── 2. Walk source, collect unique (kind, T, d, nh, nkv, h) tuples ───
+
+let mut unique_keys = []
+let mut unique_kinds = []
+let mut unique_dims = []      // each entry = "T,d,nh,nkv,h"
+
+fn already_seen(key) {
+    let mut i = 0
+    while i < len(unique_keys) {
+        if unique_keys[i] == key { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn scan_calls(needle, kind, expected_arity) {
+    let mut start = 0
+    let n = len(src)
+    while start < n {
+        let pos = idx_of_from(src, needle, start)
+        if pos < 0 { return }
+        let mut ls = pos
+        while ls > 0 {
+            if src.substring(ls - 1, ls) == "\n" { break }
+            ls = ls - 1
+        }
+        let prefix = src.substring(ls, pos)
+        if prefix.contains("//") { start = pos + len(needle); continue }
+        if prefix.contains("fn ") { start = pos + len(needle); continue }
+        if pos > 0 {
+            let bc = src.substring(pos - 1, pos)
+            if is_id_char(bc) { start = pos + len(needle); continue }
+        }
+        let open_idx = pos + len(needle)
+        let inner = gather_call_balanced(src, open_idx)
+        if len(inner) == 0 { start = open_idx; continue }
+        let args_list = split_args_balanced(inner)
+        let na = len(args_list)
+        if na != expected_arity {
+            start = open_idx + len(inner); continue
+        }
+        let T = args_list[na - 5]
+        let d = args_list[na - 4]
+        let nh = args_list[na - 3]
+        let nkv = args_list[na - 2]
+        let h = args_list[na - 1]
+        let all_lit = is_integer_literal(T) && is_integer_literal(d) && is_integer_literal(nh) && is_integer_literal(nkv) && is_integer_literal(h)
+        if !all_lit {
+            start = open_idx + len(inner); continue
+        }
+        let key = kind + ":" + T + "," + d + "," + nh + "," + nkv + "," + h
+        if !already_seen(key) {
+            unique_keys.push(key)
+            unique_kinds.push(kind)
+            unique_dims.push(T + "," + d + "," + nh + "," + nkv + "," + h)
+        }
+        start = open_idx + len(inner)
+    }
+}
+
+scan_calls("nn_decoder_block_fwd(", "fwd", 10)
+scan_calls("nn_decoder_block_bwd(", "bwd", 13)
+
+println("  unique literal-tuple call patterns found: " + to_string(len(unique_keys)))
+if len(unique_keys) == 0 {
+    println("FAIL  F-RFC047-EMIT-SKELETON-SHIPS  no literal-tuple call sites in input")
+    println("  → input must be a Phase 4-B-2 IPCP-rewritten source")
+    exit(2)
+}
+
+// ── 3. Emit skeleton .h file ─────────────────────────────────────────
+//
+// For each unique (kind, dims) tuple, emit:
+//   - fn signature: void flame_block_T<T>_d<d>_nh<nh>_nkv<nkv>_h<h>_<kind>(...)
+//   - args: int X_id, int Bp_id, int Bc_id, int cos_id, int sin_id [+ bwd extras]
+//   - body: empty stub (calls back to the boxed HexaVal version, returns)
+//
+// The skeleton compiles to a .o that can be linked against runtime.c.
+
+let mut out = ""
+out = out + "// ═══════════════════════════════════════════════════════════════════════════\n"
+out = out + "// flame_phase4b3_emitted.h — Phase 4-B-3-1 emitter scaffold output (RFC 047)\n"
+out = out + "//\n"
+out = out + "// Auto-generated by tool/flame_phase4b3_emit_skeleton.hexa\n"
+out = out + "// from " + src_path + "\n"
+out = out + "//\n"
+out = out + "// These are PROSPECTIVE signatures for Phase 4-B-3-2/3 implementation.\n"
+out = out + "// Bodies are stubs that trampoline back to the HexaVal-boxed reference\n"
+out = out + "// (preserves byte-eq automatically — F-RFC047-FALLBACK-PRESERVED).\n"
+out = out + "// ═══════════════════════════════════════════════════════════════════════════\n"
+out = out + "\n"
+out = out + "#ifndef FLAME_PHASE4B3_EMITTED_H\n"
+out = out + "#define FLAME_PHASE4B3_EMITTED_H\n"
+out = out + "\n"
+out = out + "// stdint not strictly required for stub form; ifdef for real-body Phase 4-B-3-2.\n"
+out = out + "#include <stdint.h>\n"
+out = out + "\n"
+
+let mut i = 0
+while i < len(unique_keys) {
+    let kind = unique_kinds[i]
+    let dims_csv = unique_dims[i]
+    let parts = dims_csv.split(",")
+    let T = parts[0]
+    let d = parts[1]
+    let nh = parts[2]
+    let nkv = parts[3]
+    let h = parts[4]
+    let hash_hex = djb2_hex(dims_hash_of(T, d, nh, nkv, h))
+    let fn_name = "flame_block_T" + T + "_d" + d + "_nh" + nh + "_nkv" + nkv + "_h" + h + "_" + kind
+    out = out + "// ── " + kind + " specialization, dims_hash=0x" + hash_hex + " ──\n"
+    out = out + "// proposed body (Phase 4-B-3-2/3):\n"
+    out = out + "//   - unbox farr_ids at entry\n"
+    out = out + "//   - stack-resident scratch (no farr_zeros)\n"
+    out = out + "//   - inline rmsnorm/linear/attn_core/swiglu (no fn calls)\n"
+    out = out + "//   - loop bounds literal (T=" + T + ", d=" + d + ", nh=" + nh + ", nkv=" + nkv + ", h=" + h + ")\n"
+    if kind == "fwd" {
+        out = out + "static inline void " + fn_name + "(\n"
+        out = out + "    int X_id, int Bp_id, int Bc_id,\n"
+        out = out + "    int cos_id, int sin_id\n"
+        out = out + ") {\n"
+        out = out + "    // STUB — Phase 4-B-3-1 skeleton emission only.\n"
+        out = out + "    // Real body comes in Phase 4-B-3-2.\n"
+        out = out + "    (void)X_id; (void)Bp_id; (void)Bc_id;\n"
+        out = out + "    (void)cos_id; (void)sin_id;\n"
+        out = out + "}\n"
+    } else {
+        out = out + "static inline void " + fn_name + "(\n"
+        out = out + "    int X_id, int Bp_id, int Bc_id,\n"
+        out = out + "    int dXout_id, int dX_out_id, int Bg_id,\n"
+        out = out + "    int cos_id, int sin_id\n"
+        out = out + ") {\n"
+        out = out + "    // STUB — Phase 4-B-3-1 skeleton emission only.\n"
+        out = out + "    // Real body comes in Phase 4-B-3-3.\n"
+        out = out + "    (void)X_id; (void)Bp_id; (void)Bc_id;\n"
+        out = out + "    (void)dXout_id; (void)dX_out_id; (void)Bg_id;\n"
+        out = out + "    (void)cos_id; (void)sin_id;\n"
+        out = out + "}\n"
+    }
+    out = out + "\n"
+    println("  emitted: " + fn_name + "  (dims_hash=0x" + hash_hex + ")")
+    i = i + 1
+}
+
+out = out + "#endif /* FLAME_PHASE4B3_EMITTED_H */\n"
+
+write_file(out_path, out)
+println("")
+println("PASS  F-RFC047-EMIT-SKELETON-SHIPS  " + to_string(len(unique_keys)) + " specializations emitted → " + out_path)
+println("=== end of Phase 4-B-3-1 emitter scaffold (RFC 047 §144 + PHASE4B3_EMISSION_DESIGN.md) ===")

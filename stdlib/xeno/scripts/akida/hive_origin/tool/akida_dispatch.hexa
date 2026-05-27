@@ -1,0 +1,214 @@
+// tool/akida_dispatch.hexa — Layer-4 edge-inference dispatch path.
+// @raw117_exempt — legacy module, 5-falsifier retrofit deferred to dedicated cycle
+//
+// 4-layer Akida ω-cycle integration. Branch handler for the LLM-free path.
+// kick_dispatch / M6 capacity-LB / M9 will route purpose=edge_inference
+// here when the task is on the Akida-suitable whitelist:
+//   {image, audio_clip, sensor_window, vector_embed_specific}
+//
+// Surface:
+//   --dispatch --purpose edge_inference --kind <k> --model <id> --input <p>
+//                                 → run inference, emit JSON to stdout
+//   --bridge-emit                 → emit a single γ-bridge payload line
+//                                   (consumed by kick_dispatch γ rotation)
+//   --selftest                    → F1-F6 mock-tier
+//
+// HARD: claude binary call count = 0; production touch = 0. raw 9 hexa-only,
+// raw 169 surgical, raw 247 r45 pure/io split, raw 248 r45.
+//
+// @tool(slug="akida_dispatch", desc="Layer-4 edge-inference dispatch handler. Routes Akida-suitable kinds (image / audio_clip / sensor_window / vector_embed_specific) to AKD1000 via M-AK io_seam. ~150 LoC. DESIGN-TIER 2026-05-01.")
+// @usage(hexa run tool/akida_dispatch.hexa --dispatch --purpose edge_inference --kind <k> --model <id> --input <p>)
+// @usage(hexa run tool/akida_dispatch.hexa --bridge-emit)
+// @usage(hexa run tool/akida_dispatch.hexa --selftest)
+// @design-tier 2026-05-01
+// @raw-refs raw_9 raw_91 raw_169 raw_247
+
+use std::env
+
+fn _hive() -> str {
+    let h = env("HIVE")
+    if h == "" {
+        // raw 15: no personal-path fallback. Caller MUST set $HIVE.
+        let home = env("HOME")
+        if home == "" { return "" }
+        return home + "/core/hive"
+    }
+    return h
+}
+
+fn _mak() -> str { return _hive() + "/tool/akida_neuromorphic_module.hexa" }
+
+fn _now_iso_utc() -> str {
+    let t = exec("date -u +%Y-%m-%dT%H:%M:%SZ")
+    return to_string(t).trim()
+}
+
+// ─── pure-fn — whitelisted kinds for edge-inference ───────────────────
+@pure_fn
+fn is_akida_kind(kind: str) -> bool {
+    if kind == "image" { return true }
+    if kind == "audio_clip" { return true }
+    if kind == "sensor_window" { return true }
+    if kind == "vector_embed_specific" { return true }
+    return false
+}
+
+// ─── pure-fn — sanitize payload_summary for prompt-injection ──────────
+//
+// Strips control chars / executable shell tokens / backticks / $( / ${ /
+// "rm -rf" / pipe / redirect. Truncates to 200 chars (γ bridge contract).
+@pure_fn
+fn sanitize_payload(raw: str) -> str {
+    let mut out = ""
+    let mut i = 0
+    while i < len(raw) {
+        let ch = raw.slice(i, i + 1)
+        let code = if len(ch) > 0 { ch.byte_at(0) } else { 0 }
+        let drop = ch == "`" || ch == "$" || ch == "|" || ch == ">" || ch == "<" || code < 32
+        if !drop { out = out + ch }
+        i = i + 1
+        if len(out) >= 200 { break }
+    }
+    let bad = ["rm -rf", "$(", "${", "&&", "||"]
+    let mut k = 0
+    while k < len(bad) {
+        if out.contains(bad[k]) { return "[redacted-injection-suspect]" }
+        k = k + 1
+    }
+    return out
+}
+
+// ─── handler — edge_inference dispatch ────────────────────────────────
+fn dispatch_edge_inference(kind: str, model: str, input: str) -> int {
+    if !is_akida_kind(kind) {
+        eprintln("# akida_dispatch: reason=kind-not-akida-suitable kind=" + kind + " fix=route to claude path")
+        return 3
+    }
+    if env("AKIDA_HW_PRESENT") != "1" {
+        eprintln("# akida_dispatch: reason=hw-absent fix=set AKIDA_HW_PRESENT=1 after RM4 step-10 land")
+        return 4
+    }
+    // Build cmd via M-AK pure-fn surface (whitelisted), then invoke via M-AK io_seam.
+    let build_cmd = "hexa run " + _mak() + " --build-cmd --model " + model + " --input " + input
+    let cmd = to_string(exec(build_cmd + " 2>/dev/null")).trim()
+    if cmd == "" {
+        eprintln("# akida_dispatch: reason=cmd-build-fail fix=audit M-AK build_akida_inference_cmd whitelist")
+        return 5
+    }
+    let invoke = "hexa run " + _mak() + " --invoke " + cmd
+    let raw = to_string(exec(invoke + " 2>/dev/null"))
+    let safe = sanitize_payload(raw.trim())
+    let ts = _now_iso_utc()
+    println("{\"mechanism\":\"akida_edge_inference\",\"kind\":\"" + kind + "\",\"model\":\"" + model + "\",\"ts\":\"" + ts + "\",\"payload_summary\":\"" + safe + "\"}")
+    return 0
+}
+
+// ─── handler — γ-bridge emit (Layer-2 hookup) ─────────────────────────
+fn bridge_emit() -> int {
+    if env("AKIDA_HW_PRESENT") != "1" || env("KICK_AKIDA_BRIDGE") != "1" {
+        // Honest C3 — never invent a fact when hardware/gate absent.
+        eprintln("# akida_dispatch bridge-emit: reason=hw-or-gate-absent fix=AKIDA_HW_PRESENT=1 KICK_AKIDA_BRIDGE=1 after hardware land")
+        return 4
+    }
+    // Default mock fixture for design-tier — model=mobilenet_v1 sample image.
+    let ts = _now_iso_utc()
+    let raw = to_string(exec("hexa run " + _mak() + " --invoke 'akida-infer --model mobilenet_v1 --input /tmp/sample.bin --json' 2>/dev/null"))
+    let safe = sanitize_payload(raw.trim())
+    let summary = "model=mobilenet_v1 " + safe
+    if len(summary) > 200 { summary = summary.slice(0, 200) }
+    println("{\"mechanism\":\"gamma\",\"source_id\":\"akida_inference\",\"byte_hash\":\"-\",\"ts\":\"" + ts + "\",\"payload_summary\":\"" + summary + "\"}")
+    return 0
+}
+
+// ─── selftest ────────────────────────────────────────────────────────
+fn selftest() -> int {
+    let mut fails = 0
+    println("[akida_dispatch selftest — DESIGN-TIER mock]")
+
+    // F1: kind whitelist
+    if is_akida_kind("image") && is_akida_kind("audio_clip") && !is_akida_kind("text_reasoning") {
+        println("  PASS F1 kind whitelist")
+    } else {
+        println("  FAIL F1 kind whitelist"); fails = fails + 1
+    }
+
+    // F2: payload sanitize strips dangerous tokens
+    let dirty = "model=x top_class=$(rm -rf /) confidence=0.5"
+    let clean = sanitize_payload(dirty)
+    if clean == "[redacted-injection-suspect]" {
+        println("  PASS F2 sanitize injection")
+    } else {
+        println("  FAIL F2 sanitize injection got=" + clean); fails = fails + 1
+    }
+
+    // F3: payload sanitize truncates at 200
+    let long = "a"
+    let mut i = 0
+    while i < 250 { long = long + "b"; i = i + 1 }
+    let trunc = sanitize_payload(long)
+    if len(trunc) <= 200 {
+        println("  PASS F3 sanitize truncate len=" + to_string(len(trunc)))
+    } else {
+        println("  FAIL F3 sanitize truncate len=" + to_string(len(trunc))); fails = fails + 1
+    }
+
+    // F4: hw absent → dispatch refuses
+    std::env::set("AKIDA_HW_PRESENT", "0")
+    let rc4 = dispatch_edge_inference("image", "mobilenet_v1", "/tmp/x.bin")
+    if rc4 == 4 {
+        println("  PASS F4 hw-absent refusal")
+    } else {
+        println("  FAIL F4 hw-absent refusal rc=" + to_string(rc4)); fails = fails + 1
+    }
+
+    // F5: kind unsuitable → refuses
+    std::env::set("AKIDA_HW_PRESENT", "1")
+    let rc5 = dispatch_edge_inference("text_reasoning", "x", "/tmp/x")
+    if rc5 == 3 {
+        println("  PASS F5 kind-unsuitable refusal")
+    } else {
+        println("  FAIL F5 kind-unsuitable refusal rc=" + to_string(rc5)); fails = fails + 1
+    }
+
+    // F6: bridge_emit gate-off → refuses
+    std::env::set("KICK_AKIDA_BRIDGE", "0")
+    let rc6 = bridge_emit()
+    if rc6 == 4 {
+        println("  PASS F6 bridge-emit gate-off")
+    } else {
+        println("  FAIL F6 bridge-emit gate-off rc=" + to_string(rc6)); fails = fails + 1
+    }
+
+    if fails == 0 { println("[akida_dispatch] OK 6/6"); return 0 }
+    println("[akida_dispatch] FAIL " + to_string(fails) + "/6")
+    return 1
+}
+
+fn main() -> int {
+    let args = std::env::args()
+    if len(args) >= 2 && args[1] == "--selftest" { return selftest() }
+    if len(args) >= 2 && args[1] == "--bridge-emit" { return bridge_emit() }
+    if len(args) >= 2 && args[1] == "--dispatch" {
+        let mut purpose = ""
+        let mut kind = ""
+        let mut model = ""
+        let mut input = ""
+        let mut i = 2
+        while i < len(args) {
+            if args[i] == "--purpose" && i + 1 < len(args) { purpose = args[i + 1] }
+            if args[i] == "--kind" && i + 1 < len(args) { kind = args[i + 1] }
+            if args[i] == "--model" && i + 1 < len(args) { model = args[i + 1] }
+            if args[i] == "--input" && i + 1 < len(args) { input = args[i + 1] }
+            i = i + 1
+        }
+        if purpose != "edge_inference" {
+            eprintln("# akida_dispatch: reason=purpose-not-edge_inference purpose=" + purpose)
+            return 2
+        }
+        return dispatch_edge_inference(kind, model, input)
+    }
+    eprintln("usage: hexa run tool/akida_dispatch.hexa --dispatch --purpose edge_inference --kind <k> --model <id> --input <p>")
+    eprintln("       hexa run tool/akida_dispatch.hexa --bridge-emit")
+    eprintln("       hexa run tool/akida_dispatch.hexa --selftest")
+    return 2
+}

@@ -1,0 +1,44 @@
+// ═══════════════════════════════════════════════════════════
+//  self/stdlib/os/pty.hexa -- pseudo-terminal pair + spawn helpers
+//
+//  Cross-platform (macOS + Linux). Thin wrapper over the C builtins
+//  in self/native/pty.c. The C-level shims expose:
+//     pty_open()                    -- map {master, slave, slave_name} or {error}
+//     pty_get_winsize(fd)           -- map {rows, cols, xpix, ypix} or {error}
+//     pty_set_winsize(fd,r,c,xp,yp) -- 0 or -errno
+//     pty_tcgetattr(fd)             -- map {iflag, oflag, cflag, lflag, cc[]} or {error}
+//     pty_tcsetattr(fd, when, attrs)-- 0 or -errno
+//     tty_isatty(fd)                -- bool
+//     tty_ttyname(fd)               -- string or ""
+//     pty_forkexec(argv,env,r,c)    -- map {pid, master_fd} or {error}
+//
+//  Avoid the libc-collision-prone names (openpty / forkpty / isatty /
+//  ttyname). Hexa-side helpers below use distinct names.
+//
+//  Downstream consumers:
+//   * wilson harness-cli -- replace ad-hoc raw-mode toggle with
+//     enter_raw_mode / restore_mode (stdlib/os/termios.hexa).
+//   * u-root/cpu hexa-native port -- pty_forkexec is the building
+//     block for a remote pty session.
+
+// Window-size convenience: packed `rows*65536 + cols` int, or -1 on
+// failure. Callers needing pixels go to pty_get_winsize() directly.
+pub fn pty_winsize_packed(fd: int) -> int {
+    let m = pty_get_winsize(fd)
+    if type_of(m) != "map" { return -1 }
+    if has_key(m, "error") { return -1 }
+    let r = if has_key(m, "rows") { m["rows"] } else { 0 }
+    let c = if has_key(m, "cols") { m["cols"] } else { 0 }
+    return r * 65536 + c
+}
+
+// Resize the pty's controlling terminal. xpix/ypix default to 0.
+pub fn pty_resize(fd: int, rows: int, cols: int) -> int {
+    return pty_set_winsize(fd, rows, cols, 0, 0)
+}
+
+// Spawn a child under a fresh pty. `argv[0]` is the program; `env` is
+// "KEY=VAL" strings (empty = inherit). rows/cols pin initial winsize.
+pub fn pty_spawn(argv: [string], env: [string], rows: int, cols: int) -> any {
+    return pty_forkexec(argv, env, rows, cols)
+}

@@ -1,0 +1,6 @@
+=== E05 : hexa verify --expr aliquot 6 6 ===
+verify --expr aliquot(6)=6
+  calc   = 6  == expected 6
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+  absorb = ⚠ atlas register did NOT confirm fold; invocation:
+           hexa atlas register --from-verify aliquot 6 6

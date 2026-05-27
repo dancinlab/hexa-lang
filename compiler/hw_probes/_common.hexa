@@ -1,0 +1,85 @@
+// HEXA Native Compiler — Phase 4 external-resource absorption: hw_probes _common
+//
+// @version 0.1.0
+// @capabilities [exec, env]
+//
+// Shared δ (try-live-or-fallback) helpers for HW probes. Mirrors the same
+// shape used by `compiler/bridges/_common.hexa` so callers in either
+// module subtree see a single API.
+//
+// Doctrine v2 rule 4 — every external-resource adapter has the form:
+//
+//   fn <name>_run(args) -> Result {
+//       if cli_available("<cli>") && (env("HEXA_FORCE_FALLBACK") != "1") {
+//           let r = exec_cli("<cli>", args)
+//           if r.ok { return r }
+//       }
+//       return <name>_fallback(args)
+//   }
+//
+// γ enforced: NO atlas writes, NO audit_log writes, NO discovery_log
+// writes. Adapters return values; the caller decides what to do with
+// them. Network/HW calls are subject to user-visible timeout (default
+// 30 s, env-overridable via HEXA_CLI_TIMEOUT_SEC).
+//
+// Catalog/diagnostic strings: ENGLISH ONLY.
+
+// ── shell quoting (single-quote safe; mirrors nexus/cli/run.hexa::shell_quote) ──
+
+pub fn shq(s: string) -> string {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+// ── CLI availability probe ──
+//
+// Returns true iff `command -v <name>` resolves to a non-empty path AND
+// HEXA_FORCE_FALLBACK is not "1". The env-gate is honored here so every
+// δ wrapper gets force-fallback for free without re-implementing it.
+pub fn cli_available(name: string) -> bool {
+    if env("HEXA_FORCE_FALLBACK") == "1" { return false }
+    let raw = exec("command -v " + shq(name) + " 2>/dev/null || true")
+    return raw.trim().len() > 0
+}
+
+// ── CLI execution with timeout ──
+//
+// Wraps exec() with a `timeout` prefix when the `timeout` binary is
+// available; otherwise falls back to a raw exec. Honors
+// HEXA_CLI_TIMEOUT_SEC (default 30). Captures stdout via exec_capture
+// so stderr/exit_code are recoverable without polluting our stdout.
+//
+// Returns: a 4-element array [ok, stdout, stderr, exit_code] kept as
+// a tuple-shaped array because interpreter struct construction in
+// adapter call sites is verbose and this surface is read-only.
+
+pub fn _cli_timeout_sec() -> string {
+    let v = env("HEXA_CLI_TIMEOUT_SEC")
+    if v.len() > 0 { return v }
+    return "30"
+}
+
+pub fn exec_cli(name: string, cli_args: [string]) -> array {
+    let mut cmd = shq(name)
+    let mut i = 0
+    while i < len(cli_args) {
+        cmd = cmd + " " + shq(cli_args[i])
+        i = i + 1
+    }
+    // Use `timeout` if present; portable detection via `command -v timeout`.
+    let has_timeout = exec("command -v timeout 2>/dev/null || true").trim().len() > 0
+    let prefixed = if has_timeout { "timeout " + _cli_timeout_sec() + " " + cmd } else { cmd }
+    let r = exec_capture(prefixed)
+    // exec_capture returns [stdout, stderr, exit_code]
+    let stdout_s = to_string(r[0])
+    let stderr_s = to_string(r[1])
+    let ec = to_int(r[2])
+    let ok = ec == 0
+    return [ok, stdout_s, stderr_s, ec]
+}
+
+// ── result tuple accessors (read-only sugar) ──
+
+pub fn cli_ok(r: array) -> bool { return r[0] }
+pub fn cli_stdout(r: array) -> string { return to_string(r[1]) }
+pub fn cli_stderr(r: array) -> string { return to_string(r[2]) }
+pub fn cli_exit(r: array) -> i64 { return to_int(r[3]) }

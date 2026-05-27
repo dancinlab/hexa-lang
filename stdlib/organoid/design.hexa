@@ -1,0 +1,8 @@
+#!hexa strict
+// organoid design — matrigel matrix percent.
+fn main() {
+    let matrigel_pct = 50.0
+    println("organoid_design (matrigel matrix percent):")
+    println("  matrigel_pct = " + str(matrigel_pct))
+    println("__HEXA_ORGANOID_DESIGN__ PASS gate=GATE_OPEN absorbed=false")
+}

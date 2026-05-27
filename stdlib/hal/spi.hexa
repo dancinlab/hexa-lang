@@ -1,0 +1,63 @@
+#!hexa strict
+// stdlib/hal/spi/spi.hexa — σ-slot 3: SPI bus.
+//
+// import:  use "stdlib/hal/spi"
+// φ:       digital
+// handles: ≤ 4 buses, ≤ 4 chip-select per bus = J₂/n × n = J₂ targets.
+//
+// canon-aware (~/core/canon/domains/compute/chip-interconnect):
+//   - canon σ·J₂=288 lane × 48 Gbps die-to-die. SPI is the slowest
+//     board-level cousin; 4-line standard (CLK/MISO/MOSI/CS) maps to
+//     τ=4 lifecycle stages exactly.
+
+let MODULE_NAME = "spi"
+let SIGMA_SLOT  = 3
+let PHI_KIND    = "digital"
+
+// ── modes (φ=2 dichotomy: CPOL × CPHA = 4 modes) ─────────────────────
+let MODE_0 = 0   // CPOL=0, CPHA=0
+let MODE_1 = 1
+let MODE_2 = 2
+let MODE_3 = 3
+
+fn spi_configure(bus: int, cs: int, mode: int, freq_hz: int) -> int {
+    if bus < 0 || bus > 3 { return -1 }
+    if cs < 0 || cs > 3 { return -2 }
+    if mode < 0 || mode > 3 { return -3 }
+    if freq_hz < 1000 || freq_hz > 100000000 { return -4 }
+    return bus * 4 + cs   // pack handle
+}
+
+fn spi_start(handle: int) -> bool { return handle >= 0 }
+
+fn spi_transfer(handle: int, tx: [int]) -> [int] {
+    if handle < 0 { return [] }
+    println("[spi sim] handle " + str(handle) + " transfer " + str(tx.len()) + " bytes")
+    let mut rx: [int] = []
+    let mut i = 0
+    while i < tx.len() { rx = rx + [0]; i = i + 1 }
+    return rx
+}
+
+fn spi_write(handle: int, data: [int]) -> bool { spi_transfer(handle, data); return handle >= 0 }
+fn spi_read(handle: int, n: int) -> [int] {
+    let mut tx: [int] = []
+    let mut i = 0
+    while i < n { tx = tx + [0]; i = i + 1 }
+    return spi_transfer(handle, tx)
+}
+
+fn spi_report(handle: int) -> str {
+    if handle < 0 { return "spi: invalid" }
+    return "spi: handle " + str(handle) + " ok (sim)"
+}
+
+fn spi_open(bus: int, cs: int, mode: int, freq_hz: int) -> int {
+    let h = spi_configure(bus, cs, mode, freq_hz)
+    if h < 0 { return h }
+    if !spi_start(h) { return -5 }
+    return h
+}
+
+fn spi_close(handle: int) -> bool { return handle >= 0 }
+fn spi_module_meta() -> [str] { return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"] }

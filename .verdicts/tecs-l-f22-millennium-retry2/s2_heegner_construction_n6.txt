@@ -1,0 +1,41 @@
+Heegner-point CM construction for E_n: y²=x³-n²x  (congruent number curve family)
+
+Key facts (citation-grade, NOT BSD-verified):
+  • E_n has CM by Z[i] (= ring of integers in Q(i), discriminant D=-4)
+  • j-invariant = 1728 for all n (verified hexa-native arithmetic above: c4=1728, c6=0)
+  • Conductor:
+      - n odd squarefree:  N(E_n) = 32 n²    (Cremona)
+      - n ≡ 2 mod 4 (e.g. n=6, n=14, n=22):   N = 16 n²    (so N(E_6) = 576 = 2⁶·3²)
+  • Class number h(-4) = 1 (Gauss). Q(i) has UNIQUE ideal class.
+
+Heegner point for n=6 (BSD partial — Goldfeld-Gross-Zagier rank≤1):
+  GGZ theorem (1986): if ord_{s=1} L(E,s) ≤ 1, then rank(E(Q)) = ord_{s=1} L(E,s)
+  AND |Sha| < ∞. (This IS the rank-≤1 case of BSD, PROVEN.)
+  
+  For E_6:
+    rank(E_6(Q)) = 1  (Cremona LMFDB label 576.f3)
+    generator    P = (-3, 9)  (F19 verified integer-exact: 9² = 81 = (-3)³ - 36·(-3) = -27+108 = 81 ✓)
+    Tunnell-even (above): n=6 → m=3, 2C=D=0 → BSD-conditional CONGRUENT ✓
+    GGZ applies (ord≤1 verified numerically by Cremona).
+  
+  → For n=6, BSD assertion (rank = ord of L) is UNCONDITIONALLY KNOWN
+    (this is NOT new — it is a 1986 theorem by GGZ on the rank≤1 family).
+    TECS-L contribution: hexa-native exact-arithmetic verification of:
+      (1) j(E_6) = 1728 (CM by Z[i] confirmed) — 🔵 hexa-native int arithmetic
+      (2) P=(-3,9) ∈ E_6(Q) — 🔵 F19 reverified
+      (3) Tunnell-even 2C=D=0 at n=6 (m=3) — 🔵 closed enumeration
+    All three are COMPONENT facts feeding into the GGZ-pathway, NOT a new
+    proof of any part of BSD.
+
+Status: 🟢 NUMERICAL closed-enumeration on a CONDITIONAL Tunnell witness
+        (BSD ⇒ Tunnell test exact); GGZ rank≤1 already covers n=6 separately.
+
+Honest negative on FULL BSD attempt:
+  Tunnell test 2A=B is BSD-CONDITIONAL — proving it does NOT prove BSD even at
+  one point. Direction: BSD ⇒ Tunnell. Converse OPEN.
+  Constructing the actual Heegner point (a CM point on X_0(N) → E_n) requires:
+    • Modular parameterization X_0(576) → E_6 — out of scope (analytic + algorithmic)
+    • Numerical evaluation of φ(τ) for τ ∈ upper half-plane with CM by Z[i]
+  Neither is hexa-native arithmetic; both are LLM-scope analytic limits.
+  → HONEST: TECS-L cannot construct the Heegner point itself; it can only
+    verify discrete CM-data invariants (j, conductor factorization, Tunnell counts).

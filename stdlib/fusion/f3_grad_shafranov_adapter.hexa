@@ -1,0 +1,311 @@
+#!hexa strict
+// stdlib/fusion/f3_grad_shafranov_adapter.hexa — `fusion + verify`
+// free-boundary Grad-Shafranov plasma-equilibrium adapter
+// (FUSION.md gate (c) · F3 cohort · B path · wrap-as-is · Phase 3 land).
+//
+// FUSION.md §2 gate (c) (plasma equilibrium — Grad-Shafranov
+// free-boundary solve · numerical Newton/FEM · install-gated possible ·
+// sim-sufficient) + §6 F3 cohort spec (FreeGS · DESC · EFIT · CHEASE ·
+// B wrap-as-is) + Phase 3 land target. Sibling adapter shape — see
+// `stdlib/fusion/openmc_tbr.py` (the FUSION F6 TBR wrap-as-is reference,
+// demiurge D72 ①b thin adapter) and the NUCLEAR N8/N9/N10 external-
+// library wrap adapters (`stdlib/nuclear/n8_fusion_evap_adapter.py` et
+// al.) for the install-gated honest-skip discipline.
+//
+// LANGUAGE NOTE — this project (`fusion-f3` / hexa-lang) is hexa-native:
+// the `project.tape` marker routes new producer source to `.hexa`, so
+// this F3 adapter is authored in hexa even though its older `.py`
+// siblings (openmc_tbr.py, n8_fusion_evap_adapter.py) predate that
+// enforcement. The wrap-as-is semantics are identical: probe the external
+// FreeGS Python backend via `python3 -c "import freegs"`; if absent emit
+// the honest install-gated skip; never fabricate ψ / q / β numbers.
+//
+// What gate (c) does: solve the free-boundary Grad-Shafranov equation
+//   Delta* psi = -mu0 R^2 dp/dpsi - F dF/dpsi
+// (Grad 1958 / Shafranov 1966 ideal-MHD axisymmetric equilibrium) for the
+// poloidal flux psi(R,Z) given a coil set + plasma pressure/current
+// profiles, then extract the LCFS boundary shape, the safety factor
+// q(psi) profile, and beta. A sim PASS here means "this equilibrium is
+// geometrically realizable + the design point is worth building" — it
+// NEVER means "this device achieves Q>1" (that is gate (g), downstream
+// wet-lab confirmation · FUSION.md R4-class invariant).
+//
+// D72: classify FIRST — free-boundary Grad-Shafranov is a Newton/FEM
+//      nonlinear elliptic PDE solve with a moving plasma boundary. Mature
+//      external solvers (FreeGS / DESC / EFIT / CHEASE) own this; there is
+//      no closed-form hexa-native kernel to promote (unlike the Bosch-Hale
+//      reactivity / on-axis solenoid-field closed forms). So this is a
+//      thin wrap-as-is adapter.
+// g3:  honest install-gated. FreeGS needs `pip install freegs`. If freegs
+//      is not importable, this emits an `install-gated` / `absorbed=false`
+//      skip with a clear install hint (FreeGS primary; DESC / EFIT /
+//      CHEASE as documented alternatives). The honest skip IS the PASS
+//      verdict (NUCLEAR.md §3.3 · FUSION.md honest-skip path). Never
+//      fabricates psi / q / beta numbers when no solver is present.
+// R4 invariant: absorbed = false ALWAYS for this adapter. A simulated
+//      free-boundary equilibrium is a DESIGN-FEASIBILITY witness, NOT a
+//      measured magnetic reconstruction. The only absorbed=true FUSION
+//      path remains the JET measured-oracle
+//      (`stdlib/fusion/jet_plasma_measured_oracle.py`, kappa-70 G37).
+//
+// CLI shape (mirror of openmc_tbr.py's out_dir contract):
+//   hexa run stdlib/fusion/f3_grad_shafranov_adapter.hexa <out_dir>
+//
+// Output:
+//   <out_dir>/equilibrium.json   (single JSON record, indent-free)
+// Default out_dir when omitted: /tmp/fusion_f3_grad_shafranov
+//
+// Exit: 0 always on a clean emit (honest install-gated skip = PASS).
+// @no-lock-needed
+
+// ── tiny JSON-string helpers ─────────────────────────────────────────────
+// hexa has no native JSON encoder in this stdlib slice, so we build the
+// record as a string. `_je` escapes a value into a quoted JSON string.
+
+fn _je(s: str) -> str {
+    let mut out = "\""
+    let n = s.len()
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "\"" { out = out + "\\\"" }
+        else if c == "\\" { out = out + "\\\\" }
+        else if c == "\n" { out = out + "\\n" }
+        else if c == "\r" { out = out + "\\r" }
+        else if c == "\t" { out = out + "\\t" }
+        else { out = out + c }
+        i = i + 1
+    }
+    return out + "\""
+}
+
+// Join an array of already-`_je`-escaped strings into a JSON array body.
+fn _arr(items: [str]) -> str {
+    return "[" + items.join(",") + "]"
+}
+
+// ── FreeGS backend probe (wrap-as-is external-library presence) ───────────
+// Mirror of openmc_tbr.py's `_try_import_openmc()` / n8's backend probe:
+// shell out to python3 and attempt `import freegs`. Returns the python3
+// stdout token: "ok" when importable, "" otherwise. We never launch the
+// solve from a half-present backend — a clean import is the gate.
+
+fn _probe_freegs() -> str {
+    // `python3 -c "import freegs"` exits 0 + prints "ok" iff importable.
+    // 2>/dev/null swallows the ImportError traceback; the empty stdout on
+    // failure is the honest "absent" signal (offline-safe, no network).
+    let cmd = "python3 -c 'import freegs; print(\"ok\")' 2>/dev/null"
+    return exec(cmd).trim()
+}
+
+// FreeGS version string (best-effort; "unknown" if the attribute is
+// missing). Only queried when the import probe already succeeded.
+fn _freegs_version() -> str {
+    let cmd = "python3 -c 'import freegs; print(getattr(freegs, \"__version__\", \"unknown\"))' 2>/dev/null"
+    let v = exec(cmd).trim()
+    if v.len() == 0 { return "unknown" }
+    return v
+}
+
+// ── install hint surfaced in the skip record ─────────────────────────────
+// FreeGS is the primary backend; DESC / EFIT / CHEASE are the documented
+// alternatives (FUSION.md §6 F3 row · §refs).
+let INSTALL_HINT = "FreeGS not importable — honest install-gated skip. Install the primary backend: `pip install freegs` (github.com/freegs-plasma/freegs — Dudson et al., free-boundary Grad-Shafranov equilibrium solver). Documented alternatives if FreeGS is unsuitable for the target: DESC (github.com/PlasmaControl/DESC — stellarator/tokamak pseudo-spectral equilibrium), EFIT (the de-facto experimental equilibrium-reconstruction code; request from GA / the tokamak operator), CHEASE (fixed-boundary high-resolution equilibrium · Luetjens et al., EPFL/SPC). Re-run after install to obtain the psi / q(psi) / beta / LCFS boundary-shape solve."
+
+// ── citations (Freidberg Ideal MHD 2014 · Grad 1958 / Shafranov 1966 ·
+//    FreeGS · FUSION.md gate (c)) ──────────────────────────────────────────
+fn _citations() -> [str] {
+    return [
+        _je("Freidberg, J.P. — 'Ideal MHD', Cambridge University Press (2014). Grad-Shafranov axisymmetric equilibrium + free-boundary formulation (FUSION.md gate (c) primary text)."),
+        _je("Grad, H. & Rubin, H. (1958), 'Hydromagnetic Equilibria and Force-Free Fields', Proc. 2nd UN Conf. Peaceful Uses of Atomic Energy, vol. 31, p. 190 — the Grad-Shafranov equation (Delta* psi)."),
+        _je("Shafranov, V.D. (1966), 'Plasma Equilibrium in a Magnetic Field', Reviews of Plasma Physics, vol. 2, p. 103 — companion derivation of the equilibrium equation."),
+        _je("FreeGS — Dudson et al., free-boundary Grad-Shafranov equilibrium solver, github.com/freegs-plasma/freegs (primary F3 backend)."),
+        _je("FUSION.md gate (c) (plasma equilibrium — Grad-Shafranov free-boundary solve) + §6 F3 cohort spec (FreeGS · DESC · EFIT · CHEASE · B wrap-as-is · Phase 3 land) + R4-class gate_type invariant (fusion-design-feasibility | install-gated).")
+    ]
+}
+
+// ── scope caveats (≥3 always; +1 skip-specific tail) ─────────────────────
+fn _scope_caveats(extra: str) -> [str] {
+    let mut out = [
+        _je("(s1) A simulated free-boundary equilibrium is NOT a measured magnetic reconstruction. EFIT-class measured reconstructions are constrained by real magnetic diagnostics (flux loops, pickup coils, MSE); this adapter's solve is a DESIGN-FEASIBILITY witness only. sim PASS = 'this design point is worth building', NEVER 'this device achieves Q>1' (FUSION.md R4-class invariant · gate (g) downstream wet-lab)."),
+        _je("(s2) The free-boundary solve assumes an IDEALIZED coil set + prescribed plasma pressure/current profiles. Real machines have finite coil geometry, eddy/vessel currents, ferromagnetic structure, and profile uncertainty not captured by a simple tokamak coil + analytic profile model."),
+        _je("(s3) No transport or stability coupling. This is a static equilibrium (Grad-Shafranov) only — it does NOT solve the ideal-MHD beta-limit / kink / ballooning stability (FUSION.md gate (d)), nor any transport / confinement-time / Lawson-triple-product evolution. The q(psi) profile is an equilibrium output, NOT a stability verdict."),
+        _je("(s4) absorbed = false ALWAYS for this adapter (R4 invariant). The only absorbed=true FUSION path is the JET measured-oracle (stdlib/fusion/jet_plasma_measured_oracle.py, kappa-70 G37). A free-boundary equilibrium solve — even a fully-converged one — cannot promote to absorbed=true; it is a sim-only design record.")
+    ]
+    if extra.len() > 0 { out.push(_je(extra)) }
+    return out
+}
+
+fn main() {
+    let argv = args()
+    let mut out_dir = "/tmp/fusion_f3_grad_shafranov"
+    // argv[0] is the program; argv[1] is the out_dir if supplied.
+    if argv.len() > 1 {
+        let a = argv[1]
+        if a.len() > 0 { out_dir = a }
+    }
+
+    // mkdir -p the out_dir (matches openmc_tbr.py's out.mkdir(parents=...)).
+    let _ = exec("mkdir -p '" + out_dir.replace("'", "'\\''") + "' 2>/dev/null")
+
+    // ISO stamp — UTC, filesystem-safe (matches the exports stamp style).
+    let stamp = exec("date -u +%Y-%m-%dT%H-%M-%SZ").trim()
+
+    // Backend probe.
+    let probe = _probe_freegs()
+    let present = probe == "ok"
+
+    // ── shared record head ────────────────────────────────────────────────
+    let mut producer = "freegs@absent"
+    if present { producer = "freegs@" + _freegs_version() }
+
+    let mut gate_type = "install-gated"
+    let mut backend = "freegs@absent"
+    let mut skipped_reason = ""
+    let mut equilibrium_json = "null"
+    let mut run_note = ""
+    let mut caveats: [str] = []
+    let mut headline = ""
+
+    if !present {
+        // Honest install-gated skip — FreeGS absent. install-gated IS the
+        // PASS verdict (NUCLEAR.md §3.3 · FUSION.md honest-skip path).
+        gate_type = "install-gated"
+        backend = "freegs@absent"
+        skipped_reason = "freegs not importable (python3 -c 'import freegs' produced no 'ok'). " + INSTALL_HINT
+        equilibrium_json = "null"
+        caveats = _scope_caveats("(s5) This record is an honest install-gated SKIP — no FreeGS on host, so NO psi / q(psi) / beta / boundary numbers were computed. The skip itself is the PASS verdict (FUSION.md honest-skip path). Install FreeGS and re-run to obtain the solve.")
+        headline = "skip: freegs not present (install-gated · honest-skip = PASS · FUSION.md gate (c))"
+    } else {
+        // FreeGS present — run the minimal free-boundary solve out-of-process
+        // (the solve is Python/FreeGS code; we drive it via python3 and read
+        // back a compact JSON equilibrium summary). R4 still holds:
+        // absorbed=false (design-feasibility, not a measurement).
+        gate_type = "fusion-design-feasibility"
+        backend = "freegs"
+        let eq = _run_freegs_solve(out_dir)
+        if eq.len() == 0 || eq == "null" {
+            // Solver present but the run failed — honest solver-error skip
+            // (still absorbed=false; never fabricate the equilibrium).
+            gate_type = "install-gated"
+            backend = "freegs"
+            equilibrium_json = "null"
+            skipped_reason = "freegs present but the free-boundary solve produced no equilibrium summary. Reported as an honest skip — no fabricated equilibrium. " + INSTALL_HINT
+            caveats = _scope_caveats("(s5) FreeGS importable but the solve produced no usable summary; reported as an honest skip with NO fabricated psi / q / beta numbers (FUSION.md honest-skip discipline).")
+            headline = "skip: freegs present but solve failed (honest solver-error skip · no fabricated numbers)"
+        } else {
+            equilibrium_json = eq
+            run_note = "FreeGS free-boundary Grad-Shafranov solve on the textbook freegs.machine.TestTokamak() example (freeBoundaryHagenow boundary · ConstrainPaxisIp analytic profile · isoflux X-point constraints). Outputs are a gate (c) design-feasibility witness — idealized coil set, NOT a sourced engineering lattice; absorbed=false (not a measured reconstruction)."
+            caveats = _scope_caveats("(s5) FreeGS free-boundary solve invoked with a minimal idealized tokamak coil set + analytic plasma profile (textbook example geometry, NOT a sourced engineering lattice). The psi / q(psi) / beta / boundary outputs are a design-feasibility witness for gate (c), not a design-grade reconstruction.")
+            headline = "ok: freegs free-boundary solve complete (fusion-design-feasibility · absorbed=false · design witness, NOT a measured reconstruction)"
+        }
+    }
+
+    // ── assemble the JSON record ──────────────────────────────────────────
+    let mut rec = "{"
+    rec = rec + "\"domain\":" + _je("fusion") + ","
+    rec = rec + "\"verb\":" + _je("verify") + ","
+    rec = rec + "\"kind\":" + _je("grad_shafranov_free_boundary_equilibrium") + ","
+    rec = rec + "\"stamp\":" + _je(stamp) + ","
+    rec = rec + "\"measurement_gate\":" + _je("GATE_OPEN") + ","
+    // R4 invariant — a sim equilibrium is a design-feasibility witness,
+    // NEVER a measured magnetic reconstruction (FUSION.md gate (c)).
+    rec = rec + "\"absorbed\":false,"
+    rec = rec + "\"provisional\":true,"
+    rec = rec + "\"fusion_gate\":" + _je("(c) plasma equilibrium — Grad-Shafranov free-boundary") + ","
+    rec = rec + "\"producer\":" + _je(producer) + ","
+    rec = rec + "\"backend\":" + _je(backend) + ","
+    rec = rec + "\"backend_chain\":" + _arr([_je("freegs"), _je("desc"), _je("efit"), _je("chease")]) + ","
+    rec = rec + "\"gate_type\":" + _je(gate_type) + ","
+    if skipped_reason.len() > 0 {
+        rec = rec + "\"skipped_reason\":" + _je(skipped_reason) + ","
+    } else {
+        rec = rec + "\"skipped_reason\":null,"
+    }
+    if run_note.len() > 0 {
+        rec = rec + "\"run_note\":" + _je(run_note) + ","
+    }
+    rec = rec + "\"equilibrium\":" + equilibrium_json + ","
+    rec = rec + "\"scope_caveats\":" + _arr(caveats) + ","
+    rec = rec + "\"citations\":" + _arr(_citations())
+    rec = rec + "}"
+
+    // ── write record ──────────────────────────────────────────────────────
+    let rec_path = out_dir + "/equilibrium.json"
+    let ok = write_file(rec_path, rec)
+    if !ok {
+        println("[fusion+verify · f3_grad_shafranov] FAILED to write " + rec_path)
+        exit(1)
+    }
+
+    println("[fusion+verify · f3_grad_shafranov] wrote " + rec_path)
+    println("  headline: " + headline)
+    println("  backend=" + backend + " gate_type=" + gate_type + " absorbed=false")
+    if skipped_reason.len() > 0 {
+        // first line of the skip reason (up to the first sentence boundary)
+        let dot = skipped_reason.find(".")
+        let mut first = skipped_reason
+        if dot >= 0 { first = skipped_reason.substring(0, dot + 1) }
+        println("  skipped_reason: " + first)
+    }
+    println("[fusion+verify · f3_grad_shafranov] absorbed=false (R4 invariant; a sim free-boundary equilibrium is a design-feasibility witness, NEVER a measured magnetic reconstruction — gate (c) · FUSION.md). JET measured-oracle is the only absorbed=true fusion path.")
+    exit(0)
+}
+
+// ── minimal FreeGS free-boundary solve (out-of-process Python driver) ─────
+// Mirror of the openmc_tbr.py / N8 wrap-as-is run path: when the backend
+// is present we drive the textbook FreeGS tokamak example through python3
+// and read back a compact JSON equilibrium summary (psi-bounds, q(psi)
+// profile, beta, LCFS boundary shape). On ANY solver failure the driver
+// prints nothing usable and we fall back to an honest skip — NEVER a
+// fabricated equilibrium. Returns the equilibrium JSON object string, or
+// "" / "null" on failure.
+fn _run_freegs_solve(out_dir: str) -> str {
+    // The driver is written to a sidecar .py under out_dir (a transient
+    // artifact, not committed source) and executed once. The
+    // freegs.machine.TestTokamak() example + freeBoundaryHagenow boundary +
+    // ConstrainPaxisIp analytic profile + isoflux/X-point constraints is the
+    // canonical FreeGS quickstart geometry that converges cleanly (the prior
+    // custom 4-coil + 3-isoflux set diverged with "No O points found").
+    let py = "import json,sys\n"
+        + "try:\n"
+        + "    import freegs\n"
+        + "    import numpy as np\n"
+        + "    tok=freegs.machine.TestTokamak()\n"
+        + "    eq=freegs.Equilibrium(tokamak=tok,Rmin=0.1,Rmax=2.0,Zmin=-1.0,Zmax=1.0,nx=65,ny=65,boundary=freegs.boundary.freeBoundaryHagenow)\n"
+        + "    prof=freegs.jtor.ConstrainPaxisIp(eq,1e3,2e5,2.0)\n"
+        + "    xpt=[(1.1,-0.6),(1.1,0.8)]\n"
+        + "    iso=[(1.1,-0.6,1.1,0.6)]\n"
+        + "    con=freegs.control.constrain(xpoints=xpt,isoflux=iso)\n"
+        // FreeGS prints transient Picard diagnostics (e.g. an early-iteration
+        // 'Warning: No O points found' that resolves once the plasma seeds)
+        // straight to stdout. Re-point stdout at stderr across the solve so
+        // ONLY the final JSON reaches stdout — otherwise the warning prefix
+        // would make stdout[0] != '{' and trip the honest-skip fallback.
+        + "    _real_stdout=sys.stdout; sys.stdout=sys.stderr\n"
+        + "    try:\n"
+        + "        freegs.solve(eq,prof,con)\n"
+        + "    finally:\n"
+        + "        sys.stdout=_real_stdout\n"
+        + "    def s(f,*a):\n"
+        + "        try:\n"
+        + "            v=f(*a); return float(v) if v is not None else None\n"
+        + "        except Exception: return None\n"
+        + "    psi=eq.psi(); pmin=float(psi.min()); pmax=float(psi.max())\n"
+        + "    try:\n"
+        + "        pn=np.linspace(0.01,0.99,9); qv=[float(eq.q(p)) for p in pn]\n"
+        + "        qprof={'psinorm':[round(p,4) for p in pn.tolist()],'q':[round(q,5) for q in qv],'q0_approx':qv[0],'q95_approx':qv[-1]}\n"
+        + "    except Exception: qprof=None\n"
+        + "    out={'psi_min':pmin,'psi_max':pmax,'plasma_current_A':s(eq.plasmaCurrent),'q_profile':qprof,'beta_poloidal':s(getattr(eq,'poloidalBeta',lambda:None)),'boundary_shape':{'Rgeometric_m':s(getattr(eq,'geometricRmajor',lambda:None)),'minorRadius_m':s(getattr(eq,'minorRadius',lambda:None)),'elongation':s(getattr(eq,'elongation',lambda:None)),'triangularity':s(getattr(eq,'triangularity',lambda:None))},'grid':{'nx':65,'ny':65,'Rmin':0.1,'Rmax':2.0,'Zmin':-1.0,'Zmax':1.0}}\n"
+        + "    sys.stdout.write(json.dumps(out))\n"
+        + "except Exception as e:\n"
+        + "    sys.stderr.write('freegs solve failed: '+str(e)); sys.exit(1)\n"
+    let drv = out_dir + "/_freegs_driver.py"
+    let _ = write_file(drv, py)
+    let res = exec("python3 '" + drv.replace("'", "'\\''") + "' 2>/dev/null").trim()
+    // Clean up the transient driver.
+    let _ = exec("rm -f '" + drv.replace("'", "'\\''") + "' 2>/dev/null")
+    if res.len() == 0 { return "" }
+    if res.substring(0, 1) != "{" { return "" }
+    return res
+}

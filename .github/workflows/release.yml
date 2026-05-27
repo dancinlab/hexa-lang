@@ -1,0 +1,342 @@
+name: release
+
+# Release build matrix — fires on tag push (`v*`), bootstraps the self-host
+# pipeline on each runner, packages the resulting `hexa` + `build/` sidecar
+# binaries as `hexa-<target>.tar.gz`, and uploads them to the GitHub Release
+# that the tag created. `install.sh` fetches these assets verbatim:
+#
+#   https://github.com/dancinlab/hexa-lang/releases/download/<tag>/hexa-<target>.tar.gz
+#
+# Targets (install.sh detect_target — uname{-s,-m} → {darwin|linux}-{arm64|x86_64}):
+#   · darwin-arm64    macos-latest         Apple Silicon
+#   · linux-x86_64    ubuntu-latest
+#   · linux-arm64     ubuntu-24.04-arm     GA-confirmed by bootstrap.yml
+#
+# Archive layout (install.sh L80-103):
+#   hexa-<target>/
+#     hexa                          # CLI binary (becomes ~/.hx/bin/hexa.real)
+#     build/hexa_module_loader      # `hexa build` flatten helper
+#     release/precompile/           # GO M4 — pre-built cache binaries (hexa_run.<key>)
+#                                   # so first `hexa run <shipped-script>` skips clang fork
+#
+# The bootstrap chain is duplicated verbatim from bootstrap.yml to keep the
+# two workflows independent (per bootstrap.yml's INDEPENDENCE clause).
+
+on:
+  push:
+    tags: ['v*']
+    branches: [main]      # → rolling `edge` prerelease (install via HEXA_VERSION=edge)
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag to (re)build assets for'
+        required: true
+
+permissions:
+  contents: write  # gh release upload + edge tag force-move
+
+# Tag push (v*) keeps every run — distinct group per tag, no cancellation.
+# Main push only ever needs the latest commit's edge build; cancel any
+# older in-flight edge run when a newer main push lands.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type == 'branch' }}
+
+env:
+  CFLAGS_COMMON: "-O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs"
+
+jobs:
+  # ── Setup — decide release tag + force-move `edge` on main push ────
+  setup:
+    name: setup
+    runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ steps.c.outputs.release_tag }}
+      is_tag: ${{ steps.c.outputs.is_tag }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - id: c
+        name: Compute release_tag + is_tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+              echo "release_tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+              echo "is_tag=true" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.ref_type }}" = "tag" ]; then
+              echo "release_tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+              echo "is_tag=true" >> "$GITHUB_OUTPUT"
+          else
+              echo "release_tag=edge" >> "$GITHUB_OUTPUT"
+              echo "is_tag=false" >> "$GITHUB_OUTPUT"
+          fi
+          cat "$GITHUB_OUTPUT"
+
+      # softprops/action-gh-release@v2 will create-or-update the release
+      # at the named tag, but it does NOT move an existing tag to a new
+      # commit. For `edge` (rolling), force-move the git tag here so the
+      # release's commit and the tag's commit stay in lock-step.
+      - name: Force-move `edge` tag (main push only)
+        if: steps.c.outputs.is_tag != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git tag -f edge "${{ github.sha }}"
+          git push origin -f edge
+  # ── macOS arm64 (Apple Silicon) ────────────────────────────
+  release-macos-arm64:
+    name: release (darwin-arm64)
+    needs: setup
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Stage 0 — compile self-hosted transpiler (hexa_v2)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p self/native build/stage1
+          clang $CFLAGS_COMMON \
+              -I self self/native/hexa_cc.c self/runtime.c \
+              -o build/hexa_v2
+          file build/hexa_v2
+
+      - name: Stage 1 — flatten + transpile self/main.hexa → build/stage1/main.c
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./build/hexa_v2 self/module_loader.hexa build/stage1/module_loader.c
+          clang $CFLAGS_COMMON \
+              -I self build/stage1/module_loader.c self/runtime.c \
+              -o build/hexa_module_loader
+          ./build/hexa_module_loader self/main.hexa build/stage1/main_expanded.hexa
+          ./build/hexa_v2 build/stage1/main_expanded.hexa build/stage1/main.c
+
+      - name: Stage 2 — compile CLI driver (./hexa)
+        shell: bash
+        run: |
+          set -euo pipefail
+          clang $CFLAGS_COMMON \
+              -I self build/stage1/main.c self/runtime.c \
+              -o hexa
+          file hexa
+
+      # ── GO M4 — precompile shipped scripts into release/precompile/
+      # so the tarball's first `hexa run <script>` skips the clang fork
+      # (cold-cache fork-storm mitigation, internal axis). Each manifest
+      # entry in tool/precompile.json → release/precompile/hexa_run.<key>.
+      # HEXA_MODULE_LOADER points at the just-built loader to dodge the
+      # silent-stub link-fail trap (compiled `use` needs the env hint).
+      - name: Stage 3 — precompile shipped scripts (release/precompile/)
+        shell: bash
+        run: |
+          set -euo pipefail
+          export HEXA_LANG="$PWD"
+          export HEXA_MODULE_LOADER="$PWD/build/hexa_module_loader"
+          export PATH="$PWD:$PATH"
+          ./hexa run tool/build_precompile.hexa
+          echo "--- release/precompile/ contents ---"
+          ls -la release/precompile/
+          test -d release/precompile
+          test "$(ls -1 release/precompile/ | wc -l)" -gt 0
+
+      - name: Package — hexa-darwin-arm64.tar.gz
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="darwin-arm64"
+          stage="dist/hexa-${target}"
+          mkdir -p "$stage/build" "$stage/release/precompile"
+          cp hexa "$stage/hexa"
+          cp build/hexa_module_loader "$stage/build/hexa_module_loader"
+          # GO M4 — ship precompiled binaries from Stage 3.
+          cp -R release/precompile/. "$stage/release/precompile/"
+          tar -czf "hexa-${target}.tar.gz" -C dist "hexa-${target}"
+          ls -la "hexa-${target}.tar.gz"
+          # GO M4 smoke — tarball MUST embed release/precompile/ with ≥1 entry.
+          n=$(tar -tzf "hexa-${target}.tar.gz" | grep -cE "hexa-${target}/release/precompile/[^/]+$" || true)
+          echo "tarball precompile entries: $n"
+          test "$n" -gt 0
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.setup.outputs.release_tag }}
+          prerelease: ${{ needs.setup.outputs.is_tag != 'true' }}
+          make_latest: ${{ needs.setup.outputs.is_tag == 'true' && 'true' || 'false' }}
+          target_commitish: ${{ github.sha }}
+          files: hexa-darwin-arm64.tar.gz
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+
+  # ── Linux x86_64 ───────────────────────────────────────────
+  release-linux-x86_64:
+    name: release (linux-x86_64)
+    needs: setup
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Stage 0 — compile self-hosted transpiler (hexa_v2)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p self/native build/stage1
+          gcc $CFLAGS_COMMON \
+              -I self self/native/hexa_cc.c self/runtime.c \
+              -o build/hexa_v2 \
+              -lm -ldl
+          file build/hexa_v2
+
+      - name: Stage 1 — flatten + transpile self/main.hexa → build/stage1/main.c
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./build/hexa_v2 self/module_loader.hexa build/stage1/module_loader.c
+          gcc $CFLAGS_COMMON \
+              -I self build/stage1/module_loader.c self/runtime.c \
+              -o build/hexa_module_loader \
+              -lm -ldl
+          ./build/hexa_module_loader self/main.hexa build/stage1/main_expanded.hexa
+          ./build/hexa_v2 build/stage1/main_expanded.hexa build/stage1/main.c
+
+      - name: Stage 2 — compile CLI driver (./hexa)
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcc $CFLAGS_COMMON \
+              -I self build/stage1/main.c self/runtime.c \
+              -o hexa \
+              -lm -ldl
+          file hexa
+
+      # ── GO M4 — see darwin-arm64 job for full rationale.
+      - name: Stage 3 — precompile shipped scripts (release/precompile/)
+        shell: bash
+        run: |
+          set -euo pipefail
+          export HEXA_LANG="$PWD"
+          export HEXA_MODULE_LOADER="$PWD/build/hexa_module_loader"
+          export PATH="$PWD:$PATH"
+          ./hexa run tool/build_precompile.hexa
+          echo "--- release/precompile/ contents ---"
+          ls -la release/precompile/
+          test -d release/precompile
+          test "$(ls -1 release/precompile/ | wc -l)" -gt 0
+
+      - name: Package — hexa-linux-x86_64.tar.gz
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="linux-x86_64"
+          stage="dist/hexa-${target}"
+          mkdir -p "$stage/build" "$stage/release/precompile"
+          cp hexa "$stage/hexa"
+          cp build/hexa_module_loader "$stage/build/hexa_module_loader"
+          # GO M4 — ship precompiled binaries from Stage 3.
+          cp -R release/precompile/. "$stage/release/precompile/"
+          tar -czf "hexa-${target}.tar.gz" -C dist "hexa-${target}"
+          ls -la "hexa-${target}.tar.gz"
+          # GO M4 smoke — tarball MUST embed release/precompile/ with ≥1 entry.
+          n=$(tar -tzf "hexa-${target}.tar.gz" | grep -cE "hexa-${target}/release/precompile/[^/]+$" || true)
+          echo "tarball precompile entries: $n"
+          test "$n" -gt 0
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.setup.outputs.release_tag }}
+          prerelease: ${{ needs.setup.outputs.is_tag != 'true' }}
+          make_latest: ${{ needs.setup.outputs.is_tag == 'true' && 'true' || 'false' }}
+          target_commitish: ${{ github.sha }}
+          files: hexa-linux-x86_64.tar.gz
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+
+  # ── Linux arm64 ────────────────────────────────────────────
+  release-linux-arm64:
+    name: release (linux-arm64)
+    needs: setup
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Stage 0 — compile self-hosted transpiler (hexa_v2)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p self/native build/stage1
+          gcc $CFLAGS_COMMON \
+              -I self self/native/hexa_cc.c self/runtime.c \
+              -o build/hexa_v2 \
+              -lm -ldl
+          file build/hexa_v2
+
+      - name: Stage 1 — flatten + transpile self/main.hexa → build/stage1/main.c
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./build/hexa_v2 self/module_loader.hexa build/stage1/module_loader.c
+          gcc $CFLAGS_COMMON \
+              -I self build/stage1/module_loader.c self/runtime.c \
+              -o build/hexa_module_loader \
+              -lm -ldl
+          ./build/hexa_module_loader self/main.hexa build/stage1/main_expanded.hexa
+          ./build/hexa_v2 build/stage1/main_expanded.hexa build/stage1/main.c
+
+      - name: Stage 2 — compile CLI driver (./hexa)
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcc $CFLAGS_COMMON \
+              -I self build/stage1/main.c self/runtime.c \
+              -o hexa \
+              -lm -ldl
+          file hexa
+
+      # ── GO M4 — see darwin-arm64 job for full rationale.
+      - name: Stage 3 — precompile shipped scripts (release/precompile/)
+        shell: bash
+        run: |
+          set -euo pipefail
+          export HEXA_LANG="$PWD"
+          export HEXA_MODULE_LOADER="$PWD/build/hexa_module_loader"
+          export PATH="$PWD:$PATH"
+          ./hexa run tool/build_precompile.hexa
+          echo "--- release/precompile/ contents ---"
+          ls -la release/precompile/
+          test -d release/precompile
+          test "$(ls -1 release/precompile/ | wc -l)" -gt 0
+
+      - name: Package — hexa-linux-arm64.tar.gz
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="linux-arm64"
+          stage="dist/hexa-${target}"
+          mkdir -p "$stage/build" "$stage/release/precompile"
+          cp hexa "$stage/hexa"
+          cp build/hexa_module_loader "$stage/build/hexa_module_loader"
+          # GO M4 — ship precompiled binaries from Stage 3.
+          cp -R release/precompile/. "$stage/release/precompile/"
+          tar -czf "hexa-${target}.tar.gz" -C dist "hexa-${target}"
+          ls -la "hexa-${target}.tar.gz"
+          # GO M4 smoke — tarball MUST embed release/precompile/ with ≥1 entry.
+          n=$(tar -tzf "hexa-${target}.tar.gz" | grep -cE "hexa-${target}/release/precompile/[^/]+$" || true)
+          echo "tarball precompile entries: $n"
+          test "$n" -gt 0
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.setup.outputs.release_tag }}
+          prerelease: ${{ needs.setup.outputs.is_tag != 'true' }}
+          make_latest: ${{ needs.setup.outputs.is_tag == 'true' && 'true' || 'false' }}
+          target_commitish: ${{ github.sha }}
+          files: hexa-linux-arm64.tar.gz
+          fail_on_unmatched_files: true
+          generate_release_notes: true

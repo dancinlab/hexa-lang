@@ -1,0 +1,130 @@
+// stdlib/yosys/test/counter.hexa — FIRMWARE.md G-R1 demo (procedural)
+//
+// @version 0.1.0
+// @authority FIRMWARE.md §4 G-R1 + RFC 064
+//
+// G-R1 honest scope: full annotation-driven `@target(rtl)` lowering
+// requires a compiler-side front-end pass (self/codegen_c2.hexa
+// change + bootstrap regen). This demo proves the **minimum-viable
+// alternative**: hexa code procedurally builds an RTLIL Design via
+// the typed constructors in `stdlib/yosys/rtlil.hexa`, then emits
+// it as Verilog (`write_verilog`), SystemVerilog (`write_sv`), and
+// VHDL (`write_vhdl`).
+//
+// Counter shape: 4-bit synchronous up-counter with synchronous reset.
+// Encoded as a gate netlist (post-synth shape) since the RTLIL we
+// produce is the mapped-cell representation — this matches the
+// "mapped" scope of stdlib/yosys/{write_verilog,write_sv,write_vhdl}
+// (rfc_006 §4 mapped variant).
+//
+// Run:
+//   hexa run stdlib/yosys/test/counter.hexa
+//
+// Exit code:
+//   0 — all three emitters produced byte-stable, well-formed text
+//   1 — emit failure or expected-fragment missing
+
+use "stdlib/yosys/rtlil"
+use "stdlib/yosys/write_verilog"
+use "stdlib/yosys/write_sv"
+use "stdlib/vhdl/write_vhdl"
+
+// Build a 4-bit counter as a mapped RTLIL Design. The cell types
+// reference the sky130_fd_sc_hd library (the same library the rest
+// of stdlib/yosys uses for fixtures). The shape:
+//
+//   inputs : clk, rst
+//   output : q[3:0]
+//   logic  : 4 DFFs (one per output bit) driven by a 4-bit adder.
+//
+// We emit just the wires + DFFs here; the adder is summarised as a
+// single library cell `sky130_fd_sc_hd__add4` for the demo (the
+// real synth flow would expand it to gates, but G-R1's purpose is
+// to prove authoring-from-hexa, not to re-implement synthesis).
+fn build_counter() -> Design {
+    let mut m = rtlil_new_module("counter")
+
+    // ports
+    m = rtlil_module_add_wire(m, rtlil_wire("clk",  1, 1, 1))
+    m = rtlil_module_add_wire(m, rtlil_wire("rst",  1, 1, 2))
+    m = rtlil_module_add_wire(m, rtlil_wire("q",    4, 2, 3))
+
+    // internal: next-state bus
+    m = rtlil_module_add_wire(m, rtlil_wire("q_next", 4, 0, 0))
+
+    // adder cell: q_next = q + 1
+    let mut adder = rtlil_cell("u_add", "sky130_fd_sc_hd__add4", 1)
+    adder = rtlil_cell_connect(adder, "A", "q")
+    adder = rtlil_cell_connect(adder, "B", "4'b0001")
+    adder = rtlil_cell_connect(adder, "Y", "q_next")
+    m = rtlil_module_add_cell(m, adder)
+
+    // DFF cell with synchronous reset: q <= rst ? 0 : q_next
+    let mut dff = rtlil_cell("u_dff", "sky130_fd_sc_hd__sdfrtp_1", 1)
+    dff = rtlil_cell_connect(dff, "CLK", "clk")
+    dff = rtlil_cell_connect(dff, "RESET_B", "rst")
+    dff = rtlil_cell_connect(dff, "D", "q_next")
+    dff = rtlil_cell_connect(dff, "Q", "q")
+    m = rtlil_module_add_cell(m, dff)
+
+    let mut d = rtlil_new_design("counter.hexa (G-R1 procedural demo)")
+    return rtlil_design_add(d, m)
+}
+
+fn _has(s: str, frag: str) -> int {
+    if s.find(frag) >= 0 { return 1 }
+    return 0
+}
+
+fn main() {
+    let d = build_counter()
+    let mut fails = 0
+    let mut total = 0
+
+    // T1 — Verilog emit contains module + cells + endmodule.
+    total = total + 1
+    let rv = write_verilog(d)
+    if rv.ok != 1 { println("FAIL T1 verilog_ok"); fails = fails + 1 }
+    if _has(rv.text, "module counter(") != 1 { println("FAIL T1b v_module"); fails = fails + 1 }
+    if _has(rv.text, "input clk;") != 1 { println("FAIL T1c v_clk"); fails = fails + 1 }
+    if _has(rv.text, "output q;") != 1 { println("FAIL T1d v_q_port"); fails = fails + 1 }
+    if _has(rv.text, "sky130_fd_sc_hd__add4 u_add") != 1 { println("FAIL T1e v_adder"); fails = fails + 1 }
+    if _has(rv.text, "sky130_fd_sc_hd__sdfrtp_1 u_dff") != 1 { println("FAIL T1f v_dff"); fails = fails + 1 }
+    if _has(rv.text, "endmodule") != 1 { println("FAIL T1g v_endmodule"); fails = fails + 1 }
+
+    // T2 — SystemVerilog emit uses ANSI ports + `logic` type.
+    total = total + 1
+    let rs = write_sv(d)
+    if rs.ok != 1 { println("FAIL T2 sv_ok"); fails = fails + 1 }
+    if _has(rs.text, "module counter (") != 1 { println("FAIL T2b sv_module"); fails = fails + 1 }
+    if _has(rs.text, "input logic clk") != 1 { println("FAIL T2c sv_clk"); fails = fails + 1 }
+    if _has(rs.text, "output logic [3:0] q") != 1 { println("FAIL T2d sv_q_bus"); fails = fails + 1 }
+    if _has(rs.text, "endmodule") != 1 { println("FAIL T2e sv_endmodule"); fails = fails + 1 }
+
+    // T3 — VHDL emit uses entity/architecture + port map.
+    total = total + 1
+    let rh = write_vhdl(d)
+    if rh.ok != 1 { println("FAIL T3 vhdl_ok"); fails = fails + 1 }
+    if _has(rh.text, "entity counter is") != 1 { println("FAIL T3b vhdl_entity"); fails = fails + 1 }
+    if _has(rh.text, "clk : in std_logic") != 1 { println("FAIL T3c vhdl_clk"); fails = fails + 1 }
+    if _has(rh.text, "q : out std_logic_vector(3 downto 0)") != 1 { println("FAIL T3d vhdl_q_bus"); fails = fails + 1 }
+    if _has(rh.text, "u_add : sky130_fd_sc_hd__add4 port map") != 1 { println("FAIL T3e vhdl_adder"); fails = fails + 1 }
+    if _has(rh.text, "CLK => clk") != 1 { println("FAIL T3f vhdl_pinmap"); fails = fails + 1 }
+    if _has(rh.text, "end architecture;") != 1 { println("FAIL T3g vhdl_endarch"); fails = fails + 1 }
+
+    // T4 — byte-stable across emits (all three dialects).
+    total = total + 1
+    let rv2 = write_verilog(d)
+    let rs2 = write_sv(d)
+    let rh2 = write_vhdl(d)
+    if rv.text != rv2.text { println("FAIL T4 verilog_stable"); fails = fails + 1 }
+    if rs.text != rs2.text { println("FAIL T4b sv_stable"); fails = fails + 1 }
+    if rh.text != rh2.text { println("FAIL T4c vhdl_stable"); fails = fails + 1 }
+
+    if fails > 0 {
+        println("counter (G-R1 procedural) demo: " + str(total - fails) + "/" + str(total) + " checks — FAIL")
+        exit(1)
+    }
+    println("counter (G-R1 procedural) demo: " + str(total) + "/" + str(total) + " checks PASS")
+    println("  emitted: " + str(rv.bytes) + "B verilog, " + str(rs.bytes) + "B sv, " + str(rh.bytes) + "B vhdl")
+}

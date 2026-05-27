@@ -1,0 +1,317 @@
+// stream_daemon.hexa — ANU-seeded ChaCha20 stream extender
+//
+// Architecture:
+//   Every RESEED_SEC seconds: fetch 256-bit seed from ANU QRNG (fallback
+//   /dev/urandom) via shared/sim_bridge/godel_q/anu_source.hexa, install as
+//   ChaCha20 key. Counter starts at 0 and advances per 64B block.
+//
+// Modes (CLI arg 2):
+//   stdout  : emit raw keystream bytes to stdout until --bytes N limit.
+//             (default N=65536). Reseed does not interrupt the stream.
+//   hexout  : same but lowercase hex (2x size) — useful for piping to text tools.
+//   unix    : bind to UNIX socket and serve bytes to first connector.
+//             Arg3 = socket path. Uses `nc -lU` under the hood.
+//   self    : internal benchmark mode — produce N bytes to /tmp and time it.
+//
+// Everything is local-only (no network listener). HEXA_LOCAL=1 is assumed.
+// Files read:
+//   shared/sim_bridge/godel_q/anu_source.hexa  (seed source)
+//   shared/sim_bridge/anu_stream/chacha20.hexa (block primitive)
+// This file re-implements the block primitive inline to keep the daemon a
+// single compilation unit — hexa stage1 has no module `use` for local files.
+
+// ============================================================
+// (copied from chacha20.hexa — see that file for commentary)
+// ============================================================
+let M32 = 4294967295
+let C0 = 1634760805
+let C1 = 857760878
+let C2 = 2036477234
+let C3 = 1797285236
+
+fn pow2_table() -> [int] {
+    let mut t = [1]
+    let mut i = 0
+    while i < 32 { t = t.push(t[t.len() - 1] * 2); i = i + 1 }
+    t
+}
+fn rotl32(v: int, n: int, P: [int]) -> int {
+    let vv = v & M32
+    let hi = (vv * P[n]) & M32
+    let lo = vv / P[32 - n]
+    (hi ^ lo) & M32
+}
+fn qr(s: [int], a: int, b: int, c: int, d: int, P: [int]) -> [int] {
+    let mut w = s
+    w[a] = (w[a] + w[b]) & M32
+    w[d] = rotl32(w[d] ^ w[a], 16, P)
+    w[c] = (w[c] + w[d]) & M32
+    w[b] = rotl32(w[b] ^ w[c], 12, P)
+    w[a] = (w[a] + w[b]) & M32
+    w[d] = rotl32(w[d] ^ w[a], 8, P)
+    w[c] = (w[c] + w[d]) & M32
+    w[b] = rotl32(w[b] ^ w[c], 7, P)
+    w
+}
+fn chacha_block(key8: [int], counter: int, nonce3: [int], P: [int]) -> [int] {
+    let state = [C0, C1, C2, C3,
+                 key8[0], key8[1], key8[2], key8[3],
+                 key8[4], key8[5], key8[6], key8[7],
+                 counter & M32,
+                 nonce3[0] & M32, nonce3[1] & M32, nonce3[2] & M32]
+    let mut w = [state[0], state[1], state[2], state[3],
+                 state[4], state[5], state[6], state[7],
+                 state[8], state[9], state[10], state[11],
+                 state[12], state[13], state[14], state[15]]
+    let mut r = 0
+    while r < 10 {
+        w = qr(w, 0, 4, 8, 12, P)
+        w = qr(w, 1, 5, 9, 13, P)
+        w = qr(w, 2, 6, 10, 14, P)
+        w = qr(w, 3, 7, 11, 15, P)
+        w = qr(w, 0, 5, 10, 15, P)
+        w = qr(w, 1, 6, 11, 12, P)
+        w = qr(w, 2, 7, 8, 13, P)
+        w = qr(w, 3, 4, 9, 14, P)
+        r = r + 1
+    }
+    let mut out = []
+    let mut i = 0
+    while i < 16 { out = out.push((w[i] + state[i]) & M32); i = i + 1 }
+    out
+}
+
+fn words_to_bytes(words: [int]) -> [int] {
+    let mut out = []
+    let mut i = 0
+    while i < words.len() {
+        let w = words[i] & M32
+        out = out.push(w % 256)
+        out = out.push((w / 256) % 256)
+        out = out.push((w / 65536) % 256)
+        out = out.push((w / 16777216) % 256)
+        i = i + 1
+    }
+    out
+}
+
+fn hex_nibble(c: char) -> int {
+    let s = to_string(c)
+    if s == "0" { return 0 }
+    if s == "1" { return 1 }
+    if s == "2" { return 2 }
+    if s == "3" { return 3 }
+    if s == "4" { return 4 }
+    if s == "5" { return 5 }
+    if s == "6" { return 6 }
+    if s == "7" { return 7 }
+    if s == "8" { return 8 }
+    if s == "9" { return 9 }
+    if s == "a" { return 10 }
+    if s == "b" { return 11 }
+    if s == "c" { return 12 }
+    if s == "d" { return 13 }
+    if s == "e" { return 14 }
+    if s == "f" { return 15 }
+    if s == "A" { return 10 }
+    if s == "B" { return 11 }
+    if s == "C" { return 12 }
+    if s == "D" { return 13 }
+    if s == "E" { return 14 }
+    if s == "F" { return 15 }
+    0
+}
+
+fn hex_to_bytes(h: string) -> [int] {
+    let chars = h.chars()
+    let mut out = []
+    let mut i = 0
+    while i < chars.len() {
+        let hi = hex_nibble(chars[i])
+        let lo = hex_nibble(chars[i + 1])
+        out = out.push(hi * 16 + lo)
+        i = i + 2
+    }
+    out
+}
+
+fn key_bytes_to_words(key32: [int]) -> [int] {
+    let mut out = []
+    let mut i = 0
+    while i < 8 {
+        let b0 = key32[i * 4 + 0]
+        let b1 = key32[i * 4 + 1]
+        let b2 = key32[i * 4 + 2]
+        let b3 = key32[i * 4 + 3]
+        out = out.push((b0 + b1 * 256 + b2 * 65536 + b3 * 16777216) & M32)
+        i = i + 1
+    }
+    out
+}
+
+fn byte_to_hex(b: int) -> string {
+    let HEX = "0123456789abcdef".chars()
+    to_string(HEX[(b / 16) % 16]) + to_string(HEX[b % 16])
+}
+fn bytes_to_hex(bs: [int]) -> string {
+    let mut s = ""
+    let mut i = 0
+    while i < bs.len() { s = s + byte_to_hex(bs[i]); i = i + 1 }
+    s
+}
+
+// ============================================================
+// Seed fetch
+// ============================================================
+fn fetch_seed_hex() -> string {
+    // Call shared/sim_bridge/godel_q/anu_source.hexa (self-contained ANU
+    // fetcher w/ 60s cache + /dev/urandom fallback). Returns 128 hex chars
+    // (64 bytes). We only need 32 bytes for a ChaCha20 key.
+    let home = env_var("HOME")
+    let src = home + "/Dev/nexus/sim_bridge/godel_q/anu_source.hexa"
+    let mut out = ""
+    try {
+        out = to_string(exec("HEXA_LOCAL=1 " + home + "/Dev/nexus/bin/hexa " + src + " 2>/dev/null")).trim()
+    } catch e { out = "" }
+    if out.len() >= 64 { return out.substring(0, 64) }
+    // Last-resort: urandom direct
+    let mut fallback = ""
+    try {
+        fallback = to_string(exec("head -c 32 /dev/urandom | od -An -vtx1 | tr -d ' \\n'")).trim()
+    } catch e2 { fallback = "" }
+    fallback
+}
+
+// ============================================================
+// Binary writer: write bytes[] as raw file via od-free path
+// Since hexa's write_file writes strings, we build a hex string and pipe
+// through xxd -r -p to convert to raw bytes. For stdout streaming we use
+// printf %b with \xHH escapes (batch the call to keep throughput sane).
+// ============================================================
+fn write_bytes_to_stdout_raw(bs: [int]) {
+    // Batch strategy: write to a temp file via hex, dump via `cat`.
+    let tmp = "/tmp/.anu_stream_" + to_string(timestamp()) + "_" + to_string(random_int(0, 1000000)) + ".hex"
+    let hex = bytes_to_hex(bs)
+    try { write_file(tmp, hex) } catch e {}
+    try { exec("xxd -r -p '" + tmp + "'") } catch e2 {}
+    try { delete_file(tmp) } catch e3 {}
+}
+
+fn write_bytes_to_file_raw(bs: [int], path: string) {
+    let tmp = path + ".hex"
+    let hex = bytes_to_hex(bs)
+    try { write_file(tmp, hex) } catch e {}
+    try { exec("xxd -r -p '" + tmp + "' > '" + path + "'") } catch e2 {}
+    try { delete_file(tmp) } catch e3 {}
+}
+
+// ============================================================
+// CLI
+// ============================================================
+let _a = args()
+let mode = if _a.len() >= 2 { _a[1] } else { "help" }
+
+if mode == "help" {
+    println("stream_daemon.hexa — ANU-seeded ChaCha20 stream extender")
+    println("  stdout <bytes>               emit raw bytes to stdout")
+    println("  hexout <bytes>               emit lowercase hex (bytes*2 chars)")
+    println("  file   <bytes> <path>        write raw bytes to file")
+    println("  self   <bytes>               internal throughput benchmark")
+    println("  once                         print 64B block hex + source info")
+    exit(0)
+}
+
+if mode == "once" {
+    let seed_hex = fetch_seed_hex()
+    if seed_hex.len() < 64 {
+        println("ERROR: seed fetch failed")
+        exit(1)
+    }
+    let key = hex_to_bytes(seed_hex)
+    let key8 = key_bytes_to_words(key)
+    let P = pow2_table()
+    let words = chacha_block(key8, 0, [0, 0, 0], P)
+    let bytes = words_to_bytes(words)
+    println("seed=" + seed_hex)
+    println("block0=" + bytes_to_hex(bytes))
+    exit(0)
+}
+
+// --- bulk generation path ---
+let want_bytes = if _a.len() >= 3 { to_int(_a[2]) } else { 65536 }
+let out_path = if _a.len() >= 4 { _a[3] } else { "" }
+
+let seed_hex = fetch_seed_hex()
+if seed_hex.len() < 64 {
+    println("ERROR: seed fetch failed")
+    exit(1)
+}
+let key = hex_to_bytes(seed_hex)
+let key8 = key_bytes_to_words(key)
+let P = pow2_table()
+
+// Generate ceil(want_bytes/64) blocks. Streaming strategy to avoid O(N²)
+// array.push copies in hexa stage1: we write the hex representation of each
+// block to a temp file via append, then convert hex→raw at the end with
+// xxd. For hexout mode we just cat the hex file. For stdout we pipe it
+// through xxd -r -p. This cuts the per-byte cost dramatically.
+let nblocks = (want_bytes + 63) / 64
+let want_chars = want_bytes * 2
+let tmp_hex = "/tmp/.anu_stream_" + to_string(timestamp()) + "_" + to_string(random_int(0, 1000000)) + ".hex"
+
+let t0 = clock()
+// Reset/create the hex file
+try { write_file(tmp_hex, "") } catch ew {}
+let mut ctr = 0
+let mut chars_written = 0
+while ctr < nblocks {
+    let words = chacha_block(key8, ctr, [0, 0, 0], P)
+    let bb = words_to_bytes(words)
+    let h = bytes_to_hex(bb)
+    // Truncate last block if it exceeds want_chars
+    if chars_written + h.len() <= want_chars {
+        try { append_file(tmp_hex, h) } catch ea {}
+        chars_written = chars_written + h.len()
+    } else {
+        let remaining = want_chars - chars_written
+        if remaining > 0 {
+            try { append_file(tmp_hex, h.substring(0, remaining)) } catch ea2 {}
+            chars_written = want_chars
+        }
+    }
+    ctr = ctr + 1
+}
+let t1 = clock()
+
+if mode == "stdout" {
+    // convert hex -> raw on the fly via xxd
+    try { exec("xxd -r -p '" + tmp_hex + "'") } catch e1 {}
+    try { delete_file(tmp_hex) } catch e2 {}
+} else {
+    if mode == "hexout" {
+        // dump hex file content to stdout
+        try { print(read_file(tmp_hex)) } catch e3 {}
+        try { delete_file(tmp_hex) } catch e4 {}
+    } else {
+        if mode == "file" {
+            try { exec("xxd -r -p '" + tmp_hex + "' > '" + out_path + "'") } catch ef {}
+            try { delete_file(tmp_hex) } catch ef2 {}
+            let elapsed = t1 - t0
+            let mbps = if elapsed > 0.000001 { (to_float(want_bytes) / 1048576.0) / elapsed } else { 0.0 }
+            println("OK bytes=" + to_string(want_bytes) + " blocks=" + to_string(nblocks) + " elapsed=" + to_string(elapsed) + "s throughput_MBps=" + to_string(mbps) + " out=" + out_path)
+        } else {
+            if mode == "self" {
+                let tmp_bin = "/tmp/anu_stream_self_" + to_string(timestamp()) + ".bin"
+                try { exec("xxd -r -p '" + tmp_hex + "' > '" + tmp_bin + "'") } catch es {}
+                try { delete_file(tmp_hex) } catch es2 {}
+                let elapsed = t1 - t0
+                let mbps = if elapsed > 0.000001 { (to_float(want_bytes) / 1048576.0) / elapsed } else { 0.0 }
+                println("BENCH bytes=" + to_string(want_bytes) + " elapsed=" + to_string(elapsed) + "s MBps=" + to_string(mbps) + " file=" + tmp_bin)
+                try { delete_file(tmp_bin) } catch es3 {}
+            } else {
+                println("ERROR: unknown mode '" + mode + "'")
+                exit(2)
+            }
+        }
+    }
+}

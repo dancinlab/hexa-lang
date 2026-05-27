@@ -1,0 +1,225 @@
+// HEXA Native Compiler — Phase 2 absorption: A7 meta-closure heuristics
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Source: ~/core/nexus/cli/blowup/modules/blowup_meta_closure.hexa (Mk.IX).
+//
+// Helper surface for the meta-closure fixed-point detector:
+//   - sector classification of a discovery id
+//   - generation-path trace with cycle protection
+//   - distinct-sector counting
+//   - n=6 invariance ratio probe
+//
+// All routines are pure and deterministic. The trace function takes the
+// `all_disc` corpus and a starting id; cycles are prevented by a visited
+// set and a max_depth cap.
+//
+// Discovery record format (tab-separated, mirrors upstream):
+//   id  type  expr  conf  value  axiom  src
+// where `src` is "|"-joined parent ids. parse_disc_line returns a struct
+// for ergonomic field access.
+
+pub struct DiscoveryRecord {
+    id: string,
+    kind: string,
+    expr: string,
+    conf: f64,
+    value: f64,
+    axiom: string,
+    src: string,
+    parents: array     // string[] — parsed from src field
+}
+
+fn _safe_float(s: string) -> f64 {
+    let t = s.trim()
+    if len(t) == 0 { return 0.0 }
+    return to_float(t)
+}
+
+pub fn parse_disc_line(line: string) -> DiscoveryRecord {
+    let parts = line.split("\t")
+    if len(parts) < 7 {
+        return DiscoveryRecord {
+            id: "", kind: "", expr: "", conf: 0.0, value: 0.0,
+            axiom: "", src: "", parents: []
+        }
+    }
+    let id = to_string(parts[0])
+    let kind = to_string(parts[1])
+    let expr = to_string(parts[2])
+    let conf = _safe_float(to_string(parts[3]))
+    let value = _safe_float(to_string(parts[4]))
+    let axiom = to_string(parts[5])
+    let src = to_string(parts[6])
+    let parents = []
+    if len(src) > 0 {
+        let toks = src.split("|")
+        let mut i = 0
+        while i < len(toks) {
+            let t = to_string(toks[i]).trim()
+            if len(t) > 0 { parents.push(t) }
+            i = i + 1
+        }
+    }
+    return DiscoveryRecord {
+        id: id, kind: kind, expr: expr, conf: conf, value: value,
+        axiom: axiom, src: src, parents: parents
+    }
+}
+
+// Linear scan over the discovery corpus by id.
+pub fn find_disc_by_id(all_disc: array, d_id: string) -> i64 {
+    let mut i = 0
+    while i < len(all_disc) {
+        let line = to_string(all_disc[i])
+        let tab_idx = -1
+        // hand-roll prefix-up-to-first-tab to avoid a full split
+        let mut k = 0
+        let mut found_tab: bool = false
+        while k < len(line) {
+            if line.substring(k, k + 1) == "\t" { found_tab = true; break }
+            k = k + 1
+        }
+        let head = if found_tab { line.substring(0, k) } else { line }
+        if head == d_id { return i }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+// Sector classifier — heuristic id-prefix matching (mirrors upstream
+// sector_of_id). When no shard pattern matches we return "unknown".
+pub fn sector_of_id(id: string) -> string {
+    let s = id
+    if s.contains("n6") || s.contains("sigma") || s.contains("phi") || s.contains("tau") {
+        return "n6"
+    }
+    if s.contains("cosmo") || s.contains("omega") || s.contains("dark") {
+        return "cosmology"
+    }
+    if s.contains("quantum") || s.contains("alpha") || s.contains("electroweak") {
+        return "quantum"
+    }
+    if s.contains("string") || s.contains("t_dual") { return "string" }
+    if s.contains("holo") || s.contains("boundary") { return "holographic" }
+    if s.contains("toe") || s.contains("selfref") { return "toe" }
+    if s.contains("xfer") { return "transfer" }
+    if s.contains("ded") { return "deduction" }
+    if s.contains("orbit") { return "orbit" }
+    if s.contains("closure") { return "closure" }
+    if s.contains("dual") { return "dual" }
+    if s.contains("recur") { return "recur" }
+    if s.contains("meta") { return "meta" }
+    return "unknown"
+}
+
+pub fn count_distinct_sectors(path: array) -> i64 {
+    let seen = []
+    let mut count: i64 = 0
+    let mut i = 0
+    while i < len(path) {
+        let sec = sector_of_id(to_string(path[i]))
+        let mut already: bool = false
+        let mut j = 0
+        while j < len(seen) {
+            if to_string(seen[j]) == sec { already = true; break }
+            j = j + 1
+        }
+        if !already {
+            seen.push(sec)
+            count = count + 1
+        }
+        i = i + 1
+    }
+    return count
+}
+
+// Trace generation path. path[0] = d_id, path[k] = ancestor at depth k.
+// Cycle-safe via a parallel visited array; chain stops at the first
+// non-visited parent of each node.
+pub fn trace_generation_path(d_id: string, all_disc: array, max_depth: i64) -> array {
+    let path = []
+    path.push(d_id)
+    let visited = []
+    visited.push(d_id)
+    let mut current = d_id
+    let mut depth: i64 = 0
+    while depth < max_depth {
+        let idx = find_disc_by_id(all_disc, current)
+        if idx < 0 { break }
+        let line = to_string(all_disc[idx])
+        let rec = parse_disc_line(line)
+        if len(rec.parents) == 0 { break }
+
+        let mut next_id: string = ""
+        let mut pi = 0
+        while pi < len(rec.parents) {
+            let p = to_string(rec.parents[pi])
+            let mut seen: bool = false
+            let mut vi = 0
+            while vi < len(visited) {
+                if to_string(visited[vi]) == p { seen = true; break }
+                vi = vi + 1
+            }
+            if !seen && len(p) > 0 { next_id = p; break }
+            pi = pi + 1
+        }
+        // If every parent is visited, append the first one (cycle witness)
+        // and break — matches upstream behaviour.
+        if len(next_id) == 0 {
+            if len(rec.parents) > 0 {
+                path.push(to_string(rec.parents[0]))
+            }
+            break
+        }
+        path.push(next_id)
+        visited.push(next_id)
+        current = next_id
+        depth = depth + 1
+    }
+    return path
+}
+
+// n=6 invariance probe. Returns true if every node along `path` that
+// references σ/φ/τ either explicitly carries the n=6 context (ratio 1.0)
+// or has no Δ₀-arithmetic primitives (skip-able). Any node where the
+// arithmetic ratio drifts beyond ε returns false.
+pub fn n6_invariance_preserved(all_disc: array, path: array, eps: f64) -> bool {
+    let mut i = 0
+    while i < len(path) {
+        let node_id = to_string(path[i])
+        let idx = find_disc_by_id(all_disc, node_id)
+        if idx < 0 { i = i + 1; continue }
+        let line = to_string(all_disc[idx])
+        let ratio = _eval_n6_ratio(line)
+        if ratio < 0.0 { i = i + 1; continue }   // skip un-evaluable
+        let delta = if (ratio - 1.0) < 0.0 { 1.0 - ratio } else { ratio - 1.0 }
+        if delta > eps { return false }
+        i = i + 1
+    }
+    return true
+}
+
+fn _eval_n6_ratio(line: string) -> f64 {
+    let has_sigma = line.contains("σ") || line.contains("sigma")
+    let has_phi = line.contains("φ") || line.contains("phi")
+    let has_tau = line.contains("τ") || line.contains("tau")
+    let has_n6 = line.contains("n=6") || line.contains("n = 6")
+                 || line.contains("=24") || line.contains("= 24")
+    if has_sigma && has_phi && has_tau && has_n6 { return 1.0 }
+    if has_sigma || has_phi || has_tau { return 1.0 }
+    return 0.0 - 1.0    // skip sentinel
+}
+
+// Find the first depth at which the path returns to d_id (self-ref).
+// Returns -1 if no self-reference is present.
+pub fn self_at_depth(path: array, d_id: string) -> i64 {
+    let mut i = 1
+    while i < len(path) {
+        if to_string(path[i]) == d_id { return i }
+        if to_string(path[i]).trim() == d_id.trim() { return i }
+        i = i + 1
+    }
+    return 0 - 1
+}

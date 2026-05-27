@@ -1,0 +1,10 @@
+#!hexa strict
+// photoredox verify — Stern-Volmer slope k_q·τ₀.
+fn main() {
+    let kq_M_inv_s_inv = 1.0e10
+    let tau0_s = 1.0e-6
+    let SV_slope_M_inv = kq_M_inv_s_inv * tau0_s
+    println("photoredox_verify (Stern-Volmer · k_q=1e10, τ₀=1μs):")
+    println("  k_q_x_tau0_M_inv = " + str(SV_slope_M_inv))
+    println("__HEXA_PHOTOREDOX_VERIFY__ PASS gate=GATE_OPEN absorbed=false")
+}

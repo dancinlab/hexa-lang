@@ -1,0 +1,748 @@
+// ═══════════════════════════════════════════════════════════════════
+//  test_based_linear_attn.hexa — Based Linear Attention (#316)
+// ═══════════════════════════════════════════════════════════════════
+
+// -- inlined from self/ml/based_linear_attn.hexa --
+// codegen import not wired for test files
+
+// ═══════════════════════════════════════════════════════════════════
+//  self/ml/based_linear_attn.hexa — Based Linear Attention (#316)
+//
+//  Based (Arora et al., 2024) — IO-aware linear attention using
+//  Taylor expansion of softmax kernel + sliding window for local
+//  attention. Combines linear attention O(N) with local window quality.
+//
+//  Key math:
+//    Taylor kernel: phi(x) = [1, x, x^2 / sqrt(2)]  (2nd order)
+//    Linear attention: y = (phi(Q) * (phi(K)^T * V)) / (phi(Q) * sum(phi(K)))
+//    Sliding window:   standard attention within window W
+//    Combined:         y = alpha * y_linear + (1 - alpha) * y_window
+//
+//  Architecture:
+//    W_Q : D_head x D_model   (query projection)
+//    W_K : D_head x D_model   (key projection)
+//    W_V : D_head x D_model   (value projection)
+//    W_O : D_model x D_head   (output projection)
+//
+//  API:
+//    bla_init(D_model, D_head, window_size, alpha, seed) -> model
+//    bla_taylor_feature(x) -> phi
+//    bla_linear_attention(Q_feat, K_feat, V) -> output
+//    bla_window_attention(model, Q, K, V, window) -> output
+//    bla_forward(model, X) -> output
+//    bla_loss(model, X, Y) -> float
+//    bla_train_step(model, X, Y, lr) -> model
+//
+//  AI-NATIVE attrs:
+//    @pure  (forward / loss)
+//    @hot   (training step)
+// ═══════════════════════════════════════════════════════════════════
+
+// ── math helpers ────────────────────────────────────────────────
+
+fn bla_abs(x) { if x < 0.0 { return 0.0 - x } return x }
+
+fn bla_exp(x) {
+    let mut v = x
+    if v > 20.0 { v = 20.0 }
+    if v < -20.0 { v = -20.0 }
+    let mut result = 1.0
+    let mut term = 1.0
+    let mut i = 1
+    while i < 30 {
+        term = term * v / to_float(i)
+        result = result + term
+        i = i + 1
+    }
+    if result < 0.0 { return 0.0 }
+    return result
+}
+
+fn bla_log(x) {
+    if x <= 0.0 { return -30.0 }
+    let mut v = x
+    let mut count = 0
+    while v > 2.0 {
+        v = v / 2.718281828
+        count = count + 1
+    }
+    while v < 0.5 {
+        v = v * 2.718281828
+        count = count - 1
+    }
+    let d = v - 1.0
+    let ln_v = d - d * d / 2.0 + d * d * d / 3.0 - d * d * d * d / 4.0
+    return to_float(count) + ln_v
+}
+
+fn bla_sqrt(x) {
+    if x <= 0.0 { return 0.0 }
+    let mut g = x / 2.0
+    if g < 0.001 { g = 0.001 }
+    let mut _i = 0
+    while _i < 20 {
+        g = (g + x / g) / 2.0
+        _i = _i + 1
+    }
+    return g
+}
+
+// ── array helpers ───────────────────────────────────────────────
+
+fn bla_zeros_1d(n) {
+    let mut v = []
+    let mut _i = 0
+    while _i < n {
+    return v
+        _i = _i + 1
+}
+
+fn bla_zeros_2d(rows, cols) {
+    let mut m = []
+    let mut _r = 0
+    while _r < rows {
+        let mut row = []
+        for _c in 0..cols { row = row + [0.0] }
+        m = m + [row]
+        _r = _r + 1
+    }
+    return m
+}
+
+fn bla_lcg(state) {
+    return (state * 1103515245 + 12345) % 2147483648
+}
+
+fn bla_uniform(state) {
+    let s = bla_lcg(state)
+    return [to_float(s) / 2147483648.0, to_float(s)]
+}
+
+fn bla_min_i(a, b) { if a < b { return a } return b }
+fn bla_max_f(a, b) { if a > b { return a } return b }
+
+// ═══════════════════════════════════════════════════════════════════
+//  Init model
+//    W_Q, W_K, W_V : D_head x D_model
+//    W_O           : D_model x D_head
+//    window_size   : sliding window width
+//    alpha         : mixing coefficient (0..1)
+// ═══════════════════════════════════════════════════════════════════
+fn bla_init(D_model, D_head, window_size, alpha, seed) {
+    let mut state = seed
+    if state <= 0 { state = 1 }
+    let scale = 1.0 / bla_sqrt(to_float(D_model))
+
+    // W_Q: D_head x D_model
+    let mut W_Q = bla_zeros_2d(D_head, D_model)
+    let mut i = 0
+    while i < D_head {
+        for j in 0..D_model {
+            let u = bla_uniform(state)
+            state = int(u[1])
+            if state <= 0 { state = 1 }
+            W_Q[i][j] = (u[0] - 0.5) * scale
+        }
+        i = i + 1
+    }
+
+    // W_K: D_head x D_model
+    let mut W_K = bla_zeros_2d(D_head, D_model)
+    let mut i = 0
+    while i < D_head {
+        for j in 0..D_model {
+            let u = bla_uniform(state)
+            state = int(u[1])
+            if state <= 0 { state = 1 }
+            W_K[i][j] = (u[0] - 0.5) * scale
+        }
+        i = i + 1
+    }
+
+    // W_V: D_head x D_model
+    let mut W_V = bla_zeros_2d(D_head, D_model)
+    let mut i = 0
+    while i < D_head {
+        for j in 0..D_model {
+            let u = bla_uniform(state)
+            state = int(u[1])
+            if state <= 0 { state = 1 }
+            W_V[i][j] = (u[0] - 0.5) * scale
+        }
+        i = i + 1
+    }
+
+    // W_O: D_model x D_head
+    let mut W_O = bla_zeros_2d(D_model, D_head)
+    let mut i = 0
+    while i < D_model {
+        for j in 0..D_head {
+            let u = bla_uniform(state)
+            state = int(u[1])
+            if state <= 0 { state = 1 }
+            W_O[i][j] = (u[0] - 0.5) * scale
+        }
+        i = i + 1
+    }
+
+    return #{
+        "D_model": D_model,
+        "D_head": D_head,
+        "window_size": window_size,
+        "alpha": alpha,
+        "W_Q": W_Q,
+        "W_K": W_K,
+        "W_V": W_V,
+        "W_O": W_O
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Taylor feature map  phi(x) = [1, x_0, x_1, ..., x_{d-1},
+//                                 x_0^2/sqrt(2), x_1^2/sqrt(2), ...]
+//  2nd order Taylor expansion of exp(x)
+//  Output dimension: 1 + d + d = 1 + 2*d
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn bla_taylor_feature(x) {
+    let d = len(x)
+    let inv_sqrt2 = 1.0 / bla_sqrt(2.0)
+    // phi = [1.0] + x + x^2/sqrt(2)
+    let mut phi = [1.0]
+    let mut i = 0
+    while i < d {
+        phi = phi + [x[i]]
+        i = i + 1
+    }
+    let mut i = 0
+    while i < d {
+        phi = phi + [x[i] * x[i] * inv_sqrt2]
+        i = i + 1
+    }
+    return phi
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Project input X through weight matrix W
+//  X: [S, D_model], W: [D_head, D_model]  ->  [S, D_head]
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn bla_project(X, W) {
+    let S = len(X)
+    let D_out = len(W)
+    let D_in = len(W[0])
+    let mut out = bla_zeros_2d(S, D_out)
+    let mut s = 0
+    while s < S {
+        for i in 0..D_out {
+            let mut acc = 0.0
+            for j in 0..D_in {
+                acc = acc + W[i][j] * X[s][j]
+            }
+            out[s][i] = acc
+        }
+        s = s + 1
+    }
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Linear attention via Taylor feature maps
+//
+//  Given Q_feat[s] = phi(q_s), K_feat[s] = phi(k_s):
+//    KV = sum_s  K_feat[s]^T * V[s]    (feature_dim x D_head)
+//    Z  = sum_s  K_feat[s]              (feature_dim)
+//    y[s] = (Q_feat[s] . KV) / (Q_feat[s] . Z + eps)
+//
+//  This is O(S * feature_dim * D_head) = O(S) when feature_dim is constant
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn bla_linear_attention(Q_feat, K_feat, V) {
+    let S = len(Q_feat)
+    let F = len(Q_feat[0])
+    let D = len(V[0])
+    let eps = 1.0e-8
+
+    // Accumulate KV: F x D
+    let mut KV = bla_zeros_2d(F, D)
+    // Accumulate Z: F
+    let mut Z = bla_zeros_1d(F)
+
+    let mut s = 0
+    while s < S {
+        for f in 0..F {
+            Z[f] = Z[f] + K_feat[s][f]
+            for d in 0..D {
+                KV[f][d] = KV[f][d] + K_feat[s][f] * V[s][d]
+            }
+        }
+        s = s + 1
+    }
+
+    // Compute output
+    let mut out = bla_zeros_2d(S, D)
+    let mut s = 0
+    while s < S {
+        // normalizer: dot(Q_feat[s], Z)
+        let mut norm = 0.0
+        for f in 0..F { norm = norm + Q_feat[s][f] * Z[f] }
+        if norm < eps { norm = eps }
+
+        // numerator: Q_feat[s] @ KV -> D
+        for d in 0..D {
+            let mut acc = 0.0
+            for f in 0..F {
+                acc = acc + Q_feat[s][f] * KV[f][d]
+            }
+            out[s][d] = acc / norm
+        }
+        s = s + 1
+    }
+
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Sliding window attention (standard softmax, window W)
+//
+//  For each position s, attend only to positions max(0, s-W+1)..s+1
+//  score(s,j) = Q[s] . K[j] / sqrt(D)
+//  weight = softmax(scores within window)
+//  y[s] = sum_j weight[j] * V[j]
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn bla_window_attention(model, Q, K, V, window) {
+    let S = len(Q)
+    let D = len(Q[0])
+    let scale = 1.0 / bla_sqrt(to_float(D))
+    let mut out = bla_zeros_2d(S, D)
+
+    let mut s = 0
+    while s < S {
+        let mut w_start = s - window + 1
+        if w_start < 0 { w_start = 0 }
+        let w_end = s + 1
+        let w_len = w_end - w_start
+
+        // Compute scores within window
+        let mut scores = bla_zeros_1d(w_len)
+        let mut mx = -1.0e30
+        for j in 0..w_len {
+            let kj = w_start + j
+            let mut dot = 0.0
+            for d in 0..D { dot = dot + Q[s][d] * K[kj][d] }
+            scores[j] = dot * scale
+            if scores[j] > mx { mx = scores[j] }
+        }
+
+        // Softmax
+        let mut sum_e = 0.0
+        let mut weights = bla_zeros_1d(w_len)
+        for j in 0..w_len {
+            let e = bla_exp(scores[j] - mx)
+            weights[j] = e
+            sum_e = sum_e + e
+        }
+        if sum_e < 1.0e-12 { sum_e = 1.0e-12 }
+        for j in 0..w_len {
+            weights[j] = weights[j] / sum_e
+        }
+
+        // Weighted sum of V
+        for d in 0..D {
+            let mut acc = 0.0
+            for j in 0..w_len {
+                let kj = w_start + j
+                acc = acc + weights[j] * V[kj][d]
+            }
+            out[s][d] = acc
+        }
+        s = s + 1
+    }
+
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Forward pass (combined linear + window)
+//
+//  1. Project X -> Q, K, V
+//  2. Taylor features on Q, K
+//  3. Linear attention from features
+//  4. Window attention from raw Q, K, V
+//  5. Combine: y = alpha * y_linear + (1 - alpha) * y_window
+//  6. Output projection: out = y @ W_O^T
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn bla_forward(model, X) {
+    let S = len(X)
+    let D_model = model["D_model"]
+    let D_head = model["D_head"]
+    let window = model["window_size"]
+    let alpha = model["alpha"]
+    let W_Q = model["W_Q"]
+    let W_K = model["W_K"]
+    let W_V = model["W_V"]
+    let W_O = model["W_O"]
+
+    // Project
+    let Q = bla_project(X, W_Q)
+    let K = bla_project(X, W_K)
+    let V = bla_project(X, W_V)
+
+    // Taylor feature maps
+    let mut Q_feat = []
+    let mut K_feat = []
+    let mut s = 0
+    while s < S {
+        Q_feat = Q_feat + [bla_taylor_feature(Q[s])]
+        K_feat = K_feat + [bla_taylor_feature(K[s])]
+        s = s + 1
+    }
+
+    // Linear attention
+    let y_linear = bla_linear_attention(Q_feat, K_feat, V)
+
+    // Window attention
+    let y_window = bla_window_attention(model, Q, K, V, window)
+
+    // Combine
+    let mut y_comb = bla_zeros_2d(S, D_head)
+    let mut s = 0
+    while s < S {
+        for d in 0..D_head {
+            y_comb[s][d] = alpha * y_linear[s][d] + (1.0 - alpha) * y_window[s][d]
+        }
+        s = s + 1
+    }
+
+    // Output projection: [S, D_head] @ W_O^T -> [S, D_model]
+    let mut out = bla_zeros_2d(S, D_model)
+    let mut s = 0
+    while s < S {
+        for i in 0..D_model {
+            let mut acc = 0.0
+            for j in 0..D_head {
+                acc = acc + y_comb[s][j] * W_O[i][j]
+            }
+            out[s][i] = acc
+        }
+        s = s + 1
+    }
+
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  MSE loss:  L = (1/S/D) * sum (Y_hat - Y)^2
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn bla_loss(model, X, Y) {
+    let Y_hat = bla_forward(model, X)
+    let S = len(Y)
+    let D = len(Y[0])
+    let mut total = 0.0
+    let mut s = 0
+    while s < S {
+        for d in 0..D {
+            let diff = Y_hat[s][d] - Y[s][d]
+            total = total + diff * diff
+        }
+        s = s + 1
+    }
+    return total / to_float(S) / to_float(D)
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Numerical gradient + SGD train step
+//
+//  For each weight W[i][j]:
+//    dL/dW = (L(W+eps) - L(W-eps)) / (2*eps)
+//    W_new = W - lr * dL/dW
+// ═══════════════════════════════════════════════════════════════════
+fn bla_train_step(model, X, Y, lr) {
+    let D_model = model["D_model"]
+    let D_head = model["D_head"]
+    let window = model["window_size"]
+    let alpha = model["alpha"]
+    let W_Q = model["W_Q"]
+    let W_K = model["W_K"]
+    let W_V = model["W_V"]
+    let W_O = model["W_O"]
+
+    let eps = 0.001
+    let inv_2eps = 1.0 / (2.0 * eps)
+
+    // ── Gradient for W_Q (inline via model[] to avoid copy-on-extract) ──
+    let mut gW_Q = bla_zeros_2d(D_head, D_model)
+    let mut i = 0
+    while i < D_head {
+        for j in 0..D_model {
+            let orig = model["W_Q"][i][j]
+            model["W_Q"][i][j] = orig + eps
+            let l_plus = bla_loss(model, X, Y)
+            model["W_Q"][i][j] = orig - eps
+            let l_minus = bla_loss(model, X, Y)
+            model["W_Q"][i][j] = orig
+            gW_Q[i][j] = (l_plus - l_minus) * inv_2eps
+        }
+        i = i + 1
+    }
+
+    // ── Gradient for W_K ─────────────────────────────────────
+    let mut gW_K = bla_zeros_2d(D_head, D_model)
+    let mut i = 0
+    while i < D_head {
+        for j in 0..D_model {
+            let orig = model["W_K"][i][j]
+            model["W_K"][i][j] = orig + eps
+            let l_plus = bla_loss(model, X, Y)
+            model["W_K"][i][j] = orig - eps
+            let l_minus = bla_loss(model, X, Y)
+            model["W_K"][i][j] = orig
+            gW_K[i][j] = (l_plus - l_minus) * inv_2eps
+        }
+        i = i + 1
+    }
+
+    // ── Gradient for W_V ─────────────────────────────────────
+    let mut gW_V = bla_zeros_2d(D_head, D_model)
+    let mut i = 0
+    while i < D_head {
+        for j in 0..D_model {
+            let orig = model["W_V"][i][j]
+            model["W_V"][i][j] = orig + eps
+            let l_plus = bla_loss(model, X, Y)
+            model["W_V"][i][j] = orig - eps
+            let l_minus = bla_loss(model, X, Y)
+            model["W_V"][i][j] = orig
+            gW_V[i][j] = (l_plus - l_minus) * inv_2eps
+        }
+        i = i + 1
+    }
+
+    // ── Gradient for W_O ─────────────────────────────────────
+    let mut gW_O = bla_zeros_2d(D_model, D_head)
+    let mut i = 0
+    while i < D_model {
+        for j in 0..D_head {
+            let orig = model["W_O"][i][j]
+            model["W_O"][i][j] = orig + eps
+            let l_plus = bla_loss(model, X, Y)
+            model["W_O"][i][j] = orig - eps
+            let l_minus = bla_loss(model, X, Y)
+            model["W_O"][i][j] = orig
+            gW_O[i][j] = (l_plus - l_minus) * inv_2eps
+        }
+        i = i + 1
+    }
+
+    // ── Apply gradients ──────────────────────────────────────
+    let mut W_Q_new = bla_zeros_2d(D_head, D_model)
+    let mut i = 0
+    while i < D_head {
+        for j in 0..D_model {
+            W_Q_new[i][j] = W_Q[i][j] - lr * gW_Q[i][j]
+        }
+        i = i + 1
+    }
+
+    let mut W_K_new = bla_zeros_2d(D_head, D_model)
+    let mut i = 0
+    while i < D_head {
+        for j in 0..D_model {
+            W_K_new[i][j] = W_K[i][j] - lr * gW_K[i][j]
+        }
+        i = i + 1
+    }
+
+    let mut W_V_new = bla_zeros_2d(D_head, D_model)
+    let mut i = 0
+    while i < D_head {
+        for j in 0..D_model {
+            W_V_new[i][j] = W_V[i][j] - lr * gW_V[i][j]
+        }
+        i = i + 1
+    }
+
+    let mut W_O_new = bla_zeros_2d(D_model, D_head)
+    let mut i = 0
+    while i < D_model {
+        for j in 0..D_head {
+            W_O_new[i][j] = W_O[i][j] - lr * gW_O[i][j]
+        }
+        i = i + 1
+    }
+
+    return #{
+        "D_model": D_model,
+        "D_head": D_head,
+        "window_size": window,
+        "alpha": alpha,
+        "W_Q": W_Q_new,
+        "W_K": W_K_new,
+        "W_V": W_V_new,
+        "W_O": W_O_new
+    }
+}
+
+
+// -- end inlined --
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn check(name, cond) {
+    if cond {
+        println("[PASS] " + name)
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name)
+        fail_count = fail_count + 1
+    }
+}
+
+fn fabs_(x) { if x < 0.0 { return 0.0 - x } return x }
+fn approx_(a, b, eps) { return fabs_(a - b) < eps }
+
+println("=== Based Linear Attention (#316) ===")
+
+// ── T1 init model shapes ──────────────────────────────────────
+let m1 = bla_init(4, 3, 2, 0.6, 42)
+check("T1 W_Q shape", len(m1["W_Q"]) == 3 && len(m1["W_Q"][0]) == 4)
+check("T1 W_K shape", len(m1["W_K"]) == 3 && len(m1["W_K"][0]) == 4)
+check("T1 W_V shape", len(m1["W_V"]) == 3 && len(m1["W_V"][0]) == 4)
+check("T1 W_O shape", len(m1["W_O"]) == 4 && len(m1["W_O"][0]) == 3)
+
+// ── T2 model metadata stored ──────────────────────────────────
+check("T2 D_model", m1["D_model"] == 4)
+check("T2 D_head", m1["D_head"] == 3)
+check("T2 window_size", m1["window_size"] == 2)
+check("T2 alpha", approx_(m1["alpha"], 0.6, 1.0e-9))
+
+// ── T3 Taylor feature dimension = 1 + 2*d ─────────────────────
+let phi3 = bla_taylor_feature([0.5, -0.3, 1.0])
+check("T3 phi length 1+2*3=7", len(phi3) == 7)
+check("T3 phi[0]=1", approx_(phi3[0], 1.0, 1.0e-9))
+check("T3 phi[1]=x0", approx_(phi3[1], 0.5, 1.0e-9))
+check("T3 phi[2]=x1", approx_(phi3[2], -0.3, 1.0e-9))
+check("T3 phi[3]=x2", approx_(phi3[3], 1.0, 1.0e-9))
+
+// ── T4 Taylor feature quadratic terms ─────────────────────────
+let inv_sqrt2 = 1.0 / bla_sqrt(2.0)
+check("T4 phi[4]=x0^2/sqrt2", approx_(phi3[4], 0.25 * inv_sqrt2, 1.0e-6))
+check("T4 phi[5]=x1^2/sqrt2", approx_(phi3[5], 0.09 * inv_sqrt2, 1.0e-6))
+check("T4 phi[6]=x2^2/sqrt2", approx_(phi3[6], 1.0 * inv_sqrt2, 1.0e-6))
+
+// ── T5 Linear attention produces correct shape ────────────────
+let Q_feat5 = [bla_taylor_feature([1.0, 0.5]), bla_taylor_feature([0.3, -0.2])]
+let K_feat5 = [bla_taylor_feature([0.4, 0.1]), bla_taylor_feature([0.7, 0.8])]
+let V5 = [[1.0, 2.0], [3.0, 4.0]]
+let y_lin5 = bla_linear_attention(Q_feat5, K_feat5, V5)
+check("T5 linear attn shape S", len(y_lin5) == 2)
+check("T5 linear attn shape D", len(y_lin5[0]) == 2)
+
+// ── T6 Linear attention output is finite ──────────────────────
+let mut finite6 = true
+let mut s = 0
+
+while s < 2 {
+    let mut d = 0
+
+    while d < 2 {
+        if fabs_(y_lin5[s][d]) > 1.0e6 { finite6 = false }
+    }
+}
+check("T6 linear attn finite", finite6)
+
+// ── T7 Window attention with window=1 (self-attention only) ───
+let m7 = bla_init(2, 2, 1, 0.5, 7)
+let Q7 = [[1.0, 0.0], [0.0, 1.0]]
+let K7 = [[1.0, 0.0], [0.0, 1.0]]
+let V7 = [[10.0, 20.0], [30.0, 40.0]]
+let y_win7 = bla_window_attention(m7, Q7, K7, V7, 1)
+// window=1 means each position attends only to itself
+check("T7 win=1 row0 self", approx_(y_win7[0][0], 10.0, 1.0e-6))
+check("T7 win=1 row0 self d1", approx_(y_win7[0][1], 20.0, 1.0e-6))
+check("T7 win=1 row1 self", approx_(y_win7[1][0], 30.0, 1.0e-6))
+
+// ── T8 Forward output shape ───────────────────────────────────
+let m8 = bla_init(3, 2, 2, 0.5, 99)
+let X8 = [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6], [0.7, 0.8, 0.9]]
+let out8 = bla_forward(m8, X8)
+check("T8 forward S=3", len(out8) == 3)
+check("T8 forward D=3", len(out8[0]) == 3)
+
+// ── T9 Loss is non-negative ──────────────────────────────────
+let Y9 = [[0.0, 0.0, 0.0], [1.0, 1.0, 1.0], [0.5, 0.5, 0.5]]
+let loss9 = bla_loss(m8, X8, Y9)
+check("T9 loss >= 0", loss9 >= 0.0)
+
+// ── T10 Training reduces loss ─────────────────────────────────
+let m10 = bla_init(2, 2, 2, 0.5, 12)
+let X10 = [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]]
+let Y10 = [[0.2, 0.1], [0.4, 0.3], [0.6, 0.5]]
+let loss_before = bla_loss(m10, X10, Y10)
+let mut m_trained = m10
+let mut _step = 0
+
+while _step < 10 {
+    m_trained = bla_train_step(m_trained, X10, Y10, 0.1)
+}
+let loss_after = bla_loss(m_trained, X10, Y10)
+check("T10 loss decreases", loss_after < loss_before)
+
+// ── T11 Deterministic init ────────────────────────────────────
+let ma = bla_init(3, 2, 2, 0.7, 42)
+let mb = bla_init(3, 2, 2, 0.7, 42)
+let mut det_ok = true
+let mut i = 0
+
+while i < 2 {
+    let mut j = 0
+
+    while j < 3 {
+        if fabs_(ma["W_Q"][i][j] - mb["W_Q"][i][j]) > 1.0e-12 { det_ok = false }
+    }
+}
+check("T11 deterministic init", det_ok)
+
+// ── T12 Alpha=0 means pure window ─────────────────────────────
+let m12w = bla_init(2, 2, 2, 0.0, 55)
+let X12 = [[1.0, 0.0], [0.0, 1.0]]
+let out12_w = bla_forward(m12w, X12)
+// Alpha=1 means pure linear
+let mut m12l = bla_init(2, 2, 2, 1.0, 55)
+// Same weights (same seed) so we can compare
+let out12_l = bla_forward(m12l, X12)
+// alpha=0.5 should be midpoint
+let m12m = bla_init(2, 2, 2, 0.5, 55)
+let out12_m = bla_forward(m12m, X12)
+// Verify midpoint: out_mid ~= 0.5*out_linear + 0.5*out_window
+let expected_mid = 0.5 * out12_l[0][0] + 0.5 * out12_w[0][0]
+check("T12 alpha mixing", approx_(out12_m[0][0], expected_mid, 1.0e-6))
+
+// ── T13 Taylor feature of zero vector ─────────────────────────
+let phi0 = bla_taylor_feature([0.0, 0.0])
+check("T13 phi(0) = [1,0,0,0,0]", approx_(phi0[0], 1.0, 1.0e-9) && approx_(phi0[1], 0.0, 1.0e-9) && approx_(phi0[4], 0.0, 1.0e-9))
+
+// ── T14 Forward is pure (same input same output) ──────────────
+let out14a = bla_forward(m8, X8)
+let out14b = bla_forward(m8, X8)
+let mut pure_ok = true
+let mut s = 0
+
+while s < 3 {
+    let mut d = 0
+
+    while d < 3 {
+        if fabs_(out14a[s][d] - out14b[s][d]) > 1.0e-12 { pure_ok = false }
+    }
+}
+check("T14 forward is pure", pure_ok)
+
+println("")
+println("=== Based Linear Attention summary ===")
+println("PASS: " + str(pass_count))
+println("FAIL: " + str(fail_count))
+println("TOTAL: " + str(pass_count + fail_count))

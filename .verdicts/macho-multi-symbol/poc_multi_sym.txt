@@ -1,0 +1,51 @@
+=== otool -l poc_multi_sym.o ===
+poc_multi_sym.o:
+Load command 0
+      cmd LC_SEGMENT_64
+  cmdsize 152
+  segname 
+   vmaddr 0x0000000000000000
+   vmsize 0x000000000000009f
+  fileoff 232
+ filesize 159
+  maxprot 0x00000007
+ initprot 0x00000007
+   nsects 1
+    flags 0x0
+Section
+  sectname __text
+   segname __TEXT
+      addr 0x0000000000000000
+      size 0x0000000000000050
+    offset 232
+     align 2^2 (4)
+    reloff 312
+    nreloc 0
+     flags 0x80000400
+ reserved1 0
+ reserved2 0
+Load command 1
+     cmd LC_SYMTAB
+ cmdsize 24
+  symoff 312
+   nsyms 3
+  stroff 360
+ strsize 31
+Load command 2
+      cmd LC_BUILD_VERSION
+  cmdsize 24
+ platform 1
+    minos 14.0
+      sdk 14.0
+   ntools 0
+=== nm poc_multi_sym.o ===
+0000000000000040 T _hexa_main
+0000000000000010 T _rt_alloc
+0000000000000000 T _rt_exit
+=== nm poc_multi_sym (linked exe) ===
+000000010000038c T _hexa_main
+0000000100000328 T _main
+000000010000035c T _rt_alloc
+000000010000034c T _rt_exit
+=== ./poc_multi_sym ===
+exit_code=42

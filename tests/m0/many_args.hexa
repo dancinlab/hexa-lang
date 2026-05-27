@@ -1,0 +1,23 @@
+// M0 milestone — codegen broadening (Gap 15 / C7) source fixture.
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Exercises stack-argument spilling for calls whose arity exceeds the
+// register pool of either ABI:
+//   - AAPCS64 (arm64-apple-darwin):  > 8 int args spill to [sp, #...]
+//   - System V (x86_64-linux-gnu):   > 6 int args spill via push/rsp
+//
+// Driver-level compile path does not yet reach codegen on real source
+// — verification runs from tests/m0/many_args_test.hexa, which hand-
+// builds the equivalent MIR and asserts the produced .s contains the
+// expected spill block (sub/str/[sp, # on arm64; push/add rsp on
+// x86_64) plus the correct first-N register marshalling.
+fn many_arm(a: i32, b: i32, c: i32, d: i32, e: i32, f: i32, g: i32,
+            h: i32, i: i32, j: i32) -> i32 {
+    return a + b + c + d + e + f + g + h + i + j
+}
+
+fn caller() -> i32 {
+    return many_arm(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
+}

@@ -1,0 +1,13 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "hexa-bio/nanobot/spec/subclause_direct_read_v2.schema.json",
+  "title": "raw_77_nanobot_subclause_direct_read_v2 — direct-read derivative witness",
+  "description": "Session-internal direct-read derivative witness (subclause v2). Permissive registry-coverage spec.",
+  "type": "object",
+  "required": ["schema", "audited_at"],
+  "properties": {
+    "schema": {"type": "string", "const": "raw_77_nanobot_subclause_direct_read_v2"},
+    "audited_at": {"type": "string"}
+  },
+  "additionalProperties": true
+}

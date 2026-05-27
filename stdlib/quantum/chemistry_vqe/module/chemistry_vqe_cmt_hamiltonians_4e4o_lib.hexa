@@ -1,0 +1,107 @@
+#!hexa strict
+// qmirror/chemistry_vqe/module/chemistry_vqe_cmt_hamiltonians_4e4o_lib.hexa
+//
+// Shared infrastructure for the 4e/4o vendored-VQE-replay tier. Each
+// chemistry_vqe_cmt_4e4o_<molecule>.hexa "use"s this file and gets the
+// generic n-qubit Pauli expectation evaluator + the verdict driver. The
+// per-molecule files vendor only the Hamiltonian + ψ* arrays — and there is
+// ONE molecule per file (1274-LOC single-file mode hits the hexa-interp
+// 768 MB RSS cap during AST construction on 6 large vendored Hamiltonians).
+//
+// Reference algorithm (validated against scipy.linalg.expm at machine
+// precision in the dev session's offline numpy harness):
+//   <ψ|P|ψ> for an n-qubit Pauli string P (qiskit endian: label[0] = q_{n-1}):
+//   for each amp index i, compute (j, phase_re, phase_im) such that
+//   P|i> = (phase_re + i·phase_im)·|j>, where j = i ⊕ flip_mask (flip_mask
+//   set wherever label has X or Y), phase = i^count_Y · (-1)^parity,
+//   parity = count of Y-or-Z ops at bits where bit_q(i) = 1.
+
+use "./chemistry_vqe_native.hexa"
+use "../../engine_aer/module/state_vector.hexa"
+
+fn cv_char_at_4e4o(s: str, i: int) -> str {
+    return s.substring(i, i + 1)
+}
+
+fn cv_pauli_expectation_n_4e4o(re: [float], im: [float], label: str, n_qubits: int) -> float {
+    let dim = len(re)
+    let mut flip_mask = 0
+    let mut qi = 0
+    while qi < n_qubits {
+        let op = cv_char_at_4e4o(label, n_qubits - 1 - qi)
+        if op == "X" { flip_mask = flip_mask | (1 << qi) }
+        if op == "Y" { flip_mask = flip_mask | (1 << qi) }
+        qi = qi + 1
+    }
+    let mut sum_re = 0.0
+    let mut i = 0
+    while i < dim {
+        let mut count_Y = 0
+        let mut parity_acc = 0
+        let mut q = 0
+        while q < n_qubits {
+            let op = cv_char_at_4e4o(label, n_qubits - 1 - q)
+            let bit_q = (i >> q) & 1
+            if op == "Y" {
+                count_Y = count_Y + 1
+                if bit_q == 1 { parity_acc = parity_acc + 1 }
+            }
+            if op == "Z" {
+                if bit_q == 1 { parity_acc = parity_acc + 1 }
+            }
+            q = q + 1
+        }
+        let cy = count_Y % 4
+        let py = parity_acc % 2
+        let sign = if py == 0 { 1.0 } else { 0.0 - 1.0 }
+        let mut phase_re = 0.0
+        let mut phase_im = 0.0
+        if cy == 0 { phase_re = sign }
+        if cy == 1 { phase_im = sign }
+        if cy == 2 { phase_re = 0.0 - sign }
+        if cy == 3 { phase_im = 0.0 - sign }
+        let j = i ^ flip_mask
+        let ppj_re = phase_re * re[i] - phase_im * im[i]
+        let ppj_im = phase_re * im[i] + phase_im * re[i]
+        sum_re = sum_re + re[j] * ppj_re + im[j] * ppj_im
+        i = i + 1
+    }
+    return sum_re
+}
+
+fn chemistry_vqe_native_run_named_4e4o(name: str, candidate: str,
+                                       labels: [str], coeffs: [float], shift: float,
+                                       casci_ref: float,
+                                       psi_re: [float], psi_im: [float]) -> ChemVqeNative {
+    let n_qubits = 6
+    let t_start = exec("date +%s").trim()
+    let t_start_i = to_int(t_start)
+    let nterms = len(labels)
+    let mut e_op = 0.0
+    let mut k = 0
+    while k < nterms {
+        let exp_k = cv_pauli_expectation_n_4e4o(psi_re, psi_im, labels[k], n_qubits)
+        e_op = e_op + coeffs[k] * exp_k
+        k = k + 1
+    }
+    let energy_ha = e_op + shift
+    let delta_ha = energy_ha - casci_ref
+    let delta_uha = delta_ha * 1000000.0
+    let abs_delta = if delta_uha < 0.0 { 0.0 - delta_uha } else { delta_uha }
+    let t_end = exec("date +%s").trim()
+    let wall = to_float(to_int(t_end) - t_start_i)
+    let verdict_str = if abs_delta < 1600.0 { "PASS" } else { "FAIL" }
+    let acc_note = if abs_delta < 1.0 { " (sub-µHa)" } else { "" }
+    let msg = if verdict_str == "PASS" {
+        name + " 4e/4o ⟨ψ*|H|ψ*⟩ within " + str(abs_delta) + " uHa of CASCI(4,4) ref" + acc_note + "  [" + candidate + "]"
+    } else {
+        name + " 4e/4o |delta| " + str(abs_delta) + " uHa > 1600 uHa (chem-acc bound)  [" + candidate + "]"
+    }
+    return ChemVqeNative {
+        ok: 1, verdict: verdict_str, molecule: name,
+        n_qubits: n_qubits, n_pauli_terms: nterms, n_parameters: 26,
+        energy_Ha: energy_ha, ref_energy_Ha: casci_ref, ref_kind: "casci_4_4_vendored",
+        delta_uHa: delta_uha, n_iter: 0, converged: 1, wall_seconds: wall,
+        engine: "hexa_native_replay", message: msg
+    }
+}

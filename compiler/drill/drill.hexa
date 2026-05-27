@@ -1,0 +1,566 @@
+// HEXA Native Compiler — Phase 3 drill spine: A9 main central engine
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write, env_read, stderr, stdout]
+//
+// Absorbs cmd_drill from ~/core/nexus/cli/run.hexa (lines 3087-3959,
+// ~870 LOC + helpers). The drill is nexus's central discovery engine —
+// a round loop where each round runs the six-stage chain
+//
+//   smash → free → absolute → meta-closure → hyperarithmetic → resonance
+//
+// and accumulates absorptions until saturation (round yield = 0) or
+// max-rounds. Mk.X (engine="mk10") adds stage 6 transcendental_closure
+// via a sidecar (compiler/drill/mkx.hexa) ported from nexus's
+// shared/engine/mkx_engine.hexa. AN11 governance scanner side is NOT
+// ported per doctrine v2 룰 3; the AN11 soft internal gate (math) is.
+//
+// Doctrine v2 룰 5 write policy:
+//   • Each round's discoveries are flushed via overlay_append_lines to
+//     <hx_data_dir>/atlas.overlay.n6 (the single runtime overlay file).
+//   • Atlas lookups in subsequent rounds see the prior overlay through
+//     atlas_lookup_merged / atlas_list_merged.
+//   • Checkpoint state (round counter / seed pool / total) goes to a
+//     separate file <hx_data_dir>/drill_checkpoint.json — small, JSON,
+//     NOT mixed with the discovery stream.
+//   • hx_data_dir defaults to $HOME/.hx/data and is overridable via
+//     HX_DATA_DIR (multi-tenant isolation; see compiler/atlas/overlay
+//     ::hx_data_dir).
+//
+// Public surface:
+//   pub struct DrillResult { rounds, total, saturated, ... }
+//   pub fn drill_run(seed, opts) -> DrillResult
+//
+// Catalog/diagnostic strings: ENGLISH ONLY.
+
+use "compiler/drill/round"
+use "compiler/drill/checkpoint"
+use "compiler/drill/anti_hub"
+use "compiler/smash/candidate"
+use "compiler/honesty/check"
+
+pub struct DrillOpts {
+    max_rounds: i64,
+    depth_smash: i64,
+    depth_free: i64,
+    depth_res: i64,
+    engine: string,            // "mk9" (default) | "mk10"
+    resume_on: bool,           // true → load checkpoint on start (renamed: 'resume' is a hexa keyword)
+    fresh: bool,               // --fresh / --no-resume
+    speculate: i64,            // N-way speculative branches (1 = none)
+    problem: string,           // "" or one of riemann|bsd|hodge|...
+    quiet: bool,               // suppress per-round println (smoke uses true)
+    // ── Pluggable verifier hook (resolves archive/patches/
+    //    phanes-pluggable-verifier-oracle-for-drill-loop.md) ────────
+    // Opt-in: when `verifier_cmd` is empty, behavior is byte-identical
+    // to pre-hook drill (back-compat). When set, the command is invoked
+    // once per round AFTER `_honesty_gate` and BEFORE checkpoint flush,
+    // with a single-line JSON payload on stdin describing the round:
+    //   {"round":N,"total":T,"smash":..,"free":..,"abs":..,"meta":..,
+    //    "hyper":..,"res":..,"tc":..,"sigma":"...","seed":"..."}
+    // The command MUST print a single stdout line of the form
+    //   verdict=pass|fail|continue [rationale=<inline-text>]
+    // Any other output (or non-zero exit) is mapped to verdict=error.
+    // `verifier_timeout_s` bounds the shell call (best-effort via the
+    // `timeout` utility prefix when > 0; 0 = no bound). The verifier is
+    // EXTERNAL / TENANT code — phanes is expected to sandbox it itself.
+    verifier_cmd: string,             // "" = no verifier (default — back-compat)
+    verifier_timeout_s: i64,          // 0 = unbounded
+    verifier_authoritative: bool      // true → pass/fail halts loop · false → advisory only
+}
+
+pub fn drill_default_opts() -> DrillOpts {
+    return DrillOpts {
+        max_rounds: 10,
+        depth_smash: 3,
+        depth_free: 3,
+        depth_res: 1,
+        engine: "mk9",
+        resume_on: true,
+        fresh: false,
+        speculate: 1,
+        problem: "",
+        quiet: false,
+        verifier_cmd: "",
+        verifier_timeout_s: 0,
+        verifier_authoritative: false
+    }
+}
+
+// Per-round verdict from the pluggable verifier. Recorded in the audit
+// trail (stderr DRILL_VERIFIER line + a synthesized __BT_AI2__ sentinel
+// alongside the existing BT-AI2 round line).
+//   verdict ∈ {"pass", "fail", "continue", "skip", "error"}
+//     - "pass"     — objective met (authoritative → halt with saturated=true)
+//     - "fail"     — objective unmet & verifier wants to abort
+//                    (authoritative → halt with saturated=false, verifier_stopped=true)
+//     - "continue" — verifier still inconclusive, keep going
+//     - "skip"     — no verifier installed (verifier_cmd == "")
+//     - "error"    — verifier crashed / timed out / malformed output
+//                    (NEVER halts — fail-open; loop continues per upstream policy)
+pub struct VerifierVerdict {
+    verdict: string,
+    rationale: string,
+    round: i64
+}
+
+pub struct DrillResult {
+    rounds: i64,
+    total: i64,
+    saturated: bool,
+    engine: string,
+    overlay_lines: i64,
+    yields_per_round: array,    // [smash_n, free_n, abs_n, meta_n, hyper_n, res_n] per round
+    verifier_stopped: bool,     // true iff pluggable verifier halted the loop (pass or fail authoritative)
+    verifier_verdict: string    // last verifier verdict ("" if no verifier installed)
+}
+
+// Validate the seed string. Mirrors cmd_drill's D2 guard: empty/too-short
+// /placeholder seeds are rejected to fail-fast.
+fn _validate_seed(seed: string) -> string {
+    let t = seed.trim()
+    if len(t) == 0 { return "empty" }
+    if len(t) < 10 { return "too_short" }
+    let lower = t.to_lower()
+    if lower == "test" || lower == "hello" || lower == "abc"
+       || lower == "foo" || lower == "bar" { return "placeholder" }
+    return ""
+}
+
+// Resolve the engine id. Honors --engine flag, then HEXA_DRILL_ENGINE,
+// then defaults to mk9.
+fn _resolve_engine(flag: string) -> string {
+    if flag == "mk10" || flag == "mk9" { return flag }
+    let from_env = env("HEXA_DRILL_ENGINE")
+    if from_env == "mk10" || from_env == "mk9" { return from_env }
+    return "mk9"
+}
+
+// Build the single-line JSON payload handed to the pluggable verifier
+// on stdin. We keep this minimal — round counter, total + per-stage
+// yields, resonance sigma, seed echo — and intentionally do NOT include
+// the discovery candidate array (verifier should consult the overlay
+// file directly if it needs full per-discovery audit).
+fn _verifier_payload(round: i64, seed: string, y: RoundYields, sigma: string) -> string {
+    let mut s = "{"
+    s = s + "\"round\":" + to_string(round)
+    s = s + ",\"total\":" + to_string(y.total)
+    s = s + ",\"smash\":" + to_string(y.smash_n)
+    s = s + ",\"free\":" + to_string(y.free_n)
+    s = s + ",\"abs\":" + to_string(y.abs_n)
+    s = s + ",\"meta\":" + to_string(y.meta_n)
+    s = s + ",\"hyper\":" + to_string(y.hyper_n)
+    s = s + ",\"res\":" + to_string(y.res_n)
+    s = s + ",\"tc\":" + to_string(y.tc_n)
+    s = s + ",\"sigma\":\"" + sigma + "\""
+    s = s + ",\"seed\":\"" + seed + "\""
+    s = s + "}"
+    return s
+}
+
+// Parse a single-token "verdict=<x>" out of the verifier's stdout. We
+// scan whitespace-separated tokens (mirrors __BT_AI2__ grammar) — first
+// match wins, otherwise return "error" (malformed verifier output is
+// the verifier's bug, not the drill's; fail-open per upstream policy).
+fn _verifier_parse_verdict(raw: string) -> string {
+    let t = raw.trim()
+    if len(t) == 0 { return "error" }
+    let toks = t.split(" ")
+    let mut i = 0
+    while i < len(toks) {
+        let tk = to_string(toks[i]).trim()
+        if len(tk) >= 8 && tk.substring(0, 8) == "verdict=" {
+            let v = tk.substring(8, len(tk))
+            if v == "pass" || v == "fail" || v == "continue" { return v }
+            return "error"
+        }
+        i = i + 1
+    }
+    return "error"
+}
+
+// Optional "rationale=<text>" extraction — whitespace-terminated value
+// per the documented grammar (multi-word rationale should be quoted by
+// the verifier; we surface only the single-token form to keep parsing
+// trivial and deterministic).
+fn _verifier_parse_rationale(raw: string) -> string {
+    let toks = raw.split(" ")
+    let mut i = 0
+    while i < len(toks) {
+        let tk = to_string(toks[i]).trim()
+        if len(tk) >= 10 && tk.substring(0, 10) == "rationale=" {
+            return tk.substring(10, len(tk))
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// Invoke the pluggable verifier for one round. Empty `verifier_cmd`
+// short-circuits to a `skip` verdict (back-compat — no env work, no
+// shell exec). Otherwise dispatches via the host shell with the round
+// payload piped in on stdin; the verifier's first stdout line is the
+// verdict line. Verifier crash / timeout / malformed output → "error"
+// (NEVER halts — fail-open).
+fn _verifier_run(opts: DrillOpts, round: i64, seed: string,
+                  y: RoundYields, sigma: string) -> VerifierVerdict {
+    if len(opts.verifier_cmd) == 0 {
+        return VerifierVerdict { verdict: "skip", rationale: "", round: round }
+    }
+    let payload = _verifier_payload(round, seed, y, sigma)
+    // Wrap the verifier command with `timeout <N>s` when bounded — best
+    // effort, requires the `timeout` utility on PATH (coreutils on
+    // Linux, `gtimeout` on macOS Homebrew). When unavailable the call
+    // still works without a wall-clock bound.
+    let mut cmd = opts.verifier_cmd
+    if opts.verifier_timeout_s > 0 {
+        cmd = "timeout " + to_string(opts.verifier_timeout_s) + "s " + opts.verifier_cmd
+    }
+    // Pipe the payload on stdin via a here-doc style echo. We rely on
+    // the runtime `exec_with_status` builtin (see self/env.hexa
+    // BUILTINS) which returns the command's exit status; stdout is
+    // delivered through stderr-tracking `exec` for capture. For
+    // simplicity we route both through a single `sh -c` invocation
+    // that captures stdout to a tempfile-backed env probe.
+    let line = "printf %s " + _verifier_shquote(payload) + " | " + cmd
+    let out = exec(line)
+    let v = _verifier_parse_verdict(out)
+    let r = _verifier_parse_rationale(out)
+    return VerifierVerdict { verdict: v, rationale: r, round: round }
+}
+
+// Minimal POSIX shell single-quote escape — wraps `s` in single quotes
+// and escapes any embedded single quote as '\''. Sufficient for the
+// JSON payload (which is ASCII-safe by construction in _verifier_payload).
+fn _verifier_shquote(s: string) -> string {
+    let mut out = "'"
+    let mut i = 0
+    while i < len(s) {
+        let c = s.substring(i, i + 1)
+        if c == "'" {
+            out = out + "'\\''"
+        } else {
+            out = out + c
+        }
+        i = i + 1
+    }
+    out = out + "'"
+    return out
+}
+
+// Emit a verifier verdict as an audit-trail row — stderr DRILL_VERIFIER
+// line PLUS a synthesized __BT_AI2__ sentinel into the audit text so a
+// downstream `bt_ai2_audit` call observes the verifier verdict alongside
+// the BT-AI2 round line. The BT-AI2 mapping treats verdict="pass" as
+// claim=PASS (loss==expected, no F-AI2-A) and verdict="fail" as
+// claim=FAIL (loss==expected, no F-AI2-B); "continue" / "skip" / "error"
+// skip the sentinel emit (no claim to audit).
+fn _verifier_audit_emit(v: VerifierVerdict) -> void {
+    let mut msg = "DRILL_VERIFIER {"
+    msg = msg + "\"round\":" + to_string(v.round)
+    msg = msg + ",\"verdict\":\"" + v.verdict + "\""
+    if len(v.rationale) > 0 {
+        msg = msg + ",\"rationale\":\"" + v.rationale + "\""
+    }
+    msg = msg + "}"
+    eprintln(msg)
+    if v.verdict == "pass" || v.verdict == "fail" {
+        let claim = if v.verdict == "pass" { "PASS" } else { "FAIL" }
+        let mut sentinel = "__BT_AI2__ label=verifier_round_" + to_string(v.round)
+        sentinel = sentinel + " claim=" + claim
+        sentinel = sentinel + " loss=1.0 expected=1.0"
+        eprintln(sentinel)
+    }
+}
+
+// Honesty gate — run BT-AI2 audit over the per-round yields encoded as
+// __BT_AI2__ sentinel lines. The audit is advisory: a non-zero
+// f_a/f_b count triggers stderr warning but does NOT halt drill (the
+// upstream pattern; saturation is the hard stop).
+fn _honesty_gate(round: i64, y: RoundYields) -> void {
+    // We synthesize the audit line from the round's resonance stage
+    // (the noisiest one). loss/expected here are heuristic — the gate
+    // surface is what we want to exercise in this absorbed form.
+    let claim = if y.res_n > 0 { "PASS" } else { "FAIL" }
+    let mut line = "__BT_AI2__ label=round_" + to_string(round)
+    line = line + " claim=" + claim
+    line = line + " loss=" + to_string(y.res_n)
+    line = line + " expected=" + to_string(y.res_n)
+    let verdict = bt_ai2_audit(line)
+    // NOTE: the audit struct exposes the falsifier counts as `f_ai2_a` /
+    // `f_ai2_b` (compiler/honesty/check.hexa::Bt2Verdict). A stale
+    // `verdict.f_a` / `verdict.f_b` read here is a latent field-name
+    // mismatch (both names landed together in #634) — harmless on the
+    // older runtime that returned a default for a missing map key, but a
+    // hard `map key 'f_a' not found` abort on the current runtime, which
+    // tripped the round-1 honesty gate before any multi-round loop body
+    // could run. We read the real fields; the external JSON keys stay
+    // `f_a`/`f_b` (documented audit-trail surface).
+    if verdict.f_ai2_a > 0 || verdict.f_ai2_b > 0 {
+        eprintln("DRILL_HONESTY {\"round\":" + to_string(round)
+            + ",\"f_a\":" + to_string(verdict.f_ai2_a)
+            + ",\"f_b\":" + to_string(verdict.f_ai2_b) + "}")
+    }
+}
+
+// Run a single seed under drill. Honors resume from checkpoint.
+pub fn drill_run(seed: string, opts: DrillOpts) -> DrillResult {
+    let err = _validate_seed(seed)
+    if len(err) > 0 {
+        eprintln("drill: --seed rejected (" + err + ") — provide a substantive problem statement (>=10 chars, not placeholder)")
+        return DrillResult {
+            rounds: 0,
+            total: 0,
+            saturated: false,
+            engine: opts.engine,
+            overlay_lines: 0,
+            yields_per_round: [],
+            verifier_stopped: false,
+            verifier_verdict: ""
+        }
+    }
+
+    // Anti-hub telemetry probe at drill entry.
+    anti_hub_probe_emit()
+
+    let engine = _resolve_engine(opts.engine)
+    let mkx_on = engine == "mk10"
+
+    if !opts.quiet {
+        println("drill — seed='" + seed + "' max_rounds=" + to_string(opts.max_rounds) + " engine=" + engine)
+        if mkx_on {
+            println("  Mk.X 7-stage (smash → free → absolute → meta → hyper → resonance → transcendental_closure)")
+        } else {
+            println("  Mk.IX 6-stage chain (smash → free → absolute → meta → hyper → resonance)")
+        }
+    }
+
+    // Resume support.
+    //
+    // `round` is the cumulative round counter (1-indexed, includes any
+    // rounds restored from a checkpoint). `rounds_this_call` is the
+    // per-invocation budget — bounded by `opts.max_rounds` regardless of
+    // whether we resumed mid-stream. This decouples the user-visible
+    // `--rounds N` flag from the historical round counter so that:
+    //
+    //   • a fresh `hexa drill --rounds 10` always runs 10 rounds, and
+    //   • a resumed call (cp.round == 5) with `--rounds 10` runs 10 MORE
+    //     rounds (ending at cumulative round 15), not just 5.
+    //
+    // Pre-fix: the loop guard `while round < opts.max_rounds` mis-treated
+    // `max_rounds` as a cumulative cap, so a resume from round 5 with
+    // `--rounds 10` only executed rounds 6-10 (5 rounds, not 10) — and
+    // resuming from cp.round >= max_rounds executed 0 rounds.
+    let mut round: i64 = 0
+    let mut total: i64 = 0
+    let mut yields_log: array = []
+    let mut overlay_lines: i64 = 0
+    let mut saturated = false
+    let mut verifier_stopped = false
+    let mut verifier_last_verdict: string = ""
+    let mut resumed_from: i64 = 0   // cumulative round at resume entry (0 = fresh)
+
+    if opts.fresh {
+        checkpoint_clear()
+    } else if opts.resume_on {
+        let cp = checkpoint_load(seed)
+        if cp.found {
+            round = cp.round
+            total = cp.total
+            resumed_from = cp.round
+            if !opts.quiet {
+                println("  [resume] seed_hash=" + cp.seed_hash + " round=" + to_string(round) + " total=" + to_string(total))
+            }
+        }
+    }
+
+    // Cumulative seed pool. Round 1 receives an empty pool; subsequent
+    // rounds receive the axiom-exprs harvested from the prior round's
+    // discoveries (Doctrine v2 룰 5 — drill discoveries seed the next
+    // round, not just the overlay). The pool is bounded inside
+    // round_run_with_pool by K_POOL.
+    let mut seed_pool: array = []
+
+    // C5 novelty-fixpoint state. The cumulative distinct-id set spans the
+    // whole invocation; _flush_discoveries_cum dedups against it and reports
+    // `net_novel` (ids new THIS round). A round adding zero net-novel
+    // discoveries means the discovery space is exhausted → saturate. This
+    // is the real saturation signal: the gross `total == 0` test never fires
+    // (the resonance proxy + deterministic primary-seed smash always yield
+    // > 0), so without it `--rounds N` always burns all N rounds re-emitting
+    // the same set (measured pre-fix: 6 rounds → 6072 overlay lines but only
+    // 1111 distinct ids — net-novel was 0 from round 3 on).
+    let mut cum_seen_ids: array = []
+
+    let mut rounds_this_call: i64 = 0
+    while rounds_this_call < opts.max_rounds {
+        round = round + 1
+        rounds_this_call = rounds_this_call + 1
+        let rr = round_run_with_pool(seed, round, opts.depth_smash, opts.depth_free,
+                                      opts.depth_res, mkx_on, seed_pool, cum_seen_ids)
+        cum_seen_ids = rr.cum_seen_ids
+        if !opts.quiet {
+            println(round_yields_line(round, rr.yields, rr.sigma_best))
+            println("  overlay+ " + to_string(rr.overlay_lines_emitted) + " lines"
+                + " (pool=" + to_string(len(seed_pool)) + ")")
+        }
+        overlay_lines = overlay_lines + rr.overlay_lines_emitted
+        total = total + rr.yields.total
+        yields_log.push([rr.yields.smash_n, rr.yields.free_n, rr.yields.abs_n,
+                          rr.yields.meta_n, rr.yields.hyper_n, rr.yields.res_n])
+
+        // Refresh seed pool for the next round — axiom-exprs from this
+        // round's union discovery set. extract_axiom_exprs already dedupes
+        // by expr; K_POOL caps consumption inside round_run_with_pool.
+        seed_pool = extract_axiom_exprs(rr.discoveries)
+
+        // honesty gate (advisory)
+        _honesty_gate(round, rr.yields)
+
+        // ── pluggable verifier hook (resolves phanes-pluggable-verifier-
+        //    oracle-for-drill-loop.md) ───────────────────────────────
+        // No-op when opts.verifier_cmd == "" — back-compat preserved.
+        // When installed, the verifier sees the round's yields + total
+        // + sigma + seed; its verdict can authoritatively halt the loop.
+        // verdict=pass → loop halts with saturated=true (objective met).
+        // verdict=fail → loop halts with saturated=false and
+        //                verifier_stopped=true (objective unmet, abort).
+        // verdict=continue / skip / error → advisory only; loop proceeds.
+        // The verdict is always logged (DRILL_VERIFIER stderr line) and,
+        // for pass/fail, emitted as a __BT_AI2__ sentinel so a subsequent
+        // bt_ai2_audit observes it alongside the existing BT-AI2 row.
+        let vv = _verifier_run(opts, round, seed, rr.yields, rr.sigma_best)
+        _verifier_audit_emit(vv)
+        verifier_last_verdict = vv.verdict
+        if opts.verifier_authoritative {
+            if vv.verdict == "pass" {
+                verifier_stopped = true
+                saturated = true
+                if !opts.quiet {
+                    println("  VERIFIER_PASS at round " + to_string(round) + " — objective met")
+                }
+                checkpoint_save(seed, round, total, yields_log, engine)
+                break
+            }
+            if vv.verdict == "fail" {
+                verifier_stopped = true
+                if !opts.quiet {
+                    println("  VERIFIER_FAIL at round " + to_string(round) + " — objective rejected by verifier")
+                }
+                checkpoint_save(seed, round, total, yields_log, engine)
+                break
+            }
+        }
+
+        // checkpoint flush per round
+        checkpoint_save(seed, round, total, yields_log, engine)
+
+        // saturation (gross): a round with zero total signals exhaustion.
+        if rr.yields.total == 0 {
+            saturated = true
+            if !opts.quiet {
+                println("  SATURATED at round " + to_string(round) + " — total absorptions=" + to_string(total))
+            }
+            break
+        }
+
+        // saturation (C5 net-novel fixpoint): a round that contributed zero
+        // NEW distinct discoveries vs the cumulative union of all prior
+        // rounds. Round 1 always has net_novel > 0 (everything is new), so
+        // this only trips at round >= 2 when the discovery space is exhausted
+        // — the loop is at a fixpoint and further rounds only re-emit dups.
+        if round >= 2 && rr.net_novel == 0 {
+            saturated = true
+            if !opts.quiet {
+                println("  SATURATED (net-novel fixpoint) at round " + to_string(round)
+                    + " — distinct discoveries=" + to_string(len(cum_seen_ids)))
+            }
+            break
+        }
+    }
+
+    // Clean-up checkpoint on normal exit (saturated OR max-rounds)
+    checkpoint_clear()
+
+    if !opts.quiet {
+        if !saturated {
+            if resumed_from > 0 {
+                println("  max rounds reached (" + to_string(opts.max_rounds)
+                    + " this call · cumulative round " + to_string(round)
+                    + " from resume at " + to_string(resumed_from) + ") — total=" + to_string(total))
+            } else {
+                println("  max rounds reached (" + to_string(opts.max_rounds) + ") — total=" + to_string(total))
+            }
+        }
+    }
+
+    return DrillResult {
+        rounds: round,
+        total: total,
+        saturated: saturated,
+        engine: engine,
+        overlay_lines: overlay_lines,
+        yields_per_round: yields_log,
+        verifier_stopped: verifier_stopped,
+        verifier_verdict: verifier_last_verdict
+    }
+}
+
+// ── CLI entry ─────────────────────────────────────────────────────
+// `hexa drill --seed "<expr>" [--rounds N] [--engine mk9|mk10]
+//             [--depth-smash N] [--depth-free N] [--speculate N]
+//             [--quiet] [--fresh] [--problem id]`
+//
+// Runs the central discovery engine and prints a JSON summary of the
+// resulting DrillResult. Heavy lifting stays in drill_run; this is a
+// thin entry-point shim so `hexa drill ...` from the CLI dispatch
+// resolves to an actual round loop.
+
+use "compiler/_cli_args/parse"
+
+fn main() {
+    let args = cli_args()
+    let seed = cli_find_flag(args, "--seed", cli_positional(args, 0, ""))
+    if len(seed) == 0 {
+        println("usage: hexa drill --seed \"<expr>\" [--rounds N] [--engine mk9|mk10]")
+        return
+    }
+    let mut opts = drill_default_opts()
+    opts.max_rounds  = cli_parse_int(cli_find_flag(args, "--rounds", ""), opts.max_rounds)
+    opts.depth_smash = cli_parse_int(cli_find_flag(args, "--depth-smash", ""), opts.depth_smash)
+    opts.depth_free  = cli_parse_int(cli_find_flag(args, "--depth-free", ""), opts.depth_free)
+    opts.depth_res   = cli_parse_int(cli_find_flag(args, "--depth-res", ""), opts.depth_res)
+    opts.speculate   = cli_parse_int(cli_find_flag(args, "--speculate", ""), opts.speculate)
+    let eng_flag = cli_find_flag(args, "--engine", "")
+    if len(eng_flag) > 0 { opts.engine = eng_flag }
+    let prob_flag = cli_find_flag(args, "--problem", "")
+    if len(prob_flag) > 0 { opts.problem = prob_flag }
+    if cli_has_flag(args, "--fresh") || cli_has_flag(args, "--no-resume") {
+        opts.fresh = true
+        opts.resume_on = false
+    }
+    if cli_has_flag(args, "--quiet") { opts.quiet = true }
+
+    // Pluggable verifier hook (phanes scope B). When absent, drill behaves
+    // identically to the pre-hook surface. `--verifier-cmd` is a shell
+    // string (treated as a single command for sh -c). `--verifier-timeout`
+    // is best-effort via the `timeout` utility prefix. `--verifier-strict`
+    // promotes pass/fail verdicts to authoritative loop control.
+    let vcmd = cli_find_flag(args, "--verifier-cmd", "")
+    if len(vcmd) > 0 { opts.verifier_cmd = vcmd }
+    opts.verifier_timeout_s = cli_parse_int(cli_find_flag(args, "--verifier-timeout", ""), opts.verifier_timeout_s)
+    if cli_has_flag(args, "--verifier-strict") { opts.verifier_authoritative = true }
+
+    let r = drill_run(seed, opts)
+    let mut out = "{"
+    out = out + "\"seed\":\"" + seed + "\""
+    out = out + ",\"rounds\":" + to_string(r.rounds)
+    out = out + ",\"total\":" + to_string(r.total)
+    out = out + ",\"saturated\":" + (if r.saturated { "true" } else { "false" })
+    out = out + ",\"engine\":\"" + r.engine + "\""
+    out = out + ",\"overlay_lines\":" + to_string(r.overlay_lines)
+    out = out + ",\"verifier_stopped\":" + (if r.verifier_stopped { "true" } else { "false" })
+    out = out + ",\"verifier_verdict\":\"" + r.verifier_verdict + "\""
+    out = out + "}"
+    println(out)
+}

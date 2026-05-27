@@ -1,0 +1,247 @@
+// HEXA Standard Library — signal/core_stft
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Short-Time Fourier Transform (STFT) + inverse (iSTFT, overlap-add synthesis)
+// over flat real float lists. Second-layer signal primitive: builds on the
+// merged stdlib/signal/core_fft.hexa (`fft_native` / `ifft_native`) and
+// stdlib/signal/core_window.hexa (`hann_window` / `hamming_window` /
+// `blackman_window`). Promoted from anima HEXAD/VOICE/anima-voice/dsp_core.hexa
+// (`dsp_stft` / `dsp_istft` + the `stft_num_frames` / `istft_output_len`
+// framing helpers) per the STDLIB domain phase3 M1 (signal primitives).
+//
+// Pipeline:
+//   STFT : audio → frame (hop) → window → fft_native → one-sided spectrum
+//   iSTFT: one-sided spectrum → mirror to full → ifft_native → window →
+//          overlap-add → COLA (sum-of-squared-window) normalization
+//
+// Spectrum layout (one-sided, real input):
+//   bins = n_fft / 2 + 1.  STFT returns a flat list of
+//   n_frames * bins * 2 floats, ordered
+//     frame 0 [re0 im0 re1 im1 ... re(bins-1) im(bins-1)]  frame 1 [...]  ...
+//   iSTFT consumes the spectrum split into two parallel one-sided lists
+//   (spec_real / spec_imag), each of length n_frames * bins, same frame-major
+//   ordering. This matches the anima dsp_stft / dsp_istft baseline exactly.
+//
+// Windowing: win_type 0 = Hann, 1 = Hamming, 2 = Blackman. SYMMETRIC
+// convention (denominator N-1), identical to stdlib/signal/core_window.hexa.
+// Hann + 50% overlap (hop = n_fft/2) gives the standard near-COLA recovery.
+//
+// NOTE on the trig path (libm):
+//   The window samples use the native libm `cos` builtin (IEEE-correct, its
+//   own argument reduction — no `fmod` range reduction needed), consistent
+//   with core_fft.hexa and core_window.hexa. This replaces anima's hand-rolled
+//   `cos_approx` (range-reduced Taylor via `fmod`/`sin_approx`), whose
+//   `fmod` range reduction collapses under the current toolchain. The framing
+//   / overlap-add / mirror logic is otherwise a faithful port of anima's
+//   dsp_stft / dsp_istft (it is not trig, so byte-equal there).
+//
+// Surface:
+//   pub fn stft_native(audio: [float], n_fft: int, hop: int, win_type: int) -> [float]
+//       // → flat one-sided spectrum, n_frames * bins * 2 floats.
+//   pub fn istft_native(spec_real: [float], spec_imag: [float],
+//                       n_fft: int, hop: int, win_type: int, n_frames: int) -> [float]
+//       // → reconstructed audio, COLA-normalized.
+//   pub fn stft_num_frames(signal_len: int, n_fft: int, hop: int) -> int
+//   pub fn istft_output_len(n_frames: int, n_fft: int, hop: int) -> int
+//   pub fn stft_bins(n_fft: int) -> int
+
+import "stdlib/signal/core_fft.hexa"
+import "stdlib/signal/core_window.hexa"
+
+let CSF_TWO_PI = 6.28318530717958647692
+
+// ── window sample dispatch (symmetric, denominator N-1; libm cos) ───────────
+//
+// Mirrors stdlib/signal/core_window.hexa per-sample accessors. Kept local so
+// the win_type int → window selection lives next to the STFT consumers.
+// win_type: 0 = Hann, 1 = Hamming, 2 = Blackman (default Hann).
+
+fn _csf_window_sample(win_type: int, n: int, N: int) -> float {
+    if N <= 1 { return 1.0 }
+    if win_type == 1 {
+        // Hamming: 0.54 - 0.46 * cos(2*pi*n/(N-1))
+        return 0.54 - 0.46 * cos(CSF_TWO_PI * n / (N - 1))
+    }
+    if win_type == 2 {
+        // Blackman (3-term): 0.42 - 0.5*cos(t) + 0.08*cos(2t)
+        let t = CSF_TWO_PI * n / (N - 1)
+        return 0.42 - 0.5 * cos(t) + 0.08 * cos(2.0 * t)
+    }
+    // Hann (default): 0.5 * (1 - cos(2*pi*n/(N-1)))
+    return 0.5 * (1.0 - cos(CSF_TWO_PI * n / (N - 1)))
+}
+
+// ── framing helpers (verbatim port of anima stft_num_frames / istft_output_len) ─
+
+// Number of full frames that fit: floor((signal_len - n_fft)/hop) + 1.
+pub fn stft_num_frames(signal_len: int, n_fft: int, hop: int) -> int {
+    if hop <= 0 { return 0 }
+    if signal_len < n_fft { return 0 }
+    return (signal_len - n_fft) / hop + 1
+}
+
+// Length of the overlap-add output: n_fft + (n_frames - 1) * hop.
+pub fn istft_output_len(n_frames: int, n_fft: int, hop: int) -> int {
+    if n_frames <= 0 { return 0 }
+    return n_fft + (n_frames - 1) * hop
+}
+
+// One-sided bin count for an n_fft-point real FFT: n_fft/2 + 1.
+pub fn stft_bins(n_fft: int) -> int {
+    return n_fft / 2 + 1
+}
+
+// ── stft_native(audio, n_fft, hop, win_type): Short-Time Fourier Transform ──
+//
+// Faithful port of dsp_core.hexa::dsp_stft. Splits audio into overlapping
+// frames of length n_fft (stride = hop), windows each frame, FFTs it via
+// fft_native, and keeps the one-sided spectrum (bins = n_fft/2 + 1).
+//
+// Returns flat [re, im, re, im, ...] for all frames × all bins:
+// total length = n_frames * bins * 2.
+
+pub fn stft_native(audio: [float], n_fft: int, hop: int, win_type: int) -> [float] {
+    let sig_len = len(audio)
+    let n_frames = stft_num_frames(sig_len, n_fft, hop)
+    if n_frames <= 0 { return [] }
+    let bins = n_fft / 2 + 1
+
+    // Pre-compute window
+    let mut win = []
+    let mut wi = 0
+    while wi < n_fft {
+        win = win.push(_csf_window_sample(win_type, wi, n_fft))
+        wi = wi + 1
+    }
+
+    let mut out = []
+    let mut f = 0
+    while f < n_frames {
+        let start = f * hop
+        // Extract windowed frame (zero-padded tail if the signal runs short)
+        let mut frame_re = []
+        let mut frame_im = []
+        let mut k = 0
+        while k < n_fft {
+            let s = start + k
+            let mut sample = 0.0
+            if s < sig_len { sample = audio[s] }
+            frame_re = frame_re.push(sample * win[k])
+            frame_im = frame_im.push(0.0)
+            k = k + 1
+        }
+        // FFT of this frame
+        let spec = fft_native(frame_re, frame_im, n_fft)
+        // Extract one-sided spectrum (bins = n_fft/2 + 1)
+        let mut b = 0
+        while b < bins {
+            out = out.push(spec[b * 2])      // real
+            out = out.push(spec[b * 2 + 1])  // imag
+            b = b + 1
+        }
+        f = f + 1
+    }
+    return out
+}
+
+// ── istft_native: inverse STFT via overlap-add ──────────────────────────────
+//
+// Faithful port of dsp_core.hexa::dsp_istft.
+//
+// spec_real / spec_imag: one-sided spectrum lists, each of length
+//   n_frames * bins (frame-major: frame 0 bins 0..bins-1, frame 1 ...).
+// n_fft: FFT window size · hop: hop length · win_type: window (0/1/2)
+// n_frames: number of spectrogram frames.
+//
+// For each frame: rebuild the full complex spectrum from the one-sided half
+// (Hermitian mirror X[n_fft - k] = conj(X[k])), inverse-FFT via ifft_native,
+// window, and overlap-add into the output accumulator. Final pass divides by
+// the sum of squared window values at each position (COLA normalization).
+
+pub fn istft_native(spec_real: [float], spec_imag: [float], n_fft: int, hop: int, win_type: int, n_frames: int) -> [float] {
+    let bins = n_fft / 2 + 1
+    let out_len = istft_output_len(n_frames, n_fft, hop)
+    if out_len <= 0 { return [] }
+
+    // Pre-compute window
+    let mut win = []
+    let mut wi = 0
+    while wi < n_fft {
+        win = win.push(_csf_window_sample(win_type, wi, n_fft))
+        wi = wi + 1
+    }
+
+    // Accumulator buffers: audio and window-squared sum, initialized to zeros
+    let mut audio_acc = []
+    let mut wsum_acc = []
+    let mut zi = 0
+    while zi < out_len {
+        audio_acc = audio_acc.push(0.0)
+        wsum_acc = wsum_acc.push(0.0)
+        zi = zi + 1
+    }
+
+    let mut f = 0
+    while f < n_frames {
+        // Reconstruct full-length complex spectrum from one-sided half.
+        // For real signals: X[n_fft - k] = conj(X[k]) for 0 < k < n_fft/2.
+        let mut full_re = []
+        let mut full_im = []
+        let off = f * bins
+
+        let mut b = 0
+        while b < n_fft {
+            if b < bins {
+                full_re = full_re.push(spec_real[off + b])
+                full_im = full_im.push(spec_imag[off + b])
+            } else {
+                // Mirror: bin (n_fft - b) is conjugate of bin b
+                let mirror = n_fft - b
+                full_re = full_re.push(spec_real[off + mirror])
+                full_im = full_im.push(0.0 - spec_imag[off + mirror])
+            }
+            b = b + 1
+        }
+
+        // Inverse FFT of this frame
+        let ifft_out = ifft_native(full_re, full_im, n_fft)
+
+        // Window and overlap-add (pass-by-value: rebuild accumulators)
+        let start = f * hop
+        let mut new_audio = []
+        let mut new_wsum = []
+        let mut si = 0
+        while si < out_len {
+            let local = si - start
+            if local >= 0 && local < n_fft {
+                let ifft_sample = ifft_out[local * 2]  // real part only
+                let w = win[local]
+                new_audio = new_audio.push(audio_acc[si] + ifft_sample * w)
+                new_wsum = new_wsum.push(wsum_acc[si] + w * w)
+            } else {
+                new_audio = new_audio.push(audio_acc[si])
+                new_wsum = new_wsum.push(wsum_acc[si])
+            }
+            si = si + 1
+        }
+        audio_acc = new_audio
+        wsum_acc = new_wsum
+        f = f + 1
+    }
+
+    // COLA normalization: divide by sum of squared windows
+    let mut result = []
+    let eps = 0.00000001
+    let mut ri = 0
+    while ri < out_len {
+        if wsum_acc[ri] > eps {
+            result = result.push(audio_acc[ri] / wsum_acc[ri])
+        } else {
+            result = result.push(0.0)
+        }
+        ri = ri + 1
+    }
+    return result
+}

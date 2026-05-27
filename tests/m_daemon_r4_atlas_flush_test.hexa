@@ -1,0 +1,241 @@
+// tests/m_daemon_r4_atlas_flush_test.hexa — GO M14 milestone: `hexa daemon`
+// R4 atlas SSOT hash flush (RFC 093 Phase 4 — F-DAEMON-4).
+//
+// PROBLEM (F-DAEMON-4): the daemon's in-memory compile cache key is
+// sha256(source)[0:16] + "_" + version_str() — it does NOT include the atlas
+// SSOT hash. When a node is folded into the atlas SSOT
+// (compiler/atlas/embedded.gen.hexa), an atlas-citing source can compile to a
+// DIFFERENT binary, yet the daemon would return its stale memoized binary as a
+// HIT. R2 carved this out as the R4 task.
+//
+// FIX (Option B — daemon-only invalidation layer): the daemon hashes the atlas
+// SSOT file (throttled) and, when the hash changes vs the last observed value,
+// flushes the entire in-memory cache (cache_keys / cache_bins) AND unlinks the
+// matching ~/.hexa-cache disk-mirror binaries — so the next COMPILE rebuilds
+// against the new atlas instead of returning a stale HIT. cmd_run's key is
+// UNCHANGED (no M7 drift-guard / M2 precompile impact).
+//
+// Falsifiers (RFC 093 § R4 acceptance):
+//   F-DAEMON-4-1 (no-flush HIT)   — atlas UNCHANGED: same source compiled
+//                                   twice → the per-COMPILE atlas check sees an
+//                                   unchanged hash → 2nd is an in-memory HIT
+//                                   (normal cache works, no spurious flush).
+//   F-DAEMON-4-2 (flush on fold)  — atlas SSOT CONTENT changed (simulated fold)
+//                                   → next COMPILE of the SAME source flushes
+//                                   the cache → returns BUILT (a fresh build),
+//                                   NOT a stale HIT.
+//   F-DAEMON-4-3 (re-stabilize)   — after the flush + rebuild, the atlas is
+//                                   stable again → the FOLLOWING COMPILE of the
+//                                   same source is a HIT again (the flush is a
+//                                   one-shot on the change edge, not permanent).
+//
+// METHOD: the daemon resolves the atlas SSOT via $HEXA_LANG first. We point the
+// spawned daemon at a TEMP $HEXA_LANG dir holding a small fake
+// compiler/atlas/embedded.gen.hexa, then rewrite that fake file to simulate a
+// fold. This exercises the exact flush logic without touching (or rebuilding
+// against) the 10 MB committed SSOT — fast and non-destructive. The hexa build
+// binary itself is still resolved from install_dir, so real compiles work.
+// The daemon is spawned with HEXA_DAEMON_ATLAS_THROTTLE_MS=0 so it checks the
+// atlas hash on EVERY COMPILE (production default = 2 s throttle), making the
+// flush deterministic without depending on inter-request wall-clock sleeps.
+//
+// Exit codes: 0 — all 3 falsifiers PASS · 1 — any FAIL.
+// No nc/socat dependency: client + server driven via the `hexa daemon` CLI.
+
+fn _trim(s: string) -> string {
+    return s.trim()
+}
+
+fn _exec(cmd: string) -> string {
+    return to_string(exec(cmd))
+}
+
+fn _exists(path: string) -> bool {
+    return _trim(_exec("test -e " + path + " && printf ok || printf no")) == "ok"
+}
+
+fn _shq(s: string) -> string {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+fn _resolve_hexa_bin() -> string {
+    let env_bin = env_var("HEXA_BIN")
+    if len(env_bin) > 0 { return env_bin }
+    let root = env_var("HEXA_LANG")
+    if len(root) > 0 {
+        let p = root + "/hexa"
+        if _exists(p) { return p }
+    }
+    return "hexa"
+}
+
+fn _temp_socket_path() -> string {
+    return "/tmp/hexa_daemon_r4_test." + to_string(mono_ns()) + ".sock"
+}
+
+fn _wait_for_socket(sock_path: string, max_ms: i64) -> bool {
+    let mut waited = 0
+    while waited < max_ms {
+        if _exists(sock_path) { return true }
+        sleep_ms(50)
+        waited = waited + 50
+    }
+    return false
+}
+
+// Reply parsing — daemon `compile` replies are "<TAG> <path>" on one line.
+fn _reply_tag(reply: string) -> string {
+    let n = len(reply)
+    let mut i = 0
+    while i < n {
+        if reply.substring(i, i + 1) == " " { return reply.substring(0, i) }
+        i = i + 1
+    }
+    return reply
+}
+
+fn _reply_rest(reply: string) -> string {
+    let n = len(reply)
+    let mut i = 0
+    while i < n {
+        if reply.substring(i, i + 1) == " " { return reply.substring(i + 1, n) }
+        i = i + 1
+    }
+    return ""
+}
+
+// Run `hexa daemon compile <src>` against the test socket, returning the
+// trimmed reply line.
+fn _compile(bin: string, src: string, sock: string) -> string {
+    let pair = exec_with_status(_shq(bin) + " daemon compile " + _shq(src) + " --socket " + _shq(sock) + " 2>&1")
+    return _trim(to_string(pair[0]))
+}
+
+pub fn main() -> i32 {
+    println("[m_daemon_r4_test] start (GO M14 — RFC 093 R4 atlas SSOT hash flush · F-DAEMON-4)")
+
+    let bin = _resolve_hexa_bin()
+    let sock = _temp_socket_path()
+    let stamp = to_string(mono_ns())
+
+    // ── temp $HEXA_LANG with a small fake atlas SSOT ──────────────────────
+    // The daemon resolves compiler/atlas/embedded.gen.hexa via $HEXA_LANG
+    // first; a tiny fake stands in for the 10 MB committed SSOT so we can
+    // rewrite it cheaply to simulate a fold.
+    let fake_root = "/tmp/hexa_daemon_r4_root." + stamp
+    let atlas_dir = fake_root + "/compiler/atlas"
+    let atlas_ssot = atlas_dir + "/embedded.gen.hexa"
+    let _mk = _exec("mkdir -p " + _shq(atlas_dir))
+    let atlas_v1 = "pub let ATLAS_HASH: string = \"aaaaaaaaaaaaaaaa\"\n// fake atlas SSOT v1 (test)\n"
+    let _wa1 = write_file(atlas_ssot, atlas_v1)
+
+    // Source X — tiny, self-contained, unique content-hash slot.
+    let body = "pub fn main() -> i32 {\n    println(\"r4-daemon-atlas-flush-ok\")\n    return 0\n}\n"
+    let src = "/tmp/hexa_daemon_r4_src." + stamp + ".hexa"
+    let _wr = write_file(src, body)
+
+    println("  bin=" + bin)
+    println("  sock=" + sock)
+    println("  fake_root=" + fake_root)
+    println("  atlas_ssot=" + atlas_ssot)
+    println("  src=" + src)
+
+    let mut ok = true
+
+    // ── start the daemon (bg) with HEXA_LANG pointed at the fake root ──────
+    // idle-ttl 120 so the test's > throttle sleeps don't time it out.
+    // HEXA_DAEMON_ATLAS_THROTTLE_MS=0 → the daemon checks the atlas SSOT hash
+    // on EVERY COMPILE (not the production 2 s throttle), so the flush is
+    // deterministic without relying on wall-clock sleeps between requests
+    // (the compiled-runtime `sleep_ms` granularity is not load-bearing here).
+    let log_path = sock + ".log"
+    let _spawn = _exec("HEXA_LANG=" + _shq(fake_root) + " HEXA_DAEMON_ATLAS_THROTTLE_MS=0 nohup " + _shq(bin) + " daemon start --socket " + _shq(sock) + " --idle-ttl 120 > " + _shq(log_path) + " 2>&1 &")
+    let started = _wait_for_socket(sock, 4000)
+    if !started {
+        let log_tail = _trim(_exec("tail -20 " + _shq(log_path) + " 2>/dev/null"))
+        println("  [setup] FAIL: daemon socket never appeared (" + sock + ")")
+        println("       log: " + log_tail)
+        println("[m_daemon_r4_test] FAIL")
+        return 1
+    }
+
+    // Defensive: clear any stale ~/.hexa-cache slot for this source so the
+    // first compile is a genuine BUILT across re-invocations.
+    let pre0 = _compile(bin, src, sock)
+    let path0 = _reply_rest(pre0)
+    if len(path0) > 0 { let _rm0 = _exec("rm -f " + _shq(path0) + " 2>/dev/null") }
+
+    // ── F-DAEMON-4-1 (no-flush HIT — atlas unchanged) ─────────────────────
+    // 1st compile → BUILT (miss + build).
+    let r1 = _compile(bin, src, sock)
+    let tag1 = _reply_tag(r1)
+    let path1 = _reply_rest(r1)
+    let mut f1 = true
+    if tag1 == "BUILT" && len(path1) > 0 && _exists(path1) {
+        println("  [F-DAEMON-4-1a] PASS: 1st compile → BUILT (miss + build) " + path1)
+    } else {
+        println("  [F-DAEMON-4-1a] FAIL: 1st reply='" + r1 + "' (expected 'BUILT <path>')")
+        f1 = false
+    }
+    // 2nd compile: atlas content unchanged → the per-COMPILE atlas check sees
+    // the same hash → no flush → in-memory HIT (normal cache works).
+    let r2 = _compile(bin, src, sock)
+    let tag2 = _reply_tag(r2)
+    let path2 = _reply_rest(r2)
+    if tag2 == "HIT" && path2 == path1 {
+        println("  [F-DAEMON-4-1b] PASS: atlas unchanged → 2nd compile HIT, same path (atlas check did not spuriously flush)")
+    } else {
+        println("  [F-DAEMON-4-1b] FAIL: 2nd reply='" + r2 + "' (expected 'HIT " + path1 + "')")
+        f1 = false
+    }
+    if !f1 { ok = false }
+
+    // ── F-DAEMON-4-2 (flush on fold — atlas content changed) ──────────────
+    // Rewrite the fake atlas SSOT to a DIFFERENT content (simulated fold) →
+    // its sha256 changes → the next COMPILE must flush the cache (+ unlink the
+    // disk-mirror binary) and return a fresh BUILT, NOT a stale HIT.
+    let atlas_v2 = "pub let ATLAS_HASH: string = \"bbbbbbbbbbbbbbbb\"\n// fake atlas SSOT v2 — simulated fold (test)\n// extra node line to change the content hash\n"
+    let _wa2 = write_file(atlas_ssot, atlas_v2)
+    let r3 = _compile(bin, src, sock)
+    let tag3 = _reply_tag(r3)
+    let path3 = _reply_rest(r3)
+    let mut f2 = true
+    if tag3 == "BUILT" && len(path3) > 0 && _exists(path3) {
+        println("  [F-DAEMON-4-2] PASS: atlas fold → cache flushed → re-BUILT (no stale HIT) " + path3)
+    } else {
+        println("  [F-DAEMON-4-2] FAIL: post-fold reply='" + r3 + "' (expected 'BUILT <path>', a stale 'HIT' = F-DAEMON-4 violation)")
+        f2 = false
+    }
+    if !f2 { ok = false }
+
+    // ── F-DAEMON-4-3 (re-stabilize — flush is one-shot on the change edge) ─
+    // Atlas is stable again (no further edit) → the following compile of the
+    // same source is a HIT again (the rebuilt binary is re-memoized; the flush
+    // does not repeat while the atlas hash holds steady).
+    let r4 = _compile(bin, src, sock)
+    let tag4 = _reply_tag(r4)
+    let path4 = _reply_rest(r4)
+    let mut f3 = true
+    if tag4 == "HIT" && path4 == path3 {
+        println("  [F-DAEMON-4-3] PASS: atlas stable post-fold → HIT again (flush is one-shot on the change edge)")
+    } else {
+        println("  [F-DAEMON-4-3] FAIL: reply='" + r4 + "' (expected 'HIT " + path3 + "')")
+        f3 = false
+    }
+    if !f3 { ok = false }
+
+    // ── teardown ──────────────────────────────────────────────────────────
+    let _stop = exec_with_status(_shq(bin) + " daemon stop --socket " + _shq(sock) + " 2>&1")
+    let _cl1 = _exec("rm -f " + _shq(log_path) + " 2>/dev/null")
+    let _cl2 = _exec("rm -f " + _shq(sock) + " 2>/dev/null")
+    let _cl3 = _exec("rm -f " + _shq(src) + " 2>/dev/null")
+    let _cl4 = _exec("rm -rf " + _shq(fake_root) + " 2>/dev/null")
+    if len(path1) > 0 { let _cl5 = _exec("rm -f " + _shq(path1) + " 2>/dev/null") }
+
+    if ok {
+        println("[m_daemon_r4_test] ALL 3 FALSIFIERS PASS")
+        return 0
+    }
+    println("[m_daemon_r4_test] FAIL")
+    return 1
+}

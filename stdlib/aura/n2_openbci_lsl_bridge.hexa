@@ -1,0 +1,137 @@
+#!hexa strict
+// stdlib/aura/n2_openbci_lsl_bridge.hexa — `aura + N2`
+// G2 stage_1: OpenBCI ↔ AURA-100 Lab Streaming Layer (LSL) bridge
+// skeleton (FIRST CODE).
+//
+// CONTEXT: G2 brk path stage_1 (PR #1400 g2_eeg_acquisition_path.hexa):
+//   "OpenBCI Cyton/Ganglion → AURA-100 live-streaming GATT bridge via LSL"
+//
+// LSL (Lab Streaming Layer · MIT) is the open vendor-neutral real-time
+// transport used across EEG ecosystems. This bridge skeleton declares
+// the shape of the OpenBCI → LSL outlet + AURA-100 GATT inlet, so
+// the actual Python/C++ implementation can target a stable spec.
+//
+// Honesty (g3 · @D d1 · @D d2):
+//   * absorbed=false PERMANENTLY — skeleton, not a built bridge.
+//
+// Sentinels:
+//   __HEXA_AURA_N2_OPENBCI_LSL_BRIDGE__ PASS
+//   AURA_N2_OPENBCI_LSL_BRIDGE_OK gate=GATE_OPEN absorbed=false
+
+let VERSION       = "0.1.0"
+let MODULE        = "aura-n2-openbci-lsl-bridge"
+let GEOMETRY_ID   = "aura_n2_openbci_lsl_bridge_v1"
+let RECORD_KIND   = "aura_n2_openbci_lsl_bridge_record"
+
+fn _openbci_source_block() -> [str] {
+    return [
+        "hardware_options: OpenBCI Cyton (8-ch) · Cyton+Daisy (16-ch) · Ganglion (4-ch)",
+        "SDK: brainflow (BSD-3 · C++ + Python + Java + MATLAB bindings)",
+        "sample_rate: Cyton 250 Hz · Cyton+Daisy 125 Hz · Ganglion 200 Hz",
+        "ADC: ADS1299 (Cyton+Daisy uses 2 daisy-chained · matches AURA-100 AFE)",
+        "transport: dongle USB (default) OR WiFi shield (Cyton WiFi) OR BLE (Ganglion)",
+        "impedance_check: brainflow API for per-electrode impedance",
+    ]
+}
+
+fn _lsl_outlet_block() -> [str] {
+    return [
+        "library: pylsl (MIT · Python LSL bindings) OR liblsl (C++ underlying)",
+        "stream_name: AURA-OpenBCI-EEG (canonical · vendor-agnostic)",
+        "stream_type: EEG (per BIDS-EEG vocabulary)",
+        "channel_count: 4 / 8 / 16 (per OpenBCI HW variant)",
+        "channel_format: cf_float32 (sample value type)",
+        "source_id: unique device serial number (per BCILAB convention)",
+        "metadata: channel_labels + units (uV) + reference + ground + sampling_rate",
+    ]
+}
+
+fn _aura_gatt_inlet_block() -> [str] {
+    return [
+        "transport_target: AURA-100 BLE GATT custom EEG streaming service",
+        "GATT_UUID: AURA EEG service UUID (vendor-specific · to be assigned)",
+        "characteristic: streaming_data (notify) + control (write) + status (read)",
+        "framing: 16-ch × 24-bit × N samples per BLE notification (chunked)",
+        "BLE_throughput_budget: ≥ 8 kB/s sustained (per AURA-100 D2 spec)",
+        "fallback_transport: USB (Cyton via brainflow direct) if BLE unavailable",
+    ]
+}
+
+fn _mne_realtime_block() -> [str] {
+    return [
+        "consumer: MNE-Python mne.io.read_raw_brainflow + mne_realtime.LSLClient",
+        "buffer: ring buffer 5-30 s @ 250 Hz · 16-ch float32 (~50-300 kB)",
+        "preprocessing: bandpass 0.5-50 Hz + notch 60 Hz + epoch alignment",
+        "downstream: V4 analyze cell band-power + V0 verify cell Sleep-EDF parity check",
+        "live_QC: per-channel RMS + clipping + impedance + dropout count",
+        "live_dashboard: Plotly Dash OR Streamlit (browser-based)",
+    ]
+}
+
+fn _repo_scaffold_block() -> [str] {
+    return [
+        "future_repo: github.com/<org>/aura-openbci-bridge (separate from hexa-lang)",
+        "layout: src/{openbci_source, lsl_outlet, ble_inlet, mne_consumer, dashboard}/",
+        "deps: brainflow · pylsl · mne-python · bleak (BLE) · scipy · numpy",
+        "CI: GitHub Actions matrix(python 3.10-3.12 · pylsl + brainflow latest)",
+        "tests: unit + integration + replay-from-recorded-XDF",
+        "license: MIT (matches LSL · OpenBCI · pylsl ecosystem)",
+    ]
+}
+
+fn _scope_caveats() -> [str] {
+    return [
+        "N2 OpenBCI ↔ AURA LSL bridge is a SKELETON spec, NOT a built bridge.",
+        "Actual Python/C++ implementation lives in a separate repo.",
+        "BLE inlet path requires AURA-100 firmware + GATT UUID assignment (separate gate).",
+        "MNE-realtime is in active development - API may evolve.",
+        "absorbed=false PERMANENTLY (g3) - skeleton spec, NEVER a clinical-grade transport.",
+    ]
+}
+
+fn _emit_block(label: str, lines: [str]) {
+    print("# [" + label + "]")
+    let n = lines.len()
+    let mut i = 0
+    while i < n {
+        print("#   - " + lines[i])
+        i = i + 1
+    }
+    print("#")
+}
+
+fn _emit_header() {
+    print("# AURA N2 - G2 stage_1 OpenBCI ↔ AURA-100 LSL bridge FIRST CODE")
+    print("# device_target = post-aural / temporal-bone clip BCI + lab acquisition")
+    print("# version = " + VERSION)
+    print("# ringfence: skeleton spec - NOT a built bridge")
+    print("#")
+    _emit_block("openbci_source",   _openbci_source_block())
+    _emit_block("lsl_outlet",       _lsl_outlet_block())
+    _emit_block("aura_gatt_inlet",  _aura_gatt_inlet_block())
+    _emit_block("mne_realtime",     _mne_realtime_block())
+    _emit_block("repo_scaffold",    _repo_scaffold_block())
+}
+
+fn _emit_caveats() {
+    let c = _scope_caveats()
+    let n = c.len()
+    let mut i = 0
+    while i < n {
+        print("# scope_caveat: " + c[i])
+        i = i + 1
+    }
+}
+
+fn main() {
+    _emit_header()
+    _emit_caveats()
+
+    print("AURA_N2_OPENBCI_LSL_BRIDGE_OK record_kind=" + RECORD_KIND
+        + " geometry_id=" + GEOMETRY_ID
+        + " gate=GATE_OPEN absorbed=false"
+        + " version=" + VERSION
+        + " g2_stage=1")
+
+    print("__HEXA_AURA_N2_OPENBCI_LSL_BRIDGE__ PASS")
+}

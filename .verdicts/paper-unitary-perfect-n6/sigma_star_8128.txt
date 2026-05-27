@@ -1,0 +1,4 @@
+verify --expr sigma_star(8128)=8320
+  calc   = 8320  == expected 8320
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+  absorb = · already in atlas — idempotent skip (default · @D g69)

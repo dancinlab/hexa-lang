@@ -1,0 +1,229 @@
+// ═══════════════════════════════════════════════════════════════════
+//  self/test_sparse_mm.hexa — @sparse matmul prototype tests
+// ═══════════════════════════════════════════════════════════════════
+
+// -- inlined from self/ml/sparse_mm.hexa --
+// codegen import not wired for test files
+
+// ═══════════════════════════════════════════════════════════════════
+//  self/ml/sparse_mm.hexa — @sparse matmul prototype (pure .hexa)
+//
+//  AI-native CPU optimization P2-1: sparsity-aware matmul.
+//  When input tensor has >= `ratio` zeros, switch to CSR sparse path
+//  for O(nnz * N) instead of O(M*K*N) dense matmul.
+//
+//  API:
+//    is_sparse(t, threshold)           -> bool
+//    to_csr(t, rows, cols)             -> [values, col_idx, row_ptr]
+//    sparse_mm_csr(csr, B, M, K, N)    -> Tensor (dense result [M x N])
+//    auto_mm(A, B, M, K, N, ratio)     -> Tensor (auto sparse/dense)
+//
+//  @sparse(ratio) attribute is parser-accepted (verified) but has no
+//  runtime hook yet — auto_mm() provides the behavior explicitly.
+// ═══════════════════════════════════════════════════════════════════
+
+// ── zero-ratio check ────────────────────────────────────────────
+fn is_sparse(t, threshold) {
+    let n = len(t)
+    if n == 0 { return false }
+    let mut zeros = 0
+    let mut i = 0
+    while i < n {
+        let v = t[i]
+        // treat |v| < 1e-12 as zero to be float-safe
+        let av = if v < 0.0 { -1.0 * v } else { v }
+        if av < 0.000000000001 { zeros = zeros + 1 }
+        i = i + 1
+    }
+    let ratio = (zeros * 1.0) / (n * 1.0)
+    ratio >= threshold
+}
+
+// ── CSR conversion ──────────────────────────────────────────────
+// Returns a dict { values: [float], col_idx: [int], row_ptr: [int] }
+// for an [rows x cols] row-major flat tensor.
+fn to_csr(t, rows, cols) {
+    let mut values = []
+    let mut col_idx = []
+    let mut row_ptr = [0]
+    let mut r = 0
+    let mut nnz = 0
+    while r < rows {
+        let mut c = 0
+        while c < cols {
+            let v = t[r * cols + c]
+            let av = if v < 0.0 { -1.0 * v } else { v }
+            if av >= 0.000000000001 {
+                values.push(v)
+                col_idx.push(c)
+                nnz = nnz + 1
+            }
+            c = c + 1
+        }
+        row_ptr.push(nnz)
+        r = r + 1
+    }
+    [values, col_idx, row_ptr]
+}
+
+// ── Sparse × Dense matmul (CSR A × dense B) ─────────────────────
+// A: CSR representation of [M x K]
+// B: dense flat tensor [K x N] row-major
+// Returns tensor [M x N]
+fn sparse_mm_csr(csr, B, M, K, N) {
+    let values = csr[0]
+    let col_idx = csr[1]
+    let row_ptr = csr[2]
+    let mut out = []
+    let total = M * N
+    let mut z = 0
+    while z < total {
+        out.push(0.0)
+        z = z + 1
+    }
+    let mut i = 0
+    while i < M {
+        let start = row_ptr[i]
+        let end = row_ptr[i + 1]
+        let mut p = start
+        while p < end {
+            let k = col_idx[p]
+            let a_val = values[p]
+            let mut j = 0
+            while j < N {
+                let idx = i * N + j
+                out[idx] = out[idx] + a_val * B[k * N + j]
+                j = j + 1
+            }
+            p = p + 1
+        }
+        i = i + 1
+    }
+    tensor(out, [M, N])
+}
+
+// ── Auto: dispatch to sparse/dense based on sparsity ────────────
+@sparse(0.5)
+fn auto_mm(A, B, M, K, N, ratio) {
+    if is_sparse(A, ratio) {
+        let csr = to_csr(A, M, K)
+        return sparse_mm_csr(csr, B, M, K, N)
+    }
+    let result_arr = matmul(A, B, M, K, N)
+    tensor(result_arr, [M, N])
+}
+
+
+// -- end inlined --
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn approx_eq(a, b) {
+    let d = a - b
+    let ad = if d < 0.0 { -1.0 * d } else { d }
+    ad < 0.000001
+}
+
+fn tensors_equal(a, b) {
+    if len(a) != len(b) { return false }
+    let n = len(a)
+    let mut i = 0
+    while i < n {
+        if !approx_eq(a[i], b[i]) { return false }
+        i = i + 1
+    }
+    true
+}
+
+fn check(name, cond) {
+    if cond {
+        println("[PASS] " + name)
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name)
+        fail_count = fail_count + 1
+    }
+}
+
+println("═══════════════════════════════════════════════════════")
+println("  @sparse matmul prototype tests")
+println("═══════════════════════════════════════════════════════")
+
+// ── Test 1: is_sparse detection ─────────────────────────────
+let t_dense = tensor([1.0, 2.0, 3.0, 4.0])
+let t_sparse50 = tensor([1.0, 0.0, 2.0, 0.0])
+let t_sparse90 = tensor([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0])
+check("is_sparse dense@0.5 => false", !is_sparse(t_dense, 0.5))
+check("is_sparse 50% @0.5  => true",  is_sparse(t_sparse50, 0.5))
+check("is_sparse 90% @0.5  => true",  is_sparse(t_sparse90, 0.5))
+check("is_sparse 50% @0.9  => false", !is_sparse(t_sparse50, 0.9))
+
+// ── Test 2: dense baseline vs auto_mm (dense path) ─────────
+// A = [[1,2],[3,4]]  B = [[5,6],[7,8]]  => [[19,22],[43,50]]
+let A_dense = tensor([1.0, 2.0, 3.0, 4.0], [2, 2])
+let B1      = tensor([5.0, 6.0, 7.0, 8.0], [2, 2])
+let baseline_arr = matmul(A_dense, B1, 2, 2, 2)
+let got_dense = auto_mm(A_dense, B1, 2, 2, 2, 0.5)
+check("auto_mm dense matches matmul", tensors_equal(got_dense, tensor(baseline_arr)))
+let expect_dense = tensor([19.0, 22.0, 43.0, 50.0])
+check("auto_mm dense result [19,22,43,50]", tensors_equal(got_dense, expect_dense))
+
+// ── Test 3: 50% sparse A ────────────────────────────────────
+// A = [[1,0,2,0],[0,3,0,4],[5,0,0,6],[0,7,8,0]]  (50% zeros)
+// B = I(4)  => A unchanged
+let A50 = tensor([
+    1.0, 0.0, 2.0, 0.0,
+    0.0, 3.0, 0.0, 4.0,
+    5.0, 0.0, 0.0, 6.0,
+    0.0, 7.0, 8.0, 0.0
+], [4, 4])
+let I4 = tensor([
+    1.0, 0.0, 0.0, 0.0,
+    0.0, 1.0, 0.0, 0.0,
+    0.0, 0.0, 1.0, 0.0,
+    0.0, 0.0, 0.0, 1.0
+], [4, 4])
+check("is_sparse A50 @0.5", is_sparse(A50, 0.5))
+let dense_ref50 = tensor(matmul(A50, I4, 4, 4, 4))
+let auto50 = auto_mm(A50, I4, 4, 4, 4, 0.5)
+check("auto_mm 50% sparse == dense baseline", tensors_equal(auto50, dense_ref50))
+
+// Non-trivial B for 50% case
+let B50 = tensor([
+    1.0, 2.0, 3.0, 4.0,
+    5.0, 6.0, 7.0, 8.0,
+    9.0, 1.0, 2.0, 3.0,
+    4.0, 5.0, 6.0, 7.0
+], [4, 4])
+let dense_ref50b = tensor(matmul(A50, B50, 4, 4, 4))
+let auto50b = auto_mm(A50, B50, 4, 4, 4, 0.5)
+check("auto_mm 50% × dense B == dense baseline", tensors_equal(auto50b, dense_ref50b))
+
+// ── Test 4: 90% sparse A ────────────────────────────────────
+// 4x4 with only 2 nonzeros (87.5% sparse, still >= 0.5 threshold)
+let A90 = tensor([
+    0.0, 0.0, 0.0, 0.0,
+    0.0, 2.0, 0.0, 0.0,
+    0.0, 0.0, 0.0, 0.0,
+    0.0, 0.0, 3.0, 0.0
+], [4, 4])
+check("is_sparse A90 @0.5", is_sparse(A90, 0.5))
+let dense_ref90 = tensor(matmul(A90, B50, 4, 4, 4))
+let auto90 = auto_mm(A90, B50, 4, 4, 4, 0.5)
+check("auto_mm 90% sparse × dense == baseline", tensors_equal(auto90, dense_ref90))
+
+// ── Test 5: CSR structural sanity ───────────────────────────
+let csr50 = to_csr(A50, 4, 4)
+// A50 has 8 nonzeros
+let csr50_vals = csr50[0]
+let csr50_rp = csr50[2]
+check("to_csr A50 nnz=8", len(csr50_vals) == 8)
+check("to_csr A50 row_ptr length=5", len(csr50_rp) == 5)
+check("to_csr A50 row_ptr[0]=0", csr50_rp[0] == 0)
+check("to_csr A50 row_ptr[4]=8", csr50_rp[4] == 8)
+
+println("═══════════════════════════════════════════════════════")
+println("  PASS: " + to_string(pass_count) + "  FAIL: " + to_string(fail_count))
+println("═══════════════════════════════════════════════════════")
+println(to_string(pass_count) + " passed")

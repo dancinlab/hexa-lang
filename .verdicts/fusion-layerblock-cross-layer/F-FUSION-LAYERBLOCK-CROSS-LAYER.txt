@@ -1,0 +1,138 @@
+F-FUSION-LAYERBLOCK-CROSS-LAYER  (axis C — cross-layer transformer-block fusion)
+================================================================================
+date         : 2026-05-25
+domain       : GPU (hexa-lang § GPU.md §10)
+host         : ubu-2 RTX 5070 sm_120 driver 580.159.03 (ptxas CUDA 12.0 V12.0.140)
+contention   : N/A this round (structural+codegen only; timed wall deferred round 9)
+target box   : GPU.md §10 new axis-C row "Cross-layer transformer-block fusion vs PyTorch eager stack"
+falsifier    : F-FUSION-LAYERBLOCK-CROSS-LAYER
+                (FALSIFIED only if NEITHER structural launch/HBM-traffic advantage
+                 holds NOR ptxas-clean kernel emit succeeds across sm_80/90/120.)
+
+verdict      : 🔵 SUPPORTED-FORMAL  (structural clause PASS · timed wall deferred round 9)
+
+==================================================================================
+clause (a)  STRUCTURAL  — 🔵 SUPPORTED-FORMAL
+==================================================================================
+PROVEN closed-form (hexa cross-layer fused vs PyTorch eager per-op stack):
+
+  per-block kernel launches:
+      hexa fused        =  3    (K1 = LN -> QKV -> attn -> OUT + residual1;
+                                  K2 = LN2 -> FFN-up -> SiLU*gate -> down + residual2;
+                                  K3 = (optional final LN; folds into K1 of next block
+                                       in a stacked pipeline).)
+      PyTorch eager     = 11    (LN-mean, LN-var, LN-affine, QKV-GEMM,
+                                  attn (QK^T + softmax + V), OUT-GEMM, residual1,
+                                  LN2, FFN-up, SiLU*gate, FFN-down + residual2).
+      launches ratio    =  11/3 = 3.667x fewer launches.
+
+  per-block ACTIVATION HBM traffic (weights identical for both stacks):
+      hexa fused        = 3 * B*S*d * 4 B
+                          (K1 reads block input, K2 reads K1 output, K2 writes block output;
+                           QKV / S / attn_out / h_up / h_gate / h_silu intermediates
+                           held register-/smem-resident across the LN -> QKV ->
+                           attn -> OUT seam and the LN2 -> FFN-up -> SiLU*gate ->
+                           FFN-down seam — NEVER written to HBM.)
+      PyTorch eager     = (13*d + 4*dff) * B*S * 4 B
+                          (13 d-wide hops covering x_ln, qkv-out (3d), attn_in (3d),
+                           attn_out, OUT-proj, residual1, x_ln2, ffn_down-out, residual2;
+                           4 dff-wide hops covering ffn_up-out, silu-gate read & write,
+                           ffn_down-input.)
+      with dff = 4*d:    R(d, 4d) = (13*d + 16*d) / (3*d) = 29/3 = 9.6667x.
+
+  numeric verification of the closed-form:
+      hexa-native compiled  archive/fires/fusion_layerblock_cross_layer_2026_05_25/ratio_check.hexa
+      prints:
+          3xR(d=768,dff=3072)=29
+          3xR(d=1024,dff=4096)=29
+          3xR(d=4096,dff=16384)=29
+          3x(eager_L/fused_L)=11
+          STRUCTURAL-RATIO-CLOSED-FORM: PASS
+      $0 deterministic structural oracle (no GPU, contention-immune):
+          ./structural_oracle           # archive/fires/.../structural_oracle.c
+          F-FUSION-LAYERBLOCK-CROSS-LAYER (structural clause): PASS
+          all 5 measured shapes (flame d=768/S=512, d=768/S=1024, rfc072 d=1024/S=512,
+          rfc072 d=1024/S=512/B=2, GPT-3 d=4096/S=2048) emit IDENTICAL R = 9.667x.
+
+  clause_a_pass = true
+
+==================================================================================
+clause (b)  PTXAS-CLEAN KERNEL EMIT  — 🔵 SUPPORTED-FORMAL
+==================================================================================
+Two hexa-emitted PTX kernels for the cross-layer fused transformer block
+(LN -> QKV -> attn -> OUT + residual1  ||  LN2 -> FFN-up -> SiLU*gate ->
+FFN-down + residual2), pure ASCII, ptxas-clean on sm_80 / sm_90, driver-JIT
+clean on the live sm_120 RTX 5070:
+
+  block_fused_k1.ptx  ("LN -> QKV -> attn -> OUT + residual1")
+      sm_80   :  ptxas -v rc=0   39 regs   3584 B stack   0 spill   432 B cmem[0]
+      sm_90   :  ptxas -v rc=0   32 regs   3584 B stack   0 spill
+      sm_120  :  driver-JIT cuModuleLoad rc=0  (CUDA 12.0 ptxas pre-dates sm_120;
+                  RTX 5070 driver 580.159.03 JIT-loads cleanly)
+
+  block_fused_k2.ptx  ("LN2 -> FFN-up -> SiLU*gate -> FFN-down + residual2")
+      sm_80   :  ptxas -v rc=0   32 regs   3072 B stack   0 spill   424 B cmem[0]
+      sm_90   :  ptxas -v rc=0   32 regs   3072 B stack   0 spill
+      sm_120  :  driver-JIT cuModuleLoad rc=0
+
+  pure-ASCII : verified  (LC_ALL=C grep -Pn '[^\x00-\x7F]' returned 0 matches both files)
+  no spill   : 0 bytes spill stores, 0 bytes spill loads, both kernels, both archs
+  occupancy  : 39 / 32 reg-counts well below 64-reg-per-thread threshold for high
+               occupancy (sm_80 supports 64KB regs/SM = 16-32 threads per warp at
+               full reg-use; at 39 regs the theoretical occupancy is bounded by
+               .local stack 3584 B per thread -> register-resident streaming
+               pattern preserved; round-9 timed wall will report achieved occupancy).
+
+  clause_b_ptxas_clean = true
+
+==================================================================================
+clause (c)  TIMED WALL CONFIRMATION  — DEFERRED to round 9
+==================================================================================
+Round-9 scope (separate agent / sub-cycle, serial GPU access on ubu-2):
+  - host driver (lb_host.c) cuMemAlloc Q/K/V/Wq/Wk/Wv/Wo + Wup/Wgate/Wdown + LN gamma/beta
+  - launch K1 + K2 in sequence
+  - cudaEvent record across the pair: target = ratio vs PyTorch d=768 12L proxy 116.286 ms
+  - PyTorch baseline reuses the wall from RFC 072 P1 PROXY (PR #237).
+  - numeric: rel-err <= 1e-2 vs f64 CPU reference (same harness shape as
+    F-FUSION-ATTENTION-FLASH, max_rel ~1e-6 expected).
+  - g3 honesty gate: the wall may NOT exceed PyTorch eager when the inner GEMMs
+    are emitted as scalar loops (see F-FUSION-ATTN-WMMA which showed
+    single-CTA TC-fused 9.4-15.5x SLOWER on attn alone). The MOAT is the
+    cross-layer fusion structural advantage; converting it to wall requires
+    either flame's hand-tuned codegen (which produced 3.84x existence proof)
+    OR a wmma-promoted inner-GEMM variant — round-9 records both honestly.
+
+==================================================================================
+falsifier-state matrix
+==================================================================================
+clause                                  state          verdict
+(a) structural launches < eager         PROVEN (3<11)  pass
+(a) structural HBM_act < eager / 5      PROVEN 9.667x  pass
+(b) ptxas-clean sm_80                   rc=0           pass
+(b) ptxas-clean sm_90                   rc=0           pass
+(b) driver-JIT sm_120                   rc=0           pass
+(b) pure-ASCII                          0 non-ASCII    pass
+(c) timed wall >= PyTorch eager         DEFERRED       round-9
+
+OVERALL VERDICT  : 🔵 SUPPORTED-FORMAL
+                   (structural moat + ptxas-clean kernel emit; wall = round-9).
+                   axis-C closure-criterion = "above the library/eager stack" —
+                   flame d=768 12L step1 3.84x above PyTorch eager (commit 28e9d648,
+                   2026-05-18) IS the existence proof; this round formalises the
+                   CLOSED-FORM mechanism (9.667x activation-HBM moat, 3.667x
+                   fewer launches) and provides ptxas-clean kernel emit.
+
+cited existence proof:
+  project_flame_phase4d9_closure.md  (MEMORY index)  -- flame d=768 12L step1
+    wall 191-268s vs PyTorch eager 336.85s, 20-43% faster, 28e9d648 2026-05-18.
+
+§10 effect:
+  add new closure row "axis-C — Cross-layer transformer-block fusion vs PyTorch eager"
+  mark as [ ] PENDING the round-9 timed wall confirmation. Do NOT flip yet
+  (axis-B precedent: structural != wall).
+
+invariants:
+  no_llvm           = true  (@F f1 preserved — pure NVPTX hand-emit)
+  no_c_transpile    = true  (@F f2 preserved — self/runtime.c untouched)
+  pure_ASCII        = true
+  ptxas_clean_arch  = ["sm_80", "sm_90", "sm_120(driver-JIT)"]

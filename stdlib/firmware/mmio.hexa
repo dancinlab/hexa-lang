@@ -1,0 +1,122 @@
+#!hexa strict
+// stdlib/firmware/mmio.hexa — MMIO access helpers + C-text emit
+//
+// @version 0.1.0
+// @stability phase-a (FIRMWARE.md G-F2 — library-level capability)
+// @authority FIRMWARE.md §4 G-F2 + RFC 063
+//
+// G-F2 library capability: emit the C text fragments that codegen
+// uses when it sees an `@mmio(addr, width, ordering=preserve)` on a
+// declaration. Pure string production — no codegen-side glue.
+//
+// The C fragment uses `volatile`-qualified pointers + explicit memory
+// barriers to defeat the optimiser's reorder/CSE/DCE on MMIO sites.
+// Per RFC 063 §5 step 2.
+
+// CLEAN-ROOM: emit a volatile load expression in C for the given
+// address + width. Used at every @mmio read site.
+fn mmio_emit_read(addr: str, width: int) -> str {
+    if width == 8  { return "(*(volatile unsigned char  *)(" + addr + "))" }
+    if width == 16 { return "(*(volatile unsigned short *)(" + addr + "))" }
+    if width == 32 { return "(*(volatile unsigned int   *)(" + addr + "))" }
+    if width == 64 { return "(*(volatile unsigned long long *)(" + addr + "))" }
+    return ""
+}
+
+// CLEAN-ROOM: emit a volatile store statement in C for the given
+// address + width.
+fn mmio_emit_write(addr: str, width: int, value: str) -> str {
+    let lhs = mmio_emit_read(addr, width)
+    if lhs == "" { return "" }
+    return lhs + " = (" + value + ");"
+}
+
+// CLEAN-ROOM: GCC compiler barrier — prevents the optimiser from
+// reordering memory ops across this point. Per `__asm__ volatile`
+// documentation (GCC 5.4+ Manual §6.47.2.6).
+fn mmio_emit_barrier() -> str {
+    return "__asm__ volatile (\"\" : : : \"memory\");"
+}
+
+// CLEAN-ROOM: helper for the codegen lane — emit an ordered read:
+// `(barrier; tmp = *mmio; barrier; tmp)`. Used when `ordering=preserve`
+// is in effect (only value G-F2 accepts in v1 per RFC 063 §4).
+fn mmio_emit_ordered_read(addr: str, width: int, tmp: str) -> str {
+    let b = mmio_emit_barrier()
+    let r = mmio_emit_read(addr, width)
+    return b + " " + tmp + " = " + r + "; " + b
+}
+
+fn mmio_supported_widths() -> [int] {
+    return [8, 16, 32, 64]
+}
+
+fn main() {
+    let mut fails = 0
+    let mut total = 0
+
+    total = total + 1
+    let r32 = mmio_emit_read("0x40000000", 32)
+    if r32.find("volatile unsigned int") < 0 {
+        println("FAIL T1 r32"); fails = fails + 1
+    }
+    if r32.find("0x40000000") < 0 {
+        println("FAIL T1b r32_addr"); fails = fails + 1
+    }
+
+    total = total + 1
+    let w8 = mmio_emit_write("0x40000004", 8, "0xFF")
+    if w8.find("volatile unsigned char") < 0 {
+        println("FAIL T2 w8"); fails = fails + 1
+    }
+    if w8.find("= (0xFF);") < 0 {
+        println("FAIL T2b w8_value"); fails = fails + 1
+    }
+
+    total = total + 1
+    let r16 = mmio_emit_read("UART_DR", 16)
+    if r16.find("volatile unsigned short") < 0 {
+        println("FAIL T3 r16"); fails = fails + 1
+    }
+
+    total = total + 1
+    let r64 = mmio_emit_read("0x60000000", 64)
+    if r64.find("volatile unsigned long long") < 0 {
+        println("FAIL T4 r64"); fails = fails + 1
+    }
+
+    total = total + 1
+    if mmio_emit_read("0x0", 24) != "" {
+        println("FAIL T5 unsupported_width"); fails = fails + 1
+    }
+
+    total = total + 1
+    let b = mmio_emit_barrier()
+    if b.find("__asm__ volatile") < 0 {
+        println("FAIL T6 barrier"); fails = fails + 1
+    }
+    if b.find("\"memory\"") < 0 {
+        println("FAIL T6b memory_clobber"); fails = fails + 1
+    }
+
+    total = total + 1
+    let ord = mmio_emit_ordered_read("0x40000010", 32, "tmp")
+    if ord.find("__asm__ volatile") < 0 {
+        println("FAIL T7 ordered_barrier"); fails = fails + 1
+    }
+    if ord.find("tmp = (*(volatile unsigned int   *)(0x40000010))") < 0 {
+        println("FAIL T7b ordered_read"); fails = fails + 1
+    }
+
+    total = total + 1
+    let widths = mmio_supported_widths()
+    if len(widths) != 4 {
+        println("FAIL T8 widths"); fails = fails + 1
+    }
+
+    if fails > 0 {
+        println("mmio selftest: " + str(total - fails) + "/" + str(total) + " — FAIL")
+        exit(1)
+    }
+    println("mmio selftest: " + str(total) + "/" + str(total) + " PASS")
+}

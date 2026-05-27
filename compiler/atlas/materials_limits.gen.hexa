@@ -1,0 +1,99 @@
+// absorbed from ~/core/hexa-matter/LIMIT_BREAKTHROUGH.md (MIT, hexa-matter v1.2.0, dancinlab 2026-05-14)
+//
+// compiler/atlas/materials_limits.gen.hexa — atlas @C rodata mirror of the
+// real-limits anchored in hexa-matter's Wave-M audit. Mirrors the 12-row
+// §2 table plus the per-limit numerical sub-rows from §3 (fibers, refractory
+// melting points, thermal conductivity, concrete grades, packing fraction).
+//
+// SSOT for the source markdown: ~/core/hexa-matter/LIMIT_BREAKTHROUGH.md.
+// Verbatim prose mirror: doc/atlas/materials_real_limits.md (BG-3 2026-05-14).
+// This file is the structured/auditable accessor surface for the same data.
+//
+// Each row is an AtlasNode of kind "C" with:
+//   id      — materials_limits.<slug>
+//   raw     — header `@C <id> = <value> :: materials_limits.<sub_cat> [<grade>]`
+//             plus continuation lines `formula:`, `value:`, `citation:`,
+//             `class:` carrying the HARD_WALL / SOFT_WALL / BREAKABLE_WITH_TECH
+//             / UNCLEAR taxonomy per compiler/lattice_policy/limit_class.hexa.
+//   grade   — heuristic: HARD_WALL → 11, SOFT_WALL → 10,
+//             BREAKABLE_WITH_TECH → 9, UNCLEAR → 7 (user-tunable).
+//
+// Regenerate via: hexa run tool/atlas_absorb_hexa_matter.hexa  (planned).
+// Until that tool lands this file is hand-curated against the source MD.
+
+use "compiler/atlas/parser"
+
+@phase("parse_only")
+pub let MATERIALS_LIMITS: [AtlasNode] = [
+    // L1 — Frenkel theoretical shear / tensile strength (HARD_WALL)
+    AtlasNode { kind: "C", id: "materials_limits.frenkel_shear", raw: "@C materials_limits.frenkel_shear = 20_GPa_for_steel :: materials_limits.strength [11]\n  formula: sigma_th ~ E / 10\n  value: 20 GPa (steel, E=200 GPa); generic: E/10\n  citation: Frenkel J., Z. Phys. 37, 572 (1926)\n  class: HARD_WALL", source_file: "LIMIT_BREAKTHROUGH.md", source_line: 22, grade: GradeInfo { value: 11, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } },
+
+    // L2 — Practical tensile strength (fibers, SOFT_WALL — CNT on path)
+    AtlasNode { kind: "C", id: "materials_limits.practical_strength_kevlar", raw: "@C materials_limits.practical_strength_kevlar = 3.6_GPa :: materials_limits.fiber_strength [10]\n  formula: tensile_strength(Kevlar_49)\n  value: 3.6 GPa (sigma); E=124 GPa; rho=1.44 g/cm^3\n  citation: CRC Handbook 105th ed.\n  class: SOFT_WALL", source_file: "LIMIT_BREAKTHROUGH.md", source_line: 23, grade: GradeInfo { value: 10, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } },
+    AtlasNode { kind: "C", id: "materials_limits.practical_strength_uhmwpe", raw: "@C materials_limits.practical_strength_uhmwpe = 3.9_GPa :: materials_limits.fiber_strength [10]\n  formula: tensile_strength(UHMWPE_Dyneema_SK99)\n  value: 3.9 GPa (sigma); E=132 GPa; rho=0.97 g/cm^3\n  citation: CRC Handbook 105th ed.\n  class: SOFT_WALL", source_file: "LIMIT_BREAKTHROUGH.md", source_line: 50, grade: GradeInfo { value: 10, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } },
+    AtlasNode { kind: "C", id: "materials_limits.practical_strength_carbon_fiber_t1100g", raw: "@C materials_limits.practical_strength_carbon_fiber_t1100g = 7.0_GPa :: materials_limits.fiber_strength [10]\n  formula: tensile_strength(Carbon_T1100G)\n  value: 7.0 GPa (sigma); E=324 GPa; rho=1.79 g/cm^3\n  citation: CRC Handbook 105th ed.\n  class: SOFT_WALL", source_file: "LIMIT_BREAKTHROUGH.md", source_line: 51, grade: GradeInfo { value: 10, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } },
+    AtlasNode { kind: "C", id: "materials_limits.practical_strength_cnt_yarn_lab", raw: "@C materials_limits.practical_strength_cnt_yarn_lab = 80_GPa :: materials_limits.fiber_strength [9]\n  formula: tensile_strength(CNT_yarn_1mm_lab)\n  value: 80 GPa (sigma); E=850 GPa; rho=1.4 g/cm^3\n  citation: Tsinghua / IBS lab fiber, hexa-matter L2 sub-table\n  class: BREAKABLE_WITH_TECH", source_file: "LIMIT_BREAKTHROUGH.md", source_line: 52, grade: GradeInfo { value: 9, verified: false, breakthrough: true, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } },
+    AtlasNode { kind: "C", id: "materials_limits.practical_strength_cnt_theory", raw: "@C materials_limits.practical_strength_cnt_theory = 100_to_150_GPa :: materials_limits.fiber_strength [11]\n  formula: tensile_strength(single_CNT_theoretical)\n  value: 100-150 GPa (sigma); E=1000 GPa; rho=1.4 g/cm^3\n  citation: hexa-matter L2 theoretical ceiling row\n  class: HARD_WALL", source_file: "LIMIT_BREAKTHROUGH.md", source_line: 53, grade: GradeInfo { value: 11, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } },
+
+    // L3 — Specific strength sigma/rho (SOFT_WALL toward CNT)
+    AtlasNode { kind: "C", id: "materials_limits.specific_strength_uhmwpe", raw: "@C materials_limits.specific_strength_uhmwpe = 3700_kN_m_per_kg :: materials_limits.specific_strength [10]\n  formula: sigma / rho\n  value: 3700 kN*m/kg (UHMWPE); Kevlar_49 ~2300; CNT_lab ~46000\n  citation: Ashby M.F., Materials Selection in Mechanical Design 5th ed. (2017)\n  class: SOFT_WALL", source_file: "LIMIT_BREAKTHROUGH.md", source_line: 24, grade: GradeInfo { value: 10, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } },
+    AtlasNode { kind: "C", id: "materials_limits.specific_strength_cnt_theory", raw: "@C materials_limits.specific_strength_cnt_theory = 1e8_N_m_per_kg :: materials_limits.specific_strength [11]\n  formula: sigma_th / rho (theoretical CNT fiber)\n  value: ~1e8 N*m/kg (~30x current UHMWPE headroom)\n  citation: Ashby M.F., hexa-matter §3 L3\n  class: HARD_WALL", source_file: "LIMIT_BREAKTHROUGH.md", source_line: 59, grade: GradeInfo { value: 11, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } },
+
+    // L4 — Mohs hardness 10 / diamond (HARD_WALL effective)
+    AtlasNode { kind: "C", id: "materials_limits.mohs_diamond", raw: "@C materials_limits.mohs_diamond = 10 :: materials_limits.hardness [11]\n  formula: Mohs_hardness(diamond)\n  value: 10 (scale ceiling); 19th-century empirical scale\n  citation: Mohs F., Versuch einer Elementar-Methode zur naturhistorischen Bestimmung (1812)\n  class: HARD_WALL", source_file: "LIMIT_BREAKTHROUGH.md", source_line: 25, grade: GradeInfo { value: 11, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } },
+    AtlasNode { kind: "C", id: "materials_limits.hardness_vickers_diamond", raw: "@C materials_limits.hardness_vickers_diamond = 70_to_100_GPa :: materials_limits.hardness [11]\n  formula: Vickers_hardness(diamond)\n  value: 70-100 GPa; lonsdaleite_calc ~150 GPa; w-BN_calc ~85 GPa\n  citation: Pan Z. et al., PRL 102, 055503 (2009)\n  class: HARD_WALL", source_file: "LIMIT_BREAKTHROUGH.md", source_line: 63, grade: GradeInfo { value: 11, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } },
+
+    // L5 — Refractory melting points (HARD_WALL — bond energy)
+    AtlasNode { kind: "C", id: "materials_limits.melting_point_w", raw: "@C materials_limits.melting_point_w = 3695_K :: materials_limits.melting_point [11]\n  formula: T_m(W)\n  value: 3695 K (tungsten)\n  citation: NIST WebBook\n  class: HARD_WALL", source_file: "LIMIT_BREAKTHROUGH.md", source_line: 69, grade: GradeInfo { value: 11, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } },
+    AtlasNode { kind: "C", id: "materials_limits.melting_point_hfc", raw: "@C materials_limits.melting_point_hfc = 4201_K :: materials_limits.melting_point [11]\n  formula: T_m(HfC)\n  value: 4201 K (hafnium carbide)\n  citation: CRC Handbook 105th ed.\n  class: HARD_WALL", source_file: "LIMIT_BREAKTHROUGH.md", source_line: 71, grade: GradeInfo { value: 11, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } },
+    AtlasNode { kind: "C", id: "materials_limits.melting_point_tahfc_alloy", raw: "@C materials_limits.melting_point_tahfc_alloy = 4215_K :: materials_limits.melting_point [11]\n  formula: T_m(Ta4HfC5_alloy)\n  value: 4215 K (max measured refractory; covalent ceiling ~5000 K)\n  citation: Cedillos-Barraza O. et al., Sci. Rep. 6, 37962 (2016)\n  class: HARD_WALL", source_file: "LIMIT_BREAKTHROUGH.md", source_line: 73, grade: GradeInfo { value: 11, verified: true, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } },
+
+    // L6 — Density Os (HARD_WALL on stable matter)
+    AtlasNode { kind: "C", id: "materials_limits.os_density", raw: "@C materials_limits.os_density = 22.59_g_per_cm3 :: materials_limits.density [11]\n  formula: rho(Os)\n  value: 22.59 g/cm^3 (densest stable element)\n  citation: NIST WebBook\n  class: HARD_WALL", source_file: "LIMIT_BREAKTHROUGH.md", source_line: 27, grade: GradeInfo { value: 11, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } },
+
+    // L7 — Glass transition T_g (SOFT_WALL — compositional)
+    AtlasNode { kind: "C", id: "materials_limits.glass_transition_silica", raw: "@C materials_limits.glass_transition_silica = 1473_K :: materials_limits.glass_transition [10]\n  formula: T_g(SiO2_glass)\n  value: ~1473 K (silica); empirical, no hard floor\n  citation: textbook (Ashby; CRC Handbook)\n  class: SOFT_WALL", source_file: "LIMIT_BREAKTHROUGH.md", source_line: 28, grade: GradeInfo { value: 10, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } },
+
+    // L8 — Concrete compressive strength (SOFT_WALL → UHPC)
+    AtlasNode { kind: "C", id: "materials_limits.concrete_uhpc", raw: "@C materials_limits.concrete_uhpc = 200_to_800_MPa :: materials_limits.compressive_strength [10]\n  formula: sigma_c(UHPC_Ductal_Cor-Tuf)\n  value: 200-800 MPa (UHPC); ordinary ~30 MPa; HPC ~80 MPa\n  citation: ACI 318 Building Code Requirements for Structural Concrete (2019)\n  class: SOFT_WALL", source_file: "LIMIT_BREAKTHROUGH.md", source_line: 29, grade: GradeInfo { value: 10, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } },
+    AtlasNode { kind: "C", id: "materials_limits.concrete_theoretical", raw: "@C materials_limits.concrete_theoretical = 2000_MPa :: materials_limits.compressive_strength [11]\n  formula: sigma_c(perfect_C-S-H_microstructure)\n  value: ~2000 MPa (theoretical, no flaw)\n  citation: hexa-matter §3 L8 theoretical ceiling row\n  class: HARD_WALL", source_file: "LIMIT_BREAKTHROUGH.md", source_line: 93, grade: GradeInfo { value: 11, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } },
+
+    // L9 — Thermal conductivity k_max (SOFT_WALL near HARD ceiling)
+    AtlasNode { kind: "C", id: "materials_limits.diamond_thermal_k", raw: "@C materials_limits.diamond_thermal_k = 2200_W_per_m_K :: materials_limits.thermal_conductivity [11]\n  formula: k(diamond_natural)\n  value: 2200 W/m*K (natural-isotope diamond)\n  citation: NIST WebBook\n  class: HARD_WALL", source_file: "LIMIT_BREAKTHROUGH.md", source_line: 30, grade: GradeInfo { value: 11, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } },
+    AtlasNode { kind: "C", id: "materials_limits.c12_diamond_thermal_k", raw: "@C materials_limits.c12_diamond_thermal_k = 3300_W_per_m_K :: materials_limits.thermal_conductivity [10]\n  formula: k(12C_isotopically_pure_diamond)\n  value: 3300 W/m*K (~50% over natural diamond)\n  citation: Wei L. et al., PRL 70, 3764 (1993)\n  class: SOFT_WALL", source_file: "LIMIT_BREAKTHROUGH.md", source_line: 104, grade: GradeInfo { value: 10, verified: true, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } },
+    AtlasNode { kind: "C", id: "materials_limits.graphene_thermal_k", raw: "@C materials_limits.graphene_thermal_k = 5000_W_per_m_K :: materials_limits.thermal_conductivity [11]\n  formula: k(graphene_single_layer_lab)\n  value: 5000 W/m*K (single-layer lab); covalent-solid Debye ceiling class\n  citation: hexa-matter §3 L9 graphene row\n  class: HARD_WALL", source_file: "LIMIT_BREAKTHROUGH.md", source_line: 106, grade: GradeInfo { value: 11, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } },
+
+    // L10 — Stefan-Boltzmann radiator floor (HARD_WALL)
+    AtlasNode { kind: "C", id: "materials_limits.stefan_boltzmann_floor", raw: "@C materials_limits.stefan_boltzmann_floor = sigma_times_T4 :: materials_limits.radiation [11]\n  formula: P/A >= sigma * T^4 (epsilon=1)\n  value: cannot radiate less than sigma*T^4 at temperature T\n  citation: NIST (cross-ref hexa-physics L7)\n  class: HARD_WALL", source_file: "LIMIT_BREAKTHROUGH.md", source_line: 31, grade: GradeInfo { value: 11, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } },
+
+    // L11 — Atomic packing fraction (HARD_WALL Hales 2017)
+    AtlasNode { kind: "C", id: "materials_limits.hales_packing", raw: "@C materials_limits.hales_packing = 0.7405 :: materials_limits.packing_fraction [11]\n  formula: pi / (3 * sqrt(2)) for FCC / HCP\n  value: 0.74048 (Kepler conjecture, formal proof Hales 2017)\n  citation: Hales T.C., Forum Math. Pi 5, e2 (2017)\n  class: HARD_WALL", source_file: "LIMIT_BREAKTHROUGH.md", source_line: 32, grade: GradeInfo { value: 11, verified: true, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } },
+    AtlasNode { kind: "C", id: "materials_limits.random_close_pack_bidisperse", raw: "@C materials_limits.random_close_pack_bidisperse = 0.85 :: materials_limits.packing_fraction [9]\n  formula: random_close_pack(bidisperse_spheres)\n  value: ~0.85 (non-identical / non-spherical can exceed 0.7405)\n  citation: hexa-matter §3 L11 note\n  class: BREAKABLE_WITH_TECH", source_file: "LIMIT_BREAKTHROUGH.md", source_line: 114, grade: GradeInfo { value: 9, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } },
+
+    // L12 — Gibbs entropy of mixing (HARD_WALL recycling)
+    AtlasNode { kind: "C", id: "materials_limits.gibbs_entropy_mixing", raw: "@C materials_limits.gibbs_entropy_mixing = k_times_sum_n_ln_x :: materials_limits.thermodynamics [11]\n  formula: dS_mix >= k * sum_i (n_i * ln(x_i))\n  value: polymer/alloy recycling cannot be cheaper than k*T per separated mole\n  citation: Gibbs J.W. (classical); ACI; CRC Handbook\n  class: HARD_WALL", source_file: "LIMIT_BREAKTHROUGH.md", source_line: 33, grade: GradeInfo { value: 11, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } }
+]
+
+// --- accessors ------------------------------------------------------------
+
+pub fn materials_limits() -> [AtlasNode] { return MATERIALS_LIMITS }
+
+pub fn materials_limits_count() -> i64 { return len(MATERIALS_LIMITS) }
+
+// materials_limits_by_class — linear scan over MATERIALS_LIMITS, filter on
+// the `class: <CLS>` continuation line in each node's raw payload.
+// Accepts the canonical 4 LimitClass tags ("HARD_WALL", "SOFT_WALL",
+// "BREAKABLE_WITH_TECH", "UNCLEAR"); unrecognized inputs return [].
+pub fn materials_limits_by_class(cls: string) -> [AtlasNode] {
+    let needle = "class: " + cls
+    let nodes = MATERIALS_LIMITS
+    let n = len(nodes)
+    let out = []
+    let mut i = 0
+    while i < n {
+        let node = nodes[i]
+        if node.raw.contains(needle) { out.push(node) }
+        i = i + 1
+    }
+    return out
+}

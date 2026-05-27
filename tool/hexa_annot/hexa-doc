@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+# hexa-doc — render @doc annotations + adjacent fn signatures as markdown
+# (AST-backed; replaces the awk grep MVP).
+#
+# Usage:
+#   hexa-doc <file.hexa> [<file2.hexa> ...]
+#   hexa-doc --dir <directory>
+#
+# Each @doc record `@doc(section="<s>", body="<b>")` attaches to the next
+# fn decl. Records grouped by section, second-level heading per fn name.
+set -eu
+
+usage() {
+    cat >&2 <<EOF
+usage:
+  hexa-doc <file.hexa> [<file2.hexa> ...]
+  hexa-doc --dir <directory>
+EOF
+    exit 2
+}
+
+case "${1:-}" in
+    -h|--help|"") usage ;;
+esac
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+. "${SCRIPT_DIR}/_ast_extract.sh"
+
+if ! resolve_files "$@"; then exit 1; fi
+if [ ${#FILES[@]} -eq 0 ]; then
+    echo "hexa-doc: no .hexa files found" >&2
+    exit 1
+fi
+
+# infer project name from first file path
+infer_project() {
+    local p="$1"
+    case "$p" in
+        */nexus/*)     echo "nexus"; return ;;
+        */hexa-lang/*) echo "hexa-lang"; return ;;
+        */Dev/*/*)     local tail="${p#*/Dev/}"; echo "${tail%%/*}"; return ;;
+    esac
+    local d
+    d=$(dirname "$p")
+    echo "$(basename "$d")"
+}
+
+PROJECT=$(infer_project "${FILES[0]}")
+printf '# hexa-doc: %s\n\n' "$PROJECT"
+
+run_ast_extract | awk '
+function decode_esc(s,   out, i, n, c, nc) {
+    out = ""; n = length(s); i = 1
+    while (i <= n) {
+        c = substr(s, i, 1)
+        if (c == "\\" && i < n) {
+            nc = substr(s, i + 1, 1)
+            if (nc == "n")  { out = out "\n"; i += 2; continue }
+            if (nc == "r")  { out = out "\r"; i += 2; continue }
+            if (nc == "t")  { out = out "\t"; i += 2; continue }
+            if (nc == "\\") { out = out "\\"; i += 2; continue }
+        }
+        out = out c; i++
+    }
+    return out
+}
+function kv_extract(raw, key,    s, pat, pos, rest, val, n, i, c, nc) {
+    s = raw
+    pat = "(^|[ \\t,(])" key "[ \\t]*[=:][ \\t]*"
+    pos = match(s, pat)
+    if (pos == 0) return ""
+    rest = substr(s, pos + RLENGTH)
+    sub(/^[ \t]+/, "", rest)
+    if (substr(rest, 1, 1) == "\"") {
+        val = ""; i = 2; n = length(rest)
+        while (i <= n) {
+            c = substr(rest, i, 1)
+            if (c == "\\" && i < n) {
+                nc = substr(rest, i + 1, 1)
+                if (nc == "\"") { val = val "\""; i += 2; continue }
+                if (nc == "\\") { val = val "\\"; i += 2; continue }
+                val = val c; i++; continue
+            }
+            if (c == "\"") break
+            val = val c; i++
+        }
+        return val
+    }
+    if (match(rest, /[,)[:space:]]/)) return substr(rest, 1, RSTART - 1)
+    return rest
+}
+BEGIN { FS = "\t"; n_records = 0 }
+/^# error\t/ { next }
+{
+    kind = $1; tgtk = $2; fn = $3; file = $4; line = $5; raw = decode_esc($6)
+    if (kind != "doc") next
+    sec  = kv_extract(raw, "section")
+    body = kv_extract(raw, "body")
+    if (sec == "") sec = "_unsectioned"
+    n_records++
+    rec_sec[n_records]  = sec
+    rec_fn[n_records]   = fn
+    rec_body[n_records] = body
+    if (!(sec in seen)) { seen[sec] = 1; order[++n_sec] = sec }
+}
+END {
+    for (i = 1; i <= n_sec; i++) {
+        sec = order[i]
+        printf "## %s\n\n", sec
+        prev_fn = ""
+        for (j = 1; j <= n_records; j++) {
+            if (rec_sec[j] != sec) continue
+            if (rec_fn[j] != prev_fn) {
+                printf "### %s\n\n", rec_fn[j]
+                prev_fn = rec_fn[j]
+            }
+            printf "%s\n\n", rec_body[j]
+        }
+        printf "---\n\n"
+    }
+}'

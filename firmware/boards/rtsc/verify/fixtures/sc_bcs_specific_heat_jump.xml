@@ -1,0 +1,95 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<feed xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/" xmlns:arxiv="http://arxiv.org/schemas/atom" xmlns="http://www.w3.org/2005/Atom">
+  <id>https://arxiv.org/api/Z8m2AIsmZ8HmkPJT1k9uLNAeaXs</id>
+  <title>arXiv Query: search_query=all:BCS OR all:specific OR all:heat OR all:jump OR all:gamma OR all:Tc&amp;id_list=&amp;start=0&amp;max_results=3</title>
+  <updated>2026-05-07T20:53:31Z</updated>
+  <link href="https://arxiv.org/api/query?search_query=all:BCS+OR+(all:specific+OR+(all:heat+OR+(all:jump+OR+(all:gamma+OR+all:Tc))))&amp;start=0&amp;max_results=3&amp;id_list=" type="application/atom+xml"/>
+  <opensearch:itemsPerPage>3</opensearch:itemsPerPage>
+  <opensearch:totalResults>398793</opensearch:totalResults>
+  <opensearch:startIndex>0</opensearch:startIndex>
+  <entry>
+    <id>http://arxiv.org/abs/astro-ph/0611030v1</id>
+    <title>Underground Water Cherenkov Muon Detector Array with the Tibet Air Shower Array for Gamma-Ray Astronomy in the 100 TeV Region</title>
+    <updated>2006-11-01T18:24:49Z</updated>
+    <link href="https://arxiv.org/abs/astro-ph/0611030v1" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/astro-ph/0611030v1" rel="related" type="application/pdf" title="pdf"/>
+    <summary>  We propose to build a large water-Cherenkov-type muon-detector array (Tibet MD array) around the 37,000 m$^{2}$ Tibet air shower array (Tibet AS array) already constructed at 4,300 m above sea level in Tibet, China. Each muon detector is a waterproof concrete pool, 6 m wide $\times$ 6 m long $\times$ 1.5 m deep in size, equipped with a 20 inch-in-diameter PMT. The Tibet MD array consists of 240 muon detectors set up 2.5 m underground. Its total effective area will be 8,640 m$^{2}$ for muon detection. The Tibet MD array will significantly improve gamma-ray sensitivity of the Tibet AS array in the 100 TeV region (10-1000 TeV) by means of gamma/hadron separation based on counting the number of muons accompanying an air shower. The Tibet AS+MD array will have the sensitivity to gamma rays in the 100 TeV region by an order of magnitude better than any other previous existing detectors in the world.</summary>
+    <category term="astro-ph" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2006-11-01T18:24:49Z</published>
+    <arxiv:comment>4 pages, 4 figures, Accepted for publication in Astrophysics and Space Science, proceeding of "The Multi-Messenger Approach to High-Energy Gamma-Ray Sources", Barcelona, July 4-7, 2006</arxiv:comment>
+    <arxiv:primary_category term="astro-ph"/>
+    <arxiv:journal_ref>Astrophys.Space Sci.309:435-439,2007</arxiv:journal_ref>
+    <author>
+      <name> The Tibet AS Gamma Collaboration</name>
+    </author>
+    <author>
+      <name>M. Amenomori</name>
+    </author>
+    <arxiv:doi>10.1007/s10509-007-9395-x</arxiv:doi>
+    <link rel="related" href="https://doi.org/10.1007/s10509-007-9395-x" title="doi"/>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/1110.6357v2</id>
+    <title>Specific heat and upper critical field in KFe2As2 single crystals</title>
+    <updated>2012-03-14T17:38:19Z</updated>
+    <link href="https://arxiv.org/abs/1110.6357v2" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/1110.6357v2" rel="related" type="application/pdf" title="pdf"/>
+    <summary>We report low-temperature specific heat measurements for high-quality single crystalline KFe2As2 (T_c about 3.5 K). The investigated zero-field specific heat data yields an unusually large nominal Sommerfeld coefficient gamma_n of 94(3) mJ/mol K^2 which is however significantly affected by extrinsic contributions as evidenced by a sizable residual linear specific heat and various theoretical considerations including also an analysis of Kadowaki-Woods relations. Then KFe2As2 should be classified as a weak to intermediately strong coupling superconductor with a total electron-boson coupling constant lambda_tot near 1 (including a calculated weak electron-phonon coupling constant of lambda_el-ph =0.17. From specific heat and ac susceptibility studies in external magnetic fields the magnetic phase diagram has been constructed. We confirm the high anisotropy of the upper critical fields B_c2(T) ranging from a factor of 5 near T_c to a slightly reduced value approaching T=0 for fields B || ab$ and || c and show that their ratio Gamma slightly exceeds the mass anisotropy of 4.35 derived from our full-relativistic LDA-band structure calculations. Its slight reduction when approaching T=0 is not a consequence of Pauli-limiting as in less perfect samples but point likely to a multiband effect. We also report irreversibility field data obtained from ac susceptibility measurements. The double-maximum in the T-dependence of its imaginary part for fields B || c indicates a peak-effect in the T-dependence of critical currents.</summary>
+    <category term="cond-mat.supr-con" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2011-10-28T14:56:13Z</published>
+    <arxiv:comment>12 pages, 8 fiqures (2 new figures) specific heat raw-data corrected, estimates for a reduced electronic specific heat added, extended theoretical analysis, 2 new authors included</arxiv:comment>
+    <arxiv:primary_category term="cond-mat.supr-con"/>
+    <author>
+      <name>M. Abdel-Hafiez</name>
+    </author>
+    <author>
+      <name>S. Aswartham</name>
+    </author>
+    <author>
+      <name>S. Wurmehl</name>
+    </author>
+    <author>
+      <name>V. Grinenko</name>
+    </author>
+    <author>
+      <name>S. -L. Drechsler</name>
+    </author>
+    <author>
+      <name>S. Johnston</name>
+    </author>
+    <author>
+      <name>A. U. B. Wolter</name>
+    </author>
+    <author>
+      <name>B. Buechner</name>
+    </author>
+    <author>
+      <name>H. Rosner</name>
+    </author>
+    <arxiv:doi>10.1103/PhysRevB.85.134533</arxiv:doi>
+    <link rel="related" href="https://doi.org/10.1103/PhysRevB.85.134533" title="doi"/>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/cond-mat/0209192v1</id>
+    <title>Influence of the van Hove singularity on the specific heat jump in BCS superconductors</title>
+    <updated>2002-09-08T17:34:39Z</updated>
+    <link href="https://arxiv.org/abs/cond-mat/0209192v1" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/cond-mat/0209192v1" rel="related" type="application/pdf" title="pdf"/>
+    <summary>  Within the weak-coupling BCS scheme we derive a general form of the coefficients in the Ginzburg-Landau expansion of the free energy of a superconductor for the case of a Fermi level close to a van Hove singularity (VHS). A simple expression for the influence of the VHS on the specific heat jump is then obtained for the case where gaps for different bands are distinct but nearly constant at the corresponding sheets of the Fermi surface.</summary>
+    <category term="cond-mat.supr-con" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2002-09-08T17:34:39Z</published>
+    <arxiv:comment>8 pages, 2 figures, LaTeX2e</arxiv:comment>
+    <arxiv:primary_category term="cond-mat.supr-con"/>
+    <author>
+      <name>T. Mishonov</name>
+    </author>
+    <author>
+      <name>S. -L. Drechsler</name>
+    </author>
+    <author>
+      <name>E. Penev</name>
+    </author>
+    <arxiv:doi>10.1142/S0217984903005299</arxiv:doi>
+    <link rel="related" href="https://doi.org/10.1142/S0217984903005299" title="doi"/>
+  </entry>
+</feed>

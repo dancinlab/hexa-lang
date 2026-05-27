@@ -1,0 +1,297 @@
+#!hexa strict
+// hexa-chip/verify/numerics_gpgpu_projection.hexa — F-CHIP-5 (Phase F).
+//
+// Falsifier F-CHIP-5 (.roadmap §F.4): vendor-agnostic GPGPU 6-axis
+// projection sufficiency. A single KernelDescriptor (axes 1–6 + IR
+// bytes) projects mechanically onto all 6 ecosystems (CUDA / HIP /
+// SYCL / OpenCL / Metal / WebGPU) without losing information.
+//
+// canon: ~/core/canon/domains/compute/gpgpu/gpgpu.md @47c70cbf
+//
+// Predictions (n=6 closed-form):
+//   - 6 invariant axes per launch (§4 STRUCT)
+//   - τ=4 memory tiers (private / group / device / constant)
+//   - φ=2 IR substrates (SPIR-V ‖ PTX)
+//   - J₂′ = 6 vendors × 4 stages × 2 modes = 48 (lattice cardinality)
+//   - same KernelDescriptor → 6 distinct host launch sites (no two equal)
+
+use "stdlib/hal/compute"
+use "gpgpu_n6/projection/cuda"
+use "gpgpu_n6/projection/hip"
+use "gpgpu_n6/projection/sycl"
+use "gpgpu_n6/projection/opencl"
+use "gpgpu_n6/projection/metal"
+use "gpgpu_n6/projection/webgpu"
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+fn _contains(haystack: str, needle: str) -> bool {
+    if needle.len() == 0 { return true }
+    if haystack.len() < needle.len() { return false }
+    let last = haystack.len() - needle.len()
+    let mut i = 0
+    while i <= last {
+        let mut j = 0
+        let mut hit = true
+        while j < needle.len() {
+            if haystack.charCodeAt(i + j) != needle.charCodeAt(j) {
+                hit = false
+                j = needle.len()
+            } else {
+                j = j + 1
+            }
+        }
+        if hit { return true }
+        i = i + 1
+    }
+    return false
+}
+
+let N = 1048576   // 2^20 elements
+
+// ── canonical KernelDescriptor for vector_add ────────────────────────
+//   axis 1 (grid):       (N/256, 1, 1)
+//   axis 2 (workgroup):  (256, 1, 1)
+//   axis 3 (mem-tier):   a/b = TIER_DEVICE, c = TIER_DEVICE
+//   axis 4 (barrier):    SCOPE_WORKGROUP (none needed for stateless add,
+//                        but workgroup is the conservative default)
+//   axis 5 (launch-dep): -1 (no dep)
+//   axis 6 (subgroup):   0 (vendor default)
+let GRID_X       = N / 256
+let GRID_Y       = 1
+let GRID_Z       = 1
+let WG_X         = 256
+let WG_Y         = 1
+let WG_Z         = 1
+let BARRIER      = 1   // SCOPE_WORKGROUP
+let SUBGROUP_W   = 0   // vendor default
+
+// ── collect 6 projections ─────────────────────────────────────────────
+let SURFACES = [
+    cuda_project_vector_add(N),
+    hip_project_vector_add(N),
+    sycl_project_vector_add(N),
+    opencl_project_vector_add(N),
+    metal_project_vector_add(N),
+    webgpu_project_vector_add(N)
+]
+
+let META = [
+    cuda_meta(),
+    hip_meta(),
+    sycl_meta(),
+    opencl_meta(),
+    metal_meta(),
+    webgpu_meta()
+]
+
+let VENDOR_NAMES = ["CUDA", "HIP", "SYCL", "OpenCL", "Metal", "WebGPU"]
+
+// ── checks ────────────────────────────────────────────────────────────
+
+fn check_invariant_axes() {
+    let n = compute_invariant_axes()
+    _check(n == 6,
+           "stdlib/hal/compute reports n=6 invariant axes",
+           "got " + str(n))
+}
+
+fn check_invariant_tiers() {
+    let n = compute_invariant_tiers()
+    _check(n == 4,
+           "stdlib/hal/compute reports τ=4 memory tiers",
+           "got " + str(n))
+}
+
+fn check_invariant_irs() {
+    let n = compute_invariant_irs()
+    _check(n == 2,
+           "stdlib/hal/compute reports φ=2 IR substrates",
+           "got " + str(n))
+}
+
+fn check_invariant_vendors() {
+    let n = compute_invariant_vendors()
+    _check(n == 6,
+           "stdlib/hal/compute reports 6 vendor backends",
+           "got " + str(n))
+}
+
+fn check_J2_prime_lattice() {
+    let j2p = compute_invariant_J2_prime()
+    _check(j2p == 48,
+           "J₂′ = 6 vendors × 4 stages × 2 modes = 48",
+           "got " + str(j2p))
+}
+
+fn check_six_surfaces_emit() {
+    _check(SURFACES.len() == 6,
+           "6 vendor projections produced 6 launch surfaces",
+           "got " + str(SURFACES.len()))
+    let mut empty = 0
+    for s in SURFACES { if s.len() == 0 { empty = empty + 1 } }
+    _check(empty == 0,
+           "every vendor surface is non-empty",
+           "empty count = " + str(empty))
+}
+
+fn check_six_surfaces_distinct() {
+    // n=6 projection sufficiency: same KernelDescriptor → 6 distinct surfaces.
+    let mut dup = 0
+    let mut i = 0
+    while i < SURFACES.len() {
+        let mut j = i + 1
+        while j < SURFACES.len() {
+            if SURFACES[i] == SURFACES[j] { dup = dup + 1 }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    _check(dup == 0,
+           "no two vendor surfaces collide (6 distinct projections)",
+           "duplicate-pairs = " + str(dup))
+}
+
+fn check_vendor_markers() {
+    // Each surface must mention a vendor-distinctive marker.
+    let cuda_ok    = _contains(SURFACES[0], "<<<")
+    let hip_ok     = _contains(SURFACES[1], "hipLaunchKernelGGL")
+    let sycl_ok    = _contains(SURFACES[2], "parallel_for")
+    let opencl_ok  = _contains(SURFACES[3], "clEnqueueNDRangeKernel")
+    let metal_ok   = _contains(SURFACES[4], "dispatchThreads")
+    let webgpu_ok  = _contains(SURFACES[5], "dispatchWorkgroups")
+    _check(cuda_ok,   "CUDA surface contains '<<<' launch syntax", "")
+    _check(hip_ok,    "HIP surface contains 'hipLaunchKernelGGL'", "")
+    _check(sycl_ok,   "SYCL surface contains 'parallel_for'", "")
+    _check(opencl_ok, "OpenCL surface contains 'clEnqueueNDRangeKernel'", "")
+    _check(metal_ok,  "Metal surface contains 'dispatchThreads'", "")
+    _check(webgpu_ok, "WebGPU surface contains 'dispatchWorkgroups'", "")
+}
+
+fn check_meta_completeness() {
+    // meta() = [VENDOR, IR, LATEST, capability_count]
+    let mut bad = 0
+    for m in META {
+        if m.len() != 4 { bad = bad + 1 }
+        if m[0].len() == 0 { bad = bad + 1 }
+        if m[1].len() == 0 { bad = bad + 1 }
+        if m[2].len() == 0 { bad = bad + 1 }
+        if int(m[3]) <= 0 { bad = bad + 1 }
+    }
+    _check(bad == 0,
+           "all 6 meta tuples have 4 fields (vendor/IR/latest/cap-count)",
+           "bad-fields = " + str(bad))
+}
+
+fn check_ir_substrate_coverage() {
+    // φ=2 IR sufficiency: each vendor must lower to SPIR-V or PTX (or a
+    // vendor-IR that has a documented translator to one of the two).
+    // Per canon §3 cross-translation matrix, AIR ↔ SPIR-V (translator)
+    // and PTX is CUDA-native. AMDGCN is via LLVM IR, accessible from SPIR-V.
+    // WGSL routes to SPIR-V via Tint. So all 6 are covered by {SPIR-V, PTX}.
+    let mut covered = 0
+    for m in META {
+        let ir = m[1]
+        if _contains(ir, "PTX") || _contains(ir, "SPIR-V") || _contains(ir, "AIR") || _contains(ir, "WGSL") || _contains(ir, "AMDGCN") || _contains(ir, "LLVM") {
+            covered = covered + 1
+        }
+    }
+    _check(covered == 6,
+           "all 6 vendors lower to {SPIR-V, PTX} (transitively)",
+           "covered = " + str(covered))
+}
+
+fn check_compute_dispatch_handle() {
+    // Sanity: stdlib/hal/compute can synthesize a kernel + buffer + dispatch.
+    let buf_a = compute_buffer_alloc(2, N * 4)   // TIER_DEVICE, fp32
+    let buf_b = compute_buffer_alloc(2, N * 4)
+    let buf_c = compute_buffer_alloc(2, N * 4)
+    _check(buf_a >= 0 && buf_b >= 0 && buf_c >= 0,
+           "compute_buffer_alloc × 3 (device tier, " + str(N * 4) + " bytes each)",
+           "h=[" + str(buf_a) + "," + str(buf_b) + "," + str(buf_c) + "]")
+    // Pretend kernel = 256-byte SPIR-V blob.
+    let kern = compute_kernel_compile(0, 256)
+    _check(kern >= 0, "compute_kernel_compile (SPIR-V, 256 bytes)", "h=" + str(kern))
+    let ev = compute_dispatch(2, kern, GRID_X, GRID_Y, GRID_Z, WG_X, WG_Y, WG_Z, BARRIER, -1, SUBGROUP_W)
+    _check(ev >= 0, "compute_dispatch (SYCL, vector_add params)", "ev=" + str(ev))
+    let waited = compute_event_wait(ev)
+    _check(waited, "compute_event_wait OK", "")
+    compute_event_release(ev)
+    compute_kernel_release(kern)
+    compute_buffer_free(buf_a)
+    compute_buffer_free(buf_b)
+    compute_buffer_free(buf_c)
+}
+
+let FALSIFIERS = [
+    "F-CHIP-5  : KernelDescriptor → 6 surfaces — any vendor fails to emit",
+    "F-CHIP-5a : memory tier outside τ=4 (5th tier needed)",
+    "F-CHIP-5b : kernel that lowers to neither SPIR-V nor PTX",
+    "F-CHIP-5c : kernel launch needing a 7th invariant axis",
+    "F-CHIP-5d : two vendor surfaces collide (projection ambiguity)"
+]
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-chip — Phase F iter 4: GPGPU projection (F-CHIP-5)")
+    println("========================================================================")
+    println("")
+    println("  Canonical KernelDescriptor: vector_add (N=" + str(N) + ", fp32)")
+    println("    grid      = (" + str(GRID_X) + ", " + str(GRID_Y) + ", " + str(GRID_Z) + ")")
+    println("    workgroup = (" + str(WG_X) + ", " + str(WG_Y) + ", " + str(WG_Z) + ")")
+    println("    barrier   = SCOPE_WORKGROUP")
+    println("    sub-group = vendor default")
+    println("")
+
+    check_invariant_axes()
+    check_invariant_tiers()
+    check_invariant_irs()
+    check_invariant_vendors()
+    check_J2_prime_lattice()
+    check_six_surfaces_emit()
+    check_six_surfaces_distinct()
+    check_vendor_markers()
+    check_meta_completeness()
+    check_ir_substrate_coverage()
+    check_compute_dispatch_handle()
+
+    println("")
+    println("  6-vendor surface emission:")
+    let mut i = 0
+    while i < SURFACES.len() {
+        println("    [" + VENDOR_NAMES[i] + "] " + SURFACES[i])
+        i = i + 1
+    }
+
+    println("")
+    println("  6-vendor meta (vendor / IR / latest / capability count):")
+    i = 0
+    while i < META.len() {
+        let m = META[i]
+        println("    " + m[0] + "  ·  IR=" + m[1] + "  ·  " + m[2] + "  ·  caps=" + m[3])
+        i = i + 1
+    }
+
+    let pass_n = RUN - FAIL
+
+    println("")
+    println("  FALSIFIERS (" + str(FALSIFIERS.len()) + "):")
+    for f in FALSIFIERS { println("    ✗ " + f) }
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_CHIP_GPGPU_PROJECTION__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_CHIP_GPGPU_PROJECTION__ PASS — F-CHIP-5 6-vendor projection OK")
+    exit(0)
+}

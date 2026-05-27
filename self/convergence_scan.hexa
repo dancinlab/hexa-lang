@@ -1,0 +1,813 @@
+// ═══════════════════════════════════════════════════════════
+//  self/convergence_scan.hexa — source-embedded convergence metadata scanner
+//
+//  목적: shared/convergence/<project>.json 을 소스 내부 주석
+//        (@convergence-start ... @convergence-end) 로 대체. 본 스크립트는
+//        파일을 라인 기반 스캔해서 블록을 수집하고 JSON 으로 덤프한다.
+//
+//  사용:
+//    hexa convergence dump <file>        — 전체 블록 + meta 를 JSON 출력
+//    hexa convergence dump-meta <file>   — @convergence-meta 블록만 출력
+//
+//  ── 형식 A: 멀티라인 블록 (레거시, 역호환) ──
+//    # @convergence-start
+//    # state: ossified
+//    # id: LAUNCHD_PATH_HARDENED
+//    # value: plist EnvironmentVariables.PATH 선두에 ...
+//    # threshold: refresh_via_cli cron 정상화
+//    # rationale: 2026-04-15 재발 사고
+//    # ossified_at: 2026-04-15
+//    # ref_commit: dba4246f
+//    # @convergence-end
+//
+//  ── 형식 B: 단일행 @convergence (comment — .md 등) ──
+//    # @convergence state=ossified id=LAUNCHD_PATH_HARDENED value="plist ..." threshold="refresh_via_cli"
+//
+//    규칙:
+//      - `@convergence ` (뒤 공백 필수) 감지 → key=value 쌍 파싱
+//      - value 에 공백/쉼표 포함 시 `"..."` 인용
+//      - 필수 키: state, id
+//      - 허용 상태: ossified | stable | in_flight | pending | completed | completed_gap | failed | blocked
+//      - 선택 키: value, threshold, date, note, evidence, checkpoint, ossified_at, promoted_from, ref_commit, rationale
+//      - 주석 prefix (#, //, ;, --, <!-- -->) 자동 제거
+//
+//  ── 형식 C: hexa attribute @convergence(...) (.hexa 파일) ──
+//    @convergence(state="ossified", id="LAUNCHD_PATH_HARDENED", value="plist ...")
+//
+//    규칙:
+//      - `@convergence(` 감지 → 괄호 내부 key="value" 쌍 (쉼표 구분) 파싱
+//      - value 는 반드시 `"..."` 인용
+//      - 필수 키: state, id (형식 B 와 동일)
+//      - 괄호 닫힘 `)` 에서 파싱 종료
+//      - 주석 행이 아닌 실제 hexa 소스의 속성 표기
+//
+//  meta 블록:
+//    # @convergence-meta-start
+//    # project: cl
+//    # description: Claude Code multi-account launcher
+//    # approval_tag: cl-approved
+//    # @convergence-meta-end
+//
+//  파싱 규칙:
+//    - 라인에 `@convergence-start` 포함 → 본 블록 시작
+//    - 라인에 `@convergence-end`       → 블록 종료
+//    - `@convergence-meta-start`       → meta 블록 시작
+//    - `@convergence-meta-end`         → meta 블록 종료
+//    - 라인에 `@convergence ` 포함 (뒤 공백) + `-start/-end/-meta` 아님 → 단일행 엔트리
+//    - 본 블록의 각 내부 라인:
+//        leading `# ` / `// ` / `; ` / `-- ` 제거 → `key: value` 파싱
+//        첫 번째 `:` 만 split, value 에 `:` 포함 가능
+//    - `state` 미지정 시 `evolving` 분류
+//    - `id` 미지정 시 해당 블록 skip + stderr 경고
+//
+//  설계 메모:
+//    - invariant_check.hexa 의 라인 기반 스캔 스타일 답습 (interp 안전)
+//    - 직접 토큰화 없이 문자열 substring 만 사용
+//    - JSON 은 수작업 문자열 빌드 — stdlib 미의존
+//    - hashmap API: .set(k,v) 반환값 재할당, .get(k) 읽기, .contains_key(k) 존재확인
+//      (kv[k]=v index-assign 는 stale 바이너리 미지원 — map_set COW 패턴 사용)
+// ═══════════════════════════════════════════════════════════
+
+// ── 라인 유틸 ──────────────────────────────────────────────
+fn cs_lstrip(s) {
+    let cs = s.chars()
+    let total = len(cs)
+    let mut i = 0
+    while i < total {
+        let c = cs[i]
+        if c == ' ' || c == '\t' { i = i + 1 }
+        else { return s.substring(i, len(s)) }
+    }
+    return ""
+}
+
+fn cs_rstrip(s) {
+    let cs = s.chars()
+    let mut e = len(cs)
+    while e > 0 {
+        let c = cs[e - 1]
+        if c == ' ' || c == '\t' || c == '\r' { e = e - 1 }
+        else { return s.substring(0, e) }
+    }
+    return ""
+}
+
+fn cs_strip(s) {
+    return cs_rstrip(cs_lstrip(s))
+}
+
+fn cs_find_char(s, ch) {
+    let cs = s.chars()
+    let total = len(cs)
+    let mut i = 0
+    while i < total {
+        if cs[i] == ch { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+fn cs_contains(haystack, needle) {
+    let hs = haystack.chars()
+    let ns = needle.chars()
+    let hl = len(hs)
+    let nl = len(ns)
+    if nl == 0 { return true }
+    if nl > hl { return false }
+    let mut i = 0
+    let last = hl - nl + 1
+    while i < last {
+        let mut k = 0
+        let mut ok = true
+        while k < nl {
+            if hs[i + k] != ns[k] { ok = false; k = nl }
+            else { k = k + 1 }
+        }
+        if ok { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn cs_starts_with(s, prefix) {
+    let sc = s.chars()
+    let pc = prefix.chars()
+    let sn = len(sc)
+    let pn = len(pc)
+    if pn > sn { return false }
+    let mut i = 0
+    while i < pn {
+        if sc[i] != pc[i] { return false }
+        i = i + 1
+    }
+    return true
+}
+
+fn cs_find_substr(haystack, needle) {
+    let hs = haystack.chars()
+    let ns = needle.chars()
+    let hl = len(hs)
+    let nl = len(ns)
+    if nl == 0 { return 0 }
+    if nl > hl { return -1 }
+    let mut i = 0
+    let last = hl - nl + 1
+    while i < last {
+        let mut k = 0
+        let mut ok = true
+        while k < nl {
+            if hs[i + k] != ns[k] { ok = false; k = nl }
+            else { k = k + 1 }
+        }
+        if ok { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+fn cs_strip_comment_prefix(line) {
+    let t = cs_lstrip(line)
+    let cs = t.chars()
+    let total = len(cs)
+    if total == 0 { return t }
+    if total >= 4 {
+        if cs[0] == '<' && cs[1] == '!' && cs[2] == '-' && cs[3] == '-' {
+            let mut rest = t.substring(4, total)
+            rest = cs_lstrip(rest)
+            let rc = rest.chars()
+            let rl = len(rc)
+            if rl >= 3 {
+                if rc[rl - 3] == '-' && rc[rl - 2] == '-' && rc[rl - 1] == '>' {
+                    rest = cs_rstrip(rest.substring(0, rl - 3))
+                }
+            }
+            return rest
+        }
+    }
+    if total >= 2 {
+        if cs[0] == '/' && cs[1] == '/' {
+            let rest = t.substring(2, total)
+            return cs_lstrip(rest)
+        }
+        if cs[0] == '-' && cs[1] == '-' {
+            let rest = t.substring(2, total)
+            return cs_lstrip(rest)
+        }
+    }
+    let c0 = cs[0]
+    if c0 == '#' || c0 == ';' {
+        let rest = t.substring(1, total)
+        return cs_lstrip(rest)
+    }
+    return t
+}
+
+// ── 블록 스캔 ──────────────────────────────────────────────
+fn cs_scan_blocks(src) {
+    let lines = src.split("\n")
+    let n = len(lines)
+    let mut blocks = []
+    let mut i = 0
+    while i < n {
+        let line = lines[i]
+        let is_start = cs_contains(line, "@convergence-start")
+        let is_meta_start = cs_contains(line, "@convergence-meta-start")
+        if is_start && !is_meta_start {
+            let mut body = []
+            let mut j = i + 1
+            let mut closed = false
+            while j < n {
+                let ln = lines[j]
+                if cs_contains(ln, "@convergence-end") && !cs_contains(ln, "@convergence-meta-end") {
+                    closed = true
+                    j = n + 1
+                } else {
+                    body.push(ln)
+                    j = j + 1
+                }
+            }
+            if closed {
+                let kv = cs_parse_block_body(body)
+                blocks.push(kv)
+            } else {
+                eprintln("warn: unclosed @convergence-start at line " + to_string(i + 1))
+            }
+            i = cs_find_block_end(lines, i + 1, "@convergence-end", "@convergence-meta-end") + 1
+            if i <= 0 { i = n }
+        } else {
+            i = i + 1
+        }
+    }
+    return blocks
+}
+
+fn cs_find_block_end(lines, from, end_marker, exclude_marker) {
+    let n = len(lines)
+    let mut i = from
+    while i < n {
+        let ln = lines[i]
+        if cs_contains(ln, end_marker) && !cs_contains(ln, exclude_marker) {
+            return i
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+fn cs_scan_meta(src) {
+    let lines = src.split("\n")
+    let n = len(lines)
+    let mut out = []
+    let mut i = 0
+    while i < n {
+        let line = lines[i]
+        if cs_contains(line, "@convergence-meta-start") {
+            let mut body = []
+            let mut j = i + 1
+            let mut closed = false
+            while j < n {
+                let ln = lines[j]
+                if cs_contains(ln, "@convergence-meta-end") {
+                    closed = true
+                    j = n + 1
+                } else {
+                    body.push(ln)
+                    j = j + 1
+                }
+            }
+            if closed {
+                let kv = cs_parse_block_body(body)
+                out.push(kv)
+            } else {
+                eprintln("warn: unclosed @convergence-meta-start at line " + to_string(i + 1))
+            }
+            let end_idx = cs_find_block_end(lines, i + 1, "@convergence-meta-end", "__NEVER__")
+            if end_idx < 0 { i = n } else { i = end_idx + 1 }
+        } else {
+            i = i + 1
+        }
+    }
+    return out
+}
+
+fn cs_parse_block_body(body_lines) {
+    let mut kv = #{"__keys__": []}
+    let mut keys = []
+    let n = len(body_lines)
+    let mut i = 0
+    while i < n {
+        let raw = body_lines[i]
+        let content = cs_strip_comment_prefix(raw)
+        let trimmed = cs_strip(content)
+        if len(trimmed) == 0 {
+            i = i + 1
+        } else {
+            if cs_contains(trimmed, "@convergence-") {
+                i = i + 1
+            } else {
+                let colon = cs_find_char(trimmed, ':')
+                if colon <= 0 {
+                    i = i + 1
+                } else {
+                    let key = cs_strip(trimmed.substring(0, colon))
+                    let value = cs_strip(trimmed.substring(colon + 1, len(trimmed)))
+                    if len(key) > 0 {
+                        kv = kv.set(key, value)
+                        keys.push(key)
+                    }
+                    i = i + 1
+                }
+            }
+        }
+    }
+    kv = kv.set("__keys__", keys)
+    return kv
+}
+
+// ── 단일행 @convergence 파서 ──────────────────────────────
+// Grammar:  key=value key="value with spaces" ...
+fn cs_parse_kv_loop(chars, total) {
+    let mut kv = #{"__keys__": []}
+    let mut keys = []
+    let mut pos = 0
+
+    while pos < total {
+        pos = cs_skip_ws(chars, total, pos)
+        if pos >= total { pos = total }
+        else {
+            let key_start = pos
+            let eq_pos = cs_scan_until_eq(chars, total, pos)
+            if eq_pos >= total {
+                pos = total
+            } else {
+                let key = cs_chars_slice(chars, key_start, eq_pos)
+                pos = eq_pos + 1
+                if pos >= total {
+                    kv = kv.set(key, "")
+                    keys.push(key)
+                    pos = total
+                } else {
+                    if chars[pos] == '"' {
+                        pos = pos + 1
+                        let val_start = pos
+                        let close = cs_scan_until_quote(chars, total, pos)
+                        let val = cs_chars_slice(chars, val_start, close)
+                        kv = kv.set(key, val)
+                        keys.push(key)
+                        if close < total { pos = close + 1 } else { pos = total }
+                    } else {
+                        let val_start = pos
+                        let val_end = cs_scan_until_space(chars, total, pos)
+                        let val = cs_chars_slice(chars, val_start, val_end)
+                        kv = kv.set(key, val)
+                        keys.push(key)
+                        pos = val_end
+                    }
+                }
+            }
+        }
+    }
+    kv = kv.set("__keys__", keys)
+    return kv
+}
+
+fn cs_skip_ws(chars, total, start) {
+    let mut p = start
+    while p < total {
+        let c = chars[p]
+        if c == ' ' || c == '\t' { p = p + 1 }
+        else { return p }
+    }
+    return p
+}
+
+fn cs_scan_until_eq(chars, total, start) {
+    let mut p = start
+    while p < total {
+        if chars[p] == '=' { return p }
+        p = p + 1
+    }
+    return total
+}
+
+fn cs_scan_until_quote(chars, total, start) {
+    let mut p = start
+    while p < total {
+        if chars[p] == '"' { return p }
+        p = p + 1
+    }
+    return total
+}
+
+fn cs_scan_until_space(chars, total, start) {
+    let mut p = start
+    while p < total {
+        let c = chars[p]
+        if c == ' ' || c == '\t' { return p }
+        p = p + 1
+    }
+    return total
+}
+
+fn cs_chars_slice(chars, a, b) {
+    let mut parts = []
+    let mut i = a
+    while i < b {
+        parts.push(to_string(chars[i]))
+        i = i + 1
+    }
+    return parts.join("")
+}
+
+// ── 단일행 스캔 ──────────────────────────────────────────────
+fn cs_scan_single_lines(src) {
+    let lines = src.split("\n")
+    let n = len(lines)
+    let mut entries = []
+    let mut i = 0
+    while i < n {
+        let line = lines[i]
+        if cs_contains(line, "@convergence ") {
+            let is_block = cs_contains(line, "@convergence-start")
+            let is_end = cs_contains(line, "@convergence-end")
+            let is_meta = cs_contains(line, "@convergence-meta")
+            if !is_block && !is_end && !is_meta {
+                let stripped = cs_strip_comment_prefix(line)
+                let trimmed = cs_strip(stripped)
+                let anchor = "@convergence "
+                let anchor_pos = cs_find_substr(trimmed, anchor)
+                if anchor_pos >= 0 {
+                    let anchor_len = len(anchor.chars())
+                    let tail = trimmed.substring(anchor_pos + anchor_len, len(trimmed))
+                    let tc = tail.chars()
+                    let kv = cs_parse_kv_loop(tc, len(tc))
+                    entries.push(kv)
+                }
+            }
+        }
+        i = i + 1
+    }
+    return entries
+}
+
+// ── 형식 C: hexa attr @convergence(...) 파서 ─────────────────
+// Grammar:  @convergence(key="value", key="value", ...)
+// 쉼표 구분, 값은 반드시 "..." 인용.
+fn cs_parse_attr_kv(inner) {
+    let chars = inner.chars()
+    let total = len(chars)
+    let mut kv = #{"__keys__": []}
+    let mut keys = []
+    let mut pos = 0
+
+    while pos < total {
+        // skip whitespace and commas
+        pos = cs_skip_ws_comma(chars, total, pos)
+        if pos >= total { pos = total }
+        else {
+            // read key until '='
+            let key_start = pos
+            let eq_pos = cs_scan_until_eq(chars, total, pos)
+            if eq_pos >= total {
+                pos = total
+            } else {
+                let key = cs_strip(cs_chars_slice(chars, key_start, eq_pos))
+                pos = eq_pos + 1
+                pos = cs_skip_ws_comma(chars, total, pos)
+                if pos >= total {
+                    kv = kv.set(key, "")
+                    keys.push(key)
+                    pos = total
+                } else {
+                    if chars[pos] == '"' {
+                        pos = pos + 1
+                        let val_start = pos
+                        let close = cs_scan_until_quote(chars, total, pos)
+                        let val = cs_chars_slice(chars, val_start, close)
+                        kv = kv.set(key, val)
+                        keys.push(key)
+                        if close < total { pos = close + 1 } else { pos = total }
+                    } else {
+                        // unquoted value: scan until comma or end
+                        let val_start = pos
+                        let val_end = cs_scan_until_comma_or_paren(chars, total, pos)
+                        let val = cs_strip(cs_chars_slice(chars, val_start, val_end))
+                        kv = kv.set(key, val)
+                        keys.push(key)
+                        pos = val_end
+                    }
+                }
+            }
+        }
+    }
+    kv = kv.set("__keys__", keys)
+    return kv
+}
+
+fn cs_skip_ws_comma(chars, total, start) {
+    let mut p = start
+    while p < total {
+        let c = chars[p]
+        if c == ' ' || c == '\t' || c == ',' || c == '\n' || c == '\r' { p = p + 1 }
+        else { return p }
+    }
+    return p
+}
+
+fn cs_scan_until_comma_or_paren(chars, total, start) {
+    let mut p = start
+    while p < total {
+        let c = chars[p]
+        if c == ',' || c == ')' { return p }
+        p = p + 1
+    }
+    return total
+}
+
+// ── 형식 C 스캔 ──────────────────────────────────────────────
+fn cs_scan_attr_lines(src) {
+    let lines = src.split("\n")
+    let n = len(lines)
+    let mut entries = []
+    let mut i = 0
+    while i < n {
+        let line = lines[i]
+        // must contain `@convergence(` but NOT be a comment-prefix marker
+        let attr_anchor = "@convergence("
+        if cs_contains(line, attr_anchor) {
+            // skip if this is inside a block marker or comment-style entry
+            let is_block = cs_contains(line, "@convergence-start")
+            let is_end = cs_contains(line, "@convergence-end")
+            let is_meta = cs_contains(line, "@convergence-meta")
+            if !is_block && !is_end && !is_meta {
+                let trimmed = cs_strip(line)
+                let anchor_pos = cs_find_substr(trimmed, attr_anchor)
+                if anchor_pos >= 0 {
+                    let anchor_len = len(attr_anchor.chars())
+                    let after_paren = trimmed.substring(anchor_pos + anchor_len, len(trimmed))
+                    // find closing paren
+                    let close_pos = cs_find_char(after_paren, ')')
+                    let mut inner = after_paren
+                    if close_pos >= 0 {
+                        inner = after_paren.substring(0, close_pos)
+                    }
+                    let ic = inner.chars()
+                    if len(ic) > 0 {
+                        let kv = cs_parse_attr_kv(inner)
+                        entries.push(kv)
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    return entries
+}
+
+// ── JSON 빌더 ──────────────────────────────────────────────
+fn cs_json_escape(s) {
+    let cs = s.chars()
+    let total = len(cs)
+    let mut buf = []
+    let mut i = 0
+    while i < total {
+        let c = cs[i]
+        if c == '\\' { buf.push("\\\\") }
+        else if c == '"' { buf.push("\\\"") }
+        else if c == '\n' { buf.push("\\n") }
+        else if c == '\r' { buf.push("\\r") }
+        else if c == '\t' { buf.push("\\t") }
+        else { buf.push(to_string(c)) }
+        i = i + 1
+    }
+    return buf.join("")
+}
+
+fn cs_json_str(s) {
+    return "\"" + cs_json_escape(s) + "\""
+}
+
+fn cs_emit_entry_object(kv, skip, indent) {
+    let keys = kv.get("__keys__")
+    let n = len(keys)
+    let mut parts = []
+    let mut i = 0
+    while i < n {
+        let k = keys[i]
+        if !cs_list_contains(skip, k) {
+            let v = kv.get(k)
+            let line = indent + cs_json_str(k) + ": " + cs_json_str(v)
+            parts.push(line)
+        }
+        i = i + 1
+    }
+    return parts.join(",\n")
+}
+
+fn cs_list_contains(lst, item) {
+    let n = len(lst)
+    let mut i = 0
+    while i < n {
+        if lst[i] == item { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn cs_group_by_state(blocks) {
+    let mut groups = #{"__order__": []}
+    let mut order = []
+    let n = len(blocks)
+    let mut i = 0
+    while i < n {
+        let blk = blocks[i]
+        if !blk.contains_key("id") {
+            eprintln("warn: block #" + to_string(i + 1) + " missing 'id', skipping")
+            i = i + 1
+        } else {
+            let mut state = "evolving"
+            if blk.contains_key("state") {
+                let s = blk.get("state")
+                if len(s) > 0 { state = s }
+            }
+            let mut existing = []
+            if groups.contains_key(state) { existing = groups.get(state) }
+            let updated = existing.push(blk)
+            groups = groups.set(state, updated)
+            if !cs_list_contains(order, state) { order.push(state) }
+            i = i + 1
+        }
+    }
+    groups = groups.set("__order__", order)
+    return groups
+}
+
+// ── 최상위 dump ────────────────────────────────────────────
+fn cs_emit_full_json(meta_block, blocks) {
+    let mut sections = []
+    if len(meta_block) > 0 {
+        let m = meta_block[0]
+        let meta_inner = cs_emit_entry_object(m, ["__keys__"], "    ")
+        sections.push("  \"_meta\": {\n" + meta_inner + "\n  }")
+    }
+    let groups = cs_group_by_state(blocks)
+    let order = groups.get("__order__")
+    let preferred = ["ossified", "stable", "completed", "completed_gap", "in_flight", "pending", "evolving", "blocked", "failed"]
+    let mut emitted = []
+    let pn = len(preferred)
+    let mut pi = 0
+    while pi < pn {
+        let st = preferred[pi]
+        if groups.contains_key(st) {
+            let section = cs_emit_group_section(st, groups.get(st))
+            sections.push(section)
+            emitted.push(st)
+        }
+        pi = pi + 1
+    }
+    let on = len(order)
+    let mut oi = 0
+    while oi < on {
+        let st2 = order[oi]
+        if !cs_list_contains(emitted, st2) {
+            let section2 = cs_emit_group_section(st2, groups.get(st2))
+            sections.push(section2)
+            emitted.push(st2)
+        }
+        oi = oi + 1
+    }
+    return "{\n" + sections.join(",\n") + "\n}"
+}
+
+fn cs_emit_group_section(state, block_list) {
+    let n = len(block_list)
+    let mut entry_parts = []
+    let mut i = 0
+    while i < n {
+        let blk = block_list[i]
+        let id = blk.get("id")
+        let skip = ["id", "state", "__keys__"]
+        let inner = cs_emit_entry_object(blk, skip, "      ")
+        let entry = "    " + cs_json_str(id) + ": {\n" + inner + "\n    }"
+        entry_parts.push(entry)
+        i = i + 1
+    }
+    return "  " + cs_json_str(state) + ": {\n" + entry_parts.join(",\n") + "\n  }"
+}
+
+fn cs_emit_meta_json(meta_block) {
+    if len(meta_block) == 0 { return "{}" }
+    let m = meta_block[0]
+    let inner = cs_emit_entry_object(m, ["__keys__"], "  ")
+    return "{\n" + inner + "\n}"
+}
+
+// ── 엔트리 병합 (3-format) ──────────────────────────────────
+// 우선순위: block (A) > single-line comment (B) > attr (C)
+// 동일 id 중복 시 먼저 등장한 형식이 우선
+fn cs_merge_entries(block_entries, single_entries) {
+    return cs_merge_all(block_entries, single_entries, [])
+}
+
+fn cs_merge_all(block_entries, single_entries, attr_entries) {
+    let mut seen_ids = []
+    let mut merged = []
+    // pass 1: block entries (format A)
+    let bn = len(block_entries)
+    let mut bi = 0
+    while bi < bn {
+        let blk = block_entries[bi]
+        if blk.contains_key("id") {
+            seen_ids.push(blk.get("id"))
+        }
+        merged.push(blk)
+        bi = bi + 1
+    }
+    // pass 2: single-line comment entries (format B)
+    let sn = len(single_entries)
+    let mut si = 0
+    while si < sn {
+        let entry = single_entries[si]
+        let mut skip = false
+        if entry.contains_key("id") {
+            if cs_list_contains(seen_ids, entry.get("id")) {
+                skip = true
+            } else {
+                seen_ids.push(entry.get("id"))
+            }
+        }
+        if !skip {
+            merged.push(entry)
+        }
+        si = si + 1
+    }
+    // pass 3: attr entries (format C)
+    let an = len(attr_entries)
+    let mut ai = 0
+    while ai < an {
+        let entry = attr_entries[ai]
+        let mut skip = false
+        if entry.contains_key("id") {
+            if cs_list_contains(seen_ids, entry.get("id")) {
+                skip = true
+            } else {
+                seen_ids.push(entry.get("id"))
+            }
+        }
+        if !skip {
+            merged.push(entry)
+        }
+        ai = ai + 1
+    }
+    return merged
+}
+
+// ── CLI 진입점 ────────────────────────────────────────────
+fn main() {
+    let av = args()
+    let mut subcmd = ""
+    let mut file = ""
+    if len(av) >= 5 {
+        subcmd = av[3]
+        file = av[4]
+    } else if len(av) >= 4 {
+        subcmd = av[2]
+        file = av[3]
+    } else if len(av) >= 3 {
+        subcmd = av[1]
+        file = av[2]
+    }
+    if len(subcmd) == 0 || len(file) == 0 {
+        println("usage: hexa convergence <dump|dump-meta> <file>")
+        exit(2)
+    }
+    let exists = exec("test -f '" + file + "' && printf yes || printf no")
+    if exists != "yes" {
+        eprintln("error: file not found: " + file)
+        exit(2)
+    }
+    let src = read_file(file)
+    if subcmd == "dump" {
+        let meta_blocks = cs_scan_meta(src)
+        let block_entries = cs_scan_blocks(src)
+        let single_entries = cs_scan_single_lines(src)
+        let attr_entries = cs_scan_attr_lines(src)
+        let blocks = cs_merge_all(block_entries, single_entries, attr_entries)
+        let out = cs_emit_full_json(meta_blocks, blocks)
+        println(out)
+        exit(0)
+    } else if subcmd == "dump-meta" {
+        let meta_blocks = cs_scan_meta(src)
+        let out = cs_emit_meta_json(meta_blocks)
+        println(out)
+        exit(0)
+    } else {
+        eprintln("error: unknown subcommand '" + subcmd + "'")
+        eprintln("usage: hexa convergence <dump|dump-meta> <file>")
+        exit(2)
+    }
+}
+
+// R7 track B cycle 4 (2026-05-18): module-level call removed.
+// `fn cs_main` renamed to `fn main` — both compiled binary entry and
+// interp `hexa run` auto-invocation work uniformly via main().

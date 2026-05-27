@@ -1,0 +1,6 @@
+=== E31 : hexa verify --expr is_perfect 12 0 ===
+verify --expr is_perfect(12)=0
+  calc   = 0  == expected 0
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+  absorb = ⚠ atlas register did NOT confirm fold; invocation:
+           hexa atlas register --from-verify is_perfect 12 0

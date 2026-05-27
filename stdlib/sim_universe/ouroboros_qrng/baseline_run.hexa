@@ -1,0 +1,47 @@
+// baseline_run.hexa — deterministic ouroboros-meta run (N trials)
+//
+// This is a thin façade over ouroboros_shadow.hexa "det" mode. The shadow
+// is a byte-for-byte replica of ouroboros_meta.hexa tournament/breeding
+// dynamics; only the RNG source is parameterized. L0-protected
+// ouroboros_meta.hexa is NEVER loaded or modified.
+//
+// Usage:
+//   hexa baseline_run.hexa <n_trials> [gens=15]
+//
+// Output: stdout — runs `ouroboros_shadow.hexa det <t> <gens>` for t in 0..N,
+//         streaming per-trial FINAL lines.
+
+let _a = args()
+let n_trials = if _a.len() >= 2 {
+    let mut v = 0
+    try { v = to_int(_a[1]) } catch e { v = 30 }
+    v
+} else { 30 }
+let gens = if _a.len() >= 3 {
+    let mut v = 0
+    try { v = to_int(_a[2]) } catch e { v = 15 }
+    v
+} else { 15 }
+
+// Resolve shadow path relative to this script.
+// $NEXUS is the canonical hub root. Fall back to $HOME/Dev/nexus if unset.
+let mut nexus_root = ""
+try { nexus_root = env_var("NEXUS") } catch e1 { nexus_root = "" }
+if nexus_root.len() == 0 {
+    let home = env_var("HOME")
+    nexus_root = home + "/Dev/nexus"
+}
+let shadow = nexus_root + "/sim_bridge/ouroboros_qrng/ouroboros_shadow.hexa"
+let hexa_bin = nexus_root + "/bin/hexa"
+
+println("# baseline_run: n_trials=" + to_string(n_trials) + " gens=" + to_string(gens))
+
+let mut t = 0
+while t < n_trials {
+    // invoke shadow 'det' mode. stdout goes through captured by caller via runner.sh.
+    let cmd = "HEXA_LOCAL=1 " + hexa_bin + " " + shadow + " det " + to_string(t) + " " + to_string(gens)
+    let mut out = ""
+    try { out = to_string(exec(cmd)) } catch e2 { out = "# det trial " + to_string(t) + " ERR" }
+    println(out)
+    t = t + 1
+}

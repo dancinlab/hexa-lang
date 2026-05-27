@@ -1,0 +1,88 @@
+{
+  "fire": "fusion-attention-flashalgo",
+  "date": "2026-05-25",
+  "falsifier": "F-FUSION-ATTN-FLASHALGO-ABOVE-CUBLAS",
+  "round": "8 of the GPU sec10 GEMM-fusion (attention) axis",
+  "host": "ubu-2 RTX 5070 sm_120 driver 580 (48 SMs, 0 compute procs at fire = uncontended)",
+  "toolchain": { "nvcc": "12.9 V12.9.86", "ptxas": "12.9", "nvvm": "7.0.1" },
+  "verdict_tier": "ORANGE INSUFFICIENT (quantified-partial; pre-registered above-cuBLAS-stack NOT hit, but largest single-round gap closure of the 8-round campaign)",
+  "pre_registered_target": "fused_ms < cublas_stack_ms (above cuBLAS-batched-GEMM+softmax+batched-GEMM stack -> 🟢)",
+  "algorithm": "TRUE FlashAttention-2 (Dao 2023): online softmax INSIDE fused kernel, m_i/l_i running across all K/V tiles, O accumulator REGISTER-RESIDENT across the entire K/V loop, S/P resident in smem only for the wmma-load-A handoff, ONE launch, inner GEMMs via wmma::mma_sync m16n16k16 fp16 fp32-acc",
+  "key_distinction_from_prior_rounds": "ROUND-4 attempted reg-O and FAILED numeric (result.json: 'wrong m16n16k16 fp32 C-frag row map'). ROUND-8 fixed via empirical frag_probe.cu: elems {0,1,4,5} -> row=lane/4, elems {2,3,6,7} -> row=lane/4+8 (round-4 used the matrix_a convention {0..3}/{4..7}, not the accumulator). Single fix -> 5.3-6.9x -> 1.60-1.99x.",
+  "geometry": { "d": 64, "BM": 16, "BK": 16, "warps_per_cta": 1, "block": 32, "grid": "N/16" },
+  "ptxas_clean": {
+    "pure_ascii": true, "non_ascii_bytes": 0,
+    "sm_80":  "rc=0 (66 regs, 1728 B smem, 0 spill)",
+    "sm_90":  "rc=0 (72 regs, 1728 B smem, 0 spill)",
+    "sm_120": "rc=0 (71 regs, 1728 B smem, 0 spill)",
+    "smem_reduction_vs_r4": "28864 B -> 1728 B (16.7x reduction: o_tile + wide BK removed)"
+  },
+  "occupancy": {
+    "method": "cuOccupancyMaxActiveBlocksPerMultiprocessor",
+    "ctas_per_sm": 24,
+    "round_4_ctas_per_sm": 8,
+    "round_7_ctas_per_sm": 1,
+    "movement": "8 -> 24 (3x) vs r4; 1 -> 24 (24x) vs r7"
+  },
+  "numeric_handptx_sm90_jit_sm120": {
+    "gate": "rel_rowscale <= 1e-2 vs f64 CPU reference (the honest per-row-scaled metric)",
+    "N512":  { "max_abs": 4.426e-05, "rel_rowscale": 5.414e-04, "rms_rel": 2.580e-04, "pass": true },
+    "N1024": { "max_abs": 6.104e-05, "rel_rowscale": 5.674e-04, "rms_rel": 2.653e-04, "pass": true },
+    "N2048": { "max_abs": 3.411e-05, "rel_rowscale": 6.105e-04, "rms_rel": 2.711e-04, "pass": true },
+    "N4096": { "max_abs": 3.116e-05, "rel_rowscale": 7.142e-04, "rms_rel": 2.721e-04, "pass": true },
+    "all_pass": true,
+    "margin_over_gate": "1-2 orders of magnitude (gate=1e-2; worst measured=7.1e-4)"
+  },
+  "timed_wall_ms": {
+    "method": "cuEvent 20 warmup + 200 timed median (uncontended pre-check)",
+    "handptx_fused": { "N512": 0.031936, "N1024": 0.060896, "N2048": 0.122304, "N4096": 0.302592 },
+    "cublas_stack":  { "N512": 0.016608, "N1024": 0.030880, "N2048": 0.061600, "N4096": 0.188704 },
+    "ratio_fused_over_cublas": { "N512": 1.92, "N1024": 1.97, "N2048": 1.99, "N4096": 1.60 }
+  },
+  "gap_closure_trajectory": {
+    "round_3_handptx": [9.4, 10.9, 13.3, 15.5],
+    "round_4_handptx": [3.40, 3.70, 3.96, 5.01],
+    "round_5":         [3.47, 3.47, 3.47, 3.47],
+    "round_7_TMA":     [null, null, 5.28, 6.87],
+    "round_8_reg_O":   [1.92, 1.97, 1.99, 1.60],
+    "single_round_improvement_vs_r7_at_N2048": "5.28 / 1.99 = 2.65x faster",
+    "single_round_improvement_vs_r7_at_N4096": "6.87 / 1.60 = 4.29x faster",
+    "overall_campaign_improvement_vs_r3_at_N4096": "15.5 / 1.60 = 9.7x"
+  },
+  "win_condition": "fused_ms < cublas_stack_ms (above-cuBLAS-stack)",
+  "win": false,
+  "win_distance": "1.60-1.99x slower (need a further sub-2x to flip; remaining wall = smem S/P round-trip + per-row softmax serial loop)",
+  "other_variants_measured": {
+    "regO_BK16": { "ms": [0.0319, 0.0609, 0.1223, 0.3026], "rank": "WINNER" },
+    "regO_BK256_wide_KV": {
+      "ms": [0.0506, 0.0997, 0.2020, 0.7789],
+      "interpretation": "the wide-KV lever AMORTIZED THE OLD O-round-trip cost; with O in regs there is no longer any O traffic to amortize, so the wide-KV cost becomes pure overhead (wider softmax pass, more smem)"
+    },
+    "regO_2warp_BM32": {
+      "ms": [0.0348, 0.0647, 0.1346, 0.3086],
+      "interpretation": "marginal regression; per-row softmax stays 16-lane sequential so doubling warps does not speed up the softmax phase. Below-saturation at small N (grid=16 vs 48 SMs)."
+    }
+  },
+  "binding_constraint": "at d=64 the per-tile softmax + smem S/P round-trip is the residual wall (after reg-O removed the O round-trip). Eliminating it requires register-S + warp-shuffle softmax + mma.x4-from-regs feeding P.V -- substantial rewrite, deferred.",
+  "section10_box": "[x] (launch-amort PR #1028) -- NOT touched; GEMM-fusion (attention) axis remains NOT-won at d=64",
+  "paper_eligible": false,
+  "paper_reason": "ORANGE INSUFFICIENT + re-confirmation of a wall already quantified in rounds 4/5/7; project.tape paper_gate forbids 🟠 and paper_significance forbids re-confirmation papers",
+  "next_round_wedge": "register-resident S + warp-shuffle softmax + mma.x4-from-regs P.V (the next single algorithmic lever after reg-O; expected to push below 1.0x at large N)",
+  "invariants": {
+    "no_llvm": true, "no_c_transpile_change": true,
+    "codegen_untouched": "compiler/codegen/*.hexa UNTOUCHED (hand-emit PTX path via nvcc-lowered CUDA-C; the algorithm is mine, lowering is mechanical)",
+    "S_tile_never_to_HBM": "TRUE (structural moat preserved)",
+    "single_launch": "TRUE (1 launch vs cuBLAS-TC 3-launch moat preserved)",
+    "pure_ASCII": "0 non-ASCII bytes in committed .ptx",
+    "no_spills": "0 spill bytes on sm_80/sm_90/sm_120"
+  },
+  "artifacts": {
+    "kernel_ptx_shipped": ["fa_regO_v2.sm90.ptx", "fa_regO_v2.sm80.ptx", "fa_regO_v2.sm120.ptx"],
+    "kernel_cuda_c": "fa_regO_v2_oracle.cu (the FA-2 algorithm + host)",
+    "variants_for_reference": ["fa_regO_bk256_oracle.cu", "fa_regO_2warp_oracle.cu", "fa_regO_4warp_oracle.cu"],
+    "fragment_row_map_probe": "frag_probe.cu",
+    "host_driver": "fa_flashalgo_host.c (1 launch via cuModuleLoadDataEx)",
+    "verdict": ".verdicts/fusion-attention-flashalgo/F-FUSION-ATTN-FLASHALGO-ABOVE-CUBLAS.txt",
+    "discovery": ".discoveries/fusion-attention-flashalgo.tape"
+  }
+}

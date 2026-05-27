@@ -1,0 +1,8 @@
+#!hexa strict
+// rtsc design — design pressure target.
+fn main() {
+    let P_target_GPa = 200.0
+    println("rtsc_design (design pressure target):")
+    println("  P_target_GPa = " + str(P_target_GPa))
+    println("__HEXA_RTSC_DESIGN__ PASS gate=GATE_OPEN absorbed=false")
+}

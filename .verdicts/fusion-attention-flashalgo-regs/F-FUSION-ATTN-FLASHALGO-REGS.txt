@@ -1,0 +1,145 @@
+F-FUSION-ATTN-FLASHALGO-REGS  (round 9 of GPU sec10 GEMM-fusion / axis-A attention)
+================================================================================
+Date     : 2026-05-25
+Host     : ubu-2 RTX 5070 sm_120 driver 580 (48 SMs, 0 compute procs at every fire)
+Toolchain: nvcc/ptxas 12.9
+Falsifier: A fused FlashAttention-2 kernel where (a) the S tile lives in
+           REGISTERS across the softmax pass, (b) softmax row-reduce uses
+           WARP-SHUFFLE primitives (shfl_sync) for rowmax+rowsum, (c) the P.V
+           GEMM consumes P fragments DIRECTLY from registers via mma-from-regs,
+           AND (d) ptxas-clean + numeric PASS AND beats the cuBLAS-batched-
+           GEMM+softmax+batched-GEMM stack (fused_ms < cublas_stack_ms) on at
+           least one (N,d) shape. FALSIFIED if the wall is not strictly ABOVE
+           cuBLAS-stack.
+
+VERDICT  : 🔴 FALSIFIED (the pre-registered warp-shuffle-softmax design)
+           + 🟠 INSUFFICIENT (the surfaced reg-S + smem-reduce variant)
+
+           The warp-shuffle-softmax design (a)+(b)+(c) is ptxas-clean and
+           numeric-PASS, but it does NOT beat cuBLAS-stack; worse, it REGRESSES
+           vs R8's reg-O (1.29x-1.56x SLOWER than R8, 2.1x-3.1x slower than
+           cuBLAS). The pre-registered win condition (fused_ms < cublas_stack_ms)
+           is NOT met on any shape -> FALSIFIED.
+
+           A controlled-A/B diagnostic surfaced a non-pre-registered variant
+           (reg-S + reg-P-repack + smem-SCRATCH reduce instead of shuffles)
+           that ties R8 at N<=2048 and BEATS R8 by 13.2% at N=4096 (still
+           1.42x-2.08x cuBLAS -> 🟠, does NOT cross 1.0x).
+
+--------------------------------------------------------------------------------
+CORRECTNESS GATE (the hard part: accumulator-layout -> matrix_a-operand-layout)
+--------------------------------------------------------------------------------
+Probe artifacts: frag_repack_probe.cu (PART A + PART B), frag_repack_partc.cu
+(PART C end-to-end). Run on ubu-2 sm_120, $0.
+
+PART A (accumulator map, re-confirms R8 #1117):
+  m16n16k16 f32 ACCUMULATOR fragment, per lane L holding elems {0..7}:
+    row(e in {0,1,4,5}) = L/4         (rows 0..7)
+    row(e in {2,3,6,7}) = L/4 + 8     (rows 8..15)
+    col = (L%4)*2 + (e%2) + (e in {4,5,6,7} ? 8 : 0)
+
+PART B (matrix_a map, NEW finding):
+  m16n16k16 f16 MATRIX_A fragment has num_elements=16, and the per-lane
+  (elem -> (row,col)) map for elems 0..7 is IDENTICAL to the accumulator map;
+  elems 8..15 simply DUPLICATE elems 0..7.
+
+KEY FINDING (the novelty the round set out to need a shuffle for):
+  The accumulator -> matrix_a repack on sm_120 is a PURELY LOCAL register move
+    pa.x[i] = pa.x[i+8] = (half)acc.x[i]   for i in 0..7
+  NO cross-lane warp shuffle is required for the repack -- each lane already
+  holds exactly the scores it needs as a matrix_a operand. (The pre-registered
+  plan assumed the repack itself needed a shuffle; it does not. The shuffle is
+  only used for the softmax ROW REDUCTION.)
+
+PART C (end-to-end repack proof):
+  Computed S=QK^T into accumulator regs, formed P with the warp-shuffle softmax,
+  repacked P into matrix_a via the local move, ran P.V, and compared to a
+  smem-round-trip reference for the SAME P. Result:
+    max|O_reg - O_smem| = 0.0   (BIT-EXACT)   -> repack PROVEN correct.
+  lane_permutation_correct = YES.
+
+--------------------------------------------------------------------------------
+NUMERIC GATE (fa_regS_v1, the warp-shuffle design) -- vs f64 CPU reference
+--------------------------------------------------------------------------------
+  N512  : max_abs 4.426e-05  rel_rowscale 5.414e-04   PASS
+  N1024 : max_abs 6.104e-05  rel_rowscale 5.674e-04   PASS
+  N2048 : max_abs 3.411e-05  rel_rowscale 6.105e-04   PASS
+  N4096 : max_abs 3.116e-05  rel_rowscale 7.142e-04   PASS
+  gate = rel_rowscale <= 1e-2.  ALL PASS (1-2 orders of magnitude of margin).
+  rel_rowscale is IDENTICAL to R8 reg-O at every shape -> the register-resident
+  S/P path is numerically bit-equivalent to R8's smem path. The ALGORITHM IS
+  CORRECT; the verdict is a PERFORMANCE falsification, not a correctness one.
+
+--------------------------------------------------------------------------------
+PTXAS-CLEAN (pure ASCII, 0 spills)
+--------------------------------------------------------------------------------
+  fa_regS_v1 (shfl)      sm_120: rc=0, 72 regs, 1024 B smem, 0 spill
+  fa_regS smem-reduce    sm_80 : rc=0, 80 regs, 1536 B smem, 0 spill
+                         sm_90 : rc=0, 80 regs, 1536 B smem, 0 spill
+                         sm_120: rc=0, 80 regs, 1536 B smem, 0 spill
+
+OCCUPANCY (analytic from cudaDeviceProp; regsPerSM=65536, smemPerSM=102400):
+  fa_regS_v1 (shfl)    : 28 CTAs/SM   (reg-bound)
+  fa_regS smem-reduce  : 25 CTAs/SM   (reg-bound)
+  R8 reg-O             : 24 CTAs/SM
+  Both R9 variants EXCEED R8 and the >=16 target -> occupancy is NOT the
+  regression cause.
+
+--------------------------------------------------------------------------------
+TIMED WALL (cuEvent 20 warmup + 200 timed median; GPU uncontended each batch)
+--------------------------------------------------------------------------------
+  N      shfl-regS   smem-reduce-regS   R8 reg-O    cublas-stack
+  512    0.048512    0.032096           0.032032    0.016672
+  1024   0.097344    0.064768           0.062688    0.031904
+  2048   0.193888    0.128352           0.124224    0.061632
+  4096   0.392416    0.264480           0.304480    0.186560
+
+  shfl-regS / R8        : 1.51, 1.55, 1.56, 1.29   (REGRESSION)
+  shfl-regS / cublas    : 2.91, 3.14, 3.14, 2.10
+  smem-reduce / R8      : 1.00, 1.03, 1.03, 0.868  (TIES, then BEATS at N=4096)
+  smem-reduce / cublas  : 1.92, 2.03, 2.08, 1.42   (still slower; 🟠)
+  N4096 smem-reduce/cublas stability over 3 reps: 1.418, 1.419, 1.417
+
+--------------------------------------------------------------------------------
+DIAGNOSTIC ATTRIBUTION (why register-resident S/P RAN SLOWER than smem R8)
+--------------------------------------------------------------------------------
+Controlled A/B: held reg-S + reg-P-repack constant, swapped ONLY the softmax
+row-reduce -- warp-shuffle (3-round shfl_xor, x2 for max+sum, a 6-deep cross-
+lane chain) vs a tiny 16-float smem-scratch reduce.
+
+  Result: shfl reduce is ~1.5x SLOWER than smem-scratch reduce at EVERY shape.
+
+CONCLUSION: the WARP-SHUFFLE SOFTMAX is the regression cause. The shfl_xor
+reduction inserts a long warp-synchronizing cross-lane dependency chain
+directly into the per-tile critical path BETWEEN the QK^T mma and the P.V mma.
+On the small (16x16) wmma tile this latency is NOT hidden by other in-flight
+work. The proven-correct in-register repack (no shuffle) is fine; it is the
+SHUFFLE-BASED ROW REDUCTION the pre-registered design mandated that hurts at
+d=64. (ncu HW counters unavailable: sm_120 unsupported by ncu 12.9; attribution
+is by the controlled swap, not counters.)
+
+--------------------------------------------------------------------------------
+DUAL-AXIS FRAMING (per principle_injection)
+--------------------------------------------------------------------------------
+This is a fusable axis; cuBLAS is below the FlashAttention-class ceiling. But
+R9 did not get ABOVE cuBLAS -- it FELL BACK from R8. The honest framing:
+"the pre-registered warp-shuffle-softmax design is 2.1x-3.1x ABOVE (slower
+than) the cuBLAS-using stack" -> a clean closed-negative ruling out the
+warp-shuffle softmax as the next lever at d=64 / 16x16 tile.
+
+--------------------------------------------------------------------------------
+SECTION 10 BOX: [x] UNCHANGED (launch-amort only). NO flip. The GEMM-fusion
+(attention / axis-A) axis remains NOT-above-cuBLAS at d=64.
+
+NEXT WEDGE: the d=64 16x16-tile attention is LATENCY/DEPENDENCY bound, not
+bandwidth bound -- warp shuffles lose to smem scratch here. Next levers:
+  (1) larger Q tile (BM=32/64, 2-4 warps) so the wmma pipeline has more
+      in-flight work to hide the row reduction;
+  (2) cp.async double-buffer of K/V to overlap the next tile's load with the
+      current P.V;
+  (3) the smem-reduce-reg-S variant (which already beats R8 at N=4096) pushed
+      to BM=64 + multi-warp to break the small-N occupancy floor.
+NOT another shuffle softmax at 16x16.
+
+INVARIANTS: no LLVM; no C-transpile change; compiler/codegen/*.hexa UNTOUCHED
+(f1/f2 preserved); S and P never to HBM; single launch; pure ASCII; 0 spills.

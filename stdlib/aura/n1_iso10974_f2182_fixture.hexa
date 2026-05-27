@@ -1,0 +1,159 @@
+#!hexa strict
+// stdlib/aura/n1_iso10974_f2182_fixture.hexa — `aura + N1`
+// G1 stage_1: open ISO 10974 + ASTM F2182 test-fixture replication
+// in openEMS (FIRST CODE · skeleton + spec emit).
+//
+// LAYER: G1 brk stage_1 implementation kickoff. Emits an
+// aura_n1_iso10974_f2182_fixture_record sentinel + structured test
+// fixture geometry spec + measurement protocol skeleton for openEMS.
+//
+// CONTEXT: G1 brk path stage_1 (PR #1392 g1_mri_safety_path.hexa):
+//   "open ASTM F2182-19e2 + ISO 10974 test-fixture replication in openEMS"
+//
+// This file is the FIRST code commit toward G1 — it doesn't run the
+// openEMS sim (separate domain) but emits the structured spec the
+// sim will use: phantom dimensions + tissue dielectrics + RF source +
+// measurement points.
+//
+// Honesty (g3 · @D d1 · @D d2):
+//   * absorbed=false PERMANENTLY — first-code, not a passed validation.
+//   * scope_caveat: actual openEMS sim runs separately + V&V vs Sim4Life
+//     reference is a multi-year stage_2 effort.
+//
+// Sentinels:
+//   __HEXA_AURA_N1_ISO10974_F2182_FIXTURE__ PASS
+//   AURA_N1_ISO10974_F2182_FIXTURE_OK gate=GATE_OPEN absorbed=false
+
+let VERSION       = "0.1.0"
+let MODULE        = "aura-n1-iso10974-f2182-fixture"
+let GEOMETRY_ID   = "aura_n1_iso10974_f2182_fixture_v1"
+let RECORD_KIND   = "aura_n1_iso10974_f2182_fixture_record"
+
+// ─── ASTM F2182-19e2 fixture spec (RF-induced heating · passive implants) ─
+
+fn _astm_f2182_fixture_block() -> [str] {
+    return [
+        "standard: ASTM F2182-19e2 (RF-induced heating · MRI · passive implants)",
+        "phantom: rectangular acrylic container 650 × 420 × 80 mm filled with HEC gel",
+        "gel_dielectric: relative permittivity 80 · conductivity 0.47 S/m (@ 64/128 MHz)",
+        "RF_source: 64 MHz (1.5T) + 128 MHz (3T) circularly-polarized birdcage coil",
+        "transmit_power: normalized to whole-body SAR 2 W/kg per 21 CFR 1020.33 / IEC 60601-2-33",
+        "fiber_optic_temp_probe: 4-point (implant tip + surface + reference 5cm away + ambient)",
+        "exposure_duration: 15 min steady-state heating @ 2 W/kg WB-SAR",
+        "pass_criterion: temperature rise ≤ specified threshold per implant type",
+    ]
+}
+
+// ─── ISO 10974 fixture spec (active implants in 1.5T/3T) ─────────────
+
+fn _iso_10974_fixture_block() -> [str] {
+    return [
+        "standard: ISO 10974:2018 (active implantable medical devices · 1.5T/3T MR)",
+        "phantom_options: rectangular OR shoulder phantom · tissue-equivalent material (TEM)",
+        "TEM_dielectric: relative permittivity 78 · conductivity 0.47 S/m (@ 64 MHz)",
+        "TEM_dielectric_3T: relative permittivity 79 · conductivity 0.55 S/m (@ 128 MHz)",
+        "device_orientation: per worst-case landmark position (e.g. iso-center)",
+        "device_states_tested: nominal operation + standby + worst-case fault",
+        "lead_routing: for connected implants (AURA is wireless, simplifies)",
+        "measurement_endpoints: heating + vibration + gradient-induced voltage + B0/B1 functional",
+    ]
+}
+
+// ─── openEMS implementation spec (the actual sim) ────────────────────
+
+fn _openems_impl_block() -> [str] {
+    return [
+        "language: Python (openEMS-Python wrapper) OR Lua (legacy)",
+        "domain_size: phantom_volume × 1.5 (PML headroom) ≈ 1000 × 700 × 200 mm",
+        "mesh_density: λ/20 inside phantom @ 128 MHz (~117 mm wavelength · Δ ≤ 5.8 mm)",
+        "PML: 8-cell uniaxial PML on all 6 faces",
+        "excitation: birdcage model OR analytical RF source (B1+ rotating field)",
+        "tissue_assignment: gel_HEC for phantom · device material per AURA-100 spec",
+        "monitoring: temperature probes at 4 ASTM F2182 spec points + 3D field maps",
+        "compute_estimate: ~4-8 h on 16-core CPU per freq + per device-orientation",
+    ]
+}
+
+// ─── V&V plan vs Sim4Life reference (stage_2 setup) ──────────────────
+
+fn _vv_plan_block() -> [str] {
+    return [
+        "stage_2_reference: Sim4Life IMAnalytics V3.0 + MRIxViP V2.1 (FDA-MDDT)",
+        "test_cases: 5-10 reference devices (e.g. passive implant rod, stent, pacemaker dummy)",
+        "metrics: peak 1g-SAR + temperature rise + B1+ field at landmark",
+        "acceptable_deviation: ≤ ±10% for absorbed power · ≤ ±15% for temperature delta",
+        "iteration_loop: gap diagnosis → mesh refinement → tissue dielectric tuning → re-run",
+        "documentation: cross-vendor benchmark report + V&V package",
+        "publication_target: peer-reviewed (IEEE TBME / Magn Reson Med / Phys Med Biol)",
+    ]
+}
+
+// ─── repository scaffold (where the actual openEMS code lives) ───────
+
+fn _repo_scaffold_block() -> [str] {
+    return [
+        "future_repo: github.com/<org>/aura-openems-mri-safety (separate from hexa-lang)",
+        "layout: openems/{astm_f2182, iso_10974, common, phantoms, reports}/",
+        "deps: openEMS-Python · numpy · scipy · pyvista · matplotlib · meshio",
+        "CI: GitHub Actions matrix(python 3.10-3.12 · openEMS latest + N-1)",
+        "tests: unit + integration + reference-device V&V tests",
+        "license: GPL-3.0 (matches openEMS) · contributor agreement per FSF",
+    ]
+}
+
+fn _scope_caveats() -> [str] {
+    return [
+        "N1 ISO 10974 + ASTM F2182 fixture is a SPEC + skeleton, NOT a passed validation.",
+        "Actual openEMS Python/Lua code lives in a separate repo (aura-openems-mri-safety).",
+        "V&V vs Sim4Life reference is stage_2 (multi-year · cross-vendor benchmark study).",
+        "FDA MDDT acceptance is stage_4+ (NEVER granted to community-maintained tool TODAY).",
+        "absorbed=false PERMANENTLY (g3) - first-code skeleton, NEVER a regulatory replacement.",
+    ]
+}
+
+fn _emit_block(label: str, lines: [str]) {
+    print("# [" + label + "]")
+    let n = lines.len()
+    let mut i = 0
+    while i < n {
+        print("#   - " + lines[i])
+        i = i + 1
+    }
+    print("#")
+}
+
+fn _emit_header() {
+    print("# AURA N1 - G1 stage_1 ISO 10974 + ASTM F2182 openEMS fixture FIRST CODE")
+    print("# device_target = post-aural / temporal-bone clip BCI (MRI-safety V&V)")
+    print("# version = " + VERSION)
+    print("# ringfence: spec + skeleton - NOT passed validation")
+    print("#")
+    _emit_block("astm_f2182_fixture",  _astm_f2182_fixture_block())
+    _emit_block("iso_10974_fixture",   _iso_10974_fixture_block())
+    _emit_block("openems_impl_spec",   _openems_impl_block())
+    _emit_block("vv_plan_stage_2",     _vv_plan_block())
+    _emit_block("repo_scaffold",       _repo_scaffold_block())
+}
+
+fn _emit_caveats() {
+    let c = _scope_caveats()
+    let n = c.len()
+    let mut i = 0
+    while i < n {
+        print("# scope_caveat: " + c[i])
+        i = i + 1
+    }
+}
+
+fn main() {
+    _emit_header()
+    _emit_caveats()
+
+    print("AURA_N1_ISO10974_F2182_FIXTURE_OK record_kind=" + RECORD_KIND
+        + " geometry_id=" + GEOMETRY_ID
+        + " gate=GATE_OPEN absorbed=false"
+        + " version=" + VERSION
+        + " g1_stage=1 timeline_to_stage_5=3-5y")
+
+    print("__HEXA_AURA_N1_ISO10974_F2182_FIXTURE__ PASS")
+}

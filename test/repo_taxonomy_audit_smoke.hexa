@@ -1,0 +1,123 @@
+// ═══════════════════════════════════════════════════════════
+//  test/repo_taxonomy_audit_smoke.hexa
+//
+//  Smoke tests for tool/repo_taxonomy_audit.hexa — the generic
+//  CATALOG.md ↔ manifest.toml ↔ filesystem audit ported from
+//  hexa-chip/verify_catalog.py (Wave I).
+//
+//  Inline fixtures (no canon dependency):
+//    - C1: 3-dir filesystem fixture, 2 cited in CATALOG, 1 missing
+//          → expect FAIL with an [unknown] issue.
+//    - C2: 3 T1 groups, manifest declares only 2 [modules.*]
+//          → expect FAIL with a [mismatch] issue.
+//    - C3: envelope absorbs the 2 module keys but in wrong order
+//          → expect PASS (sorted comparison) OR FAIL if names diverge.
+//
+//  Run:
+//      ./hexa run test/repo_taxonomy_audit_smoke.hexa
+// ═══════════════════════════════════════════════════════════
+
+use "tool/repo_taxonomy_audit"
+
+fn _check(label: string, cond: bool) -> i64 {
+    if cond {
+        println("  PASS " + label)
+        return 0
+    }
+    println("  FAIL " + label)
+    return 1
+}
+
+fn _setup_fs_fixture() -> string {
+    // Build a small disposable dir under /tmp with 3 subdirs.
+    let stamp = exec("date +%s").trim()
+    let root = "/tmp/repo_tax_audit_fixt_" + stamp
+    exec("rm -rf " + root + " && mkdir -p " + root + "/architecture " + root + "/design " + root + "/process")
+    return root
+}
+
+fn _cleanup_fs_fixture(root: string) {
+    if root.starts_with("/tmp/repo_tax_audit_fixt_") {
+        exec("rm -rf " + root)
+    }
+}
+
+fn _has_substr(arr: [string], needle: string) -> bool {
+    for x in arr {
+        if x.contains(needle) { return true }
+    }
+    return false
+}
+
+fn main_audit_smoke() {
+    println("[repo_taxonomy_audit_smoke] inline fixtures (no canon dep)")
+
+    let mut fail = 0
+
+    // ─── C1: filesystem vs CATALOG.md ────────────────────────────────────
+    let fs_root = _setup_fs_fixture()
+    // CATALOG cites only architecture/ and design/ — process/ is silently
+    // on disk → C1 should flag it as [unknown].
+    let catalog_c1 = "# CATALOG\n\nT1 dirs: `architecture/` and `design/`.\n"
+    let r1 = audit_filesystem_vs_catalog(catalog_c1, fs_root)
+    fail = fail + _check("C1: detects missing citation for 'process/'",
+                          !r1.ok && _has_substr(r1.issues, "process"))
+
+    // CATALOG cites all 3 → C1 should PASS.
+    let catalog_c1_ok = "# CATALOG\n\n`architecture/`, `design/`, `process/`.\n"
+    let r1ok = audit_filesystem_vs_catalog(catalog_c1_ok, fs_root)
+    fail = fail + _check("C1: PASS when every fs dir cited", r1ok.ok)
+
+    _cleanup_fs_fixture(fs_root)
+
+    // ─── C2: manifest [modules.*] vs CATALOG T1 groups ───────────────────
+    // CATALOG declares 3 T1 groups (architecture/design/process), manifest
+    // declares only 2 — expect a [mismatch] for the third.
+    let catalog_c2 = "## T1.A — `architecture`\n## T1.B — `design`\n## T1.C — `process`\n"
+    let manifest_c2_missing =
+        "[modules.architecture]\nverbs = [\"architecture\", \"isa_n6\"]\n" +
+        "[modules.design]\nverbs = [\"design\", \"eda\"]\n"
+    let r2 = audit_manifest_vs_catalog(manifest_c2_missing, catalog_c2, "")
+    fail = fail + _check("C2: detects missing [modules.process]",
+                          !r2.ok && _has_substr(r2.issues, "process"))
+
+    let manifest_c2_full =
+        "[modules.architecture]\nverbs = [\"architecture\"]\n" +
+        "[modules.design]\nverbs = [\"design\"]\n" +
+        "[modules.process]\nverbs = [\"process\"]\n"
+    let r2ok = audit_manifest_vs_catalog(manifest_c2_full, catalog_c2, "")
+    fail = fail + _check("C2: PASS when all T1 groups have [modules.*]", r2ok.ok)
+
+    // ─── C3: envelope absorbs vs T1 module keys ─────────────────────────
+    // Envelope absorbs the same 3 keys (in different order) → expect PASS
+    // because comparison is sorted.
+    let manifest_c3_ok = manifest_c2_full +
+        "[meta_domains.terafab]\nabsorbs = [\"process\", \"architecture\", \"design\"]\n"
+    let r3 = audit_envelope_absorption(manifest_c3_ok, "terafab")
+    fail = fail + _check("C3: PASS when absorbs ≡ modules (any order)", r3.ok)
+
+    // Envelope absorbs only 2 of 3 module keys → expect FAIL.
+    let manifest_c3_fail = manifest_c2_full +
+        "[meta_domains.terafab]\nabsorbs = [\"architecture\", \"design\"]\n"
+    let r3fail = audit_envelope_absorption(manifest_c3_fail, "terafab")
+    fail = fail + _check("C3: FAIL when absorbs is missing a module key",
+                          !r3fail.ok)
+
+    // ─── aggregate audit_all ─────────────────────────────────────────────
+    let fs_root2 = _setup_fs_fixture()
+    let catalog_full = "## T1.A — `architecture`\n## T1.B — `design`\n## T1.C — `process`\n" +
+                       "Dirs: `architecture/`, `design/`, `process/`.\n"
+    let r_all = audit_all(catalog_full, manifest_c3_ok, fs_root2)
+    fail = fail + _check("audit_all: PASS on fully agreeing fixture", r_all.ok)
+    _cleanup_fs_fixture(fs_root2)
+
+    if fail == 0 {
+        println("PASS repo_taxonomy_audit_smoke")
+        return 0
+    }
+    println("FAIL repo_taxonomy_audit_smoke: " + str(fail) + " assertion(s)")
+    exit(1)
+    return 1
+}
+
+main_audit_smoke()

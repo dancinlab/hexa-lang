@@ -1,0 +1,23 @@
+Device: NVIDIA GeForce RTX 5070 sm_120 (48 SMs)
+CUDA driver=13000 runtime=12090
+loaded hexa-PT64x128 PTX shape 4096 (sgemm_tile64x128_hilbert_4096x4096_grid)
+  shape 4096: regs/thd=42, shmem=12288 B, max_thd_per_block=1024, est_CTAs/SM=3
+loaded hexa-PT64x128 PTX shape 5120 (sgemm_tile64x128_hilbert_5120x5120_grid)
+  shape 5120: regs/thd=42, shmem=12288 B, max_thd_per_block=1024, est_CTAs/SM=3
+loaded hexa-PT64x128 PTX shape 6144 (sgemm_tile64x128_hilbert_6144x6144_grid)
+  shape 6144: regs/thd=42, shmem=12288 B, max_thd_per_block=1024, est_CTAs/SM=3
+loaded hexa-PT64x128 PTX shape 8192 (sgemm_tile64x128_hilbert_8192x8192_grid)
+  shape 8192: regs/thd=42, shmem=12288 B, max_thd_per_block=1024, est_CTAs/SM=3
+Device VRAM free=11601.06 MB total=11772.44 MB
+[M=4096] allocating 128.00 MB device memory (A=32768 KB + B=32768 KB + C=65536 KB)
+[M=4096] cuBLAS HGEMM                    median=1.981392 ms  std=0.005434  min=1.971104  max=2.018688  TFLOPS= 69.3648
+[M=4096] hexa-PT64x128 64x128+Hilbert median=2.957024 ms  std=0.001549  min=2.954560  max=2.965856  TFLOPS= 46.4788  ratio=0.6701  maxabs=0.0000  maxrel=0.0000  CTAs=2048  regs=42  CTAs/SM=3
+[M=5120] allocating 200.00 MB device memory (A=51200 KB + B=51200 KB + C=102400 KB)
+[M=5120] cuBLAS HGEMM                    median=3.850176 ms  std=0.004754  min=3.846272  max=3.888032  TFLOPS= 69.7203
+[M=5120] hexa-PT64x128 64x128+Hilbert median=5.658880 ms  std=0.001902  min=5.654656  max=5.673952  TFLOPS= 47.4361  ratio=0.6804  maxabs=0.0000  maxrel=0.0000  CTAs=3200  regs=42  CTAs/SM=3
+[M=6144] allocating 288.00 MB device memory (A=73728 KB + B=73728 KB + C=147456 KB)
+[M=6144] cuBLAS HGEMM                    median=6.616592 ms  std=0.012976  min=6.610656  max=6.676704  TFLOPS= 70.1050
+[M=6144] hexa-PT64x128 64x128+Hilbert median=9.710336 ms  std=0.004198  min=9.700960  max=9.736512  TFLOPS= 47.7694  ratio=0.6814  maxabs=0.0000  maxrel=0.0000  CTAs=4608  regs=42  CTAs/SM=3
+[M=8192] allocating 512.00 MB device memory (A=131072 KB + B=131072 KB + C=262144 KB)
+[M=8192] cuBLAS HGEMM                    median=15.667072 ms  std=0.030441  min=15.659712  max=15.868768  TFLOPS= 70.1798
+[M=8192] hexa-PT64x128 64x128+Hilbert median=23.247264 ms  std=0.005284  min=23.234079  max=23.265760  TFLOPS= 47.2964  ratio=0.6739  maxabs=0.0000  maxrel=0.0000  CTAs=8192  regs=42  CTAs/SM=3

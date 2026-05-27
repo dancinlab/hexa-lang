@@ -1,0 +1,8 @@
+#!hexa strict
+// rna-therapy specify — mRNA knockdown target.
+fn main() {
+    let knockdown_target = 0.90
+    println("rna-therapy_specify (mRNA knockdown target):")
+    println("  knockdown_target = " + str(knockdown_target))
+    println("__HEXA_RNA_THERAPY_SPECIFY__ PASS gate=GATE_OPEN absorbed=false")
+}

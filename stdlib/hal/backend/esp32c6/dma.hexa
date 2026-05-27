@@ -1,0 +1,72 @@
+#!hexa strict
+// stdlib/hal/backend/esp32c6/dma.hexa — ESP32-C6 DMA backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    ESP32-C6 RV32IMAC RISC-V @ 160 MHz.
+// Chip ref:  ESP32-C6 TRM v1.2 §3 GDMA (3 channel pairs, same as C3).
+// Surface:   esp32c6_dma_{configure,start,wait,abort}(...)
+// Dispatch:  dma.hexa selects this via cfg-flag.
+//
+// MMIO layout:
+//
+//   GDMA:  base = DR_REG_GDMA_BASE = 0x60080800
+//
+//   Same GDMA layout as C3 — 3 RX/TX channel pairs (6 directional);
+//   inherits LL_DMA 12-byte descriptor format. PERI_SEL register
+//   selects from ~16 sources.
+
+let MODULE_NAME = "esp32c6_dma"
+let SIGMA_SLOT  = 10
+let PHI_KIND    = "digital"
+
+let DR_REG_GDMA_BASE = 0x60080800
+
+let GDMA_IN_CONF0_REG     = 0x000
+let GDMA_IN_LINK_REG      = 0x024
+let GDMA_IN_PERI_SEL_REG  = 0x044
+let GDMA_OUT_CONF0_REG    = 0x048
+let GDMA_OUT_LINK_REG     = 0x06C
+let GDMA_OUT_PERI_SEL_REG = 0x08C
+let GDMA_CH_STRIDE        = 0xC0
+
+let MAX_CHAN_PAIRS = 3   // 3 RX/TX pairs on C6 (same as C3)
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn esp32c6_dma_configure(channel: int, direction: int, width: int) -> int {
+    if channel < 0 || channel > 5 { return -1 }
+    if direction < 0 || direction > 3 { return -2 }
+    if width != 1 && width != 2 && width != 4 { return -3 }
+    return channel
+}
+
+fn esp32c6_dma_start(handle: int, src: int, dst: int, n_bytes: int) -> bool {
+    if handle < 0 || handle > 5 { return false }
+    if n_bytes <= 0 { return false }
+    return true
+}
+
+fn esp32c6_dma_wait(handle: int) -> bool {
+    if handle < 0 || handle > 5 { return false }
+    return true
+}
+
+fn esp32c6_dma_abort(handle: int) -> bool {
+    if handle < 0 || handle > 5 { return false }
+    return true
+}
+
+fn esp32c6_dma_report(handle: int) -> str {
+    return "[esp32c6_dma sim] handle=" + str(handle) + " (skeleton stub — TODO MMIO)"
+}
+
+fn esp32c6_dma_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32c6_dma sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  GDMA=" + str(DR_REG_GDMA_BASE) + " (3 RX/TX pairs; same family as C3)")
+    println("  inherits LL_DMA 12-byte descriptor; PERI_SEL from ~16 sources")
+}

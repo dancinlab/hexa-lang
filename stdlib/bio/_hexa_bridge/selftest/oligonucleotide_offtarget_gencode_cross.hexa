@@ -1,0 +1,472 @@
+#!hexa strict
+// hexa-bio/_hexa_bridge/selftest/oligonucleotide_offtarget_gencode_cross.hexa
+//
+// hexa-native port of `_python_bridge/module/oligonucleotide_offtarget_gencode_cross.py`
+// (T3; io/json/sys — deterministic, no network/time/random). CROSS-AXIS A2:
+// OLIGONUCLEOTIDE off-target × RIBOZYME GENCODE v47 pc-transcript pool.
+// SantaLucia (1998) unified NN ΔG° engine (imported in-line from the
+// already-ported oligonucleotide_hybridization_sim.hexa recipe) screened
+// against ribozyme/spec/human_transcript_pool_snapshot.json (read-only).
+// Recipe: exact .py op order; `fmt("%spec",v)` via `exec printf` (C printf
+// == Python format on these float widths); raw UTF-8 ΔG°/ₙ. Witness emit
+// is text-only — no JSON output here, so py_json2 import is structural.
+
+import "_hexa_bridge/module/py_json2.hexa"
+
+// ── helpers (paste; preserve leading padding from %width specs) ───────────
+fn fmt(spec: string, v: float) -> string {
+    let mut o = exec("printf '" + spec + "' " + json_stringify(v))
+    while len(o) > 0 { let last = o.substr(len(o) - 1, 1); if last == "\n" || last == "\r" { o = o.substr(0, len(o) - 1) } else { break } }
+    return o
+}
+fn ljust(s: string, n: int) -> string { let mut o = s; while len(o) < n { o = o + " " }; return o }
+fn rjust(s: string, n: int) -> string { let mut o = s; while len(o) < n { o = " " + o }; return o }
+fn js(v: float) -> string { return json_stringify(v) }
+fn jsb(b: bool) -> string { if b { return "true" } return "false" }
+fn pyb(b: bool) -> string { if b { return "True" } return "False" }
+fn fabs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn fsum(xs: array) -> float {
+    let mut s = 0.0; let mut c = 0.0; let mut i = 0
+    while i < len(xs) { let y = xs[i]-c; let t = s+y; c = (t-s)-y; s = t; i = i+1 }
+    return s
+}
+
+// ── _sanitize: uppercase, U→T, drop spaces. Inputs here are upper ACGT/U. ──
+fn sanitize(seq: string) -> string {
+    let mut o = ""
+    let mut i = 0
+    while i < len(seq) {
+        let c = seq.substr(i, 1)
+        if c == " " { i = i + 1; continue }
+        // lowercase → uppercase (ASCII)
+        let b = ord(c)
+        let up = if b >= 97 && b <= 122 { chr(b - 32) } else { c }
+        if up == "U" { o = o + "T" }
+        else { o = o + up }
+        i = i + 1
+    }
+    return o
+}
+
+fn comp(c: string) -> string {
+    if c == "A" { return "T" }
+    if c == "T" { return "A" }
+    if c == "G" { return "C" }
+    return "G"
+}
+
+fn revcomp(s: string) -> string {
+    let mut o = ""
+    let mut i = len(s) - 1
+    while i >= 0 { o = o + comp(s.substr(i, 1)); i = i - 1 }
+    return o
+}
+
+fn is_selfc(s: string) -> bool { return s == revcomp(s) }
+
+// SantaLucia 1998 Table-1 NN parameters (5'->3' doublet); RC equivalence
+fn nn_dh_direct(d: string) -> float {
+    if d == "AA" { return -7.9 }   if d == "AT" { return -7.2 }
+    if d == "TA" { return -7.2 }   if d == "CA" { return -8.5 }
+    if d == "GT" { return -8.4 }   if d == "CT" { return -7.8 }
+    if d == "GA" { return -8.2 }   if d == "CG" { return -10.6 }
+    if d == "GC" { return -9.8 }   if d == "GG" { return -8.0 }
+    return 1.0
+}
+fn nn_ds_direct(d: string) -> float {
+    if d == "AA" { return -22.2 }  if d == "AT" { return -20.4 }
+    if d == "TA" { return -21.3 }  if d == "CA" { return -22.7 }
+    if d == "GT" { return -22.4 }  if d == "CT" { return -21.0 }
+    if d == "GA" { return -22.2 }  if d == "CG" { return -27.2 }
+    if d == "GC" { return -24.4 }  if d == "GG" { return -19.9 }
+    return 1.0
+}
+fn doublet_rc(d: string) -> string {
+    return comp(d.substr(1, 1)) + comp(d.substr(0, 1))
+}
+fn nn_dh(d: string) -> float {
+    let v = nn_dh_direct(d)
+    if v != 1.0 { return v }
+    return nn_dh_direct(doublet_rc(d))
+}
+fn nn_ds(d: string) -> float {
+    let v = nn_ds_direct(d)
+    if v != 1.0 { return v }
+    return nn_ds_direct(doublet_rc(d))
+}
+
+let T37_K = 310.15
+
+// nn_thermodynamics(s) → dG37_kcal_mol  (only field consumed by this gate)
+fn nn_dg37(s: string) -> float {
+    let mut dh = 0.0
+    let mut ds = 0.0
+    let mut i = 0
+    while i < len(s) - 1 {
+        let d = s.substr(i, 2)
+        dh = dh + nn_dh(d)
+        ds = ds + nn_ds(d)
+        i = i + 1
+    }
+    let ends = [s.substr(0, 1), s.substr(len(s) - 1, 1)]
+    let mut e = 0
+    while e < 2 {
+        let b = ends[e]
+        if b == "G" || b == "C" { dh = dh + 0.1; ds = ds + (-2.8) }
+        else { dh = dh + 2.3; ds = ds + 4.1 }
+        e = e + 1
+    }
+    if is_selfc(s) { dh = dh + 0.0; ds = ds + (-1.4) }
+    return dh - T37_K * ds / 1000.0
+}
+
+// Python round(x, 4) — banker's rounding on float; for the values produced
+// here (sums of NN doublets * frac, all ≤ ~30 in magnitude with 2dp printout)
+// half-to-even ties don't surface in the 4dp ranking — but adopt half-to-even
+// to stay byte-exact in case any flagged_top dG happens to land on .5e-4.
+fn round4(x: float) -> float {
+    let s = if x < 0.0 { -1.0 } else { 1.0 }
+    let a = fabs(x)
+    let scaled = a * 10000.0
+    let floor_v = (scaled + 0.0) - ((scaled + 0.0) % 1.0)
+    let frac = scaled - floor_v
+    let mut r = floor_v
+    if frac > 0.5 { r = floor_v + 1.0 }
+    else if frac < 0.5 { r = floor_v }
+    else {
+        // tie → half to even
+        let half = floor_v / 2.0
+        let half_floor = half - (half % 1.0)
+        if (half_floor * 2.0) == floor_v { r = floor_v } else { r = floor_v + 1.0 }
+    }
+    return s * r / 10000.0
+}
+
+// ── candidate panel (label, 5'->3' seq, expected verdict) ────────────────
+fn cand_label(i: int) -> string {
+    if i == 0 { return "sirna.designed.clean.21mer" }
+    if i == 1 { return "aso.designed.clean.20mer" }
+    if i == 2 { return "aso.gc_rich.housekeeping.20mer" }
+    return "aso.low_complexity.CTG.21mer"
+}
+fn cand_seq(i: int) -> string {
+    if i == 0 { return "ATGACTGAATATAAACTTGTG" }
+    if i == 1 { return "AGGTCATCCATGACAACTTT" }
+    if i == 2 { return "GACTTCCATGGCCACGGCTG" }
+    let mut s = ""; let mut k = 0; while k < 7 { s = s + "CTG"; k = k + 1 }; return s
+}
+fn cand_expected(i: int) -> string {
+    if i == 0 { return "PASS" }
+    if i == 1 { return "PASS" }
+    return "FAIL-flood"
+}
+
+fn shq(s: string) -> string { return "'" + s.replace("'", "'\\''") + "'" }
+
+// load vendored pool — runtime json_parse; returns map with arrays
+//   ids[], genes[], seqs[]
+fn load_pool(root: string) -> any {
+    let path = root + "/ribozyme/spec/human_transcript_pool_snapshot.json"
+    let raw = exec("cat " + shq(path) + " 2>/dev/null")
+    if len(raw) == 0 { return false }
+    let d = json_parse(raw)
+    let mut ids: array = []
+    let mut genes: array = []
+    let mut seqs: array = []
+    let ts = if d.has("transcripts") { d["transcripts"] } else { [] }
+    let mut i = 0
+    while i < len(ts) {
+        let t = ts[i]
+        let id = if t.has("transcript_id") { str(t["transcript_id"]) } else { "" }
+        let g  = if t.has("gene") { str(t["gene"]) } else { "" }
+        let sq = if t.has("seq") { str(t["seq"]) } else { "" }
+        ids.push(id); genes.push(g); seqs.push(sanitize(sq))
+        i = i + 1
+    }
+    let mut out = json_parse("{}")
+    out["ids"] = ids
+    out["genes"] = genes
+    out["seqs"] = seqs
+    return out
+}
+
+// screen one candidate → returns map with all reported fields
+//   windows_scanned, min_dg, n_flagged, n_transcripts_with_hits,
+//   flagged_per_kb, flood_verdict, flagged_top (array of maps,
+//   each with transcript_id, gene, offset, matches, duplex_dG37)
+fn screen(cand_raw: string, pool: any, dg_gate: float, kb_gate: float) -> any {
+    let cand = sanitize(cand_raw)
+    let L = len(cand)
+    let cand_rc = revcomp(cand)
+    let ids = pool["ids"]
+    let genes = pool["genes"]
+    let seqs = pool["seqs"]
+
+    let mut fl_tid: array = []
+    let mut fl_gene: array = []
+    let mut fl_off: array = []
+    let mut fl_win: array = []
+    let mut fl_m: array = []
+    let mut fl_frac: array = []
+    let mut fl_dg: array = []
+    let mut min_dg = 0.0
+    let mut scanned = 0
+    let mut pool_nt = 0
+    // transcripts_with_hits as ordered-unique array
+    let mut t_hits: array = []
+
+    let mut p = 0
+    while p < len(seqs) {
+        let seq = seqs[p]
+        pool_nt = pool_nt + len(seq)
+        if len(seq) >= L {
+            let mut i = 0
+            while i <= len(seq) - L {
+                let window = seq.substr(i, L)
+                scanned = scanned + 1
+                let mut matches = 0
+                let mut j = 0
+                while j < L {
+                    if window.substr(j, 1) == cand_rc.substr(j, 1) { matches = matches + 1 }
+                    j = j + 1
+                }
+                let dg = nn_dg37(window)
+                let frac = (matches + 0.0) / (L + 0.0)
+                let eff = dg * frac
+                if eff < min_dg { min_dg = eff }
+                if eff <= dg_gate {
+                    // ordered-unique transcripts_with_hits via add-set semantics
+                    let id = ids[p]
+                    let mut seen = false
+                    let mut hi = 0
+                    while hi < len(t_hits) { if t_hits[hi] == id { seen = true }; hi = hi + 1 }
+                    if !seen { t_hits.push(id) }
+                    fl_tid.push(id)
+                    fl_gene.push(genes[p])
+                    fl_off.push(i)
+                    fl_win.push(window)
+                    fl_m.push(matches)
+                    fl_frac.push(round4(frac))
+                    fl_dg.push(round4(eff))
+                }
+                i = i + 1
+            }
+        }
+        p = p + 1
+    }
+
+    // sort flagged by (dG, transcript_id, offset) — insertion sort
+    let n = len(fl_dg)
+    let mut q = 1
+    while q < n {
+        let kdg = fl_dg[q]; let ktid = fl_tid[q]; let kgene = fl_gene[q]
+        let koff = fl_off[q]; let kwin = fl_win[q]; let km = fl_m[q]; let kfrac = fl_frac[q]
+        let mut r = q - 1
+        while r >= 0 {
+            let less = (fl_dg[r] > kdg) ||
+                       (fl_dg[r] == kdg && fl_tid[r] > ktid) ||
+                       (fl_dg[r] == kdg && fl_tid[r] == ktid && fl_off[r] > koff)
+            if !less { break }
+            fl_dg[r + 1] = fl_dg[r]; fl_tid[r + 1] = fl_tid[r]; fl_gene[r + 1] = fl_gene[r]
+            fl_off[r + 1] = fl_off[r]; fl_win[r + 1] = fl_win[r]; fl_m[r + 1] = fl_m[r]
+            fl_frac[r + 1] = fl_frac[r]
+            r = r - 1
+        }
+        fl_dg[r + 1] = kdg; fl_tid[r + 1] = ktid; fl_gene[r + 1] = kgene
+        fl_off[r + 1] = koff; fl_win[r + 1] = kwin; fl_m[r + 1] = km; fl_frac[r + 1] = kfrac
+        q = q + 1
+    }
+
+    let pool_kb = (pool_nt + 0.0) / 1000.0
+    let flagged_per_kb = if pool_kb > 0.0 { (n + 0.0) / pool_kb } else { 0.0 }
+    let flood = flagged_per_kb > kb_gate
+
+    let mut out = json_parse("{}")
+    out["L"] = L
+    out["windows_scanned"] = scanned
+    out["pool_nt"] = pool_nt
+    out["pool_kb"] = pool_kb
+    out["min_dg"] = round4(min_dg)
+    out["n_flagged"] = n
+    out["n_transcripts_with_hits"] = len(t_hits)
+    out["flagged_per_kb"] = round4(flagged_per_kb)
+    out["flood"] = flood
+    out["flood_verdict"] = if flood { "FAIL-flood" } else { "PASS" }
+    out["fl_tid"] = fl_tid
+    out["fl_gene"] = fl_gene
+    out["fl_off"] = fl_off
+    out["fl_m"] = fl_m
+    out["fl_dg"] = fl_dg
+    return out
+}
+
+fn main() {
+    let root = exec("pwd").trim()
+    println("oligonucleotide_offtarget_gencode_cross — CROSS-AXIS A2: OLIGONUCLEOTIDE off-target × RIBOZYME GENCODE pool")
+    println("  real limit: nearest-neighbor base-pair stacking free energy")
+    println("              (SantaLucia J Jr, PNAS 1998;95:1460-1465 — unified NN parameters)")
+    println("  reference corpus: GENCODE v47 human pc-transcripts (Frankish et al., NAR 2025)")
+    println("")
+
+    let pool = load_pool(root)
+    if pool == false {
+        println("  [SKIP] vendored GENCODE pool absent at `ribozyme/spec/human_transcript_pool_snapshot.json` — nothing to screen against.")
+        println("         (g7: skip-is-honest — the RIBOZYME axis builds this snapshot via `ribozyme_off_target_screen.py --refresh-gencode`.)")
+        println("__OLIGONUCLEOTIDE_OFFTARGET_GENCODE_CROSS__ SKIP")
+        return
+    }
+
+    // pool_kb header line
+    let seqs0 = pool["seqs"]
+    let mut total = 0
+    let mut zi = 0
+    while zi < len(seqs0) { total = total + len(seqs0[zi]); zi = zi + 1 }
+    let pool_kb_hdr = (total + 0.0) / 1000.0
+    println("  RIBOZYME axis vendored pool: " + str(len(seqs0)) + " GENCODE v47 pc-transcripts, " +
+            fmt("%.2f", pool_kb_hdr) + " kb (READ-ONLY load, g11)")
+    println("  OLIGONUCLEOTIDE axis engine: imported `oligonucleotide_hybridization_sim` (no fork, f3)")
+    println("")
+
+    let mut fails = 0
+    // collect per-candidate result for cross-checks
+    let mut all_flagged_per_kb: array = []
+    let mut all_flagged_top_dgs: array = []  // for monotonic check (each entry is array)
+    let mut all_windows: array = []
+    let mut all_pool_n: array = []
+    let n_panel = 4
+
+    let mut ci = 0
+    while ci < n_panel {
+        let label = cand_label(ci)
+        let cand = cand_seq(ci)
+        let expected = cand_expected(ci)
+        let r = screen(cand, pool, -16.0, 6.0)
+        let verdict = r["flood_verdict"]
+        let logic_ok = verdict == expected
+        if !logic_ok { fails = fails + 1 }
+        let mark = if logic_ok { "PASS" } else { "FAIL" }
+        let L = r["L"]
+        println("  [" + mark + "] " + ljust(label, 34) + " 5'-" + cand + "-3' (" + str(L) + " nt)")
+        println("         windows=" + rjust(str(r["windows_scanned"]), 6) +
+                "  min ΔG°(37)=" + fmt("%8.2f", r["min_dg"]) +
+                "  flagged=" + rjust(str(r["n_flagged"]), 5) +
+                " (" + str(r["n_transcripts_with_hits"]) + " transcripts)" +
+                "  flagged/kb=" + fmt("%7.3f", r["flagged_per_kb"]))
+        println("         screen_verdict=" + verdict + "  expected=" + expected)
+
+        let tids = r["fl_tid"]; let genes = r["fl_gene"]; let offs = r["fl_off"]
+        let ms = r["fl_m"]; let dgs = r["fl_dg"]
+        let kk_max = if len(tids) < 3 { len(tids) } else { 3 }
+        let mut kk = 0
+        while kk < kk_max {
+            println("           hit: " + ljust(tids[kk], 18) + " " + ljust(genes[kk], 10) +
+                    " offset=" + rjust(str(offs[kk]), 3) +
+                    " matches=" + str(ms[kk]) + "/" + str(L) +
+                    " ΔG°=" + fmt("%8.2f", dgs[kk]))
+            kk = kk + 1
+        }
+        // also collect flagged_top (first 5) dGs for monotonic check
+        let top_max = if len(dgs) < 5 { len(dgs) } else { 5 }
+        let mut top: array = []
+        let mut ti = 0
+        while ti < top_max { top.push(dgs[ti]); ti = ti + 1 }
+        all_flagged_top_dgs.push(top)
+        all_flagged_per_kb.push(r["flagged_per_kb"])
+        all_windows.push(r["windows_scanned"])
+        all_pool_n.push(len(seqs0))
+        ci = ci + 1
+    }
+    println("")
+
+    // separation anchor: low-complexity (last) > all designed
+    let lc_kb = all_flagged_per_kb[3]
+    let mut sep_ok = true
+    let mut di = 0
+    while di < 3 { if !(lc_kb > all_flagged_per_kb[di]) { sep_ok = false }; di = di + 1 }
+    if sep_ok {
+        println("  [PASS] separation — the (CTG)ₙ low-complexity trap floods strictly harder than every designed candidate")
+    } else {
+        fails = fails + 1
+        println("  [FAIL] separation — low-complexity trap did not dominate")
+    }
+
+    // rank-monotone anchor: each flagged_top is sorted non-decreasing in dG
+    let mut rank_ok = true
+    let mut ri = 0
+    while ri < n_panel {
+        let arr = all_flagged_top_dgs[ri]
+        let mut ai = 1
+        while ai < len(arr) {
+            if arr[ai] < arr[ai - 1] { rank_ok = false }
+            ai = ai + 1
+        }
+        ri = ri + 1
+    }
+    if rank_ok {
+        println("  [PASS] flagged hits ranked by ΔG° (most stable / most negative first)")
+    } else {
+        fails = fails + 1
+        println("  [FAIL] flagged-hit ranking not monotone in ΔG°")
+    }
+
+    // cross-axis wiring anchor
+    let mut any_scan = false
+    let mut all_pool = true
+    let mut wi = 0
+    while wi < n_panel {
+        if all_windows[wi] > 0 { any_scan = true }
+        if all_pool_n[wi] != len(seqs0) { all_pool = false }
+        wi = wi + 1
+    }
+    if any_scan && all_pool {
+        println("  [PASS] cross-axis wiring — OLIGONUCLEOTIDE NN screen ran against the RIBOZYME axis's " +
+                str(len(seqs0)) + "-transcript pool")
+    } else {
+        fails = fails + 1
+        println("  [FAIL] cross-axis wiring — pool not consumed")
+    }
+
+    // determinism: re-run candidate 0 twice; compare core fields
+    let d1 = screen(cand_seq(0), pool, -16.0, 6.0)
+    let d2 = screen(cand_seq(0), pool, -16.0, 6.0)
+    let det_ok = d1["windows_scanned"] == d2["windows_scanned"] &&
+                 d1["n_flagged"] == d2["n_flagged"] &&
+                 d1["min_dg"] == d2["min_dg"] &&
+                 d1["flagged_per_kb"] == d2["flagged_per_kb"] &&
+                 d1["flood_verdict"] == d2["flood_verdict"]
+    if det_ok {
+        println("  [PASS] determinism — byte-identical re-run")
+    } else {
+        fails = fails + 1
+        println("  [FAIL] determinism — output drift")
+    }
+
+    println("")
+    println("  HONESTY (AGENTS.tape g8 / f2 / g3 / f1 / f_lattice_fit):")
+    println("  every PASS above is an IN-SILICO SIMULATOR-CONSISTENCY result")
+    println("  ONLY — it verifies the SantaLucia (1998) NN ΔG° off-target")
+    println("  screen runs self-consistently against the vendored transcript")
+    println("  subset and that its verdict logic behaves as designed. It is")
+    println("  NOT a therapeutic / clinical / regulatory / immunogenic /")
+    println("  knockdown / efficacy claim. SCOPE: the pool is the RIBOZYME")
+    println("  axis's GENCODE v47 SUBSET (n≈200 pc-transcripts, ~400 nt each),")
+    println("  NOT the full ~250k-transcript human transcriptome — a clean")
+    println("  verdict here is clean ON THAT SUBSET only, never a genome-wide")
+    println("  wet-lab off-target clearance (full screen = external RIsearch2")
+    println("  step; see ribozyme/spec/gencode_v47_offtarget_risearch2_summary")
+    println("  .json). The OLIGONUCLEOTIDE modality is described via its own")
+    println("  drug precedent (nusinersen 2016; patisiran 2018; inclisiran")
+    println("  2021) — never via the n=6 lattice (no ΔG/gate/rate from")
+    println("  σ/τ/φ/J₂). CLOSURE_RESIDUAL_BACKLOG.md §0.")
+    println("")
+
+    let total_checks = n_panel + 4
+    if fails == 0 {
+        println("  --- summary --- " + str(total_checks) + " / " + str(total_checks) + " checks PASS → verdict: PASS")
+        println("__OLIGONUCLEOTIDE_OFFTARGET_GENCODE_CROSS__ PASS")
+        return
+    }
+    println("  --- summary --- " + str(fails) + " FAIL → verdict: FAIL")
+    println("__OLIGONUCLEOTIDE_OFFTARGET_GENCODE_CROSS__ FAIL")
+    exit(1)
+}

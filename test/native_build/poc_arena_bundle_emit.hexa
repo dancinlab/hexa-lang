@@ -1,0 +1,593 @@
+// test/native_build/poc_arena_bundle_emit.hexa
+//
+// HEXA_BACKEND flip chunk-B phase-H — "여섯째 increment".
+//
+// Bundles ALL FOUR rt_arena_* primitives into ONE hexa-emit .o file:
+//   _rt_arena_init     at offset   0 — 76 bytes (mmap + state init)
+//   _rt_arena_alloc    at offset  76 — 48 bytes (bump-ptr alloc)
+//   _rt_arena_reset    at offset 124 — 20 bytes (ptr = base)
+//   _rt_arena_release  at offset 144 — 68 bytes (munmap + zero)
+//
+// __const carries `_arena_state` — 24 bytes (base/ptr/end slot,
+// initially zero — overwritten by rt_arena_init's stores).
+//
+// Each fn body embeds ADRP+ADD placeholder pairs referencing
+// `_arena_state@PAGE / @PAGEOFF`. Reloc records list every
+// placeholder so the linker (clang+ld64 here, but the hexa-native
+// linker tool/hexa_ld.hexa applies the same encoding per PR #1282)
+// fills the immediates pointing at the data symbol.
+//
+// PIPELINE (NO clang in object production):
+//   1. Concat init · alloc · reset · release bytes        → [int]   (212 B)
+//   2. Build 5 symbols (4 text + 1 data) + 6 reloc recs   → v3 args
+//   3. macho_obj_wrap_v3(...)                             → MH_OBJECT bytes
+//   4. write_bytes("/tmp/poc_arena_bundle.o", obj)        → file
+//
+// VERIFY (downstream — separate driver):
+//   - otool -tv shows all 4 fns disassemble cleanly.
+//   - otool -rv shows 6 ARM64_RELOC_PAGE21/PAGEOFF12 records →
+//     _arena_state.
+//   - nm shows _rt_arena_{init,alloc,reset,release} + _arena_state.
+//   - clang link with a C caller that calls all 4 primitives in
+//     order yields rc=42 (caller derives 42 from arena state).
+//
+// All bytes verbatim from self/codegen/runtime_arm64.hexa::rt_arena_*
+// (widened-ADRP variant per PR #1297 residual #2). Compiled module
+// loader is absent on local hosts so v3 is inlined here byte-identical
+// (deviation from self/codegen/macho.hexa surfaces as a header sanity
+// failure).
+//
+// Cross-cutting:
+//   - closure = exact: 6 relocs (init=1, alloc=1, reset=1, release=2,
+//     all hitting _arena_state); each text symbol visible; full path
+//     init→alloc→reset→release exits with rc=42.
+//   - selfhosted opt-in (hexa-emit object, clang only as link control).
+//   - g5 verbatim: stdout from verify scripts pasted unchanged.
+
+// ─── Inlined byte arrays — verbatim from self/codegen/runtime_arm64.hexa ─
+
+// rt_arena_init — 76 bytes (was 72; widened by adr→adrp+add per #1297r2).
+// Placeholder pair at byte offset 44 (ADRP) + 48 (ADD).
+fn rt_arena_init_bytes() -> [int] {
+    let mut c = []
+    // stp x29, x30, [sp, #-16]!     0xA9BF7BFD
+    c.push(253).push(123).push(191).push(169)
+    // mov x29, sp                    0x910003FD
+    c.push(253).push(3).push(0).push(145)
+    // lsl x1, x0, #20  (MB -> bytes) 0xD36CAC01
+    c.push(1).push(172).push(108).push(211)
+    // mov x6, x1  (save size; svc clobbers x1)  0xAA0103E6
+    c.push(230).push(3).push(1).push(170)
+    // mov x0, #0  (addr=NULL)        0xD2800000
+    c.push(0).push(0).push(128).push(210)
+    // mov x2, #3  (PROT_RW)          0xD2800062
+    c.push(98).push(0).push(128).push(210)
+    // mov x3, #0x1002 (MAP_ANON|PRIV)0xD2820043
+    c.push(67).push(0).push(130).push(210)
+    // movn x4, #0 (fd=-1)            0x92800004
+    c.push(4).push(0).push(128).push(146)
+    // mov x5, #0  (offset=0)         0xD2800005
+    c.push(5).push(0).push(128).push(210)
+    // mov x16, #197 (SYS_mmap)       0xD28018B0
+    c.push(176).push(24).push(128).push(210)
+    // svc #0x80                      0xD4001001
+    c.push(1).push(16).push(0).push(212)
+    // ── reloc[0,1] sit at offset 44/48 ──
+    // adrp x9, _arena_state@PAGE     0x90000009 → 09 00 00 90
+    c.push(9).push(0).push(0).push(144)
+    // add  x9, x9, _arena_state@PAGEOFF  0x91000129 → 29 01 00 91
+    c.push(41).push(1).push(0).push(145)
+    // str x0, [x9]       (state.base = x0)          0xF9000120
+    c.push(32).push(1).push(0).push(249)
+    // str x0, [x9, #8]   (state.ptr  = x0)          0xF9000520
+    c.push(32).push(5).push(0).push(249)
+    // add x10, x0, x6    (x10 = base + saved size)   0x8B06000A
+    c.push(10).push(0).push(6).push(139)
+    // str x10, [x9, #16] (state.end = base+size)    0xF900092A
+    c.push(42).push(9).push(0).push(249)
+    // ldp x29, x30, [sp], #16        0xA8C17BFD
+    c.push(253).push(123).push(193).push(168)
+    // ret                            0xD65F03C0
+    c.push(192).push(3).push(95).push(214)
+    return c
+}
+
+// rt_arena_alloc — 48 bytes (was 44; widened +4 per #1297r2). Hot-path < 64 B.
+// Placeholder pair at byte offset 0 (ADRP) + 4 (ADD).
+fn rt_arena_alloc_bytes() -> [int] {
+    let mut c = []
+    // ── reloc[2,3] at offset 0/4 of this fn ──
+    // adrp x9, _arena_state@PAGE     0x90000009
+    c.push(9).push(0).push(0).push(144)
+    // add  x9, x9, _arena_state@PAGEOFF  0x91000129
+    c.push(41).push(1).push(0).push(145)
+    // ldr x1, [x9, #8]   (x1 = state.ptr = old)     0xF9400521
+    c.push(33).push(5).push(64).push(249)
+    // add x2, x1, x0     (x2 = new_ptr)             0x8B000022
+    c.push(34).push(0).push(0).push(139)
+    // ldr x3, [x9, #16]  (x3 = state.end)           0xF9400923
+    c.push(35).push(9).push(64).push(249)
+    // cmp x2, x3                                     0xEB03005F
+    c.push(95).push(0).push(3).push(235)
+    // b.hi +2 (to oom)                               0x54000088
+    c.push(136).push(0).push(0).push(84)
+    // str x2, [x9, #8]   (state.ptr = new_ptr)      0xF9000522
+    c.push(34).push(5).push(0).push(249)
+    // mov x0, x1         (return old_ptr)           0xAA0103E0
+    c.push(224).push(3).push(1).push(170)
+    // ret                                            0xD65F03C0
+    c.push(192).push(3).push(95).push(214)
+    // oom: mov x0, #0  (return NULL on overflow)    0xD2800000
+    c.push(0).push(0).push(128).push(210)
+    // ret                                            0xD65F03C0
+    c.push(192).push(3).push(95).push(214)
+    return c
+}
+
+// rt_arena_reset — 20 bytes (was 16; widened +4 per #1297r2).
+// Placeholder pair at byte offset 0 (ADRP) + 4 (ADD).
+fn rt_arena_reset_bytes() -> [int] {
+    let mut c = []
+    // ── reloc[4,5] at offset 0/4 of this fn ──
+    // adrp x9, _arena_state@PAGE     0x90000009
+    c.push(9).push(0).push(0).push(144)
+    // add  x9, x9, _arena_state@PAGEOFF  0x91000129
+    c.push(41).push(1).push(0).push(145)
+    // ldr x0, [x9]       (x0 = state.base)          0xF9400120
+    c.push(32).push(1).push(64).push(249)
+    // str x0, [x9, #8]   (state.ptr = base)         0xF9000520
+    c.push(32).push(5).push(0).push(249)
+    // ret                                            0xD65F03C0
+    c.push(192).push(3).push(95).push(214)
+    return c
+}
+
+// rt_arena_release — 68 bytes (was 60; widened +8 — TWO adr widenings per #1297r2).
+// Placeholder pair #1 at byte offset 8/12, pair #2 at byte offset 36/40.
+fn rt_arena_release_bytes() -> [int] {
+    let mut c = []
+    // stp x29, x30, [sp, #-16]!     0xA9BF7BFD
+    c.push(253).push(123).push(191).push(169)
+    // mov x29, sp                    0x910003FD
+    c.push(253).push(3).push(0).push(145)
+    // ── reloc[6,7] at offset 8/12 of this fn ──
+    // adrp x9, _arena_state@PAGE     0x90000009
+    c.push(9).push(0).push(0).push(144)
+    // add  x9, x9, _arena_state@PAGEOFF  0x91000129
+    c.push(41).push(1).push(0).push(145)
+    // ldr x0, [x9]       (x0 = state.base)          0xF9400120
+    c.push(32).push(1).push(64).push(249)
+    // ldr x1, [x9, #16]  (x1 = state.end)           0xF9400921
+    c.push(33).push(9).push(64).push(249)
+    // sub x1, x1, x0     (x1 = size = end-base)     0xCB000021
+    c.push(33).push(0).push(0).push(203)
+    // mov x16, #73 (SYS_munmap)                     0xD2800930
+    c.push(48).push(9).push(128).push(210)
+    // svc #0x80                                      0xD4001001
+    c.push(1).push(16).push(0).push(212)
+    // ── reloc[8,9] at offset 36/40 of this fn ──
+    // adrp x9, _arena_state@PAGE     0x90000009
+    c.push(9).push(0).push(0).push(144)
+    // add  x9, x9, _arena_state@PAGEOFF  0x91000129
+    c.push(41).push(1).push(0).push(145)
+    // mov x10, #0                                    0xD280000A
+    c.push(10).push(0).push(128).push(210)
+    // str x10, [x9]      (state.base = 0)           0xF900012A
+    c.push(42).push(1).push(0).push(249)
+    // str x10, [x9, #8]  (state.ptr = 0)            0xF900052A
+    c.push(42).push(5).push(0).push(249)
+    // str x10, [x9, #16] (state.end = 0)            0xF900092A
+    c.push(42).push(9).push(0).push(249)
+    // ldp x29, x30, [sp], #16        0xA8C17BFD
+    c.push(253).push(123).push(193).push(168)
+    // ret                            0xD65F03C0
+    c.push(192).push(3).push(95).push(214)
+    return c
+}
+
+// ─── helpers (inlined from self/codegen/macho.hexa) ───────────────
+
+fn push_u16_le(buf: [int], val: int) -> [int] {
+    return buf.push(val % 256).push((val / 256) % 256)
+}
+
+fn push_u32_le(buf: [int], val: int) -> [int] {
+    return buf
+      .push(val % 256)
+      .push((val / 256) % 256)
+      .push((val / 65536) % 256)
+      .push((val / 16777216) % 256)
+}
+
+fn push_u64_le(buf: [int], val: int) -> [int] {
+    let mut b = push_u32_le(buf, val % 0x100000000)
+    return push_u32_le(b, val / 0x100000000)
+}
+
+fn align_to(val: int, align: int) -> int {
+    return (val + align - 1) / align * align
+}
+
+// ─── macho_obj_wrap_v3_arena — variant of macho_obj_wrap_v3 (#1311) ─
+//
+// DIVERGENCE vs upstream v3: the data symbol is placed in
+// `(__DATA, __data)` instead of `(__TEXT, __const)` because the arena
+// state slot is WRITE-target (rt_arena_init/alloc/reset/release all
+// `str` into it). `__TEXT,__const` ends up in a R-only segment after
+// final link → SIGSEGV on first `str`. Switching to `(__DATA, __data)`
+// keeps the symbol writable in the merged image.
+//
+// This is the "여섯째 increment" emit-side delta. The upstream v3 stays
+// unchanged (existing v3 callers — poc_multi_sym_emit — emit a text-only
+// .o with state_bytes=[] so the __const branch is dead code for them).
+// A future v4 / v3-with-section-flag promotion lands as a separate PR.
+//
+// One ncmd more (LC_SEGMENT_64 __DATA), one section more (__data).
+fn macho_obj_wrap_v3_arena(code: [int],
+                           sym_name_bytes: [[int]],
+                           sym_offsets: [int],
+                           sym_sections: [int],
+                           state_bytes: [int],
+                           reloc_offs: [int],
+                           reloc_kinds: [int],
+                           reloc_symnums: [int]) -> [int] {
+    let mut out = []
+    let code_size  = len(code)
+    let state_size = len(state_bytes)
+    let nreloc     = len(reloc_offs)
+    let nsyms      = len(sym_name_bytes)
+
+    let mut sym_strx: [int] = []
+    let mut strtab_size = 1
+    let mut si = 0
+    while si < nsyms {
+        sym_strx.push(strtab_size)
+        strtab_size = strtab_size + len(sym_name_bytes[si])
+        si = si + 1
+    }
+
+    // 2 segments (TEXT for __text + DATA for __data).
+    // TEXT segment cmd = 72 + 80 (1 section)
+    // DATA segment cmd = 72 + 80 (1 section)
+    let text_segment_cmd_size = 72 + 80
+    let data_segment_cmd_size = 72 + 80
+    let symtab_cmd_size = 24
+    let build_version_cmd_size = 24
+    let mut ncmds = 3                  // TEXT + SYMTAB + BUILD_VER (state-less case)
+    let mut sizeofcmds = text_segment_cmd_size + symtab_cmd_size + build_version_cmd_size
+    if state_size > 0 {
+        ncmds = 4
+        sizeofcmds = text_segment_cmd_size + data_segment_cmd_size + symtab_cmd_size + build_version_cmd_size
+    }
+
+    let header_size = 32
+    let code_offset = align_to(header_size + sizeofcmds, 8)
+
+    let mut data_offset = code_offset + code_size
+    if state_size > 0 {
+        data_offset = align_to(code_offset + code_size, 8)
+    }
+    let data_end = data_offset + state_size
+
+    let reloc_offset = align_to(data_end, 4)
+    let reloc_size   = 8 * nreloc
+    let symtab_offset = reloc_offset + reloc_size
+    let nlist_size = 16
+    let strtab_offset = symtab_offset + nlist_size * nsyms
+    let total_end = strtab_offset + strtab_size
+
+    // Mach-O header (32 bytes)
+    out = push_u32_le(out, 0xFEEDFACF)
+    out = push_u32_le(out, 0x0100000C)
+    out = push_u32_le(out, 0)
+    out = push_u32_le(out, 1)                  // MH_OBJECT
+    out = push_u32_le(out, ncmds)
+    out = push_u32_le(out, sizeofcmds)
+    out = push_u32_le(out, 0)
+    out = push_u32_le(out, 0)
+
+    // ── LC_SEGMENT_64 #1 — TEXT (72 + 80 = 152 bytes) ───────────────
+    // Segment carries only __text section (no __const inside TEXT).
+    out = push_u32_le(out, 0x19)
+    out = push_u32_le(out, text_segment_cmd_size)
+    let mut i0 = 0
+    while i0 < 16 { out.push(0); i0 = i0 + 1 }   // segname (16 NUL — anonymous in .o)
+    out = push_u64_le(out, 0)                    // vmaddr
+    out = push_u64_le(out, code_size)            // vmsize (__text only)
+    out = push_u64_le(out, code_offset)          // fileoff
+    out = push_u64_le(out, code_size)            // filesize
+    out = push_u32_le(out, 7)                    // maxprot
+    out = push_u32_le(out, 7)                    // initprot
+    out = push_u32_le(out, 1)                    // nsects = 1 (just __text)
+    out = push_u32_le(out, 0)                    // flags
+
+    // section_64 __text (80 bytes)
+    out.push(95).push(95).push(116).push(101).push(120).push(116)
+    let mut j0 = 0
+    while j0 < 10 { out.push(0); j0 = j0 + 1 }
+    out.push(95).push(95).push(84).push(69).push(88).push(84)
+    j0 = 0
+    while j0 < 10 { out.push(0); j0 = j0 + 1 }
+    out = push_u64_le(out, 0)                    // addr
+    out = push_u64_le(out, code_size)            // size
+    out = push_u32_le(out, code_offset)          // offset
+    out = push_u32_le(out, 2)                    // align = log2(4)
+    out = push_u32_le(out, reloc_offset)         // reloff
+    out = push_u32_le(out, nreloc)               // nreloc
+    out = push_u32_le(out, 0x80000400)           // S_ATTR_PURE + SOME
+    out = push_u32_le(out, 0)
+    out = push_u32_le(out, 0)
+    out = push_u32_le(out, 0)
+
+    // ── LC_SEGMENT_64 #2 — DATA (72 + 80 = 152 bytes) — if state ────
+    if state_size > 0 {
+        out = push_u32_le(out, 0x19)
+        out = push_u32_le(out, data_segment_cmd_size)
+        let mut iD = 0
+        while iD < 16 { out.push(0); iD = iD + 1 }
+        out = push_u64_le(out, code_size)            // vmaddr (after __text)
+        out = push_u64_le(out, state_size)           // vmsize
+        out = push_u64_le(out, data_offset)          // fileoff
+        out = push_u64_le(out, state_size)           // filesize
+        out = push_u32_le(out, 3)                    // maxprot = R+W
+        out = push_u32_le(out, 3)                    // initprot = R+W
+        out = push_u32_le(out, 1)                    // nsects = 1 (just __data)
+        out = push_u32_le(out, 0)                    // flags
+
+        // section_64 __data (80 bytes)
+        // sectname "__data" + 10 NUL pad
+        out.push(95).push(95).push(100).push(97).push(116).push(97)
+        let mut jD = 0
+        while jD < 10 { out.push(0); jD = jD + 1 }
+        // segname "__DATA" + 10 NUL pad
+        out.push(95).push(95).push(68).push(65).push(84).push(65)
+        jD = 0
+        while jD < 10 { out.push(0); jD = jD + 1 }
+        out = push_u64_le(out, code_size)            // addr (matches the section header above)
+        out = push_u64_le(out, state_size)           // size
+        out = push_u32_le(out, data_offset)          // offset
+        out = push_u32_le(out, 3)                    // align = log2(8)
+        out = push_u32_le(out, 0)                    // reloff (no relocs INTO __data)
+        out = push_u32_le(out, 0)                    // nreloc
+        out = push_u32_le(out, 0)                    // flags = S_REGULAR (writable)
+        out = push_u32_le(out, 0)
+        out = push_u32_le(out, 0)
+        out = push_u32_le(out, 0)
+    }
+
+    // LC_SYMTAB
+    out = push_u32_le(out, 0x02)
+    out = push_u32_le(out, symtab_cmd_size)
+    out = push_u32_le(out, symtab_offset)
+    out = push_u32_le(out, nsyms)
+    out = push_u32_le(out, strtab_offset)
+    out = push_u32_le(out, strtab_size)
+
+    // LC_BUILD_VERSION
+    out = push_u32_le(out, 0x32)
+    out = push_u32_le(out, build_version_cmd_size)
+    out = push_u32_le(out, 1)
+    out = push_u32_le(out, 0x000E0000)
+    out = push_u32_le(out, 0x000E0000)
+    out = push_u32_le(out, 0)
+
+    // Pad to code_offset, then __text payload
+    while len(out) < code_offset { out.push(0) }
+    let mut k0 = 0
+    while k0 < len(code) { out.push(code[k0]); k0 = k0 + 1 }
+
+    // Pad to data_offset, then __data payload (if any)
+    if state_size > 0 {
+        while len(out) < data_offset { out.push(0) }
+        let mut sb = 0
+        while sb < state_size { out.push(state_bytes[sb]); sb = sb + 1 }
+    }
+
+    // Pad to reloc_offset, then relocation table
+    while len(out) < reloc_offset { out.push(0) }
+    let mut ri = 0
+    while ri < nreloc {
+        let r_off     = reloc_offs[ri]
+        let r_kind    = reloc_kinds[ri]
+        let r_symnum  = reloc_symnums[ri]
+        out = push_u32_le(out, r_off)
+        let mut r_pcrel = 0
+        if r_kind == 3 { r_pcrel = 1 }
+        let r_length = 2
+        let r_extern = 1
+        let bits = (r_symnum % 0x1000000)
+                 + (r_pcrel * 0x1000000)
+                 + (r_length * 0x2000000)
+                 + (r_extern * 0x8000000)
+                 + ((r_kind % 16) * 0x10000000)
+        out = push_u32_le(out, bits)
+        ri = ri + 1
+    }
+
+    // Pad to symtab_offset, then nlist_64 × nsyms
+    while len(out) < symtab_offset { out.push(0) }
+    let mut sj = 0
+    while sj < nsyms {
+        let s_strx    = sym_strx[sj]
+        let s_offset  = sym_offsets[sj]
+        let s_section = sym_sections[sj]
+        // n_value for __text sym (sect=1) = 0 + offset.
+        // n_value for __data sym (sect=2) = code_size + offset (matches the
+        // __data section addr we set above).
+        let mut n_value = s_offset
+        if s_section == 2 { n_value = code_size + s_offset }
+        out = push_u32_le(out, s_strx)
+        out.push(0x0E + 0x01)
+        out.push(s_section)
+        out = push_u16_le(out, 0)
+        out = push_u64_le(out, n_value)
+        sj = sj + 1
+    }
+
+    // String table: "\0<name0>\0<name1>\0..."
+    out.push(0)
+    let mut sk = 0
+    while sk < nsyms {
+        let nb = sym_name_bytes[sk]
+        let mut nbi = 0
+        while nbi < len(nb) {
+            out.push(nb[nbi])
+            nbi = nbi + 1
+        }
+        sk = sk + 1
+    }
+
+    return out
+}
+
+// ─── driver ───────────────────────────────────────────────────────
+
+fn main() {
+    println("=== PoC arena bundle emit — 4 primitives + _arena_state in one .o ===")
+
+    // Build per-fn bytes and verify sizes.
+    let init_b   = rt_arena_init_bytes()
+    let alloc_b  = rt_arena_alloc_bytes()
+    let reset_b  = rt_arena_reset_bytes()
+    let rel_b    = rt_arena_release_bytes()
+    println("rt_arena_init    : " + to_string(len(init_b))  + " bytes (76 expected)")
+    println("rt_arena_alloc   : " + to_string(len(alloc_b)) + " bytes (48 expected)")
+    println("rt_arena_reset   : " + to_string(len(reset_b)) + " bytes (20 expected)")
+    println("rt_arena_release : " + to_string(len(rel_b))   + " bytes (68 expected)")
+
+    let mut ok = true
+    if len(init_b)  != 76 { println("FAIL: init  size");  ok = false }
+    if len(alloc_b) != 48 { println("FAIL: alloc size");  ok = false }
+    if len(reset_b) != 20 { println("FAIL: reset size");  ok = false }
+    if len(rel_b)   != 68 { println("FAIL: rel   size");  ok = false }
+
+    // Concatenate __text in order — [init, alloc, reset, release]
+    //   base offsets: 0, 76, 124, 144 ; total 212 B.
+    let mut code = []
+    let mut p = 0
+    while p < len(init_b)  { code.push(init_b[p]);  p = p + 1 }
+    p = 0
+    while p < len(alloc_b) { code.push(alloc_b[p]); p = p + 1 }
+    p = 0
+    while p < len(reset_b) { code.push(reset_b[p]); p = p + 1 }
+    p = 0
+    while p < len(rel_b)   { code.push(rel_b[p]);   p = p + 1 }
+    println("total code       : " + to_string(len(code)) + " bytes (212 expected)")
+    if len(code) != 212 { println("FAIL: total code size"); ok = false }
+
+    // Spot-check the placeholder ADRP/ADD pairs survived concatenation.
+    // init: adrp@44, add@48; alloc: adrp@76, add@80;
+    // reset: adrp@124, add@128; release: adrp@152/180, add@156/184.
+    let probes_adrp = [44, 76, 124, 152, 180]
+    let probes_add  = [48, 80, 128, 156, 184]
+    let mut q = 0
+    while q < len(probes_adrp) {
+        let o = probes_adrp[q]
+        if code[o]   != 9   { println("FAIL: ADRP[" + to_string(o) + "] byte 0"); ok = false }
+        if code[o+3] != 144 { println("FAIL: ADRP[" + to_string(o) + "] byte 3"); ok = false }
+        q = q + 1
+    }
+    q = 0
+    while q < len(probes_add) {
+        let o = probes_add[q]
+        if code[o]   != 41  { println("FAIL: ADD["  + to_string(o) + "] byte 0"); ok = false }
+        if code[o+3] != 145 { println("FAIL: ADD["  + to_string(o) + "] byte 3"); ok = false }
+        q = q + 1
+    }
+    println("placeholders     : ADRP@{44,76,124,152,180} + ADD@{48,80,128,156,184} OK")
+
+    // ── Symbol table — 5 symbols ────────────────────────────────────
+    // text[0] _rt_arena_init     @   0   (sect=1)
+    // text[1] _rt_arena_alloc    @  76   (sect=1)
+    // text[2] _rt_arena_reset    @ 124   (sect=1)
+    // text[3] _rt_arena_release  @ 144   (sect=1)
+    // data[4] _arena_state       @   0   (sect=2)  — intra-section offset 0
+
+    // "_rt_arena_init\0"     = 95 114 116 95 97 114 101 110 97 95 105 110 105 116 0 (15 B)
+    let mut name_init = []
+    name_init.push(95).push(114).push(116).push(95).push(97).push(114).push(101).push(110)
+    name_init.push(97).push(95).push(105).push(110).push(105).push(116).push(0)
+
+    // "_rt_arena_alloc\0"    = 95 114 116 95 97 114 101 110 97 95 97 108 108 111 99 0 (16 B)
+    let mut name_alloc = []
+    name_alloc.push(95).push(114).push(116).push(95).push(97).push(114).push(101).push(110)
+    name_alloc.push(97).push(95).push(97).push(108).push(108).push(111).push(99).push(0)
+
+    // "_rt_arena_reset\0"    = 95 114 116 95 97 114 101 110 97 95 114 101 115 101 116 0 (16 B)
+    let mut name_reset = []
+    name_reset.push(95).push(114).push(116).push(95).push(97).push(114).push(101).push(110)
+    name_reset.push(97).push(95).push(114).push(101).push(115).push(101).push(116).push(0)
+
+    // "_rt_arena_release\0"  = 95 114 116 95 97 114 101 110 97 95 114 101 108 101 97 115 101 0 (18 B)
+    let mut name_release = []
+    name_release.push(95).push(114).push(116).push(95).push(97).push(114).push(101).push(110)
+    name_release.push(97).push(95).push(114).push(101).push(108).push(101).push(97).push(115)
+    name_release.push(101).push(0)
+
+    // "_arena_state\0"       = 95 97 114 101 110 97 95 115 116 97 116 101 0 (13 B)
+    let mut name_state = []
+    name_state.push(95).push(97).push(114).push(101).push(110).push(97).push(95).push(115)
+    name_state.push(116).push(97).push(116).push(101).push(0)
+
+    let mut sym_name_bytes = []
+    sym_name_bytes.push(name_init).push(name_alloc).push(name_reset).push(name_release).push(name_state)
+
+    let mut sym_offsets = []
+    sym_offsets.push(0).push(76).push(124).push(144).push(0)
+
+    let mut sym_sections = []
+    sym_sections.push(1).push(1).push(1).push(1).push(2)
+
+    // ── Reloc records — 10 records (2 per ADRP+ADD pair × 5 pairs) ──
+    // For each pair: PAGE21 (kind=3) at adrp_off, PAGEOFF12 (kind=4)
+    // at add_off; both target sym index 4 (_arena_state).
+    //
+    // Order: init, alloc, reset, release#1, release#2.
+    let mut reloc_offs = []
+    reloc_offs.push(44).push(48)      // init
+    reloc_offs.push(76).push(80)      // alloc
+    reloc_offs.push(124).push(128)    // reset
+    reloc_offs.push(152).push(156)    // release pair 1
+    reloc_offs.push(180).push(184)    // release pair 2
+
+    let mut reloc_kinds = []
+    reloc_kinds.push(3).push(4)
+    reloc_kinds.push(3).push(4)
+    reloc_kinds.push(3).push(4)
+    reloc_kinds.push(3).push(4)
+    reloc_kinds.push(3).push(4)
+
+    let mut reloc_symnums = []
+    let mut rn = 0
+    while rn < 10 { reloc_symnums.push(4); rn = rn + 1 }   // all → _arena_state (sym idx 4)
+    println("nreloc           : " + to_string(len(reloc_offs)) + " records (10 expected)")
+    if len(reloc_offs) != 10 { println("FAIL: nreloc"); ok = false }
+
+    // ── State slot — 24 bytes (base/ptr/end u64 — initially zero) ──
+    let mut state_bytes = []
+    let mut sbi = 0
+    while sbi < 24 { state_bytes.push(0); sbi = sbi + 1 }
+
+    // ── Emit ─────────────────────────────────────────────────────────
+    let obj = macho_obj_wrap_v3_arena(code, sym_name_bytes, sym_offsets,
+                                      sym_sections, state_bytes,
+                                      reloc_offs, reloc_kinds, reloc_symnums)
+    println("obj size         : " + to_string(len(obj)) + " bytes total")
+
+    // Header sanity — MH_MAGIC_64 = FEEDFACF → CF FA ED FE
+    if obj[0] != 207 { println("FAIL: magic[0]"); ok = false }
+    if obj[1] != 250 { println("FAIL: magic[1]"); ok = false }
+    if obj[2] != 237 { println("FAIL: magic[2]"); ok = false }
+    if obj[3] != 254 { println("FAIL: magic[3]"); ok = false }
+    println("MH_MAGIC_64      : cf fa ed fe OK")
+
+    if obj[12] != 1 { println("FAIL: filetype != MH_OBJECT"); ok = false }
+    println("filetype         : 1 (MH_OBJECT) OK")
+
+    write_bytes("/tmp/poc_arena_bundle.o", obj)
+    println("wrote            : /tmp/poc_arena_bundle.o")
+
+    if ok { println("[poc] EMIT OK") } else { println("[poc] EMIT FAIL") }
+}
+
+// auto-invoke handles main()

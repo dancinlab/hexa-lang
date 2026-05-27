@@ -1,0 +1,28 @@
+{
+  "__fixture_tag__": "SAMPLE FIXTURE — not real data, for selftest replay only",
+  "__source__": "DeepMind GNoME schema (illustrative); real records at Zenodo 10.5281/zenodo.10371563",
+  "__captured__": "2026-05-13 (hexa-matter Phase G)",
+  "__honest_note__": "GNoME records are PREDICTED stable crystals — NOT synthesized. Preserve UNPROVEN marker per INIT.md hard rule 5.",
+  "gnome_id": "GN-SAMPLE-0000001",
+  "composition": "Li3PS4",
+  "elements": ["Li", "P", "S"],
+  "nsites": 8,
+  "predicted_formation_energy_per_atom_eV": -1.84,
+  "predicted_energy_above_hull_eV_per_atom": 0.00,
+  "is_predicted_stable": true,
+  "is_synthesized": false,
+  "synthesis_status": "UNPROVEN — DFT prediction only (Merchant et al. 2023 Nature)",
+  "structure": {
+    "lattice": {
+      "a": 7.0833,
+      "b": 6.7980,
+      "c": 10.2030,
+      "alpha": 90.0,
+      "beta": 90.0,
+      "gamma": 90.0
+    },
+    "space_group_symbol": "Pmn21",
+    "space_group_number": 31
+  },
+  "license": "CC-BY 4.0 (DeepMind GNoME release; Merchant et al. 2023 Nature)"
+}

@@ -1,0 +1,72 @@
+#!hexa strict
+// stdlib/hal/backend/esp32s3/dac.hexa — ESP32-S3 DAC backend — paper skeleton.
+//
+// Phase: skeleton / stub. **NO native DAC on ESP32-S3** (Espressif
+// dropped the DAC peripheral starting with ESP32-S2 / S3 / C3 — only
+// the original ESP32 has native 8-bit DAC). LEDC-emulation fallback.
+// Sim-first invariant preserved.
+//
+// Target:    ESP32-S3 Xtensa LX7 dual-core @ 240 MHz.
+// Chip ref:  ESP32-S3 TRM — no DAC peripheral; emulation via §13 LEDC.
+// Surface:   esp32s3_dac_{configure,write,close}(...)
+// Dispatch:  dac.hexa selects this via cfg-flag.
+//
+// Same emulation strategy as esp32c3/dac.hexa, but with 8 LEDC
+// channels (vs 6 on C3) and 1..20-bit duty resolution (vs 1..14-bit).
+//
+//   At APB=80 MHz: 16-bit duty → ≤ 1.2 kHz LEDC freq; 12-bit → ≤ 19.5 kHz;
+//                  10-bit → ≤ 78 kHz; 8-bit → ≤ 312 kHz.
+//
+// Higher duty-resolution ceiling means S3 can directly emulate a
+// 16-bit DAC at low bandwidth without dither — useful for slow analog
+// reference signals (e.g. battery voltage scaling).
+
+let MODULE_NAME = "esp32s3_dac"
+let SIGMA_SLOT  = 6
+let PHI_KIND    = "analog"
+
+let VIRTUAL_UNIT_MIN = 0
+let VIRTUAL_UNIT_MAX = 7   // 8 LEDC channels on S3
+
+let RES_8BIT  = 8
+let RES_10BIT = 10
+let RES_12BIT = 12
+let RES_16BIT = 16   // achievable via 20-bit LEDC duty (S3-specific)
+
+// ── stub handlers (route to LEDC PWM emulation) ───────────────────────
+
+fn esp32s3_dac_configure(unit: int, channel: int, resolution: int) -> int {
+    if unit < VIRTUAL_UNIT_MIN || unit > VIRTUAL_UNIT_MAX { return -1 }
+    if channel != 0 { return -2 }
+    if resolution != 8 && resolution != 10 && resolution != 12 && resolution != 16 { return -3 }
+    // STUB: esp32s3_pwm_configure(unit, 0, freq=high) with duty res = `resolution`.
+    return unit * 12 + channel
+}
+
+fn esp32s3_dac_write(handle: int, value: int) -> bool {
+    if handle < 0 { return false }
+    if value < 0 || value > 0xFFFF { return false }
+    // STUB: duty_x100 = value · 10000 / (1 << resolution); esp32s3_pwm_set_duty.
+    return true
+}
+
+fn esp32s3_dac_close(handle: int) -> bool {
+    if handle < 0 { return false }
+    // STUB: esp32s3_pwm_stop(handle)
+    return true
+}
+
+fn esp32s3_dac_report(handle: int) -> str {
+    return "[esp32s3_dac sim] handle=" + str(handle) + " (LEDC-emulation; no native DAC)"
+}
+
+fn esp32s3_dac_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32s3_dac sim] STUB skeleton — sim-first; LEDC-emulation (no native DAC)")
+    println("  strategy: esp32s3_pwm (LEDC) + external RC low-pass filter")
+    println("  res × bw (20-bit duty ceiling): 16-bit @ ≤1.2 kHz | 12-bit @ ≤19.5 kHz")
+    println("  for high-precision: external SPI DAC (AD5675R / MCP4922)")
+}

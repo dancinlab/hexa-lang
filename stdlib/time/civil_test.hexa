@@ -1,0 +1,33 @@
+// HEXA Standard Library — time/civil self-test
+// @ci_gate
+use "stdlib/time/civil"
+let mut pass = 0
+let mut total = 0
+fn cks(name: string, got: string, want: string) {
+    total = total + 1
+    if got == want { pass = pass + 1 } else { println("FAIL " + name + " got=" + got + " want=" + want) }
+}
+fn cki(name: string, got: int, want: int) {
+    total = total + 1
+    if got == want { pass = pass + 1 } else { println("FAIL " + name + " got=" + to_string(got) + " want=" + to_string(want)) }
+}
+fn main() {
+    // epoch 0 = 1970-01-01T00:00:00Z
+    cks("epoch0", iso8601_format_native(0), "1970-01-01T00:00:00Z")
+    // 1700000000 = 2023-11-14T22:13:20Z (known)
+    cks("e1.7e9", iso8601_format_native(1700000000), "2023-11-14T22:13:20Z")
+    // 946684800 = 2000-01-01T00:00:00Z (Y2K, leap-year boundary)
+    cks("y2k", iso8601_format_native(946684800), "2000-01-01T00:00:00Z")
+    // 1709251200 = 2024-02-29 (leap day) 16:00:00? compute: just check round-trip
+    cki("roundtrip", iso8601_parse_native(iso8601_format_native(1700000000)), 1700000000)
+    cki("roundtrip0", iso8601_parse_native("1970-01-01T00:00:00Z"), 0)
+    cks("rfc3339=iso", rfc3339_format_native(1700000000), iso8601_format_native(1700000000))
+    // days_from_civil(1970,1,1)=0 ; civil_from_days(0)=[1970,1,1]
+    cki("dfc_epoch", days_from_civil(1970, 1, 1), 0)
+    let ymd = civil_from_days(0)
+    cki("cfd_y", ymd[0], 1970)
+    cki("cfd_m", ymd[1], 1)
+    cki("cfd_d", ymd[2], 1)
+    println("civil self-test: " + to_string(pass) + "/" + to_string(total))
+    if pass == total { println("PASS") } else { println("FAILED") }
+}

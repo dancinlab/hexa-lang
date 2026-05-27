@@ -1,0 +1,86 @@
+// HEXA Standard Library — info/transfer_entropy
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// 1-lag transfer-entropy proxy via mutual information on the lagged pair
+// (x_t, y_{t+1}). Promoted from anima bench/info_measure_triad/bench.hexa
+// (PR #1128 INFO-MEASURE-TRIAD), where it served as the directed-flow
+// (router-differentiation) measurer orthogonal to Shannon / LZ / scale-free α.
+//
+// Definition (proxy, NOT full conditional-MI Schreiber TE):
+//
+//     te_proxy(X → Y) ≜ MI(X_t, Y_{t+1})
+//
+// On a lagged driver  driven_{t+1} = α·driver_t + (1−α)·noise_{t+1}:
+//   • MI(driver_t, driven_{t+1})  is HIGH (forward causal leak)
+//   • MI(driven_t, driver_{t+1})  is LOW  (no backward causation)
+// so a directional asymmetry  |MI_fwd − MI_bwd| / (MI_fwd + MI_bwd) ∈ [0, 1]
+// distinguishes causal direction even though this is a 1-lag proxy.
+//
+// Implementation:
+//   - Inputs are list[float] in [0, 1] (caller pre-normalizes if needed).
+//   - Equal-width histogram binning with nbins buckets per axis.
+//   - MI = Σ p(x,y) · log2( p(x,y) / (p(x)·p(y)) ), zero-prob terms skipped.
+//
+// Surface:
+//   pub fn transfer_entropy(x_seq: array, y_seq: array, nbins: int) -> float
+//     1-lag MI proxy MI(X_t, Y_{t+1}) in bits. Returns 0.0 if len < 2.
+
+extern fn log(x: float) -> float
+
+fn _te_bin_idx(x: float, nbins: int) -> int {
+    let mut xx = x
+    if xx < 0.0 { xx = 0.0 }
+    if xx > 0.9999 { xx = 0.9999 }
+    return int(xx * (nbins + 0.0))
+}
+
+fn _te_mutual_info_2d(a, b, nbins: int) -> float {
+    let n = len(a)
+    if n == 0 { return 0.0 }
+    let mut joint = #{}
+    let mut ma = #{}
+    let mut mb = #{}
+    let mut i = 0
+    while i < n {
+        let ia = _te_bin_idx(a[i], nbins)
+        let ib = _te_bin_idx(b[i], nbins)
+        let kj = "" + ia + "_" + ib
+        let ka = "" + ia
+        let kb = "" + ib
+        if !has_key(joint, kj) { joint[kj] = 1 } else { joint[kj] = joint[kj] + 1 }
+        if !has_key(ma, ka) { ma[ka] = 1 } else { ma[ka] = ma[ka] + 1 }
+        if !has_key(mb, kb) { mb[kb] = 1 } else { mb[kb] = mb[kb] + 1 }
+        i = i + 1
+    }
+    let ln2 = log(2.0)
+    let mut mi = 0.0
+    for kj in joint {
+        let cj = joint[kj]
+        let pj = (cj + 0.0) / (n + 0.0)
+        let parts = split(kj, "_")
+        let ka = parts[0]
+        let kb = parts[1]
+        let pa = (ma[ka] + 0.0) / (n + 0.0)
+        let pb = (mb[kb] + 0.0) / (n + 0.0)
+        if pj > 0.0 && pa > 0.0 && pb > 0.0 {
+            mi = mi + pj * (log(pj / (pa * pb)) / ln2)
+        }
+    }
+    return mi
+}
+
+pub fn transfer_entropy(x_seq, y_seq, nbins: int) -> float {
+    let n = len(x_seq)
+    if n < 2 { return 0.0 }
+    let mut x_now = []
+    let mut y_next = []
+    let mut i = 0
+    while i < n - 1 {
+        x_now = append(x_now, x_seq[i])
+        y_next = append(y_next, y_seq[i + 1])
+        i = i + 1
+    }
+    return _te_mutual_info_2d(x_now, y_next, nbins)
+}

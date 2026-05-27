@@ -1,0 +1,136 @@
+// gpu/tests/gemm.hexa — RFC 055 055-P2 naive FP64 GEMM end-to-end shape
+//
+// @version 0.0.1
+// @capabilities [pure]
+// @phase("parse_only")
+//
+// This file declares the hexa-source SHAPE the 055-P2 deliverable targets
+// — a `@gpu_kernel` naive FP64 GEMM, its CPU reference, and the host-side
+// `gpu_launch` call. It is intentionally `parse_only`: the compiler can
+// parse the surface (gpu/SPEC.md §2 — `@gpu_kernel` is an ordinary
+// annotation on a normal `fn`), but the MIR partition that routes
+// `@gpu_*` functions to the NVPTX codegen target is 055-P3 work
+// (F-RFC055-CPU-CODEGEN-UNTOUCHED requires it land additively).
+//
+// What 055-P2 lands today (compiler/codegen/nvptx_target.hexa):
+//   * The PTX text emitter that produces the cubin-ready PTX for this
+//     kernel — `emit_ptx_gemm_module(NVPTX_TARGET_SM80|SM90)`.
+//   * The naive (one-thread-per-C-element) GEMM lowering — 2-D thread
+//     index, a real PTX contraction loop, `fma.rn.f64` accumulate.
+//
+// What lands later (055-P2-tiled / 055-P3):
+//   * The tiled `@shared` + `gpu_barrier()` GEMM variant (gpu/SPEC.md §6).
+//   * Parser plumbing that records `@gpu_kernel` on the FnDecl, the MIR
+//     partition that routes a @gpu_* MFunc to codegen_nvptx_sm*, and the
+//     launch-site lowering that turns `gpu_launch(gemm, ...)` into a
+//     `hexa_cuda_launch_kernel(...)` call.
+//
+// Run (parse-only):
+//   hexa parse gpu/tests/gemm.hexa
+
+// ── The kernel (gpu/SPEC.md §2 — @gpu_kernel must return void) ───────
+//
+// One thread computes one C element. A is row-major m×k, B is row-major
+// k×n, C is row-major m×n. The accumulate `acc + a*b` lowers to a single
+// `fma.rn.f64` (round-to-nearest fused multiply-add).
+
+@gpu_kernel
+fn gemm(a: [f64], b: [f64], c: [f64], m: i64, n: i64, k: i64) {
+    let row = gpu_block_id_y() * gpu_block_dim_y() + gpu_thread_id_y()
+    let col = gpu_block_id_x() * gpu_block_dim_x() + gpu_thread_id_x()
+    if to_i64(row) < m {
+        if to_i64(col) < n {
+            let mut acc: f64 = 0.0
+            let mut kk: i64 = 0
+            while kk < k {
+                acc = acc + a[to_i64(row) * k + kk] * b[kk * n + to_i64(col)]
+                kk = kk + 1
+            }
+            c[to_i64(row) * n + to_i64(col)] = acc
+        }
+    }
+}
+
+// ── CPU reference (the correctness oracle, F-RFC055-GEMM-FEASIBLE) ────
+//
+// GEMM *does* reduce (the k-loop sum) → FP64 addition is not exact and
+// order-dependent → F-RFC055-GEMM-FEASIBLE is a TOLERANCE gate, not a
+// byte-equality gate (RFC 055 §7). The kernel and this reference both
+// accumulate in the same k-ascending order with the same `fma`-style
+// step, so the tolerance is tight, but it is a tolerance nonetheless.
+
+fn cpu_gemm(a: [f64], b: [f64], c: [f64], m: i64, n: i64, k: i64) {
+    let mut row = 0
+    while row < m {
+        let mut col = 0
+        while col < n {
+            let mut acc: f64 = 0.0
+            let mut kk = 0
+            while kk < k {
+                acc = acc + a[row * k + kk] * b[kk * n + col]
+                kk = kk + 1
+            }
+            c[row * n + col] = acc
+            col = col + 1
+        }
+        row = row + 1
+    }
+}
+
+// ── Host harness (gpu/SPEC.md §7 — gpu_launch ABI) ───────────────────
+//
+// 055-P2 declares the host-side launch shape. The compiler-side wiring
+// (`gpu_launch` → `hexa_cuda_launch_kernel`) is 055-P3; today the call
+// stays a declaration so the file parses without inventing a new
+// builtin in the lexer.
+
+fn main() {
+    let m: i64 = 64
+    let n: i64 = 64
+    let k: i64 = 64
+
+    // Allocate row-major [f64] farrs — A (m×k), B (k×n), C (m×n).
+    let mut a_h: [f64] = []
+    let mut b_h: [f64] = []
+    let mut i = 0
+    while i < m * k { a_h.push(to_f64(i % 7)); i = i + 1 }
+    let mut j = 0
+    while j < k * n { b_h.push(to_f64(j % 5)); j = j + 1 }
+    let mut c_h: [f64] = []
+    let mut p = 0
+    while p < m * n { c_h.push(0.0); p = p + 1 }
+
+    // CPU reference.
+    let mut c_ref: [f64] = []
+    let mut q = 0
+    while q < m * n { c_ref.push(0.0); q = q + 1 }
+    cpu_gemm(a_h, b_h, c_ref, m, n, k)
+
+    // GPU launch (055-P3 lowering — today a stubbed call shape):
+    //
+    //   let bx: i64 = 16
+    //   let by: i64 = 16
+    //   gpu_launch(gemm, (n + bx - 1) / bx, (m + by - 1) / by, 1,
+    //                    bx, by, 1, a_h, b_h, c_h, m, n, k)
+    //
+    // The dispatch script (tool/dispatch_r055_p2_gemm.sh) fires the
+    // 055-P2 hand-emitted PTX with a thin host wrapper that calls
+    // hexa_cuda_launch_kernel directly; this hexa surface is the future
+    // single-line replacement.
+
+    // F-RFC055-GEMM-FEASIBLE — tolerance compare (GEMM reduces).
+    let mut max_delta: f64 = 0.0
+    let mut r = 0
+    while r < m * n {
+        let d = c_h[r] - c_ref[r]
+        let abs_d = if d < 0.0 { -d } else { d }
+        if abs_d > max_delta { max_delta = abs_d }
+        r = r + 1
+    }
+    let tol: f64 = 0.000001
+    if max_delta <= tol {
+        println("F-RFC055-GEMM-FEASIBLE PASS — max|Δ| within tolerance")
+    } else {
+        println("F-RFC055-GEMM-FEASIBLE FAIL — max|Δ| = " + to_string(max_delta))
+    }
+}

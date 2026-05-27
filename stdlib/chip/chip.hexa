@@ -1,0 +1,26 @@
+#!hexa strict
+// stdlib/chip/chip.hexa — chip domain root dispatcher (hexa-native).
+//
+// LAYER: chip domain status surface · hexa-native pivot for AURA N20.
+// Mirrors stdlib/bio/bio.hexa root-dispatcher convention.
+//
+// CONTEXT: AURA N20 milestone — chip domain cellrun manifest
+// (domains/chip.demi) substrate flip python3 → hexa. This file is
+// the root dispatcher that hexa-lang stdlib/chip/ exposes.
+//
+// Per-verb producer cells continue at stdlib/chip/<verb>.py (legacy
+// substrate) until each verb cell migrates to .hexa individually.
+//
+// Sentinels:
+//   __HEXA_CHIP_ROOT__ PASS
+
+let VERSION   = "0.1.0"
+let MODULE    = "hexa-chip"
+
+fn main() {
+    print("# CHIP root dispatcher (hexa-native pivot · AURA N20)")
+    print("# version = " + VERSION)
+    print("# verb cells: specify · structure · design · analyze · synthesize · verify · handoff")
+    print("# substrate: hexa (cellrun.hexa dispatch) — per-verb producers may remain .py during migration")
+    print("__HEXA_CHIP_ROOT__ PASS")
+}

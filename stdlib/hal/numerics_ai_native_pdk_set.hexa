@@ -1,0 +1,247 @@
+#!hexa strict
+// stdlib/hal/numerics_ai_native_pdk_set.hexa — F-AI-NATIVE-6 T2 numerical.
+//
+// Closes the T2 (numerical / fixture) tier of falsifier F-AI-NATIVE-6
+// (3-PDK paper backend set: sky130 / tsmc_n5 / samsung_sf3p; falsifier_
+// ai_native_check.hexa registry).
+//
+// **LAST T2 fixture in F-AI-NATIVE axis set.** Lifts F-AI-NATIVE-6
+// closure 33% → 67% and reaches the **F-AI-NATIVE sat-1 milestone**
+// (all 6 falsifiers ≥ 67%). Completes the triple-axis 3/3 sat-1
+// ledger (F-HAL ✓ v0.3.0 + F-GPGPU ✓ v1.18.0 + F-AI-NATIVE ✓ now).
+//
+// T1 (3 backend.hexa stubs on disk; per-PDK constants declared at v1.9
+// /v1.10/v1.11) closes the algebraic identity:
+//
+//   |PDK_set| = 3 (open-source baseline + production + advanced)
+//   PDK_NODE_NM monotonic: 130 > 5 > 3 (descending node size)
+//   OVERHEAD_BP consistent across all 3 PDKs (= 278 = 1/36 ≈ 2.78%)
+//
+// T2 (this script) cross-checks NUMERICALLY by reading each PDK
+// backend's source and verifying:
+//
+//   1. all 3 backend/ai_native/<pdk>.hexa files present.
+//   2. each declares PDK_NODE_NM with expected values (130, 5, 3).
+//   3. each declares OVERHEAD_BP = 278 (consistent across all 3 PDKs).
+//   4. each declares N_TILES = 6 (consistent with ai.hexa).
+//   5. node sizes are monotonic descending: SKY130 > TSMC N5 > SF3P.
+//   6. PDK_NAME strings match expected ("sky130" / "tsmc_n5" / "samsung_sf3p").
+//
+// PASS = every identity holds; FAIL = any drift.
+//
+// Phase G iter 9+5+13; F-AI-NATIVE-6 closure 33% → 67%; reaches
+// F-AI-NATIVE sat-1 milestone (all 6 ≥ 67%). T3 (silicon RTL bench
+// + actual tape-out per-PDK) deferred per canon §7.5.
+// Pattern: numerics_gpgpu_lattice.hexa (multi-backend on-disk check).
+
+let EXPECTED_PDK_COUNT   = 3
+let EXPECTED_OVERHEAD_BP = 278   // φ/σ_n = 1/36 ≈ 2.78%
+let EXPECTED_N_TILES     = 6
+
+// PDK roster (ordered by node size, descending; canonical 3).
+let PDKS = ["sky130", "tsmc_n5", "samsung_sf3p"]
+
+// Expected node size in nm per PDK (monotonic descending).
+let EXPECTED_NODE_NM = [130, 5, 3]
+
+let mut RUN  = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+fn _root() -> str {
+    let env_root = env("HEXA_HAL_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _exists(p: str) -> bool {
+    let r = exec("[ -f \"" + p + "\" ] && echo y || echo n").trim()
+    return r == "y"
+}
+
+fn _extract_let_int(src: str, name: str) -> int {
+    let pat = "let " + name
+    let idx = src.index_of(pat)
+    if idx < 0 { return -1 }
+    let mut i = idx + pat.len()
+    while i < src.len() && src.char_at(i) != "=" { i = i + 1 }
+    if i >= src.len() { return -1 }
+    i = i + 1
+    while i < src.len() && (src.char_at(i) == " " || src.char_at(i) == "\t") { i = i + 1 }
+    let mut digits = ""
+    while i < src.len() {
+        let ch = src.char_at(i)
+        if ch >= "0" && ch <= "9" { digits = digits + ch } else { break }
+        i = i + 1
+    }
+    if digits.len() == 0 { return -1 }
+    return int(digits)
+}
+
+// Extract `let <name> = "<str>"` value from source.
+fn _extract_let_str(src: str, name: str) -> str {
+    let pat = "let " + name
+    let idx = src.index_of(pat)
+    if idx < 0 { return "" }
+    let mut i = idx + pat.len()
+    while i < src.len() && src.char_at(i) != "=" { i = i + 1 }
+    if i >= src.len() { return "" }
+    i = i + 1
+    while i < src.len() && (src.char_at(i) == " " || src.char_at(i) == "\t") { i = i + 1 }
+    if i >= src.len() || src.char_at(i) != "\"" { return "" }
+    i = i + 1
+    let start = i
+    while i < src.len() && src.char_at(i) != "\"" { i = i + 1 }
+    if i >= src.len() { return "" }
+    return src.slice(start, i)
+}
+
+fn check_files_present(root: str) -> bool {
+    let mut all_ok = true
+    let mut detail = ""
+    let mut idx = 0
+    while idx < PDKS.len() {
+        let pdk = PDKS[idx]
+        let p = root + "/stdlib/hal/backend/ai_native/" + pdk + ".hexa"
+        if _exists(p) { detail = detail + pdk + "=ok " }
+        else { detail = detail + pdk + "=MISSING "; all_ok = false }
+        idx = idx + 1
+    }
+    _check(all_ok,
+           "all 3 backend/ai_native/<pdk>.hexa files present (sky130 + tsmc_n5 + samsung_sf3p)",
+           detail)
+    return all_ok
+}
+
+fn check_node_nm_per_pdk(root: str) -> [int] {
+    let mut nodes: [int] = []
+    let mut bad = ""
+    let mut idx = 0
+    while idx < PDKS.len() {
+        let pdk = PDKS[idx]
+        let exp = EXPECTED_NODE_NM[idx]
+        let p = root + "/stdlib/hal/backend/ai_native/" + pdk + ".hexa"
+        if !_exists(p) {
+            bad = bad + pdk + "(missing) "
+            nodes = nodes + [-1]
+        } else {
+            let src = read_file(p)
+            let v = _extract_let_int(src, "PDK_NODE_NM")
+            nodes = nodes + [v]
+            if v != exp { bad = bad + pdk + "(=" + str(v) + ",want=" + str(exp) + ") " }
+        }
+        idx = idx + 1
+    }
+    _check(bad.len() == 0,
+           "each PDK declares PDK_NODE_NM with expected value (130 / 5 / 3)",
+           if bad.len() > 0 { "issues: " + bad } else { "sky130=130nm tsmc_n5=5nm samsung_sf3p=3nm" })
+    return nodes
+}
+
+fn check_overhead_bp_consistent(root: str) {
+    let mut bad = ""
+    let mut detail = ""
+    for pdk in PDKS {
+        let p = root + "/stdlib/hal/backend/ai_native/" + pdk + ".hexa"
+        if !_exists(p) { bad = bad + pdk + "(missing) "; continue }
+        let src = read_file(p)
+        let v = _extract_let_int(src, "OVERHEAD_BP")
+        detail = detail + pdk + "=" + str(v) + " "
+        if v != EXPECTED_OVERHEAD_BP { bad = bad + pdk + "(=" + str(v) + ") " }
+    }
+    _check(bad.len() == 0,
+           "OVERHEAD_BP = 278 (φ/σ_n = 1/36 ≈ 2.78%) consistent across all 3 PDKs",
+           if bad.len() > 0 { "issues: " + bad } else { detail })
+}
+
+fn check_n_tiles_consistent(root: str) {
+    let mut bad = ""
+    let mut detail = ""
+    for pdk in PDKS {
+        let p = root + "/stdlib/hal/backend/ai_native/" + pdk + ".hexa"
+        if !_exists(p) { bad = bad + pdk + "(missing) "; continue }
+        let src = read_file(p)
+        let v = _extract_let_int(src, "N_TILES")
+        detail = detail + pdk + "=" + str(v) + " "
+        if v != EXPECTED_N_TILES { bad = bad + pdk + "(=" + str(v) + ") " }
+    }
+    _check(bad.len() == 0,
+           "N_TILES = 6 consistent across all 3 PDKs",
+           if bad.len() > 0 { "issues: " + bad } else { detail })
+}
+
+fn check_node_monotonic(nodes: [int]) {
+    if nodes.len() != 3 {
+        _check(false, "node sizes monotonic descending (SKY130 > TSMC N5 > SF3P)",
+               "node array len=" + str(nodes.len()))
+        return
+    }
+    let ok = (nodes[0] > nodes[1]) && (nodes[1] > nodes[2])
+    _check(ok,
+           "node sizes monotonic descending: SKY130 > TSMC N5 > SF3P",
+           "got " + str(nodes[0]) + " > " + str(nodes[1]) + " > " + str(nodes[2]))
+}
+
+fn check_pdk_name_strings(root: str) {
+    let mut bad = ""
+    let mut detail = ""
+    for pdk in PDKS {
+        let p = root + "/stdlib/hal/backend/ai_native/" + pdk + ".hexa"
+        if !_exists(p) { bad = bad + pdk + "(missing) "; continue }
+        let src = read_file(p)
+        let s = _extract_let_str(src, "PDK_NAME")
+        detail = detail + pdk + "=\"" + s + "\" "
+        if s != pdk { bad = bad + pdk + "(=\"" + s + "\") " }
+    }
+    _check(bad.len() == 0,
+           "PDK_NAME strings match canonical names (sky130 / tsmc_n5 / samsung_sf3p)",
+           if bad.len() > 0 { "issues: " + bad } else { detail })
+}
+
+fn main() {
+    println("========================================================================")
+    println("  stdlib/hal — numerics_ai_native_pdk_set: F-AI-NATIVE-6 T2 numerical")
+    println("========================================================================")
+    println("  expected: 3 PDKs " + str(PDKS) + " (nodes " + str(EXPECTED_NODE_NM) + " nm)")
+    println("            OVERHEAD_BP=" + str(EXPECTED_OVERHEAD_BP) + " (φ/σ_n=1/36≈2.78%) N_TILES=" + str(EXPECTED_N_TILES))
+    println("")
+
+    let root = _root()
+
+    if !check_files_present(root) {
+        println("__HEXA_LANG_HAL_NUMERICS_AI_NATIVE_PDK_SET__ FAIL")
+        exit(1)
+    }
+
+    let nodes = check_node_nm_per_pdk(root)
+    check_overhead_bp_consistent(root)
+    check_n_tiles_consistent(root)
+    check_node_monotonic(nodes)
+    check_pdk_name_strings(root)
+
+    println("")
+    println("  FALSIFIER:")
+    println("    ✗ F-AI-NATIVE-6: 3-PDK paper backend set sky130+tsmc_n5+samsung_sf3p (cross-checked numerically)")
+    println("")
+    println("  ★ MILESTONE: F-AI-NATIVE axis sat-1 reached when this script PASSES (all 6 ≥ 67%)")
+    println("  ★ MILESTONE: triple-axis 3/3 sat-1 ledger COMPLETE (F-HAL + F-GPGPU + F-AI-NATIVE)")
+
+    let pass_n = RUN - FAIL
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_LANG_HAL_NUMERICS_AI_NATIVE_PDK_SET__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_LANG_HAL_NUMERICS_AI_NATIVE_PDK_SET__ PASS")
+    exit(0)
+}
+
+main()

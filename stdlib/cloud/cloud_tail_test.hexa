@@ -1,0 +1,126 @@
+// stdlib/cloud/cloud_tail_test.hexa — falsifiers for the `cloud tail` verb's
+// command builder (cloud_tail_cmd_opts).
+//
+// LLM-free, network-free, **no ssh / no pod**. The streaming itself is
+// ssh-bound and exercised by the live e2e smoke; this file pins the PURE
+// command-string construction — the part that decides correctness (quoting,
+// the tail|sed pipeline shape, the grep/until threading, terminal-first
+// ordering) before a single byte goes over the wire.
+//
+// The remote consumer is `sed -E -un` (NOT awk): the stock pod awk is mawk,
+// which block-buffers its stdin behind a following `tail -F` and stalls;
+// sed -u is line-buffered. These cases pin that choice.
+//
+// Run:   hexa run stdlib/cloud/cloud_tail_test.hexa
+// PASS:  exits 0, prints "cloud_tail_test PASS — N/N cases".
+
+use "stdlib/cloud/cloud"
+
+fn _fail(case: str, msg: str) {
+    println("FAIL " + case + ": " + msg)
+    exit(1)
+}
+
+fn _has(hay: str, needle: str) -> int {
+    if hay.index_of(needle) >= 0 { return 1 }
+    return 0
+}
+
+fn main() {
+    // ── case 1: bare host — ssh prefix + keep-alive + tail -F + sed -E -un ─
+    let c1 = cloud_tail_cmd_opts("gpu-1", [], "/workspace/train.log", "", "JOB DONE")
+    if _has(c1, "ssh -o BatchMode=yes -o ConnectTimeout=8") != 1 {
+        _fail("case1", "missing ssh prefix — " + c1)
+    }
+    if _has(c1, "ServerAliveInterval=15") != 1 {
+        _fail("case1", "missing keep-alive (dead-pod tail must not hang) — " + c1)
+    }
+    if _has(c1, "tail -F -n +1") != 1 {
+        _fail("case1", "missing tail -F replay-then-follow — " + c1)
+    }
+    if _has(c1, "sed -E -un") != 1 {
+        _fail("case1", "consumer must be sed -E -un (line-buffered; mawk stalls) — " + c1)
+    }
+    println("case1 PASS — ssh+keepalive + tail -F + sed -E -un pipeline present")
+
+    // ── case 2: logfile is POSIX single-quoted (injection-safe) ────────
+    let c2 = cloud_tail_cmd_opts("gpu-1", [], "/w/train.log", "", "")
+    if _has(c2, "'/w/train.log'") != 1 {
+        _fail("case2", "logfile not single-quoted for the remote shell — " + c2)
+    }
+    println("case2 PASS — logfile POSIX-quoted for the remote shell")
+
+    // ── case 3: empty until → follow forever (no {p;q}), bare `p` filter ─
+    // With until_re == "" the sed program has no terminal `/.../{p;q}` block,
+    // and with grep_re == "" the filter is a bare `p` (print every line).
+    let c3 = cloud_tail_cmd_opts("gpu-1", [], "/w/l.log", "", "")
+    if _has(c3, "{p;q}") != 0 {
+        _fail("case3", "empty --until must NOT emit a terminal {p;q} block — " + c3)
+    }
+    if _has(c3, "JOB DONE") != 0 {
+        _fail("case3", "empty --until must NOT leak a default terminal marker — " + c3)
+    }
+    println("case3 PASS — empty --until → no terminal block (follow forever)")
+
+    // ── case 4: until ERE → terminal /until/{p;q} block present ─────────
+    let c4 = cloud_tail_cmd_opts("gpu-1", [], "/w/l.log", "", "JOB DONE|Traceback")
+    if _has(c4, "/JOB DONE|Traceback/{p;q}") != 1 {
+        _fail("case4", "until ERE not in a /…/{p;q} terminal block — " + c4)
+    }
+    println("case4 PASS — --until ERE → /…/{p;q} terminal block")
+
+    // ── case 5: grep regex → /grep/p filter present ─────────────────────
+    let c5 = cloud_tail_cmd_opts("gpu-1", [], "/w/l.log", "step=|loss=", "JOB DONE")
+    if _has(c5, "/step=|loss=/p") != 1 {
+        _fail("case5", "grep ERE not in a /…/p filter — " + c5)
+    }
+    println("case5 PASS — --grep ERE → /…/p filter")
+
+    // ── case 6: ssh_opts (port + insecure) thread into the ssh prefix ───
+    let opts = ["-p", "41953", "-o", "StrictHostKeyChecking=no"]
+    let c6 = cloud_tail_cmd_opts("root@1.2.3.4", opts, "/w/l.log", "", "JOB DONE")
+    // each ssh_opt is individually POSIX-quoted (mirrors _ssh_capture_status).
+    if _has(c6, "'-p' '41953'") != 1 {
+        _fail("case6", "port opt not threaded — " + c6)
+    }
+    if _has(c6, "StrictHostKeyChecking=no") != 1 {
+        _fail("case6", "insecure opt not threaded — " + c6)
+    }
+    println("case6 PASS — port + insecure ssh_opts threaded into the ssh prefix")
+
+    // ── case 7: terminal-FIRST — the /until/{p;q} block precedes the
+    //           filter, so a terminal line surfaces + stops the stream even
+    //           when it would fail the grep filter.
+    let c7 = cloud_tail_cmd_opts("gpu-1", [], "/w/l.log", "step=", "JOB DONE")
+    let ti = c7.index_of("/JOB DONE/{p;q}")
+    let fi = c7.index_of("/step=/p")
+    if ti < 0 || fi < 0 {
+        _fail("case7", "terminal block or filter missing — " + c7)
+    }
+    if ti > fi {
+        _fail("case7", "terminal /until/{p;q} must precede the grep filter — " + c7)
+    }
+    println("case7 PASS — terminal-first (/until/{p;q} before grep filter)")
+
+    // ── case 8: sed -u (line-buffered) — the property that makes streaming
+    //            real-time over a following tail -F (mawk would stall here).
+    let c8 = cloud_tail_cmd_opts("gpu-1", [], "/w/l.log", "", "JOB DONE")
+    if _has(c8, "sed -E -un") != 1 {
+        _fail("case8", "must use sed -u (unbuffered) for real-time streaming — " + c8)
+    }
+    if _has(c8, "awk") != 0 {
+        _fail("case8", "must NOT use awk (mawk block-buffers stdin behind tail -F) — " + c8)
+    }
+    println("case8 PASS — sed -u line-buffered, no awk (no mawk stdin stall)")
+
+    // ── case 9: cloud_tail_cmd (no-opts wrapper) == _opts with [] ───────
+    let c9a = cloud_tail_cmd("gpu-1", "/w/l.log", "", "JOB DONE")
+    let c9b = cloud_tail_cmd_opts("gpu-1", [], "/w/l.log", "", "JOB DONE")
+    if c9a != c9b {
+        _fail("case9", "cloud_tail_cmd must equal cloud_tail_cmd_opts with [] opts")
+    }
+    println("case9 PASS — cloud_tail_cmd == cloud_tail_cmd_opts(host, [], ...)")
+
+    println("cloud_tail_test PASS — 9/9 cases")
+    exit(0)
+}

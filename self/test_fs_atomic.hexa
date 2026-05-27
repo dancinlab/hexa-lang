@@ -1,0 +1,130 @@
+// self/test_fs_atomic.hexa — G5 (wilson-pi-port-6-gap S-FS-ATOMIC-APPEND)
+// 10-writer concurrent atomic-append stress test.
+//
+// Spec (S-FS-ATOMIC-APPEND acceptance (e)):
+//   - 10 writers concurrently append to the same log file.
+//   - Each writer emits 1000 lines tagged with its writer-id.
+//   - All lines must be PIPE_BUF-bound (<= 512 B macOS / 4096 B Linux)
+//     so that the POSIX O_APPEND + single write(2) atomicity contract
+//     holds across all writers.
+//   - Total line count == 10 * 1000 == 10000.
+//   - No torn lines: every line matches the writer-id prefix +
+//     sequence-number format. No "WW-NN-WW-NN" interleavings.
+//   - Per-writer line count == 1000 (none lost).
+//
+// Mechanism:
+//   We can't use fork(2) directly from hexa source, so we shell-fan-out:
+//   10 background `sh -c` jobs that each open the log via shell `>>`
+//   (which is exactly POSIX `O_WRONLY | O_APPEND | O_CREAT`, the same
+//   syscall pattern as rt_fs_append_atomic). Each job emits 1000 fixed-
+//   width lines and exits. We `wait` for all of them, then read the
+//   log and verify line counts + format.
+//
+//   The rt_fs_append_atomic primitive is independently exercised in
+//   self/stdlib/fs.hexa::_fs_selftest (cases 17-18, A2 cycle). This
+//   test stresses the cross-writer atomicity envelope.
+//
+// Falsifier:
+//   If any line is torn (writer-id prefix not matching the seq-number
+//   suffix from the same writer) or total count != 10000 → FAIL.
+//
+// Usage:
+//   hexa run self/test_fs_atomic.hexa
+//   → emits __FS_ATOMIC_TEST__ <PASS|FAIL> writers=10 per=1000 total=10000
+
+use "self/stdlib/shell_escape"
+
+let WRITERS = 10
+let LINES_PER_WRITER = 1000
+// Line format: "W<id>-S<seqno>\n"
+// Max length: "W09-S0999\n" = 10 bytes << PIPE_BUF (512).
+
+fn run_atomic_test() {
+    let pid = to_string(exec("echo $$")).trim()
+    let scratch = "/tmp/_hexa_fs_atomic_" + pid
+    let _ = exec("rm -rf " + shell_escape(scratch))
+    let _ = exec("mkdir -p " + shell_escape(scratch))
+    let log_path = scratch + "/concurrent.log"
+
+    // Fan out N background writers. Each shell loop:
+    //   - i goes 0..LINES_PER_WRITER-1
+    //   - emit "W<wid>-S<seq>" with `printf` to ensure no extra fields
+    //   - shell `>>` opens with O_APPEND on every iteration would be
+    //     too slow; we use a single `>>` on the whole subshell loop,
+    //     which keeps the fd O_APPEND-flagged for the duration.
+    //
+    // Shell-side guarantee: kernel takes the per-inode lock on each
+    // write(2), so as long as each `printf` payload + newline is
+    // <= PIPE_BUF (and 10 bytes definitely is), no interleaving.
+
+    let mut w = 0
+    let mut bg_pids = []
+    while w < WRITERS {
+        let wid_padded = if w < 10 { "0" + to_string(w) } else { to_string(w) }
+        let writer_cmd = "(for i in $(seq 0 " + to_string(LINES_PER_WRITER - 1) + "); do " +
+                         "  printf 'W" + wid_padded + "-S%04d\\n' \"$i\"; " +
+                         "done) >> " + shell_escape(log_path) + " & echo $!"
+        let bg_pid = to_string(exec(writer_cmd)).trim()
+        bg_pids = bg_pids + [bg_pid]
+        w = w + 1
+    }
+
+    // Wait for all background writers.
+    let mut wait_cmd = "wait"
+    let mut wi = 0
+    while wi < len(bg_pids) {
+        wait_cmd = wait_cmd + " " + bg_pids[wi]
+        wi = wi + 1
+    }
+    let _ = exec(wait_cmd + " 2>/dev/null")
+    // Belt-and-suspenders: also wait for any stragglers in the same shell.
+    let _ = exec("wait 2>/dev/null")
+
+    // Verify total line count.
+    let count_str = to_string(exec("wc -l < " + shell_escape(log_path))).trim()
+    let total = to_int(count_str)
+    let expected = WRITERS * LINES_PER_WRITER
+
+    let mut ok = true
+    if total != expected {
+        eprintln("FAIL total lines: expected " + to_string(expected) + " got " + to_string(total))
+        ok = false
+    }
+
+    // Verify per-writer count. Each line "W<id>-S<seq>" starts with W<id>.
+    let mut wi2 = 0
+    while wi2 < WRITERS {
+        let wid_padded = if wi2 < 10 { "0" + to_string(wi2) } else { to_string(wi2) }
+        let per_str = to_string(exec("grep -c '^W" + wid_padded + "-' " + shell_escape(log_path))).trim()
+        let per = to_int(per_str)
+        if per != LINES_PER_WRITER {
+            eprintln("FAIL writer " + wid_padded + " lines: expected " + to_string(LINES_PER_WRITER) + " got " + to_string(per))
+            ok = false
+        }
+        wi2 = wi2 + 1
+    }
+
+    // Verify line format integrity — every line must match the expected
+    // pattern. A torn line (e.g. "W03-S0042W07-S0123") would not.
+    // Use awk to count lines NOT matching the pattern.
+    let bad_str = to_string(exec("awk '!/^W[0-9][0-9]-S[0-9][0-9][0-9][0-9]$/ {c++} END {print c+0}' " + shell_escape(log_path))).trim()
+    let bad = to_int(bad_str)
+    if bad != 0 {
+        eprintln("FAIL torn lines: " + to_string(bad) + " entries violate format")
+        ok = false
+    }
+
+    let _ = exec("rm -rf " + shell_escape(scratch))
+
+    if ok {
+        println("__FS_ATOMIC_TEST__ PASS writers=" + to_string(WRITERS) +
+                " per=" + to_string(LINES_PER_WRITER) +
+                " total=" + to_string(total))
+    } else {
+        println("__FS_ATOMIC_TEST__ FAIL writers=" + to_string(WRITERS) +
+                " per=" + to_string(LINES_PER_WRITER) +
+                " total=" + to_string(total))
+    }
+}
+
+run_atomic_test()

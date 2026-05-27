@@ -1,0 +1,109 @@
+#!hexa strict
+// stdlib/hal/backend/esp32c3/gpio.hexa — ESP32-C3 (RISC-V) GPIO backend
+//                                        — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    Espressif ESP32-C3 single-core RV32IMC @ 160 MHz.
+// Chip ref:  ESP32-C3 Technical Reference Manual §5 IO MUX and GPIO Matrix.
+// Surface:   esp32c3_gpio_{configure,write,read,toggle}(pin, ...)
+// Dispatch:  gpio.hexa selects this via cfg-flag (e.g. `cfg target =
+//            "esp32c3"`). v0.6.0+ fourth vendor — first RISC-V target.
+//
+// Note: ESP32-C3 is the first RISC-V vendor in stdlib/hal — earlier
+// vendors are Xtensa LX6 (esp32) / ARM Cortex-M (stm32h7, rp2040).
+// The peripheral region moves from 0x3FF range (esp32 Xtensa) to
+// 0x6000 range (esp32c3 RISC-V) — distinct memory map.
+//
+// MMIO layout:
+//
+//   GPIO Matrix:       DR_REG_GPIO_BASE   = 0x60004000
+//     GPIO_OUT_REG               0x004   GPIO 0..21 output value
+//     GPIO_OUT_W1TS_REG          0x008   write-1-to-set
+//     GPIO_OUT_W1TC_REG          0x00C   write-1-to-clear
+//     GPIO_ENABLE_REG            0x020   GPIO 0..21 output enable
+//     GPIO_ENABLE_W1TS_REG       0x024
+//     GPIO_ENABLE_W1TC_REG       0x028
+//     GPIO_IN_REG                0x03C   GPIO 0..21 input value
+//     GPIO_PIN<n>_REG            0x074 + 4·n   per-pin config
+//     GPIO_FUNC<n>_OUT_SEL_CFG   0x554 + 4·n   GPIO matrix output route
+//     GPIO_FUNC<n>_IN_SEL_CFG    0x154 + 4·n   GPIO matrix input route
+//
+//   IO_MUX:            DR_REG_IO_MUX_BASE = 0x60009000
+//     IO_MUX_GPIO<n>_REG         per-pin pad config (drive, pull,
+//                                  IE/OE, MCU_SEL function select).
+//
+// 22-pin envelope (GPIO0..GPIO21). Compared to ESP32 (40-pin):
+//   - single bank (no GPIO 32..39 split — fits in one 22-bit register).
+//   - GPIO0..5 are also ADC1 (CH0..5).
+//   - GPIO12..17 dedicated for SPI flash (do not use as GPIO).
+//   - GPIO18..19 are USB Serial JTAG D+ / D- on dev boards.
+//
+// Single-bank simplification: no OUT1/IN1/ENABLE1 registers (esp32 had
+// these for pins 32..39). All 22 pins fit in one 32-bit register.
+
+let MODULE_NAME = "esp32c3_gpio"
+let SIGMA_SLOT  = 1
+let PHI_KIND    = "digital"
+
+let DR_REG_GPIO_BASE     = 0x60004000
+let DR_REG_IO_MUX_BASE   = 0x60009000
+
+let GPIO_OUT_REG         = 0x004
+let GPIO_OUT_W1TS_REG    = 0x008
+let GPIO_OUT_W1TC_REG    = 0x00C
+let GPIO_ENABLE_REG      = 0x020
+let GPIO_ENABLE_W1TS_REG = 0x024
+let GPIO_ENABLE_W1TC_REG = 0x028
+let GPIO_IN_REG          = 0x03C
+
+let ESP32C3_GPIO_MIN = 0
+let ESP32C3_GPIO_MAX = 21      // GPIO12..17 reserved for flash; GPIO0..5 = ADC1
+
+let MCU_SEL_GPIO = 1            // ESP32-C3: MCU_SEL=1 for GPIO function
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn esp32c3_gpio_configure(pin: int, mode: int) -> int {
+    if pin < ESP32C3_GPIO_MIN || pin > ESP32C3_GPIO_MAX { return -1 }
+    if mode < 0 || mode > 5 { return -2 }
+    // STUB: real impl would
+    //   1. set IO_MUX_GPIO<pin>_REG.MCU_SEL = MCU_SEL_GPIO (=1 on C3)
+    //   2. set IO_MUX_GPIO<pin>_REG.FUN_IE for input modes
+    //   3. write GPIO_ENABLE_W1TS for output (single bank — pins fit in 22 bits)
+    return pin
+}
+
+fn esp32c3_gpio_write(pin: int, val: bool) -> int {
+    if pin < ESP32C3_GPIO_MIN || pin > ESP32C3_GPIO_MAX { return -1 }
+    // STUB: if val { *(BASE + GPIO_OUT_W1TS_REG) = (1 << pin) }
+    //       else   { *(BASE + GPIO_OUT_W1TC_REG) = (1 << pin) }
+    return 0
+}
+
+fn esp32c3_gpio_read(pin: int) -> int {
+    if pin < ESP32C3_GPIO_MIN || pin > ESP32C3_GPIO_MAX { return -1 }
+    // STUB: return (*(BASE + GPIO_IN_REG) >> pin) & 1
+    return 0
+}
+
+fn esp32c3_gpio_toggle(pin: int) -> int {
+    if pin < ESP32C3_GPIO_MIN || pin > ESP32C3_GPIO_MAX { return -1 }
+    // STUB: ESP32-C3 has no atomic XOR; sw RMW (read OUT_REG, XOR bit, write).
+    return 0
+}
+
+fn esp32c3_gpio_report(pin: int) -> str {
+    return "[esp32c3_gpio sim] pin=" + str(pin) + " (skeleton stub — TODO MMIO)"
+}
+
+fn esp32c3_gpio_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32c3_gpio sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  DR_REG_GPIO_BASE=" + str(DR_REG_GPIO_BASE) +
+            " DR_REG_IO_MUX_BASE=" + str(DR_REG_IO_MUX_BASE))
+    println("  GPIO0..GPIO21 (22 pins; 0..5 = ADC1; 12..17 = flash; 18..19 = USB-JTAG)")
+}

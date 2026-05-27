@@ -1,0 +1,23 @@
+(kicad_sch (version 20231120) (generator eeschema)
+
+  (uuid "0a1b2c3d-laun-ch01-fsp2-000000000002")
+
+  (paper "A4")
+
+  (title_block
+    (title "HEXA-LAUNCH-01 — F-SPACE-2 (root sheet)")
+    (date "2026-05-08")
+    (rev "Phase-E-skeleton")
+    (company "hexa-space (dancinlab/hexa-space)")
+    (comment 1 "Zynq US+ XCZU7EV + HDMI 1080p60 capture + 16-b ADC + DDR4-2400")
+    (comment 2 "Spec: firmware/sim/launch_telemetry.hexa (11/11 PASS)")
+    (comment 3 "Net list: firmware/board/launch_01/SCHEMATIC.md §2")
+    (comment 4 "BOM: firmware/board/launch_01/BOM.csv (~$2464 prototype)")
+  )
+
+  (lib_symbols)
+
+  (sheet_instances
+    (path "/" (page "1"))
+  )
+)

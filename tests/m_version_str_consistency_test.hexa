@@ -1,0 +1,144 @@
+// tests/m_version_str_consistency_test.hexa — GO M7 drift guard.
+//
+// Why this test exists
+// --------------------
+// GO M2/M3 ship a precompile pipeline whose cache key is:
+//
+//     sha256(source).substring(0,16) + "_" + version_str()
+//
+// Two independent call sites compute that key:
+//   (a) tool/build_precompile.hexa — at *release* time (the builder).
+//   (b) self/main.hexa cmd_run     — at *user* invocation time (the reader).
+//
+// If the two return different literals — say, someone bumps
+// self/main.hexa::version_str() to "0.1.1" but forgets the matching
+// _version_str() in tool/build_precompile.hexa — every shipped
+// precompile/hexa_run.<key> file becomes addressed under one key while
+// cmd_run looks up another. Result: silent regression — precompile HIT
+// rate drops to 0, every user invocation pays the clang fork cost, and
+// no test fails because each side individually is internally consistent.
+//
+// This test statically extracts the string literal returned by each
+// `*version_str()` function and FAILs the build when they drift.
+//
+// Strategy (Option A from M7 spec)
+// --------------------------------
+// 1. Locate repo root ($HEXA_LANG or cwd containing self/main.hexa).
+// 2. Read the two source files into memory.
+// 3. Extract the body of each version_str function and grab the
+//    `return "<LITERAL>"` payload.
+// 4. Assert both literals are non-empty AND equal.
+//
+// The extractor is purposely line-scoped + literal-matched (no full
+// AST) — fast, dependency-free, and robust to the simple 1-statement
+// shape both functions currently use. If either function ever grows
+// past `return "<literal>"`, this test will FAIL loudly with a clear
+// message asking the maintainer to extend the extractor — that's the
+// correct outcome.
+
+fn _fail(msg: string) {
+    eprintln("FAIL: " + msg)
+    exit(1)
+}
+
+fn _resolve_repo() -> string {
+    let h = env("HEXA_LANG")
+    if len(h) > 0 && file_exists(h + "/self/main.hexa") { return h }
+    if file_exists("./self/main.hexa") { return "." }
+    _fail("cannot locate repo root (need self/main.hexa); set HEXA_LANG")
+    return ""
+}
+
+// Find the byte index of `needle` in `hay` starting at `from`. -1 = miss.
+fn _find_from(hay: string, needle: string, from: i32) -> i32 {
+    let n = len(hay)
+    let m = len(needle)
+    if m == 0 { return from }
+    if m > n { return -1 }
+    let mut i = from
+    while i + m <= n {
+        if hay.substring(i, i + m) == needle { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+// Extract the FIRST `return "<literal>"` statement found AFTER `anchor`
+// (which is the function header substring, e.g. `fn version_str()`).
+// Returns "" on miss. Stops scanning at the next `fn ` keyword to avoid
+// bleeding into adjacent definitions.
+fn _extract_return_literal(src: string, anchor: string) -> string {
+    let astart = _find_from(src, anchor, 0)
+    if astart < 0 { return "" }
+    // Bound the search to within the same function body — stop at the
+    // next `\nfn ` declaration (or end of file).
+    let scan_from = astart + len(anchor)
+    let next_fn = _find_from(src, "\nfn ", scan_from)
+    let mut bound = len(src)
+    if next_fn >= 0 { bound = next_fn }
+
+    // Look for `return "` inside [scan_from, bound).
+    let rkey = "return \""
+    let rkl = len(rkey)
+    let mut p = scan_from
+    while p + rkl <= bound {
+        if src.substring(p, p + rkl) == rkey {
+            // Found `return "` — read until the closing `"`. We do NOT
+            // attempt to honor backslash escapes — version_str() is a
+            // plain version literal (no embedded quotes).
+            let mut q = p + rkl
+            while q < bound && src.substring(q, q + 1) != "\"" { q = q + 1 }
+            if q >= bound { return "" }
+            return src.substring(p + rkl, q)
+        }
+        p = p + 1
+    }
+    return ""
+}
+
+fn main() {
+    let repo = _resolve_repo()
+    let main_path  = repo + "/self/main.hexa"
+    let build_path = repo + "/tool/build_precompile.hexa"
+
+    if !file_exists(main_path)  { _fail("missing " + main_path) }
+    if !file_exists(build_path) { _fail("missing " + build_path) }
+
+    let main_src  = to_string(read_file(main_path))
+    let build_src = to_string(read_file(build_path))
+
+    // self/main.hexa — `fn version_str()` (no leading underscore).
+    let main_ver  = _extract_return_literal(main_src,  "fn version_str(")
+    // tool/build_precompile.hexa — `fn _version_str()` (leading underscore
+    // by convention for module-private helpers, but the value MUST match).
+    let build_ver = _extract_return_literal(build_src, "fn _version_str(")
+
+    if len(main_ver) == 0 {
+        _fail("could not extract `return \"<literal>\"` from self/main.hexa::version_str() — function shape changed; update tests/m_version_str_consistency_test.hexa extractor")
+    }
+    if len(build_ver) == 0 {
+        _fail("could not extract `return \"<literal>\"` from tool/build_precompile.hexa::_version_str() — function shape changed; update tests/m_version_str_consistency_test.hexa extractor")
+    }
+
+    println("self/main.hexa            version_str() = \"" + main_ver  + "\"")
+    println("tool/build_precompile.hexa _version_str() = \"" + build_ver + "\"")
+
+    if main_ver != build_ver {
+        eprintln("")
+        eprintln("DRIFT DETECTED")
+        eprintln("--------------")
+        eprintln("  self/main.hexa            version_str()  -> \"" + main_ver  + "\"")
+        eprintln("  tool/build_precompile.hexa _version_str() -> \"" + build_ver + "\"")
+        eprintln("")
+        eprintln("Both functions MUST return the same string. If they drift,")
+        eprintln("every shipped release/precompile/hexa_run.<key> file becomes")
+        eprintln("addressed under one version while cmd_run looks up another.")
+        eprintln("Result: silent 0% precompile-HIT rate in production.")
+        eprintln("")
+        eprintln("Fix: update whichever side is stale to match the other and re-run")
+        eprintln("`hexa run tool/build_precompile.hexa` to regenerate the precompile dir.")
+        exit(1)
+    }
+
+    println("PASS: version_str consistent across builder + cmd_run (\"" + main_ver + "\")")
+}

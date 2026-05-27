@@ -1,0 +1,15 @@
+slug qrng-ibm-quantum-integration
+status blocked
+priority 80
+target tool/noise_envelope.hexa β-channel handler
+why IBM Quantum vacuum fluctuation source 통합 — auth-api alternative source
+fire-host local
+fire-cmd echo "blocked on prereq: IBM Quantum 가입 + token + qiskit install"
+interval 86400
+attempts-log state/blockers/qrng_ibm_quantum_integration.attempts.jsonl
+omega-stop fixpoint-convergence
+prereq-list IBM-account / API-token / qiskit-install
+resolution-metric β-source-mix-includes-ibm
+resolution-op eq
+resolution-value true
+resolution-fallback selftest fixture KICK_BETA_HW_SOURCE=ibm passes

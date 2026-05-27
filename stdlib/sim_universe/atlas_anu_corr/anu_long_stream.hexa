@@ -1,0 +1,102 @@
+// anu_long_stream.hexa — ANU QRNG 스트림을 length bytes 모음
+//
+// 전략:
+//   - 각 request 64 bytes uint8 (ANU rate-limit: 1 req/min)
+//   - 기존 .anu_cache.bin 존재 시 첫 64B 재사용 (1분 대기 단축)
+//   - 이후 1회당 63s 대기 (rate-limit safety margin)
+//
+// 인자: <out_path> [bytes_goal]
+// 출력: out_path 에 hex 문자열 (no newline), stderr 에 진행상황
+//
+// TIMEOUT: ~9분 (512B = 8 req × 63s + overhead)
+
+let DEFAULT_GOAL: i64 = 512
+
+fn _now_epoch() -> i64 {
+    let mut r = ""
+    try { r = to_string(exec("date +%s")).trim() } catch e1 { r = "0" }
+    let mut v: i64 = 0
+    try { v = to_int(r) } catch e2 { v = 0 }
+    return v
+}
+
+fn _cache_path() -> string {
+    let mut home = ""
+    try { home = to_string(exec("printenv HOME")).trim() } catch e3 { home = "" }
+    return home + "/Dev/nexus/discovery/rng_lab/.anu_cache.bin"
+}
+
+fn _fetch_anu_64() -> string {
+    // R37/AN13/L3-PY violation — python3 JSON parser for ANU QRNG stubbed 2026-04-18
+    // Original: curl ... | /usr/bin/python3 -c "import sys,json; ..." (hex-encode 64 bytes)
+    // No-op: return "" → caller should handle empty hex as fetch failure.
+    eprintln("[R37] anu_long_stream._fetch_anu_64: python3 JSON parser disabled.")
+    return ""
+}
+
+fn _sleep_seconds(s: i64) {
+    try { exec("sleep " + to_string(s)) } catch e5 {}
+}
+
+fn main() {
+    let a = args()
+    if a.len() < 2 {
+        println("USAGE: anu_long_stream.hexa <out_path> [bytes_goal=512]")
+        return
+    }
+    let out_path = a[1]
+    let mut goal = DEFAULT_GOAL
+    if a.len() >= 3 {
+        try { goal = to_int(a[2]) } catch e6 { goal = DEFAULT_GOAL }
+    }
+    let t_start = _now_epoch()
+    println("# ANU fetch: goal=" + to_string(goal) + "B out=" + out_path)
+    let mut hex_buf = ""
+    let mut anu_hits = 0
+    let mut ur_hits = 0
+    let mut reqs = 0
+
+    // 0) 기존 cache 재사용 시도
+    let cpath = _cache_path()
+    let mut have_cache = false
+    try {
+        let c = read_file(cpath).trim()
+        if c.len() >= 128 {
+            hex_buf = c.substring(0, 128)
+            have_cache = true
+            println("# cache prefix OK (64B)")
+        }
+    } catch e7 {}
+
+    // loop until goal satisfied
+    let goal_hex: i64 = goal * 2
+    while hex_buf.len() < goal_hex {
+        let before = _now_epoch()
+        let hex = _fetch_anu_64()
+        reqs = reqs + 1
+        let elapsed = _now_epoch() - t_start
+        if hex.len() >= 128 {
+            hex_buf = hex_buf + hex.substring(0, 128)
+            anu_hits = anu_hits + 1
+            println("# ANU OK req=" + to_string(reqs) + " bytes=" + to_string(hex_buf.len() / 2) + " elapsed=" + to_string(elapsed) + "s")
+        } else {
+            // urandom fallback 금지 — ANU 스트림이 핵심
+            ur_hits = ur_hits + 1
+            println("# ANU MISS req=" + to_string(reqs) + " elapsed=" + to_string(elapsed) + "s (wait 63s)")
+        }
+        if hex_buf.len() >= goal_hex { break }
+        // rate-limit: 63s
+        let dt = _now_epoch() - before
+        let wait = 63 - dt
+        if wait > 0 { _sleep_seconds(wait) }
+    }
+
+    // trim to exact goal
+    if hex_buf.len() > goal_hex { hex_buf = hex_buf.substring(0, goal_hex) }
+
+    // write
+    try { write_file(out_path, hex_buf) } catch e8 { println("# WRITE ERROR") }
+    let total = _now_epoch() - t_start
+    println("# DONE bytes=" + to_string(hex_buf.len() / 2) + " reqs=" + to_string(reqs) + " anu=" + to_string(anu_hits) + " miss=" + to_string(ur_hits) + " elapsed=" + to_string(total) + "s")
+}
+// EOF (main auto-invoked)

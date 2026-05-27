@@ -1,0 +1,244 @@
+// F-FUSION-AXISA-SOFTMAX -- EAGER per-op baseline, 4 separate kernel launches.
+//
+//   k1_row_max : mx[row]   = max_j x                            (1 block/row)
+//   k2_exp     : e[row,j]   = exp(x - mx)                       (elementwise)
+//   k3_row_sum : sm[row]    = sum_j e                           (1 block/row)
+//   k4_div     : y[row,j]   = e / sm                            (elementwise)
+//
+// HBM/elem: k1 read x ; k2 read x + write e ; k3 read e ; k4 read e + write y
+//   => 4 read + 2 write = 6 transfers vs fused 3 read + 1 write = 4.
+//   (fused reads x 3x but no HBM intermediate e; eager materialises e twice.)
+//
+// exp via ex2.approx.f32 (SAME as fused so numeric matches). Pure ASCII.
+.version 7.8
+.target sm_80
+.address_size 64
+
+// ---- k1_row_max : grid=(rows) block=(256) ; writes mx[row] ----
+.visible .entry k1_row_max (
+    .param .u64 x,
+    .param .u64 mx,
+    .param .u32 d
+)
+{
+    .reg .u64  %rd<20>;
+    .reg .u32  %r<16>;
+    .reg .pred %p<6>;
+    .reg .f32  %f<10>;
+    .shared .align 4 .b8 sm1[1024];
+
+    ld.param.u64 %rd0, [x];
+    ld.param.u64 %rd1, [mx];
+    ld.param.u32 %r0,  [d];
+    mov.u32 %r1, %ctaid.x;
+    mov.u32 %r2, %tid.x;
+    mov.u32 %r3, %ntid.x;
+    mul.lo.u32 %r4, %r1, %r0;
+    cvt.u64.u32 %rd2, %r4;
+    shl.b64 %rd3, %rd2, 2;
+    add.u64 %rd4, %rd0, %rd3;
+    mov.f32 %f1, 0fFF800000;     // -inf
+    mov.u32 %r5, %r2;
+$k1_loop:
+    setp.ge.u32 %p1, %r5, %r0;
+    @%p1 bra $k1_done;
+    cvt.u64.u32 %rd5, %r5;
+    shl.b64 %rd6, %rd5, 2;
+    add.u64 %rd7, %rd4, %rd6;
+    ld.global.f32 %f2, [%rd7];
+    max.f32 %f1, %f1, %f2;
+    add.u32 %r5, %r5, %r3;
+    bra $k1_loop;
+$k1_done:
+    cvt.u64.u32 %rd8, %r2;
+    shl.b64 %rd9, %rd8, 2;
+    mov.u64 %rd10, sm1;
+    add.u64 %rd11, %rd10, %rd9;
+    st.shared.f32 [%rd11], %f1;
+    bar.sync 0;
+    mov.u32 %r6, 128;
+$k1_r:
+    setp.eq.u32 %p2, %r6, 0;
+    @%p2 bra $k1_rdone;
+    setp.ge.u32 %p3, %r2, %r6;
+    @%p3 bra $k1_rskip;
+    add.u32 %r7, %r2, %r6;
+    cvt.u64.u32 %rd12, %r7;
+    shl.b64 %rd13, %rd12, 2;
+    add.u64 %rd14, %rd10, %rd13;
+    ld.shared.f32 %f3, [%rd11];
+    ld.shared.f32 %f4, [%rd14];
+    max.f32 %f5, %f3, %f4;
+    st.shared.f32 [%rd11], %f5;
+$k1_rskip:
+    bar.sync 0;
+    shr.u32 %r6, %r6, 1;
+    bra $k1_r;
+$k1_rdone:
+    setp.ne.u32 %p4, %r2, 0;
+    @%p4 bra $k1_exit;
+    ld.shared.f32 %f6, [sm1];
+    cvt.u64.u32 %rd15, %r1;
+    shl.b64 %rd16, %rd15, 2;
+    add.u64 %rd17, %rd1, %rd16;
+    st.global.f32 [%rd17], %f6;
+$k1_exit:
+    ret;
+}
+
+// ---- k2_exp : grid=(rows*d/256) block=(256) ; e = exp(x - mx[row]) ----
+.visible .entry k2_exp (
+    .param .u64 x,
+    .param .u64 mx,
+    .param .u64 e,
+    .param .u32 d,
+    .param .u32 total
+)
+{
+    .reg .u64  %rd<14>;
+    .reg .u32  %r<12>;
+    .reg .pred %p<3>;
+    .reg .f32  %f<10>;
+
+    ld.param.u64 %rd0, [x];
+    ld.param.u64 %rd1, [mx];
+    ld.param.u64 %rd2, [e];
+    ld.param.u32 %r0,  [d];
+    ld.param.u32 %r1,  [total];
+    mov.u32 %r2, %ctaid.x;
+    mov.u32 %r3, %ntid.x;
+    mov.u32 %r4, %tid.x;
+    mad.lo.s32 %r5, %r2, %r3, %r4;
+    setp.ge.u32 %p1, %r5, %r1;
+    @%p1 bra $k2_exit;
+    div.u32 %r6, %r5, %r0;          // row
+    cvt.u64.u32 %rd3, %r5;
+    shl.b64 %rd4, %rd3, 2;
+    add.u64 %rd5, %rd0, %rd4;
+    ld.global.f32 %f0, [%rd5];      // x
+    cvt.u64.u32 %rd6, %r6;
+    shl.b64 %rd7, %rd6, 2;
+    add.u64 %rd8, %rd1, %rd7;
+    ld.global.f32 %f1, [%rd8];      // mx
+    sub.f32 %f2, %f0, %f1;
+    mul.f32 %f3, %f2, 0f3FB8AA3B;   // *log2(e)
+    ex2.approx.f32 %f4, %f3;
+    add.u64 %rd9, %rd2, %rd4;
+    st.global.f32 [%rd9], %f4;
+$k2_exit:
+    ret;
+}
+
+// ---- k3_row_sum : grid=(rows) block=(256) ; writes sm[row] = sum_j e ----
+.visible .entry k3_row_sum (
+    .param .u64 e,
+    .param .u64 sm,
+    .param .u32 d
+)
+{
+    .reg .u64  %rd<20>;
+    .reg .u32  %r<16>;
+    .reg .pred %p<6>;
+    .reg .f32  %f<10>;
+    .shared .align 4 .b8 sm3[1024];
+
+    ld.param.u64 %rd0, [e];
+    ld.param.u64 %rd1, [sm];
+    ld.param.u32 %r0,  [d];
+    mov.u32 %r1, %ctaid.x;
+    mov.u32 %r2, %tid.x;
+    mov.u32 %r3, %ntid.x;
+    mul.lo.u32 %r4, %r1, %r0;
+    cvt.u64.u32 %rd2, %r4;
+    shl.b64 %rd3, %rd2, 2;
+    add.u64 %rd4, %rd0, %rd3;
+    mov.f32 %f1, 0f00000000;
+    mov.u32 %r5, %r2;
+$k3_loop:
+    setp.ge.u32 %p1, %r5, %r0;
+    @%p1 bra $k3_done;
+    cvt.u64.u32 %rd5, %r5;
+    shl.b64 %rd6, %rd5, 2;
+    add.u64 %rd7, %rd4, %rd6;
+    ld.global.f32 %f2, [%rd7];
+    add.f32 %f1, %f1, %f2;
+    add.u32 %r5, %r5, %r3;
+    bra $k3_loop;
+$k3_done:
+    cvt.u64.u32 %rd8, %r2;
+    shl.b64 %rd9, %rd8, 2;
+    mov.u64 %rd10, sm3;
+    add.u64 %rd11, %rd10, %rd9;
+    st.shared.f32 [%rd11], %f1;
+    bar.sync 0;
+    mov.u32 %r6, 128;
+$k3_r:
+    setp.eq.u32 %p2, %r6, 0;
+    @%p2 bra $k3_rdone;
+    setp.ge.u32 %p3, %r2, %r6;
+    @%p3 bra $k3_rskip;
+    add.u32 %r7, %r2, %r6;
+    cvt.u64.u32 %rd12, %r7;
+    shl.b64 %rd13, %rd12, 2;
+    add.u64 %rd14, %rd10, %rd13;
+    ld.shared.f32 %f3, [%rd11];
+    ld.shared.f32 %f4, [%rd14];
+    add.f32 %f5, %f3, %f4;
+    st.shared.f32 [%rd11], %f5;
+$k3_rskip:
+    bar.sync 0;
+    shr.u32 %r6, %r6, 1;
+    bra $k3_r;
+$k3_rdone:
+    setp.ne.u32 %p4, %r2, 0;
+    @%p4 bra $k3_exit;
+    ld.shared.f32 %f6, [sm3];
+    cvt.u64.u32 %rd15, %r1;
+    shl.b64 %rd16, %rd15, 2;
+    add.u64 %rd17, %rd1, %rd16;
+    st.global.f32 [%rd17], %f6;
+$k3_exit:
+    ret;
+}
+
+// ---- k4_div : grid=(rows*d/256) block=(256) ; y = e / sm[row] ----
+.visible .entry k4_div (
+    .param .u64 e,
+    .param .u64 sm,
+    .param .u64 y,
+    .param .u32 d,
+    .param .u32 total
+)
+{
+    .reg .u64  %rd<14>;
+    .reg .u32  %r<12>;
+    .reg .pred %p<3>;
+    .reg .f32  %f<8>;
+
+    ld.param.u64 %rd0, [e];
+    ld.param.u64 %rd1, [sm];
+    ld.param.u64 %rd2, [y];
+    ld.param.u32 %r0,  [d];
+    ld.param.u32 %r1,  [total];
+    mov.u32 %r2, %ctaid.x;
+    mov.u32 %r3, %ntid.x;
+    mov.u32 %r4, %tid.x;
+    mad.lo.s32 %r5, %r2, %r3, %r4;
+    setp.ge.u32 %p1, %r5, %r1;
+    @%p1 bra $k4_exit;
+    div.u32 %r6, %r5, %r0;          // row
+    cvt.u64.u32 %rd3, %r5;
+    shl.b64 %rd4, %rd3, 2;
+    add.u64 %rd5, %rd0, %rd4;
+    ld.global.f32 %f0, [%rd5];      // e
+    cvt.u64.u32 %rd6, %r6;
+    shl.b64 %rd7, %rd6, 2;
+    add.u64 %rd8, %rd1, %rd7;
+    ld.global.f32 %f1, [%rd8];      // sm
+    rcp.rn.f32 %f2, %f1;
+    mul.f32 %f3, %f0, %f2;
+    add.u64 %rd9, %rd2, %rd4;
+    st.global.f32 [%rd9], %f3;
+$k4_exit:
+    ret;
+}

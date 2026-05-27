@@ -1,0 +1,54 @@
+#!/bin/sh
+# tool/gpu_profile — H3 round-3 GPU runtime profiler hook
+#
+# Wraps an executable under NVIDIA's profilers (nsys preferred, ncu for
+# per-kernel detail) to report per-kernel microsecond timings. The
+# source-level `gpu_timer_start()` / `gpu_timer_stop()` codegen path is a
+# follow-up; this host-side wrapper closes the profiling surface today.
+#
+# Usage:
+#   gpu_profile [-mode=nsys|ncu] <cmd> [args...]
+#
+# -mode=nsys (default) : timeline + per-kernel summary via `nsys profile`
+# -mode=ncu            : detailed per-kernel metrics via `ncu`
+#
+# Closes GPU.md milestone H3.
+
+set -eu
+
+if [ $# -lt 1 ]; then
+  echo "usage: gpu_profile [-mode=nsys|ncu] <cmd> [args...]" >&2
+  exit 2
+fi
+
+MODE="nsys"
+case "${1:-}" in
+  -mode=*) MODE="${1#-mode=}"; shift ;;
+esac
+
+if [ $# -lt 1 ]; then
+  echo "gpu_profile: no command given" >&2
+  exit 2
+fi
+
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+
+case "$MODE" in
+  nsys)
+    NSYS="${NSYS:-nsys}"
+    # --stats=true prints the per-kernel gpukernsum table (name, calls, total/avg ns)
+    "$NSYS" profile --stats=true --force-overwrite=true \
+      -o "$TMP/report" "$@"
+    ;;
+  ncu)
+    NCU="${NCU:-ncu}"
+    # gpu__time_duration.sum = per-kernel elapsed; .avg = mean over invocations
+    "$NCU" --metrics gpu__time_duration.sum,gpu__time_duration.avg \
+      --csv "$@"
+    ;;
+  *)
+    echo "gpu_profile: unknown mode: $MODE (use nsys or ncu)" >&2
+    exit 2
+    ;;
+esac

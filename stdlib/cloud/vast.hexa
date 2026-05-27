@@ -1,0 +1,940 @@
+// stdlib/cloud/vast.hexa — Vast.ai provider (cycle B-4).
+//
+// Mirrors stdlib/cloud/runpod.hexa: a thin lifecycle layer over the
+// `vastai` CLI (the canonical tool, like `runpodctl`). The run / copy
+// verbs already work through stdlib/cloud/cloud.hexa once an instance is
+// created (a vast.ai instance is plain SSH-reachable), so this module
+// adds only the LIFECYCLE layer: search-offers, create, destroy, list.
+//
+// Set VASTAI_DISABLE=1 in the environment to force the no-CLI path (every
+// public fn then returns ok=0 with a clear message instead of shelling
+// out — useful for unit-testing the command-string / marker logic
+// without a real vastai install or credentials).
+//
+// THE DESTROY BUG (archive/patches/vastai-destroy-needs-y-flag-or-silent-abort.md):
+//   `vastai destroy instance <iid>` opens an interactive `[y/N]` prompt.
+//   In a non-interactive context the prompt sees EOF, vastai prints
+//   `Aborted.` to stdout, exits rc=0, and the instance keeps billing.
+//   vast_destroy defends in depth: (a) force `-y`/`--yes` AND pipe a `y`
+//   on stdin so the prompt cannot block, AND (b) post-check stdout for an
+//   abort marker (rc alone is never trusted on a destroy path).
+
+use "stdlib/alloc/json_object"
+use "stdlib/cloud/cloud"
+
+// ── result shapes ────────────────────────────────────────────────────
+
+struct VastInstance {
+    ok:          int,   // 1 iff an instance was created
+    instance_id: str,   // vast.ai instance id (empty on failure)
+    message:     str
+}
+
+struct VastList {
+    ok:           int,     // 1 iff a vastai invocation returned (possibly empty) results
+    instance_ids: [str],   // discovered instance ids
+    message:      str
+}
+
+struct VastOffer {
+    ok:       int,   // 1 iff at least one offer matched
+    offer_id: str,   // chosen offer id (first matching, after claim-lock filter)
+    message:  str
+}
+
+fn _vast_fail_instance(msg: str) -> VastInstance {
+    return VastInstance { ok: 0, instance_id: "", message: msg }
+}
+
+fn _vast_fail_list(msg: str) -> VastList {
+    return VastList { ok: 0, instance_ids: [], message: msg }
+}
+
+fn _vast_fail_offer(msg: str) -> VastOffer {
+    return VastOffer { ok: 0, offer_id: "", message: msg }
+}
+
+// ── vastai detection ─────────────────────────────────────────────────
+
+// _vastai_path — return the vastai binary path if available, else "".
+// `VASTAI_DISABLE=1` in the env forces the no-CLI path even if vastai is
+// installed (useful when unit-testing the command-string logic).
+fn _vastai_path() -> str {
+    if env_var("VASTAI_DISABLE") == "1" {
+        return ""
+    }
+    let home_bin = env_var("HOME") + "/bin/vastai"
+    if file_exists(home_bin) {
+        return home_bin
+    }
+    let on_path = exec("command -v vastai 2>/dev/null").trim()
+    return on_path
+}
+
+// _shq_local — POSIX-quote a token for the local /bin/sh -c. Mirrors
+// cloud.hexa's _shq; kept local here so this module does not depend on a
+// private export. Wraps in single quotes; a literal ' becomes '\''.
+fn _shq_local(s: str) -> str {
+    let mut out = "'"
+    let mut i = 0
+    let n = len(s)
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "'" {
+            out = out + "'\\''"
+        } else {
+            out = out + c
+        }
+        i = i + 1
+    }
+    return out + "'"
+}
+
+// ── vastai JSON noise strip (robustness, fix-at-source) ───────────────
+// Real bug: `hexa cloud list --provider vast` →
+//   "[cloud] vast: list: non-array JSON — DEPRECATED: ... []".
+// Cause: every vastai path here runs the CLI with `2>&1` (stderr merged
+// into stdout, intentionally — we post-check stdout for markers like
+// "Aborted"). Recent vastai emits NON-JSON noise BEFORE the `--raw`
+// payload: (a) a `DEPRECATED:` notice on stderr, and (b) macOS python
+// urllib3's `NotOpenSSLWarning` (LibreSSL) on stderr. The merged stream
+// is then `<noise>\n[ {…} ]`, and json_parse chokes on the leading text.
+//
+// _vast_strip_to_json — drop everything before the first `[` or `{` so
+// the JSON payload parses cleanly regardless of the leading noise. This
+// is command-agnostic (works for any vastai subcommand's `--raw` output)
+// and noise-only: if NO `[`/`{` is present (truly empty output / a pure
+// API-failure message), the original string is returned unchanged so the
+// existing fail path (non-array / non-object JSON) still fires — real
+// errors are preserved, only leading noise is removed. One shared helper
+// (g20) for all 5 vastai JSON parse sites.
+fn _vast_strip_to_json(s: str) -> str {
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "[" {
+            return s.substring(i, n)
+        }
+        if c == "{" {
+            return s.substring(i, n)
+        }
+        i = i + 1
+    }
+    // No JSON opener found — return as-is so the caller's non-JSON fail
+    // path still detects a genuine empty / error output.
+    return s
+}
+
+// ── offer search (inbox: vast-offer-pool-verified-filter-default.md) ──
+
+// _vast_default_filters — the demiurge-empirical default predicates that
+// drop the boot-failure rate from ~60-70% to ~0%. Applied unless the
+// caller opts into the general pool (verified_only == 0). Each predicate
+// is a single token (vastai parses the whole query as one space-joined
+// argument). reliability>=0.95 + verified=true + rentable=true is the
+// campaign-proven combination.
+//
+// NB: the query-DSL field is `reliability`, NOT `reliability2` — the latter
+// is only an offer-JSON output field; vastai rejects it as an unknown query
+// key, returning 0 offers so every `hexa cloud rent` silently fails. (vast
+// docs: `vastai search offers 'reliability > 0.99 num_gpus>=4'`.) Filed twice
+// from live vast campaigns (INBOX #1038(1) · #1239(1)).
+fn _vast_default_filters() -> [str] {
+    return ["rentable=true", "verified=true", "reliability>=0.95"]
+}
+
+// _vast_build_query — join the caller's query with the default filters
+// (when verified_only) into one space-separated predicate string. The
+// default tokens come FIRST so a caller token can still override (vastai
+// uses last-wins for a repeated key). Always appends nothing here — the
+// `-n` cap-raise and `--raw` are added by the caller in the argv.
+fn _vast_build_query(query: str, verified_only: int) -> str {
+    if verified_only == 0 {
+        return query
+    }
+    let defaults = _vast_default_filters()
+    let mut out = ""
+    let mut i = 0
+    while i < len(defaults) {
+        if i > 0 {
+            out = out + " "
+        }
+        out = out + defaults[i]
+        i = i + 1
+    }
+    if len(query) > 0 {
+        out = out + " " + query
+    }
+    return out
+}
+
+// _vast_collect_offer_ids — parse a `vastai search offers --raw` JSON
+// array into the list of offer ids (the `id` field of each element).
+fn _vast_collect_offer_ids(out: str) -> [str] {
+    let parsed = json_parse(_vast_strip_to_json(out))
+    let mut ids = []
+    if type_of(parsed) != "array" {
+        return ids
+    }
+    let mut i = 0
+    while i < len(parsed) {
+        let id_v = json_object_get(parsed[i], "id")
+        // vast.ai offer/instance ids are integers in --raw JSON.
+        if type_of(id_v) == "int" {
+            let id_s = to_string(id_v)
+            if len(id_s) > 0 {
+                ids.push(id_s)
+            }
+        }
+        if type_of(id_v) == "string" {
+            let id_s2 = to_string(id_v)
+            if len(id_s2) > 0 {
+                ids.push(id_s2)
+            }
+        }
+        i = i + 1
+    }
+    return ids
+}
+
+// vast_search_offers — `vastai search offers '<query>' -n --raw`.
+// When `verified_only` is 1 (the default for `hexa cloud rent`), the
+// campaign-proven `rentable=true verified=true reliability>=0.95`
+// predicates are prepended; pass verified_only==0 to search the general
+// (unverified) pool. The `-n` flag raises the result cap (without it
+// vastai silently truncates to a handful of entries). Returns the FIRST
+// matching offer id, after applying the parallel-track claim lock so
+// sibling rents do not pick the same offer (see vast_offer_claim below).
+fn vast_search_offers(query: str, verified_only: int) -> VastOffer {
+    let vc = _vastai_path()
+    if len(vc) == 0 {
+        return _vast_fail_offer("vastai not found (set VASTAI_DISABLE=1 to silence)")
+    }
+    let eff = _vast_build_query(query, verified_only)
+    let cmd = _shq_local(vc) + " search offers " + _shq_local(eff)
+        + " -n --raw 2>&1"
+    let out = exec(cmd)
+    let ids = _vast_collect_offer_ids(out)
+    if len(ids) == 0 {
+        return _vast_fail_offer("search offers: no matching offers — " + out.substring(0, 200))
+    }
+    // Claim-lock: walk the candidate ids and pick the first one not
+    // already claimed by a sibling rent on this host (best-effort, see
+    // archive/patches/vast-offer-machine-claim-lock-for-parallel-tracks.md).
+    let claimed = vast_offer_claim(ids)
+    if claimed.ok == 1 {
+        return claimed
+    }
+    // Lock unavailable / all claimed → fall back to the first id so a
+    // single-track caller (no siblings) is never blocked.
+    return VastOffer { ok: 1, offer_id: ids[0], message: "search offers — " + to_string(len(ids)) + " offers (unlocked pick)" }
+}
+
+// ── parallel-track claim lock ─────────────────────────────────────────
+// (archive/patches/vast-offer-machine-claim-lock-for-parallel-tracks.md)
+//
+// Best-effort, file-backed claim ledger so two sibling `hexa cloud rent`
+// processes on the same host ($USER) do not pick the same offer id. The
+// patch's suggested-fix (1) asks for a flock-guarded claims.json; hexa
+// has no flock builtin, so we use the POSIX-atomic `mkdir` of a lock dir
+// as the advisory mutex (mkdir of an existing dir fails — atomic
+// test-and-set) around a plain read-modify-write of a newline-delimited
+// claims file. This implements (1) (process-shared ledger) and naturally
+// gives (2) (the first-unclaimed pick differs per process because each
+// process's claims accumulate). Stale claims older than CLAIM_TTL_SEC are
+// dropped on each load so a crashed sibling does not wedge the pool.
+
+fn _vast_claim_dir() -> str {
+    return env_var("HOME") + "/.hexa-cloud"
+}
+
+fn _vast_claim_file() -> str {
+    return _vast_claim_dir() + "/claims"
+}
+
+fn _vast_claim_lockdir() -> str {
+    return _vast_claim_dir() + "/claims.lock"
+}
+
+// _vast_now_sec — current unix epoch seconds (via `date +%s`; portable on
+// POSIX). Returns 0 if unavailable so TTL comparisons degrade to "keep".
+fn _vast_now_sec() -> int {
+    let s = exec("date +%s 2>/dev/null").trim()
+    let v = _vast_atoi(s)
+    if v < 0 {
+        return 0
+    }
+    return v
+}
+
+// _vast_atoi — parse a leading run of decimal digits. -1 if none.
+fn _vast_atoi(s: str) -> int {
+    let n = len(s)
+    let mut i = 0
+    let mut val = 0
+    let mut got = 0
+    while i < n {
+        let cc = char_code(s.substring(i, i + 1))
+        if cc >= 48 && cc <= 57 {
+            val = val * 10 + (cc - 48)
+            got = 1
+            i = i + 1
+        } else {
+            i = n
+        }
+    }
+    if got == 0 {
+        return -1
+    }
+    return val
+}
+
+// _vast_lock_acquire — atomic test-and-set via `mkdir` of the lock dir.
+// Spins up to ~2s (20 × 100ms). Returns 1 on success, 0 on timeout.
+fn _vast_lock_acquire() -> int {
+    let _ = exec("mkdir -p " + _shq_local(_vast_claim_dir()) + " 2>/dev/null")
+    let ld = _shq_local(_vast_claim_lockdir())
+    let mut tries = 0
+    while tries < 20 {
+        // mkdir of an existing dir fails (rc!=0) — atomic mutex.
+        let out = exec("mkdir " + ld + " 2>&1; echo __RC__=$?")
+        if out.index_of("__RC__=0") >= 0 {
+            return 1
+        }
+        let _2 = exec("sleep 0.1 2>/dev/null || sleep 1")
+        tries = tries + 1
+    }
+    return 0
+}
+
+fn _vast_lock_release() {
+    let _ = exec("rmdir " + _shq_local(_vast_claim_lockdir()) + " 2>/dev/null")
+}
+
+// _vast_claim_active — read the claims file and return the still-fresh
+// claim ids (each line is "offer_id<TAB>claimed_at_sec"). Drops entries
+// older than CLAIM_TTL_SEC (300s).
+fn _vast_claim_active() -> [str] {
+    let path = _vast_claim_file()
+    let mut active = []
+    if !file_exists(path) {
+        return active
+    }
+    let body = read_file(path)
+    let now = _vast_now_sec()
+    let ttl = 300
+    let lines = body.split("\n")
+    let mut i = 0
+    while i < len(lines) {
+        let line = lines[i]
+        if len(line) > 0 {
+            // split on TAB; offer id is field 0, ts is field 1.
+            let parts = line.split("\t")
+            if len(parts) >= 2 {
+                let oid = parts[0]
+                let ts = _vast_atoi(parts[1])
+                let fresh = ts < 0 || now == 0 || (now - ts) < ttl
+                if fresh && len(oid) > 0 {
+                    active.push(oid)
+                }
+            }
+        }
+        i = i + 1
+    }
+    return active
+}
+
+// _vast_claim_contains — is offer_id already in the active claim set?
+fn _vast_claim_contains(active: [str], offer_id: str) -> int {
+    let mut i = 0
+    while i < len(active) {
+        if active[i] == offer_id {
+            return 1
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+// vast_offer_claim — pick the first candidate offer id not already
+// claimed by a sibling rent, append a claim for it, and return it.
+// Returns ok=0 if the lock could not be taken or every candidate is
+// already claimed (caller then falls back to an unlocked pick).
+fn vast_offer_claim(candidate_ids: [str]) -> VastOffer {
+    if len(candidate_ids) == 0 {
+        return _vast_fail_offer("claim: no candidates")
+    }
+    if _vast_lock_acquire() == 0 {
+        return _vast_fail_offer("claim: lock unavailable (timeout)")
+    }
+    let active = _vast_claim_active()
+    let now = _vast_now_sec()
+    let mut chosen = ""
+    let mut i = 0
+    while i < len(candidate_ids) {
+        let oid = candidate_ids[i]
+        if _vast_claim_contains(active, oid) == 0 {
+            chosen = oid
+            i = len(candidate_ids)
+        } else {
+            i = i + 1
+        }
+    }
+    if len(chosen) == 0 {
+        _vast_lock_release()
+        return _vast_fail_offer("claim: all " + to_string(len(candidate_ids)) + " candidates already claimed by siblings")
+    }
+    // Append the fresh claim, then write the GC'd active set back so the
+    // file does not grow unbounded across campaign rounds.
+    let mut rebuilt = ""
+    let mut j = 0
+    while j < len(active) {
+        rebuilt = rebuilt + active[j] + "\t" + to_string(now) + "\n"
+        j = j + 1
+    }
+    rebuilt = rebuilt + chosen + "\t" + to_string(now) + "\n"
+    write_file(_vast_claim_file(), rebuilt)
+    _vast_lock_release()
+    return VastOffer { ok: 1, offer_id: chosen, message: "claimed offer " + chosen + " (lock held)" }
+}
+
+// vast_offer_release — drop a claim once the instance is created (or the
+// rent attempt failed), so the offer returns to the pool for siblings.
+fn vast_offer_release(offer_id: str) {
+    if len(offer_id) == 0 {
+        return
+    }
+    if _vast_lock_acquire() == 0 {
+        return
+    }
+    let active = _vast_claim_active()
+    let now = _vast_now_sec()
+    let mut rebuilt = ""
+    let mut j = 0
+    while j < len(active) {
+        if active[j] != offer_id {
+            rebuilt = rebuilt + active[j] + "\t" + to_string(now) + "\n"
+        }
+        j = j + 1
+    }
+    write_file(_vast_claim_file(), rebuilt)
+    _vast_lock_release()
+}
+
+// ── instance create ──────────────────────────────────────────────────
+
+// vast_create — `vastai create instance <offer-id> --image <img>
+//   --disk <gb> --raw`. Returns the new instance id parsed from the
+// `--raw` JSON (`new_contract` is the instance id in vastai's response;
+// some versions emit `id`). Mirrors runpod_create's CLI path; vast.ai
+// has no GraphQL fallback (the CLI is the only canonical surface).
+fn vast_create(offer_id: str, image: str, disk_gb: int) -> VastInstance {
+    let vc = _vastai_path()
+    if len(vc) == 0 {
+        return _vast_fail_instance("vastai not found (set VASTAI_DISABLE=1 to silence)")
+    }
+    if len(offer_id) == 0 {
+        return _vast_fail_instance("create: empty offer_id")
+    }
+    let cmd = _shq_local(vc) + " create instance " + _shq_local(offer_id)
+        + " --image " + _shq_local(image)
+        + " --disk " + _shq_local(to_string(disk_gb))
+        + " --ssh --direct"
+        + " --raw 2>&1"
+    let out = exec(cmd)
+    let parsed = json_parse(_vast_strip_to_json(out))
+    // success=true + new_contract=<iid> is the canonical create response.
+    let nc = json_object_get(parsed, "new_contract")
+    if type_of(nc) == "int" {
+        let iid = to_string(nc)
+        if len(iid) > 0 {
+            return VastInstance { ok: 1, instance_id: iid, message: "created (cli) on offer " + offer_id }
+        }
+    }
+    if type_of(nc) == "string" {
+        let iid2 = to_string(nc)
+        if len(iid2) > 0 {
+            return VastInstance { ok: 1, instance_id: iid2, message: "created (cli) on offer " + offer_id }
+        }
+    }
+    return _vast_fail_instance("create (cli) failed: " + out.substring(0, 200))
+}
+
+// ── teardown — THE CRITICAL FIX ───────────────────────────────────────
+// (archive/patches/vastai-destroy-needs-y-flag-or-silent-abort.md)
+
+// _vast_destroy_aborted — does the destroy output carry an abort marker?
+// vastai prints "Aborted." on EOF-to-confirm; match case-insensitively so
+// a future "aborted" / "ABORTED" token is still caught.
+fn _vast_destroy_aborted(out: str) -> int {
+    if out.index_of("Aborted") >= 0 {
+        return 1
+    }
+    if out.index_of("aborted") >= 0 {
+        return 1
+    }
+    if out.index_of("ABORTED") >= 0 {
+        return 1
+    }
+    return 0
+}
+
+// _vast_destroy_confirmed — does the destroy output carry a positive
+// success marker? vastai emits "destroying instance" / "success" /
+// "not found" (already gone) on a real destroy. We require one of these
+// AND the absence of the abort marker — rc=0 alone is never trusted.
+fn _vast_destroy_confirmed(out: str) -> int {
+    if out.index_of("destroying") >= 0 {
+        return 1
+    }
+    if out.index_of("destroyed") >= 0 {
+        return 1
+    }
+    if out.index_of("success") >= 0 {
+        return 1
+    }
+    if out.index_of("not found") >= 0 {
+        return 1
+    }
+    return 0
+}
+
+// vast_destroy — destroy instance <iid> WITHOUT hanging on the
+// interactive `[y/N]` prompt and WITHOUT trusting rc alone.
+//
+// Defense in depth:
+//   (a) force `-y`/`--yes` (recent vastai accepts it on most subcommands)
+//       AND pipe a `y\n` on stdin (`printf 'y\n' | …`) so even a version
+//       that ignores the flag cannot block on the prompt;
+//   (b) post-check stdout: an "Aborted" marker → ok=0 (the patch's core
+//       complaint — rc=0 + Aborted looked like success and leaked a
+//       billing instance);
+//   (c) cross-verify with `vastai show instance <iid>`: if the instance
+//       still reports a live status after a short settle, ok=0.
+// Returns ok=1 (instance_id echoed) only on CONFIRMED destruction.
+fn vast_destroy(iid: str) -> VastInstance {
+    if len(iid) == 0 {
+        return _vast_fail_instance("destroy: empty instance id")
+    }
+    let vc = _vastai_path()
+    if len(vc) == 0 {
+        return _vast_fail_instance("vastai not found (set VASTAI_DISABLE=1 to silence)")
+    }
+    // (a) -y AND a piped `y` on stdin. printf is POSIX; the pipe means a
+    // vastai that ignores -y still gets a confirmation instead of EOF.
+    let cmd = vast_destroy_cmd_TEST(vc, iid)
+    let out = exec(cmd)
+    let verdict = vast_destroy_verdict(out, iid)
+    if verdict.ok == 1 {
+        return verdict
+    }
+    return verdict
+}
+
+// vast_destroy_verdict — pure decision logic split out so it is unit-
+// testable without a live vastai (feed it a simulated stdout string).
+// ok=1 only when a positive success marker is present AND no abort marker
+// AND a follow-up `show instance` does not report the instance still
+// live. Any other shape → ok=0 with the first 200 chars of stdout
+// surfaced (suggested-fix (3): pattern-matchable diagnostic).
+fn vast_destroy_verdict(out: str, iid: str) -> VastInstance {
+    if _vast_destroy_aborted(out) == 1 {
+        return _vast_fail_instance("destroy returned rc=0 but stdout='Aborted' — LEAK SUSPECTED for " + iid + ": " + out.substring(0, 200))
+    }
+    if _vast_destroy_confirmed(out) == 0 {
+        return _vast_fail_instance("destroy: no success/destroying/not-found marker — verify manually: " + out.substring(0, 200))
+    }
+    // (c) cross-verify the instance is actually gone (best-effort; skipped
+    // when vastai is absent, e.g. under VASTAI_DISABLE in a unit test).
+    if _vast_instance_still_live(iid) == 1 {
+        return _vast_fail_instance("destroy reported success but show-instance still reports a live status — LEAK SUSPECTED for " + iid)
+    }
+    return VastInstance { ok: 1, instance_id: iid, message: "destroyed (confirmed) " + iid }
+}
+
+// ── test shims ────────────────────────────────────────────────────────
+// Public, side-effect-free accessors that expose the two pure-string
+// builders so the command-string / filter logic can be unit-tested
+// without a live vastai (the module's other private fns are reachable
+// only inside the file). Suffix _TEST keeps them out of the normal API.
+
+// vast_build_query_TEST — public alias for the offer-search query builder.
+fn vast_build_query_TEST(query: str, verified_only: int) -> str {
+    return _vast_build_query(query, verified_only)
+}
+
+// vast_strip_to_json_TEST — public alias for the leading-noise stripper so
+// the DEPRECATED / urllib3-warning robustness can be unit-tested without a
+// live vastai.
+fn vast_strip_to_json_TEST(s: str) -> str {
+    return _vast_strip_to_json(s)
+}
+
+// vast_destroy_cmd_TEST — return the exact shell command vast_destroy
+// builds for `vc destroy instance <iid>` so a unit test can assert the
+// yes-flag + stdin-pipe are present without shelling out.
+fn vast_destroy_cmd_TEST(vc: str, iid: str) -> str {
+    return "printf 'y\\n' | " + _shq_local(vc) + " destroy instance "
+        + _shq_local(iid) + " -y --raw 2>&1"
+}
+
+// _vast_instance_still_live — `vastai show instance <iid> --raw`; return 1
+// iff the instance still reports a running/loading/starting status. A
+// missing instance (empty / non-object / not-found) → 0 (gone). Returns 0
+// when vastai is unavailable so unit tests do not spuriously fail.
+fn _vast_instance_still_live(iid: str) -> int {
+    let vc = _vastai_path()
+    if len(vc) == 0 {
+        return 0
+    }
+    let _settle = exec("sleep 3 2>/dev/null || sleep 1")
+    let cmd = _shq_local(vc) + " show instance " + _shq_local(iid) + " --raw 2>&1"
+    let out = exec(cmd)
+    let parsed = json_parse(_vast_strip_to_json(out))
+    if type_of(parsed) != "map" {
+        return 0
+    }
+    let st = json_object_get_str(parsed, "actual_status", "")
+    if st == "running" {
+        return 1
+    }
+    if st == "loading" {
+        return 1
+    }
+    if st == "starting" {
+        return 1
+    }
+    let ist = json_object_get_str(parsed, "intended_status", "")
+    if ist == "running" {
+        return 1
+    }
+    return 0
+}
+
+// ── instance list ─────────────────────────────────────────────────────
+
+// vast_list_instances — `vastai show instances --raw` → the active
+// instance ids. Mirrors runpod_list_pods. ok=0 when vastai is absent or
+// the JSON is not an array.
+fn vast_list_instances() -> VastList {
+    let vc = _vastai_path()
+    if len(vc) == 0 {
+        return _vast_fail_list("vastai not found (set VASTAI_DISABLE=1 to silence)")
+    }
+    let cmd = _shq_local(vc) + " show instances --raw 2>&1"
+    let out = exec(cmd)
+    let parsed = json_parse(_vast_strip_to_json(out))
+    if type_of(parsed) != "array" {
+        return _vast_fail_list("list: non-array JSON — " + out.substring(0, 200))
+    }
+    let mut ids = []
+    let mut i = 0
+    while i < len(parsed) {
+        let id_v = json_object_get(parsed[i], "id")
+        if type_of(id_v) == "int" {
+            let id_s = to_string(id_v)
+            if len(id_s) > 0 {
+                ids.push(id_s)
+            }
+        }
+        if type_of(id_v) == "string" {
+            let id_s2 = to_string(id_v)
+            if len(id_s2) > 0 {
+                ids.push(id_s2)
+            }
+        }
+        i = i + 1
+    }
+    return VastList { ok: 1, instance_ids: ids, message: "list — " + to_string(len(ids)) + " instances" }
+}
+
+// ── ssh endpoint + wait ───────────────────────────────────────────────
+// A freshly-created vast.ai instance is plain-SSH-reachable, but the
+// host / port mapping is not known until the instance finishes booting.
+// These thin accessors mirror runpod_get_ssh_port / runpod_wait_ssh: they
+// query `vastai show instance <iid> --raw` for the ssh_host / ssh_port
+// fields and (for vast_wait_ssh) round-trip a real `echo` so the verb
+// layer can hand the caller a connectable host:port. No new lifecycle
+// here — just the read-side endpoint discovery the create→use path needs.
+
+struct VastSsh {
+    ok:      int,   // 1 iff ssh_host AND ssh_port are present (and, for wait, reachable)
+    host:    str,   // ssh host (public ip / dns)
+    port:    str,   // ssh port (string form for ssh -p)
+    message: str
+}
+
+fn _vast_fail_ssh(msg: str) -> VastSsh {
+    return VastSsh { ok: 0, host: "", port: "", message: msg }
+}
+
+// vast_ssh_endpoint — one-shot `show instance <iid> --raw` → ssh_host /
+// ssh_port. ok=0 (not yet mapped) when either field is absent, when the
+// JSON is not an object, or when vastai is unavailable. Does NOT wait —
+// callers poll via vast_wait_ssh.
+fn vast_ssh_endpoint(iid: str) -> VastSsh {
+    if len(iid) == 0 {
+        return _vast_fail_ssh("ssh_endpoint: empty instance id")
+    }
+    let vc = _vastai_path()
+    if len(vc) == 0 {
+        return _vast_fail_ssh("vastai not found (set VASTAI_DISABLE=1 to silence)")
+    }
+    let cmd = _shq_local(vc) + " show instance " + _shq_local(iid) + " --raw 2>&1"
+    let out = exec(cmd)
+    let parsed = json_parse(_vast_strip_to_json(out))
+    if type_of(parsed) != "map" {
+        return _vast_fail_ssh("ssh_endpoint: non-object JSON — " + out.substring(0, 160))
+    }
+    let host = json_object_get_str(parsed, "ssh_host", "")
+    // ssh_port may parse as int or string depending on vastai version.
+    let mut port = json_object_get_str(parsed, "ssh_port", "")
+    if len(port) == 0 {
+        let pv = json_object_get(parsed, "ssh_port")
+        if type_of(pv) == "int" {
+            port = to_string(pv)
+        }
+    }
+    if len(host) == 0 || len(port) == 0 {
+        return _vast_fail_ssh("ssh_endpoint: ssh_host/ssh_port not yet mapped for " + iid)
+    }
+    return VastSsh { ok: 1, host: host, port: port, message: "ssh endpoint " + host + ":" + port }
+}
+
+// vast_ssh_opts — canonical ssh_opts for an ephemeral vast.ai instance.
+// Mirrors runpod_pod_opts: non-22 port + accept the changing host key +
+// keepalives so an idle ssh is not declared dead by transient noise.
+fn vast_ssh_opts(port: str) -> [str] {
+    return ["-p", port, "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"]
+}
+
+// vast_wait_ssh — poll the endpoint AND a real `echo` round-trip via ssh
+// until both succeed or the budget elapses. Mirrors runpod_wait_ssh.
+// vast community pods boot in 30s best case, 5-10min worst case (see
+// docs/notes/hexa-cloud-vast-usage-recipe-2026-05-22.md), so callers
+// should pass a generous budget (e.g. 30 tries × 20s = 600s).
+fn vast_wait_ssh(iid: str, max_tries: int, sleep_each_sec: int) -> VastSsh {
+    let mut i = 0
+    let sleep_cmd = "sleep " + to_string(sleep_each_sec)
+    while i < max_tries {
+        let e = vast_ssh_endpoint(iid)
+        if e.ok == 1 {
+            let probe = cloud_run_opts("root@" + e.host, vast_ssh_opts(e.port), ["echo", "__VAST_UP__"])
+            if probe.ok == 1 {
+                if probe.stdout_.index_of("__VAST_UP__") >= 0 {
+                    return e
+                }
+            }
+        }
+        exec(sleep_cmd)
+        i = i + 1
+    }
+    return _vast_fail_ssh("wait_ssh: never ready in " + to_string(max_tries * sleep_each_sec) + "s")
+}
+
+// ── direct bare-IP endpoint (DFT-dispatch transport guard ②) ──────────
+// vast_ssh_endpoint above returns the PROXY ssh_host (ssh*.vast.ai) from a
+// single `show instance <id>`. Two problems for a `--direct` pod: (a) the
+// proxy host is blocked by cloud-guard, so heavy chains must use the bare
+// public IP + the host-side port mapped to 22/tcp; (b) the single-instance
+// `show instance <id>` crashes on a freshly-created pod when `start_date`
+// is null (INBOX #1239(2)). vast_direct_endpoint uses the PLURAL
+// `show instances --raw` list (no start_date crash) and reads the direct
+// endpoint. The parse is split into a pure fn so it is unit-testable
+// without vastai (see dft_dispatch_test.hexa).
+
+// vast_parse_direct_endpoint — PURE: raw `show instances --raw` JSON (an
+// ARRAY of instance objects) + an instance id → the bare-IP endpoint
+// (`public_ipaddr` + ports["22/tcp"][0]["HostPort"]). ok=0 when the
+// instance is absent or its ip/port are not yet mapped.
+pub fn vast_parse_direct_endpoint(raw: str, iid: str) -> VastSsh {
+    let parsed = json_parse(_vast_strip_to_json(raw))
+    if type_of(parsed) != "array" {
+        return _vast_fail_ssh("direct_endpoint: non-array JSON — " + raw.substring(0, 160))
+    }
+    let mut i = 0
+    while i < len(parsed) {
+        let inst = parsed[i]
+        let id_v = json_object_get(inst, "id")
+        let mut id_s = ""
+        if type_of(id_v) == "int" {
+            id_s = to_string(id_v)
+        }
+        if type_of(id_v) == "string" {
+            id_s = to_string(id_v)
+        }
+        if id_s == iid {
+            let host = json_object_get_str(inst, "public_ipaddr", "")
+            let mut port = ""
+            let ports = json_object_get(inst, "ports")
+            if type_of(ports) == "map" {
+                let tcp = json_object_get(ports, "22/tcp")
+                if type_of(tcp) == "array" {
+                    if len(tcp) > 0 {
+                        port = json_object_get_str(tcp[0], "HostPort", "")
+                    }
+                }
+            }
+            if len(host) == 0 {
+                return _vast_fail_ssh("direct_endpoint: public_ipaddr not yet mapped for " + iid)
+            }
+            if len(port) == 0 {
+                return _vast_fail_ssh("direct_endpoint: 22/tcp HostPort not yet mapped for " + iid)
+            }
+            return VastSsh { ok: 1, host: host, port: port, message: "direct endpoint " + host + ":" + port }
+        }
+        i = i + 1
+    }
+    return _vast_fail_ssh("direct_endpoint: instance " + iid + " not in show-instances list")
+}
+
+// vast_direct_endpoint — `vastai show instances --raw` (plural — avoids the
+// #1239(2) single-instance start_date=None crash) → vast_parse_direct_endpoint.
+pub fn vast_direct_endpoint(iid: str) -> VastSsh {
+    if len(iid) == 0 {
+        return _vast_fail_ssh("direct_endpoint: empty instance id")
+    }
+    let vc = _vastai_path()
+    if len(vc) == 0 {
+        return _vast_fail_ssh("vastai not found (set VASTAI_DISABLE=1 to silence)")
+    }
+    let out = exec(_shq_local(vc) + " show instances --raw 2>&1")
+    return vast_parse_direct_endpoint(out, iid)
+}
+
+// ── ~/.ssh/config auto-injection (#1155 zero-flag identity) ───────────
+// hexa cloud's ssh otherwise offers only the Mac default ~/.ssh/id_ed25519,
+// which is unregistered on vast → `Permission denied (publickey)` on every
+// direct-IP pod. The `--identity` flag (#1266) is the explicit escape; this is
+// the zero-flag path — `rent`/`adopt` write a MARKER-SCOPED Host block to
+// ~/.ssh/config so a later bare `hexa cloud run root@<ip> --port <p>` (or any
+// raw ssh to that IP) picks up the vast key automatically. The block carries
+// only the identity + ephemeral-host-key options — NOT Port, so `--port`
+// stays caller-controlled and the block never hijacks another service on the
+// same IP. Marker scoping means it only ever rewrites its OWN block (never a
+// user's hand-written config), and is idempotent across re-rents.
+
+// _vast_ssh_config_markers — the begin/end sentinels for one IP's block.
+fn _vast_cfg_begin(ip: str) -> str {
+    return "# >>> hexa-cloud vast " + ip + " >>>"
+}
+fn _vast_cfg_end(ip: str) -> str {
+    return "# <<< hexa-cloud vast " + ip + " <<<"
+}
+
+// vast_ssh_config_block — PURE: the marker-scoped Host block for `ip` using
+// `identity` as the private key. No trailing newline.
+pub fn vast_ssh_config_block(ip: str, identity: str) -> str {
+    return _vast_cfg_begin(ip) + "\n"
+        + "Host " + ip + "\n"
+        + "    IdentityFile " + identity + "\n"
+        + "    IdentitiesOnly yes\n"
+        + "    StrictHostKeyChecking no\n"
+        + "    UserKnownHostsFile /dev/null\n"
+        + _vast_cfg_end(ip)
+}
+
+// vast_ssh_config_splice — PURE + idempotent: given the existing ~/.ssh/config
+// text, return it with `ip`'s managed block inserted (or REPLACED if already
+// present). Any lines between this ip's begin/end markers are dropped first,
+// so re-renting the same IP never duplicates or stacks blocks. User content
+// (outside the markers) is preserved verbatim.
+pub fn vast_ssh_config_splice(existing: str, ip: str, identity: str) -> str {
+    let begin = _vast_cfg_begin(ip)
+    let end = _vast_cfg_end(ip)
+    let lines = existing.split("\n")
+    let mut kept = []
+    let mut skip = 0
+    let mut i = 0
+    while i < len(lines) {
+        let ln = lines[i]
+        if ln == begin {
+            skip = 1
+        } else {
+            if ln == end {
+                skip = 0
+            } else {
+                if skip == 0 {
+                    kept.push(ln)
+                }
+            }
+        }
+        i = i + 1
+    }
+    let mut base = ""
+    let mut j = 0
+    while j < len(kept) {
+        if j > 0 {
+            base = base + "\n"
+        }
+        base = base + kept[j]
+        j = j + 1
+    }
+    let block = vast_ssh_config_block(ip, identity)
+    let trimmed = base.trim()
+    if len(trimmed) == 0 {
+        return block + "\n"
+    }
+    return trimmed + "\n\n" + block + "\n"
+}
+
+// _vast_default_identity — the key to auto-inject: $HEXA_VAST_IDENTITY if set,
+// else the campaign-default ~/.ssh/id_vast_anima IF it exists. "" → caller
+// skips injection (no key to present; graceful no-op).
+fn _vast_default_identity() -> str {
+    let env_id = env_var("HEXA_VAST_IDENTITY")
+    if len(env_id) > 0 {
+        return env_id
+    }
+    let cand = env_var("HOME") + "/.ssh/id_vast_anima"
+    if file_exists(cand) {
+        return cand
+    }
+    return ""
+}
+
+// vast_ssh_config_ensure — I/O: idempotently write `ip`'s managed Host block
+// into ~/.ssh/config using `identity`. Returns 1 on write, 0 on no-op (empty
+// ip/identity). Creates ~/.ssh (700) + config (600) if absent. The splice is
+// pure + marker-scoped, so this only ever rewrites hexa's own block.
+fn vast_ssh_config_ensure(ip: str, identity: str) -> int {
+    if len(ip) == 0 {
+        return 0
+    }
+    if len(identity) == 0 {
+        return 0
+    }
+    let home = env_var("HOME")
+    if len(home) == 0 {
+        return 0
+    }
+    let ssh_dir = home + "/.ssh"
+    let _ = exec("mkdir -p " + _shq_local(ssh_dir) + " 2>/dev/null && chmod 700 " + _shq_local(ssh_dir) + " 2>/dev/null")
+    let cfg = ssh_dir + "/config"
+    let mut existing = ""
+    if file_exists(cfg) {
+        existing = read_file(cfg)
+    }
+    let updated = vast_ssh_config_splice(existing, ip, identity)
+    write_file(cfg, updated)
+    let _ = exec("chmod 600 " + _shq_local(cfg) + " 2>/dev/null")
+    return 1
+}
+
+// vast_ssh_config_autoinject — resolve the bare-IP endpoint for `iid` and (if
+// a vast key is available) write its ~/.ssh/config block. The single call the
+// `rent`/`adopt` verbs use; safe no-op when no key / endpoint not yet mapped.
+// Returns the IP written, or "" when it skipped.
+pub fn vast_ssh_config_autoinject(iid: str) -> str {
+    let identity = _vast_default_identity()
+    if len(identity) == 0 {
+        return ""
+    }
+    let ep = vast_direct_endpoint(iid)
+    if ep.ok == 0 {
+        return ""
+    }
+    let _ = vast_ssh_config_ensure(ep.host, identity)
+    return ep.host
+}

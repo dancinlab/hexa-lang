@@ -1,0 +1,72 @@
+// HEXA Native Compiler — Wave 1 absorption: falsifiers smoke
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Run:
+//   hexa run compiler/falsifiers/static_index_test.hexa
+
+use "compiler/falsifiers/embed"
+use "compiler/falsifiers/embedded.gen"
+use "compiler/falsifiers/static_index"
+
+fn _is_hex64(s: string) -> bool {
+    if len(s) != 64 { return false }
+    let mut i = 0
+    while i < 64 {
+        let c = s.substring(i, i + 1)
+        let ok = (c >= "0" && c <= "9") || (c >= "a" && c <= "f")
+        if !ok { return false }
+        i = i + 1
+    }
+    return true
+}
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok { println("  PASS  " + label) }
+    else { println("  FAIL  " + label); fails.push(label) }
+}
+
+fn main() {
+    println("wave1 falsifiers embed smoke")
+    println("  hash:         " + FALSIFIERS_HASH)
+    println("  generated_at: " + FALSIFIERS_GENERATED_AT)
+    println("  source_count: " + to_string(FALSIFIERS_SOURCE_COUNT))
+    println("  entries:      " + to_string(len(FALSIFIERS)))
+
+    let fails = []
+    println("")
+    println("checks:")
+    _check("hash is 64-char hex",                _is_hex64(FALSIFIERS_HASH),                  fails)
+    _check("generated_at non-empty",             len(FALSIFIERS_GENERATED_AT) > 0,            fails)
+    _check("source_count > 0",                   FALSIFIERS_SOURCE_COUNT > 0,                 fails)
+    _check("entries match source_count",         len(FALSIFIERS) == FALSIFIERS_SOURCE_COUNT,  fails)
+    _check("entries > 0",                        len(FALSIFIERS) > 0,                         fails)
+
+    let f1 = falsifiers_lookup("F1")
+    _check("lookup(F1).id == F1",                f1.id == "F1",                               fails)
+    _check("lookup(F1).slug non-empty",          len(f1.slug) > 0,                            fails)
+    _check("lookup(F1).cmd_sha256 non-empty",    len(f1.cmd_sha256) > 0,                      fails)
+
+    let miss = falsifiers_lookup("FFF-NOT-A-REAL-ID")
+    _check("lookup miss → id == \"\"",          miss.id == "",                               fails)
+
+    println("")
+    if len(fails) == 0 {
+        println("RESULT: PASS (" + to_string(len(FALSIFIERS)) + "/" + to_string(FALSIFIERS_SOURCE_COUNT) + " entries, hash=" + FALSIFIERS_HASH.substring(0, 12) + "...)")
+        exit(0)
+    } else {
+        println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
+        exit(1)
+    }
+}
+
+let _av = argv()
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let s = to_string(_av[1])
+    if s.ends_with("/static_index_test.hexa") { return true }
+    if s == "static_index_test.hexa" { return true }
+    return false
+}
+if _is_main() { main() }

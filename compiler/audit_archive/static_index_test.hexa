@@ -1,0 +1,84 @@
+// HEXA Native Compiler — Phase 1-extension absorption: audit archive smoke
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Run:
+//   hexa run compiler/audit_archive/static_index_test.hexa
+
+use "compiler/audit_archive/embed"
+use "compiler/audit_archive/embedded.gen"
+use "compiler/audit_archive/static_index"
+
+fn _is_hex64(s: string) -> bool {
+    if len(s) != 64 { return false }
+    let mut i = 0
+    while i < 64 {
+        let c = s.substring(i, i + 1)
+        let ok = (c >= "0" && c <= "9") || (c >= "a" && c <= "f")
+        if !ok { return false }
+        i = i + 1
+    }
+    return true
+}
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok { println("  PASS  " + label) }
+    else { println("  FAIL  " + label); fails.push(label) }
+}
+
+fn main() {
+    println("phase1-ext audit archive embed smoke")
+    println("  hash:         " + AUDIT_ARCHIVE_HASH)
+    println("  generated_at: " + AUDIT_ARCHIVE_GENERATED_AT)
+    println("  source_path:  " + AUDIT_ARCHIVE_SOURCE_PATH)
+    println("  source_lines: " + to_string(AUDIT_ARCHIVE_SOURCE_LINES))
+    println("  embedded:     " + to_string(len(AUDIT_LOG_TAIL)))
+    println("  ts_first:     " + AUDIT_ARCHIVE_TS_FIRST)
+    println("  ts_last:      " + AUDIT_ARCHIVE_TS_LAST)
+
+    let fails = []
+    println("")
+    println("checks:")
+    _check("hash is 64-char hex",                _is_hex64(AUDIT_ARCHIVE_HASH),                     fails)
+    _check("generated_at non-empty",             len(AUDIT_ARCHIVE_GENERATED_AT) > 0,               fails)
+    _check("source_path non-empty",              len(AUDIT_ARCHIVE_SOURCE_PATH) > 0,                fails)
+    _check("source_lines > 0",                   AUDIT_ARCHIVE_SOURCE_LINES > 0,                    fails)
+    _check("embedded > 0",                       len(AUDIT_LOG_TAIL) > 0,                           fails)
+    _check("embedded <= source_lines",           len(AUDIT_LOG_TAIL) <= AUDIT_ARCHIVE_SOURCE_LINES, fails)
+    _check("ts_first non-empty",                 len(AUDIT_ARCHIVE_TS_FIRST) > 0,                   fails)
+    _check("ts_last non-empty",                  len(AUDIT_ARCHIVE_TS_LAST) > 0,                    fails)
+
+    let first = AUDIT_LOG_TAIL[0]
+    _check("first.ts non-empty",                 len(first.ts) > 0,                                 fails)
+    _check("first.subcmd non-empty",             len(first.subcmd) > 0,                             fails)
+    _check("first.exit_code is integer",         first.exit_code >= -255 && first.exit_code <= 255, fails)
+
+    // ts_first/last should match first/last entries.
+    _check("ts_first matches first.ts",          AUDIT_ARCHIVE_TS_FIRST == first.ts,                fails)
+    let last_e = AUDIT_LOG_TAIL[len(AUDIT_LOG_TAIL) - 1]
+    _check("ts_last matches last.ts",            AUDIT_ARCHIVE_TS_LAST == last_e.ts,                fails)
+
+    // Filters non-crashing.
+    let fails_arr = audit_archive_failures()
+    _check("failures() returns array",           len(fails_arr) >= 0,                               fails)
+
+    println("")
+    if len(fails) == 0 {
+        println("RESULT: PASS (" + to_string(len(AUDIT_LOG_TAIL)) + "/" + to_string(AUDIT_ARCHIVE_SOURCE_LINES) + " entries embedded, hash=" + AUDIT_ARCHIVE_HASH.substring(0, 12) + "...)")
+        exit(0)
+    } else {
+        println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
+        exit(1)
+    }
+}
+
+let _av = argv()
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let s = to_string(_av[1])
+    if s.ends_with("/static_index_test.hexa") { return true }
+    if s == "static_index_test.hexa" { return true }
+    return false
+}
+if _is_main() { main() }

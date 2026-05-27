@@ -1,0 +1,302 @@
+#!hexa strict
+// hexa-chip/verify/falsifier_check.hexa — closure-pct tracker (recipe §3).
+//
+// Tracks T1 (algebraic) / T2 (numerical) / T3 (empirical) closure for
+// each falsifier registered in .roadmap.hexa_chip §A.4.   This is the
+// canonical RSC progress meter — `<project> verify falsifier` prints
+// per-falsifier closure pct + sat-1 / sat-2 status.
+//
+// Closure formula (recipe §3):
+//
+//   closure_pct(t1, t2, t3)
+//     = 0   if  no tier closed
+//     = 33  if  any single tier closed
+//     = 67  if  two tiers closed
+//     = 100 if  all three tiers closed
+//
+// Per recipe §3, T2 / T3 closure means **every script in the
+// falsifier's tier-stack array exists on disk** (not just one).
+//
+// Updated 2026-05-08 (RSC iter 21): T3 closure is now tracked via
+// archival empirical_*.hexa fixtures (F1/F2/F3). F-CHIP-1/2/3 each
+// reach 100% closure (T1 ✓ + T2 ✓ + T3 ✓). Strict bench-tier
+// closure remains Stage-1+ scope (deferred v2.0.0+); T3 ✓ here
+// means the archival/empirical leg of the falsifier loop is wired,
+// not that the prediction has been hardware-validated.
+//
+// Outputs:
+//   • per-falsifier table: T1 ✓/✗, T2 ✓/✗ (×N stack), T3 ✓/✗ (×N stack), pct
+//   • sat-1 verdict: 3 measurable falsifiers ≥ 67% AND each T2 ≥ 3
+//   • sat-3 verdict: 3 measurable falsifiers at 100% AND each T3 ≥ 1
+//   • aggregate: roadmap-presence still verified (legacy semantic)
+//
+// PASS = roadmap presence intact (legacy) + every T2 stack ≥ 1 script
+//        present.  (sat-1 / sat-2 are reported informationally — they
+//        do NOT gate the script's exit code; saturation is a milestone
+//        signal, not a regression failure.)
+// FAIL = any registered falsifier missing from roadmap, OR any T2
+//        stack collapses to zero scripts (regressions).
+//
+// Run:
+//   hexa run verify/falsifier_check.hexa
+//   hexa run verify/falsifier_check.hexa --json
+//
+// Cost: $0 (file existence + single roadmap read).
+
+// ─── falsifier registry ──────────────────────────────────────────────
+//
+// Each entry: [id, claim_summary, bench_summary, T1_script, T2_scripts...]
+// with T2_scripts inlined as a multi-element trailing tail (closure
+// recipe §3: T2 is an ARRAY, so a single falsifier can have ×1..×N
+// T2 stacks).
+
+let FALSIFIERS = [
+    ["F-CHIP-1",
+     "process node 12-generation σ scaling (Moore's law n=6 fit)",
+     "Samsung/SK/TSMC public 2nm-3nm measurement vs σ(6)=12 ladder fit"],
+    ["F-CHIP-2",
+     "NPU n=6 dataflow τ=4 stage decomposition",
+     "Samsung Exynos / Apple Neural Engine pipeline-stage count comparison"],
+    ["F-CHIP-3",
+     "HBM stack height σ-φ=10 layer ceiling",
+     "HBM4 measured stack count vs σ(6)-φ(6)=10 prediction"],
+    ["F-CHIP-4",
+     "consciousness-chip n=6 invariant claim",
+     "Φ (IIT) measure / PCI / closed-form n=6 fit experimental data"]
+]
+
+// T1 calc_* per falsifier (one script each; "" = not yet wired).
+let F1_T1 = "calc_process.hexa"
+let F2_T1 = "calc_npu.hexa"
+let F3_T1 = "calc_hbm.hexa"
+let F4_T1 = ""    // consciousness-chip T1 not yet derived
+
+// T2 stacks (arrays).
+let F1_T2 = ["numerics_process.hexa", "numerics_process_parity.hexa", "numerics_process_solver.hexa", "numerics_spice_corner.hexa"]
+let F2_T2 = ["numerics_npu.hexa", "numerics_npu_parity.hexa", "numerics_npu_solver.hexa", "numerics_rtl_isa_n6.hexa"]
+let F3_T2 = ["numerics_hbm.hexa", "numerics_hbm_parity.hexa", "numerics_hbm_solver.hexa", "numerics_power_thermal.hexa"]
+let F4_T2: [str] = []   // consciousness T2 not yet derived
+
+// T3 stacks (arrays — archival empirical fixtures; iter 18-20).
+let F1_T3 = ["empirical_process.hexa"]
+let F2_T3 = ["empirical_npu.hexa"]
+let F3_T3 = ["empirical_hbm.hexa"]
+let F4_T3: [str] = []   // consciousness T3 needs Φ-bench (Stage-3+)
+
+// ─── helpers ─────────────────────────────────────────────────────────
+
+fn _root() -> str {
+    let env_root = env("HEXA_CHIP_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _has_flag(a: [str], flag: str) -> bool {
+    for x in a { if x == flag { return true } }
+    return false
+}
+
+fn _user_args() -> [str] {
+    let raw = args()
+    let mut sidx = -1
+    let mut i = 0
+    while i < raw.len() {
+        if raw[i].ends_with(".hexa") { sidx = i; break }
+        i = i + 1
+    }
+    let mut out: [str] = []
+    let mut j = sidx + 1
+    if sidx < 0 { j = 0 }
+    while j < raw.len() { out = out + [raw[j]]; j = j + 1 }
+    return out
+}
+
+fn _exists(p: str) -> bool {
+    let r = exec("[ -f \"" + p + "\" ] && echo y || echo n").trim()
+    return r == "y"
+}
+
+fn _t1_ok(root: str, t1_script: str) -> bool {
+    if t1_script.len() == 0 { return false }
+    return _exists(root + "/verify/" + t1_script)
+}
+
+fn _t2_ok(root: str, t2_scripts: [str]) -> bool {
+    // T2 closure (recipe §3): every script in the stack must exist.
+    if t2_scripts.len() == 0 { return false }
+    for s in t2_scripts {
+        if !_exists(root + "/verify/" + s) { return false }
+    }
+    return true
+}
+
+fn _t2_present_count(root: str, t2_scripts: [str]) -> int {
+    let mut n = 0
+    for s in t2_scripts {
+        if _exists(root + "/verify/" + s) { n = n + 1 }
+    }
+    return n
+}
+
+fn closure_pct(t1: bool, t2: bool, t3: bool) -> int {
+    let mut n = 0
+    if t1 { n = n + 1 }
+    if t2 { n = n + 1 }
+    if t3 { n = n + 1 }
+    if n == 0 { return 0 }
+    if n == 1 { return 33 }
+    if n == 2 { return 67 }
+    return 100
+}
+
+fn _bool_str(b: bool) -> str { if b { return "✓" }; return "✗" }
+
+// ─── main routine ────────────────────────────────────────────────────
+
+fn main() {
+    let ua = _user_args()
+    let json_mode = _has_flag(ua, "--json")
+    let root = _root()
+
+    // Step 1 — verify roadmap presence (legacy semantic).
+    let p = root + "/.roadmap.hexa_chip"
+    let roadmap_present = _exists(p)
+    let mut found = 0
+    if roadmap_present {
+        let txt = read_file(p)
+        for f in FALSIFIERS {
+            if txt.contains(f[0]) { found = found + 1 }
+        }
+    }
+
+    // Step 2 — gather per-falsifier closure data.
+    let f1_t1 = _t1_ok(root, F1_T1)
+    let f2_t1 = _t1_ok(root, F2_T1)
+    let f3_t1 = _t1_ok(root, F3_T1)
+    let f4_t1 = _t1_ok(root, F4_T1)
+
+    let f1_t2 = _t2_ok(root, F1_T2)
+    let f2_t2 = _t2_ok(root, F2_T2)
+    let f3_t2 = _t2_ok(root, F3_T2)
+    let f4_t2 = _t2_ok(root, F4_T2)
+
+    // T3 archival closure (RSC iter 18-20): every script in the
+    // T3 stack must exist on disk. Strict bench T3 deferred v2.0.0+.
+    let f1_t3 = _t2_ok(root, F1_T3)
+    let f2_t3 = _t2_ok(root, F2_T3)
+    let f3_t3 = _t2_ok(root, F3_T3)
+    let f4_t3 = _t2_ok(root, F4_T3)
+
+    let f1_pct = closure_pct(f1_t1, f1_t2, f1_t3)
+    let f2_pct = closure_pct(f2_t1, f2_t2, f2_t3)
+    let f3_pct = closure_pct(f3_t1, f3_t2, f3_t3)
+    let f4_pct = closure_pct(f4_t1, f4_t2, f4_t3)
+
+    let f1_t2_n = _t2_present_count(root, F1_T2)
+    let f2_t2_n = _t2_present_count(root, F2_T2)
+    let f3_t2_n = _t2_present_count(root, F3_T2)
+    let f4_t2_n = _t2_present_count(root, F4_T2)
+
+    let f1_t3_n = _t2_present_count(root, F1_T3)
+    let f2_t3_n = _t2_present_count(root, F2_T3)
+    let f3_t3_n = _t2_present_count(root, F3_T3)
+    let f4_t3_n = _t2_present_count(root, F4_T3)
+
+    // sat-1: measurable falsifiers (F1/F2/F3) ≥ 67% AND each T2 ≥ 3.
+    // F4 is non-measurable (consciousness — no commercial bench data).
+    let sat_1 = (f1_pct >= 67) && (f2_pct >= 67) && (f3_pct >= 67) &&
+                (f1_t2_n >= 3) && (f2_t2_n >= 3) && (f3_t2_n >= 3)
+
+    // sat-2: full 16-script inventory (we ship 20+ verify/, ≥ 16).
+    let n_verify = int(exec("ls " + root + "/verify/*.hexa 2>/dev/null | wc -l").trim())
+    let sat_2 = n_verify >= 16
+
+    // sat-3 (added 2026-05-08, RSC iter 21): measurable falsifiers
+    // at 100% closure AND each T3 stack ≥ 1 archival script.
+    let sat_3 = (f1_pct >= 100) && (f2_pct >= 100) && (f3_pct >= 100) &&
+                (f1_t3_n >= 1) && (f2_t3_n >= 1) && (f3_t3_n >= 1)
+
+    // Pass / fail logic (regression gate, NOT saturation gate).
+    let all_in_roadmap = (found == FALSIFIERS.len()) && roadmap_present
+    let no_t2_collapse = (f1_t2_n >= 1) && (f2_t2_n >= 1) && (f3_t2_n >= 1)
+    let ok = all_in_roadmap && no_t2_collapse
+
+    if json_mode {
+        let mut js = "{\"tool\":\"hexa-chip/verify/falsifier_check.hexa\","
+        js = js + "\"schema\":\"hexa-chip/falsifier/v2\","
+        js = js + "\"falsifiers_total\":" + str(FALSIFIERS.len()) + ","
+        js = js + "\"falsifiers_in_roadmap\":" + str(found) + ","
+        js = js + "\"closure\":{"
+        js = js + "\"F-CHIP-1\":{\"t1\":" + (if f1_t1 { "true" } else { "false" }) + ",\"t2_count\":" + str(f1_t2_n) + ",\"t3_count\":" + str(f1_t3_n) + ",\"pct\":" + str(f1_pct) + "},"
+        js = js + "\"F-CHIP-2\":{\"t1\":" + (if f2_t1 { "true" } else { "false" }) + ",\"t2_count\":" + str(f2_t2_n) + ",\"t3_count\":" + str(f2_t3_n) + ",\"pct\":" + str(f2_pct) + "},"
+        js = js + "\"F-CHIP-3\":{\"t1\":" + (if f3_t1 { "true" } else { "false" }) + ",\"t2_count\":" + str(f3_t2_n) + ",\"t3_count\":" + str(f3_t3_n) + ",\"pct\":" + str(f3_pct) + "},"
+        js = js + "\"F-CHIP-4\":{\"t1\":" + (if f4_t1 { "true" } else { "false" }) + ",\"t2_count\":" + str(f4_t2_n) + ",\"t3_count\":" + str(f4_t3_n) + ",\"pct\":" + str(f4_pct) + "}"
+        js = js + "},"
+        js = js + "\"sat_1\":" + (if sat_1 { "true" } else { "false" }) + ","
+        js = js + "\"sat_2\":" + (if sat_2 { "true" } else { "false" }) + ","
+        js = js + "\"sat_3\":" + (if sat_3 { "true" } else { "false" }) + ","
+        js = js + "\"verify_count\":" + str(n_verify) + ","
+        js = js + "\"ok\":" + (if ok { "true" } else { "false" })
+        js = js + "}"
+        println(js)
+        if !ok { exit(1) }
+        return
+    }
+
+    println("========================================================================")
+    println("  hexa-chip — falsifier closure tracker (recipe §3)")
+    println("========================================================================")
+    if !roadmap_present {
+        println("  FAIL — .roadmap.hexa_chip not found at " + p)
+        exit(1)
+    }
+
+    println("")
+    println("  per-falsifier closure (T3 = archival fixture; bench-T3 deferred Stage-1+):")
+    println("    id          T1   T2 (count/total)   T3 (count/total)   closure")
+    let f1_t2_label = "  " + _bool_str(f1_t2) + " (" + str(f1_t2_n) + "/" + str(F1_T2.len()) + ")     "
+    let f2_t2_label = "  " + _bool_str(f2_t2) + " (" + str(f2_t2_n) + "/" + str(F2_T2.len()) + ")     "
+    let f3_t2_label = "  " + _bool_str(f3_t2) + " (" + str(f3_t2_n) + "/" + str(F3_T2.len()) + ")     "
+    let f4_t2_label = "  " + _bool_str(f4_t2) + " (" + str(f4_t2_n) + "/" + str(F4_T2.len()) + ")     "
+    let f1_t3_label = "  " + _bool_str(f1_t3) + " (" + str(f1_t3_n) + "/" + str(F1_T3.len()) + ")     "
+    let f2_t3_label = "  " + _bool_str(f2_t3) + " (" + str(f2_t3_n) + "/" + str(F2_T3.len()) + ")     "
+    let f3_t3_label = "  " + _bool_str(f3_t3) + " (" + str(f3_t3_n) + "/" + str(F3_T3.len()) + ")     "
+    let f4_t3_label = "  " + _bool_str(f4_t3) + " (" + str(f4_t3_n) + "/" + str(F4_T3.len()) + ")     "
+    println("    F-CHIP-1     " + _bool_str(f1_t1) + " " + f1_t2_label + " " + f1_t3_label + " " + str(f1_pct) + "%")
+    println("    F-CHIP-2     " + _bool_str(f2_t1) + " " + f2_t2_label + " " + f2_t3_label + " " + str(f2_pct) + "%")
+    println("    F-CHIP-3     " + _bool_str(f3_t1) + " " + f3_t2_label + " " + f3_t3_label + " " + str(f3_pct) + "%")
+    println("    F-CHIP-4     " + _bool_str(f4_t1) + " " + f4_t2_label + " " + f4_t3_label + " " + str(f4_pct) + "%")
+    println("")
+
+    println("  registered claims:")
+    let mut idx = 1
+    while idx <= FALSIFIERS.len() {
+        let f = FALSIFIERS[idx - 1]
+        println("    " + f[0] + ":  " + f[1])
+        println("              bench: " + f[2])
+        idx = idx + 1
+    }
+    println("")
+
+    println("  saturation status:")
+    println("    sat-1 (F1/F2/F3 ≥ 67% AND each T2 ≥ 3):           " + _bool_str(sat_1))
+    println("    sat-2 (verify/*.hexa ≥ 16):                       " + _bool_str(sat_2) + "  (" + str(n_verify) + " on disk)")
+    println("    sat-3 (F1/F2/F3 = 100% AND each T3 ≥ 1 archival): " + _bool_str(sat_3))
+    println("")
+
+    println("  roadmap presence: " + str(found) + "/" + str(FALSIFIERS.len()) + " falsifiers in .roadmap §A.4")
+    println("========================================================================")
+
+    if !ok {
+        if found != FALSIFIERS.len() {
+            println("  FAIL — falsifier roadmap incomplete")
+        } else {
+            println("  FAIL — at least one T2 stack has zero scripts on disk (regression)")
+        }
+        exit(1)
+    }
+    println("  PASS — falsifier register intact, all T2 stacks ≥ 1 script")
+    if sat_1 { println("    ★ sat-1 milestone reached: 3 measurable falsifiers ≥ 67%") }
+    if sat_2 { println("    ★ sat-2 milestone reached: 16-script inventory complete") }
+    if sat_3 { println("    ★ sat-3 milestone reached: 3 measurable falsifiers at 100% (T3 archival ✓)") }
+}

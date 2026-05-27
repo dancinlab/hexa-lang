@@ -1,0 +1,224 @@
+// stdlib/bio/crispr_gene_editing/off_target.hexa — Cas-OFFinder-style
+// genome-wide off-target search for SpCas9 sgRNAs. PURE algorithmic.
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Sister to `grna_score.hexa` (on-target Doench-2014). Slides a 23-nt
+// window (20-nt spacer + 3-nt PAM) over each chromosome on both strands
+// (RC generated once per chrom), PAM-filters, then counts spacer-vs-
+// window Hamming mismatches.
+//
+// Reference: Bae S, Park J, Kim J-S. "Cas-OFFinder: a fast and versatile
+// algorithm that searches for potential off-target sites of Cas9 RNA-
+// guided endonucleases." Bioinformatics 30(10):1473-1475 (2014).
+//
+// SCOPE: identity-or-mismatch only (no bulges); CFD / MIT specificity
+// out of scope. Caller must uppercase genome + spacer; non-ACGT bytes
+// simply never match a fixed nucleotide.
+//
+// Public surface:
+//   pub fn off_target_scan(spacer, genome, pam, max_mismatches)       -> [OffTargetHit]
+//   pub fn off_target_scan_named(spacer, chroms, pam, max_mismatches) -> [OffTargetHit]
+//   pub fn off_target_pam_match(window, pam)                          -> bool
+//   pub fn off_target_count_mismatches(a, b)                          -> int
+//
+// `chroms` is packed `[[name, seq], ...]` (nested array) to keep public
+// arity ≤ 4 for the module-loader extern-emission budget.
+//
+// Scoring: 1.0 - (weighted_mm / 28). Seed (pos 9-19) weight 2, PAM-
+// distal (pos 0-8) weight 1. Perfect → 1.0; 1 distal mm → 27/28; 1
+// seed mm → 26/28.
+
+// ── public hit record ─────────────────────────────────────────────────
+
+pub struct OffTargetHit {
+    chrom: string,
+    position: int,
+    strand: string,
+    sequence: string,
+    mismatches: int,
+    pam_match: bool,
+    score: float,
+}
+
+// ── single-nt helpers ─────────────────────────────────────────────────
+
+fn _char_at(s: string, i: int) -> string {
+    if i < 0 { return "" }
+    if i + 1 > len(s) { return "" }
+    return s.substring(i, i + 1)
+}
+
+// Single-base complement; unknown bases collapse to "N" so they cleanly
+// fail any fixed-nucleotide match downstream.
+fn _complement_base(c: string) -> string {
+    if c == "A" { return "T" }
+    if c == "T" { return "A" }
+    if c == "G" { return "C" }
+    if c == "C" { return "G" }
+    return "N"
+}
+
+// Reverse complement of an uppercase nucleotide string.
+fn _rc(s: string) -> string {
+    let mut out: string = ""
+    let n = len(s)
+    let mut i = n - 1
+    while i >= 0 {
+        out = out + _complement_base(_char_at(s, i))
+        i = i - 1
+    }
+    return out
+}
+
+// PAM match: "N" wildcards; A/C/G/T must match exactly. Length-mismatch
+// returns false.
+pub fn off_target_pam_match(window: string, pam: string) -> bool {
+    if len(window) != len(pam) { return false }
+    let mut i = 0
+    while i < len(pam) {
+        let p = _char_at(pam, i)
+        let w = _char_at(window, i)
+        if p == "N" {
+            // wildcard — any base accepted
+        } else if p != w {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+// Hamming distance between two equal-length strings; returns -1 on
+// length mismatch (distinguishes invalid input from all-different).
+pub fn off_target_count_mismatches(a: string, b: string) -> int {
+    if len(a) != len(b) { return -1 }
+    let mut diff = 0
+    let mut i = 0
+    while i < len(a) {
+        if _char_at(a, i) != _char_at(b, i) { diff = diff + 1 }
+        i = i + 1
+    }
+    return diff
+}
+
+// Weighted mismatch count: PAM-distal positions 0-8 count 1, seed
+// positions 9-19 count 2. Normalised by 28 (chosen so a single distal
+// mismatch loses 1/28 and an all-seed-mismatch hit clamps to 0).
+fn _weighted_mismatches(spacer: string, observed: string) -> float {
+    let mut w: float = 0.0
+    let n = len(spacer)
+    if len(observed) != n { return -1.0 }
+    let mut i = 0
+    while i < n {
+        let want = _char_at(spacer, i)
+        let got  = _char_at(observed, i)
+        if want != got {
+            if i >= 9 {
+                w = w + 2.0
+            } else {
+                w = w + 1.0
+            }
+        }
+        i = i + 1
+    }
+    return w
+}
+
+fn _hit_score(spacer: string, observed: string) -> float {
+    let w = _weighted_mismatches(spacer, observed)
+    if w < 0.0 { return 0.0 }
+    let raw = 1.0 - (w / 28.0)
+    if raw < 0.0 { return 0.0 }
+    if raw > 1.0 { return 1.0 }
+    return raw
+}
+
+// ── core scan ────────────────────────────────────────────────────────
+
+// Walk one strand and append PAM-passing windows with Hamming ≤
+// max_mismatches to `hits`. For "-" strand the caller passes the RC
+// sequence; the reporter maps the local index back to the forward
+// strand via `orig_len - i - win_len`. Args packed into small arrays
+// to keep outer arity ≤ 3 (module-loader extern-emit budget).
+fn _scan_strand(hits: array, ctx: array, extras: array) -> array {
+    let spacer       = ctx[0]
+    let chrom_name   = ctx[1]
+    let chrom_seq    = ctx[2]
+    let strand_label = ctx[3]
+    let pam          = ctx[4]
+    let max_mismatches = extras[0]
+    let orig_len       = extras[1]
+
+    let sp_len = len(spacer)
+    let pam_len = len(pam)
+    let win_len = sp_len + pam_len
+    let n = len(chrom_seq)
+    if n < win_len { return hits }
+    let mut i = 0
+    let end = n - win_len + 1
+    while i < end {
+        let spacer_obs = chrom_seq.substring(i, i + sp_len)
+        let pam_obs    = chrom_seq.substring(i + sp_len, i + win_len)
+        let pam_ok = off_target_pam_match(pam_obs, pam)
+        if pam_ok {
+            let mm = off_target_count_mismatches(spacer, spacer_obs)
+            if mm >= 0 && mm <= max_mismatches {
+                let sc = _hit_score(spacer, spacer_obs)
+                let mut report_pos = i
+                if strand_label == "-" {
+                    report_pos = orig_len - i - win_len
+                }
+                let hit = OffTargetHit {
+                    chrom: chrom_name,
+                    position: report_pos,
+                    strand: strand_label,
+                    sequence: spacer_obs + pam_obs,
+                    mismatches: mm,
+                    pam_match: true,
+                    score: sc,
+                }
+                hits.push(hit)
+            }
+        }
+        i = i + 1
+    }
+    return hits
+}
+
+// Public scan with paired (name, seq) entries — `chroms` packed as
+// `[[name, seq], ...]`. Walks both strands per chrom; reports forward-
+// strand position.
+pub fn off_target_scan_named(spacer: string, chroms: array, pam: string, max_mismatches: int) -> array {
+    let mut hits: [OffTargetHit] = []
+    let n_chroms = len(chroms)
+    let mut ci = 0
+    while ci < n_chroms {
+        let row = chroms[ci]
+        let name = row[0]
+        let fwd  = row[1]
+        let orig_len = len(fwd)
+        let fwd_ctx: [string] = [spacer, name, fwd, "+", pam]
+        let extras: [int] = [max_mismatches, orig_len]
+        hits = _scan_strand(hits, fwd_ctx, extras)
+        let rev = _rc(fwd)
+        let rev_ctx: [string] = [spacer, name, rev, "-", pam]
+        hits = _scan_strand(hits, rev_ctx, extras)
+        ci = ci + 1
+    }
+    return hits
+}
+
+// Convenience: anonymous-chrom scan; names default to "chr0", "chr1",
+// ... and delegates to `off_target_scan_named`.
+pub fn off_target_scan(spacer: string, genome: array, pam: string, max_mismatches: int) -> array {
+    let mut chroms: [[string]] = []
+    let mut i = 0
+    while i < len(genome) {
+        let row: [string] = ["chr" + to_string(i), genome[i]]
+        chroms.push(row)
+        i = i + 1
+    }
+    return off_target_scan_named(spacer, chroms, pam, max_mismatches)
+}

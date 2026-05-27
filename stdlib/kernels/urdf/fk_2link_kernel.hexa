@@ -1,0 +1,244 @@
+// stdlib/kernels/urdf/fk_2link_kernel.hexa — D80 g_hexa_only pilot #3
+// (demiurge AGENTS.tape @D g_hexa_only — ultimate form).
+//
+// Third sample of the hexa-native parity port pattern after
+// solar (ephemeris + Haurwitz) and mc_transport (1-D slab MC).
+// Clean-room hexa-native 2-link planar revolute-arm forward kinematics
+// kernel, mirroring the textbook chain-rule trig that urdfpy /
+// yourdfpy compute internally when `URDF.update_cfg(q)` is called on
+// the 2-link manipulator described in `stdlib/bot/urdfpy_basics.py`.
+// Substrate parity vs a numpy oracle (single line of trig, same
+// algorithm) lives in `fk_2link_kernel_test.hexa`.
+//
+// Layer (ABSORPTION.md ① / demiurge design.md D72):
+//   ①a kernel — THIS FILE. Domain-agnostic. No specific URDF, no
+//                robot name, no calibration. Pure "joint angle vector
+//                q -> end-effector pose" for the parametric 2-link
+//                planar arm (L1, L2, q[0], q[1]).
+//   ①b adapter — `stdlib/bot/urdfpy_basics.py` (current). It owns the
+//                hermetic 2-link URDF XML / robot-name caveats and
+//                routes URDF document parsing through
+//                `kernels/urdf/urdf_kernel.py`. The forward-kinematics
+//                arithmetic that this `.hexa` kernel ports now lives
+//                inside yourdfpy at `URDF.update_cfg`; a future port
+//                that walks a real URDF tree in hexa-native code will
+//                build on top of this kernel.
+//
+// @version 0.1.0
+// @capabilities [pure]
+// @stability stage-2 substrate (clean-room re-derivation, no urdfpy
+//   call). Substrate parity against the same closed-form expression
+//   in numpy 2.0.x verified by `fk_2link_kernel_test.hexa` for 5
+//   joint configurations (zero / 90° / fold / right-angle /
+//   asymmetric) to <1e-14 relative on x / y / theta_ee — well
+//   inside the D80 ±0.1 % spec ceiling.
+// @since 2026-05-20
+//
+// CLEAN-ROOM PROVENANCE
+//   This module carries NO urdfpy / yourdfpy code — it implements
+//   the 2-link planar-arm forward-kinematics chain directly from
+//   textbook spatial-kinematics algebra (Spong, Hutchinson, Vidyasagar
+//   "Robot Modeling and Control" 2006 §3.1; Craig "Introduction to
+//   Robotics" 2005 §3.1, the standard Denavit-Hartenberg planar
+//   2R example). The expression
+//       x       = L1·cos(θ1) + L2·cos(θ1+θ2)
+//       y       = L1·sin(θ1) + L2·sin(θ1+θ2)
+//       θ_ee   = θ1 + θ2
+//   is an open-form mathematical fact (sum of revolute-joint
+//   contributions in the plane); no proprietary or copyrighted source.
+//
+//   - upstream code   : none (clean-room re-derivation)
+//   - upstream spec   : Spong, Hutchinson, Vidyasagar "Robot Modeling
+//                       and Control" 2006, eq.(3.7), planar 2R arm.
+//                       Craig "Introduction to Robotics" 2005, eq.(3.6),
+//                       same 2-link example.
+//   - parity baseline : direct numpy evaluation of the same closed
+//                       form on darwin-arm64, Python 3.x / numpy 2.0.x.
+//                       (urdfpy's `URDF.update_cfg(q)` produces the
+//                       same numbers via a heavier general-tree walk,
+//                       but the closed form is unambiguous for the
+//                       2-link planar case so the oracle is numpy.)
+//
+// HONESTY (g3 — non-negotiable, inherited by every caller):
+//   * Computed pose IS the algorithm output — given identical
+//     (L1, L2, θ1, θ2) the closed form MUST produce identical numbers
+//     to last-bit-of-double across hosts. The parity test asserts
+//     <1e-14 relative.
+//   * BUT this is the SPEC kinematic chain, NOT a measurement of a
+//     real robot arm — there is no encoder feed, no joint backlash,
+//     no link flex. Any ①b adapter that consumes this kernel keeps
+//     gate=GATE_OPEN and `absorbed=false` at the record layer until
+//     a measured oracle (encoder log / motion-capture) is wired in.
+//   * The 2-link planar arm is a textbook DOF=2 simplification; real
+//     manipulators have 6-7 DOF, joint limits, gravity loading, etc.
+//     None of that is in scope here.
+//   * Substrate parity (`fk_2link_kernel_test.hexa`) only proves the
+//     PORT PATTERN — D80's record-layer `absorbed=true` flip needs
+//     the demiurge HexaNativeParityRef schema + a measured oracle
+//     (out of scope here per g3).
+//
+// Surface (all angles in radians; lengths in metres):
+//   pub fn fk_2link(L1, L2, theta1, theta2) -> [x, y, theta_ee]
+//   pub fn fk_2link_x(L1, L2, theta1, theta2) -> float
+//   pub fn fk_2link_y(L1, L2, theta1, theta2) -> float
+//   pub fn fk_2link_orientation(L1, L2, theta1, theta2) -> float
+//   pub fn se3_rotz(theta) -> [float]     // 16-element row-major 4x4
+//   pub fn se3_trans(x, y, z) -> [float]  // 16-element row-major 4x4
+//   pub fn se3_matmul(A, B) -> [float]    // 4x4 * 4x4 = 4x4
+//   pub fn fk_2link_se3(L1, L2, theta1, theta2) -> [float]
+//                                          // 4x4 end-effector pose
+
+use "stdlib/core/math/float"
+
+// ── 2-link planar forward kinematics (closed form) ───────────────────
+
+/// Closed-form forward kinematics for a 2-link planar revolute arm.
+/// Both links lie in the x-y plane; joints rotate about z.
+///
+/// Inputs:
+///   L1     — first link length (m), L1 ≥ 0
+///   L2     — second link length (m), L2 ≥ 0
+///   theta1 — first joint angle (rad), about world-frame z, from +x
+///   theta2 — second joint angle (rad), about end-of-link-1 z,
+///            relative to link 1's local frame
+///
+/// Returns the end-effector pose packed in a 3-element array:
+///   [x_world (m), y_world (m), theta_ee (rad)]
+pub fn fk_2link(L1: float, L2: float,
+                theta1: float, theta2: float) -> [float] {
+    let s1 = sin(theta1)
+    let c1 = cos(theta1)
+    let s12 = sin(theta1 + theta2)
+    let c12 = cos(theta1 + theta2)
+    let x = L1 * c1 + L2 * c12
+    let y = L1 * s1 + L2 * s12
+    let th = theta1 + theta2
+    return [x, y, th]
+}
+
+/// End-effector x coordinate (m).
+pub fn fk_2link_x(L1: float, L2: float,
+                  theta1: float, theta2: float) -> float {
+    let r = fk_2link(L1, L2, theta1, theta2)
+    return r[0]
+}
+
+/// End-effector y coordinate (m).
+pub fn fk_2link_y(L1: float, L2: float,
+                  theta1: float, theta2: float) -> float {
+    let r = fk_2link(L1, L2, theta1, theta2)
+    return r[1]
+}
+
+/// End-effector orientation θ_ee = θ1 + θ2 (rad), about world z.
+pub fn fk_2link_orientation(L1: float, L2: float,
+                            theta1: float, theta2: float) -> float {
+    return theta1 + theta2
+}
+
+// ── SE(3) homogeneous transforms (bonus per task brief) ──────────────
+//
+// Row-major 4x4 represented as a flat 16-element array:
+//   M[i, j] = M[i * 4 + j],  i ∈ [0, 4), j ∈ [0, 4)
+// Matches the convention in `stdlib/linalg/reference.hexa` so future
+// callers can pipe these matrices through `sgemm_ref`.
+
+/// Pure rotation about world-z by `theta` (rad), as a 4×4 SE(3) matrix.
+///   Rz =  ⎡  c  -s  0  0 ⎤
+///         ⎢  s   c  0  0 ⎥
+///         ⎢  0   0  1  0 ⎥
+///         ⎣  0   0  0  1 ⎦
+pub fn se3_rotz(theta: float) -> [float] {
+    let c = cos(theta)
+    let s = sin(theta)
+    return [
+        c,  -s, 0.0, 0.0,
+        s,   c, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 1.0
+    ]
+}
+
+/// Pure translation by (x, y, z), as a 4×4 SE(3) matrix.
+///   T(x,y,z) = ⎡ 1 0 0 x ⎤
+///              ⎢ 0 1 0 y ⎥
+///              ⎢ 0 0 1 z ⎥
+///              ⎣ 0 0 0 1 ⎦
+pub fn se3_trans(x: float, y: float, z: float) -> [float] {
+    return [
+        1.0, 0.0, 0.0, x,
+        0.0, 1.0, 0.0, y,
+        0.0, 0.0, 1.0, z,
+        0.0, 0.0, 0.0, 1.0
+    ]
+}
+
+/// 4×4 row-major matrix product C = A · B.
+/// A and B are length-16 arrays; returns a new length-16 array.
+/// Intentionally inlined as a triple-nested loop rather than calling
+/// `sgemm_ref` so this kernel has zero external stdlib dependencies
+/// beyond `stdlib/core/math/float` — the trade is ~50 LOC vs a deeper
+/// import dependency graph for a 4×4 operation. For larger matmuls,
+/// callers should use `stdlib/linalg/reference.hexa::sgemm_ref` (or
+/// the dispatch variant).
+pub fn se3_matmul(A: [float], B: [float]) -> [float] {
+    let mut out = [
+        0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0
+    ]
+    let mut i = 0
+    while i < 4 {
+        let mut j = 0
+        while j < 4 {
+            let mut s = 0.0
+            let mut k = 0
+            while k < 4 {
+                s = s + A[i * 4 + k] * B[k * 4 + j]
+                k = k + 1
+            }
+            out[i * 4 + j] = s
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return out
+}
+
+/// 4×4 SE(3) end-effector pose for the 2-link planar arm.
+///
+///   T_world_link1     = Rz(θ1) · T(L1, 0, 0)
+///   T_link1_endeffctr = Rz(θ2) · T(L2, 0, 0)
+///   T_world_endeffctr = T_world_link1 · T_link1_endeffctr
+///
+/// The translation column of the returned matrix matches the (x, y)
+/// from `fk_2link` exactly (z = 0 for a planar arm). The 2×2 rotation
+/// submatrix is Rz(θ1 + θ2).
+///
+/// Returned as a flat length-16 row-major array (see file header).
+pub fn fk_2link_se3(L1: float, L2: float,
+                    theta1: float, theta2: float) -> [float] {
+    let r1 = se3_rotz(theta1)
+    let t1 = se3_trans(L1, 0.0, 0.0)
+    let link1 = se3_matmul(r1, t1)
+
+    let r2 = se3_rotz(theta2)
+    let t2 = se3_trans(L2, 0.0, 0.0)
+    let link2 = se3_matmul(r2, t2)
+
+    return se3_matmul(link1, link2)
+}
+
+// ── ①b adapter note ──────────────────────────────────────────────────
+//
+// The hermetic 2-link URDF document (link masses, visual cylinders,
+// joint axes, robot name, urdfpy load incantation) is domain-specific
+// and lives in `stdlib/bot/urdfpy_basics.py` plus the URDF-parsing
+// shim `stdlib/kernels/urdf/urdf_kernel.py`. This kernel only ports
+// the forward-kinematics substrate primitive (closed-form 2R chain).
+// A full URDF-tree walker in hexa-native code — reading link / joint
+// XML, building parent / child transforms, applying joint angles to
+// arbitrary kinematic trees — is the follow-on milestone gated on
+// hexa-native XML parsing coverage. Until then, urdfpy stays as the
+// URDF parser via the `①b` adapter.

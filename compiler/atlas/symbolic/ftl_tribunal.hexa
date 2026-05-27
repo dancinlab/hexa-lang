@@ -1,0 +1,150 @@
+// compiler/atlas/symbolic/ftl_tribunal.hexa — 15 FTL mechanisms × 3 axes
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Hexa-native port of archive-TECS-L/.shared/calc/ftl_tribunal.py
+// (git commit 4ee05c39; TECS-L absorption Wave 2 — manifest §Backlog #6).
+//
+// Each of the 15 known/proposed FTL mechanisms is judged on three physics
+// axes — General Relativity (GR), Quantum Mechanics (QM), Causality — and
+// assigned ONE overall verdict from the fixed ladder:
+//
+//   ALLOWED      — genuine (but not "real FTL"; e.g. metric expansion)
+//   CONDITIONAL  — valid GR solution, needs exotic matter / unknown physics
+//   ILLUSORY     — appears superluminal, carries no signal (Hartman, phase v)
+//   FORBIDDEN    — ruled out by known physics (tachyons, EPR signalling)
+//   SPECULATIVE  — depends on an unproven quantum-gravity framework
+//
+// The long per-axis prose explanations and the ASCII table / argparse / IO
+// are NOT ported (anti-bloat). What IS ported is the verdict-gating core:
+// the fixed 15×3 ruling table, the per-axis short rulings, the overall
+// verdict, and the deterministic statistics (per-verdict counts, the
+// CONDITIONAL "what would it take" set). Zero external dependency (g5).
+//
+// Cross-link: atlas/inbox/_tecsl_calculator_port_manifest.md §C / §Backlog #6.
+
+// verdict tags (Python ALLOWED/CONDITIONAL/ILLUSORY/FORBIDDEN/SPECULATIVE)
+pub fn FTL_ALLOWED()     -> string { return "ALLOWED" }
+pub fn FTL_CONDITIONAL() -> string { return "CONDITIONAL" }
+pub fn FTL_ILLUSORY()    -> string { return "ILLUSORY" }
+pub fn FTL_FORBIDDEN()   -> string { return "FORBIDDEN" }
+pub fn FTL_SPECULATIVE() -> string { return "SPECULATIVE" }
+
+pub struct FtlMechanism {
+    number: int,
+    name: string,
+    gr: string,           // short GR ruling
+    qm: string,           // short QM ruling
+    causality: string,    // short causality ruling
+    overall: string       // one of the verdict tags
+}
+
+// The exact 15-mechanism table (Python MECHANISMS list — number, name, the
+// three short Verdict.ruling labels, and `overall`).
+pub fn ftl_mechanisms() -> [FtlMechanism] {
+    let mut m: [FtlMechanism] = []
+    m.push(FtlMechanism { number: 1,  name: "Tachyons",
+        gr: "Permitted kinematics", qm: "Vacuum unstable", causality: "Violated",
+        overall: "FORBIDDEN" })
+    m.push(FtlMechanism { number: 2,  name: "Alcubierre Warp Drive",
+        gr: "Valid metric solution", qm: "Requires exotic matter", causality: "CTC risk",
+        overall: "CONDITIONAL" })
+    m.push(FtlMechanism { number: 3,  name: "Wormholes (Einstein-Rosen Bridge)",
+        gr: "Solutions exist", qm: "Needs negative energy", causality: "CTC possible",
+        overall: "CONDITIONAL" })
+    m.push(FtlMechanism { number: 4,  name: "Quantum Entanglement (EPR)",
+        gr: "Not applicable", qm: "Real nonlocality", causality: "No-signaling theorem",
+        overall: "FORBIDDEN" })
+    m.push(FtlMechanism { number: 5,  name: "Quantum Tunneling (Hartman Effect)",
+        gr: "Not applicable", qm: "Hartman effect real", causality: "Signal velocity <= c",
+        overall: "ILLUSORY" })
+    m.push(FtlMechanism { number: 6,  name: "Cherenkov Radiation",
+        gr: "Not applicable", qm: "Well understood", causality: "No violation",
+        overall: "ALLOWED" })
+    m.push(FtlMechanism { number: 7,  name: "Phase Velocity > c",
+        gr: "Not applicable", qm: "Standard wave mechanics", causality: "No information carried",
+        overall: "ILLUSORY" })
+    m.push(FtlMechanism { number: 8,  name: "Superluminal Group Velocity",
+        gr: "Not applicable", qm: "Experimentally demonstrated", causality: "Signal front <= c",
+        overall: "ILLUSORY" })
+    m.push(FtlMechanism { number: 9,  name: "Casimir Effect (Negative Energy)",
+        gr: "Local WEC violation", qm: "Experimentally confirmed", causality: "Insufficient for FTL",
+        overall: "CONDITIONAL" })
+    m.push(FtlMechanism { number: 10, name: "String Theory T-Duality",
+        gr: "Modifies Planck-scale geometry", qm: "Consistent within string theory",
+        causality: "Unclear implications", overall: "SPECULATIVE" })
+    m.push(FtlMechanism { number: 11, name: "Cosmic Inflation / Metric Expansion",
+        gr: "Standard cosmology", qm: "Consistent", causality: "No local violation",
+        overall: "ALLOWED" })
+    m.push(FtlMechanism { number: 12, name: "Krasnikov Tube",
+        gr: "Valid solution", qm: "Requires exotic matter", causality: "One-way safe, two-tube risk",
+        overall: "CONDITIONAL" })
+    m.push(FtlMechanism { number: 13, name: "Variable Speed of Light (VSL)",
+        gr: "Requires modified GR", qm: "Modified dispersion", causality: "Redefines the barrier",
+        overall: "SPECULATIVE" })
+    m.push(FtlMechanism { number: 14, name: "Noncommutative Geometry Spacetime",
+        gr: "Modified at Planck scale", qm: "Modified dispersion relations",
+        causality: "Unclear", overall: "SPECULATIVE" })
+    m.push(FtlMechanism { number: 15, name: "Loop Quantum Gravity (LQG)",
+        gr: "Replaced by spin foams", qm: "Modified dispersion predicted",
+        causality: "Possible Lorentz violation", overall: "SPECULATIVE" })
+    return m
+}
+
+// single mechanism by number (1..15); number 0 in result = not found.
+pub fn ftl_mechanism(num: int) -> FtlMechanism {
+    let ms = ftl_mechanisms()
+    let mut i = 0
+    while i < len(ms) {
+        if ms[i].number == num { return ms[i] }
+        i = i + 1
+    }
+    return FtlMechanism { number: 0, name: "", gr: "", qm: "", causality: "", overall: "" }
+}
+
+// count of mechanisms with a given overall verdict (Python print_statistics).
+pub fn ftl_count(verdict: string) -> int {
+    let ms = ftl_mechanisms()
+    let mut c = 0
+    let mut i = 0
+    while i < len(ms) {
+        if ms[i].overall == verdict { c = c + 1 }
+        i = i + 1
+    }
+    return c
+}
+
+pub struct FtlStats {
+    allowed: int,
+    conditional: int,
+    illusory: int,
+    forbidden: int,
+    speculative: int,
+    total: int
+}
+
+pub fn ftl_statistics() -> FtlStats {
+    let ms = ftl_mechanisms()
+    return FtlStats {
+        allowed:     ftl_count("ALLOWED"),
+        conditional: ftl_count("CONDITIONAL"),
+        illusory:    ftl_count("ILLUSORY"),
+        forbidden:   ftl_count("FORBIDDEN"),
+        speculative: ftl_count("SPECULATIVE"),
+        total:       len(ms)
+    }
+}
+
+// the "what would it take?" set — the CONDITIONAL mechanisms (Python
+// print_what_would_it_take: valid GR solutions needing physics we lack).
+pub fn ftl_conditional_set() -> [FtlMechanism] {
+    let ms = ftl_mechanisms()
+    let mut out: [FtlMechanism] = []
+    let mut i = 0
+    while i < len(ms) {
+        if ms[i].overall == "CONDITIONAL" { out.push(ms[i]) }
+        i = i + 1
+    }
+    return out
+}

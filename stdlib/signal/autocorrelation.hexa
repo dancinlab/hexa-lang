@@ -1,0 +1,92 @@
+// HEXA Standard Library — signal/autocorrelation
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Multi-lag autocorrelation function (ACF) primitives for EEG / signal-
+// processing analysis (HEXAD/LIFE substrate state correlations, BCI window
+// stationarity, pitch-track corroboration, AR-model order selection, etc.).
+//
+// Distinct from stdlib/signal/core_pitch.hexa::autocorr which returns a
+// single ACF value at one lag τ. This module returns the FULL ACF array
+// ACF[0..max_lag] in a single pass — the form callers actually want for
+// EEG-band correlation envelopes, AR-coefficient solving, and periodicity
+// hunting across multiple candidate lags.
+//
+// Public surface:
+//   autocorrelation(x, n, max_lag)            biased ACF[0..max_lag]
+//   autocorrelation_normalized(x, n, max_lag) ACF[k] / ACF[0]
+//
+// Biased estimator (textbook DSP / Wiener-Khinchin sense):
+//
+//   ACF[k] = (1/n) · Σ_{i=0}^{n-1-k} x[i] · x[i+k]   for k = 0..max_lag
+//
+// "Biased" = divides by n (constant), not (n-k). The biased form is the
+// standard choice for spectral estimation (positive-semidefinite, matches
+// |FFT(x)|² via Wiener-Khinchin) and for downstream PSD computation; the
+// unbiased form (÷(n-k)) is appropriate when the ACF values themselves are
+// the deliverable and the small-sample bias must be removed. Caller can
+// post-multiply by n/(n-k) to convert if needed.
+//
+// HONEST LIMITS:
+//   - O(n × max_lag) time, naive direct sum. Fine for EEG-scale n ≤ ~10k
+//     and max_lag ≤ ~1k; for larger windows the FFT-based path
+//       ACF = IFFT(|FFT(zero_pad(x, 2n))|²)
+//     would be O(n log n) regardless of max_lag. That FFT path is DEFERRED
+//     pending a `core_fft.fft_native`-backed helper here; today's two
+//     callers (anima HEXAD/LIFE/state EEG correlation prototyping) want
+//     small max_lag and the naive form keeps the proof trivial.
+//   - Numeric: float64 accumulator (no Kahan compensation). On EEG-scale
+//     bounded signals (|x| < ~1e3) the relative error stays ≤ 1e-12.
+//   - Returns empty array on n <= 0 or max_lag < 0. max_lag is clamped to
+//     n-1 (lags ≥ n have zero overlap by definition).
+
+// ── autocorrelation(x, n, max_lag) → biased ACF[0..max_lag] ──
+//
+// Returns an array of length (max_lag + 1) holding the biased ACF values
+// at lags 0, 1, 2, ..., max_lag. Lag 0 is the signal energy divided by n.
+
+pub fn autocorrelation(x: [float], n: int, max_lag: int) -> [float] {
+    if n <= 0 { return [] }
+    if max_lag < 0 { return [] }
+    let mut lag_cap = max_lag
+    if lag_cap > n - 1 { lag_cap = n - 1 }
+
+    let inv_n = 1.0 / n
+    let mut out = []
+    let mut k = 0
+    while k <= lag_cap {
+        let mut sum = 0.0
+        let mut i = 0
+        while i < n - k {
+            sum = sum + x[i] * x[i + k]
+            i = i + 1
+        }
+        out = out.push(sum * inv_n)
+        k = k + 1
+    }
+    return out
+}
+
+// ── autocorrelation_normalized(x, n, max_lag) → ACF[k] / ACF[0] ──
+//
+// Identical to autocorrelation() but each bin divided by ACF[0]. By
+// construction ACF_norm[0] == 1.0 (zero-signal guard returns empty so the
+// division is always safe). Bin range [-1, 1]; values near 1 at lag k
+// indicate strong periodicity at period k.
+
+pub fn autocorrelation_normalized(x: [float], n: int, max_lag: int) -> [float] {
+    let raw = autocorrelation(x, n, max_lag)
+    let raw_len = len(raw)
+    if raw_len == 0 { return [] }
+    let r0 = raw[0]
+    if r0 == 0.0 { return [] }
+    let inv_r0 = 1.0 / r0
+    let mut out = []
+    let mut k = 0
+    while k < raw_len {
+        out = out.push(raw[k] * inv_r0)
+        k = k + 1
+    }
+    return out
+}

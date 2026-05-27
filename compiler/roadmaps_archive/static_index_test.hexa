@@ -1,0 +1,84 @@
+// HEXA Native Compiler — Phase 1-extension absorption: roadmaps archive smoke
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Run:
+//   hexa run compiler/roadmaps_archive/static_index_test.hexa
+
+use "compiler/roadmaps_archive/embed"
+use "compiler/roadmaps_archive/embedded.gen"
+use "compiler/roadmaps_archive/static_index"
+
+fn _is_hex64(s: string) -> bool {
+    if len(s) != 64 { return false }
+    let mut i = 0
+    while i < 64 {
+        let c = s.substring(i, i + 1)
+        let ok = (c >= "0" && c <= "9") || (c >= "a" && c <= "f")
+        if !ok { return false }
+        i = i + 1
+    }
+    return true
+}
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok { println("  PASS  " + label) }
+    else { println("  FAIL  " + label); fails.push(label) }
+}
+
+fn main() {
+    println("phase1-ext roadmaps archive embed smoke")
+    println("  bundle_hash:  " + ROADMAPS_ARCHIVE_HASH)
+    println("  generated_at: " + ROADMAPS_ARCHIVE_GENERATED_AT)
+    println("  source_count: " + to_string(ROADMAPS_ARCHIVE_SOURCE_COUNT))
+    println("  entries:      " + to_string(len(ROADMAPS_ARCHIVE)))
+
+    let fails = []
+    println("")
+    println("checks:")
+    _check("bundle_hash is 64-char hex",         _is_hex64(ROADMAPS_ARCHIVE_HASH),                  fails)
+    _check("generated_at non-empty",             len(ROADMAPS_ARCHIVE_GENERATED_AT) > 0,            fails)
+    _check("source_count > 0",                   ROADMAPS_ARCHIVE_SOURCE_COUNT > 0,                 fails)
+    _check("entries match source_count",         len(ROADMAPS_ARCHIVE) == ROADMAPS_ARCHIVE_SOURCE_COUNT, fails)
+    _check("entries == 7 (readme_order)",        len(ROADMAPS_ARCHIVE) == 7,                        fails)
+
+    let nx = roadmaps_archive_lookup("nexus")
+    _check("lookup(nexus).project == nexus",     nx.project == "nexus",                             fails)
+    _check("lookup(nexus).status == present",    nx.status == "present",                            fails)
+    _check("lookup(nexus).sha256 64-hex",        _is_hex64(nx.sha256),                              fails)
+    _check("lookup(nexus).size_bytes > 0",       nx.size_bytes > 0,                                 fails)
+    _check("lookup(nexus).raw_json non-empty",   len(nx.raw_json) > 0,                              fails)
+
+    let hl = roadmaps_archive_lookup("hexa-lang")
+    _check("lookup(hexa-lang).status == present", hl.status == "present",                           fails)
+    _check("lookup(hexa-lang).source ends .json", hl.source_path.ends_with(".json"),                fails)
+
+    let cn = roadmaps_archive_lookup("canon")
+    _check("lookup(canon) row exists",            len(cn.project) > 0,                              fails)
+
+    let miss = roadmaps_archive_lookup("NOT-A-REAL-PROJECT")
+    _check("lookup miss → project == \"\"",      miss.project == "",                                fails)
+
+    let present = roadmaps_archive_present()
+    _check("present() count > 0",                 len(present) > 0,                                 fails)
+
+    println("")
+    if len(fails) == 0 {
+        println("RESULT: PASS (" + to_string(len(ROADMAPS_ARCHIVE)) + "/" + to_string(ROADMAPS_ARCHIVE_SOURCE_COUNT) + " entries, bundle=" + ROADMAPS_ARCHIVE_HASH.substring(0, 12) + "...)")
+        exit(0)
+    } else {
+        println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
+        exit(1)
+    }
+}
+
+let _av = argv()
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let s = to_string(_av[1])
+    if s.ends_with("/static_index_test.hexa") { return true }
+    if s == "static_index_test.hexa" { return true }
+    return false
+}
+if _is_main() { main() }

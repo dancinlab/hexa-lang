@@ -1,0 +1,49 @@
+// stdlib/test/test_qrng_curby.hexa — CURBy (NIST + CU Boulder) Bell-test QRNG selftest
+//
+// Sentinel: __QRNG_CURBY__ PASS
+
+use "stdlib/qrng/source"
+use "stdlib/qrng/backends/curby"
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn chk(tag, cond) {
+    if cond { pass_count = pass_count + 1 } else { println("  FAIL " + tag); fail_count = fail_count + 1 }
+}
+
+fn main() -> void {
+    println("── stdlib/qrng/backends/curby selftest ──")
+
+    let m = qrng_source_meta_curby()
+    chk("meta.name", m.name == "curby")
+    chk("meta.tier", m.tier == 1)
+    chk("meta.is_quantum", m.is_quantum == 1)
+    chk("meta.is_local", m.is_local == 0)
+    chk("meta.is_free", m.is_free == 1)
+    chk("meta.vendor", m.vendor == "nist+cu_boulder")
+    chk("meta.status", m.status == "IMPLEMENTED")
+
+    // n_bytes < 1 → fail
+    let r0 = qrng_source_collect_curby(0, 1)
+    chk("collect_0_fail", r0.ok == 0)
+
+    // n_bytes > 64 → fail (multi-pulse)
+    let r_big = qrng_source_collect_curby(65, 1)
+    chk("collect_65_fail", r_big.ok == 0)
+
+    // gated path (no env) → fail
+    let r_gated = qrng_source_collect_curby(8, 1)
+    chk("collect_gated_fail", r_gated.ok == 0)
+
+    let total = pass_count + fail_count
+    println("  pass=" + to_string(pass_count) + "  fail=" + to_string(fail_count))
+    if fail_count == 0 {
+        println("PASS: qrng_curby " + to_string(pass_count) + "/" + to_string(total))
+        println("__QRNG_CURBY__ PASS")
+        return
+    }
+    println("FAIL: qrng_curby " + to_string(pass_count) + "/" + to_string(total))
+    println("__QRNG_CURBY__ FAIL")
+    exit(1)
+}

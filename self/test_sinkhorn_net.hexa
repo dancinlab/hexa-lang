@@ -1,0 +1,424 @@
+// ═══════════════════════════════════════════════════════════════
+//  test_sinkhorn_net.hexa — Sinkhorn Network (#280) tests
+// ═══════════════════════════════════════════════════════════════
+
+// -- inlined from self/ml/sinkhorn_net.hexa --
+// codegen import not wired for test files
+
+// ═══════════════════════════════════════════════════════════════
+//  self/ml/sinkhorn_net.hexa — Sinkhorn Network Layer (#280)
+//
+//  Differentiable Sinkhorn normalization: given a score matrix M ∈ R^{n×n},
+//  produce an approximate doubly stochastic matrix (rows + cols sum to 1)
+//  via iterative row/col normalization on exp(M / tau).
+//
+//  This is the Gumbel-Sinkhorn trick backbone (Mena et al. 2018):
+//    P_0 = exp(M / tau)
+//    For k = 1..K:
+//       P ← row_normalize(P)
+//       P ← col_normalize(P)
+//
+//  Converges to a doubly stochastic matrix (soft permutation).
+//  τ→0 makes it a hard permutation; τ large → uniform.
+//
+//  API:
+//    sn_forward(M, tau, n_iter)          -> [[float]]   doubly stochastic
+//    sn_row_normalize(M)                 -> [[float]]
+//    sn_col_normalize(M)                 -> [[float]]
+//    sn_permutation_loss(P_pred, P_true) -> float       Frobenius
+//    sn_hungarian_from_soft(P)           -> [int]       greedy argmax assignment
+//    sn_is_doubly_stochastic(P, tol)     -> bool
+//    sn_matching_score(P, cost)          -> float       <P, cost>
+//    sn_entropy(P)                       -> float       -Σ p log p
+//
+//  @pure
+// ═══════════════════════════════════════════════════════════════
+
+fn sn_abs(x) {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn sn_zeros(n) {
+    let mut v = []
+    let mut _i = 0
+
+    while _i < n { v = v + [0.0] }
+    return v
+}
+
+fn sn_zeros2d(m, n) {
+    let mut w = []
+    let mut _i = 0
+
+    while _i < m { w = w + [sn_zeros(n)] }
+    return w
+}
+
+fn sn_eye(n) {
+    let mut w = sn_zeros2d(n, n)
+    let mut i = 0
+
+    while i < n { w[i][i] = 1.0 }
+    return w
+}
+
+// ── exponentiate matrix entries M_ij / tau ──
+fn sn_exp_matrix(M, tau) {
+    let n = len(M)
+    let m = len(M[0])
+    let mut out = sn_zeros2d(n, m)
+    let mut i = 0
+
+    while i < n {
+        let mut j = 0
+
+        while j < m {
+            let e = M[i][j] / tau
+            let mut eclamp = e
+            if eclamp > 30.0 { eclamp = 30.0 }
+            if eclamp < (0.0 - 30.0) { eclamp = 0.0 - 30.0 }
+            out[i][j] = exp(eclamp)
+        }
+    }
+    return out
+}
+
+// ── row normalize: each row sums to 1 ──
+fn sn_row_normalize(M) {
+    let n = len(M)
+    let m = len(M[0])
+    let mut out = sn_zeros2d(n, m)
+    let mut i = 0
+
+    while i < n {
+        let mut s = 0.0
+        let mut j = 0
+
+        while j < m { s = s + M[i][j] }
+        if s < 1.0e-30 { s = 1.0e-30 }
+        let mut j = 0
+
+        while j < m { out[i][j] = M[i][j] / s }
+    }
+    return out
+}
+
+// ── col normalize: each column sums to 1 ──
+fn sn_col_normalize(M) {
+    let n = len(M)
+    let m = len(M[0])
+    let mut out = sn_zeros2d(n, m)
+    let mut colsum = sn_zeros(m)
+    let mut j = 0
+
+    while j < m {
+        let mut s = 0.0
+        let mut i = 0
+
+        while i < n { s = s + M[i][j] }
+        if s < 1.0e-30 { s = 1.0e-30 }
+        colsum[j] = s
+    }
+    let mut i = 0
+
+    while i < n {
+        let mut j = 0
+
+        while j < m { out[i][j] = M[i][j] / colsum[j] }
+    }
+    return out
+}
+
+// ── Sinkhorn forward: exp(M/tau) then alternating row/col normalize ──
+fn sn_forward(M, tau, n_iter) {
+    let mut P = sn_exp_matrix(M, tau)
+    let mut _k = 0
+
+    while _k < n_iter {
+        P = sn_row_normalize(P)
+        P = sn_col_normalize(P)
+    }
+    return P
+}
+
+// ── check doubly stochastic: all row sums ≈ 1 and col sums ≈ 1 ──
+fn sn_is_doubly_stochastic(P, tol) {
+    let n = len(P)
+    let m = len(P[0])
+    if n != m { return false }
+    let mut i = 0
+
+    while i < n {
+        let mut r = 0.0
+        let mut j = 0
+
+        while j < m { r = r + P[i][j] }
+        if sn_abs(r - 1.0) > tol { return false }
+    }
+    let mut j = 0
+
+    while j < m {
+        let mut c = 0.0
+        let mut i = 0
+
+        while i < n { c = c + P[i][j] }
+        if sn_abs(c - 1.0) > tol { return false }
+    }
+    return true
+}
+
+// ── Frobenius permutation loss: ||P_pred - P_true||² ──
+fn sn_permutation_loss(P_pred, P_true) {
+    let n = len(P_pred)
+    let m = len(P_pred[0])
+    let mut s = 0.0
+    let mut i = 0
+
+    while i < n {
+        let mut j = 0
+
+        while j < m {
+            let d = P_pred[i][j] - P_true[i][j]
+            s = s + d * d
+        }
+    }
+    return s
+}
+
+// ── matching score: <P, cost> (inner product) ──
+fn sn_matching_score(P, cost) {
+    let n = len(P)
+    let m = len(P[0])
+    let mut s = 0.0
+    let mut i = 0
+
+    while i < n {
+        let mut j = 0
+
+        while j < m { s = s + P[i][j] * cost[i][j] }
+    }
+    return s
+}
+
+// ── greedy argmax row-based assignment (soft → hard) ──
+fn sn_hungarian_from_soft(P) {
+    let n = len(P)
+    let m = len(P[0])
+    let mut used = sn_zeros(m)
+    let mut assign = []
+    let mut i = 0
+
+    while i < n { assign = assign + [0] }
+    let mut i = 0
+
+    while i < n {
+        let mut best = -1
+        let mut best_v = 0.0 - 1.0e30
+        let mut j = 0
+
+        while j < m {
+            if used[j] < 0.5 {
+                if P[i][j] > best_v {
+                    best_v = P[i][j]
+                    best = j
+                }
+            }
+        }
+        if best < 0 { best = 0 }
+        assign[i] = best
+        used[best] = 1.0
+    }
+    return assign
+}
+
+// ── matrix entropy: -Σ p log p (skip zeros) ──
+fn sn_entropy(P) {
+    let n = len(P)
+    let m = len(P[0])
+    let mut h = 0.0
+    let mut i = 0
+
+    while i < n {
+        let mut j = 0
+
+        while j < m {
+            let p = P[i][j]
+            if p > 1.0e-12 {
+                h = h - p * log(p)
+            }
+        }
+    }
+    return h
+}
+
+// ── permutation → one-hot doubly stochastic ──
+fn sn_perm_to_matrix(perm) {
+    let n = len(perm)
+    let mut P = sn_zeros2d(n, n)
+    let mut i = 0
+
+    while i < n {
+        let j = perm[i]
+        P[i][j] = 1.0
+    }
+    return P
+}
+
+// ── sum of matrix entries ──
+fn sn_sum(M) {
+    let n = len(M)
+    let m = len(M[0])
+    let mut s = 0.0
+    let mut i = 0
+
+    while i < n {
+        let mut j = 0
+
+        while j < m { s = s + M[i][j] }
+    }
+    return s
+}
+
+
+// -- end inlined --
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn check(name, cond) {
+    if cond {
+        println("[PASS] " + name)
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name)
+        fail_count = fail_count + 1
+    }
+}
+
+fn fabs(x) {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn approx(a, b, eps) {
+    return fabs(a - b) < eps
+}
+
+println("═══════════════════════════════════════════════════════")
+println("  Sinkhorn Network (#280) Test Suite")
+println("═══════════════════════════════════════════════════════")
+
+// ── Test 1: row normalize ─
+let M1 = [[1.0, 2.0, 1.0], [0.0, 1.0, 0.0], [2.0, 2.0, 2.0]]
+let R = sn_row_normalize(M1)
+check("row[0] sums 1", approx(R[0][0] + R[0][1] + R[0][2], 1.0, 1.0e-10))
+check("row[1] sums 1", approx(R[1][0] + R[1][1] + R[1][2], 1.0, 1.0e-10))
+check("row[2] uniform", approx(R[2][0], 1.0 / 3.0, 1.0e-6))
+
+// ── Test 2: col normalize ─
+let C = sn_col_normalize([[1.0, 1.0], [1.0, 3.0]])
+check("col[0] sums 1", approx(C[0][0] + C[1][0], 1.0, 1.0e-10))
+check("col[1] sums 1", approx(C[0][1] + C[1][1], 1.0, 1.0e-10))
+
+// ── Test 3: forward → doubly stochastic ─
+let M2 = [
+    [0.1, 0.5, 0.9],
+    [0.3, 0.2, 0.7],
+    [0.8, 0.6, 0.4]
+]
+let P = sn_forward(M2, 1.0, 30)
+check("P is doubly stochastic (tol 1e-3)", sn_is_doubly_stochastic(P, 1.0e-3))
+
+// ── Test 4: all entries ≥ 0 ─
+let mut nonneg = true
+let mut i = 0
+
+while i < 3 {
+    let mut j = 0
+
+    while j < 3 {
+        if P[i][j] < 0.0 { nonneg = false }
+    }
+}
+check("P entries ≥ 0", nonneg)
+
+// ── Test 5: total mass = n ─
+let total = sn_sum(P)
+check("sum(P) = n", approx(total, 3.0, 1.0e-3))
+
+// ── Test 6: low tau → approach hard permutation ─
+// M has distinct row maxima for distinct columns
+let M3 = [
+    [10.0, 0.0, 0.0],
+    [0.0, 10.0, 0.0],
+    [0.0, 0.0, 10.0]
+]
+let P_low = sn_forward(M3, 0.5, 30)
+// diagonal should dominate
+check("P_low diag[0] ~ 1", P_low[0][0] > 0.99)
+check("P_low diag[1] ~ 1", P_low[1][1] > 0.99)
+check("P_low diag[2] ~ 1", P_low[2][2] > 0.99)
+
+// ── Test 7: high tau → more uniform ─
+let P_hi = sn_forward(M3, 100.0, 30)
+check("P_hi near uniform", approx(P_hi[0][0], 1.0/3.0, 0.05))
+
+// ── Test 8: greedy assignment ─
+let assign = sn_hungarian_from_soft(P_low)
+check("assign[0] = 0", assign[0] == 0)
+check("assign[1] = 1", assign[1] == 1)
+check("assign[2] = 2", assign[2] == 2)
+
+// ── Test 9: permutation loss ─
+let P_true = sn_perm_to_matrix([0, 1, 2])
+let loss = sn_permutation_loss(P_low, P_true)
+check("loss small for correct match", loss < 0.05)
+let loss_wrong = sn_permutation_loss(sn_perm_to_matrix([2, 1, 0]), P_true)
+check("loss larger for wrong match", loss_wrong > loss)
+
+// ── Test 10: matching score ─
+let cost = [
+    [0.0, 5.0, 10.0],
+    [10.0, 0.0, 5.0],
+    [5.0, 10.0, 0.0]
+]
+let score = sn_matching_score(P_low, cost)
+check("matching score near 0 for diag match", score < 1.0)
+
+// ── Test 11: entropy of doubly stochastic positive ─
+let h = sn_entropy(P)
+check("entropy >= 0", h >= 0.0)
+let h_hard = sn_entropy(P_true)
+check("hard perm entropy ~ 0", h_hard < 1.0e-6)
+check("soft entropy > hard", h > h_hard)
+
+// ── Test 12: more iterations → closer to DS ─
+let P_few = sn_forward(M2, 1.0, 2)
+let P_many = sn_forward(M2, 1.0, 100)
+// check row-sum deviation
+fn row_err(matrix) {
+    let n = len(matrix)
+    let mut e = 0.0
+    let mut i = 0
+
+    while i < n {
+        let mut s = 0.0
+        let mut j = 0
+
+        while j < n { s = s + matrix[i][j] }
+        let d = s - 1.0
+        if d < 0.0 { e = e - d } else { e = e + d }
+    }
+    return e
+}
+check("more iters → less row err", row_err(P_many) <= row_err(P_few) + 1.0e-10)
+
+// ═══════════════════════════════════════════════════════════════
+println("")
+println("pass=" + to_string(pass_count) + " fail=" + to_string(fail_count))
+if fail_count == 0 {
+    println("ALL PASS")
+} else {
+    println("FAILED")
+}

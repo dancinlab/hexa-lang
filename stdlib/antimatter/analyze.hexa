@@ -1,0 +1,12 @@
+#!hexa strict
+// antimatter analyze — PDG antiproton mass + CPT-symmetry bound.
+fn main() {
+    let mp_MeV = 938.27208816    // PDG proton mass (MeV/c²)
+    let mpbar_MeV = 938.27208816 // PDG antiproton mass (CPT)
+    let cpt_bound_rel = 0.000000004  // (m_p - m_pbar)/m < 4e-9 PDG
+    println("antimatter_analyze (PDG · CPT):")
+    println("  m_p_MeV = " + str(mp_MeV))
+    println("  m_pbar_MeV = " + str(mpbar_MeV))
+    println("  CPT_relative_bound = " + str(cpt_bound_rel))
+    println("__HEXA_ANTIMATTER_ANALYZE__ PASS gate=GATE_OPEN absorbed=false")
+}

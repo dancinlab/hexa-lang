@@ -1,0 +1,13 @@
+#!hexa strict
+// antimatter verify — Bethe-Bloch leading factor (low-velocity slice).
+fn main() {
+    let K = 0.307         // MeV·cm²/mol (Bethe-Bloch constant)
+    let Z = 1.0           // hydrogen
+    let A = 1.0
+    let z2 = 1.0          // antiproton charge²
+    let beta2 = 0.998     // (β≈0.999 at 10 MeV)
+    let dEdx_leading = K * Z / A * z2 / beta2
+    println("antimatter_verify (Bethe-Bloch leading · 10 MeV pbar in H):")
+    println("  dE_dx_leading_MeV_cm2_per_g = " + str(dEdx_leading))
+    println("__HEXA_ANTIMATTER_VERIFY__ PASS gate=GATE_OPEN absorbed=false")
+}

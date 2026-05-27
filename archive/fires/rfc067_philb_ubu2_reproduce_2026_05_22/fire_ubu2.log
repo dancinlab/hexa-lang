@@ -1,0 +1,23 @@
+Device: NVIDIA GeForce RTX 5070 sm_120
+CUDA driver=13000 runtime=12000
+loaded hexa-PHILB PTX shape 4096 (sgemm_4warp_hilbert_4096x4096_grid)
+  shape 4096: regs/thd=64, shmem=8192 B, max_thd_per_block=1024
+loaded hexa-PHILB PTX shape 5120 (sgemm_4warp_hilbert_5120x5120_grid)
+  shape 5120: regs/thd=64, shmem=8192 B, max_thd_per_block=1024
+loaded hexa-PHILB PTX shape 6144 (sgemm_4warp_hilbert_6144x6144_grid)
+  shape 6144: regs/thd=64, shmem=8192 B, max_thd_per_block=1024
+loaded hexa-PHILB PTX shape 8192 (sgemm_4warp_hilbert_8192x8192_grid)
+  shape 8192: regs/thd=64, shmem=8192 B, max_thd_per_block=1024
+Device VRAM free=11601.19 MB total=11772.44 MB
+[M=4096] allocating 128.00 MB device memory (A=32768 KB + B=32768 KB + C=65536 KB)
+[M=4096] cuBLAS HGEMM            median=1.962176 ms  std=0.001567  min=1.953888  max=1.965280  TFLOPS= 70.0442
+[M=4096] hexa-PHILB 4warp+Hilbert median=2.390560 ms  std=0.002481  min=2.384928  max=2.399488  TFLOPS= 57.4924  ratio=0.8208  maxabs=0.0000  maxrel=0.0000  CTAs=4096  regs=64
+[M=5120] allocating 200.00 MB device memory (A=51200 KB + B=51200 KB + C=102400 KB)
+[M=5120] cuBLAS HGEMM            median=3.813600 ms  std=0.000912  min=3.811520  max=3.816832  TFLOPS= 70.3890
+[M=5120] hexa-PHILB 4warp+Hilbert median=4.616480 ms  std=0.010978  min=4.599296  max=4.649152  TFLOPS= 58.1472  ratio=0.8261  maxabs=0.0000  maxrel=0.0000  CTAs=6400  regs=64
+[M=6144] allocating 288.00 MB device memory (A=73728 KB + B=73728 KB + C=147456 KB)
+[M=6144] cuBLAS HGEMM            median=6.583488 ms  std=0.019883  min=6.547648  max=6.613696  TFLOPS= 70.4576
+[M=6144] hexa-PHILB 4warp+Hilbert median=7.931040 ms  std=0.029576  min=7.855072  max=7.949120  TFLOPS= 58.4862  ratio=0.8301  maxabs=0.0000  maxrel=0.0000  CTAs=9216  regs=64
+[M=8192] allocating 512.00 MB device memory (A=131072 KB + B=131072 KB + C=262144 KB)
+[M=8192] cuBLAS HGEMM            median=15.609616 ms  std=0.002197  min=15.601920  max=15.615744  TFLOPS= 70.4381
+[M=8192] hexa-PHILB 4warp+Hilbert median=18.513872 ms  std=0.045512  min=18.366495  max=18.569536  TFLOPS= 59.3885  ratio=0.8431  maxabs=0.0000  maxrel=0.0000  CTAs=16384  regs=64

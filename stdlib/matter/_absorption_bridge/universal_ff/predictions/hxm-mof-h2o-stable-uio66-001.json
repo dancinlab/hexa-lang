@@ -1,0 +1,42 @@
+{
+  "__fixture_tag__": "VENDORED UNIVERSAL-FF PREDICTION — frozen NNP output, not measurement",
+  "candidate_id": "hxm-mof-h2o-stable-uio66-001",
+  "novel_section": "§4.D.13 (Tier-2 wave, 2026-05-14)",
+  "target_property": "BET surface-area retention plus crystallinity loss for UiO-66 Zr₆O₄(OH)₄(BDC)₆ framework after 1000 h liquid-water submersion at 25 °C",
+  "predicted_value": 88.0,
+  "predicted_unit": "% BET area retention (1000 h liquid H₂O @ 25 °C)",
+  "predicted_crystallinity_loss_percent": 12.0,
+  "operating_conditions": {
+    "framework": "UiO-66 Zr₆O₄(OH)₄(BDC)₆ (Cavka-Lillerud 2008 chemistry)",
+    "test_conditions": "submerged in deionized liquid water at 25 °C, 1000 h continuous",
+    "BET_method": "N₂ adsorption at 77 K, BET fit 0.05 ≤ p/p₀ ≤ 0.30",
+    "crystallinity_method": "powder XRD, integrated peak intensity at (111) + (200) compared to as-synthesized baseline",
+    "synthesis": "solvothermal in DMF + HCl modulator, conventional 24 h / 120 °C protocol"
+  },
+  "model": "M3GNet (notional)",
+  "model_caveat": "Universal FFs predict atomistic energies / forces on the Zr₆O₄(OH)₄ cluster + BDC linker — they DO frame the hydrolytic-stability landscape (Zr-O bond hydrolysis barrier + missing-linker defect energy) reasonably for crystalline MOFs. The 88 % BET retention + 12 % crystallinity loss values here are a PROXY-from-literature pinned with raw#10 C3 honesty: Cavka 2008 + Furukawa 2014 UiO-66 hydro-stability reports.",
+  "proxy_source": "Cavka et al. 2008 J. Am. Chem. Soc. 130:13850 (UiO-66 first report, Zr-cluster water-stability anchor); Furukawa et al. 2014 IUCrJ 1:252 (UiO-66 BET + crystallinity after extended aqueous-phase tests, ~85-90 % retention at 1000 h); DeCoste et al. 2013 J. Mater. Chem. A 1:11922 (UiO-66 stability under water + acid + base conditions); Wang & Yaghi review 2020 Chem. Rev. 120:8479 (MOF aqueous-stability survey, UiO-66 high-stability class)",
+  "falsifier_relation": "PASS",
+  "falsifier_target_value": 80.0,
+  "falsifier_target_unit": "% BET area retention",
+  "falsifier_target_crystallinity_loss": 20.0,
+  "falsifier_target_crystallinity_unit": "% crystallinity loss (1000 h H₂O @ 25 °C)",
+  "falsifier_id": "F-MOF-3",
+  "falsifier_text": "BET area retention < 80% OR crystallinity loss > 20% after 1000 h H₂O @ 25 °C → FAIL",
+  "delta_to_target_bet": 8.0,
+  "delta_to_target_xtal": -8.0,
+  "accessed": "2026-05-14",
+  "n6_lattice_fit_applied": false,
+  "is_measurement": false,
+  "is_external_verification": false,
+  "tier": "Tier-2",
+  "unproven_markers_preserved": [
+    "UiO-66 water stability claim depends on Zr₆-cluster defect density — missing-linker defects degrade hydro-stability HARD_WALL (preserved per `mof/mof.md` MOF-L12)",
+    "surfactant-templated UiO-66 scale-up > kg UNVERIFIED at commercial production",
+    "magic-MOF DAC $100/t UNPROVEN preserved verbatim — Climeworks amine baseline $600-1000/t per `mof/mof.md`",
+    "long-duration (> 10⁴ h) liquid-water + thermal-cycling aging UNVERIFIED beyond academic test corpus",
+    "trace-impurity-driven Zr-cluster degradation (Cl⁻, SO₄²⁻ at industrial water quality) UNVERIFIED at production"
+  ],
+  "honesty_caveats": "Both falsifier branches PASS at the proxy literature values for academic-grade UiO-66 (low defect density, < 1 missing linker per Zr₆ cluster). PASS does NOT close the candidate — defect-density HARD_WALL on hydrostability remains; long-duration > 10⁴ h aqueous aging UNVERIFIED. SPEC_FIRST preserved — does NOT promote to EXTERNAL-VERIFIED.",
+  "license_note": "Peer-reviewed paper values per ACS / IUCr publisher terms; NuMat Technologies / Promethean Particles MOF synthesis vendor authority (raw#10 C3, NOT n=6 lattice-fit)."
+}

@@ -1,0 +1,45 @@
+// HEXA Native Compiler — Phase 1-extension absorption: projects archive (D10)
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Source SSOT:
+//   ~/core/nexus/config/projects.json  (full document, frozen snapshot)
+//
+// Per absorption doctrine v2 rule 3, nexus's project registry is absorbed
+// into hexa-lang as a frozen archive — historical record, NOT an active
+// management surface. Hexa never rewrites projects.json. The reverse is
+// also true: we do not reinterpret the document; we store it verbatim.
+//
+// Each top-level project (core/auxiliary/launch_ops/experimental/archived)
+// is flattened into one ProjectArchiveEntry row tagged with `category`
+// (the source bucket name). The full per-project sub-object is preserved
+// as a raw JSON string in `raw_json` so any field that nexus ships today
+// or adds tomorrow rides along without schema churn.
+//
+// In addition to the per-project rows we expose the top-level `_meta`,
+// `categories`, `common_links`, `private_repos`, `dev_dir` blocks as
+// separate raw-JSON pub-let constants for callers that want the document
+// shell without crawling the entry list.
+//
+// D6 already extracts the `_meta.universal_completion_criterion` subtree
+// into a typed CompletionCriterion record. D10 keeps that overlap on
+// purpose: D10 is the surrounding-document archive (drift in any field
+// triggers regen), D6 is the typed extract.
+
+@phase("parse_only")
+pub struct ProjectArchiveEntry {
+    // Source bucket name: "core" | "auxiliary" | "launch_ops" |
+    // "experimental" | "archived" | "private_repos".
+    category: string,
+
+    // Project key as it appears in projects.json (e.g. "nexus",
+    // "hexa-lang", "TECS-L").
+    name: string,
+
+    // Verbatim JSON serialization of the per-project sub-object. Consumers
+    // that need structured access should json_parse() this; the archive
+    // does NOT pre-decode it because nexus may add fields and the goal is
+    // bit-stable preservation.
+    raw_json: string
+}

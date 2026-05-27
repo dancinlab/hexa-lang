@@ -1,0 +1,145 @@
+#!hexa strict
+// stdlib/hal/backend/rp2040/gpio.hexa — RP2040 (Cortex-M0+) GPIO backend
+//                                       — paper skeleton.
+//
+// Phase: skeleton / stub. Real MMIO will go here once Cortex-M0+
+// cross-compile lands. Sim-first invariant preserved (gpio.hexa sim
+// backend ships before this; this file is a HW-backend addition, not
+// a sim replacement).
+//
+// Target:    Raspberry Pi RP2040 dual-core Cortex-M0+ @ 133 MHz.
+// Chip ref:  RP2040 Datasheet (datasheets.raspberrypi.com/rp2040)
+//            §2.19 IO Bank 0, §2.3.1 SIO.
+// Surface:   rp2040_gpio_{configure,write,read,toggle}(pin, ...)
+// Dispatch:  gpio.hexa selects this via cfg-flag (e.g. `cfg target =
+//            "rp2040"`). v0.4.0+ second vendor (after stm32h7).
+//
+// MMIO layout (sketch; real impl writes registers):
+//
+//   SIO block (single-cycle I/O, atomic ops):
+//     base = 0xD0000000
+//     CPUID                       0x000   read core 0/1
+//     GPIO_IN                     0x004   read 30-pin input state
+//     GPIO_HI_IN                  0x008   read QSPI 6-pin input state
+//     GPIO_OUT                    0x010   read/write 30-pin output state
+//     GPIO_OUT_SET                0x014   atomic set bits (write-1-to-set)
+//     GPIO_OUT_CLR                0x018   atomic clear bits
+//     GPIO_OUT_XOR                0x01C   atomic toggle bits
+//     GPIO_OE                     0x020   read/write output-enable mask
+//     GPIO_OE_SET                 0x024   atomic set OE
+//     GPIO_OE_CLR                 0x028   atomic clear OE
+//
+//   IO_BANK0 (pad function MUX):
+//     base = 0x40014000
+//     GPIO<n>_STATUS              0x000 + 8·n
+//     GPIO<n>_CTRL                0x004 + 8·n   FUNCSEL field selects
+//                                                F0=SPI .. F1=UART ..
+//                                                F2=I2C .. F3=PWM ..
+//                                                F4=SIO .. F5=PIO0 ..
+//                                                F6=PIO1 .. F7=USB
+//
+//   PADS_BANK0 (pad electrical config: pull, drive, schmitt):
+//     base = 0x4001C000
+//     GPIO<n>                     0x004 + 4·n   PUE/PDE/IE/OD/DRIVE/SCHMITT
+//
+//   RESETS (peripheral hard reset gate):
+//     base = 0x4000C000
+//     RESET                       0x000   bit 5 = io_bank0, bit 8 = pads_bank0
+//     RESET_DONE                  0x008   read; spin until clear after release
+//
+// 30-pin envelope (GP0..GP29) maps to σ×τ×... handle space; default
+// per-process GPIO handle ceiling J₂/n=4 (sim) — HW envelope can
+// extend up to all 30 pins concurrently in this single-core reading.
+//
+// TODO:
+//   1. cross-compile cfg-flag dispatch from stdlib/hal/gpio.hexa.
+//   2. mmio_w32/r32 abstraction over volatile pointer (pico-sdk style).
+//   3. function-select (FUNCSEL) helper for SPI/I2C/UART/PWM modes.
+//   4. atomic SET/CLR/XOR aliases vs read-modify-write fallback.
+//   5. board-LED helper (Pico GP25 default LED).
+//   6. PIO-driven GPIO mode (state machine programmable I/O) — out of
+//      scope for v0.4.0 stub.
+
+let MODULE_NAME = "rp2040_gpio"
+let SIGMA_SLOT  = 1               // matches stdlib/hal/gpio.hexa σ-slot
+let PHI_KIND    = "digital"
+
+// SIO base + key register offsets (read-only constants).
+let SIO_BASE         = 0xD0000000
+let SIO_GPIO_IN      = 0x004
+let SIO_GPIO_OUT     = 0x010
+let SIO_GPIO_OUT_SET = 0x014
+let SIO_GPIO_OUT_CLR = 0x018
+let SIO_GPIO_OUT_XOR = 0x01C
+let SIO_GPIO_OE      = 0x020
+let SIO_GPIO_OE_SET  = 0x024
+
+// IO_BANK0 / PADS_BANK0 base.
+let IO_BANK0_BASE    = 0x40014000
+let PADS_BANK0_BASE  = 0x4001C000
+let RESETS_BASE      = 0x4000C000
+
+// Pin envelope.
+let RP2040_GPIO_MIN  = 0
+let RP2040_GPIO_MAX  = 29
+
+// FUNCSEL values (per RP2040 datasheet §2.19.6.1).
+let FUNCSEL_SPI  = 1
+let FUNCSEL_UART = 2
+let FUNCSEL_I2C  = 3
+let FUNCSEL_PWM  = 4
+let FUNCSEL_SIO  = 5
+let FUNCSEL_PIO0 = 6
+let FUNCSEL_PIO1 = 7
+let FUNCSEL_USB  = 9
+
+// ── stub handlers ─────────────────────────────────────────────────────
+// (paper skeleton — real impl writes MMIO via volatile pointer)
+
+fn rp2040_gpio_configure(pin: int, mode: int) -> int {
+    if pin < RP2040_GPIO_MIN || pin > RP2040_GPIO_MAX { return -1 }
+    if mode < 0 || mode > 5 { return -2 }
+    // STUB: real impl would
+    //   1. release reset on io_bank0 + pads_bank0 (RESETS+0x000 bit 5/8 clear)
+    //   2. write FUNCSEL_SIO to IO_BANK0_BASE + 0x004 + 8·pin (CTRL.FUNCSEL = 5)
+    //   3. write SIO_GPIO_OE_SET bit pin to enable output (or clear for input)
+    //   4. write PADS_BANK0_BASE + 0x004 + 4·pin for pull/drive config
+    return pin
+}
+
+fn rp2040_gpio_write(pin: int, val: bool) -> int {
+    if pin < RP2040_GPIO_MIN || pin > RP2040_GPIO_MAX { return -1 }
+    // STUB: real impl writes
+    //   if val { *(SIO_BASE + SIO_GPIO_OUT_SET) = (1 << pin) }
+    //   else   { *(SIO_BASE + SIO_GPIO_OUT_CLR) = (1 << pin) }
+    return 0
+}
+
+fn rp2040_gpio_read(pin: int) -> int {
+    if pin < RP2040_GPIO_MIN || pin > RP2040_GPIO_MAX { return -1 }
+    // STUB: real impl reads (*(SIO_BASE + SIO_GPIO_IN) >> pin) & 1
+    return 0
+}
+
+fn rp2040_gpio_toggle(pin: int) -> int {
+    if pin < RP2040_GPIO_MIN || pin > RP2040_GPIO_MAX { return -1 }
+    // STUB: real impl writes SIO_GPIO_OUT_XOR with (1 << pin)
+    return 0
+}
+
+fn rp2040_gpio_report(pin: int) -> str {
+    return "[rp2040_gpio sim] pin=" + str(pin) + " (skeleton stub — TODO MMIO)"
+}
+
+// ── module meta (matches σ-slot pattern) ──────────────────────────────
+
+fn rp2040_gpio_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[rp2040_gpio sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  SIO_BASE=" + str(SIO_BASE) + " IO_BANK0=" + str(IO_BANK0_BASE) +
+            " PADS_BANK0=" + str(PADS_BANK0_BASE))
+    println("  GP0..GP29 envelope (30 pins)")
+}

@@ -1,0 +1,86 @@
+// HEXA Standard Library — crypto/tls13_certificate
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// TLS 1.3 Certificate message parser (RFC 8446 §4.4.2) — pure hexa. Bridges
+// the TLS handshake to the X.509 layer: parses the Certificate handshake
+// message body and extracts each cert's DER bytes (which x509_min then
+// consumes). let-mut idiom (#1506).
+//
+// Structure (RFC 8446 §4.4.2):
+//   struct {
+//       opaque certificate_request_context<0..2^8-1>;
+//       CertificateEntry certificate_list<0..2^24-1>;
+//   } Certificate;
+//   struct {
+//       opaque cert_data<1..2^24-1>;          // X.509 DER
+//       Extension extensions<0..2^16-1>;
+//   } CertificateEntry;
+//
+// Surface (body = the Certificate message body, NOT including the 4-byte HS header):
+//   pub fn tls13_cert_request_context_len(body: [int]) -> int
+//   pub fn tls13_cert_list_offset(body: [int]) -> int        — offset of cert_list uint24 length
+//   pub fn tls13_cert_list_length(body: [int]) -> int        — total cert_list bytes
+//   pub fn tls13_cert_first_entry_offset(body: [int]) -> int — offset of first CertificateEntry
+//   pub fn tls13_cert_entry_data_length(body: [int], o: int) -> int
+//   pub fn tls13_cert_entry_data(body: [int], o: int) -> [int]     — extracted DER cert bytes
+//   pub fn tls13_cert_entry_extensions_length(body: [int], o: int) -> int
+//   pub fn tls13_cert_entry_next(body: [int], o: int) -> int
+
+@pure
+fn _u24(b: [int], o: int) -> int {
+    return ((b[o] & 0xFF) << 16) | ((b[o + 1] & 0xFF) << 8) | (b[o + 2] & 0xFF)
+}
+
+@pure
+fn _u16(b: [int], o: int) -> int {
+    return ((b[o] & 0xFF) << 8) | (b[o + 1] & 0xFF)
+}
+
+@pure
+pub fn tls13_cert_request_context_len(body: [int]) -> int {
+    return body[0] & 0xFF
+}
+
+@pure
+pub fn tls13_cert_list_offset(body: [int]) -> int {
+    return 1 + tls13_cert_request_context_len(body)
+}
+
+@pure
+pub fn tls13_cert_list_length(body: [int]) -> int {
+    return _u24(body, tls13_cert_list_offset(body))
+}
+
+@pure
+pub fn tls13_cert_first_entry_offset(body: [int]) -> int {
+    return tls13_cert_list_offset(body) + 3
+}
+
+@pure
+pub fn tls13_cert_entry_data_length(body: [int], o: int) -> int {
+    return _u24(body, o)
+}
+
+@pure
+pub fn tls13_cert_entry_data(body: [int], o: int) -> [int] {
+    let n = tls13_cert_entry_data_length(body, o)
+    let mut d: [int] = []
+    let mut i = 0
+    while i < n { d.push(body[o + 3 + i]); i = i + 1 }
+    return d
+}
+
+@pure
+pub fn tls13_cert_entry_extensions_length(body: [int], o: int) -> int {
+    let dl = tls13_cert_entry_data_length(body, o)
+    return _u16(body, o + 3 + dl)
+}
+
+@pure
+pub fn tls13_cert_entry_next(body: [int], o: int) -> int {
+    let dl = tls13_cert_entry_data_length(body, o)
+    let el = tls13_cert_entry_extensions_length(body, o)
+    return o + 3 + dl + 2 + el
+}

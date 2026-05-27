@@ -1,0 +1,58 @@
+// HEXA Standard Library — crypto/tls13_renegotiation_info
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// renegotiation_info extension (RFC 5746) — pure hexa. Originally a TLS 1.2
+// security fix; TLS 1.3 retains parsing for backward compatibility. For an
+// initial-handshake ClientHello / ServerHello the renegotiated_connection
+// is empty (just one zero length byte). let-mut idiom (#1506).
+//
+// Structure (RFC 5746 §3.2):
+//   struct { opaque renegotiated_connection<0..255>; } RenegotiationInfo;
+//
+// Surface:
+//   pub fn tls13_ext_renegotiation_info_empty() -> [int]
+//   pub fn tls13_ext_renegotiation_info(verify_data: [int]) -> [int]
+//   pub fn tls13_renegotiation_info_parse(ext_value: [int]) -> [int]
+
+let _TLS_EXT_RENEGOTIATION_INFO: int = 0xff01
+
+@pure
+pub fn tls13_ext_renegotiation_info_empty() -> [int] {
+    // ff01 0001 00 — extension with a single zero byte (empty inner vector)
+    return [(_TLS_EXT_RENEGOTIATION_INFO >> 8) & 0xFF, _TLS_EXT_RENEGOTIATION_INFO & 0xFF,
+            0, 1,
+            0]
+}
+
+@pure
+pub fn tls13_ext_renegotiation_info(verify_data: [int]) -> [int] {
+    let n = len(verify_data)
+    let mut inner: [int] = []
+    inner.push(n & 0xFF)
+    let mut i = 0
+    while i < n { inner.push(verify_data[i]); i = i + 1 }
+    let il = len(inner)
+    let mut o: [int] = []
+    o.push((_TLS_EXT_RENEGOTIATION_INFO >> 8) & 0xFF)
+    o.push(_TLS_EXT_RENEGOTIATION_INFO & 0xFF)
+    o.push((il >> 8) & 0xFF)
+    o.push(il & 0xFF)
+    i = 0
+    while i < il { o.push(inner[i]); i = i + 1 }
+    return o
+}
+
+@pure
+pub fn tls13_renegotiation_info_parse(ext_value: [int]) -> [int] {
+    if len(ext_value) < 1 { return [] }
+    let n = ext_value[0] & 0xFF
+    let mut out: [int] = []
+    let mut i = 0
+    while i < n && 1 + i < len(ext_value) {
+        out.push(ext_value[1 + i] & 0xFF)
+        i = i + 1
+    }
+    return out
+}

@@ -1,0 +1,36 @@
+// HEXA Native Compiler — Phase 1-extension absorption: status archive (D12)
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Source SSOT:
+//   ~/core/nexus/state/markers/   (directory listing snapshot)
+//
+// Per absorption doctrine v2 rule 3, nexus's status surface is absorbed
+// as a frozen archive — "status as of nexus archive time T", not live.
+//
+// Strategy choice (per BG brief D12):
+//   (a) Capture marker filename + mtime + size at regen time (deterministic
+//       from filesystem state). PICKED — every marker filename already
+//       encodes worker id + epoch timestamp, so the listing alone is the
+//       status tableau.
+//   (b) Run `nexus status --json` once and embed output — REJECTED. The
+//       --json output is computed from the same markers + mutable
+//       agent state, so (a) is the more fundamental input.
+//
+// Each entry is one StatusMarkerEntry { name, mtime_epoch, size_bytes }.
+// Bundle hash = sha256 over a sorted "name|mtime|size" digest line per
+// marker; any new/deleted/touched marker trips the bundle.
+
+@phase("parse_only")
+pub struct StatusMarkerEntry {
+    // Marker file basename (relative to ~/core/nexus/state/markers/).
+    name: string,
+
+    // Last-modified epoch seconds.
+    mtime_epoch: i64,
+
+    // Size in bytes. Many markers are 0-byte sentinels; that is meaningful
+    // (presence-only signal) and we preserve the literal size.
+    size_bytes: i64
+}

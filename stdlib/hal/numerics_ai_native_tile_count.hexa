@@ -1,0 +1,154 @@
+#!hexa strict
+// stdlib/hal/numerics_ai_native_tile_count.hexa — F-AI-NATIVE-4 T2 numerical.
+//
+// Closes the T2 (numerical / fixture) tier of falsifier F-AI-NATIVE-4
+// (n_tiles = σ/φ = 6 native tiles per HEXA-AI chip; falsifier_ai_native
+// _check.hexa registry).
+//
+// T1 (ai.hexa internal asserts: SIGMA=12, PHI=2, N_TILES=6) closes the
+// algebraic identity:
+//
+//   n_tiles = σ / φ = 12 / 2 = 6
+//   σ_n     = σ · n_tiles = 12 · 6 = 72   (provenance overhead denom)
+//
+// T2 (this script) cross-checks NUMERICALLY by reading ai.hexa source.
+//
+// Identities checked:
+//   1. ai.hexa exists at stdlib/hal/ai.hexa.
+//   2. ai.hexa declares SIGMA = 12.
+//   3. ai.hexa declares PHI = 2.
+//   4. ai.hexa declares N_TILES = 6.
+//   5. SIGMA / PHI = N_TILES (algebraic identity from on-disk values).
+//   6. ai.hexa declares SIGMA_N = 72.
+//   7. SIGMA · N_TILES = SIGMA_N (provenance overhead denom identity).
+//   8. ai.hexa declares fn ai_invariant_n_tiles() (accessor).
+//
+// PASS = every identity holds; FAIL = any drift.
+//
+// Phase G iter 9+5+11; F-AI-NATIVE-4 closure 33% → 67%.
+// Pattern: numerics_ai_native_lattice.hexa (sister F-AI-NATIVE-1 T2;
+// reuses _extract_let_int + algebraic-identity-on-disk pattern).
+
+let EXPECTED_SIGMA   = 12
+let EXPECTED_PHI     = 2
+let EXPECTED_N_TILES = 6
+let EXPECTED_SIGMA_N = 72
+
+let mut RUN  = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+fn _root() -> str {
+    let env_root = env("HEXA_HAL_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _exists(p: str) -> bool {
+    let r = exec("[ -f \"" + p + "\" ] && echo y || echo n").trim()
+    return r == "y"
+}
+
+fn _extract_let_int(src: str, name: str) -> int {
+    let pat = "let " + name
+    let idx = src.index_of(pat)
+    if idx < 0 { return -1 }
+    let mut i = idx + pat.len()
+    while i < src.len() && src.char_at(i) != "=" { i = i + 1 }
+    if i >= src.len() { return -1 }
+    i = i + 1
+    while i < src.len() && (src.char_at(i) == " " || src.char_at(i) == "\t") { i = i + 1 }
+    let mut digits = ""
+    while i < src.len() {
+        let ch = src.char_at(i)
+        if ch >= "0" && ch <= "9" { digits = digits + ch } else { break }
+        i = i + 1
+    }
+    if digits.len() == 0 { return -1 }
+    return int(digits)
+}
+
+fn check_const(src: str, name: str, expected: int) -> int {
+    let v = _extract_let_int(src, name)
+    let ok = v == expected
+    _check(ok,
+           "ai.hexa declares " + name + " = " + str(expected),
+           "got " + str(v))
+    return v
+}
+
+fn check_div_identity(sigma: int, phi: int, n_tiles: int) {
+    let lhs = sigma / phi
+    let ok = lhs == n_tiles
+    _check(ok,
+           "σ / φ = N_TILES (algebraic identity from on-disk values)",
+           str(sigma) + "/" + str(phi) + "=" + str(lhs) + " want " + str(n_tiles))
+}
+
+fn check_sigma_n_identity(sigma: int, n_tiles: int, sigma_n: int) {
+    let lhs = sigma * n_tiles
+    let ok = lhs == sigma_n
+    _check(ok,
+           "σ · n_tiles = σ_n (provenance-overhead denominator identity)",
+           str(sigma) + "·" + str(n_tiles) + "=" + str(lhs) + " want " + str(sigma_n))
+}
+
+fn check_accessor_present(src: str, name: str) {
+    let pat = "fn " + name
+    let ok = src.contains(pat)
+    _check(ok,
+           "ai.hexa declares fn " + name + "()",
+           if ok { "found" } else { "missing accessor" })
+}
+
+fn main() {
+    println("========================================================================")
+    println("  stdlib/hal — numerics_ai_native_tile_count: F-AI-NATIVE-4 T2 numerical")
+    println("========================================================================")
+    println("  expected: σ=" + str(EXPECTED_SIGMA) + " φ=" + str(EXPECTED_PHI) +
+            " n_tiles=" + str(EXPECTED_N_TILES) + " σ_n=" + str(EXPECTED_SIGMA_N))
+    println("")
+
+    let root = _root()
+    let p = root + "/stdlib/hal/ai.hexa"
+    if !_exists(p) {
+        _check(false, "ai.hexa present at stdlib/hal/ai.hexa", "MISSING")
+        println("__HEXA_LANG_HAL_NUMERICS_AI_NATIVE_TILE_COUNT__ FAIL")
+        exit(1)
+    }
+    _check(true, "ai.hexa present at stdlib/hal/ai.hexa", "found")
+
+    let src = read_file(p)
+
+    let sigma   = check_const(src, "SIGMA",   EXPECTED_SIGMA)
+    let phi     = check_const(src, "PHI",     EXPECTED_PHI)
+    let n_tiles = check_const(src, "N_TILES", EXPECTED_N_TILES)
+    let sigma_n = check_const(src, "SIGMA_N", EXPECTED_SIGMA_N)
+
+    check_div_identity(sigma, phi, n_tiles)
+    check_sigma_n_identity(sigma, n_tiles, sigma_n)
+    check_accessor_present(src, "ai_invariant_n_tiles")
+
+    println("")
+    println("  FALSIFIER:")
+    println("    ✗ F-AI-NATIVE-4: n_tiles = σ/φ = 6 (cross-checked numerically)")
+
+    let pass_n = RUN - FAIL
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_LANG_HAL_NUMERICS_AI_NATIVE_TILE_COUNT__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_LANG_HAL_NUMERICS_AI_NATIVE_TILE_COUNT__ PASS")
+    exit(0)
+}
+
+main()

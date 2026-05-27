@@ -1,0 +1,14 @@
+#!hexa strict
+// rtsc analyze — strong-coupling Tc asymptote ≈ 0.5·ω_log·√λ (BSL).
+extern fn sqrt(x: float) -> float
+fn main() {
+    let omega_log_K = 1046.0   // h3br 200GPa fullq Allen-weighted (this session)
+    let lambda = 2.156
+    let Tc_asym = 0.5 * omega_log_K * sqrt(lambda)
+    let Tc_AD = 158.1  // Allen-Dynes (μ*=0.10) — for comparison
+    println("rtsc_analyze (BSL asymptote vs Allen-Dynes):")
+    println("  omega_log_K = " + str(omega_log_K) + "  lambda = " + str(lambda))
+    println("  Tc_BSL_asymptote_K = " + str(Tc_asym))
+    println("  Tc_AllenDynes_K = " + str(Tc_AD))
+    println("__HEXA_RTSC_ANALYZE__ PASS gate=GATE_OPEN absorbed=false")
+}

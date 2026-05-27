@@ -1,0 +1,150 @@
+// sr_registry.hexa — registry of SR injection sites across nexus engines.
+//
+// Purpose: track which engines/metrics opt-in to SR noise floor injection,
+// with sigma, base_seed, and status.  JSONL append-only — each `register`
+// call writes one record.  `list` replays the file.
+//
+// Intentionally simple: no dedup.  Treat latest line per (engine, metric)
+// as authoritative (caller convention).  This is a passive ledger — it
+// does NOT inject noise; callers invoke sr_inject.hexa helpers directly.
+//
+// SSOT path:  shared/sim_bridge/sr_harness/sr_registry.jsonl
+//
+// CLI:
+//   hexa sr_registry.hexa register <engine> <metric> <sigma> <base_seed> <file> <line> [status]
+//   hexa sr_registry.hexa list                                      — dump all
+//   hexa sr_registry.hexa list_engine <engine>                       — filter
+//   hexa sr_registry.hexa count                                      — line count
+//   hexa sr_registry.hexa help
+//
+// Status values (convention, free-form string):
+//   planned       — integration identified, not yet wired
+//   stub          — no-op integration stub applied (wrap_metric on raw pass-through)
+//   active        — call_wrapped_scalar live, NEXUS_SR gate respected
+//   confirmed     — SR-confirmed metric, gate flipped on by default
+//   rolled_back   — integration reverted
+
+let _a = args()
+let mode_arg = if _a.len() >= 2 { _a[1] } else { "help" }
+
+fn registry_path() -> string {
+    let mut home = ""
+    try { home = to_string(exec("printenv HOME")).trim() } catch e {}
+    if home.len() == 0 {
+        try { home = to_string(exec("echo $HOME")).trim() } catch e {}
+    }
+    home + "/Dev/nexus/sim_bridge/sr_harness/sr_registry.jsonl"
+}
+
+fn now_iso() -> string {
+    let mut s = ""
+    try { s = to_string(exec("date -u +%Y-%m-%dT%H:%M:%SZ")).trim() } catch e {}
+    if s.len() == 0 { s = "unknown" }
+    s
+}
+
+fn escape_json(s: string) -> string {
+    let mut out = ""
+    let n = s.len()
+    let mut i = 0
+    while i < n {
+        let ch = s.substring(i, i + 1)
+        if ch == "\"" { out = out + "\\\"" }
+        else if ch == "\\" { out = out + "\\\\" }
+        else if ch == "\n" { out = out + "\\n" }
+        else if ch == "\t" { out = out + "\\t" }
+        else { out = out + ch }
+        i = i + 1
+    }
+    out
+}
+
+if mode_arg == "help" {
+    println("sr_registry.hexa — SR injection-site ledger")
+    println("  register <engine> <metric> <sigma> <base_seed> <file> <line> [status]")
+    println("  list")
+    println("  list_engine <engine>")
+    println("  count")
+}
+
+if mode_arg == "register" {
+    if _a.len() < 8 {
+        println("ERROR: need <engine> <metric> <sigma> <base_seed> <file> <line> [status]")
+    } else {
+        let engine = _a[2]
+        let metric = _a[3]
+        let sigma_s = _a[4]
+        let seed_s = _a[5]
+        let file = _a[6]
+        let line = _a[7]
+        let status = if _a.len() >= 9 { _a[8] } else { "planned" }
+
+        let rec = "{\"ts\":\"" + now_iso() + "\"" +
+                  ",\"engine\":\"" + escape_json(engine) + "\"" +
+                  ",\"metric\":\"" + escape_json(metric) + "\"" +
+                  ",\"sigma\":" + sigma_s +
+                  ",\"base_seed\":" + seed_s +
+                  ",\"file\":\"" + escape_json(file) + "\"" +
+                  ",\"line\":" + line +
+                  ",\"status\":\"" + escape_json(status) + "\"" +
+                  "}\n"
+
+        let path = registry_path()
+        try { append_file(path, rec) } catch e {
+            println("WRITE_ERR path=" + path)
+        }
+        println("OK engine=" + engine + " metric=" + metric + " sigma=" + sigma_s + " status=" + status)
+    }
+}
+
+if mode_arg == "list" {
+    let path = registry_path()
+    let mut raw = ""
+    try { raw = read_file(path) } catch e { raw = "" }
+    if raw.len() == 0 {
+        println("(empty registry: " + path + ")")
+    } else {
+        print(raw)
+    }
+}
+
+if mode_arg == "list_engine" {
+    if _a.len() < 3 {
+        println("ERROR: need engine name")
+    } else {
+        let want = _a[2]
+        let needle = "\"engine\":\"" + want + "\""
+        let path = registry_path()
+        let mut raw = ""
+        try { raw = read_file(path) } catch e { raw = "" }
+        if raw.len() == 0 {
+            println("(empty registry)")
+        } else {
+            let lines = raw.split("\n")
+            let mut shown = 0
+            for ln in lines {
+                if ln.index_of(needle) >= 0 {
+                    println(ln)
+                    shown = shown + 1
+                }
+            }
+            println("# " + to_string(shown) + " matches for engine=" + want)
+        }
+    }
+}
+
+if mode_arg == "count" {
+    let path = registry_path()
+    let mut raw = ""
+    try { raw = read_file(path) } catch e { raw = "" }
+    if raw.len() == 0 {
+        println("0")
+    } else {
+        let lines = raw.split("\n")
+        let mut n = 0
+        for ln in lines {
+            if ln.len() > 0 { n = n + 1 }
+        }
+        println(to_string(n))
+    }
+}

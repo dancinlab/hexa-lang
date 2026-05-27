@@ -1,0 +1,81 @@
+// test/mult_order_smoke.hexa — smoke for symbolic/mult_order.hexa
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Reference values (standard number theory — multiplicative order /
+// primitive roots of (Z/nZ)*; manifest §Backlog #15 residual NT primitive):
+//   φ(6)=2 φ(7)=6 φ(9)=6 φ(5)=4 φ(11)=10
+//   ord₆(5)=2=φ(6) → 5 is a primitive root mod 6 ; least pr mod 6 = 5
+//   ord₇(3)=6=φ(7) → 3 is the least primitive root mod 7 ; ord₇(2)=3
+//   least primitive root: mod 5 → 2 · mod 9 → 2 · mod 11 → 2
+//   primitive-root count = φ(φ(n)): mod 7 → 2, mod 11 → 4, mod 6 → 1
+//   (Z/8Z)* and (Z/12Z)* are NON-cyclic → no primitive root (count 0)
+//
+// Run:  hexa run test/mult_order_smoke.hexa
+// Sentinel: __MULT_ORDER_SMOKE__ PASS|FAIL on the final line.
+
+import "compiler/atlas/symbolic/mult_order.hexa"
+
+let mut PASS = 0
+let mut FAIL = 0
+
+fn check(label: string, cond: bool) {
+    if cond {
+        PASS = PASS + 1
+        println("[PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("[FAIL] " + label)
+    }
+}
+
+// ── totient ──────────────────────────────────────────────────────────────
+check("mo_phi(6) == 2",  mo_phi(6) == 2)
+check("mo_phi(7) == 6",  mo_phi(7) == 6)
+check("mo_phi(9) == 6",  mo_phi(9) == 6)
+check("mo_phi(11) == 10", mo_phi(11) == 10)
+
+// ── modular exponentiation ───────────────────────────────────────────────
+check("mo_powmod(3,6,7) == 1 (Fermat)", mo_powmod(3, 6, 7) == 1)
+check("mo_powmod(2,10,11) == 1 (Fermat)", mo_powmod(2, 10, 11) == 1)
+check("mo_powmod(5,2,6) == 1", mo_powmod(5, 2, 6) == 1)
+
+// ── T1 : multiplicative order ────────────────────────────────────────────
+check("ord₆(5) == 2", mo_order(5, 6) == 2)
+check("ord₇(3) == 6", mo_order(3, 7) == 6)
+check("ord₇(2) == 3", mo_order(2, 7) == 3)
+check("ord₈(4) == 0 (4 not a unit mod 8)", mo_order(4, 8) == 0)
+
+// ── T2 : primitive-root predicate ────────────────────────────────────────
+check("5 is a primitive root mod 6", mo_is_primitive_root(5, 6))
+check("3 is a primitive root mod 7", mo_is_primitive_root(3, 7))
+check("2 is NOT a primitive root mod 7 (ord 3)", !mo_is_primitive_root(2, 7))
+
+// ── T3 : least primitive root / cyclicity ────────────────────────────────
+check("least primitive root mod 6 == 5", mo_primitive_root(6) == 5)
+check("least primitive root mod 7 == 3", mo_primitive_root(7) == 3)
+check("least primitive root mod 5 == 2", mo_primitive_root(5) == 2)
+check("least primitive root mod 9 == 2", mo_primitive_root(9) == 2)
+check("least primitive root mod 11 == 2", mo_primitive_root(11) == 2)
+check("(Z/8Z)* non-cyclic → no primitive root", !mo_has_primitive_root(8))
+check("(Z/12Z)* non-cyclic → no primitive root", !mo_has_primitive_root(12))
+check("(Z/6Z)* cyclic → has primitive root", mo_has_primitive_root(6))
+
+// ── T4 : primitive-root count = φ(φ(n)) ──────────────────────────────────
+check("count primitive roots mod 6 == 1", mo_count_primitive(6) == 1)
+check("count primitive roots mod 7 == 2", mo_count_primitive(7) == 2)
+check("count primitive roots mod 11 == 4", mo_count_primitive(11) == 4)
+check("count primitive roots mod 8 == 0", mo_count_primitive(8) == 0)
+check("closed form == direct scan (n=7)", mo_count_primitive(7) == mo_count_primitive_scan(7))
+check("closed form == direct scan (n=11)", mo_count_primitive(11) == mo_count_primitive_scan(11))
+
+println("")
+println("═══════════════════════════════════════════════════════════")
+println("  mult_order smoke: PASS=" + str(PASS) + " FAIL=" + str(FAIL))
+println("═══════════════════════════════════════════════════════════")
+if FAIL > 0 {
+    println("__MULT_ORDER_SMOKE__ FAIL")
+} else {
+    println("__MULT_ORDER_SMOKE__ PASS")
+}

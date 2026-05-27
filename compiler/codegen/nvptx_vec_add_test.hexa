@@ -1,0 +1,242 @@
+// HEXA Native Compiler — RFC 055 055-P1 / vec-add PTX emit + validator smoke
+//
+// @version 0.0.1
+// @capabilities [pure]
+//
+// RFC 055 055-P1 smoke entry point — exercises the keystone vec-add
+// emitter (`emit_ptx_vec_add_module`) and the `@gpu` subset validator
+// (`nvptx_validate_gpu_subset`) on synthetic inputs. Mirrors the 055-P0
+// `nvptx_emit_test.hexa` shape (TEXT-shape CONTAINS asserts only — no
+// GPU fire, no ptxas invocation; the real-GPU fire is
+// `tool/dispatch_r055_p1_vec_add.sh`).
+//
+// 055-P1 falsifier coverage in this file:
+//   F-RFC055-PTX-EMIT (partial — text-shape; the ptxas-accept half lives
+//                     in the dispatch script).
+//   F-RFC055-CPU-CODEGEN-UNTOUCHED — this test never imports a CPU
+//                                    codegen module; running it leaves
+//                                    the CPU emit path untouched.
+//   GPU01..GPU07 — driven by `_validator_cases()` below.
+//
+// Run:
+//   hexa run compiler/codegen/nvptx_vec_add_test.hexa
+
+import "./nvptx_target.hexa"
+import "./nvptx_ptx_ops.hexa"
+
+// ── Text inspection ──────────────────────────────────────────────────
+
+fn _contains(hay: string, needle: string) -> bool {
+    return hay.find(needle) >= 0
+}
+
+fn _check(ok_in: bool, hay: string, needle: string, label: string) -> bool {
+    if _contains(hay, needle) { return ok_in }
+    println("  FAIL: " + label + " (missing: `" + needle + "`)")
+    return false
+}
+
+// ── PTX emit test (sm_80 + sm_90 paths) ──────────────────────────────
+
+fn _test_emit_vec_add_module() -> bool {
+    let mut ok = true
+
+    // sm_90 emit
+    let ptx90 = emit_ptx_vec_add_module(NVPTX_TARGET_SM90)
+    println("")
+    println("── emitted PTX vec-add (sm_90) ──")
+    println(ptx90)
+
+    ok = _check(ok, ptx90, ".version 7.8",            "sm_90 .version directive")
+    ok = _check(ok, ptx90, ".target sm_90",           "sm_90 .target directive")
+    ok = _check(ok, ptx90, ".address_size 64",        "sm_90 .address_size")
+    ok = _check(ok, ptx90, ".visible .entry vadd",    "sm_90 .visible .entry header")
+    ok = _check(ok, ptx90, ".param .u64 vadd_param_0", "sm_90 param 0 (a base)")
+    ok = _check(ok, ptx90, ".param .u64 vadd_param_3", "sm_90 param 3 (n length)")
+    ok = _check(ok, ptx90, ".reg .u32 %r0;",          "sm_90 .reg .u32 bank")
+    ok = _check(ok, ptx90, ".reg .u64 %rd0;",         "sm_90 .reg .u64 bank")
+    ok = _check(ok, ptx90, ".reg .pred %p0;",         "sm_90 .reg .pred bank")
+    ok = _check(ok, ptx90, ".reg .f64 %fd0;",         "sm_90 .reg .f64 bank")
+    ok = _check(ok, ptx90, "ld.param.u64 %rd0, [vadd_param_0]", "sm_90 ld.param a")
+    ok = _check(ok, ptx90, "mov.u32 %r0, %ctaid.x",   "sm_90 mov %ctaid.x (gpu_block_id_x)")
+    ok = _check(ok, ptx90, "mov.u32 %r1, %ntid.x",    "sm_90 mov %ntid.x  (gpu_block_dim_x)")
+    ok = _check(ok, ptx90, "mov.u32 %r2, %tid.x",     "sm_90 mov %tid.x   (gpu_thread_id_x)")
+    ok = _check(ok, ptx90, "mad.lo.s32 %r3, %r0, %r1, %r2", "sm_90 gid compose")
+    ok = _check(ok, ptx90, "setp.lt.s32 %p0, %r3, %r4",     "sm_90 bounds compare")
+    ok = _check(ok, ptx90, "@!%p0 bra",                "sm_90 negated bra (OOB skip)")
+    ok = _check(ok, ptx90, "cvt.u64.u32 %rd4, %r3",   "sm_90 widen gid → u64")
+    ok = _check(ok, ptx90, "mul.lo.u64 %rd5, %rd4, 8", "sm_90 byte-offset scale")
+    ok = _check(ok, ptx90, "add.u64 %rd6, %rd0, %rd5", "sm_90 &a[gid] compose")
+    ok = _check(ok, ptx90, "ld.global.f64 %fd0, [%rd6]", "sm_90 ld a[gid]")
+    ok = _check(ok, ptx90, "ld.global.f64 %fd1, [%rd7]", "sm_90 ld b[gid]")
+    ok = _check(ok, ptx90, "add.f64 %fd2, %fd0, %fd1",   "sm_90 fp64 add")
+    ok = _check(ok, ptx90, "st.global.f64 [%rd8], %fd2", "sm_90 st c[gid]")
+    ok = _check(ok, ptx90, "ret;",                       "sm_90 ret terminator")
+
+    // sm_80 sanity — same body, only the `.target` arch flips.
+    let ptx80 = emit_ptx_vec_add_module(NVPTX_TARGET_SM80)
+    ok = _check(ok, ptx80, ".target sm_80",  "sm_80 .target directive")
+    ok = _check(ok, ptx80, ".visible .entry vadd", "sm_80 .visible .entry header")
+    ok = _check(ok, ptx80, "ld.global.f64 %fd0, [%rd6]", "sm_80 ld a[gid]")
+
+    return ok
+}
+
+// ── `@gpu_*` attribute recognition + GPU0N validator ─────────────────
+
+fn _test_attr_recognition() -> bool {
+    let mut ok = true
+    if !nvptx_is_gpu_attr("gpu_kernel") {
+        println("  FAIL: nvptx_is_gpu_attr(gpu_kernel) should be true")
+        ok = false
+    }
+    if !nvptx_is_gpu_attr("gpu_device") {
+        println("  FAIL: nvptx_is_gpu_attr(gpu_device) should be true")
+        ok = false
+    }
+    if nvptx_is_gpu_attr("cite") {
+        println("  FAIL: nvptx_is_gpu_attr(cite) should be false")
+        ok = false
+    }
+    if nvptx_attr_kind("gpu_kernel") != NVPTX_FN_KERNEL {
+        println("  FAIL: nvptx_attr_kind(gpu_kernel) != NVPTX_FN_KERNEL")
+        ok = false
+    }
+    if nvptx_attr_kind("gpu_device") != NVPTX_FN_DEVICE {
+        println("  FAIL: nvptx_attr_kind(gpu_device) != NVPTX_FN_DEVICE")
+        ok = false
+    }
+    if nvptx_attr_kind("cite") != -1 {
+        println("  FAIL: nvptx_attr_kind(cite) should be -1")
+        ok = false
+    }
+    return ok
+}
+
+fn _has(codes: [string], needle: string) -> bool {
+    let mut i = 0
+    while i < len(codes) {
+        if codes[i] == needle { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn _test_validator() -> bool {
+    let mut ok = true
+
+    // Case A — the canonical vec-add kernel (clean).
+    let mut a = nvptx_empty_validate_input()
+    a.is_kernel = true
+    a.is_gpu_context = true
+    a.return_type_name = ""   // void — gpu/SPEC.md §2: kernels must
+    a.param_types = ["[f64]", "[f64]", "[f64]", "i64"]
+    a.local_types = ["i64", "f64", "f64", "f64"]
+    a.uses_gpu_intrinsic = true   // legal inside a @gpu_* body
+    let codes_a = nvptx_validate_gpu_subset(a)
+    if len(codes_a) != 0 {
+        println("  FAIL: clean vec-add should produce no GPU0N codes, got " + to_string(len(codes_a)))
+        let mut i = 0
+        while i < len(codes_a) { println("    - " + codes_a[i]); i = i + 1 }
+        ok = false
+    }
+
+    // Case B — GPU01 (kernel with non-void return type).
+    let mut b = nvptx_empty_validate_input()
+    b.is_kernel = true
+    b.is_gpu_context = true
+    b.return_type_name = "i64"
+    b.param_types = ["[f64]"]
+    let codes_b = nvptx_validate_gpu_subset(b)
+    if !_has(codes_b, "GPU01") {
+        println("  FAIL: GPU01 should fire on @gpu_kernel returning i64")
+        ok = false
+    }
+
+    // Case C — GPU03 (CPU fn called from @gpu_* body).
+    let mut c = nvptx_empty_validate_input()
+    c.is_kernel = true
+    c.is_gpu_context = true
+    c.return_type_name = ""
+    c.param_types = ["[f64]"]
+    c.calls_cpu_fns = true
+    let codes_c = nvptx_validate_gpu_subset(c)
+    if !_has(codes_c, "GPU03") {
+        println("  FAIL: GPU03 should fire on CPU fn called from kernel")
+        ok = false
+    }
+
+    // Case D — GPU04 (non-allowlisted type — String parameter).
+    let mut d = nvptx_empty_validate_input()
+    d.is_kernel = true
+    d.is_gpu_context = true
+    d.return_type_name = ""
+    d.param_types = ["[f64]", "String"]
+    let codes_d = nvptx_validate_gpu_subset(d)
+    if !_has(codes_d, "GPU04") {
+        println("  FAIL: GPU04 should fire on String parameter")
+        ok = false
+    }
+
+    // Case E — GPU05 (heap alloc inside kernel).
+    let mut e = nvptx_empty_validate_input()
+    e.is_kernel = true
+    e.is_gpu_context = true
+    e.return_type_name = ""
+    e.param_types = ["[f64]"]
+    e.has_heap_alloc = true
+    let codes_e = nvptx_validate_gpu_subset(e)
+    if !_has(codes_e, "GPU05") {
+        println("  FAIL: GPU05 should fire on heap alloc")
+        ok = false
+    }
+
+    // Case F — GPU06 (gpu_* intrinsic called from CPU code).
+    let mut f = nvptx_empty_validate_input()
+    f.is_kernel = false
+    f.is_gpu_context = false
+    f.uses_gpu_intrinsic = true
+    let codes_f = nvptx_validate_gpu_subset(f)
+    if !_has(codes_f, "GPU06") {
+        println("  FAIL: GPU06 should fire on intrinsic from CPU code")
+        ok = false
+    }
+
+    // Case G — GPU07 (@shared outside kernel).
+    let mut g = nvptx_empty_validate_input()
+    g.is_kernel = false
+    g.is_gpu_context = true   // @gpu_device, but @shared is kernel-only
+    g.return_type_name = "f64"
+    g.has_shared_outside_kernel = true
+    let codes_g = nvptx_validate_gpu_subset(g)
+    if !_has(codes_g, "GPU07") {
+        println("  FAIL: GPU07 should fire on @shared outside @gpu_kernel")
+        ok = false
+    }
+
+    return ok
+}
+
+fn main() {
+    println("══════════════════════════════════════════════")
+    println("  RFC 055 055-P1 — vec-add PTX emit + GPU0N validator smoke")
+    println("══════════════════════════════════════════════")
+
+    let ok_emit = _test_emit_vec_add_module()
+    let ok_attr = _test_attr_recognition()
+    let ok_val = _test_validator()
+
+    println("")
+    println("══════════════════════════════════════════════")
+    if ok_emit && ok_attr && ok_val {
+        println("PASS: RFC 055 055-P1 vec-add emit + validator smoke")
+        println("      (text-shape only; ptxas + GPU fire = tool/dispatch_r055_p1_vec_add.sh)")
+    } else {
+        println("FAIL: RFC 055 055-P1 smoke not satisfied.")
+        if !ok_emit { println("      vec-add emit FAILED") }
+        if !ok_attr { println("      attribute-recognition FAILED") }
+        if !ok_val  { println("      GPU0N validator FAILED") }
+    }
+    println("══════════════════════════════════════════════")
+    if !(ok_emit && ok_attr && ok_val) { exit(1) }
+}

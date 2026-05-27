@@ -1,0 +1,9 @@
+{"ts":"2026-05-05T04:36:39Z","caller":"qrng_standalone","subcmd":"qrng chain","args":"","exit_code":0,"version":"1.0.0"}
+{"ts":"2026-05-05T04:37:59Z","caller":"qrng_standalone","subcmd":"qrng selftest","args":"","exit_code":1,"version":"1.0.0"}
+{"ts":"2026-05-05T04:38:04Z","caller":"qrng_standalone","subcmd":"qrng selftest","args":"","exit_code":1,"version":"1.0.0"}
+{"ts":"2026-05-05T04:39:01Z","caller":"qrng_standalone","subcmd":"qrng chain","args":"","exit_code":0,"version":"1.0.0"}
+{"ts":"2026-05-05T04:39:02Z","caller":"qrng_standalone","subcmd":"qrng selftest","args":"","exit_code":1,"version":"1.0.0"}
+{"ts":"2026-05-05T04:39:10Z","caller":"qrng_standalone","subcmd":"qrng chain","args":"","exit_code":0,"version":"1.0.0"}
+{"ts":"2026-05-05T04:39:11Z","caller":"qrng_standalone","subcmd":"qrng selftest","args":"","exit_code":1,"version":"1.0.0"}
+{"ts":"2026-05-05T04:45:31Z","caller":"qrng_standalone","subcmd":"qrng chain","args":"","exit_code":0,"version":"1.0.0"}
+{"ts":"2026-05-05T04:45:32Z","caller":"qrng_standalone","subcmd":"qrng selftest","args":"","exit_code":1,"version":"1.0.0"}

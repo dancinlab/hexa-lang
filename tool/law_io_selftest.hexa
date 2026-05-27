@@ -1,0 +1,27 @@
+// tool/law_io_selftest.hexa — smoke for self/stdlib/law_io
+//
+// Moved out of self/stdlib/law_io.hexa: a `fn main()` living in a `use`d
+// stdlib module collides with the entry module's `main()` once
+// self/main.hexa's module_loader flattens the graph (C `redefinition of
+// 'u_main'`). Same reason the self/tui/* selftests are tool/*_selftest.hexa.
+//
+// Run: `hexa run tool/law_io_selftest.hexa`
+
+use "self/stdlib/law_io"
+
+println("law_io: self-test")
+let p = "/tmp/hexa_law_io_selftest.hexa"
+let ok = safe_write_file(p, "fn main() { println(\"ok\") }\n")
+let ok2 = safe_append_file(p, "// appended\n")
+
+// @allow-bare-exec — safe_exec is law_io's checked exec wrapper; the
+// substring "exec(" here is safe_exec, not a raw exec.
+// @allow-silent-exit — rc is checked in the verdict block below.
+let rc = safe_exec("test -f '" + p + "'")
+let rm_rc = safe_exec("rm -f '" + p + "'")
+println("  write=" + to_string(ok) + " append=" + to_string(ok2) + " exec_rc=" + to_string(rc) + " rm_rc=" + to_string(rm_rc))
+if !ok || !ok2 || rc != 0 {
+    println("law_io: selftest FAIL")
+    exit(1)
+}
+println("law_io: selftest OK")

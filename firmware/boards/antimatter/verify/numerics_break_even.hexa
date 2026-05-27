@@ -1,0 +1,275 @@
+#!hexa strict
+// hexa-antimatter/verify/numerics_break_even.hexa — F-AM-4 T2 numerical
+// closure for the hexa-ufo Stage-3 propulsion break-even claim.
+//
+// Companion to verify/calc_break_even.hexa: instead of integer ledger
+// arithmetic, this file recomputes every break-even-pillar key constant
+// through math_pure (sqrt, pow, log, exp) and asserts agreement with the
+// closed-form integer ledger to within math_pure's stability floor.
+//
+// Physics anchors:
+//   m_p   = 1.6726219×10⁻²⁷ kg  (proton rest mass)
+//   c     = 2.998×10⁸ m/s        (speed of light)
+//   E_pp  = 2 m_p c² ≈ 3.0064×10⁻¹⁰ J  (annihilation energy per p̄+p)
+//   R_t   = σ³·10⁹ /s = 1.728×10¹² /s  (tabletop production rate)
+//   yr    = 3.1536×10⁷ s
+//   m_yr  = R_t · m_p · yr ≈ 91 ng/yr  (annual mass yield, 1 unit)
+//   P_t   = R_t · E_pp ≈ 519 W         (instantaneous annihilation power)
+//   Stage-3 fleet: σ-φ = 10 units → ≈ 0.91 μg/yr
+//
+// Run: hexa run verify/numerics_break_even.hexa
+// Sentinel: __HEXA_ANTIMATTER_NUMERICS_BREAK_EVEN__ PASS
+//
+// Authority: .roadmap.hexa_antimatter §A.4 F-AM-4 + hexa-ufo .roadmap §0.
+
+use "self/runtime/math_pure"
+
+let HOME = env("HOME")
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _int_str(x: int) -> str { return "" + x }
+fn _flt_str(x: float) -> str { return "" + x }
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    if ok {
+        println("  [PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("  [FAIL] " + label)
+    }
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+fn _approx_eq(a: float, b: float, tol: float) -> bool {
+    return abs_pure(a - b) <= tol
+}
+
+fn _approx_rel(a: float, b: float, rel_tol: float) -> bool {
+    let aa = abs_pure(a)
+    let ab = abs_pure(b)
+    let denom = if aa > ab { aa } else { ab }
+    if denom == 0.0 { return abs_pure(a - b) <= rel_tol }
+    return abs_pure(a - b) / denom <= rel_tol
+}
+
+// ── n=6 lattice (float) + physics constants ──────────────────────────────
+let SIGMA = 12.0
+let TAU   = 4.0
+let PHI   = 2.0
+let N     = 6.0
+let J2    = 24.0
+
+let M_P     = 1.6726219e-27   // kg, proton mass
+let C_LIGHT = 2.998e8         // m/s
+let YEAR_S  = 3.1536e7        // seconds in a year
+let R_TABLETOP = 1.728e12     // p̄/s, tabletop terminal
+
+let TOL = 1.0e-9
+
+let FALSIFIERS = [
+    "F-AM-4 T2: σ³·10⁹ ≠ 1.728×10¹² ± 0.01% → tabletop production retract",
+    "F-AM-4 T2: 2·m_p·c² ≠ 3.0064×10⁻¹⁰ J ± 0.5% → annihilation energy retract",
+    "F-AM-4 T2: R · m_p · yr ≠ 91 ng ± 5% → annual yield retract",
+    "F-AM-4 T2: power R·E ≠ 519 W ± 1% → instantaneous power retract",
+    "F-AM-4 T2: σ-φ = 10 units → 0.91 μg/yr fleet ± 5% → break-even fleet retract",
+    "F-AM-4 T2: σ³ via pow_pure ≠ via σ²·σ → math_pure path-dependence",
+    "F-AM-4 T2: σ·τ² ≠ 192 (mo) → Stage-3 timeline mismatch",
+    "F-AM-4 T2: Tsiolkovsky exp(Δv/c) ≠ closed-form → propulsion eq broken",
+    "math_pure floor: log_pure(2) ≠ 0.693, exp_pure(1) ≠ e",
+]
+
+// ── (1) Production rate σ³·10⁹ via math_pure ─────────────────────────────
+
+fn check_production_rate() {
+    let s3  = pow_pure(SIGMA, 3.0)
+    let R   = s3 * 1.0e9
+    _check(_approx_rel(R, R_TABLETOP, 0.0001),
+           "σ³·10⁹ = 1.728×10¹² p̄/s  (tabletop terminal)",
+           "R = " + _flt_str(R))
+}
+
+// ── (2) Annihilation energy E_pair = 2·m_p·c² ───────────────────────────
+
+fn check_annihilation_energy() {
+    let E = 2.0 * M_P * C_LIGHT * C_LIGHT
+    _check(_approx_rel(E, 3.0064e-10, 0.005),
+           "E_pair = 2·m_p·c² ≈ 3.0064×10⁻¹⁰ J  (per p̄+p annihilation)",
+           "E = " + _flt_str(E) + " J")
+}
+
+// ── (3) Annual mass yield (1 unit) ──────────────────────────────────────
+
+fn check_annual_yield() {
+    let m_yr = R_TABLETOP * M_P * YEAR_S
+    let target_ng = 91.0e-9      // 91 ng in kg
+    _check(_approx_rel(m_yr, target_ng, 0.05),
+           "R·m_p·yr ≈ 91 ng/yr  (annual mass yield, 1 unit)",
+           "m_yr = " + _flt_str(m_yr * 1.0e9) + " ng")
+}
+
+// ── (4) Instantaneous annihilation power R·E ────────────────────────────
+
+fn check_power() {
+    let P = R_TABLETOP * 3.0064e-10
+    _check(_approx_rel(P, 519.5, 0.01),
+           "R·E_pair ≈ 519 W  (instantaneous annihilation power)",
+           "P = " + _flt_str(P) + " W")
+}
+
+// ── (5) Fleet break-even σ-φ = 10 units ─────────────────────────────────
+
+fn check_fleet_break_even() {
+    let fleet = SIGMA - PHI
+    let m_fleet_per_yr = fleet * R_TABLETOP * M_P * YEAR_S
+    let target_ug = 0.91e-6      // 0.91 μg in kg
+    _check(_approx_rel(fleet, 10.0, TOL),
+           "σ - φ = 10  (fleet unit count)", "")
+    _check(_approx_rel(m_fleet_per_yr, target_ug, 0.05),
+           "10 units · R·m_p·yr ≈ 0.91 μg/yr  (Stage-3 fleet break-even point)",
+           "m_fleet = " + _flt_str(m_fleet_per_yr * 1.0e6) + " μg")
+}
+
+// ── (6) σ³ path-independence (pow_pure vs σ²·σ) ──────────────────────────
+
+fn check_sigma_cubed_independence() {
+    let s3_pow = pow_pure(SIGMA, 3.0)
+    let s3_mul = (SIGMA * SIGMA) * SIGMA
+    _check(_approx_eq(s3_pow, 1728.0, TOL),
+           "pow_pure(σ, 3) = 1728", "")
+    _check(_approx_eq(s3_pow, s3_mul, TOL),
+           "σ³ via pow_pure == σ³ via σ²·σ  (path-independence)", "")
+}
+
+// ── (7) Stage-3 timeline σ·τ² = 192 months → 16 yr ──────────────────────
+
+fn check_stage3_timeline() {
+    let st2 = SIGMA * TAU * TAU
+    _check(_approx_eq(st2, 192.0, TOL),
+           "σ·τ² = 192  (Stage-3 timeline, months)", "")
+    let yr = st2 / 12.0
+    _check(_approx_eq(yr, 16.0, TOL),
+           "σ·τ² mo / 12 = 16 yr  (Stage-3 horizon)", "")
+}
+
+// ── (8) Tsiolkovsky equation closed-form check ──────────────────────────
+//
+// For Δv = c · ln(m₀/m₁) (relativistic exhaust limit), if Δv/c = ln(2),
+// then m₀/m₁ = 2 — i.e., 50% mass fraction ejected as antimatter.
+// This is a closed-form anchor that holds independent of magnitude.
+
+fn check_tsiolkovsky() {
+    let dv_over_c = log_pure(2.0)        // ≈ 0.693
+    let mass_ratio = exp_pure(dv_over_c) // = 2.0 by inverse identity
+    _check(_approx_eq(mass_ratio, 2.0, TOL),
+           "Δv/c = ln(2) → m₀/m₁ = 2  (Tsiolkovsky inverse, closed-form)",
+           "mass_ratio = " + _flt_str(mass_ratio))
+    let dv_over_c_check = log_pure(mass_ratio)
+    _check(_approx_rel(dv_over_c_check, 0.693, 0.001),
+           "log_pure(2) ≈ 0.693  (math_pure floor anchor)", "")
+}
+
+// ── (9) Total energy budget over Stage-3 horizon ────────────────────────
+
+fn check_stage3_energy_budget() {
+    // σ-φ fleet × R × E × (σ·τ²/12 yr in s) → total energy released.
+    let fleet = SIGMA - PHI
+    let E_pair = 2.0 * M_P * C_LIGHT * C_LIGHT
+    let stage3_s = (SIGMA * TAU * TAU / 12.0) * YEAR_S    // 16 yr in s ≈ 5.05e8 s
+    let E_total = fleet * R_TABLETOP * E_pair * stage3_s
+    // Order of magnitude: 10 × 1.7e12 × 3e-10 × 5e8 = 2.55e12 J ≈ 2.55 TJ
+    _check(E_total > 1.0e12 && E_total < 1.0e13,
+           "Stage-3 fleet total annihilation energy ∈ [1, 10] TJ",
+           "E_total = " + _flt_str(E_total / 1.0e12) + " TJ")
+}
+
+// ── (10) math_pure floor (log/exp/pow) ──────────────────────────────────
+
+fn check_math_pure_floor() {
+    let l2 = log_pure(2.0)
+    _check(_approx_rel(l2, 0.6931472, 0.0001),
+           "log_pure(2) = 0.6931472", "")
+    let e1 = exp_pure(1.0)
+    _check(_approx_rel(e1, 2.71828, 0.0001),
+           "exp_pure(1) = e ≈ 2.71828", "")
+    let p2 = pow_pure(2.0, 10.0)
+    _check(_approx_eq(p2, 1024.0, TOL),
+           "pow_pure(2, 10) = 1024", "")
+}
+
+fn print_header() {
+    println("")
+    println("  Stage-3 propulsion break-even constants")
+    println("    m_p   = " + _flt_str(M_P) + " kg")
+    println("    c     = " + _flt_str(C_LIGHT) + " m/s")
+    println("    E_pp  = " + _flt_str(2.0 * M_P * C_LIGHT * C_LIGHT) + " J")
+    println("    R_t   = " + _flt_str(R_TABLETOP) + " /s  (= σ³·10⁹)")
+    println("    m_yr  = " + _flt_str(R_TABLETOP * M_P * YEAR_S * 1.0e9) + " ng/yr (1 unit)")
+    println("    fleet = σ-φ = 10 units → ≈ " +
+            _flt_str((SIGMA - PHI) * R_TABLETOP * M_P * YEAR_S * 1.0e6) + " μg/yr")
+    println("")
+}
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-antimatter — numerics_break_even: F-AM-4 T2 numerical closure")
+    println("========================================================================")
+    println("  closes:  F-AM-4 T2 (Stage-3 propulsion break-even, math_pure)")
+    println("  method:  closed-form Tsiolkovsky + n=6 lattice anchors via math_pure")
+    print_header()
+
+    println("  -- (1) production rate σ³·10⁹ = 1.728e12 p̄/s --")
+    check_production_rate()
+
+    println("")
+    println("  -- (2) annihilation energy 2·m_p·c² --")
+    check_annihilation_energy()
+
+    println("")
+    println("  -- (3) annual mass yield ≈ 91 ng/yr --")
+    check_annual_yield()
+
+    println("")
+    println("  -- (4) instantaneous power ≈ 519 W --")
+    check_power()
+
+    println("")
+    println("  -- (5) fleet break-even σ-φ × 91 ng ≈ 0.91 μg/yr --")
+    check_fleet_break_even()
+
+    println("")
+    println("  -- (6) σ³ path-independence (pow_pure vs σ²·σ) --")
+    check_sigma_cubed_independence()
+
+    println("")
+    println("  -- (7) Stage-3 timeline σ·τ² = 192 mo = 16 yr --")
+    check_stage3_timeline()
+
+    println("")
+    println("  -- (8) Tsiolkovsky closed-form  Δv/c = ln(2) --")
+    check_tsiolkovsky()
+
+    println("")
+    println("  -- (9) Stage-3 fleet total energy budget --")
+    check_stage3_energy_budget()
+
+    println("")
+    println("  -- (10) math_pure floor (log/exp/pow) --")
+    check_math_pure_floor()
+
+    println("")
+    println("  FALSIFIERS (" + _int_str(len(FALSIFIERS)) + "):")
+    for f in FALSIFIERS { println("    ✗ " + f) }
+
+    println("========================================================================")
+    let pass_n = RUN - FAIL
+    println("  " + _int_str(pass_n) + "/" + _int_str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_ANTIMATTER_NUMERICS_BREAK_EVEN__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_ANTIMATTER_NUMERICS_BREAK_EVEN__ PASS")
+    exit(0)
+}

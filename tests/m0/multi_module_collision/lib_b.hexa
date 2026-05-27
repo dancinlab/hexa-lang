@@ -1,0 +1,6 @@
+// Stage1 C8 fixture — lib_b.hexa
+//
+// Same fn name as lib_a.hexa::helper but different body — the brief's
+// "INTENTIONAL same name; pub gate would prevent this" case. Kept
+// private so this fixture isolates the label-collision concern.
+fn helper() -> i32 { return 99 }

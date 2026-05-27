@@ -1,0 +1,26 @@
+Device: NVIDIA GeForce RTX 5070 sm_120
+CUDA driver=13000 runtime=12000
+loaded hexa-3stage PTX shape 256 (sgemm_4warp_3stage_256x256_grid)
+  shape 256: regs/thd=64, shmem=12288 B, max_thd_per_block=1024
+loaded hexa-3stage PTX shape 384 (sgemm_4warp_3stage_384x384_grid)
+  shape 384: regs/thd=64, shmem=12288 B, max_thd_per_block=1024
+loaded hexa-3stage PTX shape 512 (sgemm_4warp_3stage_512x512_grid)
+  shape 512: regs/thd=64, shmem=12288 B, max_thd_per_block=1024
+loaded hexa-3stage PTX shape 768 (sgemm_4warp_3stage_768x768_grid)
+  shape 768: regs/thd=64, shmem=12288 B, max_thd_per_block=1024
+loaded hexa-3stage PTX shape 1024 (sgemm_4warp_3stage_1024x1024_grid)
+  shape 1024: regs/thd=64, shmem=12288 B, max_thd_per_block=1024
+loaded hexa-3stage PTX shape 1536 (sgemm_4warp_3stage_1536x1536_grid)
+  shape 1536: regs/thd=64, shmem=12288 B, max_thd_per_block=1024
+[M= 256] cuBLAS HGEMM            median=0.004480 ms  std=0.000755  min=0.003840  max=0.006080  TFLOPS=  7.4898
+[M= 256] hexa-3STAGE 4warp+3stage median=0.008112 ms  std=0.000561  min=0.006464  max=0.008704  TFLOPS=  4.1364  ratio=0.5523  maxabs=0.0000  maxrel=0.0000  CTAs=16  regs=64  shmem=12288
+[M= 384] cuBLAS HGEMM            median=0.007744 ms  std=0.000786  min=0.005984  max=0.008512  TFLOPS= 14.6237
+[M= 384] hexa-3STAGE 4warp+3stage median=0.010176 ms  std=0.000322  min=0.008480  max=0.010720  TFLOPS= 11.1288  ratio=0.7610  maxabs=0.0000  maxrel=0.0000  CTAs=36  regs=64  shmem=12288
+[M= 512] cuBLAS HGEMM            median=0.010176 ms  std=0.000326  min=0.008672  max=0.010784  TFLOPS= 26.3793
+[M= 512] hexa-3STAGE 4warp+3stage median=0.014336 ms  std=0.000445  min=0.012000  max=0.016064  TFLOPS= 18.7246  ratio=0.7098  maxabs=0.0000  maxrel=0.0000  CTAs=64  regs=64  shmem=12288
+[M= 768] cuBLAS HGEMM            median=0.018112 ms  std=0.001779  min=0.016320  max=0.022816  TFLOPS= 50.0204
+[M= 768] hexa-3STAGE 4warp+3stage median=0.024096 ms  std=0.000882  min=0.022048  max=0.025056  TFLOPS= 37.5983  ratio=0.7517  maxabs=0.0000  maxrel=0.0000  CTAs=144  regs=64  shmem=12288
+[M=1024] cuBLAS HGEMM            median=0.038912 ms  std=0.000408  min=0.038400  max=0.041184  TFLOPS= 55.1882
+[M=1024] hexa-3STAGE 4warp+3stage median=0.053248 ms  std=0.000388  min=0.051616  max=0.055264  TFLOPS= 40.3298  ratio=0.7308  maxabs=0.0000  maxrel=0.0000  CTAs=256  regs=64  shmem=12288
+[M=1536] cuBLAS HGEMM            median=0.106976 ms  std=0.000801  min=0.106272  max=0.108800  TFLOPS= 67.7512
+[M=1536] hexa-3STAGE 4warp+3stage median=0.141248 ms  std=0.000493  min=0.138944  max=0.141824  TFLOPS= 51.3123  ratio=0.7574  maxabs=0.0000  maxrel=0.0000  CTAs=576  regs=64  shmem=12288

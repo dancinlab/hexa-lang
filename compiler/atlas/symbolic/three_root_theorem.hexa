@@ -1,0 +1,208 @@
+// compiler/atlas/symbolic/three_root_theorem.hexa — 3-root uniqueness theorem
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Hexa-native port of archive-TECS-L/.shared/calc/prove_3root_theorem.py
+// (git commit 4ee05c39; TECS-L absorption Wave 2 — manifest §Backlog #8).
+//
+//   THEOREM. n = 6 is the UNIQUE integer (n ≥ 2) satisfying all three:
+//     (A) rad(n) = n            n squarefree
+//     (B) σ(n)   = n · φ(n)     divisor–totient product
+//     (C) τ(n)   = φ(n)²        divisor–totient power
+//
+//   PROOF (closed-form, not bounded scan):
+//     1. (A) ⇒ n = p₁···p_k, distinct primes (squarefree).
+//     2. For squarefree n: σ=Π(pᵢ+1), φ=Π(pᵢ−1), τ=2^k.
+//     3. (C): 2^k = [Π(pᵢ−1)]² ⇒ k even (k=2m), Π(pᵢ−1)=2^m,
+//        so every (pᵢ−1) is a power of 2 ⇒ pᵢ ∈ Fermat primes {2,3,5,17,257,65537}.
+//     4. k=2: (p−1)(q−1)=2 ⇒ (p,q)=(2,3) ⇒ n=6 (and (B) checks: σ(6)=12=6·2).
+//     5. k≥4: product of the 4 smallest such (pᵢ−1) = 1·2·4·16 = 128 > 2² = 4,
+//        impossible (primes must be distinct; only {2,3,5} have pᵢ−1∈{1,2,4}).
+//     6. ⇒ k=2, n=6 unique. QED.
+//
+// This module ports the verifiable kernel: the three condition predicates,
+// the Fermat-prime (p−1 = 2^j) classifier, the k=2 enumeration, and the
+// k≥4 impossibility witness. Print/argparse not ported (anti-bloat). Zero
+// external dependency (g5 hexa-native-only).
+//
+// Cross-link: atlas/inbox/_tecsl_calculator_port_manifest.md §C / §Backlog #8 ·
+// symbolic/sigma_phi_tau_uniqueness.hexa (sibling n=6-uniqueness family).
+
+fn _is_prime(n: int) -> bool {
+    if n < 2 { return false }
+    if n == 2 { return true }
+    if n % 2 == 0 { return false }
+    let mut d = 3
+    while d * d <= n {
+        if n % d == 0 { return false }
+        d = d + 2
+    }
+    return true
+}
+
+pub fn trt_sigma(n: int) -> int {
+    if n <= 0 { return 0 }
+    let mut s = 0
+    let mut d = 1
+    while d <= n {
+        if n % d == 0 { s = s + d }
+        d = d + 1
+    }
+    return s
+}
+
+pub fn trt_tau(n: int) -> int {
+    if n <= 0 { return 0 }
+    let mut c = 0
+    let mut d = 1
+    while d <= n {
+        if n % d == 0 { c = c + 1 }
+        d = d + 1
+    }
+    return c
+}
+
+pub fn trt_phi(n: int) -> int {
+    if n <= 0 { return 0 }
+    if n == 1 { return 1 }
+    let mut count = 0
+    let mut k = 1
+    while k <= n {
+        let mut a = k
+        let mut b = n
+        while b != 0 {
+            let t = b
+            b = a % b
+            a = t
+        }
+        if a == 1 { count = count + 1 }
+        k = k + 1
+    }
+    return count
+}
+
+// rad(n) = product of distinct prime factors.
+pub fn trt_rad(n: int) -> int {
+    if n <= 1 { return 1 }
+    let mut m = n
+    let mut r = 1
+    let mut d = 2
+    while d * d <= m {
+        if m % d == 0 {
+            r = r * d
+            while m % d == 0 { m = m / d }
+        }
+        d = d + 1
+    }
+    if m > 1 { r = r * m }
+    return r
+}
+
+// ── the three conditions ────────────────────────────────────────────────
+pub fn cond_a_squarefree(n: int) -> bool {        // rad(n) = n
+    return trt_rad(n) == n
+}
+pub fn cond_b_sigma_nphi(n: int) -> bool {        // σ(n) = n·φ(n)
+    return trt_sigma(n) == n * trt_phi(n)
+}
+pub fn cond_c_tau_phi2(n: int) -> bool {          // τ(n) = φ(n)²
+    let p = trt_phi(n)
+    return trt_tau(n) == p * p
+}
+
+// all three simultaneously.
+pub fn three_root_holds(n: int) -> bool {
+    if n < 2 { return false }
+    return cond_a_squarefree(n) && cond_b_sigma_nphi(n) && cond_c_tau_phi2(n)
+}
+
+// solution set over [2, limit] (exhaustive confirmation of the theorem).
+pub fn three_root_solutions(limit: int) -> [int] {
+    let mut sols: [int] = []
+    let mut n = 2
+    while n <= limit {
+        if three_root_holds(n) { sols.push(n) }
+        n = n + 1
+    }
+    return sols
+}
+
+// ── proof-kernel helpers ────────────────────────────────────────────────
+
+// is x a power of 2 ? (x & (x-1) == 0 for x>0)
+pub fn is_power_of_two(x: int) -> bool {
+    if x <= 0 { return false }
+    let mut m = x
+    while m % 2 == 0 { m = m / 2 }
+    return m == 1
+}
+
+// Fermat-like primes < `limit`: prime p with p−1 a power of 2
+//   ⇒ {2, 3, 5, 17, 257, 65537}.
+pub fn fermat_like_primes(limit: int) -> [int] {
+    let mut out: [int] = []
+    let mut p = 2
+    while p < limit {
+        if _is_prime(p) && is_power_of_two(p - 1) { out.push(p) }
+        p = p + 1
+    }
+    return out
+}
+
+// k=2 enumeration: pairs (p,q) of Fermat-like primes with (p−1)(q−1)=2.
+// Returns the unique resulting n (=p·q), or -1 if none.
+pub fn k2_unique_n(limit: int) -> int {
+    let fp = fermat_like_primes(limit)
+    let mut i = 0
+    while i < len(fp) {
+        let mut j = i + 1
+        while j < len(fp) {
+            let p = fp[i]
+            let q = fp[j]
+            if (p - 1) * (q - 1) == 2 { return p * q }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+// k≥4 impossibility witness: product of the 4 smallest Fermat-like (pᵢ−1).
+// Theorem needs this to equal 2^(k/2)=4 for k=4; it is 1·2·4·16=128 > 4.
+pub fn k4_product_witness(limit: int) -> int {
+    let fp = fermat_like_primes(limit)
+    let mut prod = 1
+    let mut i = 0
+    while i < 4 && i < len(fp) {
+        prod = prod * (fp[i] - 1)
+        i = i + 1
+    }
+    return prod
+}
+
+pub struct ProofStatus {
+    n6_holds: bool,        // n=6 satisfies A∧B∧C
+    n6_unique: bool,       // {2..limit} solution set = {6}
+    k2_n: int,             // unique n from k=2 enumeration (= 6)
+    k4_product: int,       // 4-smallest (pᵢ−1) product (= 128)
+    k4_impossible: bool,   // 128 > 4 ⇒ no k=4 solution
+    complete: bool         // all proof obligations discharged
+}
+
+pub fn prove(limit: int) -> ProofStatus {
+    let sols = three_root_solutions(limit)
+    let unique = len(sols) == 1 && sols[0] == 6
+    let k2 = k2_unique_n(100000)
+    let k4 = k4_product_witness(100000)
+    let k4_imp = k4 > 4
+    let n6 = three_root_holds(6)
+    return ProofStatus {
+        n6_holds: n6,
+        n6_unique: unique,
+        k2_n: k2,
+        k4_product: k4,
+        k4_impossible: k4_imp,
+        complete: n6 && unique && k2 == 6 && k4_imp
+    }
+}

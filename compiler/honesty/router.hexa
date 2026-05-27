@@ -1,0 +1,128 @@
+// HEXA Native Compiler — Phase 2 absorption: A3 multi-domain router
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Source: ~/core/nexus/tool/check_router.hexa.
+//
+// Upstream fans out to 16 domain backends via shell exec (one
+// `hexa run tool/check_<domain>.hexa` per domain) and aggregates the
+// sentinel lines into a single `__NEXUS_CHECK__` verdict. The hexa-lang
+// port keeps the dispatch surface but only wires the in-process backends
+// that are γ-safe: `physics` (dim+cons) and `hexalint`. Other domains
+// remain as registered names with verdict "SKIP" — they would each pull
+// in their own exec surface or large config tree, deferred to Phase 3.
+//
+//   pub fn honesty_router_domains() -> [string]
+//   pub fn honesty_router_run(domains: [string],
+//                              source_for_hexalint: string) -> RouterVerdict
+//
+// `source_for_hexalint` is the concatenated source text the lint domain
+// should scan — empty string means "skip the lint scan, emit SKIP".
+
+use "compiler/honesty/physics"
+use "compiler/honesty/hexalint"
+
+pub struct DomainResult {
+    domain: string,
+    status: string    // "PASS" | "FAIL" | "SKIP"
+}
+
+pub struct RouterVerdict {
+    overall: string,           // "PASS" | "FAIL"
+    results: array,            // DomainResult[]
+    physics: PhysicsVerdict,
+    hexalint: HexalintVerdict,
+    ran_physics: bool,
+    ran_hexalint: bool
+}
+
+// Upstream domain catalog (kept in sync with check_router.hexa::DOMAINS).
+// The wiring column reflects what's portable in Phase 2:
+//   ✓ in-process backend lives in this dir
+//   – upstream backend exists but pulls in shell/network surface
+//   ✗ no upstream backend
+pub fn honesty_router_domains() -> array {
+    let out = []
+    out.push("math")
+    out.push("physics")        // ✓ — dim + cons
+    out.push("bio")
+    out.push("sim")
+    out.push("qrng")
+    out.push("brain")
+    out.push("consciousness")
+    out.push("phi")
+    out.push("learning")
+    out.push("phenomenology")
+    out.push("law")
+    out.push("integrity")
+    out.push("meta")
+    out.push("hexalint")       // ✓ — grep-MVP
+    out.push("atlas")
+    out.push("device")
+    return out
+}
+
+fn _contains(xs: array, needle: string) -> bool {
+    let mut i = 0
+    while i < len(xs) {
+        if to_string(xs[i]) == needle { return true }
+        i = i + 1
+    }
+    return false
+}
+
+pub fn honesty_router_run(domains: array, source_for_hexalint: string) -> RouterVerdict {
+    let mut overall_pass: bool = true
+    let results = []
+
+    // physics
+    let want_phys = _contains(domains, "physics") || _contains(domains, "all")
+    let mut phys_verdict = PhysicsVerdict {
+        overall: "SKIP",
+        dim_pass: 0, dim_total: 0, cons_pass: 0, cons_total: 0
+    }
+    let mut ran_p: bool = false
+    if want_phys {
+        phys_verdict = physics_check()
+        ran_p = true
+        if phys_verdict.overall == "FAIL" { overall_pass = false }
+    }
+
+    // hexalint (warnings only; never flips overall_pass unless errors > 0)
+    let want_hex = _contains(domains, "hexalint") || _contains(domains, "all")
+    let mut hex_verdict = HexalintVerdict {
+        overall: "SKIP", files: 0, violations: 0,
+        errors: 0, warnings: 0, rules: []
+    }
+    let mut ran_h: bool = false
+    if want_hex && len(source_for_hexalint) > 0 {
+        hex_verdict = hexalint_check(source_for_hexalint)
+        ran_h = true
+        if hex_verdict.errors > 0 { overall_pass = false }
+    }
+
+    // Compose results table — every domain gets a row so the verdict
+    // shape matches the upstream sentinel (deterministic ordering).
+    let dom_list = honesty_router_domains()
+    let mut i = 0
+    while i < len(dom_list) {
+        let d = to_string(dom_list[i])
+        let mut status: string = "SKIP"
+        if d == "physics" && ran_p { status = phys_verdict.overall }
+        if d == "hexalint" && ran_h { status = hex_verdict.overall }
+        results.push(DomainResult { domain: d, status: status })
+        i = i + 1
+    }
+
+    let mut overall: string = "PASS"
+    if !overall_pass { overall = "FAIL" }
+    return RouterVerdict {
+        overall: overall,
+        results: results,
+        physics: phys_verdict,
+        hexalint: hex_verdict,
+        ran_physics: ran_p,
+        ran_hexalint: ran_h
+    }
+}

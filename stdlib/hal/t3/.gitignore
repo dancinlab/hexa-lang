@@ -1,0 +1,8 @@
+# T3 cross-compile build artifacts (regenerable via `make -f Makefile.rp2040`)
+*.o
+*.elf
+*.bin
+*.uf2
+
+# Renode run logs (regenerable when T3b2 run-tier activates in v1.4.0+)
+*.log

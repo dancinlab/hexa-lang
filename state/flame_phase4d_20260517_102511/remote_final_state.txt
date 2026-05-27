@@ -1,0 +1,14 @@
+=== final state at kill ===
+Sun May 17 01:58:21 UTC 2026
+    PID     ELAPSED     TIME %CPU   RSS    VSZ
+    822       05:59 00:05:58 99.8 3710400 7097692
+Name:	flame_d768_12L
+Umask:	0022
+State:	R (running)
+Tgid:	822
+Ngid:	0
+Pid:	822
+PPid:	820
+TracerPid:	0
+Uid:	0	0	0	0
+Gid:	0	0	0	0

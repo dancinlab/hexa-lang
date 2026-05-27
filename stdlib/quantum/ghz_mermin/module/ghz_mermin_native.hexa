@@ -1,0 +1,342 @@
+#!hexa strict
+// qmirror/ghz_mermin/module/ghz_mermin_native.hexa
+//
+// Pure-hexa GHZ-3 Mermin-witness kernel. Phase 5b of the full-repo
+// hexa-only absorption (PARALLEL_SUBAGENT_FIRING_ROADMAP_2026_05_12.md §4
+// Round 1). Replaces the numpy_native fallback that previously lived in
+// _python_bridge/module/ghz_mermin_runner.py (now deleted) — no subprocess,
+// no python, no qiskit dependency.
+//
+// Algorithm (mirrors ghz_mermin_runner.py numpy_native branch up to PRNG):
+//
+//   1. Prepare |GHZ_3> = (|000> + |111>)/sqrt(2) via H_0 + CNOT_01 + CNOT_12
+//      against the engine_aer pure-hexa state_vector kernel.
+//   2. For each of the 4 Mermin bases MERMIN_BASES = ["XXX","XYY","YXY","YYX"]:
+//        - Apply the per-qubit measurement-basis rotation to a *fresh* GHZ
+//          state (apply_single in state_vector.hexa mutates its input array
+//          in place — see "aliasing" note below — so each basis rebuilds GHZ):
+//             X on q -> apply H on q
+//             Y on q -> apply S^dag, then H on q
+//        - Build the 8-entry cumulative |amp|^2 distribution, quantise it to
+//          8 unsigned-32-bit thresholds, and sample n_shots outcomes by
+//          drawing one 32-bit LCG word per shot (Numerical-Recipes constants
+//          1664525 / 1013904223 mod 2^32 — the same LCG family as chsh.hexa's
+//          _chsh_lcg_bytes; one step per shot instead of the 8-byte fold so
+//          the hot loop is integer-only and allocates nothing — see "runtime"
+//          note below) and binary-searching the threshold table (a fixed
+//          3-deep `if` chain, no inner loop).
+//        - E_basis = (1/N) sum_k (-1)^parity(k) counts[k], with
+//          parity(k) = popcount(k & 0b111) mod 2.
+//   3. M_trial = E(XXX) - E(XYY) - E(YXY) - E(YYX). Aggregate mean/std (pop-
+//      ulation, ddof=0)/min/max over n_trials repeats with decorrelated
+//      per-trial / per-basis seed streams (trial_seed = seed + 1000003*t;
+//      basis i in {1..4} gets trial_seed + 7919*i), matching the structural
+//      seed split of the python path. Need not be bit-for-bit identical to
+//      numpy default_rng; same statistical verdict for the same seed.
+//
+// Sign convention follows the .py spec: M_analytic = +1 - (-1) - (-1) - (-1) = +4.
+// Quantum bound |M| <= 4; classical bound |M| <= 2. PASS verdict (F-QM-2-GHZ-10):
+//   M_mean in [3.7, 4.0]  AND  M_min > 3.5.
+//
+// |GHZ_3> is a simultaneous eigenstate of all four Mermin Pauli strings
+// (eigenvalue +1 for XXX, -1 for XYY/YXY/YYX), so after the basis rotation the
+// computational-basis histogram is supported on a single parity class per
+// basis and M = +4.0 exactly to numerical precision, independent of the seed.
+//
+// --- aliasing note ---
+//   state_vector.hexa's `apply_single` does `let mut re = state.re; ...
+//   re[i] = ...` and hexa arrays are reference types, so it MUTATES the
+//   caller's amplitude array. This kernel therefore never reuses a
+//   StateVector: every basis rebuilds GHZ from |000> before rotating.
+//
+// --- runtime note ---
+//   The hexa interpreter (0.1.0-dispatch) does not reclaim boxed numeric
+//   temporaries inside long `while` loops; a few hundred thousand iterations
+//   of even pure-integer arithmetic trips the 768MB RSS cap. The sampling
+//   loop is kept flat (one LCG step + a constant-depth `if` chain per shot,
+//   no nested loop) so 1024 shots * 4 bases * 30 trials ~= 1.2e5 iterations
+//   subprocess, no python, no qiskit; the only external math is `sqrt`.
+
+use "../../engine_aer/module/state_vector.hexa"
+use "../../engine_aer/module/gates.hexa"
+
+// 2^32, used as the LCG modulus and the upper sampling sentinel.
+fn _ghz_two32() -> int { return 4294967296 }
+
+// ---- public result struct --------------------------------------------
+
+struct GhzMerminNative {
+    ok:          int,
+    verdict:     str,        // "PASS" | "FAIL"
+    M_mean:      float,
+    M_std:       float,
+    M_min:       float,
+    M_max:       float,
+    E_XXX:       float,
+    E_XYY:       float,
+    E_YXY:       float,
+    E_YYX:       float,
+    n_shots:     int,
+    n_trials:    int,
+    engine:      str,
+    message:     str
+}
+
+fn _ghz_native_fail(reason: str) -> GhzMerminNative {
+    return GhzMerminNative {
+        ok: 0, verdict: "FAIL",
+        M_mean: 0.0, M_std: 0.0, M_min: 0.0, M_max: 0.0,
+        E_XXX: 0.0, E_XYY: 0.0, E_YXY: 0.0, E_YYX: 0.0,
+        n_shots: 0, n_trials: 0, engine: "none",
+        message: reason
+    }
+}
+
+// ---- GHZ-3 state preparation + measurement-basis rotation -------------
+
+// Rotate one qubit into the measurement basis for one Pauli letter.
+//   "X" on q -> H on q          (H X H = Z)
+//   "Y" on q -> S^dag then H    (H S^dag . Y . S H = Z)
+//   anything else (e.g. "Z") -> identity (not used in Mermin bases; defensive)
+fn _ghz_rotate_qubit(state: StateVector, pauli: str, q: int) -> StateVector {
+    let n = 3
+    if pauli == "X" {
+        let h = gate_h()
+        return apply_single(state, h.re, h.im, q, n)
+    }
+    if pauli == "Y" {
+        let sdg = gate_sdg()
+        let h = gate_h()
+        let s1 = apply_single(state, sdg.re, sdg.im, q, n)
+        return apply_single(s1, h.re, h.im, q, n)
+    }
+    return state
+}
+
+// Build a fresh |GHZ_3> = (|000> + |111>)/sqrt(2) and rotate it into the
+// measurement basis for the 3-letter Mermin string (p0 on q0, p1 on q1,
+// p2 on q2). Each letter is "X" or "Y". Returns the rotated StateVector.
+fn _ghz_prepare_basis(p0: str, p1: str, p2: str) -> StateVector {
+    let n = 3
+    let h = gate_h()
+    let g1 = apply_single(state_zero(n), h.re, h.im, 0, n)   // H_0
+    let g2 = apply_cnot(g1, 0, 1, n)                          // CNOT_01
+    let ghz = apply_cnot(g2, 1, 2, n)                         // CNOT_12
+    let r0 = _ghz_rotate_qubit(ghz, p0, 0)
+    let r1 = _ghz_rotate_qubit(r0, p1, 1)
+    let r2 = _ghz_rotate_qubit(r1, p2, 2)
+    return r2
+}
+
+// ---- 8-entry integer CDF --------------------------------------------
+
+// Quantise the cumulative |amp|^2 distribution of a 3-qubit state into 8
+// unsigned-32-bit thresholds: thr[k] = round-down(cum[k] / total * 2^32),
+// with thr[7] forced to exactly 2^32 so that any draw in [0, 2^32) selects
+// some bucket. Returns [] if the state has zero norm (shouldn't happen).
+fn _ghz_int_cdf(re: [float], im: [float]) -> [int] {
+    let n = len(re)
+    if n != 8 { return [] }
+    let mut acc = 0.0
+    let mut cum = []
+    let mut i = 0
+    while i < n {
+        let p = re[i] * re[i] + im[i] * im[i]
+        let p_safe = if p < 0.0 { 0.0 } else { p }
+        acc = acc + p_safe
+        cum = cum.push(acc)
+        i = i + 1
+    }
+    let total = cum[n - 1]
+    if total < 0.0000000001 { return [] }
+    let span = to_float(_ghz_two32())
+    let mut thr = []
+    let mut j = 0
+    while j < n {
+        thr = thr.push(to_int(cum[j] / total * span))
+        j = j + 1
+    }
+    thr[n - 1] = _ghz_two32()   // sentinel: every draw < 2^32 lands in a bucket
+    return thr
+}
+
+// Fixed-depth (3-level) binary search over 8 cumulative thresholds:
+// returns the smallest k in {0..7} with r < thr[k] (thr[7] == 2^32).
+// No loop -> contributes nothing to the interpreter's iteration budget.
+fn _ghz_bucket8(r: int, thr: [int]) -> int {
+    if r < thr[3] {
+        if r < thr[1] {
+            if r < thr[0] { return 0 }
+            return 1
+        }
+        if r < thr[2] { return 2 }
+        return 3
+    }
+    if r < thr[5] {
+        if r < thr[4] { return 4 }
+        return 5
+    }
+    if r < thr[6] { return 6 }
+    return 7
+}
+
+// popcount(k) mod 2 over the low 3 bits.
+fn _ghz_parity3(k: int) -> int {
+    let b0 = k & 1
+    let b1 = (k >> 1) & 1
+    let b2 = (k >> 2) & 1
+    return (b0 + b1 + b2) % 2
+}
+
+// ---- correlator: sample n_shots outcomes, accumulate (-1)^parity ------
+//
+// Flat hot loop: one LCG step (Numerical-Recipes 1664525 / 1013904223
+// mod 2^32) per shot yields a 32-bit word, a constant-depth `if` chain maps
+// it to one of 8 computational-basis outcomes, and the +/-1 parity sign is
+// folded into a running integer sum. O(n_shots) time, zero heap traffic, no
+// inner loop.
+fn _ghz_correlator(thr: [int], n_shots: int, seed: int) -> float {
+    if len(thr) != 8 { return 0.0 }
+    let m = _ghz_two32()
+    let mut s = seed % m
+    if s < 1 { s = s + m }
+    if s < 1 { s = 12345 }
+    let mut acc = 0
+    let mut shot = 0
+    while shot < n_shots {
+        s = (1664525 * s + 1013904223) % m
+        let k = _ghz_bucket8(s, thr)
+        if _ghz_parity3(k) == 0 {
+            acc = acc + 1
+        } else {
+            acc = acc - 1
+        }
+        shot = shot + 1
+    }
+    return to_float(acc) / to_float(n_shots)
+}
+
+// ---- top-level dispatcher --------------------------------------------
+
+// Run the GHZ-3 Mermin witness: for each of the 4 Mermin bases prepare a
+// fresh GHZ-3, rotate into the measurement basis, quantise the outcome
+// distribution; then for each of n_trials repeats sample n_shots outcomes
+// per basis and form M = E(XXX) - E(XYY) - E(YXY) - E(YYX). Aggregates
+// mean / std (population, ddof=0) / min / max over the trials.
+//
+// Verdict (F-QM-2-GHZ-10): PASS iff M_mean in [3.7, 4.0] AND M_min > 3.5.
+fn ghz_mermin_native_run(n_shots: int, n_trials: int, seed: int) -> GhzMerminNative {
+    if n_shots < 1 {
+        return _ghz_native_fail("ghz_mermin_native: n_shots > 0 required")
+    }
+    if n_trials < 1 {
+        return _ghz_native_fail("ghz_mermin_native: n_trials > 0 required")
+    }
+
+    // Prepare + quantise each Mermin basis once (fresh GHZ per basis — see
+    // the aliasing note in the file header).
+    let r_xxx = _ghz_prepare_basis("X", "X", "X")
+    let thr_xxx = _ghz_int_cdf(state_re_array(r_xxx), state_im_array(r_xxx))
+    let r_xyy = _ghz_prepare_basis("X", "Y", "Y")
+    let thr_xyy = _ghz_int_cdf(state_re_array(r_xyy), state_im_array(r_xyy))
+    let r_yxy = _ghz_prepare_basis("Y", "X", "Y")
+    let thr_yxy = _ghz_int_cdf(state_re_array(r_yxy), state_im_array(r_yxy))
+    let r_yyx = _ghz_prepare_basis("Y", "Y", "X")
+    let thr_yyx = _ghz_int_cdf(state_re_array(r_yyx), state_im_array(r_yyx))
+    if len(thr_xxx) != 8 || len(thr_xyy) != 8 || len(thr_yxy) != 8 || len(thr_yyx) != 8 {
+        return _ghz_native_fail("ghz_mermin_native: rotated-state CDF degenerate (norm=0)")
+    }
+
+    // Per-(trial, basis) seed streams (mirrors the .py layout: trial_seed =
+    // seed + 1000003*t, per-basis stride 7919*(i+1)).
+    let mut sum_M = 0.0
+    let mut sum_sq_M = 0.0
+    let mut min_M = 0.0
+    let mut max_M = 0.0
+    let mut sum_xxx = 0.0
+    let mut sum_xyy = 0.0
+    let mut sum_yxy = 0.0
+    let mut sum_yyx = 0.0
+    let mut t = 0
+    while t < n_trials {
+        let trial_seed = seed + 1000003 * t
+        let e_xxx = _ghz_correlator(thr_xxx, n_shots, trial_seed + 7919 * 1)
+        let e_xyy = _ghz_correlator(thr_xyy, n_shots, trial_seed + 7919 * 2)
+        let e_yxy = _ghz_correlator(thr_yxy, n_shots, trial_seed + 7919 * 3)
+        let e_yyx = _ghz_correlator(thr_yyx, n_shots, trial_seed + 7919 * 4)
+
+        let m_trial = e_xxx - e_xyy - e_yxy - e_yyx
+        sum_M = sum_M + m_trial
+        sum_sq_M = sum_sq_M + m_trial * m_trial
+        if t == 0 {
+            min_M = m_trial
+            max_M = m_trial
+        } else {
+            if m_trial < min_M { min_M = m_trial }
+            if max_M < m_trial { max_M = m_trial }
+        }
+        sum_xxx = sum_xxx + e_xxx
+        sum_xyy = sum_xyy + e_xyy
+        sum_yxy = sum_yxy + e_yxy
+        sum_yyx = sum_yyx + e_yyx
+        t = t + 1
+    }
+
+    let n_f = to_float(n_trials)
+    let M_mean = sum_M / n_f
+    // population variance = E[x^2] - (E[x])^2 ; clamp float noise to >= 0.
+    let var_raw = sum_sq_M / n_f - M_mean * M_mean
+    let var_safe = if var_raw < 0.0 { 0.0 } else { var_raw }
+    let M_std = sqrt(var_safe)
+
+    let E_XXX = sum_xxx / n_f
+    let E_XYY = sum_xyy / n_f
+    let E_YXY = sum_yxy / n_f
+    let E_YYX = sum_yyx / n_f
+
+    // Verdict band: M_mean in [3.7, 4.0]  AND  M_min > 3.5. The relop lint
+    // bans >= / <= , so the closed upper bound is expressed with a small tol
+    // on the strict comparison (M is +4.0 to numerical precision here).
+    let tol = 0.000001
+    let pass_mean = (3.7 - tol < M_mean) && (M_mean < 4.0 + tol)
+    let pass_min = 3.5 - tol < min_M
+    let verdict_str = if pass_mean {
+        if pass_min { "PASS" } else { "FAIL" }
+    } else { "FAIL" }
+
+    let reason = if verdict_str == "PASS" {
+        "M_mean=" + str(M_mean) + " in [3.7,4.0] AND M_min=" + str(min_M) + " > 3.5"
+    } else {
+        let mut parts = ""
+        if !pass_mean {
+            parts = parts + "M_mean=" + str(M_mean) + " outside [3.7,4.0]"
+        }
+        if !pass_min {
+            if len(parts) > 0 { parts = parts + "; " }
+            parts = parts + "M_min=" + str(min_M) + " < 3.5"
+        }
+        parts
+    }
+
+    let msg = "ghz_mermin_native: " + verdict_str +
+              " (M_mean=" + str(M_mean) + ", M_min=" + str(min_M) +
+              ", n_shots=" + str(n_shots) + ", n_trials=" + str(n_trials) +
+              ", engine=hexa_native)"
+
+    return GhzMerminNative {
+        ok: 1,
+        verdict: verdict_str,
+        M_mean: M_mean,
+        M_std: M_std,
+        M_min: min_M,
+        M_max: max_M,
+        E_XXX: E_XXX,
+        E_XYY: E_XYY,
+        E_YXY: E_YXY,
+        E_YYX: E_YYX,
+        n_shots: n_shots,
+        n_trials: n_trials,
+        engine: "hexa_native",
+        message: msg
+    }
+}

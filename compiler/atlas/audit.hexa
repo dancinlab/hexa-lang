@@ -1,0 +1,961 @@
+// HEXA Native Compiler — Wave 2.1 atlas audit surface
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Ported from ~/core/n6/algorithms/atlas_health.hexa (CC0-1.0, absorbed 2026-05-13)
+// and ~/core/n6/algorithms/atlas_health_export.hexa (CC0-1.0, absorbed 2026-05-13).
+//
+// Produces an AuditReport over the static rodata embed, the runtime
+// overlay, or the merged view. Replaces the n6-side health module's
+// disk-backed responsibilities with pure in-memory scans against the
+// AtlasIndex / overlay arrays.
+//
+// What we keep:
+//   - entry count + per-kind histogram
+//   - grade distribution
+//   - duplicate (kind, id) detection
+//   - orphan-ref detection (any edge target that no node defines)
+//   - malformed-line detection (header without a recognizable @<KIND>)
+//   - breakthrough count (grade.breakthrough OR raw contains "[N!]")
+//   - audit_to_json — JSON serializer for CI dashboards
+//
+// What we drop (vs the n6 source):
+//   - mtime-cache sidecar (we're not disk-backed)
+//   - chflags-lock state (no immutability flags)
+//   - blowup.jsonl sidecar (no separate edge file)
+//   - shell-out paths (awk / grep / sort) — pure-hexa scan instead
+
+use "compiler/atlas/parser"
+use "compiler/atlas/merger"
+use "compiler/atlas/overlay"
+// NOTE: static_index is intentionally NOT use'd here so callers can
+// audit overlay-only views without pulling the rodata embed into the
+// interp's working set. The audit_rodata/audit_merged convenience
+// wrappers live in compiler/atlas/audit_rodata.hexa instead.
+
+// --- types -----------------------------------------------------------------
+
+pub struct AuditReport {
+    audit_scope: string,      // "rodata" | "overlay" | "merged"
+    entry_count: i64,
+    p_count: i64,
+    c_count: i64,
+    l_count: i64,
+    e_count: i64,
+    f_count: i64,
+    r_count: i64,
+    s_count: i64,
+    x_count: i64,
+    q_count: i64,
+    grade_buckets: array,     // [string] — "[10*] 234" / "[10] 12" / ...
+    dup_count: i64,           // duplicate (kind, id) pairs
+    duplicates: array,        // [string] — "K:id" entries that collided
+    orphan_count: i64,        // edge targets referenced but never defined
+    orphan_sample: array,     // [string] — up to 32 sample orphan ids
+    malformed_count: i64,     // nodes whose kind == "" (sentinel)
+    breakthrough_count: i64,  // nodes flagged [!]
+    hypothesis_count: i64,    // nodes flagged [?]
+    verified_count: i64,      // nodes flagged [*]
+    // Honesty-triad coverage (measure-only): of the formula/law-bearing
+    // kinds (F, L, P, R), how many carry NO citation evidence — neither a
+    // `cite =` substring in raw nor a non-empty verified_by edge. A high
+    // cite_missing_count vs cite_present_count quantifies the gap between
+    // parsed [*] grade markers and recomputed/cited provenance.
+    cite_missing_count: i64,  // F/L/P/R nodes with no cite= and no verified_by
+    cite_present_count: i64,  // F/L/P/R nodes with a cite= or verified_by
+    // Per-domain coverage (measure-only): each node's `:: <domain>` token
+    // (parsed from the header line, matching parser.hexa's grammar) bucketed
+    // into a count. Nodes with no domain token bucket as "(none)". Answers
+    // "which science domains are under/zero-covered" — a coverage axis the
+    // KIND histogram can't surface (e.g. R-heavy but domain-skewed).
+    domain_buckets: array,    // [string] — "<domain> <count>" sorted by count desc
+    distinct_domain_count: i64, // number of distinct named domains (excl. "(none)")
+    no_domain_count: i64      // nodes whose header carries no `:: <domain>` token
+}
+
+// --- helpers ---------------------------------------------------------------
+
+fn _empty_report(scope_name: string) -> AuditReport {
+    return AuditReport {
+        audit_scope: scope_name,
+        entry_count: 0,
+        p_count: 0, c_count: 0, l_count: 0, e_count: 0,
+        f_count: 0, r_count: 0, s_count: 0, x_count: 0, q_count: 0,
+        grade_buckets: [],
+        dup_count: 0,
+        duplicates: [],
+        orphan_count: 0,
+        orphan_sample: [],
+        malformed_count: 0,
+        breakthrough_count: 0,
+        hypothesis_count: 0,
+        verified_count: 0,
+        cite_missing_count: 0,
+        cite_present_count: 0,
+        domain_buckets: [],
+        distinct_domain_count: 0,
+        no_domain_count: 0
+    }
+}
+
+// Find the index of `key` in parallel arrays (keys / counts), or -1.
+fn _bucket_find(keys: array, key: string) -> i64 {
+    let mut i = 0
+    while i < len(keys) {
+        if to_string(keys[i]) == key { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+// Render a grade marker key from a parsed GradeInfo, matching n6 ladder
+// keys: "[10*]" / "[10!]" / "[10*!]" / "[10?]" / "[10]" / "[N]". Nodes
+// without a grade marker bucket under "[--]".
+fn _grade_key(g: GradeInfo) -> string {
+    if g.value < 0 { return "[--]" }
+    let mut k = "[" + to_string(g.value)
+    if g.verified { k = k + "*" }
+    if g.breakthrough { k = k + "!" }
+    if g.hypothesis { k = k + "?" }
+    return k + "]"
+}
+
+// Increment a parallel-array bucket count for `key`.
+fn _bucket_bump(keys: array, counts: array, key: string) {
+    let idx = _bucket_find(keys, key)
+    if idx < 0 {
+        keys.push(key)
+        counts.push(1)
+        return
+    }
+    counts[idx] = counts[idx] + 1
+}
+
+// Build the assembled list of "[key] count" strings sorted by count desc.
+fn _bucket_format(keys: array, counts: array) -> array {
+    let n = len(keys)
+    // simple insertion-sort descending by count
+    let kk = []
+    let cc = []
+    let mut i = 0
+    while i < n {
+        kk.push(keys[i])
+        cc.push(counts[i])
+        i = i + 1
+    }
+    let mut a = 0
+    while a < n {
+        let mut b = a + 1
+        while b < n {
+            if cc[b] > cc[a] {
+                let tk = kk[a]; kk[a] = kk[b]; kk[b] = tk
+                let tc = cc[a]; cc[a] = cc[b]; cc[b] = tc
+            }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    let out = []
+    let mut j = 0
+    while j < n {
+        out.push(to_string(kk[j]) + " " + to_string(cc[j]))
+        j = j + 1
+    }
+    return out
+}
+
+// Bump per-kind counter on the report struct.
+fn _bump_kind(rep: AuditReport, kind: string) {
+    if kind == "P" { rep.p_count = rep.p_count + 1; return }
+    if kind == "C" { rep.c_count = rep.c_count + 1; return }
+    if kind == "L" { rep.l_count = rep.l_count + 1; return }
+    if kind == "E" { rep.e_count = rep.e_count + 1; return }
+    if kind == "F" { rep.f_count = rep.f_count + 1; return }
+    if kind == "R" { rep.r_count = rep.r_count + 1; return }
+    if kind == "S" { rep.s_count = rep.s_count + 1; return }
+    if kind == "X" { rep.x_count = rep.x_count + 1; return }
+    if kind == "Q" { rep.q_count = rep.q_count + 1; return }
+}
+
+// Detect a `[N!]` substring in raw text (covers nodes whose grade wasn't
+// parsed into structured fields — rodata embed defaults to value=-1).
+fn _raw_has_breakthrough(raw: string) -> bool {
+    return raw.index_of("!]") >= 0
+}
+
+fn _raw_has_verified(raw: string) -> bool {
+    return raw.index_of("*]") >= 0
+}
+
+fn _raw_has_hypothesis(raw: string) -> bool {
+    return raw.index_of("?]") >= 0
+}
+
+// Formula/law-bearing kinds whose claims should carry citation evidence:
+// F formulas, L laws, P primitives, R relations. (C constants / E
+// experiments / S symmetries / X crossings / Q open questions are excluded
+// from the cite-coverage axis — they are not formula assertions.)
+fn _kind_is_cite_bearing(kind: string) -> bool {
+    return kind == "F" || kind == "L" || kind == "P" || kind == "R"
+}
+
+// A node carries citation evidence if its raw text contains a `cite =`
+// substring OR it has at least one non-empty verified_by (|>) edge.
+fn _node_has_cite(node: AtlasNode) -> bool {
+    if node.raw.index_of("cite =") >= 0 { return true }
+    if node.edges.verified_by.len() > 0 { return true }
+    return false
+}
+
+// Local whitespace / trim helpers (parser.hexa's are private to that module).
+fn _au_is_ws(c: string) -> bool {
+    return c == " " || c == "\t"
+}
+
+fn _au_ltrim(s: string) -> string {
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        if !_au_is_ws(s.substring(i, i + 1)) { break }
+        i = i + 1
+    }
+    return s.substring(i, n)
+}
+
+fn _au_rtrim(s: string) -> string {
+    let n = len(s)
+    let mut i = n
+    while i > 0 {
+        if !_au_is_ws(s.substring(i - 1, i)) { break }
+        i = i - 1
+    }
+    return s.substring(0, i)
+}
+
+// Extract the `:: <domain>` token from a node's raw text, faithful to the
+// parser.hexa grammar `@<TYPE> <id> [= <expr>] [:: <domain>] [<grade>]`:
+//   - operate ONLY on the header line (first line of raw, before any "\n"),
+//     so `::` inside continuation prose / file paths can't leak in;
+//   - strip a trailing `[...]` grade marker (scan from the right, mirroring
+//     _extract_grade_marker) so `[10*]` isn't read as part of the domain;
+//   - take the text after the LAST " :: " in what remains, then keep only
+//     its first whitespace-delimited token (a single domain word).
+// Returns "(none)" when no domain token is present.
+fn _extract_domain(raw: string) -> string {
+    if len(raw) == 0 { return "(none)" }
+    // Header line = up to the first newline.
+    let nl = raw.index_of("\n")
+    let header = if nl >= 0 { raw.substring(0, nl) } else { raw }
+    // Right-trim, then drop a trailing "[...]" grade marker if present.
+    let mut s = _au_rtrim(header)
+    let hn = len(s)
+    if hn > 0 && s.substring(hn - 1, hn) == "]" {
+        let mut b = hn - 1
+        while b > 0 {
+            if s.substring(b - 1, b) == "[" { break }
+            b = b - 1
+        }
+        if b > 0 { s = _au_rtrim(s.substring(0, b - 1)) }
+    }
+    // Find the LAST " :: " separator (the domain sits just before the grade).
+    let needle = " :: "
+    let mut pos = -1
+    let mut scan = s.index_of(needle)
+    while scan >= 0 {
+        pos = scan
+        let nxt = s.substring(pos + 4, len(s)).index_of(needle)
+        if nxt < 0 { break }
+        scan = pos + 4 + nxt
+    }
+    if pos < 0 { return "(none)" }
+    // Domain text begins after " :: "; keep its first whitespace-delim token.
+    let after = _au_ltrim(s.substring(pos + 4, len(s)))
+    let an = len(after)
+    let mut e = 0
+    while e < an {
+        let c = after.substring(e, e + 1)
+        if _au_is_ws(c) { break }
+        e = e + 1
+    }
+    let tok = after.substring(0, e)
+    if len(tok) == 0 { return "(none)" }
+    return tok
+}
+
+// --- core audit ------------------------------------------------------------
+
+// audit_nodes — the workhorse. Walks `nodes`, fills `rep`, builds the
+// grade histogram, detects duplicates, and computes orphan refs by
+// cross-referencing parsed edges against the defined-id set.
+fn _audit_nodes(rep: AuditReport, nodes: array) {
+    let n = len(nodes)
+    rep.entry_count = n
+    let seen = {}                  // (kind|id) -> first_index
+    let defined = {}               // id -> true (for orphan check)
+    let grade_keys = []
+    let grade_counts = []
+    let domain_keys = []           // parallel domain histogram (incl. "(none)")
+    let domain_counts = []
+
+    let mut i = 0
+    while i < n {
+        let node = nodes[i]
+        // enrich grade/edges from raw if structured fields are absent.
+        let enriched = if node.grade.value < 0 && node.edges.depends_on.len() == 0
+            { enrich_node(node) } else { node }
+
+        if enriched.kind == "" {
+            rep.malformed_count = rep.malformed_count + 1
+            i = i + 1
+            continue
+        }
+
+        _bump_kind(rep, enriched.kind)
+        defined[enriched.id] = true
+
+        let key = enriched.kind + "|" + enriched.id
+        if has_key(seen, key) {
+            rep.dup_count = rep.dup_count + 1
+            if len(rep.duplicates) < 64 {
+                rep.duplicates.push(enriched.kind + ":" + enriched.id)
+            }
+        } else {
+            seen[key] = i
+        }
+
+        // Grade markers — prefer structured field, fall back to raw probe.
+        let gk = _grade_key(enriched.grade)
+        _bucket_bump(grade_keys, grade_counts, gk)
+        if enriched.grade.value >= 0 {
+            if enriched.grade.verified { rep.verified_count = rep.verified_count + 1 }
+            if enriched.grade.breakthrough { rep.breakthrough_count = rep.breakthrough_count + 1 }
+            if enriched.grade.hypothesis { rep.hypothesis_count = rep.hypothesis_count + 1 }
+        } else {
+            // raw-text fallback (covers frozen rodata).
+            if _raw_has_verified(enriched.raw) { rep.verified_count = rep.verified_count + 1 }
+            if _raw_has_breakthrough(enriched.raw) { rep.breakthrough_count = rep.breakthrough_count + 1 }
+            if _raw_has_hypothesis(enriched.raw) { rep.hypothesis_count = rep.hypothesis_count + 1 }
+        }
+
+        // Honesty-triad cite coverage (measure-only): tally F/L/P/R nodes
+        // by whether they carry any citation evidence.
+        if _kind_is_cite_bearing(enriched.kind) {
+            if _node_has_cite(enriched) {
+                rep.cite_present_count = rep.cite_present_count + 1
+            } else {
+                rep.cite_missing_count = rep.cite_missing_count + 1
+            }
+        }
+
+        // Per-domain coverage (measure-only): bucket by the `:: <domain>`
+        // header token; nodes with no token fall into the "(none)" bucket.
+        let dom = _extract_domain(enriched.raw)
+        _bucket_bump(domain_keys, domain_counts, dom)
+        if dom == "(none)" { rep.no_domain_count = rep.no_domain_count + 1 }
+
+        i = i + 1
+    }
+
+    rep.grade_buckets = _bucket_format(grade_keys, grade_counts)
+    rep.domain_buckets = _bucket_format(domain_keys, domain_counts)
+    // distinct NAMED domains = total buckets minus the "(none)" bucket (if any).
+    let mut dd = len(domain_keys)
+    if _bucket_find(domain_keys, "(none)") >= 0 { dd = dd - 1 }
+    rep.distinct_domain_count = dd
+
+    // Orphan refs: collect every depends_on / derives target and see
+    // which never appear as a defined id.
+    let orphan_seen = {}
+    let mut j = 0
+    while j < n {
+        let node = nodes[j]
+        let enriched = if node.grade.value < 0 && node.edges.depends_on.len() == 0
+            { enrich_node(node) } else { node }
+        let mut e = 0
+        let deps = enriched.edges.depends_on
+        while e < len(deps) {
+            let tgt = to_string(deps[e])
+            if !has_key(defined, tgt) && !has_key(orphan_seen, tgt) {
+                orphan_seen[tgt] = true
+                rep.orphan_count = rep.orphan_count + 1
+                if len(rep.orphan_sample) < 32 {
+                    rep.orphan_sample.push(tgt)
+                }
+            }
+            e = e + 1
+        }
+        let mut d = 0
+        let drvs = enriched.edges.derives
+        while d < len(drvs) {
+            let tgt = to_string(drvs[d])
+            if !has_key(defined, tgt) && !has_key(orphan_seen, tgt) {
+                orphan_seen[tgt] = true
+                rep.orphan_count = rep.orphan_count + 1
+                if len(rep.orphan_sample) < 32 {
+                    rep.orphan_sample.push(tgt)
+                }
+            }
+            d = d + 1
+        }
+        j = j + 1
+    }
+}
+
+// --- public API ------------------------------------------------------------
+
+// audit_nodes_with_scope — audit an arbitrary node array under the
+// given scope label. The thin building block; callers compose rodata /
+// overlay / merged views and label them.
+pub fn audit_nodes_with_scope(scope_name: string, nodes: array) -> AuditReport {
+    let rep = _empty_report(scope_name)
+    _audit_nodes(rep, nodes)
+    return rep
+}
+
+// audit_overlay — audit only the runtime overlay file. Pure overlay
+// path, no rodata pull.
+pub fn audit_overlay() -> AuditReport {
+    return audit_nodes_with_scope("overlay", overlay_load_cached())
+}
+
+// audit_rodata / audit_merged live in compiler/atlas/audit_rodata.hexa —
+// they pull the static rodata embed which inflates the interp working set.
+
+// --- Wave 2.2: JSON export -------------------------------------------------
+
+fn _jesc(s: string) -> string {
+    let n = len(s)
+    let parts = []
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "\\" { parts.push("\\\\") }
+        else if c == "\"" { parts.push("\\\"") }
+        else if c == "\n" { parts.push("\\n") }
+        else if c == "\r" { parts.push("\\r") }
+        else if c == "\t" { parts.push("\\t") }
+        else { parts.push(c) }
+        i = i + 1
+    }
+    return parts.join("")
+}
+
+fn _str_array_json(arr: array) -> string {
+    let parts = []
+    parts.push("[")
+    let n = len(arr)
+    let mut i = 0
+    while i < n {
+        parts.push("\"")
+        parts.push(_jesc(to_string(arr[i])))
+        parts.push("\"")
+        if i + 1 < n { parts.push(",") }
+        i = i + 1
+    }
+    parts.push("]")
+    return parts.join("")
+}
+
+// audit_to_json — emit a JSON object describing the report. Stable key
+// names suitable for CI dashboards / time-series.
+pub fn audit_to_json(rep: AuditReport) -> string {
+    let p = []
+    p.push("{")
+    p.push("\"scope\":\"")
+    p.push(_jesc(rep.audit_scope))
+    p.push("\",\"entry_count\":")
+    p.push(to_string(rep.entry_count))
+    p.push(",\"kind_counts\":{")
+    p.push("\"P\":" + to_string(rep.p_count))
+    p.push(",\"C\":" + to_string(rep.c_count))
+    p.push(",\"L\":" + to_string(rep.l_count))
+    p.push(",\"E\":" + to_string(rep.e_count))
+    p.push(",\"F\":" + to_string(rep.f_count))
+    p.push(",\"R\":" + to_string(rep.r_count))
+    p.push(",\"S\":" + to_string(rep.s_count))
+    p.push(",\"X\":" + to_string(rep.x_count))
+    p.push(",\"Q\":" + to_string(rep.q_count))
+    p.push("},\"grade_histogram\":")
+    p.push(_str_array_json(rep.grade_buckets))
+    p.push(",\"dup_count\":")
+    p.push(to_string(rep.dup_count))
+    p.push(",\"duplicates\":")
+    p.push(_str_array_json(rep.duplicates))
+    p.push(",\"orphan_count\":")
+    p.push(to_string(rep.orphan_count))
+    p.push(",\"orphan_sample\":")
+    p.push(_str_array_json(rep.orphan_sample))
+    p.push(",\"malformed_count\":")
+    p.push(to_string(rep.malformed_count))
+    p.push(",\"breakthrough_count\":")
+    p.push(to_string(rep.breakthrough_count))
+    p.push(",\"hypothesis_count\":")
+    p.push(to_string(rep.hypothesis_count))
+    p.push(",\"verified_count\":")
+    p.push(to_string(rep.verified_count))
+    p.push(",\"cite_missing_count\":")
+    p.push(to_string(rep.cite_missing_count))
+    p.push(",\"cite_present_count\":")
+    p.push(to_string(rep.cite_present_count))
+    p.push(",\"distinct_domain_count\":")
+    p.push(to_string(rep.distinct_domain_count))
+    p.push(",\"no_domain_count\":")
+    p.push(to_string(rep.no_domain_count))
+    p.push(",\"domain_histogram\":")
+    p.push(_str_array_json(rep.domain_buckets))
+    p.push("}")
+    return p.join("")
+}
+
+// audit_to_text — human-readable rendering of the report.
+pub fn audit_to_text(rep: AuditReport) -> string {
+    let p = []
+    p.push("=== atlas audit: " + rep.audit_scope + " ===\n")
+    p.push("  entries:        " + to_string(rep.entry_count) + "\n")
+    p.push("  P primitives:   " + to_string(rep.p_count) + "\n")
+    p.push("  C constants:    " + to_string(rep.c_count) + "\n")
+    p.push("  L laws:         " + to_string(rep.l_count) + "\n")
+    p.push("  E experiments:  " + to_string(rep.e_count) + "\n")
+    p.push("  F formulas:     " + to_string(rep.f_count) + "\n")
+    p.push("  R relations:    " + to_string(rep.r_count) + "\n")
+    p.push("  S symmetries:   " + to_string(rep.s_count) + "\n")
+    p.push("  X crossings:    " + to_string(rep.x_count) + "\n")
+    p.push("  Q open questions: " + to_string(rep.q_count) + "\n")
+    p.push("  verified [*]:   " + to_string(rep.verified_count) + "\n")
+    p.push("  breakthrough [!]: " + to_string(rep.breakthrough_count) + "\n")
+    p.push("  hypothesis [?]: " + to_string(rep.hypothesis_count) + "\n")
+    p.push("  duplicates:     " + to_string(rep.dup_count) + "\n")
+    p.push("  orphan refs:    " + to_string(rep.orphan_count) + "\n")
+    p.push("  malformed:      " + to_string(rep.malformed_count) + "\n")
+    p.push("  cite missing (F/L/P/R): " + to_string(rep.cite_missing_count) + "\n")
+    p.push("  cite present (F/L/P/R): " + to_string(rep.cite_present_count) + "\n")
+    p.push("  distinct domains: " + to_string(rep.distinct_domain_count) + "\n")
+    p.push("  no-domain nodes: " + to_string(rep.no_domain_count) + "\n")
+    p.push("  top domains (by count, up to 20):\n")
+    let mut d = 0
+    while d < len(rep.domain_buckets) && d < 20 {
+        p.push("    " + to_string(rep.domain_buckets[d]) + "\n")
+        d = d + 1
+    }
+    p.push("  grade histogram:\n")
+    let mut i = 0
+    while i < len(rep.grade_buckets) {
+        p.push("    " + to_string(rep.grade_buckets[i]) + "\n")
+        i = i + 1
+    }
+    if len(rep.orphan_sample) > 0 {
+        p.push("  orphan sample (up to 32):\n")
+        let mut j = 0
+        while j < len(rep.orphan_sample) {
+            p.push("    " + to_string(rep.orphan_sample[j]) + "\n")
+            j = j + 1
+        }
+    }
+    return p.join("")
+}
+
+// --- R5: active-acquisition ranking (Q / 🟡 / 🟠) ---------------------------
+//
+// Turns the audit measures into a PRIORITIZED to-acquire list: which
+// registered-but-unverified or open nodes to verify/acquire next. Read-only
+// (no node mutation, no fold). Verdict-tier model (ATLAS.md):
+//   🟠 INSUFFICIENT  — cite-bearing kind (F/L/P/R), NO cite & NO verified [*].
+//   🟡 CITATION-ONLY — cite-bearing & cited (cite= / |>) but NOT [*]-verified.
+//   Q  OPEN-QUESTION — kind "Q" open questions (discovery frontier).
+// Verified [*] nodes (🔵/🟢) are excluded. Composite priority:
+//   priority = tier_weight + domain_gap_weight + kind_weight
+//     tier_weight       : 🟠=300 🟡=200 Q=100  (deepest gap first)
+//     domain_gap_weight : clamp(60 - domain_size, 0, 60) — sparse domains rank
+//                         higher (acquiring there moves an under-covered domain)
+//     kind_weight       : F=8 L=6 P=4 R=2 Q=0  (formula assertions first)
+// Ties broken by id-order (earlier = more foundational).
+
+pub struct AcqItem {
+    kind: string,
+    id: string,
+    tier: string,        // "🟠" | "🟡" | "Q"
+    domain: string,
+    domain_size: i64,    // sibling count in the same domain bucket
+    priority: i64
+}
+
+pub struct AcqReport {
+    audit_scope: string,
+    frontier_count: i64,   // total 🟠 + 🟡 + Q nodes
+    insufficient_count: i64, // 🟠
+    citation_only_count: i64, // 🟡
+    open_question_count: i64, // Q
+    top_k: i64,            // how many items the `items` list holds
+    items: array           // [AcqItem] — ranked desc by priority, top_k deep
+}
+
+// Per-tier kind weight (formula assertions rank above relations).
+fn _acq_kind_weight(kind: string) -> i64 {
+    if kind == "F" { return 8 }
+    if kind == "L" { return 6 }
+    if kind == "P" { return 4 }
+    if kind == "R" { return 2 }
+    return 0
+}
+
+// Domain-gap weight: sparse domains score higher (acquiring there moves the
+// needle more). clamp(60 - size, 0, 60). size includes the node itself.
+fn _acq_domain_gap_weight(size: i64) -> i64 {
+    let w = 60 - size
+    if w < 0 { return 0 }
+    if w > 60 { return 60 }
+    return w
+}
+
+// Classify a node into a frontier tier, or "" if it is not a frontier node
+// (verified, or a non-frontier kind like C/E/S/X).
+fn _acq_tier_of(node: AtlasNode) -> string {
+    if node.kind == "Q" { return "Q" }
+    if !_kind_is_cite_bearing(node.kind) { return "" }
+    // cite-bearing: exclude recompute-verified ([*] grade or *] raw marker).
+    let verified = if node.grade.value >= 0 { node.grade.verified }
+                   else { _raw_has_verified(node.raw) }
+    if verified { return "" }
+    if _node_has_cite(node) { return "🟡" }
+    return "🟠"
+}
+
+fn _acq_tier_weight(tier: string) -> i64 {
+    if tier == "🟠" { return 300 }
+    if tier == "🟡" { return 200 }
+    return 100   // Q
+}
+
+// audit_acquisition_with_scope — enumerate + rank the acquisition frontier
+// over `nodes`. top_k bounds the returned `items` (counts are over the full
+// frontier regardless of top_k). Read-only.
+pub fn audit_acquisition_with_scope(scope_name: string, nodes: array, top_k: i64) -> AcqReport {
+    let n = len(nodes)
+    // Pass 1: per-domain sibling counts (only over frontier-eligible nodes).
+    let dom_keys = []
+    let dom_counts = []
+    let mut i = 0
+    while i < n {
+        let node0 = nodes[i]
+        let node = if node0.grade.value < 0 && node0.edges.depends_on.len() == 0
+            { enrich_node(node0) } else { node0 }
+        if _acq_tier_of(node) != "" {
+            _bucket_bump(dom_keys, dom_counts, _extract_domain(node.raw))
+        }
+        i = i + 1
+    }
+    // Pass 2: build frontier items with composite priority.
+    let items = []
+    let mut insuff = 0
+    let mut cite_only = 0
+    let mut openq = 0
+    let mut j = 0
+    while j < n {
+        let node0 = nodes[j]
+        let node = if node0.grade.value < 0 && node0.edges.depends_on.len() == 0
+            { enrich_node(node0) } else { node0 }
+        let tier = _acq_tier_of(node)
+        if tier == "" { j = j + 1; continue }
+        if tier == "🟠" { insuff = insuff + 1 }
+        else if tier == "🟡" { cite_only = cite_only + 1 }
+        else { openq = openq + 1 }
+        let dom = _extract_domain(node.raw)
+        let di = _bucket_find(dom_keys, dom)
+        let dsize = if di >= 0 { to_int(to_string(dom_counts[di])) } else { 1 }
+        let prio = _acq_tier_weight(tier)
+            + _acq_domain_gap_weight(dsize)
+            + _acq_kind_weight(node.kind)
+        items.push(AcqItem {
+            kind: node.kind,
+            id: node.id,
+            tier: tier,
+            domain: dom,
+            domain_size: dsize,
+            priority: prio
+        })
+        j = j + 1
+    }
+    // Sort items by priority desc (selection-sort; top_k slice taken after).
+    let m = len(items)
+    let mut a = 0
+    while a < m {
+        let mut best = a
+        let mut b = a + 1
+        while b < m {
+            if items[b].priority > items[best].priority { best = b }
+            b = b + 1
+        }
+        if best != a {
+            let tmp = items[a]; items[a] = items[best]; items[best] = tmp
+        }
+        a = a + 1
+    }
+    // Slice to top_k (top_k <= 0 means "all").
+    let keep = if top_k <= 0 || top_k > m { m } else { top_k }
+    let sliced = []
+    let mut k = 0
+    while k < keep {
+        sliced.push(items[k])
+        k = k + 1
+    }
+    return AcqReport {
+        audit_scope: scope_name,
+        frontier_count: m,
+        insufficient_count: insuff,
+        citation_only_count: cite_only,
+        open_question_count: openq,
+        top_k: keep,
+        items: sliced
+    }
+}
+
+// audit_acquisition_overlay — frontier ranking over the runtime overlay only.
+pub fn audit_acquisition_overlay(top_k: i64) -> AcqReport {
+    return audit_acquisition_with_scope("overlay", overlay_load_cached(), top_k)
+}
+
+// acquisition_to_text — human-readable ranked frontier.
+pub fn acquisition_to_text(rep: AcqReport) -> string {
+    let p = []
+    p.push("=== atlas acquisition frontier: " + rep.audit_scope + " ===\n")
+    p.push("  frontier total:    " + to_string(rep.frontier_count) + "\n")
+    p.push("  🟠 insufficient:   " + to_string(rep.insufficient_count)
+        + "  (cite-bearing · no cite · no recompute)\n")
+    p.push("  🟡 citation-only:  " + to_string(rep.citation_only_count)
+        + "  (cited · not recompute-verified)\n")
+    p.push("  Q  open question:  " + to_string(rep.open_question_count) + "\n")
+    p.push("  top-" + to_string(rep.top_k) + " by priority"
+        + " (priority = tier + domain-gap + kind):\n")
+    let mut i = 0
+    while i < len(rep.items) {
+        let it = rep.items[i]
+        p.push("    " + to_string(i + 1) + ". "
+            + it.tier + " " + it.kind + ":" + it.id
+            + "  p=" + to_string(it.priority)
+            + "  dom=" + it.domain + "(" + to_string(it.domain_size) + ")\n")
+        i = i + 1
+    }
+    return p.join("")
+}
+
+// --- R7: numerology quarantine tier (read-only isolation) ------------------
+//
+// NUMEROLOGY-style nodes assert a suspicious numeric coincidence (a ratio /
+// equality between otherwise-unrelated constants) WITHOUT a derivation or
+// citation. They should be visibly QUARANTINED, not silently mixed among
+// rigorous nodes. This sub-mode DETECTS + ISOLATES them — READ-ONLY (no node
+// mutation, no grade change). CONSERVATIVE: false-positives are costly, so a
+// node must meet ALL FOUR signals (any one alone is insufficient):
+//   (1) coincidence SHAPE in the header CLAIM BODY (after the `id = ` sep):
+//       a `≈`, a numeric ratio-equality (`a/b = …`), or a numeric `= … = …`
+//       chain. Confining to the header body excludes robustness/falsifier
+//       nodes that only DISCUSS "coincidence" in `=>` edges (they refute it).
+//   (2) a coincidence/numerology KEYWORD in raw (numerolog / coincidence /
+//       수치일치 / coincidence_not_proof) — ordinary formulas lack this.
+//   (3) NO verification — not [*]-graded (structured grade or raw `*]`).
+//   (4) NO citation — no `cite =` and no `|>` verified_by (via _node_has_cite).
+
+pub struct NumItem {
+    kind: string,
+    id: string,
+    domain: string,
+    header: string       // the trimmed header claim line (the coincidence)
+}
+
+pub struct NumerologyReport {
+    audit_scope: string,
+    scanned_count: i64,      // total nodes scanned
+    flagged_count: i64,      // nodes meeting the full numerology signature
+    items: array             // [NumItem] — quarantined nodes (id order)
+}
+
+// Coincidence/numerology keyword probe (case-insensitive substring set).
+fn _nu_has_coinc_keyword(raw: string) -> bool {
+    let lo = raw.to_lower()
+    if lo.index_of("numerolog") >= 0 { return true }
+    if lo.index_of("coincidence") >= 0 { return true }
+    if lo.index_of("coincidence_not_proof") >= 0 { return true }
+    if raw.index_of("수치일치") >= 0 { return true }   // KO: "numeric match"
+    return false
+}
+
+// First (header) line of a node's raw text.
+fn _nu_header_line(raw: string) -> string {
+    let nl = raw.index_of("\n")
+    let h = if nl >= 0 { raw.substring(0, nl) } else { raw }
+    return _au_rtrim(_au_ltrim(h))
+}
+
+// True if `s` contains a second `=` after position `from` (a `= … = …`
+// chain — characteristic of "a = b = c" numeric re-writes).
+fn _nu_has_second_eq(s: string, from: i64) -> bool {
+    let rest = s.substring(from, len(s))
+    return rest.index_of("=") >= 0
+}
+
+// True if a single ascii digit sits anywhere in `s`.
+fn _nu_has_digit(s: string) -> bool {
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c >= "0" && c <= "9" { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// Strip the leading `id = ` value separator so the shape check sees only the
+// CLAIM BODY. Without this, the node's own `id = body` separator would be
+// miscounted as part of a `= … = …` chain (e.g. an HONEST "…-non-applicability
+// = n=6 … 연결 없음" denial would falsely flag). Drops up to & incl the first
+// " = "; if absent, returns the header unchanged.
+fn _nu_claim_body(header: string) -> string {
+    let sep = header.index_of(" = ")
+    if sep >= 0 { return header.substring(sep + 3, len(header)) }
+    return header
+}
+
+// Coincidence SHAPE over the CLAIM BODY: a `≈`, a numeric ratio-equality
+// (`/` left of an `=`, e.g. `12/5=σ(6)/…`), or a numeric `= … = …` chain
+// (e.g. `beta_0 = sigma(6) - sopfr(6) = 12 - 5 = 7`).
+fn _nu_header_has_coincidence_shape(header: string) -> bool {
+    let body = _nu_claim_body(header)
+    if body.index_of("≈") >= 0 { return true }
+    let eq = body.index_of("=")
+    if eq < 0 { return false }
+    // ratio-equality: a `/` appears left of the first `=`.
+    let slash = body.index_of("/")
+    if slash >= 0 && slash < eq && _nu_has_digit(body) { return true }
+    // numeric multi-`=` chain (a second `=` past the first) with a digit.
+    if _nu_has_second_eq(body, eq + 1) && _nu_has_digit(body) { return true }
+    return false
+}
+
+// Verified marker (structured grade OR raw `*]` fallback for frozen rodata).
+fn _nu_is_verified(node: AtlasNode) -> bool {
+    if node.grade.value >= 0 { return node.grade.verified }
+    return _raw_has_verified(node.raw)
+}
+
+// The full conservative numerology signature (all four signals).
+fn _nu_is_numerology(node: AtlasNode) -> bool {
+    if !_nu_has_coinc_keyword(node.raw) { return false }            // (2)
+    if !_nu_header_has_coincidence_shape(_nu_header_line(node.raw)) { return false } // (1)
+    if _nu_is_verified(node) { return false }                       // (3)
+    if _node_has_cite(node) { return false }                        // (4)
+    return true
+}
+
+// audit_numerology_with_scope — enumerate the numerology quarantine tier
+// over `nodes`. Read-only: no node mutation, no grade change.
+pub fn audit_numerology_with_scope(scope_name: string, nodes: array) -> NumerologyReport {
+    let n = len(nodes)
+    let items = []
+    let mut i = 0
+    while i < n {
+        let node0 = nodes[i]
+        let node = if node0.grade.value < 0 && node0.edges.depends_on.len() == 0
+            { enrich_node(node0) } else { node0 }
+        if node.kind != "" && _nu_is_numerology(node) {
+            items.push(NumItem {
+                kind: node.kind,
+                id: node.id,
+                domain: _extract_domain(node.raw),
+                header: _nu_header_line(node.raw)
+            })
+        }
+        i = i + 1
+    }
+    return NumerologyReport {
+        audit_scope: scope_name,
+        scanned_count: n,
+        flagged_count: len(items),
+        items: items
+    }
+}
+
+// audit_numerology_overlay — quarantine scan over the runtime overlay only.
+pub fn audit_numerology_overlay() -> NumerologyReport {
+    return audit_numerology_with_scope("overlay", overlay_load_cached())
+}
+
+// numerology_to_text — human-readable quarantine list.
+pub fn numerology_to_text(rep: NumerologyReport) -> string {
+    let p = []
+    p.push("=== atlas numerology quarantine: " + rep.audit_scope + " ===\n")
+    p.push("  scanned:           " + to_string(rep.scanned_count) + "\n")
+    p.push("  ⚠ quarantined:     " + to_string(rep.flagged_count)
+        + "  (coincidence-shape header · numerology keyword · no [*] · no cite)\n")
+    let mut i = 0
+    while i < len(rep.items) {
+        let it = rep.items[i]
+        p.push("    " + to_string(i + 1) + ". "
+            + it.kind + ":" + it.id
+            + "  dom=" + it.domain + "\n")
+        p.push("       " + it.header + "\n")
+        i = i + 1
+    }
+    if rep.flagged_count == 0 {
+        p.push("  (no numerology-tier nodes detected)\n")
+    }
+    return p.join("")
+}
+
+// numerology_to_json — machine-readable quarantine list for CI dashboards.
+pub fn numerology_to_json(rep: NumerologyReport) -> string {
+    let p = []
+    p.push("{\"scope\":\"")
+    p.push(_jesc(rep.audit_scope))
+    p.push("\",\"scanned_count\":")
+    p.push(to_string(rep.scanned_count))
+    p.push(",\"flagged_count\":")
+    p.push(to_string(rep.flagged_count))
+    p.push(",\"items\":[")
+    let mut i = 0
+    while i < len(rep.items) {
+        let it = rep.items[i]
+        if i > 0 { p.push(",") }
+        p.push("{\"kind\":\"" + _jesc(it.kind) + "\"")
+        p.push(",\"id\":\"" + _jesc(it.id) + "\"")
+        p.push(",\"domain\":\"" + _jesc(it.domain) + "\"")
+        p.push(",\"header\":\"" + _jesc(it.header) + "\"}")
+        i = i + 1
+    }
+    p.push("]}")
+    return p.join("")
+}
+
+// acquisition_to_json — machine-readable ranked frontier for CI dashboards.
+pub fn acquisition_to_json(rep: AcqReport) -> string {
+    let p = []
+    p.push("{\"scope\":\"")
+    p.push(_jesc(rep.audit_scope))
+    p.push("\",\"frontier_count\":")
+    p.push(to_string(rep.frontier_count))
+    p.push(",\"insufficient_count\":")
+    p.push(to_string(rep.insufficient_count))
+    p.push(",\"citation_only_count\":")
+    p.push(to_string(rep.citation_only_count))
+    p.push(",\"open_question_count\":")
+    p.push(to_string(rep.open_question_count))
+    p.push(",\"top_k\":")
+    p.push(to_string(rep.top_k))
+    p.push(",\"items\":[")
+    let mut i = 0
+    while i < len(rep.items) {
+        let it = rep.items[i]
+        if i > 0 { p.push(",") }
+        p.push("{\"rank\":" + to_string(i + 1))
+        p.push(",\"tier\":\"" + _jesc(it.tier) + "\"")
+        p.push(",\"kind\":\"" + _jesc(it.kind) + "\"")
+        p.push(",\"id\":\"" + _jesc(it.id) + "\"")
+        p.push(",\"domain\":\"" + _jesc(it.domain) + "\"")
+        p.push(",\"domain_size\":" + to_string(it.domain_size))
+        p.push(",\"priority\":" + to_string(it.priority) + "}")
+        i = i + 1
+    }
+    p.push("]}")
+    return p.join("")
+}

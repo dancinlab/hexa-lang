@@ -1,0 +1,575 @@
+// stdlib/net/websocket_native.hexa — native RFC 6455 WebSocket client (ws:// only)
+//
+// @module(slug="stdlib-net-websocket-native", desc="hexa-native RFC 6455 WebSocket client over raw TCP — ws:// (plaintext) only")
+// @usage(import stdlib/net/websocket_native; let h = ws_connect_native("ws://127.0.0.1:8080/feed"); let m = ws_recv_native(h, 5))
+//
+// @version 1.0.0
+// @capabilities [ws_connect_native, ws_send_native, ws_recv_native, ws_close_native, ws_supports_native]
+// @stability experimental
+// @since 2026-05-23
+// @maintainer anima-core
+// @priority P1
+//
+// PROBLEM (archive/patches/websocket-streaming-client-websocat-dependency.md)
+//   stdlib/websocket.hexa's STREAMING client (ws_connect/ws_recv) shells out
+//   to the external `websocat` binary; the python3 fallback is one-shot only.
+//   On a host with neither, a persistent WS *subscriber* (connect once, hold
+//   the socket open, yield frames as they arrive) is impossible. anima's
+//   chat-broker subscriber daemon hit exactly this and had to fall back to
+//   HTTP polling.
+//
+// FIX (this module)
+//   A self-contained hexa-native WS client on top of stdlib/net/socket
+//   (raw TCP via net_connect / net_read_bytes / net_write_bytes) — NO
+//   shell-out for the native path. Implements the RFC 6455 subset anima's
+//   LOCAL chat broker needs:
+//     · HTTP/1.1 Upgrade handshake + Sec-WebSocket-Key/Accept (sha1+base64)
+//     · client→server frames are masked (4-byte XOR, as the spec requires)
+//     · server→client frame parse: 7 / 7+16 / 7+64 length forms
+//     · text (0x1), close (0x8), ping (0x9) → auto-pong, pong (0xA) ignored
+//
+// SCOPE — ws:// ONLY. wss:// needs a TLS handshake (multi-week C-runtime
+//   addition: no hexa TLS primitive yet). For wss:// callers MUST fall back
+//   to the websocat-wrapper path in stdlib/websocket.hexa. Use
+//   ws_supports_native(url) to detect the degraded case cheaply (the patch's
+//   option 3) BEFORE attempting a connect.
+//
+// Caveats (C3):
+//   · Plaintext only. No TLS, no permessage-deflate, no fragmentation
+//     reassembly across continuation frames (FIN=0 + opcode 0x0). A single
+//     logical text message that the server splits into continuation frames
+//     surfaces as the first fragment only — local brokers send whole frames.
+//   · The mask key is derived from random() + mono_ns(), NOT a CSPRNG. ws://
+//     is plaintext anyway; masking exists to defeat proxy cache-poisoning,
+//     not to provide confidentiality. Adequate for a LOCAL broker.
+//   · ws_recv_native blocks up to timeout_sec via net_set_timeout (SO_RCVTIMEO)
+//     and returns "" on timeout / close. Control frames (ping/close) are
+//     handled transparently inside the recv loop.
+//   · Payloads are decoded as raw bytes → hexa string via bytes_to_str_raw.
+//     Practical size limit is hexa-string / array sizing (a few MB), not the
+//     RFC's 2^63. Frames > a few MB are not a target here.
+
+use "stdlib/net/socket"
+
+// ── ws_supports_native — cheap scheme probe (patch option 3) ────────
+//
+// true  for ws://  (this module can serve it natively)
+// false for wss:// (or any non-ws scheme) — caller must use the
+//        websocat-wrapper fallback in stdlib/websocket.hexa.
+pub fn ws_supports_native(url: string) -> bool {
+    return url.substring(0, 5) == "ws://"
+}
+
+// ── _ws_url_parse — split ws://host[:port]/path?query ───────────────
+//
+// Returns a map {"ok": bool, "host": string, "port": int, "path": string,
+// "error": string}. Default port 80 when omitted. Path defaults to "/".
+fn _ws_url_parse(url: string) {
+    let r = #{}
+    r["ok"] = false
+    r["host"] = ""
+    r["port"] = 80
+    r["path"] = "/"
+    r["error"] = ""
+    if !ws_supports_native(url) {
+        r["error"] = "ws_native: only ws:// is supported (got: " + url + ")"
+        return r
+    }
+    // Strip scheme.
+    let rest = url.substring(5, len(url))
+    // Split authority / path at first '/'.
+    let slash = rest.index_of("/")
+    let mut authority = rest
+    let mut path = "/"
+    if slash >= 0 {
+        authority = rest.substring(0, slash)
+        path = rest.substring(slash, len(rest))
+    }
+    if len(path) == 0 { path = "/" }
+    // Split host : port.
+    let colon = authority.index_of(":")
+    if colon >= 0 {
+        r["host"] = authority.substring(0, colon)
+        let port_str = authority.substring(colon + 1, len(authority))
+        let p = to_int(port_str)
+        if p > 0 { r["port"] = p }
+    } else {
+        r["host"] = authority
+        r["port"] = 80
+    }
+    if len(to_string(r["host"])) == 0 {
+        r["error"] = "ws_native: empty host in url: " + url
+        return r
+    }
+    r["path"] = path
+    r["ok"] = true
+    return r
+}
+
+// ── _ws_rand_byte — derive one pseudo-random byte in [0,255] ────────
+//
+// Combines the [0,1) PRNG with the monotonic-ns low byte. ws:// is
+// plaintext; masking is anti-cache-poison, not confidentiality, so a
+// CSPRNG is unnecessary here.
+fn _ws_rand_byte() -> int {
+    let a = to_int(random() * 256.0)
+    let b = mono_ns()
+    let v = (a + b) % 256
+    if v < 0 { return v + 256 }
+    return v
+}
+
+// ── _ws_rand_bytes_str — n pseudo-random bytes as a raw hexa string ──
+fn _ws_rand_bytes_str(n: int) -> string {
+    let mut arr = []
+    let mut i = 0
+    while i < n {
+        arr = arr + [_ws_rand_byte()]
+        i = i + 1
+    }
+    return bytes_to_str_raw(arr)
+}
+
+// ── _ws_str_to_bytes — hexa string → [int] byte array ───────────────
+//
+// Uses char_code (byte read at index) so binary payloads survive.
+fn _ws_str_to_bytes(s: string) {
+    let mut arr = []
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        arr = arr + [char_code(s, i)]
+        i = i + 1
+    }
+    return arr
+}
+
+// ── _ws_make_handle — internal connection-handle map ────────────────
+fn _ws_make_handle() {
+    let h = #{}
+    h["ok"] = false
+    h["fd"] = -1
+    h["error"] = ""
+    h["backend"] = "native"
+    // Receive buffer carry-over (server bytes read past the current frame).
+    h["buf"] = []
+    return h
+}
+
+// ── ws_connect_native — open + RFC 6455 handshake over raw TCP ───────
+//
+// Returns a handle map {"ok": bool, "fd": int, "error": string,
+// "backend": "native", "buf": [int]}. On success "ok"=true and "fd" is
+// the connected socket. Caller uses ws_send_native / ws_recv_native /
+// ws_close_native with the handle.
+//
+// timeout_sec applies to the post-handshake recv loop (SO_RCVTIMEO).
+pub fn ws_connect_native(url: string) {
+    let h = _ws_make_handle()
+    let p = _ws_url_parse(url)
+    if !p["ok"] {
+        h["error"] = to_string(p["error"])
+        return h
+    }
+    let host = to_string(p["host"])
+    let port = to_int(p["port"])
+    let path = to_string(p["path"])
+
+    let addr = host + ":" + to_string(port)
+    let fd = net_connect(addr)
+    if fd < 0 {
+        h["error"] = "ws_native: net_connect(" + addr + ") failed: " + to_string(fd)
+        return h
+    }
+
+    // Sec-WebSocket-Key = base64(16 random bytes).
+    let key = base64_encode(_ws_rand_bytes_str(16))
+
+    let req = "GET " + path + " HTTP/1.1\r\n"
+        + "Host: " + host + ":" + to_string(port) + "\r\n"
+        + "Upgrade: websocket\r\n"
+        + "Connection: Upgrade\r\n"
+        + "Sec-WebSocket-Key: " + key + "\r\n"
+        + "Sec-WebSocket-Version: 13\r\n"
+        + "User-Agent: hexa-stdlib-websocket-native/1.0\r\n"
+        + "\r\n"
+
+    let wrote = net_write(fd, req)
+    if wrote < 0 {
+        net_close(fd)
+        h["error"] = "ws_native: handshake write failed: " + to_string(wrote)
+        return h
+    }
+
+    // Read the HTTP response until the header terminator \r\n\r\n.
+    let mut head = ""
+    let mut tries = 0
+    while head.index_of("\r\n\r\n") < 0 {
+        if tries >= 64 {
+            net_close(fd)
+            h["error"] = "ws_native: handshake header too long / no terminator"
+            return h
+        }
+        let chunk = net_read(fd)
+        if len(chunk) == 0 {
+            net_close(fd)
+            h["error"] = "ws_native: connection closed during handshake"
+            return h
+        }
+        head = head + chunk
+        tries = tries + 1
+    }
+
+    // Validate the 101 status line.
+    let term = head.index_of("\r\n\r\n")
+    let header_block = head.substring(0, term)
+    if header_block.index_of("101") < 0 {
+        net_close(fd)
+        let line_end = header_block.index_of("\r\n")
+        let status_line = if line_end >= 0 { header_block.substring(0, line_end) } else { header_block }
+        h["error"] = "ws_native: handshake not 101: " + status_line
+        return h
+    }
+
+    // Verify Sec-WebSocket-Accept == base64(sha1(key + magic)).
+    let magic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+    let expect = base64_encode(sha1_bytes(key + magic))
+    // Case-insensitive substring check (header names/values vary in case).
+    if header_block.to_lower().index_of(expect.to_lower()) < 0 {
+        net_close(fd)
+        h["error"] = "ws_native: Sec-WebSocket-Accept mismatch (expected " + expect + ")"
+        return h
+    }
+
+    // Any bytes the server sent past the header terminator are the start
+    // of the first WS frame — carry them into the recv buffer.
+    let extra = head.substring(term + 4, len(head))
+    if len(extra) > 0 {
+        h["buf"] = _ws_str_to_bytes(extra)
+    }
+
+    h["ok"] = true
+    h["fd"] = fd
+    return h
+}
+
+// ── _ws_encode_frame — build a masked client frame as [int] ─────────
+//
+// opcode: 0x1 text, 0x8 close, 0x9 ping, 0xA pong. payload is a hexa
+// string (its bytes). FIN is always 1 (no fragmentation on send).
+fn _ws_encode_frame(opcode: int, payload: string) {
+    let mut frame = []
+    // Byte 0: FIN=1 | opcode.
+    frame = frame + [128 + (opcode % 16)]
+    let n = len(payload)
+    // Byte 1+: MASK=1 | length form.
+    if n < 126 {
+        frame = frame + [128 + n]
+    } else {
+        if n < 65536 {
+            frame = frame + [128 + 126]
+            frame = frame + [(n / 256) % 256]
+            frame = frame + [n % 256]
+        } else {
+            frame = frame + [128 + 127]
+            // 64-bit length, big-endian. hexa ints are 64-bit; emit 8 bytes.
+            let mut shift = 56
+            while shift >= 0 {
+                frame = frame + [(n / _ws_pow2(shift)) % 256]
+                shift = shift - 8
+            }
+        }
+    }
+    // 4-byte masking key.
+    let m0 = _ws_rand_byte()
+    let m1 = _ws_rand_byte()
+    let m2 = _ws_rand_byte()
+    let m3 = _ws_rand_byte()
+    let mask = [m0, m1, m2, m3]
+    frame = frame + mask
+    // Masked payload: byte[i] XOR mask[i % 4].
+    let mut i = 0
+    while i < n {
+        let b = char_code(payload, i)
+        let k = mask[i % 4]
+        frame = frame + [_ws_xor_byte(b, k)]
+        i = i + 1
+    }
+    return frame
+}
+
+// _ws_pow2 — 2^n for n in {0,8,16,...,56}. Avoids bit-shift operators
+// whose hexa support varies; multiply-loop is clear and exact for the
+// 8 byte boundaries used by the 64-bit length form.
+fn _ws_pow2(n: int) -> int {
+    let mut r = 1
+    let mut i = 0
+    while i < n {
+        r = r * 2
+        i = i + 1
+    }
+    return r
+}
+
+// _ws_xor_byte — byte-wise XOR via arithmetic (no '^' operator reliance).
+// Computes a XOR b for two values in [0,255] bit by bit.
+fn _ws_xor_byte(a: int, b: int) -> int {
+    let mut result = 0
+    let mut bit = 1
+    let mut x = a
+    let mut y = b
+    let mut i = 0
+    while i < 8 {
+        let ax = x % 2
+        let by = y % 2
+        if ax != by {
+            result = result + bit
+        }
+        x = x / 2
+        y = y / 2
+        bit = bit * 2
+        i = i + 1
+    }
+    return result
+}
+
+// ── ws_send_native — send one text frame ────────────────────────────
+pub fn ws_send_native(h, message: string) -> bool {
+    if type_of(h) != "map" { return false }
+    if !h["ok"] { return false }
+    let fd = to_int(h["fd"])
+    if fd < 0 { return false }
+    let frame = _ws_encode_frame(1, message)
+    let wrote = net_write_bytes(fd, frame)
+    return wrote >= 0
+}
+
+// ── _ws_fill — ensure at least `need` bytes are buffered on the handle ─
+//
+// Reads from the socket (net_read_bytes, up to 65536/call) until the
+// handle buffer holds `need` bytes or the peer closes. Returns the
+// (possibly grown) buffer; caller checks len() to detect EOF.
+fn _ws_fill(h, need: int) {
+    let fd = to_int(h["fd"])
+    let mut buf = h["buf"]
+    let mut tries = 0
+    while len(buf) < need {
+        if tries >= 4096 { return buf }
+        let chunk = net_read_bytes(fd, 65536)
+        if len(chunk) == 0 {
+            // EOF or timeout — return what we have.
+            h["buf"] = buf
+            return buf
+        }
+        buf = buf + chunk
+        tries = tries + 1
+    }
+    h["buf"] = buf
+    return buf
+}
+
+// ── _ws_take — pop the first `n` bytes off the handle buffer ─────────
+fn _ws_take(h, n: int) {
+    let buf = h["buf"]
+    let mut out = []
+    let mut i = 0
+    while i < n {
+        out = out + [buf[i]]
+        i = i + 1
+    }
+    let mut rest = []
+    let total = len(buf)
+    let mut j = n
+    while j < total {
+        rest = rest + [buf[j]]
+        j = j + 1
+    }
+    h["buf"] = rest
+    return out
+}
+
+// ── ws_recv_native — block up to timeout_sec, return one text frame ──
+//
+// Returns the decoded text payload, or "" on timeout / close. Control
+// frames are handled transparently: ping → auto-pong then keep reading;
+// close → return "". A non-text data frame returns "" (caller may retry).
+pub fn ws_recv_native(h, timeout_sec: int) -> string {
+    if type_of(h) != "map" { return "" }
+    if !h["ok"] { return "" }
+    let fd = to_int(h["fd"])
+    if fd < 0 { return "" }
+    let t = if timeout_sec > 0 { timeout_sec } else { 30 }
+    net_set_timeout(fd, t * 1000)
+
+    // Frame header: at least 2 bytes.
+    let two = _ws_fill(h, 2)
+    if len(two) < 2 { return "" }
+    let header = _ws_take(h, 2)
+    let b0 = header[0]
+    let b1 = header[1]
+    let opcode = b0 % 16
+    let masked = b1 >= 128
+    let mut plen = b1 % 128
+
+    if plen == 126 {
+        let ext = _ws_fill(h, 2)
+        if len(ext) < 2 { return "" }
+        let lb = _ws_take(h, 2)
+        plen = lb[0] * 256 + lb[1]
+    } else {
+        if plen == 127 {
+            let ext = _ws_fill(h, 8)
+            if len(ext) < 8 { return "" }
+            let lb = _ws_take(h, 8)
+            // 64-bit big-endian; hexa int is 64-bit. Top bit must be 0 (RFC).
+            let mut val = 0
+            let mut k = 0
+            while k < 8 {
+                val = val * 256 + lb[k]
+                k = k + 1
+            }
+            plen = val
+        }
+    }
+
+    // Server→client frames are unmasked per RFC, but tolerate masked.
+    let mut mkey = [0, 0, 0, 0]
+    if masked {
+        let mext = _ws_fill(h, 4)
+        if len(mext) < 4 { return "" }
+        mkey = _ws_take(h, 4)
+    }
+
+    // Payload.
+    let body_bytes = if plen > 0 {
+        let pext = _ws_fill(h, plen)
+        if len(pext) < plen { [] } else { _ws_take(h, plen) }
+    } else {
+        []
+    }
+    if plen > 0 && len(body_bytes) < plen {
+        // Short read (timeout / close mid-frame).
+        return ""
+    }
+
+    // Unmask if needed.
+    let mut payload = []
+    if masked {
+        let mut i = 0
+        while i < plen {
+            payload = payload + [_ws_xor_byte(body_bytes[i], mkey[i % 4])]
+            i = i + 1
+        }
+    } else {
+        payload = body_bytes
+    }
+
+    // Opcode dispatch.
+    if opcode == 8 {
+        // Close — acknowledge and report close to caller (empty string).
+        let _ack = net_write_bytes(fd, _ws_encode_frame(8, ""))
+        return ""
+    }
+    if opcode == 9 {
+        // Ping — reply with pong carrying the same payload, then recurse
+        // for the next data frame.
+        let pong_payload = bytes_to_str_raw(payload)
+        let _pong = net_write_bytes(fd, _ws_encode_frame(10, pong_payload))
+        return ws_recv_native(h, timeout_sec)
+    }
+    if opcode == 10 {
+        // Pong — unsolicited; ignore and read the next frame.
+        return ws_recv_native(h, timeout_sec)
+    }
+    if opcode == 1 {
+        return bytes_to_str_raw(payload)
+    }
+    // Binary (0x2) or continuation (0x0) — not a text frame; caller retries.
+    return bytes_to_str_raw(payload)
+}
+
+// ── ws_close_native — send close frame + close socket ───────────────
+pub fn ws_close_native(h) -> bool {
+    if type_of(h) != "map" { return false }
+    let fd = to_int(h["fd"])
+    if fd < 0 { return false }
+    // Close frame with status code 1000 (Normal Closure): 2-byte payload.
+    let code_hi = 1000 / 256
+    let code_lo = 1000 % 256
+    let close_payload = bytes_to_str_raw([code_hi, code_lo])
+    let _w = net_write_bytes(fd, _ws_encode_frame(8, close_payload))
+    net_close(fd)
+    h["ok"] = false
+    h["fd"] = -1
+    return true
+}
+
+// ── ws_frame_roundtrip_for_test — encode then decode a text payload ──
+//
+// Pure-logic golden fixture: builds a masked client text frame, then
+// decodes it back through the same length/mask/opcode parser used by
+// ws_recv_native — WITHOUT any socket. Returns {"opcode": int,
+// "payload": string, "ok": bool}. Lets the frame codec be verified
+// byte-for-byte offline (no live WS server required).
+pub fn ws_frame_roundtrip_for_test(message: string) {
+    let r = #{}
+    r["ok"] = false
+    r["opcode"] = 0
+    r["payload"] = ""
+
+    let frame = _ws_encode_frame(1, message)
+    if len(frame) < 2 { return r }
+
+    // Decode mirror of ws_recv_native's parser, reading from `frame`.
+    let b0 = frame[0]
+    let b1 = frame[1]
+    let opcode = b0 % 16
+    let masked = b1 >= 128
+    let mut plen = b1 % 128
+    let mut idx = 2
+    if plen == 126 {
+        plen = frame[idx] * 256 + frame[idx + 1]
+        idx = idx + 2
+    } else {
+        if plen == 127 {
+            let mut val = 0
+            let mut k = 0
+            while k < 8 {
+                val = val * 256 + frame[idx + k]
+                k = k + 1
+            }
+            plen = val
+            idx = idx + 8
+        }
+    }
+    let mut mkey = [0, 0, 0, 0]
+    if masked {
+        mkey = [frame[idx], frame[idx + 1], frame[idx + 2], frame[idx + 3]]
+        idx = idx + 4
+    }
+    let mut payload = []
+    let mut i = 0
+    while i < plen {
+        let raw = frame[idx + i]
+        if masked {
+            payload = payload + [_ws_xor_byte(raw, mkey[i % 4])]
+        } else {
+            payload = payload + [raw]
+        }
+        i = i + 1
+    }
+    r["opcode"] = opcode
+    r["payload"] = bytes_to_str_raw(payload)
+    r["ok"] = true
+    return r
+}
+
+// ── ws_accept_for_test — expose the Sec-WebSocket-Accept computation ─
+//
+// Returns base64(sha1(key + magic)). Lets a test assert the known RFC
+// 6455 example: key "dGhlIHNhbXBsZSBub25jZQ==" → accept
+// "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=".
+pub fn ws_accept_for_test(key: string) -> string {
+    let magic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+    return base64_encode(sha1_bytes(key + magic))
+}

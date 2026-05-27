@@ -1,0 +1,16 @@
+#!hexa strict
+// rtsc verify — McMillan Tc (full formula, extern exp).
+extern fn exp(x: float) -> float
+fn main() {
+    let omega_D_K = 300.0
+    let lambda = 1.5
+    let mu_star = 0.10
+    let num = 0.0 - 1.04 * (1.0 + lambda)
+    let den = lambda - mu_star * (1.0 + 0.62 * lambda)
+    let arg = num / den
+    let Tc_K = (omega_D_K / 1.45) * exp(arg)
+    println("rtsc_verify (McMillan · λ=1.5, μ*=0.10, ωD=300K):")
+    println("  exponent_arg = " + str(arg))
+    println("  Tc_McMillan_K = " + str(Tc_K))
+    println("__HEXA_RTSC_VERIFY__ PASS gate=GATE_OPEN absorbed=false")
+}

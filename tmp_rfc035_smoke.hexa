@@ -1,0 +1,248 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// tmp_rfc035_smoke.hexa — anima RFC 035 bf16 mixed-precision train smoke
+//
+// Builtins (self/runtime.c, anima RFC 035 block — depends on RFC 034):
+//   farr_to_bf16 / farr_from_bf16 / adamw_step_mixed
+// Reference: incoming/rfc_drafts_2026_05_12/rfc_035_bf16_mixed_precision_train.md
+//
+// Acceptance — gated on the COMPILED native binary (hexa build … && ./bin),
+// no Python, no BLAS (interp `hexa run` is deprecating):
+//
+//   1 BUILD+PARSE          — this file compiles to a native binary.
+//   2 BF16-ROUNDTRIP       — to_bf16 then from_bf16 is a fixed point
+//                            (idempotent); a non-bf16 value loses its
+//                            low 16 mantissa bits exactly once.
+//   3 LOSSSCALE-INVARIANT  — adamw_step_mixed with loss_scale=S and a
+//                            grad pre-multiplied by S gives byte-identical
+//                            params to plain adamw_step (RFC 034) with the
+//                            unscaled grad (AMP master-weight contract).
+//   4 SKIP-NONFINITE       — a grad with one Inf element → step skipped
+//                            (returns 0, params untouched).
+//   5 DETERMINISM          — same seed → byte-identical param trajectory.
+//
+// 5/5 PASS → RFC 035 landable; anima HEXAD/PLAN.md Phase 5 lower-memory.
+// ════════════════════════════════════════════════════════════════════════
+
+fn abs_d(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn lcg_next(state: int) -> int {
+    let s = state * 6364136223846793005 + 1442695040888963407
+    let m = s % 2147483647
+    if m < 0 { return 0 - m }
+    return m
+}
+
+fn lcg_unit(v: int) -> float {
+    let f = (to_float(v) / 2147483647.0)
+    return f * 2.0 - 1.0
+}
+
+fn main() {
+    let mut pass = 0
+    let total = 5
+
+    // ── Falsifier 1: BUILD+PARSE ────────────────────────────────────
+    println("PASS  F-RFC035-BUILD  native binary built + entered main()")
+    pass = pass + 1
+
+    // ── Falsifier 2: BF16-ROUNDTRIP ─────────────────────────────────
+    // A random f64 → to_bf16 once = lossy; to_bf16 again = identical
+    // (idempotent fixed point). bf16 keeps 8 mantissa bits → relative
+    // error bound ~2^-8 ≈ 0.4%.
+    let src = farr_zeros(8)
+    let mut st = 12345
+    let mut i = 0
+    while i < 8 {
+        st = lcg_next(st)
+        let _ = farr_set(src, i, lcg_unit(st) * 10.0)
+        i = i + 1
+    }
+    let b1 = farr_zeros(8)
+    let b2 = farr_zeros(8)
+    let r1 = farr_to_bf16(src, b1, 8)        // src -> bf16 (lossy)
+    let r2 = farr_to_bf16(b1, b2, 8)         // bf16 -> bf16 (identity)
+    let mut idem_ok = true
+    let mut max_rel = 0.0
+    let mut worst_idem = 0.0
+    let mut j = 0
+    while j < 8 {
+        let o  = farr_get(src, j)
+        let q1 = farr_get(b1, j)
+        let q2 = farr_get(b2, j)
+        // idempotent: second pass must be byte-identical to the first.
+        let id_err = abs_d(q2 - q1)
+        if id_err > worst_idem { worst_idem = id_err }
+        if q1 != q2 { idem_ok = false }
+        // lossy but bounded: |bf16 - orig| / |orig| < 1% (8-bit mantissa).
+        if abs_d(o) > 0.0001 {
+            let rel = abs_d(q1 - o) / abs_d(o)
+            if rel > max_rel { max_rel = rel }
+        }
+        j = j + 1
+    }
+    if idem_ok && r1 == 1 && r2 == 1 && max_rel < 0.01 {
+        println("PASS  F-RFC035-BF16-ROUNDTRIP  idempotent (max idem diff=" + to_string(worst_idem) + "), max rel err=" + to_string(max_rel) + " < 1%")
+        pass = pass + 1
+    } else {
+        println("FAIL  F-RFC035-BF16-ROUNDTRIP  idem_ok=" + to_string(idem_ok) + " max_rel=" + to_string(max_rel))
+    }
+    let _ = farr_free(src)
+    let _ = farr_free(b1)
+    let _ = farr_free(b2)
+
+    // ── Falsifier 3: LOSSSCALE-INVARIANT ────────────────────────────
+    // Two params start identical. Path A: plain RFC 034 adamw_step with
+    // grad g. Path B: adamw_step_mixed with grad (g * S) and loss_scale
+    // S. Unscale (g*S)/S = g, so the master weight update is the SAME.
+    let N = 6
+    let S = 1024.0
+    let pA = farr_zeros(N)
+    let pB = farr_zeros(N)
+    let gA = farr_zeros(N)
+    let gB = farr_zeros(N)
+    let mA = farr_zeros(N)
+    let vA = farr_zeros(N)
+    let mB = farr_zeros(N)
+    let vB = farr_zeros(N)
+    let mut gs = 999
+    let mut k = 0
+    while k < N {
+        gs = lcg_next(gs)
+        let pv = lcg_unit(gs) * 0.3
+        let _ = farr_set(pA, k, pv)
+        let _ = farr_set(pB, k, pv)
+        gs = lcg_next(gs)
+        let gv = lcg_unit(gs) * 0.5
+        let _ = farr_set(gA, k, gv)        // true gradient
+        let _ = farr_set(gB, k, gv * S)    // loss-scaled gradient
+        k = k + 1
+    }
+    // 5 steps each.
+    let mut step = 0
+    while step < 5 {
+        adamw_step(pA, gA, mA, vA, N, 0.05, 0.9, 0.999, 0.00000001, 0.01, step + 1)
+        let applied = adamw_step_mixed(pB, gB, mB, vB, N, 0.05, 0.9, 0.999, 0.00000001, 0.01, step + 1, S)
+        if applied != 1 { println("FAIL  F-RFC035-LOSSSCALE-INVARIANT  step " + to_string(step) + " skipped unexpectedly") }
+        step = step + 1
+    }
+    let mut ls_ok = true
+    let mut worst_ls = 0.0
+    let mut m = 0
+    while m < N {
+        let a = farr_get(pA, m)
+        let b = farr_get(pB, m)
+        let e = abs_d(a - b)
+        if e > worst_ls { worst_ls = e }
+        if a != b { ls_ok = false }
+        m = m + 1
+    }
+    if ls_ok {
+        println("PASS  F-RFC035-LOSSSCALE-INVARIANT  mixed==plain byte-identical (max diff=" + to_string(worst_ls) + ")")
+        pass = pass + 1
+    } else {
+        println("FAIL  F-RFC035-LOSSSCALE-INVARIANT  diverged (max diff=" + to_string(worst_ls) + ")")
+    }
+    let _ = farr_free(gA)
+    let _ = farr_free(gB)
+    let _ = farr_free(mA)
+    let _ = farr_free(vA)
+    let _ = farr_free(mB)
+    let _ = farr_free(vB)
+
+    // ── Falsifier 4: SKIP-NONFINITE ─────────────────────────────────
+    // Inject Inf into one grad element (via 1.0/0.0). adamw_step_mixed
+    // must return 0 and leave the param byte-unchanged (AMP overflow).
+    let pInf = farr_zeros(N)
+    let gInf = farr_zeros(N)
+    let mInf = farr_zeros(N)
+    let vInf = farr_zeros(N)
+    let mut z = 0
+    while z < N {
+        let _ = farr_set(pInf, z, 0.123 + to_float(z))
+        let _ = farr_set(gInf, z, 0.01)
+        z = z + 1
+    }
+    let inf_v = 1.0 / 0.0                   // +Inf
+    let _ = farr_set(gInf, 3, inf_v)
+    // snapshot params before
+    let snap = farr_zeros(N)
+    let mut s2 = 0
+    while s2 < N {
+        let _ = farr_set(snap, s2, farr_get(pInf, s2))
+        s2 = s2 + 1
+    }
+    let ret = adamw_step_mixed(pInf, gInf, mInf, vInf, N, 0.05, 0.9, 0.999, 0.00000001, 0.0, 1, 512.0)
+    let mut untouched = true
+    let mut s3 = 0
+    while s3 < N {
+        if farr_get(pInf, s3) != farr_get(snap, s3) { untouched = false }
+        s3 = s3 + 1
+    }
+    if ret == 0 && untouched {
+        println("PASS  F-RFC035-SKIP-NONFINITE  Inf grad → step skipped (ret=0), params untouched")
+        pass = pass + 1
+    } else {
+        println("FAIL  F-RFC035-SKIP-NONFINITE  ret=" + to_string(ret) + " untouched=" + to_string(untouched))
+    }
+    let _ = farr_free(pInf)
+    let _ = farr_free(gInf)
+    let _ = farr_free(mInf)
+    let _ = farr_free(vInf)
+    let _ = farr_free(snap)
+
+    // ── Falsifier 5: DETERMINISM ────────────────────────────────────
+    // Re-run path B from the same seed; the trajectory must be byte-equal.
+    let pB2 = farr_zeros(N)
+    let gB2 = farr_zeros(N)
+    let mB2 = farr_zeros(N)
+    let vB2 = farr_zeros(N)
+    let mut gs2 = 999
+    let mut k2 = 0
+    while k2 < N {
+        gs2 = lcg_next(gs2)
+        let _ = farr_set(pB2, k2, lcg_unit(gs2) * 0.3)
+        gs2 = lcg_next(gs2)
+        let _ = farr_set(gB2, k2, lcg_unit(gs2) * 0.5 * S)
+        k2 = k2 + 1
+    }
+    let mut step2 = 0
+    while step2 < 5 {
+        let _ = adamw_step_mixed(pB2, gB2, mB2, vB2, N, 0.05, 0.9, 0.999, 0.00000001, 0.01, step2 + 1, S)
+        step2 = step2 + 1
+    }
+    let mut det_ok = true
+    let mut worst_d = 0.0
+    let mut d = 0
+    while d < N {
+        let a = farr_get(pB, d)
+        let b = farr_get(pB2, d)
+        let e = abs_d(a - b)
+        if e > worst_d { worst_d = e }
+        if a != b { det_ok = false }
+        d = d + 1
+    }
+    if det_ok {
+        println("PASS  F-RFC035-DETERMINISM  two seed=999 runs byte-identical (max diff=" + to_string(worst_d) + ")")
+        pass = pass + 1
+    } else {
+        println("FAIL  F-RFC035-DETERMINISM  diverged (max diff=" + to_string(worst_d) + ")")
+    }
+    let _ = farr_free(pA)
+    let _ = farr_free(pB)
+    let _ = farr_free(pB2)
+    let _ = farr_free(gB2)
+    let _ = farr_free(mB2)
+    let _ = farr_free(vB2)
+
+    println("")
+    println("=== RFC035 smoke: " + to_string(pass) + "/" + to_string(total) + " PASS ===")
+    if pass == total {
+        println("PASS — anima RFC 035 bf16 mixed-precision train works (compiled)")
+    } else {
+        println("FAIL — RFC 035 smoke incomplete")
+    }
+}

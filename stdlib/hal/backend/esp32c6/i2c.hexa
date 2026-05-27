@@ -1,0 +1,79 @@
+#!hexa strict
+// stdlib/hal/backend/esp32c6/i2c.hexa — ESP32-C6 I2C backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    ESP32-C6 RV32IMAC RISC-V @ 160 MHz.
+// Chip ref:  ESP32-C6 TRM v1.2 §22 I²C Controller.
+// Surface:   esp32c6_i2c_{configure,start,write,read,stop}(...)
+// Dispatch:  i2c.hexa selects this via cfg-flag.
+//
+// MMIO layout: 1 HP I2C + 1 LP I2C on C6.
+//
+//   HP I2C:  base = DR_REG_I2C_BASE    = 0x60004000
+//   LP I2C:  base = DR_REG_LP_I2C_BASE = 0x600B1000
+//
+//   Same command-queue architecture as ESP32 family (16-deep COMD queue,
+//   FIFO_DATA_REG, RSTART/WRITE/READ/STOP/END opcodes). Speed grades:
+//   std 100k / fast 400k / fast-plus 1M.
+//
+// LP I2C is a new addition on C6 — runs in LP_APB domain so it can talk
+// to off-chip sensors during deep sleep without waking HP_CPU.
+
+let MODULE_NAME = "esp32c6_i2c"
+let SIGMA_SLOT  = 2
+let PHI_KIND    = "digital"
+
+let DR_REG_I2C_BASE    = 0x60004000   // HP I2C
+let DR_REG_LP_I2C_BASE = 0x600B1000   // LP I2C (new on C6)
+
+let I2C_CTR_REG         = 0x004
+let I2C_FIFO_DATA_REG   = 0x01C
+let I2C_COMD0_REG       = 0x058
+
+let CMD_RSTART = 0
+let CMD_WRITE  = 1
+let CMD_READ   = 2
+let CMD_STOP   = 3
+let CMD_END    = 4
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn esp32c6_i2c_configure(unit: int, speed_hz: int) -> int {
+    if unit < 0 || unit > 1 { return -1 }   // 0=HP, 1=LP
+    if speed_hz < 1000 || speed_hz > 1000000 { return -2 }
+    return unit
+}
+
+fn esp32c6_i2c_start(unit: int, addr: int) -> int {
+    if unit < 0 || unit > 1 { return -1 }
+    if addr < 0 || addr > 0x7F { return -2 }
+    return 0
+}
+
+fn esp32c6_i2c_write(handle: int, byte: int) -> int {
+    if byte < 0 || byte > 255 { return -1 }
+    return 0
+}
+
+fn esp32c6_i2c_read(handle: int) -> int {
+    return -1
+}
+
+fn esp32c6_i2c_stop(handle: int) -> int {
+    return 0
+}
+
+fn esp32c6_i2c_report(handle: int) -> str {
+    return "[esp32c6_i2c sim] handle=" + str(handle) + " (skeleton stub — TODO MMIO)"
+}
+
+fn esp32c6_i2c_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32c6_i2c sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  HP I2C=" + str(DR_REG_I2C_BASE) + " LP I2C=" + str(DR_REG_LP_I2C_BASE))
+    println("  LP I2C runs in LP_APB during deep sleep (sensor reads w/o HP wake)")
+}

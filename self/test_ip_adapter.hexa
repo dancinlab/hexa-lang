@@ -1,0 +1,666 @@
+// ═══════════════════════════════════════════════════════════════════
+//  test_ip_adapter.hexa — IP-Adapter (#300)
+// ═══════════════════════════════════════════════════════════════════
+
+// -- inlined from self/ml/ip_adapter.hexa --
+// codegen import not wired for test files
+
+// ═══════════════════════════════════════════════════════════════════
+//  self/ml/ip_adapter.hexa — IP-Adapter (#300)
+//
+//  IP-Adapter (Ye et al., 2023) — Image Prompt Adapter with
+//  decoupled cross-attention for image-conditioned diffusion.
+//
+//  Core idea: separate cross-attention paths for text and image,
+//  combined with a controllable lambda weight.
+//
+//    Text cross-attn:   Z_text = softmax(Q K_text^T / sqrt(d)) V_text
+//    Image cross-attn:  Z_img  = softmax(Q K_img^T  / sqrt(d)) V_img
+//    Combined:          Z = Z_text + lambda * Z_img
+//
+//  Only the image adapter weights (W_Kimg, W_Vimg, W_proj) are
+//  trained; the base text cross-attention is frozen.
+//
+//  Architecture:
+//    Image projection:   proj = W_proj * image_feat + b_proj
+//                         (D_image -> D_model)
+//    Text cross-attn:    Q*K_text = Q * (W_Kt * text)^T
+//                         V_text   = W_Vt * text
+//    Image cross-attn:   Q*K_img  = Q * (W_Ki * proj)^T
+//                         V_img    = W_Vi * proj
+//
+//  API:
+//    ipa_init(D_model, D_image, D_text, n_heads, seed)  -> model
+//    ipa_image_proj(model, image_feat)                   -> projected
+//    ipa_text_cross_attn(model, query, text_kv)          -> output
+//    ipa_image_cross_attn(model, query, image_kv)        -> output
+//    ipa_forward(model, query, text_feat, image_feat, lam) -> output
+//    ipa_loss(model, Q, text, image, target, lam)        -> float
+//    ipa_train_step(model, batch, lr, lam)               -> model
+//
+//  AI-NATIVE attrs:
+//    @pure  (forward / loss / projection)
+//    @hot   (training step)
+// ═══════════════════════════════════════════════════════════════════
+
+// ─── math helpers ─────────────────────────────────────────────────
+
+fn ipa_abs(x) { if x < 0.0 { return 0.0 - x } return x }
+
+fn ipa_exp(x) {
+    let mut v = x
+    if v > 20.0 { v = 20.0 }
+    if v < -20.0 { v = -20.0 }
+    let mut result = 1.0
+    let mut term = 1.0
+    let mut i = 1
+    while i < 30 {
+        term = term * v / to_float(i)
+        result = result + term
+        i = i + 1
+    }
+    if result < 0.0 { return 0.0 }
+    return result
+}
+
+fn ipa_sqrt(x) {
+    if x <= 0.0 { return 0.0 }
+    let mut g = x / 2.0
+    if g < 1.0 { g = 1.0 }
+    let mut _i = 0
+    while _i < 30 {
+        g = (g + x / g) / 2.0
+        _i = _i + 1
+    }
+    return g
+}
+
+// ─── allocation helpers ───────────────────────────────────────────
+
+fn ipa_zeros(n) {
+    let mut v = []
+    let mut _i = 0
+    while _i < n {
+    return v
+        _i = _i + 1
+}
+
+fn ipa_zeros_2d(rows, cols) {
+    let mut m = []
+    let mut _r = 0
+    while _r < rows {
+        let mut row = []
+        for _c in 0..cols { row = row + [0.0] }
+        m = m + [row]
+        _r = _r + 1
+    }
+    return m
+}
+
+// ─── RNG ──────────────────────────────────────────────────────────
+
+fn ipa_lcg(state) {
+    return (state * 1103515245 + 12345) % 2147483648
+}
+
+fn ipa_uniform(state) {
+    let s = ipa_lcg(state)
+    return [to_float(s) / 2147483648.0, to_float(s)]
+}
+
+fn ipa_rand_matrix(rows, cols, state, scale) {
+    let mut s = state
+    let mut m = ipa_zeros_2d(rows, cols)
+    let mut i = 0
+    while i < rows {
+        for j in 0..cols {
+            let u = ipa_uniform(s)
+            s = int(u[1])
+            if s <= 0 { s = 1 }
+            m[i][j] = (u[0] - 0.5) * scale
+        }
+        i = i + 1
+    }
+    return [m, s]
+}
+
+fn ipa_rand_vec(n, state, scale) {
+    let mut s = state
+    let mut v = ipa_zeros(n)
+    let mut i = 0
+    while i < n {
+        let u = ipa_uniform(s)
+        s = int(u[1])
+        if s <= 0 { s = 1 }
+        v[i] = (u[0] - 0.5) * scale
+        i = i + 1
+    }
+    return [v, s]
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  ipa_init — create model dict
+//
+//  Frozen (text cross-attn):
+//    W_Qt : D_model x D_model   query projection (text path)
+//    W_Kt : D_model x D_text    key   projection (text path)
+//    W_Vt : D_model x D_text    value projection (text path)
+//
+//  Trainable (image adapter):
+//    W_proj : D_model x D_image  image feature projection
+//    b_proj : D_model
+//    W_Ki   : D_model x D_model  key   projection (image path)
+//    W_Vi   : D_model x D_model  value projection (image path)
+// ═══════════════════════════════════════════════════════════════════
+fn ipa_init(D_model, D_image, D_text, n_heads, seed) {
+    let mut s = seed
+    if s <= 0 { s = 1 }
+    let scale = 0.5
+
+    // Frozen text cross-attention weights
+    let r1 = ipa_rand_matrix(D_model, D_model, s, scale)
+    let W_Qt = r1[0]
+    s = int(r1[1])
+    if s <= 0 { s = 1 }
+
+    let r2 = ipa_rand_matrix(D_model, D_text, s, scale)
+    let W_Kt = r2[0]
+    s = int(r2[1])
+    if s <= 0 { s = 1 }
+
+    let r3 = ipa_rand_matrix(D_model, D_text, s, scale)
+    let W_Vt = r3[0]
+    s = int(r3[1])
+    if s <= 0 { s = 1 }
+
+    // Trainable image adapter weights
+    let r4 = ipa_rand_matrix(D_model, D_image, s, scale)
+    let W_proj = r4[0]
+    s = int(r4[1])
+    if s <= 0 { s = 1 }
+
+    let r5 = ipa_rand_vec(D_model, s, scale)
+    let b_proj = r5[0]
+    s = int(r5[1])
+    if s <= 0 { s = 1 }
+
+    let r6 = ipa_rand_matrix(D_model, D_model, s, scale)
+    let W_Ki = r6[0]
+    s = int(r6[1])
+    if s <= 0 { s = 1 }
+
+    let r7 = ipa_rand_matrix(D_model, D_model, s, scale)
+    let W_Vi = r7[0]
+
+    return #{
+        "D_model": D_model,
+        "D_image": D_image,
+        "D_text": D_text,
+        "n_heads": n_heads,
+        "W_Qt": W_Qt,
+        "W_Kt": W_Kt,
+        "W_Vt": W_Vt,
+        "W_proj": W_proj,
+        "b_proj": b_proj,
+        "W_Ki": W_Ki,
+        "W_Vi": W_Vi
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  ipa_image_proj — project image features into model dim
+//    proj = W_proj * image_feat + b_proj     (D_image -> D_model)
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn ipa_image_proj(model, image_feat) {
+    let D_model = model["D_model"]
+    let D_image = model["D_image"]
+    let W_proj = model["W_proj"]
+    let b_proj = model["b_proj"]
+    let mut out = ipa_zeros(D_model)
+    let mut i = 0
+    while i < D_model {
+        let mut s = b_proj[i]
+        for j in 0..D_image {
+            s = s + W_proj[i][j] * image_feat[j]
+        }
+        out[i] = s
+        i = i + 1
+    }
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Scaled dot-product attention (single head, flat vectors)
+//    attn(Q, K, V) = softmax(Q K^T / sqrt(d)) V
+//
+//  Q : [D_model]  (single query token)
+//  kv: [D_kv]     (single kv token — simplified single-token case)
+//  W_K: D_model x D_kv   W_V: D_model x D_kv
+//
+//  Returns [D_model]
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn ipa_cross_attn_core(Q_vec, kv_vec, W_K, W_V, D_model, D_kv) {
+    // K = W_K * kv  -> [D_model]
+    let mut K_vec = ipa_zeros(D_model)
+    let mut i = 0
+    while i < D_model {
+        let mut s = 0.0
+        for j in 0..D_kv { s = s + W_K[i][j] * kv_vec[j] }
+        K_vec[i] = s
+        i = i + 1
+    }
+    // V = W_V * kv  -> [D_model]
+    let mut V_vec = ipa_zeros(D_model)
+    let mut i = 0
+    while i < D_model {
+        let mut s = 0.0
+        for j in 0..D_kv { s = s + W_V[i][j] * kv_vec[j] }
+        V_vec[i] = s
+        i = i + 1
+    }
+    // score = dot(Q, K) / sqrt(D_model)
+    let mut dot = 0.0
+    let mut i = 0
+    while i < D_model {
+    let scale = ipa_sqrt(to_float(D_model))
+    let score = dot / scale
+    // For single-token KV, softmax([score]) = 1.0 always
+    // But the scaling still affects gradient magnitude
+    // attn weight = 1.0, so output = V
+    // With multiple tokens we'd do full softmax; for single-token:
+    // We use the score as a gating signal via sigmoid for richer gradients
+    let gate = 1.0 / (1.0 + ipa_exp(0.0 - score))
+    let mut out = ipa_zeros(D_model)
+    for i in 0..D_model {
+        out[i] = gate * V_vec[i]
+    }
+    return out
+        i = i + 1
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  ipa_text_cross_attn — text path (frozen weights)
+//    Q_proj = W_Qt * query
+//    Z_text = cross_attn(Q_proj, text_kv, W_Kt, W_Vt)
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn ipa_text_cross_attn(model, query, text_kv) {
+    let D_model = model["D_model"]
+    let D_text = model["D_text"]
+    let W_Qt = model["W_Qt"]
+    // project query
+    let mut Q_proj = ipa_zeros(D_model)
+    let mut i = 0
+    while i < D_model {
+        let mut s = 0.0
+        for j in 0..D_model { s = s + W_Qt[i][j] * query[j] }
+        Q_proj[i] = s
+        i = i + 1
+    }
+    return ipa_cross_attn_core(Q_proj, text_kv, model["W_Kt"], model["W_Vt"], D_model, D_text)
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  ipa_image_cross_attn — image path (trainable adapter weights)
+//    proj = ipa_image_proj(model, image_kv)
+//    Q_proj = W_Qt * query   (shared query projection)
+//    Z_img = cross_attn(Q_proj, proj, W_Ki, W_Vi)
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn ipa_image_cross_attn(model, query, image_kv) {
+    let D_model = model["D_model"]
+    let W_Qt = model["W_Qt"]
+    // project query (same W_Qt as text path)
+    let mut Q_proj = ipa_zeros(D_model)
+    let mut i = 0
+    while i < D_model {
+        let mut s = 0.0
+        for j in 0..D_model { s = s + W_Qt[i][j] * query[j] }
+        Q_proj[i] = s
+        i = i + 1
+    }
+    // project image features to model dim
+    let proj = ipa_image_proj(model, image_kv)
+    return ipa_cross_attn_core(Q_proj, proj, model["W_Ki"], model["W_Vi"], D_model, D_model)
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  ipa_forward — combined forward pass
+//    Z = Z_text + lambda * Z_img
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn ipa_forward(model, query, text_feat, image_feat, lam) {
+    let D_model = model["D_model"]
+    let z_text = ipa_text_cross_attn(model, query, text_feat)
+    let z_img = ipa_image_cross_attn(model, query, image_feat)
+    let mut out = ipa_zeros(D_model)
+    let mut i = 0
+    while i < D_model {
+        out[i] = z_text[i] + lam * z_img[i]
+        i = i + 1
+    }
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  ipa_loss — MSE between forward output and target
+//    L = (1/D) * sum_i (out_i - target_i)^2
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn ipa_loss(model, query, text_feat, image_feat, target, lam) {
+    let D_model = model["D_model"]
+    let out = ipa_forward(model, query, text_feat, image_feat, lam)
+    let mut mse = 0.0
+    let mut i = 0
+    while i < D_model {
+        let diff = out[i] - target[i]
+        mse = mse + diff * diff
+        i = i + 1
+    }
+    return mse / to_float(D_model)
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  ipa_train_step — numerical gradient descent on adapter weights
+//
+//  ONLY trainable parameters are updated:
+//    W_proj, b_proj, W_Ki, W_Vi
+//  Text weights (W_Qt, W_Kt, W_Vt) stay frozen.
+//
+//  batch = list of #{"query": [...], "text": [...], "image": [...], "target": [...]}
+// ═══════════════════════════════════════════════════════════════════
+@hot
+fn ipa_train_step(model, batch, lr, lam) {
+    let eps = 1.0e-4
+    let N = len(batch)
+    if N == 0 { return model }
+    let D_model = model["D_model"]
+    let D_image = model["D_image"]
+
+    // Compute base loss
+    let mut base_loss = 0.0
+    let mut b = 0
+    while b < N {
+        let sample = batch[b]
+        base_loss = base_loss + ipa_loss(model, sample["query"], sample["text"], sample["image"], sample["target"], lam)
+        b = b + 1
+    }
+    base_loss = base_loss / to_float(N)
+
+    // ── Update W_proj ────────────────────────────────────────
+    let mut W_proj_new = ipa_zeros_2d(D_model, D_image)
+    let mut i = 0
+    while i < D_model {
+        for j in 0..D_image {
+            let orig = model["W_proj"][i][j]
+            model["W_proj"][i][j] = orig + eps
+            let mut loss_p = 0.0
+            for b in 0..N {
+                let sample = batch[b]
+                loss_p = loss_p + ipa_loss(model, sample["query"], sample["text"], sample["image"], sample["target"], lam)
+            }
+            loss_p = loss_p / to_float(N)
+            let grad = (loss_p - base_loss) / eps
+            W_proj_new[i][j] = orig - lr * grad
+            model["W_proj"][i][j] = orig
+        }
+        i = i + 1
+    }
+
+    // ── Update b_proj ────────────────────────────────────────
+    let mut b_proj_new = ipa_zeros(D_model)
+    let mut i = 0
+    while i < D_model {
+        let orig = model["b_proj"][i]
+        model["b_proj"][i] = orig + eps
+        let mut loss_p = 0.0
+        for b in 0..N {
+            let sample = batch[b]
+            loss_p = loss_p + ipa_loss(model, sample["query"], sample["text"], sample["image"], sample["target"], lam)
+        }
+        loss_p = loss_p / to_float(N)
+        let grad = (loss_p - base_loss) / eps
+        b_proj_new[i] = orig - lr * grad
+        model["b_proj"][i] = orig
+        i = i + 1
+    }
+
+    // ── Update W_Ki ──────────────────────────────────────────
+    let mut W_Ki_new = ipa_zeros_2d(D_model, D_model)
+    let mut i = 0
+    while i < D_model {
+        for j in 0..D_model {
+            let orig = model["W_Ki"][i][j]
+            model["W_Ki"][i][j] = orig + eps
+            let mut loss_p = 0.0
+            for b in 0..N {
+                let sample = batch[b]
+                loss_p = loss_p + ipa_loss(model, sample["query"], sample["text"], sample["image"], sample["target"], lam)
+            }
+            loss_p = loss_p / to_float(N)
+            let grad = (loss_p - base_loss) / eps
+            W_Ki_new[i][j] = orig - lr * grad
+            model["W_Ki"][i][j] = orig
+        }
+        i = i + 1
+    }
+
+    // ── Update W_Vi ──────────────────────────────────────────
+    let mut W_Vi_new = ipa_zeros_2d(D_model, D_model)
+    let mut i = 0
+    while i < D_model {
+        for j in 0..D_model {
+            let orig = model["W_Vi"][i][j]
+            model["W_Vi"][i][j] = orig + eps
+            let mut loss_p = 0.0
+            for b in 0..N {
+                let sample = batch[b]
+                loss_p = loss_p + ipa_loss(model, sample["query"], sample["text"], sample["image"], sample["target"], lam)
+            }
+            loss_p = loss_p / to_float(N)
+            let grad = (loss_p - base_loss) / eps
+            W_Vi_new[i][j] = orig - lr * grad
+            model["W_Vi"][i][j] = orig
+        }
+        i = i + 1
+    }
+
+    // ── Return model with updated adapter weights, text frozen ──
+    return #{
+        "D_model": D_model,
+        "D_image": D_image,
+        "D_text": model["D_text"],
+        "n_heads": model["n_heads"],
+        "W_Qt": model["W_Qt"],
+        "W_Kt": model["W_Kt"],
+        "W_Vt": model["W_Vt"],
+        "W_proj": W_proj_new,
+        "b_proj": b_proj_new,
+        "W_Ki": W_Ki_new,
+        "W_Vi": W_Vi_new
+    }
+}
+
+
+// -- end inlined --
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn check(name, cond) {
+    if cond {
+        println("[PASS] " + name)
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name)
+        fail_count = fail_count + 1
+    }
+}
+
+fn fabs_(x) { if x < 0.0 { return 0.0 - x } return x }
+fn approx_(a, b, eps) { return fabs_(a - b) < eps }
+
+println("=== IP-Adapter (#300) ===")
+
+// Dimensions: D_model=4, D_image=3, D_text=3, n_heads=2
+let D_model = 4
+let D_image = 3
+let D_text = 3
+let n_heads = 2
+
+let model = ipa_init(D_model, D_image, D_text, n_heads, 42)
+
+// ── T1 init shapes ────────────────────────────────────────────
+check("T1 W_Qt shape", len(model["W_Qt"]) == D_model && len(model["W_Qt"][0]) == D_model)
+check("T1 W_Kt shape", len(model["W_Kt"]) == D_model && len(model["W_Kt"][0]) == D_text)
+check("T1 W_Vt shape", len(model["W_Vt"]) == D_model && len(model["W_Vt"][0]) == D_text)
+check("T1 W_proj shape", len(model["W_proj"]) == D_model && len(model["W_proj"][0]) == D_image)
+check("T1 b_proj len", len(model["b_proj"]) == D_model)
+check("T1 W_Ki shape", len(model["W_Ki"]) == D_model && len(model["W_Ki"][0]) == D_model)
+check("T1 W_Vi shape", len(model["W_Vi"]) == D_model && len(model["W_Vi"][0]) == D_model)
+
+// ── T2 image projection output dimension ──────────────────────
+let img_feat = [0.5, 0.3, 0.8]
+let proj = ipa_image_proj(model, img_feat)
+check("T2 proj length", len(proj) == D_model)
+
+// ── T3 text cross-attention output dimension ──────────────────
+let query = [0.1, 0.2, 0.3, 0.4]
+let text_kv = [0.5, 0.6, 0.7]
+let z_text = ipa_text_cross_attn(model, query, text_kv)
+check("T3 z_text length", len(z_text) == D_model)
+
+// ── T4 image cross-attention output dimension ─────────────────
+let z_img = ipa_image_cross_attn(model, query, img_feat)
+check("T4 z_img length", len(z_img) == D_model)
+
+// ── T5 forward output dimension + lambda=0 equals text-only ──
+let out0 = ipa_forward(model, query, text_kv, img_feat, 0.0)
+check("T5 forward length", len(out0) == D_model)
+let mut text_only_match = true
+let mut i = 0
+
+while i < D_model {
+    if fabs_(out0[i] - z_text[i]) > 1.0e-9 { text_only_match = false }
+}
+check("T5 lambda=0 equals text-only", text_only_match)
+
+// ── T6 lambda=1 adds image contribution ───────────────────────
+let out1 = ipa_forward(model, query, text_kv, img_feat, 1.0)
+let mut has_image_contrib = false
+let mut i = 0
+
+while i < D_model {
+    if fabs_(out1[i] - z_text[i]) > 1.0e-9 { has_image_contrib = true }
+}
+check("T6 lambda=1 has image contribution", has_image_contrib)
+
+// ── T7 forward = z_text + lam * z_img ─────────────────────────
+let lam_test = 0.7
+let out_lam = ipa_forward(model, query, text_kv, img_feat, lam_test)
+let mut combo_correct = true
+let mut i = 0
+
+while i < D_model {
+    let expected = z_text[i] + lam_test * z_img[i]
+    if fabs_(out_lam[i] - expected) > 1.0e-9 { combo_correct = false }
+}
+check("T7 Z = Z_text + lam * Z_img", combo_correct)
+
+// ── T8 loss is non-negative ───────────────────────────────────
+let target = [1.0, 0.0, 1.0, 0.0]
+let l8 = ipa_loss(model, query, text_kv, img_feat, target, 1.0)
+check("T8 loss >= 0", l8 >= 0.0)
+
+// ── T9 loss = 0 when output matches target ────────────────────
+let out_exact = ipa_forward(model, query, text_kv, img_feat, 1.0)
+let l9 = ipa_loss(model, query, text_kv, img_feat, out_exact, 1.0)
+check("T9 loss = 0 for matching target", l9 < 1.0e-9)
+
+// ── T10 training reduces loss (adapter-only update) ───────────
+let batch = [
+    #{"query": [0.1, 0.2, 0.3, 0.4], "text": [0.5, 0.6, 0.7], "image": [0.5, 0.3, 0.8], "target": [1.0, 0.0, 0.5, 0.5]},
+    #{"query": [0.4, 0.3, 0.2, 0.1], "text": [0.7, 0.6, 0.5], "image": [0.8, 0.3, 0.5], "target": [0.0, 1.0, 0.5, 0.5]}
+]
+let loss_before = ipa_loss(model, batch[0]["query"], batch[0]["text"], batch[0]["image"], batch[0]["target"], 1.0)
+let mut trained = model
+let mut _step = 0
+
+while _step < 5 {
+    trained = ipa_train_step(trained, batch, 0.05, 1.0)
+}
+let loss_after = ipa_loss(trained, batch[0]["query"], batch[0]["text"], batch[0]["image"], batch[0]["target"], 1.0)
+check("T10 training reduces loss", loss_after < loss_before)
+
+// ── T11 frozen weights unchanged after training ───────────────
+let mut frozen_ok = true
+let mut i = 0
+
+while i < D_model {
+    let mut j = 0
+
+    while j < D_model {
+        if fabs_(trained["W_Qt"][i][j] - model["W_Qt"][i][j]) > 1.0e-12 { frozen_ok = false }
+    }
+    let mut j = 0
+
+    while j < D_text {
+        if fabs_(trained["W_Kt"][i][j] - model["W_Kt"][i][j]) > 1.0e-12 { frozen_ok = false }
+        if fabs_(trained["W_Vt"][i][j] - model["W_Vt"][i][j]) > 1.0e-12 { frozen_ok = false }
+    }
+}
+check("T11 text weights frozen", frozen_ok)
+
+// ── T12 adapter weights changed after training ────────────────
+let mut adapter_changed = false
+let mut i = 0
+
+while i < D_model {
+    let mut j = 0
+
+    while j < D_image {
+        if fabs_(trained["W_proj"][i][j] - model["W_proj"][i][j]) > 1.0e-12 { adapter_changed = true }
+    }
+    if fabs_(trained["b_proj"][i] - model["b_proj"][i]) > 1.0e-12 { adapter_changed = true }
+    let mut j = 0
+
+    while j < D_model {
+        if fabs_(trained["W_Ki"][i][j] - model["W_Ki"][i][j]) > 1.0e-12 { adapter_changed = true }
+        if fabs_(trained["W_Vi"][i][j] - model["W_Vi"][i][j]) > 1.0e-12 { adapter_changed = true }
+    }
+}
+check("T12 adapter weights updated", adapter_changed)
+
+// ── T13 deterministic init ────────────────────────────────────
+let m_a = ipa_init(4, 3, 3, 2, 99)
+let m_b = ipa_init(4, 3, 3, 2, 99)
+let pa = ipa_image_proj(m_a, [0.1, 0.2, 0.3])
+let pb = ipa_image_proj(m_b, [0.1, 0.2, 0.3])
+let mut det_ok = true
+let mut i = 0
+
+while i < 4 {
+    if fabs_(pa[i] - pb[i]) > 1.0e-12 { det_ok = false }
+}
+check("T13 deterministic init", det_ok)
+
+// ── T14 lambda scaling — higher lambda gives more image weight ─
+let out_low = ipa_forward(model, query, text_kv, img_feat, 0.1)
+let out_high = ipa_forward(model, query, text_kv, img_feat, 5.0)
+let mut diff_low = 0.0
+let mut diff_high = 0.0
+let mut i = 0
+
+while i < D_model {
+    diff_low = diff_low + fabs_(out_low[i] - z_text[i])
+    diff_high = diff_high + fabs_(out_high[i] - z_text[i])
+}
+check("T14 higher lambda -> more image influence", diff_high > diff_low)
+
+println("")
+println("=== IP-Adapter summary ===")
+println("PASS: " + str(pass_count))
+println("FAIL: " + str(fail_count))
+println("TOTAL: " + str(pass_count + fail_count))

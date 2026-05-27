@@ -1,0 +1,11 @@
+{
+  "rfc": "067-P4",
+  "kernel": "wmma_16x16",
+  "falsifier": "F-RFC067-TILE-LOOP-NUMERIC",
+  "verdict": "PASS",
+  "shape": "16x16x16",
+  "max_delta": 0,
+  "tolerance": 0.01125,
+  "mismatches": 0,
+  "max_abs_cref": 1.125
+}

@@ -1,0 +1,387 @@
+// RFC 067 PN hexa-emit SGEMM + XOR shared-mem swizzle -- M=N=K=768.
+//
+// Same geometry as PK (N66: 2-stage cp.async pipeline, 16 warps in 4x4 grid,
+// 64x64 output tile, 512 threads/CTA) but adds XOR swizzle on shared-mem:
+//   phys_col = log_col XOR (log_row & 7)
+// and replaces wmma.load.shared.tf32 + wmma.mma.m16n16k8 with explicit
+// per-lane shared loads + mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32.
+// Per warp: 2 mma calls covering n=0..7 and n=8..15 (16x16 warp tile).
+//
+// Layout:
+//   A row-major     [M=768 x K=768] f32. Row stride = 768 elem = 3072 B.
+//   B col-major     [K=768 x N=768] f32. Col stride = 768 elem = 3072 B.
+//   C row-major out [M=768 x N=768] f32. Row stride = 768 elem = 3072 B.
+//
+// Shared-mem swizzle (both A and B slabs):
+//   logical entry at (row_idx in 0..63, col_idx in 0..7) lives at:
+//     phys_offset = row_idx * 32 + (col_idx XOR (row_idx & 7)) * 4
+//   The XOR is its own inverse, so reads apply the same XOR.
+//
+// Per-CTA bases (unchanged from PK):
+//   A_cta = a + ctaid.y * 196608
+//   B_cta = b + ctaid.x * 196608
+//   C_cta = c + ctaid.y * 196608 + ctaid.x * 256
+//
+// Per-warp bases:
+//   warp     = tid.x >> 5
+//   m_tile   = warp >> 2
+//   n_tile   = warp & 3
+//   warp_m0  = m_tile * 16            (first M row this warp owns)
+//   warp_n0  = n_tile * 16            (first N col this warp owns)
+//
+// Cooperative cp.async (512 thr/CTA, 64*8 = 512 elements per tile per slab):
+//   t = tid.x;  row = t >> 3;  col = t & 7;
+//   phys_col = col XOR (row & 7)
+//   A_g  = A_cta + row * 3072 + (k*8 + col) * 4
+//   B_g  = B_cta + row * 3072 + (k*8 + col) * 4   (col here is K dim)
+//   cp.async.ca.shared.global [_tg_a + slot*2048 + row*32 + phys_col*4], [A_g], 4
+//   cp.async.ca.shared.global [_tg_b + slot*2048 + row*32 + phys_col*4], [B_g], 4
+
+.version 8.0
+.target sm_90
+.address_size 64
+
+.shared .align 16 .b8 _tg_a[4096];   // 2 slabs * 64 rows * 8 elem * 4 B
+.shared .align 16 .b8 _tg_b[4096];
+
+.visible .entry sgemm_xor_swizzle_768x768_grid (
+    .param .u64 a,
+    .param .u64 b,
+    .param .u64 c,
+    .param .u64 k_tiles
+)
+{
+    .reg .u64 %rd<32>;
+    .reg .u32 %r<80>;
+    .reg .pred %p1;
+    .reg .pred %pmore;
+    .reg .b32 %ra<4>;
+    .reg .b32 %rb<6>;
+    .reg .f32 %fc<8>;
+    .reg .f32 %ft<4>;
+
+    ld.param.u64 %rd0, [a];
+    ld.param.u64 %rd1, [b];
+    ld.param.u64 %rd2, [c];
+    ld.param.u64 %rd3, [k_tiles];
+
+    mov.u32 %r10, %ctaid.y;
+    mov.u32 %r11, %ctaid.x;
+
+    mov.u32 %r1, %tid.x;
+    shr.u32 %r2, %r1, 5;        // warp id
+    shr.u32 %r3, %r2, 2;        // m_tile = warp >> 2
+    and.b32 %r4, %r2, 3;        // n_tile = warp & 3
+    and.b32 %r50, %r1, 31;      // laneid
+    shr.u32 %r51, %r50, 2;      // group = laneid >> 2
+    and.b32 %r52, %r50, 3;      // thr_in_group = laneid & 3
+
+    // Cooperative load indices: row = tid >> 3, col = tid & 7.
+    shr.u32 %r12, %r1, 3;       // row_load in [0, 64)
+    and.b32 %r13, %r1, 7;       // col_load in [0, 8)
+
+    // A_cta = a + ctaid.y * 196608
+    mul.lo.u32 %r5, %r10, 196608;
+    cvt.u64.u32 %rd4, %r5;
+    add.u64 %rd10, %rd0, %rd4;
+
+    // B_cta = b + ctaid.x * 196608
+    mul.lo.u32 %r5, %r11, 196608;
+    cvt.u64.u32 %rd5, %r5;
+    add.u64 %rd11, %rd1, %rd5;
+
+    // A load offset (per thread, w.r.t. A_cta, excluding k_step):
+    mul.lo.u32 %r14, %r12, 3072;
+    mul.lo.u32 %r15, %r13, 4;
+    add.u32 %r14, %r14, %r15;
+    cvt.u64.u32 %rd14, %r14;
+    add.u64 %rd14, %rd10, %rd14;     // %rd14 = A_cta + row*3072 + col*4
+
+    // B load offset:
+    cvt.u64.u32 %rd15, %r14;
+    add.u64 %rd15, %rd11, %rd15;     // %rd15 = B_cta + row*3072 + col*4
+
+    // Per-thread shared store offset within ONE slab (XOR swizzled):
+    //   phys_col = col XOR (row & 7)
+    //   offset   = row * 32 + phys_col * 4
+    and.b32 %r53, %r12, 7;          // row & 7
+    xor.b32 %r54, %r13, %r53;       // phys_col
+    shl.b32 %r16, %r12, 5;          // row * 32
+    mul.lo.u32 %r17, %r54, 4;       // phys_col * 4
+    add.u32 %r16, %r16, %r17;       // %r16 = intra-slab thread offset (swizzled)
+
+    mov.u32 %r18, _tg_a;            // slab A base
+    mov.u32 %r20, _tg_b;            // slab B base
+
+    // ----------------------------------------------------------------
+    // Per-warp READ address computation for manual mma fragment fill.
+    //
+    // For matrix A (m16k8 .row .tf32), fragment lane mapping:
+    //   group   = laneid >> 2  in [0..7]
+    //   thr_in  = laneid & 3   in [0..3]
+    //   reg0 -> A[group    ][thr_in*2 + 0]
+    //   reg1 -> A[group    ][thr_in*2 + 1]
+    //   reg2 -> A[group + 8][thr_in*2 + 0]
+    //   reg3 -> A[group + 8][thr_in*2 + 1]
+    // Logical row in slab: warp_m0 + group   (for reg0/1)
+    //                      warp_m0 + group+8 (for reg2/3)
+    // Logical col in K:    thr_in*2 + 0      (reg0/2)
+    //                      thr_in*2 + 1      (reg1/3)
+    //
+    // For matrix B (k8n8 .col .tf32) -- B is stored col-major globally,
+    // and our slab-B layout puts col=warp_n0+group's K-dim at row index
+    // (warp_n0 + group) in the slab. With m16n8k8 we issue 2 mmas, one for
+    // n=warp_n0+0..7 (B0 cols) and one for n=warp_n0+8..15 (B1 cols).
+    // For each mma:
+    //   reg0 -> B[thr_in*2 + 0][n_col_base + group]
+    //   reg1 -> B[thr_in*2 + 1][n_col_base + group]
+    // The slab-B logical (row, col) lookup we need is at slab-row =
+    // (n_col_base + group), slab-col-K = (thr_in*2 + {0,1}).
+    //
+    // We pre-compute the row/col indices and base addresses below.
+    // ----------------------------------------------------------------
+
+    // warp_m0 = m_tile * 16
+    shl.b32 %r60, %r3, 4;
+    // warp_n0 = n_tile * 16
+    shl.b32 %r61, %r4, 4;
+
+    // A row indices:  rowA_lo = warp_m0 + group;  rowA_hi = warp_m0 + group + 8
+    add.u32 %r62, %r60, %r51;       // rowA_lo
+    add.u32 %r63, %r62, 8;          // rowA_hi
+    // A col indices in K:  colA_0 = thr_in*2;  colA_1 = thr_in*2 + 1
+    shl.b32 %r64, %r52, 1;          // colA_0
+    add.u32 %r65, %r64, 1;          // colA_1
+
+    // B0 row indices in slab-B: rowB0 = warp_n0 + group (for n=0..7 half)
+    // B1 row indices in slab-B: rowB1 = warp_n0 + group + 8 (for n=8..15 half)
+    add.u32 %r66, %r61, %r51;       // rowB0
+    add.u32 %r67, %r66, 8;          // rowB1
+    // B col indices in K (same as A col indices: thr_in*2, thr_in*2+1)
+    // i.e. %r64, %r65
+
+    // XOR swizzle for the per-lane shared loads.  Swizzle pattern is per
+    // logical row: phys_col = log_col XOR (log_row & 7).
+    //   A row_lo & 7:
+    and.b32 %r68, %r62, 7;          // rowA_lo & 7
+    xor.b32 %r69, %r64, %r68;       // phys colA_0 for rowA_lo
+    xor.b32 %r70, %r65, %r68;       // phys colA_1 for rowA_lo
+    //   A row_hi & 7:
+    and.b32 %r71, %r63, 7;          // rowA_hi & 7
+    xor.b32 %r72, %r64, %r71;       // phys colA_0 for rowA_hi
+    xor.b32 %r73, %r65, %r71;       // phys colA_1 for rowA_hi
+    //   B0 row & 7:
+    and.b32 %r74, %r66, 7;
+    xor.b32 %r75, %r64, %r74;       // phys colB_0 for rowB0
+    xor.b32 %r76, %r65, %r74;       // phys colB_1 for rowB0
+    //   B1 row & 7:
+    and.b32 %r77, %r67, 7;
+    // (reuse %r75/76 patterns via fresh regs below)
+
+    // C base offset (unchanged from PK).
+    mul.lo.u32 %r5, %r10, 196608;
+    mul.lo.u32 %r6, %r3, 49152;
+    add.u32 %r7, %r5, %r6;
+    mul.lo.u32 %r8, %r11, 256;
+    add.u32 %r7, %r7, %r8;
+    mul.lo.u32 %r8, %r4, 64;
+    add.u32 %r7, %r7, %r8;
+    cvt.u64.u32 %rd6, %r7;
+    add.u64 %rd12, %rd2, %rd6;
+
+    mov.f32 %fc0, 0f00000000;
+    mov.f32 %fc1, 0f00000000;
+    mov.f32 %fc2, 0f00000000;
+    mov.f32 %fc3, 0f00000000;
+    mov.f32 %fc4, 0f00000000;
+    mov.f32 %fc5, 0f00000000;
+    mov.f32 %fc6, 0f00000000;
+    mov.f32 %fc7, 0f00000000;
+
+    cvt.s32.s64 %r0, %rd3;          // K_TILES remaining
+    mov.u32 %r30, 0;                // current slot
+
+    // ---- PROLOGUE: kick K=0 prefetch into slot 0 ----
+    setp.le.s32 %p1, %r0, 0;
+    @%p1 bra $epilogue;
+
+    add.u32 %r40, %r18, %r16;
+    cp.async.ca.shared.global [%r40], [%rd14], 4;
+    add.u32 %r41, %r20, %r16;
+    cp.async.ca.shared.global [%r41], [%rd15], 4;
+    cp.async.commit_group;
+
+    add.u64 %rd14, %rd14, 32;
+    add.u64 %rd15, %rd15, 32;
+
+$kloop:
+    setp.le.s32 %p1, %r0, 0;
+    @%p1 bra $epilogue;
+
+    setp.gt.s32 %pmore, %r0, 1;
+    @!%pmore bra $no_prefetch;
+
+    xor.b32 %r31, %r30, 1;
+    shl.b32 %r32, %r31, 11;          // next_slot * 2048
+
+    add.u32 %r40, %r18, %r32;
+    add.u32 %r40, %r40, %r16;
+    cp.async.ca.shared.global [%r40], [%rd14], 4;
+
+    add.u32 %r41, %r20, %r32;
+    add.u32 %r41, %r41, %r16;
+    cp.async.ca.shared.global [%r41], [%rd15], 4;
+
+    cp.async.commit_group;
+    cp.async.wait_group 1;
+    bra $consume;
+
+$no_prefetch:
+    cp.async.wait_all;
+
+$consume:
+    bar.sync 0;
+
+    // current_slot base
+    shl.b32 %r34, %r30, 11;          // current_slot * 2048
+    add.u32 %r35, %r18, %r34;        // slab A base for this slot
+    add.u32 %r36, %r20, %r34;        // slab B base for this slot
+
+    // ---- Load A fragment (m16k8, .row, .tf32) per documented mma layout ----
+    //   reg0 -> [rowA_lo, colA_0]   swizzled: rowA_lo * 32 + (colA_0 XOR (rowA_lo & 7)) * 4
+    //   reg1 -> [rowA_lo, colA_1]
+    //   reg2 -> [rowA_hi, colA_0]
+    //   reg3 -> [rowA_hi, colA_1]
+    shl.b32 %r38, %r62, 5;          // rowA_lo * 32
+    mul.lo.u32 %r39, %r69, 4;       // phys colA_0 for rowA_lo * 4
+    add.u32 %r42, %r38, %r39;
+    add.u32 %r42, %r42, %r35;
+    ld.shared.b32 %ra0, [%r42];
+
+    mul.lo.u32 %r39, %r70, 4;       // phys colA_1 for rowA_lo * 4
+    add.u32 %r42, %r38, %r39;
+    add.u32 %r42, %r42, %r35;
+    ld.shared.b32 %ra1, [%r42];
+
+    shl.b32 %r38, %r63, 5;          // rowA_hi * 32
+    mul.lo.u32 %r39, %r72, 4;       // phys colA_0 for rowA_hi * 4
+    add.u32 %r42, %r38, %r39;
+    add.u32 %r42, %r42, %r35;
+    ld.shared.b32 %ra2, [%r42];
+
+    mul.lo.u32 %r39, %r73, 4;       // phys colA_1 for rowA_hi * 4
+    add.u32 %r42, %r38, %r39;
+    add.u32 %r42, %r42, %r35;
+    ld.shared.b32 %ra3, [%r42];
+
+    // ---- Load B fragment for n=0..7 (k8n8, .col, .tf32) ----
+    //   reg0 -> B[colA_0][rowB0]  -> slab-row rowB0, slab-col colA_0
+    //   reg1 -> B[colA_1][rowB0]
+    shl.b32 %r38, %r66, 5;          // rowB0 * 32
+    mul.lo.u32 %r39, %r75, 4;       // phys colB_0 for rowB0
+    add.u32 %r42, %r38, %r39;
+    add.u32 %r42, %r42, %r36;
+    ld.shared.b32 %rb0, [%r42];
+
+    mul.lo.u32 %r39, %r76, 4;       // phys colB_1 for rowB0
+    add.u32 %r42, %r38, %r39;
+    add.u32 %r42, %r42, %r36;
+    ld.shared.b32 %rb1, [%r42];
+
+    // ---- Load B fragment for n=8..15 ----
+    xor.b32 %r78, %r64, %r77;       // phys colB_0 for rowB1
+    xor.b32 %r79, %r65, %r77;       // phys colB_1 for rowB1
+    shl.b32 %r38, %r67, 5;          // rowB1 * 32
+    mul.lo.u32 %r39, %r78, 4;
+    add.u32 %r42, %r38, %r39;
+    add.u32 %r42, %r42, %r36;
+    ld.shared.b32 %rb4, [%r42];
+
+    mul.lo.u32 %r39, %r79, 4;
+    add.u32 %r42, %r38, %r39;
+    add.u32 %r42, %r42, %r36;
+    ld.shared.b32 %rb5, [%r42];
+
+    // ---- mma #1: m16n8k8 covering n=0..7 (acc fc0..fc3) ----
+    mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32
+        {%fc0, %fc1, %fc2, %fc3},
+        {%ra0, %ra1, %ra2, %ra3},
+        {%rb0, %rb1},
+        {%fc0, %fc1, %fc2, %fc3};
+
+    // ---- mma #2: m16n8k8 covering n=8..15 (acc fc4..fc7) ----
+    mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32
+        {%fc4, %fc5, %fc6, %fc7},
+        {%ra0, %ra1, %ra2, %ra3},
+        {%rb4, %rb5},
+        {%fc4, %fc5, %fc6, %fc7};
+
+    bar.sync 0;
+
+    add.u64 %rd14, %rd14, 32;
+    add.u64 %rd15, %rd15, 32;
+
+    xor.b32 %r30, %r30, 1;
+    sub.s32 %r0, %r0, 1;
+    bra $kloop;
+
+$epilogue:
+    // Store accumulator to global C using the m16n8k8 documented layout:
+    //   For 16x8 D output, lane (group, thr_in):
+    //     D[group    ][thr_in*2 + 0] = reg0
+    //     D[group    ][thr_in*2 + 1] = reg1
+    //     D[group + 8][thr_in*2 + 0] = reg2
+    //     D[group + 8][thr_in*2 + 1] = reg3
+    //   For the 16x16 warp tile we have two 16x8 halves: n=0..7 (fc0..fc3)
+    //   at C col offset 0, and n=8..15 (fc4..fc7) at C col offset 8.
+    //
+    // C address per lane element = C_warp_base + row * 3072 + col * 4
+    //
+    // Lane row indices: row_lo = group, row_hi = group + 8.
+    // Lane col indices: col_a = thr_in*2, col_b = thr_in*2 + 1.
+    // Per-warp C base is %rd12.
+
+    // row_lo byte off  = group * 3072
+    mul.lo.u32 %r45, %r51, 3072;
+    cvt.u64.u32 %rd20, %r45;
+    add.u64 %rd20, %rd12, %rd20;     // C[row_lo, col=0]
+
+    // row_hi byte off  = (group + 8) * 3072
+    add.u32 %r46, %r51, 8;
+    mul.lo.u32 %r47, %r46, 3072;
+    cvt.u64.u32 %rd21, %r47;
+    add.u64 %rd21, %rd12, %rd21;     // C[row_hi, col=0]
+
+    // col offset bytes: thr_in*2*4 = thr_in*8, and +4 for col_b
+    shl.b32 %r48, %r52, 3;           // thr_in * 8 bytes
+    // Half n=0..7:
+    //   D[row_lo][thr_in*2 + 0] = fc0
+    cvt.u64.u32 %rd22, %r48;
+    add.u64 %rd22, %rd20, %rd22;
+    st.global.f32 [%rd22], %fc0;
+    //   D[row_lo][thr_in*2 + 1] = fc1
+    add.u64 %rd22, %rd22, 4;
+    st.global.f32 [%rd22], %fc1;
+    //   D[row_hi][thr_in*2 + 0] = fc2
+    cvt.u64.u32 %rd22, %r48;
+    add.u64 %rd22, %rd21, %rd22;
+    st.global.f32 [%rd22], %fc2;
+    //   D[row_hi][thr_in*2 + 1] = fc3
+    add.u64 %rd22, %rd22, 4;
+    st.global.f32 [%rd22], %fc3;
+
+    // Half n=8..15:  col offset += 32 (8 cols * 4 bytes)
+    add.u32 %r48, %r48, 32;
+    cvt.u64.u32 %rd22, %r48;
+    add.u64 %rd22, %rd20, %rd22;
+    st.global.f32 [%rd22], %fc4;
+    add.u64 %rd22, %rd22, 4;
+    st.global.f32 [%rd22], %fc5;
+    cvt.u64.u32 %rd22, %r48;
+    add.u64 %rd22, %rd21, %rd22;
+    st.global.f32 [%rd22], %fc6;
+    add.u64 %rd22, %rd22, 4;
+    st.global.f32 [%rd22], %fc7;
+
+    ret;
+}

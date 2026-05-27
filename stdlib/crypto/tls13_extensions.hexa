@@ -1,0 +1,97 @@
+// HEXA Standard Library — crypto/tls13_extensions
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// TLS 1.3 Extension framework + supported_versions (RFC 8446 §4.2 / §4.2.1)
+// — pure hexa. Generic Extension TLV (uint16 type + uint16 length + value)
+// plus the standard supported_versions extension forms for ClientHello /
+// ServerHello. The most TLS-1.3-specific extension; specific others
+// (key_share, signature_algorithms, supported_groups, server_name) follow
+// in later PRs. let-mut idiom (#1506).
+//
+// Surface — generic Extension TLV:
+//   pub fn tls13_ext_build(ext_type: int, value: [int]) -> [int]
+//   pub fn tls13_ext_type(b: [int], o: int) -> int
+//   pub fn tls13_ext_length(b: [int], o: int) -> int
+//   pub fn tls13_ext_value_start(b: [int], o: int) -> int
+//   pub fn tls13_ext_next(b: [int], o: int) -> int
+//   pub fn tls13_ext_vec_wrap(extensions_concat: [int]) -> [int]  — prepend 2-byte total length
+// Surface — supported_versions:
+//   pub fn tls13_ext_supported_versions_client_tls13() -> [int]
+//   pub fn tls13_ext_supported_versions_server_tls13() -> [int]
+//
+// Constants (RFC 8446 §4.2 selected types):
+//   TLS_EXT_SERVER_NAME = 0x0000   TLS_EXT_SUPPORTED_GROUPS = 0x000a
+//   TLS_EXT_SIGNATURE_ALGORITHMS = 0x000d   TLS_EXT_SUPPORTED_VERSIONS = 0x002b
+//   TLS_EXT_KEY_SHARE = 0x0033
+
+let TLS_EXT_SERVER_NAME: int = 0x0000
+let TLS_EXT_SUPPORTED_GROUPS: int = 0x000a
+let TLS_EXT_SIGNATURE_ALGORITHMS: int = 0x000d
+let TLS_EXT_SUPPORTED_VERSIONS: int = 0x002b
+let TLS_EXT_KEY_SHARE: int = 0x0033
+
+let TLS_VERSION_1_3: int = 0x0304
+
+@pure
+pub fn tls13_ext_build(ext_type: int, value: [int]) -> [int] {
+    let mut o: [int] = []
+    let n = len(value)
+    o.push((ext_type >> 8) & 0xFF)
+    o.push(ext_type & 0xFF)
+    o.push((n >> 8) & 0xFF)
+    o.push(n & 0xFF)
+    let mut i = 0
+    while i < n { o.push(value[i]); i = i + 1 }
+    return o
+}
+
+@pure
+pub fn tls13_ext_type(b: [int], o: int) -> int {
+    return ((b[o] & 0xFF) << 8) | (b[o + 1] & 0xFF)
+}
+
+@pure
+pub fn tls13_ext_length(b: [int], o: int) -> int {
+    return ((b[o + 2] & 0xFF) << 8) | (b[o + 3] & 0xFF)
+}
+
+@pure
+pub fn tls13_ext_value_start(b: [int], o: int) -> int {
+    return o + 4
+}
+
+@pure
+pub fn tls13_ext_next(b: [int], o: int) -> int {
+    return o + 4 + tls13_ext_length(b, o)
+}
+
+// Wrap a concatenation of extensions with the outer 2-byte extensions-vector length
+// (the prefix that appears in ClientHello / ServerHello extensions field).
+@pure
+pub fn tls13_ext_vec_wrap(extensions_concat: [int]) -> [int] {
+    let mut o: [int] = []
+    let n = len(extensions_concat)
+    o.push((n >> 8) & 0xFF)
+    o.push(n & 0xFF)
+    let mut i = 0
+    while i < n { o.push(extensions_concat[i]); i = i + 1 }
+    return o
+}
+
+// supported_versions in ClientHello: extension_data = uint8 list_length || ProtocolVersion versions[].
+// For a TLS 1.3 only offer: list_length=2, versions=0x0304. Full extension bytes: 00 2b 00 03 02 03 04.
+@pure
+pub fn tls13_ext_supported_versions_client_tls13() -> [int] {
+    let inner = [0x02, (TLS_VERSION_1_3 >> 8) & 0xFF, TLS_VERSION_1_3 & 0xFF]
+    return tls13_ext_build(TLS_EXT_SUPPORTED_VERSIONS, inner)
+}
+
+// supported_versions in ServerHello/HRR: extension_data = ProtocolVersion selected_version (2 bytes).
+// For TLS 1.3 selection: 0x0304. Full extension bytes: 00 2b 00 02 03 04.
+@pure
+pub fn tls13_ext_supported_versions_server_tls13() -> [int] {
+    let inner = [(TLS_VERSION_1_3 >> 8) & 0xFF, TLS_VERSION_1_3 & 0xFF]
+    return tls13_ext_build(TLS_EXT_SUPPORTED_VERSIONS, inner)
+}

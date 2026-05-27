@@ -1,0 +1,140 @@
+// tool/init_project.hexa — `hexa init` project scaffolder (track B sister)
+//
+// @version 0.1.0
+// @capabilities [fs_write, exec]
+//
+// Mirrors self/main.hexa::cmd_init 1:1 so a future standalone bin/hexa-init
+// can be built via `hexa build tool/init_project.hexa -o bin/hexa-init` (R7
+// track B pattern, cf. tool/verify_cli.hexa → bin/hexa-verify).
+//
+// Current dispatch path: self/main.hexa inlines this logic directly so the
+// CLI works without a separate binary or interp dep. This sister file is
+// the canonical source for the standalone path.
+//
+// Usage:
+//   hexa-init <dir> [--name N]
+//
+// Behavior:
+//   - mkdir -p <dir>
+//   - write <dir>/project.hexa (minimal @I identity)
+//   - write <dir>/main.hexa (hello-world entry)
+//   - write <dir>/.gitignore (build/, .hexa-cache/, *.o, ...)
+//   - refuse rc=2 if <dir>/project.hexa or <dir>/main.hexa already exists
+//
+// INBOX 2026-05-25T23:10Z (c) RESOLVED — `hexa init` was "not implemented".
+
+fn _basename(path: string) -> string {
+    let n = len(path)
+    if n == 0 { return "project" }
+    let mut end = n
+    while end > 0 && path.substring(end - 1, end) == "/" {
+        end = end - 1
+    }
+    if end == 0 { return "project" }
+    let mut start = end
+    while start > 0 && path.substring(start - 1, start) != "/" {
+        start = start - 1
+    }
+    let bn = path.substring(start, end)
+    if len(bn) == 0 { return "project" }
+    return bn
+}
+
+fn _shell_quote(s: string) -> string {
+    let n = len(s)
+    let parts = []
+    parts.push("'")
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "'" {
+            parts.push("'\\''")
+        } else {
+            parts.push(c)
+        }
+        i = i + 1
+    }
+    parts.push("'")
+    return parts.join("")
+}
+
+fn main() {
+    let av = args()
+    // av layout when invoked as `hexa-init <dir> [--name N]`:
+    //   av[0] = exe path
+    //   av[1] = <dir>
+    //   av[2..] = optional flags
+    if len(av) < 2 {
+        println("error: hexa-init requires <dir> argument")
+        println("usage: hexa-init <dir> [--name N]")
+        exit(2)
+    }
+    let dir = av[1]
+    let mut name = ""
+    let mut k = 2
+    while k < len(av) {
+        let a = av[k]
+        if a == "--name" && k + 1 < len(av) {
+            name = av[k + 1]
+            k = k + 2
+        } else {
+            println("error: unknown init arg: " + a)
+            println("usage: hexa-init <dir> [--name N]")
+            exit(2)
+        }
+    }
+    if len(name) == 0 {
+        name = _basename(dir)
+    }
+
+    let pj_path = dir + "/project.hexa"
+    let mn_path = dir + "/main.hexa"
+    if file_exists(pj_path) || file_exists(mn_path) {
+        println("error: refusing to clobber existing project — " + dir + " already has project.hexa or main.hexa")
+        exit(2)
+    }
+
+    let dq = _shell_quote(dir)
+    let _mk = exec("mkdir -p " + dq + " 2>&1")
+
+    let pj_parts = []
+    pj_parts.push("// ")
+    pj_parts.push(name)
+    pj_parts.push(" — hexa project (scaffolded by `hexa init`)\n\n")
+    pj_parts.push("@I := \"")
+    pj_parts.push(name)
+    pj_parts.push("\" :: identity [active]\n")
+    pj_parts.push("  kind  = \"native binary\"\n")
+    pj_parts.push("  entry = \"main.hexa\"\n")
+    write_file(pj_path, pj_parts.join(""))
+
+    let mn_parts = []
+    mn_parts.push("// ")
+    mn_parts.push(name)
+    mn_parts.push(" — entry point\n\n")
+    mn_parts.push("fn main() {\n")
+    mn_parts.push("    println(\"hello from ")
+    mn_parts.push(name)
+    mn_parts.push("\")\n")
+    mn_parts.push("}\n")
+    write_file(mn_path, mn_parts.join(""))
+
+    let gi_parts = []
+    gi_parts.push("# hexa scaffold defaults\n")
+    gi_parts.push("build/\n")
+    gi_parts.push(".hexa-cache/\n")
+    gi_parts.push("*.o\n")
+    gi_parts.push("*.dSYM/\n")
+    gi_parts.push(".DS_Store\n")
+    write_file(dir + "/.gitignore", gi_parts.join(""))
+
+    println("scaffolded: " + dir + " (name=" + name + ")")
+    println("  - " + pj_path)
+    println("  - " + mn_path)
+    println("  - " + dir + "/.gitignore")
+    println("")
+    println("next:")
+    println("  hexa build " + dir + "/main.hexa -o " + dir + "/" + name)
+    println("  " + dir + "/" + name)
+}
+// auto-invoke handles main() — no explicit call (hexa-strict guard).

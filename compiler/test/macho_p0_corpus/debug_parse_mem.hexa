@@ -1,0 +1,16 @@
+import "../../emit/macho_arm64.hexa"
+
+fn main() {
+    let cases: [string] = ["[sp]", "[sp, #8]", "[sp, #-16]!", "[sp], #16"]
+    let mut i = 0
+    while i < len(cases) {
+        let s = cases[i]
+        let r = _parse_mem_op(s)
+        println("\"" + s + "\" -> [base=" + to_string(r[0]) + ", off=" + to_string(r[1]) + ", mode=" + to_string(r[2]) + "]")
+        i = i + 1
+    }
+    let v1 = "-16".to_int()
+    println("(\"-16\").to_int() = " + to_string(v1))
+    let v2 = "16".to_int()
+    println("(\"16\").to_int() = " + to_string(v2))
+}

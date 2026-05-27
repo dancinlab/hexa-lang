@@ -1,0 +1,183 @@
+// multiverse/module/bio_variant/ribozyme_variants.hexa
+//   M-variant ribozyme catalytic-core generator (Phase 0 MVP).
+//
+// Canonical reference (hexa-bio F-RB-4 cycle 24 C0b PASS):
+//   12-nt hammerhead-minimal catalytic core 5'-CUGAUGAGGCCG-3'
+//   (Symons 1981 13-nt minimal trimmed at variable position).
+//
+// Encoding: A=0, C=1, G=2, U=3. canonical = [1,3,2,0,3,2,0,2,2,1,1,2].
+//
+// Variant generation strategy (deterministic, reproducible):
+//   variant_0 = canonical (Hamming distance 0)
+//   variant_i (i ≥ 1) = canonical with `hamming_of(i)` positions perturbed,
+//     positions chosen by linear congruential walker (seed=i).
+//
+// Hamming schedule (M=15): [0, 1, 1, 2, 2, 2, 3, 3, 4, 4, 5, 6, 7, 8, 10]
+// — climbs through divergence regime expected by hexa-bio σ(6)=12
+//   STRUCTURAL-EXACT claim (functional collapse around d≥6).
+//
+// Usage:
+//   hexa ribozyme_variants.hexa <M> <out_file>
+//     writes M lines, each "variant_idx\thamming_d\tcore_seq\tposition_perturb_mask"
+//
+
+const CORE_LEN: i64 = 12
+
+// canonical core CUGAUGAGGCCG → integer encoding A=0,C=1,G=2,U=3
+fn canonical_core() -> [i64] {
+    let mut c: [i64] = []
+    c.push(1)   // C
+    c.push(3)   // U
+    c.push(2)   // G
+    c.push(0)   // A
+    c.push(3)   // U
+    c.push(2)   // G
+    c.push(0)   // A
+    c.push(2)   // G
+    c.push(2)   // G
+    c.push(1)   // C
+    c.push(1)   // C
+    c.push(2)   // G
+    return c
+}
+
+// Hamming schedule (M=15 entries; for M>15, fall back to a deterministic
+// growth schedule i % CORE_LEN with mild noise).
+fn hamming_of(idx: i64, M: i64) -> i64 {
+    if idx == 0 { return 0 }
+    let schedule: [i64] = [0, 1, 1, 2, 2, 2, 3, 3, 4, 4, 5, 6, 7, 8, 10]
+    if idx < schedule.len() && idx < 15 {
+        return schedule[idx]
+    }
+    // beyond first 15: grow modulo CORE_LEN with mild jitter
+    let mut h = (idx * 3 + 1) % (CORE_LEN + 1)
+    if h < 1 { h = 1 }
+    return h
+}
+
+// LCG deterministic position selector — choose `d` distinct positions in [0, CORE_LEN)
+fn select_positions(seed: i64, d: i64) -> [i64] {
+    let mut state = seed * 1103515245 + 12345
+    if state < 0 { state = 0 - state }
+    let mut chosen: [i64] = []
+    let mut tries = 0
+    while chosen.len() < d && tries < 200 {
+        state = (state * 1103515245 + 12345) & 2147483647
+        let pos = state % CORE_LEN
+        // skip if already chosen
+        let mut found = false
+        let mut k = 0
+        while k < chosen.len() {
+            if chosen[k] == pos { found = true }
+            k = k + 1
+        }
+        if !found { chosen.push(pos) }
+        tries = tries + 1
+    }
+    return chosen
+}
+
+// Pick an alternative base (any of 4 bases except `orig`).
+fn alt_base(orig: i64, seed: i64) -> i64 {
+    let mut state = (seed * 22695477 + 1) & 2147483647
+    let r = state % 3
+    // map r ∈ {0,1,2} → one of the 3 non-orig bases
+    let mut alt = (orig + 1 + r) % 4
+    if alt < 0 { alt = alt + 4 }
+    return alt
+}
+
+fn perturb_core(d: i64, variant_idx: i64) -> [i64] {
+    let mut core = canonical_core()
+    if d == 0 { return core }
+    let positions = select_positions(variant_idx + 7919, d)
+    let mut k = 0
+    while k < positions.len() {
+        let pos = positions[k]
+        let orig = core[pos]
+        let nb = alt_base(orig, variant_idx * 31 + pos * 17 + 5)
+        core[pos] = nb
+        k = k + 1
+    }
+    return core
+}
+
+fn base_to_char(b: i64) -> string {
+    if b == 0 { return "A" }
+    if b == 1 { return "C" }
+    if b == 2 { return "G" }
+    if b == 3 { return "U" }
+    return "N"
+}
+
+fn core_to_string(core: [i64]) -> string {
+    let mut s = ""
+    let mut i = 0
+    while i < core.len() {
+        s = s + base_to_char(core[i])
+        i = i + 1
+    }
+    return s
+}
+
+fn hamming_distance(a: [i64], b: [i64]) -> i64 {
+    let mut d: i64 = 0
+    let mut i = 0
+    while i < a.len() && i < b.len() {
+        if a[i] != b[i] { d = d + 1 }
+        i = i + 1
+    }
+    return d
+}
+
+fn position_mask(canonical: [i64], variant: [i64]) -> string {
+    // 1 if canonical, 0 if mutated
+    let mut s = ""
+    let mut i = 0
+    while i < canonical.len() {
+        if canonical[i] == variant[i] { s = s + "1" } else { s = s + "0" }
+        i = i + 1
+    }
+    return s
+}
+
+// API: generate_variants(M) → [{idx, d, core_seq, mask}]
+// stored as 4-line records in a single TSV string for easy hexa-stage0 IO.
+fn generate_variants_tsv(M: i64) -> string {
+    let canonical = canonical_core()
+    let mut out = ""
+    let mut i = 0
+    while i < M {
+        let d_target = hamming_of(i, M)
+        let v = perturb_core(d_target, i)
+        let d_actual = hamming_distance(canonical, v)
+        let seq = core_to_string(v)
+        let mask = position_mask(canonical, v)
+        out = out + to_string(i) + "\t" + to_string(d_actual) + "\t" + seq + "\t" + mask + "\n"
+        i = i + 1
+    }
+    return out
+}
+
+// CLI entrypoint
+let _args = args()
+if _args.len() < 3 {
+    println("usage: hexa ribozyme_variants.hexa <M> <out_file>")
+    println("  generates M variant records (idx, hamming_d, core_seq, conservation_mask)")
+} else {
+    let mut M = 15
+    try { M = to_int(_args[1]) } catch e { M = 15 }
+    let out_file = _args[2]
+    let tsv = generate_variants_tsv(M)
+    try { write_file(out_file, tsv) } catch e {}
+    println("[ribozyme_variants] M=" + to_string(M) + " canonical=CUGAUGAGGCCG -> " + out_file)
+    // Print first few for visibility
+    let lines = tsv.split("\n")
+    let mut k = 0
+    let lim = if lines.len() < 5 { lines.len() } else { 5 }
+    while k < lim {
+        if lines[k].len() > 0 { println("  " + lines[k]) }
+        k = k + 1
+    }
+    if lines.len() > 5 { println("  ... (" + to_string(lines.len() - 1) + " variants total)") }
+}

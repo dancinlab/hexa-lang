@@ -1,0 +1,55 @@
+#!hexa strict
+// self/tui/widget/indent.hexa — TUI-PRIM L4 indent / tool-response widget
+//
+// Renders a `  ⎿  <text>` line — the "tool result" visual prefix borrowed
+// from Claude Code's `MessageResponse` component. Used to wrap any output
+// that's a *response to* something (tool call, slash command, subagent
+// result) so it visually nests under the originating message.
+//
+// API
+//   pub fn indent_draw(x, y, text, w, fg, bg, attrs) -> int
+//     Draws `  ⎿  text` at (x,y), max w cells. The two leading spaces +
+//     the ⎿ glyph + two trailing spaces = 5-cell prefix; text uses the
+//     remaining w-5 cells. Returns number of cells written.
+//
+//   pub fn indent_prefix() -> string
+//     Returns the raw 5-cell prefix string (`  ⎿  `) for callers that want
+//     to embed it inline (e.g. concatenating into a scrollback row).
+//
+//   pub fn indent_prefix_width() -> int
+//     Returns 5 (the column count of the prefix).
+//
+// The `⎿` glyph is U+2ABF (SUPERSET WITH DOT). On terminals that lack it
+// the fallback is `⌙` (U+2319, "TURNED NOT SIGN") or `└` (U+2514, "BOX
+// DRAWINGS LIGHT UP AND RIGHT") — but those are escape hatches; the
+// canonical glyph carries semantic weight (= "this responds to the line
+// above") that the box-drawing chars don't.
+//
+// Coloring convention: the prefix itself is rendered DIM (attrs bit 8) so
+// the eye reads the *content* first and the structural marker fades to
+// background. Callers pass content fg/bg/attrs for the text portion; the
+// prefix is always dim-default-on-default regardless of caller args, to
+// keep tool-response framing consistent across the screen.
+
+use "self/tui/render"
+use "self/tui/widget/text"
+
+let INDENT_PREFIX = "  ⎿  "                        // 2 spaces + ⎿ + 2 spaces = 5 cells
+let INDENT_PREFIX_W = 5
+let INDENT_DIM_ATTRS = 8                           // dim bit (matches render.hexa attrs convention)
+
+pub fn indent_prefix() -> string { return INDENT_PREFIX }
+pub fn indent_prefix_width() -> int { return INDENT_PREFIX_W }
+
+pub fn indent_draw(x: int, y: int, text: string, w: int, fg: int, bg: int, attrs: int) -> int {
+    if w < 1 { return 0 }
+    // Render the 5-cell prefix dim-default regardless of caller args.
+    let pre_w = if INDENT_PREFIX_W < w { INDENT_PREFIX_W } else { w }
+    let mut written = text_draw(x, y, INDENT_PREFIX, pre_w, -1, -1, INDENT_DIM_ATTRS)
+    if written < INDENT_PREFIX_W { return written }
+    // Remaining columns for the text payload — caller's fg/bg/attrs.
+    let rem = w - INDENT_PREFIX_W
+    if rem < 1 { return written }
+    written = written + text_draw(x + INDENT_PREFIX_W, y, text, rem, fg, bg, attrs)
+    return written
+}

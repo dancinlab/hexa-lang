@@ -1,0 +1,37 @@
+{
+  "__fixture_tag__": "VENDORED UNIVERSAL-FF PREDICTION — frozen NNP output, not measurement",
+  "candidate_id": "hxm-quantum-si-donor-001",
+  "novel_section": "§4.C.1 (Tier-2 wave, 2026-05-14)",
+  "target_property": "electron-spin coherence time T₂ for ³¹P donor in ²⁸Si-enriched (≥ 99.99 %) host at sub-100 mK (Kane-scheme single-shot SET readout chemistry)",
+  "predicted_value": 30.0,
+  "predicted_unit": "s (T₂ at sub-100 mK)",
+  "operating_conditions": {
+    "host": "²⁸Si-enriched (≥ 99.99 % ²⁸Si, residual ²⁹Si ≤ 50 ppm)",
+    "donor": "³¹P (Kane-scheme architecture)",
+    "temperature_mK": 100,
+    "readout": "single-electron-transistor (SET) charge-sensing single-shot",
+    "decoupling": "Hahn-echo / dynamical decoupling sequence"
+  },
+  "model": "MACE-MP-0 (notional)",
+  "model_caveat": "Universal FFs are atomistic — they predict total energies / forces / stress on the Si lattice + ³¹P substitutional defect site, not the spin-coherence T₂ directly. T₂ is a spin-bath property dominated by residual ²⁹Si nuclear-flip-flop noise + Johnson-Nyquist gate noise. The 30 s value here is a PROXY-from-literature pinned with raw#10 C3 honesty: lab measurements on ²⁸Si:P donor ensembles. SEMI-QUANTITATIVE: NNP can only frame the host-lattice geometry that gates the residual ²⁹Si fraction; T₂ itself is a measured quantity in the proxy source.",
+  "proxy_source": "Saeedi et al. 2013 Science 342:830 (³¹P donor in ²⁸Si, electron-spin T₂ ≈ 3 s ensemble at 1.2 K + nuclear-spin T₂ ≈ 39 minutes); Tyryshkin et al. 2012 Nat. Mater. 11:143 (³¹P electron-spin T₂ ≈ 10 s @ 1.8 K in ²⁸Si ensemble); Muhonen et al. 2014 Nat. Nanotechnol. 9:986 (single-donor T₂ ≈ 0.56 s extended to 30 s with Hahn-echo + dynamical-decoupling in ²⁸Si, Morello / Dzurak UNSW)",
+  "falsifier_relation": "PASS",
+  "falsifier_target_value": 10.0,
+  "falsifier_target_unit": "s (T₂ at 100 mK)",
+  "falsifier_id": "F-QUANTUM-2",
+  "falsifier_text": "electron-spin T₂ < 10 s @ 100 mK OR single-shot readout fidelity < 99 % → FAIL",
+  "delta_to_target": 20.0,
+  "accessed": "2026-05-14",
+  "n6_lattice_fit_applied": false,
+  "is_measurement": false,
+  "is_external_verification": false,
+  "tier": "Tier-2",
+  "unproven_markers_preserved": [
+    "²⁸Si enrichment cost HARD_WALL — International Avogadro Project + Urenco centrifuge pricing UNVERIFIED at commodity scale",
+    "sub-50-ppm ²⁹Si residual UNVERIFIED at 200/300-mm wafer-scale chemical purification",
+    "single-shot SET readout fidelity ≥ 99% at scaled-array geometry UNVERIFIED (Muhonen single-donor; multi-donor crosstalk → hexa-chip per CROSS_LINK §3.2)",
+    "dual-use export-control friction on centrifuge route SOFT_WALL on commercial supply"
+  ],
+  "honesty_caveats": "Ensemble + single-donor T₂ in ²⁸Si:P routinely exceeds 10 s with dynamical decoupling; the 30 s proxy hits at the Muhonen 2014 single-donor benchmark. PASS on T₂ alone does NOT close the candidate — F-QUANTUM-2 has an AND-of-OR falsifier: T₂ < 10 s OR fidelity < 99 % fails. Single-shot readout fidelity at scaled-array geometry is the binding bar (Diraq / SQC roadmap UNVERIFIED at multi-qubit). SPEC_FIRST preserved — does NOT promote to EXTERNAL-VERIFIED. Qubit device integration → hexa-chip per CROSS_LINK §3.2.",
+  "license_note": "Peer-reviewed paper values per publisher terms; UNSW Morello / Dzurak + Princeton Lyon vendor authority (raw#10 C3, NOT n=6 lattice-fit)."
+}

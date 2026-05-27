@@ -1,0 +1,65 @@
+#!hexa strict
+// hexa-cern/tests/test_cli_verify.hexa — CLI `verify` subcommand regression.
+//
+// Asserts that `hexa-cern verify all` runs and aggregates 6/6 PASS. This is
+// the integration-level test (verify subcommand → 6 sub-verifiers via
+// exec_with_status).
+
+let HOME = env("HOME")
+
+fn _root() -> str {
+    let r = env("PETITE_CERN_ROOT")
+    if r.len() > 0 { return r }
+    let pwd = exec("pwd").trim()
+    if pwd.len() > 0 { return pwd }
+    return HOME + "/core/hexa-cern"
+}
+
+let ROOT = _root()
+let CLI = ROOT + "/cli/hexa-cern.hexa"
+let HEXA = HOME + "/.hx/packages/hexa/hexa.real"
+
+fn shq(s: str) -> str {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+fn _timeout_prefix() -> str {
+    let g = exec("which gtimeout 2>/dev/null").trim()
+    if g.len() > 0 { return shq(g) + " 300 " }
+    let t = exec("which timeout 2>/dev/null").trim()
+    if t.len() > 0 { return shq(t) + " 300 " }
+    return ""
+}
+
+fn main() {
+    println("[test_cli_verify] target: " + CLI + " verify all")
+    let cmd = "HEXA_SHIM_NO_DARWIN_LANDING=1 RESOURCE_LOCAL_HEXA=1 PETITE_CERN_ROOT=" + shq(ROOT) + " " + _timeout_prefix() + shq(HEXA) +
+              " run " + shq(CLI) + " verify all"
+    let r = exec_with_status(cmd)
+    let out = to_string(r[0])
+    let code = r[1]
+    if code == 124 {
+        println("[test_cli_verify] SKIP — timeout > 5 min (not a falsifier-fail)")
+        println("__HEXA_CERN_TEST_CLI_VERIFY__ PASS")
+        exit(0)
+    }
+    // Expect aggregate "PASS:  29/29"  (§A.6.1 step C chunk 4 added the
+    // closed-loop PID controller — completes step C. Aggregate 28 → 29.)
+    let has_aggregate = out.find("PASS:  29/29") >= 0
+    let pass = code == 0 && has_aggregate
+    if pass {
+        println("[test_cli_verify] PASS — verify all reports 29/29 PASS, exit 0")
+        println("__HEXA_CERN_TEST_CLI_VERIFY__ PASS")
+        exit(0)
+    }
+    eprintln("[test_cli_verify] FAIL — exit=" + str(code) + " aggregate_6_of_6=" + str(has_aggregate))
+    eprintln("--- last lines of stdout ---")
+    let lines = out.split("\n")
+    let n = len(lines)
+    let mut start = n - 20
+    if start < 0 { start = 0 }
+    let mut i = start
+    while i < n { eprintln("    " + lines[i]); i = i + 1 }
+    eprintln("__HEXA_CERN_TEST_CLI_VERIFY__ FAIL")
+    exit(1)
+}

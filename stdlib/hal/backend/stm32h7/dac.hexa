@@ -1,0 +1,95 @@
+#!hexa strict
+// stdlib/hal/backend/stm32h7/dac.hexa — STM32H7 DAC backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved (dac.hexa
+// sim ships first; this is HW-backend addition).
+//
+// Target:    STMicroelectronics STM32H7 Cortex-M7 @ 480 MHz.
+// Chip ref:  RM0433 §29 Digital-to-analog converter (DAC1 dual-channel
+//            12-bit; DAC2 optional on H72/H73x). Native hardware DAC
+//            with DMA-driven waveform output, 1 MSPS conversion rate.
+// Surface:   stm32h7_dac_{configure,write,close}(...)
+// Dispatch:  dac.hexa selects this via cfg-flag.
+//
+// MMIO layout:
+//
+//   DAC1:  base = 0x40007400   (channel 1 → PA4, channel 2 → PA5)
+//   DAC2:  base = 0x58003400   (optional, certain SKUs)
+//
+//   DAC_CR                     0x000   control:
+//                                       EN1 bit 0 (channel 1 enable)
+//                                       TEN1 bit 2 (trigger enable)
+//                                       TSEL1 bits 5:3 (trigger source)
+//                                       WAVE1 bits 7:6 (noise / triangle)
+//                                       MAMP1 bits 11:8 (mask amplitude)
+//                                       DMAEN1 bit 12
+//                                       EN2 bit 16 / TEN2 bit 18 / ...
+//   DAC_SWTRIGR                0x004   software trigger (write 1 to fire)
+//   DAC_DHR12R1                0x008   12-bit right-aligned, channel 1
+//   DAC_DHR12L1                0x00C   12-bit left-aligned
+//   DAC_DHR8R1                 0x010   8-bit right-aligned
+//   DAC_DHR12R2                0x014   12-bit right-aligned, channel 2
+//   DAC_DHR12RD                0x020   dual 12-bit (both channels)
+//   DAC_DOR1                   0x02C   data output register (read-back)
+//   DAC_DOR2                   0x030
+//   DAC_SR                     0x034   status: DMAUDR<n> underrun flags
+//
+// Reference: V_REF+ from chip pin (typ 3.3 V); output range 0..VREF+.
+// Conversion rate: up to 1 MSPS per channel with DMA + TIM trigger.
+
+let MODULE_NAME = "stm32h7_dac"
+let SIGMA_SLOT  = 6
+let PHI_KIND    = "analog"
+
+let DAC1_BASE = 0x40007400
+let DAC2_BASE = 0x58003400
+
+let DAC_CR        = 0x000
+let DAC_SWTRIGR   = 0x004
+let DAC_DHR12R1   = 0x008
+let DAC_DHR12R2   = 0x014
+let DAC_DOR1      = 0x02C
+let DAC_DOR2      = 0x030
+
+let RES_8BIT  = 8
+let RES_12BIT = 12
+let RES_16BIT = 16   // not native; software upscale required
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn stm32h7_dac_configure(unit: int, channel: int, resolution: int) -> int {
+    if unit < 0 || unit > 1 { return -1 }     // DAC1 / DAC2 (latter optional)
+    if channel < 0 || channel > 1 { return -2 } // 2 channels per unit
+    if resolution != 8 && resolution != 12 { return -3 }
+    // STUB: enable RCC.APB1ENR.DAC1EN; configure GPIO PA4/PA5 as analog;
+    //       set DAC_CR.ENn=1, TENn=0 (software trigger), no waveform
+    return unit * 12 + channel
+}
+
+fn stm32h7_dac_write(handle: int, value: int) -> bool {
+    if handle < 0 { return false }
+    if value < 0 || value > 0xFFFF { return false }
+    // STUB: write DAC_DHR12R<channel> with value (12-bit) or DAC_DHR8R<channel>
+    //       with value (8-bit shifted as configured)
+    return true
+}
+
+fn stm32h7_dac_close(handle: int) -> bool {
+    if handle < 0 { return false }
+    // STUB: clear DAC_CR.ENn
+    return true
+}
+
+fn stm32h7_dac_report(handle: int) -> str {
+    return "[stm32h7_dac sim] handle=" + str(handle) + " (skeleton stub — TODO MMIO)"
+}
+
+fn stm32h7_dac_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[stm32h7_dac sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  DAC1=" + str(DAC1_BASE) + " DAC2=" + str(DAC2_BASE) + " (optional)")
+    println("  native 12-bit, 1 MSPS, V_REF+ 3.3V; DMA + TIM trigger for waveforms")
+}

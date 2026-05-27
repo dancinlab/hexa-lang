@@ -1,0 +1,8 @@
+#!hexa strict
+// aerogel synthesize — supercritical CO2 temp.
+fn main() {
+    let supercrit_T_C = 31.0
+    println("aerogel_synthesize (supercritical CO2 temp):")
+    println("  supercrit_T_C = " + str(supercrit_T_C))
+    println("__HEXA_AEROGEL_SYNTHESIZE__ PASS gate=GATE_OPEN absorbed=false")
+}

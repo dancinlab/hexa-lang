@@ -1,0 +1,3488 @@
+// tool/atlas_cli.hexa — `hexa atlas {hash|stats|lookup|dump|register|export}`
+//
+// @version 0.8.0
+// @capabilities [fs_read, fs_write, exec]
+//
+// Atlas surface — compiler/atlas/embedded.gen.hexa is THE single SSOT (the
+// binary-builtin atlas; #846 owner-directed inversion of the n6-runtime model):
+//   - READ (hash/stats/lookup/dump) resolve against static_atlas(), which
+//     TEXT-parses embedded.gen.hexa at load (extracts each AtlasNode.raw .n6
+//     block → parser::parse_atlas_string). OOM-safe: never a compile-time `use`.
+//   - WRITE (register) is the ONE absorption verb. Each `--from-<verb>` arm runs
+//     the verb IN-PROCESS, constructs the verified AtlasNode IN MEMORY, and folds
+//     it DIRECTLY into embedded.gen.hexa — visible to the next lookup with NO
+//     rebuild, NO staging shard, NO intermediate. Commit embedded.gen.hexa with
+//     normal git to share. All arms share DiscoveryEvent → register_from_event.
+//       --from-verify <fn> <n|a b> <v>   recompute IN-PROCESS, register on 🔵/🟢
+//       --from-drill  --seed "<text>"    drive the drill engine, register candidates
+//       --from-discovery <slug>          fold .discoveries/<slug>.tape atoms (F14-F18 ceremony)
+//   - EXPORT (export [--out PATH]) writes the live atlas out as a portable .n6
+//     file (default n6/atlas.n6). n6/atlas.n6 is an EXPORT artifact only — NOT
+//     the runtime SSOT.
+//
+//   (append-witness staging shards, the `pr` verb + --auto-pr PR-only detour, the
+//    `register <file>` STUB, and the n6-runtime-SSOT load path were abolished
+//    2026-05-25 — #831 (collapse) + #846 (embedded-SSOT inversion).)
+//
+// Wired from self/main.hexa: `hexa atlas <sub-sub> [args]`.
+// Also runnable directly: `hexa run tool/atlas_cli.hexa <sub-sub> [args]`.
+
+use "compiler/atlas/parser"
+use "compiler/atlas/merger"
+use "compiler/atlas/static_index"
+use "compiler/atlas/cascade"       // cascade_candidates / cascade_to_text — read-only cascade-invalidation query (R5 #1026)
+use "compiler/atlas/atlas_diff"    // cmd_diff — diff two atlas sources (R6)
+use "compiler/atlas/proof_chain"   // proof_chain / proof_to_text / proof_to_json — read-only proof-chain export (R6)
+use "compiler/atlas/auto_edge"     // infer_edges / infer_proposals_to_text/json — read-only auto-edge inference (R7)
+use "compiler/atlas/embed_fold"    // embed_fold_into (kind,id dedup + atomic write)
+use "compiler/atlas/calc_dispatch" // calc_eps / calc_is_float_fn — float-recompute SSOT (shared w/ verify_cli)
+use "self/stdlib/fs"               // read_file_safe (used by cmd_append_witness)
+use "compiler/atlas/audit"
+use "compiler/atlas/audit_rodata"
+use "compiler/atlas/overlay"
+use "compiler/discover/promote"
+use "compiler/atlas/symbolic/congruence_chain_engine"
+use "compiler/drill/drill"
+use "compiler/drill/round"
+use "compiler/smash/candidate"
+
+fn _slice_args() -> array {
+    let av = args()
+    let n = len(av)
+    let mut i = 1
+    while i < n {
+        let a = to_string(av[i])
+        if a == "lookup" || a == "dump" || a == "stats" || a == "hash" || a == "register" || a == "export" || a == "diff" || a == "reverify" || a == "cascade" || a == "proof" || a == "infer-edges" || a == "--help" || a == "-h" || a == "help" {
+            let mut out = []
+            let mut j = i
+            while j < n {
+                out.push(av[j])
+                j = j + 1
+            }
+            return out
+        }
+        i = i + 1
+    }
+    if n >= 3 {
+        let mut out = []
+        let mut j = 2
+        while j < n {
+            out.push(av[j])
+            j = j + 1
+        }
+        return out
+    }
+    return []
+}
+
+fn _jq(s: string) -> string {
+    let n = len(s)
+    let mut out = ""
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "\\" { out = out + "\\\\" }
+        else if c == "\"" { out = out + "\\\"" }
+        else if c == "\n" { out = out + "\\n" }
+        else if c == "\r" { out = out + "\\r" }
+        else if c == "\t" { out = out + "\\t" }
+        else { out = out + c }
+        i = i + 1
+    }
+    return out
+}
+
+fn _arr_for_kind(idx: AtlasIndex, k: string) -> array {
+    if k == "P" { return idx.p_nodes }
+    if k == "C" { return idx.c_nodes }
+    if k == "L" { return idx.l_nodes }
+    if k == "E" { return idx.e_nodes }
+    if k == "F" { return idx.f_nodes }
+    if k == "R" { return idx.r_nodes }
+    if k == "S" { return idx.s_nodes }
+    if k == "X" { return idx.x_nodes }
+    if k == "Q" { return idx.q_nodes }
+    return []
+}
+
+fn _emit_text(n: AtlasNode) {
+    println("@" + n.kind + " " + n.id + " :: " + n.source_file + ":" + to_string(n.source_line))
+    if len(n.raw) > 0 {
+        println(n.raw)
+    }
+    println("--")
+}
+
+fn _emit_jsonl(n: AtlasNode) {
+    println("{\"kind\":\"" + _jq(n.kind) + "\",\"id\":\"" + _jq(n.id) + "\",\"source_file\":\"" + _jq(n.source_file) + "\",\"source_line\":" + to_string(n.source_line) + ",\"raw\":\"" + _jq(n.raw) + "\"}")
+}
+
+fn cmd_hash() {
+    let idx = static_atlas()
+    println(idx.hash)
+}
+
+fn cmd_stats(rest: array) {
+    // Parse flags: --audit (full Wave 2 audit report), --format=json
+    // (machine-readable), --scope=rodata|overlay|merged (default merged
+    // when --audit, rodata otherwise for backward compat).
+    let mut do_audit = false
+    let mut do_acq = false
+    let mut do_num = false
+    let mut acq_top = 20
+    let mut fmt = "text"
+    let mut audit_scope = ""
+    let mut i = 0
+    let n = len(rest)
+    while i < n {
+        let a = to_string(rest[i])
+        if a == "--audit" { do_audit = true; i = i + 1 }
+        else if a == "--acquisition" { do_acq = true; i = i + 1 }
+        else if a == "--numerology" { do_num = true; i = i + 1 }
+        else if a.starts_with("--top=") { acq_top = to_int(a.substring(6, len(a))); i = i + 1 }
+        else if a == "--format=json" || a == "--json" { fmt = "json"; i = i + 1 }
+        else if a == "--format=text" { fmt = "text"; i = i + 1 }
+        else if a == "--scope=rodata" { audit_scope = "rodata"; i = i + 1 }
+        else if a == "--scope=overlay" { audit_scope = "overlay"; i = i + 1 }
+        else if a == "--scope=merged" { audit_scope = "merged"; i = i + 1 }
+        else { i = i + 1 }
+    }
+    // Acquisition-frontier ranking (R5): Q / 🟡 / 🟠 prioritization.
+    if do_acq {
+        if len(audit_scope) == 0 { audit_scope = "merged" }
+        let arep = if audit_scope == "rodata" { audit_acquisition_rodata(acq_top) }
+                   else if audit_scope == "overlay" { audit_acquisition_overlay(acq_top) }
+                   else { audit_acquisition_merged(acq_top) }
+        if fmt == "json" { println(acquisition_to_json(arep)) }
+        else { print(acquisition_to_text(arep)) }
+        return
+    }
+    // Numerology quarantine tier (R7): isolate coincidence-claim nodes that
+    // carry no derivation / citation, so they aren't mixed with rigor.
+    if do_num {
+        if len(audit_scope) == 0 { audit_scope = "merged" }
+        let nrep = if audit_scope == "rodata" { audit_numerology_rodata() }
+                   else if audit_scope == "overlay" { audit_numerology_overlay() }
+                   else { audit_numerology_merged() }
+        if fmt == "json" { println(numerology_to_json(nrep)) }
+        else { print(numerology_to_text(nrep)) }
+        return
+    }
+    if !do_audit {
+        // Legacy compact stats — keep stable for callers / CI pinning.
+        let idx = static_atlas()
+        let p = len(idx.p_nodes)
+        let c = len(idx.c_nodes)
+        let l = len(idx.l_nodes)
+        let e = len(idx.e_nodes)
+        let f = len(idx.f_nodes)
+        let r = len(idx.r_nodes)
+        let s = len(idx.s_nodes)
+        let x = len(idx.x_nodes)
+        let q = len(idx.q_nodes)
+        let total = p + c + l + e + f + r + s + x + q
+        println("ATLAS_HASH         " + idx.hash)
+        println("ATLAS_SOURCE_COUNT " + to_string(idx.source_count))
+        println("P primitives       " + to_string(p))
+        println("C constants        " + to_string(c))
+        println("L laws             " + to_string(l))
+        println("E experiments      " + to_string(e))
+        println("F formulas         " + to_string(f))
+        println("R relations        " + to_string(r))
+        println("S symmetries       " + to_string(s))
+        println("X crossings        " + to_string(x))
+        println("Q open questions   " + to_string(q))
+        println("total nodes        " + to_string(total))
+        return
+    }
+    // Full audit report.
+    if len(audit_scope) == 0 { audit_scope = "merged" }
+    let rep = if audit_scope == "rodata" { audit_rodata() }
+              else if audit_scope == "overlay" { audit_overlay() }
+              else { audit_merged() }
+    if fmt == "json" {
+        println(audit_to_json(rep))
+    } else {
+        print(audit_to_text(rep))
+    }
+}
+
+fn cmd_lookup(rest: array) {
+    if len(rest) == 0 {
+        println("usage: hexa atlas lookup [P|C|L|E|F|R|S|X|Q] <id>")
+        println("       hexa atlas lookup --prefix=<id-prefix>")
+        exit(2)
+    }
+    // --prefix=<...> short-circuit (Wave 2.3).
+    let mut prefix = ""
+    let mut positional = []
+    let mut pi = 0
+    while pi < len(rest) {
+        let a = to_string(rest[pi])
+        if a.starts_with("--prefix=") {
+            prefix = a.substring(9, len(a))
+        } else if a == "--prefix" && pi + 1 < len(rest) {
+            prefix = to_string(rest[pi + 1])
+            pi = pi + 1
+        } else {
+            positional.push(rest[pi])
+        }
+        pi = pi + 1
+    }
+    if len(prefix) > 0 {
+        let hits = atlas_prefix(prefix)
+        if len(hits) == 0 {
+            println("# no nodes match prefix: " + prefix)
+            exit(1)
+        }
+        let mut hi = 0
+        while hi < len(hits) {
+            _emit_text(hits[hi])
+            hi = hi + 1
+        }
+        return
+    }
+    let mut kind = ""
+    let mut id = ""
+    if len(positional) >= 2 {
+        let a0 = to_string(positional[0])
+        if a0 == "P" || a0 == "C" || a0 == "L" || a0 == "E" || a0 == "F" || a0 == "R" || a0 == "S" || a0 == "X" || a0 == "Q" {
+            kind = a0
+            id = to_string(positional[1])
+        } else {
+            id = a0
+        }
+    } else if len(positional) == 1 {
+        id = to_string(positional[0])
+    }
+    if len(id) == 0 {
+        println("usage: hexa atlas lookup [P|C|L|E|F|R|S|X|Q] <id>")
+        exit(2)
+    }
+
+    if len(kind) > 0 {
+        let n = lookup_static(kind, id)
+        if n.kind == "" {
+            println("# not found: " + kind + ":" + id)
+            exit(1)
+        }
+        _emit_text(n)
+        return
+    }
+    let kinds = ["P", "C", "L", "E", "F", "R", "S", "X", "Q"]
+    let mut i = 0
+    let mut found = 0
+    while i < len(kinds) {
+        let n = lookup_static(kinds[i], id)
+        if n.kind != "" {
+            _emit_text(n)
+            found = found + 1
+        }
+        i = i + 1
+    }
+    if found == 0 {
+        println("# not found: " + id + " (searched P, C, L, E, F, R, S, X, Q)")
+        exit(1)
+    }
+}
+
+fn cmd_dump(rest: array) {
+    let mut want_kind = ""
+    let mut json_mode = false
+    let mut i = 0
+    while i < len(rest) {
+        let a = to_string(rest[i])
+        if a == "--json" || a == "-j" { json_mode = true }
+        else if a == "P" || a == "C" || a == "L" || a == "E" || a == "F" || a == "R" || a == "S" || a == "X" || a == "Q" { want_kind = a }
+        i = i + 1
+    }
+    let idx = static_atlas()
+    let kinds = ["P", "C", "L", "E", "F", "R", "S", "X", "Q"]
+    let mut ki = 0
+    while ki < len(kinds) {
+        let k = kinds[ki]
+        if len(want_kind) == 0 || want_kind == k {
+            let arr = _arr_for_kind(idx, k)
+            let mut ni = 0
+            while ni < len(arr) {
+                let n = arr[ni]
+                if json_mode { _emit_jsonl(n) } else { _emit_text(n) }
+                ni = ni + 1
+            }
+        }
+        ki = ki + 1
+    }
+}
+
+// cmd_export — write the live atlas (binary-builtin, served by static_atlas
+// from embedded.gen.hexa) out as a portable .n6 file. n6/atlas.n6 is NOT the
+// runtime SSOT (that is embedded.gen.hexa) — it is produced ON DEMAND here for
+// sharing / inspection / import elsewhere. Default out = n6/atlas.n6.
+fn cmd_export(rest: array) {
+    let mut out = ""
+    let mut i = 0
+    while i < len(rest) {
+        let a = to_string(rest[i])
+        if a == "--out" && i + 1 < len(rest) { out = to_string(rest[i + 1]); i = i + 2 }
+        else { i = i + 1 }
+    }
+    if len(out) == 0 {
+        let home = env_var("HOME")
+        out = home + "/core/hexa-lang/n6/atlas.n6"
+    }
+    let idx = static_atlas()
+    let kinds = ["P", "C", "L", "E", "F", "R", "S", "X", "Q"]
+    let mut parts = []
+    let mut ki = 0
+    let mut count = 0
+    while ki < len(kinds) {
+        let arr = _arr_for_kind(idx, kinds[ki])
+        let mut ni = 0
+        while ni < len(arr) {
+            let nd = arr[ni]
+            if len(nd.raw) > 0 {
+                parts.push(nd.raw)
+                parts.push("\n\n")
+                count = count + 1
+            }
+            ni = ni + 1
+        }
+        ki = ki + 1
+    }
+    write_file(out, parts.join(""))
+    println("hexa atlas export: wrote " + to_string(count) + " nodes → " + out)
+}
+
+// cmd_diff — `hexa atlas diff <A> <B>` (R6). READ-ONLY comparison of two
+// atlas sources keyed on (kind, id): nodes only-in-A (removed), only-in-B
+// (added), in-both-but-raw-differs (changed). A / B are file paths — either
+// a plain .n6 export or an embedded.gen.hexa file (auto-detected by the
+// loader). --format=json / --json emits machine-readable id lists + counts.
+fn cmd_diff(rest: array) {
+    let mut paths = []
+    let mut json_mode = false
+    let mut i = 0
+    while i < len(rest) {
+        let a = to_string(rest[i])
+        if a == "--format=json" || a == "--json" { json_mode = true }
+        else if a == "--format=text" { json_mode = false }
+        else { paths.push(a) }
+        i = i + 1
+    }
+    if len(paths) < 2 {
+        eprintln("usage: hexa atlas diff <A> <B> [--format=json]")
+        eprintln("  A / B = .n6 export OR embedded.gen.hexa file (auto-detected)")
+        exit(2)
+    }
+    let a_nodes = load_atlas_source(to_string(paths[0]))
+    let b_nodes = load_atlas_source(to_string(paths[1]))
+    let d = diff_atlas(a_nodes, b_nodes)
+    if json_mode { diff_report_json(d) } else { diff_report_text(d) }
+}
+
+// `hexa atlas register` — the ONE absorption verb. Each `--from-<verb>` arm
+// re-runs the verb IN-PROCESS (same calc fns as `hexa verify --expr`), and on a
+// 🔵 SUPPORTED-FORMAL / 🟢 SUPPORTED-NUMERICAL result constructs the AtlasNode
+// .n6 block IN MEMORY and folds it DIRECTLY into embedded.gen.hexa SSOT (see
+// _append_live_n6) — visible to the next lookup with NO rebuild. Commit
+// n6/atlas.n6 with normal git to share. Arms: --from-verify · --from-drill.
+
+// --- helpers for direct node-construction + n6 fold ---------------
+
+let _NOCALC_REGISTER: int = -999999
+
+// _recompute_register — mirror tool/verify_cli.hexa::_recompute (1-op).
+// Kept inline so atlas_cli stays a single tool — verify_cli has `main` and
+// cannot be imported as a module. Add a case here when verify_cli's table
+// grows, OR pull verify_cli's calc into a shared compiler/atlas/symbolic/
+// dispatcher (TODO: extract once a 3rd consumer arrives).
+fn _recompute_register(fn_name: string, n: int) -> int {
+    if fn_name == "divisor_sum" || fn_name == "sigma" || fn_name == "sigma_1" { return sigma_k(n, 1) }
+    if fn_name == "sigma_0" { return sigma_k(n, 0) }
+    if fn_name == "sigma_2" { return sigma_k(n, 2) }
+    if fn_name == "euler_totient" || fn_name == "euler_phi" || fn_name == "phi" { return euler_phi(n) }
+    if fn_name == "mobius" || fn_name == "mu" { return mobius(n) }
+    if fn_name == "divisor_count" || fn_name == "tau" { return len(divisors(n)) }
+    if fn_name == "sigma_3" { return sigma_k(n, 3) }   // Σ_{d|n} d³ — A001158 (INBOX #5 · mirror verify_cli · g0 sigma_k reuse)
+    // sigma_star / omega_big / liouville / liouville_summatory / pisano_period —
+    // INLINED (not delegated to congruence_chain_engine) so the module flattener
+    // pulls each body into THIS compile unit alongside the sigma_k/divisors arms.
+    // The prior `return sigma_star(n)` delegation form built only stub-extern
+    // refs (`hexa_call1(sigma_star, n)` undeclared): these single-use callees
+    // were never traced reachable through the new arms, so clang failed. Same
+    // closure as the inlined `mertens` arm below + congruence_chain's `sopfr`
+    // note. Bodies are verbatim ports of congruence_chain_engine.hexa.
+    if fn_name == "sigma_star" {   // Σ_{d||n} d — unitary divisor sum (INBOX #6 · A034448)
+        if n <= 0 { return 0 }
+        let ds = divisors(n)
+        let mut s = 0
+        let mut i = 0
+        while i < len(ds) {
+            let d = ds[i]
+            let mut a = d
+            let mut b = n / d
+            while b != 0 { let t = a % b; a = b; b = t }
+            if a == 1 { s = s + d }
+            i = i + 1
+        }
+        return s
+    }
+    if fn_name == "omega_big" || fn_name == "big_omega" {   // Ω(n) w/ multiplicity — A001222 (INBOX #7)
+        let mut count = 0
+        let mut x = n
+        let mut d = 2
+        while d * d <= x {
+            while x % d == 0 { count = count + 1; x = x / d }
+            d = d + 1
+        }
+        if x > 1 { count = count + 1 }
+        return count
+    }
+    if fn_name == "liouville" {   // λ(n)=(−1)^Ω(n) +1/−1 — A008836 (INBOX #7)
+        let mut count = 0
+        let mut x = n
+        let mut d = 2
+        while d * d <= x {
+            while x % d == 0 { count = count + 1; x = x / d }
+            d = d + 1
+        }
+        if x > 1 { count = count + 1 }
+        if count % 2 == 0 { return 1 }
+        return -1
+    }
+    if fn_name == "liouville_summatory" {   // L(n)=Σλ(k) — A002819 (INBOX #7)
+        let mut sum = 0
+        let mut k = 1
+        while k <= n {
+            let mut count = 0
+            let mut x = k
+            let mut d = 2
+            while d * d <= x {
+                while x % d == 0 { count = count + 1; x = x / d }
+                d = d + 1
+            }
+            if x > 1 { count = count + 1 }
+            if count % 2 == 0 { sum = sum + 1 } else { sum = sum - 1 }
+            k = k + 1
+        }
+        return sum
+    }
+    if fn_name == "pisano_period" {   // π(n) Fibonacci period mod n — A001175 (INBOX #8)
+        if n <= 1 { return 1 }
+        let mut a = 0
+        let mut b = 1
+        let mut period = 0
+        while true {
+            let t = (a + b) % n
+            a = b
+            b = t
+            period = period + 1
+            if a == 0 && b == 1 { return period }
+        }
+        return period
+    }
+    if fn_name == "is_perfect" {
+        if sigma_k(n, 1) == 2 * n { return 1 }
+        return 0
+    }
+    if fn_name == "aliquot" { return sigma_k(n, 1) - n }
+    if fn_name == "gamma0_index"   { return gamma0_index(n) }
+    if fn_name == "gamma0_cusps"   { return gamma0_cusps(n) }
+    if fn_name == "gamma0_genus"   { return gamma0_genus(n) }
+    if fn_name == "isotropy_lcm"   { return isotropy_lcm(n) }
+    if fn_name == "first_cusp_form_weight" { return first_cusp_form_weight(n) }
+    // ── TECS-L F21 mirror (verify_cli.hexa::_recompute · INBOX 3) ─────────
+    // mertens / tunnell_count_odd / tunnell_count_even — verbatim ports.
+    if fn_name == "mertens" {
+        let mut s = 0
+        let mut k = 1
+        while k <= n {
+            s = s + mobius(k)
+            k = k + 1
+        }
+        return s
+    }
+    if fn_name == "tunnell_count_odd" || fn_name == "tunnell_count_even" {
+        if n < 0 { return 0 }
+        let z_coef = if fn_name == "tunnell_count_odd" { 32 } else { 8 }
+        let mut bound = 0
+        while (bound + 1) * (bound + 1) <= n { bound = bound + 1 }
+        bound = bound + 1
+        let mut cnt = 0
+        let mut x = 0 - bound
+        while x <= bound {
+            let tx = 2 * x * x
+            if tx <= n {
+                let mut y = 0 - bound
+                while y <= bound {
+                    let txy = tx + y * y
+                    if txy <= n {
+                        let mut z = 0 - bound
+                        while z <= bound {
+                            if txy + z_coef * z * z == n { cnt = cnt + 1 }
+                            z = z + 1
+                        }
+                    }
+                    y = y + 1
+                }
+            }
+            x = x + 1
+        }
+        return cnt
+    }
+    return _NOCALC_REGISTER
+}
+
+fn _recompute2_register(fn_name: string, a: int, b: int) -> int {
+    if fn_name == "sigma_k"   { return sigma_k(a, b) }
+    if fn_name == "jacobi"    { return jacobi_symbol(a, b) }
+    if fn_name == "kronecker" { return kronecker_symbol(a, b) }
+    if fn_name == "dim_cusp_forms" { return dim_cusp_forms(a, b) }
+    // RFC 046 ssh_winding(v, w) — verbatim port of verify_cli.hexa::_recompute2.
+    // Mirrors PR #592 verify-arm; ssh_winding atom registration requires this
+    // dispatch (PR #592 surface gap: atlas_cli register table not synced).
+    if fn_name == "ssh_winding" {
+        if b > a { return 1 }
+        return 0
+    }
+    return _NOCALC_REGISTER
+}
+
+// 3-arg integer NUMERICAL recompute (RFC 046 tknn_chern p q r → Chern t).
+// Verbatim port of verify_cli.hexa::_tknn_chern / _recompute3.
+fn _recompute3_register(fn_name: string, a: int, b: int, c: int) -> int {
+    if fn_name == "tknn_chern" {
+        // TKNN/Diophantine closed-form. Mirror _tknn_chern from verify_cli.
+        return _tknn_chern_register(a, b, c)
+    }
+    // TECS-L F21 — BSD congruent-number witness mirror. y² == x³ − n²·x.
+    if fn_name == "elliptic_witness" {
+        let lhs = b * b
+        let rhs = a * a * a - c * c * a
+        if lhs == rhs { return 1 }
+        return 0
+    }
+    return _NOCALC_REGISTER
+}
+
+// _ext_euclid_register — extended Euclid for tknn_chern register path.
+// Mirrors verify_cli::_ext_euclid. Returns [g, x, y] with a*x + b*y = g = gcd(a,b).
+fn _ext_euclid_register(a: int, b: int) -> array {
+    let mut old_r = a
+    let mut r = b
+    let mut old_s = 1
+    let mut s = 0
+    let mut old_t = 0
+    let mut t = 1
+    while r != 0 {
+        let qq = old_r / r
+        let tr = old_r - qq * r
+        old_r = r; r = tr
+        let ts = old_s - qq * s
+        old_s = s; s = ts
+        let tt = old_t - qq * t
+        old_t = t; t = tt
+    }
+    return [old_r, old_s, old_t]
+}
+
+fn _tknn_chern_register(p: int, q: int, rgap: int) -> int {
+    // Verbatim port of tool/verify_cli.hexa::_tknn_chern. Hofstadter/TKNN
+    // Wannier label via extended Euclid + Wannier window |t| ≤ q/2.
+    let ee = _ext_euclid_register(q, p)
+    let mut s = ee[1] * rgap
+    let mut t = ee[2] * rgap
+    let half = q / 2
+    while t > half {
+        t = t - q
+        s = s + p
+    }
+    while t <= (0 - half) {
+        t = t + q
+        s = s - p
+    }
+    return t
+}
+
+// ── float NUMERICAL recompute (🟢) ─────────────────────────────────────
+//
+// Companion to the integer paths above. Statistical transforms (Welch-t
+// critical table · Wilson-Hilferty t→z + Φ) are libm-class NUMERICAL
+// recomputes (TECS-L n6-rep Tier2). VERBATIM ports of the verify-arm
+// (tool/verify_cli.hexa::_welch_t_crit / _wilson_hilferty_p) — kept inline
+// because verify_cli has `main` and cannot be imported as a module. A
+// within-ε match → 🟢 SUPPORTED-NUMERICAL; out-of-ε disagreement → 🔴.
+// Extend this table whenever verify_cli's float table grows.
+let _NOCALC_F_REGISTER: float = -999999.0
+// ε = 1e-9 — now sourced from compiler/atlas/calc_dispatch::calc_eps() (shared
+// SSOT with verify_cli). Reverify + the legacy float adapter call calc_eps().
+
+fn _parse_float_register(s: string) -> float {
+    let t = s.trim()
+    let n = len(t)
+    if n == 0 { return 0.0 }
+    let mut i = 0
+    let mut sign = 1.0
+    if t[i] == "-" { sign = 0.0 - 1.0; i = i + 1 }
+    else if t[i] == "+" { i = i + 1 }
+    let mut int_part = 0.0
+    while i < n && t[i] >= "0" && t[i] <= "9" {
+        int_part = int_part * 10.0 + to_float(to_int(t[i]))
+        i = i + 1
+    }
+    let mut frac = 0.0
+    let mut scale = 1.0
+    if i < n && t[i] == "." {
+        i = i + 1
+        while i < n && t[i] >= "0" && t[i] <= "9" {
+            scale = scale / 10.0
+            frac = frac + to_float(to_int(t[i])) * scale
+            i = i + 1
+        }
+    }
+    let mut val = sign * (int_part + frac)
+    if i < n && (t[i] == "e" || t[i] == "E") {
+        i = i + 1
+        let mut esign = 1
+        if i < n && t[i] == "-" { esign = -1; i = i + 1 }
+        else if i < n && t[i] == "+" { i = i + 1 }
+        let mut eexp = 0
+        while i < n && t[i] >= "0" && t[i] <= "9" {
+            eexp = eexp * 10 + to_int(t[i])
+            i = i + 1
+        }
+        let mut k = 0
+        while k < eexp {
+            if esign > 0 { val = val * 10.0 } else { val = val / 10.0 }
+            k = k + 1
+        }
+    }
+    return val
+}
+
+fn _fabs_register(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+// Welch-t α=0.05 two-tailed critical value (NIST/SEMATECH breakpoints +
+// Welch–Satterthwaite linear interp). Verbatim port of verify_cli.
+fn _welch_t_crit_register(df: float) -> float {
+    if df <= 0.0 { return 12.706 }
+    if df < 1.0 { return 12.706 }
+    if df >= 10000.0 { return 1.960 }
+    let dfs = [1.0, 2.0, 3.0, 4.0, 5.0, 10.0, 20.0, 30.0, 50.0, 100.0, 10000.0]
+    let tcs = [12.706, 4.303, 3.182, 2.776, 2.571, 2.228, 2.086, 2.042, 2.009, 1.984, 1.960]
+    let cnt = len(dfs)
+    let mut i = 0
+    while i + 1 < cnt {
+        let lo = dfs[i]
+        let hi = dfs[i + 1]
+        if df >= lo && df <= hi {
+            let span = hi - lo
+            if span <= 0.0 { return tcs[i] }
+            let frac = (df - lo) / span
+            return tcs[i] + frac * (tcs[i + 1] - tcs[i])
+        }
+        i = i + 1
+    }
+    return 1.960
+}
+
+// Standard normal CDF Φ(z) — Abramowitz & Stegun 26.2.17. Verbatim port.
+fn _norm_cdf_v_register(z: float) -> float {
+    let p = 0.2316419
+    let b1 = 0.319381530
+    let b2 = 0.0 - 0.356563782
+    let b3 = 1.781477937
+    let b4 = 0.0 - 1.821255978
+    let b5 = 1.330274429
+    let pi = 3.14159265358979323846
+    let abs_z = if z < 0.0 { 0.0 - z } else { z }
+    let x = 0.0 - (abs_z * abs_z) / 2.0
+    let mut term = 1.0
+    let mut sum = 1.0
+    let mut k = 1
+    while k <= 40 {
+        term = term * x / to_float(k)
+        sum = sum + term
+        if k > 5 {
+            let abs_term = if term < 0.0 { 0.0 - term } else { term }
+            if abs_term < 0.0000000001 { k = 41 }
+        }
+        k = k + 1
+    }
+    let phi = sum / sqrt(2.0 * pi)
+    let t = 1.0 / (1.0 + p * abs_z)
+    let t2 = t * t
+    let t3 = t2 * t
+    let t4 = t3 * t
+    let t5 = t4 * t
+    let upper_tail = phi * (b1 * t + b2 * t2 + b3 * t3 + b4 * t4 + b5 * t5)
+    let cdf_pos = 1.0 - upper_tail
+    if z < 0.0 { return 1.0 - cdf_pos }
+    return cdf_pos
+}
+
+// Wilson-Hilferty t→z → two-tailed p via Φ. Verbatim port of verify_cli.
+fn _wilson_hilferty_p_register(t_stat: float, df: float) -> float {
+    if df <= 0.0 { return 1.0 }
+    let abs_t = if t_stat < 0.0 { 0.0 - t_stat } else { t_stat }
+    if abs_t <= 0.0 { return 1.0 }
+    let correction = 1.0 - 1.0 / (4.0 * df)
+    let denom = sqrt(1.0 + (abs_t * abs_t) / (2.0 * df))
+    let z = abs_t * correction / denom
+    let upper = 1.0 - _norm_cdf_v_register(z)
+    let p_two = 2.0 * upper
+    if p_two < 0.0 { return 0.0 }
+    if p_two > 1.0 { return 1.0 }
+    return p_two
+}
+
+// CHSH Tsirelson bound — verbatim port of verify_cli::_chsh_tsirelson.
+// 0-arg closed-form: S_max^Q = 2*sqrt(2) (Tsirelson 1980 LMP 4 93 / CHSH 1969).
+fn _chsh_tsirelson_register() -> float {
+    return 2.0 * sqrt(2.0)
+}
+
+// Compound-removal recurrence — register mirror of verify_cli::_compound_coverage
+// / _cycles_to_target. cov(N)=1-(1-x)^N · cycles_to_target = min N with (1-x)^N≤tgt.
+// Deterministic cumulative-product loop (no transcendental). TTR-MN ink timeline.
+fn _compound_coverage_register(x: float, big_n: int) -> float {
+    if x <= 0.0 { return 0.0 }
+    if x >= 1.0 { return 1.0 }
+    let r = 1.0 - x
+    let mut prod = 1.0
+    let mut i = 0
+    while i < big_n {
+        prod = prod * r
+        i = i + 1
+    }
+    return 1.0 - prod
+}
+
+fn _cycles_to_target_register(x: float, target: float) -> float {
+    if x <= 0.0 { return _NOCALC_F_REGISTER }
+    if target <= 0.0 { return _NOCALC_F_REGISTER }
+    if x >= 1.0 { return 1.0 }
+    if target >= 1.0 { return 0.0 }
+    let r = 1.0 - x
+    let mut prod = 1.0
+    let mut n = 0
+    while prod > target {
+        prod = prod * r
+        n = n + 1
+        if n > 1000000 { return _NOCALC_F_REGISTER }
+    }
+    return to_float(n)
+}
+
+// Hardy multipartite — verbatim port of verify_cli::_hardy_powi / _hardy_abs /
+// _hardy_solve_tr / _hardy_bound (Newton root of x^{N+1}-2x+1=0 on (0,1);
+// p_N^max = t_r^N * (1-t_r)^N / (1 - t_r^N); Adhikary-Mandal arXiv:2505.10170 Eq.5).
+fn _hardy_powi_register(x: float, n: int) -> float {
+    let mut acc = 1.0
+    let mut k = 0
+    while k < n {
+        acc = acc * x
+        k = k + 1
+    }
+    return acc
+}
+
+fn _hardy_abs_register(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn _hardy_solve_tr_register(big_n: int) -> float {
+    let m = big_n + 1
+    let mut x = 0.5
+    let mut it = 0
+    while it < 100 {
+        let fx = _hardy_powi_register(x, m) - 2.0 * x + 1.0
+        let fp = to_float(m) * _hardy_powi_register(x, big_n) - 2.0
+        if _hardy_abs_register(fx) < 0.00000000000001 { return x }
+        if _hardy_abs_register(fp) < 0.00000000000001 { return x }
+        let dx = fx / fp
+        x = x - dx
+        if x < 0.001 { x = 0.001 }
+        if x > 0.999 { x = 0.999 }
+        if _hardy_abs_register(dx) < 0.00000000000001 { return x }
+        it = it + 1
+    }
+    return x
+}
+
+fn _hardy_bound_register(big_n: int) -> float {
+    if big_n < 2 { return _NOCALC_F_REGISTER }
+    let tr = _hardy_solve_tr_register(big_n)
+    let trN = _hardy_powi_register(tr, big_n)
+    let omt = 1.0 - tr
+    let omtN = _hardy_powi_register(omt, big_n)
+    return trN * omtN / (1.0 - trN)
+}
+
+// MABK-Ardehali quantum max — verbatim port of verify_cli::_mabk_quantum_max.
+// B_N^Q = 2^{(N-1)/2} via sqrt(2)-product loop (Mermin 1990 / Ardehali 1992
+// / Belinskii-Klyshko 1993). N ≥ 2.
+fn _mabk_quantum_max_register(big_n: int) -> float {
+    if big_n < 2 { return _NOCALC_F_REGISTER }
+    let s = sqrt(2.0)
+    let mut v = 1.0
+    let mut k = 0
+    let exp = big_n - 1
+    while k < exp {
+        v = v * s
+        k = k + 1
+    }
+    return v
+}
+
+// Pseudo-telepathy magic-square (doily) quantum win prob = 1.0 — verbatim
+// port of verify_cli::_ptd_quantum_win. 0-arg closed-form constant.
+// Brassard-Broadbent-Tapp 2005 Found. Phys. 35 1877 (arXiv:quant-ph/0407221).
+fn _ptd_quantum_win_register() -> float {
+    return 1.0
+}
+
+// Pseudo-telepathy magic-square LP-tight classical (LHV) bound = 8/9 —
+// verbatim port of verify_cli::_ptd_classical_bound_const. 0-arg closed-form.
+fn _ptd_classical_bound_register() -> float {
+    return 8.0 / 9.0
+}
+
+// ── RFC 045 qmirror PR-B atoms (Mitigation/Clifford) ───────────────────
+//
+// CDR perfect-mitigation slope — verbatim port of verify_cli::_cdr_perfect_mitigation
+// (Czarnik-Arrasmith-Coles-Cincio 2021 Claim 2, arXiv:2005.10189). Under
+// the global depolarising channel, the CDR OLS slope is b = 1/(1-p_noise).
+// 1-arg closed-form: p_noise in [0, 1).
+fn _cdr_perfect_mitigation_register(p_noise: float) -> float {
+    if p_noise < 0.0 { return _NOCALC_F_REGISTER }
+    if p_noise > 0.999999999 { return _NOCALC_F_REGISTER }
+    return 1.0 / (1.0 - p_noise)
+}
+
+// Wigner stabilizer sum-negativity at odd prime d — verbatim port of
+// verify_cli::_wigner_stabilizer_sn (Veitch 2014 NJP 16 013009 + Gross-Hudson).
+// At any odd prime d (real sieve, not a fixed small-prime list) every
+// stabilizer state has W >= 0, so sn = 0 exactly. 1-arg closed-form: d
+// (odd prime, >= 3); composite/even d => NOCALC, matching verify_cli.
+fn _wigner_stabilizer_sn_register(d: int) -> float {
+    if d < 3 { return _NOCALC_F_REGISTER }
+    // odd prime gate: d=4,6,8,9,... fail (composite or even).
+    if (d % 2) == 0 { return _NOCALC_F_REGISTER }
+    // real odd-prime sieve (verbatim mirror of verify_cli::_wigner_stabilizer_sn).
+    let mut k = 3
+    let mut is_prime = 1
+    while k * k <= d {
+        if (d % k) == 0 { is_prime = 0 }
+        k = k + 2
+    }
+    if is_prime == 0 { return _NOCALC_F_REGISTER }
+    return 0.0
+}
+
+// ── RFC 045 qmirror PR-C atoms (Variational/Fisher/Shadow) ─────────────
+//
+// VQE H2 STO-3G/0.74Å FCI ground-state energy — verbatim port of
+// verify_cli::_vqe_h2_fci_sto3g. PySCF 2.13.0 RHF+FCI canonical constant
+// E_FCI = -1.137283834488502 Ha. 0-arg closed-form anchor.
+fn _vqe_h2_fci_sto3g_register() -> float {
+    return 0.0 - 1.137283834488502
+}
+
+// QFI SQL closed form — verbatim port of verify_cli::_qfi_sql. Spin-coherent
+// product state |+>^N: F_phi = N (alpha=1 standard quantum limit).
+// 1-arg closed-form: n_atoms (>= 1).
+fn _qfi_sql_register(n_atoms: int) -> float {
+    if n_atoms < 1 { return _NOCALC_F_REGISTER }
+    return to_float(n_atoms)
+}
+
+// QFI GHZ closed form — verbatim port of verify_cli::_qfi_ghz. GHZ state
+// (|0>^N + |1>^N)/sqrt(2): F_phi = N^2 (alpha=2 Heisenberg limit).
+// 1-arg closed-form: n_atoms (>= 1).
+fn _qfi_ghz_register(n_atoms: int) -> float {
+    if n_atoms < 1 { return _NOCALC_F_REGISTER }
+    let n_f = to_float(n_atoms)
+    return n_f * n_f
+}
+
+// Pauli classical-shadow per-snapshot variance bound — verbatim port of
+// verify_cli::_shadow_pauli_var_bound (Huang-Kueng-Preskill 2020, HKP
+// Lemma S2). Weight-k Pauli observable: ||O||²_shadow_Pauli = 4^k.
+// 1-arg closed-form: pauli_weight (k >= 0).
+fn _shadow_pauli_var_bound_register(pauli_weight: int) -> float {
+    if pauli_weight < 0 { return _NOCALC_F_REGISTER }
+    let mut acc_pauli = 1.0
+    let mut idx_pauli = 0
+    while idx_pauli < pauli_weight {
+        acc_pauli = acc_pauli * 4.0
+        idx_pauli = idx_pauli + 1
+    }
+    return acc_pauli
+}
+
+// Clifford classical-shadow worst-case shadow-norm² bound — verbatim port
+// of verify_cli::_shadow_clifford_var_bound (HKP Theorem 1, traceless O).
+// ||O||²_shadow_Clifford <= 3 * Tr(O²) = 3 * 2^n for any non-identity Pauli.
+// 1-arg closed-form: n_qubits (>= 1).
+fn _shadow_clifford_var_bound_register(n_qubits: int) -> float {
+    if n_qubits < 1 { return _NOCALC_F_REGISTER }
+    let mut dim_f = 1.0
+    let mut idx_q = 0
+    while idx_q < n_qubits {
+        dim_f = dim_f * 2.0
+        idx_q = idx_q + 1
+    }
+    return 3.0 * dim_f
+}
+
+// Page-curve entropy peak — verbatim port of verify_cli::_page_curve_entropy_peak
+// (Page 1993 PRL 71 1291, arXiv:gr-qc/9305007 Eq.2). For a bipartite pure
+// state on Hilbert space dim_a ⊗ dim_b with dim_a <= dim_b, the average
+// entanglement entropy of subsystem A over the Haar measure peaks at
+//     S_max(dim_a) = ln(dim_a)  -  dim_a / (2 * dim_b)     (nats)
+// 2-arg closed-form.
+fn _page_curve_entropy_peak_register(dim_subsystem_a: int, dim_subsystem_b: int) -> float {
+    if dim_subsystem_a < 1 { return _NOCALC_F_REGISTER }
+    if dim_subsystem_b < 1 { return _NOCALC_F_REGISTER }
+    if dim_subsystem_a > dim_subsystem_b { return _NOCALC_F_REGISTER }
+    let d_a = to_float(dim_subsystem_a)
+    let d_b = to_float(dim_subsystem_b)
+    let ln_da = log(d_a)
+    let correction = d_a / (2.0 * d_b)
+    return ln_da - correction
+}
+
+// Qdrift random-product channel diamond-distance error bound — verbatim port
+// of verify_cli::_qdrift_error_bound (Campbell 2019 PRL 123 070503,
+// arXiv:1811.08017 Eq.3). For total Hamiltonian L1-norm lambda over time t
+// and big_n random one-term steps,
+//     epsilon  <=  2 * (lambda * t)^2 / big_n
+// 2-arg closed-form: a0 = lambda_times_time, a1 = big_n_as_float.
+fn _qdrift_error_bound_register(lambda_times_time: float, big_n_steps: int) -> float {
+    if big_n_steps < 1 { return _NOCALC_F_REGISTER }
+    if lambda_times_time < 0.0 { return _NOCALC_F_REGISTER }
+    let n_f = to_float(big_n_steps)
+    return 2.0 * lambda_times_time * lambda_times_time / n_f
+}
+
+// Symmetry-adjusted classical-shadow per-shot variance F2 bound — verbatim
+// port of verify_cli::_sym_shadow_var_bound (Zhao-Rubin-Babbush 2024 npj QI
+// symmetry adjustment on top of HKP 2020 Pauli shadow). For an observable
+// O = Sum_{j=1..m} c_j P_j of m single-Pauli terms each of locality ≤ k,
+//     var_bound  =  5 * m * 4^k
+// 2-arg closed-form: takes (num_paulis m ≥ 1, pauli_locality k ≥ 0).
+fn _sym_shadow_var_bound_register(num_paulis: int, pauli_locality: int) -> float {
+    if num_paulis < 1 { return _NOCALC_F_REGISTER }
+    if pauli_locality < 0 { return _NOCALC_F_REGISTER }
+    let mut four_pow_k = 1.0
+    let mut idx_loc = 0
+    while idx_loc < pauli_locality {
+        four_pow_k = four_pow_k * 4.0
+        idx_loc = idx_loc + 1
+    }
+    return 5.0 * to_float(num_paulis) * four_pow_k
+}
+
+// Overlap-guided ADAPT-VQE H2 STO-3G constant shift — verbatim port of
+// verify_cli::_overlap_vqe_h2_shift_ha (Oh et al. 2023, arXiv 2301.10196;
+// F-QM-CHEM-N5 H2/STO-3G/2q frozen-core reduced-Hamiltonian). The 2-qubit
+// reduced Hamiltonian's energy needs the frozen-core + nuclear-repulsion
+// shift to recover absolute FCI ground-state energy:
+//     E_FCI_full(Ha)  =  E_2q_reduced  +  constant_shift_ha
+// constant_shift_ha = 0.7151043390810812 Ha (verbatim PySCF 2.13.0 RHF
+// reduction at R=0.74Å). 0-arg closed-form constant.
+fn _overlap_vqe_h2_shift_ha_register() -> float {
+    return 0.7151043390810812
+}
+
+// Robust Phase Estimation (RPE) Heisenberg-limit standard deviation bound —
+// verbatim port of verify_cli::_rpe_heisenberg_sigma (Kimmel-Low-Yoder PRA
+// 92, 062315 (2015), arXiv:1502.02677; Eqs. (10)-(13) / Fig. 2). For K
+// Heisenberg generations and M shots per circuit,
+//     sigma_HB(K, M)  =  1 / ( 2^(K-1) * sqrt(M) )
+// — the Heisenberg-limited 1/V scaling vs SQL 1/sqrt(V). 2-arg closed-form:
+// takes (k_gens K ≥ 1, m_per_k M ≥ 1) → sigma_HB as float.
+fn _rpe_heisenberg_sigma_register(k_gens: int, m_per_k: int) -> float {
+    if k_gens < 1 { return _NOCALC_F_REGISTER }
+    if m_per_k < 1 { return _NOCALC_F_REGISTER }
+    let mut two_kmax = 1.0
+    let mut idx_gen = 0
+    let exp_gen = k_gens - 1
+    while idx_gen < exp_gen {
+        two_kmax = two_kmax * 2.0
+        idx_gen = idx_gen + 1
+    }
+    return 1.0 / (two_kmax * sqrt(to_float(m_per_k)))
+}
+
+// Mirror-circuit volumetric benchmarking heavy-output-generation (HOG)
+// Porter-Thomas asymptote — verbatim port of verify_cli::_mirror_bench_hog
+// _asymptote (Cross-Bishop-Sheldon-Nation-Gambetta PRA 100, 032328 (2019),
+// arXiv:1811.12926; quantum-volume heavy-output test). For a Haar-random
+// w-qubit circuit at approximate-2-design depth,
+//     HOG_asymptote  =  (1 + ln 2) / 2  ~=  0.8466
+// — Porter-Thomas anticoncentration anchor of the QV test. 0-arg constant.
+fn _mirror_bench_hog_asymptote_register() -> float {
+    let ln_two = 0.6931471805599453
+    return (1.0 + ln_two) / 2.0
+}
+
+// ── Bio-physical Phase 1 (demiurge V2 unlock — atlas register mirror) ──
+// L2 wall — atlas-side companion of verify_cli bio Phase 1. Verbatim ports
+// of _exp_release · _ldl_pct · _beer_lambert. PR #732 / inbox patch
+// atlas-cli-biostat-register-2026-05-25. Cross-domain unblock: ISR ·
+// DAPTPGX · LPA · NOREFLOW · TTR · HERPES (5+ claims × 3 fns).
+
+// Exponential release (M_0 * (1 - exp(-k*t))). 3-arg.
+fn _exp_release_register(m_0: float, k_rate: float, t_time: float) -> float {
+    if m_0 < 0.0 { return _NOCALC_F_REGISTER }
+    if k_rate < 0.0 { return _NOCALC_F_REGISTER }
+    if t_time < 0.0 { return _NOCALC_F_REGISTER }
+    return m_0 * (1.0 - exp(0.0 - k_rate * t_time))
+}
+
+// LDL percent change ((final - baseline) / baseline * 100). 2-arg.
+fn _ldl_pct_register(baseline: float, final_v: float) -> float {
+    if baseline <= 0.0 { return _NOCALC_F_REGISTER }
+    return (final_v - baseline) / baseline * 100.0
+}
+
+// Beer-Lambert attenuation (I_0 * exp(-mu * x)). 3-arg.
+fn _beer_lambert_register(i_0: float, mu_abs: float, x_depth: float) -> float {
+    if i_0 < 0.0 { return _NOCALC_F_REGISTER }
+    if mu_abs < 0.0 { return _NOCALC_F_REGISTER }
+    if x_depth < 0.0 { return _NOCALC_F_REGISTER }
+    return i_0 * exp(0.0 - mu_abs * x_depth)
+}
+
+// ── Bio-statistics (LPA cycle 4 V2 — atlas register mirror) ─────────────
+// Trial-readout primitives: NNT (Laupacis 1988) · ARR (Sackett 1996) ·
+// ln_HR → HR back-transform (Cox 1972). L2 unblock for LPA · NOREFLOW etc.
+
+// Number Needed to Treat (100 / arr_pp). 1-arg.
+fn _nnt_register(arr_pp: float) -> float {
+    if arr_pp <= 0.0 { return _NOCALC_F_REGISTER }
+    return 100.0 / arr_pp
+}
+
+// Absolute Risk Reduction (p_control - p_treat). 2-arg.
+fn _arr_register(p_control: float, p_treat: float) -> float {
+    return p_control - p_treat
+}
+
+// Log Hazard Ratio → Hazard Ratio (exp(ln_HR)). 1-arg.
+fn _ln_hr_to_hr_register(ln_hr: float) -> float {
+    return exp(ln_hr)
+}
+
+// ── Bio-physical Phase 2 (demiurge V2 unlock — atlas register mirror) ──
+// Hill (1910) · Cheng-Prusoff (1973) · Fick's first law (1855) ·
+// Young-Laplace (1805/1806) · Stokes-Einstein (1905). L2 unblock for
+// receptor-binding · Ki conversion · diffusion · vessel-wall mechanics.
+
+// Hill receptor binding (L^n / (Kd^n + L^n)). 3-arg.
+fn _hill_register(l_conc: float, k_d: float, n_hill: float) -> float {
+    if l_conc < 0.0 { return _NOCALC_F_REGISTER }
+    if k_d <= 0.0 { return _NOCALC_F_REGISTER }
+    if n_hill <= 0.0 { return _NOCALC_F_REGISTER }
+    let ln_p = pow(l_conc, n_hill)
+    let kn_p = pow(k_d, n_hill)
+    let denom = kn_p + ln_p
+    if denom <= 0.0 { return _NOCALC_F_REGISTER }
+    return ln_p / denom
+}
+
+// Cheng-Prusoff Ki from IC50 (IC50 / (1 + S/Km)). 3-arg.
+fn _cheng_prusoff_register(ic50: float, s_conc: float, k_m: float) -> float {
+    if ic50 < 0.0 { return _NOCALC_F_REGISTER }
+    if s_conc < 0.0 { return _NOCALC_F_REGISTER }
+    if k_m <= 0.0 { return _NOCALC_F_REGISTER }
+    return ic50 / (1.0 + s_conc / k_m)
+}
+
+// Fick's first law of diffusion (-D * dC/dx). 3-arg.
+fn _fick1_register(d_diff: float, d_c: float, d_x: float) -> float {
+    if d_diff < 0.0 { return _NOCALC_F_REGISTER }
+    if d_x == 0.0 { return _NOCALC_F_REGISTER }
+    return 0.0 - d_diff * d_c / d_x
+}
+
+// Young-Laplace vessel wall stress (P*r / t_wall). 3-arg.
+fn _laplace_wall_register(p_press: float, r_rad: float, t_wall: float) -> float {
+    if p_press < 0.0 { return _NOCALC_F_REGISTER }
+    if r_rad < 0.0 { return _NOCALC_F_REGISTER }
+    if t_wall <= 0.0 { return _NOCALC_F_REGISTER }
+    return p_press * r_rad / t_wall
+}
+
+// Stokes-Einstein diffusion (kB*T / (6*pi*eta*r)). 3-arg.
+fn _stokes_einstein_register(t_kelvin: float, eta_visc: float, r_rad: float) -> float {
+    if t_kelvin <= 0.0 { return _NOCALC_F_REGISTER }
+    if eta_visc <= 0.0 { return _NOCALC_F_REGISTER }
+    if r_rad <= 0.0 { return _NOCALC_F_REGISTER }
+    let kB_se = 0.00000000000000000000001380649     // 1.380649e-23 J/K (CODATA-2019 exact)
+    let pi_se = 3.14159265358979323846
+    return kB_se * t_kelvin / (6.0 * pi_se * eta_visc * r_rad)
+}
+
+// ── Superconductivity (RTSC V2 closed-form — atlas register mirror) ────
+// Allen-Dynes (1975) · McMillan (1968) · BCS (1957) · Eliashberg (1960) ·
+// BEE-NET grid · Migdal (1958). L2 unblock for RTSC V2 🔵 push.
+
+// Allen-Dynes critical temperature (ω_log/1.2)·exp(-1.04(1+λ)/(λ-μ*(1+0.62λ))). 3-arg.
+fn _allen_dynes_tc_register(lam: float, omega_log_k: float, mustar: float) -> float {
+    if omega_log_k <= 0.0 { return _NOCALC_F_REGISTER }
+    let denom = lam - mustar * (1.0 + 0.62 * lam)
+    if denom <= 0.0 { return _NOCALC_F_REGISTER }
+    let exp_arg = 0.0 - 1.04 * (1.0 + lam) / denom
+    return (omega_log_k / 1.2) * exp(exp_arg)
+}
+
+// McMillan critical temperature (ω_D/1.45)·exp(-1.04(1+λ)/(λ-μ*(1+0.62λ))). 3-arg.
+fn _mcmillan_tc_register(lam: float, omega_d_k: float, mustar: float) -> float {
+    if omega_d_k <= 0.0 { return _NOCALC_F_REGISTER }
+    let denom = lam - mustar * (1.0 + 0.62 * lam)
+    if denom <= 0.0 { return _NOCALC_F_REGISTER }
+    let exp_arg = 0.0 - 1.04 * (1.0 + lam) / denom
+    return (omega_d_k / 1.45) * exp(exp_arg)
+}
+
+// BCS gap-to-Tc ratio (2π / e^γ ≈ 3.527754). 0-arg.
+fn _bcs_gap_ratio_register() -> float {
+    let pi_bcs = 3.14159265358979323846
+    let euler_gamma = 0.5772156649015329
+    return 2.0 * pi_bcs / exp(euler_gamma)
+}
+
+// Eliashberg coupling λ from precomputed moment (λ = 2*M₀). 1-arg.
+fn _lambda_eliashberg_register(moment_m0: float) -> float {
+    if moment_m0 < 0.0 { return _NOCALC_F_REGISTER }
+    return 2.0 * moment_m0
+}
+
+// BEE-NET grid bin count (floor(ω_max/Δω) + 1). 2-arg.
+fn _beenet_grid_bins_register(omega_max_mev: float, step_mev: float) -> float {
+    if omega_max_mev < 0.0 { return _NOCALC_F_REGISTER }
+    if step_mev <= 0.0 { return _NOCALC_F_REGISTER }
+    let bins = omega_max_mev / step_mev
+    let bins_int = to_int(bins)
+    return to_float(bins_int + 1)
+}
+
+// Migdal adiabaticity ratio (ω_phonon / E_Fermi). 2-arg.
+fn _migdal_ratio_register(omega_phonon: float, e_fermi: float) -> float {
+    if omega_phonon < 0.0 { return _NOCALC_F_REGISTER }
+    if e_fermi <= 0.0 { return _NOCALC_F_REGISTER }
+    return omega_phonon / e_fermi
+}
+
+// ── Superconductivity tranche 2 (RTSC #15 device-side + strong-coupling) ─
+// Allen-Dynes full f1·f2 shape correction · Morel-Anderson μ* · GL coherence
+// length ξ · BCS isotope exponent α · GL κ · London λ_L · Tuyn Hc(T) ·
+// condensation energy U · BCS Δ(0) · Pippard ξ₀. VERBATIM mirror of
+// tool/verify_cli.hexa supercon impls (same CODATA-2018 constants/arithmetic).
+
+// Allen-Dynes strong-coupling Tc (f1·f2·ad_base). 4-arg (λ, ω_log, ω̄₂, μ*).
+fn _allen_dynes_full_register(lam: float, omega_log_k: float, omega2_k: float, mustar: float) -> float {
+    if omega_log_k <= 0.0 { return _NOCALC_F_REGISTER }
+    let denom = lam - mustar * (1.0 + 0.62 * lam)
+    if denom <= 0.0 { return _NOCALC_F_REGISTER }
+    let ad_base = (omega_log_k / 1.2) * exp(0.0 - 1.04 * (1.0 + lam) / denom)
+    let r = omega2_k / omega_log_k
+    let lambda1 = 2.46 * (1.0 + 3.8 * mustar)
+    let lambda2 = 1.82 * (1.0 + 6.3 * mustar) * r
+    let f1 = pow(1.0 + pow(lam / lambda1, 1.5), 1.0 / 3.0)
+    let f2 = 1.0 + (lam * lam) * (r - 1.0) / ((lam * lam) + (lambda2 * lambda2))
+    return f1 * f2 * ad_base
+}
+
+// Morel-Anderson Coulomb pseudopotential μ* = μ/(1+μ·ln(E_F/ω_ph)). 3-arg.
+fn _morel_anderson_mustar_register(mu_bare: float, e_fermi: float, omega_ph: float) -> float {
+    if mu_bare < 0.0 { return _NOCALC_F_REGISTER }
+    if e_fermi <= 0.0 { return _NOCALC_F_REGISTER }
+    if omega_ph <= 0.0 { return _NOCALC_F_REGISTER }
+    return mu_bare / (1.0 + mu_bare * log(e_fermi / omega_ph))
+}
+
+// GL coherence length ξ = sqrt(Φ₀/(2π·Hc2)), Φ₀=2.067833848e-15 Wb. 1-arg.
+fn _coherence_length_register(hc2_zero_t: float) -> float {
+    if hc2_zero_t <= 0.0 { return _NOCALC_F_REGISTER }
+    let phi0 = 2.067833848e-15
+    let two_pi = 6.28318530717958647692
+    return sqrt(phi0 / (two_pi * hc2_zero_t))
+}
+
+// BCS isotope-effect exponent α = -ln(Tc₂/Tc₁)/ln(M₂/M₁). 4-arg.
+fn _isotope_exponent_register(mass1: float, tc1: float, mass2: float, tc2: float) -> float {
+    if mass1 <= 0.0 { return _NOCALC_F_REGISTER }
+    if mass2 <= 0.0 { return _NOCALC_F_REGISTER }
+    if tc1 <= 0.0 { return _NOCALC_F_REGISTER }
+    if tc2 <= 0.0 { return _NOCALC_F_REGISTER }
+    let dln_m = log(mass2 / mass1)
+    if dln_m == 0.0 { return _NOCALC_F_REGISTER }
+    return (0.0 - log(tc2 / tc1)) / dln_m
+}
+
+// Ginzburg-Landau parameter κ = λ_L/ξ (Type-I/II at 1/√2). 2-arg.
+fn _gl_parameter_kappa_register(lambda_l: float, xi: float) -> float {
+    if xi <= 0.0 { return _NOCALC_F_REGISTER }
+    if lambda_l < 0.0 { return _NOCALC_F_REGISTER }
+    return lambda_l / xi
+}
+
+// London penetration depth λ_L = sqrt(m_e/(μ₀·n_s·e²)). 1-arg.
+fn _london_penetration_depth_register(n_s: float) -> float {
+    if n_s <= 0.0 { return _NOCALC_F_REGISTER }
+    let m_e = 9.1093837015e-31
+    let mu0 = 1.25663706212e-6
+    let e_q = 1.602176634e-19
+    return sqrt(m_e / (mu0 * n_s * e_q * e_q))
+}
+
+// Tuyn thermodynamic critical field Hc(T)=Hc0·(1-(T/Tc)²). 3-arg.
+fn _thermo_critical_field_register(hc_zero: float, temp_k: float, tc_k: float) -> float {
+    if tc_k <= 0.0 { return _NOCALC_F_REGISTER }
+    if temp_k >= tc_k { return 0.0 }
+    if temp_k < 0.0 { return _NOCALC_F_REGISTER }
+    let r = temp_k / tc_k
+    return hc_zero * (1.0 - r * r)
+}
+
+// SC condensation energy density U = Bc(0)²/(2μ₀). 1-arg.
+fn _condensation_energy_register(bc_zero_t: float) -> float {
+    let mu0 = 1.25663706212e-6
+    return bc_zero_t * bc_zero_t / (2.0 * mu0)
+}
+
+// BCS zero-T energy gap Δ(0) = 1.764·k_B·Tc. 1-arg.
+fn _bcs_gap_zero_register(tc_k: float) -> float {
+    if tc_k <= 0.0 { return _NOCALC_F_REGISTER }
+    let k_b = 1.380649e-23
+    return 1.764 * k_b * tc_k
+}
+
+// Pippard intrinsic coherence ξ₀ = ħ·v_F/(π·1.764·k_B·Tc). 2-arg.
+fn _pippard_coherence_register(v_fermi: float, tc_k: float) -> float {
+    if v_fermi <= 0.0 { return _NOCALC_F_REGISTER }
+    if tc_k <= 0.0 { return _NOCALC_F_REGISTER }
+    let hbar = 1.054571817e-34
+    let k_b = 1.380649e-23
+    let pi_p = 3.14159265358979323846
+    let gap0 = 1.764 * k_b * tc_k
+    return hbar * v_fermi / (pi_p * gap0)
+}
+
+// ── Bio-physical Phase 3 (demiurge V2 unlock — atlas register mirror) ──
+// Higuchi (1961) sustained-release · Tafel (1905) electrochemical
+// overpotential · Hagen-Poiseuille (1839/1840) laminar flow. Phase 3
+// introduces the 4-arg float dispatch lane (hagen_poiseuille).
+
+// Higuchi sustained-release (k_H * sqrt(t)). 2-arg.
+fn _higuchi_register(k_h: float, t_time: float) -> float {
+    if k_h < 0.0 { return _NOCALC_F_REGISTER }
+    if t_time < 0.0 { return _NOCALC_F_REGISTER }
+    return k_h * sqrt(t_time)
+}
+
+// Tafel overpotential (a + b*log10(j)) via log(j)/log(10). 3-arg.
+fn _tafel_register(a_intercept: float, b_slope: float, j_curr: float) -> float {
+    if j_curr <= 0.0 { return _NOCALC_F_REGISTER }
+    let ln10 = log(10.0)
+    return a_intercept + b_slope * (log(j_curr) / ln10)
+}
+
+// Hagen-Poiseuille laminar flow (π·r^4·dP / (8·μ·L)). 4-arg.
+fn _hagen_poiseuille_register(r_rad: float, d_p: float, mu_visc: float, l_len: float) -> float {
+    if r_rad < 0.0 { return _NOCALC_F_REGISTER }
+    if mu_visc <= 0.0 { return _NOCALC_F_REGISTER }
+    if l_len <= 0.0 { return _NOCALC_F_REGISTER }
+    let pi_hp = 3.14159265358979323846
+    let r2 = r_rad * r_rad
+    let r4 = r2 * r2
+    return pi_hp * r4 * d_p / (8.0 * mu_visc * l_len)
+}
+
+// ── TTR-ORAL / TTR-LAC bundle (topical PK + laser optics · INBOX T22:35Z) ──
+// Register mirrors of verify_cli dispatch. 11 fn family: 6 PK + 5 optics;
+// all libm-class 🟢 Tier2 (sqrt/log/pow). Names distinct from existing
+// 2-arg `higuchi` and 3-arg `beer_lambert` (see verify_cli comment).
+
+// Higuchi planar-diffusion flux (sqrt(2·C0·Dm·t/π)). 3-arg.
+fn _higuchi_flux_register(c0: float, dm: float, t_time: float) -> float {
+    if c0 < 0.0 { return _NOCALC_F_REGISTER }
+    if dm < 0.0 { return _NOCALC_F_REGISTER }
+    if t_time < 0.0 { return _NOCALC_F_REGISTER }
+    let pi_hf = 3.14159265358979323846
+    return sqrt(2.0 * c0 * dm * t_time / pi_hf)
+}
+
+// Fick steady-state flux (P·ΔC). 2-arg.
+fn _fick_steady_flux_register(p_perm: float, d_c: float) -> float {
+    if p_perm < 0.0 { return _NOCALC_F_REGISTER }
+    return p_perm * d_c
+}
+
+// Partition coefficient log P (log10(C_oct/C_water)). 2-arg.
+fn _partition_coeff_register(c_oct: float, c_water: float) -> float {
+    if c_oct <= 0.0 { return _NOCALC_F_REGISTER }
+    if c_water <= 0.0 { return _NOCALC_F_REGISTER }
+    let ln10_pc = log(10.0)
+    return log(c_oct / c_water) / ln10_pc
+}
+
+// Skin permeability (D·K/h). 3-arg.
+fn _permeability_skin_register(d_diff: float, k_part: float, h_thick: float) -> float {
+    if d_diff < 0.0 { return _NOCALC_F_REGISTER }
+    if h_thick <= 0.0 { return _NOCALC_F_REGISTER }
+    return d_diff * k_part / h_thick
+}
+
+// AUC first-order (C0/ke). 2-arg.
+fn _auc_first_order_register(c0: float, k_e: float) -> float {
+    if c0 < 0.0 { return _NOCALC_F_REGISTER }
+    if k_e <= 0.0 { return _NOCALC_F_REGISTER }
+    return c0 / k_e
+}
+
+// Clearance (dose/AUC). 2-arg.
+fn _clearance_register(dose: float, auc: float) -> float {
+    if dose < 0.0 { return _NOCALC_F_REGISTER }
+    if auc <= 0.0 { return _NOCALC_F_REGISTER }
+    return dose / auc
+}
+
+// Beer-Lambert molar form (I0·10^(-ε·c·L)). 4-arg.
+fn _beer_lambert_log10_register(i_0: float, eps: float, c_conc: float, l_path: float) -> float {
+    if i_0 < 0.0 { return _NOCALC_F_REGISTER }
+    if eps < 0.0 { return _NOCALC_F_REGISTER }
+    if c_conc < 0.0 { return _NOCALC_F_REGISTER }
+    if l_path < 0.0 { return _NOCALC_F_REGISTER }
+    return i_0 * pow(10.0, 0.0 - eps * c_conc * l_path)
+}
+
+// Fluence (P·t/A). 3-arg.
+fn _fluence_register(power_w: float, area_cm2: float, t_time: float) -> float {
+    if power_w < 0.0 { return _NOCALC_F_REGISTER }
+    if area_cm2 <= 0.0 { return _NOCALC_F_REGISTER }
+    if t_time < 0.0 { return _NOCALC_F_REGISTER }
+    return power_w * t_time / area_cm2
+}
+
+// Gaussian beam waist (w0·sqrt(1+(z/zR)²)). 3-arg.
+fn _beam_waist_register(w0: float, z_axial: float, z_rayleigh: float) -> float {
+    if w0 < 0.0 { return _NOCALC_F_REGISTER }
+    if z_rayleigh <= 0.0 { return _NOCALC_F_REGISTER }
+    let ratio = z_axial / z_rayleigh
+    return w0 * sqrt(1.0 + ratio * ratio)
+}
+
+// Rayleigh range (π·w0²/λ). 2-arg.
+fn _rayleigh_range_register(w0: float, lambda_wl: float) -> float {
+    if w0 < 0.0 { return _NOCALC_F_REGISTER }
+    if lambda_wl <= 0.0 { return _NOCALC_F_REGISTER }
+    let pi_rr = 3.14159265358979323846
+    return pi_rr * w0 * w0 / lambda_wl
+}
+
+// Absorption depth (1/α). 1-arg.
+fn _absorption_depth_register(alpha_abs: float) -> float {
+    if alpha_abs <= 0.0 { return _NOCALC_F_REGISTER }
+    return 1.0 / alpha_abs
+}
+
+// float dispatch — fn_name → recompute. Mirrors verify_cli::_recompute_float.
+// RFC 045 qmirror PR-A atoms (chsh_tsirelson · hardy_bound · mabk_quantum_max
+// · pt_doily_quantum_win · pt_doily_classical_bound) are mirrored here as
+// the atlas_cli register-arm companion to the verify-arm dispatch added in
+// PR #626. PR-B atoms (cdr_perfect_mitigation · wigner_stabilizer_sn) and
+// PR-C atoms (vqe_h2_fci_sto3g · qfi_sql · qfi_ghz · shadow_pauli_var_bound
+// · shadow_clifford_var_bound) added via PR #625/#655 verify dispatch.
+// PR-D atoms (page_curve_entropy_peak · qdrift_error_bound) added via
+// PR #663 verify dispatch. PR-E atoms (sym_shadow_var_bound ·
+// overlap_vqe_h2_shift_ha · rpe_heisenberg_sigma · mirror_bench_hog_asymptote)
+// added via PR #667 verify dispatch.
+// 0-arg fns ignore a0/a1/a2/a3; 1-arg fns take a0; 2-arg take a0,a1;
+// 3-arg take a0,a1,a2 (bio Phase 1/2 + supercon); 4-arg take a0,a1,a2,a3
+// (bio Phase 3 — hagen_poiseuille). Widened 2026-05-25 (atlas L2 wall fix).
+fn _recompute_float_register(fn_name: string, a0: float, a1: float, a2: float, a3: float, argc: int) -> float {
+    if fn_name == "welch_t_crit" { return _welch_t_crit_register(a0) }
+    if fn_name == "wilson_hilferty_p" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        return _wilson_hilferty_p_register(a0, a1)
+    }
+    if fn_name == "compound_coverage" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        return _compound_coverage_register(a0, to_int(a1))
+    }
+    if fn_name == "cycles_to_target" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        return _cycles_to_target_register(a0, a1)
+    }
+    // RFC 045 qmirror PR-A 2nd — register mirror of verify_cli dispatch (#626).
+    if fn_name == "chsh_tsirelson" { return _chsh_tsirelson_register() }
+    if fn_name == "hardy_bound" {
+        let big_n = to_int(a0)
+        return _hardy_bound_register(big_n)
+    }
+    if fn_name == "mabk_quantum_max" {
+        let big_n = to_int(a0)
+        return _mabk_quantum_max_register(big_n)
+    }
+    if fn_name == "pt_doily_quantum_win" { return _ptd_quantum_win_register() }
+    if fn_name == "pt_doily_classical_bound" { return _ptd_classical_bound_register() }
+    // RFC 045 qmirror PR-B — register mirror of verify_cli dispatch (#625).
+    if fn_name == "cdr_perfect_mitigation" {
+        return _cdr_perfect_mitigation_register(a0)
+    }
+    if fn_name == "wigner_stabilizer_sn" {
+        let d = to_int(a0)
+        return _wigner_stabilizer_sn_register(d)
+    }
+    // RFC 045 qmirror PR-C — register mirror of verify_cli dispatch (#655).
+    if fn_name == "vqe_h2_fci_sto3g" { return _vqe_h2_fci_sto3g_register() }
+    if fn_name == "qfi_sql" {
+        let n_atoms = to_int(a0)
+        return _qfi_sql_register(n_atoms)
+    }
+    if fn_name == "qfi_ghz" {
+        let n_atoms = to_int(a0)
+        return _qfi_ghz_register(n_atoms)
+    }
+    if fn_name == "shadow_pauli_var_bound" {
+        let pauli_weight = to_int(a0)
+        return _shadow_pauli_var_bound_register(pauli_weight)
+    }
+    if fn_name == "shadow_clifford_var_bound" {
+        let n_qubits = to_int(a0)
+        return _shadow_clifford_var_bound_register(n_qubits)
+    }
+    // RFC 045 qmirror PR-D — register mirror of verify_cli dispatch (#663).
+    if fn_name == "page_curve_entropy_peak" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        let dim_subsystem_a = to_int(a0)
+        let dim_subsystem_b = to_int(a1)
+        return _page_curve_entropy_peak_register(dim_subsystem_a, dim_subsystem_b)
+    }
+    if fn_name == "qdrift_error_bound" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        let big_n_steps = to_int(a1)
+        return _qdrift_error_bound_register(a0, big_n_steps)
+    }
+    // RFC 045 qmirror PR-E — register mirror of verify_cli dispatch (#667).
+    if fn_name == "sym_shadow_var_bound" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        let num_paulis = to_int(a0)
+        let pauli_locality = to_int(a1)
+        return _sym_shadow_var_bound_register(num_paulis, pauli_locality)
+    }
+    if fn_name == "overlap_vqe_h2_shift_ha" { return _overlap_vqe_h2_shift_ha_register() }
+    if fn_name == "rpe_heisenberg_sigma" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        let k_gens = to_int(a0)
+        let m_per_k = to_int(a1)
+        return _rpe_heisenberg_sigma_register(k_gens, m_per_k)
+    }
+    if fn_name == "mirror_bench_hog_asymptote" { return _mirror_bench_hog_asymptote_register() }
+    // ── Bio-physical Phase 1 (atlas L2 unblock 2026-05-25) ───────────
+    //   exp_release(M_0, k, t)    3-arg: M_0 * (1 - exp(-k*t))
+    //   ldl_pct(baseline, final)  2-arg: (final - baseline)/baseline * 100
+    //   beer_lambert(I_0, mu, x)  3-arg: I_0 * exp(-mu*x)
+    if fn_name == "exp_release" {
+        if argc < 3 { return _NOCALC_F_REGISTER }
+        return _exp_release_register(a0, a1, a2)
+    }
+    if fn_name == "ldl_pct" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        return _ldl_pct_register(a0, a1)
+    }
+    if fn_name == "beer_lambert" {
+        if argc < 3 { return _NOCALC_F_REGISTER }
+        return _beer_lambert_register(a0, a1, a2)
+    }
+    // ── Bio-statistics (LPA cycle 4 V2 — atlas L2 unblock) ────────────
+    //   nnt(arr_pp)              1-arg: 100 / arr_pp
+    //   arr(p_control, p_treat)  2-arg: p_control - p_treat
+    //   ln_hr_to_hr(ln_hr)       1-arg: exp(ln_hr)
+    if fn_name == "nnt" {
+        return _nnt_register(a0)
+    }
+    if fn_name == "arr" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        return _arr_register(a0, a1)
+    }
+    if fn_name == "ln_hr_to_hr" {
+        return _ln_hr_to_hr_register(a0)
+    }
+    // ── Bio-physical Phase 2 (atlas L2 unblock) ───────────────────────
+    //   hill(L, Kd, n)              3-arg: L^n / (Kd^n + L^n)
+    //   cheng_prusoff(IC50, S, Km)  3-arg: IC50 / (1 + S/Km)
+    //   fick1(D, dC, dx)            3-arg: -D * dC/dx
+    //   laplace(P, r, t_wall)       3-arg: P * r / t_wall
+    //   stokes_einstein(T, eta, r)  3-arg: kB * T / (6 * pi * eta * r)
+    if fn_name == "hill" {
+        if argc < 3 { return _NOCALC_F_REGISTER }
+        return _hill_register(a0, a1, a2)
+    }
+    if fn_name == "cheng_prusoff" {
+        if argc < 3 { return _NOCALC_F_REGISTER }
+        return _cheng_prusoff_register(a0, a1, a2)
+    }
+    if fn_name == "fick1" {
+        if argc < 3 { return _NOCALC_F_REGISTER }
+        return _fick1_register(a0, a1, a2)
+    }
+    if fn_name == "laplace" {
+        if argc < 3 { return _NOCALC_F_REGISTER }
+        return _laplace_wall_register(a0, a1, a2)
+    }
+    if fn_name == "stokes_einstein" {
+        if argc < 3 { return _NOCALC_F_REGISTER }
+        return _stokes_einstein_register(a0, a1, a2)
+    }
+    // ── Superconductivity (RTSC V2 — atlas L2 unblock) ────────────────
+    //   allen_dynes_tc(λ, ω_log, μ*)   3-arg
+    //   mcmillan_tc(λ, ω_D, μ*)        3-arg
+    //   bcs_gap_ratio()                0-arg constant
+    //   lambda_eliashberg(M₀)          1-arg
+    //   beenet_grid_bins(ω_max, Δω)    2-arg
+    //   migdal_ratio(ω_phonon, E_F)    2-arg
+    if fn_name == "allen_dynes_tc" {
+        if argc < 3 { return _NOCALC_F_REGISTER }
+        return _allen_dynes_tc_register(a0, a1, a2)
+    }
+    if fn_name == "mcmillan_tc" {
+        if argc < 3 { return _NOCALC_F_REGISTER }
+        return _mcmillan_tc_register(a0, a1, a2)
+    }
+    if fn_name == "bcs_gap_ratio" { return _bcs_gap_ratio_register() }
+    if fn_name == "lambda_eliashberg" {
+        return _lambda_eliashberg_register(a0)
+    }
+    if fn_name == "beenet_grid_bins" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        return _beenet_grid_bins_register(a0, a1)
+    }
+    if fn_name == "migdal_ratio" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        return _migdal_ratio_register(a0, a1)
+    }
+    // ── Superconductivity tranche 2 (RTSC #15 device-side + strong-coupling) ─
+    //   allen_dynes_full(λ, ω_log, ω̄₂, μ*)  4-arg   morel_anderson_mustar(μ,E_F,ω) 3-arg
+    //   coherence_length(Hc2)                1-arg   isotope_exponent(M₁,Tc₁,M₂,Tc₂) 4-arg
+    //   gl_parameter_kappa(λ_L, ξ)           2-arg   london_penetration_depth(n_s)   1-arg
+    //   thermo_critical_field(Hc0, T, Tc)    3-arg   condensation_energy(Bc0)         1-arg
+    //   bcs_gap_zero(Tc)                     1-arg   pippard_coherence(v_F, Tc)       2-arg
+    if fn_name == "allen_dynes_full" {
+        if argc < 4 { return _NOCALC_F_REGISTER }
+        return _allen_dynes_full_register(a0, a1, a2, a3)
+    }
+    if fn_name == "morel_anderson_mustar" {
+        if argc < 3 { return _NOCALC_F_REGISTER }
+        return _morel_anderson_mustar_register(a0, a1, a2)
+    }
+    if fn_name == "coherence_length" { return _coherence_length_register(a0) }
+    if fn_name == "isotope_exponent" {
+        if argc < 4 { return _NOCALC_F_REGISTER }
+        return _isotope_exponent_register(a0, a1, a2, a3)
+    }
+    if fn_name == "gl_parameter_kappa" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        return _gl_parameter_kappa_register(a0, a1)
+    }
+    if fn_name == "london_penetration_depth" { return _london_penetration_depth_register(a0) }
+    if fn_name == "thermo_critical_field" {
+        if argc < 3 { return _NOCALC_F_REGISTER }
+        return _thermo_critical_field_register(a0, a1, a2)
+    }
+    if fn_name == "condensation_energy" { return _condensation_energy_register(a0) }
+    if fn_name == "bcs_gap_zero" { return _bcs_gap_zero_register(a0) }
+    if fn_name == "pippard_coherence" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        return _pippard_coherence_register(a0, a1)
+    }
+    // ── Bio-physical Phase 3 (atlas L2 unblock — 4-arg lane) ──────────
+    //   higuchi(k_H, t)                   2-arg: k_H * sqrt(t)
+    //   tafel(a, b, j)                    3-arg: a + b * log10(j)
+    //   hagen_poiseuille(r, dP, mu, L)    4-arg: pi*r^4*dP / (8*mu*L)
+    if fn_name == "higuchi" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        return _higuchi_register(a0, a1)
+    }
+    if fn_name == "tafel" {
+        if argc < 3 { return _NOCALC_F_REGISTER }
+        return _tafel_register(a0, a1, a2)
+    }
+    if fn_name == "hagen_poiseuille" {
+        if argc < 4 { return _NOCALC_F_REGISTER }
+        return _hagen_poiseuille_register(a0, a1, a2, a3)
+    }
+    // ── TTR-ORAL / TTR-LAC bundle (topical PK + laser optics · INBOX T22:35Z) ──
+    if fn_name == "higuchi_flux" {
+        if argc < 3 { return _NOCALC_F_REGISTER }
+        return _higuchi_flux_register(a0, a1, a2)
+    }
+    if fn_name == "fick_steady_flux" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        return _fick_steady_flux_register(a0, a1)
+    }
+    if fn_name == "partition_coeff" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        return _partition_coeff_register(a0, a1)
+    }
+    if fn_name == "permeability_skin" {
+        if argc < 3 { return _NOCALC_F_REGISTER }
+        return _permeability_skin_register(a0, a1, a2)
+    }
+    if fn_name == "auc_first_order" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        return _auc_first_order_register(a0, a1)
+    }
+    if fn_name == "clearance" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        return _clearance_register(a0, a1)
+    }
+    if fn_name == "beer_lambert_log10" {
+        if argc < 4 { return _NOCALC_F_REGISTER }
+        return _beer_lambert_log10_register(a0, a1, a2, a3)
+    }
+    if fn_name == "fluence" {
+        if argc < 3 { return _NOCALC_F_REGISTER }
+        return _fluence_register(a0, a1, a2)
+    }
+    if fn_name == "beam_waist" {
+        if argc < 3 { return _NOCALC_F_REGISTER }
+        return _beam_waist_register(a0, a1, a2)
+    }
+    if fn_name == "rayleigh_range" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        return _rayleigh_range_register(a0, a1)
+    }
+    if fn_name == "absorption_depth" {
+        return _absorption_depth_register(a0)
+    }
+    return _NOCALC_F_REGISTER
+}
+
+// WIPE-OK: the register-side float membership mirrors (_is_float_fn_register /
+// _is_zero_arg_float_fn_register) were a STRICT SUBSET of verify_cli's table
+// (63 vs 99 fns — the R3-measured drift) and are removed. The lone live caller
+// (cmd_reverify) now consults the shared SSOT compiler/atlas/calc_dispatch::
+// calc_is_float_fn. Widening reverify's predicate to the full table is
+// byte-identical for its counts (no atlas numerical F-node references a fn
+// outside the prior subset — verified: numerical_seen=36 match=32 drift=3
+// unverifiable=1). _is_zero_arg_float_fn_register had no callers at all.
+
+// _fstr_register — float → string for verdict echo / node text.
+fn _fstr_register(x: float) -> string {
+    return to_string(x)
+}
+
+// _hxesc — escape a string for use inside a hexa double-quoted string literal
+// (backslash, then double-quote, then newline). Mirrors what tool/atlas_embed_gen
+// emits when serializing AtlasNode.raw into embedded.gen.hexa.
+
+// _provenance_lines — VERIFY-KIT V6 optional provenance block. When `source`
+// is non-empty, emits a `source = "<text>"` line (the external attribution —
+// OEIS id, DOI, …) right after `verified-by` and before `cite`, matching the
+// OEIS O4 hand-fold shape so future OEIS folds use `--source` instead of a
+// hand edit. `url` (optional) adds a `url = "<link>"` line for the CC-BY-SA /
+// DOI link. Empty `source` AND `url` → "" (default behavior unchanged: the
+// node carries only the `g_self_verify` verify cite, no provenance field).
+fn _provenance_lines(source: string, url: string) -> string {
+    let mut out = ""
+    if len(source) > 0 { out = out + "  source = \"" + source + "\"\n" }
+    if len(url) > 0 { out = out + "  url = \"" + url + "\"\n" }
+    return out
+}
+
+// _build_raw_F — hexa-source-form header for a verified closed-form (kind F).
+// Shape:   @F <id> = <fn>(<arg>) = <value> :: formula [d=<date> active]
+//            verified-by = "hexa verify --expr <fn> <args> <v>"
+//            [source = "<attribution>"]   (V6 — present iff --source given)
+//            [url = "<link>"]             (V6 — present iff --url given)
+//            cite = "@D g_self_verify · TECS-L Tier1"
+fn _build_raw_F(id: string, fn_name: string, arg_str: string, value: int, today: string, source: string, url: string) -> string {
+    return "@F " + id + " = " + fn_name + "(" + arg_str + ") = " + to_string(value) +
+           " :: formula [d=" + today + " active]\n" +
+           "  verified-by = \"hexa verify --expr " + fn_name + " " + arg_str + " " + to_string(value) + "\"\n" +
+           _provenance_lines(source, url) +
+           "  cite = \"@D g_self_verify · TECS-L Tier1 — hexa-native NT closed-form\"\n" +
+           "  provenance = \"tool/atlas_cli.hexa register --from-verify (direct node-gen → embedded.gen.hexa SSOT)\""
+}
+
+// _build_raw_F_numerical — hexa-source-form header for a 🟢 SUPPORTED-
+// NUMERICAL form (kind F). The `tier` field + the `cite` line carry the
+// TECS-L Tier2 marker so the atlas keeps the 🟢-vs-🔵 distinction (🔵 =
+// closed-form FORMAL; 🟢 = libm-class numerical recompute within ε=1e-9).
+// `arg_str` / `value_str` are the decimal float echoes (e.g. "12.706").
+fn _build_raw_F_numerical(id: string, fn_name: string, arg_str: string, value_str: string, today: string, source: string, url: string) -> string {
+    return "@F " + id + " = " + fn_name + "(" + arg_str + ") = " + value_str +
+           " :: formula [d=" + today + " active]\n" +
+           "  tier = \"🟢 SUPPORTED-NUMERICAL\"\n" +
+           "  verified-by = \"hexa verify --expr " + fn_name + " " + arg_str + " " + value_str + "\"\n" +
+           _provenance_lines(source, url) +
+           "  cite = \"TECS-L n6-rep Tier2 — hexa-native libm-class numerical recompute (ε=1e-9)\"\n" +
+           "  provenance = \"tool/atlas_cli.hexa register --from-verify (direct node-gen → embedded.gen.hexa SSOT; 🟢 numerical)\""
+}
+
+// ── 6-tier node-gen (g5 rubric completeness) ─────────────────────────
+// register's --from-verify covers 🔵/🟢 (SUPPORTED, recompute-backed). The
+// remaining four g5 tiers (🟡 citation · 🟠 deferred · 🔴 falsified · ⚪ fenced)
+// carry NO in-process recompute — their evidence is external (DOI · blocker ·
+// falsifier id · honest-fence). Each builder emits a kind-F (or kind-X for
+// ⚪) node whose `tier =` field is the g5 verdict, so `atlas lookup --tier <T>`
+// and `atlas stats --tier-breakdown` can surface the full verdict spectrum.
+// This roots g63 (FALSIFIED never skipped) + honest-triad (claim+citation+
+// severity) in the atlas SSOT itself, not scattered markdown.
+
+// _build_raw_falsified — 🔴 FALSIFIED closed-negative (kind F). NO recompute:
+// the claim is invalidated, the falsifier id + citation carry the evidence.
+fn _build_raw_falsified(id: string, claim: string, falsifier: string, citation: string, today: string) -> string {
+    return "@F " + id + " = " + claim + " :: falsified [d=" + today + " active]\n" +
+           "  tier = \"🔴 FALSIFIED\"\n" +
+           "  closed_negative = true\n" +
+           "  falsifier = \"" + falsifier + "\"\n" +
+           "  cite = \"" + citation + "\"\n" +
+           "  provenance = \"tool/atlas_cli.hexa register --from-falsify (closed-negative · g63 · no recompute; falsifier carries evidence)\""
+}
+
+// _build_raw_citation — 🟡 SUPPORTED-BY-CITATION (kind F). Literature/atlas
+// registered with a DOI + verbatim note; NO hexa recompute (never auto-🔵).
+fn _build_raw_citation(id: string, claim: string, doi: string, note: string, today: string) -> string {
+    return "@F " + id + " = " + claim + " :: citation [d=" + today + " active]\n" +
+           "  tier = \"🟡 SUPPORTED-BY-CITATION\"\n" +
+           "  doi = \"" + doi + "\"\n" +
+           "  note = \"" + note + "\"\n" +
+           "  cite = \"literature-registered · no hexa recompute (g5 🟡 · never auto-🔵)\"\n" +
+           "  provenance = \"tool/atlas_cli.hexa register --from-citation (external DOI evidence)\""
+}
+
+// _build_raw_deferred — 🟠 INSUFFICIENT/DEFERRED (kind F). No calc path / blocked
+// on an external dependency (hardware · measurement · API). blocker + eta carry
+// the gate.
+fn _build_raw_deferred(id: string, claim: string, blocker: string, eta: string, today: string) -> string {
+    return "@F " + id + " = " + claim + " :: deferred [d=" + today + " active]\n" +
+           "  tier = \"🟠 INSUFFICIENT/DEFERRED\"\n" +
+           "  blocker = \"" + blocker + "\"\n" +
+           "  eta = \"" + eta + "\"\n" +
+           "  cite = \"deferred on external dep (g5 🟠 · no calc path)\"\n" +
+           "  provenance = \"tool/atlas_cli.hexa register --from-defer (external-dep blocker)\""
+}
+
+// _build_raw_fenced — ⚪ SPECULATION-FENCED (kind X experimental). Imagination /
+// metaphor / hypothesis honestly fenced — verify N/A, SF ≠ proven.
+fn _build_raw_fenced(id: string, claim_text: string, fence_kind: string, today: string) -> string {
+    return "@X " + id + " = " + claim_text + " :: fenced [d=" + today + " active]\n" +
+           "  tier = \"⚪ SPECULATION-FENCED\"\n" +
+           "  fence_kind = \"" + fence_kind + "\"\n" +
+           "  cite = \"honest fence (g5 ⚪ · verify N/A · SF ≠ proven)\"\n" +
+           "  provenance = \"tool/atlas_cli.hexa register --from-fence (imagination/metaphor honest-fenced)\""
+}
+
+// ── live n6 write path (the single absorption sink) ──────────────────
+// register appends the node's .n6-grammar block (ev.raw) DIRECTLY to the
+// live n6/atlas.n6 SSOT — the very file `hexa atlas lookup/stats/dump/hash`
+// parse at load time (static_index::static_atlas → merger::load_atlas). No
+// embedded.gen.hexa, no staging shard, no rebuild: the next lookup sees it.
+
+// _resolve_embedded_path — the embedded.gen.hexa SSOT (the binary-builtin atlas
+// that static_index::static_atlas text-parses at load). $HEXA_ATLAS_EMBED (abs
+// dir containing embedded.gen.hexa) wins; else the stable repo path. MUST match
+// static_index::_resolve_embedded_path so register writes the file lookup reads.
+fn _resolve_embedded_path() -> string {
+    let override = env_var("HEXA_ATLAS_EMBED")
+    if len(override) > 0 { return override + "/embedded.gen.hexa" }
+    let home = env_var("HOME")
+    return home + "/core/hexa-lang/compiler/atlas/embedded.gen.hexa"
+}
+
+// _embedded_has_id — true iff embedded.gen.hexa already declares this node id
+// (cheap `id: "<id>"` scan). Re-registration is idempotent (refuses to dup).
+fn _embedded_has_id(embed_text: string, id: string) -> bool {
+    return embed_text.contains("id: \"" + id + "\"")
+}
+
+// _hxesc — escape a string into a hexa double-quoted string-literal body
+// (\\ → \\\\, " → \", LF → \n, etc.) so the .n6 raw block can be spliced into
+// an AtlasNode struct literal.
+fn _hxesc(s: string) -> string {
+    let n = len(s)
+    let mut chunks = []
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if      c == "\\" { chunks.push("\\\\") }
+        else if c == "\"" { chunks.push("\\\"") }
+        else if c == "\n" { chunks.push("\\n") }
+        else if c == "\r" { chunks.push("\\r") }
+        else if c == "\t" { chunks.push("\\t") }
+        else { chunks.push(c) }
+        i = i + 1
+    }
+    return chunks.join("")
+}
+
+// _fold_into_embedded — fold a verified node DIRECTLY into embedded.gen.hexa
+// (the binary-builtin SSOT static_atlas text-parses). Builds the AtlasNode
+// struct literal from the .n6 raw block and inserts it on a fresh line right
+// after the matching `ATLAS_<kind>_NODES: [AtlasNode] = [` opener — visible to
+// the next lookup with NO rebuild (static_atlas re-reads embedded.gen.hexa each
+// load). n6/atlas.n6 is NOT touched (that is export-only). Returns "" on
+// success, else an error message.
+fn _fold_into_embedded(node_kind: string, node_raw: string, node_id: string) -> string {
+    if len(node_raw) == 0 {
+        return "empty .n6 body for id: " + node_id + " (adapter must set ev.raw)"
+    }
+    let path = _resolve_embedded_path()
+    // Build the one-line AtlasNode struct literal, then delegate dedup +
+    // section-splice + ATOMIC write to embed_fold::embed_fold_into (the
+    // canonical pipeline). It dedups on the composite (kind,id) key — not a
+    // bare `id:` scan — and on a true duplicate returns a SKIP-prefixed status
+    // (idempotent: no second node appended). The temp-file + rename in
+    // embed_fold_into guarantees concurrent readers never see a half-written
+    // embedded.gen.hexa.
+    let node_text = "    AtlasNode { kind: \"" + node_kind + "\", id: \"" + _hxesc(node_id) +
+              "\", raw: \"" + _hxesc(node_raw) +
+              "\", source_file: \"register\", source_line: 0" +
+              ", grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false }" +
+              ", edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } }"
+    return embed_fold_into(path, node_kind, node_text, node_id)
+}
+
+// _slug_register — id-safe slug for the new atlas-id (kind-prefix style:
+// `verified_<fn>_<arg>` → `verified-divisor_sum-6`). Matches the existing
+// embed convention (lowercase, hyphen-separator, no spaces).
+fn _slug_register(s: string) -> string {
+    let n = len(s)
+    let mut out = ""
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        let is_lo = c >= "a" && c <= "z"
+        let is_up = c >= "A" && c <= "Z"
+        let is_di = c >= "0" && c <= "9"
+        if is_lo || is_di { out = out + c }
+        else if is_up { out = out + c }
+        else if c == "_" || c == "-" { out = out + c }
+        else { out = out + "-" }
+        i = i + 1
+    }
+    return out
+}
+
+// ── DiscoveryEvent — canonical internal envelope for all discovery surfaces.
+//
+// Every internal discovery surface (verify, drill/kick, check, smash,
+// atlas-verify, the verify_* tool family, proposer tools, math discovery)
+// converges on this struct. The adapter pattern is:
+//
+//   fn _adapt_<verb>(args...) -> DiscoveryEvent {
+//       // run the verb in-process, on a verified result emit a
+//       // DiscoveryEvent; on a falsified / skipped result return an
+//       // event with verdict != "🔵 SUPPORTED-FORMAL" so register_from_event
+//       // can honestly degrade.
+//   }
+//
+//   register_from_event(ev)
+//     — single, kind-uniform sink: appends ev.raw (the .n6 block) directly to
+//       the live n6/atlas.n6 SSOT. NEVER lies about a falsified/skipped verdict.
+//
+// Future verbs plug in by writing ONE `_adapt_<verb>` fn and wiring a
+// `--from-<verb>` arg to `cmd_register`. The node's .n6 block (ev.raw) IS the
+// storage form — appended straight to the live n6/atlas.n6 SSOT.
+//
+// Field semantics:
+//   kind         — one of "P|C|L|E|F" (matches atlas grammar; F is most
+//                  common for closed-form discoveries, L for laws, P for
+//                  fresh axioms).
+//   id           — canonical atlas id (pure-alpha-safe via `_safe_id` /
+//                  `_slug_register`); used both for dedup and section
+//                  fold.
+//   name         — one-line human label ("sigma(6)=12", "drill closed
+//                  form X"). Used in title / commit message only — NOT
+//                  spliced into the AtlasNode.
+//   raw          — the hexa-source-form body that goes into AtlasNode.raw
+//                  (header line + `cite =` + `provenance =`; what
+//                  `_build_raw_F`/`_build_raw_L` produce).
+//   verdict      — gating verdict; the canonical set is:
+//                  "🔵 SUPPORTED-FORMAL"     — promote-eligible (closed-form)
+//                  "🟢 SUPPORTED-NUMERICAL"  — promote-eligible (libm-class
+//                                              recompute within ε=1e-9, Tier2)
+//                  "🔴 FALSIFIED"            — calculator disagreed
+//                  "🟠 INSUFFICIENT"         — no calculator path (verify)
+//                  "skip"                    — drill produced 0 candidates
+//                  "error"                   — adapter crashed / malformed
+//                  Anything other than "🔵 SUPPORTED-FORMAL" / "🟢
+//                  SUPPORTED-NUMERICAL" must NOT reach register_from_event —
+//                  adapters are expected to degrade honestly before that.
+//   source_verb  — provenance: "verify" / "drill" / "kick" / "check" /
+//                  "smash" / "atlas-verify" / etc.
+//   provenance   — one-liner with the exact invocation/cmdline (e.g.
+//                  "hexa atlas register --from-verify phi 8 4").
+//                  Spliced into the body's `provenance =` line so a
+//                  reader can reproduce.
+pub struct DiscoveryEvent {
+    kind: string,
+    id: string,
+    name: string,
+    raw: string,
+    verdict: string,
+    source_verb: string,
+    provenance: string
+}
+
+// register_from_event — the canonical sink. Appends ev.raw (the node's .n6
+// block) directly to the live n6/atlas.n6 SSOT — visible to the next lookup
+// with no rebuild. HONEST DEGRADE: skipped / falsified events never reach this
+// fn (adapters short-circuit); an append failure returns the error message.
+//
+// Returns "" on success, otherwise an error message.
+fn register_from_event(ev: DiscoveryEvent) -> string {
+    // Promotable tiers: 🔵 SUPPORTED-FORMAL (closed-form) and 🟢
+    // SUPPORTED-NUMERICAL (libm-class recompute within ε). Both clear the
+    // rubric bar; 🟡/🟠/🔴/skip/error must have degraded in the adapter.
+    // The 🔵-vs-🟢 distinction is preserved in the node's `cite =` / `tier =`
+    // lines (TECS-L Tier1 vs Tier2) by the raw-builder, so the atlas keeps
+    // them distinguishable downstream.
+    if ev.verdict != "🔵 SUPPORTED-FORMAL" && ev.verdict != "🟢 SUPPORTED-NUMERICAL" {
+        return "register_from_event: refusing event with verdict='" + ev.verdict +
+               "' (only 🔵 SUPPORTED-FORMAL / 🟢 SUPPORTED-NUMERICAL are promotable; adapter should have degraded)"
+    }
+    if len(ev.kind) == 0 || (ev.kind != "P" && ev.kind != "C" && ev.kind != "L" && ev.kind != "E" && ev.kind != "F" && ev.kind != "R" && ev.kind != "S" && ev.kind != "X" && ev.kind != "Q") {
+        return "register_from_event: invalid kind='" + ev.kind + "' (must be P|C|L|E|F|R|S|X|Q)"
+    }
+    if len(ev.id) == 0 {
+        return "register_from_event: empty id (adapter must mint a stable id)"
+    }
+    let embed_path = _resolve_embedded_path()
+    let err = _fold_into_embedded(ev.kind, ev.raw, ev.id)
+    if embed_is_skip(err) {
+        // Idempotent re-register: (kind,id) already present. Not an error — the
+        // atlas is unchanged; print a clear skip notice and succeed.
+        println("  atlas  = already registered — skipped: @" + ev.kind + " " + ev.id + " (no duplicate appended)")
+        println("  note   = re-register is idempotent; nothing to commit")
+        return ""
+    }
+    if len(err) > 0 {
+        return "fold into embedded.gen.hexa failed — " + err
+    }
+    println("  atlas  = folded @" + ev.kind + " " + ev.id + " → " + embed_path + " (binary-builtin SSOT)")
+    println("  note   = visible to `hexa atlas lookup` immediately — no rebuild")
+    println("")
+    println("hexa atlas register: landed in the live atlas. Commit to share it:")
+    println("  git -C ~/core/hexa-lang add compiler/atlas/embedded.gen.hexa && git commit -m " + _shq("atlas(" + ev.kind + "): register " + ev.id))
+    return ""
+}
+
+// ── adapters — one per discovery verb ─────────────────────────────────
+//
+// Each adapter takes verb-specific args, runs the verb IN-PROCESS, and
+// returns a DiscoveryEvent. The caller (cmd_register) inspects the
+// returned event's `verdict`:
+//   "🔵 SUPPORTED-FORMAL" → register_from_event(ev, …)
+//   anything else         → print honest degrade, exit non-zero
+//                           (or exit 0 for benign "skip")
+
+// _adapt_verify — verify recompute on a closed-form. Mirrors the original
+// `--from-verify` path; the 1-op / 2-op split lives in cmd_register.
+fn _adapt_verify_1op(fn_name: string, n_arg: int, expected: int, id_override: string) -> DiscoveryEvent {
+    let got = _recompute_register(fn_name, n_arg)
+    let arg_str = to_string(n_arg)
+    let provenance = "hexa atlas register --from-verify " + fn_name + " " + arg_str + " " + to_string(expected)
+    if got == _NOCALC_REGISTER {
+        return DiscoveryEvent { kind: "F", id: "", name: fn_name + "(" + arg_str + ")=" + to_string(expected),
+            raw: "", verdict: "🟠 INSUFFICIENT", source_verb: "verify", provenance: provenance }
+    }
+    if got != expected {
+        return DiscoveryEvent { kind: "F", id: "", name: fn_name + "(" + arg_str + ")=" + to_string(expected),
+            raw: "", verdict: "🔴 FALSIFIED", source_verb: "verify", provenance: provenance }
+    }
+    let mut id = id_override
+    if len(id) == 0 { id = "verified-" + _slug_register(fn_name) + "-" + to_string(n_arg) }
+    let today = _today_compact()
+    let raw_body = _build_raw_F(id, fn_name, arg_str, expected, today, "", "")
+    return DiscoveryEvent { kind: "F", id: id, name: fn_name + "(" + arg_str + ")=" + to_string(expected),
+        raw: raw_body, verdict: "🔵 SUPPORTED-FORMAL", source_verb: "verify", provenance: provenance }
+}
+
+fn _adapt_verify_2op(fn_name: string, a_arg: int, b_arg: int, expected: int, id_override: string) -> DiscoveryEvent {
+    let got = _recompute2_register(fn_name, a_arg, b_arg)
+    let arg_str = to_string(a_arg) + "," + to_string(b_arg)
+    let provenance = "hexa atlas register --from-verify " + fn_name + " " + to_string(a_arg) + " " + to_string(b_arg) + " " + to_string(expected)
+    if got == _NOCALC_REGISTER {
+        return DiscoveryEvent { kind: "F", id: "", name: fn_name + "(" + arg_str + ")=" + to_string(expected),
+            raw: "", verdict: "🟠 INSUFFICIENT", source_verb: "verify", provenance: provenance }
+    }
+    if got != expected {
+        return DiscoveryEvent { kind: "F", id: "", name: fn_name + "(" + arg_str + ")=" + to_string(expected),
+            raw: "", verdict: "🔴 FALSIFIED", source_verb: "verify", provenance: provenance }
+    }
+    let mut id = id_override
+    if len(id) == 0 { id = "verified-" + _slug_register(fn_name) + "-" + to_string(a_arg) + "-" + to_string(b_arg) }
+    let today = _today_compact()
+    let raw_body = _build_raw_F(id, fn_name, arg_str, expected, today, "", "")
+    return DiscoveryEvent { kind: "F", id: id, name: fn_name + "(" + arg_str + ")=" + to_string(expected),
+        raw: raw_body, verdict: "🔵 SUPPORTED-FORMAL", source_verb: "verify", provenance: provenance }
+}
+
+// _adapt_verify_3op — 3-operand integer FORMAL adapter (RFC 046 tknn_chern).
+// Mirrors verify_cli::cmd_expr 6-arg path. Closed-form Diophantine search →
+// 🔵 SUPPORTED-FORMAL when calc == expected, 🔴 FALSIFIED on disagreement,
+// 🟠 INSUFFICIENT when _recompute3_register returns _NOCALC_REGISTER.
+fn _adapt_verify_3op(fn_name: string, a_arg: int, b_arg: int, c_arg: int, expected: int, id_override: string) -> DiscoveryEvent {
+    let got = _recompute3_register(fn_name, a_arg, b_arg, c_arg)
+    let arg_str = to_string(a_arg) + "," + to_string(b_arg) + "," + to_string(c_arg)
+    let provenance = "hexa atlas register --from-verify " + fn_name + " " + to_string(a_arg) + " " + to_string(b_arg) + " " + to_string(c_arg) + " " + to_string(expected)
+    if got == _NOCALC_REGISTER {
+        return DiscoveryEvent { kind: "F", id: "", name: fn_name + "(" + arg_str + ")=" + to_string(expected),
+            raw: "", verdict: "🟠 INSUFFICIENT", source_verb: "verify", provenance: provenance }
+    }
+    if got != expected {
+        return DiscoveryEvent { kind: "F", id: "", name: fn_name + "(" + arg_str + ")=" + to_string(expected),
+            raw: "", verdict: "🔴 FALSIFIED", source_verb: "verify", provenance: provenance }
+    }
+    let mut id = id_override
+    if len(id) == 0 { id = "verified-" + _slug_register(fn_name) + "-" + to_string(a_arg) + "-" + to_string(b_arg) + "-" + to_string(c_arg) }
+    let today = _today_compact()
+    let raw_body = _build_raw_F(id, fn_name, arg_str, expected, today, "", "")
+    return DiscoveryEvent { kind: "F", id: id, name: fn_name + "(" + arg_str + ")=" + to_string(expected),
+        raw: raw_body, verdict: "🔵 SUPPORTED-FORMAL", source_verb: "verify", provenance: provenance }
+}
+
+// _adapt_verify_float — the 🟢 NUMERICAL adapter (RFC 047 atoms). Mirrors
+// verify_cli::cmd_expr_float: float args + claimed value are compared with
+// tolerance ε (NOT exact-eq) — within ε → 🟢 SUPPORTED-NUMERICAL; out-of-ε
+// → 🔴; no float path → 🟠 INSUFFICIENT. argc is 0 (constant) | 1 | 2 | 3
+// (bio Phase 1/2 + supercon) | 4 (bio Phase 3 hagen_poiseuille).
+fn _adapt_verify_float(fn_name: string, a0_str: string, a1_str: string, a2_str: string, a3_str: string, v_str: string, argc: int, id_override: string) -> DiscoveryEvent {
+    let a0 = _parse_float_register(a0_str)
+    let mut a1 = 0.0
+    let mut a2 = 0.0
+    let mut a3 = 0.0
+    if argc >= 2 { a1 = _parse_float_register(a1_str) }
+    if argc >= 3 { a2 = _parse_float_register(a2_str) }
+    if argc >= 4 { a3 = _parse_float_register(a3_str) }
+    let v = _parse_float_register(v_str)
+    // 0-arg → empty operand echo (e.g. "chsh_tsirelson()"); 1-arg → "<a0>";
+    // 2-arg → "<a0>,<a1>"; 3-arg → "<a0>,<a1>,<a2>"; 4-arg → "...,<a3>".
+    // Mirrors verify_cli cmd_expr_float label.
+    let mut arg_echo = ""
+    if argc == 1 { arg_echo = _fstr_register(a0) }
+    if argc == 2 { arg_echo = _fstr_register(a0) + "," + _fstr_register(a1) }
+    if argc == 3 { arg_echo = _fstr_register(a0) + "," + _fstr_register(a1) + "," + _fstr_register(a2) }
+    if argc >= 4 { arg_echo = _fstr_register(a0) + "," + _fstr_register(a1) + "," + _fstr_register(a2) + "," + _fstr_register(a3) }
+    let v_echo = _fstr_register(v)
+    let mut prov = "hexa atlas register --from-verify " + fn_name
+    if argc >= 1 { prov = prov + " " + a0_str }
+    if argc >= 2 { prov = prov + " " + a1_str }
+    if argc >= 3 { prov = prov + " " + a2_str }
+    if argc >= 4 { prov = prov + " " + a3_str }
+    prov = prov + " " + v_str
+    let got = _recompute_float_register(fn_name, a0, a1, a2, a3, argc)
+    if got == _NOCALC_F_REGISTER {
+        return DiscoveryEvent { kind: "F", id: "", name: fn_name + "(" + arg_echo + ")=" + v_echo,
+            raw: "", verdict: "🟠 INSUFFICIENT", source_verb: "verify", provenance: prov }
+    }
+    let diff = _fabs_register(got - v)
+    if diff > calc_eps() {
+        return DiscoveryEvent { kind: "F", id: "", name: fn_name + "(" + arg_echo + ")=" + v_echo,
+            raw: "", verdict: "🔴 FALSIFIED", source_verb: "verify", provenance: prov }
+    }
+    let mut id = id_override
+    if len(id) == 0 { id = "verified-" + _slug_register(fn_name) + "-num" }
+    let today = _today_compact()
+    let raw_body = _build_raw_F_numerical(id, fn_name, arg_echo, v_echo, today, "", "")
+    return DiscoveryEvent { kind: "F", id: id, name: fn_name + "(" + arg_echo + ")=" + v_echo,
+        raw: raw_body, verdict: "🟢 SUPPORTED-NUMERICAL", source_verb: "verify", provenance: prov }
+}
+
+// _build_raw_drill — hexa-source-form body for a drill discovery candidate.
+// Shape (kind L for derived discoveries, kind P for fresh axioms):
+//   @L|@P <id> = <expr> :: drill-<src> [d=<date> active]
+//     verified-by = "hexa drill --seed <seed> --rounds N --engine <eng>"
+//     cite = "@D g_self_verify · drill round verdict != skip"
+//     provenance = "tool/atlas_cli.hexa register --from-drill (direct node-gen, no .n6)"
+fn _build_raw_drill(kind: string, id: string, expr: string, seed: string,
+                    src_tag: string, engine: string, rounds: int, today: string) -> string {
+    let kindp = "@" + kind
+    let mut head = kindp + " " + id
+    if len(expr) > 0 { head = head + " = " + expr }
+    head = head + " :: drill-" + src_tag + " [d=" + today + " active]"
+    let body = head + "\n" +
+               "  verified-by = \"hexa drill --seed " + _shq(seed) + " --rounds " + to_string(rounds) + " --engine " + engine + "\"\n" +
+               "  cite = \"@D g_self_verify · drill round verdict != skip\"\n" +
+               "  provenance = \"tool/atlas_cli.hexa register --from-drill (direct node-gen, no .n6)\""
+    return body
+}
+
+// _adapt_drill — run the drill engine in-process and lift candidates into
+// DiscoveryEvent[]. Uses the public `drill_run(seed, opts)` entry. We
+// pull candidates out of the LAST round's discoveries by re-running one
+// round inline (the public DrillResult only ships counts; the per-round
+// `discoveries: array` lives in RoundResult, which is consumed by the
+// loop). To get at the candidates without re-architecting drill_run, we
+// drive a single `round_run_with_pool` call for round=1 — drill's own
+// loop does the same thing internally, and an arity-1 call is the right
+// granularity for the "register one PR per discovery batch" semantic.
+//
+// On a degenerate seed / no-candidate round, returns an event with
+// verdict="skip" so cmd_register can degrade honestly (no PR).
+//
+// kind selection:
+//   axiom=true  → @P (provisional axiom — drill called it fresh)
+//   axiom=false → @L (link / derived — drill called it derivable)
+//
+// HONESTY GATE: drill internally invokes _verifier_run + _honesty_gate;
+// when no external verifier is installed (verifier_cmd==""), the verdict
+// is "skip". We adopt the SAME convention — verdict "skip" means
+// no-promotable-candidate, which is exactly what we want.
+fn _adapt_drill_candidate(c: DiscoveryCandidate, seed: string, engine: string,
+                          rounds: int, today: string) -> DiscoveryEvent {
+    let kind = if c.axiom { "P" } else { "L" }
+    let id = _slug_register(c.id)
+    let raw_body = _build_raw_drill(kind, id, c.expr, seed, c.src, engine, rounds, today)
+    let provenance = "hexa atlas register --from-drill --seed " + _shq(seed) + " --rounds " + to_string(rounds) + " --engine " + engine
+    return DiscoveryEvent {
+        kind: kind, id: id,
+        name: "drill " + c.src + " — " + c.id,
+        raw: raw_body,
+        verdict: "🔵 SUPPORTED-FORMAL",
+        source_verb: "drill",
+        provenance: provenance
+    }
+}
+
+// _adapt_verify_generic — single, generic verify-delegation adapter (replaces
+// the legacy per-fn _adapt_verify_1op/2op/3op/float + _is_float_fn_register +
+// the per-fn _<fn>_register recompute tables). Shells out to
+// `hexa verify --expr <fn> <args> <v>` — single calc home = tool/verify_cli.hexa
+// per @D g20 — parses the tier line, and on 🔵/🟢 builds the .n6 raw block. No
+// per-fn knowledge in atlas_cli: adding a new verify-able fn now requires ONLY
+// a verify_cli dispatch entry, never an atlas_cli edit. The legacy per-fn fns
+// (_recompute_*_register, _<fn>_register, _adapt_verify_1op/2op/3op/float,
+// _is_*_fn_register) are now uncalled — left as harmless dead code for now;
+// safe to delete in a follow-up cleanup PR.
+// VERIFY-KIT V6 — `source` / `url` carry external provenance (OEIS id, DOI,
+// CC-BY-SA link). Empty → unchanged default (verify cite only). Distinct from
+// the verify cite: `source` is the PROVENANCE attribution, `g_self_verify`
+// stays the verification cite.
+fn _adapt_verify_generic(fn_name: string, args: array, v_str: string, id_override: string, source: string, url: string) -> DiscoveryEvent {
+    let mut args_str_arr = []
+    let mut i = 0
+    while i < len(args) {
+        args_str_arr.push(to_string(args[i]))
+        i = i + 1
+    }
+    let arg_str_comma = args_str_arr.join(",")
+    let arg_str_space = args_str_arr.join(" ")
+    let invoke = "hexa verify --expr " + fn_name + " " + arg_str_space + " " + v_str
+    let prov = "hexa atlas register --from-verify (generic verify-delegation) · " + invoke
+    let name = fn_name + "(" + arg_str_comma + ")=" + v_str
+
+    // Shell out to verify; tier line is the canonical verdict source (g5).
+    let out = to_string(exec(invoke + " 2>&1"))
+
+    let mut verdict = "🟠 INSUFFICIENT"
+    if out.contains("🟢 SUPPORTED-NUMERICAL") { verdict = "🟢 SUPPORTED-NUMERICAL" }
+    else if out.contains("🔵 SUPPORTED-FORMAL") { verdict = "🔵 SUPPORTED-FORMAL" }
+    else if out.contains("🔴 FALSIFIED") { verdict = "🔴 FALSIFIED" }
+
+    if verdict == "🟠 INSUFFICIENT" || verdict == "🔴 FALSIFIED" {
+        return DiscoveryEvent { kind: "F", id: "", name: name, raw: "",
+            verdict: verdict, source_verb: "verify", provenance: prov }
+    }
+
+    let today = _today_compact()
+    let mut id = id_override
+    if verdict == "🟢 SUPPORTED-NUMERICAL" {
+        if len(id) == 0 { id = "verified-" + _slug_register(fn_name) + "-num" }
+        let raw = _build_raw_F_numerical(id, fn_name, arg_str_comma, v_str, today, source, url)
+        return DiscoveryEvent { kind: "F", id: id, name: name, raw: raw,
+            verdict: verdict, source_verb: "verify", provenance: prov }
+    }
+    // 🔵 SUPPORTED-FORMAL — int closed-form; id includes args dash-joined.
+    if len(id) == 0 {
+        id = "verified-" + _slug_register(fn_name) + "-" + args_str_arr.join("-")
+    }
+    let v_int = to_int(v_str)
+    let raw = _build_raw_F(id, fn_name, arg_str_comma, v_int, today, source, url)
+    return DiscoveryEvent { kind: "F", id: id, name: name, raw: raw,
+        verdict: verdict, source_verb: "verify", provenance: prov }
+}
+
+// _parse_compute_value — extract the numeric value from a verify compute-mode
+// stdout (`COMPUTE: <label> = <value>` line). Returns the value substring after
+// the LAST " = " on the COMPUTE line, or "" when no COMPUTE line is present.
+fn _parse_compute_value(out: string) -> string {
+    let lines = out.split("\n")
+    let mut i = 0
+    while i < len(lines) {
+        let ln = to_string(lines[i])
+        if ln.starts_with("COMPUTE: ") {
+            // value is the tail after the last " = "
+            let parts = ln.split(" = ")
+            if len(parts) >= 2 { return to_string(parts[len(parts) - 1]).trim() }
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// _adapt_verify_compute — VERIFY-KIT V1 value-less COMPUTE-and-fold adapter.
+// register's --from-verify treats EVERY positional after the fn name as an
+// OPERAND (no claimed value), delegates to `hexa verify --expr <fn> <args>
+// --compute` (the single calc home per @D g20 — atlas owns NO recompute
+// mirror), reads the COMPUTE value back, and folds it on 🔵/🟢. This kills
+// BOTH the atlas_cli↔verify_cli recompute desync (no mirror) AND the arity
+// gap (any operand count — allen_dynes_tc is 3-arg, handled by verify_cli).
+fn _adapt_verify_compute(fn_name: string, args: array, id_override: string, source: string, url: string) -> DiscoveryEvent {
+    let mut args_str_arr = []
+    let mut i = 0
+    while i < len(args) {
+        args_str_arr.push(to_string(args[i]))
+        i = i + 1
+    }
+    let arg_str_comma = args_str_arr.join(",")
+    let arg_str_space = args_str_arr.join(" ")
+    let mut invoke = "hexa verify --expr " + fn_name
+    if len(arg_str_space) > 0 { invoke = invoke + " " + arg_str_space }
+    invoke = invoke + " --compute"
+    let prov = "hexa atlas register --from-verify (generic verify-delegation, compute) · " + invoke
+
+    // Shell out to verify in compute mode; tier line is the canonical verdict.
+    let out = to_string(exec(invoke + " 2>&1"))
+
+    let mut verdict = "🟠 INSUFFICIENT"
+    if out.contains("🟢 SUPPORTED-NUMERICAL") { verdict = "🟢 SUPPORTED-NUMERICAL" }
+    else if out.contains("🔵 SUPPORTED-FORMAL") { verdict = "🔵 SUPPORTED-FORMAL" }
+    else if out.contains("🔴 FALSIFIED") { verdict = "🔴 FALSIFIED" }
+
+    let v_str = _parse_compute_value(out)
+    let name = fn_name + "(" + arg_str_comma + ")=" + v_str
+
+    if verdict == "🟠 INSUFFICIENT" || verdict == "🔴 FALSIFIED" || len(v_str) == 0 {
+        return DiscoveryEvent { kind: "F", id: "", name: name, raw: "",
+            verdict: verdict, source_verb: "verify", provenance: prov }
+    }
+
+    let today = _today_compact()
+    let mut id = id_override
+    if verdict == "🟢 SUPPORTED-NUMERICAL" {
+        if len(id) == 0 { id = "verified-" + _slug_register(fn_name) + "-num" }
+        let raw = _build_raw_F_numerical(id, fn_name, arg_str_comma, v_str, today, source, url)
+        return DiscoveryEvent { kind: "F", id: id, name: name, raw: raw,
+            verdict: verdict, source_verb: "verify", provenance: prov }
+    }
+    // 🔵 SUPPORTED-FORMAL — int closed-form; id includes args dash-joined.
+    if len(id) == 0 {
+        id = "verified-" + _slug_register(fn_name) + "-" + args_str_arr.join("-")
+    }
+    let raw = _build_raw_F(id, fn_name, arg_str_comma, to_int(v_str), today, source, url)
+    return DiscoveryEvent { kind: "F", id: id, name: name, raw: raw,
+        verdict: verdict, source_verb: "verify", provenance: prov }
+}
+
+// ── from-discovery — fold a `.discoveries/<slug>.tape` discovery atom(s) ──
+//
+// The discovery-tape format (see .discoveries/README.md, @D discovery_log):
+//   @X <id> := "<text>" :: discovery [slug=<slug> group=<G>]
+//     date                = "..."
+//     verdict_tier_target = "BLUE SUPPORTED-FORMAL" | "RED CLOSED-NEGATIVE" | ...
+//     atlas               = "<id> (manual splice ...)" | "no fold (honest gap)"
+//     ...
+// (an older variant uses `verdict-tier-target` with hyphens; both accepted.)
+//
+// This arm automates the F14-F18 manual-splice ceremony: read every `@X …
+// :: discovery` atom from the tape, map its verdict-tier to the canonical
+// promotable set, and fold each TERMINAL atom (🔵 formal / 🟢 numerical /
+// 🔴 closed-negative) as a kind-F AtlasNode via the shared _fold_into_embedded
+// sink. Honest-degrade atoms (🟠 INSUFFICIENT / "no fold (honest gap)") are
+// SKIPPED (never faked). Idempotent: an atom whose id is already in the atlas
+// is skipped with no duplicate appended.
+
+// _discovery_tape_path — resolve `.discoveries/<slug>.tape`. $HEXA_DISCOVERIES
+// (abs dir) wins; else the repo-local .discoveries dir (mirrors how
+// _resolve_embedded_path resolves the atlas SSOT).
+fn _discovery_tape_path(slug: string) -> string {
+    let override = env_var("HEXA_DISCOVERIES")
+    if len(override) > 0 { return override + "/" + slug + ".tape" }
+    let home = env_var("HOME")
+    return home + "/core/hexa-lang/.discoveries/" + slug + ".tape"
+}
+
+// _tape_field — extract the first `<key> = "<value>"` field value from a tape
+// atom block text (the lines between two `@X` headers). Accepts both
+// `verdict_tier_target` and `verdict-tier-target` via two calls. Returns "" if
+// absent.
+fn _tape_field(block: string, key: string) -> string {
+    let lines = block.split("\n")
+    let mut i = 0
+    while i < len(lines) {
+        let ln = to_string(lines[i]).trim()
+        if ln.starts_with(key) {
+            // after the key, expect `=` then a "..."-quoted value
+            let rest = ln.substring(len(key), len(ln)).trim()
+            if rest.starts_with("=") {
+                let v = rest.substring(1, len(rest)).trim()
+                // strip surrounding double-quotes if present
+                if len(v) >= 2 && v.starts_with("\"") {
+                    let inner = v.substring(1, len(v))
+                    let q = inner.find("\"")
+                    if q >= 0 { return inner.substring(0, q) }
+                    return inner
+                }
+                return v
+            }
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// _discovery_verdict — map a discovery-tape verdict_tier_target string to the
+// canonical promotable verdict. BLUE/🔵 → 🔵 SUPPORTED-FORMAL; GREEN/🟢 → 🟢
+// SUPPORTED-NUMERICAL; RED/🔴 CLOSED-NEGATIVE is a TERMINAL finding (paper_-
+// negative_ok @D) → promotable as 🔵 SUPPORTED-FORMAL (the closed-form ruling-
+// out IS the formal result). ORANGE/🟠 INSUFFICIENT / anything else → "skip".
+fn _discovery_verdict(tier: string) -> string {
+    let t = tier.to_lower()
+    if t.contains("🟢") || t.contains("numerical") { return "🟢 SUPPORTED-NUMERICAL" }
+    if t.contains("🔵") || t.contains("blue") || t.contains("formal") { return "🔵 SUPPORTED-FORMAL" }
+    if t.contains("🔴") || t.contains("red") || t.contains("closed-negative") || t.contains("closed negative") { return "🔵 SUPPORTED-FORMAL" }
+    return "skip"
+}
+
+// _build_raw_discovery — kind-F AtlasNode raw block for a folded discovery atom.
+// Mirrors the F14-F18 manual-splice shape: the discovery text becomes the node
+// statement, the source slug + verdict-tier are recorded in cite/provenance so
+// a reader can trace it back to the discovery tape.
+fn _build_raw_discovery(id: string, text: string, slug: string, tier: string, today: string) -> string {
+    return "@F " + id + " = " + text +
+           " :: formula [d=" + today + " active]\n" +
+           "  tier = \"" + tier + "\"\n" +
+           "  verified-by = \"discovery .discoveries/" + slug + ".tape (verdict_tier_target=" + tier + ")\"\n" +
+           "  cite = \"@D discovery_log · @D atlas_fold — folded from .discoveries/" + slug + ".tape\"\n" +
+           "  provenance = \"tool/atlas_cli.hexa register --from-discovery " + slug + " (tape atom → embedded.gen.hexa SSOT)\""
+}
+
+// _adapt_discovery_atoms — parse the discovery tape, return one DiscoveryEvent
+// per `@X … :: discovery` atom (promotable atoms get a non-"skip" verdict;
+// honest-gap atoms get "skip" so the dispatch degrades without faking a node).
+fn _adapt_discovery_atoms(slug: string) -> array {
+    let path = _discovery_tape_path(slug)
+    let body = read_file_safe(path)
+    let mut events: array = []
+    if len(body) == 0 { return events }
+    let today = _today_compact()
+    // Split on the `@X ` atom-header marker. Each chunk after the first split
+    // element begins with the rest of a `@X <id> := "<text>" :: discovery …`
+    // header followed by its field lines (up to the next `@X `).
+    let chunks = body.split("\n@X ")
+    let mut ci = 0
+    while ci < len(chunks) {
+        let raw_chunk = to_string(chunks[ci])
+        ci = ci + 1
+        // The very first chunk is the file preamble (before any @X) — skip it
+        // unless it itself starts with "@X " (file with no leading newline).
+        let mut chunk = raw_chunk
+        if !chunk.starts_with("@X ") {
+            // body.split("\n@X ") strips the "@X " prefix from chunks[1..]; the
+            // header now starts directly with "<id> :=" — but chunk[0] is the
+            // preamble. Detect a header by the " := " token + ":: discovery".
+            if !chunk.contains(" := ") || !chunk.contains(":: discovery") { continue }
+        } else {
+            chunk = chunk.substring(3, len(chunk))
+        }
+        // header line = first line of the chunk; id = token before " :="
+        let nl = chunk.find("\n")
+        let header = if nl >= 0 { chunk.substring(0, nl) } else { chunk }
+        let asn = header.find(" := ")
+        if asn < 0 { continue }
+        let id = header.substring(0, asn).trim()
+        if len(id) == 0 { continue }
+        // statement text = the first "..."-quoted span after " := "
+        let after = header.substring(asn + 4, len(header))
+        let mut text = ""
+        if after.starts_with("\"") {
+            let inner = after.substring(1, len(after))
+            let q = inner.find("\"")
+            text = if q >= 0 { inner.substring(0, q) } else { inner }
+        }
+        if len(text) == 0 { text = id }
+        // verdict tier — accept both underscore and hyphen field names
+        let mut tier = _tape_field(chunk, "verdict_tier_target")
+        if len(tier) == 0 { tier = _tape_field(chunk, "verdict-tier-target") }
+        let atlas_field = _tape_field(chunk, "atlas")
+        let verdict = _discovery_verdict(tier)
+        // Honest gap: tape explicitly says no fold → skip even if tier maps.
+        let mut final_verdict = verdict
+        if atlas_field.to_lower().contains("no fold") { final_verdict = "skip" }
+        let raw = _build_raw_discovery(id, text, slug, _discovery_verdict(tier), today)
+        let provenance = "hexa atlas register --from-discovery " + slug
+        events.push(DiscoveryEvent { kind: "F", id: id,
+            name: id + " (tier=" + tier + ")", raw: raw,
+            verdict: final_verdict, source_verb: "discovery", provenance: provenance })
+    }
+    return events
+}
+
+// cmd_register — the absorption verb. Each `--from-<verb>` arm produces a
+// DiscoveryEvent and hands it to register_from_event, which folds the node's
+// .n6 block DIRECTLY into compiler/atlas/embedded.gen.hexa (the binary-builtin
+// SSOT; visible to next lookup, no rebuild). Supported arms:
+//   --from-verify <fn> <args...> <v>    (any arity; delegated to `hexa verify`)
+//   --from-drill  --seed "<text>" [--rounds N] [--engine mk9|mk10]
+//   --from-discovery <slug>             (fold .discoveries/<slug>.tape atoms)
+// Options: --id (verify only; drill mints per-candidate ids).
+fn cmd_register(rest: array) {
+    let mut from_verb = ""                  // "verify" | "drill" | "discovery" | ""
+    let mut id_override = ""
+    let mut discovery_slug = ""             // --from-discovery <slug>
+    let mut want_compute = false            // --compute → value-less compute-and-fold
+    // VERIFY-KIT V6 — external provenance attribution. --source flows into the
+    // folded node's `source = "<text>"` field (OEIS id, DOI, …); --url adds the
+    // CC-BY-SA / DOI link. Both empty → unchanged default (g_self_verify cite
+    // only). This automates the OEIS O4 hand-fold of attributed @F nodes.
+    let mut node_source = ""
+    let mut node_url = ""
+    // drill-specific
+    let mut drill_seed = ""
+    let mut drill_rounds = 1
+    let mut drill_engine = "mk9"
+    // 6-tier (g5) extra-evidence flags: 🔴 falsify · 🟡 citation · 🟠 defer · ⚪ fence
+    let mut nt_falsifier = ""
+    let mut nt_citation = ""
+    let mut nt_doi = ""
+    let mut nt_note = ""
+    let mut nt_blocker = ""
+    let mut nt_eta = ""
+    let mut nt_kind = "hypothesis"
+    let mut positional = []
+    let mut i = 0
+    let n = len(rest)
+    while i < n {
+        let a = to_string(rest[i])
+        if a == "--from-verify" { from_verb = "verify"; i = i + 1 }
+        else if a == "--compute" { want_compute = true; i = i + 1 }
+        else if a == "--from-drill" || a == "--from-kick" { from_verb = "drill"; i = i + 1 }
+        else if a == "--from-discovery" && i + 1 < n { from_verb = "discovery"; discovery_slug = to_string(rest[i + 1]); i = i + 2 }
+        else if a == "--from-falsify" { from_verb = "falsify"; i = i + 1 }
+        else if a == "--from-citation" { from_verb = "citation"; i = i + 1 }
+        else if a == "--from-defer" { from_verb = "defer"; i = i + 1 }
+        else if a == "--from-fence" { from_verb = "fence"; i = i + 1 }
+        else if a == "--falsifier" && i + 1 < n { nt_falsifier = to_string(rest[i + 1]); i = i + 2 }
+        else if a == "--citation" && i + 1 < n { nt_citation = to_string(rest[i + 1]); i = i + 2 }
+        else if a == "--doi" && i + 1 < n { nt_doi = to_string(rest[i + 1]); i = i + 2 }
+        else if a == "--note" && i + 1 < n { nt_note = to_string(rest[i + 1]); i = i + 2 }
+        else if a == "--blocker" && i + 1 < n { nt_blocker = to_string(rest[i + 1]); i = i + 2 }
+        else if a == "--eta" && i + 1 < n { nt_eta = to_string(rest[i + 1]); i = i + 2 }
+        else if a == "--kind" && i + 1 < n { nt_kind = to_string(rest[i + 1]); i = i + 2 }
+        else if a == "--id" && i + 1 < n { id_override = to_string(rest[i + 1]); i = i + 2 }
+        else if a == "--source" && i + 1 < n { node_source = to_string(rest[i + 1]); i = i + 2 }
+        else if a == "--url" && i + 1 < n { node_url = to_string(rest[i + 1]); i = i + 2 }
+        else if a == "--seed" && i + 1 < n { drill_seed = to_string(rest[i + 1]); i = i + 2 }
+        else if a == "--rounds" && i + 1 < n { drill_rounds = to_int(to_string(rest[i + 1])); i = i + 2 }
+        else if a == "--engine" && i + 1 < n { drill_engine = to_string(rest[i + 1]); i = i + 2 }
+        else if a == "--help" || a == "-h" {
+            println("usage: hexa atlas register --from-verify <fn> <n> <v>")
+            println("       hexa atlas register --from-verify <fn> <a> <b> <v>              (2-op)")
+            println("       hexa atlas register --from-verify welch_t_crit <df> <v>          (🟢 NUMERICAL)")
+            println("       hexa atlas register --from-verify wilson_hilferty_p <t> <df> <v> (🟢)")
+            println("       hexa atlas register --from-drill  --seed \"<text>\" [--rounds N] [--engine mk9|mk10] [--id <id>]")
+            println("       hexa atlas register --from-discovery <slug>                     (fold .discoveries/<slug>.tape atoms)")
+            println("       hexa atlas register --from-falsify  <claim_id> [<desc>] --falsifier <id> [--citation <ref>]  (🔴 closed-negative)")
+            println("       hexa atlas register --from-citation <fn> [<args> <v>] --doi <doi> [--note <quote>]           (🟡 literature)")
+            println("       hexa atlas register --from-defer    <claim_id> --blocker <dep> [--eta <approx>]              (🟠 deferred)")
+            println("       hexa atlas register --from-fence    \"<claim text>\" [--kind metaphor|sf|hypothesis]           (⚪ fenced)")
+            println("")
+            println("g5 6-tier set: 🔵🟢 (--from-verify, recompute) · 🟡 (--from-citation) · 🟠 (--from-defer) · 🔴 (--from-falsify) · ⚪ (--from-fence)")
+            println("Options (verify): --source \"<attribution>\"  external provenance (OEIS id, DOI) → node `source =` field")
+            println("                  --url    \"<link>\"         CC-BY-SA / DOI link → node `url =` field")
+            println("")
+            println("Each `--from-<verb>` arm runs the verb IN-PROCESS, constructs the verified")
+            println("AtlasNode IN MEMORY, and appends it DIRECTLY to the live n6/atlas.n6 SSOT — the")
+            println("same file `hexa atlas lookup/stats/dump` read. No staging shard, no embedded.gen.hexa,")
+            println("no rebuild: the next lookup sees it. Commit n6/atlas.n6 with normal git to share.")
+            println("All arms share the canonical DiscoveryEvent → register_from_event sink.")
+            return
+        }
+        else { positional.push(a); i = i + 1 }
+    }
+
+    // ── dispatch ────────────────────────────────────────────────
+    if from_verb == "verify" {
+        if len(positional) < 2 {
+            println("error: --from-verify needs <fn> <args...> <v>  (or <fn> <args...> --compute)")
+            println("       see: hexa atlas register --help")
+            exit(2)
+        }
+        let fn_name = to_string(positional[0])
+
+        // VERIFY-KIT V1 — explicit value-less COMPUTE-and-fold. Every
+        // positional after the fn name is an OPERAND; register delegates to
+        // `hexa verify --expr <fn> <args> --compute` (single calc home; atlas
+        // owns NO recompute mirror), reads the computed value, and folds it.
+        if want_compute {
+            let mut cargs = []
+            let mut ci = 1
+            while ci < len(positional) {
+                cargs.push(to_string(positional[ci]))
+                ci = ci + 1
+            }
+            let cev = _adapt_verify_compute(fn_name, cargs, id_override, node_source, node_url)
+            println("hexa atlas register --from-verify " + cev.name + "  (compute)")
+            if cev.verdict == "🟠 INSUFFICIENT" {
+                println("  tier   = 🟠 INSUFFICIENT")
+                println("  reason = `hexa verify --expr " + fn_name + " --compute` produced no value")
+                println("  gap    = add " + fn_name + " to tool/verify_cli.hexa (single calc home per @D g20)")
+                exit(3)
+            }
+            if cev.verdict == "🔴 FALSIFIED" {
+                println("  tier   = 🔴 FALSIFIED — recompute non-deterministic; refusing to register")
+                exit(4)
+            }
+            println("  tier   = " + cev.verdict + "  (delegated via `hexa verify --expr … --compute`)")
+            let crerr = register_from_event(cev)
+            if len(crerr) > 0 {
+                println("error: " + crerr)
+                exit(5)
+            }
+            return
+        }
+
+        let v_str = to_string(positional[len(positional) - 1])
+        let mut args_arr = []
+        let mut pi = 1
+        while pi < len(positional) - 1 {
+            args_arr.push(to_string(positional[pi]))
+            pi = pi + 1
+        }
+        let ev = _adapt_verify_generic(fn_name, args_arr, v_str, id_override, node_source, node_url)
+        // VERIFY-KIT V1 auto-route: a 🟠 from the value-bearing form means the
+        // arity didn't compute (e.g. allen_dynes_tc(λ,ω_log,μ*) is 3-arg but
+        // the last operand was consumed as the claimed <v>, leaving a 2-arg
+        // call). Retry in value-less COMPUTE mode treating ALL positionals as
+        // operands. A genuine 🔴 (calc disagrees) is NOT retried — it stays
+        // falsified. This kills the arity gap without conflating falsification.
+        if ev.verdict == "🟠 INSUFFICIENT" {
+            let mut allargs = []
+            let mut ai = 1
+            while ai < len(positional) {
+                allargs.push(to_string(positional[ai]))
+                ai = ai + 1
+            }
+            let cev = _adapt_verify_compute(fn_name, allargs, id_override, node_source, node_url)
+            if cev.verdict == "🟢 SUPPORTED-NUMERICAL" || cev.verdict == "🔵 SUPPORTED-FORMAL" {
+                println("hexa atlas register --from-verify " + cev.name + "  (compute — auto-routed from 🟠)")
+                println("  tier   = " + cev.verdict + "  (delegated via `hexa verify --expr … --compute`)")
+                let crerr = register_from_event(cev)
+                if len(crerr) > 0 {
+                    println("error: " + crerr)
+                    exit(5)
+                }
+                return
+            }
+        }
+        println("hexa atlas register --from-verify " + ev.name)
+        if ev.verdict == "🟠 INSUFFICIENT" {
+            println("  tier   = 🟠 INSUFFICIENT")
+            println("  reason = `hexa verify --expr " + fn_name + "` has no calculator path")
+            println("  gap    = add " + fn_name + " to tool/verify_cli.hexa (single calc home per @D g20)")
+            exit(3)
+        }
+        if ev.verdict == "🔴 FALSIFIED" {
+            println("  tier   = 🔴 FALSIFIED — refusing to register a falsified claim")
+            exit(4)
+        }
+        println("  tier   = " + ev.verdict + "  (delegated via `hexa verify --expr`)")
+        let rerr = register_from_event(ev)
+        if len(rerr) > 0 {
+            println("error: " + rerr)
+            exit(5)
+        }
+        return
+    }
+
+    // ── 🔴 FALSIFIED — closed-negative (g63 · no recompute) ──────────
+    if from_verb == "falsify" {
+        if len(positional) < 1 || len(nt_falsifier) == 0 {
+            println("error: --from-falsify needs <claim_id> [<desc...>] --falsifier <id> [--citation <ref>]")
+            println("       see: hexa atlas register --help")
+            exit(2)
+        }
+        let claim_id = to_string(positional[0])
+        let mut desc_arr = []
+        let mut di = 1
+        while di < len(positional) { desc_arr.push(to_string(positional[di])); di = di + 1 }
+        let mut claim = claim_id
+        if len(desc_arr) > 0 { claim = claim_id + " " + desc_arr.join(" ") }
+        let mut id = id_override
+        if len(id) == 0 { id = "falsified-" + _slug_register(claim_id) }
+        let today = _today_compact()
+        let raw = _build_raw_falsified(id, claim, nt_falsifier, nt_citation, today)
+        println("hexa atlas register --from-falsify " + claim_id)
+        println("  tier   = 🔴 FALSIFIED  (closed-negative · falsifier " + nt_falsifier + ")")
+        let ferr = _fold_into_embedded("F", raw, id)
+        if len(ferr) > 0 {
+            if embed_is_skip(ferr) { println("  skip   = " + id + " (already in atlas — idempotent)"); return }
+            println("error: " + ferr); exit(5)
+        }
+        println("  atlas  = folded @F " + id + " → live (🔴 closed-negative)")
+        return
+    }
+
+    // ── 🟡 SUPPORTED-BY-CITATION — literature, no recompute ──────────
+    if from_verb == "citation" {
+        if len(positional) < 1 || len(nt_doi) == 0 {
+            println("error: --from-citation needs <claim_fn> [<args...> <value>] --doi <doi> [--note <quote>]")
+            println("       see: hexa atlas register --help")
+            exit(2)
+        }
+        let cfn = to_string(positional[0])
+        let mut ca = []
+        let mut ci = 1
+        while ci < len(positional) { ca.push(to_string(positional[ci])); ci = ci + 1 }
+        let claim = cfn + "(" + ca.join(",") + ")"
+        let mut id = id_override
+        if len(id) == 0 { id = "cited-" + _slug_register(cfn) }
+        let today = _today_compact()
+        let raw = _build_raw_citation(id, claim, nt_doi, nt_note, today)
+        println("hexa atlas register --from-citation " + cfn)
+        println("  tier   = 🟡 SUPPORTED-BY-CITATION  (doi " + nt_doi + ")")
+        let ferr = _fold_into_embedded("F", raw, id)
+        if len(ferr) > 0 {
+            if embed_is_skip(ferr) { println("  skip   = " + id + " (already in atlas — idempotent)"); return }
+            println("error: " + ferr); exit(5)
+        }
+        println("  atlas  = folded @F " + id + " → live (🟡 citation)")
+        return
+    }
+
+    // ── 🟠 INSUFFICIENT/DEFERRED — external-dep blocker ──────────────
+    if from_verb == "defer" {
+        if len(positional) < 1 || len(nt_blocker) == 0 {
+            println("error: --from-defer needs <claim_id> --blocker <dep> [--eta <approx>]")
+            println("       see: hexa atlas register --help")
+            exit(2)
+        }
+        let dclaim = to_string(positional[0])
+        let mut id = id_override
+        if len(id) == 0 { id = "deferred-" + _slug_register(dclaim) }
+        let today = _today_compact()
+        let raw = _build_raw_deferred(id, dclaim, nt_blocker, nt_eta, today)
+        println("hexa atlas register --from-defer " + dclaim)
+        println("  tier   = 🟠 INSUFFICIENT/DEFERRED  (blocker " + nt_blocker + ")")
+        let ferr = _fold_into_embedded("F", raw, id)
+        if len(ferr) > 0 {
+            if embed_is_skip(ferr) { println("  skip   = " + id + " (already in atlas — idempotent)"); return }
+            println("error: " + ferr); exit(5)
+        }
+        println("  atlas  = folded @F " + id + " → live (🟠 deferred)")
+        return
+    }
+
+    // ── ⚪ SPECULATION-FENCED — honest imagination/metaphor fence ─────
+    if from_verb == "fence" {
+        if len(positional) < 1 {
+            println("error: --from-fence needs \"<claim text>\" [--kind metaphor|sf|hypothesis]")
+            println("       see: hexa atlas register --help")
+            exit(2)
+        }
+        let mut fa = []
+        let mut fi = 0
+        while fi < len(positional) { fa.push(to_string(positional[fi])); fi = fi + 1 }
+        let ftext = fa.join(" ")
+        let mut id = id_override
+        if len(id) == 0 { id = "fenced-" + _slug_register(ftext) }
+        let today = _today_compact()
+        let raw = _build_raw_fenced(id, ftext, nt_kind, today)
+        println("hexa atlas register --from-fence")
+        println("  tier   = ⚪ SPECULATION-FENCED  (kind " + nt_kind + ")")
+        let ferr = _fold_into_embedded("X", raw, id)
+        if len(ferr) > 0 {
+            if embed_is_skip(ferr) { println("  skip   = " + id + " (already in atlas — idempotent)"); return }
+            println("error: " + ferr); exit(5)
+        }
+        println("  atlas  = folded @X " + id + " → live (⚪ fenced)")
+        return
+    }
+
+    if from_verb == "discovery" {
+        if len(discovery_slug) == 0 {
+            println("error: --from-discovery needs a <slug> (e.g. tecs-l-f15-novel-mk10)")
+            println("       see: hexa atlas register --help")
+            exit(2)
+        }
+        let tape_path = _discovery_tape_path(discovery_slug)
+        println("hexa atlas register --from-discovery " + discovery_slug)
+        println("  tape   = " + tape_path)
+        let body = read_file_safe(tape_path)
+        if len(body) == 0 {
+            println("  tier   = skip — discovery tape not found / empty: " + tape_path)
+            println("  reason = no `.discoveries/" + discovery_slug + ".tape` to fold; NO node appended.")
+            exit(2)
+        }
+        let events = _adapt_discovery_atoms(discovery_slug)
+        if len(events) == 0 {
+            println("  tier   = skip — no `@X … :: discovery` atom found in tape")
+            println("  reason = tape has no parseable discovery atom; NO node appended.")
+            exit(3)
+        }
+        let embed_path = _resolve_embedded_path()
+        let mut folded = 0
+        let mut skipped = 0
+        let mut degraded = 0
+        let mut ei = 0
+        while ei < len(events) {
+            let ev = events[ei]
+            ei = ei + 1
+            // Honest degrade: 🟠 INSUFFICIENT / "no fold" atoms never fold.
+            if ev.verdict != "🔵 SUPPORTED-FORMAL" && ev.verdict != "🟢 SUPPORTED-NUMERICAL" {
+                println("  degrade= " + ev.id + " (" + ev.name + ") — not terminal/promotable; honest-skip")
+                degraded = degraded + 1
+                continue
+            }
+            let ferr = _fold_into_embedded(ev.kind, ev.raw, ev.id)
+            if len(ferr) > 0 {
+                if embed_is_skip(ferr) {
+                    println("  skip   = " + ev.id + " (already in atlas — idempotent, no duplicate)")
+                    skipped = skipped + 1
+                } else {
+                    println("error: fold into embedded.gen.hexa failed — " + ferr)
+                    exit(5)
+                }
+            } else {
+                println("  atlas  = folded @" + ev.kind + " " + ev.id + " → live (" + ev.name + ")")
+                folded = folded + 1
+            }
+        }
+        println("  result = folded=" + to_string(folded) + " already-present=" + to_string(skipped) + " honest-degrade=" + to_string(degraded) + " (atoms=" + to_string(len(events)) + ")")
+        if folded == 0 {
+            if skipped > 0 {
+                println("  tier   = idempotent — all promotable atoms already in the atlas (nothing to commit)")
+                return
+            }
+            println("  tier   = skip — no promotable atom folded (all honest-degrade / absent)")
+            return
+        }
+        println("  tier   = 🔵 SUPPORTED-FORMAL  (" + to_string(folded) + " atom(s) folded from discovery tape)")
+        println("")
+        println("hexa atlas register: " + to_string(folded) + " discovery atom(s) landed in the live atlas (" + embed_path + ").")
+        println("  commit them with:  git -C ~/core/hexa-lang add compiler/atlas/embedded.gen.hexa && git commit -m " + _shq("atlas(discovery): register " + discovery_slug))
+        return
+    }
+
+    if from_verb == "drill" {
+        if len(drill_seed) == 0 {
+            println("error: --from-drill needs --seed \"<text>\" (>=10 chars, not a placeholder)")
+            println("       see: hexa atlas register --help")
+            exit(2)
+        }
+        // Mirror drill's _validate_seed contract — short/placeholder seeds
+        // are honestly degraded (no PR), not faked. The user can lower the
+        // bar by writing a real problem statement.
+        let st = drill_seed.trim()
+        let lower = st.to_lower()
+        let mut seed_reject = ""
+        if len(st) < 10 { seed_reject = "too_short" }
+        else if lower == "test" || lower == "hello" || lower == "abc"
+             || lower == "foo" || lower == "bar" { seed_reject = "placeholder" }
+        if len(seed_reject) > 0 {
+            println("hexa atlas register --from-drill --seed " + _shq(drill_seed))
+            println("  tier   = skip — seed rejected (" + seed_reject + ")")
+            println("  reason = drill requires a substantive problem statement (>=10 chars, not placeholder)")
+            println("           NO candidates produced; NO PR was opened.")
+            return
+        }
+        println("hexa atlas register --from-drill --seed " + _shq(drill_seed) + " --rounds " + to_string(drill_rounds) + " --engine " + drill_engine)
+        // Drive the drill engine in-process AT THE ROUND GRANULARITY —
+        // `drill_run(seed, opts)` returns only counts; the per-round
+        // DiscoveryCandidate[] lives in RoundResult.discoveries which the
+        // drill_run loop consumes internally. We replicate the same loop
+        // here (it's <20 lines), but keep the candidates so we can lift
+        // them into DiscoveryEvent[] for the canonical sink.
+        //
+        // Per the task constraint: "find where the per-round VERIFIED
+        // candidates come out — that's the in-process handle, NOT the
+        // overlay file." `round_run_with_pool` IS that handle.
+        //
+        // HONESTY GATE: we mirror drill's _verifier_run + _honesty_gate
+        // implicitly — when total==0 across all rounds, verdict is
+        // effectively "skip" and we honestly degrade (no PR). When
+        // candidates surface but only "0 axiom-derivable" — i.e. drill
+        // itself reports res_n==0 and the cumulative pool yields no
+        // axioms — we still lift them as kind L (derived) per the
+        // _cand_to_n6 mapping convention (axiom → @P, else → @L).
+        let mkx_on = drill_engine == "mk10"
+        let mut all_discoveries: array = []
+        let mut seed_pool: array = []
+        let mut cum_seen_ids: array = []
+        let mut total_yield: i64 = 0
+        let mut last_round: i64 = 0
+        let mut r: i64 = 0
+        while r < drill_rounds {
+            r = r + 1
+            last_round = r
+            let rr = round_run_with_pool(drill_seed, r, 3, 3, 1, mkx_on, seed_pool, cum_seen_ids)
+            cum_seen_ids = rr.cum_seen_ids
+            println("  round " + to_string(r) + ": smash+" + to_string(rr.yields.smash_n) +
+                    " free+" + to_string(rr.yields.free_n) +
+                    " abs=" + to_string(rr.yields.abs_n) +
+                    " meta=" + to_string(rr.yields.meta_n) +
+                    " hyper=" + to_string(rr.yields.hyper_n) +
+                    " res+" + to_string(rr.yields.res_n) +
+                    " total=" + to_string(rr.yields.total))
+            total_yield = total_yield + rr.yields.total
+            // Accumulate discoveries across rounds.
+            let mut di = 0
+            while di < len(rr.discoveries) {
+                all_discoveries.push(rr.discoveries[di])
+                di = di + 1
+            }
+            // Feed next round's seed pool from this round's axiom-exprs.
+            seed_pool = extract_axiom_exprs(rr.discoveries)
+            // Saturation: drill's own contract — gross total OR C5 net-novel fixpoint.
+            if rr.yields.total == 0 { break }
+            if r >= 2 && rr.net_novel == 0 { break }
+        }
+        println("  drill  = rounds=" + to_string(last_round) +
+                " total=" + to_string(total_yield) +
+                " candidates_captured=" + to_string(len(all_discoveries)))
+        // HONEST DEGRADE: drill returned 0 candidates → no promotable
+        // event, exit 0. We do NOT fabricate a node.
+        if len(all_discoveries) == 0 {
+            println("  tier   = skip — no promotable candidate found")
+            println("  reason = drill produced 0 discoveries across " + to_string(last_round) + " round(s); NO PR was opened.")
+            println("           verdict=skip (no external verifier installed, no candidates surfaced)")
+            return
+        }
+        let cands = all_discoveries
+        let mut emitted = 0
+        let today = _today_compact()
+        let mut idx = 0
+        let cn = len(cands)
+        // One DiscoveryEvent per candidate; each folds into embedded.gen.hexa
+        // (binary-builtin SSOT). Commit embedded.gen.hexa once at the end.
+        let embed_path = _resolve_embedded_path()
+        while idx < cn {
+            let c = cands[idx]
+            // Defensive: skip empty ids (mirrors overlay flush dedup).
+            if len(c.id) == 0 { idx = idx + 1; continue }
+            let ev = _adapt_drill_candidate(c, drill_seed, drill_engine, last_round, today)
+            let ferr = _fold_into_embedded(ev.kind, ev.raw, ev.id)
+            if len(ferr) > 0 {
+                // Duplicate (kind,id) is benign — drill can re-emit. Other errors abort.
+                if embed_is_skip(ferr) {
+                    println("  skip   = " + ev.id + " (already in atlas)")
+                } else {
+                    println("error: fold into embedded.gen.hexa failed — " + ferr)
+                    exit(5)
+                }
+            } else {
+                println("  atlas  = folded @" + ev.kind + " " + ev.id + " → live")
+                emitted = emitted + 1
+            }
+            idx = idx + 1
+        }
+        if emitted == 0 {
+            println("  tier   = skip — all drill candidates were already in the atlas (no new append)")
+            return
+        }
+        println("  tier   = 🔵 SUPPORTED-FORMAL  (" + to_string(emitted) + " new candidate(s); @D g_self_verify · drill verdict != skip)")
+        println("")
+        println("hexa atlas register: " + to_string(emitted) + " candidate(s) landed in the live atlas (" + embed_path + ").")
+        println("  commit them with:  git -C ~/core/hexa-lang add compiler/atlas/embedded.gen.hexa && git commit -m " + _shq("atlas(drill): register " + to_string(emitted) + " candidate(s)"))
+        return
+    }
+
+    // No --from-<verb> selected — there is no bare `register <file>` mode.
+    println("hexa atlas register: no discovery arm selected.")
+    println("  --from-verify <fn> <n> <v>            (direct in-memory node-gen → live n6/atlas.n6)")
+    println("  --from-verify <fn> <a> <b> <v>        (2-op form)")
+    println("  --from-verify … --source \"<attr>\"     external provenance (OEIS id, DOI) → node `source =`")
+    println("  --from-drill  --seed \"<text>\" [--rounds N] [--engine mk9|mk10]")
+    println("  --from-discovery <slug>               (fold .discoveries/<slug>.tape atoms into the live atlas)")
+    println("  see: hexa atlas register --help")
+    exit(3)
+}
+
+// ── pr (the `PR` arm of `update || PR`) ───────────────────
+// `hexa atlas pr --staging <file.n6>` — fold a staging shard into the live
+// atlas IN A FRESH BRANCH of the hexa-lang clone, commit the append shard,
+// then try `gh pr create` against origin. The `PR` fallback for non-owners
+// (and for agents) — distinct from `promote`, which folds onto the current
+// branch for owners to commit themselves.
+//
+// HONEST DEGRADED PATH (g3): `git`/`gh` may be absent or unauthenticated.
+//   - no `git`               → still folds the shard, prints the manual
+//                              branch+commit+PR commands. exit 0 (shard written).
+//   - `git` ok, `gh` absent  → branch + commit succeed; prints the exact
+//     /unauth                  `gh pr create` command to run. exit 0.
+//   - `gh pr create` ok      → prints the real PR URL. exit 0.
+// A PR is NEVER claimed as "opened" unless `gh pr create` actually returned 0.
+
+// _shq — single-quote-escape a string for safe `exec()` embedding.
+fn _shq(s: string) -> string {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+// _exec_ok — run a shell command, return true iff exit status 0. `exec()`
+// only captures stdout, so we append `&& echo __OK__ || echo __FAIL__` and
+// inspect the trailing marker (the try-CLI-or-fallback pattern, @D g5).
+fn _exec_ok(cmd: string) -> bool {
+    let out = exec("( " + cmd + " ) >/dev/null 2>&1 && echo __OK__ || echo __FAIL__").trim()
+    return out == "__OK__"
+}
+
+fn _today_compact() -> string {
+    let s = exec("date -u +%Y-%m-%d 2>/dev/null").trim()
+    if len(s) == 0 { return "unknown-date" }
+    return s
+}
+
+// _branch_stamp — date + millis, safe for a git branch name.
+
+// ── reverify — retroactive re-verification of frozen 🟢 nodes ──────────
+//
+// ATLAS @goal META-SIGNAL ②: registered atlas nodes are frozen at
+// registration and never re-verified — a 🟢 SUPPORTED-NUMERICAL claim
+// stays trusted forever even if the in-process calculator drifts. This
+// is the lightweight successor of the retired RFC-017 §5e retroactive
+// sweep (compiler/discover/retroactive_sweep.hexa, tombstone-based): it
+// re-RUNS the recompute over already-registered F nodes IN-PROCESS and
+// reports verdict DRIFT — it does NOT tombstone or mutate the atlas.
+//
+// Each 🟢 F node carries a fully machine-parseable header line:
+//   @F <id> = <fn>(<a0,a1,...>) = <claimed> :: formula [...]
+// We parse <fn> + the comma-arg list + <claimed>, re-run
+// _recompute_float_register on the SAME fn+args (the live mirror of
+// verify_cli's float table), and compare to <claimed> within ε=1e-9.
+// Disposition per node:
+//   MATCH         within-ε recompute == claimed (verdict confirmed)
+//   DRIFT         out-of-ε disagreement (the frozen verdict has rotted)
+//   UNVERIFIABLE  no in-process float calc path for <fn> (skip, not fail)
+
+// _rev_extract_header — first line (up to first "\n") of a node's raw.
+fn _rev_extract_header(raw: string) -> string {
+    let nl = raw.find("\n")
+    if nl < 0 { return raw }
+    return raw.substring(0, nl)
+}
+
+pub struct ReverifyParse {
+    ok: bool,
+    fn_name: string,
+    args: array,        // [string] operands (comma-split, may be empty)
+    claimed: string     // claimed value as written
+}
+
+// _rev_parse_header — parse "@F <id> = <fn>(<args>) = <claimed> :: ...".
+// Returns ok=false if the line is not in canonical numerical-F shape.
+fn _rev_parse_header(header: string) -> ReverifyParse {
+    let empty = ReverifyParse { ok: false, fn_name: "", args: [], claimed: "" }
+    // Find the first " = " (after the id) and the "(" that follows it.
+    let eq1 = header.find(" = ")
+    if eq1 < 0 { return empty }
+    let after = header.substring(eq1 + 3, len(header))
+    let lpar = after.find("(")
+    if lpar < 0 { return empty }
+    let rpar = after.find(")")
+    if rpar < 0 || rpar < lpar { return empty }
+    let fn_name = after.substring(0, lpar).trim()
+    if len(fn_name) == 0 { return empty }
+    let args_blob = after.substring(lpar + 1, rpar)
+    // Claimed value lives after ") = " and before " :: " (or EOL).
+    let tail = after.substring(rpar + 1, len(after))
+    let eq2 = tail.find("= ")
+    if eq2 < 0 { return empty }
+    let mut claimed = tail.substring(eq2 + 2, len(tail))
+    let dcol = claimed.find(" ::")
+    if dcol >= 0 { claimed = claimed.substring(0, dcol) }
+    claimed = claimed.trim()
+    if len(claimed) == 0 { return empty }
+    // Split args on comma (0-arg → empty list).
+    let mut args = []
+    if len(args_blob.trim()) > 0 {
+        let parts = args_blob.split(",")
+        let mut pi = 0
+        while pi < len(parts) {
+            args.push(to_string(parts[pi]).trim())
+            pi = pi + 1
+        }
+    }
+    return ReverifyParse { ok: true, fn_name: fn_name, args: args, claimed: claimed }
+}
+
+// ── R7: non-F recompute + --fix (auto-reregister) ─────────────────────
+//
+// R3/R4 reverify only re-checked 🟢 NUMERICAL **F** nodes via the float
+// calc_dispatch table. But OTHER kinds carry the SAME machine-recomputable
+// header `<fn>(<args>) = <claimed>`. The only such non-F kind today is @P
+// (the foundation axioms): `@P sigma = divisor_sum(6) = 12`, euler_totient,
+// divisor_count, mobius, jordan_totient, sum_prime_factors, mersenne — all
+// INTEGER number-theoretic forms. R7 widens reverify to walk EVERY node and,
+// when the fn is integer-recomputable (_recompute*_register), re-run that
+// path too. F float stays the float path; P int uses the int path.
+//
+// _rev_is_int_str — true iff `s` is a plain (optionally-signed) integer.
+// Guards the int path against prose headers like `@P x = capacity (Lyapunov …`
+// whose pseudo-args are not numbers (to_int would abort the whole sweep).
+fn _rev_is_int_str(s: string) -> bool {
+    let t = s.trim()
+    let n = len(t)
+    if n == 0 { return false }
+    let mut i = 0
+    if t[0] == "-" || t[0] == "+" { i = 1 }
+    if i >= n { return false }
+    while i < n {
+        if t[i] < "0" || t[i] > "9" { return false }
+        i = i + 1
+    }
+    return true
+}
+
+// _rev_int_recompute — try the integer recompute ladder (1/2/3-op) for a
+// non-float fn. Returns _NOCALC_REGISTER when no integer calc path exists OR
+// any arg is non-numeric (the UNVERIFIABLE signal — same convention as
+// cmd_register's adapters).
+fn _rev_int_recompute(fn_name: string, args: array) -> int {
+    let argc = len(args)
+    if argc < 1 || argc > 3 { return _NOCALC_REGISTER }
+    let mut ai = 0
+    while ai < argc {
+        if !_rev_is_int_str(to_string(args[ai])) { return _NOCALC_REGISTER }
+        ai = ai + 1
+    }
+    if argc == 1 {
+        return _recompute_register(fn_name, to_int(to_string(args[0])))
+    }
+    if argc == 2 {
+        return _recompute2_register(fn_name, to_int(to_string(args[0])), to_int(to_string(args[1])))
+    }
+    return _recompute3_register(fn_name, to_int(to_string(args[0])), to_int(to_string(args[1])), to_int(to_string(args[2])))
+}
+
+// _rev_drop_node_line — surgically delete the single AtlasNode literal line
+// for (kind,id) from embedded.gen.hexa (the R5 #1029 "delete stale node line"
+// step, automated). The emitter writes one node per line as
+// `    AtlasNode { kind: "<K>", id: "<id>", raw: ... }`. We match on the
+// composite `kind: "<K>", id: "<id>"` substring (same key embed_fold dedups
+// on) and drop that whole line + its trailing newline. Atomic temp+rename so
+// a reader never sees a half-written embed. Returns "" on success, else err.
+fn _rev_drop_node_line(embed_path: string, kind: string, id: string) -> string {
+    let body = read_file_safe(embed_path)
+    if len(body) == 0 { return "embedded.gen.hexa not readable or empty at: " + embed_path }
+    let key = "kind: \"" + kind + "\", id: \"" + id + "\""
+    let ki = body.index_of(key)
+    if ki < 0 { return "node line not found for @" + kind + " " + id }
+    // Walk to start-of-line and end-of-line (consume the trailing newline).
+    let mut ls = ki
+    while ls > 0 && body.substring(ls - 1, ls) != "\n" { ls = ls - 1 }
+    let nl = body.index_of("\n", ki)
+    let mut le = nl
+    if le < 0 { le = len(body) } else { le = le + 1 }
+    let new_body = body.substring(0, ls) + body.substring(le, len(body))
+    let tmp_path = embed_path + ".rfix." + to_string(mono_ns())
+    if !write_file_safe(tmp_path, new_body) { return "could not write temp file for fix: " + tmp_path }
+    if !_exec_ok("mv -f " + _shq(tmp_path) + " " + _shq(embed_path)) {
+        let _ = _exec_ok("rm -f " + _shq(tmp_path))
+        return "atomic rename failed (mv) for: " + embed_path
+    }
+    return ""
+}
+
+// _rev_fix_node — automate R5 #1029: re-register a DRIFTED node at full
+// precision IN PLACE. Replace the claimed token in the node's raw header with
+// the recomputed value, drop the stale line, then re-fold the corrected raw
+// (same kind+id, body preserved). Returns "" on success, else an error.
+fn _rev_fix_node(kind: string, id: string, raw: string, header: string, claimed: string, fresh: string) -> string {
+    // Replace ONLY the claimed-value occurrence in the header (`= <claimed>`),
+    // leaving the rest of the raw body (cite / provenance / prose) intact.
+    let new_header = header.replace("= " + claimed, "= " + fresh)
+    let new_raw = raw.replace(header, new_header)
+    let embed_path = _resolve_embedded_path()
+    let derr = _rev_drop_node_line(embed_path, kind, id)
+    if len(derr) > 0 { return derr }
+    return _fold_into_embedded(kind, new_raw, id)
+}
+
+// cmd_reverify — walk ALL registered nodes carrying a machine-recomputable
+// `<fn>(<args>) = <claimed>` header, re-run the in-process recompute (float
+// path for 🟢 F, integer path for @P number-theoretic forms), and report
+// per-kind verdict drift. Read-only by default. Flags:
+//   --limit N   cap nodes scanned
+//   --fix       (opt-in MUTATION) re-register each DRIFT at full precision
+//               in place (delete stale line → re-fold corrected raw)
+fn cmd_reverify(rest: array) {
+    let mut limit = -1
+    let mut do_fix = false
+    let mut i = 0
+    while i < len(rest) {
+        let a = to_string(rest[i])
+        if a == "--limit" && i + 1 < len(rest) { limit = to_int(to_string(rest[i + 1])); i = i + 2 }
+        else if a == "--fix" { do_fix = true; i = i + 1 }
+        else if a == "--help" || a == "-h" {
+            println("usage: hexa atlas reverify [--limit N] [--fix]")
+            println("  Re-runs the in-process recompute over EVERY registered node carrying a")
+            println("  machine-recomputable `<fn>(<args>) = <claimed>` header — 🟢 NUMERICAL F nodes")
+            println("  (float calc) AND @P number-theoretic axioms (integer calc) — and reports")
+            println("  per-kind verdict drift (MATCH / DRIFT / UNVERIFIABLE). Read-only by default.")
+            println("  --fix (opt-in MUTATION): for each DRIFT, re-register at full precision IN PLACE")
+            println("        (delete stale node line → re-fold corrected raw; the R5 #1029 manual")
+            println("        remediation, automated). No drift → --fix is a safe no-op.")
+            println("  Addresses the 'frozen at registration, never re-verified' gap (META-SIGNAL ②).")
+            return
+        }
+        else { i = i + 1 }
+    }
+
+    let nodes = atlas_list()
+    let mut seen: i64 = 0
+    let mut matched: i64 = 0
+    let mut drifted: i64 = 0
+    let mut fixed: i64 = 0
+    let mut unverifiable: i64 = 0
+    let mut skipped: i64 = 0
+    println("hexa atlas reverify — re-running in-process recompute over ALL recomputable nodes (F float · P int)")
+    if do_fix { println("  (ε=1e-9 · --fix = re-register drift at full precision IN PLACE)") }
+    else { println("  (ε=1e-9 · read-only · no tombstone)") }
+    println("")
+    let mut ni = 0
+    while ni < len(nodes) {
+        if limit >= 0 && seen >= limit { break }
+        let nd = nodes[ni]
+        ni = ni + 1
+        let header = _rev_extract_header(nd.raw)
+        let p = _rev_parse_header(header)
+        // Skip nodes with no machine-recomputable fn(args)=v header (prose-only
+        // C/L/R/X/etc.). Not a failure — just out of reverify scope.
+        if !p.ok { skipped = skipped + 1; continue }
+        // F float path (the R3/R4 tier) — gated on 🟢 SUPPORTED-NUMERICAL.
+        if nd.kind == "F" && calc_is_float_fn(p.fn_name) {
+            if !nd.raw.contains("🟢 SUPPORTED-NUMERICAL") { skipped = skipped + 1; continue }
+            seen = seen + 1
+            let argc = len(p.args)
+            let mut a0 = 0.0
+            let mut a1 = 0.0
+            let mut a2 = 0.0
+            let mut a3 = 0.0
+            if argc >= 1 { a0 = _parse_float_register(to_string(p.args[0])) }
+            if argc >= 2 { a1 = _parse_float_register(to_string(p.args[1])) }
+            if argc >= 3 { a2 = _parse_float_register(to_string(p.args[2])) }
+            if argc >= 4 { a3 = _parse_float_register(to_string(p.args[3])) }
+            let claimed = _parse_float_register(p.claimed)
+            let got = _recompute_float_register(p.fn_name, a0, a1, a2, a3, argc)
+            if got == _NOCALC_F_REGISTER {
+                unverifiable = unverifiable + 1
+                println("  UNVERIF @F " + nd.id + " — " + p.fn_name + "() returned NOCALC")
+                continue
+            }
+            let diff = _fabs_register(got - claimed)
+            if diff > calc_eps() {
+                drifted = drifted + 1
+                println("  DRIFT   @F " + nd.id + " — " + p.fn_name + "() claimed=" + p.claimed +
+                        " recompute=" + _fstr_register(got) + " |Δ|=" + _fstr_register(diff))
+                if do_fix {
+                    let ferr = _rev_fix_node("F", nd.id, nd.raw, header, p.claimed, _fstr_register(got))
+                    if len(ferr) > 0 { println("    FIX-ERR @F " + nd.id + " — " + ferr) }
+                    else { fixed = fixed + 1; println("    FIXED   @F " + nd.id + " → " + _fstr_register(got)) }
+                }
+            } else {
+                matched = matched + 1
+                println("  MATCH   @F " + nd.id + " — " + p.fn_name + "() == " + p.claimed + " (within ε)")
+            }
+            continue
+        }
+        // Integer path (the R7 widening) — @P number-theoretic axioms and any
+        // other kind whose fn is on the integer recompute ladder.
+        let got_i = _rev_int_recompute(p.fn_name, p.args)
+        if got_i != _NOCALC_REGISTER && _rev_is_int_str(p.claimed) {
+            seen = seen + 1
+            let claimed_i = to_int(p.claimed)
+            if got_i != claimed_i {
+                drifted = drifted + 1
+                println("  DRIFT   @" + nd.kind + " " + nd.id + " — " + p.fn_name + "() claimed=" + p.claimed +
+                        " recompute=" + to_string(got_i))
+                if do_fix {
+                    let ferr = _rev_fix_node(nd.kind, nd.id, nd.raw, header, p.claimed, to_string(got_i))
+                    if len(ferr) > 0 { println("    FIX-ERR @" + nd.kind + " " + nd.id + " — " + ferr) }
+                    else { fixed = fixed + 1; println("    FIXED   @" + nd.kind + " " + nd.id + " → " + to_string(got_i)) }
+                }
+            } else {
+                matched = matched + 1
+                println("  MATCH   @" + nd.kind + " " + nd.id + " — " + p.fn_name + "() == " + p.claimed)
+            }
+            continue
+        }
+        // Header parses but no calc path for this fn — out of scope, not a fail.
+        skipped = skipped + 1
+    }
+    println("")
+    let mut fixed_str = ""
+    if do_fix && fixed > 0 { fixed_str = " fixed=" + to_string(fixed) }
+    println("reverify: recompute_seen=" + to_string(seen) +
+            " match=" + to_string(matched) +
+            " drift=" + to_string(drifted) +
+            fixed_str +
+            " unverifiable=" + to_string(unverifiable) +
+            " (no_calc_path_skipped=" + to_string(skipped) + ")")
+    if drifted > 0 {
+        if do_fix && fixed == drifted {
+            println("  ✓ all " + to_string(drifted) + " drifted node(s) re-registered at full precision in embedded.gen.hexa.")
+            println("    Commit the fold:  git add compiler/atlas/embedded.gen.hexa && git commit")
+        } else {
+            println("  ⚠ " + to_string(drifted) + " node(s) drifted — a frozen verdict no longer reproduces.")
+            println("    Inspect the calculator vs the registered value; re-run with --fix to auto re-register.")
+            exit(1)
+        }
+    }
+    if matched == 0 && seen == 0 {
+        println("  note   = no recomputable nodes (F float / P int) with an in-process calc path were found.")
+    }
+}
+
+// cmd_cascade — `hexa atlas cascade <id> [--format=json]`. READ-ONLY query:
+// given a HYPOTHETICALLY falsified node id, list every node whose structured
+// edge (depends_on / verified_by / equivalents / derives) cites it — the
+// cascade-invalidation candidates that would need re-examination. Never
+// tombstones / mutates anything (the heavyweight RFC-017 §5e machinery is
+// retired + out of scope — see compiler/atlas/cascade.hexa header). Wraps the
+// R5 cascade query (PR #1026): we enrich the static atlas ONCE (so edges are
+// backfilled from raw), reuse that list both to confirm the id exists and to
+// run cascade_candidates against it.
+fn cmd_cascade(rest: array) {
+    let mut id = ""
+    let mut fmt = "text"
+    let mut i = 0
+    while i < len(rest) {
+        let a = to_string(rest[i])
+        if a == "--format=json" || a == "--json" { fmt = "json" }
+        else if a == "--format=text" { fmt = "text" }
+        else if len(id) == 0 && !a.starts_with("--") { id = a }
+        i = i + 1
+    }
+    if len(id) == 0 {
+        println("usage: hexa atlas cascade <id> [--format=json]")
+        println("       lists nodes whose edges cite <id> (cascade-invalidation candidates)")
+        exit(2)
+    }
+    // Enrich the static atlas once; reuse for existence check + cascade query.
+    let all = atlas_list()
+    let enriched = []
+    let mut exists = false
+    let mut j = 0
+    while j < len(all) {
+        let en = atlas_enrich(all[j])
+        if en.id == id { exists = true }
+        enriched.push(en)
+        j = j + 1
+    }
+    if !exists {
+        if fmt == "json" {
+            println("{\"falsified\":\"" + _jq(id) + "\",\"found\":false,\"count\":0,\"candidates\":[]}")
+        } else {
+            println("# unknown id: " + id + " (no such node in the atlas)")
+        }
+        exit(1)
+    }
+    let hits = cascade_candidates(id, enriched)
+    if fmt == "json" {
+        let mut parts = []
+        parts.push("{\"falsified\":\"" + _jq(id) + "\",\"found\":true,\"count\":" + to_string(len(hits)) + ",\"candidates\":[")
+        let mut k = 0
+        while k < len(hits) {
+            let h = hits[k]
+            if k > 0 { parts.push(",") }
+            parts.push("{\"id\":\"" + _jq(h.id) + "\",\"kind\":\"" + _jq(h.kind) + "\",\"via\":\"" + _jq(h.via) + "\"}")
+            k = k + 1
+        }
+        parts.push("]}")
+        println(parts.join(""))
+        return
+    }
+    if len(hits) == 0 {
+        println("cascade: if " + id + " were FALSIFIED, no cascade candidates (0 nodes cite it).")
+        return
+    }
+    print(cascade_to_text(id, hits))
+}
+
+// cmd_proof — export a node's PROOF CHAIN (R6). The INVERSE of cascade: walks
+// the SUPPORTING edges (<- depends_on · |> verified_by · == equivalents)
+// transitively from <id> to the evidentiary basis it rests on. READ-ONLY.
+// Cycle-safe (visited-set) + depth-capped. Bare-expr / external-script edge
+// targets that don't resolve to a node are reported as UNRESOLVED leaves.
+//   hexa atlas proof <id> [--depth=N] [--format=json]
+fn cmd_proof(rest: array) {
+    let mut id = ""
+    let mut max_depth = -1   // unlimited
+    let mut json_mode = false
+    let mut i = 0
+    while i < len(rest) {
+        let a = to_string(rest[i])
+        if a.starts_with("--depth=") { max_depth = to_int(a.substring(8, len(a))) }
+        else if a == "--depth" && i + 1 < len(rest) { max_depth = to_int(to_string(rest[i + 1])); i = i + 1 }
+        else if a == "--format=json" || a == "--json" { json_mode = true }
+        else if a == "--format=text" { json_mode = false }
+        else if len(id) == 0 { id = a }
+        i = i + 1
+    }
+    if len(id) == 0 {
+        println("usage: hexa atlas proof <id> [--depth=N] [--format=json]")
+        exit(2)
+    }
+    let links = proof_chain(id, max_depth)
+    // A root that resolves to no real node yields a single unresolved leaf.
+    if len(links) == 1 && !links[0].resolved {
+        println("# not a node (unresolved root): " + id)
+        if json_mode { println(proof_to_json(id, links)) }
+        exit(1)
+    }
+    if json_mode { println(proof_to_json(id, links)) }
+    else { print(proof_to_text(id, links)) }
+}
+
+// cmd_infer_edges — INFER candidate edges for a node (R7). Scans <id>'s raw
+// text for whole-identifier references to OTHER real atlas ids that are NOT
+// already in its declared edges, and PROPOSES them (guessed kind depends_on
+// + evidence line). False-positive guard: maximal id-char-run tokenization
+// is a strict word-boundary match (`divisor_sum` never matches id `n`).
+// READ-ONLY — proposals only, NEVER folds edges into embedded.gen.hexa.
+//   hexa atlas infer-edges <id> [--format=json]
+fn cmd_infer_edges(rest: array) {
+    let mut id = ""
+    let mut json_mode = false
+    let mut i = 0
+    while i < len(rest) {
+        let a = to_string(rest[i])
+        if a == "--format=json" || a == "--json" { json_mode = true }
+        else if a == "--format=text" { json_mode = false }
+        else if len(id) == 0 && !a.starts_with("--") { id = a }
+        i = i + 1
+    }
+    if len(id) == 0 {
+        println("usage: hexa atlas infer-edges <id> [--format=json]")
+        println("       proposes undeclared id references in <id>'s raw as candidate edges (read-only)")
+        exit(2)
+    }
+    let node = atlas_lookup_enriched(id)
+    if node.kind == "" {
+        if json_mode {
+            println("{\"source\":\"" + _jq(id) + "\",\"found\":false,\"count\":0,\"proposals\":[]}")
+        } else {
+            println("# unknown id: " + id + " (no such node in the atlas)")
+        }
+        exit(1)
+    }
+    let props = infer_edges(id)
+    if json_mode { println(infer_proposals_to_json(id, props)) }
+    else { print(infer_proposals_to_text(id, props)) }
+}
+
+fn cmd_help() {
+    println("hexa atlas — atlas SSOT surface (embedded.gen.hexa read + direct-fold write)")
+    println("")
+    println("read subcommands (TEXT-parse embedded.gen.hexa at load):")
+    println("  hash                    print ATLAS_HASH")
+    println("  stats                   per-kind counts + ATLAS_HASH + source_count")
+    println("  stats --audit [--scope=rodata|overlay|merged] [--format=json]")
+    println("                          rich audit (grades / dups / orphans / breakthroughs)")
+    println("  stats --acquisition [--top=N] [--scope=...] [--format=json]")
+    println("                          ranked acquire-next frontier (Q / 🟡 cite-only / 🟠 insufficient)")
+    println("  stats --numerology [--scope=rodata|overlay|merged] [--format=json]")
+    println("                          quarantine tier: coincidence-claim nodes w/ no derivation/cite")
+    println("  lookup <id>             search all 9 kinds for matching id")
+    println("  lookup <K> <id>         restrict to one kind (K ∈ {P|C|L|E|F|R|S|X|Q})")
+    println("  lookup --prefix=<p>     list nodes whose id starts with <p>")
+    println("  dump [K] [--json]       emit all nodes (text or jsonl)")
+    println("")
+    println("write subcommand (folds DIRECTLY into embedded.gen.hexa — no rebuild, no intermediate):")
+    println("  register --from-verify <fn> <n> <v>          recompute IN-PROCESS; register on 🔵/🟢")
+    println("           --from-verify <fn> <a> <b> <v>      (2-op form)")
+    println("           --from-drill  --seed \"<text>\" [--rounds N] [--engine mk9|mk10] [--id <id>]")
+    println("           --from-discovery <slug>             fold .discoveries/<slug>.tape discovery atoms")
+    println("                          (id · verdict_tier_target · atlas) → @F nodes; idempotent; honest-")
+    println("                          degrade on 🟠 INSUFFICIENT / 'no fold' atoms. Automates F14-F18 splice.")
+    println("                          Each --from-<verb> arm runs the verb IN-PROCESS, builds the")
+    println("                          verified AtlasNode IN MEMORY, and folds it into embedded.gen.hexa")
+    println("                          — visible to the next lookup with NO rebuild. HONEST DEGRADE:")
+    println("                          drill verdict=skip registers nothing; verify FALSIFIED is refused.")
+    println("                          Commit embedded.gen.hexa with normal git to share.")
+    println("")
+    println("export subcommand (live atlas → portable .n6; n6 is EXPORT-only, NOT the SSOT):")
+    println("  export [--out PATH]     write all nodes as .n6 (default n6/atlas.n6)")
+    println("")
+    println("diff subcommand (READ-ONLY compare of two atlas sources, keyed on (kind,id)):")
+    println("  diff <A> <B> [--format=json]")
+    println("                          A/B = .n6 export OR embedded.gen.hexa (auto-detected);")
+    println("                          reports removed (only-A) / added (only-B) / changed (raw differs)")
+    println("")
+    println("reverify subcommand (re-run the calc over FROZEN recomputable nodes; read-only by default):")
+    println("  reverify [--limit N] [--fix]")
+    println("                          re-run in-process recompute over ALL nodes with a")
+    println("                          `<fn>(<args>) = <claimed>` header — 🟢 NUMERICAL F (float) AND")
+    println("                          @P number-theoretic axioms (integer) → report MATCH / DRIFT /")
+    println("                          UNVERIFIABLE (ε=1e-9). Closes 'frozen at registration, never")
+    println("                          re-verified' (META-SIGNAL ②). exit 1 if drift (no --fix).")
+    println("                          --fix re-registers each DRIFT at full precision IN PLACE")
+    println("                          (R5 #1029 remediation automated); no drift → safe no-op.")
+    println("")
+    println("cascade subcommand (read-only cascade-invalidation query; no tombstone · no mutate):")
+    println("  cascade <id> [--format=json]")
+    println("                          if <id> were HYPOTHETICALLY falsified, list every node whose")
+    println("                          edge (depends_on/verified_by/equivalents/derives) cites it —")
+    println("                          the cascade candidates to re-examine. unknown id → exit 1.")
+    println("")
+    println("proof subcommand (read-only proof-chain export; INVERSE of cascade · no mutate):")
+    println("  proof <id> [--depth=N] [--format=json]")
+    println("                          transitively walk <id>'s SUPPORTING edges (<- depends_on ·")
+    println("                          |> verified_by · == equivalents) to the verified basis it")
+    println("                          rests on. ordered chain + per-node tier (🟢/🟡/🟠) shows if")
+    println("                          it grounds out in verified nodes. cycle-safe · unknown id → exit 1.")
+    println("")
+    println("infer-edges subcommand (read-only auto-edge inference; proposals only · no fold):")
+    println("  infer-edges <id> [--format=json]")
+    println("                          scan <id>'s raw for whole-identifier references to OTHER atlas")
+    println("                          ids NOT already in its declared edges → propose them as candidate")
+    println("                          edges (kind depends_on + evidence). maximal id-token match guards")
+    println("                          substring noise. NEVER folds into embedded.gen. unknown id → exit 1.")
+    println("")
+    println("SSOT: compiler/atlas/embedded.gen.hexa (set $HEXA_ATLAS_EMBED=/abs/dir to override).")
+}
+
+fn main() {
+    let a = _slice_args()
+    if len(a) == 0 {
+        cmd_help()
+        return
+    }
+    let sub = to_string(a[0])
+    let mut rest = []
+    let mut i = 1
+    while i < len(a) {
+        rest.push(a[i])
+        i = i + 1
+    }
+    if sub == "hash" { cmd_hash() }
+    else if sub == "stats" { cmd_stats(rest) }
+    else if sub == "lookup" { cmd_lookup(rest) }
+    else if sub == "dump" { cmd_dump(rest) }
+    else if sub == "register" { cmd_register(rest) }
+    else if sub == "export" { cmd_export(rest) }
+    else if sub == "diff" { cmd_diff(rest) }
+    else if sub == "reverify" { cmd_reverify(rest) }
+    else if sub == "cascade" { cmd_cascade(rest) }
+    else if sub == "proof" { cmd_proof(rest) }
+    else if sub == "infer-edges" { cmd_infer_edges(rest) }
+    else if sub == "help" || sub == "--help" || sub == "-h" { cmd_help() }
+    else {
+        println("error: unknown subcommand: " + sub)
+        cmd_help()
+        exit(2)
+    }
+}

@@ -1,0 +1,87 @@
+// test/n6_uniqueness_smoke.hexa — smoke for symbolic/n6_uniqueness.hexa
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Reference values from n6_uniqueness_tester.py (archive-TECS-L/.shared/
+// calc, commit 4ee05c39) — arithmetic-identity uniqueness scanner.
+// Hit sets verified by exhaustive hexa-native scan over n∈[1,5000]:
+//   id 1  φσ=nτ        → {1,6}        id 2  (n−3)!=n     → {6}  UNIQUE
+//   id 3  tri=fact     → {1,3}        id 4  σ(τ(σ))=σ    → {1,2,3,6,11,…}
+//   id 5  3n−6=σ       → {6}  UNIQUE  id 6  n−2=τ        → {6}  UNIQUE
+//   id 7  (n−1)!/2=…   → {6}  UNIQUE  id 8  lcm=sopfr·σ  → {6}  UNIQUE
+//   id 9  τφ=σ−τ       → {6,30}       id 10 σ=2n         → {6,28,496}
+//   id 11 sopfr(φ)=ω   → {6}  UNIQUE
+// g4-HONEST result: 6 of the 11 KNOWN_IDENTITIES are genuinely n=6-unique,
+// NOT 11 as the Python's "unique identities" label claims.
+//
+// Run:  hexa run test/n6_uniqueness_smoke.hexa
+// Sentinel: __N6_UNIQUENESS_SMOKE__ PASS|FAIL on the final line.
+
+import "compiler/atlas/symbolic/n6_uniqueness.hexa"
+
+let mut PASS = 0
+let mut FAIL = 0
+
+fn check(label: string, cond: bool) {
+    if cond {
+        PASS = PASS + 1
+        println("[PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("[FAIL] " + label)
+    }
+}
+
+let LIM = 5000
+
+// ── T1 : arithmetic functions at n=6 ─────────────────────────────────────
+check("nu_sigma(6) == 12",  nu_sigma(6) == 12)
+check("nu_tau(6) == 4",     nu_tau(6) == 4)
+check("nu_phi(6) == 2",     nu_phi(6) == 2)
+check("nu_sopfr(6) == 5",   nu_sopfr(6) == 5)
+check("nu_omega(6) == 2",   nu_omega(6) == 2)
+check("nu_triangular(6) == 21", nu_triangular(6) == 21)
+check("nu_lcm1n(6) == 60",  nu_lcm1n(6) == 60)
+check("nu_factorial(5) == 120", nu_factorial(5) == 120)
+
+// ── all 11 identities hold at n=6 ────────────────────────────────────────
+check("identity 1 holds at n=6",  nu_identity_holds(1, 6))
+check("identity 5 holds at n=6",  nu_identity_holds(5, 6))
+check("identity 6 holds at n=6",  nu_identity_holds(6, 6))
+check("identity 11 holds at n=6", nu_identity_holds(11, 6))
+
+// ── T2/T4 : hit counts (the exhaustive-scan reference) ───────────────────
+check("id 1 hit count == 2 ({1,6})",      nu_hit_count(1, LIM) == 2)
+check("id 2 hit count == 1 ({6})",        nu_hit_count(2, LIM) == 1)
+check("id 3 hit count == 2 ({1,3})",      nu_hit_count(3, LIM) == 2)
+check("id 9 hit count == 2 ({6,30})",     nu_hit_count(9, LIM) == 2)
+check("id 10 hit count == 3 ({6,28,496})", nu_hit_count(10, LIM) == 3)
+check("id 3 first hit == 1 (not 6)",      nu_first_hit(3, LIM) == 1)
+check("id 5 first hit == 6",              nu_first_hit(5, LIM) == 6)
+
+// ── T3 : n=6-uniqueness — the g4-honest result ───────────────────────────
+check("id 2 IS n=6-unique",   nu_is_n6_unique(2, LIM))
+check("id 5 IS n=6-unique",   nu_is_n6_unique(5, LIM))
+check("id 6 IS n=6-unique",   nu_is_n6_unique(6, LIM))
+check("id 7 IS n=6-unique",   nu_is_n6_unique(7, LIM))
+check("id 8 IS n=6-unique",   nu_is_n6_unique(8, LIM))
+check("id 11 IS n=6-unique",  nu_is_n6_unique(11, LIM))
+check("id 1 NOT n=6-unique (also n=1)",  !nu_is_n6_unique(1, LIM))
+check("id 3 NOT n=6-unique (n∈{1,3})",   !nu_is_n6_unique(3, LIM))
+check("id 4 NOT n=6-unique (self-loop)", !nu_is_n6_unique(4, LIM))
+check("id 9 NOT n=6-unique (also n=30)", !nu_is_n6_unique(9, LIM))
+check("id 10 NOT n=6-unique (perfect)",  !nu_is_n6_unique(10, LIM))
+
+// ── g4 honesty: 6 unique, not the source's claimed 11 ────────────────────
+check("nu_unique_count == 6 (g4-honest, NOT 11)", nu_unique_count(LIM) == 6)
+
+println("")
+println("═══════════════════════════════════════════════════════════")
+println("  n6_uniqueness smoke: PASS=" + str(PASS) + " FAIL=" + str(FAIL))
+println("═══════════════════════════════════════════════════════════")
+if FAIL > 0 {
+    println("__N6_UNIQUENESS_SMOKE__ FAIL")
+} else {
+    println("__N6_UNIQUENESS_SMOKE__ PASS")
+}

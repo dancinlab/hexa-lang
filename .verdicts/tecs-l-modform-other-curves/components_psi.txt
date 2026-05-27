@@ -1,0 +1,22 @@
+=== Gamma_1(N)/X(N) index COMPONENTS: psi(N) = gamma0_index(N) ===
+(psi is the Gamma_0(N) index; reused as a factor in Gamma_1 index = psi*phi/2)
+
+verify --expr gamma0_index(6)=12
+  calc   = 12  == expected 12
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+verify --expr gamma0_index(12)=24
+  calc   = 24  == expected 24
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+verify --expr gamma0_index(5)=6
+  calc   = 6  == expected 6
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+verify --expr gamma0_index(7)=8
+  calc   = 8  == expected 8
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+verify --expr gamma0_index(11)=12
+  calc   = 12  == expected 12
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)

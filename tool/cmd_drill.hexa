@@ -1,0 +1,102 @@
+#!hexa strict
+// tool/cmd_drill.hexa — F6 DRILL_GAP divergent seed stub
+//
+// Invoked as `hexa drill <topic...>` — placeholder level. Joins the
+// user's arguments into a single topic string and emits N=5 divergent
+// "angles" to stdout. The exact topic line is also written to
+// $HOME/.hx/drill.last.txt so the loop harness (or humans) can re-enter.
+//
+// Real divergent seed generation (blowup engine bridge) is wired later;
+// today this is a deterministic placeholder so shims/doctor pass.
+
+fn _dr_home() -> string {
+    let h = env("HOME")
+    if h != "" { return h }
+    return to_string(exec("echo $HOME")).trim()
+}
+
+fn _dr_quote(s: string) -> string {
+    let mut out = "'"
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        let c = char_code(s, i)
+        if c == 39 {
+            out = out + "'\\''"
+        } else {
+            out = out + chr(c)
+        }
+        i = i + 1
+    }
+    out = out + "'"
+    return out
+}
+
+fn _dr_angles() -> [string] {
+    let mut a = []
+    a.push("minimal-surface")
+    a.push("alt-path")
+    a.push("next-layer-predict")
+    a.push("adjacent-speculation")
+    a.push("singularity-extract")
+    return a
+}
+
+fn _dr_collect_topic() -> string {
+    let av = argv()
+    let n = len(av)
+    // Convention (matches hx_init.hexa): av[0] = interpreter, av[1] = script,
+    // user args begin at av[2]. We accept both the direct-script form
+    // (`hexa tool/cmd_drill.hexa <topic>`) and the shim dispatch form
+    // (`drill <topic>` → dispatcher injects args the same way).
+    let mut parts = []
+    let mut i = 2
+    while i < n {
+        parts.push(av[i])
+        i = i + 1
+    }
+    return parts.join(" ")
+}
+
+fn cmd_selftest() -> int {
+    println("[cmd_drill selftest]")
+    // T1: _dr_angles() returns 5 canonical angles
+    let a = _dr_angles()
+    if len(a) != 5 { println("FAIL: angle count"); return 1 }
+    if a[0] != "minimal-surface"     { println("FAIL: angle[0]"); return 1 }
+    if a[4] != "singularity-extract" { println("FAIL: angle[4]"); return 1 }
+    // T2: _dr_quote — single quote inside topic is escaped
+    let q = _dr_quote("it's")
+    if q.index_of("'\\''") < 0 { println("FAIL: quote escape"); return 1 }
+    println("[cmd_drill selftest] OK")
+    return 0
+}
+
+fn main() -> int {
+    let av0 = argv()
+    if len(av0) > 2 {
+        let s0 = av0[2]
+        if s0 == "--selftest" || s0 == "selftest" { return cmd_selftest() }
+    }
+    let topic = _dr_collect_topic()
+    if topic == "" {
+        eprintln("drill: empty topic — usage: drill <topic ...>")
+        return 1
+    }
+
+    let angles = _dr_angles()
+    let mut i = 0
+    while i < len(angles) {
+        println("[drill] " + angles[i] + ": " + topic)
+        i = i + 1
+    }
+
+    // Persist last topic for the loop harness.
+    let last_path = _dr_home() + "/.hx/drill.last.txt"
+    exec_with_status("mkdir -p " + _dr_quote(_dr_home() + "/.hx"))
+    exec_with_status("printf '%s\n' " + _dr_quote(topic) + " > " + _dr_quote(last_path))
+
+    return 0
+}
+
+exit(main())

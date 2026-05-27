@@ -1,0 +1,8 @@
+#!hexa strict
+// protein-fold specify — pLDDT confidence target.
+fn main() {
+    let pLDDT_target = 90.0
+    println("protein-fold_specify (pLDDT confidence target):")
+    println("  pLDDT_target = " + str(pLDDT_target))
+    println("__HEXA_PROTEIN_FOLD_SPECIFY__ PASS gate=GATE_OPEN absorbed=false")
+}

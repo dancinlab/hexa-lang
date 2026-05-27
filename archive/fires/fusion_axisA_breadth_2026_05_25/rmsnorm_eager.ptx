@@ -1,0 +1,174 @@
+// F-FUSION-AXISA-RMSNORM -- EAGER per-op baseline, 3 separate kernel launches.
+//
+//   k1_reduce_sq : ms[row]    = (1/d) sum_j x^2                 (1 block/row)
+//   k2_normalize : xn[row,j]  = x * rsqrt(ms + eps)             (elementwise)
+//   k3_scale     : y[row,j]   = xn * gamma[j]                   (elementwise)
+//
+// HBM/elem: k1 read x ; k2 read x + write xn ; k3 read xn + write y
+//   => 3 read + 2 write = 5 transfers vs fused 2 read + 1 write = 3.
+//
+// Pure ASCII.
+.version 7.8
+.target sm_80
+.address_size 64
+
+// ---- k1_reduce_sq : grid=(rows) block=(256) ; writes ms[row] ----
+.visible .entry k1_reduce_sq (
+    .param .u64 x,
+    .param .u64 ms,
+    .param .u32 d
+)
+{
+    .reg .u64  %rd<20>;
+    .reg .u32  %r<16>;
+    .reg .pred %p<6>;
+    .reg .f32  %f<12>;
+    .shared .align 4 .b8 sm1[1024];
+
+    ld.param.u64 %rd0, [x];
+    ld.param.u64 %rd1, [ms];
+    ld.param.u32 %r0,  [d];
+    mov.u32 %r1, %ctaid.x;
+    mov.u32 %r2, %tid.x;
+    mov.u32 %r3, %ntid.x;
+    mul.lo.u32 %r4, %r1, %r0;
+    cvt.u64.u32 %rd2, %r4;
+    shl.b64 %rd3, %rd2, 2;
+    add.u64 %rd4, %rd0, %rd3;
+    mov.f32 %f1, 0f00000000;
+    mov.u32 %r5, %r2;
+$k1_loop:
+    setp.ge.u32 %p1, %r5, %r0;
+    @%p1 bra $k1_done;
+    cvt.u64.u32 %rd5, %r5;
+    shl.b64 %rd6, %rd5, 2;
+    add.u64 %rd7, %rd4, %rd6;
+    ld.global.f32 %f2, [%rd7];
+    fma.rn.f32 %f1, %f2, %f2, %f1;
+    add.u32 %r5, %r5, %r3;
+    bra $k1_loop;
+$k1_done:
+    cvt.u64.u32 %rd8, %r2;
+    shl.b64 %rd9, %rd8, 2;
+    mov.u64 %rd10, sm1;
+    add.u64 %rd11, %rd10, %rd9;
+    st.shared.f32 [%rd11], %f1;
+    bar.sync 0;
+    mov.u32 %r6, 128;
+$k1_r:
+    setp.eq.u32 %p2, %r6, 0;
+    @%p2 bra $k1_rdone;
+    setp.ge.u32 %p3, %r2, %r6;
+    @%p3 bra $k1_rskip;
+    add.u32 %r7, %r2, %r6;
+    cvt.u64.u32 %rd12, %r7;
+    shl.b64 %rd13, %rd12, 2;
+    add.u64 %rd14, %rd10, %rd13;
+    ld.shared.f32 %f3, [%rd11];
+    ld.shared.f32 %f4, [%rd14];
+    add.f32 %f5, %f3, %f4;
+    st.shared.f32 [%rd11], %f5;
+$k1_rskip:
+    bar.sync 0;
+    shr.u32 %r6, %r6, 1;
+    bra $k1_r;
+$k1_rdone:
+    setp.ne.u32 %p4, %r2, 0;
+    @%p4 bra $k1_exit;
+    ld.shared.f32 %f6, [sm1];
+    cvt.rn.f32.u32 %f7, %r0;
+    rcp.rn.f32 %f8, %f7;
+    mul.f32 %f9, %f6, %f8;          // mean(x^2)
+    cvt.u64.u32 %rd15, %r1;
+    shl.b64 %rd16, %rd15, 2;
+    add.u64 %rd17, %rd1, %rd16;
+    st.global.f32 [%rd17], %f9;
+$k1_exit:
+    ret;
+}
+
+// ---- k2_normalize : grid=(rows*d/256) block=(256) ; xn = x*rsqrt(ms+eps) ----
+.visible .entry k2_normalize (
+    .param .u64 x,
+    .param .u64 ms,
+    .param .u64 xn,
+    .param .u32 d,
+    .param .u32 total,
+    .param .f32 eps
+)
+{
+    .reg .u64  %rd<14>;
+    .reg .u32  %r<12>;
+    .reg .pred %p<3>;
+    .reg .f32  %f<10>;
+
+    ld.param.u64 %rd0, [x];
+    ld.param.u64 %rd1, [ms];
+    ld.param.u64 %rd2, [xn];
+    ld.param.u32 %r0,  [d];
+    ld.param.u32 %r1,  [total];
+    ld.param.f32 %f0,  [eps];
+    mov.u32 %r2, %ctaid.x;
+    mov.u32 %r3, %ntid.x;
+    mov.u32 %r4, %tid.x;
+    mad.lo.s32 %r5, %r2, %r3, %r4;
+    setp.ge.u32 %p1, %r5, %r1;
+    @%p1 bra $k2_exit;
+    div.u32 %r6, %r5, %r0;          // row
+    cvt.u64.u32 %rd3, %r5;
+    shl.b64 %rd4, %rd3, 2;
+    add.u64 %rd5, %rd0, %rd4;
+    ld.global.f32 %f1, [%rd5];      // x
+    cvt.u64.u32 %rd6, %r6;
+    shl.b64 %rd7, %rd6, 2;
+    add.u64 %rd8, %rd1, %rd7;
+    ld.global.f32 %f2, [%rd8];      // ms
+    add.f32 %f3, %f2, %f0;
+    rsqrt.approx.f32 %f4, %f3;
+    mul.f32 %f5, %f1, %f4;          // xn
+    add.u64 %rd9, %rd2, %rd4;
+    st.global.f32 [%rd9], %f5;
+$k2_exit:
+    ret;
+}
+
+// ---- k3_scale : grid=(rows*d/256) block=(256) ; y = xn * gamma[j] ----
+.visible .entry k3_scale (
+    .param .u64 xn,
+    .param .u64 gamma,
+    .param .u64 y,
+    .param .u32 d,
+    .param .u32 total
+)
+{
+    .reg .u64  %rd<14>;
+    .reg .u32  %r<12>;
+    .reg .pred %p<3>;
+    .reg .f32  %f<8>;
+
+    ld.param.u64 %rd0, [xn];
+    ld.param.u64 %rd1, [gamma];
+    ld.param.u64 %rd2, [y];
+    ld.param.u32 %r0,  [d];
+    ld.param.u32 %r1,  [total];
+    mov.u32 %r2, %ctaid.x;
+    mov.u32 %r3, %ntid.x;
+    mov.u32 %r4, %tid.x;
+    mad.lo.s32 %r5, %r2, %r3, %r4;
+    setp.ge.u32 %p1, %r5, %r1;
+    @%p1 bra $k3_exit;
+    rem.u32 %r6, %r5, %r0;          // j
+    cvt.u64.u32 %rd3, %r5;
+    shl.b64 %rd4, %rd3, 2;
+    add.u64 %rd5, %rd0, %rd4;
+    ld.global.f32 %f0, [%rd5];      // xn
+    cvt.u64.u32 %rd6, %r6;
+    shl.b64 %rd7, %rd6, 2;
+    add.u64 %rd8, %rd1, %rd7;
+    ld.global.f32 %f1, [%rd8];      // gamma[j]
+    mul.f32 %f2, %f0, %f1;
+    add.u64 %rd9, %rd2, %rd4;
+    st.global.f32 [%rd9], %f2;
+$k3_exit:
+    ret;
+}

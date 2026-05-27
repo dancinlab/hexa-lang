@@ -1,0 +1,224 @@
+// RFC 067 PK perf SGEMM hexa-emit + 2-stage cp.async pipeline -- M=N=K=256.
+//
+// Same WMMA shape + tile geometry as PJ (gen_sgemm_shared_ptx.py), but the
+// per-K-step A and B tiles are loaded into a DOUBLE-BUFFERED shared scratch
+// via cp.async.cg.shared.global (sm_80+ async copy). The K=k+1 load is
+// issued before the K=k mma, so global-load latency overlaps with mma.
+//
+// Layout (unchanged from PJ):
+//   A row-major     [M=256 x K=256] f32. Row stride = 256 elem = 1024 B.
+//   B col-major     [K=256 x N=256] f32. Col stride = 256 elem = 1024 B.
+//   C row-major out [M=256 x N=256] f32. Row stride = 256 elem = 1024 B.
+//
+// Per-CTA base addresses:
+//   A_cta = a + ctaid.y * 65536
+//   B_cta = b + ctaid.x * 65536
+//   C_cta = c + ctaid.y * 65536 + ctaid.x * 256
+//
+// Per-warp offsets (warp = tid.x>>5, m_tile = warp>>2, n_tile = warp&3):
+//   A_warp_smem(slot) = _tg_a + slot * 2048 + m_tile * 512
+//   B_warp_smem(slot) = _tg_b + slot * 2048 + n_tile * 512
+//   C_warp     = C_cta + m_tile * 16384 + n_tile * 64
+//
+// Cooperative load (per K-step k, slot = k & 1):
+//   thread t = tid.x in [0, 512):
+//     row_a = t >> 3      col_a = t & 7
+//     row_b = t >> 3      kr_b  = t & 7        (B col-major: load along K)
+//     A_g  = A_cta + row_a * 256 * 4 + (k*8 + col_a) * 4
+//     B_g  = B_cta + row_b * 256 * 4 + (k*8 + kr_b)  * 4
+//     cp.async.ca.shared.global [_tg_a + slot*2048 + (row_a*8 + col_a)*4], [A_g], 4
+//     cp.async.ca.shared.global [_tg_b + slot*2048 + (row_b*8 + kr_b)*4],  [B_g], 4
+//   cp.async.commit_group
+
+.version 8.0
+.target sm_90
+.address_size 64
+
+.shared .align 16 .b8 _tg_a[4096];   // 2 slabs * 64 rows * 8 elem * 4 B
+.shared .align 16 .b8 _tg_b[4096];
+
+.visible .entry sgemm_multistage_256x256_grid (
+    .param .u64 a,
+    .param .u64 b,
+    .param .u64 c,
+    .param .u64 k_tiles
+)
+{
+    .reg .u64 %rd<32>;
+    .reg .u32 %r<48>;
+    .reg .pred %p1;
+    .reg .pred %pmore;
+    .reg .b32 %ra<4>;
+    .reg .b32 %rb<4>;
+    .reg .f32 %fc<8>;
+
+    ld.param.u64 %rd0, [a];
+    ld.param.u64 %rd1, [b];
+    ld.param.u64 %rd2, [c];
+    ld.param.u64 %rd3, [k_tiles];
+
+    mov.u32 %r10, %ctaid.y;
+    mov.u32 %r11, %ctaid.x;
+
+    mov.u32 %r1, %tid.x;
+    shr.u32 %r2, %r1, 5;        // warp id
+    shr.u32 %r3, %r2, 2;        // m_tile = warp >> 2
+    and.b32 %r4, %r2, 3;        // n_tile = warp & 3
+
+    // Cooperative-load indices (per thread):
+    //   row_load = tid.x >> 3   in [0, 64)
+    //   col_load = tid.x & 7    in [0, 8)
+    shr.u32 %r12, %r1, 3;       // row_load
+    and.b32 %r13, %r1, 7;       // col_load
+
+    // A_cta base = a + ctaid.y * 65536
+    mul.lo.u32 %r5, %r10, 65536;
+    cvt.u64.u32 %rd4, %r5;
+    add.u64 %rd10, %rd0, %rd4;
+
+    // B_cta base = b + ctaid.x * 65536
+    mul.lo.u32 %r5, %r11, 65536;
+    cvt.u64.u32 %rd5, %r5;
+    add.u64 %rd11, %rd1, %rd5;
+
+    // A load-offset (per-thread, w.r.t. A_cta, excludes k_step):
+    mul.lo.u32 %r14, %r12, 1024;
+    mul.lo.u32 %r15, %r13, 4;
+    add.u32 %r14, %r14, %r15;
+    cvt.u64.u32 %rd14, %r14;
+    add.u64 %rd14, %rd10, %rd14;     // %rd14 = A_cta + row_load*1024 + col_load*4
+
+    // B load-offset (per-thread, w.r.t. B_cta, excludes k_step): identical scalar
+    cvt.u64.u32 %rd15, %r14;
+    add.u64 %rd15, %rd11, %rd15;     // %rd15 = B_cta + row_load*1024 + col_load*4
+
+    // Per-thread shared-mem store offset within ONE slab:
+    //   (row_load * 8 + col_load) * 4 = row_load * 32 + col_load * 4
+    shl.b32 %r16, %r12, 5;
+    mul.lo.u32 %r17, %r13, 4;
+    add.u32 %r16, %r16, %r17;       // %r16 in [0..2044]; intra-slab thread offset
+
+    mov.u32 %r18, _tg_a;            // base
+    mov.u32 %r20, _tg_b;
+
+    // Per-warp shared-mem READ offsets relative to slab base:
+    //   m_tile * 16 * 32 = m_tile * 512
+    mul.lo.u32 %r22, %r3, 512;      // warp-A within-slab offset
+    mul.lo.u32 %r24, %r4, 512;      // warp-B within-slab offset
+
+    // C base offset
+    mul.lo.u32 %r5, %r10, 65536;
+    mul.lo.u32 %r6, %r3, 16384;
+    add.u32 %r7, %r5, %r6;
+    mul.lo.u32 %r8, %r11, 256;
+    add.u32 %r7, %r7, %r8;
+    mul.lo.u32 %r8, %r4, 64;
+    add.u32 %r7, %r7, %r8;
+    cvt.u64.u32 %rd6, %r7;
+    add.u64 %rd12, %rd2, %rd6;
+
+    mov.f32 %fc0, 0f00000000;
+    mov.f32 %fc1, 0f00000000;
+    mov.f32 %fc2, 0f00000000;
+    mov.f32 %fc3, 0f00000000;
+    mov.f32 %fc4, 0f00000000;
+    mov.f32 %fc5, 0f00000000;
+    mov.f32 %fc6, 0f00000000;
+    mov.f32 %fc7, 0f00000000;
+
+    cvt.s32.s64 %r0, %rd3;          // K_TILES remaining
+    cvt.s32.s64 %r33, %rd3;         // K_TILES total (immutable copy)
+
+    // Pipeline state:
+    //   %r30 = current slot (0/1)
+    //   %r0 = remaining iterations
+    //   %rd14 / %rd15 = current per-thread global-load pointer (advances by 32 B / K-step)
+    mov.u32 %r30, 0;
+
+    // ---- PROLOGUE: issue K=0 prefetch into slot 0 ----
+    setp.le.s32 %p1, %r0, 0;
+    @%p1 bra $epilogue;
+
+    // dst addr for slot 0 = _tg_a + 0 + %r16  (and _tg_b + 0 + %r16)
+    // NOTE: cp.async.cg requires size=16 (one cache line). With per-fp32 stores
+    // we use cp.async.ca which permits size in {4,8,16}.
+    add.u32 %r40, %r18, %r16;
+    cp.async.ca.shared.global [%r40], [%rd14], 4;
+    add.u32 %r41, %r20, %r16;
+    cp.async.ca.shared.global [%r41], [%rd15], 4;
+    cp.async.commit_group;
+
+    // Advance global pointers for next prefetch (K=1).
+    add.u64 %rd14, %rd14, 32;
+    add.u64 %rd15, %rd15, 32;
+
+$kloop:
+    setp.le.s32 %p1, %r0, 0;
+    @%p1 bra $epilogue;
+
+    // If more iterations remain (i.e. %r0 > 1), kick next prefetch into other slot.
+    setp.gt.s32 %pmore, %r0, 1;
+    @!%pmore bra $no_prefetch;
+
+    // next_slot = current_slot ^ 1
+    xor.b32 %r31, %r30, 1;
+    shl.b32 %r32, %r31, 11;          // next_slot * 2048
+
+    // A next dst = _tg_a + next_slot*2048 + %r16
+    add.u32 %r40, %r18, %r32;
+    add.u32 %r40, %r40, %r16;
+    cp.async.ca.shared.global [%r40], [%rd14], 4;
+
+    // B next dst = _tg_b + next_slot*2048 + %r16
+    add.u32 %r41, %r20, %r32;
+    add.u32 %r41, %r41, %r16;
+    cp.async.ca.shared.global [%r41], [%rd15], 4;
+
+    cp.async.commit_group;
+    // Wait for current consume-group to land (1 group still in flight = next prefetch).
+    cp.async.wait_group 1;
+    bra $consume;
+
+$no_prefetch:
+    // Final iter: only the current consume group is in flight.
+    cp.async.wait_all;
+
+$consume:
+    bar.sync 0;
+
+    // Load A/B from CURRENT slot (= %r30).
+    shl.b32 %r34, %r30, 11;          // current_slot * 2048
+    add.u32 %r35, %r18, %r34;
+    add.u32 %r35, %r35, %r22;        // slab-A base + warp offset
+    add.u32 %r36, %r20, %r34;
+    add.u32 %r36, %r36, %r24;        // slab-B base + warp offset
+
+    wmma.load.a.sync.aligned.row.m16n16k8.shared.tf32
+        {%ra0, %ra1, %ra2, %ra3}, [%r35], 8;
+
+    wmma.load.b.sync.aligned.col.m16n16k8.shared.tf32
+        {%rb0, %rb1, %rb2, %rb3}, [%r36], 8;
+
+    wmma.mma.sync.aligned.row.col.m16n16k8.f32.tf32.tf32.f32
+        {%fc0, %fc1, %fc2, %fc3, %fc4, %fc5, %fc6, %fc7},
+        {%ra0, %ra1, %ra2, %ra3},
+        {%rb0, %rb1, %rb2, %rb3},
+        {%fc0, %fc1, %fc2, %fc3, %fc4, %fc5, %fc6, %fc7};
+
+    bar.sync 0;
+
+    // Advance global pointers (this thread's pointer for the K=current+1 prefetch
+    // that we just issued was already loaded; advance by 32 B again to prepare
+    // for the next iteration's K=k+1 prefetch).
+    add.u64 %rd14, %rd14, 32;
+    add.u64 %rd15, %rd15, 32;
+
+    xor.b32 %r30, %r30, 1;
+    sub.s32 %r0, %r0, 1;
+    bra $kloop;
+
+$epilogue:
+    wmma.store.d.sync.aligned.row.m16n16k8.global.f32
+        [%rd12], {%fc0, %fc1, %fc2, %fc3, %fc4, %fc5, %fc6, %fc7}, 256;
+    ret;
+}

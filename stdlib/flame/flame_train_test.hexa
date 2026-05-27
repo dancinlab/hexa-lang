@@ -1,0 +1,191 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/flame/flame_train_test.hexa — flame Phase 3-D selftest
+//
+// 80-step compiled-native training driver on single (ids, target_t)
+// memorization task. Same loop topology as anima d_corpus_fire but a
+// tiny model (T=3, d=8, n_layer=2, V=8) for $0 single-shot validation.
+//
+// Falsifiers:
+//   F-RFC043-TRAIN-DET     two seed=42 runs byte-identical gn2
+//                          trajectories (compiler-only determinism
+//                          through fwd + bwd + AdamW for 80 steps)
+//   F-RFC043-TRAIN-DESCENT gn2[79] < gn2[0] · 1e-2  (100× collapse min;
+//                          campaign achieved ~2e7× on its harder d=32·3L
+//                          config — our floor is much more conservative)
+//   F-RFC043-TRAIN-FIT     after 80 steps, predict(ids) == target_t
+//                          (memorization sanity)
+//
+// Honest carve-out (g3): the absolute gn2 trajectory will NOT byte-eq
+// anima's 7.97116 → 3.73374e-07 (a) the model config differs (d=8 vs
+// d=32, V=8 vs V=256) and (b) flame uses builtin libm sqrt/exp/log
+// while anima uses dt_sqrt (24-iter Newton) / dt_exp (Taylor+square) /
+// dt_ln (atanh series), which differ in last ulps. Phase 3-E will land
+// dt_* hand-Taylor replicas to enable a separate byte-eq experiment.
+// ════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/decoder_lib"
+use "stdlib/flame/decoder_block_lib"
+use "stdlib/flame/nn_lib"
+use "stdlib/flame/train_lib"
+
+fn _tr_abs(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+// Run an 80-step trajectory; return packed result farr:
+//   [gn2_initial, gn2_final, final_prediction]
+fn _tr_run_80(seed: int, capture_traj: int) -> int {
+    let T = 3
+    let d = 8
+    let nh = 2
+    let nkv = 1
+    let h = 12
+    let V = 8
+    let n_layer = 2
+    let hd = d / nh
+    let target_t = 4
+
+    let ids = t_zeros(T)
+    t_set(ids, 0, 3.0); t_set(ids, 1, 5.0); t_set(ids, 2, 1.0)
+
+    let m_size = m_total(d, nh, nkv, h, V, n_layer)
+    let M = t_zeros(m_size)
+    nn_decoder_init(M, seed, T, d, nh, nkv, h, V, n_layer)
+    let Mm = t_zeros(m_size)   // AdamW m (zero init)
+    let Mv = t_zeros(m_size)   // AdamW v (zero init)
+    let Mg = t_zeros(m_size)
+    let mc_size = mc_total(T, d, nh, nkv, h, V, n_layer)
+    let Mc = t_zeros(mc_size)
+    let cos = t_zeros(T * hd); let sin = t_zeros(T * hd)
+    nn_rope_build_tables(T, hd, cos, sin)
+
+    // hyperparams from anima d_corpus_fire (lr=0.1, b1=0.9, b2=0.999,
+    // eps=1e-8, wd=0.0).
+    let lr = 0.1
+    let b1 = 0.9
+    let b2 = 0.999
+    let eps = 0.00000001
+    let wd = 0.0
+
+    let gn2_first = nn_decoder_gn2(Mc, target_t, T, d, nh, nkv, h, V, n_layer)
+    // gn2 BEFORE any step (initial). Need to run a fwd first to fill Mc.
+    nn_decoder_fwd(ids, M, Mc, cos, sin, T, d, nh, nkv, h, V, n_layer)
+    let gn2_init = nn_decoder_gn2(Mc, target_t, T, d, nh, nkv, h, V, n_layer)
+    let mut gn2_last = gn2_init
+    let mut step = 1
+    while step <= 80 {
+        let g = nn_decoder_train_step(ids, target_t, M, Mc, Mg, Mm, Mv,
+                                      cos, sin,
+                                      T, d, nh, nkv, h, V, n_layer,
+                                      lr, b1, b2, eps, wd, step)
+        gn2_last = g
+        // optional trajectory capture
+        if capture_traj > 0 {
+            // capture_traj is a farr of size ≥81; store gn2 at index step-1+1=step
+            // (slot 0 = init; slot k = gn2 after step k 의 pre-update measurement)
+            t_set(capture_traj, step, g)
+        }
+        step = step + 1
+    }
+    if capture_traj > 0 { t_set(capture_traj, 0, gn2_init) }
+    // measure prediction at end
+    nn_decoder_fwd(ids, M, Mc, cos, sin, T, d, nh, nkv, h, V, n_layer)
+    let final_pred = nn_decoder_predict(Mc, T, d, nh, nkv, h, V, n_layer)
+    let final_gn2 = nn_decoder_gn2(Mc, target_t, T, d, nh, nkv, h, V, n_layer)
+
+    let _ = t_free(ids); let _ = t_free(M); let _ = t_free(Mm); let _ = t_free(Mv)
+    let _ = t_free(Mg); let _ = t_free(Mc); let _ = t_free(cos); let _ = t_free(sin)
+
+    let out = t_zeros(3)
+    t_set(out, 0, gn2_init)
+    t_set(out, 1, final_gn2)
+    t_set(out, 2, to_float(final_pred))
+    return out
+}
+
+// ── entrypoint ─────────────────────────────────────────────────────────
+println("=== flame Phase 3-D selftest (train_lib: 80-step compiled-native trainer, single sample) ===")
+
+let mut pass = 0
+let total = 3
+
+// run 1 (capture trajectory) + run 2 (det check)
+let traj = t_zeros(81)
+let r1 = _tr_run_80(42, traj)
+let r2 = _tr_run_80(42, 0)
+
+let gn2_init_1 = t_get(r1, 0)
+let gn2_final_1 = t_get(r1, 1)
+let pred_1 = to_int(t_get(r1, 2))
+let gn2_init_2 = t_get(r2, 0)
+let gn2_final_2 = t_get(r2, 1)
+let pred_2 = to_int(t_get(r2, 2))
+
+// ── F-RFC043-TRAIN-DET ─────────────────────────────────────────────────
+let det_init = _tr_abs(gn2_init_1 - gn2_init_2)
+let det_final = _tr_abs(gn2_final_1 - gn2_final_2)
+if det_init == 0.0 {
+    if det_final == 0.0 {
+        if pred_1 == pred_2 {
+            println("PASS  F-RFC043-TRAIN-DET     two seed=42 runs byte-identical (gn2_init, gn2_final, prediction)")
+            pass = pass + 1
+        } else {
+            print("FAIL  F-RFC043-TRAIN-DET     pred mismatch "); print(pred_1); print(" vs "); print(pred_2); println("")
+        }
+    } else {
+        print("FAIL  F-RFC043-TRAIN-DET     gn2_final dev = "); print(det_final); println("")
+    }
+} else {
+    print("FAIL  F-RFC043-TRAIN-DET     gn2_init dev = "); print(det_init); println("")
+}
+
+// ── F-RFC043-TRAIN-DESCENT ────────────────────────────────────────────
+// Require: gn2[80] < gn2[0] · 1e-2 (100x collapse minimum). Campaign
+// achieved ~2e7× on harder problem; 100x on this toy is comfortable.
+let ratio = if gn2_init_1 > 0.0 { gn2_final_1 / gn2_init_1 } else { 1.0 }
+if ratio < 0.01 {
+    print("PASS  F-RFC043-TRAIN-DESCENT gn2[0] = ")
+    print(gn2_init_1)
+    print(" → gn2[80] = ")
+    print(gn2_final_1)
+    print(" (collapse ")
+    print(1.0 / ratio)
+    println("×, threshold ≥100×; 80-step compiled-native AdamW)")
+    pass = pass + 1
+} else {
+    print("FAIL  F-RFC043-TRAIN-DESCENT ratio = "); print(ratio); print(" (threshold <0.01); gn2[0]=")
+    print(gn2_init_1); print(" gn2[80]="); print(gn2_final_1); println("")
+}
+
+// ── F-RFC043-TRAIN-FIT ────────────────────────────────────────────────
+if pred_1 == 4 {
+    println("PASS  F-RFC043-TRAIN-FIT     predict(ids) = target_t (4); memorization confirmed at single-sample scale")
+    pass = pass + 1
+} else {
+    print("FAIL  F-RFC043-TRAIN-FIT     pred = "); print(pred_1); print(" ≠ target_t 4; final gn2 = "); print(gn2_final_1); println("")
+}
+
+// trajectory print (informational; first / last / middle)
+print("traj: gn2[0]=")  ; print(t_get(traj, 0))
+print(" gn2[20]=") ; print(t_get(traj, 20))
+print(" gn2[40]=") ; print(t_get(traj, 40))
+print(" gn2[60]=") ; print(t_get(traj, 60))
+print(" gn2[80]=") ; print(t_get(traj, 80))
+println("")
+
+let _ = t_free(r1); let _ = t_free(r2); let _ = t_free(traj)
+
+println("")
+print("=== flame Phase 3-D: ")
+print(pass)
+print("/")
+print(total)
+println(" PASS ===")
+if pass == total {
+    println("PASS — flame train_lib 80-step compiled-native training (single-sample memorization) determinism + descent + fit. Phase 3 nn-stack COMPLETE (Phase 3-A optim + 3-B block + 3-C decoder + 3-D train). Phase 3-E anima oracle byte-eq (dt_* hand-Taylor) follows.")
+} else {
+    println("FAIL — flame Phase 3-D not landable")
+}

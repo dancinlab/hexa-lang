@@ -1,0 +1,222 @@
+// ═══════════════════════════════════════════════════════════
+// scripts/akida/falsifier.hexa — single-dispatch falsifier wrapper
+//
+// 배경:
+//   nexus/scripts/akida/*.py 11 harness (F-C, F-L1, F-L1+, F-L6, F-L7,
+//   F-M1, F-M2, F-M3a, F-A, F-B + spike_trace_gen + cnn2snn_emulator).
+//   각 harness 는 stdout 마지막 줄에 evidence JSON 을 emit, exit code 로 verdict
+//   (0=PASS/PARTIAL-PASS, !=0=FAIL/PARTIAL-FAIL).
+//   본 wrapper 는 hexa-side dispatch 단일 진입점 — kick 의 raw 40 dispatch 와
+//   호환되며, NDJSON meta (NEXUS_AKIDA_FALSIFIER) 를 stderr 로 1줄 emit.
+//
+// 설계:
+//   1. cmd dispatch — first user arg 가 falsifier id (F-C / F-L7 / ...)
+//   2. python3 harness 호출 + __RC= trailer 로 exit code 회수 (PATTERNS §5)
+//   3. stdout 마지막 라인 = evidence JSON, 그대로 통과
+//   4. stderr 에 1-line NDJSON meta (PATTERNS §4) — duration_us 포함
+//
+// CLI:
+//   hexa run scripts/akida/falsifier.hexa run F-C
+//   hexa run scripts/akida/falsifier.hexa run F-L7 --bits 200000
+//   hexa run scripts/akida/falsifier.hexa run F-M3a --synth-route
+//   hexa run scripts/akida/falsifier.hexa run F-L1 --simulator
+//
+// 규칙: hexa >=/<= 금지 — < / > 만 사용. stdlib only.
+// 편집 금지: nexus/scripts/akida/*.py harnesses (별 에이전트 영역).
+// ═══════════════════════════════════════════════════════════
+
+let _WITNESS = "design/kick/2026-05-07_anima-nexus-akida-physical-math-limit-saturation_omega_cycle.json"
+
+fn _ns_now() -> i64 {
+    let mut r: i64 = 0
+    let raw = to_string(exec("date +%s%N 2>/dev/null")).trim()  // @allow-bare-exec
+    if raw.len() > 0 && raw.contains("N") == false {
+        try { r = to_int(raw) } catch e {}  // @allow-silent-catch
+    }
+    if r < 1 {
+        let s2 = to_string(exec("python3 -c 'import time;print(time.time_ns())' 2>/dev/null")).trim()  // @allow-bare-exec
+        try { r = to_int(s2) } catch e2 {}  // @allow-silent-catch
+    }
+    if r < 1 {
+        let s3 = to_string(exec("date +%s")).trim()  // @allow-bare-exec
+        try { let sec = to_int(s3); r = sec * 1000000000 } catch e3 {}  // @allow-silent-catch
+    }
+    return r
+}
+
+fn _shq(s: string) -> string {
+    return s.replace("'", "'\\''")
+}
+
+fn _harness_for(fid: string) -> string {
+    if fid == "F-C"   { return "scripts/akida/validate_witness.py" }
+    if fid == "F-L1"  { return "scripts/akida/energy_meter.py" }
+    if fid == "F-L1+" { return "scripts/akida/energy_meter.py" }
+    if fid == "F-L6"  { return "scripts/akida/lyapunov_sweep.py" }
+    if fid == "F-L7"  { return "scripts/akida/qrng_entropy.py" }
+    if fid == "F-M1"  { return "scripts/akida/godel_disagreement.py" }
+    if fid == "F-M2"  { return "scripts/akida/spike_compress.py" }
+    if fid == "F-M3a" { return "scripts/akida/dispatch_check.py" }
+    if fid == "F-A"   { return "scripts/akida/blowup_phase7.py" }
+    if fid == "F-B"   { return "scripts/akida/check_loops.py" }
+    return ""
+}
+
+// Some falsifiers need an extra positional arg (e.g. F-C takes the witness path,
+// energy_meter takes --falsifier <id>). This builds the per-id leading args.
+fn _leading_args(fid: string) -> string {
+    if fid == "F-C"   { return "'" + _shq(_WITNESS) + "'" }
+    if fid == "F-L1"  { return "--falsifier F-L1" }
+    if fid == "F-L1+" { return "--falsifier 'F-L1+'" }
+    return ""
+}
+
+fn _emit_meta(stage: string, fid: string, rc: i64, dur_us: i64, evidence_path: string) {
+    let mut m: [string] = []
+    m.push("NEXUS_AKIDA_FALSIFIER {\"stage\":\"")
+    m.push(stage)
+    m.push("\",\"falsifier_id\":\"")
+    m.push(fid)
+    m.push("\",\"rc\":")
+    m.push(to_string(rc))
+    m.push(",\"duration_us\":")
+    m.push(to_string(dur_us))
+    m.push(",\"evidence_path\":\"")
+    m.push(evidence_path)
+    m.push("\"}")
+    eprintln(m.join(""))
+}
+
+fn _last_line(s: string) -> string {
+    let n = len(s)
+    if n < 1 { return "" }
+    let mut end = n
+    if s.substring(n - 1, n) == "\n" { end = n - 1 }
+    let body = s.substring(0, end)
+    let lb = body.last_index_of("\n")
+    if lb < 0 { return body }
+    return body.substring(lb + 1, end)
+}
+
+fn _extract_path(json_line: string) -> string {
+    let key = "\"raw_log_path\":"
+    let i = json_line.index_of(key)
+    if i < 0 { return "" }
+    let rest = json_line.substring(i + len(key), len(json_line)).trim()
+    if rest.len() < 1 || rest.substring(0, 1) != "\"" { return "" }
+    let after = rest.substring(1, len(rest))
+    let close = after.index_of("\"")
+    if close < 0 { return "" }
+    return after.substring(0, close)
+}
+
+fn _join_extra(extras: [string]) -> string {
+    if len(extras) < 1 { return "" }
+    let mut buf: [string] = []
+    let mut i = 0
+    while i < len(extras) {
+        buf.push(" '" + _shq(extras[i]) + "'")
+        i = i + 1
+    }
+    return buf.join("")
+}
+
+fn run_one(fid: string, extras: [string]) -> i32 {
+    let harness = _harness_for(fid)
+    if harness.len() < 1 {
+        eprintln("falsifier.hexa: unknown id " + fid)
+        return 2
+    }
+    let lead = _leading_args(fid)
+    let extra = _join_extra(extras)
+    let cmd = "python3 '" + _shq(harness) + "' " + lead + extra + "; echo \"__RC=$?\""
+
+    let t0 = _ns_now()
+    let out = to_string(exec(cmd))                                 // @allow-bare-exec
+    let t1 = _ns_now()
+
+    let rc_at = out.index_of("__RC=")
+    let mut rc: i64 = 1
+    let mut payload = out
+    if rc_at > -1 {
+        let tail = out.substring(rc_at + 5, len(out)).trim()
+        try { rc = to_int(tail) } catch e {}                        // @allow-silent-catch
+        payload = out.substring(0, rc_at)
+    }
+
+    print(payload)
+    let last = _last_line(payload.trim())
+    let evidence_path = _extract_path(last)
+    let dur_us: i64 = (t1 - t0) / 1000
+
+    _emit_meta("done", fid, rc, dur_us, evidence_path)
+    return rc as i32
+}
+
+fn run_all_no_hardware() -> i32 {
+    let no_hw_ids: [string] = ["F-C", "F-L7", "F-M2", "F-M3a"]
+    let mut worst: i32 = 0
+    let mut i = 0
+    while i < len(no_hw_ids) {
+        let fid = no_hw_ids[i]
+        let extras = if fid == "F-L7" { ["--bits", "200000", "--spike-trace", "state/akida_synth/spike_trace.txt"] }
+                     else if fid == "F-M2" { ["--simulate", "--n-events", "50000"] }
+                     else if fid == "F-M3a" { ["--synth-route"] }
+                     else { [] }
+        let rc = run_one(fid, extras)
+        if rc > worst { worst = rc }
+        i = i + 1
+    }
+    return worst
+}
+
+fn run_all_simulator() -> i32 {
+    let sim_ids: [string] = ["F-L1", "F-L1+", "F-L6", "F-M1"]
+    let mut worst: i32 = 0
+    let mut i = 0
+    while i < len(sim_ids) {
+        let fid = sim_ids[i]
+        let extras = if fid == "F-L1" || fid == "F-L1+" { ["--simulator"] }
+                     else if fid == "F-M1" { ["--simulate", "--n-programs", "1000"] }
+                     else { ["--simulate"] }
+        let rc = run_one(fid, extras)
+        if rc > worst { worst = rc }
+        i = i + 1
+    }
+    return worst
+}
+
+fn main_dispatch(a: [string]) -> i32 {
+    let mut cmd = "help"
+    if len(a) > 2 { cmd = a[2] }
+
+    if cmd == "run" {
+        if len(a) < 4 {
+            println("usage: hexa run scripts/akida/falsifier.hexa run <F-id> [extras...]")
+            return 1
+        }
+        let fid = a[3]
+        let extras: [string] = if len(a) > 4 { a.slice(4, len(a)) } else { [] }
+        return run_one(fid, extras)
+    }
+
+    if cmd == "all-no-hardware" {
+        return run_all_no_hardware()
+    }
+    if cmd == "all-simulator" {
+        let rc1 = run_all_no_hardware()
+        let rc2 = run_all_simulator()
+        if rc2 > rc1 { return rc2 }
+        return rc1
+    }
+
+    println("usage:")
+    println("  hexa run scripts/akida/falsifier.hexa run <F-id> [extras]")
+    println("  hexa run scripts/akida/falsifier.hexa all-no-hardware")
+    println("  hexa run scripts/akida/falsifier.hexa all-simulator")
+    return 1
+}
+
+let _argv = args()
+let _rc = main_dispatch(_argv)
+exit(_rc)  // @allow-silent-exit

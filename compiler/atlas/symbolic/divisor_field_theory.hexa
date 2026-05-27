@@ -1,0 +1,154 @@
+// compiler/atlas/symbolic/divisor_field_theory.hexa — Action S(n) uniqueness
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Hexa-native port of archive-TECS-L/.shared/calc/divisor_field_theory.py
+// (git commit 4ee05c39; TECS-L absorption Wave 2 — manifest §Backlog #9).
+//
+// Two closed-form "action" characterisations on the divisor lattice:
+//
+//   classic perfect-number action  P(n) = σ(n) − 2n
+//       P(n) = 0  ⟺  n perfect      (Euclid–Euler; the manifest's S(n))
+//       P(n) < 0  ⟺  n deficient
+//       P(n) > 0  ⟺  n abundant
+//
+//   divisor-field combined action  S(n) = [σφ − nτ]² + [σ(n+φ) − nτ²]²
+//       S(n) = 0  ⟺  both residuals vanish  ⟺  n ∈ {1, 6}
+//       R(n) = σ(n)·φ(n) / (n·τ(n))   (R(n)=1 ⟺ first residual vanishes)
+//
+// Both are exact integer arithmetic; the squared-residual action makes
+// S(n)=0 a simultaneous-constraint uniqueness statement (the source's
+// scan_solutions enumerates S(n)=0 and R(n)=1 sets). The plotting /
+// spacetime-signature / partition-thermo display code is NOT ported
+// (anti-bloat). Zero external dependency (g5 hexa-native-only).
+//
+// Cross-link: atlas/inbox/_tecsl_calculator_port_manifest.md §C / §Backlog #9 ·
+// symbolic/perfect_number_engine.hexa · symbolic/sigma_phi_tau_uniqueness.hexa.
+
+pub fn dft_sigma(n: int) -> int {
+    if n <= 0 { return 0 }
+    let mut s = 0
+    let mut d = 1
+    while d <= n {
+        if n % d == 0 { s = s + d }
+        d = d + 1
+    }
+    return s
+}
+
+pub fn dft_tau(n: int) -> int {
+    if n <= 0 { return 0 }
+    let mut c = 0
+    let mut d = 1
+    while d <= n {
+        if n % d == 0 { c = c + 1 }
+        d = d + 1
+    }
+    return c
+}
+
+pub fn dft_phi(n: int) -> int {
+    if n <= 0 { return 0 }
+    if n == 1 { return 1 }
+    let mut count = 0
+    let mut k = 1
+    while k <= n {
+        let mut a = k
+        let mut b = n
+        while b != 0 {
+            let t = b
+            b = a % b
+            a = t
+        }
+        if a == 1 { count = count + 1 }
+        k = k + 1
+    }
+    return count
+}
+
+// ── classic perfect-number action  P(n) = σ(n) − 2n ─────────────────────
+pub fn perfect_action(n: int) -> int {
+    return dft_sigma(n) - 2 * n
+}
+
+pub fn is_perfect(n: int) -> bool {
+    if n <= 1 { return false }
+    return perfect_action(n) == 0
+}
+
+// classification: -1 deficient · 0 perfect · +1 abundant
+pub fn abundance_class(n: int) -> int {
+    let p = perfect_action(n)
+    if p < 0 { return -1 }
+    if p == 0 { return 0 }
+    return 1
+}
+
+pub fn perfect_solutions(limit: int) -> [int] {
+    let mut sols: [int] = []
+    let mut n = 2
+    while n <= limit {
+        if perfect_action(n) == 0 { sols.push(n) }
+        n = n + 1
+    }
+    return sols
+}
+
+// ── divisor-field combined action  S(n) and residuals ───────────────────
+pub struct ActionTerms {
+    n: int,
+    term1: int,        // σφ − nτ
+    term2: int,        // σ(n+φ) − nτ²
+    action: int        // term1² + term2²
+}
+
+pub fn compute_action(n: int) -> ActionTerms {
+    let s = dft_sigma(n)
+    let p = dft_phi(n)
+    let t = dft_tau(n)
+    let t1 = s * p - n * t
+    let t2 = s * (n + p) - n * t * t
+    return ActionTerms { n: n, term1: t1, term2: t2, action: t1 * t1 + t2 * t2 }
+}
+
+// S(n) scalar (= term1² + term2²).
+pub fn divisor_field_action(n: int) -> int {
+    let a = compute_action(n)
+    return a.action
+}
+
+// R(n) = σ(n)·φ(n) / (n·τ(n)) — first-residual ratio (R=1 ⟺ term1=0).
+pub fn r_factor(n: int) -> float {
+    let s = dft_sigma(n)
+    let p = dft_phi(n)
+    let t = dft_tau(n)
+    let denom = n * t
+    if denom == 0 { return 0.0 }
+    return to_float(s * p) / to_float(denom)
+}
+
+// S(n)=0 solution set over [1, limit] (the source's s_zero list).
+pub fn action_zero_solutions(limit: int) -> [int] {
+    let mut sols: [int] = []
+    let mut n = 1
+    while n <= limit {
+        if divisor_field_action(n) == 0 { sols.push(n) }
+        n = n + 1
+    }
+    return sols
+}
+
+// R(n)=1 solution set over [1, limit] (the source's r_one list).
+pub fn r_one_solutions(limit: int) -> [int] {
+    let mut sols: [int] = []
+    let mut n = 1
+    while n <= limit {
+        let r = r_factor(n)
+        let d = r - 1.0
+        let ad = if d < 0.0 { -d } else { d }
+        if ad < 0.000000001 { sols.push(n) }
+        n = n + 1
+    }
+    return sols
+}

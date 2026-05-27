@@ -1,0 +1,49 @@
+// stdlib/test/test_mc_integrate.hexa — mc-integrate engine selftest sentinel
+//
+// Sentinel: __MC_INTEGRATE_TEST__ PASS
+//
+// RFC 047 — exercises stdlib/mc_integrate/engine.hexa via subprocess: the
+// full --self-test falsifier sweep + a small deterministic urandom estimate.
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn chk(tag: str, cond: bool) {
+    if cond { pass_count = pass_count + 1 } else { println("  FAIL " + tag); fail_count = fail_count + 1 }
+}
+
+fn _hexa_bin() -> str {
+    let env_bin = env("HEXA_BIN")
+    if env_bin.len() > 0 { return env_bin }
+    let path_bin = exec("command -v hexa 2>/dev/null || true").trim()
+    if path_bin.len() > 0 { return path_bin }
+    return "hexa"
+}
+
+fn main() -> void {
+    println("── stdlib/mc_integrate/engine selftest ──")
+    let bin = _hexa_bin()
+    let engine = "stdlib/mc_integrate/engine.hexa"
+
+    // F1 — full falsifier sweep (F2-F5 + G1-G6 + H1-H3).
+    let st = exec("'" + bin + "' run '" + engine + "' --self-test 2>&1")
+    chk("self_test_sentinel_pass", st.contains("__MC_INTEGRATE__ PASS"))
+
+    // F2 — small deterministic catalan estimate via urandom.
+    let est = exec("'" + bin + "' run '" + engine + "' --constant catalan -N 2000 --rng urandom 2>&1")
+    chk("estimate_sentinel_pass", est.contains("__MC_INTEGRATE__ PASS"))
+    chk("estimate_rng_used_urandom", est.contains("rng_used"))
+
+    // F3 — compare two RNG legs (deterministic urandom-vs-urandom).
+    let cmp = exec("'" + bin + "' run '" + engine + "' --compare catalan -N 1000 --trials 4 --rng-a urandom --rng-b urandom 2>&1")
+    chk("compare_sentinel_present", cmp.contains("__MC_INTEGRATE_COMPARE__"))
+
+    println("")
+    println("  pass=" + str(pass_count) + " fail=" + str(fail_count))
+    if fail_count == 0 {
+        println("__MC_INTEGRATE_TEST__ PASS")
+    } else {
+        println("__MC_INTEGRATE_TEST__ FAIL")
+        exit(1)
+    }
+}

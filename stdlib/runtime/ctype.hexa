@@ -1,0 +1,800 @@
+// stdlib/runtime/ctype.hexa — RUNTIME.md step-2 cycle 1 POC.
+//
+// Hexa-source replacements for C-side `hxlcl_isalnum`/`hxlcl_isalpha`
+// helpers in self/runtime.c (cycle 59). The C-side wrappers thin-shim
+// onto these hexa fns via the standard HexaVal calling convention
+// (every hexa pub fn emits `HexaVal name(HexaVal ...)` after hexat
+// transpile).
+//
+// This is the first proof of step 2 of RUNTIME.md's 4-step path:
+//   step 1 (cycles 46-65): libc unhook via C-source hxlcl_* helpers
+//   step 2 (NOW):          port hxlcl_* helpers C → hexa source
+//   step 3 (later):        runtime.c HI tier C → hexa source
+//   step 4 (final):        runtime_core.c CORE tier C → hexa source
+//
+// ASCII classifiers — locale-free. Per ANSI C `isalnum(c)` /
+// `isalpha(c)` definition restricted to the C locale (matches the
+// cycle-59 hxlcl_isalnum/_isalpha bodies).
+
+pub fn rt_isalnum(c: int) -> bool {
+    if c >= 48 && c <= 57 { return true }   // '0'..'9'
+    if c >= 65 && c <= 90 { return true }   // 'A'..'Z'
+    if c >= 97 && c <= 122 { return true }  // 'a'..'z'
+    return false
+}
+
+pub fn rt_isalpha(c: int) -> bool {
+    if c >= 65 && c <= 90 { return true }   // 'A'..'Z'
+    if c >= 97 && c <= 122 { return true }  // 'a'..'z'
+    return false
+}
+
+// Step 3 cycle 28 — string → [int] byte array. C body iterated until
+// NULL terminator; hexa version uses byte_len + .byte_at(i) (byte_len is
+// the canonical hexa string length builtin and doesn't depend on NUL).
+pub fn rt_str_bytes(s: string) -> [int] {
+    let mut out: [int] = []
+    let n = byte_len(s)
+    let mut i = 0
+    while i < n {
+        out = out.push(s.byte_at(i))
+        i = i + 1
+    }
+    return out
+}
+
+// Step 3 cycle 52 — UTF-8 codepoint count. Thin wrapper over the
+// rt_utf8_cpcount helper introduced in cycle 51.
+pub fn rt_str_char_count(s: string) -> int {
+    return rt_utf8_cpcount(s)
+}
+
+// Step 3 cycle 57 — string contains (substring search). True when `sub`
+// appears anywhere in `s`. Reuses cycle-54's rt_str_index_of for the
+// scan logic — `index_of != -1` is the canonical predicate.
+pub fn rt_str_contains_b(s: string, sub: string) -> bool {
+    if rt_str_index_of(s, sub) >= 0 { return true }
+    return false
+}
+
+// Step 3 cycle 57 — string byte-equality. C body uses pointer-equality
+// fast-path for interned strings then strcmp — we replicate the byte-
+// by-byte compare here (interning fast-path stays in the C wrapper
+// since hexa source can't observe HX_STR identity).
+pub fn rt_str_eq_b(a: string, b: string) -> bool {
+    let na = byte_len(a)
+    let nb = byte_len(b)
+    if na != nb { return false }
+    let mut i = 0
+    while i < na {
+        if a.byte_at(i) != b.byte_at(i) { return false }
+        i = i + 1
+    }
+    return true
+}
+
+// Step 3 cycle 56 — prefix / suffix predicates. Hexa fns return bool;
+// the C wrappers keep their `int` return signature (codegen wraps in
+// `hexa_bool(rt_str_starts_with(...))`) so we use `_b` suffix names
+// here and let the C bridge extract via `hexa_truthy(...) ? 1 : 0`.
+pub fn rt_str_starts_with_b(s: string, prefix: string) -> bool {
+    let plen = byte_len(prefix)
+    let slen = byte_len(s)
+    if plen > slen { return false }
+    let mut i = 0
+    while i < plen {
+        if s.byte_at(i) != prefix.byte_at(i) { return false }
+        i = i + 1
+    }
+    return true
+}
+
+pub fn rt_str_ends_with_b(s: string, suffix: string) -> bool {
+    let sfxlen = byte_len(suffix)
+    let slen = byte_len(s)
+    if sfxlen > slen { return false }
+    let offset = slen - sfxlen
+    let mut i = 0
+    while i < sfxlen {
+        if s.byte_at(offset + i) != suffix.byte_at(i) { return false }
+        i = i + 1
+    }
+    return true
+}
+
+// Step 3 cycle 55 — first occurrence at-or-after byte offset `start`.
+// st < 0 clamps to 0; st > hlen returns -1; empty needle returns st
+// (matches C body's `if (*needle == '\0') return st;`).
+pub fn rt_str_index_of_from(s: string, sub: string, start: int) -> int {
+    let hlen = byte_len(s)
+    let nlen = byte_len(sub)
+    let mut st = start
+    if st < 0 { st = 0 }
+    if st > hlen { return -1 }
+    if nlen == 0 { return st }
+    let mut i = st
+    while i + nlen <= hlen {
+        let mut k = 0
+        let mut matched = true
+        while k < nlen {
+            if s.byte_at(i + k) != sub.byte_at(k) {
+                matched = false
+                k = nlen
+            } else {
+                k = k + 1
+            }
+        }
+        if matched { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+// Step 3 cycle 55 — LAST occurrence of `sub` in `s`. Empty needle
+// returns hlen (matches C body). Overlapping matches handled by
+// p += 1 advance (same as the C body's overlap-safe scan).
+pub fn rt_str_last_index_of(s: string, sub: string) -> int {
+    let hlen = byte_len(s)
+    let nlen = byte_len(sub)
+    if nlen == 0 { return hlen }
+    if nlen > hlen { return -1 }
+    let mut last = -1
+    let mut i = 0
+    while i + nlen <= hlen {
+        let mut k = 0
+        let mut matched = true
+        while k < nlen {
+            if s.byte_at(i + k) != sub.byte_at(k) {
+                matched = false
+                k = nlen
+            } else {
+                k = k + 1
+            }
+        }
+        if matched { last = i }
+        i = i + 1
+    }
+    return last
+}
+
+// Step 4 cycle 92 — strtoll replacement. Parses optional whitespace +
+// sign + optional 0x/0X hex prefix + digit loop. Throws on bad input
+// (no digits consumed OR trailing non-whitespace). Empty/whitespace-only
+// → 0 (matches C body's defensive fallback for env-var/optional-argv
+// parsing — comment says 812 callsites depend on this shape).
+// RUNTIME.md step-2 — lenient atoll/atoi replacement (no-throw, decimal only).
+// Mirrors the C hxlcl_atoll body: skip ws (space/tab/newline) + optional sign +
+// base-10 digit loop; returns 0 on no-digits, NEVER throws. Distinct from
+// rt_str_parse_int below (which throws on garbage + accepts 0x hex). hxlcl_atoi
+// stays C as (int)hxlcl_atoll.
+pub fn rt_atoll(s: string) -> int {
+    let n = byte_len(s)
+    let mut i = 0
+    while i < n {
+        let b = s.byte_at(i)
+        if b == 32 || b == 9 || b == 10 {
+            i = i + 1
+        } else {
+            break
+        }
+    }
+    let mut sign = 1
+    if i < n {
+        let b = s.byte_at(i)
+        if b == 45 { sign = -1; i = i + 1 }
+        else if b == 43 { i = i + 1 }
+    }
+    let mut v = 0
+    while i < n {
+        let b = s.byte_at(i)
+        if b >= 48 && b <= 57 {
+            v = v * 10 + (b - 48)
+            i = i + 1
+        } else {
+            break
+        }
+    }
+    return sign * v
+}
+
+pub fn rt_str_parse_int(s: string) -> int {
+    let n = byte_len(s)
+    let mut i = 0
+    while i < n {
+        let b = s.byte_at(i)
+        if b == 32 || b == 9 || b == 10 || b == 13 {
+            i = i + 1
+        } else {
+            break
+        }
+    }
+    if i >= n { return 0 }
+    let mut sign = 1
+    if s.byte_at(i) == 45 {
+        sign = -1
+        i = i + 1
+    } else if s.byte_at(i) == 43 {
+        i = i + 1
+    }
+    let mut base = 10
+    if i + 1 < n {
+        if s.byte_at(i) == 48 {
+            let c1 = s.byte_at(i + 1)
+            if c1 == 120 || c1 == 88 {
+                base = 16
+                i = i + 2
+            }
+        }
+    }
+    let mut v = 0
+    let mut consumed = 0
+    while i < n {
+        let b = s.byte_at(i)
+        let mut d = -1
+        if b >= 48 && b <= 57 {
+            d = b - 48
+        } else if base == 16 {
+            if b >= 97 && b <= 102 { d = b - 87 }
+            else if b >= 65 && b <= 70 { d = b - 55 }
+        }
+        if d < 0 { break }
+        v = v * base + d
+        consumed = consumed + 1
+        i = i + 1
+    }
+    if consumed == 0 {
+        throw "error: to_int: not an integer: \"" + s + "\""
+    }
+    while i < n {
+        let b = s.byte_at(i)
+        if b == 32 || b == 9 || b == 10 || b == 13 {
+            i = i + 1
+        } else {
+            break
+        }
+    }
+    if i < n {
+        throw "error: to_int: trailing garbage in \"" + s + "\""
+    }
+    return sign * v
+}
+
+// Step 3 cycle 73 — strtod replacement. Parses optional whitespace +
+// sign + integer + optional fractional + optional exponent. Handles
+// the common cases bit-exact for non-extreme magnitudes. Edge cases
+// (subnormals, INF/NaN strings, hex floats) fall short of libm strtod
+// — acceptable for the typical hexa-source user-input parse path.
+pub fn rt_str_parse_float(s: string) -> float {
+    let n = byte_len(s)
+    let mut i = 0
+    while i < n {
+        let b = s.byte_at(i)
+        if b == 32 || b == 9 || b == 10 || b == 13 {
+            i = i + 1
+        } else {
+            break
+        }
+    }
+    let mut sign = 1.0
+    if i < n {
+        let b = s.byte_at(i)
+        if b == 45 {
+            sign = -1.0
+            i = i + 1
+        } else if b == 43 {
+            i = i + 1
+        }
+    }
+    let mut int_part = 0.0
+    while i < n {
+        let b = s.byte_at(i)
+        if b >= 48 && b <= 57 {
+            int_part = int_part * 10.0 + ((b - 48) as float)
+            i = i + 1
+        } else {
+            break
+        }
+    }
+    let mut frac_part = 0.0
+    let mut frac_div = 1.0
+    if i < n {
+        if s.byte_at(i) == 46 {
+            i = i + 1
+            while i < n {
+                let b = s.byte_at(i)
+                if b >= 48 && b <= 57 {
+                    frac_part = frac_part * 10.0 + ((b - 48) as float)
+                    frac_div = frac_div * 10.0
+                    i = i + 1
+                } else {
+                    break
+                }
+            }
+        }
+    }
+    let mut value = int_part + frac_part / frac_div
+    if i < n {
+        let b = s.byte_at(i)
+        if b == 101 || b == 69 {
+            i = i + 1
+            let mut esign = 1
+            if i < n {
+                let bb = s.byte_at(i)
+                if bb == 45 { esign = -1; i = i + 1 }
+                else if bb == 43 { i = i + 1 }
+            }
+            let mut exp = 0
+            while i < n {
+                let bb = s.byte_at(i)
+                if bb >= 48 && bb <= 57 {
+                    exp = exp * 10 + (bb - 48)
+                    i = i + 1
+                } else {
+                    break
+                }
+            }
+            let mut pow10 = 1.0
+            let mut k = 0
+            while k < exp {
+                pow10 = pow10 * 10.0
+                k = k + 1
+            }
+            if esign < 0 { value = value / pow10 }
+            else { value = value * pow10 }
+        }
+    }
+    return sign * value
+}
+
+// Step 3 cycle 72 — char_code(s, i): byte value at idx, or 0 on OOB.
+// Distinct from char_code_at (which returns -1 on OOB and wraps neg
+// idx). No recursion trap because hexa_str_char_code_at stays C-only
+// (cycle 52); byte_at → hexa_str_byte_at → hexa_str_char_code_at(C).
+pub fn rt_char_code(s: string, idx: int) -> int {
+    if idx < 0 { return 0 }
+    let n = byte_len(s)
+    if idx >= n { return 0 }
+    return s.byte_at(idx)
+}
+
+// Step 3 cycle 62 — single-arg format: replace first `{}` with the
+// stringified arg. C wrapper handles the `hexa_to_string(arg)`
+// polymorphic coercion before dispatch; the hexa fn always sees a
+// string. Returns fmt unchanged when no `{}` placeholder is present.
+pub fn rt_format(fmt: string, sarg: string) -> string {
+    let idx = rt_str_index_of(fmt, "{}")
+    if idx < 0 { return fmt }
+    let n = byte_len(fmt)
+    let before = fmt.substring(0, idx)
+    let after = fmt.substring(idx + 2, n)
+    return before + sarg + after
+}
+
+// Step 3 cycle 54 — byte-indexed first occurrence of `sub` in `s`.
+// Returns -1 when absent. Empty needle returns 0 (matches the C body's
+// `hxlcl_strstr(hay, "")` → `hay` semantic). Used by `s.index_of(sub)`.
+pub fn rt_str_index_of(s: string, sub: string) -> int {
+    let n = byte_len(s)
+    let m = byte_len(sub)
+    if m == 0 { return 0 }
+    let mut i = 0
+    while i + m <= n {
+        let mut k = 0
+        let mut matched = true
+        while k < m {
+            if s.byte_at(i + k) != sub.byte_at(k) {
+                matched = false
+                k = m
+            } else {
+                k = k + 1
+            }
+        }
+        if matched { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+// Step 3 cycle 53 — codepoint-indexed nth char (1-codepoint string,
+// 1..4 bytes). Negative target or OOB returns "". Inlines the same
+// UTF-8 bit-pattern table as rt_utf8_cpcount (cycle 51).
+pub fn rt_str_nth_char(s: string, target: int) -> string {
+    if target < 0 { return "" }
+    let sn = byte_len(s)
+    let mut i = 0
+    let mut k = 0
+    while i < sn {
+        let b = s.byte_at(i)
+        let mut cp = 1
+        if (b & 0x80) == 0 {
+            cp = 1
+        } else if (b & 0xE0) == 0xC0 {
+            cp = 2
+        } else if (b & 0xF0) == 0xE0 {
+            cp = 3
+        } else if (b & 0xF8) == 0xF0 {
+            cp = 4
+        }
+        if k == target {
+            let mut end = i + cp
+            if end > sn { end = sn }
+            return s.substring(i, end)
+        }
+        i = i + cp
+        k = k + 1
+    }
+    return ""
+}
+
+// Step 3 cycle 53 — codepoint-indexed substring [cs..ce). Walks UTF-8
+// to find the byte boundaries that correspond to the requested
+// codepoint indices. cs < 0 clamps to 0; ce ≤ cs returns "". Empty
+// result if cs is beyond the string.
+pub fn rt_str_char_substring(s: string, startv: int, endv: int) -> string {
+    let mut cs = startv
+    let ce = endv
+    if cs < 0 { cs = 0 }
+    if ce <= cs { return "" }
+    let sn = byte_len(s)
+    let mut i = 0
+    let mut k = 0
+    let mut bs = -1
+    let mut be = sn
+    while i < sn {
+        if k == cs && bs < 0 { bs = i }
+        if k == ce { be = i; break }
+        let b = s.byte_at(i)
+        let mut cp = 1
+        if (b & 0x80) == 0 {
+            cp = 1
+        } else if (b & 0xE0) == 0xC0 {
+            cp = 2
+        } else if (b & 0xF0) == 0xE0 {
+            cp = 3
+        } else if (b & 0xF8) == 0xF0 {
+            cp = 4
+        }
+        i = i + cp
+        k = k + 1
+    }
+    if bs < 0 { return "" }
+    if be > sn { be = sn }
+    if be <= bs { return "" }
+    return s.substring(bs, be)
+}
+
+// Step 3 cycle 52 — byte-indexed `.char_at(i)` with Python-style
+// negative-index wraparound. Returns "" on OOB.
+// (Note: hexa_str_char_code_at is intentionally NOT ported — see the
+// `s.byte_at(i)` → `hexa_str_byte_at` → `hexa_str_char_code_at`
+// recursion trap. Porting it would infinite-loop through the byte_at
+// builtin.)
+pub fn rt_str_char_at(s: string, idx: int) -> string {
+    let n = byte_len(s)
+    let mut i = idx
+    if i < 0 { i = i + n }
+    if i < 0 || i >= n { return "" }
+    return s.substring(i, i + 1)
+}
+
+// Step 3 cycle 51 — UTF-8 codepoint counter (helper for pad_left/right).
+// Same bit-pattern table as rt_str_chars but just counts (no substring
+// allocations).
+pub fn rt_utf8_cpcount(s: string) -> int {
+    let n = byte_len(s)
+    let mut count = 0
+    let mut i = 0
+    while i < n {
+        let b = s.byte_at(i)
+        let mut cp = 1
+        if (b & 0x80) == 0 {
+            cp = 1
+        } else if (b & 0xE0) == 0xC0 {
+            cp = 2
+        } else if (b & 0xF0) == 0xE0 {
+            cp = 3
+        } else if (b & 0xF8) == 0xF0 {
+            cp = 4
+        }
+        i = i + cp
+        count = count + 1
+    }
+    return count
+}
+
+// Step 3 cycle 51 — pad_left/right: ensure visible width (UTF-8
+// codepoints, not bytes) is ≥ `width` by prepending/appending spaces.
+// If already wide enough, returns the input unchanged. The C body uses
+// hexa_to_string first; that polymorphic coercion stays in the C wrapper
+// and the hexa fn always sees a string.
+pub fn rt_pad_left(s: string, width: int) -> string {
+    let cplen = rt_utf8_cpcount(s)
+    if cplen >= width { return s }
+    let pad = width - cplen
+    let mut bytes: [int] = []
+    let mut i = 0
+    while i < pad {
+        bytes = bytes.push(32)
+        i = i + 1
+    }
+    return bytes_to_str_raw(bytes) + s
+}
+
+pub fn rt_pad_right(s: string, width: int) -> string {
+    let cplen = rt_utf8_cpcount(s)
+    if cplen >= width { return s }
+    let pad = width - cplen
+    let mut bytes: [int] = []
+    let mut i = 0
+    while i < pad {
+        bytes = bytes.push(32)
+        i = i + 1
+    }
+    return s + bytes_to_str_raw(bytes)
+}
+
+// Step 3 cycle 50 — ASCII case conversion. Non-ASCII bytes pass through
+// unchanged (UTF-8 continuation bytes have high bit set, won't match
+// the 'a'-'z' or 'A'-'Z' range). Collect bytes into [int] then one-shot
+// `bytes_to_str_raw` so we avoid O(n²) string concat.
+pub fn rt_str_to_upper(s: string) -> string {
+    let n = byte_len(s)
+    let mut bytes: [int] = []
+    let mut i = 0
+    while i < n {
+        let b = s.byte_at(i)
+        if b >= 97 && b <= 122 {
+            bytes = bytes.push(b - 32)
+        } else {
+            bytes = bytes.push(b)
+        }
+        i = i + 1
+    }
+    return bytes_to_str_raw(bytes)
+}
+
+pub fn rt_str_to_lower(s: string) -> string {
+    let n = byte_len(s)
+    let mut bytes: [int] = []
+    let mut i = 0
+    while i < n {
+        let b = s.byte_at(i)
+        if b >= 65 && b <= 90 {
+            bytes = bytes.push(b + 32)
+        } else {
+            bytes = bytes.push(b)
+        }
+        i = i + 1
+    }
+    return bytes_to_str_raw(bytes)
+}
+
+// Step 3 cycle 49 — strip trailing whitespace (mirror of trim_start).
+pub fn rt_str_trim_end(s: string) -> string {
+    let n = byte_len(s)
+    let mut b_end = n
+    while b_end > 0 {
+        let b = s.byte_at(b_end - 1)
+        if b == 32 || b == 9 || b == 10 || b == 13 {
+            b_end = b_end - 1
+        } else {
+            break
+        }
+    }
+    return s.substring(0, b_end)
+}
+
+// Step 3 cycle 49 — strip both leading and trailing whitespace.
+// Could be implemented as trim_end(trim_start(s)) but inlining halves
+// the string allocations.
+pub fn rt_str_trim(s: string) -> string {
+    let n = byte_len(s)
+    let mut a = 0
+    while a < n {
+        let b = s.byte_at(a)
+        if b == 32 || b == 9 || b == 10 || b == 13 {
+            a = a + 1
+        } else {
+            break
+        }
+    }
+    let mut b_end = n
+    while b_end > a {
+        let b = s.byte_at(b_end - 1)
+        if b == 32 || b == 9 || b == 10 || b == 13 {
+            b_end = b_end - 1
+        } else {
+            break
+        }
+    }
+    return s.substring(a, b_end)
+}
+
+// Step 3 cycle 48 — strip leading whitespace (space, tab, LF, CR).
+// Replaces the C-direct rt_str_trim_start in self/runtime.c:2970 when
+// HEXA_HAS_HEXA_RT_STDLIB is defined. The C body uses strdup; this
+// uses the substring builtin (perf-31 single-shot alloc).
+pub fn rt_str_trim_start(s: string) -> string {
+    let n = byte_len(s)
+    let mut a = 0
+    while a < n {
+        let b = s.byte_at(a)
+        if b == 32 || b == 9 || b == 10 || b == 13 {
+            a = a + 1
+        } else {
+            break
+        }
+    }
+    return s.substring(a, n)
+}
+
+// Step 3 cycle 47 — UTF-8 codepoint walker. Returns an array of
+// 1-codepoint strings ("한글hi".chars().len() == 4, not 8). ASCII
+// behaviour is unchanged (codepoint == byte for ASCII). Mirrors the
+// C body in self/runtime_core.c:4072 (the `_hx_utf8_cp_len` table is
+// inlined here as bit-pattern checks).
+//   leading-byte 0xxxxxxx       → 1 byte
+//   leading-byte 110xxxxx       → 2 bytes
+//   leading-byte 1110xxxx       → 3 bytes
+//   leading-byte 11110xxx       → 4 bytes
+//   anything else (continuation) → 1 byte (defensive fallback)
+pub fn rt_str_chars(s: string) -> [string] {
+    let n = byte_len(s)
+    let mut out: [string] = []
+    let mut i = 0
+    while i < n {
+        let b = s.byte_at(i)
+        let mut cp = 1
+        if (b & 0x80) == 0 {
+            cp = 1
+        } else if (b & 0xE0) == 0xC0 {
+            cp = 2
+        } else if (b & 0xF0) == 0xE0 {
+            cp = 3
+        } else if (b & 0xF8) == 0xF0 {
+            cp = 4
+        }
+        let mut end = i + cp
+        if end > n { end = n }
+        out = out.push(s.substring(i, end))
+        i = end
+    }
+    return out
+}
+
+// Step 3 cycle 46 — byte-based string slice, [start, end) clamped.
+// Uses the substring builtin so the actual allocation is the perf-31
+// hexa_strbuf_alloc + memcpy single-shot path (better than the C body's
+// strndup + hexa_str_own_with_len which double-allocates).
+pub fn rt_str_slice(s: string, start: int, end: int) -> string {
+    let slen = byte_len(s)
+    let mut a = start
+    let mut b = end
+    if a < 0 { a = 0 }
+    if b > slen { b = slen }
+    if a > b { a = b }
+    return s.substring(a, b)
+}
+
+// Step 3 cycle 44 — string replace-all-occurrences. Walks `s` byte by
+// byte; on each position checks whether `old` matches and either emits
+// `new_s` (advancing by olen) or copies one byte (advancing by 1).
+// Empty `old` returns `s` unchanged (matches C body's no-op guard via
+// `oldlen == 0` would loop forever otherwise).
+pub fn rt_str_replace(s: string, old: string, new_s: string) -> string {
+    let slen = byte_len(s)
+    let olen = byte_len(old)
+    if olen == 0 { return s }
+    let mut out = ""
+    let mut i = 0
+    while i + olen <= slen {
+        let mut k = 0
+        let mut matched = true
+        while k < olen {
+            if s.byte_at(i + k) != old.byte_at(k) {
+                matched = false
+                k = olen
+            } else {
+                k = k + 1
+            }
+        }
+        if matched {
+            out = out + new_s
+            i = i + olen
+        } else {
+            out = out + s.substring(i, i + 1)
+            i = i + 1
+        }
+    }
+    if i < slen {
+        out = out + s.substring(i, slen)
+    }
+    return out
+}
+
+// Step 3 cycle 43 — string join, all-string fast path. C body uses
+// hexa_to_string() to coerce mixed-type elements; this hexa-source
+// variant skips that and assumes every element is already a string
+// (caller-side typing or dispatch guard).
+//
+// RUNTIME cycle 68 (2026-05-25) — O(n) byte-collect instead of chained
+// `out = out + sep + arr[i]`. The chained `+` form was O(n²): each `+`
+// reallocates and copies the entire accumulated string, so joining the
+// ~32K parts of atlas embedded.gen.hexa (#846 _extract_raw_blocks → 9.7 MB)
+// ballooned to 2.3 GB and appeared to hang at startup (smoke regression
+// after r16 enabled HEXA_HAS_HEXA_RT_STDLIB → hexa_str_join now dispatches
+// here for all-string arrays instead of the single-pass C body). Mirror the
+// rt_str_to_upper / rt_pad_* idiom: gather every byte once, one-shot
+// `bytes_to_str_raw` (single hexa_strbuf_alloc + single fill loop).
+pub fn rt_str_join_str(arr: [string], sep: string) -> string {
+    let n = len(arr)
+    if n == 0 { return "" }
+    let sl = byte_len(sep)
+    let mut bytes: [int] = []
+    let mut i = 0
+    while i < n {
+        if i > 0 {
+            let mut s = 0
+            while s < sl {
+                bytes = bytes.push(sep.byte_at(s))
+                s = s + 1
+            }
+        }
+        let el = arr[i]
+        let el_len = byte_len(el)
+        let mut j = 0
+        while j < el_len {
+            bytes = bytes.push(el.byte_at(j))
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return bytes_to_str_raw(bytes)
+}
+
+// Step 3 cycle 42 — string substring with length-style semantics.
+// C-side hexa_str_substr handles the void-len → slen-start defaulting
+// (HX_TAG check), and passes a concrete count int here. We do the
+// remaining clamps (start ∈ [0, slen], count ≥ 0, end ≤ slen) plus the
+// substring builtin call.
+pub fn rt_str_substr(s: string, start: int, count: int) -> string {
+    let slen = byte_len(s)
+    let mut a = start
+    if a < 0 { a = 0 }
+    if a > slen { a = slen }
+    let mut c = count
+    if c < 0 { c = 0 }
+    let mut end_idx = a + c
+    if end_idx > slen { end_idx = slen }
+    return s.substring(a, end_idx)
+}
+
+// Step 3 cycle 27 — count non-overlapping occurrences of substring `sub` in `s`.
+// Matches interpreter's greedy advance (hexa_full.hexa:14954-14973). Empty
+// pattern → 0 (avoids infinite loop on .strstr-equivalent semantics).
+pub fn rt_str_count_substr(s: string, sub: string) -> int {
+    let slen = byte_len(s)
+    let plen = byte_len(sub)
+    if plen == 0 { return 0 }
+    let mut cnt = 0
+    let mut i = 0
+    while i + plen <= slen {
+        let mut k = 0
+        let mut ok = true
+        while k < plen {
+            if s.byte_at(i + k) != sub.byte_at(k) {
+                ok = false
+                k = plen
+            } else {
+                k = k + 1
+            }
+        }
+        if ok {
+            cnt = cnt + 1
+            i = i + plen
+        } else {
+            i = i + 1
+        }
+    }
+    return cnt
+}

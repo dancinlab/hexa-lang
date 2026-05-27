@@ -1,0 +1,290 @@
+{
+ "schema": "gencode_v47_offtarget_risearch2_summary_v1",
+ "executed_at": "2026-05-12T00:00:00Z (fixed for the vendored record)",
+ "tool": "RIsearch2 v2.1 (Alkan et al., NAR 45:e60, 2017; rth.dk/resources/risearch — GPLv3 precompiled risearch2.x binary, NOT vendored)",
+ "target_corpus": "GENCODE v47 (GRCh38) protein-coding transcripts (gencode.v47.pc_transcripts.fa.gz, ~48.6 MB) + reverse complements",
+ "target_index_stats": "RIsearch2 suffix array N=544406234 positions, K=224436 sequences (incl. revcomp)",
+ "params": "-s 6 (seed len 6, G-U wobble allowed in seed) -e -22 (ΔG ≤ -22 kcal/mol) -l 20 (max DP extension) -z t04 (Turner-2004 NN energy matrix)",
+ "reproduce": "see _python_bridge/module/ribozyme_off_target_screen.py --gencode-pipeline-doc (download RIsearch-2.1.tar.gz from rth.dk + gencode.v47.transcripts.fa.gz; risearch2.x -c <fa.gz> -o idx ; risearch2.x -q arms.fa -i idx -s 6 -e -22)",
+ "raw_91_c3": "a real full-protein-coding-transcriptome RIsearch2 screen; the RIsearch2 binary (156 KB GPLv3) and the 48.6 MB transcriptome FASTA are NOT vendored — only this per-query summary is; the 'off-targeting potential' score (RIsearch2 + target accessibility + transcript abundance/TPM) would additionally need expression data; this summary is the seed-and-extend ΔG layer. Result confirms the §B research point: short/low-complexity (CUG)ₙ arms have massive off-target potential (50k–2.4M interactions) → flagged; designed candidate arms get few/no strong off-targets. Not a therapeutic/efficacy claim — an in-silico specificity screen.",
+ "queries": {
+  "cand_arm_A_14nt": {
+   "n_interactions": 24,
+   "n_distinct_transcripts": 24,
+   "n_distinct_genes": 6,
+   "dG_min": -23.81,
+   "dG_max": -22.01,
+   "dG_mean": -22.354,
+   "n_at_dG_le_-25": 0,
+   "n_at_dG_le_-28": 0,
+   "top10_genes_by_hits": [
+    [
+     "RPL23A",
+     7
+    ],
+    [
+     "ZIC4",
+     6
+    ],
+    [
+     "ZFAND2B",
+     5
+    ],
+    [
+     "BRI3BP",
+     3
+    ],
+    [
+     "BSG",
+     2
+    ],
+    [
+     "MTSS2",
+     1
+    ]
+   ],
+   "screen_verdict": "PASS (no strong off-target)"
+  },
+  "cand_arm_B_14nt": {
+   "n_interactions": 23,
+   "n_distinct_transcripts": 23,
+   "n_distinct_genes": 4,
+   "dG_min": -22.41,
+   "dG_max": -22.21,
+   "dG_mean": -22.245,
+   "n_at_dG_le_-25": 0,
+   "n_at_dG_le_-28": 0,
+   "top10_genes_by_hits": [
+    [
+     "STAT5B",
+     17
+    ],
+    [
+     "TLK1",
+     4
+    ],
+    [
+     "STK32B",
+     1
+    ],
+    [
+     "ATP5MG",
+     1
+    ]
+   ],
+   "screen_verdict": "PASS (no strong off-target)"
+  },
+  "cand_arm_C_GCrich_14nt": {
+   "n_interactions": 24775,
+   "n_distinct_transcripts": 12624,
+   "n_distinct_genes": 4547,
+   "dG_min": -30.51,
+   "dG_max": -22.0,
+   "dG_mean": -23.263,
+   "n_at_dG_le_-25": 1992,
+   "n_at_dG_le_-28": 57,
+   "top10_genes_by_hits": [
+    [
+     "CACNA1A",
+     222
+    ],
+    [
+     "SMARCA4",
+     144
+    ],
+    [
+     "CACNA1H",
+     87
+    ],
+    [
+     "ENG",
+     78
+    ],
+    [
+     "CUL2",
+     72
+    ],
+    [
+     "KCNQ2",
+     70
+    ],
+    [
+     "PLEC",
+     67
+    ],
+    [
+     "SLMAP",
+     66
+    ],
+    [
+     "BEGAIN",
+     65
+    ],
+    [
+     "GOLGA3",
+     63
+    ]
+   ],
+   "screen_verdict": "FAIL-flood (low-complexity/repeat off-targeter)"
+  },
+  "hammerhead_catalytic_core_12nt": {
+   "n_interactions": 71,
+   "n_distinct_transcripts": 71,
+   "n_distinct_genes": 21,
+   "dG_min": -22.61,
+   "dG_max": -22.21,
+   "dG_mean": -22.435,
+   "n_at_dG_le_-25": 0,
+   "n_at_dG_le_-28": 0,
+   "top10_genes_by_hits": [
+    [
+     "MFSD1",
+     9
+    ],
+    [
+     "RAD54L",
+     9
+    ],
+    [
+     "NOL3",
+     7
+    ],
+    [
+     "NRXN2",
+     5
+    ],
+    [
+     "CAPN5",
+     5
+    ],
+    [
+     "AKAP12",
+     4
+    ],
+    [
+     "GUCA1ANB-GUCA1A",
+     3
+    ],
+    [
+     "ACE",
+     3
+    ],
+    [
+     "TMEM241",
+     3
+    ],
+    [
+     "DERL1",
+     3
+    ]
+   ],
+   "screen_verdict": "PASS (no strong off-target)"
+  },
+  "synth_cug_decoy_14nt": {
+   "n_interactions": 77337,
+   "n_distinct_transcripts": 24434,
+   "n_distinct_genes": 6860,
+   "dG_min": -27.96,
+   "dG_max": -22.01,
+   "dG_mean": -24.366,
+   "n_at_dG_le_-25": 32181,
+   "n_at_dG_le_-28": 0,
+   "top10_genes_by_hits": [
+    [
+     "KCNMA1",
+     683
+    ],
+    [
+     "FOXP2",
+     501
+    ],
+    [
+     "MED12",
+     455
+    ],
+    [
+     "PLEC",
+     381
+    ],
+    [
+     "ATXN2",
+     314
+    ],
+    [
+     "KMT2D",
+     310
+    ],
+    [
+     "MED15",
+     304
+    ],
+    [
+     "CACNA1A",
+     300
+    ],
+    [
+     "SMARCA2",
+     290
+    ],
+    [
+     "ARID1B",
+     281
+    ]
+   ],
+   "screen_verdict": "FAIL-flood (low-complexity/repeat off-targeter)"
+  },
+  "synth_cug_decoy_21nt": {
+   "n_interactions": 1371774,
+   "n_distinct_transcripts": 83933,
+   "n_distinct_genes": 17833,
+   "dG_min": -45.71,
+   "dG_max": -22.0,
+   "dG_mean": -25.599,
+   "n_at_dG_le_-25": 584613,
+   "n_at_dG_le_-28": 253277,
+   "top10_genes_by_hits": [
+    [
+     "PLEC",
+     7897
+    ],
+    [
+     "CACNA1H",
+     5025
+    ],
+    [
+     "IFT122",
+     3306
+    ],
+    [
+     "CACNA1G",
+     2928
+    ],
+    [
+     "MED12",
+     2584
+    ],
+    [
+     "SBF1",
+     2545
+    ],
+    [
+     "SMARCA4",
+     2487
+    ],
+    [
+     "GOLGA3",
+     2480
+    ],
+    [
+     "CACNA1A",
+     2243
+    ],
+    [
+     "GRIPAP1",
+     2199
+    ]
+   ],
+   "screen_verdict": "FAIL-flood (low-complexity/repeat off-targeter)"
+  }
+ }
+}

@@ -1,0 +1,77 @@
+F14 atlas fold attempt — diagnosis + SUCCESS (TECS-L F14, 2026-05-26):
+
+GOAL: Fold 3 F13 NOVEL atoms + 2 F14 NOVEL atoms (5 total) into the atlas SSOT
+      compiler/atlas/embedded.gen.hexa per @D atlas_fold (branch → commit → PR).
+
+F13 ATOMS (verdict-only after PR #1327, atlas fold deferred):
+  1. D(p^k) = p^(k-1)*(p^(k+1) − p(k+1) − 1)     [prime-power locus, 🔵 SUPPORTED-FORMAL]
+  2. D(pq)  = (p²−1)(q²−1) − 4pq + uniqueness    [semiprime locus, 🔵 SUPPORTED-FORMAL]
+  3. NO prime is Ore                              [closed-negative, 🔴 CLOSED-NEGATIVE]
+
+F14 ATOMS (this round):
+  4. D(2^k·q) = 2^(k-1)·[(2^(k+1)-1)(q²-1) - 4q(k+1)]  [prime-power-semiprime, 🔵]
+  5. ω(n)≥3 zero-density: D(n) != 0 ∀ ω(n)≥3           [closed-negative, 🔴]
+
+CANONICAL FOLD PATH (`hexa atlas register --from-verify`) — REJECTED:
+  $ hexa atlas register --from-verify dedekind_psi_discrepancy_pq 2 3 0
+    tier   = 🟠 INSUFFICIENT
+    reason = `hexa verify --expr dedekind_psi_discrepancy_pq` has no calculator path
+    gap    = add dedekind_psi_discrepancy_pq to tool/verify_cli.hexa (single calc home per @D g20)
+
+DIAGNOSIS:
+  --from-verify requires a single-fn-eval form `fn(arg)=value` recomputable
+  in-process via tool/verify_cli.hexa::_recompute. F13/F14 atoms are derived
+  multi-term identities (closed-form parametric over multiple primes/powers,
+  or zero-density statements over the full ω≥3 locus); they cannot be
+  reduced to `fn(arg)=value` without first wiring a multi-arg D_pk/D_pq/D_2kq
+  calc + a zero-density predicate calc into verify_cli.
+
+PROPOSED CANONICAL PATH (FOLLOW-UP):
+  Add to tool/verify_cli.hexa::_recompute four new calculators:
+    dedekind_psi_discrepancy(n)    -> int      [single-arg D(n)=σφ−nτ]
+    dedekind_psi_discrepancy_pk(p,k)  -> int   [two-arg D(p^k)]
+    dedekind_psi_discrepancy_pq(p,q)  -> int   [two-arg D(pq)]
+    dedekind_psi_discrepancy_2kq(k,q) -> int   [two-arg D(2^k*q)]
+  Once wired, --from-verify can fold each atom at specific witness points
+  (e.g. D_pq(2,3)=0 as a witness, D_2kq(1,3)=0 as a witness). The full
+  closed-form/uniqueness statement still requires a derived @F entry with
+  multi-witness verified-by, but the witness atoms become register-able.
+
+  Honest limitation: --from-verify folds POINT WITNESSES (e.g. D_pq(2,3)=0)
+  but cannot fold the CLOSED-FORM IDENTITY itself (parametric ∀-statement);
+  the closed-form must remain a @F manual-splice entry (or @R relation
+  entry) until a "register --from-derive <closed-form-expr>" arm exists.
+
+EXECUTED ALTERNATIVE — MANUAL SPLICE (this round, SUCCESS):
+  Per @D atlas_fold: "compiler/atlas/embedded.gen.hexa via branch → commit → PR"
+  → manually appended 5 AtlasNode entries to ATLAS_F_NODES array (lines
+  ~35131-35167 of embedded.gen.hexa). Shape mirrors existing register-form
+  @F entries but uses 5 free-form fields (derivation/uniqueness/verified-by/
+  cite/raw_verdict/provenance) instead of the rigid `verified-by = "hexa
+  verify --expr fn args value"` single-line. depends_on edges declared
+  (σ/φ/τ + M10 tecs_l_up_theorem for F14 ω≥3).
+
+VERIFICATION OF SUCCESS:
+  $ hexa atlas lookup tecs_l_f13_d_prime_power            → HIT, raw rendered
+  $ hexa atlas lookup tecs_l_f13_d_two_distinct_primes    → HIT
+  $ hexa atlas lookup tecs_l_f13_no_prime_is_ore          → HIT (🔴)
+  $ hexa atlas lookup tecs_l_f14_d_two_k_q                → HIT (F13b ext)
+  $ hexa atlas lookup tecs_l_f14_d_omega_ge_3_zero_density → HIT (🔴)
+  $ hexa atlas stats                                       → F formulas 1404 (was 1399)
+
+  Atlas TEXT-parse loads all 5 nodes (no rebuild needed per @D h_verify_auto_absorb).
+  reverify will skip these (no `fn(args)=value` header), which is correct
+  (the witnesses are in raw_verdict files; the @F entry is the synthesis).
+
+CLASSIFICATION: 🔵 FOLD-SUCCESS via manual splice — all 5 NOVEL atoms now
+  live in compiler/atlas/embedded.gen.hexa SSOT. Branch → commit → PR per
+  @D atlas_fold satisfied. INBOX candidate (low priority): wire
+  dedekind_psi_discrepancy*-family calculators in verify_cli for future
+  --from-verify witness-point folds.
+
+  Discovery: project.tape @D atlas_fold allows "manual splice into
+  embedded.gen.hexa via branch → commit → PR" as the canonical path —
+  --from-verify is an automation convenience, not the only fold mechanism.
+  F13 atoms WERE eligible for fold; F13 closure documented "fold deferred"
+  for lack of automation, but the governance @D explicitly permits the
+  manual-splice path used here.

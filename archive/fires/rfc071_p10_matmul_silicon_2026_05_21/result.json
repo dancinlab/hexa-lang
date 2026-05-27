@@ -1,0 +1,105 @@
+{
+  "cycle": "N122-RFC071-P10-source-to-silicon-matmul-retry",
+  "date": "2026-05-22",
+  "host": "darwin-arm64 (compile) -> ubu-2 RTX 5070 driver 580.126.09 + ptxas CUDA 12.0 (fire)",
+  "main_head": "7bc63345",
+  "prereqs_main_head": {
+    "n86_nvptx_target_recognizers": "PRESENT (3 fns + dispatcher at compiler/codegen/nvptx_target.hexa:4447,4463,4479,4500-4502 from commit 7f3448aa)",
+    "n100_hir_to_mir_synthesis": "PRESENT (gpu_matmul intercept at compiler/lower/hir_to_mir.hexa:1138-1169 from commit f2770d6e)",
+    "n100_bind_registration": "PRESENT (compiler/check/bind.hexa:1104,1108 — gpu_matmul/_NT_a/_NT_b)",
+    "n100_fixture": "PRESENT (compiler/codegen/nvptx_p10_matmul_test.hexa, 2761 B)"
+  },
+  "falsifier": "F-RFC071-NVPTX-MATMUL-SOURCE-TO-SILICON-NUMERIC-EQ",
+  "verdict": "FAIL — N86 codegen has 3 distinct PTX-emit bugs blocking source-to-silicon closure",
+  "verification_passes": {
+    "driver_build": "PASS (hexa build self/main.hexa -> /tmp/hexa_n122_driver)",
+    "ptx_emit": "PASS (driver wrote 4843 B sm_80 PTX, 4845 B sm_120 PTX, phase=P3-PATH-B)",
+    "ptx_ascii": "PASS (pure ASCII)",
+    "wmma_substrings_emitted": "PARTIAL (3/5 found, 2/5 wrong-form — see ptx_substring_audit)",
+    "ptxas_accept_original_emit": "FAIL (line 101 wmma.mma 'Unexpected instruction types', line 110 wmma.store.d 'Arguments mismatch')",
+    "driver_jit_original_emit": "FAIL (cuModuleLoadDataEx = 218 PTX JIT compilation failed)",
+    "ptxas_accept_handfixed": "PASS after 3 surgical edits (.shared->.global on load/store, mma type spec, store operand order) — 32 regs, 400 B cmem[0]",
+    "driver_jit_handfixed": "PASS",
+    "kernel_launch_handfixed": "PASS (cuLaunchKernel + cuCtxSynchronize OK)",
+    "numeric_equivalence_handfixed": "FAIL (max_abs=13.60, max_rel=1479; all 4096 cells nonzero but wrong values — suggests additional addressing/tiling bug in N86 emit)"
+  },
+  "ptx_substring_audit": {
+    "expected_5": [
+      ".visible .entry matmul_kernel",
+      "wmma.load.a.sync.aligned.m16n16k16.row.f16",
+      "wmma.load.b.sync.aligned.m16n16k16.col.f16",
+      "wmma.mma.sync.aligned.row.col.m16n16k16.f32.f16.f16.f32",
+      "wmma.store.d.sync.aligned"
+    ],
+    "found_as_specified": [".visible .entry matmul_kernel", "wmma.mma.sync.aligned.row.col.m16n16k16.f32.f16.f16.f32", "wmma.store.d.sync.aligned"],
+    "found_with_wrong_modifier_order": ["wmma.load.a.sync.aligned.row.m16n16k16.f16.shared (token order .row before .m16n16k16 + .shared state-space at end is wrong-shape vs expected and ptx-invalid for global ptrs)", "wmma.load.b.sync.aligned.col.m16n16k16.f16.shared (same)"],
+    "ratio_strict_substring": "3/5",
+    "ratio_concept_present": "5/5"
+  },
+  "n86_emit_bugs": {
+    "bug_1_wmma_load_state_space": {
+      "emitted": "wmma.load.a.sync.aligned.row.m16n16k16.f16.shared {regs}, [%rdN], %rN",
+      "expected": "wmma.load.a.sync.aligned.row.m16n16k16.global.f16 {regs}, [%rdN], %rN",
+      "issue": "(a) state-space modifier must precede element-type, (b) state-space is .global (pointer is loaded from .param.u64 -> generic), not .shared",
+      "ptxas_diag": "(no diag emitted; ptxas accepted .shared but downstream wmma.mma rejects)"
+    },
+    "bug_2_wmma_mma_type_spec": {
+      "emitted": "wmma.mma.sync.aligned.row.col.m16n16k16.f32.f16.f16.f32 {D8}, {A8}, {B8}, {C8}",
+      "expected_either": ["wmma.mma.sync.aligned.row.col.m16n16k16.f32.f32 {D8}, {A8}, {B8}, {C8}  (short form, f16 a/b implicit via .b32 packing)", "wmma.mma.sync.aligned.row.col.m16n16k16.f32.f16.f16.f32 {D4}, {A4}, {B4}, {C4}  (long form requires HALF-sized fragments per PTX 7.0 spec; only valid for the alternative 4-reg form)"],
+      "issue": "Long form .f32.f16.f16.f32 is reserved for the 4-reg fragment layout (bf16/etc). With 8 .b32 A/B + 8 .f32 D/C the canonical mnemonic is the short form .f32.f32. Every other f16 m16n16k16 oracle PTX in inbox/fires/ uses .f32.f32. The .f32.bf16.bf16.f32 form is the long form for bf16; .f16.f16 is not valid as input-type spec.",
+      "ptxas_diag": "Unexpected instruction types specified for 'wmma.mma'"
+    },
+    "bug_3_wmma_store_d": {
+      "emitted": "wmma.store.d.sync.aligned.row.m16n16k16.f32.shared {regs}, [%rdN], %rN",
+      "expected": "wmma.store.d.sync.aligned.row.m16n16k16.global.f32 [%rdN], {regs}, %rN",
+      "issue": "(a) state-space must precede element-type (same as bug 1), (b) state-space is .global not .shared, (c) operand order: address first then fragment, not fragment then address",
+      "ptxas_diag": "Arguments mismatch for instruction 'wmma.store.d'"
+    },
+    "bug_4_likely_addressing_or_tiling": {
+      "evidence": "hand-fixed PTX (3 surgical fixes above) compiles + runs but max_abs=13.6 / max_rel=1479; all 4096 cells nonzero but values don't match CPU reference. Pre-transposing B to col-major in the host also fails (max_abs=12.7).",
+      "suspect": "Address computation for A/B per-tile likely correct (single warp per (M/16,N/16) block, K-loop kk += 16 with stride %r5/%r6) but the .col B-load expects column-major B in memory while the test fixture treats B as row-major. Other suspects: stride encoding mismatch (param %r6 may need byte-stride not element-stride), or wmma fragment-layout convention mismatch between row-major A load + col-major B load.",
+      "ptxas_diag": "n/a (PTX compiles after bugs 1-3 fix, but kernel produces incorrect output)"
+    }
+  },
+  "ptx_metrics_handfixed_sm80": {
+    "registers_used": 32,
+    "cmem0_bytes": 400,
+    "stack_frame_bytes": 0,
+    "spill_stores_bytes": 0,
+    "spill_loads_bytes": 0
+  },
+  "numeric_result_handfixed": {
+    "M": 64, "N": 64, "K": 64,
+    "max_abs": 13.59821,
+    "max_rel": 1479.357,
+    "byte_mismatch": 4096,
+    "byte_mismatch_total": 4096,
+    "c_nonzero_cells": 4096,
+    "first_nonzero_idx": 0,
+    "ref_sample_first_8": [-1.980, 4.992, -2.512, -2.866, -1.160, -1.588, 0.901, -4.402],
+    "got_sample_first_8": [-0.026, 3.140, -1.303, -0.069, 0.244, -1.654, 0.752, 4.022],
+    "tolerance_4_ulp": "FAIL (~4e-6 absolute expected; observed 13.60)"
+  },
+  "source_to_silicon_e2e_closure_status": "STILL BLOCKED — driver-emitted PTX is rejected by ptxas; hand-fix of 3 mnemonic-shape bugs gets the kernel to launch but reveals a 4th addressing/layout bug. Source-to-silicon path is wired (HIR -> MIR -> NVPTX dispatcher -> 5/5 expected WMMA concepts emitted) but the emit STRINGS themselves are malformed against PTX 7.0 grammar.",
+  "honest_scope_per_g3": {
+    "fired": ["driver rebuild", "PTX emit sm_80 + sm_120", "ptxas sm_80 (original) -> FAIL captured", "driver-JIT (original) -> FAIL captured", "hand-fix 3 mnemonic bugs", "ptxas sm_80 (hand-fixed) -> PASS captured", "driver-JIT (hand-fixed) -> PASS captured", "cuLaunchKernel + cuMemcpyDtoH (hand-fixed) -> PASS captured", "numeric compare -> FAIL captured", "B-transpose variant -> FAIL captured"],
+    "compiler_source_untouched": "TRUE per task constraint (DO NOT touch compiler source)",
+    "scope_compliance": "TRUE per task brief honest-scope clause 'If WMMA emit has bug (shape mismatch), document precisely'",
+    "not_claiming": "Source-to-silicon matmul E2E CLOSED — counter-falsified by ptxas + numeric. Both N86 (PTX-shape emit) AND a follow-up tiling/layout bug must be fixed before re-fire."
+  },
+  "artifacts": {
+    "matmul_kernel.sm_80.ptx": "original main-HEAD-emitted PTX, ptxas rejects (3 bugs)",
+    "matmul_kernel.sm_120.ptx": "same emitter sm_120 target (same body shape)",
+    "matmul_kernel.sm_80.handfixed.ptx": "3 surgical edits applied (state-space, mma type-spec, store operand order); ptxas accepts but numeric FAILs",
+    "host_matmul.c": "silicon-fire harness (CUDA driver API, FP16-input FP32-acc, 4-ULP gate)",
+    "fire.log": "combined: original PTX (ptxas FAIL) + hand-fixed PTX (silicon-run numeric FAIL)",
+    "result.json": "this file",
+    "notes.md": "human-readable cycle notes"
+  },
+  "remediation_next_cycle": {
+    "bug_1_3_fix_location": "compiler/codegen/nvptx_target.hexa — _nvptx_emit_matmul_body and related helpers (lines around 4400-4520). Change mnemonic emission to: load = 'wmma.load.a.sync.aligned.row.m16n16k16.global.f16', load b = 'wmma.load.b.sync.aligned.col.m16n16k16.global.f16', store = 'wmma.store.d.sync.aligned.row.m16n16k16.global.f32 [addr], {regs}, stride'",
+    "bug_2_fix": "Same file — use short form 'wmma.mma.sync.aligned.row.col.m16n16k16.f32.f32' (the standard for the 8-b32-A + 8-b32-B + 8-f32-D + 8-f32-C layout). The .f32.f16.f16.f32 long form requires the 4-reg fragment layout (different codegen).",
+    "bug_4_fix": "Address/stride computation in K-loop. Audit row-major A vs col-major B layout assumption against test fixture's layout; consider switching B load to .row and accepting row-major B (the canonical layout for nn.Linear weight typically). Also audit whether stride argument is element-count or byte-count for wmma.load (it is element-count per PTX 7.0 spec).",
+    "oracle_reference": "inbox/fires/rfc067_p4_2026_05_20/wmma_16x16.ptx — 67-line working f16 m16n16k16 oracle, ptxas-accepted, single-tile (M=N=K=16). Use as the byte-eq target for N86 emit."
+  }
+}

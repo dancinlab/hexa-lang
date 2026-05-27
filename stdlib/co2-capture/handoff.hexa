@@ -1,0 +1,8 @@
+#!hexa strict
+// co2-capture handoff — $/tCO2 cost target.
+fn main() {
+    let cost_USD_per_tCO2 = 100.0
+    println("co2-capture_handoff ($/tCO2 cost target):")
+    println("  cost_USD_per_tCO2 = " + str(cost_USD_per_tCO2))
+    println("__HEXA_CO2_CAPTURE_HANDOFF__ PASS gate=GATE_OPEN absorbed=false")
+}

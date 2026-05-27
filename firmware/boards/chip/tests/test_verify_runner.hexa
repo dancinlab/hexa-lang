@@ -1,0 +1,31 @@
+#!hexa strict
+// tests/test_verify_runner.hexa — verify/cli.hexa "all" exits 0.
+//
+// Mirrors hexa-sscb/tests/test_acceptance.py::test_a8_python_verify_10_of_10
+// — invokes the unified CLI and asserts every registered check passes.
+
+fn main() {
+    let root = exec("pwd").trim()
+    let cli = root + "/verify/cli.hexa"
+    if exec("[ -f \"" + cli + "\" ] && echo y || echo n").trim() != "y" {
+        println("[test_verify_runner] FAIL — verify/cli.hexa missing")
+        exit(1)
+    }
+    let cmd = "HEXA_CHIP_ROOT=\"" + root + "\" hexa run \"" + cli + "\" --quiet >/dev/null 2>&1; echo $?"
+    let rc = exec(cmd).trim()
+    if rc != "0" {
+        println("[test_verify_runner] FAIL — verify/cli.hexa exit " + rc)
+        exit(1)
+    }
+    println("  [PASS] verify/cli.hexa --quiet exits 0 (every registered check passed)")
+
+    // also verify per-verb sandbox runner
+    let runner = root + "/verify/verb_runner.hexa"
+    let cmd2 = "HEXA_CHIP_ROOT=\"" + root + "\" hexa run \"" + runner + "\" --quiet >/dev/null 2>&1; echo $?"
+    let rc2 = exec(cmd2).trim()
+    if rc2 != "0" {
+        println("[test_verify_runner] FAIL — verify/verb_runner.hexa exit " + rc2)
+        exit(1)
+    }
+    println("  [PASS] verify/verb_runner.hexa --quiet exits 0 (29 sandboxes pass)")
+}

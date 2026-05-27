@@ -1,0 +1,1131 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/flame/flame_nn_test.hexa — flame Phase 2-A selftest
+//
+// Falsifiers (RFC 043 §Verification + g_flame_api_fixed):
+//   F-RFC043-LAYER-EQ-LINEAR-FWD   nn_linear_fwd y[i,j] ≡ closed sum
+//                                  Σ_k x[i,k]·W[k,j] + b[j]  (byte-eq)
+//   F-RFC043-LAYER-EQ-LINEAR-BWD   nn_linear_bwd {dW, dx, db} ≡ closed
+//                                  analytic vjp  (byte-eq)
+//   F-RFC043-LAYER-EQ-RMSNORM-FWD  nn_rmsnorm_fwd y_i ≡ c3_rmsnorm_fwd
+//                                  algebra (g_i·x_i/sqrt(mean(x²)+ε))
+//                                  (byte-eq within same sqrt impl)
+//   F-RFC043-LAYER-EQ-RMSNORM-BWD  nn_rmsnorm_bwd {dx, dg} ≡
+//                                  c3_rmsnorm_bwd closed vjp  (byte-eq)
+//
+// Each falsifier compares the flame wrapper to an INDEPENDENT in-file
+// closed-form reference computation — proving the wrapper exactly
+// implements the analytic formula. Cross-link to anima d_train3_lib.hexa
+// c3_matvec / c3_rmsnorm_fwd / c3_rmsnorm_bwd: the analytic forms are
+// IDENTICAL — flame's wrapper ≡ in-file ref ≡ c3_* (transitive).
+//
+// g_blue_closed_mandate: F-RFC043-LAYER-EQ is the connection-point closed
+// check between flame's nn surface and the verified RFC-040 oracle —
+// must be byte-equal (or RFC-040 measured fp-tol where reduction differs).
+// ════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/nn_lib"
+
+fn nn_abs(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+// ─── reference impls (independent of nn_lib wrappers) ──────────────────
+
+// Reference linear fwd — `ikj` accumulation matching farr_matmul exactly
+// (self/runtime.c hexa_farr_matmul: `for i { for k { for j { C[i,j] +=
+// A[i,k]*B[k,j] } } }`). Different reduction order ⇒ different last-bit
+// per fp-non-associativity (RFC 040 TOL_MATMUL caveat) — so the ref MUST
+// match the wrapper's order to anchor a byte-equal check.
+fn ref_linear_fwd(x: int, W: int, b: int, B: int, D: int, C: int) -> int {
+    let y = t_zeros(B * C)
+    // y starts zero — matmul accumulates into it in ikj order.
+    let mut i = 0
+    while i < B {
+        let mut k = 0
+        while k < D {
+            let a_ik = t_get(x, i * D + k)
+            let mut j = 0
+            while j < C {
+                let cur = t_get(y, i * C + j)
+                t_set(y, i * C + j, cur + a_ik * t_get(W, k * C + j))
+                j = j + 1
+            }
+            k = k + 1
+        }
+        // bias broadcast — same single-pass order as nn_linear_fwd.
+        let mut jj = 0
+        while jj < C {
+            let cur = t_get(y, i * C + jj)
+            t_set(y, i * C + jj, cur + t_get(b, jj))
+            jj = jj + 1
+        }
+        i = i + 1
+    }
+    return y
+}
+
+fn ref_linear_bwd(x: int, W: int, dy: int,
+                  dW_out: int, dx_out: int, db_out: int,
+                  B: int, D: int, C: int) {
+    let mut d = 0
+    while d < D {
+        let mut c = 0
+        while c < C {
+            let mut acc = 0.0
+            let mut bi = 0
+            while bi < B {
+                acc = acc + t_get(x, bi * D + d) * t_get(dy, bi * C + c)
+                bi = bi + 1
+            }
+            t_set(dW_out, d * C + c, acc)
+            c = c + 1
+        }
+        d = d + 1
+    }
+    let mut bi2 = 0
+    while bi2 < B {
+        let mut d2 = 0
+        while d2 < D {
+            let mut acc2 = 0.0
+            let mut c2 = 0
+            while c2 < C {
+                acc2 = acc2 + t_get(dy, bi2 * C + c2) * t_get(W, d2 * C + c2)
+                c2 = c2 + 1
+            }
+            t_set(dx_out, bi2 * D + d2, acc2)
+            d2 = d2 + 1
+        }
+        bi2 = bi2 + 1
+    }
+    let mut j = 0
+    while j < C {
+        let mut acc3 = 0.0
+        let mut i3 = 0
+        while i3 < B {
+            acc3 = acc3 + t_get(dy, i3 * C + j)
+            i3 = i3 + 1
+        }
+        t_set(db_out, j, acc3)
+        j = j + 1
+    }
+}
+
+// Reference RMSNorm fwd — c3_rmsnorm_fwd algebra (same eps + sqrt path).
+fn ref_rmsnorm_fwd(x: int, g: int,
+                   y_out: int, xn_out: int, inv_out: int, d: int) {
+    let eps = 0.000001
+    let mut ms = 0.0
+    let mut i = 0
+    while i < d {
+        let xi = t_get(x, i)
+        ms = ms + xi * xi
+        i = i + 1
+    }
+    ms = ms / to_float(d)
+    let inv = 1.0 / sqrt(ms + eps)
+    t_set(inv_out, 0, inv)
+    let mut j = 0
+    while j < d {
+        let xni = t_get(x, j) * inv
+        t_set(xn_out, j, xni)
+        t_set(y_out, j, t_get(g, j) * xni)
+        j = j + 1
+    }
+}
+
+// ─── Attention core reference (independent loops; d5_attn_fwd/bwd algebra) ──
+fn _ref_softmax_row(s: int, p_out: int, base: int, L: int) {
+    let mut m = t_get(s, 0)
+    let mut i = 1
+    while i < L {
+        if t_get(s, i) > m { m = t_get(s, i) }
+        i = i + 1
+    }
+    let mut tot = 0.0
+    let mut i2 = 0
+    while i2 < L {
+        let e = exp(t_get(s, i2) - m)
+        t_set(p_out, base + i2, e)
+        tot = tot + e
+        i2 = i2 + 1
+    }
+    let mut i3 = 0
+    while i3 < L {
+        let cur = t_get(p_out, base + i3)
+        t_set(p_out, base + i3, cur / tot)
+        i3 = i3 + 1
+    }
+}
+
+fn ref_attn_core_fwd(Q: int, K: int, V: int,
+                     P_out: int, ctx_out: int,
+                     T: int, nh: int, nkv: int, hd: int) {
+    let n_rep = nh / nkv
+    let d = nh * hd
+    let scale = 1.0 / sqrt(to_float(hd))
+    let srow = t_zeros(T)
+    let mut hh = 0
+    while hh < nh {
+        let kvh = hh / n_rep
+        let mut i = 0
+        while i < T {
+            let L = i + 1
+            let mut j = 0
+            while j < L {
+                let mut dot = 0.0
+                let mut c = 0
+                while c < hd {
+                    dot = dot + t_get(Q, (i * nh + hh) * hd + c)
+                              * t_get(K, (j * nkv + kvh) * hd + c)
+                    c = c + 1
+                }
+                t_set(srow, j, dot * scale)
+                j = j + 1
+            }
+            _ref_softmax_row(srow, P_out, (hh * T + i) * T, L)
+            let mut c2 = 0
+            while c2 < hd {
+                let mut acc = 0.0
+                let mut jj = 0
+                while jj < L {
+                    acc = acc + t_get(P_out, (hh * T + i) * T + jj)
+                              * t_get(V, (jj * nkv + kvh) * hd + c2)
+                    jj = jj + 1
+                }
+                t_set(ctx_out, i * d + hh * hd + c2, acc)
+                c2 = c2 + 1
+            }
+            i = i + 1
+        }
+        hh = hh + 1
+    }
+    let _ = t_free(srow)
+}
+
+fn ref_attn_core_bwd(Q: int, K: int, V: int, P: int, dctx: int,
+                     dQ_out: int, dK_out: int, dV_out: int,
+                     T: int, nh: int, nkv: int, hd: int) {
+    let n_rep = nh / nkv
+    let d = nh * hd
+    let scale = 1.0 / sqrt(to_float(hd))
+    let dP_row = t_zeros(T)
+    let mut hh = 0
+    while hh < nh {
+        let kvh = hh / n_rep
+        let mut i = 0
+        while i < T {
+            let L = i + 1
+            let mut j = 0
+            while j < L {
+                let mut acc = 0.0
+                let mut c = 0
+                while c < hd {
+                    acc = acc + t_get(dctx, i * d + hh * hd + c)
+                              * t_get(V, (j * nkv + kvh) * hd + c)
+                    c = c + 1
+                }
+                t_set(dP_row, j, acc)
+                j = j + 1
+            }
+            let mut sdot = 0.0
+            let mut j2 = 0
+            while j2 < L {
+                sdot = sdot + t_get(P, (hh * T + i) * T + j2) * t_get(dP_row, j2)
+                j2 = j2 + 1
+            }
+            let mut j3 = 0
+            while j3 < L {
+                let pij = t_get(P, (hh * T + i) * T + j3)
+                let mut c = 0
+                while c < hd {
+                    let dv_idx = (j3 * nkv + kvh) * hd + c
+                    let cur = t_get(dV_out, dv_idx)
+                    t_set(dV_out, dv_idx, cur + pij * t_get(dctx, i * d + hh * hd + c))
+                    c = c + 1
+                }
+                j3 = j3 + 1
+            }
+            let mut j4 = 0
+            while j4 < L {
+                let dS = t_get(P, (hh * T + i) * T + j4) * (t_get(dP_row, j4) - sdot) * scale
+                let mut c2 = 0
+                while c2 < hd {
+                    let dq_idx = (i * nh + hh) * hd + c2
+                    let dk_idx = (j4 * nkv + kvh) * hd + c2
+                    let cur_q = t_get(dQ_out, dq_idx)
+                    t_set(dQ_out, dq_idx, cur_q + dS * t_get(K, (j4 * nkv + kvh) * hd + c2))
+                    let cur_k = t_get(dK_out, dk_idx)
+                    t_set(dK_out, dk_idx, cur_k + dS * t_get(Q, (i * nh + hh) * hd + c2))
+                    c2 = c2 + 1
+                }
+                j4 = j4 + 1
+            }
+            i = i + 1
+        }
+        hh = hh + 1
+    }
+    let _ = t_free(dP_row)
+}
+
+// ─── SwiGLU reference (independent loops; c3_swiglu_fwd/bwd algebra) ──
+fn _ref_sigmoid(x: float) -> float { return 1.0 / (1.0 + exp(0.0 - x)) }
+fn _ref_silu(x: float) -> float { return x * _ref_sigmoid(x) }
+fn _ref_silu_grad(x: float) -> float {
+    let s = _ref_sigmoid(x)
+    return s + x * s * (1.0 - s)
+}
+
+fn ref_swiglu_fwd(r: int, Wg: int, Wu: int, Wd: int,
+                  a_out: int, b_out: int, s_out: int, o_out: int,
+                  d: int, h: int) {
+    // a, b via ikj-order matvec to match farr_matmul.
+    let mut k = 0
+    while k < h {
+        let mut acc_a = 0.0
+        let mut acc_b = 0.0
+        let mut j = 0
+        while j < d {
+            let rj = t_get(r, j)
+            acc_a = acc_a + t_get(Wg, k * d + j) * rj
+            acc_b = acc_b + t_get(Wu, k * d + j) * rj
+            j = j + 1
+        }
+        t_set(a_out, k, acc_a)
+        t_set(b_out, k, acc_b)
+        t_set(s_out, k, _ref_silu(acc_a) * acc_b)
+        k = k + 1
+    }
+    // o = Wd · s   (ikj)
+    let mut i = 0
+    while i < d {
+        let mut acc_o = 0.0
+        let mut kk = 0
+        while kk < h {
+            acc_o = acc_o + t_get(Wd, i * h + kk) * t_get(s_out, kk)
+            kk = kk + 1
+        }
+        t_set(o_out, i, acc_o)
+        i = i + 1
+    }
+}
+
+fn ref_swiglu_bwd(r: int, Wg: int, Wu: int, Wd: int,
+                  a: int, b: int, s: int, dout: int,
+                  dr_out: int, dWg_out: int, dWu_out: int, dWd_out: int,
+                  d: int, h: int) {
+    let mut di = 0
+    while di < d {
+        let do_i = t_get(dout, di)
+        let mut hi = 0
+        while hi < h {
+            t_set(dWd_out, di * h + hi, do_i * t_get(s, hi))
+            hi = hi + 1
+        }
+        di = di + 1
+    }
+    let ds = t_zeros(h)
+    let mut k = 0
+    while k < h {
+        let mut acc = 0.0
+        let mut i = 0
+        while i < d {
+            acc = acc + t_get(Wd, i * h + k) * t_get(dout, i)
+            i = i + 1
+        }
+        t_set(ds, k, acc)
+        k = k + 1
+    }
+    let da = t_zeros(h)
+    let db = t_zeros(h)
+    let mut k2 = 0
+    while k2 < h {
+        let ak = t_get(a, k2)
+        let dsk = t_get(ds, k2)
+        t_set(da, k2, dsk * t_get(b, k2) * _ref_silu_grad(ak))
+        t_set(db, k2, dsk * _ref_silu(ak))
+        k2 = k2 + 1
+    }
+    let mut hi3 = 0
+    while hi3 < h {
+        let da_h = t_get(da, hi3)
+        let db_h = t_get(db, hi3)
+        let mut di3 = 0
+        while di3 < d {
+            let rj = t_get(r, di3)
+            t_set(dWg_out, hi3 * d + di3, da_h * rj)
+            t_set(dWu_out, hi3 * d + di3, db_h * rj)
+            di3 = di3 + 1
+        }
+        hi3 = hi3 + 1
+    }
+    let mut di5 = 0
+    while di5 < d {
+        let mut acc2 = 0.0
+        let mut hi5 = 0
+        while hi5 < h {
+            acc2 = acc2
+                + t_get(Wg, hi5 * d + di5) * t_get(da, hi5)
+                + t_get(Wu, hi5 * d + di5) * t_get(db, hi5)
+            hi5 = hi5 + 1
+        }
+        t_set(dr_out, di5, acc2)
+        di5 = di5 + 1
+    }
+    let _ = t_free(ds); let _ = t_free(da); let _ = t_free(db)
+}
+
+// Reference RoPE tables — same builtin sin/cos path as wrapper.
+fn ref_rope_build_tables(T: int, hd: int, cos_out: int, sin_out: int) {
+    let half = hd / 2
+    let base = 10000.0
+    let lnb = ln(base)
+    let mut p = 0
+    while p < T {
+        let mut c = 0
+        while c < hd {
+            let fi = if c < half { c } else { c - half }
+            let ex = (to_float(2 * fi) / to_float(hd)) * lnb
+            let invf = 1.0 / exp(ex)
+            let ang = to_float(p) * invf
+            t_set(cos_out, p * hd + c, cos(ang))
+            t_set(sin_out, p * hd + c, sin(ang))
+            c = c + 1
+        }
+        p = p + 1
+    }
+}
+
+fn ref_rope_apply_fwd(q: int, cos_tab: int, sin_tab: int,
+                      q_out: int, p: int, hd: int) {
+    let half = hd / 2
+    let bse = p * hd
+    let mut c = 0
+    while c < hd {
+        let rh_c = if c < half {
+            0.0 - t_get(q, half + c)
+        } else {
+            t_get(q, c - half)
+        }
+        t_set(q_out, c, t_get(q, c) * t_get(cos_tab, bse + c)
+                       + rh_c * t_get(sin_tab, bse + c))
+        c = c + 1
+    }
+}
+
+fn ref_rope_apply_bwd(dqp: int, cos_tab: int, sin_tab: int,
+                      dq_out: int, p: int, hd: int) {
+    let half = hd / 2
+    let bse = p * hd
+    let mut c = 0
+    while c < hd {
+        let gs_for_rht = if c < half {
+            t_get(dqp, half + c) * t_get(sin_tab, bse + half + c)
+        } else {
+            0.0 - t_get(dqp, c - half) * t_get(sin_tab, bse + c - half)
+        }
+        t_set(dq_out, c, t_get(dqp, c) * t_get(cos_tab, bse + c) + gs_for_rht)
+        c = c + 1
+    }
+}
+
+// Reference embedding fwd — direct row copy from table.
+fn ref_embedding_fwd(ids: int, table: int, X_out: int, T: int, d: int) {
+    let mut i = 0
+    while i < T {
+        let tok = to_int(t_get(ids, i))
+        let mut c = 0
+        while c < d {
+            t_set(X_out, i * d + c, t_get(table, tok * d + c))
+            c = c + 1
+        }
+        i = i + 1
+    }
+}
+
+fn ref_embedding_bwd_scatter(dX: int, ids: int, dtable_inout: int,
+                             T: int, d: int) {
+    let mut i = 0
+    while i < T {
+        let tok = to_int(t_get(ids, i))
+        let mut c = 0
+        while c < d {
+            let cur = t_get(dtable_inout, tok * d + c)
+            t_set(dtable_inout, tok * d + c, cur + t_get(dX, i * d + c))
+            c = c + 1
+        }
+        i = i + 1
+    }
+}
+
+// Reference tied LM head fwd — closed matvec.
+fn ref_lm_head_fwd(temb: int, zT: int, logits_out: int, V: int, d: int) {
+    let mut k = 0
+    while k < V {
+        let mut acc = 0.0
+        let mut j = 0
+        while j < d {
+            acc = acc + t_get(temb, k * d + j) * t_get(zT, j)
+            j = j + 1
+        }
+        t_set(logits_out, k, acc)
+        k = k + 1
+    }
+}
+
+fn ref_lm_head_bwd(temb: int, zT: int, dl: int,
+                   dtemb_out: int, dzT_out: int, V: int, d: int) {
+    let mut k = 0
+    while k < V {
+        let dlk = t_get(dl, k)
+        let mut j = 0
+        while j < d {
+            let cur = t_get(dtemb_out, k * d + j)
+            t_set(dtemb_out, k * d + j, cur + dlk * t_get(zT, j))
+            j = j + 1
+        }
+        k = k + 1
+    }
+    let mut j2 = 0
+    while j2 < d {
+        let mut acc = 0.0
+        let mut k2 = 0
+        while k2 < V {
+            acc = acc + t_get(temb, k2 * d + j2) * t_get(dl, k2)
+            k2 = k2 + 1
+        }
+        t_set(dzT_out, j2, acc)
+        j2 = j2 + 1
+    }
+}
+
+fn ref_rmsnorm_bwd(x: int, g: int, xn: int, inv: float, dy: int,
+                   dx_out: int, dg_out: int, d: int) {
+    let mut dot = 0.0
+    let mut i = 0
+    while i < d {
+        let dxn_i = t_get(dy, i) * t_get(g, i)
+        t_set(dg_out, i, t_get(dy, i) * t_get(xn, i))
+        dot = dot + dxn_i * t_get(x, i)
+        t_set(dx_out, i, dxn_i)
+        i = i + 1
+    }
+    let inv3 = inv * inv * inv
+    let scale = (inv3 / to_float(d)) * dot
+    let mut j = 0
+    while j < d {
+        let dxn_j = t_get(dx_out, j)
+        let xj = t_get(x, j)
+        t_set(dx_out, j, inv * dxn_j - scale * xj)
+        j = j + 1
+    }
+}
+
+// ─── falsifier harnesses ───────────────────────────────────────────────
+
+fn max_dev_farr(a: int, b: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n {
+        let d = nn_abs(t_get(a, i) - t_get(b, i))
+        if d > m { m = d }
+        i = i + 1
+    }
+    return m
+}
+
+// F-RFC043-LAYER-EQ-LINEAR-FWD + BWD
+fn check_linear() -> int {
+    let B = 4
+    let D = 3
+    let C = 5
+
+    // deterministic fixed inputs (LCG, seed=42).
+    let x = t_zeros(B * D)
+    t_fill_lcg(x, B * D, 42 * 7 + 13, 1.0)
+    let W = t_zeros(D * C)
+    t_fill_lcg(W, D * C, 42, 0.5)
+    let b = t_zeros(C)
+    t_fill_lcg(b, C, 9001, 0.1)
+
+    // forward
+    let y_flame = nn_linear_fwd(x, W, b, B, D, C)
+    let y_ref = ref_linear_fwd(x, W, b, B, D, C)
+    let dev_fwd = max_dev_farr(y_flame, y_ref, B * C)
+
+    // backward — seed dy with LCG.
+    let dy = t_zeros(B * C)
+    t_fill_lcg(dy, B * C, 31337, 1.0)
+
+    let dW_flame = t_zeros(D * C)
+    let dx_flame = t_zeros(B * D)
+    let db_flame = t_zeros(C)
+    nn_linear_bwd(x, W, dy, dW_flame, dx_flame, db_flame, B, D, C)
+
+    let dW_ref = t_zeros(D * C)
+    let dx_ref = t_zeros(B * D)
+    let db_ref = t_zeros(C)
+    ref_linear_bwd(x, W, dy, dW_ref, dx_ref, db_ref, B, D, C)
+
+    let dW_dev = max_dev_farr(dW_flame, dW_ref, D * C)
+    let dx_dev = max_dev_farr(dx_flame, dx_ref, B * D)
+    let db_dev = max_dev_farr(db_flame, db_ref, C)
+
+    // free intermediates
+    let _ = t_free(y_flame); let _ = t_free(y_ref)
+    let _ = t_free(dy)
+    let _ = t_free(dW_flame); let _ = t_free(dx_flame); let _ = t_free(db_flame)
+    let _ = t_free(dW_ref); let _ = t_free(dx_ref); let _ = t_free(db_ref)
+    let _ = t_free(x); let _ = t_free(W); let _ = t_free(b)
+
+    // pack [fwd, dW, dx, db] devs into a 4-len return farr.
+    let out = t_zeros(4)
+    t_set(out, 0, dev_fwd)
+    t_set(out, 1, dW_dev)
+    t_set(out, 2, dx_dev)
+    t_set(out, 3, db_dev)
+    return out
+}
+
+// F-RFC043-LAYER-EQ-RMSNORM-FWD + BWD
+fn check_rmsnorm() -> int {
+    let d = 8
+
+    let x = t_zeros(d)
+    t_fill_lcg(x, d, 7, 1.0)
+    let g = t_zeros(d)
+    t_fill_lcg(g, d, 13, 0.3)
+
+    let y_flame = t_zeros(d); let xn_flame = t_zeros(d); let inv_flame = t_zeros(1)
+    nn_rmsnorm_fwd(x, g, y_flame, xn_flame, inv_flame, d)
+
+    let y_ref = t_zeros(d); let xn_ref = t_zeros(d); let inv_ref = t_zeros(1)
+    ref_rmsnorm_fwd(x, g, y_ref, xn_ref, inv_ref, d)
+
+    let dev_fwd_y = max_dev_farr(y_flame, y_ref, d)
+    let dev_fwd_xn = max_dev_farr(xn_flame, xn_ref, d)
+    let dev_fwd_inv = nn_abs(t_get(inv_flame, 0) - t_get(inv_ref, 0))
+
+    // backward
+    let dy = t_zeros(d)
+    t_fill_lcg(dy, d, 999, 1.0)
+
+    let dx_flame = t_zeros(d); let dg_flame = t_zeros(d)
+    let inv_val = t_get(inv_flame, 0)
+    nn_rmsnorm_bwd(x, g, xn_flame, inv_val, dy, dx_flame, dg_flame, d)
+
+    let dx_ref = t_zeros(d); let dg_ref = t_zeros(d)
+    ref_rmsnorm_bwd(x, g, xn_ref, inv_val, dy, dx_ref, dg_ref, d)
+
+    let dx_dev = max_dev_farr(dx_flame, dx_ref, d)
+    let dg_dev = max_dev_farr(dg_flame, dg_ref, d)
+
+    // free
+    let _ = t_free(x); let _ = t_free(g); let _ = t_free(dy)
+    let _ = t_free(y_flame); let _ = t_free(xn_flame); let _ = t_free(inv_flame)
+    let _ = t_free(y_ref);   let _ = t_free(xn_ref);   let _ = t_free(inv_ref)
+    let _ = t_free(dx_flame); let _ = t_free(dg_flame)
+    let _ = t_free(dx_ref);   let _ = t_free(dg_ref)
+
+    let out = t_zeros(5)
+    t_set(out, 0, dev_fwd_y)
+    t_set(out, 1, dev_fwd_xn)
+    t_set(out, 2, dev_fwd_inv)
+    t_set(out, 3, dx_dev)
+    t_set(out, 4, dg_dev)
+    return out
+}
+
+// F-RFC043-LAYER-EQ-ATTN-{FWD,BWD,CAUSAL}
+// small but exercises GQA grouping (nh != nkv): nh=4, nkv=2 → n_rep=2.
+fn check_attn() -> int {
+    let T = 4
+    let nh = 4
+    let nkv = 2
+    let hd = 3
+    let d = nh * hd
+
+    let Q = t_zeros(T * nh * hd);  t_fill_lcg(Q,  T*nh*hd,   71, 0.5)
+    let K = t_zeros(T * nkv * hd); t_fill_lcg(K,  T*nkv*hd,  72, 0.5)
+    let V = t_zeros(T * nkv * hd); t_fill_lcg(V,  T*nkv*hd,  73, 0.5)
+
+    let P_f = t_zeros(nh * T * T); let ctx_f = t_zeros(T * d)
+    let P_r = t_zeros(nh * T * T); let ctx_r = t_zeros(T * d)
+    nn_attn_core_fwd(Q, K, V, P_f, ctx_f, T, nh, nkv, hd)
+    ref_attn_core_fwd(Q, K, V, P_r, ctx_r, T, nh, nkv, hd)
+    let fwd_P_dev = max_dev_farr(P_f, P_r, nh * T * T)
+    let fwd_ctx_dev = max_dev_farr(ctx_f, ctx_r, T * d)
+
+    // CAUSAL property check — P[hh, i, j] must be 0.0 for j > i.
+    // (i.e. tokens cannot attend to future positions.) Closed math
+    // invariant — real-limit anchor (g3). Inspect the wrapper output.
+    let mut causal_violated = 0.0
+    let mut hh_c = 0
+    while hh_c < nh {
+        let mut i_c = 0
+        while i_c < T {
+            let mut j_c = i_c + 1
+            while j_c < T {
+                let v = t_get(P_f, (hh_c * T + i_c) * T + j_c)
+                let av = if v < 0.0 { 0.0 - v } else { v }
+                if av > causal_violated { causal_violated = av }
+                j_c = j_c + 1
+            }
+            i_c = i_c + 1
+        }
+        hh_c = hh_c + 1
+    }
+
+    // backward — same dctx for both wrapper and ref. dQ/dK/dV are
+    // accumulated INTO (pre-zeroed by t_zeros) — feed identical
+    // saved-fwd P (use the ref's P_r for both bwd calls, matching the
+    // SwiGLU-bwd isolation pattern).
+    let dctx = t_zeros(T * d); t_fill_lcg(dctx, T * d, 999, 0.7)
+    let dQ_f = t_zeros(T * nh * hd); let dK_f = t_zeros(T * nkv * hd); let dV_f = t_zeros(T * nkv * hd)
+    let dQ_r = t_zeros(T * nh * hd); let dK_r = t_zeros(T * nkv * hd); let dV_r = t_zeros(T * nkv * hd)
+    nn_attn_core_bwd(Q, K, V, P_r, dctx, dQ_f, dK_f, dV_f, T, nh, nkv, hd)
+    ref_attn_core_bwd(Q, K, V, P_r, dctx, dQ_r, dK_r, dV_r, T, nh, nkv, hd)
+    let bwd_dQ = max_dev_farr(dQ_f, dQ_r, T * nh * hd)
+    let bwd_dK = max_dev_farr(dK_f, dK_r, T * nkv * hd)
+    let bwd_dV = max_dev_farr(dV_f, dV_r, T * nkv * hd)
+
+    let _ = t_free(Q); let _ = t_free(K); let _ = t_free(V); let _ = t_free(dctx)
+    let _ = t_free(P_f); let _ = t_free(ctx_f); let _ = t_free(P_r); let _ = t_free(ctx_r)
+    let _ = t_free(dQ_f); let _ = t_free(dK_f); let _ = t_free(dV_f)
+    let _ = t_free(dQ_r); let _ = t_free(dK_r); let _ = t_free(dV_r)
+
+    let out = t_zeros(6)
+    t_set(out, 0, fwd_P_dev)
+    t_set(out, 1, fwd_ctx_dev)
+    t_set(out, 2, causal_violated)
+    t_set(out, 3, bwd_dQ)
+    t_set(out, 4, bwd_dK)
+    t_set(out, 5, bwd_dV)
+    return out
+}
+
+// F-RFC043-LAYER-EQ-SWIGLU-{FWD,BWD}
+fn check_swiglu() -> int {
+    let d = 5
+    let h = 7
+
+    let r = t_zeros(d);       t_fill_lcg(r,  d,      11,  0.4)
+    let Wg = t_zeros(h * d);  t_fill_lcg(Wg, h * d,  22,  0.3)
+    let Wu = t_zeros(h * d);  t_fill_lcg(Wu, h * d,  33,  0.3)
+    let Wd_m = t_zeros(d * h);t_fill_lcg(Wd_m,d * h, 44,  0.3)
+
+    let a_f = t_zeros(h); let b_f = t_zeros(h); let s_f = t_zeros(h); let o_f = t_zeros(d)
+    let a_r = t_zeros(h); let b_r = t_zeros(h); let s_r = t_zeros(h); let o_r = t_zeros(d)
+    nn_swiglu_fwd(r, Wg, Wu, Wd_m, a_f, b_f, s_f, o_f, d, h)
+    ref_swiglu_fwd(r, Wg, Wu, Wd_m, a_r, b_r, s_r, o_r, d, h)
+    let fwd_o = max_dev_farr(o_f, o_r, d)
+    let fwd_a = max_dev_farr(a_f, a_r, h)
+    let fwd_b = max_dev_farr(b_f, b_r, h)
+    let fwd_s = max_dev_farr(s_f, s_r, h)
+
+    let dout = t_zeros(d); t_fill_lcg(dout, d, 55, 0.7)
+    let dr_f = t_zeros(d); let dWg_f = t_zeros(h*d); let dWu_f = t_zeros(h*d); let dWd_f = t_zeros(d*h)
+    let dr_r = t_zeros(d); let dWg_r = t_zeros(h*d); let dWu_r = t_zeros(h*d); let dWd_r = t_zeros(d*h)
+    // BWD isolation: feed identical (a, b, s) to BOTH bwd calls so the
+    // last-bit fwd-FMA gap doesn't propagate into bwd inputs. Use the
+    // ref fwd outputs as the common saved-fwd state for both.
+    nn_swiglu_bwd(r, Wg, Wu, Wd_m, a_r, b_r, s_r, dout, dr_f, dWg_f, dWu_f, dWd_f, d, h)
+    ref_swiglu_bwd(r, Wg, Wu, Wd_m, a_r, b_r, s_r, dout, dr_r, dWg_r, dWu_r, dWd_r, d, h)
+    let bwd_dr  = max_dev_farr(dr_f,  dr_r,  d)
+    let bwd_dWg = max_dev_farr(dWg_f, dWg_r, h * d)
+    let bwd_dWu = max_dev_farr(dWu_f, dWu_r, h * d)
+    let bwd_dWd = max_dev_farr(dWd_f, dWd_r, d * h)
+
+    let _ = t_free(r); let _ = t_free(Wg); let _ = t_free(Wu); let _ = t_free(Wd_m); let _ = t_free(dout)
+    let _ = t_free(a_f); let _ = t_free(b_f); let _ = t_free(s_f); let _ = t_free(o_f)
+    let _ = t_free(a_r); let _ = t_free(b_r); let _ = t_free(s_r); let _ = t_free(o_r)
+    let _ = t_free(dr_f); let _ = t_free(dWg_f); let _ = t_free(dWu_f); let _ = t_free(dWd_f)
+    let _ = t_free(dr_r); let _ = t_free(dWg_r); let _ = t_free(dWu_r); let _ = t_free(dWd_r)
+
+    let out = t_zeros(8)
+    t_set(out, 0, fwd_o); t_set(out, 1, fwd_a); t_set(out, 2, fwd_b); t_set(out, 3, fwd_s)
+    t_set(out, 4, bwd_dr); t_set(out, 5, bwd_dWg); t_set(out, 6, bwd_dWu); t_set(out, 7, bwd_dWd)
+    return out
+}
+
+// F-RFC043-LAYER-EQ-ROPE-{TABLES,FWD,BWD,ORTHO}
+fn check_rope() -> int {
+    let T = 4
+    let hd = 8
+
+    // tables
+    let cos_flame = t_zeros(T * hd); let sin_flame = t_zeros(T * hd)
+    nn_rope_build_tables(T, hd, cos_flame, sin_flame)
+    let cos_ref = t_zeros(T * hd); let sin_ref = t_zeros(T * hd)
+    ref_rope_build_tables(T, hd, cos_ref, sin_ref)
+    let tab_cos_dev = max_dev_farr(cos_flame, cos_ref, T * hd)
+    let tab_sin_dev = max_dev_farr(sin_flame, sin_ref, T * hd)
+
+    // forward on a seeded q at position 2
+    let q = t_zeros(hd)
+    t_fill_lcg(q, hd, 5151, 1.0)
+    let qp_flame = t_zeros(hd)
+    nn_rope_apply_fwd(q, cos_flame, sin_flame, qp_flame, 2, hd)
+    let qp_ref = t_zeros(hd)
+    ref_rope_apply_fwd(q, cos_ref, sin_ref, qp_ref, 2, hd)
+    let fwd_dev = max_dev_farr(qp_flame, qp_ref, hd)
+
+    // backward
+    let dqp = t_zeros(hd)
+    t_fill_lcg(dqp, hd, 6262, 1.0)
+    let dq_flame = t_zeros(hd)
+    nn_rope_apply_bwd(dqp, cos_flame, sin_flame, dq_flame, 2, hd)
+    let dq_ref = t_zeros(hd)
+    ref_rope_apply_bwd(dqp, cos_ref, sin_ref, dq_ref, 2, hd)
+    let bwd_dev = max_dev_farr(dq_flame, dq_ref, hd)
+
+    // orthogonality check (math/physics real-limit anchor): for ANY q,
+    // applying fwd then bwd at the same position with dqp = q' must
+    // return the original q (Rᵀ·R = I — the closed orthogonal identity
+    // that justifies the bwd having no tape). Here: feed q' as dqp.
+    let qpp = t_zeros(hd)
+    nn_rope_apply_bwd(qp_flame, cos_flame, sin_flame, qpp, 2, hd)
+    let ortho_dev = max_dev_farr(qpp, q, hd)
+
+    let _ = t_free(q); let _ = t_free(dqp)
+    let _ = t_free(cos_flame); let _ = t_free(sin_flame)
+    let _ = t_free(cos_ref); let _ = t_free(sin_ref)
+    let _ = t_free(qp_flame); let _ = t_free(qp_ref)
+    let _ = t_free(dq_flame); let _ = t_free(dq_ref)
+    let _ = t_free(qpp)
+
+    let out = t_zeros(5)
+    t_set(out, 0, tab_cos_dev)
+    t_set(out, 1, tab_sin_dev)
+    t_set(out, 2, fwd_dev)
+    t_set(out, 3, bwd_dev)
+    t_set(out, 4, ortho_dev)
+    return out
+}
+
+// F-RFC043-LAYER-EQ-EMBED-{FWD,SCATTER}
+fn check_embedding() -> int {
+    let T = 5
+    let d = 4
+    let V = 7
+
+    let ids = t_zeros(T)
+    t_set(ids, 0, 2.0); t_set(ids, 1, 5.0); t_set(ids, 2, 0.0)
+    t_set(ids, 3, 6.0); t_set(ids, 4, 3.0)
+    let table = t_zeros(V * d)
+    t_fill_lcg(table, V * d, 4242, 0.3)
+
+    let X_flame = t_zeros(T * d)
+    nn_embedding_fwd(ids, table, X_flame, T, d)
+    let X_ref = t_zeros(T * d)
+    ref_embedding_fwd(ids, table, X_ref, T, d)
+    let fwd_dev = max_dev_farr(X_flame, X_ref, T * d)
+
+    // scatter check — both paths receive the SAME pre-existing dtable
+    // (to test accumulation behaviour, not just from-zero).
+    let dX = t_zeros(T * d)
+    t_fill_lcg(dX, T * d, 7777, 0.5)
+    let dtable_flame = t_zeros(V * d)
+    t_fill_lcg(dtable_flame, V * d, 99, 0.1)   // pre-fill
+    let dtable_ref = t_zeros(V * d)
+    t_fill_lcg(dtable_ref, V * d, 99, 0.1)     // same pre-fill
+
+    nn_embedding_bwd_scatter(dX, ids, dtable_flame, T, d)
+    ref_embedding_bwd_scatter(dX, ids, dtable_ref, T, d)
+    let scatter_dev = max_dev_farr(dtable_flame, dtable_ref, V * d)
+
+    let _ = t_free(ids); let _ = t_free(table); let _ = t_free(dX)
+    let _ = t_free(X_flame); let _ = t_free(X_ref)
+    let _ = t_free(dtable_flame); let _ = t_free(dtable_ref)
+
+    let out = t_zeros(2)
+    t_set(out, 0, fwd_dev)
+    t_set(out, 1, scatter_dev)
+    return out
+}
+
+// F-RFC043-LAYER-EQ-LMHEAD-{FWD,BWD}
+fn check_lm_head() -> int {
+    let V = 6
+    let d = 4
+
+    let temb = t_zeros(V * d)
+    t_fill_lcg(temb, V * d, 1024, 0.2)
+    let zT = t_zeros(d)
+    t_fill_lcg(zT, d, 2048, 1.0)
+
+    let logits_flame = t_zeros(V)
+    nn_lm_head_fwd(temb, zT, logits_flame, V, d)
+    let logits_ref = t_zeros(V)
+    ref_lm_head_fwd(temb, zT, logits_ref, V, d)
+    let fwd_dev = max_dev_farr(logits_flame, logits_ref, V)
+
+    // bwd — use same pre-existing dtemb (test ACCUMULATE behavior).
+    let dl = t_zeros(V)
+    t_fill_lcg(dl, V, 31, 0.7)
+    let dtemb_flame = t_zeros(V * d)
+    t_fill_lcg(dtemb_flame, V * d, 17, 0.1)
+    let dtemb_ref = t_zeros(V * d)
+    t_fill_lcg(dtemb_ref, V * d, 17, 0.1)
+    let dzT_flame = t_zeros(d)
+    let dzT_ref = t_zeros(d)
+
+    nn_lm_head_bwd(temb, zT, dl, dtemb_flame, dzT_flame, V, d)
+    ref_lm_head_bwd(temb, zT, dl, dtemb_ref, dzT_ref, V, d)
+
+    let bwd_dtemb_dev = max_dev_farr(dtemb_flame, dtemb_ref, V * d)
+    let bwd_dzT_dev = max_dev_farr(dzT_flame, dzT_ref, d)
+
+    let _ = t_free(temb); let _ = t_free(zT); let _ = t_free(dl)
+    let _ = t_free(logits_flame); let _ = t_free(logits_ref)
+    let _ = t_free(dtemb_flame); let _ = t_free(dtemb_ref)
+    let _ = t_free(dzT_flame); let _ = t_free(dzT_ref)
+
+    let out = t_zeros(3)
+    t_set(out, 0, fwd_dev)
+    t_set(out, 1, bwd_dtemb_dev)
+    t_set(out, 2, bwd_dzT_dev)
+    return out
+}
+
+// ─── entrypoint ────────────────────────────────────────────────────────
+println("=== flame Phase 2 selftest (nn_lib: Linear + RMSNorm + Embedding + LMHead + RoPE + SwiGLU + Attention-core, compiled-native) ===")
+
+let mut pass = 0
+let total = 17
+
+// ── Linear ─────────────────────────────────────────────────────────────
+let lin = check_linear()
+let lin_fwd = t_get(lin, 0)
+let lin_dW = t_get(lin, 1)
+let lin_dx = t_get(lin, 2)
+let lin_db = t_get(lin, 3)
+
+// RFC 040 measurement-calibrated tolerance — FMA fusion (clang -O2 over
+// the C `farr_matmul`) vs hexa-side ref scalar mul-add differ in last
+// ulps (fp-non-associativity / FMA single-round). Same RFC 040 §2.2
+// honest caveat that justified `TOL_MATMUL ≈ 2e-9` for the cuBLAS oracle.
+// For our small d=3 problem the drift is ≪ 1e-12 in practice; we
+// document the bound and verify it.
+if lin_fwd < 0.000000000001 {
+    println("PASS  F-RFC043-LAYER-EQ-LINEAR-FWD   max|nn_linear_fwd − closed-ref| < 1e-12 (RFC 040 §2.2 measured fp-tol; FMA-vs-hexa-scalar last-ulp gap)")
+    pass = pass + 1
+} else {
+    print("FAIL  F-RFC043-LAYER-EQ-LINEAR-FWD   max|Δ|=")
+    print(lin_fwd)
+    println(" (>1e-12)")
+}
+
+if lin_dW == 0.0 {
+    if lin_dx == 0.0 {
+        if lin_db == 0.0 {
+            println("PASS  F-RFC043-LAYER-EQ-LINEAR-BWD   max|{dW, dx, db}_flame − {dW, dx, db}_ref| = 0.0 (byte-eq · closed analytic vjp)")
+            pass = pass + 1
+        } else {
+            println("FAIL  F-RFC043-LAYER-EQ-LINEAR-BWD   db deviation non-zero")
+        }
+    } else {
+        println("FAIL  F-RFC043-LAYER-EQ-LINEAR-BWD   dx deviation non-zero")
+    }
+} else {
+    println("FAIL  F-RFC043-LAYER-EQ-LINEAR-BWD   dW deviation non-zero")
+}
+
+// ── RMSNorm ────────────────────────────────────────────────────────────
+let rn = check_rmsnorm()
+let rn_y = t_get(rn, 0)
+let rn_xn = t_get(rn, 1)
+let rn_inv = t_get(rn, 2)
+let rn_dx = t_get(rn, 3)
+let rn_dg = t_get(rn, 4)
+
+if rn_y == 0.0 {
+    if rn_xn == 0.0 {
+        if rn_inv == 0.0 {
+            println("PASS  F-RFC043-LAYER-EQ-RMSNORM-FWD  max|{y, xn, inv}_flame − {y, xn, inv}_ref| = 0.0 (byte-eq · c3_rmsnorm_fwd algebra)")
+            pass = pass + 1
+        } else {
+            println("FAIL  F-RFC043-LAYER-EQ-RMSNORM-FWD  inv deviation non-zero")
+        }
+    } else {
+        println("FAIL  F-RFC043-LAYER-EQ-RMSNORM-FWD  xn deviation non-zero")
+    }
+} else {
+    println("FAIL  F-RFC043-LAYER-EQ-RMSNORM-FWD  y deviation non-zero")
+}
+
+if rn_dx == 0.0 {
+    if rn_dg == 0.0 {
+        println("PASS  F-RFC043-LAYER-EQ-RMSNORM-BWD  max|{dx, dg}_flame − {dx, dg}_ref| = 0.0 (byte-eq · c3_rmsnorm_bwd closed vjp)")
+        pass = pass + 1
+    } else {
+        println("FAIL  F-RFC043-LAYER-EQ-RMSNORM-BWD  dg deviation non-zero")
+    }
+} else {
+    println("FAIL  F-RFC043-LAYER-EQ-RMSNORM-BWD  dx deviation non-zero")
+}
+
+// ── Embedding ──────────────────────────────────────────────────────────
+let em = check_embedding()
+let em_fwd = t_get(em, 0)
+let em_scat = t_get(em, 1)
+if em_fwd == 0.0 {
+    println("PASS  F-RFC043-LAYER-EQ-EMBED-FWD     max|nn_embedding_fwd − closed-ref| = 0.0 (byte-eq · pure row copy)")
+    pass = pass + 1
+} else {
+    println("FAIL  F-RFC043-LAYER-EQ-EMBED-FWD     fwd deviation non-zero")
+}
+if em_scat == 0.0 {
+    println("PASS  F-RFC043-LAYER-EQ-EMBED-SCATTER max|nn_embedding_bwd_scatter − closed-ref| = 0.0 (byte-eq · scatter-add accumulation, d5_grad §(b) pattern)")
+    pass = pass + 1
+} else {
+    println("FAIL  F-RFC043-LAYER-EQ-EMBED-SCATTER scatter deviation non-zero")
+}
+
+// ── Tied LM head ───────────────────────────────────────────────────────
+let lh = check_lm_head()
+let lh_fwd = t_get(lh, 0)
+let lh_dtemb = t_get(lh, 1)
+let lh_dzT = t_get(lh, 2)
+// FWD uses farr_matmul (FMA-fused) vs hexa-scalar ref → RFC 040 fp-tol.
+if lh_fwd < 0.000000000001 {
+    println("PASS  F-RFC043-LAYER-EQ-LMHEAD-FWD    max|nn_lm_head_fwd − closed-ref| < 1e-12 (RFC 040 §2.2 fp-tol; matvec via farr_matmul(V·d · d·1))")
+    pass = pass + 1
+} else {
+    print("FAIL  F-RFC043-LAYER-EQ-LMHEAD-FWD    max|Δ|="); print(lh_fwd); println(" (>1e-12)")
+}
+// BWD since #1262 routes through forge kernels: dtemb = farr_outer_gpu +
+// farr_add_inplace_gpu (elementwise — EXACTLY byte-eq with the host dl⊗zT
+// accumulate), dzT = farr_matmul_t_gpu (an FMA-fusible reduction — RFC-040
+// §2.2 last-ulp vs the hexa-side scalar ref, same caveat as LMHEAD-FWD).
+if lh_dtemb == 0.0 {
+    if lh_dzT < 0.000000000001 {
+        print("PASS  F-RFC043-LAYER-EQ-LMHEAD-BWD    max|dtemb_accum|=0.0 (byte-eq · dl⊗zT) · max|dzT|="); print(lh_dzT); println(" < 1e-12 (RFC 040 §2.2 FMA tembᵀ·dl)")
+        pass = pass + 1
+    } else {
+        print("FAIL  F-RFC043-LAYER-EQ-LMHEAD-BWD    dzT deviation max|Δ|="); print(lh_dzT); println(" (>1e-12)")
+    }
+} else {
+    print("FAIL  F-RFC043-LAYER-EQ-LMHEAD-BWD    dtemb deviation max|Δ|="); println(lh_dtemb)
+}
+
+// ── RoPE ──────────────────────────────────────────────────────────────
+let rp = check_rope()
+let rp_tab_cos = t_get(rp, 0)
+let rp_tab_sin = t_get(rp, 1)
+let rp_fwd = t_get(rp, 2)
+let rp_bwd = t_get(rp, 3)
+let rp_ortho = t_get(rp, 4)
+if rp_tab_cos == 0.0 {
+    if rp_tab_sin == 0.0 {
+        println("PASS  F-RFC043-LAYER-EQ-ROPE-TABLES  max|{cos, sin}_flame − {cos, sin}_ref| = 0.0 (byte-eq · RoFormer cos/sin per-position tables)")
+        pass = pass + 1
+    } else {
+        println("FAIL  F-RFC043-LAYER-EQ-ROPE-TABLES  sin deviation non-zero")
+    }
+} else {
+    println("FAIL  F-RFC043-LAYER-EQ-ROPE-TABLES  cos deviation non-zero")
+}
+if rp_fwd == 0.0 {
+    println("PASS  F-RFC043-LAYER-EQ-ROPE-FWD     max|nn_rope_apply_fwd − closed-ref| = 0.0 (byte-eq · q⊙cos + rotate_half(q)⊙sin, RoFormer)")
+    pass = pass + 1
+} else {
+    println("FAIL  F-RFC043-LAYER-EQ-ROPE-FWD     fwd deviation non-zero")
+}
+if rp_bwd == 0.0 {
+    println("PASS  F-RFC043-LAYER-EQ-ROPE-BWD     max|nn_rope_apply_bwd − closed-ref| = 0.0 (byte-eq · dq'⊙cos + rotate_half_T(dq'⊙sin), Rᵀ=R(−θ) closed)")
+    pass = pass + 1
+} else {
+    println("FAIL  F-RFC043-LAYER-EQ-ROPE-BWD     bwd deviation non-zero")
+}
+// Orthogonality identity check — closed math/physics anchor (g3
+// real-limit): Rᵀ·R = I ⟹ fwd∘bwd(qp) = q, ∀ q. Pure analytic property.
+// Cross-impl FMA may introduce last-bit drift here (two compositions of
+// the rotation matrix), so we use a tight RFC 040 fp-tol.
+if rp_ortho < 0.0000000000001 {
+    print("PASS  F-RFC043-LAYER-EQ-ROPE-ORTHO   max|fwd∘bwd(q') − q| = ")
+    print(rp_ortho)
+    println(" < 1e-13 (closed orthogonality Rᵀ·R = I — math/physics real-limit anchor; g3)")
+    pass = pass + 1
+} else {
+    print("FAIL  F-RFC043-LAYER-EQ-ROPE-ORTHO   orthogonality identity violated, max|Δ|=")
+    print(rp_ortho)
+    println("")
+}
+
+// ── SwiGLU ─────────────────────────────────────────────────────────────
+let sw = check_swiglu()
+let sw_o = t_get(sw, 0); let sw_a = t_get(sw, 1); let sw_b = t_get(sw, 2); let sw_s = t_get(sw, 3)
+let sw_dr = t_get(sw, 4); let sw_dWg = t_get(sw, 5); let sw_dWu = t_get(sw, 6); let sw_dWd = t_get(sw, 7)
+// fwd uses farr_matmul (FMA) — RFC 040 fp-tol.
+if sw_o < 0.000000000001 {
+    if sw_a < 0.000000000001 {
+        if sw_b < 0.000000000001 {
+            if sw_s < 0.000000000001 {
+                println("PASS  F-RFC043-LAYER-EQ-SWIGLU-FWD   max|{o, a, b, s}_flame − {ref}| < 1e-12 (RFC 040 fp-tol; 2 matvec + silu + Hadamard + matvec, c3_swiglu_fwd algebra)")
+                pass = pass + 1
+            } else { println("FAIL  F-RFC043-LAYER-EQ-SWIGLU-FWD s deviation") }
+        } else { println("FAIL  F-RFC043-LAYER-EQ-SWIGLU-FWD b deviation") }
+    } else { println("FAIL  F-RFC043-LAYER-EQ-SWIGLU-FWD a deviation") }
+} else {
+    print("FAIL  F-RFC043-LAYER-EQ-SWIGLU-FWD o deviation = "); print(sw_o); println("")
+}
+// bwd uses pure hexa scalar loops both sides → byte-eq.
+if sw_dr == 0.0 {
+    if sw_dWg == 0.0 {
+        if sw_dWu == 0.0 {
+            if sw_dWd == 0.0 {
+                println("PASS  F-RFC043-LAYER-EQ-SWIGLU-BWD   max|{dr, dWg, dWu, dWd}_flame − {ref}| = 0.0 (byte-eq · c3_swiglu_bwd closed vjp)")
+                pass = pass + 1
+            } else { println("FAIL  F-RFC043-LAYER-EQ-SWIGLU-BWD dWd deviation") }
+        } else { println("FAIL  F-RFC043-LAYER-EQ-SWIGLU-BWD dWu deviation") }
+    } else { println("FAIL  F-RFC043-LAYER-EQ-SWIGLU-BWD dWg deviation") }
+} else {
+    println("FAIL  F-RFC043-LAYER-EQ-SWIGLU-BWD dr deviation")
+}
+
+// ── Attention core ─────────────────────────────────────────────────────
+let at = check_attn()
+let at_fwd_P = t_get(at, 0); let at_fwd_ctx = t_get(at, 1); let at_causal = t_get(at, 2)
+let at_dQ = t_get(at, 3); let at_dK = t_get(at, 4); let at_dV = t_get(at, 5)
+if at_fwd_P == 0.0 {
+    if at_fwd_ctx == 0.0 {
+        println("PASS  F-RFC043-LAYER-EQ-ATTN-FWD     max|{P, ctx}_flame − {ref}| = 0.0 (byte-eq · GQA causal scaled-dot · row-softmax · weighted sum)")
+        pass = pass + 1
+    } else { print("FAIL  F-RFC043-LAYER-EQ-ATTN-FWD ctx deviation = "); print(at_fwd_ctx); println("") }
+} else {
+    print("FAIL  F-RFC043-LAYER-EQ-ATTN-FWD P deviation = "); print(at_fwd_P); println("")
+}
+// CAUSAL invariant — closed math anchor (g3 real-limit): P[hh,i,j]=0
+// for ∀ j > i (no attending to future). Wrapper-only inspection.
+if at_causal == 0.0 {
+    println("PASS  F-RFC043-LAYER-EQ-ATTN-CAUSAL  max|P[hh,i,j>i]| = 0.0 (closed math invariant · no leak across causal mask)")
+    pass = pass + 1
+} else {
+    print("FAIL  F-RFC043-LAYER-EQ-ATTN-CAUSAL  P leaked beyond j=i, max="); print(at_causal); println("")
+}
+if at_dQ == 0.0 {
+    if at_dK == 0.0 {
+        if at_dV == 0.0 {
+            println("PASS  F-RFC043-LAYER-EQ-ATTN-BWD     max|{dQ, dK, dV}_flame − {ref}| = 0.0 (byte-eq · d5_attn_bwd attention-core closed vjp + GQA accumulation across n_rep heads)")
+            pass = pass + 1
+        } else { print("FAIL  F-RFC043-LAYER-EQ-ATTN-BWD dV dev="); print(at_dV); println("") }
+    } else { print("FAIL  F-RFC043-LAYER-EQ-ATTN-BWD dK dev="); print(at_dK); println("") }
+} else {
+    print("FAIL  F-RFC043-LAYER-EQ-ATTN-BWD dQ dev="); print(at_dQ); println("")
+}
+
+println("")
+print("=== flame Phase 2: ")
+print(pass)
+print("/")
+print(total)
+println(" PASS ===")
+
+if pass == total {
+    println("PASS — flame nn_lib 7-layer Phase 2 set (Linear · RMSNorm · Embedding · LMHead · RoPE · SwiGLU · Attention-core, fwd+bwd, with Rᵀ·R=I orthogonality + causal-mask closed invariants) ≡ closed analytic ref; connection-point closed (g_blue_closed_mandate). Phase 3 (optim_lib + train_lib · F-RFC043-STEP-EQ) is the next gate.")
+} else {
+    println("FAIL — flame Phase 2 not landable")
+}

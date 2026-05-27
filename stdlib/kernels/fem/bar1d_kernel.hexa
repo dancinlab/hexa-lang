@@ -1,0 +1,337 @@
+// stdlib/kernels/fem/bar1d_kernel.hexa
+// D80 g_hexa_only pilot #10 (demiurge AGENTS.tape @D g_hexa_only).
+//
+// Clean-room hexa-native port of the SMALLEST cited FEM substrate inside
+// the (multi-month) skfem family: a 1-D linear (2-node) bar finite
+// element. Domain-agnostic ①a kernel — caller supplies node coordinates,
+// Young's modulus E, cross-section area A, and (optionally) a point load
+// at the free end. The kernel assembles the global stiffness matrix
+// (dense; bar problems are inherently tridiagonal so dense fits in
+// memory at any pilot-scale N) and exposes a tridiagonal forward
+// solver via Thomas algorithm for the fixed-free axial-load case.
+//
+// PARTIAL PORT — explicitly NOT a full skfem port (which would need a
+// sparse linear-algebra stack, gmsh meshing, 3-D tet elements, von
+// Mises post-processing, etc.). This kernel ports < 5 % of skfem's
+// surface — only the linear-bar element stiffness + a tridiagonal
+// Thomas solve. The PDE is the simplest possible (axial stretching of
+// a 1-D rod); the closed-form mechanics-of-materials answer
+// u(x) = P·x / (E·A) is the parity oracle.
+//
+// @version 0.1.0
+// @capabilities [pure]
+// @stability stage-2 substrate (clean-room re-derivation, no
+//   scikit-fem source-code inspection — 1-D bar stiffness +
+//   Thomas tridiagonal solve are textbook FEM and textbook numerical
+//   linear algebra). Substrate parity against Python `math` (libm)
+//   reference numbers captured 2026-05-20 on darwin-arm64; tolerance
+//   ceiling 1e-10 relative.
+// @since 2026-05-20
+//
+// Layer (ABSORPTION.md ① / demiurge design.md D72):
+//   ①a kernel — THIS FILE. Domain-agnostic. No silicon-die box, no
+//                BIPV stack, no chamber wall — only "given a 1-D mesh
+//                + EA + a tip load, assemble K, apply fix-node-0 BC,
+//                and solve for axial displacements."
+//   ①b adapter — `stdlib/kernels/fem/skfem_kernel.py` (gmsh meshing +
+//                3-D tet thermal / elastic solvers) and the per-domain
+//                gmsh_skfem.py adapters under stdlib/component/,
+//                stdlib/rtsc/, stdlib/sscb/. Those stay on the .py side
+//                until heavier FEM primitives (sparse linalg, 2-D / 3-D
+//                element families, mesh I/O) land — multi-month / multi-
+//                year scope.
+//
+// CLEAN-ROOM PROVENANCE
+//   No scikit-fem / FEniCS / deal.II / Calculix source-code inspection —
+//   the 1-D bar stiffness and Thomas tridiagonal solver pre-date every
+//   modern FEM library by decades.
+//
+//   - upstream code   : none (clean-room re-derivation from textbook)
+//   - upstream spec   :
+//       (a) T.J.R. Hughes, "The Finite Element Method: Linear Static
+//           and Dynamic Finite Element Analysis" (Dover 2000), §1.6 +
+//           §1.10 — 1-D bar (axial rod) element, linear shape functions
+//           N1(x) = 1 − ξ, N2(x) = ξ on a 2-node element of length L.
+//           Element stiffness k_e = (E·A/L) · [[ 1, -1], [-1, 1]] from
+//           ∫_0^L (dN/dx)^T · E·A · (dN/dx) dx.
+//       (b) Cook, Malkus, Plesha & Witt, "Concepts and Applications of
+//           Finite Element Analysis" 4th ed. (Wiley 2002), §2.3 — same
+//           result, with the global-assembly mapping i,j → I,J that
+//           this kernel uses.
+//       (c) R.L. Burden & J.D. Faires, "Numerical Analysis" 10th ed.
+//           (Cengage 2016), §6.6 — Crout / Thomas factorisation for a
+//           tridiagonal SPD system, O(n) forward sweep + back sweep.
+//   - external const  : none (no material constants baked in; E and A
+//                       are caller-supplied; no body force, no gravity,
+//                       no temperature coupling).
+//   - parity baseline : (a) closed-form mechanics-of-materials oracle
+//                       u(x_k) = P·x_k / (E·A) for fixed-free uniform
+//                       bar — INDEPENDENT of the FEM discretisation,
+//                       so this is a TRUE oracle, not a self-mirror.
+//                       The 1-D linear bar element is EXACT for this
+//                       loading (the analytic solution lives in the
+//                       trial-function space), so the FEM answer
+//                       coincides bit-for-bit with the analytic up to
+//                       floating-point roundoff in the Thomas sweep.
+//                       (b) Python `math` libm closed-form line-by-line
+//                       transliteration (bar1d_oracle.py) on darwin-
+//                       arm64 (Python 3.x), same operation order as
+//                       this kernel.
+//
+// HONESTY (g3 — non-negotiable, inherited by every caller):
+//   * The 1-D bar element is EXACT for the constant-EA uniform axial
+//     load case — the answer is the analytic solution, not an
+//     approximation. The FEM machinery is used HERE to prove the
+//     ASSEMBLY + Thomas SOLVE primitives, not to demonstrate FEM
+//     approximation error (which is identically zero on this problem).
+//   * For NON-uniform EA, NON-uniform meshes, OR distributed body
+//     loads the answer is still EXACT iff the analytic displacement
+//     is piecewise linear; for general body loads (e.g. f(x) ~ x^2)
+//     the linear-bar element gives the standard FEM approximation
+//     with O(h^2) convergence — this kernel does NOT exercise that
+//     regime (it only ports the tip-point-load case to keep the
+//     pilot surface < 5 % of skfem's full surface).
+//   * Thomas algorithm assumes the tridiagonal matrix is diagonally
+//     dominant or SPD; the bar stiffness with fix-node-0 BC IS SPD
+//     (eigenvalues of a uniform bar K_red are 4·k·sin²((2i-1)π/(2(2N-1)))
+//     > 0 for i=1..N-1). The kernel does NOT check for singularity
+//     in the caller-supplied case; if the caller passes a degenerate
+//     mesh (e.g. duplicated node coordinates → L=0 element) the
+//     1/L division returns +Inf and the solve will NaN — the caller
+//     owns mesh sanity (matches how skfem's `condense` + `solve` would
+//     also explode on a degenerate mesh, just at a deeper stack).
+//   * Substrate parity proves the PORT PATTERN, NOT the demiurge
+//     `absorbed=true` gate for any FEM-consuming cell (component +
+//     verify, rtsc + magnetics, sscb + femmt). That gate remains
+//     closed pending a 3-D tet port + gmsh-replacement meshing +
+//     sparse linalg — all multi-round, multi-month / multi-year work.
+//
+// Surface (all SI units; length m, force N, modulus Pa = N/m², area m²,
+// displacement m):
+//
+//   pub fn bar1d_element_stiffness(E: float, A: float, L: float)
+//                                  -> [[float]]
+//       // returns the 2×2 element stiffness:
+//       //     k = (E·A/L) · [[ 1, -1], [-1, 1]]
+//
+//   pub fn bar1d_assemble_K(nodes: [float], E: float, A: float)
+//                            -> [[float]]
+//       // assembles the global (n × n) dense stiffness matrix for a
+//       // 1-D bar discretised over `nodes` (sorted ascending,
+//       // strictly increasing). Constant E and A across all elements
+//       // in this iteration; non-uniform EA is a straightforward
+//       // follow-on (per-element E[i], A[i] arrays).
+//
+//   pub fn bar1d_solve_fixed_free(nodes: [float], E: float, A: float,
+//                                  P_tip: float) -> [float]
+//       // applies essential BC u[0] = 0 and Neumann BC f[n-1] = P_tip,
+//       // condenses to the (n-1) × (n-1) reduced system, solves via
+//       // Thomas tridiagonal algorithm, and returns the full
+//       // length-n displacement vector with u[0] prepended.
+
+use "stdlib/core/math/float"
+
+// ─── primitives ──────────────────────────────────────────────────────
+
+/// Build the 2×2 element stiffness for a linear bar element of length
+/// `L`, modulus `E`, cross-section area `A`. Returns the dense 2×2 as
+/// a row-major `[[float]]`.
+///
+/// Algorithm reference: Hughes §1.6 — the strain-displacement matrix
+/// B = (dN/dx) = (1/L) · [-1, 1] for the 2-node linear element gives
+///     k_e = ∫_0^L B^T · (E·A) · B dx
+///         = (E·A/L) · [[ 1, -1], [-1, 1]]
+/// after the constant integrand collapses the integral to a single
+/// scalar factor.
+///
+/// Operation order is FROZEN — `c = E * A / L`, then 4 array writes
+/// in row-major (0,0)(0,1)(1,0)(1,1). Mirrored 1:1 in the Python
+/// oracle so the IEEE-754 result is bit-identical.
+pub fn bar1d_element_stiffness(E: float, A: float, L: float) -> [[float]] {
+    let c = E * A / L
+    return [[c, 0.0 - c], [0.0 - c, c]]
+}
+
+/// Assemble the global (n × n) dense stiffness matrix from a uniform-
+/// material 1-D bar discretised over `nodes`. `nodes` is the array of
+/// node x-coordinates (strictly increasing, length n ≥ 2). The kernel
+/// emits one element per consecutive node pair; element length L_i =
+/// nodes[i+1] − nodes[i] (may be non-uniform). Constant E and A across
+/// all elements in this iteration.
+///
+/// Algorithm reference: Cook §2.3 — direct-stiffness assembly. For
+/// each element e with local nodes (i, j) = (e, e+1), add the element
+/// stiffness k_e into the global K at positions (i,i), (i,j), (j,i),
+/// (j,j). Initial K is the zero matrix.
+///
+/// Operation order is FROZEN — outer loop e = 0..n_elem-1, inner 4
+/// writes in the (i,i)(i,j)(j,i)(j,j) order. The Python oracle uses
+/// the same loop and the same write order, so K bit-mirrors.
+pub fn bar1d_assemble_K(nodes: [float], E: float, A: float) -> [[float]] {
+    let n = len(nodes)
+    // initialise zero matrix
+    let mut K: [[float]] = []
+    let mut r = 0
+    while r < n {
+        let mut row: [float] = []
+        let mut s = 0
+        while s < n {
+            row = row.push(0.0)
+            s = s + 1
+        }
+        K = K.push(row)
+        r = r + 1
+    }
+    // accumulate element stiffnesses
+    let n_elem = n - 1
+    let mut e = 0
+    while e < n_elem {
+        let L = nodes[e + 1] - nodes[e]
+        let ke = bar1d_element_stiffness(E, A, L)
+        // (i,i)(i,j)(j,i)(j,j) with i=e, j=e+1
+        K[e][e]         = K[e][e]         + ke[0][0]
+        K[e][e + 1]     = K[e][e + 1]     + ke[0][1]
+        K[e + 1][e]     = K[e + 1][e]     + ke[1][0]
+        K[e + 1][e + 1] = K[e + 1][e + 1] + ke[1][1]
+        e = e + 1
+    }
+    return K
+}
+
+// ─── Thomas tridiagonal solver ───────────────────────────────────────
+
+/// Solve a tridiagonal SPD system A·u = b in-place using the Thomas
+/// algorithm (Crout factorisation of a tridiagonal matrix). The
+/// caller passes three length-m arrays representing the sub-diagonal
+/// `a` (a[0] unused / 0), the main diagonal `d`, and the super-
+/// diagonal `c` (c[m-1] unused / 0), plus the right-hand side `b`.
+/// Returns the solution `u` as a length-m array.
+///
+/// Algorithm reference: Burden & Faires §6.6 — Algorithm 6.7
+/// (Crout factorisation for tridiagonal linear systems). Forward
+/// sweep eliminates the sub-diagonal; back sweep solves the upper
+/// triangular system. O(m) work, O(1) extra storage beyond the
+/// three input vectors.
+///
+/// Operation order is FROZEN — the Python oracle mirrors the same
+/// (m_prime, c_prime, d_prime) running update and the same back-
+/// substitution from index m-1 down to 0.
+fn thomas_tridiag(a: [float], d: [float], c: [float],
+                  b: [float]) -> [float] {
+    let m = len(d)
+    // working copies (the algorithm overwrites c and b in canonical
+    // texts; the kernel keeps a separate buffer for clarity).
+    let mut cp: [float] = []
+    let mut dp: [float] = []
+    let mut i = 0
+    while i < m {
+        cp = cp.push(c[i])
+        dp = dp.push(b[i])
+        i = i + 1
+    }
+    // forward sweep
+    cp[0] = c[0] / d[0]
+    dp[0] = b[0] / d[0]
+    let mut k = 1
+    while k < m {
+        let denom = d[k] - a[k] * cp[k - 1]
+        if k < m - 1 {
+            cp[k] = c[k] / denom
+        }
+        dp[k] = (b[k] - a[k] * dp[k - 1]) / denom
+        k = k + 1
+    }
+    // back substitution
+    let mut u: [float] = []
+    let mut q = 0
+    while q < m {
+        u = u.push(0.0)
+        q = q + 1
+    }
+    u[m - 1] = dp[m - 1]
+    let mut j = m - 2
+    while j >= 0 {
+        u[j] = dp[j] - cp[j] * u[j + 1]
+        j = j - 1
+    }
+    return u
+}
+
+// ─── fixed-free tip-load solve ───────────────────────────────────────
+
+/// Full assemble + condense + solve for the canonical fixed-free
+/// axial bar problem:
+///     • node 0 is fixed: u[0] = 0
+///     • last node carries a point load: f[n-1] = P_tip
+///     • interior nodes have zero body load: f[i] = 0 for 0 < i < n-1
+///
+/// Returns the length-n displacement vector with u[0] = 0 prepended
+/// to the (n-1)-vector returned by the reduced-system Thomas solve.
+///
+/// Reduced system: drop row 0 and column 0 from K → K_red is (n-1)×
+/// (n-1) tridiagonal with main diagonal [k_1+k_2, k_2+k_3, ..., k_{n-1}]
+/// (where the last entry is the boundary k_{n-1} without a second
+/// element to add) and off-diagonal -k_i. (Here k_i = E·A / L_i is the
+/// per-element scalar.) RHS = [0, 0, ..., 0, P_tip].
+///
+/// For the uniform-mesh case (L_i = L for all i) the closed-form
+/// answer is u(x_k) = P_tip · x_k / (E·A) — independent of N, so the
+/// FEM solve matches the analytic oracle bit-for-bit modulo Thomas
+/// roundoff.
+pub fn bar1d_solve_fixed_free(nodes: [float], E: float, A: float,
+                              P_tip: float) -> [float] {
+    let n = len(nodes)
+    // assemble global K, then condense out node 0 (drop row 0 + col 0).
+    let K = bar1d_assemble_K(nodes, E, A)
+    let m = n - 1                       // reduced-system size
+    // extract tridiagonals from the reduced (1..n-1, 1..n-1) sub-block
+    let mut a: [float] = []             // sub-diag
+    let mut d: [float] = []             // main diag
+    let mut c: [float] = []             // super-diag
+    let mut b: [float] = []             // RHS
+    let mut i = 0
+    while i < m {
+        // reduced-system row i corresponds to global row (i+1)
+        let gi = i + 1
+        d = d.push(K[gi][gi])
+        if i == 0 {
+            a = a.push(0.0)
+        } else {
+            a = a.push(K[gi][gi - 1])
+        }
+        if i == m - 1 {
+            c = c.push(0.0)
+        } else {
+            c = c.push(K[gi][gi + 1])
+        }
+        // RHS = 0 everywhere except the last entry (tip load)
+        if i == m - 1 {
+            b = b.push(P_tip)
+        } else {
+            b = b.push(0.0)
+        }
+        i = i + 1
+    }
+    let u_red = thomas_tridiag(a, d, c, b)
+    // prepend u[0] = 0 (essential BC)
+    let mut u: [float] = []
+    u = u.push(0.0)
+    let mut k = 0
+    while k < m {
+        u = u.push(u_red[k])
+        k = k + 1
+    }
+    return u
+}
+
+// ─── ①b adapter note ────────────────────────────────────────────────
+//
+// `stdlib/kernels/fem/skfem_kernel.py` (the 3-D tet thermal + linear-
+// elasticity solver) remains the production FEM kernel — this 1-D bar
+// kernel does NOT replace it. The day a hexa-native sparse-linalg
+// stack + 2-D/3-D element families land, the assembly pattern in this
+// pilot generalises (per Hughes §3 — same direct-stiffness mapping
+// applies to any conforming element). For now this kernel is the
+// PROOF-OF-PATTERN slice that FEM assembly + a direct linear solve
+// are reachable in hexa-native form; the heavy-port classification of
+// kernel-fem in `demiurge:domains/DEPENDENCIES.demi` stands.

@@ -1,0 +1,643 @@
+// ═══════════════════════════════════════════════════════════════
+//  test_watermark.hexa — Watermarking verification (#39 + #119)
+//
+//  Tests (>= 25):
+//    T1  green mask correct size
+//    T2  ~50% green tokens (lower bound)
+//    T3  ~50% green tokens (upper bound)
+//    T4  apply_bias increases green logits
+//    T5  apply_bias leaves red logits unchanged
+//    T6  argmax selects highest logit
+//    T7  count_green n_total correct
+//    T8  z_score ~0 for 50%
+//    T9  z_score >> 0 for 80%
+//    T10 watermarked generation more green
+//    T11 detect finds watermark
+//    T12 detect clean has lower z
+//    T13 p_value low for high z
+//    T14 p_value ~ 0.5 for z ~ 0
+//    T15 sliding window returns valid range
+//    T16 sliding window z >= full-sequence z on watermarked
+//    T17 sliding window detects watermark in partially edited text
+//    T18 keygen produces positive integer
+//    T19 keygen different passphrases -> different keys
+//    T20 key_fingerprint in range [0, 999999]
+//    T21 rotate_key produces new key different from original
+//    T22 multi_key_detect picks correct key
+//    T23 multi_key_detect wrong keys -> not detected
+//    T24 detect_pvalue with p=0.01 finds watermark
+//    T25 detect_pvalue clean text not detected
+//    T26 strength positive for watermarked text
+//    T27 strength near zero for clean text
+//    T28 configurable gamma mask has correct green fraction
+//    T29 detect_gamma works with gamma=0.3
+//    T30 detect_robust finds watermark in edited text
+//
+//  실행: ./hexa self/test_watermark.hexa
+// ═══════════════════════════════════════════════════════════════
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn check(name, cond) {
+    if cond {
+        println("[PASS] " + name)
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name)
+        fail_count = fail_count + 1
+    }
+}
+
+fn fabs(x) { if x < 0.0 { return 0.0 - x } return x }
+fn approx(a, b, eps) { return fabs(a - b) < eps }
+
+// ── inlined from watermark.hexa ─────────────────────────────
+
+fn wm_abs(x) {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn wm_sqrt(x) {
+    if x <= 0.0 { return 0.0 }
+    let mut g = x / 2.0
+    if g < 1.0 { g = 1.0 }
+    let mut _i = 0
+
+    while _i < 30 { g = (g + x / g) / 2.0 }
+    return g
+}
+
+fn wm_exp(x) {
+    let mut v = x
+    if v > 20.0 { v = 20.0 }
+    if v < -20.0 { v = -20.0 }
+    let mut result = 1.0
+    let mut term = 1.0
+    let mut i = 1
+
+    while i < 30 {
+        term = term * v / to_float(i)
+        result = result + term
+    }
+    if result < 0.0 { return 0.0 }
+    return result
+}
+
+fn wm_zeros(n) {
+    let mut v = []
+    let mut _i = 0
+
+    while _i < n { v = v + [0.0] }
+    return v
+}
+
+fn wm_zeros_int(n) {
+    let mut v = []
+    let mut _i = 0
+
+    while _i < n { v = v + [0] }
+    return v
+}
+
+fn wm_hash_single(prev_token, token_id, seed) {
+    let mut h = (prev_token + 1) * 2654435761 + token_id * 1315423911 + seed * 7919
+    h = h % 1000003
+    if h < 0 { h = 0 - h }
+    return h
+}
+
+fn wm_green_mask(prev_token, vocab_size, seed, gamma) {
+    let mut mask = wm_zeros_int(vocab_size)
+    let threshold = to_int(gamma * to_float(vocab_size))
+    let mut t = 0
+
+    while t < vocab_size {
+        let h = wm_hash_single(prev_token, t, seed)
+        let bucket = h % vocab_size
+        if bucket < threshold { mask[t] = 1 }
+    }
+    return mask
+}
+
+fn wm_green_mask_default(prev_token, vocab_size, seed) {
+    return wm_green_mask(prev_token, vocab_size, seed, 0.5)
+}
+
+fn wm_apply_bias(logits, green_mask, delta) {
+    let n = len(logits)
+    let mut out = wm_zeros(n)
+    let mut i = 0
+
+    while i < n {
+        out[i] = logits[i]
+        if green_mask[i] == 1 { out[i] = out[i] + delta }
+    }
+    return out
+}
+
+fn wm_softmax(logits) {
+    let n = len(logits)
+    let mut mx = logits[0]
+    let mut i = 1
+
+    while i < n {
+        if logits[i] > mx { mx = logits[i] }
+    }
+    let mut exps = wm_zeros(n)
+    let mut z = 0.0
+    let mut i = 0
+
+    while i < n {
+        exps[i] = wm_exp(logits[i] - mx)
+        z = z + exps[i]
+    }
+    let mut out = wm_zeros(n)
+    let mut i = 0
+
+    while i < n { out[i] = exps[i] / z }
+    return out
+}
+
+fn wm_argmax(logits) {
+    let n = len(logits)
+    let mut best = 0
+    let mut best_v = logits[0]
+    let mut i = 1
+
+    while i < n {
+        if logits[i] > best_v {
+            best_v = logits[i]
+            best = i
+        }
+    }
+    return best
+}
+
+fn wm_count_green(tokens, vocab_size, seed) {
+    let n = len(tokens)
+    if n < 2 { return [0, 0] }
+    let mut n_green = 0
+    let mut n_total = 0
+    let mut i = 1
+
+    while i < n {
+        let prev = tokens[i - 1]
+        let cur = tokens[i]
+        let mask = wm_green_mask_default(prev, vocab_size, seed)
+        if mask[cur] == 1 { n_green = n_green + 1 }
+        n_total = n_total + 1
+    }
+    return [n_green, n_total]
+}
+
+fn wm_z_score(n_green, n_total, gamma) {
+    if n_total <= 0 { return 0.0 }
+    let p_hat = to_float(n_green) / to_float(n_total)
+    let denom = wm_sqrt(gamma * (1.0 - gamma) / to_float(n_total))
+    if denom < 1.0e-10 { return 0.0 }
+    return (p_hat - gamma) / denom
+}
+
+fn wm_z_score_default(n_green, n_total) {
+    return wm_z_score(n_green, n_total, 0.5)
+}
+
+fn wm_detect(tokens, vocab_size, seed, threshold) {
+    let counts = wm_count_green(tokens, vocab_size, seed)
+    let n_green = counts[0]
+    let n_total = counts[1]
+    let z = wm_z_score_default(n_green, n_total)
+    let mut detected = 0
+    if z >= threshold { detected = 1 }
+    return [detected, z, n_green, n_total]
+}
+
+fn wm_generate(logits_fn, start_token, n_tokens, vocab_size, seed, delta) {
+    let mut tokens = [start_token]
+    let mut prev = start_token
+    let mut _t = 0
+
+    while _t < n_tokens {
+        let raw_logits = logits_fn(prev)
+        let mask = wm_green_mask_default(prev, vocab_size, seed)
+        let biased = wm_apply_bias(raw_logits, mask, delta)
+        let next = wm_argmax(biased)
+        tokens = tokens + [next]
+        prev = next
+    }
+    return tokens
+}
+
+fn wm_generate_clean(logits_fn, start_token, n_tokens) {
+    let mut tokens = [start_token]
+    let mut prev = start_token
+    let mut _t = 0
+
+    while _t < n_tokens {
+        let raw_logits = logits_fn(prev)
+        let next = wm_argmax(raw_logits)
+        tokens = tokens + [next]
+        prev = next
+    }
+    return tokens
+}
+
+fn wm_p_value(z) {
+    if z < 0.0 { return 1.0 }
+    let pi = 3.141592653589793
+    let inv_sqrt2pi = 1.0 / wm_sqrt(2.0 * pi)
+    let pdf = inv_sqrt2pi * wm_exp(-0.5 * z * z)
+    if z < 0.01 { return 0.5 }
+    let p = pdf / z
+    if p > 0.5 { return 0.5 }
+    return p
+}
+
+// ── new functions from #119 ──────────────────────────────────
+
+fn wm_detect_sliding(tokens, vocab_size, seed, window_size) {
+    let n = len(tokens)
+    if n < 3 { return [0.0, 0, 0, 0, 0] }
+    let mut ws = window_size
+    if ws > n { ws = n }
+    if ws < 3 { ws = 3 }
+    let mut best_z = -999.0
+    let mut best_start = 0
+    let mut best_end = 0
+    let mut best_ng = 0
+    let mut best_nt = 0
+    let num_windows = n - ws + 1
+    let mut s = 0
+
+    while s < num_windows {
+        let e = s + ws
+        let mut ng = 0
+        let mut nt = 0
+        let mut i = (s + 1)
+
+        while i < e {
+            let prev = tokens[i - 1]
+            let cur = tokens[i]
+            let mask = wm_green_mask_default(prev, vocab_size, seed)
+            if mask[cur] == 1 { ng = ng + 1 }
+            nt = nt + 1
+        }
+        let z = wm_z_score_default(ng, nt)
+        if z > best_z {
+            best_z = z
+            best_start = s
+            best_end = e
+            best_ng = ng
+            best_nt = nt
+        }
+    }
+    return [best_z, best_start, best_end, best_ng, best_nt]
+}
+
+fn wm_p_to_z_threshold(p_threshold) {
+    if p_threshold >= 0.05 { return 1.645 }
+    if p_threshold >= 0.01 { return 2.326 }
+    if p_threshold >= 0.001 { return 3.09 }
+    if p_threshold >= 0.0001 { return 3.72 }
+    if p_threshold >= 0.00001 { return 4.26 }
+    return 4.75
+}
+
+fn wm_detect_pvalue(tokens, vocab_size, seed, p_threshold) {
+    let z_thresh = wm_p_to_z_threshold(p_threshold)
+    let counts = wm_count_green(tokens, vocab_size, seed)
+    let ng = counts[0]
+    let nt = counts[1]
+    let z = wm_z_score_default(ng, nt)
+    let p = wm_p_value(z)
+    let mut detected = 0
+    if z >= z_thresh { detected = 1 }
+    return [detected, z, p, ng, nt]
+}
+
+fn wm_keygen(passphrase) {
+    let chars = passphrase.chars()
+    let n = len(chars)
+    let mut h = 5381
+    let mut i = 0
+
+    while i < n {
+        let c = to_int(chars[i])
+        h = h * 33 + c
+        h = h % 2147483647
+    }
+    if h < 0 { h = 0 - h }
+    return h
+}
+
+fn wm_key_fingerprint(seed) {
+    let mut fp = seed % 1000000
+    if fp < 0 { fp = 0 - fp }
+    return fp
+}
+
+fn wm_rotate_key(seed, epoch) {
+    let mut h = seed * 2654435761 + epoch * 1315423911 + 7919
+    h = h % 2147483647
+    if h < 0 { h = 0 - h }
+    return h
+}
+
+fn wm_multi_key_detect(tokens, vocab_size, keys, threshold) {
+    let nk = len(keys)
+    let mut best_idx = -1
+    let mut best_z = -999.0
+    let mut best_ng = 0
+    let mut best_nt = 0
+    let mut k = 0
+
+    while k < nk {
+        let counts = wm_count_green(tokens, vocab_size, keys[k])
+        let ng = counts[0]
+        let nt = counts[1]
+        let z = wm_z_score_default(ng, nt)
+        if z > best_z {
+            best_z = z
+            best_idx = k
+            best_ng = ng
+            best_nt = nt
+        }
+    }
+    let mut detected = 0
+    if best_z >= threshold { detected = 1 }
+    return [best_idx, best_z, detected, best_ng, best_nt]
+}
+
+fn wm_strength(tokens, vocab_size, seed, gamma) {
+    let n = len(tokens)
+    if n < 2 { return [0.0, 0.0, gamma] }
+    let mut ng = 0
+    let mut nt = 0
+    let mut i = 1
+
+    while i < n {
+        let prev = tokens[i - 1]
+        let cur = tokens[i]
+        let mask = wm_green_mask(prev, vocab_size, seed, gamma)
+        if mask[cur] == 1 { ng = ng + 1 }
+        nt = nt + 1
+    }
+    let gf = to_float(ng) / to_float(nt)
+    return [gf - gamma, gf, gamma]
+}
+
+fn wm_count_green_gamma(tokens, vocab_size, seed, gamma) {
+    let n = len(tokens)
+    if n < 2 { return [0, 0] }
+    let mut ng = 0
+    let mut nt = 0
+    let mut i = 1
+
+    while i < n {
+        let prev = tokens[i - 1]
+        let cur = tokens[i]
+        let mask = wm_green_mask(prev, vocab_size, seed, gamma)
+        if mask[cur] == 1 { ng = ng + 1 }
+        nt = nt + 1
+    }
+    return [ng, nt]
+}
+
+fn wm_detect_gamma(tokens, vocab_size, seed, gamma, threshold) {
+    let counts = wm_count_green_gamma(tokens, vocab_size, seed, gamma)
+    let ng = counts[0]
+    let nt = counts[1]
+    let z = wm_z_score(ng, nt, gamma)
+    let mut detected = 0
+    if z >= threshold { detected = 1 }
+    return [detected, z, ng, nt]
+}
+
+fn wm_detect_robust(tokens, vocab_size, seed, window_size, p_threshold) {
+    let sw = wm_detect_sliding(tokens, vocab_size, seed, window_size)
+    let best_z = sw[0]
+    let best_p = wm_p_value(best_z)
+    let z_thresh = wm_p_to_z_threshold(p_threshold)
+    let mut detected = 0
+    if best_z >= z_thresh { detected = 1 }
+    return [detected, best_z, best_p, sw[1], sw[2]]
+}
+
+// ── mock logits function: deterministic based on prev_token ──
+let VOCAB = 16
+
+fn mock_logits(prev) {
+    let mut logits = wm_zeros(VOCAB)
+    let mut i = 0
+
+    while i < VOCAB {
+        let mut h = (prev + 1) * 31 + i * 17
+        h = h % 100
+        logits[i] = to_float(h) / 100.0
+    }
+    return logits
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  TESTS
+// ═══════════════════════════════════════════════════════════════
+
+let SEED = 42
+
+// T1: green mask correct size
+let mask1 = wm_green_mask_default(5, VOCAB, SEED)
+check("T1 green mask size = vocab", len(mask1) == VOCAB)
+
+// T2-T3: approximately 50% green
+let mut green_count = 0
+let mut i = 0
+
+while i < VOCAB {
+    if mask1[i] == 1 { green_count = green_count + 1 }
+}
+let green_frac = to_float(green_count) / to_float(VOCAB)
+check("T2 ~50% green tokens (lower)", green_frac >= 0.2)
+check("T3 ~50% green tokens (upper)", green_frac <= 0.8)
+
+// T4: apply_bias increases green logits
+let test_logits = [1.0, 2.0, 3.0, 1.0, 2.0, 3.0, 1.0, 2.0, 3.0, 1.0, 2.0, 3.0, 1.0, 2.0, 3.0, 1.0]
+let biased = wm_apply_bias(test_logits, mask1, 2.0)
+let mut any_increased = false
+let mut i = 0
+
+while i < VOCAB {
+    if mask1[i] == 1 {
+        if biased[i] > test_logits[i] { any_increased = true }
+    }
+}
+check("T4 bias increases green logits", any_increased)
+
+// T5: red logits unchanged
+let mut red_unchanged = true
+let mut i = 0
+
+while i < VOCAB {
+    if mask1[i] == 0 {
+        if fabs(biased[i] - test_logits[i]) > 0.001 { red_unchanged = false }
+    }
+}
+check("T5 red logits unchanged", red_unchanged)
+
+// T6: argmax selects highest
+let argmax_logits = [0.1, 0.5, 0.9, 0.2]
+check("T6 argmax picks index 2", wm_argmax(argmax_logits) == 2)
+
+// T7: count_green on sequential tokens
+let seq_tokens = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+let counts = wm_count_green(seq_tokens, VOCAB, SEED)
+check("T7 count_green n_total = 15", counts[1] == 15)
+
+// T8: z_score ~0 for 50% green
+let z_50 = wm_z_score_default(50, 100)
+check("T8 z_score for 50% ~= 0", fabs(z_50) < 0.5)
+
+// T9: z_score >> 0 for 80% green
+let z_80 = wm_z_score_default(80, 100)
+check("T9 z_score for 80% >> 0", z_80 > 4.0)
+
+// T10: watermarked generation has more green tokens
+let wm_tokens = wm_generate(mock_logits, 0, 50, VOCAB, SEED, 5.0)
+let clean_tokens = wm_generate_clean(mock_logits, 0, 50)
+let wm_counts = wm_count_green(wm_tokens, VOCAB, SEED)
+let wm_green_frac = to_float(wm_counts[0]) / to_float(wm_counts[1])
+check("T10 watermarked has more green", wm_green_frac > 0.5)
+
+// T11: detect finds watermark
+let detect_wm = wm_detect(wm_tokens, VOCAB, SEED, 2.0)
+check("T11 detect watermarked: detected=1", detect_wm[0] == 1)
+
+// T12: detect clean has lower z
+let detect_clean = wm_detect(clean_tokens, VOCAB, SEED, 4.0)
+check("T12 detect clean z < watermarked z", detect_clean[1] < detect_wm[1])
+
+// T13: p_value low for high z
+let p_high = wm_p_value(5.0)
+check("T13 p_value for z=5 is very low", p_high < 0.001)
+
+// T14: p_value ~0.5 for z near 0
+let p_zero = wm_p_value(0.001)
+check("T14 p_value for z~0 is ~0.5", fabs(p_zero - 0.5) < 0.1)
+
+// ═══════════════════════════════════════════════════════════════
+//  #119 NEW TESTS — Sliding Window, Key Management, Robustness
+// ═══════════════════════════════════════════════════════════════
+
+// T15: sliding window returns valid range
+let sw = wm_detect_sliding(wm_tokens, VOCAB, SEED, 20)
+check("T15 sliding window best_start >= 0", sw[1] >= 0)
+check("T15b sliding window best_end <= len", sw[2] <= len(wm_tokens))
+
+// T16: sliding window z is positive (watermark visible in best window)
+check("T16 sliding window z > 0 (watermark visible)", sw[0] > 1.0)
+
+// T17: sliding window detects watermark in partially edited text
+// Take watermarked tokens, corrupt the first 10 tokens, keep rest
+let mut edited_tokens = []
+let mut i = 0
+
+while i < len(wm_tokens) {
+    if i < 10 {
+        // Replace with arbitrary "noise" tokens
+        edited_tokens = edited_tokens + [(i * 7 + 3) % VOCAB]
+    } else {
+        edited_tokens = edited_tokens + [wm_tokens[i]]
+    }
+}
+let sw_edited = wm_detect_sliding(edited_tokens, VOCAB, SEED, 20)
+check("T17 sliding window finds watermark in partially edited text", sw_edited[0] > 2.0)
+
+// T18: keygen produces positive integer
+let key1 = wm_keygen("secret-watermark-key-alpha")
+check("T18 keygen produces positive int", key1 > 0)
+
+// T19: different passphrases -> different keys
+let key2 = wm_keygen("different-passphrase-beta")
+check("T19 different passphrases -> different keys", key1 != key2)
+
+// T20: key_fingerprint in valid range
+let fp1 = wm_key_fingerprint(key1)
+check("T20 fingerprint >= 0", fp1 >= 0)
+check("T20b fingerprint < 1000000", fp1 < 1000000)
+
+// T21: rotate_key produces different key
+let rotated = wm_rotate_key(key1, 1)
+check("T21 rotated key != original", rotated != key1)
+
+// T22: multi_key_detect picks correct key
+let correct_seed = SEED
+let wrong_seed1 = 999
+let wrong_seed2 = 12345
+let keys = [wrong_seed1, wrong_seed2, correct_seed]
+let mk = wm_multi_key_detect(wm_tokens, VOCAB, keys, 2.0)
+check("T22 multi_key picks key index 2 (correct)", mk[0] == 2)
+check("T22b multi_key detected=1", mk[2] == 1)
+
+// T23: multi_key_detect wrong keys -> not detected at high threshold
+let wrong_keys = [wrong_seed1, wrong_seed2]
+let mk_wrong = wm_multi_key_detect(wm_tokens, VOCAB, wrong_keys, 8.0)
+check("T23 wrong keys not detected at high threshold", mk_wrong[2] == 0)
+
+// T24: detect_pvalue with p=0.01 finds watermark
+let dp = wm_detect_pvalue(wm_tokens, VOCAB, SEED, 0.01)
+check("T24 detect_pvalue finds watermark (p=0.01)", dp[0] == 1)
+check("T24b p_value returned is small", dp[2] < 0.05)
+
+// T25: detect_pvalue clean text not detected at p=0.001
+let dp_clean = wm_detect_pvalue(clean_tokens, VOCAB, SEED, 0.001)
+check("T25 detect_pvalue clean not detected (p=0.001)", dp_clean[0] == 0)
+
+// T26: strength positive for watermarked text
+let str_wm = wm_strength(wm_tokens, VOCAB, SEED, 0.5)
+check("T26 strength > 0 for watermarked", str_wm[0] > 0.0)
+check("T26b green_fraction > 0.5", str_wm[1] > 0.5)
+
+// T27: strength near zero for clean text
+let str_cl = wm_strength(clean_tokens, VOCAB, SEED, 0.5)
+check("T27 strength for clean text < watermarked", str_cl[0] < str_wm[0])
+
+// T28: configurable gamma mask green fraction
+let mask_g03 = wm_green_mask(5, VOCAB, SEED, 0.3)
+let mut gc03 = 0
+let mut i = 0
+
+while i < VOCAB {
+    if mask_g03[i] == 1 { gc03 = gc03 + 1 }
+}
+let gf03 = to_float(gc03) / to_float(VOCAB)
+// With gamma=0.3, expect roughly 30% green (allow wide tolerance for small vocab)
+check("T28 gamma=0.3 green fraction <= 0.6", gf03 <= 0.6)
+
+// T29: detect_gamma works with gamma=0.3
+// Generate watermarked tokens with gamma=0.3 bias
+let mut wm_tokens_g03 = [0]
+let mut prev_g = 0
+let mut _t = 0
+
+while _t < 50 {
+    let raw = mock_logits(prev_g)
+    let mask_g = wm_green_mask(prev_g, VOCAB, SEED, 0.3)
+    let biased_g = wm_apply_bias(raw, mask_g, 5.0)
+    let next_g = wm_argmax(biased_g)
+    wm_tokens_g03 = wm_tokens_g03 + [next_g]
+    prev_g = next_g
+}
+let dg = wm_detect_gamma(wm_tokens_g03, VOCAB, SEED, 0.3, 2.0)
+check("T29 detect_gamma(0.3) finds watermark", dg[0] == 1)
+
+// T30: detect_robust finds watermark in partially edited text
+let dr = wm_detect_robust(edited_tokens, VOCAB, SEED, 20, 0.01)
+check("T30 detect_robust finds watermark in edited text", dr[0] == 1)
+
+// ═══════════════════════════════════════════════════════════════
+println("")
+println("=== watermark test summary ===")
+println("PASS: " + str(pass_count))
+println("FAIL: " + str(fail_count))
+println("TOTAL: " + str(pass_count + fail_count))

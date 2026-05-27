@@ -1,0 +1,3 @@
+#!/bin/sh
+# hive safety gate — commit-msg (no-hardcode personal-path-leak-ban-iter5)
+exec "$(git rev-parse --show-toplevel)/scripts/safety/commit-msg-scan.sh" "$@"

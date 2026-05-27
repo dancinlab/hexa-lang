@@ -1,0 +1,61 @@
+// ═══════════════════════════════════════════════════════════
+//  self/stdlib/proc/wait.hexa -- waitpid(2) wrapper (POSIX, P1)
+//
+//  Reap child processes spawned via pty_forkexec / pool_on / any
+//  hexa fork+exec pattern. Cross-platform — works on macOS + Linux.
+//
+//  proc_wait(pid, flags) -> map
+//    pid:    > 0  wait for that specific child
+//            == 0 wait for any child in the same process group
+//            == -1 wait for any child (most common)
+//    flags:  bitmask of WNOHANG | WUNTRACED | WCONTINUED
+//    return: map { pid, exited, signaled, exit_code, term_sig,
+//                  raw_status } on success.
+//            On WNOHANG with no children ready: same shape with pid=0.
+//            On error: { error: <msg>, errno: <int>, pid: -1 }.
+//
+//  proc_reap_zombies() -> int
+//    Reap every zombie waiting in WNOHANG mode. Returns count reaped.
+//    Safe to call in a loop / on a timer (no-op when no zombies).
+
+// Constants resolved at module-load time so values stay synced with
+// <sys/wait.h>. NB: names are prefixed `WAIT_` to avoid clashing with
+// the libc preprocessor macros of the same bare names — the codegen
+// emits `HexaVal WAIT_WNOHANG = ...` and `WNOHANG` is taken by the
+// header as a macro.
+pub let WAIT_WNOHANG    : int = proc_wait_flag_const("WNOHANG")
+pub let WAIT_UNTRACED   : int = proc_wait_flag_const("WUNTRACED")
+pub let WAIT_CONTINUED  : int = proc_wait_flag_const("WCONTINUED")
+
+// Blocking wait for one specific child. Convenience over the raw
+// proc_wait(pid, 0) call when the caller knows the pid.
+pub fn proc_wait_for(pid: int) -> any {
+    return proc_wait(pid, 0)
+}
+
+// Non-blocking probe: did this child exit? Returns void if not yet
+// (or if waitpid errored on a non-existent pid).
+pub fn proc_try_reap(pid: int) -> any {
+    let r = proc_wait(pid, WAIT_WNOHANG)
+    if type_of(r) != "map" { return void }
+    if has_key(r, "error") { return void }
+    let p = r["pid"]
+    if p == 0 || p == -1 { return void }    // still running / no info
+    return r
+}
+
+// Reap every zombie that's pending. Returns count.
+pub fn proc_reap_zombies() -> int {
+    let mut n = 0
+    let mut tries = 0
+    while tries < 1024 {
+        let r = proc_wait(-1, WAIT_WNOHANG)
+        if type_of(r) != "map" { break }
+        if has_key(r, "error") { break }
+        let p = r["pid"]
+        if p == 0 || p == -1 { break }
+        n = n + 1
+        tries = tries + 1
+    }
+    return n
+}

@@ -1,0 +1,44 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "hexa-bio/virocapsid/spec/kinetic_trap_remediation_v1.schema.json",
+  "title": "F-VIROCAPSID-4 kinetic-trap remediation sweep witness v1",
+  "description": "Aggregate witness emitted by virocapsid_kinetic_trap_remediation.py. Param sweep over K_CLOSE × K12 grid seeking joint PASS (y_aberrant_max < 0.15 AND y_closed_final >= 0.85).",
+  "type": "object",
+  "required": [
+    "schema",
+    "audited_at",
+    "audit_kind",
+    "baseline",
+    "n_candidates_tested",
+    "n_joint_passers",
+    "all_candidates",
+    "joint_passers",
+    "f_virocapsid_4_kinetic_trap_remediation",
+    "witness_ref"
+  ],
+  "properties": {
+    "schema": {"type": "string", "const": "raw_77_virocapsid_kinetic_trap_remediation_v1"},
+    "audited_at": {"type": "string", "format": "date-time"},
+    "audit_kind": {"type": "string"},
+    "baseline": {"type": "object"},
+    "n_candidates_tested": {"type": "integer", "minimum": 1},
+    "n_joint_passers": {"type": "integer", "minimum": 0},
+    "joint_passers": {"type": "array"},
+    "all_candidates": {"type": "array"},
+    "f_virocapsid_4_kinetic_trap_remediation": {
+      "type": "object",
+      "required": ["verdict"],
+      "properties": {
+        "verdict": {"type": "string", "enum": ["PASS", "FAIL"]},
+        "best_params": {"type": ["object", "null"]},
+        "criteria": {"type": "object"},
+        "raw_91_c3_disclose": {"type": "string"}
+      }
+    },
+    "raw_77_append_only": {"type": "boolean"},
+    "witness_ref": {
+      "type": "string",
+      "pattern": "^state/discovery_absorption/registry\\.jsonl#raw_77_virocapsid_kinetic_trap_remediation_v1$"
+    }
+  }
+}

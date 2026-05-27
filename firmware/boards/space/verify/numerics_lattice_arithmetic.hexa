@@ -1,0 +1,102 @@
+#!hexa strict
+// hexa-space/verify/numerics_lattice_arithmetic.hexa — math_pure floor.
+//
+// Per recipe §6.5: "numerics_lattice_arithmetic 는 모든 프로젝트가 공유 —
+// math_pure stability floor 는 도메인 무관." Cross-checks that the n=6
+// lattice arithmetic done in float64 (via math_pure) agrees with the
+// integer arithmetic done in pillar verify_*.hexa within numerical
+// precision — guarding against silent precision drift.
+//
+// Sentinel: __HEXA_SPACE_NUMERICS_LATTICE_ARITHMETIC__ PASS
+// Cost: $0 — math_pure-only floats.
+
+use "self/runtime/math_pure"
+
+let FALSIFIERS: [str] = ["F-SPACE-1", "F-SPACE-2", "F-SPACE-3", "F-SPACE-4"]
+
+let mut RUN  = 0
+let mut FAIL = 0
+
+fn _ck(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    if ok { println("  [PASS] " + label + "  " + detail) }
+    else  { FAIL = FAIL + 1; println("  [FAIL] " + label + "  " + detail) }
+}
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x }; return x }
+
+fn main() {
+    println("[numerics_lattice_arithmetic] math_pure float ↔ int n=6 cross-check")
+
+    // ── canonical lattice (integer SoT) ─────────────────────────────────
+    let n_i     = 6
+    let sigma_i = 12
+    let tau_i   = 4
+    let phi_i   = 2
+    let j2_i    = 24
+
+    // ── float twins ─────────────────────────────────────────────────────
+    let n     = 6.0
+    let sigma = 12.0
+    let tau   = 4.0
+    let phi   = 2.0
+    let j2    = 24.0
+
+    // 1. master closure σ·φ = n·τ = J₂ (float)
+    let lhs_f = sigma * phi
+    let mid_f = n * tau
+    _ck(lhs_f == mid_f && lhs_f == j2,
+        "float closure σ·φ = n·τ = J₂", "= " + str(j2))
+
+    // 2. integer ↔ float agreement at each lattice node
+    _ck(float(n_i)     == n,     "n: int↔float identity",     "= " + str(n))
+    _ck(float(sigma_i) == sigma, "σ: int↔float identity",     "= " + str(sigma))
+    _ck(float(tau_i)   == tau,   "τ: int↔float identity",     "= " + str(tau))
+    _ck(float(phi_i)   == phi,   "φ: int↔float identity",     "= " + str(phi))
+    _ck(float(j2_i)    == j2,    "J₂: int↔float identity",    "= " + str(j2))
+
+    // 3. σ² = 144 in both int and float
+    let s2_i = sigma_i * sigma_i
+    let s2_f = sigma * sigma
+    _ck(s2_i == 144 && s2_f == 144.0,
+        "σ² = 144 in int + float", "")
+
+    // 4. (σ-φ)^n = 10^6 (sopfr-cascade analogue) via pow_pure
+    let cascade_f = pow_pure(sigma - phi, n)
+    _ck(_abs(cascade_f - 1.0e6) < 1.0,
+        "(σ−φ)^n = 10^6 via pow_pure", "= " + str(cascade_f))
+
+    // 5. sqrt(J₂)² returns J₂ within precision
+    let r = sqrt_pure(j2)
+    let rt = r * r
+    _ck(_abs(rt - j2) < 1.0e-12,
+        "sqrt_pure(J₂)² round-trip within 1e-12", "= " + str(rt))
+
+    // 6. log_pure round-trip: log(exp(σ)) = σ within 1e-9
+    let exp_sigma = exp_pure(sigma)
+    let log_exp   = log_pure(exp_sigma)
+    _ck(_abs(log_exp - sigma) < 1.0e-9,
+        "log_pure(exp_pure(σ)) = σ within 1e-9", "= " + str(log_exp))
+
+    // 7. pi_pure() · 2 within precision of two_pi (math_pure constant)
+    let pi_v   = pi_pure()
+    let twopi  = pi_v * 2.0
+    _ck(_abs(twopi - 6.28318530717958647692) < 1.0e-12,
+        "2·pi_pure within 1e-12 of double-precision 2π",
+        "= " + str(twopi))
+
+    // 8. n=6 perfect-number identity: n = sum-of-divisors-without-self
+    //    1 + 2 + 3 = 6 = n  (perfect-number characterising prop)
+    let perf_sum = 1 + 2 + 3
+    _ck(perf_sum == n_i,
+        "perfect-number floor 1+2+3 = n = 6", "= " + str(perf_sum))
+
+    let pass_n = RUN - FAIL
+    println("[numerics_lattice_arithmetic] " + str(pass_n) + "/" + str(RUN) + " PASS")
+    if FAIL > 0 {
+        println("__HEXA_SPACE_NUMERICS_LATTICE_ARITHMETIC__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_SPACE_NUMERICS_LATTICE_ARITHMETIC__ PASS")
+    exit(0)
+}

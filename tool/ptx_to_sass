@@ -1,0 +1,48 @@
+#!/bin/sh
+# tool/ptx_to_sass — H1 round-3 PTX → SASS preview helper
+#
+# Pipes a `.ptx` file through ptxas → nvdisasm and writes the resulting
+# SASS to stdout (default) or a target path. Useful for low-level
+# inspection of NVPTX codegen — register allocation, scheduling, spill.
+#
+# Usage:
+#   ptx_to_sass <foo.ptx> [-arch=sm_80] [-o foo.sass]
+#
+# Defaults: arch=sm_80 (Ampere baseline), output to stdout.
+# Honors $PTXAS / $NVDISASM env overrides for non-default CUDA toolchain.
+#
+# Closes GPU.md milestone H1.
+
+set -eu
+
+if [ $# -lt 1 ]; then
+  echo "usage: ptx_to_sass <foo.ptx> [-arch=sm_80] [-o foo.sass]" >&2
+  exit 2
+fi
+
+PTX="$1"; shift
+ARCH="sm_80"
+OUT="-"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -arch=*) ARCH="${1#-arch=}" ;;
+    -o)      OUT="$2"; shift ;;
+    *)       echo "ptx_to_sass: unknown arg: $1" >&2; exit 2 ;;
+  esac
+  shift
+done
+
+PTXAS="${PTXAS:-ptxas}"
+NVDISASM="${NVDISASM:-nvdisasm}"
+
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+
+"$PTXAS" "$PTX" -arch="$ARCH" -o "$TMP/cubin" 2>&1
+if [ "$OUT" = "-" ]; then
+  "$NVDISASM" "$TMP/cubin"
+else
+  "$NVDISASM" "$TMP/cubin" > "$OUT"
+  echo "wrote $OUT (arch=$ARCH)" >&2
+fi

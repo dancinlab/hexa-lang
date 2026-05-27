@@ -1,0 +1,875 @@
+// self/lsp.hexa — HEXA LSP ported from src/lsp.rs
+
+// LSP server for HEXA-LANG.
+// Speaks JSON-RPC over stdin/stdout with Content-Length framing.
+// Supports: initialize/shutdown/exit, textDocument/didOpen, didChange,
+// completion, definition, hover, rename, semanticTokens/full.
+
+// Pull the canonical keyword set from the lexer SSOT so completion /
+// semantic-token classification automatically tracks language additions —
+// every new reserved word added to self/lexer.hexa flows through
+// keyword_list() into the LSP without a manual second edit. tool/
+// build_hexa_lsp.hexa flattens the use-chain via the compiled module_loader.
+use "self/lexer"
+
+// ── JSON Value type ──────────────────────────────────────────
+
+struct JsonValue {
+    kind: string,       // "null", "bool", "number", "str", "array", "object"
+    bool_val: bool,
+    num_val: float,
+    str_val: string,
+    array_val: [string], // simplified
+    obj_keys: [string],
+    obj_vals: [string]
+}
+
+fn json_null() -> JsonValue {
+    return JsonValue { kind: "null", bool_val: false, num_val: 0.0, str_val: "", array_val: [], obj_keys: [], obj_vals: [] }
+}
+
+fn json_bool(b: bool) -> JsonValue {
+    return JsonValue { kind: "bool", bool_val: b, num_val: 0.0, str_val: "", array_val: [], obj_keys: [], obj_vals: [] }
+}
+
+fn json_number(n: float) -> JsonValue {
+    return JsonValue { kind: "number", bool_val: false, num_val: n, str_val: "", array_val: [], obj_keys: [], obj_vals: [] }
+}
+
+fn json_str(s: string) -> JsonValue {
+    return JsonValue { kind: "str", bool_val: false, num_val: 0.0, str_val: s, array_val: [], obj_keys: [], obj_vals: [] }
+}
+
+fn json_value_to_json(self: JsonValue) -> string {
+    if self.kind == "null" { return "null" }
+    if self.kind == "bool" {
+        if self.bool_val { return "true" }
+        return "false"
+    }
+    if self.kind == "number" {
+        return to_string(self.num_val)
+    }
+    if self.kind == "str" {
+        return "\"" + escape_json_str(self.str_val) + "\""
+    }
+    return "null"
+}
+
+fn escape_json_str(s: string) -> string {
+    let out = ""
+    let chars = s.chars()
+    let total = len(chars)
+    let mut i = 0
+    while i < total {
+        let c = to_string(chars[i])
+        if c == "\"" { out = out + "\\\"" }
+        else if c == "\\" { out = out + "\\\\" }
+        else if c == "\n" { out = out + "\\n" }
+        else if c == "\r" { out = out + "\\r" }
+        else if c == "\t" { out = out + "\\t" }
+        else { out = out + c }
+        i = i + 1
+    }
+    return out
+}
+
+// ── LSP Constants ──────────────────────────────────────────
+
+fn get_n6_constants() -> [string] {
+    return [
+        "N6_N=6",
+        "N6_SIGMA=12",
+        "N6_TAU=4",
+        "N6_PHI=2",
+        "N6_SOPFR=5",
+        "N6_J2=24",
+        "N6_MU=1",
+        "N6_LAMBDA=2"
+    ]
+}
+
+// Delegates to the lexer's keyword_list() SSOT (see self/lexer.hexa).
+// The previously-hardcoded 45-entry array was missing 11 reserved words
+// (`import`/`extern`/`break`/`continue`/`dyn`/`in`/`do`/`defer`/`typeof`/
+// `with`/`as`) — this delegation eliminates that drift and any future drift
+// by construction.
+fn get_keywords() -> [string] {
+    return keyword_list()
+}
+
+fn get_builtins() -> [string] {
+    return [
+        "print", "println", "len", "type_of",
+        "sigma", "phi", "tau", "gcd", "sopfr",
+        "read_file", "write_file", "file_exists", "delete_file", "append_file",
+        "keys", "values", "has_key",
+        "to_string", "to_int", "to_float",
+        "abs", "min", "max", "floor", "ceil", "round", "sqrt", "pow",
+        "log", "log2", "log10", "ln", "exp", "sin", "cos", "tan",
+        "format", "args", "env_var", "exit", "clock",
+        "Some", "Ok", "Err",
+        "channel", "random", "random_int", "sleep", "print_err",
+        "json_parse", "json_stringify",
+        "psi_coupling", "psi_balance", "psi_steps", "psi_entropy", "psi_frustration",
+        "consciousness_max_cells", "consciousness_decoder_dim", "consciousness_phi",
+        "hexad_modules", "hexad_right", "hexad_left",
+        "tension_link",
+        "exec", "exec_with_status", "input", "readline"
+    ]
+}
+
+// ── Semantic Token Types (LSP spec order) ────────────────
+// Index in this array = tokenType id sent to client.
+// https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#semanticTokenTypes
+
+fn get_semantic_token_types() -> [string] {
+    return [
+        "namespace",    // 0
+        "type",         // 1
+        "class",        // 2
+        "enum",         // 3
+        "struct",       // 4
+        "parameter",    // 5
+        "variable",     // 6
+        "property",     // 7
+        "function",     // 8
+        "keyword",      // 9
+        "comment",      // 10
+        "string",       // 11
+        "number",       // 12
+        "operator",     // 13
+        "decorator"     // 14
+    ]
+}
+
+fn get_semantic_token_modifiers() -> [string] {
+    return [
+        "declaration",   // 0
+        "definition",    // 1
+        "readonly",      // 2
+        "defaultLibrary" // 3
+    ]
+}
+
+// ── LSP Semantic Tokenizer ───────────────────────────────
+// Re-tokenizes source for semantic highlighting via the lexer SSOT.
+//
+// Single source: `tokenize_with_comments(source)` from self/lexer.hexa
+// emits every token the language has — keywords (per-keyword Kind names),
+// literals, operators, AND comments (LineComment / BlockComment) — in one
+// position-sorted stream. semantic_tokenize() is just classify-and-map.
+// When the language grows (new operator, new comment style), the change
+// lands in lexer.hexa and flows here for free.
+
+struct SemanticToken {
+    line: int,       // 0-based
+    col: int,        // 0-based
+    length: int,
+    token_type: int, // index into get_semantic_token_types()
+    modifiers: int   // bitmask into get_semantic_token_modifiers()
+}
+
+// Map a lexer Token kind to an LSP semantic-token type id. Returns -1 to
+// skip (delimiters · newlines · eof). Identifier kinds get a default that
+// the caller may upgrade based on builtin / capitalization / call lookahead.
+// Anything not listed here — every operator the lexer recognizes, current
+// and future — falls through to type 13 (operator), so new tokens auto-flow.
+fn classify_lex_kind(kind: string) -> int {
+    if kind == "LineComment" { return 10 }
+    if kind == "BlockComment" { return 10 }
+    if kind == "StringLit" { return 11 }
+    if kind == "CharLit" { return 11 }
+    if kind == "RegexLit" { return 11 }
+    if kind == "IntLit" { return 12 }
+    if kind == "FloatLit" { return 12 }
+    if kind == "BoolLit" { return 9 }
+    if kind == "At" { return 14 }
+    if kind == "Attribute" { return 14 }
+    if kind == "Label" { return 6 }
+    if kind == "Ident" { return 6 }
+    if kind == "LBrace" { return -1 }
+    if kind == "RBrace" { return -1 }
+    if kind == "LParen" { return -1 }
+    if kind == "RParen" { return -1 }
+    if kind == "LBracket" { return -1 }
+    if kind == "RBracket" { return -1 }
+    if kind == "Comma" { return -1 }
+    if kind == "Semicolon" { return -1 }
+    if kind == "Newline" { return -1 }
+    if kind == "Eof" { return -1 }
+    if kind == "HashLBrace" { return -1 }
+    return 13
+}
+
+fn semantic_tokenize(source: string) -> [SemanticToken] {
+    // Build builtin set once for O(1) lookup inside the identifier branch.
+    let bi_set = #{}
+    for b in get_builtins() {
+        bi_set[b] = true
+    }
+
+    // Single SSOT pass — `tokenize_with_comments` returns the same stream
+    // tokenize() would, interleaved with LineComment / BlockComment Tokens
+    // at their source positions. Lexer line/col are 1-indexed; LSP is
+    // 0-indexed — subtract one.
+    let raw = tokenize_with_comments(source)
+    let n = len(raw)
+    let mut out = []
+    let mut i = 0
+    while i < n {
+        let tok = raw[i]
+        let line0 = tok.line - 1
+        let col0 = tok.col - 1
+        let length = len(tok.value.chars())
+
+        // Keyword? — single is_keyword() call covers all 56 reserved words
+        // regardless of which per-keyword Kind the lexer assigned to them.
+        if is_keyword(tok.value) {
+            out.push(SemanticToken { line: line0, col: col0, length: length, token_type: 9, modifiers: 0 })
+            i = i + 1
+            continue
+        }
+
+        let base = classify_lex_kind(tok.kind)
+        if base == -1 {
+            i = i + 1
+            continue
+        }
+
+        if tok.kind == "Ident" {
+            // builtin > Type (uppercase first char) > function-call > variable
+            if has_key(bi_set, tok.value) {
+                out.push(SemanticToken { line: line0, col: col0, length: length, token_type: 8, modifiers: 8 })
+            } else {
+                let first_ch = tok.value.chars()[0]
+                let first_s = to_string(first_ch)
+                if is_alpha(first_ch) && first_s == first_s.to_upper() {
+                    out.push(SemanticToken { line: line0, col: col0, length: length, token_type: 1, modifiers: 0 })
+                } else if (i + 1) < n && raw[i + 1].kind == "LParen" {
+                    out.push(SemanticToken { line: line0, col: col0, length: length, token_type: 8, modifiers: 0 })
+                } else {
+                    out.push(SemanticToken { line: line0, col: col0, length: length, token_type: 6, modifiers: 0 })
+                }
+            }
+        } else {
+            out.push(SemanticToken { line: line0, col: col0, length: length, token_type: base, modifiers: 0 })
+        }
+        i = i + 1
+    }
+
+    return out
+}
+
+// Encode semantic tokens into LSP delta format.
+// Returns a flat array of ints: [deltaLine, deltaStartChar, length, tokenType, tokenModifiers, ...]
+fn encode_semantic_tokens(stokens: [SemanticToken]) -> [int] {
+    let mut result = []
+    let mut prev_line = 0
+    let mut prev_col = 0
+    for tok in stokens {
+        let delta_line = tok.line - prev_line
+        let mut delta_col = tok.col
+        if delta_line == 0 {
+            delta_col = tok.col - prev_col
+        }
+        result.push(delta_line)
+        result.push(delta_col)
+        result.push(tok.length)
+        result.push(tok.token_type)
+        result.push(tok.modifiers)
+        prev_line = tok.line
+        prev_col = tok.col
+    }
+    return result
+}
+
+// ── Handle textDocument/semanticTokens/full ───────────────
+fn handle_semantic_tokens_full(source: string) -> string {
+    let stokens = semantic_tokenize(source)
+    let encoded = encode_semantic_tokens(stokens)
+    // Build JSON array of ints
+    let mut parts = []
+    for v in encoded {
+        parts.push(to_string(v))
+    }
+    let data_json = "[" + join(parts, ",") + "]"
+    return "{\"data\":" + data_json + "}"
+}
+
+// ── Symbol table ──────────────────────────────────────────
+
+struct Symbol {
+    name: string,
+    kind: string,   // "variable", "function", "struct", "enum", "trait", "field", "param", "variant"
+    line: int,
+    col: int,
+    detail: string
+}
+
+struct SymbolRef {
+    name: string,
+    line: int,
+    col: int,
+    sym_len: int
+}
+
+// ── Diagnostic ──────────────────────────────────────────
+
+struct LspDiagnostic {
+    line: int,        // 0-based
+    col: int,         // 0-based
+    end_col: int,
+    severity: int,    // 1=Error, 2=Warning, 3=Info, 4=Hint
+    message: string
+}
+
+fn diagnose(source: string) -> [LspDiagnostic] {
+    // In full implementation: run lexer + parser + type_checker
+    // and collect errors as diagnostics
+    let diags = []
+    return diags
+}
+
+// ── Message framing ──────────────────────────────────────
+
+fn read_message(input: string) -> string {
+    // Parse Content-Length header then read body
+    // Simplified: in real impl, reads from stdin BufReader
+    return input
+}
+
+fn send_message(body: string) -> string {
+    let msg = "Content-Length: " + to_string(len(body)) + "\r\n\r\n" + body
+    return msg
+}
+
+// ── Response builders ──────────────────────────────────────
+
+fn make_response(id: string, result: string) -> string {
+    return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":" + result + "}"
+}
+
+fn make_notification(method: string, params: string) -> string {
+    return "{\"jsonrpc\":\"2.0\",\"method\":\"" + method + "\",\"params\":" + params + "}"
+}
+
+// ── Word at position ──────────────────────────────────────
+
+// ── identifier scanner helpers ──
+
+fn _is_ident_start(c: int) -> bool {
+    if c > 96 && c < 123 { return true }   // a-z
+    if c > 64 && c < 91 { return true }    // A-Z
+    if c == 95 { return true }             // _
+    return false
+}
+
+fn _is_ident_part(c: int) -> bool {
+    if _is_ident_start(c) { return true }
+    if c > 47 && c < 58 { return true }    // 0-9
+    return false
+}
+
+fn _line_text(source: string, line: int) -> string {
+    let parts = source.split("\n")
+    if line < 0 || line >= len(parts) { return "" }
+    return parts[line]
+}
+
+fn word_at_position(source: string, line: int, character: int) -> string {
+    let row = _line_text(source, line)
+    let n = len(row)
+    if n == 0 || character < 0 || character > n { return "" }
+    let chars = row.chars()
+    // expand backwards
+    let mut s = character
+    if s == n { s = n - 1 }
+    if s < 0 || s >= n { return "" }
+    if !_is_ident_part(char_code(to_string(chars[s]), 0)) { return "" }
+    while s > 0 {
+        let pc = char_code(to_string(chars[s - 1]), 0)
+        if !_is_ident_part(pc) { break }
+        s = s - 1
+    }
+    // expand forwards
+    let mut e = character
+    while e < n {
+        let pc = char_code(to_string(chars[e]), 0)
+        if !_is_ident_part(pc) { break }
+        e = e + 1
+    }
+    if !_is_ident_start(char_code(to_string(chars[s]), 0)) { return "" }
+    return row.substring(s, e)
+}
+
+// Find top-level decl matching name. Returns "line:col" string or "" if not found.
+fn find_symbol(source: string, name: string) -> string {
+    let lines = source.split("\n")
+    let nlines = len(lines)
+    let mut i = 0
+    while i < nlines {
+        let row = lines[i]
+        // strip leading whitespace
+        let trimmed = row.trim()
+        // strip optional pub/async/pure/extern/comptime modifier
+        let mut body = trimmed
+        let mods = ["pub ", "async ", "pure ", "extern ", "comptime "]
+        let mut changed = true
+        // @partial — Stage 0: pre-witness acknowledgement
+        while changed {
+            changed = false
+            let mj = 0
+            while mj < len(mods) {
+                let m = mods[mj]
+                if body.starts_with(m) { body = body.substring(len(m), len(body)); changed = true }
+                mj = mj + 1
+            }
+        }
+        let kws = ["fn ", "let ", "const ", "static ", "struct ", "enum ", "trait ", "type ", "effect ", "macro "]
+        let mut kj = 0
+        while kj < len(kws) {
+            let kw = kws[kj]
+            if body.starts_with(kw) {
+                let after = body.substring(len(kw), len(body)).trim()
+                // strip mut for let
+                let after2 = if after.starts_with("mut ") { after.substring(4, len(after)) } else { after }
+                // identifier prefix
+                let achars = after2.chars()
+                let mut j = 0
+                let alen = len(achars)
+                while j < alen {
+                    let cc = char_code(to_string(achars[j]), 0)
+                    if !_is_ident_part(cc) { break }
+                    j = j + 1
+                }
+                if j > 0 {
+                    let id = after2.substring(0, j)
+                    if id == name {
+                        // find col in original row
+                        let col = row.index_of(id)
+                        return to_string(i) + ":" + to_string(col)
+                    }
+                }
+            }
+            kj = kj + 1
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// Find all occurrences of identifier `name` in source.
+// strstr-based: 2-pass — pass 1 collects newline + // offsets via fast index_of_from,
+// pass 2 enumerates name occurrences with linear-walk into offset arrays.
+// Skips // line-comments. String literal stripping deferred (FP acceptable for rename UX).
+// Returns list of "line:col" pairs.
+fn find_all_occurrences(source: string, name: string) -> [string] {
+    let mut result = []
+    let nlen = len(name)
+    let slen = len(source)
+    if nlen == 0 || slen == 0 { return result }
+    // Pass 1: collect newline offsets via repeated index_of_from (strstr-fast).
+    let mut newlines = []
+    let mut p = 0
+    while p < slen {
+        let nl = source.index_of_from("\n", p)
+        if nl < 0 { break }
+        newlines.push(nl)
+        p = nl + 1
+    }
+    // Pass 1b: collect // offsets (line comment starts).
+    let mut comments = []
+    let mut q = 0
+    while q < slen {
+        let cc = source.index_of_from("//", q)
+        if cc < 0 { break }
+        comments.push(cc)
+        q = cc + 2
+    }
+    // Pass 2: enumerate name occurrences, linear-walk into newlines/comments.
+    let nl_count = len(newlines)
+    let cm_count = len(comments)
+    let mut search_start = 0
+    let mut nl_idx = 0    // index into newlines, advances monotonically
+    let mut cm_idx = 0    // index into comments
+    while search_start < slen {
+        let pos = source.index_of_from(name, search_start)
+        if pos < 0 { break }
+        // advance nl_idx so newlines[nl_idx] is first newline > pos
+        while nl_idx < nl_count && newlines[nl_idx] < pos { nl_idx = nl_idx + 1 }
+        let line = nl_idx
+        let last_nl_pos = if nl_idx > 0 { newlines[nl_idx - 1] } else { -1 }
+        let col = pos - last_nl_pos - 1
+        // boundary check via char_code_at (1 call each side, O(1))
+        let prev_ok = if pos == 0 { true } else {
+            let pc = source.char_code_at(pos - 1)
+            !_is_ident_part(pc)
+        }
+        let next_ok = if pos + nlen >= slen { true } else {
+            let nc = source.char_code_at(pos + nlen)
+            !_is_ident_part(nc)
+        }
+        // in-comment check: any // between last_nl_pos and pos?
+        while cm_idx < cm_count && comments[cm_idx] < last_nl_pos + 1 { cm_idx = cm_idx + 1 }
+        let in_comment = cm_idx < cm_count && comments[cm_idx] < pos
+        if prev_ok && next_ok && !in_comment {
+            result.push(to_string(line) + ":" + to_string(col))
+        }
+        search_start = pos + nlen
+    }
+    return result
+}
+
+// ── Hover handler ──────────────────────────────────────
+
+fn keyword_doc(kw: string) -> string {
+    if kw == "if" { return "Conditional branch: `if cond { ... } else { ... }`" }
+    if kw == "fn" { return "Function declaration: `fn name(params) -> Ret { ... }`" }
+    if kw == "let" { return "Variable binding: `let name: Type = value`" }
+    if kw == "struct" { return "Struct declaration: `struct Name { field: Type, ... }`" }
+    if kw == "match" { return "Pattern matching: `match expr { pat => body, ... }`" }
+    if kw == "for" { return "Iterator loop: `for x in collection { ... }`" }
+    if kw == "while" { return "Conditional loop: `while cond { ... }`" }
+    if kw == "return" { return "Return a value from the current function" }
+    if kw == "spawn" { return "Spawn concurrent execution: `spawn { ... }`" }
+    if kw == "proof" { return "Formal proof block: `proof name { ... }`" }
+    if kw == "comptime" { return "Compile-time evaluation: `comptime { ... }`" }
+    if kw == "trait" { return "Trait declaration: `trait Name { fn method(...) -> Ret }`" }
+    if kw == "impl" { return "Implementation block: `impl Trait for Type { ... }`" }
+    if kw == "enum" { return "Enum declaration: `enum Name { Variant, ... }`" }
+    if kw == "effect" { return "Declare an algebraic effect: `@effect Name { ... }`" }
+    return ""
+}
+
+fn builtin_doc(name: string) -> string {
+    if name == "print" { return "fn print(value: any) — Print value without newline" }
+    if name == "println" { return "fn println(value: any) — Print value with newline" }
+    if name == "len" { return "fn len(collection: any) -> int — Get collection length" }
+    if name == "type_of" { return "fn type_of(value: any) -> string — Get runtime type name" }
+    if name == "sigma" { return "fn sigma(n: int) -> int — Sum of divisors" }
+    if name == "phi" { return "fn phi(n: int) -> int — Euler's totient function" }
+    if name == "tau" { return "fn tau(n: int) -> int — Number of divisors" }
+    if name == "sqrt" { return "fn sqrt(x: float) -> float — Square root" }
+    if name == "pow" { return "fn pow(base: float, exp: float) -> float — Power" }
+    return ""
+}
+
+// ── Go-to-definition ──────────────────────────────────────
+
+fn handle_definition(uri: string, source: string, line: int, character: int) -> string {
+    let word = word_at_position(source, line, character)
+    if word == "" { return "null" }
+    let loc = find_symbol(source, word)
+    if loc == "" { return "null" }
+    let parts = loc.split(":")
+    let dline = parts[0]
+    let dcol = parts[1]
+    let nlen = len(word)
+    return "{\"uri\":\"" + uri + "\",\"range\":{\"start\":{\"line\":" + dline + ",\"character\":" + dcol + "},\"end\":{\"line\":" + dline + ",\"character\":" + to_string(to_int(dcol) + nlen) + "}}}"
+}
+
+// ── Hover ──────────────────────────────────────────────────
+
+fn handle_hover(source: string, line: int, character: int) -> string {
+    let word = word_at_position(source, line, character)
+    if word == "" { return "null" }
+    // Check keyword docs
+    let doc = keyword_doc(word)
+    if doc != "" {
+        return "{\"contents\":{\"kind\":\"markdown\",\"value\":\"**keyword** `" + word + "`\\n\\n" + doc + "\"}}"
+    }
+    // Check builtin docs
+    let bdoc = builtin_doc(word)
+    if bdoc != "" {
+        return "{\"contents\":{\"kind\":\"markdown\",\"value\":\"**builtin**\\n\\n```\\n" + bdoc + "\\n```\"}}"
+    }
+    // User symbol — look up via find_symbol
+    let loc = find_symbol(source, word)
+    if loc != "" {
+        let parts = loc.split(":")
+        let dline = parts[0]
+        return "{\"contents\":{\"kind\":\"markdown\",\"value\":\"**symbol** `" + word + "` — defined at line " + dline + "\"}}"
+    }
+    return "null"
+}
+
+// ── Rename ──────────────────────────────────────────────────
+
+fn handle_rename(uri: string, source: string, line: int, character: int, new_name: string) -> string {
+    let word = word_at_position(source, line, character)
+    if word == "" { return "null" }
+    let occurrences = find_all_occurrences(source, word)
+    if len(occurrences) == 0 { return "null" }
+    let mut edits = []
+    let mut i = 0
+    let nlen = len(word)
+    while i < len(occurrences) {
+        let parts = occurrences[i].split(":")
+        let oline = parts[0]
+        let ocol = parts[1]
+        edits.push("{\"range\":{\"start\":{\"line\":" + oline + ",\"character\":" + ocol + "},\"end\":{\"line\":" + oline + ",\"character\":" + to_string(to_int(ocol) + nlen) + "}},\"newText\":\"" + new_name + "\"}")
+        i = i + 1
+    }
+    return "{\"changes\":{\"" + uri + "\":[" + join(edits, ",") + "]}}"
+}
+
+// ── Server capabilities ──────────────────────────────────
+
+fn build_semantic_tokens_legend() -> string {
+    let types = get_semantic_token_types()
+    let mods = get_semantic_token_modifiers()
+    let mut type_parts = []
+    for t in types {
+        type_parts.push("\"" + t + "\"")
+    }
+    let mut mod_parts = []
+    for m in mods {
+        mod_parts.push("\"" + m + "\"")
+    }
+    return "{\"tokenTypes\":[" + join(type_parts, ",") + "],\"tokenModifiers\":[" + join(mod_parts, ",") + "]}"
+}
+
+fn build_capabilities() -> string {
+    let legend = build_semantic_tokens_legend()
+    return "{" +
+        "\"textDocumentSync\":1," +
+        "\"completionProvider\":{\"triggerCharacters\":[\".\",\":\",\"@\"]}," +
+        "\"hoverProvider\":true," +
+        "\"definitionProvider\":true," +
+        "\"renameProvider\":true," +
+        "\"semanticTokensProvider\":{" +
+            "\"legend\":" + legend + "," +
+            "\"full\":true" +
+        "}" +
+    "}"
+}
+
+// ── JSON-RPC field extraction (minimal) ──────────────────
+// Extract a string value for a given key from a JSON object string.
+// Handles simple cases: "key":"value" and "key":number
+
+// decreases json — structural
+fn json_get_string(json: string, key: string) -> string {
+    let search = "\"" + key + "\":"
+    let idx = json.index_of(search)
+    if idx < 0 { return "" }
+    let after = json.substring(idx + len(search), len(json))
+    let trimmed = after.trim()
+    if len(trimmed) == 0 { return "" }
+    let first_chars = trimmed.chars()
+    if to_string(first_chars[0]) == "\"" {
+        // String value — find closing quote (skip escapes)
+        let mut i = 1
+        let mut result_parts = []
+        let tlen = len(first_chars)
+        while i < tlen {
+            let c = first_chars[i]
+            if c == '\\' && (i + 1) < tlen {
+                let nx = to_string(first_chars[i + 1])
+                if nx == "n" { result_parts.push("\n"); i = i + 2 }
+                else if nx == "r" { result_parts.push("\r"); i = i + 2 }
+                else if nx == "t" { result_parts.push("\t"); i = i + 2 }
+                else if nx == "b" { result_parts.push(from_char_code(8)); i = i + 2 }
+                else if nx == "f" { result_parts.push(from_char_code(12)); i = i + 2 }
+                else if nx == "u" && (i + 5) < tlen {
+                    // \uXXXX — 4 hex digits → codepoint → UTF-8 (BMP only).
+                    // Surrogate pair (\uD800-\uDBFF + \uDC00-\uDFFF for non-BMP)
+                    // is not handled; rare in LSP payloads. from_char_code emits
+                    // 1-/2-/3-byte UTF-8 per cp <= 0xFFFF.
+                    let mut cp = 0
+                    let mut bad = false
+                    let mut h = 0
+                    while h < 4 {
+                        let hc = to_string(first_chars[i + 2 + h])
+                        let code = char_code(hc, 0)
+                        let mut d = 0
+                        if code > 47 && code < 58 { d = code - 48 }          // 0-9
+                        else if code > 96 && code < 103 { d = code - 87 }    // a-f
+                        else if code > 64 && code < 71 { d = code - 55 }     // A-F
+                        else { bad = true }
+                        cp = cp * 16 + d
+                        h = h + 1
+                    }
+                    if bad { result_parts.push(nx); i = i + 2 }
+                    else { result_parts.push(from_char_code(cp)); i = i + 6 }
+                }
+                else {
+                    // \" \\ \/ and unknown — pass through the literal char
+                    result_parts.push(nx)
+                    i = i + 2
+                }
+            } else if c == '"' {
+                return join(result_parts, "")
+            } else {
+                result_parts.push(to_string(c))
+                i = i + 1
+            }
+        }
+        return join(result_parts, "")
+    }
+    // Numeric or other — collect until , } or whitespace
+    let mut i = 0
+    let mut val_parts = []
+    let tlen = len(first_chars)
+    while i < tlen {
+        let c = first_chars[i]
+        if c == ',' || c == '}' || c == ' ' || c == '\n' || c == '\r' {
+            return join(val_parts, "")
+        }
+        val_parts.push(to_string(c))
+        i = i + 1
+    }
+    return join(val_parts, "")
+}
+
+// ── Document store ──────────────────────────────────────────
+// In-memory map of URI -> source text for open documents.
+
+let mut doc_store = #{}
+
+fn store_document(uri: string, text: string) {
+    doc_store[uri] = text
+}
+
+fn get_document(uri: string) -> string {
+    if has_key(doc_store, uri) {
+        return doc_store[uri]
+    }
+    return ""
+}
+
+// ── Main LSP loop ──────────────────────────────────────────
+
+// Non-blocking line read with periodic parent-death (ppid==1) check.
+// Polls stdin with a 500ms timeout via `term_poll_stdin`; on timeout, checks
+// `term_getppid()` — if orphaned (parent died, reparented to launchd/init),
+// returns "" to signal EOF so the main loop exits cleanly. Reads one byte at
+// a time via `term_read_byte` once stdin is ready; accumulates until \n.
+// This is the COMPLETE LSP-leak fix (was: 24 idle hexa-lsp accumulated, all
+// stuck in blocking readline() on zombie pipes that never close after parent
+// SIGKILL). Combined with the line-top ppid guard, the LSP now wakes up at
+// most every 500ms to verify it still has a parent.
+fn read_line_or_orphan() -> string {
+    let mut buf = ""
+    while true {
+        let ready = term_poll_stdin(500)   // 500ms poll timeout
+        if ready == 0 {
+            // timeout — check for orphan
+            if term_getppid() == 1 { return "" }
+            // else keep polling
+        } else if ready < 0 {
+            return ""   // poll error / EOF
+        } else {
+            let b = term_read_byte()
+            if b < 0 { return "" }   // EOF
+            if b == 10 { return buf }   // \n
+            if b != 13 {   // skip CR
+                buf = buf + chr(b)
+            }
+        }
+    }
+    return buf
+}
+
+fn run_lsp() {
+    // Read JSON-RPC messages from stdin, dispatch, write responses to stdout.
+    // Content-Length framing per LSP spec.
+    let mut running = true
+    while running {
+        // 2026-05-26: parent-death guard — exit if orphaned (ppid → 1 means parent
+        // died, we got reparented to launchd/init). Catches the LSP-leak pattern
+        // where stdin pipe stays open after parent SIGKILL → loop survives across
+        // any read return. Partial fix (won't break a currently-blocked readline);
+        // a non-blocking-I/O refactor is the complete fix (follow-up).
+        if term_getppid() == 1 { running = false } else {
+        // Read Content-Length header (non-blocking via poll+ppid guard — leak fix)
+        let header = read_line_or_orphan()
+        if header == "" {
+            running = false
+        } else {
+            // Parse Content-Length
+            let hdr_trimmed = header.trim()
+            if hdr_trimmed.starts_with("Content-Length:") {
+                let len_str = hdr_trimmed.substring(15, len(hdr_trimmed)).trim()
+                let content_len = to_int(len_str)
+                // Skip blank line after headers (non-blocking via poll+ppid guard)
+                let blank = read_line_or_orphan()
+                // Read body
+                let body = input(content_len)
+                // Dispatch
+                let method = json_get_string(body, "method")
+                let id = json_get_string(body, "id")
+
+                if method == "initialize" {
+                    let caps = build_capabilities()
+                    let result = "{\"capabilities\":" + caps + ",\"serverInfo\":{\"name\":\"hexa-lsp\",\"version\":\"0.1.0\"}}"
+                    let resp = make_response(id, result)
+                    print(send_message(resp))
+                } else if method == "initialized" {
+                    // No response needed
+                } else if method == "shutdown" {
+                    let resp = make_response(id, "null")
+                    print(send_message(resp))
+                } else if method == "exit" {
+                    running = false
+                } else if method == "textDocument/didOpen" {
+                    // Extract uri and text from params.textDocument
+                    let uri = json_get_string(body, "uri")
+                    let text = json_get_string(body, "text")
+                    store_document(uri, text)
+                    // Publish diagnostics
+                    let diags = diagnose(text)
+                    let notif = make_notification("textDocument/publishDiagnostics", "{\"uri\":\"" + escape_json_str(uri) + "\",\"diagnostics\":[]}")
+                    print(send_message(notif))
+                } else if method == "textDocument/didChange" {
+                    let uri = json_get_string(body, "uri")
+                    let text = json_get_string(body, "text")
+                    if text != "" {
+                        store_document(uri, text)
+                    }
+                } else if method == "textDocument/hover" {
+                    let uri = json_get_string(body, "uri")
+                    let source = get_document(uri)
+                    let line_str = json_get_string(body, "line")
+                    let char_str = json_get_string(body, "character")
+                    let result = handle_hover(source, to_int(line_str), to_int(char_str))
+                    let resp = make_response(id, result)
+                    print(send_message(resp))
+                } else if method == "textDocument/definition" {
+                    let uri = json_get_string(body, "uri")
+                    let source = get_document(uri)
+                    let line_str = json_get_string(body, "line")
+                    let char_str = json_get_string(body, "character")
+                    let result = handle_definition(uri, source, to_int(line_str), to_int(char_str))
+                    let resp = make_response(id, result)
+                    print(send_message(resp))
+                } else if method == "textDocument/semanticTokens/full" {
+                    let uri = json_get_string(body, "uri")
+                    let source = get_document(uri)
+                    let result = handle_semantic_tokens_full(source)
+                    let resp = make_response(id, result)
+                    print(send_message(resp))
+                } else {
+                    // Unknown method — if it has an id, respond with method-not-found
+                    if id != "" {
+                        let resp = make_response(id, "null")
+                        print(send_message(resp))
+                    }
+                }
+            }
+        }
+        }  // end ppid-guard else (2026-05-26 leak fix)
+    }
+}
+
+// ── Script entry ──────────────────────────────────────────
+// R7 track B cycle 10 (2026-05-18): module-level `run_lsp()` wrapped in
+// `fn main()` for compiled-binary entry (bin/hexa-lsp). Interp `hexa run`
+// auto-invokes main() too, so dual-path behavior preserved. The dispatcher
+// (self/main.hexa lsp branch) exec_replace()s into the binary so stdin/
+// stdout are fully inherited — LSP JSON-RPC needs unbuffered bidirectional
+// streaming, incompatible with the exec()-buffered spawn used by other
+// track B verbs.
+fn main() {
+    run_lsp()
+}

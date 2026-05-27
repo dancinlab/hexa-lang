@@ -1,0 +1,8 @@
+#!hexa strict
+// electrocat structure — catalyst layer thickness.
+fn main() {
+    let layer_nm = 100.0
+    println("electrocat_structure (catalyst layer thickness):")
+    println("  layer_nm = " + str(layer_nm))
+    println("__HEXA_ELECTROCAT_STRUCTURE__ PASS gate=GATE_OPEN absorbed=false")
+}

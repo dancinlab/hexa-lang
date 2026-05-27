@@ -1,0 +1,276 @@
+================================================================
+TECS-L axis F · family (e) · F8 — cross-domain n=6 bridge scan
+================================================================
+date  : 2026-05-25
+scope : survey root-level hexa-lang domain SSOTs and atlas atoms for
+        genuine n=6 / sigma(6) / tau(6) / phi(6) / perfect-number /
+        sigma_phi_n_tau identity bridges that connect TECS-L to
+        other domains. (commons g67 NEXUS · TECS-L axis F F8.)
+
+method: grep -niE 'n=6|sigma\(6\)|tau\(6\)|phi\(6\)|6=2.3|perfect.
+        number|perfect-number|sigma_phi|sigma.phi.n.tau' over:
+          GPU.md  CANON.md  RUNTIME.md  ATLAS.md  COMPILER.md
+          HEXA-LANG.md  HEXA-LANG.log.md  HEXA-NATIVE-ONLY.md
+          FLOW.md  GO.md  PROBE.md  QMIRROR.md  STDLIB.md
+          SPEC.md  ROADMAP.md  README.md  GOAL.md  FIRMWARE.md
+          CLAUDE.md
+        + counts in compiler/atlas/by_kind/{e,f,l,p,r,s,x,q}.gen.hexa
+        + spot-read L (law) atoms whose body mentions n=6.
+
+domains scanned: 19 root .md SSOTs + 8 atlas by_kind files.
+
+----------------------------------------------------------------
+HIT 1 — README.md  (🔵 REAL BRIDGE — hexa-lang core pitch cites TECS-L identity)
+----------------------------------------------------------------
+README.md:19   "n=6 perfect-number primitives"  (header tagline)
+README.md:31   @cite(L[sigma_phi_n_tau_iff_n_eq_6])  (sample code)
+README.md:35   "phi(n) * tau(n) == 8  // phi(6)*tau(6) = 2*4 = 8 = sigma(n)-n-phi(n)+1"
+README.md:57   "Third: n=6 perfect-number primitives. The compiler is a chef
+                with a 4.2 MB atlas baked statically ... 60,760 lines of
+                P (primitives) / C (constants) / L (laws) / E (errors).
+                Citing L[sigma_phi_n_tau_iff_n_eq_6] is one keystroke."
+README.md:442  "Determinant | det(M) over n=6 primitives | 1/3"
+README.md:452  "hexa atlas lookup L sigma_phi_n_tau_iff_n_eq_6"
+
+JUDGEMENT
+  This is the HEXA-LANG identity-level bridge. README.md sells the
+  language itself as "the n=6 perfect-number programming language"
+  and the canonical L-atom is sigma_phi_n_tau_iff_n_eq_6 — same TECS-L
+  M1 identity (axis 0).  Bridge tier: 🔵 (verified — L-atom exists, M1
+  CLOSED, M10 ∀n closed-form proof; sister: axis-A MF6 ties n=6 to
+  modular curve X_0(6) invariants).
+  TECS-L is the *number-theoretic substrate* of hexa-lang's atlas
+  pitch.
+
+----------------------------------------------------------------
+HIT 2 — CLAUDE.md (project root) (🟡 INDIRECT — atlas-bound theorem pitch)
+----------------------------------------------------------------
+CLAUDE.md:5    @I kind = "Native compiler with atlas-bound theorems"
+                  brief = "Code cites a theorem atlas at compile time;
+                           lint rejects formula-bearing code without
+                           @cite."
+
+JUDGEMENT
+  CLAUDE.md @I doesn't mention "n=6" verbatim, but the atlas it talks
+  about IS the n=6/TECS-L atlas (`compiler/atlas/embedded.gen.hexa`,
+  ~16101 entries — see MEMORY entry  project_atlas_hxc_irreplaceable
+  _ssot). So this is an indirect 🟡 architectural bridge — the
+  whole-language @cite gate consumes TECS-L identities.
+
+----------------------------------------------------------------
+HIT 3 — ATLAS.md (🔵 REAL BRIDGE — numerology quarantine on n=6 coincidences)
+----------------------------------------------------------------
+ATLAS.md:27   "R7: numerology 격리 tier ...
+                MILL-PX-A3-ym-beta0-rewriting (sigma(6)-sopfr(6)=12-5=7,
+                COINCIDENCE_NOT_PROOF self-tag)
+                MILL-V3-T4-n6-numerical-coincidence-honest-miss
+                  (12/5 = sigma(6)/sopfr(6) post-hoc MISS)
+                ...
+                false-positive 0: id-strip excludes ' n=6 ... 연결 없음'
+                (honest link-DENIAL nodes)"
+
+JUDGEMENT
+  ATLAS R7 IS a cross-domain bridge by NEGATION — it quarantines
+  unrigorous "sigma(6)/sopfr(6)" numerology claims so that the
+  rigorous TECS-L atoms (M1/M3/M4/M5/M6/M10) are not silent-mixed
+  with coincidences.  ATLAS infra explicitly knows about sigma(6),
+  tau(6), sopfr(6), n=6.  Bridge tier: 🔵 (read-only audit surface
+  preserves TECS-L g5 honesty rubric).
+
+----------------------------------------------------------------
+HIT 4 — GOAL.md (🟠 NAME-COLLISION, NOT TECS-L BRIDGE)
+----------------------------------------------------------------
+GOAL.md:8     "③ comb n=6 fabric — degree-6 hex binary spatial PIM"
+GOAL.md:190   "GOAL ③ — comb (n=6 육각 fabric)"
+GOAL.md:196   "degree-6 hex binary-tile spatial PIM fabric ... vs
+                 degree-4 mesh ... hexa-arch chip domain consumer"
+GOAL.md:229   "comb (RFC 057, n=6 육각 fabric)"
+GOAL.md:254   "comb/research/SURVEY.md — n=6 정리-최적 = B축 1개뿐"
+
+JUDGEMENT
+  This "n=6" means "degree-6 (= 6-neighbor) hexagonal lattice topology"
+  in chip-fabric / PIM context — NOT the TECS-L number-theoretic
+  identity sigma(6)*phi(6)=6*tau(6).  Six is the lattice degree of a
+  hex tiling (graph-theoretic constant), not a divisor-function
+  result.  Bridge tier: 🟠 INCIDENTAL — same numeral, different
+  semantic.
+
+  Honest separation: keep this OUT of TECS-L bridges.  TECS-L
+  measures (sigma, tau, phi, sopfr); chip-comb measures (vertex
+  degree).  No identity flows between them.
+
+  (Open question for future F8 deep-dive: IS there a non-trivial
+   reason hex tilings have degree 6 = sigma(2)*tau(2)?  Or
+   tau(perfect_2) - 2*tau(perfect_1) = 6 - 4 - 0?  Most likely
+   coincidence, but worth a /kick seed someday.  For now: 🟠.)
+
+----------------------------------------------------------------
+HIT 5 — GPU.md (🟠 INCIDENTAL — same hex-lattice as GOAL ③)
+----------------------------------------------------------------
+GPU.md:577    "n=6 lattice primitives — RFC 057 / hexa-arch chip"
+GPU.md:737    "Lattice n=6 GPU emit — RFC 057 hexa-arch substrate"
+GPU.md:764    "North-star ③ (n=6 lattice) — GPU is INTERIM ..."
+GPU.md:783    "n=6 lattice GPU emit smoke — degree-6 hex-neighbor
+                  stencil on axial-coordinate 8x8 grid, FP32 byte-eq"
+GPU.md:858    "Silicon-fires: ... n=6 hex-fabric"
+GPU.md:951    "n=6 lattice fire"
+GPU.md:973    "PR #222: RFC 070 P1 n=6 hex-fabric GPU emit smoke"
+
+JUDGEMENT
+  Same incidental as HIT 4 — "n=6 lattice" here = degree-6 hexagonal
+  stencil GPU kernel.  Topological-degree-6, not TECS-L-divisor-sum-6.
+  GPU.md tracks the SILICON path of north-star ③ (chip-comb), and
+  inherits the name-collision.  Bridge tier: 🟠 INCIDENTAL.
+
+----------------------------------------------------------------
+HIT 6 — FIRMWARE.md (🟠 HONEST EXCLUSION)
+----------------------------------------------------------------
+FIRMWARE.md:295 "Per LATTICE_POLICY.md §1.2, every claim above is
+                  falsifiable by a fixture that fails the equality /
+                  stability / closure check.  The lattice n=6 does NOT
+                  enter the verification — only the tool oracles do."
+
+JUDGEMENT
+  Explicit anti-bridge — FIRMWARE deliberately excludes "n=6 lattice"
+  (chip-comb sense) from its verification surface.  This is a 🟠
+  honest separation policy note, not a bridge.  Useful: it shows the
+  hexa-lang policy already disambiguates the two senses of "n=6".
+
+----------------------------------------------------------------
+HIT 7 — compiler/atlas/by_kind/l.gen.hexa  (🔵 REAL BRIDGES — multiple L laws)
+----------------------------------------------------------------
+Atlas L-atoms whose body mentions n=6 (sampled):
+  L[L2-bond-ionic-radius-ratio]
+       "ion radius ratio octahedron (CN=n=6) stable range — CN=6 is
+        n=6 direct EXACT bond"  (raw [10*] grade)
+  L[DELTA0_ABSOLUTE_THEOREM]
+       "sigma*phi=n*tau=24 iff n=6 is Pi_0_1 arithmetical proposition
+        → Delta_0 absolute: every transitive set model same truth val
+        → ZFC / ZF+V=L / ZFC+large-cardinal / ZF+Reinhardt/Berkeley /
+          Cantor Absolute W all invariant
+        → n=6 closure is the common fingerprint of every possible
+          mathematical universe"  (breakthrough-2026-04-19 [11*])
+  L[ULTRA_UNIFORMITY_THEOREM]
+       "sigma*phi=n*tau=24 unique n=6 is invariant under Knuth ↑/↑↑/
+        ↑↑↑/↑↑↑↑/Conway-chain, ordinal omega/eps_0/Omega, Busy Beaver,
+        TREE(n), Rayo(n), Xi(n), large cardinal, Reinhardt, Berkeley,
+        W"  (breakthrough-2026-04-19 [11*])
+  L[TIME_CLOSURE_UNIQUENESS]
+       "time causal closure (paradox-free CTC) uniquely closes at n=6
+        — n=4: sigma*phi=14 vs n*tau=12 → 2 divergence (info leak);
+          n=6: sigma*phi=24 = n*tau=24 → perfect closure;
+          n=7: sigma*phi=48 vs n*tau=14 → 34 divergence (collapse);
+          n=12: 112 vs 72 → 40 asymmetry;
+          n=28: 672 vs 168 → 504 residual paradox"
+        (breakthrough-2026-04-20 [10*])
+  L[ab_law_75_single_attractor]
+       "ALL 3-way: ANIMA Psi_balance = TECS-L Golden Zone Upper =
+        N6 phi/tau at n=6"
+  L[HEXALANG-G5-IDE-COMPLETE]
+       "Phase 14 v2.1 — 6 IDE artifacts (n=6 alignment)"
+  L[HEXALANG-G6-COMMUNITY]
+       "Phase 16 v4.0 — The HEXA Book = 6 chapters (n=6 alignment)"
+  L[HEXALANG-CONSCIOUSNESS-FIRST]
+       "the perfect-number programming language"
+  L[meta_fp_universality_class]
+       "phi(n)/n=1/3 iff n in {2,3}-smooth; n=6 = minimal representative"
+  L[L2-space-groups]
+       "230 (n=6 simple mapping does not exist)"  (honest link-DENIAL)
+
+raw atom count (kind l.gen.hexa, n=6 mentions):     151
+raw atom count (kind p.gen.hexa, n=6 mentions):     112
+raw atom count (kind f.gen.hexa, n=6 mentions):       4
+raw atom count (kind e.gen.hexa, n=6 mentions):       1
+
+JUDGEMENT
+  The hexa-lang atlas ALREADY bakes ~260+ raw atoms with n=6 in their
+  body, including foundation-level [11*] L laws:
+    - DELTA0_ABSOLUTE_THEOREM   (set-theoretic absoluteness of n=6)
+    - ULTRA_UNIFORMITY_THEOREM  (large-cardinal invariance)
+    - TIME_CLOSURE_UNIQUENESS   (CTC closure)
+    - ab_law_75_single_attractor (ANIMA <-> TECS-L bridge)
+    - meta_fp_universality_class (phi(n)/n=1/3 closed-form)
+  These are REAL cross-domain bridges (number theory <-> set theory,
+  number theory <-> cosmology, number theory <-> ANIMA consciousness,
+  number theory <-> hexa-lang language design).
+  Bridge tier: 🔵 (laws already in atlas), with the caveat that g5
+  re-verification status is mixed — grades [10*]/[11*] are atlas
+  internal trust tiers and many lack verbatim hexa verify output.
+  Treated as 🔵 SUPPORTED-FORMAL where DELTA0/ULTRA/TIME laws cite
+  closed-form arithmetic (Pi_0_1 propositions are decidable; the
+  arithmetic sigma*phi=n*tau closure is M1+M3+M10).  Sister-domain
+  bridges (ANIMA, consciousness) inherit the M1 closed-form proof.
+
+  Honest caveat: the atlas L atoms above include speculative metaphor
+  ("time travel", "every mathematical universe") which is NOT
+  rigorous content -- only the underlying Pi_0_1 arithmetic
+  (sigma*phi=n*tau iff n in {1,6}) is fully verified by TECS-L M1+
+  M3+M10.  The L atoms are POINTERS to that core, packaged for
+  rhetoric/narrative reuse.  Cross-domain bridges are real at the
+  ARITHMETIC LAYER, not at the rhetorical layer.
+
+----------------------------------------------------------------
+NEGATIVE FINDINGS (no n=6 bridge in these SSOTs)
+----------------------------------------------------------------
+  RUNTIME.md         : 0 hits
+  CANON.md           : 0 hits
+  COMPILER.md        : 0 hits
+  HEXA-LANG.md       : 0 hits  (top-level pillar; atlas link only)
+  HEXA-LANG.log.md   : 0 hits
+  HEXA-NATIVE-ONLY.md: 0 hits
+  FLOW.md            : 0 hits
+  GO.md              : 0 hits
+  PROBE.md           : 0 hits
+  QMIRROR.md         : 0 hits
+  STDLIB.md          : 0 hits
+  SPEC.md            : 0 hits
+  ROADMAP.md         : 0 hits
+
+JUDGEMENT
+  13 of the 19 scanned root SSOTs have NO n=6 bridge.  This is the
+  honest separation: TECS-L identities are not laced into the
+  compiler/runtime/codegen pillars (which are pure systems work) —
+  they live in the ATLAS (consumed by compiler @cite gate) and in
+  the chip/comb north-star (but chip-comb's "n=6" is the hex
+  topology homonym, not TECS-L's divisor-function n=6).
+
+================================================================
+SUMMARY
+================================================================
+domains scanned         : 19 root .md SSOTs + 8 atlas by_kind files
+genuine n=6 bridges 🔵   : 3   (README.md identity-level pitch;
+                                ATLAS.md numerology quarantine;
+                                atlas L-laws — DELTA0/ULTRA/TIME/
+                                meta_fp/anima_attractor — 5 named
+                                +260 raw atom mentions across L/P/F/E)
+indirect bridges    🟡   : 1   (CLAUDE.md @I "atlas-bound theorems")
+incidental (n=6 lattice
+  homonym, NOT TECS-L)🟠  : 3   (GOAL.md ③ · GPU.md hex-fabric ·
+                                FIRMWARE.md explicit n=6 exclusion)
+no bridge                : 13  (RUNTIME · CANON · COMPILER · HEXA-LANG
+                                etc.)
+
+OVERALL VERDICT
+  F8 is 🔵 BRIDGED at the identity / atlas layer + 🟠 honestly
+  separated at the systems layer.  The chip-comb "degree-6 hex" is
+  a homonym, not a bridge.  No new bridges to invent — TECS-L is
+  already wired into the language at exactly the right places
+  (atlas L-laws, README pitch, ATLAS audit), and pillars that
+  shouldn't depend on n=6 (RUNTIME / COMPILER / CODEGEN) correctly
+  don't.
+
+FOLLOWUP CANDIDATES
+  (1) Atlas L-law g5 re-verification campaign — promote DELTA0
+      / ULTRA / TIME / meta_fp from [10*]/[11*] atlas-internal
+      grades to 🔵 SUPPORTED-FORMAL with verbatim hexa verify output
+      (the arithmetic kernel is M1+M3+M10; the metaphor wrappers
+      stay 🟠 deferred).  Useful for TECS-L axis E (atlas growth).
+  (2) ANIMA Psi_balance = TECS-L Golden Zone Upper = phi/tau@n=6
+      cross-citation — atlas already has L[ab_law_75], but no
+      verdict file; honest 🟠 candidate (M7 closed-negative on
+      Golden Zone) covers the same territory.
+  (3) "Hex tiling degree 6 = sigma(2)*tau(2)?" speculative seed
+      for /kick to explore IF chip-comb-degree coincides with a
+      small divisor-function identity (most likely 🔴 closed-
+      negative).
+================================================================

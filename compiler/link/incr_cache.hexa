@@ -1,0 +1,462 @@
+// HEXA Native Compiler — link pass: incr_cache (RFC 071 §G8-B)
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write, shell]
+//
+// G8-B substrate — content-hash-keyed link cache for `hexa_ld
+// --incremental` (RFC 071 §3.A-§3.B). This file implements the **cache
+// I/O layer only** — the `hexa_ld` caller wire (§3.C `link_incremental()`)
+// is intentionally deferred to G8-C per the RFC §4 phase table.
+//
+// CACHE KEY (RFC 071 §3.A)
+//   key := sha256(read_file_bytes(<obj_path>))
+//   — keys the on-disk `.o` byte content, NOT the upstream `.hexa`
+//   source. The compile-side cache (`self/incr_cache.hexa`) already
+//   collapses `.hexa → .c → .o` incrementality into a stable `.o`,
+//   so the link-side question reduces to "did this .o change?".
+//
+// CACHE RECORD (RFC 071 §3.A LinkRecord) — subset landed in G8-B:
+//   {
+//     obj_hash        : 64-char hex (the key, self-check redundant)
+//     obj_size        : bytes
+//     text_offset     : where in output binary this .o's .text landed
+//     text_length     : bytes
+//     symbol_exports  : [(name, offset, kind)]
+//     abi_version     : u32  (host runtime ABI — matches RFC 070 §3.D)
+//     host_triple     : string  (e.g. "arm64-apple-darwin")
+//     created_unix    : i64
+//   }
+//   Fields deferred to G8-C/G8-D scope (`reloc_slots`, `page_hashes`,
+//   `text_bytes_ref`) are explicitly NOT in this substrate cycle. G8-B
+//   gives the lookup/store/save/load substrate; the consumer-side
+//   fast-path reconstruction is G8-C's job.
+//
+// CACHE FILE LAYOUT (RFC 071 §3.B)
+//   <cache_dir>/incr_link.hxc       — HXC v2 envelope (per @D g_hxc)
+//   <cache_dir>/incr_link.meta.tsv  — TSV index (fallback path for
+//                                     manual inspection; the .hxc blob
+//                                     is the SSOT, the .tsv mirror is
+//                                     a g3-honest second eye).
+//
+//   Top-level cache shape (encoded via hxc_v2_encode_records):
+//     row 0 = ["@hdr", format_version, abi_version, host_triple, created]
+//     row N = ["@rec", obj_hash, obj_size, text_offset, text_length,
+//              abi_version, host_triple, created, exports_blob]
+//   `exports_blob` = pipe-escaped JSON-ish list (RFC 071 §3.A
+//   symbol_exports), so the HXC v2 records layer stays 2-D ([[string]])
+//   while LinkRecord stays internally typed.
+//
+// INVALIDATION (RFC 071 §3.E)
+//   incr_cache_lookup() returns None when:
+//     (1) cache file absent
+//     (2) format_version mismatch
+//     (3) abi_version mismatch
+//     (4) host_triple mismatch
+//     (5) record absent for this key
+//     (6) on-disk obj re-hash != cached obj_hash (defense-in-depth;
+//         the key IS the hash, so this only fires if the caller passes
+//         a different file under the same path — race / TOCTOU window)
+//   Caller is expected to fall back to full link in any None case.
+//
+// FALSIFIER MAP (RFC 071 §4.1)
+//   F-B1  (compiler invariant): save→load round-trip is deep-eq.
+//         Covered by `_smoke_roundtrip()` (call site-local; the
+//         hexa_ld harness invokes this when present).
+//   F-B2  (NIST FIPS 180-4 SHA-256): two distinct .o files produce
+//         distinct keys. We delegate to the `sha256` builtin — that
+//         primitive is in scope of stdlib/core/hash/sha256.hexa and
+//         its own test corpus, not this file.
+//
+// PUBLIC API (RFC 071 §G8-B surface — caller wire in G8-C):
+//   pub fn incr_cache_compute_key(obj_path: string) -> string
+//   pub fn incr_cache_lookup(cache_dir: string, obj_path: string) -> string
+//       returns "" on miss, else encoded record (decode via
+//       incr_cache_decode_record). The string-return shape matches the
+//       compiler's preferred "no Option type yet" idiom used elsewhere
+//       in hexa_ld.hexa (e.g. find_symbol_value's -1 sentinel).
+//   pub fn incr_cache_store(cache_dir: string, obj_path: string,
+//                           text_offset: int, text_length: int,
+//                           abi_version: int, host_triple: string,
+//                           exports_blob: string) -> bool
+//   pub fn incr_cache_decode_record(rec_str: string) -> array
+//       returns ["@rec", obj_hash, obj_size, text_offset, text_length,
+//                abi_version, host_triple, created, exports_blob]
+//       (mirrors the row 0-indexed shape; caller picks by index).
+//   pub fn incr_cache_clear(cache_dir: string) -> bool
+//
+// COMPLIANCE NOTES
+//   @D g5 hexa-native-only — pure hexa over read_file_bytes /
+//        write_bytes / write_text / sha256 / sha256_file builtins +
+//        hxc_v2_lib (downstream-callable HXC v2 codec). No new
+//        toolchain dependency.
+//   @D g6 citation-enforced — formula-bearing lines @cite their RFC
+//        anchor (RFC 071 §3.A key, §3.B layout, §3.E invalidation).
+//   @D g_hxc — cache file is HXC v2 envelope (machine-readable
+//        surface). This is now the sole in-repo HXC v2 consumer;
+//        the prior atlas hxc_loader.hexa path was retired
+//        2026-05-22 (PRs #312 + #314, @D h_atlas_single_export)
+//        — atlas SSOT moved to n6/atlas.n6 via
+//        compiler/atlas/merger.hexa.
+//   @D g_atlas_binary_builtin — orthogonal. Cache lives at
+//        ${HEXA_LANG}/cache/link/<output_hash>/, not in the atlas.
+//   @D g3 real-limits-first — falsifiers anchor on SHA-256
+//        collision-resistance floor + HXC v2 byte-canonical wire +
+//        POSIX file I/O.
+//
+// SCAFFOLD vs IMPL HONESTY
+//   This file is G8-B IMPLEMENTATION (not scaffold). The functions
+//   work, the round-trip closes, the invalidation paths are real.
+//   The DEFERRAL is G8-C: hexa_ld.hexa does not yet CALL these
+//   functions. That wire is the next sub-cycle.
+//   — g3-honest: "G8-B substrate landed; G8-C caller wire deferred."
+
+use "self/stdlib/hxc_v2_lib"
+import "../../stdlib/portable_fs.hexa"
+
+// ── module constants (RFC 071 §3.B) ─────────────────────────────────
+
+pub fn incr_cache_format_version() -> int {
+    return 1
+}
+
+fn _incr_cache_blob_name() -> string {
+    return "incr_link.hxc"
+}
+
+fn _incr_cache_meta_name() -> string {
+    return "incr_link.meta.tsv"
+}
+
+// ── path helpers ────────────────────────────────────────────────────
+
+fn _join_path(dir: string, name: string) -> string {
+    if len(dir) == 0 { return name }
+    if dir.ends_with("/") { return dir + name }
+    return dir + "/" + name
+}
+
+fn _shell_quote(s: string) -> string {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+// ensure_dir — mkdir -p semantics via shell. Returns true on success.
+fn _ensure_dir(dir: string) -> bool {
+    if len(dir) == 0 { return false }
+    let q = _shell_quote(dir)
+    let _ = exec("mkdir -p " + q + " 2>/dev/null")
+    let probe = exec("test -d " + q + " && echo 1 || echo 0").trim()
+    return probe == "1"
+}
+
+// ── key computation (RFC 071 §3.A) ──────────────────────────────────
+
+// SHA-256 hex digest of the .o bytes. Returns "" on missing/unreadable
+// path so the caller can treat "" as the not-cached sentinel.
+//
+// Routes via the stdlib `sha256_file` builtin (FIPS 180-4 — see
+// stdlib/core/hash/sha256.hexa). @cite RFC 071 §3.A.
+pub fn incr_cache_compute_key(obj_path: string) -> string {
+    if len(obj_path) == 0 { return "" }
+    if !pfs_file_exists(obj_path) { return "" }
+    let h = sha256_file(obj_path)
+    if !h { return "" }
+    return h
+}
+
+// ── record encoding (RFC 071 §3.A LinkRecord subset) ───────────────
+
+fn _i64_to_str(v: int) -> string {
+    return str(v)
+}
+
+// Build a LinkRecord row in the @rec shape (see §3.B layout).
+// All fields are stringified — the HXC v2 records layer is [[string]].
+fn _encode_record_row(obj_hash: string, obj_size: int,
+                      text_offset: int, text_length: int,
+                      abi_version: int, host_triple: string,
+                      created: int, exports_blob: string) -> array {
+    let row = []
+    row.push("@rec")
+    row.push(obj_hash)
+    row.push(_i64_to_str(obj_size))
+    row.push(_i64_to_str(text_offset))
+    row.push(_i64_to_str(text_length))
+    row.push(_i64_to_str(abi_version))
+    row.push(host_triple)
+    row.push(_i64_to_str(created))
+    row.push(exports_blob)
+    return row
+}
+
+fn _encode_header_row(abi_version: int, host_triple: string,
+                      created: int) -> array {
+    let row = []
+    row.push("@hdr")
+    row.push(_i64_to_str(incr_cache_format_version()))
+    row.push(_i64_to_str(abi_version))
+    row.push(host_triple)
+    row.push(_i64_to_str(created))
+    return row
+}
+
+// Serialize a row back to a flat pipe-escaped string for the
+// public-surface return value of incr_cache_lookup.
+// Mirror of the @rec row shape; caller decodes via
+// incr_cache_decode_record.
+fn _row_to_string(row: array) -> string {
+    let mut out = ""
+    let mut i = 0
+    while i < row.length {
+        let cell = row[i] as string
+        let esc1 = cell.replace("\\", "\\\\")
+        let esc2 = esc1.replace("|", "\\|")
+        if i > 0 { out = out + "|" }
+        out = out + esc2
+        i = i + 1
+    }
+    return out
+}
+
+// Inverse of _row_to_string — pipe-escape aware split.
+fn _string_to_row(s: string) -> array {
+    let out = []
+    if len(s) == 0 { return out }
+    let mut cell = ""
+    let mut i = 0
+    while i < len(s) {
+        let c = s.substring(i, i + 1)
+        if c == "\\" && (i + 1) < len(s) {
+            let n = s.substring(i + 1, i + 2)
+            if n == "\\" { cell = cell + "\\"; i = i + 2; continue }
+            if n == "|"  { cell = cell + "|";  i = i + 2; continue }
+            cell = cell + c
+            i = i + 1
+            continue
+        }
+        if c == "|" {
+            out.push(cell)
+            cell = ""
+            i = i + 1
+            continue
+        }
+        cell = cell + c
+        i = i + 1
+    }
+    out.push(cell)
+    return out
+}
+
+// ── cache I/O ────────────────────────────────────────────────────────
+
+// Read+decode the cache file. Returns [] on any error / version
+// mismatch / missing file. Returned shape is [row0=@hdr, row1=@rec,
+// row2=@rec, …]; caller filters.
+fn _load_cache_rows(cache_dir: string, abi_version: int,
+                    host_triple: string) -> array {
+    let path = _join_path(cache_dir, _incr_cache_blob_name())
+    if !pfs_file_exists(path) { return [] }
+    let bytes = read_file_bytes(path)
+    if !bytes { return [] }
+    // Reassemble bytes → string for the HXC v2 codec (lib expects
+    // string input; the bytes are already the encoded blob).
+    let mut blob = ""
+    let mut i = 0
+    while i < bytes.length {
+        let b = bytes[i] as int
+        // Use raw byte → char-1; the cc2 chain is byte-deterministic
+        // so non-printable bytes round-trip via byte-string semantics
+        // (idem on read_file_bytes which already gave us a [int]).
+        blob = blob + chr(b)
+        i = i + 1
+    }
+    let rows = hxc_v2_decode_records(blob)
+    if !rows { return [] }
+    if rows.length == 0 { return [] }
+    // Validate header — invalidation §3.E (1)/(2)/(3)/(4).
+    let hdr = rows[0] as array
+    if hdr.length < 5 { return [] }
+    let tag = hdr[0] as string
+    if tag != "@hdr" { return [] }
+    let cached_fmt = to_int(hdr[1] as string)
+    if cached_fmt != incr_cache_format_version() { return [] }  // §3.E(1)
+    let cached_abi = to_int(hdr[2] as string)
+    if cached_abi != abi_version { return [] }                   // §3.E(2)
+    let cached_triple = hdr[3] as string
+    if cached_triple != host_triple { return [] }                // §3.E(4)
+    return rows
+}
+
+// Write the cache. Atomicity: tmp + rename. Returns true on success.
+fn _save_cache_rows(cache_dir: string, rows: array) -> bool {
+    if !_ensure_dir(cache_dir) { return false }
+    let path = _join_path(cache_dir, _incr_cache_blob_name())
+    let tmp = path + ".tmp"
+    let blob = hxc_v2_encode_records(rows)
+    if !blob { return false }
+    // String → [int] bytes for write_bytes; preserves the byte-canonical
+    // wire (every char is one byte in the cc2 output domain).
+    let buf = []
+    let mut i = 0
+    while i < len(blob) {
+        let c = blob.substring(i, i + 1)
+        buf.push(ord(c))
+        i = i + 1
+    }
+    let _wb = write_bytes(tmp, buf)
+    // Best-effort atomic rename. exec is used (no portable rename builtin
+    // — the same pattern hexa_ld v1.2 uses around the codesign blob).
+    let q_tmp = _shell_quote(tmp)
+    let q_dst = _shell_quote(path)
+    let _ = exec("mv " + q_tmp + " " + q_dst + " 2>/dev/null")
+    let probe = exec("test -f " + q_dst + " && echo 1 || echo 0").trim()
+    return probe == "1"
+}
+
+// Mirror to a human-readable TSV (g3-honest second eye for ops).
+fn _save_meta_tsv(cache_dir: string, rows: array) -> bool {
+    let path = _join_path(cache_dir, _incr_cache_meta_name())
+    let mut out = ""
+    out = out + "# RFC 071 §G8-B incr_link.meta.tsv (mirror; SSOT = .hxc)\n"
+    out = out + "# columns: tag\tobj_hash\tobj_size\ttext_off\ttext_len\tabi\ttriple\tcreated\texports\n"
+    let mut i = 0
+    while i < rows.length {
+        let row = rows[i] as array
+        let mut j = 0
+        while j < row.length {
+            if j > 0 { out = out + "\t" }
+            out = out + (row[j] as string)
+            j = j + 1
+        }
+        out = out + "\n"
+        i = i + 1
+    }
+    return write_text(path, out)
+}
+
+// ── public surface (RFC 071 §G8-B) ──────────────────────────────────
+
+// Lookup the cache record for obj_path. Returns "" on miss. On hit,
+// returns the encoded record row (use incr_cache_decode_record to get
+// the field array).
+//
+// Invalidation §3.E enforced:
+//   (1) format_version  — checked in _load_cache_rows
+//   (2) abi_version     — checked in _load_cache_rows
+//   (3) runtime_hash    — caller propagates via abi_version bump
+//   (4) host_triple     — checked in _load_cache_rows
+//   (5) record absent   — natural by-key miss
+//   (6) obj re-hash != cached_hash — defense in depth here
+pub fn incr_cache_lookup(cache_dir: string, obj_path: string,
+                         abi_version: int, host_triple: string) -> string {
+    let key = incr_cache_compute_key(obj_path)
+    if len(key) == 0 { return "" }
+    let rows = _load_cache_rows(cache_dir, abi_version, host_triple)
+    if rows.length == 0 { return "" }
+    // Linear scan — sufficient for the wilson-scale N≈10-30 plugin set
+    // RFC 071 §1 motivates. A hash-indexed sidecar can land in G8-C if
+    // measurements show this dominates.
+    let mut i = 1  // skip @hdr
+    while i < rows.length {
+        let row = rows[i] as array
+        if row.length < 9 {
+            i = i + 1
+            continue
+        }
+        let tag = row[0] as string
+        if tag != "@rec" {
+            i = i + 1
+            continue
+        }
+        let cached_hash = row[1] as string
+        if cached_hash == key {
+            // §3.E(6) defense in depth — key IS the hash, so if the
+            // on-disk file changed between key compute + record fetch,
+            // we'd see a different key already. Belt-and-braces:
+            // verify cached_hash agrees with the rehash we just did.
+            return _row_to_string(row)
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// Store a LinkRecord. If a record already exists for this key, it is
+// overwritten (LRU-by-recency — the most recent link wins; this is
+// the simplest semantics for wilson dev's "build → tweak → rebuild"
+// inner loop). Returns true on successful persist.
+pub fn incr_cache_store(cache_dir: string, obj_path: string,
+                        text_offset: int, text_length: int,
+                        abi_version: int, host_triple: string,
+                        exports_blob: string) -> bool {
+    let key = incr_cache_compute_key(obj_path)
+    if len(key) == 0 { return false }
+    let obj_size = pfs_file_size(obj_path)
+    let created = to_int(pfs_now_ns().substring(0, 10))
+    // Load existing rows (preserving valid records under the same hdr);
+    // if the hdr is stale (format/abi/triple mismatch) we get [] and
+    // the cache is rebuilt fresh.
+    let existing = _load_cache_rows(cache_dir, abi_version, host_triple)
+    let next = []
+    next.push(_encode_header_row(abi_version, host_triple, created))
+    // Append-or-replace: skip any existing @rec with the same key,
+    // then append the new one at the end (creation order preserved).
+    if existing.length > 0 {
+        let mut i = 1
+        while i < existing.length {
+            let row = existing[i] as array
+            if row.length >= 2 {
+                let tag = row[0] as string
+                let other_key = row[1] as string
+                if tag == "@rec" && other_key != key {
+                    next.push(row)
+                }
+            }
+            i = i + 1
+        }
+    }
+    let new_row = _encode_record_row(key, obj_size, text_offset,
+                                     text_length, abi_version,
+                                     host_triple, created, exports_blob)
+    next.push(new_row)
+    let ok = _save_cache_rows(cache_dir, next)
+    if ok {
+        let _meta = _save_meta_tsv(cache_dir, next)
+    }
+    return ok
+}
+
+// Convert a lookup-return string back into its row array.
+pub fn incr_cache_decode_record(rec_str: string) -> array {
+    return _string_to_row(rec_str)
+}
+
+// Clear the cache (deletes both .hxc + .meta.tsv). Returns true on
+// successful removal. Safe — caller flips back to full-link mode.
+pub fn incr_cache_clear(cache_dir: string) -> bool {
+    if len(cache_dir) == 0 { return false }
+    let p_blob = _join_path(cache_dir, _incr_cache_blob_name())
+    let p_meta = _join_path(cache_dir, _incr_cache_meta_name())
+    let _ = exec("rm -f " + _shell_quote(p_blob) + " "
+                       + _shell_quote(p_meta) + " 2>/dev/null")
+    let probe = exec("test -f " + _shell_quote(p_blob)
+                     + " && echo 1 || echo 0").trim()
+    return probe == "0"
+}
+
+// ── default cache dir (RFC 071 §3.B) ────────────────────────────────
+
+// `${HEXA_LANG}/cache/link/<output_basename_hash>/` per §3.B. Caller
+// passes output_basename; this helper resolves the full dir.
+pub fn incr_cache_default_dir(output_basename: string) -> string {
+    let hexa_lang = exec("echo $HEXA_LANG 2>/dev/null").trim()
+    let mut root = hexa_lang
+    if len(root) == 0 {
+        // Fallback: $HOME/.hx
+        let home = exec("echo $HOME 2>/dev/null").trim()
+        if len(home) == 0 { return "" }
+        root = home + "/.hx"
+    }
+    let h = sha256(output_basename)
+    let bucket = h.substring(0, 16)
+    return root + "/cache/link/" + bucket
+}

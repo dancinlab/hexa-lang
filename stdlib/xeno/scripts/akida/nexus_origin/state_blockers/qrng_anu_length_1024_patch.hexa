@@ -1,0 +1,14 @@
+slug qrng-anu-length-1024-patch
+status active
+priority 70
+target tool/noise_envelope.hexa:165
+why ANU API parameter length=1 → length=1024 1-line patch + byte-queue management → β throughput 1024×
+fire-host local
+fire-cmd echo "manual implementation step — see convergence/r4_beta_qrng_4source_implementation_plan_2026_04_27.convergence Tier-1"
+interval 86400
+attempts-log state/blockers/qrng_anu_length_1024_patch.attempts.jsonl
+omega-stop fixpoint-convergence
+resolution-metric β-throughput-bit-per-sec
+resolution-op gte
+resolution-value 8000
+resolution-fallback ANU API rate-limit empirical >= 1024 bit per request × 1 req/sec budget held over N=10 cycles

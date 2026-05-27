@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 140 140" width="140" height="140">
+  <!-- hexa-lang signature — a hexagonal gem cut, atlas-bound -->
+  <g stroke="#1f6feb" stroke-width="2" fill="none">
+    <!-- outer hexagon -->
+    <polygon points="70,12 122,40 122,100 70,128 18,100 18,40" stroke-linejoin="round"/>
+    <!-- inner facets (gem cut) -->
+    <line x1="70" y1="12"  x2="70" y2="70"/>
+    <line x1="122" y1="40" x2="70" y2="70"/>
+    <line x1="122" y1="100" x2="70" y2="70"/>
+    <line x1="70" y1="128" x2="70" y2="70"/>
+    <line x1="18" y1="100" x2="70" y2="70"/>
+    <line x1="18" y1="40"  x2="70" y2="70"/>
+    <!-- atlas inscription marker -->
+    <circle cx="70" cy="70" r="6" fill="#1f6feb" stroke="none"/>
+  </g>
+</svg>

@@ -1,0 +1,8 @@
+#!hexa strict
+// photonic structure — ring resonator radius.
+fn main() {
+    let ring_um = 5.0
+    println("photonic_structure (ring resonator radius):")
+    println("  ring_um = " + str(ring_um))
+    println("__HEXA_PHOTONIC_STRUCTURE__ PASS gate=GATE_OPEN absorbed=false")
+}

@@ -1,0 +1,148 @@
+// HEXA Standard Library — signal/core_mel
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// MEL filterbank + magnitude-spectrum → mel-spectrum projection. Ported from
+// anima HEXAD/VOICE/anima-voice/dsp_core.hexa (`hz_to_mel`, `mel_to_hz`,
+// `dsp_mel_filterbank`, `dsp_spec_to_mel`) per the STDLIB domain phase3 M1
+// (signal primitives) — the MEL parts deferred from the merged
+// stdlib/signal/core_pitch (#857). Companion to stdlib/signal/core_griffin.
+//
+// Conventions (HTK-style, librosa-compatible):
+//
+//   mel = 2595 · log10(1 + hz / 700)       (forward, mel curve)
+//   hz  = 700  · (10^(mel / 2595) − 1)     (inverse)
+//
+// Filterbank layout (returned by `mel_filterbank`):
+//   bins        = n_fft / 2 + 1                (one-sided FFT bin count)
+//   filterbank  = flat [float] of length n_mels · bins, row-major:
+//                 row m (offset = m·bins) holds the triangular weights of
+//                 mel band m over FFT bin indices 0 .. bins-1.
+//
+// Each triangle spans mel-spaced center frequencies (n_mels + 2 anchor points,
+// edges included) — for band m the triangle rises from bin_points[m] to
+// bin_points[m+1] (peak) and falls to bin_points[m+2].
+//
+// `spec_to_mel` applies the filterbank to a one-sided magnitude spectrum:
+//
+//   mel[m] = Σ_{b=0}^{bins-1} spec_mag[b] · filterbank[m · bins + b]
+//
+// NOTE on the curve (libm):
+//   The mel ↔ Hz curve uses the native libm `log` and `pow` builtins (NOT
+//   anima's hand-rolled `log_approx` / `exp_approx`) — consistent with
+//   stdlib/signal/core_fft.hexa's libm trig stance and project.tape
+//   @D stdlib_trig_libm. `log10(x)` is realised as `log(x) / log(10)` and
+//   `10^x` as `pow(10, x)`; both are IEEE-correct over the full range.
+//   The filterbank shape / triangle math itself is byte-equal to the anima
+//   baseline.
+//
+// Surface:
+//   pub fn hz_to_mel(hz: float) -> float
+//   pub fn mel_to_hz(mel: float) -> float
+//   pub fn mel_filterbank(n_mels: int, n_fft: int, sr: int) -> [float]
+//       // → flat n_mels · bins triangular-filter weights, row-major.
+//   pub fn spec_to_mel(spec_mag: [float], filterbank: [float], n_mels: int) -> [float]
+//       // → [float] of length n_mels (mel band energies).
+
+let CM_LOG10 = 2.30258509299404568402   // ln(10), precomputed for log10 conversion
+
+// ── hz ↔ mel (HTK / librosa convention, libm log+pow) ───────────────────────
+
+pub fn hz_to_mel(hz: float) -> float {
+    // mel = 2595 · log10(1 + hz/700) = 2595 · log(1 + hz/700) / log(10)
+    return 2595.0 * log(1.0 + hz / 700.0) / CM_LOG10
+}
+
+pub fn mel_to_hz(mel: float) -> float {
+    // hz = 700 · (10^(mel/2595) − 1)
+    return 700.0 * (pow(10.0, mel / 2595.0) - 1.0)
+}
+
+// ── mel_filterbank(n_mels, n_fft, sr): triangular filterbank ────────────────
+//
+// Byte-equal port of dsp_core.hexa::dsp_mel_filterbank.
+//
+// Returns a flat list of n_mels · bins floats (row-major, bins = n_fft/2 + 1).
+// Each row holds a triangular weighting over FFT bins between three
+// mel-spaced anchor frequencies (left / center / right).
+
+pub fn mel_filterbank(n_mels: int, n_fft: int, sr: int) -> [float] {
+    let bins = n_fft / 2 + 1
+    let fmax = sr / 2  // Nyquist
+
+    // Mel-spaced anchor points: n_mels + 2 (edges included)
+    let mel_low = hz_to_mel(0.0)
+    let mel_high = hz_to_mel(fmax * 1.0)
+    let n_points = n_mels + 2
+
+    let mut mel_points = []
+    let mut hz_points = []
+    let mut m = 0
+    while m < n_points {
+        let mel_val = mel_low + (mel_high - mel_low) * m / (n_points - 1)
+        mel_points = mel_points.push(mel_val)
+        hz_points = hz_points.push(mel_to_hz(mel_val))
+        m = m + 1
+    }
+
+    // Convert hz anchor points to (fractional) FFT bin indices
+    let mut bin_points = []
+    let mut bp = 0
+    while bp < n_points {
+        bin_points = bin_points.push(hz_points[bp] * n_fft / sr)
+        bp = bp + 1
+    }
+
+    // Build triangular filters: for mel band m, triangle from bin_points[m]
+    // through bin_points[m+1] (peak) to bin_points[m+2].
+    let mut fb = []
+    let mut mi = 0
+    while mi < n_mels {
+        let f_left = bin_points[mi]
+        let f_center = bin_points[mi + 1]
+        let f_right = bin_points[mi + 2]
+        let mut b = 0
+        while b < bins {
+            let bf = b * 1.0
+            let mut val = 0.0
+            if bf >= f_left && bf <= f_center && f_center > f_left {
+                // Rising slope: (bf − f_left) / (f_center − f_left)
+                val = (bf - f_left) / (f_center - f_left)
+            } else if bf > f_center && bf <= f_right && f_right > f_center {
+                // Falling slope: (f_right − bf) / (f_right − f_center)
+                val = (f_right - bf) / (f_right - f_center)
+            }
+            fb = fb.push(val)
+            b = b + 1
+        }
+        mi = mi + 1
+    }
+    return fb
+}
+
+// ── spec_to_mel(spec_mag, filterbank, n_mels): magnitude → mel-band energy ──
+//
+// Byte-equal port of dsp_core.hexa::dsp_spec_to_mel.
+//
+// spec_mag: [float] one-sided magnitude spectrum, length = bins.
+// filterbank: [float] from mel_filterbank, length = n_mels · bins.
+// n_mels: number of mel bands.
+// Returns [float] of length n_mels.
+
+pub fn spec_to_mel(spec_mag: [float], filterbank: [float], n_mels: int) -> [float] {
+    let bins = len(spec_mag)
+    let mut mel_out = []
+    let mut m = 0
+    while m < n_mels {
+        let mut sum = 0.0
+        let mut b = 0
+        while b < bins {
+            sum = sum + spec_mag[b] * filterbank[m * bins + b]
+            b = b + 1
+        }
+        mel_out = mel_out.push(sum)
+        m = m + 1
+    }
+    return mel_out
+}

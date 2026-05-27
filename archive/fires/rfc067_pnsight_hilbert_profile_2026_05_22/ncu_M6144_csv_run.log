@@ -1,0 +1,4 @@
+Device: NVIDIA GeForce RTX 5070 sm_120
+shape M=6144 entry=sgemm_4warp_hilbert_6144x6144_grid regs/thd=64 shmem=8192 B
+launch grid=(128,128,1) block=(128,1,1) side=96 p=128 K_TILES=384 (real=9216 padding=7168)
+M=6144 nreps=1 mean=157.932ms min=157.932ms max=157.932ms TFLOPS=2.937

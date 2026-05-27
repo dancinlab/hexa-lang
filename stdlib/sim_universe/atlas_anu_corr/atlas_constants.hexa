@@ -1,0 +1,283 @@
+// atlas_constants.hexa — atlas.n6 에서 VERIFIED 수치상수 추출
+//
+// 전략: verified grade ([10*], [11*], [9*], [8*]) + 수치값 추출 가능 + >= 0.01 비자명
+//   - π, ζ(3), φ, e 등 잘 알려진 수학상수는 하드코딩 (atlas 에 symbolic 으로만 존재)
+//   - atlas 수치 상수는 라인 파싱
+//   - decimal expansion N 자리 생성 (0-9 시퀀스)
+//
+// 출력: <stdout> TSV  name<TAB>value<TAB>digits<TAB>description
+//   digits 는 소수점 아래 N 자리 (0-9 문자열)
+
+let ATLAS_PATH = "/Users/ghost/Dev/nexus/n6/atlas.n6"
+let DIGITS_N = 512  // 각 상수당 N 자리
+
+// ─── 수학 상수 decimal expansion (하드코딩, 충분한 자릿수) ───
+//   atlas 에 π/e/ζ(3)/φ 등은 symbolic 정의만 있어 수치 추출 불가
+//   → 독립 알려진 값 사용
+let MATH_CONSTANTS = [
+    // (name, value, decimal_digits_after_point, description)
+    ["pi",        "3.14159265358979323846", "14159265358979323846264338327950288419716939937510582097494459230781640628620899862803482534211706798214808651328230664709384460955058223172535940812848111745028410270193852110555964462294895493038196442881097566593344612847564823378678316527120190914564856692346034861045432664821339360726024914127372458700660631558817488152092096282925409171536436789259036001133053054882046652138414695194151160943305727036575959195309218611738193261179310511854807446237996274956735188575272489122793818301194913",     "pi - circle ratio"],
+    ["e",         "2.71828182845904523536", "71828182845904523536028747135266249775724709369995957496696762772407663035354759457138217852516642742746639193200305992181741359662904357290033429526059563073813232862794349076323382988075319525101901157383418793070215408914993488416750924476146066808226480016847741185374234544243710753907774499206955170276183860626133138458300075204493382656029760673711320070932870912744374704723069697720931014169283681902551510865746377211125238978442505695369677078544996996794686445490598",     "e - natural log base"],
+    ["phi_golden","1.61803398874989484820", "61803398874989484820458683436563811772030917980576286213544862270526046281890244970720720418939113748475408807538689175212663386222353693179318006076672635443338908659593958290563832266131992829026788067520876689250171169620703222104321626954862629631361443814975870122034080588795445474924618569536486444924104432077134494704956584678850987433944221254487706647809158846074998871240076521705751797883416625624940758906970400028121042762177111777805315317141011704666599146697987317",     "phi - golden ratio"],
+    ["sqrt2",     "1.41421356237309504880", "41421356237309504880168872420969807856967187537694807317667973799073247846210703885038753432764157273501384623091229702492483605585073721264412149709993583141322266592750559275579995050115278206057147010955997160597025453791716604942458145023932755823586823506691466178285510036083926296551486776796815107124884900175929093054663619712064091538547632395906615180820708948126944099502843211036013956020135108381321930213076893395099649828521832093108074537459717762466810902",        "sqrt(2)"],
+    ["sqrt3",     "1.73205080756887729352", "73205080756887729352744634150587236694280525381038062805580697945193301690880003708114618675724857567562614141540670302996994509499895247881165551209437364852809323190230558206797482010108467492326501531234326690332474858912012265642912556353818533497574193906430687478552265757613056088204437395317067517849017404908037022094054322664024996513832614887929611538996528998693935378571800432537876634604906754894895849751854471869489131793686158552296089919127559998050023080469641",        "sqrt(3)"],
+    ["sqrt5",     "2.23606797749978969640", "23606797749978969640917366873127623544061835961152572427089724541052092563780489941441440837878227496030930058915203344441076893408528335842747316751869374937063517745486800876115902540037091810149550321068054432596541022097502820008586126867070005751898956073478017058988013989725869515060066073415054881893108200020020571103884854605770116849571060562015632345869691049128893974168830773395824036549829988180572008989048537692543680005057062559014977008498069367706554830528",        "sqrt(5)"],
+    ["zeta3",     "1.20205690315959428540", "20205690315959428539973816151144999076498629234049888179227155534183820578631309018645587360933525814619915779526071941849199908917106390175866613440145517999704734398283347517283547918944515676107259944022070877671928097069054854555057094013547735014019421194554091040345159008866834048537706516094832517683345148302462411734925773020116519648907055810023054820411088470569574017706020923893797081919717711693014775898538",                 "zeta(3) Apery"],
+    ["euler_gamma","0.57721566490153286060","57721566490153286060651209008240243104215933593992359880576723488486772677766467093694706329174674951463144724980708248096050401448654283622417399764492353625350033374293733773767394279259525824709491600873520394816567085323315177661152862119950150798479374508570574002992135685558763764329928442834681482017709847066",                 "euler-mascheroni"],
+    ["catalan",   "0.91596559417721901505", "91596559417721901505460351493238411077414937428167213426649811962176301977625476947935651292611510624857442261919619957031047742793818170546729779471720931551289871437960832983057830060949895041905849041290948",  "catalan constant"],
+    ["ln2",       "0.69314718055994530941", "69314718055994530941723212145817656807550013436025525412068000949339362196969471560586332699641868754200148102057068573368552023575813055703267075163507596193072757082837143519030703862389167347112335011", "ln(2)"],
+]
+
+fn _ends_verified(line: string) -> bool {
+    // grade [10*], [11*], [9*], [8*] 만 verified
+    // [d.r?] 같은 hypothesis 제외
+    let mut i = line.len() - 1
+    // find last ']'
+    let mut pos = 0 - 1
+    let mut k = line.len()
+    while k > 0 {
+        k = k - 1
+        if line.substring(k, k + 1) == "]" {
+            pos = k
+            break
+        }
+    }
+    if pos < 0 { return false }
+    // find matching '['
+    let mut start = 0 - 1
+    let mut j = pos
+    while j > 0 {
+        j = j - 1
+        if line.substring(j, j + 1) == "[" {
+            start = j
+            break
+        }
+    }
+    if start < 0 { return false }
+    let grade = line.substring(start + 1, pos)
+    // must contain '*' (verified) and not '?'
+    if grade.len() == 0 { return false }
+    let mut has_star = false
+    let mut has_q = false
+    let mut gi = 0
+    while gi < grade.len() {
+        let ch = grade.substring(gi, gi + 1)
+        if ch == "*" { has_star = true }
+        if ch == "?" { has_q = true }
+        gi = gi + 1
+    }
+    return has_star && !has_q
+}
+
+fn _extract_name_value(line: string) -> list {
+    // @X name = <expr> :: domain [grade]
+    let mut result = []
+    let dd = line.index_of("::")
+    if dd < 0 { return result }
+    let lhs = line.substring(0, dd)
+    // 첫 토큰: @X name
+    let hash_pos = lhs.index_of(" ")
+    if hash_pos < 0 { return result }
+    let after_type = lhs.substring(hash_pos + 1, lhs.len())
+    let eq = after_type.index_of("=")
+    if eq < 0 { return result }
+    let name = after_type.substring(0, eq).trim()
+    if name.len() == 0 { return result }
+    // RHS: 마지막 '=' 뒤
+    let mut last_eq = 0 - 1
+    let mut ci = 0
+    while ci < lhs.len() {
+        if lhs.substring(ci, ci + 1) == "=" { last_eq = ci }
+        ci = ci + 1
+    }
+    if last_eq < 0 { return result }
+    let rhs = lhs.substring(last_eq + 1, lhs.len()).trim()
+    if rhs.len() == 0 { return result }
+    // rhs 가 숫자 literal 인지 검사 (단순: 첫 문자가 digit or '-' or '.')
+    let c0 = rhs.substring(0, 1)
+    let is_num = c0 == "-" || c0 == "." || "0123456789".contains(c0)
+    if !is_num { return result }
+    // extract clean number token (split by space)
+    let mut num = rhs
+    let sp = rhs.index_of(" ")
+    if sp >= 0 { num = rhs.substring(0, sp) }
+    // drop trailing commas
+    while num.len() > 0 {
+        let last = num.substring(num.len() - 1, num.len())
+        if last == "," || last == ")" || last == ";" {
+            num = num.substring(0, num.len() - 1)
+        } else {
+            break
+        }
+    }
+    if num.len() == 0 { return result }
+    result.push(name)
+    result.push(num)
+    return result
+}
+
+// ─── 수 → 0-9 digit string (N 자리) ───
+// 처리:
+//   1) 소수점 있는 경우: 소수점 뒤 N 자리
+//   2) 정수만 있는 경우: 숫자를 반복 padding
+//   3) exponential (1.6e-34): 십진 시프트 후 digit 추출
+fn _value_to_digits(val: string, n: i64) -> string {
+    // 1) exponential parse
+    let mut mantissa = val
+    let mut exp: i64 = 0
+    let epos = val.index_of("e")
+    let mut epos2 = 0 - 1
+    if epos < 0 {
+        epos2 = val.index_of("E")
+    }
+    let use_e = if epos >= 0 { epos } else { epos2 }
+    if use_e >= 0 {
+        mantissa = val.substring(0, use_e)
+        let exp_s = val.substring(use_e + 1, val.len())
+        try { exp = to_int(exp_s) } catch e1 { exp = 0 }
+    }
+    // remove sign
+    if mantissa.len() > 0 {
+        let c0 = mantissa.substring(0, 1)
+        if c0 == "-" || c0 == "+" {
+            mantissa = mantissa.substring(1, mantissa.len())
+        }
+    }
+    // split on '.'
+    let dot = mantissa.index_of(".")
+    let mut int_part = mantissa
+    let mut frac_part = ""
+    if dot >= 0 {
+        int_part = mantissa.substring(0, dot)
+        frac_part = mantissa.substring(dot + 1, mantissa.len())
+    }
+    // 디지트만 추출 (strip non-digits)
+    let mut ip = ""
+    let mut i = 0
+    while i < int_part.len() {
+        let ch = int_part.substring(i, i + 1)
+        if "0123456789".contains(ch) { ip = ip + ch }
+        i = i + 1
+    }
+    let mut fp = ""
+    let mut j: i64 = 0
+    while j < frac_part.len() {
+        let ch = frac_part.substring(j, j + 1)
+        if "0123456789".contains(ch) { fp = fp + ch }
+        j = j + 1
+    }
+    // exp 적용: positive → int_part 뒤로 0 padding or frac 에서 shift
+    //   양수 exp: frac 에서 exp 개 digit 을 int 뒤로 이동
+    //   음수 exp: int 앞에 |exp| 개 0 padding, int 를 frac 앞으로 이동
+    if exp > 0 {
+        let take = if exp <= fp.len() as i64 { exp } else { fp.len() as i64 }
+        let take_i: i64 = take
+        let moved = fp.substring(0, take_i)
+        ip = ip + moved
+        if fp.len() as i64 > take_i {
+            fp = fp.substring(take_i, fp.len())
+        } else {
+            fp = ""
+            // pad ip with zeros
+            let mut pad = exp - take_i
+            while pad > 0 { ip = ip + "0"; pad = pad - 1 }
+        }
+    } else if exp < 0 {
+        let k = 0 - exp
+        // full digits = ip + fp
+        let full = ip + fp
+        // 새 소수점 위치: ip.len() + exp = ip.len() - k
+        let shift = ip.len() as i64 - k
+        if shift >= 0 {
+            ip = full.substring(0, shift)
+            fp = full.substring(shift, full.len())
+        } else {
+            // need |shift| leading zeros in frac
+            ip = "0"
+            let mut pad2 = 0 - shift
+            let mut padded = ""
+            while pad2 > 0 { padded = padded + "0"; pad2 = pad2 - 1 }
+            fp = padded + full
+        }
+    }
+    // now assemble: we want N frac digits for the "decimal expansion"
+    // if fp 가 짧으면 정수부분 digits 반복으로 채움 (작지만 deterministic; 0 padding 은 bias 유발)
+    let mut digits = fp
+    if digits.len() as i64 < n {
+        // fallback: 정수부 전체를 concat 해서 채운다 (e.g. "144" → "144144144...")
+        let core = if ip.len() > 0 { ip } else { "0" }
+        while (digits.len() as i64) < n {
+            digits = digits + core
+        }
+    }
+    if digits.len() as i64 > n { digits = digits.substring(0, n) }
+    return digits
+}
+
+fn main() {
+    // 1) 수학상수 emit
+    let mut m_idx = 0
+    while m_idx < MATH_CONSTANTS.len() {
+        let row = MATH_CONSTANTS[m_idx]
+        let name = row[0]
+        let val = row[1]
+        let digs = row[2]
+        let desc = row[3]
+        let mut d = digs
+        if (d.len() as i64) > DIGITS_N { d = d.substring(0, DIGITS_N) }
+        println(name + "\t" + val + "\t" + d + "\t" + desc)
+        m_idx = m_idx + 1
+    }
+
+    // 2) atlas 파싱
+    let mut content = ""
+    try { content = read_file(ATLAS_PATH) } catch e3 { content = "" }
+    if content.len() == 0 {
+        println("# ERROR read atlas")
+        return
+    }
+    let lines = content.split("\n")
+    let mut seen = #{}
+    let mut emitted = 0
+    let mut li = 0
+    while li < lines.len() {
+        let line = lines[li]
+        li = li + 1
+        if line.len() < 4 { continue }
+        let p2 = line.substring(0, 2)
+        if p2 != "@P" && p2 != "@C" && p2 != "@F" && p2 != "@L" { continue }
+        if !_ends_verified(line) { continue }
+        let nv = _extract_name_value(line)
+        if nv.len() < 2 { continue }
+        let name = nv[0]
+        let val = nv[1]
+        // dedup by name
+        if seen.contains_key(name) { continue }
+        seen[name] = true
+        // 너무 작거나 자명한 정수 제외 (0~9)
+        let mut v_f: f64 = 0.0
+        try { v_f = to_float(val) } catch e2 { v_f = 0.0 / 0.0 }
+        // NaN skip
+        if v_f != v_f { continue }
+        let mut absv = v_f
+        if absv < 0.0 { absv = 0.0 - absv }
+        if absv == 0.0 { continue }
+        // 정수 0..9 자체 제외 (digits 가 모두 동일)
+        if absv >= 0.0 && absv < 10.0 && (v_f == (v_f as i64) as f64) { continue }
+        let digs = _value_to_digits(val, DIGITS_N)
+        // digit string 이 모두 같은 문자면 (e.g. "000000") skip
+        let mut all_same = true
+        let mut di = 1
+        while di < digs.len() {
+            if digs.substring(di, di + 1) != digs.substring(0, 1) { all_same = false; break }
+            di = di + 1
+        }
+        if all_same { continue }
+        let safe_name = "atlas_" + name
+        println(safe_name + "\t" + val + "\t" + digs + "\tatlas verified")
+        emitted = emitted + 1
+        if emitted >= 80 { break }  // cap
+    }
+    println("# DONE constants=" + to_string(MATH_CONSTANTS.len() + emitted))
+}
+

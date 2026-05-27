@@ -1,0 +1,177 @@
+#!hexa strict
+// stdlib/kernels/mhd_stability/beta_limit.hexa — ①a ideal-MHD β-limit kernel
+// (demiurge design.md D72 2-layer STDLIB restructure · FUSION.md F4 gate (d)).
+//
+// Clean-room hexa-native closed-form ideal-MHD STABILITY kernel: the
+// Troyon β-limit + the cylindrical safety factor q* + the external-kink
+// q95 threshold. Domain-AGNOSTIC — only the standard linear ideal-MHD
+// algebra; NO device operating point, NO ITER caveat (the ①b adapter
+// `stdlib/fusion/mhd_stability.hexa` owns the operating point + the g3
+// honesty gate). Kernel sibling of `kernels/fusion_reactivity/reactivity`
+// (F1/F2) under D72 — this file is F4 gate (d).
+//
+// @version 0.1.0
+// @capabilities [pure]
+// @stability stage-2 substrate (closed-form Path A · libm-only; in fact
+//   this kernel is rational algebra — no transcendental call). Parity
+//   anchor = textbook Troyon scaling + the cylindrical q* identity; the
+//   `--expr` atoms in tool/verify_cli.hexa gate those identities.
+// @since 2026-05-25
+//
+// 2-layer (ABSORPTION.md ①):
+//   ①a kernel  — THIS FILE. Domain-independent Troyon β-limit + cylindrical
+//                q* + kink threshold. Pure functions.
+//   ①b adapter — `stdlib/fusion/mhd_stability.hexa`. Owns the ITER-class
+//                reference operating point + the g3 honesty header.
+//
+// ══ HONEST SCOPE — LINEAR IDEAL-MHD ONLY (NON-NEGOTIABLE · g3) ════════════
+//   This kernel is the LINEAR IDEAL-MHD β-limit + the external-kink q95
+//   threshold. It is:
+//     • NOT turbulence / transport (no confinement-time physics here).
+//     • NOT disruption dynamics (no current-quench / thermal-quench model).
+//     • NOT resistive MHD (no tearing — neoclassical NTM / classical RTM
+//       are absent; ideal-MHD assumes zero resistivity = frozen flux).
+//     • NOT a 2-D/3-D equilibrium (no Grad-Shafranov solve — that is gate
+//       (c)); the q* used here is the CYLINDRICAL approximation, which
+//       omits elongation / shaping (so it UNDER-estimates a shaped q95).
+//   A "PASS" from `beta < beta_Troyon` (or `q95 > 2`) is a STABILITY
+//   PREDICTION of the linear ideal-MHD model — NEVER a claim that a device
+//   is stable. absorbed=false; never "Q>1"; the JET measured-oracle
+//   remains the ONLY absorbed=true fusion path.
+//
+// ── PROVENANCE / CITATION (FUSION governance · honest-cite) ───────────────
+//   Coefficients + forms are taken VERBATIM from the canonical references;
+//   they are NOT re-derived (re-derivation of a published scaling = mis-
+//   cite). Closed-form Path A — no solver, no ML.
+//
+//   - Troyon β-limit + normalized coefficient β_N :
+//       F. Troyon, R. Gruber, H. Saurenmann, S. Semenzato, S. Succi,
+//       "MHD-Limits to Plasma Confinement", Plasma Phys. Control. Fusion
+//       26, 209 (1984), DOI 10.1088/0741-3335/26/1A/319. The Troyon
+//       scaling β_max[%] = β_N · I_p[MA] / (a[m]·B[T]) with the ideal-MHD
+//       textbook limit β_N ≈ 2.8 (advanced-scenario wall-stabilized limit
+//       β_N ≈ 3.5). [also Wesson, "Tokamaks" 4th ed., §6.16; Freidberg,
+//       "Ideal MHD", §12.] β_N here is the engineering convention with I_p
+//       in MA, a (minor radius) in m, B (toroidal field) in T, β_max in %.
+//   - Cylindrical safety factor q* (edge q) :
+//       J. Wesson, "Tokamaks" 4th ed., §3.6 / §3.7 — the cylindrical
+//       (large-aspect-ratio, circular) edge safety factor
+//       q* = 2π a² B / (μ0 R I_p). Textbook identity, not a fit.
+//   - External-kink stability threshold q95 > 2 :
+//       Kruskal-Shafranov limit (q_a > 1 for the m=1 kink; the practical
+//       operational external-kink boundary is q95 > 2) — Wesson §3.7 /
+//       §7.6, Freidberg "Ideal MHD" §11. A device is run with q95 ≳ 3 for
+//       margin; q95 > 2 is the textbook external-kink stability boundary.
+
+// ── physical constant (provenance only — see q_star prefactor reduction) ──
+//   vacuum permeability μ0 = 4π × 10⁻⁷ T·m/A (exact pre-2019-SI; the
+//   post-2019 CODATA value differs only at the ~2.3e-10 relative level,
+//   negligible for this scaling). The cylindrical q* prefactor 2π/(μ0·10⁶)
+//   reduces to EXACTLY 5 (the π cancels — see q_star), so this kernel needs
+//   no transcendental constant and stays at full float precision. μ0 is
+//   documented here, not evaluated.
+
+// ══ TROYON β-LIMIT (Troyon et al. 1984, verbatim) ════════════════════════
+//
+//   β_max[%] = β_N · I_p[MA] / ( a[m] · B[T] )
+//
+// β_N (normalized beta, the "Troyon coefficient"): the ideal-MHD textbook
+// limit is β_N ≈ 2.8; the wall-stabilized advanced-scenario limit is
+// β_N ≈ 3.5. β_N is a DESIGN INPUT here — the kernel does not pick it.
+
+/// Troyon ideal-MHD textbook β_N coefficient (≈2.8). VERBATIM constant
+/// (Troyon 1984 / Wesson §6.16) — the standard ideal-MHD normalized-beta
+/// limit. Not re-derived.
+pub fn troyon_beta_n_ideal() -> float { return 2.8 }
+
+/// Troyon advanced-scenario (wall-stabilized) β_N coefficient (≈3.5).
+/// VERBATIM constant — the higher limit reachable with a conducting wall /
+/// optimized profiles. Not re-derived.
+pub fn troyon_beta_n_advanced() -> float { return 3.5 }
+
+/// Troyon β-limit [%]: β_max = β_N · I_p[MA] / (a[m]·B[T]).
+/// All engineering units (I_p in MA, a = minor radius in m, B = toroidal
+/// field in T). Returns 0.0 for non-physical inputs (a ≤ 0 or B ≤ 0) — the
+/// NaN-free sentinel convention. Pure rational algebra (no libm call).
+/// ANCHOR: beta_max_pct(2.8, 15.0, 2.0, 5.3) = 2.8·15/(2·5.3) = 3.96226…%.
+pub fn beta_max_pct(beta_n: float, ip_ma: float, a_m: float, b_t: float) -> float {
+    if a_m <= 0.0 { return 0.0 }
+    if b_t <= 0.0 { return 0.0 }
+    return beta_n * ip_ma / (a_m * b_t)
+}
+
+/// Inverse Troyon: the achieved normalized beta β_N from an operating β[%].
+///   β_N = β[%] · a[m] · B[T] / I_p[MA]
+/// The MHD figure of merit — a device's β_N vs the limit (2.8 / 3.5) is the
+/// margin. Returns 0.0 for I_p ≤ 0 (sentinel). Pure rational algebra.
+/// ANCHOR: beta_n(3.9622641509433962, 15.0, 2.0, 5.3) = 2.8.
+pub fn beta_n(beta_pct: float, ip_ma: float, a_m: float, b_t: float) -> float {
+    if ip_ma <= 0.0 { return 0.0 }
+    return beta_pct * a_m * b_t / ip_ma
+}
+
+/// Troyon stability PREDICTION (linear ideal-MHD): is the operating β[%]
+/// below the Troyon limit for the given β_N? returns true ⇔ β < β_max.
+/// HONEST (g3): true = the linear ideal-MHD model predicts NO ideal-β
+/// instability — it is NOT a claim that the device is stable (turbulence /
+/// resistive / disruption physics is out of scope). a ≤ 0 / B ≤ 0 → false.
+pub fn beta_troyon_stable(beta_pct: float, beta_n_limit: float,
+                          ip_ma: float, a_m: float, b_t: float) -> bool {
+    let limit = beta_max_pct(beta_n_limit, ip_ma, a_m, b_t)
+    if limit <= 0.0 { return false }
+    return beta_pct < limit
+}
+
+// ══ CYLINDRICAL SAFETY FACTOR q* + EXTERNAL-KINK THRESHOLD ════════════════
+//
+//   q* = 2π · a² · B / ( μ0 · R · I_p )       (Wesson §3.6, cylindrical)
+//
+// Edge (cylindrical) safety factor in the large-aspect-ratio circular
+// approximation. With I_p in MA the prefactor reduces EXACTLY: since
+// μ0 = 4π × 10⁻⁷ and 1 MA = 10⁶ A,
+//   2π / (μ0 · 10⁶) = 2π / (4π × 10⁻⁷ · 10⁶) = 2π / (0.4π) = 5   (exactly,
+// the π cancels analytically). So q* = 5 · a² · B / (R · I_p[MA]). The
+// kernel evaluates this π-FREE identity (not the literal-μ0 chain): it is
+// mathematically the SAME Wesson cylindrical q*, but the identity has no
+// transcendental constant, so it stays at full float precision (the
+// literal-4π fold otherwise re-introduces ~1e-6 cancellation noise). The
+// μ0 = 4π×10⁻⁷ value is documented above for the prefactor reduction only.
+//
+// HONEST: cylindrical q* OMITS elongation / shaping, so it UNDER-estimates
+// a shaped device's q95 (a 2-D Grad-Shafranov equilibrium — gate (c) — is
+// needed for the true q95). q* here is the textbook lower bound.
+
+/// Cylindrical edge safety factor q* = 2π a² B / (μ0 R I_p) = 5·a²·B/(R·I_p)
+/// with I_p in MA (the π-cancellation identity above — exact, full
+/// precision). a = minor radius [m], B = toroidal field [T], R = major
+/// radius [m], I_p in MA. Returns 0.0 for non-physical inputs (R ≤ 0 or
+/// I_p ≤ 0) — sentinel. Pure rational algebra (no transcendental call).
+/// ANCHOR: q_star(1.0, 2.0, 4.0, 1.0) = 5·1·2/(4·1) = 2.5 exactly.
+///         q_star(2.0, 5.3, 6.2, 15.0) = 1.1397849462365592.
+pub fn q_star(a_m: float, b_t: float, r_m: float, ip_ma: float) -> float {
+    if r_m <= 0.0 { return 0.0 }
+    if ip_ma <= 0.0 { return 0.0 }
+    return 5.0 * a_m * a_m * b_t / (r_m * ip_ma)
+}
+
+/// External-kink stability PREDICTION (linear ideal-MHD): is q95 above the
+/// textbook external-kink threshold? returns true ⇔ q95 > 2 (Wesson §7.6 /
+/// Kruskal-Shafranov operational boundary; devices run q95 ≳ 3 for margin).
+/// HONEST (g3): true = the linear ideal-MHD model predicts external-kink
+/// stability — NOT a guarantee the device is kink-free (resistive wall
+/// modes / error fields are out of scope). This is a pure threshold flag.
+pub fn kink_stable(q95: float) -> bool {
+    return q95 > 2.0
+}
+
+/// External-kink threshold constant (q95 = 2.0) — the textbook external-
+/// kink stability boundary. Exposed so a consumer can report the margin
+/// (q95 − 2.0) explicitly. VERBATIM (Kruskal-Shafranov / Wesson §7.6).
+pub fn kink_q95_threshold() -> float { return 2.0 }
+
+// ── ①b adapter note ──────────────────────────────────────────────────────
+//
+// The fusion operating point (an ITER-class β_N / I_p / a / B / R reference)
+// + the g3 honesty gate (sim input ≠ device measurement; absorbed=false for
+// textbook inputs; linear ideal-MHD scope caveat) live in the ①b adapter
+// `stdlib/fusion/mhd_stability.hexa`, NOT in this domain-agnostic kernel.

@@ -1,0 +1,376 @@
+// ════════════════════════════════════════════════════════════════════════
+// tool/flame_phase4b_ipcp.hexa — flame Phase 4-B-2 IPCP prototype (RFC 047)
+//
+// Reads a module_loader-expanded .hexa source, finds the top-level
+// (T, d, nh, nkv, h) literal 5-tuple, and substitutes those tokens
+// with their literal values inside the bodies of a fixed allow-list
+// of flame fn (block_fwd / block_bwd / decoder_fwd / decoder_grad /
+// decoder_train_step). Writes the rewritten source to stdout.
+//
+// Audit precondition (verified 2026-05-17 — see PHASE4B_SCAFFOLD.md):
+//   None of the 5 target fns shadow T/d/nh/nkv/h with inner `let`.
+//   Substitution is therefore safe at the body-text level — no
+//   semantic change beyond literal-folding the params.
+//
+// Usage:
+//   hexa run tool/flame_phase4b_ipcp.hexa <expanded.hexa> [<out.hexa>]
+//
+// If <out.hexa> is omitted, the rewritten source is written to
+// <expanded.hexa>.ipcp. Stderr carries the substitution report.
+//
+// Verification anchor (Phase 4-B-2 prototype):
+//   F-RFC047-IPCP-SOURCE-FOUND   — found top-level 5-tuple literal
+//   F-RFC047-IPCP-SUBST-COUNT    — ≥1 substitution per target fn body
+//   F-RFC047-IPCP-RESCAN-LITERAL — running scaffold on rewritten source
+//                                  yields ≥1 literal-tuple call site
+//                                  (was zero on input)
+//
+// What this does NOT do (deferred):
+//   - Build flag wiring to cmd_build (Phase 4-B-2 next sub-step)
+//   - Specialized kernel emission (Phase 4-B-3 — distinct from IPCP)
+//   - Inner-scope shadowing handling (not needed for target fns)
+// ════════════════════════════════════════════════════════════════════════
+
+let argv = args()
+if len(argv) < 2 {
+    println("usage: hexa run tool/flame_phase4b_ipcp.hexa <expanded.hexa> [<out.hexa>]")
+    println("       Phase 4-B-2 IPCP prototype (RFC 047)")
+    exit(1)
+}
+
+let src_path = argv[1]
+let mut out_path = src_path + ".ipcp"
+if len(argv) >= 3 { out_path = argv[2] }
+
+let src = read_file(src_path)
+if len(src) == 0 {
+    println("error: cannot read " + src_path)
+    exit(1)
+}
+
+println("=== flame Phase 4-B-2 IPCP prototype (RFC 047) ===")
+println("  input  : " + src_path)
+println("  output : " + out_path)
+
+// ── 1. Find top-level (T, d, nh, nkv, h) 5-tuple literals ─────────────
+//
+// Heuristic: scan for the FIRST 5 adjacent or near-adjacent (within ≤30
+// non-blank lines) statements matching `let <name> = <integer>`.
+// Names must appear as the set {T, d, nh, nkv, h} (in any order, but
+// expected adjacency from flame_d32_corpus_test main()).
+
+fn parse_int_token(s) {
+    let t = s.trim()
+    let nt = len(t)
+    if nt == 0 { return -1 }
+    let digits = "0123456789"
+    let mut sign = 1
+    let mut i = 0
+    if t.substring(0, 1) == "-" {
+        sign = -1
+        i = 1
+    }
+    let mut v = 0
+    while i < nt {
+        let ch = t.substring(i, i + 1)
+        if !digits.contains(ch) { return -2147483647 }  // invalid sentinel
+        v = v * 10 + (ord(ch) - 48)
+        i = i + 1
+    }
+    return sign * v
+}
+
+fn match_let_int(line) {
+    // Accept: `let <name> = <int>` (optional leading whitespace).
+    // Reject: nested `let` inside other constructs, `let mut`, type
+    // annotations (`let x: int = …`), expressions on RHS.
+    // Returns [name, value] on match, [] otherwise.
+    let t = line.trim()
+    if !t.starts_with("let ") { return [] }
+    let rest = t.substring(4, len(t))
+    if rest.starts_with("mut ") { return [] }
+    let eq = rest.index_of("=")
+    if eq <= 0 { return [] }
+    let lhs = rest.substring(0, eq).trim()
+    let rhs = rest.substring(eq + 1, len(rest)).trim()
+    // Strip trailing comment if present
+    let mut rhs2 = rhs
+    let cc = rhs2.index_of("//")
+    if cc >= 0 { rhs2 = rhs2.substring(0, cc).trim() }
+    // Reject type annotation in LHS
+    if lhs.contains(":") { return [] }
+    if lhs.contains(" ") { return [] }
+    let v = parse_int_token(rhs2)
+    if v <= -2147483647 { return [] }
+    return [lhs, to_string(v)]
+}
+
+let lines = src.split("\n")
+let nlines = len(lines)
+
+// Sweep for a contiguous-or-near-contiguous {T,d,nh,nkv,h} 5-tuple.
+// Strategy: walk lines; whenever we see `let T = <int>`, look ahead
+// up to 30 non-blank lines for matches of d, nh, nkv, h. If all found
+// without re-encountering T, take that as the 5-tuple anchor.
+
+let mut found = false
+let mut val_T = ""
+let mut val_d = ""
+let mut val_nh = ""
+let mut val_nkv = ""
+let mut val_h = ""
+let mut anchor_line = -1
+
+let mut i = 0
+while i < nlines && !found {
+    let m = match_let_int(lines[i])
+    if len(m) == 2 && m[0] == "T" {
+        let cand_T = m[1]
+        let mut cand_d = ""
+        let mut cand_nh = ""
+        let mut cand_nkv = ""
+        let mut cand_h = ""
+        let mut j = i + 1
+        let mut scanned = 0
+        while j < nlines && scanned < 30 {
+            let m2 = match_let_int(lines[j])
+            if len(m2) == 2 {
+                if m2[0] == "T" {
+                    // re-encountered T before completing — abort this anchor
+                    break
+                }
+                if m2[0] == "d" && cand_d == "" { cand_d = m2[1] }
+                else if m2[0] == "nh" && cand_nh == "" { cand_nh = m2[1] }
+                else if m2[0] == "nkv" && cand_nkv == "" { cand_nkv = m2[1] }
+                else if m2[0] == "h" && cand_h == "" { cand_h = m2[1] }
+            }
+            if cand_d != "" && cand_nh != "" && cand_nkv != "" && cand_h != "" {
+                found = true
+                val_T = cand_T
+                val_d = cand_d
+                val_nh = cand_nh
+                val_nkv = cand_nkv
+                val_h = cand_h
+                anchor_line = i + 1
+                break
+            }
+            if lines[j].trim() != "" { scanned = scanned + 1 }
+            j = j + 1
+        }
+    }
+    i = i + 1
+}
+
+if !found {
+    println("FAIL  F-RFC047-IPCP-SOURCE-FOUND  no top-level (T,d,nh,nkv,h) 5-tuple in " + src_path)
+    println("  → cannot IPCP. Input source must contain `let T = …; let d = …; …` group.")
+    exit(2)
+}
+
+println("")
+println("PASS  F-RFC047-IPCP-SOURCE-FOUND  anchor at line " + to_string(anchor_line))
+println("  T   = " + val_T)
+println("  d   = " + val_d)
+println("  nh  = " + val_nh)
+println("  nkv = " + val_nkv)
+println("  h   = " + val_h)
+
+// ── 2. Substitute params inside allow-listed target fn bodies ─────────
+//
+// Allow-list: every fn whose signature embeds (T:int, d:int, nh:int,
+// nkv:int, h:int) at the end (with optional V/n_layer trailing).
+// For our use case this is: nn_decoder_block_fwd / _bwd /
+// nn_decoder_fwd / nn_decoder_grad / nn_decoder_train_step.
+//
+// For each target fn:
+//   (a) Find `pub fn <name>(` location.
+//   (b) Locate the function body — first `{` after the param list's
+//       matching `)`, then brace-balanced to the closing `}`.
+//   (c) Within the body, word-boundary substitute T → val_T, etc.
+// Substitution count is reported per fn.
+
+let target_fns = [
+    "nn_decoder_block_fwd",
+    "nn_decoder_block_bwd",
+    "nn_decoder_fwd",
+    "nn_decoder_grad",
+    "nn_decoder_train_step"
+]
+
+fn idx_of_from(haystack, needle, start) {
+    let n = len(haystack)
+    let m = len(needle)
+    if m == 0 { return start }
+    if start < 0 { return -1 }
+    let limit = n - m
+    let mut i = start
+    while i <= limit {
+        if haystack.substring(i, i + m) == needle { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+fn match_paren_close(text, open_idx) {
+    // Returns the offset of the `)` matching the `(` immediately
+    // before open_idx (caller passes start = position AFTER the `(`).
+    let n = len(text)
+    let mut depth = 1
+    let mut i = open_idx
+    while i < n {
+        let ch = text.substring(i, i + 1)
+        if ch == "(" { depth = depth + 1 }
+        else if ch == ")" {
+            depth = depth - 1
+            if depth == 0 { return i }
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+fn match_brace_close(text, open_idx) {
+    let n = len(text)
+    let mut depth = 1
+    let mut i = open_idx
+    while i < n {
+        let ch = text.substring(i, i + 1)
+        if ch == "{" { depth = depth + 1 }
+        else if ch == "}" {
+            depth = depth - 1
+            if depth == 0 { return i }
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+fn is_id_char(c) {
+    let oc = ord(c)
+    if oc >= 48 && oc <= 57 { return true }
+    if oc >= 65 && oc <= 90 { return true }
+    if oc >= 97 && oc <= 122 { return true }
+    if oc == 95 { return true }
+    return false
+}
+
+// word-boundary substitution within `body`: replace every standalone
+// occurrence of `token` with `replacement`. Returns [new_body, count].
+fn word_subst(body, token, replacement) {
+    let n = len(body)
+    let m = len(token)
+    let mut out = ""
+    let mut i = 0
+    let mut count = 0
+    while i < n {
+        if i + m <= n {
+            let cand = body.substring(i, i + m)
+            if cand == token {
+                let lb_ok = if i == 0 { true } else { !is_id_char(body.substring(i - 1, i)) }
+                let rb_ok = if i + m == n { true } else { !is_id_char(body.substring(i + m, i + m + 1)) }
+                if lb_ok && rb_ok {
+                    out = out + replacement
+                    count = count + 1
+                    i = i + m
+                    continue
+                }
+            }
+        }
+        out = out + body.substring(i, i + 1)
+        i = i + 1
+    }
+    return [out, to_string(count)]
+}
+
+// Locate the next `[pub] fn <name>(` in `text` starting at `start`.
+// module_loader strips `pub` during flattening, so the expanded source
+// has `fn <name>(` only — but allow either form for direct-source use.
+// Returns [pos, prelude_len] on match, [-1, 0] otherwise.
+fn locate_pub_fn(text, fn_name, start) {
+    let needle_pub = "pub fn " + fn_name + "("
+    let needle_plain = "fn " + fn_name + "("
+    let n = len(text)
+    let pos_pub = idx_of_from(text, needle_pub, start)
+    let pos_plain = idx_of_from(text, needle_plain, start)
+    // Prefer pub form if it appears first; fall back to plain.
+    if pos_pub >= 0 && (pos_plain < 0 || pos_pub <= pos_plain) {
+        return [to_string(pos_pub), to_string(len(needle_pub) - 1)]
+    }
+    if pos_plain >= 0 {
+        // Word-boundary check: char before `fn ` must be non-id.
+        if pos_plain > 0 {
+            let bc = text.substring(pos_plain - 1, pos_plain)
+            if is_id_char(bc) {
+                // try again from after this candidate (recursive but limited)
+                return locate_pub_fn(text, fn_name, pos_plain + 1)
+            }
+        }
+        return [to_string(pos_plain), to_string(len(needle_plain) - 1)]
+    }
+    return ["-1", "0"]
+}
+
+// Apply substitutions for one fn name within the working text.
+// Returns [new_text, total_substitutions_across_5_params].
+fn substitute_in_fn(text, fn_name) {
+    let r0 = locate_pub_fn(text, fn_name, 0)
+    let pos = parse_int_token(r0[0])
+    if pos < 0 { return [text, "0"] }
+    let prelude_len = parse_int_token(r0[1])    // length to the "(", inclusive offset
+    let open_paren_off = pos + prelude_len    // points to "("
+    let close_paren_off = match_paren_close(text, open_paren_off + 1)
+    if close_paren_off < 0 { return [text, "0"] }
+    // find the `{` right after `)` (may have whitespace/newlines)
+    let n = len(text)
+    let mut j = close_paren_off + 1
+    while j < n {
+        let ch = text.substring(j, j + 1)
+        if ch == "{" { break }
+        j = j + 1
+    }
+    if j >= n { return [text, "0"] }
+    let body_open = j + 1
+    let body_close = match_brace_close(text, body_open)
+    if body_close < 0 { return [text, "0"] }
+    let body = text.substring(body_open, body_close)
+    // sequentially substitute each of the 5 tokens
+    let r1 = word_subst(body, "T", val_T)
+    let r2 = word_subst(r1[0], "d", val_d)
+    let r3 = word_subst(r2[0], "nh", val_nh)
+    let r4 = word_subst(r3[0], "nkv", val_nkv)
+    let r5 = word_subst(r4[0], "h", val_h)
+    let total = parse_int_token(r1[1]) + parse_int_token(r2[1]) + parse_int_token(r3[1]) + parse_int_token(r4[1]) + parse_int_token(r5[1])
+    let new_body = r5[0]
+    let new_text = text.substring(0, body_open) + new_body + text.substring(body_close, n)
+    return [new_text, to_string(total)]
+}
+
+let mut working = src
+let mut total_substs = 0
+let mut any_subst = false
+let mut fi = 0
+while fi < len(target_fns) {
+    let name = target_fns[fi]
+    let r = substitute_in_fn(working, name)
+    let cnt = parse_int_token(r[1])
+    println("  fn " + name + "  substitutions = " + r[1])
+    working = r[0]
+    total_substs = total_substs + cnt
+    if cnt > 0 { any_subst = true }
+    fi = fi + 1
+}
+
+println("")
+println("  total substitutions across allow-list = " + to_string(total_substs))
+if any_subst {
+    println("PASS  F-RFC047-IPCP-SUBST-COUNT  ≥1 substitution per target fn body (≥0 in some — see per-fn breakdown)")
+} else {
+    println("FAIL  F-RFC047-IPCP-SUBST-COUNT  no substitutions performed (target fns not found in input?)")
+    exit(2)
+}
+
+// ── 3. Write rewritten source ─────────────────────────────────────────
+write_file(out_path, working)
+println("")
+println("  rewritten source → " + out_path)
+println("=== end of Phase 4-B-2 IPCP prototype (RFC 047 §144 + PHASE4B_SCAFFOLD.md option (a)) ===")

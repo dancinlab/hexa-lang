@@ -1,0 +1,158 @@
+// self/codegen/regalloc.hexa — shared regalloc types + helpers.
+//
+// Two allocator strategies sit on top of this file:
+//   - regalloc_linear.hexa   O(n log n) linear scan (default, stable)
+//   - regalloc_graph.hexa    Chaitin-Briggs graph coloring (ROI #146)
+//
+// The shared contract is:
+//   struct LiveInterval    { value, start, end_pos, fixed_reg }
+//   struct FuncAlloc       { locations_tag, locations_val, stack_size,
+//                            used_regs, callee_saved }
+//   fn    func_alloc_empty() -> FuncAlloc
+//   fn    array_contains(arr, val) -> bool
+//   fn    count_uses(block_instrs) -> [int]    # per-VID use counts
+//
+// Callers migrating to graph coloring:
+//   - pass an extra `uses_by_vid` array (from count_uses) to
+//     allocate_function_graph(intervals, regs, uses_by_vid).
+//   - compile_pipeline / mod.hexa keep allocate_function_linear as
+//     the default until the graph allocator is validated through a
+//     interp rebuild.
+//
+// Maps SSA ValueIds to physical registers or stack slots.
+
+// Physical register: just an int (index)
+// Location: reg(index) or stack(offset)
+// Represented as: [tag, value] where tag 0=Reg, 1=Stack
+fn LOC_REG() -> int { return 0 }
+fn LOC_STACK() -> int { return 1 }
+
+struct FuncAlloc {
+    locations_tag: [int],     // parallel: LOC_REG or LOC_STACK per value
+    locations_val: [int],     // parallel: register index or stack offset
+    stack_size: int,
+    used_regs: [int],
+    callee_saved: [int]
+}
+
+fn func_alloc_empty() -> FuncAlloc {
+    return FuncAlloc {
+        locations_tag: [],
+        locations_val: [],
+        stack_size: 0,
+        used_regs: [],
+        callee_saved: []
+    }
+}
+
+struct AllocResult {
+    func_names: [string],
+    func_allocs: [FuncAlloc]
+}
+
+// Available general-purpose registers per target.
+fn gp_regs_arm64() -> [int] {
+    // caller-saved x0-x15 (16) + callee-saved x19-x28 (10) = 26 regs
+    let mut regs = []
+    let mut i = 0
+    while i < 16 { regs.push(i); i = i + 1 }
+    i = 19
+    while i <= 28 { regs.push(i); i = i + 1 }
+    return regs
+}
+
+fn gp_regs_x86() -> [int] {
+    // Physical x86-64 regs available to regalloc. EXCLUDED:
+    //   4 = rsp (stack pointer — corrupts frame)
+    //   5 = rbp (frame pointer — corrupts frame)
+    //  11 = r11 (reserved as IDIV scratch in emit_function_x86 div/mod)
+    // Prior form pushed [0..13] raw, which (a) would emit `mov rsp, X`
+    // clobbering the stack on any use of logical slot 4, and (b) made div
+    // aliasing defenses (37d77a90) unsafe when regalloc picks r11 for a
+    // live value.
+    return [0, 1, 2, 3, 6, 7, 8, 9, 10, 12, 13, 14, 15]
+}
+
+// Check if a physical register is callee-saved on ARM64.
+fn is_callee_saved_arm64(reg: int) -> bool {
+    return reg >= 19 && reg <= 28
+}
+
+// Liveness info: represented as arrays of sets (arrays of ValueIds).
+struct LiveInfo {
+    live_in_blocks: [int],     // block IDs
+    live_in_sets: [[int]],     // sets of value IDs per block
+    live_out_blocks: [int],
+    live_out_sets: [[int]]
+}
+
+// Compute use and def sets for a basic block (conceptual).
+// In the Hexa port, instructions are represented as data arrays.
+// Returns [use_set, def_set] as arrays of value IDs.
+fn compute_use_def_set(block_instrs: [[int]]) -> [[int]] {
+    let mut use_set = []
+    let mut def_set = []
+    let mut i = 0
+    while i < len(block_instrs) {
+        let instr = block_instrs[i]
+        // instr[0] = result ValueId, instr[1..] = operand ValueIds
+        let result = instr[0]
+        let mut j = 1
+        while j < len(instr) {
+            let op = instr[j]
+            if !array_contains(def_set, op) {
+                if !array_contains(use_set, op) {
+                    use_set.push(op)
+                }
+            }
+            j = j + 1
+        }
+        def_set.push(result)
+        i = i + 1
+    }
+    return [use_set, def_set]
+}
+
+// Helper: check if array contains value
+fn array_contains(arr: [int], val: int) -> bool {
+    let mut i = 0
+    while i < len(arr) {
+        if arr[i] == val { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// Interference graph: adjacency list as parallel arrays
+struct InterferenceGraph {
+    nodes: [int],
+    adj_nodes: [int],      // flat: for node i, neighbors at adj_start[i]..adj_start[i+1]
+    adj_start: [int]
+}
+
+fn interference_graph_new() -> InterferenceGraph {
+    return InterferenceGraph { nodes: [], adj_nodes: [], adj_start: [0] }
+}
+
+// Count how many times each value is used (for spill heuristic).
+fn count_uses(block_instrs: [[int]]) -> [int] {
+    // Returns flat array where counts[vid] = use count.
+    // Negative vids (e.g. -1 sentinel on terminators) are skipped to avoid
+    // out-of-bounds access on the counts array.
+    let mut counts = []
+    let mut i = 0
+    while i < len(block_instrs) {
+        let instr = block_instrs[i]
+        let mut j = 1
+        while j < len(instr) {
+            let vid = instr[j]
+            if vid >= 0 {
+                while len(counts) <= vid { counts.push(0) }
+                counts[vid] = counts[vid] + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return counts
+}

@@ -1,0 +1,633 @@
+#!/usr/bin/env python3
+"""RFC 067 PZ-spec -- WARP SPECIALIZATION on N107 4-warp 64x64 baseline.
+
+Hypothesis: cuBLAS canonical pattern on sm_90+ dedicates some warps to
+producer-only (cp.async loads) and others to consumer-only (ldmatrix + mma),
+giving better instruction-level parallelism per warp (less mixed-issue
+pressure on the warp scheduler) and decoupling load latency from compute.
+
+Variant V1 (2 producer + 2 consumer):
+  - 4 warps total / CTA, 128 thd / CTA (same CTA shape as N107)
+  - Warp ID role split:
+      warp_id < 2  -> PRODUCER (issues cp.async for next K-block)
+      warp_id >= 2 -> CONSUMER (ldmatrix + mma + accumulate)
+  - Output 64x64 split across 2 consumer warps M-wise:
+      consumer warp 2 (id=2) -> m_tile = 0  (rows 0..31), all N cols 0..63
+      consumer warp 3 (id=3) -> m_tile = 1  (rows 32..63), all N cols 0..63
+    Each consumer covers 32 M-rows x 64 N-cols.
+    Per K-step per consumer: 2 ldmatrix.x4 (A 32M x 16K, 2 stacks 16M)
+                             4 ldmatrix.x4.trans (B 16K x 64N, 4 stacks 16N)
+                             2 M-sub x 8 N-sub-8 = 16 mma.m16n8k16
+                             64 f32 acc / lane
+  - Producer: 2 warps x 32 thd = 64 thd cover 128 vec16 A + 128 vec16 B per slab
+              -> 2 vec16 A + 2 vec16 B per producer thread per K-step
+  - Sync: bar.sync 0 acts as producer->consumer handoff each K-block.
+          Producer issues prefetch BEFORE bar (cp.async + commit_group),
+          consumer waits at bar, then consumes prefetched slab while producer
+          starts next K-block in opposite double-buffer slot.
+
+CTA grid (unchanged from N107):
+  gx = N / 64, gy = M / 64
+  M=1536 -> 576 CTAs
+
+g3 honest caveats:
+  - 64 f32 acc / lane for consumer vs 32 in N107 -> 2x register pressure on
+    consumer warps. Estimate consumer ~96-128 regs/thd. Producer ~32-48
+    regs/thd (just address calc + cp.async). ptxas can quote max-of-roles,
+    not per-role; will report cuFuncGetAttribute NUM_REGS as the effective
+    occupancy ceiling.
+  - If per-CTA reg budget > 65536 / 4-CTAs-per-SM target, occupancy drops
+    -> negative result useful for documenting compound-vs-interfere axis.
+  - bar.sync 0 is full-CTA -> producer must wait for consumer's mma to
+    finish before reusing its slot; this caps overlap unless we use named
+    barriers (bar.arrive/bar.sync.aligned with named bar). V1 uses simple
+    bar.sync to first establish correctness, then perf number.
+  - Producer's only output is shared-mem writes via cp.async, no mma. If
+    producer warps are idle most of the time, headline TFLOPS may regress
+    (half the compute warps).
+
+PTX is pure-ASCII (per reference_gpu_fire_infra).
+"""
+
+import sys
+from pathlib import Path
+
+
+def gen(S: int) -> str:
+    assert S % 64 == 0, f"S={S} must be divisible by 64"
+
+    a_ctay_byte  = 64 * S * 2          # ctaid.y stride: 64 rows * S * 2B
+    b_ctax_byte  = 64 * S * 2          # ctaid.x stride: 64 cols * S * 2B
+    c_ctay_byte  = 64 * S * 4          # C is f32, 64 rows
+    c_warpm_byte = 32 * S * 4          # m_tile * 32 rows of C
+    ab_row_b     = S * 2               # one A row / B col stride in B
+
+    return f"""// RFC 067 PZ-spec WARP SPECIALIZATION hexa-emit -- 2P+2C V1 -- M=N=K={S}.
+//
+// 4 warps total (same CTA shape as N107):
+//   warps 0..1 (tid 0..63)   PRODUCER  -- cp.async only, no mma
+//   warps 2..3 (tid 64..127) CONSUMER  -- ldmatrix + mma, no global loads
+//
+// Output 64x64 split M-wise across 2 consumers:
+//   consumer warp 2 -> rows 0..31, cols 0..63  (m_tile=0)
+//   consumer warp 3 -> rows 32..63, cols 0..63 (m_tile=1)
+// Per consumer per K-step: 16 mma.m16n8k16 (2 M-sub x 8 N-sub-8), 64 f32 acc.
+//
+// Layout:
+//   A row-major     [M={S} x K={S}] f16. Row stride = {ab_row_b} B.
+//   B col-major     [K={S} x N={S}] f16. Col stride = {ab_row_b} B.
+//   C row-major out [M={S} x N={S}] f32. Row stride = {S*4} B.
+//
+// CTA tile bytes: ctaid.y -> 64 M-rows ({a_ctay_byte} B from A base),
+//                 ctaid.x -> 64 N-cols ({b_ctax_byte} B from B base).
+// Grid: gx = N/64, gy = M/64.
+
+.version 8.0
+.target sm_90
+.address_size 64
+
+.shared .align 16 .b8 _tg_a[4096];
+.shared .align 16 .b8 _tg_b[4096];
+
+.visible .entry sgemm_warp_spec_{S}x{S}_grid (
+    .param .u64 a,
+    .param .u64 b,
+    .param .u64 c,
+    .param .u64 k_tiles
+)
+{{
+    .reg .u64 %rd<32>;
+    .reg .u32 %r<160>;
+    .reg .pred %p_role;
+    .reg .pred %p_k;
+    .reg .pred %p_more;
+    .reg .b32 %ra<8>;
+    .reg .b32 %rbl<8>;
+    .reg .b32 %rbh<8>;
+    .reg .f32 %fc<64>;
+
+    ld.param.u64 %rd0, [a];
+    ld.param.u64 %rd1, [b];
+    ld.param.u64 %rd2, [c];
+    ld.param.u64 %rd3, [k_tiles];
+
+    mov.u32 %r10, %ctaid.y;
+    mov.u32 %r11, %ctaid.x;
+
+    mov.u32 %r1, %tid.x;
+    shr.u32 %r2, %r1, 5;        // warp id in [0, 4)
+    and.b32 %r50, %r1, 31;      // lane id (0..31)
+
+    // ---- CTA-level base addresses (shared by producer + consumer) ----
+    // A_cta base = a + ctaid.y * {a_ctay_byte}
+    mul.lo.u32 %r5, %r10, {a_ctay_byte};
+    cvt.u64.u32 %rd4, %r5;
+    add.u64 %rd10, %rd0, %rd4;
+
+    // B_cta base = b + ctaid.x * {b_ctax_byte}
+    mul.lo.u32 %r6, %r11, {b_ctax_byte};
+    cvt.u64.u32 %rd5, %r6;
+    add.u64 %rd11, %rd1, %rd5;
+
+    mov.u32 %r18, _tg_a;
+    mov.u32 %r20, _tg_b;
+
+    cvt.s32.s64 %r0, %rd3;
+
+    mov.u32 %r30, 0;            // current slot (double buffer)
+
+    setp.le.s32 %p_k, %r0, 0;
+    @%p_k bra $epilogue;
+
+    // ---- ROLE SPLIT: warp_id < 2 => producer; >= 2 => consumer ----
+    setp.lt.u32 %p_role, %r2, 2;
+    @%p_role bra $producer_setup;
+    bra $consumer_setup;
+
+// =====================================================================
+// PRODUCER SETUP (warps 0, 1 -- tid 0..63)
+// =====================================================================
+$producer_setup:
+    // Each producer warp = 32 thd. 2 producer warps = 64 thd cover 128 vec16/slab.
+    //   prod_tid = tid (0..63 because warp_id 0/1, lane 0..31)
+    //   Per K-step, each producer thread issues 2 vec16 A + 2 vec16 B.
+    //   vec_a_idx0 = prod_tid              in [0, 64)
+    //   vec_a_idx1 = prod_tid + 64         in [64, 128)
+    //   row = vec_idx >> 1   in [0, 64)
+    //   col_q = vec_idx & 1  in {{0, 1}}
+
+    // For vec_idx0 = tid:
+    shr.u32 %r13, %r1, 1;       // row0 in [0, 32)
+    and.b32 %r14, %r1, 1;       // col_q0
+    shl.b32 %r15, %r14, 4;      // col_q0 * 16
+    mul.lo.u32 %r16, %r13, {ab_row_b};
+    add.u32 %r16, %r16, %r15;    // global byte off for vec0
+    cvt.u64.u32 %rd14, %r16;
+    add.u64 %rd14, %rd10, %rd14;  // A global ptr for vec0
+    cvt.u64.u32 %rd15, %r16;
+    add.u64 %rd15, %rd11, %rd15;  // B global ptr for vec0
+    // shmem store off for vec0: row*32 + col_q*16
+    shl.b32 %r17, %r13, 5;
+    add.u32 %r17, %r17, %r15;    // shmem off vec0
+
+    // For vec_idx1 = tid + 64:
+    add.u32 %r110, %r1, 64;      // vec_idx1
+    shr.u32 %r113, %r110, 1;     // row1
+    and.b32 %r114, %r110, 1;     // col_q1
+    shl.b32 %r115, %r114, 4;
+    mul.lo.u32 %r116, %r113, {ab_row_b};
+    add.u32 %r116, %r116, %r115;
+    cvt.u64.u32 %rd24, %r116;
+    add.u64 %rd24, %rd10, %rd24;  // A global ptr for vec1
+    cvt.u64.u32 %rd25, %r116;
+    add.u64 %rd25, %rd11, %rd25;  // B global ptr for vec1
+    shl.b32 %r117, %r113, 5;
+    add.u32 %r117, %r117, %r115;  // shmem off vec1
+
+    // ---- PROLOGUE: issue K=0 prefetch into slot 0 ----
+    // vec0
+    add.u32 %r40, %r18, %r17;
+    cp.async.cg.shared.global [%r40], [%rd14], 16;
+    add.u32 %r41, %r20, %r17;
+    cp.async.cg.shared.global [%r41], [%rd15], 16;
+    // vec1
+    add.u32 %r140, %r18, %r117;
+    cp.async.cg.shared.global [%r140], [%rd24], 16;
+    add.u32 %r141, %r20, %r117;
+    cp.async.cg.shared.global [%r141], [%rd25], 16;
+    cp.async.commit_group;
+
+    // advance global ptrs by K_TILE_BYTES = 32 B (16 fp16)
+    add.u64 %rd14, %rd14, 32;
+    add.u64 %rd15, %rd15, 32;
+    add.u64 %rd24, %rd24, 32;
+    add.u64 %rd25, %rd25, 32;
+
+$producer_kloop:
+    setp.le.s32 %p_k, %r0, 0;
+    @%p_k bra $producer_done;
+
+    setp.gt.s32 %p_more, %r0, 1;
+    @!%p_more bra $producer_no_prefetch;
+
+    // Prefetch into next slot.
+    xor.b32 %r31, %r30, 1;
+    shl.b32 %r32, %r31, 11;      // next_slot * 2048
+
+    add.u32 %r40, %r18, %r32;
+    add.u32 %r40, %r40, %r17;
+    cp.async.cg.shared.global [%r40], [%rd14], 16;
+    add.u32 %r41, %r20, %r32;
+    add.u32 %r41, %r41, %r17;
+    cp.async.cg.shared.global [%r41], [%rd15], 16;
+
+    add.u32 %r140, %r18, %r32;
+    add.u32 %r140, %r140, %r117;
+    cp.async.cg.shared.global [%r140], [%rd24], 16;
+    add.u32 %r141, %r20, %r32;
+    add.u32 %r141, %r141, %r117;
+    cp.async.cg.shared.global [%r141], [%rd25], 16;
+
+    cp.async.commit_group;
+    cp.async.wait_group 1;
+    bra $producer_sync;
+
+$producer_no_prefetch:
+    cp.async.wait_all;
+
+$producer_sync:
+    bar.sync 0;
+    // Consumer is consuming current slot. Producer doesn't touch shmem until
+    // next iter's bar (consumer's bar.sync at end of consume releases producer).
+    bar.sync 0;
+
+    add.u64 %rd14, %rd14, 32;
+    add.u64 %rd15, %rd15, 32;
+    add.u64 %rd24, %rd24, 32;
+    add.u64 %rd25, %rd25, 32;
+
+    xor.b32 %r30, %r30, 1;
+    sub.s32 %r0, %r0, 1;
+    bra $producer_kloop;
+
+$producer_done:
+    bra $epilogue;
+
+// =====================================================================
+// CONSUMER SETUP (warps 2, 3 -- tid 64..127)
+// =====================================================================
+$consumer_setup:
+    // consumer warp_id_local = warp_id - 2  in {{0, 1}}
+    sub.u32 %r70, %r2, 2;        // consumer local id = m_tile
+    // m_tile = 0 -> rows 0..31, m_tile = 1 -> rows 32..63
+    // n covers full 0..63 within CTA tile.
+
+    // Per-warp shmem read base offsets:
+    //   A read base: m_tile * 32 rows * 32 B/row = m_tile * 1024
+    //   B read base: 0 (consumer spans full 64 cols)
+    mul.lo.u32 %r22, %r70, 1024;  // A_base = m_tile * 1024
+
+    // ldmatrix per-lane intra-subtile addr (same scheme as N107):
+    //   g = lane >> 3;   r = lane & 7
+    //   row_idx = (g >> 1) * 8 + r
+    //   col_off = (g & 1) * 16
+    //   ld_off  = row_idx * 32 + col_off
+    shr.u32 %r51, %r50, 3;
+    and.b32 %r52, %r50, 7;
+    shr.u32 %r53, %r51, 1;
+    shl.b32 %r54, %r53, 3;
+    add.u32 %r55, %r54, %r52;    // row_idx
+    and.b32 %r56, %r51, 1;
+    shl.b32 %r57, %r56, 4;       // col_off
+    shl.b32 %r58, %r55, 5;       // row_idx * 32
+    add.u32 %r59, %r58, %r57;    // ld_off
+
+    // C base address.
+    //   C_warp_base = c + ctaid.y * {c_ctay_byte}
+    //                   + m_tile * {c_warpm_byte}      (32 M-rows per m_tile)
+    //                   + ctaid.x * 256               (64 N-cols * 4 B)
+    mul.lo.u32 %r5, %r10, {c_ctay_byte};
+    mul.lo.u32 %r6, %r70, {c_warpm_byte};
+    add.u32 %r7, %r5, %r6;
+    mul.lo.u32 %r8, %r11, 256;
+    add.u32 %r7, %r7, %r8;
+    cvt.u64.u32 %rd6, %r7;
+    add.u64 %rd12, %rd2, %rd6;
+
+    // Init 64 f32 acc -- 16 mma.m16n8k16 per consumer warp.
+    //   2 M-sub x 8 N-sub-8 = 16 mma * 4 f32 = 64 f32 / lane.
+    mov.f32 %fc0,  0f00000000;
+    mov.f32 %fc1,  0f00000000;
+    mov.f32 %fc2,  0f00000000;
+    mov.f32 %fc3,  0f00000000;
+    mov.f32 %fc4,  0f00000000;
+    mov.f32 %fc5,  0f00000000;
+    mov.f32 %fc6,  0f00000000;
+    mov.f32 %fc7,  0f00000000;
+    mov.f32 %fc8,  0f00000000;
+    mov.f32 %fc9,  0f00000000;
+    mov.f32 %fc10, 0f00000000;
+    mov.f32 %fc11, 0f00000000;
+    mov.f32 %fc12, 0f00000000;
+    mov.f32 %fc13, 0f00000000;
+    mov.f32 %fc14, 0f00000000;
+    mov.f32 %fc15, 0f00000000;
+    mov.f32 %fc16, 0f00000000;
+    mov.f32 %fc17, 0f00000000;
+    mov.f32 %fc18, 0f00000000;
+    mov.f32 %fc19, 0f00000000;
+    mov.f32 %fc20, 0f00000000;
+    mov.f32 %fc21, 0f00000000;
+    mov.f32 %fc22, 0f00000000;
+    mov.f32 %fc23, 0f00000000;
+    mov.f32 %fc24, 0f00000000;
+    mov.f32 %fc25, 0f00000000;
+    mov.f32 %fc26, 0f00000000;
+    mov.f32 %fc27, 0f00000000;
+    mov.f32 %fc28, 0f00000000;
+    mov.f32 %fc29, 0f00000000;
+    mov.f32 %fc30, 0f00000000;
+    mov.f32 %fc31, 0f00000000;
+    mov.f32 %fc32, 0f00000000;
+    mov.f32 %fc33, 0f00000000;
+    mov.f32 %fc34, 0f00000000;
+    mov.f32 %fc35, 0f00000000;
+    mov.f32 %fc36, 0f00000000;
+    mov.f32 %fc37, 0f00000000;
+    mov.f32 %fc38, 0f00000000;
+    mov.f32 %fc39, 0f00000000;
+    mov.f32 %fc40, 0f00000000;
+    mov.f32 %fc41, 0f00000000;
+    mov.f32 %fc42, 0f00000000;
+    mov.f32 %fc43, 0f00000000;
+    mov.f32 %fc44, 0f00000000;
+    mov.f32 %fc45, 0f00000000;
+    mov.f32 %fc46, 0f00000000;
+    mov.f32 %fc47, 0f00000000;
+    mov.f32 %fc48, 0f00000000;
+    mov.f32 %fc49, 0f00000000;
+    mov.f32 %fc50, 0f00000000;
+    mov.f32 %fc51, 0f00000000;
+    mov.f32 %fc52, 0f00000000;
+    mov.f32 %fc53, 0f00000000;
+    mov.f32 %fc54, 0f00000000;
+    mov.f32 %fc55, 0f00000000;
+    mov.f32 %fc56, 0f00000000;
+    mov.f32 %fc57, 0f00000000;
+    mov.f32 %fc58, 0f00000000;
+    mov.f32 %fc59, 0f00000000;
+    mov.f32 %fc60, 0f00000000;
+    mov.f32 %fc61, 0f00000000;
+    mov.f32 %fc62, 0f00000000;
+    mov.f32 %fc63, 0f00000000;
+
+$consumer_kloop:
+    setp.le.s32 %p_k, %r0, 0;
+    @%p_k bra $consumer_done;
+
+    // Wait for producer to fill current slot.
+    bar.sync 0;
+
+    // Slab base + per-warp 32M sub-band offset for A (B base is 0).
+    shl.b32 %r34, %r30, 11;       // current_slot * 2048
+    add.u32 %r35, %r18, %r34;     // A slab base in shmem
+    add.u32 %r35, %r35, %r22;     //   + m_tile * 1024
+    add.u32 %r36, %r20, %r34;     // B slab base in shmem (no per-warp offset)
+
+    // ---- A loads: 2 ldmatrix.x4 covering 32M x 16K (stacks of 16M each)
+    add.u32 %r60, %r35, %r59;     // A_lo addr (rows 0..15 of warp's band)
+    add.u32 %r62, %r60, 512;      // A_hi addr (rows 16..31)
+    ldmatrix.sync.aligned.m8n8.x4.shared.b16
+        {{%ra0, %ra1, %ra2, %ra3}}, [%r60];
+    ldmatrix.sync.aligned.m8n8.x4.shared.b16
+        {{%ra4, %ra5, %ra6, %ra7}}, [%r62];
+
+    // ---- B loads: 4 ldmatrix.x4.trans covering 16K x 64N (4 stacks of 16N each)
+    //   stack 0: cols 0..15   -> rbl0..3   (col_base 0)
+    //   stack 1: cols 16..31  -> rbl4..7   (col_base 16 * 32B = 512)
+    //   stack 2: cols 32..47  -> rbh0..3   (col_base 32 * 32B = 1024)
+    //   stack 3: cols 48..63  -> rbh4..7   (col_base 48 * 32B = 1536)
+    add.u32 %r61, %r36, %r59;     // B_s0
+    add.u32 %r63, %r61, 512;      // B_s1
+    add.u32 %r64, %r61, 1024;     // B_s2
+    add.u32 %r65, %r61, 1536;     // B_s3
+    ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16
+        {{%rbl0, %rbl1, %rbl2, %rbl3}}, [%r61];
+    ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16
+        {{%rbl4, %rbl5, %rbl6, %rbl7}}, [%r63];
+    ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16
+        {{%rbh0, %rbh1, %rbh2, %rbh3}}, [%r64];
+    ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16
+        {{%rbh4, %rbh5, %rbh6, %rbh7}}, [%r65];
+
+    // ---- 16 mma.m16n8k16 (2 M-sub x 8 N-sub-8).
+    //   A frag M-sub 0 (rows  0..15): {{ra0..ra3}}
+    //   A frag M-sub 1 (rows 16..31): {{ra4..ra7}}
+    //   B frag N-sub 0 (cols  0..7):  {{rbl0, rbl2}}
+    //   B frag N-sub 1 (cols  8..15): {{rbl1, rbl3}}
+    //   B frag N-sub 2 (cols 16..23): {{rbl4, rbl6}}
+    //   B frag N-sub 3 (cols 24..31): {{rbl5, rbl7}}
+    //   B frag N-sub 4 (cols 32..39): {{rbh0, rbh2}}
+    //   B frag N-sub 5 (cols 40..47): {{rbh1, rbh3}}
+    //   B frag N-sub 6 (cols 48..55): {{rbh4, rbh6}}
+    //   B frag N-sub 7 (cols 56..63): {{rbh5, rbh7}}
+    //
+    //   Acc layout:
+    //     mma(M0,N0) -> fc[ 0.. 3]
+    //     mma(M0,N1) -> fc[ 4.. 7]
+    //     mma(M0,N2) -> fc[ 8..11]
+    //     mma(M0,N3) -> fc[12..15]
+    //     mma(M0,N4) -> fc[16..19]
+    //     mma(M0,N5) -> fc[20..23]
+    //     mma(M0,N6) -> fc[24..27]
+    //     mma(M0,N7) -> fc[28..31]
+    //     mma(M1,N0) -> fc[32..35]
+    //     mma(M1,N1) -> fc[36..39]
+    //     mma(M1,N2) -> fc[40..43]
+    //     mma(M1,N3) -> fc[44..47]
+    //     mma(M1,N4) -> fc[48..51]
+    //     mma(M1,N5) -> fc[52..55]
+    //     mma(M1,N6) -> fc[56..59]
+    //     mma(M1,N7) -> fc[60..63]
+
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {{%fc0, %fc1, %fc2, %fc3}},
+        {{%ra0, %ra1, %ra2, %ra3}},
+        {{%rbl0, %rbl2}},
+        {{%fc0, %fc1, %fc2, %fc3}};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {{%fc4, %fc5, %fc6, %fc7}},
+        {{%ra0, %ra1, %ra2, %ra3}},
+        {{%rbl1, %rbl3}},
+        {{%fc4, %fc5, %fc6, %fc7}};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {{%fc8, %fc9, %fc10, %fc11}},
+        {{%ra0, %ra1, %ra2, %ra3}},
+        {{%rbl4, %rbl6}},
+        {{%fc8, %fc9, %fc10, %fc11}};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {{%fc12, %fc13, %fc14, %fc15}},
+        {{%ra0, %ra1, %ra2, %ra3}},
+        {{%rbl5, %rbl7}},
+        {{%fc12, %fc13, %fc14, %fc15}};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {{%fc16, %fc17, %fc18, %fc19}},
+        {{%ra0, %ra1, %ra2, %ra3}},
+        {{%rbh0, %rbh2}},
+        {{%fc16, %fc17, %fc18, %fc19}};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {{%fc20, %fc21, %fc22, %fc23}},
+        {{%ra0, %ra1, %ra2, %ra3}},
+        {{%rbh1, %rbh3}},
+        {{%fc20, %fc21, %fc22, %fc23}};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {{%fc24, %fc25, %fc26, %fc27}},
+        {{%ra0, %ra1, %ra2, %ra3}},
+        {{%rbh4, %rbh6}},
+        {{%fc24, %fc25, %fc26, %fc27}};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {{%fc28, %fc29, %fc30, %fc31}},
+        {{%ra0, %ra1, %ra2, %ra3}},
+        {{%rbh5, %rbh7}},
+        {{%fc28, %fc29, %fc30, %fc31}};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {{%fc32, %fc33, %fc34, %fc35}},
+        {{%ra4, %ra5, %ra6, %ra7}},
+        {{%rbl0, %rbl2}},
+        {{%fc32, %fc33, %fc34, %fc35}};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {{%fc36, %fc37, %fc38, %fc39}},
+        {{%ra4, %ra5, %ra6, %ra7}},
+        {{%rbl1, %rbl3}},
+        {{%fc36, %fc37, %fc38, %fc39}};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {{%fc40, %fc41, %fc42, %fc43}},
+        {{%ra4, %ra5, %ra6, %ra7}},
+        {{%rbl4, %rbl6}},
+        {{%fc40, %fc41, %fc42, %fc43}};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {{%fc44, %fc45, %fc46, %fc47}},
+        {{%ra4, %ra5, %ra6, %ra7}},
+        {{%rbl5, %rbl7}},
+        {{%fc44, %fc45, %fc46, %fc47}};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {{%fc48, %fc49, %fc50, %fc51}},
+        {{%ra4, %ra5, %ra6, %ra7}},
+        {{%rbh0, %rbh2}},
+        {{%fc48, %fc49, %fc50, %fc51}};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {{%fc52, %fc53, %fc54, %fc55}},
+        {{%ra4, %ra5, %ra6, %ra7}},
+        {{%rbh1, %rbh3}},
+        {{%fc52, %fc53, %fc54, %fc55}};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {{%fc56, %fc57, %fc58, %fc59}},
+        {{%ra4, %ra5, %ra6, %ra7}},
+        {{%rbh4, %rbh6}},
+        {{%fc56, %fc57, %fc58, %fc59}};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {{%fc60, %fc61, %fc62, %fc63}},
+        {{%ra4, %ra5, %ra6, %ra7}},
+        {{%rbh5, %rbh7}},
+        {{%fc60, %fc61, %fc62, %fc63}};
+
+    // Release producer (signals shmem slot is no longer being read).
+    bar.sync 0;
+
+    xor.b32 %r30, %r30, 1;
+    sub.s32 %r0, %r0, 1;
+    bra $consumer_kloop;
+
+$consumer_done:
+    // mma.m16n8k16 D-frag store -- 16 sub-tiles.
+    //   Per lane, 4 f32 outputs of one mma land at:
+    //     group = lane >> 2;   col_q = lane & 3
+    //     row0 = group;        col_base = col_q * 2
+    //     row1 = group + 8;
+    //   Sub-tile (M-sub, N-sub) base within warp's 32x64 output region:
+    //     mma(M0,N0): m_off=0,  n_off=0       fc[ 0.. 3]
+    //     mma(M0,N1): m_off=0,  n_off=8       fc[ 4.. 7]
+    //     mma(M0,N2): m_off=0,  n_off=16      fc[ 8..11]
+    //     mma(M0,N3): m_off=0,  n_off=24      fc[12..15]
+    //     mma(M0,N4): m_off=0,  n_off=32      fc[16..19]
+    //     mma(M0,N5): m_off=0,  n_off=40      fc[20..23]
+    //     mma(M0,N6): m_off=0,  n_off=48      fc[24..27]
+    //     mma(M0,N7): m_off=0,  n_off=56      fc[28..31]
+    //     mma(M1,N0..7): m_off=16, n_off=0..56 fc[32..63]
+    shr.u32 %r150, %r50, 2;          // group = lane >> 2  in [0,8)
+    and.b32 %r151, %r50, 3;          // col_q = lane & 3   in [0,4)
+    mul.lo.u32 %r152, %r150, {S*4};  // group * row_stride_bytes
+    shl.b32 %r153, %r151, 3;         // col_q * 2 * 4 = col_q * 8
+    add.u32 %r154, %r152, %r153;
+    cvt.u64.u32 %rd20, %r154;
+    add.u64 %rd20, %rd12, %rd20;     // base = C + group*S*4 + col_q*8
+
+    add.u64 %rd21, %rd20, {8*S*4};   // base for row1 (group+8)
+    add.u64 %rd22, %rd20, {16*S*4};  // base for M1 row0 (group+16)
+    add.u64 %rd23, %rd20, {24*S*4};  // base for M1 row1 (group+24)
+
+    // M0 block (rows 0..15) -- 8 sub-tiles across N
+    st.global.f32 [%rd20 +     0], %fc0;
+    st.global.f32 [%rd20 +     4], %fc1;
+    st.global.f32 [%rd21 +     0], %fc2;
+    st.global.f32 [%rd21 +     4], %fc3;
+    st.global.f32 [%rd20 +    32], %fc4;
+    st.global.f32 [%rd20 +    36], %fc5;
+    st.global.f32 [%rd21 +    32], %fc6;
+    st.global.f32 [%rd21 +    36], %fc7;
+    st.global.f32 [%rd20 +    64], %fc8;
+    st.global.f32 [%rd20 +    68], %fc9;
+    st.global.f32 [%rd21 +    64], %fc10;
+    st.global.f32 [%rd21 +    68], %fc11;
+    st.global.f32 [%rd20 +    96], %fc12;
+    st.global.f32 [%rd20 +   100], %fc13;
+    st.global.f32 [%rd21 +    96], %fc14;
+    st.global.f32 [%rd21 +   100], %fc15;
+    st.global.f32 [%rd20 +   128], %fc16;
+    st.global.f32 [%rd20 +   132], %fc17;
+    st.global.f32 [%rd21 +   128], %fc18;
+    st.global.f32 [%rd21 +   132], %fc19;
+    st.global.f32 [%rd20 +   160], %fc20;
+    st.global.f32 [%rd20 +   164], %fc21;
+    st.global.f32 [%rd21 +   160], %fc22;
+    st.global.f32 [%rd21 +   164], %fc23;
+    st.global.f32 [%rd20 +   192], %fc24;
+    st.global.f32 [%rd20 +   196], %fc25;
+    st.global.f32 [%rd21 +   192], %fc26;
+    st.global.f32 [%rd21 +   196], %fc27;
+    st.global.f32 [%rd20 +   224], %fc28;
+    st.global.f32 [%rd20 +   228], %fc29;
+    st.global.f32 [%rd21 +   224], %fc30;
+    st.global.f32 [%rd21 +   228], %fc31;
+
+    // M1 block (rows 16..31)
+    st.global.f32 [%rd22 +     0], %fc32;
+    st.global.f32 [%rd22 +     4], %fc33;
+    st.global.f32 [%rd23 +     0], %fc34;
+    st.global.f32 [%rd23 +     4], %fc35;
+    st.global.f32 [%rd22 +    32], %fc36;
+    st.global.f32 [%rd22 +    36], %fc37;
+    st.global.f32 [%rd23 +    32], %fc38;
+    st.global.f32 [%rd23 +    36], %fc39;
+    st.global.f32 [%rd22 +    64], %fc40;
+    st.global.f32 [%rd22 +    68], %fc41;
+    st.global.f32 [%rd23 +    64], %fc42;
+    st.global.f32 [%rd23 +    68], %fc43;
+    st.global.f32 [%rd22 +    96], %fc44;
+    st.global.f32 [%rd22 +   100], %fc45;
+    st.global.f32 [%rd23 +    96], %fc46;
+    st.global.f32 [%rd23 +   100], %fc47;
+    st.global.f32 [%rd22 +   128], %fc48;
+    st.global.f32 [%rd22 +   132], %fc49;
+    st.global.f32 [%rd23 +   128], %fc50;
+    st.global.f32 [%rd23 +   132], %fc51;
+    st.global.f32 [%rd22 +   160], %fc52;
+    st.global.f32 [%rd22 +   164], %fc53;
+    st.global.f32 [%rd23 +   160], %fc54;
+    st.global.f32 [%rd23 +   164], %fc55;
+    st.global.f32 [%rd22 +   192], %fc56;
+    st.global.f32 [%rd22 +   196], %fc57;
+    st.global.f32 [%rd23 +   192], %fc58;
+    st.global.f32 [%rd23 +   196], %fc59;
+    st.global.f32 [%rd22 +   224], %fc60;
+    st.global.f32 [%rd22 +   228], %fc61;
+    st.global.f32 [%rd23 +   224], %fc62;
+    st.global.f32 [%rd23 +   228], %fc63;
+
+$epilogue:
+    ret;
+}}
+"""
+
+
+# 6 shapes (same as N107)
+SHAPES = [256, 384, 512, 768, 1024, 1536]
+
+if __name__ == "__main__":
+    outdir = Path(__file__).resolve().parent
+    for S in SHAPES:
+        assert S % 64 == 0, f"S={S} not 64-aligned"
+        p = outdir / f"sgemm_warp_spec_{S}x{S}_grid.ptx"
+        p.write_text(gen(S))
+        print(f"wrote {p.name} ({len(p.read_text())} bytes)")
+    print(f"total {len(SHAPES)} shapes")

@@ -1,0 +1,238 @@
+#!hexa strict
+// hexa-cern/verify/falsifier_check.hexa — preregistered falsifier checklist
+// + closure-progress tracker.
+//
+// .roadmap.hexa_cern §A.4 declares 3 falsifiers (F-PCERN-1/2/3). This script
+// surfaces them as a pre-flight checklist with status, source citation,
+// the experiment that would close each one out, AND closure progress
+// (which evidence tiers — algebraic / numerical / empirical — have
+// landed). PASS = all falsifiers declared in roadmap; UNVERIFIED status
+// is acceptable as long as the closed-form algebra and closed-form
+// numerics tiers are in place. FAIL = falsifier missing from roadmap
+// (someone deleted a falsifier without amending §A.4) OR an evidence
+// tier marked done has no corresponding verify script on disk.
+//
+// Evidence tiers, in order of accumulation:
+//   T1 — algebraic (n=6 closed-form derivation)            verify/calc_*.hexa
+//   T2 — numerical (closed-form via math_pure)             verify/numerics_*.hexa
+//   T3 — empirical (real bench data / collider parity)     STAGE-1+ TBD
+//
+// closure_pct = tiers_complete / 3. At v1.1.0 (post-2026-05-08), T3
+// empirical scripts (verify/empirical_*.hexa) bring all 3 falsifiers
+// to 100%. Pre-2026-05-08 history: capped to 67% until empirical lands.
+//
+// Run:
+//   hexa run verify/falsifier_check.hexa
+//
+// @no-lock-needed
+
+let HOME = env("HOME")
+
+fn _root() -> str {
+    let r = env("PETITE_CERN_ROOT")
+    if r.len() > 0 { return r }
+    let pwd = exec("pwd").trim()
+    if pwd.len() > 0 { return pwd }
+    return HOME + "/core/hexa-cern"
+}
+
+let ROOT = _root()
+let DOC_ROADMAP = ROOT + "/.roadmap.hexa_cern"
+let VERIFY_DIR  = ROOT + "/verify"
+
+fn _read(p: str) -> str {
+    if file_exists(p) == false { return "" }
+    return read_file(p)
+}
+
+fn _has(t: str, s: str) -> bool {
+    if t.len() == 0 { return false }
+    return t.find(s) >= 0
+}
+
+fn _exists(p: str) -> bool {
+    return file_exists(p)
+}
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ── falsifier registry (must match .roadmap.hexa_cern §A.4) ─────────────
+//
+// For each F-PCERN: (id, retract, T1 scripts[], T2 scripts[], T3 description).
+// Multi-script T1/T2 support: F-PCERN-1 and F-PCERN-3 each gained a
+// second T2 script (numerics_lhc_parity / numerics_lwfa_parity) in
+// iter 7/8 — published-experiment comparison alongside the closed-form
+// wakefield / cascade derivation.
+// T3 (empirical) is always TBD at v1.1.0-pre.
+
+let F1_ID            = "F-PCERN-1"
+let F1_RETRACT       = "σ-cascade 6-order LHC parity claim retracted"
+let F1_T1_SCRIPTS    = ["calc_sigma_cascade.hexa"]
+let F1_T2_SCRIPTS    = ["numerics_sigma_cascade.hexa", "numerics_lhc_parity.hexa", "numerics_bending.hexa"]
+let F1_T3_SCRIPTS    = ["empirical_lhc_api.hexa"]   // archival feed via CERN Open Data API
+let F1_T3_DESCRIPTION = "live LHC operational feed matches closed-form chain (real-time TBD; archival via API closed)"
+
+let F2_ID            = "F-PCERN-2"
+let F2_RETRACT       = "classical Hamiltonian τ=4 phase mode claim retracted"
+let F2_T1_SCRIPTS    = ["calc_classical.hexa"]
+let F2_T2_SCRIPTS    = ["numerics_classical.hexa", "numerics_liouville.hexa", "numerics_se3_partial.hexa"]
+let F2_T3_SCRIPTS    = ["empirical_classical_arxiv.hexa"]   // arXiv classical-mechanics milestones
+let F2_T3_DESCRIPTION = "real classical-mechanics demo (raw data TBD; arXiv milestone existence closed)"
+
+let F3_ID            = "F-PCERN-3"
+let F3_RETRACT       = "1 GeV/m wakefield E-field claim retracted"
+let F3_T1_SCRIPTS    = ["calc_wakefield.hexa"]
+let F3_T2_SCRIPTS    = ["numerics_wakefield.hexa", "numerics_lwfa_parity.hexa", "numerics_lwfa_solver.hexa", "numerics_lwfa_relativistic.hexa", "numerics_beam_dynamics.hexa", "numerics_lwfa_scaling.hexa"]
+let F3_T3_SCRIPTS    = ["empirical_lwfa_hepdata.hexa"]   // Inspire-HEP paper feed
+let F3_T3_DESCRIPTION = "live DESY/SLAC LWFA bench feed (raw data TBD; paper-existence via Inspire-HEP closed)"
+
+fn check_roadmap_declares(token: str) -> bool {
+    return _has(_read(DOC_ROADMAP), token)
+}
+
+fn _all_present(scripts: [str]) -> bool {
+    for s in scripts {
+        if _exists(VERIFY_DIR + "/" + s) == false { return false }
+    }
+    return scripts.len() > 0
+}
+
+fn _closure_pct(t1_ok: bool, t2_ok: bool, t3_ok: bool) -> int {
+    let mut n = 0
+    if t1_ok { n = n + 1 }
+    if t2_ok { n = n + 1 }
+    if t3_ok { n = n + 1 }
+    // round-up reporting: 0/3=0, 1/3=33, 2/3=67, 3/3=100 (matches sentinel)
+    if n == 0 { return 0 }
+    if n == 1 { return 33 }
+    if n == 2 { return 67 }
+    return 100
+}
+
+fn _emit_tier_line(label: str, scripts: [str]) {
+    let ok = _all_present(scripts)
+    let mark = if ok { "✓" } else { "✗" }
+    let mut paths = ""
+    let mut i = 0
+    while i < scripts.len() {
+        if i > 0 { paths = paths + " + " }
+        paths = paths + "verify/" + scripts[i]
+        i = i + 1
+    }
+    println("         " + label + " " + mark + "  " + paths)
+}
+
+fn _emit_falsifier(id: str, retract: str,
+                   t1_scripts: [str], t2_scripts: [str],
+                   t3_scripts: [str], t3_desc: str) {
+    let t1_ok = _all_present(t1_scripts)
+    let t2_ok = _all_present(t2_scripts)
+    let t3_ok = t3_scripts.len() > 0 && _all_present(t3_scripts)
+    let pct = _closure_pct(t1_ok, t2_ok, t3_ok)
+    let status_str = if pct == 100 { "FULL closure (algebra + numerics + empirical)" }
+                     else if pct >= 67 { "PARTIAL closure (algebra + numerics)" }
+                     else if pct >= 33 { "EARLY closure (algebra only)" }
+                     else { "UNVERIFIED" }
+    let t2_count = t2_scripts.len()
+    let t3_count = t3_scripts.len()
+    println("    ✗ " + id + ": " + retract)
+    println("         closure:  " + str(pct) + "%   (" + status_str + ")  [T2 ×" +
+            str(t2_count) + ", T3 ×" + str(t3_count) + "]")
+    _emit_tier_line("T1 algebra:  ", t1_scripts)
+    _emit_tier_line("T2 numerics: ", t2_scripts)
+    if t3_ok {
+        _emit_tier_line("T3 empirical:", t3_scripts)
+    } else {
+        println("         T3 empirical: ✗  " + t3_desc)
+    }
+}
+
+fn check_tier_scripts_present(fid: str, label: str, scripts: [str]) {
+    for s in scripts {
+        let path = VERIFY_DIR + "/" + s
+        let ok = _exists(path)
+        _check(ok, fid + " " + label + " — " + s + " present on disk",
+               "expected at " + path)
+    }
+}
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-cern — preregistered falsifier checklist + closure progress")
+    println("========================================================================")
+    println("  source: " + DOC_ROADMAP)
+    println("")
+    println("  Tiers of evidence, in order of accumulation:")
+    println("    T1  algebraic     n=6 closed-form derivation   (verify/calc_*.hexa)")
+    println("    T2  numerical     closed-form via math_pure    (verify/numerics_*.hexa)")
+    println("    T3  empirical     real bench / collider data   (Stage-1+ TBD)")
+    println("")
+    println("  At v1.1.0 (2026-05-08+): T1 + T2 + T3 (API + fixture) landed for")
+    println("  all 3 falsifiers → 100% bookkeeping closure.")
+    println("  Strict raw-data fit (Stage-1+ benchtop) deferred to v2.0.0.")
+    println("")
+
+    println("  Falsifiers declared:")
+    _emit_falsifier(F1_ID, F1_RETRACT, F1_T1_SCRIPTS, F1_T2_SCRIPTS, F1_T3_SCRIPTS, F1_T3_DESCRIPTION)
+    println("")
+    _emit_falsifier(F2_ID, F2_RETRACT, F2_T1_SCRIPTS, F2_T2_SCRIPTS, F2_T3_SCRIPTS, F2_T3_DESCRIPTION)
+    println("")
+    _emit_falsifier(F3_ID, F3_RETRACT, F3_T1_SCRIPTS, F3_T2_SCRIPTS, F3_T3_SCRIPTS, F3_T3_DESCRIPTION)
+
+    println("")
+    println("  Roadmap registration audit:")
+    _check(check_roadmap_declares(F1_ID), F1_ID + " registered in roadmap §A.4", "")
+    _check(check_roadmap_declares(F2_ID), F2_ID + " registered in roadmap §A.4", "")
+    _check(check_roadmap_declares(F3_ID), F3_ID + " registered in roadmap §A.4", "")
+
+    println("")
+    println("  Tier-script presence audit (T1 + T2 + T3 → 100% bookkeeping closure):")
+    check_tier_scripts_present(F1_ID, "T1", F1_T1_SCRIPTS)
+    check_tier_scripts_present(F1_ID, "T2", F1_T2_SCRIPTS)
+    check_tier_scripts_present(F1_ID, "T3", F1_T3_SCRIPTS)
+    check_tier_scripts_present(F2_ID, "T1", F2_T1_SCRIPTS)
+    check_tier_scripts_present(F2_ID, "T2", F2_T2_SCRIPTS)
+    check_tier_scripts_present(F2_ID, "T3", F2_T3_SCRIPTS)
+    check_tier_scripts_present(F3_ID, "T1", F3_T1_SCRIPTS)
+    check_tier_scripts_present(F3_ID, "T2", F3_T2_SCRIPTS)
+    check_tier_scripts_present(F3_ID, "T3", F3_T3_SCRIPTS)
+
+    println("")
+    println("  Note: claimed closure pct here is BOOK-KEEPING ONLY — it asserts")
+    println("  evidence has been WRITTEN, not that the underlying claims are")
+    println("  TRUE. T3 (empirical) is the only tier that can falsify; T1/T2")
+    println("  closure means the closed-form is REGRESSION-LOCKED and ready")
+    println("  for empirical comparison.")
+
+    println("========================================================================")
+    let pass_n = RUN - FAIL
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_CERN_FALSIFIER__ FAIL")
+        exit(1)
+    }
+    // Aggregate closure: min(per-falsifier pct) so the sentinel reflects the
+    // weakest falsifier rather than an average. All 3 must be at the same
+    // tier for the bundle to advance.
+    let pct1 = _closure_pct(_all_present(F1_T1_SCRIPTS), _all_present(F1_T2_SCRIPTS), _all_present(F1_T3_SCRIPTS))
+    let pct2 = _closure_pct(_all_present(F2_T1_SCRIPTS), _all_present(F2_T2_SCRIPTS), _all_present(F2_T3_SCRIPTS))
+    let pct3 = _closure_pct(_all_present(F3_T1_SCRIPTS), _all_present(F3_T2_SCRIPTS), _all_present(F3_T3_SCRIPTS))
+    let mut agg = pct1
+    if pct2 < agg { agg = pct2 }
+    if pct3 < agg { agg = pct3 }
+    let tier_label = if agg == 100 { "T1+T2+T3 locked" }
+                     else if agg >= 67 { "T1+T2 locked" }
+                     else if agg >= 33 { "T1 locked" }
+                     else { "unverified" }
+    println("__HEXA_CERN_FALSIFIER__ PASS — 3/3 preregistered, " + str(agg) + "% closure (" + tier_label + ")")
+    exit(0)
+}

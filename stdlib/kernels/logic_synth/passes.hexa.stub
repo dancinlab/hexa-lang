@@ -1,0 +1,53 @@
+#!hexa strict
+// stdlib/yosys/passes.hexa — core Yosys pass library (CLEAN-ROOM skeleton)
+//
+// @version 0.0.1-skeleton
+// @capabilities [passes, rtlil-transform, opt, flatten, proc, techmap]
+// @stability skeleton (rfc_006 §4 module-3 of 7; bodies pending §5 gate)
+// @since 2026-05-19
+//
+// CLEAN-ROOM PROVENANCE (design.md Decision 1 — public-surface clean-room)
+//   This module re-derives the *public surface* of Yosys' core pass
+//   library by inspection of upstream + manual + pass help-text only.
+//   No upstream code is copied. Each pass is a typed RTLIL → RTLIL
+//   transformation; the dispatcher in this file routes `hexa yosys
+//   pass <name>` to the correct implementation.
+//
+//   - upstream code     : passes/proc/proc.cc          (proc_*)
+//                         passes/opt/opt.cc            (opt_*)
+//                         passes/cmds/flatten.cc       (flatten)
+//                         passes/techmap/techmap.cc    (techmap)
+//                         passes/techmap/extract.cc    (extract)
+//                         passes/techmap/dfflibmap.cc  (dfflibmap)
+//                         passes/cmds/splitnets.cc     (splitnets)
+//                         passes/cmds/hierarchy.cc     (hierarchy)
+//                         passes/cmds/synth_generic.cc (synth_generic
+//                                                       script driver)
+//   - upstream manual   : https://yosyshq.readthedocs.io/projects/yosys/
+//                          en/latest/cmd/index.html (per-pass help)
+//   - upstream license  : ISC (YosysHQ; LICENSE)
+//   - upstream repo     : https://github.com/YosysHQ/yosys
+//
+// rfc_006 §4: module-3 of 7. Minimum pass set required for SKY130
+// synth of comb/rtl/router_d{4,6}.v (rfc_006 §5 gate):
+//
+//   read_verilog → hierarchy -auto-top → proc → flatten → opt →
+//   techmap → opt → dfflibmap -liberty <lib.lib> → abc_map (D18) →
+//   opt -fast → write_verilog
+//
+// Each pass body re-derives the *transformation rule* (e.g. "proc"
+// = expand always blocks into sync/comb logic + cell list) from the
+// manual + standard textbook references (Kahng/Lienig/Markov/Hu
+// "VLSI Physical Design", de Micheli "Synthesis and Optimization of
+// Digital Circuits"), NOT from upstream source line patterns.
+
+fn main() {
+    // Skeleton phase — no body landed yet (rfc_048 raw-91 doctrine).
+    // Self-test will: build a small RTLIL fixture (an AND-OR-XOR
+    // combinational logic + a flop), run each pass in the gate-§5
+    // ordering above, assert cell-count / type-mix invariants at each
+    // step. dfflibmap + abc_map use mock cell library until liberty.hexa
+    // and abc_map.hexa land.
+    println("stdlib/yosys/passes.hexa: TBD-STUB (rfc_006 §4 module-3)");
+    exit(91);  // rfc_048 raw-91 — TBD-stub-hit, do not wire in
+}

@@ -1,0 +1,104 @@
+// test/nuclear_r4_anchor_smoke.hexa — regression / invariant smoke for
+// stdlib/nuclear/sim.hexa (v0.8.0+; verified through v0.9.0).
+//
+// @version 0.1.0
+// @capabilities [pure, io]
+//
+// Defense-in-depth guard (from a /gap F5 finding). Two regressions are
+// locked in so a future kernel/emitter edit that silently breaks them
+// fails CI instead of shipping a fabricated promotion or a coefficient
+// drift:
+//
+//   R4 invariant — every JSON record the N11 / decay emitters write
+//   hardcodes "absorbed": false FOREVER (NUCLEAR.md §7 · @D d4/d5 — a
+//   semi-empirical Geiger-Nuttall fit is NEVER a measurement; absorbed=
+//   true requires GSI/JINR/RIKEN beam + detection). The emitter sites in
+//   sim.hexa render the literal `"absorbed": false` (escaped in source).
+//   We read the module source and assert: ≥1 false literal present (the
+//   hardcode exists) AND zero true literals (no flip slipped in). The
+//   exact false count is intentionally NOT asserted (it tracks the number
+//   of emitter cells, which is allowed to grow).
+//
+//   Anchor reproduction — the landed α-decay kernels reproduce the
+//   Phase-2 consensus anchors within tolerance (Viola-Seaborg NC1 +
+//   Royer NC2 → unweighted consensus mean):
+//     U-238  (Z=92,  A=238, Q_α=4.27  MeV) → log10 T½ ≈ +17.4  s
+//     Og-294 (Z=118, A=294, Q_α=11.65 MeV) → log10 T   ≈ -2.93
+//   Tolerance 0.5 dex (the honest per-formula extrapolation band, s1)
+//   catches a kernel-coefficient regression while tolerating the
+//   intrinsic semi-empirical scatter.
+//
+// Run:  hexa run test/nuclear_r4_anchor_smoke.hexa
+// Sentinel: __NUCLEAR_R4_SMOKE__ PASS|FAIL on the final line.
+
+import "stdlib/nuclear/sim.hexa"
+
+let mut PASS = 0
+let mut FAIL = 0
+
+fn check(label: string, cond: bool) {
+    if cond {
+        PASS = PASS + 1
+        println("[PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("[FAIL] " + label)
+    }
+}
+
+fn approx(a: float, b: float, tol: float) -> bool {
+    let d = a - b
+    if d < 0.0 { return (0.0 - d) < tol }
+    return d < tol
+}
+
+// Count non-overlapping occurrences of `needle` in `hay` via split.
+fn occurs(hay: string, needle: string) -> int {
+    let parts = split(hay, needle)
+    return len(parts) - 1
+}
+
+// ── R4 invariant: absorbed=false hardcoded, never flipped ───────────────
+// The module's JSON emitters render the source literal `"absorbed": false`
+// (escaped \" in the .hexa string literal). Reading the source as bytes,
+// the needle therefore carries backslash-quote.
+let src = to_string(read_file("stdlib/nuclear/sim.hexa"))
+let false_lit = "\\\"absorbed\\\": false"
+let true_lit  = "\\\"absorbed\\\": true"
+let n_false = occurs(src, false_lit)
+let n_true  = occurs(src, true_lit)
+
+println("[R4] absorbed=false literals = " + to_string(n_false) +
+        "  absorbed=true literals = " + to_string(n_true))
+check("R4: at least one absorbed=false hardcode present", n_false >= 1)
+check("R4: zero absorbed=true literals (no flip)", n_true == 0)
+
+// ── Anchor reproduction: VS+Royer consensus mean within 0.5 dex ─────────
+// Accelerator band [lo, hi] = [-6, 3] (matches sim.hexa main / N11 demo);
+// the band only affects the priority score, not mean_log10_T_s.
+let band_lo = 0.0 - 6.0
+let band_hi = 3.0
+
+let u238 = n11_alpha_cell(92, 238, 4.27, band_lo, band_hi)
+println("[anchor] U-238  mean_log10_T_s = " + to_string(u238.mean_log10_T_s) +
+        "  (anchor +17.4, tol 0.5)  valid=" + to_string(u238.valid))
+check("anchor U-238 α: log10 T½ ≈ +17.4 s within 0.5 dex",
+      u238.valid == 1 && approx(u238.mean_log10_T_s, 17.4, 0.5))
+
+let og294 = n11_alpha_cell(118, 294, 11.65, band_lo, band_hi)
+println("[anchor] Og-294 mean_log10_T_s = " + to_string(og294.mean_log10_T_s) +
+        "  (anchor -2.93, tol 0.5)  valid=" + to_string(og294.valid))
+check("anchor Og-294 α: log10 T ≈ -2.93 within 0.5 dex",
+      og294.valid == 1 && approx(og294.mean_log10_T_s, 0.0 - 2.93, 0.5))
+
+// ── verdict ─────────────────────────────────────────────────────────────
+println("")
+println("═══════════════════════════════════════════════════════════")
+println("  nuclear_r4_anchor smoke: PASS=" + to_string(PASS) +
+        " FAIL=" + to_string(FAIL))
+println("═══════════════════════════════════════════════════════════")
+if FAIL > 0 {
+    println("__NUCLEAR_R4_SMOKE__ FAIL")
+} else {
+    println("__NUCLEAR_R4_SMOKE__ PASS")
+}

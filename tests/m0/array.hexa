@@ -1,0 +1,21 @@
+// Stage1 Gap 14 / idiom 2 verification — growable arrays.
+//
+// Exercises:
+//   - Array index expression (xs[0]) routed through the new STMT_ASSIGN
+//     op="index" path in hir_to_mir.
+//   - Growable mutation via .push() routes through the existing call
+//     pipeline (parser emits ExprKind::Call). The parser does not yet
+//     emit ArrayLit / ExprKind::ArrayKind, so array literal `[]` is a
+//     syntactic gap (Stage1 Gap 15 follow-up).
+//
+// Goal: produce a non-empty .s. The type-checker narrows xs[i] to a
+// placeholder type today; we keep the indexed read on the RHS of a
+// return so it is the only consumer and types line up.
+
+fn first(xs: [i64]) -> i64 {
+    return xs[0]
+}
+
+fn main() -> i32 {
+    return 0
+}

@@ -1,0 +1,10 @@
+// stdlib/path.hexa — F1 (2026-05-10) backward-compat shim.
+//
+// Module relocated to stdlib/alloc/path.hexa. POSIX-style path helpers
+// — pure logic but allocates intermediate arrays/strings via split/join,
+// so classified as alloc rather than core.
+//
+// Sunset: removed after F4 absorptions complete.
+// New canonical path: stdlib/alloc/path.hexa
+
+import "stdlib/alloc/path.hexa"

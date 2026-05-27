@@ -1,0 +1,120 @@
+#!hexa strict
+// stdlib/hal/backend/rp2040/core.hexa — RP2040 core backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved. ★ FINAL per-vendor
+// peripheral — completes HW-12 coverage for rp2040.
+//
+// Target:    Raspberry Pi RP2040 dual Cortex-M0+ @ 133 MHz; NO cache,
+//            NO FPU, NO MPU. Boot ROM @ 0x00000000; SRAM 264 KB total
+//            split into 6 banks for striped memory access.
+// Chip ref:  ARMv6-M ARM (DDI 0419E) + Cortex-M0+ TRM + RP2040 Datasheet
+//            §2.6 Power-on State Machine, §2.8 Watchdog, §2.13 Clocks.
+// Surface:   rp2040_core_{now_us,sleep_us,panic,critical_enter,critical_exit,
+//            reset}(...)
+// Dispatch:  core.hexa selects this via cfg-flag.
+//
+// MMIO layout:
+//
+//   System Control Block (SCB) — architectural at 0xE000ED00:
+//     SCB_CPUID                   0x000   read-only ID (returns Cortex-M0+)
+//     SCB_ICSR                    0x004
+//     SCB_VTOR                    0x008
+//     SCB_AIRCR                   0x00C   reset request key 0x05FA + bit 2
+//     SCB_SCR                     0x010   SLEEPDEEP bit 2
+//
+//   No DWT cycle counter on M0+ (DWT optional and not enabled). Use the
+//   RP2040 TIMER block (0x40054000, 64-bit µs counter) instead — see
+//   backend/rp2040/timer.hexa for the exact MMIO.
+//
+//   Per-core SIO (Single-cycle I/O) at 0xD0000000:
+//     CPUID                       0x000   read core 0 / 1
+//
+//   RESETS (peripheral reset gate) — base 0x4000C000:
+//     RESET                       0x000   bit-mask of held-in-reset peripherals
+//     RESET_DONE                  0x008   read; spin until clear after release
+//
+//   WATCHDOG — base 0x40058000 (used as software reset trigger):
+//     CTRL                        0x000   ENABLE bit 30, TRIGGER bit 31
+//     LOAD                        0x004   countdown value
+//     SCRATCH<n>                  0x00C..0x028   8 × 32-bit scratch
+//                                                  (survive watchdog reset)
+//
+// Critical section: same Cortex-M `__disable_irq()` = CPSID i. M0+ has
+// no PRIMASK manipulation via MSR — use the (slower) MSR PRIMASK, ... and
+// MRS ..., PRIMASK pair (encoded the same way as M3/M7).
+//
+// Reset path 1: SCB_AIRCR = 0x05FA0004 (system reset request).
+// Reset path 2: WATCHDOG.CTRL.TRIGGER = 1 (preferred; scratch regs preserve
+// boot reason).
+//
+// No cache management — RP2040 has no L1 cache. XIP (eXecute In Place)
+// flash has its own 16 KB cache @ 0x14000000 (XIP_CTRL block) but that's
+// flash-specific and not a CPU L1.
+
+let MODULE_NAME = "rp2040_core"
+let SIGMA_SLOT  = 0
+let PHI_KIND    = "digital"
+
+let SCB_BASE     = 0xE000ED00
+let SCB_AIRCR    = 0x00C
+let SCB_SCR      = 0x010
+
+let SIO_BASE     = 0xD0000000
+let SIO_CPUID    = 0x000
+
+let RESETS_BASE       = 0x4000C000
+let RESETS_RESET      = 0x000
+let RESETS_RESET_DONE = 0x008
+
+let WATCHDOG_BASE     = 0x40058000
+let WATCHDOG_CTRL     = 0x000
+let WATCHDOG_SCRATCH0 = 0x00C
+
+let SYSCLK_HZ    = 125000000   // typ Pico board (XOSC=12 MHz × PLL)
+
+let AIRCR_RESET_KEY = 0x05FA0004
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn rp2040_core_now_us() -> int {
+    // STUB: read TIMER block @ 0x40054000 + 0x00C (TIMELR) for low 32 bits;
+    //       resolution = 1 µs.
+    return 0
+}
+
+fn rp2040_core_sleep_us(us: int) {
+    if us <= 0 { return }
+    // STUB: read TIMER, busy-wait until current >= start + us; OR program
+    //       ALARM<n> and WFE.
+}
+
+fn rp2040_core_panic(msg: str) {
+    println("[rp2040_core PANIC] " + msg)
+    // STUB: write msg via stdio (UART0 default); trigger BKPT #0
+}
+
+fn rp2040_core_critical_enter() -> int {
+    // STUB: MRS ..., PRIMASK; CPSID i; return prior
+    return 0
+}
+
+fn rp2040_core_critical_exit(prior: int) {
+    // STUB: MSR PRIMASK, prior
+}
+
+fn rp2040_core_reset() {
+    // STUB: prefer WATCHDOG.CTRL.TRIGGER = 1 (preserves SCRATCH boot reason)
+    //       fallback: SCB_AIRCR = 0x05FA0004
+}
+
+fn rp2040_core_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[rp2040_core sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  SCB=" + str(SCB_BASE) + " WATCHDOG=" + str(WATCHDOG_BASE) +
+            " SIO_CPUID=" + str(SIO_BASE))
+    println("  Cortex-M0+ @ " + str(SYSCLK_HZ) + " Hz; NO cache / NO FPU / NO MPU")
+    println("  now_us via TIMER block; reset via WATCHDOG.TRIGGER (preferred)")
+}

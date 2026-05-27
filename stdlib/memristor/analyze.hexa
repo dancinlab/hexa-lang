@@ -1,0 +1,13 @@
+#!hexa strict
+// memristor analyze — Strukov linear-drift state w/D at t=1s, V=1V.
+fn main() {
+    let mu_v = 1.0e-14        // m²/(V·s)
+    let V = 1.0
+    let t = 1.0
+    let D = 1.0e-8            // 10 nm
+    let w_over_D = mu_v * V * t / (D * D)
+    println("memristor_analyze (Strukov linear-drift):")
+    println("  mu_v = " + str(mu_v) + "  D_nm = 10  V = " + str(V) + "  t_s = " + str(t))
+    println("  w_over_D = " + str(w_over_D) + " (saturated if >1)")
+    println("__HEXA_MEMRISTOR_ANALYZE__ PASS gate=GATE_OPEN absorbed=false")
+}

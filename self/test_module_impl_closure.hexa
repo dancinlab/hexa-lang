@@ -1,0 +1,639 @@
+// ═══════════════════════════════════════════════════════════
+//  test_phase2_integration.hexa — Phase2 Bootstrapping Integration Test
+//
+//  Validates the three Phase2 pillars working together:
+//    C1: Module system (import chain, module_loader)
+//    C2: ImplBlock codegen (struct + impl + method dispatch)
+//    C3: Closure capture (free variable capture + codegen)
+//
+//  Cross-cutting integration scenarios:
+//    - struct + impl + closure interplay
+//    - method dispatch with captured variables
+//    - module-loaded structs used in closures
+//    - builder pattern with closures
+//    - higher-order methods accepting closures
+//    - nested struct + method chaining + capture
+//
+//  50 assertions minimum.
+// ═══════════════════════════════════════════════════════════
+
+use "self/stdlib/law_io"
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn check(name, actual, expected) {
+    if to_string(actual) == to_string(expected) {
+        println("[PASS] " + name)
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name + " — expected: " + to_string(expected) + ", got: " + to_string(actual))
+        fail_count = fail_count + 1
+    }
+}
+
+println("═══════════════════════════════════════════════════════")
+println("  Phase2 Integration Test — C1+C2+C3 Combined")
+println("═══════════════════════════════════════════════════════")
+println("")
+
+// ═══════════════════════════════════════════════════════════
+//  Section A: Struct + Impl foundation (C2 baseline)
+// ═══════════════════════════════════════════════════════════
+
+println("--- A. Struct + Impl Baseline ---")
+
+struct Vec2 { x: int, y: int }
+
+impl Vec2 {
+    fn mag_sq(self) {
+        return self.x * self.x + self.y * self.y
+    }
+
+    fn add(self, other) {
+        return Vec2 { x: self.x + other.x, y: self.y + other.y }
+    }
+
+    fn scale(self, k) {
+        return Vec2 { x: self.x * k, y: self.y * k }
+    }
+
+    fn to_str(self) {
+        return "(" + to_string(self.x) + "," + to_string(self.y) + ")"
+    }
+
+    fn dot(self, other) {
+        return self.x * other.x + self.y * other.y
+    }
+}
+
+let v1 = Vec2 { x: 3, y: 4 }
+let v2 = Vec2 { x: 1, y: 2 }
+
+check("A1 mag_sq", v1.mag_sq(), 25)
+check("A2 add", v1.add(v2).to_str(), "(4,6)")
+check("A3 scale", v2.scale(3).to_str(), "(3,6)")
+check("A4 dot", v1.dot(v2), 11)
+check("A5 chain add+scale", v1.add(v2).scale(2).to_str(), "(8,12)")
+
+// ═══════════════════════════════════════════════════════════
+//  Section B: Closure capture baseline (C3 baseline)
+// ═══════════════════════════════════════════════════════════
+
+println("")
+println("--- B. Closure Capture Baseline ---")
+
+let factor = 10
+let multiply = |x| x * factor
+check("B1 capture int", multiply(7), 70)
+
+fn make_adder(n) {
+    return |x| x + n
+}
+let add5 = make_adder(5)
+let add100 = make_adder(100)
+check("B2 factory adder 5", add5(3), 8)
+check("B3 factory adder 100", add100(3), 103)
+check("B4 independent closures", add5(10) + add100(10), 125)
+
+fn compose(f, g) {
+    return |x| f(g(x))
+}
+let add5_then_double = compose(|x| x * 2, add5)
+check("B5 compose", add5_then_double(10), 30)
+
+// ═══════════════════════════════════════════════════════════
+//  Section C: Struct methods + closure interplay (C2+C3)
+// ═══════════════════════════════════════════════════════════
+
+println("")
+println("--- C. Struct + Closure Integration ---")
+
+// C1: Closure that creates and returns a struct
+fn make_vec_factory(dx, dy) {
+    return |x, y| Vec2 { x: x + dx, y: y + dy }
+}
+let offset_factory = make_vec_factory(10, 20)
+let v3 = offset_factory(1, 2)
+check("C1 closure returns struct x", v3.x, 11)
+check("C2 closure returns struct y", v3.y, 22)
+
+// C3: Closure capturing a struct, calling its method
+let base_vec = Vec2 { x: 5, y: 5 }
+let from_base = |dx, dy| base_vec.add(Vec2 { x: dx, y: dy })
+let v4 = from_base(3, 7)
+check("C3 closure captures struct", v4.to_str(), "(8,12)")
+check("C4 captured struct method", v4.mag_sq(), 208)
+
+// C5: Method result used in closure
+let scale_factor = 3
+let scale_and_mag = |v| v.scale(scale_factor).mag_sq()
+check("C5 method in closure", scale_and_mag(Vec2 { x: 1, y: 2 }), 45)
+
+// C6: Array of structs processed by closure
+let mut vecs = []
+vecs.push(Vec2 { x: 1, y: 0 })
+vecs.push(Vec2 { x: 0, y: 2 })
+vecs.push(Vec2 { x: 3, y: 4 })
+
+fn map_arr(arr, f) {
+    let mut out = []
+    for item in arr {
+        out.push(f(item))
+    }
+    return out
+}
+
+let mags = map_arr(vecs, |v| v.mag_sq())
+check("C6 map struct method [0]", mags[0], 1)
+check("C7 map struct method [1]", mags[1], 4)
+check("C8 map struct method [2]", mags[2], 25)
+
+// ═══════════════════════════════════════════════════════════
+//  Section D: Builder pattern + closure (C2+C3)
+// ═══════════════════════════════════════════════════════════
+
+println("")
+println("--- D. Builder + Closure ---")
+
+struct Config {
+    width: int,
+    height: int,
+    label: string,
+    scale: int
+}
+
+impl Config {
+    fn set_width(self, w) {
+        return Config { width: w, height: self.height, label: self.label, scale: self.scale }
+    }
+    fn set_height(self, h) {
+        return Config { width: self.width, height: h, label: self.label, scale: self.scale }
+    }
+    fn set_label(self, l) {
+        return Config { width: self.width, height: self.height, label: l, scale: self.scale }
+    }
+    fn set_scale(self, s) {
+        return Config { width: self.width, height: self.height, label: self.label, scale: s }
+    }
+    fn area(self) {
+        return self.width * self.height * self.scale
+    }
+    fn describe(self) {
+        return self.label + " " + to_string(self.width) + "x" + to_string(self.height) + " @" + to_string(self.scale)
+    }
+}
+
+fn default_config() {
+    return Config { width: 100, height: 100, label: "default", scale: 1 }
+}
+
+// D1: builder chain
+let cfg = default_config().set_width(800).set_height(600).set_label("main").set_scale(2)
+check("D1 builder width", cfg.width, 800)
+check("D2 builder describe", cfg.describe(), "main 800x600 @2")
+check("D3 builder area", cfg.area(), 960000)
+
+// D4: closure that applies a config transform
+fn with_config(base, transform) {
+    return transform(base)
+}
+let hd = with_config(default_config(), |c| c.set_width(1920).set_height(1080).set_label("HD"))
+check("D4 closure config transform", hd.describe(), "HD 1920x1080 @1")
+
+// D5: captured config in closure
+let template = default_config().set_scale(3)
+let from_template = |w, h| template.set_width(w).set_height(h)
+let derived = from_template(320, 240)
+check("D5 captured config width", derived.width, 320)
+check("D6 captured config scale preserved", derived.scale, 3)
+check("D7 captured config area", derived.area(), 230400)
+
+// ═══════════════════════════════════════════════════════════
+//  Section E: Higher-order struct operations (C2+C3)
+// ═══════════════════════════════════════════════════════════
+
+println("")
+println("--- E. Higher-Order Struct Ops ---")
+
+struct Pair { first: any, second: any }
+
+impl Pair {
+    fn swap(self) {
+        return Pair { first: self.second, second: self.first }
+    }
+    fn map_first(self, f) {
+        return Pair { first: f(self.first), second: self.second }
+    }
+    fn map_second(self, f) {
+        return Pair { first: self.first, second: f(self.second) }
+    }
+    fn map_both(self, f) {
+        return Pair { first: f(self.first), second: f(self.second) }
+    }
+}
+
+let pr = Pair { first: 3, second: 7 }
+check("E1 pair first", pr.first, 3)
+check("E2 pair swap", pr.swap().first, 7)
+
+// Method accepting closure
+let k = 10
+check("E3 map_first with capture", pr.map_first(|x| x * k).first, 30)
+check("E4 map_second with capture", pr.map_second(|x| x + k).second, 17)
+check("E5 map_both", pr.map_both(|x| x * 2).first, 6)
+check("E6 map_both second", pr.map_both(|x| x * 2).second, 14)
+
+// Chain: swap then map
+let chained = pr.swap().map_first(|x| x * 100)
+check("E7 swap+map chain first", chained.first, 700)
+check("E8 swap+map chain second", chained.second, 3)
+
+// ═══════════════════════════════════════════════════════════
+//  Section F: Accumulator / stateful closure + struct (C2+C3)
+// ═══════════════════════════════════════════════════════════
+
+println("")
+println("--- F. Accumulator Pattern ---")
+
+struct Accum { value: int }
+
+impl Accum {
+    fn get(self) { return self.value }
+    fn add(self, n) { return Accum { value: self.value + n } }
+    fn mul(self, n) { return Accum { value: self.value * n } }
+}
+
+fn reduce_arr(arr, init, f) {
+    let mut acc = init
+    for v in arr {
+        acc = f(acc, v)
+    }
+    return acc
+}
+
+// Reduce array into Accum struct via closure
+let sum_accum = reduce_arr([1, 2, 3, 4, 5], Accum { value: 0 }, |acc, v| acc.add(v))
+check("F1 reduce struct sum", sum_accum.get(), 15)
+
+let product_accum = reduce_arr([1, 2, 3, 4, 5], Accum { value: 1 }, |acc, v| acc.mul(v))
+check("F2 reduce struct product", product_accum.get(), 120)
+
+// Mixed ops in closure
+let bonus = 10
+let custom = reduce_arr([1, 2, 3], Accum { value: 0 }, |acc, v| acc.add(v * bonus))
+check("F3 reduce with captured multiplier", custom.get(), 60)
+
+// ═══════════════════════════════════════════════════════════
+//  Section G: Module system validation (C1)
+// ═══════════════════════════════════════════════════════════
+
+println("")
+println("--- G. Module System ---")
+
+// G1: Verify module_loader functions are available via import
+// -- inlined from self/module_loader.hexa --
+// codegen import not wired for test files
+
+// self/module_loader.hexa — concat-based HEXA module loader (Phase2 C1)
+//
+// 목적: bootstrap.hexa 1,945줄 모놀리스 해체.
+//   - 지시문: 첫 non-space 토큰이 `import "path.hexa"` 또는 `use "path.hexa"` 인 라인
+//   - 재귀적으로 파일 내용을 인라인 병합 (concat).
+//   - 순환 import 감지 (visited list).
+//   - 경로는 현재 파일의 디렉토리 상대로 해석.
+//
+// 이 로더는 parser/lexer/interpreter 와 독립적인 소스 전처리기다.
+// 전처리된 문자열을 parser 에 넘기면 모듈 지원이 사실상 완성된다.
+//
+// API:
+//   load_module(path)                  -> string   (preprocessed source)
+//   ml_resolve(src, base_dir, vs)      -> string   (internal helper)
+//   ml_resolve_path(path)              -> string   (.hexa 확장자 폴백)
+//
+// CLI:
+//   interp self/module_loader.hexa               → 자체 스모크 테스트
+//   interp self/module_loader.hexa <in> <out>    → imports/uses 전개 후 <out> 기록
+//
+// 의존: read_file / write_file / file_exists 빌트인, 기본 string api.
+
+fn ml_dirname(path) {
+    // T36 fix: char-by-char parts.push + join was O(n²) per line and blew
+    // memory to 143GB when expanding multi-use files (bc_emitter 1349 lines
+    // + bc_vm 719 lines). substring() on the host path stays O(n).
+    let n = len(path)
+    let mut i = n - 1
+    while i >= 0 {
+        if path[i] == '/' {
+            return path.substring(0, i)
+        }
+        i = i - 1
+    }
+    return "."
+}
+
+fn ml_join_path(dir, rel) {
+    if len(rel) > 0 {
+        if rel[0] == '/' { return rel }
+    }
+    if len(dir) == 0 { return rel }
+    return dir + "/" + rel
+}
+
+fn ml_trim_left(s) {
+    // T36 fix: host builtin trim_start replaces the O(n²) char-array
+    // accumulator (parts.push + join) that blew memory to 143GB when
+    // expanding multi-use files (bc_emitter 1349 + bc_vm 719 lines).
+    return s.trim_start()
+}
+
+fn ml_starts_with(s, prefix) {
+    let pn = len(prefix)
+    let sn = len(s)
+    if pn > sn { return false }
+    let mut i = 0
+    while i < pn {
+        if s[i] != prefix[i] { return false }
+        i = i + 1
+    }
+    return true
+}
+
+fn ml_split_lines(s) {
+    // T36 fix: host builtin split replaces char-by-char parts.push + join.
+    return s.split("\n")
+}
+
+fn ml_contains(list, needle) {
+    let n = len(list)
+    let mut i = 0
+    while i < n {
+        if list[i] == needle { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn ml_parse_import(line) {
+    // T36 fix: substring in place of char-by-char parts.push + join.
+    let trimmed = ml_trim_left(line)
+    let mut prefix_len = 0
+    if ml_starts_with(trimmed, "import ") {
+        prefix_len = 7
+    } else if ml_starts_with(trimmed, "use ") {
+        prefix_len = 4
+    } else {
+        return ""
+    }
+    let n = len(trimmed)
+    if prefix_len >= n { return "" }
+    let rest = ml_trim_left(trimmed.substring(prefix_len, n))
+    let rn = len(rest)
+    if rn < 2 { return "" }
+    if rest[0] != '"' { return "" }
+    let mut i = 1
+    while i < rn {
+        if rest[i] == '"' {
+            return rest.substring(1, i)
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+fn ml_resolve_path(full) {
+    if file_exists(full) { return full }
+    let with_ext = full + ".hexa"
+    if file_exists(with_ext) { return with_ext }
+    return full
+}
+
+// HX-stdlib-fallback: if `use "stdlib/foo"` (relative to caller dir) fails,
+// try well-known hexa-lang stdlib location: $HEXA_LANG/self/<imp>.hexa.
+// Enables consumers anywhere on disk to `use "stdlib/string"` and find the
+// HEXA-native string helpers (T4 migration target).
+fn ml_resolve_stdlib(imp) {
+    if !ml_starts_with(imp, "stdlib/") { return "" }
+    let hl = env_var("HEXA_LANG")
+    if len(hl) == 0 { return "" }
+    let cand = hl + "/self/" + imp + ".hexa"
+    if file_exists(cand) { return cand }
+    return ""
+}
+
+// Strip `pub ` visibility prefix from top-level declarations.
+// After module inlining everything is in a single TU; the interp
+// parser (pre-G39 binary) chokes on `@attr pub fn` sequences.
+// Stripping `pub ` at the source level is safe — codegen ignores
+// visibility anyway (single translation unit).
+fn ml_strip_pub(src) {
+    // Fast exit: no `pub ` in source at all
+    if src.index_of("pub ") < 0 { return src }
+    let lines = ml_split_lines(src)
+    let n = len(lines)
+    let mut out = []
+    let mut i = 0
+    while i < n {
+        let line = lines[i]
+        let t = ml_trim_left(line)
+        if ml_starts_with(t, "pub fn ") || ml_starts_with(t, "pub struct ") || ml_starts_with(t, "pub enum ") || ml_starts_with(t, "pub let ") || ml_starts_with(t, "pub const ") {
+            // Compute leading whitespace length
+            let tlen = len(t)
+            let llen = len(line)
+            let ws = line.substring(0, llen - tlen)
+            // Remove "pub " (4 chars) from the trimmed line
+            out.push(ws + t.substring(4, tlen))
+        } else {
+            out.push(line)
+        }
+        i = i + 1
+    }
+    return out.join("\n")
+}
+
+let mut ml_has_cycle = false
+
+// decreases src — structural
+fn ml_resolve(src, base_dir, visited) {
+    let lines = ml_split_lines(src)
+    let mut out_parts = []
+    let n = len(lines)
+    let mut i = 0
+    while i < n {
+        let line = lines[i]
+        let imp = ml_parse_import(line)
+        if imp == "" {
+            out_parts.push(line)
+            out_parts.push("\n")
+        } else {
+            let raw_full = ml_join_path(base_dir, imp)
+            let mut full = ml_resolve_path(raw_full)
+            // HX-stdlib-fallback: if local resolve missed, try stdlib/<imp>.
+            if !file_exists(full) {
+                let std_full = ml_resolve_stdlib(imp)
+                if len(std_full) > 0 { full = std_full }
+            }
+            if ml_contains(visited, full) {
+                out_parts.push("// [module_loader] ERROR: import cycle detected: " + full)
+                out_parts.push("\n")
+                eprintln("[module_loader] ERROR: import cycle detected: " + full)
+                ml_has_cycle = true
+            } else {
+                let vs2 = visited.push(full)
+                let child_src = read_file(full)
+                let child_dir = ml_dirname(full)
+                let expanded = ml_resolve(child_src, child_dir, vs2)
+                let cleaned = ml_strip_pub(expanded)
+                out_parts.push("// [module_loader] begin: " + full)
+                out_parts.push("\n")
+                out_parts.push(cleaned)
+                out_parts.push("// [module_loader] end: " + full)
+                out_parts.push("\n")
+            }
+        }
+        i = i + 1
+    }
+    return out_parts.join("")
+}
+
+fn load_module(path) {
+    let src = read_file(path)
+    let dir = ml_dirname(path)
+    let visited = [path]
+    return ml_resolve(src, dir, visited)
+}
+
+let __ml_av = args()
+if len(__ml_av) >= 4 {
+    let expanded = load_module(__ml_av[2])
+    if ml_has_cycle {
+        eprintln("[module_loader] FATAL: import cycle(s) detected — output is incomplete, aborting")
+        exit(1)
+    }
+    safe_write_file(__ml_av[3], expanded)
+} else {
+    println("[module_loader] helpers ready")
+    assert ml_dirname("a/b/c.hexa") == "a/b"
+    assert ml_dirname("foo.hexa") == "."
+    assert ml_join_path("a/b", "c.hexa") == "a/b/c.hexa"
+    assert ml_join_path("a", "/abs/x.hexa") == "/abs/x.hexa"
+    assert ml_starts_with("import \"x\"", "import ")
+    assert ml_parse_import("import \"lexer.hexa\"") == "lexer.hexa"
+    assert ml_parse_import("  import \"a/b.hexa\"") == "a/b.hexa"
+    assert ml_parse_import("use \"mod_a.hexa\"") == "mod_a.hexa"
+    assert ml_parse_import("  use \"a/b.hexa\"") == "a/b.hexa"
+    assert ml_parse_import("let x = 1") == ""
+    assert ml_parse_import("// import \"x\"") == ""
+    let ls = ml_split_lines("a\nb\nc")
+    assert len(ls) == 3
+    assert ls[0] == "a"
+    assert ls[2] == "c"
+    println("[module_loader] self-test PASS")
+}
+
+
+// -- end inlined --
+
+check("G1 ml_dirname basic", ml_dirname("/a/b/c.hexa"), "/a/b")
+check("G2 ml_dirname no slash", ml_dirname("foo.hexa"), ".")
+check("G3 ml_join_path relative", ml_join_path("/a/b", "c.hexa"), "/a/b/c.hexa")
+check("G4 ml_join_path absolute", ml_join_path("/a", "/abs.hexa"), "/abs.hexa")
+
+// G5: parse import directive
+check("G5 parse import", ml_parse_import("import \"foo.hexa\""), "foo.hexa")
+check("G6 parse non-import", ml_parse_import("let x = 1"), "")
+
+// G7: read a module file directly and verify content
+let _hexa_root = if len(env_var("HEXA_LANG")) > 0 { env_var("HEXA_LANG") } else { "." }
+let boot_src = read_file(_hexa_root + "/self/modules/boot_structs.hexa")
+check("G7 module file non-empty", len(boot_src) > 100, true)
+
+// G8: verify module content contains 'struct' keyword
+check("G8 module contains struct", boot_src.contains("struct"), true)
+
+// ═══════════════════════════════════════════════════════════
+//  Section H: Nested struct + method + closure (C2+C3 deep)
+// ═══════════════════════════════════════════════════════════
+
+println("")
+println("--- H. Nested Struct + Deep Integration ---")
+
+struct Color { r: int, g: int, b: int }
+
+impl Color {
+    fn brightness(self) {
+        return (self.r + self.g + self.b) / 3
+    }
+    fn to_str(self) {
+        return "rgb(" + to_string(self.r) + "," + to_string(self.g) + "," + to_string(self.b) + ")"
+    }
+}
+
+struct Widget {
+    name: string,
+    pos: any,
+    color: any
+}
+
+impl Widget {
+    fn describe(self) {
+        return self.name + " at " + self.pos.to_str() + " " + self.color.to_str()
+    }
+    fn move_by(self, dx, dy) {
+        return Widget {
+            name: self.name,
+            pos: self.pos.add(Vec2 { x: dx, y: dy }),
+            color: self.color
+        }
+    }
+}
+
+let w1 = Widget {
+    name: "btn",
+    pos: Vec2 { x: 10, y: 20 },
+    color: Color { r: 255, g: 0, b: 0 }
+}
+
+check("H1 nested describe", w1.describe(), "btn at (10,20) rgb(255,0,0)")
+check("H2 nested color brightness", w1.color.brightness(), 85)
+
+let w2 = w1.move_by(5, 5)
+check("H3 move nested pos", w2.pos.to_str(), "(15,25)")
+check("H4 move preserves name", w2.name, "btn")
+check("H5 move preserves color", w2.color.to_str(), "rgb(255,0,0)")
+
+// Closure that builds widgets from a template
+let base_color = Color { r: 0, g: 128, b: 255 }
+let make_widget = |name, x, y| Widget {
+    name: name,
+    pos: Vec2 { x: x, y: y },
+    color: base_color
+}
+let w3 = make_widget("label", 50, 100)
+check("H6 closure widget name", w3.name, "label")
+check("H7 closure widget captures color", w3.color.to_str(), "rgb(0,128,255)")
+
+// Map array of widgets via closure
+let widgets = [
+    make_widget("a", 0, 0),
+    make_widget("b", 10, 10),
+    make_widget("c", 20, 20)
+]
+let names = map_arr(widgets, |w| w.name)
+check("H8 map widget names [0]", names[0], "a")
+check("H9 map widget names [2]", names[2], "c")
+
+// ═══════════════════════════════════════════════════════════
+//  SUMMARY
+// ═══════════════════════════════════════════════════════════
+
+println("")
+println("═══════════════════════════════════════════════════════")
+let total = pass_count + fail_count
+println("  Phase2 Integration: " + to_string(pass_count) + " PASS / " + to_string(fail_count) + " FAIL / " + to_string(total) + " total")
+if fail_count == 0 {
+    println("  ALL PHASE2 INTEGRATION TESTS PASSED!")
+} else {
+    println("  SOME TESTS FAILED")
+}
+println("═══════════════════════════════════════════════════════")

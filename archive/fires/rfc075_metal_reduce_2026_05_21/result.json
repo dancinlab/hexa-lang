@@ -1,0 +1,20 @@
+{
+  "all_pass_byte_eq" : true,
+  "byte_mismatch" : 0,
+  "campaign" : "rfc075_metal_reduce_2026_05_21",
+  "device" : "Apple M3",
+  "expected_per_group" : 32,
+  "falsifier_F_RFC075_METAL_REDUCE_SUM_NUMERIC_EQ" : "PASS",
+  "max_abs_diff" : 0,
+  "N_groups" : 32,
+  "N_input" : 1024,
+  "registry_id" : 4294968442,
+  "samples_first_4" : [
+    32,
+    32,
+    32,
+    32
+  ],
+  "shape" : "reduce_sum",
+  "simd_group_width" : 32
+}

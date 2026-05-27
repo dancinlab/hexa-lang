@@ -1,0 +1,67 @@
+# pyproject.toml — hexa-matter Phase G absorption bridge optional deps
+#
+# Phase G (2026-05-13): external materials-discovery absorption layer.
+# Each adapter under <system>/<system>_*.py is callable directly with
+# `--selftest`; optional deps (mp-api / mace-torch / schnetpack / matgl /
+# alignn / chgnet / huggingface_hub) gate compute paths and fall back to
+# stdlib SKIP cleanly when missing.
+#
+# Install all optional deps:
+#     pip install -e ".[all]"
+#
+# Install per-system stack:
+#     pip install -e ".[materials_project]"   # mp-api  (Materials Project Berkeley/LBNL)
+#     pip install -e ".[meta_omat24]"         # huggingface_hub + mace-torch (Meta OMat24)
+#     pip install -e ".[universal_ff]"        # SchNet + MACE + M3GNet + ALIGNN + CHGNet
+#
+# Stdlib-only fallback is honored in every adapter. A module SKIPs cleanly
+# when its optional dep is missing — the harness counts SKIP as PASS.
+#
+# Honest C3 (per INIT.md):
+#   - Matlantis is COMMERCIAL (Preferred Networks). The matlantis_call_smoke
+#     adapter SKIPs by default; no pip extra is provided here because the
+#     SDK is not on public PyPI.
+#   - GNoME is a dataset (no SDK extra). The gnome_dataset_smoke adapter
+#     replays a bundled fixture; live Zenodo download is a runtime concern.
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hexa-matter-absorption-bridge"
+version = "0.1.0"
+description = "External materials-discovery system absorption bridge for hexa-matter (Materials Project / GNoME / Matlantis / OMat24 / SchNet / MACE / ALIGNN / CHGNet / M3GNet)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [
+    { name = "박민우", email = "nerve011235@gmail.com" },
+]
+keywords = ["materials", "absorption-bridge", "materials-project", "gnome", "matlantis", "omat24", "schnet", "mace", "alignn", "chgnet", "m3gnet", "hexa-family"]
+
+[project.optional-dependencies]
+materials_project = ["mp-api>=0.41.0", "matminer>=0.9.0"]
+meta_omat24 = ["huggingface_hub>=0.20.0", "mace-torch>=0.3.0", "ase>=3.22.0"]
+universal_ff = [
+    "schnetpack>=2.0.0",
+    "mace-torch>=0.3.0",
+    "matgl>=1.0.0",      # M3GNet successor
+    "alignn>=2024.1.14", # NIST ALIGNN
+    "chgnet>=0.3.0",
+    "ase>=3.22.0",
+]
+all = [
+    "mp-api>=0.41.0",
+    "matminer>=0.9.0",
+    "huggingface_hub>=0.20.0",
+    "schnetpack>=2.0.0",
+    "mace-torch>=0.3.0",
+    "matgl>=1.0.0",
+    "alignn>=2024.1.14",
+    "chgnet>=0.3.0",
+    "ase>=3.22.0",
+]
+
+[tool.setuptools]
+packages = []

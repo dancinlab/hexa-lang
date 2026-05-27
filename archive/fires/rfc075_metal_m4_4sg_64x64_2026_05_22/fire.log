@@ -1,0 +1,47 @@
+=== Apple M4 4-simdgroup 64x64 fire (N138) ===
+2026-05-21T17:27:01Z
+machdep.cpu.brand_string: Apple M4
+hw.ncpu: 10
+26.5
+Apple metal version 32023.883 (metalfe-32023.883)
+Target: air64-apple-darwin25.5.0
+Thread model: posix
+InstalledDir: /private/var/run/com.apple.security.cryptexd/mnt/com.apple.MobileAsset.MetalToolchain-v17.6.42.0.YiSwwR/Metal.xctoolchain/usr/metal/current/bin
+
+--- Compiling simdgroup_matmul_4sg_64x64 ---
+-rw-r--r--  1 mini  staff   9088 May 22 02:27 simdgroup_matmul_4sg_64x64.air
+-rw-r--r--  1 mini  staff  14035 May 22 02:27 simdgroup_matmul_4sg_64x64.metallib
+
+--- Compiling Swift host ---
+-rwxr-xr-x  1 mini  staff  102744 May 22 02:27 host_4sg
+
+=== Firing simdgroup_matmul_4sg_64x64 (FP16 MMA + FP32 accum) ===
+device_name=Apple M4
+registry_id=4294968657
+max_threads_per_threadgroup=1024x1024x1024
+max_threadgroup_memory_length=32768
+pipeSb  tew=32  max=1024  stat_threadgroup_memory_length=4096
+pipeDb  tew=32  max=1024  stat_threadgroup_memory_length=8192
+simdgroup_matmul_4sg_64x64            M=256 N=256 K=256  median=0.0994ms  GFLOPS=337.65  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_4sg_64x64_db         M=256 N=256 K=256  median=0.1000ms  GFLOPS=335.40  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_4sg_64x64            M=512 N=512 K=512  median=0.2904ms  GFLOPS=924.44  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_4sg_64x64_db         M=512 N=512 K=512  median=0.3485ms  GFLOPS=770.26  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_4sg_64x64            M=768 N=768 K=768  median=0.4786ms  GFLOPS=1893.02  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_4sg_64x64_db         M=768 N=768 K=768  median=0.4550ms  GFLOPS=1990.96  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_4sg_64x64            M=1024 N=1024 K=1024  median=1.1102ms  GFLOPS=1934.23  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_4sg_64x64_db         M=1024 N=1024 K=1024  median=1.0461ms  GFLOPS=2052.80  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_4sg_64x64            M=1536 N=1536 K=1536  median=3.5747ms  GFLOPS=2027.51  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_4sg_64x64_db         M=1536 N=1536 K=1536  median=3.4365ms  GFLOPS=2109.05  max|d|=0.000e+00  rel=0.000e+00  PASS
+F-RFC075-METAL-M4-4SIMDGROUP: PASS
+PEAK_GFLOPS=2109.05 (best of sb + db, across shape sweep)
+PEAK_SB=2027.51 @ M=1536
+PEAK_DB=2109.05 @ M=1536
+PEAK_AT_1536=2109.05
+VS_N133_M4_DB_RATIO=1.135x (N133 M4 peak = 1858.35 GFLOPS)
+VS_N37_M3_RATIO=1.388x (N37 M3 = 1519.00 GFLOPS)
+VS_N107_NVPTX_RATIO=0.0408x (N107 NVPTX = 51651.60 GFLOPS)
+VERDICT=COMPOUNDS
+MAX_REL_ERR_OVERALL=0.000e+00 (gate < 1e-4)
+
+=== Done ===
+2026-05-21T17:27:07Z

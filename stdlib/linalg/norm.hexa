@@ -1,0 +1,136 @@
+// HEXA Standard Library — linalg/norm (phase 5 M1 · 2/2)
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Vector / matrix norm + L2-normalize + cosine_distance — the four
+// hot-path numeric primitives surveyed across the anima sweep (per
+// hexa-lang issue #458: 210+ ad-hoc l2_norm / vec_norm / cosine sites).
+// Single-source-of-truth here lets every caller import one module
+// instead of re-rolling sqrt(sum_sq) inline.
+//
+// Public API:
+//   pub fn l2_norm(v: array, d: int)                         -> float
+//       Euclidean norm √(Σ v_i²) over the first `d` elements.
+//   pub fn frobenius_norm(A: array, rows: int, cols: int)    -> float
+//       Matrix L2 norm √(Σ A_ij²) — row-major flat array.
+//       Identical to l2_norm(A, rows*cols) — provided as a
+//       semantically-named alias for matrix callers.
+//   pub fn l2_normalize(v: array, d: int)                    -> array
+//       Returns v / |v|. Zero-vector (|v| < 1e-12) returns `v` itself
+//       unchanged — caller-side degenerate-input guard.
+//   pub fn cosine_distance(a: array, b: array, d: int)       -> float
+//       1 − cos_similarity. Zero-norm input on either side returns
+//       1.0 (maximally-distant fallback, matches scipy.spatial).
+//
+// ── Custom-epsilon variants (anima alm-site unblock) ─────────────
+// Three regularized variants surveyed across the anima alm sweep
+// (cycle 11 B-defer): sites that wrap a custom epsilon / value-floor
+// around the norm and therefore can NOT byte-equal migrate to the
+// plain l2_norm above. Two distinct regularization semantics:
+//   pub fn l2_norm_eps(v: array, d: int, eps: float)         -> float
+//       √(Σ v_i² + eps) — Tikhonov-regularized: eps is added INSIDE
+//       the sqrt. eps = 0.0 is identical to l2_norm. Models the
+//       alm_holographic_mapping √(Σv² + 1e-9) pattern.
+//   pub fn l2_norm_floored(v: array, d: int, floor: float)   -> float
+//       max(l2_norm(v, d), floor) — value floor on the RESULT (not
+//       the input). Models the alm_unity_loss `if d < EPS return EPS`
+//       pattern. Distinct from l2_norm_eps: floor never perturbs a
+//       norm already ≥ floor, whereas eps perturbs every result.
+//   pub fn l2_normalize_eps(v: array, d: int, eps: float)    -> array
+//       v / max(|v|, eps) — custom-epsilon zero-vector guard. Unlike
+//       l2_normalize (which returns v unchanged below 1e-12) this
+//       always divides, clamping the denominator to eps so a
+//       zero / near-zero vector maps to v / eps (no div-by-zero,
+//       no identity fallthrough). Models alm l2_normalize sites with
+//       custom 1e-6/1e-7 epsilon + zero-vector handling.
+//
+// ── Honest limit (per L2 survey #458 follow-up) ──────────────────
+// Simple Σ-then-sqrt summation. For d > 1e6 or extreme magnitudes
+// (|v_i| > 1e150) the sum-of-squares can overflow / catastrophically
+// cancel. Two known mitigations remain DEFERRED to phase 5.1:
+//   (a) Kahan compensated summation (≥1 OoM accuracy gain, ~2× cost)
+//   (b) |max|-scaling pass like cblas_snrm2 / linalg/reference snrm2_ref
+// Callers needing snrm2 semantics today should use
+// `stdlib/linalg/reference.snrm2_ref` (already exists, two-pass scaling).
+// This module privileges the SIMPLE single-pass form for the common
+// d < 10⁴ case (the 210+ anima sites).
+//
+// libm `sqrt` is the native builtin (project.tape @D stdlib_trig_libm).
+
+pub fn l2_norm(v: array, d: int) -> float {
+    let mut s = 0.0
+    let mut i = 0
+    while i < d {
+        s = s + v[i] * v[i]
+        i = i + 1
+    }
+    return sqrt(s)
+}
+
+pub fn frobenius_norm(A: array, rows: int, cols: int) -> float {
+    let n = rows * cols
+    let mut s = 0.0
+    let mut i = 0
+    while i < n {
+        s = s + A[i] * A[i]
+        i = i + 1
+    }
+    return sqrt(s)
+}
+
+pub fn l2_normalize(v: array, d: int) -> array {
+    let n = l2_norm(v, d)
+    if n < 0.000000000001 { return v }
+    let mut out = []
+    let mut i = 0
+    while i < d {
+        out = out.push(v[i] / n)
+        i = i + 1
+    }
+    return out
+}
+
+pub fn cosine_distance(a: array, b: array, d: int) -> float {
+    let na = l2_norm(a, d)
+    let nb = l2_norm(b, d)
+    let denom = na * nb
+    if denom < 0.000000000001 { return 1.0 }
+    let mut dot = 0.0
+    let mut i = 0
+    while i < d {
+        dot = dot + a[i] * b[i]
+        i = i + 1
+    }
+    return 1.0 - dot / denom
+}
+
+// ── Custom-epsilon variants (anima alm-site unblock) ─────────────
+
+pub fn l2_norm_eps(v: array, d: int, eps: float) -> float {
+    let mut s = 0.0
+    let mut i = 0
+    while i < d {
+        s = s + v[i] * v[i]
+        i = i + 1
+    }
+    return sqrt(s + eps)
+}
+
+pub fn l2_norm_floored(v: array, d: int, floor: float) -> float {
+    let n = l2_norm(v, d)
+    if n < floor { return floor }
+    return n
+}
+
+pub fn l2_normalize_eps(v: array, d: int, eps: float) -> array {
+    let mut n = l2_norm(v, d)
+    if n < eps { n = eps }
+    let mut out = []
+    let mut i = 0
+    while i < d {
+        out = out.push(v[i] / n)
+        i = i + 1
+    }
+    return out
+}

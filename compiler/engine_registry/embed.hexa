@@ -1,0 +1,27 @@
+// HEXA Native Compiler — Wave 1 absorption: engine registry embed
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Source SSOT:
+//   ~/core/nexus/engine/engine_registry.jsonl
+//
+// One EngineEntry per line. Fields:
+//   ts            (i64)         — unix timestamp of spawn
+//   name          (string)
+//   score         (i64)         — auto-spawn baseline 0
+//   auto_spawned  (bool)
+//   bt_parent     (string)
+//   attack_angle  (string)      — comma-separated attack tags
+//   path          (string)
+
+@phase("parse_only")
+pub struct EngineEntry {
+    ts: i64,
+    name: string,
+    score: i64,
+    auto_spawned: bool,
+    bt_parent: string,
+    attack_angle: string,
+    path: string
+}

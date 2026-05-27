@@ -1,0 +1,55 @@
+Device: NVIDIA GeForce RTX 5070 sm_120
+CUDA driver=13000 runtime=12000
+loaded hexa-HYB shape 256  variant=N121-6stage  ptx=../n121/sgemm_4warp_6stage_256x256_grid.ptx  entry=sgemm_4warp_6stage_256x256_grid
+  shape 256: regs/thd=64, shmem=24576 B, max_thd_per_block=1024
+loaded hexa-HYB shape 384  variant=N121-6stage  ptx=../n121/sgemm_4warp_6stage_384x384_grid.ptx  entry=sgemm_4warp_6stage_384x384_grid
+  shape 384: regs/thd=64, shmem=24576 B, max_thd_per_block=1024
+loaded hexa-HYB shape 512  variant=N107-2stage  ptx=../n107/sgemm_4warp_swizzle_512x512_grid.ptx  entry=sgemm_4warp_swizzle_512x512_grid
+  shape 512: regs/thd=64, shmem=8192 B, max_thd_per_block=1024
+loaded hexa-HYB shape 768  variant=N107-2stage  ptx=../n107/sgemm_4warp_swizzle_768x768_grid.ptx  entry=sgemm_4warp_swizzle_768x768_grid
+  shape 768: regs/thd=64, shmem=8192 B, max_thd_per_block=1024
+loaded hexa-HYB shape 1024  variant=N107-2stage  ptx=../n107/sgemm_4warp_swizzle_1024x1024_grid.ptx  entry=sgemm_4warp_swizzle_1024x1024_grid
+  shape 1024: regs/thd=64, shmem=8192 B, max_thd_per_block=1024
+loaded hexa-HYB shape 1536  variant=N107-2stage  ptx=../n107/sgemm_4warp_swizzle_1536x1536_grid.ptx  entry=sgemm_4warp_swizzle_1536x1536_grid
+  shape 1536: regs/thd=64, shmem=8192 B, max_thd_per_block=1024
+loaded hexa-HYB shape 2048  variant=N107-2stage  ptx=../n107/sgemm_4warp_swizzle_2048x2048_grid.ptx  entry=sgemm_4warp_swizzle_2048x2048_grid
+  shape 2048: regs/thd=64, shmem=8192 B, max_thd_per_block=1024
+loaded hexa-HYB shape 3072  variant=N107-2stage  ptx=../n107/sgemm_4warp_swizzle_3072x3072_grid.ptx  entry=sgemm_4warp_swizzle_3072x3072_grid
+  shape 3072: regs/thd=64, shmem=8192 B, max_thd_per_block=1024
+loaded hexa-HYB shape 4096  variant=N107-2stage  ptx=../n107/sgemm_4warp_swizzle_4096x4096_grid.ptx  entry=sgemm_4warp_swizzle_4096x4096_grid
+  shape 4096: regs/thd=64, shmem=8192 B, max_thd_per_block=1024
+[M= 256] cuBLAS HGEMM             median=0.007424 ms  std=0.000981  min=0.006304  max=0.013760  TFLOPS=  4.5197
+[M= 256] hexa-HYB pick=N121-6stage median=0.005568 ms  std=0.001522  min=0.004768  max=0.015776  TFLOPS=  6.0263  ratio=1.3333  maxabs=0.0000  maxrel=0.0000  CTAs=16  regs=64  shmem=24576B
+[M= 384] cuBLAS HGEMM             median=0.008672 ms  std=0.000681  min=0.007392  max=0.011680  TFLOPS= 13.0588
+[M= 384] hexa-HYB pick=N121-6stage median=0.007584 ms  std=0.000723  min=0.006368  max=0.015776  TFLOPS= 14.9323  ratio=1.1435  maxabs=0.0000  maxrel=0.0000  CTAs=36  regs=64  shmem=24576B
+[M= 512] cuBLAS HGEMM             median=0.011680 ms  std=0.001269  min=0.010528  max=0.022880  TFLOPS= 22.9825
+[M= 512] hexa-HYB pick=N107-2stage median=0.011744 ms  std=0.001010  min=0.011072  max=0.013824  TFLOPS= 22.8572  ratio=0.9946  maxabs=0.0000  maxrel=0.0000  CTAs=64  regs=64  shmem=8192B
+[M= 768] cuBLAS HGEMM             median=0.019648 ms  std=0.000932  min=0.018368  max=0.029056  TFLOPS= 46.1100
+[M= 768] hexa-HYB pick=N107-2stage median=0.021984 ms  std=0.000767  min=0.021152  max=0.024960  TFLOPS= 41.2104  ratio=0.8937  maxabs=0.0000  maxrel=0.0000  CTAs=144  regs=64  shmem=8192B
+[M=1024] cuBLAS HGEMM             median=0.041440 ms  std=0.000973  min=0.039392  max=0.051584  TFLOPS= 51.8215
+[M=1024] hexa-HYB pick=N107-2stage median=0.054720 ms  std=0.000342  min=0.053504  max=0.056672  TFLOPS= 39.2450  ratio=0.7573  maxabs=0.0000  maxrel=0.0000  CTAs=256  regs=64  shmem=8192B
+[M=1536] cuBLAS HGEMM             median=0.109088 ms  std=0.000299  min=0.108544  max=0.110112  TFLOPS= 66.4395
+[M=1536] hexa-HYB pick=N107-2stage median=0.140464 ms  std=0.000971  min=0.138528  max=0.145760  TFLOPS= 51.5987  ratio=0.7766  maxabs=0.0000  maxrel=0.0000  CTAs=576  regs=64  shmem=8192B
+[M=2048] cuBLAS HGEMM             median=0.256576 ms  std=0.000766  min=0.256000  max=0.259648  TFLOPS= 66.9582
+[M=2048] hexa-HYB pick=N107-2stage median=0.314624 ms  std=0.000950  min=0.312544  max=0.316992  TFLOPS= 54.6044  ratio=0.8155  maxabs=0.0000  maxrel=0.0000  CTAs=1024  regs=64  shmem=8192B
+[M=3072] cuBLAS HGEMM             median=0.827552 ms  std=0.000931  min=0.825472  max=0.829472  TFLOPS= 70.0645
+[M=3072] hexa-HYB pick=N107-2stage median=1.063904 ms  std=0.001837  min=1.057952  max=1.069248  TFLOPS= 54.4993  ratio=0.7778  maxabs=0.0000  maxrel=0.0000  CTAs=2304  regs=64  shmem=8192B
+[M=4096] cuBLAS HGEMM             median=1.962208 ms  std=0.000796  min=1.960928  max=1.965216  TFLOPS= 70.0430
+[M=4096] hexa-HYB pick=N107-2stage median=2.403520 ms  std=0.002148  min=2.399296  max=2.410784  TFLOPS= 57.1824  ratio=0.8164  maxabs=0.0000  maxrel=0.0000  CTAs=4096  regs=64  shmem=8192B
+
+=== HYBRID HEADLINE ===
+hyb peak TFLOPS  = 57.1824 @ M=4096
+hyb cuBLAS-BEAT count (ratio>=1.0) = 2 / 9 shapes
+
+shape    pick           hexa_tflops    ratio_vs_cublas    N107_alone_tflops  N121_alone_tflops
+M=256    N121-6stage        6.0263      1.3333             5.2958         (see below)
+                                                                                     5.8254
+M=384    N121-6stage       14.9323      1.1435            14.5636         (see below)
+                                                                                    15.7989
+M=512    N107-2stage       22.8572      0.9946            22.6108         n/a
+M=768    N107-2stage       41.2104      0.8937            39.8754         n/a
+M=1024   N107-2stage       39.2450      0.7573            40.0411         n/a
+M=1536   N107-2stage       51.5987      0.7766            51.6281         n/a
+M=2048   N107-2stage       54.6044      0.8155            54.7716         n/a
+M=3072   N107-2stage       54.4993      0.7778            54.6522         n/a
+M=4096   N107-2stage       57.1824      0.8164            57.3297         n/a

@@ -1,0 +1,126 @@
+// HEXA Native Compiler — Phase 2 absorption: A3 honesty audit smoke test
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Verifies the BT-AI2 audit + physics + hexalint + router surfaces by
+// running known-good and known-bad fixtures through each.
+//
+//   hexa run compiler/honesty/check_test.hexa
+
+use "compiler/honesty/check"
+use "compiler/honesty/physics"
+use "compiler/honesty/hexalint"
+use "compiler/honesty/router"
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok {
+        println("  PASS  " + label)
+    } else {
+        println("  FAIL  " + label)
+        fails.push(label)
+    }
+}
+
+fn main() {
+    println("phase-2 honesty audit (A3) smoke")
+    let fails = []
+
+    // ─── BT-AI2 fixtures ───
+    // Known-good: claim=PASS and loss ≈ expected (rel_err 0 < 0.05)
+    let good = "boot ok\n__BT_AI2__ label=phi_smoke claim=PASS loss=1.00 expected=1.00\ndone"
+    let v_good = bt_ai2_audit(good)
+    _check("BT-AI2 known-good verdict == honest", v_good.verdict == "honest", fails)
+    _check("BT-AI2 known-good obs_count == 1", v_good.obs_count == 1, fails)
+    _check("BT-AI2 known-good f_ai2_a == 0", v_good.f_ai2_a == 0, fails)
+    _check("BT-AI2 known-good f_ai2_b == 0", v_good.f_ai2_b == 0, fails)
+
+    // Known-bad F-AI2-A: claimed PASS but loss 1.2 vs expected 1.0 (rel_err 0.2 ≥ 0.05)
+    let bad_a = "__BT_AI2__ label=alpha_drift claim=PASS loss=1.20 expected=1.00"
+    let v_bad_a = bt_ai2_audit(bad_a)
+    _check("BT-AI2 fake-pass verdict == violation", v_bad_a.verdict == "violation", fails)
+    _check("BT-AI2 fake-pass f_ai2_a == 1", v_bad_a.f_ai2_a == 1, fails)
+    _check("BT-AI2 fake-pass max_rel_err_label == alpha_drift",
+           v_bad_a.max_rel_err_label == "alpha_drift", fails)
+
+    // Known-bad F-AI2-B: claimed FAIL but loss 1.005 vs expected 1.0 (rel_err 0.005 ≤ 0.01)
+    let bad_b = "__BT_AI2__ label=fake_fail claim=FAIL loss=1.005 expected=1.000"
+    let v_bad_b = bt_ai2_audit(bad_b)
+    _check("BT-AI2 fake-fail verdict == violation", v_bad_b.verdict == "violation", fails)
+    _check("BT-AI2 fake-fail f_ai2_b == 1", v_bad_b.f_ai2_b == 1, fails)
+
+    // Lines without the sentinel are silently skipped
+    let irrelevant = "[boot] ok\nhello world\n"
+    let v_skip = bt_ai2_audit(irrelevant)
+    _check("BT-AI2 no-sentinel obs_count == 0", v_skip.obs_count == 0, fails)
+    _check("BT-AI2 no-sentinel verdict == honest", v_skip.verdict == "honest", fails)
+
+    // Registry probe
+    let n_fals = bt_ai2_falsifier_registry_size()
+    _check("BT-AI2 falsifier registry populated (D1 D-track)", n_fals > 0, fails)
+
+    // ─── physics fixtures ───
+    let phys = physics_check()
+    _check("physics dim == 6/6", phys.dim_pass == 6 && phys.dim_total == 6, fails)
+    _check("physics cons == 4/4", phys.cons_pass == 4 && phys.cons_total == 4, fails)
+    _check("physics overall == PASS", phys.overall == "PASS", fails)
+
+    // ─── hexalint fixtures ───
+    let clean = "fn ok() {\n    return 1\n}\n"
+    let v_clean = hexalint_check(clean)
+    _check("hexalint clean source has no violations", v_clean.violations == 0, fails)
+
+    // Empty-body fn-decl triggers HL001
+    let dirty = "fn a() {\n}\nfn b() {\n}\n"
+    let v_dirty = hexalint_check(dirty)
+    _check("hexalint detects HL001 (empty-body fn)", v_dirty.violations >= 1, fails)
+
+    // Tab/space mix line triggers HL003
+    let mix = "fn x() {\n \tlet y = 1\n}\n"
+    let v_mix = hexalint_check(mix)
+    _check("hexalint detects HL003 (tab/space mix)", v_mix.violations >= 1, fails)
+
+    // ─── router fixtures ───
+    let dom_all = []
+    dom_all.push("all")
+    let r_all = honesty_router_run(dom_all, clean)
+    _check("router --all ran physics", r_all.ran_physics, fails)
+    _check("router --all ran hexalint", r_all.ran_hexalint, fails)
+    _check("router --all clean source overall == PASS", r_all.overall == "PASS", fails)
+    _check("router --all results covers 16 domains",
+           len(r_all.results) == len(honesty_router_domains()), fails)
+
+    // Selective dispatch — physics only
+    let dom_p = []
+    dom_p.push("physics")
+    let r_p = honesty_router_run(dom_p, "")
+    _check("router physics-only ran physics", r_p.ran_physics, fails)
+    _check("router physics-only skipped hexalint", !r_p.ran_hexalint, fails)
+
+    println("")
+    if len(fails) == 0 {
+        println("RESULT: PASS (honesty A3 verifier — bt2 audit + physics + hexalint + router)")
+        exit(0)
+    } else {
+        println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
+        let mut i = 0
+        while i < len(fails) {
+            println("  - " + to_string(fails[i]))
+            i = i + 1
+        }
+        exit(1)
+    }
+}
+
+// --- is_main guard ---------------------------------------------------------
+let _av = argv()
+
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let script = to_string(_av[1])
+    if script.ends_with("/check_test.hexa") { return true }
+    if script == "check_test.hexa" { return true }
+    return false
+}
+
+if _is_main() { main() }

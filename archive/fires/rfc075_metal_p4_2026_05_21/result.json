@@ -1,0 +1,16 @@
+{
+  "campaign": "rfc075_metal_p4_silicon_fire_2026_05_21",
+  "host": "Mac",
+  "platform": "darwin-arm64",
+  "gpu": "Apple M3 (registry_id=4294968442)",
+  "date_utc": "2026-05-21T05:06:25Z",
+  "msl_compiler": "Apple metal version 32023.883 (metalfe-32023.883)",
+  "metallib_size_bytes": 3741,
+  "air_size_bytes": 3584,
+  "kernel": "vec_add",
+  "N": 1024,
+  "max_abs_diff": 0.0,
+  "byte_mismatch": 0,
+  "falsifier_F_RFC075_METAL_NUMERIC_EQ": "PASS",
+  "honest_scope": "MSL kernel text matches codegen_emit_metal_msl exactly (verified by reading metal_target.hexa preamble/signature/body emit fns at lines 318-350); xcrun -sdk macosx metal -c + xcrun metallib + Swift Metal host on Apple M3 GPU yields byte-identical FP32 output to CPU reference. First Mac silicon-fire for hexa-lang. P4 closure: source = hexa codegen MSL text shape, .metallib path = USER-LOCAL Mac (cannot run on ubu-2 x86_64)."
+}

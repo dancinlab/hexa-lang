@@ -1,0 +1,16 @@
+// tool/probe_sigmoid_f64.hexa — F-SIGMOIDF64-NUMERIC kernel
+//
+// PR #1496 (RFC 055 §13 f64 sigmoid = 0.5 + 0.5·tanh(x/2), overflow-stable
+// via tanh's exp(-|x|) core) — silicon falsifier on ubu-2 RTX 5070
+// driver-JIT. Range [-8,+8) covers both 0/1 saturation tails. Host cmp
+// vs CPU libm `1.0/(1.0+exp(-x))` with tol max_abs_err < 1e-7.
+//
+// Mirror of probe_tanh_f64 (#1595) — same shape, sigmoid math.
+
+@gpu_kernel
+fn sigmoid_f64_probe(a: [f64], c: [f64], n: i64) {
+    let mut tid: i64 = to_i64(gpu_thread_id_x())
+    if tid < n {
+        c[to_i64(tid)] = sigmoid(a[to_i64(tid)])
+    }
+}

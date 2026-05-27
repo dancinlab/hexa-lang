@@ -1,0 +1,35 @@
+// HEXA Native Compiler — Phase 1-extension absorption: status archive index
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Read-only facade over the embedded STATUS_MARKERS table — a frozen
+// listing of ~/core/nexus/state/markers/ as captured at regen time.
+//
+//   pub fn status_archive_list()              -> [StatusMarkerEntry]
+//   pub fn status_archive_lookup(name: string) -> StatusMarkerEntry
+//   pub fn status_archive_count()             -> i64
+//
+// Lookup miss returns a sentinel entry (name == "", mtime_epoch == 0).
+
+use "compiler/status_archive/embed"
+use "compiler/status_archive/embedded.gen"
+
+pub fn status_archive_list() -> [StatusMarkerEntry] {
+    return STATUS_MARKERS
+}
+
+pub fn status_archive_lookup(name: string) -> StatusMarkerEntry {
+    let n = len(STATUS_MARKERS)
+    let mut i = 0
+    while i < n {
+        let e = STATUS_MARKERS[i]
+        if e.name == name { return e }
+        i = i + 1
+    }
+    return StatusMarkerEntry { name: "", mtime_epoch: 0, size_bytes: 0 }
+}
+
+pub fn status_archive_count() -> i64 {
+    return len(STATUS_MARKERS)
+}

@@ -1,0 +1,302 @@
+// annot_sample.hexa — fixture file for tool/hexa_annot smoke test.
+// Contains one example annotation per tool family. Pure data; never executed.
+// Generated for the 28-tool absorption wave 1 (grep MVP only).
+
+// --- hexa-pure-check ---
+@pure
+fn add(a: int, b: int) -> int { return a + b }
+
+// --- hexa-memo-check ---
+@memo(ttl=60)
+fn fib(n: int) -> int { return n }
+
+// --- hexa-catalog ---
+@cli(sub="status")
+@flag(name="json")
+fn cmd_status() { return }
+
+// --- hexa-readme ---
+@readme(title="annot_sample")
+@changelog(version="0.1")
+@api_doc(section="public")
+@example(code="x")
+@deprecated(since="0.2")
+@author(name="hexa-team")
+fn readme_anchor() { return }
+
+// --- hexa-doc ---
+@doc(section="intro", body="overview text")
+fn doc_anchor() { return }
+
+// --- hexa-codegen-hints ---
+@inline
+fn fast_path() { return }
+@no_inline
+fn slow_path() { return }
+@cold
+fn cold_path() { return }
+
+// --- hexa-distill ---
+@distill(parent="big")
+fn distill_anchor() { return }
+@prune(ratio=0.5)
+fn prune_anchor() { return }
+@lora(r=8)
+fn lora_anchor() { return }
+@adapter(name="a1")
+fn adapter_anchor() { return }
+@kd(teacher="t1")
+fn kd_anchor() { return }
+
+// --- hexa-effect-map ---
+@effect(io)
+fn eff_io() { return }
+@capability(name="net")
+fn eff_cap() { return }
+@ai(model="gpt")
+fn eff_ai() { return }
+@prove(stmt="x>0")
+fn eff_prove() { return }
+@refines(parent="P")
+fn eff_refines() { return }
+
+// --- hexa-intent-map ---
+@intent(description: "compute sum")
+fn intent_anchor() { return }
+
+// --- hexa-meta-map ---
+@meta(level=1)
+fn meta_anchor() { return }
+@reflect
+fn reflect_anchor() { return }
+@introspect
+fn introspect_anchor() { return }
+@self_model
+fn self_model_anchor() { return }
+@theory_of_mind
+fn tom_anchor() { return }
+@qualia
+fn qualia_anchor() { return }
+
+// --- hexa-phi-map ---
+@phi(weight=0.5, channel="eeg")
+fn phi_anchor() { return }
+@consciousness(tier="L1")
+fn cons_anchor() { return }
+@channel(id=1, src="eeg")
+fn chan_anchor() { return }
+@iit(metric="phi")
+fn iit_anchor() { return }
+
+// --- hexa-struct-layout ---
+@repr("c")
+@align(8)
+struct Foo {
+    a: int
+    b: int
+}
+@pack
+struct Bar {
+    c: int
+}
+
+// --- hexa-self-aware ---
+@compile_trace
+fn ca_anchor() { return }
+@ast_visible
+fn av_anchor() { return }
+@codegen_mark
+fn cm_anchor() { return }
+@optimizer_hint
+fn oh_anchor() { return }
+@type_debug
+fn td_anchor() { return }
+@self_check
+fn sc_anchor() { return }
+
+// --- hexa-cognitive ---
+@feature(name="edge")
+fn cog_feat() { return }
+@saliency
+fn cog_sal() { return }
+@cochlea
+fn cog_coch() { return }
+@pitch
+fn cog_pitch() { return }
+@episodic
+fn cog_epi() { return }
+@procedural
+fn cog_proc() { return }
+@consolidate
+fn cog_cons() { return }
+@emotion(tag="joy")
+fn cog_emo() { return }
+@appraisal
+fn cog_app() { return }
+@goal(name="g1")
+fn cog_goal() { return }
+@plan
+fn cog_plan() { return }
+
+// --- hexa-freedom ---
+@free_will
+fn fr_will() { return }
+@autonomy
+fn fr_auto() { return }
+@agency
+fn fr_agency() { return }
+@choice
+fn fr_choice() { return }
+@spontaneity
+fn fr_spont() { return }
+@volition
+fn fr_vol() { return }
+@initiative
+fn fr_init() { return }
+@self_determined
+fn fr_sd() { return }
+@degrees_of_freedom
+fn fr_dof() { return }
+@indeterminate
+fn fr_ind() { return }
+
+// --- hexa-infer ---
+@infer(model="m1")
+fn inf_anchor() { return }
+@quantize(bits=8)
+fn inf_q() { return }
+@cache_kv
+fn inf_kv() { return }
+@speculate
+fn inf_spec() { return }
+@batch_continuous
+fn inf_bc() { return }
+
+// --- hexa-learn ---
+@learn(loss="ce")
+fn learn_anchor() { return }
+@curriculum(stage=1)
+fn learn_curr() { return }
+@moe(experts=8)
+fn learn_moe() { return }
+@chinchilla
+fn learn_chin() { return }
+@synthetic_data
+fn learn_syn() { return }
+
+// --- hexa-safety ---
+@interpret
+fn safe_int() { return }
+@align
+fn safe_align() { return }
+@adversarial_robust
+fn safe_ar() { return }
+@deploy_safe
+fn safe_dep() { return }
+@multimodal_safe
+fn safe_mm() { return }
+@model_welfare
+fn safe_mw() { return }
+
+// --- hexa-antivirus ---
+@antivirus
+fn av_anchor() { return }
+@quarantine
+fn av_q() { return }
+@heal
+fn av_heal() { return }
+@integrity
+fn av_int() { return }
+@sandbox
+fn av_sb() { return }
+@cve(id="CVE-2024-1")
+fn av_cve() { return }
+@rce_guard
+fn av_rg() { return }
+@audit
+fn av_aud() { return }
+@canary
+fn av_can() { return }
+@patch
+fn av_patch() { return }
+
+// --- hexa-serve ---
+@ctx_compress
+fn serve_cc() { return }
+@tool_cache
+fn serve_tc() { return }
+@session_migrate
+fn serve_sm() { return }
+@route_agent
+fn serve_ra() { return }
+
+// --- hexa-tenant ---
+@hotswap
+fn tn_hs() { return }
+@tenant_isolate
+fn tn_iso() { return }
+@self_serve_portal
+fn tn_ssp() { return }
+
+// --- hexa-eval-run ---
+@eval(suite="basic")
+fn eval_anchor() { return }
+@cat_adaptive
+fn eval_cat() { return }
+@judge_calibrate
+fn eval_jc() { return }
+@contamination_check
+fn eval_cc() { return }
+
+// --- hexa-n6-list ---
+@n6(identity="hx-001", domain="lang", target="parser", name="parse_expr")
+fn n6_anchor() { return }
+
+// --- hexa-test-list ---
+@test(name="t1")
+fn test_anchor() { return }
+@bench(name="b1")
+fn bench_anchor() { return }
+
+// --- hexa-schema ---
+@schema(type="json")
+struct Msg {
+    field_a: int
+    field_b: string
+}
+
+// --- hexa-law-link ---
+@law(ref="H-001")
+fn law_anchor() { return }
+
+// --- hexa-harness ---
+@harness(phase="prompt")
+fn harness_anchor() { return }
+@gate(rule_id="H-002", action="warn")
+fn harness_gate() { return }
+@dod
+fn harness_dod() { return }
+@verify
+fn harness_verify() { return }
+@pre_tool_guard
+fn harness_ptg() { return }
+@prompt_scan
+fn harness_ps() { return }
+@post
+fn harness_post() { return }
+@lint
+fn harness_lint() { return }
+@commit_check
+fn harness_cc() { return }
+@mistake_log
+fn harness_ml() { return }
+
+// --- hexa-rule ---
+@rule(kind="name", pattern="^fn_.*", forbid="^FN_")
+fn rule_anchor() { return }
+@rule(kind="alias", from="@old", to="@new", discriminator="x")
+fn rule_alias() { return }
+
+// --- hexa-gate-register ---
+@gate(rule="G-001")
+fn gate_anchor() { return }

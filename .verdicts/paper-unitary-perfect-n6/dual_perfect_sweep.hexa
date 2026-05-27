@@ -1,0 +1,53 @@
+// dual_perfect_sweep.hexa — F-DUAL-PERFECT-N6 falsifier driver.
+//
+// Sweep n = 1..N. Report every n that is SIMULTANEOUSLY:
+//   ordinary-perfect : sigma(n)      == 2*n   (Σ_{d|n} d)
+//   unitary-perfect  : sigma_star(n) == 2*n   (Σ_{d||n} d, d||n ⟺ gcd(d,n/d)=1)
+//
+// FINDING claim: the ONLY such n in [1,N] is n=6.
+// Falsifier: ANY n != 6 with BOTH predicates true ⟹ uniqueness FALSIFIED.
+//
+// Pure integer arithmetic; sigma/sigma_star imported verbatim from the
+// stdlib SSOT that backs `hexa verify --expr` (g5 same-source guarantee).
+// N=10000 covers ordinary-perfect {6,28,496,8128} and unitary-perfect
+// {6,60,90} — the first divergence members of BOTH sequences.
+
+use "stdlib/core/math"
+
+fn main() {
+    let N = 10000
+    let n = 1
+    let dual_count = 0
+    let ord_count = 0
+    let uni_count = 0
+    println("F-DUAL-PERFECT-N6 sweep n=1..10000")
+    while n <= N {
+        let s = sigma(n)
+        let ss = sigma_star(n)
+        let two_n = 2 * n
+        if s == two_n {
+            ord_count = ord_count + 1
+            println("  ordinary-perfect: n=" + str(n) + " sigma=" + str(s) + " sigma_star=" + str(ss))
+        }
+        if ss == two_n {
+            uni_count = uni_count + 1
+            println("  unitary-perfect : n=" + str(n) + " sigma=" + str(s) + " sigma_star=" + str(ss))
+        }
+        if s == two_n {
+            if ss == two_n {
+                dual_count = dual_count + 1
+                println("DUAL-PERFECT n=" + str(n) + " sigma=" + str(s) + " sigma_star=" + str(ss))
+            }
+        }
+        n = n + 1
+    }
+    println("---")
+    println("ordinary-perfect count in [1,10000] = " + str(ord_count))
+    println("unitary-perfect  count in [1,10000] = " + str(uni_count))
+    println("DUAL-PERFECT     count in [1,10000] = " + str(dual_count))
+    if dual_count == 1 {
+        println("RESULT: F-DUAL-PERFECT-N6 NOT falsified — unique dual-perfect in [1,10000] = n=6")
+    } else {
+        println("RESULT: F-DUAL-PERFECT-N6 FALSIFIED — dual_count != 1")
+    }
+}

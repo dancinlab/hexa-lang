@@ -1,0 +1,19 @@
+#!hexa strict
+// tests/test_release_ladder.hexa — v1.0 → v2.0 release-cadence harness.
+//
+// Pass criterion: __HEXA_ANTIMATTER_VERIFY_LADDER__ PASS sentinel.
+
+fn main() {
+    let root = env("HEXA_ANTIMATTER_ROOT")
+    let mut p = "verify/release_ladder.hexa"
+    if root.len() > 0 { p = root + "/verify/release_ladder.hexa" }
+
+    let raw = exec("hexa run " + p + " 2>&1")
+    if raw.contains("__HEXA_ANTIMATTER_VERIFY_LADDER__ PASS") {
+        println("test_release_ladder: PASS")
+        return
+    }
+    println("test_release_ladder: FAIL")
+    println(raw.trim())
+    exit(1)
+}

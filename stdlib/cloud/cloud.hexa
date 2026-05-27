@@ -1,0 +1,697 @@
+// stdlib/cloud/cloud.hexa — structured-argv remote dispatch (cycle A).
+//
+// Approach C: a remote command is ALWAYS a structured argv list ([str]),
+// never a shell command string. Each argv element is POSIX single-quoted
+// (_shq) before it is joined and handed to ssh, so the remote login shell
+// word-splits it back into exactly the original argv — no glob expansion,
+// no C-style `/* */` comment mis-parse, no word-splitting.
+//
+// Every shell in the path — the local `/bin/sh -c` that launches ssh and
+// the remote login shell — receives only single-quoted literal tokens, so
+// neither can word-split, glob-expand, or comment-parse a command into
+// anything other than the argv that was passed in.
+//
+// See stdlib/cloud/design.md for the decision ledger and the L145
+// incident this module exists to make unrepresentable.
+
+// ── result shape ─────────────────────────────────────────────────────
+
+struct CloudResult {
+    ok:        int,   // 1 iff the dispatch succeeded (remote exit_code == 0)
+    exit_code: int,   // remote process exit code; -1 if not recoverable
+    pid:       int,   // remote PID from cloud_nohup; 0 otherwise
+    stdout_:   str,   // captured remote stdout+stderr, marker line stripped
+    message:   str,   // human-readable diagnostic
+    logfile:   str    // remote logfile path (cloud_nohup only; "" elsewhere) — caller threads this into `hexa cloud tail <host> <logfile>` so Monitor can attach
+}
+
+fn _cloud_fail(msg: str) -> CloudResult {
+    return CloudResult { ok: 0, exit_code: -1, pid: 0, stdout_: "", message: msg, logfile: "" }
+}
+
+// ── shell quoting ────────────────────────────────────────────────────
+
+// _shq — POSIX-quote one token so a shell treats it as a single literal
+// word. Wrap in single quotes; a literal ' is emitted as the 4-char
+// sequence '\'' (close-quote, escaped quote, reopen-quote).
+fn _shq(s: str) -> str {
+    let mut out = "'"
+    let mut i = 0
+    let n = len(s)
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "'" {
+            out = out + "'\\''"
+        } else {
+            out = out + c
+        }
+        i = i + 1
+    }
+    return out + "'"
+}
+
+// _join_argv — POSIX-quote every element and join with single spaces.
+fn _join_argv(argv: [str]) -> str {
+    let mut out = ""
+    let mut i = 0
+    while i < len(argv) {
+        if i > 0 {
+            out = out + " "
+        }
+        out = out + _shq(argv[i])
+        i = i + 1
+    }
+    return out
+}
+
+// ── ssh transport ───────────────────────────────────────────────────
+
+// SshCapture — the captured remote output plus the LOCAL ssh process exit
+// code. `local_rc` == 255 means the SSH transport itself failed (connection
+// refused / TCP timeout / auth rejection / changed host key) before the
+// remote login shell ever ran — there is no __CLOUD_*__ marker in `body`
+// because no remote command executed. Any other `local_rc` came from a
+// remote command that did run (its real exit code rides the marker).
+struct SshCapture {
+    body:     str,   // remote stdout+stderr (2>&1 merged), incl. any marker
+    local_rc: int    // local ssh process exit code; 255 == transport failure
+}
+
+// _ssh_capture_status — run `remote` on `host` over ssh and return BOTH the
+// captured stdout+stderr AND the local ssh exit code, so callers can tell a
+// TRANSPORT outage (a pod that is alive+billing but unreachable — the
+// vast.ai/RunPod failure mode) apart from a remote command that ran and
+// exited nonzero. `ssh_opts` are extra ssh flags (e.g. ["-p","19241"] for a
+// non-22 port, or ["-o","StrictHostKeyChecking=no"] for an ephemeral host
+// whose key changes each boot). host, every opt and `remote` are POSIX-quoted
+// for the LOCAL shell too, so the local `/bin/sh -c` (exec_capture) sees each
+// as one literal word, exactly as the remote login shell sees the inner-quoted
+// tokens. ConnectTimeout=8 bounds the connect attempt so an unreachable host
+// fails in ~8s with exit 255 instead of hanging on the kernel's default TCP
+// timeout (minutes); BatchMode=yes keeps ssh from blocking on an auth prompt.
+// _ssh_cmd — build the LOCAL ssh command string for `remote` on `host` with
+// extra `ssh_opts`, every token POSIX-quoted for the local `/bin/sh -c`.
+// Shared by the capture path (_ssh_capture_status) and the streaming path
+// (cloud_tail_cmd_opts) so the ssh prefix / quoting stays identical. The
+// keep-alive opts bound a silent transport drop: ServerAliveInterval=15 +
+// CountMax=4 tears a dead/hung connection down in ~60s (so a long `tail -F`
+// over a pod that vanished returns instead of hanging forever).
+fn _ssh_cmd(host: str, ssh_opts: [str], remote: str) -> str {
+    let mut cmd = "ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
+    let mut i = 0
+    while i < len(ssh_opts) {
+        cmd = cmd + " " + _shq(ssh_opts[i])
+        i = i + 1
+    }
+    return cmd + " " + _shq(host) + " " + _shq(remote)
+}
+
+fn _ssh_capture_status(host: str, ssh_opts: [str], remote: str) -> SshCapture {
+    let cmd = _ssh_cmd(host, ssh_opts, remote)
+    // exec_capture returns [stdout, stderr, local_exit_code]; the remote
+    // command merges its own stderr into stdout (2>&1), so element 0
+    // carries everything including the __CLOUD_*__ marker line. Element 2 is
+    // the LOCAL ssh process exit code (255 == transport never connected).
+    let res = exec_capture(cmd)
+    return SshCapture { body: res[0], local_rc: res[2] }
+}
+
+// _ssh_capture — _ssh_capture_status keeping only the captured body, for
+// callers that do not discriminate transport failure (poll / sha256).
+fn _ssh_capture(host: str, ssh_opts: [str], remote: str) -> str {
+    return _ssh_capture_status(host, ssh_opts, remote).body
+}
+
+// _ssh_transport_outage — shared CloudResult for an ssh exit-255 (the local
+// ssh process). The SSH transport never reached the remote shell, so this is
+// NOT a remote command failure. exit_code 255 is preserved (not the generic
+// -1) so the caller / CLI can recognise the outage and fast-fail rather than
+// retry into a wall of billing. The message names the alive≠reachable mode so
+// the operator stops the pod instead of debugging a phantom remote crash.
+fn _ssh_transport_outage(verb: str, body: str) -> CloudResult {
+    return CloudResult { ok: 0, exit_code: 255, pid: 0, stdout_: body,
+        message: verb + ": ssh transport failure (exit 255) — host unreachable (connection refused / timeout / auth / changed host key). The pod may be alive and billing but not accepting SSH — a vast.ai/RunPod transport outage. Stop retrying; verify reachability or tear the pod down.", logfile: "" }
+}
+
+// ── scp transport ───────────────────────────────────────────────────
+
+// _scp_opts — translate cloud's ssh_opts to scp's. ssh uses `-p` for port,
+// scp uses `-P`; every `-o foo=bar` passes through verbatim.
+fn _scp_opts(ssh_opts: [str]) -> [str] {
+    let mut out = []
+    let mut i = 0
+    while i < len(ssh_opts) {
+        let t = ssh_opts[i]
+        if t == "-p" {
+            out.push("-P")
+            i = i + 1
+            if i < len(ssh_opts) {
+                out.push(ssh_opts[i])
+                i = i + 1
+            }
+        } else {
+            out.push(t)
+            i = i + 1
+        }
+    }
+    return out
+}
+
+// _scp_capture — run scp with each opt + src + dst POSIX-quoted for the
+// local /bin/sh -c (exec_capture). scp's own exit code rides on the local
+// process exit, recovered from exec_capture's element 2 — no remote marker
+// needed (scp does not run a shell on the remote side for plain file copy).
+fn _scp_capture(scp_opts: [str], src: str, dst: str) -> CloudResult {
+    let mut cmd = "scp -o BatchMode=yes -o ConnectTimeout=8"
+    let mut i = 0
+    while i < len(scp_opts) {
+        cmd = cmd + " " + _shq(scp_opts[i])
+        i = i + 1
+    }
+    cmd = cmd + " " + _shq(src) + " " + _shq(dst)
+    let res = exec_capture(cmd)
+    let rc = res[2]
+    let mut ok = 0
+    if rc == 0 {
+        ok = 1
+    }
+    return CloudResult { ok: ok, exit_code: rc, pid: 0, stdout_: res[0],
+        message: "scp exit " + to_string(rc), logfile: "" }
+}
+
+// ── marker parsing ───────────────────────────────────────────────────
+
+// _parse_uint_after — read the run of decimal digits immediately after
+// `marker` in `hay`. Returns -1 if the marker is absent or no digit
+// follows it.
+fn _parse_uint_after(hay: str, marker: str) -> int {
+    let at = hay.index_of(marker)
+    if at < 0 {
+        return -1
+    }
+    let mut i = at + len(marker)
+    let n = len(hay)
+    let mut val = 0
+    let mut got = 0
+    while i < n {
+        let cc = char_code(hay.substring(i, i + 1))
+        if cc >= 48 && cc <= 57 {
+            val = val * 10 + (cc - 48)
+            got = 1
+            i = i + 1
+        } else {
+            i = n
+        }
+    }
+    if got == 0 {
+        return -1
+    }
+    return val
+}
+
+// _strip_marker — return everything in `out` before the line that carries
+// `marker`. If the marker sits on the first line, returns "".
+fn _strip_marker(out: str, marker: str) -> str {
+    let at = out.index_of(marker)
+    if at < 0 {
+        return out
+    }
+    let mut cut = 0
+    let mut j = at
+    while j > 0 {
+        if out.substring(j - 1, j) == "\n" {
+            cut = j - 1
+            j = 0
+        } else {
+            j = j - 1
+        }
+    }
+    return out.substring(0, cut)
+}
+
+// ── escape-hatch lint ────────────────────────────────────────────────
+
+// cloud_lint_argv — return a list of human-readable warnings for argv
+// elements that look like an authoring mistake rather than a real
+// argument: a C-style /* */ comment fragment, or an embedded newline.
+// Quoting makes them harmless to the shell, but they are almost always
+// an error — the L145 incident was a `/* note */` line meant as a
+// comment that the remote shell glob-expanded into argv. An empty list
+// means the argv is clean.
+fn cloud_lint_argv(argv: [str]) -> [str] {
+    let mut warns = []
+    let mut i = 0
+    while i < len(argv) {
+        let a = argv[i]
+        let m = len(a)
+        let mut hit = 0
+        // A C-style comment fragment: an element that opens with /*,
+        // closes with */, or carries an inline "/* " or " */". A plain
+        // glob path (/tmp/*, dir/*) matches none of these.
+        if m >= 2 {
+            if a.substring(0, 2) == "/*" {
+                hit = 1
+            }
+            if a.substring(m - 2, m) == "*/" {
+                hit = 1
+            }
+        }
+        if a.index_of("/* ") >= 0 {
+            hit = 1
+        }
+        if a.index_of(" */") >= 0 {
+            hit = 1
+        }
+        if hit == 1 {
+            warns.push("argv[" + str(i) + "] looks like a C-style comment fragment — shell comments are `#`; this is almost certainly a misplaced note, not an argument: " + a)
+        }
+        if a.index_of("\n") >= 0 {
+            warns.push("argv[" + str(i) + "] contains a newline — split it into separate argv elements")
+        }
+        i = i + 1
+    }
+    return warns
+}
+
+// ── dispatch ─────────────────────────────────────────────────────────
+
+// cloud_run_wall_opts — like cloud_run_opts but caps the remote command's
+// wall-clock time. When `max_wall` > 0 the joined argv is wrapped with the
+// POSIX `timeout <max_wall> ...` utility on the remote side, so a hung or
+// over-long remote process is killed instead of blocking the dispatcher
+// forever. `timeout` exits 124 on expiry; the existing `__CLOUD_RC__=$?`
+// marker captures that naturally, so a wall-exceeded run surfaces as
+// exit_code == 124 with a "max-wall N exceeded" message. A `max_wall` of 0
+// (or negative) applies no cap and is identical to cloud_run_opts.
+// See archive/patches/cloud-cli-operational-improvements-anima-2026-05-20.md P2.
+fn cloud_run_wall_opts(host: str, ssh_opts: [str], argv: [str], max_wall: int) -> CloudResult {
+    if len(argv) == 0 {
+        return _cloud_fail("cloud_run: empty argv")
+    }
+    let warns = cloud_lint_argv(argv)
+    if len(warns) > 0 {
+        return _cloud_fail("cloud_run: refused — " + warns[0])
+    }
+    let mut prefix = ""
+    if max_wall > 0 {
+        // `timeout <sec> <argv...>` — SIGTERM at <sec>, exit 124 on expiry.
+        prefix = "timeout " + str(max_wall) + " "
+    }
+    let remote = prefix + _join_argv(argv) + " 2>&1; echo __CLOUD_RC__=$?"
+    let cap = _ssh_capture_status(host, ssh_opts, remote)
+    let out = cap.body
+    let rc = _parse_uint_after(out, "__CLOUD_RC__=")
+    let body = _strip_marker(out, "__CLOUD_RC__=")
+    if rc < 0 {
+        if cap.local_rc == 255 {
+            return _ssh_transport_outage("cloud_run", body)
+        }
+        return CloudResult { ok: 0, exit_code: -1, pid: 0, stdout_: body,
+            message: "cloud_run: no exit-code marker — ssh transport failure or remote shell died", logfile: "" }
+    }
+    if max_wall > 0 && rc == 124 {
+        return CloudResult { ok: 0, exit_code: 124, pid: 0, stdout_: body,
+            message: "max-wall " + str(max_wall) + "s exceeded — remote command killed (exit 124)", logfile: "" }
+    }
+    let mut ok = 0
+    if rc == 0 {
+        ok = 1
+    }
+    return CloudResult { ok: ok, exit_code: rc, pid: 0, stdout_: body,
+        message: "remote exit " + str(rc), logfile: "" }
+}
+
+// cloud_run_opts — run `argv` on remote `host` over ssh with extra ssh
+// flags `ssh_opts`, wait for it, and return its captured output + exit
+// code. `host` is an ssh destination (`user@host`, or a ~/.ssh/config
+// Host alias). Use `ssh_opts` for a non-22 port or a changing host key —
+// an ephemeral RunPod / vast.ai pod cannot rely on a static config alias.
+fn cloud_run_opts(host: str, ssh_opts: [str], argv: [str]) -> CloudResult {
+    return cloud_run_wall_opts(host, ssh_opts, argv, 0)
+}
+
+// cloud_run — cloud_run_opts with no extra ssh flags (host reachable on
+// port 22 with a known host key, e.g. a ~/.ssh/config alias).
+fn cloud_run(host: str, argv: [str]) -> CloudResult {
+    return cloud_run_opts(host, [], argv)
+}
+
+// cloud_exec_opts — shell-mode dispatch (NOT structured-argv). `cmd_str`
+// is sent to the remote login shell AS-IS — pipes / globs / redirects /
+// shell variables all parse on the remote side. Use for ad-hoc 1-liners
+// (`cd /work && nvidia-smi | head -5`); use `cloud_run_opts` for program
+// dispatch where the L145-class shell-string corruption must be impossible.
+// Caller owns the quoting inside `cmd_str`; `cloud cloud-guard` policy
+// allows `exec` as the legal fast-path replacing raw ssh shell-outs.
+fn cloud_exec_opts(host: str, ssh_opts: [str], cmd_str: str) -> CloudResult {
+    if len(cmd_str) == 0 {
+        return _cloud_fail("cloud_exec: empty cmd_str")
+    }
+    let remote = cmd_str + " 2>&1; echo __CLOUD_RC__=$?"
+    let cap = _ssh_capture_status(host, ssh_opts, remote)
+    let out = cap.body
+    let rc = _parse_uint_after(out, "__CLOUD_RC__=")
+    let body = _strip_marker(out, "__CLOUD_RC__=")
+    if rc < 0 {
+        if cap.local_rc == 255 {
+            return _ssh_transport_outage("cloud_exec", body)
+        }
+        return CloudResult { ok: 0, exit_code: -1, pid: 0, stdout_: body,
+            message: "cloud_exec: no exit-code marker — ssh transport failure or remote shell died", logfile: "" }
+    }
+    let mut ok = 0
+    if rc == 0 {
+        ok = 1
+    }
+    return CloudResult { ok: ok, exit_code: rc, pid: 0, stdout_: body,
+        message: "remote exit " + str(rc), logfile: "" }
+}
+
+// cloud_exec — cloud_exec_opts with no extra ssh flags.
+fn cloud_exec(host: str, cmd_str: str) -> CloudResult {
+    return cloud_exec_opts(host, [], cmd_str)
+}
+
+// cloud_nohup_opts — start `argv` on `host` detached (nohup, output to
+// `logfile`) over ssh with extra `ssh_opts`, and return immediately with
+// the remote PID. Poll liveness later with cloud_poll / cloud_poll_opts.
+fn cloud_nohup_opts(host: str, ssh_opts: [str], argv: [str], logfile: str) -> CloudResult {
+    if len(argv) == 0 {
+        return _cloud_fail("cloud_nohup: empty argv")
+    }
+    let warns = cloud_lint_argv(argv)
+    if len(warns) > 0 {
+        return _cloud_fail("cloud_nohup: refused — " + warns[0])
+    }
+    let remote = "nohup " + _join_argv(argv) + " > " + _shq(logfile) + " 2>&1 & echo __CLOUD_PID__=$!"
+    let cap = _ssh_capture_status(host, ssh_opts, remote)
+    let out = cap.body
+    let pid = _parse_uint_after(out, "__CLOUD_PID__=")
+    let body = _strip_marker(out, "__CLOUD_PID__=")
+    if pid < 0 {
+        if cap.local_rc == 255 {
+            return _ssh_transport_outage("cloud_nohup", body)
+        }
+        return CloudResult { ok: 0, exit_code: -1, pid: 0, stdout_: body,
+            message: "cloud_nohup: no pid marker — ssh transport failure or nohup did not start", logfile: logfile }
+    }
+    return CloudResult { ok: 1, exit_code: 0, pid: pid, stdout_: body,
+        message: "started; remote pid " + str(pid) + " · log " + logfile, logfile: logfile }
+}
+
+// cloud_nohup — cloud_nohup_opts with no extra ssh flags.
+fn cloud_nohup(host: str, argv: [str], logfile: str) -> CloudResult {
+    return cloud_nohup_opts(host, [], argv, logfile)
+}
+
+// cloud_poll_opts — return 1 if remote process `pid` is still alive on
+// `host` (ssh with extra `ssh_opts`), else 0. `kill -0` probes the
+// process without signalling it.
+fn cloud_poll_opts(host: str, ssh_opts: [str], pid: int) -> int {
+    if pid <= 0 {
+        return 0
+    }
+    let remote = "kill -0 " + str(pid) + " 2>/dev/null && echo __CLOUD_ALIVE__ || echo __CLOUD_DEAD__"
+    let out = _ssh_capture(host, ssh_opts, remote)
+    if out.index_of("__CLOUD_ALIVE__") >= 0 {
+        return 1
+    }
+    return 0
+}
+
+// cloud_poll — cloud_poll_opts with no extra ssh flags.
+fn cloud_poll(host: str, pid: int) -> int {
+    return cloud_poll_opts(host, [], pid)
+}
+
+// cloud_tail_cmd_opts — build the LOCAL command that live-streams a remote
+// `logfile` over ssh, so a harness (Monitor) can attach to a remote job's
+// progress without polling. The remote side is a `tail -F | sed -E -un`
+// pipeline:
+//   - `tail -F -n +1` replays the file from the top then follows new lines
+//     (so a job that already finished is handled idempotently);
+//   - `sed -E -un` runs a terminal-FIRST program: on a line matching the
+//     `until_re` ERE it prints then `q`uits (closing the pipe → `tail -F`
+//     gets SIGPIPE → ssh returns: a clean single completion, never an
+//     unbounded stream); otherwise it prints the line when it matches
+//     `grep_re` (empty = every line). The terminal line always surfaces
+//     even if it would fail the grep filter.
+//   - `-u` makes sed line-buffered/unbuffered. This matters: the stock awk
+//     on a pod is mawk, which block-buffers its STDIN when the upstream pipe
+//     stays open (a following `tail -F`) and so never processes lines until
+//     EOF — and `stdbuf` cannot fix it (mawk uses its own read buffer). sed
+//     `-u` reads + emits line by line, so each log line reaches the local
+//     end immediately.
+// The caller runs the returned string through `exec_replace` (execvp, NOT
+// exec_capture / exec_stream) so the process inherits this stdout fd and
+// forwards each line live with zero buffering. `grep_re` / `until_re` are
+// sed ERE addresses — a literal `/` in a pattern must be backslash-escaped
+// (markers like "JOB DONE|Traceback" need no escaping).
+//
+// Exit-code contract (callers — Monitor / micro-exp / wrapping skill):
+//   0   — `until_re` matched: clean end (JOB DONE / OOMKilled / Traceback / …
+//         per the caller-supplied terminal pattern). The pipe closed because
+//         sed printed-and-quit, so ssh returned 0 cleanly.
+//   255 — ssh transport drop: the local ssh exited 255 (host vanished, key
+//         changed mid-stream, kernel TCP reset, ServerAliveCountMax tripped).
+//         The pod may be alive + billing but unreachable — verify before retry.
+//   other non-zero — sed/tail pipeline failed mid-stream (logfile removed
+//         remotely, mawk surfaced after all, disk full, …). Treat the stream
+//         as truncated; the job may still be running.
+// Callers distinguish "real success" from "stream broke before terminal
+// marker" by combining exit code with captured tail stdout — a 0 exit with
+// `JOB DONE` in the body is the only unambiguous SUCCESS signal.
+fn cloud_tail_cmd_opts(host: str, ssh_opts: [str], logfile: str, grep_re: str, until_re: str) -> str {
+    // Terminal-first sed program: `/until/{p;q}` precedes the filter so a
+    // terminal line both surfaces and stops the stream. The whole program is
+    // _shq-quoted for the remote shell (it has no single quotes of its own).
+    let mut prog = ""
+    if len(until_re) > 0 {
+        prog = "/" + until_re + "/{p;q}; "
+    }
+    if len(grep_re) > 0 {
+        prog = prog + "/" + grep_re + "/p"
+    } else {
+        prog = prog + "p"
+    }
+    let remote = "tail -F -n +1 " + _shq(logfile) + " 2>/dev/null | sed -E -un " + _shq(prog)
+    return _ssh_cmd(host, ssh_opts, remote)
+}
+
+// cloud_tail_cmd — cloud_tail_cmd_opts with no extra ssh flags.
+fn cloud_tail_cmd(host: str, logfile: str, grep_re: str, until_re: str) -> str {
+    return cloud_tail_cmd_opts(host, [], logfile, grep_re, until_re)
+}
+
+// ── file transfer ────────────────────────────────────────────────────
+//
+// Local-side post-transfer verify (F6, inbox 2026-05-24):
+// scp's raw exit code is necessary but not sufficient for success — scp
+// can return 0 on the local side while the actual transfer silently
+// dropped (remote source missing under some scp protocol modes, pod
+// terminated mid-handshake, zero-byte truncation, etc.). The wrapper
+// therefore probes `file_exists(local) && file_size(local) > 0` after
+// the scp call and demotes ok=1 to ok=0 with a distinct exit_code marker
+// when the local side fails to materialise.
+//
+// Reserved exit_code markers (caller-discriminated, additive on top of
+// scp's native 1-99 range so legacy callers still see "nonzero == fail"):
+//   100  remote_file_missing      (scp exit 0 but local not present)
+//   101  zero_byte_transfer       (local exists but size == 0)
+//   102  local_source_missing     (copy-to pre-check: local source absent)
+// 103-104 reserved for optional remote-size verify (not yet wired).
+// See archive/patches/hexa-cloud-copy-from-verify-local-2026-05-24.md.
+
+// cloud_copy_to_opts — upload `local_path` to `host:remote_path` over scp
+// with extra ssh flags `ssh_opts` (translated to scp's `-P` for port).
+// Returns CloudResult.ok==1 iff scp exited 0 AND local source existed.
+// Pre-checks local source presence so the caller gets a distinct exit
+// code (102) instead of an opaque scp "No such file or directory".
+fn cloud_copy_to_opts(host: str, ssh_opts: [str], local_path: str, remote_path: str) -> CloudResult {
+    if !file_exists(local_path) {
+        return CloudResult { ok: 0, exit_code: 102, pid: 0, stdout_: "",
+            message: "local_source_missing · " + local_path, logfile: "" }
+    }
+    return _scp_capture(_scp_opts(ssh_opts), local_path, host + ":" + remote_path)
+}
+
+// cloud_copy_to — cloud_copy_to_opts with no extra ssh flags.
+fn cloud_copy_to(host: str, local_path: str, remote_path: str) -> CloudResult {
+    return cloud_copy_to_opts(host, [], local_path, remote_path)
+}
+
+// cloud_copy_from_opts — download `host:remote_path` to local `local_path`.
+// Returns CloudResult.ok==1 iff scp exited 0 AND the local file
+// materialised with size > 0. F6 fix (2026-05-24): scp's exit-0 alone
+// is not enough — verify the local file actually arrived.
+fn cloud_copy_from_opts(host: str, ssh_opts: [str], remote_path: str, local_path: str) -> CloudResult {
+    let r = _scp_capture(_scp_opts(ssh_opts), host + ":" + remote_path, local_path)
+    if r.ok != 1 {
+        // scp itself failed (transport / auth / refused) — surface as-is.
+        return r
+    }
+    // scp returned 0; verify the local file actually exists and is non-empty.
+    if !file_exists(local_path) {
+        return CloudResult { ok: 0, exit_code: 100, pid: 0, stdout_: r.stdout_,
+            message: "remote_file_missing_or_scp_silent_fail · " + local_path, logfile: "" }
+    }
+    let sz = file_size(local_path)
+    if sz <= 0 {
+        return CloudResult { ok: 0, exit_code: 101, pid: 0, stdout_: r.stdout_,
+            message: "zero_byte_transfer · " + local_path, logfile: "" }
+    }
+    return CloudResult { ok: 1, exit_code: 0, pid: 0, stdout_: r.stdout_,
+        message: "scp exit 0 · verified " + to_string(sz) + " bytes", logfile: "" }
+}
+
+// cloud_copy_from — cloud_copy_from_opts with no extra ssh flags.
+fn cloud_copy_from(host: str, remote_path: str, local_path: str) -> CloudResult {
+    return cloud_copy_from_opts(host, [], remote_path, local_path)
+}
+
+// ── resumable / recursive transfer (R3 · P5, anima inbox 2026-05) ─────
+
+// _ssh_e_arg — build rsync's `-e` remote-shell string from cloud's
+// ssh_opts. rsync word-splits this string on whitespace (not a full
+// shell), and every cloud ssh_opt (-p N, -o key=val) is a space-free
+// token, so a plain space-join is faithful. BatchMode=yes keeps rsync
+// from hanging on an auth prompt, mirroring _ssh_capture.
+fn _ssh_e_arg(ssh_opts: [str]) -> str {
+    let mut e = "ssh -o BatchMode=yes -o ConnectTimeout=8"
+    let mut i = 0
+    while i < len(ssh_opts) {
+        e = e + " " + ssh_opts[i]
+        i = i + 1
+    }
+    return e
+}
+
+// cloud_copy_from_resume_opts — download host:remote_path to local_path
+// with rsync `--partial --append-verify`, so an interrupted large-file
+// transfer (a checkpoint pull cut off by a pod reboot) RESUMES from the
+// kept partial instead of restarting from byte 0. Same local-side verify
+// as cloud_copy_from_opts: rsync exit 0 alone is not enough — the file
+// must materialise non-empty. Requires rsync >= 3.0 on both ends
+// (--append-verify); rsync's own error surfaces on older builds.
+fn cloud_copy_from_resume_opts(host: str, ssh_opts: [str], remote_path: str, local_path: str) -> CloudResult {
+    let e = _ssh_e_arg(ssh_opts)
+    let mut cmd = "rsync --partial --append-verify --timeout=20 -e " + _shq(e)
+    cmd = cmd + " " + _shq(host + ":" + remote_path) + " " + _shq(local_path)
+    let res = exec_capture(cmd)
+    let rc = res[2]
+    if rc != 0 {
+        return CloudResult { ok: 0, exit_code: rc, pid: 0, stdout_: res[0],
+            message: "rsync exit " + to_string(rc) + " (resume) · " + local_path, logfile: "" }
+    }
+    if !file_exists(local_path) {
+        return CloudResult { ok: 0, exit_code: 100, pid: 0, stdout_: res[0],
+            message: "remote_file_missing_or_rsync_silent_fail · " + local_path, logfile: "" }
+    }
+    let sz = file_size(local_path)
+    if sz <= 0 {
+        return CloudResult { ok: 0, exit_code: 101, pid: 0, stdout_: res[0],
+            message: "zero_byte_transfer · " + local_path, logfile: "" }
+    }
+    return CloudResult { ok: 1, exit_code: 0, pid: 0, stdout_: res[0],
+        message: "rsync exit 0 (resume) · verified " + to_string(sz) + " bytes", logfile: "" }
+}
+
+// cloud_copy_from_resume — cloud_copy_from_resume_opts with no extra flags.
+fn cloud_copy_from_resume(host: str, remote_path: str, local_path: str) -> CloudResult {
+    return cloud_copy_from_resume_opts(host, [], remote_path, local_path)
+}
+
+// cloud_copy_to_recursive_opts — upload a local DIRECTORY tree to
+// host:remote_path with `scp -r`. Pre-checks the local source exists
+// (exit 102 otherwise), then prepends "-r" to the scp opts so the whole
+// subtree copies. Single-file copy-to stays on cloud_copy_to_opts.
+fn cloud_copy_to_recursive_opts(host: str, ssh_opts: [str], local_path: str, remote_path: str) -> CloudResult {
+    if !file_exists(local_path) {
+        return CloudResult { ok: 0, exit_code: 102, pid: 0, stdout_: "",
+            message: "local_source_missing · " + local_path, logfile: "" }
+    }
+    let mut ropts = ["-r"]
+    let scp_opts = _scp_opts(ssh_opts)
+    let mut i = 0
+    while i < len(scp_opts) {
+        ropts.push(scp_opts[i])
+        i = i + 1
+    }
+    return _scp_capture(ropts, local_path, host + ":" + remote_path)
+}
+
+// cloud_copy_to_recursive — cloud_copy_to_recursive_opts with no extra flags.
+fn cloud_copy_to_recursive(host: str, local_path: str, remote_path: str) -> CloudResult {
+    return cloud_copy_to_recursive_opts(host, [], local_path, remote_path)
+}
+
+// ── sha256 transfer verify (P6, anima inbox 2026-05-20) ──────────────
+
+// _first_field — the first whitespace-delimited token of `s` (leading
+// whitespace skipped). `sha256sum`/`shasum` print "<hex>  <path>", so this
+// pulls the bare hex digest. "" when `s` has no non-whitespace token.
+fn _first_field(s: str) -> str {
+    let n = len(s)
+    let mut i = 0
+    let mut started = 0
+    let mut start = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        let ws = c == " " || c == "\n" || c == "\t" || c == "\r"
+        if started == 0 {
+            if ws == false {
+                started = 1
+                start = i
+            }
+        } else {
+            if ws == true {
+                return s.substring(start, i)
+            }
+        }
+        i = i + 1
+    }
+    if started == 1 {
+        return s.substring(start, n)
+    }
+    return ""
+}
+
+// _sha256_local — sha256 hex of a local file. Tries `sha256sum` (Linux)
+// then `shasum -a 256` (macOS). "" when neither tool is present or the
+// file is unreadable.
+fn _sha256_local(path: str) -> str {
+    let r = exec_capture("sha256sum " + _shq(path) + " 2>/dev/null")
+    let s = _first_field(r[0])
+    if len(s) == 64 {
+        return s
+    }
+    let r2 = exec_capture("shasum -a 256 " + _shq(path) + " 2>/dev/null")
+    return _first_field(r2[0])
+}
+
+// _sha256_remote — sha256 hex of a file on `host` over ssh (sha256sum,
+// falling back to shasum -a 256). "" when unavailable.
+fn _sha256_remote(host: str, ssh_opts: [str], path: str) -> str {
+    let q = _shq(path)
+    let body = _ssh_capture(host, ssh_opts, "sha256sum " + q + " 2>/dev/null || shasum -a 256 " + q + " 2>/dev/null")
+    return _first_field(body)
+}
+
+// cloud_verify_sha — compare the sha256 of a local file against its remote
+// twin (post-transfer integrity check, P6). exit_code: 0 verified · 103
+// mismatch · 104 a digest was unavailable (no sha tool either side). The
+// digests are 64-hex; anything else is treated as unavailable.
+fn cloud_verify_sha(host: str, ssh_opts: [str], remote_path: str, local_path: str) -> CloudResult {
+    let lsha = _sha256_local(local_path)
+    let rsha = _sha256_remote(host, ssh_opts, remote_path)
+    if len(lsha) != 64 || len(rsha) != 64 {
+        return CloudResult { ok: 0, exit_code: 104, pid: 0, stdout_: "",
+            message: "sha_unavailable (no sha256sum/shasum one or both sides)", logfile: "" }
+    }
+    if lsha != rsha {
+        return CloudResult { ok: 0, exit_code: 103, pid: 0, stdout_: "",
+            message: "sha_mismatch · local=" + lsha.substring(0, 12) + "… remote=" + rsha.substring(0, 12) + "…", logfile: "" }
+    }
+    return CloudResult { ok: 1, exit_code: 0, pid: 0, stdout_: "",
+        message: "sha256 verified (" + lsha.substring(0, 12) + "…)", logfile: "" }
+}

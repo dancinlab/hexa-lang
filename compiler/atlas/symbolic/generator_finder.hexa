@@ -1,0 +1,127 @@
+// compiler/atlas/symbolic/generator_finder.hexa — minimal generating-set kernel
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Hexa-native port of generator_finder.py from archive-TECS-L/.shared/calc
+// (commit 4ee05c39; TECS-L absorption Wave 3 — manifest §Backlog #15).
+//
+// Closed-form kernel only (the argparse / progress-print / dict plumbing
+// is NOT ported — g1 deterministic-dispatch + anti-bloat):
+//   gf_binary_ops(a,b)       the 8 ops {+, −, r−, ×, ÷, r÷, ^, r^}
+//                            with overflow/domain guards (safe_pow)
+//   gf_depth1_reaches        does a 2-element generator set reach a target
+//                            value within a relative threshold at depth 1?
+//   gf_depth1_match_count    how many of N targets a generator pair covers
+//
+// Based on H-CX-476: {ζ(3), ln 2} generates 5/9 at depth 1.
+//   ζ(3)=1.2020569031595942, ln 2=0.6931471805599453
+//   ζ(3) − ln 2 ≈ 0.5089  ;  ln 2 / ζ(3) ≈ 0.5767  ;
+//   exact closed hit used below: ln2 − (ζ3 − ln2) family — the engine
+//   exposes the reachability predicate, callers supply target catalogs.
+//
+// Zero external dependency (g5). Cross-link: manifest §C / §Backlog #15.
+
+fn _abs_f(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+// safe power: guards overflow / domain (mirror safe_pow). Returns
+// (ok, value); ok=false ⟹ skip this op.
+pub struct GfPow { ok: bool, value: float }
+
+pub fn gf_safe_pow(a: float, b: float) -> GfPow {
+    if a == 0.0 && b <= 0.0 { return GfPow { ok: false, value: 0.0 } }
+    if _abs_f(b) > 20.0 { return GfPow { ok: false, value: 0.0 } }
+    // negative base with non-integer exponent → skip (complex)
+    if a < 0.0 {
+        let bi = to_float(to_int(b))
+        if bi != b { return GfPow { ok: false, value: 0.0 } }
+    }
+    let r = pow(a, b)
+    if _abs_f(r) > 1.0e15 { return GfPow { ok: false, value: 0.0 } }
+    return GfPow { ok: true, value: r }
+}
+
+// the binary-op result set for (a,b) — flat float list.
+// order: a+b, a−b, b−a, a·b, a/b, b/a, a^b, b^a  (guarded entries skipped).
+pub fn gf_binary_ops(a: float, b: float) -> [float] {
+    let mut out: [float] = []
+    out.push(a + b)
+    out.push(a - b)
+    out.push(b - a)
+    out.push(a * b)
+    if b != 0.0 { out.push(a / b) }
+    if a != 0.0 { out.push(b / a) }
+    let p1 = gf_safe_pow(a, b)
+    if p1.ok { out.push(p1.value) }
+    let p2 = gf_safe_pow(b, a)
+    if p2.ok { out.push(p2.value) }
+    return out
+}
+
+// depth-1 reachable set from a 2-element generator {g0,g1}:
+// the generators themselves + all binary ops over the ordered pairs
+// (g0,g0),(g0,g1),(g1,g0),(g1,g1).
+pub fn gf_depth1_reachable(g0: float, g1: float) -> [float] {
+    let mut out: [float] = []
+    out.push(g0)
+    out.push(g1)
+    let gs: [float] = [g0, g1]
+    let mut i = 0
+    while i < 2 {
+        let mut j = 0
+        while j < 2 {
+            let ops = gf_binary_ops(gs[i], gs[j])
+            let mut t = 0
+            while t < len(ops) {
+                out.push(ops[t])
+                t = t + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// is `target` reachable from {g0,g1} at depth 1 within relative `thr`?
+pub fn gf_depth1_reaches(g0: float, g1: float, target: float, thr: float) -> bool {
+    let rs = gf_depth1_reachable(g0, g1)
+    let mut i = 0
+    while i < len(rs) {
+        let err = _abs_f(rs[i] - target)
+        let mut rel = err
+        if target != 0.0 { rel = err / _abs_f(target) }
+        if rel <= thr { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// how many of `targets` the pair {g0,g1} covers at depth 1.
+pub fn gf_depth1_match_count(g0: float, g1: float, targets: [float], thr: float) -> int {
+    let mut cnt = 0
+    let mut i = 0
+    while i < len(targets) {
+        if gf_depth1_reaches(g0, g1, targets[i], thr) { cnt = cnt + 1 }
+        i = i + 1
+    }
+    return cnt
+}
+
+// best relative error over the depth-1 reachable set (for ranking pairs).
+pub fn gf_depth1_best_relerr(g0: float, g1: float, target: float) -> float {
+    let rs = gf_depth1_reachable(g0, g1)
+    let mut best = 1.0e18
+    let mut i = 0
+    while i < len(rs) {
+        let err = _abs_f(rs[i] - target)
+        let mut rel = err
+        if target != 0.0 { rel = err / _abs_f(target) }
+        if rel < best { best = rel }
+        i = i + 1
+    }
+    return best
+}

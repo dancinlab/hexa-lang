@@ -1,0 +1,108 @@
+// HEXA Native Compiler — shared CLI argv helpers for absorbed verbs
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Background. `hexa <verb>` dispatches via `cmd_run("compiler/<x>/<entry>.hexa",
+// ab_args)` (self/main.hexa::dispatch_absorbed). Most absorbed modules
+// are libraries (only `pub fn`s); without a `fn main()` they parse and
+// exit silently with rc 0. This file provides the minimal helper set
+// each module's `fn main()` shim can `use` to extract `--flag VALUE`
+// and positional arguments without duplicating ~25 LOC per module.
+//
+// Conventions.
+//   - `argv()` returns [interp_bin, script_path, ...user_args]
+//     (see interpreter.c host_args / hexa_main_argv). User args start
+//     at index 2 — cli_args() does that slice once.
+//   - All parsers return strings. Numeric coercion is left to the
+//     caller via cli_parse_int(); empty input falls through to the
+//     supplied default so missing-arg paths are non-fatal.
+//   - English diagnostics, no logging, no I/O — keep this file pure.
+
+// cli_args — argv() minus [interp_bin, script_path]. The result is
+// what `hexa <verb> [args]` would expose to a shell script.
+pub fn cli_args() -> array {
+    let av = argv()
+    let mut out: array = []
+    let mut i: i64 = 2
+    while i < len(av) {
+        out.push(to_string(av[i]))
+        i = i + 1
+    }
+    return out
+}
+
+// cli_find_flag — return the value following the first occurrence of
+// `name` (e.g. "--seed"). If absent or trailing, returns `def`.
+pub fn cli_find_flag(args: array, name: string, def: string) -> string {
+    let mut i: i64 = 0
+    while i < len(args) {
+        if to_string(args[i]) == name && (i + 1) < len(args) {
+            return to_string(args[i + 1])
+        }
+        i = i + 1
+    }
+    return def
+}
+
+// cli_has_flag — true if `name` appears in the args (bare flag form
+// like `--fresh` or `--quiet`). Independent of cli_find_flag.
+pub fn cli_has_flag(args: array, name: string) -> bool {
+    let mut i: i64 = 0
+    while i < len(args) {
+        if to_string(args[i]) == name { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// cli_positional — return the `idx`-th non-flag argument (skipping
+// `--name VALUE` pairs). Bare flags consume themselves only; long
+// flag VALUE consumes two slots.
+pub fn cli_positional(args: array, idx: i64, def: string) -> string {
+    let mut i: i64 = 0
+    let mut found: i64 = 0
+    while i < len(args) {
+        let cur = to_string(args[i])
+        if len(cur) >= 2 && cur.starts_with("--") {
+            // bare-flag heuristic: consume 1 if next is another flag
+            // or we are at end; otherwise treat as `--name VALUE` pair.
+            if (i + 1) >= len(args) {
+                i = i + 1
+            } else {
+                let nxt = to_string(args[i + 1])
+                if len(nxt) >= 2 && nxt.starts_with("--") {
+                    i = i + 1
+                } else {
+                    i = i + 2
+                }
+            }
+        } else {
+            if found == idx { return cur }
+            found = found + 1
+            i = i + 1
+        }
+    }
+    return def
+}
+
+// cli_parse_int — best-effort string → i64 with default fallback. The
+// hexa builtin parse_int returns 0 on failure (and silently for empty);
+// we distinguish "" (use def) from a parseable integer. Negative ints
+// supported via parse_int.
+pub fn cli_parse_int(s: string, def: i64) -> i64 {
+    if len(s) == 0 { return def }
+    let mut n: i64 = def
+    try { n = to_int(s) } catch e { n = def }
+    return n
+}
+
+// cli_parse_bool — accept the usual truthy/falsy forms; default-fallback
+// on anything else. Empty string returns the default.
+pub fn cli_parse_bool(s: string, def: bool) -> bool {
+    if len(s) == 0 { return def }
+    let t = s.to_lower()
+    if t == "1" || t == "true" || t == "yes" || t == "on"  { return true }
+    if t == "0" || t == "false" || t == "no"  || t == "off" { return false }
+    return def
+}

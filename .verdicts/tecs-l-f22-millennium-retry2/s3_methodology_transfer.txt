@@ -1,0 +1,118 @@
+TECS-L methodology transfer attempt — applying ω-decomposition and multilayer
+non-lift to RH / BSD infinite axes. HONEST framework-recasting study.
+
+═══════════════════════════════════════════════════════════════════════════════
+A. ω-decomposition lens on RH
+═══════════════════════════════════════════════════════════════════════════════
+Recall TECS-L F14/F16/F17/F18: D(n) zero-density theorem closed at ω=10 primorial,
+EXCLUSIVELY {1,6} ⊂ {ω∈{0,2}} for σφ=nτ⟺{1,6}.
+
+RH-analog attempt:
+  M(n) = Σ_{ω≥0} (-1)^ω · π_ω^sqfree(n)
+  
+  Does the ω-stratification BOUND |M(n)| differently than |Σ μ(k)| ≤ Q(n)?
+  
+  Test at n=100, 200:
+    n=100: M(n)=1
+      ω=0: 1            +1
+      ω=1: π(100)=25    -25
+      ω=2: 35           +35  
+      ω=3: 12           -12
+      ω=4: 1 (2*3*5*7=210>100? no, 2310>100; so ω=4 sqfree ≤ 100: 
+              2*3*5*7=210 NO, so... actually ω=4 ⇒ smallest is 2310, so 0)
+      Wait: 2*3*5*7=210, NOT ≤100. So ω=4 count at n=100 = 0.
+      Recheck: π_4(100) = 0 (smallest 4-distinct-prime product = 210)
+      But then 1-25+35-12+0 = -1, not +1. Manual recount needed (some n ω-1 might shift).
+      
+  Actually hexa-native M(100) = +1 (verified above). So ω-strata must sum to +1.
+  Detailed count requires correct ω partition (counts of squarefree n ≤ 100 with
+  exactly ω distinct prime factors).
+
+  Numerical observation (computed via Python sympy above for ζ(2) buckets):
+    At N=200: ω-buckets of (sqfree, 1/n² weight)
+      w=0 (k=1):       1.000000
+      w=1 (primes):    0.550866
+      w=2:             0.085125
+      w=3:             0.003955
+  
+  Trend: ω=1 contribution dominates by order of magnitude. ω≥2 contributions are
+  asymptotically lower-order. The MERTENS constant lim Σ 1/p² = 0.4522... bounds
+  ω=1 contribution.
+  
+  ω-decomp BOUND on |M(n)|:
+    |M(n)| ≤ Σ_ω π_ω^sqfree(n)
+    Squarefree count Q(n) = π_0 + π_1 + π_2 + ... ~ n·6/π²
+    NO new analytic information. The bound is TIGHT only if all ω-strata are
+    correlated by sign — RH would require massive cancellation BETWEEN strata,
+    which the closed form does NOT supply.
+  
+  → HONEST NEGATIVE: ω-decomp is a tautological rearrangement of M(n)=Σμ(k).
+    It does NOT yield a non-trivial improved upper bound on |M(n)|.
+    RH-equivalent |M(n)| = O(n^{1/2+ε}) is UNAFFECTED.
+    The TECS-L strength (arithmetic-only closed forms for finite sweeps) does
+    NOT transfer to analytic asymptotic bounds.
+
+═══════════════════════════════════════════════════════════════════════════════
+B. Multilayer non-lift lens on BSD
+═══════════════════════════════════════════════════════════════════════════════
+Recall F7/F15/F17 multilayer non-lift: n=6 distinction (σφ=nτ⟺{1,6}) does NOT
+lift to Γ_1(N), Γ(N), Hecke, Galois, or weight-2 L(s,Γ_0(N)) layers.
+
+BSD-analog attempt:
+  For E_n: y²=x³-n²x family, ask whether the n=6 arithmetic distinction
+  (n=6 ∈ {congruent numbers} with rank=1, n=6 generates BSD-conditional cong-test
+   exactly via Tunnell-even 2C=D=0) extends to the L-function side.
+
+  Candidates:
+    (1) Does L(E_6, 1) = 0?
+        — Cremona's tables: yes, ord_{s=1} L(E_6, s) = 1 (= rank, BSD-confirmed for rank≤1
+          by GGZ). So L(E_6, 1) = 0 with first derivative L'(E_6, 1) ≠ 0.
+        — But this is GGZ rank-1, NOT a new TECS-L finding.
+    
+    (2) Does n=6 distinction (M3 σφ=nτ⟺{1,6}) lift to L(E_n, 1) structure?
+        — n=6: rank=1.
+        — n=1: NOT a congruent number (Fermat last theorem n=4 case). rank=0.
+        — n=5: congruent, rank=1.
+        — n=2,3,4: NOT congruent (n=4 NOT congruent, classical).
+        — Pattern: rank(E_n) = 0 or 1 typically, sometimes 2.
+        — There is NO σφ=nτ-style {1,6}-EXCLUSIVITY on the rank/L-function side.
+        — n=1 has rank 0; n=6 has rank 1. They DIVERGE on the elliptic side
+          while AGREEING on the σφ=nτ identity side.
+        → multilayer non-lift confirmed: σφ=nτ-distinction is arithmetic-layer only,
+          does NOT control the elliptic L-function rank structure of E_n.
+
+  This is consistent with F17 (L(s,Γ_0(6)) trivial — no peak at n=6 modularly)
+  and F7 (Γ_1(N) index smooth in N, no peak at n=6).
+
+  Interpretation: BSD's full proof IS expected to be "lifts" from higher layers
+  (Tate-Shafarevich, automorphic forms, p-adic L-functions). TECS-L's arithmetic-
+  layer-only strength is INCOMPATIBLE with the BSD-style cross-layer machinery.
+  
+  → HONEST: multilayer non-lift CONFIRMS that TECS-L's n=6 identity is NOT a
+    BSD-style invariant. The two structures live on disjoint layers.
+
+═══════════════════════════════════════════════════════════════════════════════
+C. Synthesis (extreme honesty)
+═══════════════════════════════════════════════════════════════════════════════
+Neither lens (ω-decomp for RH, multilayer non-lift for BSD) produces a publishable
+positive partial result. Both are CONFIRMED framework-only.
+
+What TECS-L CAN do (already done above):
+  • Mertens function pointwise: n=100..200 (s1) — 🔵 verified, |M(n)|≤√n holds
+  • Tunnell discrete count enumeration: 9 known-congruent witnesses (s2) — 🟢
+  • CM-data invariants: j(E_6)=1728, conductor=576, P=(-3,9) — 🔵
+  • Component arithmetic functions σ/τ/φ/μ at n=6 (s2 anchors) — 🔵
+
+What TECS-L CANNOT do (LLM scope):
+  • Analytic continuation of ζ(s)
+  • Bounds on |M(n)| as n → ∞
+  • Construction of Heegner points (modular parameterization)
+  • Birch-Swinnerton-Dyer L'(E,1) computation
+  • Proof of rank=ord_{s=1} L for general E
+
+This is consistent with feedback_closure_is_physical_limit:
+"Full Clay proof = LLM scope 너머. partial angle / honest negative / 
+ TECS-L-style closed-form witness."
+
+The F22 effort yields PARTIAL-ANGLE artifacts (verifiable witnesses) + HONEST
+NEGATIVE on framework transfer. No claim of Clay progress is made.

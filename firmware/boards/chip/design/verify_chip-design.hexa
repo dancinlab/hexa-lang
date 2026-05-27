@@ -1,0 +1,52 @@
+#!hexa strict
+// design/verify_chip-design.hexa — Group B design methodology root verb.
+//
+// Top-level design spec covers RTL-down methodology. The 12 hexa-* design
+// branches under design/ map to σ(6)=12 BOM lattice slots projected onto
+// design topology choices (digital / PIM / 3D / superconducting / etc.).
+//
+// Falsifiers:
+//   F-CHIP-D-1: σ(6)=12 design branches absent ⇒ topology lattice broken.
+//   F-CHIP-D-2: τ(6)=4 design stages (RTL/synth/P&R/sign-off) not invariant.
+
+fn _has_dir(p: str) -> bool {
+    let r = exec("[ -d \"" + p + "\" ] && echo y || echo n").trim()
+    return r == "y"
+}
+
+fn main() {
+    let root = exec("pwd").trim()
+    let branches = ["hexa-1-digital", "hexa-2-pim", "hexa-3d-stack",
+                    "hexa-dna-molecular", "hexa-field-effect", "hexa-neuromorphic",
+                    "hexa-photon-topo", "hexa-photonic", "hexa-quantum-hybrid",
+                    "hexa-superconducting", "hexa-topo-anyon", "hexa-wafer"]
+    if branches.len() != 12 {
+        println("[design] FAIL — branch list count " + str(branches.len()) + " ≠ σ(6)=12")
+        exit(1)
+    }
+    let mut present = 0
+    let mut missing: [str] = []
+    for b in branches {
+        if _has_dir(root + "/design/" + b) {
+            present = present + 1
+        } else {
+            missing = missing + [b]
+        }
+    }
+    println("[design] design branches σ(6)=12 lattice — " + str(present) + "/12 present")
+    if missing.len() > 0 {
+        println("[design] missing branches:")
+        for m in missing { println("  - " + m) }
+    }
+    let stages = ["RTL", "synth", "P&R", "sign-off"]
+    if stages.len() != 4 {
+        println("[design] FAIL — design-stage count ≠ τ(6)=4")
+        exit(1)
+    }
+    println("[design] τ(6)=4 design stages: " + stages[0] + " · " + stages[1] + " · " + stages[2] + " · " + stages[3] + " PASS")
+    if present < 12 {
+        println("[design] WARN — design branch coverage incomplete (F-CHIP-D-1 risk)")
+        exit(1)
+    }
+    println("[design] σ(6)=12 + τ(6)=4 design lattice intact PASS")
+}

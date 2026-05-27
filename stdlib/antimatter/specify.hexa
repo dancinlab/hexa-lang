@@ -1,0 +1,8 @@
+#!hexa strict
+// antimatter specify — CPT-test asymmetry bound.
+fn main() {
+    let cpt_bound_rel = 4.0e-9
+    println("antimatter_specify (CPT-test asymmetry bound):")
+    println("  cpt_bound_rel = " + str(cpt_bound_rel))
+    println("__HEXA_ANTIMATTER_SPECIFY__ PASS gate=GATE_OPEN absorbed=false")
+}

@@ -1,0 +1,43 @@
+#!hexa strict
+// tests/test_nanobot_actuation.hexa — NANOBOT F-NB-4 C0b actuation MVP smoke test.
+//
+// Pass criterion (stub-skip path, no HEXA_BIO_WITH_NUMPY):
+//   __HEXA_BIO_NANOBOT__ PASS sentinel present after --actuation dispatch.
+//
+// Pass criterion (full path, HEXA_BIO_WITH_NUMPY=1):
+//   __NANOBOT_MVP_RESULT__ PASS sentinel present (6/6 deterministic
+//   criteria from nanobot_actuation_simulation.py).
+//
+// Cost: $0 (pure stdlib python3, ~1s wall-clock for default cycles=10000).
+
+fn main() {
+    let root = env("HEXA_BIO_ROOT")
+    let mut p = "nanobot/module/nanobot.hexa"
+    if root.len() > 0 { p = root + "/nanobot/module/nanobot.hexa" }
+
+    let raw = exec("hexa run " + p + " --actuation --cycles 1000 2>&1")
+
+    let module_ok = raw.contains("__HEXA_BIO_NANOBOT__ PASS")
+
+    let with_numpy = env("HEXA_BIO_WITH_NUMPY")
+    if with_numpy == "1" {
+        // Full actuation path: require BOTH sentinels.
+        let actuation_ok = raw.contains("__NANOBOT_MVP_RESULT__ PASS")
+        if module_ok && actuation_ok {
+            println("test_nanobot_actuation: PASS (full actuation path, 6/6)")
+            return
+        }
+        println("test_nanobot_actuation: FAIL (full actuation path)")
+        println(raw.trim())
+        exit(1)
+    }
+
+    // Stub-skip path: only HEXA module sentinel required.
+    if module_ok {
+        println("test_nanobot_actuation: PASS (stub-skip path; set HEXA_BIO_WITH_NUMPY=1 for full actuation)")
+        return
+    }
+    println("test_nanobot_actuation: FAIL")
+    println(raw.trim())
+    exit(1)
+}

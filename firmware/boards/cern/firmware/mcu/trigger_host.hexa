@@ -1,0 +1,230 @@
+#!hexa strict
+// hexa-cern/firmware/mcu/trigger_host.hexa — B3 trigger-card host controller.
+//
+// **First stdlib/hal consumer in hexa-cern** (cross-repo demonstration of
+// stdlib/hal v1.11.x reach: SKY130 / TSMC N5 / Samsung SF3P AI-native paper
+// backends + 6 vendor HW-12 lattice + GPGPU σ=12 lattice + AI-native
+// dispatch primitive). hexa-cern is a benchtop particle-accelerator
+// project (3-pillar HEXA-MINI-ACCEL + HEXA-PACCEL + HEXA-CLASSIC-ACCEL);
+// this controller wires the B3 trigger card on stm32h7 silicon.
+//
+// Pattern: hexa-chip/firmware/mcu/{npu_host,corner_seq,thermal_coord}.hexa
+// (Phase D iter 4 — same imports, same handle-pool / lifecycle / falsifier
+// re-check shape).
+//
+// stdlib/hal imports (paper-tier; resolved by hexa-lang module loader):
+//   stdlib/hal/core   — Cortex-M7 SCB+DWT (stm32h7 backend)
+//   stdlib/hal/gpio   — interlock pins + LED + DAC/ADC chip-selects
+//   stdlib/hal/intr   — Cortex-M7 NVIC (trigger ISR + IWDG)
+//   stdlib/hal/timer  — TIM1/TIM2 4 Hz tick + 1 µs trigger delay
+//   stdlib/hal/adc    — 16-bit ADC1 chain (interlock readout)
+//   stdlib/hal/dac    — 16-bit DAC1 chain (HV / coil / pump / valve)
+//   stdlib/hal/uart   — USART3 host comms
+//   stdlib/hal/pwm    — TIM3 cooling-fan PWM
+//
+// This is paper-tier import ledger only — actual `use stdlib/hal/...`
+// statements require the hexa-lang import resolver path (hx install
+// hexa-lang first; cross-repo SSOT). Paper-spec invariant per
+// stdlib/hal canon §7.5 + roadmap §F.6 / §G.5: FFI is downstream.
+//
+// Constants mirror firmware/sim/{timing_chain, dac_chain, adc_chain,
+// control_loop}.hexa for cross-doc audit consistency.
+
+let MODULE_NAME = "hexa_cern_trigger_host"
+let CONSUMER    = "hexa-cern"
+let HAL_VERSION = "v1.11.0"        // stdlib/hal at time of authoring
+let MCU_VENDOR  = "stm32h7"        // stdlib/hal/backend/stm32h7
+let MCU_PART    = "STM32H743ZIT6"  // matches Rust skeleton firmware/mcu
+
+// ── n=6 invariant lattice consumed from stdlib/hal (canon §2 mirror) ──
+
+let SIGMA = 12   // σ-slot count (gpio/i2c/spi/uart/adc/dac/pwm/timer/intr/dma/rtc/core)
+let PHI   = 2    // sim/HW dichotomy
+let TAU   = 4    // configure / start / serve / report
+
+// ── B3 trigger card constants (mirror sim layer) ─────────────────────
+
+let TICK_RATE_HZ_BP   = 400         // 4.00 Hz × 100 (basis-point form)
+let D_TRIG_NS         = 1000        // 1 µs trigger delay
+let GATE_WIDTH_NS     = 200         // 200 ns gate
+let GATE_TOL_NS       = 5           // ±5 ns gate jitter
+
+// ── DAC chain (HV / coil / pump / valve) ──────────────────────────────
+
+let DAC_N_CHANNELS    = 4           // HV / coil / pump / valve
+let DAC_N_BITS        = 16          // 16-bit DAC
+let DAC_VFS_MV        = 20000       // 20 V full-scale (±10 V)
+let DAC_UPDATE_HZ     = 1000000     // 1 MS/s
+let DAC_SETTLE_NS     = 5000        // 5 µs settling
+
+// ── ADC chain (interlock + plant feedback) ────────────────────────────
+
+let ADC_N_CHANNELS    = 4           // 4 interlock readouts
+let ADC_N_BITS        = 16
+
+// ── PI control loop tuning (mirror Rust src/pi.rs) ────────────────────
+
+let PI_KP_BP          = 1500        // 1.5 V/V (basis-point: 1500 / 1000)
+let PI_KI_BP          = 200         // 0.2 V/(V·ms)
+let PI_DT_US          = 100         // 100 µs control loop period
+let PI_SAT_MV         = 9500        // 9.5 V saturation (10 V full-scale - 0.5 V margin)
+
+// ── interlock pins (canon B6 + B7 pattern) ────────────────────────────
+
+let N_INTERLOCKS      = 4           // laser_ok / vacuum_ok / hv_ok / radiation_ok
+let INTERLOCK_OK_ALL  = 15          // 0b1111 — all interlocks OK
+
+// ── falsifiers (cross-repo audit; paper-only) ─────────────────────────
+// F-CERN-1: stdlib/hal version not pinned → cross-repo drift
+// F-CERN-2: σ-slot consumed > 12 → embedded peripheral lattice broken
+// F-CERN-3: 100 µs PI loop period → ADC update rate constraint (Nyquist-safe)
+// F-CERN-4: gate jitter > 5 ns → B3 timing-spec violation
+
+// ── boot-time invariant re-check ──────────────────────────────────────
+
+fn boot_check() -> bool {
+    if SIGMA != 12 { return false }
+    if PHI != 2 { return false }
+    if TAU != 4 { return false }
+    if DAC_N_CHANNELS != 4 { return false }
+    if N_INTERLOCKS != 4 { return false }
+    if PI_DT_US <= 0 || PI_DT_US > 1000 { return false }
+    return true
+}
+
+// ── stdlib/hal handle-pool (J₂/n = 4 default; per stdlib/hal/calc_handle_pool) ──
+// Each peripheral export gives back a handle; we draw from 8 σ-slots so handle
+// count ≤ 4 × 8 = 32 (well within stm32h7 NVIC capacity).
+
+let HANDLE_POOL_CEILING = 32
+
+// ── lifecycle stages (τ=4 mirror) ────────────────────────────────────
+
+let STAGE_CONFIGURE = 0
+let STAGE_START     = 1
+let STAGE_SERVE     = 2
+let STAGE_REPORT    = 3
+
+// ── stub controller surface ──────────────────────────────────────────
+
+// Configure all peripherals via stdlib/hal at boot. Returns 0 on
+// success, negative on validation failure. STUB: real impl calls
+// stdlib/hal/{gpio, intr, timer, adc, dac, uart, pwm}::configure
+// per backend (stm32h7).
+fn trigger_host_configure() -> int {
+    if boot_check() == false { return -1 }
+    // STUB: real impl
+    //   1. core::init_clocks(480 MHz, FPU on)
+    //   2. gpio::config_pin(LED, PE3, push-pull, low)
+    //   3. gpio::config_pin(INTERLOCK_*, PA0..PA3, input, pull-up)
+    //   4. timer::configure(TIM1, TICK_RATE_HZ_BP / 100)
+    //   5. timer::configure(TIM2, 1 µs tick)
+    //   6. dac::configure(DAC1_CH1, 16-bit, ±10V, 1 MS/s)
+    //   7. adc::configure(ADC1, 16-bit, 4ch DMA-stream)
+    //   8. uart::configure(USART3, 115200, 8N1)
+    //   9. pwm::configure(TIM3_CH1, 25 kHz cooling-fan)
+    //  10. intr::configure(EXTI0..3 for interlock, TIM1_UP for tick,
+    //                       TIM2_CC for trigger fire, IWDG for watchdog)
+    return 0
+}
+
+// Arm the trigger after interlock-OK proof is witnessed.
+// Returns true if armed; false on interlock fail or stage drift.
+fn trigger_host_arm(interlock_word: int) -> bool {
+    if interlock_word != INTERLOCK_OK_ALL { return false }
+    // STUB: real impl writes TIM2 CCMR1 to enable output compare
+    //       on the next tick rising edge.
+    return true
+}
+
+// Fire the trigger (TIM2 hardware-counted 1 µs after tick).
+fn trigger_host_fire() -> int {
+    // STUB: real impl pulses GATE pin HIGH for GATE_WIDTH_NS ± GATE_TOL_NS.
+    return GATE_WIDTH_NS
+}
+
+// Read the 4 interlock bits as a single 4-bit word.
+fn trigger_host_read_interlocks() -> int {
+    // STUB: real impl reads GPIO PA0..PA3 → packed nibble.
+    return INTERLOCK_OK_ALL  // optimistic stub
+}
+
+// Step the PI control loop (mirrors Rust src/pi.rs::step).
+// Returns DAC code in 0..(2^16-1) range.
+fn trigger_host_pi_step(setpoint_mv: int, measured_mv: int) -> int {
+    let error_mv = setpoint_mv - measured_mv
+    let p_term_mv = (error_mv * PI_KP_BP) / 1000
+    if p_term_mv > PI_SAT_MV { return DAC_VFS_MV / 2 + (PI_SAT_MV * 65535) / DAC_VFS_MV }
+    if p_term_mv < -PI_SAT_MV { return DAC_VFS_MV / 2 - (PI_SAT_MV * 65535) / DAC_VFS_MV }
+    let dac_code = DAC_VFS_MV / 2 + (p_term_mv * 65535) / DAC_VFS_MV
+    return dac_code
+}
+
+// Write a 16-bit DAC code to a channel via stdlib/hal/dac.
+fn trigger_host_dac_write(ch: int, code: int) -> bool {
+    if ch < 0 || ch >= DAC_N_CHANNELS { return false }
+    if code < 0 || code > 65535 { return false }
+    // STUB: real impl calls dac::write(ch, code) on stm32h7 DAC1.
+    return true
+}
+
+// Read a 16-bit ADC sample from a channel via stdlib/hal/adc.
+fn trigger_host_adc_read(ch: int) -> int {
+    if ch < 0 || ch >= ADC_N_CHANNELS { return -1 }
+    // STUB: real impl waits for ADC DMA-stream completion + reads channel.
+    return 32768   // mid-scale stub
+}
+
+// Module metadata.
+fn trigger_host_meta() -> [str] {
+    return [MODULE_NAME, CONSUMER, HAL_VERSION, MCU_VENDOR, MCU_PART]
+}
+
+fn trigger_host_invariant_sigma() -> int { return SIGMA }
+fn trigger_host_invariant_phi() -> int { return PHI }
+fn trigger_host_invariant_tau() -> int { return TAU }
+
+// ── bench / sim main ────────────────────────────────────────────────
+
+fn main() {
+    println("[hexa-cern trigger_host] firmware/mcu/trigger_host.hexa — B3 trigger-card stdlib/hal consumer")
+    println("  consumer: " + CONSUMER + " (cross-repo)")
+    println("  stdlib/hal: " + HAL_VERSION + " (HW-12 lattice + GPGPU σ=12 + AI-native axis + 3-PDK ai_native)")
+    println("  MCU: " + MCU_PART + " (vendor backend stdlib/hal/backend/" + MCU_VENDOR + ")")
+    println("  invariants: σ=" + str(SIGMA) + " φ=" + str(PHI) + " τ=" + str(TAU))
+    println("  σ-slots consumed: 8 (gpio/intr/timer/adc/dac/uart/pwm/core)")
+    println("  B3 timing: tick " + str(TICK_RATE_HZ_BP / 100) + " Hz · trigger delay " + str(D_TRIG_NS) + " ns · gate " + str(GATE_WIDTH_NS) + "±" + str(GATE_TOL_NS) + " ns")
+    println("  DAC: " + str(DAC_N_CHANNELS) + " ch × " + str(DAC_N_BITS) + "b @ " + str(DAC_UPDATE_HZ) + " S/s, ±" + str(DAC_VFS_MV/2) + " mV FS")
+    println("  ADC: " + str(ADC_N_CHANNELS) + " ch × " + str(ADC_N_BITS) + "b")
+    println("  PI: kp=" + str(PI_KP_BP) + "bp ki=" + str(PI_KI_BP) + "bp dt=" + str(PI_DT_US) + "µs sat=" + str(PI_SAT_MV) + "mV")
+    println("  interlocks: " + str(N_INTERLOCKS) + " (laser_ok / vacuum_ok / hv_ok / radiation_ok)")
+
+    let ok = boot_check()
+    if ok == false {
+        println("[hexa-cern trigger_host] boot_check FAIL")
+        exit(1)
+    }
+    let cfg = trigger_host_configure()
+    if cfg < 0 {
+        println("[hexa-cern trigger_host] configure FAIL " + str(cfg))
+        exit(1)
+    }
+    let il = trigger_host_read_interlocks()
+    let armed = trigger_host_arm(il)
+    if armed == false {
+        println("[hexa-cern trigger_host] arm FAIL — interlock=" + str(il))
+        exit(1)
+    }
+    let gate = trigger_host_fire()
+    let dac = trigger_host_pi_step(5000, 4500)   // setpoint 5V, measured 4.5V
+    let dwr = trigger_host_dac_write(0, dac)
+    let adc_v = trigger_host_adc_read(0)
+    println("  gate width = " + str(gate) + " ns")
+    println("  PI step (5V → 4.5V) → dac code " + str(dac))
+    println("  dac_write(ch=0) " + (if dwr { "OK" } else { "FAIL" }))
+    println("  adc_read(ch=0) = " + str(adc_v))
+    println("__HEXA_CERN_TRIGGER_HOST__ PASS")
+    println("  cross-repo audit: stdlib/hal " + HAL_VERSION + " consumed by hexa-cern (1st external sister-project consumer)")
+}
+
+main()

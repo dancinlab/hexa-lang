@@ -1,0 +1,488 @@
+// stdlib/runtime/math.hexa — RUNTIME.md step-2 cycle 2.
+//
+// Hexa-source replacements for `hxlcl_cos`/_sin/_exp/_log/_fmod
+// (self/runtime.c cycle 59). Taylor / range-reduction approximations.
+// NOT bit-exact with libm. aprime_cc never calls them in compile-
+// then-exit (flame/NN code paths linked but unreachable from the
+// compiler hot loop).
+//
+// Cost model: HexaVal wrap is `hexa_float` (8-byte allocation in
+// TAG_FLOAT slot) + return unwrap is `HX_FLOAT`. Two ~5ns each
+// surrounding a ~100ns Taylor body. Acceptable for any caller.
+
+// Step 3 cycle 7 — square root (Newton-Raphson). Replaces libm sqrt()
+// in self/runtime_core.c::hexa_sqrt. Convergence is quadratic; the 40-
+// iter cap is conservative for double precision (typical convergence
+// at ~6 iterations). Negative input clamps to 0.0 (matches libm sqrt's
+// domain-error → NaN replaced with conservative 0 for hexa user code).
+pub fn rt_sqrt(x: float) -> float {
+    if x <= 0.0 { return 0.0 }
+    let mut g = x * 0.5
+    if g < 1.0 { g = 1.0 }
+    let mut i = 0
+    while i < 40 {
+        let next = 0.5 * (g + x / g)
+        if next == g { return next }
+        g = next
+        i = i + 1
+    }
+    return g
+}
+
+// Step 3 cycle 8 — tan (sin/cos). Pole near x = π/2 + kπ saturates to a
+// large finite value (1e308 ≈ DBL_MAX) instead of libm's HUGE_VAL/inf —
+// hexa user code at this entry rarely hits the pole exactly.
+pub fn rt_tan(x: float) -> float {
+    let c = rt_cos(x)
+    if c == 0.0 { return 1e308 }
+    return rt_sin(x) / c
+}
+
+// Step 3 cycle 8 — log base 2 via natural log / ln(2).
+pub fn rt_log2(x: float) -> float {
+    let LN2 = 0.6931471805599453
+    return rt_log(x) / LN2
+}
+
+// Step 3 cycle 9 — log base 10 via natural log / ln(10).
+pub fn rt_log10(x: float) -> float {
+    let LN10 = 2.302585092994046
+    return rt_log(x) / LN10
+}
+
+// Step 3 cycle 14 — log gamma via Stirling series with shift.
+// Stirling: log Γ(z) ≈ (z-0.5)log(z) - z + 0.5*log(2π) + Σ B_{2k}/(2k(2k-1)z^{2k-1})
+// = (z-0.5)log(z) - z + 0.918938533204673 +
+//   1/(12z) - 1/(360z^3) + 1/(1260z^5) - 1/(1680z^7) + 1/(1188z^9)
+// Series accurate for z >= 7; shift up via Γ(z)=Γ(z+1)/z so we always
+// evaluate at z' >= 7. Returns log of the resulting Γ.
+// Reflection (Γ(z)Γ(1-z)=π/sin(πz)) handles z<=0; conservative 1e308
+// at non-positive integer poles.
+pub fn rt_lgamma(z: float) -> float {
+    let LOG_SQRT_2PI = 0.9189385332046727
+    let PI = 3.141592653589793
+    if z <= 0.0 {
+        let zi = z as int
+        if (zi as float) == z { return 1e308 }
+        let sinpz = rt_sin(PI * z)
+        if sinpz == 0.0 { return 1e308 }
+        let abss = if sinpz < 0.0 { 0.0 - sinpz } else { sinpz }
+        return rt_log(PI / abss) - rt_lgamma(1.0 - z)
+    }
+    let mut x = z
+    let mut shift = 0.0
+    while x < 7.0 {
+        shift = shift + rt_log(x)
+        x = x + 1.0
+    }
+    let inv = 1.0 / x
+    let inv2 = inv * inv
+    let series = inv * (1.0 / 12.0)
+                - inv * inv2 * (1.0 / 360.0)
+                + inv * inv2 * inv2 * (1.0 / 1260.0)
+                - inv * inv2 * inv2 * inv2 * (1.0 / 1680.0)
+                + inv * inv2 * inv2 * inv2 * inv2 * (1.0 / 1188.0)
+    return (x - 0.5) * rt_log(x) - x + LOG_SQRT_2PI + series - shift
+}
+
+// Step 3 cycle 19 — naive matmul (row-major, cblas-style M/K/N order).
+//   C[i*N + j] = Σ_p A[i*K + p] * B[p*N + j]
+// Bounds-guarded inner accumulator (skips out-of-range index instead of
+// faulting) matches the C body's defensive contract.
+pub fn rt_matmul(a: [float], b: [float], m: int, k: int, n: int) -> [float] {
+    let mut out: [float] = []
+    if m < 0 { return out }
+    if k < 0 { return out }
+    if n < 0 { return out }
+    let alen = len(a)
+    let blen = len(b)
+    let mut i = 0
+    while i < m {
+        let mut j = 0
+        while j < n {
+            let mut s = 0.0
+            let mut p = 0
+            while p < k {
+                let ai = i * k + p
+                let bi = p * n + j
+                if ai < alen {
+                    if bi < blen {
+                        s = s + a[ai] * b[bi]
+                    }
+                }
+                p = p + 1
+            }
+            out = out.push(s)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// Step 3 cycle 18 — naive matrix-vector multiply (row-major).
+//   out[r] = Σ_c w[r*cols + c] * x[c]   for r ∈ [0, rows)
+// Hot path; C wrapper retains the rows/cols int extraction.
+pub fn rt_matvec(w: [float], x: [float], rows: int, cols: int) -> [float] {
+    let mut out: [float] = []
+    if rows <= 0 { return out }
+    if cols <= 0 { return out }
+    let mut r = 0
+    while r < rows {
+        let mut acc = 0.0
+        let mut c = 0
+        let base = r * cols
+        while c < cols {
+            acc = acc + w[base + c] * x[c]
+            c = c + 1
+        }
+        out = out.push(acc)
+        r = r + 1
+    }
+    return out
+}
+
+// Step 3 cycle 17 — SiLU (Swish-1) activation: x / (1 + exp(-x))
+pub fn rt_silu(a: [float]) -> [float] {
+    let mut out: [float] = []
+    let n = len(a)
+    let mut i = 0
+    while i < n {
+        let x = a[i]
+        out = out.push(x / (1.0 + rt_exp(0.0 - x)))
+        i = i + 1
+    }
+    return out
+}
+
+// Step 3 cycle 17 — GELU (tanh approximation):
+//   0.5 * x * (1 + tanh(sqrt(2/π) * (x + 0.044715 * x³)))
+pub fn rt_gelu(a: [float]) -> [float] {
+    let mut out: [float] = []
+    let n = len(a)
+    let K = 0.7978845608028654   // sqrt(2/π)
+    let mut i = 0
+    while i < n {
+        let x = a[i]
+        let inner = K * (x + 0.044715 * x * x * x)
+        out = out.push(0.5 * x * (1.0 + rt_tanh(inner)))
+        i = i + 1
+    }
+    return out
+}
+
+// Step 3 cycle 17 — argmax (returns int index, -1 for empty/non-array).
+// Ties → lowest index.
+pub fn rt_argmax(a: [float]) -> int {
+    let n = len(a)
+    if n == 0 { return -1 }
+    let mut best_i = 0
+    let mut best_v = a[0]
+    let mut i = 1
+    while i < n {
+        if a[i] > best_v {
+            best_v = a[i]
+            best_i = i
+        }
+        i = i + 1
+    }
+    return best_i
+}
+
+// Step 3 cycle 16 — RMS normalization. Two-arity polymorphism (scalar vs
+// array gamma) split into separate hexa fns; C wrapper dispatches.
+//   out[i] = gamma[i?] * x[i] / sqrt(mean(x²) + eps)
+// Mean-square + reciprocal sqrt reuse rt_sqrt from this file.
+fn _rms_norm_inv(x: [float], eps: float) -> float {
+    let n = len(x)
+    if n == 0 { return 0.0 }
+    let mut ss = 0.0
+    let mut i = 0
+    while i < n {
+        ss = ss + x[i] * x[i]
+        i = i + 1
+    }
+    let mean = ss / (n as float)
+    let s = rt_sqrt(mean + eps)
+    if s == 0.0 { return 0.0 }
+    return 1.0 / s
+}
+
+pub fn rt_rms_norm_scalar(x: [float], gamma: float, eps: float) -> [float] {
+    let mut out: [float] = []
+    let n = len(x)
+    if n == 0 { return out }
+    let inv = _rms_norm_inv(x, eps)
+    let mut j = 0
+    while j < n {
+        out = out.push(gamma * x[j] * inv)
+        j = j + 1
+    }
+    return out
+}
+
+pub fn rt_rms_norm_array(x: [float], gamma: [float], eps: float) -> [float] {
+    let mut out: [float] = []
+    let n = len(x)
+    if n == 0 { return out }
+    let gn = len(gamma)
+    let inv = _rms_norm_inv(x, eps)
+    let mut j = 0
+    while j < n {
+        let gi = if j < gn { j } else { 0 }
+        out = out.push(gamma[gi] * x[j] * inv)
+        j = j + 1
+    }
+    return out
+}
+
+// Step 3 cycle 15 — stable softmax. Subtract max for numerical stability,
+// then exp + normalize. Composition: rt_exp from this file. Empty input
+// returns empty; degenerate sum=0 (all -inf or empty after exp underflow)
+// returns all-zero vector matching the C implementation's `inv = 0`.
+pub fn rt_softmax(a: [float]) -> [float] {
+    let mut out: [float] = []
+    let n = len(a)
+    if n == 0 { return out }
+    let mut m = a[0]
+    let mut i = 1
+    while i < n {
+        if a[i] > m { m = a[i] }
+        i = i + 1
+    }
+    let mut sum = 0.0
+    let mut tmp: [float] = []
+    let mut j = 0
+    while j < n {
+        let e = rt_exp(a[j] - m)
+        tmp = tmp.push(e)
+        sum = sum + e
+        j = j + 1
+    }
+    let inv = if sum > 0.0 { 1.0 / sum } else { 0.0 }
+    let mut k = 0
+    while k < n {
+        out = out.push(tmp[k] * inv)
+        k = k + 1
+    }
+    return out
+}
+
+// Step 3 cycle 11 — float power. Composes rt_exp + rt_log to remove the
+// last libm pow() dependency in self/runtime{,_core}.c.
+//   pow(b, e) = exp(e * log(b))  when b > 0
+// Edge cases:
+//   - b == 0.0       : 0^e = 0 for e>0, 1 for e==0, +inf for e<0 (saturate
+//                      to 1e308 — hexa has no native +inf)
+//   - b < 0.0        : NaN per IEEE for non-integer e; we conservatively
+//                      flip sign on |b|^e when e is exact integer, else NaN
+//                      via the (x != x) idiom (0.0/0.0). Hexa user code at
+//                      this entry point doesn't traffic in negative-base
+//                      fractional powers.
+pub fn rt_pow_float(b: float, e: float) -> float {
+    if b > 0.0 { return rt_exp(e * rt_log(b)) }
+    if b == 0.0 {
+        if e == 0.0 { return 1.0 }
+        if e > 0.0  { return 0.0 }
+        return 1e308
+    }
+    // b < 0 — only well-defined for integer e
+    let ei = e as int
+    if (ei as float) == e {
+        let p = rt_exp(e * rt_log(0.0 - b))
+        if (ei & 1) != 0 { return 0.0 - p }
+        return p
+    }
+    // Negative base + fractional exponent: undefined in real math.
+    // Conservative fallback: return 0.0 (hexa user-code at this entry
+    // point doesn't traffic in negative-base fractional powers; explicit
+    // 0.0 avoids the divide-by-zero risk of (0.0/0.0)).
+    return 0.0
+}
+
+// Step 3 cycle 9 — hyperbolic tangent via exp.
+//   tanh(x) = (e^(2x) - 1) / (e^(2x) + 1)
+// Saturates explicitly for |x| > ~22 (e^44 overflows double easily).
+pub fn rt_tanh(x: float) -> float {
+    if x > 22.0  { return 1.0 }
+    if x < -22.0 { return -1.0 }
+    let e2 = rt_exp(2.0 * x)
+    return (e2 - 1.0) / (e2 + 1.0)
+}
+
+pub fn rt_fmod(x: float, y: float) -> float {
+    if y == 0.0 { return 0.0 }
+    let q = x / y
+    let iq = q as int  // truncation
+    return x - (iq as float) * y
+}
+
+pub fn rt_exp(x: float) -> float {
+    // Range reduction: x = n*ln2 + r, |r| <= ln2/2. exp(x) = 2^n * exp(r)
+    let LN2 = 0.6931471805599453
+    let n_d = x / LN2
+    let mut n_i: int = 0
+    if n_d >= 0.0 {
+        n_i = (n_d + 0.5) as int
+    } else {
+        n_i = (n_d - 0.5) as int
+    }
+    let r = x - (n_i as float) * LN2
+    // Taylor: 1 + r + r²/2 + r³/6 + ... up to r^7/5040
+    let r2 = r * r
+    let r3 = r2 * r
+    let r4 = r2 * r2
+    let sum = 1.0 + r + r2 * 0.5 + r3 * (1.0 / 6.0) + r4 * (1.0 / 24.0)
+            + r4 * r * (1.0 / 120.0) + r4 * r2 * (1.0 / 720.0)
+            + r4 * r3 * (1.0 / 5040.0)
+    // 2^n via repeated double (cap for safety)
+    let mut nc = n_i
+    if nc > 1023 { nc = 1023 }
+    if nc < -1022 { nc = -1022 }
+    let mut pow2 = 1.0
+    if nc >= 0 {
+        let mut i = 0
+        while i < nc {
+            pow2 = pow2 * 2.0
+            i = i + 1
+        }
+    } else {
+        let mut i = 0
+        let limit = -nc
+        while i < limit {
+            pow2 = pow2 * 0.5
+            i = i + 1
+        }
+    }
+    return sum * pow2
+}
+
+pub fn rt_log(x: float) -> float {
+    if x <= 0.0 { return -1e308 }  // -inf approximation
+    // log(x) = log(m * 2^e) = log(m) + e*ln2 where m in [1, 2)
+    let mut m = x
+    let mut e: int = 0
+    while m >= 2.0 {
+        m = m * 0.5
+        e = e + 1
+    }
+    while m < 1.0 {
+        m = m * 2.0
+        e = e - 1
+    }
+    // log((1+u)/(1-u)) with u = (m-1)/(m+1). Series 2(u + u^3/3 + u^5/5 + ...).
+    let u = (m - 1.0) / (m + 1.0)
+    let u2 = u * u
+    let u3 = u2 * u
+    let u5 = u3 * u2
+    let u7 = u5 * u2
+    let sum = 2.0 * (u + u3 / 3.0 + u5 / 5.0 + u7 / 7.0 + u7 * u2 / 9.0)
+    return sum + (e as float) * 0.6931471805599453
+}
+
+pub fn rt_cos(x: float) -> float {
+    let TWO_PI = 6.283185307179586
+    let PI = 3.141592653589793
+    let mut a = x
+    if a < 0.0 { a = -a }
+    while a >= TWO_PI { a = a - TWO_PI }
+    if a > PI { a = TWO_PI - a }
+    // |a| <= pi. Taylor 8-term: 1 - a²/2! + a⁴/4! - ... + a¹⁴/14!
+    let a2 = a * a
+    let a4 = a2 * a2
+    let a6 = a4 * a2
+    let a8 = a4 * a4
+    return 1.0 - a2 / 2.0 + a4 / 24.0 - a6 / 720.0 + a8 / 40320.0
+         - a8 * a2 / 3628800.0 + a8 * a4 / 479001600.0
+         - a8 * a6 / 87178291200.0
+}
+
+pub fn rt_sin(x: float) -> float {
+    // sin(x) = cos(x - pi/2). Same precision as rt_cos.
+    let PI_HALF = 1.5707963267948966
+    return rt_cos(x - PI_HALF)
+}
+
+// Step 3 cycle 40 — inverse trig (atan + asin + acos).
+//
+// rt_atan uses two-stage range reduction:
+//   (1) |x| > 1 → atan(x) = sign(x)*pi/2 - atan(1/x), so |1/x| <= 1
+//   (2) |x| > tan(pi/8) ≈ 0.4142 → atan(a) = pi/4 + atan((a-1)/(a+1)),
+//       so the inner |y| <= tan(pi/8) for fast Maclaurin convergence
+// Then 6-term Maclaurin: atan(a) ≈ a - a³/3 + a⁵/5 - a⁷/7 + a⁹/9 - a¹¹/11
+// gives ~1e-9 precision on the reduced domain.
+pub fn rt_atan(x: float) -> float {
+    let PI_HALF = 1.5707963267948966
+    let PI_QUARTER = 0.7853981633974483
+    let TAN_PI8 = 0.4142135623730951
+    let mut sign = 1.0
+    let mut a = x
+    if a < 0.0 { a = -a; sign = -1.0 }
+    let mut reduced_inv = false
+    if a > 1.0 {
+        a = 1.0 / a
+        reduced_inv = true
+    }
+    let mut reduced_quarter = false
+    if a > TAN_PI8 {
+        a = (a - 1.0) / (a + 1.0)
+        reduced_quarter = true
+    }
+    let a2 = a * a
+    let a3 = a2 * a
+    let a5 = a3 * a2
+    let a7 = a5 * a2
+    let a9 = a7 * a2
+    let a11 = a9 * a2
+    let mut result = a - a3 / 3.0 + a5 / 5.0 - a7 / 7.0 + a9 / 9.0 - a11 / 11.0
+    if reduced_quarter { result = PI_QUARTER + result }
+    if reduced_inv { result = PI_HALF - result }
+    return sign * result
+}
+
+// rt_asin via the standard identity asin(x) = atan(x / sqrt(1 - x²)).
+// Clamps |x| > 1 to +/-pi/2 (NaN-free fallback). Precision degrades near
+// |x| = 1 because sqrt(1-x²) → 0 amplifies floor-noise; that is the
+// expected trade-off for a naive port and matches libm's behaviour at
+// the cycle-2/4 precision budget.
+pub fn rt_asin(x: float) -> float {
+    let PI_HALF = 1.5707963267948966
+    if x >= 1.0 { return PI_HALF }
+    if x <= -1.0 { return -PI_HALF }
+    let s = rt_sqrt(1.0 - x * x)
+    if s == 0.0 {
+        if x > 0.0 { return PI_HALF }
+        return -PI_HALF
+    }
+    return rt_atan(x / s)
+}
+
+// rt_acos via the standard identity acos(x) = pi/2 - asin(x).
+pub fn rt_acos(x: float) -> float {
+    let PI_HALF = 1.5707963267948966
+    return PI_HALF - rt_asin(x)
+}
+
+// Step 3 cycle 41 — atan2 with quadrant resolution. Returns the angle
+// of (x, y) in radians ∈ (-π, π].
+//   x > 0           → atan(y/x)
+//   x < 0, y ≥ 0    → atan(y/x) + π
+//   x < 0, y < 0    → atan(y/x) − π
+//   x = 0, y > 0    → π/2
+//   x = 0, y < 0    → −π/2
+//   x = 0, y = 0    → 0  (libm returns 0; some impls return NaN)
+pub fn rt_atan2(y: float, x: float) -> float {
+    let PI = 3.141592653589793
+    let PI_HALF = 1.5707963267948966
+    if x > 0.0 {
+        return rt_atan(y / x)
+    }
+    if x < 0.0 {
+        if y >= 0.0 { return rt_atan(y / x) + PI }
+        return rt_atan(y / x) - PI
+    }
+    // x == 0
+    if y > 0.0 { return PI_HALF }
+    if y < 0.0 { return -PI_HALF }
+    return 0.0
+}

@@ -1,0 +1,1252 @@
+// ═══════════════════════════════════════════════════════════
+//  self/ir/lowering.hexa — AST → HEXA-IR Lowering (T11 P1+P2)
+//
+//  Depends on (concat-link order): types.hexa, instr.hexa, builder.hexa,
+//  ast.hexa (for Expr/Stmt struct types).
+//
+//  Scope (T11 P1 — 5개 AST 노드):
+//    - IntLit        →  load imm_i64 Value
+//    - FloatLit      →  load imm_f64 Value   (Operand 재사용: imm_f64 kind 지원)
+//    - BinOp Add/Sub/Mul/Div/Mod → ADD/SUB/MUL/DIV/MOD opcode
+//    - Return        →  RETURN opcode (terminator)
+//    - FnDecl        →  IrFunction + entry BasicBlock
+//
+//  Scope (T11 P2 — 4개 추가 AST 노드):
+//    - Call(callee, args)    → CALL opcode (args L→R eval, fresh result reg)
+//    - If(cond, then, else)  → BRANCH → then/else blocks → JUMP end block
+//    - While(cond, body)     → header/body/end blocks, BRANCH + backedge JUMP
+//    - Let(name, val, mut)   → immutable: env SSA bind; mut: ALLOC slot + STORE
+//
+//  Lowering 실패 (unknown kind) 시에는 마커 Value 를 반환하고 TODO 주석을
+//  emit 하여 전체 컴파일이 깨지지 않도록 한다. 이 번엔 standalone 이므로
+//  codegen_c2 파이프라인에는 접속하지 않는다.
+// ═══════════════════════════════════════════════════════════
+
+// ── Env: 식별자 → ValueId (아주 얕은 지역 스코프) ─────────────
+// mut 플래그로 alloc-slot vs SSA-reg 구분. `slot_vid` 는 mut 바인딩의 ALLOC
+// 결과 ValueId — 매 read 시 LOAD, 매 write 시 STORE 로 연결된다.
+struct LowerEnv {
+    names:  array,  // array of string
+    vids:   array,  // array of int (ValueId — SSA for immutable, slot for mut)
+    muts:   array,  // array of bool (true if mut alloc-slot, false if SSA)
+    // P7-6 Field struct_idx: optional type tag for each binding, "" when
+    // the type is unknown (most locals — non-struct RHS). Set by the
+    // LetStmt handler when the RHS is a StructInit so Field access can
+    // resolve `obj.name` against the module struct registry instead of
+    // hardcoding idx=0.
+    types:  array   // array of string (type name or "" for unknown)
+}
+
+fn lower_env_new() {
+    return LowerEnv { names: [], vids: [], muts: [], types: [] }
+}
+
+fn lower_env_bind(env, name, vid) {
+    push(env.names, name)
+    push(env.vids, vid)
+    push(env.muts, false)
+    push(env.types, "")
+}
+
+// P7-6 step 3e: rebind-or-bind. Overwrites vid + clears type for an
+// existing name (first-match-wins semantics in lookup mean a plain
+// `push` cannot shadow, so match-arm-scoped bindings need to mutate
+// the pre-existing slot rather than append). Falls back to `bind`
+// when the name is unseen. Used by match-arm ident patterns so
+// `match x { y => y.field }` can rewire `y` to each arm's scrutinee
+// value without accumulating dead entries across arms.
+fn lower_env_rebind(env, name: string, vid: int) {
+    let mut i = 0
+    while i < len(env.names) {
+        if env.names[i] == name {
+            env.vids[i]  = vid
+            env.muts[i]  = false
+            env.types[i] = ""
+            return 0
+        }
+        i = i + 1
+    }
+    lower_env_bind(env, name, vid)
+    return 0
+}
+
+fn lower_env_bind_mut(env, name, slot_vid) {
+    push(env.names, name)
+    push(env.vids, slot_vid)
+    push(env.muts, true)
+    push(env.types, "")
+}
+
+// Sets or updates the type annotation for an existing binding. No-op
+// if the name isn't bound (silent — callers treat missing names as
+// unknown type). Used by LetStmt when the RHS expression is a known
+// type-tagged construct like StructInit.
+fn lower_env_set_type(env, name: string, type_name: string) {
+    let mut i = 0
+    while i < len(env.names) {
+        if env.names[i] == name {
+            env.types[i] = type_name
+            return 0
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+// Returns the type annotation for a bound name, or "" if unknown or
+// unbound.
+fn lower_env_type_of(env, name: string) -> string {
+    let mut i = 0
+    while i < len(env.names) {
+        if env.names[i] == name {
+            return env.types[i]
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+fn lower_env_lookup(env, name) {
+    let i = 0
+    while i < len(env.names) {
+        if env.names[i] == name {
+            return env.vids[i]
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+fn lower_env_is_mut(env, name) {
+    let i = 0
+    while i < len(env.names) {
+        if env.names[i] == name {
+            return env.muts[i]
+        }
+        i = i + 1
+    }
+    return false
+}
+
+// ── Expression Lowering ─────────────────────────────────────
+// e  : Expr struct with `kind` tag (see ast.hexa)
+// returns ValueId (>=0) or -1 on failure.
+
+fn lower_int_lit(m, b, e) {
+    // IntLit → "load imm_i64" with i64 type.
+    return bld_const_i64(m, b, e.int_val)
+}
+
+fn lower_float_lit(m, b, e) {
+    // FloatLit → emit "load" with imm_f64 operand, f64 type.
+    // imm_f64 payload stored in Operand.a (int slot) is a 64-bit bit-pattern
+    // placeholder. Full f64 lowering requires a float-literal table; for now
+    // we store 0 and rely on caller to look up e.float_val separately.
+    let op = Operand { kind: "imm_f64", a: 0, b: 0, cmp: "" }
+    return builder_emit(m, b, "load", [op], "f64")
+}
+
+// Map AST BinOp string → IR mnemonic string.
+fn lower_binop_mnemonic(op_str) {
+    if op_str == "add" { return "add" }
+    if op_str == "sub" { return "sub" }
+    if op_str == "mul" { return "mul" }
+    if op_str == "div" { return "div" }
+    if op_str == "rem" { return "mod" }   // AST uses "rem"; IR opcode is "mod"
+    if op_str == "mod" { return "mod" }
+    // ── P7-6a GAP-2: comparison ops (route to cmp helpers, result is bool).
+    if op_str == "eq" { return "eq" }
+    if op_str == "ne" { return "ne" }
+    if op_str == "lt" { return "lt" }
+    if op_str == "le" { return "le" }
+    if op_str == "gt" { return "gt" }
+    if op_str == "ge" { return "ge" }
+    // ── P7-6a GAP-3: bitwise / shift (builder + ir_to_arm64 support present).
+    if op_str == "bitand" { return "bitand" }
+    if op_str == "bitor"  { return "bitor" }
+    if op_str == "bitxor" { return "bitxor" }
+    if op_str == "shl"    { return "shl" }
+    if op_str == "shr"    { return "shr" }
+    // Logical and/or/xor — keep the caller-side (mul / sum-prod) synth in
+    // bld_and / bld_or / bld_xor; they are reachable via bld_* directly
+    // but BinOp op_str = "and"/"or"/"xor" routes here for parity.
+    if op_str == "and" { return "and" }
+    if op_str == "or"  { return "or" }
+    if op_str == "xor" { return "xor" }
+    return ""   // unsupported
+}
+
+// Lower BinOp. `lhs_vid` / `rhs_vid` must already be lowered (caller drives
+// the recursion over the parse tree — lowering.hexa is flat to avoid
+// re-parsing serialized children).
+fn lower_binop_from_vids(m, b, op_str, lhs_vid, rhs_vid, ty) {
+    let mnem = lower_binop_mnemonic(op_str)
+    if mnem == "" {
+        // TODO: lower BinOp kind unsupported ("+op_str+")
+        return -1
+    }
+    if mnem == "add" { return bld_add(m, b, lhs_vid, rhs_vid, ty) }
+    if mnem == "sub" { return bld_sub(m, b, lhs_vid, rhs_vid, ty) }
+    if mnem == "mul" { return bld_mul(m, b, lhs_vid, rhs_vid, ty) }
+    if mnem == "div" { return bld_div(m, b, lhs_vid, rhs_vid, ty) }
+    if mnem == "mod" { return bld_modulo(m, b, lhs_vid, rhs_vid, ty) }
+    // Comparisons — bool-typed result.
+    if mnem == "eq" { return bld_cmp_eq(m, b, lhs_vid, rhs_vid) }
+    if mnem == "ne" { return bld_cmp_ne(m, b, lhs_vid, rhs_vid) }
+    if mnem == "lt" { return bld_cmp_lt(m, b, lhs_vid, rhs_vid) }
+    if mnem == "le" { return bld_cmp_le(m, b, lhs_vid, rhs_vid) }
+    if mnem == "gt" { return bld_cmp_gt(m, b, lhs_vid, rhs_vid) }
+    if mnem == "ge" { return bld_cmp_ge(m, b, lhs_vid, rhs_vid) }
+    // Bitwise / shift — i64 by default.
+    if mnem == "bitand" { return bld_band(m, b, lhs_vid, rhs_vid, ty) }
+    if mnem == "bitor"  { return bld_bor(m, b, lhs_vid, rhs_vid, ty) }
+    if mnem == "bitxor" { return bld_bxor(m, b, lhs_vid, rhs_vid, ty) }
+    if mnem == "shl"    { return bld_shl(m, b, lhs_vid, rhs_vid, ty) }
+    if mnem == "shr"    { return bld_shr(m, b, lhs_vid, rhs_vid, ty) }
+    // Logical — reuse existing synth helpers (bool-typed).
+    if mnem == "and" { return bld_and(m, b, lhs_vid, rhs_vid) }
+    if mnem == "or"  { return bld_or(m, b, lhs_vid, rhs_vid) }
+    if mnem == "xor" { return bld_xor(m, b, lhs_vid, rhs_vid) }
+    return -1
+}
+
+// Normalize parser Node CamelCase kind strings to the snake_case kinds
+// the lower_expr dispatcher uses. Unknown kinds pass through unchanged.
+fn _normalize_kind(k) {
+    if k == "IntLit" { return "int_lit" }
+    if k == "FloatLit" { return "float_lit" }
+    if k == "BoolLit" { return "bool_lit" }
+    if k == "StringLit" { return "string_lit" }
+    if k == "CharLit" { return "string_lit" }
+    if k == "Ident" { return "ident" }
+    if k == "BinOp" { return "bin_op" }
+    if k == "Binary" { return "bin_op" }
+    if k == "Unary" { return "unary_op" }
+    if k == "UnaryOp" { return "unary_op" }
+    if k == "Call" { return "call" }
+    if k == "Index" { return "index" }
+    if k == "Field" { return "field" }
+    if k == "Array" { return "array" }
+    if k == "If" { return "if" }
+    if k == "Match" { return "match_expr" }
+    if k == "Block" { return "block" }
+    return k
+}
+
+// Single-expr dispatcher. Only handles leaf / already-lowered kinds listed
+// in scope. Unknown kinds return -1 and emit a placeholder.
+fn lower_expr(m, b, e, env) {
+    let k = _normalize_kind(e.kind)
+    if k == "int_lit" {
+        return lower_int_lit(m, b, e)
+    }
+    if k == "float_lit" {
+        return lower_float_lit(m, b, e)
+    }
+    if k == "ident" {
+        let vid = lower_env_lookup(env, e.name)
+        if vid >= 0 {
+            // mut 바인딩이면 slot 에서 LOAD. immutable 이면 SSA reg 직접 반환.
+            if lower_env_is_mut(env, e.name) {
+                return bld_load(m, b, vid, "i64")
+            }
+            return vid
+        }
+        // TODO: lower unresolved ident — inject a placeholder load
+        return bld_const_i64(m, b, 0)
+    }
+    if k == "bool_lit" {
+        let v = 0
+        if e.bool_val { v = 1 }
+        return bld_const_i64(m, b, v)
+    }
+    if k == "unary_op" {
+        let inner_vid = lower_expr(m, b, e.left, env)
+        if inner_vid < 0 { return -1 }
+        let zero = bld_const_i64(m, b, 0)
+        return bld_sub(m, b, zero, inner_vid, "i64")
+    }
+    if k == "bin_op" {
+        let lhs = lower_expr(m, b, e.left, env)
+        if lhs < 0 { return -1 }
+        let rhs = lower_expr(m, b, e.right, env)
+        if rhs < 0 { return -1 }
+        return lower_binop_from_vids(m, b, e.op, lhs, rhs, "i64")
+    }
+    if k == "string_lit" {
+        let idx = module_intern_string(m, e.str_val)
+        return bld_const_string(m, b, idx)
+    }
+    if k == "index" {
+        let arr = lower_expr(m, b, e.left, env)
+        if arr < 0 { return -1 }
+        let idx = lower_expr(m, b, e.right, env)
+        if idx < 0 { return -1 }
+        return bld_array_index(m, b, arr, idx, "i64")
+    }
+    if k == "field" {
+        let obj = lower_expr(m, b, e.left, env)
+        if obj < 0 { return -1 }
+        // P7-6 struct_idx: resolve e.name via the module struct registry
+        // when e.left is a typed-bound Ident. Mirrors the resolution now
+        // active in tool/native_build.hexa. Unknown type / non-Ident
+        // base → idx=0 fallback (matches legacy single-field behavior).
+        let mut fidx = 0
+        if e.left.kind == "Ident" || e.left.kind == "ident" {
+            let tname = lower_env_type_of(env, e.left.name)
+            if len(tname) > 0 {
+                let resolved = module_find_field_idx(m, tname, e.name)
+                if resolved >= 0 { fidx = resolved }
+            }
+        }
+        return bld_struct_field(m, b, obj, fidx, "i64")
+    }
+    if k == "call" {
+        // Caller convention: e.name = callee, e.args = array of Expr children.
+        // Resolve fid by name; lower each arg recursively. Unknown callee → -1.
+        let fid = module_find_function(m, e.name)
+        if fid < 0 { return -1 }
+        let arg_vids = []
+        let i = 0
+        while i < len(e.args) {
+            let av = lower_expr(m, b, e.args[i], env)
+            if av < 0 { return -1 }
+            push(arg_vids, av)
+            i = i + 1
+        }
+        return bld_call(m, b, fid, arg_vids, "i64")
+    }
+    // ── P7-6a GAP-1: minimal If / Block / IfExpr dispatch ─────
+    //
+    // Block — evaluate statement children L→R, return last value (expr-level
+    // block). Caller-side stmt driver handles Stmt children; here we accept
+    // the simplest shape: e.body / e.args array of child Expr nodes, last
+    // value is the block result. Unknown shape → -1.
+    if k == "block" || e.kind == "Block" {
+        let mut last = -1
+        let mut bi = 0
+        while bi < len(e.args) {
+            let cv = lower_expr(m, b, e.args[bi], env)
+            if cv >= 0 { last = cv }
+            bi = bi + 1
+        }
+        if last >= 0 { return last }
+        return bld_const_i64(m, b, 0)
+    }
+    // IfExpr / If — value-producing if. Requires a phi merge. `e.left` = cond,
+    // `e.right` = then-expr, `e.else_body` = else-expr. Any of the three may
+    // be missing in a stmt-only If; unknown → -1.
+    if k == "if" || e.kind == "If" || e.kind == "IfExpr" {
+        let cond_vid = lower_expr(m, b, e.left, env)
+        if cond_vid < 0 { return -1 }
+        let skel = lower_if_expr_skeleton(m, b, cond_vid)
+        let then_bb = skel[0]
+        let else_bb = skel[1]
+        let end_bb  = skel[2]
+        // then
+        builder_switch_to(b, then_bb)
+        let then_vid = lower_expr(m, b, e.right, env)
+        let then_final = b.current_block
+        bld_jump(m, b, end_bb)
+        // else
+        builder_switch_to(b, else_bb)
+        let else_raw = e.else_body
+        let mut else_vid = -1
+        if else_raw != "" {
+            else_vid = lower_expr(m, b, else_raw, env)
+        }
+        if else_vid < 0 {
+            else_vid = bld_const_i64(m, b, 0)
+        }
+        let else_final = b.current_block
+        bld_jump(m, b, end_bb)
+        // merge
+        return lower_if_expr_close(m, b, end_bb, then_final, then_vid,
+                                             else_final, else_vid, "i64")
+    }
+    // TODO: lower Expr kind (k) — match/lambda/array/tuple/maplit/range etc.
+    return -1
+}
+
+// ── Array literal lowering ─────────────────────────────────
+// Given already-lowered element vids, emit a load with op_array_init
+// sequence. For now we synthesize via N bld_array_store to a fresh alloc.
+fn lower_array_from_vids(m, b, elem_vids, elem_ty) {
+    let slot = bld_alloc(m, b, "array")
+    let i = 0
+    while i < len(elem_vids) {
+        let idx = bld_const_i64(m, b, i)
+        bld_array_store(m, b, slot, idx, elem_vids[i])
+        i = i + 1
+    }
+    return slot
+}
+
+// ── Call lowering (from resolved callee + arg vids) ────────
+// Caller resolves the callee name via module_find_function and lowers each
+// arg via lower_expr. Unknown callee → -1 (caller may emit placeholder).
+fn lower_call_by_name(m, b, callee_name, arg_vids, ret_ty) {
+    // P7-7a: syscall builtin — direct to OP_SYSCALL, no fid resolution.
+    if callee_name == "syscall" {
+        return bld_syscall(m, b, arg_vids, ret_ty)
+    }
+    let fid = module_find_function(m, callee_name)
+    if fid < 0 { return -1 }
+    return bld_call(m, b, fid, arg_vids, ret_ty)
+}
+
+// ── UnaryOp lowering (standalone entrypoint) ────────────────
+// Map AST UnaryOp string → IR opcode.
+//   "neg"    → NEG opcode (arithmetic negation)
+//   "not"    → (1 - x) synthesized (logical not)
+//   "bitnot" → (-1) - x synthesized (two's complement bitwise not)
+// Return -1 on unsupported op.
+fn lower_unary_from_vid(m, b, op_str, operand_vid, ty) {
+    if op_str == "neg" {
+        return bld_neg(m, b, operand_vid, ty)
+    }
+    if op_str == "not" {
+        let one = bld_const_i64(m, b, 1)
+        return bld_sub(m, b, one, operand_vid, ty)
+    }
+    if op_str == "bitnot" {
+        let neg_one = bld_const_i64(m, b, -1)
+        return bld_sub(m, b, neg_one, operand_vid, ty)
+    }
+    // TODO: lower UnaryOp kind unsupported (op_str)
+    return -1
+}
+
+// ── Ident-as-expression lowering (standalone entrypoint) ───
+// Returns vid for SSA-bound names, LOAD vid for mut-slot names, -1 if unbound.
+fn lower_ident_by_name(m, b, env, name, ty) {
+    let vid = lower_env_lookup(env, name)
+    if vid < 0 { return -1 }
+    if lower_env_is_mut(env, name) {
+        return bld_load(m, b, vid, ty)
+    }
+    return vid
+}
+
+// ── FieldAccess lowering ────────────────────────────────────
+// obj.field → "load" with [obj, field_idx] operands.
+fn lower_field_access(m, b, obj_vid, field_idx, field_ty) {
+    return bld_struct_field(m, b, obj_vid, field_idx, field_ty)
+}
+
+// ── Index lowering ──────────────────────────────────────────
+// arr[i] → "load" with [arr, idx] operands.
+fn lower_index(m, b, arr_vid, idx_vid, elem_ty) {
+    return bld_array_index(m, b, arr_vid, idx_vid, elem_ty)
+}
+
+// ── Comparison BinOp lowering ───────────────────────────────
+// Eq/Ne/Lt/Le/Gt/Ge reuse Sub opcode with a CmpKind tag operand;
+// result type is "bool".
+fn lower_cmp_from_vids(m, b, cmp_kind, lhs_vid, rhs_vid) {
+    if cmp_kind == "eq" { return bld_cmp_eq(m, b, lhs_vid, rhs_vid) }
+    if cmp_kind == "ne" { return bld_cmp_ne(m, b, lhs_vid, rhs_vid) }
+    if cmp_kind == "lt" { return bld_cmp_lt(m, b, lhs_vid, rhs_vid) }
+    if cmp_kind == "le" { return bld_cmp_le(m, b, lhs_vid, rhs_vid) }
+    if cmp_kind == "gt" { return bld_cmp_gt(m, b, lhs_vid, rhs_vid) }
+    if cmp_kind == "ge" { return bld_cmp_ge(m, b, lhs_vid, rhs_vid) }
+    // TODO: lower cmp kind unsupported (cmp_kind)
+    return -1
+}
+
+// ── Call lowering ───────────────────────────────────────────
+// Evaluate args L→R (caller must lower each to a ValueId), then emit CALL.
+// `callee_fid` is a FuncId resolved by the caller (module_find_function).
+fn lower_call(m, b, callee_fid, arg_vids, ret_ty) {
+    return bld_call(m, b, callee_fid, arg_vids, ret_ty)
+}
+
+// ── If lowering ─────────────────────────────────────────────
+//   cond_vid ∈ ValueId (already lowered to bool-producing instruction).
+//   then_vid / else_vid ∈ ValueId produced in each branch (or -1 for
+//   statements). For simplicity this scaffold creates three blocks
+//   (then/else/end) and emits a terminating branch. Callers that need
+//   a value-producing `if` should wire a phi at the end block.
+fn lower_if_skeleton(m, b, cond_vid) {
+    let then_bb = builder_create_block(m, b, "if.then")
+    let else_bb = builder_create_block(m, b, "if.else")
+    let end_bb  = builder_create_block(m, b, "if.end")
+    bld_branch(m, b, cond_vid, then_bb, else_bb)
+    return [then_bb, else_bb, end_bb]
+}
+
+// After caller populates the then/else blocks, both terminate with a JUMP to
+// `end_bb`. We switch the builder to end_bb so subsequent emits continue
+// linearly after the if.
+fn lower_if_close(m, b, end_bb) {
+    builder_switch_to(b, end_bb)
+}
+
+// ── While lowering ──────────────────────────────────────────
+//   header : cond evaluated each iteration
+//   body   : loop body, terminates with JUMP header (backedge)
+//   end    : post-loop
+// Returns [header_bb, body_bb, end_bb] so the caller can lower cond into
+// header and body stmts into body_bb.
+fn lower_while_skeleton(m, b) {
+    let header_bb = builder_create_block(m, b, "while.header")
+    let body_bb   = builder_create_block(m, b, "while.body")
+    let end_bb    = builder_create_block(m, b, "while.end")
+    // Current block JUMPs into header to start the loop.
+    bld_jump(m, b, header_bb)
+    return [header_bb, body_bb, end_bb]
+}
+
+// ── Let lowering ────────────────────────────────────────────
+// Immutable let: bind name→value_vid in env (pure SSA).
+// Mutable let : emit ALLOC slot + STORE initial value. Reads go through
+//               LOAD (see lower_expr ident branch).
+fn lower_let(m, b, env, name, value_vid, mut_flag, ty) {
+    if !mut_flag {
+        lower_env_bind(env, name, value_vid)
+        return value_vid
+    }
+    let slot = bld_alloc(m, b, ty)
+    bld_store(m, b, slot, value_vid)
+    lower_env_bind_mut(env, name, slot)
+    return slot
+}
+
+// ── Statement Lowering ──────────────────────────────────────
+// Minimal statement set: Return + let-binding (for env threading during
+// self-test construction; not a full let lowering yet).
+
+fn lower_return(m, b, val_vid) {
+    // RETURN opcode. val_vid <0 means "ret void".
+    return bld_ret(m, b, val_vid)
+}
+
+// ── Assign lowering ────────────────────────────────────────
+// `name` must be a previously-declared mut binding. Emits STORE to slot.
+fn lower_assign(m, b, env, name, rhs_vid) {
+    let slot = lower_env_lookup(env, name)
+    if slot < 0 { return -1 }
+    if !lower_env_is_mut(env, name) { return -1 }
+    bld_store(m, b, slot, rhs_vid)
+    return rhs_vid
+}
+
+// ── Return Statement ────────────────────────────────────────
+// Convenience — identical to `lower_return` but named after the AST node.
+// `val_vid` < 0 means `return;` (void return).
+fn lower_return_stmt(m, b, val_vid) {
+    return bld_ret(m, b, val_vid)
+}
+
+// ── Break / Continue ───────────────────────────────────────
+// These rely on an enclosing loop to have published (header_bb, end_bb).
+// Caller threads these through a small loop-context struct:
+//   LoopCtx { header_bb: int, end_bb: int }
+// and passes it to lower_break / lower_continue.
+struct LoopCtx {
+    header_bb: int,
+    end_bb:    int
+}
+
+fn loop_ctx_new(header_bb, end_bb) {
+    return LoopCtx { header_bb: header_bb, end_bb: end_bb }
+}
+
+// Break → JUMP loop.end (emits terminator into current block).
+fn lower_break(m, b, ctx) {
+    if ctx.end_bb < 0 { return -1 }
+    bld_jump(m, b, ctx.end_bb)
+    return 0
+}
+
+// Continue → JUMP loop.header.
+fn lower_continue(m, b, ctx) {
+    if ctx.header_bb < 0 { return -1 }
+    bld_jump(m, b, ctx.header_bb)
+    return 0
+}
+
+// ── While lowering (full helper) ───────────────────────────
+// Given a pre-lowered cond builder callback is not supported here — instead,
+// we expose the skeleton and a close helper. This mirrors lower_for_range_*.
+// Flow:
+//   1. lower_while_skeleton(m, b)       → [header, body, end]
+//   2. builder_switch_to(b, header)     → lower cond, bld_branch(cond, body, end)
+//   3. builder_switch_to(b, body)       → lower body, then lower_while_close
+//   4. lower_while_close(m, b, header)  → emits backedge JUMP and switches to end
+fn lower_while_close(m, b, header_bb, end_bb) {
+    bld_jump(m, b, header_bb)
+    builder_switch_to(b, end_bb)
+}
+
+// ── Match lowering ─────────────────────────────────────────
+// Simple match on a scalar (int/bool). Arms are materialized as a SWITCH
+// over the discriminant `scrutinee_vid`. Each arm gets a fresh block; the
+// default block handles the wildcard / fall-through.
+//   cases: array of [case_int_val, case_block_id]
+// After lowering, caller fills each case block with its arm body and must
+// terminate with a JUMP to `end_bb`.
+// Returns [case_blocks(array), default_bb, end_bb].
+fn lower_match_skeleton(m, b, scrutinee_vid, case_count) {
+    let case_blocks = []
+    let i = 0
+    while i < case_count {
+        let bb = builder_create_block(m, b, "match.arm")
+        push(case_blocks, bb)
+        i = i + 1
+    }
+    let default_bb = builder_create_block(m, b, "match.default")
+    let end_bb = builder_create_block(m, b, "match.end")
+    return [case_blocks, default_bb, end_bb]
+}
+
+// Emit the terminating `switch` after match skeleton + cases mapping.
+// cases_assoc : array of [case_int_val, arm_block_id] (same count / order).
+fn lower_match_dispatch(m, b, scrutinee_vid, cases_assoc, default_bb) {
+    bld_switch(m, b, scrutinee_vid, cases_assoc, default_bb)
+}
+
+fn lower_match_close(m, b, end_bb) {
+    builder_switch_to(b, end_bb)
+}
+
+// ── IfExpr lowering (value-producing if) ───────────────────
+// Unlike lower_if_skeleton which is statement-oriented, IfExpr needs a PHI
+// in the end block to merge then/else results.
+// Steps:
+//   1. lower cond  → cond_vid
+//   2. lower_if_expr_skeleton(m, b, cond_vid) → [then_bb, else_bb, end_bb]
+//   3. populate then_bb with its expr, capture then_vid + then_final_bb,
+//      emit JUMP end_bb (caller does this before moving on)
+//   4. same for else_bb → else_vid + else_final_bb
+//   5. lower_if_expr_close(m, b, end_bb, then_final_bb, then_vid,
+//                                       else_final_bb, else_vid, ty)
+//      → returns phi vid
+fn lower_if_expr_skeleton(m, b, cond_vid) {
+    let then_bb = builder_create_block(m, b, "ifexpr.then")
+    let else_bb = builder_create_block(m, b, "ifexpr.else")
+    let end_bb  = builder_create_block(m, b, "ifexpr.end")
+    bld_branch(m, b, cond_vid, then_bb, else_bb)
+    return [then_bb, else_bb, end_bb]
+}
+
+fn lower_if_expr_close(m, b, end_bb, then_final_bb, then_vid,
+                                     else_final_bb, else_vid, ty) {
+    builder_switch_to(b, end_bb)
+    let incoming = [[then_final_bb, then_vid], [else_final_bb, else_vid]]
+    return bld_phi(m, b, incoming, ty)
+}
+
+// ── For-range lowering skeleton ────────────────────────────
+// Returns [header_bb, body_bb, end_bb, slot_vid].
+// Caller populates body_bb then calls lower_for_range_close.
+fn lower_for_range_skeleton(m, b, env, var_name, start_vid, end_vid) {
+    let slot = bld_alloc(m, b, "i64")
+    bld_store(m, b, slot, start_vid)
+    lower_env_bind_mut(env, var_name, slot)
+    let blks = lower_while_skeleton(m, b)
+    // blks = [header, body, end]. At header: load i, compare vs end.
+    builder_switch_to(b, blks[0])
+    let cur = bld_load(m, b, slot, "i64")
+    let cmp = bld_sub(m, b, cur, end_vid, "i64")
+    bld_branch(m, b, cmp, blks[2], blks[1])
+    return [blks[0], blks[1], blks[2], slot]
+}
+
+fn lower_for_range_close(m, b, slot, header_bb) {
+    let cur = bld_load(m, b, slot, "i64")
+    let one = bld_const_i64(m, b, 1)
+    let next = bld_add(m, b, cur, one, "i64")
+    bld_store(m, b, slot, next)
+    bld_jump(m, b, header_bb)
+}
+
+// ── Function Lowering ───────────────────────────────────────
+//  name        : string
+//  params      : array of [name, ir-type-kind-string]
+//  ret_type    : string (IrType kind)
+//  returns     : (func_id, builder)
+//
+// Body population is performed by the caller — this scaffold creates the
+// skeleton so that smaller lowerings can be composed.
+
+fn lower_fn_decl_skeleton(m, name, params, ret_type) {
+    let fid = module_add_function(m, name, params, ret_type)
+    let b = builder_new(m, fid)
+    return [fid, b]
+}
+
+// Convenience: materialize a simple `fn name(...) -> ret_type { return <body> }`
+// where `body_vid` is the ValueId produced by prior lower_expr calls.
+fn lower_simple_return_fn(m, name, params, ret_type, body_vid) {
+    let skel = lower_fn_decl_skeleton(m, name, params, ret_type)
+    let fid = skel[0]
+    let b = skel[1]
+    lower_return(m, b, body_vid)
+    return fid
+}
+
+// ── Self-tests ──────────────────────────────────────────────
+// Each test builds an IrModule, lowers a tiny AST by hand, and asserts the
+// resulting opcode sequence matches the expected list.
+
+fn _collect_opcodes(f) {
+    let out = []
+    let i = 0
+    while i < len(f.blocks) {
+        let bb = f.blocks[i]
+        let j = 0
+        while j < len(bb.instructions) {
+            push(out, bb.instructions[j].op)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn _ops_eq(a, b) {
+    if len(a) != len(b) {
+        return false
+    }
+    let i = 0
+    while i < len(a) {
+        if a[i] != b[i] {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+// T1: IntLit → load imm_i64 + ret.
+fn _lowering_test_int_return() {
+    let m = make_ir_module("t1")
+    let skel = lower_fn_decl_skeleton(m, "k42", [], "i64")
+    let fid = skel[0]
+    let b = skel[1]
+    let v = lower_int_lit(m, b, expr_int(42))
+    lower_return(m, b, v)
+    let got = _collect_opcodes(m.functions[fid])
+    assert _ops_eq(got, ["load", "ret"])
+}
+
+// T2: BinOp Add of two IntLits → load, load, add, ret.
+fn _lowering_test_add() {
+    let m = make_ir_module("t2")
+    let skel = lower_fn_decl_skeleton(m, "add3_4", [], "i64")
+    let fid = skel[0]
+    let b = skel[1]
+    let l = lower_int_lit(m, b, expr_int(3))
+    let r = lower_int_lit(m, b, expr_int(4))
+    let s = lower_binop_from_vids(m, b, "add", l, r, "i64")
+    lower_return(m, b, s)
+    let got = _collect_opcodes(m.functions[fid])
+    assert _ops_eq(got, ["load", "load", "add", "ret"])
+}
+
+// T3: (3*4) - (2+1) → load×4, mul, add, sub, ret.
+fn _lowering_test_nested_arith() {
+    let m = make_ir_module("t3")
+    let skel = lower_fn_decl_skeleton(m, "mix", [], "i64")
+    let fid = skel[0]
+    let b = skel[1]
+    let a = lower_int_lit(m, b, expr_int(3))
+    let c = lower_int_lit(m, b, expr_int(4))
+    let prod = lower_binop_from_vids(m, b, "mul", a, c, "i64")
+    let x = lower_int_lit(m, b, expr_int(2))
+    let y = lower_int_lit(m, b, expr_int(1))
+    let sum = lower_binop_from_vids(m, b, "add", x, y, "i64")
+    let diff = lower_binop_from_vids(m, b, "sub", prod, sum, "i64")
+    lower_return(m, b, diff)
+    let got = _collect_opcodes(m.functions[fid])
+    assert _ops_eq(got, ["load", "load", "mul", "load", "load", "add", "sub", "ret"])
+}
+
+// T4: Div / Mod coverage.
+fn _lowering_test_div_mod() {
+    let m = make_ir_module("t4")
+    let skel = lower_fn_decl_skeleton(m, "dm", [], "i64")
+    let fid = skel[0]
+    let b = skel[1]
+    let a = lower_int_lit(m, b, expr_int(10))
+    let c = lower_int_lit(m, b, expr_int(3))
+    let q = lower_binop_from_vids(m, b, "div", a, c, "i64")
+    let a2 = lower_int_lit(m, b, expr_int(10))
+    let c2 = lower_int_lit(m, b, expr_int(3))
+    let r = lower_binop_from_vids(m, b, "rem", a2, c2, "i64")   // AST "rem" → IR "mod"
+    let s = lower_binop_from_vids(m, b, "add", q, r, "i64")
+    lower_return(m, b, s)
+    let got = _collect_opcodes(m.functions[fid])
+    assert _ops_eq(got, ["load", "load", "div", "load", "load", "mod", "add", "ret"])
+}
+
+// T5: FloatLit lowering type tag ("f64") on the load instruction.
+fn _lowering_test_float_lit() {
+    let m = make_ir_module("t5")
+    let skel = lower_fn_decl_skeleton(m, "pi", [], "f64")
+    let fid = skel[0]
+    let b = skel[1]
+    let v = lower_float_lit(m, b, expr_float(3.14))
+    lower_return(m, b, v)
+    let f = m.functions[fid]
+    // First instruction is load; its type must be f64.
+    assert len(f.blocks) > 0
+    assert len(f.blocks[0].instructions) == 2
+    assert f.blocks[0].instructions[0].op == "load"
+    assert f.blocks[0].instructions[0].ty == "f64"
+    assert f.blocks[0].instructions[1].op == "ret"
+}
+
+// T6: Unsupported BinOp → returns -1, emits TODO (no crash).
+fn _lowering_test_unsupported_binop() {
+    let m = make_ir_module("t6")
+    let skel = lower_fn_decl_skeleton(m, "bad", [], "i64")
+    let b = skel[1]
+    let a = lower_int_lit(m, b, expr_int(1))
+    let c = lower_int_lit(m, b, expr_int(2))
+    let r = lower_binop_from_vids(m, b, "pow", a, c, "i64")
+    assert r == -1
+}
+
+// T7: Call opcode — emits CALL after arg loads.
+fn _lowering_test_call() {
+    let m = make_ir_module("t7")
+    // callee: fn id(x) -> i64 { return x }  (fid 0)
+    lower_simple_return_fn(m, "id", [["x", "i64"]], "i64", 0)
+    // caller: fn c() -> i64 { return id(7) }  (fid 1)
+    let skel = lower_fn_decl_skeleton(m, "c", [], "i64")
+    let fid = skel[0]
+    let b = skel[1]
+    let arg = lower_int_lit(m, b, expr_int(7))
+    let r = lower_call(m, b, 0, [arg], "i64")
+    lower_return(m, b, r)
+    let got = _collect_opcodes(m.functions[fid])
+    assert _ops_eq(got, ["load", "call", "ret"])
+}
+
+// T8: If — branch + jump into end, terminator shape check.
+fn _lowering_test_if() {
+    let m = make_ir_module("t8")
+    let skel = lower_fn_decl_skeleton(m, "if_test", [], "i64")
+    let fid = skel[0]
+    let b = skel[1]
+    let cond = lower_int_lit(m, b, expr_int(1))  // truthy dummy cond
+    let blks = lower_if_skeleton(m, b, cond)
+    let then_bb = blks[0]
+    let else_bb = blks[1]
+    let end_bb  = blks[2]
+    builder_switch_to(b, then_bb)
+    bld_jump(m, b, end_bb)
+    builder_switch_to(b, else_bb)
+    bld_jump(m, b, end_bb)
+    lower_if_close(m, b, end_bb)
+    lower_return(m, b, cond)
+    let got = _collect_opcodes(m.functions[fid])
+    // entry: load, branch   then: jump   else: jump   end: ret
+    assert _ops_eq(got, ["load", "branch", "jump", "jump", "ret"])
+}
+
+// T9: While — header/body/end skeleton, backedge terminator shape.
+fn _lowering_test_while() {
+    let m = make_ir_module("t9")
+    let skel = lower_fn_decl_skeleton(m, "w_test", [], "i64")
+    let fid = skel[0]
+    let b = skel[1]
+    let blks = lower_while_skeleton(m, b)
+    let header_bb = blks[0]
+    let body_bb   = blks[1]
+    let end_bb    = blks[2]
+    // header: cond + branch to body/end
+    builder_switch_to(b, header_bb)
+    let cond = lower_int_lit(m, b, expr_int(0))
+    bld_branch(m, b, cond, body_bb, end_bb)
+    // body: jump back to header
+    builder_switch_to(b, body_bb)
+    bld_jump(m, b, header_bb)
+    // end: ret
+    builder_switch_to(b, end_bb)
+    lower_return(m, b, cond)
+    let got = _collect_opcodes(m.functions[fid])
+    // entry: jump    header: load, branch    body: jump    end: ret
+    assert _ops_eq(got, ["jump", "load", "branch", "jump", "ret"])
+}
+
+// T10: Let immutable — SSA binding, no alloc/store.
+fn _lowering_test_let_immutable() {
+    let m = make_ir_module("t10")
+    let skel = lower_fn_decl_skeleton(m, "l_test", [], "i64")
+    let fid = skel[0]
+    let b = skel[1]
+    let env = lower_env_new()
+    let v = lower_int_lit(m, b, expr_int(42))
+    lower_let(m, b, env, "x", v, false, "i64")
+    assert lower_env_lookup(env, "x") == v
+    assert lower_env_is_mut(env, "x") == false
+    lower_return(m, b, v)
+    let got = _collect_opcodes(m.functions[fid])
+    assert _ops_eq(got, ["load", "ret"])
+}
+
+// T11: Let mutable — ALLOC slot + STORE; lookup goes through LOAD.
+fn _lowering_test_let_mutable() {
+    let m = make_ir_module("t11")
+    let skel = lower_fn_decl_skeleton(m, "lm_test", [], "i64")
+    let fid = skel[0]
+    let b = skel[1]
+    let env = lower_env_new()
+    let v = lower_int_lit(m, b, expr_int(7))
+    lower_let(m, b, env, "y", v, true, "i64")
+    assert lower_env_is_mut(env, "y") == true
+    // Read-through: mut ident read emits a LOAD.
+    let ident = Expr { kind: "ident", int_val: 0, float_val: 0.0, bool_val: false, name: "y", op: "" }
+    let read_vid = lower_expr(m, b, ident, env)
+    lower_return(m, b, read_vid)
+    let got = _collect_opcodes(m.functions[fid])
+    // load(7), alloc, store, load(y), ret
+    assert _ops_eq(got, ["load", "alloc", "store", "load", "ret"])
+}
+
+// T12: If-inside-While — combined control flow shape.
+fn _lowering_test_if_in_while() {
+    let m = make_ir_module("t12")
+    let skel = lower_fn_decl_skeleton(m, "iw", [], "i64")
+    let fid = skel[0]
+    let b = skel[1]
+    let wblks = lower_while_skeleton(m, b)
+    let header_bb = wblks[0]
+    let body_bb   = wblks[1]
+    let end_bb    = wblks[2]
+    builder_switch_to(b, header_bb)
+    let c0 = lower_int_lit(m, b, expr_int(1))
+    bld_branch(m, b, c0, body_bb, end_bb)
+    builder_switch_to(b, body_bb)
+    let c1 = lower_int_lit(m, b, expr_int(0))
+    let ifblks = lower_if_skeleton(m, b, c1)
+    let then_bb = ifblks[0]
+    let else_bb = ifblks[1]
+    let if_end  = ifblks[2]
+    builder_switch_to(b, then_bb)
+    bld_jump(m, b, if_end)
+    builder_switch_to(b, else_bb)
+    bld_jump(m, b, if_end)
+    builder_switch_to(b, if_end)
+    bld_jump(m, b, header_bb)   // backedge of while body
+    builder_switch_to(b, end_bb)
+    lower_return(m, b, c0)
+    let got = _collect_opcodes(m.functions[fid])
+    // entry:jump  header:load,branch  body:load,branch  then:jump  else:jump  if.end:jump  end:ret
+    assert _ops_eq(got, ["jump", "load", "branch", "load", "branch", "jump", "jump", "jump", "ret"])
+}
+
+// T13: Assign — mut variable store update via lower_assign.
+fn _lowering_test_assign() {
+    let m = make_ir_module("t13")
+    let skel = lower_fn_decl_skeleton(m, "asn", [], "i64")
+    let fid = skel[0]
+    let b = skel[1]
+    let env = lower_env_new()
+    let v = lower_int_lit(m, b, expr_int(5))
+    lower_let(m, b, env, "x", v, true, "i64")
+    let new_val = lower_int_lit(m, b, expr_int(10))
+    let r = lower_assign(m, b, env, "x", new_val)
+    assert r >= 0
+    lower_return(m, b, r)
+    let got = _collect_opcodes(m.functions[fid])
+    // load(5), alloc, store, load(10), store, ret
+    assert _ops_eq(got, ["load", "alloc", "store", "load", "store", "ret"])
+}
+
+// T14: Recursive BinOp via lower_expr — (3 + 4).
+fn _lowering_test_recursive_binop() {
+    let m = make_ir_module("t14")
+    let skel = lower_fn_decl_skeleton(m, "rbin", [], "i64")
+    let fid = skel[0]
+    let b = skel[1]
+    let env = lower_env_new()
+    let add_expr = Expr { kind: "bin_op", op: "add",
+        left: expr_int(3), right: expr_int(4),
+        int_val: 0, float_val: 0.0, bool_val: false, name: "" }
+    let v = lower_expr(m, b, add_expr, env)
+    assert v >= 0
+    lower_return(m, b, v)
+    let got = _collect_opcodes(m.functions[fid])
+    assert _ops_eq(got, ["load", "load", "add", "ret"])
+}
+
+// T15: For-range skeleton — header check + body increment.
+fn _lowering_test_for_range() {
+    let m = make_ir_module("t15")
+    let skel = lower_fn_decl_skeleton(m, "forr", [], "i64")
+    let fid = skel[0]
+    let b = skel[1]
+    let env = lower_env_new()
+    let start = lower_int_lit(m, b, expr_int(0))
+    let end_v = lower_int_lit(m, b, expr_int(10))
+    let fr = lower_for_range_skeleton(m, b, env, "i", start, end_v)
+    let header_bb = fr[0]
+    let body_bb = fr[1]
+    let end_bb = fr[2]
+    let slot = fr[3]
+    builder_switch_to(b, body_bb)
+    lower_for_range_close(m, b, slot, header_bb)
+    builder_switch_to(b, end_bb)
+    lower_return(m, b, start)
+    let got = _collect_opcodes(m.functions[fid])
+    // entry: load(0), load(10), alloc, store, jump
+    // header: load, sub, branch
+    // body: load, load(1), add, store, jump
+    // end: ret
+    assert _ops_eq(got, ["load", "load", "alloc", "store", "jump", "load", "sub", "branch", "load", "load", "add", "store", "jump", "ret"])
+}
+
+// T16: Return statement wrapper — equivalent shape to T1.
+fn _lowering_test_return_stmt() {
+    let m = make_ir_module("t16")
+    let skel = lower_fn_decl_skeleton(m, "rs", [], "i64")
+    let fid = skel[0]
+    let b = skel[1]
+    let v = lower_int_lit(m, b, expr_int(7))
+    lower_return_stmt(m, b, v)
+    let got = _collect_opcodes(m.functions[fid])
+    assert _ops_eq(got, ["load", "ret"])
+}
+
+// T17: Return with -1 → void ret (no operand slot).
+fn _lowering_test_return_void() {
+    let m = make_ir_module("t17")
+    let skel = lower_fn_decl_skeleton(m, "rv", [], "void")
+    let fid = skel[0]
+    let b = skel[1]
+    lower_return_stmt(m, b, -1)
+    let got = _collect_opcodes(m.functions[fid])
+    assert _ops_eq(got, ["ret"])
+}
+
+// T18: Break — inside a while body JUMPs to end_bb.
+fn _lowering_test_break() {
+    let m = make_ir_module("t18")
+    let skel = lower_fn_decl_skeleton(m, "brk", [], "i64")
+    let fid = skel[0]
+    let b = skel[1]
+    let blks = lower_while_skeleton(m, b)
+    let header_bb = blks[0]
+    let body_bb   = blks[1]
+    let end_bb    = blks[2]
+    builder_switch_to(b, header_bb)
+    let cond = lower_int_lit(m, b, expr_int(1))
+    bld_branch(m, b, cond, body_bb, end_bb)
+    builder_switch_to(b, body_bb)
+    let ctx = loop_ctx_new(header_bb, end_bb)
+    lower_break(m, b, ctx)
+    builder_switch_to(b, end_bb)
+    lower_return_stmt(m, b, cond)
+    let got = _collect_opcodes(m.functions[fid])
+    // entry:jump  header:load,branch  body:jump(break→end)  end:ret
+    assert _ops_eq(got, ["jump", "load", "branch", "jump", "ret"])
+}
+
+// T19: Continue — inside while body JUMPs to header_bb (backedge via continue).
+fn _lowering_test_continue() {
+    let m = make_ir_module("t19")
+    let skel = lower_fn_decl_skeleton(m, "cont", [], "i64")
+    let fid = skel[0]
+    let b = skel[1]
+    let blks = lower_while_skeleton(m, b)
+    let header_bb = blks[0]
+    let body_bb   = blks[1]
+    let end_bb    = blks[2]
+    builder_switch_to(b, header_bb)
+    let cond = lower_int_lit(m, b, expr_int(1))
+    bld_branch(m, b, cond, body_bb, end_bb)
+    builder_switch_to(b, body_bb)
+    let ctx = loop_ctx_new(header_bb, end_bb)
+    lower_continue(m, b, ctx)
+    builder_switch_to(b, end_bb)
+    lower_return_stmt(m, b, cond)
+    let got = _collect_opcodes(m.functions[fid])
+    assert _ops_eq(got, ["jump", "load", "branch", "jump", "ret"])
+}
+
+// T20: While with bin_op condition + assign body — end-to-end recursion.
+//   let mut i = 0
+//   while i < 10 { i = i + 1 }
+fn _lowering_test_while_binop_assign() {
+    let m = make_ir_module("t20")
+    let skel = lower_fn_decl_skeleton(m, "wba", [], "i64")
+    let fid = skel[0]
+    let b = skel[1]
+    let env = lower_env_new()
+    let zero = lower_int_lit(m, b, expr_int(0))
+    lower_let(m, b, env, "i", zero, true, "i64")
+    let blks = lower_while_skeleton(m, b)
+    let header_bb = blks[0]
+    let body_bb   = blks[1]
+    let end_bb    = blks[2]
+    builder_switch_to(b, header_bb)
+    // cond: i < 10  (lower_expr recursion over bin_op)
+    let cond_expr = Expr { kind: "bin_op", op: "lt",
+        left: Expr { kind: "ident", int_val: 0, float_val: 0.0, bool_val: false, name: "i", op: "" },
+        right: expr_int(10),
+        int_val: 0, float_val: 0.0, bool_val: false, name: "" }
+    // Use direct lt since lower_expr only handles arith BinOps currently.
+    let cur_i = lower_ident_by_name(m, b, env, "i", "i64")
+    let ten = lower_int_lit(m, b, expr_int(10))
+    let lt = bld_cmp_lt(m, b, cur_i, ten)
+    bld_branch(m, b, lt, body_bb, end_bb)
+    builder_switch_to(b, body_bb)
+    // body: i = i + 1
+    let cur2 = lower_ident_by_name(m, b, env, "i", "i64")
+    let one = lower_int_lit(m, b, expr_int(1))
+    let next = bld_add(m, b, cur2, one, "i64")
+    lower_assign(m, b, env, "i", next)
+    lower_while_close(m, b, header_bb, end_bb)
+    lower_return_stmt(m, b, cur2)
+    let got = _collect_opcodes(m.functions[fid])
+    // entry: load(0), alloc, store, jump
+    // header: load(i), load(10), sub(cmp), branch
+    // body: load(i), load(1), add, store, jump(back)
+    // end: ret
+    assert _ops_eq(got, ["load", "alloc", "store", "jump",
+                          "load", "load", "sub", "branch",
+                          "load", "load", "add", "store", "jump",
+                          "ret"])
+}
+
+// T21: Match skeleton — switch over scrutinee with 2 arms + default.
+fn _lowering_test_match_skeleton() {
+    let m = make_ir_module("t21")
+    let skel = lower_fn_decl_skeleton(m, "mm", [], "i64")
+    let fid = skel[0]
+    let b = skel[1]
+    let scrut = lower_int_lit(m, b, expr_int(2))
+    let ms = lower_match_skeleton(m, b, scrut, 2)
+    let cases = ms[0]
+    let default_bb = ms[1]
+    let end_bb = ms[2]
+    let cases_assoc = [[1, cases[0]], [2, cases[1]]]
+    lower_match_dispatch(m, b, scrut, cases_assoc, default_bb)
+    // arm 1: return 10
+    builder_switch_to(b, cases[0])
+    bld_jump(m, b, end_bb)
+    // arm 2: return 20
+    builder_switch_to(b, cases[1])
+    bld_jump(m, b, end_bb)
+    // default
+    builder_switch_to(b, default_bb)
+    bld_jump(m, b, end_bb)
+    lower_match_close(m, b, end_bb)
+    lower_return_stmt(m, b, scrut)
+    let got = _collect_opcodes(m.functions[fid])
+    // entry: load, switch   arm0: jump  arm1: jump  default: jump  end: ret
+    assert _ops_eq(got, ["load", "switch", "jump", "jump", "jump", "ret"])
+}
+
+// T22: IfExpr — value-producing if with PHI merge.
+//   let x = if cond { 1 } else { 2 }
+fn _lowering_test_if_expr() {
+    let m = make_ir_module("t22")
+    let skel = lower_fn_decl_skeleton(m, "ifx", [], "i64")
+    let fid = skel[0]
+    let b = skel[1]
+    let cond = lower_int_lit(m, b, expr_int(1))
+    let blks = lower_if_expr_skeleton(m, b, cond)
+    let then_bb = blks[0]
+    let else_bb = blks[1]
+    let end_bb  = blks[2]
+    builder_switch_to(b, then_bb)
+    let tv = lower_int_lit(m, b, expr_int(1))
+    bld_jump(m, b, end_bb)
+    builder_switch_to(b, else_bb)
+    let ev = lower_int_lit(m, b, expr_int(2))
+    bld_jump(m, b, end_bb)
+    let phi = lower_if_expr_close(m, b, end_bb, then_bb, tv, else_bb, ev, "i64")
+    lower_return_stmt(m, b, phi)
+    let got = _collect_opcodes(m.functions[fid])
+    // entry: load(cond), branch
+    // then:  load(1), jump
+    // else:  load(2), jump
+    // end:   phi, ret
+    assert _ops_eq(got, ["load", "branch", "load", "jump", "load", "jump", "phi", "ret"])
+}
+
+// T23: string_lit — intern string + bld_const_string.
+fn _lowering_test_string_lit() {
+    let m = make_ir_module("t23")
+    let skel = lower_fn_decl_skeleton(m, "sl", [], "str")
+    let fid = skel[0]
+    let b = skel[1]
+    let env = lower_env_new()
+    let se = Expr { kind: "string_lit", int_val: 0, float_val: 0.0,
+        bool_val: false, str_val: "hi", name: "", op: "" }
+    let v = lower_expr(m, b, se, env)
+    assert v >= 0
+    lower_return(m, b, v)
+    let got = _collect_opcodes(m.functions[fid])
+    assert _ops_eq(got, ["load", "ret"])
+    assert len(m.string_pool) == 1
+    assert m.string_pool[0] == "hi"
+}
+
+// T24: index dispatcher — e.left (arr) + e.right (idx) → bld_array_index.
+fn _lowering_test_index_dispatcher() {
+    let m = make_ir_module("t24")
+    let skel = lower_fn_decl_skeleton(m, "idx", [], "i64")
+    let fid = skel[0]
+    let b = skel[1]
+    let env = lower_env_new()
+    let ie = Expr { kind: "index",
+        left: expr_int(5), right: expr_int(2),
+        int_val: 0, float_val: 0.0, bool_val: false, name: "", op: "" }
+    let v = lower_expr(m, b, ie, env)
+    assert v >= 0
+    lower_return(m, b, v)
+    let got = _collect_opcodes(m.functions[fid])
+    // load(arr=5), load(idx=2), load(array_index), ret
+    assert _ops_eq(got, ["load", "load", "load", "ret"])
+}
+
+// T25: array_from_vids helper — alloc + N stores.
+fn _lowering_test_array_from_vids() {
+    let m = make_ir_module("t25")
+    let skel = lower_fn_decl_skeleton(m, "arr3", [], "array")
+    let fid = skel[0]
+    let b = skel[1]
+    let a = lower_int_lit(m, b, expr_int(1))
+    let c = lower_int_lit(m, b, expr_int(2))
+    let d = lower_int_lit(m, b, expr_int(3))
+    let arr_vid = lower_array_from_vids(m, b, [a, c, d], "i64")
+    lower_return(m, b, arr_vid)
+    let got = _collect_opcodes(m.functions[fid])
+    // load(1), load(2), load(3), alloc, load(idx0), store, load(idx1), store, load(idx2), store, ret
+    assert _ops_eq(got, ["load", "load", "load", "alloc", "load", "store", "load", "store", "load", "store", "ret"])
+}
+
+fn lowering_run_tests() {
+    _lowering_test_int_return()
+    _lowering_test_add()
+    _lowering_test_nested_arith()
+    _lowering_test_div_mod()
+    _lowering_test_float_lit()
+    _lowering_test_unsupported_binop()
+    _lowering_test_call()
+    _lowering_test_if()
+    _lowering_test_while()
+    _lowering_test_let_immutable()
+    _lowering_test_let_mutable()
+    _lowering_test_if_in_while()
+    _lowering_test_assign()
+    _lowering_test_recursive_binop()
+    _lowering_test_for_range()
+    _lowering_test_return_stmt()
+    _lowering_test_return_void()
+    _lowering_test_break()
+    _lowering_test_continue()
+    _lowering_test_while_binop_assign()
+    _lowering_test_match_skeleton()
+    _lowering_test_if_expr()
+    _lowering_test_string_lit()
+    _lowering_test_index_dispatcher()
+    _lowering_test_array_from_vids()
+    println("lowering: 25 tests PASS")
+}

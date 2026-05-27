@@ -1,0 +1,130 @@
+#!hexa strict
+// stdlib/aura/n9_brain_crosslink.hexa — `aura + N9` AURA × BRAIN
+// cross-domain coordination (shared Sim4Life MRI-safety gap path).
+//
+// CONTEXT: AURA = post-aural wearable BCI (Class II) · BRAIN = implant
+// BCI domain (Class III). Both share the Sim4Life FDA-MDDT MRI-safety
+// dependency (per AURA's aura.md §3 cross-link to brain.md).
+//
+// Honesty (g3 · @D d1):
+//   * absorbed=false PERMANENTLY — cross-link decl, NOT shared workflow.
+//
+// Sentinels:
+//   __HEXA_AURA_N9_BRAIN_CROSSLINK__ PASS
+//   AURA_N9_BRAIN_CROSSLINK_OK gate=GATE_OPEN absorbed=false
+
+let VERSION       = "0.1.0"
+let MODULE        = "aura-n9-brain-crosslink"
+let GEOMETRY_ID   = "aura_n9_brain_crosslink_v1"
+let RECORD_KIND   = "aura_n9_brain_crosslink_record"
+
+fn _shared_gap_block() -> [str] {
+    return [
+        "shared_dependency: Sim4Life FDA-MDDT (IMAnalytics V3.0 + MRIxViP V2.1)",
+        "AURA_severity: Class II non-implantable wearable - 'MR Unsafe' label acceptable",
+        "BRAIN_severity: Class III implant - 'MR Conditional' labeling mandatory for clinical use",
+        "common_open_solver: openEMS + ITIS Foundation phantoms (capable but not MDDT-qualified)",
+        "shared_test_standards: ASTM F2182-19e2 + ISO 10974 (both apply, different scope)",
+        "shared_brk_candidate: G1 stage_1 ISO 10974 + ASTM F2182 fixture (N1 hexa-lang PR #1414)",
+    ]
+}
+
+fn _coordination_block() -> [str] {
+    return [
+        "coordination_authority: hexa-native AURA + BRAIN domain owners",
+        "shared_artifacts: openEMS fixture spec (N1) + V&V plan (G1 stage_2)",
+        "issue_tracker_link: hexa-lang INBOX entry per joint milestone",
+        "doc_crossref: AURA aura.md §3 ↔ BRAIN brain.md §3 (verify+gap section)",
+        "release_cadence: synchronized v0.x.y releases when fixture spec updates",
+        "fork_split_criteria: if AURA wellness vs BRAIN implant scopes diverge beyond shared 20%",
+    ]
+}
+
+fn _aura_specific_block() -> [str] {
+    return [
+        "AURA_scope_subset: home-healthcare wellness · OTC · non-diagnostic",
+        "MRI_labeling_today: 'MR Unsafe' (per N7 + V6 honest-gap report)",
+        "labeling_upgrade_path: G1 stage_5 FDA-MDDT acceptance → 'MR Conditional' upgrade",
+        "user_impact: low (wellness device · removable before MRI)",
+        "regulatory_priority: Lower than BRAIN (FDA 510(k) vs PMA Class III)",
+        "AURA_independence: AURA can ship to market WITHOUT G1 closure ('MR Unsafe' label sufficient)",
+    ]
+}
+
+fn _brain_specific_block() -> [str] {
+    return [
+        "BRAIN_scope_subset: implantable BCI · clinical · diagnostic + therapeutic",
+        "MRI_labeling_today: 'MR Unsafe' BLOCKING (cannot ship without MRI-safety labeling)",
+        "labeling_imperative: 'MR Conditional' mandatory for clinical adoption",
+        "user_impact: HIGH (chronic implant · MRI procedures common)",
+        "regulatory_priority: PMA Class III · Sim4Life FDA-MDDT IS PATH",
+        "BRAIN_dependency: BRAIN clinical viability requires G1 closure OR Sim4Life license",
+    ]
+}
+
+fn _joint_brk_value_block() -> [str] {
+    return [
+        "AURA_value_from_G1: future 'MR Conditional' upgrade (label improvement)",
+        "BRAIN_value_from_G1: clinical viability (mandatory for adoption)",
+        "joint_funding_case: AURA + BRAIN combined funding ask for G1 brk path",
+        "shared_repo_target: github.com/<org>/aura-brain-openems-mri-safety",
+        "shared_maintainer_org: 501(c)(3) candidate · sustained governance + V&V",
+        "publication_strategy: joint AURA+BRAIN paper per cross-vendor benchmark (G1 stage_2)",
+    ]
+}
+
+fn _scope_caveats() -> [str] {
+    return [
+        "N9 AURA × BRAIN cross-link is a COORDINATION decl, NOT a shared workflow.",
+        "Actual joint work requires: BRAIN domain owner agreement + shared repo setup.",
+        "Cross-domain priority differs (AURA wellness LOW vs BRAIN clinical HIGH).",
+        "absorbed=false PERMANENTLY (g3) - declaration, NEVER a joint validated workflow.",
+    ]
+}
+
+fn _emit_block(label: str, lines: [str]) {
+    print("# [" + label + "]")
+    let n = lines.len()
+    let mut i = 0
+    while i < n {
+        print("#   - " + lines[i])
+        i = i + 1
+    }
+    print("#")
+}
+
+fn _emit_header() {
+    print("# AURA N9 - AURA × BRAIN cross-link (Sim4Life MRI-safety gap shared)")
+    print("# device_target = AURA-100 wellness + BRAIN clinical (different scopes · shared brk)")
+    print("# version = " + VERSION)
+    print("# ringfence: coordination decl - NOT a joint workflow")
+    print("#")
+    _emit_block("shared_gap",        _shared_gap_block())
+    _emit_block("coordination",      _coordination_block())
+    _emit_block("aura_specific",     _aura_specific_block())
+    _emit_block("brain_specific",    _brain_specific_block())
+    _emit_block("joint_brk_value",   _joint_brk_value_block())
+}
+
+fn _emit_caveats() {
+    let c = _scope_caveats()
+    let n = c.len()
+    let mut i = 0
+    while i < n {
+        print("# scope_caveat: " + c[i])
+        i = i + 1
+    }
+}
+
+fn main() {
+    _emit_header()
+    _emit_caveats()
+
+    print("AURA_N9_BRAIN_CROSSLINK_OK record_kind=" + RECORD_KIND
+        + " geometry_id=" + GEOMETRY_ID
+        + " gate=GATE_OPEN absorbed=false"
+        + " version=" + VERSION
+        + " shared_brk=G1 priority=AURA_LOW_BRAIN_HIGH")
+
+    print("__HEXA_AURA_N9_BRAIN_CROSSLINK__ PASS")
+}

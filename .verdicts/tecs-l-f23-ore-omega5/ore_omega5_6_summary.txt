@@ -1,0 +1,34 @@
+F23-s3 A001599 Ore harmonic divisor ω=5/6 subfamily
+====================================================
+
+ω=5 Ore subfamily (3 witnesses):
+  n=8190  = 2 · 3² · 5 · 7 · 13                  σ=26208      τ=48   H=15  🔵 ORE
+  n=27846 = 2 · 3² · 7 · 13 · 17                 σ=78624      τ=48   H=17  🔵 ORE
+  n=32760 = 2³ · 3² · 5 · 7 · 13                 σ=131040     τ=96   H=24  🔵 ORE
+                                                  
+  Shared 4-prime kernel of the first 2: 2·3²·7·13 (= 1638, ω=4 Ore — F18 anchor)
+  Shape: ω=4 Ore-base × prime{5, 17} → ω=5 Ore "extensions"
+
+ω=6 Ore subfamily (2 witnesses):
+  n=237510 = 2 · 3² · 5 · 7 · 13 · 29            σ=665280     τ=96   H=29  🔵 ORE
+  n=360360 = 2³ · 3² · 5 · 7 · 11 · 13           σ=1572480    τ=192  H=44  🔵 ORE
+
+D(n) = σφ - nτ test (M10 universal property):
+  n=8190   D=44894304       ≠ 0
+  n=27846  D=542112480      ≠ 0
+  n=32760  D=902603520      ≠ 0
+  → All ω=5 Ore numbers are NOT in {1,6} identity locus — consistent with M10 closed-form proof.
+
+Observations (🟡 — no closed-form yet, hand sweep of OEIS A001599 entries):
+  - ω=5 Ore numbers exist (Ore ⊋ {ω ≤ 4 Ore} — 8190 is the smallest known).
+  - ω=6 Ore numbers exist (237510 smallest, then 360360).
+  - Many ω=5 candidates pack 2·3²·{5,7,13} as a base — 6 is the multiplicative anchor.
+  - 8190 = 6 · 1365 = 6 · (3·5·7·13) — "n=6 × squarefree-tail" pattern.
+  - 27846 = 6 · 4641 = 6 · (3·7·13·17) — same 6-anchor pattern.
+  - 32760 = 8 · 4095 = 2² · 8190 — power-of-2 inflation of 8190.
+
+NOVELTY:
+  ω=5 Ore: 3 explicit witnesses (all share n=6 as a divisor in the first 2).
+  ω=6 Ore: 2 explicit witnesses (all share n=6 as a divisor in 237510 = 6·5·7·11³·103? wait actually 237510/6 = 39585 = 3·5·7·13·29).
+  Hand-found pattern "ω=k Ore ⊃ 6·tail" — 🟡 citation level, no closed-form proof.
+  No new theorem; explicit witness expansion of A001599 in ω subfamily slicing.

@@ -1,0 +1,61 @@
+F-PHASEH-INC2 — hexa_ld PAGE21/PAGEOFF12 + __cstring/__const link-run
+========================================================================
+HEXA_BACKEND flip · chunk-B PHASE H · increment 2.
+Linker = tool/hexa_ld.hexa (100% hexa-native). clang -c = INPUT-only
+control (assembles the 2 .o); NO clang/ld/as in the LINK step.
+Host: ssh mini (arm64, /usr/bin/clang, /usr/bin/otool, ~/.hx/bin/hexa).
+
+── TEST A: adrp/add (PAGE21 + PAGEOFF12) → __const string ──────────────
+  object A (a_main.o): _start does
+      adrp x1, _hxld_msg@PAGE   (ARM64_RELOC_PAGE21, type 3)
+      add  x1, x1, _hxld_msg@PAGEOFF (ARM64_RELOC_PAGEOFF12, type 4)
+      write(1, x1, 16); exit(0)   (raw svc #0x80, zero dyld imports)
+  object B (b_msg.o): const char hxld_msg[] = "hi from cstring\n"
+      → clang lands it in __TEXT,__const (size 0x11) with defined
+        external sym _hxld_msg.
+
+LINK (no clang/ld):
+  hexa run tool/hexa_ld.hexa -o hello_str --lc-main __start \
+           a_main.o b_msg.o
+
+RUN (verbatim, ssh mini):
+  LINK_RC=0
+  RUN_RC=0 STDOUT=[hi from cstring]
+  nm-u=[]
+  === otool -tv (adrp/add) ===
+  __start:
+  00000001000002e0	adrp	x1, 0 ; 0x100000000
+  00000001000002e4	add	x1, x1, #0x310
+  00000001000002e8	mov	x0, #0x1
+  === __const ===
+  Contents of (__TEXT,__const) section
+  0000000100000310	66206968 206d6f72 72747363 0a676e69
+  0000000100000320	00
+
+  Math check: adrp page = 0x100000000 (tgt_page == pc_page → delta 0).
+  add #0x310 = (0x100000310 & 0xfff). x1 = 0x100000000 + 0x310 =
+  0x100000310 = EXACT __const VM addr. __const bytes decode to
+  "hi from cstring\n\0". Program reads the string at the resolved
+  address and prints it. PASS.
+
+── TEST B: #1276 BRANCH26 regression (no-regression) ──────────────────
+  Canonical F-P1-LINKEXEC 2-object exit(42): user.o (bl _rt_answer;
+  bl _rt_exit) + rt.o (_rt_answer mov x0,#42/ret; _rt_exit svc exit).
+
+RUN (verbatim, ssh mini, perl alarm timeout):
+  EXIT42_RC=42
+  nm-u=[]
+  otool -tv: _start bl _rt_answer / bl _rt_exit both resolved correctly.
+
+  PASS — BRANCH26 cross-object reloc still resolves; my PAGE21/PAGEOFF12
+  + __const layout changes did not regress #1276.
+
+── default build_aprime.sh ────────────────────────────────────────────
+  `grep hexa_ld tool/build_aprime.sh` = no match. The default aprime_cc
+  recipe does NOT use hexa_ld (clang links it); my change to the opt-in
+  hexa-native linker cannot affect the default build path. Untouched.
+
+VERDICT: 🟢 PASS — PAGE21 + PAGEOFF12 + __const layout link + RUN exactly.
+RESIDUAL (next phase-H): multi-section beyond one __const (__data RW,
+__got, ARM64_RELOC_GOT_LOAD_PAGE21/PAGEOFF12), dyld imports for libm/
+libSystem function symbols (lazy/chained binds), the full 506KB runtime.

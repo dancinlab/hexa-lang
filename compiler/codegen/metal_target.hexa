@@ -1,0 +1,1091 @@
+// HEXA Native Compiler — Codegen / Metal (hexa-src → MSL source)  [RFC 075 P1+P2+P3 codegen-only]
+//
+// @version 0.0.3
+// @capabilities [pure]
+//
+// ─────────────────────────────────────────────────────────────────────
+// RFC 075 P1+P2+P3 — Metal codegen text-emit, codegen-only (no silicon
+// fire this cycle). NVPTX path byte-identically untouched. Zero edits
+// to `self/codegen_c2.hexa` per @D g_commit_push_deploy.
+//
+// This file is the hexa-native Apple GPU codegen target. It PARSES
+// CLEAN. P1 adds the full vec-add MSL syntax-fragment table (kernel
+// declaration, device-pointer parameter typing, thread-position-in-grid
+// attribute, FP32 binop fragments, load/store templates, address-space
+// keyword constants). P2 adds the per-Local precision / address-space
+// classifier helpers `_metal_local_precision(local)` and
+// `_metal_local_address_space(local)` — minimal versions mirroring the
+// `_nvptx_classify_local_for_stmt` style. P3 implements
+// `codegen_emit_metal_msl` to produce a real MSL kernel source for the
+// vec-add MIR pattern (STMT_LOAD + STMT_LOAD + STMT_BINOP_ADD +
+// STMT_STORE). Other kernel shapes are still future work — see honest
+// scope below.
+//
+// P4 (silicon fire via `xcrun -sdk macosx metal` + Metal Performance
+// Shaders runtime + M-series GPU) remains a follow-on USER-LOCAL cycle
+// requiring a Mac with the Metal toolchain. This cycle is codegen-only;
+// the emitted MSL text is verified by substring asserts in the lower-
+// test smoke, not by Apple-silicon execution.
+//
+// Mirror of `compiler/codegen/nvptx_target.hexa` (RFC 055 Stage 1) and
+// `compiler/codegen/rocm_target.hexa` (RFC 075 P0 sibling). The Metal
+// target is different in one structural way: Metal's vendor-input format
+// is SOURCE TEXT (.metal files in MSL — Apple's C++-flavored shading
+// language) rather than a virtual-ISA text like PTX or HIP-IL. The
+// opcodes below are therefore MSL syntax fragments, not virtual-ISA
+// mnemonics. The emit pass produces MSL source code, which Apple's
+// `metal` compiler (Xcode) ingests the same way `ptxas` ingests PTX.
+//
+//   pub fn codegen_emit_metal_msl(module: MModule) -> string
+//
+// Mirrors `codegen_emit_ptx_sm80` signature: MIR module in, MSL source
+// text out. Dispatcher checks the first MFunc shape: if it matches the
+// vec-add pattern (STMT_LOAD + STMT_LOAD + STMT_BINOP_ADD + STMT_STORE)
+// the emitter produces a full MSL kernel source. Empty module / non-
+// vec-add shape → returns "" honestly (the P0 contract is preserved).
+//
+// ─────────────────────────────────────────────────────────────────────
+// HONEST SCOPE (RFC 075 §6 / @D g3)
+//
+//   IS  — target enum constants (Apple GPU rev), full vec-add MSL
+//         syntax-fragment table, per-Local precision + address-space
+//         classifier helpers, real MSL source emit for the vec-add
+//         MIR pattern.
+//   NOT — General MIR-walk MSL emission. The vec-add emitter is
+//         shape-hardcoded; other MIR shapes return "". General
+//         MFunc → MSL lowering is multi-session (mirrors NVPTX P3
+//         timeline).  No `@gpu_kernel` target dispatch wiring this
+//         cycle (codegen-only). No `xcrun -sdk macosx metal` invocation
+//         (P4 silicon fire = follow-on USER-LOCAL Mac cycle).
+//         Apple silicon does not fire this cycle.
+//
+// `xcrun metal` (MSL source -> AIR bytecode -> metallib) is an external
+// Apple compiler — the same g5 logic as NVPTX's `ptxas` and ROCm's
+// `hipcc` (RFC 055 §8 mirrored to RFC 075). This file does not claim a
+// closed-loop Apple GPU toolchain.
+//
+// Choosing MSL source over AIR bytecode keeps @D f2 ("no LLVM linkage")
+// intact: AIR is an LLVM-bitcode container produced by Apple's `metal`
+// compiler. Emitting bitcode directly would re-introduce LLVM coupling.
+// Emitting MSL source text mirrors the PTX-text / HIP-IL-text pattern.
+//
+// ─────────────────────────────────────────────────────────────────────
+// CITATIONS (not lattice-derived, per @D f1)
+//
+// MSL syntax keywords (`kernel`, `device`, `threadgroup`, attribute
+// `[[thread_position_in_grid]]`) and Apple-GPU generation names (M1/M2/M3)
+// are Apple platform facts cited from Apple's Metal Shading Language
+// Specification.
+//   ref: Metal Shading Language Specification — https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf
+//   ref: Metal Performance Shaders — https://developer.apple.com/documentation/metalperformanceshaders
+// ─────────────────────────────────────────────────────────────────────
+
+import "../ir/mir.hexa"
+import "../ir/lir.hexa"
+
+// ── LModule target tags ───────────────────────────────────────
+//
+// The `LModule.target` value an Apple-compiled module would carry.
+// Three Apple-GPU generations as the conservative scaffold: M1 (Apple7),
+// M2 (Apple8), M3 (Apple9). Apple does NOT publish a stable per-GPU
+// arch string the way NVIDIA does for sm_*; the user-facing target is
+// the macOS deployment target + the Metal feature set. The strings here
+// are a hexa-internal convention for `LModule.target`, not an Apple-API
+// arch tag.
+pub let METAL_TARGET_APPLE_GPU_M1: string = "air64-apple-macos-applegpu-m1"
+pub let METAL_TARGET_APPLE_GPU_M2: string = "air64-apple-macos-applegpu-m2"
+pub let METAL_TARGET_APPLE_GPU_M3: string = "air64-apple-macos-applegpu-m3"
+pub let METAL_TARGET_APPLE_GPU: string    = "air64-apple-macos-applegpu"  // generation-agnostic default
+
+// MSL language version directive (top of the emitted .metal file).
+// Metal 3.0 is the macOS 13+ baseline; 2.4 covers macOS 12+ if needed.
+pub let METAL_LANG_VERSION_3_0: string = "metal_3_0"
+pub let METAL_LANG_VERSION_2_4: string = "metal_2_4"
+
+// ── MSL address spaces (Apple memory hierarchy) ───────────────
+//
+// Apple MSL has four address-space qualifiers, mirrored to PTX state
+// spaces but vendor-specific (RFC 075 §3 table row).
+pub let METAL_SPACE_DEVICE: string      = "device"       // device DRAM (≈ PTX global)
+pub let METAL_SPACE_THREADGROUP: string = "threadgroup"  // per-block scratchpad (≈ PTX shared)
+pub let METAL_SPACE_CONSTANT: string    = "constant"     // read-only constant (≈ PTX const)
+pub let METAL_SPACE_THREAD: string      = "thread"       // per-thread private (≈ PTX local)
+
+// ── MSL kernel attributes (thread hierarchy) ──────────────────
+//
+// MSL uses C++ attribute syntax to bind kernel arguments to thread
+// hierarchy positions. These are SOURCE-TEXT fragments — emitted
+// literally into the kernel signature, e.g.
+//   uint tid [[thread_position_in_grid]]
+pub let METAL_ATTR_TID: string    = "[[thread_position_in_grid]]"
+pub let METAL_ATTR_BID: string    = "[[threadgroup_position_in_grid]]"
+pub let METAL_ATTR_NTID: string   = "[[threads_per_threadgroup]]"
+pub let METAL_ATTR_NCTAID: string = "[[threadgroups_per_grid]]"
+
+// Apple hardware fact: SIMD-group (warp equivalent) is 32 wide on all
+// Apple GPUs through M3. Cited constant, not derived from n=6.
+//   ref: Metal Shading Language Specification §6.9.2 SIMD-group functions
+pub let METAL_SIMD_GROUP_SIZE: i64 = 32
+
+// ── MSL simdgroup_matrix MMA fragments (matmul tier — RFC 075 P3++) ──
+//
+// Apple's tensor-core analog is the `simdgroup_matrix<T, R, C>` type plus
+// the cooperative `simdgroup_load` / `simdgroup_multiply_accumulate` /
+// `simdgroup_store` builtins (the warp-level MMA the cross-vendor
+// scaffold mirrors against NVPTX `wmma.*` and ROCm `rocwmma`). Apple's
+// canonical tile is 8×8 FP32; a 32×32 threadgroup tile is composed of a
+// 4×4 grid of 8×8 simdgroup-matrix fragments (`32x32_tg` pattern). These
+// are SOURCE-TEXT fragments emitted into the .metal file, NOT a virtual
+// ISA — Apple's `metal` compiler lowers them to AIR/AMX-style ops.
+//   ref: Metal Shading Language Specification §6.7.1 (matrix functions)
+//   ref: Metal Shading Language Specification §6.9.2 (SIMD-group functions)
+pub let METAL_MM_FRAG_TYPE: string   = "simdgroup_float8x8"                 // 8×8 FP32 simdgroup matrix fragment
+pub let METAL_MM_LOAD: string        = "simdgroup_load"                     // cooperative tile load
+pub let METAL_MM_MAD: string         = "simdgroup_multiply_accumulate"      // c = a*b + c (warp-level MMA)
+pub let METAL_MM_STORE: string       = "simdgroup_store"                    // cooperative tile store
+pub let METAL_MM_MAKE_ZERO: string   = "make_filled_simdgroup_matrix"       // zero-init accumulator helper
+pub let METAL_MM_FRAG_DIM: i64       = 8                                    // Apple canonical 8×8 fragment tile
+pub let METAL_MM_TG_DIM: i64         = 32                                   // 32×32 threadgroup tile (4×4 of 8×8)
+
+// ── MSL syntax fragments (vec-add tier — RFC 075 P1) ──────────
+//
+// MSL is source text, so the "opcodes" below are language fragments
+// the emit pass concatenates rather than virtual-ISA mnemonics. RFC 075
+// P1 lands the full vec-add subset (kernel declaration, device-pointer
+// parameter typing, FP32 binop fragments, thread-position attribute);
+// later phases (FMA, FP16, threadgroup, atomics) add their own constants.
+pub let METAL_KW_KERNEL: string     = "kernel"          // declares a compute kernel
+pub let METAL_KW_VOID: string       = "void"            // kernel return type (always void)
+pub let METAL_KW_CONST: string      = "const"           // immutable qualifier
+pub let METAL_TYPE_FLOAT: string    = "float"           // FP32 scalar
+pub let METAL_TYPE_FLOAT_PTR: string = "device float*"  // FP32 device pointer (kernel arg)
+pub let METAL_TYPE_DOUBLE: string   = "double"          // FP64 scalar (Apple-GPU FP64 is emulated/limited)
+pub let METAL_TYPE_UINT: string     = "uint"            // 32-bit unsigned scalar (thread index type)
+pub let METAL_TYPE_INT: string      = "int"             // 32-bit signed scalar
+pub let METAL_TYPE_BOOL: string     = "bool"            // boolean scalar
+
+// RFC 075 P1 — vec-add binop / load / store / return / kernel-decl
+// fragment constants. These are the exact source-text fragments the
+// P3 emit pass concatenates. "Opcode" name kept aligned with the
+// cross-vendor scaffold pattern even though MSL is source text.
+pub let METAL_OP_ADD: string         = "+"              // binop add (source-text fragment)
+pub let METAL_OP_SUB: string         = "-"              // binop sub
+pub let METAL_OP_MUL: string         = "*"              // binop mul
+pub let METAL_OP_DIV: string         = "/"              // binop div
+// RFC 075 P3+ unary family — unary-op MSL source-text fragments.
+// `-` is the prefix unary minus operator (overloaded with binop SUB by
+// position — emit pass disambiguates via the unary-body helper). `abs`
+// and `sqrt` are Apple MSL builtins exposed by `<metal_stdlib>`.
+// Transcendentals `exp` / `log` / `sin` / `cos` are also Apple MSL
+// builtins from `<metal_stdlib>` (Metal Shading Language Specification
+// §5.10 — common / math functions), the FP32 single-argument overloads.
+//   ref: Metal Shading Language Specification §5.10 (math functions)
+pub let METAL_OP_NEG: string         = "-"              // unary minus (prefix)
+pub let METAL_OP_ABS: string         = "abs"            // MSL builtin: abs(float)
+pub let METAL_OP_SQRT: string        = "sqrt"           // MSL builtin: sqrt(float)
+pub let METAL_OP_EXP: string         = "exp"            // MSL builtin: exp(float)
+pub let METAL_OP_LOG: string         = "log"            // MSL builtin: log(float)
+pub let METAL_OP_SIN: string         = "sin"            // MSL builtin: sin(float)
+pub let METAL_OP_COS: string         = "cos"            // MSL builtin: cos(float)
+pub let METAL_OP_INDEX_OPEN: string  = "["              // array indexing open
+pub let METAL_OP_INDEX_CLOSE: string = "]"              // array indexing close
+pub let METAL_OP_ASSIGN: string      = " = "            // assignment (with spaces)
+pub let METAL_OP_RETURN_NONE: string = ""               // MSL kernel returns void — empty op
+pub let METAL_OP_STMT_TERM: string   = ";"              // statement terminator
+pub let METAL_OP_CALL_OPEN: string   = "("              // function call open paren
+pub let METAL_OP_CALL_CLOSE: string  = ")"              // function call close paren
+
+// RFC 075 P1 — kernel-declaration fragment templates. Kept as separate
+// string constants so the P3 emit pass concatenates them in a single
+// well-defined order. Mirrors the ptx_op_emit_* helper shape.
+pub let METAL_OP_KERNEL_DECL: string         = "kernel void"          // kernel signature lead
+pub let METAL_OP_PARAM_DEVICE_CONST_FLOAT_PTR: string = "device const float* "  // read-only FP32 buffer
+pub let METAL_OP_PARAM_DEVICE_FLOAT_PTR: string       = "device float* "        // writable FP32 buffer
+pub let METAL_OP_THREAD_POS_GRID: string     = "[[thread_position_in_grid]]"   // thread-id binding
+pub let METAL_OP_BUFFER_BINDING_PREFIX: string = "[[buffer("                    // [[buffer(N)]] prefix
+pub let METAL_OP_BUFFER_BINDING_SUFFIX: string = ")]]"                          // [[buffer(N)]] suffix
+pub let METAL_OP_PREAMBLE_INCLUDE: string    = "#include <metal_stdlib>"        // stdlib include
+pub let METAL_OP_PREAMBLE_USING: string      = "using namespace metal;"         // metal namespace
+pub let METAL_OP_LOAD_F32_TEMPLATE: string   = "[i]"   // a[i] tail — emitted as <buf>[i]
+pub let METAL_OP_STORE_F32_TEMPLATE: string  = "[i]"   // c[i] tail — emitted as <buf>[i]
+
+// ── MSL address spaces (lookup pair) ──────────────────────────
+//
+// RFC 075 P2 alias constants — short-form aliases the classifier
+// helpers `_metal_local_address_space` / `_metal_local_precision`
+// return. These mirror `METAL_SPACE_*` strings but live alongside the
+// classifier helpers for locality. The vec-add subset only exercises
+// METAL_AS_DEVICE (kernel buffer args land in device memory); the
+// other three are reserved for future shapes (threadgroup atomics,
+// constant tables, thread-private spills).
+pub let METAL_AS_DEVICE: string      = "device"        // kernel-buffer pointer (GPU DRAM)
+pub let METAL_AS_THREADGROUP: string = "threadgroup"   // per-block scratchpad
+pub let METAL_AS_CONSTANT: string    = "constant"      // read-only constant bank
+pub let METAL_AS_THREAD: string      = "thread"        // per-thread private (default)
+
+// ── MSL per-Local precision tags (RFC 075 P2 classifier) ──────
+//
+// Stringly-typed per-Local precision tags the P2 classifier emits.
+// Mirrors NVPTX_RKIND_* string constants pattern. For vec-add today
+// every Local is METAL_PRECISION_F32 (FP32 hardware-canonical on
+// Apple GPU); future phases add F16 / I32 / PRED for cmp results.
+pub let METAL_PRECISION_F32: string  = "float"
+pub let METAL_PRECISION_F16: string  = "half"
+pub let METAL_PRECISION_F64: string  = "double"  // emulated on most M-series silicon
+pub let METAL_PRECISION_I32: string  = "int"
+pub let METAL_PRECISION_U32: string  = "uint"
+pub let METAL_PRECISION_BOOL: string = "bool"
+
+// ── MSL function-kind keyword ─────────────────────────────────
+//
+// Apple's analog of PTX `.visible .entry` is the `kernel` keyword in
+// MSL source. Device-only helpers are unqualified (or `inline`).
+pub let METAL_DIRECTIVE_KERNEL: string = "kernel"
+pub let METAL_DIRECTIVE_DEVICE: string = ""  // unqualified function (device-only callable)
+
+// MetalOpEntry — one row of the informational MSL syntax-fragment table.
+// Mirrors the per-target opcode-table pattern (RFC 055 §3 / lir.hexa).
+// "mnemonic" is a misnomer for MSL (source text), but the field name is
+// kept aligned with PtxOpEntry / RocmOpEntry for the cross-vendor
+// scaffold pattern.
+pub struct MetalOpEntry {
+    mnemonic: string,    // MSL fragment, e.g. "+" or "kernel"
+    arity: i64,          // operand count
+    space: string,       // address space if memory op, "" otherwise
+    note: string         // human-readable role
+}
+
+// _metal_op_entry — MetalOpEntry constructor.
+fn _metal_op_entry(mnemonic: string, arity: i64, space: string, note: string) -> MetalOpEntry {
+    return MetalOpEntry {
+        mnemonic: mnemonic,
+        arity: arity,
+        space: space,
+        note: note
+    }
+}
+
+// metal_fp32_slice_ops — the FP32-arithmetic-subset syntax table for the
+// RFC 075 vec-add slice. RFC 075 P1 LANDED — full vec-add row set
+// (kernel decl, device-pointer parameter typing, thread-position
+// attribute, binop fragments, load/store templates). Note: Apple-GPU
+// FP64 is emulated on most M-series silicon (limited hardware FP64);
+// FP32 is the canonical first slice on Metal, whereas NVPTX/ROCm
+// started with FP64 because data-center NVIDIA/AMD silicon has
+// hardware FP64.
+pub fn metal_fp32_slice_ops() -> [MetalOpEntry] {
+    let mut t = []
+    // Kernel declaration row — `kernel void <name>(...)`.
+    t.push(_metal_op_entry(METAL_OP_KERNEL_DECL, 0, "", "kernel declaration lead"))
+    // Device-pointer parameter rows — read-only inputs + writable output.
+    t.push(_metal_op_entry(METAL_OP_PARAM_DEVICE_CONST_FLOAT_PTR, 1, METAL_AS_DEVICE, "device const float* (read-only buffer arg)"))
+    t.push(_metal_op_entry(METAL_OP_PARAM_DEVICE_FLOAT_PTR, 1, METAL_AS_DEVICE, "device float* (writable buffer arg)"))
+    // Thread-position attribute — the kernel's i index binding.
+    t.push(_metal_op_entry(METAL_OP_THREAD_POS_GRID, 0, "", "thread_position_in_grid attribute"))
+    // FP32 binop fragments — vec-add only needs add today; sub/mul/div
+    // ride in for the next-shape cycle.
+    t.push(_metal_op_entry(METAL_OP_ADD, 2, "", "FP32 add fragment"))
+    t.push(_metal_op_entry(METAL_OP_SUB, 2, "", "FP32 sub fragment"))
+    t.push(_metal_op_entry(METAL_OP_MUL, 2, "", "FP32 mul fragment"))
+    t.push(_metal_op_entry(METAL_OP_DIV, 2, "", "FP32 div fragment"))
+    // Load / store templates — index-into-device-pointer source text.
+    t.push(_metal_op_entry(METAL_OP_LOAD_F32_TEMPLATE, 1, METAL_AS_DEVICE, "FP32 device load: <buf>[i]"))
+    t.push(_metal_op_entry(METAL_OP_STORE_F32_TEMPLATE, 1, METAL_AS_DEVICE, "FP32 device store: <buf>[i]"))
+    // Return-none row — kernel body terminator (MSL kernels are void).
+    t.push(_metal_op_entry(METAL_OP_RETURN_NONE, 0, "", "kernel void return"))
+    return t
+}
+
+// ── RFC 075 P2 — per-Local precision + address-space classifiers ─────
+//
+// Mirrors the NVPTX `_nvptx_classify_local_for_stmt` discipline at a
+// minimal scale. The vec-add subset doesn't need a stmt-aware classifier
+// — every Local is FP32 (Apple GPU FP32 hardware-canonical) and every
+// buffer arg lives in `device` memory. The helpers below return those
+// defaults; they document the extension point for future shapes
+// (threadgroup atomics, FP16, constant tables, thread-private spills).
+//
+// HONEST SCOPE — these helpers return constants today. Per-stmt
+// classification (predicate vs scalar, FP16 vs FP32) is multi-session
+// work that mirrors `_nvptx_classify_local_for_stmt` once the MSL
+// emitter handles more than the vec-add shape.
+
+// _metal_local_precision — per-Local precision tag (MSL type keyword).
+//
+// Vec-add tier returns METAL_PRECISION_F32 unconditionally. Future
+// shapes consult `local.precision` (mirroring `_nvptx_classify_local_for_stmt`)
+// to dispatch into half / int / bool. Empty / unknown → FP32 default.
+fn _metal_local_precision(local: Local) -> string {
+    // RFC 068-style per-Local precision tag wins when explicitly set
+    // (mirror of `_nvptx_classify_local_for_stmt` line 968+).
+    if local.precision == ".f16" { return METAL_PRECISION_F16 }
+    if local.precision == ".f32" { return METAL_PRECISION_F32 }
+    if local.precision == ".f64" { return METAL_PRECISION_F64 }
+    if local.precision == ".i32" { return METAL_PRECISION_I32 }
+    if local.precision == ".u32" { return METAL_PRECISION_U32 }
+    if local.precision == ".bool" { return METAL_PRECISION_BOOL }
+    // Default for vec-add tier — FP32 (Apple GPU canonical).
+    return METAL_PRECISION_F32
+}
+
+// _metal_local_address_space — per-Local address-space qualifier.
+//
+// Vec-add tier returns METAL_AS_DEVICE for kernel buffer params (the
+// only locals carrying a non-default address space today). All other
+// Locals land in the implicit `thread` private bank — represented by
+// METAL_AS_THREAD here. Future shapes (threadgroup atomics, constant
+// tables) will consult an extended MIR annotation that today does not
+// exist — this helper documents that extension point.
+fn _metal_local_address_space(local: Local) -> string {
+    // P2 minimal — kernel buffer params (arena_id 0 = global) land in
+    // device memory; everything else in thread-private. Mirrors the
+    // NVPTX `.global` vs `.local` state-space decision.
+    if local.arena_id == 0 { return METAL_AS_DEVICE }
+    return METAL_AS_THREAD
+}
+
+// ── RFC 075 P3 — vec-add MSL emit helpers ───────────────────────────
+//
+// Helper builders for the MSL kernel text. The emit pass concatenates
+// them in a fixed sequence. The vec-add shape is hardcoded (a single
+// STMT_LOAD + STMT_LOAD + STMT_BINOP_ADD + STMT_STORE pattern that
+// matches the canonical `c[i] = a[i] + b[i]` kernel).
+
+// _metal_emit_preamble — emit the MSL preamble (include + namespace).
+fn _metal_emit_preamble() -> string {
+    return METAL_OP_PREAMBLE_INCLUDE + "\n" + METAL_OP_PREAMBLE_USING + "\n\n"
+}
+
+// _metal_emit_kernel_signature — emit `kernel void <name>(...)` with
+// the three vec-add device buffer params + the thread-index binding.
+// Hardcoded for the vec-add MIR shape (two const inputs + one writable
+// output + uint i [[thread_position_in_grid]]).
+fn _metal_emit_kernel_signature(name: string) -> string {
+    let mut out = METAL_OP_KERNEL_DECL + " " + name + "(\n"
+    out = out + "    " + METAL_OP_PARAM_DEVICE_CONST_FLOAT_PTR + "a "
+    out = out + METAL_OP_BUFFER_BINDING_PREFIX + "0" + METAL_OP_BUFFER_BINDING_SUFFIX + ",\n"
+    out = out + "    " + METAL_OP_PARAM_DEVICE_CONST_FLOAT_PTR + "b "
+    out = out + METAL_OP_BUFFER_BINDING_PREFIX + "1" + METAL_OP_BUFFER_BINDING_SUFFIX + ",\n"
+    out = out + "    " + METAL_OP_PARAM_DEVICE_FLOAT_PTR + "c "
+    out = out + METAL_OP_BUFFER_BINDING_PREFIX + "2" + METAL_OP_BUFFER_BINDING_SUFFIX + ",\n"
+    out = out + "    " + METAL_TYPE_UINT + " i " + METAL_OP_THREAD_POS_GRID + ")\n"
+    return out
+}
+
+// _metal_emit_vec_add_body — emit the MSL kernel body for vec-add.
+// Hardcoded: `c[i] = a[i] + b[i];` with surrounding braces.
+fn _metal_emit_vec_add_body() -> string {
+    let mut out = "{\n"
+    out = out + "    c" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_ASSIGN
+    out = out + "a" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + " " + METAL_OP_ADD + " "
+    out = out + "b" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// _metal_emit_vec_mul_body — emit the MSL kernel body for vec-mul.
+// Hardcoded: `c[i] = a[i] * b[i];` with surrounding braces. Mirror of
+// `_metal_emit_vec_add_body` with the binop fragment swapped to `*`.
+fn _metal_emit_vec_mul_body() -> string {
+    let mut out = "{\n"
+    out = out + "    c" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_ASSIGN
+    out = out + "a" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + " " + METAL_OP_MUL + " "
+    out = out + "b" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// _metal_emit_vec_sub_body — emit the MSL kernel body for vec-sub.
+// Hardcoded: `c[i] = a[i] - b[i];` with surrounding braces. Mirror of
+// `_metal_emit_vec_add_body` with the binop fragment swapped to `-`.
+fn _metal_emit_vec_sub_body() -> string {
+    let mut out = "{\n"
+    out = out + "    c" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_ASSIGN
+    out = out + "a" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + " " + METAL_OP_SUB + " "
+    out = out + "b" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// _metal_emit_vec_div_body — emit the MSL kernel body for vec-div.
+// Hardcoded: `c[i] = a[i] / b[i];` with surrounding braces. Mirror of
+// `_metal_emit_vec_add_body` with the binop fragment swapped to `/`.
+fn _metal_emit_vec_div_body() -> string {
+    let mut out = "{\n"
+    out = out + "    c" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_ASSIGN
+    out = out + "a" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + " " + METAL_OP_DIV + " "
+    out = out + "b" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// _metal_emit_vec_scale_body — emit the MSL kernel body for vec-scale.
+// Hardcoded: `c[i] = a[i] * <scalar>;` with surrounding braces. The
+// scalar literal text is supplied by the caller (formatted from the
+// MIR const operand) so the emitter stays string-pure.
+fn _metal_emit_vec_scale_body(scalar_text: string) -> string {
+    let mut out = "{\n"
+    out = out + "    c" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_ASSIGN
+    out = out + "a" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + " " + METAL_OP_MUL + " "
+    out = out + scalar_text
+    out = out + METAL_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// ── RFC 075 P3+ unary family — 2-buffer signature + body helpers ────
+//
+// Unary element-wise kernels (vec-neg, vec-abs, vec-sqrt) have a
+// 2-buffer signature: one read-only input `a` + one writable output `c`
+// (NO second input `b`). The thread index binding is identical to the
+// 3-buffer vec-add signature (uint i [[thread_position_in_grid]]).
+// This emitter mirrors `_metal_emit_kernel_signature` but drops the
+// `b` parameter row and shifts `c`'s buffer binding from [[buffer(2)]]
+// to [[buffer(1)]].
+
+// _metal_emit_unary_kernel_signature — emit `kernel void <name>(...)`
+// with the 2-buffer params (a, c) + thread-index binding. Hardcoded
+// for the unary MIR shape (one const input + one writable output +
+// uint i [[thread_position_in_grid]]).
+fn _metal_emit_unary_kernel_signature(name: string) -> string {
+    let mut out = METAL_OP_KERNEL_DECL + " " + name + "(\n"
+    out = out + "    " + METAL_OP_PARAM_DEVICE_CONST_FLOAT_PTR + "a "
+    out = out + METAL_OP_BUFFER_BINDING_PREFIX + "0" + METAL_OP_BUFFER_BINDING_SUFFIX + ",\n"
+    out = out + "    " + METAL_OP_PARAM_DEVICE_FLOAT_PTR + "c "
+    out = out + METAL_OP_BUFFER_BINDING_PREFIX + "1" + METAL_OP_BUFFER_BINDING_SUFFIX + ",\n"
+    out = out + "    " + METAL_TYPE_UINT + " i " + METAL_OP_THREAD_POS_GRID + ")\n"
+    return out
+}
+
+// _metal_emit_vec_neg_body — emit the MSL kernel body for vec-neg.
+// Hardcoded: `c[i] = -a[i];` with surrounding braces. Element-wise
+// unary minus (prefix `-` operator); no second buffer load.
+fn _metal_emit_vec_neg_body() -> string {
+    let mut out = "{\n"
+    out = out + "    c" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_ASSIGN
+    out = out + METAL_OP_NEG
+    out = out + "a" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// _metal_emit_vec_abs_body — emit the MSL kernel body for vec-abs.
+// Hardcoded: `c[i] = abs(a[i]);` with surrounding braces. Calls the
+// MSL builtin `abs(float)` exposed by `<metal_stdlib>` (§5.10).
+fn _metal_emit_vec_abs_body() -> string {
+    let mut out = "{\n"
+    out = out + "    c" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_ASSIGN
+    out = out + METAL_OP_ABS + METAL_OP_CALL_OPEN
+    out = out + "a" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_CALL_CLOSE
+    out = out + METAL_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// _metal_emit_vec_sqrt_body — emit the MSL kernel body for vec-sqrt.
+// Hardcoded: `c[i] = sqrt(a[i]);` with surrounding braces. Calls the
+// MSL builtin `sqrt(float)` exposed by `<metal_stdlib>` (§5.10).
+fn _metal_emit_vec_sqrt_body() -> string {
+    let mut out = "{\n"
+    out = out + "    c" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_ASSIGN
+    out = out + METAL_OP_SQRT + METAL_OP_CALL_OPEN
+    out = out + "a" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_CALL_CLOSE
+    out = out + METAL_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// _metal_emit_vec_exp_body — emit the MSL kernel body for vec-exp.
+// Hardcoded: `c[i] = exp(a[i]);` with surrounding braces. Calls the
+// MSL builtin `exp(float)` exposed by `<metal_stdlib>` (§5.10).
+fn _metal_emit_vec_exp_body() -> string {
+    let mut out = "{\n"
+    out = out + "    c" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_ASSIGN
+    out = out + METAL_OP_EXP + METAL_OP_CALL_OPEN
+    out = out + "a" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_CALL_CLOSE
+    out = out + METAL_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// _metal_emit_vec_log_body — emit the MSL kernel body for vec-log.
+// Hardcoded: `c[i] = log(a[i]);` with surrounding braces. Calls the
+// MSL builtin `log(float)` exposed by `<metal_stdlib>` (§5.10).
+fn _metal_emit_vec_log_body() -> string {
+    let mut out = "{\n"
+    out = out + "    c" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_ASSIGN
+    out = out + METAL_OP_LOG + METAL_OP_CALL_OPEN
+    out = out + "a" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_CALL_CLOSE
+    out = out + METAL_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// _metal_emit_vec_sin_body — emit the MSL kernel body for vec-sin.
+// Hardcoded: `c[i] = sin(a[i]);` with surrounding braces. Calls the
+// MSL builtin `sin(float)` exposed by `<metal_stdlib>` (§5.10).
+fn _metal_emit_vec_sin_body() -> string {
+    let mut out = "{\n"
+    out = out + "    c" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_ASSIGN
+    out = out + METAL_OP_SIN + METAL_OP_CALL_OPEN
+    out = out + "a" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_CALL_CLOSE
+    out = out + METAL_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// _metal_emit_vec_cos_body — emit the MSL kernel body for vec-cos.
+// Hardcoded: `c[i] = cos(a[i]);` with surrounding braces. Calls the
+// MSL builtin `cos(float)` exposed by `<metal_stdlib>` (§5.10).
+fn _metal_emit_vec_cos_body() -> string {
+    let mut out = "{\n"
+    out = out + "    c" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_ASSIGN
+    out = out + METAL_OP_COS + METAL_OP_CALL_OPEN
+    out = out + "a" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_CALL_CLOSE
+    out = out + METAL_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// _metal_mfunc_is_vec_add_shape — recognise the vec-add MIR shape.
+// Hardcoded shape check: entry block has exactly STMT_LOAD + STMT_LOAD
+// + STMT_BINOP("add") + STMT_STORE (in that order), plus an optional
+// STMT_RETURN at the end. Anything else returns false and the emitter
+// falls through to the honest empty-string path.
+fn _metal_mfunc_is_vec_add_shape(mfn: MFunc) -> bool {
+    if len(mfn.blocks) == 0 { return false }
+    let entry = mfn.blocks[0]
+    let stmts = entry.stmts
+    if len(stmts) < 4 { return false }
+    if stmts[0].kind != STMT_LOAD { return false }
+    if stmts[1].kind != STMT_LOAD { return false }
+    if stmts[2].kind != STMT_BINOP { return false }
+    if stmts[2].op != "add" { return false }
+    if stmts[3].kind != STMT_STORE { return false }
+    return true
+}
+
+// _metal_mfunc_is_vec_mul_shape — recognise the vec-mul MIR shape.
+// Mirror of `_metal_mfunc_is_vec_add_shape` with the BINOP op string
+// switched to "mul". Same STMT_LOAD + STMT_LOAD + STMT_BINOP("mul") +
+// STMT_STORE skeleton (with optional STMT_RETURN tail).
+fn _metal_mfunc_is_vec_mul_shape(mfn: MFunc) -> bool {
+    if len(mfn.blocks) == 0 { return false }
+    let entry = mfn.blocks[0]
+    let stmts = entry.stmts
+    if len(stmts) < 4 { return false }
+    if stmts[0].kind != STMT_LOAD { return false }
+    if stmts[1].kind != STMT_LOAD { return false }
+    if stmts[2].kind != STMT_BINOP { return false }
+    if stmts[2].op != "mul" { return false }
+    if stmts[3].kind != STMT_STORE { return false }
+    return true
+}
+
+// _metal_mfunc_is_vec_sub_shape — recognise the vec-sub MIR shape.
+// Mirror of `_metal_mfunc_is_vec_add_shape` with the BINOP op string
+// switched to "sub". Same STMT_LOAD + STMT_LOAD + STMT_BINOP("sub") +
+// STMT_STORE skeleton (with optional STMT_RETURN tail).
+fn _metal_mfunc_is_vec_sub_shape(mfn: MFunc) -> bool {
+    if len(mfn.blocks) == 0 { return false }
+    let entry = mfn.blocks[0]
+    let stmts = entry.stmts
+    if len(stmts) < 4 { return false }
+    if stmts[0].kind != STMT_LOAD { return false }
+    if stmts[1].kind != STMT_LOAD { return false }
+    if stmts[2].kind != STMT_BINOP { return false }
+    if stmts[2].op != "sub" { return false }
+    if stmts[3].kind != STMT_STORE { return false }
+    return true
+}
+
+// _metal_mfunc_is_vec_div_shape — recognise the vec-div MIR shape.
+// Mirror of `_metal_mfunc_is_vec_add_shape` with the BINOP op string
+// switched to "div". Same STMT_LOAD + STMT_LOAD + STMT_BINOP("div") +
+// STMT_STORE skeleton (with optional STMT_RETURN tail).
+fn _metal_mfunc_is_vec_div_shape(mfn: MFunc) -> bool {
+    if len(mfn.blocks) == 0 { return false }
+    let entry = mfn.blocks[0]
+    let stmts = entry.stmts
+    if len(stmts) < 4 { return false }
+    if stmts[0].kind != STMT_LOAD { return false }
+    if stmts[1].kind != STMT_LOAD { return false }
+    if stmts[2].kind != STMT_BINOP { return false }
+    if stmts[2].op != "div" { return false }
+    if stmts[3].kind != STMT_STORE { return false }
+    return true
+}
+
+// _metal_mfunc_is_vec_scale_shape — recognise the vec-scale MIR shape.
+// Skeleton: STMT_LOAD a→va, STMT_BINOP("mul") with operands
+// (Operand{kind="local"}, Operand{kind="const_float"|"const_int"}),
+// STMT_STORE vc→c (optional STMT_RETURN tail). The const operand
+// position is fixed at args[1] (lhs local · rhs const) — the canonical
+// `a[i] * <scalar>` lowering order. Anything else falls through.
+fn _metal_mfunc_is_vec_scale_shape(mfn: MFunc) -> bool {
+    if len(mfn.blocks) == 0 { return false }
+    let entry = mfn.blocks[0]
+    let stmts = entry.stmts
+    if len(stmts) < 3 { return false }
+    if stmts[0].kind != STMT_LOAD { return false }
+    if stmts[1].kind != STMT_BINOP { return false }
+    if stmts[1].op != "mul" { return false }
+    if stmts[2].kind != STMT_STORE { return false }
+    // BINOP args[0] = lhs local, args[1] = rhs const literal.
+    let binop_args = stmts[1].args
+    if len(binop_args) < 2 { return false }
+    if binop_args[0].kind != "local" { return false }
+    let rhs_kind = binop_args[1].kind
+    if rhs_kind != "const_float" {
+        if rhs_kind != "const_int" { return false }
+    }
+    return true
+}
+
+// _metal_mfunc_is_unary_shape_with_op — shared recogniser for the
+// 2-buffer unary element-wise MIR shape. Skeleton: STMT_LOAD a→va,
+// STMT_UNOP(op_name) (va)→vc, STMT_STORE vc→c (optional STMT_RETURN
+// tail). The unary op string ("neg" / "abs" / "sqrt") is the only
+// per-shape discriminator; the load-unop-store skeleton is identical
+// across the three variants. Element-wise unary; not invoked when the
+// MIR has a second STMT_LOAD (binop/scale dispatch wins first).
+fn _metal_mfunc_is_unary_shape_with_op(mfn: MFunc, op_name: string) -> bool {
+    if len(mfn.blocks) == 0 { return false }
+    let entry = mfn.blocks[0]
+    let stmts = entry.stmts
+    if len(stmts) < 3 { return false }
+    if stmts[0].kind != STMT_LOAD { return false }
+    if stmts[1].kind != STMT_UNOP { return false }
+    if stmts[1].op != op_name { return false }
+    if stmts[2].kind != STMT_STORE { return false }
+    // UNOP carries a single local operand (no rhs).
+    let unop_args = stmts[1].args
+    if len(unop_args) < 1 { return false }
+    if unop_args[0].kind != "local" { return false }
+    return true
+}
+
+// _metal_mfunc_is_vec_neg_shape — recognise vec-neg MIR shape.
+// STMT_LOAD a→va + STMT_UNOP("neg") va→vc + STMT_STORE vc→c.
+fn _metal_mfunc_is_vec_neg_shape(mfn: MFunc) -> bool {
+    return _metal_mfunc_is_unary_shape_with_op(mfn, "neg")
+}
+
+// _metal_mfunc_is_vec_abs_shape — recognise vec-abs MIR shape.
+// STMT_LOAD a→va + STMT_UNOP("abs") va→vc + STMT_STORE vc→c.
+fn _metal_mfunc_is_vec_abs_shape(mfn: MFunc) -> bool {
+    return _metal_mfunc_is_unary_shape_with_op(mfn, "abs")
+}
+
+// _metal_mfunc_is_vec_sqrt_shape — recognise vec-sqrt MIR shape.
+// STMT_LOAD a→va + STMT_UNOP("sqrt") va→vc + STMT_STORE vc→c.
+fn _metal_mfunc_is_vec_sqrt_shape(mfn: MFunc) -> bool {
+    return _metal_mfunc_is_unary_shape_with_op(mfn, "sqrt")
+}
+
+// _metal_mfunc_is_vec_exp_shape — recognise vec-exp MIR shape.
+// STMT_LOAD a→va + STMT_UNOP("exp") va→vc + STMT_STORE vc→c.
+fn _metal_mfunc_is_vec_exp_shape(mfn: MFunc) -> bool {
+    return _metal_mfunc_is_unary_shape_with_op(mfn, "exp")
+}
+
+// _metal_mfunc_is_vec_log_shape — recognise vec-log MIR shape.
+// STMT_LOAD a→va + STMT_UNOP("log") va→vc + STMT_STORE vc→c.
+fn _metal_mfunc_is_vec_log_shape(mfn: MFunc) -> bool {
+    return _metal_mfunc_is_unary_shape_with_op(mfn, "log")
+}
+
+// _metal_mfunc_is_vec_sin_shape — recognise vec-sin MIR shape.
+// STMT_LOAD a→va + STMT_UNOP("sin") va→vc + STMT_STORE vc→c.
+fn _metal_mfunc_is_vec_sin_shape(mfn: MFunc) -> bool {
+    return _metal_mfunc_is_unary_shape_with_op(mfn, "sin")
+}
+
+// _metal_mfunc_is_vec_cos_shape — recognise vec-cos MIR shape.
+// STMT_LOAD a→va + STMT_UNOP("cos") va→vc + STMT_STORE vc→c.
+fn _metal_mfunc_is_vec_cos_shape(mfn: MFunc) -> bool {
+    return _metal_mfunc_is_unary_shape_with_op(mfn, "cos")
+}
+
+// ── RFC 075 P3++ matmul tier — simdgroup_matrix MMA shape recognisers ─
+//
+// `_metal_mfunc_is_matmul_shape_with_op` — shared recogniser for the
+// matmul-family MIR shape. Skeleton: STMT_LOAD a→va, STMT_LOAD b→vb,
+// STMT_BINOP(op_name) (va, vb)→vc, STMT_STORE vc→c (optional STMT_RETURN
+// tail). This is the IDENTICAL skeleton the NVPTX `_nvptx_mfunc_is_matmul
+// _shape` recogniser keys on (N86 / N128) and the SAME synthetic MIR
+// `gpu_matmul(c, a, b, M, N, K)` (N100, hir_to_mir.hexa:1169) and the
+// N143 HIR→MIR nested-loop auto-synth produce: a 4-stmt entry block whose
+// third stmt is STMT_BINOP with op ∈ {"matmul", "matmul_NT_a",
+// "matmul_NT_b"}. The op string is the only per-shape discriminator;
+// the load-load-binop-store skeleton is shared across the three variants.
+//   ref: hir_to_mir.hexa gpu_matmul call-branch synthesis (N100)
+//   ref: nvptx_target.hexa `_nvptx_mfunc_is_matmul_shape` (N86)
+fn _metal_mfunc_is_matmul_shape_with_op(mfn: MFunc, op_name: string) -> bool {
+    if len(mfn.blocks) == 0 { return false }
+    let entry = mfn.blocks[0]
+    let stmts = entry.stmts
+    if len(stmts) < 4 { return false }
+    if stmts[0].kind != STMT_LOAD { return false }
+    if stmts[1].kind != STMT_LOAD { return false }
+    if stmts[2].kind != STMT_BINOP { return false }
+    if stmts[2].op != op_name { return false }
+    if stmts[3].kind != STMT_STORE { return false }
+    return true
+}
+
+// _metal_mfunc_is_matmul_shape — recognise canonical matmul MIR shape
+// (`c = a · b`; A row-major MxK, B row-major KxN, C row-major MxN).
+// STMT_LOAD + STMT_LOAD + STMT_BINOP("matmul") + STMT_STORE.
+fn _metal_mfunc_is_matmul_shape(mfn: MFunc) -> bool {
+    return _metal_mfunc_is_matmul_shape_with_op(mfn, "matmul")
+}
+
+// _metal_mfunc_is_matmul_NT_a_shape — recognise matmul-NT-a MIR shape
+// (`c = a^T · b`; A column-major). STMT_LOAD + STMT_LOAD +
+// STMT_BINOP("matmul_NT_a") + STMT_STORE.
+fn _metal_mfunc_is_matmul_NT_a_shape(mfn: MFunc) -> bool {
+    return _metal_mfunc_is_matmul_shape_with_op(mfn, "matmul_NT_a")
+}
+
+// _metal_mfunc_is_matmul_NT_b_shape — recognise matmul-NT-b MIR shape
+// (`c = a · b^T`; B column-major). STMT_LOAD + STMT_LOAD +
+// STMT_BINOP("matmul_NT_b") + STMT_STORE.
+fn _metal_mfunc_is_matmul_NT_b_shape(mfn: MFunc) -> bool {
+    return _metal_mfunc_is_matmul_shape_with_op(mfn, "matmul_NT_b")
+}
+
+// _metal_format_scalar — format a MIR const operand as MSL literal text.
+// const_float → uses the `float_val` field (e.g. "2.5"); const_int →
+// uses the `int_val` field with `.0` appended so it stays FP32 in MSL.
+// Anything else returns "0.0" as the safe fallback (callers should have
+// already gated by the shape recogniser).
+fn _metal_format_scalar(op: Operand) -> string {
+    if op.kind == "const_float" { return to_string(op.float_val) }
+    if op.kind == "const_int" { return to_string(op.int_val) + ".0" }
+    return "0.0"
+}
+
+// ── RFC 075 P3++ matmul tier — simdgroup_matrix MMA emit helpers ──────
+//
+// The matmul kernel has a 6-arg signature: two read-only input buffers
+// (a, b) + one writable output (c) + three i32 dimension scalars
+// (M, N, K). The tile coordinates come from `[[threadgroup_position_in_
+// grid]]` (block row / col) — the simdgroup-matrix K-loop accumulates
+// 8×8 fragments into the C accumulator. This mirrors the NVPTX
+// `_nvptx_emit_matmul_*` register-level body but in Apple MSL source
+// text using `simdgroup_load` / `simdgroup_multiply_accumulate` /
+// `simdgroup_store` (warp-level MMA).
+
+// _metal_emit_matmul_kernel_signature — emit the 6-arg matmul kernel
+// signature. Buffers a/b read-only [[buffer(0..1)]], c writable
+// [[buffer(2)]], M/N/K as `constant uint&` [[buffer(3..5)]], plus the
+// threadgroup-position binding for tile coordinates.
+fn _metal_emit_matmul_kernel_signature(name: string) -> string {
+    let mut out = METAL_OP_KERNEL_DECL + " " + name + "(\n"
+    out = out + "    " + METAL_OP_PARAM_DEVICE_CONST_FLOAT_PTR + "a "
+    out = out + METAL_OP_BUFFER_BINDING_PREFIX + "0" + METAL_OP_BUFFER_BINDING_SUFFIX + ",\n"
+    out = out + "    " + METAL_OP_PARAM_DEVICE_CONST_FLOAT_PTR + "b "
+    out = out + METAL_OP_BUFFER_BINDING_PREFIX + "1" + METAL_OP_BUFFER_BINDING_SUFFIX + ",\n"
+    out = out + "    " + METAL_OP_PARAM_DEVICE_FLOAT_PTR + "c "
+    out = out + METAL_OP_BUFFER_BINDING_PREFIX + "2" + METAL_OP_BUFFER_BINDING_SUFFIX + ",\n"
+    out = out + "    " + METAL_SPACE_CONSTANT + " " + METAL_TYPE_UINT + "& M "
+    out = out + METAL_OP_BUFFER_BINDING_PREFIX + "3" + METAL_OP_BUFFER_BINDING_SUFFIX + ",\n"
+    out = out + "    " + METAL_SPACE_CONSTANT + " " + METAL_TYPE_UINT + "& N "
+    out = out + METAL_OP_BUFFER_BINDING_PREFIX + "4" + METAL_OP_BUFFER_BINDING_SUFFIX + ",\n"
+    out = out + "    " + METAL_SPACE_CONSTANT + " " + METAL_TYPE_UINT + "& K "
+    out = out + METAL_OP_BUFFER_BINDING_PREFIX + "5" + METAL_OP_BUFFER_BINDING_SUFFIX + ",\n"
+    out = out + "    " + METAL_TYPE_UINT + "2 tg " + METAL_ATTR_BID + ")\n"
+    return out
+}
+
+// _metal_emit_matmul_body — emit the MSL kernel body for the canonical
+// matmul `c = a · b` using Apple `simdgroup_matrix` MMA. Each threadgroup
+// computes a full 32×32 output tile (METAL_MM_TG_DIM) composed of a 4×4
+// grid of 8×8 simdgroup-matrix fragments (METAL_MM_FRAG_DIM = 8). The
+// emit declares 16 (= (TG_DIM/FRAG_DIM)²) C accumulators, zero-init via
+// `make_filled_simdgroup_matrix<float, 8, 8>(0.0f)` (Apple takes the
+// element type + dims as TEMPLATE PARAMS, not a runtime arg — N166 found
+// the prior `(simdgroup_float8x8, 0.0f)` form does not compile). The
+// K-loop steps by the 8×8 fragment dim; for each K-step it loads the four
+// 8×8 A sub-tiles (one per sub_m row band) and four 8×8 B sub-tiles (one
+// per sub_n col band) via scalar-origin `simdgroup_load`, then issues the
+// 4×4 = 16 `simdgroup_multiply_accumulate` MMAs. After the K-loop every
+// fragment is stored to its 8×8 output sub-tile via `simdgroup_store`.
+//
+// Sub-tile pointer arithmetic (canonical row-major, scalar-origin load —
+// the exact N166-verified-compiling form, no `ulong2` origin):
+//   A sub-tile (sub_m, kk): a + (row_tile + sub_m*8) * K + kk      stride K
+//   B sub-tile (sub_n, kk): b + kk * N + (col_tile + sub_n*8)      stride N
+//   C sub-tile (sub_m,sub_n): c + (row_tile + sub_m*8) * N
+//                               + (col_tile + sub_n*8)             stride N
+//
+// `a_transpose` / `b_transpose` flag column-major operands for the NT
+// variants (matmul_NT_a transposes A; matmul_NT_b transposes B). Apple
+// `simdgroup_load(frag, base, stride, origin, transpose)` carries the
+// transpose flag as the final bool argument.
+fn _metal_emit_matmul_body(a_transpose: bool, b_transpose: bool) -> string {
+    let frag_dim = to_string(METAL_MM_FRAG_DIM)
+    let tg_dim = to_string(METAL_MM_TG_DIM)
+    // sub-tiles per tile axis = TG_DIM / FRAG_DIM (= 32 / 8 = 4).
+    let sub_n_per_axis = METAL_MM_TG_DIM / METAL_MM_FRAG_DIM
+    let sub_axis = to_string(sub_n_per_axis)
+    // Template-typed accumulator: `make_filled_simdgroup_matrix<float, 8, 8>`.
+    let frag_tmpl = METAL_MM_MAKE_ZERO + "<" + METAL_TYPE_FLOAT + ", " + frag_dim + ", " + frag_dim + ">"
+    let a_t = if a_transpose { "true" } else { "false" }
+    let b_t = if b_transpose { "true" } else { "false" }
+    let mut out = "{\n"
+    // Tile origin from threadgroup position — 32×32 tile per threadgroup.
+    out = out + "    uint row_tile = tg.y * " + tg_dim + ";  // block row origin\n"
+    out = out + "    uint col_tile = tg.x * " + tg_dim + ";  // block col origin\n"
+    // 4×4 grid of 8×8 C accumulators (16 fragments covering the 32×32 tile),
+    // zero-initialised via the template-arg fill (Fix 1: element type + dims
+    // are TEMPLATE params, NOT a runtime first argument).
+    out = out + "    " + METAL_MM_FRAG_TYPE + " c_frag[" + sub_axis + "][" + sub_axis + "];\n"
+    out = out + "    for (uint sm = 0; sm < " + sub_axis + "; ++sm) {\n"
+    out = out + "        for (uint sn = 0; sn < " + sub_axis + "; ++sn) {\n"
+    out = out + "            c_frag[sm][sn] = " + frag_tmpl + "(0.0f);  // zero-init accumulator\n"
+    out = out + "        }\n"
+    out = out + "    }\n"
+    // K-loop: step by the 8×8 fragment dim, accumulating all 16 sub-tiles.
+    out = out + "    for (uint kk = 0; kk < K; kk += " + frag_dim + ") {\n"
+    // Load the 4 A sub-tiles for this K-step (one per sub_m row band).
+    out = out + "        " + METAL_MM_FRAG_TYPE + " a_frag[" + sub_axis + "];\n"
+    out = out + "        for (uint sm = 0; sm < " + sub_axis + "; ++sm) {\n"
+    out = out + "            " + METAL_MM_LOAD + "(a_frag[sm], a + (row_tile + sm * " + frag_dim + ") * K + kk, K, 0, " + a_t + ");  // A sub-tile\n"
+    out = out + "        }\n"
+    // Load the 4 B sub-tiles for this K-step (one per sub_n col band).
+    out = out + "        " + METAL_MM_FRAG_TYPE + " b_frag[" + sub_axis + "];\n"
+    out = out + "        for (uint sn = 0; sn < " + sub_axis + "; ++sn) {\n"
+    out = out + "            " + METAL_MM_LOAD + "(b_frag[sn], b + kk * N + (col_tile + sn * " + frag_dim + "), N, 0, " + b_t + ");  // B sub-tile\n"
+    out = out + "        }\n"
+    // 4×4 = 16 warp-level MMAs: c[sm][sn] = a[sm] * b[sn] + c[sm][sn].
+    out = out + "        for (uint sm = 0; sm < " + sub_axis + "; ++sm) {\n"
+    out = out + "            for (uint sn = 0; sn < " + sub_axis + "; ++sn) {\n"
+    out = out + "                " + METAL_MM_MAD + "(c_frag[sm][sn], a_frag[sm], b_frag[sn], c_frag[sm][sn]);  // c = a*b + c\n"
+    out = out + "            }\n"
+    out = out + "        }\n"
+    out = out + "    }\n"
+    // Store each 8×8 C accumulator to its output sub-tile (stride N, row-major).
+    out = out + "    for (uint sm = 0; sm < " + sub_axis + "; ++sm) {\n"
+    out = out + "        for (uint sn = 0; sn < " + sub_axis + "; ++sn) {\n"
+    out = out + "            " + METAL_MM_STORE + "(c_frag[sm][sn], c + (row_tile + sm * " + frag_dim + ") * N + (col_tile + sn * " + frag_dim + "), N);  // C sub-tile store\n"
+    out = out + "        }\n"
+    out = out + "    }\n"
+    out = out + "}\n"
+    return out
+}
+
+// codegen_emit_metal_msl — MIR module -> MSL source text.
+//
+// RFC 075 P3+ LANDED (codegen-only) — emits a full MSL kernel source
+// when the first MFunc matches a recognised shape. Otherwise (empty
+// module, unrecognised shape) returns `""` honestly, preserving the
+// P0 contract the lower_test Case 1 still asserts.
+//
+// HONEST SCOPE — sixteen shapes recognised today (matmul, matmul_NT_a,
+// matmul_NT_b, vec-add, vec-mul, vec-sub, vec-div, vec-scale, vec-neg,
+// vec-abs, vec-sqrt, vec-exp, vec-log, vec-sin, vec-cos). All other MIR
+// patterns return "". General MFunc → MSL lowering is multi-session work
+// mirroring the NVPTX P3 timeline.
+//
+//   Shape coverage matrix (RFC 075 P3++):
+//     matmul       `c = a · b`           STMT_LOAD+LOAD+BINOP(matmul)+STORE      (6-arg, simdgroup MMA)
+//     matmul_NT_a  `c = a^T · b`         STMT_LOAD+LOAD+BINOP(matmul_NT_a)+STORE (A transposed)
+//     matmul_NT_b  `c = a · b^T`         STMT_LOAD+LOAD+BINOP(matmul_NT_b)+STORE (B transposed)
+//     vec-add   `c[i] = a[i] + b[i]`     STMT_LOAD+LOAD+BINOP(add)+STORE
+//     vec-mul   `c[i] = a[i] * b[i]`     STMT_LOAD+LOAD+BINOP(mul)+STORE
+//     vec-sub   `c[i] = a[i] - b[i]`     STMT_LOAD+LOAD+BINOP(sub)+STORE
+//     vec-div   `c[i] = a[i] / b[i]`     STMT_LOAD+LOAD+BINOP(div)+STORE
+//     vec-scale `c[i] = a[i] * <const>`  STMT_LOAD+BINOP(mul, const)+STORE
+//     vec-neg   `c[i] = -a[i]`           STMT_LOAD+UNOP(neg)+STORE   (2-buf)
+//     vec-abs   `c[i] = abs(a[i])`       STMT_LOAD+UNOP(abs)+STORE   (2-buf)
+//     vec-sqrt  `c[i] = sqrt(a[i])`      STMT_LOAD+UNOP(sqrt)+STORE  (2-buf)
+//     vec-exp   `c[i] = exp(a[i])`       STMT_LOAD+UNOP(exp)+STORE   (2-buf)
+//     vec-log   `c[i] = log(a[i])`       STMT_LOAD+UNOP(log)+STORE   (2-buf)
+//     vec-sin   `c[i] = sin(a[i])`       STMT_LOAD+UNOP(sin)+STORE   (2-buf)
+//     vec-cos   `c[i] = cos(a[i])`       STMT_LOAD+UNOP(cos)+STORE   (2-buf)
+//
+// Dispatch order: matmul → matmul_NT_a → matmul_NT_b → vec-add → vec-mul
+// → vec-sub → vec-div → vec-scale → vec-neg → vec-abs → vec-sqrt →
+// vec-exp → vec-log → vec-sin → vec-cos → "". The matmul family is
+// dispatched FIRST: its recogniser keys on the distinct op string that
+// the vec-* recognisers reject, so order is mutually exclusive but
+// matmul-first keeps the 6-arg simdgroup-MMA signature path off the
+// vec-* fast lanes. Element-wise unary kernels are dispatched AFTER all binop /
+// scale shapes so the existing recognisers short-circuit on a second
+// STMT_LOAD first; the unary recognisers only see MIR with the 2-stmt
+// prefix STMT_LOAD + STMT_UNOP. vec-scale is tried before vec-* unary
+// because its recogniser is the most discerning (checks operand kinds)
+// on the 3-stmt prefix it shares with the unary family. Within the
+// unary family, dispatch order does not matter — all unary recognisers
+// are mutually exclusive on the STMT_UNOP op string.
+//
+// The unary family is the codegen's first 2-buffer kernel shape: input
+// `a` + output `c` (NO second input `b`). The signature is emitted by
+// `_metal_emit_unary_kernel_signature` and shifts `c`'s buffer binding
+// from [[buffer(2)]] (3-buf binops) to [[buffer(1)]].
+//
+// P4+ insertion points:
+//   - TODO RFC 075 P4 — silicon fire via `xcrun -sdk macosx metal`
+//     + Metal Performance Shaders runtime + M-series GPU (vec-add
+//     landed on Apple M3 commit 4415ec91; vec-mul / vec-sub / vec-div /
+//     vec-scale / vec-neg / vec-abs / vec-sqrt / vec-exp / vec-log /
+//     vec-sin / vec-cos silicon fires queued for the same cycle once
+//     a Mac is available — transcendentals need ULP-tolerance compare
+//     against the CPU reference because Apple M-series transcendentals
+//     may differ from IEEE by several ULP).
+//   - TODO RFC 075 follow-on cycle — general MFunc → MSL emission
+//     (replicate `_nvptx_lower_func` shape against MSL statements).
+pub fn codegen_emit_metal_msl(module: MModule) -> string {
+    // P0 contract: empty module → empty string.
+    if len(module.funcs) == 0 { return "" }
+    let mfn = module.funcs[0]
+    // Shared preamble + signature for any recognised vec-* shape.
+    let kname = mfn.name
+    // matmul — STMT_LOAD + STMT_LOAD + STMT_BINOP("matmul") + STMT_STORE.
+    // Dispatched FIRST (before vec-* binops) because the matmul recogniser
+    // keys on the distinct op string ("matmul" / "matmul_NT_a" /
+    // "matmul_NT_b") that the vec-* recognisers reject. Uses the 6-arg
+    // simdgroup_matrix MMA signature + body (NOT the 3-buffer vec-* sig).
+    if _metal_mfunc_is_matmul_shape(mfn) {
+        let mut out = _metal_emit_preamble()
+        out = out + _metal_emit_matmul_kernel_signature(kname)
+        out = out + _metal_emit_matmul_body(false, false)
+        return out
+    }
+    // matmul-NT-a — `c = a^T · b` (A column-major). simdgroup_load A frag
+    // carries transpose=true.
+    if _metal_mfunc_is_matmul_NT_a_shape(mfn) {
+        let mut out = _metal_emit_preamble()
+        out = out + _metal_emit_matmul_kernel_signature(kname)
+        out = out + _metal_emit_matmul_body(true, false)
+        return out
+    }
+    // matmul-NT-b — `c = a · b^T` (B column-major). simdgroup_load B frag
+    // carries transpose=true.
+    if _metal_mfunc_is_matmul_NT_b_shape(mfn) {
+        let mut out = _metal_emit_preamble()
+        out = out + _metal_emit_matmul_kernel_signature(kname)
+        out = out + _metal_emit_matmul_body(false, true)
+        return out
+    }
+    // vec-add — STMT_LOAD + STMT_LOAD + STMT_BINOP(add) + STMT_STORE.
+    if _metal_mfunc_is_vec_add_shape(mfn) {
+        let mut out = _metal_emit_preamble()
+        out = out + _metal_emit_kernel_signature(kname)
+        out = out + _metal_emit_vec_add_body()
+        return out
+    }
+    // vec-mul — STMT_LOAD + STMT_LOAD + STMT_BINOP(mul) + STMT_STORE.
+    if _metal_mfunc_is_vec_mul_shape(mfn) {
+        let mut out = _metal_emit_preamble()
+        out = out + _metal_emit_kernel_signature(kname)
+        out = out + _metal_emit_vec_mul_body()
+        return out
+    }
+    // vec-sub — STMT_LOAD + STMT_LOAD + STMT_BINOP(sub) + STMT_STORE.
+    if _metal_mfunc_is_vec_sub_shape(mfn) {
+        let mut out = _metal_emit_preamble()
+        out = out + _metal_emit_kernel_signature(kname)
+        out = out + _metal_emit_vec_sub_body()
+        return out
+    }
+    // vec-div — STMT_LOAD + STMT_LOAD + STMT_BINOP(div) + STMT_STORE.
+    if _metal_mfunc_is_vec_div_shape(mfn) {
+        let mut out = _metal_emit_preamble()
+        out = out + _metal_emit_kernel_signature(kname)
+        out = out + _metal_emit_vec_div_body()
+        return out
+    }
+    // vec-scale — STMT_LOAD + STMT_BINOP(mul, const) + STMT_STORE.
+    // The scalar literal text is pulled from the BINOP's args[1] const
+    // operand and formatted to an MSL FP32 literal.
+    if _metal_mfunc_is_vec_scale_shape(mfn) {
+        let entry = mfn.blocks[0]
+        let scalar = _metal_format_scalar(entry.stmts[1].args[1])
+        let mut out = _metal_emit_preamble()
+        out = out + _metal_emit_kernel_signature(kname)
+        out = out + _metal_emit_vec_scale_body(scalar)
+        return out
+    }
+    // vec-neg — STMT_LOAD + STMT_UNOP(neg) + STMT_STORE (2-buffer sig).
+    if _metal_mfunc_is_vec_neg_shape(mfn) {
+        let mut out = _metal_emit_preamble()
+        out = out + _metal_emit_unary_kernel_signature(kname)
+        out = out + _metal_emit_vec_neg_body()
+        return out
+    }
+    // vec-abs — STMT_LOAD + STMT_UNOP(abs) + STMT_STORE (2-buffer sig).
+    if _metal_mfunc_is_vec_abs_shape(mfn) {
+        let mut out = _metal_emit_preamble()
+        out = out + _metal_emit_unary_kernel_signature(kname)
+        out = out + _metal_emit_vec_abs_body()
+        return out
+    }
+    // vec-sqrt — STMT_LOAD + STMT_UNOP(sqrt) + STMT_STORE (2-buffer sig).
+    if _metal_mfunc_is_vec_sqrt_shape(mfn) {
+        let mut out = _metal_emit_preamble()
+        out = out + _metal_emit_unary_kernel_signature(kname)
+        out = out + _metal_emit_vec_sqrt_body()
+        return out
+    }
+    // vec-exp — STMT_LOAD + STMT_UNOP(exp) + STMT_STORE (2-buffer sig).
+    if _metal_mfunc_is_vec_exp_shape(mfn) {
+        let mut out = _metal_emit_preamble()
+        out = out + _metal_emit_unary_kernel_signature(kname)
+        out = out + _metal_emit_vec_exp_body()
+        return out
+    }
+    // vec-log — STMT_LOAD + STMT_UNOP(log) + STMT_STORE (2-buffer sig).
+    if _metal_mfunc_is_vec_log_shape(mfn) {
+        let mut out = _metal_emit_preamble()
+        out = out + _metal_emit_unary_kernel_signature(kname)
+        out = out + _metal_emit_vec_log_body()
+        return out
+    }
+    // vec-sin — STMT_LOAD + STMT_UNOP(sin) + STMT_STORE (2-buffer sig).
+    if _metal_mfunc_is_vec_sin_shape(mfn) {
+        let mut out = _metal_emit_preamble()
+        out = out + _metal_emit_unary_kernel_signature(kname)
+        out = out + _metal_emit_vec_sin_body()
+        return out
+    }
+    // vec-cos — STMT_LOAD + STMT_UNOP(cos) + STMT_STORE (2-buffer sig).
+    if _metal_mfunc_is_vec_cos_shape(mfn) {
+        let mut out = _metal_emit_preamble()
+        out = out + _metal_emit_unary_kernel_signature(kname)
+        out = out + _metal_emit_vec_cos_body()
+        return out
+    }
+    // No recognised shape — honest empty string.
+    return ""
+}

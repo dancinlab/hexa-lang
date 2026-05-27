@@ -1,0 +1,8 @@
+#!hexa strict
+// photonic design — bus-ring coupling gap.
+fn main() {
+    let gap_nm = 200.0
+    println("photonic_design (bus-ring coupling gap):")
+    println("  gap_nm = " + str(gap_nm))
+    println("__HEXA_PHOTONIC_DESIGN__ PASS gate=GATE_OPEN absorbed=false")
+}

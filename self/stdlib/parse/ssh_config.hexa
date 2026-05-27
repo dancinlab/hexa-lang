@@ -1,0 +1,289 @@
+// ═══════════════════════════════════════════════════════════
+//  self/stdlib/parse/ssh_config.hexa -- ~/.ssh/config parser (MVP)
+//
+//  Pure-hexa parser for the common subset of OpenSSH client config
+//  syntax. Replaces shell-out (`ssh -G <host>`) for downstream tools
+//  that need to resolve `hostname/user/port/identity_file` from an
+//  alias.
+//
+//  MVP scope:
+//    - `Host <pattern> [<pattern> ...]` blocks (one or more patterns)
+//    - `Match` blocks: SKIPPED (parsed but never apply — they need
+//      runtime evaluation that's downstream's call)
+//    - `Include <path>`: SKIPPED (caller can chain ssh_config_parse
+//      calls if they need transitive includes)
+//    - Wildcards in patterns: `*` (any-substring), `?` (single char),
+//      literal prefix/suffix. No negation (`!pattern`) yet.
+//    - First-match-wins semantics for these directives:
+//        HostName, User, Port, IdentityFile, ProxyCommand,
+//        ProxyJump, ServerAliveInterval, ConnectTimeout
+//    - Comment lines (`#`) and blank lines ignored.
+//    - Directive names compared case-insensitively (`hostname`,
+//      `HostName`, `HOSTNAME` all match).
+//
+//  Deferred (v2):
+//    - `Match` blocks (`Match user X`, `Match exec ...`)
+//    - `Include` recursion
+//    - `!negation` patterns
+//    - Multi-value cumulative directives (`SetEnv`, `IdentityFile`*)
+//      (* IdentityFile is actually multi-value — first-match-wins is
+//      acceptable for the cpu/pool use case)
+//
+//  Downstream consumers:
+//    - wilson pool: replaces `ssh -G <slug>` shell-out (slow fork)
+//    - hexa-native cpu port: same Host→user@hostname:port resolution
+//      step before constructing the SSH dial
+
+use "self/stdlib/fs"
+
+pub struct SshHost {
+    hostname: string,
+    user: string,
+    port: int,
+    identity_file: string,
+    proxy_command: string,
+    proxy_jump: string,
+    connect_timeout: int
+}
+
+fn _ssh_default() -> SshHost {
+    return SshHost { hostname: "", user: "", port: 22,
+                     identity_file: "", proxy_command: "", proxy_jump: "",
+                     connect_timeout: 0 }
+}
+
+// ── lex helpers ───────────────────────────────────────────────────
+fn _trim(s: string) -> string { return s.trim() }
+
+fn _lower(s: string) -> string {
+    let mut out = ""
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        let code = char_code(s, i)
+        // ASCII A..Z is 65..90; map to lowercase by adding 32.
+        if code > 64 && code < 91 {
+            out = out + chr(code + 32)
+        } else {
+            out = out + s.substring(i, i + 1)
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// Split a config line into (key, value), preserving any quoted value
+// content verbatim. Strips a trailing inline `#comment` UNLESS inside
+// a quoted span (basic — ssh config doesn't quote keys).
+fn _split_kv(line: string) -> [string] {
+    let s = _trim(line)
+    if len(s) == 0 || s.substring(0, 1) == "#" { return ["", ""] }
+    // Find first whitespace or `=` separator.
+    let mut i = 0
+    let n = len(s)
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == " " || c == "\t" || c == "=" { break }
+        i = i + 1
+    }
+    if i == n { return [s, ""] }
+    let key = s.substring(0, i)
+    // Skip separator + any whitespace/=
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == " " || c == "\t" || c == "=" { i = i + 1 }
+        else { break }
+    }
+    let val = _trim(s.substring(i, n))
+    return [key, val]
+}
+
+// Wildcard match -- supports `*` (zero-or-more of any char) and `?`
+// (exactly one char). No `[...]` ranges (rare in ssh_config). Case
+// sensitive for hostnames -- matches OpenSSH behavior.
+pub fn ssh_config_pattern_match(pattern: string, host: string) -> bool {
+    let p_n = len(pattern)
+    let h_n = len(host)
+    // Simple greedy matcher with backtracking on `*`.
+    let mut pi = 0
+    let mut hi = 0
+    let mut star_pi = -1   // position of last `*` in pattern
+    let mut star_hi = 0    // position in host at the `*` capture start
+    while hi < h_n {
+        let pc = if pi < p_n { pattern.substring(pi, pi + 1) } else { "" }
+        let hc = host.substring(hi, hi + 1)
+        if pc == "?" {
+            pi = pi + 1
+            hi = hi + 1
+            continue
+        }
+        if pc == "*" {
+            star_pi = pi
+            star_hi = hi
+            pi = pi + 1
+            continue
+        }
+        if pc != "" && pc == hc {
+            pi = pi + 1
+            hi = hi + 1
+            continue
+        }
+        // mismatch -- backtrack to last `*` if any.
+        if star_pi > -1 {
+            pi = star_pi + 1
+            star_hi = star_hi + 1
+            hi = star_hi
+            continue
+        }
+        return false
+    }
+    // pattern leftover must be all `*`.
+    while pi < p_n {
+        if pattern.substring(pi, pi + 1) != "*" { return false }
+        pi = pi + 1
+    }
+    return true
+}
+
+// ── parse: produce a list of (patterns, kv_map) blocks ────────────
+fn _parse_blocks(src: string) -> [any] {
+    let lines = src.split("\n")
+    let mut blocks: [any] = []
+    let mut cur_pats: [string] = []
+    let mut cur_kv: any = #{}
+    let mut have_block = false
+    let mut skipping = false   // true inside an unsupported Match block
+    let n = len(lines)
+    let mut i = 0
+    while i < n {
+        let kv = _split_kv(str(lines[i]))
+        let key = kv[0]
+        let val = kv[1]
+        i = i + 1
+        if key == "" { continue }
+        let lk = _lower(key)
+        if lk == "host" {
+            // Flush previous block.
+            if have_block { blocks.push(#{ "patterns": cur_pats, "kv": cur_kv }) }
+            // Patterns are space-separated.
+            let parts = val.split(" ")
+            cur_pats = []
+            let mut pi = 0
+            while pi < len(parts) {
+                let p = str(parts[pi]).trim()
+                if p != "" { cur_pats.push(p) }
+                pi = pi + 1
+            }
+            cur_kv = #{}
+            have_block = true
+            skipping = false
+            continue
+        }
+        if lk == "match" {
+            // Flush previous block; start a `Match` block which we
+            // explicitly skip (no apply). The directives inside are
+            // dropped on the floor.
+            if have_block { blocks.push(#{ "patterns": cur_pats, "kv": cur_kv }) }
+            cur_pats = []
+            cur_kv = #{}
+            have_block = false
+            skipping = true
+            continue
+        }
+        if skipping { continue }
+        if !have_block {
+            // Pre-host directives go into an implicit `Host *` block.
+            cur_pats = ["*"]
+            cur_kv = #{}
+            have_block = true
+        }
+        // Record the lowercased key + raw value; first-match-wins
+        // resolution happens at lookup time, not parse time.
+        if has_key(cur_kv, lk) == false { cur_kv[lk] = val }
+    }
+    if have_block { blocks.push(#{ "patterns": cur_pats, "kv": cur_kv }) }
+    return blocks
+}
+
+// ── resolve: walk blocks in order, apply first-match-wins ─────────
+// `blocks` is the output of `_parse_blocks`. For each directive we
+// care about, we take the FIRST block whose any-pattern matches
+// `host`. If a later block also matches but the directive is already
+// set, we leave it alone — true first-match-wins.
+pub fn ssh_config_resolve_blocks(blocks: any, host: string) -> SshHost {
+    let mut out = _ssh_default()
+    let mut got_hostname = false
+    let mut got_user = false
+    let mut got_port = false
+    let mut got_id = false
+    let mut got_proxy_cmd = false
+    let mut got_proxy_jump = false
+    let mut got_ct = false
+    let nb = len(blocks)
+    let mut bi = 0
+    while bi < nb {
+        let b = blocks[bi]
+        let pats = b["patterns"]
+        let mut matched = false
+        let pn = len(pats)
+        let mut pi = 0
+        while pi < pn {
+            if ssh_config_pattern_match(str(pats[pi]), host) { matched = true ; break }
+            pi = pi + 1
+        }
+        if matched {
+            let kv = b["kv"]
+            if !got_hostname && has_key(kv, "hostname") {
+                out.hostname = str(kv["hostname"])
+                got_hostname = true
+            }
+            if !got_user && has_key(kv, "user") {
+                out.user = str(kv["user"])
+                got_user = true
+            }
+            if !got_port && has_key(kv, "port") {
+                let p = to_int(str(kv["port"]))
+                if p > 0 { out.port = p ; got_port = true }
+            }
+            if !got_id && has_key(kv, "identityfile") {
+                out.identity_file = str(kv["identityfile"])
+                got_id = true
+            }
+            if !got_proxy_cmd && has_key(kv, "proxycommand") {
+                out.proxy_command = str(kv["proxycommand"])
+                got_proxy_cmd = true
+            }
+            if !got_proxy_jump && has_key(kv, "proxyjump") {
+                out.proxy_jump = str(kv["proxyjump"])
+                got_proxy_jump = true
+            }
+            if !got_ct && has_key(kv, "connecttimeout") {
+                let t = to_int(str(kv["connecttimeout"]))
+                if t > 0 { out.connect_timeout = t ; got_ct = true }
+            }
+        }
+        bi = bi + 1
+    }
+    if out.hostname == "" { out.hostname = host }   // ssh's default
+    return out
+}
+
+// ── one-shot: read file + parse + resolve ─────────────────────────
+// Returns SshHost with hostname/user/port/identity_file resolved.
+// On missing config or unreadable file, returns the default profile
+// (hostname=<host>, port=22).
+pub fn ssh_config_resolve(config_path: string, host: string) -> SshHost {
+    let src = read_file_safe(config_path)
+    if len(src) == 0 {
+        let mut out = _ssh_default()
+        out.hostname = host
+        return out
+    }
+    let blocks = _parse_blocks(src)
+    return ssh_config_resolve_blocks(blocks, host)
+}
+
+// Convenience: try ~/.ssh/config (caller passes $HOME).
+pub fn ssh_config_resolve_default(home: string, host: string) -> SshHost {
+    return ssh_config_resolve(home + "/.ssh/config", host)
+}

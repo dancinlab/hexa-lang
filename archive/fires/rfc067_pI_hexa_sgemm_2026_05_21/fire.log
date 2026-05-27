@@ -1,0 +1,20 @@
+Device: NVIDIA GeForce RTX 5070 sm_120
+CUDA driver=13000 runtime=12000
+loaded hexa PTX shape 256 (sgemm_256x256_grid)
+loaded hexa PTX shape 384 (sgemm_384x384_grid)
+loaded hexa PTX shape 512 (sgemm_512x512_grid)
+loaded hexa PTX shape 768 (sgemm_768x768_grid)
+loaded hexa PTX shape 1024 (sgemm_1024x1024_grid)
+loaded hexa PTX shape 1536 (sgemm_1536x1536_grid)
+[M= 256] cuBLAS SGEMM  median=0.008672 ms  std=0.001529  min=0.007424  max=0.028160  TFLOPS=  3.8693
+[M= 256] hexa SGEMM    median=0.013504 ms  std=0.000547  min=0.012928  max=0.015904  TFLOPS=  2.4848  ratio=0.6422  maxabs=0.000000
+[M= 384] cuBLAS SGEMM  median=0.008800 ms  std=0.001146  min=0.007936  max=0.017184  TFLOPS= 12.8689
+[M= 384] hexa SGEMM    median=0.020000 ms  std=0.000611  min=0.018624  max=0.022048  TFLOPS=  5.6623  ratio=0.4400  maxabs=0.000000
+[M= 512] cuBLAS SGEMM  median=0.016960 ms  std=0.000291  min=0.015840  max=0.018016  TFLOPS= 15.8276
+[M= 512] hexa SGEMM    median=0.047504 ms  std=0.000657  min=0.046816  max=0.049696  TFLOPS=  5.6508  ratio=0.3570  maxabs=0.000000
+[M= 768] cuBLAS SGEMM  median=0.039472 ms  std=0.000621  min=0.037536  max=0.040576  TFLOPS= 22.9522
+[M= 768] hexa SGEMM    median=0.104768 ms  std=0.000674  min=0.103552  max=0.107008  TFLOPS=  8.6474  ratio=0.3768  maxabs=0.000000
+[M=1024] cuBLAS SGEMM  median=0.096832 ms  std=0.000856  min=0.094816  max=0.105984  TFLOPS= 22.1774
+[M=1024] hexa SGEMM    median=0.271520 ms  std=0.000865  min=0.270016  max=0.273952  TFLOPS=  7.9091  ratio=0.3566  maxabs=0.000000
+[M=1536] cuBLAS SGEMM  median=0.220544 ms  std=0.001080  min=0.218336  max=0.222752  TFLOPS= 32.8631
+[M=1536] hexa SGEMM    median=0.816160 ms  std=0.000856  min=0.814080  max=0.818624  TFLOPS=  8.8803  ratio=0.2702  maxabs=0.000000

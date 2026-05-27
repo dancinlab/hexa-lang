@@ -1,0 +1,6 @@
+=== E03 : hexa verify --expr euler_phi 6 2 ===
+verify --expr euler_phi(6)=2
+  calc   = 2  == expected 2
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+  absorb = ⚠ atlas register did NOT confirm fold; invocation:
+           hexa atlas register --from-verify euler_phi 6 2

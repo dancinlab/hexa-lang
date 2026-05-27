@@ -1,0 +1,49 @@
+# stdlib/hal/t3/Makefile.stm32h7 — STM32H7 T3 harness cross-compile recipe.
+#
+# Phase: scaffold + compile-tier (live). Builds via arm-none-eabi-gcc
+# against Cortex-M7 + FPv5-D16 double-precision FPU. T3a + T3b1 land
+# from v1.5.0 onward (numerics_t3_stm32h7_compile.hexa verifies).
+#
+# Target: STMicroelectronics STM32H7 Cortex-M7 @ 480 MHz (ARMv7-M).
+# Toolchain: arm-none-eabi-gcc (free; no licence).
+#
+# Usage:
+#   make -f Makefile.stm32h7              # builds t3_harness_stm32h7.elf
+#   make -f Makefile.stm32h7 clean
+
+ARM_GCC_PREFIX ?= arm-none-eabi-
+CC      = $(ARM_GCC_PREFIX)gcc
+AS      = $(ARM_GCC_PREFIX)as
+LD      = $(ARM_GCC_PREFIX)ld
+OBJCOPY = $(ARM_GCC_PREFIX)objcopy
+
+# Cortex-M7 flags + FPv5-D16 double-precision FPU + ARMv7-M ISA.
+CPUFLAGS = -mcpu=cortex-m7 -mthumb -mfpu=fpv5-d16 -mfloat-abi=hard
+CFLAGS   = $(CPUFLAGS) -Os -ffunction-sections -fdata-sections \
+           -fno-builtin -fno-common -nostdlib \
+           -Wall -Wextra -Werror
+ASFLAGS  = $(CPUFLAGS)
+LDSCRIPT = linker_stm32h7.ld
+LDFLAGS  = -T $(LDSCRIPT) -nostdlib --gc-sections -static
+
+OBJECTS  = boot_stm32h7.o harness_stm32h7_main.o
+TARGET   = t3_harness_stm32h7.elf
+
+.PHONY: all clean
+
+all: $(TARGET)
+
+boot_stm32h7.o: boot_stm32h7.s
+	$(AS) $(ASFLAGS) -o $@ $<
+
+harness_stm32h7_main.o: harness_stm32h7_main.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(TARGET): $(OBJECTS) $(LDSCRIPT)
+	$(LD) $(LDFLAGS) -o $@ $(OBJECTS)
+
+clean:
+	rm -f $(OBJECTS) $(TARGET) t3_harness_stm32h7.bin
+
+# Status: scaffold-tier (T3a) + compile-tier (T3b1) live-verified.
+# T3b2 (Renode emulation) deferred until Renode 2026.x lands in dev env.

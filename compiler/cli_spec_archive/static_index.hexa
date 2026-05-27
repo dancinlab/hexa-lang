@@ -1,0 +1,46 @@
+// HEXA Native Compiler — Phase 1-extension absorption: cli_spec archive index
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Read-only facade over the embedded CLI_SPEC_SECTIONS table.
+//
+//   pub fn cli_spec_archive_list()              -> [CliSpecSection]
+//   pub fn cli_spec_archive_lookup(s: string)   -> CliSpecSection
+//   pub fn cli_spec_archive_section_names()     -> [string]
+//   pub fn cli_spec_archive_subcommand_names()  -> [string]
+//
+// Lookup miss returns a sentinel entry (name == "").
+
+use "compiler/cli_spec_archive/embed"
+use "compiler/cli_spec_archive/embedded.gen"
+
+pub fn cli_spec_archive_list() -> [CliSpecSection] {
+    return CLI_SPEC_SECTIONS
+}
+
+pub fn cli_spec_archive_lookup(name: string) -> CliSpecSection {
+    let n = len(CLI_SPEC_SECTIONS)
+    let mut i = 0
+    while i < n {
+        let e = CLI_SPEC_SECTIONS[i]
+        if e.name == name { return e }
+        i = i + 1
+    }
+    return CliSpecSection { name: "", raw_json: "", size_bytes: 0 }
+}
+
+pub fn cli_spec_archive_section_names() -> [string] {
+    let out = []
+    let n = len(CLI_SPEC_SECTIONS)
+    let mut i = 0
+    while i < n {
+        out.push(CLI_SPEC_SECTIONS[i].name)
+        i = i + 1
+    }
+    return out
+}
+
+pub fn cli_spec_archive_subcommand_names() -> [string] {
+    return CLI_SPEC_SUBCOMMAND_NAMES
+}

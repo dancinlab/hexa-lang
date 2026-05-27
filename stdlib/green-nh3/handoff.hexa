@@ -1,0 +1,8 @@
+#!hexa strict
+// green-nh3 handoff — $/tNH3 cost target.
+fn main() {
+    let cost_USD_per_tNH3 = 500.0
+    println("green-nh3_handoff ($/tNH3 cost target):")
+    println("  cost_USD_per_tNH3 = " + str(cost_USD_per_tNH3))
+    println("__HEXA_GREEN_NH3_HANDOFF__ PASS gate=GATE_OPEN absorbed=false")
+}

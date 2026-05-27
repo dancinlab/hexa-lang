@@ -1,0 +1,12 @@
+{
+  "falsifier": "F-FUSION-LAYERBLOCK-CROSS-LAYER-TIMED",
+  "kernels": ["block_fused_k1","block_fused_k2"],
+  "numeric_verdict": "FAIL",
+  "S": 4, "d": 768, "dh": 64, "dff": 3072,
+  "launches": 2,
+  "max_rel": 0,
+  "max_abs_ref": 0,
+  "median_ms": 68466.023438,
+  "mean_ms": 68466.023438,
+  "std_ms": 0.000000
+}

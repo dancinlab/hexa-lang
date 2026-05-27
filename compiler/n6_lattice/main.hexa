@@ -1,0 +1,102 @@
+// absorbed from ~/core/hexa-bio/selftest/n6_axis_computational_verification.py (Apache-2.0, hexa-bio v1.1.0)
+//
+// compiler/n6_lattice/main.hexa — CLI shim for the n=6 lattice verifier,
+// axis table, and cross-axis drift detector.
+//
+// Usage:
+//   hexa run compiler/n6_lattice/main.hexa verify       # deductive sigma/tau/phi/J2 + master identity
+//   hexa run compiler/n6_lattice/main.hexa axis-table   # print the 5-axis rodata table
+//   hexa run compiler/n6_lattice/main.hexa cross-check  # cross-axis drift detector
+//   hexa run compiler/n6_lattice/main.hexa help
+//
+// Exit semantics:
+//   Each subverb prints a sentinel line on its own:
+//     __N6_AXIS_VERIFY__         PASS|FAIL    (verify)
+//     __N6_AXIS_TABLE__          PASS         (axis-table — print-only, always PASS)
+//     __N6_LATTICE_CROSS_CHECK__ PASS|FAIL    (cross-check)
+//   Callers grep the sentinel; this script does not call process_exit() so
+//   it composes safely under `hexa run`.
+
+import "compiler/n6_lattice/verify.hexa"
+import "compiler/n6_lattice/axis_table.hexa"
+import "compiler/n6_lattice/cross_check.hexa"
+use "self/stdlib/argv_skip"
+
+fn _cli() -> [string] {
+    let raw = args()
+    let mut out: [string] = []
+    let mut i = skip_invocation_prefix(raw)
+    while i < len(raw) {
+        out.push(raw[i])
+        i = i + 1
+    }
+    return out
+}
+
+fn _print_help() {
+    println("hexa lattice — n=6 invariant verifier (hexa-bio absorption v1.1.0)")
+    println("")
+    println("usage:")
+    println("  hexa run compiler/n6_lattice/main.hexa <verb>")
+    println("")
+    println("verbs:")
+    println("  verify       run the 5 deductive sigma/tau/phi/J2/master-identity checks")
+    println("  axis-table   print the 5-axis n=6 reference table (rodata)")
+    println("  cross-check  run cross-axis drift detector")
+    println("  help         show this message")
+}
+
+fn _cmd_verify() {
+    let r = verify_all()
+    print_verify_result(r)
+}
+
+fn _cmd_axis_table() {
+    let xs = n6_axes()
+    println("[n6_lattice/axis-table] " + str(len(xs)) + " axes (rodata)")
+    println("")
+    let mut i = 0
+    while i < len(xs) {
+        let row = xs[i]
+        println("=== " + row.name)
+        println("  sigma=" + str(row.sigma) + "  " + row.sigma_meaning)
+        println("  tau  =" + str(row.tau)   + "  " + row.tau_meaning)
+        println("  phi  =" + str(row.phi)   + "  " + row.phi_meaning)
+        println("  J2   =" + str(row.J2)    + "  " + row.J2_meaning)
+        i = i + 1
+    }
+    println("")
+    println("__N6_AXIS_TABLE__ PASS")
+}
+
+fn _cmd_cross_check() {
+    let r = cross_check()
+    print_cross_check(r)
+}
+
+fn main() {
+    let cli = _cli()
+    if len(cli) == 0 {
+        _print_help()
+        return
+    }
+    let verb = cli[0]
+    if verb == "verify" {
+        _cmd_verify()
+        return
+    }
+    if verb == "axis-table" {
+        _cmd_axis_table()
+        return
+    }
+    if verb == "cross-check" {
+        _cmd_cross_check()
+        return
+    }
+    if verb == "help" {
+        _print_help()
+        return
+    }
+    println("[n6_lattice/main] unknown verb: " + verb)
+    _print_help()
+}

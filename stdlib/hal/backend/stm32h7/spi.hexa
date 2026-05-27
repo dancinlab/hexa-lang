@@ -1,0 +1,99 @@
+#!hexa strict
+// stdlib/hal/backend/stm32h7/spi.hexa — STM32H7 (Cortex-M7) SPI backend
+//                                       — paper skeleton.
+//
+// Phase: skeleton / stub. Real MMIO will go here once Cortex-M
+// cross-compile lands. Sim-first invariant preserved (spi.hexa sim
+// backend ships before this; this file is a HW-backend addition, not
+// a sim replacement).
+//
+// Target:    STMicroelectronics STM32H7 family (Cortex-M7 @ 480 MHz).
+// Chip ref:  RM0433 reference manual, SPI peripheral §50.
+// Surface:   stm32h7_spi_{configure,transfer}(bus, ...)
+// Dispatch:  v0.2.0+ — spi.hexa selects this via cfg-flag.
+//
+// MMIO layout (sketch):
+//
+//   SPI1 base:   0x40013000
+//   SPI2 base:   0x40003800
+//   SPI3 base:   0x40003C00
+//   SPI4 base:   0x40013400
+//   SPI5 base:   0x40015000
+//   SPI6 base:   0x58001400   (D3 domain)
+//
+//   Per-bus registers (offsets, SPI/I²S unified):
+//     CR1     0x00   control 1: SPE / MASTER / CPOL / CPHA
+//     CR2     0x04   control 2: SSOE / DS (data size 4..16 bits)
+//     CFG1    0x08   master cfg: MBR (clock divider) / DSIZE
+//     SR      0x14   status: TXP / RXP / EOT
+//     TXDR    0x20   TX data register
+//     RXDR    0x30   RX data register
+//
+// Pin assignments (Nucleo-H7 default AF; SCK / MISO / MOSI per bus):
+//
+//   SPI1: PA5 (SCK) / PA6 (MISO) / PA7 (MOSI)
+//   SPI2: PB13 (SCK) / PB14 (MISO) / PB15 (MOSI)
+//   SPI3: PB3 (SCK) / PB4 (MISO) / PB5 (MOSI)
+//   SPI4: PE2 (SCK) / PE5 (MISO) / PE6 (MOSI)
+//   SPI5: PF7 (SCK) / PF8 (MISO) / PF9 (MOSI)
+//   SPI6: PA5 (SCK alt) / PA6 (MISO alt) / PA7 (MOSI alt)
+
+// ─── bus table ───────────────────────────────────────────────────────
+
+let BUS_COUNT = 6
+let BUS_NAMES = ["SPI1", "SPI2", "SPI3", "SPI4", "SPI5", "SPI6"]
+
+// Pins encoded as bank*16 + offset (PA=0, PB=1, PC=2, PD=3, PE=4, PF=5).
+let BUS_SCK  = [5,  29, 19, 66, 87, 5]    // PA5, PB13, PB3, PE2, PF7, PA5
+let BUS_MISO = [6,  30, 20, 69, 88, 6]    // PA6, PB14, PB4, PE5, PF8, PA6
+let BUS_MOSI = [7,  31, 21, 70, 89, 7]    // PA7, PB15, PB5, PE6, PF9, PA7
+
+let BUS_BASES = [
+    "0x40013000",   // SPI1
+    "0x40003800",   // SPI2
+    "0x40003C00",   // SPI3
+    "0x40013400",   // SPI4
+    "0x40015000",   // SPI5
+    "0x58001400"    // SPI6
+]
+
+// ─── mode constants (mirror stdlib/hal/spi.hexa) ─────────────────────
+
+let MODE_0 = 0   // CPOL=0 CPHA=0
+let MODE_1 = 1   // CPOL=0 CPHA=1
+let MODE_2 = 2   // CPOL=1 CPHA=0
+let MODE_3 = 3   // CPOL=1 CPHA=1
+
+// ─── stub surface ────────────────────────────────────────────────────
+
+fn stm32h7_spi_configure(bus: int, cs_pin: int, mode: int, freq_hz: int) -> int {
+    if bus < 0 || bus >= BUS_COUNT { return -1 }
+    if cs_pin < -1 { return -2 }
+    if mode < MODE_0 || mode > MODE_3 { return -3 }
+    if freq_hz <= 0 { return -4 }
+    let name = BUS_NAMES[bus]
+    println("[stm32h7 spi] configure " + name +
+            " sck=pin" + str(BUS_SCK[bus]) +
+            " miso=pin" + str(BUS_MISO[bus]) +
+            " mosi=pin" + str(BUS_MOSI[bus]) +
+            " cs=pin" + str(cs_pin) +
+            " mode=" + str(mode) +
+            " freq=" + str(freq_hz) +
+            "  // TODO: write CR1/CR2/CFG1, set MBR")
+    return bus
+}
+
+fn stm32h7_spi_transfer(bus: int, tx_data: [int]) -> int {
+    if bus < 0 || bus >= BUS_COUNT { return -1 }
+    let name = BUS_NAMES[bus]
+    println("[stm32h7 spi] transfer " + name +
+            " bytes=" + str(tx_data.len()) +
+            "  // TODO: enable SPE, push TXDR, poll TXP/RXP")
+    return tx_data.len()
+}
+
+// ─── self-introspection ──────────────────────────────────────────────
+
+fn stm32h7_spi_backend_meta() -> [str] {
+    return ["stm32h7", "spi", "skeleton", str(BUS_COUNT)]
+}

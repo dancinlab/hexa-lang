@@ -1,0 +1,139 @@
+// HEXA Native Compiler — Wave 4.1 atlas .n6 example fixtures
+//
+// @version 0.1.0
+// @capabilities [pure, fs_read]
+//
+// Drives the parser over the three n6-spec example files copied from
+// ~/core/n6/examples/ under CC0-1.0. Asserts per-kind counts plus a
+// few structural invariants (e.g. 03_crossings exercises @X / @? / @S).
+//
+// Fixtures absorbed 2026-05-13 from ~/core/n6/examples/{01_primitives,
+// 02_relations, 03_crossings}.n6 → test/fixtures/n6/.
+//
+// Run:
+//   hexa run compiler/atlas/parser_n6_examples_test.hexa
+
+use "compiler/atlas/parser"
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok {
+        println("  PASS  " + label)
+    } else {
+        println("  FAIL  " + label)
+        fails.push(label)
+    }
+}
+
+fn _count_kind(nodes: array, kind: string) -> i64 {
+    let mut c = 0
+    let mut i = 0
+    while i < len(nodes) {
+        if to_string(nodes[i].kind) == kind { c = c + 1 }
+        i = i + 1
+    }
+    return c
+}
+
+fn _resolve_fixture_path(name: string) -> string {
+    let env_root = env("HEXA_LANG")
+    let candidates = []
+    if len(env_root) > 0 {
+        candidates.push(env_root + "/test/fixtures/n6/" + name)
+    }
+    candidates.push("test/fixtures/n6/" + name)
+    let home = env("HOME")
+    if len(home) > 0 {
+        candidates.push(home + "/core/hexa-lang/test/fixtures/n6/" + name)
+    }
+    let mut i = 0
+    while i < len(candidates) {
+        let p = to_string(candidates[i])
+        if file_exists(p) { return p }
+        i = i + 1
+    }
+    return to_string(candidates[0])
+}
+
+fn main() {
+    println("wave-4.1 atlas .n6 examples test")
+
+    let fails = []
+
+    // ── 01_primitives.n6 — should be mostly @P ──
+    let p1 = _resolve_fixture_path("01_primitives.n6")
+    let nodes1 = parse_atlas_file(p1, "01_primitives.n6")
+    let p_count1 = _count_kind(nodes1, "P")
+    println("  01_primitives.n6: " + to_string(len(nodes1)) + " nodes, P=" + to_string(p_count1))
+    _check("01_primitives has >= 5 nodes", len(nodes1) >= 5, fails)
+    _check("01_primitives is mostly @P", p_count1 >= 5, fails)
+    // Verify one of the primitive grade markers parsed.
+    let mut found_grade_11 = false
+    let mut i = 0
+    while i < len(nodes1) {
+        if nodes1[i].grade.value == 11 && nodes1[i].grade.verified { found_grade_11 = true }
+        i = i + 1
+    }
+    _check("01_primitives has a [11*] entry", found_grade_11, fails)
+
+    // ── 02_relations.n6 — mix of @C @F @R @L ──
+    let p2 = _resolve_fixture_path("02_relations.n6")
+    let nodes2 = parse_atlas_file(p2, "02_relations.n6")
+    let c_count2 = _count_kind(nodes2, "C")
+    let f_count2 = _count_kind(nodes2, "F")
+    let r_count2 = _count_kind(nodes2, "R")
+    let l_count2 = _count_kind(nodes2, "L")
+    println("  02_relations.n6:  " + to_string(len(nodes2)) + " nodes, C=" + to_string(c_count2) + " F=" + to_string(f_count2) + " R=" + to_string(r_count2) + " L=" + to_string(l_count2))
+    _check("02_relations has >= 6 nodes", len(nodes2) >= 6, fails)
+    _check("02_relations has >= 1 @C", c_count2 >= 1, fails)
+    _check("02_relations has >= 1 @F", f_count2 >= 1, fails)
+    _check("02_relations has >= 1 @R", r_count2 >= 1, fails)
+    _check("02_relations has >= 1 @L", l_count2 >= 1, fails)
+
+    // ── 03_crossings.n6 — exercises @X / @? / @S / breakthrough ──
+    let p3 = _resolve_fixture_path("03_crossings.n6")
+    let nodes3 = parse_atlas_file(p3, "03_crossings.n6")
+    let x_count3 = _count_kind(nodes3, "X")
+    let q_count3 = _count_kind(nodes3, "Q")
+    let s_count3 = _count_kind(nodes3, "S")
+    println("  03_crossings.n6:  " + to_string(len(nodes3)) + " nodes, X=" + to_string(x_count3) + " Q=" + to_string(q_count3) + " S=" + to_string(s_count3))
+    _check("03_crossings has >= 6 nodes", len(nodes3) >= 6, fails)
+    _check("03_crossings has >= 1 @X", x_count3 >= 1, fails)
+    _check("03_crossings has >= 1 @?", q_count3 >= 1, fails)
+    _check("03_crossings has >= 1 @S", s_count3 >= 1, fails)
+    // breakthrough marker `[N!]` or `[N*!]` is present at least once.
+    let mut found_breakthrough = false
+    let mut j = 0
+    while j < len(nodes3) {
+        if nodes3[j].grade.breakthrough { found_breakthrough = true }
+        j = j + 1
+    }
+    _check("03_crossings has a breakthrough [!] entry", found_breakthrough, fails)
+
+    println("")
+    if len(fails) == 0 {
+        println("RESULT: PASS (" + to_string(len(nodes1) + len(nodes2) + len(nodes3)) + " total nodes across 3 fixtures)")
+        exit(0)
+    } else {
+        println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
+        let mut k = 0
+        while k < len(fails) {
+            println("  - " + to_string(fails[k]))
+            k = k + 1
+        }
+        exit(1)
+    }
+}
+
+let _av = argv()
+
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let script = to_string(_av[1])
+    if script.ends_with("/parser_n6_examples_test.hexa") { return true }
+    if script == "parser_n6_examples_test.hexa" { return true }
+    return false
+}
+
+if _is_main() {
+    main()
+}

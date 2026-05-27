@@ -1,0 +1,101 @@
+* hexa-cern/docs/safety/emc_sim/decoupling_psrr.cir
+*
+* §A.6.1 step E5.3 — EMC pre-compliance: passive decoupling impedance
+* sweep at the IC supply pin. ngspice -b decoupling_psrr.cir
+*
+* What this DOES simulate:
+*   - Decoupling network impedance Z(f) at the IC supply pin
+*   - Self-resonance frequencies of MLCC stack
+*   - PCB-trace + via inductance contribution to supply pin
+*
+* What this does NOT simulate (out of scope of passive AC analysis):
+*   - LDO PSRR — that's a small-signal feedback property of the
+*     LP5907 and adds 50–70 dB on top of the passive impedance
+*     (see datasheet Fig. 6). Modeled separately in the
+*     analytic budget in psrr_results.md.
+*   - Buck converter ripple injection — modeled as 1V perturbation
+*     here; actual ripple is ~10 mV pp (40 dB lower).
+*
+* Acceptance for the passive network alone (per CISPR 22 Class A):
+*   |Z(f)| ≤ 100 mΩ at 1.4 MHz buck fundamental
+*   |Z(f)| ≤ 1 Ω at all CISPR Class A spurs (30 MHz–6 GHz)
+*
+* Output: AC log-decade sweep 10 Hz to 1 GHz, |Z| at the IC supply pin.
+
+* ── decoupling subcircuits — match BOM.csv C_DEC1/2/3 ───────────────
+*
+* C_DEC1: 4.7 µF X6S 0603 — ESR 5 mΩ, ESL 0.5 nH
+* C_DEC2: 100 nF X7R 0402 — ESR 30 mΩ, ESL 0.4 nH
+* C_DEC3:  10 nF X7R 0402 — ESR 50 mΩ, ESL 0.3 nH
+
+.subckt mlcc_4u7 a b
+    Cmlcc a x 4.7e-6
+    Resr  x y 5e-3
+    Lesl  y b 0.5e-9
+.ends
+
+.subckt mlcc_100n a b
+    Cmlcc a x 100e-9
+    Resr  x y 30e-3
+    Lesl  y b 0.4e-9
+.ends
+
+.subckt mlcc_10n a b
+    Cmlcc a x 10e-9
+    Resr  x y 50e-3
+    Lesl  y b 0.3e-9
+.ends
+
+* ── PCB trace + via — supply route ~5 mm from regulator to IC pin ──
+*  L_trace ≈ 1.2 nH/mm × 5 mm = 6 nH
+*  L_via ≈ 1 nH × 2 vias = 2 nH
+*  Total ≈ 8 nH
+
+.subckt pcb_track a b
+    Ltrk  a b 8e-9
+.ends
+
+* ── circuit — drive AC current at supply pin, measure voltage ───────
+
+* AC current source: 1 A AC into the IC pin. Z(f) = V(ic_pin) / I_ac.
+Iac  0 ic_pin AC 1
+
+* Decoupling caps directly at IC pin
+Xc_dec1 ic_pin 0 mlcc_4u7
+Xc_dec2 ic_pin 0 mlcc_100n
+Xc_dec3 ic_pin 0 mlcc_10n
+
+* Trace back to supply rail (modeled as 0 Ω perfect supply at far end)
+Xtrk    ic_pin rail pcb_track
+Vrail   rail 0 DC 3.3 AC 0
+
+* ── analysis ─────────────────────────────────────────────────────────
+.ac dec 50 10 1G
+
+.control
+ac dec 50 10 1G
+
+* Compute |Z| at IC pin in dBΩ and Ω
+let z_mag = mag(v(ic_pin))
+let z_db  = 20 * log10(z_mag)
+
+* Find Z at key freqs
+echo "==== Decoupling network |Z| at IC supply pin ===="
+echo ""
+meas ac z_at_100k   find z_mag when frequency=100k
+meas ac z_at_1m4    find z_mag when frequency=1.4Meg
+meas ac z_at_10m    find z_mag when frequency=10Meg
+meas ac z_at_30m    find z_mag when frequency=30Meg
+meas ac z_at_100m   find z_mag when frequency=100Meg
+meas ac z_at_1g     find z_mag when frequency=1Gig
+
+print z_at_100k
+print z_at_1m4
+print z_at_10m
+print z_at_30m
+print z_at_100m
+print z_at_1g
+
+quit
+.endc
+.end

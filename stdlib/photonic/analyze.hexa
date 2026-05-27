@@ -1,0 +1,11 @@
+#!hexa strict
+// photonic analyze — ring-resonator Q = λ/Δλ at 1550 nm.
+fn main() {
+    let lambda_nm = 1550.0
+    let dlambda_nm = 0.01
+    let Q = lambda_nm / dlambda_nm
+    println("photonic_analyze (ring resonator · λ=1550 nm):")
+    println("  lambda_nm = " + str(lambda_nm) + "  dlambda_nm = " + str(dlambda_nm))
+    println("  Q = " + str(Q))
+    println("__HEXA_PHOTONIC_ANALYZE__ PASS gate=GATE_OPEN absorbed=false")
+}

@@ -1,0 +1,67 @@
+{
+  "__fixture_tag__": "VENDORED UNIVERSAL-FF PREDICTION — frozen NNP output, not measurement",
+  "candidate_id": "hxm-bat-anode-li-metal-001",
+  "novel_section": "§4.A.5 (Round 3, 2026-05-13)",
+  "target_property": "Coulombic efficiency (CE) after 200 cycles in carbonate electrolyte, Li||Cu half-cell",
+  "predicted_value": 99.4,
+  "predicted_unit": "% CE",
+  "operating_conditions": {
+    "cycle_count": 200,
+    "rate": "1 mA/cm^2 plating / 1 mA/cm^2 stripping, 1 mAh/cm^2 areal capacity",
+    "electrolyte": "1M LiPF6 EC/EMC + 10% FEC + 1% LiNO3 additive",
+    "temperature_C": 25,
+    "host": "3D porous Cu current collector"
+  },
+  "model": "ALIGNN (notional)",
+  "model_caveat": "Universal FFs do NOT directly predict Coulombic efficiency — CE is a cell-level integral over SEI evolution + dendrite nucleation kinetics + electrolyte decomposition. The 99.4% value here is a PROXY-from-literature pinned with raw#10 C3 honesty: state-of-the-art lab-cell CE for FEC + LiNO3-stabilized Li || 3D-Cu cells. ALIGNN's notional contribution is electronic-structure-on-Li-surface input that downstream MD + interface-modeling would consume. PROXY ONLY.",
+  "proxy_source": "Cui group (Stanford) 2018 Nat. Energy 3:739 (3D-host Li-metal CE 99.1% over 100 cycles, FEC additive) + Bao et al. 2019 Nat. Energy (LiF-rich SEI, 99.5% CE over 200 cycles in carbonate + LiNO3) + Tesla 4680 anode-free Li-metal early-life CE benchmarks (UNVERIFIED at production scale beyond pilot)",
+  "falsifier_relation": "AT-RISK",
+  "falsifier_target_value": 99.5,
+  "falsifier_target_unit": "% CE @ 500 cycles",
+  "falsifier_id": "F-BAT-ANODE-1",
+  "falsifier_text": "CE < 99.5% after 500 cycles in carbonate OR dendrite penetration → FAIL",
+  "delta_to_target": -0.1,
+  "delta_cycle_count_to_target": -300,
+  "accessed": "2026-05-13",
+  "arxiv_anchor_refresh_2026_05_14": {
+    "snapshot": "_research_bridge/arxiv/arxiv_cache/tier1_anchor_refresh_2026-05-14.jsonl",
+    "cross_check_papers": [
+      {
+        "arxiv_id": "2604.10630",
+        "title": "Electrochemical stability + Li insertion at Li|Li3OCl SE interface",
+        "note": "first-principles DFT shows interface structural stability (Apr 2026)"
+      },
+      {
+        "arxiv_id": "2502.03063",
+        "title": "Operando imaging of crystal structure in all-SS-batteries",
+        "note": "direct operando imaging of Li plating + delithiation limitation in dense electrodes"
+      },
+      {
+        "arxiv_id": "2412.12611",
+        "title": "Observing Li Nucleation at Li Metal-SE Interface",
+        "note": "DPMD: bandgap decrease inside SEI → electronic conduction risk"
+      },
+      {
+        "arxiv_id": "2410.15752",
+        "title": "Modeling next-gen Li metal batteries",
+        "note": "comprehensive first-principles review"
+      },
+      {
+        "arxiv_id": "2409.18344",
+        "title": "Antioxidative Li Salt for High-Voltage Ether Electrolyte",
+        "note": "4.6V operation"
+      }
+    ],
+    "verdict_unchanged": "falsifier_relation remains AT-RISK — operando imaging (2502.03063) directly visualizes delithiation limitation; 99.5% CE at 500 cycles full-cell remains UNVERIFIED at commodity scale"
+  },
+  "n6_lattice_fit_applied": false,
+  "is_measurement": false,
+  "is_external_verification": false,
+  "unproven_markers_preserved": [
+    "Li-metal SEI HARD_WALL — SEI instability remains the dominant failure mode in carbonate electrolyte (Xu 2014 + Cui 2017 reviews)",
+    "full-cell vs half-cell CE gap typically 1-2% — falsifier targets full-cell evidence",
+    "500-cycle ≥ 99.5% target UNVERIFIED at any commercial cell scale 2026"
+  ],
+  "honesty_caveats": "Proxy 99.4% CE @ 200 cycles is short of the F-BAT-ANODE-1 target (99.5% @ 500 cycles) on BOTH axes — explicit AT-RISK classification. The CE gap of 0.1 pp at half the cycle count compounds badly (CE × N is the cumulative metric; 99.4%^500 ≈ 4.9% Li remaining vs 99.5%^500 ≈ 8.2%). SEI HARD_WALL preserved. Cell engineering → hexa-energy per CROSS_LINK §3.3. SPEC_FIRST preserved — does NOT promote to EXTERNAL-VERIFIED.",
+  "license_note": "Peer-reviewed paper values per CC-BY publisher terms; vendor authority SES AI / Cuberg / Solid Power / QuantumScape (raw#10 C3, NOT n=6 lattice-fit)."
+}

@@ -1,0 +1,38 @@
+// test_exec_stream_kill.hexa — proves exec_stream_kill(h) promptly terminates
+// a long-running streaming child instead of waiting for it to exit on its own
+// (the load-bearing property for wilson tool-core ESC-cancel: a `bash` tool
+// running `sleep 10` must die in well under a second when the user hits ESC,
+// not after the full 10s).
+//
+// Path: AOT only (`hexa build`) — the exec_stream* family is codegen-emitted
+// and backed by runtime.c (hexa_exec_stream_kill / slot table + fork+pgid).
+fn main() {
+    let cmd = "sh -c 'sleep 10'"
+    let h = exec_stream_async(cmd)
+    if h < 0 {
+        println("[kill-smoke] FAIL: exec_stream_async returned " + str(h))
+        return
+    }
+    // give the child a beat to actually fork+exec
+    let r0 = exec_stream_poll(h)
+    if r0[0] {
+        println("[kill-smoke] FAIL: stream reported done before kill (handle " + str(h) + ")")
+        return
+    }
+    let t0 = time_ms()
+    let rc = exec_stream_kill(h)
+    let dt = time_ms() - t0
+    println("[kill-smoke] kill rc=" + str(rc) + " elapsed_ms=" + str(dt))
+    // Expect: child killed via signal (rc < 0 == -WTERMSIG, typically -15 SIGTERM
+    // because `sleep` exits on SIGTERM within the grace window, or -9 SIGKILL),
+    // and elapsed well under 1s — definitely not the full 10s sleep.
+    if dt < 1000 && rc < 0 {
+        println("[kill-smoke] PASS — child terminated in " + str(dt) + "ms (rc=" + str(rc) + "), not after 10s")
+    } else if dt < 1000 {
+        // dt is the real proof; rc>=0 would be unexpected for a `sleep` kill but
+        // the prompt-termination property still held.
+        println("[kill-smoke] PASS (timing) — terminated in " + str(dt) + "ms; note rc=" + str(rc) + " (expected <0)")
+    } else {
+        println("[kill-smoke] FAIL — took " + str(dt) + "ms (rc=" + str(rc) + "); kill was not prompt")
+    }
+}

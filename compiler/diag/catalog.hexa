@@ -1,0 +1,519 @@
+// HEXA Native Compiler — Diagnostic Catalog (Phase A0 skeleton)
+//
+// All compiler errors and warnings are described here. Per RFC-019:
+//   - error code = HX[CCCC] (4 digits)
+//   - groups by stage:
+//       HX0xxx parse/lex     (S0)
+//       HX1xxx atlas resolve (S1)
+//       HX2xxx bind/scope    (S2)
+//       HX3xxx type          (S3)
+//       HX4xxx domain        (S4)
+//       HX5xxx units         (S5)
+//       HX6xxx equational    (S6)
+//       HX7xxx proof         (S7)
+//       HX8xxx citation      (S8)
+//       HX9xxx codegen/link/runtime
+//
+// English only (Decision 3). No i18n. messages.hexa holds templates.
+//
+// Severity is a payload-free enum (`Severity`). Stage and code remain strings:
+// stage tags are open-ended ("S0".."S8" | "codegen" | "link" | "runtime") and
+// codes are HX-prefixed numerics that grow with each phase.
+
+import "../lex/tokens.hexa"
+
+// ── Severity ──────────────────────────────────────────────────
+
+pub enum Severity {
+    Error,
+    Warning,
+    Note
+}
+
+// ── FixIt action ──────────────────────────────────────────────
+
+pub enum FixItKind {
+    Replace,
+    Insert,
+    Delete,
+    Multi,
+    None
+}
+
+pub struct FixIt {
+    kind: FixItKind,
+    span: Span,
+    new_text: string
+}
+
+// ── Diagnostic instance (per error site) ─────────────────────
+
+pub struct Diagnostic {
+    code: string,        // "HX1042"
+    severity: Severity,
+    stage: string,       // "S0".."S8" | "codegen" | "link" | "runtime"
+    span: Span,
+    message: string,     // rendered template (English)
+    note: string,
+    suggest: string,     // did-you-mean candidate
+    fixit: FixIt,
+    related: [string]    // other HX codes
+}
+
+// ── Catalog entry (compile-time table) ────────────────────────
+
+pub struct DiagSpec {
+    code: string,
+    title: string,        // "atlas node not found"
+    severity: Severity,
+    stage: string,
+    template: string,     // "atlas {atlas_hash} has no {kind} node `{node_id}`"
+    explain: string,      // long form for `hexa explain`
+    fix_it_kind: FixItKind
+}
+
+// ── Initial catalog (will grow with each phase) ──────────────
+
+pub let CATALOG: [DiagSpec] = [
+    DiagSpec {
+        code: "HX0001",
+        title: "unexpected character",
+        severity: Severity::Error,
+        stage: "S0",
+        template: "unexpected character `{ch}`",
+        explain: "The lexer encountered a character outside of any valid token.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX0010",
+        title: "import not found",
+        severity: Severity::Error,
+        stage: "S0",
+        template: "import `{path}` not found (resolved from `{importer}`)",
+        explain: "The parser tried to load a file cited by an `import \"path\"` directive but `read_file` reported the resolved path does not exist. Common causes: typo in the path string, missing file, wrong directory level (`../` count off by one). Paths are resolved relative to the file containing the import, then normalized (./, ../ collapsed). Stage1 punch list Gap 1 — added when the parser learned to recursively load imports instead of treating them as opaque names.",
+        fix_it_kind: FixItKind::Replace
+    },
+    DiagSpec {
+        code: "HX0011",
+        title: "expected opening brace",
+        severity: Severity::Error,
+        stage: "S0",
+        template: "expected opening brace to start a block, found {found}",
+        explain: "The parser expected an opening brace `{` to begin a block expression (fn body, if/else arm, while body, struct/enum body). Without it, the parser cannot tell where the body starts and may silently absorb the next item into the surrounding context. Stage1 punch list Gap 5 — added so block-open mismatches surface as a precise S0 diagnostic instead of a downstream cascade. Note: braces are escaped from the message template here because `compiler/diag/builder.hexa::_interpolate` treats raw `{...}` as a placeholder boundary.",
+        fix_it_kind: FixItKind::Insert
+    },
+    DiagSpec {
+        code: "HX0012",
+        title: "expected closing brace",
+        severity: Severity::Error,
+        stage: "S0",
+        template: "expected closing brace to end a block, found {found}",
+        explain: "The parser expected a closing brace `}` to end a block expression. Without it, the parser may silently consume the next top-level item into the prior body. Stage1 punch list Gap 5 — added so block-close mismatches surface as a precise S0 diagnostic instead of a downstream cascade. Note: braces are escaped from the message template here because `compiler/diag/builder.hexa::_interpolate` treats raw `{...}` as a placeholder boundary.",
+        fix_it_kind: FixItKind::Insert
+    },
+    DiagSpec {
+        code: "HX0013",
+        title: "array literal too large for the compile path",
+        severity: Severity::Error,
+        stage: "S0",
+        template: "array literal has {found} elements — exceeds the compile-path cap (1024). Construct at runtime (loop + push) or load via the atlas.n6 SSOT (n6/atlas.n6 + compiler/atlas/merger.hexa). (HXC sidecar path retired 2026-05-22 — PRs #312 + #314.)",
+        explain: "GRAMMAR-ENFORCED real-limit (compile path only; the interpreter / self/parser.hexa is exempt and handles arbitrarily large array literals fine — proven O(1) RSS). A source-level array literal with thousands of elements (notably the embedded-atlas const arrays in compiler/atlas/embedded.gen.hexa, ~7400 AtlasNode) makes the new compiler's codegen/error-recovery accumulate super-quadratic (O(n²)) RSS — empirically 231 GiB / 52 s before OOM, the #1 blocker of stage-2/stage-3/E2. Rather than rely on runtime path selection (the prior HXC fast path still left the giant const-literal fallback in the build graph, so it was still codegen'd), the compile path STRUCTURALLY REJECTS the construct so the O(n²) is impossible by grammar, not merely avoided. Fix: build large collections at runtime, or serve them from the atlas.n6 SSOT (governance @D h_atlas_single_export; PR #312 + #314 retired the HXC sidecar 2026-05-22 — static_atlas() now parses n6/atlas.n6 via compiler/atlas/merger.hexa).",
+        fix_it_kind: FixItKind::Replace
+    },
+    DiagSpec {
+        code: "HX1042",
+        title: "atlas node not found",
+        severity: Severity::Error,
+        stage: "S1",
+        template: "atlas {atlas_hash} has no {kind} node `{node_id}`",
+        explain: "The identifier was used as a P/C/L/E token, but no such node exists in the atlas snapshot pinned by hexa.toml. This is usually a typo or a missing atlas update.",
+        fix_it_kind: FixItKind::Replace
+    },
+    DiagSpec {
+        code: "HX1101",
+        title: "unbound ident in lower",
+        severity: Severity::Error,
+        stage: "S2",
+        template: "unbound identifier `{name}` in lower (no binding visible from this scope)",
+        explain: "The HIR→MIR lowering pass tried to resolve an identifier reference but no local binding for it exists in the lowering scope chain. Stage1 punch list C5 — previously the miss silently produced `_const_int_op(0)` (a zero-valued operand), which masked cross-file resolution failures introduced by the Gap 1 splice. Failing fatally here surfaces the unbound name as a precise S2 diagnostic instead of letting zero-typed MIR flow downstream to codegen.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX1102",
+        title: "unsupported pattern shape in lower",
+        severity: Severity::Error,
+        stage: "S2",
+        template: "unsupported pattern kind `{kind}` in match-arm lower (Stage1 punch list C10 — extend pattern lowering or emit via ast_to_hir desugar)",
+        explain: "The HIR→MIR match-arm lowering currently handles wildcard, ident, enum_path, literal_int, literal_string, and struct_pattern. Any other pattern shape is silently coerced into a general operand-equality test today, which can be wrong (e.g. ranges, or-patterns, struct-field patterns once the parser learns them). Stage1 punch list C10 — emit HX1102 instead of relying on an operand fallback so the missing pattern kind shows up as a diagnostic.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX1103",
+        title: "unhandled HExpr kind in lower",
+        severity: Severity::Error,
+        stage: "S2",
+        template: "unhandled HExpr kind `{kind}` in hir_to_mir (default fall-through produced no MIR)",
+        explain: "The HIR→MIR lowering pass dispatches on HExpr.kind; unknown kinds previously fell through to a children-recurse-then-return-no-value path that silently produced empty MIR. Stage1 punch list C16 — mirror the Gap 14 lower-diag sink convention: emit HX1103 with the unhandled kind so missing constructs (e.g. growable-array method calls, future for/yield desugarings) surface as a precise S2 diagnostic instead of generating a zero-shaped output.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX1104",
+        title: "closure codegen not yet implemented",
+        severity: Severity::Error,
+        stage: "S2",
+        template: "closure-expression `fn(...){...}` codegen is not yet implemented (RFC closure-expression cycle C1 delivers parse/bind/type only — MIR indirect-call lowering is C2, arm64 codegen is C3)",
+        explain: "The closure-expression RFC is split into three cycles. C1 (this build) implements the parser, AST node (ExprKind::Closure), bind-pass scoping of closure params, and a `fn`-typed value for the type checker — the full front-half. Codegen is deliberately deferred: C2 adds the HIR->MIR closure-conversion lowering (capture-environment struct synthesis + closure value + indirect call), and C3 adds the arm64 backend. Until C2/C3 land, a program that uses a closure-expression compiles through parse/check cleanly and then stops here with this accurate diagnostic — instead of the misleading pre-C1 `HX2001 undefined name fn` (which mis-reported the `fn` keyword as an unknown identifier). To proceed today, rewrite the closure as a named top-level `fn` item.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX1100",
+        title: "closure capture not yet supported",
+        severity: Severity::Warning,
+        stage: "S2",
+        template: "closure in `{site}` captures variable `{name}` from outer scope; v0 lower only handles non-capturing closures (Stage1 Gap 14.1 follow-up)",
+        explain: "Hexa stage1 lowering currently inlines closure bodies at the call site without environment capture. If a closure references a variable defined in an outer scope, the inline path produces an undefined reference at MIR/LIR time. Stage1 Gap 14.1 follow-up will add closure conversion (environment struct synthesis + indirect call). Until then, rewrite the closure to take all dependencies as explicit parameters, or inline the computation. Severity: Warning so a transient capture does not block the build, but the produced binary may have undefined behaviour for the closure path.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX1110",
+        title: "host-stdlib import in embedded target",
+        severity: Severity::Error,
+        stage: "codegen",
+        template: "host-stdlib import `{path}` is forbidden under --target=`{target}` (embedded targets only allow stdlib/core, stdlib/alloc, stdlib/hal, stdlib/embedded, stdlib/mcu)",
+        explain: "Targets matching `*-none-*` (e.g. thumbv7em-none-eabihf, riscv32imac-unknown-none-elf, thumbv6m-none-eabi) are bare-metal: they have no host OS, no libc, no syscall surface. Importing modules from the host stdlib (stdlib/io, stdlib/http, stdlib/json, ...) under these targets pulls in symbols the firmware linker cannot resolve and breaks the no_std contract documented in SPEC.yaml firmware_evolution. Allowed embedded-safe paths: `stdlib/core/*` (pure: int, slice, option, result, math), `stdlib/alloc/*` (allocator interface), `stdlib/hal/*` (hardware abstraction layer), `stdlib/embedded/*` (panic handler, no_std prelude), `stdlib/mcu/*` (MCU-specific drivers). Phase F3 deliverable: target_gate_check enforcement at compile time.",
+        fix_it_kind: FixItKind::Replace
+    },
+    DiagSpec {
+        code: "HX1099",
+        title: "atlas L node is tombstoned",
+        severity: Severity::Error,
+        stage: "S8",
+        template: "atlas L node `{node_id}` is tombstoned: {reason}",
+        explain: "The cited L node was retroactively retired (RFC-017 §5e tombstone + retroactive sweep). The original record stays in atlas history for provenance, but new code may not cite it. See atlas.tombstones.n6 for the full record (replacement, prev_proof_hash, prev_verifier_version). SPEC.yaml atlas_self_discovery.invalidation pins HX1099 as the compile-fail signal.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX2001",
+        title: "undefined name",
+        severity: Severity::Error,
+        stage: "S2",
+        template: "undefined name `{name}`",
+        explain: "The identifier was used in an expression but no binding for it exists in any visible scope (function parameters, let bindings, top-level items, match arm patterns). Common causes: typo, missing import, name out of scope.",
+        fix_it_kind: FixItKind::Replace
+    },
+    DiagSpec {
+        code: "HX2003",
+        title: "callee is not callable",
+        severity: Severity::Error,
+        stage: "S3",
+        template: "`{name}` is not callable: its type `{actual}` is not a function",
+        explain: "The call-site expression's callee resolved to a value whose static type is not a function. Common causes: shadowing a function name with a local let binding, calling a struct field, or accessing a value of a non-fn type as if it were a function. Stage1 punch list C20 surfaces this as HX2003 instead of silently returning unit, so the cascade after Gap 1 multi-file imports stays readable.",
+        fix_it_kind: FixItKind::None
+    },
+    // RFC-074 Phase 2 (2026-05-20) — enum variant payload arity check.
+    // Stage S2 (bind) emits this when an `E::V(...)` expression or
+    // `E::V(...) -> ...` match pattern supplies a different number of payload
+    // components than the variant declaration's positional `typs[]` arity.
+    DiagSpec {
+        code: "HX2004",
+        title: "enum variant payload arity mismatch",
+        severity: Severity::Error,
+        stage: "S2",
+        template: "enum variant `{enum_name}::{variant_name}` expects {expected} payload {plural}, got {actual}",
+        explain: "An enum variant constructor or match pattern supplied a different number of positional payload components than the variant declaration. Under RFC-074 §2.2, enum variants carry a positional `typs[]` payload list (arity = `len(typs)`); arity 0 = unit variant, arity 1 = single-field, arity N≥2 = multi-field. The construction or pattern site must match the declared arity exactly. Fix: add or remove payload components, or amend the enum declaration.",
+        fix_it_kind: FixItKind::None
+    },
+    // RFC-074 Phase 2.1 (2026-05-20) — enum variant payload element-type check.
+    // Stage S3 (types) emits this AFTER HX2004 has confirmed matching arity. For
+    // each positional slot in `E::V(arg_0, arg_1, ..., arg_{N-1})` the inferred
+    // type of arg_i must be assignable to the declared `typs[i]` from the enum
+    // variant declaration. HX2004 (arity) and HX2005 (element-type) form the
+    // matched pair gating the positive type-soundness obligation per RFC-074 §3
+    // Phase 2 + Phase 2.1.
+    DiagSpec {
+        code: "HX2005",
+        title: "enum variant payload element-type mismatch",
+        severity: Severity::Error,
+        stage: "S3",
+        template: "enum variant `{enum_name}::{variant_name}` payload slot {pos}: expected `{expected}`, got `{actual}`",
+        explain: "An enum variant constructor supplied a payload value whose static type does not match the declared positional slot type. Under RFC-074 §2.2 each variant carries a `typs: [TypeRef]` list; the construction site's `children[i]` must be type-assignable to `typs[i]`. Common causes: argument-order swap (e.g. `E::V(\"hi\", 42)` against `enum E { V(int, string) }`), a typo in the enum declaration, or a stale call site after a variant signature change. Fix: reorder the arguments, correct the expression types, or amend the enum variant declaration.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX3001",
+        title: "type mismatch",
+        severity: Severity::Error,
+        stage: "S3",
+        template: "type mismatch: expected `{expected}`, got `{actual}`",
+        explain: "A binary operator, assignment, or other expression site received an operand whose static type does not match the expected type. Insert an explicit cast or fix the producing expression.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX3002",
+        title: "wrong number of arguments",
+        severity: Severity::Error,
+        stage: "S3",
+        template: "wrong number of arguments to `{name}`: expected {expected}, got {actual}",
+        explain: "The call site supplies a different number of arguments than the callee's signature declares. Add or remove arguments to match the function definition.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX3003",
+        title: "argument type mismatch",
+        severity: Severity::Error,
+        stage: "S3",
+        template: "argument {pos} of `{name}`: expected `{expected}`, got `{actual}`",
+        explain: "A call argument's static type does not match the corresponding parameter type. Fix the argument expression or change the call target.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX3004",
+        title: "return type mismatch",
+        severity: Severity::Error,
+        stage: "S3",
+        template: "return type mismatch: function `{name}` returns `{expected}`, got `{actual}`",
+        explain: "A `return` expression yields a value whose static type does not match the enclosing function's declared return type.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX3010",
+        title: "duplicate pub symbol across files",
+        // Warning, not Error: the bind/typecheck pre-pass already
+        // resolves the collision with a first-wins skip (so the
+        // second-file copy is silently dropped from the typed env);
+        // hard-erroring on top of that blocks codegen even when the
+        // duplicates are byte-identical helpers re-exported from
+        // multiple atlas modules. Downstream callers see exactly one
+        // definition either way — this stays a warning surface so the
+        // user notices the dup without losing the build.
+        severity: Severity::Warning,
+        stage: "S3",
+        template: "duplicate `pub` definition of `{name}`: also defined in `{first_file}` (importer `{second_file}`)",
+        explain: "Two distinct files both declare `pub <name>` and end up spliced into the same compilation unit. The pre-pass keeps the first definition encountered and skips the rest, so this is informational unless the two definitions actually disagree — in which case behaviour follows the first definition.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX3005",
+        title: "match arms have different types",
+        severity: Severity::Error,
+        stage: "S3",
+        template: "match arms have different types: expected `{expected}`, got `{actual}` on arm {pos}",
+        explain: "All arms of a `match` used as an expression must produce the same type. Adjust the divergent arm to match the first arm's result type.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX4001",
+        title: "integer division domain narrow",
+        severity: Severity::Warning,
+        stage: "S4",
+        template: "integer division narrows the real domain to integers; use `//` (floor) or cast to f64 to silence",
+        explain: "Dividing two integer operands with `/` silently truncates the real-number result. RFC-017 S4 surfaces this as a domain hint so the author confirms the narrowing was intentional.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX5001",
+        title: "unit mismatch in arithmetic",
+        severity: Severity::Error,
+        stage: "S5",
+        template: "unit mismatch in `{op}`: lhs is `{lhs}`, rhs is `{rhs}`",
+        explain: "Addition, subtraction, and comparison operators require both sides to share the same dimensional unit (RFC-017 §3.1 S5). Multiplication and division compose units; only +/-/comparisons require equality. Lenient v1: an untyped operand is compatible with any unit.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX5002",
+        title: "fn return unit mismatch",
+        severity: Severity::Error,
+        stage: "S5",
+        template: "return unit mismatch: function `{name}` declares `{expected}`, body produces `{actual}`",
+        explain: "A `return` expression (or a fn's trailing block value) yields a value whose dimensional unit does not match the unit declared in the fn's `@units` annotation.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX5003",
+        title: "call argument unit mismatch",
+        severity: Severity::Error,
+        stage: "S5",
+        template: "argument {pos} of `{name}`: expected unit `{expected}`, got `{actual}`",
+        explain: "A call argument's dimensional unit does not match the corresponding parameter unit declared on the callee's `@units` annotation. Convert the argument or fix the callee declaration.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX6001",
+        title: "equational normalization mismatch",
+        severity: Severity::Error,
+        stage: "S6",
+        template: "@verify equational mismatch in `{name}`: LHS normalizes to `{lhs}`, RHS normalizes to `{rhs}`",
+        explain: "The `@verify` annotation requested an equational check, but after constant folding, commutative operand sorting, and associativity flattening the LHS and RHS of the body's `==` comparison reduce to different canonical forms. RFC-017 §3.1 S6 — the in-house prover's first-line equational rewrite engine cannot prove the stated equality syntactically. Fix the body to express a true identity, or fall back to `@prove` for SMT-class reasoning.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX6002",
+        title: "sample-eval counter-example found",
+        severity: Severity::Error,
+        stage: "S6",
+        template: "@verify counter-example in `{name}`: at {assignment} LHS evaluates to `{lhs}` but RHS evaluates to `{rhs}`",
+        explain: "The sample-eval prover stage exercised the body's `==` comparison at 16 deterministic integer assignments (LCG seed=1, range [-10, 10]) and found at least one input where LHS and RHS disagree. The reported assignment is a concrete witness — the equality cannot hold over Int. Refine the body, narrow domain via `@units`, or upgrade to `@prove` for SMT-grade verification.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX8001",
+        title: "atlas L node missing for @implements",
+        severity: Severity::Error,
+        stage: "S8",
+        template: "atlas {atlas_hash} has no L node `{node_id}` cited by @implements — fix the citation id, or if L[{node_id}] should exist, register it: `@discover(kind=\"L\")` (upstream: `hexa atlas register <file>` → `promote` if you own hexa-lang **||** `pr` otherwise).",
+        explain: "An `@implements(L[id])` annotation refers to an L node that is not present in the merged atlas snapshot. Either fix the citation id (typo / wrong node), or — if the law genuinely belongs in the atlas — register it with `@discover(kind=\"L\")` and land it via the `hexa atlas` CLI: `hexa atlas register <file.hexa>` writes the proposed shard; `hexa atlas promote --staging <shard>` folds it into the live atlas (the `update` arm — repo owners; emits atlas.append.<date>.n6); or `hexa atlas pr` branches + `gh pr create`s against origin (the `PR` arm — non-owners).",
+        fix_it_kind: FixItKind::Replace
+    },
+    DiagSpec {
+        code: "HX8002",
+        title: "@implements points at non-L node kind",
+        severity: Severity::Error,
+        stage: "S8",
+        template: "@implements({kind}[{node_id}]) points at a {kind} node; only L nodes may be implemented",
+        explain: "The `@implements` annotation is reserved for citing an L (law) node from the atlas. Citing a P/C/E node is a kind error — use the appropriate annotation or cite the law that governs the node.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX8003",
+        title: "fn uses atlas L refs but has no @implements citation",
+        severity: Severity::Warning,
+        stage: "S8",
+        template: "function `{name}` references atlas L node `{node_id}` in its body but has no @implements citation",
+        explain: "A function body cites one or more L nodes (via L[id] expressions) but the function declares no `@implements` annotation. Adding `@implements(L[id])` records the law-of-record so downstream verification (S6/S7 prover) can attach proofs to the right node. DEPRECATED: superseded by HX8004 (Error) per SPEC.yaml atlas_citation_strict; kept transitionally for tooling parity. Will be retired in the next citation pass refresh.",
+        fix_it_kind: FixItKind::Insert
+    },
+    DiagSpec {
+        code: "HX8004",
+        title: "formula has no atlas binding",
+        severity: Severity::Error,
+        stage: "S8",
+        template: "formula in `{name}` has no atlas binding — `@implements(L[id])` to cite an existing law, or `@discover(kind=\"L\")` to register a new one (upstream: `hexa atlas register <file>` → `promote` if you own hexa-lang **||** `pr` otherwise). Bypass: `@grace(HX8004, until=\"...\", reason=\"...\")` — never silent (emits HX9000). SPEC.yaml atlas_citation_strict.",
+        explain: "Functions carrying @verify or @law annotations, OR whose body references atlas L[*] nodes, are knowledge-bearing artifacts — they must be bound to atlas L. Cite an existing law with `@implements(L[id])`, or register a new one with `@discover(kind=\"L\")`. Land it upstream via the `hexa atlas` CLI: `hexa atlas register <file.hexa>` writes the proposed shard (compiler/discover/staging.hexa); then `hexa atlas promote --staging <shard>` folds it into the live atlas if you own hexa-lang (the `update` arm — emits atlas.append.<date>.n6, so the atlas grows with every contribution); or `hexa atlas pr` branches + `gh pr create`s against origin (the `PR` arm — non-owners). Bypass while a migration is in flight: `@grace(HX8004, until, reason)` — never silently (every @grace site emits HX9000 and the build is gated on acked-grace consent).",
+        fix_it_kind: FixItKind::Insert
+    },
+    DiagSpec {
+        code: "HX9000",
+        title: "@grace requires reviewer acknowledgement",
+        severity: Severity::Warning,
+        stage: "runtime",
+        template: "ai-native: @grace at {file}:{line} suppresses {error_code} until {until}. Reason: \"{reason}\". Suppressed [{suppressed_severity_original}]: {suppressed_title} — {suppressed_message}. This is a TEMPORARY debt — the author is responsible for resolving the underlying issue before the expiry date. Reviewer acknowledgement REQUIRED before merge.",
+        explain: "Every @grace site emits this warning to prevent silent strict-lint bypass. The build is gated on explicit user consent at the CI/PR layer: PR description must contain `Acked-grace: HXxxxx by <reviewer>` trailer or commit message must contain `acked-grace: <code> by <author>`. The `Suppressed [...]` segment inlines the original diagnostic's severity / title / short-rendered body (SPEC.yaml opt_out.ai_native_warn_policy.suppressed_diagnostic_inlining, args_keys: suppressed_title / suppressed_message / suppressed_severity_original) so the bypassed text stays auditable at every compile. SPEC.yaml opt_out.ai_native_warn_policy.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX9001",
+        title: "@grace expired",
+        severity: Severity::Error,
+        stage: "runtime",
+        template: "@grace for {error_code} expired on {until}; fix or extend",
+        explain: "An @grace annotation past its `until` date no longer suppresses the underlying diagnostic. Either fix the issue or update `until` (and `reason`).",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX8010",
+        title: "@law annotation malformed",
+        severity: Severity::Error,
+        stage: "S8",
+        template: "@law annotation malformed: {detail}",
+        explain: "The `@law` annotation must take at least one positional argument: a string literal containing the formula (e.g. `@law(\"E = m * c^2\")`). Optional keyword args such as `units=\"...\"` are also string literals. RFC-017 §3.5.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX9002",
+        title: "@grace annotation malformed",
+        severity: Severity::Error,
+        stage: "S8",
+        template: "@grace annotation malformed: {detail}",
+        explain: "The `@grace` annotation requires three fields: a positional HX error code (matching `HX[0-9]{4}`), `until=\"YYYY-MM-DD\"`, and `reason=\"...\"`. SPEC.yaml opt_out section.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX9003",
+        title: "@discover annotation malformed",
+        severity: Severity::Error,
+        stage: "S8",
+        template: "@discover annotation malformed: {detail}",
+        explain: "The `@discover` annotation requires a `kind=` keyword argument whose value is one of the atlas node-kind strings: `\"P\"`, `\"C\"`, `\"L\"`, or `\"E\"`.",
+        fix_it_kind: FixItKind::None
+    },
+    // ── RFC 055 055-P1 — `@gpu` subset strict-lint (gpu/SPEC.md §9) ──
+    //
+    // These codes classify a `@gpu_kernel` / `@gpu_device` function
+    // against the gpu/SPEC.md subset. The decision table lives in
+    // `compiler/codegen/nvptx_target.hexa::nvptx_validate_gpu_subset`;
+    // wiring it into the strict-lint pipeline (FnDecl walker + diag
+    // emit) is a 055-P2 deliverable. Today the codes are pre-registered
+    // here so a future PR plumbs them in without growing the catalog.
+    DiagSpec {
+        code: "GPU01",
+        title: "@gpu_kernel must return void",
+        severity: Severity::Error,
+        stage: "codegen",
+        template: "@gpu_kernel `{fn_name}` declares a non-void return type ({type_name}); PTX `.visible .entry` cannot return a value",
+        explain: "A `@gpu_kernel` lowers to a PTX `.visible .entry`, which has no return-value channel — results must go through a `.global` farr the host reads back. Either change the return to void and write the result through an output `[f64]` parameter, or convert the function to `@gpu_device` (which lowers to `.func` and may return a value). gpu/SPEC.md §2 / §9.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "GPU02",
+        title: "@gpu_device called from CPU code",
+        severity: Severity::Error,
+        stage: "codegen",
+        template: "@gpu_device `{fn_name}` called from CPU code; @gpu_device functions are reachable only from @gpu_kernel / @gpu_device bodies",
+        explain: "A `@gpu_device` function lowers to PTX `.func` — it lives in the kernel's address space and cannot be invoked from the host. To call it from CPU code, either route through a `@gpu_kernel` entry point or copy the body to a regular CPU `fn`. gpu/SPEC.md §2 / §9.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "GPU03",
+        title: "CPU fn called from @gpu_* body",
+        severity: Severity::Error,
+        stage: "codegen",
+        template: "CPU fn `{callee}` called from @gpu_* body `{fn_name}`; only allowlisted intrinsics and @gpu_device fns are callable from GPU code",
+        explain: "A GPU kernel runs on the device — host-side functions are not in its address space. The legal call surface inside a `@gpu_*` body is: (1) the gpu_* intrinsics (gpu/SPEC.md §5), and (2) other `@gpu_device` functions. Move the helper to `@gpu_device` or inline the body. gpu/SPEC.md §4 / §9.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "GPU04",
+        title: "non-allowlisted type in @gpu_* function",
+        severity: Severity::Error,
+        stage: "codegen",
+        template: "type `{type_name}` is not in the @gpu subset allowlist; legal types are f64 / f32 / i64 / i32 / bool and fixed/borrowed arrays of those",
+        explain: "A GPU kernel has no host heap and no allocator — only fixed-extent scalar + array types are legal. Strings, maps, sets, growable Lists, tuples of non-allowlisted types, closures, and trait objects all reject. Use a `[f64]` / `[i64]` farr instead. gpu/SPEC.md §3 / §9.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "GPU05",
+        title: "denied construct in @gpu_* body",
+        severity: Severity::Error,
+        stage: "codegen",
+        template: "@gpu_* body contains a denied construct ({detail}); recursion / heap alloc / growable-collection op / IO / syscall are all rejected",
+        explain: "A GPU kernel has no growable call stack, no host heap, and no syscall surface. Rewrite the construct as a fixed-extent computation: convert recursion to iteration, replace growing collections with caller-provided `[T]` farrs, and remove IO calls (a kernel cannot println / read files). gpu/SPEC.md §4 / §9.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "GPU05W",
+        title: "@gpu_* loop with non-obviously-bounded iteration count",
+        severity: Severity::Warning,
+        stage: "codegen",
+        template: "@gpu_* loop in `{fn_name}` has an iteration count the validator cannot prove terminates; rewrite as a thread-indexed loop with compile-visible bounds",
+        explain: "A GPU kernel must terminate — unbounded loops can stall an entire SM. The validator accepts `for i in 0..N` with `N` a constant or kernel parameter; loops keyed off a `while` over a runtime-mutated index are warned. gpu/SPEC.md §4 / §9.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "GPU06",
+        title: "gpu_* intrinsic in CPU code",
+        severity: Severity::Error,
+        stage: "codegen",
+        template: "intrinsic `{intrinsic}` is only legal inside a @gpu_* body; calling it from CPU code is a GPU/CPU phase-confusion error",
+        explain: "Intrinsics like `gpu_thread_id_x` / `gpu_block_dim_x` / `gpu_barrier` lower to PTX special-register reads and only have meaning on the device. Move the call into a `@gpu_kernel` body, or compute the value host-side from the launch configuration. gpu/SPEC.md §5 / §9.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "GPU07",
+        title: "@shared misuse",
+        severity: Severity::Error,
+        stage: "codegen",
+        template: "@shared on `{local_name}` is illegal here; @shared is only legal on a fixed-extent local array inside a @gpu_kernel body",
+        explain: "Shared memory is block-scoped and exists only inside a kernel launch. `@shared` must annotate a local of fixed-extent array type (`[T; N]`) of an allowlisted scalar, declared inside a `@gpu_kernel` (not a `@gpu_device`). gpu/SPEC.md §6 / §9.",
+        fix_it_kind: FixItKind::None
+    }
+]

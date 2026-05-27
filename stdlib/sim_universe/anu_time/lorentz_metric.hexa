@@ -1,0 +1,586 @@
+// lorentz_metric.hexa — Stage 2 evolution module
+//
+// Adds Lorentzian causal structure (-+++) on top of σ²=64 spatial lattice.
+// Each cell now carries (state, t_index) instead of just state, with light-cone
+// constraint: update[i, t] depends ONLY on state[j, t-1] where d(i,j) ≤ c·dt.
+//
+// Departures from quantum_universe.hexa Stage-1:
+//   ✓ Lorentzian (-+++) signature via separate time index
+//   ✓ light-cone constraint (causal cone)
+//   ✓ retarded-only neighbor (forward time direction asymmetry)
+//   ✓ proper-time τ vs coordinate-time t distinction
+//   ✗ field-theoretic action (Stage 3)
+//   ✗ empirical anchor (Stage 4)
+//   ✗ scale-up (Stage 5)
+//
+// raw 91 C3 honest disclosure: this is still a toy at σ²=64 with i64 state.
+// Lorentz signature realized via metric coefficients in update rule, not as
+// genuine pseudo-Riemannian manifold. Causal cone enforced by neighbor
+// restriction (subset of spatial neighbors per tick), not by full BCH metric.
+// Empirical anchor (CMB / GW) NOT done — Stage 4 follow-up.
+//
+// Usage:
+//   hexa lorentz_metric.hexa --selftest
+//   hexa lorentz_metric.hexa <ticks> <topology> [c=1|2]    # speed-of-light c
+//
+// Causal cone: c=1 means 1 spatial neighbor per tick (slow-light), c=2 means
+// up to 2 spatial neighbors per tick (faster light cone).
+
+const LSIGMA: i64 = 64
+const LSCALE: i64 = 65536
+
+// Time-history buffer — last 4 time slices for retarded-Green-function evolution
+const LHIST: i64 = 4
+
+// ── topology subset (from topology_universe.hexa) ──
+const LT_FLAT: i64 = 0
+const LT_T3: i64 = 2
+const LT_S3: i64 = 4
+const LT_BLACKHOLE: i64 = 6
+const LT_WORMHOLE: i64 = 7
+const LT_MINKOWSKI: i64 = 17    // canonical Lorentz topology
+// iter-64: add ads-cft and de-sitter for causality observable comparison
+const LT_ADS_CFT: i64 = 13
+const LT_DE_SITTER: i64 = 16
+// iter-65: extend Stage 2 substrate +4 for axis-15 orthogonality test
+const LT_VACUUM_DECAY: i64 = 8
+const LT_ALTERED: i64 = 9
+const LT_BIG_CRUNCH: i64 = 19
+const LT_BRANE: i64 = 14
+// iter-67: extend Stage 2 substrate +3 for bimodal confirmation
+const LT_CARTOON: i64 = 10
+const LT_NESTED: i64 = 11
+const LT_CALABI6: i64 = 12
+// iter-68: final 3 ports for full Lorentz substrate (18/21)
+const LT_INFLATION: i64 = 15
+const LT_CA3D: i64 = 18
+const LT_BUBBLE: i64 = 20
+
+fn _ltopo_id(name: string) -> i64 {
+    if name == "flat" { return LT_FLAT }
+    if name == "t3" { return LT_T3 }
+    if name == "s3" { return LT_S3 }
+    if name == "blackhole" { return LT_BLACKHOLE }
+    if name == "wormhole" { return LT_WORMHOLE }
+    if name == "minkowski" { return LT_MINKOWSKI }
+    // iter-64: causality observable comparison candidates
+    if name == "ads-cft" { return LT_ADS_CFT }
+    if name == "de-sitter" { return LT_DE_SITTER }
+    // iter-65: orthogonality test extension
+    if name == "vacuum-decay" { return LT_VACUUM_DECAY }
+    if name == "altered" { return LT_ALTERED }
+    if name == "big-crunch" { return LT_BIG_CRUNCH }
+    if name == "brane" { return LT_BRANE }
+    // iter-67: bimodal confirmation extension
+    if name == "cartoon" { return LT_CARTOON }
+    if name == "nested" { return LT_NESTED }
+    if name == "calabi6" { return LT_CALABI6 }
+    // iter-68: final 3
+    if name == "inflation" { return LT_INFLATION }
+    if name == "ca3d" { return LT_CA3D }
+    if name == "bubble" { return LT_BUBBLE }
+    return 0 - 1
+}
+
+fn _lneighbor_t3(i: i64, axis: i64) -> i64 {
+    let x = i % 4
+    let y = (i / 4) % 4
+    let z = i / 16
+    if axis == 0 {
+        let xm = (x + 3) % 4
+        return z * 16 + y * 4 + xm
+    }
+    if axis == 1 {
+        let ym = (y + 3) % 4
+        return z * 16 + ym * 4 + x
+    }
+    let zm = (z + 3) % 4
+    return zm * 16 + y * 4 + x
+}
+
+fn _lneighbor_flat(i: i64, axis: i64) -> i64 {
+    if axis == 0 { return (i + LSIGMA - 1) % LSIGMA }
+    return (i + 1) % LSIGMA
+}
+
+fn _lneighbor_s3(i: i64, axis: i64) -> i64 {
+    let i_q = i % 32
+    let x = i_q % 4
+    let y = (i_q / 4) % 4
+    let z = i_q / 16
+    if axis == 0 {
+        let xm = (x + 3) % 4
+        return z * 16 + y * 4 + xm
+    }
+    if axis == 1 {
+        let ym = (y + 3) % 4
+        return z * 16 + ym * 4 + x
+    }
+    if axis == 2 {
+        let zm = (z + 3) % 4
+        return zm * 16 + y * 4 + x
+    }
+    return i_q + 32
+}
+
+fn _lneighbor_blackhole(i: i64, axis: i64) -> i64 {
+    let i_BH: i64 = 21
+    if i == i_BH { return i_BH }
+    let x = i % 4
+    let y = (i / 4) % 4
+    let z = i / 16
+    let mut dx = x - 1
+    if dx < 0 { dx = 0 - dx }
+    let mut dy = y - 1
+    if dy < 0 { dy = 0 - dy }
+    let mut dz = z - 1
+    if dz < 0 { dz = 0 - dz }
+    let d = dx + dy + dz
+    if d <= 1 {
+        let mut nx = x
+        let mut ny = y
+        let mut nz = z
+        if axis == 0 {
+            if x > 1 { nx = x - 1 } else if x < 1 { nx = x + 1 }
+        } else if axis == 1 {
+            if y > 1 { ny = y - 1 } else if y < 1 { ny = y + 1 }
+        } else {
+            if z > 1 { nz = z - 1 } else if z < 1 { nz = z + 1 }
+        }
+        return nz * 16 + ny * 4 + nx
+    }
+    return _lneighbor_t3(i, axis)
+}
+
+fn _lneighbor_wormhole(i: i64, axis: i64) -> i64 {
+    if axis >= 3 {
+        if i < 32 {
+            let off = i % 8
+            return 32 + ((i + off) % 32)
+        }
+        let i2 = i - 32
+        let off = i2 % 8
+        return (i2 + off) % 32
+    }
+    let base = if i < 32 { 0 } else { 32 }
+    let r = i - base
+    let x = r % 4
+    let y = (r / 4) % 4
+    let z = r / 16
+    if axis == 0 {
+        let xm = (x + 3) % 4
+        return base + z * 16 + y * 4 + xm
+    }
+    if axis == 1 {
+        let ym = (y + 3) % 4
+        return base + z * 16 + ym * 4 + x
+    }
+    let zm = (z + 1) % 2
+    return base + zm * 16 + y * 4 + x
+}
+
+// minkowski-specific spatial neighbor: T^3 base + axis-3 forward-only time hop
+fn _lneighbor_minkowski(i: i64, axis: i64) -> i64 {
+    let base = _lneighbor_t3(i, axis)
+    // Lorentz signature break: axis 0 carries +11 forward asymmetry (light-cone tilt)
+    if axis == 0 {
+        if i >= 60 { return i }
+        return (base + 11) % LSIGMA
+    }
+    return (base + axis * 3) % LSIGMA
+}
+
+// iter-64: ads-cft and de-sitter neighbor functions (ports from v2 anchor)
+fn _lneighbor_ads_cft(i: i64, axis: i64) -> i64 {
+    if axis < 2 { return _lneighbor_t3(i, axis) }
+    return (i + 32) % LSIGMA
+}
+
+fn _lneighbor_de_sitter(i: i64, axis: i64) -> i64 {
+    let base = _lneighbor_t3(i, axis)
+    let amp = (i / 8 + 1)
+    return (base + amp) % LSIGMA
+}
+
+// iter-65: 4 more lorentz neighbor functions
+fn _lneighbor_vacuum_decay(i: i64, axis: i64) -> i64 {
+    if i == 0 && axis == 0 { return 0 }
+    let n = _lneighbor_t3(i, axis)
+    let x = i % 4; let y = (i / 4) % 4; let z = i / 16
+    let d = x + y + z
+    if d <= 1 { return (n + 7) % LSIGMA }
+    return n
+}
+
+fn _lneighbor_altered(i: i64, axis: i64) -> i64 {
+    let base = _lneighbor_t3(i, axis)
+    let off = (i * 31 + axis * 17) % LSIGMA
+    return (base + off + 5) % LSIGMA
+}
+
+fn _lneighbor_big_crunch(i: i64, axis: i64) -> i64 {
+    let i_center: i64 = 21
+    if i == i_center { return i_center }
+    let x = i % 4; let y = (i / 4) % 4; let z = i / 16
+    let mut nx = x; let mut ny = y; let mut nz = z
+    if axis == 0 { if x > 1 { nx = x - 1 } else if x < 1 { nx = x + 1 } }
+    else if axis == 1 { if y > 1 { ny = y - 1 } else if y < 1 { ny = y + 1 } }
+    else { if z > 1 { nz = z - 1 } else if z < 1 { nz = z + 1 } }
+    return nz * 16 + ny * 4 + nx
+}
+
+fn _lneighbor_brane(i: i64, axis: i64) -> i64 {
+    if axis >= 3 { return (i * 17 + 5) % LSIGMA }
+    if i % 8 == 3 { return (i * 17 + axis * 11 + 5) % LSIGMA }
+    return _lneighbor_t3(i, axis)
+}
+
+// iter-67: 3 more lorentz neighbor functions for bimodal confirmation
+fn _lneighbor_cartoon(i: i64, axis: i64) -> i64 {
+    let off = (i * 47 + axis * 23 + 13) % LSIGMA
+    let r = (i + off) % LSIGMA
+    if r < 0 { return r + LSIGMA }
+    return r
+}
+
+fn _lneighbor_nested(i: i64, axis: i64) -> i64 {
+    if i >= 56 {
+        let r = i - 56
+        if axis == 0 { return 56 + ((r + 7) % 8) }
+        if axis == 1 { return 56 + ((r + 1) % 8) }
+        return r * 7 % 56
+    }
+    let n = _lneighbor_t3(i, axis)
+    if n >= 56 { return n - 56 }
+    if i == 0 && axis == 2 { return 56 }
+    return n
+}
+
+fn _lbit_pow2(k: i64) -> i64 {
+    let mut v: i64 = 1; let mut s = 0
+    while s < k { v = v * 2; s = s + 1 }
+    return v
+}
+
+fn _lneighbor_calabi6(i: i64, axis: i64) -> i64 {
+    let mut k = axis % 6
+    if k < 0 { k = k + 6 }
+    return i ^ _lbit_pow2(k)
+}
+
+// iter-68: final 3 lorentz neighbor functions
+fn _lneighbor_inflation(i: i64, axis: i64) -> i64 {
+    let base = _lneighbor_t3(i, axis)
+    if i % 8 == 0 { return (LSIGMA - 1 - base) % LSIGMA }
+    return base
+}
+
+fn _lneighbor_ca3d(i: i64, axis: i64) -> i64 {
+    let base = _lneighbor_t3(i, axis)
+    if i % 3 == 0 { return base ^ 7 }
+    return base
+}
+
+fn _lneighbor_bubble(i: i64, axis: i64) -> i64 {
+    let bubble_id = i / 16
+    let base = _lneighbor_t3(i, axis)
+    let neighbor_bubble = base / 16
+    if bubble_id != neighbor_bubble { return (base + bubble_id * 13) % LSIGMA }
+    return base
+}
+
+fn _ltopo_neighbor(i: i64, axis: i64, topo: i64) -> i64 {
+    if topo == LT_FLAT { return _lneighbor_flat(i, axis) }
+    if topo == LT_T3 { return _lneighbor_t3(i, axis) }
+    if topo == LT_MINKOWSKI { return _lneighbor_minkowski(i, axis) }
+    if topo == LT_S3 { return _lneighbor_s3(i, axis) }
+    if topo == LT_BLACKHOLE { return _lneighbor_blackhole(i, axis) }
+    if topo == LT_WORMHOLE { return _lneighbor_wormhole(i, axis) }
+    // iter-64: causality observable candidates
+    if topo == LT_ADS_CFT { return _lneighbor_ads_cft(i, axis) }
+    if topo == LT_DE_SITTER { return _lneighbor_de_sitter(i, axis) }
+    // iter-65: orthogonality test extension
+    if topo == LT_VACUUM_DECAY { return _lneighbor_vacuum_decay(i, axis) }
+    if topo == LT_ALTERED { return _lneighbor_altered(i, axis) }
+    if topo == LT_BIG_CRUNCH { return _lneighbor_big_crunch(i, axis) }
+    if topo == LT_BRANE { return _lneighbor_brane(i, axis) }
+    // iter-67: bimodal confirmation
+    if topo == LT_CARTOON { return _lneighbor_cartoon(i, axis) }
+    if topo == LT_NESTED { return _lneighbor_nested(i, axis) }
+    if topo == LT_CALABI6 { return _lneighbor_calabi6(i, axis) }
+    // iter-68: final 3
+    if topo == LT_INFLATION { return _lneighbor_inflation(i, axis) }
+    if topo == LT_CA3D { return _lneighbor_ca3d(i, axis) }
+    if topo == LT_BUBBLE { return _lneighbor_bubble(i, axis) }
+    return _lneighbor_flat(i, axis)
+}
+
+// ── Lorentz state with time history ────────────────────────
+let mut __ls_hist: [i64] = []   // flat array: index = t_offset * LSIGMA + i; t_offset ∈ [0, LHIST)
+let mut __ls_t_now: i64 = 0     // current time index (mod LHIST)
+let mut __ls_lightcone_violations: i64 = 0   // count of attempted spacelike accesses
+
+fn ls_init(seed: i64) {
+    let mut buf: [i64] = []
+    let mut k = 0
+    while k < LSIGMA * LHIST {
+        // initial profile: Gaussian-ish at i=32, replicated across history
+        let i = k % LSIGMA
+        let mut d = i - 32
+        if d < 0 { d = 0 - d }
+        let v = (LSCALE / (1 + d * d)) + (seed * 13 + i * 7) % 100
+        buf = buf + [v]
+        k = k + 1
+    }
+    __ls_hist = buf
+    __ls_t_now = 0
+    __ls_lightcone_violations = 0
+}
+
+fn _ls_get(i: i64, t_offset: i64) -> i64 {
+    // t_offset = 0 means current, 1 means previous, ..., (LHIST-1) means oldest
+    let t_idx = (__ls_t_now - t_offset + LHIST * 2) % LHIST
+    return __ls_hist[t_idx * LSIGMA + i]
+}
+
+fn _ls_set_now(i: i64, v: i64) {
+    let t_idx = __ls_t_now
+    let pos = t_idx * LSIGMA + i
+    let mut new_buf: [i64] = []
+    let mut k = 0
+    while k < LSIGMA * LHIST {
+        if k == pos { new_buf = new_buf + [v] } else { new_buf = new_buf + [__ls_hist[k]] }
+        k = k + 1
+    }
+    __ls_hist = new_buf
+}
+
+// Lorentz step: advance time by 1.
+//   new_state[i, t] = (-)·state[i, t-1] + (+)·sum_{j ∈ light_cone(i, c)} state[j, t-2]
+//   Coefficients (-+++) Minkowski signature: time-component negative, space positive.
+//   c = speed of light cap (1 or 2 spatial neighbors per tick).
+fn ls_step(topo: i64, c_speed: i64) {
+    // Advance t_now first
+    __ls_t_now = (__ls_t_now + 1) % LHIST
+
+    let mut new_buf: [i64] = []
+    let mut k = 0
+    while k < LSIGMA * LHIST {
+        new_buf = new_buf + [__ls_hist[k]]
+        k = k + 1
+    }
+
+    let mut i = 0
+    while i < LSIGMA {
+        // time-like component (negative coefficient — Lorentz signature)
+        let prev = _ls_get(i, 1)        // t-1 at same spatial cell
+        let prev2 = _ls_get(i, 2)       // t-2 at same spatial cell
+        let time_term = 0 - prev + prev2 / 4   // (-+) signature on time
+
+        // spatial light-cone neighbors at t-1 (causal — retarded)
+        let mut spatial_sum: i64 = 0
+        let mut spatial_count: i64 = 0
+        let mut a = 0
+        while a < 3 {
+            let j1 = _ltopo_neighbor(i, a, topo)
+            spatial_sum = spatial_sum + _ls_get(j1, 1)
+            spatial_count = spatial_count + 1
+            // c=2 reaches second-neighbor (j2 = neighbor of j1)
+            if c_speed >= 2 {
+                let j2 = _ltopo_neighbor(j1, a, topo)
+                spatial_sum = spatial_sum + _ls_get(j2, 1) / 2  // weaker
+                spatial_count = spatial_count + 1
+            }
+            a = a + 1
+        }
+        let space_term = if spatial_count > 0 { spatial_sum / spatial_count } else { 0 }
+
+        let new_v = (time_term + space_term + LSCALE) % LSCALE
+        let mut nv = new_v
+        if nv < 0 { nv = nv + LSCALE }
+        new_buf[__ls_t_now * LSIGMA + i] = nv
+        i = i + 1
+    }
+    __ls_hist = new_buf
+}
+
+// Causal cone violation check — try to access spacelike-separated point
+fn ls_attempt_spacelike_read(i: i64, j: i64) -> i64 {
+    // distance i,j on T^3 lattice
+    let xi = i % 4
+    let yi = (i / 4) % 4
+    let zi = i / 16
+    let xj = j % 4
+    let yj = (j / 4) % 4
+    let zj = j / 16
+    let mut dx = xi - xj
+    if dx < 0 { dx = 0 - dx }
+    let mut dy = yi - yj
+    if dy < 0 { dy = 0 - dy }
+    let mut dz = zi - zj
+    if dz < 0 { dz = 0 - dz }
+    let d = dx + dy + dz
+    // we are at t_now reading state[j, t_now] with d > 0 = spacelike with dt=0
+    if d > 0 {
+        __ls_lightcone_violations = __ls_lightcone_violations + 1
+        return 0 - 1   // forbidden
+    }
+    return _ls_get(j, 0)
+}
+
+fn ls_state_hash() -> i64 {
+    let mut h: i64 = 0
+    let mut i = 0
+    while i < LSIGMA {
+        let v = _ls_get(i, 0)
+        h = (h * 33 + v) % 9999999967
+        i = i + 1
+    }
+    return h
+}
+
+fn ls_total_energy() -> i64 {
+    // ∫|∂_t state|² + |∇state|² ≈ Σ (state² + |Δt-state|²)
+    let mut e: i64 = 0
+    let mut i = 0
+    while i < LSIGMA {
+        let v = _ls_get(i, 0)
+        let v_prev = _ls_get(i, 1)
+        let dt = v - v_prev
+        e = e + (v * v + dt * dt) / LSCALE
+        i = i + 1
+    }
+    return e
+}
+
+// ── selftest ────────────────────────────────────────────────
+fn _lselftest_run(topo_name: string, ticks: i64, c: i64) -> [i64] {
+    let topo = _ltopo_id(topo_name)
+    if topo < 0 { return [0 - 1, 0 - 1, 0 - 1] }
+    ls_init(6)
+    let e0 = ls_total_energy()
+    let mut t = 0
+    while t < ticks {
+        ls_step(topo, c)
+        t = t + 1
+    }
+    let eT = ls_total_energy()
+    let h = ls_state_hash()
+    return [eT - e0, h, __ls_lightcone_violations]
+}
+
+fn run_lorentz_selftest() {
+    println("[lorentz_metric] --selftest (Stage 2: light-cone + retarded causality)")
+    let topos = ["flat", "t3", "s3", "blackhole", "wormhole", "minkowski"]
+    let mut hashes: [i64] = []
+    let mut i = 0
+    while i < topos.len() {
+        let r = _lselftest_run(topos[i], 16, 1)
+        hashes = hashes + [r[1]]
+        println("  topo=" + topos[i] + " (c=1)  energy_drift=" + to_string(r[0]) + "  hash=" + to_string(r[1]) + "  lightcone_viol=" + to_string(r[2]))
+        i = i + 1
+    }
+    // c=2 faster light cone — should diverge from c=1 results
+    let r_c1 = _lselftest_run("t3", 16, 1)
+    let r_c2 = _lselftest_run("t3", 16, 2)
+    let c_diff = r_c1[1] != r_c2[1]
+    println("  c=1 vs c=2 (t3): hash_diff=" + to_string(c_diff) + "  c=1_hash=" + to_string(r_c1[1]) + "  c=2_hash=" + to_string(r_c2[1]))
+
+    // verify all hashes distinct (across 6 topologies)
+    let mut a = 0
+    let mut all_distinct = true
+    while a < hashes.len() {
+        let mut b = a + 1
+        while b < hashes.len() {
+            if hashes[a] == hashes[b] {
+                all_distinct = false
+                println("  COLLISION: " + topos[a] + " == " + topos[b])
+            }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    // idempotent
+    let r1 = _lselftest_run("flat", 16, 1)
+    let r2 = _lselftest_run("flat", 16, 1)
+    let idem = r1[1] == r2[1]
+    if !idem { println("  RAW-65-VIOLATION flat re-run differs") }
+    // attempt spacelike read — should increment violations
+    ls_init(6)
+    let saved_viol = __ls_lightcone_violations
+    let _v = ls_attempt_spacelike_read(0, 1)
+    let viol_inc = __ls_lightcone_violations > saved_viol
+
+    let pass = all_distinct && idem && c_diff && viol_inc
+    if pass {
+        println("__LORENTZ_METRIC_SELFTEST__ PASS topologies=6 idempotent=true distinct=true c-discriminative=true causal-violation-detected=true")
+    } else {
+        println("__LORENTZ_METRIC_SELFTEST__ FAIL distinct=" + to_string(all_distinct) + " idem=" + to_string(idem) + " c_diff=" + to_string(c_diff) + " viol=" + to_string(viol_inc))
+    }
+}
+
+// ── main ────────────────────────────────────────────────────
+let _largs = args()
+
+let mut l_is_selftest = false
+let mut l_arg_i = 0
+while l_arg_i < _largs.len() {
+    if _largs[l_arg_i] == "--selftest" { l_is_selftest = true }
+    l_arg_i = l_arg_i + 1
+}
+
+if l_is_selftest {
+    run_lorentz_selftest()
+} else {
+    // iter-64: position-independent parser (mirror iter-45 v2 anchor)
+    let mut l_max_ticks: i64 = 50
+    let mut l_topo_name: string = "minkowski"
+    let mut l_c: i64 = 1
+    let mut l_topo_idx: i64 = -1
+    let mut l_scan_i: i64 = 0
+    while l_scan_i < _largs.len() {
+        if _ltopo_id(_largs[l_scan_i]) >= 0 {
+            l_topo_idx = l_scan_i
+            l_scan_i = _largs.len()
+        } else {
+            l_scan_i = l_scan_i + 1
+        }
+    }
+    if l_topo_idx >= 0 {
+        l_topo_name = _largs[l_topo_idx]
+        if l_topo_idx >= 1 {
+            try { l_max_ticks = to_int(_largs[l_topo_idx - 1]) } catch e { l_max_ticks = 50 }
+        }
+        if l_topo_idx + 1 < _largs.len() {
+            try { l_c = to_int(_largs[l_topo_idx + 1]) } catch e { l_c = 1 }
+        }
+    } else {
+        if _largs.len() >= 2 {
+            try { l_max_ticks = to_int(_largs[1]) } catch e { l_max_ticks = 50 }
+        }
+        if _largs.len() >= 3 { l_topo_name = _largs[2] }
+        if _largs.len() >= 4 {
+            try { l_c = to_int(_largs[3]) } catch e { l_c = 1 }
+        }
+    }
+    let l_topo = _ltopo_id(l_topo_name)
+    if l_topo < 0 {
+        println("[lorentz_metric] ERROR unknown topology=" + l_topo_name)
+        println("  valid: flat | t3 | s3 | blackhole | wormhole | minkowski")
+        println("  reason: validation-fail invalid-topology-name")
+        println("  fix: 1) hexa lorentz_metric.hexa 50 minkowski 1  2) hexa lorentz_metric.hexa --selftest")
+    } else {
+        println("[lorentz_metric] start ticks=" + to_string(l_max_ticks) + " topology=" + l_topo_name + " c=" + to_string(l_c))
+        ls_init(6)
+        let e0 = ls_total_energy()
+        let mut t = 0
+        while t < l_max_ticks {
+            ls_step(l_topo, l_c)
+            t = t + 1
+        }
+        let eT = ls_total_energy()
+        let h = ls_state_hash()
+        println("[lorentz_metric] done ticks=" + to_string(t) + " topology=" + l_topo_name + " c=" + to_string(l_c) + " energy_initial=" + to_string(e0) + " energy_final=" + to_string(eT) + " drift=" + to_string(eT - e0) + " hash=" + to_string(h) + " causal_viol=" + to_string(__ls_lightcone_violations))
+        println("  raw 91 C3 honest: Lorentz signature realized via metric coefficients in update rule, not as genuine pseudo-Riemannian manifold; causal cone enforced by retarded-only neighbor restriction (Stage 3 follow-up: field-theoretic action)")
+    }
+}

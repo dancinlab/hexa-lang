@@ -1,0 +1,173 @@
+RFC 071 P9 N70 → N91 RE-FIRE warp_reduce_sum source-to-silicon fire log
+========================================================================
+
+date:    2026-05-21
+cycle:   N91 (re-fire after N81 silent-wipe restore + N71-C re-restore)
+host:    macOS arm64 (driver build) + ubu-2 summer-B650M-K (silicon fire)
+device:  NVIDIA GeForce RTX 5070 (sm_120a JIT from sm_80 PTX)
+kernel:  warp_reduce_sum (1 block × 1024 threads = 32 warps × 32 lanes)
+outcome: BLOCKED — F-RFC071-E2E-WARP-REDUCE-SUM-NUMERIC-EQ : BLOCKED (gap C)
+         F-RFC071-E2E-DRIVER-BUILD               PASS  (N81 restore + N71-C re-restore)
+         F-RFC071-E2E-PTX-EMIT-CLEAN             PASS  (no `unsupported binop` markers)
+         F-RFC071-E2E-PTX-LOAD                   FAIL  (ptxas Arguments-mismatch
+                                                       on `shfl` — FP64-shuffle
+                                                       composition gap GAP-C)
+         F-RFC071-E2E-WARP-REDUCE-SUM-NUMERIC-EQ BLOCKED (gap C upstream)
+
+
+pre-conditions on main HEAD (b6ca8506 at start; N71-C wipe re-restored locally):
+  PTX_OP_SHFL_SYNC_BFLY_B32  declared (842d6565 restored — verified 1×)
+  gpu_warp_shuffle_xor       wired    (7671d7db + 0626a8f6 — verified 5×)
+  div.s64 / div.s32          wired    (LOCAL re-restore after silent-wipe by
+                                       7671d7db — verified 4× post-edit)
+
+  N71-C silent-wipe analysis (mirrors N81 BFLY const wipe class):
+    9652fd5e ADDED div.s32/div.s64/div_f32 to _nvptx_binop_mnemonic_for_kind
+    7671d7db re-applied N71-A xor branch + classifier but ALSO REMOVED the
+             N71-C div edits during the same "staging conflict" manual repair
+             that wiped PTX_OP_SHFL_SYNC_BFLY_B32. The N81 restore commit
+             (842d6565) only put BFLY back — the div wipe was NOT noticed
+             until this N91 cycle. Re-applied locally per task @D g3 honest-
+             scope instruction "if X still missing somehow, re-restore".
+
+
+step 1 — driver rebuild from main HEAD:
+  export PATH=$HOME/.hx/bin:$PATH
+  export HEXA_LANG=/Users/ghost/core/hexa-lang
+  export HEXA_MAC_BUILD_OK=1
+  export HEXA_MODULE_LOADER=/Users/ghost/core/hexa-lang/build/hexa_module_loader
+  /tmp/hexac build self/main.hexa -o /tmp/hexa_n91_driver
+  → OK: built /tmp/hexa_n91_driver (Mach-O 64-bit arm64)
+
+  (Used /tmp/hexac per reference_hexa_basename_sigkill_workaround_2026_05_19 —
+   `hexa`/`hexa.real` would SIGKILL via wilson-pool routing on heavy build.
+   `hexa-build` shim is help-only — hexac dispatches `build` verb correctly.)
+
+
+step 2 — PTX emit:
+  /tmp/hexa_n91_driver build compiler/codegen/nvptx_p9_warp_reduce_test.hexa \
+       --target=nvptx64-nvidia-cuda-sm80 -o /tmp/warp_reduce_sum.sm_80.ptx
+  → emitted: compiler/codegen/nvptx_p9_warp_reduce_test.hexa.ptx (3344 B, pure ASCII)
+  → copied  to inbox/fires/rfc071_p9_warp_reduce_2026_05_21/warp_reduce_sum.sm_80.ptx
+
+  Substring verification:
+    shfl.sync.bfly.b32   present 1× (L78)
+    div.s64              present 3× (L81, L85, L89 — mask/2 i32, tid/32 i64 ×2)
+    div.s32              absent (kernel uses i64 div only at the call sites;
+                                 N71-C arm still wires .s32 for any U32-dst path)
+    `// unsupported call`        ABSENT
+    `// unsupported binop: /`    ABSENT
+    non-ASCII chars              0
+
+
+step 3 — silicon fire on ubu-2 (RTX 5070, plain `ssh ubu-2`, no SIDECAR_NO_POOL):
+  scp host_warp_reduce.c warp_reduce_sum.sm_80.ptx ubu-2:/tmp/n91_warp_reduce/
+  ssh ubu-2 nvcc -arch=sm_80 -o host_warp_reduce host_warp_reduce.c -lcuda  → OK
+  ssh ubu-2 timeout 30 ./host_warp_reduce warp_reduce_sum.sm_80.ptx
+  → stdout/stderr:
+
+      Device: NVIDIA GeForce RTX 5070
+      JIT err: ptxas application ptx input, line 78; error   : Arguments mismatch for instruction 'shfl'
+      ptxas application ptx input, line 79; error   : Arguments mismatch for instruction 'add'
+      ptxas application ptx input, line 80; error   : Arguments mismatch for instruction 'mov'
+      ptxas application ptx input, line 78; error   : Unknown symbol '%r9'
+      ptxas application ptx input, line 78; error   : Unknown symbol '%r16'
+      ptxas fatal   : Ptx assembly aborted due to errors
+      cuModuleLoadDataEx FAIL: a PTX JIT compilation failed
+      BLOCKED: PTX gaps prevent load (gpu_warp_shuffle_xor + `/` binop)
+
+  Wall: ~3 s (cuInit + ptxas-reject). Cost: $0 (no kernel launch).
+
+
+step 4 — numeric check: NOT REACHED (cuModuleLoadDataEx FAIL upstream)
+
+
+falsifiers (N91 re-fire):
+  F-RFC071-E2E-DRIVER-BUILD               PASS    (driver compiles; both N81 +
+                                                   N71-C restorations took)
+  F-RFC071-E2E-PTX-EMIT-CLEAN             PASS    (shfl.sync.bfly.b32 + div.s64
+                                                   both present; no honest-stub
+                                                   markers anywhere in body)
+  F-RFC071-E2E-PTX-LOAD                   FAIL    (NEW gap surfaced: GAP-C —
+                                                   FP64-shuffle bank mismatch)
+  F-RFC071-E2E-WARP-REDUCE-SUM-NUMERIC-EQ BLOCKED (gap C upstream — kernel never
+                                                   launched; cannot evaluate ULP)
+
+
+gap-C diagnosis (the deeper bug surfaced, honest @D g3):
+  PTX L78:  `shfl.sync.bfly.b32 %r18, %r9, %r16, 0x1f, 0xffffffff;`
+            % r9 and %r16 are referenced but NEVER declared in the .reg
+            section. ptxas: "Unknown symbol '%r9' / '%r16'".
+
+  Source MIR call:  gpu_warp_shuffle_xor(sum, mask)
+    `sum`  is FP64 (let mut sum: f64 = 0.0) — classifier puts it in
+           %fd<id> bank (visible as %fd9 at L53, declared L19).
+    `mask` is i32  (let mut mask: i32 = 16) — classifier puts it in
+           %r<id> bank with id=16 BUT no `.reg .u32 %r16;` declaration is
+           emitted by the kind table; only %r18/%r19 get declarations.
+
+  Codegen path (compiler/codegen/nvptx_target.hexa _nvptx_lower_stmt
+                gpu_warp_shuffle_xor arm, restored in commit 7671d7db):
+
+      let src_reg  = _nvptx_reg_u32(s.args[0].local_id)   // → "%r" + id
+      let mask_reg = _nvptx_reg_u32(s.args[1].local_id)   // → "%r" + id
+
+  Both operands are formatted as `%r<local_id>` regardless of actual bank.
+  FP64-typed arg[0] (`sum`) is FP64-banked as `%fd9` — but this emit
+  writes `%r9`, picking a slot in the u32 bank that was never declared.
+
+  Per the fixture comment L22-25 (intentional design note):
+      gpu_warp_shuffle_xor(v, mask) [NOT WIRED — XOR butterfly variant
+      of existing gpu_warp_shuffle(v, lane) idx-mode; FP64-shuffle would
+      compose from 2× u32 halves per PTX ISA §9.7.13.4]
+
+  The author KNEW FP64-shuffle requires composition: split FP64 into hi/lo
+  u32 halves via `mov.b64 {%r_lo, %r_hi}, %fd_src;`, shfl each half
+  separately, then `mov.b64 %fd_dst, {%r_lo, %r_hi};`. The N71-A wiring
+  closed the call-site → PTX-mnemonic gap (shfl.sync.bfly.b32 IS now
+  emitted) but did NOT add the FP64 decomposition wrapper.
+
+  Closure path (NEXT cycle, out of N91 scope):
+    Option A — kernel rewrite: change `sum` to i64-bitcast or do the
+               manual hi/lo split in source. Cheap, kernel-specific.
+    Option B — codegen extension: detect FP64 first arg to
+               gpu_warp_shuffle_xor and synthesize 2× u32 halves +
+               2× shfl + recompose. Reusable; matches gpu/SPEC.md §5.
+
+  Both options touch compiler-or-fixture source; deferred from this
+  re-fire workflow.
+
+
+honest scope summary (@D g3):
+  N91 re-fire CLOSED:
+    + Driver build now succeeds on main HEAD (after N71-C re-restore).
+    + PTX emit is clean — no honest-stub markers in body.
+    + shfl.sync.bfly.b32 mnemonic emits (N71-A landed).
+    + div.s64 / div.s32 mnemonics emit (N71-C re-restored).
+    + PTX_OP_SHFL_SYNC_BFLY_B32 const declared (N81 restore landed earlier).
+    + Pure ASCII (driver JIT-safe per reference_gpu_fire_infra).
+
+  N91 re-fire SURFACED:
+    - GAP-C: FP64 → u32 bank mismatch in gpu_warp_shuffle_xor lowering.
+             %r<id> register format used for FP64 args, picking slots in
+             a bank where no decl was emitted. ptxas-detected at JIT time.
+             This is the deeper gap the fixture's design comment had
+             anticipated but had not yet been wired.
+
+  Cost: $0 (ptxas-reject; no kernel launch).
+  Wall: ~5 min (env setup + 2 build attempts + emit + scp + nvcc + fire).
+  3-gap chain status: 2-of-3 CLOSED (GAP-A shfl mnemonic, GAP-B integer div);
+                      GAP-C (FP64-shuffle composition) NEWLY DIAGNOSED.
+
+
+related context:
+  - reference_runtime_c_deploy_regen_wipe — analogous wipe class. N71-C wipe
+    by 7671d7db mirrors the runtime.c json \uXXXX 3-time landing pattern.
+  - feedback_worktree_merge_silent_filedrop — the codegen wipe is a sibling
+    of the file-drop pattern: a manual conflict repair quietly dropped a
+    semantic edit hunk while preserving syntax checks.
+  - reference_hexa_basename_sigkill_workaround_2026_05_19 — /tmp/hexac shim
+    used (hexa/hexa.real SIGKILL via wilson-pool routing).
+  - reference_hexa_module_loader_env_2026_05_20 — 4-env-var setup applied.
+  - reference_gpu_fire_infra — PTX pure-ASCII verified; cuModuleLoadDataEx
+    used; ubu-2 RTX 5070 reached without SIDECAR_NO_POOL.

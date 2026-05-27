@@ -1,0 +1,126 @@
+#!hexa strict
+// stdlib/hal/backend/esp32/i2c.hexa — ESP32 I2C backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    ESP32 dual Xtensa LX6 @ 240 MHz.
+// Chip ref:  ESP32 Technical Reference Manual §11 I²C Controller.
+// Surface:   esp32_i2c_{configure,start,write,read,stop}(...)
+// Dispatch:  i2c.hexa selects this via cfg-flag.
+//
+// MMIO layout (sketch — ESP32 has 2 I2C controllers, both with command
+// queue + RAM-backed FIFO architecture, NOT a DesignWare-class IP):
+//
+//   I2C0:  base = DR_REG_I2C_EXT_BASE  = 0x3FF53000
+//   I2C1:  base = DR_REG_I2C1_EXT_BASE = 0x3FF67000
+//
+//   I2C_SCL_LOW_PERIOD_REG       0x000   SCL low half-bit count
+//   I2C_CTR_REG                  0x004   master mode, sample/hold timing,
+//                                          MS_MODE bit 4 (master)
+//                                          TRANS_START bit 5 (kick off)
+//                                          TX_LSB_FIRST bit 8
+//   I2C_SR_REG                   0x008   status: BUS_BUSY / ARB_LOST /
+//                                          SLAVE_ADDRESSED / RX_FIFO_CNT /
+//                                          TX_FIFO_CNT
+//   I2C_TO_REG                   0x00C   timeout cycles (SCL stuck guard)
+//   I2C_SLAVE_ADDR_REG           0x010   slave-mode addr (bit 31 = 10-bit)
+//   I2C_SCL_HIGH_PERIOD_REG      0x018   SCL high half-bit count
+//   I2C_FIFO_DATA_REG            0x01C   shared TX/RX FIFO data port
+//   I2C_INT_RAW_REG              0x024
+//   I2C_INT_CLR_REG              0x028
+//   I2C_INT_ENA_REG              0x02C
+//   I2C_INT_STATUS_REG           0x030
+//   I2C_COMD<n>_REG              0x058 + 4·n   command queue (16 deep)
+//                                                opcode (RSTART/WRITE/READ/STOP/END)
+//                                                + ack-en/ack-val + byte_num
+//
+// Speed grades: std 100 kbit/s, fast 400 kbit/s, fast-plus 1 Mbit/s.
+// ESP32 I2C uses programmable command queue rather than fire-and-forget
+// per-byte FIFO — software queues a sequence of (RSTART, WRITE, READ,
+// STOP) commands then triggers TRANS_START.
+//
+// TODO:
+//   1. cfg-flag dispatch from stdlib/hal/i2c.hexa.
+//   2. SCL period calc from APB_CLK (typ 80 MHz) → low/high counts.
+//   3. command queue helper: build (RSTART, WRITE addr, WRITE data*, STOP)
+//      sequence into COMD<0..n> then trigger.
+//   4. clock-stretching tolerance (configurable via I2C_TO_REG).
+//   5. open-drain pad config helper (IO_MUX FUN_OD bit) via gpio.hexa.
+
+let MODULE_NAME = "esp32_i2c"
+let SIGMA_SLOT  = 2
+let PHI_KIND    = "digital"
+
+let DR_REG_I2C_EXT_BASE  = 0x3FF53000   // I2C0
+let DR_REG_I2C1_EXT_BASE = 0x3FF67000   // I2C1
+
+// Key register offsets.
+let I2C_SCL_LOW_PERIOD_REG  = 0x000
+let I2C_CTR_REG             = 0x004
+let I2C_SR_REG              = 0x008
+let I2C_TO_REG              = 0x00C
+let I2C_SCL_HIGH_PERIOD_REG = 0x018
+let I2C_FIFO_DATA_REG       = 0x01C
+let I2C_COMD0_REG           = 0x058
+
+// Command-queue opcodes (per TRM §11.3.4).
+let CMD_RSTART = 0
+let CMD_WRITE  = 1
+let CMD_READ   = 2
+let CMD_STOP   = 3
+let CMD_END    = 4
+
+// Speed presets.
+let SPEED_STD_100K  = 100000
+let SPEED_FAST_400K = 400000
+let SPEED_FASTP_1M  = 1000000
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn esp32_i2c_configure(unit: int, speed_hz: int) -> int {
+    if unit < 0 || unit > 1 { return -1 }
+    if speed_hz < 1000 || speed_hz > 1000000 { return -2 }
+    // STUB: real impl would
+    //   1. enable I2C peri clock (DPORT_PERIP_CLK_EN bit)
+    //   2. set I2C_CTR_REG: MS_MODE=1, TX_LSB_FIRST=0
+    //   3. compute SCL_LOW/HIGH_PERIOD from APB_CLK and target
+    //   4. configure GPIO matrix to route SCL/SDA to chosen pads
+    return unit
+}
+
+fn esp32_i2c_start(unit: int, addr: int) -> int {
+    if unit < 0 || unit > 1 { return -1 }
+    if addr < 0 || addr > 0x7F { return -2 }
+    // STUB: build COMD0=RSTART, COMD1=WRITE(addr), set TRANS_START
+    return 0
+}
+
+fn esp32_i2c_write(handle: int, byte: int) -> int {
+    if byte < 0 || byte > 255 { return -1 }
+    // STUB: push byte into FIFO, append COMD WRITE 1-byte op
+    return 0
+}
+
+fn esp32_i2c_read(handle: int) -> int {
+    // STUB: append COMD READ, drain FIFO_DATA_REG
+    return -1
+}
+
+fn esp32_i2c_stop(handle: int) -> int {
+    // STUB: append COMD STOP, set TRANS_START, spin on BUS_BUSY=0
+    return 0
+}
+
+fn esp32_i2c_report(handle: int) -> str {
+    return "[esp32_i2c sim] handle=" + str(handle) + " (skeleton stub — TODO MMIO)"
+}
+
+fn esp32_i2c_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32_i2c sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  I2C0=" + str(DR_REG_I2C_EXT_BASE) + " I2C1=" + str(DR_REG_I2C1_EXT_BASE))
+    println("  command queue depth 16, std/fast/fast-plus")
+}

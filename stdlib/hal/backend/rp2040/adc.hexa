@@ -1,0 +1,120 @@
+#!hexa strict
+// stdlib/hal/backend/rp2040/adc.hexa — RP2040 ADC backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved. ★ analog
+//
+// Target:    RP2040 dual Cortex-M0+ @ 133 MHz.
+// Chip ref:  RP2040 Datasheet §4.9 ADC (4-channel + on-die T sensor).
+// Surface:   rp2040_adc_{configure,read,close}(...)
+// Dispatch:  adc.hexa selects this via cfg-flag.
+//
+// MMIO layout (single ADC instance, 4 ext channels + 1 T sensor):
+//
+//   ADC base = 0x4004C000
+//
+//   CS                            0x00   control + status:
+//                                          EN bit 0       enable
+//                                          TS_EN bit 1    enable T sensor
+//                                          START_ONCE bit 2  trigger conv
+//                                          START_MANY bit 3  free-run mode
+//                                          READY bit 8    conv done
+//                                          ERR bit 9
+//                                          ERR_STICKY bit 10
+//                                          AINSEL bits 14:12  channel 0..4
+//                                          RROBIN bits 20:16  round-robin mask
+//   RESULT                        0x04   12-bit conversion result
+//   FCS                           0x08   FIFO control/status
+//   FIFO                          0x0C   FIFO read
+//   DIV                           0x10   clock divider (rate = 48MHz / (DIV+1))
+//   INTR                          0x14   raw interrupt
+//   INTE                          0x18   interrupt enable
+//   INTF                          0x1C   force interrupt
+//   INTS                          0x20   masked interrupt status
+//
+// Channels:
+//   AIN0  → GP26 pad (analog input)
+//   AIN1  → GP27 pad
+//   AIN2  → GP28 pad
+//   AIN3  → GP29 pad (also VSYS / 3 voltage divider on most boards)
+//   AIN4  → on-die temperature sensor (formula:
+//             T_C = 27 - (V_be - 0.706) / 0.001721)
+//
+// Resolution:    12-bit (0..4095)
+// Reference:     V_REF (typ 3.3 V) — VREF and AGND pins
+// Sample rate:   max ~500 kSPS at default 48 MHz ADC clock with min DIV
+// Conversion time: 96 cycles @ 48 MHz = 2 µs per conversion
+//
+// TODO:
+//   1. cfg-flag dispatch from stdlib/hal/adc.hexa.
+//   2. configure GPIO pad as analog (PADS_BANK0.IE=0, PADS_BANK0.OD=1)
+//      via stdlib/hal/backend/rp2040/gpio.hexa helper.
+//   3. round-robin scan support (set RROBIN mask).
+//   4. DMA path: pace conversions by DREQ on ADC FIFO.
+//   5. on-die T sensor calibration (V_be reference voltage trims per chip).
+
+let MODULE_NAME = "rp2040_adc"
+let SIGMA_SLOT  = 5
+let PHI_KIND    = "analog"   // ★ matches σ-slot analog peer
+
+let ADC_BASE = 0x4004C000
+
+// Register offsets.
+let ADC_CS     = 0x00
+let ADC_RESULT = 0x04
+let ADC_FCS    = 0x08
+let ADC_FIFO   = 0x0C
+let ADC_DIV    = 0x10
+
+// Channel limits.
+let CH_MIN = 0   // AIN0
+let CH_MAX = 4   // AIN4 = on-die T sensor
+
+// Resolution: 12-bit (per RP2040 datasheet §4.9).
+let RES_12BIT = 12
+
+// Default ADC clock (no divisor): 48 MHz / 96 = 500 kSPS.
+let ADC_FCLK_HZ = 48000000
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn rp2040_adc_configure(channel: int, rate_hz: int) -> int {
+    if channel < CH_MIN || channel > CH_MAX { return -1 }
+    if rate_hz < 1 || rate_hz > 500000 { return -2 }
+    // STUB: real impl would
+    //   1. release reset on adc (RESETS bit 0)
+    //   2. for AIN0..3, configure pad as analog via PADS_BANK0
+    //   3. for AIN4, set CS.TS_EN
+    //   4. compute DIV = (ADC_FCLK_HZ / 96 / rate_hz) - 1
+    //   5. set CS: AINSEL=channel, EN=1
+    return channel
+}
+
+fn rp2040_adc_read(channel: int) -> int {
+    if channel < CH_MIN || channel > CH_MAX { return -1 }
+    // STUB: real impl would
+    //   1. write CS.START_ONCE
+    //   2. spin until CS.READY=1
+    //   3. read RESULT (12-bit, 0..4095)
+    return 0
+}
+
+fn rp2040_adc_close(channel: int) -> int {
+    if channel < CH_MIN || channel > CH_MAX { return -1 }
+    // STUB: clear CS.EN, hold reset on adc
+    return 0
+}
+
+fn rp2040_adc_report(channel: int) -> str {
+    return "[rp2040_adc sim] channel=" + str(channel) + " (skeleton stub — TODO MMIO)"
+}
+
+fn rp2040_adc_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[rp2040_adc sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  ADC_BASE=" + str(ADC_BASE))
+    println("  channels: AIN0..3 (GP26..29) + AIN4 (T sensor)")
+    println("  resolution: 12-bit, max 500 kSPS")
+}

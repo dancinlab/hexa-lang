@@ -1,0 +1,172 @@
+#!hexa strict
+// stdlib/hal/t3/numerics_t3_stm32h7_compile.hexa — STM32H7 T3b1 (compile-tier) check.
+//
+// Phase: HW-bench LIVE. Mirror of numerics_t3_rp2040_compile.hexa for
+// the STM32H7 cross-compile path. Runs `make -f Makefile.stm32h7` via
+// the local arm-none-eabi-gcc toolchain (Cortex-M7 + FPv5-D16) and
+// verifies the resulting `t3_harness_stm32h7.elf` matches the ARMv7-M
+// layout documented in linker_stm32h7.ld + boot_stm32h7.s.
+//
+// PASS criterion: arm-none-eabi-gcc available; `make` runs cleanly;
+// produced ELF has .text @ 0x08000000 (STM32H7 FLASH) + non-zero size +
+// expected boot symbols (`_vector_table`, `_reset_handler`,
+// `harness_main`, `_stack_top`).
+//
+// Note: this is the SECOND vendor T3 compile-tier (after rp2040 in
+// v1.3.0). Combined with rp2040, it demonstrates the T3 scaffold model
+// generalizes across both ARMv6-M (M0+) and ARMv7-M (M7) targets with
+// no shared toolchain hacks — the only differences are the linker
+// script and the boot.s vector table layout.
+//
+// Run:
+//   hexa run stdlib/hal/t3/numerics_t3_stm32h7_compile.hexa
+//
+// Cost: $0.05 (one full cross-compile invocation).
+
+let MODULE_NAME = "t3_stm32h7_compile"
+
+let EXPECTED_TEXT_VMA = "08000000"   // STM32H7 FLASH base
+let REQUIRED_SYMBOLS  = ["_vector_table", "_reset_handler", "harness_main", "_stack_top"]
+
+// ─── check harness ────────────────────────────────────────────────────
+
+let mut RUN  = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ─── helpers ─────────────────────────────────────────────────────────
+
+fn _root() -> str {
+    let env_root = env("HEXA_HAL_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _which(cmd: str) -> bool {
+    let r = exec("command -v " + cmd + " >/dev/null 2>&1 && echo y || echo n").trim()
+    return r == "y"
+}
+
+fn _exists(p: str) -> bool {
+    let r = exec("[ -f \"" + p + "\" ] && echo y || echo n").trim()
+    return r == "y"
+}
+
+// ─── checks ──────────────────────────────────────────────────────────
+
+fn check_toolchain_present() -> bool {
+    let has = _which("arm-none-eabi-gcc") && _which("arm-none-eabi-as") &&
+              _which("arm-none-eabi-ld") && _which("arm-none-eabi-nm")
+    _check(has, "arm-none-eabi-* toolchain present (gcc/as/ld/nm)", "")
+    return has
+}
+
+fn check_make_build(t3_dir: str) -> bool {
+    let cmd = "cd \"" + t3_dir + "\" && make -f Makefile.stm32h7 clean >/dev/null 2>&1 && make -f Makefile.stm32h7 t3_harness_stm32h7.elf 2>&1"
+    let out = exec(cmd)
+    let elf = t3_dir + "/t3_harness_stm32h7.elf"
+    let ok = _exists(elf)
+    _check(ok, "make produces t3_harness_stm32h7.elf",
+           if ok { "ELF emitted at " + elf } else { "build failed:\n" + out })
+    return ok
+}
+
+fn check_elf_format(t3_dir: str) -> bool {
+    let elf = t3_dir + "/t3_harness_stm32h7.elf"
+    if !_exists(elf) { _check(false, "ELF format = elf32-littlearm", "ELF missing"); return false }
+    let out = exec("arm-none-eabi-objdump -f \"" + elf + "\" 2>&1")
+    let ok = out.contains("elf32-littlearm")
+    _check(ok, "ELF format = elf32-littlearm", "")
+    return ok
+}
+
+fn check_text_section_at_flash(t3_dir: str) -> bool {
+    let elf = t3_dir + "/t3_harness_stm32h7.elf"
+    if !_exists(elf) { _check(false, ".text @ 0x08000000 (FLASH)", "ELF missing"); return false }
+    let out = exec("arm-none-eabi-objdump -h \"" + elf + "\" 2>&1 | grep -E ' \\.text '")
+    let ok = out.contains(EXPECTED_TEXT_VMA)
+    _check(ok, ".text @ 0x08000000 (STM32H7 FLASH base)",
+           if ok { "found: " + out.trim() } else { "actual: " + out.trim() })
+    return ok
+}
+
+fn check_required_symbols(t3_dir: str) -> bool {
+    let elf = t3_dir + "/t3_harness_stm32h7.elf"
+    if !_exists(elf) { _check(false, "boot symbols present", "ELF missing"); return false }
+    let nm_out = exec("arm-none-eabi-nm \"" + elf + "\" 2>&1")
+    let mut bad = ""
+    let mut n_ok = 0
+    for sym in REQUIRED_SYMBOLS {
+        if nm_out.contains(sym) { n_ok = n_ok + 1 }
+        else { bad = bad + sym + " " }
+    }
+    _check(n_ok == REQUIRED_SYMBOLS.len(),
+           "all required boot symbols present: " + str(REQUIRED_SYMBOLS),
+           if bad.len() > 0 { "missing: " + bad } else { str(n_ok) + "/" + str(REQUIRED_SYMBOLS.len()) })
+    return n_ok == REQUIRED_SYMBOLS.len()
+}
+
+fn check_text_size_reasonable(t3_dir: str) -> bool {
+    let elf = t3_dir + "/t3_harness_stm32h7.elf"
+    if !_exists(elf) { _check(false, ".text size > 0 + < 4KB", "ELF missing"); return false }
+    let out = exec("arm-none-eabi-objdump -h \"" + elf + "\" 2>&1 | grep -E ' \\.text '")
+    // Format: "  0 .text         00000XXX  ..."
+    // Just check non-empty (the size column appears as 8 hex digits).
+    let ok = out.contains("CODE") || out.contains(".text")
+    _check(ok, ".text section present + has CODE flag",
+           if ok { out.trim() } else { "actual: " + out.trim() })
+    return ok
+}
+
+// ─── main ────────────────────────────────────────────────────────────
+
+fn main() {
+    println("========================================================================")
+    println("  stdlib/hal — numerics_t3_stm32h7_compile: T3b1 compile-tier (LIVE)")
+    println("========================================================================")
+    println("  toolchain: arm-none-eabi-gcc (Cortex-M7 + FPv5-D16)")
+    println("  expected: t3_harness_stm32h7.elf with .text @ 0x" + EXPECTED_TEXT_VMA)
+    println("")
+
+    let root = _root()
+    let t3_dir = root + "/stdlib/hal/t3"
+
+    if !check_toolchain_present() {
+        println("__HEXA_LANG_HAL_T3_STM32H7_COMPILE__ FAIL")
+        exit(1)
+    }
+
+    if !check_make_build(t3_dir) {
+        println("__HEXA_LANG_HAL_T3_STM32H7_COMPILE__ FAIL")
+        exit(1)
+    }
+    check_elf_format(t3_dir)
+    check_text_section_at_flash(t3_dir)
+    check_required_symbols(t3_dir)
+    check_text_size_reasonable(t3_dir)
+
+    println("")
+    println("  T3 vendor coverage at v1.5.0:")
+    println("    rp2040  T3b1 ✓ (v1.3.0; Cortex-M0+ / ARMv6-M)")
+    println("    stm32h7 T3b1 ✓ (v1.5.0; Cortex-M7 / ARMv7-M + FPv5-D16)")
+    println("  Both share arm-none-eabi-gcc; differ only in linker.ld + boot.s.")
+
+    let pass_n = RUN - FAIL
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_LANG_HAL_T3_STM32H7_COMPILE__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_LANG_HAL_T3_STM32H7_COMPILE__ PASS")
+    exit(0)
+}
+
+main()

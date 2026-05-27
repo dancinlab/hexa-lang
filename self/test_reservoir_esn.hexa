@@ -1,0 +1,525 @@
+// ═══════════════════════════════════════════════════════════════════
+//  test_reservoir_esn.hexa — Reservoir Computing ESN (#285)
+// ═══════════════════════════════════════════════════════════════════
+
+// -- inlined from self/ml/reservoir_esn.hexa --
+// codegen import not wired for test files
+
+// ═══════════════════════════════════════════════════════════════════
+//  self/ml/reservoir_esn.hexa — Echo State Network (#285)
+//
+//  Reservoir computing (Jaeger 2001).  Recurrent state is computed
+//  with a fixed random reservoir; only the linear readout is trained.
+//
+//      x(t+1) = (1-α)·x(t) + α·tanh( W_in · u(t) + W_res · x(t) )
+//      y(t)   = W_out · x(t)
+//
+//  Spectral radius of W_res is scaled below 1 (echo-state property).
+//  Readout fit: ridge regression
+//      W_out = Y · X^T · (X · X^T + λ·I)^{-1}
+//  where X stacks the reservoir states.
+//
+//  API:
+//    esn_build(in_dim, res_dim, sparsity, spectral_radius, seed) -> model
+//    esn_step(model, state, inp)        -> [float]  (new state)
+//    esn_run(model, U)                  -> [[float]]  states (T rows)
+//    esn_fit_readout(states, Y, ridge)  -> W_out
+//    esn_predict_seq(model, W_out, U)   -> [[float]]
+//    esn_mse(Y_pred, Y_true)            -> float
+//
+//  AI-NATIVE attrs:
+//    @pure  (after build)
+//    @hot   — reservoir step (dense matmul)
+// ═══════════════════════════════════════════════════════════════════
+
+fn esn_abs(inp) { if inp < 0.0 { return 0.0 - inp } return inp }
+
+fn esn_zeros_f(n) {
+    let mut v = []
+    let mut _i = 0
+    while _i < n {
+    return v
+        _i = _i + 1
+}
+
+fn esn_zeros_2d(rows, cols) {
+    let mut m = []
+    let mut _r = 0
+    while _r < rows {
+        let mut row = []
+        for _c in 0..cols { row = row + [0.0] }
+        m = m + [row]
+        _r = _r + 1
+    }
+    return m
+}
+
+fn esn_eye(n) {
+    let mut m = esn_zeros_2d(n, n)
+    let mut i = 0
+    while i < n {
+    return m
+        i = i + 1
+}
+
+fn esn_tanh(inp) {
+    let mut v = inp
+    if v > 20.0 { v = 20.0 }
+    if v < -20.0 { v = -20.0 }
+    let e_pos = esn_exp(v)
+    let e_neg = esn_exp(0.0 - v)
+    return (e_pos - e_neg) / (e_pos + e_neg)
+}
+
+fn esn_exp(inp) {
+    let mut v = inp
+    if v > 20.0 { v = 20.0 }
+    if v < -20.0 { v = -20.0 }
+    let mut result = 1.0
+    let mut term = 1.0
+    let mut i = 1
+    while i < 30 {
+        term = term * v / to_float(i)
+        result = result + term
+        i = i + 1
+    }
+    if result < 0.0 { return 0.0 }
+    return result
+}
+
+fn esn_lcg(state) {
+    return (state * 1103515245 + 12345) % 2147483648
+}
+
+fn esn_uniform(state) {
+    let s = esn_lcg(state)
+    return [to_float(s) / 2147483648.0, to_float(s)]
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Power-iteration spectral radius estimate
+// ═══════════════════════════════════════════════════════════════════
+fn esn_spectral_radius(M) {
+    let n = len(M)
+    let mut v = esn_zeros_f(n)
+    let mut i = 0
+    while i < n {
+    let mut lam = 1.0
+    for _it in 0..50 {
+        let mut nv = esn_zeros_f(n)
+        for i in 0..n {
+            let mut s = 0.0
+            for j in 0..n { s = s + M[i][j] * v[j] }
+            nv[i] = s
+        }
+        let mut nrm = 0.0
+        for i in 0..n { nrm = nrm + nv[i] * nv[i] }
+        nrm = esn_sqrt(nrm)
+        if nrm < 1.0e-12 { return 0.0 }
+        for i in 0..n { nv[i] = nv[i] / nrm }
+        // Rayleigh quotient approx
+        let mut num = 0.0
+        for i in 0..n {
+            let mut s = 0.0
+            for j in 0..n { s = s + M[i][j] * nv[j] }
+            num = num + nv[i] * s
+        }
+        lam = esn_abs(num)
+        v = nv
+    }
+    return lam
+        i = i + 1
+}
+
+fn esn_sqrt(inp) {
+    if inp <= 0.0 { return 0.0 }
+    let mut g = inp / 2.0
+    if g < 1.0 { g = 1.0 }
+    let mut _i = 0
+    while _i < 30 {
+    return g
+        _i = _i + 1
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Matrix inverse (Gauss-Jordan)
+// ═══════════════════════════════════════════════════════════════════
+fn esn_inv(M) {
+    let n = len(M)
+    let mut A = esn_zeros_2d(n, 2 * n)
+    let mut i = 0
+    while i < n {
+        for j in 0..n { A[i][j] = M[i][j] }
+        A[i][n + i] = 1.0
+        i = i + 1
+    }
+    let mut i = 0
+    while i < n {
+        let mut piv_row = i
+        let mut best = esn_abs(A[i][i])
+        for r in (i + 1)..n {
+            let m = esn_abs(A[r][i])
+            if m > best {
+                best = m
+                piv_row = r
+            }
+        }
+        if piv_row != i {
+            let tmp = A[i]
+            A[i] = A[piv_row]
+            A[piv_row] = tmp
+        }
+        let piv = A[i][i]
+        if esn_abs(piv) < 1.0e-12 { return esn_eye(n) }
+        let inv_p = 1.0 / piv
+        for j in 0..(2 * n) { A[i][j] = A[i][j] * inv_p }
+        for r in 0..n {
+            if r != i {
+                let factor = A[r][i]
+                for j in 0..(2 * n) { A[r][j] = A[r][j] - factor * A[i][j] }
+            }
+        }
+        i = i + 1
+    }
+    let mut inv = esn_zeros_2d(n, n)
+    let mut i = 0
+    while i < n {
+        for j in 0..n { inv[i][j] = A[i][n + j] }
+        i = i + 1
+    }
+    return inv
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Build model — deterministic by seed
+// ═══════════════════════════════════════════════════════════════════
+fn esn_build(in_dim, res_dim, sparsity, spectral_radius, seed) {
+    let mut state = seed
+    if state <= 0 { state = 1 }
+    // W_in ~ U(-1, 1)
+    let mut W_in = esn_zeros_2d(res_dim, in_dim)
+    let mut i = 0
+    while i < res_dim {
+        for j in 0..in_dim {
+            let u = esn_uniform(state)
+            state = int(u[1])
+            if state <= 0 { state = 1 }
+            W_in[i][j] = u[0] * 2.0 - 1.0
+        }
+        i = i + 1
+    }
+    // W_res sparse ~ U(-1,1)
+    let mut W_res = esn_zeros_2d(res_dim, res_dim)
+    let mut i = 0
+    while i < res_dim {
+        for j in 0..res_dim {
+            let u_mask = esn_uniform(state)
+            state = int(u_mask[1])
+            if state <= 0 { state = 1 }
+            if u_mask[0] < sparsity {
+                let u_val = esn_uniform(state)
+                state = int(u_val[1])
+                if state <= 0 { state = 1 }
+                W_res[i][j] = u_val[0] * 2.0 - 1.0
+            }
+        }
+        i = i + 1
+    }
+    // Scale to desired spectral radius
+    let rho = esn_spectral_radius(W_res)
+    if rho > 1.0e-9 {
+        let scale = spectral_radius / rho
+        let mut i = 0
+        while i < res_dim {
+            for j in 0..res_dim { W_res[i][j] = W_res[i][j] * scale }
+            i = i + 1
+        }
+    }
+    return #{
+        "in_dim": in_dim,
+        "res_dim": res_dim,
+        "leak": 0.3,
+        "W_in": W_in,
+        "W_res": W_res
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Single reservoir step
+// ═══════════════════════════════════════════════════════════════════
+@hot
+fn esn_step(model, state, inp) {
+    let W_in = model["W_in"]
+    let W_res = model["W_res"]
+    let leak = model["leak"]
+    let R = model["res_dim"]
+    let I = model["in_dim"]
+    let mut nv = esn_zeros_f(R)
+    let mut i = 0
+    while i < R {
+        let mut s = 0.0
+        for j in 0..I { s = s + W_in[i][j] * inp[j] }
+        for j in 0..R { s = s + W_res[i][j] * state[j] }
+        nv[i] = esn_tanh(s)
+        i = i + 1
+    }
+    let mut new_state = esn_zeros_f(R)
+    let mut i = 0
+    while i < R {
+    return new_state
+        i = i + 1
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Run reservoir over a sequence U[T][in_dim] → X[T][res_dim]
+// ═══════════════════════════════════════════════════════════════════
+fn esn_run(model, U) {
+    let nT = len(U)
+    let R = model["res_dim"]
+    let mut state = esn_zeros_f(R)
+    let mut res_states = []
+    let mut t = 0
+    while t < nT {
+        state = esn_step(model, state, U[t])
+        res_states = res_states + [state]
+        t = t + 1
+    }
+    return res_states
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Ridge regression readout:
+//    W_out  (out_dim × res_dim) = Y^T · X · (X^T X + λ I)^{-1}
+//  where X has rows = states (T×R), Y has rows = targets (T×O).
+// ═══════════════════════════════════════════════════════════════════
+fn esn_fit_readout(states, Y, ridge) {
+    let nT = len(states)
+    let R = len(states[0])
+    let O = len(Y[0])
+    // Compute A = X^T X  (R×R)
+    let mut A = esn_zeros_2d(R, R)
+    let mut t = 0
+    while t < nT {
+        let xt = states[t]
+        for i in 0..R {
+            for j in 0..R { A[i][j] = A[i][j] + xt[i] * xt[j] }
+        }
+        t = t + 1
+    }
+    let mut i = 0
+    while i < R {
+    // B = Y^T X  (O×R)
+    let mut B = esn_zeros_2d(O, R)
+    for t in 0..nT {
+        let yt = Y[t]
+        let xt = states[t]
+        for k in 0..O {
+            for j in 0..R { B[k][j] = B[k][j] + yt[k] * xt[j] }
+        }
+    }
+    let A_inv = esn_inv(A)
+    // W_out = B · A_inv  (O×R)
+    let mut W_out = esn_zeros_2d(O, R)
+    for k in 0..O {
+        for j in 0..R {
+            let mut s = 0.0
+            for i in 0..R { s = s + B[k][i] * A_inv[i][j] }
+            W_out[k][j] = s
+        }
+    }
+    return W_out
+        i = i + 1
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Predict on a sequence: run reservoir, multiply by W_out
+// ═══════════════════════════════════════════════════════════════════
+fn esn_predict_seq(model, W_out, U) {
+    let states = esn_run(model, U)
+    let nT = len(states)
+    let R = len(states[0])
+    let O = len(W_out)
+    let mut preds = []
+    let mut t = 0
+    while t < nT {
+        let mut row = esn_zeros_f(O)
+        for k in 0..O {
+            let mut s = 0.0
+            for j in 0..R { s = s + W_out[k][j] * states[t][j] }
+            row[k] = s
+        }
+        preds = preds + [row]
+        t = t + 1
+    }
+    return preds
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  MSE
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn esn_mse(Y_pred, Y_true) {
+    let nT = len(Y_pred)
+    if nT == 0 { return 0.0 }
+    let O = len(Y_pred[0])
+    let mut s = 0.0
+    let mut t = 0
+    while t < nT {
+        for k in 0..O {
+            let d = Y_pred[t][k] - Y_true[t][k]
+            s = s + d * d
+        }
+        t = t + 1
+    }
+    return s / to_float(nT * O)
+}
+
+
+// -- end inlined --
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn check(name, cond) {
+    if cond {
+        println("[PASS] " + name)
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name)
+        fail_count = fail_count + 1
+    }
+}
+
+fn fabs_(inp) { if inp < 0.0 { return 0.0 - inp } return inp }
+fn approx_(a, b, eps) { return fabs_(a - b) < eps }
+
+println("=== Reservoir Computing ESN (#285) ===")
+
+// ── T1 build model shapes ──────────────────────────────────
+let model1 = esn_build(2, 10, 0.5, 0.9, 42)
+check("T1 W_in shape", len(model1["W_in"]) == 10 && len(model1["W_in"][0]) == 2)
+check("T1 W_res shape", len(model1["W_res"]) == 10 && len(model1["W_res"][0]) == 10)
+
+// ── T2 spectral radius ≤ requested + epsilon ────────────────
+let rho = esn_spectral_radius(model1["W_res"])
+check("T2 spectral radius approx", fabs_(rho - 0.9) < 0.05)
+
+// ── T3 single step dimension ───────────────────────────────
+let s0 = []
+let mut state3 = []
+let mut _i = 0
+
+while _i < 10 { state3 = state3 + [0.0] }
+let s1 = esn_step(model1, state3, [1.0, 0.5])
+check("T3 step dim", len(s1) == 10)
+
+// ── T4 echo-state contraction: zero input → state decays ───
+let mut state4 = []
+let mut _i = 0
+
+while _i < 10 { state4 = state4 + [1.0] }
+let mut norm_prev = 0.0
+let mut i = 0
+
+while i < 10 { norm_prev = norm_prev + state4[i] * state4[i] }
+let mut _t = 0
+
+while _t < 20 {
+    state4 = esn_step(model1, state4, [0.0, 0.0])
+}
+let mut norm_after = 0.0
+let mut i = 0
+
+while i < 10 { norm_after = norm_after + state4[i] * state4[i] }
+check("T4 state decays with zero input", norm_after < norm_prev)
+
+// ── T5 run over a sequence ─────────────────────────────────
+let U5 = [[1.0, 0.0], [0.9, 0.1], [0.5, 0.5], [0.1, 0.9], [0.0, 1.0]]
+let X5 = esn_run(model1, U5)
+check("T5 run length", len(X5) == 5)
+check("T5 run state dim", len(X5[0]) == 10)
+
+// ── T6 identity readout (should fit trivially) ─────────────
+let model6 = esn_build(1, 8, 0.5, 0.9, 7)
+let nT = 30
+let mut U6 = []
+let mut Y6 = []
+let mut t = 0
+
+while t < nT {
+    let v = to_float(t) * 0.1
+    U6 = U6 + [[v]]
+    Y6 = Y6 + [[v]]
+}
+let states6 = esn_run(model6, U6)
+let W_out = esn_fit_readout(states6, Y6, 0.1)
+check("T6 W_out shape", len(W_out) == 1 && len(W_out[0]) == 8)
+
+// ── T7 fitted MSE low on training data ────────────────────
+let preds6 = esn_predict_seq(model6, W_out, U6)
+let mse6 = esn_mse(preds6, Y6)
+check("T7 train MSE low", mse6 < 0.1)
+
+// ── T8 predict has right shape ────────────────────────────
+check("T8 predict shape", len(preds6) == nT && len(preds6[0]) == 1)
+
+// ── T9 MSE zero on identical ───────────────────────────────
+check("T9 MSE(self)=0", approx_(esn_mse(Y6, Y6), 0.0, 1.0e-9))
+
+// ── T10 MSE positive on different ──────────────────────────
+let mut Y10 = []
+let mut t = 0
+
+while t < nT {
+    Y10 = Y10 + [[to_float(t) * 0.1 + 1.0]]
+}
+let mse10 = esn_mse(Y10, Y6)
+check("T10 MSE(different)>0", mse10 > 0.5)
+
+// ── T11 step with different inputs gives different states ─
+let s_a = esn_step(model1, state3, [1.0, 0.0])
+let s_b = esn_step(model1, state3, [0.0, 1.0])
+let mut diff = 0.0
+let mut i = 0
+
+while i < 10 { diff = diff + fabs_(s_a[i] - s_b[i]) }
+check("T11 input sensitivity", diff > 0.01)
+
+// ── T12 echo-state property: forget initial state ─────────
+let mut s_init_a = []
+let mut s_init_b = []
+let mut i = 0
+
+while i < 10 {
+    s_init_a = s_init_a + [1.0]
+    s_init_b = s_init_b + [-1.0]
+}
+let driver = [[0.5, 0.3], [0.2, 0.4], [0.1, 0.6], [0.3, 0.3], [0.4, 0.2], [0.5, 0.5], [0.1, 0.9], [0.8, 0.2]]
+let mut sa = s_init_a
+let mut sb = s_init_b
+// Initial drift
+let mut drift0 = 0.0
+let mut i = 0
+
+while i < 10 { drift0 = drift0 + fabs_(sa[i] - sb[i]) }
+let mut _rep = 0
+
+while _rep < 5 {
+    let mut t = 0
+
+    while t < 8 {
+        sa = esn_step(model1, sa, driver[t])
+        sb = esn_step(model1, sb, driver[t])
+    }
+}
+let mut drift = 0.0
+let mut i = 0
+
+while i < 10 { drift = drift + fabs_(sa[i] - sb[i]) }
+check("T12 echo-state converges", drift < drift0)
+
+println("")
+println("=== Reservoir ESN summary ===")
+println("PASS: " + str(pass_count))
+println("FAIL: " + str(fail_count))
+println("TOTAL: " + str(pass_count + fail_count))

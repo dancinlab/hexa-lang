@@ -1,0 +1,7 @@
+multi-arch fatbin host loader
+  device     : NVIDIA GeForce RTX 5070
+  capability : sm_120
+  fatbin size: 5664 bytes (embedded in host binary)
+  load       : OK (driver picked image for sm_120)
+  kernel     : x=-2.000 -> y=-5.250000 (want=-5.250000)
+  RESULT: PASS (exact f64 equality, multi-arch fatbin loaded)

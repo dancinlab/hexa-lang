@@ -1,0 +1,231 @@
+#!hexa strict
+// hexa-chip/firmware/sim/process_corner_monitor.hexa — Phase C iter 1.
+//
+// Sim-firmware controller for F-CHIP-1 (process σ-cascade).  Simulates
+// a wafer-test corner monitor that sweeps PVT (Process / Voltage /
+// Temperature) bins, classifies dies into FF/TT/SS/FS/SF buckets, and
+// emits speed-bin verdicts that match Samsung Foundry's wafer-acceptance
+// flow.  Not bound to a specific MCU/FPGA — paper sim only.
+//
+// Stage-1+ (Phase D) target hardware:
+//   - Samsung Foundry FPGA SoC (8-channel ADC + 16-channel DAC, BIST glue)
+//   - Or Microchip / Renesas equivalent with Samsung-compat IP cores
+//
+// Predictions (n=6 closed-form, anchored to numerics_spice_corner):
+//   - bin classification: 6 corners (FF/FS/TT/SF/SS plus FF-cold) covering
+//     V × T grid; matches σ(6)=12 → 12 dies-per-wafer characterization slots.
+//   - speed-bin yields per Samsung SF2P 70% gross yield disclosure.
+//   - per-die measurement set: density + freq + leakage = 3 axes (= τ-1).
+//
+// PASS = sim-firmware loop completes 12 wafer-die binnings with
+//        consistent speed-bin distribution (sat-2 within ±15% of 70% TT).
+// FAIL = no fault path — sim only emits warnings.
+//
+// Phase D refactor: this sim-firmware is now a downstream consumer of
+// stdlib/hal v0.0.1.  Peripheral handles (adc/dac/gpio/timer/intr) are
+// opened via the hal handshake at the top of main() instead of being
+// inlined as `[sim]` println stubs.
+
+use "stdlib/hal/core"
+use "stdlib/hal/adc"
+use "stdlib/hal/dac"
+use "stdlib/hal/gpio"
+use "stdlib/hal/timer"
+use "stdlib/hal/intr"
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ── corner classifier: 6-bucket FF / FS / TT / SF / SS / TRIP ─────────
+//
+// Inputs: density_MTr_mm2, freq_GHz, leakage_uA_per_mm2.
+// Bucket logic mirrors Samsung wafer-accept thresholds (paper).
+
+fn classify_corner(density: float, freq: float, leak: float) -> str {
+    if leak > 500.0 { return "TRIP" }                  // bad — die rejected
+    if freq >= 3.7 && leak <= 200.0 { return "FF" }    // fast/cool
+    if freq <= 2.8 { return "SS" }                     // slow
+    if freq >= 3.2 && leak >= 250.0 { return "FS" }    // mismatch
+    if freq >= 3.0 && leak <= 180.0 { return "SF" }    // mismatch
+    return "TT"                                         // typical
+}
+
+// ── synthetic wafer-die batch (12 dies = σ(6) per σ-cascade slot) ────
+//
+// (die_id, density, freq_GHz, leakage_uA_mm2)
+let WAFER = [
+    ["d01", "232.0", "3.50", "180.0"],
+    ["d02", "228.5", "3.45", "175.0"],
+    ["d03", "234.0", "3.85", "150.0"],   // FF
+    ["d04", "230.5", "3.10", "165.0"],
+    ["d05", "229.0", "3.40", "200.0"],
+    ["d06", "231.0", "3.50", "190.0"],
+    ["d07", "227.0", "2.60", "210.0"],   // SS
+    ["d08", "232.5", "3.55", "185.0"],
+    ["d09", "230.0", "3.30", "260.0"],   // FS mismatch
+    ["d10", "233.0", "3.20", "165.0"],
+    ["d11", "232.0", "3.45", "175.0"],
+    ["d12", "230.5", "3.40", "180.0"]
+]
+
+fn _f(s: str) -> float { return float(s) }
+
+// ── controller loop ───────────────────────────────────────────────────
+
+fn check_wafer_size_sigma() {
+    _check(WAFER.len() == 12,
+           "wafer-die batch size == σ(6) = 12 (one die per σ-slot)",
+           "got " + str(WAFER.len()))
+}
+
+fn check_density_sane() {
+    let mut bad = 0
+    for d in WAFER {
+        let ds = _f(d[1])
+        if ds < 200.0 || ds > 260.0 { bad = bad + 1 }   // SF2 nominal range
+    }
+    _check(bad == 0,
+           "every die density in SF2 nominal band [200, 260] MTr/mm²",
+           "out-of-band = " + str(bad))
+}
+
+fn check_corner_classification_runs() {
+    // Run classifier on all 12 dies, count each bucket.
+    let mut counts = [0, 0, 0, 0, 0, 0]   // FF, FS, TT, SF, SS, TRIP
+    for d in WAFER {
+        let bin = classify_corner(_f(d[1]), _f(d[2]), _f(d[3]))
+        if bin == "FF" { counts[0] = counts[0] + 1 }
+        if bin == "FS" { counts[1] = counts[1] + 1 }
+        if bin == "TT" { counts[2] = counts[2] + 1 }
+        if bin == "SF" { counts[3] = counts[3] + 1 }
+        if bin == "SS" { counts[4] = counts[4] + 1 }
+        if bin == "TRIP" { counts[5] = counts[5] + 1 }
+    }
+    let total = counts[0] + counts[1] + counts[2] + counts[3] + counts[4] + counts[5]
+    _check(total == WAFER.len(),
+           "every die classified into exactly one of {FF, FS, TT, SF, SS, TRIP}",
+           "")
+    // TT yield should match Samsung SF2P 70% gross within ±15% (5 to 11 dies / 12).
+    _check(counts[2] >= 5 && counts[2] <= 11,
+           "TT bucket size ∈ [5, 11] of 12 (matches Samsung SF2P 70% ±15% band)",
+           "TT count = " + str(counts[2]))
+    // No TRIP dies in this synthetic batch.
+    _check(counts[5] == 0,
+           "no TRIP-bin dies in synthetic batch (cleanroom-quality fixture)",
+           "TRIP = " + str(counts[5]))
+    _check(counts[0] >= 1,
+           "≥ 1 FF die present (speed-bin sortable)",
+           "FF = " + str(counts[0]))
+    _check(counts[4] >= 1,
+           "≥ 1 SS die present (low-power bin sortable)",
+           "SS = " + str(counts[4]))
+}
+
+fn check_freq_density_correlation() {
+    // Higher freq dies should also be denser (intra-batch sanity).
+    let mut min_d = 9999.0
+    let mut max_d = 0.0
+    let mut min_f = 99.0
+    let mut max_f = 0.0
+    for d in WAFER {
+        let ds = _f(d[1])
+        let fs = _f(d[2])
+        if ds < min_d { min_d = ds }
+        if ds > max_d { max_d = ds }
+        if fs < min_f { min_f = fs }
+        if fs > max_f { max_f = fs }
+    }
+    let d_spread = max_d - min_d
+    let f_spread = max_f - min_f
+    _check(f_spread >= 0.5 && f_spread <= 2.0,
+           "freq spread within batch ∈ [0.5, 2.0] GHz (intra-wafer corner sweep)",
+           "spread = " + str(f_spread) + " GHz")
+    _check(d_spread <= 30.0,
+           "density spread within batch ≤ 30 MTr/mm² (intra-wafer process drift)",
+           "spread = " + str(d_spread))
+}
+
+fn check_emit_speed_bin_log() {
+    // Sim-firmware would emit a JSONL log per die — count expected entries.
+    let n_entries = WAFER.len()
+    _check(n_entries == 12,
+           "speed-bin log entry count == σ(6) = 12 (1 entry per die)",
+           "")
+}
+
+let FALSIFIERS = [
+    "F-CHIP-1.C.a: corner classifier returns ambiguous bin → wafer-accept logic broken",
+    "F-CHIP-1.C.b: TT yield outside ±15% of Samsung SF2P 70% gross → process drift",
+    "F-CHIP-1.C.c: density spread > 30 MTr/mm² intra-wafer → fab tooling out of spec",
+    "F-CHIP-1.C.d: TRIP-bin die appears in cleanroom-qual fixture → SEM contamination signal"
+]
+
+fn _print_results() {
+    println("  per-die classification:")
+    for d in WAFER {
+        let bin = classify_corner(_f(d[1]), _f(d[2]), _f(d[3]))
+        let pad_id = d[0] + "      "
+        println("    " + pad_id.slice(0, 6) + " density=" + d[1] + " freq=" + d[2] + " leak=" + d[3] + "  →  " + bin)
+    }
+}
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-chip — Phase C sim-firmware: process corner monitor (F-CHIP-1)")
+    println("========================================================================")
+    println("")
+    println("  Target HW (Phase D): Samsung Foundry FPGA SoC (8-ADC + 16-DAC + BIST)")
+    println("  Sim scope: 12-die wafer batch (= σ(6)) classified into FF/FS/TT/SF/SS/TRIP")
+    println("")
+
+    // ── stdlib/hal handshake (Phase D refactor) ──────────────────────
+    // Open the peripherals this controller conceptually drives:
+    //   adc   — wafer-test corner sensor channels
+    //   dac   — bias / Vdd sweep stimulus
+    //   gpio  — die-select / load-board strobe
+    //   timer — periodic per-die measurement tick (1 ms)
+    //   intr  — corner_done IRQ from BIST glue
+    println("  [hal] opening stdlib/hal peripheral handles ...")
+    let adc_h    = adc_open(0, 0)
+    let dac_h    = dac_open(0, 0)
+    let gpio_h   = gpio_open(13, MODE_OUTPUT)
+    let timer_h  = timer_open(0, MODE_PERIODIC, 1000)
+    let intr_h   = intr_open(0, PRIO_HIGH, "corner_done")
+    _check(adc_h   >= 0, "stdlib/hal adc_open OK",   "h=" + str(adc_h))
+    _check(dac_h   >= 0, "stdlib/hal dac_open OK",   "h=" + str(dac_h))
+    _check(gpio_h  >= 0, "stdlib/hal gpio_open OK",  "h=" + str(gpio_h))
+    _check(timer_h >= 0, "stdlib/hal timer_open OK", "h=" + str(timer_h))
+    _check(intr_h  >= 0, "stdlib/hal intr_open OK",  "h=" + str(intr_h))
+    println("")
+
+    _print_results()
+    println("")
+
+    check_wafer_size_sigma()
+    check_density_sane()
+    check_corner_classification_runs()
+    check_freq_density_correlation()
+    check_emit_speed_bin_log()
+
+    let pass_n = RUN - FAIL
+
+    println("")
+    println("  FALSIFIERS (" + str(FALSIFIERS.len()) + "):")
+    for f in FALSIFIERS { println("    ✗ " + f) }
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_CHIP_SIM_PROCESS_CORNER_MONITOR__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_CHIP_SIM_PROCESS_CORNER_MONITOR__ PASS — corner-monitor sim-firmware OK")
+    exit(0)
+}

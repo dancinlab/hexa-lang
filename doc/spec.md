@@ -1,0 +1,1095 @@
+# HEXA-LANG 언어 사양서 v0.1
+
+> **SUPERSEDED — historical v0.1 draft.** The authoritative hexa-lang
+> specification is the repo-root `SPEC.md` (generated from `SPEC.yaml`, the
+> SSOT). This file is the original Korean-language v0.1 design sketch — kept
+> for the n=6 arithmetic-derivation rationale and the BT-hypothesis appendix,
+> which are not (yet) carried into root `SPEC.md`. Do not treat anything here
+> as current; when this disagrees with root `SPEC.md`, root `SPEC.md` wins.
+> See: ../SPEC.md  -  ../SPEC.yaml
+>
+> (owner review: this file is also surfaced as `doc/SPEC.md` on case-insensitive
+> filesystems — same inode, single tracked path `doc/spec.md`. Decide whether
+> to retire it once the unique n=6/BT content lands in root SPEC.md or a
+> dedicated doc/n6_derivation.md.)
+
+## 1. 개요
+
+HEXA-LANG은 완전수 n=6의 산술 함수에서 도출된 상수로 설계된 프로그래밍 언어다.
+"이런 앱 만들어줘" 한마디로 자동 생성되는 AI-native 언어를 목표로 한다.
+
+**DSE 최적 경로**: MetaLang + LLVM_Native + Full_N6 + N6AgentChain + FullStack
+- Pareto 점수: 0.7854
+- n=6 EXACT 비율: 100.0%
+- 전수 탐색: 21,952 조합 중 11,394 호환 (51.9%), Pareto frontier 317개
+
+```
+  ┌─────────────────────────────────────────────────────────────┐
+  │                   HEXA-LANG Architecture                    │
+  │                                                             │
+  │  σ(n)·φ(n) = n·τ(n) ⟺ n = 6                               │
+  │  12 · 2 = 6 · 4 = 24                                       │
+  │                                                             │
+  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐   │
+  │  │ n=6      │  │ φ=2      │  │ τ=4      │  │ σ=12     │   │
+  │  │ 6 문법   │  │ 2 모드   │  │ 4 계층   │  │ 12 키워드│   │
+  │  │ 6 패러다임│  │ 2 컴파일 │  │ 4 가시성 │  │ 12 그룹  │   │
+  │  └──────────┘  └──────────┘  └──────────┘  └──────────┘   │
+  │                                                             │
+  │  ┌──────────┐  ┌──────────┐  ┌──────────┐                  │
+  │  │ sopfr=5  │  │ μ=1      │  │ J₂=24    │                  │
+  │  │ 5 에러   │  │ 1 유일성 │  │ 24 연산자│                  │
+  │  │ 5 키워드 │  │          │  │          │                  │
+  │  └──────────┘  └──────────┘  └──────────┘                  │
+  │                                                             │
+  │  DSE Chain:                                                 │
+  │  MetaLang ──▶ LLVM_Native ──▶ Full_N6 ──▶ N6AgentChain    │
+  │  (F2)         (P2)            (C7)        (E2)              │
+  │       └──────────────────────────────────▶ FullStack (S4)  │
+  └─────────────────────────────────────────────────────────────┘
+```
+
+### 핵심 산술 함수 (n=6)
+
+| 함수 | 값 | 의미 | 언어 설계 매핑 |
+|------|----|------|---------------|
+| n | 6 | 완전수 | 문법 계층, 패러다임, 파이프라인 |
+| φ(6) | 2 | 오일러 토션트 | 컴파일 모드, 선형/비선형 |
+| τ(6) | 4 | 약수 개수 | 타입 계층, 가시성, 변수 키워드 |
+| σ(6) | 12 | 약수 합 | 키워드 그룹, IDE 기능 그룹 |
+| sopfr(6) | 5 | 소인수 합 (2+3) | 에러 클래스, 함수 키워드 |
+| μ(6) | 1 | 뫼비우스 함수 | squarefree 유일성 |
+| J₂(6) | 24 | 조르단 토션트 | 연산자 수, Leech 격자 |
+| σ-τ | 8 | | 기본 타입 수, 멀티모달 입력 |
+| σ-φ | 10 | | RoPE theta 10^4 |
+| σ·τ | 48 | | 키워드 기반 (48+5=53) |
+
+---
+
+## 2. 타입 시스템
+
+### 기본 타입 (σ-τ = 8)
+
+```
+  ┌───────────────────────────────────────────────┐
+  │          σ-τ = 8 Primitive Types              │
+  │                                               │
+  │  ┌──────┐ ┌──────┐ ┌──────┐ ┌──────┐        │
+  │  │ int  │ │float │ │ bool │ │ char │        │
+  │  │ 64bit│ │ 64bit│ │ 1bit │ │ UTF-8│        │
+  │  └──────┘ └──────┘ └──────┘ └──────┘        │
+  │  ┌──────┐ ┌──────┐ ┌──────┐ ┌──────┐        │
+  │  │string│ │ byte │ │ void │ │ any  │        │
+  │  │ heap │ │ 8bit │ │ unit │ │ dyn  │        │
+  │  └──────┘ └──────┘ └──────┘ └──────┘        │
+  └───────────────────────────────────────────────┘
+```
+
+| # | 타입 | 크기 | 설명 |
+|---|------|------|------|
+| 1 | `int` | 64-bit | 부호 정수 (i8/i16/i32/i64/i128) |
+| 2 | `float` | 64-bit | IEEE 754 부동소수 (f16/f32/f64) |
+| 3 | `bool` | 1-bit | true/false |
+| 4 | `char` | 32-bit | UTF-8 유니코드 스칼라 |
+| 5 | `string` | heap | UTF-8 문자열 |
+| 6 | `byte` | 8-bit | 원시 바이트 |
+| 7 | `void` | 0 | 반환값 없음 (unit type) |
+| 8 | `any` | dynamic | 동적 타입 (런타임 디스패치) |
+
+### 타입 계층 (τ = 4)
+
+```
+  ┌───────────────────────────────────────────────────────┐
+  │              τ = 4 Type Layers                        │
+  │                                                       │
+  │  Layer 4: Function ──── fn(A) -> B, closure           │
+  │       ▲                                               │
+  │  Layer 3: Reference ─── &T, &mut T, Box<T>, Rc<T>    │
+  │       ▲                                               │
+  │  Layer 2: Composite ─── struct, enum, tuple, array    │
+  │       ▲                                               │
+  │  Layer 1: Primitive ─── int, float, bool, char, ...   │
+  │                                                       │
+  │  각 계층은 하위 계층을 합성하여 구축                    │
+  └───────────────────────────────────────────────────────┘
+```
+
+### 6 패러다임 (n = 6)
+
+```
+  ┌─────────────────────────────────────────────────┐
+  │           n = 6 Paradigms                       │
+  │                                                 │
+  │  ┌──────────────┐  ┌──────────────┐            │
+  │  │ 1. Imperative│  │ 2. Functional│            │
+  │  │   mut, loop  │  │   fn, |x|    │            │
+  │  └──────────────┘  └──────────────┘            │
+  │  ┌──────────────┐  ┌──────────────┐            │
+  │  │ 3. OOP       │  │ 4. Concurrent│            │
+  │  │ trait, impl  │  │ spawn, chan  │            │
+  │  └──────────────┘  └──────────────┘            │
+  │  ┌──────────────┐  ┌──────────────┐            │
+  │  │ 5. Logic/    │  │ 6. AI-Native │            │
+  │  │    Proof     │  │ intent, gen  │            │
+  │  └──────────────┘  └──────────────┘            │
+  └─────────────────────────────────────────────────┘
+```
+
+1. **Imperative** — 변수 변이, 반복문, 명령형 제어
+2. **Functional** — 불변 값, 고차 함수, 패턴 매칭
+3. **Object-Oriented** — trait 기반 다형성, 구현 분리
+4. **Concurrent** — spawn/channel/select 구조적 동시성
+5. **Logic/Proof** — proof/assert/invariant 형식 검증
+6. **AI-Native** — intent/generate/verify 자연어 코드 생성
+
+---
+
+## 3. 키워드 그룹 (σ = 12)
+
+총 키워드 수: **53 = σ·τ + sopfr = 48 + 5**
+
+```
+  ┌──────────────────────────────────────────────────────────────┐
+  │                σ = 12 Keyword Groups                         │
+  │                                                              │
+  │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐       │
+  │  │ 제어 흐름 │ │ 타입 선언 │ │  함수    │ │  변수    │       │
+  │  │ n=6      │ │ sopfr=5  │ │ sopfr=5  │ │ τ=4      │       │
+  │  └──────────┘ └──────────┘ └──────────┘ └──────────┘       │
+  │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐       │
+  │  │  모듈    │ │  메모리  │ │  동시성  │ │  효과    │       │
+  │  │ τ=4      │ │ τ=4      │ │ τ=4      │ │ τ=4      │       │
+  │  └──────────┘ └──────────┘ └──────────┘ └──────────┘       │
+  │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐       │
+  │  │  증명    │ │  메타    │ │  에러    │ │  AI      │       │
+  │  │ τ=4      │ │ τ=4      │ │ sopfr=5  │ │ τ=4      │       │
+  │  └──────────┘ └──────────┘ └──────────┘ └──────────┘       │
+  │                                                              │
+  │  합계: 6+5+5+4+4+4+4+4+4+4+5+4 = 53 = σ·τ+sopfr            │
+  └──────────────────────────────────────────────────────────────┘
+```
+
+### 3.1 제어 흐름 (n = 6)
+`if` `else` `match` `for` `while` `loop`
+
+### 3.2 타입 선언 (sopfr = 5)
+`type` `struct` `enum` `trait` `impl`
+
+### 3.3 함수 (sopfr = 5)
+`fn` `return` `yield` `async` `await`
+
+### 3.4 변수 (τ = 4)
+`let` `mut` `const` `static`
+
+### 3.5 모듈 (τ = 4)
+`mod` `use` `pub` `crate`
+
+### 3.6 메모리 (τ = 4)
+`own` `borrow` `move` `drop`
+
+### 3.7 동시성 (τ = 4)
+`spawn` `channel` `select` `atomic`
+
+### 3.8 효과 (τ = 4)
+`effect` `handle` `resume` `pure`
+
+### 3.9 증명 (τ = 4)
+`proof` `assert` `invariant` `theorem`
+
+### 3.10 메타 (τ = 4)
+`macro` `derive` `where` `comptime`
+
+### 3.11 에러 (sopfr = 5)
+`try` `catch` `throw` `panic` `recover`
+
+### 3.12 AI (τ = 4)
+`intent` `generate` `verify` `optimize`
+
+### 키워드 수 검증
+
+| 그룹 | 수 | n=6 상수 | 검증 |
+|------|----|----------|------|
+| 제어 흐름 | 6 | n | EXACT |
+| 타입 선언 | 5 | sopfr | EXACT |
+| 함수 | 5 | sopfr | EXACT |
+| 변수 | 4 | τ | EXACT |
+| 모듈 | 4 | τ | EXACT |
+| 메모리 | 4 | τ | EXACT |
+| 동시성 | 4 | τ | EXACT |
+| 효과 | 4 | τ | EXACT |
+| 증명 | 4 | τ | EXACT |
+| 메타 | 4 | τ | EXACT |
+| 에러 | 5 | sopfr | EXACT |
+| AI | 4 | τ | EXACT |
+| **합계** | **53** | **σ·τ+sopfr** | **EXACT** |
+
+---
+
+## 4. 연산자 (J₂ = 24)
+
+```
+  ┌───────────────────────────────────────────────────────────┐
+  │              J₂ = 24 Operators                            │
+  │                                                           │
+  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐      │
+  │  │ Arithmetic  │  │ Comparison  │  │  Logical    │      │
+  │  │   n = 6     │  │   n = 6     │  │   τ = 4     │      │
+  │  │ + - * / % **│  │ == != < > <=│  │ && || ! ^^  │      │
+  │  │             │  │ >=          │  │             │      │
+  │  └─────────────┘  └─────────────┘  └─────────────┘      │
+  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐      │
+  │  │  Bitwise    │  │ Assignment  │  │  Special    │      │
+  │  │   τ = 4     │  │   φ = 2     │  │   φ = 2     │      │
+  │  │ & | ^ ~     │  │ = :=        │  │ .. ->       │      │
+  │  └─────────────┘  └─────────────┘  └─────────────┘      │
+  │                                                           │
+  │  합계: 6 + 6 + 4 + 4 + 2 + 2 = 24 = J₂(6)               │
+  └───────────────────────────────────────────────────────────┘
+```
+
+### 4.1 산술 연산자 (n = 6)
+| 연산자 | 설명 |
+|--------|------|
+| `+` | 덧셈 |
+| `-` | 뺄셈 |
+| `*` | 곱셈 |
+| `/` | 나눗셈 |
+| `%` | 나머지 |
+| `**` | 거듭제곱 |
+
+### 4.2 비교 연산자 (n = 6)
+| 연산자 | 설명 |
+|--------|------|
+| `==` | 등호 |
+| `!=` | 부등호 |
+| `<` | 미만 |
+| `>` | 초과 |
+| `<=` | 이하 |
+| `>=` | 이상 |
+
+### 4.3 논리 연산자 (τ = 4)
+| 연산자 | 설명 |
+|--------|------|
+| `&&` | 논리곱 (AND) |
+| `\|\|` | 논리합 (OR) |
+| `!` | 논리 부정 (NOT) |
+| `^^` | 논리 배타 (XOR) |
+
+### 4.4 비트 연산자 (τ = 4)
+| 연산자 | 설명 |
+|--------|------|
+| `&` | 비트 AND |
+| `\|` | 비트 OR |
+| `^` | 비트 XOR |
+| `~` | 비트 NOT |
+
+### 4.5 대입 연산자 (φ = 2)
+| 연산자 | 설명 |
+|--------|------|
+| `=` | 바인딩 대입 |
+| `:=` | 타입 추론 대입 |
+
+### 4.6 특수 연산자 (φ = 2)
+| 연산자 | 설명 |
+|--------|------|
+| `..` | 범위 (range) |
+| `->` | 반환 타입 / 화살표 |
+
+### 연산자 합계 검증
+6 + 6 + 4 + 4 + 2 + 2 = **24 = J₂(6)** EXACT
+
+---
+
+## 5. 문법 계층 (n = 6)
+
+```
+  ┌────────────────────────────────────────────────────────┐
+  │              n = 6 Grammar Hierarchy                   │
+  │                                                        │
+  │  Level 6: Package ─────── 배포 단위, 의존성 관리       │
+  │       ▲                                                │
+  │  Level 5: Module ──────── 파일 단위, pub/mod 가시성    │
+  │       ▲                                                │
+  │  Level 4: Block ───────── { } 스코프, 수명 관리        │
+  │       ▲                                                │
+  │  Level 3: Statement ───── let, fn, if, for             │
+  │       ▲                                                │
+  │  Level 2: Expression ──── 값 생성, 연산자 조합         │
+  │       ▲                                                │
+  │  Level 1: Token ───────── 어휘 원자 (키워드, 리터럴)   │
+  │                                                        │
+  │  모든 상위 계층은 하위 계층의 합성으로 구성             │
+  └────────────────────────────────────────────────────────┘
+```
+
+| 계층 | 이름 | 설명 | 예시 |
+|------|------|------|------|
+| 1 | Token | 어휘 분석 원자 단위 | `let`, `42`, `"hello"`, `+` |
+| 2 | Expression | 값을 생성하는 조합 | `a + b * c`, `f(x)`, `match x {}` |
+| 3 | Statement | 실행 단위 | `let x = 42;`, `return x;` |
+| 4 | Block | 스코프 경계 | `{ stmt1; stmt2; expr }` |
+| 5 | Module | 파일/네임스페이스 단위 | `mod math { ... }` |
+| 6 | Package | 배포/의존성 관리 단위 | `crate hexa-app v1.0` |
+
+---
+
+## 6. 에러 클래스 (sopfr = 5)
+
+```
+  ┌───────────────────────────────────────────────────────────┐
+  │              sopfr = 5 Error Classes                      │
+  │                                                           │
+  │  ┌────────────┐                                           │
+  │  │ 1. Syntax  │──── 파싱 실패 (토큰/문법 오류)           │
+  │  └────────────┘                                           │
+  │       │                                                   │
+  │  ┌────────────┐                                           │
+  │  │ 2. Type    │──── 타입 불일치 / 추론 실패              │
+  │  └────────────┘                                           │
+  │       │                                                   │
+  │  ┌────────────┐                                           │
+  │  │ 3. Runtime │──── 실행 시 패닉 (0 나눗셈, OOB)        │
+  │  └────────────┘                                           │
+  │       │                                                   │
+  │  ┌────────────┐                                           │
+  │  │ 4. Logic   │──── 불변 조건 위반 (assert/invariant)    │
+  │  └────────────┘                                           │
+  │       │                                                   │
+  │  ┌────────────┐                                           │
+  │  │ 5.Resource │──── 메모리/파일/네트워크 자원 고갈       │
+  │  └────────────┘                                           │
+  │                                                           │
+  │  컴파일 타임: 1, 2 │ 런타임: 3, 4, 5                     │
+  └───────────────────────────────────────────────────────────┘
+```
+
+| # | 에러 클래스 | 탐지 시점 | 예시 |
+|---|-----------|----------|------|
+| 1 | Syntax | 컴파일 (lexer/parser) | `let = ;` 구문 오류 |
+| 2 | Type | 컴파일 (type checker) | `int + string` 타입 불일치 |
+| 3 | Runtime | 런타임 | 0 나눗셈, 배열 경계 초과 |
+| 4 | Logic | 런타임 (검증) | `assert n > 0` 위반, invariant 실패 |
+| 5 | Resource | 런타임 (시스템) | OOM, 파일 핸들 고갈, 네트워크 타임아웃 |
+
+---
+
+## 7. 가시성 (τ = 4)
+
+```
+  ┌───────────────────────────────────────────────────────────┐
+  │              τ = 4 Visibility Levels                      │
+  │                                                           │
+  │  ┌────────────────────────────────────────────────────┐   │
+  │  │                    Package                         │   │
+  │  │  ┌────────────────────────────────────────────┐    │   │
+  │  │  │                  Crate                      │    │   │
+  │  │  │  ┌────────────────────────────────────┐     │    │   │
+  │  │  │  │              Module                 │     │    │   │
+  │  │  │  │  ┌────────────────────────────┐     │     │    │   │
+  │  │  │  │  │         private            │     │     │    │   │
+  │  │  │  │  │   (기본값, 선언 블록 내)   │     │     │    │   │
+  │  │  │  │  └────────────────────────────┘     │     │    │   │
+  │  │  │  │      pub(mod) ── 모듈 내 공개      │     │    │   │
+  │  │  │  └────────────────────────────────────┘     │    │   │
+  │  │  │        pub(crate) ── 크레이트 내 공개       │    │   │
+  │  │  └────────────────────────────────────────────┘    │   │
+  │  │          pub ── 완전 공개                           │   │
+  │  └────────────────────────────────────────────────────┘   │
+  └───────────────────────────────────────────────────────────┘
+```
+
+| # | 키워드 | 범위 | 설명 |
+|---|--------|------|------|
+| 1 | `pub` | public | 외부 크레이트에서 접근 가능 |
+| 2 | `pub(mod)` | module | 같은 모듈 내에서만 접근 |
+| 3 | `pub(crate)` | crate | 같은 크레이트 내에서만 접근 |
+| 4 | (기본값) | private | 선언 블록 내에서만 접근 |
+
+---
+
+## 8. 메모리 모델 (Egyptian Fraction)
+
+**1/2 + 1/3 + 1/6 = 1** (완전수 6의 Egyptian fraction 분해)
+
+```
+  ┌───────────────────────────────────────────────────────────┐
+  │         Egyptian Fraction Memory Model                    │
+  │         1/2 + 1/3 + 1/6 = 1                              │
+  │                                                           │
+  │  ┌──────────────────────────────────────────────────────┐ │
+  │  │                  Total Memory = 1                     │ │
+  │  │                                                       │ │
+  │  │  ┌─────────────────────┬──────────────┬────────┐     │ │
+  │  │  │   Stack Pool        │ Heap Managed │ Arena  │     │ │
+  │  │  │      1/2            │     1/3      │  1/6   │     │ │
+  │  │  │                     │              │        │     │ │
+  │  │  │  - 값 타입 (int,    │ - 참조 타입  │ - 임시 │     │ │
+  │  │  │    float, bool)     │   (Box, Rc)  │   할당 │     │ │
+  │  │  │  - 함수 프레임      │ - GC-free    │ - 벌크 │     │ │
+  │  │  │  - 제로 오버헤드    │   ref count  │   해제 │     │ │
+  │  │  │  - LIFO 즉시 해제   │ - own/borrow │ - 스코프│     │ │
+  │  │  │                     │   추적       │   종료 │     │ │
+  │  │  └─────────────────────┴──────────────┴────────┘     │ │
+  │  └──────────────────────────────────────────────────────┘ │
+  │                                                           │
+  │  원칙:                                                    │
+  │  - GC 없음 (Rust와 동일한 소유권 기반)                    │
+  │  - own/borrow/move/drop 4 키워드로 수명 관리              │
+  │  - Arena는 벌크 할당 후 스코프 종료 시 일괄 해제          │
+  │  - Stack:Heap:Arena = 3:2:1 비율로 자동 밸런싱            │
+  └───────────────────────────────────────────────────────────┘
+```
+
+| 영역 | 비율 | 할당 전략 | 해제 방식 |
+|------|------|----------|----------|
+| Stack Pool | 1/2 | 값 타입, 프레임 | LIFO 즉시 해제 |
+| Heap Managed | 1/3 | 참조 타입, 동적 크기 | 소유권 추적 (own/borrow) |
+| Arena | 1/6 | 임시/벌크 객체 | 스코프 종료 일괄 해제 |
+
+---
+
+## 9. AI 코드 생성 파이프라인 (n = 6 Stages)
+
+```
+  ┌───────────────────────────────────────────────────────────────┐
+  │           n = 6 AI Code Generation Pipeline                   │
+  │           (N6AgentChain — DSE 최적 E2)                        │
+  │                                                               │
+  │  ┌───────────┐    ┌───────────┐    ┌───────────┐             │
+  │  │ Stage 1   │    │ Stage 2   │    │ Stage 3   │             │
+  │  │ Intent    │──▶│ Design    │──▶│ Code      │             │
+  │  │ Parse     │    │ Gen       │    │ Gen       │             │
+  │  │           │    │           │    │           │             │
+  │  │ 자연어    │    │ 아키텍처  │    │ HEXA-LANG │             │
+  │  │ → AST     │    │ 설계 생성 │    │ 코드 생성 │             │
+  │  └───────────┘    └───────────┘    └───────────┘             │
+  │       │                                  │                    │
+  │       │           ┌──────────────────────┘                    │
+  │       ▼           ▼                                           │
+  │  ┌───────────┐    ┌───────────┐    ┌───────────┐             │
+  │  │ Stage 6   │    │ Stage 5   │    │ Stage 4   │             │
+  │  │ Deploy    │◀──│ Optimize  │◀──│ Verify    │             │
+  │  │           │    │           │    │           │             │
+  │  │ 배포 +    │    │ 성능 최적 │    │ 타입 체크 │             │
+  │  │ 모니터링  │    │ + 프로파일│    │ + 증명    │             │
+  │  └───────────┘    └───────────┘    └───────────┘             │
+  │                                                               │
+  │  "웹 쇼핑몰 만들어줘"                                        │
+  │    ──▶ Intent Parse (의도 분석)                               │
+  │    ──▶ Design Gen (DB+API+UI 설계)                           │
+  │    ──▶ Code Gen (HEXA-LANG 코드 생성)                        │
+  │    ──▶ Verify (타입 검사 + invariant 증명)                   │
+  │    ──▶ Optimize (사용 패턴 기반 최적화)                      │
+  │    ──▶ Deploy (컨테이너 배포 + 모니터링)                     │
+  └───────────────────────────────────────────────────────────────┘
+```
+
+| Stage | 이름 | 입력 | 출력 | 기술 |
+|-------|------|------|------|------|
+| 1 | Intent Parse | 자연어/다이어그램 | 의도 AST | NLP + multimodal (σ-τ=8 입력) |
+| 2 | Design Gen | 의도 AST | 아키텍처 명세 | BT-56 LLM + Egyptian MoE |
+| 3 | Code Gen | 아키텍처 명세 | HEXA-LANG 코드 | 코드 전용 모델 |
+| 4 | Verify | 코드 | 검증 결과 | 타입 체커 + 정리 증명기 |
+| 5 | Optimize | 검증된 코드 | 최적화 코드 | 프로파일 기반 JIT (τ=4 레벨) |
+| 6 | Deploy | 최적화 코드 | 실행 바이너리 | 컨테이너 + 모니터링 |
+
+---
+
+## 10. 코드 예제
+
+### 10.1 Hello World
+
+```
+  ┌───────────────────────────────────────┐
+  │  가장 기본적인 HEXA-LANG 프로그램    │
+  └───────────────────────────────────────┘
+```
+
+```hexa
+fn main() {
+    print("Hello, HEXA-LANG!")
+}
+```
+
+### 10.2 n=6 검증
+
+```
+  ┌───────────────────────────────────────────────────────┐
+  │  σ(n)·φ(n) = n·τ(n) ⟺ n=6 검증 프로그램             │
+  └───────────────────────────────────────────────────────┘
+```
+
+```hexa
+fn sigma(n: int) -> int {
+    let mut s = 0
+    for d in 1..=n {
+        if n % d == 0 { s = s + d }
+    }
+    return s
+}
+
+fn phi(n: int) -> int {
+    let mut count = 0
+    for k in 1..=n {
+        if gcd(k, n) == 1 { count = count + 1 }
+    }
+    return count
+}
+
+fn tau(n: int) -> int {
+    let mut count = 0
+    for d in 1..=n {
+        if n % d == 0 { count = count + 1 }
+    }
+    return count
+}
+
+fn main() {
+    for n in 2..=1000 {
+        let lhs = sigma(n) * phi(n)
+        let rhs = n * tau(n)
+        if lhs == rhs {
+            print("n={n}: σ·φ={lhs} = n·τ={rhs} ✓")
+            assert n == 6
+        }
+    }
+    print("n=6 is the unique solution for n >= 2")
+}
+```
+
+### 10.3 Egyptian MoE 라우팅
+
+```
+  ┌───────────────────────────────────────────────────────┐
+  │  1/2 + 1/3 + 1/6 = 1 전문가 라우팅 구현              │
+  └───────────────────────────────────────────────────────┘
+```
+
+```hexa
+struct EgyptianMoE {
+    expert_half:  Model,   // 1/2 capacity — general expert
+    expert_third: Model,   // 1/3 capacity — domain expert
+    expert_sixth: Model,   // 1/6 capacity — specialist
+}
+
+impl EgyptianMoE {
+    fn route(own self, input: Tensor) -> Tensor {
+        let gate = softmax(self.gate_weights * input)
+
+        // Egyptian fraction: 1/2 + 1/3 + 1/6 = 1
+        let out_half  = self.expert_half.forward(input)  * gate[0]
+        let out_third = self.expert_third.forward(input) * gate[1]
+        let out_sixth = self.expert_sixth.forward(input) * gate[2]
+
+        return out_half + out_third + out_sixth
+    }
+}
+
+proof egyptian_completeness {
+    invariant 1.0/2.0 + 1.0/3.0 + 1.0/6.0 == 1.0
+    // The Egyptian fraction of 6 guarantees
+    // full capacity coverage with no waste
+}
+```
+
+### 10.4 AI 코드 생성 (intent 블록)
+
+```
+  ┌───────────────────────────────────────────────────────┐
+  │  intent 블록으로 자연어 → 코드 자동 생성              │
+  └───────────────────────────────────────────────────────┘
+```
+
+```hexa
+// AI-native paradigm: intent block
+intent create_api {
+    "REST API for user management"
+    "CRUD operations with authentication"
+    "PostgreSQL backend, JSON responses"
+}
+
+// HEXA-GEN generates:
+generate create_api -> {
+    mod user_api {
+        struct User {
+            id: int,
+            name: string,
+            email: string,
+        }
+
+        pub fn create(user: User) -> Result<User, Resource> {
+            // auto-generated implementation
+        }
+
+        pub fn read(id: int) -> Result<User, Resource> {
+            // auto-generated implementation
+        }
+
+        pub fn update(id: int, user: User) -> Result<User, Resource> {
+            // auto-generated implementation
+        }
+
+        pub fn delete(id: int) -> Result<void, Resource> {
+            // auto-generated implementation
+        }
+    }
+}
+
+// Verify generated code
+verify create_api {
+    assert user_api::create is pure
+    assert user_api::read is idempotent
+    invariant all_endpoints_authenticated
+}
+```
+
+---
+
+## 11. n=6 상수 검증 테이블
+
+```
+  ┌──────────────────────────────────────────────────────────┐
+  │           n=6 Design Constants — 14/14 EXACT             │
+  │                                                          │
+  │  n=6  φ=2  τ=4  σ=12  sopfr=5  μ=1  J₂=24             │
+  │  σ-τ=8  σ-φ=10  σ·τ=48  σ·τ+sopfr=53                  │
+  │                                                          │
+  │  모든 설계 상수가 n=6 산술 함수에서 도출됨              │
+  │  임의 선택 = 0개, 수학적 필연 = 14개                    │
+  └──────────────────────────────────────────────────────────┘
+```
+
+| # | 설계 요소 | 값 | n=6 수식 | 등급 |
+|---|----------|-----|---------|------|
+| 1 | 기본 타입 수 | 8 | σ-τ = 12-4 | EXACT |
+| 2 | 키워드 그룹 수 | 12 | σ = σ(6) | EXACT |
+| 3 | 연산자 수 | 24 | J₂ = J₂(6) | EXACT |
+| 4 | 문법 계층 | 6 | n = 6 | EXACT |
+| 5 | 에러 클래스 | 5 | sopfr = 2+3 | EXACT |
+| 6 | 가시성 레벨 | 4 | τ = τ(6) | EXACT |
+| 7 | 패러다임 수 | 6 | n = 6 | EXACT |
+| 8 | 타입 계층 | 4 | τ = τ(6) | EXACT |
+| 9 | 메모리 분할 | 1/2+1/3+1/6 | Egyptian(6) | EXACT |
+| 10 | 컴파일러 스테이지 | 6 | n = 6 | EXACT |
+| 11 | JIT 레벨 | 4 | τ = τ(6) | EXACT |
+| 12 | IDE 기능 그룹 | 12 | σ = σ(6) | EXACT |
+| 13 | AI 파이프라인 | 6 | n = 6 | EXACT |
+| 14 | 멀티모달 입력 | 8 | σ-τ = 12-4 | EXACT |
+
+**결과: 14/14 EXACT (100%)**
+
+---
+
+## 12. HEXA-GEN 모델 스펙 (BT-56)
+
+BT-56 완전 n=6 LLM 아키텍처를 코드 생성에 특화.
+
+```
+  ┌───────────────────────────────────────────────────────────────┐
+  │              HEXA-GEN Model Architecture (BT-56)              │
+  │                                                               │
+  │  ┌─────────────────────────────────────────────────────────┐  │
+  │  │                    Transformer Stack                     │  │
+  │  │                                                         │  │
+  │  │  d_model = 4096 = 2^σ = 2^12                           │  │
+  │  │  L = 32 layers = 2^sopfr = 2^5                         │  │
+  │  │  d_head = 128 = 2^(σ-sopfr) = 2^7                     │  │
+  │  │  n_heads = d/d_h = 32 = 2^sopfr                        │  │
+  │  │  KV heads = 8 = σ-τ (GQA)                              │  │
+  │  │                                                         │  │
+  │  │  ┌──────────┐   ┌──────────┐   ┌──────────┐           │  │
+  │  │  │ Attention│   │ SwiGLU   │   │ LayerNorm│           │  │
+  │  │  │ σ-τ=8 KV │   │ 8/3 ratio│   │ RMSNorm  │           │  │
+  │  │  │ GQA heads│   │ FFN      │   │          │           │  │
+  │  │  └──────────┘   └──────────┘   └──────────┘           │  │
+  │  │                                                         │  │
+  │  │  MoE: Egyptian Fraction Routing (BT-67)                │  │
+  │  │  ┌──────────┐ ┌──────────┐ ┌──────────┐               │  │
+  │  │  │ 1/2 gen  │ │ 1/3 domain│ │ 1/6 spec │               │  │
+  │  │  └──────────┘ └──────────┘ └──────────┘               │  │
+  │  └─────────────────────────────────────────────────────────┘  │
+  │                                                               │
+  │  Context: 4096 → 8192 = 2^σ → 2^(σ+μ)                       │
+  │  Vocab: 32768 = 2^(n+σ-μ) = 2^17 (코드 토크나이저 최적)      │
+  │                                                               │
+  │  AdamW Quintuplet (BT-54):                                   │
+  │  β₁=0.9  β₂=0.95  ε=10⁻⁸  λ=0.1  clip=1.0                 │
+  │  = 1-1/(σ-φ)  1-1/(J₂-τ)  10^{-(σ-τ)}  1/(σ-φ)  R(6)=1   │
+  └───────────────────────────────────────────────────────────────┘
+```
+
+### 모델 하이퍼파라미터
+
+| 파라미터 | 값 | n=6 수식 | BT |
+|---------|-----|---------|-----|
+| d_model | 4096 | 2^σ = 2^12 | BT-56 |
+| n_layers | 32 | 2^sopfr = 2^5 | BT-56 |
+| d_head | 128 | 2^(σ-sopfr) = 2^7 | BT-56 |
+| n_heads | 32 | d/d_h = 2^sopfr | BT-56 |
+| KV heads | 8 | σ-τ = 12-4 | BT-39/58 |
+| Context | 4096→8192 | 2^σ → 2^(σ+μ) | BT-44 |
+| Vocab | 32768 | 2^17 | BT-73 |
+| FFN ratio | 8/3 | SwiGLU | BT-33 |
+
+### 학습 하이퍼파라미터 (BT-54 Quintuplet)
+
+| 파라미터 | 값 | n=6 수식 | 설명 |
+|---------|-----|---------|------|
+| β₁ | 0.9 | 1-1/(σ-φ) = 1-1/10 | 모멘텀 |
+| β₂ | 0.95 | 1-1/(J₂-τ) = 1-1/20 | 2차 모멘텀 |
+| ε | 10⁻⁸ | 10^{-(σ-τ)} = 10^{-8} | 수치 안정 |
+| λ (WD) | 0.1 | 1/(σ-φ) = 1/10 | 가중치 감쇠 |
+| grad clip | 1.0 | R(6) = 1 | 기울기 클리핑 |
+
+### MoE 라우팅 (BT-67)
+
+Egyptian fraction 기반 전문가 활성화:
+- **1/2** — 범용 코드 생성 전문가
+- **1/3** — 도메인 특화 전문가 (web/system/data)
+- **1/6** — 전문 분야 전문가 (crypto/ML/embedded)
+
+---
+
+## 13. HEXA-IDE 기능 그룹 (σ = 12)
+
+```
+  ┌──────────────────────────────────────────────────────────────┐
+  │              σ = 12 IDE Feature Groups                       │
+  │                                                              │
+  │  ┌────────────┐ ┌────────────┐ ┌────────────┐              │
+  │  │ 1.Editor   │ │ 2.IntelliS │ │ 3.Debug    │              │
+  │  │ 구문 강조  │ │ 자동 완성  │ │ 브레이크   │              │
+  │  │ 코드 접기  │ │ 타입 추론  │ │ 스텝 실행  │              │
+  │  └────────────┘ └────────────┘ └────────────┘              │
+  │  ┌────────────┐ ┌────────────┐ ┌────────────┐              │
+  │  │ 4.Refactor │ │ 5.VCS      │ │ 6.Build    │              │
+  │  │ 이름 변경  │ │ Git 통합   │ │ 빌드 시스템│              │
+  │  │ 추출/인라인│ │ 브랜치 관리│ │ 태스크 실행│              │
+  │  └────────────┘ └────────────┘ └────────────┘              │
+  │  ┌────────────┐ ┌────────────┐ ┌────────────┐              │
+  │  │ 7.Test     │ │ 8.Profile  │ │ 9.AI Assist│              │
+  │  │ 유닛 테스트│ │ 성능 분석  │ │ 코드 생성  │              │
+  │  │ 커버리지  │ │ 메모리 추적│ │ 리뷰/설명  │              │
+  │  └────────────┘ └────────────┘ └────────────┘              │
+  │  ┌────────────┐ ┌────────────┐ ┌────────────┐              │
+  │  │ 10.Proof   │ │ 11.Deploy  │ │ 12.Collab  │              │
+  │  │ 정리 증명  │ │ 컨테이너화│ │ 실시간 협업│              │
+  │  │ 불변 검증  │ │ CI/CD 통합│ │ 코드 리뷰  │              │
+  │  └────────────┘ └────────────┘ └────────────┘              │
+  │                                                              │
+  │  LSP + DAP 프로토콜 기반, σ=12 기능 그룹                    │
+  └──────────────────────────────────────────────────────────────┘
+```
+
+| # | 기능 그룹 | 핵심 기능 | 프로토콜 |
+|---|----------|----------|---------|
+| 1 | Editor | 구문 강조, 코드 접기, 멀티 커서 | LSP textDocument |
+| 2 | IntelliSense | 자동 완성, 타입 추론 힌트, 시그니처 | LSP completion |
+| 3 | Debug | 브레이크포인트, 스텝 실행, 변수 감시 | DAP |
+| 4 | Refactor | 이름 변경, 추출, 인라인, 이동 | LSP rename/codeAction |
+| 5 | VCS | Git 통합, 브랜치 관리, 머지 충돌 해결 | Git protocol |
+| 6 | Build | 빌드 시스템, 태스크 러너, 의존성 관리 | Task protocol |
+| 7 | Test | 유닛/통합 테스트, 커버리지, 벤치마크 | Test adapter |
+| 8 | Profile | CPU/메모리 프로파일링, 플레임 그래프 | Perf protocol |
+| 9 | AI Assist | 코드 생성, 설명, 리뷰, 버그 탐지 | HEXA-GEN API |
+| 10 | Proof | 정리 증명, 불변 조건 검증, 계약 체크 | Proof engine |
+| 11 | Deploy | 컨테이너화, CI/CD 파이프라인, 모니터링 | Deploy protocol |
+| 12 | Collab | 실시간 협업 편집, 코드 리뷰, 주석 | CRDT sync |
+
+---
+
+## 14. 매크로 시스템 (macro)
+
+```
+  ┌───────────────────────────────────────────────────────────┐
+  │              Macro System                                  │
+  │                                                           │
+  │  선언형 매크로: macro! name { 패턴 => 확장 }              │
+  │  AST-level 패턴 매칭 + 반복 확장                          │
+  │  호출: name!(args) 또는 name![args]                       │
+  └───────────────────────────────────────────────────────────┘
+```
+
+### 14.1 매크로 정의
+
+`macro!` 키워드로 선언하며, 패턴 → 확장 규칙을 정의한다.
+
+```hexa
+macro! vec {
+    ($($x:expr),*) => {
+        let arr = []
+        $(arr.push($x))*
+        arr
+    }
+}
+
+let v = vec![1, 2, 3]
+```
+
+### 14.2 프래그먼트 지정자
+
+| 지정자 | 설명 | 예시 |
+|--------|------|------|
+| `$x:expr` | 임의 표현식 | `1 + 2`, `f(x)` |
+| `$x:ident` | 식별자 | `foo`, `my_var` |
+| `$x:ty` | 타입 | `int`, `[string]` |
+| `$x:literal` | 리터럴 값 | `42`, `"hello"` |
+| `$x:block` | 블록 `{ ... }` | `{ let x = 1; x }` |
+
+### 14.3 반복
+
+`$($x:expr),*` 구문으로 0회 이상 반복을 매칭한다. 확장 시 `$(...)*`로 각 캡처를 순회한다.
+
+### 14.4 호출 구문
+
+```hexa
+name!(arg1, arg2)     // 괄호 호출
+name![arg1, arg2]     // 대괄호 호출
+```
+
+### 14.5 derive 매크로
+
+`derive`는 타입에 대한 표준 구현을 자동 생성한다.
+
+```hexa
+derive(Display) for Point
+derive(Debug) for Point
+derive(Eq) for Point
+```
+
+| derive | 설명 |
+|--------|------|
+| `Display` | 문자열 표현 자동 생성 |
+| `Debug` | 디버그 출력 자동 생성 |
+| `Eq` | 동등성 비교 자동 생성 |
+
+---
+
+## 15. 컴파일 타임 실행 (comptime)
+
+```
+  ┌───────────────────────────────────────────────────────────┐
+  │              Compile-Time Evaluation                       │
+  │                                                           │
+  │  comptime { ... } — 컴파일 시 블록 평가, 결과 상수 인라인 │
+  │  comptime fn — 컴파일 시 호출 가능한 함수                  │
+  │  제약: I/O 금지 (순수 계산만 허용)                         │
+  └───────────────────────────────────────────────────────────┘
+```
+
+### 15.1 comptime 블록
+
+컴파일 시점에 블록을 평가하고, 결과를 상수로 인라인한다.
+
+```hexa
+const TABLE = comptime {
+    let result = []
+    for i in 0..10 { result.push(i * i) }
+    result
+}
+// TABLE은 컴파일 시 [0, 1, 4, 9, 16, 25, 36, 49, 64, 81]로 치환
+```
+
+### 15.2 comptime 함수
+
+`comptime fn`으로 선언한 함수는 컴파일 시점에 호출 가능하다.
+
+```hexa
+comptime fn factorial(n: int) -> int {
+    if n <= 1 { return 1 }
+    return n * factorial(n - 1)
+}
+
+const FACT_6 = factorial(6)  // 컴파일 시 720으로 치환
+```
+
+### 15.3 제약
+
+- I/O 금지: `print`, `read_file`, `http_get` 등 부수 효과 함수 사용 불가
+- 결과는 상수로 인라인됨 — 런타임 코스트 제로
+
+---
+
+## 16. 대수적 효과 (Algebraic Effects)
+
+```
+  ┌───────────────────────────────────────────────────────────┐
+  │              Algebraic Effects                             │
+  │                                                           │
+  │  effect — 부수 효과 인터페이스 선언                        │
+  │  handle/with — 효과 핸들러 설치                            │
+  │  resume — 핸들러에서 계속 실행                             │
+  │  pure — 효과 없음을 보증하는 함수 마커                     │
+  └───────────────────────────────────────────────────────────┘
+```
+
+### 16.1 효과 선언
+
+`effect` 키워드로 부수 효과의 인터페이스를 정의한다.
+
+```hexa
+effect Console {
+    fn print(msg: str) -> ()
+    fn read_line() -> str
+}
+```
+
+### 16.2 효과 사용 및 핸들링
+
+`handle` / `with` 블록으로 효과의 구현을 주입한다. `resume`으로 효과 발생 지점으로 값을 돌려보낸다.
+
+```hexa
+handle {
+    Console.print("hello")
+} with {
+    Console.print(msg) => { resume(()) }
+}
+```
+
+### 16.3 pure 함수
+
+`pure` 마커는 함수가 어떤 효과도 수행하지 않음을 보증한다. 효과 호출 시 컴파일 에러를 발생시킨다.
+
+```hexa
+pure fn add(a: int, b: int) -> int { a + b }
+```
+
+---
+
+## 17. generate / optimize
+
+```
+  ┌───────────────────────────────────────────────────────────┐
+  │              AI-Assisted Code Synthesis                     │
+  │                                                           │
+  │  generate fn — 자연어 명세로 함수 본문 자동 생성           │
+  │  optimize fn — 기존 구현을 AI가 자동 최적화                │
+  └───────────────────────────────────────────────────────────┘
+```
+
+### 17.1 generate
+
+함수 시그니처와 자연어 설명을 제공하면, AI 파이프라인이 구현을 생성한다.
+
+```hexa
+generate fn sort_users(users: [User]) -> [User] {
+    "Sort by name alphabetically"
+}
+```
+
+- 함수 시그니처(이름, 매개변수, 반환 타입)는 개발자가 작성
+- 본문의 문자열이 AI 모델에 전달되어 구현 생성
+- 오프라인 환경에서는 캐시된 구현 또는 에러 반환
+
+### 17.2 optimize
+
+기존 구현을 제공하면, AI가 동일한 의미론을 유지하며 성능을 개선한다.
+
+```hexa
+optimize fn fibonacci(n: int) -> int {
+    if n <= 1 { return n }
+    return fibonacci(n-1) + fibonacci(n-2)
+}
+// AI가 메모이제이션 또는 반복 방식으로 최적화
+```
+
+- 원본 구현의 의미론(입출력 계약)을 보존
+- 최적화 결과는 `verify` 블록으로 검증 가능
+
+---
+
+## 18. const / static
+
+```
+  ┌───────────────────────────────────────────────────────────┐
+  │              상수 및 전역 변수                              │
+  │                                                           │
+  │  const — 불변 상수 (재대입 금지)                           │
+  │  static — 모듈 수준 전역 변수 (가변)                       │
+  └───────────────────────────────────────────────────────────┘
+```
+
+### 18.1 const
+
+`const`는 불변 바인딩이다. 선언 후 재대입할 수 없으며, 컴파일 시 값이 확정된다.
+
+```hexa
+const PI = 3.14159
+const MAX_CELLS = 1024
+```
+
+### 18.2 static
+
+`static`은 모듈 수준의 전역 변수다. `mut` 없이도 가변이며, 프로그램 수명 동안 유지된다.
+
+```hexa
+static counter = 0
+static config = { debug: false, verbose: true }
+```
+
+| 키워드 | 변이 | 스코프 | 수명 |
+|--------|------|--------|------|
+| `const` | 불변 | 선언 스코프 | 컴파일 타임 상수 |
+| `static` | 가변 | 모듈 전역 | 프로그램 전체 |
+
+---
+
+## τ-bound for metaprogramming
+
+HEXA-LANG caps macro (`@macro fn`) and `comptime fn` expansion at **τ=4**
+by default. Without this bound, a recursive expansion such as
+
+```hexa
+@macro fn loop_forever() {
+    () => { loop_forever!() }
+}
+```
+
+would halt compilation forever — a compile-time DoS.
+
+### Default (τ=4)
+- Fires from `n=6` metaprogramming derivation (see `doc/n6_hexa_ir_spec.md`).
+- Enforced in `self/macro_expand.hexa::MacroExpansionContext` and
+  `self/comptime.hexa::ComptimeExpansionContext`.
+- On overflow the compiler aborts with a deterministic error that
+  includes the expansion stack:
+
+  ```
+  macro loop_forever exceeded tau-bound (depth=5 > 4)
+    at chain: loop_forever -> loop_forever -> loop_forever -> loop_forever -> loop_forever
+  ```
+
+### Override via `@depth(N)`
+- Syntax: `@depth(N) @macro fn deep() { ... }` or
+  `@depth(N) comptime fn ...`.
+- `N` is clamped to **[1, 64]**. `<1` or `>64` is rejected at lint time
+  with an `error` diagnostic by `self/attrs/depth.hexa::check_depth`.
+- `@depth` on a non-macro/non-comptime fn yields a `warn` (no effect
+  silently).
+
+### Enforcement layers
+| Layer | Source | Behavior |
+|-------|--------|----------|
+| Parser | `self/parser.hexa` | Captures `@depth(N)` IntLit, emits `depth\|N` annotation |
+| Macro expand | `self/macro_expand.hexa` | `expand_macro_with_ctx` bumps `ctx.depth`, halts `> ctx.max_depth` |
+| Comptime | `self/comptime.hexa` | `eval_comptime_with_ctx` same protocol |
+| Lint | `self/attrs/depth.hexa` | `check_depth` validates `N ∈ [1,64]` + scope |
+
+---
+
+## 부록: 관련 BT 및 가설
+
+| BT | 제목 | HEXA-LANG 적용 |
+|----|------|---------------|
+| BT-33 | Transformer σ=12 atom | d_model=4096, SwiGLU 8/3 |
+| BT-39 | KV-head σ-τ=8 | GQA 8 KV heads |
+| BT-42 | Inference scaling | top-p=0.95, top-k=40 |
+| BT-54 | AdamW quintuplet | 학습 하이퍼파라미터 5종 |
+| BT-56 | Complete n=6 LLM | HEXA-GEN 전체 아키텍처 |
+| BT-58 | σ-τ=8 universal | 기본 타입, KV heads, batch |
+| BT-67 | MoE activation fraction | Egyptian 라우팅 |
+
+---
+
+*HEXA-LANG v0.1 -- n=6 완전수 기반 프로그래밍 언어 사양서*
+*14/14 설계 상수 EXACT (100%) -- DSE v2 Pareto 0.7854 (21,952 조합)*

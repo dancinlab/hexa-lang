@@ -1,0 +1,606 @@
+// ===================================================================
+//  test_tokenizer_trainer.hexa — Tokenizer Trainer Tests
+//
+//  Verifies:
+//    1. text_to_chars splits correctly
+//    2. count_pairs finds bigram frequencies
+//    3. merge_pair merges correctly
+//    4. train_bpe produces vocab + merges
+//    5. Special tokens present at correct positions
+//    6. Encode-decode roundtrip
+//    7. Single text training
+//    8. Multiple text training
+//    9. Edge cases (empty, single char)
+//   10. is_special_token detection
+//
+//  Run: ./hexa self/test_tokenizer_trainer.hexa
+//  Minimum 10 check() statements.
+// ===================================================================
+
+use "self/stdlib/law_io"
+
+// -- inlined from self/ml/tokenizer_trainer.hexa --
+// codegen import not wired for test files
+
+// ===================================================================
+//  self/ml/tokenizer_trainer.hexa — BPE Tokenizer Trainer (pure Hexa)
+//
+//  Train a Byte-Pair Encoding tokenizer from scratch.
+//  Iteratively merge the most frequent byte-pair until vocab_size.
+//
+//  Public API:
+//    train_bpe(texts, vocab_size)
+//      Train BPE on array of texts. Returns [vocab, merges].
+//
+//    count_pairs(tokens)
+//      Count bigram frequencies in token sequence.
+//      Returns array of [pair, count].
+//
+//    merge_pair(tokens, pair)
+//      Merge all occurrences of pair in token sequence.
+//      Returns updated token sequence.
+//
+//    save_vocab(vocab, merges, path)
+//      Save vocab + merges to file in JSON-like format.
+//
+//    load_vocab(path)
+//      Load vocab + merges from file.
+//
+//  Special tokens: [PAD]=0, [UNK]=1, [BOS]=2, [EOS]=3
+// ===================================================================
+
+// ===================================================================
+//  Special tokens
+// ===================================================================
+let SPECIAL_PAD = "[PAD]"
+let SPECIAL_UNK = "[UNK]"
+let SPECIAL_BOS = "[BOS]"
+let SPECIAL_EOS = "[EOS]"
+let N_SPECIAL = 4
+
+fn initial_special_tokens() {
+    return [SPECIAL_PAD, SPECIAL_UNK, SPECIAL_BOS, SPECIAL_EOS]
+}
+
+// ===================================================================
+//  Text to initial byte-level tokens
+//  Each character becomes its own token string.
+// ===================================================================
+fn text_to_chars(text) {
+    let n = len(text)
+    let mut chars = []
+    let mut i = 0
+    while i < n {
+        let code = char_code(text, i)
+        chars = chars + [chr(code)]
+        i = i + 1
+    }
+    return chars
+}
+
+// ===================================================================
+//  Count bigram pairs in a token sequence
+//
+//  tokens: array of strings
+//  Returns array of [[tok_a, tok_b], count] sorted by count desc.
+// ===================================================================
+fn count_pairs(tokens) {
+    let n = len(tokens)
+    if n < 2 { return [] }
+
+    // Collect pair frequencies using parallel arrays
+    let mut pair_keys = []
+    let mut pair_counts = []
+
+    let mut i = 0
+    while i < n - 1 {
+        let key = tokens[i] + "\t" + tokens[i + 1]
+        let pair = [tokens[i], tokens[i + 1]]
+
+        // Find if pair already exists
+        let mut found = -1
+        let mut j = 0
+        while j < len(pair_keys) {
+            if pair_keys[j] == key {
+                found = j
+                j = len(pair_keys)
+            }
+            j = j + 1
+        }
+
+        if found >= 0 {
+            // Increment count: rebuild array with updated count
+            let mut new_counts = []
+            let mut k = 0
+            while k < len(pair_counts) {
+                if k == found {
+                    new_counts = new_counts + [pair_counts[k] + 1]
+                } else {
+                    new_counts = new_counts + [pair_counts[k]]
+                }
+                k = k + 1
+            }
+            pair_counts = new_counts
+        } else {
+            pair_keys = pair_keys + [key]
+            pair_counts = pair_counts + [1]
+        }
+        i = i + 1
+    }
+
+    // Build result array sorted by count desc (selection sort)
+    let n_pairs = len(pair_keys)
+    let mut result = []
+    let mut used = []
+    let mut ui = 0
+    while ui < n_pairs {
+        used = used + [false]
+        ui = ui + 1
+    }
+
+    let mut sorted = 0
+    while sorted < n_pairs {
+        let mut best_idx = -1
+        let mut best_count = -1
+        let mut j = 0
+        while j < n_pairs {
+            if used[j] == false {
+                if pair_counts[j] > best_count {
+                    best_count = pair_counts[j]
+                    best_idx = j
+                }
+            }
+            j = j + 1
+        }
+        if best_idx >= 0 {
+            let parts = pair_keys[best_idx].split("\t")
+            result = result + [[[parts[0], parts[1]], best_count]]
+            // Mark as used
+            let mut new_used = []
+            let mut k = 0
+            while k < n_pairs {
+                if k == best_idx {
+                    new_used = new_used + [true]
+                } else {
+                    new_used = new_used + [used[k]]
+                }
+                k = k + 1
+            }
+            used = new_used
+        }
+        sorted = sorted + 1
+    }
+
+    return result
+}
+
+// ===================================================================
+//  Merge all occurrences of pair in token sequence
+//
+//  tokens: array of strings
+//  pair: [tok_a, tok_b]
+//  Returns new token sequence with pair merged.
+// ===================================================================
+fn merge_pair(tokens, pair) {
+    let n = len(tokens)
+    if n < 2 { return tokens }
+
+    let a = pair[0]
+    let b = pair[1]
+    let merged = a + b
+
+    let mut result = []
+    let mut i = 0
+    while i < n {
+        if i < n - 1 {
+            if tokens[i] == a {
+                if tokens[i + 1] == b {
+                    result = result + [merged]
+                    i = i + 2
+                } else {
+                    result = result + [tokens[i]]
+                    i = i + 1
+                }
+            } else {
+                result = result + [tokens[i]]
+                i = i + 1
+            }
+        } else {
+            result = result + [tokens[i]]
+            i = i + 1
+        }
+    }
+    return result
+}
+
+// ===================================================================
+//  Find the most frequent pair
+//  Returns [pair, count] or [[], 0] if none.
+// ===================================================================
+fn most_frequent_pair(pair_counts) {
+    let n = len(pair_counts)
+    if n == 0 { return [[], 0] }
+    // pair_counts is already sorted by count desc
+    return [pair_counts[0][0], pair_counts[0][1]]
+}
+
+// ===================================================================
+//  Collect initial byte-level vocab from texts
+//  Returns array of unique single-char tokens.
+// ===================================================================
+fn collect_byte_vocab(texts) {
+    let mut seen_keys = []
+    let mut vocab = []
+
+    let n_texts = len(texts)
+    let mut ti = 0
+    while ti < n_texts {
+        let text = texts[ti]
+        let n_chars = len(text)
+        let mut ci = 0
+        while ci < n_chars {
+            let ch = chr(char_code(text, ci))
+            // Check if already seen
+            let mut found = false
+            let mut j = 0
+            while j < len(seen_keys) {
+                if seen_keys[j] == ch {
+                    found = true
+                    j = len(seen_keys)
+                }
+                j = j + 1
+            }
+            if found == false {
+                seen_keys = seen_keys + [ch]
+                vocab = vocab + [ch]
+            }
+            ci = ci + 1
+        }
+        ti = ti + 1
+    }
+    return vocab
+}
+
+// ===================================================================
+//  Train BPE tokenizer
+//
+//  texts: array of training text strings
+//  vocab_size: target vocabulary size
+//
+//  Returns [vocab, merges]
+//    vocab: array of token strings (index = token ID)
+//    merges: array of [tok_a, tok_b] merge rules (priority order)
+// ===================================================================
+fn train_bpe(texts, vocab_size) {
+    // Step 1: Initialize vocab with special tokens + byte vocab
+    let specials = initial_special_tokens()
+    let byte_vocab = collect_byte_vocab(texts)
+    let mut vocab = specials + byte_vocab
+    let mut merges = []
+
+    // Step 2: Build initial token sequence (all texts concatenated)
+    let n_texts = len(texts)
+    let mut all_tokens = []
+    let mut ti = 0
+    while ti < n_texts {
+        let chars = text_to_chars(texts[ti])
+        all_tokens = all_tokens + chars
+        // Add a separator between texts
+        if ti < n_texts - 1 {
+            all_tokens = all_tokens + [" "]
+        }
+        ti = ti + 1
+    }
+
+    // Step 3: Iteratively merge most frequent pair until vocab_size
+    let max_merges = vocab_size - len(vocab)
+    let mut merge_count = 0
+
+    while merge_count < max_merges {
+        let pairs = count_pairs(all_tokens)
+        let best = most_frequent_pair(pairs)
+        let pair = best[0]
+        let count = best[1]
+
+        if count < 2 {
+            // No pair occurs more than once, stop
+            merge_count = max_merges
+        } else {
+            // Merge the pair
+            let merged_token = pair[0] + pair[1]
+            all_tokens = merge_pair(all_tokens, pair)
+            vocab = vocab + [merged_token]
+            merges = merges + [pair]
+            merge_count = merge_count + 1
+        }
+    }
+
+    return [vocab, merges]
+}
+
+// ===================================================================
+//  Encode text using trained vocab + merges
+//
+//  Returns array of token IDs.
+// ===================================================================
+fn bpe_encode_trained(text, vocab, merges) {
+    let mut tokens = text_to_chars(text)
+
+    // Apply merges in priority order
+    let n_merges = len(merges)
+    let mut mi = 0
+    while mi < n_merges {
+        tokens = merge_pair(tokens, merges[mi])
+        mi = mi + 1
+    }
+
+    // Map to IDs
+    let mut ids = []
+    let n_toks = len(tokens)
+    let mut i = 0
+    while i < n_toks {
+        let tok = tokens[i]
+        // Find in vocab
+        let mut found_id = 1   // UNK
+        let mut j = 0
+        while j < len(vocab) {
+            if vocab[j] == tok {
+                found_id = j
+                j = len(vocab)
+            }
+            j = j + 1
+        }
+        ids = ids + [found_id]
+        i = i + 1
+    }
+
+    return ids
+}
+
+// ===================================================================
+//  Decode token IDs back to text
+// ===================================================================
+fn bpe_decode_trained(ids, vocab) {
+    let n = len(ids)
+    let vocab_size = len(vocab)
+    let mut result = ""
+    let mut i = 0
+    while i < n {
+        let id = ids[i]
+        if id >= 0 {
+            if id < vocab_size {
+                let tok = vocab[id]
+                // Skip special tokens in output
+                if tok != SPECIAL_PAD {
+                    if tok != SPECIAL_BOS {
+                        if tok != SPECIAL_EOS {
+                            if tok != SPECIAL_UNK {
+                                result = result + tok
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    return result
+}
+
+// ===================================================================
+//  Save vocab + merges to path
+//  Format: JSON-like text file
+//    Line 1: vocab_size
+//    Lines 2..vocab_size+1: one token per line
+//    Line vocab_size+2: n_merges
+//    Remaining lines: "tok_a tok_b" per merge
+// ===================================================================
+fn save_vocab(vocab, merges, path) {
+    let n_vocab = len(vocab)
+    let n_merges = len(merges)
+    let mut content = str(n_vocab) + "\n"
+
+    let mut i = 0
+    while i < n_vocab {
+        content = content + vocab[i] + "\n"
+        i = i + 1
+    }
+
+    content = content + str(n_merges) + "\n"
+    i = 0
+    while i < n_merges {
+        content = content + merges[i][0] + "\t" + merges[i][1] + "\n"
+        i = i + 1
+    }
+
+    safe_write_file(path, content)
+    return true
+}
+
+// ===================================================================
+//  Load vocab + merges from path
+//  Returns [vocab, merges]
+// ===================================================================
+fn tt_load_vocab(path) {
+    let content = read_file(path)
+    let lines = content.split("\n")
+    let n_vocab = to_int(lines[0])
+
+    let mut vocab = []
+    let mut i = 1
+    while i <= n_vocab {
+        vocab = vocab + [lines[i]]
+        i = i + 1
+    }
+
+    let n_merges = to_int(lines[i])
+    i = i + 1
+    let mut merges = []
+    let mut mi = 0
+    while mi < n_merges {
+        let parts = lines[i + mi].split("\t")
+        if len(parts) >= 2 {
+            merges = merges + [[parts[0], parts[1]]]
+        }
+        mi = mi + 1
+    }
+
+    return [vocab, merges]
+}
+
+// ===================================================================
+//  Utility: get vocab size
+// ===================================================================
+fn trained_vocab_size(vocab) {
+    return len(vocab)
+}
+
+// ===================================================================
+//  Utility: check if token is special
+// ===================================================================
+fn is_special_token(token) {
+    if token == SPECIAL_PAD { return true }
+    if token == SPECIAL_UNK { return true }
+    if token == SPECIAL_BOS { return true }
+    if token == SPECIAL_EOS { return true }
+    return false
+}
+
+println("[tokenizer_trainer] loaded — BPE training from scratch + special tokens")
+
+
+// -- end inlined --
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn check(name, cond) {
+    if cond {
+        println("[PASS] " + name)
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name)
+        fail_count = fail_count + 1
+    }
+}
+
+println("===================================================================")
+println("  Tokenizer Trainer Test Suite")
+println("===================================================================")
+
+// ===================================================================
+//  T1: text_to_chars splits text into individual characters
+// ===================================================================
+let chars = text_to_chars("abc")
+check("T1 text_to_chars length=3", len(chars) == 3)
+check("T1b text_to_chars[0]='a'", chars[0] == "a")
+
+// ===================================================================
+//  T2: count_pairs finds bigram frequencies
+// ===================================================================
+let tokens2 = ["a", "b", "a", "b", "c"]
+let pairs2 = count_pairs(tokens2)
+// "a","b" appears twice, "b","a" once, "b","c" once
+check("T2 count_pairs finds pairs", len(pairs2) > 0)
+// First pair should be most frequent ("a","b" with count 2)
+let top_pair = pairs2[0]
+check("T2b most frequent pair count=2", top_pair[1] == 2)
+
+// ===================================================================
+//  T3: merge_pair merges occurrences
+// ===================================================================
+let tokens3 = ["a", "b", "c", "a", "b"]
+let merged3 = merge_pair(tokens3, ["a", "b"])
+// Should become ["ab", "c", "ab"]
+check("T3 merge_pair length reduced", len(merged3) == 3)
+check("T3b merged token = 'ab'", merged3[0] == "ab")
+
+// ===================================================================
+//  T4: merge_pair no match leaves unchanged
+// ===================================================================
+let merged4 = merge_pair(tokens3, ["x", "y"])
+check("T4 no-match merge unchanged", len(merged4) == 5)
+
+// ===================================================================
+//  T5: train_bpe produces vocab with special tokens
+// ===================================================================
+let texts = ["aaab", "aaab", "aab"]
+let result = train_bpe(texts, 15)
+let vocab = result[0]
+let merges = result[1]
+check("T5 vocab starts with [PAD]", vocab[0] == "[PAD]")
+check("T5b vocab[1] = [UNK]", vocab[1] == "[UNK]")
+check("T5c vocab[2] = [BOS]", vocab[2] == "[BOS]")
+check("T5d vocab[3] = [EOS]", vocab[3] == "[EOS]")
+
+// ===================================================================
+//  T6: train_bpe creates merges
+// ===================================================================
+check("T6 merges non-empty", len(merges) > 0)
+
+// ===================================================================
+//  T7: First merge should be most common pair
+// ===================================================================
+let first_merge = merges[0]
+// "aa" or "ab" should be among first merges since "a" is very frequent
+check("T7 first merge is a valid pair", len(first_merge) == 2)
+
+// ===================================================================
+//  T8: Encode-decode roundtrip
+// ===================================================================
+let test_text = "aab"
+let ids = bpe_encode_trained(test_text, vocab, merges)
+let decoded = bpe_decode_trained(ids, vocab)
+check("T8 encode-decode roundtrip", decoded == test_text)
+
+// ===================================================================
+//  T9: is_special_token detection
+// ===================================================================
+check("T9 [PAD] is special", is_special_token("[PAD]") == true)
+check("T9b 'hello' not special", is_special_token("hello") == false)
+
+// ===================================================================
+//  T10: trained_vocab_size correct
+// ===================================================================
+let vs = trained_vocab_size(vocab)
+check("T10 vocab_size matches len(vocab)", vs == len(vocab))
+
+// ===================================================================
+//  T11: initial_special_tokens has 4 entries
+// ===================================================================
+let specials = initial_special_tokens()
+check("T11 4 special tokens", len(specials) == 4)
+
+// ===================================================================
+//  T12: Single char text training
+// ===================================================================
+let result_single = train_bpe(["x"], 10)
+let vocab_single = result_single[0]
+let merges_single = result_single[1]
+check("T12 single char: no merges needed", len(merges_single) == 0)
+
+// ===================================================================
+//  T13: collect_byte_vocab finds unique chars
+// ===================================================================
+let bv = collect_byte_vocab(["aabbc"])
+check("T13 byte_vocab unique chars", len(bv) == 3)
+
+// ===================================================================
+//  T14: merge_pair handles consecutive pairs
+// ===================================================================
+let tokens14 = ["a", "a", "a"]
+let merged14 = merge_pair(tokens14, ["a", "a"])
+// "a","a","a" -> "aa","a" (greedy left-to-right merge)
+check("T14 consecutive merge: 3->2", len(merged14) == 2)
+
+// ===================================================================
+//  Summary
+// ===================================================================
+println("")
+println("pass=" + to_string(pass_count) + " fail=" + to_string(fail_count))
+if fail_count == 0 {
+    println("ALL PASS")
+} else {
+    println("FAILED")
+}
+println(to_string(pass_count) + " passed")

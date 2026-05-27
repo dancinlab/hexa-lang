@@ -1,0 +1,243 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  stdlib/test/test_semver.hexa
+//
+//  Selftest for stdlib/semver — SemVer 2.0.0 parse + compare + range-satisfy.
+//
+//  Validates (wilson session — core/loader.hexa loader_validate (f)/(g)):
+//    1. semver_parse — X.Y.Z, leading "v", -prerelease, +build, garbage
+//    2. semver_compare — numeric precedence + the SemVer §11 prerelease chain
+//    3. build metadata ignored for precedence
+//    4. semver_eq/gt/gte/lt/lte spot checks
+//    5. semver_satisfies — exact / ^ / ~ / x-range / >= < AND / || OR
+//    6. prerelease-in-range rule (npm-ish, simplified — see semver.hexa header)
+//    7. semver_max / semver_satisfying_max
+//
+//  Run:
+//      $HOME/.hx/bin/hexa_real run stdlib/test/test_semver.hexa
+//
+//  Exit semantics:
+//      * all asserts pass → "PASS: stdlib/semver selftest N/N"
+//      * any assert fails → "FAIL: ..." per case + exit(1)
+//
+//  No external dependencies (pure-hexa, no shell, no fs, no net).
+// ═══════════════════════════════════════════════════════════════════════════
+
+use "stdlib/semver"
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn chk_true(tag, cond) {
+    if cond {
+        println("  PASS " + tag)
+        pass_count = pass_count + 1
+    } else {
+        println("  FAIL " + tag + " (cond false)")
+        fail_count = fail_count + 1
+    }
+}
+
+fn chk_false(tag, cond) {
+    if !cond {
+        println("  PASS " + tag)
+        pass_count = pass_count + 1
+    } else {
+        println("  FAIL " + tag + " (cond true, want false)")
+        fail_count = fail_count + 1
+    }
+}
+
+fn chk_eq_int(tag, got, want) {
+    if got == want {
+        println("  PASS " + tag + " == " + to_string(want))
+        pass_count = pass_count + 1
+    } else {
+        println("  FAIL " + tag + " got=" + to_string(got) + " want=" + to_string(want))
+        fail_count = fail_count + 1
+    }
+}
+
+fn chk_eq_str(tag, got, want) {
+    if got == want {
+        println("  PASS " + tag + " == \"" + want + "\"")
+        pass_count = pass_count + 1
+    } else {
+        println("  FAIL " + tag + " got=\"" + got + "\" want=\"" + want + "\"")
+        fail_count = fail_count + 1
+    }
+}
+
+// helper: assert v < range (satisfies)
+fn sat(tag, v, r) { chk_true(tag, semver_satisfies(v, r)) }
+fn unsat(tag, v, r) { chk_false(tag, semver_satisfies(v, r)) }
+// helper: a < b strictly per semver_compare
+fn lt(tag, a, b) { chk_eq_int(tag, semver_compare(a, b), -1) }
+
+fn main() -> void {
+    println("── stdlib/semver selftest ──")
+
+    // ── 1. parse ──────────────────────────────────────────────────────────
+    let p1 = semver_parse("1.2.3")
+    chk_true("01_parse_basic_ok", p1["ok"])
+    chk_eq_int("02_parse_major", p1["major"], 1)
+    chk_eq_int("03_parse_minor", p1["minor"], 2)
+    chk_eq_int("04_parse_patch", p1["patch"], 3)
+    chk_eq_str("05_parse_pre_empty", p1["prerelease"], "")
+    chk_eq_str("06_parse_build_empty", p1["build"], "")
+
+    let p2 = semver_parse("v1.2.3")
+    chk_true("07_parse_leading_v_ok", p2["ok"])
+    chk_eq_int("08_parse_leading_v_minor", p2["minor"], 2)
+
+    let p3 = semver_parse("1.2.3-alpha.1")
+    chk_true("09_parse_pre_ok", p3["ok"])
+    chk_eq_str("10_parse_pre_str", p3["prerelease"], "alpha.1")
+    chk_eq_str("11_parse_pre_no_build", p3["build"], "")
+
+    let p4 = semver_parse("1.2.3-alpha.1+build.5")
+    chk_true("12_parse_pre_build_ok", p4["ok"])
+    chk_eq_str("13_parse_pre_build_pre", p4["prerelease"], "alpha.1")
+    chk_eq_str("14_parse_pre_build_build", p4["build"], "build.5")
+
+    let p5 = semver_parse("1.0.0-x.7.z.92")
+    chk_true("15_parse_spec_pre_ok", p5["ok"])
+    chk_eq_str("16_parse_spec_pre_str", p5["prerelease"], "x.7.z.92")
+
+    // "1.2" is NOT a valid *version* (only X.Y.Z) — see semver.hexa header.
+    chk_false("17_parse_partial_invalid", semver_parse("1.2")["ok"])
+    chk_false("18_parse_bare_major_invalid", semver_parse("1")["ok"])
+    // garbage
+    chk_false("19_parse_garbage_abc", semver_parse("abc")["ok"])
+    chk_false("20_parse_garbage_empty", semver_parse("")["ok"])
+    chk_false("21_parse_leading_zero", semver_parse("1.02.3")["ok"])
+    chk_false("22_parse_trailing_junk", semver_parse("1.2.3.4")["ok"])
+    chk_true("23_valid_helper_true", semver_valid("2.0.0"))
+    chk_false("24_valid_helper_false", semver_valid("nope"))
+
+    // ── 2. compare: numeric precedence ───────────────────────────────────
+    lt("25_cmp_1_lt_2", "1.0.0", "2.0.0")
+    lt("26_cmp_2.0_lt_2.1", "2.0.0", "2.1.0")
+    lt("27_cmp_2.1.0_lt_2.1.1", "2.1.0", "2.1.1")
+    chk_eq_int("28_cmp_equal", semver_compare("1.2.3", "1.2.3"), 0)
+    chk_eq_int("29_cmp_gt", semver_compare("2.0.0", "1.9.9"), 1)
+    // prerelease lower than release
+    lt("30_cmp_pre_lt_release", "1.0.0-alpha", "1.0.0")
+    // the canonical SemVer §11 chain
+    lt("31_chain_a", "1.0.0-alpha",      "1.0.0-alpha.1")
+    lt("32_chain_b", "1.0.0-alpha.1",    "1.0.0-alpha.beta")
+    lt("33_chain_c", "1.0.0-alpha.beta", "1.0.0-beta")
+    lt("34_chain_d", "1.0.0-beta",       "1.0.0-beta.2")
+    lt("35_chain_e", "1.0.0-beta.2",     "1.0.0-beta.11")
+    lt("36_chain_f", "1.0.0-beta.11",    "1.0.0-rc.1")
+    lt("37_chain_g", "1.0.0-rc.1",       "1.0.0")
+
+    // ── 3. build metadata ignored for precedence ─────────────────────────
+    chk_eq_int("38_build_ignored", semver_compare("1.0.0+build1", "1.0.0+build2"), 0)
+    chk_eq_int("39_build_vs_none", semver_compare("1.0.0+x", "1.0.0"), 0)
+
+    // ── 4. wrappers ──────────────────────────────────────────────────────
+    chk_true("40_eq",   semver_eq("1.2.3", "1.2.3"))
+    chk_false("41_eq_f", semver_eq("1.2.3", "1.2.4"))
+    chk_true("42_gt",   semver_gt("1.2.4", "1.2.3"))
+    chk_false("43_gt_f", semver_gt("1.2.3", "1.2.3"))
+    chk_true("44_gte_eq", semver_gte("1.2.3", "1.2.3"))
+    chk_true("45_gte_gt", semver_gte("1.3.0", "1.2.9"))
+    chk_false("46_gte_f", semver_gte("1.2.3", "1.2.4"))
+    chk_true("47_lt",   semver_lt("1.2.3", "1.2.4"))
+    chk_false("48_lt_f", semver_lt("1.2.3", "1.2.3"))
+    chk_true("49_lte_eq", semver_lte("1.2.3", "1.2.3"))
+    chk_true("50_lte_lt", semver_lte("1.2.3", "1.9.0"))
+    chk_false("51_lte_f", semver_lte("1.2.4", "1.2.3"))
+
+    // ── 5. satisfies: exact ──────────────────────────────────────────────
+    sat("52_exact_hit", "1.2.3", "1.2.3")
+    unsat("53_exact_miss", "1.2.4", "1.2.3")
+    sat("54_exact_eq_op", "1.2.3", "=1.2.3")
+    sat("55_exact_eqeq_op", "1.2.3", "==1.2.3")
+
+    // caret
+    sat("56_caret_eq",     "1.2.3", "^1.2.3")
+    sat("57_caret_minor",  "1.9.0", "^1.2.3")
+    sat("58_caret_patch",  "1.2.10", "^1.2.3")
+    unsat("59_caret_major","2.0.0", "^1.2.3")
+    unsat("60_caret_below","1.2.2", "^1.2.3")
+    // caret on 0.x: pins minor
+    sat("61_caret0_patch", "0.2.9", "^0.2.3")
+    unsat("62_caret0_minor","0.3.0", "^0.2.3")
+    // caret on 0.0.x: pins patch
+    sat("63_caret00_eq",   "0.0.3", "^0.0.3")
+    unsat("64_caret00_up", "0.0.4", "^0.0.3")
+    // caret partials
+    sat("65_caret_1",      "1.5.0", "^1")
+    unsat("66_caret_1_up", "2.0.0", "^1")
+    sat("67_caret_1_2",    "1.2.7", "^1.2")
+    sat("68_caret_1_2_minor","1.3.0", "^1.2")    // ^1.2 = >=1.2.0 <2.0.0 (major pinned)
+    unsat("68b_caret_1_2_up","2.0.0", "^1.2")
+
+    // tilde
+    sat("69_tilde_eq",     "1.2.3", "~1.2.3")
+    sat("70_tilde_patch",  "1.2.9", "~1.2.3")
+    unsat("71_tilde_minor","1.3.0", "~1.2.3")
+    unsat("72_tilde_below","1.2.2", "~1.2.3")
+    sat("73_tilde_1_2",    "1.2.0", "~1.2")
+    sat("74_tilde_1_2_p",  "1.2.99", "~1.2")
+    unsat("75_tilde_1_2_up","1.3.0", "~1.2")
+    sat("76_tilde_1",      "1.0.0", "~1")
+    sat("77_tilde_1_mid",  "1.9.9", "~1")
+    unsat("78_tilde_1_up", "2.0.0", "~1")
+
+    // comparators / AND
+    sat("79_and_in",       "1.5.0", ">=1.2.0 <2.0.0")
+    unsat("80_and_upper",  "2.0.0", ">=1.2.0 <2.0.0")
+    unsat("81_and_lower",  "0.9.0", ">=1.2.0 <2.0.0")
+    sat("82_gt",           "1.2.4", ">1.2.3")
+    unsat("83_gt_eq",      "1.2.3", ">1.2.3")
+    sat("84_lt",           "1.2.2", "<1.2.3")
+    unsat("85_lt_eq",      "1.2.3", "<1.2.3")
+    sat("86_le_eq",        "1.2.3", "<=1.2.3")
+    sat("87_ge_eq",        "1.2.3", ">=1.2.3")
+
+    // OR
+    sat("88_or_left",      "1.4.0", "^1.0.0 || ^2.0.0")
+    sat("89_or_right",     "2.3.0", "^1.0.0 || ^2.0.0")
+    unsat("90_or_neither", "3.0.0", "^1.0.0 || ^2.0.0")
+
+    // x-range / wildcard
+    sat("91_x_1x",         "1.7.2", "1.x")
+    unsat("92_x_1x_up",    "2.0.0", "1.x")
+    sat("93_x_12x",        "1.2.9", "1.2.x")
+    unsat("94_x_12x_up",   "1.3.0", "1.2.x")
+    sat("95_star_any1",    "0.0.1", "*")
+    sat("96_star_any2",    "99.99.99", "*")
+    sat("97_empty_range",  "1.2.3", "")
+    unsat("98_garbage_rng","1.2.3", "this is not a range ###")
+    unsat("99_garbage_ver","not-a-version", "^1.0.0")
+
+    // ── 6. prerelease-in-range rule (chosen: only same-tuple pre bound) ──
+    // stable range does NOT admit a prerelease version, even if in-window
+    unsat("100_pre_excluded", "1.2.3-alpha", "^1.0.0")
+    unsat("101_pre_excluded_star", "1.2.3-alpha", "*")
+    // a range with a prerelease bound on the SAME tuple admits it
+    sat("102_pre_admitted_same", "1.2.3-beta.2", ">=1.2.3-alpha <1.3.0")
+    // ...but a prerelease on a DIFFERENT tuple is still excluded
+    unsat("103_pre_excluded_other_tuple", "1.5.0-beta", ">=1.2.3-alpha <2.0.0")
+    // a stable version satisfies a range with a prerelease bound normally
+    sat("104_stable_with_pre_bound", "1.4.0", ">=1.2.3-alpha <2.0.0")
+
+    // ── 7. aggregates ────────────────────────────────────────────────────
+    chk_eq_str("105_max", semver_max(["1.0.0", "2.3.1", "2.3.0", "0.9.9"]), "2.3.1")
+    chk_eq_str("106_max_empty", semver_max([]), "")
+    chk_eq_str("107_max_with_pre", semver_max(["1.0.0-rc.1", "1.0.0", "1.0.0-beta"]), "1.0.0")
+    chk_eq_str("108_sat_max", semver_satisfying_max(["1.2.0", "1.4.0", "1.9.0", "2.0.0"], "^1.2.0"), "1.9.0")
+    chk_eq_str("109_sat_max_none", semver_satisfying_max(["2.0.0", "3.0.0"], "^1.0.0"), "")
+
+    // ── summary ──────────────────────────────────────────────────────────
+    let total = pass_count + fail_count
+    println("")
+    if fail_count == 0 {
+        println("PASS: stdlib/semver selftest " + to_string(pass_count) + "/" + to_string(total))
+    } else {
+        println("FAIL: stdlib/semver selftest " + to_string(pass_count) + "/" + to_string(total) + " (" + to_string(fail_count) + " failures)")
+        exit(1)
+    }
+}

@@ -1,0 +1,302 @@
+#!hexa strict
+// stdlib/hal/numerics_module_topology.hexa — F-HAL-1 T2 numerical.
+//
+// Closes the T2 (numerical / fixture) tier of falsifier F-HAL-1
+// (12 modules == σ(6); README.md "Falsifier preregister").
+//
+// T1 (calc_peripherals.hexa) closes the algebraic identity:
+//
+//   σ(6) = 12  ∧  σ·φ = n·τ = J₂ = 24
+//
+// using pure integer constants. T2 (this script) cross-checks the
+// SAME identities but reads them out of the on-disk module table —
+// every <module>.hexa must (a) exist, (b) declare a SIGMA_SLOT in
+// the canonical 0..11 range with no duplicates and no gaps, and
+// (c) declare a max_handles literal as the 4th field of its
+// `<x>_module_meta()` array literal that sums (across all 12
+// modules) to 4×10 + 24×2 = 88.
+//
+// Identities checked (numerically — read from source):
+//
+//   1. 12 module files present on disk.
+//   2. σ-slot set = {0..11}, contiguous, no gaps, no duplicates.
+//   3. Σ max_handles  = 4×10 + 24×2  = 88   (n·J₂·φ ≅ 88-handle floor).
+//   4. σ·φ            = 12·2          = 24   = J₂.
+//   5. n·τ            = 6·4           = 24   = J₂.
+//   6. 4 × σ(6)       = 4·12          = 48   = 2·J₂  (per-process handle space
+//                                                     when every module uses
+//                                                     the default 4-handle pool).
+//
+// PASS = every identity above holds against the on-disk module table.
+// FAIL = any module missing OR σ-slot collision/gap OR max_handles
+//        sum ≠ 88 OR algebraic identity drift.
+//
+// Run:
+//   hexa run stdlib/hal/numerics_module_topology.hexa
+//
+// Cost: $0 (12 file-reads + grep; no compilation).
+
+// ─── n=6 lattice constants (numerical references) ────────────────────
+
+let N        = 6
+let SIGMA_6  = 12
+let TAU_6    = 4
+let PHI_6    = 2
+let J2       = 24
+
+// expected sum: 10 default-pool modules × 4 + 2 extended (intr/dma) × 24
+let EXPECTED_HANDLE_SUM = 4 * 10 + 24 * 2     // = 88
+
+// expected per-process default-pool handle space: 4 × 12
+let EXPECTED_DEFAULT_SPACE = 4 * SIGMA_6      // = 48 = 2·J₂
+
+// ─── module roster (canonical 12, σ-slot order) ──────────────────────
+// NB: order MATTERS — index = expected σ-slot.
+
+let MODULES = [
+    "core",   // σ=0   digital
+    "gpio",   // σ=1   digital
+    "i2c",    // σ=2   digital
+    "spi",    // σ=3   digital
+    "uart",   // σ=4   digital
+    "adc",    // σ=5   analog
+    "dac",    // σ=6   analog
+    "pwm",    // σ=7   digital
+    "timer",  // σ=8   digital
+    "intr",   // σ=9   digital  (extends to J₂=24)
+    "dma",    // σ=10  digital  (extends to J₂=24)
+    "rtc"     // σ=11  digital
+]
+
+// ─── check harness ───────────────────────────────────────────────────
+
+let mut RUN  = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ─── helpers ─────────────────────────────────────────────────────────
+
+fn _root() -> str {
+    let env_root = env("HEXA_HAL_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _exists(p: str) -> bool {
+    let r = exec("[ -f \"" + p + "\" ] && echo y || echo n").trim()
+    return r == "y"
+}
+
+// Extract the integer value of `let SIGMA_SLOT = <int>` from a source.
+fn _extract_sigma_slot(src: str) -> int {
+    let pat = "let SIGMA_SLOT"
+    let idx = src.index_of(pat)
+    if idx < 0 { return -1 }
+    let mut i = idx + pat.len()
+    // skip past '='
+    while i < src.len() && src.char_at(i) != "=" { i = i + 1 }
+    if i >= src.len() { return -1 }
+    i = i + 1
+    // skip whitespace
+    while i < src.len() && (src.char_at(i) == " " || src.char_at(i) == "\t") { i = i + 1 }
+    // collect digits
+    let mut digits = ""
+    while i < src.len() {
+        let ch = src.char_at(i)
+        if ch >= "0" && ch <= "9" { digits = digits + ch } else { break }
+        i = i + 1
+    }
+    if digits.len() == 0 { return -1 }
+    return int(digits)
+}
+
+// Extract max_handles — the 4th field of <m>_module_meta()'s `return [...]`.
+// Canonical body is: return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "<n>"]
+// or                  return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, str(LIFECYCLE_STAGES.len())]
+// Either way the integer value is one of {4, 24}.
+fn _extract_max_handles(src: str, m: str) -> int {
+    let key = "fn " + m + "_module_meta"
+    let kidx = src.index_of(key)
+    if kidx < 0 { return -1 }
+    // Walk forward to "return ["
+    let pat = "return ["
+    let mut walk = kidx
+    while walk < src.len() {
+        // bounded scan; meta fns are short
+        if walk + pat.len() <= src.len() {
+            let slice = src.slice(walk, walk + pat.len())
+            if slice == pat { break }
+        }
+        walk = walk + 1
+    }
+    if walk >= src.len() { return -1 }
+    walk = walk + pat.len()
+    // walk to closing ']'
+    let mut commas = 0
+    let mut field4_start = -1
+    let mut i = walk
+    while i < src.len() {
+        let ch = src.char_at(i)
+        if ch == "]" { break }
+        if ch == "," {
+            commas = commas + 1
+            if commas == 3 { field4_start = i + 1 }
+        }
+        i = i + 1
+    }
+    if field4_start < 0 || field4_start >= i { return -1 }
+    // field4 is a string literal "4" / "24" or str(LIFECYCLE_STAGES.len())
+    let f4 = src.slice(field4_start, i).trim()
+    // Strip surrounding quotes if present
+    if f4.len() >= 2 && f4.char_at(0) == "\"" {
+        // "4" or "24"
+        let mut j = 1
+        let mut digits = ""
+        while j < f4.len() {
+            let ch = f4.char_at(j)
+            if ch >= "0" && ch <= "9" { digits = digits + ch } else { break }
+            j = j + 1
+        }
+        if digits.len() == 0 { return -1 }
+        return int(digits)
+    }
+    // str(LIFECYCLE_STAGES.len()) → 4 (canonical core.hexa convention)
+    if f4.contains("LIFECYCLE_STAGES.len()") { return TAU_6 }
+    return -1
+}
+
+// ─── checks ──────────────────────────────────────────────────────────
+
+fn check_module_count() {
+    _check(MODULES.len() == SIGMA_6,
+           "12 module roster == σ(6) = " + str(SIGMA_6),
+           "got " + str(MODULES.len()))
+}
+
+fn check_files_present(root: str) {
+    let mut n = 0
+    let mut missing = ""
+    for m in MODULES {
+        let p = root + "/stdlib/hal/" + m + ".hexa"
+        if _exists(p) { n = n + 1 }
+        else { missing = missing + m + " " }
+    }
+    _check(n == SIGMA_6,
+           "all 12 module files present on disk",
+           "got " + str(n) + "/12" + (if missing.len() > 0 { "; missing: " + missing } else { "" }))
+}
+
+fn check_sigma_slots_contiguous(root: str) {
+    // Collect SIGMA_SLOT values from each module file; verify they are
+    // exactly {0,1,...,11} as a set.
+    let mut seen: [int] = []
+    let mut bad = ""
+    let mut idx = 0
+    while idx < MODULES.len() {
+        let m = MODULES[idx]
+        let p = root + "/stdlib/hal/" + m + ".hexa"
+        if !_exists(p) {
+            bad = bad + m + "(missing) "
+        } else {
+            let src = read_file(p)
+            let s = _extract_sigma_slot(src)
+            if s < 0 {
+                bad = bad + m + "(no-slot) "
+            } else if s != idx {
+                bad = bad + m + "(slot=" + str(s) + ",want=" + str(idx) + ") "
+            } else {
+                seen = seen + [s]
+            }
+        }
+        idx = idx + 1
+    }
+    let ok = (seen.len() == SIGMA_6) && (bad.len() == 0)
+    _check(ok,
+           "σ-slot set = {0..11} contiguous, no gaps/dupes",
+           if bad.len() > 0 { "issues: " + bad } else { "got " + str(seen.len()) + " slots" })
+}
+
+fn check_handle_sum(root: str) {
+    // Σ max_handles across 12 modules must equal 4×10 + 24×2 = 88.
+    let mut sum = 0
+    let mut detail = ""
+    for m in MODULES {
+        let p = root + "/stdlib/hal/" + m + ".hexa"
+        if !_exists(p) { detail = detail + m + "=? "; continue }
+        let src = read_file(p)
+        let h = _extract_max_handles(src, m)
+        if h < 0 {
+            detail = detail + m + "=? "
+        } else {
+            sum = sum + h
+            detail = detail + m + "=" + str(h) + " "
+        }
+    }
+    _check(sum == EXPECTED_HANDLE_SUM,
+           "Σ max_handles = 4×10 + 24×2 = " + str(EXPECTED_HANDLE_SUM),
+           "got " + str(sum) + " (" + detail + ")")
+}
+
+fn check_sigma_phi_J2() {
+    let lhs = SIGMA_6 * PHI_6
+    _check(lhs == J2,
+           "σ·φ = " + str(SIGMA_6) + "·" + str(PHI_6) + " = " + str(J2) + " = J₂",
+           "got " + str(lhs))
+}
+
+fn check_n_tau_J2() {
+    let mid = N * TAU_6
+    _check(mid == J2,
+           "n·τ = " + str(N) + "·" + str(TAU_6) + " = " + str(J2) + " = J₂",
+           "got " + str(mid))
+}
+
+fn check_default_handle_space() {
+    // 4 × σ(6) = 48 = 2·J₂
+    let space = TAU_6 * SIGMA_6
+    let twoJ2 = 2 * J2
+    _check(space == EXPECTED_DEFAULT_SPACE && space == twoJ2,
+           "4·σ = " + str(EXPECTED_DEFAULT_SPACE) + " = 2·J₂ (default per-proc handle space)",
+           "got " + str(space))
+}
+
+// ─── main ────────────────────────────────────────────────────────────
+
+fn main() {
+    println("========================================================================")
+    println("  stdlib/hal — numerics_module_topology: F-HAL-1 T2 numerical")
+    println("========================================================================")
+    println("  σ-slot order: " + str(MODULES))
+    println("")
+
+    let root = _root()
+
+    check_module_count()
+    check_files_present(root)
+    check_sigma_slots_contiguous(root)
+    check_handle_sum(root)
+    check_sigma_phi_J2()
+    check_n_tau_J2()
+    check_default_handle_space()
+
+    println("")
+    println("  FALSIFIER:")
+    println("    ✗ F-HAL-1: 12 modules == σ(6)  (cross-checked numerically)")
+
+    let pass_n = RUN - FAIL
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_LANG_HAL_NUMERICS_MODULE_TOPOLOGY__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_LANG_HAL_NUMERICS_MODULE_TOPOLOGY__ PASS")
+    exit(0)
+}

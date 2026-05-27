@@ -1,0 +1,7 @@
+verify --expr sigma(496)=992
+  calc   = 992  == expected 992
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+  absorb = · already in atlas — idempotent skip (default · @D g69)
+---
+             2-op: sigma_k|jacobi|kronecker|dim_cusp_forms|ssh_winding  (extend _recompute on gap)
+             consensus3_outlier_count(x0,x1,x2) → outlier count    (leave-one-out 3σ Byzantine guard, NUCLEAR G2, 3-arg)

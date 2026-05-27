@@ -1,0 +1,190 @@
+/target/
+hexa_test
+hexa.prev*
+playground/pkg/
+hexa_old
+.growth/
+.DS_Store
+build/
+# baseline native interpreter source — must survive gitignore (SH-P3-1 소실 방지)
+!build/artifacts/hexa_native_baseline.c
+# bash wrapper shim — must survive gitignore so `git checkout` materializes
+# the tracked blob (PR #421 added this via `git add -f`).  Recurrence guard
+# vs (a) stale pre-#421 copies on older branches, (b) `git clean -fdx` wipe.
+# Cycle-8 PR #444 side-finding (anima 2026-05-23) traced root cause here.
+!hexa
+ready
+
+.claude/*
+!.claude/skills/
+!.claude/settings.json
+!.claude/hooks/
+!.claude/commands/
+
+# Python bytecode noise
+__pycache__/
+*.pyc
+
+# AOT build cache (hexa run)
+.hexa-cache/
+
+# GO M2/M3 — release precompile output dir (binaries staged at release time
+# by tool/build_precompile.hexa from tool/precompile.json; tarball-shipped,
+# not source-controlled — same provenance as build/).
+release/precompile/
+
+# Scratch space
+tmp/
+
+# hx install destinations for third-party packages (e.g. lib/yoga via `hx install yoga`)
+# Use a sibling-level negate so first-party dirs (e.g. lib/hxnccl) stay tracked.
+lib/*/
+!lib/hxnccl/
+!lib/hxpyembed/
+# Build artefacts inside first-party libs are still ignored.
+lib/hxnccl/build/
+lib/hxpyembed/build/
+
+# Rust baseline benchmark build artifacts (cargo target/)
+bench/rust_baseline/target/
+
+# Large data files (exceeds GitHub 100MB limit)
+shared/discovery_log.jsonl
+
+# Removed legacy Rust build (commits 08caf07 / 94ffd0f)
+src/
+Cargo.toml
+Cargo.lock
+.cargo/
+
+# Backup binaries / patched intermediates
+hexa.backup_*
+hexa.patched
+hexa.pre_fix*
+hexa.test
+self/*.bin.o
+
+# Scratch / debug / repro / probe files
+self/dbg_*.hexa
+self/mh_debug*.hexa
+self/_*.hexa
+self/arr_test*.hexa
+self/att_fn_test.hexa
+self/idx_test.hexa
+self/debug_*.hexa
+diag*.hexa
+self/interpreter.hexa.c
+
+# Claude Code memory (account-shared, local only)
+.claude-memory/
+
+# Backup snapshots of stage0/codegen (pre-regression checkpoints, local only)
+*.bak_*
+# Rust prebuilt shim at repo root (dev-only, built from hexa_v2 pipeline)
+hexa.real
+hexa.real.bak_*
+# SIGKILL-bypass shim copy of hexa.real (per memory
+# reference_hexa_driver_sigkill_bypass — external matcher kills hexa/hexa.real
+# basenames, hexadrv is the bypass name; built ad-hoc, not source-tracked).
+hexadrv
+# Staging artifact from hexa_v2 regen pipeline (canonical is hexa_cc.c)
+self/native/hexa_cc.c.new
+
+# R7 track B absorbed-verb sub-binaries — built via `hexa build stdlib/<verb>/<verb>.hexa`.
+# Arch-specific Mach-O / ELF, not source of truth. Rebuild with tool/build_hexa_<verb>.sh.
+bin/hexa-qrng
+bin/hexa-cloud
+bin/hexa-qmirror
+bin/hexa-sim-universe
+bin/hexa-convergence
+bin/hexa-test
+bin/hexa-check
+bin/hexa-verify
+bin/hexa-calc
+bin/hexa-lsp
+bin/hexa-atlas
+
+# R7 track B Phase 3/4 batch absorbed-verb binaries (build_absorbed_binaries.sh)
+bin/hexa-absorbed-*
+
+# Compiled module_loader (build pipeline helper, optional fast path).
+# Built via tool/build_hexa_module_loader.sh. Source is self/module_loader.hexa.
+build/hexa_module_loader
+
+# Local smoke/session artifacts (not tracked)
+shared/state/
+
+# Attr hook regen artifacts (superseded by scripts/hooks/)
+.attr-generated/
+
+# Transient native/smoke artifacts at repo root
+/err.log
+/launch_*.o
+
+# stage0 nightly rebuild backups (local-only safety copies)
+self/native/hexa_v2.pre_nightly_rebuild_*
+self/native/hexa_v2.pre_*
+
+# CANON M3: the transpiler is a build artifact (build/hexa_v2), built
+# per-machine from the arch-neutral C seed self/native/hexa_cc.c via
+# `hexa cc` (Go 1.4 C-seed model). No transpiler binary lives in git —
+# build/hexa_v2 is always arch-correct, closing the committed-binary
+# arch-leak class. M1 retired the suffixed variants; M3b dropped the
+# committed seeds (hexa_v2 / hexa_v2_linux_x86_64). All must stay out of git.
+self/native/hexa_v2
+self/native/hexa_v2_linux_x86_64
+self/native/hexa_v2_baseline
+self/native/hexa_v2_test
+self/native/hexa_v2_nobt71
+self/native/hexa_v2_pre71
+self/native/hexa_v2_rfc011
+
+# CANON M5/M8: repo-root deployed CLI driver — shim-preferred `hxv2` target
+# written by `tool/build_hexa_cli --install` (fallback `hexa.real`). Per-host
+# deploy artifact, not source — keep out of git.
+/hxv2
+
+# Compiled native shared libraries under self/native — built locally from
+# the .c/.cu sources in the same directory. Do not ship binaries.
+self/native/*.dylib
+self/native/*.so
+
+# BT-HEXA-28 Meta² fixpoint certificate chain — local-only (git history is
+# the team-wide record; the chain here is a per-host tamper-evidence log).
+.meta2-cert/
+
+# airgenome rig_trend consumer ephemeral advice (300s regenerated)
+.hook-advice.md
+
+# Claude Code UserPromptSubmit hook stack (per-session state, local only)
+.hook-commands/
+
+# statusline render telemetry (append-only, session-local)
+.hook-statusline.jsonl
+
+# Session scratch state dir (telemetry, per-run artifacts)
+state/*
+# Tracked SSOT docs that live under state/ (negate the blanket above)
+!state/merge_order.md
+# Per-test regression state (markers/ holds timestamp-suffixed runtime artifacts)
+test/regression/*/state/
+
+# Pre-Claude-Code snapshot backups (automatic safety copies)
+hexa.pre-cc-backup-*
+
+# Working-tree backup blanket patterns
+# git history is canonical recovery path; .bak* in working tree forbidden
+.roadmap.bak.*
+*.hexa.bak
+Dockerfile.bak.*
+# Timestamped backup snapshots (e.g. hexa.real.bak.1778419304) — local-only
+*.bak.*
+archive/
+
+# Jekyll/static site generator output for docs/ — source is the .md files
+docs/_site/
+/bin/hexa-daemon-serve
+self/runtime.o
+# root-anchored throwaway hexa_v2 compile target (was mis-ingested as a
+# CLAUDE.md project-instruction file — generated C, never source)
+/A

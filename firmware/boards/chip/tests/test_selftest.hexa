@@ -1,0 +1,61 @@
+#!hexa strict
+// tests/test_selftest.hexa — 29-verb directory sweep harness
+//
+// Pass criterion: __HEXA_CHIP_SELFTEST__ PASS sentinel present
+//                 AND all 29 verb directories enumerable.
+// Cost: $0 (read-only filesystem stat across 29 dirs).
+//
+// MIGRATED 2026-05-07: kick-spec one-liner read "28-verb / 7-group"; the
+// explicit hexa.toml verb_map enumerates 29 verbs across 6 groups. Test
+// now matches the line-by-line manifest (= 29) per hexa.toml + .roadmap.
+
+fn main() {
+    let mut root = env("HEXA_CHIP_ROOT")
+    if root.len() == 0 {
+        root = exec("pwd").trim()
+    }
+
+    // Enumerate the 29 expected verbs across 6 groups (mirror of cli/hexa-chip.hexa).
+    let verbs = [
+        // architecture (3)
+        "architecture", "isa_n6", "hexa1",
+        // design (5)
+        "design", "dse_pipeline", "rtl_gen", "eda", "verify_test",
+        // process (5)
+        "process", "materials", "wafer", "yield", "thermal_power",
+        // packaging (6)
+        "packaging", "advanced_packaging", "chip_3d", "hbm", "interconnect", "sc",
+        // accelerator (8)
+        "npu_n6", "pim", "photonic", "accel", "asic", "hexa_pim", "hexa_3d", "hexa_wafer",
+        // consciousness (2)
+        "conscious_chip", "conscious_soc"
+    ]
+
+    if verbs.len() != 29 {
+        println("test_selftest: FAIL — expected 29 verbs, got " + str(verbs.len()))
+        exit(1)
+    }
+
+    let mut missing: [str] = []
+    for v in verbs {
+        let p = root + "/" + v
+        let r = exec("[ -d \"" + p + "\" ] && echo y || echo n").trim()
+        if r != "y" { missing = missing + [v] }
+    }
+    if missing.len() > 0 {
+        println("test_selftest: FAIL — missing verb dirs:")
+        for m in missing { println("  - " + m) }
+        exit(1)
+    }
+
+    // Run the CLI selftest and look for the sentinel.
+    let cli = root + "/cli/hexa-chip.hexa"
+    let raw = exec("HEXA_CHIP_ROOT=\"" + root + "\" hexa run \"" + cli + "\" selftest 2>&1")
+    if raw.contains("__HEXA_CHIP_SELFTEST__ PASS") {
+        println("test_selftest: PASS — 29/29 verb dirs + sentinel present")
+        return
+    }
+    println("test_selftest: FAIL — sentinel missing")
+    println(raw.trim())
+    exit(1)
+}

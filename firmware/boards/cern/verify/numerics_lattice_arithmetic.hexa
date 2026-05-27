@@ -1,0 +1,232 @@
+#!hexa strict
+// hexa-cern/verify/numerics_lattice_arithmetic.hexa — float-arithmetic
+// cross-check of the n=6 lattice anchors.
+//
+// `verify/lattice_check.hexa` proves the n=6 closures using INTEGER
+// arithmetic (σ·φ = 12·2 = 24 etc.). This script repeats the same
+// derivations using `self/runtime/math_pure` floating-point routines
+// (sqrt_pure, pow_pure, log10_pure, exp_pure / log_pure) and asserts
+// they agree to sub-1e-9 relative error.
+//
+// Why this matters: the per-pillar numerics scripts (numerics_wakefield,
+// numerics_sigma_cascade, numerics_classical, …) compose math_pure
+// calls with these same n=6 anchors. If math_pure drifts on the
+// integer-equivalent anchors (e.g. sqrt(144) ≠ 12), every downstream
+// numeric is contaminated. This script gives that drift its own
+// regression slot.
+//
+// Run:
+//   hexa run verify/numerics_lattice_arithmetic.hexa
+//
+// @no-lock-needed
+
+use "self/runtime/math_pure"
+
+let HOME = env("HOME")
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ── n=6 lattice (canonical integer values) ──────────────────────────────
+let SIGMA_INT = 12
+let TAU_INT   = 4
+let PHI_INT   = 2
+let SOPFR_INT = 5
+let J2_INT    = 24
+let N_INT     = 6
+let SIGMA_PHI_INT = 10
+let SIGMA_SQ_INT  = 144
+let SIGMA_CUBED_INT = 1728
+
+// Float counterparts (build via math_pure where possible; cast otherwise)
+let SIGMA = 12.0
+let PHI   = 2.0
+let TAU   = 4.0
+let N     = 6.0
+
+// helper: relative error |a - b| / |b|
+fn rel_err(a: float, b: float) -> float {
+    let d = a - b
+    let abs_d = if d < 0.0 { -d } else { d }
+    let abs_b = if b < 0.0 { -b } else { b }
+    if abs_b == 0.0 { return abs_d }
+    return abs_d / abs_b
+}
+
+let TOL = 1.0e-9
+
+// ── checks ──────────────────────────────────────────────────────────────
+
+// Check 1 — sqrt(σ²) = σ
+fn check_sqrt_of_sigma_squared() {
+    let v = sqrt_pure(SIGMA * SIGMA)
+    let err = rel_err(v, SIGMA)
+    _check(err < TOL,
+           "sqrt_pure(σ²) = σ  (sqrt(144) = 12)",
+           "v = " + str(v) + ", expected " + str(SIGMA) + ", rel err = " + str(err))
+}
+
+// Check 2 — pow(σ, 2) = σ²
+fn check_pow_sigma_2() {
+    let v = pow_pure(SIGMA, 2.0)
+    let err = rel_err(v, 144.0)
+    _check(err < TOL,
+           "pow_pure(σ, 2) = 144",
+           "v = " + str(v) + ", rel err = " + str(err))
+}
+
+// Check 3 — pow(σ, 3) = Ω_ACCEL = 1728 (FCC envelope)
+fn check_pow_sigma_3() {
+    let v = pow_pure(SIGMA, 3.0)
+    let err = rel_err(v, 1728.0)
+    _check(err < TOL,
+           "pow_pure(σ, 3) = 1728  (Ω_ACCEL FCC envelope)",
+           "v = " + str(v) + ", rel err = " + str(err))
+}
+
+// Check 4 — pow(σ-φ, n) = (σ-φ)^n = 10^6
+fn check_pow_sigma_phi_n() {
+    let v = pow_pure(SIGMA - PHI, N)
+    let err = rel_err(v, 1.0e6)
+    _check(err < TOL,
+           "pow_pure(σ-φ, n) = 10^6  (canonical span statement)",
+           "v = " + str(v) + ", rel err = " + str(err))
+}
+
+// Check 5 — log10(10^7) = 7  (chain decade ladder)
+fn check_log10_chain_span() {
+    let v = log10_pure(1.0e7)
+    let err = rel_err(v, 7.0)
+    _check(err < TOL,
+           "log10_pure(10^7) = 7  (E_6/E_0 chain span)",
+           "v = " + str(v) + ", rel err = " + str(err))
+}
+
+// Check 6 — log10(σ²) = 2·log10(σ)
+fn check_log_homomorphism() {
+    let lhs = log10_pure(144.0)
+    let rhs = 2.0 * log10_pure(SIGMA)
+    let err = rel_err(lhs, rhs)
+    _check(err < TOL,
+           "log10(σ²) = 2·log10(σ)  (homomorphism on n=6 anchor)",
+           "lhs = " + str(lhs) + ", rhs = " + str(rhs))
+}
+
+// Check 7 — exp(log(σ)) = σ  (roundtrip stability)
+fn check_exp_log_roundtrip_sigma() {
+    let v = exp_pure(log_pure(SIGMA))
+    let err = rel_err(v, SIGMA)
+    _check(err < TOL,
+           "exp(log(σ)) = σ  (roundtrip)",
+           "v = " + str(v) + ", rel err = " + str(err))
+}
+
+// Check 8 — sqrt(σ³) ≈ σ^(3/2)
+fn check_sqrt_pow_consistency() {
+    let lhs = sqrt_pure(pow_pure(SIGMA, 3.0))
+    let rhs = pow_pure(SIGMA, 1.5)
+    let err = rel_err(lhs, rhs)
+    _check(err < TOL,
+           "sqrt(σ³) = σ^(3/2)  (cross-consistency)",
+           "lhs = " + str(lhs) + ", rhs = " + str(rhs))
+}
+
+// Check 9 — float n=6 closure: σ·φ = n·τ = J₂ = 24
+fn check_n6_closure_float() {
+    let lhs = SIGMA * PHI
+    let mid = N * TAU
+    let j2  = 24.0
+    _check(lhs == j2 && mid == j2 && lhs == mid,
+           "float n=6 closure: σ·φ = n·τ = J₂ = 24",
+           "lhs = " + str(lhs) + ", mid = " + str(mid))
+}
+
+// Check 10 — the integer-arithmetic anchors agree with the float-derived
+// values to integer precision.  This is the cross-tier sanity check.
+fn check_int_vs_float_parity() {
+    let s_sq_float = pow_pure(SIGMA, 2.0)
+    let s_cu_float = pow_pure(SIGMA, 3.0)
+    let ok_sq = (int_of(s_sq_float) == SIGMA_SQ_INT)
+    let ok_cu = (int_of(s_cu_float) == SIGMA_CUBED_INT)
+    _check(ok_sq && ok_cu,
+           "int(σ²) == 144 AND int(σ³) == 1728  (float casts back to integer anchors)",
+           "int(σ²) = " + str(int_of(s_sq_float)) + ", int(σ³) = " + str(int_of(s_cu_float)))
+}
+
+fn int_of(x: float) -> int {
+    return int(x)
+}
+
+// Check 11 — Tevatron seed σ·J₂ = 288 GeV via float
+fn check_tevatron_float() {
+    let v = SIGMA * 24.0
+    let err = rel_err(v, 288.0)
+    _check(err < TOL,
+           "σ·J₂ = 288 GeV (Tevatron seed, float)",
+           "v = " + str(v))
+}
+
+// Check 12 — sopfr(6) numerical: σ·φ - n·φ = 24 - 12 = 12 = σ — sanity
+//   identity that connects sopfr·φ to other anchors.
+//
+//   Actually use: sopfr · φ = 5 · 2 = 10 = σ - φ
+fn check_sopfr_relation() {
+    let sopfr = 5.0
+    let v = sopfr * PHI
+    let err = rel_err(v, SIGMA - PHI)
+    _check(err < TOL,
+           "sopfr(6)·φ(6) = σ - φ = 10  (cascade seed identity)",
+           "v = " + str(v))
+}
+
+let FALSIFIERS = [
+    "any rel err > 1e-9 on n=6 anchor -> math_pure precision regression",
+    "int(pow(σ,2)) ≠ 144 -> float→int cast broken on integer-valued anchors",
+    "exp(log(σ)) ≠ σ -> exp/log roundtrip drifted (numerics tower compromised)",
+    "log10(σ²) ≠ 2·log10(σ) -> homomorphism property breaks (not a logarithm)",
+    "sqrt(144) ≠ 12 -> sqrt routine broken on the most-exercised anchor",
+]
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-cern — n=6 lattice float-arithmetic cross-check (math_pure)")
+    println("  (catches numerical drift on anchors used by every numerics_*.hexa)")
+    println("========================================================================")
+    println("")
+    println("  tolerance: rel err < " + str(TOL))
+    println("")
+
+    check_sqrt_of_sigma_squared()
+    check_pow_sigma_2()
+    check_pow_sigma_3()
+    check_pow_sigma_phi_n()
+    check_log10_chain_span()
+    check_log_homomorphism()
+    check_exp_log_roundtrip_sigma()
+    check_sqrt_pow_consistency()
+    check_n6_closure_float()
+    check_int_vs_float_parity()
+    check_tevatron_float()
+    check_sopfr_relation()
+
+    println("")
+    println("  FALSIFIERS (" + str(len(FALSIFIERS)) + "):")
+    for f in FALSIFIERS { println("    ✗ " + f) }
+    println("========================================================================")
+    let pass_n = RUN - FAIL
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_CERN_NUMERICS_LATTICE_ARITHMETIC__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_CERN_NUMERICS_LATTICE_ARITHMETIC__ PASS — math_pure agrees with integer anchors")
+    exit(0)
+}

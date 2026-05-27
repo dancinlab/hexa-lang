@@ -1,0 +1,69 @@
+// tool/probe_logsumexp_f64.hexa — §5j custom-reduction milestone (LogSumExp)
+//
+// Demonstrates a "custom reduction" that cuBLAS cannot express: LogSumExp,
+//   LSE(a) = m + log( sum_i exp(a_i - m) ),  m = max_i a_i
+// composed from three already-landed silicon idioms — block tree-reduce
+// (PR #1323 / probe_shared_f32), f64 exp polynomial (PR #1333), and f64 log
+// (PR #1429) — inside a single @gpu_kernel. cuBLAS has only SUM/MAX; the
+// numerically-stable max-shift + exp + log + sum chain is hand-emitted here.
+//
+// Kernel: single block, N=256, blockDim=256, gridDim=1.
+//   1. tree-reduce MAX over a[0..n) -> sm[0] = m (broadcast via shared)
+//   2. sm[tid] = exp(a[tid] - m)
+//   3. tree-reduce SUM -> sm[0]
+//   4. out[0] = m + log(sm[0])
+// Host compares out[0] to CPU libm LSE; tolerance 1e-7.
+
+@gpu_kernel
+fn probe_logsumexp_f64(a: [f64], out: [f64], n: i64) {
+    @shared let sm: [f64; 256] = []
+    let mut tid: i64 = to_i64(gpu_thread_id_x())
+
+    // load for max-reduce. pad lanes >= n with a[0] (a valid element <= max,
+    // so the max is unchanged). a[0] avoids a unary-neg literal sentinel —
+    // NVPTX codegen does not yet emit unop(neg) (see INBOX 2026-05-27).
+    if tid < n {
+        sm[to_i64(tid)] = a[to_i64(tid)]
+    } else {
+        sm[to_i64(tid)] = a[0]
+    }
+    gpu_barrier()
+
+    // tree max-reduce
+    let mut stride: i64 = 128
+    while stride > 0 {
+        if tid < stride {
+            let x: f64 = sm[to_i64(tid)]
+            let y: f64 = sm[to_i64(tid) + stride]
+            if y > x {
+                sm[to_i64(tid)] = y
+            }
+        }
+        gpu_barrier()
+        stride = stride / 2
+    }
+
+    // broadcast max to every lane via shared, then re-stage exp(a - m)
+    let m: f64 = sm[0]
+    gpu_barrier()
+    if tid < n {
+        sm[to_i64(tid)] = exp(a[to_i64(tid)] - m)
+    } else {
+        sm[to_i64(tid)] = 0.0
+    }
+    gpu_barrier()
+
+    // tree sum-reduce
+    stride = 128
+    while stride > 0 {
+        if tid < stride {
+            sm[to_i64(tid)] = sm[to_i64(tid)] + sm[to_i64(tid) + stride]
+        }
+        gpu_barrier()
+        stride = stride / 2
+    }
+
+    if tid == 0 {
+        out[0] = m + log(sm[0])
+    }
+}

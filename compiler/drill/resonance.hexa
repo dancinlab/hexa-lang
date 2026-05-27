@@ -1,0 +1,86 @@
+// HEXA Native Compiler — Phase 3 drill spine: stage 5 resonance
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Stochastic-resonance stage 5 from cmd_drill (~/core/nexus/cli/run.hexa
+// line 3671-3712). Upstream loops a σ grid (0.01, 0.05, 0.10, 0.20, 0.40)
+// driving the blowup core with perturbed seeds and picks the σ with the
+// highest discovery count. This absorbed surface keeps the σ-best
+// selection contract but the "engine" is a closed-form deterministic
+// proxy — no subprocess, no real perturbation prover. The upstream
+// stage is dominated by Brownian agitation; the contract that matters
+// to callers (drill.hexa) is `(r_best, sigma_best)`, not the noise
+// quality.
+//
+// Public surface:
+//   pub struct ResonanceResult { count, sigma }
+//   pub fn resonance_run(seed: string, round: i64, rd: i64) -> ResonanceResult
+//
+// Depth contract (matches upstream):
+//   rd == 1 → 1 σ probed (0.10)
+//   rd == 2 → 3 σ probed (0.01, 0.10, 0.40)
+//   rd >= 3 → 5 σ probed (full grid)
+//
+// Catalog/diagnostic strings: ENGLISH ONLY.
+
+pub struct ResonanceResult {
+    count: i64,         // best-σ absorption count
+    sigma: string       // sigma string, e.g. "0.10"
+}
+
+// FNV-1a-ish 32-bit hash over a string. Keeps the resonance proxy
+// deterministic per (seed, round, sigma) without pulling /dev/urandom
+// (the upstream `_urand_i64()` is replaced here by a pure mixer — drill
+// determinism in the absorbed surface is a feature, not a regression).
+fn _resonance_hash(seed: string, round: i64, sigma: string) -> i64 {
+    let mut h: i64 = 2166136261
+    let mut i = 0
+    let n = len(seed)
+    while i < n {
+        let b = char_code(seed, i)
+        h = (h ^ b) * 16777619
+        i = i + 1
+    }
+    h = (h ^ round) * 16777619
+    let mut j = 0
+    let ns = len(sigma)
+    while j < ns {
+        let sb = char_code(sigma, j)
+        h = (h ^ sb) * 16777619
+        j = j + 1
+    }
+    // bring to 0..63 — small absorption counts (matches upstream ~ 0..30).
+    if h < 0 { h = -h }
+    return h % 64
+}
+
+// Probe a single σ — returns the proxy absorption count.
+fn _resonance_probe(seed: string, round: i64, sigma: string) -> i64 {
+    return _resonance_hash(seed, round, sigma)
+}
+
+// Main entry. Picks the σ with the highest probe count.
+pub fn resonance_run(seed: string, round: i64, rd: i64) -> ResonanceResult {
+    if rd <= 0 {
+        return ResonanceResult { count: 0, sigma: "0.10" }
+    }
+
+    let mut best = _resonance_probe(seed, round, "0.10")
+    let mut bsig = "0.10"
+
+    if rd >= 2 {
+        let r001 = _resonance_probe(seed, round, "0.01")
+        let r040 = _resonance_probe(seed, round, "0.40")
+        if r001 > best { best = r001; bsig = "0.01" }
+        if r040 > best { best = r040; bsig = "0.40" }
+    }
+    if rd >= 3 {
+        let r005 = _resonance_probe(seed, round, "0.05")
+        let r020 = _resonance_probe(seed, round, "0.20")
+        if r005 > best { best = r005; bsig = "0.05" }
+        if r020 > best { best = r020; bsig = "0.20" }
+    }
+
+    return ResonanceResult { count: best, sigma: bsig }
+}

@@ -1,0 +1,233 @@
+// F3 firmware test — target_gate_check / HX1110 enforcement.
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Hand-builds a Module shaped like
+//
+//     import "stdlib/core/int"      // OK
+//     import "stdlib/io"            // SHOULD FAIL with HX1110
+//     fn main() { /* placeholder */ }
+//
+// then runs `target_gate_check(module, "thumbv7em-none-eabihf")` and
+// asserts:
+//   * exactly one HX1110 diagnostic is emitted
+//   * the diagnostic targets `stdlib/io` (not `stdlib/core/int`)
+//   * the message names the offending path AND the current target
+//   * a non-embedded target (e.g. `arm64-apple-darwin`) emits zero
+//     diagnostics for the same module → gate is target-shape gated
+//
+// Driven by stage0 hexa interpreter (no host MCU / qemu required):
+//   RESOURCE_LOCAL_HEXA=1 hexa_interp run tests/firmware/blink_test.hexa
+//
+// Exit codes: 0 = PASS, 1 = FAIL.
+
+import "../../compiler/lex/tokens.hexa"
+import "../../compiler/parse/ast.hexa"
+import "../../compiler/diag/catalog.hexa"
+import "../../compiler/check/target_gate.hexa"
+
+// ── AST construction helpers ────────────────────────────────
+
+fn _span(line: i64) -> Span {
+    return Span {
+        file: "tests/firmware/blink.hexa",
+        line: line,
+        col: 1,
+        len: 1
+    }
+}
+
+fn _empty_type() -> TypeRef {
+    return TypeRef { kind: "named", name: "", args: [], span: _span(0) }
+}
+
+fn _empty_expr() -> Expr {
+    return Expr {
+        kind: ExprKind::Block,
+        span: _span(0),
+        text: "",
+        children: [],
+        atlas_ref: AtlasRef { kind: "", id: "", span: _span(0) }
+    }
+}
+
+fn _import(path: string, line: i64) -> Item {
+    return Item {
+        kind: ItemKind::Import,
+        name: path,
+        span: _span(line),
+        annotations: [],
+        params: [],
+        return_type: _empty_type(),
+        body: _empty_expr(),
+        is_pub: false
+    }
+}
+
+fn _fn_main_placeholder() -> Item {
+    return Item {
+        kind: ItemKind::Fn,
+        name: "main",
+        span: _span(4),
+        annotations: [],
+        params: [],
+        return_type: _empty_type(),
+        body: _empty_expr(),
+        is_pub: false
+    }
+}
+
+fn _build_module() -> Module {
+    let mut items = []
+    items.push(_import("stdlib/core/int", 1))
+    items.push(_import("stdlib/io", 2))
+    items.push(_fn_main_placeholder())
+
+    let mut imps = []
+    imps.push("stdlib/core/int")
+    imps.push("stdlib/io")
+
+    return Module {
+        file: "tests/firmware/blink.hexa",
+        items: items,
+        imports: imps
+    }
+}
+
+// ── Substring helper ────────────────────────────────────────
+
+fn _contains(hay: string, needle: string) -> bool {
+    let h = hay.chars()
+    let n = needle.chars()
+    let hn = len(h)
+    let nn = len(n)
+    if nn == 0 { return true }
+    if nn > hn { return false }
+    let mut i = 0
+    while i + nn < hn + 1 {
+        let mut j = 0
+        let mut ok = true
+        while j < nn {
+            if h[i + j] != n[j] {
+                ok = false
+                break
+            }
+            j = j + 1
+        }
+        if ok { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// ── Severity → string ───────────────────────────────────────
+
+fn _is_error(s: Severity) -> bool {
+    return match s {
+        Severity::Error -> true,
+        Severity::Warning -> false,
+        Severity::Note -> false
+    }
+}
+
+// ── Driver ──────────────────────────────────────────────────
+
+fn main() {
+    println("══════════════════════════════════════════════")
+    println("  F3 — target_gate_check / HX1110 enforcement")
+    println("══════════════════════════════════════════════")
+
+    let mod_ = _build_module()
+
+    // ── Embedded target: HX1110 expected for stdlib/io ──
+    println("")
+    println("── --target=thumbv7em-none-eabihf ──")
+    let diags_emb = target_gate_check(mod_, "thumbv7em-none-eabihf")
+    println("  emitted " + to_string(len(diags_emb)) + " diagnostic(s)")
+
+    let mut ok = true
+
+    if len(diags_emb) != 1 {
+        println("  FAIL: expected exactly 1 HX1110, got " + to_string(len(diags_emb)))
+        ok = false
+    } else {
+        let d = diags_emb[0]
+        println("  diag: " + d.code + " " + d.message)
+        if d.code != "HX1110" {
+            println("  FAIL: expected HX1110, got " + d.code)
+            ok = false
+        } else { println("  ok: HX1110 emitted") }
+        if !_is_error(d.severity) {
+            println("  FAIL: HX1110 should have Error severity")
+            ok = false
+        } else { println("  ok: severity = Error") }
+        if !_contains(d.message, "stdlib/io") {
+            println("  FAIL: HX1110 message does not name `stdlib/io`")
+            ok = false
+        } else { println("  ok: message names stdlib/io") }
+        if !_contains(d.message, "thumbv7em-none-eabihf") {
+            println("  FAIL: HX1110 message does not name target")
+            ok = false
+        } else { println("  ok: message names thumbv7em-none-eabihf") }
+        // The `stdlib/core/int` import must NOT have triggered HX1110.
+        if _contains(d.message, "stdlib/core/int") {
+            println("  FAIL: HX1110 wrongly fired on stdlib/core/int")
+            ok = false
+        } else { println("  ok: stdlib/core/int passed gate") }
+    }
+
+    // ── Non-embedded target: gate should be silent ──
+    println("")
+    println("── --target=arm64-apple-darwin (gate disabled) ──")
+    let diags_host = target_gate_check(mod_, "arm64-apple-darwin")
+    println("  emitted " + to_string(len(diags_host)) + " diagnostic(s)")
+    if len(diags_host) != 0 {
+        println("  FAIL: gate fired on non-embedded target")
+        ok = false
+    } else { println("  ok: gate silent on host target") }
+
+    // ── Predicate sanity ──
+    println("")
+    println("── predicate sanity ──")
+    if !is_embedded_target("thumbv7em-none-eabihf") {
+        println("  FAIL: thumbv7em-none-eabihf must be embedded")
+        ok = false
+    } else { println("  ok: thumbv7em-none-eabihf is embedded") }
+    if is_embedded_target("arm64-apple-darwin") {
+        println("  FAIL: arm64-apple-darwin must NOT be embedded")
+        ok = false
+    } else { println("  ok: arm64-apple-darwin is host") }
+    if !is_embedded_safe_stdlib("stdlib/core/int") {
+        println("  FAIL: stdlib/core/int must be embedded-safe")
+        ok = false
+    } else { println("  ok: stdlib/core/int embedded-safe") }
+    if is_embedded_safe_stdlib("stdlib/io") {
+        println("  FAIL: stdlib/io must NOT be embedded-safe")
+        ok = false
+    } else { println("  ok: stdlib/io is host-only") }
+    if !is_host_stdlib_import("stdlib/io") {
+        println("  FAIL: stdlib/io must be a host import")
+        ok = false
+    } else { println("  ok: stdlib/io flagged as host") }
+    if is_host_stdlib_import("stdlib/core/int") {
+        println("  FAIL: stdlib/core/int must NOT be a host import")
+        ok = false
+    } else { println("  ok: stdlib/core/int passes (not host)") }
+    // Relative imports must never be flagged — the gate is for stdlib only.
+    if is_host_stdlib_import("./mymod.hexa") {
+        println("  FAIL: relative imports must not be flagged")
+        ok = false
+    } else { println("  ok: relative imports skip the gate") }
+
+    println("")
+    println("══════════════════════════════════════════════")
+    if ok {
+        println("PASS: target_gate_check / HX1110 contract OK.")
+        println("══════════════════════════════════════════════")
+        exit(0)
+    }
+    println("FAIL: target_gate_check contract not satisfied.")
+    println("══════════════════════════════════════════════")
+    exit(1)
+}

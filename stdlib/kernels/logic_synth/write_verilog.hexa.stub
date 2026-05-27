@@ -1,0 +1,51 @@
+#!hexa strict
+// stdlib/yosys/write_verilog.hexa — RTLIL → gate-level Verilog backend (CLEAN-ROOM skeleton)
+//
+// @version 0.0.1-skeleton
+// @capabilities [backend, verilog, emit, gate-netlist]
+// @stability skeleton (rfc_006 §4 module-6 of 7; bodies pending §5 gate)
+// @since 2026-05-19
+//
+// CLEAN-ROOM PROVENANCE (design.md Decision 1 — public-surface clean-room)
+//   This module re-derives the *public surface* of Yosys' Verilog
+//   backend (mapped/gate-netlist emission only) by inspection of
+//   upstream + manual + IEEE 1364-2005 standard wording. No upstream
+//   code is copied.
+//
+//   - upstream code     : backends/verilog/verilog_backend.cc
+//                          (RTLIL → Verilog text emitter; mapped + RTL
+//                           variants — this module covers the *mapped*
+//                           variant only for gate §5 scope)
+//   - upstream manual   : https://yosyshq.readthedocs.io/projects/yosys/
+//                          en/latest/cmd/write_verilog.html
+//   - upstream license  : ISC (YosysHQ; LICENSE)
+//   - upstream repo     : https://github.com/YosysHQ/yosys
+//   - IEEE ref (norm)   : IEEE Std 1364-2005 §3-12 (lexical + grammar
+//                          for the output language; used only as the
+//                          standardized output spec)
+//
+// rfc_006 §4: module-6 of 7. Consumes the mapped-RTLIL design
+// produced by abc_map (after passes + liberty + abc_map) and emits a
+// gate-level Verilog netlist that downstream EDA tools (open or
+// commercial) can consume. Mapped-only scope: every cell is a
+// reference to a Liberty cell instance; no behavioral always-blocks
+// in the output.
+//
+// Output convention (rfc_006 §4 + IEEE 1364-2005):
+//   one `module` block per RTLIL Module, gate cells emitted as
+//   instance bindings with named ports (.A(...), .Y(...)),
+//   wire declarations explicit, no `defparam`, no behavioral
+//   constructs. Deterministic ordering: modules in user-supplied
+//   order; within a module, wires then cells, each block sorted by
+//   name for byte-stable output.
+
+fn main() {
+    // Skeleton phase — no body landed yet (rfc_048 raw-91 doctrine).
+    // Self-test will: round-trip a known mapped RTLIL fixture through
+    // write_verilog and re-parse with read_verilog, assert structural
+    // equivalence (same module set, same cell list per module, same
+    // port bindings); plus byte-stability check (two emissions of the
+    // same design produce identical output).
+    println("stdlib/yosys/write_verilog.hexa: TBD-STUB (rfc_006 §4 module-6)");
+    exit(91);  // rfc_048 raw-91 — TBD-stub-hit, do not wire in
+}

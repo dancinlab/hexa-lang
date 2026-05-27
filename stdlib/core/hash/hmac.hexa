@@ -1,0 +1,243 @@
+// HEXA Standard Library — hash/hmac
+//
+// @version 0.1.0
+// @capabilities [pure, crypto]
+//
+// HMAC-SHA256 (RFC 2104 / FIPS 198-1) — closes the byte-level HMAC gap
+// surfaced by archive/patches/phanes-aws-sigv4-signer-for-stdlib.md.
+//
+// Why a byte-level surface is required:
+//   The pre-existing `hmac_sha256` in self/std_crypto.hexa is string-in /
+//   hex-out. AWS SigV4 step 3 chains HMAC outputs *as keys* — each link's
+//   32 raw output bytes become the next link's key. Feeding a 64-char hex
+//   STRING as that key (then re-byte-ifying it) silently derives the wrong
+//   signing key. SigV4 (and any other HMAC-key-chain protocol) needs the
+//   raw-bytes-in / raw-bytes-out form.
+//
+// Public API:
+//   pub fn hmac_sha256_bytes(key: [int], data: [int]) -> [int]
+//       key + data are raw byte arrays (0..255). Returns the 32-byte MAC.
+//   pub fn hmac_sha256_hex(key: [int], data: [int]) -> string
+//       same, but returns the lowercase 64-char hex digest.
+//
+// This module carries its own pure-hexa SHA-256-over-bytes core because
+// the runtime `sha256` builtin is string-in / hex-out only and cannot be
+// fed the intermediate ipad/opad byte blocks. The block function below is
+// FIPS 180-4 and is verified byte-equal to the runtime builtin in the
+// companion hmac_test.hexa (empty-string + "abc" vectors).
+//
+// @cite FIPS 198-1 (HMAC) · FIPS 180-4 (SHA-256) · RFC 2104 / RFC 4231
+
+// ── SHA-256 round constants (FIPS 180-4 §4.2.2) ──────────────────────
+let HMAC_SHA256_K = [
+    1116352408, 1899447441, 3049323471, 3921009573, 961987163, 1508970993, 2453635748, 2870763221,
+    3624381080, 310598401, 607225278, 1426881987, 1925078388, 2162078206, 2614888103, 3248222580,
+    3835390401, 4022224774, 264347078, 604807628, 770255983, 1249150122, 1555081692, 1996064986,
+    2554220882, 2821834349, 2952996808, 3210313671, 3336571891, 3584528711, 113926993, 338241895,
+    666307205, 773529912, 1294757372, 1396182291, 1695183700, 1986661051, 2177026350, 2456956037,
+    2730485921, 2820302411, 3259730800, 3345764771, 3516065817, 3600352804, 4094571909, 275423344,
+    430227734, 506948616, 659060556, 883997877, 958139571, 1322822218, 1537002063, 1747873779,
+    1955562222, 2024104815, 2227730452, 2361852424, 2428436474, 2756734187, 3204031479, 3329325298
+]
+
+// ── 32-bit bit helpers ───────────────────────────────────────────────
+// Uses the language's native bitwise operators (& | ^ << >>). All words
+// are kept in the unsigned 32-bit range by masking with 0xFFFFFFFF.
+let HMAC_MASK32 = 4294967295
+
+// @cite FIPS 180-4 §3.2 — rotate-right on a 32-bit word.
+fn hmac_rotr(x, n) -> int {
+    return ((x >> n) | ((x << (32 - n)) & HMAC_MASK32)) & HMAC_MASK32
+}
+
+// @cite FIPS 180-4 §3.2 — logical right shift (zero-fill) on a 32-bit word.
+fn hmac_shr(x, n) -> int {
+    return x >> n
+}
+
+// ── SHA-256 over a raw byte array (FIPS 180-4) ───────────────────────
+// Returns the 32-byte digest. Pure; identical to the runtime `sha256`
+// builtin's pre-hex digest (verified in hmac_test.hexa).
+// @cite FIPS 180-4 §6.2 — SHA-256 message schedule + compression.
+pub fn sha256_digest_bytes(data: [int]) -> [int] {
+    // 2026-05-27 #1506 fix: this fn previously used immutable `let` with
+    // reassignment (`let w = []; w[ci] = …`, `msg = msg.push(…)`, `let h0 …
+    // h0 = …`). That shape MISCOMPILES on the compiled `hexa run` path —
+    // index-write to a `let` (non-mut) array + scalar `let`-reassign across
+    // a 64-round loop SIGSEGV'd (the CI module_loader 2-step path tolerated
+    // it, so the regression escaped). Rewritten with `let mut` + in-place
+    // `.push()` statements — identical algorithm, verified ba7816bf… on the
+    // compiled path. See INBOX #1506.
+    let mut h0 = 1779033703
+    let mut h1 = 3144134277
+    let mut h2 = 1013904242
+    let mut h3 = 2773480762
+    let mut h4 = 1359893119
+    let mut h5 = 2600822924
+    let mut h6 = 528734635
+    let mut h7 = 1541459225
+
+    // Padding: append 0x80, zero-fill to 56 mod 64, then 64-bit big-endian length.
+    let bit_len = len(data) * 8
+    let mut msg = []
+    let mut di = 0
+    while di < len(data) { msg.push(data[di] & 255); di = di + 1 }
+    msg.push(128)
+    while (len(msg) % 64) != 56 {
+        msg.push(0)
+    }
+    // 64-bit big-endian length: byte i = (bit_len >> (8*i)) & 0xFF, MSB first.
+    let mut i = 7
+    while i >= 0 {
+        msg.push((bit_len >> (8 * i)) & 255)
+        i = i - 1
+    }
+
+    let mut block = 0
+    while block * 64 < len(msg) {
+        let mut w = []
+        let mut wi = 0
+        while wi < 64 {
+            w.push(0)
+            wi = wi + 1
+        }
+        let mut ci = 0
+        while ci < 16 {
+            let off = block * 64 + ci * 4
+            w[ci] = (msg[off] * 16777216 + msg[off+1] * 65536 + msg[off+2] * 256 + msg[off+3]) % 4294967296
+            ci = ci + 1
+        }
+        let mut si = 16
+        while si < 64 {
+            let s0 = (hmac_rotr(w[si-15], 7) ^ hmac_rotr(w[si-15], 18)) ^ hmac_shr(w[si-15], 3)
+            let s1 = (hmac_rotr(w[si-2], 17) ^ hmac_rotr(w[si-2], 19)) ^ hmac_shr(w[si-2], 10)
+            w[si] = (w[si-16] + s0 + w[si-7] + s1) % 4294967296
+            si = si + 1
+        }
+
+        let mut a = h0; let mut b = h1; let mut c = h2; let mut d = h3
+        let mut e = h4; let mut f = h5; let mut g = h6; let mut hh = h7
+
+        let mut ri = 0
+        while ri < 64 {
+            let bs1 = (hmac_rotr(e, 6) ^ hmac_rotr(e, 11)) ^ hmac_rotr(e, 25)
+            let ch = (e & f) ^ ((e ^ HMAC_MASK32) & g)
+            let temp1 = (hh + bs1 + ch + HMAC_SHA256_K[ri] + w[ri]) % 4294967296
+            let bs0 = (hmac_rotr(a, 2) ^ hmac_rotr(a, 13)) ^ hmac_rotr(a, 22)
+            let maj = ((a & b) ^ (a & c)) ^ (b & c)
+            let temp2 = (bs0 + maj) % 4294967296
+
+            hh = g; g = f; f = e; e = (d + temp1) % 4294967296
+            d = c; c = b; b = a; a = (temp1 + temp2) % 4294967296
+            ri = ri + 1
+        }
+
+        h0 = (h0 + a) % 4294967296; h1 = (h1 + b) % 4294967296
+        h2 = (h2 + c) % 4294967296; h3 = (h3 + d) % 4294967296
+        h4 = (h4 + e) % 4294967296; h5 = (h5 + f) % 4294967296
+        h6 = (h6 + g) % 4294967296; h7 = (h7 + hh) % 4294967296
+        block = block + 1
+    }
+
+    let mut result = []
+    let vals = [h0, h1, h2, h3, h4, h5, h6, h7]
+    let mut vi = 0
+    while vi < 8 {
+        result.push((vals[vi] / 16777216) % 256)
+        result.push((vals[vi] / 65536) % 256)
+        result.push((vals[vi] / 256) % 256)
+        result.push(vals[vi] % 256)
+        vi = vi + 1
+    }
+    return result
+}
+
+// ── HMAC-SHA256, byte-level ──────────────────────────────────────────
+// key + data are raw byte arrays; result is the 32-byte MAC.
+// @cite RFC 2104 / FIPS 198-1 — HMAC = H((K ⊕ opad) ∥ H((K ⊕ ipad) ∥ m)).
+pub fn hmac_sha256_bytes(key: [int], data: [int]) -> [int] {
+    // 2026-05-27 #1506 fix: same `let`-reassign → compiled-path miscompile
+    // class as sha256_digest_bytes above. Rewritten with `let mut` +
+    // in-place `.push()`.
+    let block_size = 64
+
+    // Key normalisation: hash if longer than the block size, then 0-pad.
+    let mut key_bytes = []
+    let mut ki = 0
+    while ki < len(key) { key_bytes.push(key[ki] & 255); ki = ki + 1 }
+    if len(key_bytes) > block_size {
+        key_bytes = sha256_digest_bytes(key_bytes)
+    }
+    while len(key_bytes) < block_size {
+        key_bytes.push(0)
+    }
+
+    // ipad / opad — K ⊕ 0x36 and K ⊕ 0x5c over the block.
+    let mut ipad = []
+    let mut opad = []
+    let mut i = 0
+    while i < block_size {
+        ipad.push(54 ^ key_bytes[i])
+        opad.push(92 ^ key_bytes[i])
+        i = i + 1
+    }
+
+    // inner = H(ipad ∥ data)
+    let mut inner_msg = ipad
+    let mut di = 0
+    while di < len(data) {
+        inner_msg.push(data[di])
+        di = di + 1
+    }
+    let inner_hash = sha256_digest_bytes(inner_msg)
+
+    // outer = H(opad ∥ inner)
+    let mut outer_msg = opad
+    let mut hi = 0
+    while hi < len(inner_hash) {
+        outer_msg.push(inner_hash[hi])
+        hi = hi + 1
+    }
+    return sha256_digest_bytes(outer_msg)
+}
+
+// ── Hex / byte conversion helpers ────────────────────────────────────
+pub fn bytes_to_hex_lower(bytes: [int]) -> string {
+    let hex_chars = "0123456789abcdef"
+    let result = ""
+    let i = 0
+    while i < len(bytes) {
+        let high = bytes[i] / 16
+        let low = bytes[i] % 16
+        result = result + hex_chars[high] + hex_chars[low]
+        i = i + 1
+    }
+    return result
+}
+
+pub fn string_to_byte_array(s) -> [int] {
+    let result = []
+    let i = 0
+    while i < len(s) {
+        result = result.push(ord(s[i]))
+        i = i + 1
+    }
+    return result
+}
+
+// HMAC-SHA256 returning the lowercase hex digest (string form).
+pub fn hmac_sha256_hex(key: [int], data: [int]) -> string {
+    return bytes_to_hex_lower(hmac_sha256_bytes(key, data))
+}
+
+// SHA-256 of a byte array as a lowercase hex string.
+pub fn sha256_hex_bytes(data: [int]) -> string {
+    return bytes_to_hex_lower(sha256_digest_bytes(data))
+}
+
+// Thin string/hex wrapper — re-expresses the legacy string-in / hex-out
+// `hmac_sha256` surface on top of the byte-level core. Per the patch §3:
+// the existing self/std_crypto.hexa::hmac_sha256 can be re-based onto this.
+pub fn hmac_sha256_str(key: string, data: string) -> string {
+    return hmac_sha256_hex(string_to_byte_array(key), string_to_byte_array(data))
+}

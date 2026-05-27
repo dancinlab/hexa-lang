@@ -1,0 +1,21 @@
+2.50. Printing statistics.
+
+=== router_d4 ===
+
+        +----------Local Count, excluding submodules.
+        | 
+     3889 wires
+     9583 wire bits
+     3889 public wires
+     9583 public wire bits
+       10 ports
+      670 port bits
+     6216 submodules
+       20   CCU2C
+      395   L6MUX21
+     2988   LUT4
+     1175   PFUMX
+     1638   TRELLIS_FF
+
+=== design hierarchy ===
+

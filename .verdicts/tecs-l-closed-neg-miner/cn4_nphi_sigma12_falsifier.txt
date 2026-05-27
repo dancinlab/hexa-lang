@@ -1,0 +1,4 @@
+$ hexa verify --expr sigma 12 48
+verify --expr sigma(12)=48
+  calc   = 28  != expected 48
+  tier   = 🔴 FALSIFIED  (calc deterministically disagrees — TECS-L result-agnostic closed negative)

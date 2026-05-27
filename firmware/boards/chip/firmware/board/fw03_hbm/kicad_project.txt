@@ -1,0 +1,13 @@
+# KiCad project stub — fw03_hbm
+# Phase E G1: actual `.kicad_pro` / `.kicad_sch` to land after MOU + funding.
+# See ../../doc/board_v0_spec.md §3 for pinmap.
+# See schematic_paper.md for paper-tier net list.
+# File extensions reserved:
+#   fw03_hbm.kicad_pro        project
+#   fw03_hbm.kicad_sch        schematic
+#   fw03_hbm.kicad_pcb        PCB layout
+#   fw03_hbm-bom.csv          BOM export
+#   fw03_hbm.kicad_prl        project local prefs
+# KiCad version target: 8.0+ (s-expression file format).
+# 10-layer HDI + buried/blind vias = specialty fab (Eurocircuits HDI class).
+# Si interposer footprint requires custom KiCad symbol/footprint pair (TBD).

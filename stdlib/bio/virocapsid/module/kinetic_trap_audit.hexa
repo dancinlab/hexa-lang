@@ -1,0 +1,211 @@
+#!hexa strict
+//
+// virocapsid/module/kinetic_trap_audit.hexa — F-VIROCAPSID-4 trap audit.
+//
+// HEXA-NATIVE port of _python_bridge/module/virocapsid_kinetic_trap_audit.py
+// (R5 sunset 31/57, 2026-05-07). Re-runs cage assembly backward_euler at
+// cycle-24 stability-corner params and computes trap criteria
+// (y_aberrant_max < 0.15 + y_aberrant/y_closed < 0.18). Optional --multi-t
+// runs T=1 / T=3 / T=4 to close F-VIROCAPSID-4-c.
+
+use "virocapsid/module/cage_assembly_simulation"
+
+let PASS_R_AGG = 0.15
+let PASS_RATIO_ABERRANT = 0.18
+
+fn registry_path() -> string {
+    let cwd = exec("pwd").trim()
+    return cwd + "/state/discovery_absorption/registry.jsonl"
+}
+
+fn t1_corner() {
+    let p = {}
+    p["K12"] = 1.0e-6; p["K21"] = 1.0e-4; p["K_CLOSE"] = 1.0e-7; p["K_OPEN"] = 1.0e-14
+    return p
+}
+fn t3_params() {
+    let p = {}
+    p["K12"] = 1.235e-08; p["K21"] = 1.0e-4; p["K_CLOSE"] = 5.645e-13; p["K_OPEN"] = 1.0e-14
+    return p
+}
+fn t4_params() {
+    let p = {}
+    p["K12"] = 3.906e-09; p["K21"] = 1.0e-4; p["K_CLOSE"] = 2.384e-14; p["K_OPEN"] = 1.0e-14
+    return p
+}
+
+fn run_trap_audit(params, c0: float, t_end: float, dt: float) {
+    let sample_times = []
+    let mut i = 0
+    while i <= 100 {
+        sample_times.push(t_end * to_float(i) / 100.0)
+        i = i + 1
+    }
+    let result = integrate_be_c(c0, t_end, dt, sample_times,
+        params["K12"], params["K21"], params["K_CLOSE"], params["K_OPEN"])
+    let samples_t = result["samples_t"]
+    let samples_s = result["samples_s"]
+    let mass0 = result["mass0"]
+    let mut y_aberrant_max = 0.0
+    let mut y_closed_final = 0.0
+    let mut y_aberrant_final = 0.0
+    let mut k = 0
+    while k < len(samples_t) {
+        let s = samples_s[k]
+        let y_pent = (5.0 * s[1]) / mass0
+        let y_hex = (6.0 * s[2]) / mass0
+        let y_aberrant = y_pent + y_hex
+        if y_aberrant > y_aberrant_max { y_aberrant_max = y_aberrant }
+        y_closed_final = (to_float(n_cp_per_cage()) * s[3]) / mass0
+        y_aberrant_final = y_aberrant
+        k = k + 1
+    }
+    let mut ratio = void
+    let mut ratio_sentinel = void
+    if y_closed_final > 0.0 {
+        ratio = y_aberrant_final / y_closed_final
+    } else {
+        ratio_sentinel = "+inf"
+    }
+    let r = {}
+    r["params"] = params
+    r["c0"] = c0
+    r["t_end"] = t_end
+    r["y_aberrant_max"] = y_aberrant_max
+    r["y_aberrant_final"] = y_aberrant_final
+    r["y_closed_final"] = y_closed_final
+    r["ratio_aberrant_to_closed"] = ratio
+    r["ratio_aberrant_sentinel"] = ratio_sentinel
+    return r
+}
+
+fn multi_t_verdict(audits) {
+    let per_t = {}
+    let mut all_pass = true
+    let t_keys = ["1", "3", "4"]
+    let mut i = 0
+    while i < len(t_keys) {
+        let tk = t_keys[i]
+        let ad = audits[tk]
+        let ratio = ad["ratio_aberrant_to_closed"]
+        let mut ratio_pass = false
+        if type_of(ratio) != "void" && to_float(ratio) < PASS_RATIO_ABERRANT { ratio_pass = true }
+        let row = {}
+        row["y_aberrant_max"] = ad["y_aberrant_max"]
+        row["y_closed_final"] = ad["y_closed_final"]
+        row["ratio_aberrant_to_closed"] = ratio
+        row["ratio_pass"] = ratio_pass
+        per_t["T" + tk] = row
+        if !ratio_pass { all_pass = false }
+        i = i + 1
+    }
+    let r = {}
+    if all_pass { r["verdict"] = "PASS" } else { r["verdict"] = "FAIL" }
+    r["criterion"] = "y_aberrant / y_closed_shell < 0.18 at t_end across T=1, T=3, T=4"
+    r["per_t"] = per_t
+    r["pass_threshold"] = PASS_RATIO_ABERRANT
+    return r
+}
+
+fn parse_argv_local(av) {
+    let r = {}
+    r["emit"] = false
+    r["summary"] = false
+    r["multi_t"] = false
+    let mut i = 0
+    while i < len(av) {
+        let a = av[i]
+        if a == "--emit" { r["emit"] = true }
+        else if a == "--summary" { r["summary"] = true }
+        else if a == "--multi-t" { r["multi_t"] = true }
+        i = i + 1
+    }
+    return r
+}
+
+fn main() {
+    let cfg = parse_argv_local(args())
+    let mut audit = void
+    let mut all_audits = void
+    if cfg["multi_t"] {
+        all_audits = {}
+        all_audits["1"] = run_trap_audit(t1_corner(), 60.0, 10000.0, 0.01)
+        all_audits["3"] = run_trap_audit(t3_params(), 180.0, 10000.0, 0.01)
+        all_audits["4"] = run_trap_audit(t4_params(), 240.0, 10000.0, 0.01)
+        audit = all_audits["1"]
+    } else {
+        audit = run_trap_audit(t1_corner(), 60.0, 10000.0, 0.01)
+    }
+
+    let r_agg_pass = audit["y_aberrant_max"] < PASS_R_AGG
+    let ratio = audit["ratio_aberrant_to_closed"]
+    let mut ratio_pass = false
+    if type_of(ratio) != "void" && to_float(ratio) < PASS_RATIO_ABERRANT { ratio_pass = true }
+
+    let f4_kinetic_trap = {}
+    if r_agg_pass { f4_kinetic_trap["verdict"] = "PASS" } else { f4_kinetic_trap["verdict"] = "FAIL" }
+    f4_kinetic_trap["y_aberrant_max"] = audit["y_aberrant_max"]
+    f4_kinetic_trap["threshold"] = PASS_R_AGG
+    f4_kinetic_trap["criterion"] = "r_agg = max(y_aberrant) over trajectory < 0.15"
+
+    let f4_b = {}
+    if ratio_pass { f4_b["verdict"] = "PASS" } else { f4_b["verdict"] = "FAIL" }
+    f4_b["y_aberrant_final"] = audit["y_aberrant_final"]
+    f4_b["y_closed_final"] = audit["y_closed_final"]
+    f4_b["ratio_aberrant_to_closed"] = ratio
+    f4_b["ratio_sentinel"] = audit["ratio_aberrant_sentinel"]
+    f4_b["threshold"] = PASS_RATIO_ABERRANT
+    f4_b["criterion"] = "y_aberrant / y_closed_shell < 0.18 at t_end"
+
+    let mut f4_c = void
+    if type_of(all_audits) != "void" {
+        f4_c = multi_t_verdict(all_audits)
+    } else {
+        let dr = {}
+        dr["verdict"] = "DEFERRED"
+        dr["reason"] = "Multi-T (T=3 + T=4) trap audit deferred — run with --multi-t to close."
+        f4_c = dr
+    }
+
+    let subs = {}
+    subs["f_virocapsid_4_kinetic_trap"] = f4_kinetic_trap
+    subs["f_virocapsid_4_b"] = f4_b
+    subs["f_virocapsid_4_c"] = f4_c
+
+    let w = {}
+    w["schema"] = "raw_77_virocapsid_kinetic_trap_v1"
+    w["audited_at"] = utc_iso_now()
+    w["audit_kind"] = "kinetic_trap_t1_stability_corner"
+    w["trajectory_summary"] = audit
+    w["f_virocapsid_4_subclauses"] = subs
+    w["raw_91_c3_disclose"] = "Re-runs cage_assembly_simulation backward_euler at cycle-24 stability-corner params (K12=1e-6, K21=1e-4, K_CLOSE=1e-7, K_OPEN=1e-14, c0=60). Trap criteria computed from trajectory samples (y_aberrant = pentamer + hexamer mass fraction; y_closed_shell = closed-cage mass fraction). T=1 only; T=3/T=4 trap audit deferred to V-R2 (-4-c)."
+    w["raw_77_append_only"] = true
+    w["raw_9_hexa_only"] = "hexa stdlib only (R5 sunset 2026-05-07)"
+    w["witness_ref"] = "state/discovery_absorption/registry.jsonl#raw_77_virocapsid_kinetic_trap_v1"
+
+    if cfg["emit"] {
+        let path = registry_path()
+        let last_slash = path.last_index_of("/")
+        exec("mkdir -p " + path.substring(0, last_slash))
+        append_file(path, json_encode(w) + "\n")
+        eprintln("emitted 1 witness row -> " + path)
+    }
+    if cfg["summary"] {
+        println(json_encode(w))
+    } else {
+        let mut ratio_str = "inf"
+        if type_of(ratio) != "void" { ratio_str = to_string(ratio) }
+        eprintln("y_aberrant_max=" + to_string(audit["y_aberrant_max"]) +
+            "  y_closed_final=" + to_string(audit["y_closed_final"]) +
+            "  ratio=" + ratio_str)
+        let sub_keys = keys(subs)
+        let mut s_i = 0
+        while s_i < len(sub_keys) {
+            eprintln("  " + sub_keys[s_i] + ": " + subs[sub_keys[s_i]]["verdict"])
+            s_i = s_i + 1
+        }
+    }
+
+    if r_agg_pass && ratio_pass { exit(0) }
+    exit(1)
+}

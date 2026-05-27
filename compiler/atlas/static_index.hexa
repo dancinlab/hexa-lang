@@ -1,0 +1,488 @@
+// HEXA Native Compiler — Phase A4: static atlas index facade
+//
+// @version 0.2.0
+// @capabilities [pure]
+//
+// Reads the const arrays produced by compiler/atlas/embed.hexa
+// (which writes compiler/atlas/embedded.gen.hexa) and exposes the
+// same shape compiler/atlas/merger.hexa does — `static_atlas()`
+// returning an AtlasIndex, and `lookup_static(kind, id)` mirroring
+// merger.hexa::lookup.
+//
+// At runtime the compiler binary should call static_atlas() exactly
+// once at startup; the cost is the (zero-)cost of materializing four
+// already-resident const arrays into a struct. There is NO file I/O,
+// NO parsing, NO hashing — that all happened at compiler-build time.
+//
+// Phase A4 wiring (RFC-017 §4.5 / SPEC.yaml foundation.atlas_embedding):
+//   - compiler/atlas/embedded.gen.hexa is COMMITTED as a small synthetic
+//     fixture (8 nodes — 3 P, 2 C, 2 L, 1 E) so that a clean checkout
+//     compiles without an external codegen step.
+//   - Production builds REPLACE that file via:
+//         hexa run tool/atlas_embed_gen.hexa <atlas-root>
+//     which re-emits ATLAS_HASH + ATLAS_SOURCE_COUNT + the per-kind
+//     arrays from the live ~/core/nexus/n6/ corpus. The fixture's
+//     ATLAS_GENERATED_AT == "fixture" sentinel lets drift CI distinguish
+//     bootstrap data from a real regen.
+//   - Stage0 hexa has no real conditional imports, so we just `use` the
+//     generated file directly. If a downstream consumer ever needs the
+//     pre-A4 empty-fallback behavior, they should swap in a stub
+//     embedded.gen.hexa with empty arrays — the surface here stays the
+//     same.
+
+use "compiler/atlas/parser"
+use "compiler/atlas/merger"
+use "compiler/atlas/overlay"
+use "compiler/atlas/prefix_index"
+use "compiler/atlas/offset_index"
+// (2026-05-22 — `use "compiler/atlas/hxc_loader"` removed; hxc retired,
+//  static_atlas now parses n6/atlas.n6 via merger::load_atlas.)
+
+// R7 track B (2026-05-18): `use "compiler/atlas/embedded.gen"` severed.
+// The module_loader cycle-safety fix made atlas_cli flatten succeed, but
+// the resulting 5 MB flat (embedded.gen's 7451 AtlasNode const literals)
+// then SIGKILLs the hexat transpile — the very "const-literal load"
+// cost the dist/atlas.hxc sidecar was built to avoid (see Path Y note
+// below + tool/atlas_build_hxc.hexa, which text-reads embedded.gen to
+// dodge exactly this). The compiled atlas binary serves from
+// dist/atlas.hxc (tracked, canonical, 6.4 MB — build_aprime: "loaded
+// 15952 nodes from hxc"); the embedded.gen const arrays were only the
+// no-sidecar fallback. This file's own L18-31 design note explicitly
+// sanctions the empty-array surface ("swap in a stub embedded.gen.hexa
+// with empty arrays — the surface here stays the same"). embedded.gen.hexa
+// remains untouched on disk as the TEXT SSOT for atlas_build_hxc.
+// ATLAS_HASH / ATLAS_SOURCE_COUNT are small metadata the HXC path's
+// AtlasIndex still carries — declared locally (frozen-embed values;
+// compiler/drill/accumulation_test.hexa keeps its own `use embedded.gen`
+// for the drift-pin assertion, unaffected). No-sidecar fallback now
+// returns an empty index + a regenerate hint instead of OOM-transpiling
+// 5 MB of consts.
+let ATLAS_HASH: string = "663698a06bc6f967fa2855a77bc4e399aae465dda5ca948b3c7352dbf98ce7fb"
+let ATLAS_SOURCE_COUNT: i64 = 410
+
+// --- drift-detection placeholders (Phase A4+) ------------------------------
+//
+// ATLAS_HASH_MIN / ATLAS_HASH_MAX bracket the set of atlas hashes the
+// current compiler binary considers "in policy". Empty strings disable
+// the gate. Phase A4 commits the placeholders and ships drift detection
+// via CI in a follow-up phase (CI lands later — see RFC-017 §4.5
+// "atlas mtime → CI rebuild" automation).
+//
+// When wired:
+//   - if ATLAS_HASH < ATLAS_HASH_MIN → compiler is older than required
+//     atlas pin → fail with "compiler stale, rebuild"
+//   - if ATLAS_HASH > ATLAS_HASH_MAX → compiler is newer than supported
+//     atlas pin → fail with "atlas drift, regenerate embedded.gen.hexa"
+//
+// Today these are unenforced sentinels.
+pub let ATLAS_HASH_MIN: string = ""
+pub let ATLAS_HASH_MAX: string = ""
+
+// --- public API ------------------------------------------------------------
+
+// static_atlas — return an AtlasIndex constructed from the embedded
+// const arrays declared in compiler/atlas/embedded.gen.hexa. This is the
+// sole runtime path: O(1), zero I/O, zero parse.
+//
+// The duplicates / skipped_oversize fields are always empty in the
+// static path — those are merger-time signals and were resolved at
+// compiler-build time, not preserved across the embed boundary.
+// _resolve_embedded_path — the embedded.gen.hexa SSOT (binary-builtin atlas).
+// $HEXA_ATLAS_EMBED (abs dir containing embedded.gen.hexa) wins; else the
+// stable repo path. NOT CWD-relative (the 2026-05-22 atlas-shrink footgun).
+fn _resolve_embedded_path() -> string {
+    let override = env("HEXA_ATLAS_EMBED")
+    if len(override) > 0 { return override + "/embedded.gen.hexa" }
+    let home = env("HOME")
+    return home + "/core/hexa-lang/compiler/atlas/embedded.gen.hexa"
+}
+
+// _unescape_hx — reverse the hexa string-literal escaping (\n→LF, \t→TAB,
+// \r→CR, \"→", \\→\). index_of-jumps over backslash runs to stay fast (NOT
+// char-by-char — that was a 95s/lookup footgun on the 9.7 MB embed).
+fn _unescape_hx(s: string) -> string {
+    let n = len(s)
+    let mut chunks = []
+    let mut pos = 0
+    while pos < n {
+        let bi = s.index_of("\\", pos)
+        if bi < 0 { chunks.push(s.substring(pos, n)); break }
+        if bi > pos { chunks.push(s.substring(pos, bi)) }
+        if bi + 1 < n {
+            let nx = s.substring(bi + 1, bi + 2)
+            if      nx == "n" { chunks.push("\n") }
+            else if nx == "t" { chunks.push("\t") }
+            else if nx == "r" { chunks.push("\r") }
+            else if nx == "\"" { chunks.push("\"") }
+            else if nx == "\\" { chunks.push("\\") }
+            else { chunks.push(nx) }
+            pos = bi + 2
+        } else {
+            chunks.push("\\")
+            pos = bi + 1
+        }
+    }
+    return chunks.join("")
+}
+
+// _extract_raw_blocks — pull every AtlasNode.raw field (the .n6 block) out of
+// embedded.gen.hexa and concatenate into one .n6 stream (blank-line separated).
+// embedded.gen.hexa emits ONE struct literal per physical line (raw's newlines
+// are escaped `\n`, never real), so we split into lines ONCE then scan each
+// SHORT line — O(total chars). (Repeated index_of over the 9.7 MB monolith was
+// O(n²) = ~300s/lookup; this is sub-second.) `raw: "` opens; the next UNESCAPED
+// `"` on the line closes (even backslash run before it = real close). OOM-safe:
+// a text scan, never a compile-time `use` const load.
+// pub so `compiler/atlas/atlas_diff.hexa` can reuse the embed→.n6 extraction
+// for the `hexa atlas diff` verb (load an embedded.gen.hexa file as nodes).
+pub fn _extract_raw_blocks(text: string) -> string {
+    let lines = text.split("\n")
+    let nl = len(lines)
+    let marker = "raw: \""
+    let mlen = len(marker)
+    let mut parts = []
+    let mut li = 0
+    while li < nl {
+        let line = lines[li]
+        li = li + 1
+        let mi = line.index_of(marker)
+        if mi < 0 { continue }
+        let start = mi + mlen
+        let ln = len(line)
+        let mut close = -1
+        let mut k = start
+        while k < ln {
+            let q = line.index_of("\"", k)
+            if q < 0 { close = ln; break }
+            let mut bs = 0
+            let mut p = q - 1
+            while p >= start {
+                if line.substring(p, p + 1) == "\\" { bs = bs + 1; p = p - 1 }
+                else { break }
+            }
+            if bs % 2 == 0 { close = q; break }
+            k = q + 1
+        }
+        if close < 0 { close = ln }
+        parts.push(_unescape_hx(line.substring(start, close)))
+        parts.push("\n\n")
+    }
+    return parts.join("")
+}
+
+// --- process-lifetime parse cache (mirrors parser.hexa RFC 072 Option A) ----
+//
+// static_atlas() text-parses the full ~9.7 MB / 16 k-node embedded.gen.hexa on
+// every call. Every query verb (lookup_static / atlas_lookup / atlas_prefix_* /
+// atlas_list) calls static_atlas() fresh, so the whole corpus is re-parsed per
+// query (~10^4x waste; the overlapping subproblem IS the parsed index). The
+// parsed AtlasIndex is a pure function of embedded.gen.hexa's bytes, and that
+// file is frozen for the process lifetime — `register`/fold writes it then the
+// CLI exits (a one-shot subcommand; no register-then-static_atlas re-read in any
+// path: drill emits to the OVERLAY, not the embed — see compiler/drill/round.hexa).
+// So we cache the index ONCE per process, exactly as enrich_node caches enriched
+// nodes. Invalidation = process exit (the embed is rebuilt → fresh process).
+//
+// Cache keyed on the RESOLVED path so a within-process HEXA_ATLAS_EMBED change
+// (env points at a different embed dir) re-parses rather than serving the wrong
+// corpus. Same-path repeat → cache hit. Empty-index loads are NOT cached so a
+// transient read failure does not pin an empty atlas (a later same-path call
+// retries the parse).
+let mut _g_atlas_index: any = 0
+let mut _g_atlas_loaded: bool = false
+let mut _g_atlas_path: string = ""
+let mut _g_atlas_cache_hits: i64 = 0
+let mut _g_atlas_cache_misses: i64 = 0
+
+// atlas_cache_stats — observability hook (mirrors enrich_cache_stats). Returns
+// (hits, misses) over the process lifetime; a hit means a re-parse was avoided.
+pub fn atlas_cache_stats() -> [i64] {
+    return [_g_atlas_cache_hits, _g_atlas_cache_misses]
+}
+
+// atlas_cache_reset — test-only escape hatch. Production never resets within a
+// process; binary rebuild handles invalidation (process exit IS the TTL).
+pub fn atlas_cache_reset() {
+    _g_atlas_loaded = false
+    _g_atlas_path = ""
+    _g_atlas_cache_hits = 0
+    _g_atlas_cache_misses = 0
+}
+
+pub fn static_atlas() -> AtlasIndex {
+    // SSOT = compiler/atlas/embedded.gen.hexa (the binary-builtin atlas).
+    // Read it as TEXT at load, extract each AtlasNode.raw (.n6 block), parse
+    // the concatenated .n6 stream. OOM-safe — never a compile-time const-
+    // literal `use` (that path 231 GiB-OOM'd; see history above). register
+    // writes embedded.gen.hexa directly; n6/atlas.n6 is now an EXPORT-only
+    // artifact (`hexa atlas export`), no longer the runtime SSOT.
+    let path = _resolve_embedded_path()
+    // Process-lifetime cache: serve the parsed index if the same path was
+    // already loaded this process (the file is frozen — see cache note above).
+    if _g_atlas_loaded && _g_atlas_path == path {
+        _g_atlas_cache_hits = _g_atlas_cache_hits + 1
+        return _g_atlas_index
+    }
+    _g_atlas_cache_misses = _g_atlas_cache_misses + 1
+    let text = read_file(path)
+    let n6_stream = _extract_raw_blocks(text)
+    let nodes = parse_atlas_string(n6_stream, "embedded.gen.hexa")
+    let idx = _bucket_by_kind(nodes)
+    let n = len(nodes)
+    if n > 0 {
+        println("atlas: loaded " + to_string(n) + " nodes from embedded.gen.hexa")
+        // Cache only non-empty loads (a transient read failure must not pin an
+        // empty atlas — a later same-path call should retry the parse).
+        _g_atlas_index = idx
+        _g_atlas_path = path
+        _g_atlas_loaded = true
+    } else {
+        eprintln("atlas: no nodes parsed from embedded.gen.hexa at " + path + " — serving EMPTY index")
+        eprintln("atlas: set HEXA_ATLAS_EMBED=/abs/dir-containing-embedded.gen.hexa to override")
+    }
+    return idx
+}
+
+// _bucket_by_kind — partition a flat [AtlasNode] into the 9 per-kind
+// arrays expected by AtlasIndex. Used by the HXC-sidecar fast path.
+fn _bucket_by_kind(nodes: array) -> AtlasIndex {
+    let mut p_nodes = []
+    let mut c_nodes = []
+    let mut l_nodes = []
+    let mut e_nodes = []
+    let mut f_nodes = []
+    let mut r_nodes = []
+    let mut s_nodes = []
+    let mut x_nodes = []
+    let mut q_nodes = []
+    let mut i = 0
+    while i < len(nodes) {
+        let n = nodes[i]
+        if      n.kind == "P" { p_nodes.push(n) }
+        else if n.kind == "C" { c_nodes.push(n) }
+        else if n.kind == "L" { l_nodes.push(n) }
+        else if n.kind == "E" { e_nodes.push(n) }
+        else if n.kind == "F" { f_nodes.push(n) }
+        else if n.kind == "R" { r_nodes.push(n) }
+        else if n.kind == "S" { s_nodes.push(n) }
+        else if n.kind == "X" { x_nodes.push(n) }
+        else if n.kind == "Q" { q_nodes.push(n) }
+        i = i + 1
+    }
+    return AtlasIndex {
+        p_nodes: p_nodes,
+        c_nodes: c_nodes,
+        l_nodes: l_nodes,
+        e_nodes: e_nodes,
+        f_nodes: f_nodes,
+        r_nodes: r_nodes,
+        s_nodes: s_nodes,
+        x_nodes: x_nodes,
+        q_nodes: q_nodes,
+        hash: ATLAS_HASH,
+        source_count: ATLAS_SOURCE_COUNT,
+        duplicates: [],
+        skipped_oversize: []
+    }
+}
+
+fn _count_rodata() -> i64 {
+    // R7 track B: embedded.gen const arrays no longer `use`d here; the
+    // rodata fallback is empty (dist/atlas.hxc is the live SSOT).
+    return 0
+}
+
+// lookup_static — same signature as merger.hexa::lookup. Linear scan
+// over the per-kind array; for atlas-resolve typical workloads this
+// is O(unique_id_cites_in_user_program). Phase A4 keeps the linear
+// scan; a packed perfect-hash variant lands later if profiling
+// justifies it.
+pub fn lookup_static(kind: string, id: string) -> AtlasNode {
+    // Fast path — on-disk offset index seeks to the single node's line and
+    // parses only it, avoiding the full ~16k-node parse (ATLAS R3 milestone).
+    // A hit (kind != "") is byte-identical to the full-parse result below.
+    // When the index is HEALTHY a sentinel is a DEFINITIVE miss (same kind==""
+    // sentinel the full parse returns), so we return it directly — no full
+    // parse. Only an UNhealthy index (empty / read failure / staleness) falls
+    // through to the canonical full parse, so correctness never depends on the
+    // accelerator (stale-safe by fallback).
+    let fast = offset_lookup(kind, id)
+    if fast.kind != "" { return fast }
+    if offset_index_healthy() { return fast }
+    let idx = static_atlas()
+    return lookup(idx, kind, id)
+}
+
+// --- merged lookup (binary built-in atlas) ---------------------------------
+//
+// POLICY 2026-05-19 — atlas is unconditionally binary built-in. The live
+// atlas is the compile-time embed (embedded.gen.hexa → dist/atlas.hxc).
+// The runtime `.n6` overlay LOAD path is RETIRED: overlay_load_cached()
+// now returns [] unconditionally, so the "merged" variants below resolve
+// to the binary-built-in rodata view ALONE. `.n6` files are a `hexa atlas
+// export` OUTPUT artifact only; new equations reach the live atlas via
+// GitHub PR into embedded.gen.hexa, never through an on-disk overlay.
+// See @D g_atlas_binary_builtin in AGENTS.tape.
+//
+// atlas_lookup_merged / atlas_list_merged are kept as stable surfaces so
+// existing callers (drill / audit) compile unchanged; with the overlay
+// retired-to-empty they are now equivalent to atlas_lookup / atlas_list.
+
+// atlas_lookup — convenience alias matching the spec API name from the
+// Phase 3 task description. Wraps the existing lookup_static under a
+// shorter name; callers that prefer this name get a uniform pair with
+// atlas_lookup_merged below.
+pub fn atlas_lookup(id: string) -> AtlasNode {
+    // Fast path — offset index seeks to the single node's line (file order is
+    // P,C,L,E,F,R,S,X,Q, matching the per-kind probe order below) and parses
+    // only it. Byte-identical to the full-parse probe on a hit; a healthy-index
+    // sentinel is a definitive miss (no full parse). Only an unhealthy index
+    // falls through to the canonical per-kind sweep (stale-safe).
+    let fast = offset_lookup("", id)
+    if fast.kind != "" { return fast }
+    if offset_index_healthy() { return fast }
+    // Search P → C → L → E → F → R → S → X → Q. AtlasIndex keys are per-kind
+    // so we have to probe each bucket; a hit short-circuits.
+    let idx = static_atlas()
+    let p = lookup(idx, "P", id)
+    if p.kind != "" { return p }
+    let c = lookup(idx, "C", id)
+    if c.kind != "" { return c }
+    let l = lookup(idx, "L", id)
+    if l.kind != "" { return l }
+    let e = lookup(idx, "E", id)
+    if e.kind != "" { return e }
+    let f = lookup(idx, "F", id)
+    if f.kind != "" { return f }
+    let r = lookup(idx, "R", id)
+    if r.kind != "" { return r }
+    let s = lookup(idx, "S", id)
+    if s.kind != "" { return s }
+    let x = lookup(idx, "X", id)
+    if x.kind != "" { return x }
+    let q = lookup(idx, "Q", id)
+    if q.kind != "" { return q }
+    return p
+}
+
+// atlas_lookup_merged — rodata-first, overlay-fallback lookup. Returns
+// the rodata hit if any, otherwise the overlay hit, otherwise the
+// sentinel (kind == "").
+pub fn atlas_lookup_merged(id: string) -> AtlasNode {
+    let rodata_hit = atlas_lookup(id)
+    if rodata_hit.kind != "" { return rodata_hit }
+    let overlay = overlay_load_cached()
+    return overlay_find_by_id(overlay, id)
+}
+
+// atlas_list — flat list of all rodata nodes (P + C + L + E in scan
+// order). Useful for diagnostics / reflection.
+pub fn atlas_list() -> array {
+    let idx = static_atlas()
+    let mut out = []
+    let mut i = 0
+    while i < len(idx.p_nodes) { out.push(idx.p_nodes[i]); i = i + 1 }
+    i = 0
+    while i < len(idx.c_nodes) { out.push(idx.c_nodes[i]); i = i + 1 }
+    i = 0
+    while i < len(idx.l_nodes) { out.push(idx.l_nodes[i]); i = i + 1 }
+    i = 0
+    while i < len(idx.e_nodes) { out.push(idx.e_nodes[i]); i = i + 1 }
+    i = 0
+    while i < len(idx.f_nodes) { out.push(idx.f_nodes[i]); i = i + 1 }
+    i = 0
+    while i < len(idx.r_nodes) { out.push(idx.r_nodes[i]); i = i + 1 }
+    i = 0
+    while i < len(idx.s_nodes) { out.push(idx.s_nodes[i]); i = i + 1 }
+    i = 0
+    while i < len(idx.x_nodes) { out.push(idx.x_nodes[i]); i = i + 1 }
+    i = 0
+    while i < len(idx.q_nodes) { out.push(idx.q_nodes[i]); i = i + 1 }
+    return out
+}
+
+// atlas_list_merged — rodata followed by overlay entries whose (kind, id)
+// does NOT collide with rodata. Conflicting overlay entries are dropped
+// and the first collision per process is logged once via
+// overlay_note_conflict.
+pub fn atlas_list_merged() -> array {
+    let mut merged = atlas_list()
+    let overlay = overlay_load_cached()
+    let mut i = 0
+    while i < len(overlay) {
+        let n = overlay[i]
+        let mut dup = false
+        let mut j = 0
+        while j < len(merged) {
+            let m = merged[j]
+            if m.id == n.id && m.kind == n.kind {
+                dup = true
+                overlay_note_conflict(n.kind, n.id, m.source_file)
+                break
+            }
+            j = j + 1
+        }
+        if !dup { merged.push(n) }
+        i = i + 1
+    }
+    return merged
+}
+
+// --- Wave 2.3: prefix lookup -----------------------------------------------
+//
+// atlas_prefix — return every node whose id starts with `prefix`. n6 plan
+// §7 Wave 2.3 spec.
+//
+// Wave 2.4 (commit fd368a54 prefix bench, FU2 measurement): the original
+// linear-scan body measured p95 at 440x the 50 ms threshold across the
+// 7398-node merged view (per-call cost lower-bounded at ~22 s). The hot
+// path now delegates to `prefix_lookup` (compiler/atlas/prefix_index),
+// which builds a 2-char bucket map over the merged view on first use and
+// auto-invalidates on overlay file-size change. Public signature is
+// unchanged. The linear scan body remains below as the explicit fallback
+// for the < 2-char prefix case and is exposed as `atlas_prefix_linear`
+// for parity testing.
+pub fn atlas_prefix(prefix: string) -> array {
+    return prefix_lookup(prefix)
+}
+
+// atlas_prefix_linear — the pre-Wave-2.4 linear scan. Retained as the
+// fallback for short prefixes (handled inside prefix_lookup) and exposed
+// pub for the prefix_index parity test to confirm the bucket path
+// returns the same set as the canonical sweep.
+pub fn atlas_prefix_linear(prefix: string) -> array {
+    let all = atlas_list_merged()
+    let out = []
+    let pn = len(prefix)
+    if pn == 0 { return all }
+    let n = len(all)
+    let mut i = 0
+    while i < n {
+        let node = all[i]
+        if len(node.id) >= pn && node.id.substring(0, pn) == prefix {
+            out.push(node)
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// --- Wave 1.5: lazy enrichment ----------------------------------------------
+//
+// atlas_enrich — fill in `grade` + `edges` on a node whose rodata embed
+// carried default values. Useful for callers that need the structured
+// edge / grade info but want to keep the static const arrays slim.
+// Delegates to `parser::enrich_node`, which re-parses the node's `raw`
+// text.
+pub fn atlas_enrich(node: AtlasNode) -> AtlasNode {
+    return enrich_node(node)
+}
+
+// atlas_lookup_enriched — same as atlas_lookup_merged but the returned
+// node has structured grade + edges populated even when it came from the
+// frozen rodata embed.
+pub fn atlas_lookup_enriched(id: string) -> AtlasNode {
+    let n = atlas_lookup_merged(id)
+    if n.kind == "" { return n }
+    return atlas_enrich(n)
+}

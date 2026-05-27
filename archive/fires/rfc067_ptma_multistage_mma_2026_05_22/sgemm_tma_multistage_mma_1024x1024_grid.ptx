@@ -1,0 +1,484 @@
+//
+// RFC 067 N203 -- 3-stage TMA mbarrier pool + mma.sync.m16n8k16 + Hilbert d2xy.
+// M=N=K=1024. Per-CTA 64x64 tile, 4-warp 2x2, K_TILES=64, K_TILE=16, STAGES=3.
+// Hilbert: p=16 (next_pow2(gx=16)), d2xy unrolled 4 rounds.
+// TMA: 2 descriptors (A [M, K] innermost K, B [N, K] col-major innermost K),
+//      box [K_TILE=16, 64], expect_tx 4096 per stage (2048 A + 2048 B).
+// shmem per CTA: 6144 A + 6144 B + 24 mbar = 12312 B (< 48 KB limit).
+// Per-stage parity tracking (N201): each mbarrier has own parity bit.
+// ASCII-only PTX. .target sm_120a, .version 8.7.
+//
+
+.version 8.7
+.target sm_120a
+.address_size 64
+
+.shared .align 16 .b8 _tg_a[6144];
+.shared .align 16 .b8 _tg_b[6144];
+.shared .align 8  .b8 _tg_mbar[24];
+
+.visible .entry sgemm_tma_multistage_mma_1024x1024_grid (
+    .param .align 64 .b8 tmap_a_param[128],
+    .param .align 64 .b8 tmap_b_param[128],
+    .param .u64 c_ptr_param,
+    .param .u64 k_tiles_param
+)
+{
+    .reg .u64 %rd<32>;
+    .reg .u32 %r<200>;
+    .reg .pred %p1;
+    .reg .pred %pwait;
+    .reg .pred %prx0;
+    .reg .pred %prx1;
+    .reg .pred %prxr;
+    .reg .pred %phlbx;
+    .reg .pred %phlby;
+    .reg .pred %phlb_oob;
+    .reg .pred %pt0;
+    .reg .pred %p_issue;
+    .reg .pred %p_slot1;
+    .reg .pred %p_slot2;
+    .reg .b32 %ra<8>;
+    .reg .b32 %rbl<4>;
+    .reg .b32 %rbh<4>;
+    .reg .f32 %fc<32>;
+    .reg .b64 %tok;
+    .reg .b32 %parity;
+    .reg .b32 %parity0;
+    .reg .b32 %parity1;
+    .reg .b32 %parity2;
+    .reg .b32 %k_iter;
+    .reg .b32 %k_off;
+    .reg .b32 %issue_k;
+    .reg .b32 %issue_kx16;
+    .reg .b32 %slot;
+    .reg .b32 %slot_a_off;
+    .reg .b32 %slot_b_off;
+    .reg .b32 %slot_mbar_off;
+    .reg .b32 %tx_count;
+    .reg .b32 %arr_count;
+    .reg .b32 %x0, %y0, %x1, %y1;
+    .reg .b32 %smem_a_lo, %smem_b_lo, %smem_mbar_lo;
+    .reg .b32 %wait_addr;
+    .reg .b32 %a_slab_base;
+    .reg .b32 %b_slab_base;
+    .reg .b32 %issue_a_addr, %issue_b_addr, %issue_mbar_addr;
+    .reg .b64 %tmap_a_pp, %tmap_b_pp, %tmap_a_addr, %tmap_b_addr;
+    .reg .b64 %c_addr;
+
+    // ---- TMA descriptor + C ptr loads (param-space) ----
+    mov.b64 %tmap_a_pp, tmap_a_param;
+    cvta.param.u64 %tmap_a_addr, %tmap_a_pp;
+    mov.b64 %tmap_b_pp, tmap_b_param;
+    cvta.param.u64 %tmap_b_addr, %tmap_b_pp;
+    ld.param.u64 %c_addr, [c_ptr_param];
+    ld.param.u64 %rd3, [k_tiles_param];
+
+    // ---- Hilbert d2xy CTA-swizzle (N149/N200-full pattern, byte-identical) ----
+    //   grid = p x p, p = 16 (next_pow2(gx=16)); d = ctaid.y*p + ctaid.x
+    //   (sw_x, sw_y) = hilbert_d2xy(16, d); drop tiles with x>=16 or y>=16
+    mov.u32 %r100, %ctaid.x;
+    mov.u32 %r101, %ctaid.y;
+    mul.lo.u32 %r120, %r101, 16;
+    add.u32    %r120, %r120, %r100;
+    mov.u32 %r121, 0;
+    mov.u32 %r122, 0;
+    // -- Hilbert round 0: s = 1 --
+    shr.u32 %r126, %r120, 1;
+    and.b32 %r123, %r126, 1;
+    xor.b32 %r127, %r120, %r123;
+    and.b32 %r124, %r127, 1;
+    setp.eq.u32 %prx0, %r124, 0;
+    setp.eq.u32 %prx1, %r123, 1;
+    and.pred %prxr, %prx0, %prx1;
+    sub.u32 %r128, 0, %r121;
+    sub.u32 %r129, 0, %r122;
+    selp.b32 %r121, %r128, %r121, %prxr;
+    selp.b32 %r122, %r129, %r122, %prxr;
+    selp.b32 %r128, %r122, %r121, %prx0;
+    selp.b32 %r122, %r121, %r122, %prx0;
+    mov.u32 %r121, %r128;
+    mul.lo.u32 %r128, %r123, 1;
+    add.u32 %r121, %r121, %r128;
+    mul.lo.u32 %r129, %r124, 1;
+    add.u32 %r122, %r122, %r129;
+    shr.u32 %r120, %r120, 2;
+    // -- Hilbert round 1: s = 2 --
+    shr.u32 %r126, %r120, 1;
+    and.b32 %r123, %r126, 1;
+    xor.b32 %r127, %r120, %r123;
+    and.b32 %r124, %r127, 1;
+    setp.eq.u32 %prx0, %r124, 0;
+    setp.eq.u32 %prx1, %r123, 1;
+    and.pred %prxr, %prx0, %prx1;
+    sub.u32 %r128, 1, %r121;
+    sub.u32 %r129, 1, %r122;
+    selp.b32 %r121, %r128, %r121, %prxr;
+    selp.b32 %r122, %r129, %r122, %prxr;
+    selp.b32 %r128, %r122, %r121, %prx0;
+    selp.b32 %r122, %r121, %r122, %prx0;
+    mov.u32 %r121, %r128;
+    mul.lo.u32 %r128, %r123, 2;
+    add.u32 %r121, %r121, %r128;
+    mul.lo.u32 %r129, %r124, 2;
+    add.u32 %r122, %r122, %r129;
+    shr.u32 %r120, %r120, 2;
+    // -- Hilbert round 2: s = 4 --
+    shr.u32 %r126, %r120, 1;
+    and.b32 %r123, %r126, 1;
+    xor.b32 %r127, %r120, %r123;
+    and.b32 %r124, %r127, 1;
+    setp.eq.u32 %prx0, %r124, 0;
+    setp.eq.u32 %prx1, %r123, 1;
+    and.pred %prxr, %prx0, %prx1;
+    sub.u32 %r128, 3, %r121;
+    sub.u32 %r129, 3, %r122;
+    selp.b32 %r121, %r128, %r121, %prxr;
+    selp.b32 %r122, %r129, %r122, %prxr;
+    selp.b32 %r128, %r122, %r121, %prx0;
+    selp.b32 %r122, %r121, %r122, %prx0;
+    mov.u32 %r121, %r128;
+    mul.lo.u32 %r128, %r123, 4;
+    add.u32 %r121, %r121, %r128;
+    mul.lo.u32 %r129, %r124, 4;
+    add.u32 %r122, %r122, %r129;
+    shr.u32 %r120, %r120, 2;
+    // -- Hilbert round 3: s = 8 --
+    shr.u32 %r126, %r120, 1;
+    and.b32 %r123, %r126, 1;
+    xor.b32 %r127, %r120, %r123;
+    and.b32 %r124, %r127, 1;
+    setp.eq.u32 %prx0, %r124, 0;
+    setp.eq.u32 %prx1, %r123, 1;
+    and.pred %prxr, %prx0, %prx1;
+    sub.u32 %r128, 7, %r121;
+    sub.u32 %r129, 7, %r122;
+    selp.b32 %r121, %r128, %r121, %prxr;
+    selp.b32 %r122, %r129, %r122, %prxr;
+    selp.b32 %r128, %r122, %r121, %prx0;
+    selp.b32 %r122, %r121, %r122, %prx0;
+    mov.u32 %r121, %r128;
+    mul.lo.u32 %r128, %r123, 8;
+    add.u32 %r121, %r121, %r128;
+    mul.lo.u32 %r129, %r124, 8;
+    add.u32 %r122, %r122, %r129;
+    mov.u32 %r11, %r121;             // sw_x
+    mov.u32 %r10, %r122;             // sw_y
+    setp.ge.u32 %phlbx, %r11, 16;
+    setp.ge.u32 %phlby, %r10, 16;
+    or.pred %phlb_oob, %phlbx, %phlby;
+    @%phlb_oob bra $hilbert_oob_ret;
+
+    // ---- thread/warp ids ----
+    mov.u32 %r1, %tid.x;
+    shr.u32 %r2, %r1, 5;        // warp id in [0, 4)
+    shr.u32 %r3, %r2, 1;        // m_tile = warp >> 1  in [0, 2)
+    and.b32 %r4, %r2, 1;        // n_tile = warp & 1   in [0, 2)
+    and.b32 %r50, %r1, 31;      // lane id
+
+    // shared-mem base addresses
+    mov.u32 %smem_a_lo, _tg_a;
+    mov.u32 %smem_b_lo, _tg_b;
+    mov.u32 %smem_mbar_lo, _tg_mbar;
+
+    // ---- mbarrier init (thread 0 only, all STAGES) ----
+    setp.eq.s32 %pt0, %r1, 0;
+    @!%pt0 bra $L_init_done;
+    mov.u32 %arr_count, 1;
+    mbarrier.init.shared.b64 [%smem_mbar_lo+0],  %arr_count;
+    mbarrier.init.shared.b64 [%smem_mbar_lo+8],  %arr_count;
+    mbarrier.init.shared.b64 [%smem_mbar_lo+16], %arr_count;
+    fence.proxy.async.shared::cta;
+$L_init_done:
+    bar.sync 0;
+
+    // ---- init per-stage parity counters to 0 ----
+    mov.u32 %parity0, 0;
+    mov.u32 %parity1, 0;
+    mov.u32 %parity2, 0;
+
+    // ---- per-warp ldmatrix base offsets ----
+    // A read base in slab = m_tile * 1024 (32 rows * 32 B/row)
+    mul.lo.u32 %r22, %r3, 1024;
+    // B read base in slab = n_tile * 1024
+    mul.lo.u32 %r24, %r4, 1024;
+
+    // ldmatrix per-lane intra-subtile address (16x16 logical -> 4 b32 per lane)
+    shr.u32 %r51, %r50, 3;
+    and.b32 %r52, %r50, 7;
+    shr.u32 %r53, %r51, 1;
+    shl.b32 %r54, %r53, 3;
+    add.u32 %r55, %r54, %r52;            // row_idx
+    and.b32 %r56, %r51, 1;
+    shl.b32 %r57, %r56, 4;               // col_off
+    shl.b32 %r58, %r55, 5;               // row * 32
+    add.u32 %r59, %r58, %r57;            // intra-subtile lane addr
+
+    // C base address (under Hilbert swizzle):
+    mul.lo.u32 %r5, %r10, 262144;
+    mul.lo.u32 %r6, %r3, 131072;
+    add.u32 %r7, %r5, %r6;
+    mul.lo.u32 %r8, %r11, 256;
+    add.u32 %r7, %r7, %r8;
+    mul.lo.u32 %r8, %r4, 128;
+    add.u32 %r7, %r7, %r8;
+    cvt.u64.u32 %rd6, %r7;
+    add.u64 %rd12, %c_addr, %rd6;
+
+    // ---- init 32 f32 accumulators ----
+    mov.f32 %fc0,  0f00000000;
+    mov.f32 %fc1,  0f00000000;
+    mov.f32 %fc2,  0f00000000;
+    mov.f32 %fc3,  0f00000000;
+    mov.f32 %fc4,  0f00000000;
+    mov.f32 %fc5,  0f00000000;
+    mov.f32 %fc6,  0f00000000;
+    mov.f32 %fc7,  0f00000000;
+    mov.f32 %fc8,  0f00000000;
+    mov.f32 %fc9,  0f00000000;
+    mov.f32 %fc10, 0f00000000;
+    mov.f32 %fc11, 0f00000000;
+    mov.f32 %fc12, 0f00000000;
+    mov.f32 %fc13, 0f00000000;
+    mov.f32 %fc14, 0f00000000;
+    mov.f32 %fc15, 0f00000000;
+    mov.f32 %fc16, 0f00000000;
+    mov.f32 %fc17, 0f00000000;
+    mov.f32 %fc18, 0f00000000;
+    mov.f32 %fc19, 0f00000000;
+    mov.f32 %fc20, 0f00000000;
+    mov.f32 %fc21, 0f00000000;
+    mov.f32 %fc22, 0f00000000;
+    mov.f32 %fc23, 0f00000000;
+    mov.f32 %fc24, 0f00000000;
+    mov.f32 %fc25, 0f00000000;
+    mov.f32 %fc26, 0f00000000;
+    mov.f32 %fc27, 0f00000000;
+    mov.f32 %fc28, 0f00000000;
+    mov.f32 %fc29, 0f00000000;
+    mov.f32 %fc30, 0f00000000;
+    mov.f32 %fc31, 0f00000000;
+
+    // ---- per-CTA global offsets ----
+    mul.lo.u32 %r70, %r10, 64;          // %r70 = sw_y * 64 = A box y0
+    mul.lo.u32 %r71, %r11, 64;          // %r71 = sw_x * 64 = B box y0
+
+    // -- prologue: thread 0 issues stages 0..min(STAGES,K_TILES)-1 --
+    setp.eq.s32 %pt0, %r1, 0;
+    @!%pt0 bra $L_prologue_done;
+    // prologue stage 0: k=0, k_off=0
+    mov.u32 %x0, 0;
+    mov.u32 %y0, %r70;
+    cp.async.bulk.tensor.2d.shared::cluster.global.tile.mbarrier::complete_tx::bytes
+        [%smem_a_lo+0], [%tmap_a_addr, {%x0, %y0}], [%smem_mbar_lo+0];
+    mov.u32 %x1, 0;
+    mov.u32 %y1, %r71;
+    cp.async.bulk.tensor.2d.shared::cluster.global.tile.mbarrier::complete_tx::bytes
+        [%smem_b_lo+0], [%tmap_b_addr, {%x1, %y1}], [%smem_mbar_lo+0];
+    mov.u32 %tx_count, 4096;
+    mbarrier.arrive.expect_tx.release.cta.shared::cta.b64
+        %tok, [%smem_mbar_lo+0], %tx_count;
+    // prologue stage 1: k=1, k_off=16
+    mov.u32 %x0, 16;
+    mov.u32 %y0, %r70;
+    cp.async.bulk.tensor.2d.shared::cluster.global.tile.mbarrier::complete_tx::bytes
+        [%smem_a_lo+2048], [%tmap_a_addr, {%x0, %y0}], [%smem_mbar_lo+8];
+    mov.u32 %x1, 16;
+    mov.u32 %y1, %r71;
+    cp.async.bulk.tensor.2d.shared::cluster.global.tile.mbarrier::complete_tx::bytes
+        [%smem_b_lo+2048], [%tmap_b_addr, {%x1, %y1}], [%smem_mbar_lo+8];
+    mov.u32 %tx_count, 4096;
+    mbarrier.arrive.expect_tx.release.cta.shared::cta.b64
+        %tok, [%smem_mbar_lo+8], %tx_count;
+    // prologue stage 2: k=2, k_off=32
+    mov.u32 %x0, 32;
+    mov.u32 %y0, %r70;
+    cp.async.bulk.tensor.2d.shared::cluster.global.tile.mbarrier::complete_tx::bytes
+        [%smem_a_lo+4096], [%tmap_a_addr, {%x0, %y0}], [%smem_mbar_lo+16];
+    mov.u32 %x1, 32;
+    mov.u32 %y1, %r71;
+    cp.async.bulk.tensor.2d.shared::cluster.global.tile.mbarrier::complete_tx::bytes
+        [%smem_b_lo+4096], [%tmap_b_addr, {%x1, %y1}], [%smem_mbar_lo+16];
+    mov.u32 %tx_count, 4096;
+    mbarrier.arrive.expect_tx.release.cta.shared::cta.b64
+        %tok, [%smem_mbar_lo+16], %tx_count;
+$L_prologue_done:
+    bar.sync 0;
+
+    // ---- K-loop ----
+    mov.u32 %k_iter, 0;
+$L_kloop:
+    mul.lo.s32 %k_off, %k_iter, 16;
+
+    // -- compute slot = k_iter % STAGES (3) and per-slot byte offsets --
+    rem.s32 %slot, %k_iter, 3;
+    mul.lo.s32 %slot_a_off,    %slot, 2048;
+    mul.lo.s32 %slot_b_off,    %slot, 2048;
+    mul.lo.s32 %slot_mbar_off, %slot, 8;
+
+    // -- pick parity for current slot --
+    mov.u32 %parity, %parity0;
+    setp.eq.s32 %p_slot1, %slot, 1;
+    @%p_slot1 mov.u32 %parity, %parity1;
+    setp.eq.s32 %p_slot2, %slot, 2;
+    @%p_slot2 mov.u32 %parity, %parity2;
+
+    // -- all threads: wait on mbarrier at slot --
+    add.s32 %wait_addr, %smem_mbar_lo, %slot_mbar_off;
+$L_wait:
+    mbarrier.try_wait.parity.shared::cta.b64 %pwait, [%wait_addr], %parity;
+    @!%pwait bra $L_wait;
+    bar.sync 0;
+
+    // -- flip parity for the slot we just waited on --
+    setp.eq.s32 %p_slot1, %slot, 0;
+    @%p_slot1 xor.b32 %parity0, %parity0, 1;
+    setp.eq.s32 %p_slot1, %slot, 1;
+    @%p_slot1 xor.b32 %parity1, %parity1, 1;
+    setp.eq.s32 %p_slot1, %slot, 2;
+    @%p_slot1 xor.b32 %parity2, %parity2, 1;
+
+    // -- slab base addrs for current slot --
+    add.u32 %a_slab_base, %smem_a_lo, %slot_a_off;
+    add.u32 %b_slab_base, %smem_b_lo, %slot_b_off;
+
+    // -- ldmatrix A (2x m8n8.x4 = 8 b32 per lane) --
+    add.u32 %r60, %a_slab_base, %r22;     // A_warp_base = slab + m_tile*1024
+    add.u32 %r60, %r60, %r59;              // + intra-subtile lane addr
+    add.u32 %r62, %r60, 512;               // bottom half of warp's 32 rows
+    ldmatrix.sync.aligned.m8n8.x4.shared.b16
+        {%ra0, %ra1, %ra2, %ra3}, [%r60];
+    ldmatrix.sync.aligned.m8n8.x4.shared.b16
+        {%ra4, %ra5, %ra6, %ra7}, [%r62];
+
+    // -- ldmatrix B trans (2x m8n8.x4.trans = 8 b32 per lane) --
+    add.u32 %r61, %b_slab_base, %r24;
+    add.u32 %r61, %r61, %r59;
+    add.u32 %r63, %r61, 512;
+    ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16
+        {%rbl0, %rbl1, %rbl2, %rbl3}, [%r61];
+    ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16
+        {%rbh0, %rbh1, %rbh2, %rbh3}, [%r63];
+
+    // -- 8 mma.m16n8k16 (covers 32x32 per warp; identical to N200-full) --
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc0, %fc1, %fc2, %fc3},
+        {%ra0, %ra1, %ra2, %ra3},
+        {%rbl0, %rbl2},
+        {%fc0, %fc1, %fc2, %fc3};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc4, %fc5, %fc6, %fc7},
+        {%ra0, %ra1, %ra2, %ra3},
+        {%rbl1, %rbl3},
+        {%fc4, %fc5, %fc6, %fc7};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc8, %fc9, %fc10, %fc11},
+        {%ra0, %ra1, %ra2, %ra3},
+        {%rbh0, %rbh2},
+        {%fc8, %fc9, %fc10, %fc11};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc12, %fc13, %fc14, %fc15},
+        {%ra0, %ra1, %ra2, %ra3},
+        {%rbh1, %rbh3},
+        {%fc12, %fc13, %fc14, %fc15};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc16, %fc17, %fc18, %fc19},
+        {%ra4, %ra5, %ra6, %ra7},
+        {%rbl0, %rbl2},
+        {%fc16, %fc17, %fc18, %fc19};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc20, %fc21, %fc22, %fc23},
+        {%ra4, %ra5, %ra6, %ra7},
+        {%rbl1, %rbl3},
+        {%fc20, %fc21, %fc22, %fc23};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc24, %fc25, %fc26, %fc27},
+        {%ra4, %ra5, %ra6, %ra7},
+        {%rbh0, %rbh2},
+        {%fc24, %fc25, %fc26, %fc27};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc28, %fc29, %fc30, %fc31},
+        {%ra4, %ra5, %ra6, %ra7},
+        {%rbh1, %rbh3},
+        {%fc28, %fc29, %fc30, %fc31};
+
+    // -- issue next stage (k+STAGES) into the slot we just vacated --
+    add.s32 %issue_k, %k_iter, 3;
+    setp.lt.s32 %p_issue, %issue_k, 64;
+    setp.eq.and.s32 %p_issue, %r1, 0, %p_issue;
+    @!%p_issue bra $L_skip_issue;
+    mul.lo.s32 %issue_kx16, %issue_k, 16;
+    add.s32 %issue_a_addr,    %smem_a_lo,    %slot_a_off;
+    add.s32 %issue_b_addr,    %smem_b_lo,    %slot_b_off;
+    add.s32 %issue_mbar_addr, %smem_mbar_lo, %slot_mbar_off;
+    mov.u32 %x0, %issue_kx16;
+    mov.u32 %y0, %r70;
+    cp.async.bulk.tensor.2d.shared::cluster.global.tile.mbarrier::complete_tx::bytes
+        [%issue_a_addr], [%tmap_a_addr, {%x0, %y0}], [%issue_mbar_addr];
+    mov.u32 %x1, %issue_kx16;
+    mov.u32 %y1, %r71;
+    cp.async.bulk.tensor.2d.shared::cluster.global.tile.mbarrier::complete_tx::bytes
+        [%issue_b_addr], [%tmap_b_addr, {%x1, %y1}], [%issue_mbar_addr];
+    mov.u32 %tx_count, 4096;
+    mbarrier.arrive.expect_tx.release.cta.shared::cta.b64
+        %tok, [%issue_mbar_addr], %tx_count;
+$L_skip_issue:
+
+    bar.sync 0;
+
+    add.s32 %k_iter, %k_iter, 1;
+    setp.lt.s32 %p1, %k_iter, 64;
+    @%p1 bra $L_kloop;
+
+    // ---- epilogue: store 32 acc registers to C ----
+    shr.u32 %r80, %r50, 2;               // group
+    and.b32 %r81, %r50, 3;               // col_q
+    mul.lo.u32 %r82, %r80, 4096;
+    shl.b32 %r83, %r81, 3;
+    add.u32 %r84, %r82, %r83;
+    cvt.u64.u32 %rd20, %r84;
+    add.u64 %rd20, %rd12, %rd20;
+
+    add.u64 %rd21, %rd20, 32768;
+    add.u64 %rd22, %rd20, 65536;
+    add.u64 %rd23, %rd20, 98304;
+
+    st.global.f32 [%rd20 +     0], %fc0;
+    st.global.f32 [%rd20 +     4], %fc1;
+    st.global.f32 [%rd21 +     0], %fc2;
+    st.global.f32 [%rd21 +     4], %fc3;
+    st.global.f32 [%rd20 +    32], %fc4;
+    st.global.f32 [%rd20 +    36], %fc5;
+    st.global.f32 [%rd21 +    32], %fc6;
+    st.global.f32 [%rd21 +    36], %fc7;
+    st.global.f32 [%rd20 +    64], %fc8;
+    st.global.f32 [%rd20 +    68], %fc9;
+    st.global.f32 [%rd21 +    64], %fc10;
+    st.global.f32 [%rd21 +    68], %fc11;
+    st.global.f32 [%rd20 +    96], %fc12;
+    st.global.f32 [%rd20 +   100], %fc13;
+    st.global.f32 [%rd21 +    96], %fc14;
+    st.global.f32 [%rd21 +   100], %fc15;
+
+    st.global.f32 [%rd22 +     0], %fc16;
+    st.global.f32 [%rd22 +     4], %fc17;
+    st.global.f32 [%rd23 +     0], %fc18;
+    st.global.f32 [%rd23 +     4], %fc19;
+    st.global.f32 [%rd22 +    32], %fc20;
+    st.global.f32 [%rd22 +    36], %fc21;
+    st.global.f32 [%rd23 +    32], %fc22;
+    st.global.f32 [%rd23 +    36], %fc23;
+    st.global.f32 [%rd22 +    64], %fc24;
+    st.global.f32 [%rd22 +    68], %fc25;
+    st.global.f32 [%rd23 +    64], %fc26;
+    st.global.f32 [%rd23 +    68], %fc27;
+    st.global.f32 [%rd22 +    96], %fc28;
+    st.global.f32 [%rd22 +   100], %fc29;
+    st.global.f32 [%rd23 +    96], %fc30;
+    st.global.f32 [%rd23 +   100], %fc31;
+
+    ret;
+
+$hilbert_oob_ret:
+    ret;
+}

@@ -1,0 +1,148 @@
+// ═══════════════════════════════════════════════════════════════════
+//  self/ml/dpo.hexa — Direct Preference Optimization (pure Hexa)
+//
+//  Rafailov et al. 2023: "Direct Preference Optimization:
+//  Your Language Model is Secretly a Reward Model"
+//
+//  DPO loss:
+//    L = -log sigmoid(beta * ((log_pi_w - log_ref_w)
+//                            - (log_pi_l - log_ref_l)))
+//
+//  SimPO variant (Meng et al. 2024):
+//    L = -log sigmoid(beta * (mean(pi_w) - mean(pi_l)) - gamma)
+//    No reference model, length-normalized
+//
+//  Pure Hexa — no C, no FFI, no builtins beyond math_pure.
+// ═══════════════════════════════════════════════════════════════════
+
+// Requires: runtime/math_pure.hexa (exp_pure, log_pure, abs_pure)
+
+// ── sigmoid: 1 / (1 + exp(-x)) ─────────────────────────────────
+// Numerically stable: branch on sign of x to avoid exp overflow
+@pure
+pub fn sigmoid(x) {
+    if x >= 0.0 {
+        let ex = exp_pure(0.0 - x)
+        return 1.0 / (1.0 + ex)
+    }
+    let ex = exp_pure(x)
+    return ex / (1.0 + ex)
+}
+
+// ── log_sigmoid: log(sigmoid(x)) ────────────────────────────────
+// = -softplus(-x), numerically stable
+@pure
+pub fn log_sigmoid(x) {
+    // log(sigmoid(x)) = x - softplus(x)
+    // softplus(x) = log(1 + exp(x))
+    // For large positive x: log_sigmoid ~ 0
+    // For large negative x: log_sigmoid ~ x
+    if x >= 15.0 {
+        // sigmoid(x) ~ 1, so log ~ -exp(-x)
+        return 0.0 - exp_pure(0.0 - x)
+    }
+    if x <= -15.0 {
+        // sigmoid(x) ~ exp(x), so log ~ x
+        return x
+    }
+    // General case: -softplus(-x) = x - log(1 + exp(x))
+    // Use stable form: -max(0, -x) - log(1 + exp(-|x|))
+    let ax = abs_pure(x)
+    let neg_ax = 0.0 - ax
+    let log_term = log_pure(1.0 + exp_pure(neg_ax))
+    if x >= 0.0 {
+        return 0.0 - log_term
+    }
+    return x - log_term
+}
+
+// ── dpo_loss ────────────────────────────────────────────────────
+// Batch DPO loss averaged over paired samples.
+// Each array element is one sample's summed log-prob.
+//
+// L = -mean[ log sigmoid(beta * ((pi_w - ref_w) - (pi_l - ref_l))) ]
+@pure
+pub fn dpo_loss(pi_logprobs_chosen, pi_logprobs_rejected, ref_logprobs_chosen, ref_logprobs_rejected, beta) {
+    let n = len(pi_logprobs_chosen)
+    if n == 0 { return 0.0 }
+    let mut total = 0.0
+    let mut i = 0
+    while i < n {
+        let log_ratio_w = pi_logprobs_chosen[i] - ref_logprobs_chosen[i]
+        let log_ratio_l = pi_logprobs_rejected[i] - ref_logprobs_rejected[i]
+        let logit = beta * (log_ratio_w - log_ratio_l)
+        // L_i = -log_sigmoid(logit)
+        let ls = log_sigmoid(logit)
+        total = total - ls
+        i = i + 1
+    }
+    return total / (n * 1.0)
+}
+
+// ── dpo_reward: implicit reward beta * (log_pi - log_ref) ──────
+@pure
+pub fn dpo_reward(pi_logprobs, ref_logprobs, beta) {
+    let n = len(pi_logprobs)
+    if n == 0 { return 0.0 }
+    let mut total = 0.0
+    let mut i = 0
+    while i < n {
+        total = total + (pi_logprobs[i] - ref_logprobs[i])
+        i = i + 1
+    }
+    return beta * total / (n * 1.0)
+}
+
+// ── dpo_train_step ──────────────────────────────────────────────
+// Single DPO training step from pre-computed logprobs.
+// model_logprobs: dict with "chosen" and "rejected" keys -> [float]
+// ref_logprobs:   dict with "chosen" and "rejected" keys -> [float]
+// Returns dict: {loss, reward_chosen, reward_rejected, reward_margin}
+pub fn dpo_train_step(model_logprobs, ref_logprobs, beta, lr) {
+    let pi_w = model_logprobs["chosen"]
+    let pi_l = model_logprobs["rejected"]
+    let ref_w = ref_logprobs["chosen"]
+    let ref_l = ref_logprobs["rejected"]
+
+    let loss = dpo_loss(pi_w, pi_l, ref_w, ref_l, beta)
+    let rw = dpo_reward(pi_w, ref_w, beta)
+    let rl = dpo_reward(pi_l, ref_l, beta)
+    let margin = rw - rl
+
+    let mut result = #{}
+    result["loss"] = loss
+    result["reward_chosen"] = rw
+    result["reward_rejected"] = rl
+    result["reward_margin"] = margin
+    return result
+}
+
+// ── simpo_loss ──────────────────────────────────────────────────
+// SimPO: reference-free, length-normalized preference optimization.
+// L = -mean[ log sigmoid(beta * (mean(pi_w) - mean(pi_l)) - gamma) ]
+//
+// pi_chosen / pi_rejected are arrays of per-token log-probs for each
+// sample. We compute the average log-prob per sample as the
+// length-normalized reward, then apply the margin gamma.
+//
+// For batch interface: each element is one sample's summed log-prob
+// and the corresponding sequence length is inferred from the array
+// (each element = sum of per-token log-probs for that sample).
+// To keep the API simple, we accept arrays of per-sample average
+// log-probs directly (caller normalizes by length).
+@pure
+pub fn simpo_loss(pi_chosen, pi_rejected, beta, gamma) {
+    let n = len(pi_chosen)
+    if n == 0 { return 0.0 }
+    let mut total = 0.0
+    let mut i = 0
+    while i < n {
+        let logit = beta * (pi_chosen[i] - pi_rejected[i]) - gamma
+        let ls = log_sigmoid(logit)
+        total = total - ls
+        i = i + 1
+    }
+    return total / (n * 1.0)
+}
+
+println("[dpo_pure] loaded — DPO + SimPO, pure Hexa, no FFI")

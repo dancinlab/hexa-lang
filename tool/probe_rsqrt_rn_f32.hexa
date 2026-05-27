@@ -1,0 +1,18 @@
+// tool/probe_rsqrt_rn_f32.hexa — B4 milestone fixture: f32 rsqrt_rn silicon fire
+//
+// Validates PR #1358 — opt-in IEEE-correct f32 rsqrt path (sqrt.rn.f32 +
+// rcp.rn.f32) introduced as `rsqrt_rn` intrinsic (`rsqrt(x)` keeps the
+// fast `rsqrt.approx.f32` perf-default).
+//
+// Kernel: c[i] = rsqrt_rn(a[i]) at f32. Compare to CPU libm 1.0/sqrtf(x).
+// Expected: max_rel_err == 0 byte-exact for normal-range inputs (round-
+// to-nearest composition matches libm exactly, same as f64 result in
+// PR #1337 F-RSQRTF64-NUMERIC).
+
+@gpu_kernel
+fn probe_rsqrt_rn_f32(a: [f32], c: [f32], n: i64) {
+    let mut tid: i64 = to_i64(gpu_thread_id_x())
+    if tid < n {
+        c[to_i64(tid)] = rsqrt_rn(a[to_i64(tid)])
+    }
+}

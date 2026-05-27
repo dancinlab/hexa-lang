@@ -1,0 +1,20 @@
+Device: NVIDIA RTX PRO 4500 Blackwell sm_120
+CUDA driver=13000 runtime=12080
+loaded hexa-shared PTX shape 256 (sgemm_shared_256x256_grid)
+loaded hexa-shared PTX shape 384 (sgemm_shared_384x384_grid)
+loaded hexa-shared PTX shape 512 (sgemm_shared_512x512_grid)
+loaded hexa-shared PTX shape 768 (sgemm_shared_768x768_grid)
+loaded hexa-shared PTX shape 1024 (sgemm_shared_1024x1024_grid)
+loaded hexa-shared PTX shape 1536 (sgemm_shared_1536x1536_grid)
+[M= 256] cuBLAS SGEMM        median=0.009696 ms  std=0.000925  min=0.009344  max=0.013856  TFLOPS=  3.4606
+[M= 256] hexa-shared SGEMM   median=0.014848 ms  std=0.000238  min=0.013920  max=0.016960  TFLOPS=  2.2599  ratio=0.6530  maxabs=0.000000
+[M= 384] cuBLAS SGEMM        median=0.011744 ms  std=0.000244  min=0.009760  max=0.012800  TFLOPS=  9.6429
+[M= 384] hexa-shared SGEMM   median=0.021024 ms  std=0.000139  min=0.019968  max=0.021152  TFLOPS=  5.3865  ratio=0.5586  maxabs=0.000000
+[M= 512] cuBLAS SGEMM        median=0.011776 ms  std=0.000891  min=0.011392  max=0.017856  TFLOPS= 22.7951
+[M= 512] hexa-shared SGEMM   median=0.025152 ms  std=0.000903  min=0.024256  max=0.028064  TFLOPS= 10.6725  ratio=0.4682  maxabs=0.000000
+[M= 768] cuBLAS SGEMM        median=0.019920 ms  std=0.000558  min=0.017856  max=0.025056  TFLOPS= 45.4804
+[M= 768] hexa-shared SGEMM   median=0.049664 ms  std=0.000526  min=0.047520  max=0.053760  TFLOPS= 18.2420  ratio=0.4011  maxabs=0.000000
+[M=1024] cuBLAS SGEMM        median=0.035520 ms  std=0.000729  min=0.034240  max=0.038592  TFLOPS= 60.4584
+[M=1024] hexa-shared SGEMM   median=0.118464 ms  std=0.000743  min=0.117088  max=0.121568  TFLOPS= 18.1277  ratio=0.2998  maxabs=0.000000
+[M=1536] cuBLAS SGEMM        median=0.082656 ms  std=0.000715  min=0.082304  max=0.089536  TFLOPS= 87.6858
+[M=1536] hexa-shared SGEMM   median=0.324128 ms  std=0.000865  min=0.322528  max=0.327072  TFLOPS= 22.3608  ratio=0.2550  maxabs=0.000000

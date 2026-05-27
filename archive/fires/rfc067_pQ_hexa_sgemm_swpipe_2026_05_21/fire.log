@@ -1,0 +1,20 @@
+Device: NVIDIA GeForce RTX 5070 sm_120
+CUDA driver=13000 runtime=12000
+loaded hexa-swpipe PTX shape 256 (sgemm_swpipe_256x256_grid)
+loaded hexa-swpipe PTX shape 384 (sgemm_swpipe_384x384_grid)
+loaded hexa-swpipe PTX shape 512 (sgemm_swpipe_512x512_grid)
+loaded hexa-swpipe PTX shape 768 (sgemm_swpipe_768x768_grid)
+loaded hexa-swpipe PTX shape 1024 (sgemm_swpipe_1024x1024_grid)
+loaded hexa-swpipe PTX shape 1536 (sgemm_swpipe_1536x1536_grid)
+[M= 256] cuBLAS HGEMM            median=0.007440 ms  std=0.001265  min=0.005632  max=0.013728  TFLOPS=  4.5100
+[M= 256] hexa-swpipe HGEMM     median=0.007616 ms  std=0.000499  min=0.006112  max=0.009696  TFLOPS=  4.4058  ratio=0.9769  maxabs=0.0000  maxrel=0.0000
+[M= 384] cuBLAS HGEMM            median=0.008640 ms  std=0.000768  min=0.007360  max=0.015616  TFLOPS= 13.1072
+[M= 384] hexa-swpipe HGEMM     median=0.009664 ms  std=0.000337  min=0.008832  max=0.012960  TFLOPS= 11.7184  ratio=0.8940  maxabs=0.0000  maxrel=0.0000
+[M= 512] cuBLAS HGEMM            median=0.011536 ms  std=0.000889  min=0.010432  max=0.019488  TFLOPS= 23.2694
+[M= 512] hexa-swpipe HGEMM     median=0.017856 ms  std=0.000369  min=0.016864  max=0.019392  TFLOPS= 15.0333  ratio=0.6461  maxabs=0.0000  maxrel=0.0000
+[M= 768] cuBLAS HGEMM            median=0.019792 ms  std=0.000509  min=0.017760  max=0.020928  TFLOPS= 45.7745
+[M= 768] hexa-swpipe HGEMM     median=0.034272 ms  std=0.000283  min=0.033408  max=0.035296  TFLOPS= 26.4347  ratio=0.5775  maxabs=0.0000  maxrel=0.0000
+[M=1024] cuBLAS HGEMM            median=0.041344 ms  std=0.001047  min=0.038368  max=0.050624  TFLOPS= 51.9418
+[M=1024] hexa-swpipe HGEMM     median=0.084896 ms  std=0.000753  min=0.083040  max=0.086528  TFLOPS= 25.2955  ratio=0.4870  maxabs=0.0000  maxrel=0.0000
+[M=1536] cuBLAS HGEMM            median=0.107136 ms  std=0.001059  min=0.106816  max=0.110944  TFLOPS= 67.6501
+[M=1536] hexa-swpipe HGEMM     median=0.231744 ms  std=0.000739  min=0.229728  max=0.233792  TFLOPS= 31.2748  ratio=0.4623  maxabs=0.0000  maxrel=0.0000

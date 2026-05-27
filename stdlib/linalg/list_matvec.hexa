@@ -1,0 +1,38 @@
+// HEXA Standard Library — linalg/list_matvec
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Pure-hexa list (row-major) matrix-vector multiply. Promoted from anima
+// canonical site `anima-physics/realtime_monitor.hexa` (`matvec`) per
+// STDLIB phase4 survey #455 — 23 duplicate clones across anima
+// (training/alm_*.hexa, training/nn_core.hexa, training/persona_lora_train.hexa,
+// anima-physics/realtime_monitor.hexa).
+//
+// Byte-equal-faithful to the anima sites:
+//   - row-major access `w[r * cols + c]`.
+//   - signature order (w, x, rows, cols) preserved.
+//   - empty-friendly: rows == 0 returns [].
+//
+// Companion to the GPU `matvec_farr` (foreign-array surface in
+// stdlib/linalg/{reference,ffi,dispatch}.hexa); this list version is the
+// non-farr path used by interp-side anima training scaffolds.
+//
+// Surface:
+//   pub fn matvec(w: [float], x: [float], rows: int, cols: int) -> [float]
+
+pub fn matvec(w: array, x: array, rows: int, cols: int) -> array {
+    let mut out = []
+    let mut r = 0
+    while r < rows {
+        let mut s = 0.0
+        let mut c = 0
+        while c < cols {
+            s = s + w[r * cols + c] * x[c]
+            c = c + 1
+        }
+        out = out.push(s)
+        r = r + 1
+    }
+    return out
+}

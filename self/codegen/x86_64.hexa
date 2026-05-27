@@ -1,0 +1,304 @@
+// self/codegen/x86_64.hexa — ported from src/codegen/x86_64.rs
+// x86-64 Machine Code Emitter — secondary target.
+// Generates raw x86-64 instructions (variable width).
+
+// x86-64 register encoding (REX.W compatible).
+// Order: rax=0, rcx=1, rdx=2, rbx=3, rsi=4, rdi=5, r8-r15=6-13
+fn x86_reg_enc() -> [int] {
+    return [0, 1, 2, 3, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+}
+
+// ── Little-endian byte pushers with two's-complement normalization ──
+// Hexa `%` follows the dividend's sign, so for negative `v`, the naïve
+// `push(v % 256); v = v / 256` loop drops the high-byte sign extension
+// (`-5 / 256 = 0` under truncated division). Every rel32 / negative imm
+// call site in this file must go through these helpers to avoid silent
+// backward-branch / negative-literal miscompilation.
+// Matches irx_push_imm32 in ir_to_x86.hexa + patch_call_fixups_x86 in
+// mod.hexa (fix commits 047f671d / 3b61bb9c).
+
+// Push signed 32-bit value as 4 little-endian bytes (handles negatives).
+fn x86_push_u32_le(code: [int], v: int) -> [int] {
+    let mut u = v
+    if u < 0 { u = u + 4294967296 }   // 2^32
+    return code.push(u % 256).push((u / 256) % 256).push((u / 65536) % 256).push((u / 16777216) % 256)
+}
+
+// Push signed 64-bit value as 8 little-endian bytes. Uses floor-division
+// emulation since 2^64 doesn't fit in i64 for a single `+` normalization.
+fn x86_push_u64_le(code: [int], v: int) -> [int] {
+    let mut c = code
+    let mut x = v
+    let mut i = 0
+    while i < 8 {
+        let mut b = x % 256
+        let mut nx = x / 256
+        if b < 0 {
+            b = b + 256
+            nx = (x - b) / 256
+        }
+        c.push(b)
+        x = nx
+        i = i + 1
+    }
+    return c
+}
+
+// REX.W prefix with optional R (reg-field extension) and B (r/m extension).
+// reg_ext=1 when the ModRM.reg reg is r8-r15; rm_ext=1 when ModRM.rm is r8-r15.
+// Callers that address only rax..rdi collapse to REX.W = 0x48.
+fn x86_rex_w(reg_ext: int, rm_ext: int) -> int {
+    return 0x48 + (reg_ext * 4) + rm_ext
+}
+
+// Emit mov reg, reg (64-bit). Handles r8-r15 via REX.R/B.
+fn x86_emit_mov_rr(code: [int], dst: int, src: int) -> [int] {
+    if dst == src { return code }
+    let rex = x86_rex_w(if src >= 8 { 1 } else { 0 }, if dst >= 8 { 1 } else { 0 })
+    return code.push(rex).push(0x89).push(0xc0 + (src % 8) * 8 + (dst % 8))
+}
+
+// Emit ALU reg, reg (64-bit): add=0x01, sub=0x29.
+fn x86_emit_alu_rr(code: [int], opcode: int, dst: int, src: int) -> [int] {
+    let rex = x86_rex_w(if src >= 8 { 1 } else { 0 }, if dst >= 8 { 1 } else { 0 })
+    return code.push(rex).push(opcode).push(0xc0 + (src % 8) * 8 + (dst % 8))
+}
+
+// Emit movabs reg, imm64. opcode = B8 + rd_low (3-bit reg); REX.B if reg >= 8.
+fn x86_emit_mov_imm64(code: [int], reg: int, val: int) -> [int] {
+    let rex = x86_rex_w(0, if reg >= 8 { 1 } else { 0 })
+    let c = code.push(rex).push(0xb8 + (reg % 8))
+    return x86_push_u64_le(c, val)
+}
+
+// Emit prologue
+fn x86_emit_prologue(code: [int], stack_size: int) -> [int] {
+    let mut c = code
+    // push rbp
+    c.push(0x55)
+    // mov rbp, rsp
+    c.push(0x48).push(0x89).push(0xe5)
+    // sub rsp, stack_size
+    if stack_size > 0 {
+        c.push(0x48).push(0x81).push(0xec)
+        c = x86_push_u32_le(c, stack_size)
+    }
+    return c
+}
+
+// Emit epilogue
+fn x86_emit_epilogue(code: [int]) -> [int] {
+    let mut c = code
+    // mov rsp, rbp
+    c.push(0x48).push(0x89).push(0xec)
+    // pop rbp
+    c.push(0x5d)
+    // ret
+    c.push(0xc3)
+    return c
+}
+
+// Resolve a register for a value given allocation info.
+// In the self-hosted version, allocation is represented as arrays.
+// locations_regs[vid] = physical register index, or -1 if spilled.
+fn x86_resolve_reg(vid: int, locations_regs: [int]) -> int {
+    if vid < len(locations_regs) {
+        let r = locations_regs[vid]
+        if r >= 0 {
+            let enc = x86_reg_enc()
+            if r < len(enc) { return enc[r] }
+        }
+    }
+    return 0
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  x86-64 SYSCALL EMISSION — Linux
+// ═══════════════════════════════════════════════════════════════
+// Linux x86-64 ABI: syscall nr in rax, args in rdi, rsi, rdx, r10, r8, r9.
+// Trap instruction: 0f 05 (syscall).
+//   __NR_write = 1, __NR_exit = 60.
+//
+// x86_64.hexa::x86_reg_enc() maps logical register indices; we use raw
+// opcode encoding here because syscall arg regs are fixed (rdi=7, rsi=6,
+// rdx=2, rax=0). The `_reg` parameters passed in are already raw x86
+// register numbers (0..15) matching the Intel SDM encoding.
+
+// mov rax, imm32 (zero-extended) — used for small syscall numbers.
+// Encoding: 48 c7 c0 imm32   (REX.W + MOV r/m64, imm32, reg=rax).
+// (Destination is fixed to rax = reg 0, so no REX.B is needed.)
+fn x86_emit_mov_rax_imm32(code: [int], imm: int) -> [int] {
+    let c = code.push(0x48).push(0xc7).push(0xc0)
+    return x86_push_u32_le(c, imm)
+}
+
+// syscall trap: 0f 05
+fn x86_emit_syscall_insn(code: [int]) -> [int] {
+    return code.push(0x0f).push(0x05)
+}
+
+// encode_syscall_write_x86 — write(fd_reg, buf_reg, len_reg)
+// Marshals args into rdi (7), rsi (6), rdx (2); syscall nr 1 in rax.
+fn encode_syscall_write_x86(os: int, fd_reg: int, buf_reg: int, len_reg: int) -> [int] {
+    let mut code = []
+    // Place args (mov rr is a no-op when src==dst).
+    code = x86_emit_mov_rr(code, 7, fd_reg)   // rdi <- fd
+    code = x86_emit_mov_rr(code, 6, buf_reg)  // rsi <- buf
+    code = x86_emit_mov_rr(code, 2, len_reg)  // rdx <- len
+    // Syscall number (Linux write = 1).
+    code = x86_emit_mov_rax_imm32(code, 1)
+    code = x86_emit_syscall_insn(code)
+    return code
+}
+
+// encode_syscall_exit_x86 — exit(code_reg)
+fn encode_syscall_exit_x86(os: int, code_reg: int) -> [int] {
+    let mut code = []
+    code = x86_emit_mov_rr(code, 7, code_reg)  // rdi <- status
+    code = x86_emit_mov_rax_imm32(code, 60)    // __NR_exit
+    code = x86_emit_syscall_insn(code)
+    return code
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  ALU / multiply / compare — ARM64 parity slice
+// ═══════════════════════════════════════════════════════════════
+// REX.W prefix 0x48 selects 64-bit operand size. All ops here emit
+// (REX.W, opcode, ModR/M). ModR/M = 0xc0 | (src<<3) | dst for reg-reg
+// forms — matches the Intel SDM "/r" notation.
+
+// add dst, src  — 48 01 /r  (r/m ← dst, reg ← src → REX.B=dst>=8, REX.R=src>=8)
+fn x86_emit_add_rr(code: [int], dst: int, src: int) -> [int] {
+    let rex = x86_rex_w(if src >= 8 { 1 } else { 0 }, if dst >= 8 { 1 } else { 0 })
+    return code.push(rex).push(0x01).push(0xc0 + (src % 8) * 8 + (dst % 8))
+}
+
+// sub dst, src  — 48 29 /r
+fn x86_emit_sub_rr(code: [int], dst: int, src: int) -> [int] {
+    let rex = x86_rex_w(if src >= 8 { 1 } else { 0 }, if dst >= 8 { 1 } else { 0 })
+    return code.push(rex).push(0x29).push(0xc0 + (src % 8) * 8 + (dst % 8))
+}
+
+// imul dst, src — 48 0f af /r  (dst *= src; 2-op form has dst in reg field, src in r/m)
+fn x86_emit_imul_rr(code: [int], dst: int, src: int) -> [int] {
+    let rex = x86_rex_w(if dst >= 8 { 1 } else { 0 }, if src >= 8 { 1 } else { 0 })
+    return code.push(rex).push(0x0f).push(0xaf).push(0xc0 + (dst % 8) * 8 + (src % 8))
+}
+
+// cmp lhs, rhs — 48 39 /r  (SUBS XZR,lhs,rhs equivalent — lhs in r/m, rhs in reg)
+fn x86_emit_cmp_rr(code: [int], lhs: int, rhs: int) -> [int] {
+    let rex = x86_rex_w(if rhs >= 8 { 1 } else { 0 }, if lhs >= 8 { 1 } else { 0 })
+    return code.push(rex).push(0x39).push(0xc0 + (rhs % 8) * 8 + (lhs % 8))
+}
+
+// test dst, dst — 48 85 /r  (zero check; both operands are the same reg)
+fn x86_emit_test_rr(code: [int], dst: int) -> [int] {
+    let rex = x86_rex_w(if dst >= 8 { 1 } else { 0 }, if dst >= 8 { 1 } else { 0 })
+    return code.push(rex).push(0x85).push(0xc0 + (dst % 8) * 8 + (dst % 8))
+}
+
+// Condition codes — shared by Jcc and SETcc, mirror Intel SDM encoding.
+// Use ARM64 cond_code integers as callers: eq=0, ne=1, lt=11 (signed),
+// gt=12 (signed), le=13, ge=10. Map to x86 tttn:
+//   eq→0x04, ne→0x05, lt→0x0c (SETL), gt→0x0f (SETG),
+//   le→0x0e (SETLE), ge→0x0d (SETGE).
+fn x86_cc_from_arm64(cc: int) -> int {
+    if cc == 0 { return 0x04 }   // eq
+    if cc == 1 { return 0x05 }   // ne
+    if cc == 10 { return 0x0d }  // ge
+    if cc == 11 { return 0x0c }  // lt
+    if cc == 12 { return 0x0f }  // gt
+    if cc == 13 { return 0x0e }  // le
+    return 0x05  // default: NE (safest for unknown)
+}
+
+// setcc dst, cond — 0f 9x /r  (writes byte 0/1; caller must movzx to widen).
+// A REX prefix is ALWAYS required for byte-reg addressing consistency. Without
+// one, ModRM rm=4..7 selects AH/CH/DH/BH (legacy high-bytes) instead of the
+// spl/bpl/sil/dil low-byte registers we actually want. So:
+//   dst <  8 → REX = 0x40  (empty REX — just enables low-byte interpretation)
+//   dst >= 8 → REX = 0x41  (REX.B to extend ModRM.rm into r8-r15)
+// MOVZX that follows uses REX.W so the 64-bit destination is zero-extended.
+// Matches irx_emit_setcc_movzx in ir_to_x86.hexa.
+fn x86_emit_setcc(code: [int], dst_x86: int, tttn: int) -> [int] {
+    let mut c = code
+    let low = dst_x86 % 8
+    if dst_x86 >= 8 {
+        c.push(0x41)
+    } else {
+        c.push(0x40)
+    }
+    c.push(0x0f).push(0x90 + tttn).push(0xc0 + low)
+    // movzx dst, dst_byte — REX.W 0f b6 /r  (widen byte to 64-bit)
+    if dst_x86 >= 8 {
+        c.push(0x4d).push(0x0f).push(0xb6).push(0xc0 + low * 8 + low)
+    } else {
+        c.push(0x48).push(0x0f).push(0xb6).push(0xc0 + dst_x86 * 8 + dst_x86)
+    }
+    return c
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Control flow — jumps, calls, ret
+// ═══════════════════════════════════════════════════════════════
+// Branches take signed 32-bit rel operands, relative to the byte AFTER
+// the branch instruction. Parallel to ARM64 patch_branch, callers emit
+// a placeholder (rel=0) then patch once the target address is known.
+
+// jmp rel32 — e9 disp32  (5 bytes total)
+fn x86_emit_jmp_rel32(code: [int], rel: int) -> [int] {
+    return x86_push_u32_le(code.push(0xe9), rel)
+}
+
+// jcc rel32 — 0f 8x disp32  (6 bytes total). tttn = x86 condition code.
+fn x86_emit_jcc_rel32(code: [int], tttn: int, rel: int) -> [int] {
+    return x86_push_u32_le(code.push(0x0f).push(0x80 + tttn), rel)
+}
+
+// call rel32 — e8 disp32
+fn x86_emit_call_rel32(code: [int], rel: int) -> [int] {
+    return x86_push_u32_le(code.push(0xe8), rel)
+}
+
+// ret — c3 (plain near return)
+fn x86_emit_ret(code: [int]) -> [int] {
+    return code.push(0xc3)
+}
+
+// Patch a branch at `offset` in `code` with a new rel32 displacement.
+// Layout recap: E9/E8 + disp32 = 5 bytes; 0F 8x + disp32 = 6 bytes.
+// `rel` is the signed 32-bit delta from the byte AFTER the instruction.
+// `op_kind`: 0 = jmp/call (1-byte opcode), 1 = jcc (2-byte opcode).
+fn x86_patch_rel32(code: [int], offset: int, op_kind: int, rel: int) -> [int] {
+    let mut c = code
+    let disp_off = if op_kind == 1 { offset + 2 } else { offset + 1 }
+    if disp_off + 4 <= len(c) {
+        let mut urel = rel
+        if urel < 0 { urel = urel + 4294967296 }
+        c[disp_off] = urel % 256
+        c[disp_off + 1] = (urel / 256) % 256
+        c[disp_off + 2] = (urel / 65536) % 256
+        c[disp_off + 3] = (urel / 16777216) % 256
+    }
+    return c
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Stack push/pop (1-byte for low regs; REX prefix for r8-r15)
+// ═══════════════════════════════════════════════════════════════
+
+// push reg — 50+rd (rax..rdi) or 41 50+rd-8 (r8..r15)
+fn x86_emit_push_reg(code: [int], reg: int) -> [int] {
+    if reg >= 8 {
+        return code.push(0x41).push(0x50 + (reg - 8))
+    }
+    return code.push(0x50 + reg)
+}
+
+// pop reg — 58+rd, or 41 58+rd-8
+fn x86_emit_pop_reg(code: [int], reg: int) -> [int] {
+    if reg >= 8 {
+        return code.push(0x41).push(0x58 + (reg - 8))
+    }
+    return code.push(0x58 + reg)
+}

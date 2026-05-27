@@ -1,0 +1,23 @@
+fn build_and_read() {
+    let mut arr = []
+    arr = arr + [10.0]
+    arr = arr + [20.0]
+    arr = arr + [30.0]
+    println("built len=" + to_string(len(arr)))
+    // read back
+    let mut out = []
+    let mut i = 0
+
+    while i < len(arr) {
+        out = out + [arr[i] * 2.0]
+    }
+    return out
+}
+
+fn main_fn() {
+    let r = build_and_read()
+    println("result len=" + to_string(len(r)))
+    println("r[0]=" + to_string(r[0]))
+}
+
+main_fn()

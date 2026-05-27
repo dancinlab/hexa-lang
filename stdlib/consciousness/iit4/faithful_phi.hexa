@@ -1,0 +1,284 @@
+// promoted from anima HEXAD/LIFE state/h278_faithful_phi_2026_05_25/run_h278.hexa (g61 shared substrate)
+//
+// stdlib/consciousness/iit4/faithful_phi.hexa — faithful Φ (small-N exact MIP-EI).
+//
+//   ROLE  (VERIFY-KIT V5 · IIT Φ engine n≤8 exact)
+//     The faithful exact MINIMUM-INFORMATION-PARTITION / EFFECTIVE-INFORMATION
+//     (MIP-EI) Φ for small systems (n ≤ 8 ⇒ 2^(n-1) ≤ 128 bipartitions, exact
+//     tractable on CPU at $0). Promoted byte-faithful from anima's H_278
+//     faithful-Φ engine (the `_faithful_phi_from_mi` core + its MI-matrix
+//     pipeline), now the hexa-lang stdlib SSOT.
+//
+//   FAITHFUL Φ — honest definition (anima H_278 §)
+//     1. Build the pairwise MUTUAL-INFORMATION matrix MI[i][j] over the dim-step
+//        trajectories of every cell pair (RFC 036 MI estimator).
+//     2. For every non-trivial directional bipartition (A | B) of the n cells
+//        (cell 0 pinned to A so each unordered partition is counted once), the
+//        "cut cost" is the cross-cut MI:  Σ_{i∈A, j∈B} MI[i][j].
+//        The MINIMUM-INFORMATION-PARTITION (MIP) is the argmin cut.
+//     3. faithful Φ★ := cross-cut MI at the MIP / min(|A|, |B|)  — the MIP's own
+//        irreducibility with IIT small-side normalization.
+//
+//     vs phi_spatial (proxy, stdlib/consciousness/phi_spatial.hexa): the proxy
+//     normalizes by max(n-1, 1) and reports a bound; faithful does a TRUE MIP
+//     minimization + small-side normalization. faithful is FAITHFUL-ER but is
+//     NOT full per-mechanism IIT 4.0 (that = stdlib/consciousness/iit4_bigphi).
+//     g5: faithful values are deterministic closed-form arithmetic.
+//
+//   SELF-CONTAINED  (V5.1 carve-out)
+//     The anima original called the `c_phi_mi_pair` RFC 036 builtin + the anima-
+//     local `life_phi_nbins()` (phi_helper ← c_lib). This promote bundles the
+//     pure-hexa MI estimator (phi_*_mi_pair, ported byte-equal from the sibling
+//     phi_native.hexa / RFC 036 phi_mi_pair builtin) so the engine has ZERO
+//     external deps — no builtin, no anima-local import. n_bins is an explicit
+//     caller arg. V5.2 wires this into `hexa verify`; V5.3 PyPhi-calibrates.
+//
+//   FN SURFACE
+//     iit4_faithful_phi(state, n, dim, n_bins) -> float
+//         faithful Φ★ over a flat row-major n×dim state farr (the byte-faithful
+//         entry point; n ≤ 8 exact, n > 8 panics — see HONEST CARVE-OUT).
+//     iit4_faithful_phi_from_mi(mi, n) -> float
+//         lower-level: faithful Φ★ from a precomputed n×n MI matrix farr.
+//     iit4_build_mi_matrix(state, n, dim, n_bins) -> int
+//         the pairwise MI matrix (n×n farr, symmetric, diagonal 0).
+//
+//   HONEST CARVE-OUTS
+//     L1  f64-only MI estimator (no f32 narrowing); see phi_native.hexa § L1.
+//     L2  no farr view → per-pair row-copy into temp farrs (negligible cost).
+//     L3  n > 8 panics. The exact MIP enumerates 2^(n-1) masks; n ≤ 8 keeps
+//         it ≤ 128 (exact tractable). Large-N exact is a future cycle (greedy
+//         / anytime path) — we panic so callers cannot mistake a placeholder
+//         for a real faithful Φ.
+//
+//   IMPORT-SAFE  NO `fn main()` / NO top-level call. snake_case · English code.
+// ════════════════════════════════════════════════════════════════════════════
+
+
+// ── integer 2^k via accumulator (hexa bit-shift uncertain — use mult) ────────
+fn _iit4_pow2(k: int) -> int {
+    let mut p = 1
+    let mut i = 0
+    while i < k { p = p * 2; i = i + 1 }
+    return p
+}
+
+// ── bit-test: 1 if bit b set in mask, else 0 (arithmetic eq of mask & (1<<b)) ─
+fn _iit4_bit_set(mask: int, b: int) -> int {
+    let pw = _iit4_pow2(b)
+    if (mask / pw) % 2 == 1 { return 1 }
+    return 0
+}
+
+fn _iit4_imin(a: int, b: int) -> int { if a < b { return a }; return b }
+
+
+// ── step 1 — state binning (RFC 036 / phi_native.hexa byte-equal) ───────────
+// Bin each value into [0, n_bins-1] by min-max normalization.
+fn _iit4_bin_values(values: int, n: int, n_bins: int) -> int {
+    let bins = farr_zeros(n)
+    if n <= 0 { return bins }
+
+    let mut mn = farr_get(values, 0)
+    let mut mx = mn
+    let mut i = 1
+    while i < n {
+        let v = farr_get(values, i)
+        if v < mn { mn = v }
+        if v > mx { mx = v }
+        i = i + 1
+    }
+    let range = mx - mn
+
+    // all-identical guard — Rust f32::EPSILON literal.
+    if range < 1.19209290e-7 { return bins }
+
+    let bw = range / n_bins
+    let mut j = 0
+    while j < n {
+        let r = (farr_get(values, j) - mn) / bw
+        let mut b = floor(r).to_int()
+        if b > n_bins - 1 { b = n_bins - 1 }
+        if b < 0 { b = 0 }
+        let _ = farr_set(bins, j, b)
+        j = j + 1
+    }
+    return bins
+}
+
+
+// ── step 2a — Shannon entropy over ALL k bins (RFC 036 byte-equal) ──────────
+// H = Σ_i -p_i · log2(p_i + 1e-10). log2(x) = log(x) / log(2.0).
+fn _iit4_entropy(counts: int, k: int, total: int) -> float {
+    if total == 0 { return 0.0 }
+    let t = total + 1.0e-8
+    let mut s = 0.0
+    let log2_denom = log(2.0)
+    let mut i = 0
+    while i < k {
+        let p = farr_get(counts, i) / t
+        s = s + (0.0 - p) * (log(p + 1.0e-10) / log2_denom)
+        i = i + 1
+    }
+    return s
+}
+
+
+// ── step 2b — pairwise mutual information (RFC 036 phi_mi_pair byte-equal) ───
+// MI(A; B) = max(H(A) + H(B) − H(A,B), 0).
+fn _iit4_mi_pair(a: int, b: int, n: int, n_bins: int) -> float {
+    if n <= 0 { return 0.0 }
+    if n_bins <= 0 { return 0.0 }
+
+    let ba = _iit4_bin_values(a, n, n_bins)
+    let bb = _iit4_bin_values(b, n, n_bins)
+    let ca = farr_zeros(n_bins)
+    let cb = farr_zeros(n_bins)
+    let jo = farr_zeros(n_bins * n_bins)
+
+    let mut i = 0
+    while i < n {
+        let ai = farr_get(ba, i).to_int()
+        let bi = farr_get(bb, i).to_int()
+        let _ = farr_set(ca, ai, farr_get(ca, ai) + 1.0)
+        let _ = farr_set(cb, bi, farr_get(cb, bi) + 1.0)
+        let ji = ai * n_bins + bi
+        let _ = farr_set(jo, ji, farr_get(jo, ji) + 1.0)
+        i = i + 1
+    }
+
+    let hA  = _iit4_entropy(ca, n_bins,           n)
+    let hB  = _iit4_entropy(cb, n_bins,           n)
+    let hAB = _iit4_entropy(jo, n_bins * n_bins,  n)
+    let mi = hA + hB - hAB
+
+    let _ = farr_free(ba)
+    let _ = farr_free(bb)
+    let _ = farr_free(ca)
+    let _ = farr_free(cb)
+    let _ = farr_free(jo)
+
+    if mi < 0.0 { return 0.0 }
+    return mi
+}
+
+
+// ── pairwise MI matrix (anima H_278 `_build_mi_matrix`, byte-faithful) ───────
+// MI[i][j] = mi_pair over the dim-step trajectories of cell i and cell j.
+// Stored row-major in an (n × n) farr. Symmetric; diagonal left 0 (unused).
+pub fn iit4_build_mi_matrix(state: int, n: int, dim: int, n_bins: int) -> int {
+    let mi = farr_zeros(n * n)
+    let mut i = 0
+    while i < n {
+        let mut j = i + 1
+        while j < n {
+            let row_i = farr_zeros(dim)
+            let row_j = farr_zeros(dim)
+            let mut d = 0
+            while d < dim {
+                let _ = farr_set(row_i, d, farr_get(state, i * dim + d))
+                let _ = farr_set(row_j, d, farr_get(state, j * dim + d))
+                d = d + 1
+            }
+            let v = _iit4_mi_pair(row_i, row_j, dim, n_bins)
+            let _ = farr_set(mi, i * n + j, v)
+            let _ = farr_set(mi, j * n + i, v)
+            let _ = farr_free(row_i)
+            let _ = farr_free(row_j)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return mi
+}
+
+
+// ── cross-cut MI for a bipartition mask (anima H_278 `_cross_cut`) ──────────
+// cell 0 ∈ A; bit b set ⇒ cell b+1 ∈ A. Returns Σ_{i∈A, j∈B} MI[i][j].
+fn _iit4_cross_cut(mi: int, n: int, mask: int) -> float {
+    let mut cross = 0.0
+    let mut ia = 0
+    while ia < n {
+        let mut inA = 0
+        if ia == 0 { inA = 1 }
+        else { if _iit4_bit_set(mask, ia - 1) == 1 { inA = 1 } }
+        if inA == 1 {
+            let mut jb = 0
+            while jb < n {
+                let mut jInA = 0
+                if jb == 0 { jInA = 1 }
+                else { if _iit4_bit_set(mask, jb - 1) == 1 { jInA = 1 } }
+                if jInA == 0 {
+                    cross = cross + farr_get(mi, ia * n + jb)
+                }
+                jb = jb + 1
+            }
+        }
+        ia = ia + 1
+    }
+    return cross
+}
+
+
+// ── |A| for a mask — cell 0 always in A, plus set bits (anima `_size_a`) ─────
+fn _iit4_size_a(n: int, mask: int) -> int {
+    let mut cnt = 1
+    let mut b = 0
+    while b < n - 1 {
+        if _iit4_bit_set(mask, b) == 1 { cnt = cnt + 1 }
+        b = b + 1
+    }
+    return cnt
+}
+
+
+// ── faithful Φ★ from a precomputed MI matrix (anima `_faithful_phi_from_mi`) ─
+// Enumerate ALL non-trivial bipartitions (2^(n-1) masks, skip B-empty), find
+// the MIP = argmin cross-cut MI, return cross-cut(MIP) / min(|A|, |B|).
+// n ≤ 8 ⇒ ≤ 128 masks — exact tractable on CPU at $0.
+pub fn iit4_faithful_phi_from_mi(mi: int, n: int) -> float {
+    if n <= 1 { return 0.0 }
+    if n == 2 { return farr_get(mi, 1) }   // only one cut: {0}|{1}
+
+    let max_mask = _iit4_pow2(n - 1)
+    let mut best_cut = 1.0e308
+    let mut best_norm = 1.0
+    let mut found = false
+    let mut mask = 1
+    while mask < max_mask {
+        let sa = _iit4_size_a(n, mask)
+        let sb = n - sa
+        if sb >= 1 {
+            let cut = _iit4_cross_cut(mi, n, mask)
+            if (!found) || (cut < best_cut) {
+                best_cut = cut
+                best_norm = _iit4_imin(sa, sb) * 1.0
+                found = true
+            }
+        }
+        mask = mask + 1
+    }
+    if best_norm < 1.0 { best_norm = 1.0 }
+    let phi = best_cut / best_norm
+    if phi < 0.0 { return 0.0 }
+    return phi
+}
+
+
+// ── faithful Φ★ over a flat row-major n×dim state (byte-faithful entry) ──────
+// Builds the MI matrix then runs the exact MIP-EI. n ≤ 8 only (L3 carve-out).
+pub fn iit4_faithful_phi(state: int, n: int, dim: int, n_bins: int) -> float {
+    if n <= 0 { return 0.0 }
+    if dim <= 0 { return 0.0 }
+    if n_bins <= 0 { return 0.0 }
+    if n <= 1 { return 0.0 }
+
+    // L3 carve-out — exact path only for n ≤ 8 (2^(n-1) ≤ 128 masks).
+    if n > 8 {
+        panic("iit4_faithful_phi: n > 8 not supported (exact MIP-EI is n<=8; large-N = future cycle)")
+    }
+
+    let mi = iit4_build_mi_matrix(state, n, dim, n_bins)
+    let phi = iit4_faithful_phi_from_mi(mi, n)
+    let _ = farr_free(mi)
+    return phi
+}

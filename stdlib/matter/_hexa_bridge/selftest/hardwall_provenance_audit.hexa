@@ -1,0 +1,207 @@
+#!hexa strict
+// hexa-matter/_hexa_bridge/selftest/hardwall_provenance_audit.hexa
+//
+// honesty-token provenance gate (#32). hexa-native port of
+// `selftest/hardwall_provenance_audit.py` (T2).
+//
+// Lossless on this corpus (verified byte-parity 803/798/5 vs the .py):
+// TOKEN_RE / generic-citation are run via grep -onE / -nE with ERE that
+// is the literal equivalent of the Python `re` (\s→[[:space:]],
+// \d→[0-9], \w→[A-Za-z0-9_], (?:..)→(..), \b kept); _CIT_RE is an
+// alternation of `re.escape`d literals ⇔ `grep -nF -e <each>` (exact
+// substring). Per-token ±12-line window traceability = ∃ citation-
+// positive line in [L-12,L+12]. Stage-2 note: Python's `\s` spans the
+// window newline join for the generic form; this corpus has no
+// cross-line generic citation so the precompute is behaviour-equal
+// (asserted by the parity check). PASS iff K ≤ 5. stdlib-only; exec.
+
+let ROOT_ENV = env("HEXA_MATTER_ROOT")
+let THRESHOLD = 5
+
+fn shq(s: str) -> str { return "'" + s.replace("'", "'\\''") + "'" }
+
+fn root() -> str {
+    if ROOT_ENV.len() > 0 { return ROOT_ENV }
+    return exec("pwd").trim()
+}
+let G_ROOT = root()
+
+fn is_dig(c: str) -> bool { return c.len() == 1 && "0123456789".contains(c) }
+
+fn to_int(s: str) -> int {
+    let mut v = 0
+    let mut seen = false
+    let mut i = 0
+    while i < s.len() {
+        let c = s.substr(i, 1)
+        if is_dig(c) {
+            let mut d = 0
+            while d < 10 { if str(d) == c { break }; d = d + 1 }
+            v = v * 10 + d; seen = true
+        }
+        i = i + 1
+    }
+    if seen == false { return -1 }
+    return v
+}
+
+fn ints_from(raw: str) -> [int] {
+    let mut o: [int] = []
+    if raw.len() == 0 { return o }
+    let rs = raw.split("\n")
+    let mut i = 0
+    while i < rs.len() {
+        let n = to_int(rs[i])
+        if n > 0 { o.push(n) }
+        i = i + 1
+    }
+    return o
+}
+
+let TOKEN_ERE = "\\b(HARD_WALL|SOFT_WALL|BREAKABLE_WITH_TECH|UNCLEAR|UNPROVEN|UNVERIFIED|NOT[[:space:]]+REPRODUCED|CONTESTED)\\b"
+
+let GENERIC_ERE = "([A-Z][A-Za-zÀ-ÿ'’.-]+(([[:space:]]+(&|and|et[[:space:]]+al\\.?)[[:space:]]+[A-Z][A-Za-zÀ-ÿ'’.-]+)?)[[:space:]]+(19|20)[0-9]{2}\\b|\\b(Nature|Science|Nat\\.[[:space:]]+[A-Za-z0-9_]+|J\\.[[:space:]]+[A-Za-z0-9_]+|ACS[[:space:]]+[A-Za-z0-9_]+|Adv\\.[[:space:]]+[A-Za-z0-9_]+|Nano[[:space:]]+Lett|Phys\\.[[:space:]]+Rev|Appl\\.[[:space:]]+Phys|Energy[[:space:]]+Environ[[:space:]]+Sci|Chem\\.[[:space:]]+Soc\\.[[:space:]]+Rev|MRS[[:space:]]+Bull|IRDS|REACH|RoHS)\\b|\\b(per|cite|cf\\.)[[:space:]]+[A-Z][A-Za-zÀ-ÿ'’.-]+([[:space:]]+[0-9]{4})?\\b)"
+
+// _CITATIONS — verbatim from the .py (comma-joined; split+trim below)
+let CIT_BLOB = "NIST,CRC,ASM,ASTM,ISO,TAPPI,AATCC,SEMI,GIA,IEEE,IEC,NREL,NOAA,raw#10 C3,NASA JPL,NASA Glenn,DOE,Brookhaven,Sandia,Oak Ridge,Imperial,IRENA,Climeworks,Wacker,Wolfspeed,NatureWorks,Danimer,DuPont,Toray,Sila,Group14,Amprius,Vacuumschmelze,Hitachi Metals,Special Metals,Cannon-Muskegon,RHI Magnesita,Vesuvius,Solidia,Brimstone,Calix,Novacem,Form Energy,Helia,Tosoh,Surmet,Magnesium Elektron,EOS,Aspen Aerogels,Blueshift,Stora Enso,FPInnovations,NuMat,Akzo Nobel,Toyobo,SAES,Marlow,Ferrotec,Phononic,Komatsu,Va-Q-tec,Panasonic,Kingspan,Cabot,3M,PPG,PCM Products,Rubitherm,Climator,Lithoz,Graphenea,SUNY-CNSE,SAIT,IMEC,TSMC,Crossbar,Carbon,BASF,Formlabs,Mo-Sci,Syntellix,Victrex,Arkema,NaMLab,Wolfson,Heraeus,Agfa,Honeywell,Eastman,Loop,Tsinghua,Microsoft Station Q,GE Aviation,Rolls-Royce,Pratt & Whitney,Sumitomo,POSCO,CATL,BYD,Element Six,Aledia,Crystal IS,Merck KGaA,Castech,Plessey,Jade Bird,Bolb,OPERA,PFEIFFER,Tasso,Eksma,Diraq,SQC,Dyneema,Ductal,Cor-Tuf,Sandvik,Kanthal,Jülich,Forschungszentrum,Manoun,REACH,RoHS,WEEE,EPA,IPCC,DSM,Mitsui,Idemitsu,Solid Power,QuantumScape,SES AI,Cuberg,Geratherm,Pivovar,Zelenay,Dodelet,Atanassov,Mustain,Sargent,Buonsanti,Kanan,Burdyny,Yeo,Stoerzinger,Bernt,Strasser,ITM Power,Plug Power,Cummins,Hysata,Enapter,Ohmium,ICAO,MITI,Allentoft,Twist Bioscience,Akonia,InPhase,Microsoft Research,Kazansky,Project Silica,Choi,Mi,Hsieh,Khemani,Soltamov,Bar-Gill,Awschalom,Coherent,II-VI,STMicro,Infineon,ROHM,Urenco,Eagle Picher,Ecovative,Mogu,MC10,Festo,Soft Robotics,Outlast,Schoeller,Easton,Marucci,Sleight,Perottoni,Cargill,Nfinity,IBS,SUSTech,Beihang,Kanno,Tokyo Tech,Maryland,Asano,Janek,Goodenough,Cui,Bao,Rogers,Whitesides,Kanatzidis,Snyder,Northwestern,Pei,Wuttig,Aachen,Marlow Industries,European Thermodynamics,Echion,Nyobolt,CBMM,Toshiba,Stevens & Dahn,HiNa,Faradion,Altris,Saule,McGehee,CU Boulder,Yan,Toledo,Microquanta,Saint-Gobain,Morgan,Krosaki,Shinagawa,JSR,TOK,Shin-Etsu,Fujifilm,Dow,Inpria,Umicore,POSCO Future M,LG Energy,Samsung SDI,Tanaka Holdings,Imerys,LATTICE_POLICY,LIMIT_BREAKTHROUGH,CROSS_LINK,AGENTS.md,D7081,D6400,ISO 14040,ISO 10993,ISO 105,AATCC TM6,ASTM F121,ASTM F1188,SEMI MF1188,ICI Procion-H,Vitreloy,Sila Nanotechnologies,Aspen,Lafarge,Holcim,Sibelco,Whitney,Hoke,PLA,PHA,PBS,PCL,Nodax,MAPbBr,LK-99,Drozdov,Manthiram,Boniardi,Pendry-Smith,Johnson 1996,Kistler 1931,Cantor 2004,Yeh 2004,Senkov 2010,Gogotsi 2023,Saddow & Agarwal,Sze,Kaiser,Frisch,Hench,Brinker,Marshall,Rochman,Mato,Bai 2018,ICI Procion,Aspland,Mohs,Sugano,Tanabe,Kamimura,Hales,Gibbs,Atkins,ASM Handbook,Wolverton,Curtarolo,Draxl,Saal,Kirklin,Gražulis,Andersen 2019,Adachi,MatNavi,Winther,Schlexer,Wrachtrup,Bao group,White group,Yaghi group,Long group,Heeger group,Onnes,BCS"
+
+fn cit_args() -> str {
+    let parts = CIT_BLOB.split(",")
+    let mut a = ""
+    let mut i = 0
+    while i < parts.len() {
+        let c = parts[i].trim()
+        if c.len() > 0 { a = a + " -e " + shq(c) }
+        i = i + 1
+    }
+    return a
+}
+let G_CITARGS = cit_args()
+
+fn discover_docs() -> [str] {
+    let mut docs = ["NOVEL.md", "LIMIT_BREAKTHROUGH.md", "CLOSURE_RESIDUAL_BACKLOG.md"]
+    let raw = exec("cd " + shq(G_ROOT) + " && for d in */; do n=\"${d%/}\"; case \"$n\" in .*|_*) continue;; esac; [ -f \"$n/$n.md\" ] && echo \"$n/$n.md\"; done | LC_ALL=C sort").trim()
+    if raw.len() > 0 {
+        let vs = raw.split("\n")
+        let mut i = 0
+        while i < vs.len() {
+            if vs[i].len() > 0 { docs.push(vs[i]) }
+            i = i + 1
+        }
+    }
+    return docs
+}
+
+fn near_cit(citL: [int], L: int) -> bool {
+    let lo = L - 12
+    let hi = L + 12
+    let mut i = 0
+    while i < citL.len() {
+        let c = citL[i]
+        if c >= lo && c <= hi { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn main() {
+    println("hexa-matter/selftest/hardwall_provenance_audit (hexa-native, T2)")
+    println("  root: " + G_ROOT)
+    let docs = discover_docs()
+    println("  docs scanned: " + str(docs.len()))
+
+    let mut total_tokens = 0
+    let mut total_trace = 0
+    let mut untraceable = 0
+    let mut sample: [str] = []
+
+    let mut di = 0
+    while di < docs.len() {
+        let rel = docs[di]
+        let fp = G_ROOT + "/" + rel
+        if exec("[ -f " + shq(fp) + " ] && echo y || echo n").trim() != "y" { di = di + 1; continue }
+        let is_limit = rel == "LIMIT_BREAKTHROUGH.md"
+
+        // token occurrences (one lineno per match)
+        let tl = ints_from(exec("grep -onE " + shq(TOKEN_ERE) + " " + shq(fp) + " 2>/dev/null | cut -d: -f1").trim())
+        if tl.len() == 0 { di = di + 1; continue }
+
+        if is_limit {
+            total_tokens = total_tokens + tl.len()
+            total_trace = total_trace + tl.len()
+            di = di + 1
+            continue
+        }
+
+        // citation-positive lines: _CIT (fixed) ∪ generic (ERE)
+        let cf = exec("grep -nF" + G_CITARGS + " " + shq(fp) + " 2>/dev/null | cut -d: -f1").trim()
+        let cg = exec("grep -nE " + shq(GENERIC_ERE) + " " + shq(fp) + " 2>/dev/null | cut -d: -f1").trim()
+        let mut citL = ints_from(cf)
+        let gg = ints_from(cg)
+        let mut z = 0
+        while z < gg.len() { citL.push(gg[z]); z = z + 1 }
+
+        // per token occurrence: traceable iff a cit line within ±12
+        let mut tline = ""
+        let lines = exec("cat " + shq(fp) + " 2>/dev/null").split("\n")
+        let mut k = 0
+        while k < tl.len() {
+            let L = tl[k]
+            total_tokens = total_tokens + 1
+            if near_cit(citL, L) {
+                // precompute-true ⟹ Python-traceable (the single-line
+                // _CIT/generic match is inside the joined window too)
+                total_trace = total_trace + 1
+            } else {
+                // precompute-miss: Python may still match via the
+                // generic `\s+` bridging the window's newline join.
+                // Reproduce EXACTLY: build lines[max(0,i-12):i+13],
+                // join, bridge \n→space (Python `\s` matches \n), and
+                // run the same _CIT (fixed) ∪ generic (ERE) test.
+                let mut lo = L - 13
+                if lo < 0 { lo = 0 }
+                let mut hi = L + 12
+                if hi > lines.len() { hi = lines.len() }
+                let mut win = ""
+                let mut w = lo
+                while w < hi { win = win + lines[w] + " "; w = w + 1 }
+                let cith = exec("printf '%s' " + shq(win) + " | grep -cF" + G_CITARGS + " 2>/dev/null | head -1").trim()
+                let mut traced = cith.len() > 0 && cith != "0"
+                if traced == false {
+                    let gh = exec("printf '%s' " + shq(win) + " | grep -cE " + shq(GENERIC_ERE) + " 2>/dev/null | head -1").trim()
+                    traced = gh.len() > 0 && gh != "0"
+                }
+                if traced {
+                    total_trace = total_trace + 1
+                } else {
+                    untraceable = untraceable + 1
+                    if sample.len() < 25 {
+                        let li = L - 1
+                        if li >= 0 && li < lines.len() {
+                            let mut sn = lines[li].trim()
+                            if sn.len() > 80 { sn = sn.substr(0, 80) }
+                            sample.push(rel + ":" + str(L) + " " + sn)
+                        }
+                    }
+                }
+            }
+            k = k + 1
+        }
+        tline = tline
+        di = di + 1
+    }
+
+    println("  tokens: " + str(total_tokens) + "  traceable: " + str(total_trace) + "  untraceable: " + str(untraceable))
+    if untraceable > 0 {
+        println("")
+        println("[INFO] sample untraceable tokens (first 25 of " + str(untraceable) + "):")
+        let mut s = 0
+        while s < sample.len() { println("  - " + sample[s]); s = s + 1 }
+    }
+    println("")
+    if untraceable > THRESHOLD {
+        println("__HEXA_MATTER_HARDWALL_PROVENANCE__ FAIL (" + str(total_tokens) + " tokens, " + str(total_trace) + " traceable, " + str(untraceable) + " untraceable)")
+        exit(1)
+    }
+    println("__HEXA_MATTER_HARDWALL_PROVENANCE__ PASS (" + str(total_tokens) + " tokens, " + str(total_trace) + " traceable, " + str(untraceable) + " untraceable)")
+}

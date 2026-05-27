@@ -1,0 +1,274 @@
+#!/bin/bash
+# bin/hexa-fast — opt-in fast compile path via runtime.h + cached runtime.o
+# PHASE 1.3 (2026-05-15): bypass the legacy `#include "runtime.c"` emit by
+# sed-swapping post hexa_v2 output, then link against ~/.hexa-cache/runtime-<sha>.o.
+#
+# Usage:
+#   hexa-fast <input.hexa> <output-binary>           # compile to binary
+#   hexa-fast run <input.hexa> [args...]             # compile + exec (drop-in for `hexa run`)
+#
+# Speed: 4.4–7.9× user-time vs default `hexa-cc + clang` across bench/* (avg 5.7×).
+#        See COMPILE-SPEED.log.tape @bench_sample_coverage (commit 8c29d75f).
+#
+# Cache:  ~/.hexa-cache/runtime-<sha256(runtime.c)>.o
+#         ~/.hexa-cache/bin-<rt><deep-sha(src+imports)><flags>
+#         deep-sha walks `import "..."` / `from "..." import ...` transitively
+#         so editing an imported file invalidates the cached binary.
+# Flags:  HEXA_FAST_CFLAGS (default -O0)
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+usage() {
+    cat <<EOF >&2
+usage:
+  hexa-fast <input.hexa> <output-binary>     compile only
+  hexa-fast run <input.hexa> [args...]       compile + exec (cached binary)
+  hexa-fast bench [--json] <input.hexa>      A/B baseline vs runtime.h path
+  hexa-fast check                            smoke runtime.h ABI surface
+  hexa-fast clean                            wipe ~/.hexa-cache
+
+  hexa-run is a symlink that auto-implies `run`:
+  hexa-run <input.hexa> [args...]            same as: hexa-fast run …
+
+env:
+  HEXA_FAST_CFLAGS   clang flags (default: -O0)
+  HEXA_CACHE_DIR     cache location (default: ~/.hexa-cache)
+EOF
+    exit 2
+}
+
+[ $# -ge 1 ] || usage
+
+# When invoked as `hexa-run`, default to `run` mode (no need to type `run` arg).
+case "$(basename "$0")" in
+    hexa-run) set -- run "$@" ;;
+esac
+
+HEXA_V2="$REPO_ROOT/self/native/hexa_v2"
+RUNTIME_C="$REPO_ROOT/self/runtime.c"
+RUNTIME_H="$REPO_ROOT/self/runtime.h"
+CACHE_DIR="${HEXA_CACHE_DIR:-$HOME/.hexa-cache}"
+CFLAGS="${HEXA_FAST_CFLAGS:--O0}"
+
+# `clean` doesn't need runtime.o; check it first so we don't build-then-wipe.
+if [ "${1:-}" = "clean" ]; then
+    if [ -d "$CACHE_DIR" ]; then
+        count=$(find "$CACHE_DIR" -maxdepth 1 -mindepth 1 | wc -l | tr -d ' ')
+        find "$CACHE_DIR" -maxdepth 1 -mindepth 1 -exec rm -rf {} +
+        echo "hexa-fast: wiped $count cache entr$([ "$count" = 1 ] && echo y || echo ies) from $CACHE_DIR"
+    else
+        echo "hexa-fast: nothing to clean ($CACHE_DIR does not exist)"
+    fi
+    exit 0
+fi
+
+[ -x "$HEXA_V2" ] || { echo "hexa-fast: missing $HEXA_V2" >&2; exit 1; }
+[ -f "$RUNTIME_H" ] || { echo "hexa-fast: missing $RUNTIME_H" >&2; exit 1; }
+
+# All non-clean subcommands need the cache dir.
+mkdir -p "$CACHE_DIR"
+
+# runtime.o cache keyed by sha256(runtime.c).
+RT_SHA=$(shasum -a 256 "$RUNTIME_C" | awk '{print $1}')
+RT_O="$CACHE_DIR/runtime-$RT_SHA.o"
+if [ ! -f "$RT_O" ]; then
+    clang $CFLAGS -c "$RUNTIME_C" -o "$RT_O"
+fi
+
+# Resolve the compiled module_loader binary. Mirrors
+# self/main.hexa::resolve_module_loader_compiled — probes (in order):
+# $HEXA_MODULE_LOADER, <repo>/build/hexa_module_loader, cwd, $HEXA_LANG.
+# Echoes the path on success, empty string otherwise.
+resolve_module_loader_bin() {
+    if [ -n "${HEXA_MODULE_LOADER:-}" ] && [ -x "$HEXA_MODULE_LOADER" ]; then
+        printf '%s' "$HEXA_MODULE_LOADER"
+        return
+    fi
+    if [ -x "$REPO_ROOT/build/hexa_module_loader" ]; then
+        printf '%s' "$REPO_ROOT/build/hexa_module_loader"
+        return
+    fi
+    if [ -x "./build/hexa_module_loader" ]; then
+        printf '%s' "./build/hexa_module_loader"
+        return
+    fi
+    if [ -n "${HEXA_LANG:-}" ] && [ -x "$HEXA_LANG/build/hexa_module_loader" ]; then
+        printf '%s' "$HEXA_LANG/build/hexa_module_loader"
+        return
+    fi
+    printf ''
+}
+
+# inbox/patches/import-link-fail-mitosis-hook-mini-arm64-2026-05-24 fix:
+# `hexa-fast` previously fed SRC straight into hexa_v2, so `import "X.hexa"`
+# directives produced extern decls for imported symbols without the bodies —
+# linker then failed with `Undefined symbols`. Mirror cmd_build's flatten
+# pre-step: if SRC contains any `use "…"` / `import "…"` / `from "…"` /
+# `pub use "…"` / `pub import "…"` directive AND a compiled module_loader is
+# available, run it first and substitute the flattened tmpfile as SRC.
+#
+# No directives → SKIP the flatten step entirely (preserves the original
+# fast-path measured 4.4–7.9× speedup, which is the whole point of -fast).
+flatten_if_needed() {
+    local SRC=$1
+    if ! grep -qE '^[[:space:]]*(pub[[:space:]]+)?(use|import|from)[[:space:]]+"' "$SRC" 2>/dev/null; then
+        # No import directives — nothing to flatten.
+        printf '%s' "$SRC"
+        return
+    fi
+    local ML
+    ML=$(resolve_module_loader_bin)
+    if [ -z "$ML" ]; then
+        echo "hexa-fast: warn: SRC has import/use directives but compiled module_loader not found — falling back to raw src (link may fail)" >&2
+        printf '%s' "$SRC"
+        return
+    fi
+    local FLAT="${TMPDIR:-/tmp}/hexa-fast-flat-$$-$RANDOM.hexa"
+    # Mirror module_loader_env_prefix() in self/main.hexa — propagate
+    # HEXA_INSTALL_DIR (for stdlib/* resolution) and raise the runtime
+    # mem-cap to 4096 MB so bundle flatten completes on larger projects.
+    local INSTALL_DIR="${HEXA_INSTALL_DIR:-$REPO_ROOT}"
+    local MEM_CAP="${HEXA_MEM_CAP_MB:-4096}"
+    if ! HEXA_INSTALL_DIR="$INSTALL_DIR" HEXA_MEM_CAP_MB="$MEM_CAP" \
+            "$ML" "$SRC" "$FLAT" >&2; then
+        echo "hexa-fast: warn: module_loader flatten failed — falling back to raw src" >&2
+        rm -f "$FLAT"
+        printf '%s' "$SRC"
+        return
+    fi
+    if [ ! -f "$FLAT" ]; then
+        echo "hexa-fast: warn: module_loader produced no output — falling back to raw src" >&2
+        printf '%s' "$SRC"
+        return
+    fi
+    printf '%s' "$FLAT"
+}
+
+# Build a binary for SRC into OUT. Sets BIN=OUT on success.
+build() {
+    local SRC=$1 OUT=$2
+    local FLAT_SRC
+    FLAT_SRC=$(flatten_if_needed "$SRC")
+    local TMP_C="${TMPDIR:-/tmp}/hexa-fast-$$-$RANDOM.c"
+    "$HEXA_V2" "$FLAT_SRC" "$TMP_C" >/dev/null
+    sed -i.bak 's|#include "runtime.c"|#include "runtime.h"|' "$TMP_C"
+    clang $CFLAGS -o "$OUT" "$TMP_C" "$RT_O" -I"$REPO_ROOT/self"
+    rm -f "$TMP_C" "$TMP_C.bak"
+    # Clean the flatten tmpfile only if we actually created one
+    # (FLAT_SRC == SRC means flatten was skipped).
+    if [ "$FLAT_SRC" != "$SRC" ]; then
+        rm -f "$FLAT_SRC"
+    fi
+}
+
+# Transitive sha256 over SRC + all reachable imports.
+# Imports matched: `import "X"` and `from "X" import …` (with optional `as Y`).
+# Resolution heuristic: try <src_dir>/X, then <REPO_ROOT>/X, then
+# <REPO_ROOT>/self/X. Unresolved paths are hashed as literals so missing/moved
+# imports still invalidate. BFS with visited-set guard against cycles.
+deep_hash() {
+    local entry=$1
+    local seen=() queue=("$entry") agg=""
+    while [ ${#queue[@]} -gt 0 ]; do
+        local cur="${queue[0]}"
+        queue=("${queue[@]:1}")
+        local s skip=0
+        for s in "${seen[@]:-}"; do [ "$s" = "$cur" ] && skip=1 && break; done
+        [ $skip -eq 1 ] && continue
+        seen+=("$cur")
+        agg="$agg$(shasum -a 256 "$cur" 2>/dev/null | awk '{print $1}')"
+        local imp target dir
+        dir="$(dirname "$cur")"
+        while IFS= read -r imp; do
+            [ -z "$imp" ] && continue
+            target=""
+            if   [ -f "$dir/$imp" ]; then              target="$dir/$imp"
+            elif [ -f "$REPO_ROOT/$imp" ]; then        target="$REPO_ROOT/$imp"
+            elif [ -f "$REPO_ROOT/self/$imp" ]; then   target="$REPO_ROOT/self/$imp"
+            fi
+            if [ -n "$target" ]; then
+                queue+=("$target")
+            else
+                agg="$agg UNRESOLVED:$imp"
+            fi
+        done < <(grep -hE '^[[:space:]]*(import|from)[[:space:]]+"[^"]+"' "$cur" 2>/dev/null \
+                  | sed -E 's/^[[:space:]]*(import|from)[[:space:]]+"([^"]+)".*/\2/')
+    done
+    printf '%s' "$agg" | shasum -a 256 | awk '{print $1}'
+}
+
+case ${1:-} in
+    check)
+        SMOKE="$REPO_ROOT/tests/runtime_h_smoke.c"
+        [ -f "$SMOKE" ] || { echo "hexa-fast: missing $SMOKE" >&2; exit 1; }
+        OUT="${TMPDIR:-/tmp}/hexa-fast-check-$$.o"
+        trap 'rm -f "$OUT"' EXIT
+        if clang $CFLAGS -c "$SMOKE" -I"$REPO_ROOT/self" -o "$OUT" 2>&1; then
+            echo "hexa-fast: runtime.h surface OK ($(wc -l <"$SMOKE") lines, all symbols resolved)"
+            exit 0
+        else
+            echo "hexa-fast: runtime.h surface FAILED — see clang errors above" >&2
+            exit 1
+        fi
+        ;;
+    bench)
+        shift
+        BENCH_JSON=0
+        if [ "${1:-}" = "--json" ]; then BENCH_JSON=1; shift; fi
+        [ $# -eq 1 ] || usage
+        SRC=$1
+        [ -f "$SRC" ] || { echo "hexa-fast: no such file: $SRC" >&2; exit 1; }
+        # As of PHASE 1.3.B, hexa_v2 emits #include "runtime.h" by default.
+        # For the BASELINE arm we mechanically sed it back to runtime.c so
+        # clang sees the legacy `#include "runtime.c"` standalone TU.
+        BL_C="${TMPDIR:-/tmp}/hexa-bench-baseline-$$.c"
+        BL_BIN="${TMPDIR:-/tmp}/hexa-bench-baseline-$$.bin"
+        NEW_C="${TMPDIR:-/tmp}/hexa-bench-new-$$.c"
+        NEW_BIN="${TMPDIR:-/tmp}/hexa-bench-new-$$.bin"
+        trap 'rm -f "$BL_C" "$BL_BIN" "$BL_C.bak" "$NEW_C" "$NEW_BIN"' EXIT
+        "$HEXA_V2" "$SRC" "$NEW_C" >/dev/null
+        # baseline = same C with the include flipped back
+        sed 's|#include "runtime.h"|#include "runtime.c"|' "$NEW_C" > "$BL_C"
+        # warm any disk caches
+        clang $CFLAGS -o "$BL_BIN" "$BL_C" -I"$REPO_ROOT/self" 2>/dev/null
+        baseline_user=$( { /usr/bin/time -p clang $CFLAGS -o "$BL_BIN" "$BL_C" -I"$REPO_ROOT/self" 2>&1 1>/dev/null ; } 2>&1 | awk '/^user/{print $2}')
+        clang $CFLAGS -o "$NEW_BIN" "$NEW_C" "$RT_O" -I"$REPO_ROOT/self" 2>/dev/null
+        new_user=$( { /usr/bin/time -p clang $CFLAGS -o "$NEW_BIN" "$NEW_C" "$RT_O" -I"$REPO_ROOT/self" 2>&1 1>/dev/null ; } 2>&1 | awk '/^user/{print $2}')
+        # report
+        bytes=$(wc -c <"$SRC")
+        speedup=$(awk -v b=$baseline_user -v n=$new_user 'BEGIN{ if (n>0) printf "%.2f", b/n; else print 0 }')
+        if [ $BENCH_JSON -eq 1 ]; then
+            # Single-line JSON object — easy to grep, jq, or stream into JSONL.
+            printf '{"src":"%s","bytes":%d,"baseline_user":%s,"new_user":%s,"speedup":%s}\n' \
+                "$SRC" "$bytes" "$baseline_user" "$new_user" "$speedup"
+        else
+            printf "src        : %s (%d bytes)\n" "$SRC" "$bytes"
+            printf "baseline   : %s s user  (clang + #include runtime.c)\n" "$baseline_user"
+            printf "new path   : %s s user  (clang + runtime.h, runtime.o cached)\n" "$new_user"
+            printf "speedup    : %sx\n" "$speedup"
+        fi
+        exit 0
+        ;;
+    run)
+        shift
+        [ $# -ge 1 ] || usage
+        SRC=$1; shift
+        [ -f "$SRC" ] || { echo "hexa-fast: no such file: $SRC" >&2; exit 1; }
+        # Binary cache: keyed by sha256(src) + sha256(runtime.c) + CFLAGS so any
+        # change to src OR runtime OR flags forces a rebuild.
+        SRC_SHA=$(deep_hash "$SRC")
+        FLAGS_SHA=$(printf '%s' "$CFLAGS" | shasum -a 256 | awk '{print $1}')
+        BIN="$CACHE_DIR/bin-${RT_SHA:0:8}-${SRC_SHA:0:16}-${FLAGS_SHA:0:8}"
+        if [ ! -x "$BIN" ]; then
+            build "$SRC" "$BIN"
+        fi
+        exec "$BIN" "$@"
+        ;;
+    *)
+        [ $# -eq 2 ] || usage
+        build "$1" "$2"
+        ;;
+esac

@@ -1,0 +1,68 @@
+#!hexa strict
+// hexa-matter/_hexa_bridge/selftest/gem_authenticity_check.hexa
+//
+// GEM group certification-anchor gate. hexa-native port of
+// `selftest/gem_authenticity_check.py` (T2). PASS iff the gemology spec
+// references a canonical certification body (GIA/IGS/AGS/HRD/Gübelin/
+// SSEF/ICA) OR carries >= 3 secondary gemological anchors.
+// stdlib-only; file reads via exec (hexa-native shell builtin).
+
+let ROOT_ENV = env("HEXA_MATTER_ROOT")
+
+fn shq(s: str) -> str { return "'" + s.replace("'", "'\\''") + "'" }
+
+fn root() -> str {
+    if ROOT_ENV.len() > 0 { return ROOT_ENV }
+    return exec("pwd").trim()
+}
+
+fn read_if(p: str) -> str {
+    let ex = exec("[ -f " + shq(p) + " ] && echo y || echo n").trim()
+    if ex == "y" { return exec("cat " + shq(p) + " 2>/dev/null") }
+    return ""
+}
+
+let GEM_SPECS = ["gemology/gemology.md", "GEMOLOGY.md"]
+let AUTH = ["GIA", "IGS", "AGS", "HRD", "Gübelin", "SSEF", "ICA"]
+let SEC = ["refractive index", "birefringence", "dispersion", "mohs", "specific gravity", "fluorescence", "sugano-tanabe"]
+
+fn main() {
+    println("hexa-matter/selftest/gem_authenticity_check (hexa-native, T2)")
+    let r = root()
+    let mut corpus = ""
+    let mut i = 0
+    while i < GEM_SPECS.len() {
+        let body = read_if(r + "/" + GEM_SPECS[i])
+        if body.len() > 0 {
+            corpus = corpus + "\n" + body
+            println("  [OK]   loaded " + GEM_SPECS[i])
+        } else {
+            println("  [WARN] missing " + GEM_SPECS[i])
+        }
+        i = i + 1
+    }
+
+    let mut auth = 0
+    let mut j = 0
+    while j < AUTH.len() {
+        if corpus.contains(AUTH[j]) { auth = auth + 1 }
+        j = j + 1
+    }
+    let lo = corpus.to_lower()
+    let mut sec = 0
+    let mut k = 0
+    while k < SEC.len() {
+        if lo.contains(SEC[k]) { sec = sec + 1 }
+        k = k + 1
+    }
+
+    println("  certification authority hits: " + str(auth))
+    println("  secondary anchor hits:        " + str(sec))
+
+    if auth > 0 || sec >= 3 {
+        println("__HEXA_MATTER_GEM_AUTHENTICITY__ PASS")
+    } else {
+        println("__HEXA_MATTER_GEM_AUTHENTICITY__ FAIL  (no cert authority AND <3 secondary anchors)")
+        exit(1)
+    }
+}

@@ -1,0 +1,277 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/flame/flame_d768_12L_corpus_test.hexa — Phase 4-D-1 source draft
+//
+// **GPU dispatch target** — scaled config for Phase 4-D-4 cost-bearing
+// fire (vast.ai / runpod A100 SXM). Build-only verifiable on M-Mac;
+// runtime resident set ~10GB → DO NOT RUN locally (will OOM/thrash).
+//
+// Mirrors flame_d32_corpus_test.hexa (Phase 3-F-3 production verified,
+// commit c4aab67e) and flame_d128_2L_smoke_test.hexa (Phase 4-D pre-flight
+// scaled smoke, commit 485a1d96). Same training pattern: fwd + gn2 +
+// grad accumulate across nsamp windows + AdamW step.
+//
+// config (per PHASE4D_GPU_DISPATCH_DESIGN.md §"Scaled config: d=768·12L"):
+//   T=1024, d=768, nh=12, nkv=4, h=3072, V=256 (see V-fallback note),
+//   n_layer=12
+//   nsamp=4 (smaller than d=32·3L's 8 to fit memory budget)
+//   stride=4096
+//   20 AdamW steps (smaller than 80 — each step ~30K× more expensive
+//   than d=32·3L per PHASE4D §"Compute density")
+//   lr=0.03, b1=0.9, b2=0.999, eps=1e-8, wd=0.01, seed=42
+//
+// V=256 FALLBACK RATIONALE:
+//   PHASE4D_GPU_DISPATCH_DESIGN.md §Scaled-config lists V=32768. However
+//   the only available corpus (corpus_consciousness_v1.jsonl) is byte-
+//   level with vocab in [0..255]. Using V=32768 with byte-mod indices
+//   would leave 32512 unused rows in tok_emb / output projection that
+//   never receive gradient — wasted compute + memory + meaningless wall
+//   measurement (CSR-sparse pattern, not the dense GPU dispatch target).
+//   For a build-sanity + GPU-dispatch smoke target, V=256 keeps the
+//   corpus tokenization honest (every byte maps to a real id) while
+//   preserving the heavy d/nh/h/n_layer dimensions where GPU bandwidth
+//   actually dominates wall (per PHASE4D §"Attention dominates wall at
+//   scale" — V appears only at tok_emb + final projection, both O(V·d)
+//   = O(V·768) = linear in V; the dominant attention/FFN costs are
+//   V-independent).
+//   When a real V=32768 BPE corpus lands later (future RFC), switch
+//   V back to 32768 and use the BPE tokenizer instead of byte-mod.
+//   Documented in Phase 4-D-5 follow-up.
+//
+// Memory estimate (rough, doubles = 8 bytes):
+//   Per layer bp_total: 2·768 + 2·768² + 2·(768/12·4)·768 + 3·3072·768
+//                     = 1536 + 1.18M + 393K + 7.08M ≈ 8.65M doubles ≈ 69MB
+//   Per layer bc_total: dominated by T·T attn (1024·1024) + T·d streams
+//                     ≈ 1M + 8·1024·768 ≈ 7.3M doubles ≈ 58MB
+//   M (model): 12·bp + V·d (tok_emb) + d (gF) + V·d (out_proj)
+//            = 12·69MB + 256·768·8 + 768·8 + 256·768·8
+//            ≈ 828MB + 1.6MB + 6KB + 1.6MB ≈ 832MB
+//   Mc (cache): 12·58MB + scratch ≈ 700MB
+//   Mm + Mv + Mg + Mg_acc: 4 × M ≈ 3.3GB
+//   IDS + YS + cos/sin tabs + ids_scratch: < 1MB (negligible)
+//   ────────────────────────────────────────────
+//   TOTAL resident: ~4.8GB doubles + Mc working set ~5.5GB+ on first
+//   fwd-bwd. With C runtime overhead + farr table bookkeeping → ~10GB
+//   estimated, which is why this MUST NOT RUN on M-Mac.
+//
+// Falsifiers (Phase 4-D-1 build-tier):
+//   F-RFC046-D768-BUILD : compiles cleanly under HEXA_MAC_BUILD_OK=1
+//                         + handles V=256 byte-vocab gracefully (no
+//                         out-of-bounds at tok_emb lookup with byte ids)
+//
+// No run-time falsifiers — M-Mac CPU memory ceiling forbids local
+// execution. F-RFC046-D768-RUN / F-RFC046-EAGER-PYTORCH-MATCH gates
+// land in Phase 4-D-4 (GPU dispatch fire).
+//
+// CROSS-LINK:
+//   - PHASE4D_GPU_DISPATCH_DESIGN.md (Phase 4-D scope SSOT)
+//   - flame_d32_corpus_test.hexa (Phase 3-F-3, the pattern mirrored)
+//   - flame_d128_2L_smoke_test.hexa (Phase 4-D pre-flight smoke,
+//     commit 485a1d96 — adamw signature corrected here)
+// ════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/decoder_lib"
+use "stdlib/flame/decoder_block_lib"
+use "stdlib/flame/nn_lib"
+use "stdlib/flame/train_lib"
+
+fn _c_abs(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+println("=== flame Phase 4-D-1 source (d=768·12L scaled — GPU dispatch target, BUILD ONLY on M-Mac) ===")
+
+let T = 1024
+let d = 768
+let nh = 12
+let nkv = 4
+let h = 3072
+let V = 256          // V-fallback: byte-level corpus (see header rationale)
+let n_layer = 12
+let nsamp = 4
+let stride = 4096
+let n_steps = 20
+let hd = d / nh
+
+// Same corpus as d=32·3L and d=128·2L (byte-level V=256, no BPE step).
+let path = "/Users/ghost/core/anima/training/corpus_consciousness_v1.jsonl"
+let bytes_arr = read_file_bytes(path)
+let n_bytes = len(bytes_arr)
+print("  corpus: "); print(path); println("")
+print("  size: "); print(n_bytes); println(" bytes (V=256 byte-level vocab)")
+print("  d768·12L config: T="); print(T); print(" d="); print(d); print(" nh="); print(nh)
+print(" nkv="); print(nkv); print(" h="); print(h); print(" n_layer="); print(n_layer)
+println("")
+print("  nsamp="); print(nsamp); print(" stride="); print(stride); print(" n_steps="); print(n_steps)
+println("")
+
+// extract nsamp=4 windows of T=1024 ids + 1 target each
+// IDS_arr[s*T + i] = toks[s*stride + i]
+// YS_arr[s]        = toks[s*stride + T]
+// With byte values in [0..255] and V=256 → every id is in-vocab (no clip).
+let IDS = t_zeros(nsamp * T)
+let YS = t_zeros(nsamp)
+let mut s = 0
+while s < nsamp {
+    let off = s * stride
+    if off + T < n_bytes {
+        let mut p = 0
+        while p < T {
+            t_set(IDS, s * T + p, to_float(bytes_arr[off + p]))
+            p = p + 1
+        }
+        t_set(YS, s, to_float(bytes_arr[off + T]))
+    }
+    s = s + 1
+}
+
+// allocate model + optimizer
+let m_size = m_total(d, nh, nkv, h, V, n_layer)
+print("  model size: "); print(m_size); println(" doubles")
+let M = t_zeros(m_size)
+nn_decoder_init(M, 42, T, d, nh, nkv, h, V, n_layer)
+let Mm = t_zeros(m_size)
+let Mv = t_zeros(m_size)
+let Mg = t_zeros(m_size)
+let Mg_acc = t_zeros(m_size)
+let mc_size = mc_total(T, d, nh, nkv, h, V, n_layer)
+print("  cache size: "); print(mc_size); println(" doubles")
+let Mc = t_zeros(mc_size)
+let cos_tab = t_zeros(T * hd); let sin_tab = t_zeros(T * hd)
+nn_rope_build_tables(T, hd, cos_tab, sin_tab)
+
+let lr = 0.03
+let b1 = 0.9
+let b2 = 0.999
+let eps_a = 0.00000001
+let wd = 0.01
+
+// helper: per-window ids subview (allocate small T-len farr).
+fn _window_ids(IDS: int, s: int, T: int, ids_out: int) {
+    let mut p = 0
+    while p < T {
+        let _ = farr_set(ids_out, p, farr_get(IDS, s * T + p))
+        p = p + 1
+    }
+}
+
+// initial gn2 epoch
+let ids_scratch = t_zeros(T)
+let mut gn2_init_epoch = 0.0
+let mut s_init = 0
+while s_init < nsamp {
+    _window_ids(IDS, s_init, T, ids_scratch)
+    let target_t = to_int(t_get(YS, s_init))
+    nn_decoder_fwd(ids_scratch, M, Mc, cos_tab, sin_tab,
+                   T, d, nh, nkv, h, V, n_layer)
+    let g = nn_decoder_gn2(Mc, target_t, T, d, nh, nkv, h, V, n_layer)
+    gn2_init_epoch = gn2_init_epoch + g
+    s_init = s_init + 1
+}
+print("  init epoch gn2: "); println(gn2_init_epoch)
+
+// 20-step grad-accumulate-then-step loop (matches d_corpus_fire pattern,
+// 20 steps instead of 80 — per PHASE4D §"Per-step cost estimate" each
+// step at d=768·12L is ~30K× the d=32·3L step cost, so 20 steps already
+// dominate wall budget on A100).
+// Uses fwd+grad+adamw decomposition with the CORRECTED
+// nn_decoder_adamw_step signature: (M, Mg, Mm, Mv, n, lr, b1, b2, eps,
+// wd, t) — n_size first, then floats, then step (matches the smoke test
+// commit 485a1d96 fix, NOT the older opt_adamw_step shape).
+// Per-step wall measurement — narrows the fire #16 191-268s step-1 window
+// and exposes step-10/step-20 trajectory for end-to-end convergence verify.
+let mut step = 1
+let mut gn2_last = gn2_init_epoch
+let mut wall_prev = to_int(to_string(exec("date +%s")).trim())
+while step <= n_steps {
+    // zero global Mg accumulator
+    let mut z = 0
+    while z < m_size {
+        let _ = farr_set(Mg_acc, z, 0.0)
+        z = z + 1
+    }
+    // accumulate gradients across nsamp windows
+    let mut gn2_step_epoch = 0.0
+    let mut s_e = 0
+    while s_e < nsamp {
+        _window_ids(IDS, s_e, T, ids_scratch)
+        let tt = to_int(t_get(YS, s_e))
+        // fwd
+        nn_decoder_fwd(ids_scratch, M, Mc, cos_tab, sin_tab,
+                       T, d, nh, nkv, h, V, n_layer)
+        let g = nn_decoder_gn2(Mc, tt, T, d, nh, nkv, h, V, n_layer)
+        gn2_step_epoch = gn2_step_epoch + g
+        // zero per-window Mg, then bwd, then add to Mg_acc
+        let mut z2 = 0
+        while z2 < m_size {
+            let _ = farr_set(Mg, z2, 0.0)
+            z2 = z2 + 1
+        }
+        nn_decoder_grad(ids_scratch, tt, M, Mc, Mg, cos_tab, sin_tab,
+                        T, d, nh, nkv, h, V, n_layer)
+        let mut a = 0
+        while a < m_size {
+            let cur = farr_get(Mg_acc, a)
+            let _ = farr_set(Mg_acc, a, cur + farr_get(Mg, a))
+            a = a + 1
+        }
+        s_e = s_e + 1
+    }
+    // one AdamW step over accumulated grads — CORRECTED signature
+    nn_decoder_adamw_step(M, Mg_acc, Mm, Mv, m_size, lr, b1, b2, eps_a, wd, step)
+    gn2_last = gn2_step_epoch
+    let wall_now = to_int(to_string(exec("date +%s")).trim())
+    print("  step "); print(step); print(" wall="); print(wall_now - wall_prev); println("s")
+    wall_prev = wall_now
+    if step == 1 {
+        print("  step 1 (pre-update) gn2: "); println(gn2_step_epoch)
+    }
+    if step == 10 {
+        print("  step 10 gn2: "); println(gn2_step_epoch)
+    }
+    if step == n_steps {
+        print("  step "); print(step); print(" gn2: "); println(gn2_step_epoch)
+    }
+    step = step + 1
+}
+
+// final epoch gn2 + acc (GPU dispatch will capture these too)
+let mut gn2_final_epoch = 0.0
+let mut acc = 0
+let mut s_f = 0
+while s_f < nsamp {
+    _window_ids(IDS, s_f, T, ids_scratch)
+    let tt = to_int(t_get(YS, s_f))
+    nn_decoder_fwd(ids_scratch, M, Mc, cos_tab, sin_tab,
+                   T, d, nh, nkv, h, V, n_layer)
+    let g = nn_decoder_gn2(Mc, tt, T, d, nh, nkv, h, V, n_layer)
+    gn2_final_epoch = gn2_final_epoch + g
+    let pred = nn_decoder_predict(Mc, T, d, nh, nkv, h, V, n_layer)
+    if pred == tt { acc = acc + 1 }
+    s_f = s_f + 1
+}
+print("  final: epoch gn2 = ")
+print(gn2_final_epoch)
+print("  / acc = ")
+print(acc)
+print("/")
+print(nsamp)
+println("")
+
+// Build-tier falsifier
+// F-RFC046-D768-BUILD : compiles + V=256 byte-vocab graceful
+// (If we get to this println, compilation + IDS extraction + at least
+// one fwd/grad/adamw cycle completed without OOB on V=256 lookup.)
+println("PASS  F-RFC046-D768-BUILD  d=768·12L source compiles + V=256 byte-vocab graceful")
+println("")
+println("NOTE  Run-time falsifiers (F-RFC046-D768-RUN, F-RFC046-EAGER-PYTORCH-MATCH)")
+println("      defer to Phase 4-D-4 GPU dispatch fire — M-Mac CPU memory ceiling")
+println("      forbids local execution (~10GB resident estimated).")
+
+let _ = t_free(IDS); let _ = t_free(YS); let _ = t_free(M); let _ = t_free(Mm); let _ = t_free(Mv)
+let _ = t_free(Mg); let _ = t_free(Mg_acc); let _ = t_free(Mc)
+let _ = t_free(cos_tab); let _ = t_free(sin_tab); let _ = t_free(ids_scratch)
+
+println("=== flame Phase 4-D-1 source draft READY for GPU dispatch (Phase 4-D-4) ===")

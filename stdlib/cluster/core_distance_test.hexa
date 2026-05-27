@@ -1,0 +1,180 @@
+// stdlib/cluster/core_distance_test.hexa
+//
+// Self-contained smoke test for stdlib/cluster/core_distance.hexa. Single-file
+// `hexa build` does not flatten `import "stdlib/..."`, so the module body is
+// inlined verbatim below (same pattern as voss/core_pitch_test). When cross-
+// import flatten lands, swap the inlined block for `import "stdlib/cluster/
+// core_distance.hexa"` and the assertions stay valid.
+
+// ─── INLINED FROM stdlib/cluster/core_distance.hexa ───
+fn euclidean(a: [float], b: [float]) -> float {
+    let n = len(a)
+    if n != len(b) { return 0.0 }
+    let mut sum = 0.0
+    let mut i = 0
+    while i < n {
+        let d = a[i] - b[i]
+        sum = sum + d * d
+        i = i + 1
+    }
+    return sqrt(sum)
+}
+
+fn manhattan(a: [float], b: [float]) -> float {
+    let n = len(a)
+    if n != len(b) { return 0.0 }
+    let mut sum = 0.0
+    let mut i = 0
+    while i < n {
+        let mut d = a[i] - b[i]
+        if d < 0.0 { d = 0.0 - d }
+        sum = sum + d
+        i = i + 1
+    }
+    return sum
+}
+
+fn hamming(a: [int], b: [int]) -> int {
+    let n = len(a)
+    if n != len(b) { return 0 }
+    let mut count = 0
+    let mut i = 0
+    while i < n {
+        if a[i] != b[i] { count = count + 1 }
+        i = i + 1
+    }
+    return count
+}
+
+fn cosine_similarity(a: [float], b: [float]) -> float {
+    let n = len(a)
+    if n != len(b) { return 0.0 - 2.0 }
+    let mut dot = 0.0
+    let mut na2 = 0.0
+    let mut nb2 = 0.0
+    let mut i = 0
+    while i < n {
+        dot = dot + a[i] * b[i]
+        na2 = na2 + a[i] * a[i]
+        nb2 = nb2 + b[i] * b[i]
+        i = i + 1
+    }
+    if na2 <= 0.0 || nb2 <= 0.0 { return 0.0 - 2.0 }
+    return dot / (sqrt(na2) * sqrt(nb2))
+}
+// ─── END INLINE ───
+
+let CD_TOL = 0.000001
+
+fn near(a: float, b: float) -> bool {
+    let mut d = a - b
+    if d < 0.0 { d = 0.0 - d }
+    return d < CD_TOL
+}
+
+fn check(name: string, ok: bool, pass: int, fail: int) -> [int] {
+    if ok {
+        print("PASS  " + name)
+        return [pass + 1, fail]
+    } else {
+        print("FAIL  " + name)
+        return [pass, fail + 1]
+    }
+}
+
+fn main() {
+    let mut pass = 0
+    let mut fail = 0
+
+    // ── euclidean ──
+    // Classic (3, 4) right-triangle → 5.
+    let r = check("euclidean([0,0],[3,4])=5",
+                  near(euclidean([0.0, 0.0], [3.0, 4.0]), 5.0), pass, fail)
+    pass = r[0]; fail = r[1]
+
+    // Identity → 0.
+    let r2 = check("euclidean(v,v)=0",
+                   near(euclidean([1.0, 2.0, 3.0], [1.0, 2.0, 3.0]), 0.0), pass, fail)
+    pass = r2[0]; fail = r2[1]
+
+    // Length-mismatch guard → 0.
+    let r3 = check("euclidean length-mismatch=0",
+                   near(euclidean([1.0, 2.0], [1.0, 2.0, 3.0]), 0.0), pass, fail)
+    pass = r3[0]; fail = r3[1]
+
+    // 3-D: (1,2,2) vs (0,0,0) → √9 = 3.
+    let r4 = check("euclidean([1,2,2],[0,0,0])=3",
+                   near(euclidean([1.0, 2.0, 2.0], [0.0, 0.0, 0.0]), 3.0), pass, fail)
+    pass = r4[0]; fail = r4[1]
+
+    // ── manhattan ──
+    let r5 = check("manhattan([0,0],[3,4])=7",
+                   near(manhattan([0.0, 0.0], [3.0, 4.0]), 7.0), pass, fail)
+    pass = r5[0]; fail = r5[1]
+
+    let r6 = check("manhattan(v,v)=0",
+                   near(manhattan([5.0, -2.0, 7.0], [5.0, -2.0, 7.0]), 0.0), pass, fail)
+    pass = r6[0]; fail = r6[1]
+
+    // Signed-difference handling: |1-4|+|2-(-2)| = 3+4 = 7.
+    let r7 = check("manhattan signed=7",
+                   near(manhattan([1.0, 2.0], [4.0, 0.0 - 2.0]), 7.0), pass, fail)
+    pass = r7[0]; fail = r7[1]
+
+    // ── hamming ──
+    let r8 = check("hamming([1,2,3],[1,2,3])=0",
+                   hamming([1, 2, 3], [1, 2, 3]) == 0, pass, fail)
+    pass = r8[0]; fail = r8[1]
+
+    let r9 = check("hamming([1,2,3],[1,9,3])=1",
+                   hamming([1, 2, 3], [1, 9, 3]) == 1, pass, fail)
+    pass = r9[0]; fail = r9[1]
+
+    let r10 = check("hamming([0,0,0,0],[1,1,1,1])=4",
+                    hamming([0, 0, 0, 0], [1, 1, 1, 1]) == 4, pass, fail)
+    pass = r10[0]; fail = r10[1]
+
+    let r11 = check("hamming length-mismatch=0",
+                    hamming([1, 2], [1, 2, 3]) == 0, pass, fail)
+    pass = r11[0]; fail = r11[1]
+
+    // ── cosine_similarity ──
+    // Identical (parallel) → 1.0.
+    let r12 = check("cosine([1,2,3],[1,2,3])=1",
+                    near(cosine_similarity([1.0, 2.0, 3.0], [1.0, 2.0, 3.0]), 1.0), pass, fail)
+    pass = r12[0]; fail = r12[1]
+
+    // Orthogonal → 0.0.
+    let r13 = check("cosine([1,0],[0,1])=0",
+                    near(cosine_similarity([1.0, 0.0], [0.0, 1.0]), 0.0), pass, fail)
+    pass = r13[0]; fail = r13[1]
+
+    // Anti-parallel → -1.0.
+    let r14 = check("cosine([1,0],[-1,0])=-1",
+                    near(cosine_similarity([1.0, 0.0], [0.0 - 1.0, 0.0]), 0.0 - 1.0), pass, fail)
+    pass = r14[0]; fail = r14[1]
+
+    // Scale-invariant: cos(v, 2v) = 1.
+    let r15 = check("cosine scale-invariant=1",
+                    near(cosine_similarity([1.0, 2.0, 3.0], [2.0, 4.0, 6.0]), 1.0), pass, fail)
+    pass = r15[0]; fail = r15[1]
+
+    // Zero-norm guard → sentinel -2.0.
+    let r16 = check("cosine zero-norm sentinel",
+                    near(cosine_similarity([0.0, 0.0], [1.0, 2.0]), 0.0 - 2.0), pass, fail)
+    pass = r16[0]; fail = r16[1]
+
+    // Length-mismatch guard → sentinel -2.0.
+    let r17 = check("cosine length-mismatch sentinel",
+                    near(cosine_similarity([1.0, 2.0], [1.0, 2.0, 3.0]), 0.0 - 2.0), pass, fail)
+    pass = r17[0]; fail = r17[1]
+
+    print("")
+    print("core_distance: " + to_string(pass) + "/" + to_string(pass + fail) + " passed")
+    if fail == 0 {
+        print("ALL PASS — stdlib/cluster/core_distance")
+    } else {
+        print("FAILURES present")
+        exit(1)
+    }
+}

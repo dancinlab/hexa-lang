@@ -1,0 +1,15 @@
+{
+  "schema": "hexa-lang/hx_aot_stale/1",
+  "ts": "2026-05-08T12:09:12Z",
+  "status": "real-v1",
+  "bin_count": 10,
+  "shim_count": 9,
+  "aot_scanned": 1,
+  "stale": [
+
+  ],
+  "orphan": [
+    {"bin":"bin/hexa-daemon-serve","reason":"no matching tool/hexa-daemon-serve.hexa source"}
+  ],
+  "summary": {"stale": 0, "orphan": 1}
+}

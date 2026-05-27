@@ -1,0 +1,40 @@
+NOVEL closed-negative identity (TECS-L F13, mk10 seed 5 discovery 2026-05-26):
+
+  CLAIM (falsified):  ∃ prime p such that p is an Ore (harmonic-divisor) number.
+  RESULT:             🔴 FALSIFIED — no prime is Ore.
+
+CLOSED-FORM PROOF:
+  For prime p: σ(p) = p+1, τ(p) = 2, so H(p) = p·τ(p)/σ(p) = 2p/(p+1).
+  H(p) ∈ ℤ ⟺ (p+1) | 2p
+            ⟺ (p+1) | 2·(p+1) − 2 = 2(p+1) − 2
+            ⟺ (p+1) | 2
+            ⟺ p+1 ∈ {1, 2}
+            ⟺ p ∈ {0, 1}
+  No element of {0,1} is prime. ∴ Ore ∩ {primes} = ∅.            ∎
+
+VERIFIED via hexa verify --expr (5 Mersenne-prime witnesses):
+  M_2=3:    σ=4,  τ=2, n·τ=6,  n·τ mod σ = 2  ≠ 0  → ¬Ore
+  M_3=7:    σ=8,  τ=2, n·τ=14, n·τ mod σ = 6  ≠ 0  → ¬Ore
+  M_5=31:   σ=32, τ=2, n·τ=62, n·τ mod σ = 30 ≠ 0  → ¬Ore
+  M_7=127:  σ=128,τ=2, n·τ=254,n·τ mod σ = 126≠ 0  → ¬Ore
+  M_13=8191: σ=8192,τ=2,n·τ=16382, n·τ mod σ = 8190 ≠ 0 → ¬Ore
+  5/5 🔴 FALSIFIED (Ore-membership), 10/10 🔵 component arith.
+
+COROLLARY: Mersenne prime ∩ Ore = ∅.
+  Combined with F4 (Mersenne perfects P_k = 2^(p-1)·M_p are Ore), this
+  cleanly separates the prime building block (M_p ∉ Ore) from the
+  composite product (P_k ∈ Ore). The Mersenne-Ore overlap lives entirely
+  in the composite product layer, not the prime layer.
+
+TRIPLE INTERSECTION (Perfect ∩ Ore ∩ Mersenne):
+  Perfect ⊂ Ore (Ore 1948, F4 reconfirmed P_1..P_3 ∈ Ore).
+  Every even perfect is a Mersenne-derived product P_k = 2^(p-1)·M_p.
+  So Perfect ∩ Mersenne-product = Perfect (Euclid-Euler).
+  ∴ Perfect ∩ Ore ∩ Mersenne-product = Perfect.
+  But the Mersenne-PRIME slice intersected with Ore is EMPTY (above).
+  → "Mersenne" in the triple = composite product layer, NOT prime layer.
+
+ATLAS provenance: NOT in compiler/atlas/embedded.gen.hexa.
+
+CLASSIFICATION: 🔴 CLOSED-NEGATIVE (publishable per project.tape
+@D paper_negative_ok) — closed-form proof + 5 prime witnesses.

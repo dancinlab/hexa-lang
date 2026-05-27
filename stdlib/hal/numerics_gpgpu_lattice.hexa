@@ -1,0 +1,249 @@
+#!hexa strict
+// stdlib/hal/numerics_gpgpu_lattice.hexa — F-GPGPU-1 T2 numerical.
+//
+// Closes the T2 (numerical / fixture) tier of falsifier F-GPGPU-1
+// (σ=12 = 6 vendors × 2 IRs; falsifier_gpgpu_check.hexa registry).
+//
+// T1 (compute.hexa internal asserts) closes the algebraic identity:
+//
+//   σ_gpgpu = vendors · ir_substrates = 6 · 2 = 12
+//   J₂′      = σ_gpgpu · τ            = 12 · 4 = 48
+//
+// using pure integer constants. T2 (this script) cross-checks the
+// SAME identities but reads them out of the on-disk backend table —
+// every backend/<vendor>/compute.hexa AND every backend/<ir>/compute.hexa
+// must (a) exist on disk, (b) declare the matching VENDOR_NAME or IR-substrate
+// constants, and (c) sum to 6 vendor + 2 IR = 8 distinct backend directories.
+//
+// Identities checked (numerically — read from source):
+//
+//   1. 6 vendor backend dirs present: cuda / hip / sycl / opencl / metal / webgpu.
+//   2. 2 IR backend dirs present: spirv / ptx.
+//   3. σ_gpgpu = vendors · ir_substrates = 6 · 2  = 12.
+//   4. J₂′ = σ_gpgpu · τ = 12 · 4 = 48.
+//   5. compute.hexa (host primitive) present at stdlib/hal root.
+//   6. σ_gpgpu (=12) is **independent** of σ_hw12 (=12) — they share
+//      the integer 12 but populate different module sets (assert by
+//      checking neither vendor nor IR name appears in HW-12 module
+//      list "core/gpio/i2c/spi/uart/adc/dac/pwm/timer/intr/dma/rtc").
+//   7. Every vendor backend's compute.hexa references at least one IR
+//      substrate (PTX or SPIR-V) in its module body — paper-tier mapping
+//      check; satisfied if "PTX" or "SPIR-V" or "spirv" or "ptx" appears.
+//
+// PASS = every identity above holds against the on-disk backend table.
+// FAIL = any backend missing OR identity drift OR axis collision with HW-12.
+//
+// Run:
+//   hexa run stdlib/hal/numerics_gpgpu_lattice.hexa
+//
+// Cost: $0 (8 backend file-reads + grep; no compilation).
+//
+// Phase G iter 9+5+1 (after F-GPGPU-1..6 preregister @ 91f92d6f) —
+// first T2 fixture for the GPGPU axis. Lifts F-GPGPU-1 from 33% → 67%
+// closure (T1+T2 ✓; T3 deferred per canon §7.5 FFI-downstream rule).
+
+// ─── n=6 lattice constants (numerical references) ────────────────────
+
+let TAU_6        = 4
+let GPGPU_VENDORS_N = 6
+let GPGPU_IRS_N     = 2
+let GPGPU_SIGMA  = GPGPU_VENDORS_N * GPGPU_IRS_N    // = 12
+let GPGPU_J2_PRIME = GPGPU_SIGMA * TAU_6             // = 48
+
+// ─── vendor + IR backend rosters (canonical 6+2 = 8 backends) ────────
+
+let VENDORS = [
+    "cuda",     // NVIDIA proprietary
+    "hip",      // AMD ROCm
+    "sycl",     // Intel oneAPI / DPC++
+    "opencl",   // Khronos
+    "metal",    // Apple
+    "webgpu"    // W3C
+]
+
+let IRS = [
+    "spirv",    // SPIR-V (Khronos): SYCL, OpenCL, WebGPU, HIP-via-translator, Metal-via-translator
+    "ptx"       // NVIDIA PTX: CUDA primary
+]
+
+// HW-12 module names for axis-distinctness check (must NOT collide
+// with any vendor or IR name).
+let HW12_MODULES = [
+    "core", "gpio", "i2c", "spi", "uart", "adc",
+    "dac", "pwm", "timer", "intr", "dma", "rtc"
+]
+
+// ─── check harness ───────────────────────────────────────────────────
+
+let mut RUN  = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ─── helpers ─────────────────────────────────────────────────────────
+
+fn _root() -> str {
+    let env_root = env("HEXA_HAL_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _exists(p: str) -> bool {
+    let r = exec("[ -f \"" + p + "\" ] && echo y || echo n").trim()
+    return r == "y"
+}
+
+// Return true if any element of `forbidden` appears in `name`.
+fn _name_collides(name: str, forbidden: [str]) -> bool {
+    for f in forbidden {
+        if name == f { return true }
+    }
+    return false
+}
+
+// Check that a backend's compute.hexa source references ≥1 IR substrate.
+// Returns the matching IR name, or "" if none found.
+fn _extract_ir_ref(src: str) -> str {
+    if src.contains("PTX") || src.contains("ptx") || src.contains("IR_PTX") { return "ptx" }
+    if src.contains("SPIR-V") || src.contains("spirv") || src.contains("IR_SPIRV") { return "spirv" }
+    return ""
+}
+
+// ─── checks ──────────────────────────────────────────────────────────
+
+fn check_vendor_count() {
+    _check(VENDORS.len() == GPGPU_VENDORS_N,
+           "6 vendor roster cardinality (cuda/hip/sycl/opencl/metal/webgpu)",
+           "got " + str(VENDORS.len()))
+}
+
+fn check_ir_count() {
+    _check(IRS.len() == GPGPU_IRS_N,
+           "2 IR roster cardinality (spirv/ptx)",
+           "got " + str(IRS.len()))
+}
+
+fn check_vendor_backends_present(root: str) {
+    let mut n = 0
+    let mut missing = ""
+    for v in VENDORS {
+        let p = root + "/stdlib/hal/backend/" + v + "/compute.hexa"
+        if _exists(p) { n = n + 1 }
+        else { missing = missing + v + " " }
+    }
+    _check(n == GPGPU_VENDORS_N,
+           "all 6 backend/<vendor>/compute.hexa files present",
+           "got " + str(n) + "/6" + (if missing.len() > 0 { "; missing: " + missing } else { "" }))
+}
+
+fn check_ir_backends_present(root: str) {
+    let mut n = 0
+    let mut missing = ""
+    for ir in IRS {
+        let p = root + "/stdlib/hal/backend/" + ir + "/compute.hexa"
+        if _exists(p) { n = n + 1 }
+        else { missing = missing + ir + " " }
+    }
+    _check(n == GPGPU_IRS_N,
+           "all 2 backend/<ir>/compute.hexa files present",
+           "got " + str(n) + "/2" + (if missing.len() > 0 { "; missing: " + missing } else { "" }))
+}
+
+fn check_compute_host_present(root: str) {
+    let p = root + "/stdlib/hal/compute.hexa"
+    _check(_exists(p),
+           "compute.hexa host primitive present at stdlib/hal root",
+           if _exists(p) { "found" } else { "missing" })
+}
+
+fn check_sigma_gpgpu_eq_12() {
+    let lhs = GPGPU_VENDORS_N * GPGPU_IRS_N
+    _check(lhs == 12,
+           "σ_gpgpu = vendors · IRs = 6 · 2 = 12",
+           "got " + str(lhs))
+}
+
+fn check_J2_prime_eq_48() {
+    let lhs = GPGPU_SIGMA * TAU_6
+    _check(lhs == 48,
+           "J₂′ = σ_gpgpu · τ = 12 · 4 = 48",
+           "got " + str(lhs))
+}
+
+fn check_axis_distinct_from_hw12() {
+    // No vendor or IR name should match any HW-12 module name.
+    let mut bad = ""
+    for v in VENDORS {
+        if _name_collides(v, HW12_MODULES) { bad = bad + v + "(vendor) " }
+    }
+    for ir in IRS {
+        if _name_collides(ir, HW12_MODULES) { bad = bad + ir + "(ir) " }
+    }
+    _check(bad.len() == 0,
+           "GPGPU axis distinct from HW-12 axis (no name collision)",
+           if bad.len() > 0 { "collisions: " + bad } else { "all 8 names distinct from {core,gpio,i2c,spi,uart,adc,dac,pwm,timer,intr,dma,rtc}" })
+}
+
+fn check_vendor_backends_reference_ir(root: str) {
+    // Every vendor backend's compute.hexa must reference ≥1 IR.
+    let mut bad = ""
+    let mut detail = ""
+    for v in VENDORS {
+        let p = root + "/stdlib/hal/backend/" + v + "/compute.hexa"
+        if !_exists(p) { bad = bad + v + "(missing) "; continue }
+        let src = read_file(p)
+        let ir = _extract_ir_ref(src)
+        if ir.len() == 0 { bad = bad + v + "(no-ir) " }
+        else { detail = detail + v + "→" + ir + " " }
+    }
+    _check(bad.len() == 0,
+           "every vendor backend references ≥1 IR substrate",
+           if bad.len() > 0 { "issues: " + bad } else { detail })
+}
+
+// ─── main ────────────────────────────────────────────────────────────
+
+fn main() {
+    println("========================================================================")
+    println("  stdlib/hal — numerics_gpgpu_lattice: F-GPGPU-1 T2 numerical")
+    println("========================================================================")
+    println("  vendors: " + str(VENDORS))
+    println("  IRs    : " + str(IRS))
+    println("  σ_gpgpu = vendors · IRs = " + str(GPGPU_VENDORS_N) + " · " + str(GPGPU_IRS_N) + " = " + str(GPGPU_SIGMA))
+    println("  J₂′ = σ · τ = " + str(GPGPU_SIGMA) + " · " + str(TAU_6) + " = " + str(GPGPU_J2_PRIME))
+    println("")
+
+    let root = _root()
+
+    check_vendor_count()
+    check_ir_count()
+    check_vendor_backends_present(root)
+    check_ir_backends_present(root)
+    check_compute_host_present(root)
+    check_sigma_gpgpu_eq_12()
+    check_J2_prime_eq_48()
+    check_axis_distinct_from_hw12()
+    check_vendor_backends_reference_ir(root)
+
+    println("")
+    println("  FALSIFIER:")
+    println("    ✗ F-GPGPU-1: σ=12 = 6 vendors × 2 IRs (cross-checked numerically)")
+
+    let pass_n = RUN - FAIL
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_LANG_HAL_NUMERICS_GPGPU_LATTICE__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_LANG_HAL_NUMERICS_GPGPU_LATTICE__ PASS")
+    exit(0)
+}
+
+main()

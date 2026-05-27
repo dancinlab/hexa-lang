@@ -1,0 +1,15 @@
+// stdlib/math.hexa — F1 (2026-05-10) backward-compat shim.
+//
+// Module relocated to stdlib/core/math.hexa under the Option C
+// stdlib_core_split (SPEC.yaml firmware_evolution.roadmap.F1).
+// Pure integer arithmetic — no alloc, no syscall, no platform
+// assumption — qualifies as target-agnostic core.
+//
+// This shim re-exports the new location so the existing 100+
+// `import "stdlib/math"` consumers keep working without change.
+// Sunset: removed after F4 absorptions complete (when downstream
+// consumers have all migrated to the explicit core/ path).
+//
+// New canonical path: stdlib/core/math.hexa
+
+import "stdlib/core/math.hexa"

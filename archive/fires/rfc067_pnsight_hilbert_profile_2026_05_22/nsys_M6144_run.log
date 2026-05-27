@@ -1,0 +1,19 @@
+WARNING: Device-side CUDA Event completion trace is currently enabled.
+         This may increase runtime overhead and the likelihood of false
+         dependencies across CUDA Streams. If you wish to avoid this, please
+         disable the feature with --cuda-event-trace=false.
+WARNING: CPU IP/backtrace sampling not supported, disabling.
+Try the 'nsys status --environment' command to learn more.
+
+WARNING: CPU context switch tracing not supported, disabling.
+Try the 'nsys status --environment' command to learn more.
+
+Device: NVIDIA GeForce RTX 5070 sm_120
+shape M=6144 entry=sgemm_4warp_hilbert_6144x6144_grid regs/thd=64 shmem=8192 B
+launch grid=(128,128,1) block=(128,1,1) side=96 p=128 K_TILES=384 (real=9216 padding=7168)
+M=6144 nreps=20 mean=7.815ms min=7.797ms max=7.826ms TFLOPS=59.355
+Collecting data...
+Generating '/tmp/nsys-report-ddb4.qdstrm'
+[1/1] [0%                          ] nsys_M6144.nsys-rep[1/1] [0%                          ] nsys_M6144.nsys-rep[1/1] [========42%                 ] nsys_M6144.nsys-rep[1/1] [==========49%               ] nsys_M6144.nsys-rep[1/1] [============57%             ] nsys_M6144.nsys-rep[1/1] [==================75%       ] nsys_M6144.nsys-rep[1/1] [=======================93%  ] nsys_M6144.nsys-rep[1/1] [=======================94%  ] nsys_M6144.nsys-rep[1/1] [========================100%] nsys_M6144.nsys-rep[1/1] [========================100%] nsys_M6144.nsys-rep
+Generated:
+	/tmp/rfc067_pnsight_hilbert_profile_2026_05_22/nsys_M6144.nsys-rep

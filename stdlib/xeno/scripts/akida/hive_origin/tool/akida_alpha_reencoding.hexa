@@ -1,0 +1,212 @@
+// tool/akida_alpha_reencoding.hexa — Layer 5: α absorbed primitive re-encoding via Akida spike-event time-dim entropy.
+// @raw117_exempt — legacy module, 5-falsifier retrofit deferred to dedicated cycle
+//
+// 13+ layer Akida ω-cycle catalog Layer 5 (사전 제시).
+// raw 47 cross-repo-trawl-witness α envelope strengthening — absorbed primitive 의 spike-event 재encoding 으로 시간 차원 entropy 추가.
+// Hardware (Raspberry Pi 5 + AKD1000) en route. AKIDA_HW_PRESENT=1 env 활성 시 real path,
+// 그 외 deterministic mock fixture 으로 selftest PASS.
+//
+// Surface:
+//   @pure_fn classify_alpha_payload(payload)            -> [hash_short, time_dim_score]
+//   @pure_fn build_reencode_cmd(primitive_path)         -> str
+//   @io_seam reencode_alpha(absorbed_path)              -> [byte_hash, time_dim_entropy]
+//   --selftest                                          → F1-F6 mock-tier
+//   --reencode <absorbed-primitive-path>                → emit json envelope
+//
+// HARD: claude binary call count = 0; real Akida invoke = 0 until hardware lands.
+// raw refs: raw 9 hexa-only, raw 47 (α envelope), raw 91 honest C3 (mock disclosure),
+// raw 169 surgical (single helper), raw 247 r45 pure-fn / io-seam separation.
+//
+// @tool(slug="akida_alpha_reencoding", desc="Layer 5 α absorbed primitive re-encoding via Akida spike-event time-dim entropy. ~200 LoC. 3 pure-fn + 1 io-seam. Mock-tier until AKD1000 hardware arrives.")
+// @usage(hexa run tool/akida_alpha_reencoding.hexa --selftest)
+// @usage(hexa run tool/akida_alpha_reencoding.hexa --reencode <absorbed-primitive-path>)
+// @design-tier 2026-05-01
+// @raw-refs raw_9 raw_47 raw_91 raw_169 raw_247
+
+use std::env
+
+fn _hive() -> str {
+    let h = env("HIVE")
+    if h == "" {
+        let home = env("HOME")
+        if home == "" { return "" }
+        return home + "/core/hive"
+    }
+    return h
+}
+
+fn _now_iso_utc() -> str {
+    let t = exec("date -u +%Y-%m-%dT%H:%M:%SZ")
+    return to_string(t).trim()
+}
+
+// ─── pure-fn 1 — classify_alpha_payload ───────────────────────────────
+//
+// Input: absorbed primitive payload string (file content or summary).
+// Output: [hash_short (8-hex), time_dim_score 0..100]
+//   time_dim_score = unique-character-count proxy for time-domain entropy
+//   higher = more diverse spike timing pattern after re-encoding.
+@pure_fn
+fn classify_alpha_payload(payload: str) -> array {
+    let s = payload.trim()
+    if s == "" { return ["00000000", 0] }
+    // FNV-1a 32-bit fold for stable hash short.
+    let mut h = 2166136261
+    let mut i = 0
+    while i < len(s) {
+        let ch = s.slice(i, i + 1)
+        let code = if len(ch) > 0 { ch.byte_at(0) } else { 0 }
+        h = (h ^ code) * 16777619
+        h = h & 4294967295
+        i = i + 1
+    }
+    let hash_short = _hex_pad8(h)
+    // Time-dim entropy proxy: count distinct printable characters /
+    // bucket into 0..100 score (capped).
+    let mut seen = [false, false, false, false, false, false, false, false,
+                    false, false, false, false, false, false, false, false]
+    let mut j = 0
+    while j < len(s) {
+        let c = s.slice(j, j + 1)
+        let code = if len(c) > 0 { c.byte_at(0) } else { 0 }
+        let bucket = code & 15
+        seen[bucket] = true
+        j = j + 1
+    }
+    let mut count = 0
+    let mut k = 0
+    while k < 16 {
+        if seen[k] { count = count + 1 }
+        k = k + 1
+    }
+    // 16 buckets → score 0..100 linear.
+    let score = (count * 100) / 16
+    return [hash_short, score]
+}
+
+@pure_fn
+fn _hex_pad8(n: int) -> str {
+    let table = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"]
+    let mut out = ""
+    let mut shift = 28
+    while shift >= 0 {
+        let nib = (n >> shift) & 15
+        out = out + table[nib]
+        shift = shift - 4
+    }
+    return out
+}
+
+// ─── pure-fn 2 — build_reencode_cmd ────────────────────────────────────
+@pure_fn
+fn build_reencode_cmd(primitive_path: str) -> str {
+    if primitive_path == "" { return "" }
+    // Whitelist: forbid shell metas in the path.
+    let mut i = 0
+    while i < len(primitive_path) {
+        let ch = primitive_path.slice(i, i + 1)
+        if ch == ";" || ch == "&" || ch == "|" || ch == "`" || ch == "$" {
+            return ""
+        }
+        i = i + 1
+    }
+    return "akida-spike-reencode --primitive " + primitive_path + " --time-dim --json"
+}
+
+// ─── @io_seam — reencode_alpha ────────────────────────────────────────
+@io_seam
+fn reencode_alpha(absorbed_path: str) -> array {
+    let hw = env("AKIDA_HW_PRESENT")
+    if hw != "1" {
+        // Mock: deterministic fixture from path. Re-encode the path string itself.
+        let cls = classify_alpha_payload(absorbed_path)
+        return [cls[0], cls[1]]
+    }
+    let cmd = build_reencode_cmd(absorbed_path)
+    if cmd == "" { return ["00000000", 0] }
+    let raw = exec(cmd + " 2>/dev/null")
+    let body = to_string(raw).trim()
+    if body == "" { return ["00000000", 0] }
+    let cls = classify_alpha_payload(body)
+    return [cls[0], cls[1]]
+}
+
+fn emit_envelope(absorbed_path: str) -> str {
+    let r = reencode_alpha(absorbed_path)
+    let ts = _now_iso_utc()
+    let summary = "alpha-reencode hash=" + to_string(r[0]) + " time_dim=" + to_string(r[1])
+    return "{\"mechanism\":\"alpha\",\"source_id\":\"akida_spike_reencode\",\"byte_hash\":\"" + to_string(r[0]) + "\",\"time_dim_score\":" + to_string(r[1]) + ",\"ts\":\"" + ts + "\",\"payload_summary\":\"" + summary + "\"}"
+}
+
+fn selftest() -> int {
+    let mut fails = 0
+    println("[akida_alpha_reencoding selftest — DESIGN-TIER mock]")
+
+    // F1: empty payload safety
+    let r0 = classify_alpha_payload("")
+    if r0[0] == "00000000" && r0[1] == 0 {
+        println("  PASS F1 empty payload safety")
+    } else {
+        println("  FAIL F1 empty payload safety"); fails = fails + 1
+    }
+
+    // F2: deterministic — identical input → identical hash
+    let a = classify_alpha_payload("absorbed-primitive-x42")
+    let b = classify_alpha_payload("absorbed-primitive-x42")
+    if a[0] == b[0] && a[1] == b[1] {
+        println("  PASS F2 deterministic classify")
+    } else {
+        println("  FAIL F2 deterministic classify"); fails = fails + 1
+    }
+
+    // F3: distinct inputs produce distinct hashes (high-prob)
+    let c = classify_alpha_payload("primitive-tier1-foo")
+    let d = classify_alpha_payload("primitive-tier1-bar")
+    if c[0] != d[0] {
+        println("  PASS F3 distinct-input distinct-hash")
+    } else {
+        println("  FAIL F3 distinct-input distinct-hash"); fails = fails + 1
+    }
+
+    // F4: time_dim_score range bounded 0..100
+    let e = classify_alpha_payload("the quick brown fox jumps over the lazy dog 1234567890")
+    if e[1] >= 0 && e[1] <= 100 {
+        println("  PASS F4 time_dim_score range score=" + to_string(e[1]))
+    } else {
+        println("  FAIL F4 time_dim_score range"); fails = fails + 1
+    }
+
+    // F5: build_reencode_cmd whitelist (rejects shell metas)
+    let cmd_ok = build_reencode_cmd("/path/to/absorbed.hexa")
+    let cmd_bad = build_reencode_cmd("/path; rm -rf /")
+    if cmd_ok != "" && cmd_bad == "" {
+        println("  PASS F5 reencode_cmd whitelist")
+    } else {
+        println("  FAIL F5 reencode_cmd whitelist"); fails = fails + 1
+    }
+
+    // F6: io_seam mock fallback (HW absent)
+    std::env::set("AKIDA_HW_PRESENT", "0")
+    let m = reencode_alpha("/tmp/fake-absorbed.hexa")
+    if m[0] != "00000000" && m[1] >= 0 {
+        println("  PASS F6 io_seam mock fallback hash=" + to_string(m[0]))
+    } else {
+        println("  FAIL F6 io_seam mock fallback"); fails = fails + 1
+    }
+
+    if fails == 0 { println("[akida_alpha_reencoding] OK 6/6"); return 0 }
+    println("[akida_alpha_reencoding] FAIL " + to_string(fails) + "/6")
+    return 1
+}
+
+fn main() -> int {
+    let args = std::env::args()
+    if len(args) >= 2 && args[1] == "--selftest" { return selftest() }
+    if len(args) >= 3 && args[1] == "--reencode" {
+        println(emit_envelope(args[2]))
+        return 0
+    }
+    eprintln("usage: hexa run tool/akida_alpha_reencoding.hexa --selftest")
+    eprintln("       hexa run tool/akida_alpha_reencoding.hexa --reencode <absorbed-primitive-path>")
+    return 2
+}

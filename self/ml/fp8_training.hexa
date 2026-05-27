@@ -1,0 +1,460 @@
+// ═══════════════════════════════════════════════════════════════════
+//  self/ml/fp8_training.hexa — FP8 Training (#188)
+//
+//  FP8 (8-bit floating point) training simulation.
+//  E4M3 for forward pass — better precision, range [-448, 448]
+//  E5M2 for backward pass — better range, range [-57344, 57344]
+//
+//  Simulates FP8 quantize/dequantize in float64 to study
+//  numerical behavior, per-tensor scaling, and overflow detection.
+//
+//  Implements:
+//    1. Format constants      — E4M3 max (448), E5M2 max (57344)
+//    2. Quantization          — clamp+round per-tensor with scale
+//    3. Scale computation     — amax-based per-tensor scaling
+//    4. Dynamic scaling       — smoothed amax history window
+//    5. FP8 forward           — E4M3 quantized matmul
+//    6. FP8 backward          — E5M2 quantized gradient matmul
+//    7. FP8 train step        — full forward+backward+update
+//    8. Overflow detection    — range check for stability
+//    9. Loss scaling          — gradient scaling for FP8 stability
+//   10. Memory ratio          — FP8 vs FP16 savings (0.5)
+//   11. Quantization error    — MSE between original and roundtrip
+//   12. Amax history tracking — sliding window for dynamic scaling
+//
+//  API (pure):
+//    fp8_e4m3_max()                                     -> 448.0
+//    fp8_e5m2_max()                                     -> 57344.0
+//    fp8_amax(values, n)                                -> float
+//    fp8_compute_scale(values, n, max_val)              -> float
+//    fp8_dynamic_scale(amax_history, max_val)           -> float
+//    fp8_e4m3_quantize(values, n, scale)                -> [float]
+//    fp8_e5m2_quantize(values, n, scale)                -> [float]
+//    fp8_forward(input, weight, M, N, K, s_in, s_w)    -> [float]
+//    fp8_backward(grad_out, input, weight, M, N, K)     -> [grad_w, grad_in]
+//    fp8_train_step(params, input, target, lr, hist)    -> [params, loss, hist]
+//    fp8_update_amax_history(history, new_amax, win)    -> [float]
+//    fp8_overflow_detected(values, n, max_val)          -> bool
+//    fp8_loss_scaling(loss, scale_factor)                -> float
+//    fp8_memory_ratio()                                 -> 0.5
+//    fp8_quantize_error(original, quantized, n)         -> float (MSE)
+//
+//  AI-NATIVE attrs:
+//    @pure  — no side effects
+//    @hot   — called every training step
+// ═══════════════════════════════════════════════════════════════════
+
+// ── helpers ──────────────────────────────────────────────────────
+
+fn fp8_abs(x) {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn fp8_max(a, b) {
+    if a > b { return a }
+    return b
+}
+
+fn fp8_min(a, b) {
+    if a < b { return a }
+    return b
+}
+
+fn fp8_clamp(x, lo, hi) {
+    if x < lo { return lo }
+    if x > hi { return hi }
+    return x
+}
+
+fn fp8_round(x) {
+    if x >= 0.0 {
+        return to_float(to_int(x + 0.5))
+    }
+    return to_float(to_int(x - 0.5))
+}
+
+fn fp8_zeros(n) {
+    let mut v = []
+    for _i in 0..n { v = v + [0.0] }
+    return v
+}
+
+fn fp8_sqrt(x) {
+    if x <= 0.0 { return 0.0 }
+    let mut g = x / 2.0
+    if g < 1.0 { g = 1.0 }
+    for _i in 0..30 {
+        g = (g + x / g) / 2.0
+    }
+    return g
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Format Constants
+//
+//  E4M3: 4 exponent bits, 3 mantissa bits -> max 448.0
+//    Better precision, narrower range. Used for forward activations
+//    and weights where precision matters more.
+//
+//  E5M2: 5 exponent bits, 2 mantissa bits -> max 57344.0
+//    Better range, coarser precision. Used for backward gradients
+//    where dynamic range matters more.
+// ═══════════════════════════════════════════════════════════════════
+
+@pure
+fn fp8_e4m3_max() {
+    return 448.0
+}
+
+@pure
+fn fp8_e5m2_max() {
+    return 57344.0
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Absolute Maximum — largest |value| in array
+//
+//  Core primitive for per-tensor scaling. The amax determines
+//  what scale factor maps values into the FP8 representable range.
+// ═══════════════════════════════════════════════════════════════════
+
+@pure
+fn fp8_amax(values, n) {
+    let mut mx = 0.0
+    for i in 0..n {
+        let a = fp8_abs(values[i])
+        if a > mx { mx = a }
+    }
+    return mx
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Compute Scale — per-tensor scaling factor
+//
+//  scale = amax(values) / max_val
+//  where max_val is the FP8 format maximum (448 or 57344).
+//  Ensures values fit within the representable range after division.
+//  Returns at least 1e-12 to avoid division by zero.
+// ═══════════════════════════════════════════════════════════════════
+
+@pure
+fn fp8_compute_scale(values, n, max_val) {
+    let amax = fp8_amax(values, n)
+    if amax < 1.0e-12 { return 1.0e-12 }
+    return amax / max_val
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Dynamic Scale — smoothed scaling from amax history
+//
+//  Uses a sliding window of previous amax values. The scale is
+//  derived from the maximum amax seen in the history window,
+//  providing stability against transient activation spikes.
+//
+//  scale = max(amax_history) / max_val
+// ═══════════════════════════════════════════════════════════════════
+
+@pure
+fn fp8_dynamic_scale(amax_history, max_val) {
+    let n = len(amax_history)
+    if n == 0 { return 1.0e-12 }
+    let mut mx = amax_history[0]
+    for i in 1..n {
+        if amax_history[i] > mx { mx = amax_history[i] }
+    }
+    if mx < 1.0e-12 { return 1.0e-12 }
+    return mx / max_val
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Update Amax History — sliding window
+//
+//  Appends new_amax to history. If length exceeds the window size,
+//  drops the oldest entries. Returns the updated history array.
+// ═══════════════════════════════════════════════════════════════════
+
+@pure
+fn fp8_update_amax_history(history, new_amax, window) {
+    let mut h = history + [new_amax]
+    let n = len(h)
+    if n <= window { return h }
+    // trim: keep only the last `window` entries
+    let mut trimmed = []
+    let start = n - window
+    for i in start..n {
+        trimmed = trimmed + [h[i]]
+    }
+    return trimmed
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  E4M3 Quantize — forward pass quantization
+//
+//  Simulates FP8 E4M3 quantization in float64:
+//    q(v) = clamp(round(v / scale), -448, 448) * scale
+//
+//  The division by scale maps values into the FP8 range,
+//  rounding simulates limited mantissa, clamping prevents overflow,
+//  and the multiply by scale maps back to the original magnitude.
+// ═══════════════════════════════════════════════════════════════════
+
+@pure @hot
+fn fp8_e4m3_quantize(values, n, scale) {
+    let mut out = fp8_zeros(n)
+    let mx = fp8_e4m3_max()
+    let safe_scale = fp8_max(scale, 1.0e-12)
+    for i in 0..n {
+        let scaled = values[i] / safe_scale
+        let clamped = fp8_clamp(fp8_round(scaled), 0.0 - mx, mx)
+        out[i] = clamped * safe_scale
+    }
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  E5M2 Quantize — backward pass quantization
+//
+//  Simulates FP8 E5M2 quantization in float64:
+//    q(v) = clamp(round(v / scale), -57344, 57344) * scale
+//
+//  E5M2 has wider range than E4M3, making it suitable for
+//  gradients which can have larger dynamic range.
+// ═══════════════════════════════════════════════════════════════════
+
+@pure @hot
+fn fp8_e5m2_quantize(values, n, scale) {
+    let mut out = fp8_zeros(n)
+    let mx = fp8_e5m2_max()
+    let safe_scale = fp8_max(scale, 1.0e-12)
+    for i in 0..n {
+        let scaled = values[i] / safe_scale
+        let clamped = fp8_clamp(fp8_round(scaled), 0.0 - mx, mx)
+        out[i] = clamped * safe_scale
+    }
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Overflow Detection — check if any value exceeds format range
+//
+//  Returns true if any |value| > max_val, indicating the scale
+//  factor is too small and needs adjustment upward.
+// ═══════════════════════════════════════════════════════════════════
+
+@pure
+fn fp8_overflow_detected(values, n, max_val) {
+    for i in 0..n {
+        if fp8_abs(values[i]) > max_val {
+            return true
+        }
+    }
+    return false
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Loss Scaling — multiply loss by scale factor for FP8 stability
+//
+//  In FP8 training, small gradients can underflow to zero.
+//  Loss scaling amplifies the loss before backward pass, which
+//  proportionally amplifies all gradients. After backward,
+//  gradients are divided by the same factor to restore magnitude.
+// ═══════════════════════════════════════════════════════════════════
+
+@pure
+fn fp8_loss_scaling(loss, scale_factor) {
+    return loss * scale_factor
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Memory Ratio — FP8 vs FP16
+//
+//  FP8 uses 8 bits per element, FP16 uses 16 bits.
+//  Memory saving ratio = 8 / 16 = 0.5 (50% memory reduction).
+// ═══════════════════════════════════════════════════════════════════
+
+@pure
+fn fp8_memory_ratio() {
+    return 0.5
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Quantization Error — MSE between original and quantized
+//
+//  error = (1/n) * sum((original[i] - quantized[i])^2)
+//  Measures precision loss from FP8 quantization round-trip.
+// ═══════════════════════════════════════════════════════════════════
+
+@pure
+fn fp8_quantize_error(original, quantized, n) {
+    if n <= 0 { return 0.0 }
+    let mut sum_sq = 0.0
+    for i in 0..n {
+        let diff = original[i] - quantized[i]
+        sum_sq = sum_sq + diff * diff
+    }
+    return sum_sq / to_float(n)
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  FP8 Forward Pass — E4M3 quantized matmul
+//
+//  Quantizes input (MxK) and weight (KxN) to E4M3 format,
+//  then computes output = q_input * q_weight -> MxN (row-major).
+//
+//  This simulates H100/H200 FP8 tensor core behavior where
+//  both operands are in E4M3 for maximum precision in forward.
+//
+//  Returns flat array of size M*N.
+// ═══════════════════════════════════════════════════════════════════
+
+@pure @hot
+fn fp8_forward(input, weight, M, N, K, scale_in, scale_w) {
+    let q_in = fp8_e4m3_quantize(input, M * K, scale_in)
+    let q_w = fp8_e4m3_quantize(weight, K * N, scale_w)
+    let mut out = fp8_zeros(M * N)
+    for i in 0..M {
+        for j in 0..N {
+            let mut acc = 0.0
+            for k in 0..K {
+                acc = acc + q_in[i * K + k] * q_w[k * N + j]
+            }
+            out[i * N + j] = acc
+        }
+    }
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  FP8 Backward Pass — E5M2 quantized gradient matmul
+//
+//  Computes weight and input gradients using E5M2 quantization:
+//    grad_w  = input^T * grad_out    (KxM * MxN -> KxN)
+//    grad_in = grad_out * weight^T   (MxN * NxK -> MxK)
+//
+//  E5M2 is used for backward because gradients have larger
+//  dynamic range than activations or weights.
+//
+//  Returns: [grad_weight (flat KxN), grad_input (flat MxK)]
+// ═══════════════════════════════════════════════════════════════════
+
+@pure @hot
+fn fp8_backward(grad_output, input, weight, M, N, K) {
+    let scale_g = fp8_compute_scale(grad_output, M * N, fp8_e5m2_max())
+    let scale_i = fp8_compute_scale(input, M * K, fp8_e5m2_max())
+    let scale_w = fp8_compute_scale(weight, K * N, fp8_e5m2_max())
+
+    let q_grad = fp8_e5m2_quantize(grad_output, M * N, scale_g)
+    let q_in = fp8_e5m2_quantize(input, M * K, scale_i)
+    let q_w = fp8_e5m2_quantize(weight, K * N, scale_w)
+
+    // grad_w = input^T * grad_out  (KxM * MxN -> KxN)
+    let mut grad_w = fp8_zeros(K * N)
+    for k in 0..K {
+        for j in 0..N {
+            let mut acc = 0.0
+            for m in 0..M {
+                acc = acc + q_in[m * K + k] * q_grad[m * N + j]
+            }
+            grad_w[k * N + j] = acc
+        }
+    }
+
+    // grad_in = grad_out * weight^T  (MxN * NxK -> MxK)
+    let mut grad_in = fp8_zeros(M * K)
+    for i in 0..M {
+        for k in 0..K {
+            let mut acc = 0.0
+            for j in 0..N {
+                acc = acc + q_grad[i * N + j] * q_w[k * N + j]
+            }
+            grad_in[i * K + k] = acc
+        }
+    }
+
+    return [grad_w, grad_in]
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Simple MSE Loss — (1/n) * sum((pred - target)^2)
+// ═══════════════════════════════════════════════════════════════════
+
+@pure
+fn fp8_mse_loss(pred, target, n) {
+    if n <= 0 { return 0.0 }
+    let mut s = 0.0
+    for i in 0..n {
+        let d = pred[i] - target[i]
+        s = s + d * d
+    }
+    return s / to_float(n)
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  MSE Loss Gradient — d/dpred = 2*(pred - target) / n
+// ═══════════════════════════════════════════════════════════════════
+
+@pure
+fn fp8_mse_grad(pred, target, n) {
+    let mut g = fp8_zeros(n)
+    let inv_n = 2.0 / to_float(n)
+    for i in 0..n {
+        g[i] = (pred[i] - target[i]) * inv_n
+    }
+    return g
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  FP8 Train Step — full forward + backward + parameter update
+//
+//  Simple single-layer linear model: output = input * params
+//  Dimensions: input MxK, params KxN, output MxN, target MxN
+//  Uses M=2, K=2, N=2 for simplicity.
+//
+//  Steps:
+//    1. Compute per-tensor scales for input and params
+//    2. FP8 E4M3 forward pass (quantized matmul)
+//    3. MSE loss computation
+//    4. FP8 E5M2 backward pass (quantized gradient matmul)
+//    5. SGD parameter update: w = w - lr * grad_w
+//    6. Update amax history with new activation amax
+//
+//  Returns: [updated_params (flat KxN), loss, updated_amax_hist]
+// ═══════════════════════════════════════════════════════════════════
+
+@hot
+fn fp8_train_step(params, input, target, lr, amax_hist) {
+    let K = 2
+    let N = 2
+    let M = 2
+    let n_out = M * N
+
+    // compute per-tensor scales
+    let scale_in = fp8_compute_scale(input, M * K, fp8_e4m3_max())
+    let scale_w = fp8_compute_scale(params, K * N, fp8_e4m3_max())
+
+    // forward
+    let pred = fp8_forward(input, params, M, N, K, scale_in, scale_w)
+
+    // loss
+    let loss = fp8_mse_loss(pred, target, n_out)
+
+    // backward
+    let grad_out = fp8_mse_grad(pred, target, n_out)
+    let grads = fp8_backward(grad_out, input, params, M, N, K)
+    let grad_w = grads[0]
+
+    // SGD update: w = w - lr * grad_w
+    let mut new_params = fp8_zeros(K * N)
+    for i in 0..(K * N) {
+        new_params[i] = params[i] - lr * grad_w[i]
+    }
+
+    // update amax history
+    let new_amax = fp8_amax(pred, n_out)
+    let new_hist = fp8_update_amax_history(amax_hist, new_amax, 16)
+
+    return [new_params, loss, new_hist]
+}
+
+println("[fp8_training] loaded — E4M3/E5M2 quantize + amax scaling + forward/backward + train step")

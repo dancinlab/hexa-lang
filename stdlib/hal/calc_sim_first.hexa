@@ -1,0 +1,161 @@
+#!hexa strict
+// stdlib/hal/calc_sim_first.hexa — F-HAL-5 T1 algebraic.
+//
+// Closes the T1 (algebraic) tier of falsifier F-HAL-5
+// (every module ships a sim backend before any HW backend; sim-first
+//  invariant per README.md "Sim-first" §).
+//
+// Claim:
+//
+//   ∀ m ∈ MODULES.  source(m).contains("[sim") ∨ source(m).contains("(sim")
+//   ∧ ∀ m ∈ MODULES.  ¬ source(m).contains('use "stdlib/hal/backend/')
+//
+// Rationale:
+//
+//   The sim marker appears in two forms across the 12 modules:
+//     1. `[<module> sim] ...` — println debug lines (gpio/i2c/spi/uart
+//        /pwm/timer/intr/dma/rtc).
+//     2. `(sim ...)` — report-fn return strings (core, adc, dac).
+//
+//   Detecting either substring `[sim` OR `(sim` covers all 12. We
+//   tolerate up to 1 module exemption to remain robust against the
+//   degenerate core runtime case.
+//
+//   The HW-backend forbid is stricter: NO module .hexa may import a
+//   `stdlib/hal/backend/<vendor>` path. HW backends live as plug-in
+//   files under stdlib/hal/backend/<vendor>/ and are dispatched-to
+//   only via cfg-flag from v0.2.0+ codepaths, never imported from the
+//   peripheral surface itself. Sim-first means: the module's default
+//   surface is sim; HW is an additive option.
+//
+// Run:
+//   hexa run stdlib/hal/calc_sim_first.hexa
+//
+// PASS = ≥ 11/12 modules have a sim marker AND no module imports a
+//        backend path.
+// FAIL = > 1 module missing sim marker OR any module imports HW backend.
+//
+// Cost: $0 (file reads + substring scan).
+
+// ─── module roster (12 σ-slots) ───────────────────────────────────────
+
+let MODULES = [
+    "core", "gpio", "i2c", "spi", "uart",
+    "adc", "dac",
+    "pwm", "timer", "intr", "dma", "rtc"
+]
+
+let MIN_SIM_MARKERS = 11   // ≥ 11 of 12 (1-module exemption tolerated)
+let HW_BACKEND_USE_PATTERN = "use \"stdlib/hal/backend/"
+
+// ─── check harness ────────────────────────────────────────────────────
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ─── helpers ─────────────────────────────────────────────────────────
+
+fn _root() -> str {
+    let env_root = env("HEXA_HAL_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _exists(p: str) -> bool {
+    let r = exec("[ -f \"" + p + "\" ] && echo y || echo n").trim()
+    return r == "y"
+}
+
+fn _has_sim_marker(src: str) -> bool {
+    return src.contains("[sim") || src.contains("(sim")
+}
+
+fn _imports_hw_backend(src: str) -> bool {
+    return src.contains(HW_BACKEND_USE_PATTERN)
+}
+
+// ─── checks ──────────────────────────────────────────────────────────
+
+fn check_module_count() {
+    let n = MODULES.len()
+    _check(n == 12, "module roster length == σ(6) = 12",
+           "got " + str(n))
+}
+
+fn check_sim_markers(root: str) {
+    let mut hits = 0
+    let mut missing: [str] = []
+    for m in MODULES {
+        let path = root + "/stdlib/hal/" + m + ".hexa"
+        if !_exists(path) { continue }
+        let src = read_file(path)
+        if _has_sim_marker(src) {
+            hits = hits + 1
+        } else {
+            missing.push(m)
+        }
+    }
+    let ok = hits >= MIN_SIM_MARKERS
+    let detail = str(hits) + "/12 modules have sim marker; missing: " +
+                 str(missing)
+    _check(ok, "≥ " + str(MIN_SIM_MARKERS) + "/12 modules ship a sim marker",
+           detail)
+}
+
+fn check_no_hw_backend_imports(root: str) {
+    let mut violators: [str] = []
+    for m in MODULES {
+        let path = root + "/stdlib/hal/" + m + ".hexa"
+        if !_exists(path) { continue }
+        let src = read_file(path)
+        if _imports_hw_backend(src) { violators.push(m) }
+    }
+    let ok = violators.len() == 0
+    let detail = if ok {
+        "no module imports stdlib/hal/backend/* — sim is the default surface"
+    } else {
+        "violators: " + str(violators)
+    }
+    _check(ok, "no module imports a HW backend (sim-first invariant)",
+           detail)
+}
+
+// ─── main ────────────────────────────────────────────────────────────
+
+fn main() {
+    println("========================================================================")
+    println("  stdlib/hal — calc_sim_first: F-HAL-5 T1 algebraic (sim-before-HW)")
+    println("========================================================================")
+    println("  modules (" + str(MODULES.len()) + "): " + str(MODULES))
+    println("  marker forms accepted: '[sim' OR '(sim'")
+    println("  HW backend import forbid: " + HW_BACKEND_USE_PATTERN + "...\"")
+    println("")
+
+    let root = _root()
+
+    check_module_count()
+    check_sim_markers(root)
+    check_no_hw_backend_imports(root)
+
+    println("")
+    println("  FALSIFIER:")
+    println("    ✗ F-HAL-5: sim backend before any HW backend")
+
+    let pass_n = RUN - FAIL
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_LANG_HAL_CALC_SIM_FIRST__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_LANG_HAL_CALC_SIM_FIRST__ PASS")
+    exit(0)
+}

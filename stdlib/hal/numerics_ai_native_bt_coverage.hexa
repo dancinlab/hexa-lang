@@ -1,0 +1,170 @@
+#!hexa strict
+// stdlib/hal/numerics_ai_native_bt_coverage.hexa — F-AI-NATIVE-5 T2 numerical.
+//
+// Closes the T2 (numerical / fixture) tier of falsifier F-AI-NATIVE-5
+// (BT_COVERAGE = sopfr(n) + φ = 7; BT_541..BT_547 audit coverage;
+// falsifier_ai_native_check.hexa registry).
+//
+// T1 (ai.hexa internal asserts: SOPFR_N=5, PHI=2, BT_COVERAGE=7,
+// BT_RESERVED=0, BT_541..BT_547 = 1..7) closes the algebraic identity:
+//
+//   BT_COVERAGE = sopfr(n) + φ = 5 + 2 = 7
+//   BT_RESERVED..BT_547 = 0..7 (8 values, contiguous; 7 BTs + 1 reserved)
+//
+// T2 (this script) cross-checks NUMERICALLY by reading ai.hexa source.
+//
+// Identities checked:
+//   1. ai.hexa exists.
+//   2. ai.hexa declares SOPFR_N = 5.
+//   3. ai.hexa declares PHI = 2.
+//   4. ai.hexa declares BT_COVERAGE = 7.
+//   5. SOPFR_N + PHI = BT_COVERAGE (algebraic identity from on-disk values).
+//   6. ai.hexa declares BT_RESERVED = 0.
+//   7. ai.hexa declares BT_541 = 1, BT_542 = 2, ..., BT_547 = 7.
+//   8. BT_* values are CONTIGUOUS 0..7 (no gaps/dupes; 8 distinct BT-ids).
+//
+// 7 named BTs (BT_541..BT_547) — Clay Math Millennium Prize Problems
+// + Riemann zeros (canon §3 of btAI3_rtl_design):
+//   BT_541 = Riemann zeros           (1)
+//   BT_542 = P vs NP                 (2)
+//   BT_543 = Yang-Mills              (3)
+//   BT_544 = Navier-Stokes           (4)
+//   BT_545 = Hodge                   (5)
+//   BT_546 = BSD (Birch-Swinnerton-Dyer) (6)
+//   BT_547 = Poincaré                (7)
+//
+// PASS = every identity holds; FAIL = any drift.
+//
+// Phase G iter 9+5+12; F-AI-NATIVE-5 closure 33% → 67%.
+// Pattern: numerics_ai_native_lattice.hexa (sister; algebraic identity
+// from on-disk values + contiguous-enumeration check).
+
+let EXPECTED_SOPFR_N    = 5
+let EXPECTED_PHI        = 2
+let EXPECTED_BT_COVERAGE = 7
+
+// BT-id enumeration (index = expected value).
+let BT_NAMES = [
+    "BT_RESERVED",   // 0
+    "BT_541",        // 1 — Riemann zeros
+    "BT_542",        // 2 — P vs NP
+    "BT_543",        // 3 — Yang-Mills
+    "BT_544",        // 4 — Navier-Stokes
+    "BT_545",        // 5 — Hodge
+    "BT_546",        // 6 — BSD
+    "BT_547"         // 7 — Poincaré
+]
+
+let mut RUN  = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+fn _root() -> str {
+    let env_root = env("HEXA_HAL_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _exists(p: str) -> bool {
+    let r = exec("[ -f \"" + p + "\" ] && echo y || echo n").trim()
+    return r == "y"
+}
+
+fn _extract_let_int(src: str, name: str) -> int {
+    let pat = "let " + name
+    let idx = src.index_of(pat)
+    if idx < 0 { return -1 }
+    let mut i = idx + pat.len()
+    while i < src.len() && src.char_at(i) != "=" { i = i + 1 }
+    if i >= src.len() { return -1 }
+    i = i + 1
+    while i < src.len() && (src.char_at(i) == " " || src.char_at(i) == "\t") { i = i + 1 }
+    let mut digits = ""
+    while i < src.len() {
+        let ch = src.char_at(i)
+        if ch >= "0" && ch <= "9" { digits = digits + ch } else { break }
+        i = i + 1
+    }
+    if digits.len() == 0 { return -1 }
+    return int(digits)
+}
+
+fn check_const(src: str, name: str, expected: int) -> int {
+    let v = _extract_let_int(src, name)
+    let ok = v == expected
+    _check(ok,
+           "ai.hexa declares " + name + " = " + str(expected),
+           "got " + str(v))
+    return v
+}
+
+fn check_bt_coverage_identity(sopfr_n: int, phi: int, bt_cov: int) {
+    let lhs = sopfr_n + phi
+    let ok = lhs == bt_cov
+    _check(ok,
+           "BT_COVERAGE = sopfr(n) + φ (algebraic identity from on-disk values)",
+           str(sopfr_n) + "+" + str(phi) + "=" + str(lhs) + " want " + str(bt_cov))
+}
+
+fn check_bt_contiguous(src: str) {
+    let mut bad = ""
+    let mut idx = 0
+    while idx < BT_NAMES.len() {
+        let name = BT_NAMES[idx]
+        let v = _extract_let_int(src, name)
+        if v != idx { bad = bad + name + "(=" + str(v) + ",want=" + str(idx) + ") " }
+        idx = idx + 1
+    }
+    _check(bad.len() == 0,
+           "BT_* values are CONTIGUOUS 0..7 (8 distinct BT-ids; 1 reserved + 7 named)",
+           if bad.len() > 0 { "issues: " + bad } else { "BT_RESERVED=0..BT_547=7" })
+}
+
+fn main() {
+    println("========================================================================")
+    println("  stdlib/hal — numerics_ai_native_bt_coverage: F-AI-NATIVE-5 T2 numerical")
+    println("========================================================================")
+    println("  expected: sopfr(n)=" + str(EXPECTED_SOPFR_N) + " φ=" + str(EXPECTED_PHI) +
+            " BT_COVERAGE=" + str(EXPECTED_BT_COVERAGE) + " BT_NAMES=" + str(BT_NAMES.len()) + " (1 reserved + 7 named)")
+    println("")
+
+    let root = _root()
+    let p = root + "/stdlib/hal/ai.hexa"
+    if !_exists(p) {
+        _check(false, "ai.hexa present at stdlib/hal/ai.hexa", "MISSING")
+        println("__HEXA_LANG_HAL_NUMERICS_AI_NATIVE_BT_COVERAGE__ FAIL")
+        exit(1)
+    }
+    _check(true, "ai.hexa present at stdlib/hal/ai.hexa", "found")
+
+    let src = read_file(p)
+
+    let sopfr_n = check_const(src, "SOPFR_N",     EXPECTED_SOPFR_N)
+    let phi     = check_const(src, "PHI",         EXPECTED_PHI)
+    let bt_cov  = check_const(src, "BT_COVERAGE", EXPECTED_BT_COVERAGE)
+    check_bt_coverage_identity(sopfr_n, phi, bt_cov)
+    check_bt_contiguous(src)
+
+    println("")
+    println("  FALSIFIER:")
+    println("    ✗ F-AI-NATIVE-5: BT_COVERAGE = sopfr(n)+φ = 7 BT_541..BT_547 (cross-checked numerically)")
+
+    let pass_n = RUN - FAIL
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_LANG_HAL_NUMERICS_AI_NATIVE_BT_COVERAGE__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_LANG_HAL_NUMERICS_AI_NATIVE_BT_COVERAGE__ PASS")
+    exit(0)
+}
+
+main()

@@ -1,0 +1,36 @@
+# omega_big = Ω(n) prime factors with multiplicity (A001222)
+verify --expr omega_big(6)=2
+  calc   = 2  == expected 2
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+verify --expr omega_big(8)=3
+  calc   = 3  == expected 3
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+# liouville = λ(n) = (−1)^Ω(n), signed ±1 (A008836)
+verify --expr liouville(6)=1
+  calc   = 1  == expected 1
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+verify --expr liouville(8)=-1
+  calc   = -1  == expected -1
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+  absorb = · already in atlas — idempotent skip (default · @D g69)
+
+verify --expr liouville(1)=1
+  calc   = 1  == expected 1
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+# liouville_summatory = L(n) = Σ_{k=1}^{n} λ(k) (A002819)
+verify --expr liouville_summatory(2)=0
+  calc   = 0  == expected 0
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+verify --expr liouville_summatory(6)=0
+  calc   = 0  == expected 0
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+# NOTE (NOT recomputed — the math limit): Polya conjecture L(n)≤0 ∀n>1 is
+# FALSIFIED at n=906150257 (Tanaka 1980; Haselgrove 1958, Lehman 1960). The
+# giant summatory is not cheaply computable; recorded as a classical
+# closed-negative CITATION, not a hexa recompute (closure-is-physical-limit).

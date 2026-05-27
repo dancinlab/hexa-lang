@@ -1,0 +1,132 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// tmp_stmmap_smoke.hexa — safetensors_mmap_* compiled-path C-decl smoke
+//
+// Builtins (SSOT self/runtime.c, decls added to self/runtime.h this commit):
+//   safetensors_mmap_open(path)              -> int handle  (-1 on err)
+//   safetensors_mmap_header(handle)          -> string (raw JSON header)
+//   safetensors_mmap_data_offset(handle)     -> int    (= 8 + header_len)
+//   safetensors_mmap_size(handle)            -> int    (full file bytes)
+//   safetensors_mmap_read_f32_farr(h,off,n)  -> int farr handle
+//   safetensors_mmap_read_bytes(h,off,n)     -> [int]
+//   safetensors_mmap_close(handle)           -> void
+//
+// Fixture: tmp_stmmap_fixture.safetensors (authored alongside) —
+//   8-byte LE header_len(56) + 56-byte JSON header + 16-byte f32 data
+//   tensor "t0" = [1.0, 2.0, 3.0, 4.0]  (F32, data_offsets [0,16]).
+//   => data_offset == 64, file size == 80.
+//
+// This file is self-contained (NO import) → no lib/entrypoint split.
+// Build native + run binary; this is the additive-decl proof harness.
+//
+// Falsifier coverage (ship 9):
+//   OPEN-OK        : open(fixture) handle >= 0
+//   OPEN-MISSING   : open(nonexistent) == -1
+//   HEADER-JSON    : header non-empty AND contains "{" AND the tensor name
+//   DATA-OFFSET    : data_offset == 64 (> 0, == 8 + header_len)
+//   SIZE           : size == 80 (full mapped file)
+//   READ-F32       : read_f32_farr(h, 64, 4) -> farr len 4, vals 1,2,3,4
+//   READ-BYTES     : read_bytes(h, 64, 4) first f32 LE bytes (00 00 80 3F)
+//   CLOSE-OK       : close returns without error; post-close re-open OK
+//   DETERMINISM    : two independent open→header→offset cycles byte-equal
+// ════════════════════════════════════════════════════════════════════════
+
+fn _contains(hay: string, needle: string) -> bool {
+    let hl = len(hay)
+    let nl = len(needle)
+    if nl == 0 { return true }
+    if nl > hl { return false }
+    let mut i = 0
+    while i + nl <= hl {
+        if hay.substring(i, i + nl) == needle { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn check(label: string, ok: bool, detail: string) {
+    if ok {
+        println("PASS  " + label + "  " + detail)
+        return 1
+    }
+    println("FAIL  " + label + "  " + detail)
+    return 0
+}
+
+fn main() {
+    let fixture = "/tmp/hexa-stmmap-fix/tmp_stmmap_fixture.safetensors"
+    let mut pass = 0
+    let total = 9
+
+    // OPEN-OK
+    let h = safetensors_mmap_open(fixture)
+    pass = pass + check("OPEN-OK", h >= 0, "handle=" + to_string(h))
+
+    // OPEN-MISSING
+    let hm = safetensors_mmap_open("/tmp/hexa-stmmap-fix/__no_such__.safetensors")
+    pass = pass + check("OPEN-MISSING", hm == -1, "handle=" + to_string(hm))
+
+    // HEADER-JSON
+    let hdr = safetensors_mmap_header(h)
+    let hdr_ok = len(hdr) > 0 && _contains(hdr, "{") && _contains(hdr, "t0") && _contains(hdr, "F32")
+    pass = pass + check("HEADER-JSON", hdr_ok, "len=" + to_string(len(hdr)) + " hdr=" + hdr)
+
+    // DATA-OFFSET (= 8 + header_len; fixture header_len=56 -> 64)
+    let doff = safetensors_mmap_data_offset(h)
+    pass = pass + check("DATA-OFFSET", doff == 64 && doff > 0, "data_offset=" + to_string(doff))
+
+    // SIZE (full mapped file = 8 + 56 + 16 = 80)
+    let sz = safetensors_mmap_size(h)
+    pass = pass + check("SIZE", sz == 80, "size=" + to_string(sz))
+
+    // READ-F32 : 4 f32 at byte 64 == [1,2,3,4]
+    let fa = safetensors_mmap_read_f32_farr(h, doff, 4)
+    let mut rd_ok = fa >= 0
+    if rd_ok { rd_ok = farr_len(fa) == 4 }
+    if rd_ok {
+        rd_ok = farr_get(fa, 0) == 1.0 && farr_get(fa, 1) == 2.0
+                && farr_get(fa, 2) == 3.0 && farr_get(fa, 3) == 4.0
+    }
+    let v0 = if fa >= 0 { farr_get(fa, 0) } else { -1.0 }
+    let v3 = if fa >= 0 { farr_get(fa, 3) } else { -1.0 }
+    pass = pass + check("READ-F32", rd_ok,
+        "farr=" + to_string(fa) + " v0=" + to_string(v0) + " v3=" + to_string(v3))
+
+    // READ-BYTES : first f32 (1.0) LE bytes at offset 64 == 00 00 80 3F
+    let bs = safetensors_mmap_read_bytes(h, doff, 4)
+    let mut by_ok = len(bs) == 4
+    if by_ok {
+        by_ok = bs[0] == 0 && bs[1] == 0 && bs[2] == 128 && bs[3] == 63
+    }
+    pass = pass + check("READ-BYTES", by_ok,
+        "n=" + to_string(len(bs)) + " b=" + to_string(bs))
+
+    // CLOSE-OK : close, then a fresh open still works (idempotent / no crash)
+    safetensors_mmap_close(h)
+    let h2 = safetensors_mmap_open(fixture)
+    let close_ok = h2 >= 0
+    pass = pass + check("CLOSE-OK", close_ok, "reopen handle=" + to_string(h2))
+
+    // DETERMINISM : two independent cycles produce byte-equal header+offset
+    let ha = safetensors_mmap_open(fixture)
+    let hda = safetensors_mmap_header(ha)
+    let doa = safetensors_mmap_data_offset(ha)
+    safetensors_mmap_close(ha)
+    let hb = safetensors_mmap_open(fixture)
+    let hdb = safetensors_mmap_header(hb)
+    let dob = safetensors_mmap_data_offset(hb)
+    safetensors_mmap_close(hb)
+    safetensors_mmap_close(h2)
+    let det_ok = hda == hdb && doa == dob && len(hda) > 0
+    pass = pass + check("DETERMINISM", det_ok,
+        "doff " + to_string(doa) + "==" + to_string(dob)
+        + " hdr_eq=" + to_string(hda == hdb))
+
+    println("")
+    println("RESULT  " + to_string(pass) + "/" + to_string(total) + " PASS")
+    if pass == total {
+        println("STMMAP-SMOKE: ALL PASS")
+    } else {
+        println("STMMAP-SMOKE: FAILURES PRESENT")
+    }
+}

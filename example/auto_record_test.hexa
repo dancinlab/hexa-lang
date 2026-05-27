@@ -1,0 +1,27 @@
+// self/experiment/mk2/auto_record.hexa — 자동 발견 기록 (Python 대체)
+// 사용: hexa auto_record.hexa <value> <constant> <source>
+// discovery_log.jsonl에 JSONL 항목 추가
+
+let a = args()
+if a.len() < 5 {
+    // 인자 부족 → 조용히 종료
+    return
+}
+
+let value = a[2]
+let constant = a[3]
+let source = a[4]
+let timestamp = exec("date '+%Y-%m-%d %H:%M:%S'").trim()
+// 2026-04-28 F-A1-PATTERN cross-repo fix: printenv missing in busybox
+// hexa-exec container — env_var("HOME") goes through getenv at C runtime;
+// echo "$HOME" fallback is a POSIX shell builtin, container-safe.
+let mut _home = ""
+try {
+    let h = env_var("HOME")
+    if type_of(h) == "string" { _home = to_string(h) }
+} catch err { _home = "" }
+if len(_home) == 0 { _home = exec("echo \"$HOME\"").trim() }
+let log_path = _home + "/Dev/nexus/discovery_log.jsonl"
+
+let entry = "{\"timestamp\":\"" + timestamp + "\",\"value\":\"" + value + "\",\"constant\":\"" + constant + "\",\"source\":\"" + source + "\",\"auto\":true}"
+append_file(log_path, entry + "\n")

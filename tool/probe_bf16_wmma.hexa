@@ -1,0 +1,26 @@
+// tool/probe_bf16_wmma.hexa — B3 milestone fixture: bf16 WMMA silicon fire kernel
+//
+// RFC 068 §3a/b — bf16×bf16→f32 Tensor Core MMA. The codegen-side scaffold
+// (mma.sync.aligned.row.col.m16n16k16.f32.bf16.bf16.f32) is wired via
+// _nvptx_wmma_mnemonic_family selector; this fixture validates the
+// silicon path on RTX 5070 sm_120 driver-JIT.
+//
+// Kernel: c[i] = (f32) (a[i].bf16 * b[i].bf16) tile-multiply via WMMA.
+// Honest scope: the parser-side `@bf16` named-type grammar is not yet
+// landed (RFC 068 §3a "named type grammar deferred"). This fixture
+// represents the kernel SHAPE the future grammar will produce — fire
+// driver will manually emit the equivalent PTX via nvptx_emit's WMMA
+// path. Full source→silicon fire deferred until parser-side bf16
+// annotation grammar lands.
+
+@gpu_kernel
+fn probe_bf16_wmma(a: [f64], b: [f64], c: [f64], n: i64) {
+    // Placeholder: source-level bf16 grammar pending. Kernel structure
+    // mirrors the existing wmma_p7_reduce_sum patterns — a 16×16×16
+    // tile multiply with f32 accumulator. Today the body uses f64 as
+    // a stand-in to keep the fixture parser-clean.
+    let mut tid: i64 = to_i64(gpu_thread_id_x())
+    if tid < n {
+        c[to_i64(tid)] = a[to_i64(tid)] * b[to_i64(tid)]
+    }
+}

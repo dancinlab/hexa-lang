@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# hexa-tenant — enterprise/tenant annotation extractor (AST-backed)
+# Recognizes: @adapter, @hotswap, @tenant_isolate, @self_serve_portal
+set -eu
+
+usage() {
+    cat >&2 <<EOF
+usage: hexa-tenant [--kind adapter|hotswap|tenant_isolate|self_serve_portal] <file.hexa> [file2.hexa ...]
+       hexa-tenant [--kind ...] --dir <directory>
+EOF
+    exit 1
+}
+
+case "${1:-}" in
+    -h|--help|"") usage ;;
+esac
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+. "${SCRIPT_DIR}/_ast_extract.sh"
+
+filter_kind=""
+ARGS=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --kind)
+            shift; [ $# -ge 1 ] || usage
+            case "$1" in
+                adapter|hotswap|tenant_isolate|self_serve_portal) filter_kind="$1" ;;
+                *) echo "ERROR: invalid kind: $1" >&2; usage ;;
+            esac
+            shift ;;
+        -h|--help) usage ;;
+        *) ARGS+=("$1"); shift ;;
+    esac
+done
+
+if ! resolve_files "${ARGS[@]}"; then exit 1; fi
+if [ ${#FILES[@]} -eq 0 ]; then
+    printf '{"version":"0.2","source":"ast","annotations":[],"summary":{"adapter":0,"hotswap":0,"tenant_isolate":0,"self_serve_portal":0,"total":0}}\n'
+    exit 0
+fi
+run_ast_extract | ast_emit_kindmap_json "adapter,hotswap,tenant_isolate,self_serve_portal" "$filter_kind"

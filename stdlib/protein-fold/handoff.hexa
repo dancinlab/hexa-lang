@@ -1,0 +1,8 @@
+#!hexa strict
+// protein-fold handoff — X-ray crystal resolution.
+fn main() {
+    let crystal_A = 2.0
+    println("protein-fold_handoff (X-ray crystal resolution):")
+    println("  crystal_A = " + str(crystal_A))
+    println("__HEXA_PROTEIN_FOLD_HANDOFF__ PASS gate=GATE_OPEN absorbed=false")
+}

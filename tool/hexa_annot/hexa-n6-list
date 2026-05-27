@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# hexa-n6-list — @n6 tag extractor (AST-backed)
+#
+# Usage:
+#   hexa-n6-list <file.hexa> [<file2>...]
+#   hexa-n6-list --dir <directory>
+set -eu
+
+usage() {
+    cat >&2 <<EOF
+usage: hexa-n6-list <file.hexa> [<file2>...]
+       hexa-n6-list --dir <dir>
+EOF
+    exit 2
+}
+
+case "${1:-}" in
+    -h|--help|"") usage ;;
+esac
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+. "${SCRIPT_DIR}/_ast_extract.sh"
+
+if ! resolve_files "$@"; then exit 2; fi
+if [ ${#FILES[@]} -eq 0 ]; then
+    printf '{"version":"0.2","source":"ast","n6_tags":[],"summary":{"total":0,"by_domain":{},"unique_identities":0}}\n'
+    exit 0
+fi
+
+TMP_TSV=$(mktemp -t hexa_n6_list.XXXXXX)
+trap 'rm -f "$TMP_TSV"' EXIT
+run_ast_extract > "$TMP_TSV"
+
+awk '
+function jesc(s,   r) { r = s; gsub(/\\/, "\\\\", r); gsub(/"/, "\\\"", r); return r }
+function decode_esc(s,   out, i, n, c, nc) {
+    out = ""; n = length(s); i = 1
+    while (i <= n) {
+        c = substr(s, i, 1)
+        if (c == "\\" && i < n) {
+            nc = substr(s, i + 1, 1)
+            if (nc == "n")  { out = out "\n"; i += 2; continue }
+            if (nc == "r")  { out = out "\r"; i += 2; continue }
+            if (nc == "t")  { out = out "\t"; i += 2; continue }
+            if (nc == "\\") { out = out "\\"; i += 2; continue }
+        }
+        out = out c; i++
+    }
+    return out
+}
+function kv_extract(raw, key,    s, pat, pos, rest, val, n, i, c, nc) {
+    s = raw
+    pat = "(^|[ \\t,(])" key "[ \\t]*[=:][ \\t]*"
+    pos = match(s, pat)
+    if (pos == 0) return ""
+    rest = substr(s, pos + RLENGTH)
+    sub(/^[ \t]+/, "", rest)
+    if (substr(rest, 1, 1) == "\"") {
+        val = ""; i = 2; n = length(rest)
+        while (i <= n) {
+            c = substr(rest, i, 1)
+            if (c == "\"") break
+            val = val c; i++
+        }
+        return val
+    }
+    if (match(rest, /[,)[:space:]]/)) return substr(rest, 1, RSTART - 1)
+    return rest
+}
+BEGIN { FS = "\t"; total = 0; body = ""; n_dom = 0; n_ids = 0 }
+/^# error\t/ { next }
+{
+    kind = $1; tgtk = $2; tgt = $3; file = $4; line = $5; raw = decode_esc($6)
+    if (kind != "n6") next
+    id = kv_extract(raw, "identity")
+    dom = kv_extract(raw, "domain")
+    target_field = kv_extract(raw, "target")
+    name_field = kv_extract(raw, "name")
+    if (dom == "") dom = "unknown"
+    # default: target = decl kind, name = decl name
+    if (target_field == "") target_field = tgtk
+    if (name_field == "") name_field = tgt
+    if (body != "") body = body ","
+    body = body "{"
+    body = body "\"identity\":\""  jesc(id) "\""
+    body = body ",\"domain\":\""   jesc(dom) "\""
+    body = body ",\"target\":\""   jesc(target_field) "\""
+    body = body ",\"name\":\""     jesc(name_field) "\""
+    body = body ",\"file\":\""     jesc(file) "\""
+    body = body ",\"line\":"       line
+    body = body "}"
+    total++
+    if (id != "" && !(id in seen_id)) { seen_id[id] = 1; n_ids++ }
+    if (dom != "") {
+        if (!(dom in dom_seen)) { dom_seen[dom] = 1; dom_order[++n_dom] = dom; dom_count[dom] = 0 }
+        dom_count[dom]++
+    }
+}
+END {
+    bd = ""
+    for (i = 1; i <= n_dom; i++) {
+        if (i > 1) bd = bd ","
+        bd = bd "\"" jesc(dom_order[i]) "\":" dom_count[dom_order[i]]
+    }
+    printf("{\"version\":\"0.2\",\"source\":\"ast\",\"n6_tags\":[%s],\"summary\":{\"total\":%d,\"by_domain\":{%s},\"unique_identities\":%d}}\n", body, total, bd, n_ids)
+}' "$TMP_TSV"

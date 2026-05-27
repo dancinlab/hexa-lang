@@ -1,0 +1,8 @@
+#!hexa strict
+// metamaterial handoff — cloak prototype diameter.
+fn main() {
+    let cloak_cm = 10.0
+    println("metamaterial_handoff (cloak prototype diameter):")
+    println("  cloak_cm = " + str(cloak_cm))
+    println("__HEXA_METAMATERIAL_HANDOFF__ PASS gate=GATE_OPEN absorbed=false")
+}

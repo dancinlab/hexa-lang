@@ -1,0 +1,94 @@
+#!hexa strict
+// hexa-space/verify/numerics_starship.hexa — F-SPACE-4 first T2 numerical.
+//
+// Closes F-SPACE-4 second tier — Starship 33-Raptor Super-Heavy cluster
+// (σ·n/φ − 3 = 33) thrust budget + Tsiolkovsky Δv vs SpaceX 2024+ specs.
+//
+// Sentinel: __HEXA_SPACE_NUMERICS_STARSHIP__ PASS
+// Cost: $0 — math_pure-only floats.
+
+use "self/runtime/math_pure"
+
+let FALSIFIERS: [str] = ["F-SPACE-4"]
+
+let mut RUN  = 0
+let mut FAIL = 0
+
+fn _ck(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    if ok { println("  [PASS] " + label + "  " + detail) }
+    else  { FAIL = FAIL + 1; println("  [FAIL] " + label + "  " + detail) }
+}
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x }; return x }
+
+fn main() {
+    println("[numerics_starship] F-SPACE-4 T2 — Super Heavy 33-Raptor + Δv")
+
+    let n = 6;  let sigma = 12;  let tau = 4;  let phi = 2;  let j2 = 24
+
+    // 1. 33-Raptor cluster = σ·n/φ − 3
+    let booster_engines = sigma * n / phi - 3
+    _ck(booster_engines == 33,
+        "Super Heavy Raptor cluster σ·n/φ − 3 = 33", "= " + str(booster_engines))
+
+    // 2. ring partition: 3 inner + 10 mid + 20 outer = 33
+    let inner = 3;  let mid = 10;  let outer = 20
+    _ck(inner + mid + outer == 33 && outer == j2 - tau,
+        "ring partition 3+10+20 = 33; outer = J₂−τ = 20", "outer = " + str(outer))
+
+    // 3. ship engines = n = 6 (3 Raptor + 3 RVac)
+    let ship_engines = n
+    _ck(ship_engines == 6,
+        "Ship engines = n = 6 (3 sea-level + 3 vacuum)", "= " + str(ship_engines))
+
+    // 4. Raptor 3 sea-level thrust ≈ 2640 kN per engine; cluster total
+    let raptor_kn = 2640.0
+    let cluster_thrust_mn = (33.0 * raptor_kn) / 1000.0
+    println("  [thrust] booster total ≈ " + str(cluster_thrust_mn) + " MN  (catalog ≈ 87 MN)")
+    _ck(cluster_thrust_mn > 80.0 && cluster_thrust_mn < 95.0,
+        "Super Heavy total thrust ∈ [80, 95] MN", "= " + str(cluster_thrust_mn))
+
+    // 5. Tsiolkovsky Δv for booster stage with full ship+payload stack
+    let g0       = 9.80665
+    let isp_avg  = 340.0          // Raptor 3 sea-level Isp (avg over burn)
+    let m_prop_b = 3650000.0      // Super Heavy propellant ≈ 3650 t
+    let m_dry_b  = 200000.0       // booster dry ≈ 200 t
+    let m_ship_full = 1500000.0   // Ship wet (prop + dry) ≈ 1500 t
+    let m_pl     = 100000.0       // ~100 t LEO payload (V3 target band)
+    let m_init   = m_prop_b + m_dry_b + m_ship_full + m_pl
+    let m_final  = m_dry_b + m_ship_full + m_pl
+    let dv_kms   = (isp_avg * g0 * log_pure(m_init / m_final)) / 1000.0
+    println("  [Δv] booster Δv ≈ " + str(dv_kms) + " km/s  (booster regime ~2.5)")
+    _ck(dv_kms > 1.5 && dv_kms < 4.0,
+        "Super Heavy Δv ∈ [1.5, 4.0] km/s (booster contribution)",
+        "= " + str(dv_kms))
+
+    // 6. LEO payload V3 target = σ·τ·2 = 96 t (recipe lattice anchor)
+    let v3_payload = sigma * tau * 2
+    _ck(v3_payload == 96,
+        "Starship V3 LEO payload σ·τ·2 = 96 t target",
+        "= " + str(v3_payload))
+
+    // 7. Heat-shield tile classes = J₂² = 576
+    let tile_classes = j2 * j2
+    _ck(tile_classes == 576, "Heat-shield tile classes J₂² = 576", "= " + str(tile_classes))
+
+    // 8. n=6 closure floor
+    _ck(sigma * phi == n * tau && sigma * phi == j2,
+        "n=6 closure (master row)", "σ·φ = n·τ = J₂ = " + str(j2))
+
+    // 9. math_pure sqrt(2) within bound
+    let s2 = sqrt_pure(2.0)
+    _ck(_abs(s2 - 1.41421356) < 1.0e-6,
+        "math_pure sqrt_pure(2) within 1e-6", "= " + str(s2))
+
+    let pass_n = RUN - FAIL
+    println("[numerics_starship] " + str(pass_n) + "/" + str(RUN) + " PASS — F-SPACE-4 T2")
+    if FAIL > 0 {
+        println("__HEXA_SPACE_NUMERICS_STARSHIP__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_SPACE_NUMERICS_STARSHIP__ PASS")
+    exit(0)
+}

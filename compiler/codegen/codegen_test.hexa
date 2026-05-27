@@ -1,0 +1,583 @@
+// HEXA Native Compiler — Phase A1 / Codegen smoke test
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Hand-builds two tiny MIR modules:
+//   (a) fn id(x: Int) -> Int { return x }
+//   (b) fn add(x: Int, y: Int) -> Int { return x + y }
+//
+// Runs both `codegen_arm64_darwin` and `codegen_x86_64_linux` on each.
+// Prints LFunc summaries (instr count, opcode distribution, prologue /
+// epilogue sentinels) and asserts on key opcode presence.
+//
+// Run:
+//   hexa run compiler/codegen/codegen_test.hexa
+
+import "../ir/mir.hexa"
+import "../ir/lir.hexa"
+import "./arm64_darwin.hexa"
+import "./x86_64_linux.hexa"
+import "./thumbv7em_eabihf.hexa"
+
+// ── MIR construction helpers ─────────────────────────────────
+
+fn _local(id: i64, name: string) -> Local {
+    return Local {
+        id: id,
+        arena_id: 1,
+        type_id: 0,
+        name_hint: name,
+        precision: "",
+        space: ""
+    }
+}
+
+fn _miss_local() -> Local {
+    return Local { id: -1, arena_id: 0, type_id: 0, name_hint: "", precision: "", space: "" }
+}
+
+fn _op_local(local_id: i64) -> Operand {
+    return Operand {
+        kind: "local",
+        local_id: local_id,
+        int_val: 0,
+        float_val: 0.0,
+        str_val: "",
+        global_id: -1
+    }
+}
+
+fn _stmt_assign(dst: Local, src: Operand) -> Stmt {
+    let mut xs = []
+    xs.push(src)
+    return Stmt {
+        kind: STMT_ASSIGN,
+        dst: dst,
+        op: "",
+        args: xs,
+        target_block: -1,
+        target_block_else: -1
+    }
+}
+
+// RFC 074 Phase 4 — multi-cell enum payload constructor helpers.
+fn _op_const_int(v: i64) -> Operand {
+    return Operand {
+        kind: "const_int",
+        local_id: -1,
+        int_val: v,
+        float_val: 0.0,
+        str_val: "",
+        global_id: -1
+    }
+}
+
+fn _op_const_str(s: string) -> Operand {
+    return Operand {
+        kind: "const_str",
+        local_id: -1,
+        int_val: 0,
+        float_val: 0.0,
+        str_val: s,
+        global_id: -1
+    }
+}
+
+fn _stmt_enum_ctor(dst: Local, args: [Operand]) -> Stmt {
+    return Stmt {
+        kind: STMT_ASSIGN,
+        dst: dst,
+        op: "enum_ctor",
+        args: args,
+        target_block: -1,
+        target_block_else: -1
+    }
+}
+
+fn _stmt_binop(dst: Local, op: string, a: Operand, b: Operand) -> Stmt {
+    let mut xs = []
+    xs.push(a)
+    xs.push(b)
+    return Stmt {
+        kind: STMT_BINOP,
+        dst: dst,
+        op: op,
+        args: xs,
+        target_block: -1,
+        target_block_else: -1
+    }
+}
+
+fn _stmt_return(src: Operand) -> Stmt {
+    let mut xs = []
+    xs.push(src)
+    return Stmt {
+        kind: STMT_RETURN,
+        dst: _miss_local(),
+        op: "",
+        args: xs,
+        target_block: -1,
+        target_block_else: -1
+    }
+}
+
+fn _block(id: i64, stmts: [Stmt]) -> Block {
+    return Block { id: id, stmts: stmts, preds: [], succs: [] }
+}
+
+// ── Cases ────────────────────────────────────────────────────
+
+// (a) fn id(x: Int) -> Int { return x }
+fn _build_case_id() -> MModule {
+    let x = _local(0, "x")
+    let ret_local = _local(1, "ret")
+
+    let mut stmts = []
+    stmts.push(_stmt_return(_op_local(x.id)))
+
+    let mut blocks = []
+    blocks.push(_block(0, stmts))
+
+    let mut params = []
+    params.push(x)
+    let mut locals = []
+    locals.push(x)
+    locals.push(ret_local)
+
+    let mf = MFunc {
+        name: "id",
+        params: params,
+        return_local: ret_local,
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_CPU
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_id.hexa", funcs: fns, globals: [] }
+}
+
+// (c) RFC 074 Phase 4 — multi-cell enum payload constructor.
+//
+// Synthetic MIR for `fn mk_rgb(r, g, b) -> Color { return Color::RGB(r,g,b) }`,
+// matching the shape `compiler/lower/hir_to_mir.hexa::enum_path` emits for
+// `len(e.children) >= 2`: STMT_ASSIGN op="enum_ctor" with args =
+//   [ "enum_Color::RGB", "__tag", <hash>, "__p0", r, "__p1", g, "__p2", b ].
+//
+// The fixture is hand-built (no parser/lower in the loop) so the codegen
+// contract for the new `enum_ctor` op is exercised in isolation — the
+// per-backend assertions below verify the per-cell store loop runs N=3
+// times (3 hexa_map_set calls) on top of the single hexa_map_new init.
+fn _build_case_enum_ctor3() -> MModule {
+    let r = _local(0, "r")
+    let g = _local(1, "g")
+    let b = _local(2, "b")
+    let v = _local(3, "v")
+    let ret_local = _local(4, "ret")
+
+    let mut args: [Operand] = []
+    args.push(_op_const_str("enum_Color::RGB"))
+    args.push(_op_const_str("__tag"))
+    args.push(_op_const_int(12345))     // synthetic path-hash
+    args.push(_op_const_str("__p0"))
+    args.push(_op_local(r.id))
+    args.push(_op_const_str("__p1"))
+    args.push(_op_local(g.id))
+    args.push(_op_const_str("__p2"))
+    args.push(_op_local(b.id))
+
+    let mut stmts = []
+    stmts.push(_stmt_enum_ctor(v, args))
+    stmts.push(_stmt_return(_op_local(v.id)))
+
+    let mut blocks = []
+    blocks.push(_block(0, stmts))
+
+    let mut params = []
+    params.push(r)
+    params.push(g)
+    params.push(b)
+    let mut locals = []
+    locals.push(r)
+    locals.push(g)
+    locals.push(b)
+    locals.push(v)
+    locals.push(ret_local)
+
+    let mf = MFunc {
+        name: "mk_rgb",
+        params: params,
+        return_local: ret_local,
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_CPU
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_enum_ctor3.hexa", funcs: fns, globals: [] }
+}
+
+// (b) fn add(x: Int, y: Int) -> Int { return x + y }
+fn _build_case_add() -> MModule {
+    let x = _local(0, "x")
+    let y = _local(1, "y")
+    let t = _local(2, "tmp")
+    let ret_local = _local(3, "ret")
+
+    let mut stmts = []
+    stmts.push(_stmt_binop(t, "add", _op_local(x.id), _op_local(y.id)))
+    stmts.push(_stmt_return(_op_local(t.id)))
+
+    let mut blocks = []
+    blocks.push(_block(0, stmts))
+
+    let mut params = []
+    params.push(x)
+    params.push(y)
+    let mut locals = []
+    locals.push(x)
+    locals.push(y)
+    locals.push(t)
+    locals.push(ret_local)
+
+    let mf = MFunc {
+        name: "add",
+        params: params,
+        return_local: ret_local,
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_CPU
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_add.hexa", funcs: fns, globals: [] }
+}
+
+// ── Inspection helpers ───────────────────────────────────────
+
+fn _count_op(lf: LFunc, mnemonic: string) -> i64 {
+    let mut n = 0
+    let mut i = 0
+    while i < len(lf.instrs) {
+        if lf.instrs[i].op == mnemonic { n = n + 1 }
+        i = i + 1
+    }
+    return n
+}
+
+fn _has_op(lf: LFunc, mnemonic: string) -> bool {
+    return _count_op(lf, mnemonic) > 0
+}
+
+// RFC 074 Phase 4 — count `<mnemonic> <label>` occurrences (i.e. calls
+// to a given runtime symbol). Used by the multi-cell payload assertions
+// to verify the per-cell store loop runs N times.
+fn _count_call(lf: LFunc, mnemonic: string, callee: string) -> i64 {
+    let mut n = 0
+    let mut i = 0
+    while i < len(lf.instrs) {
+        let ins = lf.instrs[i]
+        if ins.op == mnemonic && len(ins.args) >= 1 {
+            if ins.args[0].label == callee { n = n + 1 }
+        }
+        i = i + 1
+    }
+    return n
+}
+
+fn _has_prologue_arm64(lf: LFunc) -> bool {
+    // First two non-label instrs should be `stp` then `mov`
+    if len(lf.instrs) < 2 { return false }
+    if lf.instrs[0].op != "stp" { return false }
+    if lf.instrs[1].op != "mov" { return false }
+    return true
+}
+
+fn _has_epilogue_arm64(lf: LFunc) -> bool {
+    // ldp ... ; ret near the end
+    if len(lf.instrs) < 2 { return false }
+    let last = lf.instrs[len(lf.instrs) - 1]
+    let prev = lf.instrs[len(lf.instrs) - 2]
+    if last.op != "ret" { return false }
+    if prev.op != "ldp" { return false }
+    return true
+}
+
+fn _has_prologue_x86(lf: LFunc) -> bool {
+    if len(lf.instrs) < 2 { return false }
+    if lf.instrs[0].op != "push" { return false }
+    if lf.instrs[1].op != "mov" { return false }
+    return true
+}
+
+fn _has_epilogue_x86(lf: LFunc) -> bool {
+    if len(lf.instrs) < 2 { return false }
+    let last = lf.instrs[len(lf.instrs) - 1]
+    let prev = lf.instrs[len(lf.instrs) - 2]
+    if last.op != "ret" { return false }
+    if prev.op != "pop" { return false }
+    return true
+}
+
+// Distinct opcode list (very small N — quadratic membership scan ok)
+fn _distinct_ops(lf: LFunc) -> [string] {
+    let mut out = []
+    let mut i = 0
+    while i < len(lf.instrs) {
+        let o = lf.instrs[i].op
+        let mut seen = false
+        let mut j = 0
+        while j < len(out) {
+            if out[j] == o { seen = true }
+            j = j + 1
+        }
+        if !seen { out.push(o) }
+        i = i + 1
+    }
+    return out
+}
+
+fn _print_summary(target: string, case_name: string, lf: LFunc) {
+    println("  [" + target + "] fn " + lf.name + " (" + case_name + ")")
+    println("    instrs=" + to_string(len(lf.instrs)) +
+            "  frame_size=" + to_string(lf.frame_size))
+    let ops = _distinct_ops(lf)
+    let mut s = "    opcodes:"
+    let mut i = 0
+    while i < len(ops) {
+        s = s + " " + ops[i] + "(" + to_string(_count_op(lf, ops[i])) + ")"
+        i = i + 1
+    }
+    println(s)
+}
+
+// ── Driver ───────────────────────────────────────────────────
+
+fn main() {
+    println("══════════════════════════════════════════════")
+    println("  HEXA Compiler — Codegen Smoke Test (A1)")
+    println("    targets: arm64-apple-darwin, x86_64-linux-gnu")
+    println("══════════════════════════════════════════════")
+
+    let mut ok = true
+
+    let mod_id  = _build_case_id()
+    let mod_add = _build_case_add()
+
+    // ── arm64-apple-darwin ───────────────────────────────────
+    println("")
+    println("── target: arm64-apple-darwin ──")
+
+    let l_id_arm  = codegen_arm64_darwin(mod_id)
+    let l_add_arm = codegen_arm64_darwin(mod_add)
+
+    if len(l_id_arm.funcs) != 1 {
+        println("  FAIL: arm64 id expected 1 func, got " + to_string(len(l_id_arm.funcs)))
+        ok = false
+    }
+    if len(l_add_arm.funcs) != 1 {
+        println("  FAIL: arm64 add expected 1 func, got " + to_string(len(l_add_arm.funcs)))
+        ok = false
+    }
+
+    let lf_id_arm  = l_id_arm.funcs[0]
+    let lf_add_arm = l_add_arm.funcs[0]
+    _print_summary("arm64", "id",  lf_id_arm)
+    _print_summary("arm64", "add", lf_add_arm)
+
+    if !_has_prologue_arm64(lf_id_arm) {
+        println("  FAIL: arm64 id missing prologue (stp; mov)")
+        ok = false
+    }
+    if !_has_epilogue_arm64(lf_id_arm) {
+        println("  FAIL: arm64 id missing epilogue (ldp; ret)")
+        ok = false
+    }
+    if !_has_op(lf_id_arm, "mov") {
+        println("  FAIL: arm64 id expected `mov`")
+        ok = false
+    }
+    if !_has_op(lf_id_arm, "ret") {
+        println("  FAIL: arm64 id expected `ret`")
+        ok = false
+    }
+
+    if !_has_prologue_arm64(lf_add_arm) {
+        println("  FAIL: arm64 add missing prologue")
+        ok = false
+    }
+    if !_has_epilogue_arm64(lf_add_arm) {
+        println("  FAIL: arm64 add missing epilogue")
+        ok = false
+    }
+    if !_has_op(lf_add_arm, "add") {
+        println("  FAIL: arm64 add expected `add`")
+        ok = false
+    }
+    if !_has_op(lf_add_arm, "ret") {
+        println("  FAIL: arm64 add expected `ret`")
+        ok = false
+    }
+    if lf_id_arm.target != "arm64-apple-darwin" {
+        println("  FAIL: arm64 id wrong target tag: " + lf_id_arm.target)
+        ok = false
+    }
+    if l_id_arm.target != "arm64-apple-darwin" {
+        println("  FAIL: arm64 module wrong target tag")
+        ok = false
+    }
+
+    // ── x86_64-linux-gnu ─────────────────────────────────────
+    println("")
+    println("── target: x86_64-linux-gnu ──")
+
+    // RFC 074 Phase 4 — multi-cell enum payload constructor fixtures.
+    //
+    // Synthetic 3-cell payload (`Color::RGB(r,g,b)`) exercises the new
+    // `enum_ctor` op on both CPU backends. The per-cell store loop must
+    // run exactly N=3 times (3 `hexa_map_set` calls on top of a single
+    // `hexa_map_new` init), no matter the target ABI. This is the
+    // F-RFC074-PHASE4-MULTI-CELL-EMIT falsifier in code form. Thumb
+    // backend coverage is the same op + same per-cell loop and lands
+    // in a follow-up cycle (codegen_test.hexa does not import the
+    // thumb backend today; mirroring its assertion here would need a
+    // new import path).
+    let mod_enum3 = _build_case_enum_ctor3()
+
+    let l_enum3_arm = codegen_arm64_darwin(mod_enum3)
+    if len(l_enum3_arm.funcs) != 1 {
+        println("  FAIL: arm64 mk_rgb expected 1 func")
+        ok = false
+    }
+    let lf_enum3_arm = l_enum3_arm.funcs[0]
+    _print_summary("arm64", "mk_rgb (RFC074 P4)", lf_enum3_arm)
+    let arm_new = _count_call(lf_enum3_arm, "bl", "hexa_map_new")
+    let arm_set = _count_call(lf_enum3_arm, "bl", "hexa_map_set")
+    if arm_new != 1 {
+        println("  FAIL: arm64 enum_ctor expected 1 hexa_map_new, got " + to_string(arm_new))
+        ok = false
+    }
+    if arm_set != 3 {
+        println("  FAIL: arm64 enum_ctor expected 3 hexa_map_set (one per __pN cell), got " + to_string(arm_set))
+        ok = false
+    }
+
+    let l_enum3_x86 = codegen_x86_64_linux(mod_enum3)
+    if len(l_enum3_x86.funcs) != 1 {
+        println("  FAIL: x86 mk_rgb expected 1 func")
+        ok = false
+    }
+    let lf_enum3_x86 = l_enum3_x86.funcs[0]
+    _print_summary("x86_64", "mk_rgb (RFC074 P4)", lf_enum3_x86)
+    let x86_new = _count_call(lf_enum3_x86, "call", "hexa_map_new")
+    let x86_set = _count_call(lf_enum3_x86, "call", "hexa_map_set")
+    if x86_new != 1 {
+        println("  FAIL: x86 enum_ctor expected 1 hexa_map_new, got " + to_string(x86_new))
+        ok = false
+    }
+    if x86_set != 3 {
+        println("  FAIL: x86 enum_ctor expected 3 hexa_map_set (one per __pN cell), got " + to_string(x86_set))
+        ok = false
+    }
+
+    // G1 follow-on (I5, 2026-05-20) — thumb backend codegen_test 통합.
+    // RFC 074 P4 fixture mirror per G1 punted (1). thumb 도 enum_ctor 분기
+    // 가 _build_case_enum_ctor3 fixture 의 3-cell payload 를 1 map_new + 3
+    // map_set 으로 emit 한다는 invariant 확인.
+    let l_enum3_thumb = codegen_thumbv7em_eabihf(mod_enum3)
+    if len(l_enum3_thumb.funcs) != 1 {
+        println("  FAIL: thumb mk_rgb expected 1 func")
+        ok = false
+    }
+    let lf_enum3_thumb = l_enum3_thumb.funcs[0]
+    _print_summary("thumb", "mk_rgb (RFC074 P4)", lf_enum3_thumb)
+    let thumb_new = _count_call(lf_enum3_thumb, "bl", "hexa_map_new")
+    let thumb_set = _count_call(lf_enum3_thumb, "bl", "hexa_map_set")
+    if thumb_new != 1 {
+        println("  FAIL: thumb enum_ctor expected 1 hexa_map_new, got " + to_string(thumb_new))
+        ok = false
+    }
+    if thumb_set != 3 {
+        println("  FAIL: thumb enum_ctor expected 3 hexa_map_set (one per __pN cell), got " + to_string(thumb_set))
+        ok = false
+    }
+
+    let l_id_x86  = codegen_x86_64_linux(mod_id)
+    let l_add_x86 = codegen_x86_64_linux(mod_add)
+
+    if len(l_id_x86.funcs) != 1 {
+        println("  FAIL: x86 id expected 1 func, got " + to_string(len(l_id_x86.funcs)))
+        ok = false
+    }
+    if len(l_add_x86.funcs) != 1 {
+        println("  FAIL: x86 add expected 1 func, got " + to_string(len(l_add_x86.funcs)))
+        ok = false
+    }
+
+    let lf_id_x86  = l_id_x86.funcs[0]
+    let lf_add_x86 = l_add_x86.funcs[0]
+    _print_summary("x86_64", "id",  lf_id_x86)
+    _print_summary("x86_64", "add", lf_add_x86)
+
+    if !_has_prologue_x86(lf_id_x86) {
+        println("  FAIL: x86 id missing prologue (push; mov)")
+        ok = false
+    }
+    if !_has_epilogue_x86(lf_id_x86) {
+        println("  FAIL: x86 id missing epilogue (pop; ret)")
+        ok = false
+    }
+    if !_has_op(lf_id_x86, "mov") {
+        println("  FAIL: x86 id expected `mov`")
+        ok = false
+    }
+    if !_has_op(lf_id_x86, "ret") {
+        println("  FAIL: x86 id expected `ret`")
+        ok = false
+    }
+
+    if !_has_prologue_x86(lf_add_x86) {
+        println("  FAIL: x86 add missing prologue")
+        ok = false
+    }
+    if !_has_epilogue_x86(lf_add_x86) {
+        println("  FAIL: x86 add missing epilogue")
+        ok = false
+    }
+    if !_has_op(lf_add_x86, "add") {
+        println("  FAIL: x86 add expected `add`")
+        ok = false
+    }
+    if !_has_op(lf_add_x86, "ret") {
+        println("  FAIL: x86 add expected `ret`")
+        ok = false
+    }
+    if lf_id_x86.target != "x86_64-linux-gnu" {
+        println("  FAIL: x86 id wrong target tag: " + lf_id_x86.target)
+        ok = false
+    }
+    if l_id_x86.target != "x86_64-linux-gnu" {
+        println("  FAIL: x86 module wrong target tag")
+        ok = false
+    }
+
+    println("")
+    println("══════════════════════════════════════════════")
+    if ok {
+        println("PASS: codegen produced LIR with expected opcodes for both targets.")
+    } else {
+        println("FAIL: codegen contract not satisfied.")
+    }
+    println("══════════════════════════════════════════════")
+    if !ok { exit(1) }
+}

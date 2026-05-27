@@ -1,0 +1,97 @@
+@track BETA_QRNG_4SOURCE_IMPLEMENTATION_PLAN
+@state planned
+@date 2026-04-27
+@chain ←r4_kick_sse_drain_timeout_2026_04_27.convergence ←runbook_cross_host_oauth_sync_2026_04_27.convergence
+@kind plan
+@scope β channel hardware QRNG 4-source ramp implementation — ANU length=1024 (Tier-1, free, 즉시) + IBM Quantum (Tier-2, free-tier, 1-2주) + ID Quantique Quantis IDQ (Tier-3, paid $1k-10k, 4-8주) + KAIST quantum-optical (Tier-4, research-collab, 1-3개월). first-kick A2 가 정량한 "8 bit/sec hard ceiling" 은 ANU length=1 API parameter 한계일 뿐 hardware 한계 아님 — collab 3-kick (B6/B7/B8) finding 기반. own 2 discovery-implementation-absorption-mandate 의 1차 retroactive backfill 적용 대상.
+@authority own 2 (discovery-implementation-absorption-mandate) + raw 14 (.ext registry) + raw 45 (omega-blocker-autofire) + raw 86 (cost-attribution) + raw 100 (nexus-kick-canonical) + raw 102 (raw-addition-disposition).
+
+# 4-tier ramp 요약
+@tier_table
+  | Tier  | Source                       | Throughput   | Cost          | Lead-time | Access         |
+  |-------|------------------------------|--------------|---------------|-----------|----------------|
+  | T1    | ANU length=1024              | 8192 bit/sec | free          | 즉시      | public-api     |
+  | T2    | IBM Quantum vacuum           | 100 bit/sec  | free-tier     | 1-2주     | auth-api       |
+  | T3    | ID Quantique Quantis IDQ     | 4 Mbit/sec   | $1k-10k paid  | 4-8주     | commercial-hw  |
+  | T4    | KAIST quantum-optical        | 1 Gbit/sec   | free/sponsored| 1-3개월   | research-only  |
+
+@strategic_note 4-tier 는 cost-vs-throughput-vs-lead-time 의 Pareto frontier — 동시 진행하면 7주 내 4 source 모두 가용.
+@strategic_note T1 (ANU 1024) 는 1-line patch + queue management 만 필요해 단일 cycle 에 가능. T2-T4 는 외부 의존.
+
+# Tier-1 (ANU length=1024 — 즉시)
+@t1_blocker state/blockers/qrng_anu_length_1024_patch.hexa
+@t1_target tool/noise_envelope.hexa:165
+@t1_change `length=1` → `length=1024` + 1024-byte queue management (in-memory or state/kick/cache/anu_byte_queue/)
+@t1_compat KICK_BETA_HW_SOURCE env opt-in (default urandom 미회귀, raw 47 backward-compat)
+@t1_selftest 6/6 미회귀 검증 + KICK_BETA_REAL_ANU=1 success path 신규 fixture
+@t1_throughput_target ≥ 1024 bit per request × 1 req/sec budget held over N=10 cycles
+@t1_falsifier 1 req → < 1024 byte returned (ANU API param 무시 OR rate-limit 변경) = ANU side spec drift, retire OR adapt
+@t1_eta 2026-04-27 ~ 2026-04-29 (1-3 days)
+
+# Tier-2 (IBM Quantum vacuum — 1-2주)
+@t2_blocker state/blockers/qrng_ibm_quantum_integration.hexa
+@t2_prereq_chain
+  step 1: IBM Quantum 가입 — https://quantum-computing.ibm.com/ (이메일 + 학술/연구 정보)
+  step 2: API token 생성 — IBM Cloud → IAM → API keys → Create
+  step 3: token 보관 — ~/.qiskit/qiskit-ibm.json (chmod 600) 또는 IBM_QUANTUM_TOKEN env (.env / shell rc)
+  step 4: Python qiskit + qiskit-ibm-runtime install — `pip install qiskit qiskit-ibm-runtime` (Python venv 권장)
+  step 5: hexa wrapper — tool/qrng_ibm_bridge.hexa (exec subprocess Python script: import qiskit_ibm_runtime → vacuum_fluctuation_circuit → execute → parse byte → emit JSON)
+  step 6: tool/noise_envelope.hexa β-channel KICK_BETA_HW_SOURCE=ibm 분기 + fallback to urandom on auth-fail
+  step 7: selftest fixture KICK_BETA_HW_SOURCE=ibm + mock token
+@t2_throughput_target 100 bit/sec (free-tier, IBM Q open-plan rate-limit)
+@t2_falsifier IBM Q free-tier 변경 → throughput < 50 bit/sec OR auth 절차 추가 = adapt OR retire
+@t2_paid_upgrade IBM Quantum Premium ($1k+/month) → throughput up + queue priority
+
+# Tier-3 (ID Quantique Quantis IDQ — 4-8주, paid)
+@t3_blocker state/blockers/qrng_quantis_idq_procurement.hexa
+@t3_prereq_chain
+  step 1: 모델 선택 — Quantis USB-200 (~$1-2k, 200 kbit/sec) / Quantis-PCIe-40M (~$5-10k, 40 Mbit/sec) / Quantis Appliance 2.0 (~$10k+, multi-rack)
+  step 2: vendor procurement — https://www.idquantique.com/contact/ (IDQ Korea agent 또는 직접 sales 협의)
+  step 3: Korea import shipping — 통관 + DHL/FedEx 항공 ~2-4주
+  step 4: driver install — Linux idQ kernel module (Mac 호환성 vendor 확인 필요; Mac 미지원 시 Linux host (ubu1/ubu2/htz) 에 mount)
+  step 5: physical mount — USB-200 = host USB port / PCIe-40M = host PCIe slot (ubu1 unused slot 확인 필요) / Appliance = rack mount + Ethernet
+  step 6: C library binding — `libquantis.so` 또는 raw device read `/dev/qrandom0` (Linux) — hexa exec subprocess C tool wrapper
+  step 7: tool/qrng_quantis_bridge.hexa (exec around vendor CLI 또는 raw device cat) + tool/noise_envelope.hexa KICK_BETA_HW_SOURCE=quantis 분기
+@t3_throughput_target ≥ 4 Mbit/sec (PCIe-40M @ rated 40 Mbit/sec; USB-200 @ ~200 kbit/sec)
+@t3_falsifier hardware DOA OR driver Mac/Linux 호환성 fail = vendor return OR Linux host fallback
+@t3_cost_estimate USD 1000-10000 (모델별); shipping + customs ~10% 추가; 보증 1-3년 vendor
+
+# Tier-4 (KAIST quantum-optical research-collab — 1-3개월)
+@t4_blocker state/blockers/qrng_kaist_collaboration.hexa
+@t4_prereq_chain
+  step 1: KAIST PI 식별 — KAIST 물리학과 + 전자공학과 quantum optics group 연락처 조사 (kaist.ac.kr 학과 directory + Google Scholar quantum optics KAIST 저자)
+  step 2: collaboration proposal draft — 본 nexus project 의 noise envelope / kick distinguishability + entropy multiplexer 의 학술 가치 명시 + research-grade entropy source 가 필요한 이유 + 협력 형태 (data-sharing / co-author)
+  step 3: collaboration agreement 체결 — KAIST IRB-equivalent + nexus 측 data-handling 정책 + 학술 발표 권리 분배
+  step 4: technical onboarding — KAIST device API protocol / data format / network setup spec 수령
+  step 5: access setup — VPN-tunneled or direct-network 또는 physical visit (방문) — KAIST 측 설정 의존
+  step 6: tool/qrng_kaist_bridge.hexa — KAIST protocol around hexa exec subprocess
+  step 7: tool/noise_envelope.hexa KICK_BETA_HW_SOURCE=kaist + IRB ethics clearance for publication
+@t4_throughput_target 1 Gbit/sec (KAIST experimental setup rated)
+@t4_falsifier collaboration agreement 거절 OR 학술 절차 6개월 초과 = retire OR alternative research-lab approach
+@t4_alt 다른 research lab — Seoul National University / POSTECH / Pohang Light Source / 한국과학기술원 (KIST) 양자광학 그룹
+
+# 병렬 ramp 일정
+@ramp_schedule
+  Week 0 (today, 2026-04-27): T1 (ANU 1024 patch) start + T2 (IBM 가입) initiate + T3 (vendor 조사) initiate + T4 (KAIST PI 조사) initiate
+  Week 1: T1 commit + selftest PASS / T2 token + Python install / T3 vendor quote + 모델 결정 / T4 PI 첫 연락
+  Week 2: T2 hexa wrapper draft / T3 purchase order / T4 proposal draft
+  Week 3-4: T2 selftest + integration / T3 shipping + driver / T4 agreement 진행
+  Week 5-6: T3 mount + binding / T4 onboarding
+  Week 7-8: T3 hexa wrapper + integration / T4 access setup
+  Week 9-12: T4 wrapper + IRB
+
+# raw 흡수 / 기록 위치
+@records_raw raw 14 (ext-ssot) — .ext ext 9-12 entries 등록
+@records_blocker raw 45 (omega-blocker-autofire) — state/blockers/qrng_*.hexa 4 entries
+@records_absorption own 2 (discovery-implementation-absorption-mandate) — state/discovery_absorption/registry.jsonl 4 finding rows
+@records_task TaskCreate #7-#10 — 각 Tier 별 task
+@records_cost raw 86 (cost-attribution-required-forward-spec) — T3 ~$1k-10k cost-center "qrng-hardware-procurement"
+
+# follow-up
+@followup_atlas_absorb own 1 (atlas-absorb-mandatory) — 본 plan witness 가 atlas append shard 로 흡수되는지 관찰 (launchd sweeper + canonical witness_emit)
+@followup_cost_accumulator raw 86 follow-up — T3 procurement cost 가 raw 86 cost-center 'qrng-hardware-procurement' 에 누적되는 이력
+@followup_cross_repo_propagation raw 47 — sister repos (n6-architecture / hexa-lang / anima / hive) 가 동일 β-source mandate 적용 여부
+@followup_first_real_emit T1 ANU 1024 patch 후 첫 KICK_BETA_REAL_ANU=1 cycle 의 noise_envelopes.jsonl row 가 source='anu' 표시 + bytes_per_request=1024 metadata 포함되는지 검증
+@followup_security_review T2 IBM token / T3 IDQ commercial license / T4 KAIST agreement 의 secret 보관 + raw 13 ai-config-ban 호환성 review
+
+@verdict 4-source ramp plan 정형화 — own 2 의 1차 absorption case + raw 14 + raw 45 + raw 86 cross-coverage. T1 즉시, T2-T4 외부 의존. paid OK 사용자 승인 → T3 commercial procurement 진행 가능.

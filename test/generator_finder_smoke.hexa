@@ -1,0 +1,88 @@
+// test/generator_finder_smoke.hexa — smoke for symbolic/generator_finder.hexa
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Reference values from generator_finder.py (archive-TECS-L/.shared/calc,
+// commit 4ee05c39). Generators ζ(3)=1.2020569031595942, ln2=0.6931471805599453.
+// The H-CX-476 "5/9" hit is a DEPTH-2 result (docstring: "10/10 at depth 2");
+// at depth 1 the reachable set is exactly the generators + their 8 binary-op
+// images, so this smoke pins the depth-1 closed-form values:
+//   ζ(3) − ln2 ≈ 0.508910   ζ(3)·ln2 ≈ 0.833202
+//   ζ(3) + ln2 ≈ 1.895204   ln2/ζ(3) ≈ 0.576634
+//   ζ(3)/ζ(3) = 1.0 (self quotient reachable) ; generators reach themselves
+//   safe_pow guards: huge exponent skipped, neg-base non-int skipped
+//
+// Run:  hexa run test/generator_finder_smoke.hexa
+// Sentinel: __GENFIND_SMOKE__ PASS|FAIL on the final line.
+
+import "compiler/atlas/symbolic/generator_finder.hexa"
+
+let mut PASS = 0
+let mut FAIL = 0
+
+fn check(label: string, cond: bool) {
+    if cond {
+        PASS = PASS + 1
+        println("[PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("[FAIL] " + label)
+    }
+}
+
+let Z3 = 1.2020569031595942
+let LN2 = 0.6931471805599453
+let THR = 0.0001
+
+// ── binary-op kernel ─────────────────────────────────────────────────────
+let ops = gf_binary_ops(2.0, 3.0)
+// 2+3,2−3,3−2,2·3,2/3,3/2,2^3,3^2 → 8 entries (none guarded)
+check("gf_binary_ops(2,3) → 8 results", len(ops) == 8)
+check("gf_binary_ops(2,3)[0] == 5 (2+3)", ops[0] == 5.0)
+check("gf_binary_ops(2,3)[3] == 6 (2·3)", ops[3] == 6.0)
+
+// safe_pow guards
+let bigp = gf_safe_pow(2.0, 50.0)
+check("safe_pow(2,50) guarded (|b|>20)", !bigp.ok)
+let negp = gf_safe_pow(-2.0, 0.5)
+check("safe_pow(−2, 0.5) guarded (neg base, non-int exp)", !negp.ok)
+let okp = gf_safe_pow(2.0, 3.0)
+check("safe_pow(2,3) == 8", okp.ok && okp.value == 8.0)
+let intnegp = gf_safe_pow(-2.0, 3.0)
+check("safe_pow(−2,3) == −8 (integer exp ok)", intnegp.ok && intnegp.value == -8.0)
+
+// ── depth-1 reachability from {ζ(3), ln2} ────────────────────────────────
+check("reaches generator ζ(3) itself", gf_depth1_reaches(Z3, LN2, Z3, THR))
+check("reaches generator ln2 itself",  gf_depth1_reaches(Z3, LN2, LN2, THR))
+check("reaches ζ(3)−ln2 ≈ 0.508910",   gf_depth1_reaches(Z3, LN2, Z3 - LN2, THR))
+check("reaches ζ(3)·ln2 ≈ 0.833202",   gf_depth1_reaches(Z3, LN2, Z3 * LN2, THR))
+check("reaches ζ(3)+ln2 ≈ 1.895204",   gf_depth1_reaches(Z3, LN2, Z3 + LN2, THR))
+check("reaches ln2/ζ(3) ≈ 0.576634",   gf_depth1_reaches(Z3, LN2, LN2 / Z3, THR))
+check("reaches 1.0 (ζ3/ζ3 self quotient)", gf_depth1_reaches(Z3, LN2, 1.0, THR))
+check("does NOT reach 5/9 at depth 1 (it's a depth-2 hit)",
+      !gf_depth1_reaches(Z3, LN2, 5.0 / 9.0, THR))
+
+// ── match-count over a target catalog ────────────────────────────────────
+let targets: [float] = [Z3, LN2, Z3 - LN2, Z3 * LN2, Z3 + LN2, 1.0]
+check("match_count covers all 6 depth-1 targets",
+      gf_depth1_match_count(Z3, LN2, targets, THR) == 6)
+let hard: [float] = [5.0 / 9.0, 3.14159265, 2.71828183]
+check("match_count covers 0 of 3 depth-2/irrational targets",
+      gf_depth1_match_count(Z3, LN2, hard, THR) == 0)
+
+// ── best-relerr ranking ──────────────────────────────────────────────────
+check("best_relerr to ζ(3) ≈ 0 (exact)",
+      gf_depth1_best_relerr(Z3, LN2, Z3) < 0.000001)
+check("best_relerr to π > threshold",
+      gf_depth1_best_relerr(Z3, LN2, 3.14159265) > 0.0001)
+
+println("")
+println("═══════════════════════════════════════════════════════════")
+println("  generator_finder smoke: PASS=" + str(PASS) + " FAIL=" + str(FAIL))
+println("═══════════════════════════════════════════════════════════")
+if FAIL > 0 {
+    println("__GENFIND_SMOKE__ FAIL")
+} else {
+    println("__GENFIND_SMOKE__ PASS")
+}

@@ -1,0 +1,70 @@
+{
+  "fire": "fusion-attention-wmma",
+  "date": "2026-05-25",
+  "falsifier": "F-FUSION-ATTN-WMMA-WALL",
+  "round": "2 of 3 (codegen + $0 oracle; timed wall DEFERRED to round 3)",
+  "host": "ubu-2 RTX 5070 sm_120 driver 580",
+  "toolchain": { "ptxas": "CUDA 12.0 V12.0.140", "nvcc": "12.0.140" },
+  "contention": "GPU clean (0% util, 5 MiB) -- but NO timed run this round (load probe + ptxas only)",
+  "verdict_tier": "BLUE structural-formal (codegen + moat + Tensor-Core inner GEMMs); wall DEFERRED-to-round-3",
+  "kernel": "flash_attn_wmma.ptx (hand-emit, RFC 067 WMMA cookbook + _nvptx_wmma_mnemonic family)",
+  "shape": { "d": 64, "BM": 16, "BN": 16, "block": "1 warp (32 threads)", "grid": "N/16" },
+  "structural": {
+    "fused_launches": 1,
+    "baseline_launches": 3,
+    "fused_S_hbm_bytes": 0,
+    "baseline_S_hbm_formula": "4*N*N*4",
+    "baseline_S_hbm_N2048": 67108864,
+    "total_hbm_ratio_formula": "(5*N*d + 4*N*N)/(4*N*d) = 1.25 + N/d",
+    "ratio_4x": { "N512_d64": 37, "N2048_d64": 133, "N4096_d64": 261 },
+    "st_global_count_in_ptx": 1,
+    "st_global_meaning": "ONLY the final O write; S tile uses wmma.store.d ...shared.f32 (never HBM)",
+    "compiled_hexa_oracle": "PASS",
+    "clause_a_pass": true
+  },
+  "tensor_core": {
+    "wmma_mma_sync_round3": 5,
+    "wmma_mma_sync_round1": 0,
+    "qkt_mma": "1x wmma.mma.sync.aligned.row.col.m16n16k16.f32.f32",
+    "pv_mma": "4x wmma.mma.sync.aligned.row.row.m16n16k16.f32.f32 (d=64 = 4 N-tiles)",
+    "root_cause_addressed": "round-1 wall loss was naive scalar inner GEMMs; now Tensor Cores"
+  },
+  "ptxas_clean": {
+    "sm_80": "rc=0",
+    "sm_90": "rc=0",
+    "jit_sm_120": "rc=0 (cuModuleLoadDataEx, entry resolved, NO launch/timing)",
+    "pure_ascii": true,
+    "non_ascii_bytes": 0
+  },
+  "footprint": {
+    "registers_per_thread": 48,
+    "shared_mem_bytes": 5824,
+    "spill_bytes": 0,
+    "envelope_regs_per_block": 65536,
+    "envelope_smem_per_block": 49152,
+    "envelope_smem_per_sm": 102400,
+    "smem_pct_of_block_cap": 11.8,
+    "fits_envelope": true,
+    "smem_breakdown": { "s_tile": 1024, "p_tile": 512, "o_tile": 4096, "m_l_c_vec": 192 }
+  },
+  "md5": {
+    "flash_attn_wmma.ptx": "4bd8b0099d78a704e535a8f5a9b0a8f6",
+    "flash_attn_wmma.sm80.ptx": "467ea41b0c15be2252ada608398ca75c"
+  },
+  "wall_clause_b": {
+    "status": "DEFERRED-to-round-3 (NOT claimed won)",
+    "reason": "round 1 proved structural != wall; only a real timed silicon fire settles it",
+    "harness_ready": true,
+    "harness": {
+      "fused": "fa_wmma_host.c (f64 ref + cuEvent 20 warmup + 200 timed median, nvcc -c clean)",
+      "baseline": "fa_cublas_tc_baseline.c (cuBLAS CUBLAS_GEMM_DEFAULT_TENSOR_OP 3-launch + softmax kernel, cuEvent, nvcc -c clean)"
+    },
+    "round3_plan": "ubu-2 RTX 5070 uncontended: run fa_wmma_host vs fa_cublas_tc_baseline serially at N in {512,1024,2048,4096} d=64; wall ratio = fused/baseline; >=30% win = baseline/fused >= 1.30 (i.e. fused <= 0.769x baseline ms); numeric clause rel-err <= 1e-2 vs f64 CPU ref"
+  },
+  "section10_box": "[x] (already flipped via launch-amort PR #1028) -- NOT touched; this axis needs the round-3 timed TC wall",
+  "invariants": {
+    "no_llvm": true,
+    "no_c_transpile_change": true,
+    "codegen_untouched": "compiler/codegen/*.hexa UNTOUCHED (hand-emit PTX); CPU codegen MD5 x86_64_linux=b50a2a3c8ab0ba0802bcc7b4c0419992 arm64_darwin=b0a397dc45547de06acc4fdc598bb859 nvptx_target unchanged from origin/main"
+  }
+}

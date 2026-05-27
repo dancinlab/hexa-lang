@@ -1,0 +1,79 @@
+// RFC 067 P4 multi-tile -- WMMA K-loop accumulator chain.
+//
+// Single warp computes M=16, N=16 output tile via K-loop with 4
+// K-tiles (K_TOTAL=64). C accumulator held in registers across all
+// K-iters; A/B fragments reloaded per iter from moving K-stride.
+//
+// Layout: A is row-major (M x K_TOTAL = 16 x 64); B is col-major
+// (K_TOTAL x N = 64 x 16). Each wmma.load uses explicit stride =
+// K_TOTAL so the kernel views A/B as one large matrix. Per K-tile
+// advance = 16 elements * sizeof(f16) = 32 bytes (NOT a full 16x16
+// tile of 512 bytes).
+//
+// GPU.md sec 2b -- WMMA multi-tile fire (one warp, single output tile,
+// 4 K-tile accumulator chain). True 64x64 multi-warp grid is follow-on.
+
+.version 8.0
+.target sm_90
+.address_size 64
+
+.visible .entry wmma_multitile (
+    .param .u64 a,
+    .param .u64 b,
+    .param .u64 c,
+    .param .u64 k_tiles
+)
+{
+    .reg .u64 %rd<20>;
+    .reg .u32 %r<10>;
+    .reg .pred %p1;
+    .reg .b32 %ra<8>;
+    .reg .b32 %rb<8>;
+    .reg .f32 %fc<8>;
+
+    ld.param.u64 %rd0, [a];
+    ld.param.u64 %rd1, [b];
+    ld.param.u64 %rd2, [c];
+    ld.param.u64 %rd3, [k_tiles];
+
+    mov.f32 %fc0, 0f00000000;
+    mov.f32 %fc1, 0f00000000;
+    mov.f32 %fc2, 0f00000000;
+    mov.f32 %fc3, 0f00000000;
+    mov.f32 %fc4, 0f00000000;
+    mov.f32 %fc5, 0f00000000;
+    mov.f32 %fc6, 0f00000000;
+    mov.f32 %fc7, 0f00000000;
+
+    mov.u64 %rd10, %rd0;
+    mov.u64 %rd11, %rd1;
+    cvt.s32.s64 %r0, %rd3;
+
+$kloop:
+    setp.le.s32 %p1, %r0, 0;
+    @%p1 bra $kloop_done;
+
+    // Explicit stride 64 (= K_TOTAL) over both A row-stride and B col-stride.
+    wmma.load.a.sync.aligned.row.m16n16k16.global.f16
+        {%ra0, %ra1, %ra2, %ra3, %ra4, %ra5, %ra6, %ra7}, [%rd10], 64;
+
+    wmma.load.b.sync.aligned.col.m16n16k16.global.f16
+        {%rb0, %rb1, %rb2, %rb3, %rb4, %rb5, %rb6, %rb7}, [%rd11], 64;
+
+    wmma.mma.sync.aligned.row.col.m16n16k16.f32.f32
+        {%fc0, %fc1, %fc2, %fc3, %fc4, %fc5, %fc6, %fc7},
+        {%ra0, %ra1, %ra2, %ra3, %ra4, %ra5, %ra6, %ra7},
+        {%rb0, %rb1, %rb2, %rb3, %rb4, %rb5, %rb6, %rb7},
+        {%fc0, %fc1, %fc2, %fc3, %fc4, %fc5, %fc6, %fc7};
+
+    // Per K-tile: advance A and B by 16 elements (= 32 bytes for f16).
+    add.u64 %rd10, %rd10, 32;
+    add.u64 %rd11, %rd11, 32;
+    sub.s32 %r0, %r0, 1;
+    bra $kloop;
+
+$kloop_done:
+    wmma.store.d.sync.aligned.row.m16n16k16.global.f32
+        [%rd2], {%fc0, %fc1, %fc2, %fc3, %fc4, %fc5, %fc6, %fc7}, 16;
+    ret;
+}

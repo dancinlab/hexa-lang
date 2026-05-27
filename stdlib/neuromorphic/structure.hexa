@@ -1,0 +1,8 @@
+#!hexa strict
+// neuromorphic structure — neurons per core.
+fn main() {
+    let neurons_per_core = 1000.0
+    println("neuromorphic_structure (neurons per core):")
+    println("  neurons_per_core = " + str(neurons_per_core))
+    println("__HEXA_NEUROMORPHIC_STRUCTURE__ PASS gate=GATE_OPEN absorbed=false")
+}

@@ -1,0 +1,219 @@
+#!hexa strict
+// stdlib/hal/t3/numerics_t3_rp2040_compile.hexa — T3b1 (compile-tier) check.
+//
+// Phase: HW-bench LIVE. Runs the actual `make -f Makefile.rp2040`
+// recipe via the local arm-none-eabi-gcc toolchain, then verifies the
+// resulting `t3_harness.elf` has the expected ARMv6-M layout.
+//
+// This is the second of three T3 sub-tiers (per recipe §3 + t3/README.md
+// roadmap):
+//   - T3a scaffold (paper):  numerics_t3_rp2040_scaffold.hexa  (v1.2.0)
+//   - T3b1 compile (live):   THIS SCRIPT                        (v1.3.0)
+//   - T3b2 run (HW-bench):   numerics_t3_rp2040_renode.hexa     (v1.4.0+)
+//
+// PASS criterion: arm-none-eabi-gcc available; `make` runs cleanly;
+// produced ELF has .text @ 0x10000000 (FLASH XIP) + non-zero size +
+// expected boot symbols (`_vector_table`, `_reset_handler`,
+// `harness_main`, `_stack_top`).
+//
+// FAIL: toolchain missing OR build error OR ELF malformed OR symbols
+// absent. Returns 1 cleanly so falsifier_check can downgrade T3 to ✗.
+//
+// Note: F-HAL falsifier closure for T3 ✓ requires T3b2 (Renode run-
+// tier, captured UART log with sentinel). T3b1 compile-tier alone
+// does NOT lift F<n>_T3 to ✓; it only proves the scaffold compiles
+// against a real toolchain. v1.4.0+ replaces this with the run-tier
+// script.
+//
+// Run:
+//   hexa run stdlib/hal/t3/numerics_t3_rp2040_compile.hexa
+//
+// Cost: $0.05 (one full cross-compile invocation; ~1-2 sec on a
+// modern laptop with a warm cache).
+
+let MODULE_NAME = "t3_rp2040_compile"
+
+// Expected ELF properties (per Makefile + linker.ld + boot.s).
+let EXPECTED_TEXT_VMA = "10000000"   // FLASH base
+let EXPECTED_RAM_VMA  = "20000000"   // SRAM base
+let REQUIRED_SYMBOLS  = ["_vector_table", "_reset_handler", "harness_main", "_stack_top"]
+
+// ─── check harness ────────────────────────────────────────────────────
+
+let mut RUN  = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ─── helpers ─────────────────────────────────────────────────────────
+
+fn _root() -> str {
+    let env_root = env("HEXA_HAL_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _which(cmd: str) -> bool {
+    let r = exec("command -v " + cmd + " >/dev/null 2>&1 && echo y || echo n").trim()
+    return r == "y"
+}
+
+fn _exists(p: str) -> bool {
+    let r = exec("[ -f \"" + p + "\" ] && echo y || echo n").trim()
+    return r == "y"
+}
+
+// ─── checks ──────────────────────────────────────────────────────────
+
+fn check_toolchain_present() -> bool {
+    let has_gcc = _which("arm-none-eabi-gcc")
+    let has_as  = _which("arm-none-eabi-as")
+    let has_ld  = _which("arm-none-eabi-ld")
+    let has_nm  = _which("arm-none-eabi-nm")
+    let ok = has_gcc && has_as && has_ld && has_nm
+    let detail = "gcc=" + (if has_gcc { "y" } else { "n" }) +
+                 " as=" + (if has_as { "y" } else { "n" }) +
+                 " ld=" + (if has_ld { "y" } else { "n" }) +
+                 " nm=" + (if has_nm { "y" } else { "n" })
+    _check(ok, "arm-none-eabi-* toolchain present (gcc/as/ld/nm)", detail)
+    return ok
+}
+
+fn check_make_clean(t3_dir: str) -> bool {
+    let cmd = "cd \"" + t3_dir + "\" && make -f Makefile.rp2040 clean 2>&1"
+    let out = exec(cmd)
+    // make clean is best-effort; not a fatal check (just sets the stage)
+    _check(true, "make clean (best-effort)", "")
+    return true
+}
+
+fn check_make_build(t3_dir: str) -> bool {
+    let cmd = "cd \"" + t3_dir + "\" && make -f Makefile.rp2040 t3_harness.elf 2>&1"
+    let out = exec(cmd)
+    let elf = t3_dir + "/t3_harness.elf"
+    let ok = _exists(elf)
+    _check(ok, "make produces t3_harness.elf",
+           if ok { "ELF emitted at " + elf } else { "build failed:\n" + out })
+    return ok
+}
+
+fn check_elf_format(t3_dir: str) -> bool {
+    let elf = t3_dir + "/t3_harness.elf"
+    if !_exists(elf) {
+        _check(false, "ELF format = elf32-littlearm", "ELF missing"); return false
+    }
+    let out = exec("arm-none-eabi-objdump -f \"" + elf + "\" 2>&1")
+    let ok = out.contains("elf32-littlearm")
+    _check(ok, "ELF format = elf32-littlearm",
+           if ok { "confirmed via objdump -f" } else { out })
+    return ok
+}
+
+fn check_text_section_at_flash(t3_dir: str) -> bool {
+    let elf = t3_dir + "/t3_harness.elf"
+    if !_exists(elf) { _check(false, ".text @ 0x10000000 (FLASH)", "ELF missing"); return false }
+    let out = exec("arm-none-eabi-objdump -h \"" + elf + "\" 2>&1 | grep -E ' \\.text '")
+    let ok = out.contains(EXPECTED_TEXT_VMA)
+    _check(ok, ".text @ 0x10000000 (FLASH XIP base)",
+           if ok { "found: " + out.trim() } else { "actual: " + out.trim() })
+    return ok
+}
+
+fn check_required_symbols(t3_dir: str) -> bool {
+    let elf = t3_dir + "/t3_harness.elf"
+    if !_exists(elf) { _check(false, "boot symbols present", "ELF missing"); return false }
+    let nm_out = exec("arm-none-eabi-nm \"" + elf + "\" 2>&1")
+    let mut bad = ""
+    let mut n_ok = 0
+    for sym in REQUIRED_SYMBOLS {
+        if nm_out.contains(sym) { n_ok = n_ok + 1 }
+        else { bad = bad + sym + " " }
+    }
+    _check(n_ok == REQUIRED_SYMBOLS.len(),
+           "all required boot symbols present: " + str(REQUIRED_SYMBOLS),
+           if bad.len() > 0 { "missing: " + bad } else { str(n_ok) + "/" + str(REQUIRED_SYMBOLS.len()) })
+    return n_ok == REQUIRED_SYMBOLS.len()
+}
+
+fn check_text_size_nonzero(t3_dir: str) -> bool {
+    let elf = t3_dir + "/t3_harness.elf"
+    if !_exists(elf) { _check(false, ".text size > 0", "ELF missing"); return false }
+    let size_out = exec("arm-none-eabi-size \"" + elf + "\" 2>&1 | tail -1")
+    // Expected format: "   text    data     bss     dec     hex filename"
+    let parts = size_out.trim().split(" ")
+    let mut text_n = 0
+    for p in parts {
+        if p.len() > 0 && text_n == 0 {
+            // first numeric field = text
+            let mut digits = ""
+            for ch in [p.char_at(0)] {
+                if ch >= "0" && ch <= "9" { digits = p }
+            }
+            if digits.len() > 0 { text_n = int(digits) }
+        }
+    }
+    let ok = text_n > 0
+    _check(ok, ".text size > 0 bytes",
+           if ok { "size output: " + size_out.trim() } else { "could not parse: " + size_out })
+    return ok
+}
+
+// ─── main ────────────────────────────────────────────────────────────
+
+fn main() {
+    println("========================================================================")
+    println("  stdlib/hal — numerics_t3_rp2040_compile: T3b1 compile-tier (LIVE)")
+    println("========================================================================")
+    println("  toolchain: arm-none-eabi-gcc (cross-compile to Cortex-M0+)")
+    println("  expected: t3_harness.elf with .text @ 0x" + EXPECTED_TEXT_VMA)
+    println("")
+
+    let root = _root()
+    let t3_dir = root + "/stdlib/hal/t3"
+
+    if !check_toolchain_present() {
+        println("")
+        println("  Toolchain missing — install arm-none-eabi-gcc to enable T3b1.")
+        println("  T3 closure stays at scaffold-tier (T3a) only.")
+        println("__HEXA_LANG_HAL_T3_RP2040_COMPILE__ FAIL")
+        exit(1)
+    }
+
+    check_make_clean(t3_dir)
+    if !check_make_build(t3_dir) {
+        println("__HEXA_LANG_HAL_T3_RP2040_COMPILE__ FAIL")
+        exit(1)
+    }
+    check_elf_format(t3_dir)
+    check_text_section_at_flash(t3_dir)
+    check_required_symbols(t3_dir)
+    check_text_size_nonzero(t3_dir)
+
+    println("")
+    println("  T3 TIER STATUS:")
+    println("    T3a (scaffold-tier): numerics_t3_rp2040_scaffold.hexa  ✓ landed v1.2.0")
+    println("    T3b1 (compile-tier): this script                       ✓ landed v1.3.0")
+    println("    T3b2 (run-tier):     numerics_t3_rp2040_renode.hexa    ☐ deferred")
+    println("                         (requires Renode 2024.10+ install)")
+    println("")
+    println("  Per recipe §3, F<n>_T3 ✓ requires T3b2 run-tier evidence.")
+    println("  v1.3.0 lifts compile-tier confidence but does NOT close T3.")
+
+    let pass_n = RUN - FAIL
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_LANG_HAL_T3_RP2040_COMPILE__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_LANG_HAL_T3_RP2040_COMPILE__ PASS")
+    exit(0)
+}
+
+main()

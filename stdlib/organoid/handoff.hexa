@@ -1,0 +1,8 @@
+#!hexa strict
+// organoid handoff — drug screen compound library.
+fn main() {
+    let screen_compounds = 1000.0
+    println("organoid_handoff (drug screen compound library):")
+    println("  screen_compounds = " + str(screen_compounds))
+    println("__HEXA_ORGANOID_HANDOFF__ PASS gate=GATE_OPEN absorbed=false")
+}

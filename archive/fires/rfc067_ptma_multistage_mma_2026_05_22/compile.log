@@ -1,0 +1,2 @@
+/usr/local/cuda-12.9/bin/nvcc -O2 -arch=sm_120a -o host host.c -lcuda -lcublas -lm
+(no stdout/stderr; clean build, exit=0)

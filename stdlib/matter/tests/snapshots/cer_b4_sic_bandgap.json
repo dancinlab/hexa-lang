@@ -1,0 +1,35 @@
+{
+  "__fixture_tag__": "VENDORED SOURCE SNAPSHOT — frozen citation, not live data",
+  "gate_id": "cer_b4_sic_bandgap",
+  "claim": {
+    "property": "bandgap (indirect)",
+    "material": "4H-SiC (silicon carbide, 300 K)",
+    "value": 3.26,
+    "unit": "eV",
+    "secondary": {
+      "polytype": "6H-SiC",
+      "value": 3.02,
+      "unit": "eV"
+    }
+  },
+  "source": {
+    "kind": "BOOK",
+    "authors": "Saddow S.E. & Agarwal A. (eds.)",
+    "title": "Advances in Silicon Carbide Processing and Applications",
+    "year": 2004,
+    "publisher": "Artech House",
+    "page": "Ch. 1, Table 1.2",
+    "citation": "Saddow & Agarwal 2004 (4H-SiC 3.26 eV, 6H-SiC 3.02 eV)"
+  },
+  "tolerance": {
+    "abs": 0.05,
+    "unit": "eV",
+    "basis": "literature spread 3.23–3.28 eV for 4H-SiC; tolerance covers polytype rounding"
+  },
+  "spec_doc": {
+    "path": "silicon/silicon.md",
+    "line_hint": "Si-L11 row in §3 ceiling table"
+  },
+  "accessed": "2026-05-13",
+  "n6_lattice_fit_applied": false
+}

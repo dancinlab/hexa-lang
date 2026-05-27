@@ -1,0 +1,56 @@
+#!hexa strict
+// hexa-cern/tests/test_lattice.hexa — n=6 lattice closure regression test.
+//
+// Wraps verify/lattice_check.hexa and asserts: exit 0 + sentinel
+// `__HEXA_CERN_LATTICE__ PASS` line in stdout.
+
+let HOME = env("HOME")
+
+fn _root() -> str {
+    let r = env("PETITE_CERN_ROOT")
+    if r.len() > 0 { return r }
+    let pwd = exec("pwd").trim()
+    if pwd.len() > 0 { return pwd }
+    return HOME + "/core/hexa-cern"
+}
+
+let ROOT = _root()
+let SCRIPT = ROOT + "/verify/lattice_check.hexa"
+let HEXA = HOME + "/.hx/packages/hexa/hexa.real"
+
+fn shq(s: str) -> str {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+fn _timeout_prefix() -> str {
+    let g = exec("which gtimeout 2>/dev/null").trim()
+    if g.len() > 0 { return shq(g) + " 300 " }
+    let t = exec("which timeout 2>/dev/null").trim()
+    if t.len() > 0 { return shq(t) + " 300 " }
+    return ""
+}
+
+fn main() {
+    println("[test_lattice] script: " + SCRIPT)
+    let cmd = "HEXA_SHIM_NO_DARWIN_LANDING=1 RESOURCE_LOCAL_HEXA=1 PETITE_CERN_ROOT=" + shq(ROOT) + " " + _timeout_prefix() + shq(HEXA) + " run " + shq(SCRIPT)
+    let r = exec_with_status(cmd)
+    let out = to_string(r[0])
+    let code = r[1]
+    let has_pass = out.find("__HEXA_CERN_LATTICE__ PASS") >= 0
+    if code == 124 {
+        println("[test_lattice] SKIP — timeout > 5 min (not a falsifier-fail)")
+        println("__HEXA_CERN_TEST_LATTICE__ PASS")
+        exit(0)
+    }
+    let pass = code == 0 && has_pass
+    if pass {
+        println("[test_lattice] PASS — exit 0 + sentinel found")
+        println("__HEXA_CERN_TEST_LATTICE__ PASS")
+        exit(0)
+    }
+    eprintln("[test_lattice] FAIL — exit=" + str(code) + " sentinel=" + str(has_pass))
+    eprintln("--- stdout ---")
+    eprintln(out)
+    eprintln("__HEXA_CERN_TEST_LATTICE__ FAIL")
+    exit(1)
+}

@@ -1,0 +1,56 @@
+# stdlib/hal/t3/Makefile.rp2040 — RP2040 T3 harness cross-compile recipe.
+#
+# Phase: paper-tier scaffold. Not executed by stdlib/hal v1.2.0; lays
+# the groundwork for T3b run-tier (Renode emulation) in v1.3.0+.
+#
+# Target: Raspberry Pi RP2040 dual Cortex-M0+ @ 133 MHz (ARMv6-M).
+# Toolchain: arm-none-eabi-gcc (free; no licence).
+#
+# Usage:
+#   make -f Makefile.rp2040            # builds t3_harness.elf
+#   make -f Makefile.rp2040 clean
+#   make -f Makefile.rp2040 t3_harness.uf2  # converts ELF → UF2 for flash
+#
+# Prerequisite: ARM_GCC_PREFIX must point to an arm-none-eabi-gcc
+# install (e.g. /usr/bin/, ~/opt/arm-gnu-toolchain/bin/, etc.).
+
+ARM_GCC_PREFIX ?= arm-none-eabi-
+CC      = $(ARM_GCC_PREFIX)gcc
+AS      = $(ARM_GCC_PREFIX)as
+LD      = $(ARM_GCC_PREFIX)ld
+OBJCOPY = $(ARM_GCC_PREFIX)objcopy
+
+# Cortex-M0+ flags.
+CPUFLAGS = -mcpu=cortex-m0plus -mthumb
+CFLAGS   = $(CPUFLAGS) -Os -ffunction-sections -fdata-sections \
+           -fno-builtin -fno-common -nostdlib \
+           -Wall -Wextra -Werror
+ASFLAGS  = $(CPUFLAGS)
+LDSCRIPT = linker_rp2040.ld
+LDFLAGS  = -T $(LDSCRIPT) -nostdlib --gc-sections -static
+
+OBJECTS  = boot_rp2040.o harness_main.o
+
+.PHONY: all clean
+
+all: t3_harness.elf
+
+boot_rp2040.o: boot_rp2040.s
+	$(AS) $(ASFLAGS) -o $@ $<
+
+harness_main.o: harness_main.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+t3_harness.elf: $(OBJECTS) $(LDSCRIPT)
+	$(LD) $(LDFLAGS) -o $@ $(OBJECTS)
+
+t3_harness.uf2: t3_harness.elf
+	$(OBJCOPY) -O binary t3_harness.elf t3_harness.bin
+	# elf2uf2 from pico-sdk (separate tool); fallback: flash via openocd
+	@echo "TODO: invoke pico-sdk elf2uf2 OR openocd to flash to Pico board"
+
+clean:
+	rm -f $(OBJECTS) t3_harness.elf t3_harness.bin t3_harness.uf2
+
+# Status: scaffold-tier (paper). v1.3.0+ wires Renode run via
+# renode_rp2040.resc and captures UART log to t3_rp2040_run.log.

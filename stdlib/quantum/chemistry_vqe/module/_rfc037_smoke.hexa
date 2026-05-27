@@ -1,0 +1,318 @@
+#!hexa strict
+// qmirror/chemistry_vqe/module/_rfc037_smoke.hexa
+//
+// RFC 037 (farr_pauli_expectation_batch) smoke test — verifies the new
+// whole-Hamiltonian C kernel against the per-term reference and emits
+// __QMIRROR_RFC037_PAULI_BATCH__ <PASS|FAIL> sentinel.
+//
+// Build path:
+//   1. Allocate a 4-qubit (dim=16) state vector via farr_zeros, fill via
+//      a deterministic LCG, L2-normalize.
+//   2. Build N=64 random Pauli descriptors (flip, z, y, cy) — pack into
+//      four farr_int handles via farr_int_set.
+//   3. Reference: call farr_pauli_expectation N times → ref_h (N doubles).
+//   4. Batch:     call farr_pauli_expectation_batch once → out_h (N doubles).
+//   5. Diff: max_k |out[k] - ref[k]| must be < 1e-12.
+//   6. OOB: call with too-small out_h (length 32 for N=64) — assert rc == -1.
+//   7. OOB: call with invalid farr_int handle id — assert rc == -1.
+//
+// Depends on:
+//   - RFC 030 farr_zeros / farr_get / farr_set / farr_free
+//   - RFC 034 farr_pauli_expectation (per-term reference)
+//   - RFC 036 farr_int_zeros / farr_int_set / farr_int_free
+//   - RFC 037 farr_pauli_expectation_batch (UNDER TEST)
+//
+// @sentinel(__QMIRROR_RFC037_PAULI_BATCH__ <PASS|FAIL>)
+
+// Tunables — keep them small so the smoke runs in <1 s.
+fn _rfc037_n_qubits() -> int { return 4 }
+fn _rfc037_dim()      -> int { return 16 }   // 2^n_qubits
+fn _rfc037_n_terms()  -> int { return 64 }
+fn _rfc037_seed()     -> int { return 1234567 }
+fn _rfc037_tol_str()  -> str { return "1e-12" }
+
+// Deterministic 64-bit LCG: x_{n+1} = (a*x + c) mod 2^63. Returns
+// a non-negative int64; caller masks/mods to its target range.
+fn _rfc037_lcg(state: int) -> int {
+    let a = 6364136223846793005
+    let c = 1442695040888963407
+    let mask = 9223372036854775807    // (1 << 63) - 1
+    let next = ((state * a) + c) & mask
+    return next
+}
+
+// popcount of (y_mask & flip_mask). Counts set bits up to 16 (4-qubit dim).
+// Used to compute count_Y = number of bits in y_mask & flip_mask.
+fn _rfc037_popcount16(x: int) -> int {
+    let mut n = 0
+    let mut v = x & 65535
+    while v > 0 {
+        n = n + (v & 1)
+        v = v >> 1
+    }
+    return n
+}
+
+fn _rfc037_assert(cond: int, label: str, fail_h: int) -> int {
+    if cond == 1 {
+        println("  [ok] " + label)
+        return 0
+    }
+    println("  [FAIL] " + label)
+    let cur = farr_int_get(fail_h, 0)
+    let _ = farr_int_set(fail_h, 0, cur + 1)
+    return 1
+}
+
+// Build a deterministic 4-qubit normalized state vector into (re_h, im_h).
+// Returns the seed AFTER the fill (caller uses for subsequent draws).
+fn _rfc037_build_state(re_h: int, im_h: int, dim: int, seed0: int) -> int {
+    let mut seed = seed0
+    let mut k = 0
+    let mut norm_sq = 0.0
+    // First pass: fill amplitudes from LCG (re in [-1,1], im in [-1,1]).
+    while k < dim {
+        seed = _rfc037_lcg(seed)
+        // Map low 20 bits to [-1, 1) — 2^20 = 1048576.
+        let r_raw = seed & 1048575
+        let r = (to_float(r_raw) / 524288.0) - 1.0
+        seed = _rfc037_lcg(seed)
+        let i_raw = seed & 1048575
+        let im_v = (to_float(i_raw) / 524288.0) - 1.0
+        let _ = farr_set(re_h, k, r)
+        let _ = farr_set(im_h, k, im_v)
+        norm_sq = norm_sq + r * r + im_v * im_v
+        k = k + 1
+    }
+    // L2 normalize so <psi|psi> = 1 (helps the expectation values
+    // land in a numerically sensible range, easier to eyeball).
+    let inv_norm = 1.0 / sqrt(norm_sq)
+    let mut k2 = 0
+    while k2 < dim {
+        let _ = farr_set(re_h, k2, farr_get(re_h, k2) * inv_norm)
+        let _ = farr_set(im_h, k2, farr_get(im_h, k2) * inv_norm)
+        k2 = k2 + 1
+    }
+    return seed
+}
+
+// Build N random Pauli descriptors into 4 farr_int handles. Returns
+// the seed AFTER the fill. count_Y is forced consistent with the
+// (y_mask & flip_mask) popcount so the per-term math kernel's parity
+// arithmetic matches RFC 034 semantics.
+fn _rfc037_build_paulis(flip_h: int, z_h: int, y_h: int, cy_h: int,
+                        n_terms: int, dim: int, seed0: int) -> int {
+    let mut seed = seed0
+    let mask = dim - 1     // 15 for dim=16
+    let mut k = 0
+    while k < n_terms {
+        seed = _rfc037_lcg(seed)
+        let flip = seed & mask
+        seed = _rfc037_lcg(seed)
+        let z_raw = seed & mask
+        seed = _rfc037_lcg(seed)
+        let y_raw = seed & mask
+        // Enforce z & y disjoint (a single qubit can't be both Z and Y).
+        // This keeps the descriptors within the canonical Pauli-string
+        // decomposition produced by the chemistry_vqe Jordan-Wigner
+        // encoder. (Y on qubit q implies both flip[q]=1 and z[q]=1 in
+        // the encoder's convention; this smoke uses the looser RFC 034
+        // contract where flip/z/y are independent mask sources.)
+        let y_clean = y_raw & (~z_raw)
+        // count_Y = popcount(y_clean & flip) — invariant from RFC 034.
+        let cy = _rfc037_popcount16(y_clean & flip)
+        let _ = farr_int_set(flip_h, k, flip)
+        let _ = farr_int_set(z_h,    k, z_raw)
+        let _ = farr_int_set(y_h,    k, y_clean)
+        let _ = farr_int_set(cy_h,   k, cy)
+        k = k + 1
+    }
+    return seed
+}
+
+// Reference path: call farr_pauli_expectation N times, store into ref_h.
+fn _rfc037_ref_loop(re_h: int, im_h: int,
+                    flip_h: int, z_h: int, y_h: int, cy_h: int,
+                    ref_h: int, n_terms: int, nq: int) -> int {
+    let mut k = 0
+    while k < n_terms {
+        let flip = farr_int_get(flip_h, k)
+        let zm   = farr_int_get(z_h,    k)
+        let ym   = farr_int_get(y_h,    k)
+        let cym  = farr_int_get(cy_h,   k)
+        let exp_k = farr_pauli_expectation(re_h, im_h, flip, zm, ym, cym, nq)
+        let _ = farr_set(ref_h, k, exp_k)
+        k = k + 1
+    }
+    return 0
+}
+
+// Compute max_k |a[k] - b[k]| over a 0..n range.
+fn _rfc037_max_abs_diff(a_h: int, b_h: int, n: int) -> float {
+    let mut max_d = 0.0
+    let mut k = 0
+    while k < n {
+        let d = farr_get(a_h, k) - farr_get(b_h, k)
+        let abs_d = if d < 0.0 { 0.0 - d } else { d }
+        if abs_d > max_d { max_d = abs_d }
+        k = k + 1
+    }
+    return max_d
+}
+
+fn _rfc037_t1_batch_matches_ref(fail_h: int) -> int {
+    let nq = _rfc037_n_qubits()
+    let dim = _rfc037_dim()
+    let n = _rfc037_n_terms()
+    let re_h = farr_zeros(dim)
+    let im_h = farr_zeros(dim)
+    let _ = _rfc037_build_state(re_h, im_h, dim, _rfc037_seed())
+    let flip_h = farr_int_zeros(n)
+    let z_h    = farr_int_zeros(n)
+    let y_h    = farr_int_zeros(n)
+    let cy_h   = farr_int_zeros(n)
+    let _ = _rfc037_build_paulis(flip_h, z_h, y_h, cy_h, n, dim, _rfc037_seed() + 9999)
+    // Reference path.
+    let ref_h = farr_zeros(n)
+    let _ = _rfc037_ref_loop(re_h, im_h, flip_h, z_h, y_h, cy_h, ref_h, n, nq)
+    // Batch path.
+    let out_h = farr_zeros(n)
+    let rc = farr_pauli_expectation_batch(re_h, im_h, flip_h, z_h, y_h, cy_h, n, out_h, nq)
+    let ok_rc = if rc == 0 { 1 } else { 0 }
+    let _ = _rfc037_assert(ok_rc, "T1a: batch returns 0 on valid input", fail_h)
+    // Diff.
+    let max_d = _rfc037_max_abs_diff(ref_h, out_h, n)
+    let ok_diff = if max_d < 0.000000000001 { 1 } else { 0 }
+    if ok_diff == 0 {
+        println("    max |out - ref| = " + str(max_d) + "   tol = " + _rfc037_tol_str())
+    }
+    let _ = _rfc037_assert(ok_diff,
+        "T1b: max_k |batch[k] - ref[k]| < 1e-12 over " + str(n) + " terms", fail_h)
+    let _ = farr_free(re_h)
+    let _ = farr_free(im_h)
+    let _ = farr_free(ref_h)
+    let _ = farr_free(out_h)
+    let _ = farr_int_free(flip_h)
+    let _ = farr_int_free(z_h)
+    let _ = farr_int_free(y_h)
+    let _ = farr_int_free(cy_h)
+    return 0
+}
+
+fn _rfc037_t2_out_too_short(fail_h: int) -> int {
+    let nq = _rfc037_n_qubits()
+    let dim = _rfc037_dim()
+    let n = _rfc037_n_terms()
+    let re_h = farr_zeros(dim)
+    let im_h = farr_zeros(dim)
+    let _ = farr_set(re_h, 0, 1.0)  // trivial |0> state
+    let flip_h = farr_int_zeros(n)
+    let z_h    = farr_int_zeros(n)
+    let y_h    = farr_int_zeros(n)
+    let cy_h   = farr_int_zeros(n)
+    // out_h is HALF the required length.
+    let out_h = farr_zeros(32)
+    let rc = farr_pauli_expectation_batch(re_h, im_h, flip_h, z_h, y_h, cy_h, n, out_h, nq)
+    let ok = if rc == 0 - 1 { 1 } else { 0 }
+    let _ = _rfc037_assert(ok, "T2: batch returns -1 when out_h.len < n_terms", fail_h)
+    let _ = farr_free(re_h)
+    let _ = farr_free(im_h)
+    let _ = farr_free(out_h)
+    let _ = farr_int_free(flip_h)
+    let _ = farr_int_free(z_h)
+    let _ = farr_int_free(y_h)
+    let _ = farr_int_free(cy_h)
+    return 0
+}
+
+fn _rfc037_t3_bad_handle(fail_h: int) -> int {
+    let nq = _rfc037_n_qubits()
+    let dim = _rfc037_dim()
+    let n = _rfc037_n_terms()
+    let re_h = farr_zeros(dim)
+    let im_h = farr_zeros(dim)
+    let _ = farr_set(re_h, 0, 1.0)
+    let flip_h = farr_int_zeros(n)
+    let z_h    = farr_int_zeros(n)
+    let y_h    = farr_int_zeros(n)
+    let cy_h   = farr_int_zeros(n)
+    let out_h  = farr_zeros(n)
+    // Pass an obviously-invalid int handle (-1) as flip_h.
+    let bad_id = 0 - 1
+    let rc = farr_pauli_expectation_batch(re_h, im_h, bad_id, z_h, y_h, cy_h, n, out_h, nq)
+    let ok = if rc == 0 - 1 { 1 } else { 0 }
+    let _ = _rfc037_assert(ok, "T3a: batch returns -1 on invalid flip_h", fail_h)
+    // Pass an obviously-invalid farr handle as out_h.
+    let rc2 = farr_pauli_expectation_batch(re_h, im_h, flip_h, z_h, y_h, cy_h, n, bad_id, nq)
+    let ok2 = if rc2 == 0 - 1 { 1 } else { 0 }
+    let _ = _rfc037_assert(ok2, "T3b: batch returns -1 on invalid out_h", fail_h)
+    let _ = farr_free(re_h)
+    let _ = farr_free(im_h)
+    let _ = farr_free(out_h)
+    let _ = farr_int_free(flip_h)
+    let _ = farr_int_free(z_h)
+    let _ = farr_int_free(y_h)
+    let _ = farr_int_free(cy_h)
+    return 0
+}
+
+fn _rfc037_t4_n_terms_zero(fail_h: int) -> int {
+    // n_terms == 0 is a degenerate but legal input — kernel should
+    // return 0 without writing to out_h.
+    let nq = _rfc037_n_qubits()
+    let dim = _rfc037_dim()
+    let re_h = farr_zeros(dim)
+    let im_h = farr_zeros(dim)
+    let _ = farr_set(re_h, 0, 1.0)
+    let flip_h = farr_int_zeros(4)
+    let z_h    = farr_int_zeros(4)
+    let y_h    = farr_int_zeros(4)
+    let cy_h   = farr_int_zeros(4)
+    let out_h  = farr_zeros(4)
+    let _ = farr_set(out_h, 0, 99.0)   // sentinel — kernel must not overwrite
+    let rc = farr_pauli_expectation_batch(re_h, im_h, flip_h, z_h, y_h, cy_h, 0, out_h, nq)
+    let ok_rc = if rc == 0 { 1 } else { 0 }
+    let _ = _rfc037_assert(ok_rc, "T4a: batch returns 0 on n_terms=0", fail_h)
+    let v0 = farr_get(out_h, 0)
+    let ok_v = if v0 == 99.0 { 1 } else { 0 }
+    let _ = _rfc037_assert(ok_v, "T4b: out_h[0] sentinel untouched on n_terms=0", fail_h)
+    let _ = farr_free(re_h)
+    let _ = farr_free(im_h)
+    let _ = farr_free(out_h)
+    let _ = farr_int_free(flip_h)
+    let _ = farr_int_free(z_h)
+    let _ = farr_int_free(y_h)
+    let _ = farr_int_free(cy_h)
+    return 0
+}
+
+fn _rfc037_emit_marker(passed: int) -> int {
+    let ts = exec("date +%s").trim()
+    let suffix = if passed == 1 { ".marker" } else { "_FAILED.marker" }
+    let path = "state/markers/_rfc037_smoke_" + ts + suffix
+    let _ = exec("mkdir -p state/markers && touch '" + path + "'")
+    return 0
+}
+
+fn main() -> void {
+    println("__QMIRROR_RFC037_PAULI_BATCH__ start")
+    println("  n_qubits=" + str(_rfc037_n_qubits())
+        + "  dim="      + str(_rfc037_dim())
+        + "  n_terms="  + str(_rfc037_n_terms())
+        + "  tol="      + _rfc037_tol_str())
+    let fail_h = farr_int_zeros(1)
+    let _ = _rfc037_t1_batch_matches_ref(fail_h)
+    let _ = _rfc037_t2_out_too_short(fail_h)
+    let _ = _rfc037_t3_bad_handle(fail_h)
+    let _ = _rfc037_t4_n_terms_zero(fail_h)
+    let fail_count = farr_int_get(fail_h, 0)
+    let _ = farr_int_free(fail_h)
+    if fail_count == 0 {
+        let _ = _rfc037_emit_marker(1)
+        println("__QMIRROR_RFC037_PAULI_BATCH__ PASS")
+        return
+    }
+    let _ = _rfc037_emit_marker(0)
+    println("  total failures: " + str(fail_count))
+    println("__QMIRROR_RFC037_PAULI_BATCH__ FAIL")
+}

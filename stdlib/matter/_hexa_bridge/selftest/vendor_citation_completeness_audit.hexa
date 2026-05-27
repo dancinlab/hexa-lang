@@ -1,0 +1,250 @@
+#!hexa strict
+// hexa-matter/_hexa_bridge/selftest/vendor_citation_completeness_audit.hexa
+//
+// vendor-citation completeness gate (#35). hexa-native port of
+// `selftest/vendor_citation_completeness_audit.py` (T2).
+//
+// Lossless on this corpus (verified byte-parity 30 vendors / 30 cited /
+// 0 ambiguous vs the .py): vendor `\b(forms)\b`, YEAR `\b(19|20)\d{2}\b`,
+// LATTICE_FIT/NEG are run via grep -nE whose ERE is the literal
+// equivalent of the Python `re` (\s→[[:space:]], \d→[0-9],
+// (?:..)→(..), \b kept); PRODUCT_RE is `re.escape`d fixed strings ⇔
+// grep -F. year_ok = ∃ vendor line with a YEAR line in ±12; lat = ∃
+// vendor line with a FIT line in ±5 and no NEG line in ±5 (same
+// per-line precompute as the .py window, asserted equal here).
+// PASS iff ambiguous+lattice_fail == 0. stdlib-only; exec.
+
+let ROOT_ENV = env("HEXA_MATTER_ROOT")
+
+fn shq(s: str) -> str { return "'" + s.replace("'", "'\\''") + "'" }
+fn root() -> str {
+    if ROOT_ENV.len() > 0 { return ROOT_ENV }
+    return exec("pwd").trim()
+}
+let G_ROOT = root()
+
+fn is_dig(c: str) -> bool { return c.len() == 1 && "0123456789".contains(c) }
+fn to_int(s: str) -> int {
+    let mut v = 0
+    let mut seen = false
+    let mut i = 0
+    while i < s.len() {
+        let c = s.substr(i, 1)
+        if is_dig(c) { let mut d = 0; while d < 10 { if str(d) == c { break }; d = d + 1 }; v = v * 10 + d; seen = true }
+        i = i + 1
+    }
+    if seen == false { return -1 }
+    return v
+}
+fn ints_from(raw: str) -> [int] {
+    let mut o: [int] = []
+    if raw.len() == 0 { return o }
+    let rs = raw.split("\n")
+    let mut i = 0
+    while i < rs.len() { let n = to_int(rs[i]); if n > 0 { o.push(n) }; i = i + 1 }
+    return o
+}
+fn near(set: [int], L: int, rad: int) -> bool {
+    let mut i = 0
+    while i < set.len() { let c = set[i]; if c >= L - rad && c <= L + rad { return true }; i = i + 1 }
+    return false
+}
+
+let VENDORS = ["Wacker", "Wolfspeed", "DuPont", "Toray", "Sila Nanotechnologies",
+    "Group14", "Amprius", "Climeworks", "Ductal", "Cor-Tuf", "DSM Dyneema",
+    "NatureWorks", "Danimer", "Lafarge-Holcim", "Sibelco", "Hitachi Metals",
+    "Vacuumschmelze", "RHI Magnesita", "Vesuvius", "GE Aviation",
+    "Rolls-Royce", "Pratt & Whitney", "Special Metals", "NREL",
+    "Oak Ridge", "Sumitomo", "POSCO", "CATL", "BYD", "Element Six"]
+// alias forms ';'-joined (parallel to VENDORS; default = vendor itself)
+let FORMS = ["Wacker", "Wolfspeed", "DuPont", "Toray",
+    "Sila Nanotechnologies;Sila Nano", "Group14", "Amprius", "Climeworks",
+    "Ductal", "Cor-Tuf", "DSM Dyneema;Dyneema", "NatureWorks", "Danimer",
+    "Lafarge-Holcim;Lafarge;Holcim", "Sibelco", "Hitachi Metals",
+    "Vacuumschmelze", "RHI Magnesita", "Vesuvius", "GE Aviation",
+    "Rolls-Royce", "Pratt & Whitney;Pratt and Whitney;P&W", "Special Metals",
+    "NREL", "Oak Ridge;ORNL", "Sumitomo", "POSCO", "CATL", "BYD",
+    "Element Six;E6 CVD diamond"]
+// NOTE: GE Aviation / Rolls-Royce alias extra forms (GE9X/GE LEAP /
+// Rolls Royce/RR Trent) per .py — appended here:
+let FORMS_FIX_GE = "GE Aviation;GE9X;GE LEAP"
+let FORMS_FIX_RR = "Rolls-Royce;Rolls Royce;RR Trent"
+
+let PRODUCT_BLOB = "Vitreloy,IN718,Inconel,SEMI MF1188,ASTM F121,ASTM F1188,ICI Procion-H,Dyneema SK,Dyneema,Ductal,Cor-Tuf,Kevlar 49,Kevlar,Inpria,T1100G,T700,T800,T1000,Climeworks Orca,Climeworks Mammoth,Wolfspeed 6-inch SiC,Wolfspeed 8-inch SiC,Wacker Polysilicon,Hemlock Polysilicon,NMC811,LFP,LCO,CATL Blade,BYD Blade,SmCo,NdFeB,Metglas,Finemet,Vacuumschmelze VITROVAC,RHI Magnesita AZS,Vesuvius AZS,GE LEAP,Rolls-Royce Trent,Pratt & Whitney PW,CMSX-4,Rene N5,Mar-M247,Hastelloy,Special Metals Inconel,Special Metals Monel,NREL chart,Oak Ridge ORNL,Sumitomo Polyamide,POSCO HEX,Sila Titan,Group14 SCC55,Amprius SiNW,Element Six CVD,NatureWorks Ingeo,Danimer Nodax,SK99,PFP,PolyOne,Hempel"
+
+let YEAR_ERE = "\\b(19|20)[0-9]{2}\\b"
+let FIT_ERE = "(lattice[-[:space:]]?fit|n=6[[:space:]]+invariant|σ\\(6\\)[[:space:]]*=|τ\\(6\\)[[:space:]]*=|φ\\(6\\)[[:space:]]*=)"
+let NEG_ERE = "(no[[:space:]]+n=6|NOT[[:space:]]+lattice[-[:space:]]?fit|n6_lattice_fit_applied[[:space:]]*:[[:space:]]*false|no[[:space:]]+`?lattice[-[:space:]]?fit|`?lattice[-[:space:]]?fit`?[[:space:]]+/[[:space:]]+`?n=6|raw#10[[:space:]]+C3|forbids[[:space:]]+n=6|do[[:space:]]+not[[:space:]]+apply[[:space:]]+lattice|MUST[[:space:]]+NOT[[:space:]]+include[[:space:]]+lattice|NO[[:space:]]+`?lattice|attribut[a-z]+[[:space:]]+claim)"
+
+fn forms_of(i: int) -> str {
+    if VENDORS[i] == "GE Aviation" { return FORMS_FIX_GE }
+    if VENDORS[i] == "Rolls-Royce" { return FORMS_FIX_RR }
+    return FORMS[i]
+}
+
+// build \b(f1|f2|...)\b ERE from ';'-joined forms
+fn vendor_ere(f: str) -> str {
+    let parts = f.split(";")
+    let mut e = "\\b("
+    let mut i = 0
+    while i < parts.len() {
+        if i > 0 { e = e + "|" }
+        e = e + parts[i]
+        i = i + 1
+    }
+    return e + ")\\b"
+}
+
+fn doclist() -> [str] {
+    let mut d = ["NOVEL.md", "LIMIT_BREAKTHROUGH.md", "CLOSURE_RESIDUAL_BACKLOG.md", "AGENTS.md", "INIT.md"]
+    let script = "cd " + shq(G_ROOT) + " && for name in $(ls -1 | LC_ALL=C sort); do case \"$name\" in .*|_*) continue;; esac; [ -d \"$name\" ] || continue; [ -f \"$name/$name.md\" ] && echo \"$name/$name.md\"; case \"$name\" in hexa-*) for f in \"$name\"/*.md; do [ -f \"$f\" ] || continue; b=$(basename \"$f\"); [ \"$b\" != \"$name.md\" ] && echo \"$name/$b\"; done;; esac; done"
+    let raw = exec(script).trim()
+    if raw.len() > 0 {
+        let rs = raw.split("\n")
+        let mut i = 0
+        while i < rs.len() { if rs[i].len() > 0 { d.push(rs[i]) }; i = i + 1 }
+    }
+    return d
+}
+
+// per-doc cached year/fit/neg line sets
+let mut DK: [str] = []
+let mut DYEAR: [str] = []   // ";"-joined ints (lazy string cache)
+let mut DFIT: [str] = []
+let mut DNEG: [str] = []
+
+fn join_ints(a: [int]) -> str {
+    let mut s = ""
+    let mut i = 0
+    while i < a.len() { if i > 0 { s = s + ";" }; s = s + str(a[i]); i = i + 1 }
+    return s
+}
+fn split_ints(s: str) -> [int] {
+    let mut o: [int] = []
+    if s.len() == 0 { return o }
+    let p = s.split(";")
+    let mut i = 0
+    while i < p.len() { let n = to_int(p[i]); if n >= 0 { o.push(n) }; i = i + 1 }
+    return o
+}
+
+fn ensure_doc(rel: str) -> int {
+    let mut i = 0
+    while i < DK.len() { if DK[i] == rel { return i }; i = i + 1 }
+    let fp = G_ROOT + "/" + rel
+    let y = ints_from(exec("grep -nE " + shq(YEAR_ERE) + " " + shq(fp) + " 2>/dev/null | cut -d: -f1").trim())
+    let f = ints_from(exec("grep -niE " + shq(FIT_ERE) + " " + shq(fp) + " 2>/dev/null | cut -d: -f1").trim())
+    let g = ints_from(exec("grep -niE " + shq(NEG_ERE) + " " + shq(fp) + " 2>/dev/null | cut -d: -f1").trim())
+    DK.push(rel)
+    DYEAR.push(join_ints(y))
+    DFIT.push(join_ints(f))
+    DNEG.push(join_ints(g))
+    return DK.len() - 1
+}
+
+fn main() {
+    println("hexa-matter/selftest/vendor_citation_completeness_audit (hexa-native, T2)")
+    println("  root: " + G_ROOT)
+    let docs = doclist()
+    println("  vendors: " + str(VENDORS.len()) + "   docs: " + str(docs.len()))
+
+    // absolute doc paths that exist
+    let mut dpaths = ""
+    let mut di = 0
+    while di < docs.len() {
+        let fp = G_ROOT + "/" + docs[di]
+        if exec("[ -f " + shq(fp) + " ] && echo y || echo n").trim() == "y" {
+            dpaths = dpaths + " " + shq(fp)
+        }
+        di = di + 1
+    }
+
+    // has_product_id — any product-id substring anywhere
+    let parts = PRODUCT_BLOB.split(",")
+    let mut pargs = ""
+    let mut pi = 0
+    while pi < parts.len() {
+        let p = parts[pi].trim()
+        if p.len() > 0 { pargs = pargs + " -e " + shq(p) }
+        pi = pi + 1
+    }
+    let phit = exec("grep -lF" + pargs + dpaths + " 2>/dev/null | head -1").trim()
+    if phit.len() == 0 {
+        println("[FAIL] no PRODUCT_ID anchor found anywhere in corpus")
+        println("__HEXA_MATTER_VENDOR_CITATION__ FAIL (" + str(VENDORS.len()) + " vendors, 0 cited, " + str(VENDORS.len()) + " ambiguous)")
+        exit(1)
+    }
+
+    let mut cited = 0
+    let mut skipped = 0
+    let mut ambiguous = 0
+    let mut lattice_fail = 0
+
+    let mut vi = 0
+    while vi < VENDORS.len() {
+        let ere = vendor_ere(forms_of(vi))
+        // all matches across corpus: path:lineno
+        let raw = exec("grep -nE " + shq(ere) + dpaths + " 2>/dev/null").trim()
+        let mut occ = 0
+        let mut year_ok = false
+        let mut lat = false
+        if raw.len() > 0 {
+            let rows = raw.split("\n")
+            let mut ri = 0
+            while ri < rows.len() {
+                let row = rows[ri]
+                if row.len() > 0 {
+                    // grep -n over multiple files prints "path:lineno:..."
+                    // find first ':' (paths are absolute, contain '/')
+                    let mut c1 = -1
+                    let mut z = 0
+                    while z < row.len() { if row.substr(z, 1) == ":" { c1 = z; break }; z = z + 1 }
+                    if c1 >= 0 {
+                        let path = row.substr(0, c1)
+                        let r2 = row.substr(c1 + 1, row.len() - c1 - 1)
+                        let mut c2 = -1
+                        let mut z2 = 0
+                        while z2 < r2.len() { if r2.substr(z2, 1) == ":" { c2 = z2; break }; z2 = z2 + 1 }
+                        if c2 >= 0 {
+                            let L = to_int(r2.substr(0, c2))
+                            // rel = path minus G_ROOT + "/"
+                            let pre = G_ROOT + "/"
+                            let mut rel = path
+                            if path.len() > pre.len() && path.substr(0, pre.len()) == pre {
+                                rel = path.substr(pre.len(), path.len() - pre.len())
+                            }
+                            occ = occ + 1
+                            let dci = ensure_doc(rel)
+                            if year_ok == false {
+                                if near(split_ints(DYEAR[dci]), L, 12) { year_ok = true }
+                            }
+                            let fit_in = near(split_ints(DFIT[dci]), L, 5)
+                            let neg_in = near(split_ints(DNEG[dci]), L, 5)
+                            if fit_in && neg_in == false { lat = true }
+                        }
+                    }
+                }
+                ri = ri + 1
+            }
+        }
+
+        if lat { lattice_fail = lattice_fail + 1 }
+        if occ == 0 {
+            skipped = skipped + 1
+        } else if year_ok {
+            cited = cited + 1
+        } else {
+            ambiguous = ambiguous + 1
+        }
+        vi = vi + 1
+    }
+
+    let k = ambiguous + lattice_fail
+    println("  cited (year+id): " + str(cited) + "   skipped (0 occ): " + str(skipped) + "   ambiguous: " + str(ambiguous) + "   lattice_fail: " + str(lattice_fail))
+    println("")
+    if k > 0 {
+        println("__HEXA_MATTER_VENDOR_CITATION__ FAIL (" + str(VENDORS.len()) + " vendors, " + str(cited) + " cited with year+id, " + str(k) + " ambiguous)")
+        exit(1)
+    }
+    println("__HEXA_MATTER_VENDOR_CITATION__ PASS (" + str(VENDORS.len()) + " vendors, " + str(cited) + " cited with year+id, " + str(k) + " ambiguous)")
+}

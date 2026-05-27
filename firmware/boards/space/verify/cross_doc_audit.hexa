@@ -1,0 +1,276 @@
+#!hexa strict
+// hexa-space/verify/cross_doc_audit.hexa — cross-pillar consistency audit.
+//
+// Scans the canonical project documents and confirms shared anchors agree
+// across roadmap + 27 pillar specs + README + CHANGELOG + hexa.toml. The
+// shared anchors are: provenance headers (@canonical / @origin /
+// canon), the 4 falsifier IDs (F-SPACE-1..4), the 16-verb ops
+// SoT (aerospace_transport/spacex_intel_2026.md), and the sister-substrate
+// cross-cite set (hexa-cosmos / hexa-ufo / hexa-rtsc / hexa-cern).
+//
+// Run:
+//   hexa run verify/cross_doc_audit.hexa   # exit 0 = all anchors agree
+//
+// Authority: .roadmap.hexa_space §A + 27 pillar specs (frozen v1.0.0).
+//
+// Sentinel: __HEXA_SPACE_CROSSDOC__ PASS  (per recipe §4 invariants 1–5)
+//
+// Cost: $0 (file reads + string scan).
+//
+// @no-lock-needed
+// @resolver-bypass(reason="Pure local cross-doc audit; reads project docs only.")
+
+let HOME = env("HOME")
+
+fn _root() -> str {
+    let r = env("HEXA_SPACE_ROOT")
+    if r.len() > 0 { return r }
+    let pwd = exec("pwd").trim()
+    if pwd.len() > 0 { return pwd }
+    return HOME + "/core/hexa-space"  // @allow-devpath
+}
+
+let ROOT = _root()
+
+// ── doc paths ───────────────────────────────────────────────────────────
+
+let DOC_ROADMAP   = ROOT + "/.roadmap.hexa_space"
+let DOC_README    = ROOT + "/README.md"
+let DOC_CHANGELOG = ROOT + "/CHANGELOG.md"
+let DOC_HEXATOML  = ROOT + "/hexa.toml"
+let DOC_INTEL     = ROOT + "/aerospace_transport/spacex_intel_2026.md"
+
+// 27 verb spec md files, ordered by group
+let SPECS: [str] = [
+    // core (2)
+    "cosmic/hexa-cosmic.md",
+    "starship/hexa-starship.md",
+    // engineering (4)
+    "aerospace/aerospace.md",
+    "aerospace_transport/aerospace-transport.md",
+    "engineering/space-engineering.md",
+    "systems/space-systems.md",
+    // observation (3)
+    "astrodynamics/astrodynamics.md",
+    "astronomy/astronomy.md",
+    "obs_astronomy/observational-astronomy.md",
+    // life (2)
+    "astrobiology/astrobiology.md",
+    "medicine/space-medicine.md",
+    // operations (16)
+    "spaceship/spaceship.md",
+    "satellite/satellite.md",
+    "space_center/space_center.md",
+    "space_ai_center/space_ai_center.md",
+    "space_datacenter/space_datacenter.md",
+    "falcon/falcon.md",
+    "dragon/dragon.md",
+    "recovery/recovery.md",
+    "orbital_depot/orbital_depot.md",
+    "hls/hls.md",
+    "starlink/starlink.md",
+    "rideshare/rideshare.md",
+    "station/station.md",
+    "mars_base/mars_base.md",
+    "direct_to_cell/direct_to_cell.md",
+    "mondaloy/mondaloy.md",
+]
+
+let OPS_VERBS: [str] = [
+    "spaceship", "satellite", "space_center", "space_ai_center",
+    "space_datacenter", "falcon", "dragon", "recovery",
+    "orbital_depot", "hls", "starlink", "rideshare",
+    "station", "mars_base", "direct_to_cell", "mondaloy",
+]
+
+let FALSIFIERS: [str] = ["F-SPACE-1", "F-SPACE-2", "F-SPACE-3", "F-SPACE-4"]
+
+// ── helpers ─────────────────────────────────────────────────────────────
+
+fn _read(p: str) -> str {
+    if file_exists(p) == false { return "" }
+    return read_file(p)
+}
+
+fn _has(t: str, s: str) -> bool {
+    if t.len() == 0 { return false }
+    return t.find(s) >= 0
+}
+
+fn _any(t: str, ss: [str]) -> bool {
+    for s in ss { if _has(t, s) { return true } }
+    return false
+}
+
+let mut RUN = 0
+let mut FAIL = 0
+let mut FAILURES = []
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    if ok {
+        println("  [PASS] " + label)
+        if detail.len() > 0 { println("         · " + detail) }
+    } else {
+        FAIL = FAIL + 1
+        FAILURES.push(label + " :: " + detail)
+        println("  [FAIL] " + label)
+        if detail.len() > 0 { println("         · " + detail) }
+    }
+}
+
+// ── checks ──────────────────────────────────────────────────────────────
+
+// Check 1: every verb spec has a provenance header
+fn check_provenance_headers() {
+    let mut missing: [str] = []
+    for rel in SPECS {
+        let txt = _read(ROOT + "/" + rel)
+        let ok = _any(txt, ["@canonical", "@origin", "canon"])
+        if !ok { missing = missing + [rel] }
+    }
+    _check(missing.len() == 0,
+           "27/27 verb specs carry @canonical / @origin / canon provenance",
+           "missing: " + missing.join(", "))
+}
+
+// Check 2: 16 operations specs cite the SpaceX intel SoT
+fn check_ops_cite_intel() {
+    let mut missing: [str] = []
+    for v in OPS_VERBS {
+        let txt = _read(ROOT + "/" + v + "/" + v + ".md")
+        let ok = _any(txt, ["spacex_intel_2026.md", "spacex_intel_2026"])
+        if !ok { missing = missing + [v] }
+    }
+    _check(missing.len() == 0,
+           "16/16 ops specs cite aerospace_transport/spacex_intel_2026.md",
+           "missing: " + missing.join(", "))
+}
+
+// Check 3: roadmap §A.4 preregisters all 4 falsifiers
+fn check_roadmap_falsifiers() {
+    let txt = _read(DOC_ROADMAP)
+    if txt.len() == 0 { return }
+    for f in FALSIFIERS {
+        _check(_has(txt, f),
+               "roadmap §A.4 preregisters " + f,
+               ".roadmap.hexa_space")
+    }
+}
+
+// Check 4: roadmap names sister substrates (hexa-cosmos / hexa-ufo / hexa-rtsc)
+fn check_roadmap_sisters() {
+    let txt = _read(DOC_ROADMAP)
+    if txt.len() == 0 { return }
+    let sisters = ["hexa-cosmos", "hexa-ufo", "hexa-rtsc"]
+    for s in sisters {
+        _check(_has(txt, s),
+               "roadmap names sister substrate " + s,
+               ".roadmap.hexa_space header")
+    }
+}
+
+// Check 5: README declares the 5 groups + 27 verb total consistently
+fn check_readme_group_count() {
+    let txt = _read(DOC_README)
+    if txt.len() == 0 {
+        _check(false, "README.md present", DOC_README)
+        return
+    }
+    let groups = ["core", "engineering", "observation", "life", "operations"]
+    let mut hits = 0
+    for g in groups { if _has(txt, g) { hits = hits + 1 } }
+    _check(hits == 5,
+           "README references all 5 groups (core/engineering/observation/life/operations)",
+           "hits = " + str(hits) + "/5")
+    _check(_any(txt, ["27 verb", "27-verb", "27 / 5"]),
+           "README cites 27-verb / 5-group substrate count", "")
+}
+
+// Check 6: CHANGELOG documents both v1.0.0 baseline + operations extension
+fn check_changelog_milestones() {
+    let txt = _read(DOC_CHANGELOG)
+    if txt.len() == 0 {
+        _check(false, "CHANGELOG.md present", DOC_CHANGELOG)
+        return
+    }
+    _check(_has(txt, "[1.0.0]"),
+           "CHANGELOG declares [1.0.0] baseline",
+           "anchor: ## [1.0.0]")
+    _check(_any(txt, ["operations", "16 new verbs", "16 ops"]),
+           "CHANGELOG documents operations extension",
+           "16-verb operations group")
+}
+
+// Check 7: hexa.toml [closure] verbs_total matches the 27 figure
+fn check_hexa_toml_verbs_total() {
+    let txt = _read(DOC_HEXATOML)
+    if txt.len() == 0 {
+        _check(false, "hexa.toml present", DOC_HEXATOML)
+        return
+    }
+    _check(_any(txt, ["verbs_total = 27", "verbs_total=27"]),
+           "hexa.toml [closure] verbs_total = 27", "")
+    _check(_any(txt, ["verbs_canonical = 11", "verbs_canonical=11"]),
+           "hexa.toml [closure] verbs_canonical = 11", "")
+    _check(_any(txt, ["verbs_extension = 16", "verbs_extension=16"]),
+           "hexa.toml [closure] verbs_extension = 16", "")
+}
+
+// Check 8: the SoT itself (spacex_intel_2026.md) exists and is non-trivial
+fn check_intel_sot_present() {
+    let txt = _read(DOC_INTEL)
+    let ok = txt.len() > 1000
+    _check(ok,
+           "aerospace_transport/spacex_intel_2026.md present and non-trivial (>1KB)",
+           "size = " + str(txt.len()) + " bytes")
+}
+
+// Check 9: hexa.toml [modules].hexa enumerates the 27 specs (count anchor)
+fn check_hexa_toml_modules_enumeration() {
+    let txt = _read(DOC_HEXATOML)
+    if txt.len() == 0 { return }
+    let mut hits = 0
+    for rel in SPECS {
+        if _has(txt, rel) { hits = hits + 1 }
+    }
+    _check(hits == 27,
+           "hexa.toml [modules].hexa enumerates all 27 verb specs",
+           "hits = " + str(hits) + "/27")
+}
+
+// ── main ────────────────────────────────────────────────────────────────
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-space — cross-doc audit (roadmap + 27 specs + README + CHANGELOG)")
+    println("========================================================================")
+    println("  root: " + ROOT)
+    println("")
+
+    check_provenance_headers()
+    check_ops_cite_intel()
+    check_intel_sot_present()
+    println("")
+    check_roadmap_falsifiers()
+    check_roadmap_sisters()
+    println("")
+    check_readme_group_count()
+    check_changelog_milestones()
+    println("")
+    check_hexa_toml_verbs_total()
+    check_hexa_toml_modules_enumeration()
+
+    println("========================================================================")
+    let pass_n = RUN - FAIL
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("  FAILURES:")
+        for f in FAILURES { println("    ✗ " + f) }
+        println("__HEXA_SPACE_CROSSDOC__ FAIL")
+        exit(1)
+    }
+    println("  All cross-pillar anchors agree across roadmap + 27 specs + meta docs.")
+    println("__HEXA_SPACE_CROSSDOC__ PASS")
+    exit(0)
+}

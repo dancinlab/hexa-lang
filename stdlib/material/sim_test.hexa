@@ -1,0 +1,80 @@
+// sim_test.hexa — falsifier for stdlib/material/sim eliashberg moments (#4).
+//
+// Analytic anchor: a RECTANGULAR α²F(ω) = c on [a,b], 0 elsewhere, has
+// closed-form moments (the c cancels in ω_log / ω̄₂):
+//   λ     = 2c·ln(b/a)
+//   ω_log = exp[(ln²b - ln²a) / (2 ln(b/a))]   = √(a·b) for the [a,b] window
+//   ω̄₂    = sqrt[(b² - a²) / (2 ln(b/a))]
+// so a fine-grid trapezoid must converge to them. Plus an α²F → moments →
+// allen_dynes_full round-trip and the malformed-input guards.
+//
+// Run:  hexa build stdlib/material/sim_test.hexa -o /tmp/sim_test && /tmp/sim_test
+// PASS: exits printing "sim_test PASS".
+
+use "stdlib/material/sim"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn _rel(got: float, want: float) -> float {
+    let d = _abs(got - want)
+    let w = _abs(want)
+    if w < 1e-12 { return d }
+    return d / w
+}
+
+fn _ck(name: str, got: float, want: float, tol: float) -> int {
+    if _rel(got, want) <= tol {
+        println("PASS " + name + " (got " + to_string(got) + ")")
+        return 0
+    }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want))
+    return 1
+}
+
+fn main() {
+    let mut fails = 0
+
+    // rectangular α²F: c = 0.5 on [1, 2], 1001-point uniform grid.
+    let a = 1.0
+    let b = 2.0
+    let c = 0.5
+    let npts = 1001
+    let mut omega: [float] = []
+    let mut a2f: [float] = []
+    let step = (b - a) / to_float(npts - 1)
+    let mut i = 0
+    while i < npts {
+        omega.push(a + step * to_float(i))
+        a2f.push(c)
+        i = i + 1
+    }
+
+    let m = eliashberg_moments_from_a2f(omega, a2f)
+    let ln2 = 0.6931471805599453
+    let lam_want = 2.0 * c * ln2                 // 0.6931472
+    let wlog_want = 1.4142135623730951           // √(1·2) = √2
+    let w2_want = sqrt(3.0 / (2.0 * ln2))        // √(3/(2 ln2)) ≈ 1.471068
+    fails = fails + _ck("rect lambda", m[0], lam_want, 1e-4)
+    fails = fails + _ck("rect omega_log", m[1], wlog_want, 1e-4)
+    fails = fails + _ck("rect omega_bar2", m[2], w2_want, 1e-4)
+
+    // sanity: a delta-like single-spike α²F → ω_log ≈ ω̄₂ ≈ spike frequency.
+    // narrow triangle centred at 5.0 (grid 4.9, 5.0, 5.1).
+    let sp = eliashberg_moments_from_a2f([4.9, 5.0, 5.1], [0.0, 1.0, 0.0])
+    fails = fails + _ck("spike omega_log≈5", sp[1], 5.0, 2e-3)
+    fails = fails + _ck("spike omega_bar2≈5", sp[2], 5.0, 2e-3)
+
+    // malformed-input guards → sentinel [-1,-1,-1].
+    let bad1 = eliashberg_moments_from_a2f([1.0], [0.5])           // < 2 points
+    if bad1[0] == 0.0 - 1.0 { println("PASS guard <2pts") } else { println("FAIL guard <2pts"); fails = fails + 1 }
+    let bad2 = eliashberg_moments_from_a2f([1.0, 2.0], [0.5])      // length mismatch
+    if bad2[0] == 0.0 - 1.0 { println("PASS guard len-mismatch") } else { println("FAIL guard len-mismatch"); fails = fails + 1 }
+    let bad3 = eliashberg_moments_from_a2f([0.0, 1.0], [0.5, 0.5]) // ω ≤ 0
+    if bad3[0] == 0.0 - 1.0 { println("PASS guard omega<=0") } else { println("FAIL guard omega<=0"); fails = fails + 1 }
+
+    if fails == 0 {
+        println("sim_test PASS")
+    } else {
+        println("sim_test FAIL — " + to_string(fails) + " case(s)")
+    }
+}

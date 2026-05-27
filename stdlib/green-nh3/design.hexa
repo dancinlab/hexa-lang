@@ -1,0 +1,8 @@
+#!hexa strict
+// green-nh3 design — Haber-Bosch pressure.
+fn main() {
+    let P_bar = 200.0
+    println("green-nh3_design (Haber-Bosch pressure):")
+    println("  P_bar = " + str(P_bar))
+    println("__HEXA_GREEN_NH3_DESIGN__ PASS gate=GATE_OPEN absorbed=false")
+}

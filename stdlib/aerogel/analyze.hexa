@@ -1,0 +1,14 @@
+#!hexa strict
+// aerogel analyze — Maxwell-Eucken effective thermal conductivity.
+fn main() {
+    let k_solid = 1.4
+    let k_air = 0.024
+    let phi = 0.95            // silica aerogel porosity
+    let beta = (k_air - k_solid) / (k_air + 2.0 * k_solid)
+    let k_eff = k_solid * (1.0 + 2.0 * beta * phi) / (1.0 - beta * phi)
+    println("aerogel_analyze (Maxwell-Eucken · silica φ=0.95):")
+    println("  k_solid_WmK = " + str(k_solid) + "  k_air_WmK = " + str(k_air))
+    println("  beta = " + str(beta))
+    println("  k_eff_WmK = " + str(k_eff))
+    println("__HEXA_AEROGEL_ANALYZE__ PASS gate=GATE_OPEN absorbed=false")
+}

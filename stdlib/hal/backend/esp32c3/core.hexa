@@ -1,0 +1,121 @@
+#!hexa strict
+// stdlib/hal/backend/esp32c3/core.hexa — ESP32-C3 core backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved. ★ FINAL per-vendor
+// peripheral — completes HW-12 coverage for esp32c3.
+//
+// Target:    ESP32-C3 RV32IMC RISC-V single-core @ 160 MHz with NO FPU
+//            (RV32IMC = base + multiply + compressed; no F or D).
+//            16 KB I-cache + 16 KB D-cache via EXT_MEM controller.
+// Chip ref:  ESP32-C3 TRM §3 + §10 (RTC_CNTL) + §11 (cache) +
+//            RISC-V Privileged ISA §3 (Machine-mode CSRs) + RISC-V
+//            Unprivileged ISA §10 (M extension) + RV32IMC Standard.
+// Surface:   esp32c3_core_{now_us,sleep_us,panic,critical_enter,critical_exit,
+//            cache_invalidate,reset}(...)
+// Dispatch:  core.hexa selects this via cfg-flag.
+//
+// Architecture-specific (RISC-V RV32IMC):
+//
+//   Standard CSRs (Machine-mode):
+//     mhartid (0xF14)             hardware thread ID
+//     mstatus (0x300)             status: MIE bit 3 = global IRQ enable
+//     mie     (0x304)             interrupt enable mask
+//     mip     (0x344)             interrupt pending
+//     mtvec   (0x305)             trap vector base + mode
+//     mcause  (0x342)             trap cause code
+//     mepc    (0x341)             saved PC for trap return
+//     mcycle  (0xB00)             cycle counter low 32 bits
+//     mcycleh (0xB80)             cycle counter high 32 bits (64-bit total)
+//     mtime   (memory-mapped)     standard RV machine timer (ESP32-C3
+//                                  exposes this via SYSTIMER block @ 0x60023000
+//                                  rather than as a CSR).
+//
+//   Espressif-specific CSRs:
+//     mintstatus (0x346)          per-Espressif-IRQ status
+//     mxstatus (0x7C1)            extended status (vendor)
+//
+//   EXT_MEM cache controller — 0x600C4000:
+//     EXTMEM_ICACHE_CTRL_REG      I-cache enable + size
+//     EXTMEM_ICACHE_INVALIDATE    write 1 to invalidate
+//     EXTMEM_DCACHE_*             D-cache equivalents
+//
+//   RTC_CNTL @ 0x60008000 — sleep + reset (same family as ESP32):
+//     RTC_CNTL_OPTIONS0_REG       SW_SYS_RST bit
+//     RTC_CNTL_DSLEEP_TIMER0/1
+//
+// Critical section: csrrci a0, mstatus, 0x8 (clear MIE bit; return prior
+// mstatus.MIE in a0). Restore via csrw mstatus, prior.
+//
+// Cycle timing: rdcycle / rdcycleh (or csrr a0, mcycle).
+//
+// Sleep: wfi instruction (RISC-V wait-for-interrupt; clock-gates core
+// until next IRQ).
+
+let MODULE_NAME = "esp32c3_core"
+let SIGMA_SLOT  = 0
+let PHI_KIND    = "digital"
+
+let CSR_MHARTID  = 0xF14
+let CSR_MSTATUS  = 0x300
+let CSR_MIE      = 0x304
+let CSR_MIP      = 0x344
+let CSR_MTVEC    = 0x305
+let CSR_MCAUSE   = 0x342
+let CSR_MEPC     = 0x341
+let CSR_MCYCLE   = 0xB00
+let CSR_MCYCLEH  = 0xB80
+
+let DR_REG_EXTMEM_BASE   = 0x600C4000
+let DR_REG_SYSTIMER_BASE = 0x60023000
+let DR_REG_RTCCNTL_BASE  = 0x60008000
+
+let RTC_CNTL_OPTIONS0_REG = 0x000
+
+let SYSCLK_HZ = 160000000
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn esp32c3_core_now_us() -> int {
+    // STUB: csrr a0, mcycle (low 32 bits); divide by SYSCLK/1e6 for µs.
+    //       For long-term: read SYSTIMER block (0x60023000, 52-bit @ 16 MHz).
+    return 0
+}
+
+fn esp32c3_core_sleep_us(us: int) {
+    if us <= 0 { return }
+    // STUB: program SYSTIMER alarm; csrsi mie, ...; wfi (wait-for-interrupt).
+}
+
+fn esp32c3_core_panic(msg: str) {
+    println("[esp32c3_core PANIC] " + msg)
+    // STUB: write msg via UART0; ebreak (RISC-V breakpoint)
+}
+
+fn esp32c3_core_critical_enter() -> int {
+    // STUB: csrrci a0, mstatus, 0x8 (clear MIE; a0 = prior mstatus)
+    return 0
+}
+
+fn esp32c3_core_critical_exit(prior: int) {
+    // STUB: csrw mstatus, prior
+}
+
+fn esp32c3_core_cache_invalidate() -> bool {
+    // STUB: write EXTMEM_ICACHE_INVALIDATE = 1; spin on completion
+    return true
+}
+
+fn esp32c3_core_reset() {
+    // STUB: write RTC_CNTL_OPTIONS0_REG with SW_SYS_RST bit
+}
+
+fn esp32c3_core_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32c3_core sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  RV32IMC RISC-V @ " + str(SYSCLK_HZ) + " Hz; NO FPU; 16K I + 16K D cache")
+    println("  CSRs: mhartid/mstatus/mie/mtvec/mcycle (RV standard)")
+    println("  cache via EXT_MEM=" + str(DR_REG_EXTMEM_BASE) + "; SYSTIMER for long-term µs")
+}

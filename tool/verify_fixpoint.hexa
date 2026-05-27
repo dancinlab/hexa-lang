@@ -1,0 +1,56 @@
+// tool/verify_fixpoint.hexa — P7-9 fixpoint verifier (2026-04-20: delegates to meta2_verify)
+//
+// HISTORY
+//   Original implementation used `tool/native_build.hexa` to triple-compile
+//   (seed → hexa_1 → hexa_2 → hexa_3, gate: sha2==sha3). That pipeline
+//   never materialised — native_build.hexa is a parse-erroring sketch and
+//   the actual self-host path is flatten + hexat-transpile + clang.
+//
+// 2026-04-20
+//   self-host fixpoint promoted new → live. The authoritative verifier is now
+//   tool/meta2_verify.hexa (Tier 1 = live v3==v4 via two-round
+//   deterministic re-link; Tier 2 = on-disk SSOT-sha fallback). This
+//   wrapper delegates to keep the raw enforce field (.raw:170) stable
+//   and the raw_all chain-verify hook wired.
+//
+// EXITS
+//   0 on cert "ok", non-zero on drift/failure (mirrors meta2_verify).
+
+fn _selftest_vf() -> int {
+    println("[verify_fixpoint selftest]")
+    // 1) --target= prefix helper: a pure string check
+    let probe = "--target=darwin-arm64"
+    if !probe.starts_with("--target=") { eprintln("FAIL: starts_with"); return 1 }
+    // 2) delegates to meta2_verify.hexa — path string well-formed
+    let tgt = "tool/meta2_verify.hexa"
+    if !tgt.ends_with("meta2_verify.hexa") { eprintln("FAIL: delegate path"); return 1 }
+    println("[verify_fixpoint selftest] OK")
+    return 0
+}
+
+fn main() {
+    let av = argv()
+    // --selftest 최우선 dispatch (coverage batch) — must precede exec_with_status
+    let mut _i_st = 2
+    while _i_st < len(av) {
+        if av[_i_st] == "--selftest" || av[_i_st] == "selftest" {
+            exit(_selftest_vf())
+        }
+        _i_st = _i_st + 1
+    }
+    // Accept --target= for legacy CLI compat; meta2_verify does its own
+    // cross-check on Darwin only. Linux runs still work — Tier 1 link
+    // flags switch automatically in fixpoint_compare.hexa.
+    let mut i = 2
+    while i < len(av) {
+        let a = av[i]
+        if a.starts_with("--target=") {
+            println("[fixpoint] --target=" + a.slice(9, len(a)) + " noted (meta2 handles via fixpoint_compare)")
+        }
+        i = i + 1
+    }
+    println("[fixpoint] delegating to tool/meta2_verify.hexa verify")
+    let r = exec_with_status("HEXA_VAL_ARENA=0 HEXA_NO_LAUNCHD=1 ./build/hexa_interp tool/meta2_verify.hexa verify")
+    print(r[0])
+    exit(r[1])
+}

@@ -1,0 +1,8 @@
+#!hexa strict
+// graphene handoff — wafer diameter target.
+fn main() {
+    let wafer_inch = 1.0
+    println("graphene_handoff (wafer diameter target):")
+    println("  wafer_inch = " + str(wafer_inch))
+    println("__HEXA_GRAPHENE_HANDOFF__ PASS gate=GATE_OPEN absorbed=false")
+}

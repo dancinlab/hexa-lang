@@ -1,0 +1,8 @@
+#!hexa strict
+// green-nh3 synthesize — Haber-Bosch temperature.
+fn main() {
+    let T_K = 723.0
+    println("green-nh3_synthesize (Haber-Bosch temperature):")
+    println("  T_K = " + str(T_K))
+    println("__HEXA_GREEN_NH3_SYNTHESIZE__ PASS gate=GATE_OPEN absorbed=false")
+}

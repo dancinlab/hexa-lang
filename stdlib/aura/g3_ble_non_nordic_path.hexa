@@ -1,0 +1,151 @@
+#!hexa strict
+// stdlib/aura/g3_ble_non_nordic_path.hexa — `aura + G3 brk` BLE 5.x
+// non-Nordic SoC + open RISC-V stack workflow path declaration.
+//
+// CONTEXT: aura.md §"Open-gap" G3:
+//   "BLE 5.x SoC Nordic 의존 줄이기 — RISC-V BLE SoC 시야."
+//
+// Nordic Semiconductor dominates the medical-wearable BLE 5.x market
+// (nRF52/53/54 families). The breakthrough goal is to diversify the
+// supply chain + reduce single-vendor risk + enable fully open
+// BLE 5.x SoC + stack alternatives, particularly via RISC-V.
+//
+// Honesty (g3 · @D d1 · @D d2):
+//   * absorbed=false PERMANENTLY — roadmap, NOT a built RISC-V BLE SoC.
+//   * scope_caveat: BLE SIG qualification + radio certification (FCC
+//     15.247 / ETSI EN 300 328) are independent of SoC silicon path.
+//
+// Sentinels:
+//   __HEXA_AURA_G3_BLE_NON_NORDIC_PATH__ PASS
+//   AURA_G3_BLE_NON_NORDIC_PATH_OK gate=GATE_OPEN absorbed=false
+//
+// Pattern: mirrors stdlib/aura/g1_mri_safety_path.hexa + g2.
+
+let VERSION       = "0.1.0"
+let MODULE        = "aura-g3-ble-non-nordic-path"
+let GEOMETRY_ID   = "aura_g3_ble_non_nordic_path_v1"
+let RECORD_KIND   = "aura_g3_ble_non_nordic_path_record"
+
+fn _problem_block() -> [str] {
+    return [
+        "Nordic Semiconductor dominates medical BLE 5.x SoC market (nRF52/53/54)",
+        "single-vendor risk - lockstep BLE feature dependency on Nordic roadmap",
+        "supply-chain concentration - geopolitical + allocation risk",
+        "Nordic SoftDevice is closed firmware blob (BLE controller portion)",
+        "alternative SoCs (TI CC2640, Silicon Labs EFR32, NXP) also proprietary",
+        "open RISC-V BLE SoC ecosystem nascent - few production-ready options",
+    ]
+}
+
+fn _open_capability_block() -> [str] {
+    return [
+        "Apache NimBLE - open BLE 5.x host + controller (Apache 2.0)",
+        "Zephyr Bluetooth stack - open BLE host + controller (Apache 2.0)",
+        "Bumble (Google) - open Python BLE testing stack",
+        "RISC-V cores - SiFive, Andes, OpenHW (CV32E40P), Western Digital SweRV",
+        "open BLE PHY IP - emerging (Espressif ESP32-C2/C3/C6 partial RISC-V)",
+        "Pine64 PineTime - open hardware smartwatch (nRF52 - still Nordic but open BSP)",
+    ]
+}
+
+fn _gap_analysis_block() -> [str] {
+    return [
+        "missing_artifact_1: fully open RISC-V BLE 5.x SoC with BT SIG-qualified controller",
+        "missing_artifact_2: open RF PHY IP at BLE 2.4 GHz with FCC/ETSI cert path",
+        "missing_artifact_3: production-grade open BLE controller (NimBLE/Zephyr LL)",
+        "missing_artifact_4: ARM Cortex-M alternative apps core - SiFive E21 / E76 / Andes",
+        "missing_artifact_5: open BSP + driver suite at Nordic Connect SDK parity",
+        "missing_artifact_6: 2nd-source supply chain for medical-grade certified silicon",
+    ]
+}
+
+fn _breakthrough_path_block() -> [str] {
+    return [
+        "stage_1: ESP32-C6 (RISC-V + BLE 5.x) evaluation as AURA-100 alt SoC",
+        "stage_2: NimBLE/Zephyr LL controller production-grade audit + qualification path",
+        "stage_3: open RF PHY IP integration with RISC-V apps core (academic + industry)",
+        "stage_4: BT SIG qualification of open NimBLE controller (Declaration + QDID)",
+        "stage_5: medical-grade silicon production (open or licensed RISC-V + open stack)",
+        "stage_6: 2nd-source supply chain for FDA 510(k) submissions (Nordic + RISC-V)",
+    ]
+}
+
+fn _precedent_block() -> [str] {
+    return [
+        "Espressif ESP32-C6 - RISC-V + Wi-Fi 6 + BLE 5.x (production · 2023+)",
+        "Espressif ESP32-C2/C3 - RISC-V + BLE 5.x (production · cost-optimized)",
+        "Bouffalo Lab BL602 - RISC-V + BLE 5.x (production · Pine64 PineCone)",
+        "Apache NimBLE - production BLE 5.x controller deployed on Apache Mynewt OS",
+        "Zephyr Bluetooth controller - production BLE stack with multi-SoC support",
+        "no fully open RISC-V + open-stack medical-grade SoC exists as of 2026",
+    ]
+}
+
+fn _risk_cost_block() -> [str] {
+    return [
+        "technical_risk: open RISC-V BLE controllers lack medical-grade clinical track record",
+        "regulatory_risk: BT SIG qualification possible (NimBLE qualified) · FDA OK with non-Nordic",
+        "ecosystem_risk: tooling parity with nRF Connect SDK takes years",
+        "timeline_estimate: 1-3 years for ESP32-C6 alt-SoC · 3-5 years for fully open RISC-V",
+        "cost_estimate: $100K-$500K (alt-SoC firmware port + BT SIG qual + supply audit)",
+        "funding_options: corporate sponsorship + RISC-V International + open-source consortia",
+    ]
+}
+
+fn _scope_caveats() -> [str] {
+    return [
+        "G3 BLE 5.x non-Nordic path is a ROADMAP declaration, NOT a built RISC-V BLE SoC.",
+        "BT SIG qualification + FCC 15.247/ETSI EN 300 328 cert are independent of SoC silicon.",
+        "ESP32-C6 (Espressif) is the most production-ready 2nd-source TODAY for BLE 5.x + RISC-V.",
+        "absorbed=false PERMANENTLY (g3) - aspirational, NEVER a vendor commitment.",
+        "@D d2 honest: brk path concrete · 1-3y near-term (ESP32-C6) · 3-5y long-term (fully open RISC-V).",
+    ]
+}
+
+fn _emit_block(label: str, lines: [str]) {
+    print("# [" + label + "]")
+    let n = lines.len()
+    let mut i = 0
+    while i < n {
+        print("#   - " + lines[i])
+        i = i + 1
+    }
+    print("#")
+}
+
+fn _emit_header() {
+    print("# AURA G3 brk - BLE 5.x non-Nordic + open RISC-V SoC path declaration")
+    print("# device_target = post-aural / temporal-bone clip BCI")
+    print("# version = " + VERSION)
+    print("# ringfence: NOT a SoC - a roadmap")
+    print("#")
+    _emit_block("problem",            _problem_block())
+    _emit_block("open_capability",    _open_capability_block())
+    _emit_block("gap_analysis",       _gap_analysis_block())
+    _emit_block("breakthrough_path",  _breakthrough_path_block())
+    _emit_block("precedent",          _precedent_block())
+    _emit_block("risk_cost",          _risk_cost_block())
+}
+
+fn _emit_caveats() {
+    let c = _scope_caveats()
+    let n = c.len()
+    let mut i = 0
+    while i < n {
+        print("# scope_caveat: " + c[i])
+        i = i + 1
+    }
+}
+
+fn main() {
+    _emit_header()
+    _emit_caveats()
+
+    print("AURA_G3_BLE_NON_NORDIC_PATH_OK record_kind=" + RECORD_KIND
+        + " geometry_id=" + GEOMETRY_ID
+        + " gate=GATE_OPEN absorbed=false"
+        + " version=" + VERSION
+        + " stages=6 timeline=1-5y cost=0.1-0.5M")
+
+    print("__HEXA_AURA_G3_BLE_NON_NORDIC_PATH__ PASS")
+}

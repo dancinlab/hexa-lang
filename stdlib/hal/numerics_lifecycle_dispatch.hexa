@@ -1,0 +1,243 @@
+#!hexa strict
+// stdlib/hal/numerics_lifecycle_dispatch.hexa — F-HAL-2 T2 numerical.
+//
+// Closes the T2 (numerical / fixture) tier of falsifier F-HAL-2
+// (4-stage τ-lifecycle per peripheral, README.md "Falsifier preregister").
+//
+// T1 (calc_lifecycle.hexa) closes the algebraic identity:
+//
+//   τ(6) = 4 ⇒ |LIFECYCLE_STAGES| = 4 ∧ ≥3-of-4 lifecycle fns/module
+//
+// T2 (this script) cross-checks the dispatch table NUMERICALLY by
+// reading every module's source and SCORING each module's lifecycle
+// surface, then summing across the σ=12 modules. The aggregate score
+// must clear two thresholds:
+//
+//   • per-module score ≥ 3 of 4 stages         (matches T1 floor)
+//   • Σ stage_count over 12 modules ≥ 12·3 = 36
+//   • _report present on EVERY module (100% report-stage coverage)
+//
+// Convenience-merge accommodation (matches T1 calc_lifecycle):
+//   - `<m>_open` counts as both `<m>_start` AND part of the start-serve
+//     fused convenience surface (gives credit when literal _start is
+//     absent).
+//   - intr is exempt from `_start` (its enable-stage is `intr_enable`).
+//
+// Domain-verb stage-2 mapping (the "serve" stage is domain-specific):
+//   gpio  → write|read|toggle
+//   i2c   → write|read|transfer
+//   spi   → transfer|write|read
+//   uart  → write|read
+//   adc   → read
+//   dac   → write
+//   pwm   → set_duty|set_freq
+//   timer → tick|elapsed
+//   intr  → enable|fire
+//   dma   → run|transfer
+//   rtc   → set|get
+//   core  → serve (degenerate; always-on)
+//
+// PASS = aggregate score ≥ 36 ∧ every module has _report ∧ per-module
+//        score ≥ 3.
+// FAIL = any falsifier above trips.
+//
+// Run:
+//   hexa run stdlib/hal/numerics_lifecycle_dispatch.hexa
+//
+// Cost: $0 (12 file-reads + grep; no compilation).
+
+// ─── n=6 lattice constants ────────────────────────────────────────────
+
+let N        = 6
+let SIGMA_6  = 12
+let TAU_6    = 4
+
+// Aggregate floor: every module clears 3-of-4 ⇒ sum ≥ 12·3 = 36.
+let AGGREGATE_FLOOR = SIGMA_6 * (TAU_6 - 1)   // = 36
+
+// ─── module roster (canonical 12) ────────────────────────────────────
+
+let MODULES = [
+    "core", "gpio", "i2c", "spi", "uart",
+    "adc", "dac",
+    "pwm", "timer", "intr", "dma", "rtc"
+]
+
+// Per-module domain-verb fallback list — when literal `_serve` is
+// absent, ANY of these counts as the serve-stage surface.
+fn _serve_verbs(m: str) -> [str] {
+    if m == "gpio"  { return ["write", "read", "toggle"] }
+    if m == "i2c"   { return ["write", "read", "transfer"] }
+    if m == "spi"   { return ["transfer", "write", "read"] }
+    if m == "uart"  { return ["write", "read"] }
+    if m == "adc"   { return ["read"] }
+    if m == "dac"   { return ["write"] }
+    if m == "pwm"   { return ["set_duty", "set_freq"] }
+    if m == "timer" { return ["tick", "elapsed", "now_us"] }
+    if m == "intr"  { return ["enable", "fire", "trigger"] }
+    if m == "dma"   { return ["run", "transfer"] }
+    if m == "rtc"   { return ["set", "get"] }
+    if m == "core"  { return ["serve"] }
+    return []
+}
+
+// ─── check harness ───────────────────────────────────────────────────
+
+let mut RUN  = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ─── helpers ─────────────────────────────────────────────────────────
+
+fn _root() -> str {
+    let env_root = env("HEXA_HAL_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _exists(p: str) -> bool {
+    let r = exec("[ -f \"" + p + "\" ] && echo y || echo n").trim()
+    return r == "y"
+}
+
+fn _has_fn(src: str, name: str) -> bool {
+    return src.contains("fn " + name + "(")
+}
+
+// Score a module's lifecycle surface against the τ=4 dispatch table.
+// Returns (score, has_report) — a 2-tuple encoded as a [int].
+//
+//   score increments:
+//     +1 for fn <m>_configure(...)
+//     +1 for fn <m>_start(...)  OR  fn <m>_open(...)  OR  intr-exempt
+//     +1 for fn <m>_serve(...)  OR  fn <m>_open(...)  OR  any _serve_verbs
+//     +1 for fn <m>_report(...)
+//
+// returns [score, has_report_int]
+fn _score_module(src: str, m: str) -> [int] {
+    let mut score = 0
+    let cfg = _has_fn(src, m + "_configure")
+    let st  = _has_fn(src, m + "_start")
+    let sv  = _has_fn(src, m + "_serve")
+    let rp  = _has_fn(src, m + "_report")
+    let op  = _has_fn(src, m + "_open")
+    let intr_exempt = (m == "intr") && _has_fn(src, m + "_enable")
+
+    if cfg { score = score + 1 }
+
+    if st || op || intr_exempt { score = score + 1 }
+
+    if sv || op {
+        score = score + 1
+    } else {
+        // try domain verbs
+        let mut hit = false
+        for v in _serve_verbs(m) {
+            if _has_fn(src, m + "_" + v) { hit = true; break }
+        }
+        if hit { score = score + 1 }
+    }
+
+    if rp { score = score + 1 }
+
+    let r = if rp { 1 } else { 0 }
+    return [score, r]
+}
+
+// ─── checks ──────────────────────────────────────────────────────────
+
+fn check_aggregate_score(root: str) {
+    let mut total = 0
+    let mut detail = ""
+    for m in MODULES {
+        let p = root + "/stdlib/hal/" + m + ".hexa"
+        if !_exists(p) { detail = detail + m + "(?) "; continue }
+        let src = read_file(p)
+        let pair = _score_module(src, m)
+        let s = pair[0]
+        total = total + s
+        detail = detail + m + "=" + str(s) + " "
+    }
+    _check(total >= AGGREGATE_FLOOR,
+           "Σ stage-coverage ≥ 12·(τ-1) = " + str(AGGREGATE_FLOOR),
+           "got " + str(total) + " (" + detail.trim() + ")")
+}
+
+fn check_per_module_floor(root: str) {
+    let mut bad = ""
+    let mut ok_n = 0
+    for m in MODULES {
+        let p = root + "/stdlib/hal/" + m + ".hexa"
+        if !_exists(p) { bad = bad + m + "(missing) "; continue }
+        let src = read_file(p)
+        let pair = _score_module(src, m)
+        let s = pair[0]
+        if s >= 3 { ok_n = ok_n + 1 }
+        else { bad = bad + m + "(s=" + str(s) + ") " }
+    }
+    _check(bad.len() == 0,
+           "every module ≥ 3/4 lifecycle fns",
+           if bad.len() > 0 { "below floor: " + bad } else { "all 12 ≥ 3/4 (got " + str(ok_n) + "/12)" })
+}
+
+fn check_report_coverage(root: str) {
+    let mut n_report = 0
+    let mut missing = ""
+    for m in MODULES {
+        let p = root + "/stdlib/hal/" + m + ".hexa"
+        if !_exists(p) { missing = missing + m + "(file?) "; continue }
+        let src = read_file(p)
+        let pair = _score_module(src, m)
+        if pair[1] == 1 { n_report = n_report + 1 }
+        else { missing = missing + m + " " }
+    }
+    _check(n_report == SIGMA_6,
+           "100% _report-stage coverage across σ=12 modules",
+           "got " + str(n_report) + "/12" + (if missing.len() > 0 { "; missing: " + missing } else { "" }))
+}
+
+fn check_stage_cardinality() {
+    // |LIFECYCLE_STAGES| numerically reaffirmed = 4 = τ(6).
+    let stages = ["configure", "start", "serve", "report"]
+    _check(stages.len() == TAU_6,
+           "|LIFECYCLE_STAGES| = τ(6) = " + str(TAU_6),
+           "got " + str(stages.len()))
+}
+
+// ─── main ────────────────────────────────────────────────────────────
+
+fn main() {
+    println("========================================================================")
+    println("  stdlib/hal — numerics_lifecycle_dispatch: F-HAL-2 T2 numerical")
+    println("========================================================================")
+    println("  modules (" + str(MODULES.len()) + "): " + str(MODULES))
+    println("")
+
+    let root = _root()
+
+    check_stage_cardinality()
+    check_aggregate_score(root)
+    check_per_module_floor(root)
+    check_report_coverage(root)
+
+    println("")
+    println("  FALSIFIER:")
+    println("    ✗ F-HAL-2: 4-stage τ-lifecycle per peripheral  (cross-checked numerically)")
+
+    let pass_n = RUN - FAIL
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_LANG_HAL_NUMERICS_LIFECYCLE_DISPATCH__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_LANG_HAL_NUMERICS_LIFECYCLE_DISPATCH__ PASS")
+    exit(0)
+}

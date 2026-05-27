@@ -1,0 +1,10 @@
+=== DEPLOYED bin/hexa-verify (04:36, stale-transpiler build) — BEFORE ===
+--- nth_prime 5 11 ---
+  tier   = 🟠 INSUFFICIENT
+  reason = calculator system has NO path for 'nth_prime'
+--- catalan 4 14 ---
+  tier   = 🟠 INSUFFICIENT
+  reason = calculator system has NO path for 'catalan'
+--- is_prime 7 1 ---
+  tier   = 🟠 INSUFFICIENT
+  reason = calculator system has NO path for 'is_prime'

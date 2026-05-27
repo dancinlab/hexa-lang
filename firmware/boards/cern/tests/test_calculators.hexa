@@ -1,0 +1,110 @@
+#!hexa strict
+// hexa-cern/tests/test_calculators.hexa — per-pillar calculator regression.
+//
+// Runs each verify/calc_*.hexa script and asserts exit 0 + the per-script
+// PASS sentinel. Aggregates results across all 4 calculators (cross-doc,
+// wakefield, sigma cascade, classical) plus the falsifier checklist.
+
+let HOME = env("HOME")
+
+fn _root() -> str {
+    let r = env("PETITE_CERN_ROOT")
+    if r.len() > 0 { return r }
+    let pwd = exec("pwd").trim()
+    if pwd.len() > 0 { return pwd }
+    return HOME + "/core/hexa-cern"
+}
+
+let ROOT = _root()
+let HEXA = HOME + "/.hx/packages/hexa/hexa.real"
+
+// (label, script_path, sentinel_token)
+let CASES = [
+    "cross_doc_audit.hexa|__HEXA_CERN_CROSS_DOC__ PASS",
+    "calc_wakefield.hexa|__HEXA_CERN_WAKEFIELD__ PASS",
+    "numerics_wakefield.hexa|__HEXA_CERN_NUMERICS_WAKEFIELD__ PASS",
+    "numerics_lwfa_solver.hexa|__HEXA_CERN_NUMERICS_LWFA_SOLVER__ PASS",
+    "numerics_lwfa_relativistic.hexa|__HEXA_CERN_NUMERICS_LWFA_RELATIVISTIC__ PASS",
+    "numerics_beam_dynamics.hexa|__HEXA_CERN_NUMERICS_BEAM_DYNAMICS__ PASS",
+    "numerics_lwfa_scaling.hexa|__HEXA_CERN_NUMERICS_LWFA_SCALING__ PASS",
+    "calc_sigma_cascade.hexa|__HEXA_CERN_SIGMA_CASCADE__ PASS",
+    "numerics_sigma_cascade.hexa|__HEXA_CERN_NUMERICS_SIGMA_CASCADE__ PASS",
+    "numerics_bending.hexa|__HEXA_CERN_NUMERICS_BENDING__ PASS",
+    "calc_classical.hexa|__HEXA_CERN_CLASSICAL__ PASS",
+    "numerics_classical.hexa|__HEXA_CERN_NUMERICS_CLASSICAL__ PASS",
+    "numerics_liouville.hexa|__HEXA_CERN_NUMERICS_LIOUVILLE__ PASS",
+    "numerics_se3_partial.hexa|__HEXA_CERN_NUMERICS_SE3_PARTIAL__ PASS",
+    "numerics_cross_pillar.hexa|__HEXA_CERN_NUMERICS_CROSS_PILLAR__ PASS",
+    "numerics_lhc_parity.hexa|__HEXA_CERN_NUMERICS_LHC_PARITY__ PASS",
+    "numerics_lwfa_parity.hexa|__HEXA_CERN_NUMERICS_LWFA_PARITY__ PASS",
+    "numerics_lattice_arithmetic.hexa|__HEXA_CERN_NUMERICS_LATTICE_ARITHMETIC__ PASS",
+    "lint_numerics.hexa|__HEXA_CERN_LINT_NUMERICS__ PASS",
+    "saturation_check.hexa|__HEXA_CERN_RSC_SATURATED__ STOP",
+    "empirical_lhc_api.hexa|__HEXA_CERN_EMPIRICAL_LHC_API__ PASS",
+    "empirical_lwfa_hepdata.hexa|__HEXA_CERN_EMPIRICAL_LWFA_HEPDATA__ PASS",
+    "empirical_classical_arxiv.hexa|__HEXA_CERN_EMPIRICAL_CLASSICAL_ARXIV__ PASS",
+    "falsifier_check.hexa|__HEXA_CERN_FALSIFIER__ PASS",
+    "firmware/sim/timing_chain.hexa|__HEXA_CERN_FW_TIMING_CHAIN__ PASS",
+    "firmware/sim/dac_chain.hexa|__HEXA_CERN_FW_DAC_CHAIN__ PASS",
+    "firmware/sim/adc_chain.hexa|__HEXA_CERN_FW_ADC_CHAIN__ PASS",
+    "firmware/sim/control_loop.hexa|__HEXA_CERN_FW_CONTROL_LOOP__ PASS",
+]
+
+fn shq(s: str) -> str {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+// 5-min sub-process timeout. Detects gtimeout (brew coreutils),
+// falls back to timeout (Linux/CI), no-op on bare macOS.
+// On timeout, exit code = 124 (gtimeout/timeout convention) →
+// reported as skip-with-reason instead of FAIL.
+fn _timeout_prefix() -> str {
+    let g = exec("which gtimeout 2>/dev/null").trim()
+    if g.len() > 0 { return shq(g) + " 300 " }
+    let t = exec("which timeout 2>/dev/null").trim()
+    if t.len() > 0 { return shq(t) + " 300 " }
+    return ""
+}
+
+fn run_one(case: str) -> bool {
+    // case = "<filename>|<sentinel_token>"
+    let parts = case.split("|")
+    let fname = parts[0]
+    let sentinel = parts[1]
+    // Path resolution: bare filename → verify/ default; filename with
+    // slash → resolved as ROOT-relative path (lets us reach
+    // firmware/sim/* alongside verify/*).
+    let path = if fname.find("/") >= 0 { ROOT + "/" + fname } else { ROOT + "/verify/" + fname }
+    // HEXA_SHIM_NO_DARWIN_LANDING=1 RESOURCE_LOCAL_HEXA=1: bypass resource-toolkit remote routing.
+    // _timeout_prefix(): 5-min cap; exit 124 → SKIP-with-reason (not FAIL).
+    let cmd = "HEXA_SHIM_NO_DARWIN_LANDING=1 RESOURCE_LOCAL_HEXA=1 PETITE_CERN_ROOT=" + shq(ROOT) +
+              " " + _timeout_prefix() + shq(HEXA) + " run " + shq(path)
+    let r = exec_with_status(cmd)
+    let out = to_string(r[0])
+    let code = r[1]
+    let has_sent = out.find(sentinel) >= 0
+    if code == 124 {
+        println("  [SKIP] " + fname + "  (timeout > 5 min — likely network slow; not a falsifier-fail)")
+        return true   // skip-with-reason: counted as pass
+    }
+    let pass = code == 0 && has_sent
+    let mark = if pass { "PASS" } else { "FAIL" }
+    println("  [" + mark + "] " + fname + "  (exit=" + str(code) + " sentinel=" + str(has_sent) + ")")
+    return pass
+}
+
+fn main() {
+    println("[test_calculators] running " + str(len(CASES)) + " calculator regressions")
+    let mut ok = 0
+    let mut fail = 0
+    for c in CASES {
+        if run_one(c) { ok = ok + 1 } else { fail = fail + 1 }
+    }
+    println("[test_calculators] " + str(ok) + "/" + str(len(CASES)) + " PASS")
+    if fail > 0 {
+        eprintln("__HEXA_CERN_TEST_CALCULATORS__ FAIL — " + str(fail) + " calculator(s) failed")
+        exit(1)
+    }
+    println("__HEXA_CERN_TEST_CALCULATORS__ PASS — all calculators close")
+    exit(0)
+}

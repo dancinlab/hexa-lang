@@ -1,0 +1,89 @@
+// test/three_root_theorem_smoke.hexa — smoke for symbolic/three_root_theorem.hexa
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Reference values from archive-TECS-L/.shared/calc/prove_3root_theorem.py
+// (commit 4ee05c39):
+//   THEOREM: n=6 unique with A: rad(n)=n, B: σ(n)=n·φ(n), C: τ(n)=φ(n)²
+//   rad(6)=6 (squarefree) · rad(12)=6 (not squarefree)
+//   A(6)=B(6)=C(6)=true ; three_root_holds(6)=true, (12)=false
+//   three_root_solutions[2,500] = {6}
+//   Fermat-like primes (p−1 power of 2): {2, 3, 5, 17, 257, 65537}
+//   k=2 enumeration: (2−1)(3−1)=2 → unique n = 6
+//   k≥4 witness: (2−1)(3−1)(5−1)(17−1) = 1·2·4·16 = 128 > 4 ⇒ impossible
+//   is_power_of_two(16)=true, (6)=false
+//   prove(500): complete = true
+//
+// Run:  hexa run test/three_root_theorem_smoke.hexa
+// Sentinel: __TRT_SMOKE__ PASS|FAIL on the final line.
+
+import "compiler/atlas/symbolic/three_root_theorem.hexa"
+
+let mut PASS = 0
+let mut FAIL = 0
+
+fn check(label: string, cond: bool) {
+    if cond {
+        PASS = PASS + 1
+        println("[PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("[FAIL] " + label)
+    }
+}
+
+// ── rad + the three conditions ──────────────────────────────────────────
+check("trt_rad(6) == 6 (squarefree)",  trt_rad(6) == 6)
+check("trt_rad(12) == 6 (not squarefree)", trt_rad(12) == 6)
+check("trt_rad(28) == 14 (2·7)",       trt_rad(28) == 14)
+check("cond_a_squarefree(6)", cond_a_squarefree(6))
+check("cond_b_sigma_nphi(6) (σ=12=6·2)", cond_b_sigma_nphi(6))
+check("cond_c_tau_phi2(6) (τ=4=2²)", cond_c_tau_phi2(6))
+check("!cond_a_squarefree(12)", !cond_a_squarefree(12))
+
+// ── the theorem ─────────────────────────────────────────────────────────
+check("three_root_holds(6)", three_root_holds(6))
+check("!three_root_holds(12)", !three_root_holds(12))
+check("!three_root_holds(28)", !three_root_holds(28))
+let s = three_root_solutions(500)
+check("three_root_solutions[2,500] == {6}", len(s) == 1 && s[0] == 6)
+
+// ── proof kernel: power-of-2 + Fermat-like primes ───────────────────────
+check("is_power_of_two(16) == true", is_power_of_two(16))
+check("is_power_of_two(1) == true (2^0)", is_power_of_two(1))
+check("is_power_of_two(6) == false", !is_power_of_two(6))
+
+// small range first (fast): {2,3,5,17,257}
+let fpS = fermat_like_primes(300)
+check("fermat_like_primes(<300) == {2,3,5,17,257}",
+      len(fpS) == 5 && fpS[0] == 2 && fpS[1] == 3 && fpS[2] == 5
+      && fpS[3] == 17 && fpS[4] == 257)
+
+// full Fermat set (one wider scan): {2,3,5,17,257,65537}
+let fpF = fermat_like_primes(70000)
+check("fermat_like_primes(<70000) == {2,3,5,17,257,65537}",
+      len(fpF) == 6 && fpF[5] == 65537)
+
+// ── k=2 uniqueness + k≥4 impossibility witness ──────────────────────────
+check("k2_unique_n == 6 ((2−1)(3−1)=2)", k2_unique_n(70000) == 6)
+check("k4_product_witness == 128 (1·2·4·16)", k4_product_witness(70000) == 128)
+
+// ── aggregate proof status ──────────────────────────────────────────────
+let pr = prove(500)
+check("prove: n6_holds", pr.n6_holds)
+check("prove: n6_unique", pr.n6_unique)
+check("prove: k2_n == 6", pr.k2_n == 6)
+check("prove: k4_product == 128", pr.k4_product == 128)
+check("prove: k4_impossible (128 > 4)", pr.k4_impossible)
+check("prove: complete (QED)", pr.complete)
+
+println("")
+println("═══════════════════════════════════════════════════════════")
+println("  three_root_theorem smoke: PASS=" + str(PASS) + " FAIL=" + str(FAIL))
+println("═══════════════════════════════════════════════════════════")
+if FAIL > 0 {
+    println("__TRT_SMOKE__ FAIL")
+} else {
+    println("__TRT_SMOKE__ PASS")
+}

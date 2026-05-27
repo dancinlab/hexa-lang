@@ -1,0 +1,956 @@
+// ═══════════════════════════════════════════════════════════════════
+//  test_diff_transformer.hexa — Differential Transformer (#287)
+// ═══════════════════════════════════════════════════════════════════
+
+// -- inlined from self/ml/diff_transformer.hexa --
+// codegen import not wired for test files
+
+// ═══════════════════════════════════════════════════════════════════
+//  self/ml/diff_transformer.hexa — Differential Transformer (#287)
+//
+//  Microsoft Research (2024) — Differential Attention mechanism
+//  where two softmax attention maps are subtracted to cancel noise.
+//
+//  Key idea:
+//    Split Q,K into Q1,Q2 and K1,K2 (each half head-dim)
+//    A = softmax(Q1 * K1^T / sqrt(d)) - lambda * softmax(Q2 * K2^T / sqrt(d))
+//    out = A * V
+//
+//  lambda is a learnable scalar that controls the subtraction weight.
+//  This cancels shared noise between the two attention patterns,
+//  leaving only the signal-carrying differential.
+//
+//  Architecture:
+//    W_Q : D_model -> n_heads * D_head
+//    W_K : D_model -> n_heads * D_head
+//    W_V : D_model -> n_heads * (D_head / 2)
+//    W_O : n_heads * (D_head / 2) -> D_model
+//    lambda_param : learnable scalar (init 0.5)
+//
+//  API:
+//    dt_init(D_model, D_head, n_heads, seq_len, seed) -> model
+//    dt_attention(model, Q, K, V)    -> [seq_len x D_v]
+//    dt_forward(model, X)            -> [seq_len x D_model]
+//    dt_train_step(model, X, Y, lr)  -> model
+//    dt_loss(model, X, Y)            -> float
+//
+//  AI-NATIVE attrs:
+//    @pure  (forward / attention)
+//    @hot   (train step — omitted due to dict mutation aliasing bug)
+// ═══════════════════════════════════════════════════════════════════
+
+// ───────────────────────────────────────────────────────────────────
+//  Helper math functions (dt_ prefix)
+// ───────────────────────────────────────────────────────────────────
+
+fn dt_abs(x) { if x < 0.0 { return 0.0 - x } return x }
+
+fn dt_exp(x) {
+    let mut v = x
+    if v > 20.0 { v = 20.0 }
+    if v < -20.0 { v = -20.0 }
+    let mut result = 1.0
+    let mut term = 1.0
+    let mut i = 1
+    while i < 30 {
+        term = term * v / to_float(i)
+        result = result + term
+        i = i + 1
+    }
+    if result < 0.0 { return 0.0 }
+    return result
+}
+
+fn dt_log(x) {
+    if x <= 0.0 { return -30.0 }
+    let mut v = x
+    let mut count = 0
+    while v > 2.0 {
+        v = v / 2.718281828
+        count = count + 1
+    }
+    while v < 0.5 {
+        v = v * 2.718281828
+        count = count - 1
+    }
+    let d = v - 1.0
+    let ln_v = d - d * d / 2.0 + d * d * d / 3.0 - d * d * d * d / 4.0
+    return to_float(count) + ln_v
+}
+
+fn dt_sqrt(x) {
+    if x <= 0.0 { return 0.0 }
+    let mut guess = x / 2.0
+    if guess < 0.001 { guess = 0.001 }
+    let mut _i = 0
+    while _i < 20 {
+        guess = (guess + x / guess) / 2.0
+        _i = _i + 1
+    }
+    return guess
+}
+
+fn dt_zeros(n) {
+    let mut v = []
+    let mut _i = 0
+    while _i < n {
+    return v
+        _i = _i + 1
+}
+
+fn dt_zeros_2d(rows, cols) {
+    let mut m = []
+    let mut _r = 0
+    while _r < rows {
+        let mut row = []
+        for _c in 0..cols { row = row + [0.0] }
+        m = m + [row]
+        _r = _r + 1
+    }
+    return m
+}
+
+fn dt_lcg(state) {
+    return (state * 1103515245 + 12345) % 2147483648
+}
+
+fn dt_uniform(state) {
+    let s = dt_lcg(state)
+    return [to_float(s) / 2147483648.0, to_float(s)]
+}
+
+// Xavier-like init: U(-scale, scale) where scale = sqrt(6 / (fan_in + fan_out))
+fn dt_init_matrix(rows, cols, seed) {
+    let mut state = seed
+    let fan = to_float(rows + cols)
+    let scale = dt_sqrt(6.0 / fan)
+    let mut m = dt_zeros_2d(rows, cols)
+    let mut i = 0
+    while i < rows {
+        for j in 0..cols {
+            let u = dt_uniform(state)
+            state = int(u[1])
+            if state <= 0 { state = 1 }
+            m[i][j] = (u[0] - 0.5) * 2.0 * scale
+        }
+        i = i + 1
+    }
+    return #{"matrix": m, "seed": state}
+}
+
+// ───────────────────────────────────────────────────────────────────
+//  Softmax over a 2D attention score matrix [seq x seq]
+// ───────────────────────────────────────────────────────────────────
+fn dt_softmax_2d(scores, rows, cols) {
+    let mut out = dt_zeros_2d(rows, cols)
+    let mut i = 0
+    while i < rows {
+        let mut mx = scores[i][0]
+        for j in 1..cols {
+            if scores[i][j] > mx { mx = scores[i][j] }
+        }
+        let mut row_sum = 0.0
+        for j in 0..cols {
+            let e = dt_exp(scores[i][j] - mx)
+            out[i][j] = e
+            row_sum = row_sum + e
+        }
+        if row_sum <= 0.0 { row_sum = 1.0e-12 }
+        for j in 0..cols {
+            out[i][j] = out[i][j] / row_sum
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// ───────────────────────────────────────────────────────────────────
+//  1D softmax (for output layer)
+// ───────────────────────────────────────────────────────────────────
+fn dt_softmax_1d(logits) {
+    let n = len(logits)
+    let mut mx = logits[0]
+    let mut i = 1
+    while i < n {
+    let mut out = dt_zeros(n)
+    let mut s = 0.0
+    for i in 0..n {
+        let e = dt_exp(logits[i] - mx)
+        out[i] = e
+        s = s + e
+    }
+    if s <= 0.0 { s = 1.0e-12 }
+    for i in 0..n { out[i] = out[i] / s }
+    return out
+        i = i + 1
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  dt_init — Initialize Differential Transformer model
+//
+//  D_model  : embedding dimension
+//  D_head   : per-head dimension (must be even — split into halves)
+//  n_heads  : number of attention heads
+//  seq_len  : max sequence length
+//  seed     : RNG seed
+//
+//  D_v = D_head / 2  (value dim per head, after differential)
+// ═══════════════════════════════════════════════════════════════════
+fn dt_init(D_model, D_head, n_heads, seq_len, seed) {
+    let mut state = seed
+    if state <= 0 { state = 1 }
+    let D_v = int(D_head / 2)
+    let D_qk_total = n_heads * D_head
+    let D_v_total = n_heads * D_v
+
+    // W_Q : D_model -> D_qk_total
+    let r1 = dt_init_matrix(D_qk_total, D_model, state)
+    let W_Q = r1["matrix"]
+    state = int(r1["seed"])
+    if state <= 0 { state = 1 }
+
+    // W_K : D_model -> D_qk_total
+    let r2 = dt_init_matrix(D_qk_total, D_model, state)
+    let W_K = r2["matrix"]
+    state = int(r2["seed"])
+    if state <= 0 { state = 1 }
+
+    // W_V : D_model -> D_v_total
+    let r3 = dt_init_matrix(D_v_total, D_model, state)
+    let W_V = r3["matrix"]
+    state = int(r3["seed"])
+    if state <= 0 { state = 1 }
+
+    // W_O : D_v_total -> D_model
+    let r4 = dt_init_matrix(D_model, D_v_total, state)
+    let W_O = r4["matrix"]
+    state = int(r4["seed"])
+    if state <= 0 { state = 1 }
+
+    // Output projection: D_model -> n_classes (set later, default 2)
+    let n_classes = 2
+    let r5 = dt_init_matrix(n_classes, D_model, state)
+    let W_out = r5["matrix"]
+    state = int(r5["seed"])
+
+    let b_Q = dt_zeros(D_qk_total)
+    let b_K = dt_zeros(D_qk_total)
+    let b_V = dt_zeros(D_v_total)
+    let b_O = dt_zeros(D_model)
+    let b_out = dt_zeros(n_classes)
+
+    return #{
+        "D_model": D_model,
+        "D_head": D_head,
+        "D_v": D_v,
+        "n_heads": n_heads,
+        "seq_len": seq_len,
+        "n_classes": n_classes,
+        "W_Q": W_Q,
+        "W_K": W_K,
+        "W_V": W_V,
+        "W_O": W_O,
+        "W_out": W_out,
+        "b_Q": b_Q,
+        "b_K": b_K,
+        "b_V": b_V,
+        "b_O": b_O,
+        "b_out": b_out,
+        "lambda": 0.5
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  dt_linear — Y[i] = sum_j W[i][j]*x[j] + b[i]
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn dt_linear(W, b, x) {
+    let out_dim = len(W)
+    let in_dim = len(x)
+    let mut y = dt_zeros(out_dim)
+    let mut i = 0
+    while i < out_dim {
+        let mut s = b[i]
+        for j in 0..in_dim {
+            s = s + W[i][j] * x[j]
+        }
+        y[i] = s
+        i = i + 1
+    }
+    return y
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  dt_linear_batch — apply linear to each row of X [seq x D_in]
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn dt_linear_batch(W, b, X, seq_len) {
+    let mut out = []
+    let mut t = 0
+    while t < seq_len {
+        out = out + [dt_linear(W, b, X[t])]
+        t = t + 1
+    }
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  dt_attention — Differential Attention (core mechanism)
+//
+//  Q, K: [seq_len x D_qk_total]  (already projected)
+//  V:    [seq_len x D_v_total]    (already projected)
+//
+//  For each head h:
+//    Q1 = Q[:, h*D_head : h*D_head + D_head/2]
+//    Q2 = Q[:, h*D_head + D_head/2 : (h+1)*D_head]
+//    K1 = K[:, h*D_head : h*D_head + D_head/2]
+//    K2 = K[:, h*D_head + D_head/2 : (h+1)*D_head]
+//    V_h = V[:, h*D_v : (h+1)*D_v]
+//
+//    A1 = softmax(Q1 * K1^T / sqrt(d))
+//    A2 = softmax(Q2 * K2^T / sqrt(d))
+//    A  = A1 - lambda * A2
+//    head_out = A * V_h
+//
+//  Output: concat of all heads [seq_len x D_v_total]
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn dt_attention(model, Q, K, V) {
+    let n_heads = model["n_heads"]
+    let D_head = model["D_head"]
+    let D_v = model["D_v"]
+    let seq_len = model["seq_len"]
+    let lam = model["lambda"]
+    let half = int(D_head / 2)
+    let scale = 1.0 / dt_sqrt(to_float(half))
+
+    let D_v_total = n_heads * D_v
+    let mut output = dt_zeros_2d(seq_len, D_v_total)
+
+    let mut h = 0
+    while h < n_heads {
+        let qk_offset = h * D_head
+        let v_offset = h * D_v
+
+        // Compute attention scores for Q1*K1^T and Q2*K2^T
+        let mut scores1 = dt_zeros_2d(seq_len, seq_len)
+        let mut scores2 = dt_zeros_2d(seq_len, seq_len)
+
+        for i in 0..seq_len {
+            for j in 0..seq_len {
+                let mut s1 = 0.0
+                let mut s2 = 0.0
+                for d in 0..half {
+                    s1 = s1 + Q[i][qk_offset + d] * K[j][qk_offset + d]
+                    s2 = s2 + Q[i][qk_offset + half + d] * K[j][qk_offset + half + d]
+                }
+                scores1[i][j] = s1 * scale
+                scores2[i][j] = s2 * scale
+            }
+        }
+
+        // Softmax each row
+        let attn1 = dt_softmax_2d(scores1, seq_len, seq_len)
+        let attn2 = dt_softmax_2d(scores2, seq_len, seq_len)
+
+        // Differential: A = attn1 - lambda * attn2
+        // Then multiply by V_h
+        for i in 0..seq_len {
+            for d in 0..D_v {
+                let mut val = 0.0
+                for j in 0..seq_len {
+                    let a_diff = attn1[i][j] - lam * attn2[i][j]
+                    val = val + a_diff * V[j][v_offset + d]
+                }
+                output[i][v_offset + d] = val
+            }
+        }
+        h = h + 1
+    }
+
+    return output
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  dt_forward — Full forward pass
+//
+//  X: [seq_len x D_model]  input embeddings
+//
+//  1) Project Q, K, V
+//  2) Differential attention
+//  3) Output projection (W_O)
+//  Returns [seq_len x D_model]
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn dt_forward(model, X) {
+    let seq_len = model["seq_len"]
+    let W_Q = model["W_Q"]
+    let W_K = model["W_K"]
+    let W_V = model["W_V"]
+    let W_O = model["W_O"]
+    let b_Q = model["b_Q"]
+    let b_K = model["b_K"]
+    let b_V = model["b_V"]
+    let b_O = model["b_O"]
+    let D_model = model["D_model"]
+
+    // Project Q, K, V
+    let Q = dt_linear_batch(W_Q, b_Q, X, seq_len)
+    let K = dt_linear_batch(W_K, b_K, X, seq_len)
+    let V = dt_linear_batch(W_V, b_V, X, seq_len)
+
+    // Differential attention
+    let attn_out = dt_attention(model, Q, K, V)
+
+    // Output projection: [seq_len x D_v_total] -> [seq_len x D_model]
+    let mut out = dt_zeros_2d(seq_len, D_model)
+    let mut t = 0
+    while t < seq_len {
+        let projected = dt_linear(W_O, b_O, attn_out[t])
+        for d in 0..D_model { out[t][d] = projected[d] }
+        t = t + 1
+    }
+
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  dt_classify — Forward + average pooling + softmax classification
+//
+//  Returns class probabilities [n_classes]
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn dt_classify(model, X) {
+    let seq_len = model["seq_len"]
+    let D_model = model["D_model"]
+    let W_out = model["W_out"]
+    let b_out = model["b_out"]
+
+    let hidden = dt_forward(model, X)
+
+    // Average pool over sequence
+    let mut pooled = dt_zeros(D_model)
+    let mut t = 0
+    while t < seq_len {
+        for d in 0..D_model {
+            pooled[d] = pooled[d] + hidden[t][d]
+        }
+        t = t + 1
+    }
+    let inv_seq = 1.0 / to_float(seq_len)
+    let mut d = 0
+    while d < D_model {
+
+    // Classify
+    let logits = dt_linear(W_out, b_out, pooled)
+    return dt_softmax_1d(logits)
+        d = d + 1
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  dt_loss — Cross-entropy loss for classification
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn dt_loss(model, X, y) {
+    let probs = dt_classify(model, X)
+    let mut py = probs[y]
+    if py < 1.0e-12 { py = 1.0e-12 }
+    return 0.0 - dt_log(py)
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  dt_train_step — One step of numerical-gradient SGD
+//
+//  Uses finite differences (epsilon = 1e-4) on all weight matrices
+//  and the lambda parameter to compute gradients, then applies
+//  gradient descent.
+//
+//  This is computationally expensive but correct for small models.
+//  For production use, analytic backprop would replace this.
+// ═══════════════════════════════════════════════════════════════════
+fn dt_train_step(model, X, Y, lr) {
+    let N = len(X)
+    let eps = 1.0e-4
+    let inv_eps2 = 1.0 / (2.0 * eps)
+
+    // Compute average loss
+    let mut base_loss = 0.0
+    let mut i = 0
+    while i < N {
+        base_loss = base_loss + dt_loss(model, X[i], Y[i])
+        i = i + 1
+    }
+    base_loss = base_loss / to_float(N)
+
+    // Helper: perturb a single element in a 2D weight matrix, measure loss change
+    // We update all weight matrices via numerical gradient
+
+    let D_model = model["D_model"]
+    let n_heads = model["n_heads"]
+    let D_head = model["D_head"]
+    let D_v = model["D_v"]
+    let seq_len = model["seq_len"]
+    let n_classes = model["n_classes"]
+    let D_qk_total = n_heads * D_head
+    let D_v_total = n_heads * D_v
+
+    // ── Update W_out (n_classes x D_model) — smallest matrix first ──
+    let mut W_out_new = dt_zeros_2d(n_classes, D_model)
+    let W_out = model["W_out"]
+    let b_out = model["b_out"]
+    let mut i = 0
+    while i < n_classes {
+        for j in 0..D_model {
+            let orig = W_out[i][j]
+            W_out[i][j] = orig + eps
+            let mut lp = 0.0
+            for k in 0..N { lp = lp + dt_loss(model, X[k], Y[k]) }
+            W_out[i][j] = orig - eps
+            let mut lm = 0.0
+            for k in 0..N { lm = lm + dt_loss(model, X[k], Y[k]) }
+            W_out[i][j] = orig
+            let grad = (lp - lm) * inv_eps2 / to_float(N)
+            W_out_new[i][j] = orig - lr * grad
+        }
+        i = i + 1
+    }
+
+    let mut b_out_new = dt_zeros(n_classes)
+    let mut i = 0
+    while i < n_classes {
+        let orig = b_out[i]
+        model["b_out"][i] = orig + eps
+        let mut lp = 0.0
+        for k in 0..N { lp = lp + dt_loss(model, X[k], Y[k]) }
+        model["b_out"][i] = orig - eps
+        let mut lm = 0.0
+        for k in 0..N { lm = lm + dt_loss(model, X[k], Y[k]) }
+        model["b_out"][i] = orig
+        let grad = (lp - lm) * inv_eps2 / to_float(N)
+        b_out_new[i] = orig - lr * grad
+        i = i + 1
+    }
+
+    // ── Update W_O (D_model x D_v_total) ──
+    let W_O = model["W_O"]
+    let mut W_O_new = dt_zeros_2d(D_model, D_v_total)
+    let mut i = 0
+    while i < D_model {
+        for j in 0..D_v_total {
+            let orig = W_O[i][j]
+            W_O[i][j] = orig + eps
+            let mut lp = 0.0
+            for k in 0..N { lp = lp + dt_loss(model, X[k], Y[k]) }
+            W_O[i][j] = orig - eps
+            let mut lm = 0.0
+            for k in 0..N { lm = lm + dt_loss(model, X[k], Y[k]) }
+            W_O[i][j] = orig
+            let grad = (lp - lm) * inv_eps2 / to_float(N)
+            W_O_new[i][j] = orig - lr * grad
+        }
+        i = i + 1
+    }
+
+    let b_O = model["b_O"]
+    let mut b_O_new = dt_zeros(D_model)
+    let mut i = 0
+    while i < D_model {
+        let orig = b_O[i]
+        model["b_O"][i] = orig + eps
+        let mut lp = 0.0
+        for k in 0..N { lp = lp + dt_loss(model, X[k], Y[k]) }
+        model["b_O"][i] = orig - eps
+        let mut lm = 0.0
+        for k in 0..N { lm = lm + dt_loss(model, X[k], Y[k]) }
+        model["b_O"][i] = orig
+        let grad = (lp - lm) * inv_eps2 / to_float(N)
+        b_O_new[i] = orig - lr * grad
+        i = i + 1
+    }
+
+    // ── Update W_Q (D_qk_total x D_model) ──
+    let W_Q = model["W_Q"]
+    let mut W_Q_new = dt_zeros_2d(D_qk_total, D_model)
+    let mut i = 0
+    while i < D_qk_total {
+        for j in 0..D_model {
+            let orig = W_Q[i][j]
+            W_Q[i][j] = orig + eps
+            let mut lp = 0.0
+            for k in 0..N { lp = lp + dt_loss(model, X[k], Y[k]) }
+            W_Q[i][j] = orig - eps
+            let mut lm = 0.0
+            for k in 0..N { lm = lm + dt_loss(model, X[k], Y[k]) }
+            W_Q[i][j] = orig
+            let grad = (lp - lm) * inv_eps2 / to_float(N)
+            W_Q_new[i][j] = orig - lr * grad
+        }
+        i = i + 1
+    }
+
+    let mut b_Q_new = dt_zeros(D_qk_total)
+    let b_Q = model["b_Q"]
+    let mut i = 0
+    while i < D_qk_total {
+        let orig = b_Q[i]
+        model["b_Q"][i] = orig + eps
+        let mut lp = 0.0
+        for k in 0..N { lp = lp + dt_loss(model, X[k], Y[k]) }
+        model["b_Q"][i] = orig - eps
+        let mut lm = 0.0
+        for k in 0..N { lm = lm + dt_loss(model, X[k], Y[k]) }
+        model["b_Q"][i] = orig
+        let grad = (lp - lm) * inv_eps2 / to_float(N)
+        b_Q_new[i] = orig - lr * grad
+        i = i + 1
+    }
+
+    // ── Update W_K (D_qk_total x D_model) ──
+    let W_K = model["W_K"]
+    let mut W_K_new = dt_zeros_2d(D_qk_total, D_model)
+    let mut i = 0
+    while i < D_qk_total {
+        for j in 0..D_model {
+            let orig = W_K[i][j]
+            W_K[i][j] = orig + eps
+            let mut lp = 0.0
+            for k in 0..N { lp = lp + dt_loss(model, X[k], Y[k]) }
+            W_K[i][j] = orig - eps
+            let mut lm = 0.0
+            for k in 0..N { lm = lm + dt_loss(model, X[k], Y[k]) }
+            W_K[i][j] = orig
+            let grad = (lp - lm) * inv_eps2 / to_float(N)
+            W_K_new[i][j] = orig - lr * grad
+        }
+        i = i + 1
+    }
+
+    let mut b_K_new = dt_zeros(D_qk_total)
+    let b_K = model["b_K"]
+    let mut i = 0
+    while i < D_qk_total {
+        let orig = b_K[i]
+        model["b_K"][i] = orig + eps
+        let mut lp = 0.0
+        for k in 0..N { lp = lp + dt_loss(model, X[k], Y[k]) }
+        model["b_K"][i] = orig - eps
+        let mut lm = 0.0
+        for k in 0..N { lm = lm + dt_loss(model, X[k], Y[k]) }
+        model["b_K"][i] = orig
+        let grad = (lp - lm) * inv_eps2 / to_float(N)
+        b_K_new[i] = orig - lr * grad
+        i = i + 1
+    }
+
+    // ── Update W_V (D_v_total x D_model) ──
+    let W_V = model["W_V"]
+    let mut W_V_new = dt_zeros_2d(D_v_total, D_model)
+    let mut i = 0
+    while i < D_v_total {
+        for j in 0..D_model {
+            let orig = W_V[i][j]
+            W_V[i][j] = orig + eps
+            let mut lp = 0.0
+            for k in 0..N { lp = lp + dt_loss(model, X[k], Y[k]) }
+            W_V[i][j] = orig - eps
+            let mut lm = 0.0
+            for k in 0..N { lm = lm + dt_loss(model, X[k], Y[k]) }
+            W_V[i][j] = orig
+            let grad = (lp - lm) * inv_eps2 / to_float(N)
+            W_V_new[i][j] = orig - lr * grad
+        }
+        i = i + 1
+    }
+
+    let mut b_V_new = dt_zeros(D_v_total)
+    let b_V = model["b_V"]
+    let mut i = 0
+    while i < D_v_total {
+        let orig = b_V[i]
+        model["b_V"][i] = orig + eps
+        let mut lp = 0.0
+        for k in 0..N { lp = lp + dt_loss(model, X[k], Y[k]) }
+        model["b_V"][i] = orig - eps
+        let mut lm = 0.0
+        for k in 0..N { lm = lm + dt_loss(model, X[k], Y[k]) }
+        model["b_V"][i] = orig
+        let grad = (lp - lm) * inv_eps2 / to_float(N)
+        b_V_new[i] = orig - lr * grad
+        i = i + 1
+    }
+
+    // ── Update lambda ──
+    let orig_lam = model["lambda"]
+    model["lambda"] = orig_lam + eps
+    let mut lp_lam = 0.0
+    let mut k = 0
+    while k < N {
+    model["lambda"] = orig_lam - eps
+    let mut lm_lam = 0.0
+    for k in 0..N { lm_lam = lm_lam + dt_loss(model, X[k], Y[k]) }
+    model["lambda"] = orig_lam
+    let grad_lam = (lp_lam - lm_lam) * inv_eps2 / to_float(N)
+    let mut new_lambda = orig_lam - lr * grad_lam
+    // Clamp lambda to [0, 1]
+    if new_lambda < 0.0 { new_lambda = 0.0 }
+    if new_lambda > 1.0 { new_lambda = 1.0 }
+
+    return #{
+        "D_model": D_model,
+        "D_head": D_head,
+        "D_v": D_v,
+        "n_heads": n_heads,
+        "seq_len": seq_len,
+        "n_classes": n_classes,
+        "W_Q": W_Q_new,
+        "W_K": W_K_new,
+        "W_V": W_V_new,
+        "W_O": W_O_new,
+        "W_out": W_out_new,
+        "b_Q": b_Q_new,
+        "b_K": b_K_new,
+        "b_V": b_V_new,
+        "b_O": b_O_new,
+        "b_out": b_out_new,
+        "lambda": new_lambda
+    }
+        k = k + 1
+}
+
+
+// -- end inlined --
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn check(name, cond) {
+    if cond {
+        println("[PASS] " + name)
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name)
+        fail_count = fail_count + 1
+    }
+}
+
+fn fabs_(x) { if x < 0.0 { return 0.0 - x } return x }
+fn approx_(a, b, eps) { return fabs_(a - b) < eps }
+
+println("=== Differential Transformer (#287) ===")
+
+// Model params: D_model=4, D_head=4, n_heads=2, seq_len=3
+let D_model = 4
+let D_head = 4
+let n_heads = 2
+let seq_len = 3
+
+let model = dt_init(D_model, D_head, n_heads, seq_len, 42)
+
+// ── T1 init shapes ─────────────────────────────────────────
+let D_qk_total = n_heads * D_head
+let D_v = int(D_head / 2)
+let D_v_total = n_heads * D_v
+check("T1 W_Q shape", len(model["W_Q"]) == D_qk_total && len(model["W_Q"][0]) == D_model)
+check("T1 W_K shape", len(model["W_K"]) == D_qk_total && len(model["W_K"][0]) == D_model)
+check("T1 W_V shape", len(model["W_V"]) == D_v_total && len(model["W_V"][0]) == D_model)
+check("T1 W_O shape", len(model["W_O"]) == D_model && len(model["W_O"][0]) == D_v_total)
+
+// ── T2 lambda initialised to 0.5 ──────────────────────────
+check("T2 lambda init", approx_(model["lambda"], 0.5, 1.0e-9))
+
+// ── T3 forward output shape ────────────────────────────────
+let X1 = [
+    [0.1, 0.2, 0.3, 0.4],
+    [0.5, 0.6, 0.7, 0.8],
+    [0.9, 1.0, 1.1, 1.2]
+]
+let out3 = dt_forward(model, X1)
+check("T3 forward seq_len", len(out3) == seq_len)
+check("T3 forward D_model", len(out3[0]) == D_model)
+
+// ── T4 attention output is bounded ─────────────────────────
+// After differential attention, values should not explode
+let Q4 = dt_linear_batch(model["W_Q"], model["b_Q"], X1, seq_len)
+let K4 = dt_linear_batch(model["W_K"], model["b_K"], X1, seq_len)
+let V4 = dt_linear_batch(model["W_V"], model["b_V"], X1, seq_len)
+let attn4 = dt_attention(model, Q4, K4, V4)
+let mut bounded4 = true
+let mut t = 0
+
+while t < seq_len {
+    let mut d = 0
+
+    while d < D_v_total {
+        if fabs_(attn4[t][d]) > 100.0 { bounded4 = false }
+    }
+}
+check("T4 attention bounded", bounded4)
+
+// ── T5 softmax rows sum to 1 ───────────────────────────────
+let scores5 = [[1.0, 2.0, 3.0], [0.5, 0.5, 0.5], [3.0, 1.0, 2.0]]
+let sm5 = dt_softmax_2d(scores5, 3, 3)
+let mut softmax_ok = true
+let mut i = 0
+
+while i < 3 {
+    let mut row_sum = 0.0
+    let mut j = 0
+
+    while j < 3 { row_sum = row_sum + sm5[i][j] }
+    if fabs_(row_sum - 1.0) > 1.0e-6 { softmax_ok = false }
+}
+check("T5 softmax rows sum to 1", softmax_ok)
+
+// ── T6 softmax values in [0,1] ─────────────────────────────
+let mut sm_bounded = true
+let mut i = 0
+
+while i < 3 {
+    let mut j = 0
+
+    while j < 3 {
+        if sm5[i][j] < 0.0 { sm_bounded = false }
+        if sm5[i][j] > 1.0 { sm_bounded = false }
+    }
+}
+check("T6 softmax values in [0,1]", sm_bounded)
+
+// ── T7 lambda=0 reduces to single-head attention ──────────
+// When lambda=0, the differential term vanishes: A = attn1 - 0*attn2 = attn1
+// Compare with lambda=1 to verify lambda has an effect
+let model_lam0 = #{
+    "D_model": D_model, "D_head": D_head, "D_v": D_v,
+    "n_heads": n_heads, "seq_len": seq_len, "n_classes": 2,
+    "W_Q": model["W_Q"], "W_K": model["W_K"], "W_V": model["W_V"],
+    "W_O": model["W_O"], "W_out": model["W_out"],
+    "b_Q": model["b_Q"], "b_K": model["b_K"], "b_V": model["b_V"],
+    "b_O": model["b_O"], "b_out": model["b_out"],
+    "lambda": 0.0
+}
+let model_lam1 = #{
+    "D_model": D_model, "D_head": D_head, "D_v": D_v,
+    "n_heads": n_heads, "seq_len": seq_len, "n_classes": 2,
+    "W_Q": model["W_Q"], "W_K": model["W_K"], "W_V": model["W_V"],
+    "W_O": model["W_O"], "W_out": model["W_out"],
+    "b_Q": model["b_Q"], "b_K": model["b_K"], "b_V": model["b_V"],
+    "b_O": model["b_O"], "b_out": model["b_out"],
+    "lambda": 1.0
+}
+let out_lam0 = dt_forward(model_lam0, X1)
+let out_lam1 = dt_forward(model_lam1, X1)
+let mut lam_differs = false
+let mut t = 0
+
+while t < seq_len {
+    let mut d = 0
+
+    while d < D_model {
+        if fabs_(out_lam0[t][d] - out_lam1[t][d]) > 1.0e-9 { lam_differs = true }
+    }
+}
+check("T7 lambda affects output", lam_differs)
+
+// ── T8 classify produces valid probabilities ───────────────
+let probs8 = dt_classify(model, X1)
+let mut prob_sum = 0.0
+let mut prob_valid = true
+let mut i = 0
+
+while i < 2 {
+    prob_sum = prob_sum + probs8[i]
+    if probs8[i] < 0.0 { prob_valid = false }
+    if probs8[i] > 1.0 { prob_valid = false }
+}
+check("T8 classify probs sum to 1", approx_(prob_sum, 1.0, 1.0e-6))
+check("T8 classify probs in [0,1]", prob_valid)
+
+// ── T9 loss is non-negative ────────────────────────────────
+let loss9 = dt_loss(model, X1, 0)
+check("T9 loss >= 0", loss9 >= 0.0)
+
+// ── T10 training reduces loss ──────────────────────────────
+// Build tiny dataset: 2 samples, 2 classes
+let X_train = [
+    [[0.1, 0.2, 0.3, 0.4], [0.5, 0.6, 0.7, 0.8], [0.9, 1.0, 1.1, 1.2]],
+    [[1.2, 1.1, 1.0, 0.9], [0.8, 0.7, 0.6, 0.5], [0.4, 0.3, 0.2, 0.1]]
+]
+let Y_train = [0, 1]
+
+let mut loss_before = 0.0
+let mut i = 0
+
+while i < 2 { loss_before = loss_before + dt_loss(model, X_train[i], Y_train[i]) }
+loss_before = loss_before / 2.0
+
+let mut m_train = model
+let mut _step = 0
+
+while _step < 30 {
+    m_train = dt_train_step(m_train, X_train, Y_train, 0.1)
+}
+
+let mut loss_after = 0.0
+let mut i = 0
+
+while i < 2 { loss_after = loss_after + dt_loss(m_train, X_train[i], Y_train[i]) }
+loss_after = loss_after / 2.0
+
+check("T10 training reduces loss", loss_after < loss_before)
+
+// ── T11 determinism: same seed same model ──────────────────
+let model_a = dt_init(4, 4, 2, 3, 77)
+let model_b = dt_init(4, 4, 2, 3, 77)
+let out_a = dt_forward(model_a, X1)
+let out_b = dt_forward(model_b, X1)
+let mut det_ok = true
+let mut t = 0
+
+while t < seq_len {
+    let mut d = 0
+
+    while d < D_model {
+        if fabs_(out_a[t][d] - out_b[t][d]) > 1.0e-9 { det_ok = false }
+    }
+}
+check("T11 deterministic init", det_ok)
+
+// ── T12 different seeds give different models ──────────────
+let model_c = dt_init(4, 4, 2, 3, 99)
+let out_c = dt_forward(model_c, X1)
+let mut seeds_differ = false
+let mut t = 0
+
+while t < seq_len {
+    let mut d = 0
+
+    while d < D_model {
+        if fabs_(out_a[t][d] - out_c[t][d]) > 1.0e-9 { seeds_differ = true }
+    }
+}
+check("T12 different seeds differ", seeds_differ)
+
+// ── T13 dt_sqrt correctness ────────────────────────────────
+check("T13 sqrt(4)=2", approx_(dt_sqrt(4.0), 2.0, 1.0e-6))
+check("T13 sqrt(9)=3", approx_(dt_sqrt(9.0), 3.0, 1.0e-6))
+check("T13 sqrt(0)=0", approx_(dt_sqrt(0.0), 0.0, 1.0e-6))
+
+// ── T14 dt_exp/dt_log roundtrip ────────────────────────────
+let val14 = 2.5
+let rt14 = dt_log(dt_exp(val14))
+check("T14 log(exp(x)) ~ x", approx_(rt14, val14, 0.05))
+
+// ── T15 1d softmax ─────────────────────────────────────────
+let sm15 = dt_softmax_1d([1.0, 2.0, 3.0, 4.0])
+let mut sum15 = 0.0
+let mut i = 0
+
+while i < 4 { sum15 = sum15 + sm15[i] }
+check("T15 1d softmax sums to 1", approx_(sum15, 1.0, 1.0e-6))
+// Largest logit should have largest probability
+check("T15 1d softmax ordering", sm15[3] > sm15[2] && sm15[2] > sm15[1] && sm15[1] > sm15[0])
+
+println("")
+println("=== Differential Transformer summary ===")
+println("PASS: " + str(pass_count))
+println("FAIL: " + str(fail_count))
+println("TOTAL: " + str(pass_count + fail_count))

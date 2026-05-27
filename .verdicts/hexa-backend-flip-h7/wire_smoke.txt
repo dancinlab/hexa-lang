@@ -1,0 +1,26 @@
+=== link baseline ===
+      |               ^       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+13 warnings generated.
+link-rc=0
+run-base-rc=42
+=== link override ===
+      |               ^       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+13 warnings generated.
+link-rc=0
+run-ovr-rc=42
+=== otool override _hexa_exit ===
+_hexa_exit:
+0000000100000770	mov	x0, x1
+0000000100000774	stp	x29, x30, [sp, #-0x10]!
+0000000100000778	mov	x29, sp
+000000010000077c	mov	x16, #0x1
+0000000100000780	svc	#0x80
+_main:
+=== otool baseline _hexa_exit (first 6 instr) ===
+_hexa_exit:
+00000001000472c0	stp	x29, x30, [sp, #-0x10]!
+00000001000472c4	mov	x29, sp
+00000001000472c8	fmov	d0, x1
+00000001000472cc	fcvtzs	w8, d0
+00000001000472d0	cmp	w0, #0x1
+00000001000472d4	csel	w8, w8, wzr, eq
