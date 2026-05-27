@@ -1,0 +1,86 @@
+// HEXA Standard Library — core/trait_clone_fixture
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Trait dispatch design fixture — documents the planned API surface for the
+// `Clone` core trait (RUNTIME.flip B5.trait-clone, sibling of B5.trait-design
+// which landed `Add`/`Sub`/`Eq`/`Ord` via PR #1752, and B5.trait-mul-div which
+// landed `Mul`/`Div`/`Rem` via PR #1783). The actual trait-dispatch
+// typechecker + monomorphization is a multi-PR compiler campaign (RFC #532
+// design landed, scaffold branch
+// `rfc-082-impl-a-trait-bound-scaffold-2026-05-23` active). This file pins
+// the **caller-facing concrete-type wrappers** so callers can compile
+// against a stable surface while the polymorphic trait dispatch lands.
+//
+// RUNTIME.flip B5.trait-clone spec:
+//   `clone_int/float/str/array_int/array_float` deep-copy fixture.
+//
+// What this file is NOT:
+//   - it is NOT a trait declaration (the compiler doesn't yet parse `trait` /
+//     `impl` syntax for user-level types)
+//   - it does NOT enable polymorphic dispatch over user types
+//   - it does NOT exercise the coherence/orphan rule decision
+//
+// What this file IS:
+//   - the concrete-monomorphic `_int` / `_float` / `_str` / `_array_int` /
+//     `_array_float` instantiations of the planned `Clone` trait surface,
+//     ready to be replaced by a single generic `clone[T: Clone](v: T) -> T`
+//     when the typechecker gains trait support
+//   - a parse-clean fixture that the trait-impl campaign can A/B test against
+//   - a documentation of intended semantics per type — scalar clone is a
+//     by-value pass-through (int/float/str), array clone is an element-wise
+//     deep copy (new backing buffer, same contents)
+//
+// Planned trait surface (RFC #532):
+//
+//   trait Clone { fn clone(self) -> Self }
+//
+// Semantics note — `str` clone returns the same string value. The runtime
+// `str` representation is already value-immutable, so a separate buffer
+// allocation is not observable to caller code; this matches Rust's
+// `String::clone` returning a fresh allocation while the user-visible
+// semantics are by-value.
+//
+// Coherence/orphan rule (D2 decision pending) — see trait_design_fixture.
+
+// -- Clone — scalar int / float / str (by-value pass-through) --
+
+@pure
+pub fn clone_int(v: int) -> int {
+    return v
+}
+
+@pure
+pub fn clone_float(v: float) -> float {
+    return v
+}
+
+@pure
+pub fn clone_str(s: str) -> str {
+    return s
+}
+
+// -- Clone — array_int / array_float (element-wise deep copy) --
+
+@pure
+pub fn clone_array_int(a: [int]) -> [int] {
+    let mut out: [int] = []
+    let mut i = 0
+    while i < len(a) {
+        out.push(a[i])
+        i = i + 1
+    }
+    return out
+}
+
+@pure
+pub fn clone_array_float(a: [float]) -> [float] {
+    let mut out: [float] = []
+    let mut i = 0
+    while i < len(a) {
+        out.push(a[i])
+        i = i + 1
+    }
+    return out
+}
