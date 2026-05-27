@@ -39,7 +39,7 @@ RUNTIME.md north-star("`.hexa`-ONLY · zero `.c`") 와 step3/step4 메모리
 | `hxlmhead_linux.c` | ③ | fused LM-head fwd/bwd — 모든 matmul 이 `cblas_sgemm`(OpenBLAS/Accelerate) 라우팅. H100 측정 scalar 165× 느림 → BLAS 의존 본질적 | 유지 (벤더 BLAS FFI; scalar 포팅은 perf-부적격) |
 | `hxqwen14b.c` | ③ | Qwen2.5-14B LoRA 학습 shim — `#include <cuda_runtime.h>`/`<cublas_v2.h>`/`<cuda_bf16.h>`. 벤더 CUDA/cuBLAS ABI (CPU AdamW 레퍼런스 일부만 순수) | 유지 (벤더 CUDA FFI) |
 | `hxqwen32b.c` | ③ | Qwen2.5-32B 변종 (14b 와 동일 ABI, n_layer/ffn_dim 만 차이). 동일 CUDA/cuBLAS 벤더 ABI | 유지 (벤더 CUDA FFI) |
-| `hxtok.c` | ① | Qwen2.5 BPE 토크나이저 순수 C 구현 — byte-level pre-tokenize + per-word BPE. 외부 의존 0 (libc 만) | `stdlib/tokenizer/bpe.hexa` (순수 parser/codec — 포팅 적격 핵심 후보) |
+| ~~`hxtok.c`~~ | ① | **DELETED (B9.6e)** — Qwen2.5 BPE C 구현. 빌드/링크/FFI 호출 0건 (standalone shim) · 순수-hexa 등가 `self/ml/qwen_bpe.hexa`·`tokenizer_bpe.hexa` 가 모든 consumer 서빙. dead-file git-rm (v565 패턴) | `self/ml/qwen_bpe.hexa`·`tokenizer_bpe.hexa` (이미 존재 — consumer 전수 사용 중) |
 | `hxvdsp_linux.c` | ① | Apple vDSP(RMSNorm/SoftMax/SwiGLU) 의 Linux scalar+libm 대체. 순수 scalar 루프, `-lm` 만 | `stdlib/flame/` eltwise (hexa-native scalar; auto-vec 은 native codegen 몫) |
 | `hxvocoder.c` | ① | HEXA-SPEAK 뉴럴 보코더 — additive synth sin/exp/clip 핫루프. libm(`math.h`) 만, BLAS 의도적 미통합 | `anima/anima-speak/neural_vocoder.hexa` (이미 hexa 레퍼런스 — C 는 libm floor 가속본) |
 | `lora_cuda_host.c` | ① | LoRA fwd/bwd **CPU 레퍼런스** — CUDA 커널의 exact-arithmetic 등가 순수 C. CUDA launch 는 weak stub(없으면 CPU 라우팅) | CPU 레퍼런스는 `stdlib/flame/` hexa-native 포팅 적격 (CUDA dispatch 부분만 ③) |
@@ -68,7 +68,7 @@ whitelist)으로 C 유지. `v565_grad_analysis.c` 는 분석 도구로 런타임
 | **③ vendor FFI / OS ABI floor** | **19** | 59% |
 | 합계 | 32 | 100% |
 
-- **layer ① (portable) = 11** : `crypto_blowfish` · `exec_argv_sha256` · `gpu_codegen_stub` · `hxflash_linux` · `hxlayer_linux` · `hxtok` · `hxvdsp_linux` · `hxvocoder` · `lora_cuda_host` · `tensor_kernels`(\*perf-floor 보류) · `v565_grad_analysis`(\*도구)
+- **layer ① (portable) = 11** (`hxtok` DELETED B9.6e — dead standalone, hexa 등가 기존; 잔존 list 는 historical) : `crypto_blowfish` · `exec_argv_sha256` · `gpu_codegen_stub` · `hxflash_linux` · `hxlayer_linux` · ~~`hxtok`~~ · `hxvdsp_linux` · `hxvocoder` · `lora_cuda_host` · `tensor_kernels`(\*perf-floor 보류) · `v565_grad_analysis`(\*도구)
 - **layer ② (bootstrap/floor) = 2** : `hexa_cc`(self-host 산출물) · `fp_init`(FP 제어레지스터 floor)
 - **layer ③ (FFI/OS-ABI floor) = 19** : `crypto_openssl` · `crypto_sodium` · `hxblas_linux` · `hxccl_linux` · `hxffi_slot` · `hxlmhead_linux` · `hxqwen14b` · `hxqwen32b` · `mount` · `namespace` · `net` · `persistent_pipe` · `proc_fork` · `pty` · `signal_flock` · `term_ffi` · `thread` · `wait` · `exec_pipe`
 
@@ -76,7 +76,7 @@ whitelist)으로 C 유지. `v565_grad_analysis.c` 는 분석 도구로 런타임
 
 zero-C north-star 가 **실측 진행 가능한** 우선순위 (perf-floor/도구 제외한 순수 후보):
 
-1. **`hxtok.c`** → BPE 토크나이저 (순수 parser/codec, libc-only). 포팅 가치 최고 — 알고리즘 명확, 외부 의존 0.
+1. ~~**`hxtok.c`**~~ → **DELETED (B9.6e)**. 정밀 audit 결과 standalone dead shim — 빌드 스크립트·링크·FFI 호출 0건이고 순수-hexa 등가(`self/ml/qwen_bpe.hexa`·`tokenizer_bpe.hexa`)가 이미 8개 consumer 전수 서빙. "포팅" 아니라 dead-file git-rm (v565 패턴). `.c` 228→227.
 2. **`exec_argv_sha256.c`** (SHA-256 부분) → FIPS 180-4 순수 해시. crypto stdlib 의 자연스러운 hexa-native 흡수 대상. (exec 부분은 ③ 으로 분리.)
 3. **`crypto_blowfish.c`** (Blowfish/bcrypt core) → π-seeded 순수 알고리즘. chacha20 hexa-native 선례 그대로. (SHA-512 sub-step 만 ③ sodium 위임.)
 4. **`hxvocoder.c`** → 이미 `neural_vocoder.hexa` 레퍼런스 존재. C 는 libm 가속본 — hexa 재흡수 가능 (perf 는 native codegen libm 호출로 회수).

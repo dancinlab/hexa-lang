@@ -291,8 +291,9 @@ hexa 로 존재 → reimpl 신규작성은 redundant. `.c` 가 남은 진짜 이
 
 ⚠ **DUP-RACE (2026-05-28)**: ~7 realistic 중 2개가 이미 hexa 존재 → blowfish 만 net-new.
 
-- [⛔DUP] **B9.5a-tokenizer-bpe** — `self/ml/tokenizer_bpe.hexa`·`qwen_bpe.hexa`
-      이미 존재. native `hxtok.c` 삭제 = wire 갭 (B9.6), reimpl 아님.
+- [x] **B9.5a-tokenizer-bpe** — `self/ml/tokenizer_bpe.hexa`·`qwen_bpe.hexa`
+      이미 존재. native `hxtok.c` = standalone dead shim (빌드/링크/FFI 호출 0건).
+      **DELETED B9.6e (228→227)** — dead-file git-rm (v565 패턴), reimpl 아님.
 - [⛔DUP] **B9.5b-sha256-core** — `stdlib/core/hash/sha256.hexa`·`stdlib/crypto/`
       이미 존재. wire 갭만.
 - [x] **B9.5c-blowfish** — `crypto_blowfish.c` (pi-seeded bcrypt) →
@@ -325,6 +326,15 @@ fan-out 불가, serial 진행.
 - [ ] **B9.6d-next-clean-c-delete** — native/runtime `.c` 중 추가 clean 1-caller +
       name-match 삭제 후보를 per-file 분석으로 발굴 (sha256 류 다중-caller 는 별도
       대규모 rewire 트랙). 입증된 7-surface 레시피 재사용.
+- [x] **B9.6e-hxtok-c-delete** — 🎯 **실제 `.c` 삭제 DONE (228→227)**.
+      `self/native/hxtok.c`(750L)+`hxtok.h`(49L) Qwen2.5 BPE C 라이브러리 삭제.
+      정밀 audit: standalone shim — `tool/`·`*.json`·`*.sh` 빌드 스크립트 0건,
+      `.so`/`.dylib` 아티팩트 0건, 전 repo `HxTok`/`hxtok_*` FFI 호출 0건 (유일
+      매치 = `compiler/roadmaps_archive/embedded.gen.hexa` 의 archived 텍스트
+      리터럴, 코드 아님). 순수-hexa 등가(`qwen_bpe.hexa`·`tokenizer_bpe.hexa`)가
+      8개 consumer 전수 서빙. **삭제 후 8/8 consumer `hexa parse` clean** — C
+      lib 가 dead 였음을 입증 (RUNEQ moot: live caller 0). runtime.c 무관(미
+      include). blowfish(#1816)·v565(#1818) 의 dead-file 패턴.
 - [ ] **B9.6a-hexaval-repr-emit** — HexaVal repr 생성자 codegen self-emit
       (`self/codegen/runtime_arm64.hexa` 확장; `rt_arena_*` 4 fn LANDED 패턴)
 - [ ] **B9.6b-runtime-primitive-emit** — 잔여 runtime primitive self-emit
