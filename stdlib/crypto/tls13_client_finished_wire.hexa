@@ -1,0 +1,149 @@
+// HEXA Standard Library — crypto/tls13_client_finished_wire
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// TLS 1.3 client Finished message + application-traffic key derivation —
+// pure hexa. The post-server-Finished transition: verify the server's
+// Finished tag, compute the client's Finished tag, derive application
+// traffic secrets / keys / IVs, build the Finished HandshakeMessage bytes
+// for AEAD-sealing inside an application-record.
+//
+// Frontier 18-list #6 (RUNTIME.md): "Finished verify_data + app-record
+// send/recv — tls13_record + tls13_finished + AEAD seal/open 와이어."
+// This PR delivers the **verify_data + app-traffic key derivation half**;
+// the actual AEAD seal+socket send / read+AEAD open of the Finished record
+// is a follow-up that needs a live conn (driver glue, not crypto).
+//
+// Surface (3 fn · 2 struct):
+//   - tls13_client_verify_server_finished(s_hs_traffic, transcript_hash_pre_sf,
+//                                          server_finished_verify_data) -> bool
+//     Recompute the server's verify_data and compare in constant time
+//     (delegated to existing tls13_finished_verify).
+//
+//   - tls13_client_compute_finished_message(c_hs_traffic,
+//                                            transcript_hash_pre_cf) -> [int]
+//     Build the on-wire Finished HandshakeMessage (4-byte HS header + 32-byte
+//     verify_data). Caller AEAD-seals this inside an application-record.
+//
+//   - tls13_client_derive_app_keys(master_secret, transcript_hash_at_sf,
+//                                   aead_key_length) -> Tls13ApplicationKeys
+//     Drive the post-server-Finished transition: derive c_ap_traffic /
+//     s_ap_traffic + key/iv pairs from master_secret + the transcript hash
+//     measured AT the server's Finished (RFC 8446 §7.1).
+//
+// Building blocks (all pre-LANDED):
+//   - tls13_finished_verify_data / tls13_finished_verify  (tls13_finished)
+//   - tls13_client_application_traffic_secret /
+//     tls13_server_application_traffic_secret              (tls13_traffic_secrets)
+//   - tls13_traffic_key / tls13_traffic_iv                 (tls13_record)
+//   - tls13_hs_header                                       (tls13_wire)
+//   - tls13_record_seal / tls13_record_open                 (tls13_record) —
+//     consumed by the application-record glue layer (next sibling PR).
+//
+// Composition (RFC 8446 §4.4.4 + §7.1):
+//   server Finished verify:
+//     verify_data_server = HMAC(finished_key(s_hs), H_pre_sf)
+//     pass iff verify_data_server == server_sent_bytes (constant time)
+//
+//   client Finished build:
+//     verify_data_client = HMAC(finished_key(c_hs), H_pre_cf)
+//     msg = hs_header(Finished, 32) || verify_data_client
+//
+//   application keys (post-server-Finished):
+//     c_ap_traffic = Derive-Secret(master_secret, "c ap traffic", H_at_sf)
+//     s_ap_traffic = Derive-Secret(master_secret, "s ap traffic", H_at_sf)
+//     c_ap_key/iv  = Expand-Label(c_ap_traffic, "key"/"iv", "", N|12)
+//     s_ap_key/iv  = Expand-Label(s_ap_traffic, "key"/"iv", "", N|12)
+//
+// Out-of-scope (frontier #6 sibling follow-up — driver glue, not crypto):
+//   - AEAD-seal Finished + socket_write
+//   - socket_read + AEAD-open server Finished record
+//   - sequence-number management (record nonces) across handshake/app phases
+
+use "stdlib/crypto/tls13_finished"
+use "stdlib/crypto/tls13_traffic_secrets"
+use "stdlib/crypto/tls13_record"
+use "stdlib/crypto/tls13_wire"
+
+// Application-phase keys + IVs (client + server) and the chained secrets.
+struct Tls13ApplicationKeys {
+    c_ap_traffic:    [int],   // 32 bytes
+    s_ap_traffic:    [int],   // 32 bytes
+    client_ap_key:   [int],   // AEAD key
+    client_ap_iv:    [int],   // 12 bytes
+    server_ap_key:   [int],   // AEAD key
+    server_ap_iv:    [int]    // 12 bytes
+}
+
+// Verify the server's Finished message against the expected transcript hash.
+// `server_finished_verify_data` is the 32-byte tag the server sent inside its
+// Finished HandshakeMessage (after AEAD-open of the handshake record).
+//
+// Delegates the constant-time compare to tls13_finished_verify (which uses
+// the existing primitive).
+@pure
+pub fn tls13_client_verify_server_finished(
+    s_hs_traffic:                [int],
+    transcript_hash_pre_sf:      [int],
+    server_finished_verify_data: [int]
+) -> bool {
+    return tls13_finished_verify(s_hs_traffic, transcript_hash_pre_sf, server_finished_verify_data)
+}
+
+// Build the on-wire Finished HandshakeMessage for the client:
+//   hs_header(msg_type=Finished, length=32) || verify_data (32 bytes).
+//
+// The caller then AEAD-seals this inside an application-record (using
+// tls13_record_seal with the client's handshake traffic key/iv at the
+// current handshake-phase sequence number).
+@pure
+pub fn tls13_client_compute_finished_message(
+    c_hs_traffic:           [int],
+    transcript_hash_pre_cf: [int]
+) -> [int] {
+    let verify_data = tls13_finished_verify_data(c_hs_traffic, transcript_hash_pre_cf)
+    let hdr = tls13_hs_header(TLS_HS_FINISHED, len(verify_data))
+    let mut out: [int] = []
+    let mut i = 0
+    while i < len(hdr) {
+        out.push(hdr[i])
+        i = i + 1
+    }
+    i = 0
+    while i < len(verify_data) {
+        out.push(verify_data[i])
+        i = i + 1
+    }
+    return out
+}
+
+// Post-server-Finished transition: derive application-traffic keys.
+//
+// Inputs:
+//   master_secret           — from frontier #5 (tls13_client_keyschedule_wire)
+//   transcript_hash_at_sf   — SHA256(CH || SH || EE || Cert || CertVerify ||
+//                             ServerFinished) — measured AT the server's
+//                             Finished message
+//   aead_key_length         — 16 (AES-128-GCM) or 32 (AES-256-GCM/ChaCha20)
+@pure
+pub fn tls13_client_derive_app_keys(
+    master_secret:         [int],
+    transcript_hash_at_sf: [int],
+    aead_key_length:       int
+) -> Tls13ApplicationKeys {
+    let c_ap = tls13_client_application_traffic_secret(master_secret, transcript_hash_at_sf)
+    let s_ap = tls13_server_application_traffic_secret(master_secret, transcript_hash_at_sf)
+    let c_key = tls13_traffic_key(c_ap, aead_key_length)
+    let c_iv = tls13_traffic_iv(c_ap)
+    let s_key = tls13_traffic_key(s_ap, aead_key_length)
+    let s_iv = tls13_traffic_iv(s_ap)
+    return Tls13ApplicationKeys {
+        c_ap_traffic:  c_ap,
+        s_ap_traffic:  s_ap,
+        client_ap_key: c_key,
+        client_ap_iv:  c_iv,
+        server_ap_key: s_key,
+        server_ap_iv:  s_iv
+    }
+}
