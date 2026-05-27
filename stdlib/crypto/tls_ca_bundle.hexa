@@ -1,0 +1,86 @@
+// HEXA Standard Library — crypto/tls_ca_bundle
+//
+// @version 0.1.0
+// @capabilities [pure, ffi]
+//
+// TLS trust-root (CA bundle) lookup surface — API stub. The actual root
+// store choice (Mozilla NSS PEM · system trust store · pinned set) is a
+// distribution-policy decision blocked on the D2+ governance gate per
+// frontier 18-list #9 ("TLS CA bundle 배포 결정 (D2+)"). This file pins the
+// CALLER-FACING surface so the TLS 1.3 client wire (PRs #1724/#1725/#1726/
+// #1728) can compile against a stable API while the actual store ships in a
+// later PR.
+//
+// Frontier 18-list #9 (RUNTIME.md): "TLS CA bundle 배포 결정 (D2+) — TLS
+// handshake 와 함께."
+//
+// Surface (4 fn · 1 struct · all `tls_ca_*` prefix):
+//   pub fn tls_ca_bundle_source() -> str
+//     Returns the configured source kind ("none" until D2+ decision).
+//
+//   pub fn tls_ca_bundle_count() -> int
+//     Returns the number of trust roots currently loaded (0 until decision).
+//
+//   pub fn tls_ca_bundle_pem(index: int) -> str
+//     Returns the PEM-encoded certificate at `index` (empty string until
+//     a bundle is installed).
+//
+//   pub fn tls_ca_bundle_verify_chain(leaf_der: [int],
+//                                       intermediates: [[int]]) -> TlsCaVerifyResult
+//     Validates `leaf_der` chained through `intermediates` against the
+//     configured trust roots. Returns `kind = "no-bundle"` until the D2+
+//     decision installs a real bundle.
+//
+// Trust-store policy options (frontier #9 design space — D2+ resolves):
+//   Option A — pinned trust roots shipped IN the binary (compact subset of
+//              Mozilla NSS, ~140 KiB; reproducible · zero IO at startup).
+//   Option B — system trust store FFI (macOS SecTrust · Linux ca-certificates)
+//              (smaller binary · platform-dependent · runtime FFI).
+//   Option C — caller-supplied bundle path (no defaults · explicit always).
+//   Option D — hybrid: A as default, C as override.
+//
+// The API below is policy-agnostic — all four options can populate the
+// `tls_ca_bundle_*` lookups identically. Only the IMPLEMENTATION of these
+// fns is gated on D2+.
+
+// Verify-chain result. `kind` discriminates outcome:
+//   "ok"                — leaf verified up to a trusted root
+//   "no-bundle"         — no trust store configured yet (D2+ pending)
+//   "chain-broken"      — intermediate or root not found
+//   "expired"           — one cert in the chain is past notAfter
+//   "sig-fail"          — a chain link's signature didn't verify
+//   "untrusted-root"    — chain terminates at a cert not in the trust store
+struct TlsCaVerifyResult {
+    kind:                 str,
+    matched_root_index:   int,    // index into tls_ca_bundle_pem(), or -1
+    chain_depth:          int,    // number of intermediates walked
+    failing_subject:      str     // for diagnostic; empty when kind="ok"
+}
+
+@pure
+pub fn tls_ca_bundle_source() -> str {
+    // D2+ stub: declare "none" until the governance decision installs a
+    // concrete trust store. A follow-up PR replaces this with the chosen
+    // option ("pinned-nss" · "system-fficacert" · "caller-supplied" · "hybrid").
+    return "none"
+}
+
+@pure
+pub fn tls_ca_bundle_count() -> int {
+    return 0
+}
+
+@pure
+pub fn tls_ca_bundle_pem(index: int) -> str {
+    return ""
+}
+
+@pure
+pub fn tls_ca_bundle_verify_chain(leaf_der: [int], intermediates: [[int]]) -> TlsCaVerifyResult {
+    return TlsCaVerifyResult {
+        kind: "no-bundle",
+        matched_root_index: -1,
+        chain_depth: len(intermediates),
+        failing_subject: ""
+    }
+}
