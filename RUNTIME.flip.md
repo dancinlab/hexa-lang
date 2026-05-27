@@ -215,9 +215,10 @@ coarse item 을 audit-grounded atomic 으로 분해 (2026-05-28).
 실측 현재 상태 (2026-05-28, origin/main):
 - `.o` = **0** ✅ (#1808 build-artifact 제거로 달성)
 - `.s` = **3** (3 irreducible boot-floor · B9.1a 로 dead fixture 1개 제거)
-- `.c` = **230** (`self/*.c` 44 + `self/native/*.c` 32 + 기타). north-star
+- `.c` = **229** (`self/*.c` 44 + `self/native/*.c` 31 + 기타). north-star
   충족 시 `find . -name '*.c' -o -name '*.s' -o -name '*.o'` 가 비어야 함.
-  ※ 첫 실제 감소 후보 = `crypto_blowfish.c` (B9.6c · blowfish RUNEQ 입증 #1814).
+  🎯 **첫 실제 감소 달성** — `crypto_blowfish.c` 삭제 (B9.6c · #1816 · 230→229).
+  codegen-wire 레시피 end-to-end 입증 (fixpoint byte-identical).
 
 ⚠ **핵심 정정 (2026-05-28 scoping 3/3 + dup-race precheck 후)**: `.c`-zero 의
 진짜 병목은 reimpl 부재가 **아니다** — portable layer① 의 대부분(sha256·regex·
@@ -306,16 +307,24 @@ hexa 로 존재 → reimpl 신규작성은 redundant. `.c` 가 남은 진짜 이
 해야 runtime.c 가 dead. wipe-prone + rebuild + fixpoint 필요 → 격리-worktree 병렬
 fan-out 불가, serial 진행.
 
-- [ ] **B9.6c-blowfish-c-delete** — 🎯 **첫 실제 `.c` 삭제 (230→229)**. blowfish
-      RUNEQ (#1814) 가 byte-identical hexa 대체본을 입증했으므로, 4-surface builtin
-      제거로 `crypto_blowfish.c` 를 dead 화:
-      1. `compiler/check/bind.hexa:1055` — allowlist 에서 `bcrypt_pbkdf` 제거
-      2. `self/codegen.hexa:6971-72` — emit branch 제거
-      3. `self/codegen.hexa:10180` — `_is_builtin_name` 제거
-      4. `self/stdlib/ssh/keyfile.hexa` — `use "stdlib/crypto/blowfish"` rewire
-      → regen (mini arm64 · `cc --regen` ubu l-value버그로 불가) → fixpoint →
-      `crypto_blowfish.c` git rm + build-recipe 갱신. SERIAL · wipe-prone ·
-      phase-h codegen 에이전트와 codegen.hexa 경합 주의.
+- [x] **B9.6c-blowfish-c-delete** — 🎯 **첫 실제 `.c` 삭제 DONE (230→229 · #1816)**.
+      7-surface 제거 (runtime.c #include · runtime.h decl · bind.hexa allowlist ·
+      codegen.hexa emit+is_builtin · keyfile.hexa rewire · hexa_cc.c regen) +
+      `crypto_blowfish.c` git rm. **fixpoint byte-identical (gen2≡gen3, 1851200 B)**
+      · link clean · keyfile resolves via `use "stdlib/crypto/blowfish"`. wipe-prone
+      runtime.c guard held. **codegen-wire 레시피 end-to-end 입증.**
+
+      ⚠ **다음 후보 분석 (레시피 입증됐으나 clean 케이스는 제한적)**:
+      - `exec_argv_sha256.c` → ❌ NOT clean: `sha256`/`sha256_file` builtin 을
+        falsifier·hexa_ld·main·codegen 등 **핵심 컴파일러 다수**가 직접 호출 +
+        stdlib 이름 불일치 (`sha256` vs `sha256_hex`) + exec-shim 번들. 무리한
+        삭제 = 컴파일러 붕괴. 다중 rewire+rename 필요한 별도 큰 작업.
+      - 나머지 native ③19 = vendor FFI (포팅≠삭제 · 영구 바닥).
+      - blowfish 가 유일한 깔끔한 1-caller 케이스였음. 다음 `.c` 삭제는 per-file
+        caller-count + name-match 분석 선행 必 (clean 케이스 추가 탐색 = B9.6d).
+- [ ] **B9.6d-next-clean-c-delete** — native/runtime `.c` 중 추가 clean 1-caller +
+      name-match 삭제 후보를 per-file 분석으로 발굴 (sha256 류 다중-caller 는 별도
+      대규모 rewire 트랙). 입증된 7-surface 레시피 재사용.
 - [ ] **B9.6a-hexaval-repr-emit** — HexaVal repr 생성자 codegen self-emit
       (`self/codegen/runtime_arm64.hexa` 확장; `rt_arena_*` 4 fn LANDED 패턴)
 - [ ] **B9.6b-runtime-primitive-emit** — 잔여 runtime primitive self-emit
