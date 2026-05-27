@@ -1426,7 +1426,7 @@ CLAIMS.tape entries: `fusion_layerblock_cross_layer_structural` (🔵) +
 ## flame V3 port (from INBOX #2 — P1 학습-정확도 코어 COMPLETE, P2/P3 여기로 이관 2026-05-27)
 > P1 코어 landed: full-position CE forward (#1481) + RFC 059 backward design (#1487) + P1②-a/b/c backward impl (#1489/1491/1492), 전부 grad-check 🔵. anima ConsciousDecoderV3 학습-정확도 경로 완결. 아래는 저우선(차단 아님, byte-level fallback 동작) enhancement.
 - [ ] flame-P2a rope base 인자화 — `nn_rope_build_tables` base 10000 하드코딩 → 파라미터화 (Qwen=50000). trivial, parse-gate 검증
-- [ ] flame-P2b Qwen BPE tokenizer — byte-level V=256 fallback → 실 BPE (merge rules + vocab 로드), encode/decode round-trip + reference 토큰화 일치 검증
+- [ ] flame-P2b Qwen BPE tokenizer — byte-level V=256 fallback → 실 BPE (merge rules + vocab 로드), encode/decode round-trip + reference 토큰화 일치 검증. ⚠ **scope 정정 (2026-05-27)**: BPE 알고리즘 = 이미 존재 (`self/ml/tokenizer_bpe.hexa` 590L · bpe_load/encode/decode/merge + `tokenizer_test` round-trip + `tokenizer_trainer`). 실제 gap = **self/ml BPE → stdlib/flame 학습 corpus 경로 와이어링** (byte-level `read_file_bytes` → `bpe_encode` 교체 + self/ml↔stdlib/flame 모듈 경계 + tokenizer 두 API 일원화). from-scratch 아님 (anima DECODER MoE scale-gate · `inbox/notes/anima-decoder-moe-toy-pass-gates-flame-p2b-qwen-bpe.md`)
 - [ ] flame-P2c from_qwen warm-start `.pt` loader — PyTorch checkpoint 바이너리 포맷 파싱 → flame weight import
 - [ ] flame-P3a bnb 8-bit 양자화 — weight int8 quant/dequant, GPU 경로
 - [ ] flame-P3b cross-attn — encoder-decoder cross-attention op + backward (ag_tape)

@@ -30,3 +30,18 @@ flame-P2b Qwen BPE tokenizer (merge rules + vocab 로드, encode/decode round-tr
 ## 차단 여부
 
 ⚠ 부분 차단 — DECODER M4b-fire-scale (3B) 가 flame-P2b 에 의존. toy 검증(M4a/b)은 완료라 즉시-차단은 아니나, MoE-fresh 의 실 가치(3B 더블바인드 해소) 실증이 flame-P2b 까지 보류.
+
+## scope 정정 (2026-05-27 — BPE 는 이미 존재, from-scratch 아님)
+
+flame-P2b 를 "BPE tokenizer 부재 → 새로 작성" 으로 적었으나 **부정확**. 코드 스캔 결과:
+
+- `self/ml/tokenizer_bpe.hexa` (590 LoC) — **완비된 BPE**: `bpe_load`/`bpe_load_from_dict`/`build_merge_ranks`/`bpe_merge_word`/`bpe_encode`/`bpe_decode`/`bpe_encode_batch`/`bpe_vocab_size` (stateful tok-object API)
+- `self/ml/tokenizer.hexa` + `self/ml/tokenizer_test.hexa` — round-trip 테스트 (`bpe_encode(text, vocab, merges)` stateless API · encode→decode 일치 case 들)
+- `self/ml/tokenizer_trainer.hexa` — BPE merge 학습기
+
+**∴ 실제 gap = "BPE 작성" 이 아니라 "self/ml BPE → stdlib/flame 학습 path 와이어링"**:
+1. stdlib/flame corpus 로더 (`flame_d768_12L_corpus_test` 등) 가 byte-level `read_file_bytes` (V=256) 사용 — 이를 `bpe_encode` 경유로 교체
+2. self/ml (interp-tier) ↔ stdlib/flame (forge/native-tier) 모듈 경계 — import 가능 여부 / 정식 tokenizer 모듈 일원화 (tokenizer_bpe vs tokenizer 두 API 정리)
+3. Qwen vocab.json + merges.txt 로드 → V=151936 round-trip + reference 토큰화 일치 검증
+
+→ flame-P2b 재정의: **BPE 알고리즘 (있음) 를 flame 학습 corpus 경로에 연결**. 난이도 = wiring/module-boundary (from-scratch BPE 보다 작음). flame-P2a (rope base) 와 함께 진행 시 3B Qwen hexa-native 학습 path 개방.
