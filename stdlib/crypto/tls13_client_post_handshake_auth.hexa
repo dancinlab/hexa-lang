@@ -1,0 +1,234 @@
+// HEXA Standard Library — crypto/tls13_client_post_handshake_auth
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// TLS 1.3 post-handshake client authentication (RFC 8446 §4.6.2) — pure
+// hexa. After the initial handshake has completed and application traffic
+// is flowing, the server MAY send a CertificateRequest at any point; the
+// client responds with a Certificate + CertificateVerify (and a Finished
+// over the post-handshake transcript). This module composes the on-wire
+// HandshakeMessage bytes for the client side of that exchange:
+//
+//   1. parse the server's post-handshake CertificateRequest and extract
+//      the certificate_request_context (which the client MUST echo into
+//      its Certificate response — RFC 8446 §4.6.2)
+//   2. build the Certificate HandshakeMessage with the echoed context +
+//      the supplied X.509 cert chain bytes
+//   3. build the CertificateVerify HandshakeMessage carrying a signature
+//      produced over the post-handshake transcript hash (signed_content
+//      already constructed via tls13_certverify; raw signature bytes
+//      supplied by the caller — pure module · no signing IO here)
+//
+// RUNTIME.flip B1.tls13-post-handshake-auth. let-mut idiom (#1506).
+//
+// Surface (3 fn · 1 struct · 1 new constant — the other two HS types
+// come from tls13_wire):
+//   pub struct Tls13PostHandshakeAuthState {
+//       kind:                str,    // "ok" | "wrong-hs-type" | "short"
+//       request_context:     [int],  // echoed back into Certificate
+//       cert_message:        [int],  // (unused by parse; populated by caller flow)
+//       cert_verify_message: [int]   // (unused by parse; populated by caller flow)
+//   }
+//   pub fn tls13_client_parse_cert_request_post_handshake(hs_msg: [int])
+//       -> Tls13PostHandshakeAuthState
+//   pub fn tls13_client_build_certificate_post_handshake(
+//       request_context:  [int],
+//       cert_chain_bytes: [int]
+//   ) -> [int]
+//   pub fn tls13_client_build_certverify_post_handshake(
+//       sig_scheme: int,
+//       signature:  [int]
+//   ) -> [int]
+//
+// New constant (the other 2 HS types — CERTIFICATE=11=0x0b and
+// CERTIFICATE_VERIFY=15=0x0f — are already provided by tls13_wire):
+//   pub let TLS_HS_CERTIFICATE_REQUEST: int = 13   // 0x0d
+//
+// Composition notes (RFC 8446 §4.6.2 + §4.4.2 + §4.4.3):
+//   CertificateRequest on-wire HandshakeMessage:
+//     hs_header(13, body_len) || body
+//       body = u8 ctx_len || ctx[ctx_len] || u16 ext_len || extensions
+//   Certificate on-wire HandshakeMessage (client response):
+//     hs_header(11, body_len) || body
+//       body = u8 ctx_len || ctx[ctx_len] || u24 cert_list_len || cert_chain_bytes
+//     ctx MUST equal the request_context received above (§4.6.2).
+//   CertificateVerify on-wire HandshakeMessage:
+//     hs_header(15, body_len) || body
+//       body = u16 sig_scheme || u16 sig_len || signature[sig_len]
+//
+// Out-of-scope (driver glue, follow-up):
+//   - actually signing the post-handshake transcript (caller passes raw
+//     signature bytes; signed_content construction lives in tls13_certverify)
+//   - the post-handshake Finished over the new transcript leg
+//   - AEAD seal of all three messages inside application records
+//   - delivering the response to the socket
+
+use "stdlib/crypto/tls13_wire"
+
+// Post-handshake CertificateRequest message type (RFC 8446 §4.3.2 / §4.6.2).
+// CERTIFICATE (0x0b=11) and CERTIFICATE_VERIFY (0x0f=15) are supplied by
+// tls13_wire; CERTIFICATE_REQUEST is added here as it is not yet there.
+pub let TLS_HS_CERTIFICATE_REQUEST: int = 0x0d   // 13
+
+// Result of parsing a post-handshake CertificateRequest. `kind` is "ok"
+// when the parse succeeded and `request_context` holds the bytes the
+// client MUST echo into its Certificate response. cert_message /
+// cert_verify_message are placeholders the caller flow populates when it
+// actually builds the response (kept here so this struct can travel
+// through the whole post-handshake auth turn as one value).
+pub struct Tls13PostHandshakeAuthState {
+    kind:                str,
+    request_context:     [int],
+    cert_message:        [int],
+    cert_verify_message: [int]
+}
+
+// Parse a server-sent post-handshake CertificateRequest HandshakeMessage
+// (the full HS-framed bytes, NOT just the body) and extract the
+// certificate_request_context. Validates:
+//   - hs_msg has the 4-byte HS header + at least 1 byte for u8 ctx_len
+//   - hs_type == TLS_HS_CERTIFICATE_REQUEST (13)
+//   - hs_length declares a body that fits in the supplied bytes
+//   - ctx_len fits in the declared body
+//
+// Returns kind="wrong-hs-type" if the message type is not 13.
+// Returns kind="short" if any length check fails.
+// Returns kind="ok" with the extracted context otherwise.
+@pure
+pub fn tls13_client_parse_cert_request_post_handshake(
+    hs_msg: [int]
+) -> Tls13PostHandshakeAuthState {
+    let empty: [int] = []
+    if len(hs_msg) < 4 {
+        return Tls13PostHandshakeAuthState {
+            kind:                "short",
+            request_context:     empty,
+            cert_message:        empty,
+            cert_verify_message: empty
+        }
+    }
+    let hs_type = tls13_hs_type(hs_msg, 0)
+    if hs_type != TLS_HS_CERTIFICATE_REQUEST {
+        return Tls13PostHandshakeAuthState {
+            kind:                "wrong-hs-type",
+            request_context:     empty,
+            cert_message:        empty,
+            cert_verify_message: empty
+        }
+    }
+    let body_len = tls13_hs_length(hs_msg, 0)
+    if len(hs_msg) < 4 + body_len {
+        return Tls13PostHandshakeAuthState {
+            kind:                "short",
+            request_context:     empty,
+            cert_message:        empty,
+            cert_verify_message: empty
+        }
+    }
+    if body_len < 1 {
+        return Tls13PostHandshakeAuthState {
+            kind:                "short",
+            request_context:     empty,
+            cert_message:        empty,
+            cert_verify_message: empty
+        }
+    }
+    let ctx_len = hs_msg[4] & 0xFF
+    if 1 + ctx_len > body_len {
+        return Tls13PostHandshakeAuthState {
+            kind:                "short",
+            request_context:     empty,
+            cert_message:        empty,
+            cert_verify_message: empty
+        }
+    }
+    let mut ctx: [int] = []
+    let mut i = 0
+    while i < ctx_len {
+        ctx.push(hs_msg[5 + i] & 0xFF)
+        i = i + 1
+    }
+    return Tls13PostHandshakeAuthState {
+        kind:                "ok",
+        request_context:     ctx,
+        cert_message:        empty,
+        cert_verify_message: empty
+    }
+}
+
+// Build the Certificate HandshakeMessage the client sends back in
+// response to a post-handshake CertificateRequest. `request_context` is
+// the bytes returned by the parser above (MUST be echoed verbatim per
+// §4.6.2). `cert_chain_bytes` is the already-serialized CertificateEntry
+// list (i.e. the body that follows the u24 cert_list_length in §4.4.2);
+// pure composition · no X.509 work here.
+//
+// On-wire layout:
+//   hs_header(11, body_len) || u8 ctx_len || ctx || u24 cert_list_len || cert_chain
+@pure
+pub fn tls13_client_build_certificate_post_handshake(
+    request_context:  [int],
+    cert_chain_bytes: [int]
+) -> [int] {
+    let ctx_len = len(request_context)
+    let cert_list_len = len(cert_chain_bytes)
+    let body_len = 1 + ctx_len + 3 + cert_list_len
+    let hdr = tls13_hs_header(TLS_HS_CERTIFICATE, body_len)
+    let mut out: [int] = []
+    let mut i = 0
+    while i < len(hdr) {
+        out.push(hdr[i])
+        i = i + 1
+    }
+    out.push(ctx_len & 0xFF)
+    i = 0
+    while i < ctx_len {
+        out.push(request_context[i] & 0xFF)
+        i = i + 1
+    }
+    out.push((cert_list_len >> 16) & 0xFF)
+    out.push((cert_list_len >> 8) & 0xFF)
+    out.push(cert_list_len & 0xFF)
+    i = 0
+    while i < cert_list_len {
+        out.push(cert_chain_bytes[i] & 0xFF)
+        i = i + 1
+    }
+    return out
+}
+
+// Build the CertificateVerify HandshakeMessage carrying the client's
+// signature over the post-handshake transcript hash. `sig_scheme` is the
+// 16-bit SignatureScheme code (RFC 8446 §4.2.3 — e.g. 0x0807 for
+// ed25519, 0x0403 for ecdsa_secp256r1_sha256). `signature` is the raw
+// signature bytes (caller already produced them via the relevant cipher
+// module — Ed25519 / ECDSA / RSA-PSS).
+//
+// On-wire layout:
+//   hs_header(15, body_len) || u16 sig_scheme || u16 sig_len || signature
+@pure
+pub fn tls13_client_build_certverify_post_handshake(
+    sig_scheme: int,
+    signature:  [int]
+) -> [int] {
+    let sig_len = len(signature)
+    let body_len = 2 + 2 + sig_len
+    let hdr = tls13_hs_header(TLS_HS_CERTIFICATE_VERIFY, body_len)
+    let mut out: [int] = []
+    let mut i = 0
+    while i < len(hdr) {
+        out.push(hdr[i])
+        i = i + 1
+    }
+    out.push((sig_scheme >> 8) & 0xFF)
+    out.push(sig_scheme & 0xFF)
+    out.push((sig_len >> 8) & 0xFF)
+    out.push(sig_len & 0xFF)
+    i = 0
+    while i < sig_len {
+        out.push(signature[i] & 0xFF)
+        i = i + 1
+    }
+    return out
+}
