@@ -1,0 +1,95 @@
+// HEXA Standard Library — core/trait_display_fixture
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Trait dispatch design fixture — documents the planned API surface for
+// the `Display` core trait (RUNTIME.flip B5.trait-display, sibling of
+// B5.trait-design / B5.trait-mul-div). The actual trait-dispatch
+// typechecker + monomorphization is a multi-PR compiler campaign
+// (RFC #532 design landed, scaffold branch
+// `rfc-082-impl-a-trait-bound-scaffold-2026-05-23` active). This file
+// pins the **caller-facing concrete-type wrappers** so callers can
+// compile against a stable surface while the polymorphic trait dispatch
+// lands.
+//
+// RUNTIME.flip B5.trait-display spec:
+//   `to_str_int/float/bool/array_int` — separate from `to_string`
+//   runtime fn (which only handles int/float scalar conversion).
+//
+// What this file is NOT:
+//   - it is NOT a trait declaration (the compiler doesn't yet parse
+//     `trait` / `impl` syntax for user-level types)
+//   - it does NOT enable polymorphic dispatch over user types
+//   - it does NOT exercise the coherence/orphan rule decision
+//   - it does NOT replace the `to_string` runtime builtin — it wraps
+//     it for int/float and adds bool + array surface
+//
+// What this file IS:
+//   - the concrete-monomorphic `_int` / `_float` / `_bool` / `_array_*`
+//     instantiations of the planned `Display` trait, ready to be
+//     replaced by a single generic `to_str[T: Display](v: T)` when the
+//     typechecker gains trait support
+//   - a parse-clean fixture that the trait-impl campaign can A/B test
+//     against
+//   - a documentation of intended rendering semantics per type (array
+//     elements joined by ", " inside "[...]"; str elements
+//     double-quoted)
+//
+// Planned trait surface (RFC #532):
+//
+//   trait Display { fn to_str(self) -> str }
+//
+// Coherence/orphan rule (D2 decision pending) — see trait_design_fixture.
+
+// -- to_str — scalar int / float wrappers over runtime `to_string` --
+
+@pure
+pub fn to_str_int(n: int) -> str {
+    return to_string(n)
+}
+
+@pure
+pub fn to_str_float(f: float) -> str {
+    return to_string(f)
+}
+
+// -- to_str — bool (runtime `to_string` does not cover bool) --
+
+@pure
+pub fn to_str_bool(b: bool) -> str {
+    if b { return "true" }
+    return "false"
+}
+
+// -- to_str — array of int — rendered as "[1, 2, 3]" --
+
+@pure
+pub fn to_str_array_int(a: [int]) -> str {
+    let mut out = "["
+    let mut i = 0
+    while i < len(a) {
+        if i > 0 { out = out + ", " }
+        out = out + to_string(a[i])
+        i = i + 1
+    }
+    out = out + "]"
+    return out
+}
+
+// -- to_str — array of str — rendered as `["a", "b", "c"]` --
+
+@pure
+pub fn to_str_array_str(a: [str]) -> str {
+    let mut out = "["
+    let mut i = 0
+    while i < len(a) {
+        if i > 0 { out = out + ", " }
+        out = out + "\""
+        out = out + a[i]
+        out = out + "\""
+        i = i + 1
+    }
+    out = out + "]"
+    return out
+}
