@@ -2170,8 +2170,9 @@ correctness (per M10/M16; see cycle-69 catalog + PR #251/#426 analysis)
 
 ## Phase 3 — Tier-C application primitives (16+ cycles OR deferred)
 
-- [~] crypto bulk: chacha20 ✓(RFC 8439) · sha256 ✓(pre-existing) · x25519 ✓(stdlib/crypto/
-      x25519.hexa — Montgomery ladder GF(2^255−19), RFC 7748 §5.2/§6.1 + ECDH 3/3) · ed25519 remains
+- [~] crypto bulk: chacha20 ✓(RFC 8439) · sha256 ✓(pre-existing) · x25519 ✓(RFC 7748 3/3) · sha512 ✓(FIPS180-4) ·
+      ed25519 ◐(stdlib/crypto/ed25519.hexa parse-clean, TweetNaCl Edwards port over verified
+      x25519 field arith + sha512; runtime KAT perf-pending >150s). crypto-bulk: 4.5/5
 - [ ] networking full: TLS 1.3 in hexa? (very heavy)
 - [x] GPU kernels (hxcuda_*.cu, hxblas_*) — **vendor C ABI** = FFI terminal state
       per `Policy DECIDED 2026-05-26 Option A` (below). Layer ③ irreducible-external
