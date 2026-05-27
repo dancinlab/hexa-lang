@@ -1,0 +1,115 @@
+// HEXA Standard Library — cloud/preflight_symptom_diff
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Cross-backend symptom comparator — workload-axis sibling of
+// stdlib/cloud/preflight_log_pattern_watcher (which classifies a single
+// run's failure mode). This file implements RFC 091 §2.5: given two
+// classified symptoms from the same workload running on different
+// backends (e.g. CPU vs GPU, or NVPTX vs arm64-Darwin), report whether
+// they agree or diverge.
+//
+// RUNTIME.flip B6.preflight-symptom-diff (frontier B6 list — preflight v2
+// telemetry axis): the divergence classifier complements the OOM / NaN /
+// deadlock pattern watcher by surfacing backend-specific failures that
+// would otherwise be invisible to a single-run diagnostic.
+//
+// RFC reference: docs/rfc/rfc_drafts_2026_05_24/rfc_091_hexa_cloud_preflight_v2_dft_hpc.md
+// (§2.5 — cross-backend symptom diff). Pure-formula, no IO, no pod-spinup.
+//
+// Surface (1 fn · 1 struct):
+//   preflight_compare_symptoms(kind_a: str, kind_b: str) -> PreflightSymptomDiff
+//
+// Input vocabulary (from stdlib/cloud/preflight_log_pattern_watcher
+// classifier): "oom" / "nan" / "deadlock" / "segfault" / "killed" / "none".
+//
+// Classification axes:
+//   - both "none"                        -> "both-clean"           (both_clean=true)
+//   - same non-"none" kind on both       -> "both-failed-same"     (both_failed_same=true)
+//   - kind_a="none", kind_b!="none"      -> "backend-b-only-failed"
+//   - kind_a!="none", kind_b="none"      -> "backend-a-only-failed"
+//   - distinct non-"none" kinds          -> "divergent"            (divergent=true)
+
+// Cross-backend symptom comparison result — RFC 091 §2.5.
+//
+// kind: terminal classification (one of the 5 axes above).
+// both_clean / both_failed_same / divergent: convenience boolean flags
+//   for callers that want to branch without string compare.
+// backend_a_only / backend_b_only: when populated, the failing symptom
+//   on that backend; "" otherwise.
+struct PreflightSymptomDiff {
+    kind:              str,   // both-clean / both-failed-same / divergent / backend-a-only-failed / backend-b-only-failed
+    both_clean:        bool,  // true when kind == "both-clean"
+    both_failed_same:  bool,  // true when kind == "both-failed-same"
+    divergent:         bool,  // true when kind == "divergent"
+    backend_a_only:    str,   // failing symptom on backend A (when relevant), else ""
+    backend_b_only:    str    // failing symptom on backend B (when relevant), else ""
+}
+
+// Compare two classified symptoms across backends.
+//
+// kind_a / kind_b are values produced by the
+// stdlib/cloud/preflight_log_pattern_watcher classifier
+// ("oom" / "nan" / "deadlock" / "segfault" / "killed" / "none").
+//
+// Result kind decisions are deterministic and total: every input pair
+// maps to exactly one of the 5 terminal kinds.
+@pure
+pub fn preflight_compare_symptoms(kind_a: str, kind_b: str) -> PreflightSymptomDiff {
+    // both clean — workload is symptom-free on both backends.
+    if kind_a == "none" {
+        if kind_b == "none" {
+            return PreflightSymptomDiff {
+                kind: "both-clean",
+                both_clean: true,
+                both_failed_same: false,
+                divergent: false,
+                backend_a_only: "",
+                backend_b_only: ""
+            }
+        }
+        // a clean, b failed — backend B-only failure.
+        return PreflightSymptomDiff {
+            kind: "backend-b-only-failed",
+            both_clean: false,
+            both_failed_same: false,
+            divergent: false,
+            backend_a_only: "",
+            backend_b_only: kind_b
+        }
+    }
+    // a failed, b clean — backend A-only failure.
+    if kind_b == "none" {
+        return PreflightSymptomDiff {
+            kind: "backend-a-only-failed",
+            both_clean: false,
+            both_failed_same: false,
+            divergent: false,
+            backend_a_only: kind_a,
+            backend_b_only: ""
+        }
+    }
+    // both failed, same kind — symptom is reproducible across backends
+    // (suggests workload-intrinsic, not backend-specific).
+    if kind_a == kind_b {
+        return PreflightSymptomDiff {
+            kind: "both-failed-same",
+            both_clean: false,
+            both_failed_same: true,
+            divergent: false,
+            backend_a_only: kind_a,
+            backend_b_only: kind_b
+        }
+    }
+    // both failed, distinct kinds — divergent symptoms hint at
+    // backend-specific bugs (numerical drift, driver gap, etc).
+    return PreflightSymptomDiff {
+        kind: "divergent",
+        both_clean: false,
+        both_failed_same: false,
+        divergent: true,
+        backend_a_only: kind_a,
+        backend_b_only: kind_b
+    }
+}
