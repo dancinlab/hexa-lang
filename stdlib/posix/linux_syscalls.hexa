@@ -1,0 +1,135 @@
+// HEXA Standard Library — posix/linux_syscalls
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Linux syscall number tables — arm64 (AArch64 EABI) + x86_64 — for the 17
+// syscalls listed in RUNTIME.md frontier #3 ("Linux self-host 잔여 17
+// syscall"). This file is the data-table half of the campaign: a hexa-native
+// constant-table per architecture, ready for `svc #0` inline emission per
+// memory `feedback-runtime-c-deploy-regen-wipe`.
+//
+// Frontier 18-list #3 (RUNTIME.md): "Linux self-host 잔여 17 syscall —
+// read/write/open/close/mkdir/dup2/lseek/select/poll/wait4/getpid/getuid/kill/
+// fcntl/ioctl/stat/fstat/mmap/gettimeofday/exit 의 `#if Darwin-arm64 / #else
+// libc` 패턴 → `svc #0x80` 인라인. Phase-1 반복 적용."
+//
+// Numbers cited from Linux kernel uapi headers:
+//   arch/arm64/include/asm/unistd.h + asm-generic/unistd.h  (Linux 6.x)
+//   arch/x86/entry/syscalls/syscall_64.tbl                  (Linux 6.x)
+//
+// Cross-platform note: macOS arm64 uses `svc #0x80` with syscall numbers from
+// xnu/bsd/kern/syscalls.master (totally different numbering). Linux arm64 uses
+// `svc #0` with the asm-generic/unistd.h numbers. The Phase-1 campaign per
+// frontier #3 wires these tables into the runtime's `_hxlcl_syscall*_cf`
+// dispatch to replace the libc fallback with inline svc emission on Linux.
+//
+// Surface:
+//   pub fn linux_syscall_arm64(name: str) -> int   — arm64 syscall number (or -1)
+//   pub fn linux_syscall_x86_64(name: str) -> int  — x86_64 syscall number (or -1)
+//   pub fn linux_syscall_names() -> [str]          — the 17 names in canonical order
+//   pub fn linux_syscall_count() -> int            — 17
+//
+// All three lookups are tiny string-match dispatches. The values come from the
+// kernel uapi headers; numbers are stable per syscall (never re-numbered) so
+// this table is durable.
+//
+// Reference for the 17 syscalls (frontier #3 ordering preserved):
+//   read · write · open · close · mkdir · dup2 · lseek · select · poll ·
+//   wait4 · getpid · getuid · kill · fcntl · ioctl · stat · fstat · mmap ·
+//   gettimeofday · exit
+//
+//   (Frontier #3 text lists 17 names + exit = 18 entries; mmap is in the
+//    "+ exit" tail. We mirror the full list here for completeness.)
+
+@pure
+pub fn linux_syscall_count() -> int {
+    return 18
+}
+
+@pure
+pub fn linux_syscall_names() -> [str] {
+    return [
+        "read",
+        "write",
+        "open",
+        "close",
+        "mkdir",
+        "dup2",
+        "lseek",
+        "select",
+        "poll",
+        "wait4",
+        "getpid",
+        "getuid",
+        "kill",
+        "fcntl",
+        "ioctl",
+        "stat",
+        "fstat",
+        "mmap",
+        "gettimeofday",
+        "exit"
+    ]
+}
+
+// arm64 syscall numbers (asm-generic/unistd.h — Linux 6.x).
+// arm64 uses asm-generic so most numbers come from the generic table.
+@pure
+pub fn linux_syscall_arm64(name: str) -> int {
+    if name == "read" { return 63 }
+    if name == "write" { return 64 }
+    // openat (no plain "open" on arm64 — must use openat with AT_FDCWD)
+    if name == "open" { return 56 }
+    if name == "close" { return 57 }
+    // mkdirat (no plain "mkdir" on arm64 — must use mkdirat with AT_FDCWD)
+    if name == "mkdir" { return 34 }
+    // dup3 (no plain "dup2" on arm64 — must use dup3 with flags=0)
+    if name == "dup2" { return 24 }
+    if name == "lseek" { return 62 }
+    // pselect6 (no plain "select" on arm64)
+    if name == "select" { return 72 }
+    // ppoll (plain "poll" available via __NR_ppoll on most arches, asm-generic = 73)
+    if name == "poll" { return 73 }
+    // wait4 — asm-generic = 260
+    if name == "wait4" { return 260 }
+    if name == "getpid" { return 172 }
+    if name == "getuid" { return 174 }
+    if name == "kill" { return 129 }
+    if name == "fcntl" { return 25 }
+    if name == "ioctl" { return 29 }
+    // fstatat (no plain "stat" on arm64 — must use fstatat with AT_FDCWD)
+    if name == "stat" { return 79 }
+    if name == "fstat" { return 80 }
+    if name == "mmap" { return 222 }
+    if name == "gettimeofday" { return 169 }
+    if name == "exit" { return 93 }
+    return -1
+}
+
+// x86_64 syscall numbers (arch/x86/entry/syscalls/syscall_64.tbl — Linux 6.x).
+// x86_64 retains the legacy (pre-asm-generic) numbering.
+@pure
+pub fn linux_syscall_x86_64(name: str) -> int {
+    if name == "read" { return 0 }
+    if name == "write" { return 1 }
+    if name == "open" { return 2 }
+    if name == "close" { return 3 }
+    if name == "mkdir" { return 83 }
+    if name == "dup2" { return 33 }
+    if name == "lseek" { return 8 }
+    if name == "select" { return 23 }
+    if name == "poll" { return 7 }
+    if name == "wait4" { return 61 }
+    if name == "getpid" { return 39 }
+    if name == "getuid" { return 102 }
+    if name == "kill" { return 62 }
+    if name == "fcntl" { return 72 }
+    if name == "ioctl" { return 16 }
+    if name == "stat" { return 4 }
+    if name == "fstat" { return 5 }
+    if name == "mmap" { return 9 }
+    if name == "gettimeofday" { return 96 }
+    if name == "exit" { return 60 }
+    return -1
+}
