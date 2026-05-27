@@ -432,6 +432,19 @@ fan-out 불가, serial 진행.
 - [ ] **B9.6a-hexaval-repr-emit** — HexaVal repr 생성자 codegen self-emit
       (`self/codegen/runtime_arm64.hexa` 확장; `rt_arena_*` 4 fn LANDED 패턴).
       ⚠ serial · regen+fixpoint · phase-h codegen 에이전트와 경합 · expert work.
+
+      🧱 **increment 1 — `rt_memset` self-emit LANDED (foundational · `.c` 카운트
+      UNCHANGED)**. `rt_arena_*`/`rt_str_len` 패턴 정확 답습한 가장 작은 미구현 leaf:
+      `memset(x0=dst, x1=byte_val, x2=len)` = 7-instr 28-byte byte-store loop (`mov`→
+      `cmp`/`b.hs`/`strb`/`add`/`b`→`ret`). HexaVal/GC/reloc 무관 (순수 pointer+len 루프
+      · arena 보다도 단순 — `_arena_state` reloc 불필요). 검증: (1) interp self-test
+      ALL CHECKS PASS (28 B · RET trailer · 4-align · `strb` presence), (2) `as -arch
+      arm64` 권위 disasm 과 byte-identical, (3) **emit 한 28 byte 를 JIT-exec → 실제
+      `memset` 동작 PASS** (fill range 정확 · no overrun · len=0 no-op · low-byte-only).
+      ⚠ `runtime_arm64.hexa` 는 아직 self-host compile unit(`compiler/main.hexa`) 에
+      `use` 안 됨 → `hexa_cc.c` regen 영향 0 = **fixpoint 무관·무위험** (shadow
+      self-emit 모듈; arena 4-fn 도 동일 모델로 land 됨). 파일 카운트는 runtime.c 의
+      640 fn 전부 self-emit 후에야 떨어짐 (이 increment 는 그 토대 1칸).
 - [ ] **B9.6b-runtime-primitive-emit** — 잔여 runtime primitive self-emit
       (chunk-A wire-plan)
 

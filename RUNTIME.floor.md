@@ -57,6 +57,13 @@ flip 캠페인이 안전 quick-win 을 고갈시킨 뒤 남는 진짜 바닥의 
     B9.6b (잔여 runtime primitive emit) → runtime.c dead.
   - 추정 **50-70 PR · expert serial** (#1812). regen+fixpoint · phase-h codegen
     에이전트와 경합 · **cold fan-out 부적합** (전담 신중 작업).
+  - 🧱 **increment 1 LANDED — `rt_memset` self-emit** (`runtime_arm64.hexa` 확장 ·
+    7-instr 28-B leaf byte-store loop · arena 패턴 답습). interp self-test PASS +
+    `as` byte-identical + **JIT-exec 실제 memset 동작 검증**. shadow 모듈이라
+    `hexa_cc.c` regen 무관 = fixpoint 무위험 · **`.c` 카운트 UNCHANGED** (640 fn
+    전부 emit 후에야 파일 삭제 — 이 increment 는 토대 1칸). 다음 leaf 후보 =
+    `rt_memcmp`/`rt_memmove` (동급 reloc-free 순수 루프) → 그 다음이 reloc 필요한
+    state-bound primitive → 최후가 HexaVal repr/GC core (hard floor).
 
 ### F4 — sha256 entangled
 
