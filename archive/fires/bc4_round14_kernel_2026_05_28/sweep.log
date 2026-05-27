@@ -1,0 +1,5 @@
+occupancy_max_active_blocks_per_sm=5 bm32_bk32 N=512 grid=16 block=64 max_abs=4.426e-05 rel_rowscale=0.0005414 rms_rel=0.000258 naninf=0 numeric=PASS median_ms=0.017760
+occupancy_max_active_blocks_per_sm=5 bm32_bk32 N=1024 grid=32 block=64 max_abs=6.104e-05 rel_rowscale=0.0005674 rms_rel=0.0002653 naninf=0 numeric=PASS median_ms=0.028032
+occupancy_max_active_blocks_per_sm=5 bm32_bk32 N=2048 grid=64 block=64 max_abs=3.411e-05 rel_rowscale=0.0006105 rms_rel=0.0002711 naninf=0 numeric=PASS median_ms=0.066944
+occupancy_max_active_blocks_per_sm=5 bm32_bk32 N=4096 grid=128 block=64 max_abs=3.116e-05 rel_rowscale=0.0007142 rms_rel=0.0002721 naninf=0 numeric=PASS median_ms=0.175424
+occupancy_max_active_blocks_per_sm=5 bm32_bk32 N=8192 grid=256 block=64 max_abs=1.779e-05 rel_rowscale=0.0006693 rms_rel=0.0002747 naninf=0 numeric=PASS median_ms=0.678976
