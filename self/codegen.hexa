@@ -5520,6 +5520,18 @@ fn gen2_expr(node) {
             if name == "split" {
                 return "hexa_str_split(" + gen2_expr(node.args[0]) + ", " + gen2_expr(node.args[1]) + ")"
             }
+            // Free-function `trim(s)` mirror of `s.trim()` — `trim` is a
+            // recognized free-fn builtin in the binder (compiler/check/bind.hexa)
+            // and the arm64 backend (codegen/arm64_darwin.hexa: `trim -> rt_str_trim`),
+            // but the gen2 C path had no free-fn lowering, so any module using
+            // `trim(x)` (47 self/ callers incl. self/ml/tokenizer_bpe.hexa)
+            // fell through to `hexa_call1(trim, …)` → undeclared identifier on
+            // `hexa run` (Linux C backend). Lower identically to the `.trim()`
+            // method path (lines 3942/7190: cg_string_sym("str_trim") -> rt_str_trim).
+            // Unblocks flame-P2b BPE-corpus wiring (tokenizer_bpe Linux compile).
+            if name == "trim" {
+                return cg_string_sym("str_trim") + "(" + gen2_expr(node.args[0]) + ")"
+            }
             // Math built-ins (1-arg, float result via C math.h)
             if name == "sqrt" {
                 return "hexa_sqrt(" + gen2_expr(node.args[0]) + ")"
