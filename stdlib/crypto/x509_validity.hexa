@@ -57,13 +57,18 @@ pub fn x509_parse_time(b: [int], o: int) -> [int] {
     return [year, mo, da, hh, mi, se]
 }
 
-// extract both not_before / not_after from a DER cert. validity is TBS child index 4.
+// extract both not_before / not_after from a DER cert. Validity follows
+// [0]version?, serial, sigAlg, issuer. The version field is OPTIONAL (RFC
+// 5280: `[0] EXPLICIT DEFAULT v1`) — present in v3 (tag 0xA0), absent in v1.
+// So Validity is the 5th TBS child in v3, the 4th in v1.
 @pure
 pub fn x509_validity_dates(cert: [int]) -> [int] {
     let tbs_o = der_value_start(cert, 0)
     let mut c = der_value_start(cert, tbs_o)
+    let mut skip = 3                            // v1: serial is child 0 → 3 hops to Validity
+    if (der_tag(cert, c) & 0xFF) == 0xA0 { skip = 4 }   // v3: skip [0]version too
     let mut k = 0
-    while k < 4 { c = der_next(cert, c); k = k + 1 }
+    while k < skip { c = der_next(cert, c); k = k + 1 }
     // c is at the Validity SEQUENCE
     let v_start = der_value_start(cert, c)
     let nb = x509_parse_time(cert, v_start)
