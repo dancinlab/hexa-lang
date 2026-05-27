@@ -1422,3 +1422,14 @@ CLAIMS.tape entries: `fusion_layerblock_cross_layer_structural` (🔵) +
 - [ ] F8 atan f64 polynomial — 역삼각, RFC 055 §13 확장
 - [ ] J1 gpu_sass_diff tool — PTX instruction histogram diff perf oracle, host shell
 - [ ] I1 ubu-2 bootstrap link 영구 fix — cuda fns NULL + hexa_exit stub 정식 패치, E1-E4 unblock
+
+## flame V3 port (from INBOX #2 — P1 학습-정확도 코어 COMPLETE, P2/P3 여기로 이관 2026-05-27)
+> P1 코어 landed: full-position CE forward (#1481) + RFC 059 backward design (#1487) + P1②-a/b/c backward impl (#1489/1491/1492), 전부 grad-check 🔵. anima ConsciousDecoderV3 학습-정확도 경로 완결. 아래는 저우선(차단 아님, byte-level fallback 동작) enhancement.
+- [ ] flame-P2a rope base 인자화 — `nn_rope_build_tables` base 10000 하드코딩 → 파라미터화 (Qwen=50000). trivial, parse-gate 검증
+- [ ] flame-P2b Qwen BPE tokenizer — byte-level V=256 fallback → 실 BPE (merge rules + vocab 로드), encode/decode round-trip + reference 토큰화 일치 검증
+- [ ] flame-P2c from_qwen warm-start `.pt` loader — PyTorch checkpoint 바이너리 포맷 파싱 → flame weight import
+- [ ] flame-P3a bnb 8-bit 양자화 — weight int8 quant/dequant, GPU 경로
+- [ ] flame-P3b cross-attn — encoder-decoder cross-attention op + backward (ag_tape)
+- [ ] flame-P3c KV-cache generate — autoregressive 생성용 key/value 캐시
+- [ ] flame-P3d mitosis gaussian RNG — 가중치 분열 초기화용 정규분포 RNG
+- [ ] flame-P3e ln learned gains — LayerNorm 학습 가능 gain 파라미터
