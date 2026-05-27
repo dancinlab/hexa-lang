@@ -1,0 +1,25 @@
+{
+  "falsifier": "F-FUSION-ATTN-BM32-RISK-D-FRAGMENT-MAP",
+  "date": "2026-05-28",
+  "host": "ubu-2 RTX 5070 sm_120 driver 580",
+  "toolchain": "nvcc /usr/local/cuda-12.9/bin/nvcc (Tue May 27 2025 build) -arch=compute_90 + driver JIT to sm_120",
+  "verdict_tier": "GREEN",
+  "kernel_a_trans_behavior": {
+    "compute": "mma.sync.m16n8k16 .row.col with ldmatrix.x4 .trans on B",
+    "err_vs_A.B_k_along_B_rows": 0.8399,
+    "err_vs_A.B_transpose_k_along_B_cols": 2.74,
+    "interpretation": "matches NEITHER (both > 1e-2 tolerance) -- the .trans + .row.col combination at a single 16x16 mma fragment produces a partial-block mapping (round-7 finding: 8x8-block transpose only, not full 16x16 transpose), so the kernel computes a non-trivial intermediate that does NOT equal a clean mat-mul against EITHER B or B^T"
+  },
+  "kernel_b_pretrans_behavior": {
+    "compute": "V pre-transpose in smem (sVt[n][k] = V[k][n]) + ldmatrix.x4 non-trans + mma.row.col",
+    "err_vs_P.V_k_along_V_rows": 5.96e-08,
+    "interpretation": "MATCH (err << 1e-3) -- the V pre-transpose work-around STILL holds at BM=32 BK=32 tile shape, exactly as round-7 probe3 reported at the round-7 64x64-tile shape"
+  },
+  "trans_behavior_at_BK32": "8x8-block (same as round-7 finding at the larger 64x64 tile)",
+  "v_pretranspose_required": true,
+  "smem_budget_delta_bytes": 0,
+  "plan_section_2_correct": true,
+  "verdict": "wedge proceed unchanged",
+  "honest_scope": "Single-shape probe at BM=32 BK=32 confirms the round-7 mma-fragment-map property is invariant to the surrounding tile shape (as expected: the mma is atomic at m16n8k16, fragment-map is a property of the mma instruction itself, not the surrounding tile). Doesn't generalize to OTHER (BM, BK) wedge variants without re-probing, though the same atomic-mma reasoning suggests they would all match. Probe does NOT directly verify there is no smem-bank-conflict in the pre-transpose smem layout under high-contention multi-warp access -- that's a separate (lighter) measurement at full-kernel build time.",
+  "implication_for_bc4_round14": "Risk-d CLEARED for cheap-first oracle gate. BC4 round-14 silicon fire (flash_attn_bm32_occupancy_v0) should proceed with V pre-transpose budgeted in smem per plan section 2 (BK*d*2 = 32*64*2 = 4096 B V^T slot). Plan section 2 smem budget table (BM=32 BK=32 O-reg = 30720 B) is correct, no replan needed. The BM=32 BK=32 wedge keeps its 3 CTAs/SM occupancy projection."
+}
