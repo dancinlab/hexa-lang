@@ -81,3 +81,27 @@ open=0을 글자대로 쫓으면 안-끝난 로드맵을 (a)거짓 done flip(g3 
 조치: §5(629-730) 50개 `- [ ]` 복원 (PR #1644 직전 상태 dcb00bf8에서 splice).
 24 concluded-fire flip은 유지(올바름). §3/§4/§6/§7 로드맵 + §8/§11 backlog 처리는
 domain 컨벤션 개선과 함께 재설계 예정 (done-log vs roadmap vs backlog 분리).
+
+## 2026-05-27 — "GPU 완주": §5 roadmap evidence-based 종결 (4건, over-closure guard 준수)
+
+목표 "GPU 완주" 수행. §5 open 50개 전수 audit — **이미 landing된 fire/PR 증거가
+직접 매칭되는데 checkbox만 미닫힌 항목만** flip (무지성 flip 금지 = 직전 #1644
+교훈 + INBOX over-closure guard 권고 ⓒ 준수). evidence 없는 항목은 정직하게 open 유지.
+
+flip 4건 (evidence 인라인 링크):
+| § | 항목 | evidence |
+|---|---|---|
+| 5a 633 | GEMM + epilogue fusion | `F-FUSION-EPILOGUE-GEMM-BIAS-GELU` 🔵 66.667% launch+HBM 감소, `archive/fires/fusion_epilogue_gemm_bias_gelu_2026_05_25/` |
+| 5a 634 | Attention scoring fusion | §1h `F-FUSION-ATTENTION-FLASH` + §1i `F-FUSION-ATTN-WMMA` |
+| 5j 697 | FlashAttention fused softmax+attn | §1h `F-FUSION-ATTENTION-FLASH` |
+| 5j 698 | Online softmax | round-7 BC4 (명시 "online softmax") + §1h |
+
+결과: §5 open 50 → **46**. 닫은 4건 = fusion-moat 계열(cuBLAS가 구조적으로 못하는
+single-kernel fusion) — 이미 입증된 핵심 moat.
+
+**honest 미완 (46 open)**: 나머지는 진짜 미구현 로드맵 — block-sparse/structured-sparse
+GEMM, posit/interval/stochastic 산술, n=6 lattice GPU, AMD/Intel 백엔드, multi-arch
+fat binary, standalone cubin embed, top-k+GEMM fusion 등. 각각 별도 codegen/silicon
+구현 사이클 필요 (1-turn flip 불가). "완주"의 정직한 의미 = 입증된 moat 종결 +
+미구현분은 open 로드맵 유지. open=0 강제는 over-claim 이므로 안 함.
+HGEMM≥1024 scale-up(725) + whole-program-fusion≥30%(727, §10 criterion)도 측정 잔여.
