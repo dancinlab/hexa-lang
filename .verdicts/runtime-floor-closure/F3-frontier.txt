@@ -1,0 +1,34 @@
+# F3 — runtime FLOOR (runtime.c/runtime_core.c) — LIVE FRONTIER (NOT closed)
+# status: 🟠 genuinely-portable · multi-session (NOT a terminal verdict)
+# captured 2026-05-28 on origin/main worktree.
+
+# self-emit ENABLER pattern is LANDED (the F3 precedent):
+$ grep -n 'rt_arena_init\|rt_arena_alloc\|rt_arena_reset\|rt_arena_release' self/codegen/runtime_arm64.hexa
+1157:fn rt_arena_init() {
+1268:fn rt_arena_alloc() {
+1339:fn rt_arena_reset() {
+1375:fn rt_arena_release() {
+$ grep -cE '^(pub )?fn ' self/codegen/runtime_arm64.hexa
+16     # 16 self-emit fns already in the hexa-native backend
+
+# dup-race precheck (safe to resume — no concurrent F3 work):
+$ gh pr list --state open | grep -iE 'codegen|runtime|self-emit|hexaval'
+(none — open PRs are B9 flip quick-win/doc track, orthogonal to F3 codegen self-emit)
+
+# WHY F3 STAYS OPEN (honest, not over-closure):
+#   F3 is the ONLY floor item that is genuinely PORTABLE (layer ①, de-risked) yet
+#   NOT closeable in a single session. runtime.c (640 fn) + runtime_core.c (548 fn)
+#   must ALL be codegen-self-emitted before the files die. Est 50-70 PR, expert
+#   serial, each unit emit-path → gen1≡gen2 fixpoint-critical. This is Go-1.5's
+#   "great C→Go translation" analog. It cannot receive a terminal verdict
+#   (🔵/🟢/🔴) because it is open engineering, not an irreducible floor.
+#
+# NEXT UNIT: B9.6a — HexaVal repr constructor self-emit (hexa_int/float/bool/str
+#   tagged-union) into runtime_arm64.hexa, fixpoint-verified. F4's sha256 ① port
+#   (FIPS-verified stdlib target) is also a unit of this campaign.
+#
+# FLOOR DOC END-STATE (2026-05-28): F1 perf-floor 🔴 / F2 vendor-FFI 🔴 / F4 sha256
+#   🟢→F3 / F5 boot-asm 🔴 / F6 bootstrap 🔴 = all TERMINAL. F3 = the single live
+#   multi-session frontier, precisely characterized + enabler-proven + dup-race-clear.
+#   honest "100% closure" = everything closeable is closed; F3 is the irreducible-
+#   -multi-session residual (per feedback-closure-is-physical-limit).

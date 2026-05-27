@@ -1,0 +1,35 @@
+# F5 — .s boot-floor (3 files) — TERMINAL honest-floor (RFC 063/064 re-open flag)
+# verdict tier: 🔴 closed-negative (@asm CANNOT express vector-table data section)
+# authoritative source: docs/asm_floor_audit.md (audit #1810)
+# captured 2026-05-28 on origin/main worktree.
+
+$ find . -name '*.s' -not -path './.git/*'
+./stdlib/hal/t3/boot_stm32h7.s
+./stdlib/hal/t3/boot_rp2040.s
+./stdlib/sscb/firmware/startup/startup_stm32f429.s
+
+# FINDING (audit #1810, the structural closed-negative):
+#   boot_rp2040.s    — RP2040 Cortex-M0+ .vector_table @ FLASH 0x10000100 fixed addr
+#   boot_stm32h7.s   — STM32H7 Cortex-M7 vector page @ FLASH 0x08000000, CPU fetches
+#                       it directly at reset
+#   startup_stm32f429.s — STM32F429 g_pfnVectors weak-alias linker contract
+#
+#   These are NOT function bodies — they are DATA SECTIONS (.vector_table /
+#   .isr_vector) placed at a fixed link address that the CPU HARDWARE reads at
+#   reset. `@asm` is an INLINE function-body escape hatch (wfi/dsb single instr),
+#   structurally incapable of expressing a fixed-address vector-table word array.
+#
+# CODEGEN STATE (the enabler gate):
+$ grep -n 'RFC 063/064' self/codegen.hexa
+#   self/codegen.hexa:~1851 recognizes @target/@mmio/@interrupt/@asm but
+#   "codegen lowering pending RFC 063/064 (treated as no-op on this lane)".
+#   RFC 063 (target_firmware_codegen) + RFC 064 (target_rtl_codegen) = DRAFTS.
+#
+# VERDICT: 🔴 IRREDUCIBLE BOOT-FLOOR — terminal honest-floor (layer ②-equivalent).
+#   Matches north-star "minimal per-arch .s asm STAYS · Target = zero .c, NOT
+#   zero asm. The asm floor is irreducible." The vector table is the physical
+#   hardware-reset floor. RE-OPEN flag: if RFC 063/064 lands first-class
+#   @interrupt/@target vector-table DATA-SECTION lowering (hexa self-emits the
+#   .vector_table word array at fixed link addr), zero-.s becomes reachable.
+#   Until then = honest floor. Same closure shape as F1 (perf re-open) /
+#   F2 (vendor-ABI re-open).
