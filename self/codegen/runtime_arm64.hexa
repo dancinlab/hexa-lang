@@ -1104,6 +1104,433 @@ fn rt_strcmp() {
     return c
 }
 
+// ── rt_strncmp ───────────────────────────────────────────────
+// strncmp(x0=a, x1=b, x2=len) — compare at most len bytes of two
+// NUL-terminated strings; return in w0 the signed difference
+// (a[i]-b[i]) at the first mismatch, else 0. Stops on either the
+// len bound OR a shared NUL (whichever comes first) — exact C
+// semantics. The bounded sibling of rt_strcmp. Pure byte-load +
+// compare loop; no relocation, no arena state, no HexaVal touch
+// (B9.6a / F3 increment 3).
+//
+// Algorithm:
+//   mov x3, #0           ; i = 0
+//   loop: cmp x3, x2     ; i == len?
+//         b.hs eq        ; if i >= len, equal (bound reached)
+//         ldrb w4, [x0, x3]
+//         ldrb w5, [x1, x3]
+//         subs w6, w4, w5
+//         b.ne diff      ; first mismatch
+//         cbz w4, eq     ; both NUL -> equal
+//         add x3, x3, #1
+//         b loop
+//   eq:   mov w0, #0; ret
+//   diff: mov w0, w6; ret
+//
+// 14 instructions, 56 bytes. Encodings validated against
+// `as -arch arm64` disassembly (B9.6a self-emit increment 3).
+
+fn rt_strncmp() {
+    let mut c = []
+    // mov x3, #0  (counter i)        0xD2800003
+    c.push(3)
+    c.push(0)
+    c.push(128)
+    c.push(210)
+    // loop: cmp x3, x2               0xEB02007F
+    c.push(127)
+    c.push(0)
+    c.push(2)
+    c.push(235)
+    // b.hs eq (+8 instrs = +32)      0x54000102
+    c.push(2)
+    c.push(1)
+    c.push(0)
+    c.push(84)
+    // ldrb w4, [x0, x3]              0x38636804
+    c.push(4)
+    c.push(104)
+    c.push(99)
+    c.push(56)
+    // ldrb w5, [x1, x3]              0x38636825
+    c.push(37)
+    c.push(104)
+    c.push(99)
+    c.push(56)
+    // subs w6, w4, w5                0x6B050086
+    c.push(134)
+    c.push(0)
+    c.push(5)
+    c.push(107)
+    // b.ne diff (+6 instrs = +24)    0x540000C1
+    c.push(193)
+    c.push(0)
+    c.push(0)
+    c.push(84)
+    // cbz w4, eq (+3 instrs = +12)   0x34000064
+    c.push(100)
+    c.push(0)
+    c.push(0)
+    c.push(52)
+    // add x3, x3, #1                 0x91000463
+    c.push(99)
+    c.push(4)
+    c.push(0)
+    c.push(145)
+    // b loop (-8 instrs = -32)       0x17FFFFF8
+    c.push(248)
+    c.push(255)
+    c.push(255)
+    c.push(23)
+    // eq: mov w0, #0                 0x52800000
+    c.push(0)
+    c.push(0)
+    c.push(128)
+    c.push(82)
+    // ret                            0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    // diff: mov w0, w6               0x2A0603E0
+    c.push(224)
+    c.push(3)
+    c.push(6)
+    c.push(42)
+    // ret                            0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
+// ── rt_strchr ────────────────────────────────────────────────
+// strchr(x0=s, x1=c) — return pointer to the FIRST occurrence of
+// byte c in NUL-terminated s, or NULL if not found. The NUL byte
+// itself is matchable (strchr(s,0) returns the terminator ptr),
+// matching C semantics. Pure byte-load + compare loop; no
+// relocation, no arena state, no HexaVal touch (B9.6a / F3 inc 3).
+//
+// Algorithm:
+//   mov x2, #0           ; i = 0
+//   loop: ldrb w3, [x0, x2]
+//         cmp w3, w1     ; *s == c?
+//         b.eq found
+//         cbz w3, notfound ; hit NUL without match
+//         add x2, x2, #1
+//         b loop
+//   found:   add x0, x0, x2; ret   ; return s + i
+//   notfound: mov x0, #0; ret
+//
+// 11 instructions, 44 bytes. Encodings validated against
+// `as -arch arm64` disassembly (B9.6a self-emit increment 3).
+
+fn rt_strchr() {
+    let mut c = []
+    // mov x2, #0  (index i)          0xD2800002
+    c.push(2)
+    c.push(0)
+    c.push(128)
+    c.push(210)
+    // loop: ldrb w3, [x0, x2]        0x38626803
+    c.push(3)
+    c.push(104)
+    c.push(98)
+    c.push(56)
+    // cmp w3, w1                     0x6B01007F
+    c.push(127)
+    c.push(0)
+    c.push(1)
+    c.push(107)
+    // b.eq found (+4 instrs = +16)   0x54000080
+    c.push(128)
+    c.push(0)
+    c.push(0)
+    c.push(84)
+    // cbz w3, notfound (+5 = +20)    0x340000A3
+    c.push(163)
+    c.push(0)
+    c.push(0)
+    c.push(52)
+    // add x2, x2, #1                 0x91000442
+    c.push(66)
+    c.push(4)
+    c.push(0)
+    c.push(145)
+    // b loop (-5 instrs = -20)       0x17FFFFFB
+    c.push(251)
+    c.push(255)
+    c.push(255)
+    c.push(23)
+    // found: add x0, x0, x2          0x8B020000
+    c.push(0)
+    c.push(0)
+    c.push(2)
+    c.push(139)
+    // ret                            0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    // notfound: mov x0, #0           0xD2800000
+    c.push(0)
+    c.push(0)
+    c.push(128)
+    c.push(210)
+    // ret                            0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
+// ── rt_strrchr ───────────────────────────────────────────────
+// strrchr(x0=s, x1=c) — return pointer to the LAST occurrence of
+// byte c in NUL-terminated s, or NULL if not found. Walks the full
+// string keeping the most recent match in x4; the NUL byte is
+// matchable (strrchr(s,0) returns the terminator ptr). Pure
+// byte-load + compare loop; no relocation, no arena state, no
+// HexaVal touch (B9.6a / F3 increment 3).
+//
+// Algorithm:
+//   mov x2, #0           ; i = 0
+//   mov x4, #0           ; last = NULL
+//   loop: ldrb w3, [x0, x2]
+//         cmp w3, w1
+//         b.ne skip
+//         add x4, x0, x2 ; last = s + i
+//   skip: cbz w3, done   ; NUL terminator ends scan
+//         add x2, x2, #1
+//         b loop
+//   done: mov x0, x4; ret
+//
+// 11 instructions, 44 bytes. Encodings validated against
+// `as -arch arm64` disassembly (B9.6a self-emit increment 3).
+
+fn rt_strrchr() {
+    let mut c = []
+    // mov x2, #0  (index i)          0xD2800002
+    c.push(2)
+    c.push(0)
+    c.push(128)
+    c.push(210)
+    // mov x4, #0  (last = NULL)      0xD2800004
+    c.push(4)
+    c.push(0)
+    c.push(128)
+    c.push(210)
+    // loop: ldrb w3, [x0, x2]        0x38626803
+    c.push(3)
+    c.push(104)
+    c.push(98)
+    c.push(56)
+    // cmp w3, w1                     0x6B01007F
+    c.push(127)
+    c.push(0)
+    c.push(1)
+    c.push(107)
+    // b.ne skip (+2 instrs = +8)     0x54000041
+    c.push(65)
+    c.push(0)
+    c.push(0)
+    c.push(84)
+    // add x4, x0, x2 (last = s+i)    0x8B020004
+    c.push(4)
+    c.push(0)
+    c.push(2)
+    c.push(139)
+    // skip: cbz w3, done (+3 = +12)  0x34000063
+    c.push(99)
+    c.push(0)
+    c.push(0)
+    c.push(52)
+    // add x2, x2, #1                 0x91000442
+    c.push(66)
+    c.push(4)
+    c.push(0)
+    c.push(145)
+    // b loop (-6 instrs = -24)       0x17FFFFFA
+    c.push(250)
+    c.push(255)
+    c.push(255)
+    c.push(23)
+    // done: mov x0, x4 (return last) 0xAA0403E0
+    c.push(224)
+    c.push(3)
+    c.push(4)
+    c.push(170)
+    // ret                            0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
+// ── rt_strcpy ────────────────────────────────────────────────
+// strcpy(x0=dst, x1=src) — copy NUL-terminated src into dst
+// (including the terminating NUL); return dst in x0. The byte at
+// the NUL is copied THEN the loop exits, so dst is properly
+// terminated. Pure byte load/store loop; no relocation, no arena
+// state, no HexaVal touch (B9.6a / F3 increment 3).
+//
+// Algorithm:
+//   mov x2, #0           ; i = 0   (x0=dst preserved as return val)
+//   loop: ldrb w3, [x1, x2]; w3 = src[i]
+//         strb w3, [x0, x2]; dst[i] = w3  (copies the NUL too)
+//         cbz w3, done    ; stop after writing the terminator
+//         add x2, x2, #1
+//         b loop
+//   done: ret             ; x0 still = dst
+//
+// 7 instructions, 28 bytes. Encodings validated against
+// `as -arch arm64` disassembly (B9.6a self-emit increment 3).
+
+fn rt_strcpy() {
+    let mut c = []
+    // mov x2, #0  (index i)          0xD2800002
+    c.push(2)
+    c.push(0)
+    c.push(128)
+    c.push(210)
+    // loop: ldrb w3, [x1, x2]        0x38626823
+    c.push(35)
+    c.push(104)
+    c.push(98)
+    c.push(56)
+    // strb w3, [x0, x2]              0x38226803
+    c.push(3)
+    c.push(104)
+    c.push(34)
+    c.push(56)
+    // cbz w3, done (+3 instrs = +12) 0x34000063
+    c.push(99)
+    c.push(0)
+    c.push(0)
+    c.push(52)
+    // add x2, x2, #1                 0x91000442
+    c.push(66)
+    c.push(4)
+    c.push(0)
+    c.push(145)
+    // b loop (-4 instrs = -16)       0x17FFFFFC
+    c.push(252)
+    c.push(255)
+    c.push(255)
+    c.push(23)
+    // done: ret                      0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
+// ── rt_strncpy ───────────────────────────────────────────────
+// strncpy(x0=dst, x1=src, x2=len) — copy at most len bytes of
+// NUL-terminated src into dst; if src is shorter than len, the
+// remainder of dst (up to len) is NUL-padded. NOT guaranteed
+// NUL-terminated when len <= strlen(src) — exact C semantics.
+// Two phases: a copy loop that stops at len OR src NUL, then a
+// pad loop that zero-fills the rest. Pure byte load/store loops;
+// no relocation, no arena state, no HexaVal touch (B9.6a/F3 inc 3).
+//
+// Algorithm:
+//   mov x3, #0           ; i = 0
+//   loop: cmp x3, x2     ; i == len?
+//         b.hs done      ; bound reached
+//         ldrb w4, [x1, x3]
+//         strb w4, [x0, x3]
+//         add x3, x3, #1
+//         cbz w4, pad    ; copied a NUL -> switch to pad
+//         b loop
+//   pad:  cmp x3, x2
+//         b.hs done
+//         strb wzr, [x0, x3]   ; dst[i] = 0
+//         add x3, x3, #1
+//         b pad
+//   done: ret
+//
+// 14 instructions, 56 bytes. Encodings validated against
+// `as -arch arm64` disassembly (B9.6a self-emit increment 3).
+
+fn rt_strncpy() {
+    let mut c = []
+    // mov x3, #0  (counter i)        0xD2800003
+    c.push(3)
+    c.push(0)
+    c.push(128)
+    c.push(210)
+    // loop: cmp x3, x2               0xEB02007F
+    c.push(127)
+    c.push(0)
+    c.push(2)
+    c.push(235)
+    // b.hs done (+11 instrs = +44)   0x54000162
+    c.push(98)
+    c.push(1)
+    c.push(0)
+    c.push(84)
+    // ldrb w4, [x1, x3]              0x38636824
+    c.push(36)
+    c.push(104)
+    c.push(99)
+    c.push(56)
+    // strb w4, [x0, x3]              0x38236804
+    c.push(4)
+    c.push(104)
+    c.push(35)
+    c.push(56)
+    // add x3, x3, #1                 0x91000463
+    c.push(99)
+    c.push(4)
+    c.push(0)
+    c.push(145)
+    // cbz w4, pad (+2 instrs = +8)   0x34000044
+    c.push(68)
+    c.push(0)
+    c.push(0)
+    c.push(52)
+    // b loop (-6 instrs = -24)       0x17FFFFFA
+    c.push(250)
+    c.push(255)
+    c.push(255)
+    c.push(23)
+    // pad: cmp x3, x2                0xEB02007F
+    c.push(127)
+    c.push(0)
+    c.push(2)
+    c.push(235)
+    // b.hs done (+4 instrs = +16)    0x54000082
+    c.push(130)
+    c.push(0)
+    c.push(0)
+    c.push(84)
+    // strb wzr, [x0, x3]             0x3823681F
+    c.push(31)
+    c.push(104)
+    c.push(35)
+    c.push(56)
+    // add x3, x3, #1                 0x91000463
+    c.push(99)
+    c.push(4)
+    c.push(0)
+    c.push(145)
+    // b pad (-4 instrs = -16)        0x17FFFFFC
+    c.push(252)
+    c.push(255)
+    c.push(255)
+    c.push(23)
+    // done: ret                      0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
 // ═══════════════════════════════════════════════════════════════
 // NEON SIMD string operations (HX5: AI-native algorithm replacement)
 // ═══════════════════════════════════════════════════════════════
@@ -1896,6 +2323,11 @@ fn test_runtime_arm64() {
     let mcpy = rt_memcpy()
     let mmove = rt_memmove()
     let scmp = rt_strcmp()
+    let sncmp = rt_strncmp()
+    let schr = rt_strchr()
+    let srchr = rt_strrchr()
+    let scpy = rt_strcpy()
+    let sncpy = rt_strncpy()
     let ainit = rt_arena_init()
     let aalloc = rt_arena_alloc()
     let areset = rt_arena_reset()
@@ -1914,6 +2346,11 @@ fn test_runtime_arm64() {
     println("  rt_memcpy        : " + to_string(len(mcpy)) + " bytes")
     println("  rt_memmove       : " + to_string(len(mmove)) + " bytes")
     println("  rt_strcmp        : " + to_string(len(scmp)) + " bytes")
+    println("  rt_strncmp       : " + to_string(len(sncmp)) + " bytes")
+    println("  rt_strchr        : " + to_string(len(schr)) + " bytes")
+    println("  rt_strrchr       : " + to_string(len(srchr)) + " bytes")
+    println("  rt_strcpy        : " + to_string(len(scpy)) + " bytes")
+    println("  rt_strncpy       : " + to_string(len(sncpy)) + " bytes")
     println("  rt_arena_init    : " + to_string(len(ainit)) + " bytes")
     println("  rt_arena_alloc   : " + to_string(len(aalloc)) + " bytes")
     println("  rt_arena_reset   : " + to_string(len(areset)) + " bytes")
@@ -1941,6 +2378,17 @@ fn test_runtime_arm64() {
     if len(mcpy) != 32 { println("  FAIL: rt_memcpy expected 32, got " + to_string(len(mcpy))); ok = false }
     if len(mmove) != 64 { println("  FAIL: rt_memmove expected 64, got " + to_string(len(mmove))); ok = false }
     if len(scmp) != 48 { println("  FAIL: rt_strcmp expected 48, got " + to_string(len(scmp))); ok = false }
+    // B9.6a / F3 increment 3 — 5 reloc-free leaf string primitives:
+    //   rt_strncmp 14-instr 56 B  (bounded compare, len OR NUL stop)
+    //   rt_strchr  11-instr 44 B  (first occurrence, NULL if absent)
+    //   rt_strrchr 11-instr 44 B  (last occurrence, NULL if absent)
+    //   rt_strcpy   7-instr 28 B  (NUL-terminated copy, returns dst)
+    //   rt_strncpy 14-instr 56 B  (bounded copy + NUL pad, C semantics)
+    if len(sncmp) != 56 { println("  FAIL: rt_strncmp expected 56, got " + to_string(len(sncmp))); ok = false }
+    if len(schr) != 44 { println("  FAIL: rt_strchr expected 44, got " + to_string(len(schr))); ok = false }
+    if len(srchr) != 44 { println("  FAIL: rt_strrchr expected 44, got " + to_string(len(srchr))); ok = false }
+    if len(scpy) != 28 { println("  FAIL: rt_strcpy expected 28, got " + to_string(len(scpy))); ok = false }
+    if len(sncpy) != 56 { println("  FAIL: rt_strncpy expected 56, got " + to_string(len(sncpy))); ok = false }
     // PR #1297 residual #2 — adr (4 B) → adrp+add (8 B) widening for
     // _arena_state PAGE21+PAGEOFF12 reloc machinery. Per-fn deltas:
     //   init   72 → 76 (+4 · 1 site)
@@ -1968,6 +2416,11 @@ fn test_runtime_arm64() {
     if len(mcpy) % 4 != 0 { println("  FAIL: rt_memcpy not aligned"); ok = false }
     if len(mmove) % 4 != 0 { println("  FAIL: rt_memmove not aligned"); ok = false }
     if len(scmp) % 4 != 0 { println("  FAIL: rt_strcmp not aligned"); ok = false }
+    if len(sncmp) % 4 != 0 { println("  FAIL: rt_strncmp not aligned"); ok = false }
+    if len(schr) % 4 != 0 { println("  FAIL: rt_strchr not aligned"); ok = false }
+    if len(srchr) % 4 != 0 { println("  FAIL: rt_strrchr not aligned"); ok = false }
+    if len(scpy) % 4 != 0 { println("  FAIL: rt_strcpy not aligned"); ok = false }
+    if len(sncpy) % 4 != 0 { println("  FAIL: rt_strncpy not aligned"); ok = false }
     if len(ainit) % 4 != 0 { println("  FAIL: rt_arena_init not aligned"); ok = false }
     if len(aalloc) % 4 != 0 { println("  FAIL: rt_arena_alloc not aligned"); ok = false }
     if len(areset) % 4 != 0 { println("  FAIL: rt_arena_reset not aligned"); ok = false }
@@ -1998,6 +2451,17 @@ fn test_runtime_arm64() {
     if mmove[nmv - 4] != 192 { println("  FAIL: rt_memmove no RET"); ok = false }
     let nsc = len(scmp)
     if scmp[nsc - 4] != 192 { println("  FAIL: rt_strcmp no RET"); ok = false }
+    // F3 inc 3 — all five string leaves end with ret (192,3,95,214).
+    let nsnc = len(sncmp)
+    if sncmp[nsnc - 4] != 192 { println("  FAIL: rt_strncmp no RET"); ok = false }
+    let nsch = len(schr)
+    if schr[nsch - 4] != 192 { println("  FAIL: rt_strchr no RET"); ok = false }
+    let nsrc = len(srchr)
+    if srchr[nsrc - 4] != 192 { println("  FAIL: rt_strrchr no RET"); ok = false }
+    let nscp = len(scpy)
+    if scpy[nscp - 4] != 192 { println("  FAIL: rt_strcpy no RET"); ok = false }
+    let nsnp = len(sncpy)
+    if sncpy[nsnp - 4] != 192 { println("  FAIL: rt_strncpy no RET"); ok = false }
     let na1 = len(ainit)
     if ainit[na1 - 4] != 192 { println("  FAIL: rt_arena_init no RET"); ok = false }
     let na2 = len(aalloc)
@@ -2207,6 +2671,96 @@ fn test_runtime_arm64() {
         isc = isc + 1
     }
     if !found_strcmp_cbz { println("  FAIL: rt_strcmp missing cbz w4 (NUL stop)"); ok = false }
+
+    // Verify rt_strncmp contains subs w6, w4, w5 (the compare body).
+    //   encoded as 0x6B050086 → little-endian bytes 134, 0, 5, 107.
+    let mut found_strncmp_subs = false
+    let mut isn = 0
+    while isn + 3 < len(sncmp) {
+        if sncmp[isn] == 134 {
+            if sncmp[isn + 1] == 0 {
+                if sncmp[isn + 2] == 5 {
+                    if sncmp[isn + 3] == 107 {
+                        found_strncmp_subs = true
+                    }
+                }
+            }
+        }
+        isn = isn + 1
+    }
+    if !found_strncmp_subs { println("  FAIL: rt_strncmp missing subs w6, w4, w5 (compare)"); ok = false }
+
+    // Verify rt_strchr contains add x0, x0, x2 (found-path return ptr).
+    //   encoded as 0x8B020000 → little-endian bytes 0, 0, 2, 139.
+    let mut found_strchr_add = false
+    let mut ich = 0
+    while ich + 3 < len(schr) {
+        if schr[ich] == 0 {
+            if schr[ich + 1] == 0 {
+                if schr[ich + 2] == 2 {
+                    if schr[ich + 3] == 139 {
+                        found_strchr_add = true
+                    }
+                }
+            }
+        }
+        ich = ich + 1
+    }
+    if !found_strchr_add { println("  FAIL: rt_strchr missing add x0, x0, x2 (found ptr)"); ok = false }
+
+    // Verify rt_strrchr contains add x4, x0, x2 (record last match).
+    //   encoded as 0x8B020004 → little-endian bytes 4, 0, 2, 139.
+    let mut found_strrchr_add = false
+    let mut irc = 0
+    while irc + 3 < len(srchr) {
+        if srchr[irc] == 4 {
+            if srchr[irc + 1] == 0 {
+                if srchr[irc + 2] == 2 {
+                    if srchr[irc + 3] == 139 {
+                        found_strrchr_add = true
+                    }
+                }
+            }
+        }
+        irc = irc + 1
+    }
+    if !found_strrchr_add { println("  FAIL: rt_strrchr missing add x4, x0, x2 (last match)"); ok = false }
+
+    // Verify rt_strcpy contains strb w3, [x0, x2] (the byte store body).
+    //   encoded as 0x38226803 → little-endian bytes 3, 104, 34, 56.
+    let mut found_strcpy_strb = false
+    let mut icp = 0
+    while icp + 3 < len(scpy) {
+        if scpy[icp] == 3 {
+            if scpy[icp + 1] == 104 {
+                if scpy[icp + 2] == 34 {
+                    if scpy[icp + 3] == 56 {
+                        found_strcpy_strb = true
+                    }
+                }
+            }
+        }
+        icp = icp + 1
+    }
+    if !found_strcpy_strb { println("  FAIL: rt_strcpy missing strb w3, [x0, x2] (byte store)"); ok = false }
+
+    // Verify rt_strncpy contains strb wzr, [x0, x3] (the NUL-pad store).
+    //   encoded as 0x3823681F → little-endian bytes 31, 104, 35, 56.
+    let mut found_strncpy_pad = false
+    let mut inp = 0
+    while inp + 3 < len(sncpy) {
+        if sncpy[inp] == 31 {
+            if sncpy[inp + 1] == 104 {
+                if sncpy[inp + 2] == 35 {
+                    if sncpy[inp + 3] == 56 {
+                        found_strncpy_pad = true
+                    }
+                }
+            }
+        }
+        inp = inp + 1
+    }
+    if !found_strncpy_pad { println("  FAIL: rt_strncpy missing strb wzr, [x0, x3] (NUL pad)"); ok = false }
 
     if ok {
         println("  ALL CHECKS PASS")
