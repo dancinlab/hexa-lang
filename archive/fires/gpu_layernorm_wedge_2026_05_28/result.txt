@@ -1,0 +1,29 @@
+F-GPU-LAYERNORM-FWD-1KERNEL-BYTE-EQ — §5a LN+GEMM wedge (LN-fwd portion)
+======================================================================
+host    : ubu-2  NVIDIA GeForce RTX 5070  driver 580.159.03  (sm_120, sm_80 PTX JIT)
+date    : 2026-05-28
+kernel  : tool/probe_layernorm_f64.hexa  (@gpu_kernel, single block, N=256)
+emit    : /tmp/nvptx_emit ... phase=P3, 7705 B PTX, ASCII-clean, 2× rsqrt
+host_c  : tool/layernorm_f64_host.c  (cuModuleLoadDataEx + CPU LayerNorm compare)
+
+algorithm: LayerNorm-fwd 1-kernel = 2-pass tree reduce (mean→var) + normalize.
+  mean = sum(x) / N
+  var  = sum((x-mean)^2) / N
+  y[i] = (x[i] - mean) * rsqrt(var + 1e-5)
+LogSumExp(#1657) 패턴 직접 응용 — sm[0] broadcast read 만 사용
+(argmax 의 +K partition offset 함정 회피).
+
+input   : x[i] = sin(0.11*i) + 0.3*cos(0.07*i) + 0.005*i  (N=256)
+
+RESULT (silicon):
+  max_abs_err = 0
+  max_rel_err = 0   ← byte-eq across all 256 outputs
+  ref: mean = 0.6948..., var = 0.7189..., inv = 1.1793...
+  PASS rel_err < 1e-9 · FIRE_RC=0
+
+VERDICT: 🟢 SUPPORTED-NUMERICAL byte-eq · §5a "LN+GEMM fusion" 의 LN-fwd
+sub-wedge fully validated. cuBLAS 는 norm 자체가 없으므로 LN-only 1-kernel
+도 cuBLAS-relative 격차 evidence.
+
+§5a 완전 close (LN+GEMM 묶음) 은 GEMM tile + LN reduce 합쳐야 — 추가
+fusion fire 필요. 본 wedge = LN-fwd 자체의 silicon evidence.

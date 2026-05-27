@@ -1,0 +1,68 @@
+// tool/probe_layernorm_f64.hexa — §5a LN+GEMM wedge (LN-fwd single-kernel)
+//
+// Minimum wedge of §5a "LayerNorm + GEMM fusion": prove LN-fwd 자체가 1-kernel
+// 로 byte-eq correctness. cuBLAS 는 norm 못함 = LN-only 도 fusion 영역 외 →
+// 본 probe 가 cuBLAS-relative 격차 증거 추가. 단일 kernel = 2-pass reduce
+// (mean → var) + 정규화 elementwise. LogSumExp(#1657) 패턴 직접 응용 — sm[0]
+// broadcast read 만 사용 (argmax 의 +K partition offset 함정 회피).
+//
+// Formula:
+//   mean   = sum(x) / N
+//   var    = sum((x - mean)^2) / N
+//   y[i]   = (x[i] - mean) * rsqrt(var + eps)
+//
+// Kernel: single block, N=256, blockDim=256, gridDim=1, eps = 1e-5.
+
+@gpu_kernel
+fn probe_layernorm_f64(x: [f64], y: [f64], n: i64) {
+    @shared let sm: [f64; 256] = []
+    let mut tid: i64 = to_i64(gpu_thread_id_x())
+
+    // Phase 1 — load x into shared (pad with 0 for sum-neutral)
+    if tid < n {
+        sm[to_i64(tid)] = x[to_i64(tid)]
+    } else {
+        sm[to_i64(tid)] = 0.0
+    }
+    gpu_barrier()
+
+    // Phase 1b — tree sum-reduce → sm[0] = sum
+    let mut stride: i64 = 128
+    while stride > 0 {
+        if tid < stride {
+            sm[to_i64(tid)] = sm[to_i64(tid)] + sm[to_i64(tid) + stride]
+        }
+        gpu_barrier()
+        stride = stride / 2
+    }
+    let mean: f64 = sm[0] / to_f64(n)
+    gpu_barrier()
+
+    // Phase 2 — load (x[i] - mean)^2 into shared
+    let xi: f64 = x[to_i64(tid)]
+    let diff: f64 = xi - mean
+    if tid < n {
+        sm[to_i64(tid)] = diff * diff
+    } else {
+        sm[to_i64(tid)] = 0.0
+    }
+    gpu_barrier()
+
+    // Phase 2b — tree sum-reduce → sm[0] = sum((x-mean)^2)
+    stride = 128
+    while stride > 0 {
+        if tid < stride {
+            sm[to_i64(tid)] = sm[to_i64(tid)] + sm[to_i64(tid) + stride]
+        }
+        gpu_barrier()
+        stride = stride / 2
+    }
+    let var: f64 = sm[0] / to_f64(n)
+    gpu_barrier()
+
+    // Phase 3 — normalize and write back. rsqrt(var + eps) via PR #1335
+    let inv: f64 = rsqrt(var + 0.00001)
+    if tid < n {
+        y[to_i64(tid)] = diff * inv
+    }
+}
