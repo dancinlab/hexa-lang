@@ -1,5 +1,20 @@
 # INBOX — log
 
+## 2026-05-28 — M3 fire 2차 hit on #1659 resolver gap (anima DECODER, recommend `runpodctl pod get` JSON parse)
+
+> **finding (anima M3 4축 fire 시도)**: anima `CORE/DECODER/m3_fire_dispatch.hexa` 의 lifecycle wrapper (cloud-guard 정합 `runpodctl pod create`) 는 LANDED · 그러나 transport (ssh-cascade) 시점에 hexa cloud 의 RunPod pod-id → SSH-host resolver gap (#1659) 으로 다시 막힘 — M3 4축 4-pod fire 실행 불가.
+
+**우회 (검증됨)**: 본 세션 M4b GPU fire (anima #1119/1120/1121) 가 검증한 **Vast.ai 직접-IP 패턴** — `vastai show instance <id> --raw` 에서 `ssh_host` + `ssh_port` 추출 → `hexa cloud exec root@<host> --port <n> --insecure` 작동 (cloud-guard 정합 + 표준 verb).
+
+**recommended fix (#1659 resolver primitive)**: `runpodctl pod get <pod-id> -o json` 출력에서 SSH endpoint 추출 가능 (RunPod CLI 0.5+). hexa cloud 내부에서:
+```bash
+SSH_INFO=$(runpodctl pod get "$POD_ID" -o json | jq -r '.publicIp // .ssh.host')
+SSH_PORT=$(runpodctl pod get "$POD_ID" -o json | jq -r '.ports[] | select(.type=="ssh").port // 22')
+```
+resolved `<host>:<port>` 를 hexa cloud copy-to / exec primitive 의 endpoint 로 사용. lifecycle (`runpodctl pod {create,get,destroy}`) 은 이미 cloud-guard 정합 → transport 만 위 resolver patch 로 unblock.
+
+**alternative (Vast.ai port pattern)**: 본 세션 M4b 가 입증한 안정 path. 신규 anima dispatch (M3 4축 production swap-in 등) 는 Vast.ai 로 우선, RunPod resolver fix landing 후 양쪽 backend 지원 가능. severity: high (anima M3 production fire 차단 · M4b 우회는 작동).
+
 ## 2026-05-28 — hexa multi-line expression continuation silent miscompute (parens 밖 줄바꿈)
 
 > **발견 맥락 (anima bench #4 TURING-MITOSIS · PR #1127)**: 2D 32×32 Gierer-Meinhardt 반응-확산 PDE Euler 적분기 작성 중, 활성자/억제자 갱신식의 **paren 밖 줄바꿈된 산술 expression** 이 컴파일러 오류 없이 silent 잘못 계산됨. ρ=1 control sim (대칭 IC, 균일 정상상태로 감쇠해야 정상) 이 var ~10^236 까지 blow-up. smoke test 는 single-line 형태라 통과 → 풀 bench 의 multi-line 형태에서만 차이 발생.
