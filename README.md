@@ -81,9 +81,11 @@ A binary appears only when every fatal stage passes. The atlas (4.2 MB) is baked
 
 * * *
 
-## 🔥 flame — hexa-native NN training stack (faster than PyTorch, measured)
+## 🔥 flame + 🔧 forge — hexa-native NN training stack + GPU substrate
 
-`stdlib/flame` is what you build *with* hexa-lang: a compiler-only neural-network training stdlib whose generated artifact runs a real transformer training step **2.95× faster than PyTorch eager** on the same hardware. No PyTorch wrapping, no ATen import, no Python in the trained binary — every layer (`t_*`/`ag_*`/`nn_*`/`opt_*`) lowers to hexa→C→native through the same 8-stage strict-lint gate that compiles the compiler itself.
+`stdlib/flame` is what you build *with* hexa-lang: a compiler-only neural-network training stdlib (autograd tape · layers · optimizers · tensor primitives) lowered through the same 8-stage strict-lint gate that compiles the compiler itself. No PyTorch wrapping, no ATen import, no Python in the trained binary.
+
+`self/forge` is what flame calls into: a GPU substrate that pairs device-resident hexa arrays (`farr`) with vendor-grade kernels (cuBLAS Dgemm + 11 hand-emit `.cu` kernels covering the elementwise / reduction / norm surface) under a byte-equal correctness contract, plus a BF16 Tensor-Core "mega-kernel" path (RFC 049/060) for the in-kernel-GEMM regime where vendor libs are reachable.
 
 **Architecture analogy** (`flame:forge :: torch:ATen`):
 
@@ -92,41 +94,51 @@ A binary appears only when every fatal stage passes. The atlas (4.2 MB) is baked
                      │
    ┌─────────────────┼─────────────────┐
    │ flame stdlib (compiler-only NN)   │   ← what users write
-   │   t_* · ag_* · nn_* · opt_*       │     (autograd tape · layers · optim)
+   │   t_* tensor · ag_tape autograd   │     (no Python in trained binary)
+   │   nn_lib layers · opt_* optimizer │
    └─────────────────┬─────────────────┘
-                     │   hexa build (8-stage lint)
+                     │   hexa build (8-stage strict-lint gate)
                      ▼
    ┌─────────────────────────────────┐
-   │ forge GPU substrate (C/CUDA)    │   ← what flame calls into
-   │   cuBLAS Dgemm · 12 byte-eq     │     (RFC 040/041/044 + RFC 049 BF16)
-   │   kernels · device-resident     │
+   │ forge GPU substrate             │   ← what flame calls into
+   │   farr device-resident array    │     RFC 040
+   │   cuBLAS Dgemm  +  11 .cu       │     RFC 041
+   │   BF16-TC mega-kernel path      │     RFC 049 / 060
    └─────────────────────────────────┘
                      │
                      ▼
               A100 / H100 native
 ```
 
-**Benchmark — d=768 · 12-layer transformer training step, A100, 2026-05-19** (`stdlib/flame/README.md` for full table):
+### Correctness — byte-equal oracles (max\|Δ\| = 0, FMA-contraction-off recipe)
 
-| path | step 1 wall | vs PyTorch eager | status |
-|---|---|---|---|
-| PyTorch eager (RFC 046 baseline) | 336.85 s | 1.00× (reference) | baseline |
-| **flame generic `ag_tape`** (mk2 closure, `e030fa31`) | **114 s** · step2=133 · step3=120 | **2.95× faster** | ⭐️ MEASURED PASS · 3.84× under F-RFC046 437.9 s ceiling |
-| flame device-resident hand-fused (`28e9d648`) | 191-268 s | 1.26-1.76× faster | MEASURED PASS · independent path |
+| layer | scope | measurement |
+|---|---|---|
+| forge substrate | RFC 040 device-farr + cuBLAS Dgemm · RFC 041 11-op `.cu` | **12 byte-equal fires** across the elementwise / reduce / GEMM surface, max\|Δ\| = 0 |
+| flame layers | rmsnorm · attn-fwd · attn-bwd · silu-gate | **4 byte-equal oracle fires**, max\|Δ\| = 0 |
+| flame `ag_tape` | generic autograd through the same oracles | derivation byte-equal, abstraction pays no correctness tax |
 
-Two independent measured paths under the same falsifier gate, both faster than the reference. The generic autograd path (`ag_tape`) is **faster than the hand-fused trainer** — abstraction pays no wall tax. Correctness anchored by 4 byte-equal oracle fires (rmsnorm · attn-fwd · attn-bwd · silu-gate, max\|Δ\| = 0 via FMA-contraction-off recipe).
+### Performance — measured (g3 / `LATTICE_POLICY`: real fires, falsifier-gated, no fabrication)
 
-**vs the closest thing in the ecosystem** (PyTorch eager / compiled / JAX, all written in Python+C++):
+| path | measurement | note |
+|---|---|---|
+| **forge BF16-TC mega-kernel** (RFC 049 Stage 1, A100) | **9.67× faster than FP64 cuBLAS** @ Llama-7B FFN shape | $0.10 fire · paradigm verdict from Phase R 14-fire $2.91 campaign |
+| forge Phase R / RFC 060 closure | FP64 mega-kernel **KILLED** (1.8-4.4× slower than per-op) · BF16 substrate **PASS** | RFC 060 100% closure · BF16-TC is the cuBLAS-relative wall path |
+| flame `ag_tape` d=768 · 12-layer (A100) | per-step wall recorded · **PyTorch wall speedup NOT measured** | prior README "2.95× / 1.26-1.76× faster than PyTorch eager" was a unit mismatch (full-run / 1-step) — **RETRACTED** per `stdlib/flame/README.md` correction 2026-05-19 |
 
-| axis | PyTorch eager | torch.compile | **flame** |
-|---|---|---|---|
-| language of NN code | Python | Python | hexa (compiled) |
-| runtime in trained binary | Python + libtorch | Python + libtorch + Inductor | native arm64/x86_64, no Python |
-| autograd path | C++ Autograd | TorchInductor | hexa `ag_tape` (forge-routed) |
-| d768·12L step (A100) | 336.85 s | varies (1.05-1.41× small/mid) | **114 s (2.95× faster)** |
-| dispatch model | per-op CUDA launch | fused kernel + CUDA graphs | device-resident chain + selective fusion |
+> Honest scope: flame's `ag_tape` + nn_lib + opt_* are functionally complete and byte-equal-verified; forge's `farr + cuBLAS Dgemm + 11 .cu` substrate is complete with the BF16-TC mega-kernel landing as the cuBLAS-relative wall path. End-to-end flame ↔ PyTorch wall comparison is **pending an apples-to-apples re-fire** — the substantive cuBLAS-relative win currently sits at the forge layer (BF16-TC 9.67× over FP64-cuBLAS on the FFN-shape mega-kernel).
 
-g3 / `LATTICE_POLICY`: every number above traces to a real fire — falsifier-gated, recorded as falsified when failing, no fabrication. See `stdlib/flame/PLAN.md` for the 4-fire campaign log + cycle ledger and `state/anima_handoff_2026_05_19.md` for the integration recipe.
+### Where it beats cuBLAS-using stacks structurally (whole-program fusion · cuBLAS cannot express)
+
+| finding | reduction / win | tier |
+|---|---|---|
+| `F-FUSION-EPILOGUE-GEMM-BIAS-GELU` | **66.667 % launch + HBM-write reduction** (3 launches → 1) @ LLaMA-7B FFN shape, ptxas-clean sm_80 | 🔵 structural-formal |
+| `F-FUSION-LAUNCH-AMORT` | 5-op chain → 1 launch / 3 HBM transfers vs separate-op 5 launches / 11 transfers | 🔵 + `$0` deterministic oracle |
+| `F-FUSION-AXISA-BREADTH` (norm surface) | LayerNorm 66 % · RMSNorm 59 % · Softmax 65 % · SwiGLU 63 % | 🔵 structural-formal |
+| `F-FUSION-ATTENTION-FLASH` | single-kernel fused attention (Q·K · softmax · V) | 🔵 + wall ruled-out |
+| §5j `Custom reductions` — LogSumExp 1-kernel (#1657) | numerically-stable max-shift + exp + log + sum in one kernel, silicon-validated rel_err 1.7e-10 | 🟢 SUPPORTED-NUMERICAL |
+
+Detail: `stdlib/flame/README.md` (canonical perf table + RETRACTION note) · `stdlib/flame/PERF.md` · `stdlib/flame/PLAN.md` (campaign log + cycle ledger) · `self/forge/PLAN.md` · `self/forge/PARADIGM.md` (Phase R measured verdicts) · `GPU.md` §1h-1o fusion-moat fires · `state/anima_handoff_2026_05_19.md` (integration recipe).
 
 * * *
 
@@ -283,7 +295,7 @@ Citing a tombstoned `L[id]` fires `HX1099` and fails the build. Bypass is `@grac
 - `hexa build` / `hexa cc` work **out-of-tree** — flattens `use`/`import`, resolves `hexa_cc.c`/SSOT/`-I` via `$HEXA_LANG > install_dir > ./self`; install-relative `stdlib/` discovery means `use "stdlib/*"` works with no env vars (downstream: `wilson` builds end-to-end → `wilson 0.0.1`)
 - stage-1 P0 host-OOM closed at current scale: A1 phase-arena reset + A2 in-place splice accumulator → peak ~782 MB (was 3 510 MB)
 - 14+ pinned decisions in `SPEC.yaml`, every claim traceable to an RFC
-- **`stdlib/flame` — hexa-native NN training stack 2.95× faster than PyTorch eager** (d=768·12L, A100, measured) — full benchmark table + architecture diagram in the flame section above.
+- **`stdlib/flame` + `self/forge` — hexa-native NN training stack + GPU substrate**: compiler-only NN (ag_tape · nn_lib · opt_*) on top of device-resident `farr` + cuBLAS Dgemm + 11 `.cu` kernels + BF16-TC mega-kernel path. **forge BF16-TC = 9.67× faster than FP64 cuBLAS** @ Llama-7B FFN shape (A100, measured). 12 byte-equal substrate fires + 4 byte-equal layer fires. flame ↔ PyTorch wall speedup not yet measured (prior claim RETRACTED). Detail in the flame + forge section above.
 
 * * *
 
