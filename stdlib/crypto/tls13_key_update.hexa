@@ -1,0 +1,36 @@
+// HEXA Standard Library — crypto/tls13_key_update
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// TLS 1.3 KeyUpdate message build/parse (RFC 8446 §4.6.3) — pure hexa.
+// Used post-handshake to rotate the application traffic keys (Key-Update
+// chaining). The body is a single byte = KeyUpdateRequest enum.
+// let-mut idiom (#1506).
+//
+// Structure (RFC 8446 §4.6.3):
+//   enum { update_not_requested(0), update_requested(1) } KeyUpdateRequest;
+//   struct { KeyUpdateRequest request_update; } KeyUpdate;
+//
+// Surface:
+//   pub fn tls13_key_update_build(request_update: int) -> [int]
+//   pub fn tls13_key_update_request(body: [int]) -> int
+//
+// Constants:
+//   TLS_KU_UPDATE_NOT_REQUESTED = 0
+//   TLS_KU_UPDATE_REQUESTED     = 1
+
+let TLS_KU_UPDATE_NOT_REQUESTED: int = 0
+let TLS_KU_UPDATE_REQUESTED: int = 1
+
+@pure
+pub fn tls13_key_update_build(request_update: int) -> [int] {
+    let mut o: [int] = []
+    o.push(request_update & 0xFF)
+    return o
+}
+
+@pure
+pub fn tls13_key_update_request(body: [int]) -> int {
+    return body[0] & 0xFF
+}
