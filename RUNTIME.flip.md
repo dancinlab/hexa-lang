@@ -229,16 +229,24 @@ the canonical handoff surface.
 divergence round; or pivot to a different active domain (HEXA-LANG · GPU ·
 TECS-L 등) per cross-domain handoff list above.
 
-## deferred (layer ③ FFI · vendor ABI · policy-D2+)
+## deferred — RESOLVED (CLOSED-NEGATIVE · A/C/D coverage 충족)
 
-레이어 ③ (irreducible-external-interface · vendor ABI) 항목 — RUNTIME
-north-star ("zero libc / libm / libsystem") 와 별도 카테고리. LATTICE_POLICY
-정의상 FFI 정당하지만 "완전히 hexa-self" 좁은 기준에선 active batch 에서
-빠짐. D2+ governance 결정이 옵션 B 채택 시에만 실제 작업.
+레이어 ③ FFI 항목이 deferred 로 분리됐었으나, B2 batch 의 Option A/C/D 가
+모두 LANDED 하여 CA bundle 정책 표면 전체가 hexa-self 로 충분히 커버됨.
+Option B (system trust store FFI) 는 **추가 가치 없음** — A (pinned NSS) +
+C (caller-supplied) + D (hybrid composition) 가 모든 use case 를 cover.
 
-- [ ] **B2.ca-system-fficacert (deferred)** —
-      `stdlib/crypto/tls_ca_bundle_system_fficacert.hexa`: FFI wrapper (macOS
-      SecTrust / Linux /etc/ssl/certs walk). impl skeleton with FFI binding
-      sites stubbed. **레이어 ③ vendor ABI** — `#1674` multi-dylib closed-neg
-      및 GPU 드라이버 FFI 와 동일 카테고리. D2+ 가 Option B 채택 시 active 로
-      승격 · A/C/D 채택 시 cancel.
+- [x] **B2.ca-system-fficacert** — **CLOSED-NEGATIVE** (2026-05-28). A/C/D
+      충분 — Option B 는 layer ③ vendor FFI 카테고리 (`#1674` multi-dylib
+      closed-neg pattern 과 동일), A/C/D 의 hexa-self 표면이 trust store
+      lookup 의 모든 deployment scenario 를 커버하므로 추가 impl 불필요.
+      만약 미래에 OS-native SecTrust integration 이 필요하면 별도 layer ③
+      FFI 트랙으로 재오픈 (closed-neg-future flag).
+
+      **LANDED A/C/D coverage**:
+      - PR #1765 — `tls_ca_bundle_pinned_nss.hexa` (Option A · 100% hexa-self)
+      - PR #1766 — `tls_ca_bundle_caller_supplied.hexa` (Option C · 100% hexa-self)
+      - PR #1767 — `tls_ca_bundle_hybrid.hexa` (Option D · 100% hexa-self)
+      - PR #1768 — `tls_ca_bundle_test_vectors.hexa` (test fixture)
+
+      → deferred 섹션 zero open · all-46-active + 1-closed-deferred 모두 closure.
