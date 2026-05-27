@@ -1,0 +1,69 @@
+// HEXA Standard Library — cloud/preflight_workload_kind
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Workload-kind enum + dispatcher — RUNTIME.flip B6.preflight-workload-kind.
+//
+// Sibling of stdlib/cloud/preflight.hexa (LLM training) and
+// stdlib/cloud/preflight_dft.hexa (DFT/HPC closed-form). This file enumerates
+// the five workload axes the preflight v2 surface supports so that downstream
+// CLI wire-up and symptom-diff watchers (RFC 091 §2.4/§2.5) can dispatch on a
+// single typed value instead of stringly-typed comparisons.
+//
+// RFC reference: docs/rfc/rfc_drafts_2026_05_24/rfc_091_hexa_cloud_preflight_v2_dft_hpc.md
+// — §2.1 (workload-axis enumeration) lists the five kinds carried here.
+//
+// Surface (1 enum · 3 fn):
+//   enum WorkloadKind { LLM, DFT, MD, WEB_SMOKE, BUILD_BENCH }
+//   workload_kind_name(k: WorkloadKind) -> str         — canonical UPPER_SNAKE name
+//   workload_kind_from_str(s: str) -> int              — name → index (0..4), -1 unknown
+//   workload_kind_count() -> int                       — variant count (5)
+//
+// The string surface is symmetric — `workload_kind_name` of a kind round-trips
+// through `workload_kind_from_str` to its declaration-order index.
+
+// The five workload axes carried by the preflight v2 surface.
+//   LLM         — transformer training (the original preflight.hexa axis)
+//   DFT         — plane-wave DFT / HPC (preflight_dft.hexa axis)
+//   MD          — classical / ab-initio molecular dynamics
+//   WEB_SMOKE   — browser / edge smoke run
+//   BUILD_BENCH — compiler / build-bench timing run
+enum WorkloadKind {
+    LLM,
+    DFT,
+    MD,
+    WEB_SMOKE,
+    BUILD_BENCH,
+}
+
+// Canonical UPPER_SNAKE name for a workload kind.
+@pure
+pub fn workload_kind_name(k: WorkloadKind) -> str {
+    match k {
+        WorkloadKind.LLM         -> { return "LLM" }
+        WorkloadKind.DFT         -> { return "DFT" }
+        WorkloadKind.MD          -> { return "MD" }
+        WorkloadKind.WEB_SMOKE   -> { return "WEB_SMOKE" }
+        WorkloadKind.BUILD_BENCH -> { return "BUILD_BENCH" }
+    }
+}
+
+// Inverse of workload_kind_name — name → declaration-order index.
+// Returns 0..4 for a known name, -1 for an unknown string. The index ordering
+// matches the enum declaration so downstream tables can be indexed positionally.
+@pure
+pub fn workload_kind_from_str(s: str) -> int {
+    if s == "LLM" { return 0 }
+    if s == "DFT" { return 1 }
+    if s == "MD" { return 2 }
+    if s == "WEB_SMOKE" { return 3 }
+    if s == "BUILD_BENCH" { return 4 }
+    return -1
+}
+
+// Variant count — fixed at the five axes enumerated above.
+@pure
+pub fn workload_kind_count() -> int {
+    return 5
+}
