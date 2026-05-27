@@ -1,0 +1,47 @@
+// HEXA Standard Library — crypto/tls13_misc
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// TLS 1.3 misc wire-format helpers — pure hexa. Closing pieces of the wire
+// format that don't deserve their own module:
+//   - HelloRetryRequest detection (RFC 8446 §4.1.4): a HRR is a ServerHello
+//     whose random equals a magic 32-byte constant (SHA-256 of "HelloRetryRequest")
+//   - ChangeCipherSpec record (RFC 8446 §5 retained for middlebox compat):
+//     content type 0x14 with a single-byte body 0x01.
+// let-mut idiom (#1506).
+//
+// Surface:
+//   pub fn tls13_hrr_random() -> [int]                       — the 32-byte magic value
+//   pub fn tls13_is_hrr_random(server_hello_random: [int]) -> bool
+//   pub fn tls13_change_cipher_spec_record() -> [int]        — full 5+1 byte record (16 03 03 00 01 01)
+
+let TLS_RT_CHANGE_CIPHER_SPEC: int = 0x14
+
+// SHA-256 of the literal ASCII "HelloRetryRequest" (RFC 8446 §4.1.3 — special
+// ServerHello.random value that signals a HelloRetryRequest).
+@pure
+pub fn tls13_hrr_random() -> [int] {
+    return [0xCF,0x21,0xAD,0x74,0xE5,0x9A,0x61,0x11, 0xBE,0x1D,0x8C,0x02,0x1E,0x65,0xB8,0x91,
+            0xC2,0xA2,0x11,0x16,0x7A,0xBB,0x8C,0x5E, 0x07,0x9E,0x09,0xE2,0xC8,0xA8,0x33,0x9C]
+}
+
+@pure
+pub fn tls13_is_hrr_random(server_hello_random: [int]) -> bool {
+    if len(server_hello_random) != 32 { return false }
+    let m = tls13_hrr_random()
+    let mut diff = 0
+    let mut i = 0
+    while i < 32 { if server_hello_random[i] != m[i] { diff = 1 }; i = i + 1 }
+    return diff == 0
+}
+
+// ChangeCipherSpec record (RFC 8446 §5): only sent for middlebox compat,
+// payload always {0x01}. Returns the full TLSPlaintext record bytes ready
+// to write to the wire: 5-byte record header + 1-byte body.
+@pure
+pub fn tls13_change_cipher_spec_record() -> [int] {
+    // header: type=0x14 ChangeCipherSpec, version=0x0303, length=0x0001
+    // body:   0x01
+    return [0x14, 0x03, 0x03, 0x00, 0x01, 0x01]
+}
