@@ -57,6 +57,9 @@
 
 🥇 **BC4 round-14 wedge fire 먼저** — attention 이 학습 wall 의 가장 큰 단일 block 이고, plan 정량 정찰 끝나서 cost-bearing fire 만 남았다. 측정 결과에 따라 다음 라인 (RFC 049 Stage 2 vs §5a LN+GEMM) 결정.
 
+📌 2026-05-28 cycle: M0-M3 빌트인 ✅ landed (PR anima#1319/#1320/#1321 + hexa#1920/#1924).
+다음 결정 fire = M5 H100 wall-time (F-BC-ANIMA-M4-CEILING) — BC4 wedge fire 는 그 다음.
+
 비유: anima 학습이라는 *코스 요리* 에서, attention 은 가장 시간 오래 걸리는 *메인 디시* — 이 디시 한 팬 요리 (FlashAttn-style fusion) 부터 잡는 게 wall 단축 최대.
 
 ---
