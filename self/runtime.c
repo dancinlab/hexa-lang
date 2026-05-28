@@ -1291,6 +1291,11 @@ static int hxlcl_pthread_join(void *thread, void **retval);
 #define HXLCL_SYS_BIND        104
 #define HXLCL_SYS_SETSOCKOPT  105
 #define HXLCL_SYS_LISTEN      106
+// F3 wave 2 — class-C 0-arg / cannot-fail svc-traps (getuid family extension)
+#define HXLCL_SYS_GETEUID      25
+#define HXLCL_SYS_GETEGID      43
+#define HXLCL_SYS_GETGID       47
+#define HXLCL_SYS_GETPPID      39
 
 static inline long _hxlcl_syscall1(long nr, long a0) {
     register long x0 __asm__("x0") = a0;
@@ -1565,6 +1570,35 @@ __attribute__((naked,used,noreturn)) void hxlcl_longjmp(void *buf, int val) { __
 extern int hxlcl_getuid(void);
 #else
 static int __attribute__((noinline)) hxlcl_getuid(void) { return (int)_hxlcl_syscall1(HXLCL_SYS_GETUID, 0); }
+#endif
+// F3 ACTIVATION · Path A · wave 2 — class-C 0-arg / cannot-fail svc-traps.
+// hxlcl_geteuid / hxlcl_getegid / hxlcl_getgid / hxlcl_getppid are exact
+// rt_getuid-template extensions (4-instr 16-byte body, only the `mov w16,#N`
+// immediate differs per primitive). Like getuid/getpid, none can fail (no
+// errno / carry-flag path), so the plain _hxlcl_syscall1 trap is correct.
+// DEFAULT build keeps the static svc-trap (0-libc-extern preserved). SELF-EMIT
+// flips to extern; ld64 binds to the hexa-emitted .o (rt_<n>'s 16-byte body).
+// Byte-identical to `as -arch arm64` AND JIT-exec-correct (returned value ==
+// libc geteuid/getegid/getgid/getppid).
+#ifdef HEXA_RT_SELFEMIT
+extern int hxlcl_geteuid(void);
+#else
+static int __attribute__((noinline)) hxlcl_geteuid(void) { return (int)_hxlcl_syscall1(HXLCL_SYS_GETEUID, 0); }
+#endif
+#ifdef HEXA_RT_SELFEMIT
+extern int hxlcl_getegid(void);
+#else
+static int __attribute__((noinline)) hxlcl_getegid(void) { return (int)_hxlcl_syscall1(HXLCL_SYS_GETEGID, 0); }
+#endif
+#ifdef HEXA_RT_SELFEMIT
+extern int hxlcl_getgid(void);
+#else
+static int __attribute__((noinline)) hxlcl_getgid(void) { return (int)_hxlcl_syscall1(HXLCL_SYS_GETGID, 0); }
+#endif
+#ifdef HEXA_RT_SELFEMIT
+extern int hxlcl_getppid(void);
+#else
+static int __attribute__((noinline)) hxlcl_getppid(void) { return (int)_hxlcl_syscall1(HXLCL_SYS_GETPPID, 0); }
 #endif
 // RUNTIME.md Tier-A.4 — backtrace / backtrace_symbols_fd hexa-native stubs.
 // These libc execinfo(3) fns are pulled in ONLY by the HEXA_OOB_TRACE
