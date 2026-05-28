@@ -257,3 +257,27 @@ tool/hexa_daemon_serve.c
 state/flame_phase4d_5_4_2026_05_17/flame_d768_12L_corpus_test_a2_layer2.c
 state/flame_phase4d_20260517_102511/flame_d768_12L_corpus_test_a2.c
 test/lora_cuda_equiv_test.c
+
+# Phase 4 — warm-bootstrap regenerable seeds (toward `.hexa only`, .c=0).
+# These 18 .c are emitted byte-identically by their *_emit.hexa SSOTs via
+# tool/regen_native_runtime_c_includes.hexa. The CI release.yml Stage 0-pre
+# warm-regen + local build_hexa_cli regen step recreate them before compile.
+# Removed from tracking in PR # phase4/rm-warm-regen-seeds.
+self/runtime_core.c
+self/runtime_hi_gen.c
+self/native/crypto_openssl.c
+self/native/crypto_sodium.c
+self/native/exec_argv_sha256.c
+self/native/exec_pipe.c
+self/native/fp_init.c
+self/native/mount.c
+self/native/namespace.c
+self/native/net.c
+self/native/persistent_pipe.c
+self/native/proc_fork.c
+self/native/pty.c
+self/native/signal_flock.c
+self/native/tensor_kernels.c
+self/native/term_ffi.c
+self/native/thread.c
+self/native/wait.c
