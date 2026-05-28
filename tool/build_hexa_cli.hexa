@@ -307,6 +307,47 @@ fn _regen_native_includes(repo_root: string) {
     println("[0-pre] native .c regen: " + to_string(done) + " regenerated from emitter SSOT, " + to_string(skipped) + " skipped (in-tree)")
 }
 
+// B9.C-10 (F3) — regen self/runtime_core.c (the CORE-tier fragment `#include`d
+// by runtime.c at line 1762, RFC 061 amalgamation) from its hexa emitter
+// (self/runtime_core_emit.hexa, the SSOT). Same STRICTLY-OPTIONAL contract as
+// _regen_native_includes: runs only when an external hexa-run/hexa is on PATH
+// AND the emitter is present; on SHA-identical regen the runtime.c TU is
+// unchanged; on a fresh clone (no external runner) the in-tree .c is used as-is.
+// runtime_core.c lives at self/ (NOT self/native/), so it gets its own step.
+fn _regen_runtime_core(repo_root: string) {
+    let mut runner = ""
+    let r1 = exec_with_status("command -v hexa-run >/dev/null 2>&1")
+    if r1[1] == 0 {
+        runner = "hexa-run"
+    } else {
+        let r2 = exec_with_status("command -v hexa >/dev/null 2>&1")
+        if r2[1] == 0 { runner = "hexa run" }
+    }
+    if runner == "" {
+        println("[0-pre] runtime_core.c regen SKIP — no external hexa-run on PATH (in-tree .c used)")
+        return
+    }
+    let emitter = repo_root + "/self/runtime_core_emit.hexa"
+    let dst     = repo_root + "/self/runtime_core.c"
+    if !_file_exists(emitter) {
+        println("[0-pre] runtime_core.c regen SKIP — emitter absent (in-tree .c used)")
+        return
+    }
+    let tmp = to_string(exec("mktemp -t regen_runtime_core_c.XXXXXX")).trim()
+    if tmp == "" {
+        eprintln("  warn: mktemp failed — regen runtime_core.c skipped (in-tree used)")
+        return
+    }
+    let regen = exec_with_status(runner + " " + _shq(emitter) + " " + _shq(tmp) + " >/dev/null 2>&1")
+    if regen[1] == 0 && _file_exists(tmp) {
+        let _ = exec("cp -f " + _shq(tmp) + " " + _shq(dst))
+        println("[0-pre] runtime_core.c regen: 1 regenerated from emitter SSOT")
+    } else {
+        eprintln("  warn: emitter runtime_core_emit.hexa failed (rc=" + to_string(regen[1]) + ") — in-tree .c used")
+    }
+    let _ = exec("rm -f " + _shq(tmp))
+}
+
 fn _do_build(repo_root: string) {
     // multiarch-aware: Linux x86_64 → hexat_linux_x86_64; Mac arm64 → hexat.
     // Falls back to legacy "hexat" path when the arch-specific binary
@@ -377,6 +418,8 @@ fn _do_build(repo_root: string) {
     //     and the in-tree `.c` (committed or already-present) is used as-is —
     //     the build is byte-for-byte identical to the pre-B9.C-10 behavior.
     _regen_native_includes(repo_root)
+    // F3 — also regen the CORE-tier fragment self/runtime_core.c (same contract).
+    _regen_runtime_core(repo_root)
 
     // ── Step 0: bootstrap the transpiler artifact (CANON M3b · Go 1.4 C-seed).
     //   The transpiler is no longer a committed binary — build it per-machine
