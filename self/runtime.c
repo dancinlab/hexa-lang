@@ -2288,7 +2288,17 @@ static int hxlcl_pthread_join(void *thread, void **retval) {
 
 // RUNTIME.md step-2 cycle 4 — net/exec/pty delegation via single
 // rt_net_fail (-1) + rt_net_zero (0 for inet_pton invalid).
-#ifndef HEXA_HAS_HEXA_RT_STDLIB
+//
+// F3 class-D batch2 (this PR) extends the 2-way gate to 3-way:
+//   - HEXA_RT_SELFEMIT       → extern (self-emit .o defines _rt_net_*)
+//   - !HEXA_HAS_HEXA_RT_STDLIB → standalone C body
+//   - else                   → extern (aprime_cc hexa transpile defines)
+// Default build (neither flag) hits path 3 → BYTE-IDENTICAL to origin/main.
+#if defined(HEXA_RT_SELFEMIT)
+extern HexaVal rt_net_fail(void);
+extern HexaVal rt_net_zero(void);
+extern HexaVal rt_posix_ok(void);  /* cycle 6 ISO-1 */
+#elif !defined(HEXA_HAS_HEXA_RT_STDLIB)
 HexaVal rt_net_fail(void) { return hexa_int(-1); }
 HexaVal rt_net_zero(void) { return hexa_int(0); }
 HexaVal rt_posix_ok(void) { return hexa_int(0); }  /* cycle 6 ISO-1 */

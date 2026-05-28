@@ -5838,6 +5838,149 @@ fn test_rt_pthread_create_policy_classd() {
 
 test_rt_pthread_create_policy_classd()
 
+// === class-D HARD scale-out batch2 — rt_net_zero + rt_posix_ok + rt_net_fail
+// ═══════════════════════════════════════════════════════════════════════
+//
+// Batch1 (PRs #1914 + #1923 + #1929) landed rt_isalpha + rt_isalnum +
+// rt_pthread_noop + rt_pthread_create_policy. This batch2 wave extends
+// class-D HARD coverage with 3 more 0-arg HexaVal-repr struct-return bodies:
+//
+//   - rt_net_zero  (`return hexa_int(0)`)  — STRUCTURAL REPLICATE of
+//     rt_pthread_noop_classd. Same bytecode (24 B · BRANCH26 @0x0C ·
+//     mov w0,#0 · bl _hexa_int). Tests the runbook scales mechanically by
+//     name-only change for identical-payload primitives.
+//   - rt_posix_ok  (`return hexa_int(0)`)  — second structural replicate.
+//   - rt_net_fail  (`return hexa_int(-1)`) — NEW MOVN axis. Uses
+//     mov x0,#-1 (movn x0,#0 = 0x92800000) instead of mov w0,#N family.
+//     The 64-bit MOVN is mandatory: mov w0,#-1 (0x12800000) zeroes upper
+//     x0 → x0=0xFFFFFFFF, NOT -1. So this exercises a real new opcode
+//     dimension on the class-D leaf template.
+//
+// All 3: 16-B frame, LR-spill, 6 instr, 24 bytes, ONE BRANCH26 @0x0C.
+
+// ── rt_net_zero_classd (`return hexa_int(0)`) ──────────────────────────
+fn rt_net_zero_classd() {
+    let mut c = []
+    c.push(253); c.push(123); c.push(191); c.push(169)
+    c.push(253); c.push(3); c.push(0); c.push(145)
+    // mov w0, #0                   0x52800000
+    c.push(0); c.push(0); c.push(128); c.push(82)
+    // bl _hexa_int [BRANCH26]      0x94000000  @ 0x0C
+    c.push(0); c.push(0); c.push(0); c.push(148)
+    c.push(253); c.push(123); c.push(193); c.push(168)
+    c.push(192); c.push(3); c.push(95); c.push(214)
+    return c
+}
+
+fn rt_net_zero_classd_reloc_offs() {
+    let mut o = []; o.push(12); return o
+}
+fn rt_net_zero_classd_reloc_kinds() {
+    let mut k = []; k.push(2); return k
+}
+
+fn test_rt_net_zero_classd() {
+    println("test_rt_net_zero_classd (F3 class-D HARD batch2 · structural replicate of pthread_noop)")
+    let mut ok = true
+    let s = rt_net_zero_classd()
+    println("  rt_net_zero_classd : " + to_string(len(s)) + " bytes (24 expected)")
+    if len(s) != 24 { println("  FAIL: rt_net_zero_classd expected 24 bytes"); ok = false }
+    if s[8] != 0 || s[9] != 0 || s[10] != 128 || s[11] != 82 {
+        println("  FAIL: mov w0,#0 mismatch"); ok = false
+    }
+    if s[12] != 0 || s[13] != 0 || s[14] != 0 || s[15] != 148 {
+        println("  FAIL: bl _hexa_int (BRANCH26 @0x0C) mismatch"); ok = false
+    }
+    if s[20] != 192 || s[21] != 3 || s[22] != 95 || s[23] != 214 {
+        println("  FAIL: ret trailer mismatch"); ok = false
+    }
+    if ok { println("  ALL CHECKS PASS") }
+}
+
+test_rt_net_zero_classd()
+
+// ── rt_posix_ok_classd (`return hexa_int(0)`) ──────────────────────────
+fn rt_posix_ok_classd() {
+    let mut c = []
+    c.push(253); c.push(123); c.push(191); c.push(169)
+    c.push(253); c.push(3); c.push(0); c.push(145)
+    c.push(0); c.push(0); c.push(128); c.push(82)
+    c.push(0); c.push(0); c.push(0); c.push(148)
+    c.push(253); c.push(123); c.push(193); c.push(168)
+    c.push(192); c.push(3); c.push(95); c.push(214)
+    return c
+}
+
+fn rt_posix_ok_classd_reloc_offs() {
+    let mut o = []; o.push(12); return o
+}
+fn rt_posix_ok_classd_reloc_kinds() {
+    let mut k = []; k.push(2); return k
+}
+
+fn test_rt_posix_ok_classd() {
+    println("test_rt_posix_ok_classd (F3 class-D HARD batch2 · structural replicate of pthread_noop)")
+    let mut ok = true
+    let s = rt_posix_ok_classd()
+    println("  rt_posix_ok_classd : " + to_string(len(s)) + " bytes (24 expected)")
+    if len(s) != 24 { println("  FAIL: rt_posix_ok_classd expected 24 bytes"); ok = false }
+    if s[8] != 0 || s[9] != 0 || s[10] != 128 || s[11] != 82 {
+        println("  FAIL: mov w0,#0 mismatch"); ok = false
+    }
+    if s[12] != 0 || s[13] != 0 || s[14] != 0 || s[15] != 148 {
+        println("  FAIL: bl _hexa_int (BRANCH26 @0x0C) mismatch"); ok = false
+    }
+    if s[20] != 192 || s[21] != 3 || s[22] != 95 || s[23] != 214 {
+        println("  FAIL: ret trailer mismatch"); ok = false
+    }
+    if ok { println("  ALL CHECKS PASS") }
+}
+
+test_rt_posix_ok_classd()
+
+// ── rt_net_fail_classd (`return hexa_int(-1)`) ─────────────────────────
+// 6 instr, 24 bytes. NEW MOVN axis — mov x0,#-1 (0x92800000) NOT mov w0,#X.
+fn rt_net_fail_classd() {
+    let mut c = []
+    c.push(253); c.push(123); c.push(191); c.push(169)
+    c.push(253); c.push(3); c.push(0); c.push(145)
+    // mov x0, #-1 (movn x0, #0)    0x92800000  (64-bit; ensures x0=-1)
+    c.push(0); c.push(0); c.push(128); c.push(146)
+    // bl _hexa_int [BRANCH26]      0x94000000  @ 0x0C
+    c.push(0); c.push(0); c.push(0); c.push(148)
+    c.push(253); c.push(123); c.push(193); c.push(168)
+    c.push(192); c.push(3); c.push(95); c.push(214)
+    return c
+}
+
+fn rt_net_fail_classd_reloc_offs() {
+    let mut o = []; o.push(12); return o
+}
+fn rt_net_fail_classd_reloc_kinds() {
+    let mut k = []; k.push(2); return k
+}
+
+fn test_rt_net_fail_classd() {
+    println("test_rt_net_fail_classd (F3 class-D HARD batch2 · NEW MOVN x0,#-1 axis)")
+    let mut ok = true
+    let s = rt_net_fail_classd()
+    println("  rt_net_fail_classd : " + to_string(len(s)) + " bytes (24 expected)")
+    if len(s) != 24 { println("  FAIL: rt_net_fail_classd expected 24 bytes"); ok = false }
+    // mov x0,#-1 = 00 00 80 92 @ 8 — DIFFERS from net_zero by ONE byte (0x92 vs 0x52)
+    if s[8] != 0 || s[9] != 0 || s[10] != 128 || s[11] != 146 {
+        println("  FAIL: mov x0,#-1 (MOVN) mismatch"); ok = false
+    }
+    if s[12] != 0 || s[13] != 0 || s[14] != 0 || s[15] != 148 {
+        println("  FAIL: bl _hexa_int (BRANCH26 @0x0C) mismatch"); ok = false
+    }
+    if s[20] != 192 || s[21] != 3 || s[22] != 95 || s[23] != 214 {
+        println("  FAIL: ret trailer mismatch"); ok = false
+    }
+    if ok { println("  ALL CHECKS PASS") }
+}
+
+test_rt_net_fail_classd()
+
 test_runtime_arm64()
 test_neon_string_ops()
 test_rt_strdup()
