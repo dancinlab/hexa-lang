@@ -270,7 +270,7 @@ fn _rtsc_beh8_runbook(spec: DeckSpec) -> string {
     s = s + "| 케이지 | BeH8 clathrate (Be @ 4b, H @ 32f xxx, " + a_sym + " @ 4a) |\n"
     s = s + "\n"
     s = s + "> ⚠ vc-relax 가 진짜 평형구조를 찾는다. celldm/positions 는 **시작 추정치**일 뿐.\n"
-    s = s + "> nosym=.true. 가드 — checkallsym 크래시 회피 (sc2be2h6 캐페인 교훈).\n"
+    s = s + "> nosym=.true. 가드 — checkallsym 크래시 회피 (sc2be2h6 캠페인 교훈).\n"
     s = s + "> H 32f 좌표 x~0.12 는 LaBeH8 케이지 패밀리 시작값. relax 후 scf.in 에 갱신.\n"
     s = s + "\n"
     s = s + "### 압력 fallback 절차\n"
@@ -360,7 +360,7 @@ fn _rtsc_beh8_runbook(spec: DeckSpec) -> string {
     s = s + "| workdir  | ✅ | `exports/rtsc/decks/" + a_sym + "BeH8/` |\n"
     s = s + "\n"
     s = s + "**INFRA-READY: 4/4** — /micro-exp vast.ai 발사 준비 완료.\n"
-    s = s + "provider 우선순위 = vast.ai → runpod fallback (d17)."
+    s = s + "provider 우선순위 = vast.ai → runpod fallback (d17).\n"
     return s
 }
 
@@ -549,7 +549,7 @@ fn _rtsc_perovskite_runbook(spec: DeckSpec) -> string {
     s = s + "\n"
     s = s + "> Pm-3m perovskite-hydride RTSC 후보. 압력 " + press + " GPa.\n"
     s = s + "> TODO(d6 honest): 이 RUNBOOK 은 BeH8 clathrate prototype 의 구조 테이블 파트만 채움.\n"
-    s = s + "> author-style 세부 (절대 경로, 단락별 세부 설명)은 해당 캐페인 따라 확장해야 함.\n"
+    s = s + "> author-style 세부 (절대 경로, 단락별 세부 설명)은 해당 캠페인 따라 확장해야 함.\n"
     s = s + "\n"
     s = s + "## 1. 구조\n"
     s = s + "\n"
