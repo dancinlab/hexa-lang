@@ -20,6 +20,15 @@ AS      = $(ARM_GCC_PREFIX)as
 LD      = $(ARM_GCC_PREFIX)ld
 OBJCOPY = $(ARM_GCC_PREFIX)objcopy
 
+# Hexa-emitted boot generator (F5 RFC 063/064 Component 3-lite + 5).
+# `boot_rp2040.s` is generated at build time from
+# stdlib/hal/boot_emit.hexa; the hand-written `.s` was `git rm`d once
+# the byte-diff oracle (stdlib/hal/t3/boot_byte_diff_rp2040.hexa)
+# proved gen ≡ orig 8/8 PASS (.vector_table + .text + relocs).
+HEXA_RUN  ?= hexa-run
+REPO_ROOT ?= $(abspath $(CURDIR)/../../..)
+BOOT_GEN  ?= $(REPO_ROOT)/stdlib/hal/t3/boot_rp2040_gen.hexa
+
 # Cortex-M0+ flags.
 CPUFLAGS = -mcpu=cortex-m0plus -mthumb
 CFLAGS   = $(CPUFLAGS) -Os -ffunction-sections -fdata-sections \
@@ -34,6 +43,15 @@ OBJECTS  = boot_rp2040.o harness_main.o
 .PHONY: all clean
 
 all: t3_harness.elf
+
+# Hexa-emitted boot.s — regenerated whenever the emitter or its inputs
+# change. Triple dependency captures the full chain: emitter, vector
+# generator, prologue generator (any byte change re-emits boot.s).
+boot_rp2040.s: $(BOOT_GEN) \
+               $(REPO_ROOT)/stdlib/hal/boot_emit.hexa \
+               $(REPO_ROOT)/stdlib/hal/vector_table_emit.hexa \
+               $(REPO_ROOT)/stdlib/hal/reset_prologue_emit.hexa
+	$(HEXA_RUN) $(BOOT_GEN) $@
 
 boot_rp2040.o: boot_rp2040.s
 	$(AS) $(ASFLAGS) -o $@ $<
@@ -50,7 +68,9 @@ t3_harness.uf2: t3_harness.elf
 	@echo "TODO: invoke pico-sdk elf2uf2 OR openocd to flash to Pico board"
 
 clean:
-	rm -f $(OBJECTS) t3_harness.elf t3_harness.bin t3_harness.uf2
+	rm -f $(OBJECTS) boot_rp2040.s t3_harness.elf t3_harness.bin t3_harness.uf2
 
 # Status: scaffold-tier (paper). v1.3.0+ wires Renode run via
 # renode_rp2040.resc and captures UART log to t3_rp2040_run.log.
+# F5 v1.4.0: boot_rp2040.s is now hexa-emitted at build time
+# (see BOOT_GEN above); hand-written `.s` removed (.s 3→2).

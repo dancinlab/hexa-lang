@@ -24,11 +24,15 @@ let MODULE_NAME = "t3_rp2040_scaffold"
 
 // ─── expected scaffold files (relative to stdlib/hal/) ─────────────────
 
+// F5 (v1.4.0): boot_rp2040.s is now hexa-emitted at build time by
+// stdlib/hal/t3/boot_rp2040_gen.hexa (SSOT: stdlib/hal/boot_emit.hexa).
+// The hand-written `.s` was `git rm`d once the byte-diff oracle
+// (stdlib/hal/t3/boot_byte_diff_rp2040.hexa) proved gen ≡ orig 8/8.
 let SCAFFOLD_FILES = [
     "t3/README.md",
     "t3/Makefile.rp2040",
     "t3/linker_rp2040.ld",
-    "t3/boot_rp2040.s",
+    "t3/boot_rp2040_gen.hexa",
     "t3/harness_main.c",
     "t3/renode_rp2040.resc"
 ]
@@ -117,14 +121,20 @@ fn check_linker_memory_layout(root: str) {
 }
 
 fn check_boot_armv6m_thumb(root: str) {
-    let p = root + "/stdlib/hal/t3/boot_rp2040.s"
-    if !_exists(p) { _check(false, "boot.s declares ARMv6-M / thumb", "missing"); return }
+    // F5 (v1.4.0): scaffold check moved from boot_rp2040.s (hand-written,
+    // now `git rm`d) to boot_emit.hexa (SSOT) — verifies the hexa
+    // emitter declares the ARMv6-M target identity (`.thumb`,
+    // `cortex-m0plus`, `_reset_handler` label) that produces the same
+    // boot shape. Byte-equivalence to the prior hand-written `.s` is
+    // proven by stdlib/hal/t3/boot_byte_diff_rp2040.hexa (8/8 PASS).
+    let p = root + "/stdlib/hal/reset_prologue_emit.hexa"
+    if !_exists(p) { _check(false, "reset_prologue_emit declares ARMv6-M / thumb", "missing"); return }
     let src = read_file(p)
     let has_thumb = src.contains(".thumb")
     let has_cpu   = src.contains("cortex-m0plus")
     let has_reset = src.contains("_reset_handler")
     _check(has_thumb && has_cpu && has_reset,
-           "boot_rp2040.s declares .thumb + cortex-m0plus + _reset_handler",
+           "reset_prologue_emit.hexa emits .thumb + cortex-m0plus + _reset_handler",
            "")
 }
 

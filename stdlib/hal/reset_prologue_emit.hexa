@@ -1,0 +1,178 @@
+#!hexa strict
+// stdlib/hal/reset_prologue_emit.hexa — F5 RFC 063/064 Component 3-lite.
+//
+// Pure-hexa `.s`-text reset-prologue emitter for ARMv6-M / ARMv7-M /
+// ARMv7E-M Cortex-M cores. Produces a `.text`-section `.s` fragment
+// that, when fed to `arm-none-eabi-as`, assembles to a byte-identical
+// `.text` section to the hand-written `_reset_handler` + `_hang` +
+// `_hard_fault` sequence in `boot_<mcu>.s`.
+//
+// Phase: foundation (PR2 of F5 re-open per RUNTIME.floor.md §F5).
+// Scope: text-section reset prologue ONLY. The vector table (data
+// section) is emitted by `stdlib/hal/vector_table_emit.hexa`
+// (Component 2-lite, landed in PR #1843).
+//
+// `as` does the heavy lifting (Thumb-1 instruction encoding, literal-
+// pool layout, R_ARM_ABS32 / R_ARM_THM_CALL reloc emission). This
+// module is a string-builder, not an ARM-asm encoder — hence
+// "Component 3-LITE", consistent with Component 2-lite's `.s`-text
+// approach. Full ELF-native emitter (Component 3 proper, with a
+// hexa M0+ codegen target) is deferred.
+//
+// Byte-identity oracle: stdlib/hal/t3/boot_byte_diff_rp2040.hexa
+// (RFC 063 §5 — BYTE-IDENTICAL `arm-none-eabi-as` byte-diff verify
+// against the full boot_rp2040.s).
+//
+// Reset-prologue shape (ARMv6-M Cortex-M0+, mirrors boot_rp2040.s):
+//   1. Load _stack_top → msr msp
+//   2. Copy .data: src=_etext, dst=_sdata..edata, 4-byte word loop
+//   3. Zero  .bss : _sbss..ebss, 4-byte word loop
+//   4. bl harness_main
+//   5. _hang: b _hang
+//   6. _hard_fault: b _hard_fault
+
+let MODULE_NAME = "reset_prologue_emit"
+
+// ─── helpers ────────────────────────────────────────────────────────
+
+fn _pl_indent() -> str { return "    " }
+
+// ─── primary API ────────────────────────────────────────────────────
+//
+// rp_emit_section: emits the full reset-prologue + hang + hard-fault
+// `.s` text. Caller writes it to a file and feeds it to
+// `arm-none-eabi-as`.
+//
+// Args:
+//   cpu        — e.g. "cortex-m0plus" / "cortex-m7" (sets `.cpu`).
+//   entry_fn   — the function `bl` jumps to (e.g. "harness_main").
+//   stack_sym  — initial-SP symbol name (e.g. "_stack_top").
+//   data_src   — source symbol for `.data` copy (e.g. "_etext").
+//   data_dst_s — start symbol for `.data` (e.g. "_sdata").
+//   data_dst_e — end   symbol for `.data` (e.g. "_edata").
+//   bss_s      — start symbol for `.bss` (e.g. "_sbss").
+//   bss_e      — end   symbol for `.bss` (e.g. "_ebss").
+//
+// Returns: `.s` text WITHOUT a leading `.syntax/.thumb/.cpu` prelude
+// (those are emitted by the vector-table emitter and shared across
+// the combined file). Used when composing one full .s via
+// `rp_emit_full_boot`.
+
+fn rp_emit_prologue_body(
+    entry_fn: str,
+    stack_sym: str,
+    data_src: str,
+    data_dst_s: str,
+    data_dst_e: str,
+    bss_s: str,
+    bss_e: str
+) -> str {
+    let mut out = ""
+
+    // .text section + _reset_handler label
+    out = out + _pl_indent() + ".text\n"
+    out = out + _pl_indent() + ".global _reset_handler\n"
+    out = out + _pl_indent() + ".thumb_func\n"
+    out = out + "_reset_handler:\n"
+
+    // 1. set up stack pointer (defensive — already loaded at reset)
+    out = out + _pl_indent() + "ldr  r0, =" + stack_sym + "\n"
+    out = out + _pl_indent() + "msr  msp, r0\n"
+    out = out + "\n"
+
+    // 2. copy .data from FLASH to RAM
+    out = out + _pl_indent() + "ldr  r0, =" + data_dst_s + "\n"
+    out = out + _pl_indent() + "ldr  r1, =" + data_dst_e + "\n"
+    out = out + _pl_indent() + "ldr  r2, =" + data_src + "\n"
+    out = out + "1:  cmp  r0, r1\n"
+    out = out + _pl_indent() + "bcs  2f\n"
+    out = out + _pl_indent() + "ldr  r3, [r2]\n"
+    out = out + _pl_indent() + "str  r3, [r0]\n"
+    out = out + _pl_indent() + "adds r0, #4\n"
+    out = out + _pl_indent() + "adds r2, #4\n"
+    out = out + _pl_indent() + "b    1b\n"
+    out = out + "\n"
+
+    // 3. zero .bss
+    out = out + "2:  ldr  r0, =" + bss_s + "\n"
+    out = out + _pl_indent() + "ldr  r1, =" + bss_e + "\n"
+    out = out + _pl_indent() + "movs r2, #0\n"
+    out = out + "3:  cmp  r0, r1\n"
+    out = out + _pl_indent() + "bcs  4f\n"
+    out = out + _pl_indent() + "str  r2, [r0]\n"
+    out = out + _pl_indent() + "adds r0, #4\n"
+    out = out + _pl_indent() + "b    3b\n"
+    out = out + "\n"
+
+    // 4. call entry fn (typically harness_main)
+    out = out + "4:  bl   " + entry_fn + "\n"
+    out = out + "\n"
+
+    // 5. _hang spin (if entry returns)
+    out = out + "_hang:\n"
+    out = out + _pl_indent() + "b    _hang\n"
+    out = out + "\n"
+
+    // 6. _hard_fault spin
+    out = out + _pl_indent() + ".global _hard_fault\n"
+    out = out + _pl_indent() + ".thumb_func\n"
+    out = out + "_hard_fault:\n"
+    out = out + _pl_indent() + "b    _hard_fault\n"
+
+    return out
+}
+
+// rp_emit_section: emits a self-contained `.s` file (with
+// `.syntax/.thumb/.cpu` prelude). Useful when assembling the prologue
+// as a STANDALONE `.s` (separate from the vector table) — e.g. for the
+// split-and-link verification path from #1843's recon.
+
+fn rp_emit_section(
+    header_banner: str,
+    cpu: str,
+    entry_fn: str,
+    stack_sym: str,
+    data_src: str,
+    data_dst_s: str,
+    data_dst_e: str,
+    bss_s: str,
+    bss_e: str
+) -> str {
+    let mut out = ""
+
+    if header_banner.len() > 0 {
+        out = out + header_banner
+        out = out + "\n\n"
+    }
+
+    out = out + _pl_indent() + ".syntax unified\n"
+    out = out + _pl_indent() + ".thumb\n"
+    out = out + _pl_indent() + ".cpu " + cpu + "\n"
+    out = out + "\n"
+
+    out = out + rp_emit_prologue_body(
+        entry_fn, stack_sym, data_src, data_dst_s, data_dst_e, bss_s, bss_e
+    )
+
+    return out
+}
+
+// ─── canned shape (rp2040 boot_rp2040.s mirror) ────────────────────
+
+fn rp2040_emit_reset_prologue_s() -> str {
+    let banner = "/* AUTO-GENERATED by stdlib/hal/reset_prologue_emit.hexa\n" +
+                 " * RP2040 ARMv6-M (Cortex-M0+) reset prologue (.text section).\n" +
+                 " * Byte-identity oracle: stdlib/hal/t3/boot_byte_diff_rp2040.hexa\n" +
+                 " * Do not hand-edit — regenerate via the emit fn. */"
+    return rp_emit_section(
+        banner,
+        "cortex-m0plus",
+        "harness_main",
+        "_stack_top",
+        "_etext",
+        "_sdata",
+        "_edata",
+        "_sbss",
+        "_ebss"
+    )
+}
