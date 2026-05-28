@@ -1,0 +1,45 @@
+#!hexa strict
+// stdlib/hal/t3/boot_stm32h7_gen.hexa — F5 RFC 063/064 Component 5 emitter (stm32h7).
+//
+// Build-time generator: writes the stm32h7 boot `.s` (vector table +
+// FPU enable + reset prologue) to the path passed as the first argument.
+// Replaces the hand-written stdlib/hal/t3/boot_stm32h7.s — which is
+// `git rm`'d as of F5 stm32h7 landing once the byte-diff oracle
+// (boot_byte_diff_stm32h7.hexa) PASSes.
+//
+// Invocation (from Makefile.stm32h7):
+//   hexa-run stdlib/hal/t3/boot_stm32h7_gen.hexa <output-path>
+//
+// Default output path (if argv missing): "boot_stm32h7.s" in cwd.
+//
+// Target: ARMv7-M Cortex-M7 + FPv5-D16 double-precision FPU.
+// Composes stdlib/hal/boot_emit.hexa::stm32h7_emit_full_boot_s which
+// in turn invokes vt_emit_section_ext (with `.fpu fpv5-d16` prelude +
+// 16 system vectors + 240 IRQ pad) and rp_emit_prologue_body_ext
+// (with FPU enable block — CPACR CP10/CP11 full access + dsb + isb).
+//
+// Phase: foundation (PR1 of F5 stm32h7 leg).
+// On byte-diff oracle PASS, this is the SSOT for the stm32h7 boot
+// text — the hand-written `.s` is provably redundant.
+
+use "stdlib/hal/boot_emit"
+
+let MODULE_NAME = "boot_stm32h7_gen"
+
+fn main() {
+    let argv = real_args()
+    let out_path = if argv.len() >= 1 { argv[0] } else { "boot_stm32h7.s" }
+    let s_text = stm32h7_emit_full_boot_s()
+    // route through `tee` heredoc — avoids quoting hazard (same trick
+    // boot_byte_diff_stm32h7.hexa uses for scratch writes).
+    let cmd = "cat > \"" + out_path + "\" <<'__BOOT_STM32H7_GEN_EOF__'\n" +
+              s_text + "\n__BOOT_STM32H7_GEN_EOF__"
+    let _ = exec(cmd)
+    let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
+    if exists_check != "y" {
+        println("[boot_stm32h7_gen] FATAL: failed to write " + out_path)
+        exit(1)
+    }
+    println("[boot_stm32h7_gen] wrote " + out_path)
+    exit(0)
+}
