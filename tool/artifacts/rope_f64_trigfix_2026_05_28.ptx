@@ -1,0 +1,220 @@
+// RFC 055 055-P0 - hexa-native NVPTX emit | target=nvptx64-nvidia-cuda-sm80
+.version 7.0
+.target sm_80
+.address_size 64
+
+.visible .entry probe_rope_f64 (
+    .param .u64 probe_rope_f64_param_0,
+    .param .u64 probe_rope_f64_param_1,
+    .param .u64 probe_rope_f64_param_2,
+    .param .u64 probe_rope_f64_param_3,
+    .param .u64 probe_rope_f64_param_4,
+    .param .u64 probe_rope_f64_param_5
+)
+{
+    .reg .f64 %fd2;
+    .reg .f64 %fd3;
+    .reg .u64 %rd4;
+    .reg .u64 %rd5;
+    .reg .u32 %r6;
+    .reg .u64 %rd7;
+    .reg .u64 %rd8;
+    .reg .pred %p9;
+    .reg .f64 %fd11;
+    .reg .f64 %fd12;
+    .reg .f64 %fd13;
+    .reg .f64 %fd14;
+    .reg .f64 %fd15;
+    .reg .f64 %fd16;
+    .reg .f64 %fd17;
+    .reg .f64 %fd18;
+    .reg .f64 %fd19;
+    .reg .f64 %fd20;
+    .reg .f64 %fd21;
+    .reg .f64 %fd22;
+    .reg .f64 %fd23;
+    .reg .u64 %rd24;
+    .reg .u64 %rd25;
+    .reg .u64 %rd26;
+    .reg .u64 %rd27;
+    .reg .u64 %rd28;
+    .reg .f64 %fd29;
+    .reg .f64 %fd30;
+    .reg .f64 %fd31;
+    .reg .f64 %fd32;
+    .reg .f64 %fd33;
+    .reg .f64 %fd34;
+    .reg .f64 %fd35;
+    .reg .f64 %fd36;
+    .reg .f64 %fd37;
+    .reg .f64 %fd38;
+    .reg .u64 %rd0;
+    .reg .u64 %rd1;
+    .reg .u64 %rd_idxa_29;
+    .reg .u64 %rd_idxa_31;
+    .reg .u64 %rd_idxs_addr;
+    .reg .f64 %fd_log_m_16;
+    .reg .f64 %fd_log_y_16;
+    .reg .f64 %fd_log_y2_16;
+    .reg .f64 %fd_log_p_16;
+    .reg .u64 %rd_log_b_16;
+    .reg .u64 %rd_log_k_16;
+    .reg .f64 %fd_exp_t_16;
+    .reg .f64 %fd_exp_kf_16;
+    .reg .f64 %fd_exp_r_16;
+    .reg .f64 %fd_exp_p_16;
+    .reg .f64 %fd_exp_pow2k_16;
+    .reg .u64 %rd_exp_k_16;
+    .reg .u64 %rd_exp_b_16;
+    .reg .f64 %fd_pow_lx_16;
+    .reg .f64 %fd_pow_yl_16;
+    .reg .f64 %fd_cos_nf_20;
+    .reg .f64 %fd_cos_r_20;
+    .reg .f64 %fd_cos_r2_20;
+    .reg .f64 %fd_cos_p_20;
+    .reg .f64 %fd_cos_s_20;
+    .reg .u64 %rd_cos_ni_20;
+    .reg .f64 %fd_sin_nf_22;
+    .reg .f64 %fd_sin_r_22;
+    .reg .f64 %fd_sin_r2_22;
+    .reg .f64 %fd_sin_p_22;
+    .reg .f64 %fd_sin_s_22;
+    .reg .u64 %rd_sin_ni_22;
+    .reg .u64 %rd_idx_off_25_8;
+    .reg .u64 %rd_idx_off_28_8;
+$L_0:
+    ld.param.u64 %rd0, [probe_rope_f64_param_0];  // load kernel param 0 into reg
+    ld.param.u64 %rd1, [probe_rope_f64_param_1];  // load kernel param 1 into reg
+    ld.param.f64 %fd2, [probe_rope_f64_param_2];  // load kernel param 2 into reg
+    ld.param.f64 %fd3, [probe_rope_f64_param_3];  // load kernel param 3 into reg
+    ld.param.u64 %rd4, [probe_rope_f64_param_4];  // load kernel param 4 into reg
+    ld.param.u64 %rd5, [probe_rope_f64_param_5];  // load kernel param 5 into reg
+    mov.u32 %r6, %tid.x;  // gpu_thread_id_x()
+    cvt.s64.s32 %rd7, %r6;  // to_i64 (s32 to s64)
+    mov.u64 %rd8, %rd7;  // assign
+    setp.ge.s64 %p9, %rd8, %rd4;  // cmp >=
+    @%p9 bra $L_1;  // br_cond true -> $L_1
+    bra $L_2;  // br_cond false -> $L_2
+$L_1:
+    ret;  // return
+$L_2:
+    cvt.rn.f64.s64 %fd11, %rd8;  // to_f64 (s64 to f64)
+    mul.f64 %fd12, 0d4000000000000000, %fd11;  // binop *
+    cvt.rn.f64.s64 %fd13, %rd5;  // to_f64 (s64 to f64)
+    div.rn.f64 %fd14, %fd12, %fd13;  // binop /
+    mov.f64 %fd15, %fd14;  // assign
+    mov.b64 %rd_log_b_16, %fd3;  // pow f64 log: bits = bit-cast x
+    shr.s64 %rd_log_k_16, %rd_log_b_16, 52;  // pow f64 log: k_raw = bits >> 52
+    sub.s64 %rd_log_k_16, %rd_log_k_16, 1023;  // pow f64 log: k = k_raw - 1023
+    and.b64 %rd_log_b_16, %rd_log_b_16, 0x000FFFFFFFFFFFFF;  // pow f64 log: keep mantissa bits
+    or.b64 %rd_log_b_16, %rd_log_b_16, 0x3FF0000000000000;  // pow f64 log: set exponent bias = 1023
+    mov.b64 %fd_log_m_16, %rd_log_b_16;  // pow f64 log: m = bit-cast, m in [1,2)
+    sub.f64 %fd_log_y_16, %fd_log_m_16, 0d3FF0000000000000;  // pow f64 log: m - 1
+    add.f64 %fd_log_m_16, %fd_log_m_16, 0d3FF0000000000000;  // pow f64 log: m + 1
+    div.rn.f64 %fd_log_y_16, %fd_log_y_16, %fd_log_m_16;  // pow f64 log: y = (m-1)/(m+1)
+    mul.f64 %fd_log_y2_16, %fd_log_y_16, %fd_log_y_16;  // pow f64 log: y^2 = y*y
+    mov.f64 %fd_log_p_16, 0d3FB745D1745D1746;  // pow f64 log Horner: p = C5
+    fma.rn.f64 %fd_log_p_16, %fd_log_y2_16, %fd_log_p_16, 0d3FBC71C71C71C71C;  // pow f64 log Horner step
+    fma.rn.f64 %fd_log_p_16, %fd_log_y2_16, %fd_log_p_16, 0d3FC2492492492492;  // pow f64 log Horner step
+    fma.rn.f64 %fd_log_p_16, %fd_log_y2_16, %fd_log_p_16, 0d3FC999999999999A;  // pow f64 log Horner step
+    fma.rn.f64 %fd_log_p_16, %fd_log_y2_16, %fd_log_p_16, 0d3FD5555555555555;  // pow f64 log Horner step
+    fma.rn.f64 %fd_log_p_16, %fd_log_y2_16, %fd_log_p_16, 0d3FF0000000000000;  // pow f64 log Horner step
+    mul.f64 %fd_log_p_16, %fd_log_y_16, %fd_log_p_16;  // pow f64 log: y * P
+    mul.f64 %fd_log_p_16, %fd_log_p_16, 0d4000000000000000;  // pow f64 log: 2*y*P = log(m)
+    cvt.rn.f64.s64 %fd_log_y2_16, %rd_log_k_16;  // pow f64 log: kf = (f64) k
+    fma.rn.f64 %fd_pow_lx_16, %fd_log_y2_16, 0d3FE62E42FEFA39EF, %fd_log_p_16;  // pow f64: lx = log(x) = kf*ln2 + log(m)
+    mul.f64 %fd_pow_yl_16, %fd15, %fd_pow_lx_16;  // pow f64: yl = y * log(x)
+    mul.f64 %fd_exp_t_16, %fd_pow_yl_16, 0d3FF71547652B82FE;  // pow f64 exp: t = yl*log2e
+    cvt.rni.f64.f64 %fd_exp_kf_16, %fd_exp_t_16;  // pow f64 exp: kf = round(t)
+    cvt.rni.s64.f64 %rd_exp_k_16, %fd_exp_kf_16;  // pow f64 exp: k = (s64) kf
+    mul.f64 %fd_exp_t_16, %fd_exp_kf_16, 0d3FE62E42FEE00000;  // pow f64 exp: t = kf*ln2_hi
+    sub.f64 %fd_exp_r_16, %fd_pow_yl_16, %fd_exp_t_16;  // pow f64 exp: r = yl - kf*ln2_hi
+    mul.f64 %fd_exp_t_16, %fd_exp_kf_16, 0d3DEA39EF35793C76;  // pow f64 exp: t = kf*ln2_lo
+    sub.f64 %fd_exp_r_16, %fd_exp_r_16, %fd_exp_t_16;  // pow f64 exp: r -= kf*ln2_lo
+    mov.f64 %fd_exp_p_16, 0d3E927E4FB7789F5C;  // pow f64 exp Horner: p = C10
+    fma.rn.f64 %fd_exp_p_16, %fd_exp_r_16, %fd_exp_p_16, 0d3EC71DE3A556C734;  // pow f64 exp Horner step
+    fma.rn.f64 %fd_exp_p_16, %fd_exp_r_16, %fd_exp_p_16, 0d3EFA01A01A01A01A;  // pow f64 exp Horner step
+    fma.rn.f64 %fd_exp_p_16, %fd_exp_r_16, %fd_exp_p_16, 0d3F2A01A01A01A01A;  // pow f64 exp Horner step
+    fma.rn.f64 %fd_exp_p_16, %fd_exp_r_16, %fd_exp_p_16, 0d3F56C16C16C16C17;  // pow f64 exp Horner step
+    fma.rn.f64 %fd_exp_p_16, %fd_exp_r_16, %fd_exp_p_16, 0d3F81111111111111;  // pow f64 exp Horner step
+    fma.rn.f64 %fd_exp_p_16, %fd_exp_r_16, %fd_exp_p_16, 0d3FA5555555555555;  // pow f64 exp Horner step
+    fma.rn.f64 %fd_exp_p_16, %fd_exp_r_16, %fd_exp_p_16, 0d3FC5555555555555;  // pow f64 exp Horner step
+    fma.rn.f64 %fd_exp_p_16, %fd_exp_r_16, %fd_exp_p_16, 0d3FE0000000000000;  // pow f64 exp Horner step
+    fma.rn.f64 %fd_exp_p_16, %fd_exp_r_16, %fd_exp_p_16, 0d3FF0000000000000;  // pow f64 exp Horner step
+    fma.rn.f64 %fd_exp_p_16, %fd_exp_r_16, %fd_exp_p_16, 0d3FF0000000000000;  // pow f64 exp Horner step
+    add.s64 %rd_exp_b_16, %rd_exp_k_16, 1023;  // pow f64 exp: b = k + 1023
+    shl.b64 %rd_exp_b_16, %rd_exp_b_16, 52;  // pow f64 exp: b <<= 52
+    mov.b64 %fd_exp_pow2k_16, %rd_exp_b_16;  // pow f64 exp: pow2k = bit-cast b
+    mul.f64 %fd16, %fd_exp_p_16, %fd_exp_pow2k_16;  // pow f64: dst = exp(y*log x) = x^y
+    mov.f64 %fd17, %fd16;  // assign
+    div.rn.f64 %fd18, %fd2, %fd17;  // binop /
+    mov.f64 %fd19, %fd18;  // assign
+    mul.f64 %fd_cos_nf_20, %fd19, 0d3FD45F306DC9C883;  // cos f64: x / pi
+    cvt.rni.f64.f64 %fd_cos_nf_20, %fd_cos_nf_20;  // cos f64: n = round(x/pi)
+    cvt.rzi.s64.f64 %rd_cos_ni_20, %fd_cos_nf_20;  // cos f64: ni = (s64) n
+    neg.f64 %fd_cos_nf_20, %fd_cos_nf_20;  // cos f64: -n
+    fma.rn.f64 %fd_cos_r_20, %fd_cos_nf_20, 0d400921FB54442D18, %fd19;  // cos f64: r = x - n*pi_hi
+    fma.rn.f64 %fd_cos_r_20, %fd_cos_nf_20, 0d3CA1A62633145C07, %fd_cos_r_20;  // cos f64: r -= n*pi_lo
+    mul.f64 %fd_cos_r2_20, %fd_cos_r_20, %fd_cos_r_20;  // cos f64: r^2 = r*r
+    mov.f64 %fd_cos_p_20, 0dBCA6827863B97D97;  // cos f64 Horner: p = D9 (1/18!)
+    fma.rn.f64 %fd_cos_p_20, %fd_cos_r2_20, %fd_cos_p_20, 0d3D2AE7F3E733B81F;  // cos f64 Horner step
+    fma.rn.f64 %fd_cos_p_20, %fd_cos_r2_20, %fd_cos_p_20, 0dBDA93974A8C07C9D;  // cos f64 Horner step
+    fma.rn.f64 %fd_cos_p_20, %fd_cos_r2_20, %fd_cos_p_20, 0d3E21EED8EFF8D898;  // cos f64 Horner step
+    fma.rn.f64 %fd_cos_p_20, %fd_cos_r2_20, %fd_cos_p_20, 0dBE927E4FB7789F5C;  // cos f64 Horner step
+    fma.rn.f64 %fd_cos_p_20, %fd_cos_r2_20, %fd_cos_p_20, 0d3EFA01A01A01A01A;  // cos f64 Horner step
+    fma.rn.f64 %fd_cos_p_20, %fd_cos_r2_20, %fd_cos_p_20, 0dBF56C16C16C16C17;  // cos f64 Horner step
+    fma.rn.f64 %fd_cos_p_20, %fd_cos_r2_20, %fd_cos_p_20, 0d3FA5555555555555;  // cos f64 Horner step
+    fma.rn.f64 %fd_cos_p_20, %fd_cos_r2_20, %fd_cos_p_20, 0dBFE0000000000000;  // cos f64 Horner step
+    fma.rn.f64 %fd_cos_p_20, %fd_cos_r2_20, %fd_cos_p_20, 0d3FF0000000000000;  // cos f64 Horner step
+    and.b64 %rd_cos_ni_20, %rd_cos_ni_20, 1;  // cos f64: parity = n & 1
+    cvt.rn.f64.s64 %fd_cos_s_20, %rd_cos_ni_20;  // cos f64: parity as f64 (0 or 1)
+    fma.rn.f64 %fd_cos_s_20, %fd_cos_s_20, 0dC000000000000000, 0d3FF0000000000000;  // cos f64: sign = 1 - 2*parity
+    mul.f64 %fd20, %fd_cos_p_20, %fd_cos_s_20;  // cos f64: dst = (-1)^n * cos(r)
+    mov.f64 %fd21, %fd20;  // assign
+    mul.f64 %fd_sin_nf_22, %fd19, 0d3FD45F306DC9C883;  // sin f64: x / pi
+    cvt.rni.f64.f64 %fd_sin_nf_22, %fd_sin_nf_22;  // sin f64: n = round(x/pi)
+    cvt.rzi.s64.f64 %rd_sin_ni_22, %fd_sin_nf_22;  // sin f64: ni = (s64) n
+    neg.f64 %fd_sin_nf_22, %fd_sin_nf_22;  // sin f64: -n
+    fma.rn.f64 %fd_sin_r_22, %fd_sin_nf_22, 0d400921FB54442D18, %fd19;  // sin f64: r = x - n*pi_hi
+    fma.rn.f64 %fd_sin_r_22, %fd_sin_nf_22, 0d3CA1A62633145C07, %fd_sin_r_22;  // sin f64: r -= n*pi_lo
+    mul.f64 %fd_sin_r2_22, %fd_sin_r_22, %fd_sin_r_22;  // sin f64: r^2 = r*r
+    mov.f64 %fd_sin_p_22, 0d3CE952C77030AD4A;  // sin f64 Horner: p = C8 (1/17!)
+    fma.rn.f64 %fd_sin_p_22, %fd_sin_r2_22, %fd_sin_p_22, 0dBD6AE7F3E733B81F;  // sin f64 Horner step
+    fma.rn.f64 %fd_sin_p_22, %fd_sin_r2_22, %fd_sin_p_22, 0d3DE6124613A86D09;  // sin f64 Horner step
+    fma.rn.f64 %fd_sin_p_22, %fd_sin_r2_22, %fd_sin_p_22, 0dBE5AE64567F544E4;  // sin f64 Horner step
+    fma.rn.f64 %fd_sin_p_22, %fd_sin_r2_22, %fd_sin_p_22, 0d3EC71DE3A556C734;  // sin f64 Horner step
+    fma.rn.f64 %fd_sin_p_22, %fd_sin_r2_22, %fd_sin_p_22, 0dBF2A01A01A01A01A;  // sin f64 Horner step
+    fma.rn.f64 %fd_sin_p_22, %fd_sin_r2_22, %fd_sin_p_22, 0d3F81111111111111;  // sin f64 Horner step
+    fma.rn.f64 %fd_sin_p_22, %fd_sin_r2_22, %fd_sin_p_22, 0dBFC5555555555555;  // sin f64 Horner step
+    fma.rn.f64 %fd_sin_p_22, %fd_sin_r2_22, %fd_sin_p_22, 0d3FF0000000000000;  // sin f64 Horner step
+    mul.f64 %fd_sin_p_22, %fd_sin_r_22, %fd_sin_p_22;  // sin f64: r * P(r^2) = sin(r)
+    and.b64 %rd_sin_ni_22, %rd_sin_ni_22, 1;  // sin f64: parity = n & 1
+    cvt.rn.f64.s64 %fd_sin_s_22, %rd_sin_ni_22;  // sin f64: parity as f64 (0 or 1)
+    fma.rn.f64 %fd_sin_s_22, %fd_sin_s_22, 0dC000000000000000, 0d3FF0000000000000;  // sin f64: sign = 1 - 2*parity
+    mul.f64 %fd22, %fd_sin_p_22, %fd_sin_s_22;  // sin f64: dst = (-1)^n * sin(r)
+    mov.f64 %fd23, %fd22;  // assign
+    mul.lo.s64 %rd24, 2, %rd8;  // binop *
+    mov.u64 %rd25, %rd24;  // assign
+    mul.lo.s64 %rd26, 2, %rd8;  // binop *
+    add.s64 %rd27, %rd26, 1;  // binop +
+    mov.u64 %rd28, %rd27;  // assign
+    mul.lo.s64 %rd_idx_off_25_8, %rd25, 8;  // shared idx byte off = idx * 8
+    add.s64 %rd_idxa_29, %rd_idx_off_25_8, %rd0;  // index addr = shared_off + base
+    ld.global.f64 %fd29, [%rd_idxa_29];  // ld base[idx] (f64)
+    mov.f64 %fd30, %fd29;  // assign
+    mul.lo.s64 %rd_idx_off_28_8, %rd28, 8;  // shared idx byte off = idx * 8
+    add.s64 %rd_idxa_31, %rd_idx_off_28_8, %rd0;  // index addr = shared_off + base
+    ld.global.f64 %fd31, [%rd_idxa_31];  // ld base[idx] (f64)
+    mov.f64 %fd32, %fd31;  // assign
+    mul.f64 %fd33, %fd30, %fd21;  // binop *
+    mul.f64 %fd34, %fd32, %fd23;  // binop *
+    sub.f64 %fd35, %fd33, %fd34;  // binop -
+    add.s64 %rd_idxs_addr, %rd_idx_off_25_8, %rd1;  // index_set addr = shared_off + base
+    st.global.f64 [%rd_idxs_addr], %fd35;  // st base[idx] = val (f64)
+    mul.f64 %fd36, %fd30, %fd23;  // binop *
+    mul.f64 %fd37, %fd32, %fd21;  // binop *
+    add.f64 %fd38, %fd36, %fd37;  // binop +
+    add.s64 %rd_idxs_addr, %rd_idx_off_28_8, %rd1;  // index_set addr = shared_off + base
+    st.global.f64 [%rd_idxs_addr], %fd38;  // st base[idx] = val (f64)
+    ret;  // return
+}

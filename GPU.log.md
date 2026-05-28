@@ -1193,3 +1193,31 @@ to_f64 아님·pow 아님.
 단 그 blocker 가 이제 to_f64(closed) 가 아니라 cos/sin(신규 isolated) 으로 정확히 이동. over-closure 금지.
 
 cycle-loop sequence: R13b = to_f64 silicon 100% closed (ladder ①②③④ all ✓) + cos/sin 정밀도 신규 발견 isolated.
+
+## 2026-05-28 — cycle-loop Round 14 · cos/sin 정밀도 FIX → RoPE byte-eq PASS 🟢
+
+R13b 가 격리한 cos/sin ~1e-5 부정확을 **codegen fix** 로 닫음. root cause = 5-term Taylor
+truncation (코드 주석 그대로: cos `|r^10/10!|<3e-5`, sin `|r^11/11!|<7e-6`). g0 Occam —
+Horner 계수 배열이 이미 데이터-driven 이라 **계수만 확장** (구조 변경 0):
+- `compiler/codegen/nvptx_ptx_ops.hexa`: cos C5..C9 (1/10!..1/18!), sin C5..C8 (1/11!..1/17!) 추가.
+- `compiler/codegen/nvptx_target.hexa`: Horner mov C4→C9(cos)/C8(sin) + 배열 prepend.
+- 잔여항 @r=π/2: cos z^10/20!=3.4e-15 · sin z^9/19!=2.8e-14 (둘 다 < 1e-12).
+
+**silicon 재fire** (ubu-2 RTX 5070, `tool/artifacts/trig_precision_silicon_2026_05_28.out`):
+```
+transc:  cos abs_err 1.381e-5 → 1.180e-15  (10 자릿수 개선)
+         sin abs_err 1.865e-6 → 1.443e-14
+         pow abs_err 9.770e-15 (불변, 이미 정확)
+RoPE:    max_abs 1.878e-5 → 2.780e-13 · 0/128 over-band · RESULT: PASS (byte-eq) 🟢
+```
+
+**finding**:
+- ✅ GPU cos/sin f64 lowering **정밀도 byte-eq 달성** — 이제 sqrt/rsqrt/exp/pow/cos/sin 전 transcendental 이 sub-ULP~byte-eq.
+- ✅ **RoPE 1-kernel wedge silicon byte-eq PASS** (R11 garbage 2.659 → R13b 1.878e-5 → R14 2.780e-13). to_f64(R12/13) + cos/sin(R14) 양 codegen gap 모두 닫혀 RoPE 전체가 silicon 정확.
+- NN-primitive byte-eq 4/4 silicon 증거 확보: layer_norm(R4 max_abs=0)·swiglu-act(R6 2.5e-14)·softmax(R11 byte-eq)·RoPE(R14 2.78e-13).
+
+**L723 NN-primitive milestone 은 `[ ]` 유지** — "first-class compiler-aware ops" 는 byte-eq 계산
+가능성보다 강한 아키텍처 claim (intrinsic 인식·fusion). R14 가 닫은 것 = cos/sin 정밀도 + RoPE
+byte-eq wedge. over-closure 금지 (roadmap flip 안 함).
+
+cycle-loop sequence: R14 = cos/sin Taylor 확장 (C5..C9) → silicon byte-eq · RoPE wedge PASS · transc 전부 정확.
