@@ -2987,6 +2987,44 @@ fn rt_atoi_reloc_kinds() {
     return k
 }
 
+// ── rt_munmap (B9.6-E1 · class-E memory-lifecycle FIRST LIVE wire) ─────
+//
+// FIRST class-E increment that is actually WIRED into the live runtime
+// (the rt_arena_* set #1252/#1297/#1315 emits an arena .o but the runtime
+// never calls those symbols — they are shadow-only). class-E = the
+// GC/arena/malloc memory-management core. This runtime has NO classic
+// mark/sweep GC: reclamation is scope-pop + bulk arena-reset, and the
+// deallocation primitives (`hxlcl_free` / `hxlcl_munmap`) are no-op /
+// constant-return leaves over the mmap-backed bump allocator. That bump
+// allocator IS the irreducible "some allocator seed" B9.8 flagged.
+//
+// rt_munmap is the unmap/dealloc SIDE of class-E — the simplest tractable,
+// JIT-verifiable, named-external memory-lifecycle primitive:
+//   self/runtime.c L902 `hxlcl_munmap(void*, size_t) { (void)addr;(void)length; return 0; }`
+// The bump allocator never frees, so unmap is a constant-0 success stub
+// (live call sites = mmap-file cleanup, runtime.c L7438/L7609).
+//   clang -O2 -S:  mov w0, #0 ; ret   (int return → 32-bit MOVZ)
+//   x0 = 0 (success) · no frame, no reloc, no svc, no arena state.
+// 2 instructions, 8 bytes. The byte shape reuses the proven class-D leaf
+// capability (mov w0,#imm + ret); the NEW thing is class-E live-wiring,
+// not a new instruction. The JIT-exec gate proves the unmap stub returns 0
+// AND the runtime's mmap-file cleanup path still works once it binds to the
+// self-emitted symbol.
+fn rt_munmap() {
+    let mut c = []
+    // mov w0, #0   (return 0 = success)   0x52800000
+    c.push(0)
+    c.push(0)
+    c.push(128)
+    c.push(82)
+    // ret                                 0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
 // ── self-test ────────────────────────────────────────────────
 
 fn test_runtime_arm64() {
@@ -3034,6 +3072,8 @@ fn test_runtime_arm64() {
     let atoi_b = rt_atoi()
     let at_roff = rt_atoi_reloc_offs()
     let at_rkind = rt_atoi_reloc_kinds()
+    // B9.6-E1 — class-E memory-lifecycle FIRST LIVE wire (unmap/dealloc stub).
+    let munmap_b = rt_munmap()
 
     println("runtime_arm64 — ARM64 machine code byte arrays")
     println("  rt_exit          : " + to_string(len(exit_bytes)) + " bytes")
@@ -3071,6 +3111,7 @@ fn test_runtime_arm64() {
     println("  rt_getpid        : " + to_string(len(gpid)) + " bytes")
     println("  rt_close         : " + to_string(len(clos)) + " bytes (" + to_string(len(cl_roff)) + " relocs)")
     println("  rt_atoi          : " + to_string(len(atoi_b)) + " bytes (" + to_string(len(at_roff)) + " reloc · BRANCH26)")
+    println("  rt_munmap        : " + to_string(len(munmap_b)) + " bytes (class-E lifecycle)")
 
     // Verify sizes match expected instruction counts * 4
     let mut ok = true
@@ -3201,6 +3242,13 @@ fn test_runtime_arm64() {
     if len(at_rkind) != 1 { println("  FAIL: rt_atoi expected 1 reloc kind, got " + to_string(len(at_rkind))); ok = false }
     if at_roff[0] != 8 { println("  FAIL: rt_atoi reloc offset must be 0x08 (the bl)"); ok = false }
     if at_rkind[0] != 2 { println("  FAIL: rt_atoi reloc kind must be BRANCH26(2)"); ok = false }
+    // B9.6-E1 — class-E memory-lifecycle: rt_munmap is a 2-instr 8 B leaf
+    //   mov w0,#0 / ret  (unmap success stub over the never-free bump allocator).
+    if len(munmap_b) != 8 { println("  FAIL: rt_munmap expected 8, got " + to_string(len(munmap_b))); ok = false }
+    // mov w0,#0 prefix (00 00 80 52) — return 0 (success).
+    if munmap_b[0] != 0 || munmap_b[1] != 0 || munmap_b[2] != 128 || munmap_b[3] != 82 { println("  FAIL: rt_munmap missing mov w0,#0 (success ret)"); ok = false }
+    // ret trailer (c0 03 5f d6) — munmap RETURNS 0.
+    if munmap_b[4] != 192 || munmap_b[5] != 3 || munmap_b[6] != 95 || munmap_b[7] != 214 { println("  FAIL: rt_munmap no RET"); ok = false }
 
     // Verify all sizes are multiples of 4 (ARM64 fixed-width)
     if len(exit_bytes) % 4 != 0 { println("  FAIL: rt_exit not aligned"); ok = false }
@@ -3238,6 +3286,7 @@ fn test_runtime_arm64() {
     if len(gpid) % 4 != 0 { println("  FAIL: rt_getpid not aligned"); ok = false }
     if len(clos) % 4 != 0 { println("  FAIL: rt_close not aligned"); ok = false }
     if len(atoi_b) % 4 != 0 { println("  FAIL: rt_atoi not aligned"); ok = false }
+    if len(munmap_b) % 4 != 0 { println("  FAIL: rt_munmap not aligned"); ok = false }
     // B9.6-D2 — all three end with ret (192,3,95,214).
     let nhf = len(hfloat)
     if hfloat[nhf - 4] != 192 { println("  FAIL: rt_hexa_float no RET"); ok = false }

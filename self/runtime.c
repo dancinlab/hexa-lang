@@ -899,10 +899,22 @@ static void *__attribute__((noinline)) hxlcl_calloc(size_t nmemb, size_t size) {
     }
     return p;
 }
+// B9.6-E1 (F3 Path A) — class-E memory-lifecycle FIRST LIVE wire. Under
+// HEXA_RT_SELFEMIT hxlcl_munmap is `extern` (body supplied by
+// emit_hxlcl_munmap_o.hexa's .o = a 2-instr `mov w0,#0 / ret` leaf — the
+// unmap/dealloc side of class-E). The bump allocator never frees, so the C
+// stub is a constant-0 success; the self-emit replaces it byte-identically.
+// Like getpid (#1860) the linkage must flip to `extern` under the guard, else
+// the `static` masks the self-emit symbol (-Wundefined-internal). Default
+// build keeps the file-local `static` stub (0-libc-extern preserved).
+#ifdef HEXA_RT_SELFEMIT
+extern int __attribute__((noinline)) hxlcl_munmap(void *addr, size_t length);
+#else
 static int __attribute__((noinline)) hxlcl_munmap(void *addr, size_t length) {
     (void)addr; (void)length;
     return 0;
 }
+#endif
 // Cycle 54 — Tier-A.3 file-stream subset. FILE* encoded as
 // (void *)(uintptr_t)(fd + 1) so 0 doesn't alias NULL. stderr/
 // stdout/stdin (libc pointers) preserved by hxlcl_fprintf/fputs/
