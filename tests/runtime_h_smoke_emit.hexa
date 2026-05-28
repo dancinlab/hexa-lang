@@ -1,0 +1,116 @@
+#!hexa strict
+// tests/runtime_h_smoke_emit.hexa
+//   B9.C-6 (.c-leg small batch · #1850 pattern) — runtime_h_smoke.c source emitter.
+//
+// Mirrors lib/hxpyembed/smoke_emit.hexa one-to-one. Emits the
+// runtime.h public-ABI surface compile-only smoke test verbatim.
+// bin/hexa-fast check is rewired to compile the `_gen.c` produced
+// here in place of the hand-written `tests/runtime_h_smoke.c`.
+//
+// Invocation (from bin/hexa-fast regen rule):
+//   hexa-run tests/runtime_h_smoke_emit.hexa <output-path>
+//
+// Default output path (if argv missing): "runtime_h_smoke.c" in cwd.
+//
+// Phase: B9.C-6 batch (host-toolchain target).
+
+let MODULE_NAME = "runtime_h_smoke_emit"
+
+fn emit_runtime_h_smoke_c() -> str {
+    // Verbatim content of hand-written tests/runtime_h_smoke.c
+    let s = "/* tests/runtime_h_smoke.c — runtime.h public-ABI surface smoke test\n" +
+            " *\n" +
+            " * Compile-only smoke that exercises every header symbol the post-PHASE-1.3.B\n" +
+            " * native codegen path needs from runtime.h. If anyone modifies hexat\n" +
+            " * codegen to emit a new helper, or shrinks runtime.h to drop one, this\n" +
+            " * test fails to compile.\n" +
+            " *\n" +
+            " * Originally filed as the reproducer for\n" +
+            " * incoming/patches/runtime-h-incomplete-after-phase-1-3-b.md (wilson stdlib/\n" +
+            " * sort + event-bus folds hit undeclared-function errors on first compile\n" +
+            " * after pulling hexa-lang main). The fix at commit 8be9b03f promoted the\n" +
+            " * missing surface; this test guards against future regressions.\n" +
+            " *\n" +
+            " * Usage:\n" +
+            " *   bin/hexa-fast check\n" +
+            " * or manually:\n" +
+            " *   clang -O0 -c tests/runtime_h_smoke.c -I self\n" +
+            " */\n" +
+            "\n" +
+            "#include \"runtime.h\"\n" +
+            "\n" +
+            "/* ── identity / sort_by-style consumer of hexa_call1 + hexa_fn_new ── */\n" +
+            "\n" +
+            "HexaVal _identity(HexaVal x) { return x; }\n" +
+            "\n" +
+            "HexaVal sort_by_keys(HexaVal xs, HexaVal key_fn) {\n" +
+            "    HexaVal keys = hexa_array_new();\n" +
+            "    int n = hexa_len(xs);\n" +
+            "    int i = 0;\n" +
+            "    while (i < n) {\n" +
+            "        hexa_array_push(keys,\n" +
+            "            hexa_call1(key_fn, hexa_index_get(xs, hexa_int(i))));\n" +
+            "        i = i + 1;\n" +
+            "    }\n" +
+            "    return keys;\n" +
+            "}\n" +
+            "\n" +
+            "HexaVal sort_asc(HexaVal xs) {\n" +
+            "    return __hexa_fn_arena_return(\n" +
+            "        sort_by_keys(xs, hexa_fn_new((void*)_identity, 0))\n" +
+            "    );\n" +
+            "}\n" +
+            "\n" +
+            "/* ── array-pop (event-bus frame stack pattern) ── */\n" +
+            "\n" +
+            "HexaVal pop_test(HexaVal arr) {\n" +
+            "    return hexa_array_pop(arr);\n" +
+            "}\n" +
+            "\n" +
+            "/* ── map predicate + cstring conversion (policy-helper pattern) ── */\n" +
+            "\n" +
+            "int has_key_test(HexaVal m, HexaVal k) {\n" +
+            "    return hexa_map_contains_key(m, hexa_to_cstring(k));\n" +
+            "}\n" +
+            "\n" +
+            "/* ── closure-new (struct fn-field auto-wrap pattern) ── */\n" +
+            "\n" +
+            "HexaVal closure_make(void) {\n" +
+            "    HexaVal env = hexa_array_new();\n" +
+            "    return hexa_closure_new((void*)_identity, 1, env);\n" +
+            "}\n" +
+            "\n" +
+            "/* ── hexa_call0..4 dispatch (arity-spanning fn-call pattern) ── */\n" +
+            "\n" +
+            "HexaVal call_test(HexaVal f, HexaVal a, HexaVal b, HexaVal c, HexaVal d) {\n" +
+            "    HexaVal v0 = hexa_call0(f);\n" +
+            "    HexaVal v1 = hexa_call1(f, a);\n" +
+            "    HexaVal v2 = hexa_call2(f, a, b);\n" +
+            "    HexaVal v3 = hexa_call3(f, a, b, c);\n" +
+            "    HexaVal v4 = hexa_call4(f, a, b, c, d);\n" +
+            "    (void)v0; (void)v1; (void)v2; (void)v3; (void)v4;\n" +
+            "    return v4;\n" +
+            "}\n" +
+            "\n" +
+            "int main(int argc, char** argv) {\n" +
+            "    hexa_set_args(argc, argv);\n" +
+            "    return 0;\n" +
+            "}\n"
+    return s
+}
+
+fn main() {
+    let argv = real_args()
+    let out_path = if argv.len() >= 1 { argv[0] } else { "runtime_h_smoke.c" }
+    let c_text = emit_runtime_h_smoke_c()
+    let cmd = "cat > \"" + out_path + "\" <<'__RUNTIME_H_SMOKE_EMIT_EOF__'\n" +
+              c_text + "__RUNTIME_H_SMOKE_EMIT_EOF__"
+    let _ = exec(cmd)
+    let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
+    if exists_check != "y" {
+        println("[runtime_h_smoke_emit] FATAL: failed to write " + out_path)
+        exit(1)
+    }
+    println("[runtime_h_smoke_emit] wrote " + out_path)
+    exit(0)
+}

@@ -1,0 +1,29 @@
+========================================================================
+  stdlib/hal/t3/harness_stm32h7_main — byte_diff: B9.C-6 .c-leg byte-diff oracle
+========================================================================
+  generator: stdlib/hal/t3/harness_stm32h7_main_emit.hexa
+  oracle:    arm-none-eabi-gcc + objcopy byte-diff vs hand-written .c
+  target:    STM32H7 Cortex-M7 + FPv5-D16 (ARMv7-M) bare-metal cross-compile
+  gates:     source-text · whole-file .o (no -g) · .text.harness_main (-g)
+
+  scratch: /var/folders/2g/blzd56lx2rvfvt61c1pc9g7r0000gn/T/harness_stm32h7_main_byte_diff.XXXXXX.whDXgDAP7h
+
+  [PASS] arm-none-eabi-gcc + objcopy present (STM32H7 cross toolchain)
+         · arm-none-eabi-gcc=y arm-none-eabi-objcopy=y
+  [PASS] hexa emitter stdlib/hal/t3/harness_stm32h7_main_emit.hexa present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a03fa07b06b07982c/stdlib/hal/t3/harness_stm32h7_main_emit.hexa
+  [PASS] hand-written stdlib/hal/t3/harness_stm32h7_main.c present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a03fa07b06b07982c/stdlib/hal/t3/harness_stm32h7_main.c
+  [PASS] gate-1 source-text byte-identical (sha256(.c))
+         · orig=b1a5019f4ac19f601d9030ebc18c85e358e2393bee041ba9845af8ff393c3b54 gen=b1a5019f4ac19f601d9030ebc18c85e358e2393bee041ba9845af8ff393c3b54
+  [PASS] gate-2 whole-file .o byte-identical (no -g)
+         · orig=e374ed4a11e19b89af936a712c0d73aeee2245043cf13382d56102f2cbcf0bf4 gen=e374ed4a11e19b89af936a712c0d73aeee2245043cf13382d56102f2cbcf0bf4
+  [PASS] gate-3 .text.harness_main section byte-identical (with -g)
+         · orig=8a77b50000a617f8b98dae8abe6fda9f004216918c4b495bd9ba868031ba31a1 gen=8a77b50000a617f8b98dae8abe6fda9f004216918c4b495bd9ba868031ba31a1
+
+  B9.C-6 harness_stm32h7_main.c .c-leg byte-identity:
+    PROVEN ✓ — hand-written harness_stm32h7_main.c is fully hexa-emittable.
+    DELETION GATE OPEN — stdlib/hal/t3/harness_stm32h7_main.c may be `git rm`.
+========================================================================
+  6/6 checks passed
+__HEXA_LANG_HARNESS_STM32H7_MAIN_BYTE_DIFF__ PASS

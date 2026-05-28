@@ -115,7 +115,11 @@ let REFERENCE_PREFIXES: [string] = [
     "example/",
 ]
 let REFERENCE_EXACT: [string] = [
-    "tests/runtime_h_smoke.c",
+    // B9.C-6 (.c-leg): tests/runtime_h_smoke.c was `git rm`d after
+    // tests/runtime_h_smoke_byte_diff.hexa proved gen ≡ orig 6/6 PASS
+    // (.verdicts/runtime-floor-closure/B9C6-runtime-h-smoke-byte-diff.txt).
+    // `bin/hexa-fast check` now regenerates the .c from
+    // tests/runtime_h_smoke_emit.hexa at check time.
     "test/lora_cuda_equiv_test.c",
 ]
 

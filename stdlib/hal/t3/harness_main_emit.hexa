@@ -1,0 +1,132 @@
+#!hexa strict
+// stdlib/hal/t3/harness_main_emit.hexa
+//   B9.C-6 (.c-leg small batch · #1850 pattern) — harness_main.c source emitter.
+//
+// Mirrors lib/hxpyembed/smoke_emit.hexa one-to-one. Emits the RP2040
+// T3 harness main verbatim. Makefile.rp2040 is rewired to consume the
+// `_gen.c` produced here in place of the hand-written `harness_main.c`.
+//
+// Invocation (from Makefile.rp2040 regen rule):
+//   hexa-run stdlib/hal/t3/harness_main_emit.hexa <output-path>
+//
+// Default output path (if argv missing): "harness_main.c" in cwd.
+//
+// Phase: B9.C-6 batch (arm-none-eabi cross-compile target).
+
+let MODULE_NAME = "harness_main_emit"
+
+fn emit_harness_main_c() -> str {
+    // Verbatim content of hand-written stdlib/hal/t3/harness_main.c
+    let s = "/*\n" +
+            " * stdlib/hal/t3/harness_main.c — RP2040 T3 harness main.\n" +
+            " *\n" +
+            " * Phase: paper-tier scaffold. Not executed in v1.2.0.\n" +
+            " *\n" +
+            " * Goal: minimally exercise the rp2040 HW backend stubs documented in\n" +
+            " * stdlib/hal/backend/rp2040/{gpio,uart,timer}.hexa, log a sentinel\n" +
+            " * line via UART0, and halt. Renode will capture the UART output to\n" +
+            " * t3_rp2040_run.log; numerics_t3_rp2040_renode.hexa (v1.3.0+) will\n" +
+            " * grep for the sentinel.\n" +
+            " *\n" +
+            " * Sentinel pattern: \"__T3_RP2040__ PASS gpio_toggle_5x_observed\\n\"\n" +
+            " *\n" +
+            " * Why C and not .hexa? hexa runtime fork-saturation blocks cross-\n" +
+            " * compile; arm-none-eabi-gcc is the standard ARMv6-M toolchain. Once\n" +
+            " * a hexa-lang ARMv6-M target backend lands, this file converts to\n" +
+            " * stdlib/hal/t3/harness_main.hexa (sim-mirror).\n" +
+            " */\n" +
+            "\n" +
+            "/* Manual integer typedefs — avoids depending on a hosted libc/newlib\n" +
+            " * for the cross-compile (the harness is fully -nostdlib, fully bare-\n" +
+            " * metal; only the gcc-internal builtins are needed). */\n" +
+            "typedef unsigned char       uint8_t;\n" +
+            "typedef unsigned short      uint16_t;\n" +
+            "typedef unsigned int        uint32_t;\n" +
+            "typedef unsigned long long  uint64_t;\n" +
+            "\n" +
+            "/* RP2040 register addresses (subset; full list in\n" +
+            " * stdlib/hal/backend/rp2040/gpio.hexa + uart.hexa). */\n" +
+            "\n" +
+            "#define SIO_BASE              0xD0000000U\n" +
+            "#define SIO_GPIO_OUT          (*(volatile uint32_t *)(SIO_BASE + 0x010))\n" +
+            "#define SIO_GPIO_OUT_SET      (*(volatile uint32_t *)(SIO_BASE + 0x014))\n" +
+            "#define SIO_GPIO_OUT_CLR      (*(volatile uint32_t *)(SIO_BASE + 0x018))\n" +
+            "#define SIO_GPIO_OE_SET       (*(volatile uint32_t *)(SIO_BASE + 0x024))\n" +
+            "\n" +
+            "/* Pico onboard LED is GP25. */\n" +
+            "#define LED_PIN               25\n" +
+            "\n" +
+            "/* UART0 register addresses (PL011 layout). */\n" +
+            "#define UART0_BASE            0x40034000U\n" +
+            "#define UART0_DR              (*(volatile uint32_t *)(UART0_BASE + 0x000))\n" +
+            "#define UART0_FR              (*(volatile uint32_t *)(UART0_BASE + 0x018))\n" +
+            "#define UART0_IBRD            (*(volatile uint32_t *)(UART0_BASE + 0x024))\n" +
+            "#define UART0_FBRD            (*(volatile uint32_t *)(UART0_BASE + 0x028))\n" +
+            "#define UART0_LCR_H           (*(volatile uint32_t *)(UART0_BASE + 0x02C))\n" +
+            "#define UART0_CR              (*(volatile uint32_t *)(UART0_BASE + 0x030))\n" +
+            "#define UART_FR_TXFF          (1U << 5)\n" +
+            "\n" +
+            "/* Polling delay (cycle-count loop; not calibrated). */\n" +
+            "static void delay_loop(uint32_t n) {\n" +
+            "    while (n--) { __asm__ volatile(\"nop\"); }\n" +
+            "}\n" +
+            "\n" +
+            "static void uart_write_str(const char *s) {\n" +
+            "    while (*s) {\n" +
+            "        while (UART0_FR & UART_FR_TXFF) { /* spin until tx fifo not full */ }\n" +
+            "        UART0_DR = (uint32_t)(*s++);\n" +
+            "    }\n" +
+            "}\n" +
+            "\n" +
+            "void harness_main(void) {\n" +
+            "    /* 1. Configure GP25 (LED) as output via SIO. Note: real boot would\n" +
+            "     *    also program IO_BANK0 + PADS_BANK0 + RESETS for GPIO function;\n" +
+            "     *    omitted here because Renode's rp2040 model accepts SIO writes\n" +
+            "     *    after only the SIO+PADS subset is touched. */\n" +
+            "    SIO_GPIO_OE_SET = (1U << LED_PIN);\n" +
+            "\n" +
+            "    /* 2. Configure UART0 for 115200 8N1 (Renode's UART model logs at\n" +
+            "     *    any baud; values match the Pico SDK default). */\n" +
+            "    /* Skip baud divisor + LCR_H setup in stub; Renode UART is lenient.\n" +
+            "     * Real impl: UART0_IBRD = 67; UART0_FBRD = 52; UART0_LCR_H |= (3<<5)\n" +
+            "     * for 8-bit; UART0_CR = 0x0301 (UARTEN+TXE+RXE). */\n" +
+            "    UART0_CR = 0x0301;\n" +
+            "\n" +
+            "    uart_write_str(\"[t3_rp2040 START] harness booted\\r\\n\");\n" +
+            "\n" +
+            "    /* 3. Toggle LED 5 times (T3 sentinel: 5 toggles observed). */\n" +
+            "    for (int i = 0; i < 5; i++) {\n" +
+            "        SIO_GPIO_OUT_SET = (1U << LED_PIN);\n" +
+            "        delay_loop(100000);\n" +
+            "        SIO_GPIO_OUT_CLR = (1U << LED_PIN);\n" +
+            "        delay_loop(100000);\n" +
+            "    }\n" +
+            "\n" +
+            "    /* 4. Emit T3 PASS sentinel — numerics_t3_rp2040_renode.hexa\n" +
+            "     *    (v1.3.0+) will grep for this in the captured Renode UART log. */\n" +
+            "    uart_write_str(\"__T3_RP2040__ PASS gpio_toggle_5x_observed\\r\\n\");\n" +
+            "\n" +
+            "    /* 5. Spin forever — boot.s catches return via _hang anyway, but\n" +
+            "     *    spinning here keeps the UART log's last line stable. */\n" +
+            "    for (;;) { __asm__ volatile(\"nop\"); }\n" +
+            "}\n" +
+            "\n" +
+            "/* End of harness_main.c — minimal GPIO + UART exerciser. */\n"
+    return s
+}
+
+fn main() {
+    let argv = real_args()
+    let out_path = if argv.len() >= 1 { argv[0] } else { "harness_main.c" }
+    let c_text = emit_harness_main_c()
+    let cmd = "cat > \"" + out_path + "\" <<'__HARNESS_MAIN_EMIT_EOF__'\n" +
+              c_text + "__HARNESS_MAIN_EMIT_EOF__"
+    let _ = exec(cmd)
+    let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
+    if exists_check != "y" {
+        println("[harness_main_emit] FATAL: failed to write " + out_path)
+        exit(1)
+    }
+    println("[harness_main_emit] wrote " + out_path)
+    exit(0)
+}

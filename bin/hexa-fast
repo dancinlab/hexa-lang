@@ -202,10 +202,18 @@ deep_hash() {
 
 case ${1:-} in
     check)
-        SMOKE="$REPO_ROOT/tests/runtime_h_smoke.c"
-        [ -f "$SMOKE" ] || { echo "hexa-fast: missing $SMOKE" >&2; exit 1; }
+        # B9.C-6 (.c-leg): runtime_h_smoke.c is hexa-emitted at check time
+        # from tests/runtime_h_smoke_emit.hexa. The hand-written .c was
+        # `git rm`d once the byte-diff oracle (tests/runtime_h_smoke_byte_diff.hexa)
+        # proved gen ≡ orig 6/6 PASS — see .verdicts/runtime-floor-closure/
+        # B9C6-runtime-h-smoke-byte-diff.txt.
+        EMIT="$REPO_ROOT/tests/runtime_h_smoke_emit.hexa"
+        [ -f "$EMIT" ] || { echo "hexa-fast: missing emitter $EMIT" >&2; exit 1; }
+        SMOKE="${TMPDIR:-/tmp}/hexa-fast-check-smoke-$$.c"
         OUT="${TMPDIR:-/tmp}/hexa-fast-check-$$.o"
-        trap 'rm -f "$OUT"' EXIT
+        trap 'rm -f "$OUT" "$SMOKE"' EXIT
+        "${HEXA_RUN:-hexa-run}" "$EMIT" "$SMOKE" >/dev/null
+        [ -f "$SMOKE" ] || { echo "hexa-fast: emitter failed to produce $SMOKE" >&2; exit 1; }
         if clang $CFLAGS -c "$SMOKE" -I"$REPO_ROOT/self" -o "$OUT" 2>&1; then
             echo "hexa-fast: runtime.h surface OK ($(wc -l <"$SMOKE") lines, all symbols resolved)"
             exit 0

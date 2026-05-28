@@ -1,0 +1,30 @@
+========================================================================
+  self/forge/forge_tier_v1 — byte_diff: B9.C-6 .c-leg byte-diff oracle
+========================================================================
+  generator: self/forge/forge_tier_v1_emit.hexa
+  oracle:    clang + otool byte-diff vs hand-written self/forge/forge_tier_v1.c
+  target:    Mac host arm64/x86_64 (standalone -DFORGE_SMOKE_STANDALONE)
+  gates:     source-text · whole-file .o (no -g) · __text section (with -g)
+  ⚠ DELETION DEFERRED — runtime.c #include + remote-scp scripts also consume the .c
+
+  scratch: /var/folders/2g/blzd56lx2rvfvt61c1pc9g7r0000gn/T/forge_tier_v1_byte_diff.XXXXXX.aXvkPtKIIq
+
+  [PASS] clang + otool present (Mac host toolchain)
+         · clang=y otool=y
+  [PASS] hexa emitter self/forge/forge_tier_v1_emit.hexa present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a03fa07b06b07982c/self/forge/forge_tier_v1_emit.hexa
+  [PASS] hand-written self/forge/forge_tier_v1.c present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a03fa07b06b07982c/self/forge/forge_tier_v1.c
+  [PASS] gate-1 source-text byte-identical (sha256(.c))
+         · orig=c51b99afac022c5791d807672eb165a344fe2f908e3b0c9cd7fadeb9a32c2b01 gen=c51b99afac022c5791d807672eb165a344fe2f908e3b0c9cd7fadeb9a32c2b01
+  [PASS] gate-2 whole-file .o byte-identical (no -g)
+         · orig=43b5e812f0bd7f647183b30b1e762cb8d8f9c3568f34ebff77e2355968df48f3 gen=43b5e812f0bd7f647183b30b1e762cb8d8f9c3568f34ebff77e2355968df48f3
+  [PASS] gate-3 __TEXT,__text section byte-identical (with -g)
+         · orig=4b2fd0a2027487c00dc365baaacde3247cd10d089f5acdc5c15998663148913c gen=4b2fd0a2027487c00dc365baaacde3247cd10d089f5acdc5c15998663148913c
+
+  B9.C-6 forge_tier_v1.c .c-leg byte-identity:
+    PROVEN ✓ — hand-written forge_tier_v1.c is fully hexa-emittable.
+    DELETION DEFERRED — runtime.c #include + remote-scp scripts must rewire first.
+========================================================================
+  6/6 checks passed
+__HEXA_LANG_FORGE_TIER_V1_BYTE_DIFF__ PASS
