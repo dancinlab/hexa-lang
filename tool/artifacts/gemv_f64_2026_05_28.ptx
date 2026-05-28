@@ -1,0 +1,78 @@
+// RFC 055 055-P0 - hexa-native NVPTX emit | target=nvptx64-nvidia-cuda-sm80
+.version 7.0
+.target sm_80
+.address_size 64
+
+.visible .entry probe_gemv_f64 (
+    .param .u64 probe_gemv_f64_param_0,
+    .param .u64 probe_gemv_f64_param_1,
+    .param .u64 probe_gemv_f64_param_2,
+    .param .u64 probe_gemv_f64_param_3,
+    .param .u64 probe_gemv_f64_param_4
+)
+{
+    .reg .u64 %rd3;
+    .reg .u64 %rd4;
+    .reg .u32 %r5;
+    .reg .u64 %rd6;
+    .reg .u64 %rd7;
+    .reg .pred %p8;
+    .reg .f64 %fd10;
+    .reg .u64 %rd11;
+    .reg .pred %p12;
+    .reg .u64 %rd13;
+    .reg .u64 %rd14;
+    .reg .f64 %fd15;
+    .reg .f64 %fd16;
+    .reg .f64 %fd17;
+    .reg .f64 %fd18;
+    .reg .u64 %rd19;
+    .reg .u64 %rd0;
+    .reg .u64 %rd1;
+    .reg .u64 %rd2;
+    .reg .u64 %rd_idxa_15;
+    .reg .u64 %rd_idxa_16;
+    .reg .u64 %rd_idxs_addr;
+$L_0:
+    ld.param.u64 %rd0, [probe_gemv_f64_param_0];  // load kernel param 0 into reg
+    ld.param.u64 %rd1, [probe_gemv_f64_param_1];  // load kernel param 1 into reg
+    ld.param.u64 %rd2, [probe_gemv_f64_param_2];  // load kernel param 2 into reg
+    ld.param.u64 %rd3, [probe_gemv_f64_param_3];  // load kernel param 3 into reg
+    ld.param.u64 %rd4, [probe_gemv_f64_param_4];  // load kernel param 4 into reg
+    mov.u32 %r5, %tid.x;  // gpu_thread_id_x()
+    cvt.s64.s32 %rd6, %r5;  // to_i64 (s32 to s64)
+    mov.u64 %rd7, %rd6;  // assign
+    setp.ge.s64 %p8, %rd7, %rd3;  // cmp >=
+    @%p8 bra $L_1;  // br_cond true -> $L_1
+    bra $L_2;  // br_cond false -> $L_2
+$L_1:
+    ret;  // return
+$L_2:
+    mov.f64 %fd10, 0.0;  // assign
+    mov.u64 %rd11, 0;  // assign
+    bra $L_3;  // br -> $L_3
+$L_3:
+    setp.lt.s64 %p12, %rd11, %rd4;  // cmp <
+    @%p12 bra $L_4;  // br_cond true -> $L_4
+    bra $L_5;  // br_cond false -> $L_5
+$L_4:
+    mul.lo.s64 %rd13, %rd7, %rd4;  // binop *
+    add.s64 %rd14, %rd13, %rd11;  // binop +
+    mul.lo.s64 %rd_idxa_15, %rd14, 8;  // index byte off = idx * 8
+    add.s64 %rd_idxa_15, %rd_idxa_15, %rd0;  // index addr = base + off
+    ld.global.f64 %fd15, [%rd_idxa_15];  // ld base[idx] (f64)
+    mul.lo.s64 %rd_idxa_16, %rd11, 8;  // index byte off = idx * 8
+    add.s64 %rd_idxa_16, %rd_idxa_16, %rd1;  // index addr = base + off
+    ld.global.f64 %fd16, [%rd_idxa_16];  // ld base[idx] (f64)
+    mul.f64 %fd17, %fd15, %fd16;  // binop *
+    add.f64 %fd18, %fd10, %fd17;  // binop +
+    mov.f64 %fd10, %fd18;  // assign
+    add.s64 %rd19, %rd11, 1;  // binop +
+    mov.u64 %rd11, %rd19;  // assign
+    bra $L_3;  // br -> $L_3
+$L_5:
+    mul.lo.s64 %rd_idxs_addr, %rd7, 8;  // index_set byte off = idx * 8
+    add.s64 %rd_idxs_addr, %rd_idxs_addr, %rd2;  // index_set addr = base + off
+    st.global.f64 [%rd_idxs_addr], %fd10;  // st base[idx] = val (f64)
+    ret;  // return
+}

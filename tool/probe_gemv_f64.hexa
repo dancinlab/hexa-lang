@@ -1,0 +1,26 @@
+// W1 small-M GEMV wedge — hand-emit per-thread GEMV (Round 10 cycle-fg)
+//
+// LLM single-token decode (M=1) canonical wedge: cuBLAS SGEMM at M=1 uses only
+// 0.95% of FP32 peak (99.05% sub-roofline) because the GEMM tiling is built for
+// large M. A GEMV (matrix × vector) has NO M-tiling waste — each output element
+// is an independent K-reduction. This is exactly why vLLM / llama.cpp ship custom
+// GEMV kernels that bypass cuBLAS for decode.
+//
+// This probe proves hexa nvptx_emit can express the decode GEMV:
+//   y[n] = Σ_k W[n,k] * x[k]      (W is [N,K] row-major, x is [K], y is [N])
+//
+// Per-thread independent output (R6 GEMM+SiLU pattern — NO @shared, avoids the
+// R8/R9 @shared 3rd-write-phase miscompile). N=256 outputs, K=512 reduction.
+
+@gpu_kernel
+fn probe_gemv_f64(W: [f64], x: [f64], y: [f64], N: i64, K: i64) {
+    let mut tid: i64 = to_i64(gpu_thread_id_x())
+    if tid >= N { return }
+    let mut acc: f64 = 0.0
+    let mut k: i64 = 0
+    while k < K {
+        acc = acc + W[tid * K + k] * x[k]
+        k = k + 1
+    }
+    y[tid] = acc
+}

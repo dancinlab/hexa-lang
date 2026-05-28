@@ -1017,3 +1017,30 @@ LN+GEMM 1-kernel wedge (N=256 M=64, 64 outputs)
 **halt**: cycle-fg "step failed → STOP" + 1-fire wedge 영역 밖 (codegen 정밀 PTX 분석 필요). §5a LN+GEMM combined milestone (line 636) `[ ]` 유지. dedicated codegen session 으로 handoff.
 
 cycle-fg sequence after R9: R8 closed-negative → R9 5-fire root-cause isolation (codegen miscompile 정밀 격리, fix 는 dedicated session).
+
+## 2026-05-28 — cycle-fg Round 10 · W1 small-M GEMV — correctness wedge 🟢 (perf-wedge phantom 확인)
+
+"순차진행" 자율. next-list 스캔 시 line 1494 의 W1 가 open 으로 보였으나 — **dup-race precheck 누락**: line 1508 에서 동일 W1 가 이미 **🔴 RETIRED 2026-05-28** (F-WEDGE-SMALL-M-SUB-ROOFLINE-HONEST, 병렬 세션). "99.05% sub-roofline" = compute-peak reference 오적용; M=1 GEMV 는 memory-bound (AI=0.50 F/B) → 진짜 reference 는 HBM bandwidth roofline. honest HBM 적용 시 cuBLAS M=1 = **102.71% of HBM roof** (이미 roofline 도달) → **W1 perf wedge 는 phantom, 존재하지 않음**.
+
+본 라운드 probe 는 **correctness wedge** 만 검증 (perf 주장 아님):
+
+```
+small-M GEMV wedge (decode, N=256 K=512, 256 outputs)
+  n_nan_inf = 0 / 256
+  max_abs_err = 3.197e-14  (512-step K-reduction sub-ULP)
+  max_rel_err = 1.603e-15
+  RESULT: PASS (byte-eq band <1e-12)
+```
+
+🟢 **correctness PASS** — hexa nvptx_emit 이 decode GEMV (`y[n]=Σ_k W[n,k]·x[k]`, per-thread independent K-reduction) 를 byte-eq 로 표현. R6 GEMM+SiLU 와 같은 per-thread-accumulate 패턴 (NO @shared → R8/R9 bug 회피).
+
+**finding (honest, g3)**:
+- ✅ correctness: decode GEMV 가 1-kernel byte-eq 로 emit 됨 (silicon-validated). 512-step reduction sub-ULP.
+- ❌ perf wedge: **존재하지 않음** — cuBLAS 가 small-M 에서 이미 HBM roofline 도달 (line 1508 RETIRED 와 일치). 본 probe 가 perf 우위 주장 안 함.
+- **methodology lesson 재확인**: roofline reference 는 AI-aware 해야 함 (compute-bound vs memory-bound 구분). W1 의 phantom 은 compute-peak 를 memory-bound op 에 적용한 오류.
+
+**dup-race precheck miss**: line 1494 (stale open W1 텍스트) vs line 1508 (RETIRED verdict) 이 같은 파일에 공존 — 스캔 시 1494 만 보고 진입. 향후 next-list 는 동일 키워드의 RETIRED/[x] 라인까지 grep 해야 ([[feedback_inbox_dup_race_precheck]] g0).
+
+**상태**: W1 perf-wedge milestone 은 이미 RETIRED (정정 불요). correctness probe 는 NN-primitive 카탈로그 (line 709 `NN-specific HEXA primitives`) 의 GEMV 증거로 archive — milestone flip 안 함 (perf 주장 없음, over-closure 금지). artifact `tool/artifacts/gemv_f64_2026_05_28.{ptx,out}`.
+
+cycle-fg sequence: R10 = correctness PASS + perf-phantom 재확인 (병렬 세션 RETIRED 와 일치, honest non-finding).
