@@ -124,8 +124,20 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p self/native build/stage1
+          # .c-graduation Phase 2 (ADDITIVE) — opt-in prebuilt-runtime link.
+          # When HEXA_PREBUILT_RUNTIME=<path> is set + the file exists, link the
+          # prebuilt object (built in Stage 0b from the SAME runtime.c) instead of
+          # re-compiling self/runtime.c (+ its #include seed .c) from source. This
+          # is the seam the .c=0 graduation needs: hexa_cc.c only #includes
+          # runtime.h, so it links a prebuilt runtime.a with NO seed .c present.
+          # FALLBACK-SAFE: env unset OR file absent → source path (runtime.c).
+          RT_ARG="self/runtime.c"
+          if [ -n "${HEXA_PREBUILT_RUNTIME:-}" ] && [ -f "${HEXA_PREBUILT_RUNTIME}" ]; then
+              echo "Stage-0: HEXA_PREBUILT_RUNTIME set — linking prebuilt: $HEXA_PREBUILT_RUNTIME"
+              RT_ARG="$HEXA_PREBUILT_RUNTIME"
+          fi
           clang $CFLAGS_COMMON \
-              -I self self/native/hexa_cc.c self/runtime.c \
+              -I self self/native/hexa_cc.c "$RT_ARG" \
               -o build/hexa_v2
           file build/hexa_v2
 
@@ -319,8 +331,16 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p self/native build/stage1
+          # .c-graduation Phase 2 (ADDITIVE) — opt-in prebuilt-runtime link.
+          # See darwin-arm64 job for full rationale. FALLBACK-SAFE: env unset OR
+          # file absent → source path (self/runtime.c).
+          RT_ARG="self/runtime.c"
+          if [ -n "${HEXA_PREBUILT_RUNTIME:-}" ] && [ -f "${HEXA_PREBUILT_RUNTIME}" ]; then
+              echo "Stage-0: HEXA_PREBUILT_RUNTIME set — linking prebuilt: $HEXA_PREBUILT_RUNTIME"
+              RT_ARG="$HEXA_PREBUILT_RUNTIME"
+          fi
           gcc $CFLAGS_COMMON \
-              -I self self/native/hexa_cc.c self/runtime.c \
+              -I self self/native/hexa_cc.c "$RT_ARG" \
               -o build/hexa_v2 \
               -lm -ldl
           file build/hexa_v2
@@ -444,8 +464,16 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p self/native build/stage1
+          # .c-graduation Phase 2 (ADDITIVE) — opt-in prebuilt-runtime link.
+          # See darwin-arm64 job for full rationale. FALLBACK-SAFE: env unset OR
+          # file absent → source path (self/runtime.c).
+          RT_ARG="self/runtime.c"
+          if [ -n "${HEXA_PREBUILT_RUNTIME:-}" ] && [ -f "${HEXA_PREBUILT_RUNTIME}" ]; then
+              echo "Stage-0: HEXA_PREBUILT_RUNTIME set — linking prebuilt: $HEXA_PREBUILT_RUNTIME"
+              RT_ARG="$HEXA_PREBUILT_RUNTIME"
+          fi
           gcc $CFLAGS_COMMON \
-              -I self self/native/hexa_cc.c self/runtime.c \
+              -I self self/native/hexa_cc.c "$RT_ARG" \
               -o build/hexa_v2 \
               -lm -ldl
           file build/hexa_v2
