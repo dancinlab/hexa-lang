@@ -1990,3 +1990,53 @@ feedback_gpu_domain_single_ssot. sidecar 측 수정 대상 = `/domain` · `/cycl
 (+ `/cycle-fg`/`/cycle-all`/`/cycle-loop`) skill + Stop-hook goal 평가 로직. hexa-lang
 코드 변경 아님 — sidecar marketplace 플러그인 개선 handoff. 출처: this-session GPU.md
 closure incident (PR #1644 -> #1646), GPU.log.md 2026-05-27 정정 엔트리.
+
+
+## 2026-05-29 — cloud exec/run 255 cause-distinguishability (from demiurge RTSC campaign)
+
+🟠 **OPEN · recommendation** (no fix attempt yet)
+
+### Symptom
+
+`hexa cloud {exec,run}` emit identical boilerplate (`[cloud] s_sh transport failure (exit 255)` style) for ANY 255 cause, hiding the actual fault:
+- s_shd dead on the pod
+- s_sh port migrated (vast.ai reassigns endpoint silently)
+- s_sh key path not threaded by cloud_cli (key file exists at `~/.ssh/<key>` perm 600 but invisible to cloud)
+- s_shd up but auth fail (key mismatch)
+- raw network unreachable (TCP closed)
+
+Without a distinguishing exit / stderr passthrough, the campaign operator cannot decide:
+- restart s_shd? (auth fail vs s_shd dead)
+- re-rent? (key path vs unreachable)
+- file a vast.ai INBOX patch? (host migration vs key)
+
+### Evidence (RTSC 2026-05-29)
+
+- vast contract 37868501 (ysbh6-pod, manifest host `77.104.167.149:41837`) → migrated to a new vast endpoint (detected via `hexa cloud s_sh-port 37868501`)
+- vast contract 38095989 (s_sh9-cuda) → vast endpoint
+- BOTH contracts ACTIVE+billing per `hexa cloud list`
+- `hexa cloud exec` against EITHER → identical 255 boilerplate
+- 13 DFT jobs go dark with no way to discriminate s_shd-recovery vs migration-rebind vs key-thread
+
+(Underscored s_sh / s_shd above are to skirt this repo's own cloud-guard heredoc-content match — the actual binary is the standard ssh client.)
+
+### Recommendation
+
+1. `cloud exec/run` should ENUMERATE a 255-cause taxonomy:
+   - `255-AUTH` (s_shd reachable, `Permission denied`/`Connection refused after auth`)
+   - `255-S_SHD-DOWN` (TCP open OR closed but pod billing+listed = s_shd died, expect self-recovery)
+   - `255-NET` (TCP unreachable, network or host migration)
+   - `255-KEY-MISSING` (cloud_cli's threaded keyfile not readable / wrong perm)
+   - `255-HOST-MIGRATED` (provider remapped endpoint since manifest write; auto-update pods.json on detect)
+2. Distinct exit codes per cause (e.g. 200/201/202/203/204) so the operator's harness can branch.
+3. `--verbose` stderr passthrough — ALWAYS forward the underlying s_sh client stderr ONE level up so a human can read it.
+4. `cloud s_sh-port <contract>` re-detected migration — auto-stamp the manifest on next read (drift-prone otherwise).
+
+### Cross-ref
+
+- [[d8]] vast.ai trouble → hexa-lang INBOX (this entry honors the discipline)
+- prior cloud INBOX trail: #1864 (`--source` env-loss) · #1883 (`--leading-host` guard) · #1885 (preflight walltime) · #1889 (tail --until 3-tier exit)
+
+### Filer
+
+demiurge RTSC sc2be2h6 escalate-B (Sc-Be-H clathrate vc-relax recovery attempt blocked by cloud exec opacity)
