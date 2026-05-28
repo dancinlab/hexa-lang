@@ -1,6 +1,26 @@
 # INBOX — log
 
-## 2026-05-28 — 🟠 OPEN · hexa cloud — 3 terminal/transport classification gaps (from demiurge RTSC 11-job campaign)
+## 2026-05-28 — ✅ anima DECODER M4b rev2 fire 발견 2 blocker (BPE O(N) 정체 · dir_create codegen gap)
+
+> **finding (anima DECODER M4b rev2 production fire, H100 SXM, 2026-05-28, pod `yfqcywjlxavmgr`)**: HARD top-1 + diverse corpus + n_steps 200 production fire 도중 hexa-lang 보고 대상 2건 노출 (DECODER.md L133 `a_runpod_inbox`). M4c coherence verify 가 full-BPE-scale detokenize 에 의존하는데 그 경로가 #1 로 막혀 있었음.
+
+### blocker 1 — BPE tokenize/detokenize O(N) 조회 정체 → ✅ RESOLVED (PR #1869)
+
+> **증상**: `flame_bpe_corpus_lib` → `self/ml/tokenizer_bpe` 의 `get_merge_rank`(151,388 merges linear scan/pair) × `bpe_merge_word`(O(word_len²)/word) 가 diverse corpus(1.2MB·38KB 둘 다, Korean byte-char 폭증)를 사실상 종료 불가로 만듦. anima 는 6.6KB(24-line) corpus 로 우회(n_toks=6034).
+> **dup-race precheck**: origin/main `self/ml/tokenizer_bpe.hexa` 에서 `get_merge_rank` = `while i<n { if merge_ranks[i][0]==key … }` 선형스캔 + `bpe_token_lookup` = `tok.vocab` 151,643 선형스캔 확인 — 미해결 상태였음(#1556 은 encode/decode 정확성만 fix, 성능은 미해결 별 layer).
+> **root cause**: `merge_ranks` 가 이름만 "O(1) lookup" 인 `[key,rank]` 배열 — 실제 선형스캔. vocab token→id 도 동일.
+> **fix (PR #1869, branch `inbox-bpe-o1-lookup-2026-05-28`)**: `merge_ranks` 배열→`{key:rank}` 해시맵(`build_merge_ranks` `{}` + index-set), `get_merge_rank` 는 `map_contains_key` 가드 후 O(1) 조회. vocab 측은 `build_token_id_map` 신규(`{token_str:id}` 해시맵) + `bpe_token_lookup` O(1). `hexa_map` = FNV-1a 오픈어드레싱 해시테이블(`self/runtime_core.c` `HexaMapTable`/`hmap_find`)로 진짜 O(1). 두 조회 모두 `map_contains_key`(silent) 가드 → 흔한 miss 가 `hexa_map_get` 의 `"key not found"` stderr fprintf 경로를 안 탐(미스가 대다수인 BPE 병합에서 중요).
+> **검증(g5)**: ① ubu-2 current-main(stale-tell `%ld %ld`=0) `hexa parse self/ml/tokenizer_bpe.hexa` → `OK: parses cleanly`. ② 격리 로직 테스트(use 0개 복사본, canonical stdlib-verify 패턴) 9/9 PASS — `get_merge_rank` {0,1,2} + miss=-1(b,a / z,z), `token_lookup` {0,2,3} + UNK miss=0(zzz). diff +37/−22, 공개 API 불변(동작보존 리팩터).
+> **잔여**: anima 측 full Qwen V=151643 diverse corpus 재발사로 tokenize 종료시간 회귀 측정 → M4c full-BPE-scale coherence verify unblock 확인.
+
+### blocker 2 — `dir_create` cross-backend codegen gap → ✅ ROUTED (anima 1줄 swap, hexa 변경 0)
+
+> **증상**: trainer.c 의 `hexa_call1(dir_create, X)` 가 Linux gen2 backend undeclared (anima 가 `trim` #1527 과 동종으로 보고, sed `s/hexa_call1(dir_create,/rt_fs_mkdir_p(/g` 로 우회).
+> **진단(dup-race precheck, [[feedback_inbox_dup_race_precheck]])**: `dir_create` 는 어디에도 등록 안 된 이름 — `compiler/check/bind.hexa` allowlist·`self/codegen.hexa`(gen2)·interp·`self/codegen/arm64_darwin.hexa` 전부 부재. `trim` 류(빌트인인데 gen2 lowering 만 누락)와 **다름** — `dir_create` 자체가 빌트인이 아님(anima 가 만든 이름). codegen 이 모르는 free-fn → generic `hexa_call1(dir_create,…)` → 미정의 심볼.
+> **canonical = `fs_mkdir_p`**: `self/codegen.hexa` 가 `name=="fs_mkdir_p"` → `rt_fs_mkdir_p(...)` (재귀 POSIX mkdir 루프, `self/runtime.c`) 로 lower. free-fn `fs_mkdir_p(path)` 컴파일 probe(local + ubu-2 current-main) → HX2001/undeclared 0 (bind 가 미등록 이름을 generic dispatch 로 통과시키고 codegen 이 `fs_mkdir_p` arm 으로 가로챔). anima 워크어라운드의 `rt_fs_mkdir_p` 가 정확히 이 함수 = 이미 실 fire 에서 실행 검증됨.
+> **recommend**: anima 가 `dir_create(X)` → `fs_mkdir_p(X)` 1줄 교체 → sed 워크어라운드 제거 + gen2 컴파일 clean. **hexa-lang 코드변경 불요** (g0 Occam — `dir_create` 별칭 추가 = entity 증식이라 안 함).
+
+
 
 데모더지 RTSC DFT 캠페인 (11 pod/pool 잡 · vast + ubu pool) 운영 중 `hexa cloud` 의 terminal/transport 판정에서 3 gap 노출. 모두 verbatim evidence 보유.
 
