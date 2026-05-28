@@ -2814,6 +2814,14 @@ extern int execve(const char *path, char *const argv[], char *const envp[]);
 extern int execvp(const char *file, char *const argv[]);
 // RUNTIME net/exec ⑤ (cycle 79): svc-trap execve (59). On success it never
 // returns; on failure carry-flag -> -1 + errno via _cf.
+// F3 ACTIVATION · Path A — execve class-C svc-wrapper self-emit slot.
+// 3-arg via syscall3_cf, all 3 args POINTERS (path/argv/envp) → NO sxtw
+// prologue, just mov w16,#59 + svc + _cf tail. 8 instr / 32 B, errno reloc
+// 0x10/0x14. SELF-EMIT → extern, resolved by emit_hxlcl_execve_o.hexa
+// (byte-eq to clang -O2, SYS#59).
+#ifdef HEXA_RT_SELFEMIT
+extern int hxlcl_execve(const char *path, char *const argv[], char *const envp[]);
+#else
 static int hxlcl_execve(const char *path, char *const argv[], char *const envp[]) {
 #if (defined(__arm64__) || defined(__aarch64__)) && defined(__APPLE__)
     return (int)_hxlcl_syscall3_cf(HXLCL_SYS_EXECVE, (long)path, (long)argv, (long)envp);
@@ -2821,6 +2829,7 @@ static int hxlcl_execve(const char *path, char *const argv[], char *const envp[]
     return execve(path, argv, envp);
 #endif
 }
+#endif
 // execvp = native PATH search over execve (no libc dependency). If file has
 // a '/', exec directly; else try each $PATH dir. Byte-loop path-join avoids
 // strcpy/memcpy/strchr re-pulling those libc externs.

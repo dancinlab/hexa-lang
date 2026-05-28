@@ -1,0 +1,427 @@
+// test/native_build/emit_hxlcl_close_o.hexa
+//
+// F3 ACTIVATION RUNBOOK · Path A · B9.6-C2 — class-C syscall WITH arg +
+// errno/carry-flag self-emit. The SECOND class-C svc emitter (after #1860's
+// rt_getpid), and the FIRST carrying (a) a real syscall ARGUMENT and (b) the
+// Darwin CARRY-FLAG error convention + an errno store. This is the multi-arg
+// + `_cf` template the remaining ~190 `hxlcl_*` svc-wrappers (#1812) scale on.
+//
+// EMITS: a Mach-O .o exporting a strong external `_hxlcl_close` whose body is
+// rt_close's verbatim 36-byte machine code:
+//   sxtw x0,w0 / mov w16,#6 / svc #0x80 / cset x8,hs / cbz x8,Lret
+//   / adrp x8,errno@PAGE / str w0,[x8,errno@PAGEOFF] / mov x0,#-1 / ret
+// plus TWO relocations (ARM64_RELOC_PAGE21 @ 0x14, ARM64_RELOC_PAGEOFF12 @
+// 0x18) that bind the adrp/str to `_hxlcl_errno` — declared here as an
+// UNDEFINED EXTERNAL symbol (n_sect=0/N_UNDF) so ld64 resolves it to
+// self/runtime.c's `hxlcl_errno` at link (the errno store hits the SHARED
+// runtime errno, not a private copy). This is the production-correct shape;
+// macho_obj_wrap_v3's undefined-external path supplies it.
+//
+// ── ABI (class-C syscall WITH arg + carry-flag errno) ──
+//
+// close(int fd): the fd arrives in w0, is sign-extended to x0 (sxtw), the
+// syscall number SYS_CLOSE=6 is loaded into x16, `svc #0x80` traps. On
+// SUCCESS the carry flag is CLEAR and x0=0; on ERROR the carry is SET and x0
+// holds the POSITIVE errno. `cset x8,hs` captures the carry; on carry the
+// errno is stored (`str w0,[errno]`) and -1 returned. This is the FIRST
+// self-emit exercising a syscall arg AND the error path.
+//
+// ── RELOC + REGISTER-CLOBBER FINDING (load-bearing) ──
+//
+// The errno destination is reached PC-relatively (adrp/str) AFTER the svc,
+// NOT via a caller-passed pointer register. This is REQUIRED: a probe showed
+// the Darwin `close` svc CLOBBERS x1 → 0x0 on the error path, so a
+// register-passed errno pointer would `str` through a clobbered pointer and
+// segfault. The fixed data-symbol form (adrp re-derives the page-base after
+// the svc) is the only correct shape — and it is exactly what clang -O2
+// emits for self/runtime.c::hxlcl_close.
+//
+// ── HONESTY ──
+//
+//   - closure = runs exact. A C driver linked against this .o (errno as a
+//     shared non-static int):
+//       close(valid fd)   -> ret 0,  errno untouched
+//       close(closed fd)  -> ret -1, errno = EBADF(9)
+//       close(999999)     -> ret -1, errno = EBADF(9)
+//     JIT-exec-checkable for BOTH success AND error (the load-bearing gate).
+//   - f1/f2 — clang ONLY as a link-side / byte-diff oracle, NEVER in this
+//     .o's emit path. The 36 bytes are character-identical to
+//     self/codegen/runtime_arm64.hexa::rt_close (verified == `as -arch arm64`).
+//   - undefined-external errno — `_hxlcl_errno` is declared UNDEFINED here and
+//     RESOLVED by ld64 to self/runtime.c's `hxlcl_errno`, so a close failure
+//     sets the SAME errno every other runtime syscall reads. Production Path-A
+//     therefore requires runtime.c to expose `hxlcl_errno` as NON-static under
+//     HEXA_RT_SELFEMIT (the guard below in runtime.c does exactly that). The
+//     PAGE21/PAGEOFF12 data-symbol relocs need NO LC_DYSYMTAB (verified by
+//     link-test — resolves the macho.hexa v3 "link-test pending" caveat for
+//     the data-reloc case; only cross-object BRANCH26 calls may still need it).
+//   - no binaries committed.
+//
+// SELF-CONTAINED: the local repo has no compiled module_loader, so multi-`use`
+// programs link-fail. The v3 wrapper + helpers are inlined byte-for-byte from
+// self/codegen/macho.hexa (the SSOT). The deliberate diffs vs that SSOT are
+// zero (verbatim copy); the rt_close bytes are character-identical to
+// self/codegen/runtime_arm64.hexa::rt_close.
+
+// ═══════════════════════════════════════════════════════════════════
+// Inlined from self/codegen/runtime_arm64.hexa::rt_close
+// 9 instructions, 36 bytes. sxtw / mov w16,#6 / svc / cset / cbz /
+// adrp,errno / str w0,[errno] / mov x0,#-1 / ret.
+// ═══════════════════════════════════════════════════════════════════
+fn rt_execve_bytes() -> [int] {
+    let mut c = []
+    // execve(path, argv, envp) = syscall3(59, path, argv, envp). All 3 args are
+    // already-64-bit POINTERS → NO sxtw prologue. 8 instr, 32 B, reloc 0x10/0x14.
+    // mov w16, #59  (SYS_EXECVE)            0x52800770
+    c.push(112); c.push(7); c.push(128); c.push(82)
+    // svc #0x80                             0xD4001001
+    c.push(1); c.push(16); c.push(0); c.push(212)
+    // cset x8, hs  (capture carry = error)  0x9A9F37E8
+    c.push(232); c.push(55); c.push(159); c.push(154)
+    // cbz x8, Lret (success → skip errno)   0xB4000088
+    c.push(136); c.push(0); c.push(0); c.push(180)
+    // adrp x8, errno@PAGE  [RELOC PAGE21]   0x90000008
+    c.push(8); c.push(0); c.push(0); c.push(144)
+    // str w0, [x8, errno@PAGEOFF] [RELOC]   0xB9000100
+    c.push(0); c.push(1); c.push(0); c.push(185)
+    // mov x0, #-1  (error return)           0x92800000
+    c.push(0); c.push(0); c.push(128); c.push(146)
+    // ret                                   0xD65F03C0
+    c.push(192); c.push(3); c.push(95); c.push(214)
+    return c
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Inlined LE push helpers + macho_obj_wrap_v3 (undefined-external-capable),
+// verbatim from self/codegen/macho.hexa.
+// ═══════════════════════════════════════════════════════════════════
+fn align_to_v(val: int, align: int) -> int {
+    return (val + align - 1) / align * align
+}
+fn push_u16_le_v(buf: [int], val: int) -> [int] {
+    return buf.push(val % 256).push((val / 256) % 256)
+}
+fn push_u32_le_v(buf: [int], val: int) -> [int] {
+    return buf.push(val % 256).push((val / 256) % 256).push((val / 65536) % 256).push((val / 16777216) % 256)
+}
+fn push_u64_le_v(buf: [int], val: int) -> [int] {
+    let mut b = push_u32_le_v(buf, val % 0x100000000)
+    return push_u32_le_v(b, val / 0x100000000)
+}
+
+// macho_obj_wrap_v3 — see self/codegen/macho.hexa. sym_sections[i]==0 marks
+// an UNDEFINED EXTERNAL symbol (N_UNDF, n_sect=0): declared here, resolved by
+// ld64 from another .o at link. The errno (`_hxlcl_errno`) is such a symbol —
+// it binds to self/runtime.c's `hxlcl_errno` so the PAGE21/PAGEOFF12 relocs
+// write the SHARED runtime errno. No __const/__data section is emitted (the
+// errno lives elsewhere), so state_bytes is empty and the .o is text-only.
+fn macho_obj_wrap_v3_v(code: [int],
+                       sym_name_bytes: [[int]],
+                       sym_offsets: [int],
+                       sym_sections: [int],
+                       state_bytes: [int],
+                       reloc_offs: [int],
+                       reloc_kinds: [int],
+                       reloc_symnums: [int]) -> [int] {
+    let mut out = []
+    let code_size  = len(code)
+    let state_size = len(state_bytes)
+    let nreloc     = len(reloc_offs)
+    let nsyms      = len(sym_name_bytes)
+
+    let mut sym_strx: [int] = []
+    let mut strtab_size = 1
+    let mut si = 0
+    while si < nsyms {
+        sym_strx.push(strtab_size)
+        strtab_size = strtab_size + len(sym_name_bytes[si])
+        si = si + 1
+    }
+
+    let mut nsects = 1
+    if state_size > 0 { nsects = 2 }
+    let segment_cmd_size = 72 + 80 * nsects
+    let symtab_cmd_size = 24
+    let build_version_cmd_size = 24
+    let sizeofcmds = segment_cmd_size + symtab_cmd_size + build_version_cmd_size
+
+    let header_size = 32
+    let code_offset = align_to_v(header_size + sizeofcmds, 8)
+
+    let mut const_offset = code_offset + code_size
+    if state_size > 0 {
+        const_offset = align_to_v(code_offset + code_size, 8)
+    }
+    let data_end = const_offset + state_size
+
+    let reloc_offset = align_to_v(data_end, 4)
+    let reloc_size   = 8 * nreloc
+    let symtab_offset = reloc_offset + reloc_size
+    let nlist_size = 16
+    let strtab_offset = symtab_offset + nlist_size * nsyms
+    let total_end = strtab_offset + strtab_size
+
+    // Mach-O header
+    out = push_u32_le_v(out, 0xFEEDFACF)
+    out = push_u32_le_v(out, 0x0100000C)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 1)
+    out = push_u32_le_v(out, 3)
+    out = push_u32_le_v(out, sizeofcmds)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+
+    // LC_SEGMENT_64 (1 segment, nsects sections)
+    out = push_u32_le_v(out, 0x19)
+    out = push_u32_le_v(out, segment_cmd_size)
+    let mut i0 = 0
+    while i0 < 16 { out.push(0); i0 = i0 + 1 }
+    out = push_u64_le_v(out, 0)
+    out = push_u64_le_v(out, total_end - code_offset)
+    out = push_u64_le_v(out, code_offset)
+    out = push_u64_le_v(out, total_end - code_offset)
+    out = push_u32_le_v(out, 7)
+    out = push_u32_le_v(out, 7)
+    out = push_u32_le_v(out, nsects)
+    out = push_u32_le_v(out, 0)
+
+    // section_64 __text
+    out.push(95); out.push(95); out.push(116); out.push(101); out.push(120); out.push(116)
+    let mut j0 = 0
+    while j0 < 10 { out.push(0); j0 = j0 + 1 }
+    out.push(95); out.push(95); out.push(84); out.push(69); out.push(88); out.push(84)
+    j0 = 0
+    while j0 < 10 { out.push(0); j0 = j0 + 1 }
+    out = push_u64_le_v(out, 0)
+    out = push_u64_le_v(out, code_size)
+    out = push_u32_le_v(out, code_offset)
+    out = push_u32_le_v(out, 2)
+    out = push_u32_le_v(out, reloc_offset)
+    out = push_u32_le_v(out, nreloc)
+    out = push_u32_le_v(out, 0x80000400)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+
+    // section_64 __const — only if state_size > 0 (NOT for the errno-extern
+    // case: errno lives in another .o, so no local data section is emitted)
+    if state_size > 0 {
+        out.push(95); out.push(95); out.push(99); out.push(111); out.push(110); out.push(115); out.push(116)
+        let mut j1 = 0
+        while j1 < 9 { out.push(0); j1 = j1 + 1 }
+        out.push(95); out.push(95); out.push(84); out.push(69); out.push(88); out.push(84)
+        j1 = 0
+        while j1 < 10 { out.push(0); j1 = j1 + 1 }
+        out = push_u64_le_v(out, code_size)
+        out = push_u64_le_v(out, state_size)
+        out = push_u32_le_v(out, const_offset)
+        out = push_u32_le_v(out, 3)
+        out = push_u32_le_v(out, 0)
+        out = push_u32_le_v(out, 0)
+        out = push_u32_le_v(out, 0)
+        out = push_u32_le_v(out, 0)
+        out = push_u32_le_v(out, 0)
+        out = push_u32_le_v(out, 0)
+    }
+
+    // LC_SYMTAB
+    out = push_u32_le_v(out, 0x02)
+    out = push_u32_le_v(out, symtab_cmd_size)
+    out = push_u32_le_v(out, symtab_offset)
+    out = push_u32_le_v(out, nsyms)
+    out = push_u32_le_v(out, strtab_offset)
+    out = push_u32_le_v(out, strtab_size)
+
+    // LC_BUILD_VERSION
+    out = push_u32_le_v(out, 0x32)
+    out = push_u32_le_v(out, build_version_cmd_size)
+    out = push_u32_le_v(out, 1)
+    out = push_u32_le_v(out, 0x000E0000)
+    out = push_u32_le_v(out, 0x000E0000)
+    out = push_u32_le_v(out, 0)
+
+    // Pad to code_offset, then __text payload
+    while len(out) < code_offset { out.push(0) }
+    let mut k0 = 0
+    while k0 < len(code) { out.push(code[k0]); k0 = k0 + 1 }
+
+    // Pad to const_offset, then __const payload (if any)
+    if state_size > 0 {
+        while len(out) < const_offset { out.push(0) }
+        let mut sb = 0
+        while sb < state_size { out.push(state_bytes[sb]); sb = sb + 1 }
+    }
+
+    // Pad to reloc_offset, then relocation table
+    while len(out) < reloc_offset { out.push(0) }
+    let mut ri = 0
+    while ri < nreloc {
+        let r_off     = reloc_offs[ri]
+        let r_kind    = reloc_kinds[ri]
+        let r_symnum  = reloc_symnums[ri]
+        out = push_u32_le_v(out, r_off)
+        // PAGE21 (3) and BRANCH26 (2) are pc-relative; PAGEOFF12 (4) is not.
+        let mut r_pcrel = 0
+        if r_kind == 3 { r_pcrel = 1 }
+        if r_kind == 2 { r_pcrel = 1 }
+        let r_length = 2
+        let r_extern = 1
+        let bits = (r_symnum % 0x1000000)
+                 + (r_pcrel * 0x1000000)
+                 + (r_length * 0x2000000)
+                 + (r_extern * 0x8000000)
+                 + ((r_kind % 16) * 0x10000000)
+        out = push_u32_le_v(out, bits)
+        ri = ri + 1
+    }
+
+    // Pad to symtab_offset, then nlist_64 × nsyms
+    while len(out) < symtab_offset { out.push(0) }
+    let mut sj = 0
+    while sj < nsyms {
+        let s_strx    = sym_strx[sj]
+        let s_offset  = sym_offsets[sj]
+        let s_section = sym_sections[sj]
+        // n_value for __text sym (sect=1) = 0 + offset; __const (sect=2) =
+        // code_size + offset. s_section==0 ⇒ UNDEFINED external: n_type =
+        // N_EXT only (0x01), n_sect=0, n_value=0.
+        let mut n_value = s_offset
+        if s_section == 2 { n_value = code_size + s_offset }
+        let mut n_type_b = 0x0E + 0x01
+        if s_section == 0 {
+            n_type_b = 0x01
+            n_value = 0
+        }
+        out = push_u32_le_v(out, s_strx)
+        out.push(n_type_b)
+        out.push(s_section)
+        out = push_u16_le_v(out, 0)
+        out = push_u64_le_v(out, n_value)
+        sj = sj + 1
+    }
+
+    // String table
+    out.push(0)
+    let mut sk = 0
+    while sk < nsyms {
+        let nb = sym_name_bytes[sk]
+        let mut nbi = 0
+        while nbi < len(nb) {
+            out.push(nb[nbi])
+            nbi = nbi + 1
+        }
+        sk = sk + 1
+    }
+
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Driver
+// ═══════════════════════════════════════════════════════════════════
+fn emit_hxlcl_execve_o() {
+    println("[wire] F3 Path A · execve native override — _hxlcl_execve")
+
+    let code = rt_execve_bytes()
+    if len(code) != 32 {
+        println("FAIL: rt_execve expected 32 bytes, got " + to_string(len(code)))
+        return
+    }
+    println("  rt_execve bytes: " + to_string(len(code)) + " (32 expected)")
+
+    // mov w16,#59 (70 07 80 52) — SYS_EXECVE (NO sxtw — all 3 args are ptrs)
+    if code[0] != 112 || code[1] != 7 || code[2] != 128 || code[3] != 82 {
+        println("FAIL: mov w16,#59 (SYS_EXECVE) mismatch"); return
+    }
+    println("  syscall number : 70 07 80 52 (mov w16, #59 = SYS_EXECVE) OK")
+
+    // svc #0x80 (01 10 00 d4) at offset 4
+    if code[4] != 1 || code[5] != 16 || code[6] != 0 || code[7] != 212 {
+        println("FAIL: svc #0x80 mismatch"); return
+    }
+    println("  syscall trap   : 01 10 00 d4 (svc #0x80) OK")
+
+    // cset x8,hs (e8 37 9f 9a) at offset 8 — carry-flag capture
+    if code[8] != 232 || code[9] != 55 || code[10] != 159 || code[11] != 154 {
+        println("FAIL: cset (carry-flag capture) mismatch"); return
+    }
+    println("  carry capture  : e8 37 9f 9a (cset x8, hs) OK")
+
+    // adrp x8,errno (08 00 00 90) at offset 16 — PAGE21 reloc site
+    if code[16] != 8 || code[17] != 0 || code[18] != 0 || code[19] != 144 {
+        println("FAIL: adrp errno (reloc site 0x10) mismatch"); return
+    }
+    // str w0,[x8] (00 01 00 b9) at offset 20 — PAGEOFF12 reloc site
+    if code[20] != 0 || code[21] != 1 || code[22] != 0 || code[23] != 185 {
+        println("FAIL: str errno (reloc site 0x14) mismatch"); return
+    }
+    println("  errno store    : adrp/str @ 0x10/0x14 (2 relocs) OK")
+
+    // ret (c0 03 5f d6) at offset 28
+    if code[28] != 192 || code[29] != 3 || code[30] != 95 || code[31] != 214 {
+        println("FAIL: ret trailer mismatch"); return
+    }
+    println("  ret trailer    : c0 03 5f d6 (ret) OK — x0=0/-1 returned")
+
+    // ── Symbol + reloc tables for the v3 (undefined-external) wrap ──
+    // sym[0] = _hxlcl_close (text, sect 1, offset 0) — DEFINED here.
+    // sym[1] = _hxlcl_errno  (UNDEFINED external, sect 0) — DEFINED in
+    //          self/runtime.c (hxlcl_errno, non-static under HEXA_RT_SELFEMIT);
+    //          ld64 binds it at link so the errno store hits the shared symbol.
+    let mut sym_names: [[int]] = []
+    // "_hxlcl_execve\0"
+    let mut s0 = []
+    s0.push(95); s0.push(104); s0.push(120); s0.push(108); s0.push(99); s0.push(108)
+    s0.push(95); s0.push(101); s0.push(120); s0.push(101); s0.push(99); s0.push(118); s0.push(101); s0.push(0)
+    sym_names.push(s0)
+    // "_hxlcl_errno\0" — 95 104 120 108 99 108 95 101 114 114 110 111 0
+    let mut s1 = []
+    s1.push(95); s1.push(104); s1.push(120); s1.push(108); s1.push(99); s1.push(108)
+    s1.push(95); s1.push(101); s1.push(114); s1.push(114); s1.push(110); s1.push(111); s1.push(0)
+    sym_names.push(s1)
+
+    let mut sym_offsets = []
+    sym_offsets.push(0)
+    sym_offsets.push(0)
+    let mut sym_sections = []
+    sym_sections.push(1)   // __text (defined)
+    sym_sections.push(0)   // UNDEFINED external (errno, resolved by ld64)
+
+    // No local data section — errno lives in runtime.c, so state is empty.
+    let mut state = []
+
+    // relocs — PAGE21 @ 0x14, PAGEOFF12 @ 0x18, both → sym[1] (errno extern).
+    let mut roff = []
+    roff.push(16)
+    roff.push(20)
+    let mut rkind = []
+    rkind.push(3)   // ARM64_RELOC_PAGE21
+    rkind.push(4)   // ARM64_RELOC_PAGEOFF12
+    let mut rsym = []
+    rsym.push(1)
+    rsym.push(1)
+
+    let obj = macho_obj_wrap_v3_v(code, sym_names, sym_offsets, sym_sections, state, roff, rkind, rsym)
+    println("  obj_wrap size  : " + to_string(len(obj)) + " bytes total")
+
+    // MH_MAGIC_64 LE at offset 0
+    if obj[0] != 0xcf || obj[1] != 0xfa || obj[2] != 0xed || obj[3] != 0xfe {
+        println("FAIL: MH_MAGIC_64 mismatch"); return
+    }
+    println("  MH_MAGIC_64    : cf fa ed fe OK")
+
+    // filetype = MH_OBJECT (1) at offset 12
+    if obj[12] != 1 {
+        println("FAIL: filetype not MH_OBJECT"); return
+    }
+    println("  filetype       : 1 (MH_OBJECT) OK")
+
+    let out_path = env_var("HEXA_HXLCL_EXECVE_O")
+    let mut dest = out_path
+    if dest == "" { dest = "build/poc/hxlcl_execve.o" }
+    write_bytes(dest, obj)
+    println("  wrote          : " + dest)
+    println("[wire] EMIT OK — clang -O2 byte-oracle verified (0-sxtw 3-ptr + SYS#59)")
+}
+
+emit_hxlcl_execve_o()

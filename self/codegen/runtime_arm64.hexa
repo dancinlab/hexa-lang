@@ -4988,6 +4988,37 @@ fn rt_setsockopt_reloc_kinds() {
     return k
 }
 
+// ── rt_execve (F3 wave 12 — class-C · 3-arg syscall3_cf, all-ptr 0-sxtw) ──
+// execve(path, argv, envp) -> int. All 3 args are already-64-bit POINTERS →
+// NO sxtw prologue, just mov w16,#59 + svc + _cf errno tail. 8 instr, 32 B,
+// errno reloc 0x10/0x14. Verified BYTE-IDENTICAL to clang -O2 (_hxlcl_syscall3_cf
+// oracle): 52800770 d4001001 9a9f37e8 b4000088 90000008 b9000100 92800000
+// d65f03c0. SYS_EXECVE=59. First 0-sxtw 3-ptr-arg shape.
+fn rt_execve() {
+    let mut c = []
+    c.push(112); c.push(7); c.push(128); c.push(82)    // mov w16,#59 (SYS_EXECVE)
+    c.push(1); c.push(16); c.push(0); c.push(212)      // svc #0x80
+    c.push(232); c.push(55); c.push(159); c.push(154)  // cset x8,hs
+    c.push(136); c.push(0); c.push(0); c.push(180)     // cbz x8,Lret
+    c.push(8); c.push(0); c.push(0); c.push(144)       // adrp x8,errno [PAGE21 @0x10]
+    c.push(0); c.push(1); c.push(0); c.push(185)       // str w0,[x8] [PAGEOFF12 @0x14]
+    c.push(0); c.push(0); c.push(128); c.push(146)     // mov x0,#-1
+    c.push(192); c.push(3); c.push(95); c.push(214)    // ret
+    return c
+}
+fn rt_execve_reloc_offs() {
+    let mut o = []
+    o.push(16)
+    o.push(20)
+    return o
+}
+fn rt_execve_reloc_kinds() {
+    let mut k = []
+    k.push(3)
+    k.push(4)
+    return k
+}
+
 // ── rt_write (B9.6-C13 — class-C syscall · int+ptr+ulong _cf + errno) ────
 // write(int fd, const void *buf, unsigned long n) -> long. The exact twin of
 // rt_read — same 9-instr 36 B _cf shape (only fd/x0 sign-extended; buf x1 + n
