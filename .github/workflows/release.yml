@@ -192,7 +192,6 @@ jobs:
       # on a real notarization run. Developer ID signing is a prerequisite for
       # the notarize step after Package.
       - name: Stage 2b — Developer ID codesign (gated)
-        if: ${{ secrets.MACOS_CERT_P12 != '' }}
         shell: bash
         env:
           MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
@@ -200,6 +199,13 @@ jobs:
           MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
         run: |
           set -euo pipefail
+          # In-script gate: the `secrets` context is NOT allowed in a step-level
+          # `if:` (GitHub rejects the whole workflow file). Guard on the
+          # env-exported secret instead — skips cleanly when the cert is absent.
+          if [ -z "${MACOS_CERT_P12:-}" ]; then
+            echo "codesign: MACOS_CERT_P12 secret absent — skipping Developer ID signing"
+            exit 0
+          fi
           KC="$RUNNER_TEMP/hexa-sign.keychain-db"
           KCPW="$(uuidgen)"
           security create-keychain -p "$KCPW" "$KC"
