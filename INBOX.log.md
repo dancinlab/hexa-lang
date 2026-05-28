@@ -42,10 +42,11 @@
 > **recommend (정정)**: `cloud exec` argv 파서가 (a) **알 수 없는 `--flag` 를 reject + usage 출력** (positional host 로 silent 흡수 금지) · (b) host 위치 토큰이 `--`로 시작하면 명시 에러 (`'--cmd' looks like a flag, not a host — exec uses positional <host> -- <argv>`). 이게 255-혼란의 근본.
 > **부차 (여전히 유효)**: 진짜 transport 255 (TCP-closed=pod-down vs TCP-open+contract-live=transient)의 sub-classification 은 일반적으로 여전히 유용 — 단 본 항목의 "20분 outage" 는 그 증거가 아니었음 (오진). transient-vs-fatal 분류는 별개의 nice-to-have 로 격하, argv-flag-reject 가 P1.
 
-### gap 3 — `cloud preflight` walltime sizing (DFT/phonon) — GPU-mem stub 확장
+### gap 3 — `cloud preflight` walltime sizing (DFT/phonon) — GPU-mem stub 확장 — ✅ RESOLVED #1885
 > **증상**: Mg₂IrH₆ (9-atom metallic Ir-d, 2×2×2 q) 의 `max_seconds=80000`(22h) 이 ~3× 과소 → rep#9 에서 timeout. recover 로 손실 0 이지만 1-stop 발생.
-> **현 동작**: `cloud preflight` = GPU mem-budget 만 (RFC 091 stub).
+> **현 동작 (전)**: `cloud preflight` = GPU mem-budget 만 (RFC 091 stub).
 > **recommend**: `cloud preflight --kind dft-phonon --atoms N --nq M [--metallic]` → 닫힌형 `max_seconds` 추정 (atoms × n_q × metallic-factor) + "recover=.true. 전제 넉넉히 설정" 권고. 사전 under-size flag.
+> **✅ RESOLVED (PR #1885)**: `preflight --kind dft-phonon --atoms N --nq M [--metallic] [--max-seconds S]` 추가. 닫힌형 `est_sec = 14·atoms³·nq·(metallic?3:1)` (atoms³=SCF O(N³)/q-point · nq linear · ×3 metallic). 계수 base=14·mf=3 은 Mg₂IrH₆ anchor 역산 — 실패한 80000s(≈22h) 가 ~3× 과소였으니 real-need ≈ 240000s; `14·9³·8·3 = 244944 s`(≈68h) 로 real-need 에 안착, 80000 같은 미달값엔 UNDER-SIZED warn + exit 2. 권고 = `max_seconds ≥ ×1.5 floor` AND `recover=.true.`(체크포인트 0-work-loss). GPU-mem 경로 무손상(g34 — `preflight_run` 진입부에 `--kind` 분기만 추가). g5 verbatim: `hexa verify --expr dft_phonon_walltime 9 8 1 244944` → 🔵 SUPPORTED-FORMAL · `… 9 8 1 80000` → 🔴 FALSIFIED. 테스트: `stdlib/cloud/preflight_dft_phonon_test.hexa` (6 cases) PASS.
 
 **공통 가치**: gap 1·2 가 caller(watcher/`/system` 관제탑)의 terminal 오판을 근본 차단 — 현재는 caller 마다 `grep "JOB DONE" + STOP 모순` 휴리스틱 재작성 (데모더지 watcher 가 polymorph false-DONE 으로 1회 오탐). CLI 가 3-tier exit code 를 주면 caller 단순화 + 정합.
 
