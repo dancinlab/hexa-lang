@@ -1,0 +1,593 @@
+// HEXA Standard Library — deck/rtsc
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// RTSC QE deck emitter (the proof-of-concept emitter for the generic
+// 6-domain deck generator). Emits vc-relax.in + scf.in + ph.in +
+// RUNBOOK.md from a structural spec.
+//
+// PROTOTYPES (selected via spec key "prototype"):
+//   "beh8_clathrate"   — Fm-3m fcc, 10-atom (A + Be + 8H) — MgBeH8 family,
+//                        anchor = AcBeH8 arxiv:2411.19028v2.
+//   "perovskite_pm3m"  — Pm-3m simple cubic, 5-atom (A + B + 3H) —
+//                        SrAuH3 family. Author-style (lowercase namelists,
+//                        full absolute outdir/pseudo paths) — does NOT
+//                        byte-match the MgBeH8 prototype's UPPERCASE style.
+//
+// REGRESSION TARGET — gen_deck("rtsc", <MgBeH8 spec>) reproduces
+// exports/rtsc/decks/MgBeH8/{vc-relax.in,scf.in,ph.in,RUNBOOK.md} byte-
+// for-byte. Run test/deck_gen_smoke.hexa to verify.
+//
+// d15 baked in: nosym=.true., smearing mp + degauss 0.01-0.02,
+// electron_maxstep 400, mixing_beta 0.3, electron_phonon='simple',
+// recover=.true., max_seconds via q-grid x atoms heuristic.
+//
+// ⚠ QE `press` unit is kbar. The spec carries pressure_kbar (string)
+// and pressure_gpa_comment (string) — the emitter writes them as-is.
+// Spec authors stating "10 GPa target" must pass "100.0" + "10 GPa".
+
+import "stdlib/deck/gen.hexa"
+
+// ── pub entry point ──────────────────────────────────────────────────
+
+pub fn emit_rtsc(spec: DeckSpec) -> [DeckFile] {
+    let files: [DeckFile] = []
+    let proto = spec_get_or(spec, "prototype", "beh8_clathrate")
+
+    if proto == "beh8_clathrate" {
+        deck_push(files, "vc-relax.in", _rtsc_beh8_vc_relax(spec))
+        deck_push(files, "scf.in",      _rtsc_beh8_scf(spec))
+        deck_push(files, "ph.in",       _rtsc_beh8_ph(spec))
+        deck_push(files, "RUNBOOK.md",  _rtsc_beh8_runbook(spec))
+        return files
+    }
+    if proto == "perovskite_pm3m" {
+        deck_push(files, "vc-relax.in", _rtsc_perovskite_vc_relax(spec))
+        deck_push(files, "scf.in",      _rtsc_perovskite_scf(spec))
+        deck_push(files, "ph.in",       _rtsc_perovskite_ph(spec))
+        deck_push(files, "RUNBOOK.md",  _rtsc_perovskite_runbook(spec))
+        return files
+    }
+    // Unknown prototype — return empty (caller checks len).
+    return files
+}
+
+// ── BeH8 clathrate prototype (MgBeH8 byte-match) ─────────────────────
+
+// vc-relax.in for the BeH8 clathrate prototype (Fm-3m fcc, 10-atom).
+// Byte-exact match for exports/rtsc/decks/MgBeH8/vc-relax.in given the
+// MgBeH8 spec (see test/deck_gen_smoke.hexa).
+fn _rtsc_beh8_vc_relax(spec: DeckSpec) -> string {
+    let prefix    = spec_get(spec, "prefix")            // "mgbeh8"
+    let celldm    = spec_get(spec, "celldm_bohr")       // "8.5132"
+    let a_ang     = spec_get(spec, "a_conv_ang")        // "4.505"
+    let a_anchor  = spec_get(spec, "anchor_a_ang")      // "5.30"
+    let contract  = spec_get(spec, "contraction_pct")   // "15"
+    let a_sym     = spec_get(spec, "a_site_symbol")     // "Mg"
+    let a_mass    = spec_get(spec, "a_site_mass")       // "24.305"
+    let a_upf     = spec_get(spec, "a_site_upf")        // "Mg.pbe-spnl-rrkjus_psl.1.0.0.UPF"
+    let press_kb  = spec_get(spec, "pressure_kbar")     // "100.0"
+    let press_cmt = spec_get(spec, "pressure_comment")  // "10 GPa  (QE press unit = kbar; 10 GPa = 100 kbar)"
+    let fb_kb     = spec_get(spec, "fallback_pressure_kbar")  // "500.0"
+    let fb_cmt    = spec_get(spec, "fallback_pressure_comment")  // "50 GPa"
+
+    let mut s = ""
+    s = s + "&CONTROL\n"
+    s = s + "  calculation     = 'vc-relax'\n"
+    s = s + "  prefix          = '" + prefix + "'\n"
+    s = s + "  outdir          = './out'\n"
+    s = s + "  pseudo_dir      = './pseudo'\n"
+    s = s + "  forc_conv_thr   = 1.0d-4\n"
+    s = s + "  etot_conv_thr   = 1.0d-6\n"
+    s = s + "  tstress         = .true.\n"
+    s = s + "  tprnfor         = .true.\n"
+    s = s + "  nstep           = 200\n"
+    s = s + "/\n"
+    s = s + "&SYSTEM\n"
+    s = s + "  ibrav           = 2                ! FCC, Fm-3m (SG 225) — AcBeH8/LaBeH8 prototype\n"
+    s = s + "  celldm(1)       = " + celldm + "           ! a_conv = " + a_ang + " A (" + a_sym + " variant, " + contract + "% contraction vs AcBeH8 ~" + a_anchor + " A start guess)\n"
+    s = s + "  nat             = 10               ! 1 " + a_sym + " + 1 Be + 8 H (BeH8 clathrate cage, 1 f.u./primitive)\n"
+    s = s + "  ntyp            = 3\n"
+    s = s + "  ecutwfc         = 80\n"
+    s = s + "  ecutrho         = 800\n"
+    s = s + "  nosym           = .true.           ! guard — avoids checkallsym crash (cf. sc2be2h6 campaign)\n"
+    s = s + "  occupations     = 'smearing'\n"
+    s = s + "  smearing        = 'mp'             ! Methfessel-Paxton — metallic hydride (d15)\n"
+    s = s + "  degauss         = 0.01             ! d15 small-gap SCF aid (smear 0.01)\n"
+    s = s + "/\n"
+    s = s + "&ELECTRONS\n"
+    s = s + "  conv_thr        = 1.0d-10\n"
+    s = s + "  mixing_beta     = 0.3\n"
+    s = s + "  mixing_mode     = 'plain'\n"
+    s = s + "  diagonalization = 'david'\n"
+    s = s + "  electron_maxstep = 400             ! d15 maxiter 400\n"
+    s = s + "/\n"
+    s = s + "&IONS\n"
+    s = s + "  ion_dynamics    = 'bfgs'\n"
+    s = s + "/\n"
+    s = s + "&CELL\n"
+    s = s + "  cell_dynamics   = 'bfgs'\n"
+    s = s + "  press           = " + press_kb + "            ! target " + press_cmt + "\n"
+    s = s + "  press_conv_thr  = 0.5\n"
+    s = s + "  cell_dofree     = 'all'\n"
+    s = s + "/\n"
+    s = s + "! FALLBACK: if dynamic instability persists, re-run with press = " + fb_kb + " (" + fb_cmt + ") — see RUNBOOK.md.\n"
+    s = s + "ATOMIC_SPECIES\n"
+    s = s + "  " + a_sym + "  " + a_mass + "   " + a_upf + "\n"
+    s = s + "  Be   9.0122  Be.pbe-n-rrkjus_psl.1.0.0.UPF\n"
+    s = s + "  H    1.008   H.pbe-rrkjus_psl.1.0.0.UPF\n"
+    s = s + "\n"
+    s = s + "! BeH8 clathrate cage: " + a_sym + " @ 4a (0,0,0), Be @ 4b (1/2,1/2,1/2),\n"
+    s = s + "! H @ 32f Wyckoff (xxx, x~0.12) forming the 8-coordinate cage around Be.\n"
+    s = s + "! Fractional coords below are the fcc-primitive representation (LaBeH8 family).\n"
+    s = s + "ATOMIC_POSITIONS crystal\n"
+    s = s + "  " + a_sym + "   0.0000000   0.0000000   0.0000000\n"
+    s = s + "  Be   0.5000000   0.5000000   0.5000000\n"
+    s = s + "  H    0.1200000   0.1200000   0.1200000\n"
+    s = s + "  H   -0.1200000  -0.1200000  -0.1200000\n"
+    s = s + "  H    0.6200000   0.6200000   0.3800000\n"
+    s = s + "  H    0.3800000   0.3800000   0.6200000\n"
+    s = s + "  H    0.6200000   0.3800000   0.6200000\n"
+    s = s + "  H    0.3800000   0.6200000   0.3800000\n"
+    s = s + "  H    0.3800000   0.6200000   0.6200000\n"
+    s = s + "  H    0.6200000   0.3800000   0.3800000\n"
+    s = s + "\n"
+    s = s + "K_POINTS automatic\n"
+    s = s + "  12 12 12  0 0 0\n"
+    return s
+}
+
+fn _rtsc_beh8_scf(spec: DeckSpec) -> string {
+    let prefix   = spec_get(spec, "prefix")
+    let celldm   = spec_get(spec, "celldm_bohr")
+    let a_sym    = spec_get(spec, "a_site_symbol")
+    let a_mass   = spec_get(spec, "a_site_mass")
+    let a_upf    = spec_get(spec, "a_site_upf")
+
+    let mut s = ""
+    s = s + "&CONTROL\n"
+    s = s + "  calculation     = 'scf'\n"
+    s = s + "  prefix          = '" + prefix + "'\n"
+    s = s + "  outdir          = './out'\n"
+    s = s + "  pseudo_dir      = './pseudo'\n"
+    s = s + "  verbosity       = 'high'\n"
+    s = s + "  tstress         = .true.\n"
+    s = s + "  tprnfor         = .true.\n"
+    s = s + "/\n"
+    s = s + "&SYSTEM\n"
+    s = s + "  ibrav           = 2                ! FCC, Fm-3m (SG 225) — AcBeH8/LaBeH8 prototype\n"
+    s = s + "  celldm(1)       = " + celldm + "           ! REPLACE with relaxed celldm(1) from vc-relax.out (final CELL_PARAMETERS / \"new lattice\")\n"
+    s = s + "  nat             = 10               ! 1 " + a_sym + " + 1 Be + 8 H\n"
+    s = s + "  ntyp            = 3\n"
+    s = s + "  ecutwfc         = 80\n"
+    s = s + "  ecutrho         = 800\n"
+    s = s + "  nosym           = .true.           ! guard — keep symmetry off through scf->ph for consistency\n"
+    s = s + "  occupations     = 'smearing'\n"
+    s = s + "  smearing        = 'mp'             ! Methfessel-Paxton — metallic hydride (d15)\n"
+    s = s + "  degauss         = 0.01             ! d15 small-gap SCF aid (smear 0.01)\n"
+    s = s + "/\n"
+    s = s + "&ELECTRONS\n"
+    s = s + "  conv_thr        = 1.0d-10\n"
+    s = s + "  mixing_beta     = 0.3\n"
+    s = s + "  mixing_mode     = 'plain'\n"
+    s = s + "  diagonalization = 'david'\n"
+    s = s + "  electron_maxstep = 400             ! d15 maxiter 400\n"
+    s = s + "/\n"
+    s = s + "ATOMIC_SPECIES\n"
+    s = s + "  " + a_sym + "  " + a_mass + "   " + a_upf + "\n"
+    s = s + "  Be   9.0122  Be.pbe-n-rrkjus_psl.1.0.0.UPF\n"
+    s = s + "  H    1.008   H.pbe-rrkjus_psl.1.0.0.UPF\n"
+    s = s + "\n"
+    s = s + "! REPLACE the positions below with the RELAXED ATOMIC_POSITIONS from vc-relax.out\n"
+    s = s + "! (the dispatch chain greps the final \"ATOMIC_POSITIONS\" block of vc-relax.out into this file).\n"
+    s = s + "ATOMIC_POSITIONS crystal\n"
+    s = s + "  " + a_sym + "   0.0000000   0.0000000   0.0000000\n"
+    s = s + "  Be   0.5000000   0.5000000   0.5000000\n"
+    s = s + "  H    0.1200000   0.1200000   0.1200000\n"
+    s = s + "  H   -0.1200000  -0.1200000  -0.1200000\n"
+    s = s + "  H    0.6200000   0.6200000   0.3800000\n"
+    s = s + "  H    0.3800000   0.3800000   0.6200000\n"
+    s = s + "  H    0.6200000   0.3800000   0.6200000\n"
+    s = s + "  H    0.3800000   0.6200000   0.3800000\n"
+    s = s + "  H    0.3800000   0.6200000   0.6200000\n"
+    s = s + "  H    0.6200000   0.3800000   0.3800000\n"
+    s = s + "\n"
+    s = s + "K_POINTS automatic\n"
+    s = s + "  12 12 12  0 0 0\n"
+    return s
+}
+
+fn _rtsc_beh8_ph(spec: DeckSpec) -> string {
+    let prefix       = spec_get(spec, "prefix")
+    let a_sym        = spec_get(spec, "a_site_symbol")
+    let title        = spec_get_or(spec, "ph_title",
+        a_sym + "BeH8 electron-phonon 2x2x2 q (RTSC A01 — " + a_sym + " variant of AcBeH8 low-P precompressor)")
+    let nq           = spec_get_or(spec, "nq", "2")           // "2" -> 2x2x2
+    let max_secs     = spec_get_or(spec, "max_seconds", "504000")
+    let walltime_cmt = spec_get_or(spec, "walltime_comment",
+        "140h floor (preflight ×1.5 of 93h est for 2x2x2 metallic)")
+
+    let mut s = ""
+    s = s + title + "\n"
+    s = s + "&inputph\n"
+    s = s + "  prefix              = '" + prefix + "'\n"
+    s = s + "  outdir              = './out'\n"
+    s = s + "  fildyn              = '" + prefix + ".dyn'\n"
+    s = s + "  fildvscf            = 'dvscf'\n"
+    s = s + "  ldisp               = .true.\n"
+    s = s + "  nq1                 = " + nq + "            ! " + nq + "x" + nq + "x" + nq + " q-grid (nq=" + str(_int_pow(_to_int_safe(nq), 3)) + ") — single-pod feasible for 10-atom metallic (~93h, preflight #1885)\n"
+    s = s + "  nq2                 = " + nq + "            ! refine to 4x4x4 (nq=64, ~746h) only on a multi-pod / split-q campaign\n"
+    s = s + "  nq3                 = " + nq + "\n"
+    s = s + "  tr2_ph              = 1.0d-14\n"
+    s = s + "  electron_phonon     = 'simple'     ! project standard (Allen-Dynes Tc from lambda/omega_log)\n"
+    s = s + "  el_ph_sigma         = 0.005        ! Ry, ramped via el_ph_nsigma\n"
+    s = s + "  el_ph_nsigma        = 10           ! sigma scan 0.005...0.050 Ry -> plateau search for lambda\n"
+    s = s + "  recover             = .true.       ! checkpoint-safe / resumable (re-dispatch picks up mid-q)\n"
+    s = s + "  alpha_mix(1)        = 0.3\n"
+    s = s + "  max_seconds         = " + max_secs + "       ! " + walltime_cmt + "\n"
+    s = s + "/\n"
+    return s
+}
+
+fn _rtsc_beh8_runbook(spec: DeckSpec) -> string {
+    let a_sym     = spec_get(spec, "a_site_symbol")
+    let a_radius  = spec_get_or(spec, "a_site_radius_ang", "1.60")
+    let prefix    = spec_get(spec, "prefix")
+    let celldm    = spec_get(spec, "celldm_bohr")
+    let a_ang     = spec_get(spec, "a_conv_ang")
+    let a_anchor  = spec_get(spec, "anchor_a_ang")
+    let contract  = spec_get(spec, "contraction_pct")
+    let a_mass    = spec_get(spec, "a_site_mass")
+    let a_upf     = spec_get(spec, "a_site_upf")
+    let target_p  = spec_get(spec, "pressure_gpa")        // "10"
+    let target_kb = spec_get(spec, "pressure_kbar_int")   // "100"
+    let fb_p      = spec_get(spec, "fallback_pressure_gpa")  // "50"
+    let fb_kb_int = spec_get(spec, "fallback_pressure_kbar_int")  // "500"
+    let title_kr  = spec_get_or(spec, "runbook_title_ko",
+        a_sym + "BeH8 — RTSC A01 DFT el-ph 런북 (BUILD 산출물 · INFRA-READY)")
+    let lead_kr   = spec_get_or(spec, "runbook_lead_ko",
+        "비방사성 " + a_sym + " 변종(AcBeH8 → " + a_sym + "BeH8). 목표: Be-H clathrate 사전압축(precompressor)이\n" +
+        "> " + a_sym + " 치환 후 저압(" + target_p + " GPa)에서 보존되는지 — RTSC 압력축 돌파선 검증.")
+
+    let mut s = ""
+    s = s + "# " + title_kr + "\n"
+    s = s + "\n"
+    s = s + "> " + lead_kr + "\n"
+    s = s + "> 앵커: arXiv:2411.19028v2 (Gao et al., \"actinium beryllium hydrides at low pressure\", AcBeH8 Tc 181K @ 10 GPa).\n"
+    s = s + "\n"
+    s = s + "## 1. 구조 (structure)\n"
+    s = s + "\n"
+    s = s + "| 항목 | 값 |\n"
+    s = s + "|------|-----|\n"
+    s = s + "| 공간군 | **Fm-3m (SG 225)**, fcc — AcBeH8/LaBeH8 prototype |\n"
+    s = s + "| QE ibrav | 2 (fcc primitive) |\n"
+    s = s + "| celldm(1) (시작 추정) | **" + celldm + " Bohr** = a_conv " + a_ang + " Å |\n"
+    s = s + "| 격자 도출 | AcBeH8 a_conv ~" + a_anchor + " Å (저압 앵커) → " + a_sym + " " + contract + "% 수축 (Ac 1.95Å → " + a_sym + " " + a_radius + "Å 반경비) |\n"
+    s = s + "| nat | **10** (1 " + a_sym + " + 1 Be + 8 H) — 1 f.u./primitive |\n"
+    s = s + "| ntyp | 3 |\n"
+    s = s + "| 목표 압력 | **" + target_p + " GPa (= " + target_kb + " kbar)** — AcBeH8 저압 안정성 미러; **fallback " + fb_p + " GPa (= " + fb_kb_int + " kbar)** |\n"
+    s = s + "| 케이지 | BeH8 clathrate (Be @ 4b, H @ 32f xxx, " + a_sym + " @ 4a) |\n"
+    s = s + "\n"
+    s = s + "> ⚠ vc-relax 가 진짜 평형구조를 찾는다. celldm/positions 는 **시작 추정치**일 뿐.\n"
+    s = s + "> nosym=.true. 가드 — checkallsym 크래시 회피 (sc2be2h6 캐페인 교훈).\n"
+    s = s + "> H 32f 좌표 x~0.12 는 LaBeH8 케이지 패밀리 시작값. relax 후 scf.in 에 갱신.\n"
+    s = s + "\n"
+    s = s + "### 압력 fallback 절차\n"
+    s = s + target_p + " GPa relax 가 동적 불안정(허수 phonon 다수)이면:\n"
+    s = s + "`vc-relax.in` 의 `&CELL press = " + target_kb + ".0` → `press = " + fb_kb_int + ".0` (" + fb_p + " GPa) 으로 바꿔 재실행.\n"
+    s = s + "AcBeH8 원논문도 압력↓ 한계가 ~10 GPa 이므로, " + a_sym + " 변종이 더 높은 압력을 요구할 수 있음.\n"
+    s = s + "\n"
+    s = s + "## 2. Pseudopotential 커버리지 (d13)\n"
+    s = s + "\n"
+    s = s + "세 원소 모두 경원소 → **PSL 1.0.0 PBE** 표준 커버리지. 란타나이드 이슈 없음.\n"
+    s = s + "\n"
+    s = s + "| 원소 | 질량 | UPF 파일명 | 라이브러리 |\n"
+    s = s + "|------|------|-----------|-----------|\n"
+    s = s + "| " + a_sym + " | " + a_mass + " | `" + a_upf + "` | PSL 1.0.0 (US, PBE) |\n"
+    s = s + "| Be | 9.0122 | `Be.pbe-n-rrkjus_psl.1.0.0.UPF`   | PSL 1.0.0 (US, PBE) |\n"
+    s = s + "| H  | 1.008  | `H.pbe-rrkjus_psl.1.0.0.UPF`      | PSL 1.0.0 (US, PBE) |\n"
+    s = s + "\n"
+    s = s + "> 출처: mg2irh6 (Mg/H) + labeh8_interp_ablation (Be) 의 검증된 라이브 데크.\n"
+    s = s + "> 디스패치 시 pseudo/ 디렉터리에 위 3개 UPF 배치 (QE pslibrary.1.0.0 에서 fetch).\n"
+    s = s + "\n"
+    s = s + "## 3. 사전점검 sizing (preflight #1885)\n"
+    s = s + "\n"
+    s = s + "```\n"
+    s = s + "hexa cloud preflight --kind dft-phonon --atoms 10 --nq 8 --metallic\n"
+    s = s + "```\n"
+    s = s + "\n"
+    s = s + "| q-grid | nq | est_max_seconds | walltime | floor(×1.5) | 비고 |\n"
+    s = s + "|--------|----|----|----------|-------------|------|\n"
+    s = s + "| **2×2×2** | 8  | 336000 s | **93.3 h** | 504000 s (140 h) | ✅ 단일 pod 가능 (ph.in 채택) |\n"
+    s = s + "| 4×4×4 | 64 | 2688000 s | 746.6 h | 4032000 s (1120 h) | ⚠ multi-pod/split-q 만 |\n"
+    s = s + "\n"
+    s = s + "- hydride metal → `--metallic` (×3 factor) 적용.\n"
+    s = s + "- `ph.in` 의 `max_seconds = 504000` (140h floor) + `recover=.true.` → under-size 여도 0 work loss.\n"
+    s = s + "\n"
+    s = s + "## 4. 실행 체인 (dispatch 단계에서 pod 위에 materialize)\n"
+    s = s + "\n"
+    s = s + "> demiurge 가 `.sh` Write 를 차단하므로, 디스패처가 아래 펜스 블록을 그대로\n"
+    s = s + "> pod 의 `run_chain.sh` 로 복사해 실행한다.\n"
+    s = s + "\n"
+    s = s + "```bash\n"
+    s = s + "#!/usr/bin/env bash\n"
+    s = s + "# " + a_sym + "BeH8 RTSC A01 — vc-relax -> scf -> ph(el-ph simple) chain\n"
+    s = s + "set -euo pipefail\n"
+    s = s + "cd \"$(dirname \"$0\")\"\n"
+    s = s + "\n"
+    s = s + "# --- 0. conda env (QE 7.x) ---\n"
+    s = s + "source ~/miniconda3/etc/profile.d/conda.sh\n"
+    s = s + "conda activate qe          # pw.x / ph.x 제공 환경 (없으면: conda create -n qe -c conda-forge qe)\n"
+    s = s + "export OMP_NUM_THREADS=1\n"
+    s = s + "NP=$(nproc)                 # physcores; oversubscribe 금지 (feedback: vast el-ph safe launch)\n"
+    s = s + "\n"
+    s = s + "# --- 1. vc-relax (" + target_p + " GPa target) ---\n"
+    s = s + "mpirun -np \"$NP\" pw.x -inp vc-relax.in > vc-relax.out 2>&1\n"
+    s = s + "grep -q \"JOB DONE\" vc-relax.out || { echo \"vc-relax FAILED\"; exit 1; }\n"
+    s = s + "\n"
+    s = s + "# --- 1b. 갱신: 완화된 celldm + ATOMIC_POSITIONS 를 scf.in 으로 전파 ---\n"
+    s = s + "#   (relaxed CELL_PARAMETERS / 마지막 ATOMIC_POSITIONS 블록을 scf.in 에 반영.\n"
+    s = s + "#    수동/스크립트 둘 다 가능 — 디스패처가 vc-relax.out 의 final geometry 를 파싱해 scf.in 패치)\n"
+    s = s + "\n"
+    s = s + "# --- 2. scf (relaxed geometry) ---\n"
+    s = s + "mpirun -np \"$NP\" pw.x -inp scf.in > scf.out 2>&1\n"
+    s = s + "grep -q \"JOB DONE\" scf.out || { echo \"scf FAILED\"; exit 1; }\n"
+    s = s + "\n"
+    s = s + "# --- 3. phonon + el-ph (simple) ---\n"
+    s = s + "mpirun -np \"$NP\" ph.x -inp ph.in > ph.out 2>&1\n"
+    s = s + "grep -q \"JOB DONE\" ph.out || { echo \"ph FAILED\"; exit 1; }\n"
+    s = s + "\n"
+    s = s + "echo \"JOB DONE\"\n"
+    s = s + "```\n"
+    s = s + "\n"
+    s = s + "> 동적 불안정(허수 freq) → 위 §1 압력 fallback(" + fb_p + " GPa)으로 재발사.\n"
+    s = s + "\n"
+    s = s + "## 5. 파서 (parser)\n"
+    s = s + "\n"
+    s = s + "- `parser_template: rtsc-dft-elph`\n"
+    s = s + "- 입력: `ph.out` 의 λ(electron-phonon coupling) / ω_log(logarithmic avg phonon freq)\n"
+    s = s + "- 산출: **allen_dynes_tc** (Allen-Dynes McMillan Tc, μ* = 0.10~0.13 스캔)\n"
+    s = s + "- el_ph_nsigma=10 의 σ-scan 플래토에서 수렴 λ 채택.\n"
+    s = s + "\n"
+    s = s + "## 6. INFRA-READY 계약 (4 prereqs)\n"
+    s = s + "\n"
+    s = s + "| prereq | 충족 | 위치 |\n"
+    s = s + "|--------|------|------|\n"
+    s = s + "| runnable | ✅ | RUNBOOK.md §4 run 체인 (pod 위 materialize) |\n"
+    s = s + "| inputs   | ✅ | `vc-relax.in` · `scf.in` · `ph.in` (이 디렉터리) |\n"
+    s = s + "| parser   | ✅ | `parser_template: rtsc-dft-elph` (§5) |\n"
+    s = s + "| workdir  | ✅ | `exports/rtsc/decks/" + a_sym + "BeH8/` |\n"
+    s = s + "\n"
+    s = s + "**INFRA-READY: 4/4** — /micro-exp vast.ai 발사 준비 완료.\n"
+    s = s + "provider 우선순위 = vast.ai → runpod fallback (d17)."
+    return s
+}
+
+// ── perovskite Pm-3m prototype (CaAuH3 best-effort) ──────────────────
+//
+// NOTE: SrAuH3/CaAuH3 author-style decks use lowercase namelist names,
+// absolute /home/aiden/... paths, and structurally distinct comments
+// from the BeH8 deck. This emitter captures the STRUCTURAL essentials
+// (Pm-3m, 5-atom, ibrav=1, octahedral H) — does NOT byte-match the
+// hand-authored author-style variations. Use for new-perovskite decks;
+// regen of the CaAuH3 deck will diverge stylistically (TODO d6 honest).
+
+fn _rtsc_perovskite_vc_relax(spec: DeckSpec) -> string {
+    let prefix    = spec_get(spec, "prefix")               // "caauh3"
+    let a_sym     = spec_get(spec, "a_site_symbol")        // "Ca"
+    let b_sym     = spec_get(spec, "b_site_symbol")        // "Au"
+    let a_mass    = spec_get(spec, "a_site_mass")          // "40.078"
+    let b_mass    = spec_get(spec, "b_site_mass")          // "196.967"
+    let a_upf     = spec_get(spec, "a_site_upf")           // "Ca.pbe-spn-rrkjus_psl.1.0.0.UPF"
+    let b_upf     = spec_get(spec, "b_site_upf")           // "Au.pbe-n-rrkjus_psl.1.0.0.UPF"
+    let celldm    = spec_get(spec, "celldm_bohr")          // "6.8361"
+    let a_anchor  = spec_get_or(spec, "anchor_a_ang",      "3.828")
+    let a_ang     = spec_get_or(spec, "a_conv_ang",        "3.618")
+    let contract  = spec_get_or(spec, "contraction_pct",   "5-7")
+    let press_kb  = spec_get_or(spec, "pressure_kbar",     "50.0")
+    let outdir    = spec_get_or(spec, "outdir",            "./out")
+    let pseudo    = spec_get_or(spec, "pseudo_dir",        "./pseudo")
+    let mixing    = spec_get_or(spec, "mixing_beta",       "0.4")
+    let degauss   = spec_get_or(spec, "degauss",           "0.02")
+
+    let mut s = ""
+    s = s + "&control\n"
+    s = s + "  ! Pm-3m perovskite-hydride — " + a_sym + b_sym + "H3 prototype (RTSC candidate).\n"
+    s = s + "  ! Anchor: " + a_sym + b_sym + "H3 cubic perovskite Pm-3m anchor a~" + a_anchor + " Ang.\n"
+    s = s + "  ! START celldm(1)=" + celldm + " Bohr (~" + a_ang + " Ang, " + contract + "% contraction).\n"
+    s = s + "  ! vc-relax FINDS the true a. nosym guard: avoids point-group misdetection.\n"
+    s = s + "  calculation = 'vc-relax'\n"
+    s = s + "  prefix = '" + prefix + "'\n"
+    s = s + "  outdir = '" + outdir + "'\n"
+    s = s + "  pseudo_dir = '" + pseudo + "'\n"
+    s = s + "  tprnfor = .true.\n"
+    s = s + "  tstress = .true.\n"
+    s = s + "  forc_conv_thr = 1.0d-4\n"
+    s = s + "  etot_conv_thr = 1.0d-5\n"
+    s = s + "  nstep = 200\n"
+    s = s + "  verbosity = 'low'\n"
+    s = s + "/\n"
+    s = s + "&system\n"
+    s = s + "  ! ibrav=1 simple cubic; 5-atom perovskite cell (1 " + a_sym + " + 1 " + b_sym + " + 3 H).\n"
+    s = s + "  ! Pm-3m: " + a_sym + " at A-site (1/2,1/2,1/2), " + b_sym + " at B-site (0,0,0),\n"
+    s = s + "  !   H at the 3 face-centers — " + b_sym + "-H octahedral framework.\n"
+    s = s + "  ibrav = 1\n"
+    s = s + "  celldm(1) = " + celldm + "\n"
+    s = s + "  nat = 5\n"
+    s = s + "  ntyp = 3\n"
+    s = s + "  ecutwfc = 80.0\n"
+    s = s + "  ecutrho = 640.0\n"
+    s = s + "  nosym = .true.\n"
+    s = s + "  occupations = 'smearing'\n"
+    s = s + "  smearing = 'mp'\n"
+    s = s + "  degauss = " + degauss + "\n"
+    s = s + "/\n"
+    s = s + "&electrons\n"
+    s = s + "  ! d15 small-gap SCF aids (metallic perovskite): tight conv + maxiter headroom.\n"
+    s = s + "  conv_thr = 1.0d-10\n"
+    s = s + "  mixing_beta = " + mixing + "\n"
+    s = s + "  electron_maxstep = 400\n"
+    s = s + "/\n"
+    s = s + "&ions\n"
+    s = s + "  ion_dynamics = 'bfgs'\n"
+    s = s + "/\n"
+    s = s + "&cell\n"
+    s = s + "  cell_dynamics = 'bfgs'\n"
+    s = s + "  press = " + press_kb + "\n"
+    s = s + "  press_conv_thr = 0.5\n"
+    s = s + "/\n"
+    s = s + "\n"
+    s = s + "ATOMIC_SPECIES\n"
+    s = s + "  " + a_sym + " " + a_mass + "  " + a_upf + "\n"
+    s = s + "  " + b_sym + " " + b_mass + " " + b_upf + "\n"
+    s = s + "  H  1.008   H.pbe-rrkjus_psl.1.0.0.UPF\n"
+    s = s + "ATOMIC_POSITIONS crystal\n"
+    s = s + "  " + a_sym + " 0.5 0.5 0.5\n"
+    s = s + "  " + b_sym + " 0.0 0.0 0.0\n"
+    s = s + "  H  0.5 0.0 0.0\n"
+    s = s + "  H  0.0 0.5 0.0\n"
+    s = s + "  H  0.0 0.0 0.5\n"
+    s = s + "K_POINTS automatic\n"
+    s = s + "  12 12 12 0 0 0\n"
+    return s
+}
+
+fn _rtsc_perovskite_scf(spec: DeckSpec) -> string {
+    // scf.in mirrors vc-relax.in with calculation='scf', no &cell/&ions.
+    // Same structural fields; positions/celldm REPLACED post-relax.
+    let prefix    = spec_get(spec, "prefix")
+    let a_sym     = spec_get(spec, "a_site_symbol")
+    let b_sym     = spec_get(spec, "b_site_symbol")
+    let a_mass    = spec_get(spec, "a_site_mass")
+    let b_mass    = spec_get(spec, "b_site_mass")
+    let a_upf     = spec_get(spec, "a_site_upf")
+    let b_upf     = spec_get(spec, "b_site_upf")
+    let celldm    = spec_get(spec, "celldm_bohr")
+    let outdir    = spec_get_or(spec, "outdir",            "./out")
+    let pseudo    = spec_get_or(spec, "pseudo_dir",        "./pseudo")
+    let mixing    = spec_get_or(spec, "mixing_beta",       "0.4")
+    let degauss   = spec_get_or(spec, "degauss",           "0.02")
+
+    let mut s = ""
+    s = s + "&control\n"
+    s = s + "  calculation = 'scf'\n"
+    s = s + "  prefix = '" + prefix + "'\n"
+    s = s + "  outdir = '" + outdir + "'\n"
+    s = s + "  pseudo_dir = '" + pseudo + "'\n"
+    s = s + "  verbosity = 'high'\n"
+    s = s + "  tstress = .true.\n"
+    s = s + "  tprnfor = .true.\n"
+    s = s + "/\n"
+    s = s + "&system\n"
+    s = s + "  ibrav = 1\n"
+    s = s + "  celldm(1) = " + celldm + "    ! REPLACE with relaxed value from vc-relax.out\n"
+    s = s + "  nat = 5\n"
+    s = s + "  ntyp = 3\n"
+    s = s + "  ecutwfc = 80.0\n"
+    s = s + "  ecutrho = 640.0\n"
+    s = s + "  nosym = .true.\n"
+    s = s + "  occupations = 'smearing'\n"
+    s = s + "  smearing = 'mp'\n"
+    s = s + "  degauss = " + degauss + "\n"
+    s = s + "/\n"
+    s = s + "&electrons\n"
+    s = s + "  conv_thr = 1.0d-10\n"
+    s = s + "  mixing_beta = " + mixing + "\n"
+    s = s + "  electron_maxstep = 400\n"
+    s = s + "/\n"
+    s = s + "ATOMIC_SPECIES\n"
+    s = s + "  " + a_sym + " " + a_mass + "  " + a_upf + "\n"
+    s = s + "  " + b_sym + " " + b_mass + " " + b_upf + "\n"
+    s = s + "  H  1.008   H.pbe-rrkjus_psl.1.0.0.UPF\n"
+    s = s + "! REPLACE positions below with relaxed ATOMIC_POSITIONS from vc-relax.out\n"
+    s = s + "ATOMIC_POSITIONS crystal\n"
+    s = s + "  " + a_sym + " 0.5 0.5 0.5\n"
+    s = s + "  " + b_sym + " 0.0 0.0 0.0\n"
+    s = s + "  H  0.5 0.0 0.0\n"
+    s = s + "  H  0.0 0.5 0.0\n"
+    s = s + "  H  0.0 0.0 0.5\n"
+    s = s + "K_POINTS automatic\n"
+    s = s + "  12 12 12 0 0 0\n"
+    return s
+}
+
+fn _rtsc_perovskite_ph(spec: DeckSpec) -> string {
+    let prefix = spec_get(spec, "prefix")
+    let a_sym  = spec_get(spec, "a_site_symbol")
+    let b_sym  = spec_get(spec, "b_site_symbol")
+    let nq     = spec_get_or(spec, "nq", "4")
+    let outdir = spec_get_or(spec, "outdir", "./out")
+
+    let mut s = ""
+    s = s + a_sym + b_sym + "H3 phonon + electron-phonon " + nq + "x" + nq + "x" + nq + " q (perovskite-hydride)\n"
+    s = s + "&inputph\n"
+    s = s + "  prefix = '" + prefix + "'\n"
+    s = s + "  outdir = '" + outdir + "'\n"
+    s = s + "  fildyn = '" + prefix + ".dyn'\n"
+    s = s + "  fildvscf = '" + prefix + ".dvscf'\n"
+    s = s + "  ! ldisp + " + nq + "x" + nq + "x" + nq + " q-mesh; SC cubic symmetry -> irreducible q-points reduced.\n"
+    s = s + "  ldisp = .true.\n"
+    s = s + "  nq1 = " + nq + ", nq2 = " + nq + ", nq3 = " + nq + "\n"
+    s = s + "  tr2_ph = 1.0d-14\n"
+    s = s + "  recover = .true.\n"
+    s = s + "  ! 'simple' el-ph: double-delta EPC, swept over el_ph_nsigma broadenings.\n"
+    s = s + "  ! Harvest reads the sigma-plateau lambda (NOT the monotone-broadening tail).\n"
+    s = s + "  electron_phonon = 'simple'\n"
+    s = s + "  el_ph_sigma = 0.005\n"
+    s = s + "  el_ph_nsigma = 10\n"
+    s = s + "/\n"
+    return s
+}
+
+fn _rtsc_perovskite_runbook(spec: DeckSpec) -> string {
+    let a_sym = spec_get(spec, "a_site_symbol")
+    let b_sym = spec_get(spec, "b_site_symbol")
+    let press = spec_get_or(spec, "pressure_gpa", "50")
+    let mut s = ""
+    s = s + "# " + a_sym + b_sym + "H3 — RTSC perovskite-hydride 런북 (BUILD 산출물)\n"
+    s = s + "\n"
+    s = s + "> Pm-3m perovskite-hydride RTSC 후보. 압력 " + press + " GPa.\n"
+    s = s + "> TODO(d6 honest): 이 RUNBOOK 은 BeH8 clathrate prototype 의 구조 테이블 파트만 채움.\n"
+    s = s + "> author-style 세부 (절대 경로, 단락별 세부 설명)은 해당 캐페인 따라 확장해야 함.\n"
+    s = s + "\n"
+    s = s + "## 1. 구조\n"
+    s = s + "\n"
+    s = s + "- 공간군: Pm-3m (SG 221), simple cubic\n"
+    s = s + "- ibrav = 1, nat = 5 (1 " + a_sym + " + 1 " + b_sym + " + 3 H)\n"
+    s = s + "- " + a_sym + " @ A-site (1/2,1/2,1/2), " + b_sym + " @ B-site (0,0,0), H @ 3 face-centers\n"
+    s = s + "- 목표 압력: " + press + " GPa\n"
+    s = s + "\n"
+    s = s + "## 2. 실행 체인\n"
+    s = s + "\n"
+    s = s + "vc-relax → scf → ph (el-ph simple). NP=$(nproc), oversubscribe 금지.\n"
+    return s
+}
+
+// ── numeric helpers (str-side, exact) ────────────────────────────────
+
+fn _to_int_safe(s: string) -> int {
+    // Cheap atoi for single-digit nq values ("2", "4", "8").
+    if len(s) == 0 { return 0 }
+    let ch = s.substring(0, 1)
+    let c = ord(ch) - 48
+    if c < 0 { return 0 }
+    if c > 9 { return 0 }
+    let mut n = c
+    let mut i = 1
+    while i < len(s) {
+        let d = ord(s.substring(i, i+1)) - 48
+        if d < 0 { return n }
+        if d > 9 { return n }
+        n = n * 10 + d
+        i = i + 1
+    }
+    return n
+}
+
+fn _int_pow(b: int, e: int) -> int {
+    let mut r = 1
+    let mut i = 0
+    while i < e { r = r * b; i = i + 1 }
+    return r
+}
