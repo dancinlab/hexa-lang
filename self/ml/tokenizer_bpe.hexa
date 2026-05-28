@@ -25,7 +25,8 @@ struct BPETokenizer {
     token_to_id:  array,     // same as vocab for lookup
     id_to_token:  array,     // array indexed by id -> token_str (sparse)
     vocab_size:   int,
-    merge_ranks:  array      // array of [pair_key, rank] for O(1) lookup
+    merge_ranks:  array,     // {pair_key: rank} hash map — O(1) merge-priority lookup
+    token_id_map: array      // {token_str: id} hash map — O(1) encode lookup
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -184,29 +185,29 @@ fn load_vocab(path) {
 
 // ═══════════════════════════════════════════════════════════════
 //  Build merge rank lookup
-//  Returns array of ["a b", rank] pairs for fast priority lookup.
+//  Returns a {"a b": rank} hash map for O(1) priority lookup. The
+//  previous form was an array of ["a b", rank] scanned linearly per
+//  pair — O(n_merges) × O(word_len²) made full-vocab corpora (Qwen
+//  V=151643, 151388 merges) effectively non-terminating.
 // ═══════════════════════════════════════════════════════════════
 fn build_merge_ranks(merges) {
-    let mut ranks = []
+    let mut ranks = {}
     let mut i = 0
     while i < len(merges) {
         let key = merges[i][0] + " " + merges[i][1]
-        ranks.push([key, i])
+        ranks[key] = i
         i = i + 1
     }
     return ranks
 }
 
-// Look up merge rank for a pair. Returns -1 if not found.
+// Look up merge rank for a pair. Returns -1 if not found. O(1) map probe;
+// the contains-key guard avoids the runtime's "key not found" stderr path
+// on the common miss (most adjacent pairs have no merge rule).
 fn get_merge_rank(merge_ranks, a, b) {
     let key = a + " " + b
-    let mut i = 0
-    let n = len(merge_ranks)
-    while i < n {
-        if merge_ranks[i][0] == key {
-            return merge_ranks[i][1]
-        }
-        i = i + 1
+    if map_contains_key(merge_ranks, key) {
+        return merge_ranks[key]
     }
     return -1
 }
@@ -223,6 +224,7 @@ fn bpe_load(merges_path, vocab_path) {
     let id_to_token = vocab_result[1]
     let vocab_size = vocab_result[2]
     let merge_ranks = build_merge_ranks(merges)
+    let token_id_map = build_token_id_map(vocab)
 
     let t1 = clock()
     let ms = (t1 - t0) * 1000.0
@@ -235,9 +237,23 @@ fn bpe_load(merges_path, vocab_path) {
         token_to_id: vocab,
         id_to_token: id_to_token,
         vocab_size: vocab_size,
-        merge_ranks: merge_ranks
+        merge_ranks: merge_ranks,
+        token_id_map: token_id_map
     }
     return tok
+}
+
+// Build the {token_str: id} hash map for O(1) encode-side lookup. Replaces
+// the linear scan over the [token, id] vocab array (151643 entries) that
+// bpe_token_lookup ran once per emitted token.
+fn build_token_id_map(vocab) {
+    let mut m = {}
+    let mut i = 0
+    while i < len(vocab) {
+        m[vocab[i][0]] = vocab[i][1]
+        i = i + 1
+    }
+    return m
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -271,6 +287,7 @@ fn bpe_load_from_dict(merges_list, vocab_dict) {
     }
 
     let merge_ranks = build_merge_ranks(merges_list)
+    let token_id_map = build_token_id_map(pairs)
 
     let tok = BPETokenizer {
         merges: merges_list,
@@ -278,7 +295,8 @@ fn bpe_load_from_dict(merges_list, vocab_dict) {
         token_to_id: pairs,
         id_to_token: id_to_token,
         vocab_size: max_id + 1,
-        merge_ranks: merge_ranks
+        merge_ranks: merge_ranks,
+        token_id_map: token_id_map
     }
     return tok
 }
@@ -398,15 +416,12 @@ fn bpe_encode(tok, text) {
     return all_ids
 }
 
-// Look up a token string in vocab. Returns 0 (UNK) if not found.
+// Look up a token string in vocab. Returns 0 (UNK) if not found. O(1) map
+// probe; the contains-key guard keeps the UNK miss off the runtime's
+// "key not found" stderr path.
 fn bpe_token_lookup(tok, token_str) {
-    let mut i = 0
-    let n = len(tok.vocab)
-    while i < n {
-        if tok.vocab[i][0] == token_str {
-            return tok.vocab[i][1]
-        }
-        i = i + 1
+    if map_contains_key(tok.token_id_map, token_str) {
+        return tok.token_id_map[token_str]
     }
     return 0  // UNK
 }
