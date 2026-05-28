@@ -4111,6 +4111,7 @@ fn cmd_expr_float_compute(rest, fnm: string) {
         println("  tier   = 🟠 INSUFFICIENT")
         println("  reason = float calculator system has NO path for '" + fnm + "'")
         println("  gap    = extend tool/verify_cli.hexa::_recompute_float (계산기시스템 개선 후보)")
+        println("  build  = after adding an arm, rebuild to activate: hexa build tool/verify_cli.hexa")
         return
     }
     // self-verify: recompute a SECOND time — deterministic calc MUST agree.
@@ -4219,6 +4220,7 @@ fn cmd_expr_float(rest_in, fnm: string) {
         println("  tier   = 🟠 INSUFFICIENT")
         println("  reason = float calculator system has NO path for '" + fnm + "'")
         println("  gap    = extend tool/verify_cli.hexa::_recompute_float (계산기시스템 개선 후보)")
+        println("  build  = after adding an arm, rebuild to activate: hexa build tool/verify_cli.hexa")
         return
     }
     let diff = _fabs(got - v)
@@ -4329,6 +4331,7 @@ fn cmd_expr_compute(rest, ops: int) {
         println("  tier   = 🟠 INSUFFICIENT")
         println("  reason = calculator system has NO path for '" + fnm + "'")
         println("  gap    = extend tool/verify_cli.hexa::_recompute (계산기시스템 개선 후보)")
+        println("  build  = after adding an arm, rebuild to activate: hexa build tool/verify_cli.hexa")
         return
     }
     // self-verify: recompute a SECOND time — deterministic calc MUST agree.
@@ -4440,6 +4443,7 @@ fn cmd_expr(rest_in) {
         println("  tier   = 🟠 INSUFFICIENT")
         println("  reason = calculator system has NO path for '" + fnm + "'")
         println("  gap    = extend tool/verify_cli.hexa::_recompute (계산기시스템 개선 후보)")
+        println("  build  = after adding an arm, rebuild to activate: hexa build tool/verify_cli.hexa")
         return
     }
     if got == v {
