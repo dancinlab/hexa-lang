@@ -11,11 +11,16 @@
 //   hexa tool/fixpoint_check.hexa --live        # run 3x compile chain
 //   hexa tool/fixpoint_check.hexa --ic-scan PATH # scan .c for IC drift
 //
-// Blockers:
-//   ROI #152 (hexat circular rebuild regression) MUST close before --live
-//   is allowed to rebuild interp. See:
-//     - project_hexat_circular_rebuild_20260417.md
-//     - feedback_seed_freeze.md
+// Blockers (UPDATED 2026-05-29 — F3-roi152):
+//   ROI #152 (hexat circular rebuild regression) is RESOLVED 2026-04-19
+//   per doc/audit/loop_guard_hexa_cc_rollback_20260420.md (fixes
+//   fcf275f4 / b5c21ad8 / c461f60a / c91cfcf3). The actual --live
+//   blocker today is PATH OBSOLESCENCE: build/hexa_interp and
+//   self/hexa_full.hexa were retired when the campaign moved to the
+//   aprime_cc chain (S3 fixpoint PROVEN 2026-05-20, cycle 41 closure
+//   md5 4197fd52560f3acca059a197b000c83c).
+//   Run `hexa-run tool/fixpoint_precheck.hexa` for the honest gate map
+//   + next-session roadmap.
 //
 // Output: plain lines + a JSON report at build/fixpoint_report.json.
 
