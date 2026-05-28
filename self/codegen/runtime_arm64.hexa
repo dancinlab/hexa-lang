@@ -5449,6 +5449,68 @@ fn test_rt_strndup() {
     }
 }
 
+// ── rt_free_noop (F3 class-B HARD libc-routed scale-out — trivial leaf) ──
+//
+// void hxlcl_free(void *p) { (void)p; }
+//
+// The runtime.c body is a literal noop — the bump allocator (hxlcl_malloc)
+// never reclaims, so free is a no-op. Self-emit body is therefore the
+// SHORTEST possible function: a single `ret` instruction (no frame, no
+// stack, no callee-save). 4 bytes, 0 relocs. This is the cheapest possible
+// class-B activation and a stress test of the BEHAVIORAL-equivalence model:
+// the emitted .o body and the static C body BOTH discard `p` without
+// touching it, so any caller behavior is identical.
+//
+// macOS arm64 AAPCS · 1 instruction, 4 bytes · zero relocs.
+// Registers: x0=p (unused, callee-discarded).
+// Returns: void (x0 is don't-care after ret).
+fn rt_free_noop() {
+    let mut c = []
+    // ret  (return; x0 don't-care) 0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
+// rt_free_noop has NO relocations — trivial leaf, no inner bl, no data refs.
+// Empty parallel arrays kept for uniformity with other class-B HARD shadows.
+fn rt_free_noop_reloc_offs() {
+    let o = []
+    return o
+}
+fn rt_free_noop_reloc_kinds() {
+    let k = []
+    return k
+}
+
+fn test_rt_free_noop() {
+    println("test_rt_free_noop (F3 class-B HARD libc-routed scale-out · trivial leaf)")
+    let mut ok = true
+    let s = rt_free_noop()
+    println("  rt_free_noop : " + to_string(len(s)) + " bytes (4 expected)")
+    if len(s) != 4 {
+        println("  FAIL: rt_free_noop expected 4 bytes"); ok = false
+    }
+    // ret (c0 03 5f d6) @ 0 — the entire body
+    if s[0] != 192 || s[1] != 3 || s[2] != 95 || s[3] != 214 {
+        println("  FAIL: ret instruction mismatch"); ok = false
+    }
+    // reloc table: zero entries (no inner bl, no data ref)
+    let offs = rt_free_noop_reloc_offs()
+    let kinds = rt_free_noop_reloc_kinds()
+    if len(offs) != 0 {
+        println("  FAIL: reloc offset expected [] (trivial leaf)"); ok = false
+    }
+    if len(kinds) != 0 {
+        println("  FAIL: reloc kind expected [] (trivial leaf)"); ok = false
+    }
+    if ok {
+        println("  ALL CHECKS PASS")
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // === class-D HexaVal-repr bodies (F3 wall-extension · BEHAVIORAL self-emit) ===
 // ═══════════════════════════════════════════════════════════════════════
@@ -5985,3 +6047,4 @@ test_runtime_arm64()
 test_neon_string_ops()
 test_rt_strdup()
 test_rt_strndup()
+test_rt_free_noop()
