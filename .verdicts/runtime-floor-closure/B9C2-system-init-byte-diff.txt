@@ -1,0 +1,29 @@
+========================================================================
+  stdlib/sscb — system_init_byte_diff: B9.C-2 .c-leg byte-diff oracle
+========================================================================
+  generator: stdlib/sscb/firmware/src/system_init_emit.hexa
+  oracle:    arm-none-eabi-gcc byte-diff vs hand-written src/system_init.c
+  target:    ARMv7E-M Cortex-M4 + FPv4-SP-D16 freestanding (sscb firmware)
+  gates:     source-text · whole-file .o (no -g) · .text section (with -g)
+
+  scratch: /var/folders/2g/blzd56lx2rvfvt61c1pc9g7r0000gn/T/system_init_byte_diff.XXXXXX.pok8uR5xUr
+
+  [PASS] arm-none-eabi-gcc + objcopy + objdump present
+         · gcc=y objcopy=y objdump=y
+  [PASS] hexa emitter src/system_init_emit.hexa present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a62d28aa42bfaa908/stdlib/sscb/firmware/src/system_init_emit.hexa
+  [PASS] hand-written src/system_init.c present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a62d28aa42bfaa908/stdlib/sscb/firmware/src/system_init.c
+  [PASS] gate-1 source-text byte-identical (sha256(.c))
+         · orig=099955c57ab2a5a2353f9e0fba2db0ac8a799bb922ec9344424e78f10436c650 gen=099955c57ab2a5a2353f9e0fba2db0ac8a799bb922ec9344424e78f10436c650
+  [PASS] gate-2 whole-file .o byte-identical (no -g)
+         · orig=b2f3845bb2b265304a77492c1fe0fcb5e464a0941420de77274232c5b982bc59 gen=b2f3845bb2b265304a77492c1fe0fcb5e464a0941420de77274232c5b982bc59
+  [PASS] gate-3 .text.system_init section byte-identical (with -g)
+         · orig=4aab243372a0f0fc19fc4b58fd71bba9d0f6ec7eba2d77cb3994aa67528daf59 gen=4aab243372a0f0fc19fc4b58fd71bba9d0f6ec7eba2d77cb3994aa67528daf59
+
+  B9.C-2 system_init.c .c-leg byte-identity:
+    PROVEN ✓ — hand-written system_init.c is fully hexa-emittable.
+    DELETION GATE OPEN — src/system_init.c may be `git rm`.
+========================================================================
+  6/6 checks passed
+__HEXA_LANG_SSCB_SYSTEM_INIT_BYTE_DIFF__ PASS

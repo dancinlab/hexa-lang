@@ -38,8 +38,15 @@ LDFLAGS := \
   -nostdlib -nostartfiles -ffreestanding
 
 # Hand-written firmware C sources, MINUS any files now generated at build time
-# from hexa emitters (B9.C-1 .c-leg pattern — see ADC_DMA_GEN below).
-C_SRC := $(filter-out src/adc_dma.c,$(wildcard src/*.c))
+# from hexa emitters (B9.C-1 / B9.C-2 .c-leg pattern — see *_GEN below).
+# B9.C-1 (#1847): adc_dma.c
+# B9.C-2 (this batch): gate_driver.c · system_init.c · fault_handler.c · main.c
+C_SRC := $(filter-out src/adc_dma.c \
+                       src/gate_driver.c \
+                       src/system_init.c \
+                       src/fault_handler.c \
+                       src/main.c, \
+                       $(wildcard src/*.c))
 
 HEXA_RUN  ?= hexa-run
 REPO_ROOT ?= $(abspath $(CURDIR)/../../..)
@@ -65,7 +72,32 @@ S_SRC     := $(S_GEN)
 ADC_DMA_GEN ?= $(REPO_ROOT)/stdlib/sscb/firmware/src/adc_dma_emit.hexa
 ADC_DMA_C   := src/adc_dma.c
 
-OBJS := $(C_SRC:src/%.c=build/%.o) build/adc_dma.o $(S_SRC:startup/%.s=build/%.o)
+# Hexa-emitted firmware sources (B9.C-2 batch — gate_driver / system_init /
+# fault_handler / main). Same pattern as ADC_DMA above: each .c is generated
+# at build time from its `_emit.hexa` SSOT; the hand-written `.c` was
+# `git rm`d once the per-file byte-diff oracle proved gen ≡ orig 6/6 PASS.
+GATE_DRIVER_GEN   ?= $(REPO_ROOT)/stdlib/sscb/firmware/src/gate_driver_emit.hexa
+GATE_DRIVER_C     := src/gate_driver.c
+SYSTEM_INIT_GEN   ?= $(REPO_ROOT)/stdlib/sscb/firmware/src/system_init_emit.hexa
+SYSTEM_INIT_C     := src/system_init.c
+FAULT_HANDLER_GEN ?= $(REPO_ROOT)/stdlib/sscb/firmware/src/fault_handler_emit.hexa
+FAULT_HANDLER_C   := src/fault_handler.c
+MAIN_GEN          ?= $(REPO_ROOT)/stdlib/sscb/firmware/src/main_emit.hexa
+MAIN_C            := src/main.c
+
+# Link order — preserved exactly from the pre-batch baseline (alphabetical
+# `$(wildcard src/*.c)` sorts to fault_handler · gate_driver · main ·
+# system_init; adc_dma was appended after that wildcard expansion; startup
+# last). Holding the order = byte-identical firmware.elf vs the hand-
+# written-source baseline (deterministic gold reference for the .c → .hexa
+# transition).
+OBJS := $(C_SRC:src/%.c=build/%.o) \
+        build/fault_handler.o \
+        build/gate_driver.o \
+        build/main.o \
+        build/system_init.o \
+        build/adc_dma.o \
+        $(S_SRC:startup/%.s=build/%.o)
 
 .PHONY: all clean check size
 all: build/firmware.elf build/firmware.bin build/firmware.hex
@@ -93,6 +125,32 @@ $(ADC_DMA_C): $(ADC_DMA_GEN)
 build/adc_dma.o: $(ADC_DMA_C) | build
 	$(CC) $(CFLAGS) -c $< -o $@
 
+# Hexa-emitted B9.C-2 batch — gate_driver / system_init / fault_handler /
+# main. Same shape as the adc_dma rule above; each emitter is the SSOT.
+$(GATE_DRIVER_C): $(GATE_DRIVER_GEN)
+	$(HEXA_RUN) $(GATE_DRIVER_GEN) $@
+
+build/gate_driver.o: $(GATE_DRIVER_C) | build
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(SYSTEM_INIT_C): $(SYSTEM_INIT_GEN)
+	$(HEXA_RUN) $(SYSTEM_INIT_GEN) $@
+
+build/system_init.o: $(SYSTEM_INIT_C) | build
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(FAULT_HANDLER_C): $(FAULT_HANDLER_GEN)
+	$(HEXA_RUN) $(FAULT_HANDLER_GEN) $@
+
+build/fault_handler.o: $(FAULT_HANDLER_C) | build
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(MAIN_C): $(MAIN_GEN)
+	$(HEXA_RUN) $(MAIN_GEN) $@
+
+build/main.o: $(MAIN_C) | build
+	$(CC) $(CFLAGS) -c $< -o $@
+
 build/%.o: startup/%.s | build
 	$(CC) $(ASFLAGS) -c $< -o $@
 
@@ -113,6 +171,10 @@ clean:
 	rm -rf build
 	rm -f $(S_GEN)
 	rm -f $(ADC_DMA_C)
+	rm -f $(GATE_DRIVER_C)
+	rm -f $(SYSTEM_INIT_C)
+	rm -f $(FAULT_HANDLER_C)
+	rm -f $(MAIN_C)
 
 check:
 	@command -v $(CC) >/dev/null 2>&1 || { echo "MISSING: $(CC)  (brew install --cask gcc-arm-embedded)"; exit 1; }

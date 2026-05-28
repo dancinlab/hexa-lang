@@ -1,0 +1,87 @@
+#!hexa strict
+// stdlib/sscb/firmware/src/system_init_emit.hexa
+//   B9.C-2 (.c-leg batch · #1847 pattern) — system_init.c source emitter.
+//
+// Mirrors adc_dma_emit.hexa one-to-one. Emits the SSCB firmware
+// `system_init.c` — clock-tree from engineering_pack §5.3
+// (HSE 8 MHz × PLL → SYSCLK 180 MHz, AHB 180, APB1 45, APB2 90).
+//
+// Three top-level fns: system_init · comparator_init · host_iface_init.
+//
+// Invocation:
+//   hexa-run stdlib/sscb/firmware/src/system_init_emit.hexa <output-path>
+//
+// Default output path (if argv missing): "system_init.c" in cwd.
+
+let MODULE_NAME = "system_init_emit"
+
+fn emit_system_init_c() -> str {
+    // Verbatim content of hand-written stdlib/sscb/firmware/src/system_init.c
+    let s = "/* system_init.c — clock tree from engineering_pack §5.3.\n" +
+            " * HSE 8 MHz × PLL → SYSCLK 180 MHz, AHB 180, APB1 45, APB2 90.\n" +
+            " */\n" +
+            "#include \"stm32f4xx_min.h\"\n" +
+            "#include \"sscb.h\"\n" +
+            "\n" +
+            "void system_init(void) {\n" +
+            "    /* Enable HSE oscillator and wait for stable */\n" +
+            "    RCC->CR |= RCC_CR_HSEON;\n" +
+            "    while (!(RCC->CR & RCC_CR_HSERDY)) { /* spin */ }\n" +
+            "\n" +
+            "    /* Configure PLL: HSE 8 MHz / M=4 = 2 MHz × N=180 = 360 MHz / P=2 = 180 MHz */\n" +
+            "    /* PLLCFGR: PLLSRC=HSE, M=4, N=180, P=00b(/2), Q=7 */\n" +
+            "    RCC->PLLCFGR = (1u << 22)         /* PLLSRC = HSE */\n" +
+            "                 | (4u  << 0)         /* PLLM   = 4   */\n" +
+            "                 | (180u << 6)        /* PLLN   = 180 */\n" +
+            "                 | (0u   << 16)       /* PLLP   = /2  */\n" +
+            "                 | (7u   << 24);      /* PLLQ   = /7  (USB 48 MHz, unused) */\n" +
+            "\n" +
+            "    /* APB1 / APB2 prescalers: APB1 /4 (45 MHz), APB2 /2 (90 MHz), AHB /1 */\n" +
+            "    RCC->CFGR = (5u << 10)            /* PPRE1 = 0b101 → /4 */\n" +
+            "              | (4u <<  13);          /* PPRE2 = 0b100 → /2 */\n" +
+            "\n" +
+            "    /* Spin up PLL */\n" +
+            "    RCC->CR |= RCC_CR_PLLON;\n" +
+            "    while (!(RCC->CR & RCC_CR_PLLRDY)) { /* spin */ }\n" +
+            "\n" +
+            "    /* Switch SYSCLK to PLL */\n" +
+            "    RCC->CFGR |= RCC_CFGR_SW_PLL;\n" +
+            "    while ((RCC->CFGR & RCC_CFGR_SWS) != RCC_CFGR_SWS_PLL) { /* spin */ }\n" +
+            "\n" +
+            "    /* NVIC priorities — engineering_pack §5.4 */\n" +
+            "    NVIC_SetPriority(TIM1_BRK_TIM9_IRQn, 0);   /* hard trip post-process */\n" +
+            "    NVIC_SetPriority(DMA2_Stream2_IRQn,  1);   /* ADC half-buffer */\n" +
+            "    NVIC_SetPriority(SysTick_IRQn,       14);  /* 1 ms tick */\n" +
+            "\n" +
+            "    NVIC_EnableIRQ(TIM1_BRK_TIM9_IRQn);\n" +
+            "    NVIC_EnableIRQ(DMA2_Stream2_IRQn);\n" +
+            "}\n" +
+            "\n" +
+            "void comparator_init(void) {\n" +
+            "    /* COMP1 + TIM1 BRK wiring — RM0090 §13 (COMP) + §17 (TIM1 BDTR.BKE).\n" +
+            "     * Stub. Production sets COMP1->CSR.EN, COMP1->CSR.OUT routing to BRK_IN,\n" +
+            "     * and TIM1->BDTR.BKE | BKP polarity. */\n" +
+            "}\n" +
+            "\n" +
+            "void host_iface_init(void) {\n" +
+            "    /* SPI2 host command + UART3 921600-baud telemetry log.\n" +
+            "     * Stub — full pin mapping in engineering_pack §3 PCB. */\n" +
+            "}\n"
+    return s
+}
+
+fn main() {
+    let argv = real_args()
+    let out_path = if argv.len() >= 1 { argv[0] } else { "system_init.c" }
+    let c_text = emit_system_init_c()
+    let cmd = "cat > \"" + out_path + "\" <<'__SYSTEM_INIT_EMIT_EOF__'\n" +
+              c_text + "__SYSTEM_INIT_EMIT_EOF__"
+    let _ = exec(cmd)
+    let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
+    if exists_check != "y" {
+        println("[system_init_emit] FATAL: failed to write " + out_path)
+        exit(1)
+    }
+    println("[system_init_emit] wrote " + out_path)
+    exit(0)
+}

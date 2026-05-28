@@ -1,0 +1,29 @@
+========================================================================
+  stdlib/sscb — fault_handler_byte_diff: B9.C-2 .c-leg byte-diff oracle
+========================================================================
+  generator: stdlib/sscb/firmware/src/fault_handler_emit.hexa
+  oracle:    arm-none-eabi-gcc byte-diff vs hand-written src/fault_handler.c
+  target:    ARMv7E-M Cortex-M4 + FPv4-SP-D16 freestanding (sscb firmware)
+  gates:     source-text · whole-file .o (no -g) · .text section (with -g)
+
+  scratch: /var/folders/2g/blzd56lx2rvfvt61c1pc9g7r0000gn/T/fault_handler_byte_diff.XXXXXX.USxFRtAMH1
+
+  [PASS] arm-none-eabi-gcc + objcopy + objdump present
+         · gcc=y objcopy=y objdump=y
+  [PASS] hexa emitter src/fault_handler_emit.hexa present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a62d28aa42bfaa908/stdlib/sscb/firmware/src/fault_handler_emit.hexa
+  [PASS] hand-written src/fault_handler.c present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a62d28aa42bfaa908/stdlib/sscb/firmware/src/fault_handler.c
+  [PASS] gate-1 source-text byte-identical (sha256(.c))
+         · orig=ec75bb538c21dd80b2180db69810013fe7f3b9b5b7a75d9ac45d9d31f011c9f7 gen=ec75bb538c21dd80b2180db69810013fe7f3b9b5b7a75d9ac45d9d31f011c9f7
+  [PASS] gate-2 whole-file .o byte-identical (no -g)
+         · orig=3eee56056c67748c09d0d3611fa84fe04b66054872d62d62f84d2e8e6de45ab8 gen=3eee56056c67748c09d0d3611fa84fe04b66054872d62d62f84d2e8e6de45ab8
+  [PASS] gate-3 .text.TIM1_BRK_TIM9_IRQHandler section byte-identical (with -g)
+         · orig=953889b2dc93323a62f8080df459018324abe8f78c8a6bc865736f80501cebde gen=953889b2dc93323a62f8080df459018324abe8f78c8a6bc865736f80501cebde
+
+  B9.C-2 fault_handler.c .c-leg byte-identity:
+    PROVEN ✓ — hand-written fault_handler.c is fully hexa-emittable.
+    DELETION GATE OPEN — src/fault_handler.c may be `git rm`.
+========================================================================
+  6/6 checks passed
+__HEXA_LANG_SSCB_FAULT_HANDLER_BYTE_DIFF__ PASS

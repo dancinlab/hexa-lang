@@ -1,0 +1,62 @@
+#!hexa strict
+// stdlib/sscb/firmware/src/gate_driver_emit.hexa
+//   B9.C-2 (.c-leg batch · #1847 pattern) — gate_driver.c source emitter.
+//
+// Mirrors adc_dma_emit.hexa one-to-one. Emits the SSCB firmware
+// `gate_driver.c` stub (defines `void gate_driver_init(void)` — empty
+// body + §5.1 comment block from module/engineering_pack/README.md).
+//
+// Invocation (from stdlib/sscb/firmware/Makefile):
+//   hexa-run stdlib/sscb/firmware/src/gate_driver_emit.hexa <output-path>
+//
+// Default output path (if argv missing): "gate_driver.c" in cwd.
+//
+// Phase: B9.C-2 batch (gate_driver + system_init + fault_handler + main).
+
+let MODULE_NAME = "gate_driver_emit"
+
+fn emit_gate_driver_c() -> str {
+    // Verbatim content of hand-written stdlib/sscb/firmware/src/gate_driver.c
+    let s = "/* gate_driver.c — TIM1 PWM 30 MHz + dead-time + COMP1→BRK_IN.\n" +
+            " * Source: module/engineering_pack/README.md §5.1 gate_driver_init.\n" +
+            " */\n" +
+            "#include \"stm32f4xx_min.h\"\n" +
+            "#include \"sscb.h\"\n" +
+            "\n" +
+            "void gate_driver_init(void) {\n" +
+            "    /* TIM1 advanced timer config:\n" +
+            "     *   APB2 → TIM1 input clock = 180 MHz (TIM1 special, not /2)\n" +
+            "     *   PSC = 0, ARR = 5  → 30 MHz PWM (180 MHz / 6 = 30 MHz)\n" +
+            "     *   CCR1 = duty (50 % nominal, 0 on trip)\n" +
+            "     *   BDTR.DTG = dead-time generator value (e.g. 80 ns @ 180 MHz = 14)\n" +
+            "     *   BDTR.BKE = 1, BKP = 0 (active-low BRK_IN from COMP1)\n" +
+            "     *   BDTR.MOE = 1 to enable main output, automatically cleared on BRK\n" +
+            "     *\n" +
+            "     * On any BRK trigger (hardware COMP1 or software TIM1->EGR.BG):\n" +
+            "     *   - MOE clears in 1 timer tick (~5.5 ns @ 180 MHz)\n" +
+            "     *   - PWM outputs go to OSSI/OSSR-defined safe state\n" +
+            "     *   - TIM1->SR.BIF latches → TIM1_BRK_TIM9_IRQHandler does logging\n" +
+            "     *\n" +
+            "     * Stub here — production fills in the register writes. The §5.2 verbatim\n" +
+            "     * fault_handler.c above relies on TIM1->EGR.BG being a valid break-event\n" +
+            "     * trigger, which BDTR.BKE=1 guarantees.\n" +
+            "     */\n" +
+            "}\n"
+    return s
+}
+
+fn main() {
+    let argv = real_args()
+    let out_path = if argv.len() >= 1 { argv[0] } else { "gate_driver.c" }
+    let c_text = emit_gate_driver_c()
+    let cmd = "cat > \"" + out_path + "\" <<'__GATE_DRIVER_EMIT_EOF__'\n" +
+              c_text + "__GATE_DRIVER_EMIT_EOF__"
+    let _ = exec(cmd)
+    let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
+    if exists_check != "y" {
+        println("[gate_driver_emit] FATAL: failed to write " + out_path)
+        exit(1)
+    }
+    println("[gate_driver_emit] wrote " + out_path)
+    exit(0)
+}
