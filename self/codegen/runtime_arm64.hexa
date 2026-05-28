@@ -5286,6 +5286,169 @@ fn test_rt_strdup() {
     }
 }
 
+// ── rt_strndup (F3 class-B HARD scale-out — 2nd activated class-B HARD) ──
+//
+// char *strndup(const char *s, size_t cap):
+//   if (!s) return NULL
+//   n = 0
+//   while n < cap && s[n] != 0: n++              (cap-bounded scalar byte loop)
+//   out = malloc(n+1)                             (bl _hxlcl_malloc · BRANCH26)
+//   if (!out) return NULL
+//   for i in 0..<n: out[i] = s[i]                 (scalar byte copy loop)
+//   out[n] = '\0'                                 (explicit NUL — source may lack it)
+//   return out
+//
+// Mechanical port of rt_strdup (PR #1911 / #1917) following the proven recipe:
+//   * Same callee-saved-state shape (s/n/out live across the bl) PLUS a new
+//     callee-saved register for cap (x20 holds cap; x21 holds n; x22 holds out;
+//     x19 holds s — same x19=s convention).
+//   * Same 48-B frame: stp x29/x30 [sp,#-48]! / stp x19,x20 [sp,#16] / str x21
+//     [sp,#32] / str x22 [sp,#40]. (x22 is the new 4th callee-saved slot at +40.)
+//   * Same ONE BRANCH26 reloc for `bl _hxlcl_malloc` (offset shifts from 0x30
+//     to 0x40 because the prologue is one instr longer for the x22 spill +
+//     three extra setup instrs for the cap-bounded length loop).
+//   * Explicit `.Lterm` writes `out[n] = 0` AFTER the copy loop (vs strdup,
+//     which lets the copy loop naturally copy the source NUL): the source may
+//     legitimately lack a NUL within the cap window, so the terminator is
+//     unconditional. This is the ONE behavioral difference vs strdup.
+//
+// macOS arm64 AAPCS · 36 instructions, 144 bytes · ONE BRANCH26 reloc @ 0x40.
+// Registers: x19=s · x20=cap · x21=n · x22=out (all callee-saved, restored);
+//            x9/x10 scratch; bl _hxlcl_malloc clobbers x0..x18 (none live).
+// Bytes below are character-identical to `as -arch arm64` round-trip oracle
+// (verified at PR-prep time, NOT to clang -O2; the F3 wall-reframe holds —
+// behavioral-equivalence, not byte-identity-vs-clang).
+fn rt_strndup() {
+    let mut c = []
+    // 0x00  stp x29, x30, [sp, #-48]!   0xA9BD7BFD
+    c.push(253); c.push(123); c.push(189); c.push(169)
+    // 0x04  mov x29, sp                 0x910003FD
+    c.push(253); c.push(3); c.push(0); c.push(145)
+    // 0x08  stp x19, x20, [sp, #16]     0xA90153F3
+    c.push(243); c.push(83); c.push(1); c.push(169)
+    // 0x0c  str x21, [sp, #32]          0xF90013F5
+    c.push(245); c.push(19); c.push(0); c.push(249)
+    // 0x10  str x22, [sp, #40]          0xF90017F6  (NEW: 4th callee-saved slot for out)
+    c.push(246); c.push(23); c.push(0); c.push(249)
+    // 0x14  cbz x0, .Lnull (+0x64→0x78) 0xB4000320  (if (!s) return NULL)
+    c.push(32); c.push(3); c.push(0); c.push(180)
+    // 0x18  mov x19, x0                 0xAA0003F3  (x19 = s)
+    c.push(243); c.push(3); c.push(0); c.push(170)
+    // 0x1c  mov x20, x1                 0xAA0103F4  (x20 = cap — NEW)
+    c.push(244); c.push(3); c.push(1); c.push(170)
+    // 0x20  mov x21, #0                 0xD2800015  (x21 = n = 0)
+    c.push(21); c.push(0); c.push(128); c.push(210)
+    // 0x24  .Llen: cmp x21, x20         0xEB1402BF  (cmp n, cap — NEW)
+    c.push(191); c.push(2); c.push(20); c.push(235)
+    // 0x28  b.eq .Llen_done (+0x14→0x3c) 0x540000A0  (n==cap → done — NEW)
+    c.push(160); c.push(0); c.push(0); c.push(84)
+    // 0x2c  ldrb w9, [x19, x21]         0x38756A69
+    c.push(105); c.push(106); c.push(117); c.push(56)
+    // 0x30  cbz w9, .Llen_done (+0xc→0x3c) 0x34000069  (NUL terminator)
+    c.push(105); c.push(0); c.push(0); c.push(52)
+    // 0x34  add x21, x21, #1            0x910006B5
+    c.push(181); c.push(6); c.push(0); c.push(145)
+    // 0x38  b .Llen (-0x14→0x24)        0x17FFFFFB
+    c.push(251); c.push(255); c.push(255); c.push(23)
+    // 0x3c  .Llen_done: add x0, x21, #1 0x910006A0  (malloc arg = n+1)
+    c.push(160); c.push(6); c.push(0); c.push(145)
+    // 0x40  bl _hxlcl_malloc [BRANCH26] 0x94000000  (imm zeroed pre-reloc) @ 0x40
+    c.push(0); c.push(0); c.push(0); c.push(148)
+    // 0x44  cbz x0, .Lnull (+0x34→0x78) 0xB40001A0  (malloc failed → NULL)
+    c.push(160); c.push(1); c.push(0); c.push(180)
+    // 0x48  mov x22, x0                 0xAA0003F6  (x22 = out — NEW)
+    c.push(246); c.push(3); c.push(0); c.push(170)
+    // 0x4c  mov x10, #0                 0xD280000A  (i = 0)
+    c.push(10); c.push(0); c.push(128); c.push(210)
+    // 0x50  .Lcopy: cmp x10, x21        0xEB15015F  (cmp i, n — NEW exit-test)
+    c.push(95); c.push(1); c.push(21); c.push(235)
+    // 0x54  b.eq .Lterm (+0x14→0x68)    0x540000A0  (i==n → terminate)
+    c.push(160); c.push(0); c.push(0); c.push(84)
+    // 0x58  ldrb w9, [x19, x10]         0x386A6A69
+    c.push(105); c.push(106); c.push(106); c.push(56)
+    // 0x5c  strb w9, [x22, x10]         0x382A6AC9  (write into out, not strdup's x21)
+    c.push(201); c.push(106); c.push(42); c.push(56)
+    // 0x60  add x10, x10, #1            0x9100054A
+    c.push(74); c.push(5); c.push(0); c.push(145)
+    // 0x64  b .Lcopy (-0x14→0x50)       0x17FFFFFB
+    c.push(251); c.push(255); c.push(255); c.push(23)
+    // 0x68  .Lterm: mov w9, #0          0x52800009  (NUL byte)
+    c.push(9); c.push(0); c.push(128); c.push(82)
+    // 0x6c  strb w9, [x22, x21]         0x38356AC9  (out[n] = '\0' — UNCONDITIONAL)
+    c.push(201); c.push(106); c.push(53); c.push(56)
+    // 0x70  mov x0, x22                 0xAA1603E0  (return out)
+    c.push(224); c.push(3); c.push(22); c.push(170)
+    // 0x74  b .Lret (+0x8→0x7c)         0x14000002
+    c.push(2); c.push(0); c.push(0); c.push(20)
+    // 0x78  .Lnull: mov x0, #0          0xD2800000  (NULL — shared by !s and OOM)
+    c.push(0); c.push(0); c.push(128); c.push(210)
+    // 0x7c  .Lret: ldr x22, [sp, #40]   0xF94017F6
+    c.push(246); c.push(23); c.push(64); c.push(249)
+    // 0x80  ldr x21, [sp, #32]          0xF94013F5
+    c.push(245); c.push(19); c.push(64); c.push(249)
+    // 0x84  ldp x19, x20, [sp, #16]     0xA94153F3
+    c.push(243); c.push(83); c.push(65); c.push(169)
+    // 0x88  ldp x29, x30, [sp], #48     0xA8C37BFD
+    c.push(253); c.push(123); c.push(195); c.push(168)
+    // 0x8c  ret                         0xD65F03C0
+    c.push(192); c.push(3); c.push(95); c.push(214)
+    return c
+}
+
+// Reloc table for rt_strndup — ONE BRANCH26 for `bl _hxlcl_malloc` at __text
+// byte offset 0x40 (64). kind 2 = ARM64_RELOC_BRANCH26, undefined-extern callee
+// (sym_section==0). Same shape as rt_strdup_reloc_* (PR #1911) — only the
+// offset shifts (0x30→0x40) because the prologue carries one extra spill +
+// three extra setup instructions for cap-tracking.
+fn rt_strndup_reloc_offs() {
+    let mut o = []
+    o.push(64)
+    return o
+}
+fn rt_strndup_reloc_kinds() {
+    let mut k = []
+    k.push(2)
+    return k
+}
+
+fn test_rt_strndup() {
+    println("test_rt_strndup (F3 class-B HARD scale-out · behavioral self-emit)")
+    let mut ok = true
+    let s = rt_strndup()
+    println("  rt_strndup : " + to_string(len(s)) + " bytes (144 expected)")
+    if len(s) != 144 {
+        println("  FAIL: rt_strndup expected 144 bytes"); ok = false
+    }
+    // prologue stp x29,x30,[sp,#-48]!  (fd 7b bd a9) @ 0
+    if s[0] != 253 || s[1] != 123 || s[2] != 189 || s[3] != 169 {
+        println("  FAIL: stp x29,x30 prologue (48-B frame) mismatch"); ok = false
+    }
+    // 4th-spill str x22, [sp, #40]  (f6 17 00 f9) @ 0x10 = 16
+    if s[16] != 246 || s[17] != 23 || s[18] != 0 || s[19] != 249 {
+        println("  FAIL: str x22 spill (sp+40, NEW 4th callee-save) mismatch"); ok = false
+    }
+    // bl _hxlcl_malloc (00 00 00 94) @ 0x40 = 64 — the cross-object CALL site
+    if s[64] != 0 || s[65] != 0 || s[66] != 0 || s[67] != 148 {
+        println("  FAIL: bl _hxlcl_malloc (BRANCH26 @0x40) mismatch"); ok = false
+    }
+    // ret (c0 03 5f d6) @ 0x8c = 140
+    if s[140] != 192 || s[141] != 3 || s[142] != 95 || s[143] != 214 {
+        println("  FAIL: ret trailer mismatch"); ok = false
+    }
+    // reloc table: one BRANCH26 @ 64
+    let offs = rt_strndup_reloc_offs()
+    let kinds = rt_strndup_reloc_kinds()
+    if len(offs) != 1 || offs[0] != 64 {
+        println("  FAIL: reloc offset expected [64]"); ok = false
+    }
+    if len(kinds) != 1 || kinds[0] != 2 {
+        println("  FAIL: reloc kind expected [2] (BRANCH26)"); ok = false
+    }
+    if ok {
+        println("  ALL CHECKS PASS")
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // === class-D HexaVal-repr bodies (F3 wall-extension · BEHAVIORAL self-emit) ===
 // ═══════════════════════════════════════════════════════════════════════

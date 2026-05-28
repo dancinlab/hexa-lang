@@ -387,6 +387,22 @@ static char *__attribute__((noinline)) hxlcl_strdup(const char *s) {
     return out;
 }
 #endif
+// F3 class-B HARD SCALE-OUT — hxlcl_strndup Path-A activation (2nd class-B HARD).
+// `extern` under HEXA_RT_SELFEMIT (body supplied by emit_hxlcl_strndup_o.hexa's
+// .o = frame + cap-bounded scalar strlen loop + `bl _hxlcl_malloc` + scalar
+// copy loop + explicit NUL terminator + epilogue, 36 instr / 144 B, 1
+// ARM64_RELOC_BRANCH26 @ 0x40). The BL target hxlcl_malloc is already EXPORTED
+// via HXLCL_MALLOC_SC (see L218-block, landed by PR #1917 for rt_strdup) so
+// ld64 can bind the cross-object call — no NEW callee-export macro needed
+// (strndup REUSES the strdup-era export macro since both call _hxlcl_malloc).
+// Default (guard off) keeps the static body below = 0-libc-extern preserved.
+// 2nd ACTIVATED class-B HARD primitive (39/640) — behavioral-equivalence gate
+// proven by the 4-gate sweep (0-extern byte-id default · self-host fixpoint ·
+// JIT-exec behavioral battery: empty / NUL-before-cap / no-NUL-within-cap /
+// cap=0 / NULL passthrough).
+#ifdef HEXA_RT_SELFEMIT
+extern char *hxlcl_strndup(const char *s, size_t cap);
+#else
 static char *__attribute__((noinline)) hxlcl_strndup(const char *s, size_t cap) {
     if (!s) return NULL;
     size_t n = 0;
@@ -397,6 +413,7 @@ static char *__attribute__((noinline)) hxlcl_strndup(const char *s, size_t cap) 
     out[n] = '\0';
     return out;
 }
+#endif
 // Cycle 48 batch — numeric parse + bzero.
 // RUNTIME.md step-2 — hxlcl_atoll forward-decl; the two-mode DEFINITION
 // (delegating to hexa-source rt_atoll) lives below, after the cycle-5 atof
