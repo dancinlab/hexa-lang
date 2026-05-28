@@ -1,0 +1,53 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+// stdlib/cloud/preflight_dft_phonon_test.hexa — guard for the DFT/phonon
+// walltime sizing closed-form (INBOX gap 3). `cloud preflight --kind
+// dft-phonon` estimates max_seconds from atoms/nq/metallic so a dispatcher
+// never sets a 3×-undersized walltime (the Mg₂IrH₆ rep#9 timeout class).
+//
+// This mirrors preflight.hexa:_dft_phonon_est_sec verbatim (the established
+// mirror-test pattern — see pod_registry_guard_test.hexa — since the source
+// fn is `_`-prefixed/private). Keep byte-identical to source.
+//
+// The same closed-form is registered in tool/verify_cli.hexa as
+// `dft_phonon_walltime` (g5 verbatim anchor):
+//   hexa verify --expr dft_phonon_walltime 9 8 1 244944  → 🟢
+//
+// Run:   hexa run stdlib/cloud/preflight_dft_phonon_test.hexa
+// PASS:  exits 0, prints "preflight_dft_phonon_test PASS".
+
+// ── mirror of preflight.hexa:_dft_phonon_est_sec ────────────────────────
+fn _dft_phonon_est_sec(atoms: int, nq: int, metallic: int) -> int {
+    let mf = if metallic != 0 { 3 } else { 1 }
+    return 14 * atoms * atoms * atoms * nq * mf
+}
+
+fn _ck(name: str, got: int, want: int) {
+    if got != want {
+        println("  FAIL: " + name + " got " + to_string(got) + " want " + to_string(want))
+        exit(1)
+    }
+    println("  ok: " + name)
+}
+
+fn main() {
+    // Mg₂IrH₆ anchor (9 atoms, 2×2×2 = 8 q, metallic): 14·9³·8·3 = 244944 s.
+    // The failed run set max_seconds=80000 (≈22h), ~3× under the real need —
+    // the estimate now lands at the real need (≈68h) so 80000 < 244944 warns.
+    _ck("Mg2IrH6 anchor (9,8,metallic)", _dft_phonon_est_sec(9, 8, 1), 244944)
+    // non-metallic same params → mf=1 → /3 of the metallic estimate.
+    _ck("9-atom non-metallic (9,8,0)", _dft_phonon_est_sec(9, 8, 0), 81648)
+    // atoms³ scaling: doubling atoms → ×8.
+    _ck("atoms cubic scaling (18,8,1)", _dft_phonon_est_sec(18, 8, 1), 1959552)
+    // nq linear scaling: half the q-points → half the time.
+    _ck("nq linear scaling (9,4,1)", _dft_phonon_est_sec(9, 4, 1), 122472)
+    // small non-metallic baseline (4 atoms, 4 q) ≈ 1h.
+    _ck("small 4-atom non-metallic (4,4,0)", _dft_phonon_est_sec(4, 4, 0), 3584)
+    // under-size relation: anchor estimate strictly above the failed 80000.
+    let anchor = _dft_phonon_est_sec(9, 8, 1)
+    if anchor <= 80000 {
+        println("  FAIL: anchor estimate must exceed the failed max_seconds=80000")
+        exit(1)
+    }
+    println("  ok: anchor estimate > failed 80000 (under-size warn fires)")
+    println("preflight_dft_phonon_test PASS")
+}
