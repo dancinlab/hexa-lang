@@ -2630,6 +2630,13 @@ static int __attribute__((noinline)) hxlcl_socket(int d, int t, int p) {
     return socket(d, t, p);
 #endif
 }
+// F3 ACTIVATION · Path A — bind class-C svc-wrapper self-emit slot.
+// 3-arg int+ptr+uint _cf: sockfd/x0 sxtw, addr/x1 ptr untouched, len/x2 uxtw
+// (mov w2,w2 — unsigned, zero-extend). SELF-EMIT → extern, resolved by
+// emit_hxlcl_bind_o.hexa's .o (byte-eq to clang -O2, SYS#104). errno adrp/str.
+#ifdef HEXA_RT_SELFEMIT
+extern int hxlcl_bind(int s, const void *addr, unsigned int len);
+#else
 static int __attribute__((noinline)) hxlcl_bind(int s, const void *addr, unsigned int len) {
 #if (defined(__arm64__) || defined(__aarch64__)) && defined(__APPLE__)
     return (int)_hxlcl_syscall3_cf(HXLCL_SYS_BIND, (long)s, (long)addr, (long)len);
@@ -2637,6 +2644,7 @@ static int __attribute__((noinline)) hxlcl_bind(int s, const void *addr, unsigne
     return bind(s, (const struct sockaddr *)addr, (socklen_t)len);
 #endif
 }
+#endif
 // F3 ACTIVATION · Path A — listen class-C svc-wrapper self-emit slot.
 // 2-arg int+int _cf (sockfd, backlog) — the EXACT rt_dup2 (B9.6-C4) shape,
 // differing only in SYS# (DUP2=90 → LISTEN=106, a single mov-w16 imm byte).
@@ -2673,6 +2681,13 @@ static int __attribute__((noinline)) hxlcl_accept(int s, void *addr, unsigned in
 #endif
 }
 #endif
+// F3 ACTIVATION · Path A — connect class-C svc-wrapper self-emit slot.
+// 3-arg int+ptr+uint _cf (bind twin): sockfd/x0 sxtw, addr/x1 ptr untouched,
+// len/x2 uxtw (mov w2,w2). SELF-EMIT → extern, resolved by
+// emit_hxlcl_connect_o.hexa's .o (byte-eq to clang -O2, SYS#98). errno adrp/str.
+#ifdef HEXA_RT_SELFEMIT
+extern int hxlcl_connect(int s, const void *addr, unsigned int len);
+#else
 static int __attribute__((noinline)) hxlcl_connect(int s, const void *addr, unsigned int len) {
 #if (defined(__arm64__) || defined(__aarch64__)) && defined(__APPLE__)
     return (int)_hxlcl_syscall3_cf(HXLCL_SYS_CONNECT, (long)s, (long)addr, (long)len);
@@ -2680,6 +2695,7 @@ static int __attribute__((noinline)) hxlcl_connect(int s, const void *addr, unsi
     return connect(s, (const struct sockaddr *)addr, (socklen_t)len);
 #endif
 }
+#endif
 // net/exec ④ (cycle 78): message-group svc-trap. recv/send have no Darwin
 // syscall — route to recvfrom(29)/sendto(133) with NULL addr (= recv/send).
 // ARCH GATE for message-group family (same Darwin arm64 only).
