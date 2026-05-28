@@ -113,14 +113,30 @@ extern int  hxlcl_getpid(void);
 #else
 static int  hxlcl_getpid(void);
 #endif
+// B9.6-C3 (F3 Path A) — under HEXA_RT_SELFEMIT hxlcl_getuid is `extern`
+// (resolved by emit_hxlcl_getuid_o.hexa's .o). Mirrors getpid (#1860): a
+// 0-arg / cannot-fail svc-trap, no errno path. Forward decl must flip to
+// external linkage too, else the `static` masks the self-emit symbol.
+#ifdef HEXA_RT_SELFEMIT
+extern int  hxlcl_getuid(void);
+#else
 static int  hxlcl_getuid(void);
+#endif
 // RUNTIME.md Tier-A.4 — frame walker stubs (diagnostic-only, HEXA_OOB_TRACE
 // path in runtime_core.c). A self-host compiler needs no real unwinder; the
 // stub returns 0 frames + writes a single "(backtrace unavailable)" line via
 // hxlcl_write. Drops the libc _backtrace / _backtrace_symbols_fd externs.
 static int  hxlcl_backtrace(void **buf, int sz);
 static void hxlcl_backtrace_symbols_fd(void *const *buf, int sz, int fd);
+// B9.6-C4 (F3 Path A) — under HEXA_RT_SELFEMIT hxlcl_dup2 is `extern`
+// (resolved by emit_hxlcl_dup2_o.hexa's .o). A 2-arg _cf svc with the
+// carry-flag errno store (PC-relative adrp/str to hxlcl_errno SYMBOL, so
+// that symbol must stay externally linkable under the guard — same as close).
+#ifdef HEXA_RT_SELFEMIT
+extern int  hxlcl_dup2(int oldfd, int newfd);
+#else
 static int  hxlcl_dup2(int oldfd, int newfd);
+#endif
 static int  hxlcl_pipe(int fds[2]);
 static int  hxlcl_fork(void);
 static int  hxlcl_kill(int pid, int sig);
@@ -1299,7 +1315,18 @@ static long __attribute__((noinline)) hxlcl_read(int fd, void *buf, unsigned lon
 // RUNTIME tail (cycle 82): svc-trap mkdir (136) — a direct kernel syscall,
 // 2 args. Replaces the libc mkdir call in runtime_core.c + the generated
 // code's s4-lowered mkdir. carry-set -> -1 + errno.
+// F3 ACTIVATION · Path A — B9.6-C5 class-C syscall-ABI self-emit slot.
+// hxlcl_mkdir is a 2-arg _cf with a POINTER first arg (path, x0 untouched) +
+// an int second arg (mode, x1 sign-extended) — same 9-instr length as close,
+// only the sxtw register + SYS number differ. DEFAULT build keeps the static
+// _cf svc-trap. SELF-EMIT build flips to extern; the strong `_hxlcl_mkdir`
+// symbol comes from the hexa-emitted .o (rt_mkdir's 36-byte body), ahead-
+// linked. errno store = PC-relative adrp/str to hxlcl_errno (links under guard).
+#ifdef HEXA_RT_SELFEMIT
+extern int hxlcl_mkdir(const char *path, int mode);
+#else
 static int __attribute__((noinline)) hxlcl_mkdir(const char *path, int mode) { return (int)_hxlcl_syscall2_cf(HXLCL_SYS_MKDIR, (long)path, (long)mode); }
+#endif
 static long __attribute__((noinline)) hxlcl_write(int fd, const void *buf, unsigned long n) { return _hxlcl_syscall3_cf(HXLCL_SYS_WRITE, (long)fd, (long)buf, (long)n); }
 // F3 ACTIVATION RUNBOOK · Path A — B9.6-C2 class-C syscall WITH arg + errno.
 //
@@ -1393,7 +1420,19 @@ __attribute__((naked,used,noreturn)) void hxlcl_longjmp(void *buf, int val) { __
 // (no errno / carry-flag path), so the plain _hxlcl_syscall1 trap (not the
 // _cf carry-flag variant) is correct. Drops the libc `_getuid` extern that
 // net.c's os_getuid() pulled in (RUNTIME Tier-A.4 POSIX direct svc trap).
+// F3 ACTIVATION · Path A — B9.6-C3 class-C syscall-ABI self-emit slot.
+// hxlcl_getuid mirrors getpid (#1860): a 0-arg / cannot-fail svc-trap with no
+// errno path. DEFAULT build keeps the static svc-trap (0-libc-extern preserved;
+// BSD getuid issued via inline svc, never a libc symbol). SELF-EMIT build flips
+// to extern; the strong `_hxlcl_getuid` symbol comes from the hexa-emitted .o
+// (rt_getuid's 16-byte `mov w16,#24 / mov x0,#0 / svc #0x80 / ret`), ahead-
+// linked. Byte-identical to `as -arch arm64` AND JIT-exec-correct (returned
+// uid == libc getuid()).
+#ifdef HEXA_RT_SELFEMIT
+extern int hxlcl_getuid(void);
+#else
 static int __attribute__((noinline)) hxlcl_getuid(void) { return (int)_hxlcl_syscall1(HXLCL_SYS_GETUID, 0); }
+#endif
 // RUNTIME.md Tier-A.4 — backtrace / backtrace_symbols_fd hexa-native stubs.
 // These libc execinfo(3) fns are pulled in ONLY by the HEXA_OOB_TRACE
 // diagnostic path in runtime_core.c (array OOB tracer). A self-host compiler
@@ -1414,7 +1453,18 @@ static void __attribute__((noinline)) hxlcl_backtrace_symbols_fd(void *const *bu
 // cycle 66 — libc dup2 (same carry-flag issue as close).
 extern int dup2(int oldfd, int newfd);
 // cycle 71 — dup2 re-trapped via carry-flag-correct svc 0x80 (SYS_DUP2=90).
+// F3 ACTIVATION · Path A — B9.6-C4 class-C syscall-ABI self-emit slot.
+// hxlcl_dup2 extends the close (#1861) 1-arg carry-flag template to 2 int
+// args (a second sxtw). DEFAULT build keeps the static _cf svc-trap (errno
+// stored to the shared hxlcl_errno cell). SELF-EMIT build flips to extern; the
+// strong `_hxlcl_dup2` symbol comes from the hexa-emitted .o (rt_dup2's 40-byte
+// body), ahead-linked. The errno store is a PC-relative adrp/str to the
+// hxlcl_errno SYMBOL — externally linkable under the guard, same as close.
+#ifdef HEXA_RT_SELFEMIT
+extern int hxlcl_dup2(int oldfd, int newfd);
+#else
 static int __attribute__((noinline)) hxlcl_dup2(int oldfd, int newfd) { return (int)_hxlcl_syscall2_cf(HXLCL_SYS_DUP2, (long)oldfd, (long)newfd); }
+#endif
 // cycle 66 — restore libc pipe() backing. The cycle 63+64 svc-0x80
 // path mis-handled the Darwin pipe(2) pair-return: the kernel
 // returns the two fds in x0/x1 registers, NOT in the user-provided
