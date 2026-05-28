@@ -352,6 +352,9 @@ fn cmd_rubric() {
     println("             london_hc1(λ_L,κ)          → (Φ₀/4πλ_L²)(ln κ+0.5)  (Type-II lower critical field Hc1, RTSC #16, 2-arg)")
     println("             bean_critical_current(Jc,d) → Jc·d/2               (Bean critical-state magnetization, RTSC #16, 2-arg)")
     println("             two_band_lambda_eff(λσ,λπ,λi) → larger 2-band root  (MgB₂-type effective coupling, RTSC #16, 3-arg)")
+    println("             lc_resonance(L,C)           → 1/√(L·C)             (Pendry 1999 LC resonance ω₀, CLOAK/SRR, 2-arg)")
+    println("             srr_filling_factor(r,a)     → π·r²/a²              (Pendry 1999 SRR filling factor F, CLOAK/SRR, 2-arg)")
+    println("             lorentz_mu_re(F,ω,ω₀,γ)     → 1+F·ω²·(ω₀²−ω²)/[(ω₀²−ω²)²+(ωγ)²]  (Lorentz Re{μ(ω)}, CLOAK/SRR, 4-arg)")
     println("             bcs_gap_zero(Tc)            → 1.764·k_B·Tc         (BCS zero-T energy gap Δ(0), RTSC, 1-arg)")
     println("             pippard_coherence(v_F,Tc)   → ħ·v_F/(π·1.764·k_B·Tc)  (Pippard intrinsic coherence ξ₀, RTSC #15, 2-arg)")
     println("             viola_seaborg_log10_t(Z,Qα) → (aZ+b)/√Qα+(cZ+d)     (Viola-Seaborg α-decay log10 T₁/₂[s], NUCLEAR N7/N11, 2-arg)")
@@ -1723,6 +1726,43 @@ fn _two_band_lambda_eff(lambda_sigma: float, lambda_pi: float, lambda_inter: flo
     let avg = (lambda_sigma + lambda_pi) / 2.0
     let half_diff = (lambda_sigma - lambda_pi) / 2.0
     return avg + sqrt(half_diff * half_diff + lambda_inter * lambda_inter)
+}
+
+// ── SRR Lorentz μ primitive trio (Pendry 1999 · CLOAK substrate · 2026-05-28) ─
+// Mirrors stdlib/srr/lc_resonance.hexa verbatim (single calc home per @D g20).
+// @cite Pendry, J. B. et al. (1999) IEEE TMTT 47, 2075 — "Magnetism from
+// Conductors and Enhanced Nonlinear Phenomena". Single-ring, lossless LC
+// for ω₀; loss enters only via γ in μ(ω). All libm-class ⇒ 🟢 NUMERICAL.
+//
+// LC resonance ω₀ = 1/√(L·C):
+//   2-arg (L henries, C farads → ω₀ rad/s). Source: L=C=1 → ω₀=1 rad/s (unit
+//   case F1); λ-scale → ω₀(λL,λC)=ω₀(L,C)/λ (F2 dimensional invariance).
+fn _lc_resonance(l_h: float, c_f: float) -> float {
+    let prod = l_h * c_f
+    if prod <= 0.0 { return _NOCALC_F }
+    return 1.0 / sqrt(prod)
+}
+
+// SRR filling factor F = π·r²/a²:
+//   2-arg (r ring radius m, a unit-cell pitch m → F dimless). Source: r=a/√π,
+//   a=1 → F=1 (saturation case F3); λ-scale → F(λr,λa)=F(r,a) (F4 invariance).
+fn _srr_filling_factor(r_m: float, a_m: float) -> float {
+    if a_m <= 0.0 { return _NOCALC_F }
+    let pi_srr = 3.14159265358979323846
+    return pi_srr * r_m * r_m / (a_m * a_m)
+}
+
+// Lorentz Re{μ(ω)} = 1 + F·ω²·(ω₀²−ω²) / [(ω₀²−ω²)² + (ω·γ)²]:
+//   4-arg (F dimless, ω rad/s, ω₀ rad/s, γ rad/s → μ_re dimless). Source:
+//   F=0.5, ω=0, ω₀=1e9, γ=1e6 → μ_re=1 (DC limit F5); ω≫ω₀ → μ_re→1−F (F6
+//   Pendry sub-λ μ-suppression); ω just above ω₀ → μ_re<0 (F7 CLOAK demand).
+fn _lorentz_mu_re(f_dim: float, w: float, w0: float, gamma: float) -> float {
+    let w2  = w * w
+    let w02 = w0 * w0
+    let dw  = w02 - w2
+    let denom = dw * dw + (w * gamma) * (w * gamma)
+    if denom < 1.0e-300 { return 1.0 }
+    return 1.0 + f_dim * w2 * dw / denom
 }
 
 // ── Antiproton pair-production threshold (ANTIMATTER ⓵생성) ────────────
@@ -3430,6 +3470,22 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, a2: float, a3: float,
     if fn_name == "two_band_lambda_eff" {
         if argc < 3 { return _NOCALC_F }
         return _two_band_lambda_eff(a0, a1, a2)
+    }
+    // ── SRR Lorentz μ primitive trio (Pendry 1999 · CLOAK substrate · 2026-05-28) ─
+    //   lc_resonance(L,C)              2-arg: 1/√(L·C)  (LC ω₀)
+    //   srr_filling_factor(r,a)        2-arg: π·r²/a²   (SRR F)
+    //   lorentz_mu_re(F,ω,ω₀,γ)        4-arg: 1 + F·ω²·(ω₀²−ω²)/[(ω₀²−ω²)²+(ωγ)²]
+    if fn_name == "lc_resonance" {
+        if argc < 2 { return _NOCALC_F }
+        return _lc_resonance(a0, a1)
+    }
+    if fn_name == "srr_filling_factor" {
+        if argc < 2 { return _NOCALC_F }
+        return _srr_filling_factor(a0, a1)
+    }
+    if fn_name == "lorentz_mu_re" {
+        if argc < 4 { return _NOCALC_F }
+        return _lorentz_mu_re(a0, a1, a2, a3)
     }
     if fn_name == "bcs_gap_zero" {
         return _bcs_gap_zero(a0)
