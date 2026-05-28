@@ -592,6 +592,20 @@ fn _do_build(repo_root: string) {
     //   from the arch-neutral hexa_cc.c so it is never arch-mismatched. The
     //   amalgam swap (#include "runtime.h" → "runtime.c") pulls the runtime
     //   bodies into a single TU (hexa_cc.c heads with the proto-only header).
+    //
+    //   F3 hexa_cc.c=0 RUNBOOK (scaffold 2026-05-29 ·
+    //   .verdicts/runtime-floor-closure/F3-hexa-cc-activation-runbook.md):
+    //   the long-term goal is to remove self/native/hexa_cc.c entirely and
+    //   always warm-rebuild it via `hexa cc --regen` from the 4 SSOT .hexa
+    //   modules. The flip needs P1+P2+P3+P5 GREEN (fixpoint byte-eq +
+    //   cross-host kill-storm-free + stage-(-1) seed strategy). Probe the
+    //   activation state with:
+    //
+    //     hexa-run tool/verify_hexa_cc_regen.hexa --probe
+    //
+    //   `--prefer-regen` is reserved as the future opt-in flag; it is NOT
+    //   parsed here yet (no behavior change). The cold-seed path stays the
+    //   only path until the runbook gates are measured green on Mac + ubu.
     if !_file_exists(hexat) {
         println("[0/5] bootstrap transpiler: cc hexa_cc.c runtime.c → " + hexat)
         let hexa_cc_c = repo_root + "/self/native/hexa_cc.c"
