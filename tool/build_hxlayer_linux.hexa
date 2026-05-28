@@ -98,17 +98,24 @@ fn main() {
     exec("mkdir -p " + out_dir)
 
     // ────────────────────────────────────────────────────────────────
-    // .c-text regen (B9.C-9) — hxlayer_linux.c is now a build artifact
-    // emitted byte-for-byte from self/native/hxlayer_linux_emit.hexa (the
-    // SSOT). Regenerate it before every compile so the emitter and the
-    // compiled .so never drift. Byte-identity is proven by
-    // self/native/hxlayer_linux_byte_diff.hexa (source-SHA + .o + .text).
+    // .c-text regen (B9.C-9) — the hand-written hxlayer_linux.c was
+    // git-rm'd; the C source is now emitted byte-for-byte from
+    // self/native/hxlayer_linux_emit.hexa (the SSOT) into a build-dir
+    // artifact hxlayer_linux_gen.c, which every compile below consumes.
+    // Byte-identity is proven by self/native/hxlayer_linux_byte_diff.hexa
+    // (source-SHA + whole-file .o + __text section). Regen into the build
+    // dir keeps the source tree clean (matches #1852 *_gen.c precedent).
     // ────────────────────────────────────────────────────────────────
     let emitter = src_dir + "/hxlayer_linux_emit.hexa"
-    let target_c = src_dir + "/hxlayer_linux.c"
+    let mut layer_src = out_dir + "/hxlayer_linux_gen.c"
     if exec("[ -f \"" + emitter + "\" ] && echo y || echo n").trim() == "y" {
-        println("[regen] hxlayer_linux.c <- hxlayer_linux_emit.hexa")
-        run("hexa-run \"" + emitter + "\" \"" + target_c + "\"")
+        println("[regen] hxlayer_linux_gen.c <- hxlayer_linux_emit.hexa")
+        // Prefer the `hexa-run` shim; fall back to `hexa run` (canonical
+        // subcommand) on hosts/pods that only have the `hexa` driver.
+        let runner = if exec("command -v hexa-run >/dev/null 2>&1 && echo y || echo n").trim() == "y" { "hexa-run" } else { "hexa run" }
+        run(runner + " \"" + emitter + "\" \"" + layer_src + "\"")
+    } else if exec("[ -f \"" + src_dir + "/hxlayer_linux.c\" ] && echo y || echo n").trim() == "y" {
+        layer_src = src_dir + "/hxlayer_linux.c"
     }
 
     // ────────────────────────────────────────────────────────────────
@@ -128,7 +135,7 @@ fn main() {
         // Force clang on Mac (gcc on Mac is just clang anyway, but be explicit)
         let cc_x = if env("CC") != "" { env("CC") } else { "clang" }
         println("[xverify] linking hxlayer_linux.c -> libhxlayer_xverify.dylib")
-        run(cc_x + " -O3 -fPIC -dynamiclib -D__linux__=1 " + src_dir + "/hxlayer_linux.c -lm -o " + xv_dir + "/libhxlayer_xverify.dylib")
+        run(cc_x + " -O3 -fPIC -dynamiclib -D__linux__=1 " + layer_src + " -lm -o " + xv_dir + "/libhxlayer_xverify.dylib")
 
         // Smoke: the symbol must be exported.
         if !check_symbol(xv_dir + "/libhxlayer_xverify.dylib", "_hxlayer_rmsnorm_silu") {
@@ -164,7 +171,7 @@ fn main() {
         // -D__linux__=1 flips the conditional in hxlayer_linux.c on —
         // the kernel only uses <math.h> and <stdint.h>, both present on
         // Mac's libSystem, so it compiles and links unchanged.
-        run(cc_m + " -O3 -fPIC -dynamiclib -D__linux__=1 " + src_dir + "/hxlayer_linux.c -lm -o " + out_dir + "/libhxlayer.dylib")
+        run(cc_m + " -O3 -fPIC -dynamiclib -D__linux__=1 " + layer_src + " -lm -o " + out_dir + "/libhxlayer.dylib")
 
         if !check_symbol(out_dir + "/libhxlayer.dylib", "_hxlayer_rmsnorm_silu") {
             exit(4)
@@ -194,7 +201,7 @@ fn main() {
 
     // ── libhxlayer.so — libm only (scalar O3 auto-vec) ──
     println("[1/1] building libhxlayer.so")
-    run(cc + " " + cflags_base + " " + src_dir + "/hxlayer_linux.c -o " + out_dir + "/libhxlayer.so -lm")
+    run(cc + " " + cflags_base + " " + layer_src + " -o " + out_dir + "/libhxlayer.so -lm")
 
     println("built:")
     println(exec("ls -la " + out_dir + "/libhxlayer.so").trim())

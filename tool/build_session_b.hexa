@@ -105,6 +105,21 @@ fn main() {
 
     exec("mkdir -p " + out)
 
+    // ── .c-text regen (B9.C-9) ────────────────────────────────────────
+    // The hand-written hxflash_linux.c was git-rm'd; the C source is now
+    // emitted byte-for-byte from hxflash_linux_emit.hexa (the SSOT) into a
+    // build-dir artifact <base>_gen.c, which the compile below consumes.
+    // Byte-identity is proven by self/native/hxflash_linux_byte_diff.hexa
+    // (source-SHA + whole-file .o + __text section).
+    let regen_runner = if exec("command -v hexa-run >/dev/null 2>&1 && echo y || echo n").trim() == "y" { "hexa-run" } else { "hexa run" }
+    let mut flash_src = src + "/hxflash_linux.c"
+    let flash_emit = src + "/hxflash_linux_emit.hexa"
+    if file_exists(flash_emit) {
+        flash_src = out + "/hxflash_linux_gen.c"
+        println("[regen] hxflash_linux_gen.c <- hxflash_linux_emit.hexa")
+        let _ = run(regen_runner + " \"" + flash_emit + "\" \"" + flash_src + "\"")
+    }
+
     println("═══ Session B Unified Build ═══")
     println("platform=" + uname + " arch=" + arch + " mode=" + mode)
     println("")
@@ -132,11 +147,11 @@ fn main() {
     println("[2/5] libhxflash")
     if mode != "--check" {
         if is_linux {
-            let ok = run("gcc -O3 -fPIC -shared -march=native " + src + "/hxflash_linux.c -o " + out + "/libhxflash.so -lm")
+            let ok = run("gcc -O3 -fPIC -shared -march=native " + flash_src + " -o " + out + "/libhxflash.so -lm")
             if ok { total_pass = total_pass + 1 } else { total_fail = total_fail + 1 }
         } else if is_mac {
             // hxflash_linux.c gates all functions behind #ifdef __linux__ — pass -D__linux__=1 for Mac build
-            let ok = run("clang -O3 -fPIC -dynamiclib -D__linux__=1 " + src + "/hxflash_linux.c -o " + out + "/libhxflash.dylib -lm")
+            let ok = run("clang -O3 -fPIC -dynamiclib -D__linux__=1 " + flash_src + " -o " + out + "/libhxflash.dylib -lm")
             if ok { total_pass = total_pass + 1 } else { total_fail = total_fail + 1 }
         }
     }

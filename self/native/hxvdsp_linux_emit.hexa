@@ -1,0 +1,267 @@
+#!hexa strict
+// self/native/hxvdsp_linux_emit.hexa
+//   B9.C-9 (.c-text · #1850 pattern) — hxvdsp_linux.c source emitter.
+//
+// Vector DSP scalar+libm kernels (RMSNorm/SoftMax/SwiGLU), vDSP Linux replacement.
+//
+// Emits hxvdsp_linux.c verbatim. The hexa build script regenerates the .c
+// from this emitter before compiling, so the emitter becomes the SSOT
+// and the .c becomes a build artifact.
+//
+// Byte-identity: the regenerated C is byte-for-byte the hand-written
+// source, so the compiled .o/.so is identical — PERF UNCHANGED.
+//
+// Invocation:  hexa-run self/native/hxvdsp_linux_emit.hexa <output-path>
+// Default output path (if argv missing): "hxvdsp_linux.c" in cwd.
+//
+// Phase: B9.C-9 batch (self/native standalone hexa-build .c-text).
+
+let MODULE_NAME = "hxvdsp_linux_emit"
+
+fn emit_hxvdsp_linux_c() -> str {
+    // Verbatim content of hand-written self/native/hxvdsp_linux.c
+    let s =
+            "// hxvdsp_linux.c — Linux port of Apple vDSP RMSNorm/SoftMax/SwiGLU shim\n" +
+            "//\n" +
+            "// Port of /Users/ghost/Dev/anima/training/hxvdsp_wrapper.c from macOS\n" +
+            "// Accelerate vDSP → Linux scalar+OpenBLAS replacement.\n" +
+            "//\n" +
+            "// Strategy:\n" +
+            "//   Linux has no vDSP. We replicate each vDSP primitive with the\n" +
+            "//   closest cblas call (vsmul→sscal-like, vmul→dot-product pair, etc.)\n" +
+            "//   and for the non-cblas ones (vsesq, vsadd, vvexpf, vvrecf) use a\n" +
+            "//   tight scalar loop that gcc -O3 / -march=native auto-vectorises\n" +
+            "//   into AVX2/AVX-512. Same ABI as the Mac wrapper: hexa Float→C\n" +
+            "//   double, hexa int→int64_t, pointers as int64_t addresses.\n" +
+            "//\n" +
+            "// Build (Linux x86_64, Ubuntu/Debian with libopenblas-dev):\n" +
+            "//   gcc -O3 -march=native -fPIC -shared self/native/hxvdsp_linux.c \\\n" +
+            "//       -o self/native/build/libhxvdsp.so -lm\n" +
+            "//\n" +
+            "//   See scripts/build_hxblas_linux.hexa (does both libraries).\n" +
+            "//\n" +
+            "// Why scalar+O3 is fine on Linux:\n" +
+            "//   * Apple vDSP is a black-box NEON/AMX kernel; on x86_64 there's no\n" +
+            "//     free lunch. AVX2 + auto-vec gets within 1.2-1.5x of hand-tuned\n" +
+            "//     assembly for these element-wise ops.\n" +
+            "//   * The FFI-hop-amortisation is the dominant win over per-element\n" +
+            "//     hexa calls — matches the design rationale in the Mac original.\n" +
+            "//\n" +
+            "// Version: 1 (2026-04-16) — mirror of hxvdsp_wrapper.c version 1.\n" +
+            "\n" +
+            "#include <math.h>\n" +
+            "#include <stdint.h>\n" +
+            "#include <stdlib.h>\n" +
+            "#include <string.h>\n" +
+            "\n" +
+            "int64_t hxvdsp_version(void) { return 1; }\n" +
+            "\n" +
+            "// Small helpers that emulate the vDSP primitives used in the Mac shim.\n" +
+            "// All inlined to give the compiler maximum room to vectorise.\n" +
+            "static inline void hx_sum_of_squares(const float* x, int64_t n, float* out) {\n" +
+            "    float s = 0.0f;\n" +
+            "    for (int64_t i = 0; i < n; i++) s += x[i] * x[i];\n" +
+            "    *out = s;\n" +
+            "}\n" +
+            "\n" +
+            "static inline float hx_max(const float* x, int64_t n) {\n" +
+            "    float m = x[0];\n" +
+            "    for (int64_t i = 1; i < n; i++) if (x[i] > m) m = x[i];\n" +
+            "    return m;\n" +
+            "}\n" +
+            "\n" +
+            "static inline float hx_sum(const float* x, int64_t n) {\n" +
+            "    float s = 0.0f;\n" +
+            "    for (int64_t i = 0; i < n; i++) s += x[i];\n" +
+            "    return s;\n" +
+            "}\n" +
+            "\n" +
+            "static inline void hx_scalar_add(const float* x, float a, float* y, int64_t n) {\n" +
+            "    for (int64_t i = 0; i < n; i++) y[i] = x[i] + a;\n" +
+            "}\n" +
+            "\n" +
+            "static inline void hx_scalar_mul(const float* x, float a, float* y, int64_t n) {\n" +
+            "    for (int64_t i = 0; i < n; i++) y[i] = x[i] * a;\n" +
+            "}\n" +
+            "\n" +
+            "static inline void hx_vmul(const float* a, const float* b, float* c, int64_t n) {\n" +
+            "    for (int64_t i = 0; i < n; i++) c[i] = a[i] * b[i];\n" +
+            "}\n" +
+            "\n" +
+            "static inline void hx_vsub(const float* a, const float* b, float* c, int64_t n) {\n" +
+            "    // Matches vDSP_vsub(A, .., B, .., C, ..) : C = B - A  (Apple flips operand order)\n" +
+            "    for (int64_t i = 0; i < n; i++) c[i] = b[i] - a[i];\n" +
+            "}\n" +
+            "\n" +
+            "static inline void hx_vadd(const float* a, const float* b, float* c, int64_t n) {\n" +
+            "    for (int64_t i = 0; i < n; i++) c[i] = a[i] + b[i];\n" +
+            "}\n" +
+            "\n" +
+            "static inline void hx_expf_vec(float* inout, int64_t n) {\n" +
+            "    for (int64_t i = 0; i < n; i++) inout[i] = expf(inout[i]);\n" +
+            "}\n" +
+            "\n" +
+            "static inline void hx_recf_vec(float* inout, int64_t n) {\n" +
+            "    for (int64_t i = 0; i < n; i++) inout[i] = 1.0f / inout[i];\n" +
+            "}\n" +
+            "\n" +
+            "// ─────────────────────────────────────────────────────────────\n" +
+            "// RMSNorm forward — matches hxvdsp_rmsnorm_fwd exactly\n" +
+            "// ─────────────────────────────────────────────────────────────\n" +
+            "void hxvdsp_rmsnorm_fwd(int64_t S, int64_t D,\n" +
+            "                        int64_t x_ptr, int64_t gain_ptr,\n" +
+            "                        double eps,\n" +
+            "                        int64_t out_ptr) {\n" +
+            "    const float* x = (const float*)(uintptr_t)x_ptr;\n" +
+            "    const float* g = (const float*)(uintptr_t)gain_ptr;\n" +
+            "    float* out = (float*)(uintptr_t)out_ptr;\n" +
+            "    const float eps_f = (float)eps;\n" +
+            "    const float inv_D = 1.0f / (float)D;\n" +
+            "    for (int64_t i = 0; i < S; i++) {\n" +
+            "        const float* xi = x + i * D;\n" +
+            "        float* oi = out + i * D;\n" +
+            "        float ss = 0.0f;\n" +
+            "        hx_sum_of_squares(xi, D, &ss);\n" +
+            "        float ms = ss * inv_D;\n" +
+            "        float inv_r = 1.0f / sqrtf(ms + eps_f);\n" +
+            "        hx_scalar_mul(xi, inv_r, oi, D);\n" +
+            "        hx_vmul(oi, g, oi, D);\n" +
+            "    }\n" +
+            "}\n" +
+            "\n" +
+            "// ─────────────────────────────────────────────────────────────\n" +
+            "// RMSNorm backward — matches hxvdsp_rmsnorm_bwd exactly\n" +
+            "// ─────────────────────────────────────────────────────────────\n" +
+            "void hxvdsp_rmsnorm_bwd(int64_t S, int64_t D,\n" +
+            "                        int64_t x_ptr, int64_t gain_ptr, int64_t dy_ptr,\n" +
+            "                        double eps,\n" +
+            "                        int64_t dx_ptr, int64_t dg_ptr) {\n" +
+            "    const float* x  = (const float*)(uintptr_t)x_ptr;\n" +
+            "    const float* g  = (const float*)(uintptr_t)gain_ptr;\n" +
+            "    const float* dy = (const float*)(uintptr_t)dy_ptr;\n" +
+            "    float* dx = (float*)(uintptr_t)dx_ptr;\n" +
+            "    float* dg = (float*)(uintptr_t)dg_ptr;\n" +
+            "    const float eps_f = (float)eps;\n" +
+            "    const float inv_D = 1.0f / (float)D;\n" +
+            "\n" +
+            "    float* scratch = (float*)malloc((size_t)D * sizeof(float));\n" +
+            "    float* term1   = (float*)malloc((size_t)D * sizeof(float));\n" +
+            "\n" +
+            "    for (int64_t i = 0; i < S; i++) {\n" +
+            "        const float* xi  = x  + i * D;\n" +
+            "        const float* dyi = dy + i * D;\n" +
+            "        float* dxi       = dx + i * D;\n" +
+            "        float ss = 0.0f;\n" +
+            "        hx_sum_of_squares(xi, D, &ss);\n" +
+            "        float ms = ss * inv_D;\n" +
+            "        float r = sqrtf(ms + eps_f);\n" +
+            "        float inv_r = 1.0f / r;\n" +
+            "        float inv_r3 = inv_r * inv_r * inv_r;\n" +
+            "\n" +
+            "        // coef = Σ x*g*dy\n" +
+            "        hx_vmul(xi, g, scratch, D);\n" +
+            "        float coef = 0.0f;\n" +
+            "        for (int64_t p = 0; p < D; p++) coef += scratch[p] * dyi[p];\n" +
+            "\n" +
+            "        // term1 = g * dy * inv_r\n" +
+            "        hx_vmul(g, dyi, term1, D);\n" +
+            "        hx_scalar_mul(term1, inv_r, term1, D);\n" +
+            "\n" +
+            "        // scratch = x * (coef * inv_r3 / D)\n" +
+            "        float k = coef * inv_r3 * inv_D;\n" +
+            "        hx_scalar_mul(xi, k, scratch, D);\n" +
+            "\n" +
+            "        // dxi = term1 - scratch   (vDSP_vsub semantics: C = B - A)\n" +
+            "        hx_vsub(scratch, term1, dxi, D);\n" +
+            "\n" +
+            "        // dg += x * dy * inv_r\n" +
+            "        hx_vmul(xi, dyi, scratch, D);\n" +
+            "        hx_scalar_mul(scratch, inv_r, scratch, D);\n" +
+            "        hx_vadd(dg, scratch, dg, D);\n" +
+            "    }\n" +
+            "    free(scratch);\n" +
+            "    free(term1);\n" +
+            "}\n" +
+            "\n" +
+            "// ─────────────────────────────────────────────────────────────\n" +
+            "// Softmax row (in-place), starting at row_offset_f32 floats.\n" +
+            "// Mirrors hxvdsp_softmax_row signature exactly.\n" +
+            "// ─────────────────────────────────────────────────────────────\n" +
+            "void hxvdsp_softmax_row(int64_t x_ptr, int64_t row_offset_f32, int64_t n) {\n" +
+            "    float* x = ((float*)(uintptr_t)x_ptr) + row_offset_f32;\n" +
+            "    float mx = hx_max(x, n);\n" +
+            "    float neg_mx = -mx;\n" +
+            "    hx_scalar_add(x, neg_mx, x, n);\n" +
+            "    hx_expf_vec(x, n);\n" +
+            "    float sum = hx_sum(x, n);\n" +
+            "    float inv = 1.0f / sum;\n" +
+            "    hx_scalar_mul(x, inv, x, n);\n" +
+            "}\n" +
+            "\n" +
+            "// ─────────────────────────────────────────────────────────────\n" +
+            "// SwiGLU-self forward — out[i] = up[i] * sigmoid(up[i])\n" +
+            "// ─────────────────────────────────────────────────────────────\n" +
+            "void hxvdsp_swiglu_fwd(int64_t n,\n" +
+            "                       int64_t up_ptr, int64_t out_ptr) {\n" +
+            "    const float* up = (const float*)(uintptr_t)up_ptr;\n" +
+            "    float* out = (float*)(uintptr_t)out_ptr;\n" +
+            "\n" +
+            "    // out = sigmoid(up) = 1/(1 + exp(-up))\n" +
+            "    hx_scalar_mul(up, -1.0f, out, n);  // out = -up\n" +
+            "    hx_expf_vec(out, n);               // out = exp(-up)\n" +
+            "    hx_scalar_add(out, 1.0f, out, n);  // out = 1 + exp(-up)\n" +
+            "    hx_recf_vec(out, n);               // out = sigmoid\n" +
+            "    hx_vmul(up, out, out, n);          // out = up * sigmoid\n" +
+            "}\n" +
+            "\n" +
+            "// ─────────────────────────────────────────────────────────────\n" +
+            "// SwiGLU-self backward\n" +
+            "//   dx[i] = dy[i] * (s + up[i]*s*(1-s))   where s = sigmoid(up[i])\n" +
+            "// ─────────────────────────────────────────────────────────────\n" +
+            "void hxvdsp_swiglu_bwd(int64_t n,\n" +
+            "                       int64_t up_ptr, int64_t dy_ptr, int64_t dx_ptr) {\n" +
+            "    const float* up = (const float*)(uintptr_t)up_ptr;\n" +
+            "    const float* dy = (const float*)(uintptr_t)dy_ptr;\n" +
+            "    float* dx = (float*)(uintptr_t)dx_ptr;\n" +
+            "\n" +
+            "    float* s    = (float*)malloc((size_t)n * sizeof(float));\n" +
+            "    float* tmp  = (float*)malloc((size_t)n * sizeof(float));\n" +
+            "\n" +
+            "    // s = sigmoid(up)\n" +
+            "    hx_scalar_mul(up, -1.0f, s, n);\n" +
+            "    hx_expf_vec(s, n);\n" +
+            "    hx_scalar_add(s, 1.0f, s, n);\n" +
+            "    hx_recf_vec(s, n);\n" +
+            "\n" +
+            "    // tmp = up * s\n" +
+            "    hx_vmul(up, s, tmp, n);\n" +
+            "    // dx = tmp * s  (= up*s²)\n" +
+            "    hx_vmul(tmp, s, dx, n);\n" +
+            "    // tmp = tmp - dx  (= up*s - up*s² = up*s*(1-s))\n" +
+            "    hx_vsub(dx, tmp, tmp, n);\n" +
+            "    // s = s + tmp  (= s + up*s*(1-s))\n" +
+            "    hx_vadd(s, tmp, s, n);\n" +
+            "    // dx = dy * s\n" +
+            "    hx_vmul(dy, s, dx, n);\n" +
+            "\n" +
+            "    free(s);\n" +
+            "    free(tmp);\n" +
+            "}\n"
+    return s
+}
+
+fn main() {
+    let argv = real_args()
+    let out_path = if argv.len() >= 1 { argv[0] } else { "hxvdsp_linux.c" }
+    let c_text = emit_hxvdsp_linux_c()
+    let cmd = "cat > \"" + out_path + "\" <<'HXVDSP_EMIT_EOF'\n" +
+              c_text + "HXVDSP_EMIT_EOF"
+    let _ = exec(cmd)
+    let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
+    if exists_check != "y" {
+        println("[hxvdsp_linux_emit] FATAL: failed to write " + out_path)
+        exit(1)
+    }
+    println("[hxvdsp_linux_emit] wrote " + out_path)
+    exit(0)
+}

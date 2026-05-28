@@ -120,12 +120,19 @@ while i < len(all_ml) {
 }
 
 // 3d. Native C shims (Linux port of Mac Accelerate/vDSP)
+//
+// .c-text regen (B9.C-9): hxvdsp_linux.c / hxlayer_linux.c / hxflash_linux.c
+// are now build artifacts regenerated on the pod from their *_emit.hexa
+// SSOTs (uploaded below). The pod-side build scripts regen before compile,
+// so the .c files themselves no longer need to ship (file_exists guard
+// skips them gracefully if absent). The emitters DO need to ship.
 let native_files = [
     "hxblas_linux.c",
-    "hxvdsp_linux.c",
-    "hxlayer_linux.c",
+    // .c-text emitter SSOTs (regen the .c on the pod before compile)
+    "hxvdsp_linux_emit.hexa",
+    "hxlayer_linux_emit.hexa",
+    "hxflash_linux_emit.hexa",
     // 2026-04-16: C8/C9/C-next FFI kernels
-    "hxflash_linux.c",
     "hxccl_linux.c",
     "hxlmhead_linux.c",
     // 2026-04-16: Qwen2.5-14B FFI shim (stub by default; HXQWEN14B_CUDA=1 for real)

@@ -1,0 +1,28 @@
+========================================================================
+  self/native — hxvdsp_linux_byte_diff: B9.C-9 .c-text byte-diff oracle
+========================================================================
+  generator: self/native/hxvdsp_linux_emit.hexa
+  oracle:    cc + otool byte-diff vs hand-written hxvdsp_linux.c
+  gates:     source-text · whole-file .o (no -g) · __text section (with -g)
+
+  scratch: /var/folders/2g/blzd56lx2rvfvt61c1pc9g7r0000gn/T/hxvdsp_linux_byte_diff.XXXXXX.vrwTboBT1W
+
+  [PASS] hexa emitter self/native/hxvdsp_linux_emit.hexa present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-ae5cc4bcc157c793e-b9c9/self/native/hxvdsp_linux_emit.hexa
+  [PASS] hand-written self/native/hxvdsp_linux.c present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-ae5cc4bcc157c793e-b9c9/self/native/hxvdsp_linux.c
+  [PASS] gate-1 source-text byte-identical (sha256(.c))
+         · orig=fa2bf8e53760ad163ad3eabf8e3fb39a6aad09f2622d7c774a93213df62d7aa5 gen=fa2bf8e53760ad163ad3eabf8e3fb39a6aad09f2622d7c774a93213df62d7aa5
+  [PASS] cc + otool present (Mac host toolchain)
+         · cc=y otool=y
+  [PASS] gate-2 whole-file .o byte-identical (no -g)
+         · orig=b3c10122509d3410f3220943eab9095cc252c7479d1494fb8c6e6995a46a50c1 gen=b3c10122509d3410f3220943eab9095cc252c7479d1494fb8c6e6995a46a50c1
+  [PASS] gate-3 __TEXT,__text section byte-identical (with -g)
+         · orig=c765879f74315c5d16701427e18bbd6160b2beb00f23989726c6ff75fc9f6829 gen=c765879f74315c5d16701427e18bbd6160b2beb00f23989726c6ff75fc9f6829
+
+  B9.C-9 hxvdsp_linux.c .c-text byte-identity:
+    PROVEN ✓ — hand-written hxvdsp_linux.c is fully hexa-emittable.
+    DELETION GATE OPEN — self/native/hxvdsp_linux.c may be `git rm`.
+========================================================================
+  6/6 checks passed
+__HEXA_LANG_HXVDSP_LINUX_BYTE_DIFF__ PASS
