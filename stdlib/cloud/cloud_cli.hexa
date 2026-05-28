@@ -781,16 +781,13 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
 }
 
 // _cloud_rent_runpod — runpod provision path: create (single GPU type) →
-// wait ssh-ready → register. Requires `secret get runpod.api_key` and a
-// public key at ~/.ssh/id_ed25519.pub (same contract as e2e_smoke.hexa).
-// --gpu picks the GPU type (RunPod has no offer-search; the type IS the
-// selector). Returns 0 ok / 1 failure.
+// wait ssh-ready → register. Auto-resolves the key via
+// cloud_runpod_must_have_api_key (M7) and a public key at
+// ~/.ssh/id_ed25519.pub (same contract as e2e_smoke.hexa). --gpu picks the
+// GPU type (RunPod has no offer-search; the type IS the selector).
+// Returns 0 ok / 1 failure.
 fn _cloud_rent_runpod(av: [str], start: int) -> int {
-    let api_key = exec("secret get runpod.api_key 2>/dev/null").trim()
-    if len(api_key) == 0 {
-        println("[cloud] rent runpod: no runpod.api_key (set it with: secret set runpod.api_key)")
-        return 1
-    }
+    let api_key = cloud_runpod_must_have_api_key("rent")
     let pubkey = read_file(env_var("HOME") + "/.ssh/id_ed25519.pub").trim()
     if len(pubkey) == 0 {
         println("[cloud] rent runpod: no ~/.ssh/id_ed25519.pub")
@@ -857,11 +854,7 @@ fn _cloud_rent_runpod(av: [str], start: int) -> int {
 fn _cloud_down(id: str, provider: str) -> int {
     let mut ok = 0
     if provider == "runpod" {
-        let api_key = exec("secret get runpod.api_key 2>/dev/null").trim()
-        if len(api_key) == 0 {
-            println("[cloud] down runpod: no runpod.api_key")
-            return 1
-        }
+        let api_key = cloud_runpod_must_have_api_key("down")
         ok = runpod_terminate(api_key, id)
         if ok == 1 {
             println("[cloud] down runpod: terminated " + id)
@@ -913,15 +906,12 @@ fn _cloud_list_print(provider: str) -> int {
 // _cloud_ssh_port — print the live ssh endpoint (host + port) of an
 // existing pod by id (P4). Wires runpod_get_ssh_port / vast_ssh_endpoint
 // (the fns already exist; this only surfaces them as a verb). --provider
-// default vast; runpod needs `secret get runpod.api_key`. Returns 0 when
+// default vast; runpod auto-resolves the key via cloud_runpod_must_have_api_key
+// (M7: env-passthrough → Keychain → ~/.runpod/config.toml). Returns 0 when
 // the endpoint is mapped, else 1.
 fn _cloud_ssh_port(id: str, provider: str) -> int {
     if provider == "runpod" {
-        let api_key = exec("secret get runpod.api_key 2>/dev/null").trim()
-        if len(api_key) == 0 {
-            println("[cloud] ssh-port runpod: no runpod.api_key (set it with: secret set runpod.api_key)")
-            return 1
-        }
+        let api_key = cloud_runpod_must_have_api_key("ssh-port")
         let r = runpod_get_ssh_port(api_key, id)
         if r.ok == 1 {
             println("[cloud] ssh-port runpod: " + r.ip + ":" + r.port + " (root@" + r.ip + " -p " + r.port + ")")
