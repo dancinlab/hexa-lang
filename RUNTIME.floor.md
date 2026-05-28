@@ -15,13 +15,14 @@ flip 캠페인이 안전 quick-win 을 고갈시킨 뒤 남는 진짜 바닥의 
 
 - `.o` = **0** ✅
 - `.s` = **0** (F5 .s-leg COMPLETE · PR #1843/#1844/#1845/#1846 · 아래 F5)
-- `.c` = **98** (2026-05-28 B9.C-3 ACTIVATED · `lib/hxnccl/` 2-file cluster
-  삭제 = 100→98 · `hxnccl.c` · `smoke.c` ← per-file `*_emit.hexa` +
+- `.c` = **96** (2026-05-28 B9.C-4 ACTIVATED · `lib/hxpyembed/` 2-file cluster
+  삭제 = 98→96 · `hxpyembed.c` · `smoke.c` ← per-file `*_emit.hexa` +
   `*_byte_diff.hexa` · 각 6/6 PASS ·
-  `.verdicts/runtime-floor-closure/B9C3-hxnccl{,-smoke}-byte-diff.txt`
-  · libhxnccl.dylib `.o` 2/2 byte-identical to pre-batch baseline ·
-  smoke 15/15 PASS post-rewire · `lib/hxnccl/` 의 hand-written `.c` 0).
-  이전: 2026-05-28 B9.C-2 (#1848) sscb firmware src/ 4-file batch → 104→100.
+  `.verdicts/runtime-floor-closure/B9C4-hxpyembed{,-smoke}-byte-diff.txt`
+  · libhxpyembed.dylib `.o` 2/2 byte-identical to pre-batch baseline ·
+  hxpyembed_smoke 14/14 PASS post-rewire · `lib/hxpyembed/` 의 hand-written `.c` 0).
+  이전: 2026-05-28 B9.C-3 (#1849) `lib/hxnccl/` 2-file cluster → 100→98.
+  2026-05-28 B9.C-2 (#1848) sscb firmware src/ 4-file batch → 104→100.
   2026-05-28 B9.C-1 (#1847) `src/adc_dma.c` → 105→104 (foundation PR).
   B9.6h dead-scaffolding sweep 후 **~70 예상** (대부분이 archive/fires + tool 의
   죽은 실험 harness 였음 — runtime floor 아님). sweep 후 남는 ~70 이 이 doc 의 대상.
@@ -50,6 +51,20 @@ emit (build/hxnccl_gen.c + build/smoke_gen.c). libhxnccl.dylib `.o` 2/2 baseline
 과 byte-identical · hxnccl_smoke 15/15 (init + barrier + B2 collectives +
 handle-based hxnccl_init/free) PASS post-rewire. `lib/hxnccl/` 의 hand-written
 `.c` 0 (2/2 hexa-emit).
+
+세션 .c-leg cluster: **B9.C-4** — B9.C-3 host-toolchain 패턴 1:1 적용,
+`lib/hxpyembed/` 2 파일 (`hxpyembed.c` 355L Embedded CPython FFI shim +
+`smoke.c` 111L F-FFI-1 zero-copy round-trip smoke). hxpyembed.c 는 `<Python.h>`
+include 하므로 byte_diff oracle 이 `python3-config --includes` 로 CPython include
+경로 해소 (CMakeLists.txt PY_INCLUDES 와 동일 경로). 2 oracle 모두 6/6 PASS.
+CMakeLists.txt 가 `add_custom_command` 로 build-time emit (build/hxpyembed_gen.c
++ build/smoke_gen.c). libhxpyembed.dylib `.o` 2/2 baseline 과 byte-identical
+(da691078...·9072cb9f... pre-rm == post-rm-rebuild) · hxpyembed_smoke 14/14
+(init + idempotent + import torch + call_str + tensor zero-copy 1024 f32 +
+buf addr/len/contig + py_to_tensor + value preservation + finalize) PASS
+post-rewire. `lib/hxpyembed/` 의 hand-written `.c` 0 (2/2 hexa-emit).
+stdlib/python_ffi.hexa · stdlib/test/test_python_ffi.hexa · bench/import_py_e2e.hexa
+FFI consumer parse 3/3 OK.
 
 ## 🧱 floor closure 상태 (2026-05-28 — F1-F6 종결 pass)
 

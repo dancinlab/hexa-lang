@@ -1,0 +1,29 @@
+========================================================================
+  lib/hxpyembed — smoke_byte_diff: B9.C-4 .c-leg byte-diff oracle
+========================================================================
+  generator: lib/hxpyembed/smoke_emit.hexa
+  oracle:    cc + otool byte-diff vs hand-written lib/hxpyembed/smoke.c
+  target:    Mac host x86_64/arm64 (libhxpyembed FFI smoke)
+  gates:     source-text · whole-file .o (no -g) · __text section (with -g)
+
+  scratch: /var/folders/2g/blzd56lx2rvfvt61c1pc9g7r0000gn/T/smoke_byte_diff.XXXXXX.9EciU185g1
+
+  [PASS] cc + otool present (Mac host toolchain)
+         · cc=y otool=y
+  [PASS] hexa emitter lib/hxpyembed/smoke_emit.hexa present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a74a3eb60fc467830/lib/hxpyembed/smoke_emit.hexa
+  [PASS] hand-written lib/hxpyembed/smoke.c present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a74a3eb60fc467830/lib/hxpyembed/smoke.c
+  [PASS] gate-1 source-text byte-identical (sha256(.c))
+         · orig=c25f5f9a12564ae041c6724bd514885f600cee99c9d280b758c84769f535771a gen=c25f5f9a12564ae041c6724bd514885f600cee99c9d280b758c84769f535771a
+  [PASS] gate-2 whole-file .o byte-identical (no -g)
+         · orig=e55f1453eea3a04a4366bf6ce6a710846d22c3cb052eef2dbeafd0e186b8ecd8 gen=e55f1453eea3a04a4366bf6ce6a710846d22c3cb052eef2dbeafd0e186b8ecd8
+  [PASS] gate-3 __TEXT,__text section byte-identical (with -g)
+         · orig=bfa77f762a23e4f875feea907b9c834781dcfc6f3c0c3913d23f96296d8d94fa gen=bfa77f762a23e4f875feea907b9c834781dcfc6f3c0c3913d23f96296d8d94fa
+
+  B9.C-4 smoke.c .c-leg byte-identity:
+    PROVEN ✓ — hand-written smoke.c is fully hexa-emittable.
+    DELETION GATE OPEN — lib/hxpyembed/smoke.c may be `git rm`.
+========================================================================
+  6/6 checks passed
+__HEXA_LANG_HXPYEMBED_SMOKE_BYTE_DIFF__ PASS

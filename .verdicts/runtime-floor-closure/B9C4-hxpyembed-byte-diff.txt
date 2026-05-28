@@ -1,0 +1,31 @@
+========================================================================
+  lib/hxpyembed — hxpyembed_byte_diff: B9.C-4 .c-leg byte-diff oracle
+========================================================================
+  generator: lib/hxpyembed/hxpyembed_emit.hexa
+  oracle:    cc + otool byte-diff vs hand-written lib/hxpyembed/hxpyembed.c
+  target:    Mac host x86_64/arm64 (libhxpyembed FFI shared library)
+  gates:     source-text · whole-file .o (no -g) · __text section (with -g)
+
+  scratch: /var/folders/2g/blzd56lx2rvfvt61c1pc9g7r0000gn/T/hxpyembed_byte_diff.XXXXXX.5dRJQISo6b
+
+  [PASS] cc + otool + python3-config present (Mac host toolchain)
+         · cc=y otool=y python3-config=y
+  py_inc: -I/opt/homebrew/opt/python@3.14/Frameworks/Python.framework/Versions/3.14/include/python3.14 -I/opt/homebrew/opt/python@3.14/Frameworks/Python.framework/Versions/3.14/include/python3.14
+
+  [PASS] hexa emitter lib/hxpyembed/hxpyembed_emit.hexa present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a74a3eb60fc467830/lib/hxpyembed/hxpyembed_emit.hexa
+  [PASS] hand-written lib/hxpyembed/hxpyembed.c present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a74a3eb60fc467830/lib/hxpyembed/hxpyembed.c
+  [PASS] gate-1 source-text byte-identical (sha256(.c))
+         · orig=00edce176acaeb438fb8a7288b9534582f432fef74153a3d1835cbc5bceaf98d gen=00edce176acaeb438fb8a7288b9534582f432fef74153a3d1835cbc5bceaf98d
+  [PASS] gate-2 whole-file .o byte-identical (no -g)
+         · orig=da691078ca15ee919c9eee3c4e5081a186b9596e94da838191c22a35affb3a9f gen=da691078ca15ee919c9eee3c4e5081a186b9596e94da838191c22a35affb3a9f
+  [PASS] gate-3 __TEXT,__text section byte-identical (with -g)
+         · orig=58cdff5543b601d3717c3176dc8ca03d00a3078a2bfeca01b4aa8cfc6758b141 gen=58cdff5543b601d3717c3176dc8ca03d00a3078a2bfeca01b4aa8cfc6758b141
+
+  B9.C-4 hxpyembed.c .c-leg byte-identity:
+    PROVEN ✓ — hand-written hxpyembed.c is fully hexa-emittable.
+    DELETION GATE OPEN — lib/hxpyembed/hxpyembed.c may be `git rm`.
+========================================================================
+  6/6 checks passed
+__HEXA_LANG_HXPYEMBED_BYTE_DIFF__ PASS

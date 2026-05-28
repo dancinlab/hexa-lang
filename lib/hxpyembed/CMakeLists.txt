@@ -54,8 +54,39 @@ endif()
 message(STATUS "[hxpyembed] PY_INCLUDES: ${PY_INCLUDES}")
 message(STATUS "[hxpyembed] PY_LDFLAGS:  ${PY_LDFLAGS}")
 
+# B9.C-4 (.c-leg batch): hxpyembed.c + smoke.c are now hexa-emit. The hand-
+# written `.c` is gone; the pure-hexa emitters `hxpyembed_emit.hexa` and
+# `smoke_emit.hexa` regenerate the byte-identical source at build time
+# (proof: `.verdicts/runtime-floor-closure/B9C4-hxpyembed{,-smoke}-byte-diff.txt`,
+# 6/6 PASS — gate-1 source sha + gate-2 .o (no -g) + gate-3 __text section).
+#
+# `hexa-run` is the hexa interpreter shim; it lives on PATH after
+# `hx install hexa-lang`. Override via -DHEXA_RUN=... if needed.
+if(NOT DEFINED HEXA_RUN)
+    set(HEXA_RUN "hexa-run")
+endif()
+
+set(HXPYEMBED_GEN_C "${CMAKE_CURRENT_BINARY_DIR}/hxpyembed_gen.c")
+set(SMOKE_GEN_C     "${CMAKE_CURRENT_BINARY_DIR}/smoke_gen.c")
+
+add_custom_command(
+    OUTPUT ${HXPYEMBED_GEN_C}
+    COMMAND ${HEXA_RUN} ${CMAKE_CURRENT_SOURCE_DIR}/hxpyembed_emit.hexa ${HXPYEMBED_GEN_C}
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/hxpyembed_emit.hexa
+    COMMENT "Regenerating hxpyembed.c from hxpyembed_emit.hexa (B9.C-4 hexa-emit)"
+    VERBATIM
+)
+add_custom_command(
+    OUTPUT ${SMOKE_GEN_C}
+    COMMAND ${HEXA_RUN} ${CMAKE_CURRENT_SOURCE_DIR}/smoke_emit.hexa ${SMOKE_GEN_C}
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/smoke_emit.hexa
+    COMMENT "Regenerating smoke.c from smoke_emit.hexa (B9.C-4 hexa-emit)"
+    VERBATIM
+)
+
 # ── Library target ─────────────────────────────────────────────────────────
-add_library(hxpyembed SHARED ${CMAKE_CURRENT_SOURCE_DIR}/hxpyembed.c)
+# B9.C-4 (.c-leg batch): hxpyembed.c is hexa-emit (see HXPYEMBED_GEN_C above).
+add_library(hxpyembed SHARED ${HXPYEMBED_GEN_C})
 
 # Translate the include flags string into target_include_directories form.
 separate_arguments(PY_INC_LIST UNIX_COMMAND "${PY_INCLUDES}")
@@ -86,7 +117,8 @@ install(TARGETS hxpyembed
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
 
 # C-side smoke executable — exercises the FFI surface end-to-end.
-add_executable(hxpyembed_smoke ${CMAKE_CURRENT_SOURCE_DIR}/smoke.c)
+# B9.C-4 (.c-leg batch): smoke.c is hexa-emit (see SMOKE_GEN_C above).
+add_executable(hxpyembed_smoke ${SMOKE_GEN_C})
 target_link_libraries(hxpyembed_smoke PRIVATE hxpyembed)
 if(APPLE)
     set_target_properties(hxpyembed_smoke PROPERTIES
