@@ -2790,6 +2790,116 @@ fn rt_getpid() {
     return c
 }
 
+// ── rt_close (B9.6-C2 — class-C syscall WITH arg + errno/carry-flag) ──
+// close(int fd) -> int. The SECOND class-C (syscall-ABI) self-emit, and
+// the FIRST that carries (a) a real syscall ARGUMENT and (b) the Darwin
+// CARRY-FLAG error convention + errno store. #1860's rt_getpid was a
+// 0-arg / cannot-fail leaf (plain trap, no carry path); this increment
+// builds the multi-arg + `_cf` (carry-flag) errno template that the
+// remaining ~190 `hxlcl_*` svc-wrappers (#1812 audit) need to scale out.
+//
+// macOS arm64 BSD syscall ABI (error path): the syscall number goes in
+// x16, args in x0.., then `svc #0x80`. On SUCCESS the carry flag (C bit
+// of NZCV) is CLEAR and x0 holds the result; on ERROR the carry is SET
+// and x0 holds the POSITIVE errno. The wrapper captures the carry with
+// `cset x8, hs`, and on carry stores x0 into `errno` and returns -1.
+// SYS_CLOSE = 6, one arg (fd).
+//
+// This mirrors self/runtime.c L1255
+//   hxlcl_close(int fd) { return (int)_hxlcl_syscall1_cf(HXLCL_SYS_CLOSE, fd); }
+// whose clang -O2 (== `as -arch arm64`) is byte-for-byte (9 instr, 36 B):
+//   sxtw x0,w0 / mov w16,#6 / svc #0x80 / cset x8,hs / cbz x8,Lret
+//   / adrp x8,errno@PAGE / str w0,[x8,errno@PAGEOFF] / mov x0,#-1 / ret
+//
+// ⚠ RELOC + REGISTER-CLOBBER FINDING (load-bearing — see byte-diff doc):
+// the errno store is `adrp x8,errno ; str w0,[x8]` — x8 is RE-derived
+// PC-relatively AFTER the svc, NOT a caller-passed pointer register. This
+// is REQUIRED, not stylistic: the Darwin `close` svc CLOBBERS the arg
+// registers on the error path (probe: x1 → 0x0 after a failing close),
+// so a register-passed errno destination would `str` through a clobbered
+// pointer and segfault. The errno destination must be a fixed DATA SYMBOL
+// reached via adrp/str, which means the emitted .o needs TWO relocations:
+//   - ARM64_RELOC_PAGE21   (kind 3, pcrel) at code offset 0x14 (the adrp)
+//   - ARM64_RELOC_PAGEOFF12 (kind 4)       at code offset 0x18 (the str)
+// both targeting the `errno` (hxlcl_errno) data symbol. rt_close_reloc_offs
+// / rt_close_reloc_kinds below expose that table for the macho_obj_wrap_v2
+// reloc path (the same machinery the rt_arena_* state-relative primitives
+// use). Full production Path-A activation against runtime.c's SHARED
+// `hxlcl_errno` additionally needs UNDEFINED-external-symbol reloc support
+// (v2 today resolves a SELF-DEFINED __const symbol); that is the remaining
+// ~190-layer wiring step — see RUNTIME.floor.md F3.
+//
+// 9 instructions, 36 bytes. The adrp (offset 0x14) and str (0x18) words
+// carry a ZEROED immediate pre-relocation, exactly as `as -arch arm64`
+// emits before the linker patches them.
+fn rt_close() {
+    let mut c = []
+    // sxtw x0, w0  (sign-extend fd arg)     0x93407C00
+    c.push(0)
+    c.push(124)
+    c.push(64)
+    c.push(147)
+    // mov w16, #6  (SYS_CLOSE)              0x528000D0
+    c.push(208)
+    c.push(0)
+    c.push(128)
+    c.push(82)
+    // svc #0x80                             0xD4001001
+    c.push(1)
+    c.push(16)
+    c.push(0)
+    c.push(212)
+    // cset x8, hs  (capture carry = error)  0x9A9F37E8
+    c.push(232)
+    c.push(55)
+    c.push(159)
+    c.push(154)
+    // cbz x8, Lret (success → skip errno)   0xB4000088  (+0x10 to ret)
+    c.push(136)
+    c.push(0)
+    c.push(0)
+    c.push(180)
+    // adrp x8, errno@PAGE  [RELOC PAGE21]   0x90000008  (imm zeroed)
+    c.push(8)
+    c.push(0)
+    c.push(0)
+    c.push(144)
+    // str w0, [x8, errno@PAGEOFF] [RELOC]   0xB9000100  (imm zeroed)
+    c.push(0)
+    c.push(1)
+    c.push(0)
+    c.push(185)
+    // mov x0, #-1  (error return)           0x92800000
+    c.push(0)
+    c.push(0)
+    c.push(128)
+    c.push(146)
+    // ret  (x0 = 0 on success / -1 error)   0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
+// Reloc table for rt_close — the two records the errno `adrp`/`str` need
+// when wrapped into a Mach-O .o via macho_obj_wrap_v2. Parallel arrays:
+// reloc applies at the given __text byte offset with the given kind.
+//   offset 0x14 (20) → ARM64_RELOC_PAGE21   (kind 3, pcrel adrp)
+//   offset 0x18 (24) → ARM64_RELOC_PAGEOFF12 (kind 4, str low-12 bits)
+fn rt_close_reloc_offs() {
+    let mut o = []
+    o.push(20)
+    o.push(24)
+    return o
+}
+fn rt_close_reloc_kinds() {
+    let mut k = []
+    k.push(3)
+    k.push(4)
+    return k
+}
+
 // ── self-test ────────────────────────────────────────────────
 
 fn test_runtime_arm64() {
@@ -2829,6 +2939,10 @@ fn test_runtime_arm64() {
     let henumv = rt_hexa_enum_str_v()
     // B9.6-C1 — class-C syscall ABI FIRST self-emit (raw svc #0x80).
     let gpid = rt_getpid()
+    // B9.6-C2 — class-C syscall WITH arg (fd) + errno/carry-flag store.
+    let clos = rt_close()
+    let cl_roff = rt_close_reloc_offs()
+    let cl_rkind = rt_close_reloc_kinds()
 
     println("runtime_arm64 — ARM64 machine code byte arrays")
     println("  rt_exit          : " + to_string(len(exit_bytes)) + " bytes")
@@ -2864,6 +2978,7 @@ fn test_runtime_arm64() {
     println("  rt_hexa_enum_str : " + to_string(len(henum)) + " bytes")
     println("  rt_hexa_enum_str_v: " + to_string(len(henumv)) + " bytes")
     println("  rt_getpid        : " + to_string(len(gpid)) + " bytes")
+    println("  rt_close         : " + to_string(len(clos)) + " bytes (" + to_string(len(cl_roff)) + " relocs)")
 
     // Verify sizes match expected instruction counts * 4
     let mut ok = true
@@ -2948,6 +3063,33 @@ fn test_runtime_arm64() {
     if gpid[0] != 144 || gpid[1] != 2 || gpid[2] != 128 || gpid[3] != 82 { println("  FAIL: rt_getpid wrong syscall number prefix"); ok = false }
     // ret trailer (c0 03 5f d6) — getpid RETURNS (unlike rt_exit).
     if gpid[12] != 192 || gpid[13] != 3 || gpid[14] != 95 || gpid[15] != 214 { println("  FAIL: rt_getpid no RET"); ok = false }
+    // B9.6-C2 — class-C syscall WITH arg + errno/carry-flag: rt_close is a
+    //   9-instr 36 B body sxtw / mov w16,#6 / svc / cset / cbz / adrp / str
+    //   / mov x0,#-1 / ret  (svc-trap w/ fd arg, carry→errno store, -1 ret).
+    if len(clos) != 36 { println("  FAIL: rt_close expected 36, got " + to_string(len(clos))); ok = false }
+    // sxtw x0,w0 prefix (00 7c 40 93) — fd arg sign-extended into x0.
+    if clos[0] != 0 || clos[1] != 124 || clos[2] != 64 || clos[3] != 147 { println("  FAIL: rt_close missing sxtw fd-arg prefix"); ok = false }
+    // mov w16,#6 (d0 00 80 52) — SYS_CLOSE loaded into x16.
+    if clos[4] != 208 || clos[5] != 0 || clos[6] != 128 || clos[7] != 82 { println("  FAIL: rt_close wrong syscall number (SYS_CLOSE=6)"); ok = false }
+    // svc #0x80 at offset 8 (01 10 00 d4) — the BSD syscall trap.
+    if clos[8] != 1 || clos[9] != 16 || clos[10] != 0 || clos[11] != 212 { println("  FAIL: rt_close missing svc #0x80 at offset 8"); ok = false }
+    // cset x8,hs at offset 12 (e8 37 9f 9a) — capture carry flag (error bit).
+    if clos[12] != 232 || clos[13] != 55 || clos[14] != 159 || clos[15] != 154 { println("  FAIL: rt_close missing cset (carry-flag capture)"); ok = false }
+    // cbz x8,Lret at offset 16 (88 00 00 b4) — success skips the errno store.
+    if clos[16] != 136 || clos[17] != 0 || clos[18] != 0 || clos[19] != 180 { println("  FAIL: rt_close missing cbz (success branch)"); ok = false }
+    // adrp x8,errno at offset 20 (08 00 00 90) — errno PAGE21 reloc site.
+    if clos[20] != 8 || clos[21] != 0 || clos[22] != 0 || clos[23] != 144 { println("  FAIL: rt_close missing adrp errno (reloc 0x14)"); ok = false }
+    // str w0,[x8] at offset 24 (00 01 00 b9) — errno PAGEOFF12 reloc site.
+    if clos[24] != 0 || clos[25] != 1 || clos[26] != 0 || clos[27] != 185 { println("  FAIL: rt_close missing str errno (reloc 0x18)"); ok = false }
+    // mov x0,#-1 at offset 28 (00 00 80 92) — error return value.
+    if clos[28] != 0 || clos[29] != 0 || clos[30] != 128 || clos[31] != 146 { println("  FAIL: rt_close missing mov x0,#-1 (error ret)"); ok = false }
+    // ret trailer (c0 03 5f d6) — close RETURNS (0 success / -1 error).
+    if clos[32] != 192 || clos[33] != 3 || clos[34] != 95 || clos[35] != 214 { println("  FAIL: rt_close no RET"); ok = false }
+    // reloc table: 2 records (PAGE21@0x14 + PAGEOFF12@0x18) for errno store.
+    if len(cl_roff) != 2 { println("  FAIL: rt_close expected 2 reloc offsets, got " + to_string(len(cl_roff))); ok = false }
+    if len(cl_rkind) != 2 { println("  FAIL: rt_close expected 2 reloc kinds, got " + to_string(len(cl_rkind))); ok = false }
+    if cl_roff[0] != 20 || cl_roff[1] != 24 { println("  FAIL: rt_close reloc offsets must be 0x14,0x18"); ok = false }
+    if cl_rkind[0] != 3 || cl_rkind[1] != 4 { println("  FAIL: rt_close reloc kinds must be PAGE21(3),PAGEOFF12(4)"); ok = false }
 
     // Verify all sizes are multiples of 4 (ARM64 fixed-width)
     if len(exit_bytes) % 4 != 0 { println("  FAIL: rt_exit not aligned"); ok = false }
@@ -2983,6 +3125,7 @@ fn test_runtime_arm64() {
     if len(henum) % 4 != 0 { println("  FAIL: rt_hexa_enum_str not aligned"); ok = false }
     if len(henumv) % 4 != 0 { println("  FAIL: rt_hexa_enum_str_v not aligned"); ok = false }
     if len(gpid) % 4 != 0 { println("  FAIL: rt_getpid not aligned"); ok = false }
+    if len(clos) % 4 != 0 { println("  FAIL: rt_close not aligned"); ok = false }
     // B9.6-D2 — all three end with ret (192,3,95,214).
     let nhf = len(hfloat)
     if hfloat[nhf - 4] != 192 { println("  FAIL: rt_hexa_float no RET"); ok = false }

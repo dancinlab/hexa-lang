@@ -1,0 +1,121 @@
+B9.6-C2 — class-C syscall WITH arg + errno/carry-flag self-emit · hxlcl_close
+verdict: ACTIVATED (🟢 numerical) — first class-C svc with a syscall ARG + the
+         Darwin carry-flag error path + an errno store; live-injectable via Path A
+host: mini-class arm64 macOS (Darwin 25.5.0) · clang -O2 / as -arch arm64 / ld64
+date: 2026-05-28
+
+────────────────────────────────────────────────────────────────────────────
+TARGET — the simplest hxlcl_* syscall wrapper with 1 arg + errno
+────────────────────────────────────────────────────────────────────────────
+self/runtime.c (Darwin arm64 raw-trap block, the #if ...&& __APPLE__ region):
+    static int hxlcl_close(int fd) { return (int)_hxlcl_syscall1_cf(HXLCL_SYS_CLOSE, (long)fd); }
+SYS_CLOSE = 6. ONE arg (fd). CAN fail — the `_cf` (carry-flag) variant captures
+the Darwin error convention (carry set on error, positive errno in x0), stores
+errno, returns -1. The simplest single-svc, 1-arg, errno-bearing wrapper — the
+right FIRST class-C-with-arg+errno candidate. (#1860 getpid was the 0-arg /
+cannot-fail base case; this is the next svc-emit increment.)
+
+────────────────────────────────────────────────────────────────────────────
+SELF-EMIT (self/codegen/runtime_arm64.hexa :: rt_close)
+────────────────────────────────────────────────────────────────────────────
+9 instructions, 36 bytes:
+    sxtw x0, w0    0x93407C00   (sign-extend the fd arg into x0)
+    mov  w16, #6   0x528000D0   (SYS_CLOSE into x16)
+    svc #0x80      0xD4001001   (BSD syscall trap)
+    cset x8, hs    0x9A9F37E8   (capture the carry flag = error bit)
+    cbz  x8, Lret  0xB4000088   (success → branch over the errno store, to ret)
+    adrp x8, errno 0x90000008   (errno PAGE base — RELOC PAGE21 @ off 0x14)
+    str  w0, [x8]  0xB9000100   (*errno = positive errno — RELOC PAGEOFF12 @ 0x18)
+    mov  x0, #-1   0x92800000   (error return value)
+    ret            0xD65F03C0   (x0 = 0 on success / -1 on error)
+clang -O2 of the runtime.c body is byte-for-byte this sequence; rt_close encodes
+exactly that. The adrp(0x14) + str(0x18) words carry a ZEROED immediate pre-
+relocation, as `as -arch arm64` emits before the linker patches them.
+
+────────────────────────────────────────────────────────────────────────────
+RELOC + REGISTER-CLOBBER FINDING (load-bearing — the class-C-with-errno key)
+────────────────────────────────────────────────────────────────────────────
+The errno destination is reached PC-relatively (adrp/str) AFTER the svc, NOT via
+a caller-passed pointer register. This is REQUIRED, not stylistic:
+  PROBE: a failing close svc returns errno=9 (EBADF) with carry set AND clobbers
+         x1 → 0x0 (verified: `movz x1,#0xABCD ; … svc … ; read x1` -> 0x0).
+So a register-passed errno pointer (e.g. a 2nd arg in x1) would `str` through a
+clobbered pointer and SEGFAULT (empirically reproduced — exit 139). The errno
+destination must be a fixed DATA SYMBOL whose page base is re-derived by `adrp`
+after the svc. Hence the self-emit .o needs TWO relocations against errno:
+    ARM64_RELOC_PAGE21    (kind 3, pcrel=1) @ code offset 0x14 (the adrp)
+    ARM64_RELOC_PAGEOFF12 (kind 4, pcrel=0) @ code offset 0x18 (the str)
+rt_close_reloc_offs() = [20,24]; rt_close_reloc_kinds() = [3,4].
+
+────────────────────────────────────────────────────────────────────────────
+3-LAYER VERIFY (JIT-exec is the load-bearing gate)
+────────────────────────────────────────────────────────────────────────────
+LAYER 1 — compiled self-test (size / svc / cset / cbz / reloc-site / RET):
+    hexat self/codegen/runtime_arm64.hexa -> .c; cc + runtime.c; run ->
+      "rt_close : 36 bytes (2 relocs)" + "ALL CHECKS PASS"
+      (asserts len==36; sxtw@0; mov w16,#6@4; svc#0x80@8; cset@12; cbz@16;
+       adrp@20; str@24; mov x0,#-1@28; ret@32; reloc_offs==[20,24];
+       reloc_kinds==[3,4])
+
+LAYER 2 — byte-identical to `as -arch arm64`:
+    as -arch arm64 (sxtw/mov w16,#6/svc/cset/cbz/adrp,errno/str/mov x0,#-1/ret) =
+        93407c00 528000d0 d4001001 9a9f37e8 b4000088 90000008 b9000100 92800000 d65f03c0
+    emit_hxlcl_close_o.hexa -> hxlcl_close.o; otool -t __TEXT __text =
+        93407c00 528000d0 d4001001 9a9f37e8 b4000088 90000008 b9000100 92800000 d65f03c0
+    BYTE-IDENTICAL. The 2 relocs match the `as` oracle exactly:
+        otool -rv: 0x14 PAGE21 _hxlcl_errno · 0x18 PAGOF12 _hxlcl_errno
+    nm: `T _hxlcl_close` (strong external) · `U _hxlcl_errno` (undefined extern).
+
+LAYER 3 — JIT-exec correctness, SUCCESS AND ERROR (LOAD-BEARING):
+    clang close_prod_jit.c hxlcl_close.o -o run  (errno = shared non-static int)
+    ./run ->
+        success: close(valid fd)   -> ret 0,  errno untouched (0x5151 preserved)
+        error1:  close(closed fd)  -> ret -1, errno = 9 (EBADF)
+        error2:  close(999999)     -> ret -1, errno = 9 (EBADF)
+        JIT-EXEC PASS — errno is the SHARED symbol, written only on the error path.
+    The errno store is resolved by ld64 binding the .o's UNDEFINED-external
+    `_hxlcl_errno` reloc to the C `hxlcl_errno` cell — so a close failure sets
+    the SAME errno every other runtime syscall reads. (Resolves the macho.hexa
+    v3 "link-test pending" caveat for the data-symbol PAGE21/PAGEOFF12 case: NO
+    LC_DYSYMTAB needed; only cross-object BRANCH26 calls may still require it.)
+
+────────────────────────────────────────────────────────────────────────────
+PATH-A ACTIVATION · dual-build 3-mode
+────────────────────────────────────────────────────────────────────────────
+Guard: self/runtime.c — THREE guard sites under #ifdef HEXA_RT_SELFEMIT:
+       (1) `hxlcl_errno` flips static→extern-linkable int (the reloc target);
+       (2) the L83-ish forward decl flips static→extern (else `static` masks
+           the self-emit symbol — same -Wundefined-internal finding as #1860);
+       (3) the Darwin (__APPLE__) body flips to `extern int hxlcl_close(int)`.
+       The non-Darwin (#elif __linux__) libc-fallback close body is untouched.
+Build: tool/build_hexa_cli.hexa — `close` appended to the single-symbol leaf
+       emit loop (same recipe template; distinct env var HEXA_HXLCL_CLOSE_O).
+       The .o internals differ (2 syms + 2 relocs) but the recipe step is
+       identical (one emit driver → one .o → one selfemit_objs entry).
+
+(a) DEFAULT (guard off):
+      runtime TU symbol table BYTE-IDENTICAL to origin/main (nm | sort | md5 ==).
+      undefined-extern set IDENTICAL to origin/main (0-extern invariant kept).
+      _hxlcl_close = local `t` (the _cf svc-trap body intact); _hxlcl_errno
+      stays a file-local static. Default build is purely additive.
+(b) GUARD-ON + close .o linked:
+      externs resolve · close runs correct (success→0/errno untouched,
+      error→-1/errno=EBADF(9), errno SHARED). Also verified _hxlcl_errno is a
+      defined external (S) and _hxlcl_close is undefined (U) in the guarded TU.
+(c) GUARD-ON WITHOUT the .o:
+      link-FAILS: Undefined symbols "_hxlcl_close" (extern is genuine).
+
+────────────────────────────────────────────────────────────────────────────
+SCOPE / HONESTY
+────────────────────────────────────────────────────────────────────────────
+- .c count UNCHANGED (87) — FLOOR infra; runtime.c keeps the C body under the
+  default guard. This adds the arg+errno svc template; deletion stays sign-gated.
+- runtime_arm64.hexa = shadow (NOT use'd by compiler/main.hexa) -> no regen /
+  fixpoint risk. Emit driver also un-use'd -> hexa_cc.c regen unaffected.
+- runtime.c diff = pure additive guard (0 body deletions) -> no wipe_guard trigger.
+- class-C arg+errno template now PROVEN: the ~190-fn layer-② hxlcl_* svc-wrapper
+  family (#1812 audit) scales out on this multi-arg + carry-flag (_cf) + errno-
+  store-via-reloc pattern. close(fd) is the 1-arg base; read/write (3-arg) reuse
+  the same _cfN body shape with more `sxtw`/arg loads + the IDENTICAL cset/cbz/
+  adrp,errno/str error tail. struct-arg marshalling (stat/fstat) is the only
+  remaining harder shape (pointer args + kernel struct layout).
