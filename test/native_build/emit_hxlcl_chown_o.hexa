@@ -1,0 +1,410 @@
+// test/native_build/emit_hxlcl_chown_o.hexa
+//
+// F3 ACTIVATION RUNBOOK · Path A · wave 4 — class-C syscall · 3-arg ptr+int+int
+// _cf + errno self-emit. NEW shape vs rt_lseek (which sxtw's x0+x2 skipping
+// the middle x1) — chown sxtw's x1+x2 instead (path/x0 is already a 64-bit
+// pointer). 10-instr 40 B body. errno reloc sites @0x18 / @0x1c (same as
+// dup2/lseek — two leading instructions push the adrp/str down).
+//
+// EMITS: a Mach-O .o exporting a strong external `_hxlcl_chown` whose body is
+// rt_chown's verbatim 40-byte machine code:
+//   sxtw x1,w1 / sxtw x2,w2 / mov w16,#16 / svc #0x80 / cset x8,hs
+//   / cbz x8,Lret / adrp x8,errno / str w0,[x8,errno] / mov x0,#-1 / ret
+// plus TWO relocations (ARM64_RELOC_PAGE21 @ 0x18, ARM64_RELOC_PAGEOFF12 @
+// 0x1c) that bind the adrp/str to `_hxlcl_errno` — declared here as an
+// UNDEFINED EXTERNAL symbol (n_sect=0/N_UNDF) so ld64 resolves it to
+// self/runtime.c's `hxlcl_errno` at link.
+//
+// ── ABI (class-C syscall · 3-arg ptr+int+int _cf + carry-flag errno) ──
+//
+// chown(const char *path, int uid, int gid): path (x0) is already a 64-bit
+// pointer — passes through. uid arrives in w1 → sxtw x1,w1; gid in w2 →
+// sxtw x2,w2. SYS_CHOWN=16 into x16; `svc #0x80` traps. On SUCCESS carry is
+// clear and x0=0; on ERROR carry is set and x0 holds the POSITIVE errno.
+// `cset x8,hs` captures the carry; on carry the errno is stored and -1
+// returned. NEW 3-arg ptr+int+int shape — mirror image of lseek's int+long+
+// int (which sxtw's x0+x2). Two sxtw at the start make this the same length
+// as rt_dup2 / rt_lseek (10 instr 40 B), hence shared reloc offsets 0x18/0x1c.
+//
+// ── HONESTY ──
+//
+//   - closure = runs exact. A C driver linked against this .o:
+//       chown(<own path>, geteuid(), getegid()) -> ret 0,  errno untouched
+//       chown(/nonexistent, 0, 0)               -> ret -1, errno = ENOENT(2)
+//     JIT-exec-checkable for BOTH success AND error.
+//   - f1/f2 — clang ONLY as link-side / byte-diff oracle, NEVER in this
+//     .o's emit path. The 40 bytes are character-identical to
+//     self/codegen/runtime_arm64.hexa::rt_chown.
+//   - undefined-external errno — `_hxlcl_errno` declared UNDEFINED here,
+//     RESOLVED by ld64 to self/runtime.c's `hxlcl_errno` (non-static under
+//     HEXA_RT_SELFEMIT). Same v3 wrap shape as close.
+//   - no binaries committed.
+//
+// SELF-CONTAINED: the v3 wrapper + helpers are inlined byte-for-byte from
+// self/codegen/macho.hexa. The deliberate diffs vs close are zero
+// (verbatim copy); the rt_chown bytes are character-identical to
+// self/codegen/runtime_arm64.hexa::rt_chown.
+
+// ═══════════════════════════════════════════════════════════════════
+// Inlined from self/codegen/runtime_arm64.hexa::rt_chown
+// 10 instructions, 40 bytes. sxtw x1 / sxtw x2 / mov w16,#16 / svc / cset
+// / cbz / adrp,errno / str w0,[errno] / mov x0,#-1 / ret.
+// ═══════════════════════════════════════════════════════════════════
+fn rt_chown_bytes() -> [int] {
+    let mut c = []
+    // sxtw x1, w1  (sign-extend uid)        0x93407C21
+    c.push(33); c.push(124); c.push(64); c.push(147)
+    // sxtw x2, w2  (sign-extend gid)        0x93407C42
+    c.push(66); c.push(124); c.push(64); c.push(147)
+    // mov w16, #16  (SYS_CHOWN)             0x52800210
+    c.push(16); c.push(2); c.push(128); c.push(82)
+    // svc #0x80                             0xD4001001
+    c.push(1); c.push(16); c.push(0); c.push(212)
+    // cset x8, hs  (capture carry = error)  0x9A9F37E8
+    c.push(232); c.push(55); c.push(159); c.push(154)
+    // cbz x8, Lret (success → skip errno)   0xB4000088
+    c.push(136); c.push(0); c.push(0); c.push(180)
+    // adrp x8, errno@PAGE  [RELOC PAGE21]   0x90000008
+    c.push(8); c.push(0); c.push(0); c.push(144)
+    // str w0, [x8, errno@PAGEOFF] [RELOC]   0xB9000100
+    c.push(0); c.push(1); c.push(0); c.push(185)
+    // mov x0, #-1  (error return)           0x92800000
+    c.push(0); c.push(0); c.push(128); c.push(146)
+    // ret                                   0xD65F03C0
+    c.push(192); c.push(3); c.push(95); c.push(214)
+    return c
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Inlined LE push helpers + macho_obj_wrap_v3 (undefined-external-capable),
+// verbatim from self/codegen/macho.hexa.
+// ═══════════════════════════════════════════════════════════════════
+fn align_to_v(val: int, align: int) -> int {
+    return (val + align - 1) / align * align
+}
+fn push_u16_le_v(buf: [int], val: int) -> [int] {
+    return buf.push(val % 256).push((val / 256) % 256)
+}
+fn push_u32_le_v(buf: [int], val: int) -> [int] {
+    return buf.push(val % 256).push((val / 256) % 256).push((val / 65536) % 256).push((val / 16777216) % 256)
+}
+fn push_u64_le_v(buf: [int], val: int) -> [int] {
+    let mut b = push_u32_le_v(buf, val % 0x100000000)
+    return push_u32_le_v(b, val / 0x100000000)
+}
+
+// macho_obj_wrap_v3 — see self/codegen/macho.hexa. sym_sections[i]==0 marks
+// an UNDEFINED EXTERNAL symbol (N_UNDF, n_sect=0): declared here, resolved by
+// ld64 from another .o at link. The errno (`_hxlcl_errno`) is such a symbol.
+fn macho_obj_wrap_v3_v(code: [int],
+                       sym_name_bytes: [[int]],
+                       sym_offsets: [int],
+                       sym_sections: [int],
+                       state_bytes: [int],
+                       reloc_offs: [int],
+                       reloc_kinds: [int],
+                       reloc_symnums: [int]) -> [int] {
+    let mut out = []
+    let code_size  = len(code)
+    let state_size = len(state_bytes)
+    let nreloc     = len(reloc_offs)
+    let nsyms      = len(sym_name_bytes)
+
+    let mut sym_strx: [int] = []
+    let mut strtab_size = 1
+    let mut si = 0
+    while si < nsyms {
+        sym_strx.push(strtab_size)
+        strtab_size = strtab_size + len(sym_name_bytes[si])
+        si = si + 1
+    }
+
+    let mut nsects = 1
+    if state_size > 0 { nsects = 2 }
+    let segment_cmd_size = 72 + 80 * nsects
+    let symtab_cmd_size = 24
+    let build_version_cmd_size = 24
+    let sizeofcmds = segment_cmd_size + symtab_cmd_size + build_version_cmd_size
+
+    let header_size = 32
+    let code_offset = align_to_v(header_size + sizeofcmds, 8)
+
+    let mut const_offset = code_offset + code_size
+    if state_size > 0 {
+        const_offset = align_to_v(code_offset + code_size, 8)
+    }
+    let data_end = const_offset + state_size
+
+    let reloc_offset = align_to_v(data_end, 4)
+    let reloc_size   = 8 * nreloc
+    let symtab_offset = reloc_offset + reloc_size
+    let nlist_size = 16
+    let strtab_offset = symtab_offset + nlist_size * nsyms
+    let total_end = strtab_offset + strtab_size
+
+    // Mach-O header
+    out = push_u32_le_v(out, 0xFEEDFACF)
+    out = push_u32_le_v(out, 0x0100000C)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 1)
+    out = push_u32_le_v(out, 3)
+    out = push_u32_le_v(out, sizeofcmds)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+
+    // LC_SEGMENT_64
+    out = push_u32_le_v(out, 0x19)
+    out = push_u32_le_v(out, segment_cmd_size)
+    let mut i0 = 0
+    while i0 < 16 { out.push(0); i0 = i0 + 1 }
+    out = push_u64_le_v(out, 0)
+    out = push_u64_le_v(out, total_end - code_offset)
+    out = push_u64_le_v(out, code_offset)
+    out = push_u64_le_v(out, total_end - code_offset)
+    out = push_u32_le_v(out, 7)
+    out = push_u32_le_v(out, 7)
+    out = push_u32_le_v(out, nsects)
+    out = push_u32_le_v(out, 0)
+
+    // section_64 __text
+    out.push(95); out.push(95); out.push(116); out.push(101); out.push(120); out.push(116)
+    let mut j0 = 0
+    while j0 < 10 { out.push(0); j0 = j0 + 1 }
+    out.push(95); out.push(95); out.push(84); out.push(69); out.push(88); out.push(84)
+    j0 = 0
+    while j0 < 10 { out.push(0); j0 = j0 + 1 }
+    out = push_u64_le_v(out, 0)
+    out = push_u64_le_v(out, code_size)
+    out = push_u32_le_v(out, code_offset)
+    out = push_u32_le_v(out, 2)
+    out = push_u32_le_v(out, reloc_offset)
+    out = push_u32_le_v(out, nreloc)
+    out = push_u32_le_v(out, 0x80000400)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+
+    // section_64 __const — only if state_size > 0
+    if state_size > 0 {
+        out.push(95); out.push(95); out.push(99); out.push(111); out.push(110); out.push(115); out.push(116)
+        let mut j1 = 0
+        while j1 < 9 { out.push(0); j1 = j1 + 1 }
+        out.push(95); out.push(95); out.push(84); out.push(69); out.push(88); out.push(84)
+        j1 = 0
+        while j1 < 10 { out.push(0); j1 = j1 + 1 }
+        out = push_u64_le_v(out, code_size)
+        out = push_u64_le_v(out, state_size)
+        out = push_u32_le_v(out, const_offset)
+        out = push_u32_le_v(out, 3)
+        out = push_u32_le_v(out, 0)
+        out = push_u32_le_v(out, 0)
+        out = push_u32_le_v(out, 0)
+        out = push_u32_le_v(out, 0)
+        out = push_u32_le_v(out, 0)
+        out = push_u32_le_v(out, 0)
+    }
+
+    // LC_SYMTAB
+    out = push_u32_le_v(out, 0x02)
+    out = push_u32_le_v(out, symtab_cmd_size)
+    out = push_u32_le_v(out, symtab_offset)
+    out = push_u32_le_v(out, nsyms)
+    out = push_u32_le_v(out, strtab_offset)
+    out = push_u32_le_v(out, strtab_size)
+
+    // LC_BUILD_VERSION
+    out = push_u32_le_v(out, 0x32)
+    out = push_u32_le_v(out, build_version_cmd_size)
+    out = push_u32_le_v(out, 1)
+    out = push_u32_le_v(out, 0x000E0000)
+    out = push_u32_le_v(out, 0x000E0000)
+    out = push_u32_le_v(out, 0)
+
+    // Pad to code_offset, then __text payload
+    while len(out) < code_offset { out.push(0) }
+    let mut k0 = 0
+    while k0 < len(code) { out.push(code[k0]); k0 = k0 + 1 }
+
+    // Pad to const_offset, then __const payload (if any)
+    if state_size > 0 {
+        while len(out) < const_offset { out.push(0) }
+        let mut sb = 0
+        while sb < state_size { out.push(state_bytes[sb]); sb = sb + 1 }
+    }
+
+    // Pad to reloc_offset, then relocation table
+    while len(out) < reloc_offset { out.push(0) }
+    let mut ri = 0
+    while ri < nreloc {
+        let r_off     = reloc_offs[ri]
+        let r_kind    = reloc_kinds[ri]
+        let r_symnum  = reloc_symnums[ri]
+        out = push_u32_le_v(out, r_off)
+        let mut r_pcrel = 0
+        if r_kind == 3 { r_pcrel = 1 }
+        if r_kind == 2 { r_pcrel = 1 }
+        let r_length = 2
+        let r_extern = 1
+        let bits = (r_symnum % 0x1000000)
+                 + (r_pcrel * 0x1000000)
+                 + (r_length * 0x2000000)
+                 + (r_extern * 0x8000000)
+                 + ((r_kind % 16) * 0x10000000)
+        out = push_u32_le_v(out, bits)
+        ri = ri + 1
+    }
+
+    // Pad to symtab_offset, then nlist_64 × nsyms
+    while len(out) < symtab_offset { out.push(0) }
+    let mut sj = 0
+    while sj < nsyms {
+        let s_strx    = sym_strx[sj]
+        let s_offset  = sym_offsets[sj]
+        let s_section = sym_sections[sj]
+        let mut n_value = s_offset
+        if s_section == 2 { n_value = code_size + s_offset }
+        let mut n_type_b = 0x0E + 0x01
+        if s_section == 0 {
+            n_type_b = 0x01
+            n_value = 0
+        }
+        out = push_u32_le_v(out, s_strx)
+        out.push(n_type_b)
+        out.push(s_section)
+        out = push_u16_le_v(out, 0)
+        out = push_u64_le_v(out, n_value)
+        sj = sj + 1
+    }
+
+    // String table
+    out.push(0)
+    let mut sk = 0
+    while sk < nsyms {
+        let nb = sym_name_bytes[sk]
+        let mut nbi = 0
+        while nbi < len(nb) {
+            out.push(nb[nbi])
+            nbi = nbi + 1
+        }
+        sk = sk + 1
+    }
+
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Driver
+// ═══════════════════════════════════════════════════════════════════
+fn emit_hxlcl_chown_o() {
+    println("[wire] F3 Path A · wave 4 · rt_chown native override — _hxlcl_chown")
+
+    let code = rt_chown_bytes()
+    if len(code) != 40 {
+        println("FAIL: rt_chown expected 40 bytes, got " + to_string(len(code)))
+        return
+    }
+    println("  rt_chown bytes  : " + to_string(len(code)) + " (40 expected)")
+
+    // sxtw x1,w1 (21 7c 40 93) — uid arg sign-extended (x0=path passes through)
+    if code[0] != 33 || code[1] != 124 || code[2] != 64 || code[3] != 147 {
+        println("FAIL: sxtw uid prefix mismatch"); return
+    }
+    println("  uid arg load   : 21 7c 40 93 (sxtw x1, w1) OK")
+
+    // sxtw x2,w2 (42 7c 40 93) — gid arg sign-extended
+    if code[4] != 66 || code[5] != 124 || code[6] != 64 || code[7] != 147 {
+        println("FAIL: sxtw gid prefix mismatch"); return
+    }
+    println("  gid arg load   : 42 7c 40 93 (sxtw x2, w2) OK")
+
+    // mov w16,#16 (10 02 80 52) — SYS_CHOWN
+    if code[8] != 16 || code[9] != 2 || code[10] != 128 || code[11] != 82 {
+        println("FAIL: mov w16,#16 (SYS_CHOWN) mismatch"); return
+    }
+    println("  syscall number : 10 02 80 52 (mov w16, #16 = SYS_CHOWN) OK")
+
+    // svc #0x80 (01 10 00 d4) at offset 12
+    if code[12] != 1 || code[13] != 16 || code[14] != 0 || code[15] != 212 {
+        println("FAIL: svc #0x80 mismatch"); return
+    }
+    println("  syscall trap   : 01 10 00 d4 (svc #0x80) OK")
+
+    // cset x8,hs (e8 37 9f 9a) at offset 16 — carry-flag capture
+    if code[16] != 232 || code[17] != 55 || code[18] != 159 || code[19] != 154 {
+        println("FAIL: cset (carry-flag capture) mismatch"); return
+    }
+    println("  carry capture  : e8 37 9f 9a (cset x8, hs) OK")
+
+    // adrp x8,errno (08 00 00 90) at offset 24 — PAGE21 reloc site
+    if code[24] != 8 || code[25] != 0 || code[26] != 0 || code[27] != 144 {
+        println("FAIL: adrp errno (reloc site 0x18) mismatch"); return
+    }
+    // str w0,[x8] (00 01 00 b9) at offset 28 — PAGEOFF12 reloc site
+    if code[28] != 0 || code[29] != 1 || code[30] != 0 || code[31] != 185 {
+        println("FAIL: str errno (reloc site 0x1c) mismatch"); return
+    }
+    println("  errno store    : adrp/str @ 0x18/0x1c (2 relocs) OK")
+
+    // ret (c0 03 5f d6) at offset 36
+    if code[36] != 192 || code[37] != 3 || code[38] != 95 || code[39] != 214 {
+        println("FAIL: ret trailer mismatch"); return
+    }
+    println("  ret trailer    : c0 03 5f d6 (ret) OK — x0=0/-1 returned")
+
+    // ── Symbol + reloc tables for the v3 (undefined-external) wrap ──
+    // sym[0] = _hxlcl_chown (text, sect 1, offset 0) — DEFINED here.
+    // sym[1] = _hxlcl_errno (UNDEFINED external, sect 0).
+    let mut sym_names: [[int]] = []
+    // "_hxlcl_chown\0" — 13 bytes: 95 104 120 108 99 108 95 99 104 111 119 110 0
+    let mut s0 = []
+    s0.push(95); s0.push(104); s0.push(120); s0.push(108); s0.push(99); s0.push(108)
+    s0.push(95); s0.push(99); s0.push(104); s0.push(111); s0.push(119); s0.push(110); s0.push(0)
+    sym_names.push(s0)
+    // "_hxlcl_errno\0"
+    let mut s1 = []
+    s1.push(95); s1.push(104); s1.push(120); s1.push(108); s1.push(99); s1.push(108)
+    s1.push(95); s1.push(101); s1.push(114); s1.push(114); s1.push(110); s1.push(111); s1.push(0)
+    sym_names.push(s1)
+
+    let mut sym_offsets = []
+    sym_offsets.push(0)
+    sym_offsets.push(0)
+    let mut sym_sections = []
+    sym_sections.push(1)   // __text (defined)
+    sym_sections.push(0)   // UNDEFINED external (errno)
+
+    let mut state = []
+
+    // relocs — PAGE21 @ 0x18 (24), PAGEOFF12 @ 0x1c (28), both → sym[1].
+    let mut roff = []
+    roff.push(24)
+    roff.push(28)
+    let mut rkind = []
+    rkind.push(3)
+    rkind.push(4)
+    let mut rsym = []
+    rsym.push(1)
+    rsym.push(1)
+
+    let obj = macho_obj_wrap_v3_v(code, sym_names, sym_offsets, sym_sections, state, roff, rkind, rsym)
+    println("  obj_wrap size  : " + to_string(len(obj)) + " bytes total")
+
+    if obj[0] != 0xcf || obj[1] != 0xfa || obj[2] != 0xed || obj[3] != 0xfe {
+        println("FAIL: MH_MAGIC_64 mismatch"); return
+    }
+    println("  MH_MAGIC_64    : cf fa ed fe OK")
+
+    if obj[12] != 1 {
+        println("FAIL: filetype not MH_OBJECT"); return
+    }
+    println("  filetype       : 1 (MH_OBJECT) OK")
+
+    let out_path = env_var("HEXA_HXLCL_CHOWN_O")
+    let mut dest = out_path
+    if dest == "" { dest = "build/poc/hxlcl_chown.o" }
+    write_bytes(dest, obj)
+    println("  wrote          : " + dest)
+    println("[wire] EMIT OK — JIT-exec via driver (success + ENOENT error)")
+}
+
+emit_hxlcl_chown_o()
