@@ -1,5 +1,12 @@
 # INBOX — log
 
+## 2026-05-28 — 🟠 OPEN · `atlas register --from-verify` 의 #1901 rounding auto-route 가 display-rounded 값을 읽음 (#1901 follow-up)
+
+> **출처**: #1901(3-op fold) fix 후 demiurge YH₁₀ verdict atlas fold(#1909) 중 발견. #1901 이 `_is_rounding_of` gate 로 rounded-literal 도 fold 하게 의도했으나, `_compute_value_of` 가 verify 의 **display-rounded** 출력(`227.501`, 3소수)을 읽어 full float64(`227.50113398567433`)가 아님 → `_is_rounding_of("227.501", "227.501134")` 가 band 실패 → rounded claim(`227.501134`)은 여전히 🔴, fold 불가.
+> **현 우회 (clean)**: full-precision 값(`227.50113398567433`)을 register 에 주면 strict-ε 직접 🟢 fold. YH₁₀ 는 이 경로로 #1909 성공.
+> **recommend**: `_compute_value_of` 가 verify 의 full-precision 값(display-rounded 아닌 raw float64)을 캡처하도록 — verify --expr 가 full-precision 을 노출하거나(machine-readable), register 가 자체 recompute 로 full float64 확보. 그러면 rounding auto-route(#1901 의도)가 실제 작동.
+> **우선순위 P3** (비차단): full-precision 경로가 깔끔히 작동하므로 기능 막힘 아님. rounded-literal 편의성 갭. evidence: #1909 (YH₁₀ fold, full-precision 경유 🟢).
+
 ## 2026-05-28 — ✅ RESOLVED #1901 · `atlas register --from-verify` 가 3-operand 함수 mis-parse (verified 3-op 닫힌형 fold 불가)
 
 > **RESOLVED 2026-05-28** (`fix/atlas-from-verify-arity`): root cause 는 "3-op 분기 부재"가 아니라 — value-bearing 파서는 이미 임의 arity 를 지원했으나(verify_cli `cmd_expr_float` has5/has6/has7 → argc≤4, atlas `_adapt_verify_generic` delegate), 마지막 토큰을 항상 claimed `<v>` 로 삼는 구조상 `allen_dynes_tc … 0.10 227.501` 가 3-op verify 로 정상 호출되지만 **claimed 227.501 이 literature-ROUNDED → 엔진값 227.501133986 과 |Δ|=1.3e-4 > strict ε=1e-9 → 🔴**. 기존 arity auto-route 가 **🟠 에서만** compute 재시도 → 이 🔴 은 재시도 안 됨 → false falsification. **Fix**: auto-route 를 🔴 에도 발화 — `_is_rounding_of` 게이트(엔진 compute 값이 claimed `<v>` 의 half-up 십진 band 안이어야 함; band 밖 deterministic 불일치는 🔴 유지 → g34 falsification-laundering 금지). arity table 은 verify_cli 가 SSOT(g20 — atlas 측 arity 분기 0). 테스트: 3-op allen_dynes_tc 227.501 → 🟢 fold ✓ · 1-op/2-op 회귀 무손상 · 500.0 wrong-claim → 🔴 refuse ✓. **demiurge YH₁₀ verdict(🟢 allen_dynes_tc)가 atlas 에 fold 가능해짐.**
