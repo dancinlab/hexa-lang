@@ -1,0 +1,23 @@
+========================================================================
+  self/native — signal_flock_byte_diff: B9.C-10 .c-text byte-diff oracle
+========================================================================
+  generator: self/native/signal_flock_emit.hexa
+  oracle:    source-SHA byte-diff vs hand-written signal_flock.c
+  note:      runtime.c #include fragment — .o proof via full hexa_cc build
+
+  scratch: /var/folders/2g/blzd56lx2rvfvt61c1pc9g7r0000gn/T/signal_flock_byte_diff.XXXXXX.L51UxLk4ns
+
+  [PASS] hexa emitter self/native/signal_flock_emit.hexa present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a29a88987b6876976/self/native/signal_flock_emit.hexa
+  [PASS] hand-written self/native/signal_flock.c present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a29a88987b6876976/self/native/signal_flock.c
+  [PASS] gate-1 source-text byte-identical (sha256(.c))
+         · orig=c89e3c8c853ece9245359c8d99989aed1c94cde53080f0d39346e7ccf444d02d gen=c89e3c8c853ece9245359c8d99989aed1c94cde53080f0d39346e7ccf444d02d
+
+  B9.C-10 signal_flock.c .c-text byte-identity:
+    PROVEN ✓ — hand-written signal_flock.c is fully hexa-emittable.
+    DELETION GATE OPEN — self/native/signal_flock.c may be `git rm` once the
+    full hexa_cc build (regen + runtime.c compile + smoke) also PASSes.
+========================================================================
+  3/3 checks passed
+__HEXA_LANG_SIGNAL_FLOCK_BYTE_DIFF__ PASS

@@ -1,0 +1,23 @@
+========================================================================
+  self/native — exec_pipe_byte_diff: B9.C-10 .c-text byte-diff oracle
+========================================================================
+  generator: self/native/exec_pipe_emit.hexa
+  oracle:    source-SHA byte-diff vs hand-written exec_pipe.c
+  note:      runtime.c #include fragment — .o proof via full hexa_cc build
+
+  scratch: /var/folders/2g/blzd56lx2rvfvt61c1pc9g7r0000gn/T/exec_pipe_byte_diff.XXXXXX.ZYgafMHdiP
+
+  [PASS] hexa emitter self/native/exec_pipe_emit.hexa present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a29a88987b6876976/self/native/exec_pipe_emit.hexa
+  [PASS] hand-written self/native/exec_pipe.c present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a29a88987b6876976/self/native/exec_pipe.c
+  [PASS] gate-1 source-text byte-identical (sha256(.c))
+         · orig=aa3b15e892c29608312853339c315c0cb1b776192b35ea5805a565909a4c6cf5 gen=aa3b15e892c29608312853339c315c0cb1b776192b35ea5805a565909a4c6cf5
+
+  B9.C-10 exec_pipe.c .c-text byte-identity:
+    PROVEN ✓ — hand-written exec_pipe.c is fully hexa-emittable.
+    DELETION GATE OPEN — self/native/exec_pipe.c may be `git rm` once the
+    full hexa_cc build (regen + runtime.c compile + smoke) also PASSes.
+========================================================================
+  3/3 checks passed
+__HEXA_LANG_EXEC_PIPE_BYTE_DIFF__ PASS

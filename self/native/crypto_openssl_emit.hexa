@@ -1,0 +1,87 @@
+#!hexa strict
+// self/native/crypto_openssl_emit.hexa
+//   B9.C-10 (.c-text · #1848 pattern) — crypto_openssl.c source emitter.
+//
+// runtime.c #include "native/crypto_openssl.c" — RFC 061 amalgamation fragment
+// (NOT a standalone TU; references runtime.c-internal symbols). This emitter
+// is the SSOT; the build regenerates self/native/crypto_openssl.c from it before
+// runtime.c compiles, so the .c becomes a gitignored build artifact.
+//
+// Byte-identity: regenerated C is byte-for-byte the hand-written source, so
+// the runtime.c TU (and the linked hexa binary) is identical — PERF UNCHANGED.
+//
+// Invocation:  hexa-run self/native/crypto_openssl_emit.hexa <output-path>
+// Default output path (if argv missing): "crypto_openssl.c" in cwd.
+//
+// Phase: B9.C-10 batch (self/native runtime.c-included .c-text · F3).
+
+let MODULE_NAME = "crypto_openssl_emit"
+
+fn emit_crypto_openssl_c() -> str {
+    // Verbatim content of hand-written self/native/crypto_openssl.c
+    let s =
+            "/* self/native/crypto_openssl.c -- OpenSSL EVP binding (AES-256-CTR).\n" +
+            " *\n" +
+            " * Included from self/runtime.c (NOT a standalone TU).\n" +
+            " *\n" +
+            " * Only AES-256-CTR for now — needed by OpenSSH passphrase-encrypted\n" +
+            " * private-key decryption (cipher = \"aes256-ctr\"). libsodium ships\n" +
+            " * AES-128 only; AES-256 needs OpenSSL or a hand-rolled S-box impl.\n" +
+            " *\n" +
+            " * Exports:\n" +
+            " *   hexa_aes256_ctr_xor(key, iv, data) -> [int]\n" +
+            " *\n" +
+            " * Linking: -lcrypto (OpenSSL). Detected by self/main.hexa::os_clang_*\n" +
+            " * flags via pkg-config openssl when HEXA_HAS_OPENSSL is defined.\n" +
+            " */\n" +
+            "\n" +
+            "#ifdef HEXA_HAS_OPENSSL\n" +
+            "#include <openssl/evp.h>\n" +
+            "#endif\n" +
+            "\n" +
+            "HexaVal hexa_aes256_ctr_xor(HexaVal key_v, HexaVal iv_v, HexaVal data_v) {\n" +
+            "#ifdef HEXA_HAS_OPENSSL\n" +
+            "    size_t kn = 0, in = 0, dn = 0;\n" +
+            "    unsigned char* k = _arr_to_bytes(key_v,  &kn);\n" +
+            "    unsigned char* iv = _arr_to_bytes(iv_v,  &in);\n" +
+            "    unsigned char* d = _arr_to_bytes(data_v, &dn);\n" +
+            "    if (!k || kn != 32 || !iv || in != 16 || !d) {\n" +
+            "        if (k) free(k); if (iv) free(iv); if (d) free(d);\n" +
+            "        return _crypto_error(\"aes256_ctr: key=32 iv=16 required\");\n" +
+            "    }\n" +
+            "    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();\n" +
+            "    if (!ctx) { free(k); free(iv); free(d); return _crypto_error(\"aes256_ctr: ctx_new\"); }\n" +
+            "    unsigned char* out = (unsigned char*)malloc(dn);\n" +
+            "    int outlen = 0, finlen = 0;\n" +
+            "    int ok = EVP_EncryptInit_ex(ctx, EVP_aes_256_ctr(), NULL, k, iv) == 1\n" +
+            "          && EVP_EncryptUpdate(ctx, out, &outlen, d, (int)dn) == 1\n" +
+            "          && EVP_EncryptFinal_ex(ctx, out + outlen, &finlen) == 1;\n" +
+            "    EVP_CIPHER_CTX_free(ctx);\n" +
+            "    HexaVal res;\n" +
+            "    if (ok) { res = _bytes_to_arr(out, dn); }\n" +
+            "    else { res = _crypto_error(\"aes256_ctr: EVP failed\"); }\n" +
+            "    free(k); free(iv); free(d); free(out);\n" +
+            "    return res;\n" +
+            "#else\n" +
+            "    (void)key_v; (void)iv_v; (void)data_v;\n" +
+            "    return _crypto_error(\"OpenSSL not linked — passphrase-encrypted keys unsupported\");\n" +
+            "#endif\n" +
+            "}\n"
+    return s
+}
+
+fn main() {
+    let argv = real_args()
+    let out_path = if argv.len() >= 1 { argv[0] } else { "crypto_openssl.c" }
+    let c_text = emit_crypto_openssl_c()
+    let cmd = "cat > \"" + out_path + "\" <<'CRYPTO_OPENSSL_EMIT_EOF'\n" +
+              c_text + "CRYPTO_OPENSSL_EMIT_EOF"
+    let _ = exec(cmd)
+    let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
+    if exists_check != "y" {
+        println("[crypto_openssl_emit] FATAL: failed to write " + out_path)
+        exit(1)
+    }
+    println("[crypto_openssl_emit] wrote " + out_path)
+    exit(0)
+}

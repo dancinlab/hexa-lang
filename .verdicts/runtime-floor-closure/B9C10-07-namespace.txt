@@ -1,0 +1,23 @@
+========================================================================
+  self/native — namespace_byte_diff: B9.C-10 .c-text byte-diff oracle
+========================================================================
+  generator: self/native/namespace_emit.hexa
+  oracle:    source-SHA byte-diff vs hand-written namespace.c
+  note:      runtime.c #include fragment — .o proof via full hexa_cc build
+
+  scratch: /var/folders/2g/blzd56lx2rvfvt61c1pc9g7r0000gn/T/namespace_byte_diff.XXXXXX.zqV5B3dkzg
+
+  [PASS] hexa emitter self/native/namespace_emit.hexa present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a29a88987b6876976/self/native/namespace_emit.hexa
+  [PASS] hand-written self/native/namespace.c present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a29a88987b6876976/self/native/namespace.c
+  [PASS] gate-1 source-text byte-identical (sha256(.c))
+         · orig=406864f6bfb11191c65e21778b9ea0d11ae53499dbf2258dcbe954b4959cdc24 gen=406864f6bfb11191c65e21778b9ea0d11ae53499dbf2258dcbe954b4959cdc24
+
+  B9.C-10 namespace.c .c-text byte-identity:
+    PROVEN ✓ — hand-written namespace.c is fully hexa-emittable.
+    DELETION GATE OPEN — self/native/namespace.c may be `git rm` once the
+    full hexa_cc build (regen + runtime.c compile + smoke) also PASSes.
+========================================================================
+  3/3 checks passed
+__HEXA_LANG_NAMESPACE_BYTE_DIFF__ PASS

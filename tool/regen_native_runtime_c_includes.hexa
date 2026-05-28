@@ -1,0 +1,169 @@
+#!hexa strict
+// tool/regen_native_runtime_c_includes.hexa
+//   B9.C-10 (.c-text · #1848 pattern) — regen + sha-verify for the 16
+//   self/native/*.c files `#include`d by self/runtime.c (RFC 061 amalgamation).
+//
+// ── WHY THIS EXISTS ────────────────────────────────────────────────────
+//
+// runtime.c is a single amalgamated TU that `#include`s 16 native fragment
+// `.c` files (crypto_openssl, crypto_sodium, exec_argv_sha256, exec_pipe,
+// fp_init, mount, namespace, net, persistent_pipe, proc_fork, pty,
+// signal_flock, tensor_kernels, term_ffi, thread, wait). Each is byte-
+// identically hexa-emittable (B9.C-10 byte_diff oracles, gate-1 source-SHA
+// PASS, persisted in .verdicts/runtime-floor-closure/B9C10-*).
+//
+// Source-SHA equivalence is the binding gate: because each emitter reproduces
+// its `.c` byte-for-byte, regenerating the `.c` from the emitter (the SSOT)
+// ships the SAME bytes runtime.c would `#include` → clang (deterministic on
+// identical input) produces the SAME runtime.c TU / hexa binary. The full
+// hexa_cc self-host build is the end-to-end .o-equivalence proof.
+//
+// These fragments are NOT standalone TUs (they reference runtime.c-internal
+// symbols HexaVal/hxlcl_*/hexa_int/…) — so they CANNOT be compiled in
+// isolation; gate-1 source-SHA is the only per-file gate, by design.
+//
+// ── USAGE ──────────────────────────────────────────────────────────────
+//
+//   # regen all 16 + verify sha-equivalence vs the in-tree `.c`:
+//   hexa-run tool/regen_native_runtime_c_includes.hexa
+//
+//   # regen only (e.g. when the `.c` has already been git-rm'd — no in-tree
+//   # baseline to compare; the emitter is the SSOT):
+//   hexa-run tool/regen_native_runtime_c_includes.hexa --regen-only
+//
+//   # exit 0 = all regen OK (and, unless --regen-only, all sha-equal);
+//   # exit 1 = a regen failed or a sha mismatch (drift) was detected.
+//
+// HEXA_HAL_ROOT overrides the repo-root autodetect (defaults to `pwd`).
+
+let MODULE_NAME = "regen_native_runtime_c_includes"
+
+let mut RUN  = 0
+let mut FAIL = 0
+
+fn _root() -> str {
+    let env_root = env("HEXA_HAL_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _which(cmd: str) -> bool {
+    let r = exec("command -v " + cmd + " >/dev/null 2>&1 && echo y || echo n").trim()
+    return r == "y"
+}
+
+fn _exists(p: str) -> bool {
+    let r = exec("[ -f \"" + p + "\" ] && echo y || echo n").trim()
+    return r == "y"
+}
+
+fn _sha256(p: str) -> str {
+    if _which("shasum") {
+        return exec("shasum -a 256 \"" + p + "\" 2>/dev/null | awk '{print $1}'").trim()
+    }
+    if _which("sha256sum") {
+        return exec("sha256sum \"" + p + "\" 2>/dev/null | awk '{print $1}'").trim()
+    }
+    return ""
+}
+
+fn _hexa_run() -> str {
+    // Prefer an on-PATH hexa-run; fall back to the canonical install path.
+    if _which("hexa-run") { return "hexa-run" }
+    return "/Users/ghost/.hx/bin/hexa-run"
+}
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// Regenerate one `self/native/<base>.c` from its emitter. When `regen_only`
+// is false AND an in-tree baseline exists, also assert sha-equivalence vs the
+// (pre-regen) baseline (drift guard).
+fn regen_one(root: str, base: str, regen_only: bool) {
+    let emitter = root + "/self/native/" + base + "_emit.hexa"
+    let dst     = root + "/self/native/" + base + ".c"
+
+    if !_exists(emitter) {
+        _check(false, "emitter present: " + base + "_emit.hexa", "MISSING — cannot regen " + base + ".c")
+        return
+    }
+
+    let had_baseline = _exists(dst)
+    let baseline_sha = if had_baseline { _sha256(dst) } else { "" }
+
+    let tmp = exec("mktemp -t regen_native_c.XXXXXX").trim()
+    if tmp.len() == 0 {
+        _check(false, "regen " + base + ".c", "mktemp scratch failed")
+        return
+    }
+    let cmd = _hexa_run() + " \"" + emitter + "\" \"" + tmp + "\" >/dev/null 2>&1; echo $?"
+    let rc = exec(cmd).trim()
+    if rc != "0" || !_exists(tmp) {
+        _check(false, "regen " + base + ".c", "emitter exit rc=" + rc)
+        let _ = exec("rm -f \"" + tmp + "\"")
+        return
+    }
+
+    let gen_sha = _sha256(tmp)
+
+    if regen_only || !had_baseline {
+        let _ = exec("cp -f \"" + tmp + "\" \"" + dst + "\"")
+        let _ = exec("rm -f \"" + tmp + "\"")
+        _check(_exists(dst), "regen " + base + ".c (no-baseline · emitter SSOT)",
+               "sha=" + gen_sha)
+        return
+    }
+
+    let equal = baseline_sha == gen_sha && gen_sha.len() > 0
+    let _ = exec("cp -f \"" + tmp + "\" \"" + dst + "\"")
+    let _ = exec("rm -f \"" + tmp + "\"")
+    let detail = if equal {
+        "gate-1 byte-identical · sha=" + gen_sha
+    } else {
+        "⚠ DRIFT — baseline=" + baseline_sha + " gen=" + gen_sha
+    }
+    _check(equal, "regen+verify " + base + ".c", detail)
+}
+
+fn main() {
+    println("========================================================================")
+    println("  B9.C-10 — regen_native_runtime_c_includes: 16 runtime.c #include .c regen")
+    println("========================================================================")
+
+    let argv = real_args()
+    let mut regen_only = false
+    let mut i = 0
+    while i < argv.len() {
+        if argv[i] == "--regen-only" { regen_only = true }
+        i = i + 1
+    }
+
+    let root = _root()
+    println("  repo-root: " + root)
+    println("  mode:      " + (if regen_only { "--regen-only (emitter SSOT, no baseline compare)" } else { "regen + gate-1 sha-verify vs in-tree `.c`" }))
+    println("")
+
+    let bases = ["crypto_openssl", "crypto_sodium", "exec_argv_sha256", "exec_pipe", "fp_init", "mount", "namespace", "net", "persistent_pipe", "proc_fork", "pty", "signal_flock", "tensor_kernels", "term_ffi", "thread", "wait"]
+    let mut bi = 0
+    while bi < bases.len() {
+        regen_one(root, bases[bi], regen_only)
+        bi = bi + 1
+    }
+
+    println("")
+    let pass_n = RUN - FAIL
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " artifacts regenerated"
+            + (if regen_only { "" } else { " + verified sha-identical" }))
+    if FAIL > 0 {
+        println("__HEXA_LANG_REGEN_NATIVE_RUNTIME_C__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_LANG_REGEN_NATIVE_RUNTIME_C__ PASS")
+    exit(0)
+}

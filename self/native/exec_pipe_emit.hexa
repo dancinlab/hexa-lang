@@ -1,0 +1,154 @@
+#!hexa strict
+// self/native/exec_pipe_emit.hexa
+//   B9.C-10 (.c-text · #1848 pattern) — exec_pipe.c source emitter.
+//
+// runtime.c #include "native/exec_pipe.c" — RFC 061 amalgamation fragment
+// (NOT a standalone TU; references runtime.c-internal symbols). This emitter
+// is the SSOT; the build regenerates self/native/exec_pipe.c from it before
+// runtime.c compiles, so the .c becomes a gitignored build artifact.
+//
+// Byte-identity: regenerated C is byte-for-byte the hand-written source, so
+// the runtime.c TU (and the linked hexa binary) is identical — PERF UNCHANGED.
+//
+// Invocation:  hexa-run self/native/exec_pipe_emit.hexa <output-path>
+// Default output path (if argv missing): "exec_pipe.c" in cwd.
+//
+// Phase: B9.C-10 batch (self/native runtime.c-included .c-text · F3).
+
+let MODULE_NAME = "exec_pipe_emit"
+
+fn emit_exec_pipe_c() -> str {
+    // Verbatim content of hand-written self/native/exec_pipe.c
+    let s =
+            "/* self/native/exec_pipe.c -- fork + exec with separated stdout/stderr pipes.\n" +
+            " *\n" +
+            " * Included from self/runtime.c (NOT a standalone TU).\n" +
+            " *\n" +
+            " * Unlike hexa_pty_forkexec (which uses a pty so stdout and stderr both\n" +
+            " * fall down the master_fd), this binding gives the caller two distinct\n" +
+            " * fds — needed by sshd to route stdout to CHANNEL_DATA and stderr to\n" +
+            " * CHANNEL_EXTENDED_DATA(1) per RFC 4254 §5.2.\n" +
+            " *\n" +
+            " * Exports (codegen direct-emit):\n" +
+            " *   hexa_exec_pipe_open(argv, env)\n" +
+            " *     -> map { pid:int, stdout_fd:int, stderr_fd:int, stdin_fd:int }\n" +
+            " *     or { error: string }\n" +
+            " *\n" +
+            " * Lifecycle: caller is responsible for net_close(stdout_fd) /\n" +
+            " * net_close(stderr_fd) / net_close(stdin_fd) and proc_wait(pid).\n" +
+            " */\n" +
+            "\n" +
+            "#include <sys/types.h>\n" +
+            "#include <sys/wait.h>\n" +
+            "#include <unistd.h>\n" +
+            "#include <fcntl.h>\n" +
+            "#include <errno.h>\n" +
+            "#include <string.h>\n" +
+            "#include <stdlib.h>\n" +
+            "\n" +
+            "HexaVal hexa_exec_pipe_open(HexaVal argv_v, HexaVal env_v) {\n" +
+            "    if (!HX_IS_ARRAY(argv_v)) return _crypto_error(\"exec_pipe_open: argv must be array\");\n" +
+            "    int argc = HX_ARR_LEN(argv_v);\n" +
+            "    if (argc < 1) return _crypto_error(\"exec_pipe_open: empty argv\");\n" +
+            "    /* Materialize argv */\n" +
+            "    char** argv = (char**)malloc(sizeof(char*) * (size_t)(argc + 1));\n" +
+            "    if (!argv) return _crypto_error(\"exec_pipe_open: oom argv\");\n" +
+            "    for (int i = 0; i < argc; i++) {\n" +
+            "        HexaVal v = HX_ARR_ITEMS(argv_v)[i];\n" +
+            "        const char* s = HX_IS_STR(v) ? HX_STR(v) : \"\";\n" +
+            "        argv[i] = strdup(s ? s : \"\");\n" +
+            "    }\n" +
+            "    argv[argc] = NULL;\n" +
+            "\n" +
+            "    /* Materialize env: [string] of \"KEY=VALUE\" entries (NULL-terminated). */\n" +
+            "    char** envp = NULL;\n" +
+            "    int envc = 0;\n" +
+            "    if (HX_IS_ARRAY(env_v)) {\n" +
+            "        envc = HX_ARR_LEN(env_v);\n" +
+            "        envp = (char**)malloc(sizeof(char*) * (size_t)(envc + 1));\n" +
+            "        for (int i = 0; i < envc; i++) {\n" +
+            "            HexaVal v = HX_ARR_ITEMS(env_v)[i];\n" +
+            "            const char* s = HX_IS_STR(v) ? HX_STR(v) : \"\";\n" +
+            "            envp[i] = strdup(s ? s : \"\");\n" +
+            "        }\n" +
+            "        envp[envc] = NULL;\n" +
+            "    }\n" +
+            "\n" +
+            "    int p_stdin[2], p_stdout[2], p_stderr[2];\n" +
+            "    if (hxlcl_pipe(p_stdin)  != 0) { /* fall through to cleanup */ goto fail_pipe; }\n" +
+            "    if (hxlcl_pipe(p_stdout) != 0) { hxlcl_close(p_stdin[0]); hxlcl_close(p_stdin[1]); goto fail_pipe; }\n" +
+            "    if (hxlcl_pipe(p_stderr) != 0) {\n" +
+            "        hxlcl_close(p_stdin[0]); hxlcl_close(p_stdin[1]);\n" +
+            "        hxlcl_close(p_stdout[0]); hxlcl_close(p_stdout[1]);\n" +
+            "        goto fail_pipe;\n" +
+            "    }\n" +
+            "\n" +
+            "    pid_t pid = hxlcl_fork();\n" +
+            "    if (pid < 0) {\n" +
+            "        hxlcl_close(p_stdin[0]); hxlcl_close(p_stdin[1]);\n" +
+            "        hxlcl_close(p_stdout[0]); hxlcl_close(p_stdout[1]);\n" +
+            "        hxlcl_close(p_stderr[0]); hxlcl_close(p_stderr[1]);\n" +
+            "        for (int i = 0; i < argc; i++) free(argv[i]);\n" +
+            "        free(argv);\n" +
+            "        if (envp) { for (int i = 0; i < envc; i++) free(envp[i]); free(envp); }\n" +
+            "        return _crypto_error(\"exec_pipe_open: fork failed\");\n" +
+            "    }\n" +
+            "    if (pid == 0) {\n" +
+            "        /* child */\n" +
+            "        hxlcl_dup2(p_stdin[0],  STDIN_FILENO);\n" +
+            "        hxlcl_dup2(p_stdout[1], STDOUT_FILENO);\n" +
+            "        hxlcl_dup2(p_stderr[1], STDERR_FILENO);\n" +
+            "        hxlcl_close(p_stdin[0]);  hxlcl_close(p_stdin[1]);\n" +
+            "        hxlcl_close(p_stdout[0]); hxlcl_close(p_stdout[1]);\n" +
+            "        hxlcl_close(p_stderr[0]); hxlcl_close(p_stderr[1]);\n" +
+            "        /* execvp does PATH lookup, which we need for short names like\n" +
+            "         * \"sh\". When an envp[] is supplied, switch `environ` over so\n" +
+            "         * the child inherits exactly those vars but execvp still\n" +
+            "         * finds the binary on PATH. */\n" +
+            "        if (envp && envc > 0) {\n" +
+            "            extern char** environ;\n" +
+            "            environ = envp;\n" +
+            "        }\n" +
+            "        hxlcl_execvp(argv[0], argv);\n" +
+            "        /* exec failed */\n" +
+            "        _exit(127);\n" +
+            "    }\n" +
+            "    /* parent */\n" +
+            "    hxlcl_close(p_stdin[0]);\n" +
+            "    hxlcl_close(p_stdout[1]);\n" +
+            "    hxlcl_close(p_stderr[1]);\n" +
+            "    for (int i = 0; i < argc; i++) free(argv[i]);\n" +
+            "    free(argv);\n" +
+            "    if (envp) { for (int i = 0; i < envc; i++) free(envp[i]); free(envp); }\n" +
+            "\n" +
+            "    HexaVal m = hexa_map_new();\n" +
+            "    hexa_map_set(m, \"pid\",        hexa_int((int64_t)pid));\n" +
+            "    hexa_map_set(m, \"stdin_fd\",   hexa_int((int64_t)p_stdin[1]));\n" +
+            "    hexa_map_set(m, \"stdout_fd\",  hexa_int((int64_t)p_stdout[0]));\n" +
+            "    hexa_map_set(m, \"stderr_fd\",  hexa_int((int64_t)p_stderr[0]));\n" +
+            "    return m;\n" +
+            "\n" +
+            "fail_pipe:\n" +
+            "    for (int i = 0; i < argc; i++) free(argv[i]);\n" +
+            "    free(argv);\n" +
+            "    if (envp) { for (int i = 0; i < envc; i++) free(envp[i]); free(envp); }\n" +
+            "    return _crypto_error(\"exec_pipe_open: hxlcl_pipe() failed\");\n" +
+            "}\n"
+    return s
+}
+
+fn main() {
+    let argv = real_args()
+    let out_path = if argv.len() >= 1 { argv[0] } else { "exec_pipe.c" }
+    let c_text = emit_exec_pipe_c()
+    let cmd = "cat > \"" + out_path + "\" <<'EXEC_PIPE_EMIT_EOF'\n" +
+              c_text + "EXEC_PIPE_EMIT_EOF"
+    let _ = exec(cmd)
+    let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
+    if exists_check != "y" {
+        println("[exec_pipe_emit] FATAL: failed to write " + out_path)
+        exit(1)
+    }
+    println("[exec_pipe_emit] wrote " + out_path)
+    exit(0)
+}

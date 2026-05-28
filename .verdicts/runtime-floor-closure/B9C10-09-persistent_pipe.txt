@@ -1,0 +1,23 @@
+========================================================================
+  self/native — persistent_pipe_byte_diff: B9.C-10 .c-text byte-diff oracle
+========================================================================
+  generator: self/native/persistent_pipe_emit.hexa
+  oracle:    source-SHA byte-diff vs hand-written persistent_pipe.c
+  note:      runtime.c #include fragment — .o proof via full hexa_cc build
+
+  scratch: /var/folders/2g/blzd56lx2rvfvt61c1pc9g7r0000gn/T/persistent_pipe_byte_diff.XXXXXX.We8S1TKLRI
+
+  [PASS] hexa emitter self/native/persistent_pipe_emit.hexa present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a29a88987b6876976/self/native/persistent_pipe_emit.hexa
+  [PASS] hand-written self/native/persistent_pipe.c present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a29a88987b6876976/self/native/persistent_pipe.c
+  [PASS] gate-1 source-text byte-identical (sha256(.c))
+         · orig=51bb9d4ca2bc5bd7b2069b6357521aec2c0a39d47ce6cbd84d5ed90545ae8fa1 gen=51bb9d4ca2bc5bd7b2069b6357521aec2c0a39d47ce6cbd84d5ed90545ae8fa1
+
+  B9.C-10 persistent_pipe.c .c-text byte-identity:
+    PROVEN ✓ — hand-written persistent_pipe.c is fully hexa-emittable.
+    DELETION GATE OPEN — self/native/persistent_pipe.c may be `git rm` once the
+    full hexa_cc build (regen + runtime.c compile + smoke) also PASSes.
+========================================================================
+  3/3 checks passed
+__HEXA_LANG_PERSISTENT_PIPE_BYTE_DIFF__ PASS

@@ -1,0 +1,474 @@
+#!hexa strict
+// self/native/term_ffi_emit.hexa
+//   B9.C-10 (.c-text · #1848 pattern) — term_ffi.c source emitter.
+//
+// runtime.c #include "native/term_ffi.c" — RFC 061 amalgamation fragment
+// (NOT a standalone TU; references runtime.c-internal symbols). This emitter
+// is the SSOT; the build regenerates self/native/term_ffi.c from it before
+// runtime.c compiles, so the .c becomes a gitignored build artifact.
+//
+// Byte-identity: regenerated C is byte-for-byte the hand-written source, so
+// the runtime.c TU (and the linked hexa binary) is identical — PERF UNCHANGED.
+//
+// Invocation:  hexa-run self/native/term_ffi_emit.hexa <output-path>
+// Default output path (if argv missing): "term_ffi.c" in cwd.
+//
+// Phase: B9.C-10 batch (self/native runtime.c-included .c-text · F3).
+
+let MODULE_NAME = "term_ffi_emit"
+
+fn emit_term_ffi_c() -> str {
+    // Verbatim content of hand-written self/native/term_ffi.c
+    let s =
+            "/* ═══════════════════════════════════════════════════════════════════\n" +
+            " * self/native/term_ffi.c — TUI-PRIM L1 FFI shim (POSIX termios + ioctl + signal)\n" +
+            " *\n" +
+            " * KICK VERDICT\n" +
+            " *   2026-04-27_hexa-native-tui-implementation-plan_KICK_omega_cycle.json\n" +
+            " *   T1.A 5-layer rollout — Layer 1 (this file).\n" +
+            " *   Forward-spec deliverable: architecture-only contract, no hexa builtin\n" +
+            " *   registration yet (5-touch surgery + self-host rebuild deferred per\n" +
+            " *   kick obstruction O1).\n" +
+            " *\n" +
+            " * SURFACE (12-symbol C ABI)\n" +
+            " *   Raw mode lifecycle:\n" +
+            " *     int  term_raw_enter(void)            — save current + cfmakeraw + tcsetattr; rc=0 ok\n" +
+            " *     int  term_raw_restore(void)           — tcsetattr restore saved; rc=0 ok\n" +
+            " *   Window size:\n" +
+            " *     int  term_get_winsize(int *rows, int *cols)  — ioctl TIOCGWINSZ; rc=0 ok\n" +
+            " *   I/O (non-blocking via poll):\n" +
+            " *     int  term_poll_stdin(int timeout_ms)  — 1=ready, 0=timeout, -1=error, -2=hangup/eof\n" +
+            " *     int  term_read_byte(void)             — read 1 byte; -1 on EOF/error\n" +
+            " *     int  term_read_bytes(unsigned char *buf, int max_n) — short read; bytes-read or -1\n" +
+            " *     int  term_write(const char *buf, int n) — write n bytes to stdout; rc=bytes or -1\n" +
+            " *   Signals:\n" +
+            " *     int  term_install_sigwinch(void)      — install SA_RESTART handler that\n" +
+            " *                                             flips a volatile flag; rc=0 ok\n" +
+            " *     int  term_sigwinch_pending(void)      — returns flag; resets to 0 on read\n" +
+            " *     int  term_install_sigint(void)        — SIGINT/SIGTERM → flag for graceful exit\n" +
+            " *     int  term_sigint_pending(void)        — flag; resets to 0 on read\n" +
+            " *   Introspection:\n" +
+            " *     int  term_isatty_stdin(void)          — hxlcl_isatty(0)\n" +
+            " *     int  term_isatty_stdout(void)         — hxlcl_isatty(1)\n" +
+            " *     int  term_getppid(void)               — getppid() for orphan-suicide\n" +
+            " *\n" +
+            " * INVARIANTS\n" +
+            " *   - Single-process (no thread safety; matches hexa runtime's single-threaded\n" +
+            " *     surface). Saved termios kept in module-static storage.\n" +
+            " *   - term_raw_restore is idempotent (safe to call without prior _enter).\n" +
+            " *   - Signal handlers are async-signal-safe: only sig_atomic_t flag writes.\n" +
+            " *   - All errors set errno per POSIX; callers can read it via standard means\n" +
+            " *     (a future term_strerror builtin can wrap strerror_r if needed).\n" +
+            " *\n" +
+            " * BUILD\n" +
+            " *   gcc -O2 -Wall -Wextra -c term_ffi.c -o term_ffi.o\n" +
+            " *   (No external deps beyond libc + standard POSIX headers.)\n" +
+            " *   Smoke-test main embedded under #ifdef TERM_FFI_SMOKE — compile with\n" +
+            " *   `gcc -DTERM_FFI_SMOKE -O2 term_ffi.c -o /tmp/term_ffi_smoke`.\n" +
+            " *\n" +
+            " * NEXT\n" +
+            " *   - Layer 2 (input decoder, self/tui/input.hexa) consumes term_read_byte\n" +
+            " *     stream + decodes utf8/csi/sgr/paste/focus.\n" +
+            " *   - Hexa builtin registration: codegen_c2.hexa:3292 + :3736 + :5519 +\n" +
+            " *     env.hexa:178 + hexa_full.hexa:11821 + build_c.hexa:1784 — 5-touch\n" +
+            " *     surgery + self-host rebuild (defer to next session).\n" +
+            " * ═══════════════════════════════════════════════════════════════════ */\n" +
+            "\n" +
+            "/* Feature-gate ordering: Darwin/BSD first (cfmakeraw, SIGWINCH need\n" +
+            " * _DARWIN_C_SOURCE on macOS); _DEFAULT_SOURCE re-exposes BSDism on glibc;\n" +
+            " * _POSIX_C_SOURCE pins the baseline portable surface. Order matters —\n" +
+            " * defining _POSIX_C_SOURCE alone hides BSDisms on Mac. */\n" +
+            "#if defined(__APPLE__)\n" +
+            "#define _DARWIN_C_SOURCE\n" +
+            "#endif\n" +
+            "#define _DEFAULT_SOURCE\n" +
+            "#define _POSIX_C_SOURCE 200809L\n" +
+            "\n" +
+            "#include <errno.h>\n" +
+            "#include <fcntl.h>\n" +
+            "#include <poll.h>\n" +
+            "#include <signal.h>\n" +
+            "#include <stdio.h>\n" +
+            "#include <stdlib.h>\n" +
+            "#include <string.h>\n" +
+            "#include <sys/ioctl.h>\n" +
+            "#include <termios.h>\n" +
+            "#include <unistd.h>\n" +
+            "\n" +
+            "/* ─── module state ─── */\n" +
+            "\n" +
+            "static struct termios _term_saved;\n" +
+            "static int _term_saved_valid = 0;\n" +
+            "\n" +
+            "static volatile sig_atomic_t _sigwinch_flag = 0;\n" +
+            "static volatile sig_atomic_t _sigint_flag = 0;\n" +
+            "\n" +
+            "static void _on_sigwinch(int sig) {\n" +
+            "    (void)sig;\n" +
+            "    _sigwinch_flag = 1;\n" +
+            "}\n" +
+            "\n" +
+            "static void _on_sigint(int sig) {\n" +
+            "    (void)sig;\n" +
+            "    _sigint_flag = 1;\n" +
+            "}\n" +
+            "\n" +
+            "/* ─── raw mode lifecycle ─── */\n" +
+            "\n" +
+            "int term_raw_enter(void) {\n" +
+            "    if (_term_saved_valid) {\n" +
+            "        return 0;\n" +
+            "    }\n" +
+            "    if (hxlcl_tcgetattr(STDIN_FILENO, &_term_saved) != 0) {\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    // cycle 73: struct-init copy reverse-libcalls to memcpy; declare then\n" +
+            "    // copy via the memcpy macro (-> hxlcl_memcpy) so no _memcpy extern.\n" +
+            "    struct termios raw;\n" +
+            "    memcpy(&raw, &_term_saved, sizeof(raw));\n" +
+            "    cfmakeraw(&raw);\n" +
+            "    /* Per kick spec: deliver byte-at-a-time without echo, but keep\n" +
+            "     * SIGINT/SIGQUIT/SIGTSTP active so Ctrl-C reaches our handler. */\n" +
+            "    raw.c_lflag |= ISIG;\n" +
+            "    raw.c_cc[VMIN] = 1;\n" +
+            "    raw.c_cc[VTIME] = 0;\n" +
+            "    if (hxlcl_tcsetattr(STDIN_FILENO, TCSANOW, &raw) != 0) {\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    _term_saved_valid = 1;\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "int term_raw_restore(void) {\n" +
+            "    if (!_term_saved_valid) {\n" +
+            "        return 0;  /* idempotent: nothing to restore */\n" +
+            "    }\n" +
+            "    int rc = hxlcl_tcsetattr(STDIN_FILENO, TCSANOW, &_term_saved);\n" +
+            "    _term_saved_valid = 0;\n" +
+            "    return (rc == 0) ? 0 : -1;\n" +
+            "}\n" +
+            "\n" +
+            "/* ─── window size ─── */\n" +
+            "\n" +
+            "int term_get_winsize(int *rows, int *cols) {\n" +
+            "    if (rows == NULL || cols == NULL) {\n" +
+            "        errno = EINVAL;\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    struct winsize ws;\n" +
+            "    if (hxlcl_ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) != 0) {\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    *rows = (int)ws.ws_row;\n" +
+            "    *cols = (int)ws.ws_col;\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "/* ─── I/O (non-blocking) ─── */\n" +
+            "\n" +
+            "int term_poll_stdin(int timeout_ms) {\n" +
+            "    struct pollfd pfd;\n" +
+            "    pfd.fd = STDIN_FILENO;\n" +
+            "    pfd.events = POLLIN;\n" +
+            "    pfd.revents = 0;\n" +
+            "    int rc;\n" +
+            "    do {\n" +
+            "        rc = hxlcl_poll(&pfd, 1, timeout_ms);\n" +
+            "    } while (rc < 0 && errno == EINTR);\n" +
+            "    if (rc < 0) return -1;\n" +
+            "    if (rc == 0) return 0;\n" +
+            "    if (pfd.revents & POLLIN) return 1;\n" +
+            "    /* No POLLIN but POLLHUP/POLLERR/POLLNVAL — stdin permanently dead\n" +
+            "     * (parent/terminal hangup, orphan case). Distinct from -1 (poll\n" +
+            "     * syscall error) and 0 (timeout) so callers can route to clean EOF.\n" +
+            "     * Root-cause for the 2026-05-05 hive-hexa-bin runaway (PPID=1 orphan\n" +
+            "     * tight-looped hxlcl_poll() → hexa_array_push allocations for 5h, RSS 36GB):\n" +
+            "     * the prior `(POLLIN ? 1 : 0)` collapse made callers treat hangup as\n" +
+            "     * timeout and re-poll forever, never reaching an exit branch. */\n" +
+            "    if (pfd.revents & (POLLHUP | POLLERR | POLLNVAL)) return -2;\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "/* getppid() — exposed to hexa for orphan-suicide defense-in-depth.\n" +
+            " * If parent dies, kernel reparents to PID 1 (init/launchd). hexa app\n" +
+            " * loops can poll this every N iterations and exit when parent==1, in\n" +
+            " * case POLLHUP isn't delivered (e.g. stdin is /dev/null or a still-live\n" +
+            " * pipe whose other end leaked to a different process). */\n" +
+            "int term_getppid(void) {\n" +
+            "    return (int)getppid();\n" +
+            "}\n" +
+            "\n" +
+            "int term_read_byte(void) {\n" +
+            "    unsigned char b;\n" +
+            "    ssize_t n;\n" +
+            "    do {\n" +
+            "        n = hxlcl_read(STDIN_FILENO, &b, 1);\n" +
+            "    } while (n < 0 && errno == EINTR);\n" +
+            "    if (n != 1) return -1;\n" +
+            "    return (int)b;\n" +
+            "}\n" +
+            "\n" +
+            "int term_read_bytes(unsigned char *buf, int max_n) {\n" +
+            "    if (buf == NULL || max_n <= 0) {\n" +
+            "        errno = EINVAL;\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    ssize_t n;\n" +
+            "    do {\n" +
+            "        n = hxlcl_read(STDIN_FILENO, buf, (size_t)max_n);\n" +
+            "    } while (n < 0 && errno == EINTR);\n" +
+            "    if (n < 0) return -1;\n" +
+            "    return (int)n;\n" +
+            "}\n" +
+            "\n" +
+            "int term_write(const char *buf, int n) {\n" +
+            "    if (buf == NULL || n < 0) {\n" +
+            "        errno = EINVAL;\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    int total = 0;\n" +
+            "    while (total < n) {\n" +
+            "        ssize_t w = hxlcl_write(STDOUT_FILENO, buf + total, (size_t)(n - total));\n" +
+            "        if (w < 0) {\n" +
+            "            if (errno == EINTR) continue;\n" +
+            "            return -1;\n" +
+            "        }\n" +
+            "        total += (int)w;\n" +
+            "    }\n" +
+            "    return total;\n" +
+            "}\n" +
+            "\n" +
+            "/* ─── signals ─── */\n" +
+            "\n" +
+            "int term_install_sigwinch(void) {\n" +
+            "    struct sigaction sa;\n" +
+            "    memset(&sa, 0, sizeof(sa));\n" +
+            "    sa.sa_handler = _on_sigwinch;\n" +
+            "    sa.sa_flags = SA_RESTART;\n" +
+            "    sigemptyset(&sa.sa_mask);\n" +
+            "    return (hxlcl_sigaction(SIGWINCH, &sa, NULL) == 0) ? 0 : -1;\n" +
+            "}\n" +
+            "\n" +
+            "int term_sigwinch_pending(void) {\n" +
+            "    int v = _sigwinch_flag;\n" +
+            "    _sigwinch_flag = 0;\n" +
+            "    return v;\n" +
+            "}\n" +
+            "\n" +
+            "int term_install_sigint(void) {\n" +
+            "    struct sigaction sa;\n" +
+            "    memset(&sa, 0, sizeof(sa));\n" +
+            "    sa.sa_handler = _on_sigint;\n" +
+            "    sa.sa_flags = 0;  /* no SA_RESTART — Ctrl-C interrupts blocking reads */\n" +
+            "    sigemptyset(&sa.sa_mask);\n" +
+            "    if (hxlcl_sigaction(SIGINT, &sa, NULL) != 0) return -1;\n" +
+            "    if (hxlcl_sigaction(SIGTERM, &sa, NULL) != 0) return -1;\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "int term_sigint_pending(void) {\n" +
+            "    int v = _sigint_flag;\n" +
+            "    _sigint_flag = 0;\n" +
+            "    return v;\n" +
+            "}\n" +
+            "\n" +
+            "/* ─── introspection ─── */\n" +
+            "\n" +
+            "int term_isatty_stdin(void) {\n" +
+            "    return hxlcl_isatty(STDIN_FILENO) ? 1 : 0;\n" +
+            "}\n" +
+            "\n" +
+            "int term_isatty_stdout(void) {\n" +
+            "    return hxlcl_isatty(STDOUT_FILENO) ? 1 : 0;\n" +
+            "}\n" +
+            "\n" +
+            "/* ─── PTY harness primitives (forward-only \"real PTY harness\" closure) ─── */\n" +
+            "\n" +
+            "#if defined(__APPLE__) || defined(__linux__)\n" +
+            "#  if defined(__APPLE__)\n" +
+            "#    include <util.h>          /* forkpty */\n" +
+            "#  else\n" +
+            "#    include <pty.h>           /* forkpty (libutil) on Linux */\n" +
+            "#  endif\n" +
+            "#  include <sys/wait.h>\n" +
+            "#endif\n" +
+            "\n" +
+            "/* Spawn a command in a pseudo-terminal slave. Returns master fd; child\n" +
+            " * runs argv via execvp. On error returns -1. The pid is stored in\n" +
+            " * *out_pid. The slave terminal has the requested winsize.\n" +
+            " *\n" +
+            " * Caller flow:\n" +
+            " *   int pid = 0;\n" +
+            " *   int mfd = term_pty_spawn([\"/bin/sh\", \"-c\", \"echo hi\", NULL], 24, 80, &pid);\n" +
+            " *   // write to mfd to drive child stdin; read mfd to consume stdout/err\n" +
+            " *   hxlcl_waitpid(pid, &status, 0);\n" +
+            " *   hxlcl_close(mfd);\n" +
+            " *\n" +
+            " * Caller is responsible for closing mfd + reaping the child.\n" +
+            " */\n" +
+            "int term_pty_spawn(const char *const argv[], int rows, int cols, int *out_pid) {\n" +
+            "#if defined(__APPLE__) || defined(__linux__)\n" +
+            "    if (out_pid) *out_pid = -1;\n" +
+            "    if (!argv || !argv[0]) return -1;\n" +
+            "    struct winsize ws = {0};\n" +
+            "    ws.ws_row = (unsigned short)(rows > 0 ? rows : 24);\n" +
+            "    ws.ws_col = (unsigned short)(cols > 0 ? cols : 80);\n" +
+            "    int mfd = -1;\n" +
+            "    // 2026-05-06 — POSIX fork buffer flush (forkpty = fork + open pty;\n" +
+            "    // parent stdio is inherited by child until execvp swaps it out)\n" +
+            "    fflush(NULL);\n" +
+            "    pid_t pid = hxlcl_forkpty(&mfd, NULL, NULL, &ws);\n" +
+            "    if (pid < 0) return -1;\n" +
+            "    if (pid == 0) {\n" +
+            "        /* child: execvp into argv. cast to char *const * for execvp signature. */\n" +
+            "        hxlcl_execvp(argv[0], (char *const *)argv);\n" +
+            "        /* if exec fails, exit immediately */\n" +
+            "        _exit(127);\n" +
+            "    }\n" +
+            "    if (out_pid) *out_pid = (int)pid;\n" +
+            "    return mfd;\n" +
+            "#else\n" +
+            "    (void)argv; (void)rows; (void)cols; (void)out_pid;\n" +
+            "    return -1;\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
+            "/* Read up to max_bytes from an fd. Returns count read, 0 on EOF, -1\n" +
+            " * on error. Non-blocking when fd is set O_NONBLOCK. */\n" +
+            "int term_fd_read(int fd, unsigned char *buf, int max_bytes) {\n" +
+            "    if (fd < 0 || !buf || max_bytes <= 0) return -1;\n" +
+            "    ssize_t n = hxlcl_read(fd, buf, (size_t)max_bytes);\n" +
+            "    if (n < 0) return -1;\n" +
+            "    return (int)n;\n" +
+            "}\n" +
+            "\n" +
+            "/* Write n bytes to fd. Returns count written, -1 on error. */\n" +
+            "int term_fd_write(int fd, const unsigned char *buf, int n) {\n" +
+            "    if (fd < 0 || !buf || n < 0) return -1;\n" +
+            "    ssize_t w = hxlcl_write(fd, buf, (size_t)n);\n" +
+            "    if (w < 0) return -1;\n" +
+            "    return (int)w;\n" +
+            "}\n" +
+            "\n" +
+            "int term_fd_close(int fd) {\n" +
+            "    return hxlcl_close(fd);\n" +
+            "}\n" +
+            "\n" +
+            "/* Non-blocking poll on fd — returns 1 if readable, 0 on timeout, -1 on error. */\n" +
+            "int term_fd_poll(int fd, int timeout_ms) {\n" +
+            "    if (fd < 0) return -1;\n" +
+            "    struct pollfd pfd = { .fd = fd, .events = POLLIN, .revents = 0 };\n" +
+            "    int rc = hxlcl_poll(&pfd, 1, timeout_ms);\n" +
+            "    if (rc < 0) return -1;\n" +
+            "    if (rc == 0) return 0;\n" +
+            "    if (pfd.revents & (POLLIN | POLLHUP)) return 1;\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "/* Reap a child non-blockingly. Returns:\n" +
+            " *   1  if child exited (status stored in *out_status)\n" +
+            " *   0  if still running\n" +
+            " *  -1  on error (pid invalid, etc.)\n" +
+            " */\n" +
+            "int term_pty_reap(int pid, int *out_status) {\n" +
+            "#if defined(__APPLE__) || defined(__linux__)\n" +
+            "    int st = 0;\n" +
+            "    pid_t r = hxlcl_waitpid((pid_t)pid, &st, WNOHANG);\n" +
+            "    if (r < 0) return -1;\n" +
+            "    if (r == 0) return 0;\n" +
+            "    if (out_status) *out_status = st;\n" +
+            "    return 1;\n" +
+            "#else\n" +
+            "    (void)pid; (void)out_status;\n" +
+            "    return -1;\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
+            "/* Convenience wrapper: spawn `/bin/sh -c <cmd>` in pty. Used by the\n" +
+            " * hexa builtin layer where passing argv arrays through the HexaVal\n" +
+            " * boundary is awkward — sh -c gives shell glob/quote handling for free. */\n" +
+            "int term_pty_spawn_sh(const char *cmd, int rows, int cols, int *out_pid) {\n" +
+            "#if defined(__APPLE__) || defined(__linux__)\n" +
+            "    if (!cmd) return -1;\n" +
+            "    const char *argv[] = {\"/bin/sh\", \"-c\", cmd, NULL};\n" +
+            "    return term_pty_spawn(argv, rows, cols, out_pid);\n" +
+            "#else\n" +
+            "    (void)cmd; (void)rows; (void)cols; (void)out_pid;\n" +
+            "    return -1;\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
+            "/* ═══════════════════════════════════════════════════════════════════\n" +
+            " * SMOKE TEST — compile with -DTERM_FFI_SMOKE\n" +
+            " *\n" +
+            " *   gcc -DTERM_FFI_SMOKE -O2 -Wall term_ffi.c -o /tmp/term_ffi_smoke\n" +
+            " *   /tmp/term_ffi_smoke           # in a real TTY: prints winsize, reads 1 byte\n" +
+            " *   echo x | /tmp/term_ffi_smoke  # in pipe: prints winsize fail, isatty=0\n" +
+            " * ═══════════════════════════════════════════════════════════════════ */\n" +
+            "\n" +
+            "#ifdef TERM_FFI_SMOKE\n" +
+            "int main(void) {\n" +
+            "    int is_tty_in = term_isatty_stdin();\n" +
+            "    int is_tty_out = term_isatty_stdout();\n" +
+            "    printf(\"hxlcl_isatty(stdin)=%d hxlcl_isatty(stdout)=%d\\n\", is_tty_in, is_tty_out);\n" +
+            "\n" +
+            "    int rows = 0, cols = 0;\n" +
+            "    if (term_get_winsize(&rows, &cols) == 0) {\n" +
+            "        printf(\"winsize rows=%d cols=%d\\n\", rows, cols);\n" +
+            "    } else {\n" +
+            "        printf(\"winsize: error errno=%d (%s)\\n\", errno, strerror(errno));\n" +
+            "    }\n" +
+            "\n" +
+            "    if (term_install_sigwinch() == 0) {\n" +
+            "        printf(\"SIGWINCH handler installed\\n\");\n" +
+            "    }\n" +
+            "\n" +
+            "    if (!is_tty_in) {\n" +
+            "        printf(\"not a TTY — skipping raw-mode read test\\n\");\n" +
+            "        return 0;\n" +
+            "    }\n" +
+            "\n" +
+            "    if (term_raw_enter() != 0) {\n" +
+            "        printf(\"raw_enter failed errno=%d (%s)\\n\", errno, strerror(errno));\n" +
+            "        return 1;\n" +
+            "    }\n" +
+            "\n" +
+            "    const char *prompt = \"press a key (q to quit): \";\n" +
+            "    term_write(prompt, (int)strlen(prompt));\n" +
+            "\n" +
+            "    int ready = term_poll_stdin(5000);\n" +
+            "    if (ready <= 0) {\n" +
+            "        const char *msg = \"\\r\\n[timeout/error]\\r\\n\";\n" +
+            "        term_write(msg, (int)strlen(msg));\n" +
+            "        term_raw_restore();\n" +
+            "        return 0;\n" +
+            "    }\n" +
+            "\n" +
+            "    int b = term_read_byte();\n" +
+            "    char line[64];\n" +
+            "    int ln = snprintf(line, sizeof(line), \"\\r\\nread byte=0x%02x ('%c')\\r\\n\",\n" +
+            "                      b, (b >= 0x20 && b < 0x7f) ? b : '?');\n" +
+            "    term_write(line, ln);\n" +
+            "\n" +
+            "    term_raw_restore();\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "#endif /* TERM_FFI_SMOKE */\n"
+    return s
+}
+
+fn main() {
+    let argv = real_args()
+    let out_path = if argv.len() >= 1 { argv[0] } else { "term_ffi.c" }
+    let c_text = emit_term_ffi_c()
+    let cmd = "cat > \"" + out_path + "\" <<'TERM_FFI_EMIT_EOF'\n" +
+              c_text + "TERM_FFI_EMIT_EOF"
+    let _ = exec(cmd)
+    let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
+    if exists_check != "y" {
+        println("[term_ffi_emit] FATAL: failed to write " + out_path)
+        exit(1)
+    }
+    println("[term_ffi_emit] wrote " + out_path)
+    exit(0)
+}

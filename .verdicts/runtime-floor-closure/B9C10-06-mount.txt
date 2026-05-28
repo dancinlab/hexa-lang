@@ -1,0 +1,23 @@
+========================================================================
+  self/native — mount_byte_diff: B9.C-10 .c-text byte-diff oracle
+========================================================================
+  generator: self/native/mount_emit.hexa
+  oracle:    source-SHA byte-diff vs hand-written mount.c
+  note:      runtime.c #include fragment — .o proof via full hexa_cc build
+
+  scratch: /var/folders/2g/blzd56lx2rvfvt61c1pc9g7r0000gn/T/mount_byte_diff.XXXXXX.GVU2lYPyS9
+
+  [PASS] hexa emitter self/native/mount_emit.hexa present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a29a88987b6876976/self/native/mount_emit.hexa
+  [PASS] hand-written self/native/mount.c present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a29a88987b6876976/self/native/mount.c
+  [PASS] gate-1 source-text byte-identical (sha256(.c))
+         · orig=f521136d0f0eef80532bc80640160d5956e712b01bf365dcce44baba13a5de7e gen=f521136d0f0eef80532bc80640160d5956e712b01bf365dcce44baba13a5de7e
+
+  B9.C-10 mount.c .c-text byte-identity:
+    PROVEN ✓ — hand-written mount.c is fully hexa-emittable.
+    DELETION GATE OPEN — self/native/mount.c may be `git rm` once the
+    full hexa_cc build (regen + runtime.c compile + smoke) also PASSes.
+========================================================================
+  3/3 checks passed
+__HEXA_LANG_MOUNT_BYTE_DIFF__ PASS
