@@ -13586,10 +13586,12 @@ HexaVal hexa_forge_dispatch_ffn_fp64_via_bf16(HexaVal x_v, HexaVal w1_v,
 #endif
 }
 
-/* Cycle 55 recovery — stub bodies for rt_fs_* declared in runtime.h §G5.
+/* Cycle 55 recovery — bodies for rt_fs_* declared in runtime.h §G5.
  * Origin/main left these as orphaned declarations (no bodies anywhere on
- * disk). Stubs return failure-default; replace with real POSIX impls in
- * a follow-up cycle. */
+ * disk). append_atomic/stat/rotate remain failure-default stubs; mkdir_p
+ * now carries the real fork-free recursive POSIX mkdir(2) impl that the
+ * deleted body and self/stdlib/fs.hexa tests 26-28 + the codegen comment
+ * (self/codegen.hexa fs_mkdir_p arm) specify. */
 HexaVal rt_fs_append_atomic(HexaVal path, HexaVal data) {
     (void)path; (void)data;
     return hexa_int(-1);
@@ -13602,9 +13604,29 @@ HexaVal rt_fs_rotate_if_over(HexaVal path, HexaVal max_bytes, HexaVal keep) {
     (void)path; (void)max_bytes; (void)keep;
     return hexa_int(0);
 }
+/* Returns 0 on success (incl. already-exists / idempotent), or -errno on
+ * failure (e.g. -ENOTDIR when a path prefix is a regular file). EEXIST on an
+ * intermediate component is "present, continue"; a non-dir prefix surfaces
+ * via the next-level mkdir's ENOTDIR. */
 HexaVal rt_fs_mkdir_p(HexaVal path) {
-    (void)path;
-    return hexa_int(0);
+    const char* p = HX_STR(path);
+    if (!p || !*p) return hexa_int(-EINVAL);
+    size_t plen = strlen(p);
+    char* buf = (char*)malloc(plen + 1);
+    if (!buf) return hexa_int(-ENOMEM);
+    memcpy(buf, p, plen + 1);
+    if (plen > 1 && buf[plen - 1] == '/') buf[plen - 1] = '\0';
+    int rc = 0;
+    for (char* q = buf + 1; *q; q++) {
+        if (*q == '/') {
+            *q = '\0';
+            if (mkdir(buf, 0755) != 0 && errno != EEXIST) { rc = -errno; break; }
+            *q = '/';
+        }
+    }
+    if (rc == 0 && mkdir(buf, 0755) != 0 && errno != EEXIST) rc = -errno;
+    free(buf);
+    return hexa_int(rc);
 }
 
 
