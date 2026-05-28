@@ -155,8 +155,25 @@ fn check_section_byte_equal_dbg(src_dir: str, work_dir: str, base: str) -> bool 
     return ok
 }
 
+// REGEN-BEFORE-USE: if the hand-written `.c` was git-rm'd (sign-activated),
+// reconstitute it at its canonical on-disk path from the emitter (the SSOT)
+// BEFORE the oracle reads it. ADDITIVE — never deletes; only materializes a
+// missing fixture so the byte-diff / phase-H linker-dev path keeps working
+// post-rm. No-op when the `.c` is present (gate-1 still proves byte-equal).
+fn regen_before_use(src_dir: str, base: str) {
+    let dst = src_dir + "/" + base + ".c"
+    if _exists(dst) { return }
+    let emitter = src_dir + "/" + base + "_emit.hexa"
+    if !_exists(emitter) { return }
+    let _ = exec("hexa-run \"" + emitter + "\" \"" + dst + "\" 2>/dev/null")
+    if _exists(dst) {
+        println("  [regen] reconstituted " + base + ".c from emitter (SSOT)")
+    }
+}
+
 fn check_file(src_dir: str, work_dir: str, base: str) {
     if !check_emitter_present(src_dir, base) { return }
+    regen_before_use(src_dir, base)
     if !check_orig_present(src_dir, base) {
         println("         · POST-DELETION SKIP (" + base + ".c removed after oracle PASS)")
         return
