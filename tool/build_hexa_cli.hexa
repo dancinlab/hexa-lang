@@ -696,8 +696,26 @@ fn _do_build(repo_root: string) {
             // existing #1899 shadow (runtime_arm64::rt_getuid + runtime.c
             // L127-135 extern guard).
             println("[selfemit] F3 Path A · B9.6-C3 — class-C 0-arg no-errno: getuid (rt_getpid mirror) → _hxlcl_getuid")
-            let leaves = ["memset", "memcmp", "memcpy", "memmove", "strcmp", "strncmp", "strchr", "strrchr", "strcpy", "strncpy", "strcat", "strlen", "getpid", "close", "atoi", "munmap", "strdup", "getuid"]
-            let upper  = ["MEMSET", "MEMCMP", "MEMCPY", "MEMMOVE", "STRCMP", "STRNCMP", "STRCHR", "STRRCHR", "STRCPY", "STRNCPY", "STRCAT", "STRLEN", "GETPID", "CLOSE", "ATOI", "MUNMAP", "STRDUP", "GETUID"]
+            // ── B9.6-C9/C12/C13/C15/C16/C17 (io-family svc-wrapper batch) ──
+            // The 6 io-family svc-wrappers — 5 errno-reloc primitives carrying
+            // the rt_close PAGE21/PAGEOFF12 errno-store template (lseek/read/
+            // write/waitpid/mmap), plus poll (3-arg NON-_cf, the FIRST uxtw
+            // `mov w1,w1` for unsigned nfds — no errno path, no reloc, runtime.c
+            // routes it through PLAIN `_hxlcl_syscall3`, not `_cf`). Each rides
+            // the SAME single-symbol emit loop; only the .o internals differ
+            // (SYS#, arg-widening count, presence/absence of cset/cbz tail).
+            // Shadow emitters live in self/codegen/runtime_arm64.hexa
+            // (rt_lseek/rt_read/rt_write/rt_poll/rt_waitpid/rt_mmap) and the
+            // HEXA_RT_SELFEMIT extern guards in self/runtime.c are already
+            // landed; this driver-set + loop registration closes the gap.
+            println("[selfemit] F3 Path A · B9.6-C9 — class-C 3-arg _cf+errno: lseek (sxtw fd+whence + errno) → _hxlcl_lseek")
+            println("[selfemit] F3 Path A · B9.6-C12 — class-C 3-arg _cf+errno: read (sxtw fd + errno) → _hxlcl_read")
+            println("[selfemit] F3 Path A · B9.6-C13 — class-C 3-arg _cf+errno: write (sxtw fd + errno) → _hxlcl_write")
+            println("[selfemit] F3 Path A · B9.6-C15 — class-C 3-arg NON-_cf: poll (uxtw nfds + sxtw timeout) → _hxlcl_poll")
+            println("[selfemit] F3 Path A · B9.6-C16 — class-C 4-arg _cf+errno: waitpid (sxtw pid+opt + mov x3,#0 + errno) → _hxlcl_waitpid")
+            println("[selfemit] F3 Path A · B9.6-C17 — class-C 6-arg _cf+errno: mmap (sxtw prot/flags/fd + errno) → _hxlcl_mmap")
+            let leaves = ["memset", "memcmp", "memcpy", "memmove", "strcmp", "strncmp", "strchr", "strrchr", "strcpy", "strncpy", "strcat", "strlen", "getpid", "close", "atoi", "munmap", "strdup", "getuid", "lseek", "read", "write", "poll", "waitpid", "mmap"]
+            let upper  = ["MEMSET", "MEMCMP", "MEMCPY", "MEMMOVE", "STRCMP", "STRNCMP", "STRCHR", "STRRCHR", "STRCPY", "STRNCPY", "STRCAT", "STRLEN", "GETPID", "CLOSE", "ATOI", "MUNMAP", "STRDUP", "GETUID", "LSEEK", "READ", "WRITE", "POLL", "WAITPID", "MMAP"]
             let mut li = 0
             while li < len(leaves) {
                 let n = leaves[li]
