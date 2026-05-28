@@ -3591,6 +3591,434 @@ fn rt_ioctl() {
     return c
 }
 
+// ── rt_read (B9.6-C12 — class-C syscall · int+ptr+ulong _cf + errno) ─────
+// read(int fd, void *buf, unsigned long n) -> long. A 3-arg svc-_cf that is
+// byte-for-byte the rt_close shape (9-instr 36 B) PLUS the SYS number — only
+// the FIRST arg (fd, int, x0) is sign-extended; buf (ptr, x1) and n (ulong,
+// x2) are already 64-bit and pass through untouched. So the body is IDENTICAL
+// to rt_close (sxtw x0 / mov w16 / svc / cset / cbz / adrp errno / str / mov
+// x0,#-1 / ret) with mov w16,#3 instead of #6. runtime.c L1345:
+//   hxlcl_read(int fd, void *buf, unsigned long n) { return _hxlcl_syscall3_cf(HXLCL_SYS_READ, (long)fd, (long)buf, (long)n); }
+// SYS_READ = 3. clang -O2 (== as -arch arm64, errno-define context) is
+// byte-for-byte:
+//   sxtw x0,w0 / mov w16,#3 / svc #0x80 / cset x8,hs / cbz x8,Lret
+//   / adrp x8,errno / str w0,[x8] / mov x0,#-1 / ret
+// errno reloc sites: 0x14 (PAGE21) / 0x18 (PAGEOFF12) — IDENTICAL to rt_close
+// (the body is the same length and shape; only the SYS number differs).
+fn rt_read() {
+    let mut c = []
+    // sxtw x0, w0  (sign-extend fd arg)     0x93407C00
+    c.push(0)
+    c.push(124)
+    c.push(64)
+    c.push(147)
+    // mov w16, #3  (SYS_READ)               0x52800070
+    c.push(112)
+    c.push(0)
+    c.push(128)
+    c.push(82)
+    // svc #0x80                             0xD4001001
+    c.push(1)
+    c.push(16)
+    c.push(0)
+    c.push(212)
+    // cset x8, hs  (capture carry = error)  0x9A9F37E8
+    c.push(232)
+    c.push(55)
+    c.push(159)
+    c.push(154)
+    // cbz x8, Lret (success → skip errno)   0xB4000088  (+0x10 to ret)
+    c.push(136)
+    c.push(0)
+    c.push(0)
+    c.push(180)
+    // adrp x8, errno@PAGE  [RELOC PAGE21]   0x90000008  (imm zeroed)
+    c.push(8)
+    c.push(0)
+    c.push(0)
+    c.push(144)
+    // str w0, [x8, errno@PAGEOFF] [RELOC]   0xB9000100  (imm zeroed)
+    c.push(0)
+    c.push(1)
+    c.push(0)
+    c.push(185)
+    // mov x0, #-1  (error return)           0x92800000
+    c.push(0)
+    c.push(0)
+    c.push(128)
+    c.push(146)
+    // ret  (x0 = bytes read / -1 error)     0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
+// Reloc table for rt_read — two errno records (adrp/str), IDENTICAL offsets to
+// rt_close (9-instr body of identical length):
+//   offset 0x14 (20) → ARM64_RELOC_PAGE21   (kind 3, pcrel adrp)
+//   offset 0x18 (24) → ARM64_RELOC_PAGEOFF12 (kind 4, str low-12 bits)
+fn rt_read_reloc_offs() {
+    let mut o = []
+    o.push(20)
+    o.push(24)
+    return o
+}
+fn rt_read_reloc_kinds() {
+    let mut k = []
+    k.push(3)
+    k.push(4)
+    return k
+}
+
+// ── rt_write (B9.6-C13 — class-C syscall · int+ptr+ulong _cf + errno) ────
+// write(int fd, const void *buf, unsigned long n) -> long. The exact twin of
+// rt_read — same 9-instr 36 B _cf shape (only fd/x0 sign-extended; buf x1 + n
+// x2 untouched), differing ONLY in the SYS number (mov w16,#4 vs #3). runtime.c
+// L1361:
+//   hxlcl_write(int fd, const void *buf, unsigned long n) { return _hxlcl_syscall3_cf(HXLCL_SYS_WRITE, (long)fd, (long)buf, (long)n); }
+// SYS_WRITE = 4. clang -O2 (== as -arch arm64, errno-define context):
+//   sxtw x0,w0 / mov w16,#4 / svc #0x80 / cset x8,hs / cbz x8,Lret
+//   / adrp x8,errno / str w0,[x8] / mov x0,#-1 / ret
+// errno reloc sites: 0x14 (PAGE21) / 0x18 (PAGEOFF12) — IDENTICAL to rt_close/rt_read.
+fn rt_write() {
+    let mut c = []
+    // sxtw x0, w0  (sign-extend fd arg)     0x93407C00
+    c.push(0)
+    c.push(124)
+    c.push(64)
+    c.push(147)
+    // mov w16, #4  (SYS_WRITE)              0x52800090
+    c.push(144)
+    c.push(0)
+    c.push(128)
+    c.push(82)
+    // svc #0x80                             0xD4001001
+    c.push(1)
+    c.push(16)
+    c.push(0)
+    c.push(212)
+    // cset x8, hs  (capture carry = error)  0x9A9F37E8
+    c.push(232)
+    c.push(55)
+    c.push(159)
+    c.push(154)
+    // cbz x8, Lret (success → skip errno)   0xB4000088  (+0x10 to ret)
+    c.push(136)
+    c.push(0)
+    c.push(0)
+    c.push(180)
+    // adrp x8, errno@PAGE  [RELOC PAGE21]   0x90000008  (imm zeroed)
+    c.push(8)
+    c.push(0)
+    c.push(0)
+    c.push(144)
+    // str w0, [x8, errno@PAGEOFF] [RELOC]   0xB9000100  (imm zeroed)
+    c.push(0)
+    c.push(1)
+    c.push(0)
+    c.push(185)
+    // mov x0, #-1  (error return)           0x92800000
+    c.push(0)
+    c.push(0)
+    c.push(128)
+    c.push(146)
+    // ret  (x0 = bytes written / -1 error)  0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
+// Reloc table for rt_write — two errno records (adrp/str), IDENTICAL to rt_read:
+//   offset 0x14 (20) → ARM64_RELOC_PAGE21   (kind 3, pcrel adrp)
+//   offset 0x18 (24) → ARM64_RELOC_PAGEOFF12 (kind 4, str low-12 bits)
+fn rt_write_reloc_offs() {
+    let mut o = []
+    o.push(20)
+    o.push(24)
+    return o
+}
+fn rt_write_reloc_kinds() {
+    let mut k = []
+    k.push(3)
+    k.push(4)
+    return k
+}
+
+// ── rt_select (B9.6-C14 — class-C syscall · 6-arg NON-_cf no-errno) ──────
+// select(int nfds, void *r, void *w, void *e, void *t) -> int. A 6-arg svc
+// WITHOUT the carry-flag / errno path (runtime.c uses the plain
+// `_hxlcl_syscall6`, not the `_cf` variant). Only the FIRST arg (nfds, int, x0)
+// is sign-extended; the four fd_set/timeval POINTERS (r/w/e/t, x1-x4) are
+// already 64-bit and pass through untouched; the unused 6th syscall slot (x5)
+// is zeroed. Then trap and ret — NO error branch, NO reloc. runtime.c L1572:
+//   hxlcl_select(int nfds, void *r, void *w, void *e, void *t) { return (int)_hxlcl_syscall6(HXLCL_SYS_SELECT, (long)nfds, (long)r, (long)w, (long)e, (long)t, 0); }
+// SYS_SELECT = 93 (0x5d). clang -O2 (== as -arch arm64) is byte-for-byte:
+//   sxtw x0,w0 / mov x5,#0 / mov w16,#93 / svc #0x80 / ret  (no reloc)
+// 5-instr 20 B body — the SAME length as rt_kill but a single-sxtw + an x5 zero
+// (the literal 6th arg) instead of a dual-sxtw. The non-_cf distinction drops
+// the entire errno tail.
+fn rt_select() {
+    let mut c = []
+    // sxtw x0, w0  (sign-extend nfds)       0x93407C00
+    c.push(0)
+    c.push(124)
+    c.push(64)
+    c.push(147)
+    // mov x5, #0   (zero the unused 6th arg) 0xD2800005
+    c.push(5)
+    c.push(0)
+    c.push(128)
+    c.push(210)
+    // mov w16, #93  (SYS_SELECT)            0x52800BB0
+    c.push(176)
+    c.push(11)
+    c.push(128)
+    c.push(82)
+    // svc #0x80                             0xD4001001
+    c.push(1)
+    c.push(16)
+    c.push(0)
+    c.push(212)
+    // ret  (x0 = #ready / -1)               0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
+// ── rt_poll (B9.6-C15 — class-C syscall · ptr+uint+int NON-_cf no-errno) ─
+// poll(void *fds, unsigned int nfds, int timeout) -> int. A 3-arg svc WITHOUT
+// the carry-flag / errno path (plain `_hxlcl_syscall3`). The FIRST arg (fds,
+// ptr, x0) is already 64-bit and untouched; nfds (UNSIGNED int, x1) is
+// ZERO-extended via `mov w1,w1` (the FIRST uxtw widening in the class-C set —
+// every prior int arg was sign-extended via sxtw); timeout (int, x2) is
+// sign-extended. Then trap and ret — NO error branch, NO reloc. runtime.c
+// L1573:
+//   hxlcl_poll(void *fds, unsigned int nfds, int timeout) { return (int)_hxlcl_syscall3(HXLCL_SYS_POLL, (long)fds, (long)nfds, (long)timeout); }
+// SYS_POLL = 230 (0xe6). clang -O2 (== as -arch arm64) is byte-for-byte:
+//   mov w1,w1 / sxtw x2,w2 / mov w16,#230 / svc #0x80 / ret  (no reloc)
+// 5-instr 20 B body. `mov w1,w1` (0x2a0103e1) is the unsigned-int zero-extend:
+// writing w1 clears the high 32 bits of x1, the correct widening for the
+// unsigned nfds (vs the signed sxtw used for fd/int args elsewhere).
+fn rt_poll() {
+    let mut c = []
+    // mov w1, w1   (zero-extend uint nfds)  0x2A0103E1
+    c.push(225)
+    c.push(3)
+    c.push(1)
+    c.push(42)
+    // sxtw x2, w2  (sign-extend timeout)    0x93407C42
+    c.push(66)
+    c.push(124)
+    c.push(64)
+    c.push(147)
+    // mov w16, #230  (SYS_POLL)             0x52801CD0
+    c.push(208)
+    c.push(28)
+    c.push(128)
+    c.push(82)
+    // svc #0x80                             0xD4001001
+    c.push(1)
+    c.push(16)
+    c.push(0)
+    c.push(212)
+    // ret  (x0 = #ready / -1)               0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
+// ── rt_waitpid (B9.6-C16 — class-C syscall · 4-arg _cf + errno) ──────────
+// waitpid(int pid, int *status, int options) -> int. The FIRST 4-arg svc-_cf
+// body — it extends the proven 3-arg _cf template (rt_lseek) by ONE more arg.
+// runtime.c routes waitpid to the wait4(2) syscall with a NULL 4th arg
+// (struct rusage*). The arg-widening: pid (int, x0) and options (int, x2) are
+// each sign-extended; status (ptr, x1) is already 64-bit and untouched; the
+// literal 4th arg (x3) is set to 0 via `mov x3,#0`. Then the full _cf errno
+// tail. runtime.c L1579:
+//   hxlcl_waitpid(int pid, int *status, int options) { return (int)_hxlcl_syscall4_cf(HXLCL_SYS_WAIT4, (long)pid, (long)status, (long)options, 0); }
+// SYS_WAIT4 = 7. clang -O2 (== as -arch arm64, errno-define context):
+//   sxtw x0,w0 / sxtw x2,w2 / mov x3,#0 / mov w16,#7 / svc #0x80 / cset x8,hs
+//   / cbz x8,Lret / adrp x8,errno / str w0,[x8] / mov x0,#-1 / ret
+// 11-instr 44 B body. errno reloc sites: 0x1c (PAGE21) / 0x20 (PAGEOFF12) —
+// shifted +4 vs rt_lseek's dup2-offsets because of the extra `mov x3,#0`
+// literal-arg instruction in the prologue.
+fn rt_waitpid() {
+    let mut c = []
+    // sxtw x0, w0  (sign-extend pid)        0x93407C00
+    c.push(0)
+    c.push(124)
+    c.push(64)
+    c.push(147)
+    // sxtw x2, w2  (sign-extend options)    0x93407C42
+    c.push(66)
+    c.push(124)
+    c.push(64)
+    c.push(147)
+    // mov x3, #0   (NULL rusage 4th arg)    0xD2800003
+    c.push(3)
+    c.push(0)
+    c.push(128)
+    c.push(210)
+    // mov w16, #7  (SYS_WAIT4)              0x528000F0
+    c.push(240)
+    c.push(0)
+    c.push(128)
+    c.push(82)
+    // svc #0x80                             0xD4001001
+    c.push(1)
+    c.push(16)
+    c.push(0)
+    c.push(212)
+    // cset x8, hs  (capture carry = error)  0x9A9F37E8
+    c.push(232)
+    c.push(55)
+    c.push(159)
+    c.push(154)
+    // cbz x8, Lret (success → skip errno)   0xB4000088  (+0x10 to ret)
+    c.push(136)
+    c.push(0)
+    c.push(0)
+    c.push(180)
+    // adrp x8, errno@PAGE  [RELOC PAGE21]   0x90000008  (imm zeroed)
+    c.push(8)
+    c.push(0)
+    c.push(0)
+    c.push(144)
+    // str w0, [x8, errno@PAGEOFF] [RELOC]   0xB9000100  (imm zeroed)
+    c.push(0)
+    c.push(1)
+    c.push(0)
+    c.push(185)
+    // mov x0, #-1  (error return)           0x92800000
+    c.push(0)
+    c.push(0)
+    c.push(128)
+    c.push(146)
+    // ret  (x0 = reaped pid / -1 error)     0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
+// Reloc table for rt_waitpid — two errno records (adrp/str), shifted +4 vs
+// rt_lseek because of the extra `mov x3,#0` literal-arg prologue instruction:
+//   offset 0x1c (28) → ARM64_RELOC_PAGE21   (kind 3, pcrel adrp)
+//   offset 0x20 (32) → ARM64_RELOC_PAGEOFF12 (kind 4, str low-12 bits)
+fn rt_waitpid_reloc_offs() {
+    let mut o = []
+    o.push(28)
+    o.push(32)
+    return o
+}
+fn rt_waitpid_reloc_kinds() {
+    let mut k = []
+    k.push(3)
+    k.push(4)
+    return k
+}
+
+// ── rt_mmap (B9.6-C17 — class-C syscall · 6-arg _cf + errno) ─────────────
+// mmap(void *addr, unsigned long len, int prot, int flags, int fd, long off)
+// -> void *. A 6-arg svc-_cf — the wrapper itself is a pure svc trap (the arena
+// bump-allocator state machine lives elsewhere; this is just the kernel call).
+// The arg-widening: addr (ptr, x0) + len (ulong, x1) + off (long, x5) are
+// already 64-bit and untouched; the THREE int args prot/flags/fd (x2/x3/x4) are
+// each sign-extended. Then the full _cf errno tail; on error x0=-1 == MAP_FAILED
+// (the correct pointer error sentinel). runtime.c L1657:
+//   hxlcl_mmap(void *addr, unsigned long len, int prot, int flags, int fd, long off) { return (void *)_hxlcl_syscall6_cf(HXLCL_SYS_MMAP, (long)addr, (long)len, (long)prot, (long)flags, (long)fd, off); }
+// SYS_MMAP = 197 (0xc5). clang -O2 (== as -arch arm64, errno-define context):
+//   sxtw x2,w2 / sxtw x3,w3 / sxtw x4,w4 / mov w16,#197 / svc #0x80 / cset x8,hs
+//   / cbz x8,Lret / adrp x8,errno / str w0,[x8] / mov x0,#-1 / ret
+// 11-instr 44 B body — same length as rt_waitpid (three widenings + the full
+// _cf errno tail). errno reloc sites: 0x1c (PAGE21) / 0x20 (PAGEOFF12) — same
+// as rt_waitpid (three prologue instructions push the adrp/str to the same offs).
+fn rt_mmap() {
+    let mut c = []
+    // sxtw x2, w2  (sign-extend prot)       0x93407C42
+    c.push(66)
+    c.push(124)
+    c.push(64)
+    c.push(147)
+    // sxtw x3, w3  (sign-extend flags)      0x93407C63
+    c.push(99)
+    c.push(124)
+    c.push(64)
+    c.push(147)
+    // sxtw x4, w4  (sign-extend fd)         0x93407C84
+    c.push(132)
+    c.push(124)
+    c.push(64)
+    c.push(147)
+    // mov w16, #197  (SYS_MMAP)             0x528018B0
+    c.push(176)
+    c.push(24)
+    c.push(128)
+    c.push(82)
+    // svc #0x80                             0xD4001001
+    c.push(1)
+    c.push(16)
+    c.push(0)
+    c.push(212)
+    // cset x8, hs  (capture carry = error)  0x9A9F37E8
+    c.push(232)
+    c.push(55)
+    c.push(159)
+    c.push(154)
+    // cbz x8, Lret (success → skip errno)   0xB4000088  (+0x10 to ret)
+    c.push(136)
+    c.push(0)
+    c.push(0)
+    c.push(180)
+    // adrp x8, errno@PAGE  [RELOC PAGE21]   0x90000008  (imm zeroed)
+    c.push(8)
+    c.push(0)
+    c.push(0)
+    c.push(144)
+    // str w0, [x8, errno@PAGEOFF] [RELOC]   0xB9000100  (imm zeroed)
+    c.push(0)
+    c.push(1)
+    c.push(0)
+    c.push(185)
+    // mov x0, #-1  (error return = MAP_FAILED) 0x92800000
+    c.push(0)
+    c.push(0)
+    c.push(128)
+    c.push(146)
+    // ret  (x0 = mapped addr / -1 MAP_FAILED) 0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
+// Reloc table for rt_mmap — two errno records (adrp/str), same offsets as
+// rt_waitpid (three leading widenings match the waitpid prologue length):
+//   offset 0x1c (28) → ARM64_RELOC_PAGE21   (kind 3, pcrel adrp)
+//   offset 0x20 (32) → ARM64_RELOC_PAGEOFF12 (kind 4, str low-12 bits)
+fn rt_mmap_reloc_offs() {
+    let mut o = []
+    o.push(28)
+    o.push(32)
+    return o
+}
+fn rt_mmap_reloc_kinds() {
+    let mut k = []
+    k.push(3)
+    k.push(4)
+    return k
+}
+
 // ── self-test ────────────────────────────────────────────────
 
 fn test_runtime_arm64() {
@@ -3665,6 +4093,26 @@ fn test_runtime_arm64() {
     let ls_rkind = rt_lseek_reloc_kinds()
     let fcntl_b = rt_fcntl()
     let ioctl_b = rt_ioctl()
+    // B9.6-C12/C13 — class-C syscall ABI: read/write 3-arg _cf (int+ptr+ulong,
+    // close-shape — only fd/x0 sxtw, buf/n untouched; errno relocs @0x14/0x18).
+    let read_b = rt_read()
+    let rd_roff = rt_read_reloc_offs()
+    let rd_rkind = rt_read_reloc_kinds()
+    let write_b = rt_write()
+    let wr_roff = rt_write_reloc_offs()
+    let wr_rkind = rt_write_reloc_kinds()
+    // B9.6-C14 — class-C syscall ABI: select 6-arg non-_cf (nfds sxtw, x5=0).
+    let select_b = rt_select()
+    // B9.6-C15 — class-C syscall ABI: poll 3-arg non-_cf (FIRST uxtw `mov w1,w1`).
+    let poll_b = rt_poll()
+    // B9.6-C16 — class-C syscall ABI: waitpid FIRST 4-arg _cf (mov x3,#0 literal).
+    let waitpid_b = rt_waitpid()
+    let wp_roff = rt_waitpid_reloc_offs()
+    let wp_rkind = rt_waitpid_reloc_kinds()
+    // B9.6-C17 — class-C syscall ABI: mmap 6-arg _cf (three sxtw prot/flags/fd).
+    let mmap_b = rt_mmap()
+    let mm_roff = rt_mmap_reloc_offs()
+    let mm_rkind = rt_mmap_reloc_kinds()
 
     println("runtime_arm64 — ARM64 machine code byte arrays")
     println("  rt_exit          : " + to_string(len(exit_bytes)) + " bytes")
@@ -3712,6 +4160,12 @@ fn test_runtime_arm64() {
     println("  rt_lseek         : " + to_string(len(lseek_b)) + " bytes (" + to_string(len(ls_roff)) + " relocs)")
     println("  rt_fcntl         : " + to_string(len(fcntl_b)) + " bytes (no reloc)")
     println("  rt_ioctl         : " + to_string(len(ioctl_b)) + " bytes (no reloc)")
+    println("  rt_read          : " + to_string(len(read_b)) + " bytes (" + to_string(len(rd_roff)) + " relocs)")
+    println("  rt_write         : " + to_string(len(write_b)) + " bytes (" + to_string(len(wr_roff)) + " relocs)")
+    println("  rt_select        : " + to_string(len(select_b)) + " bytes (no reloc)")
+    println("  rt_poll          : " + to_string(len(poll_b)) + " bytes (no reloc)")
+    println("  rt_waitpid       : " + to_string(len(waitpid_b)) + " bytes (" + to_string(len(wp_roff)) + " relocs)")
+    println("  rt_mmap          : " + to_string(len(mmap_b)) + " bytes (" + to_string(len(mm_roff)) + " relocs)")
 
     // Verify sizes match expected instruction counts * 4
     let mut ok = true
@@ -4013,6 +4467,126 @@ fn test_runtime_arm64() {
     if ioctl_b[8] != 1 || ioctl_b[9] != 16 || ioctl_b[10] != 0 || ioctl_b[11] != 212 { println("  FAIL: rt_ioctl missing svc #0x80 at offset 8"); ok = false }
     // ret trailer (c0 03 5f d6) directly after svc — no carry-flag / errno path.
     if ioctl_b[12] != 192 || ioctl_b[13] != 3 || ioctl_b[14] != 95 || ioctl_b[15] != 214 { println("  FAIL: rt_ioctl no RET (or unexpected errno tail)"); ok = false }
+    // B9.6-C12 — class-C syscall ABI: rt_read is a 9-instr 36 B body (int+ptr+
+    //   ulong _cf; only fd/x0 sxtw, buf/n untouched — the rt_close shape with
+    //   SYS_READ=3 instead of SYS_CLOSE=6). errno relocs at the close offsets.
+    if len(read_b) != 36 { println("  FAIL: rt_read expected 36, got " + to_string(len(read_b))); ok = false }
+    // sxtw x0,w0 prefix (00 7c 40 93) — fd arg sign-extended (buf/n untouched).
+    if read_b[0] != 0 || read_b[1] != 124 || read_b[2] != 64 || read_b[3] != 147 { println("  FAIL: rt_read missing sxtw x0 (fd arg)"); ok = false }
+    // mov w16,#3 (70 00 80 52) — SYS_READ loaded into x16.
+    if read_b[4] != 112 || read_b[5] != 0 || read_b[6] != 128 || read_b[7] != 82 { println("  FAIL: rt_read wrong syscall number (SYS_READ=3)"); ok = false }
+    // svc #0x80 at offset 8 (01 10 00 d4) — the BSD syscall trap.
+    if read_b[8] != 1 || read_b[9] != 16 || read_b[10] != 0 || read_b[11] != 212 { println("  FAIL: rt_read missing svc #0x80 at offset 8"); ok = false }
+    // cset x8,hs at offset 12 (e8 37 9f 9a) — carry-flag capture.
+    if read_b[12] != 232 || read_b[13] != 55 || read_b[14] != 159 || read_b[15] != 154 { println("  FAIL: rt_read missing cset (carry capture)"); ok = false }
+    // adrp x8,errno at offset 20 (08 00 00 90) — PAGE21 reloc site (== rt_close).
+    if read_b[20] != 8 || read_b[21] != 0 || read_b[22] != 0 || read_b[23] != 144 { println("  FAIL: rt_read missing adrp errno (reloc 0x14)"); ok = false }
+    // str w0,[x8] at offset 24 (00 01 00 b9) — PAGEOFF12 reloc site.
+    if read_b[24] != 0 || read_b[25] != 1 || read_b[26] != 0 || read_b[27] != 185 { println("  FAIL: rt_read missing str errno (reloc 0x18)"); ok = false }
+    // ret trailer (c0 03 5f d6).
+    if read_b[32] != 192 || read_b[33] != 3 || read_b[34] != 95 || read_b[35] != 214 { println("  FAIL: rt_read no RET"); ok = false }
+    // reloc table: 2 records (PAGE21@0x14 + PAGEOFF12@0x18) — same as rt_close.
+    if len(rd_roff) != 2 { println("  FAIL: rt_read expected 2 reloc offsets, got " + to_string(len(rd_roff))); ok = false }
+    if len(rd_rkind) != 2 { println("  FAIL: rt_read expected 2 reloc kinds, got " + to_string(len(rd_rkind))); ok = false }
+    if rd_roff[0] != 20 || rd_roff[1] != 24 { println("  FAIL: rt_read reloc offsets must be 0x14,0x18"); ok = false }
+    if rd_rkind[0] != 3 || rd_rkind[1] != 4 { println("  FAIL: rt_read reloc kinds must be PAGE21(3),PAGEOFF12(4)"); ok = false }
+    // B9.6-C13 — class-C syscall ABI: rt_write is the rt_read twin (9-instr 36 B
+    //   int+ptr+ulong _cf), differing ONLY in SYS_WRITE=4 (mov w16,#4).
+    if len(write_b) != 36 { println("  FAIL: rt_write expected 36, got " + to_string(len(write_b))); ok = false }
+    // sxtw x0,w0 prefix (00 7c 40 93) — fd arg sign-extended.
+    if write_b[0] != 0 || write_b[1] != 124 || write_b[2] != 64 || write_b[3] != 147 { println("  FAIL: rt_write missing sxtw x0 (fd arg)"); ok = false }
+    // mov w16,#4 (90 00 80 52) — SYS_WRITE loaded into x16.
+    if write_b[4] != 144 || write_b[5] != 0 || write_b[6] != 128 || write_b[7] != 82 { println("  FAIL: rt_write wrong syscall number (SYS_WRITE=4)"); ok = false }
+    // svc #0x80 at offset 8 (01 10 00 d4).
+    if write_b[8] != 1 || write_b[9] != 16 || write_b[10] != 0 || write_b[11] != 212 { println("  FAIL: rt_write missing svc #0x80 at offset 8"); ok = false }
+    // adrp x8,errno at offset 20 (08 00 00 90) — PAGE21 reloc site.
+    if write_b[20] != 8 || write_b[21] != 0 || write_b[22] != 0 || write_b[23] != 144 { println("  FAIL: rt_write missing adrp errno (reloc 0x14)"); ok = false }
+    // str w0,[x8] at offset 24 (00 01 00 b9) — PAGEOFF12 reloc site.
+    if write_b[24] != 0 || write_b[25] != 1 || write_b[26] != 0 || write_b[27] != 185 { println("  FAIL: rt_write missing str errno (reloc 0x18)"); ok = false }
+    // ret trailer (c0 03 5f d6).
+    if write_b[32] != 192 || write_b[33] != 3 || write_b[34] != 95 || write_b[35] != 214 { println("  FAIL: rt_write no RET"); ok = false }
+    if len(wr_roff) != 2 { println("  FAIL: rt_write expected 2 reloc offsets, got " + to_string(len(wr_roff))); ok = false }
+    if wr_roff[0] != 20 || wr_roff[1] != 24 { println("  FAIL: rt_write reloc offsets must be 0x14,0x18"); ok = false }
+    if wr_rkind[0] != 3 || wr_rkind[1] != 4 { println("  FAIL: rt_write reloc kinds must be PAGE21(3),PAGEOFF12(4)"); ok = false }
+    // B9.6-C14 — class-C syscall ABI: rt_select is a 5-instr 20 B leaf (6-arg
+    //   NON-_cf no-errno; nfds/x0 sxtw, x5 zeroed for the unused 6th slot, the
+    //   r/w/e/t pointers x1-x4 untouched — trap, ret, NO reloc).
+    if len(select_b) != 20 { println("  FAIL: rt_select expected 20, got " + to_string(len(select_b))); ok = false }
+    // sxtw x0,w0 prefix (00 7c 40 93) — nfds arg sign-extended.
+    if select_b[0] != 0 || select_b[1] != 124 || select_b[2] != 64 || select_b[3] != 147 { println("  FAIL: rt_select missing sxtw x0 (nfds)"); ok = false }
+    // mov x5,#0 (05 00 80 d2) — zero the unused 6th syscall slot.
+    if select_b[4] != 5 || select_b[5] != 0 || select_b[6] != 128 || select_b[7] != 210 { println("  FAIL: rt_select missing mov x5,#0 (6th arg)"); ok = false }
+    // mov w16,#93 (b0 0b 80 52) — SYS_SELECT loaded into x16.
+    if select_b[8] != 176 || select_b[9] != 11 || select_b[10] != 128 || select_b[11] != 82 { println("  FAIL: rt_select wrong syscall number (SYS_SELECT=93)"); ok = false }
+    // svc #0x80 at offset 12 (01 10 00 d4) — trap, NO errno tail.
+    if select_b[12] != 1 || select_b[13] != 16 || select_b[14] != 0 || select_b[15] != 212 { println("  FAIL: rt_select missing svc #0x80 at offset 12"); ok = false }
+    // ret trailer (c0 03 5f d6) directly after svc — no carry-flag / errno path.
+    if select_b[16] != 192 || select_b[17] != 3 || select_b[18] != 95 || select_b[19] != 214 { println("  FAIL: rt_select no RET (or unexpected errno tail)"); ok = false }
+    // B9.6-C15 — class-C syscall ABI: rt_poll is a 5-instr 20 B leaf (ptr+uint+
+    //   int NON-_cf no-errno; fds/x0 ptr untouched, nfds/x1 ZERO-extended via the
+    //   FIRST `mov w1,w1` uxtw, timeout/x2 sxtw — trap, ret, NO reloc).
+    if len(poll_b) != 20 { println("  FAIL: rt_poll expected 20, got " + to_string(len(poll_b))); ok = false }
+    // mov w1,w1 prefix (e1 03 01 2a) — UNSIGNED nfds zero-extended (FIRST uxtw).
+    if poll_b[0] != 225 || poll_b[1] != 3 || poll_b[2] != 1 || poll_b[3] != 42 { println("  FAIL: rt_poll missing mov w1,w1 (uxtw nfds)"); ok = false }
+    // sxtw x2,w2 (42 7c 40 93) — timeout arg sign-extended.
+    if poll_b[4] != 66 || poll_b[5] != 124 || poll_b[6] != 64 || poll_b[7] != 147 { println("  FAIL: rt_poll missing sxtw x2 (timeout)"); ok = false }
+    // mov w16,#230 (d0 1c 80 52) — SYS_POLL loaded into x16.
+    if poll_b[8] != 208 || poll_b[9] != 28 || poll_b[10] != 128 || poll_b[11] != 82 { println("  FAIL: rt_poll wrong syscall number (SYS_POLL=230)"); ok = false }
+    // svc #0x80 at offset 12 (01 10 00 d4) — trap, NO errno tail.
+    if poll_b[12] != 1 || poll_b[13] != 16 || poll_b[14] != 0 || poll_b[15] != 212 { println("  FAIL: rt_poll missing svc #0x80 at offset 12"); ok = false }
+    // ret trailer (c0 03 5f d6) directly after svc.
+    if poll_b[16] != 192 || poll_b[17] != 3 || poll_b[18] != 95 || poll_b[19] != 214 { println("  FAIL: rt_poll no RET (or unexpected errno tail)"); ok = false }
+    // B9.6-C16 — class-C syscall ABI: rt_waitpid is an 11-instr 44 B body (FIRST
+    //   4-arg svc-_cf; sxtw x0/pid + sxtw x2/options + mov x3,#0 NULL rusage —
+    //   status/x1 ptr untouched — then the full _cf errno tail). errno relocs at
+    //   0x1c/0x20 (shifted +4 vs lseek for the extra mov x3,#0).
+    if len(waitpid_b) != 44 { println("  FAIL: rt_waitpid expected 44, got " + to_string(len(waitpid_b))); ok = false }
+    // sxtw x0,w0 prefix (00 7c 40 93) — pid arg sign-extended.
+    if waitpid_b[0] != 0 || waitpid_b[1] != 124 || waitpid_b[2] != 64 || waitpid_b[3] != 147 { println("  FAIL: rt_waitpid missing sxtw x0 (pid)"); ok = false }
+    // sxtw x2,w2 (42 7c 40 93) — options arg sign-extended (status/x1 untouched).
+    if waitpid_b[4] != 66 || waitpid_b[5] != 124 || waitpid_b[6] != 64 || waitpid_b[7] != 147 { println("  FAIL: rt_waitpid missing sxtw x2 (options)"); ok = false }
+    // mov x3,#0 (03 00 80 d2) — NULL rusage 4th arg (the 4-arg extension).
+    if waitpid_b[8] != 3 || waitpid_b[9] != 0 || waitpid_b[10] != 128 || waitpid_b[11] != 210 { println("  FAIL: rt_waitpid missing mov x3,#0 (NULL rusage)"); ok = false }
+    // mov w16,#7 (f0 00 80 52) — SYS_WAIT4 loaded into x16.
+    if waitpid_b[12] != 240 || waitpid_b[13] != 0 || waitpid_b[14] != 128 || waitpid_b[15] != 82 { println("  FAIL: rt_waitpid wrong syscall number (SYS_WAIT4=7)"); ok = false }
+    // svc #0x80 at offset 16 (01 10 00 d4).
+    if waitpid_b[16] != 1 || waitpid_b[17] != 16 || waitpid_b[18] != 0 || waitpid_b[19] != 212 { println("  FAIL: rt_waitpid missing svc #0x80 at offset 16"); ok = false }
+    // cset x8,hs at offset 20 (e8 37 9f 9a) — carry-flag capture.
+    if waitpid_b[20] != 232 || waitpid_b[21] != 55 || waitpid_b[22] != 159 || waitpid_b[23] != 154 { println("  FAIL: rt_waitpid missing cset (carry capture)"); ok = false }
+    // adrp x8,errno at offset 28 (08 00 00 90) — PAGE21 reloc site.
+    if waitpid_b[28] != 8 || waitpid_b[29] != 0 || waitpid_b[30] != 0 || waitpid_b[31] != 144 { println("  FAIL: rt_waitpid missing adrp errno (reloc 0x1c)"); ok = false }
+    // str w0,[x8] at offset 32 (00 01 00 b9) — PAGEOFF12 reloc site.
+    if waitpid_b[32] != 0 || waitpid_b[33] != 1 || waitpid_b[34] != 0 || waitpid_b[35] != 185 { println("  FAIL: rt_waitpid missing str errno (reloc 0x20)"); ok = false }
+    // ret trailer (c0 03 5f d6).
+    if waitpid_b[40] != 192 || waitpid_b[41] != 3 || waitpid_b[42] != 95 || waitpid_b[43] != 214 { println("  FAIL: rt_waitpid no RET"); ok = false }
+    if len(wp_roff) != 2 { println("  FAIL: rt_waitpid expected 2 reloc offsets, got " + to_string(len(wp_roff))); ok = false }
+    if wp_roff[0] != 28 || wp_roff[1] != 32 { println("  FAIL: rt_waitpid reloc offsets must be 0x1c,0x20"); ok = false }
+    if wp_rkind[0] != 3 || wp_rkind[1] != 4 { println("  FAIL: rt_waitpid reloc kinds must be PAGE21(3),PAGEOFF12(4)"); ok = false }
+    // B9.6-C17 — class-C syscall ABI: rt_mmap is an 11-instr 44 B body (6-arg
+    //   svc-_cf; sxtw x2/prot + sxtw x3/flags + sxtw x4/fd — addr/x0, len/x1,
+    //   off/x5 untouched — then the full _cf errno tail; -1 == MAP_FAILED).
+    if len(mmap_b) != 44 { println("  FAIL: rt_mmap expected 44, got " + to_string(len(mmap_b))); ok = false }
+    // sxtw x2,w2 prefix (42 7c 40 93) — prot arg sign-extended.
+    if mmap_b[0] != 66 || mmap_b[1] != 124 || mmap_b[2] != 64 || mmap_b[3] != 147 { println("  FAIL: rt_mmap missing sxtw x2 (prot)"); ok = false }
+    // sxtw x3,w3 (63 7c 40 93) — flags arg sign-extended.
+    if mmap_b[4] != 99 || mmap_b[5] != 124 || mmap_b[6] != 64 || mmap_b[7] != 147 { println("  FAIL: rt_mmap missing sxtw x3 (flags)"); ok = false }
+    // sxtw x4,w4 (84 7c 40 93) — fd arg sign-extended.
+    if mmap_b[8] != 132 || mmap_b[9] != 124 || mmap_b[10] != 64 || mmap_b[11] != 147 { println("  FAIL: rt_mmap missing sxtw x4 (fd)"); ok = false }
+    // mov w16,#197 (b0 18 80 52) — SYS_MMAP loaded into x16.
+    if mmap_b[12] != 176 || mmap_b[13] != 24 || mmap_b[14] != 128 || mmap_b[15] != 82 { println("  FAIL: rt_mmap wrong syscall number (SYS_MMAP=197)"); ok = false }
+    // svc #0x80 at offset 16 (01 10 00 d4).
+    if mmap_b[16] != 1 || mmap_b[17] != 16 || mmap_b[18] != 0 || mmap_b[19] != 212 { println("  FAIL: rt_mmap missing svc #0x80 at offset 16"); ok = false }
+    // cset x8,hs at offset 20 (e8 37 9f 9a) — carry-flag capture.
+    if mmap_b[20] != 232 || mmap_b[21] != 55 || mmap_b[22] != 159 || mmap_b[23] != 154 { println("  FAIL: rt_mmap missing cset (carry capture)"); ok = false }
+    // adrp x8,errno at offset 28 (08 00 00 90) — PAGE21 reloc site.
+    if mmap_b[28] != 8 || mmap_b[29] != 0 || mmap_b[30] != 0 || mmap_b[31] != 144 { println("  FAIL: rt_mmap missing adrp errno (reloc 0x1c)"); ok = false }
+    // str w0,[x8] at offset 32 (00 01 00 b9) — PAGEOFF12 reloc site.
+    if mmap_b[32] != 0 || mmap_b[33] != 1 || mmap_b[34] != 0 || mmap_b[35] != 185 { println("  FAIL: rt_mmap missing str errno (reloc 0x20)"); ok = false }
+    // ret trailer (c0 03 5f d6).
+    if mmap_b[40] != 192 || mmap_b[41] != 3 || mmap_b[42] != 95 || mmap_b[43] != 214 { println("  FAIL: rt_mmap no RET"); ok = false }
+    if len(mm_roff) != 2 { println("  FAIL: rt_mmap expected 2 reloc offsets, got " + to_string(len(mm_roff))); ok = false }
+    if mm_roff[0] != 28 || mm_roff[1] != 32 { println("  FAIL: rt_mmap reloc offsets must be 0x1c,0x20"); ok = false }
+    if mm_rkind[0] != 3 || mm_rkind[1] != 4 { println("  FAIL: rt_mmap reloc kinds must be PAGE21(3),PAGEOFF12(4)"); ok = false }
 
     // Verify all sizes are multiples of 4 (ARM64 fixed-width)
     if len(exit_bytes) % 4 != 0 { println("  FAIL: rt_exit not aligned"); ok = false }
@@ -4060,6 +4634,12 @@ fn test_runtime_arm64() {
     if len(lseek_b) % 4 != 0 { println("  FAIL: rt_lseek not aligned"); ok = false }
     if len(fcntl_b) % 4 != 0 { println("  FAIL: rt_fcntl not aligned"); ok = false }
     if len(ioctl_b) % 4 != 0 { println("  FAIL: rt_ioctl not aligned"); ok = false }
+    if len(read_b) % 4 != 0 { println("  FAIL: rt_read not aligned"); ok = false }
+    if len(write_b) % 4 != 0 { println("  FAIL: rt_write not aligned"); ok = false }
+    if len(select_b) % 4 != 0 { println("  FAIL: rt_select not aligned"); ok = false }
+    if len(poll_b) % 4 != 0 { println("  FAIL: rt_poll not aligned"); ok = false }
+    if len(waitpid_b) % 4 != 0 { println("  FAIL: rt_waitpid not aligned"); ok = false }
+    if len(mmap_b) % 4 != 0 { println("  FAIL: rt_mmap not aligned"); ok = false }
     // B9.6-D2 — all three end with ret (192,3,95,214).
     let nhf = len(hfloat)
     if hfloat[nhf - 4] != 192 { println("  FAIL: rt_hexa_float no RET"); ok = false }
