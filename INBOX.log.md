@@ -2109,3 +2109,45 @@ origin/main HEAD `#1959 fix(cloud): SSH/scp to fresh GPU pods — accept-new hos
 ### Filer
 
 demiurge RTSC sc2be2h6/13-job-dark 진단 (TCP-open + #1959-host-key + publickey-suspect; 안전 probe only, 코드 회귀 폐기)
+
+
+## 2026-05-29 — cloud reboot + attach-ssh verbs (API-key 기반 자동회수)
+
+🟠 **OPEN · recommendation**
+
+### 배경
+
+vast pod 가 publickey 인증 실패(authorized_keys 에서 키 유실)로 dark 됐을 때, 데이터를
+보존하며 회수하려면 vast REST API 로 ① ssh pubkey 를 instance 에 재attach ② instance reboot
+이 필요. vast API key 는 이미 secret 에 있고 `hexa cloud list/rent` 가 그것으로 인증 중.
+그러나 그 key 를 쓸 lifecycle verb 가 없어 자동회수 불가 → 사람이 vast 웹 콘솔에 로그인하거나
+re-rent(데이터 손실)해야 함.
+
+### 현재 cloud lifecycle 표면
+
+`rent · down · list · status · ssh-port · resolve · adopt · forget · reconcile · watchdog · orphans`
+→ **`reboot` 없음 · `attach-ssh` (key 재등록) 없음**. raw `vastai` CLI 는 @D g8 로 차단.
+
+### Recommendation
+
+1. **`cloud reboot <id> [--provider P]`** — vast/runpod REST reboot endpoint 호출.
+   sshd 다운 / authorized_keys 재주입(이미지 부팅 훅) 을 데이터 보존하며 트리거.
+2. **`cloud attach-ssh <id> [--key <pub>] [--provider P]`** — 로컬 pubkey(기본 `~/.ssh/id_vast_anima.pub`)
+   를 vast account/instance 에 등록 (vast `PUT /api/v0/ssh/` 류). publickey-255 의 정공 회수.
+3. **`cloud recover <id>`** (선택, 위 둘의 조합) — attach-ssh → reboot → ssh-ready 대기 → manifest
+   re-stamp 까지 한 번에. publickey/sshd-down dark pod 의 one-verb 회수.
+
+### 효과
+
+API key 는 이미 있으므로(이 entry 의 전제), 위 verb 만 생기면 dark pod 회수가 사람 개입(웹 콘솔)
+없이 autonomous 가능 — re-rent 의 데이터 손실 + wall 낭비를 피함.
+
+### Cross-ref
+
+- 직접 동기: 2026-05-29 RTSC 13-job dark (publickey-255, [[#1962]] 진단) — 데이터 보존 회수 경로가
+  현재 cloud verb 부재로 막힘.
+- [[d8]] vast trouble → INBOX · #1959 (accept-new host-key) · #1950 (255 cause-distinguishability)
+
+### Filer
+
+demiurge RTSC 13-job-dark 회수 — vast API key 있으나 cloud reboot/attach-ssh verb 부재로 자동회수 불가
