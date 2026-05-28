@@ -538,6 +538,9 @@ fn _recompute2_register(fn_name: string, a: int, b: int) -> int {
     if fn_name == "jacobi"    { return jacobi_symbol(a, b) }
     if fn_name == "kronecker" { return kronecker_symbol(a, b) }
     if fn_name == "dim_cusp_forms" { return dim_cusp_forms(a, b) }
+    // J_k(n) — Jordan totient (A007434/A059376/A059377); mirror verify_cli _recompute2
+    // so atlas-register side stays in sync (atlas SSOT = embedded; register/verify symmetry).
+    if fn_name == "jordan_totient" { return jordan_totient(a, b) }
     // RFC 046 ssh_winding(v, w) — verbatim port of verify_cli.hexa::_recompute2.
     // Mirrors PR #592 verify-arm; ssh_winding atom registration requires this
     // dispatch (PR #592 surface gap: atlas_cli register table not synced).
