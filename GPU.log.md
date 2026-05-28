@@ -481,11 +481,12 @@ vs cublasSgemm + cub::DeviceSegmentedRadixSort.
 
 | rank | wedge | ceiling | feasibility |
 |---|---|---|---|
-| 1 | **small-M GEMV (M=1)** | 5-10× estimated (99% sub-roofline) | hexa hand-emit GEMV-tiled kernel |
-| 2 | **top-K fusion (M=8 LLaMA)** | 1.80× measured | hand-emit GEMM+streaming-top-K |
-| 3 | top-K fusion (M=32 Qwen) | 1.68× measured | 동일 |
+| ~~1~~ | ~~**small-M GEMV (M=1)**~~ | ~~5-10× estimated (99% sub-roofline)~~ | **🔴 FALSIFIED #1922 (2026-05-28) — ceiling 1.19× (HBM-bound, handemit 0.948× cuBLAS @ M=1)** |
+| ~~2~~ | ~~**top-K fusion (M=8 LLaMA)**~~ | ~~1.80× measured~~ | **🔴 FALSIFIED #1925 (2026-05-28) — ceiling 1.38× cub (naive handemit 0.066× @ M=8 LLaMA = 15× 느림)** |
+| 3 | top-K fusion (M=32 Qwen) | 1.68× measured | naive handemit 0.023× = 44× 느림 (#1925), 동일 라인 |
 | 4 | BC3 epilogue (PR #1697) | 1.085× retired | roofline-bounded, deprecated |
 | 5 | grouped QKV | TBD | stride debug 필요 |
+| next | **tiled GEMM-style + register top-K** (NEW) | TBD | warp-cooperative K-reduce + smem B-tile + register top-K accumulator. 또는 decode wedge family 전체 retire 후 attention/FFN 라인으로 회귀 |
 
 **Methodology**: cheap-first oracle 3 launchers (~5min total fire) 이 **2 wedge
 의 real >1.5× target 을 식별**, BC3 epilogue 의 1.085× 천장을 retire. 다음
@@ -1405,3 +1406,34 @@ wgmma extension), HGEMM scale-up, WPF ≥30% 등.
 
 cycle-loop sequence: R16 = 4 evidence-flip (L684 L685 L686 L706) → 신규 fire 0, 기존 산물의
 milestone 동기화로 §5 카탈로그 정확도 ↑.
+
+## 🔻 retired wedge candidates (2026-05-28)
+
+2026-05-27 ranked-wedge 표 (위 §`### Ranked wedges (BC3 decomp+wedge probe 통합)`) 의 top-2
+후보 두 건이 동일 cycle 에 연속 fire 로 closed-negative. LM-head decode 라인에는 naive
+hand-emit 으로 잡을 수 있는 ≥1.10× single-kernel wedge 가 더 이상 보이지 않음. 본 subsection 은
+두 fire 의 retirement 사유를 한 곳에 모음 (anchors).
+
+| retired wedge | original promise | fire PR | real ceiling | reason |
+|---|---|---|---|---|
+| **small-M GEMV (M=1)** | 5-10× (FP32 compute peak gap 99% sub-roofline) | hexa-lang **#1922** (`F-WEDGE-SMALL-M-GEMV-WALL`) | **1.19×** (HBM-roofline) | AI=0.50 F/B → memory-bandwidth-bound, not compute-bound. cuBLAS M=1 = ~590/700 GB/s ≈ 84% BW peak; handemit float4-vec kernel 동일 BW envelope (0.948× cuBLAS = within timer jitter). 원본 분석 = `## 2026-05-28 — F-WEDGE-SMALL-M-GEMV-WALL fire — 🔴 FALSIFIED` + Round 10 honest roofline correction (`## 2026-05-28 — 🔴 HONEST ROOFLINE CORRECTION: W1 small-M GEMV phantom wedge`) |
+| **top-K fused (naive)** | 1.80× measured (M=8 LLaMA, thrust::sort stand-in) | hexa-lang **#1925** (`F-WEDGE-TOPK-FUSED-WALL`) | **1.38×** (cub::DeviceSegmentedRadixSort baseline) | naive hand-emit GEMM (per-thread sequential dot, smem-A only, no warp-coop K-reduce) 는 small-M GEMM 문제로 환원되어 cuBLAS 대비 15× (M=8 LLaMA) ~ 44× (M=32 Qwen) 느림. cub baseline 의 실측 top-K share = ~28% (44% 아님) → 진짜 ceiling 1.38× 로 수축. 원본 분석 = `## 2026-05-28 — F-WEDGE-TOPK-FUSED-WALL fire 산물` (위 line ~1290) |
+
+**Combined implication**: 2026-05-27 ranked-wedge 표 top-2 = both 🔴. naive hand-emit
+tier 의 LM-head decode wedge 후보 고갈. 다음 방향 둘 중 하나 —
+
+- **(a) tiled GEMM-style + register top-K** (NEW) — warp-cooperative K-reduce + smem
+  B-tile + register top-K accumulator. small-M GEMV wedge 의 BW-bound 한계는 못 깨지만
+  M≥8 regime 에서 cuBLAS+cub stack 의 ~28% top-K share 를 GEMM epilogue 로 흡수해 1.10-
+  1.30× 가능성. 비용 = mma.sync 또는 wgmma-equivalent (Blackwell sm_120 = tcgen05.mma)
+  탐사 필요. **별도 cycle 의제**.
+- **(b) decode wedge family 전체 retire** — attention/FFN/norm 본 라인 (anima-rank 1-3,
+  GPU.anima.md 표) 으로 회귀. anima M4 트레이너 wiring 이 production step-rate 의
+  지배적 격차이므로 우선순위 더 높음.
+
+**Methodology lesson 통합** (위 Round 11 entry 의 rule 5 강화) — cheap-first oracle 의
+ceiling 추정은 (1) AI-aware roofline (compute vs BW), (2) baseline 의 sub-kernel share
+실측 (estimate 금물) 두 가지 모두 충족해야 함. 본 retirement 2 건 = 두 rule 의 위반 사례
+(W1=rule 1, top-K=rule 2). `feedback_closure_is_physical_limit` g0 instance #3.
+
+cycle 결과: 두 wedge retire 동시. cycle-loop next-direction 은 위 (a) 또는 (b).
