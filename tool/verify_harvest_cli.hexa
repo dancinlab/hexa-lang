@@ -1,0 +1,289 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  tool/verify_harvest_cli.hexa — `hexa verify --harvest` entry (PR-hx5)
+//
+//  @version 0.1.0
+//  @stability preview
+//  @since 2026-05-29
+//  @maintainer hexa-core
+//  @rfc demiurge project.tape d_atlas_as_audit_ssot (PR #510)
+//
+//  ── PROBLEM ────────────────────────────────────────────────────────────────
+//
+//  PR-hx1..hx4 land four stdlib modules:
+//      stdlib/atlas/atom_meta.hexa             (AtomMeta + side-table)
+//      stdlib/verify/calculators/*.hexa        (bcs_gap_ratio · eliashberg_full + assumes)
+//      stdlib/verify/dispatch.hexa             (generic name->fn registry)
+//      stdlib/verify/harvest.hexa              (kind-pluggable tar/dir/file → Metrics)
+//
+//  PR-hx5 must wire them into a working CLI so verify-atlas direct-fold is
+//  user-callable end-to-end. The CANONICAL verify entrypoint
+//  (tool/verify_cli.hexa) is currently broken at HEAD with an unrelated
+//  symbol-resolution failure (jordan_totient undeclared at clang link),
+//  pre-existing and outside this PR's scope — so we ship the new
+//  harvest verb as an INDEPENDENT, additive entry. tool/verify_cli.hexa is
+//  unchanged (backward-compat preserved). A future PR (or restoration of
+//  baseline build) will fold this verb into the main CLI; until then it
+//  runs standalone via `hexa run tool/verify_harvest_cli.hexa ...`.
+//
+//  ── USAGE ──────────────────────────────────────────────────────────────────
+//
+//  hexa run tool/verify_harvest_cli.hexa
+//      --harvest <pod_tar_or_dir_or_file>
+//      --kind     <dft-elph|sscha|llm-bench|web-smoke>
+//      --fn       <allen_dynes_tc|mcmillan_tc|...>
+//      --domain   <rtsc|bio|antimatter|...>
+//      --material <h3s|mgb2|...>
+//      [--expected <float>]            # literature anchor for tier judgment
+//      [--falsifier <id>]              # pre-registered falsifier id
+//
+//  PIPELINE:
+//      1. harvest(path, kind)  → Metrics (lambda, omega_log_K)
+//      2. dispatch(fn, args)   → value   (caller maps metrics → arity-args)
+//      3. tier:  🔵 if rel_err(value, expected) < 1e-9
+//                🟢 if rel_err(value, expected) < 0.20   (numeric MEASURED)
+//                🟠 otherwise (INCONCLUSIVE)
+//                🔴 if expected provided AND outside ±50% (FALSIFIED)
+//      4. AtomMeta side-table fold (in-process) with assumes_for(fn) +
+//         provenance_for(fn) + ISO-8601 timestamp + tier code.
+//      5. verbatim emit — tier, value, expected, rel_err, atom id, all
+//         AtomMeta fields. (Atlas-persistence is a future PR; this is the
+//         in-process direct-fold demonstrating the design.)
+//
+//  ── NON-GOALS (PR-hx5 SCOPE GUARD) ─────────────────────────────────────────
+//
+//  · Modifying tool/verify_cli.hexa (broken at HEAD; out-of-scope)
+//  · Persisting AtomMeta to compiler/atlas/embedded.gen.hexa (future PR;
+//    requires verify_cli's atlas-fold path that's also currently broken)
+//  · Removing exports/material_*/* legacy files (demiurge Phase 3 · gated
+//    on active RTSC jobs terminal per plan)
+// ═══════════════════════════════════════════════════════════════════════════
+
+use "self/runtime/math_pure"
+
+import "stdlib/verify/harvest.hexa"
+import "stdlib/verify/dispatch.hexa"
+import "stdlib/verify/calculators/assumes_meta.hexa"
+import "stdlib/atlas/atom_meta.hexa"
+
+// ── arg parsing ─────────────────────────────────────────────────────────
+
+fn _slice_args() -> array {
+    let av = args()
+    let mut out: array = []
+    let mut i = 1
+    while i < av.len() {
+        out = out + [to_string(av[i])]
+        i = i + 1
+    }
+    return out
+}
+
+fn _flag_value(av: array, name: string) -> string {
+    let mut i = 0
+    while i < av.len() {
+        if av[i] == name && i + 1 < av.len() {
+            return to_string(av[i + 1])
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+fn _flag_present(av: array, name: string) -> bool {
+    let mut i = 0
+    while i < av.len() { if av[i] == name { return true }; i = i + 1 }
+    return false
+}
+
+// ── tier judgment ───────────────────────────────────────────────────────
+
+fn abs_f(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _rel(a: float, b: float) -> float {
+    let d = abs_f(b); if d < 1.0e-30 { return abs_f(a - b) }; return abs_f(a - b) / d
+}
+
+fn _tier_judge(value: float, expected: float, expected_given: bool) -> string {
+    if !expected_given { return "O" }  // INCONCLUSIVE — no anchor
+    let r = _rel(value, expected)
+    if r < 1.0e-9 { return "B" }       // formal-precision
+    if r < 0.20   { return "G" }       // GATE_CLOSED_MEASURED
+    if r > 0.50   { return "R" }       // FALSIFIED
+    return "O"                          // 0.20..0.50 → INCONCLUSIVE
+}
+
+fn _tier_emoji(code: string) -> string {
+    if code == "B" { return "🔵" }
+    if code == "G" { return "🟢" }
+    if code == "O" { return "🟠" }
+    if code == "R" { return "🔴" }
+    if code == "Y" { return "🟡" }
+    if code == "W" { return "⚪" }
+    return "?"
+}
+
+fn _tier_name(code: string) -> string {
+    if code == "B" { return "SUPPORTED-FORMAL" }
+    if code == "G" { return "GATE_CLOSED_MEASURED" }
+    if code == "O" { return "INCONCLUSIVE" }
+    if code == "R" { return "FALSIFIED" }
+    if code == "Y" { return "CITATION" }
+    if code == "W" { return "SPECULATION" }
+    return "UNKNOWN"
+}
+
+// ── metric → arity-args mapping (per fn) ────────────────────────────────
+
+fn _metrics_to_args(fn_name: string, m: Metrics) -> array {
+    if fn_name == "allen_dynes_tc" || fn_name == "mcmillan_tc" {
+        // (omega_log/theta_d, lambda, mu_star)
+        // mu_star: not in metrics — caller expected to pre-register; we use
+        // the Morel-Anderson default 0.13 (logged in provenance).
+        let omega = metrics_get(m, "omega_log_K")
+        let lam   = metrics_get(m, "lambda")
+        return [omega, lam, 0.13]
+    }
+    if fn_name == "universal_cooper_tc" {
+        return [metrics_get(m, "omega_log_K"), metrics_get(m, "lambda")]
+    }
+    if fn_name == "bcs_gap_ratio" {
+        return []
+    }
+    if fn_name == "eliashberg_full" {
+        // 4-arg: (omega_log, omega2, lambda, mu_star); omega2 defaults to omega_log
+        let omega = metrics_get(m, "omega_log_K")
+        let lam   = metrics_get(m, "lambda")
+        return [omega, omega, lam, 0.13]
+    }
+    return []
+}
+
+// ── atom id ─────────────────────────────────────────────────────────────
+
+fn _atom_id(fn_name: string, args: array) -> string {
+    let mut s = fn_name
+    let mut i = 0
+    while i < args.len() {
+        s = s + "::" + str(args[i])
+        i = i + 1
+    }
+    return s
+}
+
+// ── main ────────────────────────────────────────────────────────────────
+
+fn _usage() {
+    println("usage: hexa run tool/verify_harvest_cli.hexa \\")
+    println("           --harvest <path> --kind <kind> --fn <fn>  \\")
+    println("           --domain <d> --material <m>                 \\")
+    println("           [--expected <float>] [--falsifier <id>]")
+    println("kinds: dft-elph (impl), sscha/llm-bench/web-smoke (stub)")
+    println("fns:   " + str(known_calculators()))
+}
+
+fn main() {
+    let args = _slice_args()
+    if args.len() == 0 || _flag_present(args, "--help") {
+        _usage(); return
+    }
+
+    let path     = _flag_value(args, "--harvest")
+    let kind     = _flag_value(args, "--kind")
+    let fn_name  = _flag_value(args, "--fn")
+    let domain   = _flag_value(args, "--domain")
+    let material = _flag_value(args, "--material")
+    let exp_s    = _flag_value(args, "--expected")
+    let fals     = _flag_value(args, "--falsifier")
+
+    if path.len() == 0 || kind.len() == 0 || fn_name.len() == 0 {
+        println("ERROR: --harvest, --kind, --fn are required.")
+        _usage(); exit(2)
+    }
+    if !dispatch_known(fn_name) {
+        println("ERROR: --fn " + fn_name + " is not in the dispatch registry.")
+        println("known: " + str(known_calculators()))
+        exit(2)
+    }
+
+    println("== hexa verify --harvest (PR-hx5) ==")
+    println("  path     = " + path)
+    println("  kind     = " + kind)
+    println("  fn       = " + fn_name)
+    println("  domain   = " + domain)
+    println("  material = " + material)
+
+    // 1. harvest
+    let m = harvest(path, kind)
+    if !m.ok {
+        println("HARVEST: ok=false (no metrics extracted; falling back to fenced ⚪)")
+        println("  tier  = ⚪ SPECULATION-FENCED")
+        println("  reason = harvest returned no metrics from " + path + " kind=" + kind)
+        exit(0)
+    }
+    println("HARVEST: " + str(metrics_len(m)) + " metrics extracted")
+    let mut hi = 0
+    while hi < metrics_len(m) {
+        println("    " + m.keys[hi] + " = " + str(m.values[hi]))
+        hi = hi + 1
+    }
+
+    // 2. dispatch
+    let dargs = _metrics_to_args(fn_name, m)
+    if arity_of(fn_name) != dargs.len() {
+        println("ERROR: arity mismatch — fn " + fn_name + " expects " +
+                str(arity_of(fn_name)) + " args, mapper produced " + str(dargs.len()))
+        exit(2)
+    }
+    let value = dispatch(fn_name, dargs)
+    println("DISPATCH: " + fn_name + str(dargs) + " = " + str(value))
+
+    // 3. tier
+    let exp_given = exp_s.len() > 0
+    let mut expected: float = 0.0
+    if exp_given { expected = float(exp_s) }
+    let tier_code = _tier_judge(value, expected, exp_given)
+    let tier_em   = _tier_emoji(tier_code)
+    let tier_nm   = _tier_name(tier_code)
+    println("TIER: " + tier_em + " " + tier_nm + " (code=" + tier_code + ")")
+    if exp_given {
+        println("  value     = " + str(value))
+        println("  expected  = " + str(expected))
+        println("  rel_err   = " + str(_rel(value, expected)))
+    }
+
+    // 4. AtomMeta in-process fold (side-table demonstration)
+    let timestamp = exec("date -u +%Y-%m-%dT%H:%M:%SZ").trim()
+    let assumes = assumes_for(fn_name)
+    let provenance = provenance_for(fn_name)
+    let recipe = "hexa run tool/verify_harvest_cli.hexa --harvest " + path +
+                 " --kind " + kind + " --fn " + fn_name +
+                 " --domain " + domain + " --material " + material
+    let m0 = meta_new(domain, material)
+    let m1 = meta_with_assumes(m0, assumes)
+    let m2 = meta_with_recipe(m1, recipe)
+    let m3 = meta_with_provenance(m2, provenance)
+    let m4 = meta_with_falsifier(m3, fals)
+    let m5 = meta_with_timestamp(m4, timestamp)
+    let meta = meta_with_tier(m5, tier_code)
+    let atom_id = _atom_id(fn_name, dargs)
+
+    let store0 = store_new()
+    let store  = store_put(store0, atom_id, meta)
+    println("ATOM_META (in-process side-table fold):")
+    println("  atom_id    = " + atom_id)
+    println("  domain     = " + meta.domain)
+    println("  material   = " + meta.material)
+    println("  tier       = " + meta.tier)
+    println("  timestamp  = " + meta.timestamp)
+    println("  assumes    = " + str(meta.assumes))
+    println("  recipe     = " + meta.recipe)
+    println("  provenance = " + meta.provenance)
+    println("  falsifier  = " + meta.falsifier)
+    println("  store_len  = " + str(store_len(store)))
+
+    // verbatim verdict marker
+    if tier_code == "B" { println("__VERIFY_HARVEST__ BLUE_FORMAL") }
+    else if tier_code == "G" { println("__VERIFY_HARVEST__ GREEN_MEASURED") }
+    else if tier_code == "R" { println("__VERIFY_HARVEST__ RED_FALSIFIED") }
+    else                     { println("__VERIFY_HARVEST__ ORANGE_INCONCLUSIVE") }
+    exit(0)
+}
