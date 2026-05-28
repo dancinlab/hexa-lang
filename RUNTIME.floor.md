@@ -15,15 +15,18 @@ flip 캠페인이 안전 quick-win 을 고갈시킨 뒤 남는 진짜 바닥의 
 
 - `.o` = **0** ✅
 - `.s` = **0** (F5 .s-leg COMPLETE · PR #1843/#1844/#1845/#1846 · 아래 F5)
-- `.c` = **96** (2026-05-28 B9.C-4 ACTIVATED · `lib/hxpyembed/` 2-file cluster
-  삭제 = 98→96 · `hxpyembed.c` · `smoke.c` ← per-file `*_emit.hexa` +
+- `.c` = **93** (2026-05-28 B9.C-6 ACTIVATED · 3-file small standalone batch
+  삭제 = 96→93 · `tests/runtime_h_smoke.c` · `stdlib/hal/t3/harness_main.c` ·
+  `stdlib/hal/t3/harness_stm32h7_main.c` ← per-file `*_emit.hexa` +
   `*_byte_diff.hexa` · 각 6/6 PASS ·
-  `.verdicts/runtime-floor-closure/B9C4-hxpyembed{,-smoke}-byte-diff.txt`
-  · libhxpyembed.dylib `.o` 2/2 byte-identical to pre-batch baseline ·
-  hxpyembed_smoke 14/14 PASS post-rewire · `lib/hxpyembed/` 의 hand-written `.c` 0).
-  이전: 2026-05-28 B9.C-3 (#1849) `lib/hxnccl/` 2-file cluster → 100→98.
-  2026-05-28 B9.C-2 (#1848) sscb firmware src/ 4-file batch → 104→100.
-  2026-05-28 B9.C-1 (#1847) `src/adc_dma.c` → 105→104 (foundation PR).
+  `.verdicts/runtime-floor-closure/B9C6-{runtime-h-smoke,harness-main-rp2040,harness-stm32h7-main}-byte-diff.txt`
+  · bin/hexa-fast `check` rewired to regen runtime_h_smoke_gen.c each invocation ·
+  Makefile.rp2040 + Makefile.stm32h7 rewired to regen harness_*_gen.c each build).
+  이전: 2026-05-28 B9.C-5 (#1851) `self/cuda/runtime_{bf16,cuda}.c` — self-emit PROVEN
+  · activation DEFERRED (.c 96 unchanged). B9.C-4 (#1850) `lib/hxpyembed/` 2-file
+  cluster → 98→96. B9.C-3 (#1849) `lib/hxnccl/` 2-file cluster → 100→98.
+  B9.C-2 (#1848) sscb firmware src/ 4-file batch → 104→100.
+  B9.C-1 (#1847) `src/adc_dma.c` → 105→104 (foundation PR).
   B9.6h dead-scaffolding sweep 후 **~70 예상** (대부분이 archive/fires + tool 의
   죽은 실험 harness 였음 — runtime floor 아님). sweep 후 남는 ~70 이 이 doc 의 대상.
 
@@ -87,6 +90,38 @@ buf addr/len/contig + py_to_tensor + value preservation + finalize) PASS
 post-rewire. `lib/hxpyembed/` 의 hand-written `.c` 0 (2/2 hexa-emit).
 stdlib/python_ffi.hexa · stdlib/test/test_python_ffi.hexa · bench/import_py_e2e.hexa
 FFI consumer parse 3/3 OK.
+
+세션 .c-leg small batch: **B9.C-6** — B9.C-1/4 패턴 1:1 적용, 7 후보 small
+standalone `.c` 중 per-file go/no-go (B9.C-5 "consumption check first" lesson
+적용). 결과 = 3 ACTIVATED (.c 96→93) · 1 PROVEN-DEFERRED (.c 카운트 미변경) ·
+3 DEAD-flag (별도 dead-sweep 회부):
+  - **ACTIVATED** 3 — 각 6/6 PASS · `.verdicts/runtime-floor-closure/B9C6-*-byte-diff.txt`:
+    · `tests/runtime_h_smoke.c` (78L, runtime.h public-ABI surface smoke) — Mac
+      clang host oracle (`-O0 -I self`) · `bin/hexa-fast check` 가 매 호출마다
+      `tests/runtime_h_smoke_emit.hexa` 로 .c regen → clang 컴파일 (live consumer
+      rewire 완료, hexa_v2 게이트 외 isolated regen+compile PASS 확인).
+    · `stdlib/hal/t3/harness_main.c` (95L, RP2040 Cortex-M0+ T3 harness) —
+      arm-none-eabi-gcc cross oracle (-mcpu=cortex-m0plus -mthumb -Os -nostdlib
+      -ffunction-sections + objcopy `--dump-section=.text.harness_main`) ·
+      Makefile.rp2040 가 `harness_main_gen.c` build-time emit (clean+rebuild PASS).
+    · `stdlib/hal/t3/harness_stm32h7_main.c` (99L, STM32H7 Cortex-M7 + FPv5-D16
+      harness) — arm-none-eabi-gcc cross oracle (-mcpu=cortex-m7 -mfpu=fpv5-d16
+      -mfloat-abi=hard 동일 옵션 + objcopy) · Makefile.stm32h7 가
+      `harness_stm32h7_main_gen.c` build-time emit (clean+rebuild PASS).
+  - **PROVEN-DEFERRED** 1 — `self/forge/forge_tier_v1.c` (343L, RFC 050 v1 ABI
+    stub dispatcher) — 6/6 PASS (standalone clang `-std=gnu11 -DFORGE_SMOKE_STANDALONE
+    -I self/forge`) · `.verdicts/runtime-floor-closure/B9C6-forge-tier-v1-byte-diff.txt`
+    · activation DEFERRED — `self/runtime.c:13266` 가 `#include "forge/forge_tier_v1.c"`
+    하고 `tool/dispatch_r050_dispatch_validate.sh` + `self/cuda/experiments/r050_perf_
+    inherit_validate.cu` 가 scp 로 GPU pod 에 업로드 (B9.C-5 self/cuda 와 정확히
+    동일 패턴, 동일 DEFERRED 사유). emit + oracle + verdicts 만 LAND, .c rm 은
+    runtime.c rewire + dispatch reflow 후속 세션으로 분리. .c 카운트 미변경.
+  - **DEAD-flag** 3 — `example/bench_ir_native.c` (119L · 0 consumer) ·
+    `example/bench_loop_native.c` (39L · `tool/bench_hexa_ir.hexa` 가 stale
+    `examples/` 경로 사용 → `file_exists()` 항상 false = effectively dead) ·
+    `example/bench_suite_native.c` (67L · 0 consumer, sibling `.hexa` 만 존재).
+    `.c-text` 패턴은 live .c → hexa-emit 보존용. 진짜 0-consumer dead 파일은
+    별도 dead-sweep tooling (B9.6h 식) 회부 — 이 PR scope 밖.
 
 ## 🧱 floor closure 상태 (2026-05-28 — F1-F6 종결 pass)
 

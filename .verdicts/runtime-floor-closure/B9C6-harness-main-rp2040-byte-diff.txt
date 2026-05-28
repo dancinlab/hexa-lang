@@ -1,0 +1,29 @@
+========================================================================
+  stdlib/hal/t3/harness_main — byte_diff: B9.C-6 .c-leg byte-diff oracle
+========================================================================
+  generator: stdlib/hal/t3/harness_main_emit.hexa
+  oracle:    arm-none-eabi-gcc + objcopy byte-diff vs hand-written .c
+  target:    RP2040 Cortex-M0+ (ARMv6-M) bare-metal cross-compile
+  gates:     source-text · whole-file .o (no -g) · .text.harness_main (-g)
+
+  scratch: /var/folders/2g/blzd56lx2rvfvt61c1pc9g7r0000gn/T/harness_main_byte_diff.XXXXXX.1UCmfgEDvX
+
+  [PASS] arm-none-eabi-gcc + objcopy present (RP2040 cross toolchain)
+         · arm-none-eabi-gcc=y arm-none-eabi-objcopy=y
+  [PASS] hexa emitter stdlib/hal/t3/harness_main_emit.hexa present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a03fa07b06b07982c/stdlib/hal/t3/harness_main_emit.hexa
+  [PASS] hand-written stdlib/hal/t3/harness_main.c present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a03fa07b06b07982c/stdlib/hal/t3/harness_main.c
+  [PASS] gate-1 source-text byte-identical (sha256(.c))
+         · orig=e136fcd8c8a47aebfd076e995cdbe8addc3ebff938e325420e350dfbf08c5643 gen=e136fcd8c8a47aebfd076e995cdbe8addc3ebff938e325420e350dfbf08c5643
+  [PASS] gate-2 whole-file .o byte-identical (no -g)
+         · orig=847bc975e24d6505511aec985e7abbdf1eda3ffe38a379a98f959f485fd10835 gen=847bc975e24d6505511aec985e7abbdf1eda3ffe38a379a98f959f485fd10835
+  [PASS] gate-3 .text.harness_main section byte-identical (with -g)
+         · orig=516a4beec988025f8f3328d6a3151966e1a71e8f2806b8febd146afa85d44053 gen=516a4beec988025f8f3328d6a3151966e1a71e8f2806b8febd146afa85d44053
+
+  B9.C-6 harness_main.c .c-leg byte-identity:
+    PROVEN ✓ — hand-written harness_main.c is fully hexa-emittable.
+    DELETION GATE OPEN — stdlib/hal/t3/harness_main.c may be `git rm`.
+========================================================================
+  6/6 checks passed
+__HEXA_LANG_HARNESS_MAIN_BYTE_DIFF__ PASS

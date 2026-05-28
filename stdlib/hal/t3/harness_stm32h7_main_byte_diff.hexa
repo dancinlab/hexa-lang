@@ -1,0 +1,238 @@
+#!hexa strict
+// stdlib/hal/t3/harness_stm32h7_main_byte_diff.hexa
+//   B9.C-6 (.c-leg small batch · #1850 pattern) — harness_stm32h7_main.c byte-diff oracle.
+//
+// Cross-compile variant of stdlib/hal/t3/harness_main_byte_diff.hexa.
+// harness_stm32h7_main.c is built by arm-none-eabi-gcc for the STM32H7
+// (Cortex-M7/ARMv7-M with FPv5-D16 double-precision FPU), so the CFLAGS
+// mirror Makefile.stm32h7: `-mcpu=cortex-m7 -mthumb -mfpu=fpv5-d16
+// -mfloat-abi=hard -Os -ffunction-sections -fdata-sections -fno-builtin
+// -fno-common -nostdlib -Wall -Wextra -Werror`.
+//
+// Three gates:
+//   gate-1 source-text byte-equal (sha256 of emitted .c == sha256 of orig .c)
+//   gate-2 whole-file .o byte-equal (compile both with cross CFLAGS, NO -g)
+//   gate-3 .text.harness_main section byte-equal (compile both with -g)
+//
+// ⚠ HARD GATE: byte-diff PASS is REQUIRED before
+// `git rm stdlib/hal/t3/harness_stm32h7_main.c`.
+//
+// Run:
+//   HEXA_HAL_ROOT=<repo-root> hexa-run stdlib/hal/t3/harness_stm32h7_main_byte_diff.hexa
+
+let MODULE_NAME = "harness_stm32h7_main_byte_diff"
+
+// ─── check harness ────────────────────────────────────────────────────
+
+let mut RUN  = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ─── helpers ─────────────────────────────────────────────────────────
+
+fn _root() -> str {
+    let env_root = env("HEXA_HAL_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _which(cmd: str) -> bool {
+    let r = exec("command -v " + cmd + " >/dev/null 2>&1 && echo y || echo n").trim()
+    return r == "y"
+}
+
+fn _exists(p: str) -> bool {
+    let r = exec("[ -f \"" + p + "\" ] && echo y || echo n").trim()
+    return r == "y"
+}
+
+fn _sha256(p: str) -> str {
+    if _which("shasum") {
+        let r = exec("shasum -a 256 \"" + p + "\" 2>/dev/null | awk '{print $1}'").trim()
+        return r
+    }
+    if _which("sha256sum") {
+        let r = exec("sha256sum \"" + p + "\" 2>/dev/null | awk '{print $1}'").trim()
+        return r
+    }
+    return ""
+}
+
+// STM32H7 CFLAGS — matches Makefile.stm32h7 for harness_stm32h7_main.o.
+fn _cflags_nodbg() -> str {
+    return "-mcpu=cortex-m7 -mthumb -mfpu=fpv5-d16 -mfloat-abi=hard -Os " +
+           "-ffunction-sections -fdata-sections " +
+           "-fno-builtin -fno-common -nostdlib " +
+           "-Wall -Wextra -Werror"
+}
+
+fn _cflags_dbg() -> str {
+    return _cflags_nodbg() + " -g"
+}
+
+// ─── checks ──────────────────────────────────────────────────────────
+
+fn check_toolchain() -> bool {
+    let has_cc      = _which("arm-none-eabi-gcc")
+    let has_objcopy = _which("arm-none-eabi-objcopy")
+    let ok = has_cc && has_objcopy
+    let detail = "arm-none-eabi-gcc=" + (if has_cc { "y" } else { "n" }) +
+                 " arm-none-eabi-objcopy=" + (if has_objcopy { "y" } else { "n" })
+    _check(ok, "arm-none-eabi-gcc + objcopy present (STM32H7 cross toolchain)", detail)
+    return ok
+}
+
+fn check_orig_present(src_dir: str) -> bool {
+    let p = src_dir + "/harness_stm32h7_main.c"
+    let ok = _exists(p)
+    if ok {
+        _check(true, "hand-written stdlib/hal/t3/harness_stm32h7_main.c present", p)
+    }
+    return ok
+}
+
+fn check_emitter_path(src_dir: str) -> bool {
+    let p = src_dir + "/harness_stm32h7_main_emit.hexa"
+    let ok = _exists(p)
+    _check(ok, "hexa emitter stdlib/hal/t3/harness_stm32h7_main_emit.hexa present", p)
+    return ok
+}
+
+fn check_source_byte_equal(src_dir: str, work_dir: str) -> bool {
+    let orig_c = src_dir + "/harness_stm32h7_main.c"
+    let gen_c  = work_dir + "/harness_stm32h7_main.c"
+    let emitter = src_dir + "/harness_stm32h7_main_emit.hexa"
+    let out = exec("hexa-run \"" + emitter + "\" \"" + gen_c + "\" 2>&1")
+    if !_exists(gen_c) {
+        _check(false, "gate-1 emitter wrote `.c`", "emit failed:\n" + out); return false
+    }
+    let orig_sha = _sha256(orig_c)
+    let gen_sha  = _sha256(gen_c)
+    let ok = orig_sha.len() > 0 && orig_sha == gen_sha
+    let detail = "orig=" + orig_sha + " gen=" + gen_sha
+    _check(ok, "gate-1 source-text byte-identical (sha256(.c))", detail)
+    return ok
+}
+
+fn check_obj_byte_equal_nodbg(src_dir: str, work_dir: str) -> bool {
+    let orig_c = src_dir + "/harness_stm32h7_main.c"
+    let gen_c  = work_dir + "/harness_stm32h7_main.c"
+    let orig_o = work_dir + "/orig.o"
+    let gen_o  = work_dir + "/gen.o"
+    let cf = _cflags_nodbg()
+    let out_o = exec("arm-none-eabi-gcc " + cf + " -c \"" + orig_c + "\" -o \"" + orig_o + "\" 2>&1")
+    let out_g = exec("arm-none-eabi-gcc " + cf + " -c \"" + gen_c  + "\" -o \"" + gen_o  + "\" 2>&1")
+    if !_exists(orig_o) {
+        _check(false, "gate-2 orig.o compiled (no -g)", "compile error:\n" + out_o); return false
+    }
+    if !_exists(gen_o) {
+        _check(false, "gate-2 gen.o compiled (no -g)", "compile error:\n" + out_g); return false
+    }
+    let orig_sha = _sha256(orig_o)
+    let gen_sha  = _sha256(gen_o)
+    let ok = orig_sha.len() > 0 && orig_sha == gen_sha
+    let detail = "orig=" + orig_sha + " gen=" + gen_sha
+    _check(ok, "gate-2 whole-file .o byte-identical (no -g)", detail)
+    return ok
+}
+
+fn check_section_byte_equal_dbg(src_dir: str, work_dir: str) -> bool {
+    let orig_c = src_dir + "/harness_stm32h7_main.c"
+    let gen_c  = work_dir + "/harness_stm32h7_main.c"
+    let orig_o = work_dir + "/orig_g.o"
+    let gen_o  = work_dir + "/gen_g.o"
+    let cf = _cflags_dbg()
+    let _o1 = exec("arm-none-eabi-gcc " + cf + " -c \"" + orig_c + "\" -o \"" + orig_o + "\" 2>&1")
+    let _o2 = exec("arm-none-eabi-gcc " + cf + " -c \"" + gen_c  + "\" -o \"" + gen_o  + "\" 2>&1")
+    if !_exists(orig_o) || !_exists(gen_o) {
+        _check(false, "gate-3 both .o compiled (with -g)", "compile error"); return false
+    }
+    // ELF — extract .text.harness_main with objcopy --dump-section
+    let orig_dump = work_dir + "/orig_text.bin"
+    let gen_dump  = work_dir + "/gen_text.bin"
+    let _d1 = exec("arm-none-eabi-objcopy --dump-section .text.harness_main=\"" + orig_dump + "\" \"" + orig_o + "\" 2>&1")
+    let _d2 = exec("arm-none-eabi-objcopy --dump-section .text.harness_main=\"" + gen_dump  + "\" \"" + gen_o  + "\" 2>&1")
+    let orig_sha = _sha256(orig_dump)
+    let gen_sha  = _sha256(gen_dump)
+    let ok = orig_sha.len() > 0 && orig_sha == gen_sha
+    let detail = "orig=" + orig_sha + " gen=" + gen_sha
+    _check(ok, "gate-3 .text.harness_main section byte-identical (with -g)", detail)
+    return ok
+}
+
+// ─── main ────────────────────────────────────────────────────────────
+
+fn main() {
+    println("========================================================================")
+    println("  stdlib/hal/t3/harness_stm32h7_main — byte_diff: B9.C-6 .c-leg byte-diff oracle")
+    println("========================================================================")
+    println("  generator: stdlib/hal/t3/harness_stm32h7_main_emit.hexa")
+    println("  oracle:    arm-none-eabi-gcc + objcopy byte-diff vs hand-written .c")
+    println("  target:    STM32H7 Cortex-M7 + FPv5-D16 (ARMv7-M) bare-metal cross-compile")
+    println("  gates:     source-text · whole-file .o (no -g) · .text.harness_main (-g)")
+    println("")
+
+    let root = _root()
+    let src_dir = root + "/stdlib/hal/t3"
+    let work_dir = exec("mktemp -d -t harness_stm32h7_main_byte_diff.XXXXXX").trim()
+    if work_dir.len() == 0 {
+        println("[FATAL] mktemp failed — cannot allocate scratch dir")
+        exit(1)
+    }
+    println("  scratch: " + work_dir)
+    println("")
+
+    if !check_toolchain() {
+        println("")
+        println("  Toolchain missing — install arm-none-eabi-gcc (brew install arm-none-eabi-gcc).")
+        println("  B9.C-6 harness_stm32h7_main.c byte-diff verify SKIP (toolchain gate).")
+        println("__HEXA_LANG_HARNESS_STM32H7_MAIN_BYTE_DIFF__ SKIP")
+        exit(0)
+    }
+
+    if !check_emitter_path(src_dir) {
+        println("__HEXA_LANG_HARNESS_STM32H7_MAIN_BYTE_DIFF__ FAIL")
+        exit(1)
+    }
+
+    if !check_orig_present(src_dir) {
+        println("")
+        println("  POST-DELETION SKIP — hand-written baseline harness_stm32h7_main.c removed")
+        println("  after this oracle PASSed (gen ≡ orig). The emitter remains the SSOT;")
+        println("  replay the historical proof via")
+        println("  `git show <pre-deletion-sha>:stdlib/hal/t3/harness_stm32h7_main.c`.")
+        println("__HEXA_LANG_HARNESS_STM32H7_MAIN_BYTE_DIFF__ SKIP")
+        exit(0)
+    }
+
+    let _g1 = check_source_byte_equal(src_dir, work_dir)
+    let _g2 = check_obj_byte_equal_nodbg(src_dir, work_dir)
+    let _g3 = check_section_byte_equal_dbg(src_dir, work_dir)
+
+    println("")
+    println("  B9.C-6 harness_stm32h7_main.c .c-leg byte-identity:")
+    if FAIL == 0 {
+        println("    PROVEN ✓ — hand-written harness_stm32h7_main.c is fully hexa-emittable.")
+        println("    DELETION GATE OPEN — stdlib/hal/t3/harness_stm32h7_main.c may be `git rm`.")
+    } else {
+        println("    BYTE-DIFF FAIL — emitter output diverges from hand-written `.c`.")
+        println("    ⚠ Hand-written `.c` MUST NOT be deleted until oracle PASSES.")
+    }
+
+    let pass_n = RUN - FAIL
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_LANG_HARNESS_STM32H7_MAIN_BYTE_DIFF__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_LANG_HARNESS_STM32H7_MAIN_BYTE_DIFF__ PASS")
+    exit(0)
+}

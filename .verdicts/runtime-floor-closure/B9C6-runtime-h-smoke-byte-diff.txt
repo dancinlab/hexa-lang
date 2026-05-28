@@ -1,0 +1,29 @@
+========================================================================
+  tests/runtime_h_smoke — byte_diff: B9.C-6 .c-leg byte-diff oracle
+========================================================================
+  generator: tests/runtime_h_smoke_emit.hexa
+  oracle:    clang + otool byte-diff vs hand-written tests/runtime_h_smoke.c
+  target:    Mac host arm64/x86_64 (runtime.h public-ABI surface)
+  gates:     source-text · whole-file .o (no -g) · __text section (with -g)
+
+  scratch: /var/folders/2g/blzd56lx2rvfvt61c1pc9g7r0000gn/T/runtime_h_smoke_byte_diff.XXXXXX.skeR3F04EF
+
+  [PASS] clang + otool present (Mac host toolchain)
+         · clang=y otool=y
+  [PASS] hexa emitter tests/runtime_h_smoke_emit.hexa present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a03fa07b06b07982c/tests/runtime_h_smoke_emit.hexa
+  [PASS] hand-written tests/runtime_h_smoke.c present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a03fa07b06b07982c/tests/runtime_h_smoke.c
+  [PASS] gate-1 source-text byte-identical (sha256(.c))
+         · orig=0be3b4505419031120f1ac71e3d131403d0bafaae7a601b6e0da77eafd918781 gen=0be3b4505419031120f1ac71e3d131403d0bafaae7a601b6e0da77eafd918781
+  [PASS] gate-2 whole-file .o byte-identical (no -g)
+         · orig=71479a40e4e026588a6068b7fe4cce20d929feb9a7f3e7e2fdf0b2757ec23519 gen=71479a40e4e026588a6068b7fe4cce20d929feb9a7f3e7e2fdf0b2757ec23519
+  [PASS] gate-3 __TEXT,__text section byte-identical (with -g)
+         · orig=c9409840e69687fef8e47380e171aceaee855412f21d56d0bfe5094384a32e7e gen=c9409840e69687fef8e47380e171aceaee855412f21d56d0bfe5094384a32e7e
+
+  B9.C-6 runtime_h_smoke.c .c-leg byte-identity:
+    PROVEN ✓ — hand-written runtime_h_smoke.c is fully hexa-emittable.
+    DELETION GATE OPEN — tests/runtime_h_smoke.c may be `git rm`.
+========================================================================
+  6/6 checks passed
+__HEXA_LANG_RUNTIME_H_SMOKE_BYTE_DIFF__ PASS
