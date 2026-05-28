@@ -1,0 +1,29 @@
+========================================================================
+  lib/hxnccl — smoke_byte_diff: B9.C-3 .c-leg byte-diff oracle
+========================================================================
+  generator: lib/hxnccl/smoke_emit.hexa
+  oracle:    cc + otool byte-diff vs hand-written lib/hxnccl/smoke.c
+  target:    Mac host x86_64/arm64 (libhxnccl single-rank smoke)
+  gates:     source-text · whole-file .o (no -g) · __text section (with -g)
+
+  scratch: /var/folders/2g/blzd56lx2rvfvt61c1pc9g7r0000gn/T/smoke_byte_diff.XXXXXX.KxqIfHuVWR
+
+  [PASS] cc + otool present (Mac host toolchain)
+         · cc=y otool=y
+  [PASS] hexa emitter lib/hxnccl/smoke_emit.hexa present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a2575c984b6052089/lib/hxnccl/smoke_emit.hexa
+  [PASS] hand-written lib/hxnccl/smoke.c present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a2575c984b6052089/lib/hxnccl/smoke.c
+  [PASS] gate-1 source-text byte-identical (sha256(.c))
+         · orig=43fd3924bc39acffe19e9eaf09a467b86bc7bcc1fb5e22de153626f68a5dbe83 gen=43fd3924bc39acffe19e9eaf09a467b86bc7bcc1fb5e22de153626f68a5dbe83
+  [PASS] gate-2 whole-file .o byte-identical (no -g)
+         · orig=5c03199035131b85b93147cc34460065116521780b3cd68b517b2cc046b0aaec gen=5c03199035131b85b93147cc34460065116521780b3cd68b517b2cc046b0aaec
+  [PASS] gate-3 __TEXT,__text section byte-identical (with -g)
+         · orig=53d88e8c74abcc2b19788b539b1aab790de7055d67994e24a3d9196fd33257d5 gen=53d88e8c74abcc2b19788b539b1aab790de7055d67994e24a3d9196fd33257d5
+
+  B9.C-3 smoke.c .c-leg byte-identity:
+    PROVEN ✓ — hand-written smoke.c is fully hexa-emittable.
+    DELETION GATE OPEN — lib/hxnccl/smoke.c may be `git rm`.
+========================================================================
+  6/6 checks passed
+__HEXA_LANG_HXNCCL_SMOKE_BYTE_DIFF__ PASS

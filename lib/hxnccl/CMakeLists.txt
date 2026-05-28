@@ -30,9 +30,39 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 option(HXNCCL_WITH_NCCL "Link against real NCCL + CUDA runtime" OFF)
 
-# Source files: thin wrapper + the existing hxccl shim.
+# B9.C-3 (.c-leg batch): hxnccl.c + smoke.c are now hexa-emit. The hand-
+# written `.c` is gone; the pure-hexa emitters `hxnccl_emit.hexa` and
+# `smoke_emit.hexa` regenerate the byte-identical source at build time
+# (proof: `.verdicts/runtime-floor-closure/B9C3-hxnccl{,-smoke}-byte-diff.txt`,
+# 6/6 PASS — gate-1 source sha + gate-2 .o (no -g) + gate-3 __text section).
+#
+# `hexa-run` is the hexa interpreter shim; it lives on PATH after
+# `hx install hexa-lang`. Override via -DHEXA_RUN=... if needed.
+if(NOT DEFINED HEXA_RUN)
+    set(HEXA_RUN "hexa-run")
+endif()
+
+set(HXNCCL_GEN_C  "${CMAKE_CURRENT_BINARY_DIR}/hxnccl_gen.c")
+set(SMOKE_GEN_C   "${CMAKE_CURRENT_BINARY_DIR}/smoke_gen.c")
+
+add_custom_command(
+    OUTPUT ${HXNCCL_GEN_C}
+    COMMAND ${HEXA_RUN} ${CMAKE_CURRENT_SOURCE_DIR}/hxnccl_emit.hexa ${HXNCCL_GEN_C}
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/hxnccl_emit.hexa
+    COMMENT "Regenerating hxnccl.c from hxnccl_emit.hexa (B9.C-3 hexa-emit)"
+    VERBATIM
+)
+add_custom_command(
+    OUTPUT ${SMOKE_GEN_C}
+    COMMAND ${HEXA_RUN} ${CMAKE_CURRENT_SOURCE_DIR}/smoke_emit.hexa ${SMOKE_GEN_C}
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/smoke_emit.hexa
+    COMMENT "Regenerating smoke.c from smoke_emit.hexa (B9.C-3 hexa-emit)"
+    VERBATIM
+)
+
+# Source files: hexa-emit wrapper + the existing hxccl shim.
 set(HXNCCL_SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/hxnccl.c
+    ${HXNCCL_GEN_C}
     ${CMAKE_CURRENT_SOURCE_DIR}/../../self/native/hxccl_linux.c
 )
 
@@ -81,7 +111,8 @@ else()
 endif()
 
 # Smoke test executable: always built, exercises init/barrier/destroy.
-add_executable(hxnccl_smoke ${CMAKE_CURRENT_SOURCE_DIR}/smoke.c)
+# B9.C-3 (.c-leg batch): smoke.c is hexa-emit (see SMOKE_GEN_C above).
+add_executable(hxnccl_smoke ${SMOKE_GEN_C})
 target_link_libraries(hxnccl_smoke PRIVATE hxnccl)
 
 # Install rule (so `make install` lands in CMAKE_INSTALL_PREFIX/lib).

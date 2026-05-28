@@ -1,0 +1,284 @@
+#!hexa strict
+// lib/hxnccl/hxnccl_emit.hexa
+//   B9.C-3 (.c-leg batch · #1847/#1848 pattern) — hxnccl.c source emitter.
+//
+// Mirrors lib/hxnccl/smoke_emit.hexa one-to-one. Emits the libhxnccl
+// FFI wrapper (`hxnccl.c`) verbatim. CMake's `hxnccl` shared-library
+// target is rewired to consume the `_gen.c` produced here in place of
+// the hand-written `hxnccl.c`.
+//
+// Invocation (from lib/hxnccl/CMakeLists.txt regen rule):
+//   hexa-run lib/hxnccl/hxnccl_emit.hexa <output-path>
+//
+// Default output path (if argv missing): "hxnccl.c" in cwd.
+//
+// Phase: B9.C-3 batch (hxnccl + smoke).
+
+let MODULE_NAME = "hxnccl_emit"
+
+fn emit_hxnccl_c() -> str {
+    // Verbatim content of hand-written lib/hxnccl/hxnccl.c
+        let s = "// hxnccl.c — thin wrapper over hxccl_linux.c that exports the user-facing\n" +
+                "// FFI surface required by training/nccl_ffi.hexa for ALM r12 FSDP.\n" +
+                "//\n" +
+                "// This file is the boundary requested in alm_r11_fsdp_plan_20260420 B1:\n" +
+                "// \"$HEXA_LANG/lib/hxnccl/ — libhxnccl.so\". It re-exports the hxccl Day-2\n" +
+                "// NCCL collectives under the names training/nccl_ffi.hexa expects:\n" +
+                "//\n" +
+                "//   hxnccl_init_world(rank, world_size, master_addr_ignored, master_port_ignored)\n" +
+                "//                                       → ncclCommInitRank via hxccl rendezvous\n" +
+                "//   hxnccl_allreduce_f32(ptr, count, op_code)  op: 0=SUM, 1=AVG\n" +
+                "//   hxnccl_broadcast_f32(ptr, count, root)\n" +
+                "//   hxnccl_barrier()\n" +
+                "//   hxnccl_destroy_world()\n" +
+                "//\n" +
+                "// All buffer pointers are device pointers in NCCL mode. master_addr/port\n" +
+                "// are accepted for API parity with the design doc but the rendezvous\n" +
+                "// uses HXCCL_UNIQUE_ID_FILE (see hxccl_linux.c) — a shared file path is\n" +
+                "// simpler than rolling a TCP store and works for intra-node SXM 2-GPU\n" +
+                "// (the alm_r11 chosen topology) as well as shared-FS multi-node.\n" +
+                "//\n" +
+                "// On Mac (no NCCL/CUDA): this wrapper compiles against the hxccl Mac\n" +
+                "// stub branch. init returns 0 only for world_size==1; collectives are\n" +
+                "// no-ops; destroy returns 0. This lets us run the single-rank smoke\n" +
+                "// test on Mac without an H100.\n" +
+                "\n" +
+                "#include <stdint.h>\n" +
+                "#include <stddef.h>\n" +
+                "#include <stdio.h>\n" +
+                "\n" +
+                "// hxccl_linux.c declarations we re-use.\n" +
+                "extern int64_t hxccl_init(int64_t rank, int64_t world_size);\n" +
+                "extern int64_t hxccl_init_handle(int64_t rank, int64_t world_size);\n" +
+                "extern int64_t hxccl_allreduce_float(int64_t handle, int64_t buf,\n" +
+                "                                     int64_t count, int64_t op);\n" +
+                "extern int64_t hxccl_broadcast_float(int64_t handle, int64_t buf,\n" +
+                "                                     int64_t count, int64_t root);\n" +
+                "extern int64_t hxccl_finalize(int64_t handle);\n" +
+                "extern void    hxccl_barrier(void);\n" +
+                "extern void    hxccl_all_gather(int64_t send_ptr, int64_t recv_ptr,\n" +
+                "                                int64_t count, int64_t dtype);\n" +
+                "extern void    hxccl_reduce_scatter(int64_t send_ptr, int64_t recv_ptr,\n" +
+                "                                    int64_t count, int64_t dtype);\n" +
+                "extern int64_t hxccl_world_size(void);\n" +
+                "extern int64_t hxccl_rank(void);\n" +
+                "extern int64_t hxccl_version(void);\n" +
+                "\n" +
+                "// Process-global handle so the user-facing surface stays stateless from\n" +
+                "// the hexa side (matches training/nccl_ffi.hexa module-global pattern).\n" +
+                "//\n" +
+                "// Naming note (B2 wire, 2026-04-20): two surfaces co-exist here so that\n" +
+                "// both training/nccl_ffi.hexa (handle-less, world_size+rank explicit) and\n" +
+                "// training/train_alm_lora.hexa (handle-based, device_count+rank routed\n" +
+                "// via stored handle) can dlopen the same libhxnccl.so. The two surfaces\n" +
+                "// share g_hxnccl_handle under the hood — calling either init populates\n" +
+                "// it, and either set of collectives works after that.\n" +
+                "static int64_t g_hxnccl_handle = 0;\n" +
+                "\n" +
+                "// hxnccl_init_world — set up the NCCL communicator for `world_size`\n" +
+                "// ranks; this rank is `rank`. master_addr / master_port are accepted\n" +
+                "// for API parity with the design doc but the rendezvous goes through\n" +
+                "// HXCCL_UNIQUE_ID_FILE — see hxccl_linux.c for the file protocol.\n" +
+                "//\n" +
+                "// Returns 0 on success, negative on failure (forwards the inner code).\n" +
+                "int64_t hxnccl_init_world(int64_t rank, int64_t world_size,\n" +
+                "                          const char* master_addr, int64_t master_port) {\n" +
+                "    (void)master_addr;\n" +
+                "    (void)master_port;\n" +
+                "    int64_t h = hxccl_init_handle(rank, world_size);\n" +
+                "    if (h <= 0) {\n" +
+                "        // hxccl_init_handle returns -1 on failure or handle pointer.\n" +
+                "        return -1;\n" +
+                "    }\n" +
+                "    g_hxnccl_handle = h;\n" +
+                "    return 0;\n" +
+                "}\n" +
+                "\n" +
+                "// hxnccl_allreduce_f32 — all-reduce `count` f32 elements at `ptr`\n" +
+                "// across all ranks, op_code 0=SUM, 1=AVG. ptr must be a device pointer\n" +
+                "// in NCCL mode. Returns 0 / -1.\n" +
+                "int64_t hxnccl_allreduce_f32(int64_t ptr, int64_t count, int64_t op_code) {\n" +
+                "    if (g_hxnccl_handle == 0) {\n" +
+                "        fprintf(stderr, \"[hxnccl] allreduce called before init_world\\n\");\n" +
+                "        return -1;\n" +
+                "    }\n" +
+                "    return hxccl_allreduce_float(g_hxnccl_handle, ptr, count, op_code);\n" +
+                "}\n" +
+                "\n" +
+                "// hxnccl_broadcast_f32 — broadcast `count` f32 elements at `ptr` from\n" +
+                "// rank `root` to all other ranks. Returns 0 / -1.\n" +
+                "int64_t hxnccl_broadcast_f32(int64_t ptr, int64_t count, int64_t root) {\n" +
+                "    if (g_hxnccl_handle == 0) {\n" +
+                "        fprintf(stderr, \"[hxnccl] broadcast called before init_world\\n\");\n" +
+                "        return -1;\n" +
+                "    }\n" +
+                "    return hxccl_broadcast_float(g_hxnccl_handle, ptr, count, root);\n" +
+                "}\n" +
+                "\n" +
+                "// hxnccl_barrier — process-wide rank sync. Single-rank no-op.\n" +
+                "int64_t hxnccl_barrier(void) {\n" +
+                "    hxccl_barrier();\n" +
+                "    return 0;\n" +
+                "}\n" +
+                "\n" +
+                "// hxnccl_destroy_world — tear down the communicator. Idempotent.\n" +
+                "int64_t hxnccl_destroy_world(void) {\n" +
+                "    if (g_hxnccl_handle == 0) return 0;\n" +
+                "    int64_t r = hxccl_finalize(g_hxnccl_handle);\n" +
+                "    g_hxnccl_handle = 0;\n" +
+                "    return r;\n" +
+                "}\n" +
+                "\n" +
+                "// Convenience accessors for callers that need to know rank/world.\n" +
+                "int64_t hxnccl_world_size(void) { return hxccl_world_size(); }\n" +
+                "int64_t hxnccl_rank(void)       { return hxccl_rank(); }\n" +
+                "int64_t hxnccl_version(void)    { return hxccl_version(); }\n" +
+                "\n" +
+                "// ══════════════════════════════════════════════════════════════════════\n" +
+                "// B2 LAYER COLLECTIVES — added 2026-04-20 (ALM r12 FSDP B2 unblock).\n" +
+                "//\n" +
+                "// fsdp_shard.hexa (CLM C9) and train_alm_lora.hexa (ALM r11/r12) walk a\n" +
+                "// per-layer GpuLayer / GpuLayerGrad struct of 8 device pointers each.\n" +
+                "// FSDP forward needs broadcast(owner→all), backward needs reduce_scatter\n" +
+                "// (or all_reduce on the dense-grad path). The hexa caller iterates the\n" +
+                "// 8 tensors and calls one of these per tensor.\n" +
+                "//\n" +
+                "// All buffers are device pointers in NCCL mode (HXCCL_NCCL=1 build);\n" +
+                "// counts are in elements; dtype is encoded f32 via the entry-point name.\n" +
+                "// reduce_scatter / allgather flow through hxccl Family A which already\n" +
+                "// dispatches to ncclReduceScatter / ncclAllGather under HXCCL_NCCL.\n" +
+                "// ══════════════════════════════════════════════════════════════════════\n" +
+                "\n" +
+                "// hxnccl_reduce_scatter_f32 — element-wise sum across ranks then scatter.\n" +
+                "// `send_ptr`: world_size * count elements (full unsharded grad);\n" +
+                "// `recv_ptr`: count elements (this rank's shard).\n" +
+                "// Returns 0 on success, -1 on missing init.\n" +
+                "int64_t hxnccl_reduce_scatter_f32(int64_t send_ptr, int64_t recv_ptr,\n" +
+                "                                  int64_t count) {\n" +
+                "    if (g_hxnccl_handle == 0) {\n" +
+                "        fprintf(stderr, \"[hxnccl] reduce_scatter_f32 called before init_world\\n\");\n" +
+                "        return -1;\n" +
+                "    }\n" +
+                "    // dtype 0 = f32 (matches hxccl_elem_size table in hxccl_linux.c).\n" +
+                "    hxccl_reduce_scatter(send_ptr, recv_ptr, count, 0);\n" +
+                "    return 0;\n" +
+                "}\n" +
+                "\n" +
+                "// hxnccl_allgather_f32 — gather `count` elements from each rank into a\n" +
+                "// world_size * count buffer. Used by FSDP pre-forward to materialise a\n" +
+                "// full layer weight tensor from the per-rank shards.\n" +
+                "int64_t hxnccl_allgather_f32(int64_t send_ptr, int64_t recv_ptr,\n" +
+                "                             int64_t count) {\n" +
+                "    if (g_hxnccl_handle == 0) {\n" +
+                "        fprintf(stderr, \"[hxnccl] allgather_f32 called before init_world\\n\");\n" +
+                "        return -1;\n" +
+                "    }\n" +
+                "    hxccl_all_gather(send_ptr, recv_ptr, count, 0);\n" +
+                "    return 0;\n" +
+                "}\n" +
+                "\n" +
+                "// hxnccl_allreduce_bf16 — bf16 in-place all-reduce on a device buffer.\n" +
+                "// dtype 2 = bf16 in hxccl_dtype_to_nccl. The current Family A entry\n" +
+                "// (hxccl_all_gather / hxccl_reduce_scatter) carries the dtype but\n" +
+                "// Family B (hxccl_allreduce_float) is f32-only — so we route bf16 via\n" +
+                "// a dedicated direct ncclAllReduce wrapper. On Mac stub this is a\n" +
+                "// world==1 no-op (returns 0).\n" +
+                "//\n" +
+                "// Signature matches train_alm_lora.hexa expectation:\n" +
+                "//   hxnccl_allreduce_bf16(h_nccl, rank, buf, count) -> int\n" +
+                "// where h_nccl is the handle returned by hxnccl_init() and `rank` is\n" +
+                "// accepted for symmetry (the comm already knows our rank). Returns\n" +
+                "// 0 on success, -1 on stub-mode multi-rank or missing init.\n" +
+                "int64_t hxnccl_allreduce_bf16(int64_t h_nccl, int64_t rank,\n" +
+                "                              int64_t buf, int64_t count) {\n" +
+                "    (void)rank;\n" +
+                "    if (h_nccl == 0 || g_hxnccl_handle == 0) {\n" +
+                "        // Identity on world==1 — caller's grads already reflect the local\n" +
+                "        // step. This matches train_alm_lora's \"world_size==1 = no-op\" doc.\n" +
+                "        return 0;\n" +
+                "    }\n" +
+                "    if (count <= 0) return 0;\n" +
+                "\n" +
+                "#ifdef HXCCL_NCCL\n" +
+                "    // Direct ncclAllReduce on the active comm. We re-declare the\n" +
+                "    // minimum NCCL surface here rather than pull in nccl.h again so\n" +
+                "    // the link path stays scoped to this TU.\n" +
+                "    extern int64_t hxnccl_internal_allreduce_bf16_dev(int64_t buf, int64_t count);\n" +
+                "    return hxnccl_internal_allreduce_bf16_dev(buf, count);\n" +
+                "#else\n" +
+                "    // Stub build: world==1 only — identity for caller convenience.\n" +
+                "    if (hxccl_world_size() <= 1) return 0;\n" +
+                "    fprintf(stderr, \"[hxnccl] allreduce_bf16 stub cannot do world>1\\n\");\n" +
+                "    return -1;\n" +
+                "#endif\n" +
+                "}\n" +
+                "\n" +
+                "// ══════════════════════════════════════════════════════════════════════\n" +
+                "// HANDLE-BASED SURFACE — added 2026-04-20 to satisfy train_alm_lora.hexa\n" +
+                "// extern decls. These are thin wrappers around the existing init / free\n" +
+                "// path; the handle returned is just g_hxnccl_handle echoed back so the\n" +
+                "// caller can treat it as opaque.\n" +
+                "//\n" +
+                "// hxnccl_init(device_count) — convenience entry that picks rank from the\n" +
+                "//   LOCAL_RANK env (or falls back to 0). For the dual-rank SXM case the\n" +
+                "//   torchrun-style launcher sets LOCAL_RANK=0 and LOCAL_RANK=1 on the\n" +
+                "//   two processes. world_size==device_count.\n" +
+                "// hxnccl_free(h_nccl) — alias for destroy_world; accepts the handle for\n" +
+                "//   symmetry. Idempotent.\n" +
+                "// ══════════════════════════════════════════════════════════════════════\n" +
+                "\n" +
+                "#include <stdlib.h>  // getenv, atoi\n" +
+                "\n" +
+                "int64_t hxnccl_init(int64_t device_count) {\n" +
+                "    if (device_count < 1) return -1;\n" +
+                "    int rank = 0;\n" +
+                "    const char* lr = getenv(\"LOCAL_RANK\");\n" +
+                "    if (!lr || !lr[0]) lr = getenv(\"RANK\");\n" +
+                "    if (lr && lr[0]) {\n" +
+                "        rank = atoi(lr);\n" +
+                "        if (rank < 0 || rank >= (int)device_count) {\n" +
+                "            fprintf(stderr, \"[hxnccl] init: RANK env %d out of [0,%lld)\\n\",\n" +
+                "                    rank, (long long)device_count);\n" +
+                "            return -1;\n" +
+                "        }\n" +
+                "    }\n" +
+                "    int64_t rc = hxnccl_init_world(rank, device_count, NULL, 0);\n" +
+                "    if (rc != 0) return -1;\n" +
+                "    // Return a non-zero handle so train_alm_lora's `G_NCCL_H != 0` gate\n" +
+                "    // fires correctly. We echo the internal handle so callers can also\n" +
+                "    // treat it as opaque.\n" +
+                "    return g_hxnccl_handle != 0 ? g_hxnccl_handle : 1;\n" +
+                "}\n" +
+                "\n" +
+                "int64_t hxnccl_free(int64_t h_nccl) {\n" +
+                "    (void)h_nccl;\n" +
+                "    return hxnccl_destroy_world();\n" +
+                "}\n" +
+                "\n" +
+                "#ifdef HXCCL_NCCL\n" +
+                "// Internal helper: bf16 ncclAllReduce on the active comm/stream. Defined\n" +
+                "// in hxccl_linux.c (HXCCL_NCCL branch) so it has access to g_hxccl_comm /\n" +
+                "// g_hxccl_stream + the nccl/cuda symbols. Forward-declared here.\n" +
+                "//\n" +
+                "// The hxccl_linux.c file exposes this as a leaf function so the wrapper\n" +
+                "// stays compile-clean without pulling in <nccl.h> a second time.\n" +
+                "int64_t hxnccl_internal_allreduce_bf16_dev(int64_t buf, int64_t count);\n" +
+                "#endif\n"
+    return s
+}
+
+fn main() {
+    let argv = real_args()
+    let out_path = if argv.len() >= 1 { argv[0] } else { "hxnccl.c" }
+    let c_text = emit_hxnccl_c()
+    let cmd = "cat > \"" + out_path + "\" <<'__HXNCCL_EMIT_EOF__'\n" +
+              c_text + "__HXNCCL_EMIT_EOF__"
+    let _ = exec(cmd)
+    let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
+    if exists_check != "y" {
+        println("[hxnccl_emit] FATAL: failed to write " + out_path)
+        exit(1)
+    }
+    println("[hxnccl_emit] wrote " + out_path)
+    exit(0)
+}

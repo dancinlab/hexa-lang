@@ -1,0 +1,140 @@
+#!hexa strict
+// lib/hxnccl/smoke_emit.hexa
+//   B9.C-3 (.c-leg batch · #1847/#1848 pattern) — smoke.c source emitter.
+//
+// Mirrors stdlib/sscb/firmware/src/*_emit.hexa one-to-one. Emits the
+// libhxnccl single-rank smoke test (`smoke.c`) verbatim. CMake's
+// `hxnccl_smoke` executable target is rewired to consume the
+// `_gen.c` produced here in place of the hand-written `smoke.c`.
+//
+// Invocation (from lib/hxnccl/CMakeLists.txt regen rule):
+//   hexa-run lib/hxnccl/smoke_emit.hexa <output-path>
+//
+// Default output path (if argv missing): "smoke.c" in cwd.
+//
+// Phase: B9.C-3 batch (hxnccl + smoke).
+
+let MODULE_NAME = "smoke_emit"
+
+fn emit_smoke_c() -> str {
+    // Verbatim content of hand-written lib/hxnccl/smoke.c
+    let s = "// lib/hxnccl/smoke.c — single-rank smoke test for libhxnccl.\n" +
+            "//\n" +
+            "// Exercises init_world(0,1) → barrier → destroy_world. Verifies:\n" +
+            "//   - hxnccl_init_world returns 0 for world_size=1 even when NCCL is\n" +
+            "//     not present (Mac stub) or present (Linux Day-2).\n" +
+            "//   - hxnccl_world_size() / hxnccl_rank() report the cached values.\n" +
+            "//   - hxnccl_barrier() is a no-op for world=1 and returns 0.\n" +
+            "//   - hxnccl_destroy_world() returns 0 and is idempotent.\n" +
+            "//\n" +
+            "// Multi-rank (world_size>=2) smoke is OUT OF SCOPE here — that requires\n" +
+            "// 2 GPUs (H100 SXM pod, $5.98/hr). This smoke is the gate that the FFI\n" +
+            "// surface, dlopen layout, and ABI are correct before we spend on a pod.\n" +
+            "\n" +
+            "#include <stdio.h>\n" +
+            "#include <stdint.h>\n" +
+            "#include <stdlib.h>\n" +
+            "\n" +
+            "extern int64_t hxnccl_init_world(int64_t rank, int64_t world_size,\n" +
+            "                                 const char* master_addr, int64_t master_port);\n" +
+            "extern int64_t hxnccl_destroy_world(void);\n" +
+            "extern int64_t hxnccl_barrier(void);\n" +
+            "extern int64_t hxnccl_world_size(void);\n" +
+            "extern int64_t hxnccl_rank(void);\n" +
+            "extern int64_t hxnccl_version(void);\n" +
+            "\n" +
+            "// B2 layer collective surface (added 2026-04-20).\n" +
+            "extern int64_t hxnccl_allreduce_f32(int64_t ptr, int64_t count, int64_t op);\n" +
+            "extern int64_t hxnccl_broadcast_f32(int64_t ptr, int64_t count, int64_t root);\n" +
+            "extern int64_t hxnccl_reduce_scatter_f32(int64_t send, int64_t recv, int64_t count);\n" +
+            "extern int64_t hxnccl_allgather_f32(int64_t send, int64_t recv, int64_t count);\n" +
+            "extern int64_t hxnccl_allreduce_bf16(int64_t h, int64_t rank,\n" +
+            "                                     int64_t buf, int64_t count);\n" +
+            "// Handle-based surface (added 2026-04-20) — used by train_alm_lora.hexa.\n" +
+            "extern int64_t hxnccl_init(int64_t device_count);\n" +
+            "extern int64_t hxnccl_free(int64_t h);\n" +
+            "\n" +
+            "static int fail_count = 0;\n" +
+            "\n" +
+            "#define EXPECT_EQ(label, got, want) do { \\\n" +
+            "    int64_t _g = (int64_t)(got); \\\n" +
+            "    int64_t _w = (int64_t)(want); \\\n" +
+            "    if (_g == _w) { \\\n" +
+            "        printf(\"  PASS  %-32s got=%lld\\n\", (label), (long long)_g); \\\n" +
+            "    } else { \\\n" +
+            "        printf(\"  FAIL  %-32s got=%lld want=%lld\\n\", \\\n" +
+            "               (label), (long long)_g, (long long)_w); \\\n" +
+            "        fail_count++; \\\n" +
+            "    } \\\n" +
+            "} while (0)\n" +
+            "\n" +
+            "int main(void) {\n" +
+            "    printf(\"[hxnccl_smoke] starting single-rank smoke\\n\");\n" +
+            "    EXPECT_EQ(\"hxnccl_version() >= 1\", hxnccl_version() >= 1 ? 1 : 0, 1);\n" +
+            "\n" +
+            "    EXPECT_EQ(\"init_world(0, 1)\", hxnccl_init_world(0, 1, \"127.0.0.1\", 0), 0);\n" +
+            "    EXPECT_EQ(\"world_size()\", hxnccl_world_size(), 1);\n" +
+            "    EXPECT_EQ(\"rank()\", hxnccl_rank(), 0);\n" +
+            "\n" +
+            "    EXPECT_EQ(\"barrier() returns 0\", hxnccl_barrier(), 0);\n" +
+            "\n" +
+            "    /* B2 layer collective surface — single-rank should noop-return 0 for\n" +
+            "     * every entry. We use a small heap buffer for the device-pointer slot\n" +
+            "     * (Mac stub does not deref it; on Linux the world==1 fast path also\n" +
+            "     * skips the NCCL call). */\n" +
+            "    {\n" +
+            "        float scratch_send[8] = {1, 2, 3, 4, 5, 6, 7, 8};\n" +
+            "        float scratch_recv[8] = {0};\n" +
+            "        int64_t sp = (int64_t)(uintptr_t)scratch_send;\n" +
+            "        int64_t rp = (int64_t)(uintptr_t)scratch_recv;\n" +
+            "\n" +
+            "        EXPECT_EQ(\"allreduce_f32(SUM, 8)\",\n" +
+            "                  hxnccl_allreduce_f32(sp, 8, 0), 0);\n" +
+            "        EXPECT_EQ(\"broadcast_f32(root=0, 8)\",\n" +
+            "                  hxnccl_broadcast_f32(sp, 8, 0), 0);\n" +
+            "        EXPECT_EQ(\"reduce_scatter_f32(8)\",\n" +
+            "                  hxnccl_reduce_scatter_f32(sp, rp, 8), 0);\n" +
+            "        EXPECT_EQ(\"allgather_f32(8)\",\n" +
+            "                  hxnccl_allgather_f32(sp, rp, 8), 0);\n" +
+            "        /* bf16 takes a handle echoed by hxnccl_init; world=1 returns 0. */\n" +
+            "        EXPECT_EQ(\"allreduce_bf16(world=1)\",\n" +
+            "                  hxnccl_allreduce_bf16(1, 0, sp, 8), 0);\n" +
+            "    }\n" +
+            "\n" +
+            "    EXPECT_EQ(\"destroy_world() returns 0\", hxnccl_destroy_world(), 0);\n" +
+            "    EXPECT_EQ(\"destroy_world() idempotent\", hxnccl_destroy_world(), 0);\n" +
+            "\n" +
+            "    EXPECT_EQ(\"world_size() after destroy\", hxnccl_world_size(), 0);\n" +
+            "\n" +
+            "    /* Handle-based surface (train_alm_lora.hexa entry-point parity). */\n" +
+            "    {\n" +
+            "        int64_t h = hxnccl_init(1);\n" +
+            "        EXPECT_EQ(\"hxnccl_init(1) > 0\", h > 0 ? 1 : 0, 1);\n" +
+            "        EXPECT_EQ(\"hxnccl_free(h)\", hxnccl_free(h), 0);\n" +
+            "    }\n" +
+            "\n" +
+            "    if (fail_count == 0) {\n" +
+            "        printf(\"[hxnccl_smoke] ALL PASS — single-rank ABI verified (B1+B2)\\n\");\n" +
+            "        return 0;\n" +
+            "    }\n" +
+            "    printf(\"[hxnccl_smoke] %d FAIL\\n\", fail_count);\n" +
+            "    return 1;\n" +
+            "}\n"
+    return s
+}
+
+fn main() {
+    let argv = real_args()
+    let out_path = if argv.len() >= 1 { argv[0] } else { "smoke.c" }
+    let c_text = emit_smoke_c()
+    let cmd = "cat > \"" + out_path + "\" <<'__SMOKE_EMIT_EOF__'\n" +
+              c_text + "__SMOKE_EMIT_EOF__"
+    let _ = exec(cmd)
+    let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
+    if exists_check != "y" {
+        println("[smoke_emit] FATAL: failed to write " + out_path)
+        exit(1)
+    }
+    println("[smoke_emit] wrote " + out_path)
+    exit(0)
+}
