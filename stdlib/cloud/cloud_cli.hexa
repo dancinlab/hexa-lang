@@ -35,8 +35,9 @@ fn _cloud_help() {
     println("                                                         like nohup but logfile is OPTIONAL — defaults to /tmp/cloud-<unix_ts>.log on the remote when --log omitted, so caller does not have to invent + thread the path")
     println("  cloud poll      <host> <pid> [conn]                    exit 0 if remote pid alive, else 1 (DEAD path also flips a PENDING ./pods.json row matching pid → FAIL; ghost-pod teardown auto-verdict)")
     println("  cloud tail      <host> <logfile> [conn] [--grep RE] [--until RE]   live-stream a remote log (Monitor bridge)")
-    println("                                                         tail -F | sed -u: print --grep lines, print+quit on --until (default: JOB DONE|crash); follows forever if --until ''")
-    println("                                                         exit 0 = --until matched (clean end · JOB DONE/OOMKilled/Traceback/…) · 255 = ssh transport drop · other = log truncated mid-stream (sed/tail pipe failed)")
+    println("                                                         tail -F | sed -u: print --grep lines, terminal-first classify on default; explicit --until RE = legacy single block; follows forever if --until ''")
+    println("                                                         default 3-tier verdict (failure-first): exit 0 = DONE · exit 3 = TIMEOUT-RESUMABLE (Maximum CPU time/max_seconds — RESUME) · exit 4 = CRASHED (non-zero STOP/routine error/segfault/OOM)")
+    println("                                                         exit 255 = ssh transport drop · other = log truncated mid-stream (sed/tail pipe failed)")
     println("  cloud watch     <host> <pid> [conn] [--interval N] [--max-wait S] [--then-down <id> [--provider P]]")
     println("                                                         loop poll until pid dies (exit 0) / max-wait (124); optional teardown")
     println("  cloud ssh-port  <id> [--provider P]                    print live ssh host:port of a pod (vast|runpod)")
@@ -99,10 +100,11 @@ fn _cloud_help() {
     println("                  verdict <jid> PASS` to override).")
     println("  --grep <re>     (tail only) stream only lines matching the awk ERE")
     println("                  <re>; empty / absent = every line.")
-    println("  --until <re>    (tail only) print + stop on the first line matching")
-    println("                  the awk ERE <re>; default covers JOB DONE + crash")
-    println("                  signatures (Traceback|Killed|OOM|...). Pass '' to")
-    println("                  follow forever (use a persistent Monitor then).")
+    println("  --until <re>    (tail only) terminal behaviour. ABSENT = default")
+    println("                  3-tier failure-first taxonomy → exit 0 DONE · 3")
+    println("                  TIMEOUT-RESUMABLE · 4 CRASHED. An explicit ERE <re>")
+    println("                  = legacy single block (print+quit exit 0 on first")
+    println("                  match). Pass '' to follow forever (persistent Monitor).")
     println("  --resume        (copy-from) rsync --partial --append-verify; resume")
     println("                  an interrupted large-file pull (needs rsync >= 3.0).")
     println("  --recursive,-r  (copy-to) copy a directory tree (scp -r).")
@@ -920,10 +922,16 @@ fn _cloud_early_life_check(host: str, ssh_opts: [str], pid: int, sec: int) -> in
     return 3
 }
 
-// Default --until ERE: terminal markers covering BOTH a clean finish and the
-// crash signatures, so a watch never stays silent through a crashloop ("silence
-// is not success"). Operators pass --until '' to follow forever instead.
-let _CLOUD_TAIL_UNTIL_DEFAULT = "JOB DONE|JOB FAILED|RESULT_DONE|Traceback|Killed|CUDA out of memory|OOMKilled|Segmentation fault|FATAL"
+// Default --until: the 3-tier failure-first taxonomy (INBOX gap 1,
+// 2026-05-28). A bare `cloud tail` now classifies the terminal state into
+// DONE (exit 0) / TIMEOUT-RESUMABLE (exit 3) / CRASHED (exit 4) instead of
+// the old "first marker match == exit 0" that mis-read a walltime-timed-out
+// QE job (which prints `Maximum CPU time exceeded` then a deceptive
+// `JOB DONE` then `STOP 1`) as SUCCESS. The sentinel selects the classifier
+// inside cloud_tail_cmd_opts; the pattern TABLES live there (g20). An
+// operator who wants the old single-block behaviour passes an explicit
+// `--until <ere>`; `--until ''` still follows forever.
+let _CLOUD_TAIL_UNTIL_DEFAULT = _CLOUD_TAIL_TAXONOMY
 
 fn main() {
     let av = args()
