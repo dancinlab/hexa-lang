@@ -1,0 +1,97 @@
+#!hexa strict
+// tool/verify_harvest_cli_test.hexa
+// PR-hx5 smoke — end-to-end verify --harvest pipeline.
+//
+// Run:  hexa run tool/verify_harvest_cli_test.hexa
+// Marker on PASS: __VERIFY_HARVEST_CLI_SMOKE__ PASS
+//
+// Drives tool/verify_harvest_cli.hexa via a child `hexa run` invocation,
+// captures stdout, asserts the verbatim verdict markers.
+
+let mut RUN: int = 0
+let mut FAIL: int = 0
+
+fn _check(ok: bool, label: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+}
+
+fn _has(s: string, sub: string) -> bool { return s.find(sub) >= 0 }
+
+fn _write_fixture(path: string, lambda_val: string, omega_val: string) {
+    let _ = exec("mkdir -p $(dirname '" + path + "') && cat > '" + path + "' <<__EOF__\n" +
+        "     Phonon dispersion summary (QE 7.5 mock)\n" +
+        "     Average el-ph coupling lambda  =   " + lambda_val + "\n" +
+        "     Average <log w>                =   " + omega_val + " K\n" +
+        "__EOF__")
+}
+
+fn main() {
+    println("== tool/verify_harvest_cli PR-hx5 smoke ==")
+
+    let fixture_dir  = "/tmp/hexa_vhcli_smoke_" + str(exec("date +%s%N").trim())
+    let fixture_file = fixture_dir + "/ph.out"
+    _write_fixture(fixture_file, "1.21", "1350.0")
+
+    let cli = "tool/verify_harvest_cli.hexa"
+
+    // F1: --help prints usage
+    let out_help = exec("hexa run " + cli + " --help 2>&1")
+    _check(_has(out_help, "usage:") && _has(out_help, "--harvest"),
+           "F1 --help prints usage banner")
+
+    // F2: end-to-end allen_dynes_tc on a fixture (lambda=1.21 omega=1350K mu=0.13)
+    //     Allen-Dynes(1350, 1.21, 0.13) = 108.434 K (closed-form recompute).
+    //     We anchor exact -> rel<1e-6 -> 🔵 BLUE_FORMAL.
+    let out2 = exec("hexa run " + cli +
+        " --harvest " + fixture_dir +
+        " --kind dft-elph --fn allen_dynes_tc" +
+        " --domain rtsc --material h3cl_mock" +
+        " --expected 108.43436 2>&1")
+    _check(_has(out2, "HARVEST:") && _has(out2, "lambda = 1.21"),
+           "F2a harvest extracted lambda 1.21")
+    _check(_has(out2, "DISPATCH:"),
+           "F2b dispatch line emitted")
+    _check(_has(out2, "GREEN_MEASURED") || _has(out2, "BLUE_FORMAL"),
+           "F2c tier in {green/blue} for ~108 K vs expected 108.434")
+    _check(_has(out2, "ATOM_META"),
+           "F2d AtomMeta side-table fold emitted")
+    _check(_has(out2, "domain     = rtsc") && _has(out2, "material   = h3cl_mock"),
+           "F2e AtomMeta echoes domain + material")
+
+    // F3: unknown fn -> error exit
+    let out3 = exec("hexa run " + cli +
+        " --harvest " + fixture_dir +
+        " --kind dft-elph --fn not_a_real_calc" +
+        " --domain x --material y 2>&1")
+    _check(_has(out3, "ERROR") || _has(out3, "not in the dispatch registry"),
+           "F3 unknown fn -> ERROR / not in registry")
+
+    // F4: missing harvest path -> SPECULATION-FENCED (white circle)
+    let out4 = exec("hexa run " + cli +
+        " --harvest /tmp/does_not_exist_xyz" +
+        " --kind dft-elph --fn allen_dynes_tc" +
+        " --domain x --material y 2>&1")
+    _check(_has(out4, "SPECULATION-FENCED") || _has(out4, "harvest returned no metrics"),
+           "F4 missing path -> SPECULATION-FENCED")
+
+    // F5: bcs_gap_ratio zero-arg via dispatch (path harvested but ignored — empty args)
+    //     dispatch(bcs_gap_ratio, []) = 3.5279; expected 3.5279 -> 🔵
+    let out5 = exec("hexa run " + cli +
+        " --harvest " + fixture_dir +
+        " --kind dft-elph --fn bcs_gap_ratio" +
+        " --domain rtsc --material universal" +
+        " --expected 3.5279 2>&1")
+    _check(_has(out5, "GREEN_MEASURED") || _has(out5, "BLUE_FORMAL"),
+           "F5 bcs_gap_ratio dispatch tier in {green/blue}")
+
+    // cleanup
+    let _ = exec("rm -rf '" + fixture_dir + "'")
+
+    println("== " + str(RUN - FAIL) + "/" + str(RUN) + " checks passed ==")
+    if FAIL > 0 { println("__VERIFY_HARVEST_CLI_SMOKE__ FAIL"); exit(1) }
+    println("__VERIFY_HARVEST_CLI_SMOKE__ PASS")
+    exit(0)
+}
