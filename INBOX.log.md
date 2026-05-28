@@ -1,5 +1,33 @@
 # INBOX — log
 
+## 2026-05-29 — 🟠 OPEN · PERF · anima M5 재측정 잔여 200-325MB/step RSS churn — #2017 in-place AdamW · #2018 offset-aware cuBLAS gemv 둘 다 engage 했으나 별개 source 의 leak 잔존 (런타임/CUDA scratch 추적 요청)
+
+> **context**: hexa-lang **#2017 (in-place AdamW, fresh 233MB out 제거)** + **#2018 (offset-aware cuBLAS gemv)** 둘 다 origin/main land 후 anima decoder M5 재측정 (anima PR #1379 `STEP_RATE_LOG` entry 10). 두 fix 모두 정상 engage 했으나 **net step-rate 0.156-0.18 step/s 가 baseline 0.50 step/s 보다 ~3× 느림** = #1354 사전 예측 ("d=64 too small for cuBLAS") 직접 confirmation. **별도로 RSS 가 5.5GB → 24GB → 38GB → 43GB → 52GB 까지 단조 증가 (~200-325MB/step churn) — AdamW 233MB/step churn 은 #2017 가 제거했으나 별개 source 의 잔여 leak 존재**.
+
+> **anima 측 \$0 source-read 진단 (PR #1379 entry 10 (D)·(E))**: anima decoder trainer + 의존 lib 의 per-step 할당 전수조사 결과 **source-grep 으로는 200-325MB/step churn 매칭 안 됨**:
+> - **mm_extract callsite at d=64 = 12개, 각 32-128KB** (총 ~0.8MB/step). prompt 의 "6×77MB" 가설은 d=64 source 와 안 맞음 — 77MB 는 V×d 일 때 값, 실제 anima trainer 에서 mm_extract 가 추출하는 weight 는 wq/wk/wv/wo (d×d=32KB) + wup/wdown (h×d=128KB). 12 callsite 위치: `train_v3_moe_longtrain.hexa:354-356,411,423,435` (fwd, 6×) + `v3_moe_bwd_lib.hexa:195,215` (mlp_block_bwd_batched, 2×) + `v3_moe_bwd_lib.hexa:285,339,340,341` (self_attn_bwd, 4×). 전부 step-INVARIANT weights 의 sub-block extract, 전부 `farr_free` 됨.
+> - **V-sized scratch** (`v3_moe_fwd:logits_raw` (mm_packed_gemv 반환) + `v3_moe_bwd:dl_scaled` + `v3_moe_bwd:logits_raw`) = **V·8B ≈ 1.2MB × 3 = 3.6MB/step**. 모두 정상 `farr_free`.
+> - **합계 약 4.4MB/step ≪ 관측 200-325MB/step**. anima 측 source 가설로는 200MB/step 의 1/50 도 설명 못함.
+
+> **추정되는 hexa-lang side source 후보** (정밀 추적 요청):
+> 1. **GPU memory cache fragmentation**: cuBLAS Dgemv 가 매 호출마다 workspace alloc 할 가능성 — `cublasGetWorkspaceSize` / `cudaMalloc`-per-call 패턴 점검 필요. #2018 의 offset-aware gemv 가 cuBLAS dispatch path 를 활성화시켜 새로 노출된 후보.
+> 2. **CUDA stream / kernel launch transient handles**: HEXA_CUDA build 에서 farr 의 device-side handle pool 이 retain 되는지 확인 — `_hx_cuda_farr_alloc`/`_hx_cuda_farr_free` 의 freelist 동작. #2017 가 AdamW out 측 churn 을 제거한 후 노출된 그 다음 layer.
+> 3. **glibc arena retention 잔여**: entry "2026-05-29 farr_adamw_step_* fresh out" 가 지목한 233MB AdamW churn 이외에, V-sized 1.2MB free 청크들이 arena 에 보유될 가능성 — `mallopt(M_MMAP_THRESHOLD)` 또는 `malloc_trim(0)` 적용 시 RSS 회복 검증 필요.
+> 4. **runtime per-step transient handle leak**: `hexa_farr_zeros` 가 freelist slot 만 재활용하고 buf 는 매번 fresh `calloc` 한다면 (anima entry (8) 도 같은 관찰) — 잦은 alloc 사이즈 다양성이 arena 단편화 유발.
+
+> **요청**:
+> 1. anima side fix 안 함 (source-grep 으로 200MB/step source 확정 안 됨 → 강제 patch = a_completeness_over_cheap 위반).
+> 2. hexa-lang side 에서 (a) HEXA_CUDA build 의 per-step CUDA-side alloc tracing (nsys/CUPTI) 또는 (b) `mallopt`/`malloc_trim` 적용 후 RSS churn 재측 시도 권장.
+> 3. anima decoder verdict (`dec_undertrain` 🔴 INFEASIBLE STRENGTHENED) 자체는 step-rate 측정 결과로 닫혀있어 본 leak 진단은 **별도 trace** 이지 verdict 영향 없음 — closure 는 anima PR #1379 가 보존.
+
+> **참고 commit / PR**:
+> - anima PR #1379 — `STEP_RATE_LOG` entry 10 (재측정 prose) + `.discoveries/decoder_collapse_undertrain.tape` node `dec_undertrain_post_fix_measurement_2026_05_29`
+> - 직전 RSS leak ROOT-CAUSE entry — anima `STEP_RATE_LOG` entry (8) (AdamW 측 driver 확정 → #2017 처방)
+> - 직전 GPU 0% 진단 entry — anima `STEP_RATE_LOG` entry (9) (offset-gemv 갭 → #2018 처방)
+> - hexa-lang #1354 — "d=64 too small for cuBLAS" 사전 예측 (이번 #2018 land 후 재측정으로 직접 confirmation)
+
+---
+
 ## 2026-05-29 — 🟠 OPEN · PERF · `farr_adamw_step_*` 가 매 step fresh `out` farr 할당 → glibc arena retention 으로 ~0.5GB/step host-RSS 누적 (long train OOM-bound) · in-place AdamW builtin 요청
 
 > **root cause (anima M4b decoder trainer 실측 #1348 + $0 source-read 진단)**: anima `train_v3_moe_longtrain.hexa` (V=151643, m_size=29.16M FP64 params=233MB) 가 H100 pod 에서 CPU-only build 로 학습 시 **RSS 가 ~0.5GB/step 으로 누적, step~100 에서 57GB** (per-step wall 도 14.8% 열화). anima 측 전수조사 결과 trainer + 의존 lib 의 모든 per-step 할당은 빠짐없이 `farr_free` 된다 (anima 결백, anima STEP_RATE_LOG entry (8) · PR #1352). 진짜 driver 는 hexa-lang runtime 의 **M1 AdamW builtin per-step 233MB out churn**:
