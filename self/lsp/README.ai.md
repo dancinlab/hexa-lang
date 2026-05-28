@@ -6,6 +6,32 @@
 This file is the SSOT for what hexa-lsp does and does not implement, so
 IDE consumers can plan integration without reading the source.
 
+> **갱신 (2026-05-29) — 실제 빌드되는 서버는 `self/lsp.hexa` (monolith)**.
+> 이 디렉터리(`self/lsp/`)는 진단 중심 스켈레톤이고, 디스패처
+> (`self/main.hexa`의 `lsp` 분기)가 `exec_replace`하는 산출물은
+> `tool/build_hexa_lsp.hexa`가 빌드한 `bin/hexa-lsp` = `self/lsp.hexa`이다.
+> 아래 매트릭스의 ❌ Step 3+ 였던 항목들은 monolith에서 이미 동작한다:
+>
+> | method | monolith 상태 |
+> |---|---|
+> | `textDocument/completion` | ✅ keyword + builtin + **stdlib `pub fn` 라이브 스캔** + 파일-로컬 심볼 |
+> | `textDocument/hover` | ✅ keyword/builtin/심볼 doc |
+> | `textDocument/definition` | ✅ 파일-로컬 심볼 |
+> | `textDocument/references` | ✅ (capability + dispatch 추가됨) |
+> | `textDocument/rename` | ✅ (orphan이던 핸들러 dispatch 배선) |
+> | `textDocument/semanticTokens/full` | ✅ lexer SSOT 기반 |
+>
+> **멀티메시지 framing**: body를 헤더와 같은 `term_read_byte` 스트림으로
+> 정확히 `Content-Length` 바이트만 읽도록 고쳐(`read_n_bytes`), 첫 메시지
+> 이후 프레임이 드롭되던 문제를 해소 — 실-에디터 세션이 정상 동작한다.
+>
+> **agent용 one-shot CLI 모드** (editor 없이 grep 대체, stale-immune):
+> `hexa-lsp <def|refs|sig|sym|complete> [name]` — daemon과 같은 심볼 surface를
+> 재사용해 실제 트리를 매 호출 파싱한다.
+>
+> **자동반영**: `lsp-rebuild` 훅이 `self/lsp.hexa` / `self/lsp/*.hexa` 편집 시
+> `bin/hexa-lsp`를 백그라운드 재빌드한다 (tape/n6/kosmos와 동일 패턴).
+
 ## JSON-RPC envelope
 | Direction | Format | Implemented |
 |---|---|---|
