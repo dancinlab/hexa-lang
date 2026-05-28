@@ -12296,6 +12296,51 @@ HexaVal hexa_rms_norm(HexaVal x, HexaVal gamma, HexaVal epsv) {
 }
 #endif
 
+// layer_norm(x, gamma, eps): (x - mean) / sqrt(var + eps), gamma-scaled.
+// L723 NN-primitive — mirror of rms_norm with mean subtraction (full LayerNorm).
+HexaVal hexa_layer_norm(HexaVal x, HexaVal gamma, HexaVal epsv) {
+    HexaVal out = hexa_array_new();
+    if (!HX_IS_ARRAY(x)) return out;
+    int64_t n = (int64_t)HX_ARR_LEN(x);
+    if (n == 0) return out;
+    double sum = 0.0;
+    for (int64_t i = 0; i < n; i++) sum += __hx_to_double(hexa_array_get(x, i));
+    double mean = sum / (double)n;
+    double ss = 0.0;
+    for (int64_t i = 0; i < n; i++) {
+        double d = __hx_to_double(hexa_array_get(x, i)) - mean;
+        ss += d * d;
+    }
+    double var = ss / (double)n;
+    double eps = __hx_to_double(epsv);
+    double inv = 1.0 / sqrt(var + eps);
+    int gamma_is_arr = HX_IS_ARRAY(gamma);
+    double gamma_scalar = gamma_is_arr ? 1.0 : __hx_to_double(gamma);
+    for (int64_t i = 0; i < n; i++) {
+        double d = __hx_to_double(hexa_array_get(x, i)) - mean;
+        double g = gamma_is_arr
+            ? __hx_to_double(hexa_array_get(gamma, i < (int64_t)HX_ARR_LEN(gamma) ? i : 0))
+            : gamma_scalar;
+        out = hexa_array_push(out, hexa_float(g * d * inv));
+    }
+    return out;
+}
+
+// rope_pair(x0, x1, theta): rotate one (even, odd) pair by angle theta.
+// L723 NN-primitive — canonical scalar form of RoPE positional rotation.
+// Returns [x0*cos(theta) - x1*sin(theta), x0*sin(theta) + x1*cos(theta)].
+HexaVal hexa_rope_pair(HexaVal x0v, HexaVal x1v, HexaVal thetav) {
+    double x0 = __hx_to_double(x0v);
+    double x1 = __hx_to_double(x1v);
+    double th = __hx_to_double(thetav);
+    double c = cos(th);
+    double s = sin(th);
+    HexaVal out = hexa_array_new();
+    out = hexa_array_push(out, hexa_float(x0 * c - x1 * s));
+    out = hexa_array_push(out, hexa_float(x0 * s + x1 * c));
+    return out;
+}
+
 // softmax(a): stable softmax — subtract max, exp, normalize by sum.
 // Step-3 cycle 15 port.
 #ifndef HEXA_HAS_HEXA_RT_STDLIB
