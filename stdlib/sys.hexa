@@ -44,10 +44,11 @@ pub fn sys_stdout_println(msg: string) {
 }
 
 pub fn sys_stdin_read_line() -> string {
-    // Delegate to the runtime's stdin builtin if available; otherwise
-    // shell `read` (limited to one line, no escapes — suitable for
-    // CLI prompts only).
-    return read_line()
+    // Delegate to the runtime's stdin builtin `input()` (rt_input → one
+    // blocking line from stdin). `read_line()` was a non-existent builtin
+    // (no rt_read_line in runtime.c, unmapped in native_build) → AOT link
+    // error breaking every build that flattened sys.hexa.
+    return input()
 }
 
 // sys_stdin_read_line_timeout(ms) — non-blocking stdin variant.
