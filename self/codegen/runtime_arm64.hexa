@@ -4625,6 +4625,154 @@ fn rt_accept_reloc_kinds() {
     return k
 }
 
+// ── rt_connect (F3 wave 7 — class-C syscall · 3-arg int+ptr+uint _cf + errno) ──
+// connect(int s, const void *addr, unsigned int len) -> int. 3-arg _cf where
+// only the int sockfd (x0) is sign-extended, addr (x1) is an already-64-bit
+// pointer passed untouched, and the UNSIGNED len (x2) is zero-extended via
+// `mov w2,w2` (uxtw — NOT sxtw, since len is unsigned). 10 instr, 40 B, errno
+// reloc @ 0x18 PAGE21 / 0x1c PAGEOFF12. Verified BYTE-IDENTICAL to clang -O2
+// (faithful _hxlcl_syscall3_cf oracle): 93407c00 2a0203e2 52800c50 d4001001
+// 9a9f37e8 b4000088 90000008 b9000100 92800000 d65f03c0. SYS_CONNECT=98.
+fn rt_connect() {
+    let mut c = []
+    // sxtw x0, w0  (sign-extend s/sockfd)   0x93407C00
+    c.push(0)
+    c.push(124)
+    c.push(64)
+    c.push(147)
+    // mov w2, w2  (uxtw — zero-extend uint len) 0x2A0203E2
+    c.push(226)
+    c.push(3)
+    c.push(2)
+    c.push(42)
+    // mov w16, #98  (SYS_CONNECT)           0x52800C50
+    c.push(80)
+    c.push(12)
+    c.push(128)
+    c.push(82)
+    // svc #0x80                             0xD4001001
+    c.push(1)
+    c.push(16)
+    c.push(0)
+    c.push(212)
+    // cset x8, hs  (capture carry = error)  0x9A9F37E8
+    c.push(232)
+    c.push(55)
+    c.push(159)
+    c.push(154)
+    // cbz x8, Lret (success → skip errno)   0xB4000088  (+0x10 to ret)
+    c.push(136)
+    c.push(0)
+    c.push(0)
+    c.push(180)
+    // adrp x8, errno@PAGE  [RELOC PAGE21]   0x90000008  (imm zeroed)
+    c.push(8)
+    c.push(0)
+    c.push(0)
+    c.push(144)
+    // str w0, [x8, errno@PAGEOFF] [RELOC]   0xB9000100  (imm zeroed)
+    c.push(0)
+    c.push(1)
+    c.push(0)
+    c.push(185)
+    // mov x0, #-1  (error return)           0x92800000
+    c.push(0)
+    c.push(0)
+    c.push(128)
+    c.push(146)
+    // ret  (x0 = 0 on success / -1 error)   0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+fn rt_connect_reloc_offs() {
+    let mut o = []
+    o.push(24)
+    o.push(28)
+    return o
+}
+fn rt_connect_reloc_kinds() {
+    let mut k = []
+    k.push(3)
+    k.push(4)
+    return k
+}
+
+// ── rt_bind (F3 wave 7 — class-C syscall · 3-arg int+ptr+uint _cf + errno) ──
+// bind(int s, const void *addr, unsigned int len) -> int. The rt_connect twin
+// (identical int+ptr+uint shape: sxtw x0 + uxtw x2 + _cf), differing only in
+// SYS# (CONNECT=98 → BIND=104, mov w16 0x52800C50 → 0x52800D10). Verified
+// BYTE-IDENTICAL to clang -O2: 93407c00 2a0203e2 52800d10 d4001001 9a9f37e8
+// b4000088 90000008 b9000100 92800000 d65f03c0. errno reloc @ 0x18 / 0x1c.
+fn rt_bind() {
+    let mut c = []
+    // sxtw x0, w0  (sign-extend s/sockfd)   0x93407C00
+    c.push(0)
+    c.push(124)
+    c.push(64)
+    c.push(147)
+    // mov w2, w2  (uxtw — zero-extend uint len) 0x2A0203E2
+    c.push(226)
+    c.push(3)
+    c.push(2)
+    c.push(42)
+    // mov w16, #104  (SYS_BIND)             0x52800D10
+    c.push(16)
+    c.push(13)
+    c.push(128)
+    c.push(82)
+    // svc #0x80                             0xD4001001
+    c.push(1)
+    c.push(16)
+    c.push(0)
+    c.push(212)
+    // cset x8, hs  (capture carry = error)  0x9A9F37E8
+    c.push(232)
+    c.push(55)
+    c.push(159)
+    c.push(154)
+    // cbz x8, Lret (success → skip errno)   0xB4000088  (+0x10 to ret)
+    c.push(136)
+    c.push(0)
+    c.push(0)
+    c.push(180)
+    // adrp x8, errno@PAGE  [RELOC PAGE21]   0x90000008  (imm zeroed)
+    c.push(8)
+    c.push(0)
+    c.push(0)
+    c.push(144)
+    // str w0, [x8, errno@PAGEOFF] [RELOC]   0xB9000100  (imm zeroed)
+    c.push(0)
+    c.push(1)
+    c.push(0)
+    c.push(185)
+    // mov x0, #-1  (error return)           0x92800000
+    c.push(0)
+    c.push(0)
+    c.push(128)
+    c.push(146)
+    // ret  (x0 = 0 on success / -1 error)   0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+fn rt_bind_reloc_offs() {
+    let mut o = []
+    o.push(24)
+    o.push(28)
+    return o
+}
+fn rt_bind_reloc_kinds() {
+    let mut k = []
+    k.push(3)
+    k.push(4)
+    return k
+}
+
 // ── rt_write (B9.6-C13 — class-C syscall · int+ptr+ulong _cf + errno) ────
 // write(int fd, const void *buf, unsigned long n) -> long. The exact twin of
 // rt_read — same 9-instr 36 B _cf shape (only fd/x0 sign-extended; buf x1 + n
