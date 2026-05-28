@@ -465,7 +465,10 @@ runtime.c 조각이라 F3 로 fold (mis-split 해소). **F3 만이 진짜 open**
       leaf, munmap 이 JIT-verifiable(returns 0) → **첫 LIVE class-E wire** (arena emit set
       #1252/#1297/#1315 은 shadow-only · runtime 미-호출). **(c) alloc-core** (`hxlcl_malloc` =
       state-reloc + `bl hxlcl_mmap` + header store · `hexa_arena_alloc` = block-chain walk) =
-      class-A+B+C COMPOSITE w/ branch logic → 단일 increment 불가 · multi-session expert. **(d)**
+      class-A+B+C COMPOSITE w/ branch logic → 단일 increment 불가 · multi-session expert
+      (**B9.6-E2 MEASURED WALL** — clang -O2 시드 disasm 이 csel/ccmp/cmn · 2-distinct-global
+      reloc · RA multi-pair spill · interleaved bl+multi-BB 요구 입증 · 44 proven emitter 中 0개
+      제공 · `B9C-E2-alloc-core-wall.txt`). **(d)**
       malloc-coupled value ctor(`hexa_str`/`hexa_array_*`) = class-D 분할-3 와 중복(거기 deferred).
       **IRREDUCIBLE SEED (B9.8 terminal)**: bump allocator 자체 — self-host runtime 은 OS 메모리를
       carve 하는 SOME machine-code seed(mmap svc + bump ptr) 필요. emit 할 mark/sweep GC 가 없음.
@@ -1033,6 +1036,55 @@ runtime.c 조각이라 F3 로 fold (mis-split 해소). **F3 만이 진짜 open**
       원칙적 emit 가능하나 multi-session expert. (d) malloc-coupled value ctor = class-D 분할-3 중복.
       **bump-allocator SEED = irreducible B9.8 terminal** — self-host runtime 은 OS 메모리 carve 용
       machine-code seed(mmap svc + bump ptr) 필요 · emit 할 GC 부재. .c count 불변(87 · FLOOR 인프라).
+
+    **🧱 B9.6-E2 — class-E ALLOC-CORE wall MEASURED · TERMINAL (closed-negative · 2026-05-28)**:
+    B9.6-E1 이 class-E dealloc-stub(munmap) 을 열었고, (c) **alloc-core** (`hxlcl_malloc` ·
+    `hexa_arena_alloc`) 가 그 다음 후보. 본 세션 = "PROVEN svc(mmap) + leaf(bump-ptr) 블록으로
+    byte-identical self-emit 가능한가, 아니면 미구축 codegen 필요인가" 를 **측정**으로 판정.
+    방법 = 가장 단순한 single-block bump 시드(=`hxlcl_malloc` L726 본체 형상: n==0 guard ·
+    +16 header · 16-B align · 소진 시 chunk-or-bigger mmap · bump · header store) 를 `clang -O2`
+    컴파일 후 `otool -tvV`/`-r` 디스어셈블. 실제 `hxlcl_malloc`/`hexa_arena_alloc` 는 이보다
+    **strictly harder** 이므로 이건 하한선. `.verdicts/runtime-floor-closure/B9C-E2-alloc-core-wall.txt`
+    (raw disasm + reloc verbatim).
+    - **결과 = TERMINAL WALL** — 가장 단순한 시드(41 instr)조차 **byte-identical 로 emit 하려면**
+      44개 proven F3 emitter 중 어느 것도 제공 못 하는 codegen 능력 5종 필요:
+      · **(W1) conditional-select/compare family** — `csinc x20,x0,xzr,hi`(n==0?1:n) ·
+        `ccmp x8,x9,#2,ne`(short-circuit `!g_ptr || g_ptr+total>g_end`) ·
+        `csel x19,x21,x8,hi`(chunk=total>CHUNK?…) · `cmn x0,#1`(MAP_FAILED 테스트). shadow
+        `rt_arena_alloc` 은 `cmp`+`b.hi` 만 — clang 은 branchless csel 로 fuse. byte-identity 는
+        동일 csel/ccmp 스케줄링 요구. **csinc/ccmp/csel/cmn = 미-emit**.
+      · **(W2) 2개 distinct module-global** `adrp+ldr/str` (`_g_ptr`@x22 · `_g_end`@x23) → 서로
+        다른 심볼에 4개 PAGE21/PAGEOFF12 reloc(otool -r symbolnum 1·2). proven `rt_arena_*` 는
+        **단일** `_arena_state` 구조체를 고정 오프셋(#8/#16)으로 참조 — multi-distinct-global
+        할당 + per-global reloc 스케줄링 = **미구축**(per-primitive PORT, 템플릿 아님).
+      · **(W3) register-allocator-driven multi-pair frame** — `stp x24/x23 · x22/x21 · x20/x19 ·
+        x29/x30` (callee-saved 4 pair spill) + 대칭 ldp epilogue. proven class-B `rt_atoi` 는
+        **1 pair**(x29/x30)만. 4-pair spill 은 RA-emergent(live-range 구동) — 고정 템플릿 아님,
+        byte-identity 는 clang RA + spill 선택 복제 요구.
+      · **(W4) `bl hxlcl_mmap`(BRANCH26)** 가 W1+W2+W3 와 **한 본체에 interleave** — class-B 는
+        **격리된 tail-call**(atoi→atoll)만 입증. 여기선 bl 이 conditional-select 셋업과
+        post-call MAP_FAILED 테스트 + state store 사이 중간에 위치.
+      · **(W5) multi-basic-block 제어흐름** forward+backward merge — `b.ls`(mmap skip) ·
+        `b.eq`(MAP_FAILED→NULL tail) · `b`(NULL tail→공유 epilogue back-edge). shadow
+        `rt_arena_alloc` 은 **단일** `b.hi`→2-instr OOM tail 만 입증.
+    - **`hexa_arena_alloc`(runtime_core.c L3538) 은 시드보다 STRICTLY HARDER** — single-block 이
+      아니라 **linked-chain block-walk** allocator: W1-W5 위에 lazy env probe(`hxlcl_getenv`) ·
+      **nested while**(`while (nb && nb->cap<n)`) · **second while**(`while (tail->next)`) ·
+      conditional `hexa_arena_new_block`(→`hxlcl_malloc` 재귀) · stats hook(`_hx_mem_tick`/
+      histogram store) · 3+ distinct static(`__hexa_arena{head,cur}`·`__hx_arena_lo/hi`·
+      `__hexa_arena_enabled`) 추가. **A+B+C composite w/ loop control flow** = "단일 increment
+      불가 · multi-session expert" 가 **측정 확인됨**.
+    - **emit 미시도(REVERT 회피)**: 손-롤 byte-array 는 clang -O2 와 byte-identical 불가(다른 RA ·
+      csel fusion 부재) → default-0-extern byte-identity 게이트 FAIL → mission 지시(non-byte-
+      identical → REVERT)대로 **emit 안 함**. additive doc-only.
+    - **class-E 가 .c=0 의 진짜 F3 terminal blocker 인가? — alloc-core 시드에 대해 YES**, 단 F3
+      유일 잔여는 아님(A/B/C/D HARD-phase ~620 fn 의 본체 PORT 가 별도로 open). alloc-core 는
+      **irreducible 정점**: 다른 모든 F3 fn 을 self-emit 해도 이 bump-allocator 시드는
+      codegen self-emit 으로 bootstrap away 불가 — allocator 자체가 곧 OS-메모리-carve 시드(mmap
+      svc + bump ptr)이고 emit 할 mark/sweep GC 가 없음. byte-identical .c=0 은 **full hexa
+      codegen 백엔드**(RA + conditional-select 선택 + multi-global reloc) 도달 시에만, 또는 시드를
+      irreducible B9.8 floor 로 honest 수용(= 측정상 옳은 종착: 시드가 곧 allocator)으로 닫힘.
+      .c count 불변(87 · FLOOR 인프라).
 
 ### F4 — sha256 entangled
 
