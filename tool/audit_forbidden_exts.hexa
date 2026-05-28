@@ -53,8 +53,6 @@ let BOOTSTRAP_EXACT: [string] = [
     "self/runtime_core.c", "self/runtime_hexaval_sketch.c",
     "self/runtime_hi_gen.c",
     "self/bytecode.h", "self/hexa_nanbox.h", "self/hexa_nanbox_bridge.h",
-    "self/test_hexa_nanbox.c", "self/test_hexa_nanbox_bridge.c",
-    "self/test_nanbox.c",
 ]
 
 let GENERATED_PREFIXES: [string] = [
