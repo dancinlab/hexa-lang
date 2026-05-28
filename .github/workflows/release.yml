@@ -93,91 +93,30 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Stage 0-pre — warm-bootstrap regen seed .c (fallback-safe)
+      # ── .c-graduation Phase 3 (real-path fix) — Stage 0b resolves the prebuilt
+      # "frozen dough" runtime.a, and Stage 0/1/2 link it via a SHARED script
+      # (tool/stage_build_hexa). The old "warm-regen seed .c" Stage 0-pre is
+      # GONE: it ran `hexa run <orchestrator>` -> built hexat -> `clang
+      # self/runtime.c` -> died "no such file" once the seed was removed, and
+      # its `git checkout` fallback restored nothing (committed-removed). The
+      # prebuilt path needs NO seed .c. When seeds ARE present (today) Stage 0b
+      # rebuilds runtime.a from source -> byte-equivalent, additive no-op.
+      - name: Stage 0b — resolve prebuilt runtime archive (runtime.a)
         shell: bash
         env:
+          CC: clang
+          LIBS: ""
+          EDGE_ASSET: hexa-darwin-arm64.tar.gz
           GH_TOKEN: ${{ github.token }}
-        run: |
-          # WARM_BOOTSTRAP.md Phase 3 — toward .hexa-only. If a prior edge hexa
-          # downloads, regenerate the runtime.c amalgamation seed .c from their
-          # *_emit.hexa SSOTs. FALLBACK-SAFE: any failure OR regen drift →
-          # restore the tracked .c (git checkout) so Stage-0 compiles the
-          # committed seed (current cold-bootstrap). No-op today (seed tracked);
-          # load-bearing after Phase 4 (.c gitignored).
-          ASSET="hexa-darwin-arm64.tar.gz"
-          if gh release download edge --pattern "$ASSET" --dir /tmp/prior 2>/dev/null \
-             && tar xzf "/tmp/prior/$ASSET" -C /tmp/prior 2>/dev/null; then
-            PH="$(find /tmp/prior -type f -name hexa | head -1)"
-            if [ -n "$PH" ] && "$PH" --version >/dev/null 2>&1; then
-              if HEXA_RUN_CMD="$PH run" "$PH" run tool/regen_native_runtime_c_includes.hexa; then
-                echo "warm: amalgamation seed .c regenerated + verified byte-identical"
-              else
-                echo "warm: regen drift/fail — restoring tracked .c"
-                git checkout -- self/runtime_core.c self/runtime_hi_gen.c self/native/*.c 2>/dev/null || true
-              fi
-            else echo "warm: prior hexa unusable — tracked .c fallback"; fi
-          else echo "warm: no prior edge hexa — tracked .c (cold-bootstrap)"; fi
-          test -f self/runtime_core.c && echo "Stage-0 seed present ✓"
+        run: bash tool/stage_resolve_runtime_a
 
-      - name: Stage 0 — compile self-hosted transpiler (hexa_v2)
+      - name: Stage 0/1/2 — self-host build (shared with nobaseline-gate)
         shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p self/native build/stage1
-          # .c-graduation Phase 2 (ADDITIVE) — opt-in prebuilt-runtime link.
-          # When HEXA_PREBUILT_RUNTIME=<path> is set + the file exists, link the
-          # prebuilt object (built in Stage 0b from the SAME runtime.c) instead of
-          # re-compiling self/runtime.c (+ its #include seed .c) from source. This
-          # is the seam the .c=0 graduation needs: hexa_cc.c only #includes
-          # runtime.h, so it links a prebuilt runtime.a with NO seed .c present.
-          # FALLBACK-SAFE: env unset OR file absent → source path (runtime.c).
-          RT_ARG="self/runtime.c"
-          if [ -n "${HEXA_PREBUILT_RUNTIME:-}" ] && [ -f "${HEXA_PREBUILT_RUNTIME}" ]; then
-              echo "Stage-0: HEXA_PREBUILT_RUNTIME set — linking prebuilt: $HEXA_PREBUILT_RUNTIME"
-              RT_ARG="$HEXA_PREBUILT_RUNTIME"
-          fi
-          clang $CFLAGS_COMMON \
-              -I self self/native/hexa_cc.c "$RT_ARG" \
-              -o build/hexa_v2
-          file build/hexa_v2
-
-      # ── .c-graduation Phase 1 (ADDITIVE) — prebuilt runtime archive ──
-      # Compiles the SAME self/runtime.c with the SAME CFLAGS into a
-      # standalone object + archive (build/runtime.a). This is the
-      # "frozen dough" (rustc/gcc stage0 pattern): a future `hexa cc` /
-      # Stage-0 can LINK this prebuilt object instead of re-compiling
-      # runtime.c (+ its #include "runtime_core.c" seed) from source —
-      # opt-in via HEXA_PREBUILT_RUNTIME=<path>. This step does NOT touch
-      # the source-compile path above; if it ever fails, the existing
-      # bootstrap stays green (the artifact is purely an extra asset).
-      - name: Stage 0b — build prebuilt runtime archive (runtime.a)
-        shell: bash
-        run: |
-          set -euo pipefail
-          clang $CFLAGS_COMMON -I self -c self/runtime.c -o build/runtime.o
-          ar rcs build/runtime.a build/runtime.o
-          file build/runtime.o
-          ls -la build/runtime.a
-
-      - name: Stage 1 — flatten + transpile self/main.hexa → build/stage1/main.c
-        shell: bash
-        run: |
-          set -euo pipefail
-          ./build/hexa_v2 self/module_loader.hexa build/stage1/module_loader.c
-          clang $CFLAGS_COMMON \
-              -I self build/stage1/module_loader.c self/runtime.c \
-              -o build/hexa_module_loader
-          ./build/hexa_module_loader self/main.hexa build/stage1/main_expanded.hexa
-          ./build/hexa_v2 build/stage1/main_expanded.hexa build/stage1/main.c
-
-      - name: Stage 2 — compile CLI driver (./hexa)
-        shell: bash
-        run: |
-          set -euo pipefail
-          clang $CFLAGS_COMMON \
-              -I self build/stage1/main.c self/runtime.c \
-              -o hexa
-          file hexa
+        env:
+          CC: clang
+          LIBS: ""
+          HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
+        run: bash tool/stage_build_hexa
 
       # ── macOS Developer ID signing (GATED · skips cleanly when secrets
       # absent → release ships ad-hoc and install.sh strips quarantine +
@@ -314,84 +253,26 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Stage 0-pre — warm-bootstrap regen seed .c (fallback-safe)
+      # ── .c-graduation Phase 3 (real-path fix) — see darwin-arm64 job for the
+      # full rationale. Stage 0b resolves the prebuilt runtime.a (source today,
+      # prior-edge asset once seeds removed); Stage 0/1/2 link it via the shared
+      # tool/stage_build_hexa. Additive no-op while seeds are present.
+      - name: Stage 0b — resolve prebuilt runtime archive (runtime.a)
         shell: bash
         env:
+          CC: gcc
+          LIBS: "-lm -ldl"
+          EDGE_ASSET: hexa-linux-x86_64.tar.gz
           GH_TOKEN: ${{ github.token }}
-        run: |
-          # WARM_BOOTSTRAP.md Phase 3 — toward .hexa-only. If a prior edge hexa
-          # downloads, regenerate the runtime.c amalgamation seed .c from their
-          # *_emit.hexa SSOTs. FALLBACK-SAFE: any failure OR regen drift →
-          # restore the tracked .c (git checkout) so Stage-0 compiles the
-          # committed seed (current cold-bootstrap). No-op today (seed tracked);
-          # load-bearing after Phase 4 (.c gitignored).
-          ASSET="hexa-linux-x86_64.tar.gz"
-          if gh release download edge --pattern "$ASSET" --dir /tmp/prior 2>/dev/null \
-             && tar xzf "/tmp/prior/$ASSET" -C /tmp/prior 2>/dev/null; then
-            PH="$(find /tmp/prior -type f -name hexa | head -1)"
-            if [ -n "$PH" ] && "$PH" --version >/dev/null 2>&1; then
-              if HEXA_RUN_CMD="$PH run" "$PH" run tool/regen_native_runtime_c_includes.hexa; then
-                echo "warm: amalgamation seed .c regenerated + verified byte-identical"
-              else
-                echo "warm: regen drift/fail — restoring tracked .c"
-                git checkout -- self/runtime_core.c self/runtime_hi_gen.c self/native/*.c 2>/dev/null || true
-              fi
-            else echo "warm: prior hexa unusable — tracked .c fallback"; fi
-          else echo "warm: no prior edge hexa — tracked .c (cold-bootstrap)"; fi
-          test -f self/runtime_core.c && echo "Stage-0 seed present ✓"
+        run: bash tool/stage_resolve_runtime_a
 
-      - name: Stage 0 — compile self-hosted transpiler (hexa_v2)
+      - name: Stage 0/1/2 — self-host build (shared with nobaseline-gate)
         shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p self/native build/stage1
-          # .c-graduation Phase 2 (ADDITIVE) — opt-in prebuilt-runtime link.
-          # See darwin-arm64 job for full rationale. FALLBACK-SAFE: env unset OR
-          # file absent → source path (self/runtime.c).
-          RT_ARG="self/runtime.c"
-          if [ -n "${HEXA_PREBUILT_RUNTIME:-}" ] && [ -f "${HEXA_PREBUILT_RUNTIME}" ]; then
-              echo "Stage-0: HEXA_PREBUILT_RUNTIME set — linking prebuilt: $HEXA_PREBUILT_RUNTIME"
-              RT_ARG="$HEXA_PREBUILT_RUNTIME"
-          fi
-          gcc $CFLAGS_COMMON \
-              -I self self/native/hexa_cc.c "$RT_ARG" \
-              -o build/hexa_v2 \
-              -lm -ldl
-          file build/hexa_v2
-
-      # ── .c-graduation Phase 1 (ADDITIVE) — prebuilt runtime archive ──
-      # See darwin-arm64 job for full rationale. Same runtime.c + CFLAGS,
-      # additive object/archive only; source-compile path above unchanged.
-      - name: Stage 0b — build prebuilt runtime archive (runtime.a)
-        shell: bash
-        run: |
-          set -euo pipefail
-          gcc $CFLAGS_COMMON -I self -c self/runtime.c -o build/runtime.o
-          ar rcs build/runtime.a build/runtime.o
-          file build/runtime.o
-          ls -la build/runtime.a
-
-      - name: Stage 1 — flatten + transpile self/main.hexa → build/stage1/main.c
-        shell: bash
-        run: |
-          set -euo pipefail
-          ./build/hexa_v2 self/module_loader.hexa build/stage1/module_loader.c
-          gcc $CFLAGS_COMMON \
-              -I self build/stage1/module_loader.c self/runtime.c \
-              -o build/hexa_module_loader \
-              -lm -ldl
-          ./build/hexa_module_loader self/main.hexa build/stage1/main_expanded.hexa
-          ./build/hexa_v2 build/stage1/main_expanded.hexa build/stage1/main.c
-
-      - name: Stage 2 — compile CLI driver (./hexa)
-        shell: bash
-        run: |
-          set -euo pipefail
-          gcc $CFLAGS_COMMON \
-              -I self build/stage1/main.c self/runtime.c \
-              -o hexa \
-              -lm -ldl
-          file hexa
+        env:
+          CC: gcc
+          LIBS: "-lm -ldl"
+          HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
+        run: bash tool/stage_build_hexa
 
       # ── GO M4 — see darwin-arm64 job for full rationale.
       - name: Stage 3 — precompile shipped scripts (release/precompile/)
@@ -447,84 +328,25 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Stage 0-pre — warm-bootstrap regen seed .c (fallback-safe)
+      # ── .c-graduation Phase 3 (real-path fix) — see darwin-arm64 job for the
+      # full rationale. Stage 0b resolves the prebuilt runtime.a; Stage 0/1/2
+      # link it via the shared tool/stage_build_hexa. Additive no-op today.
+      - name: Stage 0b — resolve prebuilt runtime archive (runtime.a)
         shell: bash
         env:
+          CC: gcc
+          LIBS: "-lm -ldl"
+          EDGE_ASSET: hexa-linux-arm64.tar.gz
           GH_TOKEN: ${{ github.token }}
-        run: |
-          # WARM_BOOTSTRAP.md Phase 3 — toward .hexa-only. If a prior edge hexa
-          # downloads, regenerate the runtime.c amalgamation seed .c from their
-          # *_emit.hexa SSOTs. FALLBACK-SAFE: any failure OR regen drift →
-          # restore the tracked .c (git checkout) so Stage-0 compiles the
-          # committed seed (current cold-bootstrap). No-op today (seed tracked);
-          # load-bearing after Phase 4 (.c gitignored).
-          ASSET="hexa-linux-arm64.tar.gz"
-          if gh release download edge --pattern "$ASSET" --dir /tmp/prior 2>/dev/null \
-             && tar xzf "/tmp/prior/$ASSET" -C /tmp/prior 2>/dev/null; then
-            PH="$(find /tmp/prior -type f -name hexa | head -1)"
-            if [ -n "$PH" ] && "$PH" --version >/dev/null 2>&1; then
-              if HEXA_RUN_CMD="$PH run" "$PH" run tool/regen_native_runtime_c_includes.hexa; then
-                echo "warm: amalgamation seed .c regenerated + verified byte-identical"
-              else
-                echo "warm: regen drift/fail — restoring tracked .c"
-                git checkout -- self/runtime_core.c self/runtime_hi_gen.c self/native/*.c 2>/dev/null || true
-              fi
-            else echo "warm: prior hexa unusable — tracked .c fallback"; fi
-          else echo "warm: no prior edge hexa — tracked .c (cold-bootstrap)"; fi
-          test -f self/runtime_core.c && echo "Stage-0 seed present ✓"
+        run: bash tool/stage_resolve_runtime_a
 
-      - name: Stage 0 — compile self-hosted transpiler (hexa_v2)
+      - name: Stage 0/1/2 — self-host build (shared with nobaseline-gate)
         shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p self/native build/stage1
-          # .c-graduation Phase 2 (ADDITIVE) — opt-in prebuilt-runtime link.
-          # See darwin-arm64 job for full rationale. FALLBACK-SAFE: env unset OR
-          # file absent → source path (self/runtime.c).
-          RT_ARG="self/runtime.c"
-          if [ -n "${HEXA_PREBUILT_RUNTIME:-}" ] && [ -f "${HEXA_PREBUILT_RUNTIME}" ]; then
-              echo "Stage-0: HEXA_PREBUILT_RUNTIME set — linking prebuilt: $HEXA_PREBUILT_RUNTIME"
-              RT_ARG="$HEXA_PREBUILT_RUNTIME"
-          fi
-          gcc $CFLAGS_COMMON \
-              -I self self/native/hexa_cc.c "$RT_ARG" \
-              -o build/hexa_v2 \
-              -lm -ldl
-          file build/hexa_v2
-
-      # ── .c-graduation Phase 1 (ADDITIVE) — prebuilt runtime archive ──
-      # See darwin-arm64 job for full rationale. Same runtime.c + CFLAGS,
-      # additive object/archive only; source-compile path above unchanged.
-      - name: Stage 0b — build prebuilt runtime archive (runtime.a)
-        shell: bash
-        run: |
-          set -euo pipefail
-          gcc $CFLAGS_COMMON -I self -c self/runtime.c -o build/runtime.o
-          ar rcs build/runtime.a build/runtime.o
-          file build/runtime.o
-          ls -la build/runtime.a
-
-      - name: Stage 1 — flatten + transpile self/main.hexa → build/stage1/main.c
-        shell: bash
-        run: |
-          set -euo pipefail
-          ./build/hexa_v2 self/module_loader.hexa build/stage1/module_loader.c
-          gcc $CFLAGS_COMMON \
-              -I self build/stage1/module_loader.c self/runtime.c \
-              -o build/hexa_module_loader \
-              -lm -ldl
-          ./build/hexa_module_loader self/main.hexa build/stage1/main_expanded.hexa
-          ./build/hexa_v2 build/stage1/main_expanded.hexa build/stage1/main.c
-
-      - name: Stage 2 — compile CLI driver (./hexa)
-        shell: bash
-        run: |
-          set -euo pipefail
-          gcc $CFLAGS_COMMON \
-              -I self build/stage1/main.c self/runtime.c \
-              -o hexa \
-              -lm -ldl
-          file hexa
+        env:
+          CC: gcc
+          LIBS: "-lm -ldl"
+          HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
+        run: bash tool/stage_build_hexa
 
       # ── GO M4 — see darwin-arm64 job for full rationale.
       - name: Stage 3 — precompile shipped scripts (release/precompile/)
