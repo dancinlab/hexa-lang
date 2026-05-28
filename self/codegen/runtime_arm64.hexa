@@ -5135,5 +5135,157 @@ fn test_runtime_arm64() {
     }
 }
 
+// ── rt_strdup (F3-codegen-kickoff — class-B HARD primitive · BEHAVIORAL self-emit) ──
+//
+// char *strdup(const char *s):
+//   if (!s) return NULL
+//   n = strlen(s)                 (INLINE scalar byte loop — hexa's OWN selection)
+//   out = malloc(n+1)             (bl _hxlcl_malloc · BRANCH26)
+//   if (!out) return NULL
+//   copy s[0..n] inclusive of NUL (INLINE scalar byte loop)
+//   return out
+//
+// 🔑 STRATEGIC SIGNIFICANCE — THE F3 WALL REFRAME.
+// The B9.6-B2/E2 wall narrative held that class-B copy-loop primitives
+// (strdup/strndup) were BLOCKED because the byte-identity-vs-clang gate forces
+// reproducing clang -O2's AUTO-VECTORIZED copy (ld1/st1 NEON, head/tail
+// peeling, an RA-emergent multi-pair frame). Hand-rolling that byte-for-byte is
+// the "reimplement clang's optimizer" impossibility.
+//
+// This emitter DROPS the clang-byte-match requirement. A self-hosting compiler
+// emits ITS OWN correct machine code; correctness is BEHAVIOR, not a diff vs a
+// third-party optimizer. The sequence below is a plain SCALAR byte-copy loop —
+// NOT byte-identical to clang -O2 — verified by:
+//   (1) interp self-test (length + structural byte asserts, below)
+//   (2) `as -arch arm64` ROUND-TRIP (our own .s assembles to these exact bytes —
+//       proves the encoding is a legal ARM64 program, NOT that it matches clang)
+//   (3) JIT-exec BEHAVIORAL battery (emit_hxlcl_strdup_o.hexa → link against a
+//       real _hxlcl_malloc + C driver → distinct ptr · exact content · NUL term ·
+//       empty/embedded-high-byte/NULL-input edges all PASS, rc=0)
+// PLUS the self-host fixpoint (tool/meta2_verify.hexa f(C)=C) is the standing
+// correctness anchor, and the default 0-extern build stays byte-identical
+// (the guard is OPT-IN; default keeps the C body).
+//
+// This is the FIRST class-B HARD primitive (frame + bl + COPY LOOP, not a bare
+// tail-call like rt_atoi): it carries callee-saved state (x19=s, x20=n, x21=out)
+// LIVE ACROSS the bl, two distinct scalar loops, and multi-BB control flow with
+// a shared NULL/return epilogue — the exact shape the wall called "unbuilt".
+// Emitting our OWN correct form makes it tractable engineering.
+//
+// macOS arm64 AAPCS · 28 instructions, 112 bytes · ONE BRANCH26 reloc @ 0x30.
+// Registers: x19=s · x20=n · x21=out (callee-saved, restored in epilogue);
+//            x9/x10 scratch; bl _hxlcl_malloc clobbers x0..x18 (none live).
+// Bytes below are character-identical to `as -arch arm64` of the .s in
+// .verdicts/runtime-floor-closure/F3-strdup-behavioral.txt (NOT to clang -O2).
+fn rt_strdup() {
+    let mut c = []
+    // stp x29, x30, [sp, #-48]!   0xA9BD7BFD  (frame + LR spill, 48-B frame)
+    c.push(253); c.push(123); c.push(189); c.push(169)
+    // mov x29, sp                 0x910003FD
+    c.push(253); c.push(3); c.push(0); c.push(145)
+    // stp x19, x20, [sp, #16]     0xA90153F3  (save callee-saved pair)
+    c.push(243); c.push(83); c.push(1); c.push(169)
+    // str x21, [sp, #32]          0xF90013F5  (save callee-saved x21)
+    c.push(245); c.push(19); c.push(0); c.push(249)
+    // cbz x0, .Lnull (+0x50→0x60) 0xB4000260  (if (!s) return NULL)
+    c.push(96); c.push(2); c.push(0); c.push(180)
+    // mov x19, x0                 0xAA0003F3  (x19 = s)
+    c.push(243); c.push(3); c.push(0); c.push(170)
+    // mov x20, #0                 0xD2800014  (n = 0)
+    c.push(20); c.push(0); c.push(128); c.push(210)
+    // .Llen: ldrb w9, [x19, x20]  0x38746A69
+    c.push(105); c.push(106); c.push(116); c.push(56)
+    // cbz w9, .Llen_done (+0xc)   0x34000069  (NUL terminator → length found)
+    c.push(105); c.push(0); c.push(0); c.push(52)
+    // add x20, x20, #1            0x91000694
+    c.push(148); c.push(6); c.push(0); c.push(145)
+    // b .Llen (-0xc→0x1c)         0x17FFFFFD
+    c.push(253); c.push(255); c.push(255); c.push(23)
+    // .Llen_done: add x0, x20, #1 0x91000680  (malloc arg = n+1)
+    c.push(128); c.push(6); c.push(0); c.push(145)
+    // bl _hxlcl_malloc [BRANCH26] 0x94000000  (imm zeroed pre-reloc) @ 0x30
+    c.push(0); c.push(0); c.push(0); c.push(148)
+    // cbz x0, .Lnull (+0x28→0x5c) 0xB4000140  (malloc failed → NULL)
+    c.push(64); c.push(1); c.push(0); c.push(180)
+    // mov x21, x0                 0xAA0003F5  (x21 = out)
+    c.push(245); c.push(3); c.push(0); c.push(170)
+    // mov x10, #0                 0xD280000A  (copy index i = 0)
+    c.push(10); c.push(0); c.push(128); c.push(210)
+    // .Lcopy: ldrb w9, [x19, x10] 0x386A6A69
+    c.push(105); c.push(106); c.push(106); c.push(56)
+    // strb w9, [x21, x10]         0x382A6AA9
+    c.push(169); c.push(106); c.push(42); c.push(56)
+    // cmp x10, x20               0xEB14015F
+    c.push(95); c.push(1); c.push(20); c.push(235)
+    // add x10, x10, #1           0x9100054A
+    c.push(74); c.push(5); c.push(0); c.push(145)
+    // b.lo .Lcopy (-0x10→0x40)   0x54FFFF83  (while i<n; at i==n the NUL is copied then stop)
+    c.push(131); c.push(255); c.push(255); c.push(84)
+    // mov x0, x21                0xAA1503E0  (return out)
+    c.push(224); c.push(3); c.push(21); c.push(170)
+    // b .Lret (+0x8→0x60)        0x14000002
+    c.push(2); c.push(0); c.push(0); c.push(20)
+    // .Lnull: mov x0, #0         0xD2800000  (NULL result, shared by !s and OOM)
+    c.push(0); c.push(0); c.push(128); c.push(210)
+    // .Lret: ldr x21, [sp, #32]  0xF94013F5
+    c.push(245); c.push(19); c.push(64); c.push(249)
+    // ldp x19, x20, [sp, #16]    0xA94153F3
+    c.push(243); c.push(83); c.push(65); c.push(169)
+    // ldp x29, x30, [sp], #48    0xA8C37BFD
+    c.push(253); c.push(123); c.push(195); c.push(168)
+    // ret                        0xD65F03C0
+    c.push(192); c.push(3); c.push(95); c.push(214)
+    return c
+}
+
+// Reloc table for rt_strdup — ONE BRANCH26 for the `bl _hxlcl_malloc` at the
+// __text byte offset 0x30 (48). kind 2 = ARM64_RELOC_BRANCH26, undefined-extern
+// callee (sym_section==0). Identical shape to rt_atoi_reloc_* (B9.6-B1).
+fn rt_strdup_reloc_offs() {
+    let mut o = []
+    o.push(48)
+    return o
+}
+fn rt_strdup_reloc_kinds() {
+    let mut k = []
+    k.push(2)
+    return k
+}
+
+fn test_rt_strdup() {
+    println("test_rt_strdup (F3 class-B HARD primitive · behavioral self-emit)")
+    let mut ok = true
+    let s = rt_strdup()
+    println("  rt_strdup : " + to_string(len(s)) + " bytes (112 expected)")
+    if len(s) != 112 {
+        println("  FAIL: rt_strdup expected 112 bytes"); ok = false
+    }
+    // prologue stp x29,x30,[sp,#-48]!  (fd 7b bd a9) @ 0
+    if s[0] != 253 || s[1] != 123 || s[2] != 189 || s[3] != 169 {
+        println("  FAIL: stp x29,x30 prologue (48-B frame) mismatch"); ok = false
+    }
+    // bl _hxlcl_malloc (00 00 00 94) @ 0x30 = 48 — the cross-object CALL site
+    if s[48] != 0 || s[49] != 0 || s[50] != 0 || s[51] != 148 {
+        println("  FAIL: bl _hxlcl_malloc (BRANCH26 @0x30) mismatch"); ok = false
+    }
+    // ret (c0 03 5f d6) @ 0x6c = 108
+    if s[108] != 192 || s[109] != 3 || s[110] != 95 || s[111] != 214 {
+        println("  FAIL: ret trailer mismatch"); ok = false
+    }
+    // reloc table: one BRANCH26 @ 48
+    let offs = rt_strdup_reloc_offs()
+    let kinds = rt_strdup_reloc_kinds()
+    if len(offs) != 1 || offs[0] != 48 {
+        println("  FAIL: reloc offset expected [48]"); ok = false
+    }
+    if len(kinds) != 1 || kinds[0] != 2 {
+        println("  FAIL: reloc kind expected [2] (BRANCH26)"); ok = false
+    }
+    if ok {
+        println("  ALL CHECKS PASS")
+    }
+}
+
 test_runtime_arm64()
 test_neon_string_ops()
+test_rt_strdup()
