@@ -215,7 +215,22 @@ extern void *hxlcl_mmap(void *addr, unsigned long len, int prot, int flags, int 
 #else
 static void *hxlcl_mmap(void *addr, unsigned long len, int prot, int flags, int fd, long off);
 #endif
+// F3 B9.6-B2 — class-B HARD `rt_strdup` Path-A activation. hxlcl_strdup is
+// `extern` under HEXA_RT_SELFEMIT (body supplied by emit_hxlcl_strdup_o.hexa's
+// .o = frame + scalar strlen loop + `bl _hxlcl_malloc` + scalar copy loop +
+// epilogue, 28 instr / 112 B, 1 ARM64_RELOC_BRANCH26 @0x30). The BL TARGET
+// hxlcl_malloc is EXPORTED (non-static) so ld64 can bind the .o's BRANCH26
+// reloc to runtime.c's hxlcl_malloc — same callee-export wrinkle as B9.6-B1
+// rt_atoi → hxlcl_atoll. Default (guard off) keeps malloc file-local `static`
+// = 0-libc-extern invariant preserved. (Both forward decl AND definition flip
+// for malloc; #1860 lesson — else -Wundefined-internal masks the symbol.)
+#ifdef HEXA_RT_SELFEMIT
+#define HXLCL_MALLOC_SC          /* exported: ld64 binds the .o's BRANCH26 here */
+void *hxlcl_malloc(size_t n);
+#else
+#define HXLCL_MALLOC_SC static    /* default: file-local (0-libc-extern) */
 static void *hxlcl_malloc(size_t n);  /* cycle 73: route pre-#define helpers off libc malloc */
+#endif
 static void  hxlcl_free(void *p);     /* cycle 73: noop free — keeps _free extern out */
 static int  hxlcl_clock_gettime(int clk, void *ts);  /* re-decl: cycle 65 syscall body overrides cycle 62 stub */
 
@@ -350,6 +365,17 @@ static const char *__attribute__((noinline)) hxlcl_strstr(const char *h, const c
     }
     return NULL;
 }
+// F3 B9.6-B2 (F3 Path A) — under HEXA_RT_SELFEMIT hxlcl_strdup is `extern`
+// (resolved by emit_hxlcl_strdup_o.hexa's .o = frame + scalar strlen loop +
+// `bl _hxlcl_malloc` + scalar copy loop + epilogue, 28 instr / 112 B, 1
+// ARM64_RELOC_BRANCH26 @0x30). The BL target hxlcl_malloc is EXPORTED via
+// HXLCL_MALLOC_SC (see L218-block) so ld64 can bind the cross-object call.
+// Default (guard off) keeps the static body below = 0-libc-extern preserved.
+// FIRST ACTIVATED class-B HARD primitive (38/640) — behavioral-equivalence
+// gate proven in #1911 (6/6 JIT-exec); this PR wires it into the live runtime.
+#ifdef HEXA_RT_SELFEMIT
+extern char *hxlcl_strdup(const char *s);
+#else
 static char *__attribute__((noinline)) hxlcl_strdup(const char *s) {
     if (!s) return NULL;
     size_t n = 0;
@@ -360,6 +386,7 @@ static char *__attribute__((noinline)) hxlcl_strdup(const char *s) {
     out[n] = '\0';
     return out;
 }
+#endif
 static char *__attribute__((noinline)) hxlcl_strndup(const char *s, size_t cap) {
     if (!s) return NULL;
     size_t n = 0;
@@ -935,7 +962,10 @@ static void __attribute__((noinline)) hxlcl_perror(const char *s) {
 #define HXLCL_HDR_BYTES 16
 static char *_hxlcl_alloc_ptr = (char *)0;
 static char *_hxlcl_alloc_end = (char *)0;
-static void *__attribute__((noinline)) hxlcl_malloc(size_t n) {
+// F3 B9.6-B2 callee-export: HXLCL_MALLOC_SC flips between `static` (default)
+// and empty (guard on, exported) so the self-emit rt_strdup .o's BRANCH26 reloc
+// against `_hxlcl_malloc` can be bound by ld64. `noinline` retained either way.
+HXLCL_MALLOC_SC void *__attribute__((noinline)) hxlcl_malloc(size_t n) {
     if (n == 0) n = 1;
     size_t total = n + HXLCL_HDR_BYTES;
     total = (total + (size_t)15) & ~(size_t)15;

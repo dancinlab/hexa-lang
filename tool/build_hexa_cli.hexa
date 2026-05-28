@@ -627,6 +627,7 @@ fn _do_build(repo_root: string) {
             println("[selfemit] F3 Path A · B9.6-C1 — class-C syscall ABI: getpid (raw svc #0x80) → _hxlcl_getpid")
             println("[selfemit] F3 Path A · B9.6-C2 — class-C syscall WITH arg+errno: close (svc + carry-flag) → _hxlcl_close")
             println("[selfemit] F3 Path A · B9.6-B1 — class-B calling-conv composite: atoi (frame + bl) → _hxlcl_atoi")
+            println("[selfemit] F3 Path A · B9.6-B2 — class-B HARD copy-loop: strdup (frame + strlen-loop + bl malloc + copy-loop) → _hxlcl_strdup")
             println("[selfemit] F3 Path A · B9.6-E1 — class-E memory-lifecycle: munmap (unmap stub) → _hxlcl_munmap")
             // From here on the driver/module_loader runtime.c is compiled with
             // the guard ON so the hxlcl_* bodies become extern (resolved below).
@@ -674,8 +675,21 @@ fn _do_build(repo_root: string) {
             // the bump allocator seed itself is the irreducible B9.8 floor. This is
             // the FIRST LIVE class-E wire — the rt_arena_* set (#1252/#1297/#1315)
             // emits an arena .o but the runtime never calls those symbols (shadow).
-            let leaves = ["memset", "memcmp", "memcpy", "memmove", "strcmp", "strncmp", "strchr", "strrchr", "strcpy", "strncpy", "strcat", "strlen", "getpid", "close", "atoi", "munmap"]
-            let upper  = ["MEMSET", "MEMCMP", "MEMCPY", "MEMMOVE", "STRCMP", "STRNCMP", "STRCHR", "STRRCHR", "STRCPY", "STRNCPY", "STRCAT", "STRLEN", "GETPID", "CLOSE", "ATOI", "MUNMAP"]
+            //
+            // B9.6-B2 appends `strdup` — the FIRST class-B HARD copy-loop primitive
+            // ACTIVATED (38/640). Unlike B9.6-B1 atoi (5-instr tail-call wrapper),
+            // strdup is a full composite: frame + scalar strlen loop + `bl _hxlcl_malloc`
+            // + scalar copy loop + multi-BB shared epilogue (28 instr / 112 B, 1
+            // ARM64_RELOC_BRANCH26 @0x30 against UNDEFINED-external `_hxlcl_malloc`).
+            // ld64 binds the BRANCH26 to runtime.c's `hxlcl_malloc` (EXPORTED via
+            // HXLCL_MALLOC_SC under the guard — same callee-export wrinkle as atoi's
+            // HXLCL_ATOLL_SC). Behavioral-equivalence gate (NOT byte-id-vs-clang)
+            // proven in PR #1911 (6/6 JIT-exec: empty / short / long / embedded
+            // 0x01-0x03 / NULL passthrough / distinct-ptr exact-content). Rides the
+            // SAME single-symbol emit loop; only the .o internals differ. Scales the
+            // ~60-100 class-B HARD copy-loop family (strndup/atoll/atof template).
+            let leaves = ["memset", "memcmp", "memcpy", "memmove", "strcmp", "strncmp", "strchr", "strrchr", "strcpy", "strncpy", "strcat", "strlen", "getpid", "close", "atoi", "munmap", "strdup"]
+            let upper  = ["MEMSET", "MEMCMP", "MEMCPY", "MEMMOVE", "STRCMP", "STRNCMP", "STRCHR", "STRRCHR", "STRCPY", "STRNCPY", "STRCAT", "STRLEN", "GETPID", "CLOSE", "ATOI", "MUNMAP", "STRDUP"]
             let mut li = 0
             while li < len(leaves) {
                 let n = leaves[li]
