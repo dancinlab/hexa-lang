@@ -1,0 +1,23 @@
+========================================================================
+  self/native — term_ffi_byte_diff: B9.C-10 .c-text byte-diff oracle
+========================================================================
+  generator: self/native/term_ffi_emit.hexa
+  oracle:    source-SHA byte-diff vs hand-written term_ffi.c
+  note:      runtime.c #include fragment — .o proof via full hexa_cc build
+
+  scratch: /var/folders/2g/blzd56lx2rvfvt61c1pc9g7r0000gn/T/term_ffi_byte_diff.XXXXXX.UNNxgoVvcP
+
+  [PASS] hexa emitter self/native/term_ffi_emit.hexa present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a29a88987b6876976/self/native/term_ffi_emit.hexa
+  [PASS] hand-written self/native/term_ffi.c present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a29a88987b6876976/self/native/term_ffi.c
+  [PASS] gate-1 source-text byte-identical (sha256(.c))
+         · orig=8caa4c13050745ad763d37639fb4fbf30b9f539c83173dcd6b3850f22457ad91 gen=8caa4c13050745ad763d37639fb4fbf30b9f539c83173dcd6b3850f22457ad91
+
+  B9.C-10 term_ffi.c .c-text byte-identity:
+    PROVEN ✓ — hand-written term_ffi.c is fully hexa-emittable.
+    DELETION GATE OPEN — self/native/term_ffi.c may be `git rm` once the
+    full hexa_cc build (regen + runtime.c compile + smoke) also PASSes.
+========================================================================
+  3/3 checks passed
+__HEXA_LANG_TERM_FFI_BYTE_DIFF__ PASS

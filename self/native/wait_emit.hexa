@@ -1,0 +1,107 @@
+#!hexa strict
+// self/native/wait_emit.hexa
+//   B9.C-10 (.c-text · #1848 pattern) — wait.c source emitter.
+//
+// runtime.c #include "native/wait.c" — RFC 061 amalgamation fragment
+// (NOT a standalone TU; references runtime.c-internal symbols). This emitter
+// is the SSOT; the build regenerates self/native/wait.c from it before
+// runtime.c compiles, so the .c becomes a gitignored build artifact.
+//
+// Byte-identity: regenerated C is byte-for-byte the hand-written source, so
+// the runtime.c TU (and the linked hexa binary) is identical — PERF UNCHANGED.
+//
+// Invocation:  hexa-run self/native/wait_emit.hexa <output-path>
+// Default output path (if argv missing): "wait.c" in cwd.
+//
+// Phase: B9.C-10 batch (self/native runtime.c-included .c-text · F3).
+
+let MODULE_NAME = "wait_emit"
+
+fn emit_wait_c() -> str {
+    // Verbatim content of hand-written self/native/wait.c
+    let s =
+            "/* self/native/wait.c -- hxlcl_waitpid(2) wrapper (POSIX).\n" +
+            " *\n" +
+            " * Included from self/runtime.c via `#include \"native/wait.c\"`. NOT a\n" +
+            " * standalone TU; relies on the runtime.c types (HexaVal, HX_IS_*,\n" +
+            " * hexa_map_*).\n" +
+            " *\n" +
+            " * Symbols exported (codegen direct-emit):\n" +
+            " *   hexa_proc_wait(pid, flags)   -> map { pid, exited, signaled, exit_code, term_sig, raw_status }\n" +
+            " *                                    pid == -1 (any child) supported.\n" +
+            " *                                    flags: 0 = blocking, WNOHANG = non-blocking.\n" +
+            " *                                    On WNOHANG with no children ready: returns map with pid=0.\n" +
+            " *                                    On error: returns map { error, errno }.\n" +
+            " *\n" +
+            " * RFC slot: stdlib-for-cpu-port.md P1 \"signal-ext: SIGCHLD reaping\".\n" +
+            " * Consumer: pty_forkexec / pool_on / any hexa fork+exec pattern that\n" +
+            " * needs to reap its zombies.\n" +
+            " */\n" +
+            "\n" +
+            "#include <sys/wait.h>\n" +
+            "\n" +
+            "HexaVal hexa_proc_wait(HexaVal pid_v, HexaVal flags_v) {\n" +
+            "    HexaVal m = hexa_map_new();\n" +
+            "    int wpid = HX_IS_INT(pid_v) ? (int)HX_INT(pid_v) : -1;\n" +
+            "    int flags = HX_IS_INT(flags_v) ? (int)HX_INT(flags_v) : 0;\n" +
+            "    int status = 0;\n" +
+            "    int rc = hxlcl_waitpid((pid_t)wpid, &status, flags);\n" +
+            "    if (rc < 0) {\n" +
+            "        hexa_map_set(m, \"error\", hexa_str(strerror(errno)));\n" +
+            "        hexa_map_set(m, \"errno\", hexa_int((int64_t)errno));\n" +
+            "        hexa_map_set(m, \"pid\",   hexa_int((int64_t)-1));\n" +
+            "        return m;\n" +
+            "    }\n" +
+            "    /* rc == 0 with WNOHANG means no child has changed state. Surface\n" +
+            "     * as pid=0 + the caller's flags hint; no exit info. */\n" +
+            "    hexa_map_set(m, \"pid\",        hexa_int((int64_t)rc));\n" +
+            "    hexa_map_set(m, \"raw_status\", hexa_int((int64_t)status));\n" +
+            "    if (rc == 0) {\n" +
+            "        hexa_map_set(m, \"exited\",    hexa_bool(0));\n" +
+            "        hexa_map_set(m, \"signaled\",  hexa_bool(0));\n" +
+            "        hexa_map_set(m, \"exit_code\", hexa_int(0));\n" +
+            "        hexa_map_set(m, \"term_sig\",  hexa_int(0));\n" +
+            "        return m;\n" +
+            "    }\n" +
+            "    int exited   = WIFEXITED(status) ? 1 : 0;\n" +
+            "    int signaled = WIFSIGNALED(status) ? 1 : 0;\n" +
+            "    int code     = exited   ? WEXITSTATUS(status) : 0;\n" +
+            "    int tsig     = signaled ? WTERMSIG(status)    : 0;\n" +
+            "    hexa_map_set(m, \"exited\",    hexa_bool(exited));\n" +
+            "    hexa_map_set(m, \"signaled\",  hexa_bool(signaled));\n" +
+            "    hexa_map_set(m, \"exit_code\", hexa_int((int64_t)code));\n" +
+            "    hexa_map_set(m, \"term_sig\",  hexa_int((int64_t)tsig));\n" +
+            "    return m;\n" +
+            "}\n" +
+            "\n" +
+            "/* Constants caller can pass as `flags`. Codegen direct-emits these\n" +
+            " * by name via `proc_wait_flag_const(name)` so the values stay in\n" +
+            " * sync with <sys/wait.h>. */\n" +
+            "HexaVal hexa_proc_wait_flag_const(HexaVal name_v) {\n" +
+            "    if (!HX_IS_STR(name_v)) return hexa_int(0);\n" +
+            "    const char* n = HX_STR(name_v);\n" +
+            "    if (strcmp(n, \"WNOHANG\")   == 0) return hexa_int((int64_t)WNOHANG);\n" +
+            "    if (strcmp(n, \"WUNTRACED\") == 0) return hexa_int((int64_t)WUNTRACED);\n" +
+            "#ifdef WCONTINUED\n" +
+            "    if (strcmp(n, \"WCONTINUED\")== 0) return hexa_int((int64_t)WCONTINUED);\n" +
+            "#endif\n" +
+            "    return hexa_int(0);\n" +
+            "}\n"
+    return s
+}
+
+fn main() {
+    let argv = real_args()
+    let out_path = if argv.len() >= 1 { argv[0] } else { "wait.c" }
+    let c_text = emit_wait_c()
+    let cmd = "cat > \"" + out_path + "\" <<'WAIT_EMIT_EOF'\n" +
+              c_text + "WAIT_EMIT_EOF"
+    let _ = exec(cmd)
+    let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
+    if exists_check != "y" {
+        println("[wait_emit] FATAL: failed to write " + out_path)
+        exit(1)
+    }
+    println("[wait_emit] wrote " + out_path)
+    exit(0)
+}

@@ -15,7 +15,19 @@ flip 캠페인이 안전 quick-win 을 고갈시킨 뒤 남는 진짜 바닥의 
 
 - `.o` = **0** ✅
 - `.s` = **0** (F5 .s-leg COMPLETE · PR #1843/#1844/#1845/#1846 · 아래 F5)
-- `.c` = **90** (2026-05-28 B9.C-8 dispatch-deferred reflow 시도 · 3 self/cuda+forge
+- `.c` = **87** (2026-05-28 B9.C-10 — runtime.c `#include` 16 native fragment 의
+  `.c`-text 패턴 FOUNDATION LAND · `.c` 87 유지 · 삭제는 `.gitignore` sign-off 게이트.
+  16 `*_emit.hexa` (verbatim C-text SSOT) + 16 `*_byte_diff.hexa` (gate-1 source-SHA,
+  16/16 PASS) + `tool/regen_native_runtime_c_includes.hexa` orchestrator LAND.
+  build rewire = `tool/build_hexa_cli.hexa` step-0-pre regen — bootstrap 前 각
+  `self/native/<f>.c` 를 emitter 에서 SHA-동일 재생성 (외부 hexa-run 있을 때만 ·
+  없으면 in-tree `.c` 사용 → 무회귀). **CORE BUILD 검증 PASS**: ① clean full
+  hexa_cc rebuild (hexat+module_loader+driver) BUILD OK · ② 16 `.c` 전부 제거 후
+  post-deletion rebuild 도 regen 이 재생성 → BUILD OK · smoke (--version·parse·
+  round-trip) 3/3 PASS · regen `.c` ≡ 원본 16/16 byte-identical. `git rm` 만 남음
+  (`.gitignore` USER sign-gated 라 미수행 — sign-off 후 1-line follow-up 으로 87→71).
+  `.verdicts/runtime-floor-closure/B9C10-{01..16}-*.txt` verbatim. 이전: B9.C-8
+  dispatch-deferred reflow 시도 · 3 self/cuda+forge
   STILL-DEFERRED `.c` 카운트 미변경 90→90 — gate-1 sha 3/3 재검증 PASS 이나
   consuming dispatch script 가 `.sh` (project.tape Write/Edit 차단 AND ABSORBED
   cross-cycle 소유) 라 reflow 불가. `tool/regen_dispatch_c_artifacts.hexa` activation

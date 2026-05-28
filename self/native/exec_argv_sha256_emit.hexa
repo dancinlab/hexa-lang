@@ -1,0 +1,510 @@
+#!hexa strict
+// self/native/exec_argv_sha256_emit.hexa
+//   B9.C-10 (.c-text · #1848 pattern) — exec_argv_sha256.c source emitter.
+//
+// runtime.c #include "native/exec_argv_sha256.c" — RFC 061 amalgamation fragment
+// (NOT a standalone TU; references runtime.c-internal symbols). This emitter
+// is the SSOT; the build regenerates self/native/exec_argv_sha256.c from it before
+// runtime.c compiles, so the .c becomes a gitignored build artifact.
+//
+// Byte-identity: regenerated C is byte-for-byte the hand-written source, so
+// the runtime.c TU (and the linked hexa binary) is identical — PERF UNCHANGED.
+//
+// Invocation:  hexa-run self/native/exec_argv_sha256_emit.hexa <output-path>
+// Default output path (if argv missing): "exec_argv_sha256.c" in cwd.
+//
+// Phase: B9.C-10 batch (self/native runtime.c-included .c-text · F3).
+
+let MODULE_NAME = "exec_argv_sha256_emit"
+
+fn emit_exec_argv_sha256_c() -> str {
+    // Verbatim content of hand-written self/native/exec_argv_sha256.c
+    let s =
+            "/* self/native/exec_argv_sha256.c\n" +
+            " *\n" +
+            " * hxa-20260424-005 items #1 + #7 (2026-04-24).\n" +
+            " *\n" +
+            " * Two pure-libc/Zig-stdlib-equivalent builtins:\n" +
+            " *\n" +
+            " *   hexa_exec_argv(argv_arr)             : HexaVal array<str> → HexaVal str\n" +
+            " *   hexa_exec_argv_with_status(argv_arr) : HexaVal array<str> → HexaVal [str,int]\n" +
+            " *       Direct fork/execvp without `/bin/sh -c`. No shell metachar expansion.\n" +
+            " *       argv_arr[0] is the program (searched via PATH if not absolute).\n" +
+            " *       argv_arr[1..] are arguments passed verbatim to the child.\n" +
+            " *\n" +
+            " *   hexa_sha256(s)                       : HexaVal str → HexaVal str (lowercase hex)\n" +
+            " *   hexa_sha256_file(path)               : HexaVal str → HexaVal str (lowercase hex of file bytes)\n" +
+            " *       FIPS 180-4 reference implementation. Returns 64-char lowercase hex.\n" +
+            " *       sha256_file returns \"\" on I/O error.\n" +
+            " *\n" +
+            " * Included from self/runtime.c via #include \"native/exec_argv_sha256.c\"\n" +
+            " * analogous to net.c / signal_flock.c. Pure libc; portable macOS/Linux.\n" +
+            " *\n" +
+            " * Rationale: exec(cmd)/exec_with_status(cmd) both route through\n" +
+            " * `/bin/sh -c`. Any command containing shell metacharacters (quotes,\n" +
+            " * `$`, backticks, heredocs) must be manually escaped. Three nexus tools\n" +
+            " * (tool/proposal_archive.hexa, drill_cycle_trigger.hexa,\n" +
+            " * dormancy_wake_tick.hexa) work around this by writing temporary script\n" +
+            " * files. exec_argv bypasses the shell entirely, removing the escape\n" +
+            " * burden on the call site.\n" +
+            " *\n" +
+            " * sha256 previously required shelling out to `shasum -a 256` or\n" +
+            " * `openssl dgst -sha256`, doubling the latency of anything that hashes\n" +
+            " * (inventory entries, manifests, cross-repo floor checks).\n" +
+            " */\n" +
+            "\n" +
+            "#include <stdio.h>\n" +
+            "#include <stdlib.h>\n" +
+            "#include <string.h>\n" +
+            "#include <stdint.h>\n" +
+            "#include <unistd.h>\n" +
+            "#include <fcntl.h>\n" +
+            "#include <errno.h>\n" +
+            "#include <sys/types.h>\n" +
+            "#include <sys/wait.h>\n" +
+            "\n" +
+            "/* ══════════════════════════════════════════════════════════════════\n" +
+            " * exec_argv — direct fork/execvp, no shell\n" +
+            " * ══════════════════════════════════════════════════════════════════ */\n" +
+            "\n" +
+            "/* Internal: materialize argv_val into a heap-allocated NULL-terminated\n" +
+            " * char** suitable for execvp. Returns NULL on allocation failure or if\n" +
+            " * the array is empty. Caller must free both the array and its cells. */\n" +
+            "static char** _hxa_materialize_argv(HexaVal argv_val, int* out_argc) {\n" +
+            "    *out_argc = 0;\n" +
+            "    if (!HX_IS_ARRAY(argv_val)) return NULL;\n" +
+            "    int64_t n = (int64_t)HX_ARR_LEN(argv_val);\n" +
+            "    if (n <= 0) return NULL;\n" +
+            "    char** argv = (char**)calloc((size_t)n + 1, sizeof(char*));\n" +
+            "    if (!argv) return NULL;\n" +
+            "    for (int64_t i = 0; i < n; i++) {\n" +
+            "        HexaVal el = hexa_array_get(argv_val, i);\n" +
+            "        const char* s = HX_IS_STR(el) ? HX_STR(el) : \"\";\n" +
+            "        if (!s) s = \"\";\n" +
+            "        argv[i] = strdup(s);\n" +
+            "        if (!argv[i]) {\n" +
+            "            for (int64_t j = 0; j < i; j++) free(argv[j]);\n" +
+            "            free(argv);\n" +
+            "            return NULL;\n" +
+            "        }\n" +
+            "    }\n" +
+            "    argv[n] = NULL;\n" +
+            "    *out_argc = (int)n;\n" +
+            "    return argv;\n" +
+            "}\n" +
+            "\n" +
+            "static void _hxa_free_argv(char** argv, int argc) {\n" +
+            "    if (!argv) return;\n" +
+            "    for (int i = 0; i < argc; i++) free(argv[i]);\n" +
+            "    free(argv);\n" +
+            "}\n" +
+            "\n" +
+            "/* Shared core: fork, execvp, capture stdout, optionally return exit code. */\n" +
+            "static HexaVal _hxa_exec_argv_core(HexaVal argv_val, int want_status) {\n" +
+            "    int argc = 0;\n" +
+            "    char** argv = _hxa_materialize_argv(argv_val, &argc);\n" +
+            "    if (!argv || argc == 0) {\n" +
+            "        if (want_status) {\n" +
+            "            HexaVal arr = hexa_array_new();\n" +
+            "            arr = hexa_array_push(arr, hexa_str(\"\"));\n" +
+            "            arr = hexa_array_push(arr, hexa_int(127));\n" +
+            "            return arr;\n" +
+            "        }\n" +
+            "        return hexa_str(\"\");\n" +
+            "    }\n" +
+            "\n" +
+            "    int pipefd[2];\n" +
+            "    if (hxlcl_pipe(pipefd) < 0) {\n" +
+            "        _hxa_free_argv(argv, argc);\n" +
+            "        if (want_status) {\n" +
+            "            HexaVal arr = hexa_array_new();\n" +
+            "            arr = hexa_array_push(arr, hexa_str(\"\"));\n" +
+            "            arr = hexa_array_push(arr, hexa_int(127));\n" +
+            "            return arr;\n" +
+            "        }\n" +
+            "        return hexa_str(\"\");\n" +
+            "    }\n" +
+            "\n" +
+            "    // 2026-05-06 — POSIX fork buffer flush (parent stdio inherited by child)\n" +
+            "    fflush(NULL);\n" +
+            "    pid_t pid = hxlcl_fork();\n" +
+            "    if (pid < 0) {\n" +
+            "        hxlcl_close(pipefd[0]); hxlcl_close(pipefd[1]);\n" +
+            "        _hxa_free_argv(argv, argc);\n" +
+            "        if (want_status) {\n" +
+            "            HexaVal arr = hexa_array_new();\n" +
+            "            arr = hexa_array_push(arr, hexa_str(\"\"));\n" +
+            "            arr = hexa_array_push(arr, hexa_int(127));\n" +
+            "            return arr;\n" +
+            "        }\n" +
+            "        return hexa_str(\"\");\n" +
+            "    }\n" +
+            "    if (pid == 0) {\n" +
+            "        /* child: stdout+stderr → pipe write end. Matches the\n" +
+            "         * `exec(cmd)` behavior (popen merges stderr by default when\n" +
+            "         * the caller appends `2>&1`; we default-merge here so the\n" +
+            "         * migration from exec→exec_argv is stdout-compatible). */\n" +
+            "        hxlcl_dup2(pipefd[1], 1);\n" +
+            "        hxlcl_dup2(pipefd[1], 2);\n" +
+            "        hxlcl_close(pipefd[0]);\n" +
+            "        hxlcl_close(pipefd[1]);\n" +
+            "        hxlcl_execvp(argv[0], argv);\n" +
+            "        /* execvp failed */\n" +
+            "        fprintf(stderr, \"exec_argv: execvp %s: %s\\n\", argv[0], strerror(errno));\n" +
+            "        _exit(127);\n" +
+            "    }\n" +
+            "    /* parent */\n" +
+            "    hxlcl_close(pipefd[1]);\n" +
+            "    _hxa_free_argv(argv, argc);\n" +
+            "\n" +
+            "    size_t cap = 4096, total = 0;\n" +
+            "    char* buf = (char*)malloc(cap);\n" +
+            "    if (buf) buf[0] = '\\0';\n" +
+            "    char tmp[4096];\n" +
+            "    for (;;) {\n" +
+            "        ssize_t n = hxlcl_read(pipefd[0], tmp, sizeof(tmp));\n" +
+            "        if (n < 0) { if (errno == EINTR) continue; break; }\n" +
+            "        if (n == 0) break;\n" +
+            "        if (buf) {\n" +
+            "            while (total + (size_t)n + 1 > cap) {\n" +
+            "                cap *= 2;\n" +
+            "                char* nb = (char*)realloc(buf, cap);\n" +
+            "                if (!nb) { free(buf); buf = NULL; break; }\n" +
+            "                buf = nb;\n" +
+            "            }\n" +
+            "            if (buf) { memcpy(buf + total, tmp, (size_t)n); total += (size_t)n; buf[total] = '\\0'; }\n" +
+            "        }\n" +
+            "    }\n" +
+            "    hxlcl_close(pipefd[0]);\n" +
+            "\n" +
+            "    int status = 0;\n" +
+            "    (void)hxlcl_waitpid(pid, &status, 0);\n" +
+            "    int exit_code;\n" +
+            "    if (WIFEXITED(status))        exit_code = WEXITSTATUS(status);\n" +
+            "    else if (WIFSIGNALED(status)) exit_code = 128 + WTERMSIG(status);\n" +
+            "    else                          exit_code = -1;\n" +
+            "\n" +
+            "    if (want_status) {\n" +
+            "        HexaVal arr = hexa_array_new();\n" +
+            "        arr = hexa_array_push(arr, buf ? hexa_str_own(buf) : hexa_str(\"\"));\n" +
+            "        arr = hexa_array_push(arr, hexa_int(exit_code));\n" +
+            "        return arr;\n" +
+            "    }\n" +
+            "    return buf ? hexa_str_own(buf) : hexa_str(\"\");\n" +
+            "}\n" +
+            "\n" +
+            "HexaVal hexa_exec_argv(HexaVal argv_val) {\n" +
+            "    return _hxa_exec_argv_core(argv_val, 0);\n" +
+            "}\n" +
+            "\n" +
+            "HexaVal hexa_exec_argv_with_status(HexaVal argv_val) {\n" +
+            "    return _hxa_exec_argv_core(argv_val, 1);\n" +
+            "}\n" +
+            "\n" +
+            "/* ══════════════════════════════════════════════════════════════════\n" +
+            " * sha256 — FIPS 180-4 reference implementation\n" +
+            " *\n" +
+            " * Pure-C; independent of OpenSSL / CommonCrypto / libsodium so the\n" +
+            " * hexa_interp binary stays dependency-free across macOS/Linux.\n" +
+            " * ══════════════════════════════════════════════════════════════════ */\n" +
+            "\n" +
+            "typedef struct {\n" +
+            "    uint32_t h[8];\n" +
+            "    uint64_t bitlen;\n" +
+            "    uint8_t  buf[64];\n" +
+            "    uint32_t buflen;\n" +
+            "} _hxa_sha256_ctx;\n" +
+            "\n" +
+            "static const uint32_t _hxa_sha256_K[64] = {\n" +
+            "    0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,\n" +
+            "    0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,\n" +
+            "    0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,\n" +
+            "    0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,\n" +
+            "    0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,\n" +
+            "    0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,\n" +
+            "    0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,\n" +
+            "    0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2\n" +
+            "};\n" +
+            "\n" +
+            "#define _HXA_ROTR(x,n) (((x) >> (n)) | ((x) << (32 - (n))))\n" +
+            "\n" +
+            "static void _hxa_sha256_init(_hxa_sha256_ctx* c) {\n" +
+            "    c->h[0]=0x6a09e667; c->h[1]=0xbb67ae85; c->h[2]=0x3c6ef372; c->h[3]=0xa54ff53a;\n" +
+            "    c->h[4]=0x510e527f; c->h[5]=0x9b05688c; c->h[6]=0x1f83d9ab; c->h[7]=0x5be0cd19;\n" +
+            "    c->bitlen = 0;\n" +
+            "    c->buflen = 0;\n" +
+            "}\n" +
+            "\n" +
+            "static void _hxa_sha256_transform(_hxa_sha256_ctx* c, const uint8_t* blk) {\n" +
+            "    uint32_t w[64];\n" +
+            "    for (int i = 0; i < 16; i++) {\n" +
+            "        w[i] = ((uint32_t)blk[i*4] << 24) | ((uint32_t)blk[i*4+1] << 16)\n" +
+            "             | ((uint32_t)blk[i*4+2] << 8) | (uint32_t)blk[i*4+3];\n" +
+            "    }\n" +
+            "    for (int i = 16; i < 64; i++) {\n" +
+            "        uint32_t s0 = _HXA_ROTR(w[i-15],7) ^ _HXA_ROTR(w[i-15],18) ^ (w[i-15] >> 3);\n" +
+            "        uint32_t s1 = _HXA_ROTR(w[i-2],17) ^ _HXA_ROTR(w[i-2],19) ^ (w[i-2] >> 10);\n" +
+            "        w[i] = w[i-16] + s0 + w[i-7] + s1;\n" +
+            "    }\n" +
+            "    uint32_t a=c->h[0], b=c->h[1], d=c->h[2], e=c->h[3];\n" +
+            "    uint32_t f=c->h[4], g=c->h[5], hh=c->h[6], ii=c->h[7];\n" +
+            "    for (int i = 0; i < 64; i++) {\n" +
+            "        uint32_t S1 = _HXA_ROTR(f,6) ^ _HXA_ROTR(f,11) ^ _HXA_ROTR(f,25);\n" +
+            "        uint32_t ch = (f & g) ^ (~f & hh);\n" +
+            "        uint32_t t1 = ii + S1 + ch + _hxa_sha256_K[i] + w[i];\n" +
+            "        uint32_t S0 = _HXA_ROTR(a,2) ^ _HXA_ROTR(a,13) ^ _HXA_ROTR(a,22);\n" +
+            "        uint32_t mj = (a & b) ^ (a & d) ^ (b & d);\n" +
+            "        uint32_t t2 = S0 + mj;\n" +
+            "        ii = hh; hh = g; g = f; f = e + t1;\n" +
+            "        e = d; d = b; b = a; a = t1 + t2;\n" +
+            "    }\n" +
+            "    c->h[0]+=a; c->h[1]+=b; c->h[2]+=d; c->h[3]+=e;\n" +
+            "    c->h[4]+=f; c->h[5]+=g; c->h[6]+=hh; c->h[7]+=ii;\n" +
+            "}\n" +
+            "\n" +
+            "static void _hxa_sha256_update(_hxa_sha256_ctx* c, const uint8_t* data, size_t len) {\n" +
+            "    c->bitlen += (uint64_t)len * 8;\n" +
+            "    while (len > 0) {\n" +
+            "        size_t want = 64 - c->buflen;\n" +
+            "        size_t take = len < want ? len : want;\n" +
+            "        memcpy(c->buf + c->buflen, data, take);\n" +
+            "        c->buflen += (uint32_t)take;\n" +
+            "        data += take;\n" +
+            "        len  -= take;\n" +
+            "        if (c->buflen == 64) {\n" +
+            "            _hxa_sha256_transform(c, c->buf);\n" +
+            "            c->buflen = 0;\n" +
+            "        }\n" +
+            "    }\n" +
+            "}\n" +
+            "\n" +
+            "static void _hxa_sha256_final(_hxa_sha256_ctx* c, uint8_t out[32]) {\n" +
+            "    uint64_t bitlen = c->bitlen;\n" +
+            "    c->buf[c->buflen++] = 0x80;\n" +
+            "    if (c->buflen > 56) {\n" +
+            "        while (c->buflen < 64) c->buf[c->buflen++] = 0;\n" +
+            "        _hxa_sha256_transform(c, c->buf);\n" +
+            "        c->buflen = 0;\n" +
+            "    }\n" +
+            "    while (c->buflen < 56) c->buf[c->buflen++] = 0;\n" +
+            "    for (int i = 7; i >= 0; i--) c->buf[c->buflen++] = (uint8_t)((bitlen >> (i*8)) & 0xff);\n" +
+            "    _hxa_sha256_transform(c, c->buf);\n" +
+            "    for (int i = 0; i < 8; i++) {\n" +
+            "        out[i*4]   = (uint8_t)((c->h[i] >> 24) & 0xff);\n" +
+            "        out[i*4+1] = (uint8_t)((c->h[i] >> 16) & 0xff);\n" +
+            "        out[i*4+2] = (uint8_t)((c->h[i] >>  8) & 0xff);\n" +
+            "        out[i*4+3] = (uint8_t)( c->h[i]        & 0xff);\n" +
+            "    }\n" +
+            "}\n" +
+            "\n" +
+            "static char* _hxa_hex_encode(const uint8_t* bytes, size_t n) {\n" +
+            "    static const char* hex = \"0123456789abcdef\";\n" +
+            "    char* out = (char*)malloc(n * 2 + 1);\n" +
+            "    if (!out) return NULL;\n" +
+            "    for (size_t i = 0; i < n; i++) {\n" +
+            "        out[i*2]   = hex[(bytes[i] >> 4) & 0xf];\n" +
+            "        out[i*2+1] = hex[ bytes[i]       & 0xf];\n" +
+            "    }\n" +
+            "    out[n*2] = '\\0';\n" +
+            "    return out;\n" +
+            "}\n" +
+            "\n" +
+            "HexaVal hexa_sha256(HexaVal s_val) {\n" +
+            "    if (!HX_IS_STR(s_val)) return hexa_str(\"\");\n" +
+            "    const char* s = HX_STR(s_val) ? HX_STR(s_val) : \"\";\n" +
+            "    _hxa_sha256_ctx ctx;\n" +
+            "    _hxa_sha256_init(&ctx);\n" +
+            "    _hxa_sha256_update(&ctx, (const uint8_t*)s, strlen(s));\n" +
+            "    uint8_t digest[32];\n" +
+            "    _hxa_sha256_final(&ctx, digest);\n" +
+            "    char* hex = _hxa_hex_encode(digest, 32);\n" +
+            "    if (!hex) return hexa_str(\"\");\n" +
+            "    return hexa_str_own(hex);\n" +
+            "}\n" +
+            "\n" +
+            "HexaVal hexa_sha256_file(HexaVal path_val) {\n" +
+            "    if (!HX_IS_STR(path_val)) return hexa_str(\"\");\n" +
+            "    const char* path = HX_STR(path_val);\n" +
+            "    if (!path) return hexa_str(\"\");\n" +
+            "    int fd = hxlcl_open_sys(path, O_RDONLY);\n" +
+            "    if (fd < 0) return hexa_str(\"\");\n" +
+            "    _hxa_sha256_ctx ctx;\n" +
+            "    _hxa_sha256_init(&ctx);\n" +
+            "    uint8_t buf[8192];\n" +
+            "    for (;;) {\n" +
+            "        ssize_t n = hxlcl_read(fd, buf, sizeof(buf));\n" +
+            "        if (n < 0) { if (errno == EINTR) continue; hxlcl_close(fd); return hexa_str(\"\"); }\n" +
+            "        if (n == 0) break;\n" +
+            "        _hxa_sha256_update(&ctx, buf, (size_t)n);\n" +
+            "    }\n" +
+            "    hxlcl_close(fd);\n" +
+            "    uint8_t digest[32];\n" +
+            "    _hxa_sha256_final(&ctx, digest);\n" +
+            "    char* hex = _hxa_hex_encode(digest, 32);\n" +
+            "    if (!hex) return hexa_str(\"\");\n" +
+            "    return hexa_str_own(hex);\n" +
+            "}\n" +
+            "\n" +
+            "/* ══════════════════════════════════════════════════════════════════\n" +
+            " * sha1 — FIPS 180-4 reference implementation\n" +
+            " *\n" +
+            " * Added for the RFC 6455 WebSocket Sec-WebSocket-Key handshake\n" +
+            " * (Sec-WebSocket-Accept == base64(sha1(key + magic-GUID))). SHA-1 is\n" +
+            " * cryptographically broken for collision resistance but RFC 6455 uses\n" +
+            " * it purely as a fixed challenge-response transform, not for security —\n" +
+            " * the spec mandates this exact construction. Pure-C, dependency-free,\n" +
+            " * mirrors the sha256 reference above.\n" +
+            " *\n" +
+            " *   hexa_sha1(s)        : HexaVal str → HexaVal str (40-char lowercase hex)\n" +
+            " *   hexa_sha1_bytes(s)  : HexaVal str → HexaVal str (raw 20-byte digest,\n" +
+            " *                         binary-safe via hexa_str_own_with_len so the\n" +
+            " *                         result can be fed straight into base64_encode)\n" +
+            " * ══════════════════════════════════════════════════════════════════ */\n" +
+            "\n" +
+            "/* Binary-safe string constructor (defined in runtime_core.c); forward\n" +
+            " * decl so this translation unit can return raw digest bytes that carry\n" +
+            " * an explicit length (NUL-safe) for base64_encode to consume. */\n" +
+            "HexaVal hexa_str_own_with_len(char* s, size_t len);\n" +
+            "\n" +
+            "typedef struct {\n" +
+            "    uint32_t h[5];\n" +
+            "    uint64_t bitlen;\n" +
+            "    uint8_t  buf[64];\n" +
+            "    uint32_t buflen;\n" +
+            "} _hxa_sha1_ctx;\n" +
+            "\n" +
+            "#define _HXA_ROTL(x,n) (((x) << (n)) | ((x) >> (32 - (n))))\n" +
+            "\n" +
+            "static void _hxa_sha1_init(_hxa_sha1_ctx* c) {\n" +
+            "    c->h[0]=0x67452301; c->h[1]=0xEFCDAB89; c->h[2]=0x98BADCFE;\n" +
+            "    c->h[3]=0x10325476; c->h[4]=0xC3D2E1F0;\n" +
+            "    c->bitlen = 0;\n" +
+            "    c->buflen = 0;\n" +
+            "}\n" +
+            "\n" +
+            "static void _hxa_sha1_transform(_hxa_sha1_ctx* c, const uint8_t* blk) {\n" +
+            "    uint32_t w[80];\n" +
+            "    for (int i = 0; i < 16; i++) {\n" +
+            "        w[i] = ((uint32_t)blk[i*4] << 24) | ((uint32_t)blk[i*4+1] << 16)\n" +
+            "             | ((uint32_t)blk[i*4+2] << 8) | (uint32_t)blk[i*4+3];\n" +
+            "    }\n" +
+            "    for (int i = 16; i < 80; i++) {\n" +
+            "        w[i] = _HXA_ROTL(w[i-3] ^ w[i-8] ^ w[i-14] ^ w[i-16], 1);\n" +
+            "    }\n" +
+            "    uint32_t a=c->h[0], b=c->h[1], d=c->h[2], e=c->h[3], f=c->h[4];\n" +
+            "    for (int i = 0; i < 80; i++) {\n" +
+            "        uint32_t k, t;\n" +
+            "        if (i < 20)      { t = (b & d) | (~b & e);            k = 0x5A827999; }\n" +
+            "        else if (i < 40) { t = b ^ d ^ e;                     k = 0x6ED9EBA1; }\n" +
+            "        else if (i < 60) { t = (b & d) | (b & e) | (d & e);   k = 0x8F1BBCDC; }\n" +
+            "        else             { t = b ^ d ^ e;                     k = 0xCA62C1D6; }\n" +
+            "        uint32_t tmp = _HXA_ROTL(a, 5) + t + f + k + w[i];\n" +
+            "        f = e; e = d; d = _HXA_ROTL(b, 30); b = a; a = tmp;\n" +
+            "    }\n" +
+            "    c->h[0]+=a; c->h[1]+=b; c->h[2]+=d; c->h[3]+=e; c->h[4]+=f;\n" +
+            "}\n" +
+            "\n" +
+            "static void _hxa_sha1_update(_hxa_sha1_ctx* c, const uint8_t* data, size_t len) {\n" +
+            "    c->bitlen += (uint64_t)len * 8;\n" +
+            "    while (len > 0) {\n" +
+            "        size_t want = 64 - c->buflen;\n" +
+            "        size_t take = len < want ? len : want;\n" +
+            "        memcpy(c->buf + c->buflen, data, take);\n" +
+            "        c->buflen += (uint32_t)take;\n" +
+            "        data += take;\n" +
+            "        len  -= take;\n" +
+            "        if (c->buflen == 64) {\n" +
+            "            _hxa_sha1_transform(c, c->buf);\n" +
+            "            c->buflen = 0;\n" +
+            "        }\n" +
+            "    }\n" +
+            "}\n" +
+            "\n" +
+            "static void _hxa_sha1_final(_hxa_sha1_ctx* c, uint8_t out[20]) {\n" +
+            "    uint64_t bitlen = c->bitlen;\n" +
+            "    c->buf[c->buflen++] = 0x80;\n" +
+            "    if (c->buflen > 56) {\n" +
+            "        while (c->buflen < 64) c->buf[c->buflen++] = 0;\n" +
+            "        _hxa_sha1_transform(c, c->buf);\n" +
+            "        c->buflen = 0;\n" +
+            "    }\n" +
+            "    while (c->buflen < 56) c->buf[c->buflen++] = 0;\n" +
+            "    for (int i = 7; i >= 0; i--) c->buf[c->buflen++] = (uint8_t)((bitlen >> (i*8)) & 0xff);\n" +
+            "    _hxa_sha1_transform(c, c->buf);\n" +
+            "    for (int i = 0; i < 5; i++) {\n" +
+            "        out[i*4]   = (uint8_t)((c->h[i] >> 24) & 0xff);\n" +
+            "        out[i*4+1] = (uint8_t)((c->h[i] >> 16) & 0xff);\n" +
+            "        out[i*4+2] = (uint8_t)((c->h[i] >>  8) & 0xff);\n" +
+            "        out[i*4+3] = (uint8_t)( c->h[i]        & 0xff);\n" +
+            "    }\n" +
+            "}\n" +
+            "\n" +
+            "/* sha1(s) — accepts the string's full byte length (HX_STRLEN), so a\n" +
+            " * binary-safe input (e.g. a digest) hashes correctly even with NULs. */\n" +
+            "HexaVal hexa_sha1(HexaVal s_val) {\n" +
+            "    if (!HX_IS_STR(s_val)) return hexa_str(\"\");\n" +
+            "    const char* s = HX_STR(s_val) ? HX_STR(s_val) : \"\";\n" +
+            "    size_t n = HX_STR(s_val) ? (size_t)HX_STRLEN(s_val) : 0;\n" +
+            "    _hxa_sha1_ctx ctx;\n" +
+            "    _hxa_sha1_init(&ctx);\n" +
+            "    _hxa_sha1_update(&ctx, (const uint8_t*)s, n);\n" +
+            "    uint8_t digest[20];\n" +
+            "    _hxa_sha1_final(&ctx, digest);\n" +
+            "    char* hex = _hxa_hex_encode(digest, 20);\n" +
+            "    if (!hex) return hexa_str(\"\");\n" +
+            "    return hexa_str_own(hex);\n" +
+            "}\n" +
+            "\n" +
+            "/* sha1_bytes(s) — raw 20-byte digest as a binary-safe hexa string.\n" +
+            " * Intended for base64_encode(sha1_bytes(key + magic)) in the RFC 6455\n" +
+            " * Sec-WebSocket-Accept computation. */\n" +
+            "HexaVal hexa_sha1_bytes(HexaVal s_val) {\n" +
+            "    if (!HX_IS_STR(s_val)) return hexa_str(\"\");\n" +
+            "    const char* s = HX_STR(s_val) ? HX_STR(s_val) : \"\";\n" +
+            "    size_t n = HX_STR(s_val) ? (size_t)HX_STRLEN(s_val) : 0;\n" +
+            "    _hxa_sha1_ctx ctx;\n" +
+            "    _hxa_sha1_init(&ctx);\n" +
+            "    _hxa_sha1_update(&ctx, (const uint8_t*)s, n);\n" +
+            "    uint8_t digest[20];\n" +
+            "    _hxa_sha1_final(&ctx, digest);\n" +
+            "    return hexa_str_own_with_len((char*)digest, 20);\n" +
+            "}\n" +
+            "\n" +
+            "/* ── TAG_FN shim globals (bootstrap bridge) ──────────────────────\n" +
+            " * Same pattern as net.c / signal_flock.c. Interpreter path resolves\n" +
+            " * `exec_argv(...)` / `sha256(...)` through these shims until the\n" +
+            " * transpiler learns direct-lowering. After direct-lowering the\n" +
+            " * globals simply remain unused. */\n" +
+            "HexaVal hx_exec_argv;\n" +
+            "HexaVal hx_exec_argv_with_status;\n" +
+            "HexaVal hx_sha256;\n" +
+            "HexaVal hx_sha256_file;\n" +
+            "HexaVal hx_sha1;\n" +
+            "HexaVal hx_sha1_bytes;\n" +
+            "\n" +
+            "static void _hexa_init_exec_sha_fn_shims(void) {\n" +
+            "    hx_exec_argv             = hexa_fn_new((void*)hexa_exec_argv,             1);\n" +
+            "    hx_exec_argv_with_status = hexa_fn_new((void*)hexa_exec_argv_with_status, 1);\n" +
+            "    hx_sha256                = hexa_fn_new((void*)hexa_sha256,                1);\n" +
+            "    hx_sha256_file           = hexa_fn_new((void*)hexa_sha256_file,           1);\n" +
+            "    hx_sha1                  = hexa_fn_new((void*)hexa_sha1,                  1);\n" +
+            "    hx_sha1_bytes            = hexa_fn_new((void*)hexa_sha1_bytes,            1);\n" +
+            "}\n"
+    return s
+}
+
+fn main() {
+    let argv = real_args()
+    let out_path = if argv.len() >= 1 { argv[0] } else { "exec_argv_sha256.c" }
+    let c_text = emit_exec_argv_sha256_c()
+    let cmd = "cat > \"" + out_path + "\" <<'EXEC_ARGV_SHA256_EMIT_EOF'\n" +
+              c_text + "EXEC_ARGV_SHA256_EMIT_EOF"
+    let _ = exec(cmd)
+    let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
+    if exists_check != "y" {
+        println("[exec_argv_sha256_emit] FATAL: failed to write " + out_path)
+        exit(1)
+    }
+    println("[exec_argv_sha256_emit] wrote " + out_path)
+    exit(0)
+}

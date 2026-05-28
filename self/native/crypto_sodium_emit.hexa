@@ -1,0 +1,376 @@
+#!hexa strict
+// self/native/crypto_sodium_emit.hexa
+//   B9.C-10 (.c-text · #1848 pattern) — crypto_sodium.c source emitter.
+//
+// runtime.c #include "native/crypto_sodium.c" — RFC 061 amalgamation fragment
+// (NOT a standalone TU; references runtime.c-internal symbols). This emitter
+// is the SSOT; the build regenerates self/native/crypto_sodium.c from it before
+// runtime.c compiles, so the .c becomes a gitignored build artifact.
+//
+// Byte-identity: regenerated C is byte-for-byte the hand-written source, so
+// the runtime.c TU (and the linked hexa binary) is identical — PERF UNCHANGED.
+//
+// Invocation:  hexa-run self/native/crypto_sodium_emit.hexa <output-path>
+// Default output path (if argv missing): "crypto_sodium.c" in cwd.
+//
+// Phase: B9.C-10 batch (self/native runtime.c-included .c-text · F3).
+
+let MODULE_NAME = "crypto_sodium_emit"
+
+fn emit_crypto_sodium_c() -> str {
+    // Verbatim content of hand-written self/native/crypto_sodium.c
+    let s =
+            "/* self/native/crypto_sodium.c -- libsodium bindings for SSH crypto.\n" +
+            " *\n" +
+            " * Included from self/runtime.c via `#include \"native/crypto_sodium.c\"`.\n" +
+            " * NOT a standalone TU.\n" +
+            " *\n" +
+            " * Symbols exported (codegen direct-emit):\n" +
+            " *   hexa_sha512(data:[int])                        -> [int] 64-byte digest\n" +
+            " *   hexa_ed25519_keypair()                          -> map { pub: [int], priv: [int] }\n" +
+            " *   hexa_ed25519_sign(priv:[int], msg:[int])        -> [int] 64-byte signature\n" +
+            " *   hexa_ed25519_verify(pub:[int], msg:[int], sig:[int]) -> bool\n" +
+            " *   hexa_x25519_keypair()                            -> map { pub: [int], priv: [int] }\n" +
+            " *   hexa_x25519_scalarmult(scalar:[int], point:[int]) -> [int] 32-byte shared\n" +
+            " *   hexa_chacha20_poly1305_encrypt(key, nonce, aad, plaintext) -> [int] ciphertext||tag\n" +
+            " *   hexa_chacha20_poly1305_decrypt(key, nonce, aad, ciphertext_tag) -> [int] | { error }\n" +
+            " *\n" +
+            " * Linking: -lsodium. cmd_build adds it automatically when libsodium\n" +
+            " * is detected via pkg-config; on hosts without libsodium, the\n" +
+            " * builtins return an empty array / error map (caller should not\n" +
+            " * have called them — guarded by has_libsodium()).\n" +
+            " *\n" +
+            " * RFC: incoming/patches/stdlib-ssh-client.md prereq (crypto suite).\n" +
+            " */\n" +
+            "\n" +
+            "#ifdef HEXA_HAS_LIBSODIUM\n" +
+            "#include <sodium.h>\n" +
+            "#endif\n" +
+            "\n" +
+            "static int _libsodium_inited = 0;\n" +
+            "static int _libsodium_ok = 0;\n" +
+            "\n" +
+            "static int _ensure_sodium(void) {\n" +
+            "#ifdef HEXA_HAS_LIBSODIUM\n" +
+            "    if (_libsodium_inited) return _libsodium_ok;\n" +
+            "    _libsodium_inited = 1;\n" +
+            "    _libsodium_ok = (sodium_init() >= 0) ? 1 : 0;\n" +
+            "    return _libsodium_ok;\n" +
+            "#else\n" +
+            "    return 0;\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
+            "HexaVal hexa_libsodium_available(void) {\n" +
+            "    return hexa_bool(_ensure_sodium());\n" +
+            "}\n" +
+            "\n" +
+            "/* Helper: copy a hexa [int] array of byte values into a fresh\n" +
+            " * unsigned char* buffer. Caller frees. Returns NULL + sets *err on\n" +
+            " * non-array input. */\n" +
+            "static unsigned char* _arr_to_bytes(HexaVal arr, size_t* out_len) {\n" +
+            "    *out_len = 0;\n" +
+            "    if (!HX_IS_ARRAY(arr)) return NULL;\n" +
+            "    int n = HX_ARR_LEN(arr);\n" +
+            "    if (n < 0) return NULL;\n" +
+            "    unsigned char* buf = (unsigned char*)malloc((size_t)n + 1);\n" +
+            "    if (!buf) return NULL;\n" +
+            "    for (int i = 0; i < n; i++) {\n" +
+            "        HexaVal v = HX_ARR_ITEMS(arr)[i];\n" +
+            "        long b = HX_IS_INT(v) ? (long)HX_INT(v) : 0;\n" +
+            "        buf[i] = (unsigned char)(b & 0xff);\n" +
+            "    }\n" +
+            "    *out_len = (size_t)n;\n" +
+            "    return buf;\n" +
+            "}\n" +
+            "\n" +
+            "/* Convert C bytes -> hexa [int] of length n. */\n" +
+            "static HexaVal _bytes_to_arr(const unsigned char* buf, size_t n) {\n" +
+            "    HexaVal out = hexa_array_new();\n" +
+            "    for (size_t i = 0; i < n; i++) {\n" +
+            "        out = hexa_array_push(out, hexa_int((int64_t)buf[i]));\n" +
+            "    }\n" +
+            "    return out;\n" +
+            "}\n" +
+            "\n" +
+            "static HexaVal _crypto_error(const char* msg) {\n" +
+            "    HexaVal m = hexa_map_new();\n" +
+            "    hexa_map_set(m, \"error\", hexa_str(msg));\n" +
+            "    return m;\n" +
+            "}\n" +
+            "\n" +
+            "/* SHA-512 */\n" +
+            "HexaVal hexa_sha512(HexaVal data_val) {\n" +
+            "#ifdef HEXA_HAS_LIBSODIUM\n" +
+            "    if (!_ensure_sodium()) return _crypto_error(\"libsodium init failed\");\n" +
+            "    size_t n = 0;\n" +
+            "    unsigned char* in = _arr_to_bytes(data_val, &n);\n" +
+            "    if (!in) return _crypto_error(\"sha512: bad input\");\n" +
+            "    unsigned char out[crypto_hash_sha512_BYTES];\n" +
+            "    crypto_hash_sha512(out, in, n);\n" +
+            "    free(in);\n" +
+            "    return _bytes_to_arr(out, crypto_hash_sha512_BYTES);\n" +
+            "#else\n" +
+            "    (void)data_val;\n" +
+            "    return _crypto_error(\"libsodium not linked into this build\");\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
+            "/* SHA-256 over byte array (needed for SSH curve25519-sha256 KEX\n" +
+            " * exchange-hash). The existing `hexa_sha256` in exec_argv_sha256.c\n" +
+            " * takes a string and returns a hex-string — kept for that surface;\n" +
+            " * this one is the raw bytes→bytes flavour. */\n" +
+            "HexaVal hexa_sha256_bytes(HexaVal data_val) {\n" +
+            "#ifdef HEXA_HAS_LIBSODIUM\n" +
+            "    if (!_ensure_sodium()) return _crypto_error(\"libsodium init failed\");\n" +
+            "    size_t n = 0;\n" +
+            "    unsigned char* in = _arr_to_bytes(data_val, &n);\n" +
+            "    if (!in) return _crypto_error(\"sha256_bytes: bad input\");\n" +
+            "    unsigned char out[crypto_hash_sha256_BYTES];\n" +
+            "    crypto_hash_sha256(out, in, n);\n" +
+            "    free(in);\n" +
+            "    return _bytes_to_arr(out, crypto_hash_sha256_BYTES);\n" +
+            "#else\n" +
+            "    (void)data_val;\n" +
+            "    return _crypto_error(\"libsodium not linked into this build\");\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
+            "/* ed25519 key-pair generation */\n" +
+            "HexaVal hexa_ed25519_keypair(void) {\n" +
+            "#ifdef HEXA_HAS_LIBSODIUM\n" +
+            "    if (!_ensure_sodium()) return _crypto_error(\"libsodium init failed\");\n" +
+            "    unsigned char pk[crypto_sign_ed25519_PUBLICKEYBYTES];\n" +
+            "    unsigned char sk[crypto_sign_ed25519_SECRETKEYBYTES];\n" +
+            "    crypto_sign_ed25519_keypair(pk, sk);\n" +
+            "    HexaVal m = hexa_map_new();\n" +
+            "    hexa_map_set(m, \"pub\",  _bytes_to_arr(pk, sizeof(pk)));\n" +
+            "    hexa_map_set(m, \"priv\", _bytes_to_arr(sk, sizeof(sk)));\n" +
+            "    return m;\n" +
+            "#else\n" +
+            "    return _crypto_error(\"libsodium not linked\");\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
+            "/* ed25519 sign: priv is the 64-byte secret key (sodium layout), msg is\n" +
+            " * the message bytes. Returns 64-byte signature. */\n" +
+            "HexaVal hexa_ed25519_sign(HexaVal priv_val, HexaVal msg_val) {\n" +
+            "#ifdef HEXA_HAS_LIBSODIUM\n" +
+            "    if (!_ensure_sodium()) return _crypto_error(\"libsodium init failed\");\n" +
+            "    size_t priv_n = 0;\n" +
+            "    size_t msg_n = 0;\n" +
+            "    unsigned char* priv = _arr_to_bytes(priv_val, &priv_n);\n" +
+            "    unsigned char* msg  = _arr_to_bytes(msg_val, &msg_n);\n" +
+            "    if (!priv || priv_n != crypto_sign_ed25519_SECRETKEYBYTES) {\n" +
+            "        if (priv) free(priv); if (msg) free(msg);\n" +
+            "        return _crypto_error(\"ed25519_sign: privkey must be 64 bytes (sodium layout)\");\n" +
+            "    }\n" +
+            "    if (!msg) { free(priv); return _crypto_error(\"ed25519_sign: bad msg\"); }\n" +
+            "    unsigned char sig[crypto_sign_ed25519_BYTES];\n" +
+            "    unsigned long long sig_len = 0;\n" +
+            "    int rc = crypto_sign_ed25519_detached(sig, &sig_len, msg, msg_n, priv);\n" +
+            "    free(priv); free(msg);\n" +
+            "    if (rc != 0) return _crypto_error(\"ed25519_sign failed\");\n" +
+            "    return _bytes_to_arr(sig, (size_t)sig_len);\n" +
+            "#else\n" +
+            "    (void)priv_val; (void)msg_val;\n" +
+            "    return _crypto_error(\"libsodium not linked\");\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
+            "/* ed25519 verify: pub is 32-byte public key, returns bool. */\n" +
+            "HexaVal hexa_ed25519_verify(HexaVal pub_val, HexaVal msg_val, HexaVal sig_val) {\n" +
+            "#ifdef HEXA_HAS_LIBSODIUM\n" +
+            "    if (!_ensure_sodium()) return hexa_bool(0);\n" +
+            "    size_t pn = 0, mn = 0, sn = 0;\n" +
+            "    unsigned char* pub = _arr_to_bytes(pub_val, &pn);\n" +
+            "    unsigned char* msg = _arr_to_bytes(msg_val, &mn);\n" +
+            "    unsigned char* sig = _arr_to_bytes(sig_val, &sn);\n" +
+            "    int ok = 0;\n" +
+            "    if (pub && pn == crypto_sign_ed25519_PUBLICKEYBYTES &&\n" +
+            "        sig && sn == crypto_sign_ed25519_BYTES && msg) {\n" +
+            "        ok = (crypto_sign_ed25519_verify_detached(sig, msg, mn, pub) == 0);\n" +
+            "    }\n" +
+            "    if (pub) free(pub); if (msg) free(msg); if (sig) free(sig);\n" +
+            "    return hexa_bool(ok);\n" +
+            "#else\n" +
+            "    (void)pub_val; (void)msg_val; (void)sig_val;\n" +
+            "    return hexa_bool(0);\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
+            "/* X25519 keypair (Curve25519 in DH-form). */\n" +
+            "HexaVal hexa_x25519_keypair(void) {\n" +
+            "#ifdef HEXA_HAS_LIBSODIUM\n" +
+            "    if (!_ensure_sodium()) return _crypto_error(\"libsodium init failed\");\n" +
+            "    unsigned char pk[crypto_scalarmult_curve25519_BYTES];\n" +
+            "    unsigned char sk[crypto_scalarmult_curve25519_SCALARBYTES];\n" +
+            "    randombytes_buf(sk, sizeof(sk));\n" +
+            "    crypto_scalarmult_curve25519_base(pk, sk);\n" +
+            "    HexaVal m = hexa_map_new();\n" +
+            "    hexa_map_set(m, \"pub\",  _bytes_to_arr(pk, sizeof(pk)));\n" +
+            "    hexa_map_set(m, \"priv\", _bytes_to_arr(sk, sizeof(sk)));\n" +
+            "    return m;\n" +
+            "#else\n" +
+            "    return _crypto_error(\"libsodium not linked\");\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
+            "/* X25519 scalar multiplication (DH shared secret). */\n" +
+            "HexaVal hexa_x25519_scalarmult(HexaVal scalar_val, HexaVal point_val) {\n" +
+            "#ifdef HEXA_HAS_LIBSODIUM\n" +
+            "    if (!_ensure_sodium()) return _crypto_error(\"libsodium init failed\");\n" +
+            "    size_t sn = 0, pn = 0;\n" +
+            "    unsigned char* sc = _arr_to_bytes(scalar_val, &sn);\n" +
+            "    unsigned char* pt = _arr_to_bytes(point_val,  &pn);\n" +
+            "    if (!sc || sn != crypto_scalarmult_curve25519_SCALARBYTES ||\n" +
+            "        !pt || pn != crypto_scalarmult_curve25519_BYTES) {\n" +
+            "        if (sc) free(sc); if (pt) free(pt);\n" +
+            "        return _crypto_error(\"x25519: scalar+point must be 32 bytes each\");\n" +
+            "    }\n" +
+            "    unsigned char out[crypto_scalarmult_curve25519_BYTES];\n" +
+            "    int rc = crypto_scalarmult_curve25519(out, sc, pt);\n" +
+            "    free(sc); free(pt);\n" +
+            "    if (rc != 0) return _crypto_error(\"x25519_scalarmult: weak point\");\n" +
+            "    return _bytes_to_arr(out, sizeof(out));\n" +
+            "#else\n" +
+            "    (void)scalar_val; (void)point_val;\n" +
+            "    return _crypto_error(\"libsodium not linked\");\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
+            "/* ChaCha20 keystream XOR (no Poly1305). Used by SSH's\n" +
+            " * chacha20-poly1305@openssh.com to encrypt the 4-byte packet_length\n" +
+            " * header with a separate key from the payload. Nonce is 8 bytes\n" +
+            " * (SSH sequence number, big-endian), key is 32 bytes. */\n" +
+            "HexaVal hexa_chacha20_xor(HexaVal key_v, HexaVal nonce_v, HexaVal data_v) {\n" +
+            "#ifdef HEXA_HAS_LIBSODIUM\n" +
+            "    if (!_ensure_sodium()) return _crypto_error(\"libsodium init failed\");\n" +
+            "    size_t kn = 0, nn = 0, dn = 0;\n" +
+            "    unsigned char* k = _arr_to_bytes(key_v,   &kn);\n" +
+            "    unsigned char* n = _arr_to_bytes(nonce_v, &nn);\n" +
+            "    unsigned char* d = _arr_to_bytes(data_v,  &dn);\n" +
+            "    if (!k || kn != crypto_stream_chacha20_KEYBYTES ||\n" +
+            "        !n || nn != crypto_stream_chacha20_NONCEBYTES ||\n" +
+            "        !d) {\n" +
+            "        if (k) free(k); if (n) free(n); if (d) free(d);\n" +
+            "        return _crypto_error(\"chacha20_xor: key=32 nonce=8 required\");\n" +
+            "    }\n" +
+            "    unsigned char* out = (unsigned char*)malloc(dn);\n" +
+            "    int rc = crypto_stream_chacha20_xor(out, d, dn, n, k);\n" +
+            "    HexaVal res;\n" +
+            "    if (rc == 0) { res = _bytes_to_arr(out, dn); }\n" +
+            "    else { res = _crypto_error(\"chacha20_xor failed\"); }\n" +
+            "    free(k); free(n); free(d); free(out);\n" +
+            "    return res;\n" +
+            "#else\n" +
+            "    (void)key_v; (void)nonce_v; (void)data_v;\n" +
+            "    return _crypto_error(\"libsodium not linked\");\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
+            "/* Poly1305 one-shot MAC. Used for SSH chacha20-poly1305@openssh.com\n" +
+            " * separately from the AEAD wrapper. key = 32 bytes, msg = any. */\n" +
+            "HexaVal hexa_poly1305_onetimeauth(HexaVal key_v, HexaVal msg_v) {\n" +
+            "#ifdef HEXA_HAS_LIBSODIUM\n" +
+            "    if (!_ensure_sodium()) return _crypto_error(\"libsodium init failed\");\n" +
+            "    size_t kn = 0, mn = 0;\n" +
+            "    unsigned char* k = _arr_to_bytes(key_v, &kn);\n" +
+            "    unsigned char* m = _arr_to_bytes(msg_v, &mn);\n" +
+            "    if (!k || kn != crypto_onetimeauth_poly1305_KEYBYTES) {\n" +
+            "        if (k) free(k); if (m) free(m);\n" +
+            "        return _crypto_error(\"poly1305: key must be 32 bytes\");\n" +
+            "    }\n" +
+            "    unsigned char tag[crypto_onetimeauth_poly1305_BYTES];\n" +
+            "    crypto_onetimeauth_poly1305(tag, m, mn, k);\n" +
+            "    free(k); if (m) free(m);\n" +
+            "    return _bytes_to_arr(tag, sizeof(tag));\n" +
+            "#else\n" +
+            "    (void)key_v; (void)msg_v;\n" +
+            "    return _crypto_error(\"libsodium not linked\");\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
+            "/* ChaCha20-Poly1305 IETF AEAD encrypt.\n" +
+            " *   key: 32 bytes  nonce: 12 bytes  aad: any  plaintext: any\n" +
+            " *   Returns ciphertext || 16-byte tag.\n" +
+            " */\n" +
+            "HexaVal hexa_chacha20_poly1305_encrypt(HexaVal key_v, HexaVal nonce_v,\n" +
+            "                                       HexaVal aad_v, HexaVal pt_v) {\n" +
+            "#ifdef HEXA_HAS_LIBSODIUM\n" +
+            "    if (!_ensure_sodium()) return _crypto_error(\"libsodium init failed\");\n" +
+            "    size_t kn = 0, nn = 0, an = 0, pn = 0;\n" +
+            "    unsigned char* k = _arr_to_bytes(key_v,   &kn);\n" +
+            "    unsigned char* n = _arr_to_bytes(nonce_v, &nn);\n" +
+            "    unsigned char* a = _arr_to_bytes(aad_v,   &an);\n" +
+            "    unsigned char* p = _arr_to_bytes(pt_v,    &pn);\n" +
+            "    if (!k || kn != crypto_aead_chacha20poly1305_ietf_KEYBYTES ||\n" +
+            "        !n || nn != crypto_aead_chacha20poly1305_ietf_NPUBBYTES) {\n" +
+            "        if (k) free(k); if (n) free(n); if (a) free(a); if (p) free(p);\n" +
+            "        return _crypto_error(\"chacha20poly1305: key/nonce wrong length\");\n" +
+            "    }\n" +
+            "    unsigned char* ct = (unsigned char*)malloc(pn + crypto_aead_chacha20poly1305_ietf_ABYTES);\n" +
+            "    unsigned long long ct_len = 0;\n" +
+            "    int rc = crypto_aead_chacha20poly1305_ietf_encrypt(\n" +
+            "        ct, &ct_len, p, pn, a, an, NULL, n, k);\n" +
+            "    HexaVal out;\n" +
+            "    if (rc == 0) { out = _bytes_to_arr(ct, (size_t)ct_len); }\n" +
+            "    else { out = _crypto_error(\"chacha20poly1305 encrypt failed\"); }\n" +
+            "    free(k); free(n); if (a) free(a); if (p) free(p); free(ct);\n" +
+            "    return out;\n" +
+            "#else\n" +
+            "    (void)key_v; (void)nonce_v; (void)aad_v; (void)pt_v;\n" +
+            "    return _crypto_error(\"libsodium not linked\");\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
+            "/* ChaCha20-Poly1305 IETF AEAD decrypt + tag verify.\n" +
+            " *   Returns plaintext bytes on success, or { error } on tag mismatch / bad input.\n" +
+            " */\n" +
+            "HexaVal hexa_chacha20_poly1305_decrypt(HexaVal key_v, HexaVal nonce_v,\n" +
+            "                                       HexaVal aad_v, HexaVal ct_v) {\n" +
+            "#ifdef HEXA_HAS_LIBSODIUM\n" +
+            "    if (!_ensure_sodium()) return _crypto_error(\"libsodium init failed\");\n" +
+            "    size_t kn = 0, nn = 0, an = 0, cn = 0;\n" +
+            "    unsigned char* k = _arr_to_bytes(key_v,   &kn);\n" +
+            "    unsigned char* n = _arr_to_bytes(nonce_v, &nn);\n" +
+            "    unsigned char* a = _arr_to_bytes(aad_v,   &an);\n" +
+            "    unsigned char* c = _arr_to_bytes(ct_v,    &cn);\n" +
+            "    if (!k || kn != crypto_aead_chacha20poly1305_ietf_KEYBYTES ||\n" +
+            "        !n || nn != crypto_aead_chacha20poly1305_ietf_NPUBBYTES ||\n" +
+            "        !c || cn < crypto_aead_chacha20poly1305_ietf_ABYTES) {\n" +
+            "        if (k) free(k); if (n) free(n); if (a) free(a); if (c) free(c);\n" +
+            "        return _crypto_error(\"chacha20poly1305: bad inputs\");\n" +
+            "    }\n" +
+            "    unsigned char* pt = (unsigned char*)malloc(cn);\n" +
+            "    unsigned long long pt_len = 0;\n" +
+            "    int rc = crypto_aead_chacha20poly1305_ietf_decrypt(\n" +
+            "        pt, &pt_len, NULL, c, cn, a, an, n, k);\n" +
+            "    HexaVal out;\n" +
+            "    if (rc == 0) { out = _bytes_to_arr(pt, (size_t)pt_len); }\n" +
+            "    else { out = _crypto_error(\"chacha20poly1305 decrypt failed (tag mismatch?)\"); }\n" +
+            "    free(k); free(n); if (a) free(a); free(c); free(pt);\n" +
+            "    return out;\n" +
+            "#else\n" +
+            "    (void)key_v; (void)nonce_v; (void)aad_v; (void)ct_v;\n" +
+            "    return _crypto_error(\"libsodium not linked\");\n" +
+            "#endif\n" +
+            "}\n"
+    return s
+}
+
+fn main() {
+    let argv = real_args()
+    let out_path = if argv.len() >= 1 { argv[0] } else { "crypto_sodium.c" }
+    let c_text = emit_crypto_sodium_c()
+    let cmd = "cat > \"" + out_path + "\" <<'CRYPTO_SODIUM_EMIT_EOF'\n" +
+              c_text + "CRYPTO_SODIUM_EMIT_EOF"
+    let _ = exec(cmd)
+    let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
+    if exists_check != "y" {
+        println("[crypto_sodium_emit] FATAL: failed to write " + out_path)
+        exit(1)
+    }
+    println("[crypto_sodium_emit] wrote " + out_path)
+    exit(0)
+}

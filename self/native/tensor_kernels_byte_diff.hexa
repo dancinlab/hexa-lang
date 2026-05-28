@@ -1,0 +1,154 @@
+#!hexa strict
+// self/native/tensor_kernels_byte_diff.hexa
+//   B9.C-10 (.c-text · #1848 pattern) — tensor_kernels.c byte-diff oracle.
+//
+// Proves the hexa emitter (tensor_kernels_emit.hexa::emit_tensor_kernels_c) produces a .c
+// source byte-identical to the hand-written self/native/tensor_kernels.c.
+//
+// ⚠ tensor_kernels.c is a runtime.c #include fragment (RFC 061 amalgamation), NOT a
+// standalone TU — it references runtime.c-internal symbols (HexaVal, hxlcl_*,
+// hexa_int, …) and CANNOT be compiled in isolation. Therefore the ONLY
+// always-available gate is gate-1 (source-SHA byte-identity); the .o/.text
+// equivalence is proven END-TO-END by the FULL hexa_cc self-host build, which
+// regenerates this .c from the emitter and compiles runtime.c with it (a
+// working hexa binary + fixpoint check is the .o-equivalence proof).
+//
+// gate-1 source-text byte-equal (sha256(emitted .c) == sha256(orig .c)) is the
+// activation criterion per #1851 precedent.
+//
+// ⚠ HARD GATE: source-SHA PASS is REQUIRED before
+// `git rm self/native/tensor_kernels.c` — AND the full hexa_cc build must PASS.
+//
+// Run:
+//   HEXA_HAL_ROOT=<repo-root> hexa-run self/native/tensor_kernels_byte_diff.hexa
+
+let MODULE_NAME = "tensor_kernels_byte_diff"
+
+let mut RUN  = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+fn _root() -> str {
+    let env_root = env("HEXA_HAL_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _which(cmd: str) -> bool {
+    let r = exec("command -v " + cmd + " >/dev/null 2>&1 && echo y || echo n").trim()
+    return r == "y"
+}
+
+fn _exists(p: str) -> bool {
+    let r = exec("[ -f \"" + p + "\" ] && echo y || echo n").trim()
+    return r == "y"
+}
+
+fn _sha256(p: str) -> str {
+    if _which("shasum") {
+        let r = exec("shasum -a 256 \"" + p + "\" 2>/dev/null | awk '{print $1}'").trim()
+        return r
+    }
+    if _which("sha256sum") {
+        let r = exec("sha256sum \"" + p + "\" 2>/dev/null | awk '{print $1}'").trim()
+        return r
+    }
+    return ""
+}
+
+fn check_emitter_path(src_dir: str) -> bool {
+    let p = src_dir + "/tensor_kernels_emit.hexa"
+    let ok = _exists(p)
+    _check(ok, "hexa emitter self/native/tensor_kernels_emit.hexa present", p)
+    return ok
+}
+
+fn check_orig_present(src_dir: str) -> bool {
+    let p = src_dir + "/tensor_kernels.c"
+    let ok = _exists(p)
+    if ok {
+        _check(true, "hand-written self/native/tensor_kernels.c present", p)
+    }
+    return ok
+}
+
+fn check_source_byte_equal(src_dir: str, work_dir: str) -> bool {
+    let orig_c = src_dir + "/tensor_kernels.c"
+    let gen_c  = work_dir + "/tensor_kernels.c"
+    let emitter = src_dir + "/tensor_kernels_emit.hexa"
+    let out = exec("hexa-run \"" + emitter + "\" \"" + gen_c + "\" 2>&1")
+    if !_exists(gen_c) {
+        _check(false, "gate-1 emitter wrote `.c`", "emit failed:\n" + out); return false
+    }
+    let orig_sha = _sha256(orig_c)
+    let gen_sha  = _sha256(gen_c)
+    let ok = orig_sha.len() > 0 && orig_sha == gen_sha
+    let detail = "orig=" + orig_sha + " gen=" + gen_sha
+    _check(ok, "gate-1 source-text byte-identical (sha256(.c))", detail)
+    return ok
+}
+
+fn main() {
+    println("========================================================================")
+    println("  self/native — tensor_kernels_byte_diff: B9.C-10 .c-text byte-diff oracle")
+    println("========================================================================")
+    println("  generator: self/native/tensor_kernels_emit.hexa")
+    println("  oracle:    source-SHA byte-diff vs hand-written tensor_kernels.c")
+    println("  note:      runtime.c #include fragment — .o proof via full hexa_cc build")
+    println("")
+
+    let root = _root()
+    let src_dir = root + "/self/native"
+    let work_dir = exec("mktemp -d -t tensor_kernels_byte_diff.XXXXXX").trim()
+    if work_dir.len() == 0 {
+        println("[FATAL] mktemp failed — cannot allocate scratch dir")
+        exit(1)
+    }
+    println("  scratch: " + work_dir)
+    println("")
+
+    if !check_emitter_path(src_dir) {
+        println("__HEXA_LANG_TENSOR_KERNELS_BYTE_DIFF__ FAIL")
+        exit(1)
+    }
+
+    if !check_orig_present(src_dir) {
+        println("")
+        println("  POST-DELETION SKIP — hand-written baseline self/native/tensor_kernels.c")
+        println("  removed after this oracle PASSed (gen ≡ orig). The emitter remains the")
+        println("  SSOT; the build regenerates the .c before runtime.c compiles. Replay the")
+        println("  historical proof via `git show <pre-deletion-sha>:self/native/tensor_kernels.c`.")
+        println("__HEXA_LANG_TENSOR_KERNELS_BYTE_DIFF__ SKIP")
+        exit(0)
+    }
+
+    let _g1 = check_source_byte_equal(src_dir, work_dir)
+
+    println("")
+    println("  B9.C-10 tensor_kernels.c .c-text byte-identity:")
+    if FAIL == 0 {
+        println("    PROVEN ✓ — hand-written tensor_kernels.c is fully hexa-emittable.")
+        println("    DELETION GATE OPEN — self/native/tensor_kernels.c may be `git rm` once the")
+        println("    full hexa_cc build (regen + runtime.c compile + smoke) also PASSes.")
+    } else {
+        println("    BYTE-DIFF FAIL — emitter output diverges from hand-written `.c`.")
+        println("    ⚠ Hand-written `.c` MUST NOT be deleted until oracle PASSES.")
+    }
+
+    let pass_n = RUN - FAIL
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_LANG_TENSOR_KERNELS_BYTE_DIFF__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_LANG_TENSOR_KERNELS_BYTE_DIFF__ PASS")
+    exit(0)
+}

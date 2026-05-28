@@ -1,0 +1,23 @@
+========================================================================
+  self/native — pty_byte_diff: B9.C-10 .c-text byte-diff oracle
+========================================================================
+  generator: self/native/pty_emit.hexa
+  oracle:    source-SHA byte-diff vs hand-written pty.c
+  note:      runtime.c #include fragment — .o proof via full hexa_cc build
+
+  scratch: /var/folders/2g/blzd56lx2rvfvt61c1pc9g7r0000gn/T/pty_byte_diff.XXXXXX.HBcev48ret
+
+  [PASS] hexa emitter self/native/pty_emit.hexa present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a29a88987b6876976/self/native/pty_emit.hexa
+  [PASS] hand-written self/native/pty.c present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a29a88987b6876976/self/native/pty.c
+  [PASS] gate-1 source-text byte-identical (sha256(.c))
+         · orig=2a49b4771578858d7a5aed954aebe818f2b66643b60c8fd2357eb922a24679c4 gen=2a49b4771578858d7a5aed954aebe818f2b66643b60c8fd2357eb922a24679c4
+
+  B9.C-10 pty.c .c-text byte-identity:
+    PROVEN ✓ — hand-written pty.c is fully hexa-emittable.
+    DELETION GATE OPEN — self/native/pty.c may be `git rm` once the
+    full hexa_cc build (regen + runtime.c compile + smoke) also PASSes.
+========================================================================
+  3/3 checks passed
+__HEXA_LANG_PTY_BYTE_DIFF__ PASS

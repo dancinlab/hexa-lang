@@ -1,0 +1,23 @@
+========================================================================
+  self/native — proc_fork_byte_diff: B9.C-10 .c-text byte-diff oracle
+========================================================================
+  generator: self/native/proc_fork_emit.hexa
+  oracle:    source-SHA byte-diff vs hand-written proc_fork.c
+  note:      runtime.c #include fragment — .o proof via full hexa_cc build
+
+  scratch: /var/folders/2g/blzd56lx2rvfvt61c1pc9g7r0000gn/T/proc_fork_byte_diff.XXXXXX.S7h1DSqiKf
+
+  [PASS] hexa emitter self/native/proc_fork_emit.hexa present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a29a88987b6876976/self/native/proc_fork_emit.hexa
+  [PASS] hand-written self/native/proc_fork.c present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a29a88987b6876976/self/native/proc_fork.c
+  [PASS] gate-1 source-text byte-identical (sha256(.c))
+         · orig=ba3cf3f1fe7a6f892f9ea8a08c6322c0bd6a21f7f11fe029d43af1a644934400 gen=ba3cf3f1fe7a6f892f9ea8a08c6322c0bd6a21f7f11fe029d43af1a644934400
+
+  B9.C-10 proc_fork.c .c-text byte-identity:
+    PROVEN ✓ — hand-written proc_fork.c is fully hexa-emittable.
+    DELETION GATE OPEN — self/native/proc_fork.c may be `git rm` once the
+    full hexa_cc build (regen + runtime.c compile + smoke) also PASSes.
+========================================================================
+  3/3 checks passed
+__HEXA_LANG_PROC_FORK_BYTE_DIFF__ PASS

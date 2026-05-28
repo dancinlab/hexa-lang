@@ -1,0 +1,344 @@
+#!hexa strict
+// self/native/signal_flock_emit.hexa
+//   B9.C-10 (.c-text · #1848 pattern) — signal_flock.c source emitter.
+//
+// runtime.c #include "native/signal_flock.c" — RFC 061 amalgamation fragment
+// (NOT a standalone TU; references runtime.c-internal symbols). This emitter
+// is the SSOT; the build regenerates self/native/signal_flock.c from it before
+// runtime.c compiles, so the .c becomes a gitignored build artifact.
+//
+// Byte-identity: regenerated C is byte-for-byte the hand-written source, so
+// the runtime.c TU (and the linked hexa binary) is identical — PERF UNCHANGED.
+//
+// Invocation:  hexa-run self/native/signal_flock_emit.hexa <output-path>
+// Default output path (if argv missing): "signal_flock.c" in cwd.
+//
+// Phase: B9.C-10 batch (self/native runtime.c-included .c-text · F3).
+
+let MODULE_NAME = "signal_flock_emit"
+
+fn emit_signal_flock_c() -> str {
+    // Verbatim content of hand-written self/native/signal_flock.c
+    let s =
+            "/* self/native/signal_flock.c — stdlib/os signal + flock builtins\n" +
+            " *\n" +
+            " * Roadmap item 62 (2026-04-22). Included from self/runtime.c via\n" +
+            " *   #include \"native/signal_flock.c\"\n" +
+            " * analogous to native/net.c. Pure libc; portable macOS/Linux.\n" +
+            " *\n" +
+            " * Symbols exported (signal — 9 + flock — 2):\n" +
+            " *   hexa_os_sig_install(sig, name_str)  : install async-signal-safe\n" +
+            " *                                         trampoline; stash handler name\n" +
+            " *   hexa_os_sig_uninstall(sig)          : restore SIG_DFL\n" +
+            " *   hexa_os_sig_current(sig)            : installed name (\"\" if none)\n" +
+            " *   hexa_os_sig_raise(sig)              : hxlcl_kill(getpid, sig)\n" +
+            " *   hexa_os_sig_kill(pid, sig)          : hxlcl_kill(pid, sig)\n" +
+            " *   hexa_os_sig_pipe_fd()               : read-end of self-pipe\n" +
+            " *   hexa_os_sig_drain()                 : array<int> pending signals,\n" +
+            " *                                         drained from pipe\n" +
+            " *   hexa_os_sig_block(arr)              : sigprocmask SIG_BLOCK\n" +
+            " *   hexa_os_sig_unblock(arr)            : sigprocmask SIG_UNBLOCK\n" +
+            " *\n" +
+            " *   hexa_os_flock_open(path, mode_int)  : open O_RDWR|O_CREAT|O_CLOEXEC\n" +
+            " *                                         then flock. mode bits:\n" +
+            " *                                           0 = LOCK_EX  (blocking)\n" +
+            " *                                           1 = LOCK_SH  (blocking)\n" +
+            " *                                           2 = LOCK_EX|LOCK_NB\n" +
+            " *                                           3 = LOCK_SH|LOCK_NB\n" +
+            " *                                         Returns fd >= 0 on success,\n" +
+            " *                                         -errno on failure.\n" +
+            " *   hexa_os_flock_close(fd)             : LOCK_UN + close; returns 0 or\n" +
+            " *                                         -errno.\n" +
+            " *\n" +
+            " * Error model: negative TAG_INT (raw -errno) — matches net.c.\n" +
+            " *\n" +
+            " * Async-signal-safety: __hexa_sig_trampoline uses only hxlcl_write(2), which\n" +
+            " * POSIX lists as async-signal-safe (signal-safety(7)). No malloc, no\n" +
+            " * printf, no lock. The trampoline writes 1 byte == signal number to the\n" +
+            " * self-pipe; the scheduler (pure hexa code) drains via hexa_os_sig_drain.\n" +
+            " *\n" +
+            " * O_CLOEXEC: flock fd is opened CLOEXEC so hxlcl_execve(3) does not leak the\n" +
+            " * lock into child processes (locks are per-(pid,open-file-description)\n" +
+            " * on POSIX, and CLOEXEC avoids accidental lock promotion through exec).\n" +
+            " */\n" +
+            "\n" +
+            "#include <signal.h>\n" +
+            "#include <fcntl.h>\n" +
+            "#include <errno.h>\n" +
+            "#include <unistd.h>\n" +
+            "#include <string.h>\n" +
+            "#include <sys/file.h>   /* flock(2) */\n" +
+            "#include <sys/types.h>\n" +
+            "\n" +
+            "#ifndef NSIG\n" +
+            "#define NSIG 64\n" +
+            "#endif\n" +
+            "\n" +
+            "/* Per-signal stored handler name. Written under normal program control\n" +
+            " * (hexa_os_sig_install) — not from inside the trampoline. */\n" +
+            "static char     g_handler_names[NSIG][64];\n" +
+            "static int      g_handler_set[NSIG];\n" +
+            "static int      g_sig_pipe[2] = {-1, -1};\n" +
+            "\n" +
+            "/* Async-signal-safe: only calls hxlcl_write(2). */\n" +
+            "static void __hexa_sig_trampoline(int sig) {\n" +
+            "    if (g_sig_pipe[1] >= 0 && sig > 0 && sig < NSIG) {\n" +
+            "        unsigned char b = (unsigned char)sig;\n" +
+            "        int saved = errno;\n" +
+            "        (void)hxlcl_write(g_sig_pipe[1], &b, 1);\n" +
+            "        errno = saved;\n" +
+            "    }\n" +
+            "}\n" +
+            "\n" +
+            "/* Set O_NONBLOCK + FD_CLOEXEC on fd. Returns 0 / -errno. */\n" +
+            "static int _hexa_fd_nonblock_cloexec(int fd) {\n" +
+            "    int fl = hxlcl_fcntl(fd, F_GETFL, 0);\n" +
+            "    if (fl < 0) return -errno;\n" +
+            "    if (hxlcl_fcntl(fd, F_SETFL, fl | O_NONBLOCK) < 0) return -errno;\n" +
+            "    int cf = hxlcl_fcntl(fd, F_GETFD, 0);\n" +
+            "    if (cf < 0) return -errno;\n" +
+            "    if (hxlcl_fcntl(fd, F_SETFD, cf | FD_CLOEXEC) < 0) return -errno;\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "/* Lazy self-pipe init. Thread-compat not guaranteed — single scheduler\n" +
+            " * thread expected (matches async_runtime.hexa). */\n" +
+            "static int _hexa_sig_pipe_init(void) {\n" +
+            "    if (g_sig_pipe[0] >= 0) return 0;\n" +
+            "    int p[2];\n" +
+            "    if (hxlcl_pipe(p) < 0) return -errno;\n" +
+            "    int rc = _hexa_fd_nonblock_cloexec(p[0]);\n" +
+            "    if (rc < 0) { hxlcl_close(p[0]); hxlcl_close(p[1]); return rc; }\n" +
+            "    rc = _hexa_fd_nonblock_cloexec(p[1]);\n" +
+            "    if (rc < 0) { hxlcl_close(p[0]); hxlcl_close(p[1]); return rc; }\n" +
+            "    g_sig_pipe[0] = p[0];\n" +
+            "    g_sig_pipe[1] = p[1];\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "HexaVal hexa_os_sig_pipe_fd(void) {\n" +
+            "    int rc = _hexa_sig_pipe_init();\n" +
+            "    if (rc < 0) return hexa_int(rc);\n" +
+            "    return hexa_int(g_sig_pipe[0]);\n" +
+            "}\n" +
+            "\n" +
+            "HexaVal hexa_os_sig_install(HexaVal sig_val, HexaVal name_val) {\n" +
+            "    if (!HX_IS_INT(sig_val)) return hexa_int(-EINVAL);\n" +
+            "    int sig = (int)HX_INT(sig_val);\n" +
+            "    if (sig <= 0 || sig >= NSIG) return hexa_int(-EINVAL);\n" +
+            "    int rc = _hexa_sig_pipe_init();\n" +
+            "    if (rc < 0) return hexa_int(rc);\n" +
+            "    struct sigaction act;\n" +
+            "    memset(&act, 0, sizeof(act));\n" +
+            "    act.sa_handler = __hexa_sig_trampoline;\n" +
+            "    act.sa_flags = SA_RESTART;\n" +
+            "    sigemptyset(&act.sa_mask);\n" +
+            "    if (hxlcl_sigaction(sig, &act, NULL) < 0) return hexa_int(-errno);\n" +
+            "    const char* name = HX_IS_STR(name_val) ? HX_STR(name_val) : \"\";\n" +
+            "    size_t nlen = strlen(name);\n" +
+            "    if (nlen >= sizeof(g_handler_names[sig])) nlen = sizeof(g_handler_names[sig]) - 1;\n" +
+            "    memcpy(g_handler_names[sig], name, nlen);\n" +
+            "    g_handler_names[sig][nlen] = '\\0';\n" +
+            "    g_handler_set[sig] = 1;\n" +
+            "    return hexa_int(0);\n" +
+            "}\n" +
+            "\n" +
+            "HexaVal hexa_os_sig_uninstall(HexaVal sig_val) {\n" +
+            "    if (!HX_IS_INT(sig_val)) return hexa_int(-EINVAL);\n" +
+            "    int sig = (int)HX_INT(sig_val);\n" +
+            "    if (sig <= 0 || sig >= NSIG) return hexa_int(-EINVAL);\n" +
+            "    struct sigaction act;\n" +
+            "    memset(&act, 0, sizeof(act));\n" +
+            "    act.sa_handler = SIG_DFL;\n" +
+            "    sigemptyset(&act.sa_mask);\n" +
+            "    if (hxlcl_sigaction(sig, &act, NULL) < 0) return hexa_int(-errno);\n" +
+            "    g_handler_names[sig][0] = '\\0';\n" +
+            "    g_handler_set[sig] = 0;\n" +
+            "    return hexa_int(0);\n" +
+            "}\n" +
+            "\n" +
+            "HexaVal hexa_os_sig_current(HexaVal sig_val) {\n" +
+            "    if (!HX_IS_INT(sig_val)) return hexa_str(\"\");\n" +
+            "    int sig = (int)HX_INT(sig_val);\n" +
+            "    if (sig <= 0 || sig >= NSIG) return hexa_str(\"\");\n" +
+            "    if (!g_handler_set[sig]) return hexa_str(\"\");\n" +
+            "    return hexa_str(g_handler_names[sig]);\n" +
+            "}\n" +
+            "\n" +
+            "HexaVal hexa_os_sig_raise(HexaVal sig_val) {\n" +
+            "    if (!HX_IS_INT(sig_val)) return hexa_int(-EINVAL);\n" +
+            "    int sig = (int)HX_INT(sig_val);\n" +
+            "    if (hxlcl_kill(hxlcl_getpid(), sig) < 0) return hexa_int(-errno);\n" +
+            "    return hexa_int(0);\n" +
+            "}\n" +
+            "\n" +
+            "HexaVal hexa_os_sig_kill(HexaVal pid_val, HexaVal sig_val) {\n" +
+            "    if (!HX_IS_INT(pid_val) || !HX_IS_INT(sig_val)) return hexa_int(-EINVAL);\n" +
+            "    int pid = (int)HX_INT(pid_val);\n" +
+            "    int sig = (int)HX_INT(sig_val);\n" +
+            "    if (hxlcl_kill(pid, sig) < 0) return hexa_int(-errno);\n" +
+            "    return hexa_int(0);\n" +
+            "}\n" +
+            "\n" +
+            "/* Drain the self-pipe, returning an array of signal numbers that had\n" +
+            " * been delivered since last drain. Non-blocking. */\n" +
+            "HexaVal hexa_os_sig_drain(void) {\n" +
+            "    HexaVal arr = hexa_array_new();\n" +
+            "    int rc = _hexa_sig_pipe_init();\n" +
+            "    if (rc < 0) return arr;\n" +
+            "    unsigned char buf[64];\n" +
+            "    for (;;) {\n" +
+            "        ssize_t n = hxlcl_read(g_sig_pipe[0], buf, sizeof(buf));\n" +
+            "        if (n <= 0) break;\n" +
+            "        for (ssize_t i = 0; i < n; i++) {\n" +
+            "            arr = hexa_array_push(arr, hexa_int((int)buf[i]));\n" +
+            "        }\n" +
+            "        if ((size_t)n < sizeof(buf)) break;\n" +
+            "    }\n" +
+            "    return arr;\n" +
+            "}\n" +
+            "\n" +
+            "/* sigprocmask helper. which: SIG_BLOCK / SIG_UNBLOCK. arr_val must be\n" +
+            " * HexaVal array of ints. */\n" +
+            "static HexaVal _hexa_sig_mask_op(int which, HexaVal arr_val) {\n" +
+            "    if (!HX_IS_ARRAY(arr_val)) return hexa_int(-EINVAL);\n" +
+            "    sigset_t set;\n" +
+            "    sigemptyset(&set);\n" +
+            "    int64_t n = (int64_t)HX_ARR_LEN(arr_val);\n" +
+            "    for (int64_t i = 0; i < n; i++) {\n" +
+            "        HexaVal el = hexa_array_get(arr_val, i);\n" +
+            "        if (!HX_IS_INT(el)) continue;\n" +
+            "        int sig = (int)HX_INT(el);\n" +
+            "        if (sig > 0 && sig < NSIG) sigaddset(&set, sig);\n" +
+            "    }\n" +
+            "    if (hxlcl_sigprocmask(which, &set, NULL) < 0) return hexa_int(-errno);\n" +
+            "    return hexa_int(0);\n" +
+            "}\n" +
+            "\n" +
+            "HexaVal hexa_os_sig_block(HexaVal arr_val) {\n" +
+            "    return _hexa_sig_mask_op(SIG_BLOCK, arr_val);\n" +
+            "}\n" +
+            "\n" +
+            "HexaVal hexa_os_sig_unblock(HexaVal arr_val) {\n" +
+            "    return _hexa_sig_mask_op(SIG_UNBLOCK, arr_val);\n" +
+            "}\n" +
+            "\n" +
+            "/* ── flock ────────────────────────────────────────────────────── */\n" +
+            "\n" +
+            "/* mode_int:\n" +
+            " *   0 = LOCK_EX (blocking)\n" +
+            " *   1 = LOCK_SH (blocking)\n" +
+            " *   2 = LOCK_EX | LOCK_NB\n" +
+            " *   3 = LOCK_SH | LOCK_NB\n" +
+            " */\n" +
+            "HexaVal hexa_os_flock_open(HexaVal path_val, HexaVal mode_val) {\n" +
+            "    if (!HX_IS_STR(path_val) || !HX_IS_INT(mode_val)) return hexa_int(-EINVAL);\n" +
+            "    const char* path = HX_STR(path_val);\n" +
+            "    int mode_bits = (int)HX_INT(mode_val);\n" +
+            "\n" +
+            "    int op;\n" +
+            "    switch (mode_bits) {\n" +
+            "        case 0: op = LOCK_EX; break;\n" +
+            "        case 1: op = LOCK_SH; break;\n" +
+            "        case 2: op = LOCK_EX | LOCK_NB; break;\n" +
+            "        case 3: op = LOCK_SH | LOCK_NB; break;\n" +
+            "        default: return hexa_int(-EINVAL);\n" +
+            "    }\n" +
+            "\n" +
+            "    /* O_CLOEXEC mandatory — exec'd children must not inherit the lock fd.\n" +
+            "     * POSIX flock(2) semantics: lock is held per open-file-description; if\n" +
+            "     * fd leaks via exec, the child would own the lock, surprising the\n" +
+            "     * parent's unlock expectations. */\n" +
+            "    int fd = hxlcl_open_sys(path, O_RDWR | O_CREAT | O_CLOEXEC, 0644);\n" +
+            "    if (fd < 0) return hexa_int(-errno);\n" +
+            "\n" +
+            "    // RUNTIME net/exec ② (cycle 77): svc-trap flock (syscall 131) via the\n" +
+            "    // carry-flag helper — drops the libc _flock extern. Was a real libc\n" +
+            "    // call here (after the #undef flock); _hxlcl_syscall2_cf sets errno\n" +
+            "    // on the carry path, so the errno read below is still valid.\n" +
+            "    //\n" +
+            "    // ARCH GATE: HXLCL_SYS_* + _hxlcl_syscall2_cf are defined ONLY for\n" +
+            "    // Darwin arm64 (`(__arm64__||__aarch64__) && __APPLE__` in runtime.c).\n" +
+            "    // Other arches (Linux x86_64/arm64) take the libc `flock(fd, op)` path\n" +
+            "    // exposed by the runtime.c:12488 `#undef flock` directly before this\n" +
+            "    // file's include — same semantics, errno-set on failure.\n" +
+            "#if (defined(__arm64__) || defined(__aarch64__)) && defined(__APPLE__)\n" +
+            "    if (_hxlcl_syscall2_cf(HXLCL_SYS_FLOCK, fd, op) < 0) {\n" +
+            "#else\n" +
+            "    if (flock(fd, op) < 0) {\n" +
+            "#endif\n" +
+            "        int e = errno;\n" +
+            "        hxlcl_close(fd);\n" +
+            "        return hexa_int(-e);\n" +
+            "    }\n" +
+            "    return hexa_int(fd);\n" +
+            "}\n" +
+            "\n" +
+            "HexaVal hexa_os_flock_close(HexaVal fd_val) {\n" +
+            "    if (!HX_IS_INT(fd_val)) return hexa_int(-EINVAL);\n" +
+            "    int fd = (int)HX_INT(fd_val);\n" +
+            "    if (fd < 0) return hexa_int(-EINVAL);\n" +
+            "    /* Best-effort unlock; close always runs. (arch gate as above) */\n" +
+            "#if (defined(__arm64__) || defined(__aarch64__)) && defined(__APPLE__)\n" +
+            "    (void)_hxlcl_syscall2_cf(HXLCL_SYS_FLOCK, fd, LOCK_UN);\n" +
+            "#else\n" +
+            "    (void)flock(fd, LOCK_UN);\n" +
+            "#endif\n" +
+            "    if (hxlcl_close(fd) < 0) return hexa_int(-errno);\n" +
+            "    return hexa_int(0);\n" +
+            "}\n" +
+            "\n" +
+            "/* getpid helper (used by .hexa wrappers for raise_signal fallback). */\n" +
+            "HexaVal hexa_os_getpid(void) {\n" +
+            "    return hexa_int((int64_t)hxlcl_getpid());\n" +
+            "}\n" +
+            "\n" +
+            "/* ── TAG_FN shim globals (bootstrap bridge) ──────────────────────\n" +
+            " * Analogous to net.c's _hexa_init_net_fn_shims. Called from runtime.c\n" +
+            " * _hexa_init_fn_shims. After the next hexa_cc bootstrap cycle teaches\n" +
+            " * the transpiler direct-lowering, these globals become harmless. */\n" +
+            "HexaVal os_sig_install;\n" +
+            "HexaVal os_sig_uninstall;\n" +
+            "HexaVal os_sig_current;\n" +
+            "HexaVal os_sig_raise;\n" +
+            "HexaVal os_sig_kill;\n" +
+            "HexaVal os_sig_pipe_fd;\n" +
+            "HexaVal os_sig_drain;\n" +
+            "HexaVal os_sig_block;\n" +
+            "HexaVal os_sig_unblock;\n" +
+            "HexaVal os_flock_open;\n" +
+            "HexaVal os_flock_close;\n" +
+            "HexaVal os_getpid;\n" +
+            "\n" +
+            "static void _hexa_init_os_fn_shims(void) {\n" +
+            "    os_sig_install   = hexa_fn_new((void*)hexa_os_sig_install,   2);\n" +
+            "    os_sig_uninstall = hexa_fn_new((void*)hexa_os_sig_uninstall, 1);\n" +
+            "    os_sig_current   = hexa_fn_new((void*)hexa_os_sig_current,   1);\n" +
+            "    os_sig_raise     = hexa_fn_new((void*)hexa_os_sig_raise,     1);\n" +
+            "    os_sig_kill      = hexa_fn_new((void*)hexa_os_sig_kill,      2);\n" +
+            "    os_sig_pipe_fd   = hexa_fn_new((void*)hexa_os_sig_pipe_fd,   0);\n" +
+            "    os_sig_drain     = hexa_fn_new((void*)hexa_os_sig_drain,     0);\n" +
+            "    os_sig_block     = hexa_fn_new((void*)hexa_os_sig_block,     1);\n" +
+            "    os_sig_unblock   = hexa_fn_new((void*)hexa_os_sig_unblock,   1);\n" +
+            "    os_flock_open    = hexa_fn_new((void*)hexa_os_flock_open,    2);\n" +
+            "    os_flock_close   = hexa_fn_new((void*)hexa_os_flock_close,   1);\n" +
+            "    os_getpid        = hexa_fn_new((void*)hexa_os_getpid,        0);\n" +
+            "}\n"
+    return s
+}
+
+fn main() {
+    let argv = real_args()
+    let out_path = if argv.len() >= 1 { argv[0] } else { "signal_flock.c" }
+    let c_text = emit_signal_flock_c()
+    let cmd = "cat > \"" + out_path + "\" <<'SIGNAL_FLOCK_EMIT_EOF'\n" +
+              c_text + "SIGNAL_FLOCK_EMIT_EOF"
+    let _ = exec(cmd)
+    let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
+    if exists_check != "y" {
+        println("[signal_flock_emit] FATAL: failed to write " + out_path)
+        exit(1)
+    }
+    println("[signal_flock_emit] wrote " + out_path)
+    exit(0)
+}

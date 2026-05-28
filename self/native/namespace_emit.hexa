@@ -1,0 +1,146 @@
+#!hexa strict
+// self/native/namespace_emit.hexa
+//   B9.C-10 (.c-text · #1848 pattern) — namespace.c source emitter.
+//
+// runtime.c #include "native/namespace.c" — RFC 061 amalgamation fragment
+// (NOT a standalone TU; references runtime.c-internal symbols). This emitter
+// is the SSOT; the build regenerates self/native/namespace.c from it before
+// runtime.c compiles, so the .c becomes a gitignored build artifact.
+//
+// Byte-identity: regenerated C is byte-for-byte the hand-written source, so
+// the runtime.c TU (and the linked hexa binary) is identical — PERF UNCHANGED.
+//
+// Invocation:  hexa-run self/native/namespace_emit.hexa <output-path>
+// Default output path (if argv missing): "namespace.c" in cwd.
+//
+// Phase: B9.C-10 batch (self/native runtime.c-included .c-text · F3).
+
+let MODULE_NAME = "namespace_emit"
+
+fn emit_namespace_c() -> str {
+    // Verbatim content of hand-written self/native/namespace.c
+    let s =
+            "/* self/native/namespace.c -- Linux unshare(2) / setns(2) / pivot_root(2)\n" +
+            " * + clone flag constants.\n" +
+            " *\n" +
+            " * Included from self/runtime.c via `#include \"native/namespace.c\"`. NOT\n" +
+            " * a standalone TU.\n" +
+            " *\n" +
+            " * Symbols exported (codegen direct-emit):\n" +
+            " *   hexa_unshare(flags)              -> 0 or -errno\n" +
+            " *   hexa_setns(fd, nstype)           -> 0 or -errno\n" +
+            " *   hexa_pivot_root(new_root, put_old) -> 0 or -errno\n" +
+            " *   hexa_namespace_clone_const(name) -> int (CLONE_NEW* constant value)\n" +
+            " *\n" +
+            " * RFC: ~/core/hexa-lang/incoming/patches/stdlib-os-namespace-linux.md\n" +
+            " * Motivation: u-root/cpu port stage-B -- per-session mount / user /\n" +
+            " * net / pid namespace for the cpu daemon's child process.\n" +
+            " *\n" +
+            " * Platform behavior:\n" +
+            " *   Linux  -- real syscall via sched.h / sys/mount.h\n" +
+            " *   macOS  -- returns -ENOSYS; namespaces are a Linux-only concept,\n" +
+            " *             this is the right shape for graceful degradation.\n" +
+            " */\n" +
+            "\n" +
+            "#ifdef __linux__\n" +
+            "/* Need _GNU_SOURCE for unshare, setns, pivot_root, CLONE_NEW* flags.\n" +
+            " * cmd_build adds it on Linux, but defining it here is harmless on\n" +
+            " * a build that already has it. */\n" +
+            "#ifndef _GNU_SOURCE\n" +
+            "#define _GNU_SOURCE\n" +
+            "#endif\n" +
+            "#include <sched.h>\n" +
+            "#include <linux/sched.h>     /* CLONE_NEW* */\n" +
+            "#include <sys/syscall.h>\n" +
+            "#include <sys/mount.h>\n" +
+            "#include <unistd.h>\n" +
+            "#endif\n" +
+            "\n" +
+            "HexaVal hexa_unshare(HexaVal flags_v) {\n" +
+            "#ifdef __linux__\n" +
+            "    if (!HX_IS_INT(flags_v)) return hexa_int((int64_t)-EINVAL);\n" +
+            "    if (unshare((int)HX_INT(flags_v)) < 0) return hexa_int((int64_t)-errno);\n" +
+            "    return hexa_int(0);\n" +
+            "#else\n" +
+            "    (void)flags_v;\n" +
+            "    return hexa_int((int64_t)-ENOSYS);\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
+            "HexaVal hexa_setns(HexaVal fd_v, HexaVal nstype_v) {\n" +
+            "#ifdef __linux__\n" +
+            "    if (!HX_IS_INT(fd_v) || !HX_IS_INT(nstype_v)) return hexa_int((int64_t)-EINVAL);\n" +
+            "    if (setns((int)HX_INT(fd_v), (int)HX_INT(nstype_v)) < 0) return hexa_int((int64_t)-errno);\n" +
+            "    return hexa_int(0);\n" +
+            "#else\n" +
+            "    (void)fd_v; (void)nstype_v;\n" +
+            "    return hexa_int((int64_t)-ENOSYS);\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
+            "HexaVal hexa_pivot_root(HexaVal new_root_v, HexaVal put_old_v) {\n" +
+            "#ifdef __linux__\n" +
+            "    if (!HX_IS_STR(new_root_v) || !HX_IS_STR(put_old_v)) return hexa_int((int64_t)-EINVAL);\n" +
+            "    long r = syscall(SYS_pivot_root, HX_STR(new_root_v), HX_STR(put_old_v));\n" +
+            "    if (r < 0) return hexa_int((int64_t)-errno);\n" +
+            "    return hexa_int(0);\n" +
+            "#else\n" +
+            "    (void)new_root_v; (void)put_old_v;\n" +
+            "    return hexa_int((int64_t)-ENOSYS);\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
+            "/* CLONE_NEW* constants by name. Lets hexa code do:\n" +
+            " *   let CLONE_NEWNS = namespace_clone_const(\"CLONE_NEWNS\")\n" +
+            " * without exposing every flag as a separate const builtin.\n" +
+            " * Returns 0 for unknown names (Linux callers should not pass them).\n" +
+            " */\n" +
+            "HexaVal hexa_namespace_clone_const(HexaVal name_v) {\n" +
+            "#ifdef __linux__\n" +
+            "    if (!HX_IS_STR(name_v)) return hexa_int(0);\n" +
+            "    const char* n = HX_STR(name_v);\n" +
+            "    if (strcmp(n, \"CLONE_NEWNS\")     == 0) return hexa_int((int64_t)CLONE_NEWNS);\n" +
+            "    if (strcmp(n, \"CLONE_NEWUTS\")    == 0) return hexa_int((int64_t)CLONE_NEWUTS);\n" +
+            "    if (strcmp(n, \"CLONE_NEWIPC\")    == 0) return hexa_int((int64_t)CLONE_NEWIPC);\n" +
+            "    if (strcmp(n, \"CLONE_NEWPID\")    == 0) return hexa_int((int64_t)CLONE_NEWPID);\n" +
+            "    if (strcmp(n, \"CLONE_NEWNET\")    == 0) return hexa_int((int64_t)CLONE_NEWNET);\n" +
+            "    if (strcmp(n, \"CLONE_NEWUSER\")   == 0) return hexa_int((int64_t)CLONE_NEWUSER);\n" +
+            "    if (strcmp(n, \"CLONE_NEWCGROUP\") == 0) return hexa_int((int64_t)CLONE_NEWCGROUP);\n" +
+            "    if (strcmp(n, \"CLONE_NEWTIME\")   == 0) return hexa_int((int64_t)CLONE_NEWTIME);\n" +
+            "    return hexa_int(0);\n" +
+            "#else\n" +
+            "    (void)name_v;\n" +
+            "    /* On non-Linux, return the canonical Linux values so portable code can\n" +
+            "     * be written without #ifdef. The actual unshare() will still return\n" +
+            "     * -ENOSYS, but the constants are useful for serialization / docs. */\n" +
+            "    if (!HX_IS_STR(name_v)) return hexa_int(0);\n" +
+            "    const char* n = HX_STR(name_v);\n" +
+            "    if (strcmp(n, \"CLONE_NEWNS\")     == 0) return hexa_int(0x00020000);\n" +
+            "    if (strcmp(n, \"CLONE_NEWUTS\")    == 0) return hexa_int(0x04000000);\n" +
+            "    if (strcmp(n, \"CLONE_NEWIPC\")    == 0) return hexa_int(0x08000000);\n" +
+            "    if (strcmp(n, \"CLONE_NEWUSER\")   == 0) return hexa_int(0x10000000);\n" +
+            "    if (strcmp(n, \"CLONE_NEWPID\")    == 0) return hexa_int(0x20000000);\n" +
+            "    if (strcmp(n, \"CLONE_NEWNET\")    == 0) return hexa_int(0x40000000);\n" +
+            "    if (strcmp(n, \"CLONE_NEWCGROUP\") == 0) return hexa_int(0x02000000);\n" +
+            "    if (strcmp(n, \"CLONE_NEWTIME\")   == 0) return hexa_int(0x00000080);\n" +
+            "    return hexa_int(0);\n" +
+            "#endif\n" +
+            "}\n"
+    return s
+}
+
+fn main() {
+    let argv = real_args()
+    let out_path = if argv.len() >= 1 { argv[0] } else { "namespace.c" }
+    let c_text = emit_namespace_c()
+    let cmd = "cat > \"" + out_path + "\" <<'NAMESPACE_EMIT_EOF'\n" +
+              c_text + "NAMESPACE_EMIT_EOF"
+    let _ = exec(cmd)
+    let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
+    if exists_check != "y" {
+        println("[namespace_emit] FATAL: failed to write " + out_path)
+        exit(1)
+    }
+    println("[namespace_emit] wrote " + out_path)
+    exit(0)
+}

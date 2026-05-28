@@ -1,0 +1,23 @@
+========================================================================
+  self/native — fp_init_byte_diff: B9.C-10 .c-text byte-diff oracle
+========================================================================
+  generator: self/native/fp_init_emit.hexa
+  oracle:    source-SHA byte-diff vs hand-written fp_init.c
+  note:      runtime.c #include fragment — .o proof via full hexa_cc build
+
+  scratch: /var/folders/2g/blzd56lx2rvfvt61c1pc9g7r0000gn/T/fp_init_byte_diff.XXXXXX.Lrd1H1xzta
+
+  [PASS] hexa emitter self/native/fp_init_emit.hexa present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a29a88987b6876976/self/native/fp_init_emit.hexa
+  [PASS] hand-written self/native/fp_init.c present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a29a88987b6876976/self/native/fp_init.c
+  [PASS] gate-1 source-text byte-identical (sha256(.c))
+         · orig=f32c2ccd8dc320cd96b57f9352e75891d649fe4b801ad15a356192e5bdb4ed46 gen=f32c2ccd8dc320cd96b57f9352e75891d649fe4b801ad15a356192e5bdb4ed46
+
+  B9.C-10 fp_init.c .c-text byte-identity:
+    PROVEN ✓ — hand-written fp_init.c is fully hexa-emittable.
+    DELETION GATE OPEN — self/native/fp_init.c may be `git rm` once the
+    full hexa_cc build (regen + runtime.c compile + smoke) also PASSes.
+========================================================================
+  3/3 checks passed
+__HEXA_LANG_FP_INIT_BYTE_DIFF__ PASS

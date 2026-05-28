@@ -1,0 +1,99 @@
+#!hexa strict
+// self/native/fp_init_emit.hexa
+//   B9.C-10 (.c-text · #1848 pattern) — fp_init.c source emitter.
+//
+// runtime.c #include "native/fp_init.c" — RFC 061 amalgamation fragment
+// (NOT a standalone TU; references runtime.c-internal symbols). This emitter
+// is the SSOT; the build regenerates self/native/fp_init.c from it before
+// runtime.c compiles, so the .c becomes a gitignored build artifact.
+//
+// Byte-identity: regenerated C is byte-for-byte the hand-written source, so
+// the runtime.c TU (and the linked hexa binary) is identical — PERF UNCHANGED.
+//
+// Invocation:  hexa-run self/native/fp_init_emit.hexa <output-path>
+// Default output path (if argv missing): "fp_init.c" in cwd.
+//
+// Phase: B9.C-10 batch (self/native runtime.c-included .c-text · F3).
+
+let MODULE_NAME = "fp_init_emit"
+
+fn emit_fp_init_c() -> str {
+    // Verbatim content of hand-written self/native/fp_init.c
+    let s =
+            "/* ═══════════════════════════════════════════════════════════════════\n" +
+            " * self/native/fp_init.c — B20 / roadmap 55 Phase 1\n" +
+            " *\n" +
+            " * Per-thread FP control-word normalization for IEEE 754 strict mode.\n" +
+            " *\n" +
+            " * Called unconditionally at main() entry (codegen_c2.hexa emits\n" +
+            " * `hexa_fp_init()` right after hexa_set_args). Idempotent — safe to\n" +
+            " * invoke multiple times or from any thread entry trampoline.\n" +
+            " *\n" +
+            " * Why per-thread: MXCSR (x86_64) and FPCR (aarch64) are thread-local\n" +
+            " * registers. OS/runtime may seed them with FTZ/DAZ/non-IEEE rounding\n" +
+            " * bits enabled (e.g. Intel MKL sets DAZ, Accelerate sets FZ on some\n" +
+            " * paths). Bit-exact cross-substrate FP requires explicit reset in\n" +
+            " * every thread that runs @strict_fp code.\n" +
+            " *\n" +
+            " * Phase 2 will wire hexa_fp_init() into a pthread_create() wrapper\n" +
+            " * (self/native/signal_flock.c pattern) so worker-pool threads inherit\n" +
+            " * the normalized state.\n" +
+            " *\n" +
+            " * Semantics:\n" +
+            " *   x86_64: clear FTZ (bit 15) + DAZ (bit 6) in MXCSR.\n" +
+            " *           Round-to-nearest-even is the default (RC=00), untouched.\n" +
+            " *   aarch64: zero FPCR — clears FZ (bit 24), FZ16 (bit 19), AH (bit 1),\n" +
+            " *            sets round-to-nearest-even (RMode=00), no trapping.\n" +
+            " *   other: no-op (the two-rounding FMA gate in codegen still holds).\n" +
+            " * ═══════════════════════════════════════════════════════════════════ */\n" +
+            "\n" +
+            "#include <stdint.h>\n" +
+            "\n" +
+            "#if defined(__x86_64__) || defined(_M_X64)\n" +
+            "#include <xmmintrin.h>\n" +
+            "#include <pmmintrin.h>\n" +
+            "#endif\n" +
+            "\n" +
+            "static int _hexa_fp_init_done = 0;\n" +
+            "\n" +
+            "void hexa_fp_init(void) {\n" +
+            "#if defined(__x86_64__) || defined(_M_X64)\n" +
+            "    /* Clear FTZ (0x8000) and DAZ (0x0040) while preserving RC/other. */\n" +
+            "    unsigned int csr = _mm_getcsr();\n" +
+            "    csr &= ~0x8040u;\n" +
+            "    _mm_setcsr(csr);\n" +
+            "#elif defined(__aarch64__)\n" +
+            "    /* FPCR ← 0: FZ=0, AH=0, RMode=00 (round-to-nearest-even). */\n" +
+            "    uint64_t zero = 0;\n" +
+            "    __asm__ volatile (\"msr fpcr, %0\" :: \"r\"(zero));\n" +
+            "#else\n" +
+            "    /* Other substrates (ppc64le, riscv64, …): no per-thread FP CSR to\n" +
+            "     * normalize here. The codegen-side FMA gate still applies; strict\n" +
+            "     * transcendental libm (Phase 2 crlibm vendoring) will carry the\n" +
+            "     * remaining portability burden. */\n" +
+            "#endif\n" +
+            "    _hexa_fp_init_done = 1;\n" +
+            "}\n" +
+            "\n" +
+            "/* Observable for self-test / introspection. */\n" +
+            "int hexa_fp_init_was_called(void) {\n" +
+            "    return _hexa_fp_init_done;\n" +
+            "}\n"
+    return s
+}
+
+fn main() {
+    let argv = real_args()
+    let out_path = if argv.len() >= 1 { argv[0] } else { "fp_init.c" }
+    let c_text = emit_fp_init_c()
+    let cmd = "cat > \"" + out_path + "\" <<'FP_INIT_EMIT_EOF'\n" +
+              c_text + "FP_INIT_EMIT_EOF"
+    let _ = exec(cmd)
+    let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
+    if exists_check != "y" {
+        println("[fp_init_emit] FATAL: failed to write " + out_path)
+        exit(1)
+    }
+    println("[fp_init_emit] wrote " + out_path)
+    exit(0)
+}

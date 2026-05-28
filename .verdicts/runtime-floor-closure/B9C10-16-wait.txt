@@ -1,0 +1,23 @@
+========================================================================
+  self/native — wait_byte_diff: B9.C-10 .c-text byte-diff oracle
+========================================================================
+  generator: self/native/wait_emit.hexa
+  oracle:    source-SHA byte-diff vs hand-written wait.c
+  note:      runtime.c #include fragment — .o proof via full hexa_cc build
+
+  scratch: /var/folders/2g/blzd56lx2rvfvt61c1pc9g7r0000gn/T/wait_byte_diff.XXXXXX.blgNiXkLOa
+
+  [PASS] hexa emitter self/native/wait_emit.hexa present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a29a88987b6876976/self/native/wait_emit.hexa
+  [PASS] hand-written self/native/wait.c present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a29a88987b6876976/self/native/wait.c
+  [PASS] gate-1 source-text byte-identical (sha256(.c))
+         · orig=9c9bc95f9990381aecda8b33733855e1bbbd3553984a741bb34b470f8e0f1838 gen=9c9bc95f9990381aecda8b33733855e1bbbd3553984a741bb34b470f8e0f1838
+
+  B9.C-10 wait.c .c-text byte-identity:
+    PROVEN ✓ — hand-written wait.c is fully hexa-emittable.
+    DELETION GATE OPEN — self/native/wait.c may be `git rm` once the
+    full hexa_cc build (regen + runtime.c compile + smoke) also PASSes.
+========================================================================
+  3/3 checks passed
+__HEXA_LANG_WAIT_BYTE_DIFF__ PASS

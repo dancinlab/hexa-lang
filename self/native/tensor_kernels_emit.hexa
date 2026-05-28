@@ -1,0 +1,346 @@
+#!hexa strict
+// self/native/tensor_kernels_emit.hexa
+//   B9.C-10 (.c-text · #1848 pattern) — tensor_kernels.c source emitter.
+//
+// runtime.c #include "native/tensor_kernels.c" — RFC 061 amalgamation fragment
+// (NOT a standalone TU; references runtime.c-internal symbols). This emitter
+// is the SSOT; the build regenerates self/native/tensor_kernels.c from it before
+// runtime.c compiles, so the .c becomes a gitignored build artifact.
+//
+// Byte-identity: regenerated C is byte-for-byte the hand-written source, so
+// the runtime.c TU (and the linked hexa binary) is identical — PERF UNCHANGED.
+//
+// Invocation:  hexa-run self/native/tensor_kernels_emit.hexa <output-path>
+// Default output path (if argv missing): "tensor_kernels.c" in cwd.
+//
+// Phase: B9.C-10 batch (self/native runtime.c-included .c-text · F3).
+
+let MODULE_NAME = "tensor_kernels_emit"
+
+fn emit_tensor_kernels_c() -> str {
+    // Verbatim content of hand-written self/native/tensor_kernels.c
+    let s =
+            "// ═══════════════════════════════════════════════════════════\n" +
+            "//  self/native/tensor_kernels.c — anima-critical HOT kernels (T3)\n" +
+            "//\n" +
+            "//  @hot_kernel — DO NOT MIGRATE TO HEXA\n" +
+            "//  Every function here is called inside anima's training inner loop\n" +
+            "//  (tensor init, forward/backward, optimizer). Moving to HEXA would\n" +
+            "//  pay HexaVal-wrap/dispatch cost per element — 10-100x slowdown.\n" +
+            "//\n" +
+            "//  Boundary policy:\n" +
+            "//    - OS calls (clock_gettime, rand) stay C\n" +
+            "//    - f32/f64/i32 pointer read/write — C (direct memcpy, no HexaVal)\n" +
+            "//    - tensor struct alloc / free / reshape — C\n" +
+            "//    - BLAS adapters (if any) — C (link against Accelerate/OpenBLAS)\n" +
+            "//\n" +
+            "//  Whitelist: $NEXUS/shared/hexa/hot-path.jsonl (anima runtime consumers)\n" +
+            "//  Policy:    docs/hexa-hot-path.md\n" +
+            "//\n" +
+            "//  Included into runtime.c via `#include \"native/tensor_kernels.c\"`.\n" +
+            "//  Not a standalone TU — relies on runtime.c's types (HexaVal, TAG_INT,\n" +
+            "//  TAG_FLOAT, hexa_int/hexa_float/hexa_void) + __hx_to_double helper.\n" +
+            "// ═══════════════════════════════════════════════════════════\n" +
+            "\n" +
+            "// Compatibility: HX_* accessor macros may not be defined yet if runtime.c\n" +
+            "// is pre-Phase-A (struct fields only). Define them as identity-map stubs.\n" +
+            "#ifndef HX_IS_INT\n" +
+            "#define HX_IS_INT(v)    ((v).tag == TAG_INT)\n" +
+            "#define HX_IS_FLOAT(v)  ((v).tag == TAG_FLOAT)\n" +
+            "#define HX_INT(v)       ((v).i)\n" +
+            "#define HX_FLOAT(v)     ((v).f)\n" +
+            "#endif\n" +
+            "#ifndef HX_INT_U\n" +
+            "#define HX_INT_U(v)     HX_INT(v)\n" +
+            "#endif\n" +
+            "\n" +
+            "/* @hot_kernel: f32/f64/i32 pointer read/write — direct memcpy ------ */\n" +
+            "\n" +
+            "HexaVal hexa_ptr_write_f32(HexaVal ptr, HexaVal offset, HexaVal val) {\n" +
+            "    int64_t p = HX_IS_INT(ptr) ? HX_INT_U(ptr) : 0;\n" +
+            "    int64_t off = HX_IS_INT(offset) ? HX_INT_U(offset) : 0;\n" +
+            "    if (p == 0) return hexa_void();\n" +
+            "    float f = (float)__hx_to_double(val);\n" +
+            "    memcpy((uint8_t*)(uintptr_t)p + off, &f, sizeof(float));\n" +
+            "    return hexa_void();\n" +
+            "}\n" +
+            "\n" +
+            "HexaVal hexa_ptr_write_i32(HexaVal ptr, HexaVal offset, HexaVal val) {\n" +
+            "    int64_t p = HX_IS_INT(ptr) ? HX_INT_U(ptr) : 0;\n" +
+            "    int64_t off = HX_IS_INT(offset) ? HX_INT_U(offset) : 0;\n" +
+            "    if (p == 0) return hexa_void();\n" +
+            "    int32_t v = (int32_t)HX_INT(val);\n" +
+            "    memcpy((uint8_t*)(uintptr_t)p + off, &v, sizeof(int32_t));\n" +
+            "    return hexa_void();\n" +
+            "}\n" +
+            "\n" +
+            "HexaVal hexa_ptr_read_f64(HexaVal ptr, HexaVal offset) {\n" +
+            "    int64_t p = HX_IS_INT(ptr) ? HX_INT_U(ptr) : 0;\n" +
+            "    int64_t off = HX_IS_INT(offset) ? HX_INT_U(offset) : 0;\n" +
+            "    if (p == 0) return hexa_float(0.0);\n" +
+            "    double d;\n" +
+            "    memcpy(&d, (uint8_t*)(uintptr_t)p + off, sizeof(double));\n" +
+            "    return hexa_float(d);\n" +
+            "}\n" +
+            "\n" +
+            "HexaVal hexa_ptr_read_f32(HexaVal ptr, HexaVal offset) {\n" +
+            "    int64_t p = HX_IS_INT(ptr) ? HX_INT_U(ptr) : 0;\n" +
+            "    int64_t off = HX_IS_INT(offset) ? HX_INT_U(offset) : 0;\n" +
+            "    if (p == 0) return hexa_float(0.0);\n" +
+            "    float f;\n" +
+            "    memcpy(&f, (uint8_t*)(uintptr_t)p + off, sizeof(float));\n" +
+            "    return hexa_float((double)f);\n" +
+            "}\n" +
+            "\n" +
+            "HexaVal hexa_ptr_read_i32(HexaVal ptr, HexaVal offset) {\n" +
+            "    int64_t p = HX_IS_INT(ptr) ? HX_INT_U(ptr) : 0;\n" +
+            "    int64_t off = HX_IS_INT(offset) ? HX_INT_U(offset) : 0;\n" +
+            "    if (p == 0) return hexa_int(0);\n" +
+            "    int32_t v;\n" +
+            "    memcpy(&v, (uint8_t*)(uintptr_t)p + off, sizeof(int32_t));\n" +
+            "    return hexa_int((int64_t)v);\n" +
+            "}\n" +
+            "\n" +
+            "/* IEEE-754 bit-cast helpers — bytes <-> Float (little-endian).\n" +
+            " * Required by safetensors B5 (encoder) and any pure-hexa caller that\n" +
+            " * needs the wire-level binary32/binary64 representation without an\n" +
+            " * external pointer allocation. Returns/accepts a TAG_ARRAY of int\n" +
+            " * (each element 0..255) — the project's canonical \"bytes\" shape.\n" +
+            " *\n" +
+            " * NaN handling: payload-preserving. The C `memcpy` round-trip copies\n" +
+            " * all 32/64 bits including the quiet/signaling bit and payload. We do\n" +
+            " * NOT canonicalize NaN — callers that need a single canonical NaN\n" +
+            " * must mask before encoding. Both signaling and quiet NaNs survive\n" +
+            " * a round-trip bit-identically (subject to platform float promotion;\n" +
+            " * see f32 narrowing note below).\n" +
+            " *\n" +
+            " * f32 narrowing note: hexa's runtime Float is C `double`. The\n" +
+            " * `f32_to_bytes_le` path performs a `(float)d` narrow which is\n" +
+            " * lossy for any double whose magnitude exceeds float range or whose\n" +
+            " * mantissa needs >24 bits. The reverse `bytes_to_f32_le` widens via\n" +
+            " * `(double)f` which IS lossless (every binary32 has an exact binary64\n" +
+            " * representation). Therefore round-trip is bit-identical ONLY for\n" +
+            " * values that already fit in binary32. Callers feeding arbitrary\n" +
+            " * doubles into f32_to_bytes_le accept the standard IEEE-754\n" +
+            " * round-to-nearest-even narrowing; ±inf and ±0 are preserved exactly,\n" +
+            " * subnormals/denormals follow the platform FPU mode (default IEEE).\n" +
+            " */\n" +
+            "\n" +
+            "HexaVal hexa_f32_to_bytes_le(HexaVal val) {\n" +
+            "    float f = (float)__hx_to_double(val);\n" +
+            "    uint8_t buf[4];\n" +
+            "    memcpy(buf, &f, 4);\n" +
+            "    HexaVal arr = hexa_array_new();\n" +
+            "    HexaVal* items = (HexaVal*)malloc(sizeof(HexaVal) * 4);\n" +
+            "    for (int i = 0; i < 4; i++) items[i] = hexa_int((int64_t)buf[i]);\n" +
+            "    HX_SET_ARR_ITEMS(arr, items);\n" +
+            "    HX_SET_ARR_CAP(arr, 4);\n" +
+            "    HX_SET_ARR_LEN(arr, 4);\n" +
+            "    return arr;\n" +
+            "}\n" +
+            "\n" +
+            "HexaVal hexa_bytes_to_f32_le(HexaVal arr, HexaVal offset) {\n" +
+            "    int64_t off = HX_IS_INT(offset) ? HX_INT(offset) : 0;\n" +
+            "    if (!HX_IS_ARRAY(arr)) return hexa_float(0.0);\n" +
+            "    int len = HX_ARR_LEN(arr);\n" +
+            "    if (off < 0 || off + 4 > len) return hexa_float(0.0);\n" +
+            "    HexaVal* items = HX_ARR_ITEMS(arr);\n" +
+            "    uint8_t buf[4];\n" +
+            "    for (int i = 0; i < 4; i++) {\n" +
+            "        HexaVal el = items[off + i];\n" +
+            "        int64_t v = 0;\n" +
+            "        if (HX_IS_INT(el)) v = HX_INT(el);\n" +
+            "        else if (HX_IS_FLOAT(el)) v = (int64_t)HX_FLOAT(el);\n" +
+            "        buf[i] = (uint8_t)(v & 0xFF);\n" +
+            "    }\n" +
+            "    float f;\n" +
+            "    memcpy(&f, buf, 4);\n" +
+            "    return hexa_float((double)f);\n" +
+            "}\n" +
+            "\n" +
+            "HexaVal hexa_f64_to_bytes_le(HexaVal val) {\n" +
+            "    double d = __hx_to_double(val);\n" +
+            "    uint8_t buf[8];\n" +
+            "    memcpy(buf, &d, 8);\n" +
+            "    HexaVal arr = hexa_array_new();\n" +
+            "    HexaVal* items = (HexaVal*)malloc(sizeof(HexaVal) * 8);\n" +
+            "    for (int i = 0; i < 8; i++) items[i] = hexa_int((int64_t)buf[i]);\n" +
+            "    HX_SET_ARR_ITEMS(arr, items);\n" +
+            "    HX_SET_ARR_CAP(arr, 8);\n" +
+            "    HX_SET_ARR_LEN(arr, 8);\n" +
+            "    return arr;\n" +
+            "}\n" +
+            "\n" +
+            "/* hexa_float_to_bits / hexa_bits_to_float — REMOVED from this file.\n" +
+            " * Two parallel PRs landed the same INBOX #1668: PR #1677 (acc8435a) put\n" +
+            " * the weak `__attribute__((weak))` defs in self/runtime.c, and PR #1678\n" +
+            " * (1636dc10) put strong defs here in tensor_kernels.c. tensor_kernels.c\n" +
+            " * is #include'd into runtime.c (see comments at runtime.c:2881 / :3100),\n" +
+            " * so within one TU the strong+weak pair triggered `redefinition` errors\n" +
+            " * that broke origin/main builds. Canonical placement = runtime.c weak\n" +
+            " * (PR #1677); the strong dup is removed here. INBOX dup-race precheck\n" +
+            " * miss (memory: [[feedback_inbox_dup_race_precheck]]).\n" +
+            " */\n" +
+            "\n" +
+            "HexaVal hexa_bytes_to_f64_le(HexaVal arr, HexaVal offset) {\n" +
+            "    int64_t off = HX_IS_INT(offset) ? HX_INT(offset) : 0;\n" +
+            "    if (!HX_IS_ARRAY(arr)) return hexa_float(0.0);\n" +
+            "    int len = HX_ARR_LEN(arr);\n" +
+            "    if (off < 0 || off + 8 > len) return hexa_float(0.0);\n" +
+            "    HexaVal* items = HX_ARR_ITEMS(arr);\n" +
+            "    uint8_t buf[8];\n" +
+            "    for (int i = 0; i < 8; i++) {\n" +
+            "        HexaVal el = items[off + i];\n" +
+            "        int64_t v = 0;\n" +
+            "        if (HX_IS_INT(el)) v = HX_INT(el);\n" +
+            "        else if (HX_IS_FLOAT(el)) v = (int64_t)HX_FLOAT(el);\n" +
+            "        buf[i] = (uint8_t)(v & 0xFF);\n" +
+            "    }\n" +
+            "    double d;\n" +
+            "    memcpy(&d, buf, 8);\n" +
+            "    return hexa_float(d);\n" +
+            "}\n" +
+            "\n" +
+            "/* Variant for the interpreter dispatch (TAG_VALSTRUCT-wrapped items).\n" +
+            " * Same semantics as hexa_bytes_to_f{32,64}_le but unwraps each Val\n" +
+            " * to read its int_val. Mirrors the rt_write_bytes_v / rt_write_bytes\n" +
+            " * split.\n" +
+            " */\n" +
+            "HexaVal hexa_bytes_to_f32_le_v(HexaVal arr, HexaVal offset) {\n" +
+            "    int64_t off = HX_IS_INT(offset) ? HX_INT(offset) : 0;\n" +
+            "    if (!HX_IS_ARRAY(arr)) return hexa_float(0.0);\n" +
+            "    int len = HX_ARR_LEN(arr);\n" +
+            "    if (off < 0 || off + 4 > len) return hexa_float(0.0);\n" +
+            "    HexaVal* items = HX_ARR_ITEMS(arr);\n" +
+            "    uint8_t buf[4];\n" +
+            "    for (int i = 0; i < 4; i++) {\n" +
+            "        HexaVal el = items[off + i];\n" +
+            "        int64_t v = 0;\n" +
+            "        if (HX_IS_INT(el)) v = HX_INT(el);\n" +
+            "        else if (HX_IS_FLOAT(el)) v = (int64_t)HX_FLOAT(el);\n" +
+            "        else if (HX_TAG(el) == TAG_VALSTRUCT) {\n" +
+            "            HexaVal iv = hexa_valstruct_int(el);\n" +
+            "            if (HX_IS_INT(iv)) v = HX_INT(iv);\n" +
+            "            else if (HX_IS_FLOAT(iv)) v = (int64_t)HX_FLOAT(iv);\n" +
+            "        }\n" +
+            "        buf[i] = (uint8_t)(v & 0xFF);\n" +
+            "    }\n" +
+            "    float f;\n" +
+            "    memcpy(&f, buf, 4);\n" +
+            "    return hexa_float((double)f);\n" +
+            "}\n" +
+            "\n" +
+            "HexaVal hexa_bytes_to_f64_le_v(HexaVal arr, HexaVal offset) {\n" +
+            "    int64_t off = HX_IS_INT(offset) ? HX_INT(offset) : 0;\n" +
+            "    if (!HX_IS_ARRAY(arr)) return hexa_float(0.0);\n" +
+            "    int len = HX_ARR_LEN(arr);\n" +
+            "    if (off < 0 || off + 8 > len) return hexa_float(0.0);\n" +
+            "    HexaVal* items = HX_ARR_ITEMS(arr);\n" +
+            "    uint8_t buf[8];\n" +
+            "    for (int i = 0; i < 8; i++) {\n" +
+            "        HexaVal el = items[off + i];\n" +
+            "        int64_t v = 0;\n" +
+            "        if (HX_IS_INT(el)) v = HX_INT(el);\n" +
+            "        else if (HX_IS_FLOAT(el)) v = (int64_t)HX_FLOAT(el);\n" +
+            "        else if (HX_TAG(el) == TAG_VALSTRUCT) {\n" +
+            "            HexaVal iv = hexa_valstruct_int(el);\n" +
+            "            if (HX_IS_INT(iv)) v = HX_INT(iv);\n" +
+            "            else if (HX_IS_FLOAT(iv)) v = (int64_t)HX_FLOAT(iv);\n" +
+            "        }\n" +
+            "        buf[i] = (uint8_t)(v & 0xFF);\n" +
+            "    }\n" +
+            "    double d;\n" +
+            "    memcpy(&d, buf, 8);\n" +
+            "    return hexa_float(d);\n" +
+            "}\n" +
+            "\n" +
+            "/* Unprefixed aliases (FIX-2 unblock 2026-05-04) ---------------------\n" +
+            " * The precompiled bootstrap transpiler self/native/hexat was built\n" +
+            " * before FIX-2's codegen registrations existed, so it emits raw symbol\n" +
+            " * references like `hexa_call1(f32_to_bytes_le, x)` instead of the\n" +
+            " * prefixed `hexa_f32_to_bytes_le(x)` direct call. The hexa_call1 /\n" +
+            " * hexa_call2 macros use _Generic to dispatch raw fn pointers, so as\n" +
+            " * long as the unprefixed identifier resolves to a same-typed function,\n" +
+            " * the call lowers correctly. These aliases provide that resolution\n" +
+            " * without regenerating hexat.\n" +
+            " */\n" +
+            "static inline HexaVal f32_to_bytes_le(HexaVal val) { return hexa_f32_to_bytes_le(val); }\n" +
+            "static inline HexaVal f64_to_bytes_le(HexaVal val) { return hexa_f64_to_bytes_le(val); }\n" +
+            "static inline HexaVal bytes_to_f32_le(HexaVal arr, HexaVal off) { return hexa_bytes_to_f32_le(arr, off); }\n" +
+            "static inline HexaVal bytes_to_f64_le(HexaVal arr, HexaVal off) { return hexa_bytes_to_f64_le(arr, off); }\n" +
+            "\n" +
+            "/* @hot_kernel: f32/f64 struct pack/unpack (FFI marshaling) --------- */\n" +
+            "\n" +
+            "HexaVal hexa_struct_pack_f32(HexaVal* args, int nargs) {\n" +
+            "    if (nargs <= 0) return hexa_int(0);\n" +
+            "    size_t total = (size_t)nargs * sizeof(float);\n" +
+            "    float* buf = (float*)calloc(1, total);\n" +
+            "    for (int i = 0; i < nargs; i++) {\n" +
+            "        buf[i] = (float)(HX_IS_FLOAT(args[i]) ? HX_FLOAT(args[i]) : (double)HX_INT(args[i]));\n" +
+            "    }\n" +
+            "    return hexa_int((int64_t)(uintptr_t)buf);\n" +
+            "}\n" +
+            "\n" +
+            "HexaVal hexa_struct_unpack_f32(HexaVal ptr, HexaVal index) {\n" +
+            "    int64_t p = HX_IS_INT(ptr) ? HX_INT_U(ptr) : 0;\n" +
+            "    int64_t idx = HX_IS_INT(index) ? HX_INT(index) : 0;\n" +
+            "    if (p == 0) return hexa_float(0.0);\n" +
+            "    float* buf = (float*)(uintptr_t)p;\n" +
+            "    return hexa_float((double)buf[idx]);\n" +
+            "}\n" +
+            "\n" +
+            "/* @hot_kernel: tensor struct stubs (row/col/data pointer) ---------- */\n" +
+            "\n" +
+            "typedef struct { int64_t rows; int64_t cols; float* data; } HexaTensorStub;\n" +
+            "\n" +
+            "HexaVal hexa_tensor_new(HexaVal r, HexaVal c) {\n" +
+            "    int64_t rows = HX_IS_INT(r)?HX_INT(r):(int64_t)HX_FLOAT(r);\n" +
+            "    int64_t cols = HX_IS_INT(c)?HX_INT(c):(int64_t)HX_FLOAT(c);\n" +
+            "    HexaTensorStub* t = (HexaTensorStub*)calloc(1, sizeof(*t));\n" +
+            "    t->rows = rows; t->cols = cols;\n" +
+            "    t->data = (float*)calloc((size_t)(rows*cols), sizeof(float));\n" +
+            "    return hexa_int((int64_t)(uintptr_t)t);\n" +
+            "}\n" +
+            "\n" +
+            "HexaVal hexa_tensor_randn(HexaVal r, HexaVal c) {\n" +
+            "    HexaVal v = hexa_tensor_new(r, c);\n" +
+            "    HexaTensorStub* t = (HexaTensorStub*)(uintptr_t)HX_INT_U(v);\n" +
+            "    int64_t n = t->rows * t->cols;\n" +
+            "    for (int64_t i = 0; i < n; i++) {\n" +
+            "        double u = (rand()+1.0)/(RAND_MAX+1.0);\n" +
+            "        double w = (rand()+1.0)/(RAND_MAX+1.0);\n" +
+            "        t->data[i] = (float)(sqrt(-2.0*log(u)) * cos(6.28318530718*w));\n" +
+            "    }\n" +
+            "    return v;\n" +
+            "}\n" +
+            "\n" +
+            "HexaVal hexa_tensor_data_ptr(HexaVal tv) {\n" +
+            "    HexaTensorStub* t = (HexaTensorStub*)(uintptr_t)HX_INT_U(tv);\n" +
+            "    return hexa_int((int64_t)(uintptr_t)t->data);\n" +
+            "}\n" +
+            "\n" +
+            "HexaVal hexa_tensor_from_ptr(HexaVal p, HexaVal r, HexaVal c) {\n" +
+            "    HexaTensorStub* t = (HexaTensorStub*)calloc(1, sizeof(*t));\n" +
+            "    t->rows = HX_IS_INT(r)?HX_INT(r):(int64_t)HX_FLOAT(r);\n" +
+            "    t->cols = HX_IS_INT(c)?HX_INT(c):(int64_t)HX_FLOAT(c);\n" +
+            "    t->data = (float*)(uintptr_t)(HX_IS_INT(p)?HX_INT_U(p):(int64_t)HX_FLOAT(p));\n" +
+            "    return hexa_int((int64_t)(uintptr_t)t);\n" +
+            "}\n"
+    return s
+}
+
+fn main() {
+    let argv = real_args()
+    let out_path = if argv.len() >= 1 { argv[0] } else { "tensor_kernels.c" }
+    let c_text = emit_tensor_kernels_c()
+    let cmd = "cat > \"" + out_path + "\" <<'TENSOR_KERNELS_EMIT_EOF'\n" +
+              c_text + "TENSOR_KERNELS_EMIT_EOF"
+    let _ = exec(cmd)
+    let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
+    if exists_check != "y" {
+        println("[tensor_kernels_emit] FATAL: failed to write " + out_path)
+        exit(1)
+    }
+    println("[tensor_kernels_emit] wrote " + out_path)
+    exit(0)
+}

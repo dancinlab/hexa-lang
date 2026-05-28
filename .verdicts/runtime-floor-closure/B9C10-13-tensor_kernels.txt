@@ -1,0 +1,23 @@
+========================================================================
+  self/native — tensor_kernels_byte_diff: B9.C-10 .c-text byte-diff oracle
+========================================================================
+  generator: self/native/tensor_kernels_emit.hexa
+  oracle:    source-SHA byte-diff vs hand-written tensor_kernels.c
+  note:      runtime.c #include fragment — .o proof via full hexa_cc build
+
+  scratch: /var/folders/2g/blzd56lx2rvfvt61c1pc9g7r0000gn/T/tensor_kernels_byte_diff.XXXXXX.Ism8frGhcs
+
+  [PASS] hexa emitter self/native/tensor_kernels_emit.hexa present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a29a88987b6876976/self/native/tensor_kernels_emit.hexa
+  [PASS] hand-written self/native/tensor_kernels.c present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a29a88987b6876976/self/native/tensor_kernels.c
+  [PASS] gate-1 source-text byte-identical (sha256(.c))
+         · orig=b201b85820df05a6bfbfc877e6d9b73ef0566b954a87e4f9a3bea63a72ec4d99 gen=b201b85820df05a6bfbfc877e6d9b73ef0566b954a87e4f9a3bea63a72ec4d99
+
+  B9.C-10 tensor_kernels.c .c-text byte-identity:
+    PROVEN ✓ — hand-written tensor_kernels.c is fully hexa-emittable.
+    DELETION GATE OPEN — self/native/tensor_kernels.c may be `git rm` once the
+    full hexa_cc build (regen + runtime.c compile + smoke) also PASSes.
+========================================================================
+  3/3 checks passed
+__HEXA_LANG_TENSOR_KERNELS_BYTE_DIFF__ PASS

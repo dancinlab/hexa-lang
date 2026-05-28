@@ -1,0 +1,23 @@
+========================================================================
+  self/native — crypto_openssl_byte_diff: B9.C-10 .c-text byte-diff oracle
+========================================================================
+  generator: self/native/crypto_openssl_emit.hexa
+  oracle:    source-SHA byte-diff vs hand-written crypto_openssl.c
+  note:      runtime.c #include fragment — .o proof via full hexa_cc build
+
+  scratch: /var/folders/2g/blzd56lx2rvfvt61c1pc9g7r0000gn/T/crypto_openssl_byte_diff.XXXXXX.Hbynu0Fz01
+
+  [PASS] hexa emitter self/native/crypto_openssl_emit.hexa present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a29a88987b6876976/self/native/crypto_openssl_emit.hexa
+  [PASS] hand-written self/native/crypto_openssl.c present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a29a88987b6876976/self/native/crypto_openssl.c
+  [PASS] gate-1 source-text byte-identical (sha256(.c))
+         · orig=c3c8308cb81047757c9938bd498018f6ba22fad04b47494ff88987879466c32c gen=c3c8308cb81047757c9938bd498018f6ba22fad04b47494ff88987879466c32c
+
+  B9.C-10 crypto_openssl.c .c-text byte-identity:
+    PROVEN ✓ — hand-written crypto_openssl.c is fully hexa-emittable.
+    DELETION GATE OPEN — self/native/crypto_openssl.c may be `git rm` once the
+    full hexa_cc build (regen + runtime.c compile + smoke) also PASSes.
+========================================================================
+  3/3 checks passed
+__HEXA_LANG_CRYPTO_OPENSSL_BYTE_DIFF__ PASS

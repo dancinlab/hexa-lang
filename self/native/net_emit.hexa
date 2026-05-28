@@ -1,0 +1,701 @@
+#!hexa strict
+// self/native/net_emit.hexa
+//   B9.C-10 (.c-text · #1848 pattern) — net.c source emitter.
+//
+// runtime.c #include "native/net.c" — RFC 061 amalgamation fragment
+// (NOT a standalone TU; references runtime.c-internal symbols). This emitter
+// is the SSOT; the build regenerates self/native/net.c from it before
+// runtime.c compiles, so the .c becomes a gitignored build artifact.
+//
+// Byte-identity: regenerated C is byte-for-byte the hand-written source, so
+// the runtime.c TU (and the linked hexa binary) is identical — PERF UNCHANGED.
+//
+// Invocation:  hexa-run self/native/net_emit.hexa <output-path>
+// Default output path (if argv missing): "net.c" in cwd.
+//
+// Phase: B9.C-10 batch (self/native runtime.c-included .c-text · F3).
+
+let MODULE_NAME = "net_emit"
+
+fn emit_net_c() -> str {
+    // Verbatim content of hand-written self/native/net.c
+    let s =
+            "/* self/native/net.c — std::net POSIX TCP socket builtins\n" +
+            " *\n" +
+            " * Ported from src/std_net.rs (hexa-lang@ef92fc6) — pure C, no Rust.\n" +
+            " * Included from self/runtime.c via `#include \"native/net.c\"`.\n" +
+            " *\n" +
+            " * Symbols exported (6 primitives):\n" +
+            " *   hexa_net_listen(addr)        : string \"host:port\" → TAG_INT fd / -errno\n" +
+            " *   hexa_net_accept(listen_fd)   : TAG_INT listen_fd → TAG_INT client_fd\n" +
+            " *   hexa_net_close(fd)           : TAG_INT fd        → TAG_INT 0 / -errno\n" +
+            " *   hexa_net_connect(addr)       : string \"host:port\" → TAG_INT fd / -errno\n" +
+            " *   hexa_net_read(fd)            : TAG_INT fd        → TAG_STR data (len=0 on err)\n" +
+            " *   hexa_net_write(fd, data)     : TAG_INT fd, string → TAG_INT bytes / -errno\n" +
+            " *\n" +
+            " * http_get / http_serve are composed in self/std_net.hexa on top of these\n" +
+            " * primitives — no C-side implementation needed.\n" +
+            " *\n" +
+            " * Error model: negative TAG_INT carries the raw errno. Matches the\n" +
+            " * C-side convention used by hxcuda/hxblas shims. The .hexa wrappers\n" +
+            " * in self/std_net.hexa convert errnos back to structured errors.\n" +
+            " *\n" +
+            " * Historical note: listen/accept/close were originally inlined into\n" +
+            " * self/runtime.c (interp resurrection block, 2026-04-16). Extracted\n" +
+            " * here alongside connect/read/write so the net subsystem lives in\n" +
+            " * a single C file — analogous to tensor_kernels.c for the hot kernel\n" +
+            " * path.\n" +
+            " */\n" +
+            "\n" +
+            "#include <sys/socket.h>\n" +
+            "#include <sys/time.h>\n" +
+            "#include <sys/select.h>\n" +
+            "#include <sys/un.h>\n" +
+            "#include <netinet/in.h>\n" +
+            "#include <arpa/inet.h>\n" +
+            "#include <errno.h>\n" +
+            "#include <unistd.h>\n" +
+            "#include <fcntl.h>\n" +
+            "#include <string.h>\n" +
+            "#include <stdlib.h>\n" +
+            "#include <stddef.h>\n" +
+            "#include <sys/uio.h>\n" +
+            "\n" +
+            "/* This file is a partial translation unit: it is #include'd into\n" +
+            " * self/runtime.c (see the `#include \"native/net.c\"` near the bottom of\n" +
+            " * runtime.c) after the full `struct HexaVal_ { ... }` definition has\n" +
+            " * landed. Standalone IDE linting of net.c will surface \"unknown type\n" +
+            " * HexaVal / implicit declaration\" noise — those are not real build\n" +
+            " * errors. The real compile path produces a single TU with all types\n" +
+            " * already defined before net.c is expanded. */\n" +
+            "\n" +
+            "/* Parse \"host:port\" into sockaddr_in. Accepts:\n" +
+            " *   - dotted-quad (127.0.0.1), \"localhost\" → INADDR_LOOPBACK,\n" +
+            " *   - \"0.0.0.0\" or \"*\"                      → INADDR_ANY,\n" +
+            " *   - port range 1..65535.\n" +
+            " * DNS + IPv6 intentionally deferred (interp narrow surface). */\n" +
+            "static int _hexa_net_parse_addr(const char* addr, struct sockaddr_in* sa_out) {\n" +
+            "    if (!addr || !*addr || !sa_out) return -EINVAL;\n" +
+            "    const char* colon = strrchr(addr, ':');\n" +
+            "    if (!colon || colon == addr) return -EINVAL;\n" +
+            "    char host[256];\n" +
+            "    size_t host_len = (size_t)(colon - addr);\n" +
+            "    if (host_len >= sizeof(host)) return -EINVAL;\n" +
+            "    memcpy(host, addr, host_len);\n" +
+            "    host[host_len] = '\\0';\n" +
+            "    /* Port 0 is a legitimate bind/connect target on POSIX — it means\n" +
+            "     * \"let the kernel pick an ephemeral port\" (see `man 2 bind`). Rejecting\n" +
+            "     * it broke `net_listen(\"127.0.0.1:0\")` which tests rely on for\n" +
+            "     * collision-free smoke runs. Only reject negatives and out-of-range. */\n" +
+            "    int port = atoi(colon + 1);\n" +
+            "    if (port < 0 || port > 65535) return -EINVAL;\n" +
+            "    memset(sa_out, 0, sizeof(*sa_out));\n" +
+            "    sa_out->sin_family = AF_INET;\n" +
+            "    sa_out->sin_port = htons((uint16_t)port);\n" +
+            "    if (strcmp(host, \"localhost\") == 0) {\n" +
+            "        sa_out->sin_addr.s_addr = htonl(INADDR_LOOPBACK);\n" +
+            "    } else if (strcmp(host, \"0.0.0.0\") == 0 || strcmp(host, \"*\") == 0) {\n" +
+            "        sa_out->sin_addr.s_addr = htonl(INADDR_ANY);\n" +
+            "    } else if (hxlcl_inet_pton(AF_INET, host, &sa_out->sin_addr) != 1) {\n" +
+            "        return -EINVAL;\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "/* Parse a hexa-side addr string into a sockaddr_storage. Recognizes:\n" +
+            " *   \"host:port\"       -> AF_INET via _hexa_net_parse_addr\n" +
+            " *   \"unix:/path/sock\" -> AF_UNIX, filesystem-bound\n" +
+            " *   \"unix:@name\"      -> AF_UNIX abstract namespace (Linux only; -EAFNOSUPPORT on Mac)\n" +
+            " * Returns the address family (>0) on success, -errno on failure.\n" +
+            " * Populates *salen_out with the right struct length for bind/connect.\n" +
+            " *\n" +
+            " * RFC: incoming/patches/net-unix-domain-socket.md\n" +
+            " */\n" +
+            "static int _hexa_net_parse_any(const char* addr,\n" +
+            "                               struct sockaddr_storage* sa_out,\n" +
+            "                               socklen_t* salen_out) {\n" +
+            "    if (!addr || !*addr || !sa_out || !salen_out) return -EINVAL;\n" +
+            "    if (strncmp(addr, \"unix:\", 5) == 0) {\n" +
+            "        const char* path = addr + 5;\n" +
+            "        if (!*path) return -EINVAL;\n" +
+            "        struct sockaddr_un* un = (struct sockaddr_un*)sa_out;\n" +
+            "        memset(un, 0, sizeof(*un));\n" +
+            "        un->sun_family = AF_UNIX;\n" +
+            "        if (path[0] == '@') {\n" +
+            "#ifndef __linux__\n" +
+            "            return -EAFNOSUPPORT;\n" +
+            "#else\n" +
+            "            /* abstract namespace: leading '\\0' + name */\n" +
+            "            size_t name_len = strlen(path + 1);\n" +
+            "            if (name_len + 1 > sizeof(un->sun_path)) return -ENAMETOOLONG;\n" +
+            "            un->sun_path[0] = '\\0';\n" +
+            "            memcpy(un->sun_path + 1, path + 1, name_len);\n" +
+            "            *salen_out = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + 1 + name_len);\n" +
+            "            return AF_UNIX;\n" +
+            "#endif\n" +
+            "        }\n" +
+            "        size_t plen = strlen(path);\n" +
+            "        if (plen + 1 > sizeof(un->sun_path)) return -ENAMETOOLONG;\n" +
+            "        memcpy(un->sun_path, path, plen);\n" +
+            "        un->sun_path[plen] = '\\0';\n" +
+            "        *salen_out = sizeof(struct sockaddr_un);\n" +
+            "        return AF_UNIX;\n" +
+            "    }\n" +
+            "    /* Existing AF_INET path. */\n" +
+            "    int rc = _hexa_net_parse_addr(addr, (struct sockaddr_in*)sa_out);\n" +
+            "    if (rc < 0) return rc;\n" +
+            "    *salen_out = sizeof(struct sockaddr_in);\n" +
+            "    return AF_INET;\n" +
+            "}\n" +
+            "\n" +
+            "HexaVal hexa_net_listen(HexaVal addr_val) {\n" +
+            "    const char* addr = hexa_to_cstring(addr_val);\n" +
+            "    struct sockaddr_storage sa;\n" +
+            "    socklen_t salen = 0;\n" +
+            "    int family = _hexa_net_parse_any(addr, &sa, &salen);\n" +
+            "    if (family < 0) return hexa_int(family);\n" +
+            "    int fd = hxlcl_socket(family, SOCK_STREAM, 0);\n" +
+            "    if (fd < 0) return hexa_int(-errno);\n" +
+            "    if (family == AF_INET) {\n" +
+            "        int one = 1;\n" +
+            "        /* SO_REUSEADDR mirrors the Rust TcpListener default. Without it,\n" +
+            "         * repeat `hexa run` within TIME_WAIT collides. AF_UNIX has no\n" +
+            "         * TIME_WAIT — skip. */\n" +
+            "        (void)hxlcl_setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));\n" +
+            "    } else if (family == AF_UNIX) {\n" +
+            "        /* Filesystem-bound sockets: unlink any stale leftover so bind\n" +
+            "         * doesn't fail with EADDRINUSE. Ignore ENOENT (no leftover) and\n" +
+            "         * any error on the abstract namespace path (sun_path[0] = '\\0'\n" +
+            "         * means abstract — nothing to unlink). */\n" +
+            "        struct sockaddr_un* un = (struct sockaddr_un*)&sa;\n" +
+            "        /* RUNTIME.md step-2 cycle 4: unlink() suppressed (compiler\n" +
+            "         * binary doesn't open AF_UNIX sockets, dead code path). */\n" +
+            "        if (un->sun_path[0] != '\\0') (void)0;\n" +
+            "    }\n" +
+            "    if (hxlcl_bind(fd, (struct sockaddr*)&sa, salen) < 0) {\n" +
+            "        int e = errno; hxlcl_close(fd); return hexa_int(-e);\n" +
+            "    }\n" +
+            "    if (hxlcl_listen(fd, 64) < 0) {\n" +
+            "        int e = errno; hxlcl_close(fd); return hexa_int(-e);\n" +
+            "    }\n" +
+            "    return hexa_int(fd);\n" +
+            "}\n" +
+            "\n" +
+            "HexaVal hexa_net_accept(HexaVal listen_val) {\n" +
+            "    int64_t listen_fd = hexa_as_num(listen_val);\n" +
+            "    if (listen_fd < 0) return hexa_int(-EINVAL);\n" +
+            "    int client = hxlcl_accept((int)listen_fd, NULL, NULL);\n" +
+            "    if (client < 0) return hexa_int(-errno);\n" +
+            "    return hexa_int(client);\n" +
+            "}\n" +
+            "\n" +
+            "HexaVal hexa_net_close(HexaVal fd_val) {\n" +
+            "    int64_t fd = hexa_as_num(fd_val);\n" +
+            "    if (fd < 0) return hexa_int(-EINVAL);\n" +
+            "    if (hxlcl_close((int)fd) < 0) return hexa_int(-errno);\n" +
+            "    return hexa_int(0);\n" +
+            "}\n" +
+            "\n" +
+            "/* net_set_nonblock(fd) -> 0 / -errno (RFC net-nonblock-multiplex.md)\n" +
+            " *\n" +
+            " * Sets O_NONBLOCK on the fd. Subsequent net_read / net_accept on the\n" +
+            " * fd returns immediately if no data / no pending connection (with\n" +
+            " * hxlcl_recv() yielding -1 / EAGAIN, mapped to \"\" by net_read; net_accept\n" +
+            " * yields -1 / EAGAIN, mapped to -errno by hexa_net_accept). Pair with\n" +
+            " * hexa_net_select to wait on N fds without per-fd blocking.\n" +
+            " */\n" +
+            "HexaVal hexa_net_set_nonblock(HexaVal fd_val) {\n" +
+            "    if (!HX_IS_INT(fd_val)) return hexa_int((int64_t)-EINVAL);\n" +
+            "    int fd = (int)HX_INT(fd_val);\n" +
+            "    int flags = hxlcl_fcntl(fd, F_GETFL, 0);\n" +
+            "    if (flags < 0) return hexa_int((int64_t)-errno);\n" +
+            "    if (hxlcl_fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) return hexa_int((int64_t)-errno);\n" +
+            "    return hexa_int(0);\n" +
+            "}\n" +
+            "\n" +
+            "/* net_select(fds, timeout_ms) -> [ready_fds] (RFC net-nonblock-multiplex.md)\n" +
+            " *\n" +
+            " *   timeout_ms < 0  : block indefinitely\n" +
+            " *   timeout_ms == 0 : hxlcl_poll(return immediately)\n" +
+            " *   timeout_ms > 0  : block up to that long\n" +
+            " *\n" +
+            " * Returns: array of fds that are READ-ready. Empty on timeout.\n" +
+            " *          On error, returns a single-element array [-errno] so the\n" +
+            " *          caller can distinguish from \"no fds ready\". (Empty array\n" +
+            " *          and [-errno] are both length-1 in the error case; check\n" +
+            " *          the first element's sign to disambiguate.)\n" +
+            " *\n" +
+            " * FD_SETSIZE limit (~1024 on Linux/Mac) is enforced via -EBADF.\n" +
+            " */\n" +
+            "HexaVal hexa_net_select(HexaVal fds_val, HexaVal timeout_ms_val) {\n" +
+            "    HexaVal err_out = hexa_array_new();\n" +
+            "    if (!HX_IS_ARRAY(fds_val)) {\n" +
+            "        return hexa_array_push(err_out, hexa_int((int64_t)-EINVAL));\n" +
+            "    }\n" +
+            "    int n = HX_ARR_LEN(fds_val);\n" +
+            "    fd_set readfds;\n" +
+            "    FD_ZERO(&readfds);\n" +
+            "    int maxfd = -1;\n" +
+            "    for (int i = 0; i < n; i++) {\n" +
+            "        HexaVal v = HX_ARR_ITEMS(fds_val)[i];\n" +
+            "        if (!HX_IS_INT(v)) continue;\n" +
+            "        int fd = (int)HX_INT(v);\n" +
+            "        if (fd < 0 || fd >= FD_SETSIZE) {\n" +
+            "            return hexa_array_push(hexa_array_new(), hexa_int((int64_t)-EBADF));\n" +
+            "        }\n" +
+            "        FD_SET(fd, &readfds);\n" +
+            "        if (fd > maxfd) maxfd = fd;\n" +
+            "    }\n" +
+            "    long long ms = HX_IS_INT(timeout_ms_val) ? (long long)HX_INT(timeout_ms_val) : -1;\n" +
+            "    struct timeval tv;\n" +
+            "    struct timeval* tvp;\n" +
+            "    if (ms < 0) {\n" +
+            "        tvp = NULL;\n" +
+            "    } else {\n" +
+            "        tv.tv_sec = (time_t)(ms / 1000);\n" +
+            "        tv.tv_usec = (suseconds_t)((ms % 1000) * 1000);\n" +
+            "        tvp = &tv;\n" +
+            "    }\n" +
+            "    /* hxlcl_select() can be interrupted by signals — caller-handles by reading\n" +
+            "     * a single -EINTR back. We don't auto-retry here; downstream code\n" +
+            "     * (anima frame loop) needs to interleave signal handling with the\n" +
+            "     * hxlcl_select() return path. */\n" +
+            "    int rc = hxlcl_select(maxfd + 1, &readfds, NULL, NULL, tvp);\n" +
+            "    if (rc < 0) {\n" +
+            "        return hexa_array_push(hexa_array_new(), hexa_int((int64_t)-errno));\n" +
+            "    }\n" +
+            "    /* rc == 0 -> timeout, empty array. rc > 0 -> walk fds again. */\n" +
+            "    HexaVal out = hexa_array_new();\n" +
+            "    if (rc == 0) return out;\n" +
+            "    for (int i = 0; i < n; i++) {\n" +
+            "        HexaVal v = HX_ARR_ITEMS(fds_val)[i];\n" +
+            "        if (!HX_IS_INT(v)) continue;\n" +
+            "        int fd = (int)HX_INT(v);\n" +
+            "        if (FD_ISSET(fd, &readfds)) {\n" +
+            "            out = hexa_array_push(out, hexa_int((int64_t)fd));\n" +
+            "        }\n" +
+            "    }\n" +
+            "    return out;\n" +
+            "}\n" +
+            "\n" +
+            "/* ── SCM_RIGHTS fd-passing over AF_UNIX (RFC P1 signal-ext / fd-passing) ──\n" +
+            " *\n" +
+            " *   net_send_fd(sock_fd, fd_to_send, payload_str)  -> 0 / -errno\n" +
+            " *   net_recv_fd(sock_fd, max_payload_bytes)        -> map { fd, data, error?, errno? }\n" +
+            " *\n" +
+            " * The classic POSIX recipe for handing a kernel fd from one process\n" +
+            " * to another across a connected AF_UNIX socket. Payload bytes are\n" +
+            " * required by some BSD variants (1+ data byte must travel with the\n" +
+            " * cmsg) so net_send_fd sends at least a single 0 byte if the caller\n" +
+            " * passes \"\".  net_recv_fd allocates a `max_payload`-byte buffer and\n" +
+            " * captures the first received fd (multi-fd cmsg arrays are out of\n" +
+            " * MVP scope -- callers needing multiple fds per message can loop).\n" +
+            " *\n" +
+            " * Cross-platform POSIX (macOS + Linux). Both have hxlcl_sendmsg(2) and\n" +
+            " * SCM_RIGHTS in the kernel ABI.\n" +
+            " */\n" +
+            "\n" +
+            "HexaVal hexa_net_send_fd(HexaVal sock_v, HexaVal fd_v, HexaVal payload_v) {\n" +
+            "    if (!HX_IS_INT(sock_v) || !HX_IS_INT(fd_v)) return hexa_int((int64_t)-EINVAL);\n" +
+            "    int sock = (int)HX_INT(sock_v);\n" +
+            "    int send_fd = (int)HX_INT(fd_v);\n" +
+            "    /* Payload: empty string still emits a single 0 byte so BSD/Mac\n" +
+            "     * doesn't reject the message (some kernels require >=1 data byte\n" +
+            "     * for the cmsg-only case). */\n" +
+            "    const char* p = HX_IS_STR(payload_v) ? HX_STR(payload_v) : \"\";\n" +
+            "    size_t plen = strlen(p);\n" +
+            "    char fallback = '\\0';\n" +
+            "    struct iovec iov;\n" +
+            "    if (plen == 0) { iov.iov_base = &fallback; iov.iov_len = 1; }\n" +
+            "    else           { iov.iov_base = (void*)p;  iov.iov_len = plen; }\n" +
+            "    /* cmsg buffer sized for exactly one fd. */\n" +
+            "    union {\n" +
+            "        char buf[CMSG_SPACE(sizeof(int))];\n" +
+            "        struct cmsghdr align;\n" +
+            "    } cmsg_buf;\n" +
+            "    memset(&cmsg_buf, 0, sizeof(cmsg_buf));\n" +
+            "    struct msghdr msg;\n" +
+            "    memset(&msg, 0, sizeof(msg));\n" +
+            "    msg.msg_iov     = &iov;\n" +
+            "    msg.msg_iovlen  = 1;\n" +
+            "    msg.msg_control = cmsg_buf.buf;\n" +
+            "    msg.msg_controllen = sizeof(cmsg_buf.buf);\n" +
+            "    struct cmsghdr* cmsg = CMSG_FIRSTHDR(&msg);\n" +
+            "    cmsg->cmsg_level = SOL_SOCKET;\n" +
+            "    cmsg->cmsg_type  = SCM_RIGHTS;\n" +
+            "    cmsg->cmsg_len   = CMSG_LEN(sizeof(int));\n" +
+            "    int* fd_ptr = (int*)CMSG_DATA(cmsg);\n" +
+            "    *fd_ptr = send_fd;\n" +
+            "    if (hxlcl_sendmsg(sock, &msg, 0) < 0) return hexa_int((int64_t)-errno);\n" +
+            "    return hexa_int(0);\n" +
+            "}\n" +
+            "\n" +
+            "HexaVal hexa_net_recv_fd(HexaVal sock_v, HexaVal max_payload_v) {\n" +
+            "    HexaVal out = hexa_map_new();\n" +
+            "    if (!HX_IS_INT(sock_v)) {\n" +
+            "        hexa_map_set(out, \"error\", hexa_str(\"net_recv_fd: bad sock fd\"));\n" +
+            "        hexa_map_set(out, \"errno\", hexa_int((int64_t)EINVAL));\n" +
+            "        hexa_map_set(out, \"fd\",    hexa_int((int64_t)-1));\n" +
+            "        return out;\n" +
+            "    }\n" +
+            "    int sock = (int)HX_INT(sock_v);\n" +
+            "    int max_n = HX_IS_INT(max_payload_v) ? (int)HX_INT(max_payload_v) : 4096;\n" +
+            "    if (max_n < 1) max_n = 1;\n" +
+            "    if (max_n > 65536) max_n = 65536;\n" +
+            "    char* buf = (char*)malloc((size_t)max_n + 1);\n" +
+            "    if (!buf) {\n" +
+            "        hexa_map_set(out, \"error\", hexa_str(\"net_recv_fd: malloc failed\"));\n" +
+            "        hexa_map_set(out, \"errno\", hexa_int((int64_t)ENOMEM));\n" +
+            "        hexa_map_set(out, \"fd\",    hexa_int((int64_t)-1));\n" +
+            "        return out;\n" +
+            "    }\n" +
+            "    struct iovec iov;\n" +
+            "    iov.iov_base = buf;\n" +
+            "    iov.iov_len  = (size_t)max_n;\n" +
+            "    union {\n" +
+            "        char cbuf[CMSG_SPACE(sizeof(int))];\n" +
+            "        struct cmsghdr align;\n" +
+            "    } cmsg_buf;\n" +
+            "    memset(&cmsg_buf, 0, sizeof(cmsg_buf));\n" +
+            "    struct msghdr msg;\n" +
+            "    memset(&msg, 0, sizeof(msg));\n" +
+            "    msg.msg_iov     = &iov;\n" +
+            "    msg.msg_iovlen  = 1;\n" +
+            "    msg.msg_control = cmsg_buf.cbuf;\n" +
+            "    msg.msg_controllen = sizeof(cmsg_buf.cbuf);\n" +
+            "    ssize_t n = hxlcl_recvmsg(sock, &msg, 0);\n" +
+            "    if (n < 0) {\n" +
+            "        int e = errno;\n" +
+            "        free(buf);\n" +
+            "        hexa_map_set(out, \"error\", hexa_str(strerror(e)));\n" +
+            "        hexa_map_set(out, \"errno\", hexa_int((int64_t)e));\n" +
+            "        hexa_map_set(out, \"fd\",    hexa_int((int64_t)-1));\n" +
+            "        return out;\n" +
+            "    }\n" +
+            "    int recv_fd = -1;\n" +
+            "    struct cmsghdr* cmsg;\n" +
+            "    for (cmsg = CMSG_FIRSTHDR(&msg); cmsg != NULL; cmsg = CMSG_NXTHDR(&msg, cmsg)) {\n" +
+            "        if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_RIGHTS) {\n" +
+            "            int* fdp = (int*)CMSG_DATA(cmsg);\n" +
+            "            recv_fd = *fdp;\n" +
+            "            break;\n" +
+            "        }\n" +
+            "    }\n" +
+            "    buf[n] = '\\0';\n" +
+            "    hexa_map_set(out, \"fd\",   hexa_int((int64_t)recv_fd));\n" +
+            "    hexa_map_set(out, \"data\", hexa_str(buf));\n" +
+            "    hexa_map_set(out, \"len\",  hexa_int((int64_t)n));\n" +
+            "    free(buf);\n" +
+            "    return out;\n" +
+            "}\n" +
+            "\n" +
+            "HexaVal hexa_net_connect(HexaVal addr_val) {\n" +
+            "    const char* addr = hexa_to_cstring(addr_val);\n" +
+            "    struct sockaddr_storage sa;\n" +
+            "    socklen_t salen = 0;\n" +
+            "    int family = _hexa_net_parse_any(addr, &sa, &salen);\n" +
+            "    if (family < 0) return hexa_int(family);\n" +
+            "    int fd = hxlcl_socket(family, SOCK_STREAM, 0);\n" +
+            "    if (fd < 0) return hexa_int(-errno);\n" +
+            "    if (hxlcl_connect(fd, (struct sockaddr*)&sa, salen) < 0) {\n" +
+            "        int e = errno; hxlcl_close(fd); return hexa_int(-e);\n" +
+            "    }\n" +
+            "    return hexa_int(fd);\n" +
+            "}\n" +
+            "\n" +
+            "/* Single-shot read up to 4096 bytes. The caller is expected to loop\n" +
+            " * until they've got what they want (HTTP parsing in .hexa happens on\n" +
+            " * the accumulated string). Mirrors the Rust variant which also did a\n" +
+            " * single hxlcl_read(TcpStream::read with a 4KiB buffer). */\n" +
+            "HexaVal hexa_net_read(HexaVal fd_val) {\n" +
+            "    int64_t fd = hexa_as_num(fd_val);\n" +
+            "    if (fd < 0) return hexa_str(\"\");\n" +
+            "    char buf[4096];\n" +
+            "    ssize_t n = hxlcl_recv((int)fd, buf, sizeof(buf) - 1, 0);\n" +
+            "    if (n <= 0) return hexa_str(\"\");\n" +
+            "    buf[n] = '\\0';\n" +
+            "    /* hexa_str dup + interns the string — safe to hand back the stack buf. */\n" +
+            "    return hexa_str(buf);\n" +
+            "}\n" +
+            "\n" +
+            "/* Looping read that accumulates up to `n` bytes before returning.\n" +
+            " *\n" +
+            " * Semantics (roadmap 56 / B7 HTTP POST body prereq):\n" +
+            " *   - Calls hxlcl_recv() repeatedly until either (a) we have received exactly\n" +
+            " *     `n` bytes, (b) the peer closed the connection (recv returns 0 —\n" +
+            " *     treated as EOF), or (c) a non-retryable error occurs. Returns a\n" +
+            " *     hexa string whose length is therefore in [0, n].\n" +
+            " *   - EINTR is retried transparently (POSIX-normal during signal arrival).\n" +
+            " *   - EAGAIN / EWOULDBLOCK is treated as EOF rather than retried. The\n" +
+            " *     blocking model for this call assumes the caller has not set any\n" +
+            " *     socket timeout; if they did (see hexa_net_set_timeout), the timeout\n" +
+            " *     also surfaces as EAGAIN/EWOULDBLOCK and we stop here so the caller\n" +
+            " *     can observe a short read — this is the intended \"timeout -> partial\"\n" +
+            " *     behaviour for HTTP POST bodies that span TCP packets.\n" +
+            " *   - n <= 0 returns \"\".\n" +
+            " *\n" +
+            " * Memory: uses heap (malloc) when n > 65536, else stack, to avoid large\n" +
+            " * stack frames on deep call chains in the interpreter. */\n" +
+            "HexaVal hexa_net_read_n(HexaVal fd_val, HexaVal n_val) {\n" +
+            "    int64_t fd = hexa_as_num(fd_val);\n" +
+            "    int64_t want = hexa_as_num(n_val);\n" +
+            "    if (fd < 0 || want <= 0) return hexa_str(\"\");\n" +
+            "    char stackbuf[65536];\n" +
+            "    char* buf = (want <= (int64_t)sizeof(stackbuf)) ? stackbuf : (char*)malloc((size_t)want + 1);\n" +
+            "    if (!buf) return hexa_str(\"\");\n" +
+            "    size_t got = 0;\n" +
+            "    while ((int64_t)got < want) {\n" +
+            "        ssize_t r = hxlcl_recv((int)fd, buf + got, (size_t)(want - (int64_t)got), 0);\n" +
+            "        if (r > 0) { got += (size_t)r; continue; }\n" +
+            "        if (r == 0) break;                /* EOF */\n" +
+            "        if (errno == EINTR) continue;     /* retry */\n" +
+            "        if (errno == EAGAIN || errno == EWOULDBLOCK) break;  /* treat as EOF */\n" +
+            "        break;                            /* other error: return what we have */\n" +
+            "    }\n" +
+            "    buf[got] = '\\0';\n" +
+            "    /* Note: hexa_str() uses strlen under the hood (like hexa_net_read above),\n" +
+            "     * so embedded NULs in the payload are not preserved. This matches the\n" +
+            "     * existing net_read contract. HTTP/1.1 bodies are text or chunked-\n" +
+            "     * framed binary and do not embed NULs in the headers/body segments\n" +
+            "     * that .hexa parses. If a future caller needs raw byte passthrough,\n" +
+            "     * extend the runtime with hexa_str_n(buf, len). */\n" +
+            "    HexaVal out = hexa_str(buf);\n" +
+            "    if (buf != stackbuf) free(buf);\n" +
+            "    return out;\n" +
+            "}\n" +
+            "\n" +
+            "/* Apply a hxlcl_recv() timeout on the socket via SO_RCVTIMEO. Returns 0 on\n" +
+            " * success, -errno on failure. ms <= 0 disables the timeout. Follow-on\n" +
+            " * hexa_net_read / hexa_net_read_n calls that would block beyond the\n" +
+            " * timeout surface EAGAIN/EWOULDBLOCK (read_n treats as EOF). */\n" +
+            "HexaVal hexa_net_set_timeout(HexaVal fd_val, HexaVal ms_val) {\n" +
+            "    int64_t fd = hexa_as_num(fd_val);\n" +
+            "    int64_t ms = hexa_as_num(ms_val);\n" +
+            "    if (fd < 0) return hexa_int(-EINVAL);\n" +
+            "    struct timeval tv;\n" +
+            "    if (ms <= 0) { tv.tv_sec = 0; tv.tv_usec = 0; }\n" +
+            "    else { tv.tv_sec = (time_t)(ms / 1000); tv.tv_usec = (suseconds_t)((ms % 1000) * 1000); }\n" +
+            "    if (hxlcl_setsockopt((int)fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {\n" +
+            "        return hexa_int(-errno);\n" +
+            "    }\n" +
+            "    return hexa_int(0);\n" +
+            "}\n" +
+            "\n" +
+            "/* net_set_nonblock + net_select are defined earlier in this file\n" +
+            " * (anima daemon Phase 2 prereq — RFC net-nonblock-multiplex.md). This\n" +
+            " * comment marks the historical insertion point a previous draft used\n" +
+            " * before the canonical definitions moved next to hexa_net_close. */\n" +
+            "\n" +
+            "HexaVal hexa_net_write(HexaVal fd_val, HexaVal data_val) {\n" +
+            "    int64_t fd = hexa_as_num(fd_val);\n" +
+            "    if (fd < 0) return hexa_int(-EINVAL);\n" +
+            "    const char* data = hexa_to_cstring(data_val);\n" +
+            "    if (!data) return hexa_int(-EINVAL);\n" +
+            "    size_t total = strlen(data);\n" +
+            "    size_t sent = 0;\n" +
+            "    while (sent < total) {\n" +
+            "        ssize_t n = hxlcl_send((int)fd, data + sent, total - sent, 0);\n" +
+            "        if (n < 0) {\n" +
+            "            if (errno == EINTR) continue;\n" +
+            "            return hexa_int(-errno);\n" +
+            "        }\n" +
+            "        if (n == 0) break;\n" +
+            "        sent += (size_t)n;\n" +
+            "    }\n" +
+            "    return hexa_int((int64_t)sent);\n" +
+            "}\n" +
+            "\n" +
+            "/* net_write_bytes(fd, [int]) — like net_write but takes a byte array\n" +
+            " * directly so NUL bytes don't truncate the payload. Required for\n" +
+            " * binary wire protocols (9P codec frames carry size-u32 = bytes whose\n" +
+            " * upper 3 bytes are typically 0). Returns number of bytes sent or\n" +
+            " * -errno. */\n" +
+            "HexaVal hexa_net_write_bytes(HexaVal fd_val, HexaVal arr_val) {\n" +
+            "    int64_t fd = hexa_as_num(fd_val);\n" +
+            "    if (fd < 0) return hexa_int(-EINVAL);\n" +
+            "    if (!HX_IS_ARRAY(arr_val)) return hexa_int(-EINVAL);\n" +
+            "    int n = HX_ARR_LEN(arr_val);\n" +
+            "    if (n < 0) return hexa_int(-EINVAL);\n" +
+            "    unsigned char* buf = (unsigned char*)malloc((size_t)n + 1);\n" +
+            "    if (!buf) return hexa_int(-ENOMEM);\n" +
+            "    for (int i = 0; i < n; i++) {\n" +
+            "        HexaVal v = HX_ARR_ITEMS(arr_val)[i];\n" +
+            "        long b = HX_IS_INT(v) ? (long)HX_INT(v) : 0;\n" +
+            "        buf[i] = (unsigned char)(b & 0xff);\n" +
+            "    }\n" +
+            "    size_t sent = 0;\n" +
+            "    size_t total = (size_t)n;\n" +
+            "    int use_write = 0;\n" +
+            "    while (sent < total) {\n" +
+            "        ssize_t s;\n" +
+            "        if (use_write) {\n" +
+            "            s = hxlcl_write((int)fd, (const void*)(buf + sent), total - sent);\n" +
+            "        } else {\n" +
+            "            s = hxlcl_send((int)fd, (const char*)(buf + sent), total - sent, 0);\n" +
+            "            if (s < 0 && errno == ENOTSOCK) {\n" +
+            "                use_write = 1;\n" +
+            "                continue;\n" +
+            "            }\n" +
+            "        }\n" +
+            "        if (s < 0) {\n" +
+            "            if (errno == EINTR) continue;\n" +
+            "            free(buf);\n" +
+            "            return hexa_int(-errno);\n" +
+            "        }\n" +
+            "        if (s == 0) break;\n" +
+            "        sent += (size_t)s;\n" +
+            "    }\n" +
+            "    free(buf);\n" +
+            "    return hexa_int((int64_t)sent);\n" +
+            "}\n" +
+            "\n" +
+            "/* net_read_raw(fd, len) — read EXACTLY `len` bytes, NUL-preserving.\n" +
+            " *\n" +
+            " * Combines net_read_n's exactly-n looping accumulation with net_read_bytes'\n" +
+            " * NUL-safe [int]-array return. Unlike net_read_n (which uses hexa_str →\n" +
+            " * strlen-truncates at the first NUL) and net_read_bytes (single recv,\n" +
+            " * capped at 65536, so it returns a SHORT read on packet boundaries), this\n" +
+            " * primitive loops hxlcl_recv until it has the full `len` bytes or the peer\n" +
+            " * closes (EOF → short array). This is the binary-wire reader the RFC 093\n" +
+            " * daemon u32-LE length-prefix framing wants: read 4 bytes → decode u32 len\n" +
+            " * → read_raw(fd, len) → exact payload with embedded NULs intact.\n" +
+            " *\n" +
+            " *   - returns [int] (len ≤ requested; < requested only on EOF/error)\n" +
+            " *   - EINTR retried; EAGAIN/EWOULDBLOCK treated as EOF (short read)\n" +
+            " *   - falls back to hxlcl_read() if the fd is not a socket (pipe/pty)\n" +
+            " *   - len <= 0 returns []  */\n" +
+            "HexaVal hexa_net_read_raw(HexaVal fd_val, HexaVal len_val) {\n" +
+            "    int64_t fd = hexa_as_num(fd_val);\n" +
+            "    int64_t want = hexa_as_num(len_val);\n" +
+            "    if (fd < 0 || want <= 0) return hexa_array_new();\n" +
+            "    unsigned char* buf = (unsigned char*)malloc((size_t)want);\n" +
+            "    if (!buf) return hexa_array_new();\n" +
+            "    size_t got = 0;\n" +
+            "    int use_read = 0;  /* switch to read() once recv reports ENOTSOCK */\n" +
+            "    while ((int64_t)got < want) {\n" +
+            "        ssize_t r;\n" +
+            "        if (use_read) {\n" +
+            "            r = hxlcl_read((int)fd, buf + got, (size_t)(want - (int64_t)got));\n" +
+            "        } else {\n" +
+            "            r = hxlcl_recv((int)fd, (char*)(buf + got), (size_t)(want - (int64_t)got), 0);\n" +
+            "            if (r < 0 && errno == ENOTSOCK) { use_read = 1; continue; }\n" +
+            "        }\n" +
+            "        if (r > 0) { got += (size_t)r; continue; }\n" +
+            "        if (r == 0) break;                /* EOF */\n" +
+            "        if (errno == EINTR) continue;     /* retry */\n" +
+            "        if (errno == EAGAIN || errno == EWOULDBLOCK) break;  /* timeout → short */\n" +
+            "        break;                            /* other error: return what we have */\n" +
+            "    }\n" +
+            "    HexaVal out = hexa_array_new();\n" +
+            "    for (size_t i = 0; i < got; i++) {\n" +
+            "        out = hexa_array_push(out, hexa_int((int64_t)buf[i]));\n" +
+            "    }\n" +
+            "    free(buf);\n" +
+            "    return out;\n" +
+            "}\n" +
+            "\n" +
+            "/* os_getuid() — getuid(2) wrapper. Named `os_getuid` (NOT `getuid`) on\n" +
+            " * purpose: `getuid` is in codegen's _hexa_name_is_reserved set, so a\n" +
+            " * `getuid` builtin would mangle to `u_getuid` at the call site and collide\n" +
+            " * with the dlsym extern-wrapper path (same trap term_getppid sidesteps by\n" +
+            " * not being named `getppid`). Returns the real uid as Int. RFC 093 §6\n" +
+            " * uses it for uid-scoped socket paths + root-daemon refuse. */\n" +
+            "HexaVal hexa_os_getuid(void) {\n" +
+            "    // Route through the svc-trap helper (self/runtime.c hxlcl_getuid,\n" +
+            "    // SYS_GETUID=24) instead of libc getuid() — drops the `_getuid`\n" +
+            "    // extern. net.c is #include'd into the runtime.c TU after the helper.\n" +
+            "    return hexa_int((int64_t)hxlcl_getuid());\n" +
+            "}\n" +
+            "\n" +
+            "/* net_read_bytes(fd, max) — like net_read but returns the bytes as a\n" +
+            " * [int] array, so NULs are preserved. */\n" +
+            "HexaVal hexa_net_read_bytes(HexaVal fd_val, HexaVal max_val) {\n" +
+            "    int64_t fd = hexa_as_num(fd_val);\n" +
+            "    if (fd < 0) return hexa_array_new();\n" +
+            "    int max = HX_IS_INT(max_val) ? (int)HX_INT(max_val) : 4096;\n" +
+            "    if (max < 1) max = 1;\n" +
+            "    if (max > 65536) max = 65536;\n" +
+            "    unsigned char* buf = (unsigned char*)malloc((size_t)max);\n" +
+            "    if (!buf) return hexa_array_new();\n" +
+            "    /* Try hxlcl_recv() first (socket fast path); fall back to hxlcl_read() if the\n" +
+            "     * fd isn't a socket — needed for pty/pipe fds. */\n" +
+            "    ssize_t n = hxlcl_recv((int)fd, (char*)buf, (size_t)max, 0);\n" +
+            "    if (n < 0 && errno == ENOTSOCK) {\n" +
+            "        n = hxlcl_read((int)fd, buf, (size_t)max);\n" +
+            "    }\n" +
+            "    if (n <= 0) { free(buf); return hexa_array_new(); }\n" +
+            "    HexaVal out = hexa_array_new();\n" +
+            "    for (ssize_t i = 0; i < n; i++) {\n" +
+            "        out = hexa_array_push(out, hexa_int((int64_t)buf[i]));\n" +
+            "    }\n" +
+            "    free(buf);\n" +
+            "    return out;\n" +
+            "}\n" +
+            "\n" +
+            "/* ── TAG_FN shim globals (bootstrap bridge, 2026-04-16) ──────────────────\n" +
+            " * The current self/native/hexat transpiler only recognises net_listen /\n" +
+            " * net_accept / net_close as direct-lowered builtins. Fresh names like\n" +
+            " * net_connect / net_read / net_write are emitted as `hexa_call1(name, …)`\n" +
+            " * — i.e. the transpiler treats them as free-function identifiers backed by\n" +
+            " * a HexaVal fn pointer. Providing TAG_FN shims keeps the interpreter path\n" +
+            " * working until the next codegen_c2 → hexa_cc → hexat bootstrap cycle\n" +
+            " * teaches the transpiler the direct-lowering. After that, these shims are\n" +
+            " * harmless — codegen will emit `hexa_net_connect(...)` directly and the\n" +
+            " * globals simply remain unused. */\n" +
+            "HexaVal net_listen;\n" +
+            "HexaVal net_accept;\n" +
+            "HexaVal net_close;\n" +
+            "HexaVal net_connect;\n" +
+            "HexaVal net_read;\n" +
+            "HexaVal net_read_n;\n" +
+            "HexaVal net_set_timeout;\n" +
+            "HexaVal net_write;\n" +
+            "/* 2026-05-13: anima daemon Phase 2 — non-blocking + select multiplex */\n" +
+            "HexaVal net_set_nonblock;\n" +
+            "HexaVal net_select;\n" +
+            "/* 2026-05-14: SCM_RIGHTS fd-passing (P1 signal-ext / fd-handoff) */\n" +
+            "HexaVal net_send_fd;\n" +
+            "HexaVal net_recv_fd;\n" +
+            "/* 2026-05-14: NUL-safe byte-array variants for binary protocols (p9 codec). */\n" +
+            "HexaVal net_write_bytes;\n" +
+            "HexaVal net_read_bytes;\n" +
+            "/* 2026-05-25: RFC 093 R4 — exactly-len NUL-preserving read + os_getuid. */\n" +
+            "HexaVal net_read_raw;\n" +
+            "HexaVal os_getuid;\n" +
+            "\n" +
+            "static void _hexa_init_net_fn_shims(void) {\n" +
+            "    net_listen        = hexa_fn_new((void*)hexa_net_listen,        1);\n" +
+            "    net_accept        = hexa_fn_new((void*)hexa_net_accept,        1);\n" +
+            "    net_close         = hexa_fn_new((void*)hexa_net_close,         1);\n" +
+            "    net_connect       = hexa_fn_new((void*)hexa_net_connect,       1);\n" +
+            "    net_read          = hexa_fn_new((void*)hexa_net_read,          1);\n" +
+            "    net_read_n        = hexa_fn_new((void*)hexa_net_read_n,        2);\n" +
+            "    net_set_timeout   = hexa_fn_new((void*)hexa_net_set_timeout,   2);\n" +
+            "    net_write         = hexa_fn_new((void*)hexa_net_write,         2);\n" +
+            "    net_set_nonblock  = hexa_fn_new((void*)hexa_net_set_nonblock,  1);\n" +
+            "    net_select        = hexa_fn_new((void*)hexa_net_select,        2);\n" +
+            "    net_send_fd       = hexa_fn_new((void*)hexa_net_send_fd,       3);\n" +
+            "    net_recv_fd       = hexa_fn_new((void*)hexa_net_recv_fd,       2);\n" +
+            "    net_write_bytes   = hexa_fn_new((void*)hexa_net_write_bytes,   2);\n" +
+            "    net_read_bytes    = hexa_fn_new((void*)hexa_net_read_bytes,    2);\n" +
+            "    net_read_raw      = hexa_fn_new((void*)hexa_net_read_raw,      2);\n" +
+            "    os_getuid         = hexa_fn_new((void*)hexa_os_getuid,         0);\n" +
+            "}\n"
+    return s
+}
+
+fn main() {
+    let argv = real_args()
+    let out_path = if argv.len() >= 1 { argv[0] } else { "net.c" }
+    let c_text = emit_net_c()
+    let cmd = "cat > \"" + out_path + "\" <<'NET_EMIT_EOF'\n" +
+              c_text + "NET_EMIT_EOF"
+    let _ = exec(cmd)
+    let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
+    if exists_check != "y" {
+        println("[net_emit] FATAL: failed to write " + out_path)
+        exit(1)
+    }
+    println("[net_emit] wrote " + out_path)
+    exit(0)
+}
