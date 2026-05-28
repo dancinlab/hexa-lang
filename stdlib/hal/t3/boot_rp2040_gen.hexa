@@ -1,0 +1,41 @@
+#!hexa strict
+// stdlib/hal/t3/boot_rp2040_gen.hexa — F5 RFC 063/064 Component 5 emitter.
+//
+// Build-time generator: writes the rp2040 boot `.s` (vector table +
+// reset prologue) to the path passed as the first argument. Replaces
+// the hand-written stdlib/hal/t3/boot_rp2040.s — which has been
+// `git rm`'d as of F5 Component 5 landing.
+//
+// Invocation (from Makefile.rp2040):
+//   hexa-run stdlib/hal/t3/boot_rp2040_gen.hexa <output-path>
+//
+// Default output path (if argv missing): "boot_rp2040.s" in cwd.
+//
+// Byte-identity is verified by stdlib/hal/t3/boot_byte_diff_rp2040.hexa
+// (full-boot byte-diff oracle, 8/8 PASS on landing).
+//
+// Phase: foundation (PR2 of F5 re-open per RUNTIME.floor.md §F5).
+// On PASS, this is the SSOT for the rp2040 boot text — the hand-
+// written `.s` is provably redundant.
+
+use "stdlib/hal/boot_emit"
+
+let MODULE_NAME = "boot_rp2040_gen"
+
+fn main() {
+    let argv = real_args()
+    let out_path = if argv.len() >= 1 { argv[0] } else { "boot_rp2040.s" }
+    let s_text = rp2040_emit_full_boot_s()
+    // route through `tee` heredoc — avoids quoting hazard (same trick
+    // boot_byte_diff_rp2040.hexa uses for scratch writes).
+    let cmd = "cat > \"" + out_path + "\" <<'__BOOT_RP2040_GEN_EOF__'\n" +
+              s_text + "\n__BOOT_RP2040_GEN_EOF__"
+    let _ = exec(cmd)
+    let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
+    if exists_check != "y" {
+        println("[boot_rp2040_gen] FATAL: failed to write " + out_path)
+        exit(1)
+    }
+    println("[boot_rp2040_gen] wrote " + out_path)
+    exit(0)
+}

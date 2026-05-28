@@ -43,7 +43,8 @@ stdlib/hal/t3/
 │
 ├── Makefile.rp2040                    # rp2040 build (Cortex-M0+)
 ├── linker_rp2040.ld                   # ARMv6-M linker script
-├── boot_rp2040.s                      # ARMv6-M vector + reset
+├── boot_rp2040_gen.hexa               # F5: hexa boot generator (was boot_rp2040.s)
+├── boot_byte_diff_rp2040.hexa         # F5: full-boot byte-diff oracle
 ├── harness_main.c                     # rp2040 GPIO + UART harness
 ├── renode_rp2040.resc                 # Renode platform spec
 ├── numerics_t3_rp2040_scaffold.hexa   # T3a scaffold check (v1.2.0)
