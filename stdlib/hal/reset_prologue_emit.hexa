@@ -67,6 +67,36 @@ fn rp_emit_prologue_body(
     bss_s: str,
     bss_e: str
 ) -> str {
+    return rp_emit_prologue_body_ext(
+        entry_fn, stack_sym, data_src, data_dst_s, data_dst_e, bss_s, bss_e,
+        false  // enable_fpu: ARMv6-M (Cortex-M0+) has no FPU
+    )
+}
+
+// rp_emit_prologue_body_ext: same as rp_emit_prologue_body + optional
+// FPU enable block (ARMv7-M / ARMv7E-M Cortex-M4F / M7 / M33 with FPU).
+//
+// When `enable_fpu == true`, inserts a 6-instruction block between the
+// stack-pointer setup (step 1) and the .data copy (step 2) that grants
+// full access to CP10 + CP11 in SCB_CPACR (0xE000ED88), followed by
+// `dsb` + `isb` barriers. This mirrors the hand-written FPU enable
+// sequence in boot_stm32h7.s (Cortex-M7 + FPv5-D16).
+//
+// The orr literal `#(0xF << 20)` (== 0xF00000) is a Thumb-2 wide-
+// encoded immediate that `as` assembles into a 4-byte ORR.W; this is
+// ARMv7-M-only and must NOT be emitted for ARMv6-M targets (caller
+// guarantees this via the bool flag).
+
+fn rp_emit_prologue_body_ext(
+    entry_fn: str,
+    stack_sym: str,
+    data_src: str,
+    data_dst_s: str,
+    data_dst_e: str,
+    bss_s: str,
+    bss_e: str,
+    enable_fpu: bool
+) -> str {
     let mut out = ""
 
     // .text section + _reset_handler label
@@ -79,6 +109,18 @@ fn rp_emit_prologue_body(
     out = out + _pl_indent() + "ldr  r0, =" + stack_sym + "\n"
     out = out + _pl_indent() + "msr  msp, r0\n"
     out = out + "\n"
+
+    // 1.5 (ARMv7-M only): enable FPU (CP10 + CP11 full access in CPACR).
+    // Mirrors boot_stm32h7.s FPU-enable block. ARMv6-M skips this.
+    if enable_fpu {
+        out = out + _pl_indent() + "ldr  r0, =0xE000ED88\n"
+        out = out + _pl_indent() + "ldr  r1, [r0]\n"
+        out = out + _pl_indent() + "orr  r1, r1, #(0xF << 20)\n"
+        out = out + _pl_indent() + "str  r1, [r0]\n"
+        out = out + _pl_indent() + "dsb\n"
+        out = out + _pl_indent() + "isb\n"
+        out = out + "\n"
+    }
 
     // 2. copy .data from FLASH to RAM
     out = out + _pl_indent() + "ldr  r0, =" + data_dst_s + "\n"

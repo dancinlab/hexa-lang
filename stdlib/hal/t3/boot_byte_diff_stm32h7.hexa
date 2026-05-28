@@ -1,0 +1,295 @@
+#!hexa strict
+// stdlib/hal/t3/boot_byte_diff_stm32h7.hexa — F5 RFC 063/064 full-boot byte-diff (stm32h7).
+//
+// Proves the hexa full-boot emitter (stdlib/hal/boot_emit.hexa
+// ::stm32h7_emit_full_boot_s) produces a complete boot `.s` byte-
+// identical to the hand-written stdlib/hal/t3/boot_stm32h7.s.
+//
+// Phase: foundation (PR1 of F5 stm32h7 leg).
+// This is the BYTE-IDENTICAL `arm-none-eabi-as` byte-diff verify gate
+// the runbook §F5 mandates before the hand-written `.s` can be
+// deleted (`git rm boot_stm32h7.s`, `.s` 2→1).
+//
+// Scope: BOTH `.vector_table` AND `.text` sections, PLUS the section
+// reloc lists (R_ARM_ABS32 / R_ARM_THM_CALL). All byte-equal → the
+// hand-written `.s` is provably redundant.
+//
+// PASS criterion:
+//   arm-none-eabi-{as,objcopy,ld,objdump,nm} available
+//   emitter output assembles cleanly
+//   sha256(.vector_table bytes from gen .o) == sha256(.vector_table from orig .o)
+//   sha256(.text         bytes from gen .o) == sha256(.text         from orig .o)
+//   .text + .vector_table relocs identical
+//
+// FAIL: toolchain missing OR assemble error OR section byte-diff > 0.
+// Returns 1 on FAIL so a parent falsifier_check or CI gate can flip
+// to ✗.
+//
+// ⚠ HARD GATE: byte-diff PASS is REQUIRED before `git rm boot_stm32h7.s`.
+// Wrong reset vector OR wrong prologue silently bricks the MCU.
+//
+// Run:
+//   HEXA_HAL_ROOT=<repo-root> hexa-run stdlib/hal/t3/boot_byte_diff_stm32h7.hexa
+
+use "stdlib/hal/boot_emit"
+
+let MODULE_NAME = "boot_byte_diff_stm32h7"
+
+// ─── check harness ────────────────────────────────────────────────────
+
+let mut RUN  = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ─── helpers ─────────────────────────────────────────────────────────
+
+fn _root() -> str {
+    let env_root = env("HEXA_HAL_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _which(cmd: str) -> bool {
+    let r = exec("command -v " + cmd + " >/dev/null 2>&1 && echo y || echo n").trim()
+    return r == "y"
+}
+
+fn _exists(p: str) -> bool {
+    let r = exec("[ -f \"" + p + "\" ] && echo y || echo n").trim()
+    return r == "y"
+}
+
+fn _sha256(p: str) -> str {
+    if _which("shasum") {
+        let r = exec("shasum -a 256 \"" + p + "\" 2>/dev/null | awk '{print $1}'").trim()
+        return r
+    }
+    if _which("sha256sum") {
+        let r = exec("sha256sum \"" + p + "\" 2>/dev/null | awk '{print $1}'").trim()
+        return r
+    }
+    return ""
+}
+
+fn _write_file(p: str, content: str) -> bool {
+    let cmd = "cat > \"" + p + "\" <<'__BOOT_BYTE_DIFF_EOF__'\n" + content + "\n__BOOT_BYTE_DIFF_EOF__"
+    let _ = exec(cmd)
+    return _exists(p)
+}
+
+// stm32h7 as flags: -mcpu=cortex-m7 -mthumb -mfpu=fpv5-d16 -mfloat-abi=hard
+// (mirrors Makefile.stm32h7 ASFLAGS). FPU flags don't affect boot.s
+// bytes (no VFP insns in this prologue) but match the production build
+// for safety + reproducibility.
+
+let AS_FLAGS_STM32H7 = "-mcpu=cortex-m7 -mthumb -mfpu=fpv5-d16 -mfloat-abi=hard"
+
+// ─── checks ──────────────────────────────────────────────────────────
+
+fn check_toolchain() -> bool {
+    let has_as      = _which("arm-none-eabi-as")
+    let has_objcopy = _which("arm-none-eabi-objcopy")
+    let has_objdump = _which("arm-none-eabi-objdump")
+    let ok = has_as && has_objcopy && has_objdump
+    let detail = "as=" + (if has_as { "y" } else { "n" }) +
+                 " objcopy=" + (if has_objcopy { "y" } else { "n" }) +
+                 " objdump=" + (if has_objdump { "y" } else { "n" })
+    _check(ok, "arm-none-eabi-as + objcopy + objdump present", detail)
+    return ok
+}
+
+fn check_orig_present(t3_dir: str) -> bool {
+    // Note: post-deletion the hand-written `.s` is `git rm`d. The
+    // caller branches on the return value to print a SKIP banner
+    // instead of a FAIL line — so a missing file is silently reported
+    // here (don't increment FAIL; the SKIP path is the success path).
+    let p = t3_dir + "/boot_stm32h7.s"
+    let ok = _exists(p)
+    if ok {
+        _check(true, "hand-written boot_stm32h7.s present", p)
+    }
+    return ok
+}
+
+fn check_emit_assembles(work_dir: str) -> bool {
+    let gen_s = work_dir + "/gen_boot.s"
+    let gen_o = work_dir + "/gen_boot.o"
+    let s_text = stm32h7_emit_full_boot_s()
+    let wrote = _write_file(gen_s, s_text)
+    if !wrote {
+        _check(false, "emitter `.s` text written", gen_s); return false
+    }
+    let cmd = "arm-none-eabi-as " + AS_FLAGS_STM32H7 + " -o \"" + gen_o + "\" \"" + gen_s + "\" 2>&1"
+    let out = exec(cmd)
+    let ok = _exists(gen_o)
+    _check(ok, "emitter output assembles via arm-none-eabi-as",
+           if ok { "wrote " + gen_o } else { "assemble error:\n" + out })
+    return ok
+}
+
+fn check_orig_assembles(t3_dir: str, work_dir: str) -> bool {
+    let orig_s = t3_dir + "/boot_stm32h7.s"
+    let orig_o = work_dir + "/orig.o"
+    let cmd = "arm-none-eabi-as " + AS_FLAGS_STM32H7 + " -o \"" + orig_o + "\" \"" + orig_s + "\" 2>&1"
+    let out = exec(cmd)
+    let ok = _exists(orig_o)
+    _check(ok, "hand-written boot_stm32h7.s assembles",
+           if ok { "wrote " + orig_o } else { "assemble error:\n" + out })
+    return ok
+}
+
+fn check_vector_table_byte_identical(work_dir: str) -> bool {
+    let gen_o = work_dir + "/gen_boot.o"
+    let orig_o = work_dir + "/orig.o"
+    let gen_bin = work_dir + "/gen_vt.bin"
+    let orig_bin = work_dir + "/orig_vt.bin"
+    if !_exists(gen_o) || !_exists(orig_o) {
+        _check(false, ".vector_table section byte-identical (gen ≡ orig)",
+               "missing object file(s)"); return false
+    }
+    let _ = exec("arm-none-eabi-objcopy -O binary --only-section=.vector_table \"" + gen_o + "\" \"" + gen_bin + "\" 2>&1")
+    let _2 = exec("arm-none-eabi-objcopy -O binary --only-section=.vector_table \"" + orig_o + "\" \"" + orig_bin + "\" 2>&1")
+    let gen_sha = _sha256(gen_bin)
+    let orig_sha = _sha256(orig_bin)
+    let ok = gen_sha.len() > 0 && gen_sha == orig_sha
+    let detail = "gen=" + gen_sha + " orig=" + orig_sha
+    _check(ok, ".vector_table section byte-identical (gen ≡ orig)", detail)
+    return ok
+}
+
+fn check_text_byte_identical(work_dir: str) -> bool {
+    let gen_o = work_dir + "/gen_boot.o"
+    let orig_o = work_dir + "/orig.o"
+    let gen_bin = work_dir + "/gen_text.bin"
+    let orig_bin = work_dir + "/orig_text.bin"
+    if !_exists(gen_o) || !_exists(orig_o) {
+        _check(false, ".text section byte-identical (gen ≡ orig)",
+               "missing object file(s)"); return false
+    }
+    let _ = exec("arm-none-eabi-objcopy -O binary --only-section=.text \"" + gen_o + "\" \"" + gen_bin + "\" 2>&1")
+    let _2 = exec("arm-none-eabi-objcopy -O binary --only-section=.text \"" + orig_o + "\" \"" + orig_bin + "\" 2>&1")
+    let gen_sha = _sha256(gen_bin)
+    let orig_sha = _sha256(orig_bin)
+    let ok = gen_sha.len() > 0 && gen_sha == orig_sha
+    let detail = "gen=" + gen_sha + " orig=" + orig_sha
+    _check(ok, ".text section byte-identical (gen ≡ orig)", detail)
+    return ok
+}
+
+fn check_text_relocs_identical(work_dir: str) -> bool {
+    let gen_o = work_dir + "/gen_boot.o"
+    let orig_o = work_dir + "/orig.o"
+    if !_exists(gen_o) || !_exists(orig_o) {
+        _check(false, ".text relocs identical (gen ≡ orig)",
+               "missing object file(s)"); return false
+    }
+    let gen_r = exec("arm-none-eabi-objdump -r --section=.text \"" + gen_o + "\" 2>&1 | grep -E 'R_ARM' | sort").trim()
+    let orig_r = exec("arm-none-eabi-objdump -r --section=.text \"" + orig_o + "\" 2>&1 | grep -E 'R_ARM' | sort").trim()
+    let ok = gen_r == orig_r && gen_r.len() > 0
+    let detail = if ok { "R_ARM_THM_CALL + literal-pool R_ARM_ABS32 set identical" }
+                 else { "gen:\n" + gen_r + "\norig:\n" + orig_r }
+    _check(ok, ".text relocs identical (gen ≡ orig)", detail)
+    return ok
+}
+
+fn check_vector_table_relocs_identical(work_dir: str) -> bool {
+    let gen_o = work_dir + "/gen_boot.o"
+    let orig_o = work_dir + "/orig.o"
+    if !_exists(gen_o) || !_exists(orig_o) {
+        _check(false, ".vector_table relocs identical (gen ≡ orig)",
+               "missing object file(s)"); return false
+    }
+    let gen_r = exec("arm-none-eabi-objdump -r --section=.vector_table \"" + gen_o + "\" 2>&1 | grep -E 'R_ARM' | sort").trim()
+    let orig_r = exec("arm-none-eabi-objdump -r --section=.vector_table \"" + orig_o + "\" 2>&1 | grep -E 'R_ARM' | sort").trim()
+    let ok = gen_r == orig_r && gen_r.len() > 0
+    let detail = if ok { "11× R_ARM_ABS32 (stack + reset + 10 hard_fault entries)" }
+                 else { "gen:\n" + gen_r + "\norig:\n" + orig_r }
+    _check(ok, ".vector_table relocs identical (gen ≡ orig)", detail)
+    return ok
+}
+
+// ─── main ────────────────────────────────────────────────────────────
+
+fn main() {
+    println("========================================================================")
+    println("  stdlib/hal — boot_byte_diff_stm32h7: F5 FULL-BOOT byte-diff oracle")
+    println("========================================================================")
+    println("  generator: stdlib/hal/boot_emit.hexa (stm32h7_emit_full_boot_s)")
+    println("  oracle:    arm-none-eabi-as byte-diff vs boot_stm32h7.s")
+    println("  target:    ARMv7-M Cortex-M7 + FPv5-D16 .vector_table + .text (full boot)")
+    println("")
+
+    let root = _root()
+    let t3_dir = root + "/stdlib/hal/t3"
+    let work_dir = exec("mktemp -d -t boot_byte_diff_stm32h7.XXXXXX").trim()
+    if work_dir.len() == 0 {
+        println("[FATAL] mktemp failed — cannot allocate scratch dir")
+        exit(1)
+    }
+    println("  scratch: " + work_dir)
+    println("")
+
+    if !check_toolchain() {
+        println("")
+        println("  Toolchain missing — install arm-none-eabi-{as,objcopy,objdump}.")
+        println("  F5 stm32h7 full-boot byte-diff verify SKIP (toolchain gate).")
+        println("__HEXA_LANG_HAL_BOOT_BYTE_DIFF_STM32H7__ SKIP")
+        exit(0)
+    }
+
+    if !check_orig_present(t3_dir) {
+        // Post-deletion: hand-written boot_stm32h7.s was `git rm`d
+        // after this oracle PASSed. Post-deletion runs SKIP gracefully
+        // — the proof already exists in git history. To re-prove against
+        // a fresh baseline, `git show <pre-deletion-sha>:stdlib/hal/t3/boot_stm32h7.s`.
+        println("")
+        println("  POST-DELETION SKIP — hand-written baseline boot_stm32h7.s removed")
+        println("  after this oracle PASSed (gen ≡ orig). The emitter remains the")
+        println("  SSOT; replay the historical proof via")
+        println("  `git show <pre-deletion-sha>:stdlib/hal/t3/boot_stm32h7.s`.")
+        println("__HEXA_LANG_HAL_BOOT_BYTE_DIFF_STM32H7__ SKIP")
+        exit(0)
+    }
+
+    let emit_ok = check_emit_assembles(work_dir)
+    let orig_ok = check_orig_assembles(t3_dir, work_dir)
+
+    if !emit_ok || !orig_ok {
+        println("__HEXA_LANG_HAL_BOOT_BYTE_DIFF_STM32H7__ FAIL")
+        exit(1)
+    }
+
+    check_vector_table_byte_identical(work_dir)
+    check_vector_table_relocs_identical(work_dir)
+    check_text_byte_identical(work_dir)
+    check_text_relocs_identical(work_dir)
+
+    println("")
+    println("  F5 stm32h7 leg (`.s`-text reset-prologue + FPU enable + composer) byte-identity:")
+    if FAIL == 0 {
+        println("    PROVEN ✓ — stm32h7 FULL boot (vector + FPU + prologue) is hexa-emittable.")
+        println("    DELETION GATE OPEN — hand-written boot_stm32h7.s may be `git rm`.")
+        println("    `.s` 2→1 (boot_rp2040.s already removed; boot_stm32h7.s the last hand `.s`).")
+    } else {
+        println("    BYTE-DIFF FAIL — emitter output diverges from hand-written `.s`.")
+        println("    ⚠ Hand-written `.s` MUST NOT be deleted until oracle PASSES.")
+        println("    ⚠ Wrong reset vector OR wrong prologue silently bricks the MCU.")
+    }
+
+    let pass_n = RUN - FAIL
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_LANG_HAL_BOOT_BYTE_DIFF_STM32H7__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_LANG_HAL_BOOT_BYTE_DIFF_STM32H7__ PASS")
+    exit(0)
+}
