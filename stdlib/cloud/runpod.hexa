@@ -8,6 +8,13 @@
 // CLI route — exec → runpodctl create pod / pod get / remove pod
 // API route — POST → https://api.runpod.io/graphql?api_key=… (curl via
 //   stdlib/http; JSON parse via stdlib/alloc/json_object).
+//
+// pool-route bypass — runpod API calls run LOCAL (cred-bound, Keychain on
+// the local Mac). pool-route should NOT relay these to a remote host that
+// lacks `secret get runpod.api_key`; otherwise a 401 surfaces from a remote
+// `runpodctl` invocation that simply had no key. The local-paths whitelist
+// (~/.sidecar/local-paths) is the enforcement surface — this file is the
+// documentation marker.
 
 use "stdlib/http"
 use "stdlib/alloc/json_object"
@@ -90,6 +97,55 @@ fn runpod_api_key() -> str {
     return env_var("RUNPOD_API_KEY")
 }
 
+// cloud_runpod_api_key — M7 auto-bootstrap. Env-passthrough first
+// (RUNPOD_API_KEY honored when set), then Keychain via `secret get
+// runpod.api_key`, then ~/.runpod/config.toml. Returns "" when nothing
+// resolves — caller decides how to react. Identical resolution surface
+// across every `cloud` verb so the user never sets env vars manually.
+// pool-route bypass: runpod API calls run LOCAL (cred-bound) — pool-route
+// should NOT relay this resolver to a remote host.
+fn cloud_runpod_api_key() -> str {
+    let env_key = env_var("RUNPOD_API_KEY")
+    if len(env_key) > 0 { return env_key }
+    let s = exec("secret get runpod.api_key 2>/dev/null").trim()
+    if len(s) > 0 { return s }
+    let toml = read_file(env_var("HOME") + "/.runpod/config.toml")
+    let k = _toml_str_field(toml, "api_key")
+    if len(k) > 0 { return k }
+    return ""
+}
+
+// cloud_runpod_must_have_api_key — resolve via cloud_runpod_api_key and
+// hard-exit with a uniform missing-key hint when empty. `verb` labels the
+// surfacing CLI verb (rent · down · ssh-port · …) so the user sees which
+// path tripped. Never prints the key itself.
+fn cloud_runpod_must_have_api_key(verb: str) -> str {
+    let k = cloud_runpod_api_key()
+    if len(k) > 0 { return k }
+    println("[cloud] " + verb + ": missing runpod.api_key — set it: secret set runpod.api_key <YOUR_KEY> (https://runpod.io/console/user/settings)")
+    exit(2)
+    return ""
+}
+
+// cloud_runpod_401_hint — uniform hint string appended to any RunPod API
+// failure whose payload (HTTP status text or GraphQL error body) contains
+// a 401 / unauthorized signal. Caller concatenates onto the surfaced
+// message; never prints the key itself. Case-permissive over the common
+// runpodctl + curl surfacings ("401 Unauthorized", "Unauthorized",
+// "unauthorized", "statuscode 401", "Invalid API key", "invalid api key").
+fn cloud_runpod_401_hint(payload: str) -> str {
+    let unauth = payload.index_of("401") >= 0
+        || payload.index_of("Unauthorized") >= 0
+        || payload.index_of("unauthorized") >= 0
+        || payload.index_of("UNAUTHORIZED") >= 0
+        || payload.index_of("Invalid API key") >= 0
+        || payload.index_of("invalid api key") >= 0
+    if unauth {
+        return " — [cloud] runpod 401 — API key invalid or revoked. Refresh: secret rotate runpod.api_key (https://runpod.io/console/user/settings)"
+    }
+    return ""
+}
+
 // runpod_local_pubkey — the local SSH public key, so every pod we create is
 // reachable from THIS host. A pod created without our key is publickey-denied:
 // a crashed-dispatch orphan then can't be inspected/torn-down over ssh, only
@@ -156,7 +212,8 @@ fn _runpod_create_cli(rpc: str, gpu_type: str, image: str, pubkey: str, name: st
             return RunPodPod { ok: 1, pod_id: pid, message: "created (cli) on " + gpu_type }
         }
     }
-    return _runpod_fail_pod("create (cli) failed: " + out.substring(0, 200))
+    let snippet = out.substring(0, 200)
+    return _runpod_fail_pod("create (cli) failed: " + snippet + cloud_runpod_401_hint(snippet))
 }
 
 fn _runpod_create_api(api_key: str, gpu_type: str, image: str, pubkey: str, name: str) -> RunPodPod {
@@ -173,7 +230,7 @@ fn _runpod_create_api(api_key: str, gpu_type: str, image: str, pubkey: str, name
             return RunPodPod { ok: 1, pod_id: pid, message: "created (api) on " + gpu_type }
         }
     }
-    return _runpod_fail_pod("create (api): no id in response (no capacity / bad input)")
+    return _runpod_fail_pod("create (api): no id in response (no capacity / bad input)" + cloud_runpod_401_hint(resp))
 }
 
 // runpod_create — try CLI first, fall back to GraphQL API on CLI absence
@@ -271,7 +328,7 @@ fn _runpod_get_ssh_port_api(api_key: str, pod_id: str) -> RunPodSshPort {
     let parsed = json_parse(resp)
     let ports_v = json_object_get_path(parsed, "data.pod.runtime.ports")
     if type_of(ports_v) != "array" {
-        return _runpod_fail_port("get_ssh_port (api): runtime not provisioned yet")
+        return _runpod_fail_port("get_ssh_port (api): runtime not provisioned yet" + cloud_runpod_401_hint(resp))
     }
     let mut i = 0
     while i < len(ports_v) {
@@ -338,7 +395,14 @@ fn _runpod_terminate_cli(rpc: str, pod_id: str) -> int {
     let cmd = _shq_local(rpc) + " pod delete " + _shq_local(pod_id) + " -o json 2>&1"
     let out = exec(cmd)
     // Best-effort: any output containing "error" is a failure; otherwise
-    // treat as success (runpodctl prints a short confirmation).
+    // treat as success (runpodctl prints a short confirmation). 401 is a
+    // cred miss (pool-route to a host without the key, or a revoked key) —
+    // surface the canonical hint inline so the operator can self-recover.
+    let hint = cloud_runpod_401_hint(out)
+    if len(hint) > 0 {
+        println("[cloud] runpod terminate (cli) failed:" + hint)
+        return 0
+    }
     if out.index_of("error") >= 0 {
         return 0
     }
