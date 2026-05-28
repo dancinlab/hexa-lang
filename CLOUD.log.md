@@ -18,3 +18,9 @@ Append-only history sister of `CLOUD.md`. Each entry starts with `## <ISO timest
 - [x] 동반 — sidecar commons 0.12.0 (`_pods_snapshot()`) + pods-route 0.1.0 (`--register` auto-inject) 이 이미 ship 됨 (2026-05-28 · cwd `./pods.json` 기반). M10 에서 `~/.hx/cloud/active-pods.json` 로 전환 정합 예정.
 - [ ] 우선순위 = M5 (SSOT) → M10 (sidecar 정합) → M1/M2/M3 (안전망) → M8/M9 (카탈로그) → M11 (정리).
 
+
+## 2026-05-29 — M8/M9 MERGED (PR #1970 · full-build verified)
+
+- [x] M8/M9 ✅ MERGED — `providers_catalog.hexa` + `cloud providers [list|fit|recommend]` verb. full Mac build (module_loader → hexat → clang link → smoke) + 기능 검증 (`cloud providers list` 4-tier 렌더 · `recommend` 캠페인) 통과 후 admin-merge. CI red 는 B9/F3 transient(`runtime_core.c` untracked)이라 sign-local 로컬 full-build proof 로 우회. → M* 9/11 (M1·M4·M5·M6·M7·M8·M9·M10 ✅).
+- [ ] M11 unblocked (M8 머지 완료) — demiurge pods.temp.json archive + PROVIDERS.json superset 정합 가능 (단 live RTSC 캠페인 데이터라 migration 은 사용자 awareness 필요).
+- [ ] M2/M3 잔여 — TTL/cost-cap watchdog · pod-kill 정확성 = live-pod 테스트 비용 승인 필요.
