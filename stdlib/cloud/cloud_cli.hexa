@@ -165,6 +165,31 @@ fn _cli_atoi(s: str) -> int {
     return v
 }
 
+// _ttl_to_sec — parse a `--ttl` duration to seconds. Accepts a bare integer
+// (seconds) or a `<N>s` / `<N>m` / `<N>h` suffix form. Empty / unparseable →
+// -1 (UNSET, no TTL enforcement). M2 deadman uses this.
+fn _ttl_to_sec(s: str) -> int {
+    let n = len(s)
+    if n == 0 {
+        return -1
+    }
+    let last = s.substring(n - 1, n)
+    let num = _cli_atoi(s)
+    if num <= 0 {
+        return -1
+    }
+    if last == "s" {
+        return num
+    }
+    if last == "m" {
+        return num * 60
+    }
+    if last == "h" {
+        return num * 3600
+    }
+    return num
+}
+
 // _ssh_opts_cli — scan av[start..] (up to a "--" separator) for the
 // connection flags --port <n> and --insecure, and build the ssh_opts list.
 fn _ssh_opts_cli(av: [str], start: int) -> [str] {
@@ -708,6 +733,9 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
     // unbounded (opt-in). Caps the rent so a ghost-RUNNING pod whose ssh
     // transport never comes up (exit 255 forever) can't bleed billing.
     let max_wait_sec = _cli_atoi(_flag_val(av, start, "--max-wait-sec", "180"))
+    // M2/M3 — opt-in guard limits (stored in registry after READY).
+    let ttl_sec = _ttl_to_sec(_flag_val(av, start, "--ttl", ""))
+    let max_cost = _flag_val(av, start, "--max-cost-usd", "")
     let mut disk_gb = disk
     if disk_gb <= 0 {
         disk_gb = 30
@@ -775,6 +803,10 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
     }
     println("[cloud] rent vast: READY " + ssh.host + ":" + ssh.port + " (root@" + ssh.host + " -p " + ssh.port + ")")
     let _ = pod_registry_add(inst.instance_id, "vast", ssh.host, ssh.port, "READY")
+    if ttl_sec >= 0 || len(max_cost) > 0 {
+        let _ = pod_registry_set_limits(inst.instance_id, ttl_sec, max_cost)
+        println("[cloud] M2/M3 guard: ttl_sec=" + str(ttl_sec) + " max_cost_usd=" + max_cost + " (enforced by `cloud watchdog`)")
+    }
     // #1155 zero-flag: write the bare-IP Host block → ~/.ssh/config so a later
     // `cloud run root@<ip>` (or raw ssh) presents the vast key with no
     // --identity. No-op when no vast key is available (graceful).
@@ -809,6 +841,10 @@ fn _cloud_rent_runpod(av: [str], start: int) -> int {
     // RunPod H100 SXM dump (pod RUNNING + ssh exit 255 forever) is the
     // motivating incident; without a cap a dead-ssh pod bleeds billing.
     let max_wait_sec = _cli_atoi(_flag_val(av, start, "--max-wait-sec", "180"))
+    // M2/M3 — opt-in guard limits stored in the M5 registry after READY.
+    // ttl: --ttl 30m/90s/3600 → deadman teardown. cost: --max-cost-usd 5.
+    let ttl_sec = _ttl_to_sec(_flag_val(av, start, "--ttl", ""))
+    let max_cost = _flag_val(av, start, "--max-cost-usd", "")
     let pod = runpod_create(api_key, gpu, image, pubkey, owner)
     if pod.ok == 0 {
         println("[cloud] rent runpod: " + pod.message)
@@ -853,6 +889,10 @@ fn _cloud_rent_runpod(av: [str], start: int) -> int {
     }
     println("[cloud] rent runpod: READY " + port.ip + ":" + port.port + " (root@" + port.ip + " -p " + port.port + ")")
     let _ = pod_registry_add(pod.pod_id, "runpod", port.ip, port.port, "READY")
+    if ttl_sec >= 0 || len(max_cost) > 0 {
+        let _ = pod_registry_set_limits(pod.pod_id, ttl_sec, max_cost)
+        println("[cloud] M2/M3 guard: ttl_sec=" + str(ttl_sec) + " max_cost_usd=" + max_cost + " (enforced by `cloud watchdog`)")
+    }
     println("pod_id=" + pod.pod_id)
     println("host=" + port.ip)
     println("port=" + port.port)
@@ -1343,6 +1383,22 @@ fn main() {
         // to watchdog_run, which parses --threshold-min / --util-cap-pct /
         // --kill and exits 0 (clean sweep) / 1 (invalid args / help) / 2
         // (sweep failed: no runpodctl / no pods / list error).
+        //
+        // M2/M3 — registry limit sweep runs FIRST: tear down pods that opted
+        // into `--ttl` (deadman) or `--max-cost-usd` (cost cap) and breached.
+        // DRY-RUN unless `--kill`; only --kill resolves the runpod key (so a
+        // dry-run with no runpod pods needs no creds). Opt-in invariant: pods
+        // with no limit set are never touched.
+        let m23_kill = _has_flag(av, si + 1, "--kill")
+        if m23_kill == 1 {
+            let m23_key = cloud_runpod_must_have_api_key("watchdog")
+            let n = pod_registry_limit_sweep(m23_key, 0)
+            if n > 0 {
+                println("[cloud] watchdog: " + str(n) + " pod(s) torn down by M2/M3 limit (ttl/cost)")
+            }
+        } else {
+            let _ = pod_registry_limit_sweep("", 1)
+        }
         let rc = watchdog_run(av, si + 1)
         exit(rc)
     }
