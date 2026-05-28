@@ -2623,6 +2623,14 @@ static void *hxlcl_gmtime_r(const void *tp, void *out) {
 // new fd on success (positive = fd, handled by _cf).
 // ARCH GATE for the BSD socket family: svc-trap path is Darwin arm64 only;
 // Linux/other arches fall through to libc (same prototypes from <sys/socket.h>).
+// F3 ACTIVATION · Path A — socket class-C svc-wrapper self-emit slot.
+// 3-arg int+int+int _cf (d, t, p) — all three ints sign-extended (3× sxtw on
+// x0/x1/x2), then mov w16,#97 / svc / _cf errno tail. 11 instr / 44 B, errno
+// reloc 0x1c/0x20. SELF-EMIT → extern, resolved by emit_hxlcl_socket_o.hexa's
+// .o (byte-eq to clang -O2, SYS#97). Completes the socket-family core set.
+#ifdef HEXA_RT_SELFEMIT
+extern int hxlcl_socket(int d, int t, int p);
+#else
 static int __attribute__((noinline)) hxlcl_socket(int d, int t, int p) {
 #if (defined(__arm64__) || defined(__aarch64__)) && defined(__APPLE__)
     return (int)_hxlcl_syscall3_cf(HXLCL_SYS_SOCKET, (long)d, (long)t, (long)p);
@@ -2630,6 +2638,7 @@ static int __attribute__((noinline)) hxlcl_socket(int d, int t, int p) {
     return socket(d, t, p);
 #endif
 }
+#endif
 // F3 ACTIVATION · Path A — bind class-C svc-wrapper self-emit slot.
 // 3-arg int+ptr+uint _cf: sockfd/x0 sxtw, addr/x1 ptr untouched, len/x2 uxtw
 // (mov w2,w2 — unsigned, zero-extend). SELF-EMIT → extern, resolved by
