@@ -1,0 +1,73 @@
+# B9.6-B1 — class-B calling-convention composite FIRST self-emit (hxlcl_atoi)
+# Generated 2026-05-28T05:02:32Z · arm64 macOS · LC_SYMTAB only
+
+=== LAYER 1: interp self-test (self/codegen/runtime_arm64.hexa) ===
+  rt_atoi          : 20 bytes (1 reloc · BRANCH26)
+  ALL CHECKS PASS
+  ALL CHECKS PASS
+
+=== LAYER 2: byte-identical to `as -arch arm64` ===
+--- emit driver output ---
+  rt_atoi bytes  : 20 (20 expected)
+  prologue       : fd 7b bf a9 (stp x29,x30,[sp,#-16]!) OK
+  call           : 00 00 00 94 (bl _hxlcl_atoll, BRANCH26 @0x08) OK
+  epilogue       : fd 7b c1 a8 (ldp x29,x30,[sp],#16) OK
+  ret trailer    : c0 03 5f d6 (ret) OK — w0=(int)atoll result
+  obj_wrap size  : 318 bytes total
+--- hexa-emit .o __text bytes ---
+(__TEXT,__text) section
+0000000000000000 a9bf7bfd 910003fd 94000000 a8c17bfd 
+0000000000000010 d65f03c0 
+--- nm (T _hxlcl_atoi defined / U _hxlcl_atoll undefined) ---
+0000000000000000 T _hxlcl_atoi
+                 U _hxlcl_atoll
+--- BRANCH26 reloc @ off 0x08 ---
+Relocation information (__TEXT,__text) 1 entries
+address  pcrel length extern type    scattered symbolnum/value
+00000008 True  long   True   BR26    False     _hxlcl_atoll
+--- as -arch arm64 oracle __text bytes (MUST MATCH) ---
+(__TEXT,__text) section
+0000000000000000 a9bf7bfd 910003fd 94000000 a8c17bfd 
+0000000000000010 d65f03c0 
+
+=== LAYER 3: JIT-exec correctness (BL reloc binds · NO infinite loop) ===
+link rc=0 (LC_DYSYMTAB in emitted .o = 0)
+hxlcl_atoi("99") = 99 (want 99) OK
+hxlcl_atoi("-42") = -42 (want -42) OK
+hxlcl_atoi("  123") = 123 (want 123) OK
+hxlcl_atoi("+7") = 7 (want 7) OK
+hxlcl_atoi("0") = 0 (want 0) OK
+hxlcl_atoi("2147483647") = 2147483647 (want 2147483647) OK
+hxlcl_atoi("abc") = 0 (want 0) OK
+hxlcl_atoi("-0") = 0 (want 0) OK
+RESULT: ALL PASS
+JIT-exec run rc=0
+--- live disasm: _hxlcl_atoi composite (ld64 bound the bl) ---
+_hxlcl_atoi:
+00000001000004b0	stp	x29, x30, [sp, #-0x10]!
+00000001000004b4	mov	x29, sp
+00000001000004b8	bl	_hxlcl_atoll
+00000001000004bc	ldp	x29, x30, [sp], #0x10
+00000001000004c0	ret
+_hxlcl_atoll:
+
+=== DUAL-BUILD (Path-A activation · 0-extern invariant) ===
+(a) DEFAULT  — hxlcl_atoi/atoll linkage (t = local, 0-extern preserved):
+00000000000176bc t _hxlcl_atoi
+0000000000000530 t _hxlcl_atoll
+    undefined-extern count = 49
+(b) GUARD ON — atoi U (self-emit supplies) / atoll T (exported for BL bind):
+                 U _hxlcl_atoi
+0000000000000498 T _hxlcl_atoll
+    undefined-extern count = 69 (delta = self-emit externs incl _hxlcl_atoi)
+(c) GUARD ON without .o — link-fail proving extern is genuine:
+Undefined symbols for architecture arm64:
+  "_hxlcl_atoi", referenced from:
+
+=== FRAMELESS-LEAF FALSIFIER (why class-B needs a frame) ===
+A frameless bl-composite (test/native_build/poc_macho_v3_branch26.hexa, no
+stp/ldp) was empirically run: the linked binary SPINS in an infinite loop
+(rc=124 under timeout) because ret reuses a clobbered x30. The stp/ldp frame
+is the load-bearing class-B difference; rt_atoi's frame fixes it (rc=0 above).
+
+=== VERDICT: 🟢 ACTIVATED — class-B FIRST self-emit · 3-layer PASS · BL reloc binds · NO LC_DYSYMTAB ===

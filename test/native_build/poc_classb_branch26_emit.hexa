@@ -1,0 +1,199 @@
+// test/native_build/poc_classb_branch26_emit.hexa
+//
+// B9.6-B1 — standalone class-B (calling-convention composite) BRANCH26
+// cross-object link+run ORACLE (the committed counterpart to the arena
+// class-A poc_arena_reloc_caller.c). Mirrors the existing
+// poc_macho_v3_branch26.hexa emitter BUT with a PROPER FRAME (stp/mov / bl /
+// ldp / ret) so x30 (LR) is preserved across the call. The frameless sibling
+// (poc_macho_v3_branch26.hexa) SPINS forever when run — this one returns.
+//
+// FINDING (load-bearing, #1475 caveat RESOLVED): ld64 links a hexa-emitted
+// BRANCH26 reloc against an UNDEFINED-external symbol with LC_SYMTAB ONLY —
+// NO LC_DYSYMTAB needed. Run-correct (returns 99) when the composite has a
+// frame. See poc_classb_branch26_caller.c / _callee.c for the link harness.
+//
+// Emitted _the_composite (5 instr, 20 B) → /tmp/poc_classb.o:
+//   a9bf7bfd  stp x29,x30,[sp,#-16]!   ; prologue: spill FP+LR
+//   910003fd  mov x29,sp
+//   94000000  bl  _the_callee          ; BRANCH26 reloc @ off 0x08 (undef extern)
+//   a8c17bfd  ldp x29,x30,[sp],#16     ; epilogue: reload FP+LR
+//   d65f03c0  ret                      ; return (low32 of callee's x0)
+// Symbols: sym[0]=_the_composite (defined), sym[1]=_the_callee (undef extern).
+// Reloc:   offset 8, kind 2 (BRANCH26), symnum 1.
+
+fn mh_magic_64_v() -> int { return 0xFEEDFACF }
+fn mh_object_v() -> int { return 1 }
+fn cpu_type_arm64_v() -> int { return 0x0100000C }
+fn cpu_subtype_all_v() -> int { return 0 }
+fn lc_segment_64_v() -> int { return 0x19 }
+fn lc_symtab_v() -> int { return 0x02 }
+fn lc_build_version_v() -> int { return 0x32 }
+fn s_attr_pure_v() -> int { return 0x80000000 }
+fn s_attr_some_v() -> int { return 0x00000400 }
+fn n_ext_v() -> int { return 0x01 }
+fn n_sect_v() -> int { return 0x0e }
+
+fn align_to_v(val: int, align: int) -> int {
+    return ((val + align - 1) / align) * align
+}
+fn push_u16_le_v(buf: [int], val: int) -> [int] {
+    let mut b = buf
+    b.push(val % 0x100); b.push((val / 0x100) % 0x100)
+    return b
+}
+fn push_u32_le_v(buf: [int], val: int) -> [int] {
+    let mut b = buf
+    b.push(val % 0x100); b.push((val / 0x100) % 0x100)
+    b.push((val / 0x10000) % 0x100); b.push((val / 0x1000000) % 0x100)
+    return b
+}
+fn push_u64_le_v(buf: [int], val: int) -> [int] {
+    let mut b = push_u32_le_v(buf, val % 0x100000000)
+    return push_u32_le_v(b, val / 0x100000000)
+}
+
+// 2 symbols (1 defined composite + 1 undef callee) + 1 BRANCH26 reloc @ off 8.
+fn emit_classb_obj(code: [int]) -> [int] {
+    let mut out = []
+    let code_size = len(code)
+
+    // strtab: "\0_the_composite\0_the_callee\0"
+    // _the_composite = 14 chars + NUL = 15 ; strx = 1
+    // _the_callee    = 11 chars + NUL = 12 ; strx = 1+15 = 16
+    let strx_comp   = 1
+    let strx_callee = 16
+    let strtab_size = 1 + 15 + 12
+
+    let nsects = 1
+    let segment_cmd_size = 72 + 80 * nsects
+    let symtab_cmd_size = 24
+    let build_version_cmd_size = 24
+    let sizeofcmds = segment_cmd_size + symtab_cmd_size + build_version_cmd_size
+    let header_size = 32
+    let code_offset = align_to_v(header_size + sizeofcmds, 8)
+    let reloc_offset = align_to_v(code_offset + code_size, 4)
+    let nreloc = 1
+    let reloc_size = 8 * nreloc
+    let symtab_offset = reloc_offset + reloc_size
+    let nlist_size = 16
+    let nsyms = 2
+    let strtab_offset = symtab_offset + nlist_size * nsyms
+    let total_end = strtab_offset + strtab_size
+
+    out = push_u32_le_v(out, mh_magic_64_v())
+    out = push_u32_le_v(out, cpu_type_arm64_v())
+    out = push_u32_le_v(out, cpu_subtype_all_v())
+    out = push_u32_le_v(out, mh_object_v())
+    out = push_u32_le_v(out, 3)
+    out = push_u32_le_v(out, sizeofcmds)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+
+    out = push_u32_le_v(out, lc_segment_64_v())
+    out = push_u32_le_v(out, segment_cmd_size)
+    let mut i = 0
+    while i < 16 { out.push(0); i = i + 1 }
+    out = push_u64_le_v(out, 0)
+    out = push_u64_le_v(out, total_end - code_offset)
+    out = push_u64_le_v(out, code_offset)
+    out = push_u64_le_v(out, total_end - code_offset)
+    out = push_u32_le_v(out, 7)
+    out = push_u32_le_v(out, 7)
+    out = push_u32_le_v(out, nsects)
+    out = push_u32_le_v(out, 0)
+
+    // section_64 __text
+    out.push(95).push(95).push(116).push(101).push(120).push(116)
+    let mut j = 0
+    while j < 10 { out.push(0); j = j + 1 }
+    out.push(95).push(95).push(84).push(69).push(88).push(84)
+    j = 0
+    while j < 10 { out.push(0); j = j + 1 }
+    out = push_u64_le_v(out, 0)
+    out = push_u64_le_v(out, code_size)
+    out = push_u32_le_v(out, code_offset)
+    out = push_u32_le_v(out, 2)
+    out = push_u32_le_v(out, reloc_offset)
+    out = push_u32_le_v(out, nreloc)
+    out = push_u32_le_v(out, s_attr_pure_v() + s_attr_some_v())
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+
+    out = push_u32_le_v(out, lc_symtab_v())
+    out = push_u32_le_v(out, symtab_cmd_size)
+    out = push_u32_le_v(out, symtab_offset)
+    out = push_u32_le_v(out, nsyms)
+    out = push_u32_le_v(out, strtab_offset)
+    out = push_u32_le_v(out, strtab_size)
+
+    out = push_u32_le_v(out, lc_build_version_v())
+    out = push_u32_le_v(out, build_version_cmd_size)
+    out = push_u32_le_v(out, 1)
+    out = push_u32_le_v(out, 0x000E0000)
+    out = push_u32_le_v(out, 0x000E0000)
+    out = push_u32_le_v(out, 0)
+
+    while len(out) < code_offset { out.push(0) }
+    let mut k = 0
+    while k < len(code) { out.push(code[k]); k = k + 1 }
+
+    // reloc: BRANCH26 @ off 8 → sym[1]
+    while len(out) < reloc_offset { out.push(0) }
+    out = push_u32_le_v(out, 8)
+    let r_symnum = 1
+    let r_pcrel = 1
+    let r_length = 2
+    let r_extern = 1
+    let r_kind = 2
+    let bits = (r_symnum % 0x1000000)
+             + (r_pcrel * 0x1000000)
+             + (r_length * 0x2000000)
+             + (r_extern * 0x8000000)
+             + ((r_kind % 16) * 0x10000000)
+    out = push_u32_le_v(out, bits)
+
+    // nlist × 2
+    while len(out) < symtab_offset { out.push(0) }
+    // sym[0] = _the_composite (defined __text @0)
+    out = push_u32_le_v(out, strx_comp)
+    out.push(n_sect_v() + n_ext_v())
+    out.push(1)
+    out = push_u16_le_v(out, 0)
+    out = push_u64_le_v(out, 0)
+    // sym[1] = _the_callee (UNDEF extern)
+    out = push_u32_le_v(out, strx_callee)
+    out.push(n_ext_v())
+    out.push(0)
+    out = push_u16_le_v(out, 0)
+    out = push_u64_le_v(out, 0)
+
+    // strtab: "\0_the_composite\0_the_callee\0"
+    out.push(0)
+    // "_the_composite\0"
+    out.push(95).push(116).push(104).push(101).push(95).push(99).push(111).push(109).push(112).push(111).push(115).push(105).push(116).push(101).push(0)
+    // "_the_callee\0"
+    out.push(95).push(116).push(104).push(101).push(95).push(99).push(97).push(108).push(108).push(101).push(101).push(0)
+
+    return out
+}
+
+fn main() {
+    // _the_composite: frame + bl _the_callee + epilogue + ret
+    let mut code = []
+    // a9bf7bfd  stp x29,x30,[sp,#-16]!   (LE: fd 7b bf a9)
+    code.push(0xfd); code.push(0x7b); code.push(0xbf); code.push(0xa9)
+    // 910003fd  mov x29,sp               (LE: fd 03 00 91)
+    code.push(0xfd); code.push(0x03); code.push(0x00); code.push(0x91)
+    // 94000000  bl _the_callee           (LE: 00 00 00 94)  BRANCH26 reloc @ off 8
+    code.push(0x00); code.push(0x00); code.push(0x00); code.push(0x94)
+    // a8c17bfd  ldp x29,x30,[sp],#16     (LE: fd 7b c1 a8)
+    code.push(0xfd); code.push(0x7b); code.push(0xc1); code.push(0xa8)
+    // d65f03c0  ret                      (LE: c0 03 5f d6)
+    code.push(0xc0); code.push(0x03); code.push(0x5f); code.push(0xd6)
+
+    let obj = emit_classb_obj(code)
+    write_bytes("/tmp/poc_classb.o", obj)
+    println("emitted /tmp/poc_classb.o  (" + to_string(len(obj)) + " bytes)")
+    println("composite: frame + bl _the_callee + epilogue; BRANCH26 off=8 sym=1")
+}
