@@ -1463,6 +1463,62 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
             out.push(_nvptx_instr("//", [], "RFC 071 P3+ - unsupported " + s.op + " operand kind"))
             return out
         }
+        // RFC 071 P3+ - float-cast intrinsics `to_f64(x)` / `to_f32(x)`
+        // (mirror of the to_i64/to_i32 arm above). The HIR->MIR layer
+        // synthesizes these when an integer operand feeds an FP expression -
+        // e.g. RoPE's `θ = pos / base^(2*tid/D)` lowers `to_f64(tid)` and
+        // `to_f64(D)` (closes the GPU cycle-loop Round 11 finding where these
+        // emitted `// unsupported call: to_f64` and produced garbage). The dst
+        // is the FP bank (NVPTX_RKIND_F64/F32 from the classifier); the source
+        // operand kind selects the `cvt.rn.<dst>.<src>` mnemonic:
+        //   to_f64 ←  U64 / I64  ->  `cvt.rn.f64.s64  %fd<d>, %rd<s>;`
+        //   to_f64 ←  U32 / I32  ->  `cvt.rn.f64.s32  %fd<d>, %r<s>;`
+        //   to_f64 ←  F64        ->  `mov.b64         %fd<d>, %fd<s>;` (no-op)
+        //   to_f32 ←  U64 / I64  ->  `cvt.rn.f32.s64  %f<d>,  %rd<s>;`
+        //   to_f32 ←  U32 / I32  ->  `cvt.rn.f32.s32  %f<d>,  %r<s>;`
+        //   to_f32 ←  F64        ->  `cvt.rn.f32.f64  %f<d>,  %fd<s>;`  (round)
+        //   to_f32 ←  F32        ->  `mov.b32         %f<d>,  %f<s>;`   (no-op)
+        //   ref: PTX ISA 8.7 §9.7.1.5 - cvt: integer<->float conversion.
+        if s.op == "to_f64" || s.op == "to_f32" {
+            if len(s.args) >= 1 {
+                let dst_reg = _nvptx_lookup_reg_for_local(kinds, s.dst.id)
+                let arg = s.args[0]
+                if arg.kind == "local" {
+                    let src_kind = _nvptx_lookup_kind_for_local(kinds, arg.local_id)
+                    let src_reg = _nvptx_lookup_reg_for_local(kinds, arg.local_id)
+                    let mut a = []
+                    a.push(_nvptx_op(dst_reg))
+                    a.push(_nvptx_op(src_reg))
+                    if s.op == "to_f64" {
+                        if src_kind == NVPTX_RKIND_F64 {
+                            out.push(_nvptx_instr("mov.b64", a, s.op + " (f64 no-op)"))
+                        } else if src_kind == NVPTX_RKIND_U64 {
+                            out.push(_nvptx_instr("cvt.rn.f64.s64", a, s.op + " (s64 to f64)"))
+                        } else {
+                            // 32-bit source - signed-widen-and-convert (the
+                            // gpu/SPEC.md §3 default, matching to_i64's s32 rule).
+                            out.push(_nvptx_instr("cvt.rn.f64.s32", a, s.op + " (s32 to f64)"))
+                        }
+                    } else {
+                        // to_f32 target
+                        if src_kind == NVPTX_RKIND_F32 {
+                            out.push(_nvptx_instr("mov.b32", a, s.op + " (f32 no-op)"))
+                        } else if src_kind == NVPTX_RKIND_F64 {
+                            out.push(_nvptx_instr("cvt.rn.f32.f64", a, s.op + " (f64 to f32)"))
+                        } else if src_kind == NVPTX_RKIND_U64 {
+                            out.push(_nvptx_instr("cvt.rn.f32.s64", a, s.op + " (s64 to f32)"))
+                        } else {
+                            out.push(_nvptx_instr("cvt.rn.f32.s32", a, s.op + " (s32 to f32)"))
+                        }
+                    }
+                    return out
+                }
+            }
+            // Honest stub - const_int / const_float / global / no-arg shapes
+            // are not the synthesized thread-derived cast this arm targets.
+            out.push(_nvptx_instr("//", [], "RFC 071 P3+ - unsupported " + s.op + " operand kind"))
+            return out
+        }
         // RFC 055 §12 P4+ - `gpu_barrier()` block-wide synchronization
         // (gpu/SPEC.md §5). Lowers to `bar.sync 0;` - a PTX special
         // instruction that synchronizes all threads in a block. The
@@ -3549,6 +3605,16 @@ fn _nvptx_classify_local_for_stmt(s: Stmt) -> string {
         //   ref: PTX ISA 8.7 §9.7.1.5 - cvt: data-type conversion.
         if s.op == "to_i64" { return NVPTX_RKIND_U64 }
         if s.op == "to_i32" { return NVPTX_RKIND_U32 }
+        // RFC 071 P3+ - float-cast intrinsics (mirror of to_i64/to_i32).
+        // `to_f64(x)` / `to_f32(x)` synthesized by HIR->MIR when an integer
+        // operand feeds an FP expression (e.g. RoPE `pos / base^(2*i/D)` with
+        // `to_f64(tid)` / `to_f64(D)`). Result bank is the dst FP width; the
+        // body lowering site emits `cvt.rn.f<w>.s<sw>`. Without these, to_f64
+        // defaulted to F64 (correct bank) but the lowering arm was missing so
+        // it hit the unsupported-call stub; to_f32 ALSO defaulted WRONG to F64.
+        //   ref: PTX ISA 8.7 §9.7.1.5 - cvt: data-type conversion.
+        if s.op == "to_f64" { return NVPTX_RKIND_F64 }
+        if s.op == "to_f32" { return NVPTX_RKIND_F32 }
         // RFC 067 P1 - WMMA fragment-producing intrinsics. `gpu_wmma_load_a`,
         // `gpu_wmma_load_b`, and `gpu_wmma_mma` all RETURN a WMMA fragment
         // (16x16 tile distributed across the warp); the dst Local for

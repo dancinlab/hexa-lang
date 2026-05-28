@@ -1086,3 +1086,29 @@ RoPE wedge (D=128, 64 pairs, pos=7 base=10000)
 artifacts: `tool/artifacts/{softmax,rope}_f64_2026_05_28.ptx` + `nnprim_2026_05_28.out`.
 
 cycle-loop sequence: R11 = softmax PASS (win) + RoPE FAIL (codegen finding → INBOX). NN-primitive catalog 3/4 byte-eq · RoPE to_f64-gapped.
+
+## 2026-05-28 — cycle-loop Round 12 (codegen) · nvptx to_f64/to_f32 lowering fix 🔧
+
+R11 RoPE FAIL 의 root cause (`to_f64(thread-derived i64)` unsupported-call) 를 **codegen fix** 로 닫음. `confirm` → codegen session 진입.
+
+**2-site fix** (`compiler/codegen/nvptx_target.hexa`, silicon-proven `to_i64` arm 의 정확한 mirror):
+- **classify** (`_nvptx_classify_local_for_stmt`): `to_f64`→`NVPTX_RKIND_F64`, `to_f32`→`NVPTX_RKIND_F32`. to_f64 는 default 가 우연히 F64(올바른 bank)였으나 lowering arm 부재로 unsupported-stub 행; to_f32 는 default 가 **WRONG F64** — 둘 다 explicit close.
+- **lower** (body emit): `to_f64 ← U64` → `cvt.rn.f64.s64`; `← U32` → `cvt.rn.f64.s32`; `← F64` → `mov.b64` no-op. `to_f32 ← U64/U32/F64/F32` → `cvt.rn.f32.s64`/`.s32`/`.f64` / `mov.b32` no-op.
+
+**test** (`nvptx_lower_test.hexa` Case 28c `_test_to_f64`): gid32 u32 → to_i64 u64 → to_f64 f64, asserts `cvt.rn.f64.s64 %fd2, %rd1` + `.reg .f64 %fd2` + no `unsupported call: to_f64` marker. 3-site test-runner wire (aggregate AND ×2 + fail-msg).
+
+**verdict tier — 🟢 by-construction (parse-clean + unit-test pinned PTX)**:
+- 두 편집 파일 `hexa parse` clean.
+- Case 28c 가 정확한 emit PTX (`cvt.rn.f64.s64 %fd2, %rd1`) 를 assert — codegen-level 검증.
+- fix = silicon-proven to_i64 arm 의 faithful mirror (same cvt-family, same reg-bank routing).
+
+**🔸 silicon re-fire PENDING (별개 build-infra breakage 에 막힘)**: ubu-2 fresh-clone 으로 nvptx_emit 재빌드 시도 → **origin/main bootstrap build 가 fresh clone 에서 깨짐** (2 독립 infra gap): (1) `self/runtime.c` amalgam 이 `#include "native/{tensor_kernels,net,...}.c"` 하는데 그 파일들이 **origin/main 에 미커밋** (local-only untracked, #1866 amalgam landing 누락) (2) `float_to_bits`/`bits_to_float` codegen-emit(#1677) 가 bare-name C call 인데 fresh-clone runtime 에 정의 부재 = **runtime/codegen version skew**. 둘 다 본 to_f64 fix 와 무관 — 별개 INBOX filing. RoPE silicon re-fire 는 clean nvptx_emit 재빌드(다음 tool deploy) 후.
+
+**finding**:
+- ✅ R11 RoPE codegen gap **root-cause-fixed** (to_f64/to_f32 lowering + classify + test). NN-primitive catalog 4번째(RoPE) unblock 경로 확보.
+- 🔸 silicon confirm pending (infra-blocked, honest defer).
+- 🔬 별개 발견: origin/main fresh-clone bootstrap build broken (native amalgam 미커밋 + float_to_bits skew) → INBOX.
+
+**L709 milestone flip 안 함** (RoPE silicon re-fire 전 = correctness 미확정, over-closure 금지).
+
+cycle-loop sequence: R12 = codegen fix (by-construction 🟢, silicon defer) + build-infra gap 발견.
