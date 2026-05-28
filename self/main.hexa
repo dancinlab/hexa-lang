@@ -3513,6 +3513,23 @@ fn cmd_run_user_direct(file, extra_args) {
             cmd = cmd + " " + q
             ai = ai + 1
         }
+        // INTERACTIVE STDIO FIX (2026-05-28): exec_replace() the compiled
+        // child so stdin/stdout/stderr are inherited VERBATIM — no popen
+        // buffering, no full-output capture-then-print. The prior path
+        // (`exec(cmd + " 2>&1; echo __HEXA_SHIM_RC__=$?")`) popen-read the
+        // ENTIRE child stdout into one buffer and only re-emitted at child
+        // EOF, so an interactive program that prints a banner then blocks
+        // in input() showed NOTHING until exit (banner trapped in the
+        // parent's pipe-drain). Measured: 0 bytes at T+1s while blocked.
+        // Replacing the process image hands the real tty to the child
+        // (same canonical pattern `hexa lsp` already uses for JSON-RPC
+        // bidirectional streaming) and propagates the child's exit code
+        // natively — no __HEXA_SHIM_RC sentinel parse needed. The legacy
+        // capture path below is retained as a fallback for the case where
+        // execvp fails (exec_replace returns "" without replacing).
+        let _ = exec_replace(cmd)
+        // Only reached if exec_replace's execvp failed — fall back to the
+        // legacy buffered capture so a broken /bin/sh still surfaces output.
         let out = exec(cmd + " 2>&1; echo \"__HEXA_SHIM_RC__=$?\"")
         let marker = "__HEXA_SHIM_RC__="
         let mlen = len(marker)
@@ -3608,6 +3625,23 @@ fn cmd_run(file, extra_args) {
         while ai < len(extra_args) {
             cmd = cmd + " " + shq(extra_args[ai])
             ai = ai + 1
+        }
+        // INTERACTIVE STDIO FIX (2026-05-28): for a TERMINAL run (not the
+        // batch driver, which runs N scripts in one process and needs
+        // post-run control flow), exec_replace() the child so stdin/stdout/
+        // stderr are inherited VERBATIM. The compat-mode entry
+        // `hexa <file.hexa>` (used by hx package shims like `drive`) routes
+        // here, NOT through cmd_run_user_direct, so without this an
+        // interactive program's banner stayed trapped in the parent's
+        // popen pipe-drain until child EOF (measured 0 bytes at T+1s while
+        // the child blocked in input()). exec_replace propagates the child
+        // exit code natively. Guarded by !cmd_run_no_exit_mode so the
+        // batch driver (cmd_run_no_exit_mode=true) keeps the capture path
+        // and its per-script rc accounting. Legacy capture path below is
+        // also the fallback if exec_replace's execvp fails.
+        if !cmd_run_no_exit_mode {
+            let _ = exec_replace(cmd)
+            // Only reached if exec_replace's execvp failed — fall through.
         }
         let out = exec(cmd + " 2>&1; echo \"__HEXA_SHIM_RC__=$?\"")
         let marker = "__HEXA_SHIM_RC__="
