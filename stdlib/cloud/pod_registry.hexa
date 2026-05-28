@@ -889,3 +889,39 @@ fn pod_registry_list() -> [PodRecord] {
     }
     return out
 }
+
+// ── M3 cost-cap field writers (additive on the M5 layer) ─────────────
+
+// pod_registry_set_max_cost — persist `max_cost_usd` on `pod_id`.
+fn pod_registry_set_max_cost(pod_id: str, max_cost_usd: str) -> int {
+    if len(pod_id) == 0 { return 0 }
+    let mut records = pod_registry_load()
+    let idx = _m5_find(records, pod_id)
+    if idx < 0 { return 0 }
+    let p = records[idx]
+    records[idx] = PodRecord {
+        id: p.id, provider: p.provider, created_at: p.created_at,
+        rented_by: p.rented_by, ssh_host: p.ssh_host, ssh_port: p.ssh_port,
+        status: p.status, ttl_sec: p.ttl_sec,
+        max_cost_usd: max_cost_usd, cumulative_cost_usd: p.cumulative_cost_usd
+    }
+    _m5_write_atomic(records)
+    return 1
+}
+
+// pod_registry_set_cumulative — persist accrued spend on `pod_id`.
+fn pod_registry_set_cumulative(pod_id: str, cumulative_usd: str) -> int {
+    if len(pod_id) == 0 { return 0 }
+    let mut records = pod_registry_load()
+    let idx = _m5_find(records, pod_id)
+    if idx < 0 { return 0 }
+    let p = records[idx]
+    records[idx] = PodRecord {
+        id: p.id, provider: p.provider, created_at: p.created_at,
+        rented_by: p.rented_by, ssh_host: p.ssh_host, ssh_port: p.ssh_port,
+        status: p.status, ttl_sec: p.ttl_sec,
+        max_cost_usd: p.max_cost_usd, cumulative_cost_usd: cumulative_usd
+    }
+    _m5_write_atomic(records)
+    return 1
+}

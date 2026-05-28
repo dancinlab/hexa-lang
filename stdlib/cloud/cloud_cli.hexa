@@ -14,12 +14,13 @@ use "stdlib/cloud/vast"
 use "stdlib/cloud/runpod"
 use "stdlib/cloud/dft_dispatch"
 use "stdlib/cloud/pods_local"
+use "stdlib/cloud/cost_cap"
 
 fn _cloud_help() {
     println("hexa cloud — structured-argv remote dispatch (cycle A)")
     println("")
     println("usage:")
-    println("  cloud rent <provider> [--gpu T] [--image IMG] [--disk GiB] [--owner TAG] [--query Q] [--max-wait-sec N]")
+    println("  cloud rent <provider> [--gpu T] [--image IMG] [--disk GiB] [--owner TAG] [--query Q] [--max-wait-sec N] [--max-cost-usd N]")
     println("                                                         provision a GPU pod (vast|runpod), wait ssh-ready, print host:port + id (alias: up)")
     println("                                                         --max-wait-sec N (default 180): bounded SSH-readiness gate; on timeout the rent auto-tears the billing pod down + exits 2 with verbatim verdict (M5 sigil: SSH-never-ready leak guard)")
     println("  cloud down <id> [--provider P]                         destroy a pod + forget it from the registry (alias: destroy)")
@@ -777,6 +778,9 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
     if len(_injected) > 0 {
         println("[cloud] rent vast: ~/.ssh/config Host " + _injected + " → vast identity (auto · zero-flag ssh; #1155)")
     }
+    // M3 — arm cost-cap watchdog if --max-cost-usd parses.
+    let cap_v = _m3_parse_usd(_flag_val(av, start, "--max-cost-usd", ""))
+    if len(cap_v) > 0 { let _ = _m3_arm_cost_cap_watchdog(inst.instance_id, "vast", cap_v) }
     println("instance_id=" + inst.instance_id)
     println("host=" + ssh.host)
     println("port=" + ssh.port)
@@ -848,6 +852,9 @@ fn _cloud_rent_runpod(av: [str], start: int) -> int {
     }
     println("[cloud] rent runpod: READY " + port.ip + ":" + port.port + " (root@" + port.ip + " -p " + port.port + ")")
     let _ = pod_registry_add(pod.pod_id, "runpod", port.ip, port.port, "READY")
+    // M3 — arm cost-cap watchdog if --max-cost-usd parses.
+    let cap_v = _m3_parse_usd(_flag_val(av, start, "--max-cost-usd", ""))
+    if len(cap_v) > 0 { let _ = _m3_arm_cost_cap_watchdog(pod.pod_id, "runpod", cap_v) }
     println("pod_id=" + pod.pod_id)
     println("host=" + port.ip)
     println("port=" + port.port)
@@ -886,6 +893,62 @@ fn _cloud_down(id: str, provider: str) -> int {
         return 0
     }
     return 1
+}
+
+// ── M3 cost-cap watchdog helpers ──────────────────────────────────────
+
+// _m3_hourly_rate_usd — best-effort "$/h" lookup; "" = unknown (caller warns).
+fn _m3_hourly_rate_usd(pod_id: str, provider: str) -> str {
+    if len(pod_id) == 0 { return "" }
+    let q = "'" + pod_id + "'"
+    if provider == "runpod" {
+        let out = exec("runpodctl pod get " + q + " -o json 2>/dev/null | tr ',' '\\n' | grep -i costPerHr | head -1 | sed -E 's/.*: *([0-9.]+).*/\\1/'").trim()
+        return out
+    }
+    if provider == "vast" {
+        let out = exec("vastai show instance " + q + " --raw 2>/dev/null | tr ',' '\\n' | grep -E 'dphtotal|dph_total' | head -1 | sed -E 's/.*: *([0-9.]+).*/\\1/'").trim()
+        return out
+    }
+    return ""
+}
+
+// _m3_arm_cost_cap_watchdog — persist max_cost_usd + spawn the 5-min
+// poller. Verbatim: "[cloud] rent: cost cap $<N> · auto-destroys ..." OR
+// "[cloud] cost-cap: hourly rate unknown for <provider> · cap disabled".
+fn _m3_arm_cost_cap_watchdog(pod_id: str, provider: str, cap_usd: str) -> int {
+    if len(cap_usd) == 0 || len(pod_id) == 0 { return 0 }
+    let rate = _m3_hourly_rate_usd(pod_id, provider)
+    if len(rate) == 0 {
+        println("[cloud] cost-cap: hourly rate unknown for " + provider + " · cap disabled")
+        return 0
+    }
+    let _ = pod_registry_set_max_cost(pod_id, cap_usd)
+    println("[cloud] rent: cost cap $" + cap_usd + " · auto-destroys when cumulative ≥ cap")
+    let log = env_var("HOME") + "/.hx/cloud/cost-cap-" + pod_id + ".log"
+    let _ = exec("mkdir -p " + env_var("HOME") + "/.hx/cloud 2>/dev/null")
+    let _ = exec("(nohup sh -c 'while sleep 300; do hexa cloud cost-cap-tick '\\''" + pod_id + "'\\'' " + provider + " " + rate + " || break; done' >> '" + log + "' 2>&1 &)")
+    return 1
+}
+
+// _cloud_cost_cap_tick — ONE poll cycle. Exit 0 = continue, 2 = teardown
+// fired (loop breaks), 1 = pod gone / no cap / error.
+fn _cloud_cost_cap_tick(pod_id: str, provider: str, hourly_rate: str) -> int {
+    if len(pod_id) == 0 { return 1 }
+    let records = pod_registry_load()
+    let idx = _m5_find(records, pod_id)
+    if idx < 0 { return 1 }
+    let rec = records[idx]
+    if len(rec.max_cost_usd) == 0 { return 1 }
+    let wall = _m3_wall_sec(rec.created_at, _reg_now_sec())
+    if wall < 0 { return 1 }
+    let cumulative = _m3_compute_cumulative_usd(hourly_rate, wall)
+    let _ = pod_registry_set_cumulative(pod_id, cumulative)
+    if _m3_should_trip(cumulative, rec.max_cost_usd) == 1 {
+        let _ = _cloud_down(pod_id, provider)
+        println("[cloud] cost-cap: $" + cumulative + " ≥ $" + rec.max_cost_usd + " · pod " + pod_id + " destroyed")
+        return 2
+    }
+    return 0
 }
 
 // _cloud_list_print — print live pods. With --provider it queries one
@@ -1008,7 +1071,7 @@ fn main() {
     while i < len(av) {
         let t = av[i]
         if si < 0 {
-            if t == "rent" || t == "up" || t == "down" || t == "destroy" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "fire" || t == "poll" || t == "tail" || t == "watch" || t == "ssh-port" || t == "resolve" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "adopt" || t == "forget" || t == "dft-run" || t == "pods" || t == "dispatch" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
+            if t == "rent" || t == "up" || t == "down" || t == "destroy" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "fire" || t == "poll" || t == "tail" || t == "watch" || t == "ssh-port" || t == "resolve" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "adopt" || t == "forget" || t == "dft-run" || t == "pods" || t == "dispatch" || t == "cost-cap-tick" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
                 si = i
                 sub = t
             }
@@ -1027,13 +1090,24 @@ fn main() {
         println("hexa cloud 0.4.1 — M1 `rent --max-wait-sec N` bounded SSH-readiness gate (default 180s) · timeout → auto-teardown + exit 2 + verbatim verdict (no more ssh-never-ready billing leak) · [0.4.0: nohup/fire --register + ghost-pod L2-auto · 0.3.4: resolve alias · 0.3.3: vast-key ssh-config autoinject · 0.3.2: --identity · 0.3.1: registry guard · 0.3.0: dft-run]")
         return
     }
+    if sub == "cost-cap-tick" {
+        // M3 — one poll cycle for the cost-cap watchdog. Called by the
+        // background loop spawned at rent time; exits 2 once teardown
+        // has fired so the loop breaks. Usage:
+        //   cloud cost-cap-tick <pod_id> <provider> <hourly_rate_usd>
+        if si + 3 >= len(av) {
+            println("[cloud] cost-cap-tick: usage — cloud cost-cap-tick <pod_id> <provider> <hourly_rate_usd>")
+            exit(1)
+        }
+        exit(_cloud_cost_cap_tick(av[si + 1], av[si + 2], av[si + 3]))
+    }
     if sub == "rent" || sub == "up" {
         // Provision a GPU pod. The first post-verb token is the provider
         // (vast|runpod); flags follow. Wires vast.hexa / runpod.hexa
         // lifecycle fns + pod_registry. $-INCURRING — the only verb that
         // creates a billing instance.
         if si + 1 >= len(av) {
-            println("[cloud] rent: missing <provider> — usage: cloud rent <vast|runpod> [--gpu T] [--image IMG] [--disk GiB] [--owner TAG] [--query Q] [--max-wait-sec N]")
+            println("[cloud] rent: missing <provider> — usage: cloud rent <vast|runpod> [--gpu T] [--image IMG] [--disk GiB] [--owner TAG] [--query Q] [--max-wait-sec N] [--max-cost-usd N]")
             exit(2)
         }
         let provider = av[si + 1]

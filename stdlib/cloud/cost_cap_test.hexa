@@ -1,0 +1,107 @@
+// stdlib/cloud/cost_cap_test.hexa — M3 cost-cap watchdog falsifiers.
+//
+// All three falsifiers are network-free + deterministic (pure helpers in
+// cost_cap.hexa). No pod is created, no registry I/O happens.
+//
+//   F-CLOUD-M3-COST-PARSE      — _m3_parse_usd accepts/rejects per spec
+//   F-CLOUD-M3-CUMULATIVE-MATH — _m3_compute_cumulative_cents byte-exact
+//   F-CLOUD-M3-CAP-TRIP        — _m3_should_trip 1/0 across the boundary
+
+use "stdlib/cloud/cost_cap"
+
+fn _assert_eq_int(actual: int, expected: int, label: str) -> int {
+    if actual == expected {
+        println("  PASS  " + label + " = " + str(actual))
+        return 0
+    }
+    println("  FAIL  " + label + " expected " + str(expected) + " got " + str(actual))
+    return 1
+}
+
+fn _assert_eq_str(actual: str, expected: str, label: str) -> int {
+    if actual == expected {
+        println("  PASS  " + label + " = '" + actual + "'")
+        return 0
+    }
+    println("  FAIL  " + label + " expected '" + expected + "' got '" + actual + "'")
+    return 1
+}
+
+fn _falsifier_parse() -> int {
+    println("F-CLOUD-M3-COST-PARSE — decimal parser accept/reject set")
+    let mut fails = 0
+    // accepted forms — returned verbatim
+    fails = fails + _assert_eq_str(_m3_parse_usd("2.5"), "2.5", "parse '2.5'")
+    fails = fails + _assert_eq_str(_m3_parse_usd("2"), "2", "parse '2'")
+    fails = fails + _assert_eq_str(_m3_parse_usd("0.5"), "0.5", "parse '0.5'")
+    fails = fails + _assert_eq_str(_m3_parse_usd("100"), "100", "parse '100'")
+    fails = fails + _assert_eq_str(_m3_parse_usd("0.01"), "0.01", "parse '0.01'")
+    // rejected forms — return ""
+    fails = fails + _assert_eq_str(_m3_parse_usd(""), "", "parse '' rejected")
+    fails = fails + _assert_eq_str(_m3_parse_usd("-1"), "", "parse '-1' rejected (negative)")
+    fails = fails + _assert_eq_str(_m3_parse_usd("0"), "", "parse '0' rejected (opt-out)")
+    fails = fails + _assert_eq_str(_m3_parse_usd("0.0"), "", "parse '0.0' rejected (opt-out)")
+    fails = fails + _assert_eq_str(_m3_parse_usd("1.2.3"), "", "parse '1.2.3' rejected (double dot)")
+    fails = fails + _assert_eq_str(_m3_parse_usd("abc"), "", "parse 'abc' rejected (non-digit)")
+    fails = fails + _assert_eq_str(_m3_parse_usd("+5"), "", "parse '+5' rejected (leading sign)")
+    fails = fails + _assert_eq_str(_m3_parse_usd("5x"), "", "parse '5x' rejected (trailing char)")
+    return fails
+}
+
+fn _falsifier_cumulative() -> int {
+    println("F-CLOUD-M3-CUMULATIVE-MATH — hourly_rate * wall_sec / 3600")
+    let mut fails = 0
+    // hourly_rate=$2.00 (200 cents), wall=900s (15 min) → $0.50 (50 cents)
+    fails = fails + _assert_eq_int(_m3_compute_cumulative_cents(200, 900), 50,
+        "200c/h * 900s = 50c ($0.50)")
+    // hourly_rate=$2.00, wall=10800s (3 h) → $6.00 (600 cents)
+    fails = fails + _assert_eq_int(_m3_compute_cumulative_cents(200, 10800), 600,
+        "200c/h * 10800s = 600c ($6.00)")
+    // boundary: 0 rate / 0 wall → 0
+    fails = fails + _assert_eq_int(_m3_compute_cumulative_cents(0, 900), 0, "zero rate → 0")
+    fails = fails + _assert_eq_int(_m3_compute_cumulative_cents(200, 0), 0, "zero wall → 0")
+    // string-formed wrapper
+    fails = fails + _assert_eq_str(_m3_compute_cumulative_usd("2.00", 900), "0.50",
+        "usd-fmt: $2.00 × 900s = $0.50")
+    fails = fails + _assert_eq_str(_m3_compute_cumulative_usd("2.00", 10800), "6.00",
+        "usd-fmt: $2.00 × 10800s = $6.00")
+    fails = fails + _assert_eq_str(_m3_compute_cumulative_usd("0.59", 3600), "0.59",
+        "usd-fmt: $0.59 × 1h = $0.59")
+    return fails
+}
+
+fn _falsifier_trip() -> int {
+    println("F-CLOUD-M3-CAP-TRIP — cumulative >= cap → trigger")
+    let mut fails = 0
+    // under cap → no trip
+    fails = fails + _assert_eq_int(_m3_should_trip("0.50", "5.00"), 0, "$0.50 < $5 → no trip")
+    fails = fails + _assert_eq_int(_m3_should_trip("4.99", "5.00"), 0, "$4.99 < $5 → no trip")
+    // at cap → trip (inclusive)
+    fails = fails + _assert_eq_int(_m3_should_trip("5.00", "5.00"), 1, "$5.00 == $5 → trip")
+    // over cap → trip
+    fails = fails + _assert_eq_int(_m3_should_trip("6.00", "5.00"), 1, "$6.00 >= $5 → trip")
+    fails = fails + _assert_eq_int(_m3_should_trip("100.00", "2.50"), 1, "$100 >= $2.50 → trip")
+    // sub-dollar cap
+    fails = fails + _assert_eq_int(_m3_should_trip("0.49", "0.50"), 0, "$0.49 < $0.50 → no trip")
+    fails = fails + _assert_eq_int(_m3_should_trip("0.50", "0.50"), 1, "$0.50 == $0.50 → trip")
+    // malformed inputs → safe no-trip
+    fails = fails + _assert_eq_int(_m3_should_trip("", "5.00"), 0, "empty cumulative → no trip")
+    fails = fails + _assert_eq_int(_m3_should_trip("5.00", ""), 0, "empty cap → no trip")
+    fails = fails + _assert_eq_int(_m3_should_trip("5.00", "0"), 0, "zero cap → no trip (opt-out)")
+    return fails
+}
+
+fn main() {
+    println("=== M3 cost-cap watchdog — falsifiers ===")
+    let mut fails = 0
+    fails = fails + _falsifier_parse()
+    fails = fails + _falsifier_cumulative()
+    fails = fails + _falsifier_trip()
+    println("")
+    if fails == 0 {
+        println("ALL PASS — F-CLOUD-M3-COST-PARSE · F-CLOUD-M3-CUMULATIVE-MATH · F-CLOUD-M3-CAP-TRIP")
+        exit(0)
+    }
+    println("FAILED — " + str(fails) + " assertion(s)")
+    exit(1)
+}

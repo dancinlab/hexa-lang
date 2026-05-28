@@ -1,0 +1,99 @@
+// stdlib/cloud/cost_cap.hexa — M3 cost-cap watchdog pure helpers.
+// CLOUD.md M3: `cloud rent --max-cost-usd <N>` arms a watchdog polling
+// cumulative spend every 5min; cumulative >= cap → teardown + verdict log.
+// PURE only (parse · math · decision); CLI wiring + spawn in cloud_cli.hexa.
+
+use "stdlib/cloud/pod_registry"
+
+// _m3_parse_usd — accept "0.5"/"2"/"2.5"; reject ""·"-N"·"0[.0]"·"1.2.3"·
+// non-digit·leading-sign·trailing-char. Stored verbatim (no float drift).
+fn _m3_parse_usd(s: str) -> str {
+    let n = len(s)
+    if n == 0 { return "" }
+    let first = s.substring(0, 1)
+    if first == "-" || first == "+" { return "" }
+    let mut i = 0
+    let mut dots = 0
+    let mut digits = 0
+    let mut nonzero = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "." {
+            dots = dots + 1
+            if dots > 1 { return "" }
+        } else {
+            let cc = char_code(c)
+            if cc < 48 || cc > 57 { return "" }
+            digits = digits + 1
+            if cc > 48 { nonzero = 1 }
+        }
+        i = i + 1
+    }
+    if digits == 0 { return "" }
+    if nonzero == 0 { return "" }
+    return s
+}
+
+// _m3_format_cents — int cents → "N.CC" USD.
+fn _m3_format_cents(cents: int) -> str {
+    if cents < 0 { return "0.00" }
+    let whole = cents / 100
+    let frac = cents - whole * 100
+    let mut frac_s = str(frac)
+    if len(frac_s) < 2 { frac_s = "0" + frac_s }
+    return str(whole) + "." + frac_s
+}
+
+// _m3_usd_to_cents — USD string → int cents (floor); "" → -1.
+fn _m3_usd_to_cents(s: str) -> int {
+    let n = len(s)
+    if n == 0 { return -1 }
+    let dot = s.index_of(".")
+    let mut whole_s = s
+    let mut frac_s = ""
+    if dot >= 0 {
+        whole_s = s.substring(0, dot)
+        frac_s = s.substring(dot + 1, n)
+    }
+    if len(whole_s) == 0 { whole_s = "0" }
+    if len(frac_s) >= 2 { frac_s = frac_s.substring(0, 2) }
+    else if len(frac_s) == 1 { frac_s = frac_s + "0" }
+    else { frac_s = "00" }
+    let whole = _reg_atoi(whole_s)
+    let frac = _reg_atoi(frac_s)
+    if whole < 0 || frac < 0 { return -1 }
+    return whole * 100 + frac
+}
+
+// _m3_compute_cumulative_cents — PURE: hourly_rate(c) * wall(s) / 3600.
+//   (200, 900)   → 50 ($0.50)
+//   (200, 10800) → 600 ($6.00)
+fn _m3_compute_cumulative_cents(hourly_rate_cents: int, wall_sec: int) -> int {
+    if hourly_rate_cents <= 0 || wall_sec <= 0 { return 0 }
+    return (hourly_rate_cents * wall_sec) / 3600
+}
+
+// _m3_compute_cumulative_usd — USD-string wrapper. Bad rate → "0.00".
+fn _m3_compute_cumulative_usd(hourly_rate_usd: str, wall_sec: int) -> str {
+    let rate_cents = _m3_usd_to_cents(hourly_rate_usd)
+    if rate_cents < 0 { return "0.00" }
+    return _m3_format_cents(_m3_compute_cumulative_cents(rate_cents, wall_sec))
+}
+
+// _m3_should_trip — PURE: cumulative >= cap → 1 (cents compare).
+fn _m3_should_trip(cumulative_usd: str, cap_usd: str) -> int {
+    let cum = _m3_usd_to_cents(cumulative_usd)
+    let cap = _m3_usd_to_cents(cap_usd)
+    if cum < 0 || cap <= 0 { return 0 }
+    if cum >= cap { return 1 }
+    return 0
+}
+
+// _m3_wall_sec — seconds between ISO `created_at` and `now_sec`; -1 on bad input.
+fn _m3_wall_sec(created_at: str, now_sec: int) -> int {
+    let csec = _reg_iso_to_sec(created_at)
+    if csec <= 0 || now_sec <= 0 { return -1 }
+    let dt = now_sec - csec
+    if dt < 0 { return -1 }
+    return dt
+}
