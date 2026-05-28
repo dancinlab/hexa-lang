@@ -1,0 +1,55 @@
+=== F3 BATCH-4 (B9.6-C12..C17) — 3-LAYER VERDICT (verbatim) ===
+claim: 6 class-C svc-wrapper primitives self-emit byte-identically to clang -O2 + as -arch arm64,
+       JIT-exec correct, and preserve the default 0-libc-extern build byte-for-byte.
+host: mini-class arm64 macOS · on-PATH hexa-run (not ~/.hx/bin/hexa) · SDK syscall.h verified
+
+── SYS# verification (xcrun SDK sys/syscall.h) ──
+#define	SYS_read           3
+#define	SYS_write          4
+#define	SYS_wait4          7
+#define	SYS_select         93
+#define	SYS_mmap           197
+#define	SYS_poll           230
+
+── LAYER 1 — interp self-test (hexa-run self/codegen/runtime_arm64.hexa) ──
+  rt_read          : 36 bytes (2 relocs)
+  rt_write         : 36 bytes (2 relocs)
+  rt_select        : 20 bytes (no reloc)
+  rt_poll          : 20 bytes (no reloc)
+  rt_waitpid       : 44 bytes (2 relocs)
+  rt_mmap          : 44 bytes (2 relocs)
+  ALL CHECKS PASS
+  (0 FAIL across all byte/svc#/reloc/sxtw/uxtw/alignment asserts)
+
+── LAYER 2 — byte-eq vs clang -O2 AND as -arch arm64 (per-primitive __text words) ──
+(errno same-TU global → DIRECT adrp/str; verified emitter ≡ clang ≡ as for all 6)
+  rt_read   93407c00 52800070 d4001001 9a9f37e8 b4000088 90000008 b9000100 92800000 d65f03c0  -> PASS (clang==as==emit)
+  rt_write  93407c00 52800090 d4001001 9a9f37e8 b4000088 90000008 b9000100 92800000 d65f03c0  -> PASS
+  rt_select 93407c00 d2800005 52800bb0 d4001001 d65f03c0                                       -> PASS
+  rt_poll   2a0103e1 93407c42 52801cd0 d4001001 d65f03c0                                       -> PASS
+  rt_waitpid 93407c00 93407c42 d2800003 528000f0 d4001001 9a9f37e8 b4000088 90000008 b9000100 92800000 d65f03c0 -> PASS
+  rt_mmap   93407c42 93407c63 93407c84 528018b0 d4001001 9a9f37e8 b4000088 90000008 b9000100 92800000 d65f03c0   -> PASS
+  reloc: read/write PAGE21@0x14+PAGEOFF12@0x18 · waitpid/mmap PAGE21@0x1c+PAGEOFF12@0x20 · select/poll NO reloc
+  LAYER-2 BYTE-EQ: ALL PASS — emitter ≡ clang -O2 ≡ as -arch arm64
+
+── LAYER 3 — JIT-exec (clang driver links the 6 wrapper .o's; errno cell shared) ──
+  PASS: mkstemp opened a temp fd
+  PASS: hxlcl_write wrote full payload
+  PASS: hxlcl_read read back identical bytes
+  PASS: hxlcl_write(badfd) = -1 + errno EBADF
+  PASS: hxlcl_poll reports stdout writable
+  PASS: hxlcl_select reports stdout writable
+  PASS: hxlcl_waitpid reaped child, status exit 0
+  PASS: hxlcl_waitpid(bogus) = -1 + errno ECHILD
+  PASS: hxlcl_mmap returned a valid page (not MAP_FAILED)
+  PASS: mmap page is writable+readable
+  PASS: hxlcl_mmap(bad) = MAP_FAILED
+JIT-EXEC ALL PASS (6 primitives)
+  (rc=0)
+
+── LAYER 4 — DEFAULT 0-libc-extern preservation (guard OFF) ──
+clang -E -P -arch arm64 self/runtime.c  vs  origin/main:self/runtime.c
+diff result: EMPTY (19088 lines byte-identical) — default build UNCHANGED, 0-extern preserved
+standalone-compile error count: branch 1 == main 1 (pre-existing #include-not-standalone; my change adds 0)
+
+VERDICT: 🟢 6/6 PASS · 0 REVERTed · default 0-extern byte-identical · ACTIVATED 31->37 (/640)
