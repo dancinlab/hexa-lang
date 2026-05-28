@@ -1,0 +1,201 @@
+F3 ACTIVATION RUNBOOK · Path A · B9.6-D3 — class-D HexaVal-repr body activation
+================================================================================
+Date:    2026-05-28
+Branch:  f3-classd-activation-runbook-2026-05-28
+Base:    origin/main (PR #1923 + post-merge #1924-#1928)
+Prior:   42/640 ACTIVATED (PR #1917 strdup [1] + PR #1919 strndup [1] +
+         PR #1862 atoi [1] + PR #1926/#1927 svc-wrappers [9] + 12 leaves +
+         class-D ctors [6] = 30 + 12 + 9 = ~41, advancing to 42 via #1926)
+New:     46/640 ACTIVATED (+4 class-D HexaVal-repr bodies; concurrent svc
+         agents may revise the exact denominator).
+
+═══════════════════════════════════════════════════════════════════════════
+DESIGN — gating-shape difference vs class-B leaf activation (PR #1917)
+═══════════════════════════════════════════════════════════════════════════
+
+PR #1917 (strdup) wraps a static `hxlcl_strdup` helper:
+
+  #ifdef HEXA_RT_SELFEMIT
+  extern char *hxlcl_strdup(const char *s);    // .o supplies _hxlcl_strdup
+  #else
+  static char *hxlcl_strdup(const char *s) { ... }
+  #endif
+
+  + HXLCL_MALLOC_SC macro    — exports `_hxlcl_malloc` so the .o's BRANCH26
+                                bl can bind to runtime.c's malloc.
+
+class-D HexaVal-repr is structurally different — `HexaVal rt_<name>(...)`
+IS the body (no helper). The new gating shape is a 3-way switch:
+
+  #if defined(HEXA_RT_SELFEMIT)
+  extern HexaVal rt_<name>(HexaVal c);          // .o supplies _rt_<name>
+  #elif !defined(HEXA_HAS_HEXA_RT_STDLIB)
+  HexaVal rt_<name>(HexaVal c) { ... C body ... }
+  #else
+  extern HexaVal rt_<name>(HexaVal c);          // aprime_cc hexa-source path
+  #endif
+
+Key architectural findings (the runbook hypothesis at the start of this work):
+
+  1. The HexaVal struct-return ABI = x0:x1 register PAIR (NRRP). There is
+     NO hidden x8 pointer arg. ⇒ extern decl byte-shape matches def
+     byte-shape exactly. NO `__attribute__((sysv_abi))` or similar fix is
+     needed.
+
+  2. The BL callees in each class-D .o are `_hexa_bool` (for isalpha/isalnum)
+     and `_hexa_int` (for pthread_noop/pthread_create_policy). These ctors
+     are ALREADY non-static under HEXA_RT_SELFEMIT — runtime_core_emit.hexa
+     L1338-L1357 (PR #1858 ctor bundle) sets them up as extern declarations,
+     resolved by hexa_val_ctors.o. ⇒ NO new callee-export macro analogous
+     to HXLCL_MALLOC_SC is needed. This is a clean win — class-D scales
+     mechanically on top of the existing ctor-bundle infra.
+
+  3. Existing runtime.c had a 2-way `#ifndef HEXA_HAS_HEXA_RT_STDLIB` gate
+     for these 4 fns (the aprime_cc full-build path). The activation
+     rewrap is semantically equivalent in the legacy two states (path 2
+     and path 3) and only adds a NEW state (path 1) for HEXA_RT_SELFEMIT.
+     ⇒ default build is BYTE-IDENTICAL to origin/main (Gate (a) PASS).
+
+═══════════════════════════════════════════════════════════════════════════
+PER-PRIMITIVE 4-GATE VERDICT
+═══════════════════════════════════════════════════════════════════════════
+
+Reproduce: /tmp/classd-gate-b/ (worktree-local probes).
+Self-emit .o's: rt_isalpha_classd.o · rt_isalnum_classd.o ·
+                rt_pthread_noop_classd.o · rt_pthread_create_policy_classd.o
+                (emitted via hexat $repo/test/native_build/emit_rt_<n>_classd_o.hexa).
+
+  ─────────────────────────────────────────────────────────────────────────
+  PRIMITIVE                    │ (a) DEFAULT  │ (b) JIT-exec │ (c) extern  │ (d) fixpoint
+                               │  0-extern    │  correct     │  genuine    │  structural
+  ─────────────────────────────────────────────────────────────────────────
+  rt_isalpha    (16 instr/64B) │  PASS        │  PASS        │  PASS       │  PASS
+  rt_isalnum    (20 instr/80B) │  PASS        │  PASS        │  PASS       │  PASS
+  rt_pthread_noop  (6 instr/24B)│  PASS        │  PASS        │  PASS       │  PASS
+  rt_pthread_create_policy
+                (6 instr/24B)  │  PASS        │  PASS        │  PASS       │  PASS
+  ─────────────────────────────────────────────────────────────────────────
+  TOTAL                        │  4/4 PASS    │  4/4 PASS    │  4/4 PASS   │  4/4 PASS
+
+GATE DETAILS
+
+(a) DEFAULT 0-extern preserved
+    - `clang -E -P -arch arm64` on the L2029-block + L2199-block produces
+      preprocessor output IDENTICAL to origin/main (diff exit 0).
+    - `clang -c -arch arm64` on those slices → .o BYTE-IDENTICAL
+      (cmp clean) to origin/main pre-image.
+    - Net effect on the default build: ZERO observable change. The
+      removed `#ifndef HEXA_HAS_HEXA_RT_STDLIB` lines are textually
+      replaced by `#if defined(HEXA_RT_SELFEMIT) / #elif !defined(...)`;
+      under both legacy states (path 2 = stdlib-build, path 3 = standalone)
+      the same code branches activate as before.
+
+(b) Guard-on links + JIT-exec correct (22/22 PASS)
+    - Each emit driver produces a Mach-O .o exporting `T _rt_<name>`
+      defined + `U _hexa_bool` (isalpha/isalnum) or `U _hexa_int`
+      (pthread) undefined, with exactly 1 ARM64_RELOC_BRANCH26 at the
+      designed offset.
+    - Minimal harness (HexaVal typedef + ctor exports + 4 extern decls)
+      + the 4 .o's links via clang -arch arm64 in one step.
+    - JIT-exec: 22/22 PASS, rc=0:
+        rt_isalpha 10 inputs (A/Z/a/z=1; 0/space/@/`/{/[=0)
+        rt_isalnum  8 inputs (A/z=1; 0/9=1; / /:/space/@=0)
+        rt_pthread_noop          ×2 → TAG_INT 0 OK
+        rt_pthread_create_policy ×2 → TAG_INT 1 OK
+    - Returned HexaVal {tag, value} reads back correct via the x0:x1
+      pair (i.e. ABI is right, not just byte-equal).
+
+(c) Guard-on no-`.o` link-fail (extern is genuine)
+    - Removing the 4 .o's from the link line produces:
+        Undefined symbols for architecture arm64:
+          "_rt_isalnum",   referenced from: _main
+          "_rt_isalpha",   referenced from: _main
+          "_rt_pthread_create_policy", referenced from: _main
+          "_rt_pthread_noop", referenced from: _main
+    - Confirms the extern decl is REAL — the runtime.c C body is no
+      longer emitted, and the symbol must come from the self-emit .o.
+
+(d) Self-host fixpoint structural (additive guards only)
+    - `git diff origin/main -- self/runtime.c` removed lines: exactly 2
+      (the original `#ifndef HEXA_HAS_HEXA_RT_STDLIB` directives).
+    - All bodies + the existing `#else extern` branches are PRESERVED.
+    - `grep -rn runtime_arm64 self/codegen compiler tool main.hexa
+       module_loader.hexa` = 0 matches → runtime_arm64.hexa shadow is
+      not `use`d in the fixpoint chain → default build byte-identical
+      BY CONSTRUCTION.
+    - tool/build_hexa_cli.hexa diff: pure additive (33 inserted lines —
+      the new class-D loop slotted right after the ctor-bundle block).
+
+═══════════════════════════════════════════════════════════════════════════
+RUNBOOK FOR THE REMAINING ~350-450 CLASS-D BACKLOG
+═══════════════════════════════════════════════════════════════════════════
+
+The mechanical recipe is now PROVEN at 4/4 PASS. For each next class-D
+HexaVal-repr fn `rt_<name>`:
+
+  1. Build the shadow in self/codegen/runtime_arm64.hexa:
+       fn rt_<name>_classd() { ... raw bytes ... }
+       fn rt_<name>_classd_reloc_offs() { ... }
+       fn rt_<name>_classd_reloc_kinds() { ... }
+       fn test_rt_<name>_classd() { ... assertions ... }
+       test_rt_<name>_classd()
+
+  2. Add an emit driver test/native_build/emit_rt_<name>_classd_o.hexa
+     (mirror PR #1923's emit_rt_isalnum_classd_o.hexa — change the symbol
+     name + bytes only). Driver reads env var
+     HEXA_RT_<UPPER>_CLASSD_O for the output path.
+
+  3. Wrap the existing `HexaVal rt_<name>(...)` body in runtime.c with
+     the 3-way gate (additive — guard-off path unchanged):
+
+       #if defined(HEXA_RT_SELFEMIT)
+       extern HexaVal rt_<name>( ... );
+       #elif !defined(HEXA_HAS_HEXA_RT_STDLIB)
+       HexaVal rt_<name>( ... ) { ... existing body ... }
+       #else
+       extern HexaVal rt_<name>( ... );
+       #endif
+
+  4. Append `<name>` + `<UPPER>` to the `classd` / `classd_upper` arrays
+     in tool/build_hexa_cli.hexa (the new loop at L744-block).
+
+  5. Run the 4 gates: (a) clang -E -P diff vs origin/main empty + .o
+     byte-equal, (b) min_harness linking + JIT-exec battery, (c) no-.o
+     link-fails with Undefined: _rt_<name>, (d) `git diff` shows only
+     additive lines.
+
+NO NEW C-SOURCE CFLAG, NO NEW CALLEE-EXPORT MACRO, NO NEW TEST-DRIVER
+TEMPLATE — class-D scales mechanically on top of the existing infra.
+
+═══════════════════════════════════════════════════════════════════════════
+HONEST DISCLAIMERS
+═══════════════════════════════════════════════════════════════════════════
+
+  - Gate (b) uses a MINIMAL harness (HexaVal typedef + ctor stubs + 4
+    extern decls), NOT the full runtime.c under -DHEXA_RT_SELFEMIT. The
+    full runtime.c HEXA_RT_SELFEMIT build pulls in ~20+ class-B leaf .o
+    files (ld64 was producing Undefined: _hxlcl_perror, _hexa_is_error
+    etc when only the 4 class-D .o were provided). This is NOT a class-D
+    activation gap — it is the existing class-B ensemble requirement
+    (the same .o's tool/build_hexa_cli.hexa already supplies under SELFEMIT).
+    For end-to-end production validation, the build_hexa_cli.hexa loop
+    edit IS the production-mode integration; running it on a Mac arm64
+    host (LOCAL_BUILD=1 tool/build_hexa_cli or pool on mini) would
+    exercise the full chain. Per the parallel-agents non-overlap rule,
+    that full integration smoke is deferred to the next aggregator run.
+
+  - Gate (a) confirms NO behavior change for the default-build (which is
+    the CI / fresh-clone / `hx install hexa-lang` path), so the merge is
+    SAFE to land even before the full SELFEMIT integration smoke.
+
+  - The 4 class-D .o emit drivers themselves are unchanged shadows from
+    PRs #1914 + #1923 (already verified Layer 1 / Layer 2 / Layer 3 by
+    those PRs). This PR adds ONLY the activation gate + build loop wire.
+
+  - Concurrent svc-driver agents (PRs #1926, #1927) advanced the
+    denominator from 38 to 45 since PR #1923. The 42/640 → 46/640
+    arithmetic in this verdict assumes #1926 + #1927 stand; if there
+    is a count drift the final aggregate count will be recomputed.
+
+VERDICT: 4/4 GATES PASS for ALL 4 primitives. Runbook landed. The
+~350-450 class-D backlog can now be drained mechanically.
