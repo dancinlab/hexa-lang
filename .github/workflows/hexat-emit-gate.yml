@@ -1,0 +1,108 @@
+# hexat-emit-gate.yml — anti-stale gate for the committed Linux transpiler.
+#
+# PURPOSE
+#   Prevents the committed `build/hexat_linux` (self-host `hexa-cc` transpiler,
+#   Linux x86_64 static ELF) from silently going STALE and re-introducing the
+#   #1979 regression: a stale binary SIGSEGVs (rc=139) when transpiling the
+#   large string-literal emit SSOTs (`self/runtime_core_emit.hexa` 523 KB /
+#   8082 `+`-concat · `self/cuda/runtime_cuda_emit.hexa` 209 KB), which blocks
+#   fresh-clone pod-side generated-C emit (anima M5 + arbitrary pod builds).
+#   This is the 3rd instance of the "committed Linux binary drifts stale vs
+#   runtime source" class (cf. #634/#748 _hx_self_rss_bytes fscanf).
+#
+# WHAT IT CHECKS
+#   Runs the committed `build/hexat_linux` against both large emit SSOTs and
+#   asserts each transpile (1) exits 0 — i.e. does NOT segfault — and (2) the
+#   output clears a generous size floor (a segfault truncates to 0–259 bytes,
+#   ~3 orders below the floors), so a stale binary fails the gate immediately.
+#
+# WHY NOT A PINNED-SHA BYTE-DIFF
+#   The transpiler is deterministic per (binary, input), but a fixed reference
+#   sha of the transpile output couples to the emit SSOT's CONTENT (which holds
+#   runtime_core.c verbatim and changes with runtime edits) — it would conflate
+#   "emit changed" with "binary stale" and need frequent bumps. The two
+#   content-DECOUPLED byte-diffs (a) fresh source-rebuild vs committed and
+#   (b) Linux-committed vs Mac-committed are both blocked today — (a) by the
+#   generated-C chicken-egg (runtime_core.c et al. are gitignored emit artifacts
+#   absent in a fresh clone, so no clean-source rebuild) and (b) because the Mac
+#   `build/hexat` is not committed. The rc=0 + size-floor check catches the
+#   actual stale-binary regression without the coupling, so it is the gate.
+#
+# INDEPENDENCE
+#   Standalone — uses only the committed binary + tracked emit SSOTs (all in the
+#   checkout), needs no generated C, and runs even while `bootstrap.yml` is red
+#   (its Stage 0 currently fails on missing runtime_core.c — a separate fix).
+#   Path-filtered so it only runs when a relevant input changes.
+
+name: hexat-emit-gate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'build/hexat_linux'
+      - 'self/runtime_core_emit.hexa'
+      - 'self/cuda/runtime_cuda_emit.hexa'
+      - '.github/workflows/hexat-emit-gate.yml'
+  pull_request:
+    paths:
+      - 'build/hexat_linux'
+      - 'self/runtime_core_emit.hexa'
+      - 'self/cuda/runtime_cuda_emit.hexa'
+      - '.github/workflows/hexat-emit-gate.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  hexat-emit-gate:
+    name: hexat_linux large-emit gate (#1979)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Toolchain + binary info
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "uname  : $(uname -m)"
+          echo "binary : $(file build/hexat_linux)"
+
+      - name: Gate — committed hexat_linux must transpile large emit SSOTs (no SEGFAULT)
+        shell: bash
+        run: |
+          set -uo pipefail
+          chmod +x build/hexat_linux
+          fail=0
+
+          # check <emit.hexa> <out.c> <size-floor-bytes>
+          # size floors are ~40% of the observed output (1.23 MB core / 457 KB
+          # cuda) — far above a segfault's 0–259 byte truncation, so the gate
+          # has a huge margin against false positives on legit emit growth/shrink.
+          check() {
+            emit="$1"; out="$2"; floor="$3"
+            echo "── $emit ──"
+            if ! ./build/hexat_linux "$emit" "$out"; then
+              rc=$?
+              echo "::error file=$emit::hexat_linux exited $rc (SEGFAULT=139) — the #1979 stale-binary regression. Rebuild build/hexat_linux from current source (tool/build_hexat_linux.hexa) and recommit."
+              fail=1
+              return
+            fi
+            sz=$(wc -c < "$out")
+            echo "   rc=0  output=$sz bytes  (floor=$floor)"
+            if [ "$sz" -lt "$floor" ]; then
+              echo "::error file=$emit::output $sz B below floor $floor B — committed binary likely stale/broken. Rebuild build/hexat_linux from current source and recommit."
+              fail=1
+            fi
+          }
+
+          check self/runtime_core_emit.hexa      /tmp/rc_core.c   1000000
+          check self/cuda/runtime_cuda_emit.hexa /tmp/rc_cuda.c    400000
+
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::hexat-emit-gate FAILED — see annotations above."
+            exit 1
+          fi
+          echo "hexat_linux large-emit gate: OK (both emit SSOTs transpiled, no segfault)"
