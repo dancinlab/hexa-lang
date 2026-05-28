@@ -1,0 +1,189 @@
+#!hexa strict
+// tool/regen_remaining8_foundation_c.hexa
+//   B9.C (.c-text · #1850/#1851 pattern) — single-command regen + gate-1
+//   sha-verify for the 8 LIVE/EVIDENCE `.c` FOUNDATION files that the
+//   `.c` floor still seeds (NOT the 3 irreducible roots: runtime.c,
+//   bootstrap_compiler.c, hexa_cc.c).
+//
+// ── WHY THIS EXISTS ────────────────────────────────────────────────────
+//
+// Eight hand-written `.c` files are byte-identically hexa-emittable. Their
+// emitters were produced mechanically by tool/gen_c_text_emitter.hexa, so
+// each `<base>_emit.hexa` reproduces its `.c` byte-for-byte (gate-1
+// source-SHA). Because the bytes are identical, regenerating the `.c` from
+// the emitter (the SSOT) ships the SAME bytes the downstream cc/nvcc/clang
+// would compile → deterministic compiler on identical input → identical
+// `.o`/binary → consumer behaviour UNAFFECTED. No re-verification (or GPU
+// fire) is needed; the cited verdicts (.verdicts/fusion-epilogue-... and
+// .verdicts/runtime-arm64-poc-rt-exit/...) still resolve against the
+// byte-identical regenerated `.c`.
+//
+// The 8 files (emitter ← `.c`):
+//   tool/gpu_standalone_cubin_host.c        — gpu_standalone_cubin_probe.hexa
+//   tool/gpu_multiarch_fatbin_host.c        — gpu_multiarch_fatbin_probe.hexa (bash)
+//   tool/fusion_epilogue_cublas_timed.c     — gpu_standalone_cubin_probe.hexa (EVIDENCE)
+//   tool/hexa_daemon_serve.c                — build_hexa_daemon_serve.sh (audit-exempt)
+//   test/native_build/poc_rt_exit_caller.c  — poc_rt_exit_drive.hexa (EVIDENCE)
+//   state/flame_phase4d_20260517_102511/flame_d768_12L_corpus_test_a2.c        — (doc-only · stale)
+//   state/flame_phase4d_5_4_2026_05_17/flame_d768_12L_corpus_test_a2_layer2.c  — dispatch_phase4d_5_4.sh (TRAINER_C)
+//   test/lora_cuda_equiv_test.c             — manual cc test (allowlisted)
+//
+// "regen-before-use" is the activation pattern: a host with an external
+// hexa-run runs this orchestrator FIRST (refreshing each `.c` from its
+// emitter), then the consumer (`.hexa` probe / `.sh` dispatch / manual cc)
+// picks up the freshly-regenerated `.c`. Once a `.c` is `git rm`'d, the
+// regen recreates it on demand, sha-identical.
+//
+// ── USAGE ──────────────────────────────────────────────────────────────
+//
+//   # regen all 8 + verify sha-equivalence vs the in-tree `.c`:
+//   hexa-run tool/regen_remaining8_foundation_c.hexa
+//
+//   # regen only (when a `.c` has been git-rm'd — emitter is the SSOT):
+//   hexa-run tool/regen_remaining8_foundation_c.hexa --regen-only
+//
+//   # exit 0 = all regen OK (and, unless --regen-only, all sha-equal);
+//   # exit 1 = a regen failed or a sha mismatch (drift) was detected.
+//
+// HEXA_HAL_ROOT overrides the repo-root autodetect (defaults to `pwd`).
+
+let MODULE_NAME = "regen_remaining8_foundation_c"
+
+let mut RUN  = 0
+let mut FAIL = 0
+
+fn _root() -> str {
+    let env_root = env("HEXA_HAL_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _which(cmd: str) -> bool {
+    let r = exec("command -v " + cmd + " >/dev/null 2>&1 && echo y || echo n").trim()
+    return r == "y"
+}
+
+fn _exists(p: str) -> bool {
+    let r = exec("[ -f \"" + p + "\" ] && echo y || echo n").trim()
+    return r == "y"
+}
+
+fn _sha256(p: str) -> str {
+    if _which("shasum") {
+        return exec("shasum -a 256 \"" + p + "\" 2>/dev/null | awk '{print $1}'").trim()
+    }
+    if _which("sha256sum") {
+        return exec("sha256sum \"" + p + "\" 2>/dev/null | awk '{print $1}'").trim()
+    }
+    return ""
+}
+
+fn _hexa_run() -> str {
+    if _which("hexa-run") { return "hexa-run" }
+    return "/Users/ghost/.hx/bin/hexa-run"
+}
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// Regenerate one `.c` from its emitter into `dst`. When `regen_only` is
+// false AND an in-tree baseline exists, also assert sha-equivalence vs the
+// (pre-regen) baseline.
+fn regen_one(root: str, emitter_rel: str, dst_rel: str, regen_only: bool) {
+    let emitter = root + "/" + emitter_rel
+    let dst     = root + "/" + dst_rel
+
+    if !_exists(emitter) {
+        _check(false, "emitter present: " + emitter_rel, "MISSING — cannot regen " + dst_rel)
+        return
+    }
+
+    let had_baseline = _exists(dst)
+    let baseline_sha = if had_baseline { _sha256(dst) } else { "" }
+
+    let tmp = exec("mktemp -t regen_r8_c.XXXXXX").trim()
+    if tmp.len() == 0 {
+        _check(false, "regen " + dst_rel, "mktemp scratch failed")
+        return
+    }
+    let cmd = _hexa_run() + " \"" + emitter + "\" \"" + tmp + "\" >/dev/null 2>&1; echo $?"
+    let rc = exec(cmd).trim()
+    if rc != "0" || !_exists(tmp) {
+        _check(false, "regen " + dst_rel, "emitter exit rc=" + rc)
+        let _ = exec("rm -f \"" + tmp + "\"")
+        return
+    }
+
+    let gen_sha = _sha256(tmp)
+
+    if regen_only || !had_baseline {
+        let _ = exec("mkdir -p \"$(dirname \"" + dst + "\")\" 2>/dev/null; cp -f \"" + tmp + "\" \"" + dst + "\"")
+        let _ = exec("rm -f \"" + tmp + "\"")
+        _check(_exists(dst), "regen " + dst_rel + " (no-baseline · emitter SSOT)", "sha=" + gen_sha)
+        return
+    }
+
+    let equal = baseline_sha == gen_sha && gen_sha.len() > 0
+    let _ = exec("cp -f \"" + tmp + "\" \"" + dst + "\"")
+    let _ = exec("rm -f \"" + tmp + "\"")
+    let detail = if equal {
+        "gate-1 byte-identical · sha=" + gen_sha
+    } else {
+        "⚠ DRIFT — baseline=" + baseline_sha + " gen=" + gen_sha
+    }
+    _check(equal, "regen+verify " + dst_rel, detail)
+}
+
+fn main() {
+    println("========================================================================")
+    println("  B9.C — regen_remaining8_foundation_c: 8 LIVE/EVIDENCE `.c` regen + sha")
+    println("========================================================================")
+
+    let argv = real_args()
+    let mut regen_only = false
+    let mut i = 0
+    while i < argv.len() {
+        if argv[i] == "--regen-only" { regen_only = true }
+        i = i + 1
+    }
+
+    let root = _root()
+    println("  repo-root: " + root)
+    println("  mode:      " + (if regen_only { "--regen-only (emitter SSOT, no baseline compare)" } else { "regen + gate-1 sha-verify vs in-tree `.c`" }))
+    println("")
+
+    // (emitter_rel, dst_rel) pairs — paths are arbitrary, NOT self/native/.
+    regen_one(root, "tool/gpu_standalone_cubin_host_emit.hexa",
+                    "tool/gpu_standalone_cubin_host.c", regen_only)
+    regen_one(root, "tool/gpu_multiarch_fatbin_host_emit.hexa",
+                    "tool/gpu_multiarch_fatbin_host.c", regen_only)
+    regen_one(root, "tool/fusion_epilogue_cublas_timed_emit.hexa",
+                    "tool/fusion_epilogue_cublas_timed.c", regen_only)
+    regen_one(root, "tool/hexa_daemon_serve_emit.hexa",
+                    "tool/hexa_daemon_serve.c", regen_only)
+    regen_one(root, "test/native_build/poc_rt_exit_caller_emit.hexa",
+                    "test/native_build/poc_rt_exit_caller.c", regen_only)
+    regen_one(root, "state/flame_phase4d_20260517_102511/flame_d768_12L_corpus_test_a2_emit.hexa",
+                    "state/flame_phase4d_20260517_102511/flame_d768_12L_corpus_test_a2.c", regen_only)
+    regen_one(root, "state/flame_phase4d_5_4_2026_05_17/flame_d768_12L_corpus_test_a2_layer2_emit.hexa",
+                    "state/flame_phase4d_5_4_2026_05_17/flame_d768_12L_corpus_test_a2_layer2.c", regen_only)
+    regen_one(root, "test/lora_cuda_equiv_test_emit.hexa",
+                    "test/lora_cuda_equiv_test.c", regen_only)
+
+    println("")
+    let pass_n = RUN - FAIL
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " artifacts regenerated"
+            + (if regen_only { "" } else { " + verified sha-identical" }))
+    if FAIL > 0 {
+        println("__HEXA_LANG_REGEN_REMAINING8_FOUNDATION_C__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_LANG_REGEN_REMAINING8_FOUNDATION_C__ PASS")
+    exit(0)
+}
