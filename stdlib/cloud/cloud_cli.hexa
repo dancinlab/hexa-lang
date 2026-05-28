@@ -51,6 +51,7 @@ fn _cloud_help() {
     println("  cloud copy-from <host> <remote> <local> [conn] [--resume] [--verify-sha]  download (scp; --resume=rsync; sha256 check)")
     println("  cloud orphans   [--hours N]                            list tracked pods, flag stale (>N h, default 6)")
     println("  cloud reconcile                                        cross-ref registry vs provider: ORPHAN/GHOST/OK")
+    println("  cloud reap      [--provider P] [--apply]               M6: orphans alive on provider but absent from M5 registry · bare=dry-run · --apply=destroy")
     println("  cloud adopt     <pod_id> [--purpose TEXT]              track an untracked (ORPHAN) pod")
     println("  cloud forget    <pod_id|ssh-form|ip|alias>             (legacy — use `cloud rm` instead) mark a tracked (GHOST) pod status=closed")
     println("  cloud watchdog  [--threshold-min N] [--util-cap-pct N] [--kill]  idle-pod autokill sweep (DRY-RUN default)")
@@ -1103,6 +1104,88 @@ fn _cloud_list_print(provider: str) -> int {
     return 0
 }
 
+// _cloud_reap — M6 orphan finder + optional teardown. Enumerate the
+// provider(s) live pod set + the M5 registry, then set-diff to find pods
+// alive on the provider but absent from registry (billing leaks the M5
+// SSOT can't see — an agent crashed mid-rent before registering).
+//
+// bare (apply=0) = dry-run table + summary line, exit 0.
+// --apply (apply=1) = same enumeration + destroy each orphan via the
+// existing _cloud_down path. Exit 0 on full success, 1 if any destroy
+// failed. (`_cloud_down` already runs pod_registry_forget on the legacy
+// JSONL + pod_registry_remove on the M5 SSOT through the rent wire.)
+fn _cloud_reap(provider_scope: str, apply: int) -> int {
+    let do_runpod = provider_scope == "" || provider_scope == "runpod"
+    let do_vast = provider_scope == "" || provider_scope == "vast"
+    // Registry ids — the canonical M5 active-pods.json (post-M5 SSOT).
+    let reg = pod_registry_list()
+    let mut reg_ids = []
+    let mut ri = 0
+    while ri < len(reg) {
+        reg_ids.push(reg[ri].id)
+        ri = ri + 1
+    }
+    // Provider id enumeration (per scope).
+    let mut orphans = []
+    if do_runpod {
+        let rl = runpod_list_pods()
+        if rl.ok == 0 {
+            println("[cloud] reap: runpod list unavailable (" + rl.message + ") — skipping runpod scope")
+        } else {
+            let rp = pod_registry_orphans(rl.pod_ids, reg_ids, "runpod")
+            let mut i = 0
+            while i < len(rp) { orphans.push(rp[i]); i = i + 1 }
+        }
+    }
+    if do_vast {
+        let vl = vast_list_instances()
+        if vl.ok == 0 {
+            println("[cloud] reap: vast list unavailable (" + vl.message + ") — skipping vast scope")
+        } else {
+            let vp = pod_registry_orphans(vl.instance_ids, reg_ids, "vast")
+            let mut j = 0
+            while j < len(vp) { orphans.push(vp[j]); j = j + 1 }
+        }
+    }
+    // Table — even when empty so the verb's contract is uniform.
+    if len(orphans) == 0 {
+        println("[cloud] reap: 0 orphans found · registry covers every alive pod")
+        return 0
+    }
+    println("ID                       PROVIDER  ACTION")
+    let mut k = 0
+    while k < len(orphans) {
+        let o = orphans[k]
+        let mut act = "(dry-run)"
+        if apply == 1 { act = "DESTROY" }
+        println(_reg_pad(o.id, 24) + " " + _reg_pad(o.provider, 9) + " " + act)
+        k = k + 1
+    }
+    if apply == 0 {
+        println("[cloud] reap: " + str(len(orphans)) + " orphans found · use --apply to destroy")
+        return 0
+    }
+    // --apply: route each orphan through _cloud_down. The legacy registry
+    // forget on success is harmless (orphan is absent there too).
+    let mut failed = 0
+    let mut m = 0
+    while m < len(orphans) {
+        let o = orphans[m]
+        let rc = _cloud_down(o.id, o.provider)
+        if rc != 0 {
+            failed = failed + 1
+            println("[cloud] reap: FAILED to destroy " + o.id + " (" + o.provider + ")")
+        }
+        m = m + 1
+    }
+    println("[cloud] reap: " + str(len(orphans) - failed) + "/" + str(len(orphans))
+        + " destroyed · " + str(failed) + " failed")
+    if failed > 0 {
+        return 1
+    }
+    return 0
+}
+
 // _cloud_ssh_port — print the live ssh endpoint (host + port) of an
 // existing pod by id (P4). Wires runpod_get_ssh_port / vast_ssh_endpoint
 // (the fns already exist; this only surfaces them as a verb). --provider
@@ -1195,7 +1278,7 @@ fn main() {
     while i < len(av) {
         let t = av[i]
         if si < 0 {
-            if t == "rent" || t == "up" || t == "rm" || t == "down" || t == "destroy" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "fire" || t == "poll" || t == "tail" || t == "watch" || t == "ssh-port" || t == "resolve" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "adopt" || t == "forget" || t == "dft-run" || t == "pods" || t == "dispatch" || t == "cost-cap-tick" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
+            if t == "rent" || t == "up" || t == "rm" || t == "down" || t == "destroy" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "fire" || t == "poll" || t == "tail" || t == "watch" || t == "ssh-port" || t == "resolve" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "reap" || t == "adopt" || t == "forget" || t == "dft-run" || t == "pods" || t == "dispatch" || t == "cost-cap-tick" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
                 si = i
                 sub = t
             }
@@ -1630,6 +1713,22 @@ fn main() {
             exit(1)
         }
         exit(0)
+    }
+    if sub == "reap" {
+        // M6 orphan finder — set-diff alive(provider) − registry(M5) =
+        // orphans (alive on provider but the M5 SSOT does not know about
+        // them). bare = dry-run table + exit 0; --apply destroys via the
+        // existing _cloud_down path. --provider runpod|vast narrows scope.
+        let provider = _flag_val(av, si + 1, "--provider", "")
+        let mut apply = 0
+        let mut ri = si + 1
+        while ri < len(av) {
+            if av[ri] == "--apply" {
+                apply = 1
+            }
+            ri = ri + 1
+        }
+        exit(_cloud_reap(provider, apply))
     }
     if sub == "adopt" {
         // Track a previously-untracked (ORPHAN) pod so it regains a

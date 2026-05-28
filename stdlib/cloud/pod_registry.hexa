@@ -925,3 +925,47 @@ fn pod_registry_set_cumulative(pod_id: str, cumulative_usd: str) -> int {
     _m5_write_atomic(records)
     return 1
 }
+
+// ── M6 — orphan finder (cloud reap) ───────────────────────────────────
+//
+// Orphan = pod alive on the provider but absent from the M5 registry
+// (`~/.hx/cloud/active-pods.json`). The inverse (registry-tracked but
+// provider-gone) is handled by `cloud reconcile` (GHOST) — keep `reap`
+// scoped to billing-leaks only.
+//
+// `cloud reap` bare = dry-run (enumerate + print). `--apply` = destroy
+// each orphan via the existing `_cloud_down` path.
+
+// Orphan — one classified orphan row for the `cloud reap` table.
+struct Orphan {
+    id:       str,
+    provider: str    // "runpod" | "vast"
+}
+
+// pod_registry_orphans — set-diff over the provider's alive id list and
+// the M5 registry id list: an id alive on the provider but absent from
+// the registry is an orphan. Pure over its inputs so a network-free test
+// can drive it with mock id lists. `provider_label` is stamped onto each
+// returned row (the caller knows which provider it queried).
+fn pod_registry_orphans(provider_alive_ids: [str], registry_ids: [str], provider_label: str) -> [Orphan] {
+    let mut out = []
+    let mut i = 0
+    while i < len(provider_alive_ids) {
+        let pid = provider_alive_ids[i]
+        let mut tracked = 0
+        let mut k = 0
+        while k < len(registry_ids) {
+            if registry_ids[k] == pid {
+                tracked = 1
+                k = len(registry_ids)
+            } else {
+                k = k + 1
+            }
+        }
+        if tracked == 0 {
+            out.push(Orphan { id: pid, provider: provider_label })
+        }
+        i = i + 1
+    }
+    return out
+}
