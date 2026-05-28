@@ -1,5 +1,17 @@
 # INBOX — log
 
+## 2026-05-29 — hexa cloud 개선점 3건 (anima M5 fire 직접-운영 실측)
+
+> anima BC-ANIMA M5 step-rate fire 를 foreground 로 직접 운영하며 관측한 `hexa cloud` 사용성 갭. #1959 (accept-new host key) 가 머지된 직후의 후속 발견.
+
+**개선 1 — pod create 시 SSH TCP port 자동 노출 (가장 큰 갭)**: `hexa cloud` 에 pod-rent 경로가 없어 `runpodctl create pod` 를 직접 써야 하는데, `--ports '22/tcp'` 를 명시하지 않으면 RunPod 가 **http-proxy port(`:NNNNN->19123 (prv,http)`) 만** 노출하고 SSH(22) TCP 가 안 붙는다 → `hexa cloud run/exec` 가 도달 불가. `--ports '22/tcp'` 를 주면 정상적으로 `64.247.x.x:NNNNN->22 (pub,tcp)` public-IP SSH 가 뜬다 (이번 세션 2회 실측 확인). **요청**: `hexa cloud` 에 pod-rent 래퍼(`hexa cloud rent` 또는 기존 dispatch 경로)가 RunPod pod 를 만들 때 `22/tcp` 노출을 default 로 강제. 현재는 caller 가 runpodctl 직접 호출 + 포트 플래그를 기억해야 함 (anima M5 fire 가 이 포트 누락으로 1회 "SSH 불가" 오진단 → teardown 낭비).
+
+**개선 2 — SSH endpoint 파싱 헬퍼 부재 (운영 함정)**: `runpodctl get pod <id> --allfields` 출력에서 SSH host:port 를 뽑으려면 `->22 (pub,tcp)` 패턴을 직접 파싱해야 하는데, 출력이 tab-구분 + 공백 변동이라 naive regex 가 매핑을 놓친다 (이번 세션 1회 false-negative → 멀쩡한 pod teardown, ~$0.27 낭비). **요청**: `hexa cloud` 에 `ssh-endpoint <pod-id>` 류 verb — pod 의 pub,tcp ->22 매핑을 `IP:PORT` 한 줄로 정규화 반환 (vast.ai `ssh_host/ssh_port` 와 동형). cloud-guard 가 raw ssh 를 막으므로 이 endpoint resolver 가 더 필요.
+
+**개선 3 — #1959 fix 의 pod-side toolchain 전파**: #1959 (accept-new host key) 는 LOCAL `hexa cloud` 가 fresh pod 에 도달하게 하지만, pod 에서 빌드/실행하는 `~/.hx/bin` install 이 stale 하면(이번 세션 로컬 `cloud.hexa` accept-new count=0 관측) 효과 없음. **요청**: fire 런북에 "pod fresh toolchain pull" 단계를 명문화하거나, `hexa cloud` 가 pod-side toolchain 버전을 self-check. (cf. anima podssh.sh 가 raw-ssh 로 우회한 이유 = `hexa cloud` 가 이 pod class 에 도달 못 했기 때문, 이제 #1959 로 해소되나 install 동기화 전제.)
+
+**severity**: medium (fire 차단은 아니나 매 fire 마다 runpodctl 직접 + 포트 플래그 + endpoint 수동 파싱 = 운영 마찰 + 오진단/teardown 낭비 반복). anima 측 우회 = `CORE/DECODER/state/m4b_longtrain_2026_05_28/podssh.sh` (raw-ssh IP-form, cloud-guard 통과). ref: anima BC-ANIMA M5 (STEP_RATE_LOG.md), hexa-lang #1959.
+
 ## 2026-05-28 — ✅ RESOLVED · `atlas register --from-verify` 의 #1901 rounding auto-route 가 display-rounded 값을 읽음 (#1901 follow-up)
 
 > **✅ RESOLVED 2026-05-28** (`fix/atlas-rounding-fullfloat-v2`): verify_cli 의 COMPUTE 출력이 full-precision `[raw=...]` suffix 노출, atlas_cli 의 `_compute_value_of` 가 raw float64 캡처. `_is_rounding_of` 가 이제 rounded-literal claim 도 실제 작동 (#1901 의도 realize). 회귀: full-precision direct-🟢 + genuine-🔴 거부 무손상. (선행 PR #1912 는 stale-base 로 786줄 무관 deletion 포함 → 닫고 clean 2-file cherry-pick 으로 재발사.)
