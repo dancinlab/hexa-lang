@@ -2657,13 +2657,30 @@ fn cmd_register(rest: array) {
         let route_orange = ev.verdict == "🟠 INSUFFICIENT"
         let route_red = ev.verdict == "🔴 FALSIFIED"
         if route_orange || route_red {
-            let mut allargs = []
-            let mut ai = 1
-            while ai < len(positional) {
-                allargs.push(to_string(positional[ai]))
-                ai = ai + 1
+            // Operand set differs by route:
+            //   🟠 (arity) — the claimed <v> was actually an EXTRA operand the
+            //       value-bearing parse wrongly swallowed → treat EVERY
+            //       positional as an operand (compute over all of them).
+            //   🔴 (rounding) — the value-bearing parse used the RIGHT operands
+            //       (positional[1..n-1]) and the last positional IS the claimed
+            //       result → compute over the TRUE operands only (args_arr), so
+            //       the folded node's name/echo reflects the real call, never
+            //       the claimed value spuriously appended as an operand.
+            let mut retry_args = []
+            if route_orange {
+                let mut ai = 1
+                while ai < len(positional) {
+                    retry_args.push(to_string(positional[ai]))
+                    ai = ai + 1
+                }
+            } else {
+                let mut ri = 0
+                while ri < len(args_arr) {
+                    retry_args.push(to_string(args_arr[ri]))
+                    ri = ri + 1
+                }
             }
-            let cev = _adapt_verify_compute(fn_name, allargs, id_override, node_source, node_url)
+            let cev = _adapt_verify_compute(fn_name, retry_args, id_override, node_source, node_url)
             let compute_ok = cev.verdict == "🟢 SUPPORTED-NUMERICAL" || cev.verdict == "🔵 SUPPORTED-FORMAL"
             // For the 🔴-shape retry, demand the engine value be a rounding of
             // the claimed <v>; the 🟠-shape retry needs no such guard (its
