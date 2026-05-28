@@ -1,0 +1,22 @@
+// stdlib/verify/calculators/mod.hexa
+//
+// verify calculator module — assumes-metadata + new (non-numerics_*) fns.
+//
+// Canonical impls of the numeric core remain in their original homes (d3
+// canonical home — no duplication):
+//   · mcmillan_tc · allen_dynes_tc · universal_cooper_tc
+//       → stdlib/rtsc/verify/numerics_mcmillan.hexa
+//
+// New impls live here:
+//   · bcs_gap_ratio        — closed-form 2π·exp(−γ_E)
+//   · eliashberg_full      — Allen–Dynes f1·f2 strong-coupling correction
+//
+// Cross-fn metadata (assumes_for / provenance_for / known_calculators)
+// lives in assumes_meta.hexa.
+//
+// PR-hx3 (dispatch.hexa) wires fn_name → callable.
+// PR-hx5 (verify_cli) stamps assumes_for(fn) into AtomMeta on direct-fold.
+
+import "stdlib/verify/calculators/bcs_gap_ratio.hexa"
+import "stdlib/verify/calculators/eliashberg_full.hexa"
+import "stdlib/verify/calculators/assumes_meta.hexa"

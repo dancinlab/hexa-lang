@@ -1,0 +1,70 @@
+#!hexa strict
+// stdlib/verify/calculators/calculators_test.hexa
+// PR-hx2 smoke — verify calculator surface.
+//
+// Run:  hexa run stdlib/verify/calculators/calculators_test.hexa
+// Marker on PASS: __VERIFY_CALCULATORS_SMOKE__ PASS
+
+use "self/runtime/math_pure"
+
+import "stdlib/verify/calculators/bcs_gap_ratio.hexa"
+import "stdlib/verify/calculators/eliashberg_full.hexa"
+import "stdlib/verify/calculators/assumes_meta.hexa"
+
+let mut RUN: int = 0
+let mut FAIL: int = 0
+
+fn abs_f(x: float) -> float { if x < 0.0 { return -x } return x }
+fn rel_err(a: float, b: float) -> float {
+    let d = abs_f(b); if d < 1.0e-30 { return abs_f(a - b) }; return abs_f(a - b) / d
+}
+fn _check(ok: bool, label: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+}
+
+fn plain_allen_dynes(omega: float, lam: float, mu: float) -> float {
+    let den = lam - mu * (1.0 + 0.62 * lam); if den <= 0.0 { return 0.0 }
+    return (omega / 1.20) * exp_pure(-1.04 * (1.0 + lam) / den)
+}
+
+fn main() {
+    println("== stdlib/verify/calculators PR-hx2 smoke ==")
+
+    // F1: bcs_gap_ratio = 2pi*exp(-gamma_E) ~ 3.52775
+    _check(rel_err(bcs_gap_ratio(), 3.527754179) < 1.0e-6,
+           "F1 bcs_gap_ratio closed-form rel < 1e-6")
+
+    // F2: eliashberg weak-limit (lambda=0.5, omega2=omega_log) = plain AD * f1 only (~1.02x)
+    let elia = eliashberg_full(200.0, 200.0, 0.5, 0.13)
+    let plain = plain_allen_dynes(200.0, 0.5, 0.13)
+    _check(elia > plain && elia / plain < 1.05,
+           "F2 eliashberg_full weak-limit ~ plain_AD * (1<f1<1.05)")
+
+    // F3: eliashberg MgB2 anchor (lambda=0.87 omega_log=700 omega2=770 mu=0.13) in [25,55] K
+    let tc_mgb2 = eliashberg_full(700.0, 770.0, 0.87, 0.13)
+    _check(tc_mgb2 > 25.0 && tc_mgb2 < 55.0,
+           "F3 eliashberg_full MgB2 Tc in [25,55] K (published 39)")
+
+    // F4: registry coverage — known_calculators=5, assumes_for non-empty for each
+    let names = known_calculators()
+    _check(names.len() == 5, "F4a known_calculators() = 5 entries")
+    let mut all_ok = true; let mut i = 0
+    while i < names.len() {
+        if assumes_for(names[i]).len() == 0 { all_ok = false }
+        if provenance_for(names[i]).len() == 0 { all_ok = false }
+        i = i + 1
+    }
+    _check(all_ok, "F4b assumes_for + provenance_for non-empty for all 5 known fns")
+
+    // F5: unknown fn -> empty (caller fences with white-circle)
+    _check(assumes_for("not_real").len() == 0 && provenance_for("not_real").len() == 0,
+           "F5 unknown fn -> empty assumes + empty provenance")
+
+    println("== " + str(RUN - FAIL) + "/" + str(RUN) + " checks passed ==")
+    if FAIL > 0 { println("__VERIFY_CALCULATORS_SMOKE__ FAIL"); exit(1) }
+    println("__VERIFY_CALCULATORS_SMOKE__ PASS")
+    exit(0)
+}

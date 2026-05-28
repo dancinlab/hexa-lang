@@ -1,0 +1,48 @@
+#!hexa strict
+// stdlib/verify/calculators/bcs_gap_ratio.hexa
+//
+// BCS s-wave universal gap-to-Tc ratio (closed form):
+//
+//   2Δ(0) / (k_B · T_c) = 2π · e^(−γ_E) ≈ 3.5279
+//
+// where γ_E = 0.5772156649… (Euler–Mascheroni constant). The constant is
+// universal for any clean s-wave BCS superconductor in the weak-coupling
+// limit; cuprates / strong-coupling SCs drift toward the upper end of the
+// n=6 closure band [φ(6), σ(6)/φ(6)] = [2, 6].
+//
+// Identity references:
+//   · BCS 1957  — Phys.Rev. 108 1175
+//   · sc/superconductor.md §8.2 (n=6 divisor closure framing)
+//   · stdlib/rtsc/verify/numerics_bcs.hexa check_bcs_gap_ratio (anchor)
+//
+// PR-hx2 (verify-atlas direct-fold) — assumes-metadata calculator.
+
+use "self/runtime/math_pure"
+
+let GAMMA_EULER: float = 0.5772156649015329
+
+// ─── canonical fn ──────────────────────────────────────────────────────
+
+fn bcs_gap_ratio() -> float {
+    // 2π · e^(−γ_E)
+    return 2.0 * pi_pure() * exp_pure(-GAMMA_EULER)
+}
+
+// ─── @assumes metadata (introspect-able) ───────────────────────────────
+//
+// Calculator dispatch (PR-hx3) reads this list to enrich AtomMeta.assumes
+// on atlas direct-fold (PR-hx5).
+
+fn bcs_gap_ratio_assumes() -> [str] {
+    return [
+        "BCS-weak-coupling",
+        "s-wave-pairing",
+        "clean-limit (l >> xi_0)",
+        "isotropic-Fermi-surface",
+        "phonon-mediated-attraction",
+    ]
+}
+
+fn bcs_gap_ratio_provenance() -> str {
+    return "BCS 1957 Phys.Rev. 108 1175 · closed-form 2pi·exp(-gamma_E)"
+}

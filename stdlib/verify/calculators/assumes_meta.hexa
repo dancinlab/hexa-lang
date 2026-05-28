@@ -1,0 +1,86 @@
+#!hexa strict
+// stdlib/verify/calculators/assumes_meta.hexa
+//
+// Unified @assumes / provenance registry for verify calculators.
+// PR-hx3 generic dispatch consumes this; PR-hx5 verify_cli stamps the
+// returned lists into AtomMeta.assumes on atlas direct-fold.
+//
+// d4 generic dispatch — new calculator = ONE row added below + impl file.
+// No name-hardcoding in the verify CLI; the CLI looks up by fn_name str.
+//
+// Coverage (PR-hx2):
+//   · allen_dynes_tc      — stdlib/rtsc/verify/numerics_mcmillan.hexa
+//   · mcmillan_tc         — stdlib/rtsc/verify/numerics_mcmillan.hexa
+//   · bcs_gap_ratio       — stdlib/verify/calculators/bcs_gap_ratio.hexa
+//   · eliashberg_full     — stdlib/verify/calculators/eliashberg_full.hexa
+//   · universal_cooper_tc — stdlib/rtsc/verify/numerics_mcmillan.hexa (bonus)
+
+// ─── registry lookup ──────────────────────────────────────────────────
+
+fn assumes_for(fn_name: str) -> [str] {
+    if fn_name == "allen_dynes_tc" {
+        return [
+            "BCS-strong-coupling",
+            "Migdal-approximation (Omega_ph << E_F)",
+            "harmonic-near-equilibrium",
+            "isotropic-Fermi-surface",
+            "Morel-Anderson mu_star renormalisation",
+        ]
+    }
+    if fn_name == "mcmillan_tc" {
+        return [
+            "BCS-conventional-coupling (lambda <= 1.5)",
+            "Debye-cutoff approximation (Theta_D scale)",
+            "harmonic-near-equilibrium",
+            "isotropic-Fermi-surface",
+            "Morel-Anderson mu_star renormalisation",
+        ]
+    }
+    if fn_name == "bcs_gap_ratio" {
+        return [
+            "BCS-weak-coupling",
+            "s-wave-pairing",
+            "clean-limit (l >> xi_0)",
+            "isotropic-Fermi-surface",
+            "phonon-mediated-attraction",
+        ]
+    }
+    if fn_name == "eliashberg_full" {
+        return [
+            "BCS-strong-coupling",
+            "Migdal-approximation (Omega_ph << E_F)",
+            "Eliashberg-isotropic alpha2F(omega)",
+            "harmonic-phonons (near-equilibrium)",
+            "Morel-Anderson mu_star renormalisation",
+            "omega_2 >= omega_log (spectral-moment ordering)",
+        ]
+    }
+    if fn_name == "universal_cooper_tc" {
+        return [
+            "n=6 divisor-closure framing (sc/superconductor.md §8.1)",
+            "Cooper-instability single-channel",
+            "phonon cutoff omega_0 (no spectral shape)",
+            "lambda_eff = lambda - mu_star - (n/phi)*lambda*mu_star",
+        ]
+    }
+    return []  // unknown fn — caller fences with white circle
+}
+
+fn provenance_for(fn_name: str) -> str {
+    if fn_name == "allen_dynes_tc"      { return "Allen-Dynes 1975 Phys.Rev.B 12 905 · plain form" }
+    if fn_name == "mcmillan_tc"         { return "McMillan 1968 Phys.Rev. 167 331" }
+    if fn_name == "bcs_gap_ratio"       { return "BCS 1957 Phys.Rev. 108 1175 · 2pi·exp(-gamma_E)" }
+    if fn_name == "eliashberg_full"     { return "Allen-Dynes 1975 Phys.Rev.B 12 905 eqs 3.1-3.4" }
+    if fn_name == "universal_cooper_tc" { return "sc/superconductor.md §8.1 universal Cooper form" }
+    return ""
+}
+
+fn known_calculators() -> [str] {
+    return [
+        "allen_dynes_tc",
+        "mcmillan_tc",
+        "bcs_gap_ratio",
+        "eliashberg_full",
+        "universal_cooper_tc",
+    ]
+}
