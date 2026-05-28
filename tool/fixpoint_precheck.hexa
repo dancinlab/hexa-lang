@@ -97,7 +97,6 @@ fn main() {
 
     let mut body = ""
     body = body + "# F3-roi152 fixpoint precheck — " + str(timestamp()) + "\n"
-    body = body + "# host: " + (if get_env("HOSTNAME") != "" { get_env("HOSTNAME") } else { "<unset>" }) + "\n"
     body = body + "\n"
 
     body = body + "GATE 1 — original v2/v3/v4 chain (tool/fixpoint_check.hexa --live target)\n"
