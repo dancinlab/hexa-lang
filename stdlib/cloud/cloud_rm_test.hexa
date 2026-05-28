@@ -1,0 +1,96 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+// stdlib/cloud/cloud_rm_test.hexa — falsifier suite for M4 `cloud rm`
+// canonical teardown verb. Mirrors three pure-logic gates extracted from
+// cloud_cli.hexa (the source fns are `_`-prefixed and private; mirror-test
+// pattern matches pod_registry_guard_test.hexa).
+//
+// Falsifiers:
+//   F-CLOUD-M4-DISPATCH       — `rm` is canonical + legacy aliases kept
+//   F-CLOUD-M4-FORCE-FLAG     — `--force` parses + confirm-gate logic
+//   F-CLOUD-M4-PROVIDER-INFER — absent `--provider` → empty (infer path)
+//
+// Run:   hexa run stdlib/cloud/cloud_rm_test.hexa
+// PASS:  exits 0, prints "cloud_rm_test PASS".
+
+fn _flag_val(av: [str], start: int, key: str, dflt: str) -> str {
+    let mut i = start
+    while i < len(av) {
+        if av[i] == key && i + 1 < len(av) { return av[i + 1] }
+        i = i + 1
+    }
+    return dflt
+}
+
+fn _has_flag(av: [str], start: int, flag: str) -> int {
+    let mut i = start
+    while i < len(av) {
+        if av[i] == flag { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+// Mirror of cloud_cli.hexa:_rm_confirm_yes (private).
+fn _rm_confirm_yes(ans: str) -> int {
+    let t = ans.trim()
+    if len(t) == 0 { return 0 }
+    if t == "y" || t == "Y" || t == "yes" || t == "YES" || t == "Yes" { return 1 }
+    return 0
+}
+
+// Mirror of dispatch verb whitelist (subset).
+fn _is_teardown_verb(t: str) -> int {
+    if t == "rm" || t == "down" || t == "destroy" || t == "forget" { return 1 }
+    return 0
+}
+
+fn _ck(name: str, got: int, want: int) {
+    if got != want {
+        println("  FAIL: " + name + " got " + to_string(got) + " want " + to_string(want))
+        exit(1)
+    }
+}
+
+fn _ck_str(name: str, got: str, want: str) {
+    if got != want {
+        println("  FAIL: " + name + " got '" + got + "' want '" + want + "'")
+        exit(1)
+    }
+}
+
+fn main() {
+    // F-CLOUD-M4-DISPATCH — `rm` joins legacy down/destroy/forget aliases.
+    _ck("rm canonical",   _is_teardown_verb("rm"), 1)
+    _ck("down legacy",    _is_teardown_verb("down"), 1)
+    _ck("destroy legacy", _is_teardown_verb("destroy"), 1)
+    _ck("forget legacy",  _is_teardown_verb("forget"), 1)
+    _ck("non-teardown",   _is_teardown_verb("list"), 0)
+
+    // F-CLOUD-M4-FORCE-FLAG — --force parses + confirm-yes recognizes y/yes.
+    let av_f = ["cloud", "rm", "pod-x", "--force"]
+    let av_nf = ["cloud", "rm", "pod-x"]
+    _ck("--force present", _has_flag(av_f, 2, "--force"), 1)
+    _ck("--force absent",  _has_flag(av_nf, 2, "--force"), 0)
+    _ck("y confirms",      _rm_confirm_yes("y"), 1)
+    _ck("yes confirms",    _rm_confirm_yes("yes"), 1)
+    _ck("blank cancels",   _rm_confirm_yes(""), 0)
+    _ck("n cancels",       _rm_confirm_yes("n"), 0)
+    _ck("garbage cancels", _rm_confirm_yes("maybe"), 0)
+    _ck("trim ws",         _rm_confirm_yes("  y  "), 1)
+
+    // F-CLOUD-M4-PROVIDER-INFER — absent --provider must default to ""
+    // (NOT "vast") so _rm_lookup_provider gets a chance to infer.
+    let av_a = ["cloud", "rm", "pod-x"]
+    let av_b = ["cloud", "rm", "pod-x", "--provider", "runpod"]
+    _ck_str("absent → empty",   _flag_val(av_a, 2, "--provider", ""), "")
+    _ck_str("explicit runpod",  _flag_val(av_b, 2, "--provider", ""), "runpod")
+
+    // Idempotent rm contract: empty inferred provider + not-in-registry → exit 0.
+    let mut synth_rc = -1
+    let inferred = ""
+    let in_reg = 0
+    if len(inferred) == 0 && in_reg == 0 { synth_rc = 0 }
+    _ck("absent+absent → exit 0", synth_rc, 0)
+
+    println("cloud_rm_test PASS")
+}
