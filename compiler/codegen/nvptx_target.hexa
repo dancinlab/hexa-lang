@@ -2846,9 +2846,13 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
                     // step 5: Horner P(z=r^2) = C0 + z(C1 + z(C2 + z(C3 + z*C4)))
                     let mut sh0 = []
                     sh0.push(_nvptx_op(p_reg))
-                    sh0.push(_nvptx_op(PTX_SINF64_C4_HEXF64))
-                    out.push(_nvptx_instr("mov.f64", sh0, "sin f64 Horner: p = C4 (1/362880)"))
+                    sh0.push(_nvptx_op(PTX_SINF64_C8_HEXF64))
+                    out.push(_nvptx_instr("mov.f64", sh0, "sin f64 Horner: p = C8 (1/17!)"))
                     let mut shc: [string] = []
+                    shc.push(PTX_SINF64_C7_HEXF64)
+                    shc.push(PTX_SINF64_C6_HEXF64)
+                    shc.push(PTX_SINF64_C5_HEXF64)
+                    shc.push(PTX_SINF64_C4_HEXF64)
                     shc.push(PTX_SINF64_C3_HEXF64)
                     shc.push(PTX_SINF64_C2_HEXF64)
                     shc.push(PTX_SINF64_C1_HEXF64)
@@ -2959,9 +2963,14 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
                     // step 5: Horner Q(z=r^2) = D0 + z(D1 + z(D2 + z(D3 + z*D4)))
                     let mut ch0 = []
                     ch0.push(_nvptx_op(p_reg))
-                    ch0.push(_nvptx_op(PTX_COSF64_C4_HEXF64))
-                    out.push(_nvptx_instr("mov.f64", ch0, "cos f64 Horner: p = D4 (1/40320)"))
+                    ch0.push(_nvptx_op(PTX_COSF64_C9_HEXF64))
+                    out.push(_nvptx_instr("mov.f64", ch0, "cos f64 Horner: p = D9 (1/18!)"))
                     let mut chc: [string] = []
+                    chc.push(PTX_COSF64_C8_HEXF64)
+                    chc.push(PTX_COSF64_C7_HEXF64)
+                    chc.push(PTX_COSF64_C6_HEXF64)
+                    chc.push(PTX_COSF64_C5_HEXF64)
+                    chc.push(PTX_COSF64_C4_HEXF64)
                     chc.push(PTX_COSF64_C3_HEXF64)
                     chc.push(PTX_COSF64_C2_HEXF64)
                     chc.push(PTX_COSF64_C1_HEXF64)

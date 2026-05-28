@@ -1,0 +1,11 @@
+=== TRANSC (trig fix) ===
+transcendental precision (base=10000 expo=0.15625 theta=1.66)
+  pow: gpu=4.2169650342858125 libm=4.2169650342858223  abs_err=9.770e-15
+  cos: gpu=-0.089085416936457787 libm=-0.089085416936458967  abs_err=1.180e-15
+  sin: gpu=0.99602398991655117 libm=0.99602398991653673  abs_err=1.443e-14
+=== RoPE (trig fix) ===
+ptxas JIT: OK (closure 3 ptxas-clean)
+RoPE silicon byte-eq (D=128, 64 pairs, pos=7.0 base=10000)
+  max_abs_err = 2.780e-13  (@i=24, gpu=-0.83988082571275957 ref=-0.83988082571248157)
+  n_over_1e-12 = 0 / 128
+  RESULT: PASS (byte-eq band)
