@@ -999,9 +999,20 @@ HXLCL_MALLOC_SC void *__attribute__((noinline)) hxlcl_malloc(size_t n) {
     *(size_t *)raw = n;  // record user-requested size for safe realloc
     return (void *)(raw + HXLCL_HDR_BYTES);
 }
+// F3 class-B HARD libc-routed scale-out — hxlcl_free Path-A activation.
+// Under HEXA_RT_SELFEMIT hxlcl_free is `extern` (body supplied by
+// emit_hxlcl_free_o.hexa's .o = a single `ret` instruction, 4 B, ZERO
+// relocs). The C body is a literal noop (bump allocator never reclaims),
+// so the self-emit body is byte-equivalent: both discard `p`. Cheapest
+// possible class-B activation — no frame, no callee, no relocs to bind.
+// Default (guard off) keeps the static noop = 0-libc-extern preserved.
+#ifdef HEXA_RT_SELFEMIT
+extern void hxlcl_free(void *p);
+#else
 static void __attribute__((noinline)) hxlcl_free(void *p) {
     (void)p;
 }
+#endif
 static void *__attribute__((noinline)) hxlcl_realloc(void *p, size_t n) {
     if (!p) return hxlcl_malloc(n);
     if (n == 0) return (void *)0;
