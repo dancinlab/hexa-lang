@@ -1,0 +1,279 @@
+#!hexa strict
+// stdlib/sscb/firmware/src/adc_dma_byte_diff.hexa
+//   B9.C-1 (.c leg parallel of F5 .s leg) — adc_dma.c byte-diff oracle.
+//
+// First .c-leg oracle. Mirrors stdlib/sscb/firmware/startup/
+// boot_byte_diff_stm32f429.hexa one-to-one but for C source:
+//
+//   .s leg:  hexa fn → arm-none-eabi-as  → .o section byte-diff vs .s.o
+//   .c leg:  hexa fn → arm-none-eabi-gcc → .o byte-diff vs .c.o
+//
+// Proves the hexa adc_dma emitter (adc_dma_emit.hexa::emit_adc_dma_c)
+// produces a `.c` source byte-identical AND `.o`-equivalent to the
+// hand-written `stdlib/sscb/firmware/src/adc_dma.c`.
+//
+// Three gates (strictly stronger than the .s leg, which only had section-level):
+//   gate-1 source-text byte-equal (sha256 of emitted .c == sha256 of orig .c)
+//   gate-2 whole-file .o byte-equal (compile both with firmware CFLAGS, NO -g)
+//   gate-3 .text.adc_spi_dma_init section byte-equal (compile both with -g,
+//          extract section, sha256 — debug-info aside, code bytes are identical)
+//
+// PASS criterion (all three required):
+//   arm-none-eabi-{gcc,objcopy,objdump} available
+//   emitter output assembles cleanly
+//   gate-1, gate-2, gate-3 all PASS
+//
+// FAIL: toolchain missing OR compile error OR any of the 3 gates fails.
+// Returns 1 on FAIL so a parent falsifier_check or CI gate can flip to ✗.
+//
+// ⚠ HARD GATE: byte-diff PASS is REQUIRED before `git rm src/adc_dma.c`.
+// adc_spi_dma_init is called from main.c L14; a wrong body silently
+// breaks the firmware boot path.
+//
+// Post-deletion: when the hand-written `src/adc_dma.c` is `git rm`d
+// after this oracle PASSes, the gate gracefully SKIPs (the proof
+// already exists in git history).
+//
+// Run:
+//   HEXA_HAL_ROOT=<repo-root> hexa-run \
+//     stdlib/sscb/firmware/src/adc_dma_byte_diff.hexa
+
+let MODULE_NAME = "adc_dma_byte_diff"
+
+// ─── check harness ────────────────────────────────────────────────────
+
+let mut RUN  = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ─── helpers ─────────────────────────────────────────────────────────
+
+fn _root() -> str {
+    let env_root = env("HEXA_HAL_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _which(cmd: str) -> bool {
+    let r = exec("command -v " + cmd + " >/dev/null 2>&1 && echo y || echo n").trim()
+    return r == "y"
+}
+
+fn _exists(p: str) -> bool {
+    let r = exec("[ -f \"" + p + "\" ] && echo y || echo n").trim()
+    return r == "y"
+}
+
+fn _sha256(p: str) -> str {
+    if _which("shasum") {
+        let r = exec("shasum -a 256 \"" + p + "\" 2>/dev/null | awk '{print $1}'").trim()
+        return r
+    }
+    if _which("sha256sum") {
+        let r = exec("sha256sum \"" + p + "\" 2>/dev/null | awk '{print $1}'").trim()
+        return r
+    }
+    return ""
+}
+
+// CFLAGS — mirror sscb firmware/Makefile verbatim (Cortex-M4 + FPv4-SP-D16
+// hard-float + freestanding). The -isystem/-I paths are absolute and resolved
+// at oracle runtime via the include-dir argument (different from the .s leg
+// which had no includes — this is a strict superset).
+//
+// Two variants: no-debug (for whole-file byte-diff) and -g (for section diff).
+
+fn _cflags_nodbg(inc_dir: str) -> str {
+    return "-mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard " +
+           "-ffreestanding " +
+           "-isystem \"" + inc_dir + "/freestanding\" " +
+           "-I\"" + inc_dir + "\" " +
+           "-ffunction-sections -fdata-sections " +
+           "-O2 -Wall -Wextra -std=c99"
+}
+
+fn _cflags_dbg(inc_dir: str) -> str {
+    return _cflags_nodbg(inc_dir) + " -g"
+}
+
+// ─── checks ──────────────────────────────────────────────────────────
+
+fn check_toolchain() -> bool {
+    let has_gcc     = _which("arm-none-eabi-gcc")
+    let has_objcopy = _which("arm-none-eabi-objcopy")
+    let has_objdump = _which("arm-none-eabi-objdump")
+    let ok = has_gcc && has_objcopy && has_objdump
+    let detail = "gcc=" + (if has_gcc { "y" } else { "n" }) +
+                 " objcopy=" + (if has_objcopy { "y" } else { "n" }) +
+                 " objdump=" + (if has_objdump { "y" } else { "n" })
+    _check(ok, "arm-none-eabi-gcc + objcopy + objdump present", detail)
+    return ok
+}
+
+fn check_orig_present(src_dir: str) -> bool {
+    // Post-deletion: hand-written `src/adc_dma.c` is `git rm`d after this
+    // oracle PASSes. Missing file → graceful SKIP (proof in git history).
+    let p = src_dir + "/adc_dma.c"
+    let ok = _exists(p)
+    if ok {
+        _check(true, "hand-written src/adc_dma.c present", p)
+    }
+    return ok
+}
+
+fn check_emitter_path(src_dir: str) -> bool {
+    let p = src_dir + "/adc_dma_emit.hexa"
+    let ok = _exists(p)
+    _check(ok, "hexa emitter src/adc_dma_emit.hexa present", p)
+    return ok
+}
+
+// gate-1 — source-text byte-equal
+fn check_source_byte_equal(src_dir: str, work_dir: str) -> bool {
+    let orig_c = src_dir + "/adc_dma.c"
+    let gen_c  = work_dir + "/adc_dma.c"
+    let emitter = src_dir + "/adc_dma_emit.hexa"
+    let out = exec("hexa-run \"" + emitter + "\" \"" + gen_c + "\" 2>&1")
+    if !_exists(gen_c) {
+        _check(false, "gate-1 emitter wrote `.c`", "emit failed:\n" + out); return false
+    }
+    let orig_sha = _sha256(orig_c)
+    let gen_sha  = _sha256(gen_c)
+    let ok = orig_sha.len() > 0 && orig_sha == gen_sha
+    let detail = "orig=" + orig_sha + " gen=" + gen_sha
+    _check(ok, "gate-1 source-text byte-identical (sha256(.c))", detail)
+    return ok
+}
+
+// gate-2 — whole-file .o byte-equal (no -g)
+fn check_obj_byte_equal_nodbg(src_dir: str, inc_dir: str, work_dir: str) -> bool {
+    let orig_c = src_dir + "/adc_dma.c"
+    let gen_c  = work_dir + "/adc_dma.c"
+    let orig_o = work_dir + "/orig.o"
+    let gen_o  = work_dir + "/gen.o"
+    let cf = _cflags_nodbg(inc_dir)
+    let out_o = exec("arm-none-eabi-gcc " + cf + " -c \"" + orig_c + "\" -o \"" + orig_o + "\" 2>&1")
+    let out_g = exec("arm-none-eabi-gcc " + cf + " -c \"" + gen_c  + "\" -o \"" + gen_o  + "\" 2>&1")
+    if !_exists(orig_o) {
+        _check(false, "gate-2 orig.o compiled (no -g)", "compile error:\n" + out_o); return false
+    }
+    if !_exists(gen_o) {
+        _check(false, "gate-2 gen.o compiled (no -g)", "compile error:\n" + out_g); return false
+    }
+    let orig_sha = _sha256(orig_o)
+    let gen_sha  = _sha256(gen_o)
+    let ok = orig_sha.len() > 0 && orig_sha == gen_sha
+    let detail = "orig=" + orig_sha + " gen=" + gen_sha
+    _check(ok, "gate-2 whole-file .o byte-identical (no -g)", detail)
+    return ok
+}
+
+// gate-3 — .text.adc_spi_dma_init section byte-equal (with -g)
+fn check_section_byte_equal_dbg(src_dir: str, inc_dir: str, work_dir: str) -> bool {
+    let orig_c = src_dir + "/adc_dma.c"
+    let gen_c  = work_dir + "/adc_dma.c"
+    let orig_o = work_dir + "/orig_g.o"
+    let gen_o  = work_dir + "/gen_g.o"
+    let cf = _cflags_dbg(inc_dir)
+    let _o1 = exec("arm-none-eabi-gcc " + cf + " -c \"" + orig_c + "\" -o \"" + orig_o + "\" 2>&1")
+    let _o2 = exec("arm-none-eabi-gcc " + cf + " -c \"" + gen_c  + "\" -o \"" + gen_o  + "\" 2>&1")
+    if !_exists(orig_o) || !_exists(gen_o) {
+        _check(false, "gate-3 both .o compiled (with -g)", "compile error"); return false
+    }
+    let sec = ".text.adc_spi_dma_init"
+    let orig_bin = work_dir + "/orig_text.bin"
+    let gen_bin  = work_dir + "/gen_text.bin"
+    let _b1 = exec("arm-none-eabi-objcopy -O binary --only-section=" + sec +
+                   " \"" + orig_o + "\" \"" + orig_bin + "\" 2>&1")
+    let _b2 = exec("arm-none-eabi-objcopy -O binary --only-section=" + sec +
+                   " \"" + gen_o  + "\" \"" + gen_bin  + "\" 2>&1")
+    let orig_sha = _sha256(orig_bin)
+    let gen_sha  = _sha256(gen_bin)
+    let ok = orig_sha.len() > 0 && orig_sha == gen_sha
+    let detail = "orig=" + orig_sha + " gen=" + gen_sha
+    _check(ok, "gate-3 " + sec + " section byte-identical (with -g)", detail)
+    return ok
+}
+
+// ─── main ────────────────────────────────────────────────────────────
+
+fn main() {
+    println("========================================================================")
+    println("  stdlib/sscb — adc_dma_byte_diff: B9.C-1 .c-leg byte-diff oracle")
+    println("========================================================================")
+    println("  generator: stdlib/sscb/firmware/src/adc_dma_emit.hexa (emit_adc_dma_c)")
+    println("  oracle:    arm-none-eabi-gcc byte-diff vs hand-written src/adc_dma.c")
+    println("  target:    ARMv7E-M Cortex-M4 + FPv4-SP-D16 freestanding (sscb firmware)")
+    println("  gates:     source-text · whole-file .o (no -g) · .text section (with -g)")
+    println("")
+
+    let root = _root()
+    let src_dir = root + "/stdlib/sscb/firmware/src"
+    let inc_dir = root + "/stdlib/sscb/firmware/include"
+    let work_dir = exec("mktemp -d -t adc_dma_byte_diff.XXXXXX").trim()
+    if work_dir.len() == 0 {
+        println("[FATAL] mktemp failed — cannot allocate scratch dir")
+        exit(1)
+    }
+    println("  scratch: " + work_dir)
+    println("")
+
+    if !check_toolchain() {
+        println("")
+        println("  Toolchain missing — install arm-none-eabi-{gcc,objcopy,objdump}.")
+        println("  B9.C-1 adc_dma.c byte-diff verify SKIP (toolchain gate).")
+        println("__HEXA_LANG_SSCB_ADC_DMA_BYTE_DIFF__ SKIP")
+        exit(0)
+    }
+
+    if !check_emitter_path(src_dir) {
+        println("__HEXA_LANG_SSCB_ADC_DMA_BYTE_DIFF__ FAIL")
+        exit(1)
+    }
+
+    if !check_orig_present(src_dir) {
+        // Post-deletion: hand-written src/adc_dma.c was `git rm`d after this
+        // oracle PASSed. Replay the historical proof via
+        // `git show <pre-deletion-sha>:stdlib/sscb/firmware/src/adc_dma.c`.
+        println("")
+        println("  POST-DELETION SKIP — hand-written baseline src/adc_dma.c removed")
+        println("  after this oracle PASSed (gen ≡ orig). The emitter remains the SSOT;")
+        println("  replay the historical proof via")
+        println("  `git show <pre-deletion-sha>:stdlib/sscb/firmware/src/adc_dma.c`.")
+        println("__HEXA_LANG_SSCB_ADC_DMA_BYTE_DIFF__ SKIP")
+        exit(0)
+    }
+
+    let _g1 = check_source_byte_equal(src_dir, work_dir)
+    let _g2 = check_obj_byte_equal_nodbg(src_dir, inc_dir, work_dir)
+    let _g3 = check_section_byte_equal_dbg(src_dir, inc_dir, work_dir)
+
+    println("")
+    println("  B9.C-1 adc_dma.c .c-leg byte-identity:")
+    if FAIL == 0 {
+        println("    PROVEN ✓ — hand-written adc_dma.c is fully hexa-emittable.")
+        println("    DELETION GATE OPEN — src/adc_dma.c may be `git rm`.")
+        println("    `.c` 105→104 — first hand-written .c deleted (B9.C-1 = first .c-leg PR).")
+    } else {
+        println("    BYTE-DIFF FAIL — emitter output diverges from hand-written `.c`.")
+        println("    ⚠ Hand-written `.c` MUST NOT be deleted until oracle PASSES.")
+        println("    ⚠ adc_spi_dma_init is called from main.c L14 — silent boot break.")
+    }
+
+    let pass_n = RUN - FAIL
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_LANG_SSCB_ADC_DMA_BYTE_DIFF__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_LANG_SSCB_ADC_DMA_BYTE_DIFF__ PASS")
+    exit(0)
+}

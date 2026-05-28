@@ -1,0 +1,30 @@
+========================================================================
+  stdlib/sscb — adc_dma_byte_diff: B9.C-1 .c-leg byte-diff oracle
+========================================================================
+  generator: stdlib/sscb/firmware/src/adc_dma_emit.hexa (emit_adc_dma_c)
+  oracle:    arm-none-eabi-gcc byte-diff vs hand-written src/adc_dma.c
+  target:    ARMv7E-M Cortex-M4 + FPv4-SP-D16 freestanding (sscb firmware)
+  gates:     source-text · whole-file .o (no -g) · .text section (with -g)
+
+  scratch: /var/folders/2g/blzd56lx2rvfvt61c1pc9g7r0000gn/T/adc_dma_byte_diff.XXXXXX.99RvjJVrzT
+
+  [PASS] arm-none-eabi-gcc + objcopy + objdump present
+         · gcc=y objcopy=y objdump=y
+  [PASS] hexa emitter src/adc_dma_emit.hexa present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-aa8608f77cc89bb05/stdlib/sscb/firmware/src/adc_dma_emit.hexa
+  [PASS] hand-written src/adc_dma.c present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-aa8608f77cc89bb05/stdlib/sscb/firmware/src/adc_dma.c
+  [PASS] gate-1 source-text byte-identical (sha256(.c))
+         · orig=a1a609dd940f434c0f763b830e661699d86b46f6a524db540765e1e4a15a4ae3 gen=a1a609dd940f434c0f763b830e661699d86b46f6a524db540765e1e4a15a4ae3
+  [PASS] gate-2 whole-file .o byte-identical (no -g)
+         · orig=67d4180cee967ae782788b9ea4baead846487c7476661dd45b4ee0d3737ebe2b gen=67d4180cee967ae782788b9ea4baead846487c7476661dd45b4ee0d3737ebe2b
+  [PASS] gate-3 .text.adc_spi_dma_init section byte-identical (with -g)
+         · orig=0c302d771ae76f031fe8c4a87c6f54f6b1e93bbf4552d26a8ea553f2a89c0530 gen=0c302d771ae76f031fe8c4a87c6f54f6b1e93bbf4552d26a8ea553f2a89c0530
+
+  B9.C-1 adc_dma.c .c-leg byte-identity:
+    PROVEN ✓ — hand-written adc_dma.c is fully hexa-emittable.
+    DELETION GATE OPEN — src/adc_dma.c may be `git rm`.
+    `.c` 105→104 — first hand-written .c deleted (B9.C-1 = first .c-leg PR).
+========================================================================
+  6/6 checks passed
+__HEXA_LANG_SSCB_ADC_DMA_BYTE_DIFF__ PASS

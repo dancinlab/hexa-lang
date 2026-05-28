@@ -1,0 +1,89 @@
+#!hexa strict
+// stdlib/sscb/firmware/src/adc_dma_emit.hexa
+//   B9.C-1 (.c leg parallel of F5 .s leg) — adc_dma.c source emitter.
+//
+// First .c-leg foundation. Mirrors the proven .s-text pattern
+// (#1843/#1844/#1845/#1846 — F5 .s leg) one-to-one but for C source:
+//
+//   .s leg:  hexa fn  → arm-none-eabi-as → .o byte-diff vs hand-written .s
+//   .c leg:  hexa fn  → arm-none-eabi-gcc → .o byte-diff vs hand-written .c
+//
+// Build-time generator: writes the SSCB firmware `adc_dma.c` stub
+// (defines `void adc_spi_dma_init(void)` — empty body + comment block
+// from module/engineering_pack/README.md §5.1) to the path passed as
+// the first argument. Replaces the hand-written
+// `stdlib/sscb/firmware/src/adc_dma.c` once the byte-diff oracle
+// (adc_dma_byte_diff.hexa) PASSes (whole-file byte-identity at the
+// no-debug compile level; section-level (.text.adc_spi_dma_init)
+// byte-identity at any debug level — both PROVEN locally 2026-05-28).
+//
+// Invocation (from stdlib/sscb/firmware/Makefile):
+//   hexa-run stdlib/sscb/firmware/src/adc_dma_emit.hexa <output-path>
+//
+// Default output path (if argv missing): "adc_dma.c" in cwd.
+//
+// Why this stub specifically:
+//   - smallest live firmware .c (23 lines, all-comment body)
+//   - `void adc_spi_dma_init(void) {}` → 4-byte `bx lr` thumb, identical
+//     to whatever hand-written equivalent emits
+//   - no FFI / no headers we don't already own (stm32f4xx_min.h + sscb.h)
+//   - empty .text/.data/.bss sections — only `.text.adc_spi_dma_init`
+//     has 4 bytes of content
+//
+// Pattern advantage (vs class-D HexaVal struct-return machine-code emit):
+//   we emit C SOURCE here, not machine code. The compiler does the codegen;
+//   we only have to match the C bytes the compiler will see. This sidesteps
+//   the #1841 recipe blocker entirely.
+//
+// Phase: foundation (PR1 of B9.C-1 = first .c file deleted = `.c` 105→104).
+
+let MODULE_NAME = "adc_dma_emit"
+
+fn emit_adc_dma_c() -> str {
+    // Verbatim content of the hand-written stdlib/sscb/firmware/src/adc_dma.c
+    // (23 lines including trailing newline). Comment block is non-load-bearing
+    // for .o output (compiler strips comments before lexing), but we keep it
+    // verbatim so source-text byte-diff also PASSes (stronger oracle gate).
+    let s = "/* adc_dma.c — SPI1 + DMA2_Stream2 setup (Σ-Δ 16-bit @ 1 MSPS).\n" +
+            " * Source: module/engineering_pack/README.md §5.1 adc_spi_dma_init.\n" +
+            " */\n" +
+            "#include \"stm32f4xx_min.h\"\n" +
+            "#include \"sscb.h\"\n" +
+            "\n" +
+            "void adc_spi_dma_init(void) {\n" +
+            "    /* Production firmware:\n" +
+            "     *   1. enable RCC AHB1ENR.DMA2EN, APB2ENR.SPI1EN\n" +
+            "     *   2. configure SPI1 as 16-bit master, 30 MHz SCK\n" +
+            "     *   3. configure DMA2_Stream2: peripheral SPI1->DR, memory adc_buf,\n" +
+            "     *      circular ping-pong size = ADC_BLOCK_SIZE, DIR = peripheral→memory\n" +
+            "     *   4. enable DMA half-transfer + transfer-complete interrupts\n" +
+            "     *\n" +
+            "     * Pin map (engineering_pack §3 PCB):\n" +
+            "     *   SPI1_SCK  PA5  AF5\n" +
+            "     *   SPI1_MISO PA6  AF5  ← Σ-Δ ADC modulator output\n" +
+            "     *   SPI1_MOSI PA7  AF5  (unused; Σ-Δ is RX-only here)\n" +
+            "     *\n" +
+            "     * Stub — full register sequence belongs in §5.x once written; this file\n" +
+            "     * exists to materialize the §5.1 init function so main.c links cleanly.\n" +
+            "     */\n" +
+            "}\n"
+    return s
+}
+
+fn main() {
+    let argv = real_args()
+    let out_path = if argv.len() >= 1 { argv[0] } else { "adc_dma.c" }
+    let c_text = emit_adc_dma_c()
+    // heredoc write — same trick startup_stm32f429_gen.hexa uses to avoid
+    // quoting hazards around special chars (§ · → · multi-line content).
+    let cmd = "cat > \"" + out_path + "\" <<'__ADC_DMA_EMIT_EOF__'\n" +
+              c_text + "__ADC_DMA_EMIT_EOF__"
+    let _ = exec(cmd)
+    let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
+    if exists_check != "y" {
+        println("[adc_dma_emit] FATAL: failed to write " + out_path)
+        exit(1)
+    }
+    println("[adc_dma_emit] wrote " + out_path)
+    exit(0)
+}

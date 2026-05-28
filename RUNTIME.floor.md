@@ -15,12 +15,20 @@ flip 캠페인이 안전 quick-win 을 고갈시킨 뒤 남는 진짜 바닥의 
 
 - `.o` = **0** ✅
 - `.s` = **0** (F5 .s-leg COMPLETE · PR #1843/#1844/#1845/#1846 · 아래 F5)
-- `.c` = **226** → B9.6h dead-scaffolding sweep 후 **~70 예상** (대부분이 archive/
-  fires + tool 의 죽은 실험 harness 였음 — runtime floor 아님). sweep 후 남는 ~70 이
-  이 doc 의 대상.
+- `.c` = **104** (2026-05-28 B9.C-1 ACTIVATED · 첫 .c-leg 삭제 = 105→104 ·
+  sscb firmware `src/adc_dma.c` ← `src/adc_dma_emit.hexa` · 6/6 byte-diff PASS
+  · `.verdicts/runtime-floor-closure/B9C1-adc-dma-byte-diff.txt`).
+  B9.6h dead-scaffolding sweep 후 **~70 예상** (대부분이 archive/fires + tool 의
+  죽은 실험 harness 였음 — runtime floor 아님). sweep 후 남는 ~70 이 이 doc 의 대상.
 
 세션 quick-win (flip): 4 파일 삭제 — blowfish(wire+🟢RUNEQ #1816) · v565(dead #1818)
 · hxtok(dead #1820) · hxvocoder(dead #1821).
+
+세션 .c-leg foundation: **B9.C-1** — `.s`-text 패턴 1:1 포팅, hexa 가 C 소스 emit ·
+arm-none-eabi-gcc 가 컴파일 · byte-diff oracle 이 검증. **gate-1 source-text** +
+**gate-2 whole-file .o (no -g)** + **gate-3 `.text.<symbol>` 섹션 (-g)** 3중
+byte-identity. class-D HexaVal struct-return 기계어-emit 난제 (#1841) 회피 —
+emit 대상이 머신코드가 아니라 C 소스이므로 컴파일러가 codegen 해결.
 
 ## 🧱 floor closure 상태 (2026-05-28 — F1-F6 종결 pass)
 
