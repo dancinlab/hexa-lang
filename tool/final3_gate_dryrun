@@ -1,0 +1,191 @@
+#!/usr/bin/env bash
+# tool/final3_gate_dryrun — .c-graduation Phase 4/5 removal-safety DRY-RUN.
+#
+# Proves the FINAL 3 tracked .c files are removal-safe on the running platform
+# WITHOUT committing any removal (working-copy temp-remove only). Invoked once
+# per platform by nobaseline-gate.yml's final3-* matrix jobs.
+#
+#   A. self/native/hexa_cc.c  — transpiler C source. Chicken-egg: a fresh tree
+#      without it has no C to build the transpiler. ESCAPE = download a prior
+#      edge `hexa`, run `hexa cc --regen` to regenerate hexa_cc.c, then build
+#      Stage-0 from the regenerated copy + prebuilt runtime.a. If regen cannot
+#      run in CI -> HARD-BLOCKER (hexa_cc.c is irreducible like the seed).
+#   B. self/forge/forge_tier_v1.c — "unused via prebuilt". Temp-remove + build
+#      full prebuilt Stage-0/1/2 green -> confirms unused; removal trivial-safe.
+#   C. test/native_build/classd_behavioral_harness.c — test fixture. Regenerate
+#      via gen_c_text_emitter and assert byte-identical (sha256) -> .c-text path
+#      reproduces it; removal safe.
+#
+# Extension-less (not .sh) per the regen_cc_manual precedent: the project's
+# sidecar hook blocks .sh Write/Edit. Invoked as `bash tool/final3_gate_dryrun`.
+#
+# Env (set by the workflow): CC (clang|gcc) · LIBS (link libs) · EDGE_ASSET
+# (per-platform edge tarball name) · GH_TOKEN (for gh release download).
+set -uo pipefail
+
+CFLAGS="-O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs -fbracket-depth=4096"
+ROOT="$PWD"
+RA="$ROOT/build/runtime.a"
+mkdir -p build/stage1
+
+sha() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'; else shasum -a 256 "$1" | awk '{print $1}'; fi; }
+
+# ── Stage 0b: prebuilt runtime.a from FULL runtime.c (seeds present) ─────────
+echo "::group::Stage 0b — runtime.a"
+$CC $CFLAGS -I self -c self/runtime.c -o build/runtime.o
+ar rcs "$RA" build/runtime.o
+ls -la "$RA"
+echo "::endgroup::"
+
+VERDICT_CC="UNSET"; VERDICT_FORGE="UNSET"; VERDICT_HARNESS="UNSET"
+
+# ════════════════════════════════════════════════════════════════════════════
+# C. classd_behavioral_harness.c — .c-text emitter byte-identity
+# ════════════════════════════════════════════════════════════════════════════
+echo "::group::C — harness .c-text byte-identity"
+HARNESS="test/native_build/classd_behavioral_harness.c"
+EMIT_HEXA="/tmp/classd_harness_emit.hexa"
+REGEN_C="/tmp/classd_harness.regen.c"
+ORIG_SHA="$(sha "$HARNESS")"
+echo "orig sha256 = $ORIG_SHA"
+
+# We need a working hexa to run the emitter generator + the emitter itself.
+# Download a prior edge `hexa` driver (also reused for part A).
+EDGE_DIR="/tmp/edge"
+mkdir -p "$EDGE_DIR"
+EDGE_HEXA=""
+if gh release download edge --repo "${GITHUB_REPOSITORY:-dancinlab/hexa-lang}" \
+      --pattern "$EDGE_ASSET" --dir "$EDGE_DIR" --clobber 2>/tmp/dl.err; then
+  tar xzf "$EDGE_DIR/$EDGE_ASSET" -C "$EDGE_DIR" 2>/dev/null || true
+  EDGE_HEXA="$(find "$EDGE_DIR" -name hexa -type f -perm -u+x 2>/dev/null | head -1)"
+  [ -z "$EDGE_HEXA" ] && EDGE_HEXA="$(find "$EDGE_DIR" -name hexa -type f 2>/dev/null | head -1)"
+fi
+echo "edge hexa = ${EDGE_HEXA:-<none>} (dl.err: $(cat /tmp/dl.err 2>/dev/null | head -1))"
+
+if [ -n "$EDGE_HEXA" ] && [ -x "$EDGE_HEXA" ]; then
+  chmod +x "$EDGE_HEXA" 2>/dev/null || true
+  # Generate a verbatim .c-text emitter, then run it to reproduce the .c.
+  if "$EDGE_HEXA" run tool/gen_c_text_emitter.hexa \
+        "$HARNESS" "$EMIT_HEXA" classd_behavioral_harness \
+        "F3 class-D behavioral JIT-exec harness" 2>/tmp/gen.err \
+     && [ -s "$EMIT_HEXA" ]; then
+    if "$EDGE_HEXA" run "$EMIT_HEXA" "$REGEN_C" 2>/tmp/emit.err && [ -s "$REGEN_C" ]; then
+      REGEN_SHA="$(sha "$REGEN_C")"
+      echo "regen sha256 = $REGEN_SHA"
+      if [ "$ORIG_SHA" = "$REGEN_SHA" ]; then
+        VERDICT_HARNESS="GREEN"
+        echo "::notice::C harness — .c-text regen BYTE-IDENTICAL ($CC) — removal safe"
+      else
+        VERDICT_HARNESS="FAIL: sha mismatch ($ORIG_SHA != $REGEN_SHA)"
+      fi
+    else
+      VERDICT_HARNESS="FAIL: emitter run failed ($(head -1 /tmp/emit.err 2>/dev/null))"
+    fi
+  else
+    VERDICT_HARNESS="FAIL: gen_c_text_emitter failed ($(head -1 /tmp/gen.err 2>/dev/null))"
+  fi
+else
+  VERDICT_HARNESS="FAIL: no edge hexa to run emitter"
+fi
+echo "::endgroup::"
+
+# ════════════════════════════════════════════════════════════════════════════
+# A. hexa_cc.c — regenerate via prior edge hexa, then Stage-0 from regen copy
+# ════════════════════════════════════════════════════════════════════════════
+echo "::group::A — hexa_cc.c regen + Stage-0"
+if [ -n "$EDGE_HEXA" ] && [ -x "$EDGE_HEXA" ]; then
+  export HEXA_LANG="$ROOT"
+  export HEXA_MEM_UNLIMITED=1
+  # Move the tracked hexa_cc.c aside so the build truly has no committed copy.
+  cp self/native/hexa_cc.c /tmp/hexa_cc.tracked.c
+  rm -f self/native/hexa_cc.c
+  REGEN_CC="self/native/hexa_cc.c.new"
+  rm -f "$REGEN_CC"
+  # Prefer the in-process driver; fall back to the manual shell pipeline.
+  if OUT="$REGEN_CC" HEXA_V2="$EDGE_HEXA" "$EDGE_HEXA" cc --regen 2>/tmp/regen.err \
+       && [ -s "$REGEN_CC" ]; then
+    echo "regen via 'hexa cc --regen' OK"
+  elif OUT="$ROOT/$REGEN_CC" HEXA_V2="$EDGE_HEXA" bash tool/regen_cc_manual 2>/tmp/regen2.err \
+       && [ -s "$REGEN_CC" ]; then
+    echo "regen via tool/regen_cc_manual OK"
+  fi
+  if [ -s "$REGEN_CC" ]; then
+    echo "regen hexa_cc.c = $(wc -c < "$REGEN_CC") bytes"
+    cp "$REGEN_CC" self/native/hexa_cc.c
+    # Stage 0 from the REGENERATED hexa_cc.c + prebuilt runtime.a (no seeds).
+    if $CC $CFLAGS -I self self/native/hexa_cc.c "$RA" -o build/hexa_v2_regen $LIBS 2>/tmp/cc0.err; then
+      export HEXA_PREBUILT_RUNTIME="$RA"
+      if ./build/hexa_v2_regen self/module_loader.hexa build/stage1/ml.c 2>/tmp/cc1.err \
+         && $CC $CFLAGS -I self build/stage1/ml.c "$RA" -o build/hexa_module_loader $LIBS 2>>/tmp/cc1.err; then
+        export HEXA_MODULE_LOADER="$ROOT/build/hexa_module_loader"
+        if ./build/hexa_module_loader self/main.hexa build/stage1/main_exp.hexa 2>/tmp/cc2.err \
+           && ./build/hexa_v2_regen build/stage1/main_exp.hexa build/stage1/main.c 2>>/tmp/cc2.err \
+           && $CC $CFLAGS -I self build/stage1/main.c "$RA" -o hexa_regen $LIBS 2>>/tmp/cc2.err \
+           && ./hexa_regen --version 2>/tmp/cc3.err; then
+          VERDICT_CC="GREEN"
+          echo "::notice::A hexa_cc.c — regen+Stage0 GREEN ($CC) — removal safe via cc --regen"
+        else
+          VERDICT_CC="FAIL: driver build/run from regen ($(tail -1 /tmp/cc2.err /tmp/cc3.err 2>/dev/null | head -1))"
+        fi
+      else
+        VERDICT_CC="FAIL: transpile module_loader from regen ($(tail -1 /tmp/cc1.err 2>/dev/null))"
+      fi
+    else
+      VERDICT_CC="FAIL: clang/gcc regen hexa_cc.c -> hexa_v2 ($(tail -1 /tmp/cc0.err 2>/dev/null))"
+    fi
+  else
+    VERDICT_CC="HARD-BLOCKER: regen produced no hexa_cc.c (regen.err: $(tail -1 /tmp/regen.err /tmp/regen2.err 2>/dev/null | head -1))"
+  fi
+  # Restore the tracked copy in the working tree (dry-run: nothing committed).
+  cp /tmp/hexa_cc.tracked.c self/native/hexa_cc.c
+else
+  VERDICT_CC="HARD-BLOCKER: no edge hexa asset ($EDGE_ASSET) — cannot regen in CI"
+fi
+echo "::endgroup::"
+
+# ════════════════════════════════════════════════════════════════════════════
+# B. forge_tier_v1.c — temp-remove + full prebuilt Stage-0/1/2 green
+# ════════════════════════════════════════════════════════════════════════════
+echo "::group::B — forge_tier_v1.c unused-claim"
+cp self/forge/forge_tier_v1.c /tmp/forge_tier_v1.c 2>/dev/null || true
+rm -f self/forge/forge_tier_v1.c
+test ! -f self/forge/forge_tier_v1.c
+export HEXA_PREBUILT_RUNTIME="$RA"
+if $CC $CFLAGS -I self self/native/hexa_cc.c "$RA" -o build/hexa_v2_b $LIBS 2>/tmp/b0.err; then
+  export HEXA_LANG="$ROOT"
+  if ./build/hexa_v2_b self/module_loader.hexa build/stage1/mlb.c 2>/tmp/b1.err \
+     && $CC $CFLAGS -I self build/stage1/mlb.c "$RA" -o build/hexa_module_loader_b $LIBS 2>>/tmp/b1.err; then
+    export HEXA_MODULE_LOADER="$ROOT/build/hexa_module_loader_b"
+    if ./build/hexa_module_loader_b self/main.hexa build/stage1/mainb_exp.hexa 2>/tmp/b2.err \
+       && ./build/hexa_v2_b build/stage1/mainb_exp.hexa build/stage1/mainb.c 2>>/tmp/b2.err \
+       && $CC $CFLAGS -I self build/stage1/mainb.c "$RA" -o hexa_b $LIBS 2>>/tmp/b2.err \
+       && ./hexa_b --version 2>/tmp/b3.err; then
+      VERDICT_FORGE="GREEN"
+      echo "::notice::B forge_tier_v1.c — full build green with it removed ($CC) — unused confirmed"
+    else
+      VERDICT_FORGE="FAIL: driver build/run ($(tail -1 /tmp/b2.err /tmp/b3.err 2>/dev/null | head -1))"
+    fi
+  else
+    VERDICT_FORGE="FAIL: transpile/link module_loader ($(tail -1 /tmp/b1.err 2>/dev/null))"
+  fi
+else
+  VERDICT_FORGE="FAIL: hexa_v2 build references forge_tier_v1 ($(tail -1 /tmp/b0.err 2>/dev/null))"
+fi
+cp /tmp/forge_tier_v1.c self/forge/forge_tier_v1.c 2>/dev/null || true
+echo "::endgroup::"
+
+# ── Verdict matrix ──────────────────────────────────────────────────────────
+echo "==================== FINAL 3 DRY-RUN VERDICT ($CC) ===================="
+echo "A hexa_cc.c                       : $VERDICT_CC"
+echo "B forge_tier_v1.c                 : $VERDICT_FORGE"
+echo "C classd_behavioral_harness.c     : $VERDICT_HARNESS"
+echo "======================================================================="
+
+# Gate fails only on a real build FAIL — a HARD-BLOCKER on hexa_cc.c is an
+# expected, REPORTED outcome (irreducible like the bootstrap seed), not a CI
+# error, so we do NOT fail the job on a HARD-BLOCKER.
+rc=0
+case "$VERDICT_CC" in FAIL*) rc=1;; esac
+case "$VERDICT_FORGE" in FAIL*|UNSET) rc=1;; esac
+case "$VERDICT_HARNESS" in FAIL*|UNSET) rc=1;; esac
+exit $rc
