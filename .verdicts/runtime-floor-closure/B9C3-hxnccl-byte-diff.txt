@@ -1,0 +1,29 @@
+========================================================================
+  lib/hxnccl — hxnccl_byte_diff: B9.C-3 .c-leg byte-diff oracle
+========================================================================
+  generator: lib/hxnccl/hxnccl_emit.hexa
+  oracle:    cc + otool byte-diff vs hand-written lib/hxnccl/hxnccl.c
+  target:    Mac host x86_64/arm64 (libhxnccl.dylib stub mode)
+  gates:     source-text · whole-file .o (no -g) · __text section (with -g)
+
+  scratch: /var/folders/2g/blzd56lx2rvfvt61c1pc9g7r0000gn/T/hxnccl_byte_diff.XXXXXX.thebJGiqe2
+
+  [PASS] cc + otool present (Mac host toolchain)
+         · cc=y otool=y
+  [PASS] hexa emitter lib/hxnccl/hxnccl_emit.hexa present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a2575c984b6052089/lib/hxnccl/hxnccl_emit.hexa
+  [PASS] hand-written lib/hxnccl/hxnccl.c present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a2575c984b6052089/lib/hxnccl/hxnccl.c
+  [PASS] gate-1 source-text byte-identical (sha256(.c))
+         · orig=e9f6857c97abd3ebe1b2f36a62495dfef091485020b41bec3fb965795c351997 gen=e9f6857c97abd3ebe1b2f36a62495dfef091485020b41bec3fb965795c351997
+  [PASS] gate-2 whole-file .o byte-identical (no -g)
+         · orig=574d4de3231ed527160095473ea689c43f52a3a05060aea48d00910b3dc55d32 gen=574d4de3231ed527160095473ea689c43f52a3a05060aea48d00910b3dc55d32
+  [PASS] gate-3 __TEXT,__text section byte-identical (with -g)
+         · orig=eb97f559f1f555a5fc4749b290fa2d991ef36b8ee8e9b689ed1e5d58ff9586cf gen=eb97f559f1f555a5fc4749b290fa2d991ef36b8ee8e9b689ed1e5d58ff9586cf
+
+  B9.C-3 hxnccl.c .c-leg byte-identity:
+    PROVEN ✓ — hand-written hxnccl.c is fully hexa-emittable.
+    DELETION GATE OPEN — lib/hxnccl/hxnccl.c may be `git rm`.
+========================================================================
+  6/6 checks passed
+__HEXA_LANG_HXNCCL_HXNCCL_BYTE_DIFF__ PASS
