@@ -1,0 +1,61 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/flame/mm_extract_lib.hexa — packed-buffer sub-block extract
+//
+// 컨텍스트 (anima M5 re-measure 2026-05-29):
+//   anima MoE 디코더 trainer (CORE/DECODER/train_v3_moe_pilot_rev2.hexa)
+//   는 스텝마다 packed 가중치 버퍼 M 에서 wq/wk/wv/wo/wup/wdown 6장을
+//   추출한다. 각 추출은 `farr_zeros(rows*cols)` + scalar copy loop 로
+//   fresh farr 를 만들어 반환하던 anima-local `mm_extract`(flame_mm.hexa)
+//   에 의존했다. V=151643·d=64 환경에서 V×d = 9.7M FP64 = 77MB 가 매
+//   추출마다 할당되고(스텝당 6장 ≈ 460MB), glibc arena 가 free 청크를
+//   OS 로 돌려주지 않아 host RSS 가 200-325MB/step 으로 누적
+//   (250 스텝 fire 에서 24GB→64GB). PR #2017 (in-place AdamW) 가 잡은
+//   233MB/step 누수와 동일한 패턴(scratch alloc per step).
+//
+// 본 모듈은 호출자가 dst 버퍼를 hoist 해 step loop 밖에서 한 번 할당하고
+// step 안에서는 0-할당으로 추출만 하도록 in-place 변형을 제공한다.
+//
+// 코어 원시연산: 기존 `farr_copy_slice_gpu(src, soff, dst, doff, n)`
+//   — runtime.c 의 GPU/CPU 디스패처 (HEXA_CUDA 면 _hx_cuda_farr_copy_
+//   slice_gpu, 아니면 _hx_farr_copy_slice_cpu memcpy). 이미 stdlib/flame
+//   의 nn_lib.hexa, flame_d768_12L_agtape_fire.hexa 등에서 사용 중이라
+//   추가 빌트인 도입 없이 라이브러리 차원 wrapper 만 더하면 된다.
+//
+// API:
+//   pub fn mm_extract(P, off, rows, cols) -> int           // alloc 변형 (기존 호환)
+//   pub fn mm_extract_inplace(dst, P, off, rows, cols)     // 0-alloc 변형
+//
+// byte-eq 보장 (mm_extract_lib_test.hexa F-MMX-INPLACE-BYTEEQ):
+//   기존 alloc 변형의 결과 farr 와 dst hoist 변형의 dst 가 임의 toy
+//   (rows*cols) 시점 byte-identical 이어야 한다 (memcpy semantics +
+//   identical FP64 source bytes → ULP=0).
+// ════════════════════════════════════════════════════════════════════════
+
+// mm_extract(P, off, rows, cols) → standalone (rows*cols) handle.
+//   기존 anima `flame_mm.mm_extract` 와 byte-identical. packed 버퍼 P 의
+//   offset `off` 에서 (rows*cols) 만큼을 fresh farr 로 복사해 돌려준다.
+//   매 호출마다 farr_zeros 가 새 FP64 청크를 잡으므로 핫루프에서는
+//   `mm_extract_inplace` 를 써 dst 를 hoist 하라.
+pub fn mm_extract(P: int, off: int, rows: int, cols: int) -> int {
+    let n = rows * cols
+    let out = farr_zeros(n)
+    let _ = farr_copy_slice_gpu(P, off, out, 0, n)
+    return out
+}
+
+// mm_extract_inplace(dst, P, off, rows, cols)
+//   dst 는 호출자가 미리 `farr_zeros(max_rows*max_cols)` 로 hoist 한
+//   farr. (rows*cols) 의 데이터가 P[off..off+rows*cols] 에서 dst[0..n]
+//   으로 zero-alloc memcpy 된다 (HEXA_CUDA 면 D2D, 아니면 host memcpy).
+//   반환값 없음 — dst 의 처음 n 칸이 갱신된다.
+//
+//   호출자가 dst 의 capacity 가 rows*cols 이상임을 보장해야 하며 (런타임이
+//   farr len 부족 시 -1 리턴), 같은 dst 를 여러 추출에 재활용할 때는 다음
+//   추출이 이전 추출의 [0..prev_n] 을 덮어쓴다는 사실에 의존한다 (이는
+//   anima train_v3_moe_pilot_rev2 의 wq/wk/wv/wo 모두 d*d, wup/wdown 은
+//   h*d/d*h 인 일반 패턴에 부합).
+pub fn mm_extract_inplace(dst: int, P: int, off: int, rows: int, cols: int) {
+    let n = rows * cols
+    let _ = farr_copy_slice_gpu(P, off, dst, 0, n)
+}
