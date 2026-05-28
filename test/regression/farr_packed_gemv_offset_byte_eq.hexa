@@ -1,0 +1,83 @@
+// test/regression/farr_packed_gemv_offset_byte_eq.hexa
+//
+// Byte-eq oracle for the offset-aware packed gemv builtin
+// `farr_packed_gemv_offset(P, off, rows, cols, u)` vs the inline scalar
+// reference loop it replaces (anima flame_mm.hexa mm_packed_gemv):
+//
+//   out[i] = Σ_j P[off + i·cols + j] · U[j]   (i ∈ [0,rows), j ∈ [0,cols))
+//
+// The CPU builtin uses the SAME i-outer / j-inner accumulation order as
+// the reference → bit-identical (max|Δ|=0). A non-zero `off` exercises
+// the sub-block slice (the dominant-expert use-case).
+//
+// Pass criterion: max|Δ|=0 across all `rows` output entries, for two
+// offsets (0 and a mid-buffer slice).
+
+fn ref_gemv(P, off: int, rows: int, cols: int, u) -> [float] {
+    let mut out = []
+    let mut i = 0
+    while i < rows {
+        let mut acc = 0.0
+        let base = off + i * cols
+        let mut j = 0
+        while j < cols {
+            acc = acc + farr_get(P, base + j) * farr_get(u, j)
+            j = j + 1
+        }
+        out.push(acc)
+        i = i + 1
+    }
+    return out
+}
+
+fn check_one(label: str, P, off: int, rows: int, cols: int, u) -> int {
+    let ref = ref_gemv(P, off, rows, cols, u)
+    let got = farr_packed_gemv_offset(P, off, rows, cols, u)
+    if got < 0 {
+        println("[farr_packed_gemv_offset_byte_eq] FAIL — " + label + " rc<0")
+        return 1
+    }
+    let mut fails = 0
+    let mut i = 0
+    while i < rows {
+        let g = farr_get(got, i)
+        let r = ref[i]
+        if g != r {
+            fails = fails + 1
+            println("  " + label + "[" + to_string(i) + "] got=" + to_string(g) + " ref=" + to_string(r))
+        }
+        i = i + 1
+    }
+    return fails
+}
+
+fn main() {
+    // Packed buffer holding two [rows×cols] blocks back-to-back so a
+    // non-zero offset reads the second block (per-expert slice).
+    let rows = 5
+    let cols = 4
+    let block = rows * cols
+    let P = farr_zeros(2 * block)
+    let mut k = 0
+    while k < 2 * block {
+        let _ = farr_set(P, k, 0.1 * to_float(k) - 0.7)
+        k = k + 1
+    }
+    let u = farr_zeros(cols)
+    let mut j = 0
+    while j < cols {
+        let _ = farr_set(u, j, 0.3 - 0.05 * to_float(j))
+        j = j + 1
+    }
+
+    let mut total_fail = 0
+    total_fail = total_fail + check_one("off=0", P, 0, rows, cols, u)
+    total_fail = total_fail + check_one("off=block", P, block, rows, cols, u)
+
+    if total_fail == 0 {
+        println("[farr_packed_gemv_offset_byte_eq] PASS — " + to_string(2 * rows)
+              + "/" + to_string(2 * rows) + " bytes match (off=0 + off=block)")
+    } else {
+        println("[farr_packed_gemv_offset_byte_eq] FAIL — " + to_string(total_fail) + " diverged")
+    }
+}

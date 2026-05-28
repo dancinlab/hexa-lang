@@ -6947,6 +6947,8 @@ fn gen2_expr(node) {
                 if name == "matmul"         { return "hexa_matmul(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")" }
                 // RFC 032 (2026-05-12): farr_matmul — packed-double matmul.
                 if name == "farr_matmul"    { return "hexa_farr_matmul(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")" }
+                // offset-aware packed gemv (anima mm_packed_gemv) — 5-arg.
+                if name == "farr_packed_gemv_offset" { return "hexa_farr_packed_gemv_offset(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")" }
                 if name == "farr32_matmul"  { return "hexa_farr32_matmul(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")" }
                 if name == "farr32_matmul_NT_b" { return "hexa_farr32_matmul_NT_b(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")" }
                 if name == "farr32_matmul_NT_a" { return "hexa_farr32_matmul_NT_a(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")" }
