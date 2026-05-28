@@ -32,6 +32,18 @@ fn _wstr(p: str, s: str) {
     write_file(p, s)
 }
 
+// B9.C regen-before-use guard (#1891 hexa_ld pattern). The two `.c` source
+// artifacts this probe scp's (gpu_standalone_cubin_host.c +
+// fusion_epilogue_cublas_timed.c) are byte-identically hexa-emittable; their
+// emitters are the SSOT. Refresh them from the emitters before reading, so
+// the probe works even after the `.c` are git-rm'd (emitter recreates them,
+// sha-identical). No-op (byte-identical overwrite) while the `.c` are present.
+fn _regen_before_use(rr: str) {
+    let regen = rr + "/tool/regen_remaining8_foundation_c.hexa"
+    if !file_exists(regen) { return }
+    let _ = exec_capture("HEXA_HAL_ROOT='" + rr + "' hexa-run '" + regen + "' --regen-only >/dev/null 2>&1")
+}
+
 fn main() {
     let host = "ubu-2"
     let remote_dir = "/tmp/gpu_standalone_cubin_probe_2026_05_28"
@@ -49,6 +61,9 @@ fn main() {
     let ptx_src = rr + "/archive/fires/nvptx_unop_close_2026_05_27/unop_wrapped.ptx"
     let host_c = rr + "/tool/gpu_standalone_cubin_host.c"
     let cublas_c = rr + "/tool/fusion_epilogue_cublas_timed.c"
+
+    // B9.C regen-before-use: refresh host.c + cublas.c from their emitters.
+    _regen_before_use(rr)
 
     // mkdir local fire dir.
     let _mk = exec_capture("mkdir -p " + fire_dir)

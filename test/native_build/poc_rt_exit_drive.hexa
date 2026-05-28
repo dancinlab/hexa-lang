@@ -20,6 +20,15 @@ fn poc_drive() {
     }
     let emit_src = hxroot + "/test/native_build/poc_rt_exit_obj_emit.hexa"
     let caller_src = hxroot + "/test/native_build/poc_rt_exit_caller.c"
+
+    // B9.C regen-before-use (#1891 hexa_ld pattern). poc_rt_exit_caller.c is
+    // byte-identically hexa-emittable (poc_rt_exit_caller_emit.hexa is the
+    // SSOT); cited by .verdicts/runtime-arm64-poc-rt-exit/F-PHASEH-CHUNKB-
+    // BRIDGE.txt. Refresh it from the emitter so this drive works after the
+    // `.c` is git-rm'd (recreated sha-identical). No-op while the `.c` exists.
+    let _regen = hxroot + "/tool/regen_remaining8_foundation_c.hexa"
+    let _rg = exec("[ -f '" + _regen + "' ] && HEXA_HAL_ROOT='" + hxroot + "' hexa-run '" + _regen + "' --regen-only >/dev/null 2>&1; true")
+
     let emit_bin = "/tmp/poc_rt_exit_emit"
     let obj = "/tmp/poc_rt_exit.o"
     let linked = "/tmp/poc_rt_exit_run"

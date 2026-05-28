@@ -15,7 +15,9 @@ flip 캠페인이 안전 quick-win 을 고갈시킨 뒤 남는 진짜 바닥의 
 
 - `.o` = **0** ✅
 - `.s` = **0** (F5 .s-leg COMPLETE · PR #1843/#1844/#1845/#1846 · 아래 F5)
-- `.c` = **87** (2026-05-28 B9.C-10 — runtime.c `#include` 16 native fragment 의
+- `.c` = **87** (2026-05-28 B9.C-11 — remaining-8 LIVE/EVIDENCE `.c`-text FOUNDATION
+  LAND · 8/8 byte-identical · sign-activatable → sign-batch 후 11→3 irreducible seed.
+  아래 B9.C-11. 이전 B9.C-10 — runtime.c `#include` 16 native fragment 의
   `.c`-text 패턴 FOUNDATION LAND · `.c` 87 유지 · 삭제는 `.gitignore` sign-off 게이트.
   16 `*_emit.hexa` (verbatim C-text SSOT) + 16 `*_byte_diff.hexa` (gate-1 source-SHA,
   16/16 PASS) + `tool/regen_native_runtime_c_includes.hexa` orchestrator LAND.
@@ -68,6 +70,42 @@ flip 캠페인이 안전 quick-win 을 고갈시킨 뒤 남는 진짜 바닥의 
   reflow 가능하나 GPU pod 실측 검증 없이 일괄 변경은 blast-radius 과대. 따라서
   emit + oracle + verdicts 만 LAND, `.c` rm 은 후속 GPU-pod-equipped 세션 (dispatch
   reflow + 실 nvcc -x cu 회귀 검증) 으로 분리. .c 카운트 96 유지.
+
+  **B9.C-11 (remaining-8 LIVE/EVIDENCE) — FOUNDATION LAND · sign-activatable**
+  (2026-05-28). `.c` 11 중 8 LIVE/EVIDENCE 파일 (3 irreducible seed 만 잔존:
+  runtime.c · bootstrap_compiler.c · hexa_cc.c) 의 `.c`-text FOUNDATION.
+  `tool/gen_c_text_emitter.hexa` 로 기계 생성한 byte-EXACT emitter 8 + 단일
+  path-agnostic regen+sha 오라클 `tool/regen_remaining8_foundation_c.hexa` LAND.
+  **8/8 byte-identical PROVEN** (sha256(emit) == sha256(origin/main `.c`),
+  orchestrator 8/8 PASS). 8 파일:
+  - `tool/gpu_standalone_cubin_host_emit.hexa` (← gpu_standalone_cubin_probe.hexa)
+  - `tool/gpu_multiarch_fatbin_host_emit.hexa` (← gpu_multiarch_fatbin_probe.hexa, bash)
+  - `tool/fusion_epilogue_cublas_timed_emit.hexa` (EVIDENCE: fusion-epilogue-gemm-bias-gelu-wall)
+  - `tool/hexa_daemon_serve_emit.hexa` (← build_hexa_daemon_serve.sh, audit-exempt)
+  - `test/native_build/poc_rt_exit_caller_emit.hexa` (EVIDENCE: runtime-arm64-poc-rt-exit/F-PHASEH-CHUNKB-BRIDGE)
+  - `state/flame_phase4d_20260517_102511/flame_d768_12L_corpus_test_a2_emit.hexa` (stale/doc-only)
+  - `state/flame_phase4d_5_4_2026_05_17/flame_d768_12L_corpus_test_a2_layer2_emit.hexa` (TRAINER_C: dispatch_phase4d_5_4.sh)
+  - `test/lora_cuda_equiv_test_emit.hexa` (manual cc test, allowlisted)
+
+  **regen-before-use 배선** (#1891 hexa_ld 패턴): `.hexa` consumer 2 개 직접 Edit —
+  `tool/gpu_standalone_cubin_probe.hexa` (`_regen_before_use` 호출 · host.c+cublas.c
+  refresh) + `test/native_build/poc_rt_exit_drive.hexa` (caller.c refresh). 둘 다
+  parse+entry 실행 검증 PASS (regen guard 통과 후 정상 진행).
+  **`.sh`-dispatch 잔여 (recoverable residual, B9.C-5/#1888 패턴 동일)**: 3 shell
+  consumer (`build_hexa_daemon_serve.sh` · `dispatch_phase4d_5_4.sh` · bash-content
+  `gpu_multiarch_fatbin_probe.hexa`) 는 project.tape `.sh` Write/Edit 차단으로 inline
+  regen 불가. activation 패턴 = host 가 build/dispatch 前 step-0 으로
+  `hexa-run tool/regen_remaining8_foundation_c.hexa --regen-only` 실행 (orchestrator
+  USAGE 헤더에 문서화). `git rm` 후 fresh-tree 에서 `.sh` 직접 실행 시 step-0 누락분은
+  **PARTIALLY CLOSED** — direct-dispatch gap. EVIDENCE `.c` 는 byte-identical regen 이라
+  cited verdict (fusion-epilogue-gemm-bias-gelu-wall · runtime-arm64-poc-rt-exit) 그대로
+  resolve (verdict orphan 없음).
+  **ADDITIVE ONLY** — `git rm` / `.gitignore` 편집 없음 (flame emitter 는 해당 state/*
+  ignored dir 의 기존 tracked `.c` 와 동일하게 `git add -f`). 8 전부 sign-activatable —
+  parent 가 sign-batch 로 `.gitignore`+`git rm` 수행 시 `.c` 11→3.
+  **rm-eligible NOTE**: `flame_d768_12L_corpus_test_a2.c` (state/flame_phase4d_20260517_
+  102511/) 는 live `.sh` consumer 0 (doc-only · LAYER2_TRAINER_REGEN_NOTES.md 가
+  "stale·superseded" 명기) — FOUNDATION 보존 대신 plain-rm 도 가능.
 
 세션 quick-win (flip): 4 파일 삭제 — blowfish(wire+🟢RUNEQ #1816) · v565(dead #1818)
 · hxtok(dead #1820) · hxvocoder(dead #1821).
