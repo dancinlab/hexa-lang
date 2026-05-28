@@ -13705,6 +13705,17 @@ __attribute__((weak)) HexaVal hexa_math_sqrt(HexaVal x) { return hexa_float(sqrt
  * replacing the nanbox.hexa stub (return 0). union-pun, tagged in/out. */
 __attribute__((weak)) HexaVal hexa_float_to_bits(HexaVal x) { union { double d; int64_t i; } u; u.d = HX_FLOAT(x); return hexa_int(u.i); }
 __attribute__((weak)) HexaVal hexa_bits_to_float(HexaVal x) { union { int64_t i; double d; } u; u.i = HX_INT(x); return hexa_float(u.d); }
+/* Bare-name aliases (2026-05-28): self/main.hexa's const-fold path emits
+ * `hexa_call1(float_to_bits, ...)` / `hexa_call1(bits_to_float, ...)` using
+ * the UNPREFIXED builtin name as a function-pointer symbol (codegen builtin
+ * map gap — the `hexa_*` rename is applied to direct calls but not to the
+ * &fn-ptr forms hexa_call1 takes). Without these symbols the transpiled
+ * `build/stage1/main_native.c` fails to link ("use of undeclared identifier
+ * 'float_to_bits'"), blocking every dispatcher rebuild. Provide weak C
+ * aliases under the bare names so the function-pointer reference resolves;
+ * weak so any future real definition supersedes without a duplicate-symbol. */
+__attribute__((weak)) HexaVal float_to_bits(HexaVal x) { return hexa_float_to_bits(x); }
+__attribute__((weak)) HexaVal bits_to_float(HexaVal x) { return hexa_bits_to_float(x); }
 __attribute__((weak)) HexaVal hexa_math_abs(HexaVal x)  { return hexa_float(fabs(HX_FLOAT(x))); }
 __attribute__((weak)) HexaVal hexa_math_floor(HexaVal x){ return hexa_float(floor(HX_FLOAT(x))); }
 __attribute__((weak)) HexaVal hexa_math_ceil(HexaVal x) { return hexa_float(ceil(HX_FLOAT(x))); }
