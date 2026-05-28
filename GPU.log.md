@@ -1112,3 +1112,41 @@ R11 RoPE FAIL 의 root cause (`to_f64(thread-derived i64)` unsupported-call) 를
 **L709 milestone flip 안 함** (RoPE silicon re-fire 전 = correctness 미확정, over-closure 금지).
 
 cycle-loop sequence: R12 = codegen fix (by-construction 🟢, silicon defer) + build-infra gap 발견.
+
+## 2026-05-28 — cycle-loop Round 13 · R12 to_f64 fix PTX-VERIFIED (GPU-free) 🟢
+
+R12 was "by-construction 🟢 (parse + unit-test)". R13 elevates it to **PTX-VERIFIED**
+without a GPU — the actual `nvptx_emit` driver (built from origin/main WITH the R12 fix)
+emits the correct `cvt.rn.f64.s64` at the exact RoPE lines that R11 left as
+`// unsupported call: to_f64`.
+
+**method (GPU-free — PTX emission is host-only, only silicon RUN needs the GPU)**:
+- isolated worktree on origin/main (has R12 fix: classify-arm + 8× cvt.rn.f64 emit).
+- B9.C migration leaves native `.c` amalgam members uncommitted on origin/main; copied
+  them from the local working tree (build-infra gap, separate INBOX entry — NOT patched,
+  B9.C-owned). `runtime_bf16.c` "missing" was a false-positive (PLAN.md doc text, not a
+  real `.c` include).
+- `hexa build compiler/cli/nvptx_emit.hexa` → `/tmp/nvptx_emit_verify` (1.73 MB, OK).
+- `nvptx_emit tool/probe_rope_f64.hexa` → PTX.
+
+**result** (`tool/artifacts/rope_f64_ptxverified_2026_05_28.ptx`):
+```
+101:    cvt.rn.f64.s64 %fd11, %rd8;   // to_f64 (s64 to f64)   ← R11 had "unsupported call: to_f64"
+103:    cvt.rn.f64.s64 %fd13, %rd5;   // to_f64 (s64 to f64)   ← R11 had "unsupported call: to_f64"
+  cvt.rn.f64.s64/s32 count = 5
+  `unsupported call: to_f64` count = 0   (R11 FAIL marker GONE)
+```
+
+**closure ladder** (honest tier elevation):
+- ① by-construction (parse + unit-test Case 28c)  — R12 ✓
+- ② **PTX-verified (driver emits cvt.rn.f64.s64, no unsupported marker)** — R13 ✓ (THIS, GPU-free)
+- ③ ptxas-clean (PTX → cubin assembles)  — 🔸 needs CUDA host (ubu-2 DOWN)
+- ④ silicon byte-eq (numerical match)    — 🔸 needs GPU run (ubu-2 DOWN)
+
+**finding**: R12 to_f64/to_f32 lowering is now empirically confirmed at the PTX level — the
+fix is real, not just by-construction. Levels ③④ require ubu-2 (SSH timeout this session,
+all routes: GCP 10.142 · tailscale 100.x · LAN). RoPE NN-primitive milestone (L709) stays
+`[ ]` — numerical correctness needs silicon (over-closure 금지). What R13 closes: the
+codegen-emit half of the RoPE gap, GPU-free.
+
+cycle-loop sequence: R13 = R12 PTX-verified (closure ② of ④, GPU-free) · silicon ③④ blocked on ubu-2.
