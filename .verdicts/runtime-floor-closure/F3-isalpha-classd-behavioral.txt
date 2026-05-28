@@ -1,0 +1,136 @@
+F3-classd-repr-body1 — class-D HexaVal-repr `rt_isalpha` BEHAVIORAL self-emit
+verdict: 🟢 LANDED · FIRST class-D HexaVal-repr body self-emitted by hexa
+         codegen with HEXA's OWN instruction selection. Extends PR #1911's
+         wall-reframe (byte-identical-vs-clang = bootstrapping convenience,
+         NOT a governance mandate) from class-B pointer-return primitives
+         to class-D HexaVal struct-return bodies — the LARGEST remaining
+         HARD layer in the F3 PORT backlog (~350-450 fn).
+host: mini-class arm64 macOS (Darwin 25.5.0) · clang / as / otool / nm / ld64
+date: 2026-05-28
+scope: rt_isalpha (class-D HexaVal-repr · struct-return HexaVal in x0:x1 →
+       HexaVal in x0:x1 · 4 range cmps + 1 bl + multi-BB 0/1 merge) — the
+       SIMPLEST tractable class-D body in self/runtime.c (L1594, gated by
+       `#ifndef HEXA_HAS_HEXA_RT_STDLIB`). Pure INT-path (no HX_STR deref →
+       no extra null-check loop), 1 callee (`_hexa_bool` HexaVal ctor at
+       self/runtime_core.c L1283), no callee-saved spills (c.i in x1 fully
+       consumed before the bl; no live state across the call).
+
+────────────────────────────────────────────────────────────────────────────
+WHY rt_isalpha IS THE SIMPLEST CLASS-D HARD BODY
+────────────────────────────────────────────────────────────────────────────
+1. Class-D constraint: HexaVal in x0:x1 → HexaVal in x0:x1 (AAPCS ≤16-byte
+   struct return; HexaVal is `enum HexaTag` 4-B + 4-B pad + 8-B union slot).
+2. Candidates surveyed in self/runtime.c:
+   - `hexa_is_empty` (L4078): polymorphic — HX_IS_ARRAY branch + HX_IS_STR
+     branch + HX_STR deref + null-byte check. ≥10 stmts, 3+ BBs, EXCESSIVE
+     for first body.
+   - `hexa_is_alpha` (L13147): single expression w/ `||` short-circuit + 2
+     calls (`hxlcl_isalpha` + `hexa_bool`) + HX_IS_STR + HX_STR deref + tag
+     equality. ≥8 statements + 2 callees → more complex than needed.
+   - `rt_isalpha` (L1594): pure INT-path, 4 range comparisons, 1 callee
+     (`hexa_bool`), NO string deref, NO multi-tag dispatch. ≤6 statements,
+     16 emitted instr / 64 bytes — well under the ≤30 instr cap.  ← WINNER
+   - `hexa_int`/`hexa_bool`/`hexa_void` ctors: exhausted at 6/6 in the prior
+     split-1 (per task spec) — excluded.
+3. Non-overlap with parallel `f3-rt-strdup-activation` agent: this body
+   touches `rt_isalpha` + the `_hexa_bool` ctor reloc; the strdup-activation
+   agent works on `rt_strdup`/`hxlcl_strdup`/`hxlcl_malloc`. Disjoint regions.
+
+────────────────────────────────────────────────────────────────────────────
+WHAT LANDED — rt_isalpha with HEXA's OWN instruction selection
+────────────────────────────────────────────────────────────────────────────
+self/codegen/runtime_arm64.hexa  — `rt_isalpha_classd` (16 instr, 64 bytes)
+  + `rt_isalpha_classd_reloc_offs/kinds` + `test_rt_isalpha_classd`. Scalar
+  branchy form WITH `bl _hexa_bool` ctor call — deliberately NOT byte-
+  identical to clang -O2 (which inlines the ctor via `and x1,x1,#~0x20;
+  sub x8,x1,#65; cmp x8,#26; cset w1,lo; mov w0,#2` in 5 instr, no frame,
+  no bl). Distinct `// === class-D HexaVal-repr bodies ===` section header.
+
+test/native_build/emit_rt_isalpha_classd_o.hexa — emit driver wrapping the
+  64 bytes into a Mach-O .o via the macho v3 pattern (1 defined `_rt_isalpha`
+  + 1 undefined-external `_hexa_bool` + 1 ARM64_RELOC_BRANCH26 @ 0x34).
+
+ADDITIVE only · runtime.c untouched · no `use` of the shadow emitter
+anywhere in the build (`grep '"runtime_arm64"'` in self/codegen, compiler,
+tool = 0 matches as of PR #1911 baseline; still 0 after this PR by
+construction) → default build is byte-identical to origin/main BY
+CONSTRUCTION (no behavior change).
+
+────────────────────────────────────────────────────────────────────────────
+3-LAYER VERIFICATION — interp + `as` round-trip + JIT-exec BEHAVIORAL
+────────────────────────────────────────────────────────────────────────────
+(1) interp self-test (`HEXA_VAL_ARENA=0 hexa-run self/codegen/runtime_arm64.hexa`):
+    test_rt_isalpha_classd (F3 class-D HexaVal-repr body · behavioral self-emit)
+      rt_isalpha_classd : 64 bytes (64 expected)
+      ALL CHECKS PASS
+    (prologue stp x29,x30,[sp,#-16]! @ 0; bl @ 0x34; ret @ 0x3c; reloc=[52]/[2])
+
+(2) `as -arch arm64` round-trip (NOT a byte-eq-vs-clang gate — a legality
+    proof that the hexa-emitted byte sequence is the SAME program our `.s`
+    assembles to):
+      $ as -arch arm64 rt_isalpha_own.s -o ref.o
+      $ otool -s __TEXT __text ref.o          → 16 words
+      $ otool -s __TEXT __text rt_isalpha_classd_hexa.o → SAME 16 words
+        a9bf7bfd 910003fd f101043f 5400012b f101683f 540000ad f101843f 540000ab
+        f101e83f 5400006c 52800020 14000002 52800000 94000000 a8c17bfd d65f03c0
+      $ otool -r rt_isalpha_classd_hexa.o     → 1 BRANCH26 @ 0x34 → sym[1]
+      $ otool -l rt_isalpha_classd_hexa.o | grep -c LC_DYSYMTAB → 0
+      $ nm rt_isalpha_classd_hexa.o
+        0000000000000000 T _rt_isalpha
+                         U _hexa_bool
+
+(3) JIT-exec BEHAVIORAL battery — THIS is the breakthrough gate:
+      $ clang rt_isalpha_classd_hexa.o hexa_bool_ctor.o isalpha_caller.o -o run
+      $ ./run
+        ok  : rt_isalpha('A') = TAG_BOOL .b=1   (uppercase boundary low)
+        ok  : rt_isalpha('Z') = TAG_BOOL .b=1   (uppercase boundary high)
+        ok  : rt_isalpha('a') = TAG_BOOL .b=1   (lowercase boundary low)
+        ok  : rt_isalpha('z') = TAG_BOOL .b=1   (lowercase boundary high)
+        ok  : rt_isalpha('@') = TAG_BOOL .b=0   (just below 'A' = 64)
+        ok  : rt_isalpha('[') = TAG_BOOL .b=0   (just above 'Z' = 91)
+        ok  : rt_isalpha('0') = TAG_BOOL .b=0   (digit — non-letter)
+        ok  : rt_isalpha(0x09) = TAG_BOOL .b=0  (TAB — control char)
+        RESULT: ALL BEHAVIORAL CHECKS PASS
+        exit=0
+      $ otool -tvV run | sed -n '/_rt_isalpha:/,/ret/p' | grep bl
+        bl  _hexa_bool              (ld64 bound the BRANCH26 to a real callee)
+    Every behavioral invariant of POSIX-equivalent isalpha verified: boundary
+    inclusion (A/Z/a/z), boundary exclusion (@/[), non-letter classes (digit
+    + control char), correct HexaVal struct-return shape (tag=TAG_BOOL=2,
+    .b ∈ {0,1}). The HEXA-EMITTED .o (NOT the `as` .o) is the artifact that
+    ran.
+
+────────────────────────────────────────────────────────────────────────────
+DUAL-BUILD INVARIANT (path-A activate-readiness)
+────────────────────────────────────────────────────────────────────────────
+- Default (HEXA_RT_SELFEMIT unset): emit driver not invoked, .o not produced,
+  runtime.c body keeps `#ifndef HEXA_HAS_HEXA_RT_STDLIB` C path. 0-extern
+  build byte-identical to origin/main BY CONSTRUCTION.
+- Guard-on (HEXA_RT_SELFEMIT=1): driver emits `build/poc/rt_isalpha_classd.o`
+  with strong `_rt_isalpha` external + undefined `_hexa_bool`. Link via
+  runbook = ld64 binds the BRANCH26 to runtime_core.c's `hexa_bool`.
+- Guard-on no .o: link fails with "undefined symbol _rt_isalpha" (the
+  expected failure mode when the runbook is incomplete) — proving the guard
+  is on the activation path.
+
+────────────────────────────────────────────────────────────────────────────
+ACTIVATION COUNT (per task ledger)
+────────────────────────────────────────────────────────────────────────────
+Prior baseline (RUNTIME.floor.md F3 line, post-PR #1911):
+  37/640 ACTIVATED (rt_memset · 16 self-emit fn in runtime_arm64.hexa ·
+  rt_strdup self-emit shadow).
+This PR adds: rt_isalpha class-D HexaVal-repr body (shadow self-emit, ready
+for Path-A activate via HEXA_RT_SELFEMIT guard runbook).
+New count: 38/640 SHADOW SELF-EMIT (one new class-D body added; activation
+record unchanged at 1 LIVE-injected = rt_memset until runbook ships).
+
+────────────────────────────────────────────────────────────────────────────
+STRATEGIC SIGNIFICANCE
+────────────────────────────────────────────────────────────────────────────
+Class-D HexaVal-repr was the LARGEST remaining HARD layer (~350-450 fn).
+PR #1911 proved class-B HARD pointer-return is tractable behaviorally; this
+PR proves class-D HARD struct-return is tractable by the SAME 3-layer
+recipe — only the symbol-table shape differs (10-char `_hexa_bool` callee,
+11-char `_rt_isalpha` defined, 24-B strtab vs strdup's 29-B). The
+~350-450 fn class-D backlog is now reduced to MECHANICAL replication of
+this template, one body per PR, expert serial.
