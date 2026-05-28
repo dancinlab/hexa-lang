@@ -770,6 +770,48 @@ fn _do_build(repo_root: string) {
             _run("HEXA_VAL_CTORS_O=" + _shq(ctors_obj_path) + " " + _shq(ctors_emit_drv), "emit hexa_val_ctors.o")
             _must_exist(ctors_obj_path, "hexa_val_ctors.o (self-emit output)")
             selfemit_objs = selfemit_objs + " " + _shq(ctors_obj_path)
+
+            // ── F3 ACTIVATION RUNBOOK · Path A · B9.6-D3 — class-D HexaVal-repr
+            // body self-emit slot (4 primitives: rt_isalpha · rt_isalnum ·
+            // rt_pthread_noop · rt_pthread_create_policy — PRs #1914 + #1923
+            // shadows). Distinct from the class-B leaf loop (L705-L721):
+            //   - emit driver path = test/native_build/emit_rt_<n>_classd_o.hexa
+            //     (rt_ prefix, _classd suffix — NOT emit_hxlcl_<n>_o.hexa).
+            //   - emitted symbol     = _rt_<n>            (NOT _hxlcl_<n>).
+            //   - env var            = HEXA_RT_<UPPER>_CLASSD_O.
+            //   - obj filename       = rt_<n>_classd.o.
+            //   - runtime.c gate     = the `HexaVal rt_<n>(...)` body itself
+            //     becomes `extern` (NOT a `hxlcl_<n>` helper) — see runtime.c
+            //     L2029-block (rt_isalnum/_isalpha) + L2199-block (pthread).
+            //     The HexaVal struct-return ABI (x0:x1 register PAIR, NRRP)
+            //     means the extern decl matches the def byte-shape exactly.
+            //   - callee-export      = NONE. `bl _hexa_bool` / `bl _hexa_int`
+            //     bind into the ctor-bundle `.o` (hexa_val_ctors.o, see L735-
+            //     L745) whose ctors are already non-static under HEXA_RT_SELFEMIT
+            //     via the runtime_core_emit.hexa L1338-L1357 gate. No extra
+            //     macro wrinkle (vs class-B's HXLCL_MALLOC_SC).
+            // 4-gate verdict per primitive (see .verdicts/runtime-floor-closure/
+            // F3-classd-activation-runbook.txt): (a) default 0-extern preserved,
+            // (b) guard-on .o links + JIT-exec correct, (c) guard-on no-.o
+            // link-fail, (d) self-host fixpoint structural (additive guards).
+            println("[selfemit] F3 Path A · B9.6-D3 — class-D HexaVal-repr bodies → _rt_isalpha + _rt_isalnum + _rt_pthread_noop + _rt_pthread_create_policy")
+            let classd = ["isalpha", "isalnum", "pthread_noop", "pthread_create_policy"]
+            let classd_upper = ["ISALPHA", "ISALNUM", "PTHREAD_NOOP", "PTHREAD_CREATE_POLICY"]
+            let mut ci = 0
+            while ci < len(classd) {
+                let cn = classd[ci]
+                let cd_emit_hexa = repo_root + "/test/native_build/emit_rt_" + cn + "_classd_o.hexa"
+                _must_exist(cd_emit_hexa, "emit_rt_" + cn + "_classd_o.hexa (F3 class-D emit driver)")
+                let cd_emit_drv = repo_root + "/build/selfemit/emit_rt_" + cn + "_classd"
+                let cd_obj_path = repo_root + "/build/selfemit/rt_" + cn + "_classd.o"
+                let cd_emit_c = repo_root + "/build/selfemit/emit_rt_" + cn + "_classd.c"
+                _run(_shq(hexat) + " " + _shq(cd_emit_hexa) + " " + _shq(cd_emit_c), "transpile class-D emit driver " + cn)
+                _run(cc + " -O2 -std=c11 -D_GNU_SOURCE -Wno-trigraphs -fbracket-depth=4096 -I " + _shq(inc) + " " + _shq(cd_emit_c) + " " + _shq(runtime_c) + " -o " + _shq(cd_emit_drv) + " " + ldflags, "compile class-D emit driver " + cn)
+                _run("HEXA_RT_" + classd_upper[ci] + "_CLASSD_O=" + _shq(cd_obj_path) + " " + _shq(cd_emit_drv), "emit rt_" + cn + "_classd.o")
+                _must_exist(cd_obj_path, "rt_" + cn + "_classd.o (self-emit output)")
+                selfemit_objs = selfemit_objs + " " + _shq(cd_obj_path)
+                ci = ci + 1
+            }
         }
     }
 

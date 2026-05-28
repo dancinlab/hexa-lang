@@ -2026,7 +2026,35 @@ static int hxlcl_posix_openpt(int flags);
 //       output, so runtime.c provides the C fallback bodies. These
 //       mirror the hexa source 1-for-1 (ASCII classifiers — locale-
 //       free per ANSI C).
-#ifndef HEXA_HAS_HEXA_RT_STDLIB
+//
+// F3 ACTIVATION RUNBOOK · Path A — class-D HexaVal-repr body self-emit slot.
+// Distinct gating shape from class-B leaf primitives (see L218-L233 strdup
+// block):
+//   - class-B: runtime.c has a `static <ret> hxlcl_<name>(...)` helper body;
+//     activation guard wraps `hxlcl_<name>` and the emit `.o` exports
+//     `_hxlcl_<name>` over a callee-export wrinkle.
+//   - class-D: runtime.c's `HexaVal rt_<name>(...)` IS the body itself; the
+//     emit `.o` exports `_rt_<name>` directly. The HexaVal struct-return ABI
+//     (x0:x1 register PAIR, NRRP) means the extern decl shape matches the
+//     def shape exactly (no x8 hidden-pointer wrinkle). The callee in the
+//     `.o`'s BRANCH26 is `_hexa_bool`/`_hexa_int`, already non-static under
+//     HEXA_RT_SELFEMIT via the ctor-bundle gate (runtime_core_emit.hexa
+//     L1338-L1357) — no separate callee-export macro needed.
+//
+// Three-way gate ordering:
+//   (1) HEXA_RT_SELFEMIT defined   → extern (self-emitted `_rt_isalnum`/
+//                                     `_rt_isalpha` win at link).
+//   (2) HEXA_HAS_HEXA_RT_STDLIB set → extern (hexa stdlib transpile provides
+//                                     the strong symbols, per the original
+//                                     aprime_cc path).
+//   (3) else (standalone smoke)    → C fallback body (0-extern-delta,
+//                                     unchanged from origin/main).
+// Default build (neither flag) lands at path (3) → BYTE-IDENTICAL to
+// origin/main (additive guards only).
+#if defined(HEXA_RT_SELFEMIT)
+extern HexaVal rt_isalnum(HexaVal c);
+extern HexaVal rt_isalpha(HexaVal c);
+#elif !defined(HEXA_HAS_HEXA_RT_STDLIB)
 HexaVal rt_isalnum(HexaVal c) {
     int64_t v = HX_INT(c);
     int b = ((v >= 48 && v <= 57) ||
@@ -2199,7 +2227,16 @@ static double hxlcl_sin(double x) { return HX_FLOAT(rt_sin(hexa_float(x))); }
 // RUNTIME.md step-2 cycle 3 — pthread delegation via single noop hexa
 // fn (`rt_pthread_noop` returns 0) + create policy (returns 1 = run
 // synchronously).
-#ifndef HEXA_HAS_HEXA_RT_STDLIB
+//
+// F3 ACTIVATION RUNBOOK · Path A — class-D HexaVal-repr body self-emit slot
+// (see L2029-block above for the gating-shape rationale). 0-arg sister of
+// the rt_isalnum/rt_isalpha slot: the `.o` is just `mov w0,#imm + bl
+// _hexa_int + ldp + ret` (6 instr / 24 B). Same 3-way gate; default build
+// lands at path (3) → byte-identical to origin/main.
+#if defined(HEXA_RT_SELFEMIT)
+extern HexaVal rt_pthread_noop(void);
+extern HexaVal rt_pthread_create_policy(void);
+#elif !defined(HEXA_HAS_HEXA_RT_STDLIB)
 HexaVal rt_pthread_noop(void) { return hexa_int(0); }
 HexaVal rt_pthread_create_policy(void) { return hexa_int(1); }
 #else
