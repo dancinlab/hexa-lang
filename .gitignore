@@ -207,3 +207,7 @@ self/native/tensor_kernels.c
 self/native/term_ffi.c
 self/native/thread.c
 self/native/wait.c
+# B9.C-11 — runtime.c CORE-tier amalgamation member (the largest, 8082 lines):
+# now a BUILD ARTIFACT regenerated from self/runtime_core_emit.hexa SSOT by
+# build_hexa_cli.hexa _regen_runtime_core() (verified byte-identical, #1871).
+self/runtime_core.c
