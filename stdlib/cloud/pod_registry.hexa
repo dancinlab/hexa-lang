@@ -534,3 +534,358 @@ fn cloud_reconcile_print() -> int {
         + " drift (ORPHAN=adopt|stop · GHOST=forget) · " + _reg_file())
     return drift
 }
+
+// ── M5 — agent-crash-safe pod registry @ ~/.hx/cloud/active-pods.json ─
+//
+// Canonical M5 SSOT (CLOUD.md M5): a single-file JSON registry written
+// ATOMICALLY via temp-file + rename(2). The legacy JSONL above remains for
+// backwards compat (read by `cloud orphans`/`cloud reconcile`). The new
+// `~/.hx/cloud/active-pods.json` carries the richer per-pod record that M2
+// (TTL deadman) and M3 (cost cap) extend in place — the schema reserves
+// `ttl_sec` · `max_cost_usd` · `cumulative_cost_usd` keys NOW so no schema
+// migration is needed when those milestones land.
+//
+// Crash-safety: every mutation writes `<path>.tmp.<pid>` first, then
+// rename(2) to the final path. POSIX rename is atomic on the same fs, so a
+// reader either sees the prior valid state or the new valid state, never a
+// partial write. The dir + file are `chmod 700`/`600` (private — may hold
+// ssh endpoints + provider ids).
+//
+// Wire points (additive — existing pod_registry_record/forget/adopt
+// untouched): `cloud rent` success → pod_registry_add(...status=READY).
+// `cloud down` confirmed teardown → pod_registry_remove(id). Status flips
+// (STOPPING, GONE) go through pod_registry_update_status.
+
+// _m5_dir / _m5_path — canonical M5 location (g13 $HOME-resolved).
+fn _m5_dir() -> str {
+    return env_var("HOME") + "/.hx/cloud"
+}
+
+fn pod_registry_path() -> str {
+    return _m5_dir() + "/active-pods.json"
+}
+
+// _m5_pid — current process pid (for the temp-file suffix). Falls back to
+// the timestamp ns when /bin/sh is unavailable so two near-simultaneous
+// writes still pick distinct temp names.
+fn _m5_pid() -> str {
+    let s = exec("echo $$ 2>/dev/null").trim()
+    if len(s) > 0 {
+        return s
+    }
+    return exec("date +%s%N 2>/dev/null").trim()
+}
+
+// _m5_ensure_dir — mkdir -p the registry dir + chmod 700 (private).
+fn _m5_ensure_dir() {
+    let dir = _m5_dir()
+    let _ = exec("mkdir -p " + _reg_shq(dir) + " 2>/dev/null && chmod 700 " + _reg_shq(dir) + " 2>/dev/null")
+}
+
+// PodRecord — one parsed M5 record. Fields mirror the JSON schema 1-to-1.
+struct PodRecord {
+    id:                    str,
+    provider:              str,    // "runpod" | "vast" | "ssh"
+    created_at:            str,    // ISO-8601 UTC
+    rented_by:             str,    // optional agent tag ("" if absent)
+    ssh_host:              str,
+    ssh_port:              str,
+    status:                str,    // "RENTING" | "READY" | "STOPPING" | "GONE"
+    ttl_sec:               int,    // -1 = unset (M2 will populate)
+    max_cost_usd:          str,    // "" = unset (M3; str to preserve "5.00")
+    cumulative_cost_usd:   str     // "0.0" default (M3 will accrue)
+}
+
+// _m5_numfield — sniff the bare (unquoted) value of "key":value out of a
+// flat JSON record, stopping at `,` or `}`. Returns "" if absent. Used for
+// JSON-numeric/null fields (ttl_sec, cumulative_cost_usd) that the writer
+// emits unquoted, which the quoted-string `_reg_field` reader cannot see.
+fn _m5_numfield(rec: str, key: str) -> str {
+    let marker = "\"" + key + "\":"
+    let at = rec.index_of(marker)
+    if at < 0 {
+        return ""
+    }
+    let start = at + len(marker)
+    let n = len(rec)
+    let mut i = start
+    while i < n {
+        let c = rec.substring(i, i + 1)
+        if c == "," || c == "}" {
+            return rec.substring(start, i).trim()
+        }
+        i = i + 1
+    }
+    return rec.substring(start, n).trim()
+}
+
+// _m5_parse — minimal JSON-array reader for our flat schema. We do NOT
+// pull in stdlib/alloc/json here to keep the M5 layer dependency-free
+// (the legacy JSONL above also hand-rolls its parsing). Records are split
+// on the top-level `},{` separator inside the "pods":[ ... ] array. Each
+// record's fields are read via the same `_reg_field` helper used above.
+fn _m5_parse_records(body: str) -> [PodRecord] {
+    let mut out = []
+    let pods_at = body.index_of("\"pods\":[")
+    if pods_at < 0 {
+        return out
+    }
+    let start = pods_at + 8
+    // Scan to the matching closing `]` at brace-depth 0.
+    let n = len(body)
+    let mut i = start
+    let mut depth = 0
+    let mut end = -1
+    while i < n {
+        let c = body.substring(i, i + 1)
+        if c == "{" {
+            depth = depth + 1
+        } else if c == "}" {
+            depth = depth - 1
+        } else if c == "]" && depth == 0 {
+            end = i
+            i = n
+        }
+        i = i + 1
+    }
+    if end < 0 {
+        return out
+    }
+    let arr = body.substring(start, end)
+    // Split on `},{` boundary (works because our writer emits records
+    // separated by exactly `},{` with no whitespace).
+    let chunks = arr.split("},{")
+    let mut k = 0
+    while k < len(chunks) {
+        let mut rec = chunks[k]
+        // Re-add the stripped braces (split removed them on both sides).
+        if rec.index_of("{") != 0 {
+            rec = "{" + rec
+        }
+        if rec.substring(len(rec) - 1, len(rec)) != "}" {
+            rec = rec + "}"
+        }
+        let id = _reg_field(rec, "id")
+        if len(id) > 0 {
+            // `ttl_sec` is JSON-numeric/null — we hand-emit it unquoted, so
+            // sniff the value directly out of the record bytes (_reg_field
+            // only reads quoted strings).
+            let mut ttl = -1
+            let ttl_num = _m5_numfield(rec, "ttl_sec")
+            if len(ttl_num) > 0 && ttl_num != "null" {
+                ttl = _reg_atoi(ttl_num)
+            }
+            // `cumulative_cost_usd` likewise unquoted; default "0.0" when absent.
+            let mut cum = _m5_numfield(rec, "cumulative_cost_usd")
+            if len(cum) == 0 || cum == "null" {
+                cum = "0.0"
+            }
+            out.push(PodRecord {
+                id: id,
+                provider: _reg_field(rec, "provider"),
+                created_at: _reg_field(rec, "created_at"),
+                rented_by: _reg_field(rec, "rented_by"),
+                ssh_host: _reg_field(rec, "ssh_host"),
+                ssh_port: _reg_field(rec, "ssh_port"),
+                status: _reg_field(rec, "status"),
+                ttl_sec: ttl,
+                max_cost_usd: _reg_field(rec, "max_cost_usd"),
+                cumulative_cost_usd: cum
+            })
+        }
+        k = k + 1
+    }
+    return out
+}
+
+// pod_registry_load — read the canonical M5 file, return the parsed
+// records. Empty list when the file is absent OR mid-write corrupt (the
+// atomic-write contract makes the latter impossible, but degrade safely).
+fn pod_registry_load() -> [PodRecord] {
+    let path = pod_registry_path()
+    if !file_exists(path) {
+        return []
+    }
+    let body = read_file(path)
+    if len(body.trim()) == 0 {
+        return []
+    }
+    return _m5_parse_records(body)
+}
+
+// _m5_emit_record — serialize one PodRecord as a flat JSON object (no
+// outer braces stripping; the array writer joins with `,`).
+fn _m5_emit_record(r: PodRecord) -> str {
+    let mut ttl_field = "null"
+    if r.ttl_sec >= 0 {
+        ttl_field = str(r.ttl_sec)
+    }
+    let mut cost_field = "0.0"
+    if len(r.cumulative_cost_usd) > 0 {
+        cost_field = r.cumulative_cost_usd
+    }
+    let mut max_cost_field = "null"
+    if len(r.max_cost_usd) > 0 {
+        max_cost_field = "\"" + _reg_jstr(r.max_cost_usd) + "\""
+    }
+    return "{\"id\":\"" + _reg_jstr(r.id) + "\","
+        + "\"provider\":\"" + _reg_jstr(r.provider) + "\","
+        + "\"created_at\":\"" + _reg_jstr(r.created_at) + "\","
+        + "\"rented_by\":\"" + _reg_jstr(r.rented_by) + "\","
+        + "\"ssh_host\":\"" + _reg_jstr(r.ssh_host) + "\","
+        + "\"ssh_port\":\"" + _reg_jstr(r.ssh_port) + "\","
+        + "\"status\":\"" + _reg_jstr(r.status) + "\","
+        + "\"ttl_sec\":" + ttl_field + ","
+        + "\"max_cost_usd\":" + max_cost_field + ","
+        + "\"cumulative_cost_usd\":" + cost_field + "}"
+}
+
+// _m5_write_atomic — write the records to ~/.hx/cloud/active-pods.json
+// via temp-file + rename(2). The temp file lives in the SAME directory
+// as the target so rename is on the same fs (atomic). `chmod 600` runs
+// on the temp BEFORE the rename so the final file is private from the
+// moment it appears at its canonical path.
+fn _m5_write_atomic(records: [PodRecord]) {
+    _m5_ensure_dir()
+    let path = pod_registry_path()
+    let tmp = path + ".tmp." + _m5_pid()
+    let mut body = "{\"version\":1,\"pods\":["
+    let mut i = 0
+    while i < len(records) {
+        if i > 0 {
+            body = body + ","
+        }
+        body = body + _m5_emit_record(records[i])
+        i = i + 1
+    }
+    body = body + "]}\n"
+    write_file(tmp, body)
+    let _ = exec("chmod 600 " + _reg_shq(tmp) + " 2>/dev/null && mv -f " + _reg_shq(tmp) + " " + _reg_shq(path))
+}
+
+// _m5_find — return the index of `pod_id` in `records`, or -1.
+fn _m5_find(records: [PodRecord], pod_id: str) -> int {
+    let mut i = 0
+    while i < len(records) {
+        if records[i].id == pod_id {
+            return i
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+// pod_registry_add — register a freshly-rented pod. Idempotent on `id`
+// (same id → update in place, preserving created_at). Returns 1 on
+// success, 0 on empty id.
+fn pod_registry_add(pod_id: str, provider: str, ssh_host: str, ssh_port: str, status: str) -> int {
+    if len(pod_id) == 0 {
+        return 0
+    }
+    if _pod_id_looks_valid(pod_id) == 0 {
+        eprintln("[cloud] M5: refusing non-pod-id '" + pod_id + "'")
+        return 0
+    }
+    let mut records = pod_registry_load()
+    let now = _reg_now_iso()
+    let agent_tag = env_var("HEXA_AGENT_TAG")
+    let idx = _m5_find(records, pod_id)
+    if idx >= 0 {
+        // update in place, preserve created_at
+        let prev = records[idx]
+        records[idx] = PodRecord {
+            id: pod_id,
+            provider: provider,
+            created_at: prev.created_at,
+            rented_by: prev.rented_by,
+            ssh_host: ssh_host,
+            ssh_port: ssh_port,
+            status: status,
+            ttl_sec: prev.ttl_sec,
+            max_cost_usd: prev.max_cost_usd,
+            cumulative_cost_usd: prev.cumulative_cost_usd
+        }
+    } else {
+        records.push(PodRecord {
+            id: pod_id,
+            provider: provider,
+            created_at: now,
+            rented_by: agent_tag,
+            ssh_host: ssh_host,
+            ssh_port: ssh_port,
+            status: status,
+            ttl_sec: -1,
+            max_cost_usd: "",
+            cumulative_cost_usd: "0.0"
+        })
+    }
+    _m5_write_atomic(records)
+    return 1
+}
+
+// pod_registry_update_status — flip a pod's status (READY → STOPPING,
+// etc.). Returns 1 on a successful flip, 0 if `pod_id` is absent.
+fn pod_registry_update_status(pod_id: str, status: str) -> int {
+    if len(pod_id) == 0 {
+        return 0
+    }
+    let mut records = pod_registry_load()
+    let idx = _m5_find(records, pod_id)
+    if idx < 0 {
+        return 0
+    }
+    let prev = records[idx]
+    records[idx] = PodRecord {
+        id: prev.id,
+        provider: prev.provider,
+        created_at: prev.created_at,
+        rented_by: prev.rented_by,
+        ssh_host: prev.ssh_host,
+        ssh_port: prev.ssh_port,
+        status: status,
+        ttl_sec: prev.ttl_sec,
+        max_cost_usd: prev.max_cost_usd,
+        cumulative_cost_usd: prev.cumulative_cost_usd
+    }
+    _m5_write_atomic(records)
+    return 1
+}
+
+// pod_registry_remove — drop a pod from the registry (confirmed teardown).
+// Returns 1 on a successful removal, 0 if `pod_id` is absent.
+fn pod_registry_remove(pod_id: str) -> int {
+    if len(pod_id) == 0 {
+        return 0
+    }
+    let records = pod_registry_load()
+    let idx = _m5_find(records, pod_id)
+    if idx < 0 {
+        return 0
+    }
+    let mut kept = []
+    let mut i = 0
+    while i < len(records) {
+        if i != idx {
+            kept.push(records[i])
+        }
+        i = i + 1
+    }
+    _m5_write_atomic(kept)
+    return 1
+}
+
+// pod_registry_list — return only alive pods (status != "GONE"). External
+// readers (`cloud reap`, dashboards) use this to enumerate live billing
+// pods after an agent crash.
+fn pod_registry_list() -> [PodRecord] {
+    let all = pod_registry_load()
+    let mut out = []
+    let mut i = 0
+    while i < len(all) {
+        if all[i].status != "GONE" {
+            out.push(all[i])
+        }
+        i = i + 1
+    }
+    return out
+}

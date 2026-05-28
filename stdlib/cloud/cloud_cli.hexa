@@ -726,6 +726,9 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
     // Register IMMEDIATELY (before the ssh wait) so a billing instance is
     // never untracked, then release the offer claim (the rent succeeded).
     pod_registry_record(inst.instance_id, owner, "running")
+    // M5 — crash-safe registry @ ~/.hx/cloud/active-pods.json (RENTING
+    // before ssh-ready; flipped to READY below once ssh handshakes).
+    let _ = pod_registry_add(inst.instance_id, "vast", "", "", "RENTING")
     vast_offer_release(offer.offer_id)
     println("[cloud] rent vast: created instance " + inst.instance_id + " (owner=" + owner + ", registered)")
     // M1 — bounded SSH-readiness gate. Sleep cadence is 10s (vast boot is
@@ -766,6 +769,7 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
         return 1
     }
     println("[cloud] rent vast: READY " + ssh.host + ":" + ssh.port + " (root@" + ssh.host + " -p " + ssh.port + ")")
+    let _ = pod_registry_add(inst.instance_id, "vast", ssh.host, ssh.port, "READY")
     // #1155 zero-flag: write the bare-IP Host block → ~/.ssh/config so a later
     // `cloud run root@<ip>` (or raw ssh) presents the vast key with no
     // --identity. No-op when no vast key is available (graceful).
@@ -806,6 +810,9 @@ fn _cloud_rent_runpod(av: [str], start: int) -> int {
         return 1
     }
     pod_registry_record(pod.pod_id, owner, "running")
+    // M5 — crash-safe registry @ ~/.hx/cloud/active-pods.json (RENTING
+    // before ssh-ready; flipped to READY below once ssh handshakes).
+    let _ = pod_registry_add(pod.pod_id, "runpod", "", "", "RENTING")
     println("[cloud] rent runpod: created pod " + pod.pod_id + " (owner=" + owner + ", registered)")
     // M1 — bounded path. sleep_each=10s; tries = max(1, max_wait_sec/10).
     // 0 / negative max_wait_sec restores legacy 40 × 15s = 600s unbounded.
@@ -840,6 +847,7 @@ fn _cloud_rent_runpod(av: [str], start: int) -> int {
         return 1
     }
     println("[cloud] rent runpod: READY " + port.ip + ":" + port.port + " (root@" + port.ip + " -p " + port.port + ")")
+    let _ = pod_registry_add(pod.pod_id, "runpod", port.ip, port.port, "READY")
     println("pod_id=" + pod.pod_id)
     println("host=" + port.ip)
     println("port=" + port.port)
@@ -852,6 +860,10 @@ fn _cloud_rent_runpod(av: [str], start: int) -> int {
 // api key). The registry forget runs regardless of the provider verdict
 // so a confirmed-gone pod never lingers as a GHOST row.
 fn _cloud_down(id: str, provider: str) -> int {
+    // M5 — flag the pod STOPPING before issuing teardown, so an
+    // agent-crash between here and provider-confirm still leaves an
+    // external reader (cloud reap) a hint to retry teardown.
+    let _ = pod_registry_update_status(id, "STOPPING")
     let mut ok = 0
     if provider == "runpod" {
         let api_key = cloud_runpod_must_have_api_key("down")
@@ -869,6 +881,7 @@ fn _cloud_down(id: str, provider: str) -> int {
     // Forget the registry row (status=closed) on a confirmed destroy.
     if ok == 1 {
         let _ = pod_registry_forget(id)
+        let _ = pod_registry_remove(id)
         println("[cloud] forgot " + id + " (registry status=closed)")
         return 0
     }
