@@ -1,5 +1,22 @@
 # INBOX — log
 
+## 2026-05-29 — 🔴 BLOCKER · `release.yml` Stage-0 `hexa_v2` self-host transpiler 컴파일 3타겟 全 FAILED → `edge` prerelease 2026-05-25 에 stuck → 모든 신규 wired fn `hexa verify --expr` 永 🟠
+
+> demiurge CLOAK 도메인 작업 중 발견 (consumer-side). `~/.hx/bin/hexa.real` 은 release-pull 전용인데, release CI 가 깨져 5/25 이후 어떤 binary 도 ship 안 됨. 동일 세션의 `hexat_linux` SEGFAULT 엔트리(아래)와 **같은 self-host transpiler 부트스트랩 break 의 다른 발현일 가능성 높음** — 교차 진단 가치 있음.
+
+**증상**: `gh run list --workflow=release.yml` 최신 run (2026-05-28T17:26, headBranch=main) **conclusion=failure**. 그 직전 run 들은 concurrency `cancel-in-progress`(branch push)로 cancelled — main 에 빠르게 push 가 쌓이며 in-flight edge 빌드가 연쇄 취소. 최신 실패 run 의 failing step (3타겟 동일):
+> - `release (darwin-arm64)`   → **Stage 0 — compile self-hosted transpiler (hexa_v2)** ✗
+> - `release (linux-x86_64)`   → **Stage 0 — compile self-hosted transpiler (hexa_v2)** ✗
+> - `release (linux-arm64)`    → **Stage 0 — compile self-hosted transpiler (hexa_v2)** ✗
+
+**왜 치명적 (닫힌 인과 사슬)**: `install.sh`/`install.hexa` 는 둘 다 GitHub release 에서 `hexa-{target}.tar.gz` 를 PULL (로컬 컴파일 ✗). 로컬 자가빌드 one-liner 없음 (binary = CI 전용). 따라서 main 에 merge 된 verify_cli/calc_dispatch/stdlib 변경이 설치 binary 에 도달하려면 release(또는 edge) 빌드가 성공해야 하는데, Stage 0 가 깨져 그 경로가 막힘. `gh release view edge` assets = **darwin-arm64 2026-05-25 23:06** (stuck). 결과: `build/artifacts/hexa-verify.c` (May 26) 가 신규 `calc_is_float_fn` registry 를 반영 못 해 `hexa verify --expr lc_resonance 1.0 1.0 1.0` → `error: to_int: trailing garbage in "1.0"`, `jordan_totient` → `NO path` 등 5/25 이후 wired 된 모든 fn 이 🟠 고착.
+
+**영향받는 다운스트림 (consumer 측 verify-complete 는 self-test 로 우회 가능하나 atlas-fold 차단)**: demiurge CLOAK 6 PR (#1934 SRR · #1936 Veselago · #1938 verify-cli wire · #1943 Drude · #1949 exp · #1957 jordan_totient) — `.hexa` self-test 는 7/7 PASS (g5 1차 증거 확보)이나, `hexa verify --expr` 🟢 verdict + `atlas register --from-verify` fold 는 release 갱신 전까지 불가.
+
+**fix 방향 (가설)**: ① Stage 0 `hexa_v2` 컴파일 실제 에러 확인 — `gh run view 26590906185 --repo dancinlab/hexa-lang --log-failed | grep -A30 'Stage 0'` (이번 세션 미수행 · log 미확인). ② 아래 `hexat_linux` 대형 emit.hexa SEGFAULT 와 동일 transpiler 인지 교차 확인 (둘 다 self-host transpiler 부트스트랩) → 단일 fix 로 양쪽 unblock 가능성. ③ release.yml concurrency 가 main 빠른 push 시 edge 를 연쇄 취소하는 패턴도 부차 개선점 (성공 빌드조차 publish 전 취소될 수 있음).
+
+**severity**: high (모든 hexa-lang release/edge binary ship 차단 + 5/25 이후 모든 신규 verify_cli fn 의 `--expr` 사용 불가 · 다수 consumer repo 영향). ref: release run `26590906185` (3타겟 Stage-0 fail) · `gh release view edge` (2026-05-25 stuck) · demiurge `reference_hexa_verify_expr_stale_binary.md` · 하단 `hexat_linux` SEGFAULT 엔트리 (동일 transpiler 의심).
+
 ## 2026-05-29 — 🔴 BLOCKER · `build/hexat_linux` 가 대형 emit.hexa transpile 시 SEGFAULT (rc=139) — generated C 산출 불가
 
 > anima BC-ANIMA M5 (트레이너 CPU→GPU step-rate 실측) fire 의 **유일 남은 blocker**. pod-side 빌드에 필요한 generated C 파일을 emit 하려다 self-host transpiler 바이너리가 segfault. anima 측 코드·recipe·진단은 100% 완비, 이 컴파일러 버그만 풀리면 검증된 recipe 로 측정 완주 가능.
