@@ -215,7 +215,7 @@ mission 의 핵심 통찰("source-SHA 동치 ⇒ regen-before-scp 가 GPU 재검
 |------|------|---------|
 | **F1** perf-floor (hxflash/hxlayer/hxvdsp) | 🔴 **TERMINAL** | 측정 285x ML 회귀 → irreducible perf-floor (`F1-perf-floor.txt`) |
 | **F2** vendor/OS-ABI FFI (19 layer-③) | 🔴 **TERMINAL** | audit #1809 — 순수 로직 0, ABI 경계 (`F2-vendor-ffi.txt`) |
-| **F3** runtime-core (640/548 fn · self-emit 20/640 shadow · **12 ACTIVATED** = memset+11 leaf · class-A reloc 경로 PROVEN) | 🟠 **LIVE FRONTIER** | genuinely-portable · Path-A 템플릿 스케일아웃 → reloc-free leaf 12 LIVE-주입 (HEXA_RT_SELFEMIT 가드 · default 0-extern 보존 byte-identical) · 4 SKIP (C 대상 부재) · class-A reloc 인프라 COMPLETE+PROVEN (arena adrp+add link+run rc=0 · 실 blocker=per-primitive PORT) · class-D(~350-450 fn HARD-본체) = struct-repr(NaN-box 아님 · 미션전제 정정) · 3-분할 sub-plan 특정 · 단일-increment no-go(struct-return ABI emit 부재+접근자 매크로 슬롯無+rt#38 선행) · HARD-phase ~620 fn expert serial |
+| **F3** runtime-core (640/548 fn · self-emit 23/640 shadow · **15 ACTIVATED** = memset+11 leaf + 3 HexaVal ctor · class-A reloc + class-D struct-return 경로 PROVEN) | 🟠 **LIVE FRONTIER** | genuinely-portable · Path-A 템플릿 스케일아웃 → reloc-free leaf 12 LIVE-주입 (HEXA_RT_SELFEMIT 가드 · default 0-extern 보존 byte-identical) · 4 SKIP (C 대상 부재) · class-A reloc 인프라 COMPLETE+PROVEN (arena adrp+add link+run rc=0 · 실 blocker=per-primitive PORT) · **class-D FIRST INCREMENT LANDED** = struct-return EMITTER 생김(x0:x1 페어 · `rt_hexa_void/int/bool` 3-instr 12-B) + 분할-1 생성자 3 ACTIVATED (3-layer: interp+byte-eq-as+JIT-exec correct · dual-build 3-mode PASS) → no-go 이유(1) 해소 · 분할-1 잔여 ~10-17 ctor 템플릿 열림 · 잔여 no-go(2)매크로 경로B (3)rt#38 coupling · class-D(~350-450 fn HARD-본체) = struct-repr(NaN-box 아님) · HARD-phase ~620 fn expert serial |
 | **F4** sha256 (exec_argv_sha256.c) | 🟢 **RESOLVED→F3** | runtime.c `#include` 조각 · 포팅 타깃 FIPS-검증 (`F4-sha256.txt`) |
 | **F5** boot-asm (3 `.s`) | 🔴 **TERMINAL** | audit #1810 — vector-table 데이터 섹션, RFC 063/064 gated (`F5-boot-asm.txt`) |
 | **F6** bootstrap seed (hexa_cc.c) | 🔴 **TERMINAL** | irreducible bootstrap FLOOR (B9.8) |
@@ -728,6 +728,33 @@ runtime.c 조각이라 F3 로 fold (mis-split 해소). **F3 만이 진짜 open**
     pure-bitop leaf 로 단순화할지 결정하는 것. 이번 조사는 "~350-450 vague" 를 **3-분할
     (struct-build / field-load / alloc-coupled) + inline-vs-link 판정 + rt#38 선행 의존성** 의
     구조적 sub-plan 으로 특정함. runtime.c 무변경 · 0-extern 중립 · regen/fixpoint 무위험 (doc-only).
+
+    **✅✅✅ class-D FIRST INCREMENT ACTIVATED (2026-05-28 · B9.6 · struct-return EMITTER landed · #PR)**:
+    위 no-go 의 **이유 (1)** (struct-return ABI emit 부재) 가 이 PR 로 **해소됨**. self-emit 카탈로그에
+    16-byte HexaVal 을 `x0:x1` 레지스터-페어로 구성/반환하는 **첫 struct-return emitter** 가 생겼고,
+    분할-1(struct-build, no-alloc)의 가장 단순한 3 생성자가 LIVE-주입됨:
+    - **신규 emitter 3** (`self/codegen/runtime_arm64.hexa`, 각 3-instr 12-B leaf):
+      `rt_hexa_void` (`mov w0,#4 · mov x1,#0 · ret`) · `rt_hexa_int` (`mov x1,x0 · mov x0,#0 · ret`) ·
+      `rt_hexa_bool` (`mov w1,w0 · mov w0,#2 · ret`). x0 = tag(low 8B) · x1 = union value(high 8B) =
+      AAPCS NRRP (≤16B → x8 hidden-ptr 無). 이전 16 leaf 전부 단일-x0 반환 → **x1 을 세팅하는 첫 leaf**.
+    - **ABI 검증 3-layer (JIT-exec 게이트가 load-bearing)**:
+      ① interp self-test — size/align/RET/시그니처-바이트 ALL CHECKS PASS.
+      ② **byte-identical to `as -arch arm64`** — 3 ctor 모두 어셈블러 출력과 바이트 동일 (`/tmp/verify_byteeq.hexa`).
+      ③ **JIT-exec correctness** — 멀티심볼 `.o`(`emit_hexa_val_ctors_o.hexa` → `_hexa_void/_hexa_int/
+      _hexa_bool`) 를 실 C 드라이버에 링크 → 반환된 `{tag,value}` 가 전 입력(INT64_MIN/MAX·bool 0/1 포함)
+      에서 정확히 read-back. **x0:x1 struct-return ABI 가 런타임에서 정확함을 증명** (단순 byte-eq 가 아닌
+      실제 호출-반환 검증). 이것이 "wrong struct-return 가 모든 HexaVal ctor 를 miscompile" 위험의 게이트.
+    - **Path-A 활성화 (dual-build · #1837 패턴)**: `self/runtime_core.c` L1281-1284 의 `hexa_int`/
+      `hexa_bool`/`hexa_void` 를 `#ifdef HEXA_RT_SELFEMIT extern / #else 본체 #endif` 가드로 감쌈
+      (`hexa_float` 는 FP-arg `fmov x1,d0` 경로라 별도 increment 로 잔류). `tool/build_hexa_cli.hexa`
+      가 HEXA_RT_SELFEMIT=1 일 때 멀티심볼 `.o` 를 emit+ahead-link. **3-mode 실측 PASS**: (a) default
+      (가드 off) = C 본체·`.o` 불요·0-extern 보존, (b) 가드 on + `.o` = extern 이 self-emit `.o` 로 resolve·
+      struct 정확, (c) 가드 on **without** `.o` = undefined-symbol link-fail (extern 이 진짜임을 증명).
+    - **남은 no-go 이유**: (2) 접근자 매크로(경로 B 본체) · (3) repr-layout/rt#38 coupling 은 그대로 open.
+      분할-1 의 잔여 생성자(`hexa_char`/`hexa_enum_str`/… ~10-17 fn)는 이제 동일 struct-return 템플릿으로
+      스케일아웃 가능 (인프라 green). 즉 **class-D 의 struct-build 서브트랙은 단일-increment no-go → 템플릿
+      열림** 으로 전환. .c count 불변(87) — 가드 off default 가 SSOT, runtime.c 의 eventual git-rm 을 향한
+      FLOOR 인프라 (per-file drop 아님).
 
 ### F4 — sha256 entangled
 

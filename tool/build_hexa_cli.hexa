@@ -438,6 +438,28 @@ fn _do_build(repo_root: string) {
                 selfemit_objs = selfemit_objs + " " + _shq(obj_path)
                 li = li + 1
             }
+
+            // ── B9.6 class-D — HexaVal struct-return ctor bundle (x0:x1 pair).
+            //
+            // The FIRST struct-return self-emit (vs the single-x0 leaves above):
+            // a MULTI-symbol .o exporting _hexa_void / _hexa_int / _hexa_bool —
+            // the runtime's universal HexaVal constructors. Under -DHEXA_RT_SELFEMIT
+            // runtime_core.c declares these three `extern` (no body), and ld64
+            // binds every HexaVal-producing callsite to the self-emit .o.
+            // Verified byte-identical to `as -arch arm64` AND JIT-exec-correct
+            // (returned {tag,value} reads back correct incl. INT64_MIN/MAX).
+            // Single emitter, single multi-symbol .o, distinct env var.
+            println("[selfemit] B9.6 class-D · HexaVal struct-return ctors → _hexa_void/_hexa_int/_hexa_bool")
+            let ctors_emit_hexa = repo_root + "/test/native_build/emit_hexa_val_ctors_o.hexa"
+            _must_exist(ctors_emit_hexa, "emit_hexa_val_ctors_o.hexa (B9.6 class-D emit driver)")
+            let ctors_emit_drv = repo_root + "/build/selfemit/emit_hexa_val_ctors"
+            let ctors_obj_path = repo_root + "/build/selfemit/hexa_val_ctors.o"
+            let ctors_emit_c = repo_root + "/build/selfemit/emit_hexa_val_ctors.c"
+            _run(_shq(hexat) + " " + _shq(ctors_emit_hexa) + " " + _shq(ctors_emit_c), "transpile HexaVal ctor emit driver")
+            _run(cc + " -O2 -std=c11 -D_GNU_SOURCE -Wno-trigraphs -fbracket-depth=4096 -I " + _shq(inc) + " " + _shq(ctors_emit_c) + " " + _shq(runtime_c) + " -o " + _shq(ctors_emit_drv) + " " + ldflags, "compile HexaVal ctor emit driver")
+            _run("HEXA_VAL_CTORS_O=" + _shq(ctors_obj_path) + " " + _shq(ctors_emit_drv), "emit hexa_val_ctors.o")
+            _must_exist(ctors_obj_path, "hexa_val_ctors.o (self-emit output)")
+            selfemit_objs = selfemit_objs + " " + _shq(ctors_obj_path)
         }
     }
 
