@@ -4853,6 +4853,53 @@ fn rt_socket_reloc_kinds() {
     return k
 }
 
+// ── rt_sendmsg / rt_recvmsg (F3 wave 9 — class-C · 3-arg int+ptr+int _cf) ──
+// {send,recv}msg(int s, ptr msg, int flags) -> long. The EXACT rt_lseek shape:
+// sxtw x0(s) + msg/x1 ptr untouched + sxtw x2(flags), 10 instr 40 B, errno
+// reloc 0x18/0x1c. Differ from rt_lseek (SYS#199) only in SYS# — SENDMSG=28
+// (mov w16 0x52800390), RECVMSG=27 (0x52800370). Verified BYTE-IDENTICAL to
+// clang -O2 (faithful _hxlcl_syscall3_cf oracle).
+fn rt_sendmsg() {
+    let mut c = []
+    c.push(0); c.push(124); c.push(64); c.push(147)    // sxtw x0,w0
+    c.push(66); c.push(124); c.push(64); c.push(147)   // sxtw x2,w2 (x1 untouched)
+    c.push(144); c.push(3); c.push(128); c.push(82)    // mov w16,#28 (SYS_SENDMSG)
+    c.push(1); c.push(16); c.push(0); c.push(212)      // svc #0x80
+    c.push(232); c.push(55); c.push(159); c.push(154)  // cset x8,hs
+    c.push(136); c.push(0); c.push(0); c.push(180)     // cbz x8,Lret
+    c.push(8); c.push(0); c.push(0); c.push(144)       // adrp x8,errno [PAGE21]
+    c.push(0); c.push(1); c.push(0); c.push(185)       // str w0,[x8] [PAGEOFF12]
+    c.push(0); c.push(0); c.push(128); c.push(146)     // mov x0,#-1
+    c.push(192); c.push(3); c.push(95); c.push(214)    // ret
+    return c
+}
+fn rt_recvmsg() {
+    let mut c = []
+    c.push(0); c.push(124); c.push(64); c.push(147)    // sxtw x0,w0
+    c.push(66); c.push(124); c.push(64); c.push(147)   // sxtw x2,w2 (x1 untouched)
+    c.push(112); c.push(3); c.push(128); c.push(82)    // mov w16,#27 (SYS_RECVMSG)
+    c.push(1); c.push(16); c.push(0); c.push(212)      // svc #0x80
+    c.push(232); c.push(55); c.push(159); c.push(154)  // cset x8,hs
+    c.push(136); c.push(0); c.push(0); c.push(180)     // cbz x8,Lret
+    c.push(8); c.push(0); c.push(0); c.push(144)       // adrp x8,errno [PAGE21]
+    c.push(0); c.push(1); c.push(0); c.push(185)       // str w0,[x8] [PAGEOFF12]
+    c.push(0); c.push(0); c.push(128); c.push(146)     // mov x0,#-1
+    c.push(192); c.push(3); c.push(95); c.push(214)    // ret
+    return c
+}
+fn rt_sendmsg_reloc_offs() {
+    let mut o = []
+    o.push(24)
+    o.push(28)
+    return o
+}
+fn rt_sendmsg_reloc_kinds() {
+    let mut k = []
+    k.push(3)
+    k.push(4)
+    return k
+}
+
 // ── rt_write (B9.6-C13 — class-C syscall · int+ptr+ulong _cf + errno) ────
 // write(int fd, const void *buf, unsigned long n) -> long. The exact twin of
 // rt_read — same 9-instr 36 B _cf shape (only fd/x0 sign-extended; buf x1 + n
