@@ -1,0 +1,98 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/flame/mm_extract_lib_test.hexa — byte-eq oracle (#2031 PR2)
+//
+// Falsifier (F-MMX-INPLACE-BYTEEQ):
+//   `mm_extract(P, off, rows, cols)` (alloc 변형) 의 결과 farr 와
+//   `mm_extract_inplace(dst, P, off, rows, cols)` (0-alloc 변형) 후의 dst
+//   farr 가 임의 toy (rows*cols) 시점 byte-identical (ULP=0) 이어야 한다.
+//
+//   근거 — 두 변형 모두 동일 원시연산 `farr_copy_slice_gpu` 를 호출.
+//   memcpy semantics + identical FP64 source bytes → 어떤 부동소수 산술도
+//   끼지 않아 ULP=0 이 구조적으로 보장된다 (가정 아닌 사실).
+//
+// Toy config:
+//   P (packed) 길이 256, deterministic LCG fill (seed=42, scale=1.0).
+//   3종 sub-block 추출 — (off=0, rows=4, cols=8) · (off=64, rows=8, cols=4)
+//   · (off=128, rows=2, cols=16) — 각 케이스가 row*col 곱셈, off 양수,
+//   다른 layout 을 커버. 셋 모두 max|Δ| == 0.0 이면 PASS.
+//
+// dst hoist 패턴 검증:
+//   동일 dst 를 3번 재활용 (이전 추출의 [0..prev_n] 덮어쓰기). 매 번
+//   alloc 변형과 cell-by-cell 비교.
+// ════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/mm_extract_lib"
+
+fn _mmx_abs(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+// max|a[i] - b[i]| over i in [0, n).
+fn _mmx_max_dev(a: int, b: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n {
+        let d = _mmx_abs(t_get(a, i) - t_get(b, i))
+        if d > m { m = d }
+        i = i + 1
+    }
+    return m
+}
+
+// Run one (off, rows, cols) probe. Return max|Δ|.
+fn _mmx_probe(P: int, off: int, rows: int, cols: int, dst: int) -> float {
+    let n = rows * cols
+    let out_alloc = mm_extract(P, off, rows, cols)
+    mm_extract_inplace(dst, P, off, rows, cols)
+    let dev = _mmx_max_dev(out_alloc, dst, n)
+    let _ = t_free(out_alloc)
+    return dev
+}
+
+// ── F-MMX-INPLACE-BYTEEQ ───────────────────────────────────────────────
+let P_len = 256
+let P = t_zeros(P_len)
+t_fill_lcg(P, P_len, 42, 1.0)
+
+// dst hoist — capacity = max(rows*cols) across all probes = 32.
+let dst = t_zeros(32)
+
+let dev1 = _mmx_probe(P, 0,   4, 8,  dst)
+let dev2 = _mmx_probe(P, 64,  8, 4,  dst)
+let dev3 = _mmx_probe(P, 128, 2, 16, dst)
+
+let mut max_dev = dev1
+if dev2 > max_dev { max_dev = dev2 }
+if dev3 > max_dev { max_dev = dev3 }
+
+let _ = t_free(P)
+let _ = t_free(dst)
+
+let mut pass = 0
+let total = 1
+
+if max_dev == 0.0 {
+    print("PASS  F-MMX-INPLACE-BYTEEQ      mm_extract ≡ mm_extract_inplace · 3 probes (4×8 · 8×4 · 2×16) max|Δ| = ")
+    print(max_dev)
+    println(" (ULP=0; farr_copy_slice_gpu memcpy semantics)")
+    pass = pass + 1
+} else {
+    print("FAIL  F-MMX-INPLACE-BYTEEQ      max|Δ| = ")
+    print(max_dev)
+    println(" (expected 0.0; alloc 변형과 in-place 변형의 결과가 다름)")
+}
+
+println("")
+print("=== mm_extract_lib byte-eq: ")
+print(pass)
+print("/")
+print(total)
+println(" PASS ===")
+if pass == total {
+    println("PASS — mm_extract_inplace 의 byte-equivalence 가 toy (3 probes) 시점 ULP=0 으로 확인됨. anima trainer 가 dst 를 hoist 해 in-place 변형으로 옮겨도 산술 trajectory 가 변하지 않음을 구조적으로 보증.")
+} else {
+    println("FAIL — byte-eq 보장 실패; mm_extract_inplace 채택 보류")
+}
