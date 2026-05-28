@@ -81,7 +81,16 @@ static int hxlcl_errno = 0;
 static long hxlcl_read(int fd, void *buf, unsigned long n);
 static long hxlcl_write(int fd, const void *buf, unsigned long n);
 static int  hxlcl_close(int fd);
+// B9.6-C1 (F3 Path A) — under HEXA_RT_SELFEMIT hxlcl_getpid is `extern`
+// (resolved by emit_hxlcl_getpid_o.hexa's .o); the forward decl must match
+// that external linkage, else the `static` here wins and masks the self-emit
+// symbol (-Wundefined-internal). Default build keeps the internal-linkage
+// forward decl that pairs with the `static` svc-trap body below.
+#ifdef HEXA_RT_SELFEMIT
+extern int  hxlcl_getpid(void);
+#else
 static int  hxlcl_getpid(void);
+#endif
 static int  hxlcl_getuid(void);
 // RUNTIME.md Tier-A.4 — frame walker stubs (diagnostic-only, HEXA_OOB_TRACE
 // path in runtime_core.c). A self-host compiler needs no real unwinder; the
@@ -1244,7 +1253,28 @@ static long __attribute__((noinline)) hxlcl_read(int fd, void *buf, unsigned lon
 static int __attribute__((noinline)) hxlcl_mkdir(const char *path, int mode) { return (int)_hxlcl_syscall2_cf(HXLCL_SYS_MKDIR, (long)path, (long)mode); }
 static long __attribute__((noinline)) hxlcl_write(int fd, const void *buf, unsigned long n) { return _hxlcl_syscall3_cf(HXLCL_SYS_WRITE, (long)fd, (long)buf, (long)n); }
 static int __attribute__((noinline)) hxlcl_close(int fd) { return (int)_hxlcl_syscall1_cf(HXLCL_SYS_CLOSE, (long)fd); }
+// F3 ACTIVATION RUNBOOK · Path A — B9.6-C1 class-C syscall-ABI self-emit slot.
+//
+// hxlcl_getpid is the FIRST class-C (raw `svc #0x80` syscall wrapper) primitive
+// activated. SYS_GETPID(20) takes no args and cannot fail (no errno/carry-flag
+// path), so the plain trap below is the simplest svc wrapper in the runtime.
+//
+// DEFAULT build (HEXA_RT_SELFEMIT undefined): the file-local `static` svc-trap
+// body below is used — UNCHANGED behavior, 0-libc-extern invariant preserved
+// (this was never a libc symbol; the BSD getpid is issued via inline svc asm).
+//
+// SELF-EMIT build (HEXA_RT_SELFEMIT defined): becomes an `extern` declaration
+// (no body); the strong external `_hxlcl_getpid` symbol is provided by the
+// hexa-emitted Mach-O .o (test/native_build/emit_hxlcl_getpid_o.hexa →
+// rt_getpid's 16-byte `mov w16,#20 / mov x0,#0 / svc #0x80 / ret`), ahead-
+// linked. ld64 binds every callsite to the self-emit bytes — verified
+// byte-identical to `as -arch arm64` AND JIT-exec-correct (the returned pid
+// reads back == libc getpid(); see the emit driver's §HONESTY).
+#ifdef HEXA_RT_SELFEMIT
+extern int hxlcl_getpid(void);
+#else
 static int __attribute__((noinline)) hxlcl_getpid(void) { return (int)_hxlcl_syscall1(HXLCL_SYS_GETPID, 0); }
+#endif
 // RUNTIME Tier-A.6 — ___chkstk_darwin native stack-probe.
 // 8 large-frame functions (net.c hexa_net_read_n has a 64 KB
 // `char stackbuf[65536]`, plus hexa_exec / exec_capture / sha256_file /

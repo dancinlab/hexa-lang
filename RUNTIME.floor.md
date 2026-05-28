@@ -215,7 +215,7 @@ mission 의 핵심 통찰("source-SHA 동치 ⇒ regen-before-scp 가 GPU 재검
 |------|------|---------|
 | **F1** perf-floor (hxflash/hxlayer/hxvdsp) | 🔴 **TERMINAL** | 측정 285x ML 회귀 → irreducible perf-floor (`F1-perf-floor.txt`) |
 | **F2** vendor/OS-ABI FFI (19 layer-③) | 🔴 **TERMINAL** | audit #1809 — 순수 로직 0, ABI 경계 (`F2-vendor-ffi.txt`) |
-| **F3** runtime-core (640/548 fn · self-emit 26/640 shadow · **18 ACTIVATED** = memset+11 leaf + 6 HexaVal ctor · class-A reloc + class-D struct-return 경로 PROVEN) | 🟠 **LIVE FRONTIER** | genuinely-portable · Path-A 템플릿 스케일아웃 → reloc-free leaf 12 LIVE-주입 (HEXA_RT_SELFEMIT 가드 · default 0-extern 보존 byte-identical) · 4 SKIP (C 대상 부재) · class-A reloc 인프라 COMPLETE+PROVEN (arena adrp+add link+run rc=0 · 실 blocker=per-primitive PORT) · **class-D struct-build 서브트랙 SCALE-OUT** = struct-return EMITTER (x0:x1 페어) + 분할-1 생성자 **6 ACTIVATED** (#1858 `rt_hexa_void/int/bool` + B9.6-D2 `rt_hexa_float/enum_str/enum_str_v` · 각 3-instr 12-B · float = FIRST FP-arg `fmov x1,d0` 브리지 · enum_str = ptr-store no-malloc) — 3-layer (interp+byte-eq-as+JIT-exec correct · float NaN/Inf/±0/DBL_MAX·MIN + NULL/literal ptr) · dual-build 3-mode PASS → no-go 이유(1) 해소 · 분할-1 잔여 ~6-11 ctor 동일 템플릿 열림 · 잔여 no-go(2)매크로 경로B (3)rt#38 coupling · class-D(~350-450 fn HARD-본체) = struct-repr(NaN-box 아님) · HARD-phase ~620 fn expert serial |
+| **F3** runtime-core (640/548 fn · self-emit 27/640 shadow · **19 ACTIVATED** = memset+11 leaf + 6 HexaVal ctor + 1 syscall · class-A reloc + class-D struct-return + class-C syscall-ABI 경로 PROVEN) | 🟠 **LIVE FRONTIER** | genuinely-portable · Path-A 템플릿 스케일아웃 → reloc-free leaf 12 LIVE-주입 (HEXA_RT_SELFEMIT 가드 · default 0-extern 보존 byte-identical) · 4 SKIP (C 대상 부재) · class-A reloc 인프라 COMPLETE+PROVEN (arena adrp+add link+run rc=0 · 실 blocker=per-primitive PORT) · **class-D struct-build 서브트랙 SCALE-OUT** = struct-return EMITTER (x0:x1 페어) + 분할-1 생성자 **6 ACTIVATED** (#1858 `rt_hexa_void/int/bool` + B9.6-D2 `rt_hexa_float/enum_str/enum_str_v` · 각 3-instr 12-B · float = FIRST FP-arg `fmov x1,d0` 브리지 · enum_str = ptr-store no-malloc) — 3-layer (interp+byte-eq-as+JIT-exec correct · float NaN/Inf/±0/DBL_MAX·MIN + NULL/literal ptr) · dual-build 3-mode PASS → no-go 이유(1) 해소 · **class-C syscall-ABI 서브트랙 OPENED** = svc-emit EMITTER (raw `svc #0x80`) + **`rt_getpid` 1 ACTIVATED** (B9.6-C1 · 4-instr 16-B `mov w16,#20 / mov x0,#0 / svc #0x80 / ret` · 무인자·무errno base case) — 3-layer (self-test+byte-eq-as+JIT-exec=실 pid==libc getpid · live disasm=self-emit svc 시퀀스) · dual-build 3-mode PASS · 잔여 ~190 layer-② `hxlcl_*` svc-wrapper(#1812)는 multi-arg + carry-flag(`_cf`) errno-side-effect 패턴 = 다음 svc-emit 증분 · 분할-1 잔여 ~6-11 ctor 동일 템플릿 열림 · 잔여 no-go(2)매크로 경로B (3)rt#38 coupling · class-D(~350-450 fn HARD-본체) = struct-repr(NaN-box 아님) · HARD-phase ~620 fn expert serial |
 | **F4** sha256 (exec_argv_sha256.c) | 🟢 **RESOLVED→F3** | runtime.c `#include` 조각 · 포팅 타깃 FIPS-검증 (`F4-sha256.txt`) |
 | **F5** boot-asm (3 `.s`) | 🔴 **TERMINAL** | audit #1810 — vector-table 데이터 섹션, RFC 063/064 gated (`F5-boot-asm.txt`) |
 | **F6** bootstrap seed (hexa_cc.c) | 🔴 **TERMINAL** | irreducible bootstrap FLOOR (B9.8) |
@@ -783,6 +783,50 @@ runtime.c 조각이라 F3 로 fold (mis-split 해소). **F3 만이 진짜 open**
       (분할-3 alloc-coupled · class-B/E) → struct-build no-alloc named-external ctor 은 사실상 소진.
       class-D 의 다음 frontier = (분할-2) 접근자 매크로 경로 B 또는 (분할-3) alloc-coupled · 또는
       rt#38 NaN-box 선평가. .c count 불변(87).
+
+    **✅ B9.6-C1 — class-C syscall-ABI 서브트랙 OPENED · FIRST svc-emit (2026-05-28 · #PR)**:
+    PHASE-BOUNDARY MAP 의 **(C) syscall-bound I/O (~40-60 fn)** 클래스를 연 첫 증분.
+    이전 활성화(class-A leaf · class-D struct-return)는 전부 레지스터 계산 / 메모리 루프였고,
+    이것은 self-emit 카탈로그의 **첫 raw `svc #0x80` BSD syscall 방출** — class-C 의 정의 그 자체.
+    - **타깃 = 런타임에서 가장 단순한 `hxlcl_*` syscall 래퍼**: `self/runtime.c` L1247
+      `hxlcl_getpid(void)` = `_hxlcl_syscall1(HXLCL_SYS_GETPID(20), 0)`. 무인자 · 무errno
+      (getpid 는 Darwin 에서 실패 불가 → carry-flag/`_cf` 경로 없음 · getuid 와 동형) →
+      ≤1-arg scalar-return 의 base case.
+    - **신규 emitter** (`self/codegen/runtime_arm64.hexa::rt_getpid`, 4-instr 16-B):
+      `mov w16,#20` (0x52800290 · SYS_GETPID→x16) · `mov x0,#0` (0xD2800000 · no arg) ·
+      `svc #0x80` (0xD4001001 · BSD trap) · `ret` (0xD65F03C0 · x0=pid 반환). clang -O2 가
+      작은 immediate 에 32-bit `mov w16` MOVZ 를 택함 → rt_getpid 가 그것을 정확히 인코딩.
+      rt_exit(무반환·epilogue 없음)와 달리 getpid 는 **값을 반환** → JIT-exec 로 결과 검증 가능
+      = 첫 class-C 후보로 적합한 이유.
+    - **ABI 검증 3-layer (JIT-exec 게이트 load-bearing)**: ① self-test — `rt_getpid : 16 bytes`
+      + ALL CHECKS PASS (len==16 · svc@off8 · `mov w16,#20`@off0 · ret@off12 단언). ②
+      **byte-identical to `as -arch arm64`** — emit `.o` 의 `__text` = `52800290 d2800000
+      d4001001 d65f03c0`, 어셈블러 출력과 바이트 동일 · nm = strong `T _hxlcl_getpid`. ③
+      **JIT-exec correctness** — `.o` 를 C 드라이버에 링크 → `hxlcl_getpid()` = 실 pid ==
+      libc `getpid()` (43329 동일) · 런타임 래퍼 경유(`hexa_os_getpid→hxlcl_getpid`) e2e PASS
+      (4970 동일) · **live 바이너리 disasm = self-emit svc 시퀀스** (ld64 가 callsite 를
+      C svc-trap 이 아니라 hexa-emit 바이트에 바인딩함 확인). **svc-trap syscall ABI 가
+      런타임에서 정확함 증명** (byte-eq 만이 아님).
+    - **Path-A 활성화 (dual-build 3-mode PASS · #1836 패턴)**: `runtime.c` 의 L84 forward
+      decl + L1247 body **둘 다** `#ifdef HEXA_RT_SELFEMIT extern / #else static #endif` 가드.
+      ⚠ **forward decl 도 반드시 flip** — `static` 으로 두면 내부-링키지가 이겨 self-emit
+      심볼을 마스킹(`-Wundefined-internal`) · 실측 확인. emit 드라이버
+      (`emit_hxlcl_getpid_o.hexa`) = 단일-심볼 leaf 템플릿 복제(`_hxlcl_getpid` 13-B,
+      `_hxlcl_memset` 와 동일 strtab 길이). `build_hexa_cli.hexa` 의 leaf emit 루프에
+      `getpid` 추가(동일 single-symbol 템플릿 · 별도 env `HEXA_HXLCL_GETPID_O`). **3-mode 실측**:
+      (a) default = `_hxlcl_getpid` local `t` (svc-trap 본체) · **runtime TU 심볼테이블 +
+      undefined-extern set(49) 둘 다 origin/main 과 IDENTICAL** = 0-extern 불변 보존,
+      (b) 가드 on + full bundle(.o) = link OK + e2e PASS + live disasm=self-emit,
+      (c) 가드 on **without** `.o` = `Undefined: _hxlcl_getpid` link-fail (extern 진짜임).
+      `.verdicts/runtime-floor-closure/B9C6-C1-getpid-syscall-byte-diff.txt`.
+    - **fixpoint 무위험**: rt_getpid 는 shadow(`runtime_arm64.hexa`=main.hexa 미-use) · emit
+      드라이버도 미-use → `hexa_cc.c` regen 무관. runtime.c diff = 순수 가드 추가(deletion 0).
+    - **잔여 (class-C svc-emit 패턴 · ~190 layer-② `hxlcl_*`)**: getpid 는 무인자·무errno base.
+      나머지는 (i) **multi-arg** (read/write/close = x0..x2 인자 적재 후 svc) + (ii)
+      **carry-flag errno** (`_cf` 변종 = `svc · cset cs · cf 시 errno=x0;return -1`) +
+      (iii) pair-return(pipe = x0:x1) · struct-arg marshalling(stat/wait4)이 fn별 상이.
+      svc-emit + Path-A 템플릿은 입증됨 · multi-arg + errno-store 시퀀스 방출이 다음 증분.
+      .c count 불변(87 · FLOOR 인프라).
 
 ### F4 — sha256 entangled
 

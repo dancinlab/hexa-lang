@@ -1,0 +1,81 @@
+B9.6-C1 — class-C syscall ABI FIRST self-emit · hxlcl_getpid (raw svc #0x80)
+verdict: ACTIVATED (🟢 numerical) — first class-C primitive live-injectable via Path A
+host: mini-class arm64 macOS (Darwin 25.5.0) · clang -O2 / as -arch arm64 / ld64
+date: 2026-05-28
+
+────────────────────────────────────────────────────────────────────────────
+TARGET — the simplest hxlcl_* syscall wrapper in self/runtime.c
+────────────────────────────────────────────────────────────────────────────
+self/runtime.c L1247 (Darwin arm64 raw-trap block):
+    static int hxlcl_getpid(void) { return (int)_hxlcl_syscall1(HXLCL_SYS_GETPID, 0); }
+SYS_GETPID = 20. Zero args. CANNOT fail (no errno / carry-flag path — like getuid),
+so the plain (non-_cf) trap is exact. The simplest single-svc, ≤1-arg, scalar-
+return wrapper in the runtime — the right FIRST class-C candidate.
+
+────────────────────────────────────────────────────────────────────────────
+SELF-EMIT (self/codegen/runtime_arm64.hexa :: rt_getpid)
+────────────────────────────────────────────────────────────────────────────
+4 instructions, 16 bytes:
+    mov w16, #20   0x52800290   (SYS_GETPID into x16)
+    mov x0,  #0    0xD2800000   (no syscall arg)
+    svc #0x80      0xD4001001   (BSD syscall trap)
+    ret            0xD65F03C0   (x0 = pid returned)
+clang -O2 picks the 32-bit `mov w16` MOVZ form for the small immediate; rt_getpid
+encodes exactly that.
+
+────────────────────────────────────────────────────────────────────────────
+3-LAYER VERIFY (JIT-exec is the load-bearing gate)
+────────────────────────────────────────────────────────────────────────────
+LAYER 1 — interp/compiled self-test (size/svc/prefix/RET assertions):
+    HEXA_VAL_ARENA=0 hexa run self/codegen/runtime_arm64.hexa
+    -> "rt_getpid : 16 bytes" + "ALL CHECKS PASS"
+       (asserts len==16, svc#0x80 @off 8, mov w16,#20 @off 0, ret @off 12)
+
+LAYER 2 — byte-identical to `as -arch arm64`:
+    as -arch arm64 (mov w16,#20 / mov x0,#0 / svc #0x80 / ret) =
+        52800290 d2800000 d4001001 d65f03c0
+    emit_hxlcl_getpid_o.hexa -> hxlcl_getpid.o; otool -s __TEXT __text =
+        52800290 d2800000 d4001001 d65f03c0
+    BYTE-IDENTICAL. nm: `0000000000000000 T _hxlcl_getpid` (strong external).
+
+LAYER 3 — JIT-exec correctness (LOAD-BEARING):
+    clang poc_getpid_caller.c hxlcl_getpid.o -o run; ./run ->
+        self-emit hxlcl_getpid() = 43329 ; libc getpid() = 43329
+        JIT-EXEC PASS (the self-emit svc-trap returns the REAL pid == libc getpid)
+    End-to-end through the runtime wrapper (hexa_os_getpid -> hxlcl_getpid):
+        hexa_os_getpid()->hxlcl_getpid() = 4970 ; libc getpid() = 4970 -> PASS
+    Live binary disasm confirms ld64 bound the callsite to the SELF-EMIT bytes:
+        _hxlcl_getpid: mov w16,#0x14 / mov x0,#0x0 / svc #0x80 / ret
+
+────────────────────────────────────────────────────────────────────────────
+PATH-A ACTIVATION · dual-build 3-mode
+────────────────────────────────────────────────────────────────────────────
+Guard: self/runtime.c — L84 forward decl + L1247 body both #ifdef HEXA_RT_SELFEMIT
+       (forward decl MUST also flip to extern, else the `static` wins and masks
+        the self-emit symbol — -Wundefined-internal; verified).
+Build: tool/build_hexa_cli.hexa — `getpid` appended to the single-symbol leaf
+       emit loop (same template; distinct env var HEXA_HXLCL_GETPID_O).
+
+(a) DEFAULT (guard off):
+      runtime TU symbol table BYTE-IDENTICAL to origin/main (diff empty).
+      undefined-extern set = 49, IDENTICAL to origin/main (0-extern invariant kept).
+      _hxlcl_getpid = local `t` (svc-trap body intact). links + runs (pid correct).
+(b) GUARD-ON + full self-emit bundle (12 leaves + 6 ctors + getpid):
+      links (all externs resolved) · runs correct (END-TO-END PASS pid=4970) ·
+      live disasm of _hxlcl_getpid = the self-emit svc sequence (not the C trap).
+(c) GUARD-ON WITHOUT the .o:
+      link-FAILS: Undefined symbols "_hxlcl_getpid" (extern is genuine).
+
+────────────────────────────────────────────────────────────────────────────
+SCOPE / HONESTY
+────────────────────────────────────────────────────────────────────────────
+- .c count UNCHANGED (87) — FLOOR infra; runtime.c keeps the C body under the
+  default guard. This opens the class-C emitter; deletion stays sign-gated.
+- runtime_arm64.hexa = shadow (NOT use'd by compiler/main.hexa) -> no regen /
+  fixpoint risk. Emit driver also un-use'd -> hexa_cc.c regen unaffected.
+- runtime.c diff = pure additive guard (0 deletions) -> no wipe_guard trigger.
+- class-C subtrack now OPEN: the ~190-fn layer-② hxlcl_* svc-wrapper family
+  (#1812 audit) can scale out on this svc-emit + Path-A template. getpid is the
+  no-arg / no-errno base case; multi-arg + carry-flag (_cf) wrappers are the
+  next svc-emit increments (errno-as-side-effect needs the `cset cs` + errno
+  store sequence — documented as the class-C remaining pattern).
