@@ -1,0 +1,5 @@
+layer_norm max_abs_err = 0.000e+00 PASS
+rope_pair(1,0,0) = [1, 0] PASS
+rope_pair(2,3,1.57) abs_err_sum = 0.000e+00 PASS
+
+ALL-PASS L723 runtime fns (layer_norm + rope_pair)

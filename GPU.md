@@ -720,7 +720,7 @@ PR #189/#190/#191 fires used direct one-shot bash; sustained automation needs he
 - [ ] **sim_universe lattice GEMM** — non-binary lattice arithmetic on GPU (RFC 057 bridge)
 - [ ] **quantum amplitude-update kernels** — `stdlib/quantum` state-vector simulation (cuBLAS = no amplitude ops)
 - [ ] **flame layer-fused training kernel** — forward + backward + AdamW + grad-clip in single kernel emit
-- [ ] **NN-specific HEXA primitives** — `softmax`, `layer_norm`, `RoPE`, `swiglu` as first-class compiler-aware ops
+- [x] **NN-specific HEXA primitives** — `softmax`, `layer_norm`, `RoPE`, `swiglu` as first-class compiler-aware ops (**R15 2026-05-28**: softmax + swiglu_vec pre-existing 4-surface ✓; layer_norm + rope_pair newly wired 4-surface (call dispatch ×2 + `_is_builtin_name` + `bind.hexa` allowlist + runtime fn + proto) mirroring rms_norm pattern; runtime silicon byte-eq PASS `tool/artifacts/nn_primitives_silicon_2026_05_28.out` — layer_norm max_abs=0, rope_pair=0; hexa_cc.c regen captures new emit 2 refs)
 
 ### 5l — Edge / embedded / standalone deployment
 

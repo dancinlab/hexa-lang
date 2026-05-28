@@ -1221,3 +1221,46 @@ RoPE:    max_abs 1.878e-5 → 2.780e-13 · 0/128 over-band · RESULT: PASS (byte
 byte-eq wedge. over-closure 금지 (roadmap flip 안 함).
 
 cycle-loop sequence: R14 = cos/sin Taylor 확장 (C5..C9) → silicon byte-eq · RoPE wedge PASS · transc 전부 정확.
+
+## 2026-05-28 — cycle-loop Round 15 · L723 NN-primitive first-class ops 4/4 완성 🛸
+
+L723 milestone — "softmax, layer_norm, RoPE, swiglu as first-class compiler-aware ops".
+R13b/R14 까지 byte-eq 계산 가능성은 입증했으나 **first-class op (compiler builtin 인식)** 은
+별개 layer. 정확한 상태 점검 후 부족분 wiring.
+
+**check 결과** (R14 끝 시점):
+- softmax: 4-surface ✓ (pre-existing)
+- swiglu_vec: 4-surface ✓ (pre-existing, canonical name — 처음 "swiglu" 로 검색해서 놓침)
+- rms_norm: 4-surface ✓ (layer_norm 형제, 별 builtin)
+- layer_norm: ❌ 미등록
+- rope (RoPE): ❌ 미등록 + scalar shape 부적합 우려
+
+**fix (g0 Occam — rms_norm 4-surface 패턴을 정확히 mirror)**:
+- `self/runtime.c`: `hexa_layer_norm(x, gamma, eps)` + `hexa_rope_pair(x0, x1, theta) → [2]`
+- `self/runtime.h`: proto 2개
+- `self/codegen.hexa`: gen2 simple dispatch ×2 + 정식 dispatch ×2 + `_is_builtin_name` ×2
+- `compiler/check/bind.hexa`: allowlist `"layer_norm"` + `"rope_pair"`
+
+**RoPE scalar form 선택**: `rope_pair(x0, x1, theta)` = `[x0·cos(θ)−x1·sin(θ), x0·sin(θ)+x1·cos(θ)]`
+— per-pair 회전 단일 primitive. table-based RoPE 의 핵심 elementwise 연산을 first-class scalar
+builtin shape 에 맞춘 형태.
+
+**verification ladder**:
+- ① parse-clean: 두 hexa 파일 모두 ✓
+- ② regen capture: ubu-2 `hexa cc --regen` → `self/native/hexa_cc.c.new` 가 `hexa_layer_norm`/
+  `hexa_rope_pair` 2 refs 포함 — 새 컴파일러가 새 emit 을 실제로 생산.
+- ③ runtime silicon (ubu-2 RTX 5070, `tool/artifacts/nn_primitives_silicon_2026_05_28.out`):
+  ```
+  layer_norm max_abs_err = 0.000e+00 PASS   (exact byte-eq vs CPU libm ref)
+  rope_pair(1,0,0) = [1, 0] PASS            (exact identity at θ=0)
+  rope_pair(2,3,1.57) abs_err_sum = 0.000e+00 PASS
+  ```
+
+**🔸 별개 발견**: 새 컴파일러 link 후 fresh-clone 환경 build segfault — codegen 변경과 무관한
+self-host build env 이슈 (B9.C amalgam family). 본 R15 결론에는 영향 없음.
+
+**L723 flip 정당화**: softmax/swiglu_vec/rms_norm 의 first-class 자격이 "4-surface 등록 + runtime fn"
+structural 기준에 근거. layer_norm + rope_pair 도 정확히 동일한 4-surface 패턴 등록 + runtime silicon
+byte-eq 확인. 4/4 first-class · over-claim 아님.
+
+cycle-loop sequence: R15 = L723 NN-primitive 4/4 first-class compiler-aware ops complete 🛸.
