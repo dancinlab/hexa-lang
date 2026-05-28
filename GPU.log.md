@@ -1150,3 +1150,46 @@ all routes: GCP 10.142 · tailscale 100.x · LAN). RoPE NN-primitive milestone (
 codegen-emit half of the RoPE gap, GPU-free.
 
 cycle-loop sequence: R13 = R12 PTX-verified (closure ② of ④, GPU-free) · silicon ③④ blocked on ubu-2.
+
+## 2026-05-28 — cycle-loop Round 13b · ubu-2 복구 → to_f64 silicon 100% CLOSED + cos/sin 신규 발견
+
+ubu-2 재부팅 완료 → silicon ③④ 잠금 해제. R12-fixed nvptx_emit 가 emit 한 verified PTX
+(`rope_f64_ptxverified`) 를 ubu-2 RTX 5070 에서 `cuModuleLoadDataEx` (ptxas JIT = ③) + 실행 (④).
+
+**RoPE silicon fire** (`tool/artifacts/rope_silicon_2026_05_28.out`):
+```
+ptxas JIT: OK                                   ← closure ③ ptxas-clean ✓
+RoPE byte-eq (D=128, 64 pairs, pos=7 base=10000)
+  max_abs_err = 1.878e-05  @i=20            ← R11 의 2.659 garbage 대비 5 자릿수 개선
+  RESULT: FAIL (byte-eq band 1e-12)
+```
+
+R11 garbage(2.659) → 1.878e-5 = to_f64 변환이 silicon 에서 **맞게 작동**. 단 1e-12 byte-eq 미달
+→ 잔여 오차 원인을 분리 진단.
+
+**transcendental 분리 진단** (`probe_transc_f64.hexa`, base=10000 expo=0.15625 theta=1.66):
+```
+  pow: abs_err = 9.770e-15   ← sub-ULP 정확 (to_f64(tid)/to_f64(D) 가 정확히 먹힘을 증명)
+  cos: abs_err = 1.381e-05   ← 🔴 RoPE 오차의 주범
+  sin: abs_err = 1.865e-06   ← 🟠 부정확
+```
+RoPE max_abs(1.878e-5) = cos 오차(1.381e-5) 와 같은 크기 → **잔여 blocker = GPU cos/sin lowering 정밀도**,
+to_f64 아님·pow 아님.
+
+**to_f64 closure ladder — 100% CLOSED**:
+- ① by-construction (unit-test Case 28c) ✓
+- ② PTX-verified (driver emits cvt.rn.f64.s64) ✓
+- ③ ptxas-clean (PTX → cubin JIT OK) ✓ (R13b)
+- ④ silicon — to_f64 변환 정확 확정 ✓: pow(to_f64(tid)/to_f64(D)) = **9.770e-15 sub-ULP** (R13b)
+
+**finding**:
+- ✅ R11/R12 to_f64 gap **100% silicon-CLOSED** — 4-ladder 전부 통과. R11 RoPE 실패(unsupported-call → garbage)
+  의 근본 원인이 silicon 에서 결정적으로 해소됨 (pow=9.77e-15 가 to_f64 변환 정확성의 직접 증거).
+- 🔬 **신규 발견 (별개)**: GPU `cos`/`sin` transcendental lowering 이 ~1e-5 부정확 (libm 대비). `sqrt`(R5
+  sub-ULP)·`rsqrt`(R4 max_abs=0)·`sigmoid`(R6 2.5e-14)·`pow`(R13b 9.77e-15) 는 정확하나 cos/sin 만 1e-5.
+  → INBOX 신규 entry (nvptx cos/sin 다항 range-reduction 정밀도).
+
+**RoPE NN-primitive milestone (L709) 는 `[ ]` 유지** — full-kernel byte-eq 는 cos/sin 정밀도로 아직 FAIL.
+단 그 blocker 가 이제 to_f64(closed) 가 아니라 cos/sin(신규 isolated) 으로 정확히 이동. over-closure 금지.
+
+cycle-loop sequence: R13b = to_f64 silicon 100% closed (ladder ①②③④ all ✓) + cos/sin 정밀도 신규 발견 isolated.
