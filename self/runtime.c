@@ -2722,6 +2722,14 @@ static long __attribute__((noinline)) hxlcl_send(int s, const void *b, unsigned 
     return (long)send(s, b, (size_t)n, f);
 #endif
 }
+// F3 ACTIVATION · Path A — recvmsg/sendmsg class-C svc-wrapper self-emit slots.
+// 3-arg int+ptr+int _cf (s, msg, flags) = the EXACT rt_lseek shape: sxtw x0(s)
+// + msg/x1 ptr untouched + sxtw x2(flags), differing only in SYS#
+// (LSEEK=199 → RECVMSG=27 / SENDMSG=28). SELF-EMIT → extern, resolved by
+// emit_hxlcl_{recvmsg,sendmsg}_o.hexa (byte-eq to clang -O2). errno adrp/str.
+#ifdef HEXA_RT_SELFEMIT
+extern long hxlcl_recvmsg(int s, void *m, int f);
+#else
 static long __attribute__((noinline)) hxlcl_recvmsg(int s, void *m, int f) {
 #if (defined(__arm64__) || defined(__aarch64__)) && defined(__APPLE__)
     return _hxlcl_syscall3_cf(HXLCL_SYS_RECVMSG, (long)s, (long)m, (long)f);
@@ -2729,6 +2737,10 @@ static long __attribute__((noinline)) hxlcl_recvmsg(int s, void *m, int f) {
     return (long)recvmsg(s, (struct msghdr *)m, f);
 #endif
 }
+#endif
+#ifdef HEXA_RT_SELFEMIT
+extern long hxlcl_sendmsg(int s, const void *m, int f);
+#else
 static long __attribute__((noinline)) hxlcl_sendmsg(int s, const void *m, int f) {
 #if (defined(__arm64__) || defined(__aarch64__)) && defined(__APPLE__)
     return _hxlcl_syscall3_cf(HXLCL_SYS_SENDMSG, (long)s, (long)m, (long)f);
@@ -2736,6 +2748,7 @@ static long __attribute__((noinline)) hxlcl_sendmsg(int s, const void *m, int f)
     return (long)sendmsg(s, (const struct msghdr *)m, f);
 #endif
 }
+#endif
 // RUNTIME net/exec ① (cycle 77): hexa-native inet_pton — drops the libc
 // _inet_pton extern. AF_INET only (the sole call site, net.c, passes
 // AF_INET); AF_INET6 returns -1 (= unsupported af) per the libc contract.
