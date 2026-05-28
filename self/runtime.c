@@ -14125,7 +14125,28 @@ HexaVal hexa_forge_dispatch_ffn_fp64_via_bf16(HexaVal x_v, HexaVal w1_v,
  * disk). append_atomic/stat/rotate remain failure-default stubs; mkdir_p
  * now carries the real fork-free recursive POSIX mkdir(2) impl that the
  * deleted body and self/stdlib/fs.hexa tests 26-28 + the codegen comment
- * (self/codegen.hexa fs_mkdir_p arm) specify. */
+ * (self/codegen.hexa fs_mkdir_p arm) specify.
+ *
+ * F3 class-D new-axes batch (this PR) extends the 2-way gate to 3-way:
+ *   - HEXA_RT_SELFEMIT       → extern (self-emit .o defines _rt_fs_*)
+ *   - !HEXA_HAS_HEXA_RT_STDLIB → standalone C body (origin/main shape)
+ *   - else                   → extern (aprime_cc hexa transpile defines)
+ * Default build (neither flag) hits path 3 → BYTE-IDENTICAL to origin/main.
+ *
+ * Class-D pool axes covered:
+ *   - rt_fs_stat            : 1-HexaVal arg discarded + hexa_void() return
+ *                             (NEW SHAPE: 5 instr · 20 B · BRANCH26 @0x08;
+ *                             no arg-setup before `bl _hexa_void`).
+ *   - rt_fs_append_atomic   : 2-HexaVal args discarded + hexa_int(-1) MOVN
+ *                             (structural replicate of rt_net_fail; same 24 B).
+ *   - rt_fs_rotate_if_over  : 3-HexaVal args discarded + hexa_int(0)
+ *                             (structural replicate of rt_posix_ok; same 24 B).
+ */
+#if defined(HEXA_RT_SELFEMIT)
+extern HexaVal rt_fs_append_atomic(HexaVal path, HexaVal data);
+extern HexaVal rt_fs_stat(HexaVal path);
+extern HexaVal rt_fs_rotate_if_over(HexaVal path, HexaVal max_bytes, HexaVal keep);
+#elif !defined(HEXA_HAS_HEXA_RT_STDLIB)
 HexaVal rt_fs_append_atomic(HexaVal path, HexaVal data) {
     (void)path; (void)data;
     return hexa_int(-1);
@@ -14138,6 +14159,11 @@ HexaVal rt_fs_rotate_if_over(HexaVal path, HexaVal max_bytes, HexaVal keep) {
     (void)path; (void)max_bytes; (void)keep;
     return hexa_int(0);
 }
+#else
+extern HexaVal rt_fs_append_atomic(HexaVal path, HexaVal data);
+extern HexaVal rt_fs_stat(HexaVal path);
+extern HexaVal rt_fs_rotate_if_over(HexaVal path, HexaVal max_bytes, HexaVal keep);
+#endif
 /* Returns 0 on success (incl. already-exists / idempotent), or -errno on
  * failure (e.g. -ENOTDIR when a path prefix is a regular file). EEXIST on an
  * intermediate component is "present, continue"; a non-dir prefix surfaces
