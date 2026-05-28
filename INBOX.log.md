@@ -2056,7 +2056,15 @@ demiurge RTSC sc2be2h6 escalate-B (Sc-Be-H clathrate vc-relax recovery attempt b
 
 ## 2026-05-29 — cloud 255 진단 종합 + stderr passthrough (RTSC 13-job dark)
 
-🟠 **OPEN · recommendation** (host-key 부분은 #1959 로 ✅ 이미 해결)
+✅ **RESOLVED** (PR feat/cloud-reboot-stderr · host-key 부분은 #1959 로 이미 해결)
+
+> RESOLVED 2026-05-29: `SshCapture` 에 `err: str` 필드 추가 + `_ssh_capture_status` 가
+> `exec_capture` 의 `res[1]`(ssh STDERR) 보존 + `_ssh_transport_outage(verb, body, err)` 가
+> `_ssh_stderr_tail(err)` 의 마지막 non-empty 줄을 ` · ssh stderr: <line>` (없으면
+> ` · (no ssh stderr)`) 로 255 메시지에 append. 3 call site (cloud_run/cloud_exec/cloud_nohup)
+> 전부 `cap.err` 전달. `_ssh_cmd`/`_scp_capture` 의 #1959 accept-new host-key 옵션 무수정
+> (regression-ban 준수, `git diff` 로 확인). 이제 255 시 진짜 원인("Permission denied (publickey)"
+> 등)이 stdout 으로 노출됨.
 
 ### 배경
 
@@ -2113,7 +2121,15 @@ demiurge RTSC sc2be2h6/13-job-dark 진단 (TCP-open + #1959-host-key + publickey
 
 ## 2026-05-29 — cloud reboot + attach-ssh verbs (API-key 기반 자동회수)
 
-🟠 **OPEN · recommendation**
+✅ **RESOLVED (reboot 부분)** (PR feat/cloud-reboot-stderr · attach-ssh/recover 는 후속 deferred)
+
+> RESOLVED 2026-05-29 (Recommendation 1 = `cloud reboot`): `vast.hexa` 에 `fn vast_reboot(iid)`
+> 추가 — `vast_destroy` 패턴 미러 (`vast_reboot_cmd_TEST` 빌더 + 순수 `vast_reboot_verdict` +
+> `_vast_reboot_confirmed` marker check, `vastai reboot instance <id> --raw`). `cloud_cli.hexa` 에
+> `cloud reboot <id> [--provider P]` verb 배선 (`_cloud_reboot` → vast=vast_reboot, runpod=명시적
+> "not yet wired" + exit 2) + `down` verb 옆 help 줄. 디스크 보존 컨테이너 재시작 → 이미지 onstart
+> 훅이 authorized_keys 재주입; in-flight QE 잡은 .save recovery 파일에서 재개. Recommendation 2
+> (`attach-ssh` pubkey 재등록) + 3 (`recover` 조합) 은 후속 — vast PUT /api/v0/ssh/ 배선 필요.
 
 ### 배경
 
