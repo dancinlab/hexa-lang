@@ -1,5 +1,55 @@
 # INBOX — log
 
+## 2026-05-29 — 🔴 `_hx_cuda_farr_matmul_gpu` cudaMemcpy D2H "illegal memory access" — degenerate N=1 (gemv) shape의 cuBLAS Dgemm m=1·lda=1 edge-case (anima M4b expert × zT)
+
+> **finding (anima M4b MoE pilot, H100 SXM)**: `mm(expert_mat, V=151643, d=64, zT, 1)` → `farr_matmul_gpu(A, 151643, 64, B, 1)` → `_hx_cuda_farr_matmul_gpu(a_id, 151643, 64, b_id, 1, c_id)` 호출에서 `cudaMemcpy C D2H failed: illegal memory access` 발생. 동일 함수가 1024² (M4b cublas_probe.hexa, PR #1119) 와 64×96@96×48 (tmp_rfc040_gpu_smoke.hexa) 에서는 byte-identical 검증 통과 — N=1 (gemv) degenerate shape 가 새 regression surface.
+
+> **root-cause 가설 (HIGH confidence, but unfixed-this-session)**: cuBLAS Dgemm 의 row-major→column-major 트릭이 `cublasDgemm(N,N, m=N=1, n=M=151643, k=K=64, alpha, B_dev, lda=N=1, A_dev, ldb=K=64, beta, C_dev, ldc=N=1)` 로 **m=1·lda=1·ldc=1** 을 발생시킴. cuBLAS Dgemm 의 형식적 spec (`lda ≥ max(1,m)`, `ldb ≥ max(1,k)`, `ldc ≥ max(1,m)`) 은 모두 만족 — m=1, lda=1, ldc=1, ldb=64 모두 valid. 그러나 cuBLAS 의 thin-matrix 내부 kernel selection (특히 m=1 + 대형 n) 이 vectorized-load alignment 가정 위반 / scalar-fallback path 미숙성으로 illegal mem access 를 유발 (`cublasDgemm` 자체는 async — `CUBLAS_STATUS_SUCCESS` 반환 후 다음 sync 지점인 `cudaMemcpy` 에서 sticky-error 노출. error site ≠ cause site).
+
+> **확인된 사실 (verified by reading)**:
+> 1. cuBLAS arg constraints (lda/ldb/ldc minima) 전부 충족 — 논리적 형식 오류 아님 (line 655-662 of `self/cuda/runtime_cuda_emit.hexa`).
+> 2. host C buf size = M*N = 151643 doubles (line 627), device C buf size = ce->len = M*N (line 632-643) — output buffer 충분.
+> 3. A_dev physical size = M*K = 9.7M doubles, cuBLAS 가 ldb=64·n=151643 으로 마지막 element [9705151] 접근 → 마지막 valid index 와 정확히 일치 (off-by-one 아님).
+> 4. B_dev physical size = K*N = 64 doubles, cuBLAS 가 lda=1·k=64 로 [0..63] 접근 → 정확히 fit.
+> 5. `g_cublas` 는 default stream(0) 사용 (line 169-176) → `cudaMemcpy` synchronous 가 implicit sync 됨 — stream-sync 누락 아님.
+> 6. **다른 cuda 커널들은 모두 `cudaDeviceSynchronize` 를 D2H 전에 호출** (`runtime_cuda_emit.hexa` line 1219, 1263, 1328, 1366, 1399, 1430, 1488) — 그러나 cuBLAS path 만 호출 안 함. cuBLAS+default-stream 의 implicit sync 에 의존. 보수적 fix 의 한 lever 이나 root cause 일 가능성 낮음 (1024² 케이스는 같은 path 로 byte-eq 통과).
+
+> **배제된 가설**:
+> - 출력 버퍼 too small (4번 fact)
+> - cuBLAS arg constraint 위반 (1번 fact)
+> - 입력 버퍼 OOB read (3번/4번 fact)
+> - row/column-major confusion (matmul_t/outer 같은 trick 으로 양산된 시그너처 두 케이스가 안정 → trick 자체는 정합)
+> - device pointer aliasing (각 farr_id 의 d_buf 분리, line 644-646)
+
+> **recommended fix (UNVERIFIED — needs H100 실증)**: `_hx_cuda_farr_matmul_gpu` 에 N==1 fast path 분기 추가 — `cublasDgemv(handle, CUBLAS_OP_T, K, M, &alpha, A_dev, K, B_dev, 1, &beta, C_dev, 1)` 로 gemv API 호출. cuBLAS gemv 는 thin-matrix kernel 분리되어 m=1 edge case 회피. 변경 위치:
+> ```c
+> // self/cuda/runtime_cuda_emit.hexa line 655 직전:
+> if (N == 1) {
+>     /* gemv fast path: C[M] = A[M×K] · B[K]  (row-major A → col-major Aᵀ K×M)
+>      * cublasDgemv with CUBLAS_OP_T means: y = α·Aᵀ·x + β·y where A is K×M col-major.
+>      * Reading row-major A as col-major Aᵀ (lda=K) gives shape K×M, then trans=T
+>      * computes M×K · K = M-vector. Result is row-major C[M]. */
+>     cublasStatus_t st = cublasDgemv(g_cublas, CUBLAS_OP_T,
+>                                     (int)K, (int)M, &alpha,
+>                                     A_dev, (int)K,
+>                                     B_dev, 1, &beta,
+>                                     C_dev, 1);
+>     if (st != CUBLAS_STATUS_SUCCESS) {
+>         fprintf(stderr, "[cuda] cublasDgemv(N=1 fast path) failed: %d\n", (int)st);
+>         return -1;
+>     }
+> } else {
+>     // existing Dgemm trick
+> }
+> ```
+> 그리고 보수적 백업으로 `cublasDgemm` 호출 직후 + `cudaMemcpy` 직전에 `cudaDeviceSynchronize` + `cudaGetLastError` 를 명시적으로 — sticky error 가 D2H 가 아니라 (실제 cause site 인) Dgemm 직후에 surface 되어 진단성 향상.
+
+> **regression test 권장 shape**: `[1024 × 64] @ [64 × 1]` (V=151643 의 scale-down — 같은 thin-output topology, fast local repro). `tmp_rfc040_gpu_smoke.hexa` 6번째 falsifier `F-RFC040-GPU-EQUIV-GEMV` 로 추가. Mac CPU oracle 과 max|Δ|<TOL_MATMUL.
+
+> **차단된 작업**: anima M4b MoE pilot full V=151643 fire (#1317). 현 우회 = `mm()` dispatch 에서 N==1 일 때 CPU fallback 강제 → wall-time 10-100× regression. proper fix landing 시 GPU full-speed.
+
+> **report context**: anima PR #1317 root-cause matrix 에 본 entry 참조. severity: high (M4b production fire 차단). evidence: 본 INBOX entry + 분석 commit (`fix-cublas-gemv-illegal-mem` branch). hexa-lang side 실측 (실제 H100 fire + scaffolded gemv path 검증) 후 landing 권장. AGENT honest: 본 session 은 추측 fix 발사 대신 분석 ledger 로 close — cuBLAS 내부 동작 확실하지 않은 path 의 speculative fix 는 a_completeness_over_cheap 위배 risk.
+
 ## 2026-05-28 — ✅ RESOLVED · `atlas register --from-verify` 의 #1901 rounding auto-route 가 display-rounded 값을 읽음 (#1901 follow-up)
 
 > **✅ RESOLVED 2026-05-28** (`fix/atlas-rounding-fullfloat-v2`): verify_cli 의 COMPUTE 출력이 full-precision `[raw=...]` suffix 노출, atlas_cli 의 `_compute_value_of` 가 raw float64 캡처. `_is_rounding_of` 가 이제 rounded-literal claim 도 실제 작동 (#1901 의도 realize). 회귀: full-precision direct-🟢 + genuine-🔴 거부 무손상. (선행 PR #1912 는 stale-base 로 786줄 무관 deletion 포함 → 닫고 clean 2-file cherry-pick 으로 재발사.)
