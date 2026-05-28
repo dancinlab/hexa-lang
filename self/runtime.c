@@ -2708,6 +2708,14 @@ static int __attribute__((noinline)) hxlcl_connect(int s, const void *addr, unsi
 // net/exec ④ (cycle 78): message-group svc-trap. recv/send have no Darwin
 // syscall — route to recvfrom(29)/sendto(133) with NULL addr (= recv/send).
 // ARCH GATE for message-group family (same Darwin arm64 only).
+// F3 ACTIVATION · Path A — recv/send class-C svc-wrapper self-emit slots.
+// 6-arg _cf via syscall6 (sendto/recvfrom with NULL addr): sxtw x0(s) + buf/x1
+// & n/x2 untouched + sxtw x3(flags) + mov x4,#0 + mov x5,#0. 12 instr / 48 B,
+// errno reloc 0x20/0x24. SELF-EMIT → extern, resolved by emit_hxlcl_{recv,send}_o.hexa
+// (byte-eq to clang -O2). SYS#: RECVFROM=29 / SENDTO=133.
+#ifdef HEXA_RT_SELFEMIT
+extern long hxlcl_recv(int s, void *b, unsigned long n, int f);
+#else
 static long __attribute__((noinline)) hxlcl_recv(int s, void *b, unsigned long n, int f) {
 #if (defined(__arm64__) || defined(__aarch64__)) && defined(__APPLE__)
     return _hxlcl_syscall6_cf(HXLCL_SYS_RECVFROM, (long)s, (long)b, (long)n, (long)f, 0, 0);
@@ -2715,6 +2723,10 @@ static long __attribute__((noinline)) hxlcl_recv(int s, void *b, unsigned long n
     return (long)recv(s, b, (size_t)n, f);
 #endif
 }
+#endif
+#ifdef HEXA_RT_SELFEMIT
+extern long hxlcl_send(int s, const void *b, unsigned long n, int f);
+#else
 static long __attribute__((noinline)) hxlcl_send(int s, const void *b, unsigned long n, int f) {
 #if (defined(__arm64__) || defined(__aarch64__)) && defined(__APPLE__)
     return _hxlcl_syscall6_cf(HXLCL_SYS_SENDTO, (long)s, (long)b, (long)n, (long)f, 0, 0);
@@ -2722,6 +2734,7 @@ static long __attribute__((noinline)) hxlcl_send(int s, const void *b, unsigned 
     return (long)send(s, b, (size_t)n, f);
 #endif
 }
+#endif
 // F3 ACTIVATION · Path A — recvmsg/sendmsg class-C svc-wrapper self-emit slots.
 // 3-arg int+ptr+int _cf (s, msg, flags) = the EXACT rt_lseek shape: sxtw x0(s)
 // + msg/x1 ptr untouched + sxtw x2(flags), differing only in SYS#
