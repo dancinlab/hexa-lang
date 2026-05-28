@@ -762,6 +762,8 @@ HexaVal hexa_exec_stream_impl(HexaVal cmd, HexaVal on_line);  /* runtime.c:4215 
 HexaVal hexa_sqrt(HexaVal v);                           /* runtime.c:5152 */
 HexaVal hexa_pow(HexaVal base, HexaVal exp);            /* runtime.c:5156 */
 HexaVal hexa_rms_norm(HexaVal x, HexaVal gamma, HexaVal eps); /* runtime.c:10846 */
+HexaVal hexa_layer_norm(HexaVal x, HexaVal gamma, HexaVal eps);                     /* L723 NN-primitive */
+HexaVal hexa_rope_pair(HexaVal x0, HexaVal x1, HexaVal theta);                      /* L723 NN-primitive */
 
 /* FFI (raw pointer / extern dispatch + dlopen/dlsym; latter two are
  * de-staticized to expose to runtime.h consumers — runtime.c:5658, 5782) */
