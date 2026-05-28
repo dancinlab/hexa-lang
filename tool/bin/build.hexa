@@ -116,7 +116,7 @@ fn install_binary(src) {
     //     - raw binary  → ~/.hx/bin/build/hexa_interp (kept; bootstrap path)
     //     - raw binary  → ~/.hx/packages/hexa/hexa.real (canonical home)
     //     - shell wrap  → ~/.hx/bin/hexa (SSOT wrapper)
-    let pkg_real = bin_dir + "/../packages/hexa/hexa.real"
+    let pkg_real = bin_dir + "/../packages/hexa/hexad"
     let outs = [pkg_real, bin_dir + "/build/hexa_interp"]
     exec("mkdir -p '" + bin_dir + "/../packages/hexa'")
     for out in outs {
@@ -132,15 +132,19 @@ fn install_binary(src) {
         exec("cp '" + src + "' '" + out + "'")
         exec("chmod 0755 '" + out + "'")
     }
+    // Transition compat symlinks: retired names point at the canonical hexad.
+    // Relative targets (same dir) so the package stays relocatable.
+    exec("ln -sf hexad '" + bin_dir + "/../packages/hexa/hexa.real'")
+    exec("ln -sf hexad '" + bin_dir + "/../packages/hexa/hxv2'")
     // Write canonical shell wrapper at bin_dir/hexa — SSOT mirrors the
     // catalog in tool/cli_wrappers.hexa (keep both in sync; the catalog
     // tool can re-install if this gets clobbered by external tooling).
     let wrapper_body = "#!/bin/bash\n"
-                     + "# 2026-05-06 macOS docker bypass cleanup — direct hexa.real exec.\n"
+                     + "# 2026-05-06 macOS docker bypass cleanup — direct hexad exec.\n"
                      + "# Resolver/routing/verbose 메시지 모두 제거. docker fallback 미사용.\n"
                      + "# SSOT: hexa-lang/tool/cli_wrappers.hexa — re-install via:\n"
                      + "#   hexa run tool/cli_wrappers.hexa --install\n"
-                     + "exec \"" + bin_dir + "/../packages/hexa/hexa.real\" \"$@\"\n"
+                     + "exec \"" + bin_dir + "/../packages/hexa/hexad\" \"$@\"\n"
     write_file(bin_dir + "/hexa", wrapper_body)
     exec("chmod 0755 '" + bin_dir + "/hexa'")
 

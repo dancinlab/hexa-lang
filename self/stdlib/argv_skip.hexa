@@ -53,7 +53,7 @@ fn _argv_basename(p) {
 // hexa_interp_linux_arm64, hexa_interp_t31_arena_off,
 // hexa_interp_variant_a, hexa_interp_safe_2150, hexa_stage0,
 // hexa.real, hexa.real.new_async, hexa.known_good, hexa.linux,
-// hexat_linux, exe, etc. Also retains the legacy 6-pattern
+// hexat_linux, hexad, exe, etc. Also retains the legacy 6-pattern
 // ends_with fallback for regression safety.
 // C3 honest C3: starts_with("hexa") admits any future binary
 // whose basename begins with "hexa" (e.g., random `hexa_clone_test`)
@@ -71,6 +71,7 @@ fn _is_interp_binary(a) {
     if a.ends_with("/hexa_interp") { return true }
     if a.ends_with("/hexa_interp.real") { return true }
     if a.ends_with("/hexa.real") { return true }
+    if a.ends_with("/hexad") { return true }
     return false
 }
 
