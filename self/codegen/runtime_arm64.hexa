@@ -3173,6 +3173,349 @@ fn rt_getppid() {
     return c
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// F3 wave 3 — class-C 1-arg / errno-reloc family. AUTHORS the NEW ptr-arg
+// sub-template (chdir/unlink/rmdir, NO leading sxtw, 8-instr 32 B body,
+// errno relocs @0x10/0x14) and CLONES the existing close 9-instr 36 B body
+// for the int-arg variants (fsync/dup, only the SYS# byte changes vs
+// rt_close). All five primitives mirror the runtime.c bodies above:
+//   chdir(SYS12)/unlink(SYS10)/rmdir(SYS137)/fsync(SYS95)/dup(SYS41)
+// Each is `_hxlcl_syscall1_cf(SYS, arg)` whose clang -O2 emit was verified
+// against `as -arch arm64` (see PR description for hex tables). The
+// PAGE21/PAGEOFF12 reloc pair targets the SHARED `_hxlcl_errno` UNDEFINED
+// external symbol (resolved by ld64 to runtime.c's hxlcl_errno), same as
+// rt_close / rt_dup2 / rt_read / rt_write / rt_mkdir / rt_fstat / rt_stat.
+// ═══════════════════════════════════════════════════════════════════════
+
+// ── rt_chdir (F3 wave 3 — class-C 1-arg PTR + errno-reloc · NEW TEMPLATE) ─
+// chdir(const char *path) -> int. The FIRST ptr-arg 1-arg _cf svc-trap:
+// path/x0 is already 64-bit (a pointer), so NO leading sxtw — 1 instr
+// shorter than rt_close's int-arg shape. 8 instr, 32 B:
+//   mov w16,#12 / svc #0x80 / cset x8,hs / cbz x8,Lret
+//   / adrp x8,errno / str w0,[x8] / mov x0,#-1 / ret
+// errno reloc sites: 0x10 (PAGE21) / 0x14 (PAGEOFF12) — shifted -4 vs
+// rt_close because the leading sxtw is absent. SYS_CHDIR = 12. clang -O2
+// (== as -arch arm64, in runtime.c's `#define errno hxlcl_errno` context)
+// of `hxlcl_chdir(path) { return (int)_hxlcl_syscall1_cf(12,(long)path); }`
+// is byte-for-byte the sequence below.
+fn rt_chdir() {
+    let mut c = []
+    // mov w16, #12  (SYS_CHDIR)             0x52800190
+    c.push(144)
+    c.push(1)
+    c.push(128)
+    c.push(82)
+    // svc #0x80                             0xD4001001
+    c.push(1)
+    c.push(16)
+    c.push(0)
+    c.push(212)
+    // cset x8, hs  (capture carry = error)  0x9A9F37E8
+    c.push(232)
+    c.push(55)
+    c.push(159)
+    c.push(154)
+    // cbz x8, Lret (success → skip errno)   0xB4000088  (+0x10 to ret)
+    c.push(136)
+    c.push(0)
+    c.push(0)
+    c.push(180)
+    // adrp x8, errno@PAGE  [RELOC PAGE21]   0x90000008  (imm zeroed)
+    c.push(8)
+    c.push(0)
+    c.push(0)
+    c.push(144)
+    // str w0, [x8, errno@PAGEOFF] [RELOC]   0xB9000100  (imm zeroed)
+    c.push(0)
+    c.push(1)
+    c.push(0)
+    c.push(185)
+    // mov x0, #-1  (error return)           0x92800000
+    c.push(0)
+    c.push(0)
+    c.push(128)
+    c.push(146)
+    // ret  (x0 = 0 on success / -1 error)   0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
+// Reloc table for rt_chdir — errno PAGE21/PAGEOFF12 at offsets 0x10/0x14
+// (shifted -4 vs rt_close because the leading sxtw is absent).
+fn rt_chdir_reloc_offs() {
+    let mut o = []
+    o.push(16)
+    o.push(20)
+    return o
+}
+fn rt_chdir_reloc_kinds() {
+    let mut k = []
+    k.push(3)
+    k.push(4)
+    return k
+}
+
+// ── rt_unlink (F3 wave 3 — class-C 1-arg PTR + errno-reloc) ──────────
+// unlink(const char *path) -> int. Byte-for-byte rt_chdir clone except
+// `mov w16,#10` (SYS_UNLINK). Same 8-instr 32 B body, same reloc table
+// (errno @0x10/0x14). clang -O2 (== as -arch arm64) verified.
+fn rt_unlink() {
+    let mut c = []
+    // mov w16, #10  (SYS_UNLINK)            0x52800150
+    c.push(80)
+    c.push(1)
+    c.push(128)
+    c.push(82)
+    // svc #0x80                             0xD4001001
+    c.push(1)
+    c.push(16)
+    c.push(0)
+    c.push(212)
+    // cset x8, hs                           0x9A9F37E8
+    c.push(232)
+    c.push(55)
+    c.push(159)
+    c.push(154)
+    // cbz x8, Lret  (+0x10 to ret)          0xB4000088
+    c.push(136)
+    c.push(0)
+    c.push(0)
+    c.push(180)
+    // adrp x8, errno@PAGE                   0x90000008
+    c.push(8)
+    c.push(0)
+    c.push(0)
+    c.push(144)
+    // str w0, [x8, errno@PAGEOFF]           0xB9000100
+    c.push(0)
+    c.push(1)
+    c.push(0)
+    c.push(185)
+    // mov x0, #-1                           0x92800000
+    c.push(0)
+    c.push(0)
+    c.push(128)
+    c.push(146)
+    // ret                                   0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+fn rt_unlink_reloc_offs() {
+    let mut o = []
+    o.push(16)
+    o.push(20)
+    return o
+}
+fn rt_unlink_reloc_kinds() {
+    let mut k = []
+    k.push(3)
+    k.push(4)
+    return k
+}
+
+// ── rt_rmdir (F3 wave 3 — class-C 1-arg PTR + errno-reloc) ───────────
+// rmdir(const char *path) -> int. Byte-for-byte rt_chdir clone except
+// `mov w16,#137` (SYS_RMDIR, 0x89). Same 8-instr 32 B body, same reloc
+// table. SYS_RMDIR is the first 1-arg primitive with a SYS# requiring
+// the high MOVZ imm16 nibble (0x89 vs the 0x06/0x0a/0x0c low-nibble
+// numbers above) — encoding still single MOVZ (no movk needed since
+// 137 < 65536). clang -O2 verified.
+fn rt_rmdir() {
+    let mut c = []
+    // mov w16, #137  (SYS_RMDIR)            0x52801130
+    c.push(48)
+    c.push(17)
+    c.push(128)
+    c.push(82)
+    // svc #0x80                             0xD4001001
+    c.push(1)
+    c.push(16)
+    c.push(0)
+    c.push(212)
+    // cset x8, hs                           0x9A9F37E8
+    c.push(232)
+    c.push(55)
+    c.push(159)
+    c.push(154)
+    // cbz x8, Lret  (+0x10 to ret)          0xB4000088
+    c.push(136)
+    c.push(0)
+    c.push(0)
+    c.push(180)
+    // adrp x8, errno@PAGE                   0x90000008
+    c.push(8)
+    c.push(0)
+    c.push(0)
+    c.push(144)
+    // str w0, [x8, errno@PAGEOFF]           0xB9000100
+    c.push(0)
+    c.push(1)
+    c.push(0)
+    c.push(185)
+    // mov x0, #-1                           0x92800000
+    c.push(0)
+    c.push(0)
+    c.push(128)
+    c.push(146)
+    // ret                                   0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+fn rt_rmdir_reloc_offs() {
+    let mut o = []
+    o.push(16)
+    o.push(20)
+    return o
+}
+fn rt_rmdir_reloc_kinds() {
+    let mut k = []
+    k.push(3)
+    k.push(4)
+    return k
+}
+
+// ── rt_fsync (F3 wave 3 — class-C 1-arg INT + errno-reloc · close clone) ─
+// fsync(int fd) -> int. Byte-for-byte rt_close clone except `mov w16,#95`
+// (SYS_FSYNC, 0x5F). 9-instr 36 B body with leading sxtw (fd is int);
+// errno reloc sites: 0x14 (PAGE21) / 0x18 (PAGEOFF12) — IDENTICAL to
+// rt_close. The simplest int-arg 1-arg clone, no new template work.
+fn rt_fsync() {
+    let mut c = []
+    // sxtw x0, w0  (sign-extend fd arg)     0x93407C00
+    c.push(0)
+    c.push(124)
+    c.push(64)
+    c.push(147)
+    // mov w16, #95  (SYS_FSYNC)             0x52800BF0
+    c.push(240)
+    c.push(11)
+    c.push(128)
+    c.push(82)
+    // svc #0x80                             0xD4001001
+    c.push(1)
+    c.push(16)
+    c.push(0)
+    c.push(212)
+    // cset x8, hs                           0x9A9F37E8
+    c.push(232)
+    c.push(55)
+    c.push(159)
+    c.push(154)
+    // cbz x8, Lret  (+0x10 to ret)          0xB4000088
+    c.push(136)
+    c.push(0)
+    c.push(0)
+    c.push(180)
+    // adrp x8, errno@PAGE                   0x90000008
+    c.push(8)
+    c.push(0)
+    c.push(0)
+    c.push(144)
+    // str w0, [x8, errno@PAGEOFF]           0xB9000100
+    c.push(0)
+    c.push(1)
+    c.push(0)
+    c.push(185)
+    // mov x0, #-1                           0x92800000
+    c.push(0)
+    c.push(0)
+    c.push(128)
+    c.push(146)
+    // ret                                   0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+fn rt_fsync_reloc_offs() {
+    let mut o = []
+    o.push(20)
+    o.push(24)
+    return o
+}
+fn rt_fsync_reloc_kinds() {
+    let mut k = []
+    k.push(3)
+    k.push(4)
+    return k
+}
+
+// ── rt_dup (F3 wave 3 — class-C 1-arg INT + errno-reloc · close clone) ───
+// dup(int oldfd) -> int. Byte-for-byte rt_close clone except `mov w16,#41`
+// (SYS_DUP, 0x29). 9-instr 36 B body with leading sxtw; errno relocs @
+// 0x14/0x18. Same template as rt_close/rt_fsync, only SYS# differs.
+fn rt_dup() {
+    let mut c = []
+    // sxtw x0, w0  (sign-extend fd arg)     0x93407C00
+    c.push(0)
+    c.push(124)
+    c.push(64)
+    c.push(147)
+    // mov w16, #41  (SYS_DUP)               0x52800530
+    c.push(48)
+    c.push(5)
+    c.push(128)
+    c.push(82)
+    // svc #0x80                             0xD4001001
+    c.push(1)
+    c.push(16)
+    c.push(0)
+    c.push(212)
+    // cset x8, hs                           0x9A9F37E8
+    c.push(232)
+    c.push(55)
+    c.push(159)
+    c.push(154)
+    // cbz x8, Lret  (+0x10 to ret)          0xB4000088
+    c.push(136)
+    c.push(0)
+    c.push(0)
+    c.push(180)
+    // adrp x8, errno@PAGE                   0x90000008
+    c.push(8)
+    c.push(0)
+    c.push(0)
+    c.push(144)
+    // str w0, [x8, errno@PAGEOFF]           0xB9000100
+    c.push(0)
+    c.push(1)
+    c.push(0)
+    c.push(185)
+    // mov x0, #-1                           0x92800000
+    c.push(0)
+    c.push(0)
+    c.push(128)
+    c.push(146)
+    // ret                                   0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+fn rt_dup_reloc_offs() {
+    let mut o = []
+    o.push(20)
+    o.push(24)
+    return o
+}
+fn rt_dup_reloc_kinds() {
+    let mut k = []
+    k.push(3)
+    k.push(4)
+    return k
+}
+
 // ── rt_dup2 (B9.6-C4 — class-C syscall · 2-arg _cf + errno) ──────────
 // dup2(int oldfd, int newfd) -> int. The FIRST 2-arg svc-_cf self-emit,
 // extending the rt_close 1-arg carry-flag template by ONE instruction (a
