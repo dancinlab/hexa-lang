@@ -5416,6 +5416,265 @@ fn test_rt_isalpha_classd() {
 
 test_rt_isalpha_classd()
 
+// ═══════════════════════════════════════════════════════════════════════
+// === class-D HARD scale-out — rt_isalnum + rt_pthread_noop + rt_pthread_create_policy
+// ═══════════════════════════════════════════════════════════════════════
+//
+// PR #1914 landed rt_isalpha (16 instr · 64 B · BRANCH26 @0x34 · 1 bl _hexa_bool).
+// This wave extends class-D HARD coverage with 3 more HexaVal-repr struct-return
+// bodies — each verified by `as -arch arm64` round-trip + behavioral JIT-exec
+// against the real ctor callees in runtime_core.c.
+//
+// Pick rationale (per task spec — ≤30 instr, single-bl, simple, NON-overlapping
+// with parallel class-B strdup/strndup/atoll/atof + svc-wrapper agents):
+//   1. rt_isalnum — sister of rt_isalpha: same range-cmp template +1 range
+//      (digits [0-9]). 20 instr · 80 B · BRANCH26 @0x44 · 1 bl _hexa_bool.
+//      Strongest replication signal: highest-confidence pick (1 more range).
+//   2. rt_pthread_noop — `return hexa_int(0)`. Trivial single-bl on a DIFFERENT
+//      ctor callee (_hexa_int instead of _hexa_bool — new dimension on the
+//      template). 6 instr · 24 B · BRANCH26 @0x0C.
+//   3. rt_pthread_create_policy — `return hexa_int(1)`. Same shape as #2, only
+//      differs in the mov w0 immediate (#1 vs #0). 6 instr · 24 B · BRANCH26
+//      @0x0C. Demonstrates that the class-D template scales mechanically by
+//      varying just the constant payload.
+//
+// All three: 16-B frame, LR-spill only, no callee-saved spills (x19/x20/x21
+// untouched), HexaVal in x0:x1 → HexaVal in x0:x1.
+
+// ── rt_isalnum_classd (sister of rt_isalpha — extends with [0-9] range) ────
+// 20 instr, 80 bytes. Bytes confirmed via `as -arch arm64` round-trip.
+fn rt_isalnum_classd() {
+    let mut c = []
+    // stp x29, x30, [sp, #-16]!    0xA9BF7BFD
+    c.push(253); c.push(123); c.push(191); c.push(169)
+    // mov x29, sp                  0x910003FD
+    c.push(253); c.push(3); c.push(0); c.push(145)
+    // cmp x1, #48 ('0')            0xF100C03F  (low end of [0-9])
+    c.push(63); c.push(192); c.push(0); c.push(241)
+    // b.lt .Lcheck_alpha (+0xc)    0x5400006B
+    c.push(107); c.push(0); c.push(0); c.push(84)
+    // cmp x1, #57 ('9')            0xF100E43F  (high end of [0-9])
+    c.push(63); c.push(228); c.push(0); c.push(241)
+    // b.le .Lone (+0x24)           0x5400012D
+    c.push(45); c.push(1); c.push(0); c.push(84)
+    // cmp x1, #65 ('A')            0xF101043F  (low end of [A-Z])
+    c.push(63); c.push(4); c.push(1); c.push(241)
+    // b.lt .Lcheck_lower (+0xc)    0x5400006B
+    c.push(107); c.push(0); c.push(0); c.push(84)
+    // cmp x1, #90 ('Z')            0xF101683F  (high end of [A-Z])
+    c.push(63); c.push(104); c.push(1); c.push(241)
+    // b.le .Lone (+0x14)           0x540000AD
+    c.push(173); c.push(0); c.push(0); c.push(84)
+    // cmp x1, #97 ('a')            0xF101843F  (low end of [a-z])
+    c.push(63); c.push(132); c.push(1); c.push(241)
+    // b.lt .Lzero (+0x14)          0x540000AB
+    c.push(171); c.push(0); c.push(0); c.push(84)
+    // cmp x1, #122 ('z')           0xF101E83F  (high end of [a-z])
+    c.push(63); c.push(232); c.push(1); c.push(241)
+    // b.gt .Lzero (+0xc)           0x5400006C
+    c.push(108); c.push(0); c.push(0); c.push(84)
+    // .Lone: mov w0, #1            0x52800020
+    c.push(32); c.push(0); c.push(128); c.push(82)
+    // b .Lcall (+0x8)              0x14000002
+    c.push(2); c.push(0); c.push(0); c.push(20)
+    // .Lzero: mov w0, #0           0x52800000
+    c.push(0); c.push(0); c.push(128); c.push(82)
+    // bl _hexa_bool [BRANCH26]     0x94000000  @ 0x44 (68)
+    c.push(0); c.push(0); c.push(0); c.push(148)
+    // ldp x29, x30, [sp], #16      0xA8C17BFD
+    c.push(253); c.push(123); c.push(193); c.push(168)
+    // ret                          0xD65F03C0
+    c.push(192); c.push(3); c.push(95); c.push(214)
+    return c
+}
+
+fn rt_isalnum_classd_reloc_offs() {
+    let mut o = []
+    o.push(68)
+    return o
+}
+fn rt_isalnum_classd_reloc_kinds() {
+    let mut k = []
+    k.push(2)
+    return k
+}
+
+fn test_rt_isalnum_classd() {
+    println("test_rt_isalnum_classd (F3 class-D HARD scale-out · sister of rt_isalpha)")
+    let mut ok = true
+    let s = rt_isalnum_classd()
+    println("  rt_isalnum_classd : " + to_string(len(s)) + " bytes (80 expected)")
+    if len(s) != 80 {
+        println("  FAIL: rt_isalnum_classd expected 80 bytes"); ok = false
+    }
+    // prologue stp x29,x30,[sp,#-16]!  (fd 7b bf a9) @ 0
+    if s[0] != 253 || s[1] != 123 || s[2] != 191 || s[3] != 169 {
+        println("  FAIL: stp x29,x30 prologue (16-B frame) mismatch"); ok = false
+    }
+    // bl _hexa_bool (00 00 00 94) @ 0x44 = 68 — the cross-object CALL site
+    if s[68] != 0 || s[69] != 0 || s[70] != 0 || s[71] != 148 {
+        println("  FAIL: bl _hexa_bool (BRANCH26 @0x44) mismatch"); ok = false
+    }
+    // ret (c0 03 5f d6) @ 0x4c = 76
+    if s[76] != 192 || s[77] != 3 || s[78] != 95 || s[79] != 214 {
+        println("  FAIL: ret trailer mismatch"); ok = false
+    }
+    let offs = rt_isalnum_classd_reloc_offs()
+    let kinds = rt_isalnum_classd_reloc_kinds()
+    if len(offs) != 1 || offs[0] != 68 {
+        println("  FAIL: reloc offset expected [68]"); ok = false
+    }
+    if len(kinds) != 1 || kinds[0] != 2 {
+        println("  FAIL: reloc kind expected [2] (BRANCH26)"); ok = false
+    }
+    if ok {
+        println("  ALL CHECKS PASS")
+    }
+}
+
+test_rt_isalnum_classd()
+
+// ── rt_pthread_noop_classd (`return hexa_int(0)`) ──────────────────────────
+// 6 instr, 24 bytes. callee = _hexa_int (NEW dimension vs _hexa_bool).
+fn rt_pthread_noop_classd() {
+    let mut c = []
+    // stp x29, x30, [sp, #-16]!    0xA9BF7BFD
+    c.push(253); c.push(123); c.push(191); c.push(169)
+    // mov x29, sp                  0x910003FD
+    c.push(253); c.push(3); c.push(0); c.push(145)
+    // mov w0, #0                   0x52800000  (hexa_int arg = 0)
+    c.push(0); c.push(0); c.push(128); c.push(82)
+    // bl _hexa_int [BRANCH26]      0x94000000  @ 0x0C (12)
+    c.push(0); c.push(0); c.push(0); c.push(148)
+    // ldp x29, x30, [sp], #16      0xA8C17BFD
+    c.push(253); c.push(123); c.push(193); c.push(168)
+    // ret                          0xD65F03C0
+    c.push(192); c.push(3); c.push(95); c.push(214)
+    return c
+}
+
+fn rt_pthread_noop_classd_reloc_offs() {
+    let mut o = []
+    o.push(12)
+    return o
+}
+fn rt_pthread_noop_classd_reloc_kinds() {
+    let mut k = []
+    k.push(2)
+    return k
+}
+
+fn test_rt_pthread_noop_classd() {
+    println("test_rt_pthread_noop_classd (F3 class-D HARD · 0-arg hexa_int(0))")
+    let mut ok = true
+    let s = rt_pthread_noop_classd()
+    println("  rt_pthread_noop_classd : " + to_string(len(s)) + " bytes (24 expected)")
+    if len(s) != 24 {
+        println("  FAIL: rt_pthread_noop_classd expected 24 bytes"); ok = false
+    }
+    if s[0] != 253 || s[1] != 123 || s[2] != 191 || s[3] != 169 {
+        println("  FAIL: stp x29,x30 prologue mismatch"); ok = false
+    }
+    // bl _hexa_int @ 0x0C = 12
+    if s[12] != 0 || s[13] != 0 || s[14] != 0 || s[15] != 148 {
+        println("  FAIL: bl _hexa_int (BRANCH26 @0x0C) mismatch"); ok = false
+    }
+    // ldp x29,x30,[sp],#16 (fd 7b c1 a8) @ 16
+    if s[16] != 253 || s[17] != 123 || s[18] != 193 || s[19] != 168 {
+        println("  FAIL: ldp x29,x30 epilogue mismatch"); ok = false
+    }
+    // ret (c0 03 5f d6) @ 20
+    if s[20] != 192 || s[21] != 3 || s[22] != 95 || s[23] != 214 {
+        println("  FAIL: ret trailer mismatch"); ok = false
+    }
+    let offs = rt_pthread_noop_classd_reloc_offs()
+    let kinds = rt_pthread_noop_classd_reloc_kinds()
+    if len(offs) != 1 || offs[0] != 12 {
+        println("  FAIL: reloc offset expected [12]"); ok = false
+    }
+    if len(kinds) != 1 || kinds[0] != 2 {
+        println("  FAIL: reloc kind expected [2] (BRANCH26)"); ok = false
+    }
+    if ok {
+        println("  ALL CHECKS PASS")
+    }
+}
+
+test_rt_pthread_noop_classd()
+
+// ── rt_pthread_create_policy_classd (`return hexa_int(1)`) ────────────────
+// 6 instr, 24 bytes. Same template as noop_classd; differs ONLY in the
+// mov w0 immediate (#1 vs #0).
+fn rt_pthread_create_policy_classd() {
+    let mut c = []
+    // stp x29, x30, [sp, #-16]!    0xA9BF7BFD
+    c.push(253); c.push(123); c.push(191); c.push(169)
+    // mov x29, sp                  0x910003FD
+    c.push(253); c.push(3); c.push(0); c.push(145)
+    // mov w0, #1                   0x52800020  (hexa_int arg = 1)
+    c.push(32); c.push(0); c.push(128); c.push(82)
+    // bl _hexa_int [BRANCH26]      0x94000000  @ 0x0C (12)
+    c.push(0); c.push(0); c.push(0); c.push(148)
+    // ldp x29, x30, [sp], #16      0xA8C17BFD
+    c.push(253); c.push(123); c.push(193); c.push(168)
+    // ret                          0xD65F03C0
+    c.push(192); c.push(3); c.push(95); c.push(214)
+    return c
+}
+
+fn rt_pthread_create_policy_classd_reloc_offs() {
+    let mut o = []
+    o.push(12)
+    return o
+}
+fn rt_pthread_create_policy_classd_reloc_kinds() {
+    let mut k = []
+    k.push(2)
+    return k
+}
+
+fn test_rt_pthread_create_policy_classd() {
+    println("test_rt_pthread_create_policy_classd (F3 class-D HARD · 0-arg hexa_int(1))")
+    let mut ok = true
+    let s = rt_pthread_create_policy_classd()
+    println("  rt_pthread_create_policy_classd : " + to_string(len(s)) + " bytes (24 expected)")
+    if len(s) != 24 {
+        println("  FAIL: rt_pthread_create_policy_classd expected 24 bytes"); ok = false
+    }
+    if s[0] != 253 || s[1] != 123 || s[2] != 191 || s[3] != 169 {
+        println("  FAIL: stp x29,x30 prologue mismatch"); ok = false
+    }
+    // mov w0,#1 (20 00 80 52) @ 8 — differs from noop by ONE byte
+    if s[8] != 32 || s[9] != 0 || s[10] != 128 || s[11] != 82 {
+        println("  FAIL: mov w0,#1 (constant payload) mismatch"); ok = false
+    }
+    // bl _hexa_int @ 0x0C = 12
+    if s[12] != 0 || s[13] != 0 || s[14] != 0 || s[15] != 148 {
+        println("  FAIL: bl _hexa_int (BRANCH26 @0x0C) mismatch"); ok = false
+    }
+    // ldp x29,x30,[sp],#16 (fd 7b c1 a8) @ 16
+    if s[16] != 253 || s[17] != 123 || s[18] != 193 || s[19] != 168 {
+        println("  FAIL: ldp x29,x30 epilogue mismatch"); ok = false
+    }
+    // ret (c0 03 5f d6) @ 20
+    if s[20] != 192 || s[21] != 3 || s[22] != 95 || s[23] != 214 {
+        println("  FAIL: ret trailer mismatch"); ok = false
+    }
+    let offs = rt_pthread_create_policy_classd_reloc_offs()
+    let kinds = rt_pthread_create_policy_classd_reloc_kinds()
+    if len(offs) != 1 || offs[0] != 12 {
+        println("  FAIL: reloc offset expected [12]"); ok = false
+    }
+    if len(kinds) != 1 || kinds[0] != 2 {
+        println("  FAIL: reloc kind expected [2] (BRANCH26)"); ok = false
+    }
+    if ok {
+        println("  ALL CHECKS PASS")
+    }
+}
+
+test_rt_pthread_create_policy_classd()
+
 test_runtime_arm64()
 test_neon_string_ops()
 test_rt_strdup()
