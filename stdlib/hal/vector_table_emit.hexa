@@ -1,0 +1,191 @@
+#!hexa strict
+// stdlib/hal/vector_table_emit.hexa — F5 RFC 063/064 Component 2-lite.
+//
+// Pure-hexa `.s`-text vector-table emitter. Takes a slot→handler map
+// (data) + section name + cpu + padding count and produces ARM/Thumb
+// `.s` text that, when passed to `arm-none-eabi-as`, produces a byte-
+// identical `.vector_table` section to the hand-written boot_<mcu>.s.
+//
+// Phase: foundation (PR1 of F5 re-open per RUNTIME.floor.md §F5).
+// Scope: vector-table data section ONLY. Reset prologue is OUT (kept
+// as a separate `.s` fragment per the runbook's minimal-effort path).
+//
+// `as` does the heavy lifting (R_ARM_ABS32 reloc emission for each
+// `.word <symbol>+1` entry, literal-pool, section flags). This module
+// is a string-builder, not an ARM-asm encoder — hence "Component 2-
+// LITE". Full ELF-native emitter (Component 2 proper) is deferred to
+// a later PR (RUNTIME.floor.md §F5 5-component breakdown).
+//
+// Byte-identity oracle: stdlib/hal/t3/vt_byte_diff_rp2040.hexa
+// (RFC 063 §5 — BYTE-IDENTICAL `arm-none-eabi-as` byte-diff verify).
+
+let MODULE_NAME = "vector_table_emit"
+
+// ─── slot table data structure ─────────────────────────────────────
+//
+// A vector-table slot is a (index, symbol_or_zero, thumb_bit) triple.
+// Zero entries (padding / unused IRQ vectors) → `.word 0` (no reloc).
+// Symbol entries → `.word <symbol>` (no Thumb bit, e.g. initial SP)
+// OR `.word <symbol> + 1` (Thumb bit set, all handlers on ARMv6-M /
+// ARMv7-M / ARMv8-M targets; CPU treats the LSB as "interworking to
+// Thumb" and clears it when loading PC).
+//
+// Encoded as a parallel-array tuple to keep the API stable under the
+// hexa-lang struct-array aliasing gotcha
+// (feedback_hexa_struct_pack_aliasing.md). Caller passes 3 arrays of
+// equal length; index `i` is one slot.
+
+// ─── helpers ────────────────────────────────────────────────────────
+
+fn _vt_indent() -> str { return "    " }
+
+fn _vt_word_line(symbol: str, thumb_bit: bool, comment: str) -> str {
+    let mut out = _vt_indent() + ".word "
+    if symbol.len() == 0 {
+        out = out + "0"
+    } else {
+        out = out + symbol
+        if thumb_bit { out = out + " + 1" }
+    }
+    if comment.len() > 0 {
+        out = out + "              /* " + comment + " */"
+    }
+    return out + "\n"
+}
+
+// ─── primary API ────────────────────────────────────────────────────
+//
+// vt_emit_section: emits a complete `.s` file string for a vector-
+// table data section.
+//
+// Args:
+//   header_banner  — `.s` top-of-file banner (multiline OK, no trailing \n).
+//   cpu            — e.g. "cortex-m0plus" / "cortex-m7".
+//   section_name   — e.g. ".vector_table" (rp2040) or ".isr_vector"
+//                    (stm32 startup convention).
+//   section_flags  — e.g. "\"a\", %progbits" (mirrors hand-written).
+//   table_label    — exported symbol, e.g. "_vector_table".
+//   slot_symbols   — parallel array of slot symbol names ("" = zero).
+//   slot_thumb     — parallel array of bools (Thumb-bit on/off).
+//   slot_comments  — parallel array of slot comment strings.
+//   pad_words      — number of trailing `.word 0` entries (rolled
+//                    into a `.rept <N> .word 0 .endr` block for
+//                    byte-identity with the hand-written boot files).
+//
+// Returns: the full `.s` text. Caller writes it to a file and feeds
+// it to `arm-none-eabi-as`.
+
+fn vt_emit_section(
+    header_banner: str,
+    cpu: str,
+    section_name: str,
+    section_flags: str,
+    table_label: str,
+    slot_symbols: [str],
+    slot_thumb: [bool],
+    slot_comments: [str],
+    pad_words: int
+) -> str {
+    let mut out = ""
+
+    // banner (caller supplies — preserves whatever comment style the
+    // hand-written `.s` used; byte-identity is at the assembled-object
+    // level, not the source-text level, so comments are irrelevant to
+    // the byte-diff oracle).
+    if header_banner.len() > 0 {
+        out = out + header_banner
+        out = out + "\n\n"
+    }
+
+    // architectural prelude
+    out = out + _vt_indent() + ".syntax unified\n"
+    out = out + _vt_indent() + ".thumb\n"
+    out = out + _vt_indent() + ".cpu " + cpu + "\n"
+    out = out + "\n"
+
+    // section + label
+    out = out + _vt_indent() + ".section " + section_name + ", " + section_flags + "\n"
+    out = out + _vt_indent() + ".global " + table_label + "\n"
+    out = out + table_label + ":\n"
+
+    // slot entries
+    let n = slot_symbols.len()
+    if slot_thumb.len() != n {
+        println("[vector_table_emit] FATAL: slot_thumb len " + str(slot_thumb.len()) + " != slot_symbols len " + str(n))
+        exit(1)
+    }
+    if slot_comments.len() != n {
+        println("[vector_table_emit] FATAL: slot_comments len " + str(slot_comments.len()) + " != slot_symbols len " + str(n))
+        exit(1)
+    }
+    let mut i = 0
+    while i < n {
+        out = out + _vt_word_line(slot_symbols[i], slot_thumb[i], slot_comments[i])
+        i = i + 1
+    }
+
+    // padding (rolled .rept block matches hand-written form for
+    // source-readability; the assembled bytes are identical either
+    // way since `.rept N .word 0 .endr` ≡ N copies of `.word 0`).
+    if pad_words > 0 {
+        out = out + _vt_indent() + "/* padding to fill vector table */\n"
+        out = out + _vt_indent() + ".rept " + str(pad_words) + "\n"
+        out = out + _vt_indent() + ".word 0\n"
+        out = out + _vt_indent() + ".endr\n"
+    }
+
+    return out
+}
+
+// ─── canned slot tables (boot_<mcu>.s shapes) ──────────────────────
+//
+// rp2040_vt_slots: returns the 4-entry symbol/thumb/comment trio
+// matching boot_rp2040.s lines 25-32 (initial-SP + reset + NMI +
+// HardFault, then 28 padding words to fill the 32-word ARMv6-M
+// system-vector area = 0x80 bytes).
+//
+// These canned tables are the "data" surface that a future Component
+// 1 parser change would populate FROM `@interrupt(slot=N)` /
+// `@vector_table(...)` annotations. For this foundation PR, they
+// are hand-curated to prove the emit surface is byte-correct.
+
+fn rp2040_vt_symbols() -> [str] {
+    return ["_stack_top", "_reset_handler", "_hard_fault", "_hard_fault"]
+}
+
+fn rp2040_vt_thumb() -> [bool] {
+    return [false, true, true, true]
+}
+
+fn rp2040_vt_comments() -> [str] {
+    return [
+        "0x00: initial SP",
+        "0x04: reset (Thumb mode bit set)",
+        "0x08: NMI",
+        "0x0C: HardFault"
+    ]
+}
+
+fn rp2040_vt_pad_words() -> int { return 28 }
+
+// rp2040_emit_full: convenience wrapper — emits the complete vector-
+// table `.s` for boot_rp2040.s style. Output assembles to a 0x80-byte
+// `.vector_table` section with 4 R_ARM_ABS32 relocs.
+
+fn rp2040_emit_vector_table_s() -> str {
+    let banner = "/* AUTO-GENERATED by stdlib/hal/vector_table_emit.hexa\n" +
+                 " * RP2040 ARMv6-M (Cortex-M0+) vector table (data section).\n" +
+                 " * Byte-identity oracle: stdlib/hal/t3/vt_byte_diff_rp2040.hexa\n" +
+                 " * Do not hand-edit — regenerate via the emit fn. */"
+    return vt_emit_section(
+        banner,
+        "cortex-m0plus",
+        ".vector_table",
+        "\"a\", %progbits",
+        "_vector_table",
+        rp2040_vt_symbols(),
+        rp2040_vt_thumb(),
+        rp2040_vt_comments(),
+        rp2040_vt_pad_words()
+    )
+}

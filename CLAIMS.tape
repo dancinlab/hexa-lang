@@ -3233,3 +3233,18 @@
   raw    = ".verdicts/paper-unitary-perfect-n6/dual_perfect_sweep.out"
   src    = "TECS-L n=6 minimality · containment lemma + complete ordinary-perfect candidate list"
   status = "🔵 SUPPORTED-FORMAL — finite exhaustion over provably complete 4-element list. terminal."
+
+# ───────────────────────────────────────────────────────────────────────
+# RUNTIME-FLOOR — F5 RFC 063/064 Component 2-lite (`.s`-text vector generator)
+# A pure-hexa `.s`-text vector-table emitter (stdlib/hal/vector_table_emit.hexa)
+# produces a `.vector_table` ELF section byte-identical (SHA256 + reloc-set)
+# to the hand-written stdlib/hal/t3/boot_rp2040.s. Foundation increment for the
+# RUNTIME.floor.md §F5 re-open path (single PR; reset-prologue lowering +
+# `git rm` deferred to Components 3 + 5).
+
+@C f5_vt_byte_diff_rp2040 := "hexa vector_table_emit produces .vector_table section byte-identical (SHA256 + 4× R_ARM_ABS32) to hand-written boot_rp2040.s — `arm-none-eabi-as` byte-diff oracle 6/6 PASS" :: fixpoint [slug=runtime-floor-closure group=RUNTIME-FLOOR]
+  method = "fixpoint"
+  cmd    = "HEXA_HAL_ROOT=$(pwd) hexa run stdlib/hal/t3/vt_byte_diff_rp2040.hexa"
+  raw    = ".verdicts/runtime-floor-closure/F5-vt-byte-diff-rp2040.txt"
+  src    = "stdlib/hal/vector_table_emit.hexa (rp2040_emit_vector_table_s) + stdlib/hal/t3/vt_byte_diff_rp2040.hexa + RUNTIME.floor.md §F5 FOUNDATION 증분 (PR1 · 2026-05-28)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim (6/6 PASS, gen sha == orig sha == 212baeea7479dbac…73d82c2). Foundation for F5 re-open. NOT paper-eligible alone — `git rm` gated on Components 3 + 5 (reset-prologue lowering + numerics_t3 rewire)."

@@ -1,0 +1,31 @@
+========================================================================
+  stdlib/hal — vt_byte_diff_rp2040: F5 vector-table byte-diff oracle
+========================================================================
+  generator: stdlib/hal/vector_table_emit.hexa (rp2040_emit_vector_table_s)
+  oracle:    arm-none-eabi-as byte-diff vs boot_rp2040.s
+  target:    ARMv6-M Cortex-M0+ .vector_table (0x80 bytes, 4 R_ARM_ABS32)
+
+  scratch: /var/folders/2g/blzd56lx2rvfvt61c1pc9g7r0000gn/T/vt_byte_diff.XXXXXX.M8mxWRIv3o
+
+  [PASS] arm-none-eabi-as + objcopy present
+         · as=y objcopy=y
+  [PASS] hand-written boot_rp2040.s present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a2a4fce895c7683e4/stdlib/hal/t3/boot_rp2040.s
+  [PASS] emitter output assembles via arm-none-eabi-as
+         · wrote /var/folders/2g/blzd56lx2rvfvt61c1pc9g7r0000gn/T/vt_byte_diff.XXXXXX.M8mxWRIv3o/gen_vt.o
+  [PASS] hand-written boot_rp2040.s assembles
+         · wrote /var/folders/2g/blzd56lx2rvfvt61c1pc9g7r0000gn/T/vt_byte_diff.XXXXXX.M8mxWRIv3o/orig.o
+  [PASS] .vector_table section byte-identical (gen ≡ orig)
+         · gen=212baeea7479dbacd7ac73b151cb0e20eaeeb38a4d3f4cb83d479660e73d82c2 orig=212baeea7479dbacd7ac73b151cb0e20eaeeb38a4d3f4cb83d479660e73d82c2
+  [PASS] .vector_table relocs identical (gen ≡ orig)
+         · 4× R_ARM_ABS32 (stack_top / reset / hard_fault×2)
+
+  F5 Component 2-lite (`.s`-text vector generator) byte-identity:
+    PROVEN ✓ — rp2040 .vector_table section is hexa-emittable.
+    Next-component scope (RUNTIME.floor.md §F5):
+      Component 1 — parser `@interrupt(slot=N)` / `@vector_table` arg
+      Component 3 — ARMv6-M reset-prologue lowering (text section)
+      Component 5 — `git rm boot_rp2040.s` + numerics_t3 rewire
+========================================================================
+  6/6 checks passed
+__HEXA_LANG_HAL_VT_BYTE_DIFF_RP2040__ PASS
