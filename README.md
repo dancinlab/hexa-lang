@@ -592,4 +592,4 @@ Pointers: `gate/` for build gates, `proposals/` for active RFCs, `SPEC.yaml` for
 
 ---
 
-🕸️ **재사용 격자 SSOT** → 루트 [`NEXUS.tape`](NEXUS.tape) (commons @D g67 + g68 · hexa-lang = shared substrate hub)
+🕸️ **재사용 격자 SSOT** → 루트 [`DOMAINS.tape`](DOMAINS.tape) (commons @D g67 cross-domain + g68 cross-project · `@link` connection graph · hexa-lang = shared substrate hub)

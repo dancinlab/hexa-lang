@@ -13,7 +13,7 @@ Append-only history sister of `ARXIV.md`. Each entry starts with `## <ISO timest
   - **phanes** `arxiv-a4-autonomous-discovery-ingest` (AlphaEvolve analog) → `~/core/phanes/INBOX.log.md` (파일 신규 생성). main unprotected → 직접 push `22414be4`. ✅
 - [x] verify-density 상관 정식화 — handoff-axis verify-ability ∝ target-repo 폐형해 밀도: DEMIURGE(5 물리상수 🔵, RFC-045 fn wired) + HEXA-LANG(16 fn·30+ recompute 🔵, self) = verify-native **producer** / ANIMA(0, IIT primitive 부재) + PHANES(0, OUROBOROS 소비자/SaaS) = **consumer**(정직, 실패 아님). 상관은 시간 가변 — A2 의 4 candidate 가 V5 IIT 엔진 랜딩 시 🟢 로 승격(ANIMA 밀도 0→양수). A2-A5 측정 표가 실증.
 - [x] 영속 — `docs/a6-crossrepo-handoff.md` (한글 §1 메커니즘·§2 4-axis+null case·§3 dirty-tree hazard+격리 worktree resolution+3-debt 표·§4 verify-density 상관 A2-A5 측정 표·§5 거버넌스·§6 A7 readiness) + `CLAIMS.tape` @C slug=arxiv-handoff-mechanism (🟢) + ARXIV.md A6 `[x]`.
-- [x] 다음 = A7 (catalogue closure report + reuse edge g67 NEXUS.tape + 4-repo 흡수 ledger). verify-density 상관이 A7 ledger 의 producer/consumer 분류 축.
+- [x] 다음 = A7 (catalogue closure report + reuse edge g67 DOMAINS.tape + 4-repo 흡수 ledger). verify-density 상관이 A7 ledger 의 producer/consumer 분류 축.
 
 ## 2026-05-26 — A5 HEXA-LANG axis 흡수 (컴파일러/수론 13편 · math.NT verify-native · IN-REPO)
 
