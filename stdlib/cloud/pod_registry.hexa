@@ -596,6 +596,29 @@ struct PodRecord {
     cumulative_cost_usd:   str     // "0.0" default (M3 will accrue)
 }
 
+// _m5_numfield — sniff the bare (unquoted) value of "key":value out of a
+// flat JSON record, stopping at `,` or `}`. Returns "" if absent. Used for
+// JSON-numeric/null fields (ttl_sec, cumulative_cost_usd) that the writer
+// emits unquoted, which the quoted-string `_reg_field` reader cannot see.
+fn _m5_numfield(rec: str, key: str) -> str {
+    let marker = "\"" + key + "\":"
+    let at = rec.index_of(marker)
+    if at < 0 {
+        return ""
+    }
+    let start = at + len(marker)
+    let n = len(rec)
+    let mut i = start
+    while i < n {
+        let c = rec.substring(i, i + 1)
+        if c == "," || c == "}" {
+            return rec.substring(start, i).trim()
+        }
+        i = i + 1
+    }
+    return rec.substring(start, n).trim()
+}
+
 // _m5_parse — minimal JSON-array reader for our flat schema. We do NOT
 // pull in stdlib/alloc/json here to keep the M5 layer dependency-free
 // (the legacy JSONL above also hand-rolls its parsing). Records are split
@@ -644,10 +667,18 @@ fn _m5_parse_records(body: str) -> [PodRecord] {
         }
         let id = _reg_field(rec, "id")
         if len(id) > 0 {
-            let ttl_raw = _reg_field(rec, "ttl_sec")
+            // `ttl_sec` is JSON-numeric/null — we hand-emit it unquoted, so
+            // sniff the value directly out of the record bytes (_reg_field
+            // only reads quoted strings).
             let mut ttl = -1
-            if len(ttl_raw) > 0 {
-                ttl = _reg_atoi(ttl_raw)
+            let ttl_num = _m5_numfield(rec, "ttl_sec")
+            if len(ttl_num) > 0 && ttl_num != "null" {
+                ttl = _reg_atoi(ttl_num)
+            }
+            // `cumulative_cost_usd` likewise unquoted; default "0.0" when absent.
+            let mut cum = _m5_numfield(rec, "cumulative_cost_usd")
+            if len(cum) == 0 || cum == "null" {
+                cum = "0.0"
             }
             out.push(PodRecord {
                 id: id,
@@ -659,7 +690,7 @@ fn _m5_parse_records(body: str) -> [PodRecord] {
                 status: _reg_field(rec, "status"),
                 ttl_sec: ttl,
                 max_cost_usd: _reg_field(rec, "max_cost_usd"),
-                cumulative_cost_usd: _reg_field(rec, "cumulative_cost_usd")
+                cumulative_cost_usd: cum
             })
         }
         k = k + 1

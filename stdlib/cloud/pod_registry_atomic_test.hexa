@@ -17,11 +17,24 @@
 use "stdlib/cloud/pod_registry"
 
 fn _t_path_sandbox() -> str {
-    // Sandbox under a unique tmp subdir per test run so a real
-    // ~/.hx/cloud/active-pods.json on the dev box is untouched.
+    // We can't override $HOME from in-process (no set_env_var builtin) so
+    // we test against the real ~/.hx/cloud/active-pods.json but snapshot
+    // it aside first + restore on exit so the operator's live state is
+    // untouched. The test only runs against a single short-lived id pair.
     let sb = exec("mktemp -d /tmp/hexa-m5-test.XXXXXX 2>/dev/null").trim()
-    let _ = exec("mkdir -p " + sb + "/.hx/cloud 2>/dev/null")
+    let _ = exec("mkdir -p " + env_var("HOME") + "/.hx/cloud 2>/dev/null")
+    // Snapshot existing registry aside (restored at the end of _t_main).
+    let real = env_var("HOME") + "/.hx/cloud/active-pods.json"
+    let _ = exec("test -f " + real + " && cp -p " + real + " " + sb + "/SAVED.json || true")
+    let _ = exec("rm -f " + real + " 2>/dev/null")
     return sb
+}
+
+fn _t_restore(sb: str) {
+    let real = env_var("HOME") + "/.hx/cloud/active-pods.json"
+    let _ = exec("rm -f " + real + " 2>/dev/null")
+    let _ = exec("test -f " + sb + "/SAVED.json && cp -p " + sb + "/SAVED.json " + real + " || true")
+    let _ = exec("rm -rf " + sb + " 2>/dev/null")
 }
 
 fn _t_assert(cond: int, label: str) {
@@ -33,10 +46,8 @@ fn _t_assert(cond: int, label: str) {
 
 fn _t_main() {
     let sb = _t_path_sandbox()
-    // Redirect HOME so pod_registry_path() resolves into the sandbox.
-    set_env_var("HOME", sb)
     let path = pod_registry_path()
-    _t_assert(path == sb + "/.hx/cloud/active-pods.json", "F-CLOUD-M5-PATH")
+    _t_assert(path == env_var("HOME") + "/.hx/cloud/active-pods.json", "F-CLOUD-M5-PATH")
 
     // ── F-CLOUD-M5-ATOMIC-WRITE ──────────────────────────────────────
     // Initial add — file should exist + be readable + chmod 600.
@@ -46,7 +57,7 @@ fn _t_main() {
     let perm = exec("stat -f %Lp " + path + " 2>/dev/null || stat -c %a " + path + " 2>/dev/null").trim()
     _t_assert(perm == "600", "F-CLOUD-M5-ATOMIC-WRITE: chmod 600 (got " + perm + ")")
     // No leftover temp file (`.tmp.<pid>`) — rename consumed it.
-    let leftovers = exec("ls " + sb + "/.hx/cloud/active-pods.json.tmp.* 2>/dev/null | wc -l").trim()
+    let leftovers = exec("ls " + path + ".tmp.* 2>/dev/null | wc -l").trim()
     _t_assert(leftovers == "0", "F-CLOUD-M5-ATOMIC-WRITE: no leftover temp (got " + leftovers + ")")
 
     let recs = pod_registry_load()
@@ -110,8 +121,9 @@ fn _t_main() {
     let alive = pod_registry_list()
     _t_assert(len(alive) == 1, "F-CLOUD-M5-CONCURRENT-READ: list returns alive only")
 
-    // Cleanup sandbox.
-    let _ = exec("rm -rf " + sb + " 2>/dev/null")
+    // Cleanup sandbox + restore the real registry snapshot.
+    let _ = pod_registry_remove("podB2")
+    _t_restore(sb)
     println("pod_registry_atomic_test PASS")
 }
 
