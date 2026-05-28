@@ -1,0 +1,104 @@
+#!hexa strict
+// stdlib/verify/harvest_test.hexa
+// PR-hx4 smoke — kind-pluggable metric harvest.
+//
+// Run:  hexa run stdlib/verify/harvest_test.hexa
+// Marker on PASS: __VERIFY_HARVEST_SMOKE__ PASS
+
+import "stdlib/verify/harvest.hexa"
+
+let mut RUN: int = 0
+let mut FAIL: int = 0
+
+fn abs_f(x: float) -> float { if x < 0.0 { return -x } return x }
+fn rel_err(a: float, b: float) -> float {
+    let d = abs_f(b); if d < 1.0e-30 { return abs_f(a - b) }; return abs_f(a - b) / d
+}
+fn _check(ok: bool, label: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+}
+
+// ─── write a fake ph.out fixture (QE Allen-Dynes summary lines) ─────────
+
+fn _write_fixture(path: string, lambda_val: string, omega_val: string) {
+    let _ = exec("mkdir -p $(dirname '" + path + "') && cat > '" + path + "' <<__EOF__\n" +
+        "     Phonon dispersion summary (QE 7.5 mock)\n" +
+        "     Iteration 1: lambda  =   0.50\n" +
+        "     Iteration 2: lambda  =   0.95\n" +
+        "     Average el-ph coupling lambda  =   " + lambda_val + "\n" +
+        "     Average <log w>                =   " + omega_val + " K\n" +
+        "     Done.\n" +
+        "__EOF__")
+}
+
+fn main() {
+    println("== stdlib/verify/harvest PR-hx4 smoke ==")
+
+    let fixture_dir  = "/tmp/hexa_harvest_smoke_" + str(exec("date +%s%N").trim())
+    let fixture_file = fixture_dir + "/ph.out"
+    _write_fixture(fixture_file, "1.21", "1350.5")
+
+    // F1: supported_kinds returns 4 known
+    let kinds = supported_kinds()
+    _check(kinds.len() == 4, "F1 supported_kinds() = 4 entries")
+
+    // F2: dft-elph harvest from a directory finds lambda + omega_log_K
+    let m_dir = harvest(fixture_dir, "dft-elph")
+    _check(m_dir.ok, "F2a dft-elph harvest from dir ok=true")
+    _check(metrics_has(m_dir, "lambda") && metrics_has(m_dir, "omega_log_K"),
+           "F2b dft-elph: keys include lambda + omega_log_K")
+    _check(rel_err(metrics_get(m_dir, "lambda"), 1.21) < 1.0e-6,
+           "F2c lambda = 1.21 (rel<1e-6)")
+    _check(rel_err(metrics_get(m_dir, "omega_log_K"), 1350.5) < 1.0e-6,
+           "F2d omega_log_K = 1350.5 K (rel<1e-6)")
+
+    // F3: dft-elph harvest from a single file
+    let m_file = harvest(fixture_file, "dft-elph")
+    _check(m_file.ok && metrics_get(m_file, "lambda") == 1.21,
+           "F3 dft-elph harvest from single file ok + lambda 1.21")
+
+    // F4: dft-elph harvest from a tar
+    let tar_path = fixture_dir + "/bundle.tar"
+    let _ = exec("cd '" + fixture_dir + "' && tar cf bundle.tar ph.out 2>/dev/null")
+    let m_tar = harvest(tar_path, "dft-elph")
+    _check(m_tar.ok, "F4a dft-elph harvest from tar ok=true")
+    _check(rel_err(metrics_get(m_tar, "lambda"), 1.21) < 1.0e-6,
+           "F4b tar: lambda 1.21 extracted")
+    _check(rel_err(metrics_get(m_tar, "omega_log_K"), 1350.5) < 1.0e-6,
+           "F4c tar: omega_log_K 1350.5 extracted")
+
+    // F5: missing path -> ok=false, empty
+    let m_miss = harvest("/tmp/this_does_not_exist_xyz", "dft-elph")
+    _check(!m_miss.ok && metrics_len(m_miss) == 0,
+           "F5 missing path -> ok=false, metrics_len=0")
+
+    // F6: stub kinds (sscha / llm-bench / web-smoke) -> ok=false (d6 honest)
+    let m_sscha = harvest(fixture_dir, "sscha")
+    let m_llm   = harvest(fixture_dir, "llm-bench")
+    let m_web   = harvest(fixture_dir, "web-smoke")
+    _check(!m_sscha.ok && !m_llm.ok && !m_web.ok,
+           "F6 stub kinds (sscha/llm-bench/web-smoke) all ok=false (TODO)")
+
+    // F7: unknown kind -> ok=false
+    let m_unk = harvest(fixture_dir, "not-a-real-kind")
+    _check(!m_unk.ok, "F7 unknown kind -> ok=false")
+
+    // F8: metrics_get on missing key -> 0.0
+    _check(metrics_get(m_dir, "not_a_key") == 0.0,
+           "F8 metrics_get(missing) -> 0.0 sentinel")
+
+    // F9: kind + source echoed in metrics
+    _check(m_dir.kind == "dft-elph" && m_dir.source == fixture_dir,
+           "F9 metrics echoes kind + source")
+
+    // cleanup
+    let _ = exec("rm -rf '" + fixture_dir + "'")
+
+    println("== " + str(RUN - FAIL) + "/" + str(RUN) + " checks passed ==")
+    if FAIL > 0 { println("__VERIFY_HARVEST_SMOKE__ FAIL"); exit(1) }
+    println("__VERIFY_HARVEST_SMOKE__ PASS")
+    exit(0)
+}
