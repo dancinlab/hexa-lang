@@ -131,6 +131,25 @@ static int  hxlcl_rmdir(const char *path);
 static int  hxlcl_fsync(int fd);
 static int  hxlcl_dup(int oldfd);
 #endif
+// F3 wave 4 — 2-arg + 3-arg errno-reloc family. chmod/access use the mkdir
+// sub-template (9-instr 36 B, single sxtw on x1, relocs @0x14/0x18).
+// truncate uses the stat sub-template (8-instr 32 B, NO sxtw — both args
+// already 64-bit, relocs @0x10/0x14). chown/lchown use the NEW ptr+int+int
+// sub-template (10-instr 40 B, sxtw on x1+x2, relocs @0x18/0x1c — same
+// reloc offsets as lseek which has a different sxtw pair (x0+x2)).
+#ifdef HEXA_RT_SELFEMIT
+extern int  hxlcl_chmod(const char *path, int mode);
+extern int  hxlcl_access(const char *path, int amode);
+extern int  hxlcl_truncate(const char *path, long length);
+extern int  hxlcl_chown(const char *path, int uid, int gid);
+extern int  hxlcl_lchown(const char *path, int uid, int gid);
+#else
+static int  hxlcl_chmod(const char *path, int mode);
+static int  hxlcl_access(const char *path, int amode);
+static int  hxlcl_truncate(const char *path, long length);
+static int  hxlcl_chown(const char *path, int uid, int gid);
+static int  hxlcl_lchown(const char *path, int uid, int gid);
+#endif
 // B9.6-C1 (F3 Path A) — under HEXA_RT_SELFEMIT hxlcl_getpid is `extern`
 // (resolved by emit_hxlcl_getpid_o.hexa's .o); the forward decl must match
 // that external linkage, else the `static` here wins and masks the self-emit
@@ -1322,6 +1341,15 @@ static int hxlcl_pthread_join(void *thread, void **retval);
 #define HXLCL_SYS_RMDIR       137
 #define HXLCL_SYS_FSYNC        95
 #define HXLCL_SYS_DUP          41
+// F3 wave 4 — class-C 2-arg / 3-arg errno-reloc svc-traps. Three sub-templates:
+//   2-arg ptr+int  (sxtw x1)         : chmod(15), access(33) — 9-instr 36 B (mkdir shape)
+//   2-arg ptr+long (no sxtw)         : truncate(200) — 8-instr 32 B (stat shape)
+//   3-arg ptr+int+int (sxtw x1+x2)   : chown(16), lchown(364) — 10-instr 40 B (NEW shape)
+#define HXLCL_SYS_CHMOD        15
+#define HXLCL_SYS_ACCESS       33
+#define HXLCL_SYS_TRUNCATE    200
+#define HXLCL_SYS_CHOWN        16
+#define HXLCL_SYS_LCHOWN      364
 
 static inline long _hxlcl_syscall1(long nr, long a0) {
     register long x0 __asm__("x0") = a0;
@@ -1532,6 +1560,18 @@ static int __attribute__((noinline)) hxlcl_unlink(const char *path) { return (in
 static int __attribute__((noinline)) hxlcl_rmdir(const char *path)  { return (int)_hxlcl_syscall1_cf(HXLCL_SYS_RMDIR,  (long)path); }
 static int __attribute__((noinline)) hxlcl_fsync(int fd)            { return (int)_hxlcl_syscall1_cf(HXLCL_SYS_FSYNC,  (long)fd); }
 static int __attribute__((noinline)) hxlcl_dup(int oldfd)           { return (int)_hxlcl_syscall1_cf(HXLCL_SYS_DUP,    (long)oldfd); }
+#endif
+// F3 wave 4 — DEFAULT: file-local `static` 2-arg / 3-arg _cf svc-trap
+// bodies. SELFEMIT flips to extern (decls above). The 2-arg bodies route
+// through _hxlcl_syscall2_cf, the 3-arg through _hxlcl_syscall3_cf — clang
+// -O2 emits IDENTICAL bytes to rt_chmod/rt_access (mkdir shape), rt_truncate
+// (stat shape), rt_chown/rt_lchown (NEW 3-arg ptr+int+int shape).
+#ifndef HEXA_RT_SELFEMIT
+static int __attribute__((noinline)) hxlcl_chmod(const char *path, int mode)         { return (int)_hxlcl_syscall2_cf(HXLCL_SYS_CHMOD,    (long)path, (long)mode); }
+static int __attribute__((noinline)) hxlcl_access(const char *path, int amode)       { return (int)_hxlcl_syscall2_cf(HXLCL_SYS_ACCESS,   (long)path, (long)amode); }
+static int __attribute__((noinline)) hxlcl_truncate(const char *path, long length)   { return (int)_hxlcl_syscall2_cf(HXLCL_SYS_TRUNCATE, (long)path, (long)length); }
+static int __attribute__((noinline)) hxlcl_chown(const char *path, int uid, int gid) { return (int)_hxlcl_syscall3_cf(HXLCL_SYS_CHOWN,    (long)path, (long)uid, (long)gid); }
+static int __attribute__((noinline)) hxlcl_lchown(const char *path, int uid, int gid){ return (int)_hxlcl_syscall3_cf(HXLCL_SYS_LCHOWN,   (long)path, (long)uid, (long)gid); }
 #endif
 // F3 ACTIVATION RUNBOOK · Path A — B9.6-C1 class-C syscall-ABI self-emit slot.
 //

@@ -3516,6 +3516,350 @@ fn rt_dup_reloc_kinds() {
     return k
 }
 
+// ── rt_chmod (F3 wave 4 — class-C 2-arg PTR+INT _cf + errno · mkdir clone) ─
+// chmod(const char *path, int mode) -> int. Byte-for-byte rt_mkdir clone
+// except `mov w16,#15` (SYS_CHMOD). 9-instr 36 B body with single sxtw on
+// x1 (the int mode); path (x0) is already 64-bit (ptr). errno reloc sites:
+// 0x14 (PAGE21) / 0x18 (PAGEOFF12) — IDENTICAL to rt_mkdir. clang -O2
+// (== as -arch arm64, errno-define context) verified byte-for-byte.
+fn rt_chmod() {
+    let mut c = []
+    // sxtw x1, w1  (sign-extend mode arg)   0x93407C21
+    c.push(33)
+    c.push(124)
+    c.push(64)
+    c.push(147)
+    // mov w16, #15  (SYS_CHMOD)             0x528001F0
+    c.push(240)
+    c.push(1)
+    c.push(128)
+    c.push(82)
+    // svc #0x80                             0xD4001001
+    c.push(1)
+    c.push(16)
+    c.push(0)
+    c.push(212)
+    // cset x8, hs                           0x9A9F37E8
+    c.push(232)
+    c.push(55)
+    c.push(159)
+    c.push(154)
+    // cbz x8, Lret  (+0x10 to ret)          0xB4000088
+    c.push(136)
+    c.push(0)
+    c.push(0)
+    c.push(180)
+    // adrp x8, errno@PAGE                   0x90000008
+    c.push(8)
+    c.push(0)
+    c.push(0)
+    c.push(144)
+    // str w0, [x8, errno@PAGEOFF]           0xB9000100
+    c.push(0)
+    c.push(1)
+    c.push(0)
+    c.push(185)
+    // mov x0, #-1                           0x92800000
+    c.push(0)
+    c.push(0)
+    c.push(128)
+    c.push(146)
+    // ret                                   0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+fn rt_chmod_reloc_offs() {
+    let mut o = []
+    o.push(20)
+    o.push(24)
+    return o
+}
+fn rt_chmod_reloc_kinds() {
+    let mut k = []
+    k.push(3)
+    k.push(4)
+    return k
+}
+
+// ── rt_access (F3 wave 4 — class-C 2-arg PTR+INT _cf + errno · mkdir clone) ─
+// access(const char *path, int amode) -> int. Byte-for-byte rt_mkdir clone
+// except `mov w16,#33` (SYS_ACCESS, 0x21). Same 9-instr 36 B body, same
+// reloc table @0x14/0x18. clang -O2 verified.
+fn rt_access() {
+    let mut c = []
+    // sxtw x1, w1  (sign-extend amode arg)  0x93407C21
+    c.push(33)
+    c.push(124)
+    c.push(64)
+    c.push(147)
+    // mov w16, #33  (SYS_ACCESS)            0x52800430
+    c.push(48)
+    c.push(4)
+    c.push(128)
+    c.push(82)
+    // svc #0x80                             0xD4001001
+    c.push(1)
+    c.push(16)
+    c.push(0)
+    c.push(212)
+    // cset x8, hs                           0x9A9F37E8
+    c.push(232)
+    c.push(55)
+    c.push(159)
+    c.push(154)
+    // cbz x8, Lret  (+0x10 to ret)          0xB4000088
+    c.push(136)
+    c.push(0)
+    c.push(0)
+    c.push(180)
+    // adrp x8, errno@PAGE                   0x90000008
+    c.push(8)
+    c.push(0)
+    c.push(0)
+    c.push(144)
+    // str w0, [x8, errno@PAGEOFF]           0xB9000100
+    c.push(0)
+    c.push(1)
+    c.push(0)
+    c.push(185)
+    // mov x0, #-1                           0x92800000
+    c.push(0)
+    c.push(0)
+    c.push(128)
+    c.push(146)
+    // ret                                   0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+fn rt_access_reloc_offs() {
+    let mut o = []
+    o.push(20)
+    o.push(24)
+    return o
+}
+fn rt_access_reloc_kinds() {
+    let mut k = []
+    k.push(3)
+    k.push(4)
+    return k
+}
+
+// ── rt_truncate (F3 wave 4 — class-C 2-arg PTR+LONG _cf + errno · stat clone) ─
+// truncate(const char *path, long length) -> int. Byte-for-byte rt_stat
+// clone except `mov w16,#200` (SYS_TRUNCATE, 0xC8). Both args are already
+// 64-bit (path is ptr, length is long), so NEITHER is sign-extended — the
+// FIRST stat-shape extension. 8-instr 32 B body, errno reloc sites 0x10/
+// 0x14 (PAGE21/PAGEOFF12) — IDENTICAL to rt_stat. clang -O2 verified.
+fn rt_truncate() {
+    let mut c = []
+    // mov w16, #200  (SYS_TRUNCATE)         0x52801910
+    c.push(16)
+    c.push(25)
+    c.push(128)
+    c.push(82)
+    // svc #0x80                             0xD4001001
+    c.push(1)
+    c.push(16)
+    c.push(0)
+    c.push(212)
+    // cset x8, hs                           0x9A9F37E8
+    c.push(232)
+    c.push(55)
+    c.push(159)
+    c.push(154)
+    // cbz x8, Lret  (+0x10 to ret)          0xB4000088
+    c.push(136)
+    c.push(0)
+    c.push(0)
+    c.push(180)
+    // adrp x8, errno@PAGE                   0x90000008
+    c.push(8)
+    c.push(0)
+    c.push(0)
+    c.push(144)
+    // str w0, [x8, errno@PAGEOFF]           0xB9000100
+    c.push(0)
+    c.push(1)
+    c.push(0)
+    c.push(185)
+    // mov x0, #-1                           0x92800000
+    c.push(0)
+    c.push(0)
+    c.push(128)
+    c.push(146)
+    // ret                                   0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+fn rt_truncate_reloc_offs() {
+    let mut o = []
+    o.push(16)
+    o.push(20)
+    return o
+}
+fn rt_truncate_reloc_kinds() {
+    let mut k = []
+    k.push(3)
+    k.push(4)
+    return k
+}
+
+// ── rt_chown (F3 wave 4 — class-C 3-arg PTR+INT+INT _cf + errno · NEW SHAPE) ─
+// chown(const char *path, int uid, int gid) -> int. The FIRST ptr+int+int
+// 3-arg _cf svc-trap: path (x0) is already 64-bit (ptr, no sxtw), uid (x1)
+// AND gid (x2) are both ints → BOTH sign-extended. This is the MIRROR
+// IMAGE of rt_lseek (which sxtw's x0 + x2, skipping the middle x1) — chown
+// sxtw's x1 + x2 instead. SYS_CHOWN = 16 (0x10). 10-instr 40 B body, errno
+// reloc sites 0x18/0x1c — IDENTICAL to rt_lseek (same prologue length).
+fn rt_chown() {
+    let mut c = []
+    // sxtw x1, w1  (sign-extend uid)        0x93407C21
+    c.push(33)
+    c.push(124)
+    c.push(64)
+    c.push(147)
+    // sxtw x2, w2  (sign-extend gid)        0x93407C42
+    c.push(66)
+    c.push(124)
+    c.push(64)
+    c.push(147)
+    // mov w16, #16  (SYS_CHOWN)             0x52800210
+    c.push(16)
+    c.push(2)
+    c.push(128)
+    c.push(82)
+    // svc #0x80                             0xD4001001
+    c.push(1)
+    c.push(16)
+    c.push(0)
+    c.push(212)
+    // cset x8, hs                           0x9A9F37E8
+    c.push(232)
+    c.push(55)
+    c.push(159)
+    c.push(154)
+    // cbz x8, Lret  (+0x10 to ret)          0xB4000088
+    c.push(136)
+    c.push(0)
+    c.push(0)
+    c.push(180)
+    // adrp x8, errno@PAGE                   0x90000008
+    c.push(8)
+    c.push(0)
+    c.push(0)
+    c.push(144)
+    // str w0, [x8, errno@PAGEOFF]           0xB9000100
+    c.push(0)
+    c.push(1)
+    c.push(0)
+    c.push(185)
+    // mov x0, #-1                           0x92800000
+    c.push(0)
+    c.push(0)
+    c.push(128)
+    c.push(146)
+    // ret                                   0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+fn rt_chown_reloc_offs() {
+    let mut o = []
+    o.push(24)
+    o.push(28)
+    return o
+}
+fn rt_chown_reloc_kinds() {
+    let mut k = []
+    k.push(3)
+    k.push(4)
+    return k
+}
+
+// ── rt_lchown (F3 wave 4 — class-C 3-arg PTR+INT+INT _cf + errno · chown clone) ─
+// lchown(const char *path, int uid, int gid) -> int. Byte-for-byte rt_chown
+// clone except `mov w16,#364` (SYS_LCHOWN, 0x16C). SYS#364 > 255 exercises
+// the high MOVZ imm16 nibble (0x52802D90 = 90 2D 80 52), still single MOVZ
+// (no movk needed since 364 < 65536). Same 10-instr 40 B body, same reloc
+// table @0x18/0x1c. clang -O2 verified.
+fn rt_lchown() {
+    let mut c = []
+    // sxtw x1, w1  (sign-extend uid)        0x93407C21
+    c.push(33)
+    c.push(124)
+    c.push(64)
+    c.push(147)
+    // sxtw x2, w2  (sign-extend gid)        0x93407C42
+    c.push(66)
+    c.push(124)
+    c.push(64)
+    c.push(147)
+    // mov w16, #364  (SYS_LCHOWN)           0x52802D90
+    c.push(144)
+    c.push(45)
+    c.push(128)
+    c.push(82)
+    // svc #0x80                             0xD4001001
+    c.push(1)
+    c.push(16)
+    c.push(0)
+    c.push(212)
+    // cset x8, hs                           0x9A9F37E8
+    c.push(232)
+    c.push(55)
+    c.push(159)
+    c.push(154)
+    // cbz x8, Lret  (+0x10 to ret)          0xB4000088
+    c.push(136)
+    c.push(0)
+    c.push(0)
+    c.push(180)
+    // adrp x8, errno@PAGE                   0x90000008
+    c.push(8)
+    c.push(0)
+    c.push(0)
+    c.push(144)
+    // str w0, [x8, errno@PAGEOFF]           0xB9000100
+    c.push(0)
+    c.push(1)
+    c.push(0)
+    c.push(185)
+    // mov x0, #-1                           0x92800000
+    c.push(0)
+    c.push(0)
+    c.push(128)
+    c.push(146)
+    // ret                                   0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+fn rt_lchown_reloc_offs() {
+    let mut o = []
+    o.push(24)
+    o.push(28)
+    return o
+}
+fn rt_lchown_reloc_kinds() {
+    let mut k = []
+    k.push(3)
+    k.push(4)
+    return k
+}
+
 // ── rt_dup2 (B9.6-C4 — class-C syscall · 2-arg _cf + errno) ──────────
 // dup2(int oldfd, int newfd) -> int. The FIRST 2-arg svc-_cf self-emit,
 // extending the rt_close 1-arg carry-flag template by ONE instruction (a
