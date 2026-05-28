@@ -109,7 +109,7 @@ jobs:
              && tar xzf "/tmp/prior/$ASSET" -C /tmp/prior 2>/dev/null; then
             PH="$(find /tmp/prior -type f -name hexa | head -1)"
             if [ -n "$PH" ] && "$PH" --version >/dev/null 2>&1; then
-              if "$PH" run tool/regen_native_runtime_c_includes.hexa; then
+              if HEXA_RUN_CMD="$PH run" "$PH" run tool/regen_native_runtime_c_includes.hexa; then
                 echo "warm: amalgamation seed .c regenerated + verified byte-identical"
               else
                 echo "warm: regen drift/fail — restoring tracked .c"
@@ -222,7 +222,7 @@ jobs:
              && tar xzf "/tmp/prior/$ASSET" -C /tmp/prior 2>/dev/null; then
             PH="$(find /tmp/prior -type f -name hexa | head -1)"
             if [ -n "$PH" ] && "$PH" --version >/dev/null 2>&1; then
-              if "$PH" run tool/regen_native_runtime_c_includes.hexa; then
+              if HEXA_RUN_CMD="$PH run" "$PH" run tool/regen_native_runtime_c_includes.hexa; then
                 echo "warm: amalgamation seed .c regenerated + verified byte-identical"
               else
                 echo "warm: regen drift/fail — restoring tracked .c"
@@ -333,7 +333,7 @@ jobs:
              && tar xzf "/tmp/prior/$ASSET" -C /tmp/prior 2>/dev/null; then
             PH="$(find /tmp/prior -type f -name hexa | head -1)"
             if [ -n "$PH" ] && "$PH" --version >/dev/null 2>&1; then
-              if "$PH" run tool/regen_native_runtime_c_includes.hexa; then
+              if HEXA_RUN_CMD="$PH run" "$PH" run tool/regen_native_runtime_c_includes.hexa; then
                 echo "warm: amalgamation seed .c regenerated + verified byte-identical"
               else
                 echo "warm: regen drift/fail — restoring tracked .c"
