@@ -87,9 +87,9 @@
 | 필요 GPU op | kernel | 빌트인 | 작업 |
 |---|---|---|---|
 | bulk zero (dMg) | `_hx_cuda_farr_zero_slice_gpu` (1356) | ✅ `farr_zero_slice_gpu` (runtime.c:12229) | anima wiring 만 |
-| fused AdamW step | `_hx_cuda_farr_adamw_step_gpu` (1356) | 🟡 미등록 (12-arg) | codegen + 기준선 + dispatch |
-| softmax over rows | `_hx_cuda_farr_softmax_rows_gpu` (1181) | 🟡 미등록 (4-arg) | codegen + 기준선 |
-| CE seed | `_hx_cuda_farr_ce_seed_gpu` (1220) | 🟡 미등록 (5-arg) | codegen + 기준선 |
+| fused AdamW step | `_hx_cuda_farr_adamw_step_gpu` (1356) | ✅ `farr_adamw_step_gpu` (11-arg, runtime.c:10648/10699 + train_lib.hexa:59) | 이미 사용 중 |
+| softmax over rows | `_hx_cuda_farr_softmax_rows_gpu` (1181) | ✅ `farr_softmax_rows` (4-arg carrier, hexa-lang #1920) | (없음) |
+| CE seed | `_hx_cuda_farr_ce_seed_gpu` (1220) | ✅ `farr_ce_seed` (5-arg, hexa-lang #1924) | (없음) |
 | FP64 matmul | cuBLAS Dgemm | ✅ `farr_matmul` (dispatch glue 완성) | (없음) |
 
 ---
@@ -98,10 +98,10 @@
 
 stacked PRs, g4 <200 LoC 씩.
 
-- [x] **M0 — anima 트레이너 `farr_zero_slice_gpu` wiring** (anima 단독). 트레이너의 dMg 재설정 루프를 빌트인 한 줄로 교체. hexa-lang 손 안 댐. 안전, 가장 작은 첫걸음. **단계비용 ~33% 즉시 제거 후보** ✅ anima #1319 (2026-05-28)
-- [ ] **M1 — hexa-lang `farr_adamw_step` 빌트인 등록**. 12-arg codegen 슬롯 신설 + `hexa_farr_adamw_step` CPU 기준선 + HEXA_CUDA dispatch + byte-eq 테스트. bootstrap `hexa_cc.c` 재컴 필요
-- [ ] **M2 — hexa-lang `farr_softmax_rows` 빌트인 등록**. 4-arg 슬롯 + CPU 기준선 + dispatch + 테스트 (M1 패턴)
-- [ ] **M3 — hexa-lang `farr_ce_seed` 빌트인 등록**. 5-arg 슬롯 + 기준선 + dispatch + 테스트
+- [x] **M0 — anima 트레이너 `farr_zero_slice_gpu` wiring** (anima 단독). 트레이너의 dMg 재설정 루프를 빌트인 한 줄로 교체. hexa-lang 손 안 댐. 안전, 가장 작은 첫걸음. **단계비용 ~33% 즉시 제거 후보** ✅ anima #1319, commit `66fc77f74` (2026-05-28) — 확장된 scope (dMg + d_logits + d_zT_last)
+- [x] **M1 — hexa-lang `farr_adamw_step_gpu` 빌트인** ✅ **이미 등록 완료 (pre-session)**. 11-arg builtin · `stdlib/flame/train_lib.hexa:59` (`let newW_h = farr_adamw_step_gpu(M, Mm, Mv, Mg, n, lr, b1, b2, eps, wd, t)`) 에서 production 사용 중 · runtime.c:10648/10699 `hexa_farr_adamw_step_gpu` + `farr_adamw_step_gpu` bare seam · codegen path = 일반 4+ arg fall-through (`hexa_callN` 천장 초과 → 직접 C 호출). 신규 PR 불필요
+- [x] **M2 — hexa-lang `farr_softmax_rows` 빌트인 등록** ✅ hexa-lang **#1920** (2026-05-28). 4-arg carrier-style builtin (`hexa_farr_softmax_rows(x, out, R, C)`) — runtime.c L9377 + runtime.h surface 만 추가, codegen 일반 fall-through 사용 → `hexa_cc.c` 재생성 불필요. fn carrier 등록 L12856
+- [x] **M3 — hexa-lang `farr_ce_seed` 빌트인 등록** ✅ hexa-lang **#1924** (2026-05-28). 5-arg 가벼운 sibling (`hexa_farr_ce_seed(softmax, target_ids, dlogits, R, C)`) — runtime.c L10858 — 6-arg `farr_ce_seed_gpu` (fused loss + seed) 와 pair, M2 의 pre-computed softmax 를 입력으로 받아 seed 만 분리. codegen L6970 5-arg 직접 emit
 - [ ] **M4 — anima 트레이너 full wiring**. Adam/softmax/CE 루프를 M1·M2·M3 빌트인 호출로 교체. H100 pod 에서 step-rate 측정 (목표 ≥10 step/s)
 - [ ] **M5 — decisive long-train fire 재발사** (dec_undertrain 검증). M4 가 토이의 `tens × V` 예산을 가용 wall 안으로 끌어왔는지 확정. 결과를 `.discoveries/decoder_collapse_undertrain.tape` (anima) 에 흡수
 
