@@ -1,0 +1,620 @@
+#!hexa strict
+// self/native/hxflash_linux_emit.hexa
+//   B9.C-9 (.c-text · #1850 pattern) — hxflash_linux.c source emitter.
+//
+// Flash-Attention forward (online-softmax) Linux FFI kernel.
+//
+// Emits hxflash_linux.c verbatim. The hexa build script regenerates the .c
+// from this emitter before compiling, so the emitter becomes the SSOT
+// and the .c becomes a build artifact.
+//
+// Byte-identity: the regenerated C is byte-for-byte the hand-written
+// source, so the compiled .o/.so is identical — PERF UNCHANGED.
+//
+// Invocation:  hexa-run self/native/hxflash_linux_emit.hexa <output-path>
+// Default output path (if argv missing): "hxflash_linux.c" in cwd.
+//
+// Phase: B9.C-9 batch (self/native standalone hexa-build .c-text).
+
+let MODULE_NAME = "hxflash_linux_emit"
+
+fn emit_hxflash_linux_c() -> str {
+    // Verbatim content of hand-written self/native/hxflash_linux.c
+    let s =
+            "// hxflash_linux.c — hexa FFI ↔ fused Flash Attention kernel (Linux x86_64)\n" +
+            "//\n" +
+            "// C8 roadmap — \"Flash Attention hexa native\" Day-1 MVP. Companion to\n" +
+            "// hxblas_linux.c (GEMM) and hxlayer_linux.c (fused rmsnorm+silu). This\n" +
+            "// file is the entry point for a tile-wise online-softmax attention\n" +
+            "// kernel so the Hexa side avoids (a) materialising the O(S²) score\n" +
+            "// matrix and (b) issuing one FFI dispatch per tile.\n" +
+            "//\n" +
+            "// Day-1 kernel: hxflash_attn_fwd\n" +
+            "//   forward-only, non-causal (causal=0); causal=1 is a Day-2 stub.\n" +
+            "//\n" +
+            "// Port baseline: the reference implementation lives in pure hexa at\n" +
+            "//   self/ai_native/flash_attention.hexa :: flash_attention(Q,K,V,Br,Bc)\n" +
+            "// (lines 188-279). This is a direct transliteration into C, preserving\n" +
+            "// the online-softmax recurrence (m, l) and per-tile rescale.\n" +
+            "//\n" +
+            "// Build (Linux x86_64, Ubuntu/Debian):\n" +
+            "//   hexa scripts/build_hxflash_linux.hexa\n" +
+            "// Cross-verify (Mac):\n" +
+            "//   hexa scripts/build_hxflash_linux.hexa --mac-xverify\n" +
+            "// Mac-native live FFI:\n" +
+            "//   hexa scripts/build_hxflash_linux.hexa --mac-native\n" +
+            "//\n" +
+            "// ABI convention (matches hxblas_linux.c / hxlayer_linux.c bit-for-bit):\n" +
+            "//   * pointers are passed as int64_t (Hexa Pointer == uint64_t opaque)\n" +
+            "//   * floats use C float* (f32) — dims and strides are int64_t\n" +
+            "//   * scale is double on the hexa side, cast to float internally\n" +
+            "//\n" +
+            "// Layout (Day-1):\n" +
+            "//   Q, K, V, O are flat float32 buffers, contiguous [n_heads, S, D]\n" +
+            "//   stored in head-major order (head h row i chan k → base_* + i*D + k).\n" +
+            "//\n" +
+            "//   Q stride = n_heads * D per head\n" +
+            "//   K/V stride = n_kv_heads * D per head  (GQA aware)\n" +
+            "//\n" +
+            "//   For grouped-query attention (GQA), each Q head h maps to a KV head:\n" +
+            "//     kv_h = h / (n_heads / n_kv_heads)\n" +
+            "//\n" +
+            "//   For Day-1 we require n_heads == n_kv_heads (no-GQA) OR the caller\n" +
+            "//   has already replicated KV heads — we honour the mapping regardless.\n" +
+            "//\n" +
+            "// .hexanoport marker convention:\n" +
+            "//   This .c is a native shim (extern FFI boundary), not a compilation\n" +
+            "//   target for the Hexa-to-C codegen. See hexa_cc.c.hexanoport.\n" +
+            "\n" +
+            "#ifdef __linux__\n" +
+            "\n" +
+            "#include <math.h>\n" +
+            "#include <stdint.h>\n" +
+            "#include <stddef.h>\n" +
+            "#include <string.h>\n" +
+            "#include <stdlib.h>\n" +
+            "\n" +
+            "// ─────────────────────────────────────────────────────────────\n" +
+            "// Scalar helpers. Kept out-of-line so -O3 can decide inlining.\n" +
+            "// ─────────────────────────────────────────────────────────────\n" +
+            "static inline float hxf_maxf(float a, float b) { return a > b ? a : b; }\n" +
+            "static inline int64_t hxf_mini(int64_t a, int64_t b) { return a < b ? a : b; }\n" +
+            "\n" +
+            "// ─────────────────────────────────────────────────────────────\n" +
+            "// hxflash_attn_fwd — forward-only, online-softmax tiled attention\n" +
+            "//\n" +
+            "// Signature (matches the .hexa extern binding in self/ml/hxflash.hexa):\n" +
+            "//   void hxflash_attn_fwd(int64_t S, int64_t D,\n" +
+            "//                         int64_t n_heads, int64_t n_kv_heads,\n" +
+            "//                         int64_t Br, int64_t Bc, int64_t causal,\n" +
+            "//                         int64_t Q, int64_t K, int64_t V, int64_t O,\n" +
+            "//                         double scale);\n" +
+            "//\n" +
+            "// Contract:\n" +
+            "//   Q : [n_heads   , S, D] float32   base_q  = h   * D per row i\n" +
+            "//   K : [n_kv_heads, S, D] float32   base_kv = kv_h * D per row j\n" +
+            "//   V : [n_kv_heads, S, D] float32\n" +
+            "//   O : [n_heads   , S, D] float32  (zero-init or overwritten per-row)\n" +
+            "//\n" +
+            "//   Tile sizes:\n" +
+            "//     Br — query rows per tile (Day-1 cap 64)\n" +
+            "//     Bc — key/value cols per tile (Day-1 cap 64)\n" +
+            "//\n" +
+            "//   scale is typically 1/sqrt(D) but the caller owns the choice so the\n" +
+            "//   kernel stays head-dim agnostic.\n" +
+            "//\n" +
+            "//   causal=0 : non-causal (Day-1 target)\n" +
+            "//   causal=1 : Day-2 — currently masks (gk > gq) to -inf and skips\n" +
+            "//              fully-masked rows, matching flash_attention_causal in\n" +
+            "//              self/ai_native/flash_attention.hexa for reference.\n" +
+            "//\n" +
+            "// Memory plan (per query tile, per Q head):\n" +
+            "//   Scratch  =  S_tile[Br*Bc]  +  row_m[Br]  +  row_l[Br]\n" +
+            "//             + O_block[Br*D]  +  p_row[Bc]\n" +
+            "//   At Br=Bc=64, D=128 :  64*64 + 64 + 64 + 64*128 + 64 = ~12.5KB\n" +
+            "//   At Br=Bc=64, D=256 :  ~20KB — still comfortably on the stack.\n" +
+            "// ─────────────────────────────────────────────────────────────\n" +
+            "void hxflash_attn_fwd(int64_t S, int64_t D,\n" +
+            "                      int64_t n_heads, int64_t n_kv_heads,\n" +
+            "                      int64_t Br, int64_t Bc, int64_t causal,\n" +
+            "                      int64_t Q, int64_t K, int64_t V, int64_t O,\n" +
+            "                      double scale) {\n" +
+            "    const float* Qp = (const float*)(uintptr_t)Q;\n" +
+            "    const float* Kp = (const float*)(uintptr_t)K;\n" +
+            "    const float* Vp = (const float*)(uintptr_t)V;\n" +
+            "    float*       Op = (float*      )(uintptr_t)O;\n" +
+            "    const float  sc = (float)scale;\n" +
+            "    const float  NEG_INF = -1.0e30f;\n" +
+            "\n" +
+            "    if (S <= 0 || D <= 0 || n_heads <= 0 || n_kv_heads <= 0) return;\n" +
+            "    if (Br <= 0) Br = 64;\n" +
+            "    if (Bc <= 0) Bc = 64;\n" +
+            "    if (Br > S)  Br = S;\n" +
+            "    if (Bc > S)  Bc = S;\n" +
+            "\n" +
+            "    // GQA divisor — how many Q heads share one KV head.\n" +
+            "    const int64_t group = n_heads / n_kv_heads;\n" +
+            "    const int64_t q_head_stride  = S * D;           // per Q-head offset\n" +
+            "    const int64_t kv_head_stride = S * D;           // per KV-head offset\n" +
+            "\n" +
+            "    const int64_t nr = (S + Br - 1) / Br;\n" +
+            "    const int64_t nc = (S + Bc - 1) / Bc;\n" +
+            "\n" +
+            "    // Heap-allocate the largest per-row scratch once. Br*D can be 64*256\n" +
+            "    // = 16KB — still stack-safe but heap keeps the function re-entrant\n" +
+            "    // without VLA concerns under strict portability.\n" +
+            "    float* scratch = (float*)malloc(sizeof(float) *\n" +
+            "        ((size_t)Br * (size_t)Bc                // S_tile\n" +
+            "       + (size_t)Br                              // row_m\n" +
+            "       + (size_t)Br                              // row_l\n" +
+            "       + (size_t)Br * (size_t)D                  // O_block\n" +
+            "       + (size_t)Bc));                           // p_row\n" +
+            "    if (!scratch) return;\n" +
+            "\n" +
+            "    float* S_tile  = scratch;\n" +
+            "    float* row_m   = S_tile  + (size_t)Br * (size_t)Bc;\n" +
+            "    float* row_l   = row_m   + (size_t)Br;\n" +
+            "    float* O_block = row_l   + (size_t)Br;\n" +
+            "    float* p_row   = O_block + (size_t)Br * (size_t)D;\n" +
+            "\n" +
+            "    for (int64_t h = 0; h < n_heads; h++) {\n" +
+            "        const int64_t kv_h   = (group > 0) ? (h / group) : h;\n" +
+            "        const int64_t base_q = h    * q_head_stride;\n" +
+            "        const int64_t base_kv = kv_h * kv_head_stride;\n" +
+            "\n" +
+            "        for (int64_t bq = 0; bq < nr; bq++) {\n" +
+            "            const int64_t q_start = bq * Br;\n" +
+            "            const int64_t q_end   = hxf_mini(q_start + Br, S);\n" +
+            "            const int64_t rows    = q_end - q_start;\n" +
+            "\n" +
+            "            for (int64_t qi = 0; qi < rows; qi++) {\n" +
+            "                row_m[qi] = NEG_INF;\n" +
+            "                row_l[qi] = 0.0f;\n" +
+            "            }\n" +
+            "            memset(O_block, 0, (size_t)rows * (size_t)D * sizeof(float));\n" +
+            "\n" +
+            "            for (int64_t bkv = 0; bkv < nc; bkv++) {\n" +
+            "                const int64_t kv_start = bkv * Bc;\n" +
+            "                const int64_t kv_end   = hxf_mini(kv_start + Bc, S);\n" +
+            "                const int64_t cols     = kv_end - kv_start;\n" +
+            "\n" +
+            "                // S_tile = Q_block · K_block^T · scale   (rows × cols)\n" +
+            "                for (int64_t qi = 0; qi < rows; qi++) {\n" +
+            "                    const int64_t gq = q_start + qi;\n" +
+            "                    const float*  qrow = Qp + base_q + gq * D;\n" +
+            "                    for (int64_t kj = 0; kj < cols; kj++) {\n" +
+            "                        const int64_t gk = kv_start + kj;\n" +
+            "                        if (causal && gk > gq) {\n" +
+            "                            S_tile[qi * Bc + kj] = NEG_INF;\n" +
+            "                        } else {\n" +
+            "                            const float* krow = Kp + base_kv + gk * D;\n" +
+            "                            float dot = 0.0f;\n" +
+            "                            for (int64_t k = 0; k < D; k++) {\n" +
+            "                                dot += qrow[k] * krow[k];\n" +
+            "                            }\n" +
+            "                            S_tile[qi * Bc + kj] = dot * sc;\n" +
+            "                        }\n" +
+            "                    }\n" +
+            "                }\n" +
+            "\n" +
+            "                // per-row online softmax update\n" +
+            "                for (int64_t qi = 0; qi < rows; qi++) {\n" +
+            "                    // Skip fully-masked rows (causal upper-right tiles).\n" +
+            "                    if (causal) {\n" +
+            "                        int all_masked = 1;\n" +
+            "                        for (int64_t kj = 0; kj < cols; kj++) {\n" +
+            "                            if (S_tile[qi * Bc + kj] > -1.0e29f) {\n" +
+            "                                all_masked = 0;\n" +
+            "                                break;\n" +
+            "                            }\n" +
+            "                        }\n" +
+            "                        if (all_masked) continue;\n" +
+            "                    }\n" +
+            "\n" +
+            "                    float tile_max = S_tile[qi * Bc + 0];\n" +
+            "                    for (int64_t kj = 1; kj < cols; kj++) {\n" +
+            "                        float v = S_tile[qi * Bc + kj];\n" +
+            "                        if (v > tile_max) tile_max = v;\n" +
+            "                    }\n" +
+            "\n" +
+            "                    const float m_old = row_m[qi];\n" +
+            "                    const float m_new = hxf_maxf(m_old, tile_max);\n" +
+            "                    const float alpha = expf(m_old - m_new);\n" +
+            "\n" +
+            "                    float tile_sum = 0.0f;\n" +
+            "                    for (int64_t kj = 0; kj < cols; kj++) {\n" +
+            "                        const float p = expf(S_tile[qi * Bc + kj] - m_new);\n" +
+            "                        p_row[kj] = p;\n" +
+            "                        tile_sum += p;\n" +
+            "                    }\n" +
+            "\n" +
+            "                    const float l_new = row_l[qi] * alpha + tile_sum;\n" +
+            "\n" +
+            "                    // Rescale prior accumulator: O_block[qi, :] *= alpha\n" +
+            "                    float* obrow = O_block + (size_t)qi * (size_t)D;\n" +
+            "                    for (int64_t k = 0; k < D; k++) obrow[k] *= alpha;\n" +
+            "\n" +
+            "                    // Add P · V_block\n" +
+            "                    for (int64_t kj = 0; kj < cols; kj++) {\n" +
+            "                        const int64_t gk = kv_start + kj;\n" +
+            "                        const float   p  = p_row[kj];\n" +
+            "                        const float*  vrow = Vp + base_kv + gk * D;\n" +
+            "                        for (int64_t k = 0; k < D; k++) {\n" +
+            "                            obrow[k] += p * vrow[k];\n" +
+            "                        }\n" +
+            "                    }\n" +
+            "\n" +
+            "                    row_m[qi] = m_new;\n" +
+            "                    row_l[qi] = l_new;\n" +
+            "                }\n" +
+            "            }\n" +
+            "\n" +
+            "            // Final normalise: O[qi, :] /= l[qi]\n" +
+            "            for (int64_t qi = 0; qi < rows; qi++) {\n" +
+            "                const int64_t gq = q_start + qi;\n" +
+            "                float* out_row = Op + base_q + gq * D;\n" +
+            "                const float inv_l = (row_l[qi] > 0.0f)\n" +
+            "                                  ? (1.0f / row_l[qi])\n" +
+            "                                  : 0.0f;\n" +
+            "                const float* obrow = O_block + (size_t)qi * (size_t)D;\n" +
+            "                for (int64_t k = 0; k < D; k++) {\n" +
+            "                    out_row[k] = obrow[k] * inv_l;\n" +
+            "                }\n" +
+            "            }\n" +
+            "        }\n" +
+            "    }\n" +
+            "\n" +
+            "    free(scratch);\n" +
+            "}\n" +
+            "\n" +
+            "// ─────────────────────────────────────────────────────────────\n" +
+            "// Struct-args ABI (2026-04-16 C8 fix)\n" +
+            "//\n" +
+            "// The 12-positional-arg hxflash_attn_fwd above exceeds the Hexa\n" +
+            "// interpreter's host_ffi_call_6 6-slot ceiling (see self/runtime.c\n" +
+            "// hexa_host_ffi_call_6 — args 7+ arrive uninitialised). The fix\n" +
+            "// mirrors the hxlmhead_bwd pattern: pack all 12 args into a heap\n" +
+            "// HxFlashArgs struct and pass a single int64 pointer through FFI.\n" +
+            "//\n" +
+            "// Field order is ABI; do not reorder. New fields go BEFORE reserved0\n" +
+            "// OR consume reserved bits. All pointers stored as int64_t for\n" +
+            "// binary-clean hexa marshalling (ptr_write writes int as 8 bytes).\n" +
+            "// ─────────────────────────────────────────────────────────────\n" +
+            "typedef struct HxFlashArgs {\n" +
+            "    int64_t S, D;                  // seq_len, head_dim\n" +
+            "    int64_t n_heads, n_kv_heads;   // GQA dims\n" +
+            "    int64_t Br, Bc;                // block tiling sizes\n" +
+            "    int64_t causal;                // bool flag (0/1)\n" +
+            "    int64_t q_p, k_p, v_p, o_p;    // float32* buffers\n" +
+            "    double  scale;                 // attention scale (1/sqrt(D))\n" +
+            "    int64_t reserved0;             // future flags\n" +
+            "} HxFlashArgs;\n" +
+            "\n" +
+            "// hxflash_attn_fwd_packed — single-pointer entry point for Hexa FFI.\n" +
+            "// Unpacks HxFlashArgs and delegates to the existing 12-arg kernel.\n" +
+            "// Returns: 0 on success, negative on error.\n" +
+            "//   -1 : null args pointer\n" +
+            "int64_t hxflash_attn_fwd_packed(int64_t args_p) {\n" +
+            "    if (args_p == 0) return -1;\n" +
+            "    HxFlashArgs* a = (HxFlashArgs*)(uintptr_t)args_p;\n" +
+            "    hxflash_attn_fwd(a->S, a->D,\n" +
+            "                     a->n_heads, a->n_kv_heads,\n" +
+            "                     a->Br, a->Bc, a->causal,\n" +
+            "                     a->q_p, a->k_p, a->v_p, a->o_p,\n" +
+            "                     a->scale);\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "// ─────────────────────────────────────────────────────────────\n" +
+            "// hxflash_attn_bwd — tiled backward pass (Dao 2022)\n" +
+            "//\n" +
+            "// Gradient formulae per row i:\n" +
+            "//   D_i    = <dO_i, O_i>\n" +
+            "//   P_ij   = exp(Q_i·K_j·scale − m_i) / l_i   (recomputed)\n" +
+            "//   dS_ij  = P_ij · (<dO_i, V_j> − D_i)\n" +
+            "//   dQ_i  += sum_j dS_ij · K_j · scale\n" +
+            "//   dK_j  += sum_i dS_ij · Q_i · scale\n" +
+            "//   dV_j  += sum_i P_ij  · dO_i\n" +
+            "//\n" +
+            "// Two sweeps per query block:\n" +
+            "//   Sweep 1: forward stats (m, l, O) via online softmax\n" +
+            "//   Sweep 2: recompute P, accumulate dQ/dK/dV\n" +
+            "//\n" +
+            "// Memory: O(Br*Bc + Br*D) scratch — no S^2 materialisation.\n" +
+            "// ─────────────────────────────────────────────────────────────\n" +
+            "\n" +
+            "typedef struct HxFlashBwdArgs {\n" +
+            "    int64_t S, D;\n" +
+            "    int64_t n_heads, n_kv_heads;\n" +
+            "    int64_t Br, Bc;\n" +
+            "    int64_t causal;\n" +
+            "    int64_t q_p, k_p, v_p, o_p;   // saved fwd output O\n" +
+            "    int64_t dO_p;                   // grad of output\n" +
+            "    int64_t dQ_p, dK_p, dV_p;      // output grad buffers\n" +
+            "    double  scale;\n" +
+            "    int64_t reserved0;\n" +
+            "} HxFlashBwdArgs;\n" +
+            "\n" +
+            "// HxFlashBwdArgs field offsets (bytes) — must match hexa side:\n" +
+            "//   0:S  8:D  16:n_heads  24:n_kv_heads  32:Br  40:Bc  48:causal\n" +
+            "//  56:q_p  64:k_p  72:v_p  80:o_p  88:dO_p\n" +
+            "//  96:dQ_p  104:dK_p  112:dV_p  120:scale  128:reserved0\n" +
+            "// total = 136 bytes\n" +
+            "\n" +
+            "static void hxflash_attn_bwd(int64_t S, int64_t D,\n" +
+            "                              int64_t n_heads, int64_t n_kv_heads,\n" +
+            "                              int64_t Br, int64_t Bc, int64_t causal,\n" +
+            "                              const float* Qp, const float* Kp,\n" +
+            "                              const float* Vp, const float* Op,\n" +
+            "                              const float* dOp,\n" +
+            "                              float* dQp, float* dKp, float* dVp,\n" +
+            "                              float scale_f) {\n" +
+            "    const float NEG_INF = -1.0e30f;\n" +
+            "\n" +
+            "    if (S <= 0 || D <= 0 || n_heads <= 0 || n_kv_heads <= 0) return;\n" +
+            "    if (Br <= 0) Br = 64;\n" +
+            "    if (Bc <= 0) Bc = 64;\n" +
+            "    if (Br > S)  Br = S;\n" +
+            "    if (Bc > S)  Bc = S;\n" +
+            "\n" +
+            "    const int64_t group = n_heads / n_kv_heads;\n" +
+            "    const int64_t q_head_stride  = S * D;\n" +
+            "    const int64_t kv_head_stride = S * D;\n" +
+            "\n" +
+            "    const int64_t nr = (S + Br - 1) / Br;\n" +
+            "    const int64_t nc = (S + Bc - 1) / Bc;\n" +
+            "\n" +
+            "    // Scratch per query block:\n" +
+            "    //   S_tile[Br*Bc] + row_m[Br] + row_l[Br] + O_block[Br*D]\n" +
+            "    //   + p_row[Bc] + row_D[Br] + dQ_block[Br*D]\n" +
+            "    size_t scratch_sz = (size_t)Br * (size_t)Bc   // S_tile\n" +
+            "                      + (size_t)Br                  // row_m\n" +
+            "                      + (size_t)Br                  // row_l\n" +
+            "                      + (size_t)Br * (size_t)D      // O_block\n" +
+            "                      + (size_t)Bc                  // p_row\n" +
+            "                      + (size_t)Br                  // row_D\n" +
+            "                      + (size_t)Br * (size_t)D;     // dQ_block\n" +
+            "    float* scratch = (float*)malloc(sizeof(float) * scratch_sz);\n" +
+            "    if (!scratch) return;\n" +
+            "\n" +
+            "    float* S_tile   = scratch;\n" +
+            "    float* row_m    = S_tile   + (size_t)Br * (size_t)Bc;\n" +
+            "    float* row_l    = row_m    + (size_t)Br;\n" +
+            "    float* O_block  = row_l    + (size_t)Br;\n" +
+            "    float* p_row    = O_block  + (size_t)Br * (size_t)D;\n" +
+            "    float* row_D    = p_row    + (size_t)Bc;\n" +
+            "    float* dQ_block = row_D    + (size_t)Br;\n" +
+            "\n" +
+            "    // Zero output grads (caller may not have zeroed them)\n" +
+            "    memset(dQp, 0, (size_t)n_heads    * (size_t)S * (size_t)D * sizeof(float));\n" +
+            "    memset(dKp, 0, (size_t)n_kv_heads * (size_t)S * (size_t)D * sizeof(float));\n" +
+            "    memset(dVp, 0, (size_t)n_kv_heads * (size_t)S * (size_t)D * sizeof(float));\n" +
+            "\n" +
+            "    for (int64_t h = 0; h < n_heads; h++) {\n" +
+            "        const int64_t kv_h    = (group > 0) ? (h / group) : h;\n" +
+            "        const int64_t base_q  = h    * q_head_stride;\n" +
+            "        const int64_t base_kv = kv_h * kv_head_stride;\n" +
+            "\n" +
+            "        for (int64_t bq = 0; bq < nr; bq++) {\n" +
+            "            const int64_t q_start = bq * Br;\n" +
+            "            const int64_t q_end   = hxf_mini(q_start + Br, S);\n" +
+            "            const int64_t rows    = q_end - q_start;\n" +
+            "\n" +
+            "            // ── Sweep 1: forward stats (m, l, O) via online softmax ──\n" +
+            "            for (int64_t qi = 0; qi < rows; qi++) {\n" +
+            "                row_m[qi] = NEG_INF;\n" +
+            "                row_l[qi] = 0.0f;\n" +
+            "            }\n" +
+            "            memset(O_block, 0, (size_t)rows * (size_t)D * sizeof(float));\n" +
+            "\n" +
+            "            for (int64_t bkv = 0; bkv < nc; bkv++) {\n" +
+            "                const int64_t kv_start = bkv * Bc;\n" +
+            "                const int64_t kv_end   = hxf_mini(kv_start + Bc, S);\n" +
+            "                const int64_t cols     = kv_end - kv_start;\n" +
+            "\n" +
+            "                for (int64_t qi = 0; qi < rows; qi++) {\n" +
+            "                    const int64_t gq = q_start + qi;\n" +
+            "                    const float* qrow = Qp + base_q + gq * D;\n" +
+            "                    for (int64_t kj = 0; kj < cols; kj++) {\n" +
+            "                        const int64_t gk = kv_start + kj;\n" +
+            "                        if (causal && gk > gq) {\n" +
+            "                            S_tile[qi * Bc + kj] = NEG_INF;\n" +
+            "                        } else {\n" +
+            "                            const float* krow = Kp + base_kv + gk * D;\n" +
+            "                            float dot = 0.0f;\n" +
+            "                            for (int64_t k = 0; k < D; k++)\n" +
+            "                                dot += qrow[k] * krow[k];\n" +
+            "                            S_tile[qi * Bc + kj] = dot * scale_f;\n" +
+            "                        }\n" +
+            "                    }\n" +
+            "                }\n" +
+            "\n" +
+            "                for (int64_t qi = 0; qi < rows; qi++) {\n" +
+            "                    if (causal) {\n" +
+            "                        int all_masked = 1;\n" +
+            "                        for (int64_t kj = 0; kj < cols; kj++) {\n" +
+            "                            if (S_tile[qi * Bc + kj] > -1.0e29f) {\n" +
+            "                                all_masked = 0; break;\n" +
+            "                            }\n" +
+            "                        }\n" +
+            "                        if (all_masked) continue;\n" +
+            "                    }\n" +
+            "\n" +
+            "                    float tile_max = S_tile[qi * Bc];\n" +
+            "                    for (int64_t kj = 1; kj < cols; kj++) {\n" +
+            "                        float v = S_tile[qi * Bc + kj];\n" +
+            "                        if (v > tile_max) tile_max = v;\n" +
+            "                    }\n" +
+            "\n" +
+            "                    const float m_old = row_m[qi];\n" +
+            "                    const float m_new = hxf_maxf(m_old, tile_max);\n" +
+            "                    const float alpha = expf(m_old - m_new);\n" +
+            "\n" +
+            "                    float tile_sum = 0.0f;\n" +
+            "                    for (int64_t kj = 0; kj < cols; kj++) {\n" +
+            "                        float p = expf(S_tile[qi * Bc + kj] - m_new);\n" +
+            "                        p_row[kj] = p;\n" +
+            "                        tile_sum += p;\n" +
+            "                    }\n" +
+            "\n" +
+            "                    const float l_new = row_l[qi] * alpha + tile_sum;\n" +
+            "                    float* obrow = O_block + (size_t)qi * (size_t)D;\n" +
+            "                    for (int64_t k = 0; k < D; k++) obrow[k] *= alpha;\n" +
+            "\n" +
+            "                    for (int64_t kj = 0; kj < cols; kj++) {\n" +
+            "                        const int64_t gk = kv_start + kj;\n" +
+            "                        const float p = p_row[kj];\n" +
+            "                        const float* vrow = Vp + base_kv + gk * D;\n" +
+            "                        for (int64_t k = 0; k < D; k++)\n" +
+            "                            obrow[k] += p * vrow[k];\n" +
+            "                    }\n" +
+            "                    row_m[qi] = m_new;\n" +
+            "                    row_l[qi] = l_new;\n" +
+            "                }\n" +
+            "            }\n" +
+            "\n" +
+            "            // Normalise O_block\n" +
+            "            for (int64_t qi = 0; qi < rows; qi++) {\n" +
+            "                const float inv_l = (row_l[qi] > 0.0f) ? (1.0f / row_l[qi]) : 0.0f;\n" +
+            "                float* obrow = O_block + (size_t)qi * (size_t)D;\n" +
+            "                for (int64_t k = 0; k < D; k++)\n" +
+            "                    obrow[k] *= inv_l;\n" +
+            "            }\n" +
+            "\n" +
+            "            // ── D_i = <dO_i, O_i> ──\n" +
+            "            for (int64_t qi = 0; qi < rows; qi++) {\n" +
+            "                const int64_t gq = q_start + qi;\n" +
+            "                const float* do_row = dOp + base_q + gq * D;\n" +
+            "                const float* ob_row = O_block + (size_t)qi * (size_t)D;\n" +
+            "                float s = 0.0f;\n" +
+            "                for (int64_t k = 0; k < D; k++)\n" +
+            "                    s += do_row[k] * ob_row[k];\n" +
+            "                row_D[qi] = s;\n" +
+            "            }\n" +
+            "\n" +
+            "            // ── Sweep 2: recompute P per tile, accumulate dQ/dK/dV ──\n" +
+            "            memset(dQ_block, 0, (size_t)rows * (size_t)D * sizeof(float));\n" +
+            "\n" +
+            "            for (int64_t bkv = 0; bkv < nc; bkv++) {\n" +
+            "                const int64_t kv_start = bkv * Bc;\n" +
+            "                const int64_t kv_end   = hxf_mini(kv_start + Bc, S);\n" +
+            "                const int64_t cols     = kv_end - kv_start;\n" +
+            "\n" +
+            "                for (int64_t qi = 0; qi < rows; qi++) {\n" +
+            "                    const int64_t gq = q_start + qi;\n" +
+            "                    const float* qrow = Qp + base_q + gq * D;\n" +
+            "                    const float inv_l = (row_l[qi] > 0.0f) ? (1.0f / row_l[qi]) : 0.0f;\n" +
+            "                    const float m_i = row_m[qi];\n" +
+            "                    const float D_i = row_D[qi];\n" +
+            "                    const float* do_row = dOp + base_q + gq * D;\n" +
+            "                    float* dq_row = dQ_block + (size_t)qi * (size_t)D;\n" +
+            "\n" +
+            "                    for (int64_t kj = 0; kj < cols; kj++) {\n" +
+            "                        const int64_t gk = kv_start + kj;\n" +
+            "\n" +
+            "                        // Recompute P_ij\n" +
+            "                        float P_ij;\n" +
+            "                        if (causal && gk > gq) {\n" +
+            "                            P_ij = 0.0f;\n" +
+            "                        } else {\n" +
+            "                            const float* krow = Kp + base_kv + gk * D;\n" +
+            "                            float dot = 0.0f;\n" +
+            "                            for (int64_t k = 0; k < D; k++)\n" +
+            "                                dot += qrow[k] * krow[k];\n" +
+            "                            P_ij = expf(dot * scale_f - m_i) * inv_l;\n" +
+            "                        }\n" +
+            "\n" +
+            "                        if (P_ij == 0.0f) continue;\n" +
+            "\n" +
+            "                        // dP_ij = <dO_i, V_j>\n" +
+            "                        const float* vrow = Vp + base_kv + gk * D;\n" +
+            "                        float dP_ij = 0.0f;\n" +
+            "                        for (int64_t k = 0; k < D; k++)\n" +
+            "                            dP_ij += do_row[k] * vrow[k];\n" +
+            "\n" +
+            "                        // dS_ij = P_ij * (dP_ij - D_i)\n" +
+            "                        const float dS_ij = P_ij * (dP_ij - D_i);\n" +
+            "                        const float w = dS_ij * scale_f;\n" +
+            "\n" +
+            "                        // dQ_i += w * K_j\n" +
+            "                        const float* krow2 = Kp + base_kv + gk * D;\n" +
+            "                        for (int64_t k = 0; k < D; k++)\n" +
+            "                            dq_row[k] += w * krow2[k];\n" +
+            "\n" +
+            "                        // dK_j += w * Q_i  (accumulate into shared dK buffer)\n" +
+            "                        float* dk_row = dKp + base_kv + gk * D;\n" +
+            "                        for (int64_t k = 0; k < D; k++)\n" +
+            "                            dk_row[k] += w * qrow[k];\n" +
+            "\n" +
+            "                        // dV_j += P_ij * dO_i\n" +
+            "                        float* dv_row = dVp + base_kv + gk * D;\n" +
+            "                        for (int64_t k = 0; k < D; k++)\n" +
+            "                            dv_row[k] += P_ij * do_row[k];\n" +
+            "                    }\n" +
+            "                }\n" +
+            "            }\n" +
+            "\n" +
+            "            // Write dQ_block back to dQ\n" +
+            "            for (int64_t qi = 0; qi < rows; qi++) {\n" +
+            "                const int64_t gq = q_start + qi;\n" +
+            "                float* dq_out = dQp + base_q + gq * D;\n" +
+            "                const float* dq_src = dQ_block + (size_t)qi * (size_t)D;\n" +
+            "                for (int64_t k = 0; k < D; k++)\n" +
+            "                    dq_out[k] += dq_src[k];\n" +
+            "            }\n" +
+            "        }\n" +
+            "    }\n" +
+            "\n" +
+            "    free(scratch);\n" +
+            "}\n" +
+            "\n" +
+            "// Struct-args packed entry point for backward.\n" +
+            "// Returns: 0 on success, -1 on null args.\n" +
+            "int64_t hxflash_attn_bwd_packed(int64_t args_p) {\n" +
+            "    if (args_p == 0) return -1;\n" +
+            "    HxFlashBwdArgs* a = (HxFlashBwdArgs*)(uintptr_t)args_p;\n" +
+            "    hxflash_attn_bwd(a->S, a->D,\n" +
+            "                     a->n_heads, a->n_kv_heads,\n" +
+            "                     a->Br, a->Bc, a->causal,\n" +
+            "                     (const float*)(uintptr_t)a->q_p,\n" +
+            "                     (const float*)(uintptr_t)a->k_p,\n" +
+            "                     (const float*)(uintptr_t)a->v_p,\n" +
+            "                     (const float*)(uintptr_t)a->o_p,\n" +
+            "                     (const float*)(uintptr_t)a->dO_p,\n" +
+            "                     (float*)(uintptr_t)a->dQ_p,\n" +
+            "                     (float*)(uintptr_t)a->dK_p,\n" +
+            "                     (float*)(uintptr_t)a->dV_p,\n" +
+            "                     (float)a->scale);\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "// ─────────────────────────────────────────────────────────────\n" +
+            "// ABI version probe — matches hxblas_version / hxvdsp_version /\n" +
+            "// hxlayer_version style. Start at 1; bump on any breaking signature\n" +
+            "// change (e.g. Day-2 causal fast path, backward pass, dtype fan-out).\n" +
+            "// v2 adds hxflash_attn_fwd_packed (struct-args ABI).\n" +
+            "// v3 adds hxflash_attn_bwd_packed (backward pass).\n" +
+            "// ─────────────────────────────────────────────────────────────\n" +
+            "int64_t hxflash_version(void) {\n" +
+            "    return 3;\n" +
+            "}\n" +
+            "\n" +
+            "#endif /* __linux__ */\n"
+    return s
+}
+
+fn main() {
+    let argv = real_args()
+    let out_path = if argv.len() >= 1 { argv[0] } else { "hxflash_linux.c" }
+    let c_text = emit_hxflash_linux_c()
+    let cmd = "cat > \"" + out_path + "\" <<'HXFLASH_EMIT_EOF'\n" +
+              c_text + "HXFLASH_EMIT_EOF"
+    let _ = exec(cmd)
+    let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
+    if exists_check != "y" {
+        println("[hxflash_linux_emit] FATAL: failed to write " + out_path)
+        exit(1)
+    }
+    println("[hxflash_linux_emit] wrote " + out_path)
+    exit(0)
+}

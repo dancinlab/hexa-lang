@@ -1,0 +1,28 @@
+========================================================================
+  self/native — hxffi_slot_byte_diff: B9.C-9 .c-text byte-diff oracle
+========================================================================
+  generator: self/native/hxffi_slot_emit.hexa
+  oracle:    cc + otool byte-diff vs hand-written hxffi_slot.c
+  gates:     source-text · whole-file .o (no -g) · __text section (with -g)
+
+  scratch: /var/folders/2g/blzd56lx2rvfvt61c1pc9g7r0000gn/T/hxffi_slot_byte_diff.XXXXXX.4Cj0Rq7zfQ
+
+  [PASS] hexa emitter self/native/hxffi_slot_emit.hexa present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-ae5cc4bcc157c793e-b9c9/self/native/hxffi_slot_emit.hexa
+  [PASS] hand-written self/native/hxffi_slot.c present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-ae5cc4bcc157c793e-b9c9/self/native/hxffi_slot.c
+  [PASS] gate-1 source-text byte-identical (sha256(.c))
+         · orig=93f4e28fa41ff04799a2024923108eb9ef8d434f475de44a5a25d218023889b0 gen=93f4e28fa41ff04799a2024923108eb9ef8d434f475de44a5a25d218023889b0
+  [PASS] cc + otool present (Mac host toolchain)
+         · cc=y otool=y
+  [PASS] gate-2 whole-file .o byte-identical (no -g)
+         · orig=14a467b1c2d555bb0f816cf52e199cd75c3394d936b19930f2fabd25b94f9cda gen=14a467b1c2d555bb0f816cf52e199cd75c3394d936b19930f2fabd25b94f9cda
+  [PASS] gate-3 __TEXT,__text section byte-identical (with -g)
+         · orig=e1b792873d8e05b1284324ce64651d1b10589a64d5c97b03139f18d7ee187ece gen=e1b792873d8e05b1284324ce64651d1b10589a64d5c97b03139f18d7ee187ece
+
+  B9.C-9 hxffi_slot.c .c-text byte-identity:
+    PROVEN ✓ — hand-written hxffi_slot.c is fully hexa-emittable.
+    DELETION GATE OPEN — self/native/hxffi_slot.c may be `git rm`.
+========================================================================
+  6/6 checks passed
+__HEXA_LANG_HXFFI_SLOT_BYTE_DIFF__ PASS

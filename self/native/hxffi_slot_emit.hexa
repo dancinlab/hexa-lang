@@ -1,0 +1,153 @@
+#!hexa strict
+// self/native/hxffi_slot_emit.hexa
+//   B9.C-9 (.c-text · #1850 pattern) — hxffi_slot.c source emitter.
+//
+// Out-pointer slot allocator for hexa C FFI (DuckDB/SQLite/curl out-param pattern).
+//
+// Emits hxffi_slot.c verbatim. The hexa build script regenerates the .c
+// from this emitter before compiling, so the emitter becomes the SSOT
+// and the .c becomes a build artifact.
+//
+// Byte-identity: the regenerated C is byte-for-byte the hand-written
+// source, so the compiled .o/.so is identical — PERF UNCHANGED.
+//
+// Invocation:  hexa-run self/native/hxffi_slot_emit.hexa <output-path>
+// Default output path (if argv missing): "hxffi_slot.c" in cwd.
+//
+// Phase: B9.C-9 batch (self/native standalone hexa-build .c-text).
+
+let MODULE_NAME = "hxffi_slot_emit"
+
+fn emit_hxffi_slot_c() -> str {
+    // Verbatim content of hand-written self/native/hxffi_slot.c
+    let s =
+            "// ════════════════════════════════════════════════════════════════════════════\n" +
+            "//  self/native/hxffi_slot.c — out-pointer slot allocator for hexa C FFI\n" +
+            "//\n" +
+            "//  PURPOSE\n" +
+            "//  -------\n" +
+            "//  Many C APIs (DuckDB, SQLite, libcurl, ...) use the \"out-parameter pointer\"\n" +
+            "//  pattern, where the caller passes the *address* of a void* slot and the\n" +
+            "//  callee writes the resulting handle into that slot:\n" +
+            "//\n" +
+            "//      duckdb_state duckdb_open(const char *path, duckdb_database *out_db);\n" +
+            "//\n" +
+            "//  Hexa's `extern fn` lane passes pointers as int (uintptr_t). Until this\n" +
+            "//  shim, there was no way for hexa code to (a) allocate an 8-byte slot,\n" +
+            "//  (b) pass its address to such a C API, then (c) dereference the slot\n" +
+            "//  back into an int handle for subsequent calls.\n" +
+            "//\n" +
+            "//  This shim provides exactly that — three tiny helpers that hexa binds via\n" +
+            "//  `extern fn` and that close the gap. The slot lives on the C heap (not the\n" +
+            "//  hexa stack) so its address survives the FFI call and is well-aligned for\n" +
+            "//  void* writes.\n" +
+            "//\n" +
+            "//  USAGE (from hexa)\n" +
+            "//  -----------------\n" +
+            "//      let slot = hxffi_alloc_ptr_slot()         // calloc(1, 8) → addr\n" +
+            "//      duckdb_open(path, slot)                   // C writes *slot = db\n" +
+            "//      let db = hxffi_load_ptr(slot)             // *(void**)slot → int\n" +
+            "//      hxffi_free_ptr_slot(slot)                 // free(slot)\n" +
+            "//\n" +
+            "//  BUILD\n" +
+            "//  -----\n" +
+            "//      cc -O2 -fPIC -shared self/native/hxffi_slot.c \\\n" +
+            "//          -o self/native/build/libhxffi_slot.dylib  (macOS)\n" +
+            "//      cc -O2 -fPIC -shared self/native/hxffi_slot.c \\\n" +
+            "//          -o self/native/build/libhxffi_slot.so     (Linux)\n" +
+            "//\n" +
+            "//  LINKAGE\n" +
+            "//  -------\n" +
+            "//      @link(\"hxffi_slot\")   → resolved by hexa_ffi_dlopen via\n" +
+            "//      ${HEXA_LANG}/self/native/build/libhxffi_slot.{dylib,so}\n" +
+            "//\n" +
+            "//  SAFETY\n" +
+            "//  ------\n" +
+            "//   * `hxffi_load_ptr(NULL)` returns NULL (caller must free anyway).\n" +
+            "//   * `hxffi_free_ptr_slot(NULL)` is a no-op (matches free() semantics).\n" +
+            "//   * Slots are zero-initialized so an unmodified slot loads as NULL\n" +
+            "//     (lets callers detect \"C didn't write\" without sentinel hacks).\n" +
+            "//\n" +
+            "//  @since 2026-05-09\n" +
+            "//  @maintainer anima-core\n" +
+            "// ════════════════════════════════════════════════════════════════════════════\n" +
+            "\n" +
+            "#include <stdlib.h>\n" +
+            "#include <string.h>\n" +
+            "#include <stdint.h>\n" +
+            "\n" +
+            "// hxffi_alloc_ptr_slot — return a freshly zero-initialized 8-byte slot.\n" +
+            "// Returns NULL only on allocation failure (extremely rare).\n" +
+            "void* hxffi_alloc_ptr_slot(void) {\n" +
+            "    return calloc(1, sizeof(void*));\n" +
+            "}\n" +
+            "\n" +
+            "// hxffi_load_ptr — dereference an out-pointer slot.\n" +
+            "// `slot` must be an address returned by hxffi_alloc_ptr_slot. NULL safe.\n" +
+            "void* hxffi_load_ptr(void* slot) {\n" +
+            "    if (!slot) return NULL;\n" +
+            "    void* val;\n" +
+            "    memcpy(&val, slot, sizeof(void*));\n" +
+            "    return val;\n" +
+            "}\n" +
+            "\n" +
+            "// hxffi_store_ptr — write a pointer into an out-pointer slot.\n" +
+            "// Useful for callers that want to seed a slot or reset it.\n" +
+            "void hxffi_store_ptr(void* slot, void* value) {\n" +
+            "    if (!slot) return;\n" +
+            "    memcpy(slot, &value, sizeof(void*));\n" +
+            "}\n" +
+            "\n" +
+            "// hxffi_free_ptr_slot — release a slot allocated by hxffi_alloc_ptr_slot.\n" +
+            "// NULL safe.\n" +
+            "void hxffi_free_ptr_slot(void* slot) {\n" +
+            "    free(slot);\n" +
+            "}\n" +
+            "\n" +
+            "// hxffi_alloc_buf — allocate a zero-initialized buffer of arbitrary size.\n" +
+            "// Useful for C APIs that take a pointer to a struct (not just a pointer\n" +
+            "// to a pointer). Caller must free via hxffi_free_ptr_slot.\n" +
+            "void* hxffi_alloc_buf(long size) {\n" +
+            "    if (size <= 0) return NULL;\n" +
+            "    return calloc(1, (size_t)size);\n" +
+            "}\n" +
+            "\n" +
+            "// hxffi_slot_selftest — internal sanity check. Allocates a slot, stores a\n" +
+            "// known sentinel, loads it back, frees the slot. Returns 1 on success, 0 on\n" +
+            "// failure. Bound from hexa side as part of the c_ffi selftest battery.\n" +
+            "int hxffi_slot_selftest(void) {\n" +
+            "    void* slot = hxffi_alloc_ptr_slot();\n" +
+            "    if (!slot) return 0;\n" +
+            "    // Empty slot must read back as NULL (calloc zero-init contract).\n" +
+            "    if (hxffi_load_ptr(slot) != NULL) {\n" +
+            "        hxffi_free_ptr_slot(slot);\n" +
+            "        return 0;\n" +
+            "    }\n" +
+            "    // Store a sentinel and read it back.\n" +
+            "    void* sentinel = (void*)(uintptr_t)0xDEADBEEFCAFEBABEULL;\n" +
+            "    hxffi_store_ptr(slot, sentinel);\n" +
+            "    if (hxffi_load_ptr(slot) != sentinel) {\n" +
+            "        hxffi_free_ptr_slot(slot);\n" +
+            "        return 0;\n" +
+            "    }\n" +
+            "    hxffi_free_ptr_slot(slot);\n" +
+            "    return 1;\n" +
+            "}\n"
+    return s
+}
+
+fn main() {
+    let argv = real_args()
+    let out_path = if argv.len() >= 1 { argv[0] } else { "hxffi_slot.c" }
+    let c_text = emit_hxffi_slot_c()
+    let cmd = "cat > \"" + out_path + "\" <<'HXFFI_SLOT_EMIT_EOF'\n" +
+              c_text + "HXFFI_SLOT_EMIT_EOF"
+    let _ = exec(cmd)
+    let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
+    if exists_check != "y" {
+        println("[hxffi_slot_emit] FATAL: failed to write " + out_path)
+        exit(1)
+    }
+    println("[hxffi_slot_emit] wrote " + out_path)
+    exit(0)
+}

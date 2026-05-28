@@ -92,6 +92,29 @@ fn main() {
     exec("mkdir -p " + out_dir)
 
     // ────────────────────────────────────────────────────────────────
+    // .c-text regen (B9.C-9) — the hand-written hxflash_linux.c was
+    // git-rm'd; the C source is now emitted byte-for-byte from
+    // self/native/hxflash_linux_emit.hexa (the SSOT) into a build-dir
+    // artifact hxflash_linux_gen.c, which every compile below consumes.
+    // Byte-identity is proven by self/native/hxflash_linux_byte_diff.hexa
+    // (source-SHA + whole-file .o + __text section). Regen into the build
+    // dir keeps the source tree clean (matches #1852 *_gen.c precedent).
+    // ────────────────────────────────────────────────────────────────
+    let emitter = src_dir + "/hxflash_linux_emit.hexa"
+    let mut flash_src = out_dir + "/hxflash_linux_gen.c"
+    if exec("[ -f \"" + emitter + "\" ] && echo y || echo n").trim() == "y" {
+        println("[regen] hxflash_linux_gen.c <- hxflash_linux_emit.hexa")
+        // Prefer the `hexa-run` shim; fall back to `hexa run` (canonical
+        // subcommand) on hosts/pods that only have the `hexa` driver.
+        let runner = if exec("command -v hexa-run >/dev/null 2>&1 && echo y || echo n").trim() == "y" { "hexa-run" } else { "hexa run" }
+        run(runner + " \"" + emitter + "\" \"" + flash_src + "\"")
+    } else if exec("[ -f \"" + src_dir + "/hxflash_linux.c\" ] && echo y || echo n").trim() == "y" {
+        // Emitter absent but a hand-written .c is present (older checkout):
+        // fall back to it so the build still works.
+        flash_src = src_dir + "/hxflash_linux.c"
+    }
+
+    // ────────────────────────────────────────────────────────────────
     // --mac-xverify : run on Mac to validate the Linux source compiles
     // and links cleanly BEFORE committing or pushing to the H100 pod.
     // Emits a .dylib in self/native/build/xverify/ alongside the hxblas
@@ -108,7 +131,7 @@ fn main() {
         // Force clang on Mac
         let cc_x = if env("CC") != "" { env("CC") } else { "clang" }
         println("[xverify] linking hxflash_linux.c -> libhxflash_xverify.dylib")
-        run(cc_x + " -O3 -fPIC -dynamiclib -D__linux__=1 " + src_dir + "/hxflash_linux.c -lm -o " + xv_dir + "/libhxflash_xverify.dylib")
+        run(cc_x + " -O3 -fPIC -dynamiclib -D__linux__=1 " + flash_src + " -lm -o " + xv_dir + "/libhxflash_xverify.dylib")
 
         // Smoke: the symbols must be exported.
         if !check_symbol(xv_dir + "/libhxflash_xverify.dylib", "_hxflash_attn_fwd") {
@@ -150,7 +173,7 @@ fn main() {
         // -D__linux__=1 flips the conditional in hxflash_linux.c on —
         // the kernel only uses <math.h>, <stdint.h>, <stdlib.h>, <string.h>,
         // all present on Mac's libSystem, so it compiles and links unchanged.
-        run(cc_m + " -O3 -fPIC -dynamiclib -D__linux__=1 " + src_dir + "/hxflash_linux.c -lm -o " + out_dir + "/libhxflash.dylib")
+        run(cc_m + " -O3 -fPIC -dynamiclib -D__linux__=1 " + flash_src + " -lm -o " + out_dir + "/libhxflash.dylib")
 
         if !check_symbol(out_dir + "/libhxflash.dylib", "_hxflash_attn_fwd") {
             exit(4)
@@ -186,7 +209,7 @@ fn main() {
 
     // ── libhxflash.so — libm only (scalar O3 auto-vec) ──
     println("[1/1] building libhxflash.so")
-    run(cc + " " + cflags_base + " " + src_dir + "/hxflash_linux.c -o " + out_dir + "/libhxflash.so -lm")
+    run(cc + " " + cflags_base + " " + flash_src + " -o " + out_dir + "/libhxflash.so -lm")
 
     println("built:")
     println(exec("ls -la " + out_dir + "/libhxflash.so").trim())

@@ -93,6 +93,28 @@ fn main() {
     exec("mkdir -p " + out_dir)
 
     // ────────────────────────────────────────────────────────────────
+    // .c-text regen (B9.C-9) — the hand-written hxvdsp_linux.c was
+    // git-rm'd; the C source is now emitted byte-for-byte from
+    // self/native/hxvdsp_linux_emit.hexa (the SSOT) into a build-dir
+    // artifact hxvdsp_linux_gen.c, which the libhxvdsp compile consumes.
+    // Byte-identity is proven by self/native/hxvdsp_linux_byte_diff.hexa
+    // (source-SHA + whole-file .o + __text section). Regen into the build
+    // dir keeps the source tree clean (matches #1852 *_gen.c precedent).
+    // (hxblas_linux.c is an OpenBLAS vendor-FFI floor — NOT .c-text'd.)
+    // ────────────────────────────────────────────────────────────────
+    let vdsp_emitter = src_dir + "/hxvdsp_linux_emit.hexa"
+    let mut vdsp_src = out_dir + "/hxvdsp_linux_gen.c"
+    if exec("[ -f \"" + vdsp_emitter + "\" ] && echo y || echo n").trim() == "y" {
+        println("[regen] hxvdsp_linux_gen.c <- hxvdsp_linux_emit.hexa")
+        // Prefer the `hexa-run` shim; fall back to `hexa run` (canonical
+        // subcommand) on hosts/pods that only have the `hexa` driver.
+        let runner = if exec("command -v hexa-run >/dev/null 2>&1 && echo y || echo n").trim() == "y" { "hexa-run" } else { "hexa run" }
+        run(runner + " \"" + vdsp_emitter + "\" \"" + vdsp_src + "\"")
+    } else if exec("[ -f \"" + src_dir + "/hxvdsp_linux.c\" ] && echo y || echo n").trim() == "y" {
+        vdsp_src = src_dir + "/hxvdsp_linux.c"
+    }
+
+    // ────────────────────────────────────────────────────────────────
     // --mac-xverify : run on Mac to validate the Linux source compiles
     // and links cleanly against OpenBLAS BEFORE committing or pushing to
     // the H100 pod. Uses Homebrew OpenBLAS for the cblas headers and
@@ -120,7 +142,7 @@ fn main() {
         println("[xverify 1/2] linking hxblas_linux.c -> libhxblas_xverify.dylib")
         run(cc_x + " -O3 -fPIC -dynamiclib -D__linux__=1" + xv_arch_flags + " -I" + obs_inc + " " + src_dir + "/hxblas_linux.c -L" + obs_lib + " -lopenblas -lm -o " + xv_dir + "/libhxblas_xverify.dylib")
         println("[xverify 2/2] linking hxvdsp_linux.c -> libhxvdsp_xverify.dylib")
-        run(cc_x + " -O3 -fPIC -dynamiclib -D__linux__=1 " + src_dir + "/hxvdsp_linux.c -lm -o " + xv_dir + "/libhxvdsp_xverify.dylib")
+        run(cc_x + " -O3 -fPIC -dynamiclib -D__linux__=1 " + vdsp_src + " -lm -o " + xv_dir + "/libhxvdsp_xverify.dylib")
 
         // Diff the exported symbol set against the existing Mac production
         // dylibs at anima/training/build/. ABI_DIFF=NONE means the Linux
@@ -197,7 +219,7 @@ fn main() {
 
     // ── libhxvdsp.so — libm only (scalar + O3 + -march=native auto-vec) ──
     println("[2/2] building libhxvdsp.so")
-    run(cc + " " + cflags_base + " " + src_dir + "/hxvdsp_linux.c -o " + out_dir + "/libhxvdsp.so -lm")
+    run(cc + " " + cflags_base + " " + vdsp_src + " -o " + out_dir + "/libhxvdsp.so -lm")
 
     println("built:")
     println(exec("ls -la " + out_dir + "/libhx*.so").trim())

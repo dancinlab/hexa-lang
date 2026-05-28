@@ -1,0 +1,305 @@
+#!hexa strict
+// self/native/gpu_codegen_stub_emit.hexa
+//   B9.C-9 (.c-text · #1850 pattern) — gpu_codegen_stub.c source emitter.
+//
+// rt#45 GPU backend codegen skeleton (placeholder emission contract).
+//
+// Emits gpu_codegen_stub.c verbatim. The hexa build script regenerates the .c
+// from this emitter before compiling, so the emitter becomes the SSOT
+// and the .c becomes a build artifact.
+//
+// Byte-identity: the regenerated C is byte-for-byte the hand-written
+// source, so the compiled .o/.so is identical — PERF UNCHANGED.
+//
+// Invocation:  hexa-run self/native/gpu_codegen_stub_emit.hexa <output-path>
+// Default output path (if argv missing): "gpu_codegen_stub.c" in cwd.
+//
+// Phase: B9.C-9 batch (self/native standalone hexa-build .c-text).
+
+let MODULE_NAME = "gpu_codegen_stub_emit"
+
+fn emit_gpu_codegen_stub_c() -> str {
+    // Verbatim content of hand-written self/native/gpu_codegen_stub.c
+    let s =
+            "/* gpu_codegen_stub.c — rt#45-research scaffold\n" +
+            " *\n" +
+            " * Skeleton for the @gpu codegen backend. NO real emission — every\n" +
+            " * function returns a placeholder. The point of this file is to lock in\n" +
+            " * the C ABI between hexa_cc.c (parser/AST) and the future GPU backend\n" +
+            " * so the rt#45 wave-6 implementer has a fixed contract to fill in.\n" +
+            " *\n" +
+            " * Companion design: docs/rt-45-gpu-design.md\n" +
+            " * Roadmap entry:   tool/config/build_toolchain.json bt#82\n" +
+            " *\n" +
+            " * This file is intentionally standalone (no hexa_cc.c headers required)\n" +
+            " * so it compiles with `gcc -c gpu_codegen_stub.c -o /tmp/gpu_codegen_stub.o`\n" +
+            " * as a smoke test.  The future implementation will replace HexaNode*\n" +
+            " * with the real ast node typedef from hexa_cc.c.\n" +
+            " */\n" +
+            "\n" +
+            "#include <stddef.h>\n" +
+            "#include <stdio.h>\n" +
+            "#include <stdlib.h>\n" +
+            "#include <string.h>\n" +
+            "\n" +
+            "/* -------------------------------------------------------------------------\n" +
+            " * Opaque types\n" +
+            " * -------------------------------------------------------------------------\n" +
+            " * In the real integration these become the actual hexa AST node and\n" +
+            " * string-buffer types from hexa_cc.c.  Defined as opaque structs here so\n" +
+            " * the stub compiles without pulling in hexa_cc.c.\n" +
+            " */\n" +
+            "typedef struct HexaNode HexaNode;     /* AST node — forward decl */\n" +
+            "typedef struct GpuStr   GpuStr;       /* growable string buffer  */\n" +
+            "\n" +
+            "struct HexaNode {\n" +
+            "    /* opaque — see hexa_cc.c */\n" +
+            "    int  kind;\n" +
+            "    void *_pad;\n" +
+            "};\n" +
+            "\n" +
+            "struct GpuStr {\n" +
+            "    char  *data;\n" +
+            "    size_t len;\n" +
+            "    size_t cap;\n" +
+            "};\n" +
+            "\n" +
+            "/* -------------------------------------------------------------------------\n" +
+            " * GPU backend selection\n" +
+            " * ------------------------------------------------------------------------- */\n" +
+            "typedef enum {\n" +
+            "    GPU_BACKEND_NONE        = 0,\n" +
+            "    GPU_BACKEND_PTX_DIRECT  = 1,  /* hand-rolled PTX text emit (§ 3.1) */\n" +
+            "    GPU_BACKEND_PTX_LLVM    = 2,  /* LLVM-NVPTX (§ 3.2, preferred)     */\n" +
+            "    GPU_BACKEND_METAL_MSL   = 3,  /* Apple Metal Shading Language       */\n" +
+            "    GPU_BACKEND_SPIRV       = 4   /* SPIR-V (rejected for v1, § 3.3)    */\n" +
+            "} GpuBackend;\n" +
+            "\n" +
+            "/* Default backend — flipped at build time by the rt#45 implementer.\n" +
+            " * Today: NONE (research only). */\n" +
+            "static GpuBackend g_gpu_backend = GPU_BACKEND_NONE;\n" +
+            "\n" +
+            "void gpu_codegen_set_backend(GpuBackend b) {\n" +
+            "    g_gpu_backend = b;\n" +
+            "}\n" +
+            "\n" +
+            "GpuBackend gpu_codegen_get_backend(void) {\n" +
+            "    return g_gpu_backend;\n" +
+            "}\n" +
+            "\n" +
+            "/* -------------------------------------------------------------------------\n" +
+            " * Validation pass — § 4.2 + § 5.4\n" +
+            " *\n" +
+            " * Walks an AST node (assumed to be FnDecl with @gpu attribute) and rejects\n" +
+            " * anything outside the GPU subset.  Returns 1 if the function is valid,\n" +
+            " * 0 otherwise.  err_buf receives a human-readable diagnostic list.\n" +
+            " *\n" +
+            " * Allowlist (initial):\n" +
+            " *   types       : f32, f64, i32, i64, bool\n" +
+            " *   collections : fixed [T; N], borrowed [T]\n" +
+            " *   ops         : arithmetic, comparison, indexing, assignment\n" +
+            " *   intrinsics  : gpu_thread_id_*, gpu_block_id_*, gpu_block_dim_*,\n" +
+            " *                 gpu_grid_dim_*, gpu_sync, gpu_atomic_add, gpu_warp_shuffle\n" +
+            " *   control     : if/else, while, return\n" +
+            " *\n" +
+            " * Denylist (rejects):\n" +
+            " *   - String, Map, Set, dynamic List ops (.map/.filter/etc — alloc)\n" +
+            " *   - closures, lambda\n" +
+            " *   - println, file IO, system calls\n" +
+            " *   - dynamic dispatch / vtable / trait objects\n" +
+            " *   - any reference to a non-@gpu function (other than allowlisted intrinsics)\n" +
+            " *\n" +
+            " * TODO(rt#45): implement walk; today returns 1 with empty err.\n" +
+            " */\n" +
+            "int validate_gpu_subset(HexaNode *fn_node, GpuStr *err_buf) {\n" +
+            "    (void)fn_node;\n" +
+            "    (void)err_buf;\n" +
+            "    /* TODO(rt#45 wave 6):\n" +
+            "     *   1. assert fn_node->kind == FnDecl\n" +
+            "     *   2. assert \"gpu\" appears in fn_node attrs list\n" +
+            "     *   3. recursive walk children: type-check params against allowlist\n" +
+            "     *   4. walk body: reject any Call whose target is not in\n" +
+            "     *      g_gpu_intrinsic_table or another @gpu fn\n" +
+            "     *   5. reject any StringLit, MapLit, ListLit-with-grow ops\n" +
+            "     *   6. on error: append \"error[GPU0N]: ...\" to err_buf\n" +
+            "     */\n" +
+            "    return 1;\n" +
+            "}\n" +
+            "\n" +
+            "/* -------------------------------------------------------------------------\n" +
+            " * PTX emission — § 3.1 / § 3.2\n" +
+            " *\n" +
+            " * Produces a PTX kernel source string for the given @gpu fn.  Caller owns\n" +
+            " * the returned char* and must free it.  Returns NULL on failure (use\n" +
+            " * validate_gpu_subset first to know why).\n" +
+            " *\n" +
+            " * TODO(rt#45): two implementations behind one signature.\n" +
+            " */\n" +
+            "char *emit_ptx_kernel(HexaNode *fn_node) {\n" +
+            "    (void)fn_node;\n" +
+            "    /* TODO(rt#45 wave 6):\n" +
+            "     *   if g_gpu_backend == GPU_BACKEND_PTX_DIRECT:\n" +
+            "     *       return emit_ptx_kernel_direct(fn_node)\n" +
+            "     *   else if g_gpu_backend == GPU_BACKEND_PTX_LLVM:\n" +
+            "     *       return emit_ptx_kernel_via_llvm(fn_node)\n" +
+            "     *   else: return NULL\n" +
+            "     */\n" +
+            "    static const char *placeholder =\n" +
+            "        \"// PTX emission not implemented — rt#45 wave 6\\n\"\n" +
+            "        \".version 7.5\\n\"\n" +
+            "        \".target sm_80\\n\"\n" +
+            "        \".address_size 64\\n\"\n" +
+            "        \"// .visible .entry kernel_stub() { ret; }\\n\";\n" +
+            "    char *out = (char *)malloc(strlen(placeholder) + 1);\n" +
+            "    if (!out) return NULL;\n" +
+            "    strcpy(out, placeholder);\n" +
+            "    return out;\n" +
+            "}\n" +
+            "\n" +
+            "static char *emit_ptx_kernel_direct(HexaNode *fn_node) {\n" +
+            "    (void)fn_node;\n" +
+            "    /* TODO: hand-write PTX text — small AST walker, no LLVM dep.\n" +
+            "     * Reg alloc by linear-scan over SSA names.  Documented as fallback\n" +
+            "     * if the LLVM dep is rejected at L0 review (§ 3.5 risk 1). */\n" +
+            "    return NULL;\n" +
+            "}\n" +
+            "\n" +
+            "static char *emit_ptx_kernel_via_llvm(HexaNode *fn_node) {\n" +
+            "    (void)fn_node;\n" +
+            "    /* TODO: emit LLVM IR as text, hand to libLLVM, target NVPTX,\n" +
+            "     * read back PTX.  Preferred path — quality wins are 30-40% on GEMM. */\n" +
+            "    return NULL;\n" +
+            "}\n" +
+            "\n" +
+            "/* -------------------------------------------------------------------------\n" +
+            " * Metal Shading Language emission — § 7\n" +
+            " *\n" +
+            " * Produces a .metal source string.  Not v1.  Stub here so the abstraction\n" +
+            " * doesn't preclude it.\n" +
+            " */\n" +
+            "char *emit_metal_shader(HexaNode *fn_node) {\n" +
+            "    (void)fn_node;\n" +
+            "    /* TODO(future): walk AST, emit MSL.  Same validated AST as PTX path. */\n" +
+            "    static const char *placeholder =\n" +
+            "        \"// Metal Shading Language emission not implemented (v1 = PTX only)\\n\"\n" +
+            "        \"#include <metal_stdlib>\\n\"\n" +
+            "        \"using namespace metal;\\n\"\n" +
+            "        \"// kernel void stub() {}\\n\";\n" +
+            "    char *out = (char *)malloc(strlen(placeholder) + 1);\n" +
+            "    if (!out) return NULL;\n" +
+            "    strcpy(out, placeholder);\n" +
+            "    return out;\n" +
+            "}\n" +
+            "\n" +
+            "/* -------------------------------------------------------------------------\n" +
+            " * Host-side launch shim synthesis — § 4.2 step 3\n" +
+            " *\n" +
+            " * For an @gpu kernel `fn foo(a: [f32], b: [f32]) -> [f32]`, synthesize a\n" +
+            " * hexa-source host wrapper:\n" +
+            " *\n" +
+            " *     fn foo_launch(grid_x, grid_y, grid_z, block_x, block_y, block_z,\n" +
+            " *                   a, b) {\n" +
+            " *         let a_dev = __cuda_memcpy_h2d(a)\n" +
+            " *         let b_dev = __cuda_memcpy_h2d(b)\n" +
+            " *         __cuda_launch(\"foo\", grid_x, grid_y, grid_z,\n" +
+            " *                              block_x, block_y, block_z, a_dev, b_dev)\n" +
+            " *         let result = __cuda_memcpy_d2h(b_dev, len(b))\n" +
+            " *         __cuda_free(a_dev); __cuda_free(b_dev)\n" +
+            " *         return result\n" +
+            " *     }\n" +
+            " *\n" +
+            " * Returns hexa source text the parser will then re-ingest.\n" +
+            " *\n" +
+            " * TODO(rt#45): real impl walks fn_node->params and emits per-arg copies.\n" +
+            " */\n" +
+            "char *emit_host_launch_shim(HexaNode *fn_node) {\n" +
+            "    (void)fn_node;\n" +
+            "    static const char *placeholder =\n" +
+            "        \"// host launch shim not implemented — rt#45 wave 6\\n\"\n" +
+            "        \"// fn KERNEL_launch(grid, block, ...args) { ... }\\n\";\n" +
+            "    char *out = (char *)malloc(strlen(placeholder) + 1);\n" +
+            "    if (!out) return NULL;\n" +
+            "    strcpy(out, placeholder);\n" +
+            "    return out;\n" +
+            "}\n" +
+            "\n" +
+            "/* -------------------------------------------------------------------------\n" +
+            " * Intrinsic table — § 5.2\n" +
+            " *\n" +
+            " * The set of pseudo-functions legal inside @gpu bodies.  Pattern-matched\n" +
+            " * at codegen time; never linked at runtime.\n" +
+            " */\n" +
+            "typedef struct {\n" +
+            "    const char *hexa_name;     /* what the user writes              */\n" +
+            "    const char *ptx_pattern;   /* PTX equivalent (informational)    */\n" +
+            "    const char *metal_pattern; /* MSL equivalent (informational)    */\n" +
+            "} GpuIntrinsic;\n" +
+            "\n" +
+            "static const GpuIntrinsic g_gpu_intrinsics[] = {\n" +
+            "    { \"gpu_thread_id_x\",  \"%tid.x\",     \"thread_position_in_threadgroup.x\" },\n" +
+            "    { \"gpu_thread_id_y\",  \"%tid.y\",     \"thread_position_in_threadgroup.y\" },\n" +
+            "    { \"gpu_thread_id_z\",  \"%tid.z\",     \"thread_position_in_threadgroup.z\" },\n" +
+            "    { \"gpu_block_id_x\",   \"%ctaid.x\",   \"threadgroup_position_in_grid.x\"   },\n" +
+            "    { \"gpu_block_id_y\",   \"%ctaid.y\",   \"threadgroup_position_in_grid.y\"   },\n" +
+            "    { \"gpu_block_id_z\",   \"%ctaid.z\",   \"threadgroup_position_in_grid.z\"   },\n" +
+            "    { \"gpu_block_dim_x\",  \"%ntid.x\",    \"threads_per_threadgroup.x\"        },\n" +
+            "    { \"gpu_block_dim_y\",  \"%ntid.y\",    \"threads_per_threadgroup.y\"        },\n" +
+            "    { \"gpu_block_dim_z\",  \"%ntid.z\",    \"threads_per_threadgroup.z\"        },\n" +
+            "    { \"gpu_grid_dim_x\",   \"%nctaid.x\",  \"threadgroups_per_grid.x\"          },\n" +
+            "    { \"gpu_sync\",         \"bar.sync 0\", \"threadgroup_barrier\"              },\n" +
+            "    { \"gpu_atomic_add\",   \"atom.add\",   \"atomic_fetch_add_explicit\"        },\n" +
+            "    { \"gpu_warp_shuffle\", \"shfl.sync\",  \"simd_shuffle\"                     },\n" +
+            "    { NULL, NULL, NULL }\n" +
+            "};\n" +
+            "\n" +
+            "int gpu_intrinsic_lookup(const char *name) {\n" +
+            "    if (!name) return 0;\n" +
+            "    for (int i = 0; g_gpu_intrinsics[i].hexa_name; i++) {\n" +
+            "        if (strcmp(g_gpu_intrinsics[i].hexa_name, name) == 0) {\n" +
+            "            return 1;\n" +
+            "        }\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "/* -------------------------------------------------------------------------\n" +
+            " * Smoke main — only compiled when GPU_CODEGEN_STUB_MAIN is defined.\n" +
+            " * Lets the stub double as a tiny self-test:\n" +
+            " *     gcc -DGPU_CODEGEN_STUB_MAIN gpu_codegen_stub.c -o /tmp/gpu_stub\n" +
+            " *     /tmp/gpu_stub\n" +
+            " * ------------------------------------------------------------------------- */\n" +
+            "#ifdef GPU_CODEGEN_STUB_MAIN\n" +
+            "int main(void) {\n" +
+            "    printf(\"gpu_codegen_stub: backend = %d (NONE)\\n\", gpu_codegen_get_backend());\n" +
+            "    printf(\"gpu_codegen_stub: intrinsic 'gpu_thread_id_x' known = %d\\n\",\n" +
+            "           gpu_intrinsic_lookup(\"gpu_thread_id_x\"));\n" +
+            "    printf(\"gpu_codegen_stub: intrinsic 'println' known         = %d\\n\",\n" +
+            "           gpu_intrinsic_lookup(\"println\"));\n" +
+            "    char *ptx   = emit_ptx_kernel(NULL);\n" +
+            "    char *metal = emit_metal_shader(NULL);\n" +
+            "    char *shim  = emit_host_launch_shim(NULL);\n" +
+            "    printf(\"--- PTX placeholder ---\\n%s\", ptx);\n" +
+            "    printf(\"--- MSL placeholder ---\\n%s\", metal);\n" +
+            "    printf(\"--- shim placeholder ---\\n%s\", shim);\n" +
+            "    free(ptx); free(metal); free(shim);\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "#endif\n"
+    return s
+}
+
+fn main() {
+    let argv = real_args()
+    let out_path = if argv.len() >= 1 { argv[0] } else { "gpu_codegen_stub.c" }
+    let c_text = emit_gpu_codegen_stub_c()
+    let cmd = "cat > \"" + out_path + "\" <<'GPU_CODEGEN_STUB_EMIT_EOF'\n" +
+              c_text + "GPU_CODEGEN_STUB_EMIT_EOF"
+    let _ = exec(cmd)
+    let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
+    if exists_check != "y" {
+        println("[gpu_codegen_stub_emit] FATAL: failed to write " + out_path)
+        exit(1)
+    }
+    println("[gpu_codegen_stub_emit] wrote " + out_path)
+    exit(0)
+}
