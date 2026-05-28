@@ -1,0 +1,187 @@
+#!hexa strict
+// tool/test/regen_hexa_ld_fixtures.hexa
+//   B9.C (.c-text · #1854 pattern) — regen-before-use wiring for the 7
+//   hexa_ld phase-H linker test fixtures (`a_main.c` / `b_*.c`).
+//
+// ── WHY THIS EXISTS ────────────────────────────────────────────────────
+//
+// The phase-H FLOOR linker (`tool/hexa_ld.hexa`) is dogfooded against four
+// hand-written PoC fixture pairs under tool/test/hexa_ld_*/. Each PoC is
+// exercised by:
+//   • its byte_diff.hexa oracle (clang+otool source/.o/section byte-diff),
+//   • the manual phase-H linker dev workflow ("cd <dir> && link → run",
+//     which `clang -c` assembles each `.c` to a `.o` INPUT, then drives
+//     `hexa_ld` over the objects — see .verdicts/hexa-ld-dyld-write/
+//     F-PHASEH-INC4.txt "INPUT INVARIANT").
+//
+// Every fixture `.c` is byte-identically hexa-emittable: its verbatim
+// `<base>_emit.hexa` emitter reproduces the file byte-for-byte (#1854,
+// 11/11 gate-1 source-SHA PASS, persisted in
+// .verdicts/runtime-floor-closure/B9C7-hexa-ld-*-byte-diff.txt).
+//
+// Source-SHA equivalence is the binding gate: because each emitter
+// reproduces its `.c` byte-for-byte, regenerating the `.c` from the emitter
+// (the SSOT) ships the SAME bytes the linker test / byte_diff oracle would
+// consume → clang (deterministic on identical input) produces the SAME `.o`
+// → the linker test result is unchanged.
+//
+// This driver makes the hand-written `.c` fixtures SIGN-ACTIVATABLE: once a
+// future sign-batch gitignores + `git rm`s them, this regen-before-use step
+// reconstitutes each `.c` at its canonical on-disk path from the emitter
+// (the SSOT) BEFORE the oracle / linker dev workflow compiles or compares.
+// ADDITIVE only — never `git rm`s, never touches `.gitignore`, never alters
+// linker behavior; it only (re)materializes the TEST-path inputs.
+//
+// Mirrors tool/regen_native_runtime_c_includes.hexa one-to-one (B9.C-10).
+//
+// ── USAGE ──────────────────────────────────────────────────────────────
+//
+//   # regen all 7 + verify sha-equivalence vs the in-tree `.c`:
+//   hexa-run tool/test/regen_hexa_ld_fixtures.hexa
+//
+//   # regen only (e.g. when the `.c` has already been git-rm'd — no in-tree
+//   # baseline to compare; the emitter is the SSOT):
+//   hexa-run tool/test/regen_hexa_ld_fixtures.hexa --regen-only
+//
+//   # exit 0 = all regen OK (and, unless --regen-only, all sha-equal);
+//   # exit 1 = a regen failed or a sha mismatch (drift) was detected.
+//
+// HEXA_HAL_ROOT overrides the repo-root autodetect (defaults to `pwd`).
+
+let MODULE_NAME = "regen_hexa_ld_fixtures"
+
+let mut RUN  = 0
+let mut FAIL = 0
+
+fn _root() -> str {
+    let env_root = env("HEXA_HAL_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _which(cmd: str) -> bool {
+    let r = exec("command -v " + cmd + " >/dev/null 2>&1 && echo y || echo n").trim()
+    return r == "y"
+}
+
+fn _exists(p: str) -> bool {
+    let r = exec("[ -f \"" + p + "\" ] && echo y || echo n").trim()
+    return r == "y"
+}
+
+fn _sha256(p: str) -> str {
+    if _which("shasum") {
+        return exec("shasum -a 256 \"" + p + "\" 2>/dev/null | awk '{print $1}'").trim()
+    }
+    if _which("sha256sum") {
+        return exec("sha256sum \"" + p + "\" 2>/dev/null | awk '{print $1}'").trim()
+    }
+    return ""
+}
+
+fn _hexa_run() -> str {
+    // Prefer an on-PATH hexa-run; fall back to the canonical install path.
+    if _which("hexa-run") { return "hexa-run" }
+    return "/Users/ghost/.hx/bin/hexa-run"
+}
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// Regenerate one `tool/test/<subdir>/<base>.c` from its emitter. When
+// `regen_only` is false AND an in-tree baseline exists, also assert
+// sha-equivalence vs the (pre-regen) baseline.
+fn regen_one(root: str, subdir: str, base: str, regen_only: bool) {
+    let dir     = root + "/tool/test/" + subdir
+    let emitter = dir + "/" + base + "_emit.hexa"
+    let dst     = dir + "/" + base + ".c"
+    let tag     = subdir + "/" + base + ".c"
+
+    if !_exists(emitter) {
+        _check(false, "emitter present: " + subdir + "/" + base + "_emit.hexa",
+               "MISSING — cannot regen " + tag)
+        return
+    }
+
+    let had_baseline = _exists(dst)
+    let baseline_sha = if had_baseline { _sha256(dst) } else { "" }
+
+    let tmp = exec("mktemp -t regen_hexa_ld.XXXXXX").trim()
+    if tmp.len() == 0 {
+        _check(false, "regen " + tag, "mktemp scratch failed")
+        return
+    }
+    let cmd = _hexa_run() + " \"" + emitter + "\" \"" + tmp + "\" >/dev/null 2>&1; echo $?"
+    let rc = exec(cmd).trim()
+    if rc != "0" || !_exists(tmp) {
+        _check(false, "regen " + tag, "emitter exit rc=" + rc)
+        let _ = exec("rm -f \"" + tmp + "\"")
+        return
+    }
+
+    let gen_sha = _sha256(tmp)
+
+    if regen_only || !had_baseline {
+        let _ = exec("cp -f \"" + tmp + "\" \"" + dst + "\"")
+        let _ = exec("rm -f \"" + tmp + "\"")
+        _check(_exists(dst), "regen " + tag + " (no-baseline · emitter SSOT)",
+               "sha=" + gen_sha)
+        return
+    }
+
+    let equal = baseline_sha == gen_sha && gen_sha.len() > 0
+    let _ = exec("cp -f \"" + tmp + "\" \"" + dst + "\"")
+    let _ = exec("rm -f \"" + tmp + "\"")
+    let detail = if equal {
+        "gate-1 byte-identical · sha=" + gen_sha
+    } else {
+        "⚠ DRIFT — baseline=" + baseline_sha + " gen=" + gen_sha
+    }
+    _check(equal, "regen+verify " + tag, detail)
+}
+
+fn main() {
+    println("========================================================================")
+    println("  B9.C — regen_hexa_ld_fixtures: 7 hexa_ld linker test fixtures regen")
+    println("========================================================================")
+
+    let argv = real_args()
+    let mut regen_only = false
+    let mut i = 0
+    while i < argv.len() {
+        if argv[i] == "--regen-only" { regen_only = true }
+        i = i + 1
+    }
+
+    let root = _root()
+    println("  repo-root: " + root)
+    println("  mode:      " + (if regen_only { "--regen-only (emitter SSOT, no baseline compare)" } else { "regen + gate-1 sha-verify vs in-tree `.c`" }))
+    println("")
+
+    // 7 fixture `.c` files across the 4 hexa_ld_* PoC dirs. Each row is
+    // <subdir>:<base>, emitter = tool/test/<subdir>/<base>_emit.hexa.
+    regen_one(root, "hexa_ld_page21",       "a_main", regen_only)
+    regen_one(root, "hexa_ld_page21",       "b_msg",  regen_only)
+    regen_one(root, "hexa_ld_multisection", "a_main", regen_only)
+    regen_one(root, "hexa_ld_multisection", "b_data", regen_only)
+    regen_one(root, "hexa_ld_dyld_write",   "a_main", regen_only)
+    regen_one(root, "hexa_ld_dyld_write",   "b_data", regen_only)
+    regen_one(root, "hexa_ld_dyld_data",    "a_main", regen_only)
+
+    println("")
+    let pass_n = RUN - FAIL
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " fixtures regenerated"
+            + (if regen_only { "" } else { " + verified sha-identical" }))
+    if FAIL > 0 {
+        println("__HEXA_LANG_REGEN_HEXA_LD_FIXTURES__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_LANG_REGEN_HEXA_LD_FIXTURES__ PASS")
+    exit(0)
+}
