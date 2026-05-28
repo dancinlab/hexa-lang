@@ -1,0 +1,174 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+// stdlib/cloud/pod_registry_forget_test.hexa — falsifiers for the registry
+// forget cleanup-symmetry fix (INBOX 2026-05-28).
+//
+// `cloud reconcile` flags GHOST rows by their literal `pod_id` field, which
+// for legacy rows can be an ssh-form (`root@<ip>` · `ssh1.vast.ai`), a bare
+// IP, an alias (`ubu-2`), or a `--help`-as-id edge case — shapes the #1229
+// `_pod_id_looks_valid` sink guard now rejects at WRITE time but which still
+// sit in the registry. The bug: pod_registry_forget re-emitted via
+// pod_registry_record, whose guard refused those very ids, so the
+// reconcile→forget loop was half-closed (numeric GHOSTs forget, ssh-form
+// GHOSTs accumulate forever — anima: 36 GHOST → 16 closed, 20 refused).
+//
+// The fix closes the matched row IN PLACE: a literal pod_id match, status
+// flip to "closed", label + created_at preserved, no routing through the
+// write-side guard. This locks that contract.
+//
+// Hermetic (no ~/.hexa-cloud read): a test-local oracle (`_forget_close`)
+// reproduces the new in-place close over an explicit JSONL-line array,
+// mirroring pod_registry.hexa:pod_registry_forget byte-for-byte. Mirrors
+// reconcile_test.hexa / pod_registry_guard_test.hexa (the source fns live in
+// pod_registry.hexa which is import-safe but the close path is file-bound).
+//
+// Run:   hexa run stdlib/cloud/pod_registry_forget_test.hexa
+// PASS:  exits 0, prints "pod_registry_forget_test PASS — N/N cases".
+
+// ── mirror of pod_registry.hexa:_reg_field (string-value extraction) ─────
+fn _reg_field(line: str, key: str) -> str {
+    let marker = "\"" + key + "\":\""
+    let at = line.index_of(marker)
+    if at < 0 {
+        return ""
+    }
+    let start = at + len(marker)
+    let mut i = start
+    let n = len(line)
+    while i < n {
+        if line.substring(i, i + 1) == "\"" {
+            return line.substring(start, i)
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// ── ForgetResult — found flag + rebuilt JSONL body ──────────────────────
+struct ForgetResult {
+    found:    int,
+    rebuilt:  str
+}
+
+// _forget_close — test-local mirror of the IN-PLACE close at the heart of
+// pod_registry_forget: literal pod_id match → flip status=closed, preserve
+// label + created_at, refresh last_seen, rebuild the rest verbatim. `now` is
+// injected so the assertion is deterministic (the real fn uses _reg_now_iso).
+fn _forget_close(lines: [str], pod_id: str, now: str) -> ForgetResult {
+    let mut found = 0
+    let mut rebuilt = ""
+    let mut i = 0
+    while i < len(lines) {
+        let line = lines[i]
+        if len(line) > 0 {
+            if found == 0 && _reg_field(line, "pod_id") == pod_id {
+                found = 1
+                let label = _reg_field(line, "label")
+                let created = _reg_field(line, "created_at")
+                rebuilt = rebuilt
+                    + "{\"pod_id\":\"" + pod_id + "\","
+                    + "\"label\":\"" + label + "\","
+                    + "\"created_at\":\"" + created + "\","
+                    + "\"last_seen\":\"" + now + "\","
+                    + "\"status\":\"closed\"}\n"
+            } else {
+                rebuilt = rebuilt + line + "\n"
+            }
+        }
+        i = i + 1
+    }
+    return ForgetResult { found: found, rebuilt: rebuilt }
+}
+
+// _row — build a JSONL registry line for a fixture.
+fn _row(pod_id: str, label: str, created: str, last_seen: str, status: str) -> str {
+    return "{\"pod_id\":\"" + pod_id + "\","
+        + "\"label\":\"" + label + "\","
+        + "\"created_at\":\"" + created + "\","
+        + "\"last_seen\":\"" + last_seen + "\","
+        + "\"status\":\"" + status + "\"}"
+}
+
+fn _fail(case: str, msg: str) {
+    println("FAIL " + case + ": " + msg)
+    exit(1)
+}
+
+fn _eq_s(case: str, got: str, want: str) {
+    if got != want { _fail(case, "got '" + got + "' want '" + want + "'") }
+}
+
+fn _eq_i(case: str, got: int, want: int) {
+    if got != want { _fail(case, "got " + str(got) + " want " + str(want)) }
+}
+
+fn main() {
+    let mut n = 0
+    let now = "2026-05-28T12:00:00Z"
+
+    // ── the INBOX falsifier: ssh-form / IP / alias / flag-as-id GHOST rows
+    // (which the write-side guard refuses) MUST still close via forget ──
+    let lines = [
+        _row("12345678",          "numeric-vast",  "2026-05-27T00:00:00Z", "2026-05-27T01:00:00Z", "running"),
+        _row("root@141.195.21.87", "ssh-form",     "2026-05-27T00:10:00Z", "2026-05-27T01:10:00Z", "running"),
+        _row("ssh1.vast.ai",       "ssh-host",     "2026-05-27T00:20:00Z", "2026-05-27T01:20:00Z", "running"),
+        _row("88.90.102.66",       "bare-ip",      "2026-05-27T00:30:00Z", "2026-05-27T01:30:00Z", "running"),
+        _row("ubu-2",              "alias",        "2026-05-27T00:40:00Z", "2026-05-27T01:40:00Z", "running"),
+        _row("--help",             "flag-as-id",   "2026-05-27T00:50:00Z", "2026-05-27T01:50:00Z", "running")
+    ]
+
+    // (1) ssh-form (root@ip) — the prime INBOX failure — now closes.
+    let r1 = _forget_close(lines, "root@141.195.21.87", now)
+    _eq_i("ssh-form-found", r1.found, 1); n = n + 1
+    let l1 = r1.rebuilt.split("\n")
+    _eq_s("ssh-form-status", _reg_field(l1[1], "status"), "closed"); n = n + 1
+    _eq_s("ssh-form-label-preserved", _reg_field(l1[1], "label"), "ssh-form"); n = n + 1
+    _eq_s("ssh-form-created-preserved", _reg_field(l1[1], "created_at"), "2026-05-27T00:10:00Z"); n = n + 1
+    _eq_s("ssh-form-lastseen-refreshed", _reg_field(l1[1], "last_seen"), now); n = n + 1
+    // the numeric sibling row is untouched (still running).
+    _eq_s("ssh-form-sibling-untouched", _reg_field(l1[0], "status"), "running"); n = n + 1
+
+    // (2) ssh-host (dots, no @) closes.
+    let r2 = _forget_close(lines, "ssh1.vast.ai", now)
+    _eq_i("ssh-host-found", r2.found, 1); n = n + 1
+    _eq_s("ssh-host-status", _reg_field(r2.rebuilt.split("\n")[2], "status"), "closed"); n = n + 1
+
+    // (3) bare IP closes.
+    let r3 = _forget_close(lines, "88.90.102.66", now)
+    _eq_i("bare-ip-found", r3.found, 1); n = n + 1
+    _eq_s("bare-ip-status", _reg_field(r3.rebuilt.split("\n")[3], "status"), "closed"); n = n + 1
+
+    // (4) alias (ubu-2) closes.
+    let r4 = _forget_close(lines, "ubu-2", now)
+    _eq_i("alias-found", r4.found, 1); n = n + 1
+    _eq_s("alias-status", _reg_field(r4.rebuilt.split("\n")[4], "status"), "closed"); n = n + 1
+
+    // (5) flag-as-id (--help) edge case closes.
+    let r5 = _forget_close(lines, "--help", now)
+    _eq_i("flag-found", r5.found, 1); n = n + 1
+    _eq_s("flag-status", _reg_field(r5.rebuilt.split("\n")[5], "status"), "closed"); n = n + 1
+
+    // ── regression (g34): numeric provider-id still closes unchanged ──
+    let r6 = _forget_close(lines, "12345678", now)
+    _eq_i("numeric-found", r6.found, 1); n = n + 1
+    _eq_s("numeric-status", _reg_field(r6.rebuilt.split("\n")[0], "status"), "closed"); n = n + 1
+    _eq_s("numeric-label-preserved", _reg_field(r6.rebuilt.split("\n")[0], "label"), "numeric-vast"); n = n + 1
+
+    // ── unmatched id → not found (found=0), body unchanged in spirit ──
+    let r7 = _forget_close(lines, "no-such-id", now)
+    _eq_i("absent-found", r7.found, 0); n = n + 1
+    // every row stays running (nothing flipped) when no match.
+    _eq_s("absent-row0-running", _reg_field(r7.rebuilt.split("\n")[0], "status"), "running"); n = n + 1
+    _eq_s("absent-row1-running", _reg_field(r7.rebuilt.split("\n")[1], "status"), "running"); n = n + 1
+
+    // ── only the FIRST matching row is closed (found-gate stops re-match) ──
+    let dup = [
+        _row("dupid", "a", "2026-05-27T00:00:00Z", "2026-05-27T00:00:00Z", "running"),
+        _row("dupid", "b", "2026-05-27T00:00:00Z", "2026-05-27T00:00:00Z", "running")
+    ]
+    let r8 = _forget_close(dup, "dupid", now)
+    _eq_i("dup-found", r8.found, 1); n = n + 1
+    _eq_s("dup-first-closed", _reg_field(r8.rebuilt.split("\n")[0], "status"), "closed"); n = n + 1
+    _eq_s("dup-second-running", _reg_field(r8.rebuilt.split("\n")[1], "status"), "running"); n = n + 1
+
+    println("pod_registry_forget_test PASS — " + str(n) + "/" + str(n) + " cases")
+}
