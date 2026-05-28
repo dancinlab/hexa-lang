@@ -1032,7 +1032,7 @@ fn main() {
         let env_kvs = _env_args_cli(av, si + 2)
         let mut argv = _collect_after(av, si + 2)
         if len(argv) == 0 {
-            println("[cloud] run: empty argv — usage: cloud run <host> [--port N] [--insecure] [--max-wall S] [--env K=V] -- <argv...>")
+            println("[cloud] run: empty argv — usage: cloud run <host> [--port N] [--insecure] [--max-wall S] [--env K=V] [--source P] -- <argv...>")
             exit(2)
         }
         argv = _with_env(env_kvs, argv)
@@ -1081,7 +1081,7 @@ fn main() {
     }
     if sub == "nohup" {
         if si + 2 >= len(av) {
-            println("[cloud] nohup: usage — cloud nohup <host> <logfile> [--port N] [--insecure] [--early-life-check N] [--register [<jid>]] -- <argv...>")
+            println("[cloud] nohup: usage — cloud nohup <host> <logfile> [--port N] [--insecure] [--early-life-check N] [--env K=V] [--source P] [--register [<jid>]] -- <argv...>")
             exit(2)
         }
         let host = av[si + 1]
@@ -1092,7 +1092,7 @@ fn main() {
         let reg_token = _register_cli(av, si + 3)
         let mut argv = _collect_after(av, si + 3)
         if len(argv) == 0 {
-            println("[cloud] nohup: empty argv — usage: cloud nohup <host> <logfile> [--port N] [--insecure] [--early-life-check N] [--env K=V] [--register [<jid>]] -- <argv...>")
+            println("[cloud] nohup: empty argv — usage: cloud nohup <host> <logfile> [--port N] [--insecure] [--early-life-check N] [--env K=V] [--source P] [--register [<jid>]] -- <argv...>")
             exit(2)
         }
         argv = _with_env(env_kvs, argv)
@@ -1138,7 +1138,7 @@ fn main() {
         // tail_cmd from one verb call. The whole point: the caller no longer
         // has to invent a logfile path AND thread it through to `cloud tail`.
         if si + 1 >= len(av) {
-            println("[cloud] fire: usage — cloud fire <host> [--log <path>] [--port N] [--insecure] [--early-life-check N] [--env K=V] [--register [<jid>]] -- <argv...>")
+            println("[cloud] fire: usage — cloud fire <host> [--log <path>] [--port N] [--insecure] [--early-life-check N] [--env K=V] [--source P] [--register [<jid>]] -- <argv...>")
             exit(2)
         }
         let host = av[si + 1]
@@ -1149,7 +1149,7 @@ fn main() {
         let reg_token = _register_cli(av, si + 2)
         let mut argv = _collect_after(av, si + 2)
         if len(argv) == 0 {
-            println("[cloud] fire: empty argv — usage: cloud fire <host> [--log <path>] [--port N] [--insecure] [--early-life-check N] [--env K=V] [--register [<jid>]] -- <argv...>")
+            println("[cloud] fire: empty argv — usage: cloud fire <host> [--log <path>] [--port N] [--insecure] [--early-life-check N] [--env K=V] [--source P] [--register [<jid>]] -- <argv...>")
             exit(2)
         }
         argv = _with_env(env_kvs, argv)
