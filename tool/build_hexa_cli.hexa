@@ -415,14 +415,21 @@ fn _do_build(repo_root: string) {
             eprintln("  warn: HEXA_RT_SELFEMIT only supports arm64 Mach-O (Darwin) — ignored")
         } else {
             println("[selfemit] F3 Path A · B9.6a-7 — 12 reloc-free leaf primitives → _hxlcl_* native overrides")
+            println("[selfemit] F3 Path A · B9.6-C1 — class-C syscall ABI: getpid (raw svc #0x80) → _hxlcl_getpid")
             // From here on the driver/module_loader runtime.c is compiled with
             // the guard ON so the hxlcl_* bodies become extern (resolved below).
             cflags = cflags + " -DHEXA_RT_SELFEMIT"
             let _ = exec("mkdir -p " + _shq(repo_root + "/build/selfemit"))
             // leaf basenames; each maps to emit_hxlcl_<n>_o.hexa, hxlcl_<n>.o,
             // and the env var HEXA_HXLCL_<UPPER>_O the driver reads.
-            let leaves = ["memset", "memcmp", "memcpy", "memmove", "strcmp", "strncmp", "strchr", "strrchr", "strcpy", "strncpy", "strcat", "strlen"]
-            let upper  = ["MEMSET", "MEMCMP", "MEMCPY", "MEMMOVE", "STRCMP", "STRNCMP", "STRCHR", "STRRCHR", "STRCPY", "STRNCPY", "STRCAT", "STRLEN"]
+            // B9.6-C1 appends `getpid` — the FIRST class-C (raw svc #0x80
+            // syscall-ABI) primitive. It rides the SAME single-symbol emit
+            // template as the reloc-free leaves (single _hxlcl_<n> export, no
+            // reloc/struct-arg), differing only in that its body is a syscall
+            // trap rather than a register/memory op. This opens the ~190-fn
+            // layer-② hxlcl_* svc-wrapper subtrack (#1812 audit).
+            let leaves = ["memset", "memcmp", "memcpy", "memmove", "strcmp", "strncmp", "strchr", "strrchr", "strcpy", "strncpy", "strcat", "strlen", "getpid"]
+            let upper  = ["MEMSET", "MEMCMP", "MEMCPY", "MEMMOVE", "STRCMP", "STRNCMP", "STRCHR", "STRRCHR", "STRCPY", "STRNCPY", "STRCAT", "STRLEN", "GETPID"]
             let mut li = 0
             while li < len(leaves) {
                 let n = leaves[li]

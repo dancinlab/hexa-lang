@@ -2739,6 +2739,57 @@ fn rt_hexa_enum_str_v() {
     return c
 }
 
+// ── rt_getpid (B9.6-C1 — class-C syscall ABI FIRST self-emit) ────
+// getpid() -> int. The FIRST class-C (syscall-ABI) self-emit leaf:
+// it issues a raw `svc #0x80` BSD syscall instead of computing a
+// value in registers (class-A/D) or looping over memory (the leaf
+// family). This opens the ~190-fn layer-② `hxlcl_*` svc-wrapper
+// subtrack per the #1812 audit.
+//
+// macOS arm64 BSD syscall ABI: the syscall number goes in x16, args
+// in x0.., then `svc #0x80`; the result returns in x0. getpid is
+// SYS_GETPID = 20. It takes NO arguments and CANNOT fail (no errno /
+// carry-flag path — like getuid), so the plain (non-_cf) trap is
+// exact: just load nr, zero x0, trap, return.
+//
+// This mirrors self/runtime.c L1247
+//   hxlcl_getpid(void) { return (int)_hxlcl_syscall1(HXLCL_SYS_GETPID, 0); }
+// whose clang -O2 -S (== `as -arch arm64`) is byte-for-byte:
+//   mov w16, #20 ; mov x0, #0 ; svc #0x80 ; ret
+// (clang picks the 32-bit `mov w16` MOVZ form for the small immediate.)
+//
+// Unlike rt_exit (which never returns, so has no epilogue and no
+// well-defined return value), getpid RETURNS the pid in x0 — making
+// it JIT-exec-checkable: a C driver calling the linked _hxlcl_getpid
+// must get the same value as libc getpid(). That return path is what
+// makes it the right FIRST class-C activation candidate.
+//
+// 4 instructions, 16 bytes.
+fn rt_getpid() {
+    let mut c = []
+    // mov w16, #20  (SYS_GETPID)     0x52800290
+    c.push(144)
+    c.push(2)
+    c.push(128)
+    c.push(82)
+    // mov x0, #0   (no syscall arg)  0xD2800000
+    c.push(0)
+    c.push(0)
+    c.push(128)
+    c.push(210)
+    // svc #0x80                      0xD4001001
+    c.push(1)
+    c.push(16)
+    c.push(0)
+    c.push(212)
+    // ret  (x0 = pid)                0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
 // ── self-test ────────────────────────────────────────────────
 
 fn test_runtime_arm64() {
@@ -2776,6 +2827,8 @@ fn test_runtime_arm64() {
     let hfloat = rt_hexa_float()
     let henum = rt_hexa_enum_str()
     let henumv = rt_hexa_enum_str_v()
+    // B9.6-C1 — class-C syscall ABI FIRST self-emit (raw svc #0x80).
+    let gpid = rt_getpid()
 
     println("runtime_arm64 — ARM64 machine code byte arrays")
     println("  rt_exit          : " + to_string(len(exit_bytes)) + " bytes")
@@ -2810,6 +2863,7 @@ fn test_runtime_arm64() {
     println("  rt_hexa_float    : " + to_string(len(hfloat)) + " bytes")
     println("  rt_hexa_enum_str : " + to_string(len(henum)) + " bytes")
     println("  rt_hexa_enum_str_v: " + to_string(len(henumv)) + " bytes")
+    println("  rt_getpid        : " + to_string(len(gpid)) + " bytes")
 
     // Verify sizes match expected instruction counts * 4
     let mut ok = true
@@ -2885,6 +2939,15 @@ fn test_runtime_arm64() {
     if len(hfloat) != 12 { println("  FAIL: rt_hexa_float expected 12, got " + to_string(len(hfloat))); ok = false }
     if len(henum) != 12 { println("  FAIL: rt_hexa_enum_str expected 12, got " + to_string(len(henum))); ok = false }
     if len(henumv) != 12 { println("  FAIL: rt_hexa_enum_str_v expected 12, got " + to_string(len(henumv))); ok = false }
+    // B9.6-C1 — class-C syscall ABI: rt_getpid is a 4-instr 16 B leaf
+    //   mov w16,#20 / mov x0,#0 / svc #0x80 / ret  (svc-trap, returns pid in x0)
+    if len(gpid) != 16 { println("  FAIL: rt_getpid expected 16, got " + to_string(len(gpid))); ok = false }
+    // svc #0x80 must be present at offset 8 (01 10 00 d4) — the syscall trap.
+    if gpid[8] != 1 || gpid[9] != 16 || gpid[10] != 0 || gpid[11] != 212 { println("  FAIL: rt_getpid missing svc #0x80 at offset 8"); ok = false }
+    // mov w16,#20 prefix (90 02 80 52) — SYS_GETPID loaded into x16.
+    if gpid[0] != 144 || gpid[1] != 2 || gpid[2] != 128 || gpid[3] != 82 { println("  FAIL: rt_getpid wrong syscall number prefix"); ok = false }
+    // ret trailer (c0 03 5f d6) — getpid RETURNS (unlike rt_exit).
+    if gpid[12] != 192 || gpid[13] != 3 || gpid[14] != 95 || gpid[15] != 214 { println("  FAIL: rt_getpid no RET"); ok = false }
 
     // Verify all sizes are multiples of 4 (ARM64 fixed-width)
     if len(exit_bytes) % 4 != 0 { println("  FAIL: rt_exit not aligned"); ok = false }
@@ -2919,6 +2982,7 @@ fn test_runtime_arm64() {
     if len(hfloat) % 4 != 0 { println("  FAIL: rt_hexa_float not aligned"); ok = false }
     if len(henum) % 4 != 0 { println("  FAIL: rt_hexa_enum_str not aligned"); ok = false }
     if len(henumv) % 4 != 0 { println("  FAIL: rt_hexa_enum_str_v not aligned"); ok = false }
+    if len(gpid) % 4 != 0 { println("  FAIL: rt_getpid not aligned"); ok = false }
     // B9.6-D2 — all three end with ret (192,3,95,214).
     let nhf = len(hfloat)
     if hfloat[nhf - 4] != 192 { println("  FAIL: rt_hexa_float no RET"); ok = false }
