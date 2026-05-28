@@ -424,18 +424,62 @@ fn cloud_poll(host: str, pid: int) -> int {
     return cloud_poll_opts(host, [], pid)
 }
 
+// ── terminal taxonomy (INBOX gap 1, 2026-05-28) ──────────────────────
+//
+// A terminal-marker match is NOT, by itself, success. A QE ph.x job that
+// hits its `max_seconds` walltime prints `Maximum CPU time exceeded`, THEN
+// the routine's normal `JOB DONE.` line, THEN `STOP 1`×N + a non-zero
+// `prterun` exit — i.e. a CLEAN-looking marker wrapped in a timed-out
+// failure. The old default `until_re` ("JOB DONE|…") quit on `JOB DONE`
+// and returned exit 0, mis-classifying a resumable timeout as SUCCESS.
+//
+// Fix = a 3-tier taxonomy evaluated FAILURE-FIRST. Because the QE timeout /
+// crash signatures appear AT or BEFORE the `JOB DONE` line, a sed program
+// that tries the CRASH set, then the TIMEOUT set, then the clean DONE set
+// (in that order) matches the failure line first and quits with the right
+// verdict before it ever reaches the deceptive `JOB DONE`. The verdict is
+// carried out-of-band as the sed `q <exit-code>` so the pipeline (and the
+// inheriting ssh / exec_replace) exits with the class:
+//
+//   exit 0 — DONE              (clean terminal marker, no trailing failure)
+//   exit 3 — TIMEOUT-RESUMABLE (walltime hit; the job can be resumed)
+//   exit 4 — CRASHED           (non-zero STOP / routine error / hard fault)
+//
+// These three are pattern TABLES (g20 — no per-marker hardcoded branch):
+// add/rename a signature = edit one constant, never the control flow. The
+// remote consumer is GNU sed (every pod) which supports `q <code>`; the
+// command STRING shape is what the falsifier suite pins, so a non-GNU
+// local sed never executes it.
+
+// _CLOUD_TAIL_CRASH_RE — non-zero hard-failure signatures. `STOP [1-9]` is
+// a Fortran non-zero STOP (QE / ph.x abort); `STOP 0` is a clean stop and
+// is deliberately excluded. `Error in routine` is the QE error banner.
+let _CLOUD_TAIL_CRASH_RE = "STOP [1-9]|Error in routine|Traceback \\(most recent call last\\)|Killed|CUDA out of memory|Segmentation fault|core dumped|FATAL|OOMKilled"
+
+// _CLOUD_TAIL_TIMEOUT_RE — walltime-hit, resumable signatures. QE prints
+// `Maximum CPU time exceeded` on `max_seconds`; `timeout 124` / SIGTERM are
+// the generic `timeout(1)` walltime kills.
+let _CLOUD_TAIL_TIMEOUT_RE = "Maximum CPU time exceeded|max_seconds|exceeded.*max.*time|walltime exceeded|DUE TO TIME LIMIT"
+
+// _CLOUD_TAIL_DONE_RE — clean terminal markers (no trailing failure). These
+// quit with exit 0 ONLY because the failure-first ordering already let any
+// crash/timeout line win.
+let _CLOUD_TAIL_DONE_RE = "JOB DONE|RESULT_DONE|JOB FAILED"
+
 // cloud_tail_cmd_opts — build the LOCAL command that live-streams a remote
 // `logfile` over ssh, so a harness (Monitor) can attach to a remote job's
 // progress without polling. The remote side is a `tail -F | sed -E -un`
 // pipeline:
 //   - `tail -F -n +1` replays the file from the top then follows new lines
 //     (so a job that already finished is handled idempotently);
-//   - `sed -E -un` runs a terminal-FIRST program: on a line matching the
-//     `until_re` ERE it prints then `q`uits (closing the pipe → `tail -F`
-//     gets SIGPIPE → ssh returns: a clean single completion, never an
-//     unbounded stream); otherwise it prints the line when it matches
-//     `grep_re` (empty = every line). The terminal line always surfaces
-//     even if it would fail the grep filter.
+//   - `sed -E -un` runs a TERMINAL-FIRST, FAILURE-FIRST program: it tries
+//     the CRASH set, then the TIMEOUT set, then the clean DONE set; on the
+//     first match it prints the line then `q <code>`uits with the verdict
+//     exit code (closing the pipe → `tail -F` gets SIGPIPE → ssh returns
+//     the verdict code: a clean single completion, never an unbounded
+//     stream). A non-terminal line is printed when it matches `grep_re`
+//     (empty = every line). The terminal line always surfaces even if it
+//     would fail the grep filter.
 //   - `-u` makes sed line-buffered/unbuffered. This matters: the stock awk
 //     on a pod is mawk, which block-buffers its STDIN when the upstream pipe
 //     stays open (a following `tail -F`) and so never processes lines until
@@ -444,29 +488,73 @@ fn cloud_poll(host: str, pid: int) -> int {
 //     end immediately.
 // The caller runs the returned string through `exec_replace` (execvp, NOT
 // exec_capture / exec_stream) so the process inherits this stdout fd and
-// forwards each line live with zero buffering. `grep_re` / `until_re` are
-// sed ERE addresses — a literal `/` in a pattern must be backslash-escaped
-// (markers like "JOB DONE|Traceback" need no escaping).
+// forwards each line live with zero buffering. `grep_re` is a sed ERE
+// address — a literal `/` in a pattern must be backslash-escaped (markers
+// like "JOB DONE|Traceback" need no escaping).
 //
-// Exit-code contract (callers — Monitor / micro-exp / wrapping skill):
-//   0   — `until_re` matched: clean end (JOB DONE / OOMKilled / Traceback / …
-//         per the caller-supplied terminal pattern). The pipe closed because
-//         sed printed-and-quit, so ssh returned 0 cleanly.
+// `until_re` controls the terminal behaviour of THIS entry point:
+//   - "" (empty)  → FOLLOW FOREVER. No terminal block at all; the stream
+//     only ends on a transport drop (255) or a pipeline break. Use this for
+//     a pure live tail with no auto-quit.
+//   - any non-empty ERE → a single legacy terminal block (`/until/{p;q}`,
+//     exit 0 on match) — back-compat for callers that pass an explicit
+//     pattern. This path does NOT classify; for the 3-tier failure-first
+//     taxonomy (the CLI's default), call `cloud_tail_cmd_taxonomy_opts`.
+//
+// (The CLI default routes to cloud_tail_cmd_taxonomy_opts, which threads a
+// `taxonomy=1` flag rather than a magic sentinel string — a hexa string
+// literal in a comparison can collapse across functions in codegen, so a
+// bool flag is the robust selector.)
+fn cloud_tail_cmd_opts(host: str, ssh_opts: [str], logfile: str, grep_re: str, until_re: str) -> str {
+    let prog = _cloud_tail_sed_prog(grep_re, until_re, 0)
+    let remote = "tail -F -n +1 " + _shq(logfile) + " 2>/dev/null | sed -E -un " + _shq(prog)
+    return _ssh_cmd(host, ssh_opts, remote)
+}
+
+// cloud_tail_cmd_taxonomy_opts — the 3-tier failure-first variant. The
+// remote sed runs the CRASH→TIMEOUT→DONE classifier and quits with the
+// verdict exit code, which ssh / exec_replace inherits:
+//
+// Exit-code contract (callers — Monitor / micro-exp / watcher / /system):
+//   0   — DONE: a clean terminal marker with no trailing failure. The only
+//         unambiguous SUCCESS signal.
+//   3   — TIMEOUT-RESUMABLE: the remote job hit its walltime (`Maximum CPU
+//         time exceeded` / `max_seconds` / timeout 124). RESUME it — do NOT
+//         treat as success or as a hard crash.
+//   4   — CRASHED: a non-zero Fortran STOP, a routine error, or a hard fault
+//         (segfault / OOM / CUDA OOM). The job failed and is NOT resumable
+//         as-is.
 //   255 — ssh transport drop: the local ssh exited 255 (host vanished, key
 //         changed mid-stream, kernel TCP reset, ServerAliveCountMax tripped).
 //         The pod may be alive + billing but unreachable — verify before retry.
 //   other non-zero — sed/tail pipeline failed mid-stream (logfile removed
 //         remotely, mawk surfaced after all, disk full, …). Treat the stream
 //         as truncated; the job may still be running.
-// Callers distinguish "real success" from "stream broke before terminal
-// marker" by combining exit code with captured tail stdout — a 0 exit with
-// `JOB DONE` in the body is the only unambiguous SUCCESS signal.
-fn cloud_tail_cmd_opts(host: str, ssh_opts: [str], logfile: str, grep_re: str, until_re: str) -> str {
-    // Terminal-first sed program: `/until/{p;q}` precedes the filter so a
-    // terminal line both surfaces and stops the stream. The whole program is
-    // _shq-quoted for the remote shell (it has no single quotes of its own).
+// `grep_re` filters the streamed lines exactly as in cloud_tail_cmd_opts.
+fn cloud_tail_cmd_taxonomy_opts(host: str, ssh_opts: [str], logfile: str, grep_re: str) -> str {
+    let prog = _cloud_tail_sed_prog(grep_re, "", 1)
+    let remote = "tail -F -n +1 " + _shq(logfile) + " 2>/dev/null | sed -E -un " + _shq(prog)
+    return _ssh_cmd(host, ssh_opts, remote)
+}
+
+// _cloud_tail_sed_prog — assemble the remote sed program from the grep
+// filter + the terminal mode. `taxonomy` (1) selects the 3-tier failure-first
+// classifier and IGNORES `until_re`; otherwise `until_re` drives a single
+// legacy terminal block ("" = follow forever). Factored out so the falsifier
+// suite can pin each branch without an ssh hop. The whole program is
+// _shq-quoted by the caller for the remote shell.
+fn _cloud_tail_sed_prog(grep_re: str, until_re: str, taxonomy: int) -> str {
     let mut prog = ""
-    if len(until_re) > 0 {
+    if taxonomy == 1 {
+        // FAILURE-FIRST 3-tier classifier. Order is load-bearing: CRASH then
+        // TIMEOUT then DONE, so a failure line that sits at/before the
+        // deceptive `JOB DONE` wins and sets the right `q <code>` verdict.
+        prog = "/" + _CLOUD_TAIL_CRASH_RE + "/{p;q4}; "
+        prog = prog + "/" + _CLOUD_TAIL_TIMEOUT_RE + "/{p;q3}; "
+        prog = prog + "/" + _CLOUD_TAIL_DONE_RE + "/{p;q0}; "
+    } else if len(until_re) > 0 {
+        // Legacy explicit-ERE terminal block: print + quit clean (exit 0) on
+        // the first match. Back-compat for callers passing their own pattern.
         prog = "/" + until_re + "/{p;q}; "
     }
     if len(grep_re) > 0 {
@@ -474,13 +562,17 @@ fn cloud_tail_cmd_opts(host: str, ssh_opts: [str], logfile: str, grep_re: str, u
     } else {
         prog = prog + "p"
     }
-    let remote = "tail -F -n +1 " + _shq(logfile) + " 2>/dev/null | sed -E -un " + _shq(prog)
-    return _ssh_cmd(host, ssh_opts, remote)
+    return prog
 }
 
 // cloud_tail_cmd — cloud_tail_cmd_opts with no extra ssh flags.
 fn cloud_tail_cmd(host: str, logfile: str, grep_re: str, until_re: str) -> str {
     return cloud_tail_cmd_opts(host, [], logfile, grep_re, until_re)
+}
+
+// cloud_tail_cmd_taxonomy — cloud_tail_cmd_taxonomy_opts with no extra flags.
+fn cloud_tail_cmd_taxonomy(host: str, logfile: str, grep_re: str) -> str {
+    return cloud_tail_cmd_taxonomy_opts(host, [], logfile, grep_re)
 }
 
 // ── file transfer ────────────────────────────────────────────────────
