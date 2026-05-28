@@ -1,7 +1,8 @@
 #!hexa strict
 // tool/regen_native_runtime_c_includes.hexa
 //   B9.C-10 (.c-text · #1848 pattern) — regen + sha-verify for the 16
-//   self/native/*.c files `#include`d by self/runtime.c (RFC 061 amalgamation).
+//   self/native/*.c files + the CORE fragment self/runtime_core.c (F3)
+//   `#include`d by self/runtime.c (RFC 061 amalgamation).
 //
 // ── WHY THIS EXISTS ────────────────────────────────────────────────────
 //
@@ -81,12 +82,12 @@ fn _check(ok: bool, label: str, detail: str) {
     if detail.len() > 0 { println("         · " + detail) }
 }
 
-// Regenerate one `self/native/<base>.c` from its emitter. When `regen_only`
-// is false AND an in-tree baseline exists, also assert sha-equivalence vs the
-// (pre-regen) baseline (drift guard).
-fn regen_one(root: str, base: str, regen_only: bool) {
-    let emitter = root + "/self/native/" + base + "_emit.hexa"
-    let dst     = root + "/self/native/" + base + ".c"
+// Regenerate one `<subdir>/<base>.c` from its emitter (subdir is repo-relative,
+// e.g. "self/native" or "self"). When `regen_only` is false AND an in-tree
+// baseline exists, also assert sha-equivalence vs the (pre-regen) baseline.
+fn regen_one(root: str, subdir: str, base: str, regen_only: bool) {
+    let emitter = root + "/" + subdir + "/" + base + "_emit.hexa"
+    let dst     = root + "/" + subdir + "/" + base + ".c"
 
     if !_exists(emitter) {
         _check(false, "emitter present: " + base + "_emit.hexa", "MISSING — cannot regen " + base + ".c")
@@ -132,7 +133,7 @@ fn regen_one(root: str, base: str, regen_only: bool) {
 
 fn main() {
     println("========================================================================")
-    println("  B9.C-10 — regen_native_runtime_c_includes: 16 runtime.c #include .c regen")
+    println("  B9.C-10 — regen_native_runtime_c_includes: 16 native + runtime_core.c regen")
     println("========================================================================")
 
     let argv = real_args()
@@ -148,12 +149,17 @@ fn main() {
     println("  mode:      " + (if regen_only { "--regen-only (emitter SSOT, no baseline compare)" } else { "regen + gate-1 sha-verify vs in-tree `.c`" }))
     println("")
 
+    // self/native/*.c fragments (16) — runtime.c `#include "native/<base>.c"`.
     let bases = ["crypto_openssl", "crypto_sodium", "exec_argv_sha256", "exec_pipe", "fp_init", "mount", "namespace", "net", "persistent_pipe", "proc_fork", "pty", "signal_flock", "tensor_kernels", "term_ffi", "thread", "wait"]
     let mut bi = 0
     while bi < bases.len() {
-        regen_one(root, bases[bi], regen_only)
+        regen_one(root, "self/native", bases[bi], regen_only)
         bi = bi + 1
     }
+
+    // F3 — the CORE-tier fragment self/runtime_core.c (runtime.c:1762
+    // `#include "runtime_core.c"`). Lives at self/ (NOT self/native/).
+    regen_one(root, "self", "runtime_core", regen_only)
 
     println("")
     let pass_n = RUN - FAIL
