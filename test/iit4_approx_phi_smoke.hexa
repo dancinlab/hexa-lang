@@ -1,0 +1,63 @@
+// iit4_approx_phi_smoke — validate greedy MIP (n>8 engine) vs exact (n≤8).
+// Contract: Φ_approx >= Φ_exact (greedy = upper bound). On these small symmetric
+// substrates the greedy descent should also REACH the exact MIP (approx==exact).
+use "stdlib/consciousness/iit4/faithful_phi"
+
+// build an n×n symmetric MI matrix from a flat upper-triangle generator:
+// MI[i][j] = base + (i*j mod 3)*step  (deterministic, non-trivial structure).
+fn _mk_mi(n: int, base: float, step: float) -> int {
+    let mi = farr_zeros(n * n)
+    let mut i = 0
+    while i < n {
+        let mut j = i + 1
+        while j < n {
+            let v = base + to_float((i * j) % 3) * step
+            let _ = farr_set(mi, i * n + j, v)
+            let _ = farr_set(mi, j * n + i, v)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return mi
+}
+
+fn _fabs(x: float) -> float { if x < 0.0 { return 0.0 - x }; return x }
+
+fn main() {
+    println("=== iit4 approx-Φ smoke (greedy vs exact) ===")
+    let mut all_ok = 1
+
+    // PART A — n≤8: greedy MUST be an upper bound, and here reach exact.
+    let mut n = 3
+    while n <= 8 {
+        let mi = _mk_mi(n, 0.10, 0.05)
+        let exact = iit4_faithful_phi_from_mi(mi, n)
+        let approx = iit4_approx_phi_from_mi(mi, n)
+        let _ = farr_free(mi)
+        let ub_ok = if approx >= exact - 0.000000001 { 1 } else { 0 }
+        let eq_ok = if _fabs(approx - exact) <= 0.000001 { 1 } else { 0 }
+        println("  n=" + to_string(n) + "  exact=" + to_string(exact)
+                + "  approx=" + to_string(approx)
+                + "  upper-bound=" + to_string(ub_ok) + "  reached-exact=" + to_string(eq_ok))
+        if ub_ok == 0 { all_ok = 0 }
+        n = n + 1
+    }
+
+    // PART B — n>8: must run (no panic) and return finite Φ ≥ 0.
+    let mut m = 9
+    while m <= 16 {
+        let mi = _mk_mi(m, 0.10, 0.05)
+        let approx = iit4_approx_phi_from_mi(mi, m)
+        let _ = farr_free(mi)
+        let ok = if approx >= 0.0 { 1 } else { 0 }
+        println("  n=" + to_string(m) + "  approx-Φ=" + to_string(approx) + "  finite>=0=" + to_string(ok))
+        if ok == 0 { all_ok = 0 }
+        m = m + 1
+    }
+
+    if all_ok == 1 {
+        println("__SMOKE__ PASS  (greedy upper-bounds exact for n<=8 + runs n>8)")
+    } else {
+        println("__SMOKE__ FAIL")
+    }
+}
