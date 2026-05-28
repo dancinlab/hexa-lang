@@ -1,0 +1,115 @@
+B9.6-E1 — class-E memory-lifecycle FIRST LIVE self-emit · hxlcl_munmap (unmap stub)
+verdict: ACTIVATED (🟢 numerical) — first class-E primitive WIRED into the live runtime via Path A
+host: mini-class arm64 macOS (Darwin 25.5.0) · clang -O2 / as -arch arm64 / ld64
+date: 2026-05-28
+
+────────────────────────────────────────────────────────────────────────────
+CLASS-E ASSESSMENT — GC/arena/malloc core (the LAST FLOOR class)
+────────────────────────────────────────────────────────────────────────────
+This runtime has NO classic mark/sweep GC. Memory management is:
+  - mmap-backed BUMP ALLOCATOR (hxlcl_malloc, self/runtime.c L858) — carves from
+    a 4 MB chunk, records a 16-B size header, never reuses freed space.
+  - NO-OP / CONSTANT-RETURN dealloc — hxlcl_free (L875) = `(void)p;` (pure ret);
+    hxlcl_munmap (L902) = `(void)addr;(void)length; return 0;`.
+  - reclamation = scope-pop + bulk arena-reset (rt 32-L discipline), NOT a GC walk.
+
+class-E emit-able SUBGROUPS vs irreducible seed:
+  (a) ARENA (rt_arena_init/alloc/reset/release · #1252/#1297/#1315) — emit PROVEN
+      (adrp+add state reloc + mmap svc). BUT shadow-only: the runtime never CALLS
+      these symbols, so they were never LIVE-wired.
+  (b) DEALLOC LIFECYCLE (hxlcl_free / hxlcl_munmap) — TRACTABLE leaves. munmap is
+      JIT-verifiable (returns 0); free returns void (not checkable). << THIS PR
+  (c) ALLOC CORE (hxlcl_malloc · hexa_arena_alloc · hexa_val_arena_calloc) —
+      class-A(state reloc) + class-B(`bl hxlcl_mmap`) + class-C(svc) COMPOSITE with
+      branch logic. Emit-able in principle by stacking proven sub-capabilities, NOT
+      a single tractable increment. Multi-instruction with conditional control flow.
+  (d) MALLOC-COUPLED VALUE CTORS (hexa_str · hexa_array_* · valstruct_*) — overlap
+      with class-D split-3 (alloc-coupled · ~300-400 fn); deferred there.
+  IRREDUCIBLE SEED (B9.8 TERMINAL): the bump allocator itself. A self-hosting
+  runtime needs SOME machine-code path that can carve memory from the OS (mmap svc
+  + bump pointer). That seed cannot be bootstrapped away — it IS the allocator.
+  There is no mark/sweep GC to emit (the runtime doesn't have one).
+
+────────────────────────────────────────────────────────────────────────────
+TARGET — the simplest tractable, JIT-verifiable class-E primitive
+────────────────────────────────────────────────────────────────────────────
+self/runtime.c L902:
+    static int hxlcl_munmap(void *addr, size_t length) { (void)addr;(void)length; return 0; }
+The bump allocator never frees → unmap is a constant-success stub. Live call sites:
+runtime.c L7438 / L7609 (mmap-file cleanup). int-return → JIT-exec-checkable. The
+dealloc SIDE of class-E — the FIRST class-E primitive actually wired into the live
+runtime (the rt_arena_* set emits a .o but the runtime calls none of its symbols).
+
+────────────────────────────────────────────────────────────────────────────
+SELF-EMIT (self/codegen/runtime_arm64.hexa :: rt_munmap)
+────────────────────────────────────────────────────────────────────────────
+2 instructions, 8 bytes:
+    mov w0, #0   0x52800000   (return 0 = success; int return → 32-bit MOVZ)
+    ret          0xD65F03C0   (x0 = 0)
+The EMITTER capability is NOT novel — `mov w0,#imm` + `ret` was proven by the
+class-D ctors. The NEW thing is class-E LIVE wiring, end-to-end. No frame, no
+reloc, no svc, no arena state.
+
+────────────────────────────────────────────────────────────────────────────
+3-LAYER VERIFY (JIT-exec is the load-bearing gate)
+────────────────────────────────────────────────────────────────────────────
+LAYER 1 — compiled self-test (size/prefix/RET assertions):
+    hexa build self/codegen/runtime_arm64.hexa -> ./rt_arm64_test
+    -> "rt_munmap : 8 bytes (class-E lifecycle)" + "ALL CHECKS PASS"
+       (asserts len==8, mov w0,#0 @off 0, ret @off 4)
+
+LAYER 2 — byte-identical to `as -arch arm64`:
+    as -arch arm64 (mov w0,#0 / ret) =
+        52800000 d65f03c0
+    emit_hxlcl_munmap_o.hexa -> hxlcl_munmap.o; otool -t __text =
+        52800000 d65f03c0
+    BYTE-IDENTICAL. nm: `0000000000000000 T _hxlcl_munmap` (strong external).
+    LC_DYSYMTAB count = 0 (leaf, no undefined externs — single-symbol export).
+
+LAYER 3 — JIT-exec correctness (LOAD-BEARING):
+    clang munmap_driver.c hxlcl_munmap.o -o run; ./run ->
+        JIT-EXEC PASS: hxlcl_munmap returns 0 (success) for all 4 cases
+        [munmap(NULL,0) · munmap(0x1000,4096) · munmap(0xdeadbeef,SIZE_MAX) · munmap(0x1000,1)]
+    rc=0. Live binary disasm confirms ld64 bound the callsite to the SELF-EMIT bytes:
+        _hxlcl_munmap: mov w0,#0x0 / ret
+
+────────────────────────────────────────────────────────────────────────────
+PATH-A ACTIVATION · dual-build 3-mode
+────────────────────────────────────────────────────────────────────────────
+Guard: self/runtime.c L902 body #ifdef HEXA_RT_SELFEMIT (extern decl / else static
+       stub). No separate forward decl exists (body precedes all uses), so only the
+       body flips. Default keeps the file-local static = 0-libc-extern.
+Build: tool/build_hexa_cli.hexa — `munmap` appended to the single-symbol leaf emit
+       loop (same template; distinct env var HEXA_HXLCL_MUNMAP_O).
+
+(a) DEFAULT (guard off):
+      runtime TU undefined-extern set = 49, BYTE-IDENTICAL to origin/main HEAD
+      (diff of `nm -u` empty). hxlcl_munmap is the file-local static (DCE'd at the
+      macro `munmap` call sites, identical to HEAD). 0-extern preserved. PASS.
+(b) GUARD ON + self-emit .o:
+      `nm` of guard-on runtime.o = `U _hxlcl_munmap` (extern). Full link with the
+      self-emit .o succeeds; hxlcl_munmap(0x4000,8192) = 0; live disasm = self-emit
+      `mov w0,#0 / ret`. PASS.
+(c) GUARD ON without the .o:
+      `Undefined symbols for architecture arm64: _hxlcl_munmap` — link FAILS,
+      proving the extern is genuinely supplied by the self-emit .o (not a stale C
+      body). PASS.
+
+fixpoint: rt_munmap is shadow (runtime_arm64.hexa = main.hexa not `use`d) · emit
+driver also unused → hexa_cc.c regen unaffected. runtime.c diff = pure guard add
+(0 deletions). .c count UNCHANGED (87 · FLOOR infra; guard-off default is SSOT,
+runtime.c's eventual git-rm is the FLOOR endgame, not a per-file drop here).
+
+────────────────────────────────────────────────────────────────────────────
+FLOOR-CLASS COVERAGE (after B9.6-E1 — ALL 5 classes have a proven emitter)
+────────────────────────────────────────────────────────────────────────────
+  class-A (reloc-bound state)      PROVEN — arena adrp+add PAGE21/PAGEOFF12 (link+run rc=0)
+  class-B (calling-conv / BL)      PROVEN — rt_atoi (frame + bl + BRANCH26 cross-object)
+  class-C (syscall ABI)            PROVEN — rt_getpid (raw svc) · rt_close (arg+errno carry-flag)
+  class-D (HexaVal struct-return)  PROVEN — 6 ctors (x0:x1 pair · fmov FP bridge)
+  class-E (GC/arena/malloc)        PROVEN — arena emit (shadow) + rt_munmap (FIRST LIVE wire) << THIS PR
+GENUINELY IRREDUCIBLE: the bump-allocator SEED (B9.8 terminal) — a self-hosting
+runtime needs SOME machine-code path to carve OS memory (mmap svc + bump pointer).
+NO classic mark/sweep GC exists to emit. The alloc-core composites (hxlcl_malloc,
+hexa_arena_alloc) are emit-able by stacking A+B+C but are multi-session expert work,
+not a single increment.

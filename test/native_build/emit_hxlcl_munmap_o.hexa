@@ -1,0 +1,266 @@
+// test/native_build/emit_hxlcl_munmap_o.hexa
+//
+// F3 ACTIVATION RUNBOOK · Path A · B9.6-E1 — class-E memory-lifecycle
+// FIRST LIVE self-emit. Production-wire the self-emitted munmap over the
+// C `hxlcl_munmap` wrapper (self/runtime.c L902).
+//
+// EMITS: a Mach-O .o file exporting a strong external symbol `_hxlcl_munmap`
+// whose body is rt_munmap's verbatim machine-code (a 2-instr constant-return
+// leaf — the unmap/dealloc SIDE of the class-E memory-management core). When
+// the driver / module_loader is built under HEXA_RT_SELFEMIT=1, self/runtime.c
+// declares `hxlcl_munmap` as `extern` (no body) instead of the file-local
+// `static` stub, and ld64 binds the `bl _hxlcl_munmap` callsites (mmap-file
+// cleanup, runtime.c L7438/L7609) to this .o's strong symbol.
+//
+// ── WHY class-E (and what is irreducible) ──
+//
+// class-E = GC/arena/malloc core. This runtime has NO classic mark/sweep GC:
+// reclamation is scope-pop + bulk arena-reset, and the deallocation primitives
+// (`hxlcl_free` / `hxlcl_munmap`) are no-op / constant-0 leaves over an
+// mmap-backed bump allocator that NEVER frees. That bump allocator is the
+// irreducible "some allocator seed" B9.8 flagged (a self-hosting runtime needs
+// SOME machine-code seed that can carve memory). The ALLOC side (`hxlcl_malloc`
+// = state-reloc + `bl hxlcl_mmap` svc + header store; `hexa_arena_alloc` =
+// block-chain walk) is a class-A+B+C COMPOSITE, not a clean leaf — emit-able in
+// principle by stacking the proven sub-capabilities, but not a single tractable
+// increment. The DEALLOC side IS tractable and is what this PR activates: the
+// FIRST class-E primitive actually wired into the live runtime (the rt_arena_*
+// set #1252/#1297/#1315 emits an arena .o but the runtime never calls those
+// symbols — shadow-only).
+//
+// ── ABI (class-E lifecycle leaf) ──
+//
+// rt_munmap(void *addr, size_t length) -> int. The bump allocator never frees,
+// so the unmap is a constant-success stub: `(void)addr;(void)length; return 0;`.
+// clang -O2 picks the 32-bit MOVZ for the int 0 return:
+//   mov w0, #0 ; ret
+// (no frame, no reloc, no svc, no arena state — x0 = 0 = success.) The 8-byte
+// sequence matches `as -arch arm64` of the C source byte-for-byte.
+//
+// ── HONESTY ──
+//
+//   - closure = runs exact — an unmap-calling C program linked against this .o
+//     must observe a 0 return AND the runtime's mmap-file cleanup must still
+//     succeed. munmap RETURNS a value → JIT-exec-checkable.
+//   - f1/f2 — clang ONLY as link-side oracle, NEVER in this .o's emit path
+//     (the 8 bytes come from rt_munmap(), inlined verbatim below).
+//   - the EMITTER capability is not novel (mov w0,#imm + ret was proven by the
+//     class-D ctors); the NEW thing is class-E LIVE wiring, end-to-end.
+//   - selfhosted opt-in — HEXA_RT_SELFEMIT=1 gates the build append; unset =
+//     no behavior change (default keeps `static` = 0-libc-extern).
+//   - no binaries committed.
+//
+// SELF-CONTAINED: same module-loader rationale as emit_hxlcl_getpid_o.hexa
+// (the local repo has no compiled module_loader, so multi-`use` programs
+// link-fail). The macho wrapper is inlined byte-for-byte. The deliberate diffs
+// vs the getpid PoC are: (1) the 8 rt_munmap bytes (vs 16 rt_getpid), (2) the
+// EXPORTED SYMBOL NAME `_hxlcl_munmap` (13 B → strtab_size = 1+13, identical
+// length to `_hxlcl_getpid`). The 8 bytes are character-identical to
+// self/codegen/runtime_arm64.hexa rt_munmap().
+
+// ═══════════════════════════════════════════════════════════════════
+// Inlined from self/codegen/runtime_arm64.hexa::rt_munmap
+// 2 instructions, 8 bytes. mov w0,#0 / ret.
+// x0 returns 0 (success) → matches C `int munmap(void*, size_t)` stub ABI.
+// ═══════════════════════════════════════════════════════════════════
+fn rt_munmap_bytes() -> [int] {
+    let mut c = []
+    // mov w0, #0   (return 0 = success)   0x52800000
+    c.push(0); c.push(0); c.push(128); c.push(82)
+    // ret  (x0 = 0)                       0xD65F03C0
+    c.push(192); c.push(3); c.push(95); c.push(214)
+    return c
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Inlined from self/codegen/macho.hexa (constants + helpers + obj_wrap)
+// Identical to emit_hxlcl_getpid_o.hexa except the symbol name (same 13 B
+// length as `_hxlcl_getpid` → strtab math unchanged) + the code bytes.
+// ═══════════════════════════════════════════════════════════════════
+fn mh_magic_64_v() -> int { return 0xFEEDFACF }
+fn mh_object_v() -> int { return 1 }
+fn cpu_type_arm64_v() -> int { return 0x0100000C }
+fn cpu_subtype_all_v() -> int { return 0 }
+fn lc_segment_64_v() -> int { return 0x19 }
+fn lc_symtab_v() -> int { return 0x02 }
+fn lc_build_version_v() -> int { return 0x32 }
+fn s_attr_pure_v() -> int { return 0x80000000 }
+fn s_attr_some_v() -> int { return 0x00000400 }
+fn n_ext_v() -> int { return 0x01 }
+fn n_sect_v() -> int { return 0x0e }
+
+fn align_to_v(val: int, align: int) -> int {
+    return (val + align - 1) / align * align
+}
+
+fn push_u16_le_v(buf: [int], val: int) -> [int] {
+    return buf.push(val % 256).push((val / 256) % 256)
+}
+
+fn push_u32_le_v(buf: [int], val: int) -> [int] {
+    return buf.push(val % 256).push((val / 256) % 256).push((val / 65536) % 256).push((val / 16777216) % 256)
+}
+
+fn push_u64_le_v(buf: [int], val: int) -> [int] {
+    let mut b = push_u32_le_v(buf, val % 0x100000000)
+    return push_u32_le_v(b, val / 0x100000000)
+}
+
+// Inlined from self/codegen/macho.hexa::macho_obj_wrap (L34-136).
+// Symbol exported = `_hxlcl_munmap` (strtab_size = 1 + 13 NUL-term = 14).
+fn macho_obj_wrap_hxlcl_munmap(code: [int], main_offset: int) -> [int] {
+    let mut out = []
+    let code_size = len(code)
+
+    let header_size = 32
+    let segment_cmd_size = 152
+    let symtab_cmd_size = 24
+    let build_version_cmd_size = 24
+    let sizeofcmds = segment_cmd_size + symtab_cmd_size + build_version_cmd_size
+
+    let code_offset = align_to_v(header_size + sizeofcmds, 8)
+    let symtab_offset = align_to_v(code_offset + code_size, 4)
+    let nlist_size = 16
+    let strtab_offset = symtab_offset + nlist_size
+    // strtab = "\0_hxlcl_munmap\0" = 1 + 13 = 14 bytes.
+    let strtab_size = 1 + 13
+
+    // Mach-O Header (32 bytes)
+    out = push_u32_le_v(out, mh_magic_64_v())
+    out = push_u32_le_v(out, cpu_type_arm64_v())
+    out = push_u32_le_v(out, cpu_subtype_all_v())
+    out = push_u32_le_v(out, mh_object_v())
+    out = push_u32_le_v(out, 3)
+    out = push_u32_le_v(out, sizeofcmds)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+
+    // LC_SEGMENT_64
+    out = push_u32_le_v(out, lc_segment_64_v())
+    out = push_u32_le_v(out, segment_cmd_size)
+    let mut i = 0
+    while i < 16 { out.push(0); i = i + 1 }
+    out = push_u64_le_v(out, 0)
+    out = push_u64_le_v(out, align_to_v(strtab_offset + strtab_size, 8))
+    out = push_u64_le_v(out, code_offset)
+    out = push_u64_le_v(out, strtab_offset + strtab_size - code_offset)
+    out = push_u32_le_v(out, 7)
+    out = push_u32_le_v(out, 7)
+    out = push_u32_le_v(out, 1)
+    out = push_u32_le_v(out, 0)
+
+    // Section header: __text (80 bytes)
+    out.push(95); out.push(95); out.push(116); out.push(101); out.push(120); out.push(116)
+    let mut j = 0
+    while j < 10 { out.push(0); j = j + 1 }
+    out.push(95); out.push(95); out.push(84); out.push(69); out.push(88); out.push(84)
+    j = 0
+    while j < 10 { out.push(0); j = j + 1 }
+    out = push_u64_le_v(out, 0)
+    out = push_u64_le_v(out, code_size)
+    out = push_u32_le_v(out, code_offset)
+    out = push_u32_le_v(out, 2)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, s_attr_pure_v() + s_attr_some_v())
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+
+    // LC_SYMTAB
+    out = push_u32_le_v(out, lc_symtab_v())
+    out = push_u32_le_v(out, symtab_cmd_size)
+    out = push_u32_le_v(out, symtab_offset)
+    out = push_u32_le_v(out, 1)
+    out = push_u32_le_v(out, strtab_offset)
+    out = push_u32_le_v(out, strtab_size)
+
+    // LC_BUILD_VERSION
+    out = push_u32_le_v(out, lc_build_version_v())
+    out = push_u32_le_v(out, build_version_cmd_size)
+    out = push_u32_le_v(out, 1)
+    out = push_u32_le_v(out, 0x000E0000)
+    out = push_u32_le_v(out, 0x000E0000)
+    out = push_u32_le_v(out, 0)
+
+    // Pad to code_offset
+    while len(out) < code_offset { out.push(0) }
+
+    // Code section
+    let mut k = 0
+    while k < len(code) { out.push(code[k]); k = k + 1 }
+
+    // Pad to symtab_offset
+    while len(out) < symtab_offset { out.push(0) }
+
+    // Symbol table: nlist_64 (16 bytes)
+    out = push_u32_le_v(out, 1)
+    out.push(n_sect_v() + n_ext_v())
+    out.push(1)
+    out = push_u16_le_v(out, 0)
+    out = push_u64_le_v(out, main_offset)
+
+    // String table — "\0_hxlcl_munmap\0" (14 bytes)
+    out.push(0)
+    // "_hxlcl_munmap\0"
+    //  95='_' 104='h' 120='x' 108='l' 99='c' 108='l' 95='_'
+    //  109='m' 117='u' 110='n' 109='m' 97='a' 112='p' 0=NUL
+    out.push(95); out.push(104); out.push(120); out.push(108); out.push(99); out.push(108); out.push(95)
+    out.push(109); out.push(117); out.push(110); out.push(109); out.push(97); out.push(112); out.push(0)
+
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Driver
+// ═══════════════════════════════════════════════════════════════════
+fn emit_hxlcl_munmap_o() {
+    println("[wire] F3 Path A · B9.6-E1 · rt_munmap class-E lifecycle override — _hxlcl_munmap")
+
+    let code = rt_munmap_bytes()
+    if len(code) != 8 {
+        println("FAIL: rt_munmap expected 8 bytes, got " + to_string(len(code)))
+        return
+    }
+    println("  rt_munmap bytes: " + to_string(len(code)) + " (8 expected)")
+
+    // mov w0,#0 (00 00 80 52) sanity at offset 0 — return 0 (success)
+    if code[0] != 0 || code[1] != 0 || code[2] != 128 || code[3] != 82 {
+        println("FAIL: mov w0,#0 prefix mismatch")
+        return
+    }
+    println("  success ret    : 00 00 80 52 (mov w0, #0) OK")
+
+    // ret (c0 03 5f d6) at offset 4 — munmap RETURNS 0 in x0
+    if code[4] != 192 || code[5] != 3 || code[6] != 95 || code[7] != 214 {
+        println("FAIL: ret trailer mismatch")
+        return
+    }
+    println("  ret trailer    : c0 03 5f d6 (ret) OK — x0=0 returned")
+
+    let obj = macho_obj_wrap_hxlcl_munmap(code, 0)
+    println("  obj_wrap size  : " + to_string(len(obj)) + " bytes total")
+
+    // MH_MAGIC_64 LE at offset 0 (0xFEEDFACF → cf fa ed fe)
+    if obj[0] != 0xcf || obj[1] != 0xfa || obj[2] != 0xed || obj[3] != 0xfe {
+        println("FAIL: MH_MAGIC_64 mismatch")
+        return
+    }
+    println("  MH_MAGIC_64    : cf fa ed fe OK")
+
+    // filetype = MH_OBJECT (1) at offset 12
+    if obj[12] != 1 {
+        println("FAIL: filetype not MH_OBJECT")
+        return
+    }
+    println("  filetype       : 1 (MH_OBJECT) OK")
+
+    let out_path = env_var("HEXA_HXLCL_MUNMAP_O")
+    let mut dest = out_path
+    if dest == "" { dest = "build/poc/hxlcl_munmap.o" }
+    write_bytes(dest, obj)
+    println("  wrote          : " + dest)
+    println("[wire] EMIT OK — link via build recipe with HEXA_RT_SELFEMIT=1")
+}
+
+emit_hxlcl_munmap_o()

@@ -418,6 +418,7 @@ fn _do_build(repo_root: string) {
             println("[selfemit] F3 Path A · B9.6-C1 — class-C syscall ABI: getpid (raw svc #0x80) → _hxlcl_getpid")
             println("[selfemit] F3 Path A · B9.6-C2 — class-C syscall WITH arg+errno: close (svc + carry-flag) → _hxlcl_close")
             println("[selfemit] F3 Path A · B9.6-B1 — class-B calling-conv composite: atoi (frame + bl) → _hxlcl_atoi")
+            println("[selfemit] F3 Path A · B9.6-E1 — class-E memory-lifecycle: munmap (unmap stub) → _hxlcl_munmap")
             // From here on the driver/module_loader runtime.c is compiled with
             // the guard ON so the hxlcl_* bodies become extern (resolved below).
             cflags = cflags + " -DHEXA_RT_SELFEMIT"
@@ -450,8 +451,22 @@ fn _do_build(repo_root: string) {
             // caveat RESOLVED). Still a single emit driver / one .o / one env var,
             // so it rides the SAME loop; only the .o internals differ (cross-object
             // call reloc). This opens the ~60-100-fn class-B call-bound subtrack.
-            let leaves = ["memset", "memcmp", "memcpy", "memmove", "strcmp", "strncmp", "strchr", "strrchr", "strcpy", "strncpy", "strcat", "strlen", "getpid", "close", "atoi"]
-            let upper  = ["MEMSET", "MEMCMP", "MEMCPY", "MEMMOVE", "STRCMP", "STRNCMP", "STRCHR", "STRRCHR", "STRCPY", "STRNCPY", "STRCAT", "STRLEN", "GETPID", "CLOSE", "ATOI"]
+            //
+            // B9.6-E1 appends `munmap` — the FIRST class-E (GC/arena/malloc core)
+            // primitive actually WIRED into the live runtime. class-E has NO classic
+            // mark/sweep GC: reclamation is scope-pop + bulk arena-reset, and the
+            // dealloc primitives (`hxlcl_free`/`hxlcl_munmap`) are no-op/constant-0
+            // leaves over an mmap-backed bump allocator that never frees. munmap is
+            // the unmap side — a 2-instr `mov w0,#0 / ret` success stub (the bump
+            // allocator's "free" is a no-op). It rides the SAME single-symbol leaf
+            // template (one export, no reloc). The ALLOC side (`hxlcl_malloc` =
+            // state-reloc + `bl hxlcl_mmap` + header store; `hexa_arena_alloc` =
+            // block-chain walk) is a class-A+B+C composite (not a single increment);
+            // the bump allocator seed itself is the irreducible B9.8 floor. This is
+            // the FIRST LIVE class-E wire — the rt_arena_* set (#1252/#1297/#1315)
+            // emits an arena .o but the runtime never calls those symbols (shadow).
+            let leaves = ["memset", "memcmp", "memcpy", "memmove", "strcmp", "strncmp", "strchr", "strrchr", "strcpy", "strncpy", "strcat", "strlen", "getpid", "close", "atoi", "munmap"]
+            let upper  = ["MEMSET", "MEMCMP", "MEMCPY", "MEMMOVE", "STRCMP", "STRNCMP", "STRCHR", "STRRCHR", "STRCPY", "STRNCPY", "STRCAT", "STRLEN", "GETPID", "CLOSE", "ATOI", "MUNMAP"]
             let mut li = 0
             while li < len(leaves) {
                 let n = leaves[li]

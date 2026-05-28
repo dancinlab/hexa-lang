@@ -215,7 +215,7 @@ mission 의 핵심 통찰("source-SHA 동치 ⇒ regen-before-scp 가 GPU 재검
 |------|------|---------|
 | **F1** perf-floor (hxflash/hxlayer/hxvdsp) | 🔴 **TERMINAL** | 측정 285x ML 회귀 → irreducible perf-floor (`F1-perf-floor.txt`) |
 | **F2** vendor/OS-ABI FFI (19 layer-③) | 🔴 **TERMINAL** | audit #1809 — 순수 로직 0, ABI 경계 (`F2-vendor-ffi.txt`) |
-| **F3** runtime-core (640/548 fn · self-emit 28/640 shadow · **21 ACTIVATED** = memset+11 leaf + 6 HexaVal ctor + 2 syscall + **1 call-conv composite** · class-A reloc + class-D struct-return + class-C syscall-ABI(arg+errno) + **class-B calling-conv(BRANCH26)** 경로 ALL PROVEN) | 🟠 **LIVE FRONTIER** | genuinely-portable · Path-A 템플릿 스케일아웃 → reloc-free leaf 12 LIVE-주입 (HEXA_RT_SELFEMIT 가드 · default 0-extern 보존 byte-identical) · 4 SKIP (C 대상 부재) · class-A reloc 인프라 COMPLETE+PROVEN (arena adrp+add link+run rc=0 · 실 blocker=per-primitive PORT) · **class-D struct-build 서브트랙 SCALE-OUT** = struct-return EMITTER (x0:x1 페어) + 분할-1 생성자 **6 ACTIVATED** (#1858 `rt_hexa_void/int/bool` + B9.6-D2 `rt_hexa_float/enum_str/enum_str_v`) — 3-layer + dual-build 3-mode PASS · **class-C syscall-ABI 서브트랙 SCALE-OUT** = svc-emit EMITTER + **2 ACTIVATED** (`rt_getpid` B9.6-C1 무인자 base · `rt_close` B9.6-C2 arg(fd)+carry-flag errno · PAGE21/PAGEOFF12 data reloc) — 3-layer + dual-build PASS · macho v3 데이터-reloc "link-test pending" RESOLVED · **class-B calling-conv 서브트랙 OPENED** = `rt_atoi` (B9.6-B1 · 5-instr 20-B `stp x29,x30,[sp,#-16]! / mov x29,sp / bl _hxlcl_atoll / ldp x29,x30,[sp],#16 / ret`) — **FIRST self-emit fn that CALLS another fn** (frame + `bl` + epilogue; 이전 21개 전부 LEAF). cross-object `bl` = **ARM64_RELOC_BRANCH26 @0x08 against UNDEFINED-external `_hxlcl_atoll`**(runtime.c 가드下 `HXLCL_ATOLL_SC` non-static 로 EXPORT → ld64 바인딩) · 3-layer (interp self-test 20B+1 BRANCH26 reloc · byte-eq-as `a9bf7bfd 910003fd 94000000 a8c17bfd d65f03c0` · **JIT-exec correct** 8/8 atoi 케이스 · live disasm = ld64 가 bl 바인딩 · rc=0 = NO infinite loop) · **BRANCH26 cross-object 링크 = LC_SYMTAB only, NO LC_DYSYMTAB**(#1475 caveat RESOLVED · committed oracle `poc_classb_branch26_*`) · ⚠ frameless leaf falsifier=무한루프(rc=124) = frame 가 load-bearing · dual-build 3-mode PASS(default 0-extern 49 보존 · 가드 on atoi=U/atoll=T · 가드 on no-`.o`=link-fail) · 잔여 ~190 layer-② `hxlcl_*` svc-wrapper(#1812) + class-B call-bound ~60-100 fn(strdup/strndup/atoll/strtoll = malloc/atof call · 동일 frame+BRANCH26 템플릿, callee-export 만 추가) + 분할-1 잔여 ~6-11 ctor 동일 템플릿 열림 · 잔여 no-go(2)매크로 경로B (3)rt#38 coupling · class-D(~350-450 fn HARD-본체) = struct-repr(NaN-box 아님) · HARD-phase ~620 fn expert serial |
+| **F3** runtime-core (640/548 fn · self-emit 29/640 shadow · **22 ACTIVATED** = memset+11 leaf + 6 HexaVal ctor + 2 syscall + 1 call-conv composite + **1 mem-lifecycle** · class-A reloc + class-D struct-return + class-C syscall-ABI(arg+errno) + class-B calling-conv(BRANCH26) + **class-E mem-lifecycle** 경로 ALL PROVEN — **5/5 FLOOR-class emitter 입증**) | 🟠 **LIVE FRONTIER** | genuinely-portable · Path-A 템플릿 스케일아웃 → reloc-free leaf 12 LIVE-주입 (HEXA_RT_SELFEMIT 가드 · default 0-extern 보존 byte-identical) · 4 SKIP (C 대상 부재) · class-A reloc 인프라 COMPLETE+PROVEN (arena adrp+add link+run rc=0 · 실 blocker=per-primitive PORT) · **class-D struct-build 서브트랙 SCALE-OUT** = struct-return EMITTER (x0:x1 페어) + 분할-1 생성자 **6 ACTIVATED** (#1858 `rt_hexa_void/int/bool` + B9.6-D2 `rt_hexa_float/enum_str/enum_str_v`) — 3-layer + dual-build 3-mode PASS · **class-C syscall-ABI 서브트랙 SCALE-OUT** = svc-emit EMITTER + **2 ACTIVATED** (`rt_getpid` B9.6-C1 무인자 base · `rt_close` B9.6-C2 arg(fd)+carry-flag errno · PAGE21/PAGEOFF12 data reloc) — 3-layer + dual-build PASS · macho v3 데이터-reloc "link-test pending" RESOLVED · **class-B calling-conv 서브트랙 OPENED** = `rt_atoi` (B9.6-B1 · 5-instr 20-B `stp x29,x30,[sp,#-16]! / mov x29,sp / bl _hxlcl_atoll / ldp x29,x30,[sp],#16 / ret`) — **FIRST self-emit fn that CALLS another fn** (frame + `bl` + epilogue; 이전 21개 전부 LEAF). cross-object `bl` = **ARM64_RELOC_BRANCH26 @0x08 against UNDEFINED-external `_hxlcl_atoll`**(runtime.c 가드下 `HXLCL_ATOLL_SC` non-static 로 EXPORT → ld64 바인딩) · 3-layer (interp self-test 20B+1 BRANCH26 reloc · byte-eq-as `a9bf7bfd 910003fd 94000000 a8c17bfd d65f03c0` · **JIT-exec correct** 8/8 atoi 케이스 · live disasm = ld64 가 bl 바인딩 · rc=0 = NO infinite loop) · **BRANCH26 cross-object 링크 = LC_SYMTAB only, NO LC_DYSYMTAB**(#1475 caveat RESOLVED · committed oracle `poc_classb_branch26_*`) · ⚠ frameless leaf falsifier=무한루프(rc=124) = frame 가 load-bearing · dual-build 3-mode PASS(default 0-extern 49 보존 · 가드 on atoi=U/atoll=T · 가드 on no-`.o`=link-fail) · **class-E mem-lifecycle 서브트랙 OPENED (FIRST LIVE class-E wire)** = `rt_munmap` (B9.6-E1 · 2-instr 8-B `mov w0,#0 / ret` · unmap/dealloc stub) — class-E(GC/arena/malloc) 에 **classic mark/sweep GC 없음**(reclaim = scope-pop + bulk arena-reset · `hxlcl_free`=no-op · `hxlcl_munmap`=const-0 · bump allocator never-free). arena emit(#1252/#1297/#1315)은 shadow-only(runtime 미-호출) → munmap 이 **첫 LIVE-wire class-E primitive** · 3-layer(self-test 8B · byte-eq-as `52800000 d65f03c0` · JIT-exec 4/4 returns-0 · live disasm self-emit · 0 LC_DYSYMTAB) + dual-build 3-mode PASS(default 0-extern 49 보존 byte-identical · 가드 on munmap=U + link OK · 가드 on no-`.o`=link-fail) · 잔여 ~190 layer-② `hxlcl_*` svc-wrapper(#1812) + class-B call-bound ~60-100 fn(strdup/strndup/atoll/strtoll = malloc/atof call · 동일 frame+BRANCH26 템플릿, callee-export 만 추가) + 분할-1 잔여 ~6-11 ctor 동일 템플릿 열림 · 잔여 no-go(2)매크로 경로B (3)rt#38 coupling · class-D(~350-450 fn HARD-본체) = struct-repr(NaN-box 아님) · **class-E alloc-core (hxlcl_malloc/hexa_arena_alloc = A+B+C composite, multi-session) + bump-allocator SEED = irreducible B9.8 terminal** · HARD-phase ~620 fn expert serial |
 | **F4** sha256 (exec_argv_sha256.c) | 🟢 **RESOLVED→F3** | runtime.c `#include` 조각 · 포팅 타깃 FIPS-검증 (`F4-sha256.txt`) |
 | **F5** boot-asm (3 `.s`) | 🔴 **TERMINAL** | audit #1810 — vector-table 데이터 섹션, RFC 063/064 gated (`F5-boot-asm.txt`) |
 | **F6** bootstrap seed (hexa_cc.c) | 🔴 **TERMINAL** | irreducible bootstrap FLOOR (B9.8) |
@@ -370,12 +370,23 @@ runtime.c 조각이라 F3 로 fold (mis-split 해소). **F3 만이 진짜 open**
     - **(D) HexaVal-repr 생성자/접근자 (~350-450 fn · HARD FLOOR 본체)** — `hexa_int`/`hexa_float`/
       `hexa_string`/`valstruct_*`/배열 ops 등 NaN-box repr 을 **생성·태깅·역참조** 하는 코어.
       B9.6a 의 진짜 본체이자 가장 위험한 단위 — repr 레이아웃 전체를 codegen 이 알아야 함.
-    - **(E) GC/arena-coupled (~30-50 fn)** — reclaim·mark·clone·arena lifecycle. (D) 의 repr +
-      (A) 의 state 양쪽에 결합 — 가장 마지막. 필요 인프라 Z = GC 통합 codegen.
+    - **(E) GC/arena-coupled (~30-50 fn) — 🟢 OPENED (B9.6-E1 `rt_munmap`, dealloc subgroup)** —
+      reclaim·arena lifecycle. ⚠ **classic mark/sweep GC 는 존재하지 않음** — 이 runtime 의
+      memory mgmt = mmap-backed BUMP allocator(`hxlcl_malloc` never-free) + scope-pop/arena-reset
+      reclaim. 서브그룹: **(b) dealloc** (`hxlcl_free`=no-op · `hxlcl_munmap`=const-0) = TRACTABLE
+      leaf, munmap 이 JIT-verifiable(returns 0) → **첫 LIVE class-E wire** (arena emit set
+      #1252/#1297/#1315 은 shadow-only · runtime 미-호출). **(c) alloc-core** (`hxlcl_malloc` =
+      state-reloc + `bl hxlcl_mmap` + header store · `hexa_arena_alloc` = block-chain walk) =
+      class-A+B+C COMPOSITE w/ branch logic → 단일 increment 불가 · multi-session expert. **(d)**
+      malloc-coupled value ctor(`hexa_str`/`hexa_array_*`) = class-D 분할-3 와 중복(거기 deferred).
+      **IRREDUCIBLE SEED (B9.8 terminal)**: bump allocator 자체 — self-host runtime 은 OS 메모리를
+      carve 하는 SOME machine-code seed(mmap svc + bump ptr) 필요. emit 할 mark/sweep GC 가 없음.
     **요약**: easy-leaf phase = **DONE (20/640, 모두 byte-eq + JIT-exec 검증)**. hard phase =
     **~620 fn**, 5 클래스 (A reloc · B calling-conv · C syscall-ABI · D HexaVal-repr · E GC) —
-    각각 신규 codegen 인프라 필요, **cold-batchable 아님 · expert human-guided serial** (#1812
-    의 50-70 PR 추정과 정합). F3 의 [ ] 유지 근거 = 이 hard phase 가 실제 open 작업이기 때문.
+    **5/5 클래스 모두 proven emitter 보유** (A arena-reloc · B rt_atoi · C rt_getpid/close ·
+    D 6 ctor · E rt_munmap). 각 클래스의 첫 증분은 열렸으나 **나머지 본체는** 신규 per-fn 작업 +
+    **cold-batchable 아님 · expert human-guided serial** (#1812 의 50-70 PR 추정과 정합).
+    F3 의 [ ] 유지 근거 = 이 hard phase 가 실제 open 작업이기 때문.
   - **WHY [ ] 유지 (not over-closure)**: F3 는 irreducible 아님 — 실제 포팅 가능한
     open 작업. terminal verdict (🔵/🟢/🔴) 부여 불가 (= `feedback-no-over-closure`).
     단일 foreground 세션이 50-70 PR campaign 을 닫을 수 없음 = 정직한 multi-session
@@ -889,6 +900,52 @@ runtime.c 조각이라 F3 로 fold (mis-split 해소). **F3 만이 진짜 open**
       이미 N-reloc 지원). class-B 인프라(frame emit + BRANCH26 cross-object link)는 입증됨 ·
       callee-export wrinkle 가 fn 별 신규 작업. .c count 불변(87 · FLOOR 인프라).
 
+    **✅✅✅✅✅ B9.6-E1 — class-E 메모리-수명(GC/arena/malloc) 서브트랙 OPENED · FIRST LIVE class-E wire (2026-05-28 · #PR)**:
+    PHASE-BOUNDARY MAP 의 **(E) GC/arena-coupled (~30-50 fn)** 클래스를 연 첫 증분 — 이로써
+    **5 FLOOR 클래스(A reloc · B calling-conv · C syscall-ABI · D struct-return · E mem-lifecycle)
+    모두 proven emitter 보유** (단, alloc-core composite + bump-allocator seed 는 irreducible).
+    - **핵심 발견 — class-E 에 classic mark/sweep GC 는 없다**: 이 runtime 의 메모리 관리는
+      (1) mmap-backed **BUMP allocator**(`hxlcl_malloc` self/runtime.c L858 — 4 MB chunk bump,
+      16-B size header, never-free) + (2) **no-op/const-return dealloc**(`hxlcl_free` L875 = `(void)p;`
+      pure ret · `hxlcl_munmap` L902 = `return 0;`) + (3) reclaim = **scope-pop + bulk arena-reset**
+      (rt 32-L discipline, GC walk 아님). 즉 emit 할 mark/sweep GC 자체가 존재하지 않음.
+    - **타깃 = class-E 에서 가장 단순·JIT-verifiable primitive**: `self/runtime.c` L902
+      `hxlcl_munmap(void*, size_t) { (void)addr;(void)length; return 0; }` — bump allocator 가
+      never-free 라 unmap = constant-success stub. live 호출처 = mmap-file cleanup(L7438/L7609).
+      `hxlcl_free` 는 void 반환(검증 불가)이라 munmap(int 0 반환)이 적합. **arena emit set
+      (#1252/#1297/#1315)은 shadow-only**(runtime 가 그 심볼을 호출하지 않음) → munmap 이 runtime 에
+      **실제 wire 된 첫 class-E primitive**.
+    - **신규 emitter** (`self/codegen/runtime_arm64.hexa::rt_munmap`, 2-instr 8-B):
+      `mov w0, #0` (0x52800000 · return 0 success · int 반환이라 32-bit MOVZ) · `ret` (0xD65F03C0).
+      ⚠ **EMITTER capability 는 novel 아님** — `mov w0,#imm` + `ret` 는 class-D ctor 가 이미 입증.
+      **NEW 한 것은 class-E LIVE-wiring** (end-to-end), 새 명령어가 아님. honest framing.
+    - **ABI 검증 3-layer (JIT-exec 게이트 load-bearing)**: ① self-test — `rt_munmap : 8 bytes
+      (class-E lifecycle)` + ALL CHECKS PASS (len==8 · mov w0,#0@off0 · ret@off4). ②
+      **byte-identical to `as -arch arm64`** — emit `.o` 의 `__text` = `52800000 d65f03c0`,
+      어셈블러 출력과 바이트 동일 · nm = `T _hxlcl_munmap` strong external · LC_DYSYMTAB 0개(leaf).
+      ③ **JIT-exec correctness** — `.o` 를 C 드라이버에 링크 → `hxlcl_munmap()` = 0 (4/4 케이스:
+      NULL/0 · 0x1000/4096 · 0xdeadbeef/SIZE_MAX · 0x1000/1) · rc=0 · live disasm = ld64 가
+      self-emit `mov w0,#0 / ret` 바인딩. **메모리-수명 stub ABI 가 런타임에서 정확함 증명**.
+    - **Path-A 활성화 (dual-build 3-mode PASS · #1860 패턴)**: `runtime.c` L902 body 를
+      `#ifdef HEXA_RT_SELFEMIT extern / #else static stub #endif` 가드(forward decl 부재 — body 가
+      모든 use 보다 앞서므로 body 만 flip). emit 드라이버(`emit_hxlcl_munmap_o.hexa`) = 단일-심볼 leaf
+      템플릿 복제(`_hxlcl_munmap` 13-B, `_hxlcl_getpid` 와 동일 strtab 길이). `build_hexa_cli.hexa`
+      의 leaf emit 루프에 `munmap` 추가(동일 single-symbol 템플릿 · env `HEXA_HXLCL_MUNMAP_O`).
+      **3-mode 실측**: (a) default = `hxlcl_munmap` file-local static · **undefined-extern set(49)
+      origin/main 과 IDENTICAL**(`nm -u` diff empty) = 0-extern 불변 보존, (b) 가드 on + `.o` =
+      `_hxlcl_munmap`=U + link OK + JIT-exec returns-0 + live disasm self-emit, (c) 가드 on
+      **without** `.o` = `Undefined: _hxlcl_munmap` link-fail (extern 진짜임).
+      `.verdicts/runtime-floor-closure/B9C6-E1-munmap-classe-byte-diff.txt`.
+    - **fixpoint 무위험**: rt_munmap 은 shadow(`runtime_arm64.hexa`=main.hexa 미-use) · emit 드라이버도
+      미-use → `hexa_cc.c` regen 무관. runtime.c diff = 순수 가드 추가(deletion 0).
+    - **잔여 (class-E)**: munmap 은 dealloc-stub base. (b) dealloc 서브그룹 잔여 = `hxlcl_free`(void
+      반환 · 동일 leaf 템플릿). (c) **alloc-core** (`hxlcl_malloc` = state-reloc + `bl hxlcl_mmap`
+      svc + header store · `hexa_arena_alloc`/`hexa_val_arena_calloc` = block-chain walk) =
+      **class-A+B+C composite w/ branch logic** → 단일 increment 불가 · A/B/C sub-capability 스택으로
+      원칙적 emit 가능하나 multi-session expert. (d) malloc-coupled value ctor = class-D 분할-3 중복.
+      **bump-allocator SEED = irreducible B9.8 terminal** — self-host runtime 은 OS 메모리 carve 용
+      machine-code seed(mmap svc + bump ptr) 필요 · emit 할 GC 부재. .c count 불변(87 · FLOOR 인프라).
+
 ### F4 — sha256 entangled
 
 - [x] **F4 sha256** — `exec_argv_sha256.c` — 🟢 **RESOLVED → F3** (decompose + de-risk ·
@@ -978,6 +1035,12 @@ runtime.c 조각이라 F3 로 fold (mis-split 해소). **F3 만이 진짜 open**
 - [x] **F6 bootstrap** — `hexa_cc.c` (생성된 self-host 컴파일러) + HexaVal repr/GC/
       arena seed = irreducible bootstrap FLOOR (CLOSED-NEG-TERMINAL). self-hosting
       컴파일러는 SOME machine-code seed 필요. B9.6 self-emit 가 100% 닫으면 re-open.
+  - **2026-05-28 정밀 특정 (B9.6-E1 class-E 조사)**: 이 "GC/arena seed" 의 정체 =
+    **mmap-backed BUMP allocator** (`hxlcl_malloc` self/runtime.c L858 · never-free).
+    classic mark/sweep GC 는 존재하지 않음 (reclaim = scope-pop + bulk arena-reset).
+    dealloc(`hxlcl_munmap`)은 self-emit 됨(B9.6-E1, FIRST LIVE class-E wire)이나
+    **alloc seed 자체(OS 메모리 carve = mmap svc + bump ptr)는 irreducible** — emit 으로
+    bootstrap away 불가. 즉 F6 의 irreducible 핵심 = 이 bump-allocator seed.
 
 ## 진짜 닫는 길 = codegen self-emit (B9.6a/b)
 
