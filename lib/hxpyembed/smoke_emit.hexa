@@ -1,0 +1,149 @@
+#!hexa strict
+// lib/hxpyembed/smoke_emit.hexa
+//   B9.C-4 (.c-leg batch · #1849 pattern) — smoke.c source emitter.
+//
+// Mirrors lib/hxnccl/smoke_emit.hexa one-to-one. Emits the libhxpyembed
+// FFI smoke test (`smoke.c`) verbatim. CMake's `hxpyembed_smoke`
+// executable target is rewired to consume the `_gen.c` produced here
+// in place of the hand-written `smoke.c`.
+//
+// Invocation (from lib/hxpyembed/CMakeLists.txt regen rule):
+//   hexa-run lib/hxpyembed/smoke_emit.hexa <output-path>
+//
+// Default output path (if argv missing): "smoke.c" in cwd.
+//
+// Phase: B9.C-4 batch (hxpyembed + smoke).
+
+let MODULE_NAME = "smoke_emit"
+
+fn emit_smoke_c() -> str {
+    // Verbatim content of hand-written lib/hxpyembed/smoke.c
+    let s = "// lib/hxpyembed/smoke.c — minimal C smoke test for libhxpyembed.\n" +
+            "//\n" +
+            "// Verifies the F-FFI-1 acceptance contract end-to-end without going\n" +
+            "// through the hexa runtime: init → import torch → tensor zero-copy\n" +
+            "// round-trip → finalize. Compile + run:\n" +
+            "//\n" +
+            "//   cc -O2 -Wall -I. smoke.c -L./build -lhxpyembed \\\n" +
+            "//      -Wl,-rpath,./build -o build/smoke\n" +
+            "//   DYLD_LIBRARY_PATH=./build ./build/smoke\n" +
+            "//\n" +
+            "// Skips with exit 0 if torch is not installed.\n" +
+            "\n" +
+            "#include <stdint.h>\n" +
+            "#include <stdio.h>\n" +
+            "#include <stdlib.h>\n" +
+            "#include <string.h>\n" +
+            "#include <math.h>\n" +
+            "\n" +
+            "extern int64_t hxpy_init(void);\n" +
+            "extern int64_t hxpy_finalize(void);\n" +
+            "extern int64_t hxpy_is_initialized(void);\n" +
+            "extern int64_t hxpy_eval(const char *code);\n" +
+            "extern int64_t hxpy_call_str(const char *mod, const char *fn, const char *arg);\n" +
+            "extern void    hxpy_free_str(int64_t p);\n" +
+            "extern int64_t hxpy_tensor_to_py(void *raw, int64_t numel, const char *dtype);\n" +
+            "extern int64_t hxpy_py_to_tensor(void *py_obj, void *out, int64_t max_elems);\n" +
+            "extern int64_t hxpy_py_buf_addr(void *py_obj);\n" +
+            "extern int64_t hxpy_py_buf_len(void *py_obj);\n" +
+            "extern int64_t hxpy_py_buf_contig(void *py_obj);\n" +
+            "extern void    hxpy_obj_decref(void *py_obj);\n" +
+            "\n" +
+            "static int pass = 0, fail = 0;\n" +
+            "\n" +
+            "#define CHK(tag, cond) do { \\\n" +
+            "    if (cond) { printf(\"  PASS %s\\n\", tag); pass++; } \\\n" +
+            "    else      { printf(\"  FAIL %s\\n\", tag); fail++; } \\\n" +
+            "} while (0)\n" +
+            "\n" +
+            "int main(void) {\n" +
+            "    printf(\"── hxpyembed smoke (F-FFI-1) ──\\n\");\n" +
+            "\n" +
+            "    if (hxpy_init() != 0) {\n" +
+            "        printf(\"  FAIL init\\n\");\n" +
+            "        return 1;\n" +
+            "    }\n" +
+            "    CHK(\"init\", hxpy_is_initialized() == 1);\n" +
+            "    CHK(\"init_idempotent\", hxpy_init() == 0);\n" +
+            "\n" +
+            "    // Try to import torch; SKIP gracefully if not present.\n" +
+            "    if (hxpy_eval(\"import torch\") != 0) {\n" +
+            "        printf(\"  SKIP torch_round_trip — torch not importable\\n\");\n" +
+            "        hxpy_finalize();\n" +
+            "        return 0;\n" +
+            "    }\n" +
+            "    CHK(\"import_torch\", 1);\n" +
+            "\n" +
+            "    // py_call(\"builtins\", \"str\", \"hello\")\n" +
+            "    int64_t s = hxpy_call_str(\"builtins\", \"str\", \"hello\");\n" +
+            "    CHK(\"call_str_hello\", s != 0);\n" +
+            "    if (s) {\n" +
+            "        const char *p = (const char *)(uintptr_t)s;\n" +
+            "        CHK(\"call_str_value\", strcmp(p, \"hello\") == 0);\n" +
+            "        hxpy_free_str(s);\n" +
+            "    }\n" +
+            "\n" +
+            "    // F-FFI-1: 1024-element f32 zero-copy round-trip.\n" +
+            "    const int N = 1024;\n" +
+            "    float *buf = (float *)malloc(N * sizeof(float));\n" +
+            "    double sum_before = 0.0;\n" +
+            "    for (int i = 0; i < N; i++) {\n" +
+            "        buf[i] = (float)i * 0.5f;\n" +
+            "        sum_before += buf[i];\n" +
+            "    }\n" +
+            "\n" +
+            "    int64_t mv = hxpy_tensor_to_py(buf, N, \"f\");\n" +
+            "    CHK(\"tensor_to_py_handle\", mv != 0);\n" +
+            "\n" +
+            "    int64_t addr = hxpy_py_buf_addr((void *)(uintptr_t)mv);\n" +
+            "    CHK(\"zero_copy_address_match\", addr == (int64_t)(uintptr_t)buf);\n" +
+            "    CHK(\"byte_length_4096\", hxpy_py_buf_len((void *)(uintptr_t)mv) == N * 4);\n" +
+            "    CHK(\"c_contiguous\", hxpy_py_buf_contig((void *)(uintptr_t)mv) == 1);\n" +
+            "\n" +
+            "    int64_t numel = hxpy_py_to_tensor((void *)(uintptr_t)mv, buf, N);\n" +
+            "    CHK(\"py_to_tensor_numel_1024\", numel == N);\n" +
+            "\n" +
+            "    double sum_after = 0.0;\n" +
+            "    for (int i = 0; i < N; i++) sum_after += buf[i];\n" +
+            "    CHK(\"value_preservation\", fabs(sum_after - sum_before) < 1e-3);\n" +
+            "    CHK(\"expected_sum_261888\", fabs(sum_before - 261888.0) < 0.5);\n" +
+            "\n" +
+            "    hxpy_obj_decref((void *)(uintptr_t)mv);\n" +
+            "\n" +
+            "    // Round-trip via numpy + memoryview.\n" +
+            "    if (hxpy_eval(\"import numpy as np\\n_arr = np.frombuffer(_mv := memoryview(bytearray(16)), dtype=np.float32) if False else None\\n\") == 0) {\n" +
+            "        // not strictly needed — covered above. Keep the C smoke minimal.\n" +
+            "    }\n" +
+            "\n" +
+            "    free(buf);\n" +
+            "\n" +
+            "    CHK(\"finalize\", hxpy_finalize() == 0);\n" +
+            "    CHK(\"post_finalize_not_init\", hxpy_is_initialized() == 0);\n" +
+            "\n" +
+            "    int total = pass + fail;\n" +
+            "    printf(\"\\n  pass=%d  fail=%d\\n\", pass, fail);\n" +
+            "    if (fail == 0) {\n" +
+            "        printf(\"PASS: hxpyembed smoke %d/%d\\n\", pass, total);\n" +
+            "        return 0;\n" +
+            "    }\n" +
+            "    printf(\"FAIL: hxpyembed smoke %d/%d\\n\", pass, total);\n" +
+            "    return 1;\n" +
+            "}\n"
+    return s
+}
+
+fn main() {
+    let argv = real_args()
+    let out_path = if argv.len() >= 1 { argv[0] } else { "smoke.c" }
+    let c_text = emit_smoke_c()
+    let cmd = "cat > \"" + out_path + "\" <<'__SMOKE_EMIT_EOF__'\n" +
+              c_text + "__SMOKE_EMIT_EOF__"
+    let _ = exec(cmd)
+    let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
+    if exists_check != "y" {
+        println("[smoke_emit] FATAL: failed to write " + out_path)
+        exit(1)
+    }
+    println("[smoke_emit] wrote " + out_path)
+    exit(0)
+}
