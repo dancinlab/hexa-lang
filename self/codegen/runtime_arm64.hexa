@@ -3025,6 +3025,208 @@ fn rt_munmap() {
     return c
 }
 
+// ── rt_getuid (B9.6-C3 — class-C syscall ABI · 0-arg no-errno) ───────
+// getuid() -> int. SECOND 0-arg / cannot-fail svc-trap (after rt_getpid),
+// scaling out the no-errno base template. runtime.c L1396 says it verbatim:
+//   hxlcl_getuid(void) { return (int)_hxlcl_syscall1(HXLCL_SYS_GETUID, 0); }
+// SYS_GETUID = 24. Byte shape is the EXACT rt_getpid sequence with only the
+// `mov w16` immediate changed (#20 -> #24):
+//   mov w16,#24 / mov x0,#0 / svc #0x80 / ret  (4 instr, 16 B, no reloc)
+// clang -O2 (== as -arch arm64) of the runtime.c body is byte-for-byte this.
+// Like getpid it RETURNS a real value (the uid) so it is JIT-exec-checkable
+// against libc getuid(). No carry-flag / errno path (BSD getuid cannot fail).
+fn rt_getuid() {
+    let mut c = []
+    // mov w16, #24  (SYS_GETUID)     0x52800310
+    c.push(16)
+    c.push(3)
+    c.push(128)
+    c.push(82)
+    // mov x0, #0   (no syscall arg)  0xD2800000
+    c.push(0)
+    c.push(0)
+    c.push(128)
+    c.push(210)
+    // svc #0x80                      0xD4001001
+    c.push(1)
+    c.push(16)
+    c.push(0)
+    c.push(212)
+    // ret  (x0 = uid)                0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
+// ── rt_dup2 (B9.6-C4 — class-C syscall · 2-arg _cf + errno) ──────────
+// dup2(int oldfd, int newfd) -> int. The FIRST 2-arg svc-_cf self-emit,
+// extending the rt_close 1-arg carry-flag template by ONE instruction (a
+// second `sxtw x1,w1` for the newfd arg). runtime.c L1417:
+//   hxlcl_dup2(int oldfd, int newfd) { return (int)_hxlcl_syscall2_cf(HXLCL_SYS_DUP2, ...); }
+// SYS_DUP2 = 90. clang -O2 (== as -arch arm64, in runtime.c's `#define errno
+// hxlcl_errno` context) is byte-for-byte (10 instr, 40 B):
+//   sxtw x0,w0 / sxtw x1,w1 / mov w16,#90 / svc #0x80 / cset x8,hs
+//   / cbz x8,Lret / adrp x8,errno / str w0,[x8] / mov x0,#-1 / ret
+// Both args are int → both sign-extended. The extra sxtw shifts every later
+// instruction +4: the cbz still skips 4 instr (adrp/str/mov-1 to ret), and
+// the errno reloc sites move to 0x18 (PAGE21) / 0x1c (PAGEOFF12) vs close's
+// 0x14 / 0x18. The errno store is PC-relative (adrp/str) AFTER the svc, NOT a
+// caller register — the dup2 svc clobbers arg regs on the error path, exactly
+// the class-C-with-errno finding proven for rt_close.
+fn rt_dup2() {
+    let mut c = []
+    // sxtw x0, w0  (sign-extend oldfd)      0x93407C00
+    c.push(0)
+    c.push(124)
+    c.push(64)
+    c.push(147)
+    // sxtw x1, w1  (sign-extend newfd)      0x93407C21
+    c.push(33)
+    c.push(124)
+    c.push(64)
+    c.push(147)
+    // mov w16, #90  (SYS_DUP2)              0x52800B50
+    c.push(80)
+    c.push(11)
+    c.push(128)
+    c.push(82)
+    // svc #0x80                             0xD4001001
+    c.push(1)
+    c.push(16)
+    c.push(0)
+    c.push(212)
+    // cset x8, hs  (capture carry = error)  0x9A9F37E8
+    c.push(232)
+    c.push(55)
+    c.push(159)
+    c.push(154)
+    // cbz x8, Lret (success → skip errno)   0xB4000088  (+0x10 to ret)
+    c.push(136)
+    c.push(0)
+    c.push(0)
+    c.push(180)
+    // adrp x8, errno@PAGE  [RELOC PAGE21]   0x90000008  (imm zeroed)
+    c.push(8)
+    c.push(0)
+    c.push(0)
+    c.push(144)
+    // str w0, [x8, errno@PAGEOFF] [RELOC]   0xB9000100  (imm zeroed)
+    c.push(0)
+    c.push(1)
+    c.push(0)
+    c.push(185)
+    // mov x0, #-1  (error return)           0x92800000
+    c.push(0)
+    c.push(0)
+    c.push(128)
+    c.push(146)
+    // ret  (x0 = newfd on success / -1)     0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
+// Reloc table for rt_dup2 — two errno records (adrp/str), shifted +4 vs
+// rt_close because of the extra sxtw x1,w1 prologue instruction:
+//   offset 0x18 (24) → ARM64_RELOC_PAGE21   (kind 3, pcrel adrp)
+//   offset 0x1c (28) → ARM64_RELOC_PAGEOFF12 (kind 4, str low-12 bits)
+fn rt_dup2_reloc_offs() {
+    let mut o = []
+    o.push(24)
+    o.push(28)
+    return o
+}
+fn rt_dup2_reloc_kinds() {
+    let mut k = []
+    k.push(3)
+    k.push(4)
+    return k
+}
+
+// ── rt_mkdir (B9.6-C5 — class-C syscall · ptr+int _cf + errno) ───────
+// mkdir(const char *path, int mode) -> int. A 2-arg svc-_cf with a POINTER
+// first arg + an int second arg — so only the int (mode, x1) is sign-extended
+// and x0 (the already-64-bit path pointer) passes through untouched. runtime.c
+// L1302:
+//   hxlcl_mkdir(const char *path, int mode) { return (int)_hxlcl_syscall2_cf(HXLCL_SYS_MKDIR, ...); }
+// SYS_MKDIR = 136. clang -O2 (== as -arch arm64, errno-define context) is
+// byte-for-byte (9 instr, 36 B — same length as rt_close, only the SINGLE
+// sxtw targets x1 not x0):
+//   sxtw x1,w1 / mov w16,#136 / svc #0x80 / cset x8,hs / cbz x8,Lret
+//   / adrp x8,errno / str w0,[x8] / mov x0,#-1 / ret
+// errno reloc sites: 0x14 (PAGE21) / 0x18 (PAGEOFF12) — same as rt_close
+// (the body is the same length; only the sxtw register and SYS number differ).
+fn rt_mkdir() {
+    let mut c = []
+    // sxtw x1, w1  (sign-extend mode arg)   0x93407C21
+    c.push(33)
+    c.push(124)
+    c.push(64)
+    c.push(147)
+    // mov w16, #136  (SYS_MKDIR)            0x52801110
+    c.push(16)
+    c.push(17)
+    c.push(128)
+    c.push(82)
+    // svc #0x80                             0xD4001001
+    c.push(1)
+    c.push(16)
+    c.push(0)
+    c.push(212)
+    // cset x8, hs  (capture carry = error)  0x9A9F37E8
+    c.push(232)
+    c.push(55)
+    c.push(159)
+    c.push(154)
+    // cbz x8, Lret (success → skip errno)   0xB4000088  (+0x10 to ret)
+    c.push(136)
+    c.push(0)
+    c.push(0)
+    c.push(180)
+    // adrp x8, errno@PAGE  [RELOC PAGE21]   0x90000008  (imm zeroed)
+    c.push(8)
+    c.push(0)
+    c.push(0)
+    c.push(144)
+    // str w0, [x8, errno@PAGEOFF] [RELOC]   0xB9000100  (imm zeroed)
+    c.push(0)
+    c.push(1)
+    c.push(0)
+    c.push(185)
+    // mov x0, #-1  (error return)           0x92800000
+    c.push(0)
+    c.push(0)
+    c.push(128)
+    c.push(146)
+    // ret  (x0 = 0 on success / -1 error)   0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
+// Reloc table for rt_mkdir — two errno records (adrp/str), same offsets as
+// rt_close (9-instr body of identical length):
+//   offset 0x14 (20) → ARM64_RELOC_PAGE21   (kind 3, pcrel adrp)
+//   offset 0x18 (24) → ARM64_RELOC_PAGEOFF12 (kind 4, str low-12 bits)
+fn rt_mkdir_reloc_offs() {
+    let mut o = []
+    o.push(20)
+    o.push(24)
+    return o
+}
+fn rt_mkdir_reloc_kinds() {
+    let mut k = []
+    k.push(3)
+    k.push(4)
+    return k
+}
+
 // ── self-test ────────────────────────────────────────────────
 
 fn test_runtime_arm64() {
@@ -3074,6 +3276,16 @@ fn test_runtime_arm64() {
     let at_rkind = rt_atoi_reloc_kinds()
     // B9.6-E1 — class-E memory-lifecycle FIRST LIVE wire (unmap/dealloc stub).
     let munmap_b = rt_munmap()
+    // B9.6-C3 — class-C syscall ABI: 0-arg no-errno (getpid mirror).
+    let getuid_b = rt_getuid()
+    // B9.6-C4 — class-C syscall ABI: 2-arg _cf + errno (int+int args).
+    let dup2_b = rt_dup2()
+    let d2_roff = rt_dup2_reloc_offs()
+    let d2_rkind = rt_dup2_reloc_kinds()
+    // B9.6-C5 — class-C syscall ABI: 2-arg _cf + errno (ptr+int args).
+    let mkdir_b = rt_mkdir()
+    let mk_roff = rt_mkdir_reloc_offs()
+    let mk_rkind = rt_mkdir_reloc_kinds()
 
     println("runtime_arm64 — ARM64 machine code byte arrays")
     println("  rt_exit          : " + to_string(len(exit_bytes)) + " bytes")
@@ -3112,6 +3324,9 @@ fn test_runtime_arm64() {
     println("  rt_close         : " + to_string(len(clos)) + " bytes (" + to_string(len(cl_roff)) + " relocs)")
     println("  rt_atoi          : " + to_string(len(atoi_b)) + " bytes (" + to_string(len(at_roff)) + " reloc · BRANCH26)")
     println("  rt_munmap        : " + to_string(len(munmap_b)) + " bytes (class-E lifecycle)")
+    println("  rt_getuid        : " + to_string(len(getuid_b)) + " bytes")
+    println("  rt_dup2          : " + to_string(len(dup2_b)) + " bytes (" + to_string(len(d2_roff)) + " relocs)")
+    println("  rt_mkdir         : " + to_string(len(mkdir_b)) + " bytes (" + to_string(len(mk_roff)) + " relocs)")
 
     // Verify sizes match expected instruction counts * 4
     let mut ok = true
@@ -3249,6 +3464,61 @@ fn test_runtime_arm64() {
     if munmap_b[0] != 0 || munmap_b[1] != 0 || munmap_b[2] != 128 || munmap_b[3] != 82 { println("  FAIL: rt_munmap missing mov w0,#0 (success ret)"); ok = false }
     // ret trailer (c0 03 5f d6) — munmap RETURNS 0.
     if munmap_b[4] != 192 || munmap_b[5] != 3 || munmap_b[6] != 95 || munmap_b[7] != 214 { println("  FAIL: rt_munmap no RET"); ok = false }
+    // B9.6-C3 — class-C syscall ABI: rt_getuid is a 4-instr 16 B leaf,
+    //   byte-identical to rt_getpid except mov w16,#24 (SYS_GETUID) vs #20.
+    if len(getuid_b) != 16 { println("  FAIL: rt_getuid expected 16, got " + to_string(len(getuid_b))); ok = false }
+    // mov w16,#24 prefix (10 03 80 52) — SYS_GETUID loaded into x16.
+    if getuid_b[0] != 16 || getuid_b[1] != 3 || getuid_b[2] != 128 || getuid_b[3] != 82 { println("  FAIL: rt_getuid wrong syscall number prefix (SYS_GETUID=24)"); ok = false }
+    // svc #0x80 at offset 8 (01 10 00 d4) — the BSD syscall trap.
+    if getuid_b[8] != 1 || getuid_b[9] != 16 || getuid_b[10] != 0 || getuid_b[11] != 212 { println("  FAIL: rt_getuid missing svc #0x80 at offset 8"); ok = false }
+    // ret trailer (c0 03 5f d6) — getuid RETURNS the uid.
+    if getuid_b[12] != 192 || getuid_b[13] != 3 || getuid_b[14] != 95 || getuid_b[15] != 214 { println("  FAIL: rt_getuid no RET"); ok = false }
+    // B9.6-C4 — class-C syscall ABI: rt_dup2 is a 10-instr 40 B body (the
+    //   2-arg _cf template; sxtw x0 / sxtw x1 / mov w16,#90 / svc / cset /
+    //   cbz / adrp errno / str / mov x0,#-1 / ret).
+    if len(dup2_b) != 40 { println("  FAIL: rt_dup2 expected 40, got " + to_string(len(dup2_b))); ok = false }
+    // sxtw x0,w0 prefix (00 7c 40 93) — oldfd arg sign-extended.
+    if dup2_b[0] != 0 || dup2_b[1] != 124 || dup2_b[2] != 64 || dup2_b[3] != 147 { println("  FAIL: rt_dup2 missing sxtw x0 (oldfd)"); ok = false }
+    // sxtw x1,w1 (21 7c 40 93) — newfd arg sign-extended (the 2-arg extension).
+    if dup2_b[4] != 33 || dup2_b[5] != 124 || dup2_b[6] != 64 || dup2_b[7] != 147 { println("  FAIL: rt_dup2 missing sxtw x1 (newfd)"); ok = false }
+    // mov w16,#90 (50 0b 80 52) — SYS_DUP2 loaded into x16.
+    if dup2_b[8] != 80 || dup2_b[9] != 11 || dup2_b[10] != 128 || dup2_b[11] != 82 { println("  FAIL: rt_dup2 wrong syscall number (SYS_DUP2=90)"); ok = false }
+    // svc #0x80 at offset 12 (01 10 00 d4) — the BSD syscall trap.
+    if dup2_b[12] != 1 || dup2_b[13] != 16 || dup2_b[14] != 0 || dup2_b[15] != 212 { println("  FAIL: rt_dup2 missing svc #0x80 at offset 12"); ok = false }
+    // cset x8,hs at offset 16 (e8 37 9f 9a) — carry-flag capture.
+    if dup2_b[16] != 232 || dup2_b[17] != 55 || dup2_b[18] != 159 || dup2_b[19] != 154 { println("  FAIL: rt_dup2 missing cset (carry capture)"); ok = false }
+    // adrp x8,errno at offset 24 (08 00 00 90) — PAGE21 reloc site.
+    if dup2_b[24] != 8 || dup2_b[25] != 0 || dup2_b[26] != 0 || dup2_b[27] != 144 { println("  FAIL: rt_dup2 missing adrp errno (reloc 0x18)"); ok = false }
+    // str w0,[x8] at offset 28 (00 01 00 b9) — PAGEOFF12 reloc site.
+    if dup2_b[28] != 0 || dup2_b[29] != 1 || dup2_b[30] != 0 || dup2_b[31] != 185 { println("  FAIL: rt_dup2 missing str errno (reloc 0x1c)"); ok = false }
+    // ret trailer (c0 03 5f d6).
+    if dup2_b[36] != 192 || dup2_b[37] != 3 || dup2_b[38] != 95 || dup2_b[39] != 214 { println("  FAIL: rt_dup2 no RET"); ok = false }
+    // reloc table: 2 records (PAGE21@0x18 + PAGEOFF12@0x1c).
+    if len(d2_roff) != 2 { println("  FAIL: rt_dup2 expected 2 reloc offsets, got " + to_string(len(d2_roff))); ok = false }
+    if len(d2_rkind) != 2 { println("  FAIL: rt_dup2 expected 2 reloc kinds, got " + to_string(len(d2_rkind))); ok = false }
+    if d2_roff[0] != 24 || d2_roff[1] != 28 { println("  FAIL: rt_dup2 reloc offsets must be 0x18,0x1c"); ok = false }
+    if d2_rkind[0] != 3 || d2_rkind[1] != 4 { println("  FAIL: rt_dup2 reloc kinds must be PAGE21(3),PAGEOFF12(4)"); ok = false }
+    // B9.6-C5 — class-C syscall ABI: rt_mkdir is a 9-instr 36 B body (ptr+int
+    //   _cf; only x1/mode sign-extended, path ptr passes through). Same length
+    //   as rt_close, only the sxtw register + SYS number differ.
+    if len(mkdir_b) != 36 { println("  FAIL: rt_mkdir expected 36, got " + to_string(len(mkdir_b))); ok = false }
+    // sxtw x1,w1 prefix (21 7c 40 93) — mode arg sign-extended (path ptr untouched).
+    if mkdir_b[0] != 33 || mkdir_b[1] != 124 || mkdir_b[2] != 64 || mkdir_b[3] != 147 { println("  FAIL: rt_mkdir missing sxtw x1 (mode arg)"); ok = false }
+    // mov w16,#136 (10 11 80 52) — SYS_MKDIR loaded into x16.
+    if mkdir_b[4] != 16 || mkdir_b[5] != 17 || mkdir_b[6] != 128 || mkdir_b[7] != 82 { println("  FAIL: rt_mkdir wrong syscall number (SYS_MKDIR=136)"); ok = false }
+    // svc #0x80 at offset 8 (01 10 00 d4).
+    if mkdir_b[8] != 1 || mkdir_b[9] != 16 || mkdir_b[10] != 0 || mkdir_b[11] != 212 { println("  FAIL: rt_mkdir missing svc #0x80 at offset 8"); ok = false }
+    // adrp x8,errno at offset 20 (08 00 00 90) — PAGE21 reloc site (== rt_close).
+    if mkdir_b[20] != 8 || mkdir_b[21] != 0 || mkdir_b[22] != 0 || mkdir_b[23] != 144 { println("  FAIL: rt_mkdir missing adrp errno (reloc 0x14)"); ok = false }
+    // str w0,[x8] at offset 24 (00 01 00 b9) — PAGEOFF12 reloc site.
+    if mkdir_b[24] != 0 || mkdir_b[25] != 1 || mkdir_b[26] != 0 || mkdir_b[27] != 185 { println("  FAIL: rt_mkdir missing str errno (reloc 0x18)"); ok = false }
+    // ret trailer (c0 03 5f d6).
+    if mkdir_b[32] != 192 || mkdir_b[33] != 3 || mkdir_b[34] != 95 || mkdir_b[35] != 214 { println("  FAIL: rt_mkdir no RET"); ok = false }
+    // reloc table: 2 records (PAGE21@0x14 + PAGEOFF12@0x18) — same as rt_close.
+    if len(mk_roff) != 2 { println("  FAIL: rt_mkdir expected 2 reloc offsets, got " + to_string(len(mk_roff))); ok = false }
+    if len(mk_rkind) != 2 { println("  FAIL: rt_mkdir expected 2 reloc kinds, got " + to_string(len(mk_rkind))); ok = false }
+    if mk_roff[0] != 20 || mk_roff[1] != 24 { println("  FAIL: rt_mkdir reloc offsets must be 0x14,0x18"); ok = false }
+    if mk_rkind[0] != 3 || mk_rkind[1] != 4 { println("  FAIL: rt_mkdir reloc kinds must be PAGE21(3),PAGEOFF12(4)"); ok = false }
 
     // Verify all sizes are multiples of 4 (ARM64 fixed-width)
     if len(exit_bytes) % 4 != 0 { println("  FAIL: rt_exit not aligned"); ok = false }
@@ -3287,6 +3557,9 @@ fn test_runtime_arm64() {
     if len(clos) % 4 != 0 { println("  FAIL: rt_close not aligned"); ok = false }
     if len(atoi_b) % 4 != 0 { println("  FAIL: rt_atoi not aligned"); ok = false }
     if len(munmap_b) % 4 != 0 { println("  FAIL: rt_munmap not aligned"); ok = false }
+    if len(getuid_b) % 4 != 0 { println("  FAIL: rt_getuid not aligned"); ok = false }
+    if len(dup2_b) % 4 != 0 { println("  FAIL: rt_dup2 not aligned"); ok = false }
+    if len(mkdir_b) % 4 != 0 { println("  FAIL: rt_mkdir not aligned"); ok = false }
     // B9.6-D2 — all three end with ret (192,3,95,214).
     let nhf = len(hfloat)
     if hfloat[nhf - 4] != 192 { println("  FAIL: rt_hexa_float no RET"); ok = false }
