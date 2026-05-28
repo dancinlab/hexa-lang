@@ -2672,15 +2672,15 @@
 # provenance). g67 intra-project reuse lattice: OEIS PROVIDES verified
 # arithmetic-fn provenance; TECS-L REUSES it (n=6 identity σφ=nτ + M4 μ +
 # F3 σ_2 cite the now-OEIS-attributed sigma/tau/phi/mu). Reuse edge
-# `TECS-L --reuses--> OEIS` recorded in repo-root NEXUS.tape §3b. Docs+NEXUS
-# only — no atlas fold (O4 owns the fold; embedded.gen.hexa untouched).
+# `TECS-L --reuses--> OEIS` recorded in repo-root DOMAINS.tape (cross-domain
+# @link). Docs+graph only — no atlas fold (O4 owns the fold; embedded.gen.hexa untouched).
 
-@C oeis_tecs_crosslink := "OEIS O5 TECS-L cross-link: the 7 O4 OEIS↔hexa-fn provenance links (sigma↔A000203 · tau↔A000005 · phi↔A000010 · mu↔A008683 @P builtins + aliquot↔A001065 · sigma_2↔A001157 · sigma_3↔A001158 @F folds) cross-linked to TECS-L axis-F F11 'OEIS reuse cite'. TECS-L M1-M10 (n=6 identity σφ=nτ ⟺ n∈{1,6}) + M4 (μ characterization) + F3 (σ_2 reverse-lookup) consume these arithmetic fns, which now carry OEIS canonical-source attribution → TECS-L = downstream consumer. g67 intra-project reuse edge `TECS-L --reuses--> OEIS` recorded in repo-root NEXUS.tape §3b (domain-node OEIS/TECS-L + domain-reuse-edge de1). O5 = docs+NEXUS only; no new atlas fold (O4 owns embedded.gen.hexa)." :: synthesis [slug=oeis-tecs-crosslink group=OEIS]
+@C oeis_tecs_crosslink := "OEIS O5 TECS-L cross-link: the 7 O4 OEIS↔hexa-fn provenance links (sigma↔A000203 · tau↔A000005 · phi↔A000010 · mu↔A008683 @P builtins + aliquot↔A001065 · sigma_2↔A001157 · sigma_3↔A001158 @F folds) cross-linked to TECS-L axis-F F11 'OEIS reuse cite'. TECS-L M1-M10 (n=6 identity σφ=nτ ⟺ n∈{1,6}) + M4 (μ characterization) + F3 (σ_2 reverse-lookup) consume these arithmetic fns, which now carry OEIS canonical-source attribution → TECS-L = downstream consumer. g67 cross-domain reuse edge `TECS-L --reuses--> OEIS` recorded in repo-root DOMAINS.tape (@link connection graph). O5 = docs+graph only; no new atlas fold (O4 owns embedded.gen.hexa)." :: synthesis [slug=oeis-tecs-crosslink group=OEIS]
   method = "crosslink"
-  cmd    = "synthesis (no new hexa verify) — links sourced from .verdicts/oeis-atlas-fold/fold_ledger.txt (O4); edge recorded in NEXUS.tape §3b"
+  cmd    = "synthesis (no new hexa verify) — links sourced from .verdicts/oeis-atlas-fold/fold_ledger.txt (O4); edge recorded in DOMAINS.tape @link"
   raw    = ".verdicts/oeis-tecs-crosslink/crosslink.txt"
-  src    = "NEXUS.tape (§3b: domain-node d_oeis/d_tecsl + reuse-edge de1) · TECS-L/TECS-L.md (F11 [x] closure) · OEIS/docs/o5-tecs-crosslink.md · .verdicts/oeis-atlas-fold/fold_ledger.txt (O4, 7 links)"
-  status = "🟢 7 OEIS↔hexa provenance links cross-linked to TECS-L F11 + NEXUS.tape reuse edge (g67). TECS-L F11 closed (OEIS reuse cite); OEIS O5 closed. Docs+NEXUS only — no atlas fold."
+  src    = "DOMAINS.tape (@link TECS-L --reuses--> OEIS · cross-domain g67) · TECS-L/TECS-L.md (F11 [x] closure) · OEIS/docs/o5-tecs-crosslink.md · .verdicts/oeis-atlas-fold/fold_ledger.txt (O4, 7 links)"
+  status = "🟢 7 OEIS↔hexa provenance links cross-linked to TECS-L F11 + DOMAINS.tape reuse edge (g67). TECS-L F11 closed (OEIS reuse cite); OEIS O5 closed. Docs+graph only — no atlas fold."
 
 # OEIS — oeis-closure (slug · group=OEIS · O7)
 # Catalogue-mirror closure synthesis of O1-O6 + paper-gate eval. Funnel:
@@ -2770,11 +2770,11 @@
 # to hexa-lang stdlib/consciousness/iit4/ as the shared SSOT (g61/g68). Promote
 # only — verify_cli wiring = V5.2 · PyPhi calibration = V5.3 (not terminal yet).
 # ───────────────────────────────────────────────────────────────────────
-@C verify_kit_iit_promote := "anima faithful-Φ engine (H_278 small-N exact MIP-EI, n<=8) promoted byte-faithful to hexa-lang stdlib/consciousness/iit4/faithful_phi.hexa — self-contained (zero anima-local deps; bundles RFC 036 pure-hexa MI estimator). pub surface: iit4_faithful_phi / iit4_faithful_phi_from_mi / iit4_build_mi_matrix. NEXUS.tape p_iit4 provide recorded (g68 cross-repo fold). Promote only — verify_cli wire = V5.2, PyPhi calibrate = V5.3." :: empirical [slug=verify-kit-iit-promote group=VERIFY-KIT]
+@C verify_kit_iit_promote := "anima faithful-Φ engine (H_278 small-N exact MIP-EI, n<=8) promoted byte-faithful to hexa-lang stdlib/consciousness/iit4/faithful_phi.hexa — self-contained (zero anima-local deps; bundles RFC 036 pure-hexa MI estimator). pub surface: iit4_faithful_phi / iit4_faithful_phi_from_mi / iit4_build_mi_matrix. DOMAINS.tape `@link VERIFY-KIT --uses--> stdlib/consciousness/iit4` recorded (g68 cross-project fold). Promote only — verify_cli wire = V5.2, PyPhi calibrate = V5.3." :: empirical [slug=verify-kit-iit-promote group=VERIFY-KIT]
   method = "promote"
   cmd    = "promote anima HEXAD/LIFE H_278 faithful-Φ → stdlib/consciousness/iit4/faithful_phi.hexa (parse-gate OK)"
   raw    = ".verdicts/verify-kit-iit-promote/v5_1.txt"
-  src    = "stdlib/consciousness/iit4/faithful_phi.hexa (promoted from anima HEXAD/LIFE state/h278_faithful_phi_2026_05_25/run_h278.hexa) · NEXUS.tape p_iit4"
+  src    = "stdlib/consciousness/iit4/faithful_phi.hexa (promoted from anima HEXAD/LIFE state/h278_faithful_phi_2026_05_25/run_h278.hexa) · DOMAINS.tape @link VERIFY-KIT --uses--> stdlib/consciousness/iit4"
   status = "🟡 anima Φ engine promoted to stdlib/consciousness/iit4 (wire+calibrate → V5.2/V5.3)"
 
 # ───────────────────────────────────────────────────────────────────────

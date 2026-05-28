@@ -1125,7 +1125,7 @@ F14 zero-density theorem 의 4-task batch successor. F13/F14 의 closed-form 패
 - [x] F11 재정의 + closure: **"OEIS reuse cite — TECS-L = OEIS-도메인 provenance 의 downstream consumer"**. `- [ ]`→`- [x]`. (OEIS 도메인 O5 와 동시 closure — OEIS 가 driver, 본 entry 는 TECS-L 측 cite 기록.)
 - [x] **근거**: TECS-L 의 n=6 정체성 작업이 의존하는 산술함수 σ/τ/φ/μ 가 OEIS O4(PR #1138)에서 검증된 catalogue provenance 를 획득 — sigma↔A000203 · tau↔A000005 · phi↔A000010 · mu↔A008683 (4 @P 빌트인 attribution) + aliquot↔A001065 · sigma_2↔A001157 · sigma_3↔A001158 (3 신규 OEIS-attributed @F fold).
 - [x] **소비 경로**: M1·M3·M10 (σφ=nτ ⟺ n∈{1,6}) = σ·τ·φ · M4 (n=6 characterization) = μ · M5 (τ=string dim) = τ · M6 (σ=2n / aliquot) = σ·aliquot · 축 F F3 (OEIS reverse-lookup) = σ_2. 축 0 코어 전체가 OEIS-attributed fn 을 소비 → reuse-cite 성립.
-- [x] **NEXUS.tape reuse edge** (g67): repo-root `NEXUS.tape` §3b 에 `TECS-L --reuses--> OEIS` (domain-reuse-edge `de1`) 등록 — 7 provenance link. 기존 파일은 확장(additive), STAR hub 노드 미접촉.
+- [x] **DOMAINS.tape reuse edge** (g67): repo-root `DOMAINS.tape` connection graph 에 cross-domain `@link TECS-L --reuses--> OEIS` 등록 — 7 provenance link. cross-project STAR 엣지(cross-project `@link` 블록) 미접촉.
 - [x] 영속: cross-link 본체는 OEIS 도메인 소유 — `OEIS/docs/o5-tecs-crosslink.md` · `.verdicts/oeis-tecs-crosslink/crosslink.txt` · `CLAIMS.tape` slug=oeis-tecs-crosslink group=OEIS. atlas fold 미접촉 (O4 소유).
 
 ## 2026-05-25T22:55 — 축 F F9 · NOVEL = verify-infra growth driver (g59 INBOX pipeline) — terminal-empirical synthesis 🟢

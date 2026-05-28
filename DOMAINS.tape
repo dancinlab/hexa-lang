@@ -3,8 +3,9 @@
 # every other line (@V · @link · #) is ignored by the roster parser, so the
 # connection graph below rides along without disturbing `domain list`.
 # Connection carrier (g3 minimal): @link <from> --<verb>--> <to>   # <evidence>
-# Absorbs the former NEXUS.tape relationship graph (stdlib provides[] catalog
-# dropped — hexa-lsp / `hexa atlas lookup` is the live stdlib discovery surface).
+# Carries the cross-project reuse-lattice / star-hub relationship graph (stdlib
+# provides[] catalog dropped — hexa-lsp / `hexa atlas lookup` is the live
+# stdlib discovery surface).
 @V := "domains" :: index
 
 # --- roster (nodes) ---

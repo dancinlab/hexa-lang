@@ -62,7 +62,7 @@
 - parse-gate PASS (`hexa parse ... OK`).
 
 ### Record reuse edge (g68 star form)
-- `NEXUS.tape` §1 provides[] 에 `@X p_iit4` 추가 — hub 가 이제 `stdlib/consciousness/iit4` 를 PROVIDES (anima H_278 fold · g68 cross-repo · g61 shared substrate). consumers = VERIFY-KIT V5 · ARXIV A2 (배선 = V5.2).
+- `DOMAINS.tape` connection graph 에 cross-project `@link VERIFY-KIT --uses--> stdlib/consciousness/iit4` 등록 — hub 가 `stdlib/consciousness/iit4` 를 제공 (anima H_278 fold · g68 cross-project · g61 shared substrate). consumers = VERIFY-KIT V5 · ARXIV A2 (배선 = V5.2).
 
 ### V5.2/V5.3 readiness (남은 작업)
 - V5.2 wire: `tool/verify_cli.hexa` 의 `_recompute` 경로에 `iit4_faithful_phi` 배선 + farr-입력 인터페이스(현 verify CLI 는 스칼라 args; Φ 는 flat state farr 필요 → 입력 어댑터 설계 필요). H_278 의 `c_phi_mi_pair` builtin 은 이미 hexa-lang 런타임에 있으므로 builtin 경로로도 배선 가능(번들 버전과 byte-eq 확인 권장).
