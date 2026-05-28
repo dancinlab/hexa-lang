@@ -93,6 +93,32 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Stage 0-pre — warm-bootstrap regen seed .c (fallback-safe)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # WARM_BOOTSTRAP.md Phase 3 — toward .hexa-only. If a prior edge hexa
+          # downloads, regenerate the runtime.c amalgamation seed .c from their
+          # *_emit.hexa SSOTs. FALLBACK-SAFE: any failure OR regen drift →
+          # restore the tracked .c (git checkout) so Stage-0 compiles the
+          # committed seed (current cold-bootstrap). No-op today (seed tracked);
+          # load-bearing after Phase 4 (.c gitignored).
+          ASSET="hexa-darwin-arm64.tar.gz"
+          if gh release download edge --pattern "$ASSET" --dir /tmp/prior 2>/dev/null \
+             && tar xzf "/tmp/prior/$ASSET" -C /tmp/prior 2>/dev/null; then
+            PH="$(find /tmp/prior -type f -name hexa | head -1)"
+            if [ -n "$PH" ] && "$PH" --version >/dev/null 2>&1; then
+              if "$PH" run tool/regen_native_runtime_c_includes.hexa; then
+                echo "warm: amalgamation seed .c regenerated + verified byte-identical"
+              else
+                echo "warm: regen drift/fail — restoring tracked .c"
+                git checkout -- self/runtime_core.c self/runtime_hi_gen.c self/native/*.c 2>/dev/null || true
+              fi
+            else echo "warm: prior hexa unusable — tracked .c fallback"; fi
+          else echo "warm: no prior edge hexa — tracked .c (cold-bootstrap)"; fi
+          test -f self/runtime_core.c && echo "Stage-0 seed present ✓"
+
       - name: Stage 0 — compile self-hosted transpiler (hexa_v2)
         shell: bash
         run: |
@@ -180,6 +206,32 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Stage 0-pre — warm-bootstrap regen seed .c (fallback-safe)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # WARM_BOOTSTRAP.md Phase 3 — toward .hexa-only. If a prior edge hexa
+          # downloads, regenerate the runtime.c amalgamation seed .c from their
+          # *_emit.hexa SSOTs. FALLBACK-SAFE: any failure OR regen drift →
+          # restore the tracked .c (git checkout) so Stage-0 compiles the
+          # committed seed (current cold-bootstrap). No-op today (seed tracked);
+          # load-bearing after Phase 4 (.c gitignored).
+          ASSET="hexa-linux-x86_64.tar.gz"
+          if gh release download edge --pattern "$ASSET" --dir /tmp/prior 2>/dev/null \
+             && tar xzf "/tmp/prior/$ASSET" -C /tmp/prior 2>/dev/null; then
+            PH="$(find /tmp/prior -type f -name hexa | head -1)"
+            if [ -n "$PH" ] && "$PH" --version >/dev/null 2>&1; then
+              if "$PH" run tool/regen_native_runtime_c_includes.hexa; then
+                echo "warm: amalgamation seed .c regenerated + verified byte-identical"
+              else
+                echo "warm: regen drift/fail — restoring tracked .c"
+                git checkout -- self/runtime_core.c self/runtime_hi_gen.c self/native/*.c 2>/dev/null || true
+              fi
+            else echo "warm: prior hexa unusable — tracked .c fallback"; fi
+          else echo "warm: no prior edge hexa — tracked .c (cold-bootstrap)"; fi
+          test -f self/runtime_core.c && echo "Stage-0 seed present ✓"
+
       - name: Stage 0 — compile self-hosted transpiler (hexa_v2)
         shell: bash
         run: |
@@ -264,6 +316,32 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
+
+      - name: Stage 0-pre — warm-bootstrap regen seed .c (fallback-safe)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # WARM_BOOTSTRAP.md Phase 3 — toward .hexa-only. If a prior edge hexa
+          # downloads, regenerate the runtime.c amalgamation seed .c from their
+          # *_emit.hexa SSOTs. FALLBACK-SAFE: any failure OR regen drift →
+          # restore the tracked .c (git checkout) so Stage-0 compiles the
+          # committed seed (current cold-bootstrap). No-op today (seed tracked);
+          # load-bearing after Phase 4 (.c gitignored).
+          ASSET="hexa-linux-arm64.tar.gz"
+          if gh release download edge --pattern "$ASSET" --dir /tmp/prior 2>/dev/null \
+             && tar xzf "/tmp/prior/$ASSET" -C /tmp/prior 2>/dev/null; then
+            PH="$(find /tmp/prior -type f -name hexa | head -1)"
+            if [ -n "$PH" ] && "$PH" --version >/dev/null 2>&1; then
+              if "$PH" run tool/regen_native_runtime_c_includes.hexa; then
+                echo "warm: amalgamation seed .c regenerated + verified byte-identical"
+              else
+                echo "warm: regen drift/fail — restoring tracked .c"
+                git checkout -- self/runtime_core.c self/runtime_hi_gen.c self/native/*.c 2>/dev/null || true
+              fi
+            else echo "warm: prior hexa unusable — tracked .c fallback"; fi
+          else echo "warm: no prior edge hexa — tracked .c (cold-bootstrap)"; fi
+          test -f self/runtime_core.c && echo "Stage-0 seed present ✓"
 
       - name: Stage 0 — compile self-hosted transpiler (hexa_v2)
         shell: bash
