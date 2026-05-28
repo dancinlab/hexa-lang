@@ -917,6 +917,44 @@ fn _usd_cents(s: str) -> int {
     return dollars * 100 + cents
 }
 
+// _sweep_confirm_gone — robustness cross-check for an ASYNC teardown that
+// reported failure. vast's `destroy instance` is async: the destroy command
+// can be ACCEPTED (and the instance genuinely on its way out) while a tight
+// follow-up `show instance` STILL reports `running` for a few seconds — so
+// vast_destroy's own immediate cross-verify (vast.hexa `_vast_instance_still_live`)
+// returns ok=0 even though the destroy succeeded (the M2 LIVE-test false
+// negative). After such an ok=0, we poll the provider's LIVE id list a few
+// times: if the id has DROPPED OUT of the live set, the teardown is CONFIRMED
+// gone and the sweep may safely remove + count it.
+//
+// SAFETY: returns 1 (confirmed gone) ONLY when the provider list query
+// SUCCEEDED (ok == 1) AND the id is ABSENT. An unavailable / errored list
+// (ok == 0 → empty ids) is the honest "I can't see that provider" degrade and
+// must NEVER be read as "gone" — otherwise a transient CLI failure would
+// silently drop a still-billing pod from the registry. So a failed query keeps
+// the FAILED posture (return 0 → caller leaves the pod in the registry).
+fn _sweep_confirm_gone(provider: str, pod_id: str) -> int {
+    let mut attempt = 0
+    // 3 polls × ~4s settle each = up to ~12s for the async teardown to clear
+    // the live list, then give up (honest FAILED) rather than block forever.
+    while attempt < 3 {
+        let _settle = exec("sleep 4 2>/dev/null || sleep 1")
+        if provider == "vast" {
+            let vl = vast_list_instances()
+            if vl.ok == 1 && _recon_id_in(vl.instance_ids, pod_id) == 0 {
+                return 1
+            }
+        } else if provider == "runpod" {
+            let rl = runpod_list_pods()
+            if rl.ok == 1 && _recon_id_in(rl.pod_ids, pod_id) == 0 {
+                return 1
+            }
+        }
+        attempt = attempt + 1
+    }
+    return 0
+}
+
 // pod_registry_limit_sweep — M2/M3 enforcement. Scan the registry; for each
 // ALIVE pod that has OPTED IN to a limit (ttl_sec >= 0 or max_cost_usd set)
 // AND BREACHED it, tear the pod down (runpod_terminate / vast_destroy) +
@@ -970,6 +1008,21 @@ fn pod_registry_limit_sweep(api_key: str, dry_run: int) -> int {
                         } else if r.provider == "vast" {
                             let vi = vast_destroy(r.id)
                             if vi.ok == 1 {
+                                term_ok = 1
+                            }
+                        }
+                        // ASYNC false-negative guard: a teardown that reported
+                        // failure may still have SUCCEEDED (vast's destroy is
+                        // async — the instance lingers in `show instance` for a
+                        // few seconds, so vast_destroy's immediate cross-verify
+                        // returns ok=0). Before honoring the FAILED report, poll
+                        // the provider's live id list: if the id has dropped out,
+                        // the teardown is CONFIRMED gone. A failed/unavailable
+                        // list query stays FAILED (safe posture — never removes a
+                        // pod we cannot confirm gone).
+                        if term_ok == 0 {
+                            if _sweep_confirm_gone(r.provider, r.id) == 1 {
+                                eprintln("[cloud] watchdog: " + r.id + " teardown CONFIRMED gone on re-check (async settle) — removing")
                                 term_ok = 1
                             }
                         }
