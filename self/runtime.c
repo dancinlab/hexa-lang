@@ -148,9 +148,22 @@ extern int  hxlcl_kill(int pid, int sig);
 #else
 static int  hxlcl_kill(int pid, int sig);
 #endif
+// B9.6-C9/C10/C11 (F3 Path A) — under HEXA_RT_SELFEMIT hxlcl_lseek (3-arg _cf),
+// hxlcl_fcntl and hxlcl_ioctl (3-arg NON-_cf) are `extern` (resolved by the
+// hexa-emitted .o). lseek stores errno via a PC-relative adrp/str to the
+// hxlcl_errno SYMBOL (externally linkable under the guard — same as dup2/lseek
+// shares the dup2 reloc offsets). fcntl/ioctl have NO errno path → no reloc
+// (the 3-arg analogues of rt_kill). Forward decls flip to external linkage too,
+// else the `static` here masks the self-emit symbol (-Wundefined-internal).
+#ifdef HEXA_RT_SELFEMIT
+extern int  hxlcl_fcntl(int fd, int cmd, long arg);
+extern int  hxlcl_ioctl(int fd, unsigned long req, void *arg);
+extern long hxlcl_lseek(int fd, long off, int whence);
+#else
 static int  hxlcl_fcntl(int fd, int cmd, long arg);
 static int  hxlcl_ioctl(int fd, unsigned long req, void *arg);
 static long hxlcl_lseek(int fd, long off, int whence);
+#endif
 static int  hxlcl_select(int nfds, void *r, void *w, void *e, void *t);
 static int  hxlcl_poll(void *fds, unsigned int nfds, int timeout);
 static int  hxlcl_waitpid(int pid, int *status, int options);
@@ -1521,8 +1534,20 @@ extern int hxlcl_kill(int pid, int sig);
 #else
 static int __attribute__((noinline)) hxlcl_kill(int pid, int sig) { return (int)_hxlcl_syscall2(HXLCL_SYS_KILL, (long)pid, (long)sig); }
 #endif
+// B9.6-C10 (F3 Path A) — DEFAULT: file-local `static` 3-arg non-_cf svc-trap
+// (0-libc-extern preserved). HEXA_RT_SELFEMIT: `extern`, body supplied by the
+// self-emit .o (rt_fcntl's 20-byte `sxtw x0 / sxtw x1 / mov w16,#92 / svc / ret`,
+// the 3-arg analogue of rt_kill — no errno store → NO reloc).
+#ifndef HEXA_RT_SELFEMIT
 static int __attribute__((noinline)) hxlcl_fcntl(int fd, int cmd, long arg) { return (int)_hxlcl_syscall3(HXLCL_SYS_FCNTL, (long)fd, (long)cmd, arg); }
+#endif
+// B9.6-C11 (F3 Path A) — DEFAULT: file-local `static` 3-arg non-_cf svc-trap.
+// HEXA_RT_SELFEMIT: `extern`, body supplied by the self-emit .o (rt_ioctl's
+// 16-byte `sxtw x0 / mov w16,#54 / svc / ret` — only fd sign-extended, req/arg
+// already 64-bit, no errno store → NO reloc).
+#ifndef HEXA_RT_SELFEMIT
 static int __attribute__((noinline)) hxlcl_ioctl(int fd, unsigned long req, void *arg) { return (int)_hxlcl_syscall3(HXLCL_SYS_IOCTL, (long)fd, (long)req, (long)arg); }
+#endif
 // PR #426 follow-up — libc lseek (same Darwin arm64 carry-flag class as
 // open/read/write/close/dup2 in cycle-66 / #414). The raw `svc #0x80`
 // `_hxlcl_syscall3` cannot read the carry flag, so a failed lseek returns
@@ -1535,7 +1560,15 @@ static int __attribute__((noinline)) hxlcl_ioctl(int fd, unsigned long req, void
 // cycle 71 — lseek re-trapped via carry-flag-correct svc 0x80 (SYS_LSEEK=199).
 // A failed lseek now returns -1+errno instead of a positive errno that a
 // `< 0` sentinel test would mistake for a valid offset (PR #426 hazard).
+// B9.6-C9 (F3 Path A) — DEFAULT: file-local `static` 3-arg _cf svc-trap (carry-
+// flag-correct, 0-libc-extern preserved). HEXA_RT_SELFEMIT: `extern`, body
+// supplied by the self-emit .o (rt_lseek's 40-byte FIRST 3-arg _cf body: sxtw
+// x0/fd + sxtw x2/whence — the MIDDLE x1/off long left untouched — then the full
+// _cf errno tail with adrp/str to the externally-linkable hxlcl_errno symbol;
+// errno relocs at the rt_dup2 offsets 0x18/0x1c).
+#ifndef HEXA_RT_SELFEMIT
 static long __attribute__((noinline)) hxlcl_lseek(int fd, long off, int whence) { return _hxlcl_syscall3_cf(HXLCL_SYS_LSEEK, (long)fd, off, (long)whence); }
+#endif
 static int __attribute__((noinline)) hxlcl_select(int nfds, void *r, void *w, void *e, void *t) { return (int)_hxlcl_syscall6(HXLCL_SYS_SELECT, (long)nfds, (long)r, (long)w, (long)e, (long)t, 0); }
 static int __attribute__((noinline)) hxlcl_poll(void *fds, unsigned int nfds, int timeout) { return (int)_hxlcl_syscall3(HXLCL_SYS_POLL, (long)fds, (long)nfds, (long)timeout); }
 // cycle 66 — libc waitpid (wait4 syscall has 4 args + needs proper
