@@ -3060,6 +3060,119 @@ fn rt_getuid() {
     return c
 }
 
+// ── rt_geteuid (F3 wave 2 — class-C 0-arg cannot-fail svc-trap) ──────
+// geteuid(void) -> uid_t. Byte-for-byte rt_getuid clone except `mov w16,#25`
+// (SYS_GETEUID). 4-instr 16-byte body, no errno, no reloc — same single-symbol
+// macho wrap as rt_getuid. Verified by `as -arch arm64` + JIT-exec match libc.
+fn rt_geteuid() {
+    let mut c = []
+    // mov w16, #25  (SYS_GETEUID)    0x52800330
+    c.push(48)
+    c.push(3)
+    c.push(128)
+    c.push(82)
+    // mov x0, #0   (no syscall arg)  0xD2800000
+    c.push(0)
+    c.push(0)
+    c.push(128)
+    c.push(210)
+    // svc #0x80                      0xD4001001
+    c.push(1)
+    c.push(16)
+    c.push(0)
+    c.push(212)
+    // ret  (x0 = euid)               0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
+// ── rt_getegid (F3 wave 2 — class-C 0-arg cannot-fail svc-trap) ──────
+// getegid(void) -> gid_t. Byte-for-byte rt_getuid clone except `mov w16,#43`
+// (SYS_GETEGID). 4-instr 16-byte body, no errno, no reloc.
+fn rt_getegid() {
+    let mut c = []
+    // mov w16, #43  (SYS_GETEGID)    0x52800570
+    c.push(112)
+    c.push(5)
+    c.push(128)
+    c.push(82)
+    // mov x0, #0   (no syscall arg)  0xD2800000
+    c.push(0)
+    c.push(0)
+    c.push(128)
+    c.push(210)
+    // svc #0x80                      0xD4001001
+    c.push(1)
+    c.push(16)
+    c.push(0)
+    c.push(212)
+    // ret  (x0 = egid)               0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
+// ── rt_getgid (F3 wave 2 — class-C 0-arg cannot-fail svc-trap) ───────
+// getgid(void) -> gid_t. Byte-for-byte rt_getuid clone except `mov w16,#47`
+// (SYS_GETGID). 4-instr 16-byte body, no errno, no reloc.
+fn rt_getgid() {
+    let mut c = []
+    // mov w16, #47  (SYS_GETGID)     0x528005F0
+    c.push(240)
+    c.push(5)
+    c.push(128)
+    c.push(82)
+    // mov x0, #0   (no syscall arg)  0xD2800000
+    c.push(0)
+    c.push(0)
+    c.push(128)
+    c.push(210)
+    // svc #0x80                      0xD4001001
+    c.push(1)
+    c.push(16)
+    c.push(0)
+    c.push(212)
+    // ret  (x0 = gid)                0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
+// ── rt_getppid (F3 wave 2 — class-C 0-arg cannot-fail svc-trap) ──────
+// getppid(void) -> pid_t. Byte-for-byte rt_getuid clone except `mov w16,#39`
+// (SYS_GETPPID). 4-instr 16-byte body, no errno, no reloc.
+fn rt_getppid() {
+    let mut c = []
+    // mov w16, #39  (SYS_GETPPID)    0x528004F0
+    c.push(240)
+    c.push(4)
+    c.push(128)
+    c.push(82)
+    // mov x0, #0   (no syscall arg)  0xD2800000
+    c.push(0)
+    c.push(0)
+    c.push(128)
+    c.push(210)
+    // svc #0x80                      0xD4001001
+    c.push(1)
+    c.push(16)
+    c.push(0)
+    c.push(212)
+    // ret  (x0 = ppid)               0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
 // ── rt_dup2 (B9.6-C4 — class-C syscall · 2-arg _cf + errno) ──────────
 // dup2(int oldfd, int newfd) -> int. The FIRST 2-arg svc-_cf self-emit,
 // extending the rt_close 1-arg carry-flag template by ONE instruction (a
