@@ -2,12 +2,18 @@
 //
 // B9.6 / F3 class-D — FIRST struct-return (x0:x1 register-pair) self-emit.
 //
-// EMITS: a Mach-O .o exporting THREE strong external symbols whose bodies
+// EMITS: a Mach-O .o exporting SIX strong external symbols whose bodies
 // are the verbatim machine code for the runtime's universal HexaVal
 // constructors:
-//   _hexa_void  offset  0 — 12 B  hexa_void()  -> HexaVal{tag=TAG_VOID(4)}
-//   _hexa_int   offset 12 — 12 B  hexa_int(n)  -> HexaVal{tag=TAG_INT(0),.i=n}
-//   _hexa_bool  offset 24 — 12 B  hexa_bool(b) -> HexaVal{tag=TAG_BOOL(2),.b=b}
+//   _hexa_void       offset  0 — 12 B  hexa_void()  -> {tag=TAG_VOID(4)}
+//   _hexa_int        offset 12 — 12 B  hexa_int(n)  -> {tag=TAG_INT(0),.i=n}
+//   _hexa_bool       offset 24 — 12 B  hexa_bool(b) -> {tag=TAG_BOOL(2),.b=b}
+//   _hexa_float      offset 36 — 12 B  hexa_float(f)-> {tag=TAG_FLOAT(1),.f=f}
+//   _hexa_enum_str   offset 48 — 12 B  hexa_enum_str(s)  -> {tag=TAG_ENUM(11),.s=s}
+//   _hexa_enum_str_v offset 60 — 12 B  hexa_enum_str_v(d)-> {tag=TAG_ENUM(11),.s=d}
+//
+// (B9.6-D2 scale-out: _hexa_float/_hexa_enum_str/_hexa_enum_str_v added to the
+//  original #1858 _hexa_void/_hexa_int/_hexa_bool bundle — same multi-symbol .o.)
 //
 // Each returns a 16-byte aggregate by value. On AAPCS arm64 a ≤16-byte
 // aggregate is returned in the x0:x1 register PAIR (NRRP — no hidden x8
@@ -17,9 +23,12 @@
 //
 // ── ABI (verified vs clang -O2 -S of runtime_core.c ctors, assembled
 //    with `as -arch arm64`, byte-confirmed via otool) ──
-//   hexa_void : mov w0,#4 ; mov x1,#0 ; ret   (constant tag + zero value)
-//   hexa_int  : mov x1,x0 ; mov x0,#0 ; ret   (x1<-arg BEFORE x0<-tag)
-//   hexa_bool : mov w1,w0 ; mov w0,#2 ; ret   (w1<-arg BEFORE w0<-tag)
+//   hexa_void       : mov w0,#4 ; mov x1,#0  ; ret  (constant tag + zero value)
+//   hexa_int        : mov x1,x0 ; mov x0,#0  ; ret  (x1<-arg BEFORE x0<-tag)
+//   hexa_bool       : mov w1,w0 ; mov w0,#2  ; ret  (w1<-arg BEFORE w0<-tag)
+//   hexa_float      : fmov x1,d0; mov w0,#1  ; ret  (FP-arg d0->x1, raw bits)
+//   hexa_enum_str   : mov x1,x0 ; mov w0,#11 ; ret  (ptr-store, no malloc)
+//   hexa_enum_str_v : mov x1,x0 ; mov w0,#11 ; ret  (byte-identical to enum_str)
 //
 // ── HONESTY ──
 //   - closure = runs exact: a C driver calling these symbols (declared
@@ -68,6 +77,39 @@ fn rt_hexa_bool_bytes() -> [int] {
     // mov w0, #2   (tag = TAG_BOOL)   0x52800040
     c.push(64).push(0).push(128).push(82)
     // ret                             0xD65F03C0
+    c.push(192).push(3).push(95).push(214)
+    return c
+}
+// B9.6-D2 scale-out — 3 more struct-build ctors. Bytes character-identical
+// to self/codegen/runtime_arm64.hexa rt_hexa_float / rt_hexa_enum_str /
+// rt_hexa_enum_str_v.
+fn rt_hexa_float_bytes() -> [int] {
+    let mut c = []
+    // fmov x1, d0  (union half = raw f bits)  0x9E660001
+    c.push(1).push(0).push(102).push(158)
+    // mov w0, #1   (tag = TAG_FLOAT)          0x52800020
+    c.push(32).push(0).push(128).push(82)
+    // ret                                     0xD65F03C0
+    c.push(192).push(3).push(95).push(214)
+    return c
+}
+fn rt_hexa_enum_str_bytes() -> [int] {
+    let mut c = []
+    // mov x1, x0   (union half = display ptr) 0xAA0003E1
+    c.push(225).push(3).push(0).push(170)
+    // mov w0, #11  (tag = TAG_ENUM)           0x52800160
+    c.push(96).push(1).push(128).push(82)
+    // ret                                     0xD65F03C0
+    c.push(192).push(3).push(95).push(214)
+    return c
+}
+fn rt_hexa_enum_str_v_bytes() -> [int] {
+    let mut c = []
+    // mov x1, x0   (union half = desc ptr)    0xAA0003E1 (byte-identical to enum_str)
+    c.push(225).push(3).push(0).push(170)
+    // mov w0, #11  (tag = TAG_ENUM)           0x52800160
+    c.push(96).push(1).push(128).push(82)
+    // ret                                     0xD65F03C0
     c.push(192).push(3).push(95).push(214)
     return c
 }
@@ -280,18 +322,22 @@ fn macho_obj_wrap_v3(code: [int],
 
 // ─── driver ───────────────────────────────────────────────────────
 fn main() {
-    println("[wire] B9.6/F3 class-D · HexaVal struct-return ctors — _hexa_void/_hexa_int/_hexa_bool")
+    println("[wire] B9.6/F3 class-D · HexaVal struct-return ctors — void/int/bool/float/enum_str/enum_str_v")
 
     let hvoid = rt_hexa_void_bytes()
     let hint  = rt_hexa_int_bytes()
     let hbool = rt_hexa_bool_bytes()
-    if len(hvoid) != 12 || len(hint) != 12 || len(hbool) != 12 {
+    let hfloat = rt_hexa_float_bytes()
+    let henum  = rt_hexa_enum_str_bytes()
+    let henumv = rt_hexa_enum_str_v_bytes()
+    if len(hvoid) != 12 || len(hint) != 12 || len(hbool) != 12
+       || len(hfloat) != 12 || len(henum) != 12 || len(henumv) != 12 {
         println("FAIL: each ctor must be 12 bytes")
         return
     }
-    println("  ctor bytes     : void=12 int=12 bool=12 OK")
+    println("  ctor bytes     : void=12 int=12 bool=12 float=12 enum_str=12 enum_str_v=12 OK")
 
-    // Concatenate: void(0) · int(12) · bool(24).
+    // Concatenate: void(0) · int(12) · bool(24) · float(36) · enum_str(48) · enum_str_v(60).
     let mut code = []
     let mut a = 0
     while a < len(hvoid) { code.push(hvoid[a]); a = a + 1 }
@@ -299,7 +345,13 @@ fn main() {
     while b < len(hint)  { code.push(hint[b]);  b = b + 1 }
     let mut d = 0
     while d < len(hbool) { code.push(hbool[d]); d = d + 1 }
-    println("  total code     : " + to_string(len(code)) + " (36 expected)")
+    let mut e = 0
+    while e < len(hfloat) { code.push(hfloat[e]); e = e + 1 }
+    let mut g = 0
+    while g < len(henum) { code.push(henum[g]); g = g + 1 }
+    let mut h = 0
+    while h < len(henumv) { code.push(henumv[h]); h = h + 1 }
+    println("  total code     : " + to_string(len(code)) + " (72 expected)")
 
     // Symbol name bytes (NUL-terminated):
     //   "_hexa_void\0" = 95 104 101 120 97 95 118 111 105 100 0   (11 bytes)
@@ -311,13 +363,23 @@ fn main() {
     name_int.push(95).push(104).push(101).push(120).push(97).push(95).push(105).push(110).push(116).push(0)
     let mut name_bool = []
     name_bool.push(95).push(104).push(101).push(120).push(97).push(95).push(98).push(111).push(111).push(108).push(0)
+    // B9.6-D2 scale-out symbol names (NUL-terminated):
+    //   "_hexa_float\0"      (12 bytes)
+    //   "_hexa_enum_str\0"   (15 bytes)
+    //   "_hexa_enum_str_v\0" (17 bytes)
+    let mut name_float = []
+    name_float.push(95).push(104).push(101).push(120).push(97).push(95).push(102).push(108).push(111).push(97).push(116).push(0)
+    let mut name_enum = []
+    name_enum.push(95).push(104).push(101).push(120).push(97).push(95).push(101).push(110).push(117).push(109).push(95).push(115).push(116).push(114).push(0)
+    let mut name_enumv = []
+    name_enumv.push(95).push(104).push(101).push(120).push(97).push(95).push(101).push(110).push(117).push(109).push(95).push(115).push(116).push(114).push(95).push(118).push(0)
 
     let mut sym_name_bytes = []
-    sym_name_bytes.push(name_void).push(name_int).push(name_bool)
+    sym_name_bytes.push(name_void).push(name_int).push(name_bool).push(name_float).push(name_enum).push(name_enumv)
     let mut sym_offsets = []
-    sym_offsets.push(0).push(12).push(24)
+    sym_offsets.push(0).push(12).push(24).push(36).push(48).push(60)
     let mut sym_sections = []
-    sym_sections.push(1).push(1).push(1)
+    sym_sections.push(1).push(1).push(1).push(1).push(1).push(1)
 
     let state_bytes   = []
     let reloc_offs    = []

@@ -215,7 +215,7 @@ mission 의 핵심 통찰("source-SHA 동치 ⇒ regen-before-scp 가 GPU 재검
 |------|------|---------|
 | **F1** perf-floor (hxflash/hxlayer/hxvdsp) | 🔴 **TERMINAL** | 측정 285x ML 회귀 → irreducible perf-floor (`F1-perf-floor.txt`) |
 | **F2** vendor/OS-ABI FFI (19 layer-③) | 🔴 **TERMINAL** | audit #1809 — 순수 로직 0, ABI 경계 (`F2-vendor-ffi.txt`) |
-| **F3** runtime-core (640/548 fn · self-emit 23/640 shadow · **15 ACTIVATED** = memset+11 leaf + 3 HexaVal ctor · class-A reloc + class-D struct-return 경로 PROVEN) | 🟠 **LIVE FRONTIER** | genuinely-portable · Path-A 템플릿 스케일아웃 → reloc-free leaf 12 LIVE-주입 (HEXA_RT_SELFEMIT 가드 · default 0-extern 보존 byte-identical) · 4 SKIP (C 대상 부재) · class-A reloc 인프라 COMPLETE+PROVEN (arena adrp+add link+run rc=0 · 실 blocker=per-primitive PORT) · **class-D FIRST INCREMENT LANDED** = struct-return EMITTER 생김(x0:x1 페어 · `rt_hexa_void/int/bool` 3-instr 12-B) + 분할-1 생성자 3 ACTIVATED (3-layer: interp+byte-eq-as+JIT-exec correct · dual-build 3-mode PASS) → no-go 이유(1) 해소 · 분할-1 잔여 ~10-17 ctor 템플릿 열림 · 잔여 no-go(2)매크로 경로B (3)rt#38 coupling · class-D(~350-450 fn HARD-본체) = struct-repr(NaN-box 아님) · HARD-phase ~620 fn expert serial |
+| **F3** runtime-core (640/548 fn · self-emit 26/640 shadow · **18 ACTIVATED** = memset+11 leaf + 6 HexaVal ctor · class-A reloc + class-D struct-return 경로 PROVEN) | 🟠 **LIVE FRONTIER** | genuinely-portable · Path-A 템플릿 스케일아웃 → reloc-free leaf 12 LIVE-주입 (HEXA_RT_SELFEMIT 가드 · default 0-extern 보존 byte-identical) · 4 SKIP (C 대상 부재) · class-A reloc 인프라 COMPLETE+PROVEN (arena adrp+add link+run rc=0 · 실 blocker=per-primitive PORT) · **class-D struct-build 서브트랙 SCALE-OUT** = struct-return EMITTER (x0:x1 페어) + 분할-1 생성자 **6 ACTIVATED** (#1858 `rt_hexa_void/int/bool` + B9.6-D2 `rt_hexa_float/enum_str/enum_str_v` · 각 3-instr 12-B · float = FIRST FP-arg `fmov x1,d0` 브리지 · enum_str = ptr-store no-malloc) — 3-layer (interp+byte-eq-as+JIT-exec correct · float NaN/Inf/±0/DBL_MAX·MIN + NULL/literal ptr) · dual-build 3-mode PASS → no-go 이유(1) 해소 · 분할-1 잔여 ~6-11 ctor 동일 템플릿 열림 · 잔여 no-go(2)매크로 경로B (3)rt#38 coupling · class-D(~350-450 fn HARD-본체) = struct-repr(NaN-box 아님) · HARD-phase ~620 fn expert serial |
 | **F4** sha256 (exec_argv_sha256.c) | 🟢 **RESOLVED→F3** | runtime.c `#include` 조각 · 포팅 타깃 FIPS-검증 (`F4-sha256.txt`) |
 | **F5** boot-asm (3 `.s`) | 🔴 **TERMINAL** | audit #1810 — vector-table 데이터 섹션, RFC 063/064 gated (`F5-boot-asm.txt`) |
 | **F6** bootstrap seed (hexa_cc.c) | 🔴 **TERMINAL** | irreducible bootstrap FLOOR (B9.8) |
@@ -755,6 +755,34 @@ runtime.c 조각이라 F3 로 fold (mis-split 해소). **F3 만이 진짜 open**
       스케일아웃 가능 (인프라 green). 즉 **class-D 의 struct-build 서브트랙은 단일-increment no-go → 템플릿
       열림** 으로 전환. .c count 불변(87) — 가드 off default 가 SSOT, runtime.c 의 eventual git-rm 을 향한
       FLOOR 인프라 (per-file drop 아님).
+
+    **✅✅✅✅ B9.6-D2 — class-D struct-build SCALE-OUT (2026-05-28 · #1858 템플릿 스케일아웃 · #PR)**:
+    #1858 의 struct-return EMITTER 인프라 위로 **분할-1 의 3 생성자 추가 ACTIVATED** (struct-build,
+    no-alloc 총 **6/6** = `hexa_void/int/bool` + `hexa_float/enum_str/enum_str_v`). class-D struct-build
+    카탈로그 진척 = **6/~17** (분할-1 의 named-external no-alloc ctor 모두 소진).
+    - **신규 emitter 3** (`self/codegen/runtime_arm64.hexa`, 각 3-instr 12-B leaf):
+      `rt_hexa_float` (`fmov x1,d0 · mov w0,#1 · ret`) — **첫 FP-arg leaf**: `fmov x1,d0`(0x9E660001)
+      가 d0 의 raw double 비트를 변환 없이 x1 로 복사 (`.f` union half). 이전 5 ctor 전부 GP-only,
+      이것이 self-emit 카탈로그의 **첫 FP→GP 레지스터 브리지**. ·
+      `rt_hexa_enum_str` (`mov x1,x0 · mov w0,#11 · ret`) — TAG_ENUM(11) 포인터-스토어, malloc 無
+      (caller-owned read-only literal 포인터 verbatim 저장 = no-free 계약). ·
+      `rt_hexa_enum_str_v` (동일 바이트 · `HexaEnumDesc*` 타입만 상이) — descriptor 포인터 스토어.
+    - **ABI 검증 3-layer (JIT-exec 게이트 load-bearing)**: ① interp self-test — 6 ctor 모두 size/align/
+      RET ALL CHECKS PASS. ② **byte-identical to `as -arch arm64`** — 6-symbol `.o` 의 72-B `__text` 가
+      어셈블러 출력과 바이트 동일 (`9e660001 52800020 d65f03c0` float · `aa0003e1 52800160 d65f03c0`
+      enum). ③ **JIT-exec correctness** — 6-symbol `.o` 를 실 C 드라이버에 링크 → float = 12 edge
+      값(0.0·-0.0·π·±Inf·NaN·DBL_MAX·DBL_MIN)에서 raw-bit 정확 · enum_str/enum_str_v = tag=11 +
+      포인터(NULL/literal) verbatim. **fmov-브리지 + x0:x1 struct-return ABI 가 런타임에서 정확함 증명**.
+    - **Path-A 활성화 (dual-build 3-mode PASS · #1858 패턴)**: `runtime_core.c` 의 3 ctor 를
+      `#ifdef HEXA_RT_SELFEMIT extern / #else 본체 #endif` 가드로 감쌈. emit 드라이버
+      (`emit_hexa_val_ctors_o.hexa`)를 6-symbol 로 확장(단일 `.o` 유지). **3-mode 실측**: (a) default
+      = 6 ctor 모두 DEFINED(T) · **0-extern 불변 (HEAD 와 nm -u 동일 + 오브젝트 byte-size 508200 동일)**,
+      (b) 가드 on + `.o` = JIT-EXEC PASS(6 ctor), (c) 가드 on **without** `.o` = 6 심볼 모두
+      undefined-symbol link-fail (extern 진짜임 증명).
+    - **잔여**: 분할-1 의 잔여 = `hexa_str`/`hexa_array_*`/`valstruct_*` 류는 모두 malloc/deref 결합
+      (분할-3 alloc-coupled · class-B/E) → struct-build no-alloc named-external ctor 은 사실상 소진.
+      class-D 의 다음 frontier = (분할-2) 접근자 매크로 경로 B 또는 (분할-3) alloc-coupled · 또는
+      rt#38 NaN-box 선평가. .c count 불변(87).
 
 ### F4 — sha256 entangled
 

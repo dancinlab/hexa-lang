@@ -1302,14 +1302,25 @@ static inline HexaVal hexa_call4(HexaVal f, HexaVal a1, HexaVal a2, HexaVal a3, 
 // JIT-exec-correct (the returned {tag,value} reads back correct for all
 // inputs incl. INT64_MIN/MAX, bool 0/1; see the emit driver's §HONESTY).
 //
-// hexa_float stays C for now — its struct high half comes from a `fmov x1,d0`
-// (FP-arg) path, a separate self-emit increment.
+// B9.6-D2 scale-out: hexa_float / hexa_enum_str / hexa_enum_str_v JOIN the
+// self-emit set (see runtime_arm64.hexa rt_hexa_float / rt_hexa_enum_str /
+// rt_hexa_enum_str_v + the extended emit_hexa_val_ctors_o.hexa bundle).
+//   hexa_float      : fmov x1,d0 / mov w0,#1  / ret  (FP-arg d0 -> x1 raw bits)
+//   hexa_enum_str   : mov x1,x0  / mov w0,#11 / ret  (ptr stored verbatim, no malloc)
+//   hexa_enum_str_v : mov x1,x0  / mov w0,#11 / ret  (byte-identical to enum_str)
+// Each is JIT-exec verified (returned {tag,value} correct for all inputs incl.
+// float NaN/Inf/±0/DBL_MAX/MIN + NULL/literal pointers) — the x0:x1 (and
+// fmov-bridged x1) struct-return ABI is correct at runtime, not just byte-equal.
 #ifdef HEXA_RT_SELFEMIT
 extern HexaVal hexa_int(int64_t n);
 #else
 HexaVal hexa_int(int64_t n) { return (HexaVal){.tag=TAG_INT, .i=n}; }
 #endif
+#ifdef HEXA_RT_SELFEMIT
+extern HexaVal hexa_float(double f);
+#else
 HexaVal hexa_float(double f) { return (HexaVal){.tag=TAG_FLOAT, .f=f}; }
+#endif
 #ifdef HEXA_RT_SELFEMIT
 extern HexaVal hexa_bool(int b);
 #else
@@ -1330,7 +1341,11 @@ HexaVal hexa_void() { return (HexaVal){.tag=TAG_VOID}; }
 // PR-2.2 will widen the codegen gate to all unit-variant enums; PR-3 will
 // switch the renderer to the `__enum_<Name>_names[]` table (#555) once the
 // per-variant (type_id, variant_idx) carrier lands.
+#ifdef HEXA_RT_SELFEMIT
+extern HexaVal hexa_enum_str(const char* display);
+#else
 HexaVal hexa_enum_str(const char* display) { return (HexaVal){.tag=TAG_ENUM, .s=(char*)display}; }
+#endif
 
 // PROBE r14-TTTT (enum-ordering RFC, 2026-05-24): TAG_ENUM descriptor — codegen
 // emits one static const HexaEnumDesc per variant, and the `#define <Name>_<V>`
@@ -1353,9 +1368,13 @@ typedef struct HexaEnumDesc {
     const char* type_name;   // "<Type>" (display prefix, no "::") — same-enum gate
 } HexaEnumDesc;
 
+#ifdef HEXA_RT_SELFEMIT
+extern HexaVal hexa_enum_str_v(const HexaEnumDesc* desc);
+#else
 HexaVal hexa_enum_str_v(const HexaEnumDesc* desc) {
     return (HexaVal){.tag=TAG_ENUM, .s=(char*)desc};
 }
+#endif
 
 // Internal helpers. Descriptor pointers begin with HEXA_ENUM_DESC_MAGIC (a
 // 4-byte sentinel). Legacy bare-string pointers begin with a printable ASCII

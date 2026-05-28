@@ -441,15 +441,17 @@ fn _do_build(repo_root: string) {
 
             // ── B9.6 class-D — HexaVal struct-return ctor bundle (x0:x1 pair).
             //
-            // The FIRST struct-return self-emit (vs the single-x0 leaves above):
-            // a MULTI-symbol .o exporting _hexa_void / _hexa_int / _hexa_bool —
-            // the runtime's universal HexaVal constructors. Under -DHEXA_RT_SELFEMIT
-            // runtime_core.c declares these three `extern` (no body), and ld64
-            // binds every HexaVal-producing callsite to the self-emit .o.
-            // Verified byte-identical to `as -arch arm64` AND JIT-exec-correct
-            // (returned {tag,value} reads back correct incl. INT64_MIN/MAX).
+            // The struct-return self-emit set (vs the single-x0 leaves above):
+            // a MULTI-symbol .o exporting the runtime's universal HexaVal ctors —
+            // _hexa_void / _hexa_int / _hexa_bool (#1858) + _hexa_float /
+            // _hexa_enum_str / _hexa_enum_str_v (B9.6-D2 scale-out). Under
+            // -DHEXA_RT_SELFEMIT runtime_core.c declares all six `extern` (no
+            // body), and ld64 binds every HexaVal-producing callsite to the
+            // self-emit .o. Verified byte-identical to `as -arch arm64` AND
+            // JIT-exec-correct (returned {tag,value} reads back correct incl.
+            // INT64_MIN/MAX, float NaN/Inf/±0/DBL_MAX/MIN, NULL/literal ptrs).
             // Single emitter, single multi-symbol .o, distinct env var.
-            println("[selfemit] B9.6 class-D · HexaVal struct-return ctors → _hexa_void/_hexa_int/_hexa_bool")
+            println("[selfemit] B9.6 class-D · HexaVal struct-return ctors → void/int/bool/float/enum_str/enum_str_v")
             let ctors_emit_hexa = repo_root + "/test/native_build/emit_hexa_val_ctors_o.hexa"
             _must_exist(ctors_emit_hexa, "emit_hexa_val_ctors_o.hexa (B9.6 class-D emit driver)")
             let ctors_emit_drv = repo_root + "/build/selfemit/emit_hexa_val_ctors"

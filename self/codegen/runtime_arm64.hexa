@@ -2649,6 +2649,96 @@ fn rt_hexa_bool() {
     return c
 }
 
+// ── rt_hexa_float (B9.6-D2 scale-out) ────────────────────────
+// hexa_float(double f) -> HexaVal{tag=TAG_FLOAT(1), .f=f}. The double
+// arg arrives in d0 (FP register, AAPCS NGRN/NSRN); the result needs
+// tag(=1) in x0 and the raw 64-bit double bit-pattern in x1.
+//   clang -O2 -S:  fmov x1, d0 ; mov w0, #1 ; ret
+//   x1 = bitcast<int64>(f) (union half = .f) · x0 = 1 (TAG_FLOAT)
+// FIRST self-emit leaf to read an FP arg — the `fmov x1, d0` GP<-FP
+// move (0x9E660001) is the only new instruction vs the int ctors;
+// it copies the d0 double bits verbatim into x1 (no conversion).
+// Order matters: x1<-d0 BEFORE x0<-#1 (x0 untouched by fmov, but the
+// clang ordering is preserved for byte-identity).
+// 3 instructions, 12 bytes.
+fn rt_hexa_float() {
+    let mut c = []
+    // fmov x1, d0  (union half = raw f bits)  0x9E660001
+    c.push(1)
+    c.push(0)
+    c.push(102)
+    c.push(158)
+    // mov w0, #1   (tag = TAG_FLOAT)          0x52800020
+    c.push(32)
+    c.push(0)
+    c.push(128)
+    c.push(82)
+    // ret                                     0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
+// ── rt_hexa_enum_str (B9.6-D2 scale-out) ─────────────────────
+// hexa_enum_str(const char* display) -> HexaVal{tag=TAG_ENUM(11),
+// .s=display}. The pointer arg arrives in x0; the result needs
+// tag(=11) in x0 and the pointer verbatim in x1. NO malloc — the
+// caller-owned read-only literal pointer is stored as-is (matches the
+// runtime no-free contract). Same shape as rt_hexa_int, tag=11 vs 0.
+//   clang -O2 -S:  mov x1, x0 ; mov w0, #11 ; ret
+//   x1 = display (union half = .s) · x0 = 11 (TAG_ENUM)
+// Order matters: x1<-x0 BEFORE x0<-#11 (else the arg is clobbered).
+// 3 instructions, 12 bytes.
+fn rt_hexa_enum_str() {
+    let mut c = []
+    // mov x1, x0   (union half = display ptr) 0xAA0003E1
+    c.push(225)
+    c.push(3)
+    c.push(0)
+    c.push(170)
+    // mov w0, #11  (tag = TAG_ENUM)           0x52800160
+    c.push(96)
+    c.push(1)
+    c.push(128)
+    c.push(82)
+    // ret                                     0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
+// ── rt_hexa_enum_str_v (B9.6-D2 scale-out) ───────────────────
+// hexa_enum_str_v(const HexaEnumDesc* desc) -> HexaVal{tag=TAG_ENUM(11),
+// .s=(char*)desc}. The descriptor-pointer arg arrives in x0; identical
+// machine code to rt_hexa_enum_str (a pointer-store ctor — the C type
+// differs, the ABI is byte-identical). NO malloc.
+//   clang -O2 -S:  mov x1, x0 ; mov w0, #11 ; ret
+//   x1 = desc (union half = .s) · x0 = 11 (TAG_ENUM)
+// 3 instructions, 12 bytes — byte-identical to rt_hexa_enum_str.
+fn rt_hexa_enum_str_v() {
+    let mut c = []
+    // mov x1, x0   (union half = desc ptr)    0xAA0003E1
+    c.push(225)
+    c.push(3)
+    c.push(0)
+    c.push(170)
+    // mov w0, #11  (tag = TAG_ENUM)           0x52800160
+    c.push(96)
+    c.push(1)
+    c.push(128)
+    c.push(82)
+    // ret                                     0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
 // ── self-test ────────────────────────────────────────────────
 
 fn test_runtime_arm64() {
@@ -2682,6 +2772,10 @@ fn test_runtime_arm64() {
     let hvoid = rt_hexa_void()
     let hint = rt_hexa_int()
     let hbool = rt_hexa_bool()
+    // B9.6-D2 scale-out — 3 more struct-build ctors (FP-arg + enum ptr).
+    let hfloat = rt_hexa_float()
+    let henum = rt_hexa_enum_str()
+    let henumv = rt_hexa_enum_str_v()
 
     println("runtime_arm64 — ARM64 machine code byte arrays")
     println("  rt_exit          : " + to_string(len(exit_bytes)) + " bytes")
@@ -2713,6 +2807,9 @@ fn test_runtime_arm64() {
     println("  rt_hexa_void     : " + to_string(len(hvoid)) + " bytes")
     println("  rt_hexa_int      : " + to_string(len(hint)) + " bytes")
     println("  rt_hexa_bool     : " + to_string(len(hbool)) + " bytes")
+    println("  rt_hexa_float    : " + to_string(len(hfloat)) + " bytes")
+    println("  rt_hexa_enum_str : " + to_string(len(henum)) + " bytes")
+    println("  rt_hexa_enum_str_v: " + to_string(len(henumv)) + " bytes")
 
     // Verify sizes match expected instruction counts * 4
     let mut ok = true
@@ -2781,6 +2878,13 @@ fn test_runtime_arm64() {
     if len(hvoid) != 12 { println("  FAIL: rt_hexa_void expected 12, got " + to_string(len(hvoid))); ok = false }
     if len(hint) != 12 { println("  FAIL: rt_hexa_int expected 12, got " + to_string(len(hint))); ok = false }
     if len(hbool) != 12 { println("  FAIL: rt_hexa_bool expected 12, got " + to_string(len(hbool))); ok = false }
+    // B9.6-D2 scale-out — each is a 3-instr 12 B x0:x1 leaf:
+    //   rt_hexa_float      fmov x1,d0 / mov w0,#1  / ret  (tag=TAG_FLOAT, val=d0 bits)
+    //   rt_hexa_enum_str   mov x1,x0  / mov w0,#11 / ret  (tag=TAG_ENUM,  val=ptr)
+    //   rt_hexa_enum_str_v mov x1,x0  / mov w0,#11 / ret  (byte-identical to enum_str)
+    if len(hfloat) != 12 { println("  FAIL: rt_hexa_float expected 12, got " + to_string(len(hfloat))); ok = false }
+    if len(henum) != 12 { println("  FAIL: rt_hexa_enum_str expected 12, got " + to_string(len(henum))); ok = false }
+    if len(henumv) != 12 { println("  FAIL: rt_hexa_enum_str_v expected 12, got " + to_string(len(henumv))); ok = false }
 
     // Verify all sizes are multiples of 4 (ARM64 fixed-width)
     if len(exit_bytes) % 4 != 0 { println("  FAIL: rt_exit not aligned"); ok = false }
@@ -2812,6 +2916,16 @@ fn test_runtime_arm64() {
     if len(hvoid) % 4 != 0 { println("  FAIL: rt_hexa_void not aligned"); ok = false }
     if len(hint) % 4 != 0 { println("  FAIL: rt_hexa_int not aligned"); ok = false }
     if len(hbool) % 4 != 0 { println("  FAIL: rt_hexa_bool not aligned"); ok = false }
+    if len(hfloat) % 4 != 0 { println("  FAIL: rt_hexa_float not aligned"); ok = false }
+    if len(henum) % 4 != 0 { println("  FAIL: rt_hexa_enum_str not aligned"); ok = false }
+    if len(henumv) % 4 != 0 { println("  FAIL: rt_hexa_enum_str_v not aligned"); ok = false }
+    // B9.6-D2 — all three end with ret (192,3,95,214).
+    let nhf = len(hfloat)
+    if hfloat[nhf - 4] != 192 { println("  FAIL: rt_hexa_float no RET"); ok = false }
+    let nhe = len(henum)
+    if henum[nhe - 4] != 192 { println("  FAIL: rt_hexa_enum_str no RET"); ok = false }
+    let nhev = len(henumv)
+    if henumv[nhev - 4] != 192 { println("  FAIL: rt_hexa_enum_str_v no RET"); ok = false }
 
     // Verify RET trailer: last 4 bytes = 192, 3, 95, 214 (0xD65F03C0)
     // (except rt_exit which ends with svc)
