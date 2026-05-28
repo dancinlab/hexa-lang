@@ -1208,6 +1208,7 @@ fn main() {
     let ok_fp8a  = _test_f8_e4m3_load_store()
     let ok_fp8b  = _test_f8_e5m2_load_store()
     let ok_i64c  = _test_to_i64_and_int_cmp()
+    let ok_tof64 = _test_to_f64()
     let ok_mwc   = _test_mixed_width_cmp()
     let ok_iadd  = _test_iadd_i64_array()
     let ok_mm    = _test_matmul_emit()
@@ -1221,7 +1222,7 @@ fn main() {
 
     println("")
     println("══════════════════════════════════════════════")
-    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_shuff64 && ok_shufm64 && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_mwc && ok_iadd && ok_mm && ok_mta && ok_mtb && ok_tma && ok_tmae && ok_mf32 && ok_mf64 && ok_minh {
+    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_shuff64 && ok_shufm64 && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_tof64 && ok_mwc && ok_iadd && ok_mm && ok_mta && ok_mtb && ok_tma && ok_tmae && ok_mf32 && ok_mf64 && ok_minh {
         println("PASS: RFC 055 + RFC 067 + RFC 068 P1/P2/P3/P4-codegen + RFC 068 §3 fp8 scaffold + RFC 069 + RFC 071 P3+/P5+ + N71-B FP64 warp-shuffle (+u64 mask narrow) + N73 mixed-width int setp (u32<u64 widen) + RFC 067 N202 TMA scaffold + RFC 067 N206 TMA matmul emit + RFC 055 §13 math intrinsics (sqrt/max/min/exp/abs/rsqrt) + PR-A [i64] kernel int-bank — 40/40 cases (incl. matmul + matmul_NT_a + matmul_NT_b + FP64 warp-shuffle composition + mixed-width cmp widen + TMA codegen scaffold + TMA matmul emit + math f32/f64/inherit + [i64] iadd int-bank)")
     } else {
         println("FAIL: RFC 055 smoke not satisfied.")
@@ -1255,6 +1256,7 @@ fn main() {
         if !ok_fp8a { println("      RFC 068 §3 fp8 e4m3 scaffold FAILED") }
         if !ok_fp8b { println("      RFC 068 §3 fp8 e5m2 scaffold FAILED") }
         if !ok_i64c { println("      RFC 071 P3+ to_i64 + int cmp + br_cond FAILED") }
+        if !ok_tof64 { println("      RFC 071 P3+ to_f64 thread-derived cast FAILED") }
         if !ok_mwc  { println("      N73 mixed-width int setp (u32<u64 widen) FAILED") }
         if !ok_iadd { println("      PR-A [i64] iadd int-bank classification FAILED") }
         if !ok_mm   { println("      RFC 071 P5+ matmul codegen FAILED") }
@@ -1267,7 +1269,7 @@ fn main() {
         if !ok_minh { println("      RFC 055 §13 math operand-kind inheritance FAILED") }
     }
     println("══════════════════════════════════════════════")
-    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_shuff64 && ok_shufm64 && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_mwc && ok_iadd && ok_mm && ok_mta && ok_mtb && ok_tma && ok_tmae && ok_mf32 && ok_mf64 && ok_minh) { exit(1) }
+    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_shuff64 && ok_shufm64 && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_tof64 && ok_mwc && ok_iadd && ok_mm && ok_mta && ok_mtb && ok_tma && ok_tmae && ok_mf32 && ok_mf64 && ok_minh) { exit(1) }
 }
 
 // ── Case 9 — 055-P4 gpu_warp_shuffle(v, lane) intrinsic ───────────────
@@ -3629,6 +3631,78 @@ fn _test_to_i64_and_int_cmp() -> bool {
         ok = false
     } else {
         println("  ok: no `unsupported binop: lt|<` marker (gap 2 closed)")
+    }
+    return ok
+}
+
+// ── Case 28c — to_f64(thread-derived i64) float-cast (GPU R11 RoPE gap) ──
+//
+// RoPE `θ = pos / base^(2*tid/D)` lowers `to_f64(tid)` where tid is a
+// thread-derived i64 (gpu_thread_id_x → u32 → to_i64 → u64). The GPU
+// cycle-loop Round 11 fire found these emitted `// unsupported call:
+// to_f64` and produced garbage (first-fail @ pair 8). This case proves the
+// lowering arm + classifier now emit `cvt.rn.f64.s64 %fd<d>, %rd<s>` for
+// the U64→F64 cast (mirror of Case 28's to_i64 U32→U64 widen).
+//   gid32 = gpu_thread_id_x()    // STMT_CALL → U32 %r0
+//   gid64 = to_i64(gid32)        // STMT_CALL → U64 %rd1
+//   gidf  = to_f64(gid64)        // STMT_CALL → F64 %fd2   ← the new arm
+fn _build_case_to_f64() -> MModule {
+    let gid32 = _local(0, "gid32")
+    let gid64 = _local(1, "gid64")
+    let gidf  = _local(2, "gidf")
+
+    let mut i64_args = []
+    i64_args.push(_op_local(gid32.id))
+    let mut f64_args = []
+    f64_args.push(_op_local(gid64.id))
+
+    let mut s0 = []
+    s0.push(_stmt_call(gid32, "gpu_thread_id_x"))
+    s0.push(_stmt_call_with_args(gid64, "to_i64", i64_args))
+    s0.push(_stmt_call_with_args(gidf, "to_f64", f64_args))
+    s0.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+    let mut locals = []
+    locals.push(gid32); locals.push(gid64); locals.push(gidf)
+
+    let mf = MFunc {
+        name: "to_f64_smoke",
+        params: [],
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_to_f64.hexa", funcs: fns, globals: [] }
+}
+
+fn _test_to_f64() -> bool {
+    let mut ok = true
+    let mod_in = _build_case_to_f64()
+    let ptx = codegen_emit_ptx_sm80(mod_in)
+
+    println("")
+    println("── emitted PTX (RFC 071 P3+ to_f64 thread-derived cast, sm_80) ──")
+    println(ptx)
+
+    // dst gidf must declare in the F64 bank (%fd2) and the body must emit
+    // `cvt.rn.f64.s64 %fd2, %rd1;` (U64 → F64 round-to-nearest).
+    ok = _check(ok, ptx, ".reg .f64 %fd2",          "to_f64 dst classified F64 (%fd2)")
+    ok = _check(ok, ptx, "cvt.rn.f64.s64 %fd2, %rd1", "cvt.rn.f64.s64 emitted for to_f64(u64)")
+
+    // Negative guard — the GPU R11 RoPE failure marker must be gone.
+    if _contains(ptx, "unsupported call: to_f64") {
+        println("  FAIL: `unsupported call: to_f64` marker still present")
+        ok = false
+    } else {
+        println("  ok: no `unsupported call: to_f64` marker (R11 RoPE gap closed)")
     }
     return ok
 }
