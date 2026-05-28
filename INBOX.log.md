@@ -1,5 +1,25 @@
 # INBOX — log
 
+## 2026-05-29 — 🔴 BLOCKER · `build/hexat_linux` 가 대형 emit.hexa transpile 시 SEGFAULT (rc=139) — generated C 산출 불가
+
+> anima BC-ANIMA M5 (트레이너 CPU→GPU step-rate 실측) fire 의 **유일 남은 blocker**. pod-side 빌드에 필요한 generated C 파일을 emit 하려다 self-host transpiler 바이너리가 segfault. anima 측 코드·recipe·진단은 100% 완비, 이 컴파일러 버그만 풀리면 검증된 recipe 로 측정 완주 가능.
+
+**증상**: prebuilt `build/hexat_linux` (self-host transpiler, `hexa-cc <in.hexa> <out.c>` 형식)가 **대형 string-literal emit.hexa** 를 transpile 할 때 segfault — exit code **139** (SIGSEGV). H100 pod (Linux x86_64, runpod/pytorch:2.4.0-cuda12.4.1) 2종 emit 에서 각각 실측 재현:
+> - `self/cuda/runtime_cuda_emit.hexa` → `hexat_linux … /tmp/rcuda.c` → **rc=139** (출력 0바이트)
+> - `self/runtime_core_emit.hexa` (523KB) → `hexat_linux … /tmp/rc.c` → **rc=139** (출력 0바이트)
+
+**왜 치명적 (닫힌 인과 사슬)**: anima 트레이너 빌드 → 완전한 `self/` 트리 필요 → generated C 파일 필요:
+> `runtime_core.c` · `runtime_cuda.c` · `native/tensor_kernels.c` · `runtime_hi_gen.c` · `runtime_bf16.c`
+> 이 파일들은 **전부 git 미추적** (`git cat-file -e origin/main:self/runtime_core.c` / `:self/native/tensor_kernels.c` 둘 다 "does not exist" 확정) = `*_emit.hexa` 의 emit 산물. fresh clone 에는 없고, 생성 경로는 `hexat` emit 한 가지인데 그게 segfault → **빌드 자체 불가**.
+
+**소진한 우회 (전부 차단 실측)**: ① fresh clone (generated 미포함) · ② 로컬 264-stale 통째 (M3 builtin 없음 + 공유 repo 점프 금지) · ③ main+cloud-m3 self/ 짜깁기 (runtime.c↔runtime.h carrier-vs-function 불일치, native/*.c 누락) · ④ pod emit bootstrap (이 segfault) · ⑤ CPU-only 빌드 (runtime_core.c 정합 통과했으나 `native/tensor_kernels.c` 누락 → 역시 emit 필요 → segfault). 즉 단일 일관 트리를 emit 없이 확보할 길이 없음.
+
+**fix 방향 (가설)**: 두 emit.hexa 모두 거대 string-literal (수백 KB) 을 담음 → hexat 의 (a) string-literal 파싱 깊은 재귀로 stack overflow (→ `ulimit -s unlimited` 로 회피되는지 1-pod 테스트 가치 있음), 또는 (b) emit 출력 버퍼/토큰 처리의 입력-크기 의존 버그. **요청**: ① `hexat` 를 대형 emit.hexa 입력으로 재현·근본 fix, 또는 ② generated C 파일을 git-committed 산물로 전환(CI 가 emit 하므로 가능)해 fresh clone 만으로 빌드되게. ②가 더 단순하고 모든 다운스트림(anima fire + 임의 pod 빌드)을 즉시 unblock.
+
+**확보 자산 (fix 후 즉시 재사용)**: 검증된 pod SSH recipe (`runpodctl create --ports '22/tcp' --startSSH --env "PUBLIC_KEY=$(cat ~/.runpod/ssh/RunPod-Key-Go.pub)"` + `hexa cloud run "root@<IP>" --port <P> --insecure`) · agent BUILD-GREEN trainer.c (anima `origin/probe-m5-walltime`) · CI Stage0-1 빌드 시퀀스 (`.github/workflows/bootstrap.yml`).
+
+**severity**: high (anima BC-ANIMA M5 측정 완전 차단 + 임의 pod-side hexa 빌드 일반 차단). ref: anima `CORE/DECODER/STEP_RATE_LOG.md` (1)~(5), hexa-lang #1920/#1924/#1959, `self/{runtime_core,cuda/runtime_cuda}_emit.hexa`.
+
 ## 2026-05-29 — hexa cloud 개선점 3건 (anima M5 fire 직접-운영 실측)
 
 > anima BC-ANIMA M5 step-rate fire 를 foreground 로 직접 운영하며 관측한 `hexa cloud` 사용성 갭. #1959 (accept-new host key) 가 머지된 직후의 후속 발견.
