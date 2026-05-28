@@ -1,6 +1,32 @@
 # INBOX — log
 
-## 2026-05-29 — 🟠 OPEN · ENHANCEMENT · CLOUD M5 `~/.hx/cloud/active-pods.json` job-schema 확장 — `/system` per-project `pods.json` 이 글로벌 SSOT 로 전환 불가 (현재 pod-rental-only)
+## 2026-05-29 — 🟠 OPEN · PERF · `farr_adamw_step_*` 가 매 step fresh `out` farr 할당 → glibc arena retention 으로 ~0.5GB/step host-RSS 누적 (long train OOM-bound) · in-place AdamW builtin 요청
+
+> **root cause (anima M4b decoder trainer 실측 #1348 + $0 source-read 진단)**: anima `train_v3_moe_longtrain.hexa` (V=151643, m_size=29.16M FP64 params=233MB) 가 H100 pod 에서 CPU-only build 로 학습 시 **RSS 가 ~0.5GB/step 으로 누적, step~100 에서 57GB** (per-step wall 도 14.8% 열화). anima 측 전수조사 결과 trainer + 의존 lib 의 모든 per-step 할당은 빠짐없이 `farr_free` 된다 (anima 결백, anima STEP_RATE_LOG entry (8) · PR #1352). 진짜 driver 는 hexa-lang runtime 의 **M1 AdamW builtin per-step 233MB out churn**:
+
+`hexa_farr_adamw_step_gpu(W, m, v, g, n, ...)` (runtime.c) 및 CPU oracle `_hx_farr_adamw_step_cpu(...)` 는 매 호출마다 **fresh `out` farr (n=m_size doubles) 를 `hexa_farr_zeros` 로 할당**해 갱신된 W 를 담아 반환한다. caller(trainer)는 `farr_copy_slice_gpu(out → W)` 후 즉시 `farr_free(out)`. ⇒ 매 step `calloc(233MB)` + `free(233MB)`. `hexa_farr_free` 는 `free(buf)` 만 호출하고 (freelist 는 handle id 만 재활용, buf 는 NULL) — runtime.c 에 `malloc_trim`/`mallopt(M_MMAP_THRESHOLD)`/`madvise` 부재 → glibc 가 free 청크를 OS 로 반환 안 함 → RSS 가 logical heap 과 무관하게 누적. measured ~0.5GB/step ≈ **2× m_size(466MB)** (AdamW out 233MB + transient V-buf/matmul/copy-back) 와 정확히 일치. (cf runtime.c 의 `farr_int_zeros` 도입 주석 — "boxed-HexaVal retention … binds the in-process NM optimizer at the 768 MB cap … cuts arena retention by ~50× … HEXA_MEM_CAP_MB=2048 workaround": 동일 arena-retention class 의 기존 인지.)
+
+**영향**: AdamW 를 step-loop 에서 쓰는 모든 dense trainer 가 train 길이에 비례해 RSS 누적 → 충분히 긴 run 은 rate 와 무관하게 OOM. anima dec_undertrain (50×V presentations) 같은 long train 이 step-rate 와 별개로 leak 만으로 infeasible.
+
+**요청 (택1, 우선순위순)**:
+- **(a) 권장 — in-place AdamW builtin** `farr_adamw_step_inplace(W, m, v, g, n, lr, b1, b2, eps, wd, step) -> 0/-1`: fresh `out` 없이 W 를 직접 in-place 갱신 (m/v 는 이미 in-place). **선례 = M2 `farr_softmax_rows` 가 3-arg(new-alloc)→4-arg(caller-out, in-place) 로 전환해 29M-double/step alloc 을 제거한 그 패턴 그대로** (runtime.c `hexa_farr_softmax_rows` line ~9508, BC-ANIMA M2 2026-05-28). caller 는 233MB out 할당+copy-back+free 3단계가 통째로 사라짐.
+- **(b) 보조 — runtime arena 반환**: runtime init 1회 `mallopt(M_TRIM_THRESHOLD, …)` / `mallopt(M_MMAP_THRESHOLD, …)`, 또는 `farr_free` 의 큰-buf 경로에서 `malloc_trim(0)`. (a) 없이도 churn 의 RSS 누적을 완화하나 per-step calloc/free 자체는 잔존.
+- **(c) 차선 — buffer 재활용**: `hexa_farr_free` 가 buf 를 즉시 free 하지 않고 freelist slot 에 보관, `hexa_farr_zeros` 가 동일-크기 slot 의 buf 를 calloc 대신 `memset` 으로 재활용. 범용이나 (a) 보다 침습적.
+
+**verify**: anima 측은 source-reasoned + lint-clean (`hexa check` 0 violations) 까지 확정 — 런타임 leak=0 재확인(in-place builtin 적용 후 RSS flat)은 다음 H100 fire 의 deferred follow-up. severity: high (모든 dense AdamW long-train OOM-bound). cross-ref: anima STEP_RATE_LOG entry (7) 실측 + entry (8) 진단 · anima PR #1352 · #1348.
+
+---
+
+## 2026-05-29 — 🟠 OPEN · PERF · offset-aware cuBLAS gemv 부재 → packed-M MoE 의 dominant `[V×d]@[d×1]` expert gemv 가 GPU 에 못 올라감 (d=64 decoder GPU 0% 의 진짜 잔여 원인)
+
+> **finding (anima M4b decoder GPU-engagement 진단, #1348 CPU-build 0% 후속)**: anima MoE decoder trainer 가 H100 에서도 GPU util 0% 인 이유는 두 겹이다. (1) #1348 실측은 **CPU-only build**(`-DHEXA_CUDA` 없음) 였으므로 0% 는 그 build mode 에서 당연(전 CUDA dispatch 가 컴파일 제외, `cuda_available()`→0). (2) **HEXA_CUDA build 라도** d=64·T=4 shape 에서 GPU 는 거의 안 붙는다 — 아래가 hexa-lang 측 잔여 갭:
+
+- `hexa_farr_matmul` 의 GPU dim-gate 는 `(M*K) > 8192 || (K*N) > 8192` 일 때만 `_hx_cuda_farr_matmul_gpu` (cuBLAS Dgemm) 로 라우팅. decoder 의 attention matmul 들(T=4, d=64 → M*K=256, K*N≈4096)은 **전부 ≤8192** → HEXA_CUDA 여도 CPU ikj 경로 유지. (이건 의도된 byte-eq 보호 — 작은 GEMM 은 CPU 가 더 빠름. 문제 아님.)
+- decoder 의 **dominant op = expert gemv `[V=151643 × d=64] @ [d×1]`** (per token, V×d≈9.7M mults). 이건 anima `flame_mm.mm_packed_gemv(M, exp_base, V, d, u)` 가 처리하는데, **packed-M 의 offset 서브블록을 직접 읽는 CPU-only 1-pass loop** (anima flame_mm.hexa 명시: "CPU-only path (no cuBLAS dispatch)"). 이유는 **hexa-lang RFC-040 surface 에 offset-aware GPU matmul/gemv 가 없기 때문** — `farr_matmul_gpu`/`_hx_cuda_farr_matmul_gpu` 는 index-0 handle 만 받는다 (offset/view/slice variant 부재, runtime.h grep 0건). 즉 V×d expert weight 를 GPU 로 gemv 하려면 매 token `mm_extract` 로 9.7M-double 을 fresh index-0 farr 로 복사해야 하고(=anima #1325 가 제거한 그 host round-trip), 그러면 또 alloc-churn. ⇒ packed expert gemv 는 GPU 에 못 올라가고 CPU 에 남는다 = decoder 의 가장 큰 일이 GPU 0% 의 잔여 원인.
+
+**요청**: **offset-aware GPU gemv** 추가 — `farr_matmul_offset_gpu(P, off, rows, cols, u_id) -> out` (또는 `farr_packed_gemv_gpu`), packed buffer `P` 의 `[off .. off+rows*cols)` 서브블록을 device-side 에서 직접 cuBLAS Dgemv (CUBLAS_OP_N, 그리고 transposed 짝 `_t` for bwd `expertᵀ·dl`) — index-0 복사 없이. 이게 있으면 anima `mm_packed_gemv`/`_t` 가 GPU dispatch 로 전환되어 V×d expert gemv (decoder 의 dominant FLOPs)가 H100 에 올라간다. (보조: 또는 batched-gemv 로 T tokens 를 한 launch 에.) severity: medium-high (decoder GPU fire 의 dominant op 가 GPU 미사용). cross-ref: anima flame_mm.hexa `mm_packed_gemv` line 75-115 주석 · STEP_RATE_LOG entry (8)/(9) · #1348.
+
+---
 
 > **출처**: demiurge RTSC 캠페인 작업 M11-(b) — per-project `pods.json` → 글로벌 SSOT 전환 시도 중 발견 (consumer-side, g59 핸드오프).
 
