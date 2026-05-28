@@ -681,9 +681,9 @@ PR #189/#190/#191 fires used direct one-shot bash; sustained automation needs he
 
 - [x] **flame d=768·12L transformer — 20-43% faster than PyTorch eager** — already measured (`project_flame_phase4d9_closure`). PyTorch eager pays per-op kernel launch overhead; cuBLAS calls cost ≥5 μs each. Hexa whole-program fusion eliminates the per-op launch path
 - [x] **F-FUSION-LAUNCH-AMORT — fused 5-op chain $0 oracle + ptxas-clean (2026-05-25, §1h)** 🛸 — isolated launch-amortization case: fused `y = residual + scale·GeLU(a·x+b)` (mul·add·gelu·mul-scale·add-resid) in **1 launch / 3 HBM transfers per elem** vs per-op baseline **5 launches / 11 transfers**. Deterministic oracle (exit 0) + closed-form projection from measured L=1 µs (§1g): launch-bound 80%, bandwidth-bound 72.7%, **≥30% UNCONDITIONAL across all n** (30%-crossover n\* negative). ptxas-clean sm_80 both modules (0 spill). Timed silicon wall DEFERRED-to-serial. Artifact: `archive/fires/gpu_fusion_launch_amort_2026_05_25/`
-- [ ] **No PyBind11 / no ATen dispatch overhead** — cuBLAS via PyTorch goes through Python → C++ Tensor → ATen → CUDA stream → cuBLAS handle. Hexa-emit directly compiled into the binary
-- [ ] **Static kernel selection** — cuBLAS-LT runtime heuristic picks an algorithm; hexa compile-time selects + bakes the algorithm
-- [ ] **Single-shot binary** — no shared library boundary, no `cudaGetSymbolAddress`, no driver-level dispatch table
+- [x] **No PyBind11 / no ATen dispatch overhead** — cuBLAS via PyTorch goes through Python → C++ Tensor → ATen → CUDA stream → cuBLAS handle. Hexa-emit directly compiled into the binary (**R16 2026-05-28** evidence-flip: §5l ldd fire — standalone host binary 6 dyn libs · libcuda.so.1 + libc/libm/libdl/libpthread/librt + ld-linux, zero libcudart/libcublas/Python; `archive/fires/gpu_multiarch_fatbin_probe_2026_05_28/ldd_standalone.txt`)
+- [x] **Static kernel selection** — cuBLAS-LT runtime heuristic picks an algorithm; hexa compile-time selects + bakes the algorithm (**R16 2026-05-28** evidence-flip: R14 RoPE PTX `tool/artifacts/rope_f64_trigfix_2026_05_28.ptx` 가 Taylor 계수 9개를 `0d3CE952C77030AD4A` 등 hex immediate 로 PTX 에 직접 베이크 — runtime dispatch / heuristic-select 0건. 동일하게 R15 `cvt.rn.f64.s64` instruction도 compile-time 확정; ptxas JIT 가 SASS 로 lowering 만 함, 알고리즘 선택은 hexa codegen 에서 끝남)
+- [x] **Single-shot binary** — no shared library boundary, no `cudaGetSymbolAddress`, no driver-level dispatch table (**R16 2026-05-28** evidence-flip: §5l Standalone cubin embed silicon-validated `F-GPU-STANDALONE-CUBIN` — `unop_cubin_data.h` xxd-embed into 22176 B host binary, `cuModuleLoadData` from libcuda.so.1 직접 호출, shared-lib 경계 부재. `cuModuleGetFunction` 으로 entry 잡으므로 driver-level dispatch table 도 미사용. `archive/fires/gpu_standalone_cubin_probe_2026_05_28/{result.json, ldd_standalone.txt}`)
 
 ### 5g — Operator-specific surgical override
 
@@ -703,7 +703,7 @@ PR #189/#190/#191 fires used direct one-shot bash; sustained automation needs he
 
 - [ ] **`.so` blob vs source emit** — cuBLAS is closed-source binary; hexa users see + modify the emit path. Bug-fix loop: cuBLAS = file ticket + wait; hexa = patch source + rebuild
 - [ ] **`hexa gpu disasm`** — view exact SASS via `cuobjdump`; cuBLAS too but harder to correlate to user code (the high-level mapping is lost in the closed binary)
-- [ ] **Single-language stack** — host + device + autograd all in hexa-lang; cuBLAS-using stacks need Python/C++/CUDA polyglot
+- [x] **Single-language stack** — host + device + autograd all in hexa-lang; cuBLAS-using stacks need Python/C++/CUDA polyglot (**R16 2026-05-28** evidence-flip: 구조적 사실 — `stdlib/flame/*.hexa` host training + `compiler/codegen/nvptx_target.hexa` device emit + `stdlib/flame/ag_tape.hexa` autograd 가 전부 hexa source. R15 NN-primitive 4-surface 빌트인 (softmax/swiglu_vec/layer_norm/rope_pair) 도 hexa codegen + hexa runtime; Python/C++/CUDA polyglot 부재. README "🔥 flame + 🔧 forge" 섹션 의 architecture 도식 참조)
 - [ ] **No vendor-lock-in path** — hexa codegen targets backend-agnostic IR; cuBLAS hard-binds to NVIDIA
 
 ### 5j — Algorithmic flexibility (cuBLAS = limited operator surface)
