@@ -553,6 +553,61 @@ fn vast_destroy_verdict(out: str, iid: str) -> VastInstance {
     return VastInstance { ok: 1, instance_id: iid, message: "destroyed (confirmed) " + iid }
 }
 
+// ── reboot — DARK-POD RECOVERY ────────────────────────────────────────
+// (INBOX #1963) A vast.ai instance can stay alive+billing yet stop
+// accepting SSH after a host migration / sshd restart — its container's
+// authorized_keys is rebuilt by the image's onstart hook, and `reboot`
+// restarts the container (preserving disk) so that hook re-runs and
+// re-injects the key. In-flight QE jobs that get SIGKILLed resume from
+// their .save recovery files, so a reboot recovers a dark pod without a
+// re-rent. Mirrors vast_destroy: a _TEST cmd builder + a pure verdict.
+
+// vast_reboot — reboot (restart container of) instance <iid>, preserving
+// disk. Returns ok=1 only on a positive reboot marker (no destroy-style
+// leak cross-check — a reboot does not tear the instance down).
+fn vast_reboot(iid: str) -> VastInstance {
+    if len(iid) == 0 {
+        return _vast_fail_instance("reboot: empty instance id")
+    }
+    let vc = _vastai_path()
+    if len(vc) == 0 {
+        return _vast_fail_instance("vastai not found (set VASTAI_DISABLE=1 to silence)")
+    }
+    let cmd = vast_reboot_cmd_TEST(vc, iid)
+    let out = exec(cmd)
+    return vast_reboot_verdict(out, iid)
+}
+
+// vast_reboot_verdict — pure decision logic (unit-testable on a simulated
+// stdout). vastai prints "Rebooting instance <id>" / "success" on a real
+// reboot; rc alone is not trusted (mirrors the destroy hardening). Any
+// shape without a positive marker → ok=0 with the first 200 chars surfaced.
+fn vast_reboot_verdict(out: str, iid: str) -> VastInstance {
+    if _vast_reboot_confirmed(out) == 0 {
+        return _vast_fail_instance("reboot: no success/rebooting marker — verify manually: " + out.substring(0, 200))
+    }
+    return VastInstance { ok: 1, instance_id: iid, message: "reboot requested (confirmed) " + iid + " — container restarting; re-probe SSH in ~90s" }
+}
+
+// _vast_reboot_confirmed — does the reboot output carry a positive marker?
+// vastai emits "rebooting" / "success" on a real reboot. Match case-
+// insensitively (lowercase + Title) so a token-case change still catches.
+fn _vast_reboot_confirmed(out: str) -> int {
+    if out.index_of("rebooting") >= 0 {
+        return 1
+    }
+    if out.index_of("Rebooting") >= 0 {
+        return 1
+    }
+    if out.index_of("rebooted") >= 0 {
+        return 1
+    }
+    if out.index_of("success") >= 0 {
+        return 1
+    }
+    return 0
+}
+
 // ── test shims ────────────────────────────────────────────────────────
 // Public, side-effect-free accessors that expose the two pure-string
 // builders so the command-string / filter logic can be unit-tested
@@ -577,6 +632,14 @@ fn vast_strip_to_json_TEST(s: str) -> str {
 fn vast_destroy_cmd_TEST(vc: str, iid: str) -> str {
     return "printf 'y\\n' | " + _shq_local(vc) + " destroy instance "
         + _shq_local(iid) + " -y --raw 2>&1"
+}
+
+// vast_reboot_cmd_TEST — return the exact shell command vast_reboot builds
+// for `vc reboot instance <iid>` so a unit test can assert the form without
+// shelling out. `--raw` for a parseable response; 2>&1 so the marker check
+// also sees stderr.
+fn vast_reboot_cmd_TEST(vc: str, iid: str) -> str {
+    return _shq_local(vc) + " reboot instance " + _shq_local(iid) + " --raw 2>&1"
 }
 
 // _vast_instance_still_live — `vastai show instance <iid> --raw`; return 1
