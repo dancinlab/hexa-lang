@@ -2167,3 +2167,60 @@ API key 는 이미 있으므로(이 entry 의 전제), 위 verb 만 생기면 da
 ### Filer
 
 demiurge RTSC 13-job-dark 회수 — vast API key 있으나 cloud reboot/attach-ssh verb 부재로 자동회수 불가
+
+
+## 2026-05-29 — hexa cloud 재빌드 4겹 블로커 (회수 재발 방지)
+
+🟠 **OPEN · recommendation**
+
+RTSC 13-job dark 회수에서 `hexa cloud` 재빌드(reboot verb 사용 목적)가 toolchain 4겹 버그로
+막힘. 회수 자체는 우회(vast_reboot 직접 호출 + cloud_exec_opts .hexa)로 성공했으나, 정공
+(cloud reboot verb)이 작동하려면 아래 4개가 재발 방지돼야 함.
+
+### 1. module_loader stale-stdlib fallback (조용한 구버전 로드)
+
+- **증상**: worktree 에서 `hexa build` / `build/hexa_module_loader` 실행 시 `HEXA_LANG` 미설정이면
+  worktree stdlib 가 아니라 **다른 repo(메인 working tree, stale 브랜치)의 stdlib** 을 로드.
+  `map key 'stdlib/cloud/cloud_cli.hexa' not found` 경고 + OLD 함수(예: `cloud_tail_cmd_taxonomy_opts`
+  누락된 #1889 이전 cloud.hexa)를 flatten.
+- **영향**: worktree 빌드가 조용히 stale 코드 → "함수 누락" 디버깅 미궁(실제론 다른 파일 로드).
+- **권장**: module_loader 가 entry 파일의 repo-root 를 stdlib root 로 자동 추론(HEXA_LANG 없이도),
+  OR `HEXA_LANG` 미설정 + cwd-repo 와 로드된 stdlib repo mismatch 시 명확한 에러로 fail-fast.
+
+### 2. `hexa build` 내장 module_loader ≠ `build/hexa_module_loader` (구버전 drift)
+
+- **증상**: `hexa build cloud_cli.hexa` 의 hexa.real 내장 flatten 은 `cloud_tail_cmd_taxonomy_opts`
+  를 누락(→ clang undeclared-identifier). 그러나 별도 `build/hexa_module_loader`(최신)로 flatten 하면
+  정상 포함.
+- **영향**: 정식 빌드 경로(`hexa build`)가 구 flatten 로직으로 깨짐.
+- **권장**: hexa.real 내장 module_loader 를 `build/hexa_module_loader` 와 lockstep 재빌드,
+  OR `hexa build` 가 `build/hexa_module_loader` 에 위임.
+
+### 3. #821 let-literal collision 이 `cloud reboot` dispatch 무력화
+
+- **증상**: `cloud_cli` main 의 `if sub == "reboot"` 가 codegen literal-collision(#821 LIVE)으로
+  매칭 실패 → `cloud reboot` 가 usage 덤프(다른 verb `list`/`down` 은 정상). 빌드 산출물에 `"reboot"`
+  literal 1개만(`__hexa_sl_*`), main 비교가 vast.hexa 의 `"reboot"`/`"rebooting"` literal 군과 collapse 의심.
+- **영향**: #1966 의 `cloud reboot` verb 가 실제 dispatch 안 됨 — `vast_reboot()` 직접 호출로만 작동.
+- **권장**: #821 codegen fix(per-fn literal re-stamp), OR reboot 분기의 `"reboot"` 를 distinct 변수로 inline.
+
+### 4. `build_hexa_cloud.sh` hexat 경로 오류
+
+- **증상**: 스크립트가 `self/native/hexat` 을 찾지만 실제 hexat = `build/hexat`(또는 `build/self/native/hexat`).
+  `self/native/hexat` 부재 → transpile 1단계 실패.
+- **권장**: `build_hexa_cloud.sh` 의 hexat 경로를 `build/hexat` 로 정정(또는 fallback 탐색).
+
+### 운영 노트 (worktree 빌드 일반)
+
+worktree 빌드는 generated artifacts(`self/runtime_core.c`, `self/forge/`, `self/native/*.c`)가 gitignored 라
+부재 → 메인 repo `self/` 복사 필요(bootstrap cascade 회피). 회수 세션은 `cp -R 메인/self/. worktree/self/`
++ `HEXA_LANG=worktree` + 수동 pipeline(`build/hexa_module_loader` → `build/hexat` → clang)로 성공.
+
+### Cross-ref
+
+#1966(reboot verb + stderr passthrough) · #1968(read_line→input AOT fix) · #1950(255 cause) ·
+#1963(reboot/attach verb) · #821(let-literal collision) · #1889(tail taxonomy 도입).
+
+### Filer
+
+demiurge RTSC 13-job dark 회수 — reboot verb 정공이 4겹 toolchain 버그로 막혀 우회 회수; 정공 재발 방지.
