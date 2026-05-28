@@ -5019,6 +5019,30 @@ fn rt_execve_reloc_kinds() {
     return k
 }
 
+// ── rt_exit (F3 wave 13 — process · syscall1 + brk, noreturn, NO-RELOC) ──
+// exit(int code) = syscall1(EXIT=1, code); __builtin_trap(). noreturn, NO errno
+// (syscall1 non-cf) → ZERO relocs (single-symbol no-reloc-v3 path). sxtw x0(code)
+// + mov w16,#1 + svc + brk #1. 4 instr, 16 B. Verified BYTE-IDENTICAL to clang
+// -O2 (_hxlcl_syscall1 oracle): 93407c00 52800030 d4001001 d4200020. SYS_EXIT=1.
+// brk tail = __builtin_trap (unreachable — kernel terminates at svc).
+fn rt_exit() {
+    let mut c = []
+    c.push(0); c.push(124); c.push(64); c.push(147)    // sxtw x0,w0 (code)
+    c.push(48); c.push(0); c.push(128); c.push(82)     // mov w16,#1 (SYS_EXIT)
+    c.push(1); c.push(16); c.push(0); c.push(212)      // svc #0x80
+    c.push(32); c.push(0); c.push(32); c.push(212)     // brk #1 (noreturn trap)
+    return c
+}
+// rt_exit has ZERO relocs (no errno store) — empty reloc tables.
+fn rt_exit_reloc_offs() {
+    let mut o = []
+    return o
+}
+fn rt_exit_reloc_kinds() {
+    let mut k = []
+    return k
+}
+
 // ── rt_write (B9.6-C13 — class-C syscall · int+ptr+ulong _cf + errno) ────
 // write(int fd, const void *buf, unsigned long n) -> long. The exact twin of
 // rt_read — same 9-instr 36 B _cf shape (only fd/x0 sign-extended; buf x1 + n

@@ -239,7 +239,13 @@ static int  hxlcl_fstat(int fd, void *buf);
 static int  hxlcl_stat(const char *path, void *buf);
 #endif
 static int  hxlcl_open_sys(const char *path, int flags, ...);
+// F3 ACTIVATION · Path A — exit forward decl (extern under guard; resolved by
+// emit_hxlcl_exit_o.hexa's no-reloc-v3 .o on arm64).
+#ifdef HEXA_RT_SELFEMIT
+extern void hxlcl_exit(int code) __attribute__((noreturn));
+#else
 static void hxlcl_exit(int code) __attribute__((noreturn));
+#endif
 // B9.6-C17 (F3 Path A) — under HEXA_RT_SELFEMIT hxlcl_mmap is `extern`
 // (resolved by the hexa-emitted .o — rt_mmap is a 6-arg _cf: sxtw x2/x3/x4 for
 // prot/flags/fd, addr/len/off untouched; errno store via PC-relative adrp/str to
@@ -1870,10 +1876,16 @@ static int __attribute__((noinline)) hxlcl_stat(const char *path, void *buf) { r
 #endif
 // Cycle 65 — close out remaining real syscalls.
 #define HXLCL_SYS_GETTIMEOFDAY 116
+#ifdef HEXA_RT_SELFEMIT
+// F3 ACTIVATION · Path A — exit self-emit slot. DEFAULT build keeps the static
+// svc-trap below; SELF-EMIT flips to extern, resolved by emit_hxlcl_exit_o.hexa
+// (rt_exit's 16-byte body: sxtw x0 / mov w16,#1 / svc / brk — no-reloc-v3 .o).
+#else
 static void __attribute__((noinline, noreturn)) hxlcl_exit(int code) {
     (void)_hxlcl_syscall1(HXLCL_SYS_EXIT, (long)code);
     __builtin_trap();  // unreachable; ensure noreturn satisfaction
 }
+#endif
 // PR #426 follow-up — libc mmap (same Darwin arm64 carry-flag class).
 // On failure the kernel returns errno in x0 instead of MAP_FAILED, so
 // the raw `_hxlcl_syscall6` path returned a small positive integer cast
