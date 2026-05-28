@@ -2281,3 +2281,45 @@ worktree 빌드는 generated artifacts(`self/runtime_core.c`, `self/forge/`, `se
 ### Filer
 
 demiurge RTSC 13-job dark 회수 — reboot verb 정공이 4겹 toolchain 버그로 막혀 우회 회수; 정공 재발 방지.
+
+
+## 2026-05-29 — verify_cli.hexa clang `_bessel_j1` duplicate-symbol (verify --expr 컴파일 실패)
+
+🟠 **OPEN · bug** (pre-existing · toolchain)
+
+### 증상
+
+`tool/verify_cli.hexa` 가 pool mini (hexa-lang `af645e419`) 에서 clang 컴파일 실패 —
+`_bessel_j1` **duplicate-symbol** codegen 버그. → `hexa verify --expr <fn> ...` 재등록 경로 BLOCKED.
+(데미우르지 NUCLEAR N12 micro-exp 에서 close-form 반감기 커널의 verify --expr 재등록 시도 중 발견.)
+
+### 영향
+
+- `hexa verify --expr` (numerical 재등록 · atlas register --from-verify) 경로 불가
+- 커널 자체는 `hexa run` 으로 정상 동작 (smoke-test 통과) — codegen 의 중복 심볼 link 단계만 깨짐
+- 워크어라운드: `test/<domain>_anchor_smoke.hexa` 의 anchor 재현이 green closure 대체
+  (NUCLEAR: `test/nuclear_r4_anchor_smoke.hexa` 4/4 PASS verbatim)
+
+### 추정 원인
+
+`_bessel_j1` (Bessel J1 special function) 이 둘 이상의 컴파일 단위 / 헤더에서 정의되어
+flatten→transpile→clang link 시 duplicate symbol. (#821 let-literal collision 계열과 별개 —
+이건 함수 심볼 중복.) verify_cli.hexa 가 use-expansion 으로 끌어오는 stdlib 수학 모듈에서
+`bessel_j1` 정의가 중복 emit 되는 것으로 의심.
+
+### 권장
+
+1. `grep -rn 'bessel_j1\|_bessel_j1' stdlib/ self/` 로 중복 정의 위치 확인
+2. native_build / hexat codegen 의 special-function emit 가 `static` 또는 single-definition
+   guard 를 두도록 (중복 시 1회만 emit)
+3. 또는 verify_cli.hexa 가 끌어오는 수학 모듈의 bessel_j1 을 단일 SSOT 로 (중복 import 제거)
+
+### Cross-ref
+
+- 발견: demiurge NUCLEAR N12 micro-exp (sim.hexa WKB (c)-gate 커널 verify 재등록 시도)
+- 관련 codegen INBOX: #821 (let-literal collision) · 2026-05-29 module_loader stale-stdlib (#1978)
+- 커널 prior atom: #960 (nuclear closed-form 🟢, 이미 등록됨 — 재등록만 막힘)
+
+### Filer
+
+demiurge NUCLEAR N12 — verify --expr 재등록 blocked, smoke-test anchor 가 green closure 대체 (d6 honest)
