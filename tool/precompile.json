@@ -10,7 +10,7 @@
     "tool/cli_wrappers.hexa",
     "tool/audit_forbidden_exts.hexa",
     "tool/install_firmware_hook.hexa",
-    "tool/build_hexa_v2_linux.hexa",
+    "tool/build_hexat_linux.hexa",
     "tool/build_precompile.hexa"
   ],
   "descriptions": {
@@ -22,7 +22,7 @@
     "tool/cli_wrappers.hexa":        "~/.hx/bin/* wrapper SSOT installer (drift detect + auto-write). 2 commits / 3 months. Fired on every wrapper drift report.",
     "tool/audit_forbidden_exts.hexa":"FIRMWARE.md G-T0 banned-source-extension audit. 2 commits / 3 months. Fired by .githooks/pre-commit AND CI bootstrap.",
     "tool/install_firmware_hook.hexa":"FIRMWARE.md G-T3 pre-push hook installer. Fired once per fresh checkout — fits 'sub-second first-call' UX goal exactly.",
-    "tool/build_hexa_v2_linux.hexa": "cross-build hexa_v2 transpiler for linux/x86_64 from macOS. 2 commits / 3 months. Fired by anima CLM dispatch and release-prep.",
+    "tool/build_hexat_linux.hexa": "cross-build hexat transpiler for linux/x86_64 from macOS. Fired by anima CLM dispatch and release-prep. (Renamed from build_hexa_v2_linux.hexa in #1221; manifest ref was stale → Stage-3 'manifest missing on disk'.)",
     "tool/build_precompile.hexa":    "self — the precompile builder itself. Fired by release CI to populate release/precompile/. Including in manifest means subsequent CI runs hit cache (bootstrap acceleration)."
   },
   "categories": {
@@ -34,7 +34,7 @@
     "tool/cli_wrappers.hexa":        "install",
     "tool/audit_forbidden_exts.hexa":"audit",
     "tool/install_firmware_hook.hexa":"install",
-    "tool/build_hexa_v2_linux.hexa": "build",
+    "tool/build_hexat_linux.hexa": "build",
     "tool/build_precompile.hexa":    "build"
   },
   "schema_notes": "M6 schema extension (additive only — `tool/build_precompile.hexa::_parse_scripts` only reads the `\"scripts\"` array, ignoring everything else). `descriptions` = per-entry human reasoning (1-line per script, mirrors `scripts` keys). `categories` = coarse bucket (build/atlas/verify/inbox/install/audit) for future filtering verbs (e.g. `--category=atlas`). Both fields are documentation-only today; future M7+ may surface them via `--list --verbose` once a richer parser lands. Adding/removing scripts: update `scripts` (load-bearing) AND mirror the entry in `descriptions` + `categories` (lint-only)."
