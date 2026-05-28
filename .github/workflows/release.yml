@@ -192,7 +192,6 @@ jobs:
       # on a real notarization run. Developer ID signing is a prerequisite for
       # the notarize step after Package.
       - name: Stage 2b — Developer ID codesign (gated)
-        if: ${{ secrets.MACOS_CERT_P12 != '' }}
         shell: bash
         env:
           MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
@@ -200,6 +199,13 @@ jobs:
           MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
         run: |
           set -euo pipefail
+          # In-script gate: the `secrets` context is NOT allowed in a step-level
+          # `if:` (GitHub rejects the whole workflow file). Guard on the
+          # env-exported secret instead — skips cleanly when the cert is absent.
+          if [ -z "${MACOS_CERT_P12:-}" ]; then
+            echo "codesign: MACOS_CERT_P12 secret absent — skipping Developer ID signing"
+            exit 0
+          fi
           KC="$RUNNER_TEMP/hexa-sign.keychain-db"
           KCPW="$(uuidgen)"
           security create-keychain -p "$KCPW" "$KC"
@@ -214,8 +220,13 @@ jobs:
           rm -f "$RUNNER_TEMP/cert.p12"
 
       - name: Stage 2b — sign SKIP notice
-        if: ${{ secrets.MACOS_CERT_P12 == '' }}
-        run: echo "::notice::Developer ID signing SKIPPED (no MACOS_CERT_P12) — release ships ad-hoc; install.sh strips quarantine + re-signs locally per Mac."
+        shell: bash
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+        run: |
+          if [ -z "${MACOS_CERT_P12:-}" ]; then
+            echo "::notice::Developer ID signing SKIPPED (no MACOS_CERT_P12) — release ships ad-hoc; install.sh strips quarantine + re-signs locally per Mac."
+          fi
 
       # ── GO M4 — precompile shipped scripts into release/precompile/
       # so the tarball's first `hexa run <script>` skips the clang fork
@@ -266,7 +277,6 @@ jobs:
       # ticket is online-only — fine for `curl|bash` installs. Skips cleanly
       # when the secret is absent.
       - name: Notarize tarball (gated)
-        if: ${{ secrets.MACOS_NOTARY_PASSWORD != '' }}
         shell: bash
         env:
           NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
@@ -274,6 +284,10 @@ jobs:
           NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
         run: |
           set -euo pipefail
+          if [ -z "${NOTARY_PASSWORD:-}" ]; then
+            echo "notarize: MACOS_NOTARY_PASSWORD absent — skipping notarization"
+            exit 0
+          fi
           xcrun notarytool submit hexa-darwin-arm64.tar.gz \
             --apple-id "$NOTARY_APPLE_ID" \
             --team-id "$NOTARY_TEAM_ID" \
