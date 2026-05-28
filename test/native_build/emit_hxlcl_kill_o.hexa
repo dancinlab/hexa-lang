@@ -1,0 +1,277 @@
+// test/native_build/emit_hxlcl_kill_o.hexa
+//
+// F3 ACTIVATION RUNBOOK · Path A · B9.6-C8 — class-C syscall · 2-arg int+int
+// NON-_cf (no errno path, no reloc) self-emit. The 2-arg analogue of rt_getuid
+// — both int args sxtw'd, then trap, then ret with NO `cset cs` carry check
+// and NO errno store. 5-instr 20 B body — same length as rt_atoi but a pure
+// leaf (no frame, no bl). This is the FIRST 2-arg svc shape that DOESN'T need
+// the v3 (undefined-external) macho wrap: with no reloc and no extern symbol,
+// the single-symbol getuid template applies directly — only the body bytes
+// and the symbol name differ.
+//
+// EMITS: a Mach-O .o file exporting a strong external `_hxlcl_kill` whose
+// body is rt_kill's verbatim 20-byte machine code:
+//   sxtw x0,w0 / sxtw x1,w1 / mov w16,#37 / svc #0x80 / ret
+// No relocations, no undefined-external symbol (errno NOT touched). When the
+// driver / module_loader is built under HEXA_RT_SELFEMIT=1, self/runtime.c
+// declares `hxlcl_kill` as `extern` and ld64 binds callsites to this .o.
+//
+// ── ABI (class-C syscall · 2-arg int+int NON-_cf, no errno) ──
+//
+// rt_kill(int pid, int sig): pid in w0 → sxtw x0,w0; sig in w1 → sxtw x1,w1;
+// SYS_KILL=37 into x16; svc. Returns x0 directly (whatever the trap leaves).
+// runtime.c uses `_hxlcl_syscall2` not `_cf` — caller must inspect the return
+// for non-zero; no errno is set by the wrapper. dup2 shares the dual-sxtw
+// prologue but kill drops the entire 5-instr errno tail.
+//
+// ── HONESTY ──
+//
+//   - closure = runs exact — a kill(pid, 0)-style C program linked against
+//     this .o must return the SAME value as the C `hxlcl_kill`.
+//   - f1/f2 — clang ONLY as link-side oracle, NEVER in this .o's emit
+//     path (the 20 bytes come from rt_kill(), inlined verbatim below).
+//   - NO error-path JIT test — non-_cf does not store errno; the gate is
+//     happy-path-only (kill(self,0) == 0 = process exists).
+//   - selfhosted opt-in — HEXA_RT_SELFEMIT=1 gates the build append.
+//   - no binaries committed.
+//
+// SELF-CONTAINED: same module-loader rationale as emit_hxlcl_getuid_o.hexa.
+// The deliberate diffs vs getuid: (1) 5 instructions vs 4 (one extra sxtw),
+// (2) body length 20 vs 16, (3) symbol name `_hxlcl_kill` (11 B vs getuid's
+// 13 B → strtab_size = 1+11 = 12), (4) the SYS#37 / dual-sxtw bytes. The 20
+// bytes are character-identical to self/codegen/runtime_arm64.hexa rt_kill().
+
+// ═══════════════════════════════════════════════════════════════════
+// Inlined from self/codegen/runtime_arm64.hexa::rt_kill
+// 5 instructions, 20 bytes. sxtw x0 / sxtw x1 / mov w16,#37 / svc / ret.
+// NO errno path (non-_cf) — x0 returns the raw trap result.
+// ═══════════════════════════════════════════════════════════════════
+fn rt_kill_bytes() -> [int] {
+    let mut c = []
+    // sxtw x0, w0  (sign-extend pid)        0x93407C00
+    c.push(0); c.push(124); c.push(64); c.push(147)
+    // sxtw x1, w1  (sign-extend sig)        0x93407C21
+    c.push(33); c.push(124); c.push(64); c.push(147)
+    // mov w16, #37  (SYS_KILL)              0x528004B0
+    c.push(176); c.push(4); c.push(128); c.push(82)
+    // svc #0x80                             0xD4001001
+    c.push(1); c.push(16); c.push(0); c.push(212)
+    // ret  (x0 = trap result)               0xD65F03C0
+    c.push(192); c.push(3); c.push(95); c.push(214)
+    return c
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Inlined from self/codegen/macho.hexa (constants + helpers + obj_wrap)
+// Same shape as emit_hxlcl_getuid_o.hexa except the symbol name length
+// differs (`_hxlcl_kill` = 11 B vs `_hxlcl_getuid` = 13 B → strtab_size
+// = 1 + 11 = 12) + the code bytes.
+// ═══════════════════════════════════════════════════════════════════
+fn mh_magic_64_v() -> int { return 0xFEEDFACF }
+fn mh_object_v() -> int { return 1 }
+fn cpu_type_arm64_v() -> int { return 0x0100000C }
+fn cpu_subtype_all_v() -> int { return 0 }
+fn lc_segment_64_v() -> int { return 0x19 }
+fn lc_symtab_v() -> int { return 0x02 }
+fn lc_build_version_v() -> int { return 0x32 }
+fn s_attr_pure_v() -> int { return 0x80000000 }
+fn s_attr_some_v() -> int { return 0x00000400 }
+fn n_ext_v() -> int { return 0x01 }
+fn n_sect_v() -> int { return 0x0e }
+
+fn align_to_v(val: int, align: int) -> int {
+    return (val + align - 1) / align * align
+}
+
+fn push_u16_le_v(buf: [int], val: int) -> [int] {
+    return buf.push(val % 256).push((val / 256) % 256)
+}
+
+fn push_u32_le_v(buf: [int], val: int) -> [int] {
+    return buf.push(val % 256).push((val / 256) % 256).push((val / 65536) % 256).push((val / 16777216) % 256)
+}
+
+fn push_u64_le_v(buf: [int], val: int) -> [int] {
+    let mut b = push_u32_le_v(buf, val % 0x100000000)
+    return push_u32_le_v(b, val / 0x100000000)
+}
+
+// Inlined from self/codegen/macho.hexa::macho_obj_wrap (L34-136).
+// Symbol exported = `_hxlcl_kill` (strtab_size = 1 + 11 NUL-term = 12).
+fn macho_obj_wrap_hxlcl_kill(code: [int], main_offset: int) -> [int] {
+    let mut out = []
+    let code_size = len(code)
+
+    let header_size = 32
+    let segment_cmd_size = 152
+    let symtab_cmd_size = 24
+    let build_version_cmd_size = 24
+    let sizeofcmds = segment_cmd_size + symtab_cmd_size + build_version_cmd_size
+
+    let code_offset = align_to_v(header_size + sizeofcmds, 8)
+    let symtab_offset = align_to_v(code_offset + code_size, 4)
+    let nlist_size = 16
+    let strtab_offset = symtab_offset + nlist_size
+    // strtab = "\0_hxlcl_kill\0" = 1 + 11 = 12 bytes.
+    let strtab_size = 1 + 11
+
+    // Mach-O Header (32 bytes)
+    out = push_u32_le_v(out, mh_magic_64_v())
+    out = push_u32_le_v(out, cpu_type_arm64_v())
+    out = push_u32_le_v(out, cpu_subtype_all_v())
+    out = push_u32_le_v(out, mh_object_v())
+    out = push_u32_le_v(out, 3)
+    out = push_u32_le_v(out, sizeofcmds)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+
+    // LC_SEGMENT_64
+    out = push_u32_le_v(out, lc_segment_64_v())
+    out = push_u32_le_v(out, segment_cmd_size)
+    let mut i = 0
+    while i < 16 { out.push(0); i = i + 1 }
+    out = push_u64_le_v(out, 0)
+    out = push_u64_le_v(out, align_to_v(strtab_offset + strtab_size, 8))
+    out = push_u64_le_v(out, code_offset)
+    out = push_u64_le_v(out, strtab_offset + strtab_size - code_offset)
+    out = push_u32_le_v(out, 7)
+    out = push_u32_le_v(out, 7)
+    out = push_u32_le_v(out, 1)
+    out = push_u32_le_v(out, 0)
+
+    // Section header: __text (80 bytes)
+    out.push(95); out.push(95); out.push(116); out.push(101); out.push(120); out.push(116)
+    let mut j = 0
+    while j < 10 { out.push(0); j = j + 1 }
+    out.push(95); out.push(95); out.push(84); out.push(69); out.push(88); out.push(84)
+    j = 0
+    while j < 10 { out.push(0); j = j + 1 }
+    out = push_u64_le_v(out, 0)
+    out = push_u64_le_v(out, code_size)
+    out = push_u32_le_v(out, code_offset)
+    out = push_u32_le_v(out, 2)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, s_attr_pure_v() + s_attr_some_v())
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+
+    // LC_SYMTAB
+    out = push_u32_le_v(out, lc_symtab_v())
+    out = push_u32_le_v(out, symtab_cmd_size)
+    out = push_u32_le_v(out, symtab_offset)
+    out = push_u32_le_v(out, 1)
+    out = push_u32_le_v(out, strtab_offset)
+    out = push_u32_le_v(out, strtab_size)
+
+    // LC_BUILD_VERSION
+    out = push_u32_le_v(out, lc_build_version_v())
+    out = push_u32_le_v(out, build_version_cmd_size)
+    out = push_u32_le_v(out, 1)
+    out = push_u32_le_v(out, 0x000E0000)
+    out = push_u32_le_v(out, 0x000E0000)
+    out = push_u32_le_v(out, 0)
+
+    // Pad to code_offset
+    while len(out) < code_offset { out.push(0) }
+
+    // Code section
+    let mut k = 0
+    while k < len(code) { out.push(code[k]); k = k + 1 }
+
+    // Pad to symtab_offset
+    while len(out) < symtab_offset { out.push(0) }
+
+    // Symbol table: nlist_64 (16 bytes)
+    out = push_u32_le_v(out, 1)
+    out.push(n_sect_v() + n_ext_v())
+    out.push(1)
+    out = push_u16_le_v(out, 0)
+    out = push_u64_le_v(out, main_offset)
+
+    // String table — "\0_hxlcl_kill\0" (12 bytes)
+    out.push(0)
+    // "_hxlcl_kill\0"
+    //  95='_' 104='h' 120='x' 108='l' 99='c' 108='l' 95='_'
+    //  107='k' 105='i' 108='l' 108='l' 0=NUL
+    out.push(95); out.push(104); out.push(120); out.push(108); out.push(99); out.push(108); out.push(95)
+    out.push(107); out.push(105); out.push(108); out.push(108); out.push(0)
+
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Driver
+// ═══════════════════════════════════════════════════════════════════
+fn emit_hxlcl_kill_o() {
+    println("[wire] F3 Path A · B9.6-C8 · rt_kill native override — _hxlcl_kill")
+
+    let code = rt_kill_bytes()
+    if len(code) != 20 {
+        println("FAIL: rt_kill expected 20 bytes, got " + to_string(len(code)))
+        return
+    }
+    println("  rt_kill bytes  : " + to_string(len(code)) + " (20 expected)")
+
+    // sxtw x0,w0 (00 7c 40 93) at offset 0 — pid arg sign-extended
+    if code[0] != 0 || code[1] != 124 || code[2] != 64 || code[3] != 147 {
+        println("FAIL: sxtw pid prefix mismatch")
+        return
+    }
+    println("  pid arg load   : 00 7c 40 93 (sxtw x0, w0) OK")
+
+    // sxtw x1,w1 (21 7c 40 93) at offset 4 — sig arg sign-extended
+    if code[4] != 33 || code[5] != 124 || code[6] != 64 || code[7] != 147 {
+        println("FAIL: sxtw sig prefix mismatch")
+        return
+    }
+    println("  sig arg load   : 21 7c 40 93 (sxtw x1, w1) OK")
+
+    // mov w16,#37 (b0 04 80 52) at offset 8 — SYS_KILL into x16
+    if code[8] != 176 || code[9] != 4 || code[10] != 128 || code[11] != 82 {
+        println("FAIL: mov w16,#37 (SYS_KILL) mismatch")
+        return
+    }
+    println("  syscall number : b0 04 80 52 (mov w16, #37 = SYS_KILL) OK")
+
+    // svc #0x80 (01 10 00 d4) at offset 12 — the BSD syscall trap
+    if code[12] != 1 || code[13] != 16 || code[14] != 0 || code[15] != 212 {
+        println("FAIL: svc #0x80 mismatch")
+        return
+    }
+    println("  syscall trap   : 01 10 00 d4 (svc #0x80) OK")
+
+    // ret (c0 03 5f d6) at offset 16 — kill RETURNS trap result in x0
+    if code[16] != 192 || code[17] != 3 || code[18] != 95 || code[19] != 214 {
+        println("FAIL: ret trailer mismatch")
+        return
+    }
+    println("  ret trailer    : c0 03 5f d6 (ret) OK — x0=trap result returned")
+
+    let obj = macho_obj_wrap_hxlcl_kill(code, 0)
+    println("  obj_wrap size  : " + to_string(len(obj)) + " bytes total")
+
+    // MH_MAGIC_64 LE at offset 0 (0xFEEDFACF → cf fa ed fe)
+    if obj[0] != 0xcf || obj[1] != 0xfa || obj[2] != 0xed || obj[3] != 0xfe {
+        println("FAIL: MH_MAGIC_64 mismatch")
+        return
+    }
+    println("  MH_MAGIC_64    : cf fa ed fe OK")
+
+    // filetype = MH_OBJECT (1) at offset 12
+    if obj[12] != 1 {
+        println("FAIL: filetype not MH_OBJECT")
+        return
+    }
+    println("  filetype       : 1 (MH_OBJECT) OK")
+
+    let out_path = env_var("HEXA_HXLCL_KILL_O")
+    let mut dest = out_path
+    if dest == "" { dest = "build/poc/hxlcl_kill.o" }
+    write_bytes(dest, obj)
+    println("  wrote          : " + dest)
+    println("[wire] EMIT OK — link via build recipe with HEXA_RT_SELFEMIT=1")
+}
+
+emit_hxlcl_kill_o()
