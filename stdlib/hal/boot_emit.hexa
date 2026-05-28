@@ -133,6 +133,204 @@ fn rp2040_emit_full_boot_s() -> str {
     )
 }
 
+// ─── CMSIS composer (PR #1846 — stm32f429 leg) ─────────────────────
+//
+// emit_full_boot_s_cmsis: combines vt_emit_section_cmsis (vector
+// table + extern decls + named-IRQ chunks) with rp_emit_prologue_body_cmsis
+// (Reset_Handler + Default_Handler per-handler sections).
+//
+// Output is a complete CMSIS-style startup `.s` file string.
+//
+// Caller passes:
+//   - vector-table args (banner, prelude, section, label, slot data,
+//     IRQ chunks) routed to vt_emit_section_cmsis.
+//   - prologue args (handler sections, entry fn, linker symbols)
+//     routed to rp_emit_prologue_body_cmsis.
+
+fn emit_full_boot_s_cmsis(
+    header_banner: str,
+    cpu: str,
+    fpu: str,
+    vector_section: str,
+    vector_section_flags: str,
+    vector_table_label: str,
+    extern_syms: [str],
+    global_syms: [str],
+    system_labels: [str],
+    system_comments: [str],
+    chunk_kinds: [str],
+    chunk_labels: [str],
+    chunk_counts: [int],
+    chunk_comments: [str],
+    reset_section: str,
+    default_section: str,
+    entry_fn: str,
+    stack_sym: str,
+    data_src: str,
+    data_dst_s: str,
+    data_dst_e: str,
+    bss_s: str,
+    bss_e: str
+) -> str {
+    let vt = vt_emit_section_cmsis(
+        header_banner, cpu, fpu, vector_section, vector_section_flags,
+        vector_table_label, extern_syms, global_syms,
+        system_labels, system_comments,
+        chunk_kinds, chunk_labels, chunk_counts, chunk_comments
+    )
+    let pl = rp_emit_prologue_body_cmsis(
+        reset_section, default_section, entry_fn,
+        stack_sym, data_src, data_dst_s, data_dst_e, bss_s, bss_e
+    )
+    return vt + "\n" + pl
+}
+
+// ─── canned shape (sscb startup_stm32f429.s mirror) ────────────────
+//
+// stm32f429_emit_full_startup_s: mirrors stdlib/sscb/firmware/startup/
+// startup_stm32f429.s exactly. The hand-written `.s` has:
+//   - prelude:   cortex-m4 + fpv4-sp-d16 FPU + thumb
+//   - section:   .isr_vector, "a", %progbits ; .type %object ; .size
+//   - label:     g_pfnVectors
+//   - externs:   _sidata, _sdata, _edata, _sbss, _ebss, _estack, main,
+//                TIM1_BRK_TIM9_IRQHandler, DMA2_Stream2_IRQHandler
+//   - globals:   g_pfnVectors, Default_Handler, Reset_Handler
+//   - system16:  _estack, Reset_Handler, 5×Default_Handler (NMI..UF),
+//                0,0,0,0 (reserved 7..10), 2×Default_Handler (SVC,DM),
+//                0 (reserved 13), 2×Default_Handler (PendSV, SysTick)
+//   - chunks:    rept 24 Default_Handler, named TIM1_BRK_TIM9, rept
+//                33 Default_Handler, named DMA2_Stream2, rept 32
+//                Default_Handler
+//   - prologue:  CMSIS reset (mov sp + indexed-load .data copy +
+//                .zero_bss + bl main + .hang spin); Default_Handler
+//                loop in its own section.
+
+fn stm32f429_vt_extern_syms() -> [str] {
+    return [
+        "_sidata",
+        "_sdata",
+        "_edata",
+        "_sbss",
+        "_ebss",
+        "_estack",
+        "main",
+        "TIM1_BRK_TIM9_IRQHandler",
+        "DMA2_Stream2_IRQHandler"
+    ]
+}
+
+fn stm32f429_vt_global_syms() -> [str] {
+    return ["g_pfnVectors", "Default_Handler", "Reset_Handler"]
+}
+
+fn stm32f429_vt_system_labels() -> [str] {
+    return [
+        "_estack",
+        "Reset_Handler",
+        "Default_Handler",   // NMI
+        "Default_Handler",   // HardFault
+        "Default_Handler",   // MemManage
+        "Default_Handler",   // BusFault
+        "Default_Handler"    // UsageFault
+    ]
+}
+
+fn stm32f429_vt_system_comments() -> [str] {
+    return [
+        "",
+        "",
+        "NMI",
+        "HardFault",
+        "MemManage",
+        "BusFault",
+        "UsageFault"
+    ]
+}
+
+// IRQ-area chunk layout for stm32f429 (matches hand-written verbatim):
+//   chunk[0] zero4   "Reserved" (offsets 0x1C..0x28 = 4 reserved slots)
+//   chunk[1] named   "Default_Handler" SVC
+//   chunk[2] named   "Default_Handler" DebugMon
+//   chunk[3] zero1   (reserved slot at offset 0x34)
+//   chunk[4] named   "Default_Handler" PendSV
+//   chunk[5] named   "Default_Handler" SysTick
+//   chunk[6] pad     24× Default_Handler (IRQ 0..23)
+//   chunk[7] named   "TIM1_BRK_TIM9_IRQHandler" (IRQ 24)
+//   chunk[8] pad     33× Default_Handler (IRQ 25..57 = 58-24-1)
+//   chunk[9] named   "DMA2_Stream2_IRQHandler" (IRQ 58)
+//   chunk[10] pad    32× Default_Handler (trailing tail)
+//
+// (Counts add to: 16 system already emitted by system block; chunk
+// pads + named entries = 4+1+1+1+1+1 + 24+1+33+1+32 = 9 + 91 = 100.
+// 16 + 91 = 107 words = 0x1ac bytes — matches the orig .isr_vector
+// size verbatim.)
+
+fn stm32f429_vt_chunk_kinds() -> [str] {
+    return ["zero4", "named", "named", "zero1", "named", "named",
+            "pad", "named", "pad", "named", "pad"]
+}
+
+fn stm32f429_vt_chunk_labels() -> [str] {
+    return ["", "Default_Handler", "Default_Handler", "",
+            "Default_Handler", "Default_Handler",
+            "Default_Handler", "TIM1_BRK_TIM9_IRQHandler",
+            "Default_Handler", "DMA2_Stream2_IRQHandler",
+            "Default_Handler"]
+}
+
+fn stm32f429_vt_chunk_counts() -> [int] {
+    return [4, 1, 1, 1, 1, 1, 24, 1, 33, 1, 32]
+}
+
+fn stm32f429_vt_chunk_comments() -> [str] {
+    return [
+        "Reserved",
+        "SVC",
+        "DebugMon",
+        "",
+        "PendSV",
+        "SysTick",
+        "External IRQs 0..N — only the two we care about are named, rest default",
+        "IRQ 24",
+        "",
+        "IRQ 58",
+        "trailing IRQs unused — Default_Handler covers them"
+    ]
+}
+
+fn stm32f429_emit_full_startup_s() -> str {
+    let banner = "/* AUTO-GENERATED by stdlib/hal/boot_emit.hexa (CMSIS composer)\n" +
+                 " * STM32F429ZIT6 ARMv7E-M (Cortex-M4 + FPv4-SP-D16) CMSIS startup.\n" +
+                 " * Composes vt_emit_section_cmsis + rp_emit_prologue_body_cmsis.\n" +
+                 " * Byte-identity oracle: stdlib/sscb/firmware/startup/boot_byte_diff_stm32f429.hexa\n" +
+                 " * Do not hand-edit — regenerate via the emit fn. */"
+    return emit_full_boot_s_cmsis(
+        banner,
+        "cortex-m4",
+        "fpv4-sp-d16",
+        ".isr_vector",
+        "\"a\",%progbits",
+        "g_pfnVectors",
+        stm32f429_vt_extern_syms(),
+        stm32f429_vt_global_syms(),
+        stm32f429_vt_system_labels(),
+        stm32f429_vt_system_comments(),
+        stm32f429_vt_chunk_kinds(),
+        stm32f429_vt_chunk_labels(),
+        stm32f429_vt_chunk_counts(),
+        stm32f429_vt_chunk_comments(),
+        ".text.Reset_Handler",
+        ".text.Default_Handler,\"ax\",%progbits",
+        "main",
+        "_estack",
+        "_sidata",
+        "_sdata",
+        "_edata",
+        "_sbss",
+        "_ebss"
+    )
+}
+
 // ─── canned shape (stm32h7 boot_stm32h7.s mirror) ──────────────────
 
 fn stm32h7_emit_full_boot_s() -> str {

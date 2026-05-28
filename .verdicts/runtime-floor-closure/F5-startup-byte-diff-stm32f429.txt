@@ -1,0 +1,37 @@
+========================================================================
+  stdlib/sscb — boot_byte_diff_stm32f429: F5 CMSIS-STARTUP byte-diff oracle
+========================================================================
+  generator: stdlib/hal/boot_emit.hexa (stm32f429_emit_full_startup_s)
+  oracle:    arm-none-eabi-as byte-diff vs startup_stm32f429.s
+  target:    ARMv7E-M Cortex-M4 + FPv4-SP-D16 CMSIS startup (full)
+
+  scratch: /var/folders/2g/blzd56lx2rvfvt61c1pc9g7r0000gn/T/boot_byte_diff_stm32f429.XXXXXX.nq9tML9IvM
+
+  [PASS] arm-none-eabi-as + objcopy + objdump present
+         · as=y objcopy=y objdump=y
+  [PASS] hand-written startup_stm32f429.s present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a7d3e9872fbb45895/stdlib/sscb/firmware/startup/startup_stm32f429.s
+  [PASS] emitter output assembles via arm-none-eabi-as
+         · wrote /var/folders/2g/blzd56lx2rvfvt61c1pc9g7r0000gn/T/boot_byte_diff_stm32f429.XXXXXX.nq9tML9IvM/gen_startup.o
+  [PASS] hand-written startup_stm32f429.s assembles
+         · wrote /var/folders/2g/blzd56lx2rvfvt61c1pc9g7r0000gn/T/boot_byte_diff_stm32f429.XXXXXX.nq9tML9IvM/orig.o
+  [PASS] .isr_vector section byte-identical (gen ≡ orig)
+         · gen=fced892c73c66d68fdbb01bb68464549f19996231e05ceddce888520d3b70227 orig=fced892c73c66d68fdbb01bb68464549f19996231e05ceddce888520d3b70227
+  [PASS] .text.Reset_Handler section byte-identical (gen ≡ orig)
+         · gen=882d0fe04712a77b0b221fe7e9b6136ac1da814c3bbd17ac5ebe1363acf5a180 orig=882d0fe04712a77b0b221fe7e9b6136ac1da814c3bbd17ac5ebe1363acf5a180
+  [PASS] .text.Default_Handler section byte-identical (gen ≡ orig)
+         · gen=90a54a1f68a806a1795bd044856908235426b3c0f67be605fb94d3d5344a747f orig=90a54a1f68a806a1795bd044856908235426b3c0f67be605fb94d3d5344a747f
+  [PASS] .isr_vector relocs identical (gen ≡ orig)
+         · 107× R_ARM_ABS32 (16 system + 89 IRQ + 2 named handlers)
+  [PASS] .text.Reset_Handler relocs identical (gen ≡ orig)
+         · R_ARM_THM_CALL main + 6× R_ARM_ABS32 literal-pool entries
+  [PASS] .text.Default_Handler relocs identical (gen ≡ orig)
+         · (empty — Default_Handler body is a single self-branch with no relocs)
+
+  F5 stm32f429 leg (CMSIS startup full = vector + reset + default) byte-identity:
+    PROVEN ✓ — stm32f429 CMSIS startup is fully hexa-emittable.
+    DELETION GATE OPEN — hand-written startup_stm32f429.s may be `git rm`.
+    `.s` 1→0 — F5 .s-leg COMPLETE (last hand-written .s deleted).
+========================================================================
+  10/10 checks passed
+__HEXA_LANG_SSCB_BOOT_BYTE_DIFF_STM32F429__ PASS

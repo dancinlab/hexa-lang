@@ -199,6 +199,102 @@ fn rp_emit_section(
     return out
 }
 
+// ─── CMSIS-style emitter (PR #1846 — stm32f429 leg) ─────────────────
+//
+// CMSIS startup `.s` files use a different reset-prologue shape from
+// the minimal `boot_<mcu>.s` files:
+//   - section is per-handler: `.section .text.Reset_Handler` (no
+//     flags) and `.section .text.Default_Handler,"ax",%progbits`.
+//   - `.weak` + `.type ... %function` annotations on the handler
+//     symbols (linker overrides Reset_Handler weakly).
+//   - SP setup uses `mov sp, r0` (ARMv7-M Thumb-2) instead of
+//     `msr msp, r0` (architecturally identical, encoding shorter).
+//   - data copy uses INDEXED loads: `ldr r4, [r2, r3]` / `str r4,
+//     [r0, r3]` with a single index register `r3` that increments by
+//     4 each iteration (clears 1 instruction off the inner loop vs
+//     the rp2040 dual-pointer form).
+//   - branch labels are explicitly named (`.copy_data`, `.zero_bss`,
+//     `.bss_loop`, `.start_main`, `.hang`) instead of `1:`/`2:`/etc.
+//   - calls `main` (not `harness_main`) — production entry point.
+//   - includes a Default_Handler at the end (own labelled section).
+//
+// The `cmsis` emitter takes these as explicit parameters so the same
+// emit surface works for any CMSIS startup (stm32f4, stm32f7, stm32g4,
+// nrf52, etc. — they all share this prologue shape with only symbol-
+// name and section-name variation).
+
+fn rp_emit_prologue_body_cmsis(
+    reset_section: str,
+    default_section: str,
+    entry_fn: str,
+    stack_sym: str,
+    data_src: str,
+    data_dst_s: str,
+    data_dst_e: str,
+    bss_s: str,
+    bss_e: str
+) -> str {
+    let mut out = ""
+
+    // ── Reset_Handler section ────────────────────────────────────
+    out = out + "/* ---- Reset_Handler --------------------------------------------------- */\n"
+    out = out + _pl_indent() + ".section " + reset_section + "\n"
+    out = out + _pl_indent() + ".weak Reset_Handler\n"
+    out = out + _pl_indent() + ".type Reset_Handler, %function\n"
+    out = out + "Reset_Handler:\n"
+
+    // 1. set up stack pointer
+    out = out + _pl_indent() + "ldr r0, =" + stack_sym + "\n"
+    out = out + _pl_indent() + "mov sp, r0\n"
+    out = out + "\n"
+
+    // 2. copy .data from FLASH to RAM (CMSIS indexed-load form)
+    out = out + _pl_indent() + "/* Copy .data from flash to RAM */\n"
+    out = out + _pl_indent() + "ldr r0, =" + data_dst_s + "\n"
+    out = out + _pl_indent() + "ldr r1, =" + data_dst_e + "\n"
+    out = out + _pl_indent() + "ldr r2, =" + data_src + "\n"
+    out = out + _pl_indent() + "movs r3, #0\n"
+    out = out + ".copy_data:\n"
+    out = out + _pl_indent() + "cmp r0, r1\n"
+    out = out + _pl_indent() + "bge .zero_bss\n"
+    out = out + _pl_indent() + "ldr r4, [r2, r3]\n"
+    out = out + _pl_indent() + "str r4, [r0, r3]\n"
+    out = out + _pl_indent() + "adds r3, r3, #4\n"
+    out = out + _pl_indent() + "adds r0, r0, #4\n"
+    out = out + _pl_indent() + "b   .copy_data\n"
+    out = out + "\n"
+
+    // 3. zero .bss
+    out = out + ".zero_bss:\n"
+    out = out + _pl_indent() + "ldr r0, =" + bss_s + "\n"
+    out = out + _pl_indent() + "ldr r1, =" + bss_e + "\n"
+    out = out + _pl_indent() + "movs r2, #0\n"
+    out = out + ".bss_loop:\n"
+    out = out + _pl_indent() + "cmp r0, r1\n"
+    out = out + _pl_indent() + "bge .start_main\n"
+    out = out + _pl_indent() + "str r2, [r0]\n"
+    out = out + _pl_indent() + "adds r0, r0, #4\n"
+    out = out + _pl_indent() + "b   .bss_loop\n"
+    out = out + "\n"
+
+    // 4. call entry fn + spin
+    out = out + ".start_main:\n"
+    out = out + _pl_indent() + "bl " + entry_fn + "\n"
+    out = out + ".hang:\n"
+    out = out + _pl_indent() + "b .hang\n"
+    out = out + "\n"
+
+    // ── Default_Handler section ─────────────────────────────────
+    out = out + "/* ---- Default_Handler ------------------------------------------------- */\n"
+    out = out + _pl_indent() + ".section " + default_section + "\n"
+    out = out + _pl_indent() + ".weak Default_Handler\n"
+    out = out + _pl_indent() + ".type Default_Handler, %function\n"
+    out = out + "Default_Handler:\n"
+    out = out + _pl_indent() + "b Default_Handler\n"
+
+    return out
+}
+
 // ─── canned shape (rp2040 boot_rp2040.s mirror) ────────────────────
 
 fn rp2040_emit_reset_prologue_s() -> str {

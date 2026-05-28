@@ -315,3 +315,182 @@ fn stm32h7_emit_vector_table_s() -> str {
         stm32h7_vt_pad_words()
     )
 }
+
+// ─── CMSIS-style emitter (PR #1846 — stm32f429 leg) ─────────────────
+//
+// CMSIS startup `.s` files diverge from the minimal `boot_<mcu>.s`
+// shape in these ways:
+//   - section name `.isr_vector` (not `.vector_table`).
+//   - external label `g_pfnVectors` with `.type ... %object` + `.size`
+//     directive (linker-script-visible object symbol).
+//   - `.extern` declarations for every external symbol the vector
+//     table references (named IRQ handlers + linker-defined symbols).
+//   - NAMED IRQ vectors interleaved with `.rept <N> .word <default>
+//     .endr` blocks of identical default handlers (per-peripheral IRQ
+//     layout where most slots map to `Default_Handler` but a few are
+//     named C handlers).
+//   - vector words drop the explicit Thumb-bit suffix (`Reset_Handler`
+//     not `Reset_Handler + 1`) — the linker auto-sets bit 0 from the
+//     `.type ... %function` annotation on each handler symbol.
+//
+// We model a CMSIS vector table as alternating "named" + "padding"
+// runs: each chunk is either a single named-handler entry or a `.rept
+// N .word <default> .endr` block. Parallel arrays of chunk kind +
+// label/count keep the API compatible with the parallel-array idiom
+// the rp2040/stm32h7 paths use (no struct-array aliasing risk).
+//
+// chunk_kind[i] == "named" → slot_label[i] is one symbol name; the
+//                  emitter writes `.word <label>` + comment, with no
+//                  Thumb-bit suffix.
+// chunk_kind[i] == "pad"   → slot_label[i] is the default-handler
+//                  symbol name; slot_count[i] is the .rept count.
+// chunk_kind[i] == "zero"  → slot_label[i] ignored; slot_count[i]
+//                  reserved `.word 0,0,...,0` words (CMSIS reserved
+//                  slots between system vectors).
+//
+// system_label / system_comment: the first 16 ARMv7-M system-vector
+// entries (SP + Reset + 14 exception slots), emitted with the
+// hand-written shape (initial-SP word, Reset_Handler word, then named
+// or `.word 0` for reserved slots). Encoded as parallel arrays just
+// like the existing `vt_emit_section_ext` slot trios but the emit
+// shape DROPS the Thumb-bit suffix to match CMSIS source style.
+
+fn _vt_word_line_no_thumb(symbol: str, comment: str) -> str {
+    let mut out = _vt_indent() + ".word "
+    if symbol.len() == 0 {
+        out = out + "0"
+    } else {
+        out = out + symbol
+    }
+    if comment.len() > 0 {
+        out = out + "          /* " + comment + " */"
+    }
+    return out + "\n"
+}
+
+fn vt_emit_section_cmsis(
+    header_banner: str,
+    cpu: str,
+    fpu: str,
+    section_name: str,
+    section_flags: str,
+    table_label: str,
+    extern_syms: [str],
+    global_syms: [str],
+    system_labels: [str],
+    system_comments: [str],
+    chunk_kinds: [str],
+    chunk_labels: [str],
+    chunk_counts: [int],
+    chunk_comments: [str]
+) -> str {
+    let mut out = ""
+
+    if header_banner.len() > 0 {
+        out = out + header_banner
+        out = out + "\n\n"
+    }
+
+    // architectural prelude (CMSIS order: syntax, cpu, fpu, thumb).
+    // Mirrors the hand-written startup_stm32f429.s prelude verbatim.
+    out = out + _vt_indent() + ".syntax unified\n"
+    out = out + _vt_indent() + ".cpu " + cpu + "\n"
+    if fpu.len() > 0 {
+        out = out + _vt_indent() + ".fpu " + fpu + "\n"
+    }
+    out = out + _vt_indent() + ".thumb\n"
+    out = out + "\n"
+
+    // `.global` declarations (vector-table label + handler aliases).
+    let ng = global_syms.len()
+    let mut gi = 0
+    while gi < ng {
+        out = out + _vt_indent() + ".global " + global_syms[gi] + "\n"
+        gi = gi + 1
+    }
+    out = out + "\n"
+
+    // `.extern` declarations (every symbol that must resolve at link
+    // time — linker-defined SP/heap symbols + named IRQ handlers).
+    let ne = extern_syms.len()
+    let mut ei = 0
+    while ei < ne {
+        out = out + _vt_indent() + ".extern " + extern_syms[ei] + "\n"
+        ei = ei + 1
+    }
+    out = out + "\n"
+
+    // `.isr_vector` section header (CMSIS shape: `.type ... %object`
+    // + `.size ... , . - <label>` BEFORE the label — yes, evaluating
+    // the size to 0 at this directive position is the canonical CMSIS
+    // form; `as` accepts it and produces a 0-sized symbol entry that
+    // the linker still resolves to the table start address).
+    out = out + "/* ---- Vector table ---------------------------------------------------- */\n"
+    out = out + _vt_indent() + ".section " + section_name + "," + section_flags + "\n"
+    out = out + _vt_indent() + ".type " + table_label + ", %object\n"
+    out = out + _vt_indent() + ".size " + table_label + ", . - " + table_label + "\n"
+    out = out + table_label + ":\n"
+
+    // 16-entry ARMv7-M system-vector area (SP + Reset + 14 exception
+    // slots). Drop Thumb-bit suffix — CMSIS source convention.
+    let ns = system_labels.len()
+    if system_comments.len() != ns {
+        println("[vector_table_emit] FATAL: system_comments len " + str(system_comments.len()) + " != system_labels len " + str(ns))
+        exit(1)
+    }
+    let mut si = 0
+    while si < ns {
+        out = out + _vt_word_line_no_thumb(system_labels[si], system_comments[si])
+        si = si + 1
+    }
+
+    // Special-case the "0,0,0,0" reserved-slot chunk: CMSIS uses
+    // `.word 0,0,0,0` on a single line at offsets 7..10 (between
+    // UsageFault and SVC). We handle this via a `kind=zero4` chunk
+    // that emits exactly that compact line — byte-identical to the
+    // hand-written form.
+
+    let nc = chunk_kinds.len()
+    if chunk_labels.len() != nc {
+        println("[vector_table_emit] FATAL: chunk_labels len " + str(chunk_labels.len()) + " != chunk_kinds len " + str(nc))
+        exit(1)
+    }
+    if chunk_counts.len() != nc {
+        println("[vector_table_emit] FATAL: chunk_counts len " + str(chunk_counts.len()) + " != chunk_kinds len " + str(nc))
+        exit(1)
+    }
+    if chunk_comments.len() != nc {
+        println("[vector_table_emit] FATAL: chunk_comments len " + str(chunk_comments.len()) + " != chunk_kinds len " + str(nc))
+        exit(1)
+    }
+
+    let mut ci = 0
+    while ci < nc {
+        let kind = chunk_kinds[ci]
+        let label = chunk_labels[ci]
+        let count = chunk_counts[ci]
+        let comment = chunk_comments[ci]
+        if kind == "named" {
+            out = out + _vt_word_line_no_thumb(label, comment)
+        } else if kind == "pad" {
+            if comment.len() > 0 {
+                out = out + _vt_indent() + "/* " + comment + " */\n"
+            }
+            out = out + _vt_indent() + ".rept " + str(count) + "\n"
+            out = out + _vt_indent() + _vt_indent() + ".word " + label + "\n"
+            out = out + _vt_indent() + ".endr\n"
+        } else if kind == "zero4" {
+            // CMSIS reserved 4-slot block: `.word 0,0,0,0` single line.
+            out = out + _vt_indent() + ".word 0,0,0,0" + "                  /* " + comment + " */\n"
+        } else if kind == "zero1" {
+            // CMSIS reserved single-slot: `.word 0` line w/o comment.
+            out = out + _vt_indent() + ".word 0\n"
+        } else {
+            println("[vector_table_emit] FATAL: unknown chunk kind '" + kind + "'")
+            exit(1)
+        }
+        ci = ci + 1
+    }
+
+    return out
+}

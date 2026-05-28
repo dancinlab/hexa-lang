@@ -1,0 +1,50 @@
+#!hexa strict
+// stdlib/sscb/firmware/startup/startup_stm32f429_gen.hexa
+//   F5 RFC 063/064 Component 5 emitter (stm32f429 CMSIS startup).
+//
+// Build-time generator: writes the stm32f429 CMSIS startup `.s`
+// (vector table + reset prologue + default handler) to the path
+// passed as the first argument.
+// Replaces the hand-written stdlib/sscb/firmware/startup/startup_stm32f429.s
+// — which is `git rm`d as of F5 stm32f429 landing once the byte-diff
+// oracle (boot_byte_diff_stm32f429.hexa) PASSes.
+//
+// Invocation (from stdlib/sscb/firmware/Makefile):
+//   hexa-run stdlib/sscb/firmware/startup/startup_stm32f429_gen.hexa <output-path>
+//
+// Default output path (if argv missing): "startup_stm32f429.s" in cwd.
+//
+// Target: ARMv7E-M Cortex-M4 + FPv4-SP-D16 single-precision FPU.
+// Composes stdlib/hal/boot_emit.hexa::stm32f429_emit_full_startup_s
+// which in turn invokes vt_emit_section_cmsis (CMSIS `.isr_vector` +
+// `g_pfnVectors` `.type %object` + `.size` directive + 9 extern decls +
+// 16 system vectors + 5 IRQ chunks interleaving named handlers with
+// rept-padded Default_Handler blocks) and rp_emit_prologue_body_cmsis
+// (per-handler `.text.Reset_Handler` + `.text.Default_Handler` sections,
+// weak/type tags, indexed-load .data copy, `bl main` + .hang spin).
+//
+// Phase: foundation (PR1 of F5 stm32f429 leg = LAST `.s` file = `.s` 1→0).
+// On byte-diff oracle PASS, this is the SSOT for the stm32f429 startup
+// text — the hand-written `.s` is provably redundant.
+
+use "stdlib/hal/boot_emit"
+
+let MODULE_NAME = "startup_stm32f429_gen"
+
+fn main() {
+    let argv = real_args()
+    let out_path = if argv.len() >= 1 { argv[0] } else { "startup_stm32f429.s" }
+    let s_text = stm32f429_emit_full_startup_s()
+    // route through `cat > heredoc` — avoids quoting hazard (same trick
+    // boot_byte_diff_stm32f429.hexa uses for scratch writes).
+    let cmd = "cat > \"" + out_path + "\" <<'__STARTUP_STM32F429_GEN_EOF__'\n" +
+              s_text + "\n__STARTUP_STM32F429_GEN_EOF__"
+    let _ = exec(cmd)
+    let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
+    if exists_check != "y" {
+        println("[startup_stm32f429_gen] FATAL: failed to write " + out_path)
+        exit(1)
+    }
+    println("[startup_stm32f429_gen] wrote " + out_path)
+    exit(0)
+}
