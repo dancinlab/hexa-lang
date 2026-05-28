@@ -23,7 +23,10 @@
 # (per-platform edge tarball name) · GH_TOKEN (for gh release download).
 set -uo pipefail
 
-CFLAGS="-O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs -fbracket-depth=4096"
+# -fbracket-depth is a clang-only flag (deeply-nested generated C); gcc has no
+# such limit and rejects the option, so add it only when CC is clang.
+CFLAGS="-O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs"
+case "$CC" in *clang*) CFLAGS="$CFLAGS -fbracket-depth=4096";; esac
 ROOT="$PWD"
 RA="$ROOT/build/runtime.a"
 mkdir -p build/stage1
