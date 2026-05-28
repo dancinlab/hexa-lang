@@ -129,6 +129,24 @@ jobs:
               -o build/hexa_v2
           file build/hexa_v2
 
+      # ── .c-graduation Phase 1 (ADDITIVE) — prebuilt runtime archive ──
+      # Compiles the SAME self/runtime.c with the SAME CFLAGS into a
+      # standalone object + archive (build/runtime.a). This is the
+      # "frozen dough" (rustc/gcc stage0 pattern): a future `hexa cc` /
+      # Stage-0 can LINK this prebuilt object instead of re-compiling
+      # runtime.c (+ its #include "runtime_core.c" seed) from source —
+      # opt-in via HEXA_PREBUILT_RUNTIME=<path>. This step does NOT touch
+      # the source-compile path above; if it ever fails, the existing
+      # bootstrap stays green (the artifact is purely an extra asset).
+      - name: Stage 0b — build prebuilt runtime archive (runtime.a)
+        shell: bash
+        run: |
+          set -euo pipefail
+          clang $CFLAGS_COMMON -I self -c self/runtime.c -o build/runtime.o
+          ar rcs build/runtime.a build/runtime.o
+          file build/runtime.o
+          ls -la build/runtime.a
+
       - name: Stage 1 — flatten + transpile self/main.hexa → build/stage1/main.c
         shell: bash
         run: |
@@ -215,6 +233,10 @@ jobs:
           mkdir -p "$stage/build" "$stage/release/precompile"
           cp hexa "$stage/hexa"
           cp build/hexa_module_loader "$stage/build/hexa_module_loader"
+          # .c-graduation Phase 1 — ship the prebuilt runtime archive so an
+          # installed tree can link it (HEXA_PREBUILT_RUNTIME) instead of
+          # compiling runtime.c from source. Additive asset only.
+          cp build/runtime.a "$stage/build/runtime.a"
           # GO M4 — ship precompiled binaries from Stage 3.
           cp -R release/precompile/. "$stage/release/precompile/"
           tar -czf "hexa-${target}.tar.gz" -C dist "hexa-${target}"
@@ -303,6 +325,18 @@ jobs:
               -lm -ldl
           file build/hexa_v2
 
+      # ── .c-graduation Phase 1 (ADDITIVE) — prebuilt runtime archive ──
+      # See darwin-arm64 job for full rationale. Same runtime.c + CFLAGS,
+      # additive object/archive only; source-compile path above unchanged.
+      - name: Stage 0b — build prebuilt runtime archive (runtime.a)
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcc $CFLAGS_COMMON -I self -c self/runtime.c -o build/runtime.o
+          ar rcs build/runtime.a build/runtime.o
+          file build/runtime.o
+          ls -la build/runtime.a
+
       - name: Stage 1 — flatten + transpile self/main.hexa → build/stage1/main.c
         shell: bash
         run: |
@@ -348,6 +382,8 @@ jobs:
           mkdir -p "$stage/build" "$stage/release/precompile"
           cp hexa "$stage/hexa"
           cp build/hexa_module_loader "$stage/build/hexa_module_loader"
+          # .c-graduation Phase 1 — ship prebuilt runtime archive (additive).
+          cp build/runtime.a "$stage/build/runtime.a"
           # GO M4 — ship precompiled binaries from Stage 3.
           cp -R release/precompile/. "$stage/release/precompile/"
           tar -czf "hexa-${target}.tar.gz" -C dist "hexa-${target}"
@@ -414,6 +450,18 @@ jobs:
               -lm -ldl
           file build/hexa_v2
 
+      # ── .c-graduation Phase 1 (ADDITIVE) — prebuilt runtime archive ──
+      # See darwin-arm64 job for full rationale. Same runtime.c + CFLAGS,
+      # additive object/archive only; source-compile path above unchanged.
+      - name: Stage 0b — build prebuilt runtime archive (runtime.a)
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcc $CFLAGS_COMMON -I self -c self/runtime.c -o build/runtime.o
+          ar rcs build/runtime.a build/runtime.o
+          file build/runtime.o
+          ls -la build/runtime.a
+
       - name: Stage 1 — flatten + transpile self/main.hexa → build/stage1/main.c
         shell: bash
         run: |
@@ -459,6 +507,8 @@ jobs:
           mkdir -p "$stage/build" "$stage/release/precompile"
           cp hexa "$stage/hexa"
           cp build/hexa_module_loader "$stage/build/hexa_module_loader"
+          # .c-graduation Phase 1 — ship prebuilt runtime archive (additive).
+          cp build/runtime.a "$stage/build/runtime.a"
           # GO M4 — ship precompiled binaries from Stage 3.
           cp -R release/precompile/. "$stage/release/precompile/"
           tar -czf "hexa-${target}.tar.gz" -C dist "hexa-${target}"
