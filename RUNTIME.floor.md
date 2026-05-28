@@ -209,6 +209,56 @@ mission 의 핵심 통찰("source-SHA 동치 ⇒ regen-before-scp 가 GPU 재검
     호출 추가 → 3 `.c` git rm (.c 90→87) · ② state/flame 은 BOOTSTRAP 외라 별도
     가치 없음 (skip).
 
+세션 .c-leg dispatch-deferred reflow 후속: **B9.C-8 follow-up (2026-05-28 ·
+post-`git rm`)** — #1884 이 3 `.c` 를 실제 `git rm` + `.gitignore` (.c 28→25).
+**direct-dispatch gap 은 이제 LIVE** (fresh origin/main checkout = 3 `.c` 전부
+disk 부재 — `git cat-file -e origin/main:self/cuda/runtime_cuda.c` 등 3/3
+NOT-TRACKED). 본 세션이 gap 을 닫으려 시도 → **regen-bridge MEASURED-PROVEN,
+`.sh`→`.hexa` 포팅 BLOCKED**:
+  - **regen-bridge = fresh-tree gap-closer MEASURED PASS** — fresh worktree
+    (3 `.c` 부재) 에서 `hexa-run tool/regen_dispatch_c_artifacts.hexa --regen-only`
+    → 3/3 regen + sha = gate-1 SSOT 와 **일치** (bf16 `3c32db08…d55835` ·
+    cuda `9b2e0c33…e4b7d1` · forge `c51b99af…c2b01`). regen 직후 3 byte_diff
+    verifier 재실행 → **bf16 6/6 · cuda gate-1 · forge 6/6 ALL PASS** (regen 된
+    `.c` 가 byte-identical → deterministic nvcc → 동일 GPU 출력, GPU 재검증 불요).
+    즉 dispatch-path 가 scp **직전** `regen … --regen-only` 한 줄만 부르면 gap CLOSED.
+  - **`.sh`→`.hexa` 포팅 BLOCKED (faithful-port unverifiable-without-GPU)** —
+    scp/local-consume 18 scripts 의 provisioning 기계:
+    · **14 ephemeral-pod** (`dispatch_{agtape_d768_fire,phase4d6_gpu_fire,
+      phase4d7_gpu_fire,phase4d7_oracle_cuda,phase4d9_block_fwd_cuda,
+      phase4d9_causal_softmax_cuda,phase4d_5_3,phase4d_5_3_refire,phase4d_5_4,
+      r049_stage2_mm_lc,r049_stage2_validate,r050_dispatch_validate,
+      r050_perf_inherit,runpod_agtape_d768}.sh`) = vastai/runpodctl offer-search
+      + rent + python3-inline JSON 파싱(vendor-version fallback) + 160-iter
+      SSH-wait + **cost-critical trap EXIT/INT/TERM pod-destroy** + nohup detached
+      launch + GPU-preflight `.cu` heredoc + multi-retry pull. 기존 `.hexa` 선례
+      `tool/dispatch_gpu_fire.hexa` 는 **정적 ssh host(`ubu-2`) 가정** — ephemeral
+      pod provisioning 무. `stdlib/cloud/dft_dispatch.hexa`(660L) 는 `runpod.hexa`
+      추상 사용 — raw `runpodctl`+python3-parse 와 **byte-equivalent 거동 아님**.
+      faithful 재표현은 rewrite 이며 거동 drift 는 GPU fire 로만 검출(=mission 금지).
+      leak paid-pod / r050 pending-fire 파손 = 실패 모드. → **포팅 ≠ 안전**.
+    · **3 local-only oracle** (`flame_phase4d{7,9}_{gpu_path,block_fwd,
+      causal_softmax}_oracle.sh`) = ssh/scp 무 · `awk`-splice 후 로컬 nvcc/clang
+      `self/cuda/runtime_cuda.c`. scp-gap 아님(=mission 타깃 외) + flame phase4
+      CLOSED 캠페인(#28e9d648 fire#17 100% closure) ABSORBED_PREFIXES 소유 →
+      cross-cycle 포팅/`git rm` = `inbox_dup_race_precheck` 위반.
+  - **comment-only 4 (gap 무)** — `dispatch_{r055_p1_vec_add,rope_gpu_oracle,
+    runpod_r055_p1_vec_add,phase4d9_orin_clobber_oracle}.sh` 는 3 `.c` 를 코멘트로만
+    언급(heredoc 자체-합성 harness scp · 3 `.c` 미-scp). regen-before-scp 불요.
+  - **dead vs live 분류 보류** — r050 RFC = "**fire pending**" (`rfc_050…md` L3 ·
+    BF16-routing falsifier 미-PASS) → r050 dispatch 2종 dead 단정 불가(`git rm` 금지).
+    나머지 flame phase4 dispatch 도 retro 문서(PHASE4D9_CAMPAIGN_RETRO·design.md)에서만
+    인용 = 사실상 CLOSED-leftover 이나, 동일 ABSORBED 소유 + dup-race 게이트로 이 세션
+    `git rm` 부적격. `.verdicts`/`PAPER` 인용 0 (gh-grep 확인).
+  - **잔여 (precise residual)**: direct-dispatch gap = **PARTIALLY CLOSED**.
+    BUILD-flow(`build_hexa_cli` #1882 step-0-pre) 은 닫힘. **fresh-tree direct-dispatch**
+    (no prior build) 만 OPEN — 14 ephemeral-pod `.sh` 가 scp 직전 regen 호출 부재.
+    닫는 1-라인은 MEASURED-PROVEN(위) — 단 그 라인을 넣을 `.sh` 편집/포팅이
+    double-blocked(project.tape `.sh` Write/Edit + ABSORBED 소유 + GPU-only-verify).
+    → **활성화는 flame/forge/runpod dispatch 사이클 소유 GPU-equipped 세션이
+    `dispatch_*.sh` 를 `.hexa` 로 포팅(scp 직전 `regen … --regen-only` 1-라인 prepend)
+    하며 수행** — 본 cross-cycle 세션은 BLOCKED-flag 가 정직한 종착.
+
 ## 🧱 floor closure 상태 (2026-05-28 — F1-F6 종결 pass)
 
 | 항목 | 상태 | verdict |
