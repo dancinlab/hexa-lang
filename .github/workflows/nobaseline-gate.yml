@@ -221,3 +221,76 @@ jobs:
           set -euo pipefail
           ./hexa --version
           echo "::notice::no-baseline dry-run GREEN (linux-arm64) — seed removal is build-safe via prebuilt runtime.a"
+
+  # ── .c-graduation Phase 4/5 — FINAL 3 tracked .c removal-safety DRY-RUN ─────
+  #
+  # The 20 warm-regen seeds are already UNtracked (Phase 3, #2035) → tracked
+  # .c = 3. This matrix proves each of the FINAL 3 removal-safe, per platform,
+  # WITHOUT committing any removal (working-copy temp-remove only):
+  #
+  #   A. self/native/hexa_cc.c — the C source of the self-hosted transpiler.
+  #      Chicken-egg: a fresh checkout WITHOUT it has no C source to build the
+  #      transpiler from. ESCAPE = download a prior edge `hexa` driver, run
+  #      `hexa cc --regen` to REGENERATE hexa_cc.c, then Stage-0 builds the
+  #      transpiler from the regenerated copy + prebuilt runtime.a. If regen
+  #      cannot run in CI (stale binary can't parse current .hexa sources, or
+  #      no edge asset) → HARD-BLOCKER reported, hexa_cc.c is irreducible.
+  #
+  #   B. self/forge/forge_tier_v1.c — "unused via prebuilt". Temp-remove it and
+  #      confirm the full prebuilt Stage-0/1/2 build is still green → confirms
+  #      the unused claim; removal trivially safe.
+  #
+  #   C. test/native_build/classd_behavioral_harness.c — a test fixture.
+  #      Run gen_c_text_emitter to produce a verbatim `.c-text` emitter from
+  #      the .c, then assert the regenerated source is BYTE-IDENTICAL (sha256)
+  #      → the .c-text path reproduces it; removal safe (emitter regenerates).
+  #
+  # DRY-RUN ONLY — never committed. Tracked .c count stays 3.
+
+  final3-darwin-arm64:
+    name: final3 (darwin-arm64)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      CC: clang
+      LIBS: ""
+      EDGE_ASSET: hexa-darwin-arm64.tar.gz
+    steps:
+      - uses: actions/checkout@v6
+      - name: final3 removal-safety dry-run
+        shell: bash
+        run: bash tool/final3_gate_dryrun
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  final3-linux-x86_64:
+    name: final3 (linux-x86_64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CC: gcc
+      LIBS: "-lm -ldl"
+      EDGE_ASSET: hexa-linux-x86_64.tar.gz
+    steps:
+      - uses: actions/checkout@v6
+      - name: final3 removal-safety dry-run
+        shell: bash
+        run: bash tool/final3_gate_dryrun
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  final3-linux-arm64:
+    name: final3 (linux-arm64)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 35
+    env:
+      CC: gcc
+      LIBS: "-lm -ldl"
+      EDGE_ASSET: hexa-linux-arm64.tar.gz
+    steps:
+      - uses: actions/checkout@v6
+      - name: final3 removal-safety dry-run
+        shell: bash
+        run: bash tool/final3_gate_dryrun
+        env:
+          GH_TOKEN: ${{ github.token }}
