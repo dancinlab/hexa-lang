@@ -90,8 +90,19 @@ static int hxlcl_errno = 0;
 // Cycle 63 forward decls — syscall wrappers used by earlier helpers
 // (e.g. hxlcl_printf line 451+ calls write). Bodies live in the
 // syscall block at line ~825 below.
+// B9.6-C12/C13 (F3 Path A) — under HEXA_RT_SELFEMIT hxlcl_read/hxlcl_write are
+// `extern` (resolved by the hexa-emitted .o — rt_read/rt_write are the rt_close
+// 3-arg _cf shape: only fd/x0 sxtw, buf/n untouched; errno store via PC-relative
+// adrp/str to the hxlcl_errno SYMBOL, externally linkable under the guard).
+// Forward decls flip to external linkage too, else the `static` masks the
+// self-emit symbol (-Wundefined-internal). hxlcl_printf (line ~451) calls write.
+#ifdef HEXA_RT_SELFEMIT
+extern long hxlcl_read(int fd, void *buf, unsigned long n);
+extern long hxlcl_write(int fd, const void *buf, unsigned long n);
+#else
 static long hxlcl_read(int fd, void *buf, unsigned long n);
 static long hxlcl_write(int fd, const void *buf, unsigned long n);
+#endif
 // B9.6-C2 (F3 Path A) — under HEXA_RT_SELFEMIT hxlcl_close is `extern`
 // (resolved by emit_hxlcl_close_o.hexa's .o). As with getpid (#1860) the
 // forward decl must flip to external linkage too, else the `static` decl
@@ -164,9 +175,21 @@ static int  hxlcl_fcntl(int fd, int cmd, long arg);
 static int  hxlcl_ioctl(int fd, unsigned long req, void *arg);
 static long hxlcl_lseek(int fd, long off, int whence);
 #endif
+// B9.6-C14/C15/C16 (F3 Path A) — under HEXA_RT_SELFEMIT hxlcl_select (6-arg
+// NON-_cf), hxlcl_poll (3-arg NON-_cf, the FIRST uxtw `mov w1,w1` for the
+// unsigned nfds) and hxlcl_waitpid (the FIRST 4-arg _cf, errno reloc) are
+// `extern` (resolved by the hexa-emitted .o). select/poll have NO errno path →
+// no reloc; waitpid stores errno via PC-relative adrp/str to the hxlcl_errno
+// SYMBOL. Forward decls flip to external linkage too.
+#ifdef HEXA_RT_SELFEMIT
+extern int  hxlcl_select(int nfds, void *r, void *w, void *e, void *t);
+extern int  hxlcl_poll(void *fds, unsigned int nfds, int timeout);
+extern int  hxlcl_waitpid(int pid, int *status, int options);
+#else
 static int  hxlcl_select(int nfds, void *r, void *w, void *e, void *t);
 static int  hxlcl_poll(void *fds, unsigned int nfds, int timeout);
 static int  hxlcl_waitpid(int pid, int *status, int options);
+#endif
 // B9.6-C6/C7 (F3 Path A) — under HEXA_RT_SELFEMIT hxlcl_fstat (int+ptr) and
 // hxlcl_stat (ptr+ptr) are `extern` (resolved by the hexa-emitted .o). Both
 // are 2-arg _cf svc bodies with the carry-flag errno store (PC-relative adrp/
@@ -181,7 +204,17 @@ static int  hxlcl_stat(const char *path, void *buf);
 #endif
 static int  hxlcl_open_sys(const char *path, int flags, ...);
 static void hxlcl_exit(int code) __attribute__((noreturn));
+// B9.6-C17 (F3 Path A) — under HEXA_RT_SELFEMIT hxlcl_mmap is `extern`
+// (resolved by the hexa-emitted .o — rt_mmap is a 6-arg _cf: sxtw x2/x3/x4 for
+// prot/flags/fd, addr/len/off untouched; errno store via PC-relative adrp/str to
+// the hxlcl_errno SYMBOL; -1 == MAP_FAILED). Forward decl flips to external
+// linkage too. The arena bump-allocator state machine is elsewhere — this is
+// just the kernel mmap trap.
+#ifdef HEXA_RT_SELFEMIT
+extern void *hxlcl_mmap(void *addr, unsigned long len, int prot, int flags, int fd, long off);
+#else
 static void *hxlcl_mmap(void *addr, unsigned long len, int prot, int flags, int fd, long off);
+#endif
 static void *hxlcl_malloc(size_t n);  /* cycle 73: route pre-#define helpers off libc malloc */
 static void  hxlcl_free(void *p);     /* cycle 73: noop free — keeps _free extern out */
 static int  hxlcl_clock_gettime(int clk, void *ts);  /* re-decl: cycle 65 syscall body overrides cycle 62 stub */
@@ -1342,7 +1375,13 @@ static inline int _hxlcl_pipe_cf(int fds[2]) {
 // follow-up cycle scales this same `_cf` pattern. A failed read/close now
 // returns -1 + sets errno (not a bogus positive errno-as-result), so the
 // content-leak / bogus-fd hazards that motivated #251 cannot recur.
+// B9.6-C12 (F3 Path A) — DEFAULT: file-local `static` 3-arg _cf svc-trap
+// (0-libc-extern preserved). HEXA_RT_SELFEMIT: `extern`, body supplied by the
+// self-emit .o (rt_read's 36-byte rt_close-shape body: sxtw x0/fd only, buf/n
+// untouched, full _cf errno tail, errno relocs @0x14/0x18, SYS_READ=3).
+#ifndef HEXA_RT_SELFEMIT
 static long __attribute__((noinline)) hxlcl_read(int fd, void *buf, unsigned long n) { return _hxlcl_syscall3_cf(HXLCL_SYS_READ, (long)fd, (long)buf, (long)n); }
+#endif
 // RUNTIME tail (cycle 82): svc-trap mkdir (136) — a direct kernel syscall,
 // 2 args. Replaces the libc mkdir call in runtime_core.c + the generated
 // code's s4-lowered mkdir. carry-set -> -1 + errno.
@@ -1358,7 +1397,12 @@ extern int hxlcl_mkdir(const char *path, int mode);
 #else
 static int __attribute__((noinline)) hxlcl_mkdir(const char *path, int mode) { return (int)_hxlcl_syscall2_cf(HXLCL_SYS_MKDIR, (long)path, (long)mode); }
 #endif
+// B9.6-C13 (F3 Path A) — DEFAULT: file-local `static` 3-arg _cf svc-trap.
+// HEXA_RT_SELFEMIT: `extern`, body supplied by the self-emit .o (rt_write's
+// 36-byte rt_read twin, SYS_WRITE=4, errno relocs @0x14/0x18).
+#ifndef HEXA_RT_SELFEMIT
 static long __attribute__((noinline)) hxlcl_write(int fd, const void *buf, unsigned long n) { return _hxlcl_syscall3_cf(HXLCL_SYS_WRITE, (long)fd, (long)buf, (long)n); }
+#endif
 // F3 ACTIVATION RUNBOOK · Path A — B9.6-C2 class-C syscall WITH arg + errno.
 //
 // hxlcl_close is the SECOND class-C svc emitter (after #1860 getpid) and the
@@ -1569,14 +1613,33 @@ static int __attribute__((noinline)) hxlcl_ioctl(int fd, unsigned long req, void
 #ifndef HEXA_RT_SELFEMIT
 static long __attribute__((noinline)) hxlcl_lseek(int fd, long off, int whence) { return _hxlcl_syscall3_cf(HXLCL_SYS_LSEEK, (long)fd, off, (long)whence); }
 #endif
+// B9.6-C14 (F3 Path A) — DEFAULT: file-local `static` 6-arg NON-_cf svc-trap.
+// HEXA_RT_SELFEMIT: `extern`, body supplied by the self-emit .o (rt_select's
+// 20-byte body: nfds/x0 sxtw + mov x5,#0 — r/w/e/t pointers untouched — trap,
+// ret, NO errno store → NO reloc, SYS_SELECT=93).
+#ifndef HEXA_RT_SELFEMIT
 static int __attribute__((noinline)) hxlcl_select(int nfds, void *r, void *w, void *e, void *t) { return (int)_hxlcl_syscall6(HXLCL_SYS_SELECT, (long)nfds, (long)r, (long)w, (long)e, (long)t, 0); }
+#endif
+// B9.6-C15 (F3 Path A) — DEFAULT: file-local `static` 3-arg NON-_cf svc-trap.
+// HEXA_RT_SELFEMIT: `extern`, body supplied by the self-emit .o (rt_poll's
+// 20-byte body: fds/x0 ptr untouched, `mov w1,w1` uxtw the UNSIGNED nfds,
+// sxtw x2/timeout — trap, ret, NO reloc, SYS_POLL=230).
+#ifndef HEXA_RT_SELFEMIT
 static int __attribute__((noinline)) hxlcl_poll(void *fds, unsigned int nfds, int timeout) { return (int)_hxlcl_syscall3(HXLCL_SYS_POLL, (long)fds, (long)nfds, (long)timeout); }
+#endif
 // cycle 66 — libc waitpid (wait4 syscall has 4 args + needs proper
 // errno/EINTR handling that the raw syscall path drops).
 extern int waitpid(int pid, int *status, int options);
 // cycle 71 — waitpid re-trapped via the wait4 syscall (SYS_WAIT4=7) with
 // carry-flag-correct error handling; 4th arg (struct rusage*) = NULL.
+// B9.6-C16 (F3 Path A) — DEFAULT: file-local `static` 4-arg _cf svc-trap (routes
+// waitpid to wait4(2) with a NULL rusage 4th arg). HEXA_RT_SELFEMIT: `extern`,
+// body supplied by the self-emit .o (rt_waitpid's 44-byte FIRST 4-arg _cf body:
+// sxtw x0/pid + sxtw x2/options + mov x3,#0 — status/x1 untouched — full _cf
+// errno tail, errno relocs @0x1c/0x20, SYS_WAIT4=7).
+#ifndef HEXA_RT_SELFEMIT
 static int __attribute__((noinline)) hxlcl_waitpid(int pid, int *status, int options) { return (int)_hxlcl_syscall4_cf(HXLCL_SYS_WAIT4, (long)pid, (long)status, (long)options, 0); }
+#endif
 /* Cycle 65: variadic to handle both 2-arg and 3-arg open() callers. */
 extern int open(const char *path, int flags, ...);
 static int __attribute__((noinline)) hxlcl_open_sys(const char *path, int flags, ...) {
@@ -1654,7 +1717,14 @@ static void __attribute__((noinline, noreturn)) hxlcl_exit(int code) {
 // cycle 71 — mmap re-trapped via carry-flag-correct svc 0x80 (SYS_MMAP=197).
 // On error the cf6 helper returns -1, which cast to (void *) is exactly
 // MAP_FAILED ((void *)-1) — probe-verified mmap(badfd) -> MAP_FAILED+EBADF.
+// B9.6-C17 (F3 Path A) — DEFAULT: file-local `static` 6-arg _cf svc-trap.
+// HEXA_RT_SELFEMIT: `extern`, body supplied by the self-emit .o (rt_mmap's
+// 44-byte 6-arg _cf body: sxtw x2/prot + sxtw x3/flags + sxtw x4/fd —
+// addr/len/off untouched — full _cf errno tail, errno relocs @0x1c/0x20,
+// -1 == MAP_FAILED, SYS_MMAP=197).
+#ifndef HEXA_RT_SELFEMIT
 static void *__attribute__((noinline)) hxlcl_mmap(void *addr, unsigned long len, int prot, int flags, int fd, long off) { return (void *)_hxlcl_syscall6_cf(HXLCL_SYS_MMAP, (long)addr, (long)len, (long)prot, (long)flags, (long)fd, off); }
+#endif
 static int __attribute__((noinline)) hxlcl_clock_gettime(int clk, void *ts) {
     // Use gettimeofday(2) (syscall 116) since clock_gettime is a vDSO
     // function on Darwin with no direct syscall number. timespec[0..1]
