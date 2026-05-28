@@ -1,0 +1,5 @@
+small-M GEMV wedge (decode, N=256 K=512, 256 outputs)
+  n_nan_inf = 0 / 256
+  max_abs_err = 3.197e-14  (@n=160, gpu=16.729963256221343 ref=16.729963256221374)
+  ref_abs_max = 19.9407  → max_rel_err = 1.603e-15
+  RESULT: PASS (byte-eq band <1e-12)
