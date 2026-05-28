@@ -15,9 +15,13 @@ flip 캠페인이 안전 quick-win 을 고갈시킨 뒤 남는 진짜 바닥의 
 
 - `.o` = **0** ✅
 - `.s` = **0** (F5 .s-leg COMPLETE · PR #1843/#1844/#1845/#1846 · 아래 F5)
-- `.c` = **104** (2026-05-28 B9.C-1 ACTIVATED · 첫 .c-leg 삭제 = 105→104 ·
-  sscb firmware `src/adc_dma.c` ← `src/adc_dma_emit.hexa` · 6/6 byte-diff PASS
-  · `.verdicts/runtime-floor-closure/B9C1-adc-dma-byte-diff.txt`).
+- `.c` = **100** (2026-05-28 B9.C-2 ACTIVATED · sscb firmware src/ 4-file batch
+  삭제 = 104→100 · `gate_driver.c` · `system_init.c` · `fault_handler.c` ·
+  `main.c` ← per-file `*_emit.hexa` + `*_byte_diff.hexa` · 각 6/6 PASS ·
+  `.verdicts/runtime-floor-closure/B9C2-{gate-driver,system-init,fault-handler,main}-byte-diff.txt`
+  · firmware.elf/bin/hex `.o` 6/6 byte-identical to pre-batch baseline ·
+  sscb firmware `src/` 의 마지막 hand-written `.c` 도 hexa-emit 으로 전환 · 5/5 file).
+  이전: 2026-05-28 B9.C-1 (#1847) `src/adc_dma.c` → 105→104 (foundation PR).
   B9.6h dead-scaffolding sweep 후 **~70 예상** (대부분이 archive/fires + tool 의
   죽은 실험 harness 였음 — runtime floor 아님). sweep 후 남는 ~70 이 이 doc 의 대상.
 
@@ -29,6 +33,13 @@ arm-none-eabi-gcc 가 컴파일 · byte-diff oracle 이 검증. **gate-1 source-
 **gate-2 whole-file .o (no -g)** + **gate-3 `.text.<symbol>` 섹션 (-g)** 3중
 byte-identity. class-D HexaVal struct-return 기계어-emit 난제 (#1841) 회피 —
 emit 대상이 머신코드가 아니라 C 소스이므로 컴파일러가 codegen 해결.
+
+세션 .c-leg batch: **B9.C-2** — B9.C-1 패턴 1:1 적용, sscb firmware src/ 나머지
+4 파일 (gate_driver · system_init · fault_handler · main) 일괄 전환. 4 oracle 모두
+6/6 PASS · firmware ELF/bin/hex 6/6 .o 모두 baseline 과 byte-identical. main.c
+는 `.text.startup.main` (GCC `-ffunction-sections` entry-point 섹션) 사용 —
+일반 fn 의 `.text.<sym>` 와 다른 GCC 컨벤션. sscb firmware `src/` 의 hand-written
+`.c` 0 (5/5 hexa-emit).
 
 ## 🧱 floor closure 상태 (2026-05-28 — F1-F6 종결 pass)
 

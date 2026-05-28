@@ -1,0 +1,97 @@
+#!hexa strict
+// stdlib/sscb/firmware/src/fault_handler_emit.hexa
+//   B9.C-2 (.c-leg batch · #1847 pattern) — fault_handler.c source emitter.
+//
+// Mirrors adc_dma_emit.hexa one-to-one. Emits the SSCB firmware
+// `fault_handler.c` — verbatim §5.2 from module/engineering_pack/README.md.
+//
+// Top-level fns: TIM1_BRK_TIM9_IRQHandler · DMA2_Stream2_IRQHandler ·
+// process_adc_block · sscb_trip_soft.
+//
+// Invocation:
+//   hexa-run stdlib/sscb/firmware/src/fault_handler_emit.hexa <output-path>
+//
+// Default output path (if argv missing): "fault_handler.c" in cwd.
+
+let MODULE_NAME = "fault_handler_emit"
+
+fn emit_fault_handler_c() -> str {
+    // Verbatim content of hand-written stdlib/sscb/firmware/src/fault_handler.c
+    let s = "/* fault_handler.c — verbatim from module/engineering_pack/README.md §5.2.\n" +
+            " *\n" +
+            " * Hard-trip path: COMP1 → TIM1 BRK_IN does the gate cutoff in hardware\n" +
+            " * (no MCU involvement). The TIM1_BRK_TIM9_IRQHandler runs after the cut\n" +
+            " * for logging only; latency here does not affect t_off.\n" +
+            " *\n" +
+            " * Soft-trip path: SPI1+DMA2_Stream2 streams Σ-Δ samples; on N consecutive\n" +
+            " * over-threshold samples we force TIM1->EGR.BG, which fires the same\n" +
+            " * BRK event the hardware comparator does, killing the PWM in one cycle.\n" +
+            " */\n" +
+            "#include \"stm32f4xx_min.h\"\n" +
+            "#include \"sscb.h\"\n" +
+            "\n" +
+            "void TIM1_BRK_TIM9_IRQHandler(void) {\n" +
+            "    if (TIM1->SR & TIM_SR_BIF) {\n" +
+            "        /* PWM is already OFF via hardware BRK; this handler does logging\n" +
+            "         * and state transition only — does NOT race against the cut. */\n" +
+            "        TIM1->SR = ~TIM_SR_BIF;\n" +
+            "        sscb_state.flags |= FLT_HW_TRIPPED;\n" +
+            "        sscb_state.trip_timestamp = DWT->CYCCNT;\n" +
+            "        sscb_state.trip_cause = TRIP_HW_COMPARATOR;\n" +
+            "        gpio_set_fault_low();\n" +
+            "        fault_log_write(sscb_state.trip_timestamp, TRIP_HW_COMPARATOR);\n" +
+            "    }\n" +
+            "}\n" +
+            "\n" +
+            "void DMA2_Stream2_IRQHandler(void) {\n" +
+            "    if (DMA2->LISR & DMA_LISR_HTIF2) {\n" +
+            "        DMA2->LIFCR = DMA_LIFCR_CHTIF2;\n" +
+            "        process_adc_block(&adc_buf[0], ADC_BLOCK_SIZE / 2);\n" +
+            "    } else if (DMA2->LISR & DMA_LISR_TCIF2) {\n" +
+            "        DMA2->LIFCR = DMA_LIFCR_CTCIF2;\n" +
+            "        process_adc_block(&adc_buf[ADC_BLOCK_SIZE / 2], ADC_BLOCK_SIZE / 2);\n" +
+            "    }\n" +
+            "}\n" +
+            "\n" +
+            "void process_adc_block(int16_t *p, uint16_t n) {\n" +
+            "    uint8_t oc = 0;\n" +
+            "    for (uint16_t i = 0; i < n; i++) {\n" +
+            "        if (p[i] > TRIP_THRESH_COUNTS) {\n" +
+            "            if (++oc >= OVERCURRENT_SAMPLES) {\n" +
+            "                sscb_trip_soft(TRIP_SW_OVERCURRENT);\n" +
+            "                return;\n" +
+            "            }\n" +
+            "        } else {\n" +
+            "            oc = 0;\n" +
+            "        }\n" +
+            "    }\n" +
+            "    sscb_state.irms_recent = irms_estimate(p, n);\n" +
+            "}\n" +
+            "\n" +
+            "void sscb_trip_soft(uint8_t cause) {\n" +
+            "    /* Force a break event — same path as hardware COMP1 → TIM1 BRK */\n" +
+            "    TIM1->EGR |= TIM_EGR_BG;\n" +
+            "    sscb_state.flags |= FLT_SW_TRIPPED;\n" +
+            "    sscb_state.trip_timestamp = DWT->CYCCNT;\n" +
+            "    sscb_state.trip_cause = cause;\n" +
+            "    gpio_set_fault_low();\n" +
+            "    fault_log_write(sscb_state.trip_timestamp, cause);\n" +
+            "}\n"
+    return s
+}
+
+fn main() {
+    let argv = real_args()
+    let out_path = if argv.len() >= 1 { argv[0] } else { "fault_handler.c" }
+    let c_text = emit_fault_handler_c()
+    let cmd = "cat > \"" + out_path + "\" <<'__FAULT_HANDLER_EMIT_EOF__'\n" +
+              c_text + "__FAULT_HANDLER_EMIT_EOF__"
+    let _ = exec(cmd)
+    let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
+    if exists_check != "y" {
+        println("[fault_handler_emit] FATAL: failed to write " + out_path)
+        exit(1)
+    }
+    println("[fault_handler_emit] wrote " + out_path)
+    exit(0)
+}
