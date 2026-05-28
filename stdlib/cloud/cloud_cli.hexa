@@ -1391,7 +1391,10 @@ fn main() {
         // with no limit set are never touched.
         let m23_kill = _has_flag(av, si + 1, "--kill")
         if m23_kill == 1 {
-            let m23_key = cloud_runpod_must_have_api_key("watchdog")
+            // SOFT runpod key (M7 secret-get path, but non-exiting): "" when
+            // absent so a vast-only sweep doesn't die on a missing runpod key.
+            // runpod_terminate handles "" gracefully (vast uses vast_destroy).
+            let m23_key = exec("secret get runpod.api_key 2>/dev/null").trim()
             let n = pod_registry_limit_sweep(m23_key, 0)
             if n > 0 {
                 println("[cloud] watchdog: " + str(n) + " pod(s) torn down by M2/M3 limit (ttl/cost)")
