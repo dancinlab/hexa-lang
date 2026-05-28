@@ -4952,6 +4952,42 @@ fn rt_send_reloc_kinds() {
     return k
 }
 
+// ── rt_setsockopt (F3 wave 11 — class-C · 5-arg via syscall6) ──
+// setsockopt(fd, level, optname, optval, optlen) -> int, via syscall6 (6th=0).
+// sxtw x0/x1/x2 (fd/level/optname) + optval/x3 ptr untouched + uxtw x4
+// (mov w4,w4; unsigned optlen) + mov x5,#0. 13 instr, 52 B, errno reloc
+// 0x24/0x28. Verified BYTE-IDENTICAL to clang -O2 (_hxlcl_syscall6_cf oracle).
+// SYS_SETSOCKOPT=105 (mov w16 0x52800D30). Completes socket-family incl options.
+fn rt_setsockopt() {
+    let mut c = []
+    c.push(0); c.push(124); c.push(64); c.push(147)    // sxtw x0,w0 (fd)
+    c.push(33); c.push(124); c.push(64); c.push(147)   // sxtw x1,w1 (level)
+    c.push(66); c.push(124); c.push(64); c.push(147)   // sxtw x2,w2 (optname)
+    c.push(228); c.push(3); c.push(4); c.push(42)      // mov w4,w4 (uxtw optlen)
+    c.push(5); c.push(0); c.push(128); c.push(210)     // mov x5,#0
+    c.push(48); c.push(13); c.push(128); c.push(82)    // mov w16,#105 (SYS_SETSOCKOPT)
+    c.push(1); c.push(16); c.push(0); c.push(212)      // svc #0x80
+    c.push(232); c.push(55); c.push(159); c.push(154)  // cset x8,hs
+    c.push(136); c.push(0); c.push(0); c.push(180)     // cbz x8,Lret
+    c.push(8); c.push(0); c.push(0); c.push(144)       // adrp x8,errno [PAGE21 @0x24]
+    c.push(0); c.push(1); c.push(0); c.push(185)       // str w0,[x8] [PAGEOFF12 @0x28]
+    c.push(0); c.push(0); c.push(128); c.push(146)     // mov x0,#-1
+    c.push(192); c.push(3); c.push(95); c.push(214)    // ret
+    return c
+}
+fn rt_setsockopt_reloc_offs() {
+    let mut o = []
+    o.push(36)
+    o.push(40)
+    return o
+}
+fn rt_setsockopt_reloc_kinds() {
+    let mut k = []
+    k.push(3)
+    k.push(4)
+    return k
+}
+
 // ── rt_write (B9.6-C13 — class-C syscall · int+ptr+ulong _cf + errno) ────
 // write(int fd, const void *buf, unsigned long n) -> long. The exact twin of
 // rt_read — same 9-instr 36 B _cf shape (only fd/x0 sign-extended; buf x1 + n

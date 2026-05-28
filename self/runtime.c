@@ -2451,6 +2451,15 @@ static int hxlcl_setenv(const char *name, const char *val, int overwrite) {
 // restore above). The stub returned "ok" so callers didn't notice, but
 // SO_REUSEADDR / SO_RCVTIMEO etc. were no-ops in the compiler binary.
 // Prototype from the top-of-file <sys/socket.h> include.
+// F3 ACTIVATION · Path A — setsockopt class-C svc-wrapper self-emit slot.
+// 5-arg via syscall6 (6th unused=0): sxtw x0/x1/x2 (fd/level/optname) +
+// optval/x3 ptr untouched + uxtw x4 (mov w4,w4; unsigned optlen) + mov x5,#0.
+// 13 instr / 52 B, errno reloc 0x24/0x28. SELF-EMIT → extern, resolved by
+// emit_hxlcl_setsockopt_o.hexa (byte-eq to clang -O2, SYS#105). Completes the
+// socket-family (incl. options).
+#ifdef HEXA_RT_SELFEMIT
+extern int hxlcl_setsockopt(int sockfd, int level, int optname, const void *optval, unsigned int optlen);
+#else
 static int __attribute__((noinline)) hxlcl_setsockopt(int sockfd, int level, int optname, const void *optval, unsigned int optlen) {
     // net/exec ③: svc-trap setsockopt (105), 5 args -> sc6_cf (6th unused).
     // ARCH GATE: HXLCL_SYS_* + _hxlcl_syscall*_cf are Darwin arm64 only.
@@ -2462,6 +2471,7 @@ static int __attribute__((noinline)) hxlcl_setsockopt(int sockfd, int level, int
     return setsockopt(sockfd, level, optname, optval, (socklen_t)optlen);
 #endif
 }
+#endif
 static int hxlcl_grantpt(int fd) { (void)fd; return (int)HX_INT(rt_posix_ok()); }
 static int hxlcl_unlockpt(int fd) { (void)fd; return (int)HX_INT(rt_posix_ok()); }
 static char *hxlcl_ptsname(int fd) { (void)fd; (void)rt_posix_ok(); return (char *)"/dev/null"; }
