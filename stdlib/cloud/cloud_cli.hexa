@@ -892,10 +892,16 @@ fn _cloud_rent_runpod(av: [str], start: int) -> int {
     println("[cloud] rent runpod: READY " + port.ip + ":" + port.port + " (root@" + port.ip + " -p " + port.port + ")")
     let _ = pod_registry_add(pod.pod_id, "runpod", port.ip, port.port, "READY")
     if ttl_sec >= 0 || len(max_cost) > 0 {
-        // RunPod's create response carries no clean dph; pass "" so the cost-cap
-        // stays inert here (TTL still enforces). RunPod rate capture is a follow-up.
-        let _ = pod_registry_set_limits(pod.pod_id, ttl_sec, max_cost, "")
-        println("[cloud] M2/M3 guard: ttl_sec=" + str(ttl_sec) + " max_cost_usd=" + max_cost + " (enforced by `cloud watchdog`)")
+        // Capture the RunPod pod's hourly rate (`costPerHr`) so the M3 cost-cap
+        // can accrue. Prefer the value the create response carried; if it was
+        // absent (older runpodctl shapes) fall back to a `pod get` lookup. ""
+        // when neither surfaces it (cost-cap inert, TTL still enforces).
+        let mut rate = pod.cost_per_hr
+        if len(rate) == 0 {
+            rate = runpod_pod_cost_per_hr(api_key, pod.pod_id)
+        }
+        let _ = pod_registry_set_limits(pod.pod_id, ttl_sec, max_cost, rate)
+        println("[cloud] M2/M3 guard: ttl_sec=" + str(ttl_sec) + " max_cost_usd=" + max_cost + " rate=" + rate + "/hr (enforced by `cloud watchdog`)")
     }
     println("pod_id=" + pod.pod_id)
     println("host=" + port.ip)
