@@ -2655,6 +2655,16 @@ static int __attribute__((noinline)) hxlcl_listen(int s, int backlog) {
 #endif
 }
 #endif
+// F3 ACTIVATION · Path A — accept class-C svc-wrapper self-emit slot.
+// 3-arg int+ptr+ptr _cf (s, addr, len) — the EXACT rt_read (B9.6-C12) shape:
+// only the int sockfd (x0) is sign-extended; addr/len pointers (x1/x2) pass
+// through untouched. Differs from rt_read ONLY in SYS# (READ=3 → ACCEPT=30,
+// the mov-w16 immediate). DEFAULT build keeps the static _cf svc-trap;
+// SELF-EMIT build flips to extern, resolved by emit_hxlcl_accept_o.hexa's .o
+// (rt_accept's 36-byte body). errno store = adrp/str to hxlcl_errno SYMBOL.
+#ifdef HEXA_RT_SELFEMIT
+extern int hxlcl_accept(int s, void *addr, unsigned int *len);
+#else
 static int __attribute__((noinline)) hxlcl_accept(int s, void *addr, unsigned int *len) {
 #if (defined(__arm64__) || defined(__aarch64__)) && defined(__APPLE__)
     return (int)_hxlcl_syscall3_cf(HXLCL_SYS_ACCEPT, (long)s, (long)addr, (long)len);
@@ -2662,6 +2672,7 @@ static int __attribute__((noinline)) hxlcl_accept(int s, void *addr, unsigned in
     return accept(s, (struct sockaddr *)addr, (socklen_t *)len);
 #endif
 }
+#endif
 static int __attribute__((noinline)) hxlcl_connect(int s, const void *addr, unsigned int len) {
 #if (defined(__arm64__) || defined(__aarch64__)) && defined(__APPLE__)
     return (int)_hxlcl_syscall3_cf(HXLCL_SYS_CONNECT, (long)s, (long)addr, (long)len);

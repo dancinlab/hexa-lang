@@ -4551,6 +4551,80 @@ fn rt_read_reloc_kinds() {
     return k
 }
 
+// ── rt_accept (F3 wave 6 — class-C syscall · 3-arg int+ptr+ptr _cf + errno) ──
+// accept(int s, void *addr, unsigned int *len) -> int. The EXACT rt_read
+// (B9.6-C12) shape: only the int sockfd (x0) is sign-extended; addr/len are
+// already-64-bit pointers (x1/x2) and pass through untouched. The ONLY
+// difference from rt_read is the syscall immediate: SYS_READ=3 (mov w16,#3 =
+// 0x52800070) → SYS_ACCEPT=30 (mov w16,#30 = 0x528003D0). Every other byte +
+// both errno reloc sites (0x14 PAGE21 / 0x18 PAGEOFF12) are byte-identical.
+// runtime.c:
+//   hxlcl_accept(int s, void *addr, unsigned int *len) { return (int)_hxlcl_syscall3_cf(HXLCL_SYS_ACCEPT, ...); }
+fn rt_accept() {
+    let mut c = []
+    // sxtw x0, w0  (sign-extend s/sockfd)   0x93407C00
+    c.push(0)
+    c.push(124)
+    c.push(64)
+    c.push(147)
+    // mov w16, #30  (SYS_ACCEPT)            0x528003D0
+    c.push(208)
+    c.push(3)
+    c.push(128)
+    c.push(82)
+    // svc #0x80                             0xD4001001
+    c.push(1)
+    c.push(16)
+    c.push(0)
+    c.push(212)
+    // cset x8, hs  (capture carry = error)  0x9A9F37E8
+    c.push(232)
+    c.push(55)
+    c.push(159)
+    c.push(154)
+    // cbz x8, Lret (success → skip errno)   0xB4000088  (+0x10 to ret)
+    c.push(136)
+    c.push(0)
+    c.push(0)
+    c.push(180)
+    // adrp x8, errno@PAGE  [RELOC PAGE21]   0x90000008  (imm zeroed)
+    c.push(8)
+    c.push(0)
+    c.push(0)
+    c.push(144)
+    // str w0, [x8, errno@PAGEOFF] [RELOC]   0xB9000100  (imm zeroed)
+    c.push(0)
+    c.push(1)
+    c.push(0)
+    c.push(185)
+    // mov x0, #-1  (error return)           0x92800000
+    c.push(0)
+    c.push(0)
+    c.push(128)
+    c.push(146)
+    // ret  (x0 = new conn fd / -1 error)    0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+// Reloc table for rt_accept — identical to rt_read (same 9-instr layout):
+//   offset 0x14 (20) → ARM64_RELOC_PAGE21   (kind 3)
+//   offset 0x18 (24) → ARM64_RELOC_PAGEOFF12 (kind 4)
+fn rt_accept_reloc_offs() {
+    let mut o = []
+    o.push(20)
+    o.push(24)
+    return o
+}
+fn rt_accept_reloc_kinds() {
+    let mut k = []
+    k.push(3)
+    k.push(4)
+    return k
+}
+
 // ── rt_write (B9.6-C13 — class-C syscall · int+ptr+ulong _cf + errno) ────
 // write(int fd, const void *buf, unsigned long n) -> long. The exact twin of
 // rt_read — same 9-instr 36 B _cf shape (only fd/x0 sign-extended; buf x1 + n
