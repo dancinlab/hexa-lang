@@ -24,3 +24,11 @@ Append-only history sister of `CLOUD.md`. Each entry starts with `## <ISO timest
 - [x] M8/M9 ✅ MERGED — `providers_catalog.hexa` + `cloud providers [list|fit|recommend]` verb. full Mac build (module_loader → hexat → clang link → smoke) + 기능 검증 (`cloud providers list` 4-tier 렌더 · `recommend` 캠페인) 통과 후 admin-merge. CI red 는 B9/F3 transient(`runtime_core.c` untracked)이라 sign-local 로컬 full-build proof 로 우회. → M* 9/11 (M1·M4·M5·M6·M7·M8·M9·M10 ✅).
 - [ ] M11 unblocked (M8 머지 완료) — demiurge pods.temp.json archive + PROVIDERS.json superset 정합 가능 (단 live RTSC 캠페인 데이터라 migration 은 사용자 awareness 필요).
 - [ ] M2/M3 잔여 — TTL/cost-cap watchdog · pod-kill 정확성 = live-pod 테스트 비용 승인 필요.
+
+## 2026-05-29 — M2/M3 ✅ 완결 (live-verified) + M11 PROVIDERS superset note
+
+- [x] M2 (TTL deadman) ✅ — PR #1983·#1988·#1990. 실 vast pod LIVE 검증 (rent --ttl 90s → watchdog 가 TTL 110s≥90s 감지 → teardown → 과금중단; podA1·미등록 pod 무시 = opt-in 불변식). async teardown false-negative robustness `_sweep_confirm_gone` (#1990).
+- [x] M3 (cost-cap) ✅ — PR #1983·#1991·#1994. registry max_cost_usd+cost_per_hr_usd 저장 · sweep derived cumulative(rate×elapsed, float-free) ≥ cap → teardown. vast dph + runpod costPerHr 양쪽 rate 포착. dry-run cost-breach 검증.
+- [x] M11 PROVIDERS.json superset 정합 ✅ — demiurge PR #500 (_meta.global_ssot → 글로벌 M8 ~/.hx/cloud/providers.json).
+- [ ] M11 잔여 — PROVIDERS.json + pods.temp.json 완전 폐기 abolition 프롬프트 준비됨. pods.temp.json 은 rich+stale 라 캡처-후-폐기 권장 (사용자 confirm 대기).
+- M* 현황: M1-M10 ✅ · M3 functional(vast+runpod) · M11 = superset note done, 완전폐기 pending.
