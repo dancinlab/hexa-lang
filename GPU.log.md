@@ -1264,3 +1264,64 @@ structural 기준에 근거. layer_norm + rope_pair 도 정확히 동일한 4-su
 byte-eq 확인. 4/4 first-class · over-claim 아님.
 
 cycle-loop sequence: R15 = L723 NN-primitive 4/4 first-class compiler-aware ops complete 🛸.
+
+## 2026-05-28 — F-WEDGE-TOPK-FUSED-WALL fire 🔴 FALSIFIED
+
+2026-05-27 oracle (lines 462-470) measured top-K fusion ceiling **1.802x at M=8 LLaMA-
+vocab** (gemm 0.85ms vs gemm+thrust::sort 1.54ms). Pre-registered falsifier:
+**F-WEDGE-TOPK-FUSED-WALL** — hexa-style hand-emit fused GEMM + streaming top-K vs
+production stack `cublasSgemm + cub::DeviceSegmentedRadixSort`.
+
+**Tier**: 🔴 FALSIFIED (much less than 1.02x threshold at M=8 LLaMA)
+**Branch / Fire**: `gpu-wedge/topk-fused-fire-2026-05-28` ·
+`archive/fires/gpu_wedge_topk_fused_fire_2026_05_28/{result.json, sweep.log, README.md}`
+**Source**: `tool/gpu_wedge_topk_fused_handemit.cu`
+**Host**: ubu-2 RTX 5070 sm_120 (compiled `-arch=sm_80`, driver JIT, $0)
+
+**Design** (2-stage):
+- Stage 1 `fused_gemm_topk_partial_kernel`: grid (n_tiles, M) blocks · 256 thr/block ·
+  COL_TILE=512 cols/block · A row cached in shared (4096 floats) · per-thread K_TOP=8
+  register min-heap inserted during column scan · block-level final merge in shared.
+- Stage 2 `fused_topk_merge_kernel`: M blocks merge n_tiles partials -> final K_TOP=8.
+
+**Baseline**: cublasSgemm (OP_T-N to land row-major M x N output) + cub::DeviceSegmented-
+RadixSort::SortPairsDescending with two-call temp-storage probe + take prefix-K_TOP.
+
+**Result** (cuEvent warmup=20 iters=200 median):
+
+| shape (M*K*N)              | baseline_ms | fused_ms | speedup | ceiling | share |
+|---|--:|--:|--:|--:|--:|
+| decode-8tok-LLaMA-vocab (8*4096*32000)   | 1.172 | **17.785** | **0.066x** | 1.802x | 3.7% |
+| small-batch-Qwen-vocab (32*4096*151643)  | 8.103 | **359.453** | **0.023x** | 1.683x | 1.3% |
+
+**Correctness**: M=8 LLaMA 8/8 rows PASS · M=32 Qwen 32/32 rows PASS (sorted top-K
+values agree within 5e-4 relative tolerance, LCG-random fill avoids ties).
+
+**Finding** (closed-negative):
+- 🔴 hand-emit fused kernel is **15x slower at M=8 LLaMA**, **44x slower at M=32 Qwen**
+  than the cuBLAS+cub production stack. Far below the 1.02x FALSIFIED threshold and the
+  1.10x SUPPORTED-NUMERICAL threshold.
+- The 2026-05-27 oracle's 1.802x ceiling assumed **free** fusion of top-K on top of
+  cuBLAS-level GEMM throughput. Replacing **both** stages with naive hand-emit overshoots
+  each by an order of magnitude: the GEMM portion alone (per-thread sequential dot
+  product, no warp-cooperative K-reduction, no shared-memory tile of B) cannot match
+  cuBLAS even in the small-M regime where cuBLAS is already at ~7.9% of FP32 peak.
+- cub::DeviceSegmentedRadixSort is also far cheaper than the thrust::sort stand-in used
+  in the 2026-05-27 oracle: the actual top-K share at M=8 LLaMA in the baseline measured
+  here is ~28% (1.17ms vs the implied 0.85ms cuBLAS-alone), not 44.52% — the realistic
+  ceiling shrinks further (about 1.38x tight).
+- **Wedge ranking impact**: top-K fusion (rank 2 in the 2026-05-27 ranked-wedges table)
+  is **retired** at the implementation tier with this design. A real wedge would need to
+  (a) FIRST close the small-M GEMM gap (rank 1, `F-WEDGE-SMALL-M-GEMV-WALL`), then
+  (b) layer a top-K accumulator on top — only the (a) sub-problem can be probed
+  separately as a wedge; top-K fusion alone is not realizable in this implementation.
+
+**Honest scope of falsification**: This falsifies the **naive hand-emit fusion** path
+at the 2-stage / per-thread-dot / shared-memory-A-only design. It does NOT falsify the
+existence of a winning fused kernel — a tiled GEMM-style design (warp-cooperative
+K-reduction with shared-memory tile of B, mma.sync or similar) layered with a register
+top-K accumulator may still close the 1.10-1.30x realistic ceiling. But that is the
+small-M GEMV wedge problem (rank 1) with an epilogue, not a separate wedge.
+
+cycle-loop sequence: F-WEDGE-TOPK-FUSED-WALL -> 🔴 closed-negative (rank-2 wedge retired
+at naive implementation tier; reduces to rank-1 small-M GEMV + epilogue).

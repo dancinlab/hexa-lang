@@ -1,0 +1,7 @@
+# F-WEDGE-TOPK-FUSED-WALL: hand-emit fused GEMM+top-K vs cuBLAS+cub::DeviceSegmentedRadixSort
+# K=4096, K_TOP=8, cuEvent warmup=20 iters=200 median
+# shape                          baseline_ms   fused_ms     speedup   ceiling_share
+# corr decode-8tok-LLaMA-vocab rows PASS=8/8
+decode-8tok-LLaMA-vocab         1.172192  17.785440   0.066x       3.7% of 1.802x
+# corr small-batch-Qwen-vocab rows PASS=32/32
+small-batch-Qwen-vocab          8.102528  359.452576   0.023x       1.3% of 1.683x
