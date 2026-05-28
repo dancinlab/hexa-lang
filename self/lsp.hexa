@@ -938,6 +938,30 @@ fn read_line_or_orphan() -> string {
     return buf
 }
 
+// Read EXACTLY n bytes from the same term_read_byte stream the header reader
+// uses. Mixing buffered input() with raw term_read_byte desyncs the stream:
+// input() over-reads past the body into the next frame's Content-Length header,
+// so every message after the first was silently dropped. Reading the body with
+// the same primitive keeps multi-message (real-editor) sessions in lockstep.
+fn read_n_bytes(n: int) -> string {
+    let mut buf = ""
+    let mut got = 0
+    while got < n {
+        let ready = term_poll_stdin(500)
+        if ready == 0 {
+            if term_getppid() == 1 { return buf }
+        } else if ready < 0 {
+            return buf
+        } else {
+            let b = term_read_byte()
+            if b < 0 { return buf }
+            buf = buf + chr(b)
+            got = got + 1
+        }
+    }
+    return buf
+}
+
 fn run_lsp() {
     // Read JSON-RPC messages from stdin, dispatch, write responses to stdout.
     // Content-Length framing per LSP spec.
@@ -962,7 +986,7 @@ fn run_lsp() {
                 // Skip blank line after headers (non-blocking via poll+ppid guard)
                 let blank = read_line_or_orphan()
                 // Read body
-                let body = input(content_len)
+                let body = read_n_bytes(content_len)
                 // Dispatch
                 let method = json_get_string(body, "method")
                 let id = json_get_string(body, "id")
