@@ -145,7 +145,22 @@ let _mk = exec("mkdir -p '" + out_dir + "' 2>/dev/null")
 // Cycle 44: parallel dead-strip + -Oz to build_aprime.sh (cycle 43)
 // — same 55% binary shrink expected for hexac. clang here is just
 // assembler+link so -Oz applies to the runtime.c re-compile path.
-let cl_cmd = "clang -Oz -arch arm64 -ffunction-sections -fdata-sections -Wl,-dead_strip -I '" + repo + "/self' '" + flats + "' '" + shim + "' '" + repo + "/self/runtime.c' -o '" + out + "' 2>&1"
+//
+// .c-graduation Phase 1 (ADDITIVE, opt-in) — "frozen dough" link path.
+// When HEXA_PREBUILT_RUNTIME=<path> points at a prebuilt runtime object
+// or archive (built by release.yml Stage 0b: clang -c runtime.c → ar),
+// LINK it instead of re-compiling self/runtime.c (+ its runtime_core.c
+// seed include) from source. This is the cold-bootstrap chicken-egg
+// escape: hexac can be built without the runtime.c seed in the tree.
+// When the env is ABSENT or the file is missing, the existing
+// source-compile path runs UNCHANGED — complete fallback safety.
+let prebuilt = env("HEXA_PREBUILT_RUNTIME")
+let rt_arg = repo + "/self/runtime.c"
+if len(prebuilt) > 0 && file_exists(prebuilt) {
+    println("  [4/4] HEXA_PREBUILT_RUNTIME set — linking prebuilt runtime: " + prebuilt)
+    rt_arg = prebuilt
+}
+let cl_cmd = "clang -Oz -arch arm64 -ffunction-sections -fdata-sections -Wl,-dead_strip -I '" + repo + "/self' '" + flats + "' '" + shim + "' '" + rt_arg + "' -o '" + out + "' 2>&1"
 let _r4 = exec(cl_cmd)
 if exec("test -x '" + out + "' && printf yes || printf no") != "yes" {
     println("build_hexac: clang assemble+link failed:")
