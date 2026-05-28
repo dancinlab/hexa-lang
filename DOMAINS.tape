@@ -31,3 +31,4 @@
 # @link <consumer> --uses--> stdlib/bio     # bio-kernel fns exist · no recorded from-hexa edge yet
 # @link <consumer> --uses--> stdlib/chem    # stdlib/chem family · no recorded from-hexa edge yet
 # @link <consumer> --uses--> stdlib/<other> # alloc · aura · aws · booksim · bot · brain · cert · ... — provides exist, downstream edges pending
+@domain UNSHADOW := "domains/UNSHADOW.md"
