@@ -1,0 +1,162 @@
+# B9.6-B2 — class-B HARD `rt_strdup` Path-A activation (FIRST ACTIVATED HARD primitive)
+# Generated 2026-05-28 · arm64 macOS · LC_SYMTAB only · 38/640 ACTIVATED
+
+Follow-on to PR #1911 (F3-codegen-kickoff · class-B HARD `rt_strdup` BEHAVIORAL
+self-emit · wall reframe). #1911 landed the hexa-emit rt_strdup byte sequence
++ behavioral battery 6/6 PASS, but DID NOT activate the symbol in the live
+runtime (shadow-verified only — `runtime_arm64.hexa` is not `use`d). This
+verdict measures the activation increment: `_hxlcl_strdup` becomes an actual
+LIVE-injected primitive (37/640 → 38/640), the FIRST class-B HARD ACTIVATED.
+
+Gate per #1911 VERIFICATION-MODEL FINDING — behavioral equivalence (NOT byte-
+id-vs-clang). The 4 ship gates:
+  (a) DEFAULT 0-extern preserved
+  (b) Guard-on links + behavioral PASS
+  (c) Guard-on without `.o` link-fails
+  (d) #1911 behavioral battery re-runs PASS on the live-wired symbol path
+
+────────────────────────────────────────────────────────────────────────────
+GATE (a) — DEFAULT 0-extern preserved (clang -E -P diff EMPTY, .o BYTE-EQ)
+────────────────────────────────────────────────────────────────────────────
+$ clang -E -P -arch arm64 self/runtime.c > /tmp/runtime_default_branch.E.txt
+$ # (origin/main runtime.c against the same headers/include paths)
+$ diff /tmp/runtime_default_branch.E.txt /tmp/runtime_default_main.E.txt | wc -l
+0
+$ # Stronger: the compiled .o is byte-identical to origin/main's .o.
+$ clang -O2 -std=c11 -DGNU_SOURCE -I self -c self/runtime.c -o runtime.default.o
+$ clang -O2 -std=c11 -DGNU_SOURCE -I self -c <origin/main runtime.c> \
+        -o runtime.main.o
+$ cmp runtime.default.o runtime.main.o && echo BYTE-IDENTICAL
+BYTE-IDENTICAL .o
+$ nm runtime.default.o | grep -E "hxlcl_strdup|hxlcl_malloc"
+0000000000000354 t _hxlcl_malloc                    (same offset on main)
+0000000000004020 t _hxlcl_strdup                    (same offset on main)
+$ # undefined-extern count
+50  (default)    50  (origin/main)                  IDENTICAL
+
+ASSESSMENT: 0-libc-extern invariant fully preserved. The new guards are
+pure additive #ifdef HEXA_RT_SELFEMIT wrappers (0 deletions to the C
+body) → with guard off, the TU is BYTE-IDENTICAL.
+
+────────────────────────────────────────────────────────────────────────────
+GATE (b) — Guard-on links + behavioral PASS
+────────────────────────────────────────────────────────────────────────────
+$ clang -O2 -std=c11 -DGNU_SOURCE -DHEXA_RT_SELFEMIT -I self \
+        -c self/runtime.c -o runtime.guard.o
+$ nm runtime.guard.o | grep -E "hxlcl_strdup|hxlcl_malloc"
+000000000000000c T _hxlcl_malloc        (EXPORTED — ld64 binds .o's BRANCH26)
+                 U _hxlcl_strdup        (UNDEFINED — supplied by self-emit .o)
+
+Both flips correct: strdup body becomes extern, malloc body becomes
+externally-linkable (HXLCL_MALLOC_SC macro empty under guard). undefined-
+extern count delta = 87 (vs 50 default) — additional `.o`-supplied externs
+that the build_hexa_cli leaf loop hooks. (Pre-existing infrastructure gap
+of un-registered B9.6-C svc-wrapper externs reproduces identically on
+origin/main with HEXA_RT_SELFEMIT=1 — not introduced by this PR.)
+
+End-to-end link + run (hexa-emit hxlcl_strdup.o + real _hxlcl_malloc):
+$ HEXA_HXLCL_STRDUP_O=/tmp/hxlcl_strdup.o HEXA_VAL_ARENA=0 \
+    hexa-run test/native_build/emit_hxlcl_strdup_o.hexa
+[wire] EMIT OK — rt_strdup 112 B + BRANCH26 @0x30
+
+$ otool -s __TEXT __text hxlcl_strdup.o | tail -8
+0000000000000000 a9bd7bfd 910003fd a90153f3 f90013f5
+0000000000000010 b4000260 aa0003f3 d2800014 38746a69
+0000000000000020 34000069 91000694 17fffffd 91000680
+0000000000000030 94000000 b4000140 aa0003f5 d280000a
+0000000000000040 386a6a69 382a6aa9 eb14015f 9100054a
+0000000000000050 54ffff83 aa1503e0 14000002 d2800000
+0000000000000060 f94013f5 a94153f3 a8c37bfd d65f03c0
+
+$ nm hxlcl_strdup.o
+                 U _hxlcl_malloc
+0000000000000000 T _hxlcl_strdup
+$ otool -l hxlcl_strdup.o | grep -c LC_DYSYMTAB
+0
+$ otool -r hxlcl_strdup.o
+Relocation information (__TEXT,__text) 1 entries
+address  pcrel length extern type    scattered symbolnum/value
+00000030 1     2      1      2       0         1                   (BRANCH26)
+
+$ clang -arch arm64 link_test_main.o hxlcl_strdup.o strdup_malloc.o \
+        -o link_test_run
+$ ./link_test_run
+link-test PASS: hxlcl_strdup → link-test-strdup
+$ otool -tvV link_test_run | sed -n '/_hxlcl_strdup:/,/ret/p' | \
+    grep -E "bl|stp|ldp|ret"
+0000000100000500    stp    x29, x30, [sp, #-0x30]!    (frame load-bearing)
+0000000100000508    stp    x19, x20, [sp, #0x10]      (callee-saved x19/x20)
+0000000100000530    bl     _hxlcl_malloc              (BRANCH26 bound by ld64)
+0000000100000564    ldp    x19, x20, [sp, #0x10]
+0000000100000568    ldp    x29, x30, [sp], #0x30
+000000010000056c    ret
+
+ld64 bound the BRANCH26 reloc against runtime.c's exported hxlcl_malloc;
+LC_DYSYMTAB stays 0 in the emitted .o (PR #1862's #1475 caveat applies);
+live disasm shows the hexa-emit 28-instr composite is what executes.
+
+────────────────────────────────────────────────────────────────────────────
+GATE (c) — Guard-on WITHOUT the `.o` link-fails (extern is genuine)
+────────────────────────────────────────────────────────────────────────────
+$ clang -arch arm64 link_test_main.o strdup_malloc.o -o link_test_run_no_o
+Undefined symbols for architecture arm64:
+  "_hxlcl_strdup", referenced from:
+      _main in link_test_main.o
+ld: symbol(s) not found for architecture arm64
+clang: error: linker command failed with exit code 1
+
+ASSESSMENT: extern hxlcl_strdup is genuine; without the hexa-emit .o the
+link FAILS exactly as required. Confirms the guard activates a real
+external symbol slot (not a -Wundefined-internal-masked static).
+
+────────────────────────────────────────────────────────────────────────────
+GATE (d) — #1911 behavioral battery re-runs PASS (6/6)
+────────────────────────────────────────────────────────────────────────────
+$ clang -arch arm64 hxlcl_strdup.o strdup_malloc.o strdup_hexa_caller.o \
+        -o strdup_hexa_run
+$ ./strdup_hexa_run
+ok  : len 0, distinct ptr, content matches          (empty)
+ok  : len 1, distinct ptr, content matches          ("a")
+ok  : len 5, distinct ptr, content matches          ("hello")
+ok  : len 54, distinct ptr, content matches         (long string)
+ok  : len 4, distinct ptr, content matches          (embedded 0x01-0x03)
+ok  : hxlcl_strdup(NULL)=NULL                       (NULL input passthrough)
+RESULT: ALL BEHAVIORAL CHECKS PASS (6/6)
+$ otool -tvV strdup_hexa_run | sed -n '/_hxlcl_strdup:/,/ret/p' | grep bl
+00000001000004f8 ... bl  _hxlcl_malloc              (ld64 bound BR26 → malloc)
+
+Every behavioral invariant of POSIX strdup re-verified on the activated
+symbol path: distinct pointer, exact content, NUL termination, NULL-input
+passthrough, embedded high bytes preserved.
+
+────────────────────────────────────────────────────────────────────────────
+SELF-HOST FIXPOINT — structurally preserved (no surface touched)
+────────────────────────────────────────────────────────────────────────────
+$ grep -rn '"runtime_arm64"\|emit_hxlcl_strdup_o' self/codegen self/main.hexa \
+        self/module_loader.hexa compiler | grep -v runtime_arm64.hexa:
+(empty — 0 use refs to the shadow emitter from main/module_loader/compiler)
+
+runtime_arm64.hexa stays SHADOW (not `use`d from main.hexa) and the emit
+driver is also un-used → hexa_cc.c regen surface untouched. runtime.c diff
+= pure additive guards (deletion 0; well under wipe_guard). Per the
+rt_atoi PR #1862 same-pattern argument, fixpoint is structurally
+preserved without a heavy regen recompile.
+
+────────────────────────────────────────────────────────────────────────────
+VERDICT: 🟢 ACTIVATED — class-B HARD FIRST · 4/4 gates PASS · 38/640
+────────────────────────────────────────────────────────────────────────────
+- Gate (a) default 0-extern preserved (clang -E diff EMPTY · .o BYTE-EQ)
+- Gate (b) guard-on links + behavioral PASS (hexa-emit .o + bl bound + run OK)
+- Gate (c) guard-on no-.o link-fails (extern genuine)
+- Gate (d) #1911 6/6 behavioral battery re-runs PASS on activated path
+- Fixpoint structurally preserved (shadow emitter, additive guards only)
+
+Count: ACTIVATED 37/640 (PR #1906 + #1899/1900/1903 + #1862/1908 + earlier
+batches) → 38/640. FIRST ACTIVATED class-B HARD primitive (the strdup
+catalogue's wall-reframe primitive from #1911 now live in the runtime).
+
+Next mechanical increments (siblings, same Path-A template + this PR's
+callee-export pattern):
+  - rt_strndup (same shape + cap arg)
+  - rt_atoll, rt_atof (call-bound numeric parse)
+  - ~60-100 class-B HARD copy-loop family per #1911 reframe
