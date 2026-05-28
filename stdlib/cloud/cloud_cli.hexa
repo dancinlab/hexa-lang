@@ -14,6 +14,7 @@ use "stdlib/cloud/vast"
 use "stdlib/cloud/runpod"
 use "stdlib/cloud/dft_dispatch"
 use "stdlib/cloud/pods_local"
+use "stdlib/cloud/providers_catalog"
 use "stdlib/sys"
 
 fn _cloud_help() {
@@ -1236,7 +1237,7 @@ fn main() {
     while i < len(av) {
         let t = av[i]
         if si < 0 {
-            if t == "rent" || t == "up" || t == "rm" || t == "down" || t == "destroy" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "fire" || t == "poll" || t == "tail" || t == "watch" || t == "ssh-port" || t == "resolve" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "reap" || t == "adopt" || t == "forget" || t == "dft-run" || t == "pods" || t == "dispatch" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
+            if t == "rent" || t == "up" || t == "rm" || t == "down" || t == "destroy" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "fire" || t == "poll" || t == "tail" || t == "watch" || t == "ssh-port" || t == "resolve" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "reap" || t == "adopt" || t == "forget" || t == "dft-run" || t == "pods" || t == "dispatch" || t == "providers" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
                 si = i
                 sub = t
             }
@@ -1371,6 +1372,16 @@ fn main() {
         // update-form: each add rewrites the full job entry; verdict touches
         // only the verdict fields; rm deletes. Atomic write + .bak rotation.
         exit(pods_local_dispatch(av, si + 1))
+    }
+    if sub == "providers" {
+        // Read-only compute-provider resource catalog (CLOUD M8/M9) at
+        // ~/.hx/cloud/providers.json (decision reference for `cloud rent` —
+        // which provider, what cost, what walltime speedup). Subverbs:
+        //   bare/list → all tiers · fit → best-fit (fit_score=3) · recommend
+        //   → current campaign recommendation. Hand-curated catalog, no write
+        //   verb (seed from a PROVIDERS.json). Distinct from `pods`/`dispatch`
+        //   (runtime work state) and `orphans`/`reconcile` (billing registry).
+        exit(providers_catalog_dispatch(av, si + 1))
     }
     if sub == "run" {
         if si + 1 >= len(av) {

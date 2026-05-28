@@ -1,0 +1,164 @@
+// stdlib/cloud/providers_catalog.hexa — compute-provider resource catalog (CLOUD M8/M9).
+//
+// Read-only SSOT for "which provider, at what cost, for what walltime
+// speedup" — the decision reference for `cloud rent`. Distinct from the
+// runtime state files:
+//   ~/.hx/cloud/active-pods.json  — work manifest (CLOUD M5, what is running)
+//   ~/.hx/cloud/pods.jsonl        — billing log (append-only)
+//   ~/.hx/cloud/providers.json    — THIS catalog (what is available)
+//
+// Schema (seeded from demiurge PROVIDERS.json · RTSC compute services registry):
+//   {
+//     "_meta": {...},
+//     "providers": {
+//       "vast_alternatives_cpu":   [ {id,name,fit_score,hexa_cloud_integrated,notes,highlight}, ... ],
+//       "hpc_tier_walltime_killers":[ ... ],
+//       "gpu_accelerated_dft":     [ ... ],
+//       "academic_free":           [ ... ]
+//     },
+//     "current_campaign_recommendation": { "<scenario>": {provider, monthly_usd, rationale}, ... },
+//     "hexa_cloud_integration_status": {...}
+//   }
+//
+// Verbs (cloud_cli.hexa `cloud providers [list|fit|recommend]`):
+//   list       — every tier, every entry (tier · id · fit · integrated · notes)
+//   fit        — best-fit only (fit_score == 3) across all tiers
+//   recommend  — the current_campaign_recommendation block
+// Read-only by design — the catalog is hand-curated; no write verb (CLOUD M8).
+
+use "stdlib/alloc/json"
+use "stdlib/alloc/json_object"
+
+// ── paths ────────────────────────────────────────────────────────────
+
+fn _pc_path() -> str {
+    return env_var("HOME") + "/.hx/cloud/providers.json"
+}
+
+fn _pc_exists(p: str) -> bool {
+    let r = exec_capture("test -e " + p + " && echo y")
+    return r[0] == "y\n"
+}
+
+// _pc_load — parse the catalog, or "" sentinel-empty when absent/blank so the
+// caller can emit a one-line "absent — seed it" hint instead of crashing.
+fn _pc_load() {
+    let path = _pc_path()
+    if !_pc_exists(path) { return json_parse("{}") }
+    let raw = read_file(path)
+    if len(raw.trim()) == 0 { return json_parse("{}") }
+    return json_parse(raw)
+}
+
+fn _pc_pad(s: str, n: int) -> str {
+    let mut r = s
+    while len(r) < n { r = r + " " }
+    return r
+}
+
+fn _pc_trunc(s: str, n: int) -> str {
+    if len(s) <= n { return s }
+    return s.substring(0, n - 1) + "…"
+}
+
+// _pc_absent_hint — shared "no catalog" surface. Returns 0 (informational,
+// not an error — an absent catalog is a valid pre-seed state).
+fn _pc_absent_hint() -> int {
+    println("cloud providers: no catalog at " + _pc_path())
+    println("  seed it from a PROVIDERS.json (e.g. demiurge RTSC compute registry):")
+    println("    mkdir -p ~/.hx/cloud && cp <repo>/PROVIDERS.json ~/.hx/cloud/providers.json")
+    return 0
+}
+
+// _pc_render_tier — print one provider tier's rows. `arr` = json array of
+// provider objects. min_fit filters (0 = all). Returns rows printed.
+fn _pc_render_tier(label: str, arr, min_fit: i64) -> int {
+    if len(arr) == 0 { return 0 }
+    let mut printed = 0
+    let mut i = 0
+    while i < len(arr) {
+        let p = arr[i]
+        let fit = json_object_get_int(p, "fit_score", 0)
+        if fit >= min_fit {
+            let id = json_object_get_str(p, "id", "?")
+            let integ = json_object_get_bool(p, "hexa_cloud_integrated", false)
+            let qe = json_object_get_bool(p, "qe_gpu_compatible", false)
+            let hot = json_object_get_bool(p, "highlight", false)
+            let notes = json_object_get_str(p, "notes", "")
+            let mut mark = " "
+            if hot { mark = "★" }
+            let mut ic = "-"
+            if integ { ic = "✓" }
+            if qe { ic = "G" }
+            if printed == 0 { println("  " + label + ":") }
+            println("    " + mark + " " + _pc_pad(id, 22) + " fit=" + str(fit) + "  hexa=" + ic + "  " + _pc_trunc(notes, 48))
+            printed = printed + 1
+        }
+        i = i + 1
+    }
+    return printed
+}
+
+// _pc_all_tiers — iterate the 4 known tiers, rendering each with min_fit.
+fn _pc_all_tiers(min_fit: i64) -> int {
+    let root = _pc_load()
+    if !json_object_has(root, "providers") { return _pc_absent_hint() }
+    let provs = json_object_get_object(root, "providers")
+    let mut total = 0
+    total = total + _pc_render_tier("cpu (vast alternatives)", json_object_get_array(provs, "vast_alternatives_cpu"), min_fit)
+    total = total + _pc_render_tier("hpc walltime-killers", json_object_get_array(provs, "hpc_tier_walltime_killers"), min_fit)
+    total = total + _pc_render_tier("gpu-accelerated dft", json_object_get_array(provs, "gpu_accelerated_dft"), min_fit)
+    total = total + _pc_render_tier("academic free", json_object_get_array(provs, "academic_free"), min_fit)
+    println("  ── " + str(total) + " provider(s)  · ★=highlight · hexa: ✓=cloud-integrated G=qe-gpu --=manual/adopt")
+    return 0
+}
+
+// ── public verb runners ──────────────────────────────────────────────
+
+// providers_catalog_list — `cloud providers list` (bare = list). All tiers.
+pub fn providers_catalog_list() -> int {
+    println("cloud providers (" + _pc_path() + ")")
+    return _pc_all_tiers(0)
+}
+
+// providers_catalog_fit — `cloud providers fit`. Best-fit only (fit_score==3).
+pub fn providers_catalog_fit() -> int {
+    println("cloud providers fit (best fit_score=3 across tiers)")
+    return _pc_all_tiers(3)
+}
+
+// providers_catalog_recommend — `cloud providers recommend`. Render the
+// current_campaign_recommendation block (scenario → provider · cost · why).
+pub fn providers_catalog_recommend() -> int {
+    let root = _pc_load()
+    if !json_object_has(root, "current_campaign_recommendation") { return _pc_absent_hint() }
+    let recs = json_object_get_object(root, "current_campaign_recommendation")
+    let keys = json_object_keys(recs)
+    println("cloud providers recommend (current campaign)")
+    if len(keys) == 0 {
+        println("  (no recommendation block)")
+        return 0
+    }
+    let mut i = 0
+    while i < len(keys) {
+        let k = keys[i]
+        let r = json_object_get(recs, k)
+        let prov = json_object_get_str(r, "provider", "?")
+        let why = json_object_get_str(r, "rationale", "")
+        println("  " + _pc_pad(k, 22) + " → " + _pc_pad(prov, 20) + "  " + _pc_trunc(why, 40))
+        i = i + 1
+    }
+    return 0
+}
+
+// providers_catalog_dispatch — route `cloud providers [list|fit|recommend]`.
+// bare (no subverb) = list. Returns the runner's exit code.
+pub fn providers_catalog_dispatch(av, start: int) -> int {
+    if start >= len(av) { return providers_catalog_list() }
+    let sub = av[start]
+    if sub == "list" { return providers_catalog_list() }
+    if sub == "fit" { return providers_catalog_fit() }
+    if sub == "recommend" { return providers_catalog_recommend() }
+    println("cloud providers: unknown subverb '" + sub + "' — use list | fit | recommend")
+    return 2
+}
