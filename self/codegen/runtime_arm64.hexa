@@ -5286,6 +5286,136 @@ fn test_rt_strdup() {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// === class-D HexaVal-repr bodies (F3 wall-extension · BEHAVIORAL self-emit) ===
+// ═══════════════════════════════════════════════════════════════════════
+//
+// Class-D = HexaVal-returning functions whose body is a HexaVal struct-return
+// composite (NOT pointer-return like rt_strdup, NOT a bare struct-pack ctor
+// like hexa_bool). These take a HexaVal in x0:x1 and return a HexaVal in
+// x0:x1 — exactly the AAPCS ≤16-byte struct ABI, low half = tag (with 4-B
+// pad), high half = 8-byte union slot (.i / .b / .s / pointer).
+//
+// THIS PR extends the PR #1911 wall-reframe (byte-identical-vs-clang was a
+// bootstrapping convenience, NOT a governance mandate) to the largest
+// remaining HARD layer: ~350-450 fn class-D HexaVal-repr family. The first
+// tractable body landed here is `rt_isalpha` — chosen as the SIMPLEST class-D
+// body: pure INT-path (no HX_STR deref → no extra null-check loop), 4 range
+// comparisons + 1 `bl hexa_bool` ctor call, no callee-saved state needed.
+//
+// Why rt_isalpha is the right first class-D body:
+//   - returns HexaVal (struct-return in x0:x1)  ✓
+//   - SHORT body: 16 instr / 64 bytes (well under the ≤30 instr / ≤120 byte
+//     cap and the rt_strdup 28-instr precedent)
+//   - exactly 1 bl callee (`_hexa_bool`) → 1 BRANCH26 reloc, same shape as
+//     rt_strdup's `bl _hxlcl_malloc`
+//   - NO callee-saved spills (x19/x20/x21 untouched) — pure scratch x0/x1
+//     because `hexa_bool` is the ONLY call and the input `c.i` in x1 is
+//     consumed before the bl
+//   - clang -O2 inlines `hexa_bool` and computes the range in 5 instr
+//     (`and x8,x1,#~0x20; sub x8,x8,#65; cmp x8,#26; cset w1,lo; mov w0,#2`).
+//     Our hexa-emitted form is a SCALAR branchy form WITH `bl _hexa_bool` —
+//     deliberately NOT byte-identical to clang -O2 (that is the point).
+//   - non-overlapping with the parallel `f3-rt-strdup-activation` agent's
+//     `rt_strdup`/`hxlcl_strdup` region.
+//
+// ── ABI (class-D: HexaVal in x0:x1 → HexaVal in x0:x1, sub-call) ──
+//   Input:  x0 = tag (TAG_INT = 0 expected) · x1 = c.i (the int codepoint)
+//   Output: x0 = tag (TAG_BOOL = 2) · x1 = .b (0 or 1)
+//   x29/x30 saved (16-B frame, the `bl` consumes LR).
+//   16 instr, 64 bytes · ONE BRANCH26 reloc @ 0x34 (52).
+//
+// Bytes below are character-identical to `as -arch arm64` of the .s in
+// .verdicts/runtime-floor-closure/F3-isalpha-classd-behavioral.txt (NOT to
+// clang -O2). Pattern mirrors PR #1911 rt_strdup but for struct-return.
+fn rt_isalpha_classd() {
+    let mut c = []
+    // stp x29, x30, [sp, #-16]!    0xA9BF7BFD  (frame + LR spill, 16-B frame)
+    c.push(253); c.push(123); c.push(191); c.push(169)
+    // mov x29, sp                  0x910003FD
+    c.push(253); c.push(3); c.push(0); c.push(145)
+    // cmp x1, #65 ('A')            0xF101043F  (c.i in x1, low end of [A-Z])
+    c.push(63); c.push(4); c.push(1); c.push(241)
+    // b.lt .Lzero (+0x24→0x30)     0x5400012B
+    c.push(43); c.push(1); c.push(0); c.push(84)
+    // cmp x1, #90 ('Z')            0xF101683F  (high end of [A-Z])
+    c.push(63); c.push(104); c.push(1); c.push(241)
+    // b.le .Lone (+0x14→0x28)      0x540000AD  (in [A-Z] → result 1)
+    c.push(173); c.push(0); c.push(0); c.push(84)
+    // cmp x1, #97 ('a')            0xF101843F  (low end of [a-z])
+    c.push(63); c.push(132); c.push(1); c.push(241)
+    // b.lt .Lzero (+0x14→0x30)     0x540000AB
+    c.push(171); c.push(0); c.push(0); c.push(84)
+    // cmp x1, #122 ('z')           0xF101E83F  (high end of [a-z])
+    c.push(63); c.push(232); c.push(1); c.push(241)
+    // b.gt .Lzero (+0xc→0x30)      0x5400006C
+    c.push(108); c.push(0); c.push(0); c.push(84)
+    // .Lone: mov w0, #1            0x52800020  (hexa_bool arg = 1)
+    c.push(32); c.push(0); c.push(128); c.push(82)
+    // b .Lcall (+0x8→0x34)         0x14000002
+    c.push(2); c.push(0); c.push(0); c.push(20)
+    // .Lzero: mov w0, #0           0x52800000  (hexa_bool arg = 0)
+    c.push(0); c.push(0); c.push(128); c.push(82)
+    // bl _hexa_bool [BRANCH26]     0x94000000  (imm zeroed pre-reloc) @ 0x34
+    c.push(0); c.push(0); c.push(0); c.push(148)
+    // ldp x29, x30, [sp], #16      0xA8C17BFD
+    c.push(253); c.push(123); c.push(193); c.push(168)
+    // ret                          0xD65F03C0  (return HexaVal in x0:x1)
+    c.push(192); c.push(3); c.push(95); c.push(214)
+    return c
+}
+
+// Reloc table for rt_isalpha_classd — ONE BRANCH26 for `bl _hexa_bool` at
+// __text byte offset 0x34 (52). kind 2 = ARM64_RELOC_BRANCH26, undefined-extern
+// callee (sym_section==0). Same shape as rt_strdup_reloc_* (PR #1911) and
+// rt_atoi_reloc_* (B9.6-B1).
+fn rt_isalpha_classd_reloc_offs() {
+    let mut o = []
+    o.push(52)
+    return o
+}
+fn rt_isalpha_classd_reloc_kinds() {
+    let mut k = []
+    k.push(2)
+    return k
+}
+
+fn test_rt_isalpha_classd() {
+    println("test_rt_isalpha_classd (F3 class-D HexaVal-repr body · behavioral self-emit)")
+    let mut ok = true
+    let s = rt_isalpha_classd()
+    println("  rt_isalpha_classd : " + to_string(len(s)) + " bytes (64 expected)")
+    if len(s) != 64 {
+        println("  FAIL: rt_isalpha_classd expected 64 bytes"); ok = false
+    }
+    // prologue stp x29,x30,[sp,#-16]!  (fd 7b bf a9) @ 0
+    if s[0] != 253 || s[1] != 123 || s[2] != 191 || s[3] != 169 {
+        println("  FAIL: stp x29,x30 prologue (16-B frame) mismatch"); ok = false
+    }
+    // bl _hexa_bool (00 00 00 94) @ 0x34 = 52 — the cross-object CALL site
+    if s[52] != 0 || s[53] != 0 || s[54] != 0 || s[55] != 148 {
+        println("  FAIL: bl _hexa_bool (BRANCH26 @0x34) mismatch"); ok = false
+    }
+    // ret (c0 03 5f d6) @ 0x3c = 60
+    if s[60] != 192 || s[61] != 3 || s[62] != 95 || s[63] != 214 {
+        println("  FAIL: ret trailer mismatch"); ok = false
+    }
+    // reloc table: one BRANCH26 @ 52
+    let offs = rt_isalpha_classd_reloc_offs()
+    let kinds = rt_isalpha_classd_reloc_kinds()
+    if len(offs) != 1 || offs[0] != 52 {
+        println("  FAIL: reloc offset expected [52]"); ok = false
+    }
+    if len(kinds) != 1 || kinds[0] != 2 {
+        println("  FAIL: reloc kind expected [2] (BRANCH26)"); ok = false
+    }
+    if ok {
+        println("  ALL CHECKS PASS")
+    }
+}
+
+test_rt_isalpha_classd()
+
 test_runtime_arm64()
 test_neon_string_ops()
 test_rt_strdup()

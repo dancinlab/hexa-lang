@@ -369,6 +369,25 @@ strdup/strndup/atoll/strtoll 형제는 이제 template 스케일아웃 + Path-A
 (ii) sibling expansion (strndup/atoll/atof — 동일 template + cap arg /
 FP-arg variant), (iii) alloc-core seed 의 honest B9.8 floor 수용.
 
+**LANDED — class-D HexaVal-repr BODY `rt_isalpha` BEHAVIORAL self-emit
+(F3-classd-repr-body1 · this PR)**: PR #1911 의 wall-reframe 을 가장 큰
+잔여 HARD layer 인 **class-D HexaVal-repr (struct-return)** 로 확장. AAPCS
+≤16-byte struct return ABI: HexaVal in x0:x1 → HexaVal in x0:x1 (low half
+= tag w/ 4-B pad, high half = `.i`/`.b`/`.s` union slot). 첫 tractable
+body = `rt_isalpha` — 가장 단순한 class-D 후보 (pure INT-path, no HX_STR
+deref, 4 range cmp + 1 `bl _hexa_bool` ctor, 16 instr / 64 bytes / 1
+BRANCH26 @0x34 / 0 callee-saved spills). clang -O2 는 `hexa_bool` 을
+inline + `and`/`sub`/`cmp`/`cset` 5-instr 로 fuse; 이 emitter 는 **그것과
+byte-identical 하지 않음**, 의도적으로 — class-B 와 동일한 behavioral-
+equivalence 게이트. 3-layer 검증 동일 패턴 (interp self-test · `as -arch
+arm64` round-trip · JIT-exec battery 8 inputs covering A/Z/a/z/@/[/0/0x09)
++ dual-build 3-mode (default 0-extern byte-identical · 가드 on links ·
+가드 on no-.o link-fails). `.verdicts/runtime-floor-closure/F3-isalpha-
+classd-behavioral.txt`. **의의**: ~350-450 fn class-D HexaVal-repr 백로그가
+"struct-return ABI unbuilt" → **"per-body PORT, mechanical 템플릿 복제"**
+로 재분류; symbol-table 모양만 body 마다 차이 (callee 이름 길이 + strtab).
+Path-A 활성화 시 38/640 (37 + isalpha) shadow self-emit 누적.
+
 
 ## floor 분류 (F1–F6)
 
