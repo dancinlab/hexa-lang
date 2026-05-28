@@ -64,6 +64,7 @@ fn main() {
 
     let mut body = ""
     let mut i = 0
+    let mut emitted = 0
     while i < n {
         // Skip the synthetic empty tail produced by the trailing newline.
         if i == n - 1 && parts[i].len() == 0 {
@@ -71,10 +72,13 @@ fn main() {
             continue
         }
         let esc = esc_line(parts[i])
-        if i == 0 {
-            body = body + "            \"" + esc + "\\n\"\n"
-        } else {
-            body = body + "          + \"" + esc + "\\n\"\n"
+        body = body + "    buf = buf + \"" + esc + "\\n\"\n"
+        emitted = emitted + 1
+        // Periodic size-bounded flush: a single exec command carrying the whole
+        // body overflows the interp's per-command limit on linux (macOS tolerates
+        // it). Flush when the buffer grows past ~64 KB; checked every 50 lines.
+        if emitted % 50 == 0 {
+            body = body + "    if buf.len() > 65536 { _flush_" + base + "(out_path, buf); buf = \"\" }\n"
         }
         i = i + 1
     }
@@ -101,20 +105,23 @@ fn main() {
           + "\n"
           + "let MODULE_NAME = \"" + base + "_emit\"\n"
           + "\n"
-          + "fn emit_" + base + "_c() -> str {\n"
-          + "    // Verbatim content of hand-written self/native/" + base + ".c\n"
-          + "    let s =\n"
+          + "fn _flush_" + base + "(out_path: str, buf: str) {\n"
+          + "    let _ = exec(\"cat >> \\\"\" + out_path + \"\\\" <<'" + eof_tag + "'\\n\" + buf + \"" + eof_tag + "\")\n"
+          + "}\n"
+          + "\n"
+          + "fn emit_" + base + "_to(out_path: str) {\n"
+          + "    // Verbatim content of hand-written self/native/" + base + ".c, streamed in\n"
+          + "    // size-bounded chunks (see generator note on the per-command exec limit).\n"
+          + "    let _ = exec(\"printf '' > \\\"\" + out_path + \"\\\"\")\n"
+          + "    let mut buf = \"\"\n"
           + body
-          + "    return s\n"
+          + "    if buf.len() > 0 { _flush_" + base + "(out_path, buf) }\n"
           + "}\n"
           + "\n"
           + "fn main() {\n"
           + "    let argv = real_args()\n"
           + "    let out_path = if argv.len() >= 1 { argv[0] } else { \"" + base + ".c\" }\n"
-          + "    let c_text = emit_" + base + "_c()\n"
-          + "    let cmd = \"cat > \\\"\" + out_path + \"\\\" <<'" + eof_tag + "'\\n\" +\n"
-          + "              c_text + \"" + eof_tag + "\"\n"
-          + "    let _ = exec(cmd)\n"
+          + "    emit_" + base + "_to(out_path)\n"
           + "    let exists_check = exec(\"[ -f \\\"\" + out_path + \"\\\" ] && echo y || echo n\").trim()\n"
           + "    if exists_check != \"y\" {\n"
           + "        println(\"[" + base + "_emit] FATAL: failed to write \" + out_path)\n"
