@@ -1,0 +1,238 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  stdlib/verify/harvest.hexa — kind-pluggable metric harvest (PR-hx4)
+//
+//  @module(slug="verify.harvest", desc="kind-pluggable metric extraction from a pod tarball or run dir")
+//  @version 0.1.0
+//  @stability preview
+//  @since 2026-05-29
+//  @maintainer hexa-core
+//  @rfc demiurge project.tape d_atlas_as_audit_ssot (PR #510)
+//
+//  ── PROBLEM ────────────────────────────────────────────────────────────────
+//
+//  PR-hx5 verify_cli will accept `hexa verify --harvest <pod_tar_or_dir>
+//  --domain <d> --material <m>` and must derive the calculator-input metrics
+//  (e.g. lambda, omega_log for DFT el-ph -> allen_dynes_tc) from the
+//  harvested artifact. The metric layout differs by KIND (dft-elph, sscha,
+//  llm-bench, web-smoke), so the surface must be kind-pluggable.
+//
+//  ── DESIGN ────────────────────────────────────────────────────────────────
+//
+//  Surface (single entry point):
+//    pub fn harvest(path: string, kind: string) -> Metrics
+//
+//  where Metrics is a flat key->float side table:
+//    pub struct Metrics {
+//        keys:   array,   // [string]
+//        values: array,   // [float]
+//        kind:   string,  // echo of input
+//        source: string,  // echo of path
+//        ok:     bool     // true iff at least one (key, value) extracted
+//    }
+//
+//  KIND coverage:
+//    · "dft-elph"   FIRST IMPL — QE ph.out / matdyn.out regex
+//                                 (lambda, omega_log_K)
+//    · "sscha"      STUB (d6 honest TODO) — returns ok=false, [], []
+//    · "llm-bench"  STUB
+//    · "web-smoke"  STUB
+//
+//  Helpers (public, useful in isolation + by tests):
+//    pub fn metrics_get(m: Metrics, key: string) -> float   // 0.0 if missing
+//    pub fn metrics_has(m: Metrics, key: string) -> bool
+//    pub fn metrics_len(m: Metrics) -> int
+//    pub fn supported_kinds() -> array  // [string]
+//
+//  ── DFT el-ph PARSER (QE ph.out / a2F.dat formats) ────────────────────────
+//
+//  Quantum-ESPRESSO `ph.x` and `matdyn.x` emit lines like:
+//
+//      Average el-ph coupling lambda  =     1.21
+//      Average <log w>                =    1350.5  K
+//
+//  (also "average <ln w>"/"omega_log" variants; we grep all three).
+//
+//  Strategy:
+//    1. If path is a tarball (ends with .tar / .tar.gz / .tgz), `tar tf`
+//       to enumerate; pick first match for ph.out / matdyn.out / a2F.dat.
+//       Then `tar -xOf` (extract to stdout) the chosen entry.
+//    2. If path is a directory, scan for the same filenames at any depth.
+//    3. If path is a file, read directly.
+//    4. grep the well-known QE lines; parse floats with naive split.
+//
+//  All shell-outs go via exec(); no FFI. Robust to absent paths (returns
+//  ok=false metrics).
+//
+//  ── PATH SAFETY (commons / d8) ─────────────────────────────────────────────
+//
+//  Vast.ai trouble lessons: tar names with spaces, missing files, partial
+//  downloads — all handled by `tar -tf 2>/dev/null` returning empty list
+//  and harvest returning ok=false rather than crashing.
+//
+//  ── RELATED ────────────────────────────────────────────────────────────────
+//
+//  · PR-hx3 stdlib/verify/dispatch.hexa — calculator dispatch (consumer)
+//  · PR-hx5 (planned) tool/verify_cli.hexa — `hexa verify --harvest`
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── Metrics struct ────────────────────────────────────────────────────────
+
+pub struct Metrics {
+    keys:   array,    // [string]
+    values: array,    // [float]
+    kind:   string,
+    source: string,
+    ok:     bool
+}
+
+fn _metrics_empty(kind: string, source: string) -> Metrics {
+    return Metrics {
+        keys: [], values: [], kind: kind, source: source, ok: false
+    }
+}
+
+// ── helpers ─────────────────────────────────────────────────────────────
+
+pub fn metrics_len(m: Metrics) -> int {
+    return m.keys.len()
+}
+
+pub fn metrics_has(m: Metrics, key: string) -> bool {
+    let mut i = 0
+    while i < m.keys.len() {
+        if m.keys[i] == key { return true }
+        i = i + 1
+    }
+    return false
+}
+
+pub fn metrics_get(m: Metrics, key: string) -> float {
+    let mut i = 0
+    while i < m.keys.len() {
+        if m.keys[i] == key { return m.values[i] }
+        i = i + 1
+    }
+    return 0.0
+}
+
+pub fn supported_kinds() -> array {
+    return ["dft-elph", "sscha", "llm-bench", "web-smoke"]
+}
+
+// ── io helpers (shell-out · safe defaults on miss) ───────────────────────
+
+fn _ends_with(s: string, suffix: string) -> bool {
+    let n = s.len()
+    let m = suffix.len()
+    if m > n { return false }
+    return s.substr(n - m, n) == suffix
+}
+
+fn _is_tar(path: string) -> bool {
+    if _ends_with(path, ".tar")    { return true }
+    if _ends_with(path, ".tar.gz") { return true }
+    if _ends_with(path, ".tgz")    { return true }
+    return false
+}
+
+// Read the file or tar-entry's text content. For tarballs we look for the
+// FIRST entry matching ph.out / matdyn.out / a2F.dat (in that order) and
+// extract it to stdout. For dirs we use `find` to scan, for files we cat.
+fn _read_dft_elph_text(path: string) -> string {
+    if _is_tar(path) {
+        // tar tf | grep first ph.out (preferred) | matdyn.out | a2F.dat
+        let names = exec("tar -tf " + path + " 2>/dev/null").trim()
+        if names.len() == 0 { return "" }
+        let candidates = ["ph.out", "matdyn.out", "a2F.dat"]
+        let mut i = 0
+        while i < candidates.len() {
+            let pick = exec("tar -tf " + path + " 2>/dev/null | grep -E '/" + candidates[i] + "$|^" + candidates[i] + "$' | head -1").trim()
+            if pick.len() > 0 {
+                return exec("tar -xOf " + path + " '" + pick + "' 2>/dev/null")
+            }
+            i = i + 1
+        }
+        return ""
+    }
+    // dir or file
+    let kind_check = exec("test -d '" + path + "' && echo dir || (test -f '" + path + "' && echo file || echo none)").trim()
+    if kind_check == "dir" {
+        let candidates = ["ph.out", "matdyn.out", "a2F.dat"]
+        let mut i = 0
+        while i < candidates.len() {
+            let pick = exec("find '" + path + "' -name '" + candidates[i] + "' 2>/dev/null | head -1").trim()
+            if pick.len() > 0 {
+                return exec("cat '" + pick + "' 2>/dev/null")
+            }
+            i = i + 1
+        }
+        return ""
+    }
+    if kind_check == "file" {
+        return exec("cat '" + path + "' 2>/dev/null")
+    }
+    return ""
+}
+
+// ── float parsing (find LAST number on a matching line) ─────────────────
+//
+// QE outputs typically write the canonical summary line LAST in the file
+// (after iteration sweep). We use `grep -E ... | tail -1 | awk '{print $NF}'`
+// idiom via shell. Returns 0.0 on miss.
+
+fn _grep_last_number(text: string, pattern: string) -> float {
+    // Write text to a transient file then grep — easier than embedding the
+    // text inside an exec quote. Use a tempfile under /tmp.
+    let tmp = "/tmp/hexa_harvest_" + str(exec("date +%s%N").trim()) + ".txt"
+    let _ = exec("cat > '" + tmp + "' <<'__HEXA_HARVEST_EOF__'\n" + text + "\n__HEXA_HARVEST_EOF__")
+    // grep + extract last float-looking token on matching line; tail -1 in
+    // case of multiple matches (use the converged one).
+    let val = exec("grep -E " + pattern + " '" + tmp + "' 2>/dev/null | tail -1 | grep -oE '[-+]?[0-9]+\\.[0-9]+([eE][-+]?[0-9]+)?' | tail -1").trim()
+    let _ = exec("rm -f '" + tmp + "'")
+    if val.len() == 0 { return 0.0 }
+    return float(val)
+}
+
+// ── DFT el-ph kind ──────────────────────────────────────────────────────
+
+fn _harvest_dft_elph(path: string) -> Metrics {
+    let txt = _read_dft_elph_text(path)
+    if txt.len() == 0 { return _metrics_empty("dft-elph", path) }
+
+    // Common QE / Allen-Dynes summary patterns:
+    //   "Average el-ph coupling lambda  =   1.21"
+    //   "lambda             =   1.21"
+    //   "Average <log w>    =  1350.5 K"
+    //   "omega_log          =  1350.5"
+    let lam = _grep_last_number(txt, "'Average el-ph coupling[[:space:]]+lambda|^[[:space:]]*lambda[[:space:]]*=' ")
+    let omega = _grep_last_number(txt, "'Average <log w>|Average <ln w>|omega_log|<log w>'")
+
+    let mut keys: array   = []
+    let mut values: array = []
+    if lam > 0.0 {
+        keys   = keys + ["lambda"]
+        values = values + [lam]
+    }
+    if omega > 0.0 {
+        keys   = keys + ["omega_log_K"]
+        values = values + [omega]
+    }
+    return Metrics {
+        keys: keys, values: values,
+        kind: "dft-elph", source: path, ok: keys.len() > 0
+    }
+}
+
+// ── public dispatch on kind ─────────────────────────────────────────────
+
+pub fn harvest(path: string, kind: string) -> Metrics {
+    if kind == "dft-elph" { return _harvest_dft_elph(path) }
+    // d6 honest TODO — sscha / llm-bench / web-smoke kinds are stubbed.
+    // They return ok=false metrics so callers can fence (⚪ speculation).
+    // Implementations land in follow-up PRs as concrete fixtures arrive.
+    if kind == "sscha"     { return _metrics_empty("sscha", path) }
+    if kind == "llm-bench" { return _metrics_empty("llm-bench", path) }
+    if kind == "web-smoke" { return _metrics_empty("web-smoke", path) }
+    // Unknown kind also returns empty (caller fences).
+    return _metrics_empty(kind, path)
+}
