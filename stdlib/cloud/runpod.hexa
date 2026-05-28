@@ -23,9 +23,10 @@ use "stdlib/cloud/cloud"
 // ── result shapes ────────────────────────────────────────────────────
 
 struct RunPodPod {
-    ok:      int,   // 1 iff pod was created
-    pod_id:  str,   // RunPod pod id (empty on failure)
-    message: str
+    ok:           int,   // 1 iff pod was created
+    pod_id:       str,   // RunPod pod id (empty on failure)
+    cost_per_hr:  str,   // dollars-per-hour (RunPod `costPerHr`); "" if absent (M3 cost-cap rate source)
+    message:      str
 }
 
 struct RunPodSshPort {
@@ -36,7 +37,21 @@ struct RunPodSshPort {
 }
 
 fn _runpod_fail_pod(msg: str) -> RunPodPod {
-    return RunPodPod { ok: 0, pod_id: "", message: msg }
+    return RunPodPod { ok: 0, pod_id: "", cost_per_hr: "", message: msg }
+}
+
+// _runpod_cost_str — coerce a parsed JSON value to a plain $/hr string.
+// RunPod reports `costPerHr` as a float (e.g. 1.89); accept int too. Any
+// other shape (null / missing / string-typed) returns "" (cost-cap inert).
+fn _runpod_cost_str(v) -> str {
+    let t = type_of(v)
+    if t == "float" || t == "int" {
+        return to_string(v)
+    }
+    if t == "string" {
+        return to_string(v)
+    }
+    return ""
 }
 
 fn _runpod_fail_port(msg: str) -> RunPodSshPort {
@@ -209,7 +224,10 @@ fn _runpod_create_cli(rpc: str, gpu_type: str, image: str, pubkey: str, name: st
     if type_of(id_v) == "string" {
         let pid = to_string(id_v)
         if len(pid) > 0 {
-            return RunPodPod { ok: 1, pod_id: pid, message: "created (cli) on " + gpu_type }
+            // `costPerHr` (float $/hr) when runpodctl surfaces it; "" otherwise
+            // (M3 cost-cap rate source — inert when absent, TTL unaffected).
+            let cph = _runpod_cost_str(json_object_get(parsed, "costPerHr"))
+            return RunPodPod { ok: 1, pod_id: pid, cost_per_hr: cph, message: "created (cli) on " + gpu_type }
         }
     }
     let snippet = out.substring(0, 200)
@@ -217,7 +235,9 @@ fn _runpod_create_cli(rpc: str, gpu_type: str, image: str, pubkey: str, name: st
 }
 
 fn _runpod_create_api(api_key: str, gpu_type: str, image: str, pubkey: str, name: str) -> RunPodPod {
-    let body = "{\"query\":\"mutation { podFindAndDeployOnDemand(input:{cloudType: ALL, gpuCount:1, volumeInGb:0, containerDiskInGb:80, minVcpuCount:8, minMemoryInGb:32, gpuTypeId:\\\"" + gpu_type + "\\\", name:\\\"" + name + "\\\", imageName:\\\"" + image + "\\\", dockerArgs:\\\"\\\", ports:\\\"22/tcp\\\", volumeMountPath:\\\"/workspace\\\", env:[{key:\\\"PUBLIC_KEY\\\", value:\\\"" + pubkey + "\\\"}]}) { id machineId } }\"}"
+    // `costPerHr` is on the Pod type returned by the mutation — request it so
+    // the M3 cost-cap has a rate source captured at create time.
+    let body = "{\"query\":\"mutation { podFindAndDeployOnDemand(input:{cloudType: ALL, gpuCount:1, volumeInGb:0, containerDiskInGb:80, minVcpuCount:8, minMemoryInGb:32, gpuTypeId:\\\"" + gpu_type + "\\\", name:\\\"" + name + "\\\", imageName:\\\"" + image + "\\\", dockerArgs:\\\"\\\", ports:\\\"22/tcp\\\", volumeMountPath:\\\"/workspace\\\", env:[{key:\\\"PUBLIC_KEY\\\", value:\\\"" + pubkey + "\\\"}]}) { id machineId costPerHr } }\"}"
     let resp = _runpod_post(api_key, body, 60)
     if len(resp) == 0 {
         return _runpod_fail_pod("create (api): empty response (HTTPS / auth failure)")
@@ -227,7 +247,8 @@ fn _runpod_create_api(api_key: str, gpu_type: str, image: str, pubkey: str, name
     if type_of(id_v) == "string" {
         let pid = to_string(id_v)
         if len(pid) > 0 {
-            return RunPodPod { ok: 1, pod_id: pid, message: "created (api) on " + gpu_type }
+            let cph = _runpod_cost_str(json_object_get_path(parsed, "data.podFindAndDeployOnDemand.costPerHr"))
+            return RunPodPod { ok: 1, pod_id: pid, cost_per_hr: cph, message: "created (api) on " + gpu_type }
         }
     }
     return _runpod_fail_pod("create (api): no id in response (no capacity / bad input)" + cloud_runpod_401_hint(resp))
@@ -355,6 +376,48 @@ fn runpod_get_ssh_port(api_key: str, pod_id: str) -> RunPodSshPort {
         }
     }
     return _runpod_get_ssh_port_api(api_key, pod_id)
+}
+
+// ── cost-per-hour query (M3 cost-cap rate fallback) ──────────────────
+//
+// `costPerHr` is captured at create time (see runpod_create); this is the
+// follow-up source for the case where the create response did NOT carry it
+// (older runpodctl shapes, or a CLI `pod create` JSON that omits the field).
+// CLI `pod get -o json` exposes `costPerHr`; the GraphQL `pod` query has the
+// same field on the Pod type. Returns the $/hr string, "" if neither path
+// surfaces it (cost-cap stays inert — TTL still enforces).
+
+fn _runpod_cost_per_hr_cli(rpc: str, pod_id: str) -> str {
+    let cmd = _shq_local(rpc) + " pod get " + _shq_local(pod_id) + " -o json 2>&1"
+    let out = exec(cmd)
+    let parsed = json_parse(out)
+    return _runpod_cost_str(json_object_get(parsed, "costPerHr"))
+}
+
+fn _runpod_cost_per_hr_api(api_key: str, pod_id: str) -> str {
+    let body = "{\"query\":\"query { pod(input:{podId:\\\"" + pod_id + "\\\"}) { costPerHr } }\"}"
+    let resp = _runpod_post(api_key, body, 30)
+    if len(resp) == 0 {
+        return ""
+    }
+    let parsed = json_parse(resp)
+    return _runpod_cost_str(json_object_get_path(parsed, "data.pod.costPerHr"))
+}
+
+// runpod_pod_cost_per_hr — best-effort $/hr lookup for a live pod. Tries the
+// CLI `pod get` first, then the GraphQL `pod` query. "" if unavailable.
+fn runpod_pod_cost_per_hr(api_key: str, pod_id: str) -> str {
+    if len(pod_id) == 0 {
+        return ""
+    }
+    let rpc = _runpodctl_path()
+    if len(rpc) > 0 {
+        let c = _runpod_cost_per_hr_cli(rpc, pod_id)
+        if len(c) > 0 {
+            return c
+        }
+    }
+    return _runpod_cost_per_hr_api(api_key, pod_id)
 }
 
 // runpod_pod_opts — canonical ssh_opts for an ephemeral RunPod pod.
