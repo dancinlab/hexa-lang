@@ -17,8 +17,9 @@
 
 > **증상**: trainer.c 의 `hexa_call1(dir_create, X)` 가 Linux gen2 backend undeclared (anima 가 `trim` #1527 과 동종으로 보고, sed `s/hexa_call1(dir_create,/rt_fs_mkdir_p(/g` 로 우회).
 > **진단(dup-race precheck, [[feedback_inbox_dup_race_precheck]])**: `dir_create` 는 어디에도 등록 안 된 이름 — `compiler/check/bind.hexa` allowlist·`self/codegen.hexa`(gen2)·interp·`self/codegen/arm64_darwin.hexa` 전부 부재. `trim` 류(빌트인인데 gen2 lowering 만 누락)와 **다름** — `dir_create` 자체가 빌트인이 아님(anima 가 만든 이름). codegen 이 모르는 free-fn → generic `hexa_call1(dir_create,…)` → 미정의 심볼.
-> **canonical = `fs_mkdir_p`**: `self/codegen.hexa` 가 `name=="fs_mkdir_p"` → `rt_fs_mkdir_p(...)` (재귀 POSIX mkdir 루프, `self/runtime.c`) 로 lower. free-fn `fs_mkdir_p(path)` 컴파일 probe(local + ubu-2 current-main) → HX2001/undeclared 0 (bind 가 미등록 이름을 generic dispatch 로 통과시키고 codegen 이 `fs_mkdir_p` arm 으로 가로챔). anima 워크어라운드의 `rt_fs_mkdir_p` 가 정확히 이 함수 = 이미 실 fire 에서 실행 검증됨.
-> **recommend**: anima 가 `dir_create(X)` → `fs_mkdir_p(X)` 1줄 교체 → sed 워크어라운드 제거 + gen2 컴파일 clean. **hexa-lang 코드변경 불요** (g0 Occam — `dir_create` 별칭 추가 = entity 증식이라 안 함).
+> **권고 = `mkdir(path)`** (실측 검증): `self/codegen.hexa` 가 `name=="mkdir"` → `hexa_bool(mkdir(HX_STR(p),0755)==0)` 직접 libc `mkdir(2)` 로 lower. ubu-2 current-main `hexa run`(compile-then-exec) 실측: `mkdir("/tmp/mkd_real") -> true` + `/tmp/mkd_real` 실제 생성 확인. `mkdir` 은 bind allowlist 등록(`compiler/check/bind.hexa` L1062). 단일레벨(부모 미생성).
+> **⚠ 초판 오진 정정 — `fs_mkdir_p` 쓰지 말 것**: 처음엔 `fs_mkdir_p`(→`rt_fs_mkdir_p` "재귀 POSIX mkdir 루프")를 canonical 로 권고했으나 **틀림**. `rt_fs_mkdir_p`(`self/runtime.c:13605`) 는 `{ (void)path; return hexa_int(0); }` = **silent no-op weak stub**. `fs_mkdir_p(p)` 는 컴파일·`0`("성공") 반환하나 dir 안 만듦 (local + ubu-2 default `hexa build`/`run` 양쪽 실측 `0`+미생성). 컴파일 통과만 보고 동작한다 오판한 것. anima sed 의 `rt_fs_mkdir_p(` 도 사실 no-op 이었음 — ckpt-save 를 inline decode 로 폐기해서 안 물렸을 뿐 (DECODER.md L121). 또 `hexa run` 은 interp 아님(R7 cutover = compile-then-exec) — interp-stub 으로 오해했던 것도 정정.
+> **recommend**: anima 가 `dir_create(X)` → `mkdir(X)` 1줄 교체 (단일레벨이면 충분; 중첩 경로는 레벨별 mkdir 또는 fs_mkdir_p stub fix 후). **hexa-lang 코드변경 불요** (working `mkdir` 존재 · g0). `fs_mkdir_p` stub 자체는 별 OPEN finding (INBOX.md 참조) — 재귀 mkdir 빌트인 default-build 무동작 = silent-success data-loss class.
 
 
 
