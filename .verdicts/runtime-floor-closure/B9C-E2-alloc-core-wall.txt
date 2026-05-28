@@ -1,0 +1,163 @@
+B9.6-E2 — class-E ALLOC-CORE wall assessment (hxlcl_malloc / hexa_arena_alloc)
+verdict: TERMINAL WALL (closed-negative) — alloc-core NOT byte-identically self-emittable
+         from the proven F3 building blocks; requires UNBUILT codegen capabilities.
+         The bump-allocator SEED beneath it is irreducible (B9.8 terminal).
+host: mini-class arm64 macOS (Darwin 25.5.0) · clang -O2 / as -arch arm64 / otool
+date: 2026-05-28
+scope: EXCLUSIVE family = class-E ALLOC-CORE (the irreducible terminal). NOT
+       syscall wrappers / ctors / accessors / predicates / string / leaf.
+
+────────────────────────────────────────────────────────────────────────────
+ASSESSMENT METHOD — measure the wall, do not force-emit
+────────────────────────────────────────────────────────────────────────────
+The mission asks: is the bump-allocator core self-emittable byte-identical via the
+proven svc(mmap) + leaf(bump-ptr) blocks, OR does it need unbuilt codegen?
+
+To make the wall PRECISE (not just "composite, hard"), I compiled the SIMPLEST
+POSSIBLE alloc-core seed — a single-block mmap-backed bump allocator with the exact
+hxlcl_malloc body shape (self/runtime.c L726: n==0 guard, +16 header, 16-B align,
+chunk-or-bigger mmap on exhaustion, bump, header store) — with clang -O2, and
+disassembled it. This is a LOWER BOUND: the real hxlcl_malloc and (worse)
+hexa_arena_alloc (runtime_core.c L3538, a MULTI-BLOCK linked-chain walk with nested
+while-loops + conditional malloc + stats hooks + env probe) are strictly harder.
+
+  clang -O2 -c classe_seed_probe.c → otool -tvV  (full disasm: appended below)
+
+────────────────────────────────────────────────────────────────────────────
+MEASURED WALL — codegen capabilities required, NONE proven byte-identically
+────────────────────────────────────────────────────────────────────────────
+Even the simplest single-block seed (41 instrs) requires, byte-identically:
+
+  (W1) CONDITIONAL-SELECT / CONDITIONAL-COMPARE family —
+       csinc x20,x0,xzr,hi   (n==0 ? 1 : n)
+       ccmp  x8,x9,#0x2,ne   (short-circuit  !g_ptr || g_ptr+total>g_end)
+       csel  x19,x21,x8,hi   (chunk = total>CHUNK ? total : CHUNK)
+       cmn   x0,#0x1         (m == MAP_FAILED, i.e. -1, test)
+       → NONE of the 44 proven F3 emitters emit csinc/ccmp/csel/cmn. The shadow
+         rt_arena_alloc uses only cmp + b.hi; clang fuses these to branchless
+         conditional-select. Byte-identity demands the SAME csel/ccmp scheduling.
+
+  (W2) TWO DISTINCT module-global statics via adrp+ldr / adrp+str —
+       adrp x22,_g_ptr  / ldr x0,[x22] / str x8,[x22]
+       adrp x23,_g_end  / ldr x9,[x23] / str x8,[x23]
+       → 4 ARM64_RELOC_PAGE21/PAGEOFF12 records to TWO different symbols (otool -r:
+         symbolnum 1 and 2). Proven rt_arena_* references ONE shared _arena_state
+         struct at fixed byte offsets (#8/#16). Multi-distinct-global allocation +
+         per-global reloc scheduling is UNBUILT (per-primitive PORT, not a template).
+
+  (W3) REGISTER-ALLOCATOR-DRIVEN multi-pair frame —
+       stp x24,x23 / stp x22,x21 / stp x20,x19 / stp x29,x30 (FOUR callee-saved
+       pairs spilled) + matching ldp epilogue. Proven class-B rt_atoi proved ONE
+       pair (x29/x30). The 4-pair spill is RA-emergent (live-range driven), not a
+       fixed template — byte-identity requires replicating clang's RA + spill choice.
+
+  (W4) bl hxlcl_mmap (BRANCH26) INTERLEAVED with W1+W2+W3 in one body —
+       class-B proved an ISOLATED tail-call (atoi→atoll). Here the bl sits mid-body
+       between conditional-select setup and post-call MAP_FAILED test + state stores.
+
+  (W5) MULTI-BASIC-BLOCK control flow with forward+backward merges —
+       b.ls 0x7c (skip mmap when chunk fits) · b.eq 0x9c (MAP_FAILED → NULL tail) ·
+       b 0x88 (backward jump from NULL tail to shared epilogue). Shadow
+       rt_arena_alloc proved a SINGLE b.hi to a 2-instr OOM tail; multi-BB with a
+       shared epilogue + back-edge is a step beyond.
+
+────────────────────────────────────────────────────────────────────────────
+hexa_arena_alloc (runtime_core.c L3538) is STRICTLY HARDER than the seed
+────────────────────────────────────────────────────────────────────────────
+The mission named hexa_arena_alloc alongside hxlcl_malloc. It is NOT a single-block
+bump — it is a LINKED-CHAIN block-walk allocator adding, on top of W1-W5:
+  - lazy env probe   hexa_arena_on() → hxlcl_getenv("HEXA_STR_ARENA")  (extra call + cache static)
+  - NESTED while loop   while (nb && nb->cap < n) nb = nb->next;        (chain walk)
+  - SECOND while loop   while (tail->next) { tail=tail->next; chain_len++; }
+  - conditional malloc  hexa_arena_new_block(n)  → recurses into hxlcl_malloc
+  - stats hooks         _hx_mem_tick / _hx_stats_on / size-bucket histogram stores
+  - 3+ distinct statics  __hexa_arena{head,cur} · __hx_arena_lo/hi · __hexa_arena_enabled
+This is a class-A + class-B + class-C COMPOSITE with loop control flow — explicitly
+"단일 increment 불가 · multi-session expert" per RUNTIME.floor.md, confirmed measured.
+
+────────────────────────────────────────────────────────────────────────────
+VERDICT — TERMINAL WALL, and class-E alloc-core IS the genuine F3 blocker for .c=0
+────────────────────────────────────────────────────────────────────────────
+- Self-emit of the alloc-core byte-identical from PROVEN blocks: NO. It requires
+  W1 (csel/ccmp/cmn), W2 (multi-distinct-global reloc), W3 (RA multi-pair spill),
+  interleaved W4+W5 — none of which any of the 44 proven F3 emitters provide. The
+  floor doc's "emit-able in principle by stacking sub-capabilities" is correct, but
+  those sub-capabilities (a real register allocator + conditional-select selection +
+  multi-global reloc scheduling) are UNBUILT in the shadow emitter — they are the
+  hexa codegen backend's job, i.e. exactly the B9.6a/b campaign, not a leaf increment.
+- Forcing a hand-rolled byte-array would NOT be byte-identical to clang -O2 (different
+  RA, no csel fusion) → would FAIL the default-0-extern byte-identity gate → REVERT.
+  So no emit was attempted (mission directive: non-byte-identical → REVERT).
+- The bump-allocator SEED itself (mmap svc + bump ptr) is irreducible: a self-hosting
+  runtime needs SOME machine-code path to carve OS memory; there is no mark/sweep GC
+  to emit. This is the B9.8 terminal — the irreducible core of F6 as well.
+
+Is class-E the genuine F3 terminal blocker for .c=0?  YES for the alloc-core seed,
+but it is NOT the ONLY remaining F3 work. F3 still has the ~620-fn HARD phase across
+classes A/B/C/D whose FIRST increments are proven but bodies remain (per-fn PORT,
+expert serial). The alloc-core is the IRREDUCIBLE tip: even if every other F3 fn were
+self-emitted, this bump-allocator seed is the floor that cannot be bootstrapped away
+via codegen self-emit. .c → 0 for the alloc-core specifically requires the full hexa
+codegen backend (RA + conditional-select + multi-global reloc) to reach byte-identity,
+OR honest acceptance of the seed as the irreducible B9.8 floor (the latter is the
+measured-correct closure: the seed is what an allocator IS).
+
+────────────────────────────────────────────────────────────────────────────
+RAW — clang -O2 disasm of the simplest single-block bump-allocator seed
+────────────────────────────────────────────────────────────────────────────
+$ clang -O2 -c classe_seed_probe.c -o classe_seed_probe.o && otool -tvV classe_seed_probe.o
+classe_seed_probe.o:
+(__TEXT,__text) section
+_seed_malloc:
+0000000000000000	stp	x24, x23, [sp, #-0x40]!
+0000000000000004	stp	x22, x21, [sp, #0x10]
+0000000000000008	stp	x20, x19, [sp, #0x20]
+000000000000000c	stp	x29, x30, [sp, #0x30]
+0000000000000010	add	x29, sp, #0x30
+0000000000000014	cmp	x0, #0x1
+0000000000000018	csinc	x20, x0, xzr, hi
+000000000000001c	add	x8, x20, #0x1f
+0000000000000020	and	x21, x8, #0xfffffffffffffff0
+0000000000000024	adrp	x22, 0 ; 0x0
+0000000000000028	ldr	x0, [x22]
+000000000000002c	add	x8, x0, x21
+0000000000000030	adrp	x23, 0 ; 0x0
+0000000000000034	ldr	x9, [x23]
+0000000000000038	cmp	x0, #0x0
+000000000000003c	ccmp	x8, x9, #0x2, ne
+0000000000000040	b.ls	0x7c
+0000000000000044	mov	w8, #0x400000
+0000000000000048	cmp	x21, #0x400, lsl #12
+000000000000004c	csel	x19, x21, x8, hi
+0000000000000050	mov	x0, #0x0
+0000000000000054	mov	x1, x19
+0000000000000058	mov	w2, #0x3
+000000000000005c	mov	w3, #0x1002
+0000000000000060	mov	w4, #-0x1
+0000000000000064	mov	x5, #0x0
+0000000000000068	bl	0x68
+000000000000006c	cmn	x0, #0x1
+0000000000000070	b.eq	0x9c
+0000000000000074	add	x8, x0, x19
+0000000000000078	str	x8, [x23]
+000000000000007c	add	x8, x0, x21
+0000000000000080	str	x8, [x22]
+0000000000000084	str	x20, [x0], #0x10
+0000000000000088	ldp	x29, x30, [sp, #0x30]
+000000000000008c	ldp	x20, x19, [sp, #0x20]
+0000000000000090	ldp	x22, x21, [sp, #0x10]
+0000000000000094	ldp	x24, x23, [sp], #0x40
+0000000000000098	ret
+000000000000009c	mov	x0, #0x0
+00000000000000a0	b	0x88
+
+$ otool -r classe_seed_probe.o   (the real link surface — 4 PAGE21/PAGEOFF12 to 2 globals + 1 BRANCH26)
+Relocation information (__TEXT,__text) 7 entries
+address  pcrel length extern type    scattered symbolnum/value
+00000080 0     2      1      4       0         1   (PAGEOFF12 → _g_ptr)
+00000078 0     2      1      4       0         2   (PAGEOFF12 → _g_end)
+00000068 1     2      1      2       0         6   (BRANCH26  → _hxlcl_mmap)
+00000034 0     2      1      4       0         2   (PAGEOFF12 → _g_end)
+00000030 1     2      1      3       0         2   (PAGE21    → _g_end)
+00000028 0     2      1      4       0         1   (PAGEOFF12 → _g_ptr)
+00000024 1     2      1      3       0         1   (PAGE21    → _g_ptr)
