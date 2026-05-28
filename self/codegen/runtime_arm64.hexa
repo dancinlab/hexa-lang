@@ -4773,6 +4773,86 @@ fn rt_bind_reloc_kinds() {
     return k
 }
 
+// ── rt_socket (F3 wave 8 — class-C syscall · 3-arg int+int+int _cf + errno) ──
+// socket(int d, int t, int p) -> int. 3-arg _cf with ALL THREE int args
+// sign-extended (sxtw x0/x1/x2 — domain/type/protocol), then mov w16,#97 / svc
+// / _cf errno tail. 11 instr, 44 B (one more sxtw than the 2-arg bodies →
+// errno reloc shifts to 0x1c PAGE21 / 0x20 PAGEOFF12). Verified BYTE-IDENTICAL
+// to clang -O2 (faithful _hxlcl_syscall3_cf oracle): 93407c00 93407c21 93407c42
+// 52800c30 d4001001 9a9f37e8 b4000088 90000008 b9000100 92800000 d65f03c0.
+// SYS_SOCKET=97. Completes socket-family core (socket/bind/listen/accept/connect).
+fn rt_socket() {
+    let mut c = []
+    // sxtw x0, w0  (sign-extend domain)     0x93407C00
+    c.push(0)
+    c.push(124)
+    c.push(64)
+    c.push(147)
+    // sxtw x1, w1  (sign-extend type)       0x93407C21
+    c.push(33)
+    c.push(124)
+    c.push(64)
+    c.push(147)
+    // sxtw x2, w2  (sign-extend protocol)   0x93407C42
+    c.push(66)
+    c.push(124)
+    c.push(64)
+    c.push(147)
+    // mov w16, #97  (SYS_SOCKET)            0x52800C30
+    c.push(48)
+    c.push(12)
+    c.push(128)
+    c.push(82)
+    // svc #0x80                             0xD4001001
+    c.push(1)
+    c.push(16)
+    c.push(0)
+    c.push(212)
+    // cset x8, hs  (capture carry = error)  0x9A9F37E8
+    c.push(232)
+    c.push(55)
+    c.push(159)
+    c.push(154)
+    // cbz x8, Lret (success → skip errno)   0xB4000088  (+0x10 to ret)
+    c.push(136)
+    c.push(0)
+    c.push(0)
+    c.push(180)
+    // adrp x8, errno@PAGE  [RELOC PAGE21]   0x90000008  (imm zeroed)
+    c.push(8)
+    c.push(0)
+    c.push(0)
+    c.push(144)
+    // str w0, [x8, errno@PAGEOFF] [RELOC]   0xB9000100  (imm zeroed)
+    c.push(0)
+    c.push(1)
+    c.push(0)
+    c.push(185)
+    // mov x0, #-1  (error return)           0x92800000
+    c.push(0)
+    c.push(0)
+    c.push(128)
+    c.push(146)
+    // ret  (x0 = new socket fd / -1 error)  0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+fn rt_socket_reloc_offs() {
+    let mut o = []
+    o.push(28)
+    o.push(32)
+    return o
+}
+fn rt_socket_reloc_kinds() {
+    let mut k = []
+    k.push(3)
+    k.push(4)
+    return k
+}
+
 // ── rt_write (B9.6-C13 — class-C syscall · int+ptr+ulong _cf + errno) ────
 // write(int fd, const void *buf, unsigned long n) -> long. The exact twin of
 // rt_read — same 9-instr 36 B _cf shape (only fd/x0 sign-extended; buf x1 + n

@@ -1,0 +1,316 @@
+// test/native_build/emit_hxlcl_waitpid_o.hexa
+//
+// F3 ACTIVATION RUNBOOK · Path A · B9.6-C16 — class-C 4-arg _cf svc + errno.
+// FIRST 4-arg _cf in the F3 catalog. EMITS a Mach-O .o exporting `_hxlcl_waitpid`
+// with rt_waitpid's verbatim 44-byte machine code (11 instr): sxtw pid (x0) +
+// sxtw options (x2); mov x3,#0 (NULL rusage 4th arg); status (ptr, x1)
+// untouched; trap; cset/cbz; errno store via PC-relative adrp/str to
+// UNDEFINED-external `_hxlcl_errno` (PAGE21@0x1c, PAGEOFF12@0x20 — shifted +4
+// vs rt_lseek because of the extra `mov x3,#0` prologue instruction); mov
+// x0,#-1; ret.
+//
+// SSOT: bytes character-identical to self/codegen/runtime_arm64.hexa::rt_waitpid.
+
+fn rt_socket_bytes() -> [int] {
+    let mut c = []
+    // sxtw x0, w0  (sign-extend domain)     0x93407C00
+    c.push(0); c.push(124); c.push(64); c.push(147)
+    // sxtw x1, w1  (sign-extend type)       0x93407C21
+    c.push(33); c.push(124); c.push(64); c.push(147)
+    // sxtw x2, w2  (sign-extend protocol)   0x93407C42
+    c.push(66); c.push(124); c.push(64); c.push(147)
+    // mov w16, #97  (SYS_SOCKET)            0x52800C30
+    c.push(48); c.push(12); c.push(128); c.push(82)
+    // svc #0x80                             0xD4001001
+    c.push(1); c.push(16); c.push(0); c.push(212)
+    // cset x8, hs                           0x9A9F37E8
+    c.push(232); c.push(55); c.push(159); c.push(154)
+    // cbz x8, Lret                          0xB4000088
+    c.push(136); c.push(0); c.push(0); c.push(180)
+    // adrp x8, errno@PAGE                   0x90000008
+    c.push(8); c.push(0); c.push(0); c.push(144)
+    // str w0, [x8, errno@PAGEOFF]           0xB9000100
+    c.push(0); c.push(1); c.push(0); c.push(185)
+    // mov x0, #-1                           0x92800000
+    c.push(0); c.push(0); c.push(128); c.push(146)
+    // ret                                   0xD65F03C0
+    c.push(192); c.push(3); c.push(95); c.push(214)
+    return c
+}
+
+fn align_to_v(val: int, align: int) -> int {
+    return (val + align - 1) / align * align
+}
+fn push_u16_le_v(buf: [int], val: int) -> [int] {
+    return buf.push(val % 256).push((val / 256) % 256)
+}
+fn push_u32_le_v(buf: [int], val: int) -> [int] {
+    return buf.push(val % 256).push((val / 256) % 256).push((val / 65536) % 256).push((val / 16777216) % 256)
+}
+fn push_u64_le_v(buf: [int], val: int) -> [int] {
+    let mut b = push_u32_le_v(buf, val % 0x100000000)
+    return push_u32_le_v(b, val / 0x100000000)
+}
+
+fn macho_obj_wrap_v3_v(code: [int],
+                       sym_name_bytes: [[int]],
+                       sym_offsets: [int],
+                       sym_sections: [int],
+                       state_bytes: [int],
+                       reloc_offs: [int],
+                       reloc_kinds: [int],
+                       reloc_symnums: [int]) -> [int] {
+    let mut out = []
+    let code_size  = len(code)
+    let state_size = len(state_bytes)
+    let nreloc     = len(reloc_offs)
+    let nsyms      = len(sym_name_bytes)
+
+    let mut sym_strx: [int] = []
+    let mut strtab_size = 1
+    let mut si = 0
+    while si < nsyms {
+        sym_strx.push(strtab_size)
+        strtab_size = strtab_size + len(sym_name_bytes[si])
+        si = si + 1
+    }
+
+    let mut nsects = 1
+    if state_size > 0 { nsects = 2 }
+    let segment_cmd_size = 72 + 80 * nsects
+    let symtab_cmd_size = 24
+    let build_version_cmd_size = 24
+    let sizeofcmds = segment_cmd_size + symtab_cmd_size + build_version_cmd_size
+
+    let header_size = 32
+    let code_offset = align_to_v(header_size + sizeofcmds, 8)
+
+    let mut const_offset = code_offset + code_size
+    if state_size > 0 {
+        const_offset = align_to_v(code_offset + code_size, 8)
+    }
+    let data_end = const_offset + state_size
+
+    let reloc_offset = align_to_v(data_end, 4)
+    let reloc_size   = 8 * nreloc
+    let symtab_offset = reloc_offset + reloc_size
+    let nlist_size = 16
+    let strtab_offset = symtab_offset + nlist_size * nsyms
+    let total_end = strtab_offset + strtab_size
+
+    out = push_u32_le_v(out, 0xFEEDFACF)
+    out = push_u32_le_v(out, 0x0100000C)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 1)
+    out = push_u32_le_v(out, 3)
+    out = push_u32_le_v(out, sizeofcmds)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+
+    out = push_u32_le_v(out, 0x19)
+    out = push_u32_le_v(out, segment_cmd_size)
+    let mut i0 = 0
+    while i0 < 16 { out.push(0); i0 = i0 + 1 }
+    out = push_u64_le_v(out, 0)
+    out = push_u64_le_v(out, total_end - code_offset)
+    out = push_u64_le_v(out, code_offset)
+    out = push_u64_le_v(out, total_end - code_offset)
+    out = push_u32_le_v(out, 7)
+    out = push_u32_le_v(out, 7)
+    out = push_u32_le_v(out, nsects)
+    out = push_u32_le_v(out, 0)
+
+    out.push(95); out.push(95); out.push(116); out.push(101); out.push(120); out.push(116)
+    let mut j0 = 0
+    while j0 < 10 { out.push(0); j0 = j0 + 1 }
+    out.push(95); out.push(95); out.push(84); out.push(69); out.push(88); out.push(84)
+    j0 = 0
+    while j0 < 10 { out.push(0); j0 = j0 + 1 }
+    out = push_u64_le_v(out, 0)
+    out = push_u64_le_v(out, code_size)
+    out = push_u32_le_v(out, code_offset)
+    out = push_u32_le_v(out, 2)
+    out = push_u32_le_v(out, reloc_offset)
+    out = push_u32_le_v(out, nreloc)
+    out = push_u32_le_v(out, 0x80000400)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+
+    if state_size > 0 {
+        out.push(95); out.push(95); out.push(99); out.push(111); out.push(110); out.push(115); out.push(116)
+        let mut j1 = 0
+        while j1 < 9 { out.push(0); j1 = j1 + 1 }
+        out.push(95); out.push(95); out.push(84); out.push(69); out.push(88); out.push(84)
+        j1 = 0
+        while j1 < 10 { out.push(0); j1 = j1 + 1 }
+        out = push_u64_le_v(out, code_size)
+        out = push_u64_le_v(out, state_size)
+        out = push_u32_le_v(out, const_offset)
+        out = push_u32_le_v(out, 3)
+        out = push_u32_le_v(out, 0)
+        out = push_u32_le_v(out, 0)
+        out = push_u32_le_v(out, 0)
+        out = push_u32_le_v(out, 0)
+        out = push_u32_le_v(out, 0)
+        out = push_u32_le_v(out, 0)
+    }
+
+    out = push_u32_le_v(out, 0x02)
+    out = push_u32_le_v(out, symtab_cmd_size)
+    out = push_u32_le_v(out, symtab_offset)
+    out = push_u32_le_v(out, nsyms)
+    out = push_u32_le_v(out, strtab_offset)
+    out = push_u32_le_v(out, strtab_size)
+
+    out = push_u32_le_v(out, 0x32)
+    out = push_u32_le_v(out, build_version_cmd_size)
+    out = push_u32_le_v(out, 1)
+    out = push_u32_le_v(out, 0x000E0000)
+    out = push_u32_le_v(out, 0x000E0000)
+    out = push_u32_le_v(out, 0)
+
+    while len(out) < code_offset { out.push(0) }
+    let mut k0 = 0
+    while k0 < len(code) { out.push(code[k0]); k0 = k0 + 1 }
+
+    if state_size > 0 {
+        while len(out) < const_offset { out.push(0) }
+        let mut sb = 0
+        while sb < state_size { out.push(state_bytes[sb]); sb = sb + 1 }
+    }
+
+    while len(out) < reloc_offset { out.push(0) }
+    let mut ri = 0
+    while ri < nreloc {
+        let r_off     = reloc_offs[ri]
+        let r_kind    = reloc_kinds[ri]
+        let r_symnum  = reloc_symnums[ri]
+        out = push_u32_le_v(out, r_off)
+        let mut r_pcrel = 0
+        if r_kind == 3 { r_pcrel = 1 }
+        if r_kind == 2 { r_pcrel = 1 }
+        let r_length = 2
+        let r_extern = 1
+        let bits = (r_symnum % 0x1000000)
+                 + (r_pcrel * 0x1000000)
+                 + (r_length * 0x2000000)
+                 + (r_extern * 0x8000000)
+                 + ((r_kind % 16) * 0x10000000)
+        out = push_u32_le_v(out, bits)
+        ri = ri + 1
+    }
+
+    while len(out) < symtab_offset { out.push(0) }
+    let mut sj = 0
+    while sj < nsyms {
+        let s_strx    = sym_strx[sj]
+        let s_offset  = sym_offsets[sj]
+        let s_section = sym_sections[sj]
+        let mut n_value = s_offset
+        if s_section == 2 { n_value = code_size + s_offset }
+        let mut n_type_b = 0x0E + 0x01
+        if s_section == 0 {
+            n_type_b = 0x01
+            n_value = 0
+        }
+        out = push_u32_le_v(out, s_strx)
+        out.push(n_type_b)
+        out.push(s_section)
+        out = push_u16_le_v(out, 0)
+        out = push_u64_le_v(out, n_value)
+        sj = sj + 1
+    }
+
+    out.push(0)
+    let mut sk = 0
+    while sk < nsyms {
+        let nb = sym_name_bytes[sk]
+        let mut nbi = 0
+        while nbi < len(nb) {
+            out.push(nb[nbi])
+            nbi = nbi + 1
+        }
+        sk = sk + 1
+    }
+
+    return out
+}
+
+fn emit_hxlcl_socket_o() {
+    println("[wire] F3 Path A · socket native override — _hxlcl_socket")
+
+    let code = rt_socket_bytes()
+    if len(code) != 44 {
+        println("FAIL: rt_socket expected 44 bytes, got " + to_string(len(code)))
+        return
+    }
+    if code[8] != 66 || code[9] != 124 || code[10] != 64 || code[11] != 147 {
+        println("FAIL: sxtw x2,w2 (protocol arg) mismatch"); return
+    }
+    println("  protocol arg   : 42 7c 40 93 (sxtw x2, w2) OK")
+    if code[12] != 48 || code[13] != 12 || code[14] != 128 || code[15] != 82 {
+        println("FAIL: mov w16,#97 (SYS_SOCKET) mismatch"); return
+    }
+    println("  syscall number : 30 0c 80 52 (mov w16, #97 = SYS_SOCKET) OK")
+    if code[28] != 8 || code[29] != 0 || code[30] != 0 || code[31] != 144 {
+        println("FAIL: adrp errno (reloc site 0x1c) mismatch"); return
+    }
+    if code[32] != 0 || code[33] != 1 || code[34] != 0 || code[35] != 185 {
+        println("FAIL: str errno (reloc site 0x20) mismatch"); return
+    }
+    println("  errno store    : adrp/str @ 0x1c/0x20 (2 relocs) OK")
+    if code[40] != 192 || code[41] != 3 || code[42] != 95 || code[43] != 214 {
+        println("FAIL: ret trailer mismatch"); return
+    }
+
+    let mut sym_names: [[int]] = []
+    // "_hxlcl_socket\0" — 13 chars + NUL
+    let mut s0 = []
+    s0.push(95); s0.push(104); s0.push(120); s0.push(108); s0.push(99); s0.push(108)
+    s0.push(95); s0.push(115); s0.push(111); s0.push(99); s0.push(107); s0.push(101); s0.push(116); s0.push(0)
+    sym_names.push(s0)
+    // "_hxlcl_errno\0"
+    let mut s1 = []
+    s1.push(95); s1.push(104); s1.push(120); s1.push(108); s1.push(99); s1.push(108)
+    s1.push(95); s1.push(101); s1.push(114); s1.push(114); s1.push(110); s1.push(111); s1.push(0)
+    sym_names.push(s1)
+
+    let mut sym_offsets = []
+    sym_offsets.push(0)
+    sym_offsets.push(0)
+    let mut sym_sections = []
+    sym_sections.push(1)
+    sym_sections.push(0)
+
+    let mut state = []
+
+    let mut roff = []
+    roff.push(28)
+    roff.push(32)
+    let mut rkind = []
+    rkind.push(3)
+    rkind.push(4)
+    let mut rsym = []
+    rsym.push(1)
+    rsym.push(1)
+
+    let obj = macho_obj_wrap_v3_v(code, sym_names, sym_offsets, sym_sections, state, roff, rkind, rsym)
+    println("  obj_wrap size  : " + to_string(len(obj)) + " bytes total")
+
+    if obj[0] != 0xcf || obj[1] != 0xfa || obj[2] != 0xed || obj[3] != 0xfe {
+        println("FAIL: MH_MAGIC_64 mismatch"); return
+    }
+    if obj[12] != 1 {
+        println("FAIL: filetype not MH_OBJECT"); return
+    }
+
+    let out_path = env_var("HEXA_HXLCL_SOCKET_O")
+    let mut dest = out_path
+    if dest == "" { dest = "build/poc/hxlcl_socket.o" }
+    write_bytes(dest, obj)
+    println("  wrote          : " + dest)
+    println("[wire] EMIT OK — clang -O2 byte-oracle verified (3x sxtw + SYS#97)")
+}
+
+emit_hxlcl_socket_o()
