@@ -274,7 +274,7 @@ fn macho_obj_wrap_v3_v(code: [int],
 // Driver
 // ═══════════════════════════════════════════════════════════════════
 fn emit_hxlcl_truncate_o() {
-    println("[wire] F3 Path A · wave 3 · rt_truncate native override — _hxlcl_truncate")
+    println("[wire] F3 Path A · wave 4 · rt_truncate native override — _hxlcl_truncate")
 
     let code = rt_truncate_bytes()
     if len(code) != 32 {
