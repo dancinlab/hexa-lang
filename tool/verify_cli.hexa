@@ -4155,6 +4155,23 @@ fn cmd_expr_float(rest_in, fnm: string) {
         cmd_expr_float_compute(rest, fnm)
         return
     }
+    // VERIFY-KIT — value-less auto-COMPUTE for non-0-arg float fns. The VERIFY
+    // arity branches below always read the LAST operand as <v>; a 1-arg fn given
+    // only its operand (`--expr <fn> <a0>`, no <v>) has len(rest)==3 and the
+    // 1-arg else-branch then reads rest[3] → OOB. Mirror the integer path's
+    // omit-<v> → COMPUTE: when the non-flag operand count ≤ the fn arity (here
+    // detected as ≤1 real operand with no value token), route to compute.
+    let mut _nops = 0
+    let mut _k = 2
+    while _k < len(rest) {
+        let _tk = to_string(rest[_k])
+        if _tk != "--absorb" && _tk != "--no-absorb" && _tk != "--compute" { _nops = _nops + 1 }
+        _k = _k + 1
+    }
+    if (!zero_arg) && _nops <= 1 {
+        cmd_expr_float_compute(rest, fnm)
+        return
+    }
     let has7 = len(rest) >= 7 && to_string(rest[6]) != "--absorb" && to_string(rest[6]) != "--no-absorb"
     let has6 = len(rest) >= 6 && to_string(rest[5]) != "--absorb" && to_string(rest[5]) != "--no-absorb"
     let has5 = len(rest) >= 5 && to_string(rest[4]) != "--absorb" && to_string(rest[4]) != "--no-absorb"
