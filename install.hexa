@@ -131,6 +131,32 @@ fn install_hexa() {
         exec("mkdir -p '" + hx_bin + "/build'")
         exec("cp -R '" + src + "/build/.' '" + hx_bin + "/build/'")
     }
+
+    // macOS — neutralize the two kill vectors a DOWNLOADED binary hits that a
+    // local build does not (mirrors install.sh):
+    //   (1) Gatekeeper quarantine: curl'd assets carry com.apple.quarantine →
+    //       first exec triggers a Gatekeeper assessment rejecting an ad-hoc /
+    //       non-notarized binary. Running this installer = the user's trust
+    //       act (Homebrew/rustup model), so strip the xattr.
+    //   (2) AppleSystemPolicy burning matcher: ad-hoc (flags=0x2) binaries get
+    //       SIGKILLed by name after heavy exec. Re-sign with a stable identity
+    //       (flags=0x0) to escape it — HEXA_CODESIGN_IDENTITY, else the first
+    //       available codesigning identity, else ad-hoc fallback (quarantine
+    //       already stripped). A notarized release tarball makes both no-ops.
+    let uname_cs = exec("uname -s").trim()
+    if uname_cs == "Darwin" {
+        exec("xattr -dr com.apple.quarantine '" + hx_bin + "/hexa.real' '" + hx_bin + "/build' 2>/dev/null || true")
+        let has_cs = exec_with_status("command -v codesign >/dev/null 2>&1")
+        if has_cs[1] == 0 {
+            let mut sign_id = env("HEXA_CODESIGN_IDENTITY")
+            if sign_id == "" {
+                sign_id = exec("security find-identity -v -p codesigning 2>/dev/null | awk -F'\"' '/[0-9]+\\)/{print $2; exit}'").trim()
+            }
+            if sign_id == "" { sign_id = "-" }
+            exec("codesign --force --sign '" + sign_id + "' --identifier hexad '" + hx_bin + "/hexa.real' 2>/dev/null || true")
+        }
+    }
+
     green("  ✓ " + hx_bin + "/hexa")
 
     // cleanup tmp

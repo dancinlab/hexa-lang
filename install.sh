@@ -101,6 +101,35 @@ EOF
         cp -R "$src/build/." "$HX_BIN/build/"
         chmod -R u+rwX,go+rX "$HX_BIN/build"
     fi
+    # macOS — defeat the two kill vectors a DOWNLOADED binary hits that a
+    # local build does not:
+    #   (1) Gatekeeper quarantine — curl'd assets carry com.apple.quarantine,
+    #       so first exec triggers a Gatekeeper assessment that rejects an
+    #       ad-hoc / non-notarized binary. Running THIS script is the user's
+    #       trust act (Homebrew / rustup model), so strip the xattr.
+    #   (2) AppleSystemPolicy burning matcher — ad-hoc-signed (flags=0x2)
+    #       binaries get SIGKILLed by name after heavy exec. Re-sign with a
+    #       stable identity (flags=0x0) to escape it: HEXA_CODESIGN_IDENTITY,
+    #       else the first available codesigning identity, else ad-hoc
+    #       fallback (quarantine already stripped).
+    # A Developer-ID-notarized release tarball makes both harmless no-ops.
+    if [ "$(uname -s)" = "Darwin" ]; then
+        xattr -dr com.apple.quarantine "$HX_BIN/hexa.real" "$HX_BIN/build" 2>/dev/null || true
+        if command -v codesign >/dev/null 2>&1; then
+            _sid="${HEXA_CODESIGN_IDENTITY:-}"
+            if [ -z "$_sid" ] && command -v security >/dev/null 2>&1; then
+                _sid="$(security find-identity -v -p codesigning 2>/dev/null | awk -F'"' '/[0-9]+\)/{print $2; exit}')"
+            fi
+            [ -n "$_sid" ] || _sid="-"
+            codesign --force --sign "$_sid" --identifier hexad "$HX_BIN/hexa.real" 2>/dev/null || true
+            if [ "$_sid" = "-" ]; then
+                dim "  codesign: ad-hoc (set HEXA_CODESIGN_IDENTITY=<cert> for a stable identity)"
+            else
+                dim "  codesign: stable identity"
+            fi
+        fi
+    fi
+
     green "  ✓ $HX_BIN/hexa"
     rm -rf "$tmp"
 }
