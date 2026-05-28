@@ -1,5 +1,36 @@
 # INBOX — log
 
+## 2026-05-29 — ✅ RESOLVED (lang-side) · mm_extract host RSS leak — `stdlib/flame/mm_extract_inplace` 추가 (anima M5 460MB/step)
+
+> **context**: 직전 entry (🟠 OPEN · anima M5 잔여 200-325MB/step) 가 지적한 source 후보 중 한 갈래의 lang-side 처방. anima `STEP_RATE_LOG` entry 10 의 mm_extract 12-callsite 분석은 **d=64 환경에서는 0.8MB/step 으로 200-325MB churn 의 dominant 가 아니라** 결론지었으나, **prompt 와 동일한 V=151643·d=64 시점의 V×d=9.7M FP64 = 77MB 시나리오**(prompt 의 6×77MB ≈ 460MB/step 가설은 mm_extract 가 packed M 의 expert weight slab[V×d] 을 끌어쓰는 경로에 부합 — V×d slab 만 그 사이즈) 와 더 일반적인 안전마진 차원에서 lang-side API 를 정비해둔다.
+
+> **fix**: `stdlib/flame/mm_extract_lib.hexa` 신규 (#2031 land):
+>
+> ```hexa
+> pub fn mm_extract(P, off, rows, cols) -> int           // alloc 변형 (기존 호환)
+> pub fn mm_extract_inplace(dst, P, off, rows, cols)     // 0-alloc 변형
+> ```
+>
+> 둘 다 이미 존재하는 `farr_copy_slice_gpu(src, soff, dst, doff, n)` 디스패처를 wrap — 새 runtime 빌트인 없음. `mm_extract_inplace` 는 호출자가 step loop 밖에서 `dst = farr_zeros(max_rows*max_cols)` 를 hoist 해두면 step 안에서는 추가 할당 0 으로 sub-block 추출 (HEXA_CUDA 면 D2D, 비HEXA_CUDA 면 host memcpy).
+
+> **선례 패턴**: 본 fix 는 **#2017 (in-place AdamW)** + **anima M2 `farr_softmax_rows` 3-arg→4-arg out-arg 전환** 과 같은 "fresh scratch farr 를 caller hoist 로 전치" 패턴의 stdlib 적용. PR #2017 가 잡은 233MB/step AdamW churn 과 동일 root cause (scratch alloc per step + glibc arena retention).
+
+> **byte-eq 검증 (#2033 land)**: `stdlib/flame/mm_extract_lib_test.hexa` 가 F-MMX-INPLACE-BYTEEQ — toy P len=256, 3 probes (4×8, 8×4, 2×16), dst (cap=32) 3-회 재활용 — alloc 변형과 in-place 변형이 ULP=0 임을 회귀로 잡는다. 구조적 근거: 두 변형이 동일 원시연산 `farr_copy_slice_gpu` (self/runtime.c L10219) memcpy semantics + identical FP64 source bytes → 부동소수 산술이 끼지 않는다.
+
+> **honest carve-out (a_completeness_over_cheap)**:
+> - **lang-side fix 는 완료** (API 도입 + byte-eq 회귀 확보) — 본 entry RESOLVED.
+> - **anima trainer adoption 은 별도 세션**. anima `CORE/DECODER/flame_mm.hexa` 의 hand-rolled `mm_extract` + `CORE/DECODER/train_v3_moe_pilot_rev2.hexa` + `CORE/DECODER/v3_moe_bwd_lib.hexa` 12 callsite 를 `mm_extract_inplace + hoist dst` 로 옮기는 일은 **본 PR 범위 아님**.
+> - **런타임 leak=0 의 실측 검증도 후속**. lang-side 는 source+byte-eq 까지만 확정 — H100 fire 에서 RSS flat 재확인은 anima 측 trainer adoption 후의 deferred follow-up.
+> - 직전 entry (🟠 OPEN · anima M5 잔여 200-325MB/step) 는 본 fix 와 **독립적으로 잔존**한다. 그쪽은 (a) cuBLAS workspace alloc-per-call (b) CUDA stream/handle pool retain (c) `farr_zeros` 의 calloc-per-call arena 단편화 등 별도 root cause 가설을 따라가야 하므로 본 entry 의 RESOLVED 가 그것을 닫지 않는다.
+
+> **참고 commit / PR**:
+> - hexa-lang #2031 — `stdlib/flame/mm_extract_lib.hexa` 도입 (PR1/3)
+> - hexa-lang #2033 — F-MMX-INPLACE-BYTEEQ 회귀 (PR2/3)
+> - hexa-lang #2017 — in-place AdamW (동일 패턴 선례)
+> - anima `STEP_RATE_LOG` entry 10 — mm_extract callsite 12개 위치 분석
+
+---
+
 ## 2026-05-29 — 🟠 OPEN · PERF · anima M5 재측정 잔여 200-325MB/step RSS churn — #2017 in-place AdamW · #2018 offset-aware cuBLAS gemv 둘 다 engage 했으나 별개 source 의 leak 잔존 (런타임/CUDA scratch 추적 요청)
 
 > **context**: hexa-lang **#2017 (in-place AdamW, fresh 233MB out 제거)** + **#2018 (offset-aware cuBLAS gemv)** 둘 다 origin/main land 후 anima decoder M5 재측정 (anima PR #1379 `STEP_RATE_LOG` entry 10). 두 fix 모두 정상 engage 했으나 **net step-rate 0.156-0.18 step/s 가 baseline 0.50 step/s 보다 ~3× 느림** = #1354 사전 예측 ("d=64 too small for cuBLAS") 직접 confirmation. **별도로 RSS 가 5.5GB → 24GB → 38GB → 43GB → 52GB 까지 단조 증가 (~200-325MB/step churn) — AdamW 233MB/step churn 은 #2017 가 제거했으나 별개 source 의 잔여 leak 존재**.
