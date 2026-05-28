@@ -215,7 +215,7 @@ mission 의 핵심 통찰("source-SHA 동치 ⇒ regen-before-scp 가 GPU 재검
 |------|------|---------|
 | **F1** perf-floor (hxflash/hxlayer/hxvdsp) | 🔴 **TERMINAL** | 측정 285x ML 회귀 → irreducible perf-floor (`F1-perf-floor.txt`) |
 | **F2** vendor/OS-ABI FFI (19 layer-③) | 🔴 **TERMINAL** | audit #1809 — 순수 로직 0, ABI 경계 (`F2-vendor-ffi.txt`) |
-| **F3** runtime-core (640/548 fn · self-emit 27/640 shadow · **20 ACTIVATED** = memset+11 leaf + 6 HexaVal ctor + 2 syscall · class-A reloc + class-D struct-return + class-C syscall-ABI(arg+errno) 경로 PROVEN) | 🟠 **LIVE FRONTIER** | genuinely-portable · Path-A 템플릿 스케일아웃 → reloc-free leaf 12 LIVE-주입 (HEXA_RT_SELFEMIT 가드 · default 0-extern 보존 byte-identical) · 4 SKIP (C 대상 부재) · class-A reloc 인프라 COMPLETE+PROVEN (arena adrp+add link+run rc=0 · 실 blocker=per-primitive PORT) · **class-D struct-build 서브트랙 SCALE-OUT** = struct-return EMITTER (x0:x1 페어) + 분할-1 생성자 **6 ACTIVATED** (#1858 `rt_hexa_void/int/bool` + B9.6-D2 `rt_hexa_float/enum_str/enum_str_v` · 각 3-instr 12-B · float = FIRST FP-arg `fmov x1,d0` 브리지 · enum_str = ptr-store no-malloc) — 3-layer (interp+byte-eq-as+JIT-exec correct · float NaN/Inf/±0/DBL_MAX·MIN + NULL/literal ptr) · dual-build 3-mode PASS → no-go 이유(1) 해소 · **class-C syscall-ABI 서브트랙 SCALE-OUT** = svc-emit EMITTER (raw `svc #0x80`) + **2 ACTIVATED**: (i) `rt_getpid` (B9.6-C1 · 4-instr 16-B `mov w16,#20 / mov x0,#0 / svc / ret` · 무인자·무errno base case) · (ii) `rt_close` (B9.6-C2 · 9-instr 36-B `sxtw / mov w16,#6 / svc / cset / cbz / adrp,errno / str / mov x0,#-1 / ret` · **FIRST arg(fd)+carry-flag errno** — errno store = PC-relative adrp/str via PAGE21+PAGEOFF12 reloc against UNDEFINED-external `_hxlcl_errno`(runtime.c 가드下 non-static)로 ld64 바인딩 · ⚠ svc가 에러경로서 x1 clobber(0x0)하므로 레지스터-전달 errno-ptr 不可 = 고정 데이터심볼 필수) — 3-layer (self-test 36B+2reloc + byte-eq-as + **JIT-exec success+error BOTH**: close(valid)→0/errno untouched · close(bad)→-1/errno=EBADF(9) shared) · dual-build 3-mode PASS · macho v3 "link-test pending" 데이터-reloc 케이스 RESOLVED(LC_DYSYMTAB 불요) · 잔여 ~190 layer-② `hxlcl_*` svc-wrapper(#1812)는 동일 multi-arg + `_cf` errno 템플릿 스케일(read/write=3-arg 동일 tail · struct-arg stat/fstat만 harder) · 분할-1 잔여 ~6-11 ctor 동일 템플릿 열림 · 잔여 no-go(2)매크로 경로B (3)rt#38 coupling · class-D(~350-450 fn HARD-본체) = struct-repr(NaN-box 아님) · HARD-phase ~620 fn expert serial |
+| **F3** runtime-core (640/548 fn · self-emit 28/640 shadow · **21 ACTIVATED** = memset+11 leaf + 6 HexaVal ctor + 2 syscall + **1 call-conv composite** · class-A reloc + class-D struct-return + class-C syscall-ABI(arg+errno) + **class-B calling-conv(BRANCH26)** 경로 ALL PROVEN) | 🟠 **LIVE FRONTIER** | genuinely-portable · Path-A 템플릿 스케일아웃 → reloc-free leaf 12 LIVE-주입 (HEXA_RT_SELFEMIT 가드 · default 0-extern 보존 byte-identical) · 4 SKIP (C 대상 부재) · class-A reloc 인프라 COMPLETE+PROVEN (arena adrp+add link+run rc=0 · 실 blocker=per-primitive PORT) · **class-D struct-build 서브트랙 SCALE-OUT** = struct-return EMITTER (x0:x1 페어) + 분할-1 생성자 **6 ACTIVATED** (#1858 `rt_hexa_void/int/bool` + B9.6-D2 `rt_hexa_float/enum_str/enum_str_v`) — 3-layer + dual-build 3-mode PASS · **class-C syscall-ABI 서브트랙 SCALE-OUT** = svc-emit EMITTER + **2 ACTIVATED** (`rt_getpid` B9.6-C1 무인자 base · `rt_close` B9.6-C2 arg(fd)+carry-flag errno · PAGE21/PAGEOFF12 data reloc) — 3-layer + dual-build PASS · macho v3 데이터-reloc "link-test pending" RESOLVED · **class-B calling-conv 서브트랙 OPENED** = `rt_atoi` (B9.6-B1 · 5-instr 20-B `stp x29,x30,[sp,#-16]! / mov x29,sp / bl _hxlcl_atoll / ldp x29,x30,[sp],#16 / ret`) — **FIRST self-emit fn that CALLS another fn** (frame + `bl` + epilogue; 이전 21개 전부 LEAF). cross-object `bl` = **ARM64_RELOC_BRANCH26 @0x08 against UNDEFINED-external `_hxlcl_atoll`**(runtime.c 가드下 `HXLCL_ATOLL_SC` non-static 로 EXPORT → ld64 바인딩) · 3-layer (interp self-test 20B+1 BRANCH26 reloc · byte-eq-as `a9bf7bfd 910003fd 94000000 a8c17bfd d65f03c0` · **JIT-exec correct** 8/8 atoi 케이스 · live disasm = ld64 가 bl 바인딩 · rc=0 = NO infinite loop) · **BRANCH26 cross-object 링크 = LC_SYMTAB only, NO LC_DYSYMTAB**(#1475 caveat RESOLVED · committed oracle `poc_classb_branch26_*`) · ⚠ frameless leaf falsifier=무한루프(rc=124) = frame 가 load-bearing · dual-build 3-mode PASS(default 0-extern 49 보존 · 가드 on atoi=U/atoll=T · 가드 on no-`.o`=link-fail) · 잔여 ~190 layer-② `hxlcl_*` svc-wrapper(#1812) + class-B call-bound ~60-100 fn(strdup/strndup/atoll/strtoll = malloc/atof call · 동일 frame+BRANCH26 템플릿, callee-export 만 추가) + 분할-1 잔여 ~6-11 ctor 동일 템플릿 열림 · 잔여 no-go(2)매크로 경로B (3)rt#38 coupling · class-D(~350-450 fn HARD-본체) = struct-repr(NaN-box 아님) · HARD-phase ~620 fn expert serial |
 | **F4** sha256 (exec_argv_sha256.c) | 🟢 **RESOLVED→F3** | runtime.c `#include` 조각 · 포팅 타깃 FIPS-검증 (`F4-sha256.txt`) |
 | **F5** boot-asm (3 `.s`) | 🔴 **TERMINAL** | audit #1810 — vector-table 데이터 섹션, RFC 063/064 gated (`F5-boot-asm.txt`) |
 | **F6** bootstrap seed (hexa_cc.c) | 🔴 **TERMINAL** | irreducible bootstrap FLOOR (B9.8) |
@@ -352,10 +352,16 @@ runtime.c 조각이라 F3 로 fold (mis-split 해소). **F3 만이 진짜 open**
       adrp+add placeholder + `poc_arena_reloc_caller.c` ld64 link+run rc=0). **실제 blocker =
       인프라 아님 · per-primitive PORT** (runtime.c reloc-bound composite → self-emittable leaf +
       그 global emit-side 정의). 상세 = 아래 **CLASS-A INFRA RUNBOOK**. cold fan-out 부적합.
-    - **(B) call-bound composite (~60-100 fn)** — `hxlcl_strdup`/`strndup`/`atoll`/`strtoll` 처럼
-      다른 runtime fn(`malloc`·`atof`) 을 **call** 하는 비-leaf. 호출 규약(stp/blr/ldp frame +
-      ARM64 calling convention) + call-target reloc 필요. 필요 인프라 Z = calling-convention
-      codegen + BL/ADRP-target reloc.
+    - **(B) call-bound composite (~60-100 fn) — 🟢 OPENED (B9.6-B1 `rt_atoi`)** — `hxlcl_strdup`/
+      `strndup`/`atoll`/`strtoll` 처럼 다른 runtime fn(`malloc`·`atof`) 을 **call** 하는 비-leaf.
+      호출 규약(stp/ldp frame + ARM64 AAPCS) + call-target BRANCH26 reloc 필요 — **둘 다 PROVEN**:
+      `rt_atoi`(`(int)atoll(s)`) = FIRST 자기-emit composite (frame + `bl _hxlcl_atoll` + epilogue),
+      ARM64_RELOC_BRANCH26 @0x08 against UNDEFINED-external callee, runtime.c 가 `HXLCL_ATOLL_SC`
+      가드로 callee 를 EXPORT(non-static). 3-layer (byte-eq-as + JIT-exec 8/8 + live disasm bl 바인딩)
+      + dual-build 3-mode PASS. **BRANCH26 cross-object 링크 = LC_SYMTAB only(NO LC_DYSYMTAB)** —
+      #1475 macho.hexa "link-test pending" caveat RESOLVED. ⚠ frame 없으면 무한루프(ret↻bl) =
+      frame 가 leaf↔composite 의 load-bearing 차이. 잔여 ~60-100 fn = 동일 frame+BRANCH26 템플릿
+      스케일 (각 callee-export 1줄 추가 + multi-arg 는 인자 적재 명령만 prepend). cold fan-out 부적합.
     - **(C) syscall-bound I/O (~40-60 fn)** — fork/execvp/popen/fopen/read/write 래퍼. svc 패턴은
       LANDED + **arg+errno 템플릿 PROVEN** (`rt_exit`·`rt_arena_init` mmap · B9.6-C1 `rt_getpid`
       무인자 · **B9.6-C2 `rt_close` = 1-arg(fd)+carry-flag errno** — cset/cbz + adrp,errno/str
@@ -829,6 +835,59 @@ runtime.c 조각이라 F3 로 fold (mis-split 해소). **F3 만이 진짜 open**
       (iii) pair-return(pipe = x0:x1) · struct-arg marshalling(stat/wait4)이 fn별 상이.
       svc-emit + Path-A 템플릿은 입증됨 · multi-arg + errno-store 시퀀스 방출이 다음 증분.
       .c count 불변(87 · FLOOR 인프라).
+
+    **✅✅ B9.6-B1 — class-B calling-convention 서브트랙 OPENED · FIRST BL composite (2026-05-28 · #PR)**:
+    PHASE-BOUNDARY MAP 의 **(B) call-bound composite (~60-100 fn)** 클래스를 연 첫 증분.
+    이전 21 활성화(class-A leaf · class-D struct-return · class-C svc)는 **전부 LEAF** — 단일 프레임,
+    `bl` 없음(getpid/close 는 svc 를 쏘지만 다른 fn 을 부르지 않음). 이것은 self-emit 카탈로그의
+    **첫 함수-호출-함수** — 스택 프레임을 세우고 `bl` 로 다른 runtime fn 을 부르는 composite,
+    class-B 의 정의 그 자체.
+    - **타깃 = 런타임에서 가장 단순한 class-B composite**: `self/runtime.c` L298
+      `static int hxlcl_atoi(const char *s) { return (int)hxlcl_atoll(s); }` — 단일 tail-call,
+      `(int)` 절단은 x0 의 w0 절반으로 free. strdup/strndup/atoll/strtoll 등 malloc/atof 호출
+      composite 의 base case.
+    - **신규 emitter** (`self/codegen/runtime_arm64.hexa::rt_atoi`, 5-instr 20-B + reloc 테이블):
+      `stp x29,x30,[sp,#-16]!` (0xA9BF7BFD · 프롤로그 = x30(LR) 스필) · `mov x29,sp` (0x910003FD) ·
+      `bl _hxlcl_atoll` (0x94000000 · imm zeroed · **BRANCH26 reloc @0x08**) · `ldp x29,x30,[sp],#16`
+      (0xA8C17BFD · 에필로그) · `ret` (0xD65F03C0). `rt_atoi_reloc_offs/kinds` = [8],[2] (BRANCH26).
+      clang -O2 가 `(int)` 캐스트를 bl 의 w0 결과에 folding → 추가 명령 없음.
+    - **⚠ class-B load-bearing FINDING (frame = leaf↔composite 의 본질)**: `bl` 은 x30 을
+      복귀주소로 덮어쓴다. 프레임 없이 `bl; ret` 만 하면 callee 가 composite 로 복귀 후 composite 의
+      `ret` 가 (clobber 된) x30 으로 점프 → **무한루프**. frameless POC(`poc_macho_v3_branch26.hexa`)
+      를 실제로 링크/실행 → rc=124(timeout spin) 으로 입증. `stp/ldp` 프레임이 그 차이.
+    - **ABI 검증 3-layer (JIT-exec 게이트 load-bearing)**: ① self-test — `rt_atoi : 20 bytes
+      (1 reloc · BRANCH26)` + stp/mov/bl/ldp/ret 단언 + reloc offs[8]/kind[2] ALL CHECKS PASS.
+      ② **byte-identical to `as -arch arm64`** — emit `.o` 의 `__text` = `a9bf7bfd 910003fd
+      94000000 a8c17bfd d65f03c0`, 어셈블러 출력과 바이트 동일 · nm = `T _hxlcl_atoi`(defined) +
+      `U _hxlcl_atoll`(undefined extern) · BR26 reloc @0x08. ③ **JIT-exec correctness** — 멀티심볼
+      `.o` 를 실 C 드라이버 + 실 `hxlcl_atoll` 에 링크 → 8/8 케이스 정확(99·-42·whitespace·+7·0·
+      INT_MAX·non-numeric·-0) · rc=0 = **NO infinite loop**(frame 정확) · live disasm = ld64 가
+      `bl _hxlcl_atoll` 를 바인딩. **frame + BRANCH26 cross-object call ABI 가 런타임에서 정확함 증명**.
+    - **🔑 BRANCH26 cross-object 링크 = LC_SYMTAB only · NO LC_DYSYMTAB (#1475 caveat RESOLVED)**:
+      `macho.hexa` L452 의 "ld64 MAY require LC_DYSYMTAB when undefined symbols present · link-test
+      pending" caveat 가 이 PR 로 **종결**. hexa-emit `.o`(undefined-external `_the_callee`/`_hxlcl_atoll`
+      + BRANCH26)가 별도 C `.o` 의 callee 와 `clang composite.o callee.o main.c` 로 링크 exit 0,
+      실행 rc=0. emitted `.o` 에 LC_DYSYMTAB = **0개** (`otool -l | grep -c LC_DYSYMTAB`). committed
+      재현 오라클 = `test/native_build/poc_classb_branch26_{emit.hexa,caller.c,callee.c}` (class-A
+      arena `poc_arena_reloc_caller.c` 의 class-B 짝).
+    - **Path-A 활성화 (dual-build 3-mode PASS · #1836 패턴 + callee-export 추가)**:
+      `runtime.c` 의 (i) `hxlcl_atoi` forward-decl+def 를 `#ifdef HEXA_RT_SELFEMIT extern / #else static`
+      가드 (#1860 lesson — decl 도 flip) · (ii) **`hxlcl_atoll` 를 가드下 EXPORT**(`HXLCL_ATOLL_SC`
+      매크로 = default `static` · 가드시 빈값) — ld64 가 `.o` 의 BRANCH26 을 runtime.c 의 atoll 에
+      바인딩하려면 callee 가 external 이어야 함 = **class-B 고유 wrinkle** (leaf/data-reloc 트랙은
+      single-symbol override 라 안 겪던 것). `build_hexa_cli.hexa` 의 leaf emit 루프에 `atoi` 추가
+      (동일 single-driver/one-`.o`/one-env 패턴 · `.o` 내부만 BRANCH26 reloc). **3-mode 실측**:
+      (a) default = `hxlcl_atoi`/`atoll` 둘 다 local `t` · **undefined-extern set(49) origin/main 과
+          IDENTICAL** = 0-extern 불변 보존, (b) 가드 on = `_hxlcl_atoi`=U(`.o` 가 공급)/`_hxlcl_atoll`=T
+          (export·BL 바인딩) · JIT-exec PASS, (c) 가드 on **without** `.o` = `Undefined: _hxlcl_atoi`
+          link-fail (extern 진짜임). `.verdicts/runtime-floor-closure/B9C6-B1-atoi-classb-byte-diff.txt`.
+    - **fixpoint 무위험**: rt_atoi 는 shadow(`runtime_arm64.hexa`=main.hexa 미-use) · emit 드라이버도
+      미-use → `hexa_cc.c` regen 무관. runtime.c diff = 순수 가드 추가(deletion 0).
+    - **잔여 (class-B call-bound · ~60-100 fn)**: atoi 는 0/1-arg tail-call base. 나머지(`strdup`/
+      `strndup`/`strtoll` = malloc/atof 호출)는 동일 frame + BRANCH26 + callee-export 템플릿 스케일 ·
+      multi-arg 는 인자 적재 명령만 prepend · 다중-callee 면 BRANCH26 reloc 레코드 추가 (macho v3 가
+      이미 N-reloc 지원). class-B 인프라(frame emit + BRANCH26 cross-object link)는 입증됨 ·
+      callee-export wrinkle 가 fn 별 신규 작업. .c count 불변(87 · FLOOR 인프라).
 
 ### F4 — sha256 entangled
 

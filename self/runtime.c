@@ -294,8 +294,23 @@ static char *__attribute__((noinline)) hxlcl_strndup(const char *s, size_t cap) 
 // RUNTIME.md step-2 — hxlcl_atoll forward-decl; the two-mode DEFINITION
 // (delegating to hexa-source rt_atoll) lives below, after the cycle-5 atof
 // def — this early helper zone is pre-HexaVal (same relocate technique as atof).
+// F3 B9.6-B1 — class-B calling-convention composite self-emit (Path A).
+// Under HEXA_RT_SELFEMIT: hxlcl_atoi is `extern` (body supplied by the
+// hexa-emitted _hxlcl_atoi .o = frame + `bl _hxlcl_atoll` + epilogue), and
+// the BL TARGET hxlcl_atoll is EXPORTED (non-static) so ld64 can bind the
+// .o's ARM64_RELOC_BRANCH26 reloc to it. Default (guard off) keeps both
+// file-local `static` = 0-libc-extern invariant preserved. (Both forward
+// decl AND definition must flip, else -Wundefined-internal masks the
+// self-emit symbol — same lesson as #1860 rt_getpid.)
+#ifdef HEXA_RT_SELFEMIT
+#define HXLCL_ATOLL_SC          /* exported: ld64 binds the .o's BRANCH26 here */
+long long __attribute__((noinline)) hxlcl_atoll(const char *s);
+extern int __attribute__((noinline)) hxlcl_atoi(const char *s);
+#else
+#define HXLCL_ATOLL_SC static    /* default: file-local (0-libc-extern) */
 static long long __attribute__((noinline)) hxlcl_atoll(const char *s);
 static int __attribute__((noinline)) hxlcl_atoi(const char *s) { return (int)hxlcl_atoll(s); }
+#endif
 static long long __attribute__((noinline)) hxlcl_strtoll(const char *nptr, char **endptr, int base) {
     if (!nptr) { if (endptr) *endptr = (char *)nptr; return 0; }
     const char *s = nptr;
@@ -1829,12 +1844,12 @@ static double __attribute__((noinline)) hxlcl_atof(const char *s) {
 // Same early-zone relocate technique as the cycle-5 atof port.
 #ifdef HEXA_HAS_HEXA_RT_STDLIB
 extern HexaVal rt_atoll(HexaVal s);
-static long long __attribute__((noinline)) hxlcl_atoll(const char *s) {
+HXLCL_ATOLL_SC long long __attribute__((noinline)) hxlcl_atoll(const char *s) {
     if (!s) return 0;
     return (long long)HX_INT(rt_atoll(hexa_str((char *)s)));
 }
 #else
-static long long __attribute__((noinline)) hxlcl_atoll(const char *s) {
+HXLCL_ATOLL_SC long long __attribute__((noinline)) hxlcl_atoll(const char *s) {
     if (!s) return 0;
     size_t i = 0;
     while (s[i] == ' ' || s[i] == '\t' || s[i] == '\n') i++;

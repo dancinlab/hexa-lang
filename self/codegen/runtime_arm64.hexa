@@ -2900,6 +2900,93 @@ fn rt_close_reloc_kinds() {
     return k
 }
 
+// ── rt_atoi (B9.6-B1 — class-B calling-convention composite · FIRST BL) ──
+// int atoi(const char *s) -> (int)atoll(s). The FIRST class-B (call-bound
+// composite) self-emit: the self-emit catalog gains its first function that
+// CALLS another function via `bl` with a real STACK FRAME. Every prior
+// activation was a LEAF (rt_getpid/rt_close issue a svc but never `bl`; the
+// 16 string/mem leaves and the HexaVal ctors are all single-frame register/
+// memory bodies). hxlcl_atoi is the simplest composite in self/runtime.c:
+// one tail-call to hxlcl_atoll, the `(int)` truncation folded into the w0
+// half of x0 (free), no other work.
+//
+// macOS arm64 AAPCS calling convention (the class-B essence): a non-leaf
+// must SPILL the link register x30 (and frame pointer x29) before the `bl`,
+// because `bl` overwrites x30 with the return address. Without the frame the
+// callee returns into the composite, whose own `ret` then jumps back to its
+// own `bl`/`ret` -> INFINITE LOOP (empirically reproduced with a frameless
+// PoC: the binary spins, rc=124 under timeout). The frame is the load-bearing
+// difference between a leaf and a composite.
+//
+// This mirrors self/runtime.c L298
+//   static int hxlcl_atoi(const char *s) { return (int)hxlcl_atoll(s); }
+// whose clang -O2 (== `as -arch arm64`) is byte-for-byte (5 instr, 20 B):
+//   stp x29,x30,[sp,#-16]! / mov x29,sp / bl _hxlcl_atoll
+//   / ldp x29,x30,[sp],#16 / ret
+//
+// ⚠ BRANCH26 + CALLEE-EXPORT FINDING (load-bearing — see byte-diff doc):
+// the `bl _hxlcl_atoll` (offset 0x08) carries a ZEROED 26-bit displacement
+// pre-relocation; the emitted .o needs ONE relocation:
+//   - ARM64_RELOC_BRANCH26 (kind 2, pcrel) at code offset 0x08, targeting the
+//     UNDEFINED-external symbol `_hxlcl_atoll`.
+// This is the FIRST cross-object-CALL reloc in F3 activation (class-A/C used
+// PAGE21/PAGEOFF12 data relocs against a DEFINED symbol; this is a code reloc
+// against an UNDEFINED one). The link test (clang composite.o callee.o main.c)
+// SUCCEEDS with LC_SYMTAB ONLY — NO LC_DYSYMTAB required (the macho.hexa
+// "link-test pending" caveat from #1475 is hereby RESOLVED for BRANCH26).
+// For production Path-A activation against runtime.c, the BL TARGET
+// (hxlcl_atoll) must ALSO be exported (non-static under the guard) so ld64
+// can bind the BRANCH26 reloc to it — a class-B-specific wrinkle the leaf and
+// data-reloc tracks never hit (their override slot was a single symbol).
+//
+// 5 instructions, 20 bytes. The bl (offset 0x08) word carries a zeroed
+// immediate pre-relocation, exactly as `as -arch arm64` emits.
+fn rt_atoi() {
+    let mut c = []
+    // stp x29, x30, [sp, #-16]!  (prologue spill)   0xA9BF7BFD
+    c.push(253)
+    c.push(123)
+    c.push(191)
+    c.push(169)
+    // mov x29, sp                                   0x910003FD
+    c.push(253)
+    c.push(3)
+    c.push(0)
+    c.push(145)
+    // bl _hxlcl_atoll  [RELOC BRANCH26]             0x94000000  (imm zeroed)
+    c.push(0)
+    c.push(0)
+    c.push(0)
+    c.push(148)
+    // ldp x29, x30, [sp], #16    (epilogue reload)  0xA8C17BFD
+    c.push(253)
+    c.push(123)
+    c.push(193)
+    c.push(168)
+    // ret  (w0 = (int)atoll result)                 0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
+// Reloc table for rt_atoi — the one BRANCH26 record the `bl` needs when
+// wrapped into a Mach-O .o via macho_obj_wrap_v3. The reloc applies at the
+// __text byte offset (0x08, the bl) with kind 2 (ARM64_RELOC_BRANCH26),
+// targeting an UNDEFINED-external symbol (sym_section == 0) = the callee.
+//   offset 0x08 (8) → ARM64_RELOC_BRANCH26 (kind 2, pcrel bl)
+fn rt_atoi_reloc_offs() {
+    let mut o = []
+    o.push(8)
+    return o
+}
+fn rt_atoi_reloc_kinds() {
+    let mut k = []
+    k.push(2)
+    return k
+}
+
 // ── self-test ────────────────────────────────────────────────
 
 fn test_runtime_arm64() {
@@ -2943,6 +3030,10 @@ fn test_runtime_arm64() {
     let clos = rt_close()
     let cl_roff = rt_close_reloc_offs()
     let cl_rkind = rt_close_reloc_kinds()
+    // B9.6-B1 — class-B calling-convention composite (frame + bl + epilogue).
+    let atoi_b = rt_atoi()
+    let at_roff = rt_atoi_reloc_offs()
+    let at_rkind = rt_atoi_reloc_kinds()
 
     println("runtime_arm64 — ARM64 machine code byte arrays")
     println("  rt_exit          : " + to_string(len(exit_bytes)) + " bytes")
@@ -2979,6 +3070,7 @@ fn test_runtime_arm64() {
     println("  rt_hexa_enum_str_v: " + to_string(len(henumv)) + " bytes")
     println("  rt_getpid        : " + to_string(len(gpid)) + " bytes")
     println("  rt_close         : " + to_string(len(clos)) + " bytes (" + to_string(len(cl_roff)) + " relocs)")
+    println("  rt_atoi          : " + to_string(len(atoi_b)) + " bytes (" + to_string(len(at_roff)) + " reloc · BRANCH26)")
 
     // Verify sizes match expected instruction counts * 4
     let mut ok = true
@@ -3090,6 +3182,25 @@ fn test_runtime_arm64() {
     if len(cl_rkind) != 2 { println("  FAIL: rt_close expected 2 reloc kinds, got " + to_string(len(cl_rkind))); ok = false }
     if cl_roff[0] != 20 || cl_roff[1] != 24 { println("  FAIL: rt_close reloc offsets must be 0x14,0x18"); ok = false }
     if cl_rkind[0] != 3 || cl_rkind[1] != 4 { println("  FAIL: rt_close reloc kinds must be PAGE21(3),PAGEOFF12(4)"); ok = false }
+    // B9.6-B1 — class-B calling-convention composite: rt_atoi is a 5-instr 20 B
+    //   body stp x29,x30,[sp,#-16]! / mov x29,sp / bl _hxlcl_atoll
+    //   / ldp x29,x30,[sp],#16 / ret  (frame + cross-object call + epilogue).
+    if len(atoi_b) != 20 { println("  FAIL: rt_atoi expected 20, got " + to_string(len(atoi_b))); ok = false }
+    // stp x29,x30,[sp,#-16]! prefix (fd 7b bf a9) — prologue spilling x29/x30.
+    if atoi_b[0] != 253 || atoi_b[1] != 123 || atoi_b[2] != 191 || atoi_b[3] != 169 { println("  FAIL: rt_atoi missing stp x29,x30 prologue"); ok = false }
+    // mov x29,sp at offset 4 (fd 03 00 91) — frame pointer set up.
+    if atoi_b[4] != 253 || atoi_b[5] != 3 || atoi_b[6] != 0 || atoi_b[7] != 145 { println("  FAIL: rt_atoi missing mov x29,sp"); ok = false }
+    // bl _hxlcl_atoll at offset 8 (00 00 00 94) — the cross-object CALL (BRANCH26 reloc site).
+    if atoi_b[8] != 0 || atoi_b[9] != 0 || atoi_b[10] != 0 || atoi_b[11] != 148 { println("  FAIL: rt_atoi missing bl (reloc 0x08, zeroed imm)"); ok = false }
+    // ldp x29,x30,[sp],#16 at offset 12 (fd 7b c1 a8) — epilogue restoring x29/x30.
+    if atoi_b[12] != 253 || atoi_b[13] != 123 || atoi_b[14] != 193 || atoi_b[15] != 168 { println("  FAIL: rt_atoi missing ldp x29,x30 epilogue"); ok = false }
+    // ret trailer (c0 03 5f d6) — atoi RETURNS (int)atoll(s).
+    if atoi_b[16] != 192 || atoi_b[17] != 3 || atoi_b[18] != 95 || atoi_b[19] != 214 { println("  FAIL: rt_atoi no RET"); ok = false }
+    // reloc table: 1 record (BRANCH26@0x08) for the cross-object bl.
+    if len(at_roff) != 1 { println("  FAIL: rt_atoi expected 1 reloc offset, got " + to_string(len(at_roff))); ok = false }
+    if len(at_rkind) != 1 { println("  FAIL: rt_atoi expected 1 reloc kind, got " + to_string(len(at_rkind))); ok = false }
+    if at_roff[0] != 8 { println("  FAIL: rt_atoi reloc offset must be 0x08 (the bl)"); ok = false }
+    if at_rkind[0] != 2 { println("  FAIL: rt_atoi reloc kind must be BRANCH26(2)"); ok = false }
 
     // Verify all sizes are multiples of 4 (ARM64 fixed-width)
     if len(exit_bytes) % 4 != 0 { println("  FAIL: rt_exit not aligned"); ok = false }
@@ -3126,6 +3237,7 @@ fn test_runtime_arm64() {
     if len(henumv) % 4 != 0 { println("  FAIL: rt_hexa_enum_str_v not aligned"); ok = false }
     if len(gpid) % 4 != 0 { println("  FAIL: rt_getpid not aligned"); ok = false }
     if len(clos) % 4 != 0 { println("  FAIL: rt_close not aligned"); ok = false }
+    if len(atoi_b) % 4 != 0 { println("  FAIL: rt_atoi not aligned"); ok = false }
     // B9.6-D2 — all three end with ret (192,3,95,214).
     let nhf = len(hfloat)
     if hfloat[nhf - 4] != 192 { println("  FAIL: rt_hexa_float no RET"); ok = false }
