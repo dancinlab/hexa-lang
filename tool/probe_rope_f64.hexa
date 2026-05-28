@@ -1,0 +1,30 @@
+// NN-primitive RoPE wedge — pure elementwise (Round 11 cycle-fg)
+//
+// Rotary Position Embedding: rotate each (even,odd) pair by angle θ_i = pos / base^(2i/d).
+//   y[2i]   = x[2i]*cos(θ) - x[2i+1]*sin(θ)
+//   y[2i+1] = x[2i]*sin(θ) + x[2i+1]*cos(θ)
+//
+// Pure elementwise (NO @shared, NO reduce) — cleanest 1-fire wedge, guaranteed
+// free of R8/R9 @shared miscompile. cos/sin builtins. Every attention layer uses
+// RoPE on Q and K — anima-relevant.
+//
+// Layout: D=128 dims (64 pairs), pos passed as scalar. base=10000.
+// thread tid handles pair tid → reads x[2*tid], x[2*tid+1].
+
+@gpu_kernel
+fn probe_rope_f64(x: [f64], y: [f64], pos: f64, base: f64, npairs: i64, D: i64) {
+    let mut tid: i64 = to_i64(gpu_thread_id_x())
+    if tid >= npairs { return }
+    // θ_i = pos / base^(2i/D)
+    let exponent: f64 = (2.0 * to_f64(tid)) / to_f64(D)
+    let freq: f64 = pow(base, exponent)
+    let theta: f64 = pos / freq
+    let c: f64 = cos(theta)
+    let s: f64 = sin(theta)
+    let i0: i64 = 2 * tid
+    let i1: i64 = 2 * tid + 1
+    let x0: f64 = x[i0]
+    let x1: f64 = x[i1]
+    y[i0] = x0 * c - x1 * s
+    y[i1] = x0 * s + x1 * c
+}

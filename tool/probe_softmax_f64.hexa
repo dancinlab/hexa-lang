@@ -1,0 +1,50 @@
+// NN-primitive softmax wedge — R4 LN-pattern (Round 11 cycle-fg)
+//
+// softmax(x)[i] = exp(x[i] - max) / Σ_j exp(x[j] - max)   (max-shift for stability)
+//
+// Structure = R4 LayerNorm-fwd (PASS, max_abs=0): 2 @shared reduce + normalize →
+// GLOBAL y direct write (NO 3rd @shared-write → avoids R8/R9 miscompile).
+//   Phase 1: max-reduce → sm[0]
+//   Phase 2: sum(exp(x-max))-reduce → sm[0]
+//   Phase 3: y[i] = exp(x[i]-max) / sum   (direct global write)
+//
+// N=256, single CTA. attention 의 핵심 — 매 head·매 row.
+
+@gpu_kernel
+fn probe_softmax_f64(x: [f64], y: [f64], n: i64) {
+    @shared let sm: [f64; 256] = []
+    let mut tid: i64 = to_i64(gpu_thread_id_x())
+
+    // Phase 1 — max reduce (pad with x[0] for non-participating lanes)
+    if tid < n { sm[to_i64(tid)] = x[to_i64(tid)] } else { sm[to_i64(tid)] = x[0] }
+    gpu_barrier()
+    let mut stride: i64 = 128
+    while stride > 0 {
+        if tid < stride {
+            let a: f64 = sm[to_i64(tid)]
+            let b: f64 = sm[to_i64(tid) + stride]
+            if b > a { sm[to_i64(tid)] = b } else { sm[to_i64(tid)] = a }
+        }
+        gpu_barrier()
+        stride = stride / 2
+    }
+    let mx: f64 = sm[0]
+    gpu_barrier()
+
+    // Phase 2 — sum(exp(x - max)) reduce
+    if tid < n { sm[to_i64(tid)] = exp(x[to_i64(tid)] - mx) } else { sm[to_i64(tid)] = 0.0 }
+    gpu_barrier()
+    stride = 128
+    while stride > 0 {
+        if tid < stride { sm[to_i64(tid)] = sm[to_i64(tid)] + sm[to_i64(tid) + stride] }
+        gpu_barrier()
+        stride = stride / 2
+    }
+    let denom: f64 = sm[0]
+    gpu_barrier()
+
+    // Phase 3 — normalize → GLOBAL y direct (no 3rd @shared-write)
+    if tid < n {
+        y[to_i64(tid)] = exp(x[to_i64(tid)] - mx) / denom
+    }
+}
