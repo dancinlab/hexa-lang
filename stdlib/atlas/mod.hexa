@@ -1,0 +1,9 @@
+// stdlib/atlas/mod.hexa — package entry point for the atlas-as-audit-SSOT
+// stdlib surface (demiurge project.tape d_atlas_as_audit_ssot lineage).
+//
+// Re-exports atom_meta so callers can write:
+//   import "stdlib/atlas" as atlas
+//   let m = atlas.meta_new("rtsc", "h3s")
+//   let s = atlas.store_put(atlas.store_new(), "node-id", m)
+
+import "stdlib/atlas/atom_meta.hexa"

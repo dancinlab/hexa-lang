@@ -1,0 +1,352 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  stdlib/atlas/atom_meta.hexa — AtomMeta side-table (lazy default, overlay)
+//
+//  @module(slug="atlas.atom_meta", desc="lazy-default AtomMeta overlay keyed by atlas node id")
+//  @usage(import "stdlib/atlas/atom_meta" as am ; let s = am.store_new(); am.store_put(s, "id", am.meta_new("rtsc", "h3s")))
+//
+//  ── module governance metadata ─────────────────────────────────────────────
+//  @version 0.1.0
+//  @capabilities [meta_new, meta_with_assumes, meta_with_recipe, meta_with_provenance,
+//                 meta_with_falsifier, meta_with_timestamp, meta_with_tier,
+//                 store_new, store_put, store_get, store_has, store_len]
+//  @stability preview
+//  @since 2026-05-29
+//  @maintainer hexa-core
+//  @priority P0
+//  @rfc demiurge project.tape d_atlas_as_audit_ssot (PR #510)
+//
+//  ── PROBLEM (atlas-as-audit-SSOT, PR #510 demiurge) ───────────────────────
+//
+//  demiurge `project.tape` directive `d_atlas_as_audit_ssot` makes
+//  `compiler/atlas/embedded.gen.hexa` the SINGLE permanent verdict store.
+//  Every `hexa verify` pass folds its result directly into an atlas atom.
+//  No intermediate ledger files (CLAIMS.tape · `.verdicts/<slug>/<id>.txt` ·
+//  attestation JSON · per-domain ledger) are tolerated — they duplicate
+//  the truth and drift.
+//
+//  To make atlas atoms self-sufficient as audit records, each atom needs
+//  rich provenance metadata: which calculator assumptions were in force,
+//  the exact recipe to reproduce, where the input came from, what would
+//  falsify the claim, when the verdict was minted, and which verdict
+//  tier (🔵 / 🟢 / 🟡 / 🟠 / 🔴 / ⚪).
+//
+//  ── DESIGN (enrich-on-load lazy default — overlay table) ──────────────────
+//
+//  The natural impulse is to add a `meta: AtomMeta` field to
+//  `compiler/atlas/parser::AtlasNode`. That would break every single
+//  `AtlasNode { ... }` struct literal in `compiler/atlas/embedded.gen.hexa`
+//  — a frozen 7451-literal rodata embed (5 MB flat). Regenerating that
+//  on each verify fold defeats the SSOT.
+//
+//  Instead AtomMeta lives in a PARALLEL side table keyed by atlas node id.
+//  The `AtlasNode` struct stays untouched. Lookup is "node + meta" — the
+//  caller asks `store_get(s, node.id)` to backfill on demand. Atoms
+//  without meta (the 7451 frozen ones) return an empty default — true
+//  enrich-on-load lazy default semantics, matching the existing
+//  `atlas_enrich` pattern in `compiler/atlas/static_index.hexa`.
+//
+//  Persistence (later PRs):
+//    • PR-hx5 verify_cli will register meta via `store_put` after fold.
+//    • A future PR can serialize the side table to `embedded_meta.gen.hexa`
+//      (parallel rodata), or fold meta into atom raw text as a structured
+//      `meta:` continuation block — both are additive and don't disturb
+//      the existing atlas surface.
+//
+//  This PR-hx1 lands the format + in-memory store ONLY (the smallest
+//  testable surface that establishes the public API future PRs build on).
+//  No verify_cli integration, no persistence, no atlas-side coupling.
+//
+//  ── PUBLIC API ────────────────────────────────────────────────────────────
+//
+//  pub struct AtomMeta { domain · material · assumes · recipe · provenance ·
+//                        falsifier · timestamp · tier · raw_tar_sha }
+//
+//  pub fn meta_new(domain, material) -> AtomMeta
+//  pub fn meta_with_assumes(m, assumes) -> AtomMeta
+//  pub fn meta_with_recipe(m, recipe) -> AtomMeta
+//  pub fn meta_with_provenance(m, provenance) -> AtomMeta
+//  pub fn meta_with_falsifier(m, falsifier) -> AtomMeta
+//  pub fn meta_with_timestamp(m, iso8601) -> AtomMeta
+//  pub fn meta_with_tier(m, tier) -> AtomMeta
+//  pub fn meta_with_raw_tar_sha(m, sha) -> AtomMeta
+//
+//  pub struct AtomMetaStore { ids : [string], metas : [AtomMeta] }
+//  pub fn store_new() -> AtomMetaStore
+//  pub fn store_put(s, id, m) -> AtomMetaStore
+//  pub fn store_get(s, id) -> AtomMeta       // returns empty default if absent
+//  pub fn store_has(s, id) -> bool
+//  pub fn store_len(s) -> int
+//
+//  ── VERDICT TIER CODES (one-character) ────────────────────────────────────
+//
+//  Tier codes match commons.tape g5 / d_paper_gate convention:
+//    "B" = 🔵 formal (closed-form proof)
+//    "G" = 🟢 GATE_CLOSED_MEASURED (numeric pass)
+//    "Y" = 🟡 citation-only
+//    "O" = 🟠 INCONCLUSIVE / MISSING-INPUT
+//    "R" = 🔴 CLOSED-negative / FALSIFIED
+//    "W" = ⚪ speculation (fenced)
+//    ""  = unassigned default
+//
+//  Stored as single-char string to keep the overlay table parse-friendly
+//  and avoid sneaking a new enum type into every downstream codegen.
+//
+//  ── DESIGN NOTES ──────────────────────────────────────────────────────────
+//
+//  • All `meta_with_*` are pure copy-on-write — they return a new AtomMeta
+//    with one field replaced, leaving the input untouched. This matches
+//    the existing stdlib (Token, etc.) and keeps reasoning local.
+//
+//  • `store_put` is also copy-on-write at the store level — a new
+//    AtomMetaStore is returned with the (id, meta) pair appended (or the
+//    existing meta replaced if id was already present). Linear scan is
+//    fine at this scale (post-fold the store size = number of verified
+//    atoms; current atlas = 7451, fully-meta'd = ~10⁴).
+//
+//  • Empty-default semantics for `store_get` on miss: returns an AtomMeta
+//    with every field set to the empty string and empty `assumes` array.
+//    Callers can detect "no meta" by checking any field for "" or by
+//    using `store_has` first. This mirrors the parser sentinel pattern
+//    (AtlasNode { kind: "", ... }).
+//
+//  ── RELATED ───────────────────────────────────────────────────────────────
+//
+//  · demiurge project.tape: `@D d_atlas_as_audit_ssot` (PR #510)
+//  · compiler/atlas/parser.hexa: AtlasNode struct (parallel — we DON'T touch)
+//  · compiler/atlas/static_index.hexa: atlas_enrich() — the lazy pattern we mirror
+//  · stdlib/cancel.hexa: copy-on-write struct mutation pattern
+//  · hexa-lang/CLAUDE.md g61: stdlib SSOT (this module is hexa-lang owned)
+//  · demiurge/CLAUDE.md d3: implementation in canonical home
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── AtomMeta struct ─────────────────────────────────────────────────────────
+
+// Per-atom audit metadata, stored in a parallel side table keyed by atlas
+// node id. See module header for tier code mapping. Fields default to ""
+// or [] (empty) so a partial meta is well-formed.
+pub struct AtomMeta {
+    domain: string,         // e.g. "rtsc", "bio", "antimatter"
+    material: string,       // e.g. "h3s", "ribozyme", "antihydrogen"
+    assumes: array,         // [string] — calculator @assumes derive
+    recipe: string,         // 1-line reproduction command
+    provenance: string,     // 1-line source summary (paper / sim run / harvest)
+    falsifier: string,      // pre-registered falsifier id (F-N6-X) or ""
+    timestamp: string,      // ISO-8601 mint time
+    tier: string,           // "B"|"G"|"Y"|"O"|"R"|"W"|"" (see header)
+    raw_tar_sha: string     // optional SHA-256 of harvested raw tar, or ""
+}
+
+// ── constructors / builders ────────────────────────────────────────────────
+
+// Create a minimal AtomMeta with just domain + material. All other fields
+// default to "" or []. O(1). Use `meta_with_*` to fill in additional
+// fields one by one (copy-on-write).
+pub fn meta_new(domain: string, material: string) -> AtomMeta {
+    return AtomMeta {
+        domain: domain,
+        material: material,
+        assumes: [],
+        recipe: "",
+        provenance: "",
+        falsifier: "",
+        timestamp: "",
+        tier: "",
+        raw_tar_sha: ""
+    }
+}
+
+// Replace the `assumes` field. Copy-on-write.
+pub fn meta_with_assumes(m: AtomMeta, assumes: array) -> AtomMeta {
+    return AtomMeta {
+        domain: m.domain,
+        material: m.material,
+        assumes: assumes,
+        recipe: m.recipe,
+        provenance: m.provenance,
+        falsifier: m.falsifier,
+        timestamp: m.timestamp,
+        tier: m.tier,
+        raw_tar_sha: m.raw_tar_sha
+    }
+}
+
+// Replace the `recipe` field. Copy-on-write.
+pub fn meta_with_recipe(m: AtomMeta, recipe: string) -> AtomMeta {
+    return AtomMeta {
+        domain: m.domain,
+        material: m.material,
+        assumes: m.assumes,
+        recipe: recipe,
+        provenance: m.provenance,
+        falsifier: m.falsifier,
+        timestamp: m.timestamp,
+        tier: m.tier,
+        raw_tar_sha: m.raw_tar_sha
+    }
+}
+
+// Replace the `provenance` field. Copy-on-write.
+pub fn meta_with_provenance(m: AtomMeta, provenance: string) -> AtomMeta {
+    return AtomMeta {
+        domain: m.domain,
+        material: m.material,
+        assumes: m.assumes,
+        recipe: m.recipe,
+        provenance: provenance,
+        falsifier: m.falsifier,
+        timestamp: m.timestamp,
+        tier: m.tier,
+        raw_tar_sha: m.raw_tar_sha
+    }
+}
+
+// Replace the `falsifier` field. Copy-on-write.
+pub fn meta_with_falsifier(m: AtomMeta, falsifier: string) -> AtomMeta {
+    return AtomMeta {
+        domain: m.domain,
+        material: m.material,
+        assumes: m.assumes,
+        recipe: m.recipe,
+        provenance: m.provenance,
+        falsifier: falsifier,
+        timestamp: m.timestamp,
+        tier: m.tier,
+        raw_tar_sha: m.raw_tar_sha
+    }
+}
+
+// Replace the `timestamp` field. Copy-on-write. Caller supplies ISO-8601.
+pub fn meta_with_timestamp(m: AtomMeta, timestamp: string) -> AtomMeta {
+    return AtomMeta {
+        domain: m.domain,
+        material: m.material,
+        assumes: m.assumes,
+        recipe: m.recipe,
+        provenance: m.provenance,
+        falsifier: m.falsifier,
+        timestamp: timestamp,
+        tier: m.tier,
+        raw_tar_sha: m.raw_tar_sha
+    }
+}
+
+// Replace the `tier` field. Copy-on-write. Caller supplies one of the
+// codes listed in the module header ("B" / "G" / "Y" / "O" / "R" / "W").
+// No validation here — that lives in the future verify_cli integration.
+pub fn meta_with_tier(m: AtomMeta, tier: string) -> AtomMeta {
+    return AtomMeta {
+        domain: m.domain,
+        material: m.material,
+        assumes: m.assumes,
+        recipe: m.recipe,
+        provenance: m.provenance,
+        falsifier: m.falsifier,
+        timestamp: m.timestamp,
+        tier: tier,
+        raw_tar_sha: m.raw_tar_sha
+    }
+}
+
+// Replace the `raw_tar_sha` field. Copy-on-write. Caller supplies SHA-256
+// hex of harvested raw tar (provenance back-pointer).
+pub fn meta_with_raw_tar_sha(m: AtomMeta, sha: string) -> AtomMeta {
+    return AtomMeta {
+        domain: m.domain,
+        material: m.material,
+        assumes: m.assumes,
+        recipe: m.recipe,
+        provenance: m.provenance,
+        falsifier: m.falsifier,
+        timestamp: m.timestamp,
+        tier: m.tier,
+        raw_tar_sha: sha
+    }
+}
+
+// ── AtomMetaStore (overlay side table) ─────────────────────────────────────
+
+// Parallel arrays — index i in `ids` corresponds to index i in `metas`.
+// Linear scan; size projection ~10⁴ entries at saturation. If profiling
+// shows the linear scan as a hot path, a follow-up PR can swap in a
+// hashed bucket layout without changing the public API.
+pub struct AtomMetaStore {
+    ids: array,             // [string] — atlas node id
+    metas: array            // [AtomMeta] — parallel meta
+}
+
+// Construct an empty store.
+pub fn store_new() -> AtomMetaStore {
+    return AtomMetaStore { ids: [], metas: [] }
+}
+
+// Returns the number of (id, meta) pairs in the store.
+pub fn store_len(s: AtomMetaStore) -> int {
+    return len(s.ids)
+}
+
+// True iff `id` has a meta recorded in `s`.
+pub fn store_has(s: AtomMetaStore, id: string) -> bool {
+    let n = len(s.ids)
+    let mut i = 0
+    while i < n {
+        if s.ids[i] == id {
+            return true
+        }
+        i = i + 1
+    }
+    return false
+}
+
+// Fetch the meta for `id`. Returns an empty-default AtomMeta (every
+// string field "", assumes []) on miss — true enrich-on-load lazy
+// default semantics. Use `store_has` to disambiguate present-empty from
+// absent.
+pub fn store_get(s: AtomMetaStore, id: string) -> AtomMeta {
+    let n = len(s.ids)
+    let mut i = 0
+    while i < n {
+        if s.ids[i] == id {
+            return s.metas[i]
+        }
+        i = i + 1
+    }
+    return AtomMeta {
+        domain: "",
+        material: "",
+        assumes: [],
+        recipe: "",
+        provenance: "",
+        falsifier: "",
+        timestamp: "",
+        tier: "",
+        raw_tar_sha: ""
+    }
+}
+
+// Put (id, meta). If id is already present, the existing entry is
+// replaced (last-write-wins). Returns a new store; the input is not
+// mutated (copy-on-write at the store level). O(n) — linear scan to
+// detect duplicates.
+pub fn store_put(s: AtomMetaStore, id: string, m: AtomMeta) -> AtomMetaStore {
+    let n = len(s.ids)
+    let mut new_ids: array = []
+    let mut new_metas: array = []
+    let mut found = false
+    let mut i = 0
+    while i < n {
+        if s.ids[i] == id {
+            new_ids.push(id)
+            new_metas.push(m)
+            found = true
+        } else {
+            new_ids.push(s.ids[i])
+            new_metas.push(s.metas[i])
+        }
+        i = i + 1
+    }
+    if !found {
+        new_ids.push(id)
+        new_metas.push(m)
+    }
+    return AtomMetaStore { ids: new_ids, metas: new_metas }
+}

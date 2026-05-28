@@ -1,0 +1,139 @@
+// test/atlas_atom_meta_smoke.hexa — smoke for stdlib/atlas/atom_meta.hexa
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Exercises the public API surface of AtomMeta + AtomMetaStore:
+//   - meta_new + meta_with_* copy-on-write semantics (field replacement
+//     leaves the input untouched; new field value sticks)
+//   - store_new / store_put / store_get / store_has / store_len
+//   - store_put on duplicate id == last-write-wins
+//   - store_get on miss == empty default (lazy-default enrich pattern)
+//
+// Run:  hexa run test/atlas_atom_meta_smoke.hexa
+// Sentinel: __ATLAS_ATOM_META_SMOKE__ PASS|FAIL on the final line.
+
+import "stdlib/atlas/atom_meta.hexa"
+
+let mut PASS = 0
+let mut FAIL = 0
+
+fn check(label: string, cond: bool) {
+    if cond {
+        PASS = PASS + 1
+        println("[PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("[FAIL] " + label)
+    }
+}
+
+// ── T1 : meta_new defaults ────────────────────────────────────────────────
+let m0 = meta_new("rtsc", "h3s")
+check("meta_new domain == 'rtsc'", m0.domain == "rtsc")
+check("meta_new material == 'h3s'", m0.material == "h3s")
+check("meta_new assumes empty", len(m0.assumes) == 0)
+check("meta_new recipe == ''", m0.recipe == "")
+check("meta_new provenance == ''", m0.provenance == "")
+check("meta_new falsifier == ''", m0.falsifier == "")
+check("meta_new timestamp == ''", m0.timestamp == "")
+check("meta_new tier == ''", m0.tier == "")
+check("meta_new raw_tar_sha == ''", m0.raw_tar_sha == "")
+
+// ── T2 : meta_with_* copy-on-write — input untouched, output has new value
+let assumes1: array = ["mu_star=0.10", "harmonic_phonons"]
+let m1 = meta_with_assumes(m0, assumes1)
+check("with_assumes preserves domain", m1.domain == "rtsc")
+check("with_assumes preserves material", m1.material == "h3s")
+check("with_assumes sets assumes (len 2)", len(m1.assumes) == 2)
+check("with_assumes assumes[0]", m1.assumes[0] == "mu_star=0.10")
+check("with_assumes assumes[1]", m1.assumes[1] == "harmonic_phonons")
+check("with_assumes input unchanged", len(m0.assumes) == 0)
+
+let m2 = meta_with_recipe(m1, "hexa verify --expr allen_dynes_tc 1.21 1350 0.10")
+check("with_recipe preserves assumes", len(m2.assumes) == 2)
+check("with_recipe sets recipe", m2.recipe == "hexa verify --expr allen_dynes_tc 1.21 1350 0.10")
+check("with_recipe input unchanged", m1.recipe == "")
+
+let m3 = meta_with_provenance(m2, "atlas:allen_dynes_h3s_drozdov_2015")
+check("with_provenance sets provenance", m3.provenance == "atlas:allen_dynes_h3s_drozdov_2015")
+check("with_provenance preserves recipe", m3.recipe == "hexa verify --expr allen_dynes_tc 1.21 1350 0.10")
+
+let m4 = meta_with_falsifier(m3, "F-N6-7")
+check("with_falsifier sets falsifier", m4.falsifier == "F-N6-7")
+
+let m5 = meta_with_timestamp(m4, "2026-05-29T21:00:00Z")
+check("with_timestamp sets timestamp", m5.timestamp == "2026-05-29T21:00:00Z")
+
+let m6 = meta_with_tier(m5, "G")
+check("with_tier sets tier 'G' (GATE_CLOSED_MEASURED)", m6.tier == "G")
+
+let m7 = meta_with_raw_tar_sha(m6, "abc123def456")
+check("with_raw_tar_sha sets sha", m7.raw_tar_sha == "abc123def456")
+check("with_raw_tar_sha preserves tier", m7.tier == "G")
+check("with_raw_tar_sha preserves all earlier fields", m7.domain == "rtsc" && m7.material == "h3s" && len(m7.assumes) == 2 && m7.falsifier == "F-N6-7")
+
+// ── T3 : store_new / store_len on empty store ─────────────────────────────
+let s0 = store_new()
+check("store_new len == 0", store_len(s0) == 0)
+check("store_new has 'x' == false", store_has(s0, "x") == false)
+
+// ── T4 : store_get on miss returns empty default ──────────────────────────
+let miss = store_get(s0, "nonexistent")
+check("miss domain == ''", miss.domain == "")
+check("miss material == ''", miss.material == "")
+check("miss assumes empty", len(miss.assumes) == 0)
+check("miss tier == ''", miss.tier == "")
+
+// ── T5 : store_put + store_get + store_has ────────────────────────────────
+let s1 = store_put(s0, "rtsc::h3s::allen_dynes", m7)
+check("store_put len == 1", store_len(s1) == 1)
+check("store_put has id", store_has(s1, "rtsc::h3s::allen_dynes") == true)
+check("store_put input unchanged (s0 empty)", store_len(s0) == 0)
+
+let got = store_get(s1, "rtsc::h3s::allen_dynes")
+check("got.domain", got.domain == "rtsc")
+check("got.material", got.material == "h3s")
+check("got.tier", got.tier == "G")
+check("got.falsifier", got.falsifier == "F-N6-7")
+check("got.timestamp", got.timestamp == "2026-05-29T21:00:00Z")
+check("got.raw_tar_sha", got.raw_tar_sha == "abc123def456")
+check("got.assumes len", len(got.assumes) == 2)
+
+// ── T6 : store_put — second id appends, doesn't displace first ────────────
+let m_lambda = meta_with_tier(meta_new("rtsc", "lambda_qe"), "B")
+let s2 = store_put(s1, "rtsc::lambda_qe::dft", m_lambda)
+check("store_put 2nd id: len == 2", store_len(s2) == 2)
+check("store_put 2nd id: original still present", store_has(s2, "rtsc::h3s::allen_dynes") == true)
+check("store_put 2nd id: new id present", store_has(s2, "rtsc::lambda_qe::dft") == true)
+check("store_get 2nd id tier 'B'", store_get(s2, "rtsc::lambda_qe::dft").tier == "B")
+check("store_get original id still 'G'", store_get(s2, "rtsc::h3s::allen_dynes").tier == "G")
+
+// ── T7 : store_put — duplicate id == last-write-wins, len unchanged ───────
+let m_updated = meta_with_tier(m7, "R")
+let s3 = store_put(s2, "rtsc::h3s::allen_dynes", m_updated)
+check("dup put: len still 2 (no append)", store_len(s3) == 2)
+check("dup put: tier replaced 'G' → 'R'", store_get(s3, "rtsc::h3s::allen_dynes").tier == "R")
+check("dup put: other entry untouched", store_get(s3, "rtsc::lambda_qe::dft").tier == "B")
+check("dup put: input store unchanged (s2 tier still 'G')", store_get(s2, "rtsc::h3s::allen_dynes").tier == "G")
+
+// ── T8 : empty-default has falsifier == "" — disambiguate via store_has ───
+let s4 = store_put(store_new(), "node-empty", meta_new("test", "empty"))
+check("present-empty: store_has true", store_has(s4, "node-empty") == true)
+check("absent: store_has false", store_has(s4, "node-missing") == false)
+let present_empty = store_get(s4, "node-empty")
+let absent = store_get(s4, "node-missing")
+check("present-empty falsifier == ''", present_empty.falsifier == "")
+check("absent falsifier == ''", absent.falsifier == "")
+check("present-empty has domain 'test'", present_empty.domain == "test")
+check("absent has domain ''", absent.domain == "")
+
+println("")
+println("═══════════════════════════════════════════════════════════")
+println("  atlas atom_meta smoke: PASS=" + str(PASS) + " FAIL=" + str(FAIL))
+println("═══════════════════════════════════════════════════════════")
+if FAIL > 0 {
+    println("__ATLAS_ATOM_META_SMOKE__ FAIL")
+} else {
+    println("__ATLAS_ATOM_META_SMOKE__ PASS")
+}
