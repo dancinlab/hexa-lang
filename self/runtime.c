@@ -2637,6 +2637,16 @@ static int __attribute__((noinline)) hxlcl_bind(int s, const void *addr, unsigne
     return bind(s, (const struct sockaddr *)addr, (socklen_t)len);
 #endif
 }
+// F3 ACTIVATION · Path A — listen class-C svc-wrapper self-emit slot.
+// 2-arg int+int _cf (sockfd, backlog) — the EXACT rt_dup2 (B9.6-C4) shape,
+// differing only in SYS# (DUP2=90 → LISTEN=106, a single mov-w16 imm byte).
+// DEFAULT build keeps the static _cf svc-trap; SELF-EMIT build flips to extern,
+// resolved by emit_hxlcl_listen_o.hexa's .o (rt_listen's 40-byte body). The
+// errno store is the same adrp/str to the hxlcl_errno SYMBOL (externally
+// linkable under the guard), identical to dup2/close.
+#ifdef HEXA_RT_SELFEMIT
+extern int hxlcl_listen(int s, int backlog);
+#else
 static int __attribute__((noinline)) hxlcl_listen(int s, int backlog) {
 #if (defined(__arm64__) || defined(__aarch64__)) && defined(__APPLE__)
     return (int)_hxlcl_syscall2_cf(HXLCL_SYS_LISTEN, (long)s, (long)backlog);
@@ -2644,6 +2654,7 @@ static int __attribute__((noinline)) hxlcl_listen(int s, int backlog) {
     return listen(s, backlog);
 #endif
 }
+#endif
 static int __attribute__((noinline)) hxlcl_accept(int s, void *addr, unsigned int *len) {
 #if (defined(__arm64__) || defined(__aarch64__)) && defined(__APPLE__)
     return (int)_hxlcl_syscall3_cf(HXLCL_SYS_ACCEPT, (long)s, (long)addr, (long)len);

@@ -3947,6 +3947,85 @@ fn rt_dup2_reloc_kinds() {
     return k
 }
 
+// ── rt_listen (F3 wave 5 — class-C syscall · 2-arg int+int _cf + errno) ──
+// listen(int s, int backlog) -> int. The EXACT rt_dup2 (B9.6-C4) 2-arg int+int
+// svc-_cf body — both args sign-extended (sxtw x0,w0 / sxtw x1,w1), errno store
+// via adrp/str to the hxlcl_errno SYMBOL. The ONLY difference from rt_dup2 is
+// the syscall immediate: SYS_DUP2=90 (mov w16,#90 = 0x52800B50) → SYS_LISTEN=106
+// (mov w16,#106 = 0x52800D50). A single imm-byte flip (0x0B→0x0D at offset 9);
+// every other byte + both errno reloc sites (0x18 PAGE21 / 0x1c PAGEOFF12) are
+// byte-identical. runtime.c:
+//   hxlcl_listen(int s, int backlog) { return (int)_hxlcl_syscall2_cf(HXLCL_SYS_LISTEN, ...); }
+fn rt_listen() {
+    let mut c = []
+    // sxtw x0, w0  (sign-extend s/sockfd)   0x93407C00
+    c.push(0)
+    c.push(124)
+    c.push(64)
+    c.push(147)
+    // sxtw x1, w1  (sign-extend backlog)    0x93407C21
+    c.push(33)
+    c.push(124)
+    c.push(64)
+    c.push(147)
+    // mov w16, #106  (SYS_LISTEN)           0x52800D50
+    c.push(80)
+    c.push(13)
+    c.push(128)
+    c.push(82)
+    // svc #0x80                             0xD4001001
+    c.push(1)
+    c.push(16)
+    c.push(0)
+    c.push(212)
+    // cset x8, hs  (capture carry = error)  0x9A9F37E8
+    c.push(232)
+    c.push(55)
+    c.push(159)
+    c.push(154)
+    // cbz x8, Lret (success → skip errno)   0xB4000088  (+0x10 to ret)
+    c.push(136)
+    c.push(0)
+    c.push(0)
+    c.push(180)
+    // adrp x8, errno@PAGE  [RELOC PAGE21]   0x90000008  (imm zeroed)
+    c.push(8)
+    c.push(0)
+    c.push(0)
+    c.push(144)
+    // str w0, [x8, errno@PAGEOFF] [RELOC]   0xB9000100  (imm zeroed)
+    c.push(0)
+    c.push(1)
+    c.push(0)
+    c.push(185)
+    // mov x0, #-1  (error return)           0x92800000
+    c.push(0)
+    c.push(0)
+    c.push(128)
+    c.push(146)
+    // ret                                   0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+// Reloc table for rt_listen — identical to rt_dup2 (same 10-instr layout):
+//   offset 0x18 (24) → ARM64_RELOC_PAGE21   (kind 3)
+//   offset 0x1c (28) → ARM64_RELOC_PAGEOFF12 (kind 4)
+fn rt_listen_reloc_offs() {
+    let mut o = []
+    o.push(24)
+    o.push(28)
+    return o
+}
+fn rt_listen_reloc_kinds() {
+    let mut k = []
+    k.push(3)
+    k.push(4)
+    return k
+}
+
 // ── rt_mkdir (B9.6-C5 — class-C syscall · ptr+int _cf + errno) ───────
 // mkdir(const char *path, int mode) -> int. A 2-arg svc-_cf with a POINTER
 // first arg + an int second arg — so only the int (mode, x1) is sign-extended
