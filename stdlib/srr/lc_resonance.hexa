@@ -31,7 +31,7 @@
 //   F3: filling factor unit case r = a/√π → F = 1         (saturation)
 //   F4: filling factor scale invariance F(λr, λa) = F(r,a)
 //   F5: Lorentz DC limit ω=0 → Re{μ} = 1                  (no resonance @ DC)
-//   F6: Lorentz high-freq limit ω≫ω₀ → Re{μ} → 1          (recovers vacuum)
+//   F6: Lorentz high-freq limit ω≫ω₀ → Re{μ} → 1 − F      (Pendry sub-λ μ-supp.)
 //   F7: Lorentz μ<0 branch exists for ω slightly > ω₀     (CLOAK demand)
 //
 // Run:
@@ -152,14 +152,19 @@ fn check_lorentz_dc() {
         "μ_re(0)=" + str(mu))
 }
 
-// F6 — Lorentz high-freq limit ω ≫ ω₀ → Re{μ} → 1
+// F6 — Lorentz high-freq limit ω ≫ ω₀ → Re{μ} → 1 − F (Pendry sub-λ μ-suppression)
+//   ω² · (ω₀²−ω²) / [(ω₀²−ω²)² + (ωγ)²]  ──→  −1   as ω → ∞ (γ ≪ ω)
+//   so   Re{μ} → 1 − F   (NOT vacuum 1 — Pendry effective-medium feature).
 fn check_lorentz_highfreq() {
-    let w0: float = 1.0e9
-    let mu = lorentz_mu_re(0.5, 1.0e15, w0, 1.0e6)
-    let ok = abs_f(mu - 1.0) < 1.0e-9
+    let f_dim: float = 0.5
+    let w0:    float = 1.0e9
+    let mu = lorentz_mu_re(f_dim, 1.0e15, w0, 1.0e6)
+    let target = 1.0 - f_dim
+    let ok = abs_f(mu - target) < 1.0e-9
     _check(ok,
-        "F6 Lorentz high-freq limit  ω ≫ ω₀  → Re{μ} → 1  (recovers vacuum)",
-        "μ_re(1e15)=" + str(mu) + "  |μ−1|=" + str(abs_f(mu - 1.0)))
+        "F6 Lorentz high-freq limit  ω ≫ ω₀  → Re{μ} → 1 − F  (Pendry sub-λ μ-supp.)",
+        "μ_re(1e15)=" + str(mu) + "  target=" + str(target) +
+        "  |μ−(1−F)|=" + str(abs_f(mu - target)))
 }
 
 // F7 — Lorentz μ < 0 branch must exist for ω slightly > ω₀
@@ -187,7 +192,7 @@ let FALSIFIERS = [
     "F3 F unit break — F(a/√π, a) ≠ 1 → DEMOTE π · r² / a² formula",
     "F4 F scale break — F(λr, λa) ≠ F(r, a) → DEMOTE dimensionless ratio",
     "F5 Lorentz DC break — μ_re(0) ≠ 1 → DEMOTE 1 + F·ω²·... offset",
-    "F6 Lorentz high-freq break — μ_re(ω → ∞) ≠ 1 → DEMOTE asymptotic recovery",
+    "F6 Lorentz high-freq break — μ_re(ω → ∞) ≠ 1 − F → DEMOTE Pendry sub-λ μ-suppression",
     "F7 Lorentz μ<0 break — μ_re(ω slightly > ω₀) ≥ 0 → DEMOTE μ_eff<0 supply (CLOAK demand)",
 ]
 
