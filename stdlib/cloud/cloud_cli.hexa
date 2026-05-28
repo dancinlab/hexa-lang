@@ -14,6 +14,7 @@ use "stdlib/cloud/vast"
 use "stdlib/cloud/runpod"
 use "stdlib/cloud/dft_dispatch"
 use "stdlib/cloud/pods_local"
+use "stdlib/sys"
 
 fn _cloud_help() {
     println("hexa cloud — structured-argv remote dispatch (cycle A)")
@@ -22,7 +23,8 @@ fn _cloud_help() {
     println("  cloud rent <provider> [--gpu T] [--image IMG] [--disk GiB] [--owner TAG] [--query Q] [--max-wait-sec N]")
     println("                                                         provision a GPU pod (vast|runpod), wait ssh-ready, print host:port + id (alias: up)")
     println("                                                         --max-wait-sec N (default 180): bounded SSH-readiness gate; on timeout the rent auto-tears the billing pod down + exits 2 with verbatim verdict (M5 sigil: SSH-never-ready leak guard)")
-    println("  cloud down <id> [--provider P]                         destroy a pod + forget it from the registry (alias: destroy)")
+    println("  cloud rm <id> [--provider P] [--force]                 CANONICAL teardown — confirm + destroy + forget (unifies down/destroy/forget). --provider inferred from registry when absent. --force skips confirm prompt. Idempotent: rm of an absent pod exits 0.")
+    println("  cloud down <id> [--provider P]                         (legacy alias of `cloud rm`) destroy a pod + forget it from the registry")
     println("  cloud list [--provider P]                              list live pods (vast + runpod, or one via --provider)")
     println("  cloud status [--provider P]                            alias of list")
     println("  cloud preflight --params N [--gpu KEY] [opts...]        closed-form GPU mem-budget check (no pod/ssh)")
@@ -49,7 +51,7 @@ fn _cloud_help() {
     println("  cloud orphans   [--hours N]                            list tracked pods, flag stale (>N h, default 6)")
     println("  cloud reconcile                                        cross-ref registry vs provider: ORPHAN/GHOST/OK")
     println("  cloud adopt     <pod_id> [--purpose TEXT]              track an untracked (ORPHAN) pod")
-    println("  cloud forget    <pod_id|ssh-form|ip|alias>             mark a tracked (GHOST) pod status=closed (any reconcile-shown form)")
+    println("  cloud forget    <pod_id|ssh-form|ip|alias>             (legacy — use `cloud rm` instead) mark a tracked (GHOST) pod status=closed")
     println("  cloud watchdog  [--threshold-min N] [--util-cap-pct N] [--kill]  idle-pod autokill sweep (DRY-RUN default)")
     println("  cloud dft-run   <deck-dir> [--go] [--query Q] [--walltime-h N] [--identity P] [--image I] [--disk G] [--owner T]")
     println("                                                         guarded DFT el-ph (QE) dispatch; PREVIEW ($0) unless --go. deck: relax.in·ph.in·scf.in.head·scf.in.tail·pseudo/")
@@ -888,6 +890,128 @@ fn _cloud_down(id: str, provider: str) -> int {
     return 1
 }
 
+// _rm_lookup_provider — registry-aware provider inference for `cloud rm`.
+// Loads ~/.hx/cloud/active-pods.json (M5 SSOT) and returns the provider
+// string ("vast" / "runpod" / ...) for the matching pod_id. Empty string
+// signals "not in registry" — caller then requires an explicit --provider.
+// Registry-load failures (perms / corrupt) degrade to "" so the caller
+// surfaces the explicit-provider requirement instead of guessing.
+fn _rm_lookup_provider(id: str) -> str {
+    if len(id) == 0 {
+        return ""
+    }
+    let records = pod_registry_load()
+    let mut i = 0
+    while i < len(records) {
+        if records[i].id == id {
+            return records[i].provider
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// _rm_pod_in_registry — 1 iff `id` is tracked in the M5 registry. Used to
+// route the idempotent "not found" exit path (registry + provider absent →
+// exit 0 with informational verdict).
+fn _rm_pod_in_registry(id: str) -> int {
+    if len(id) == 0 {
+        return 0
+    }
+    let records = pod_registry_load()
+    let mut i = 0
+    while i < len(records) {
+        if records[i].id == id {
+            return 1
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+// _rm_confirm_yes — 1 iff the answer reads as affirmative ("y" / "yes",
+// case-insensitive). Anything else (including empty, "n", "no", garbage)
+// rejects — the prompt defaults to N for safety.
+fn _rm_confirm_yes(ans: str) -> int {
+    let t = ans.trim()
+    if len(t) == 0 {
+        return 0
+    }
+    if t == "y" || t == "Y" || t == "yes" || t == "YES" || t == "Yes" {
+        return 1
+    }
+    return 0
+}
+
+// _cloud_rm — M4 canonical teardown verb. Unifies the scattered
+// down/destroy/forget surfaces behind a single confirm-gated entry:
+//   1. infer provider from the M5 registry when --provider is absent
+//   2. if the pod is absent from BOTH registry and the caller did not
+//      pass --provider, idempotent-exit 0 ("not found")
+//   3. otherwise prompt "destroy this pod? [y/N]" unless force == 1
+//   4. on confirm: provider-terminate (runpod_terminate / vast_destroy),
+//      then pod_registry_remove + pod_registry_forget — registry cleanup
+//      runs even on provider failure so a confirmed-gone pod never lingers
+//   5. exit 0 on destroyed, 1 on provider-rejected, 2 on cancel
+fn _cloud_rm(id: str, provider_in: str, force: int) -> int {
+    if len(id) == 0 {
+        println("[cloud] rm: empty <id>")
+        return 2
+    }
+    // (1) infer provider from registry when caller did not pass one
+    let mut provider = provider_in
+    let in_reg = _rm_pod_in_registry(id)
+    if len(provider) == 0 {
+        provider = _rm_lookup_provider(id)
+    }
+    // (2) idempotent: not in registry AND no explicit provider → exit 0
+    if len(provider) == 0 && in_reg == 0 {
+        println("[cloud] rm: " + id + " not found (provider + registry) — nothing to do")
+        return 0
+    }
+    if len(provider) == 0 {
+        // Tracked but provider field empty (corrupt row) — require explicit.
+        println("[cloud] rm: " + id + " — provider unknown, pass --provider <vast|runpod>")
+        return 2
+    }
+    // (3) confirm gate (skipped on --force)
+    if force == 0 {
+        println("[cloud] rm " + id + " (provider=" + provider + "): destroy this pod? [y/N]")
+        let ans = sys_stdin_read_line()
+        if _rm_confirm_yes(ans) == 0 {
+            println("[cloud] rm: cancelled (no destroy issued)")
+            return 2
+        }
+    }
+    // (4) flag STOPPING + provider teardown + registry cleanup
+    let _ = pod_registry_update_status(id, "STOPPING")
+    let mut ok = 0
+    let mut why = ""
+    if provider == "runpod" {
+        let api_key = cloud_runpod_must_have_api_key("rm")
+        ok = runpod_terminate(api_key, id)
+        if ok == 1 {
+            why = "runpod terminated"
+        } else {
+            why = "runpod terminate rejected"
+        }
+    } else {
+        let v = vast_destroy(id)
+        ok = v.ok
+        why = "vast: " + v.message
+    }
+    // Registry cleanup runs regardless of provider verdict — a confirmed-
+    // gone pod never lingers as a GHOST row. Mirrors _cloud_down semantics.
+    let _ = pod_registry_forget(id)
+    let _ = pod_registry_remove(id)
+    if ok == 1 {
+        println("[cloud] rm: destroyed " + id + " (" + why + ")")
+        return 0
+    }
+    println("[cloud] rm: " + id + " destroy FAILED — " + why)
+    return 1
+}
+
 // _cloud_list_print — print live pods. With --provider it queries one
 // provider; bare it queries BOTH (vast + runpod). Read-only ($-free for
 // vast: `show instances`; runpod: `runpod_list_pods`). Returns 0 always
@@ -1008,7 +1132,7 @@ fn main() {
     while i < len(av) {
         let t = av[i]
         if si < 0 {
-            if t == "rent" || t == "up" || t == "down" || t == "destroy" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "fire" || t == "poll" || t == "tail" || t == "watch" || t == "ssh-port" || t == "resolve" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "adopt" || t == "forget" || t == "dft-run" || t == "pods" || t == "dispatch" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
+            if t == "rent" || t == "up" || t == "rm" || t == "down" || t == "destroy" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "fire" || t == "poll" || t == "tail" || t == "watch" || t == "ssh-port" || t == "resolve" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "adopt" || t == "forget" || t == "dft-run" || t == "pods" || t == "dispatch" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
                 si = i
                 sub = t
             }
@@ -1046,9 +1170,26 @@ fn main() {
         println("[cloud] rent: unknown provider '" + provider + "' — expected vast or runpod")
         exit(2)
     }
+    if sub == "rm" {
+        // M4 canonical teardown — unifies down/destroy/forget behind a
+        // confirm-gated entry. --provider inferred from the M5 registry
+        // when absent; --force skips the confirm prompt. Idempotent: rm
+        // of an absent pod exits 0. Exit 0 destroyed · 1 provider-rejected
+        // · 2 cancel / usage.
+        if si + 1 >= len(av) {
+            println("[cloud] rm: missing <id> — usage: cloud rm <id> [--provider vast|runpod] [--force]")
+            exit(2)
+        }
+        let id = av[si + 1]
+        let provider = _flag_val(av, si + 2, "--provider", "")
+        let force = _has_flag(av, si + 2, "--force")
+        exit(_cloud_rm(id, provider, force))
+    }
     if sub == "down" || sub == "destroy" {
-        // Destroy a pod by id + forget it from the registry. --provider
-        // selects the teardown path (default vast). Wires vast_destroy /
+        // (legacy alias of `cloud rm` — kept for back-compat with deployed
+        // automation; new callers should prefer `cloud rm`.) Destroy a pod
+        // by id + forget it from the registry. --provider selects the
+        // teardown path (default vast). Wires vast_destroy /
         // runpod_terminate + pod_registry_forget.
         if si + 1 >= len(av) {
             println("[cloud] down: missing <id> — usage: cloud down <id> [--provider vast|runpod]")
