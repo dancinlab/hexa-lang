@@ -97,7 +97,15 @@ struct SshCapture {
 // CountMax=4 tears a dead/hung connection down in ~60s (so a long `tail -F`
 // over a pod that vanished returns instead of hanging forever).
 fn _ssh_cmd(host: str, ssh_opts: [str], remote: str) -> str {
-    let mut cmd = "ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
+    // StrictHostKeyChecking=accept-new + UserKnownHostsFile=/dev/null: a freshly
+    // rented GPU pod presents an UNKNOWN (or, on IP reuse, CHANGED) host key.
+    // Under BatchMode=yes the default strict policy cannot prompt to accept it,
+    // so ssh aborts with exit 255 — misread upstream as a "transport outage"
+    // (the pod is alive + SSH-reachable; only host-key verification failed).
+    // Ephemeral pods churn their host keys every rent, so persisting/verifying
+    // them is wrong; accept-new + /dev/null is exactly what the proven raw-ssh
+    // workaround (podssh.sh) did to make `hexa cloud` reach these pods.
+    let mut cmd = "ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null"
     let mut i = 0
     while i < len(ssh_opts) {
         cmd = cmd + " " + _shq(ssh_opts[i])
@@ -162,7 +170,9 @@ fn _scp_opts(ssh_opts: [str]) -> [str] {
 // process exit, recovered from exec_capture's element 2 — no remote marker
 // needed (scp does not run a shell on the remote side for plain file copy).
 fn _scp_capture(scp_opts: [str], src: str, dst: str) -> CloudResult {
-    let mut cmd = "scp -o BatchMode=yes -o ConnectTimeout=8"
+    // host-key opts mirror _ssh_cmd: a fresh pod's unknown/changed host key
+    // would abort scp with exit 255 under BatchMode (the same misread "outage").
+    let mut cmd = "scp -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null"
     let mut i = 0
     while i < len(scp_opts) {
         cmd = cmd + " " + _shq(scp_opts[i])
@@ -649,7 +659,9 @@ fn cloud_copy_from(host: str, remote_path: str, local_path: str) -> CloudResult 
 // token, so a plain space-join is faithful. BatchMode=yes keeps rsync
 // from hanging on an auth prompt, mirroring _ssh_capture.
 fn _ssh_e_arg(ssh_opts: [str]) -> str {
-    let mut e = "ssh -o BatchMode=yes -o ConnectTimeout=8"
+    // host-key opts mirror _ssh_cmd so rsync-over-ssh reaches a fresh pod
+    // (unknown host key under BatchMode would abort the remote shell, exit 255).
+    let mut e = "ssh -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null"
     let mut i = 0
     while i < len(ssh_opts) {
         e = e + " " + ssh_opts[i]
