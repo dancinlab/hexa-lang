@@ -15,14 +15,15 @@ flip 캠페인이 안전 quick-win 을 고갈시킨 뒤 남는 진짜 바닥의 
 
 - `.o` = **0** ✅
 - `.s` = **0** (F5 .s-leg COMPLETE · PR #1843/#1844/#1845/#1846 · 아래 F5)
-- `.c` = **93** (2026-05-28 B9.C-6 ACTIVATED · 3-file small standalone batch
-  삭제 = 96→93 · `tests/runtime_h_smoke.c` · `stdlib/hal/t3/harness_main.c` ·
-  `stdlib/hal/t3/harness_stm32h7_main.c` ← per-file `*_emit.hexa` +
-  `*_byte_diff.hexa` · 각 6/6 PASS ·
-  `.verdicts/runtime-floor-closure/B9C6-{runtime-h-smoke,harness-main-rp2040,harness-stm32h7-main}-byte-diff.txt`
-  · bin/hexa-fast `check` rewired to regen runtime_h_smoke_gen.c each invocation ·
-  Makefile.rp2040 + Makefile.stm32h7 rewired to regen harness_*_gen.c each build).
-  이전: 2026-05-28 B9.C-5 (#1851) `self/cuda/runtime_{bf16,cuda}.c` — self-emit PROVEN
+- `.c` = **90** (2026-05-28 B9.C-7 PROVEN-DEFERRED · 7-file tool/test
+  hexa_ld batch · `.c` 카운트 미변경 90→90 — RUNTIME.flip.md L418-419
+  "active linker dev · 보수적 KEEP" 정책 준수. 4 byte-diff oracle 6/6+6/6+6/6+3/3
+  PASS · 7 `*_emit.hexa` + 4 per-dir `byte_diff.hexa` LAND ·
+  `.verdicts/runtime-floor-closure/B9C7-hexa-ld-{page21,multisection,dyld-write,dyld-data}-byte-diff.txt`).
+  이전: 2026-05-28 chore (#1853) DEAD-rm 3 example/bench `.c` (93→90, 0-consumer
+  pure-dead). B9.C-6 (#1852) 3 ACTIVATED `.c` 96→93 (`tests/runtime_h_smoke.c` ·
+  `stdlib/hal/t3/harness_main.c` · `stdlib/hal/t3/harness_stm32h7_main.c`).
+  B9.C-5 (#1851) `self/cuda/runtime_{bf16,cuda}.c` — self-emit PROVEN
   · activation DEFERRED (.c 96 unchanged). B9.C-4 (#1850) `lib/hxpyembed/` 2-file
   cluster → 98→96. B9.C-3 (#1849) `lib/hxnccl/` 2-file cluster → 100→98.
   B9.C-2 (#1848) sscb firmware src/ 4-file batch → 104→100.
@@ -122,6 +123,37 @@ standalone `.c` 중 per-file go/no-go (B9.C-5 "consumption check first" lesson
     `example/bench_suite_native.c` (67L · 0 consumer, sibling `.hexa` 만 존재).
     `.c-text` 패턴은 live .c → hexa-emit 보존용. 진짜 0-consumer dead 파일은
     별도 dead-sweep tooling (B9.6h 식) 회부 — 이 PR scope 밖.
+
+세션 .c-leg tool/test batch: **B9.C-7** — B9.C-1/4/6 패턴 1:1 적용,
+`tool/test/hexa_ld_*` 링커 fixture 7 파일 (231L 총합) 전수. 결과 = **7 PROVEN-DEFERRED**
+(.c 카운트 미변경 90→90) — RUNTIME.flip.md L418-419 의 explicit 정책
+("active linker dev · 보수적 KEEP") 준수, B9.C-5 self/cuda 와 동일한
+"PROVEN + activation-DEFERRED" 결말:
+  - **7 emitters LANDED** — 각 `*_emit.hexa` 가 hand-written `.c` 를 verbatim
+    text 로 emit (sha256-equal 입증):
+    · `tool/test/hexa_ld_page21/a_main_emit.hexa` (33L → emit) · `b_msg_emit.hexa` (12L → emit) — inc2 PAGE21/PAGEOFF12 PoC
+    · `tool/test/hexa_ld_multisection/a_main_emit.hexa` (53L → emit) · `b_data_emit.hexa` (20L → emit) — inc3 multi-section PoC
+    · `tool/test/hexa_ld_dyld_write/a_main_emit.hexa` (45L → emit) · `b_data_emit.hexa` (8L → emit) — inc4 dyld func-import PoC
+    · `tool/test/hexa_ld_dyld_data/a_main_emit.hexa` (60L → emit) — inc5 dyld DATA-import PoC
+  - **4 per-dir byte-diff oracle LANDED** — 각 6/6 (a+b) 또는 3/3 (single) PASS ·
+    각 검사 = source-sha + `.o` byte-eq (no -g) + `__TEXT,__text` section byte-eq (with -g):
+    · `tool/test/hexa_ld_page21/byte_diff.hexa` — **11/11 PASS** (toolchain + 2×{emitter+orig+3 gates}) ·
+      `.verdicts/runtime-floor-closure/B9C7-hexa-ld-page21-byte-diff.txt`
+    · `tool/test/hexa_ld_multisection/byte_diff.hexa` — **11/11 PASS** ·
+      `.verdicts/runtime-floor-closure/B9C7-hexa-ld-multisection-byte-diff.txt`
+    · `tool/test/hexa_ld_dyld_write/byte_diff.hexa` — **11/11 PASS** ·
+      `.verdicts/runtime-floor-closure/B9C7-hexa-ld-dyld-write-byte-diff.txt`
+    · `tool/test/hexa_ld_dyld_data/byte_diff.hexa` — **6/6 PASS** ·
+      `.verdicts/runtime-floor-closure/B9C7-hexa-ld-dyld-data-byte-diff.txt`
+  - **activation (`git rm` for .c) DEFERRED** — RUNTIME.flip.md L418-419 가
+    `tool/test/hexa_ld_*` 7 파일을 "active linker dev · 보수적 KEEP" 으로 분류 ·
+    consumption check 결과 자동 consumer 0건 (RUNTIME.md narrative + .verdicts/
+    hexa-ld-dyld-write/F-PHASEH-INC4.txt PoC 인용만, .sh/Makefile/test runner 부재) ·
+    `tool/hexa_ld.hexa` phase-H linker work 가 완전 종결되고 ld driver-level
+    consumption 이 재출현 가능성 0 임을 확인한 후속 세션에서 활성화 (.c 90→83).
+  - **phase-h 충돌**: `phase-h-inc4-dyld-write` 브랜치는 stale (마지막 활동
+    pre-#1307 머지) · 격리 worktree (`/Users/ghost/core/hexa-lang/.claude/
+    worktrees/agent-a97d33602dd4f86d9`) 에서 진행 · phase-h 브랜치 reset/삭제 0건.
 
 ## 🧱 floor closure 상태 (2026-05-28 — F1-F6 종결 pass)
 

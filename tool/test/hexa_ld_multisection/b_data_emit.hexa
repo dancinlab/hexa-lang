@@ -1,0 +1,55 @@
+#!hexa strict
+// tool/test/hexa_ld_multisection/b_data_emit.hexa
+//   B9.C-7 (.c-leg tool/test hexa_ld batch · #1852 pattern) —
+//   hexa_ld_multisection/b_data.c source emitter.
+//
+// Emits the hexa_ld phase-H inc3 PoC object-B source (defines symbols
+// across __cstring / __data / __bss) verbatim.
+//
+// PROVEN-DEFERRED — see a_main_emit.hexa header.
+//
+// Invocation:
+//   hexa-run tool/test/hexa_ld_multisection/b_data_emit.hexa <output-path>
+
+let MODULE_NAME = "hexa_ld_multisection_b_data_emit"
+
+fn emit_b_data_c() -> str {
+    // Verbatim content of hand-written tool/test/hexa_ld_multisection/b_data.c
+    let s = "// b_data.c — object B: defines the three symbols object A references,\n" +
+            "// one in each section class the inc3 layout must place:\n" +
+            "//\n" +
+            "//   ms_str   → __TEXT,__cstring   (read-only C string)\n" +
+            "//   ms_init  → __DATA,__data      (initialized mutable global)\n" +
+            "//   ms_zero  → __DATA,__bss       (zero-init global; clang emits it as\n" +
+            "//                                   a common/zerofill symbol)\n" +
+            "//\n" +
+            "// Control/INPUT only (compiled by `clang -c`, NOT linked by clang/ld).\n" +
+            "// `used` keeps clang from dead-stripping; external linkage keeps them\n" +
+            "// visible across objects.\n" +
+            "\n" +
+            "__attribute__((used))\n" +
+            "const char ms_str[] = \"ms ok\\n\";        // → __cstring (6 bytes incl '\\n')\n" +
+            "\n" +
+            "__attribute__((used))\n" +
+            "int ms_init = 7;                         // → __data (initialized)\n" +
+            "\n" +
+            "__attribute__((used))\n" +
+            "int ms_zero = 0;                         // → __bss (zero-init)\n"
+    return s
+}
+
+fn main() {
+    let argv = real_args()
+    let out_path = if argv.len() >= 1 { argv[0] } else { "b_data.c" }
+    let c_text = emit_b_data_c()
+    let cmd = "cat > \"" + out_path + "\" <<'__HEXA_LD_MULTISECTION_B_DATA_EMIT_EOF__'\n" +
+              c_text + "__HEXA_LD_MULTISECTION_B_DATA_EMIT_EOF__"
+    let _ = exec(cmd)
+    let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
+    if exists_check != "y" {
+        println("[hexa_ld_multisection_b_data_emit] FATAL: failed to write " + out_path)
+        exit(1)
+    }
+    println("[hexa_ld_multisection_b_data_emit] wrote " + out_path)
+    exit(0)
+}

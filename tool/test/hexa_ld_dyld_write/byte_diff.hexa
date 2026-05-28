@@ -1,0 +1,223 @@
+#!hexa strict
+// tool/test/hexa_ld_dyld_write/byte_diff.hexa
+//   B9.C-7 (.c-leg tool/test hexa_ld batch · #1852 pattern) —
+//   hexa_ld_dyld_write byte-diff oracle (a_main.c + b_data.c).
+//
+// Proves the hexa emitters produce `.c` sources byte-identical AND
+// `.o`-equivalent to the hand-written tool/test/hexa_ld_dyld_write/{a_main,
+// b_data}.c. Both files exercise the phase-H inc4 (first dyld function
+// import: bl _write → __stubs → __got bind) PoC surface.
+//
+// Three gates per file (6 gates total):
+//   gate-1 source-text byte-equal (sha256)
+//   gate-2 whole-file .o byte-equal (clang -O0, NO -g)
+//   gate-3 __TEXT,__text section byte-equal (clang -O0 -g + otool -s)
+//
+// ⚠ PROVEN-DEFERRED: 6/6 PASS does NOT auto-`git rm` the `.c`.
+// tool/test/hexa_ld_* is "active linker dev · 보수적 KEEP" per
+// RUNTIME.flip.md L418-419 — deletion gated on phase-H conclusion.
+//
+// Run:
+//   HEXA_HAL_ROOT=<repo-root> hexa-run tool/test/hexa_ld_dyld_write/byte_diff.hexa
+
+let MODULE_NAME = "hexa_ld_dyld_write_byte_diff"
+
+// ─── check harness ────────────────────────────────────────────────────
+
+let mut RUN  = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ─── helpers ─────────────────────────────────────────────────────────
+
+fn _root() -> str {
+    let env_root = env("HEXA_HAL_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _which(cmd: str) -> bool {
+    let r = exec("command -v " + cmd + " >/dev/null 2>&1 && echo y || echo n").trim()
+    return r == "y"
+}
+
+fn _exists(p: str) -> bool {
+    let r = exec("[ -f \"" + p + "\" ] && echo y || echo n").trim()
+    return r == "y"
+}
+
+fn _sha256(p: str) -> str {
+    if _which("shasum") {
+        let r = exec("shasum -a 256 \"" + p + "\" 2>/dev/null | awk '{print $1}'").trim()
+        return r
+    }
+    if _which("sha256sum") {
+        let r = exec("sha256sum \"" + p + "\" 2>/dev/null | awk '{print $1}'").trim()
+        return r
+    }
+    return ""
+}
+
+fn _cflags_nodbg() -> str { return "-O0" }
+fn _cflags_dbg()   -> str { return "-O0 -g" }
+
+// ─── checks ──────────────────────────────────────────────────────────
+
+fn check_toolchain() -> bool {
+    let has_cc    = _which("clang")
+    let has_otool = _which("otool")
+    let ok = has_cc && has_otool
+    let detail = "clang=" + (if has_cc { "y" } else { "n" }) +
+                 " otool=" + (if has_otool { "y" } else { "n" })
+    _check(ok, "clang + otool present (Mac host toolchain)", detail)
+    return ok
+}
+
+fn check_emitter_present(src_dir: str, base: str) -> bool {
+    let p = src_dir + "/" + base + "_emit.hexa"
+    let ok = _exists(p)
+    _check(ok, "hexa emitter " + base + "_emit.hexa present", p)
+    return ok
+}
+
+fn check_orig_present(src_dir: str, base: str) -> bool {
+    let p = src_dir + "/" + base + ".c"
+    let ok = _exists(p)
+    if ok { _check(true, "hand-written " + base + ".c present", p) }
+    return ok
+}
+
+fn check_source_byte_equal(src_dir: str, work_dir: str, base: str) -> bool {
+    let orig_c  = src_dir  + "/" + base + ".c"
+    let gen_c   = work_dir + "/" + base + ".c"
+    let emitter = src_dir  + "/" + base + "_emit.hexa"
+    let out = exec("hexa-run \"" + emitter + "\" \"" + gen_c + "\" 2>&1")
+    if !_exists(gen_c) {
+        _check(false, "gate-1 emitter wrote `.c` (" + base + ")", "emit failed:\n" + out); return false
+    }
+    let orig_sha = _sha256(orig_c)
+    let gen_sha  = _sha256(gen_c)
+    let ok = orig_sha.len() > 0 && orig_sha == gen_sha
+    let detail = "orig=" + orig_sha + " gen=" + gen_sha
+    _check(ok, "gate-1 source-text byte-identical (" + base + ".c)", detail)
+    return ok
+}
+
+fn check_obj_byte_equal_nodbg(src_dir: str, work_dir: str, base: str) -> bool {
+    let orig_c = src_dir  + "/" + base + ".c"
+    let gen_c  = work_dir + "/" + base + ".c"
+    let orig_o = work_dir + "/" + base + "_orig.o"
+    let gen_o  = work_dir + "/" + base + "_gen.o"
+    let cf = _cflags_nodbg()
+    let out_o = exec("clang " + cf + " -c \"" + orig_c + "\" -o \"" + orig_o + "\" 2>&1")
+    let out_g = exec("clang " + cf + " -c \"" + gen_c  + "\" -o \"" + gen_o  + "\" 2>&1")
+    if !_exists(orig_o) {
+        _check(false, "gate-2 orig.o compiled (no -g, " + base + ")", "compile error:\n" + out_o); return false
+    }
+    if !_exists(gen_o) {
+        _check(false, "gate-2 gen.o compiled (no -g, " + base + ")", "compile error:\n" + out_g); return false
+    }
+    let orig_sha = _sha256(orig_o)
+    let gen_sha  = _sha256(gen_o)
+    let ok = orig_sha.len() > 0 && orig_sha == gen_sha
+    let detail = "orig=" + orig_sha + " gen=" + gen_sha
+    _check(ok, "gate-2 whole-file .o byte-identical (" + base + ", no -g)", detail)
+    return ok
+}
+
+fn check_section_byte_equal_dbg(src_dir: str, work_dir: str, base: str) -> bool {
+    let orig_c = src_dir  + "/" + base + ".c"
+    let gen_c  = work_dir + "/" + base + ".c"
+    let orig_o = work_dir + "/" + base + "_orig_g.o"
+    let gen_o  = work_dir + "/" + base + "_gen_g.o"
+    let cf = _cflags_dbg()
+    let _o1 = exec("clang " + cf + " -c \"" + orig_c + "\" -o \"" + orig_o + "\" 2>&1")
+    let _o2 = exec("clang " + cf + " -c \"" + gen_c  + "\" -o \"" + gen_o  + "\" 2>&1")
+    if !_exists(orig_o) || !_exists(gen_o) {
+        _check(false, "gate-3 both .o compiled (with -g, " + base + ")", "compile error"); return false
+    }
+    let orig_dump = work_dir + "/" + base + "_orig_text.txt"
+    let gen_dump  = work_dir + "/" + base + "_gen_text.txt"
+    let _d1 = exec("otool -X -s __TEXT __text \"" + orig_o + "\" > \"" + orig_dump + "\" 2>&1")
+    let _d2 = exec("otool -X -s __TEXT __text \"" + gen_o  + "\" > \"" + gen_dump  + "\" 2>&1")
+    let orig_sha = _sha256(orig_dump)
+    let gen_sha  = _sha256(gen_dump)
+    let ok = orig_sha.len() > 0 && orig_sha == gen_sha
+    let detail = "orig=" + orig_sha + " gen=" + gen_sha
+    _check(ok, "gate-3 __TEXT,__text section byte-identical (" + base + ", with -g)", detail)
+    return ok
+}
+
+fn check_file(src_dir: str, work_dir: str, base: str) {
+    if !check_emitter_present(src_dir, base) { return }
+    if !check_orig_present(src_dir, base) {
+        println("         · POST-DELETION SKIP (" + base + ".c removed after oracle PASS)")
+        return
+    }
+    let _g1 = check_source_byte_equal(src_dir, work_dir, base)
+    let _g2 = check_obj_byte_equal_nodbg(src_dir, work_dir, base)
+    let _g3 = check_section_byte_equal_dbg(src_dir, work_dir, base)
+}
+
+// ─── main ────────────────────────────────────────────────────────────
+
+fn main() {
+    println("========================================================================")
+    println("  hexa_ld_dyld_write — byte_diff: B9.C-7 .c-leg byte-diff oracle")
+    println("========================================================================")
+    println("  generators: tool/test/hexa_ld_dyld_write/{a_main,b_data}_emit.hexa")
+    println("  oracle:     clang + otool byte-diff vs hand-written {a_main,b_data}.c")
+    println("  target:     Mac host arm64 (naked _start + bl _write dyld import)")
+    println("  gates per file: source-text · whole-file .o (no -g) · __text section (with -g)")
+    println("")
+
+    let root = _root()
+    let src_dir = root + "/tool/test/hexa_ld_dyld_write"
+    let work_dir = exec("mktemp -d -t hexa_ld_dyld_write_byte_diff.XXXXXX").trim()
+    if work_dir.len() == 0 {
+        println("[FATAL] mktemp failed — cannot allocate scratch dir")
+        exit(1)
+    }
+    println("  scratch: " + work_dir)
+    println("")
+
+    if !check_toolchain() {
+        println("")
+        println("  Toolchain missing — install clang + otool (Xcode CLT on Mac).")
+        println("  B9.C-7 hexa_ld_dyld_write byte-diff verify SKIP (toolchain gate).")
+        println("__HEXA_LANG_HEXA_LD_DYLD_WRITE_BYTE_DIFF__ SKIP")
+        exit(0)
+    }
+
+    check_file(src_dir, work_dir, "a_main")
+    check_file(src_dir, work_dir, "b_data")
+
+    println("")
+    println("  B9.C-7 hexa_ld_dyld_write .c-leg byte-identity:")
+    if FAIL == 0 {
+        println("    PROVEN ✓ — hand-written {a_main,b_data}.c are fully hexa-emittable.")
+        println("    DELETION GATE OPEN per pattern — but RUNTIME.flip.md L418-419")
+        println("    \"active linker dev · 보수적 KEEP\" policy KEEPS the `.c` PROVEN-DEFERRED")
+        println("    until phase-H linker work concludes.")
+    } else {
+        println("    BYTE-DIFF FAIL — emitter output diverges from hand-written `.c`.")
+        println("    ⚠ Hand-written `.c` MUST NOT be deleted until oracle PASSES.")
+    }
+
+    let pass_n = RUN - FAIL
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_LANG_HEXA_LD_DYLD_WRITE_BYTE_DIFF__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_LANG_HEXA_LD_DYLD_WRITE_BYTE_DIFF__ PASS")
+    exit(0)
+}

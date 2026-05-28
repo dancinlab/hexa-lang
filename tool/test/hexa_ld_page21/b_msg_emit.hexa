@@ -1,0 +1,49 @@
+#!hexa strict
+// tool/test/hexa_ld_page21/b_msg_emit.hexa
+//   B9.C-7 (.c-leg tool/test hexa_ld batch · #1852 pattern) —
+//   hexa_ld_page21/b_msg.c source emitter.
+//
+// Mirrors a_main_emit.hexa one-to-one. Emits the hexa_ld phase-H inc2
+// PoC object-B source (defines `_hxld_msg` in __TEXT,__cstring) verbatim.
+//
+// PROVEN-DEFERRED — see a_main_emit.hexa header.
+//
+// Invocation:
+//   hexa-run tool/test/hexa_ld_page21/b_msg_emit.hexa <output-path>
+//
+// Default output path (if argv missing): "b_msg.c" in cwd.
+
+let MODULE_NAME = "hexa_ld_page21_b_msg_emit"
+
+fn emit_b_msg_c() -> str {
+    // Verbatim content of hand-written tool/test/hexa_ld_page21/b_msg.c
+    let s = "// b_msg.c — object B: defines a string constant that lands in __cstring.\n" +
+            "//\n" +
+            "// Control/INPUT only (compiled by `clang -c`, NOT linked by clang/ld).\n" +
+            "// The `const char[]` with an external linkage symbol forces clang to\n" +
+            "// emit the bytes into the __TEXT,__cstring section and a defined\n" +
+            "// external symbol `_hxld_msg` pointing at it. Object A references this\n" +
+            "// symbol via an adrp/add (PAGE21 + PAGEOFF12) pair.\n" +
+            "//\n" +
+            "// `used` keeps clang from dead-stripping it at -O; external linkage\n" +
+            "// keeps it visible across objects.\n" +
+            "__attribute__((used))\n" +
+            "const char hxld_msg[] = \"hi from cstring\\n\";\n"
+    return s
+}
+
+fn main() {
+    let argv = real_args()
+    let out_path = if argv.len() >= 1 { argv[0] } else { "b_msg.c" }
+    let c_text = emit_b_msg_c()
+    let cmd = "cat > \"" + out_path + "\" <<'__HEXA_LD_PAGE21_B_MSG_EMIT_EOF__'\n" +
+              c_text + "__HEXA_LD_PAGE21_B_MSG_EMIT_EOF__"
+    let _ = exec(cmd)
+    let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
+    if exists_check != "y" {
+        println("[hexa_ld_page21_b_msg_emit] FATAL: failed to write " + out_path)
+        exit(1)
+    }
+    println("[hexa_ld_page21_b_msg_emit] wrote " + out_path)
+    exit(0)
+}

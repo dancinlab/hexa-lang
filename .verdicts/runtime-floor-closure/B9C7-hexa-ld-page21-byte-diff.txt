@@ -1,0 +1,41 @@
+========================================================================
+  hexa_ld_page21 — byte_diff: B9.C-7 .c-leg byte-diff oracle
+========================================================================
+  generators: tool/test/hexa_ld_page21/{a_main,b_msg}_emit.hexa
+  oracle:     clang + otool byte-diff vs hand-written {a_main,b_msg}.c
+  target:     Mac host arm64 (freestanding naked _start + __cstring)
+  gates per file: source-text · whole-file .o (no -g) · __text section (with -g)
+
+  scratch: /var/folders/2g/blzd56lx2rvfvt61c1pc9g7r0000gn/T/hexa_ld_page21_byte_diff.XXXXXX.WPSTSMG9Pu
+
+  [PASS] clang + otool present (Mac host toolchain)
+         · clang=y otool=y
+  [PASS] hexa emitter a_main_emit.hexa present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a97d33602dd4f86d9/tool/test/hexa_ld_page21/a_main_emit.hexa
+  [PASS] hand-written a_main.c present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a97d33602dd4f86d9/tool/test/hexa_ld_page21/a_main.c
+  [PASS] gate-1 source-text byte-identical (a_main.c)
+         · orig=43352200c1aad42b06901b1c6bd14e66c877d6e8c82a90fae7d31219910a118e gen=43352200c1aad42b06901b1c6bd14e66c877d6e8c82a90fae7d31219910a118e
+  [PASS] gate-2 whole-file .o byte-identical (a_main, no -g)
+         · orig=68ca83ddf2feb85f3b63e052cb06bda8f6e00fd767866abaaae48d4ffbc69a13 gen=68ca83ddf2feb85f3b63e052cb06bda8f6e00fd767866abaaae48d4ffbc69a13
+  [PASS] gate-3 __TEXT,__text section byte-identical (a_main, with -g)
+         · orig=02930eb1f2bde2c840e26d41fd0315b809bcbff38a452041cf507c2c7a7a4031 gen=02930eb1f2bde2c840e26d41fd0315b809bcbff38a452041cf507c2c7a7a4031
+  [PASS] hexa emitter b_msg_emit.hexa present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a97d33602dd4f86d9/tool/test/hexa_ld_page21/b_msg_emit.hexa
+  [PASS] hand-written b_msg.c present
+         · /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a97d33602dd4f86d9/tool/test/hexa_ld_page21/b_msg.c
+  [PASS] gate-1 source-text byte-identical (b_msg.c)
+         · orig=20a007ffb6609aa40cee5f5611648e53b66c18fd5d0b6ef8e711c007ef57a1af gen=20a007ffb6609aa40cee5f5611648e53b66c18fd5d0b6ef8e711c007ef57a1af
+  [PASS] gate-2 whole-file .o byte-identical (b_msg, no -g)
+         · orig=9c9d65e8858b221a46c9e406dc7dc94cf1efa9d75b508b3652c393d113cb98f1 gen=9c9d65e8858b221a46c9e406dc7dc94cf1efa9d75b508b3652c393d113cb98f1
+  [PASS] gate-3 __TEXT,__text section byte-identical (b_msg, with -g)
+         · orig=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 gen=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+
+  B9.C-7 hexa_ld_page21 .c-leg byte-identity:
+    PROVEN ✓ — hand-written {a_main,b_msg}.c are fully hexa-emittable.
+    DELETION GATE OPEN per pattern — but RUNTIME.flip.md L418-419
+    "active linker dev · 보수적 KEEP" policy KEEPS the `.c` PROVEN-DEFERRED
+    until phase-H linker work concludes.
+========================================================================
+  11/11 checks passed
+__HEXA_LANG_HEXA_LD_PAGE21_BYTE_DIFF__ PASS
