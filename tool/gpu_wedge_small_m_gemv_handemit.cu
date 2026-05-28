@@ -8,25 +8,27 @@
  * SGEMM is tile-shape-bound when M is too small. This fire asks: can a plain
  * hand-emit GEMV warp-reduce + broadcast kernel beat cuBLAS at small M?
  *
- * Strategy (M=1 case = pure GEMV):
- *   - One CTA per N-tile of size CTA_N_TILE = 64 output columns.
- *   - Block dim = (32 threads/warp x N_WARPS_PER_BLOCK warps); each warp owns
- *     warp-id's CTA_N_TILE/N_WARPS columns. Within a warp, the 32 lanes
- *     cooperate on the K-stripe reduction for one output column at a time
- *     (warp-reduce via shfl_xor), serialising the warp across its assigned
- *     columns. This is the canonical FasterTransformer / vllm style.
- *
- * Generalised M>1 case:
- *   - Grid Y = M (one CTA row per output row). Each CTA still produces a
- *     CTA_N_TILE output columns for its row. Same warp-reduce body.
+ * Strategy:
+ *   M=1: pure GEMV, memory-bandwidth-bound. Each CTA owns CTA_N_COLS output
+ *        columns; each warp owns one column; lanes stripe through K and
+ *        warp-reduce via __shfl_xor_sync. A is broadcast through shared mem
+ *        (loaded cooperatively, all warps reuse).
+ *   M>1: each CTA still owns CTA_N_COLS output columns but additionally
+ *        iterates over all M rows reusing the same B column. This keeps the
+ *        B traffic at the M=1 amount (1x read), so the kernel transitions
+ *        smoothly from BW-bound (M=1) to compute-bound (M>1).
  *
  * Verdict rubric (g5):
  *   GREEN (SUPPORTED-NUMERICAL) if handemit >= 1.5x cuBLAS at M=1.
  *   RED   (FALSIFIED)           if handemit <  1.05x cuBLAS at M=1.
  *
- * Build: nvcc -O3 -arch=sm_120 gpu_wedge_small_m_gemv_handemit.cu -lcublas \
+ * Build: nvcc -O3 -arch=compute_90 -code=compute_90 \
+ *               gpu_wedge_small_m_gemv_handemit.cu -lcublas \
  *               -o gpu_wedge_small_m_gemv_handemit
  * Run:   ./gpu_wedge_small_m_gemv_handemit
+ *
+ * The compute_90 PTX is driver-JIT'd to sm_120 on the RTX 5070 host
+ * (reference_gpu_fire_infra.md). Pure-ASCII source, no non-ASCII comments.
  */
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
@@ -40,25 +42,26 @@
     if (s != CUBLAS_STATUS_SUCCESS) { fprintf(stderr, "cuBLAS err %d at %s:%d\n", \
         (int)s, __FILE__, __LINE__); return 1; }} while (0)
 
-/* RTX 5070 sm_120 FP32 peak. */
 static const double PEAK_FP32_TFLOPS = 31.2;
 
 #define WARP_SIZE 32
-#define N_WARPS_PER_BLOCK 4
-#define CTA_THREADS (WARP_SIZE * N_WARPS_PER_BLOCK)
-#define CTA_N_TILE 16  /* output columns per CTA; each warp owns CTA_N_TILE / N_WARPS = 4 columns. */
+#define CTA_WARPS 8
+#define CTA_THREADS (WARP_SIZE * CTA_WARPS)
+#define CTA_N_COLS  CTA_WARPS         /* one warp per output column */
+#define K_CHUNK     128               /* shared-mem K-tile for A reuse across M */
 
-/* hand-emit GEMV kernel.
- * Computes C[m, n] = sum_k A[m, k] * B[k, n]  for m in [0, M), n in [0, N).
- * Row-major: A is M x K, B is K x N, C is M x N.
+/* Hand-emit GEMV/GEMM-skinny kernel.
+ *   C[m,n] = sum_k A[m,k] * B[k,n]   for m in [0,M), n in [0,N).
+ *   A is M*K row-major, B is K*N row-major, C is M*N row-major.
  *
- * Grid: dim3(N / CTA_N_TILE, M, 1)
- * Block: dim3(WARP_SIZE, N_WARPS_PER_BLOCK, 1)
+ * Grid: dim3(N / CTA_N_COLS, 1, 1)    -- one CTA per N-tile, NOT per M-row.
+ * Block: dim3(WARP_SIZE, CTA_WARPS, 1)
  *
- * Within a CTA: warp w owns columns [w * (CTA_N_TILE / N_WARPS_PER_BLOCK),
- *                                    (w+1) * (CTA_N_TILE / N_WARPS_PER_BLOCK)).
- * For each owned column n_local, the warp's 32 lanes stripe-sum across K and
- * shfl_xor warp-reduce to a single scalar; lane 0 writes C[m, n_global].
+ * Each warp owns ONE output column n_global = blockIdx.x * CTA_N_COLS + warp.
+ * For each output row m, the warp's 32 lanes stripe across K via shared-mem
+ * tile of A[m, ...] (loaded cooperatively by the whole CTA, reused across
+ * all CTA_WARPS columns).  partial reduce -> __shfl_xor_sync warp butterfly
+ * -> lane 0 writes C[m, n_global].
  */
 __global__ void gemv_warpreduce_kernel(
     const float * __restrict__ A,
@@ -66,27 +69,31 @@ __global__ void gemv_warpreduce_kernel(
     float * __restrict__ C,
     int M, int K, int N)
 {
-    const int n_tile_base = blockIdx.x * CTA_N_TILE;
-    const int m           = blockIdx.y;
-    const int warp_id     = threadIdx.y;
-    const int lane        = threadIdx.x;
+    __shared__ float sA[K_CHUNK];   /* tile of A[m, k:k+K_CHUNK] */
 
-    const int cols_per_warp = CTA_N_TILE / N_WARPS_PER_BLOCK;
-    const int n_local_base  = warp_id * cols_per_warp;
+    const int n_global = blockIdx.x * CTA_N_COLS + threadIdx.y;
+    const int lane     = threadIdx.x;
+    const int tid      = threadIdx.y * WARP_SIZE + threadIdx.x;
 
-    #pragma unroll
-    for (int c = 0; c < cols_per_warp; ++c) {
-        const int n_global = n_tile_base + n_local_base + c;
-        if (n_global >= N) continue;
+    if (n_global >= N) return;
 
+    for (int m = 0; m < M; ++m) {
         float acc = 0.0f;
-        /* lane k0 strides through K with step WARP_SIZE. */
-        for (int k = lane; k < K; k += WARP_SIZE) {
-            float a = A[m * K + k];
-            float b = B[k * N + n_global];
-            acc += a * b;
+        for (int k0 = 0; k0 < K; k0 += K_CHUNK) {
+            /* cooperatively load A[m, k0:k0+K_CHUNK] into sA. */
+            #pragma unroll
+            for (int j = tid; j < K_CHUNK; j += CTA_THREADS) {
+                sA[j] = A[m * K + k0 + j];
+            }
+            __syncthreads();
+            /* each warp's 32 lanes stripe through this K_CHUNK for its column. */
+            #pragma unroll
+            for (int k = lane; k < K_CHUNK; k += WARP_SIZE) {
+                acc += sA[k] * B[(k0 + k) * N + n_global];
+            }
+            __syncthreads();
         }
-        /* warp reduce: shfl_xor butterfly. */
+        /* warp-reduce butterfly. */
         for (int offset = WARP_SIZE / 2; offset > 0; offset >>= 1) {
             acc += __shfl_xor_sync(0xffffffff, acc, offset);
         }
@@ -125,7 +132,10 @@ static int run_one_M(cublasHandle_t h, int M, int K, int N,
     CK(cudaMemcpy(dA, hA, szA, cudaMemcpyHostToDevice));
     CK(cudaMemcpy(dB, hB, szB, cudaMemcpyHostToDevice));
 
-    /* cuBLAS baseline: same call shape as gpu_wedge_small_m.cu. */
+    /* cuBLAS baseline: row-major (M*K) A * (K*N) B = (M*N) C maps to col-major
+     * C^T = B^T * A^T  ->  call cublasSgemm(N, OP_N, OP_N, N, M, K, dB, N, dA, K).
+     * Output dC_ref linear memory equals row-major C[m,n] at index m*N + n
+     * (because col-major C^T[n,m] at n + m*ldc == n + m*N). */
     float alpha = 1.0f, beta = 0.0f;
     const int WARMUP = 20, ITERS = 200;
     double *samples = (double *)malloc(ITERS * sizeof(double));
@@ -153,8 +163,8 @@ static int run_one_M(cublasHandle_t h, int M, int K, int N,
     *out_cublas_ms = samples[ITERS / 2];
 
     /* hand-emit kernel. */
-    dim3 grid((N + CTA_N_TILE - 1) / CTA_N_TILE, M, 1);
-    dim3 block(WARP_SIZE, N_WARPS_PER_BLOCK, 1);
+    dim3 grid((N + CTA_N_COLS - 1) / CTA_N_COLS, 1, 1);
+    dim3 block(WARP_SIZE, CTA_WARPS, 1);
 
     for (int i = 0; i < WARMUP; ++i) {
         gemv_warpreduce_kernel<<<grid, block>>>(dA, dB, dC_he, M, K, N);
@@ -174,22 +184,14 @@ static int run_one_M(cublasHandle_t h, int M, int K, int N,
     qsort(samples, ITERS, sizeof(double), cmp_d);
     *out_handemit_ms = samples[ITERS / 2];
 
-    /* numerical check: copy both back and compute max|delta|. */
+    /* numerical check: same linear-memory layout (row-major C[m,n] at m*N+n). */
     CK(cudaMemcpy(hC_ref, dC_ref, szC, cudaMemcpyDeviceToHost));
     CK(cudaMemcpy(hC_he,  dC_he,  szC, cudaMemcpyDeviceToHost));
     double max_abs = 0.0;
-    /* cuBLAS used column-major view of (N x M); the dC_ref linear layout in
-     * cudaMemcpy is identical to "row-major C with C[m,n] at index n*M+m"
-     * because cuBLAS wrote (N rows, M cols) col-major. Our handemit wrote
-     * row-major C[m,n] at index m*N+n. Re-index when comparing. */
-    for (int m = 0; m < M; ++m) {
-        for (int n = 0; n < N; ++n) {
-            float ref = hC_ref[n * M + m];     /* cuBLAS col-major in linearmem */
-            float he  = hC_he [m * N + n];     /* our row-major */
-            double d = (double)he - (double)ref;
-            if (d < 0) d = -d;
-            if (d > max_abs) max_abs = d;
-        }
+    for (long i = 0; i < (long)M * N; ++i) {
+        double d = (double)hC_he[i] - (double)hC_ref[i];
+        if (d < 0) d = -d;
+        if (d > max_abs) max_abs = d;
     }
     *out_max_abs_err = max_abs;
 
@@ -206,9 +208,11 @@ int main(int argc, char **argv) {
     const int n_M = sizeof(M_vals) / sizeof(M_vals[0]);
     const int K = 4096, N = 4096;
 
-    printf("# F-WEDGE-SMALL-M-GEMV-WALL — hand-emit GEMV vs cuBLAS (RTX 5070 sm_120)\n");
+    printf("# F-WEDGE-SMALL-M-GEMV-WALL -- hand-emit GEMV vs cuBLAS (RTX 5070 sm_120)\n");
     printf("# Peak FP32 = %.2f TFLOPS, K=%d N=%d, cuEvent 20 warmup + 200 timed median\n",
            PEAK_FP32_TFLOPS, K, N);
+    printf("# CTA: %d warps x %d threads, %d cols/CTA, K_CHUNK=%d (A-reuse via shared)\n",
+           CTA_WARPS, WARP_SIZE, CTA_N_COLS, K_CHUNK);
     printf("# M  cuBLAS_ms  handemit_ms  handemit_TFLOPS  speedup_x  sub_roofline_pct  max_abs_err\n");
 
     cublasHandle_t h;
