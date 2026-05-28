@@ -1,0 +1,49 @@
+{
+  "falsifier": "F-WEDGE-TOPK-FUSED-WALL",
+  "date": "2026-05-28",
+  "verdict": "FALSIFIED",
+  "verdict_tier": "RED",
+  "host": "ubu-2",
+  "gpu": "RTX 5070 sm_120 (compiled sm_80, JIT)",
+  "nvcc": "12.0.140",
+  "shapes": [
+    {
+      "name": "decode-8tok-LLaMA-vocab",
+      "M": 8, "K": 4096, "N": 32000,
+      "K_TOP": 8,
+      "correctness_pass_rows": 8,
+      "correctness_total_rows": 8,
+      "baseline_ms_median": 1.172192,
+      "fused_ms_median": 17.785440,
+      "speedup_vs_baseline": 0.066,
+      "oracle_ceiling": 1.802,
+      "ceiling_share_pct": 3.7,
+      "verdict_at_shape": "FALSIFIED (< 1.02x threshold)"
+    },
+    {
+      "name": "small-batch-Qwen-vocab",
+      "M": 32, "K": 4096, "N": 151643,
+      "K_TOP": 8,
+      "correctness_pass_rows": 32,
+      "correctness_total_rows": 32,
+      "baseline_ms_median": 8.102528,
+      "fused_ms_median": 359.452576,
+      "speedup_vs_baseline": 0.023,
+      "oracle_ceiling": 1.683,
+      "ceiling_share_pct": 1.3,
+      "verdict_at_shape": "FALSIFIED (< 1.02x threshold)"
+    }
+  ],
+  "method": {
+    "iters": 200,
+    "warmup": 20,
+    "timing": "cuEvent median",
+    "fused_kernel": "stage-1 partial topK per (row, col-tile) + stage-2 block merge",
+    "block_dim": 256,
+    "col_tile": 512,
+    "A_fill": "LCG pseudo-random [-1, 1]",
+    "B_fill": "LCG pseudo-random [-1, 1]",
+    "baseline": "cublasSgemm OP_T-N + cub::DeviceSegmentedRadixSort::SortPairsDescending"
+  },
+  "notes": "Hand-emit fused kernel achieves correct top-K (8/8 + 32/32) but is 15x-44x slower than cublasSgemm + cub::DeviceSegmentedRadixSort, far below the 1.10x SUPPORTED-NUMERICAL threshold and the 1.02x FALSIFIED threshold. Falsifies the cheap-first oracle's implicit assumption that hand-emit fusion can approach the 1.10-1.30x realistic ceiling. The naive design lacks shared-memory tiling of B and warp-level cooperative K-reduction; cuBLAS already optimizes these to ~7.9% of FP32 peak even in small-M regime, and cub::DeviceSegmentedRadixSort is far more efficient than thrust::sort for the top-K stage. The 2026-05-27 oracle's 1.802x ceiling assumed FREE fusion of top-K on top of cuBLAS GEMM; replacing both with naive hand-emit overshoots both stages by an order of magnitude. Closed-negative finding: top-K fusion is NOT a viable wedge with naive hand-emit. A real wedge would need to (a) match cuBLAS small-M GEMM throughput first, then (b) fuse top-K. The ranking implied by the 2026-05-27 oracle that 'top-K fusion is rank 2 behind small-M GEMV' is essentially refuted at the implementation tier."
+}

@@ -1,0 +1,270 @@
+// test/native_build/emit_hxlcl_ioctl_o.hexa
+//
+// F3 ACTIVATION RUNBOOK · Path A · B9.6-C11 — class-C syscall ABI 3-arg
+// NON-_cf no-errno (after #1919 getuid + B9.6-C10 fcntl). Production-wire
+// the self-emitted ioctl over the C `hxlcl_ioctl` raw-svc wrapper
+// (self/runtime.c L171/L175).
+//
+// EMITS: a Mach-O .o file exporting a strong external symbol `_hxlcl_ioctl`
+// whose body is rt_ioctl's verbatim machine-code — the EXACT 4-instr
+// single-sxtw + svc + ret sequence from self/codegen/runtime_arm64.hexa::rt_ioctl
+// (#1899 shadow emit). When the driver / module_loader is built under
+// HEXA_RT_SELFEMIT=1, self/runtime.c declares `hxlcl_ioctl` as `extern`
+// (no body) instead of the file-local `static` svc-trap definition, and
+// ld64 binds the `bl _hxlcl_ioctl` callsites to this .o's strong symbol —
+// the C runtime's ioctl is replaced by the hexa-emitted one.
+//
+// ── ABI (class-C syscall · 3-arg NON-_cf no-errno) ──
+//
+// rt_ioctl(int fd, unsigned long req, void *arg) -> int. Only the FIRST
+// arg (fd, int, x0) is sign-extended; req (unsigned long, x1) and arg
+// (ptr, x2) are already 64-bit and pass through untouched. So there is a
+// SINGLE sxtw (shorter than fcntl's dual-sxtw). SYS_IOCTL = 54 (0x36)
+// loads into x16, svc #0x80 issues the BSD trap, ret returns x0. NO error
+// branch, NO reloc — plain _hxlcl_syscall3, not _cf. 4-instr 16-byte body
+// — SAME length / shape as rt_getuid but with the leading sxtw on x0
+// instead of a `mov x0, #0`. Matches `as -arch arm64` byte-for-byte:
+//   sxtw x0,w0 / mov w16,#54 / svc #0x80 / ret
+//
+// ── HONESTY ──
+//
+//   - closure = runs exact — an ioctl-calling C program linked against
+//     this .o must behave like the C `hxlcl_ioctl` / libc ioctl(). Smoke
+//     test = an EINVAL-returning request (ioctl with a bogus req) gives
+//     the same -1 / errno store as libc — verifiable on Darwin.
+//   - f1/f2 — clang ONLY as link-side oracle, NEVER in this .o's emit
+//     path (the 16 bytes come from rt_ioctl(), inlined verbatim below).
+//   - selfhosted opt-in — HEXA_RT_SELFEMIT=1 gates the build append;
+//     unset = no behavior change (default build keeps `static`).
+//   - no binaries committed.
+//
+// SELF-CONTAINED: same module-loader rationale as emit_hxlcl_getuid_o.hexa.
+// The macho wrapper is inlined byte-for-byte. The deliberate diffs vs the
+// getuid driver are: (1) the 16 code bytes (leading sxtw instead of mov
+// x0,#0; SYS#54 instead of 24), (2) the EXPORTED SYMBOL NAME `_hxlcl_ioctl`
+// (12 B vs 13 B for `_hxlcl_getuid` → strtab_size = 1+12).
+
+// ═══════════════════════════════════════════════════════════════════
+// Inlined from self/codegen/runtime_arm64.hexa::rt_ioctl
+// 4 instructions, 16 bytes. sxtw x0,w0 / mov w16,#54 / svc #0x80 / ret.
+// x0 returns the trap result (status / -1 on error).
+// ═══════════════════════════════════════════════════════════════════
+fn rt_ioctl_bytes() -> [int] {
+    let mut c = []
+    // sxtw x0, w0  (sign-extend fd)         0x93407C00
+    c.push(0); c.push(124); c.push(64); c.push(147)
+    // mov w16, #54  (SYS_IOCTL)             0x528006D0
+    c.push(208); c.push(6); c.push(128); c.push(82)
+    // svc #0x80                             0xD4001001
+    c.push(1); c.push(16); c.push(0); c.push(212)
+    // ret  (x0 = trap result)               0xD65F03C0
+    c.push(192); c.push(3); c.push(95); c.push(214)
+    return c
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Inlined from self/codegen/macho.hexa (constants + helpers + obj_wrap)
+// Identical to emit_hxlcl_getuid_o.hexa except symbol name `_hxlcl_ioctl`
+// (12 B, strtab = 1+12 = 13) + the code bytes.
+// ═══════════════════════════════════════════════════════════════════
+fn mh_magic_64_v() -> int { return 0xFEEDFACF }
+fn mh_object_v() -> int { return 1 }
+fn cpu_type_arm64_v() -> int { return 0x0100000C }
+fn cpu_subtype_all_v() -> int { return 0 }
+fn lc_segment_64_v() -> int { return 0x19 }
+fn lc_symtab_v() -> int { return 0x02 }
+fn lc_build_version_v() -> int { return 0x32 }
+fn s_attr_pure_v() -> int { return 0x80000000 }
+fn s_attr_some_v() -> int { return 0x00000400 }
+fn n_ext_v() -> int { return 0x01 }
+fn n_sect_v() -> int { return 0x0e }
+
+fn align_to_v(val: int, align: int) -> int {
+    return (val + align - 1) / align * align
+}
+
+fn push_u16_le_v(buf: [int], val: int) -> [int] {
+    return buf.push(val % 256).push((val / 256) % 256)
+}
+
+fn push_u32_le_v(buf: [int], val: int) -> [int] {
+    return buf.push(val % 256).push((val / 256) % 256).push((val / 65536) % 256).push((val / 16777216) % 256)
+}
+
+fn push_u64_le_v(buf: [int], val: int) -> [int] {
+    let mut b = push_u32_le_v(buf, val % 0x100000000)
+    return push_u32_le_v(b, val / 0x100000000)
+}
+
+// Inlined from self/codegen/macho.hexa::macho_obj_wrap (L34-136).
+// Symbol exported = `_hxlcl_ioctl` (strtab_size = 1 + 12 NUL-term = 13).
+fn macho_obj_wrap_hxlcl_ioctl(code: [int], main_offset: int) -> [int] {
+    let mut out = []
+    let code_size = len(code)
+
+    let header_size = 32
+    let segment_cmd_size = 152
+    let symtab_cmd_size = 24
+    let build_version_cmd_size = 24
+    let sizeofcmds = segment_cmd_size + symtab_cmd_size + build_version_cmd_size
+
+    let code_offset = align_to_v(header_size + sizeofcmds, 8)
+    let symtab_offset = align_to_v(code_offset + code_size, 4)
+    let nlist_size = 16
+    let strtab_offset = symtab_offset + nlist_size
+    // strtab = "\0_hxlcl_ioctl\0" = 1 + 12 = 13 bytes.
+    let strtab_size = 1 + 12
+
+    // Mach-O Header (32 bytes)
+    out = push_u32_le_v(out, mh_magic_64_v())
+    out = push_u32_le_v(out, cpu_type_arm64_v())
+    out = push_u32_le_v(out, cpu_subtype_all_v())
+    out = push_u32_le_v(out, mh_object_v())
+    out = push_u32_le_v(out, 3)
+    out = push_u32_le_v(out, sizeofcmds)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+
+    // LC_SEGMENT_64
+    out = push_u32_le_v(out, lc_segment_64_v())
+    out = push_u32_le_v(out, segment_cmd_size)
+    let mut i = 0
+    while i < 16 { out.push(0); i = i + 1 }
+    out = push_u64_le_v(out, 0)
+    out = push_u64_le_v(out, align_to_v(strtab_offset + strtab_size, 8))
+    out = push_u64_le_v(out, code_offset)
+    out = push_u64_le_v(out, strtab_offset + strtab_size - code_offset)
+    out = push_u32_le_v(out, 7)
+    out = push_u32_le_v(out, 7)
+    out = push_u32_le_v(out, 1)
+    out = push_u32_le_v(out, 0)
+
+    // Section header: __text (80 bytes)
+    out.push(95); out.push(95); out.push(116); out.push(101); out.push(120); out.push(116)
+    let mut j = 0
+    while j < 10 { out.push(0); j = j + 1 }
+    out.push(95); out.push(95); out.push(84); out.push(69); out.push(88); out.push(84)
+    j = 0
+    while j < 10 { out.push(0); j = j + 1 }
+    out = push_u64_le_v(out, 0)
+    out = push_u64_le_v(out, code_size)
+    out = push_u32_le_v(out, code_offset)
+    out = push_u32_le_v(out, 2)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, s_attr_pure_v() + s_attr_some_v())
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+
+    // LC_SYMTAB
+    out = push_u32_le_v(out, lc_symtab_v())
+    out = push_u32_le_v(out, symtab_cmd_size)
+    out = push_u32_le_v(out, symtab_offset)
+    out = push_u32_le_v(out, 1)
+    out = push_u32_le_v(out, strtab_offset)
+    out = push_u32_le_v(out, strtab_size)
+
+    // LC_BUILD_VERSION
+    out = push_u32_le_v(out, lc_build_version_v())
+    out = push_u32_le_v(out, build_version_cmd_size)
+    out = push_u32_le_v(out, 1)
+    out = push_u32_le_v(out, 0x000E0000)
+    out = push_u32_le_v(out, 0x000E0000)
+    out = push_u32_le_v(out, 0)
+
+    // Pad to code_offset
+    while len(out) < code_offset { out.push(0) }
+
+    // Code section
+    let mut k = 0
+    while k < len(code) { out.push(code[k]); k = k + 1 }
+
+    // Pad to symtab_offset
+    while len(out) < symtab_offset { out.push(0) }
+
+    // Symbol table: nlist_64 (16 bytes)
+    out = push_u32_le_v(out, 1)
+    out.push(n_sect_v() + n_ext_v())
+    out.push(1)
+    out = push_u16_le_v(out, 0)
+    out = push_u64_le_v(out, main_offset)
+
+    // String table — "\0_hxlcl_ioctl\0" (13 bytes)
+    out.push(0)
+    // "_hxlcl_ioctl\0"
+    //  95='_' 104='h' 120='x' 108='l' 99='c' 108='l' 95='_'
+    //  105='i' 111='o' 99='c' 116='t' 108='l' 0=NUL
+    out.push(95); out.push(104); out.push(120); out.push(108); out.push(99); out.push(108); out.push(95)
+    out.push(105); out.push(111); out.push(99); out.push(116); out.push(108); out.push(0)
+
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Driver
+// ═══════════════════════════════════════════════════════════════════
+fn emit_hxlcl_ioctl_o() {
+    println("[wire] F3 Path A · B9.6-C11 · rt_ioctl native override — _hxlcl_ioctl")
+
+    let code = rt_ioctl_bytes()
+    if len(code) != 16 {
+        println("FAIL: rt_ioctl expected 16 bytes, got " + to_string(len(code)))
+        return
+    }
+    println("  rt_ioctl bytes: " + to_string(len(code)) + " (16 expected)")
+
+    // sxtw x0, w0 (00 7C 40 93) at offset 0 — sign-extend fd
+    if code[0] != 0 || code[1] != 124 || code[2] != 64 || code[3] != 147 {
+        println("FAIL: sxtw x0,w0 prefix mismatch")
+        return
+    }
+    println("  sxtw x0,w0     : 00 7c 40 93 OK")
+
+    // mov w16, #54 (D0 06 80 52) at offset 4 — SYS_IOCTL
+    if code[4] != 208 || code[5] != 6 || code[6] != 128 || code[7] != 82 {
+        println("FAIL: mov w16,#54 mismatch")
+        return
+    }
+    println("  syscall number : d0 06 80 52 (mov w16, #54 = SYS_IOCTL) OK")
+
+    // svc #0x80 (01 10 00 d4) at offset 8 — the BSD syscall trap
+    if code[8] != 1 || code[9] != 16 || code[10] != 0 || code[11] != 212 {
+        println("FAIL: svc #0x80 mismatch")
+        return
+    }
+    println("  syscall trap   : 01 10 00 d4 (svc #0x80) OK")
+
+    // ret (c0 03 5f d6) at offset 12 — ioctl RETURNS the result in x0
+    if code[12] != 192 || code[13] != 3 || code[14] != 95 || code[15] != 214 {
+        println("FAIL: ret trailer mismatch")
+        return
+    }
+    println("  ret trailer    : c0 03 5f d6 (ret) OK — x0=trap result returned")
+
+    let obj = macho_obj_wrap_hxlcl_ioctl(code, 0)
+    println("  obj_wrap size  : " + to_string(len(obj)) + " bytes total")
+
+    // MH_MAGIC_64 LE at offset 0 (0xFEEDFACF → cf fa ed fe)
+    if obj[0] != 0xcf || obj[1] != 0xfa || obj[2] != 0xed || obj[3] != 0xfe {
+        println("FAIL: MH_MAGIC_64 mismatch")
+        return
+    }
+    println("  MH_MAGIC_64    : cf fa ed fe OK")
+
+    // filetype = MH_OBJECT (1) at offset 12
+    if obj[12] != 1 {
+        println("FAIL: filetype not MH_OBJECT")
+        return
+    }
+    println("  filetype       : 1 (MH_OBJECT) OK")
+
+    let out_path = env_var("HEXA_HXLCL_IOCTL_O")
+    let mut dest = out_path
+    if dest == "" { dest = "build/poc/hxlcl_ioctl.o" }
+    write_bytes(dest, obj)
+    println("  wrote          : " + dest)
+    println("[wire] EMIT OK — link via build recipe with HEXA_RT_SELFEMIT=1")
+}
+
+emit_hxlcl_ioctl_o()
