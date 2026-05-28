@@ -39,6 +39,7 @@ struct VastList {
 struct VastOffer {
     ok:       int,   // 1 iff at least one offer matched
     offer_id: str,   // chosen offer id (first matching, after claim-lock filter)
+    dph:      str,   // dollars-per-hour for the chosen offer (vast `dph_total`); "" if absent (M3 cost-cap rate source)
     message:  str
 }
 
@@ -51,7 +52,7 @@ fn _vast_fail_list(msg: str) -> VastList {
 }
 
 fn _vast_fail_offer(msg: str) -> VastOffer {
-    return VastOffer { ok: 0, offer_id: "", message: msg }
+    return VastOffer { ok: 0, offer_id: "", dph: "", message: msg }
 }
 
 // ── vastai detection ─────────────────────────────────────────────────
@@ -198,6 +199,40 @@ fn _vast_collect_offer_ids(out: str) -> [str] {
     return ids
 }
 
+// _vast_offer_dph — re-walk the `vastai search offers --raw` JSON array and
+// return the `dph_total` (dollars-per-hour) of the element whose `id` matches
+// `offer_id`, as a plain string ("0.412"). "" if the offer / field is absent.
+// Re-parses the same `out` the id-collector saw so the chosen offer's rate is
+// captured at rent time (the M3 cost-cap accrual rate source). dph_total is
+// vast.ai's all-in hourly figure (GPU + storage + bandwidth).
+fn _vast_offer_dph(out: str, offer_id: str) -> str {
+    if len(offer_id) == 0 {
+        return ""
+    }
+    let parsed = json_parse(_vast_strip_to_json(out))
+    if type_of(parsed) != "array" {
+        return ""
+    }
+    let mut i = 0
+    while i < len(parsed) {
+        let id_v = json_object_get(parsed[i], "id")
+        let id_s = to_string(id_v)
+        if id_s == offer_id {
+            let dph_v = json_object_get(parsed[i], "dph_total")
+            let t = type_of(dph_v)
+            if t == "float" || t == "int" {
+                return to_string(dph_v)
+            }
+            if t == "string" {
+                return to_string(dph_v)
+            }
+            return ""
+        }
+        i = i + 1
+    }
+    return ""
+}
+
 // vast_search_offers — `vastai search offers '<query>' -n --raw`.
 // When `verified_only` is 1 (the default for `hexa cloud rent`), the
 // campaign-proven `rentable=true verified=true reliability>=0.95`
@@ -224,11 +259,13 @@ fn vast_search_offers(query: str, verified_only: int) -> VastOffer {
     // archive/patches/vast-offer-machine-claim-lock-for-parallel-tracks.md).
     let claimed = vast_offer_claim(ids)
     if claimed.ok == 1 {
-        return claimed
+        // Stamp the chosen offer's hourly rate (M3 cost-cap source) — the
+        // claim path doesn't see the raw JSON, so re-parse it here.
+        return VastOffer { ok: 1, offer_id: claimed.offer_id, dph: _vast_offer_dph(out, claimed.offer_id), message: claimed.message }
     }
     // Lock unavailable / all claimed → fall back to the first id so a
     // single-track caller (no siblings) is never blocked.
-    return VastOffer { ok: 1, offer_id: ids[0], message: "search offers — " + to_string(len(ids)) + " offers (unlocked pick)" }
+    return VastOffer { ok: 1, offer_id: ids[0], dph: _vast_offer_dph(out, ids[0]), message: "search offers — " + to_string(len(ids)) + " offers (unlocked pick)" }
 }
 
 // ── parallel-track claim lock ─────────────────────────────────────────
@@ -396,7 +433,7 @@ fn vast_offer_claim(candidate_ids: [str]) -> VastOffer {
     rebuilt = rebuilt + chosen + "\t" + to_string(now) + "\n"
     write_file(_vast_claim_file(), rebuilt)
     _vast_lock_release()
-    return VastOffer { ok: 1, offer_id: chosen, message: "claimed offer " + chosen + " (lock held)" }
+    return VastOffer { ok: 1, offer_id: chosen, dph: "", message: "claimed offer " + chosen + " (lock held)" }
 }
 
 // vast_offer_release — drop a claim once the instance is created (or the

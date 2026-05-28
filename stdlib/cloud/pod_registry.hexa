@@ -593,7 +593,8 @@ struct PodRecord {
     status:                str,    // "RENTING" | "READY" | "STOPPING" | "GONE"
     ttl_sec:               int,    // -1 = unset (M2 will populate)
     max_cost_usd:          str,    // "" = unset (M3; str to preserve "5.00")
-    cumulative_cost_usd:   str     // "0.0" default (M3 will accrue)
+    cumulative_cost_usd:   str,    // "0.0" default (M3; derived-on-read in the sweep, not persisted)
+    cost_per_hr_usd:       str     // "" = unset (M3 rate source; provider dph captured at rent)
 }
 
 // _m5_numfield — sniff the bare (unquoted) value of "key":value out of a
@@ -690,7 +691,8 @@ fn _m5_parse_records(body: str) -> [PodRecord] {
                 status: _reg_field(rec, "status"),
                 ttl_sec: ttl,
                 max_cost_usd: _reg_field(rec, "max_cost_usd"),
-                cumulative_cost_usd: cum
+                cumulative_cost_usd: cum,
+                cost_per_hr_usd: _reg_field(rec, "cost_per_hr_usd")
             })
         }
         k = k + 1
@@ -728,6 +730,10 @@ fn _m5_emit_record(r: PodRecord) -> str {
     if len(r.max_cost_usd) > 0 {
         max_cost_field = "\"" + _reg_jstr(r.max_cost_usd) + "\""
     }
+    let mut rate_field = "null"
+    if len(r.cost_per_hr_usd) > 0 {
+        rate_field = "\"" + _reg_jstr(r.cost_per_hr_usd) + "\""
+    }
     return "{\"id\":\"" + _reg_jstr(r.id) + "\","
         + "\"provider\":\"" + _reg_jstr(r.provider) + "\","
         + "\"created_at\":\"" + _reg_jstr(r.created_at) + "\","
@@ -737,7 +743,8 @@ fn _m5_emit_record(r: PodRecord) -> str {
         + "\"status\":\"" + _reg_jstr(r.status) + "\","
         + "\"ttl_sec\":" + ttl_field + ","
         + "\"max_cost_usd\":" + max_cost_field + ","
-        + "\"cumulative_cost_usd\":" + cost_field + "}"
+        + "\"cumulative_cost_usd\":" + cost_field + ","
+        + "\"cost_per_hr_usd\":" + rate_field + "}"
 }
 
 // _m5_write_atomic — write the records to ~/.hx/cloud/active-pods.json
@@ -803,7 +810,8 @@ fn pod_registry_add(pod_id: str, provider: str, ssh_host: str, ssh_port: str, st
             status: status,
             ttl_sec: prev.ttl_sec,
             max_cost_usd: prev.max_cost_usd,
-            cumulative_cost_usd: prev.cumulative_cost_usd
+            cumulative_cost_usd: prev.cumulative_cost_usd,
+            cost_per_hr_usd: prev.cost_per_hr_usd
         }
     } else {
         records.push(PodRecord {
@@ -816,7 +824,8 @@ fn pod_registry_add(pod_id: str, provider: str, ssh_host: str, ssh_port: str, st
             status: status,
             ttl_sec: -1,
             max_cost_usd: "",
-            cumulative_cost_usd: "0.0"
+            cumulative_cost_usd: "0.0",
+            cost_per_hr_usd: ""
         })
     }
     _m5_write_atomic(records)
@@ -845,17 +854,22 @@ fn pod_registry_update_status(pod_id: str, status: str) -> int {
         status: status,
         ttl_sec: prev.ttl_sec,
         max_cost_usd: prev.max_cost_usd,
-        cumulative_cost_usd: prev.cumulative_cost_usd
+        cumulative_cost_usd: prev.cumulative_cost_usd,
+        cost_per_hr_usd: prev.cost_per_hr_usd
     }
     _m5_write_atomic(records)
     return 1
 }
 
-// pod_registry_set_limits — populate the M2 (ttl_sec) + M3 (max_cost_usd)
-// guard fields on a tracked pod. `ttl_sec < 0` / `max_cost_usd == ""` leave
-// that limit UNSET (no enforcement). Called by `cloud rent --ttl`/`--max-cost-usd`
-// after the pod reaches READY. Returns 1 on a successful set, 0 if absent.
-fn pod_registry_set_limits(pod_id: str, ttl_sec: int, max_cost_usd: str) -> int {
+// pod_registry_set_limits — populate the M2 (ttl_sec) + M3 (max_cost_usd +
+// cost_per_hr_usd) guard fields on a tracked pod. `ttl_sec < 0` /
+// `max_cost_usd == ""` leave that limit UNSET (no enforcement). The hourly
+// rate (`cost_per_hr_usd`, captured from the provider offer at rent time) is
+// the M3 cost-cap accrual source — the sweep derives cumulative cost on read
+// from `(now − created_at) × rate`. "" leaves no rate (cost-cap inert; TTL
+// still works). Called by `cloud rent` after the pod reaches READY. Returns
+// 1 on a successful set, 0 if absent.
+fn pod_registry_set_limits(pod_id: str, ttl_sec: int, max_cost_usd: str, cost_per_hr_usd: str) -> int {
     if len(pod_id) == 0 {
         return 0
     }
@@ -875,7 +889,8 @@ fn pod_registry_set_limits(pod_id: str, ttl_sec: int, max_cost_usd: str) -> int 
         status: prev.status,
         ttl_sec: ttl_sec,
         max_cost_usd: max_cost_usd,
-        cumulative_cost_usd: prev.cumulative_cost_usd
+        cumulative_cost_usd: prev.cumulative_cost_usd,
+        cost_per_hr_usd: cost_per_hr_usd
     }
     _m5_write_atomic(records)
     return 1
@@ -955,15 +970,33 @@ fn _sweep_confirm_gone(provider: str, pod_id: str) -> int {
     return 0
 }
 
+// _accrued_cents — integer-only cost accrual: an hourly rate (`rate_usd`, e.g.
+// "0.412") billed over `elapsed_sec` → cumulative cost in cents. Float-free:
+// rate_cents = _usd_cents(rate_usd), then cents = rate_cents × elapsed_sec /
+// 3600 (integer division, truncating sub-cent). `elapsed_sec <= 0` or an
+// unparseable / zero rate → 0 (cost-cap stays inert, never false-fires).
+fn _accrued_cents(rate_usd: str, elapsed_sec: int) -> int {
+    if elapsed_sec <= 0 {
+        return 0
+    }
+    let rate_cents = _usd_cents(rate_usd)
+    if rate_cents <= 0 {
+        return 0
+    }
+    return rate_cents * elapsed_sec / 3600
+}
+
 // pod_registry_limit_sweep — M2/M3 enforcement. Scan the registry; for each
 // ALIVE pod that has OPTED IN to a limit (ttl_sec >= 0 or max_cost_usd set)
 // AND BREACHED it, tear the pod down (runpod_terminate / vast_destroy) +
 // remove it. Pods with no limit set (ttl_sec < 0 AND max_cost_usd == "") are
 // NEVER touched — the opt-in invariant. dry_run == 1 → report only, no kill.
 //   M2 (TTL): elapsed = now − created_at ≥ ttl_sec.
-//   M3 (cost): cumulative_cost_usd ≥ max_cost_usd (cents compare; accrual of
-//              cumulative_cost_usd from the provider rate is the M3 follow-up —
-//              the cap ENFORCEMENT is wired here, ready once accrual lands).
+//   M3 (cost): cumulative ≥ max_cost_usd (cents compare). Cumulative is DERIVED
+//              ON READ from the captured hourly rate: cumulative = cost_per_hr_usd
+//              × (now − created_at). No per-sweep write (idempotent). A pod with
+//              max_cost_usd set but no captured rate (cost_per_hr_usd == "") is
+//              cost-inert — its TTL guard still applies.
 // `api_key` is consumed only by runpod_terminate when an actual kill fires.
 // Returns the number of pods torn down (0 under dry_run).
 fn pod_registry_limit_sweep(api_key: str, dry_run: int) -> int {
@@ -990,11 +1023,29 @@ fn pod_registry_limit_sweep(api_key: str, dry_run: int) -> int {
                     }
                 }
                 if has_cost && !breach {
-                    let cum_c = _usd_cents(r.cumulative_cost_usd)
+                    // Derived-on-read accrual: cumulative = rate × elapsed.
+                    // Idempotent (no per-sweep write); needs both a captured
+                    // hourly rate AND a parseable created_at. Missing either →
+                    // skip (cost-cap inert, never false-fires). The TTL guard
+                    // still protects rate-less pods.
                     let cap_c = _usd_cents(r.max_cost_usd)
-                    if cap_c > 0 && cum_c >= cap_c {
-                        breach = true
-                        why = "cost $" + r.cumulative_cost_usd + " ≥ $" + r.max_cost_usd
+                    if cap_c > 0 && len(r.cost_per_hr_usd) > 0 && now > 0 {
+                        let born_c = _reg_iso_to_sec(r.created_at)
+                        if born_c > 0 {
+                            let elapsed_c = now - born_c
+                            let cum_c = _accrued_cents(r.cost_per_hr_usd, elapsed_c)
+                            if cum_c >= cap_c {
+                                breach = true
+                                let cum_dollars = cum_c / 100
+                                let cum_rem = cum_c - cum_dollars * 100
+                                let mut cum_str = str(cum_dollars) + "."
+                                if cum_rem < 10 {
+                                    cum_str = cum_str + "0"
+                                }
+                                cum_str = cum_str + str(cum_rem)
+                                why = "cost ~$" + cum_str + " (" + r.cost_per_hr_usd + "/hr × " + str(elapsed_c) + "s) ≥ $" + r.max_cost_usd
+                            }
+                        }
                     }
                 }
                 if breach {
