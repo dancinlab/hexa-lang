@@ -1,6 +1,6 @@
 # INBOX — log
 
-## 2026-05-28 — ✅ RESOLVED #PR_PLACEHOLDER · `atlas register --from-verify` 가 3-operand 함수 mis-parse (verified 3-op 닫힌형 fold 불가)
+## 2026-05-28 — ✅ RESOLVED #1901 · `atlas register --from-verify` 가 3-operand 함수 mis-parse (verified 3-op 닫힌형 fold 불가)
 
 > **RESOLVED 2026-05-28** (`fix/atlas-from-verify-arity`): root cause 는 "3-op 분기 부재"가 아니라 — value-bearing 파서는 이미 임의 arity 를 지원했으나(verify_cli `cmd_expr_float` has5/has6/has7 → argc≤4, atlas `_adapt_verify_generic` delegate), 마지막 토큰을 항상 claimed `<v>` 로 삼는 구조상 `allen_dynes_tc … 0.10 227.501` 가 3-op verify 로 정상 호출되지만 **claimed 227.501 이 literature-ROUNDED → 엔진값 227.501133986 과 |Δ|=1.3e-4 > strict ε=1e-9 → 🔴**. 기존 arity auto-route 가 **🟠 에서만** compute 재시도 → 이 🔴 은 재시도 안 됨 → false falsification. **Fix**: auto-route 를 🔴 에도 발화 — `_is_rounding_of` 게이트(엔진 compute 값이 claimed `<v>` 의 half-up 십진 band 안이어야 함; band 밖 deterministic 불일치는 🔴 유지 → g34 falsification-laundering 금지). arity table 은 verify_cli 가 SSOT(g20 — atlas 측 arity 분기 0). 테스트: 3-op allen_dynes_tc 227.501 → 🟢 fold ✓ · 1-op/2-op 회귀 무손상 · 500.0 wrong-claim → 🔴 refuse ✓. **demiurge YH₁₀ verdict(🟢 allen_dynes_tc)가 atlas 에 fold 가능해짐.**
 >
