@@ -755,8 +755,9 @@ fn _do_build(repo_root: string) {
             // getuid (geteuid/getegid/getgid/getppid). 16-byte body, no errno,
             // no reloc — getuid macho wrap; only SYS# byte + symbol name change.
             println("[selfemit] F3 Path A · wave 2 — 4 class-C 0-arg svc-traps: geteuid/getegid/getgid/getppid (getuid template extension)")
-            let leaves = ["memset", "memcmp", "memcpy", "memmove", "strcmp", "strncmp", "strchr", "strrchr", "strcpy", "strncpy", "strcat", "strlen", "getpid", "close", "atoi", "munmap", "strdup", "getuid", "strndup", "fcntl", "ioctl", "select", "lseek", "read", "write", "poll", "waitpid", "mmap", "dup2", "mkdir", "kill", "fstat", "stat", "free", "geteuid", "getegid", "getgid", "getppid"]
-            let upper  = ["MEMSET", "MEMCMP", "MEMCPY", "MEMMOVE", "STRCMP", "STRNCMP", "STRCHR", "STRRCHR", "STRCPY", "STRNCPY", "STRCAT", "STRLEN", "GETPID", "CLOSE", "ATOI", "MUNMAP", "STRDUP", "GETUID", "STRNDUP", "FCNTL", "IOCTL", "SELECT", "LSEEK", "READ", "WRITE", "POLL", "WAITPID", "MMAP", "DUP2", "MKDIR", "KILL", "FSTAT", "STAT", "FREE", "GETEUID", "GETEGID", "GETGID", "GETPPID"]
+            println("[selfemit] F3 Path A · wave 3 — 5 class-C 1-arg svc-traps: chdir/unlink/rmdir (NEW ptr-arg template) + fsync/dup (close int-arg clones)")
+            let leaves = ["memset", "memcmp", "memcpy", "memmove", "strcmp", "strncmp", "strchr", "strrchr", "strcpy", "strncpy", "strcat", "strlen", "getpid", "close", "atoi", "munmap", "strdup", "getuid", "strndup", "fcntl", "ioctl", "select", "lseek", "read", "write", "poll", "waitpid", "mmap", "dup2", "mkdir", "kill", "fstat", "stat", "free", "geteuid", "getegid", "getgid", "getppid", "chdir", "unlink", "rmdir", "fsync", "dup"]
+            let upper  = ["MEMSET", "MEMCMP", "MEMCPY", "MEMMOVE", "STRCMP", "STRNCMP", "STRCHR", "STRRCHR", "STRCPY", "STRNCPY", "STRCAT", "STRLEN", "GETPID", "CLOSE", "ATOI", "MUNMAP", "STRDUP", "GETUID", "STRNDUP", "FCNTL", "IOCTL", "SELECT", "LSEEK", "READ", "WRITE", "POLL", "WAITPID", "MMAP", "DUP2", "MKDIR", "KILL", "FSTAT", "STAT", "FREE", "GETEUID", "GETEGID", "GETGID", "GETPPID", "CHDIR", "UNLINK", "RMDIR", "FSYNC", "DUP"]
             let mut li = 0
             while li < len(leaves) {
                 let n = leaves[li]
