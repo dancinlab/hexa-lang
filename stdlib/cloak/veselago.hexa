@@ -1,0 +1,220 @@
+#!hexa strict
+// ============================================================================
+// stdlib/cloak/veselago.hexa
+//   Veselago 1968 negative-index composition primitive — closed-form n = ±√(εμ).
+//
+// Surface (pure functions):
+//   fn veselago_n_eff(eps_re, mu_re)         → n_eff  [dimless, sign-aware]
+//   fn veselago_left_handed(eps_re, mu_re)   → bool   (true iff ε<0 AND μ<0)
+//
+// Formula (Veselago, V. G. (1968) Sov. Phys. Usp. 10, 509 · "The electro-
+// dynamics of substances with simultaneously negative values of ε and μ"):
+//
+//     n_eff = +√(ε · μ)   if  ε > 0  AND  μ > 0   (normal medium)
+//     n_eff = −√(|ε|·|μ|) if  ε < 0  AND  μ < 0   (Veselago left-handed)
+//     n_eff = 0           if  sign(ε) ≠ sign(μ)   (evanescent / opaque)
+//     n_eff = 0           if  ε ≈ 0  OR  μ ≈ 0    (degenerate)
+//
+// The negative branch (ε<0 AND μ<0) is the CLOAK demand: light bends backward
+// at the interface (Snell's law with n<0), enabling phase-cancellation cloak
+// shells. Combining a Drude ε<0 medium (RTSC side, plasma response) with a
+// Lorentz μ<0 medium (SRR side, magnetic resonance) yields the left-handed
+// composite.
+//
+// Honest scope (commons g3):
+//   · Real ε and μ only — full complex Veselago index requires a sibling fn
+//     handling (ε_re + i·ε_im) · (μ_re + i·μ_im) branch cuts.
+//   · Sign-aware double-negative branch is the canonical Veselago 1968 choice;
+//     other branch conventions (causality-Kramers-Kronig) coincide on the real
+//     axis when ε<0 AND μ<0 both hold simultaneously.
+//   · Mixed-sign returns 0 — physically the wave is evanescent (purely
+//     imaginary n); 0 is a convention for the propagating real n surface.
+//
+// Self-test (this file): 7 closed-form FALSIFIERS
+//   F1: vacuum (ε=1, μ=1) → n = 1.0
+//   F2: glass (ε=2.25, μ=1) → n = 1.5
+//   F3: VESELAGO CLOAK CASE (ε=−2, μ=−3) → n = −√6 ≈ −2.449... (negative!)
+//   F4: evanescent (ε=−1, μ=+1) → n = 0
+//   F5: evanescent (ε=+1, μ=−1) → n = 0
+//   F6: scale invariance veselago_n_eff(λ²ε, μ) = λ · veselago_n_eff(ε, μ)
+//   F7: predicate truth table (4-way coverage) — left_handed = (ε<0 ∧ μ<0)
+//
+// Run:
+//     hexa run stdlib/cloak/veselago.hexa
+//
+// @no-lock-needed
+
+use "self/runtime/math_pure"
+
+let VERSION = "1.0.0"
+
+// ─── check harness ──────────────────────────────────────────────────────
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+fn abs_f(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn rel_err(a: float, b: float) -> float {
+    let d = abs_f(a - b)
+    let abs_b = abs_f(b)
+    if abs_b < 1.0e-30 { return d }
+    return d / abs_b
+}
+
+// ─── primitive: Veselago sign-aware n_eff = ±√(ε · μ) ───────────────────
+
+fn veselago_n_eff(eps_re: float, mu_re: float) -> float {
+    // degenerate / near-zero branch
+    if abs_f(eps_re) < 1.0e-30 { return 0.0 }
+    if abs_f(mu_re)  < 1.0e-30 { return 0.0 }
+    // double-positive — normal medium, +√(εμ)
+    if eps_re > 0.0 && mu_re > 0.0 {
+        return sqrt_pure(eps_re * mu_re)
+    }
+    // double-negative — Veselago left-handed, −√(|ε|·|μ|)
+    if eps_re < 0.0 && mu_re < 0.0 {
+        return -sqrt_pure((-eps_re) * (-mu_re))
+    }
+    // sign-mixed — evanescent, no propagating real n
+    return 0.0
+}
+
+// ─── primitive: left-handed predicate ───────────────────────────────────
+
+fn veselago_left_handed(eps_re: float, mu_re: float) -> bool {
+    if eps_re < 0.0 && mu_re < 0.0 { return true }
+    return false
+}
+
+// ─── analytical limit sanity checks (self-test) ─────────────────────────
+
+// F1 — vacuum (ε=1, μ=1) → n = 1.0
+fn check_vacuum() {
+    let n = veselago_n_eff(1.0, 1.0)
+    _check(rel_err(n, 1.0) < 1.0e-15,
+        "F1 vacuum  (ε=1, μ=1)  → n = 1.0",
+        "n=" + str(n) + "  target=1.0  rel_err=" + str(rel_err(n, 1.0)))
+}
+
+// F2 — glass (ε=2.25, μ=1) → n = 1.5
+fn check_glass() {
+    let n = veselago_n_eff(2.25, 1.0)
+    _check(rel_err(n, 1.5) < 1.0e-15,
+        "F2 glass  (ε=2.25, μ=1)  → n = 1.5",
+        "n=" + str(n) + "  target=1.5  rel_err=" + str(rel_err(n, 1.5)))
+}
+
+// F3 — VESELAGO CLOAK CASE (ε=−2, μ=−3) → n = −√6 ≈ −2.4494897...
+//   The signature negative-index demand: n_eff MUST be < 0 when both ε,μ < 0.
+fn check_veselago_cloak() {
+    let n = veselago_n_eff(-2.0, -3.0)
+    let target = -sqrt_pure(6.0)
+    let ok = (n < 0.0) && (rel_err(n, target) < 1.0e-15)
+    _check(ok,
+        "F3 VESELAGO CLOAK case  (ε=−2, μ=−3)  → n = −√6  (NEGATIVE branch)",
+        "n=" + str(n) + "  target=" + str(target) +
+        "  n<0=" + str(n < 0.0) + "  rel_err=" + str(rel_err(n, target)))
+}
+
+// F4 — evanescent (ε=−1, μ=+1) → n = 0 (sign-mixed, no propagation)
+fn check_evanescent_neg_eps() {
+    let n = veselago_n_eff(-1.0, 1.0)
+    _check(abs_f(n) < 1.0e-15,
+        "F4 evanescent  (ε=−1, μ=+1)  → n = 0  (sign-mixed opaque)",
+        "n=" + str(n))
+}
+
+// F5 — evanescent (ε=+1, μ=−1) → n = 0 (sign-mixed, no propagation)
+fn check_evanescent_neg_mu() {
+    let n = veselago_n_eff(1.0, -1.0)
+    _check(abs_f(n) < 1.0e-15,
+        "F5 evanescent  (ε=+1, μ=−1)  → n = 0  (sign-mixed opaque)",
+        "n=" + str(n))
+}
+
+// F6 — scale invariance: veselago_n_eff(λ²·ε, μ) = λ · veselago_n_eff(ε, μ)
+//   For normal medium (both positive). Sign branch preserved.
+fn check_scale_invariance() {
+    let eps: float = 2.0
+    let mu:  float = 3.5
+    let lam: float = 7.0
+    let n1 = veselago_n_eff(eps, mu)
+    let n2 = veselago_n_eff(lam * lam * eps, mu)
+    let ok = rel_err(n2, lam * n1) < 1.0e-14
+    _check(ok,
+        "F6 scale invariance  veselago_n_eff(λ²·ε, μ) = λ · veselago_n_eff(ε, μ)",
+        "n(ε,μ)=" + str(n1) + "  n(λ²ε,μ)=" + str(n2) +
+        "  λ·n=" + str(lam * n1))
+}
+
+// F7 — predicate truth table (4-way coverage)
+fn check_predicate_truth_table() {
+    let p_nn = veselago_left_handed(-2.0, -3.0)    // ε<0, μ<0 → true
+    let p_pp = veselago_left_handed( 2.0,  3.0)    // ε>0, μ>0 → false
+    let p_np = veselago_left_handed(-1.0,  1.0)    // ε<0, μ>0 → false
+    let p_pn = veselago_left_handed( 1.0, -1.0)    // ε>0, μ<0 → false
+    let ok = p_nn && !p_pp && !p_np && !p_pn
+    _check(ok,
+        "F7 predicate truth table  left_handed = (ε<0 ∧ μ<0)  4-way coverage",
+        "(−,−)=" + str(p_nn) + "  (+,+)=" + str(p_pp) +
+        "  (−,+)=" + str(p_np) + "  (+,−)=" + str(p_pn))
+}
+
+// ─── falsifiers ─────────────────────────────────────────────────────────
+
+let FALSIFIERS = [
+    "F1 vacuum break — n(1,1) ≠ 1 → DEMOTE +√(εμ) positive branch",
+    "F2 glass break — n(2.25,1) ≠ 1.5 → DEMOTE product-under-root formula",
+    "F3 Veselago break — n(−2,−3) ≥ 0 OR |n| ≠ √6 → DEMOTE negative branch (CLOAK breaks)",
+    "F4 evanescent break — n(−1,+1) ≠ 0 → DEMOTE sign-mixed opaque convention",
+    "F5 evanescent break — n(+1,−1) ≠ 0 → DEMOTE sign-mixed opaque convention",
+    "F6 scale break — n(λ²ε, μ) ≠ λ·n(ε,μ) → DEMOTE dimensional √ scaling",
+    "F7 predicate break — left_handed truth table off → DEMOTE ε<0 ∧ μ<0 boundary",
+]
+
+// ─── main ───────────────────────────────────────────────────────────────
+
+fn main() {
+    println("========================================================================")
+    println("  stdlib/cloak — veselago_n_eff + veselago_left_handed")
+    println("========================================================================")
+    println("  n_eff = +√(ε·μ)        if ε>0 AND μ>0   (normal medium)")
+    println("  n_eff = −√(|ε|·|μ|)    if ε<0 AND μ<0   (Veselago left-handed)")
+    println("  n_eff = 0              if sign(ε) ≠ sign(μ)  (evanescent)")
+    println("                                          (Veselago 1968)")
+    println("")
+
+    println("  Analytical limit sanity checks (7 FALSIFIERS):")
+    check_vacuum()
+    check_glass()
+    check_veselago_cloak()
+    check_evanescent_neg_eps()
+    check_evanescent_neg_mu()
+    check_scale_invariance()
+    check_predicate_truth_table()
+
+    println("")
+    println("  FALSIFIERS (" + str(FALSIFIERS.len()) + "):")
+    for f in FALSIFIERS { println("    ✗ " + f) }
+
+    println("========================================================================")
+    let pass_n = RUN - FAIL
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("  veselago_n_eff / veselago_left_handed self-test FAILED.")
+        println("__HEXA_STDLIB_CLOAK_VESELAGO__ FAIL")
+        exit(1)
+    }
+    println("  CLOAK primitive (Veselago n = ±√(εμ) sign-aware): PASS")
+    println("__HEXA_STDLIB_CLOAK_VESELAGO__ PASS")
+    exit(0)
+}
