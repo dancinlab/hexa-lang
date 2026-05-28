@@ -1,0 +1,41 @@
+device: NVIDIA GeForce RTX 5070 sm_120  SMs=48
+shape S1x64x64 (degenerate)                     M=1 K=64 N=64
+  A.fp32-sgemm        :     0.0031 ms     0.003 TFLOPS
+  B.tf32-gemmex (TC)  :     0.0033 ms     0.002 TFLOPS  ratio=0.937x vs A
+  C.bf16-gemmex (TC)  :     0.0031 ms     0.003 TFLOPS  ratio=0.998x vs A
+shape S8x64x64 (B=8 attn-proj)                  M=8 K=64 N=64
+  A.fp32-sgemm        :     0.0031 ms     0.021 TFLOPS
+  B.tf32-gemmex (TC)  :     0.0062 ms     0.011 TFLOPS  ratio=0.510x vs A
+  C.bf16-gemmex (TC)  :     0.0035 ms     0.019 TFLOPS  ratio=0.895x vs A
+shape S32x64x64 (B=32 attn-proj)                M=32 K=64 N=64
+  A.fp32-sgemm        :     0.0062 ms     0.043 TFLOPS
+  B.tf32-gemmex (TC)  :     0.0111 ms     0.024 TFLOPS  ratio=0.557x vs A
+  C.bf16-gemmex (TC)  :     0.0035 ms     0.075 TFLOPS  ratio=1.764x vs A
+shape T4xdxd (Q/K/V/O proj fwd)                 M=4 K=64 N=64
+  A.fp32-sgemm        :     0.0031 ms     0.011 TFLOPS
+  B.tf32-gemmex (TC)  :     0.0058 ms     0.006 TFLOPS  ratio=0.533x vs A
+  C.bf16-gemmex (TC)  :     0.0034 ms     0.010 TFLOPS  ratio=0.914x vs A
+shape T4xdxh (MLP up fwd)                       M=4 K=64 N=256
+  A.fp32-sgemm        :     0.0031 ms     0.043 TFLOPS
+  B.tf32-gemmex (TC)  :     0.0062 ms     0.021 TFLOPS  ratio=0.496x vs A
+  C.bf16-gemmex (TC)  :     0.0033 ms     0.039 TFLOPS  ratio=0.913x vs A
+shape T4xhxd (MLP down fwd)                     M=4 K=256 N=64
+  A.fp32-sgemm        :     0.0041 ms     0.032 TFLOPS
+  B.tf32-gemmex (TC)  :     0.0059 ms     0.022 TFLOPS  ratio=0.698x vs A
+  C.bf16-gemmex (TC)  :     0.0041 ms     0.032 TFLOPS  ratio=1.001x vs A
+shape VxdxN1 (unembed GEMV fwd) HOT             M=151643 K=64 N=1
+  A.fp32-sgemm        :     0.0328 ms     0.592 TFLOPS
+  B.tf32-gemmex (TC)  :     0.0328 ms     0.592 TFLOPS  ratio=1.000x vs A
+  C.bf16-gemmex (TC)  :     0.0287 ms     0.676 TFLOPS  ratio=1.142x vs A
+shape VxN1xd (unembed outer bwd)                M=151643 K=1 N=64
+  A.fp32-sgemm        :     0.0251 ms     0.772 TFLOPS
+  B.tf32-gemmex (TC)  :     0.0257 ms     0.755 TFLOPS  ratio=0.977x vs A
+  C.bf16-gemmex (TC)  :     0.0266 ms     0.729 TFLOPS  ratio=0.944x vs A
+shape VxdxN64 (sweep extreme)                   M=151643 K=64 N=64
+  A.fp32-sgemm        :     0.1321 ms     9.404 TFLOPS
+  B.tf32-gemmex (TC)  :     0.1299 ms     9.561 TFLOPS  ratio=1.017x vs A
+  C.bf16-gemmex (TC)  :     0.0930 ms    13.351 TFLOPS  ratio=1.420x vs A
+shape dxVxd (transpose-ish sweep)               M=64 K=151643 N=64
+  A.fp32-sgemm        :     0.1460 ms     8.512 TFLOPS
+  B.tf32-gemmex (TC)  :     0.1405 ms     8.841 TFLOPS  ratio=1.039x vs A
+  C.bf16-gemmex (TC)  :     0.0492 ms    25.250 TFLOPS  ratio=2.967x vs A

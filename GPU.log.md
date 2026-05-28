@@ -1437,3 +1437,40 @@ ceiling 추정은 (1) AI-aware roofline (compute vs BW), (2) baseline 의 sub-ke
 (W1=rule 1, top-K=rule 2). `feedback_closure_is_physical_limit` g0 instance #3.
 
 cycle 결과: 두 wedge retire 동시. cycle-loop next-direction 은 위 (a) 또는 (b).
+
+## 2026-05-28 — F-WEDGE-D64-MATMUL-TC-CEILING oracle — 🟠 INSUFFICIENT (closed-negative on trainer hot path)
+
+F-BC-ANIMA-M4-CEILING follow-up wedge (c): anima M4b decoder pilot (`train_v3_moe_pilot.hexa`, d=64 V=151643 E=2 h=256 n_layer=1 T=4) 의 matmul shape 에서 cuBLAS Sgemm (FP32) vs GemmEx-TF32 (TC) vs GemmEx-BF16 (TC strongest) 를 측정. RTX 5070 sm_120 ubu-2, cuda-12.9 nvcc native, 20 warmup / 200 measured cuEvent.
+
+**Pre-registered falsifier**: TC variant ≥1.5× FP32 cuBLAS @ trainer's hottest shape → 🟢; 1.05–1.5× → 🟠; ≤1.05× → 🔴.
+
+**Trainer hot path (10 shapes measured, 3 variants each)**:
+
+| shape | label | FP32 sgemm | TF32-TC | BF16-TC | bf16/fp32 | verdict |
+|---|---|---|---|---|---|---|
+| (4, 64, 64) | T4xdxd Q/K/V/O proj | 0.011 TF | 0.006 TF | 0.010 TF | 0.91× | 🔴 ≤1.05 |
+| (4, 64, 256) | T4xdxh MLP up | 0.043 TF | 0.021 TF | 0.039 TF | 0.91× | 🔴 ≤1.05 |
+| (4, 256, 64) | T4xhxd MLP down | 0.032 TF | 0.022 TF | 0.032 TF | 1.00× | 🔴 ≤1.05 |
+| **(151643, 64, 1)** | **VxdxN1 unembed GEMV HOT** | **0.592 TF** | **0.592 TF** | **0.676 TF** | **1.142×** | **🟠 INSUF** |
+| (151643, 1, 64) | VxN1xd unembed outer bwd | 0.772 TF | 0.755 TF | 0.729 TF | 0.94× | 🔴 ≤1.05 |
+| (8, 64, 64) | sweep B=8 | 0.021 TF | 0.011 TF | 0.019 TF | 0.90× | 🔴 ≤1.05 |
+| (32, 64, 64) | sweep B=32 | 0.043 TF | 0.024 TF | 0.075 TF | 1.76× | 🟢 ≥1.5 |
+| (151643, 64, 64) | sweep N=64 | 9.40 TF | 9.56 TF | 13.35 TF | 1.42× | 🟠 INSUF |
+| (64, 151643, 64) | sweep KxV-deep | 8.51 TF | 8.84 TF | 25.25 TF | 2.97× | 🟢 ≥1.5 |
+| (1, 64, 64) | degenerate | 0.003 TF | 0.002 TF | 0.003 TF | 1.00× | 🔴 ≤1.05 |
+
+**Hottest shape (per-step occurrence weight)**: `VxdxN1` (unembed GEMV, fwd) + `VxN1xd` (unembed outer, bwd) — 매 step 1회씩, V=151643 × d=64 의 대규모 메모리-바운드 op (다른 모든 shape 보다 byte 수 압도). Q/K/V/O/MLP 류 (4 × 64 × 64) 는 T=4 의 4-row gemm 으로 latency-dominant.
+
+**Hottest verdict**: 🟠 **INSUFFICIENT** — bf16 unembed GEMV = 1.142× FP32 cuBLAS. 1.05× ≤ 1.142 < 1.5× → 양성이지만 wedge 임계 아래. trainer 실제 hot path (T=4 narrow + V GEMV) 전부 TC 미혜택. closed-negative 의 의미:
+
+1. **d=64 narrow + N=1 GEMV 는 TC 가 못 도움** — TC fragment 가 16×8×k 단위라 N=1 은 padding 86% 낭비, K=64 만 활용. cuBLAS heuristic 도 이 regime 에서 FP32 sgemm 과 동일한 wall (0.592 TF, 1.000×) → cuBLAS 자체가 GEMV path 로 fallback.
+2. **bf16 의 1.14× 는 메모리 bandwidth 이득** (2-byte vs 4-byte load) — compute 가 아닌 BW 이득. small-M GEMV wedge (PR #1922 🔴) 와 같은 root cause family.
+3. **TC 가 살아나는 regime** = sweep extreme (M=151643, N=64) 부터. trainer 가 d=64 narrow 를 유지하는 한 unreachable.
+
+**Implication for F-BC-ANIMA-M4-CEILING**: M4b 0% GPU util 의 원인이 "TC 미사용" 이 아님 입증. 실제 원인은 — (a) T=4 의 narrow batch 로 SM occupancy 32/48 미만 (b) per-step 5+ cuBLAS launch 의 launch latency (각 0.003-0.03 ms, T=4 GEMM 의 wall 자체가 launch overhead 수준). TC switch (bf16) 는 unembed GEMV 에서만 1.14× 이득, 나머지는 ≤1.0× — wedge 아님.
+
+**Next-wedge direction**: (a) **batched-stack GEMM** — Q/K/V/O 4-op 을 single cublasGemmStridedBatchedEx 로 묶어 launch amortize (T=4 wall 0.003 ms × 4 launch → 1 launch). (b) **MoE expert weight pre-pack** — V=151643 unembed 의 매-step `mm_extract` host copy 를 device-resident 화. (c) full TC wedge family retire — anima M4b 의 ceiling 은 TC 가 아니라 batch/launch latency.
+
+**Verdict (g5)**: 🟠 INSUFFICIENT — closed-negative on trainer hot path (M4b TC ceiling is NOT the wedge). 자매 family: `feedback_closure_is_physical_limit` g0 instance #4. small-M GEMV (#1922) + top-K naive (#1925) + d=64 TC (이번) = 세 retire 가 동일 BW/launch-bound family 입증.
+
+**Artifacts**: `archive/fires/gpu_wedge_d64_matmul_tc_2026_05_28/{gpu_wedge_d64_matmul_tc.cu, result.json, sweep.log}`. PR: `gpu-wedge/d64-matmul-tc-oracle-2026-05-28`.

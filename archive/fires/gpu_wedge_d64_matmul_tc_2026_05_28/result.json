@@ -1,0 +1,66 @@
+{
+  "device": "NVIDIA GeForce RTX 5070",
+  "sm": "120",
+  "results": [
+    {
+      "shape": "S1x64x64 (degenerate)", "M": 1, "K": 64, "N": 64,
+      "fp32_sgemm_ms":     0.003134, "fp32_sgemm_tflops":     0.0026,
+      "tf32_gemmex_ms":    0.003344, "tf32_gemmex_tflops":    0.0024, "tf32_over_fp32": 0.9374,
+      "bf16_gemmex_ms":    0.003142, "bf16_gemmex_tflops":    0.0026, "bf16_over_fp32": 0.9975
+    }    ,
+    {
+      "shape": "S8x64x64 (B=8 attn-proj)", "M": 8, "K": 64, "N": 64,
+      "fp32_sgemm_ms":     0.003140, "fp32_sgemm_tflops":     0.0209,
+      "tf32_gemmex_ms":    0.006156, "tf32_gemmex_tflops":    0.0106, "tf32_over_fp32": 0.5101,
+      "bf16_gemmex_ms":    0.003509, "bf16_gemmex_tflops":    0.0187, "bf16_over_fp32": 0.8950
+    }    ,
+    {
+      "shape": "S32x64x64 (B=32 attn-proj)", "M": 32, "K": 64, "N": 64,
+      "fp32_sgemm_ms":     0.006164, "fp32_sgemm_tflops":     0.0425,
+      "tf32_gemmex_ms":    0.011070, "tf32_gemmex_tflops":    0.0237, "tf32_over_fp32": 0.5568,
+      "bf16_gemmex_ms":    0.003494, "bf16_gemmex_tflops":    0.0750, "bf16_over_fp32": 1.7643
+    }    ,
+    {
+      "shape": "T4xdxd (Q/K/V/O proj fwd)", "M": 4, "K": 64, "N": 64,
+      "fp32_sgemm_ms":     0.003090, "fp32_sgemm_tflops":     0.0106,
+      "tf32_gemmex_ms":    0.005792, "tf32_gemmex_tflops":    0.0057, "tf32_over_fp32": 0.5334,
+      "bf16_gemmex_ms":    0.003381, "bf16_gemmex_tflops":    0.0097, "bf16_over_fp32": 0.9139
+    }    ,
+    {
+      "shape": "T4xdxh (MLP up fwd)", "M": 4, "K": 64, "N": 256,
+      "fp32_sgemm_ms":     0.003057, "fp32_sgemm_tflops":     0.0429,
+      "tf32_gemmex_ms":    0.006170, "tf32_gemmex_tflops":    0.0212, "tf32_over_fp32": 0.4956,
+      "bf16_gemmex_ms":    0.003348, "bf16_gemmex_tflops":    0.0392, "bf16_over_fp32": 0.9133
+    }    ,
+    {
+      "shape": "T4xhxd (MLP down fwd)", "M": 4, "K": 256, "N": 64,
+      "fp32_sgemm_ms":     0.004089, "fp32_sgemm_tflops":     0.0321,
+      "tf32_gemmex_ms":    0.005854, "tf32_gemmex_tflops":    0.0224, "tf32_over_fp32": 0.6984,
+      "bf16_gemmex_ms":    0.004084, "bf16_gemmex_tflops":    0.0321, "bf16_over_fp32": 1.0013
+    }    ,
+    {
+      "shape": "VxdxN1 (unembed GEMV fwd) HOT", "M": 151643, "K": 64, "N": 1,
+      "fp32_sgemm_ms":     0.032784, "fp32_sgemm_tflops":     0.5921,
+      "tf32_gemmex_ms":    0.032779, "tf32_gemmex_tflops":    0.5922, "tf32_over_fp32": 1.0002,
+      "bf16_gemmex_ms":    0.028702, "bf16_gemmex_tflops":    0.6763, "bf16_over_fp32": 1.1422
+    }    ,
+    {
+      "shape": "VxN1xd (unembed outer bwd)", "M": 151643, "K": 1, "N": 64,
+      "fp32_sgemm_ms":     0.025140, "fp32_sgemm_tflops":     0.7721,
+      "tf32_gemmex_ms":    0.025725, "tf32_gemmex_tflops":    0.7545, "tf32_over_fp32": 0.9772,
+      "bf16_gemmex_ms":    0.026640, "bf16_gemmex_tflops":    0.7286, "bf16_over_fp32": 0.9437
+    }    ,
+    {
+      "shape": "VxdxN64 (sweep extreme)", "M": 151643, "K": 64, "N": 64,
+      "fp32_sgemm_ms":     0.132101, "fp32_sgemm_tflops":     9.4039,
+      "tf32_gemmex_ms":    0.129936, "tf32_gemmex_tflops":    9.5605, "tf32_over_fp32": 1.0167,
+      "bf16_gemmex_ms":    0.093047, "bf16_gemmex_tflops":    13.3509, "bf16_over_fp32": 1.4197
+    }    ,
+    {
+      "shape": "dxVxd (transpose-ish sweep)", "M": 64, "K": 151643, "N": 64,
+      "fp32_sgemm_ms":     0.145950, "fp32_sgemm_tflops":     8.5115,
+      "tf32_gemmex_ms":    0.140513, "tf32_gemmex_tflops":    8.8409, "tf32_over_fp32": 1.0387,
+      "bf16_gemmex_ms":    0.049198, "bf16_gemmex_tflops":    25.2503, "bf16_over_fp32": 2.9666
+    }
+  ]
+}
