@@ -19,8 +19,9 @@ fn _cloud_help() {
     println("hexa cloud — structured-argv remote dispatch (cycle A)")
     println("")
     println("usage:")
-    println("  cloud rent <provider> [--gpu T] [--image IMG] [--disk GiB] [--owner TAG] [--query Q]")
+    println("  cloud rent <provider> [--gpu T] [--image IMG] [--disk GiB] [--owner TAG] [--query Q] [--max-wait-sec N]")
     println("                                                         provision a GPU pod (vast|runpod), wait ssh-ready, print host:port + id (alias: up)")
+    println("                                                         --max-wait-sec N (default 180): bounded SSH-readiness gate; on timeout the rent auto-tears the billing pod down + exits 2 with verbatim verdict (M5 sigil: SSH-never-ready leak guard)")
     println("  cloud down <id> [--provider P]                         destroy a pod + forget it from the registry (alias: destroy)")
     println("  cloud list [--provider P]                              list live pods (vast + runpod, or one via --provider)")
     println("  cloud status [--provider P]                            alias of list")
@@ -698,6 +699,10 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
     let disk = _cli_atoi(_flag_val(av, start, "--disk", "30"))
     let owner = _flag_val(av, start, "--owner", "(hexa-cloud rent)")
     let query = _flag_val(av, start, "--query", "")
+    // M1 — bounded SSH-readiness gate. Default 180s; 0/negative = legacy
+    // unbounded (opt-in). Caps the rent so a ghost-RUNNING pod whose ssh
+    // transport never comes up (exit 255 forever) can't bleed billing.
+    let max_wait_sec = _cli_atoi(_flag_val(av, start, "--max-wait-sec", "180"))
     let mut disk_gb = disk
     if disk_gb <= 0 {
         disk_gb = 30
@@ -723,9 +728,39 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
     pod_registry_record(inst.instance_id, owner, "running")
     vast_offer_release(offer.offer_id)
     println("[cloud] rent vast: created instance " + inst.instance_id + " (owner=" + owner + ", registered)")
-    // 30 tries × 20s = 600s — vast community boot is 30s best / 5-10min worst.
-    let ssh = vast_wait_ssh(inst.instance_id, 30, 20)
+    // M1 — bounded SSH-readiness gate. Sleep cadence is 10s (vast boot is
+    // not sub-10s anyway); tries = max(1, max_wait_sec / 10). 0 / negative
+    // max_wait_sec restores legacy 30 × 20s = 600s.
+    let sleep_each = 10
+    let mut tries = 30
+    let mut bounded = false
+    if max_wait_sec > 0 {
+        bounded = true
+        tries = max_wait_sec / sleep_each
+        if tries < 1 {
+            tries = 1
+        }
+    } else {
+        tries = 30
+    }
+    let mut wait_cadence = sleep_each
+    if bounded == false {
+        wait_cadence = 20
+    }
+    let ssh = vast_wait_ssh(inst.instance_id, tries, wait_cadence)
     if ssh.ok == 0 {
+        if bounded {
+            // Auto-teardown — the M1 contract. A billing pod whose ssh
+            // never came up is a 100% loss; destroy it rather than leak.
+            let v = vast_destroy(inst.instance_id)
+            if v.ok == 1 {
+                let _ = pod_registry_forget(inst.instance_id)
+                println("[cloud] rent: SSH never ready within " + str(max_wait_sec) + "s, pod " + inst.instance_id + " destroyed")
+            } else {
+                println("[cloud] rent: SSH never ready within " + str(max_wait_sec) + "s, pod " + inst.instance_id + " ALIVE — manual destroy required (vast_destroy: " + v.message + ")")
+            }
+            return 2
+        }
         println("[cloud] rent vast: " + ssh.message)
         println("[cloud] instance " + inst.instance_id + " is created + tracked; ssh not yet ready — re-check with: cloud list / vastai show instance " + inst.instance_id)
         return 1
@@ -764,6 +799,10 @@ fn _cloud_rent_runpod(av: [str], start: int) -> int {
     let gpu = _flag_val(av, start, "--gpu", "NVIDIA A100 80GB PCIe")
     let image = _flag_val(av, start, "--image", "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04")
     let owner = _flag_val(av, start, "--owner", "(hexa-cloud rent)")
+    // M1 — bounded SSH-readiness gate (default 180s). The 2026-05-28
+    // RunPod H100 SXM dump (pod RUNNING + ssh exit 255 forever) is the
+    // motivating incident; without a cap a dead-ssh pod bleeds billing.
+    let max_wait_sec = _cli_atoi(_flag_val(av, start, "--max-wait-sec", "180"))
     let pod = runpod_create(api_key, gpu, image, pubkey, owner)
     if pod.ok == 0 {
         println("[cloud] rent runpod: " + pod.message)
@@ -771,9 +810,34 @@ fn _cloud_rent_runpod(av: [str], start: int) -> int {
     }
     pod_registry_record(pod.pod_id, owner, "running")
     println("[cloud] rent runpod: created pod " + pod.pod_id + " (owner=" + owner + ", registered)")
-    // 40 tries × 15s = 600s.
-    let port = runpod_wait_ssh(api_key, pod.pod_id, 40, 15)
+    // M1 — bounded path. sleep_each=10s; tries = max(1, max_wait_sec/10).
+    // 0 / negative max_wait_sec restores legacy 40 × 15s = 600s unbounded.
+    let sleep_each = 10
+    let mut tries = 40
+    let mut bounded = false
+    let mut wait_cadence = 15
+    if max_wait_sec > 0 {
+        bounded = true
+        tries = max_wait_sec / sleep_each
+        if tries < 1 {
+            tries = 1
+        }
+        wait_cadence = sleep_each
+    }
+    let port = runpod_wait_ssh(api_key, pod.pod_id, tries, wait_cadence)
     if port.ok == 0 {
+        if bounded {
+            // Auto-teardown — M1 contract. Idempotent: forget the registry
+            // row only on a confirmed terminate; print ALIVE hint otherwise.
+            let term_ok = runpod_terminate(api_key, pod.pod_id)
+            if term_ok == 1 {
+                let _ = pod_registry_forget(pod.pod_id)
+                println("[cloud] rent: SSH never ready within " + str(max_wait_sec) + "s, pod " + pod.pod_id + " destroyed")
+            } else {
+                println("[cloud] rent: SSH never ready within " + str(max_wait_sec) + "s, pod " + pod.pod_id + " ALIVE — manual destroy required (runpod_terminate FAILED)")
+            }
+            return 2
+        }
         println("[cloud] rent runpod: " + port.message)
         println("[cloud] pod " + pod.pod_id + " is created + tracked; ssh not yet ready — re-check with: cloud list")
         return 1
@@ -957,7 +1021,7 @@ fn main() {
         return
     }
     if sub == "version" || sub == "--version" || sub == "-v" {
-        println("hexa cloud 0.4.0 — nohup/fire `--register [<jid>]` auto-writes ./pods.json + poll-DEAD auto-flips matching PENDING→FAIL (ghost-pod L2-auto · ghost-pod 3-layer 종결) · [0.3.4: `resolve` alias · 0.3.3: vast-key ssh-config autoinject · 0.3.2: --identity · 0.3.1: registry guard · 0.3.0: dft-run]")
+        println("hexa cloud 0.4.1 — M1 `rent --max-wait-sec N` bounded SSH-readiness gate (default 180s) · timeout → auto-teardown + exit 2 + verbatim verdict (no more ssh-never-ready billing leak) · [0.4.0: nohup/fire --register + ghost-pod L2-auto · 0.3.4: resolve alias · 0.3.3: vast-key ssh-config autoinject · 0.3.2: --identity · 0.3.1: registry guard · 0.3.0: dft-run]")
         return
     }
     if sub == "rent" || sub == "up" {
@@ -966,7 +1030,7 @@ fn main() {
         // lifecycle fns + pod_registry. $-INCURRING — the only verb that
         // creates a billing instance.
         if si + 1 >= len(av) {
-            println("[cloud] rent: missing <provider> — usage: cloud rent <vast|runpod> [--gpu T] [--image IMG] [--disk GiB] [--owner TAG] [--query Q]")
+            println("[cloud] rent: missing <provider> — usage: cloud rent <vast|runpod> [--gpu T] [--image IMG] [--disk GiB] [--owner TAG] [--query Q] [--max-wait-sec N]")
             exit(2)
         }
         let provider = av[si + 1]

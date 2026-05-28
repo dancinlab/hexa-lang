@@ -1,0 +1,129 @@
+// @ci_gate — pure · network-free · deterministic
+// stdlib/cloud/rent_max_wait_test.hexa — guard for `cloud rent
+// --max-wait-sec <N>` bounded SSH-readiness gate (CLOUD M1 · cloud 0.4.1).
+// 2026-05-28 RunPod H100 incident: pod RUNNING but ssh exit 255 forever;
+// agent polled 7+ min then died → orphan billing pod. M1 caps wait,
+// auto-tears on timeout, prints verbatim verdict + exits 2.
+//
+// LLM-free, network-free. cloud_cli.hexa carries main(), so the helpers
+// cannot be `use`d here without side effects — mirror them verbatim (the
+// established stdlib-CLI parser-test pattern, see early_life_check_test.hexa).
+//
+// Run:  hexa run stdlib/cloud/rent_max_wait_test.hexa
+// PASS: exits 0, prints "rent_max_wait_test PASS".
+
+// ── mirror of cloud_cli.hexa:_cli_atoi ────────────────────────────────────
+fn _cli_atoi(s: str) -> int {
+    let mut i = 0
+    let mut v = 0
+    let n = len(s)
+    while i < n {
+        let cc = char_code(s.substring(i, i + 1))
+        if cc >= 48 && cc <= 57 {
+            v = v * 10 + (cc - 48)
+        }
+        i = i + 1
+    }
+    return v
+}
+
+// ── mirror of cloud_cli.hexa:_flag_val (scan av[start..] for --key VALUE) ─
+fn _flag_val(av: [str], start: int, key: str, dflt: str) -> str {
+    let mut i = start
+    while i < len(av) {
+        if av[i] == key {
+            if i + 1 < len(av) {
+                return av[i + 1]
+            }
+            return dflt
+        }
+        i = i + 1
+    }
+    return dflt
+}
+
+// ── mirror of the M1 cadence-derivation arithmetic embedded in
+// _cloud_rent_vast / _cloud_rent_runpod. Returns the (tries, cadence_sec,
+// bounded?) triple as a 3-int pack so the test can assert each branch.
+// bounded encoded as 1/0 so the return type stays a plain [int].
+fn _bounded_plan(max_wait_sec: int, legacy_tries: int, legacy_cadence: int) -> [int] {
+    let sleep_each = 10
+    let mut tries = legacy_tries
+    let mut bounded = 0
+    let mut cadence = legacy_cadence
+    if max_wait_sec > 0 {
+        bounded = 1
+        tries = max_wait_sec / sleep_each
+        if tries < 1 {
+            tries = 1
+        }
+        cadence = sleep_each
+    }
+    return [tries, cadence, bounded]
+}
+
+fn _fail(case: str, got: int, want: int) {
+    println("FAIL " + case + ": got " + str(got) + ", want " + str(want))
+    exit(1)
+}
+
+fn _check(case: str, got: int, want: int) {
+    if got != want {
+        _fail(case, got, want)
+    }
+    println(case + " PASS — " + str(got))
+}
+
+fn main() {
+    // ── §1 — flag parser pulls the right value out of the rent argv window
+    let av1 = ["--gpu", "H100", "--max-wait-sec", "120", "--owner", "smoke"]
+    _check("flag-present",
+        _cli_atoi(_flag_val(av1, 0, "--max-wait-sec", "180")), 120)
+
+    // absent → default 180s (the M1 contract default)
+    let av2 = ["--gpu", "H100", "--owner", "smoke"]
+    _check("flag-absent-default",
+        _cli_atoi(_flag_val(av2, 0, "--max-wait-sec", "180")), 180)
+
+    // explicit 0 → opt-in to legacy unbounded (parsed as 0)
+    let av3 = ["--max-wait-sec", "0"]
+    _check("flag-opt-out",
+        _cli_atoi(_flag_val(av3, 0, "--max-wait-sec", "180")), 0)
+
+    // ── §2 — bounded plan arithmetic (the core M1 derivation)
+    // default 180s → 18 tries × 10s cadence, bounded=1
+    let p180 = _bounded_plan(180, 30, 20)
+    _check("plan-180-tries",   p180[0], 18)
+    _check("plan-180-cadence", p180[1], 10)
+    _check("plan-180-bounded", p180[2], 1)
+
+    // very short 5s → must still attempt at least 1 try (floor(5/10)=0 → 1)
+    let p5 = _bounded_plan(5, 30, 20)
+    _check("plan-5-tries",     p5[0], 1)
+    _check("plan-5-cadence",   p5[1], 10)
+    _check("plan-5-bounded",   p5[2], 1)
+
+    // 300s → 30 tries × 10s cadence
+    let p300 = _bounded_plan(300, 40, 15)
+    _check("plan-300-tries",   p300[0], 30)
+    _check("plan-300-cadence", p300[1], 10)
+    _check("plan-300-bounded", p300[2], 1)
+
+    // 0 → legacy passthrough (caller's legacy_tries / legacy_cadence)
+    let p0v = _bounded_plan(0, 30, 20)
+    _check("plan-0-vast-tries",   p0v[0], 30)
+    _check("plan-0-vast-cadence", p0v[1], 20)
+    _check("plan-0-vast-bounded", p0v[2], 0)
+
+    let p0r = _bounded_plan(0, 40, 15)
+    _check("plan-0-runpod-tries",   p0r[0], 40)
+    _check("plan-0-runpod-cadence", p0r[1], 15)
+    _check("plan-0-runpod-bounded", p0r[2], 0)
+
+    // negative → treated as unbounded (the `> 0` guard)
+    let pneg = _bounded_plan(-1, 30, 20)
+    _check("plan-neg-bounded", pneg[2], 0)
+
+    println("rent_max_wait_test PASS — 13/13 cases")
+    exit(0)
+}
