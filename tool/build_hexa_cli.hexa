@@ -416,6 +416,7 @@ fn _do_build(repo_root: string) {
         } else {
             println("[selfemit] F3 Path A · B9.6a-7 — 12 reloc-free leaf primitives → _hxlcl_* native overrides")
             println("[selfemit] F3 Path A · B9.6-C1 — class-C syscall ABI: getpid (raw svc #0x80) → _hxlcl_getpid")
+            println("[selfemit] F3 Path A · B9.6-C2 — class-C syscall WITH arg+errno: close (svc + carry-flag) → _hxlcl_close")
             // From here on the driver/module_loader runtime.c is compiled with
             // the guard ON so the hxlcl_* bodies become extern (resolved below).
             cflags = cflags + " -DHEXA_RT_SELFEMIT"
@@ -428,8 +429,17 @@ fn _do_build(repo_root: string) {
             // reloc/struct-arg), differing only in that its body is a syscall
             // trap rather than a register/memory op. This opens the ~190-fn
             // layer-② hxlcl_* svc-wrapper subtrack (#1812 audit).
-            let leaves = ["memset", "memcmp", "memcpy", "memmove", "strcmp", "strncmp", "strchr", "strrchr", "strcpy", "strncpy", "strcat", "strlen", "getpid"]
-            let upper  = ["MEMSET", "MEMCMP", "MEMCPY", "MEMMOVE", "STRCMP", "STRNCMP", "STRCHR", "STRRCHR", "STRCPY", "STRNCPY", "STRCAT", "STRLEN", "GETPID"]
+            //
+            // B9.6-C2 appends `close` — the FIRST class-C with a syscall ARG
+            // (fd) + the Darwin CARRY-FLAG error path + an errno store. Its .o
+            // is NOT reloc-free: it carries 2 records (PAGE21/PAGEOFF12) against
+            // an UNDEFINED-external `_hxlcl_errno`, which ld64 binds to runtime.c's
+            // `hxlcl_errno` (non-static under the guard). At the recipe level it
+            // is still a single emit driver writing one .o via one env var, so it
+            // rides the SAME loop; only the .o internals differ. This is the
+            // multi-arg + _cf (errno) template the remaining ~190 wrappers scale on.
+            let leaves = ["memset", "memcmp", "memcpy", "memmove", "strcmp", "strncmp", "strchr", "strrchr", "strcpy", "strncpy", "strcat", "strlen", "getpid", "close"]
+            let upper  = ["MEMSET", "MEMCMP", "MEMCPY", "MEMMOVE", "STRCMP", "STRNCMP", "STRCHR", "STRRCHR", "STRCPY", "STRNCPY", "STRCAT", "STRLEN", "GETPID", "CLOSE"]
             let mut li = 0
             while li < len(leaves) {
                 let n = leaves[li]

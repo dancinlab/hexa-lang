@@ -72,7 +72,19 @@ static void hxlcl_capture_environ(int argc, char **argv, char **envp) {
 #define stderr ((FILE *)(uintptr_t)3)
 #define stdout ((FILE *)(uintptr_t)2)
 #define stdin  ((FILE *)(uintptr_t)1)
+// B9.6-C2 (F3 Path A) — `hxlcl_errno` is the hexa-native errno cell. Under
+// HEXA_RT_SELFEMIT it must be EXTERNALLY LINKABLE: the self-emitted
+// `hxlcl_close` (emit_hxlcl_close_o.hexa) stores the errno via a PAGE21/
+// PAGEOFF12 reloc against an UNDEFINED-external `_hxlcl_errno` symbol, which
+// ld64 binds to THIS cell. A `static` definition would be invisible to that
+// cross-object reloc (ld64: "undefined symbol _hxlcl_errno"). Default build
+// keeps it `static` (file-local, 0-libc-extern invariant preserved). The
+// symbol name is `hxlcl_errno`, NOT libc `errno`, so no libc clash.
+#ifdef HEXA_RT_SELFEMIT
+int hxlcl_errno = 0;
+#else
 static int hxlcl_errno = 0;
+#endif
 #undef errno
 #define errno hxlcl_errno
 // Cycle 63 forward decls — syscall wrappers used by earlier helpers
@@ -80,7 +92,17 @@ static int hxlcl_errno = 0;
 // syscall block at line ~825 below.
 static long hxlcl_read(int fd, void *buf, unsigned long n);
 static long hxlcl_write(int fd, const void *buf, unsigned long n);
+// B9.6-C2 (F3 Path A) — under HEXA_RT_SELFEMIT hxlcl_close is `extern`
+// (resolved by emit_hxlcl_close_o.hexa's .o). As with getpid (#1860) the
+// forward decl must flip to external linkage too, else the `static` decl
+// masks the self-emit symbol (-Wundefined-internal). The self-emit close
+// stores errno via a PC-relative `adrp/str` to the `hxlcl_errno` SYMBOL, so
+// that symbol must be externally linkable under the guard (see below).
+#ifdef HEXA_RT_SELFEMIT
+extern int  hxlcl_close(int fd);
+#else
 static int  hxlcl_close(int fd);
+#endif
 // B9.6-C1 (F3 Path A) — under HEXA_RT_SELFEMIT hxlcl_getpid is `extern`
 // (resolved by emit_hxlcl_getpid_o.hexa's .o); the forward decl must match
 // that external linkage, else the `static` here wins and masks the self-emit
@@ -1252,7 +1274,34 @@ static long __attribute__((noinline)) hxlcl_read(int fd, void *buf, unsigned lon
 // code's s4-lowered mkdir. carry-set -> -1 + errno.
 static int __attribute__((noinline)) hxlcl_mkdir(const char *path, int mode) { return (int)_hxlcl_syscall2_cf(HXLCL_SYS_MKDIR, (long)path, (long)mode); }
 static long __attribute__((noinline)) hxlcl_write(int fd, const void *buf, unsigned long n) { return _hxlcl_syscall3_cf(HXLCL_SYS_WRITE, (long)fd, (long)buf, (long)n); }
+// F3 ACTIVATION RUNBOOK · Path A — B9.6-C2 class-C syscall WITH arg + errno.
+//
+// hxlcl_close is the SECOND class-C svc emitter (after #1860 getpid) and the
+// FIRST carrying a syscall ARGUMENT (fd) + the Darwin CARRY-FLAG error path +
+// an errno store. SYS_CLOSE(6), 1 arg; on carry the positive errno is written
+// to `hxlcl_errno` (a fixed DATA SYMBOL reached PC-relatively via adrp/str —
+// REQUIRED, since the close svc clobbers the arg registers on the error path)
+// and -1 returned.
+//
+// DEFAULT build (HEXA_RT_SELFEMIT undefined): the file-local `static` _cf
+// svc-trap body below is used — UNCHANGED behavior, 0-libc-extern invariant
+// preserved (close is issued via inline svc asm, never a libc symbol).
+//
+// SELF-EMIT build (HEXA_RT_SELFEMIT defined): becomes an `extern` declaration
+// (no body); the strong external `_hxlcl_close` symbol comes from the
+// hexa-emitted Mach-O .o (test/native_build/emit_hxlcl_close_o.hexa →
+// rt_close's 36-byte sxtw / mov w16,#6 / svc / cset / cbz / adrp,errno / str /
+// mov x0,#-1 / ret), ahead-linked. The .o declares `_hxlcl_errno` as an
+// UNDEFINED external; ld64 binds it to the `hxlcl_errno` cell (made non-static
+// under the same guard at the top of this file), so a close failure sets the
+// SAME errno every other runtime syscall reads. Verified byte-identical to
+// `as -arch arm64` AND JIT-exec-correct: close(valid)→0/errno untouched,
+// close(bad)→-1/errno=EBADF(9) (see the emit driver's §HONESTY).
+#ifdef HEXA_RT_SELFEMIT
+extern int hxlcl_close(int fd);
+#else
 static int __attribute__((noinline)) hxlcl_close(int fd) { return (int)_hxlcl_syscall1_cf(HXLCL_SYS_CLOSE, (long)fd); }
+#endif
 // F3 ACTIVATION RUNBOOK · Path A — B9.6-C1 class-C syscall-ABI self-emit slot.
 //
 // hxlcl_getpid is the FIRST class-C (raw `svc #0x80` syscall wrapper) primitive
