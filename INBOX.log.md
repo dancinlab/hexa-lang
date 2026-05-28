@@ -26,7 +26,8 @@
 
 데모더지 RTSC DFT 캠페인 (11 pod/pool 잡 · vast + ubu pool) 운영 중 `hexa cloud` 의 terminal/transport 판정에서 3 gap 노출. 모두 verbatim evidence 보유.
 
-### gap 1 — `cloud poll` / `cloud tail --until` 가 exit-code/STOP 미인지 → walltime-stop 을 SUCCESS 로 오판
+### gap 1 — `cloud poll` / `cloud tail --until` 가 exit-code/STOP 미인지 → walltime-stop 을 SUCCESS 로 오판 (✅ RESOLVED 2026-05-28 · #1889)
+> **✅ RESOLVED #1889** — `cloud tail` default (`--until` 부재) 가 이제 **failure-first 3-tier** terminal 분류기를 빌드. 원격 `sed` 가 CRASH→TIMEOUT→DONE 순서로 스캔(타임아웃/크래시 줄이 deceptive `JOB DONE` 앞/같은 위치에 있으므로 failure 가 항상 승리) + GNU sed `q <code>` 로 verdict 를 ssh/`exec_replace` 가 상속: **exit 0 = DONE · 3 = TIMEOUT-RESUMABLE (`Maximum CPU time exceeded`/`max_seconds`) · 4 = CRASHED (`STOP [1-9]`/`Error in routine`/segfault/OOM)**. `STOP 0` (clean) 는 CRASH 에서 제외. 패턴은 g20 테이블(`_CLOUD_TAIL_{CRASH,TIMEOUT,DONE}_RE`). explicit `--until <ere>` = legacy single block · `--until ''` = follow forever. **caller-side workaround 제거 가능** — watcher/`/system` 가 `grep "JOB DONE"+STOP 모순` 휴리스틱 대신 tail exit code(3=resume·4=crashed·0=success) 로 직접 분기. test 9→18/18. (`cloud poll` 는 pid-liveness 만 보므로 exit code 미해당 — false-DONE 차단은 tail 분류로 충분.)
 > **증상** (Mg₂IrH₆ phonon, ubu-2): ph.x 가 22.5h WALL 돌다 `max_seconds=80000` 도달 → QE 가 `Maximum CPU time exceeded` 후 **"JOB DONE."** 줄 출력 (QE routine 정상종료 print) + 직후 `STOP 1` ×6 + `prterun ... exit code 1`. dyn1=0 bytes (q-point 1 미완 · rep#9 중단). 즉 **timed-out-resumable** 인데 `JOB DONE` 마커만 보면 SUCCESS.
 > **현 동작**: `cloud tail --until` default regex = `JOB DONE|OOMKilled|Traceback|crash` → "JOB DONE" 매칭 → exit 0 (clean end) 보고. 실제론 비정상 종료 + 재개 필요.
 > **recommend**: terminal taxonomy 3분류 —
