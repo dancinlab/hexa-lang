@@ -2,6 +2,14 @@
 
 Append-only history sister of `CLOUD.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-29 — M-list 실제 상태 정정 (M1/M4/M5/M6/M7 기구현 · M10 ✅ · M8/M9 PR #1970)
+
+- [x] CLOUD.md 체크박스 stale 정정 — 도메인 신설 시 all-`[ ]` 였으나 origin/main 코드 스캔 결과 **M1·M4·M5·M6·M7 이미 구현됨** 확인: M1=`--max-wait-sec` SSH-gate · M4=`_cloud_rm` canonical (down/destroy alias) · M5=`pod_registry.hexa` `_m5_*` (`~/.hx/cloud/active-pods.json`) · M6=`reap` verb · M7=`must_have_api_key`.
+- [x] M10 ✅ 완료 — sidecar commons 0.13.0 (commit 2bba720): `_pods_snapshot()` 를 M5 글로벌 registry `~/.hx/cloud/active-pods.json` 로 전환 (cwd-independent · cost-bearing · `<id>[<provider>,<status>]`+`$<cost>`) + `_providers_snapshot()` 신설. smoke 통과 (pool+pods+providers 3 snapshot). pods-route `--register` 는 per-project ./pods.json 작업뷰로 별 축 유지.
+- [ ] M8/M9 🟡 PR #1970 (draft · CI build verify 대기) — `providers_catalog.hexa` + `cloud providers [list|fit|recommend]`. hexat codegen 통과 · full AOT link 는 CI 확정. `~/.hx/cloud/providers.json` seed = demiurge PROVIDERS.json (27 providers · 4-tier).
+- [ ] M2/M3 ⏳ 미구현 — TTL deadman + cost-cap watchdog. active-pods.json 필드(ttl_sec·max_cost_usd·cumulative_cost_usd) 준비됨 · watchdog 종료 로직 정확성(올바른 pod·시점)은 live-pod 검증 필요 (blast-radius: 오종료) → 별도 세션 + pod 비용 승인.
+- [ ] M11 ⏳ M8(#1970) 머지 후 — 글로벌 providers.json canonical 화 선행.
+
 ## 2026-05-29 — M8-M11 추가 (INBOX 글로벌 SSOT 트랙 흡수)
 
 - [x] M8-M11 milestone 4개를 CLOUD.md 에 추가 — sidecar INBOX.log.md 2026-05-29 entry ("pods.json + PROVIDERS.json 글로벌 SSOT 통합 디자인 트랙") 의 (a)~(e) 구현 제안을 도메인 milestone 으로 흡수. 두 트랙 (CLOUD 안전망 M1-M7 + INBOX 자원/manifest SSOT) 이 상호보완이라 한 도메인 SSOT 로 합침 (DOMAIN.md = canonical).
