@@ -1,0 +1,234 @@
+#!hexa strict
+// ============================================================================
+// stdlib/srr/lc_resonance.hexa
+//   Split-Ring Resonator (SRR) Lorentz μ(ω) primitive — closed-form trio.
+//
+// Surface (pure functions):
+//   fn lc_resonance(L_H, C_F)               → ω₀ [rad/s]   (Pendry 1999)
+//   fn srr_filling_factor(r_m, a_m)         → F  [dimless] (Pendry 1999)
+//   fn lorentz_mu_re(F, w, w0, gamma)       → Re{μ(ω)}     (Lorentz form)
+//
+// Formulas (Pendry, J. B. et al. (1999) IEEE TMTT 47, 2075 · "Magnetism from
+// Conductors and Enhanced Nonlinear Phenomena"):
+//
+//     ω₀ = 1 / √(L · C)                                  (LC resonance)
+//     F  = π · r² / a²                                   (SRR filling factor)
+//
+//                       F · ω² · (ω₀² − ω²)
+//     Re{μ(ω)} = 1 + ───────────────────────────
+//                    (ω₀² − ω²)² + (ω·γ)²
+//
+// Honest scope (commons g3):
+//   · Single-ring single-resonator (no inter-ring magnetic coupling, no
+//     spatial dispersion, no nonlocal effects). Pendry 1999 ideal limit.
+//   · Lossless LC for ω₀ (no resistive loading). Loss via γ enters only in μ.
+//   · μ_real branch only — μ_imag (loss tangent) requires a sibling fn.
+//   · F < 1 strictly (rings cannot exceed unit cell area).
+//
+// Self-test (this file): 7 closed-form FALSIFIERS
+//   F1: LC unit case L=C=1 H·F → ω₀ = 1 rad/s            (trivial sqrt)
+//   F2: LC scale invariance ω₀(λL, λC) = ω₀(L,C)/λ        (dimensional)
+//   F3: filling factor unit case r = a/√π → F = 1         (saturation)
+//   F4: filling factor scale invariance F(λr, λa) = F(r,a)
+//   F5: Lorentz DC limit ω=0 → Re{μ} = 1                  (no resonance @ DC)
+//   F6: Lorentz high-freq limit ω≫ω₀ → Re{μ} → 1 − F      (Pendry sub-λ μ-supp.)
+//   F7: Lorentz μ<0 branch exists for ω slightly > ω₀     (CLOAK demand)
+//
+// Run:
+//     hexa run stdlib/srr/lc_resonance.hexa
+//
+// @no-lock-needed
+
+use "self/runtime/math_pure"
+
+let VERSION = "1.0.0"
+
+// ─── check harness ──────────────────────────────────────────────────────
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+fn abs_f(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn rel_err(a: float, b: float) -> float {
+    let d = abs_f(a - b)
+    let abs_b = abs_f(b)
+    if abs_b < 1.0e-30 { return d }
+    return d / abs_b
+}
+
+// ─── physical constants ─────────────────────────────────────────────────
+
+let PI: float = 3.14159265358979323846
+
+// ─── primitive: LC resonance ω₀ = 1/√(L·C) ──────────────────────────────
+
+fn lc_resonance(l_h: float, c_f: float) -> float {
+    let prod = l_h * c_f
+    if prod <= 0.0 { return 0.0 }
+    return 1.0 / sqrt_pure(prod)
+}
+
+// ─── primitive: SRR filling factor F = π·r²/a² ──────────────────────────
+
+fn srr_filling_factor(r_m: float, a_m: float) -> float {
+    if a_m <= 0.0 { return 0.0 }
+    return PI * r_m * r_m / (a_m * a_m)
+}
+
+// ─── primitive: Lorentz μ_real(ω) ───────────────────────────────────────
+//
+//                       F · ω² · (ω₀² − ω²)
+//     Re{μ(ω)} = 1 + ───────────────────────────
+//                    (ω₀² − ω²)² + (ω·γ)²
+fn lorentz_mu_re(f_dim: float, w: float,
+                 w0: float, gamma: float) -> float {
+    let w2  = w * w
+    let w02 = w0 * w0
+    let dw  = w02 - w2
+    let denom = dw * dw + (w * gamma) * (w * gamma)
+    if denom < 1.0e-300 { return 1.0 }
+    return 1.0 + f_dim * w2 * dw / denom
+}
+
+// ─── analytical limit sanity checks (self-test) ─────────────────────────
+
+// F1 — LC unit case L=C=1 → ω₀ = 1 rad/s
+fn check_lc_unit() {
+    let w0 = lc_resonance(1.0, 1.0)
+    _check(rel_err(w0, 1.0) < 1.0e-15,
+        "F1 LC unit case L=C=1 H·F  → ω₀ = 1 rad/s",
+        "ω₀=" + str(w0) + "  target=1.0  rel_err=" + str(rel_err(w0, 1.0)))
+}
+
+// F2 — LC scale invariance ω₀(λL, λC) = ω₀(L, C) / λ
+fn check_lc_scale() {
+    let l: float = 2.5e-9     // 2.5 nH
+    let c: float = 4.0e-12    // 4 pF
+    let lam: float = 7.0
+    let w0_1 = lc_resonance(l, c)
+    let w0_2 = lc_resonance(lam * l, lam * c)
+    let ok = rel_err(w0_2 * lam, w0_1) < 1.0e-12
+    _check(ok,
+        "F2 LC scale invariance  ω₀(λL, λC) = ω₀(L, C) / λ",
+        "ω₀(L,C)=" + str(w0_1) + "  λ·ω₀(λL,λC)=" + str(lam * w0_2))
+}
+
+// F3 — filling factor unit case r = a/√π → F = 1
+fn check_F_unit() {
+    let a: float = 1.0
+    let r: float = a / sqrt_pure(PI)
+    let f = srr_filling_factor(r, a)
+    _check(rel_err(f, 1.0) < 1.0e-15,
+        "F3 filling factor unit case r = a/√π  → F = 1",
+        "F=" + str(f) + "  target=1.0  rel_err=" + str(rel_err(f, 1.0)))
+}
+
+// F4 — filling factor scale invariance F(λr, λa) = F(r, a)
+fn check_F_scale() {
+    let r: float = 0.3
+    let a: float = 1.0
+    let lam: float = 11.0
+    let f1 = srr_filling_factor(r, a)
+    let f2 = srr_filling_factor(lam * r, lam * a)
+    _check(rel_err(f2, f1) < 1.0e-15,
+        "F4 filling factor scale invariance  F(λr, λa) = F(r, a)",
+        "F(r,a)=" + str(f1) + "  F(λr,λa)=" + str(f2))
+}
+
+// F5 — Lorentz DC limit ω=0 → Re{μ} = 1
+fn check_lorentz_dc() {
+    let mu = lorentz_mu_re(0.5, 0.0, 1.0e9, 1.0e6)
+    _check(rel_err(mu, 1.0) < 1.0e-15,
+        "F5 Lorentz DC limit  ω = 0  → Re{μ} = 1",
+        "μ_re(0)=" + str(mu))
+}
+
+// F6 — Lorentz high-freq limit ω ≫ ω₀ → Re{μ} → 1 − F (Pendry sub-λ μ-suppression)
+//   ω² · (ω₀²−ω²) / [(ω₀²−ω²)² + (ωγ)²]  ──→  −1   as ω → ∞ (γ ≪ ω)
+//   so   Re{μ} → 1 − F   (NOT vacuum 1 — Pendry effective-medium feature).
+fn check_lorentz_highfreq() {
+    let f_dim: float = 0.5
+    let w0:    float = 1.0e9
+    let mu = lorentz_mu_re(f_dim, 1.0e15, w0, 1.0e6)
+    let target = 1.0 - f_dim
+    let ok = abs_f(mu - target) < 1.0e-9
+    _check(ok,
+        "F6 Lorentz high-freq limit  ω ≫ ω₀  → Re{μ} → 1 − F  (Pendry sub-λ μ-supp.)",
+        "μ_re(1e15)=" + str(mu) + "  target=" + str(target) +
+        "  |μ−(1−F)|=" + str(abs_f(mu - target)))
+}
+
+// F7 — Lorentz μ < 0 branch must exist for ω slightly > ω₀
+//   At ω = ω₀, F=0.5, γ small  →  dw = ω₀²−ω² < 0,  so 2nd term < 0;
+//   magnitude can exceed 1 in the narrow window ω₀ < ω < √(ω₀²·(1+F)).
+//   Pick a point clearly inside that window and assert μ_re < 0 — this is
+//   the CLOAK demand: SRR supplies μ_eff < 0 at some ω above resonance.
+fn check_lorentz_mu_neg_branch() {
+    let f_dim: float = 0.5
+    let w0:    float = 1.0e9
+    let gamma: float = 1.0e5            // narrow loss (Q ≈ ω₀/γ = 1e4 ≫ 1)
+    // probe at ω = ω₀ · 1.0001 (just above resonance) — μ_re must be < 0
+    let w = w0 * 1.0001
+    let mu = lorentz_mu_re(f_dim, w, w0, gamma)
+    _check(mu < 0.0,
+        "F7 Lorentz μ<0 branch exists for ω just above ω₀  (CLOAK μ_eff<0 demand)",
+        "ω/ω₀=1.0001  F=0.5  γ/ω₀=1e-4  μ_re=" + str(mu))
+}
+
+// ─── falsifiers ─────────────────────────────────────────────────────────
+
+let FALSIFIERS = [
+    "F1 LC unit break — ω₀(1, 1) ≠ 1 rad/s (within 1e-15) → DEMOTE 1/√(L·C) prefactor",
+    "F2 LC scale break — ω₀(λL, λC) ≠ ω₀(L, C)/λ → DEMOTE dimensional 1/√ scaling",
+    "F3 F unit break — F(a/√π, a) ≠ 1 → DEMOTE π · r² / a² formula",
+    "F4 F scale break — F(λr, λa) ≠ F(r, a) → DEMOTE dimensionless ratio",
+    "F5 Lorentz DC break — μ_re(0) ≠ 1 → DEMOTE 1 + F·ω²·... offset",
+    "F6 Lorentz high-freq break — μ_re(ω → ∞) ≠ 1 − F → DEMOTE Pendry sub-λ μ-suppression",
+    "F7 Lorentz μ<0 break — μ_re(ω slightly > ω₀) ≥ 0 → DEMOTE μ_eff<0 supply (CLOAK demand)",
+]
+
+// ─── main ───────────────────────────────────────────────────────────────
+
+fn main() {
+    println("========================================================================")
+    println("  stdlib/srr — lc_resonance + srr_filling_factor + lorentz_mu_re")
+    println("========================================================================")
+    println("  ω₀  = 1 / √(L · C)                                  (Pendry 1999)")
+    println("  F   = π · r² / a²                                   (Pendry 1999)")
+    println("  μ_re= 1 + F · ω² · (ω₀²−ω²) / [(ω₀²−ω²)² + (ωγ)²]   (Lorentz)")
+    println("")
+
+    println("  Analytical limit sanity checks (7 FALSIFIERS):")
+    check_lc_unit()
+    check_lc_scale()
+    check_F_unit()
+    check_F_scale()
+    check_lorentz_dc()
+    check_lorentz_highfreq()
+    check_lorentz_mu_neg_branch()
+
+    println("")
+    println("  FALSIFIERS (" + str(FALSIFIERS.len()) + "):")
+    for f in FALSIFIERS { println("    ✗ " + f) }
+
+    println("========================================================================")
+    let pass_n = RUN - FAIL
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("  lc_resonance / filling_factor / lorentz_mu_re self-test FAILED.")
+        println("__HEXA_STDLIB_SRR_LC_RESONANCE__ FAIL")
+        exit(1)
+    }
+    println("  SRR primitive trio (LC ω₀ + F + Lorentz μ_re): PASS")
+    println("__HEXA_STDLIB_SRR_LC_RESONANCE__ PASS")
+    exit(0)
+}
