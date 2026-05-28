@@ -1,0 +1,153 @@
+// HEXA Standard Library — deck/gen
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// GENERIC 6-DOMAIN DECK GENERATOR ("빵틀").
+//
+// Eliminates per-domain deck / input hand-authoring. One generic entry
+// point — gen_deck(domain, spec) — dispatches by domain string to a
+// per-domain string-emitter. Adding a domain = ONE dispatch branch +
+// ONE emitter file (g4 generic dispatch · g20 parameterize · g61 SSOT).
+//
+// This is a STRING-EMITTER (deck text → DeckFile records), NOT a compiled
+// binary. It runs via `hexa run`, so it does NOT need the AOT build —
+// pure-hexa string assembly only (sidesteps verify_cli _bessel_j1
+// duplicate-symbol bug, INBOX #2002).
+//
+// Surface (pure functions, no syscall):
+//   pub fn gen_deck(domain: string, spec: DeckSpec) -> [DeckFile]
+//   pub fn deck_spec_new() -> DeckSpec
+//   pub fn spec_set(spec, key, value)           — scalar field
+//   pub fn spec_set_list(spec, key, [values])   — list-valued field
+//   pub fn spec_get(spec, key) -> string        — "" if absent
+//   pub fn spec_get_or(spec, key, default) -> string
+//   pub fn spec_get_list(spec, key) -> [string] — [] if absent
+//   pub fn spec_has(spec, key) -> bool
+//
+// Design — numeric deck values that must reproduce EXACTLY (e.g. QE
+// celldm = 8.5132, press = 100.0, degauss = 0.01) are carried as
+// PRE-FORMATTED STRINGS in the spec. The spec author controls exact
+// rendering; the emitter never round-trips a float through str() for a
+// value that must byte-match a template (str(float) precision is not
+// guaranteed — compiler/PLAN.md Tier-A.3). Only DERIVED integers
+// (nat, ntyp, max_seconds) go through str(int), which is exact.
+
+import "stdlib/deck/rtsc.hexa"
+import "stdlib/deck/nuclear.hexa"
+import "stdlib/deck/material.hexa"
+import "stdlib/deck/chem.hexa"
+import "stdlib/deck/chip.hexa"
+import "stdlib/deck/bio.hexa"
+
+// ── data types ───────────────────────────────────────────────────────
+
+// One emitted deck file: a relative path (under the caller's deck dir)
+// and its full text content. The caller writes these to disk via
+// stdlib/io.write_text — gen_deck stays pure (no syscall).
+pub struct DeckFile {
+    path:     string,
+    content:  string,
+}
+
+// Generic spec carrier. hexa v0.3 has no native map type, so a spec is
+// two parallel arrays for scalar fields (keys ↔ vals) plus two parallel
+// arrays for list-valued fields (list_keys ↔ list_vals). Same parallel-
+// array convention as stdlib/material/composition.hexa.
+pub struct DeckSpec {
+    keys:       [string],
+    vals:       [string],
+    list_keys:  [string],
+    list_vals:  [[string]],
+}
+
+// ── spec constructors / accessors ────────────────────────────────────
+
+pub fn deck_spec_new() -> DeckSpec {
+    return DeckSpec { keys: [], vals: [], list_keys: [], list_vals: [] }
+}
+
+// Set (or overwrite) a scalar field.
+pub fn spec_set(spec: DeckSpec, key: string, value: string) {
+    let mut i = 0
+    while i < len(spec.keys) {
+        if spec.keys[i] == key {
+            spec.vals[i] = value
+            return
+        }
+        i = i + 1
+    }
+    spec.keys.push(key)
+    spec.vals.push(value)
+}
+
+// Set (or overwrite) a list-valued field.
+pub fn spec_set_list(spec: DeckSpec, key: string, values: [string]) {
+    let mut i = 0
+    while i < len(spec.list_keys) {
+        if spec.list_keys[i] == key {
+            spec.list_vals[i] = values
+            return
+        }
+        i = i + 1
+    }
+    spec.list_keys.push(key)
+    spec.list_vals.push(values)
+}
+
+pub fn spec_has(spec: DeckSpec, key: string) -> bool {
+    let mut i = 0
+    while i < len(spec.keys) {
+        if spec.keys[i] == key { return true }
+        i = i + 1
+    }
+    return false
+}
+
+pub fn spec_get(spec: DeckSpec, key: string) -> string {
+    let mut i = 0
+    while i < len(spec.keys) {
+        if spec.keys[i] == key { return spec.vals[i] }
+        i = i + 1
+    }
+    return ""
+}
+
+pub fn spec_get_or(spec: DeckSpec, key: string, default: string) -> string {
+    if spec_has(spec, key) { return spec_get(spec, key) }
+    return default
+}
+
+pub fn spec_get_list(spec: DeckSpec, key: string) -> [string] {
+    let mut i = 0
+    while i < len(spec.list_keys) {
+        if spec.list_keys[i] == key { return spec.list_vals[i] }
+        i = i + 1
+    }
+    let empty: [string] = []
+    return empty
+}
+
+// ── generic dispatch (g4) ────────────────────────────────────────────
+
+// gen_deck(domain, spec) — emit the full deck file-set for `domain`.
+// Returns [] for an unknown domain (caller checks len). Adding a domain
+// is ONE branch here + ONE emitter file (no name hardcoding past this
+// dispatch — g20).
+pub fn gen_deck(domain: string, spec: DeckSpec) -> [DeckFile] {
+    if domain == "rtsc"     { return emit_rtsc(spec) }
+    if domain == "nuclear"  { return emit_nuclear(spec) }
+    if domain == "material" { return emit_material(spec) }
+    if domain == "chem"     { return emit_chem(spec) }
+    if domain == "chip"     { return emit_chip(spec) }
+    if domain == "bio"      { return emit_bio(spec) }
+    let none: [DeckFile] = []
+    return none
+}
+
+// ── shared emit helpers ──────────────────────────────────────────────
+
+// Append a DeckFile to an accumulator.
+pub fn deck_push(files: [DeckFile], path: string, content: string) {
+    files.push(DeckFile { path: path, content: content })
+}

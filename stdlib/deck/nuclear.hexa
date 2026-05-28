@@ -1,0 +1,181 @@
+// HEXA Standard Library — deck/nuclear
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Nuclear deck emitter — emits a nuclide-funnel `top_k_next.json` record
+// matching the n12_funnel schema (sibling of N11). Reproduces the field
+// shape of exports/nuclear_discovery/n12_funnel/.../top_k_next.json.
+//
+// SPEC schema (DeckSpec keys / list-keys):
+//   kind                        — e.g. "n12_zn_funnel_next_cohort_predicted_only"
+//   producer                    — producer string
+//   view                        — view explanation
+//   query_z_set (list)          — Z values, e.g. ["119", "120"]
+//   query_n_range (list)        — [n_min, n_max], e.g. ["176", "182"]
+//   query_band_low / _high      — accelerator log10(s) band
+//   query_island_sigma          — e.g. "6.0"
+//   query_magic_z (list)        — e.g. ["82","114","120","126"]
+//   query_magic_n (list)        — e.g. ["126","184"]
+//   query_filter                — filter clause text
+//   excluded (list)             — n11 cohort exclusions
+//   honest_skipped (list)       — honest-skip explanations
+//   rank_formula                — composite ranking formula
+//   verify_status               — anchors-PASS attestation text
+//   candidates_json (list)      — pre-formatted candidate JSON object strings
+//                                 (one full {…} per candidate — caller
+//                                  controls exact field order/precision)
+//   gate_type                   — e.g. "nuclear-novel-discovery-simulation"
+//
+// Per-candidate spec helper — deck_nuclear_candidate(spec) returns one
+// preformatted JSON object string for a single nuclide cell. Caller
+// builds the list via candidates_json and passes to gen_deck.
+//
+// d6 honest — does NOT compute Q_alpha, log10(T), c_total_score,
+// island_weight, composite_score. Those are SCIENTIFIC inputs/outputs
+// from the campaign; this emitter only assembles the JSON envelope.
+
+import "stdlib/deck/gen.hexa"
+
+pub fn emit_nuclear(spec: DeckSpec) -> [DeckFile] {
+    let files: [DeckFile] = []
+    let path = spec_get_or(spec, "out_path", "top_k_next.json")
+    deck_push(files, path, _nuclear_top_k_json(spec))
+    return files
+}
+
+// Build a candidate JSON object string from a per-candidate spec.
+// Returned string is a single {...} object (no trailing comma).
+// Caller pushes one such string per nuclide into list-key "candidates_json".
+pub fn deck_nuclear_candidate(c: DeckSpec) -> string {
+    let name        = spec_get(c, "name")
+    let z           = spec_get(c, "Z")
+    let n           = spec_get(c, "N")
+    let a           = spec_get(c, "A")
+    let q_alpha     = spec_get(c, "Q_alpha_MeV")
+    let q_band      = spec_get(c, "Q_alpha_band_MeV")
+    let q_src       = spec_get(c, "Q_alpha_source")
+    let pred_in     = spec_get_or(c, "predicted_input", "true")
+    let gate        = spec_get_or(c, "gate_type", "nuclear-novel-discovery-simulation")
+    let absorbed    = spec_get_or(c, "absorbed", "false")
+    let valid       = spec_get_or(c, "valid", "1")
+    let guard       = spec_get_or(c, "guard_reason", "ok")
+    let log_t       = spec_get(c, "log10_T_total_s_alpha_sf")
+    let branch      = spec_get(c, "alpha_branching")
+    let channel     = spec_get(c, "dominant_channel")
+    let sf_invalid  = spec_get_or(c, "sf_model_invalid", "false")
+    let c_total     = spec_get(c, "c_total_score")
+    let i_weight    = spec_get(c, "island_weight")
+    let composite   = spec_get(c, "composite_score")
+    let model_flag  = spec_get(c, "model_validity_flag")
+    let note        = spec_get(c, "note")
+
+    let mut s = ""
+    s = s + "{\n"
+    s = s + "      \"name\": \"" + name + "\", \"Z\": " + z + ", \"N\": " + n + ", \"A\": " + a + ",\n"
+    s = s + "      \"Q_alpha_MeV\": " + q_alpha + ",\n"
+    s = s + "      \"Q_alpha_band_MeV\": \"" + q_band + "\",\n"
+    s = s + "      \"Q_alpha_source\": \"" + q_src + "\",\n"
+    s = s + "      \"predicted_input\": " + pred_in + ",\n"
+    s = s + "      \"gate_type\": \"" + gate + "\",\n"
+    s = s + "      \"absorbed\": " + absorbed + ",\n"
+    s = s + "      \"valid\": " + valid + ", \"guard_reason\": \"" + guard + "\",\n"
+    s = s + "      \"prediction\": { \"log10_T_total_s_alpha_sf\": " + log_t + ", \"alpha_branching\": " + branch + ", \"dominant_channel\": \"" + channel + "\", \"sf_model_invalid\": " + sf_invalid + " },\n"
+    s = s + "      \"scores\": { \"c_total_score\": " + c_total + ", \"island_weight\": " + i_weight + ", \"composite_score\": " + composite + ", \"model_validity_flag\": \"" + model_flag + "\" },\n"
+    s = s + "      \"note\": \"" + note + "\"\n"
+    s = s + "    }"
+    return s
+}
+
+// ── internal: assemble top_k_next.json envelope ──────────────────────
+
+fn _nuclear_top_k_json(spec: DeckSpec) -> string {
+    let kind        = spec_get_or(spec, "kind", "n_funnel_predicted_only")
+    let producer    = spec_get(spec, "producer")
+    let view        = spec_get(spec, "view")
+    let gate        = spec_get_or(spec, "gate_type", "nuclear-novel-discovery-simulation")
+    let rank_form   = spec_get(spec, "rank_formula")
+    let verify      = spec_get(spec, "verify_status")
+    let absorbed    = spec_get_or(spec, "absorbed", "false")
+    let provisional = spec_get_or(spec, "provisional", "true")
+
+    let z_set       = spec_get_list(spec, "query_z_set")
+    let n_range     = spec_get_list(spec, "query_n_range")
+    let band_lo     = spec_get_or(spec, "query_band_low", "-6.0")
+    let band_hi     = spec_get_or(spec, "query_band_high", "3.0")
+    let island_sig  = spec_get_or(spec, "query_island_sigma", "6.0")
+    let magic_z     = spec_get_list(spec, "query_magic_z")
+    let magic_n     = spec_get_list(spec, "query_magic_n")
+    let filter      = spec_get(spec, "query_filter")
+
+    let excluded    = spec_get_list(spec, "excluded")
+    let skipped     = spec_get_list(spec, "honest_skipped")
+    let candidates  = spec_get_list(spec, "candidates_json")
+
+    let mut s = ""
+    s = s + "{\n"
+    s = s + "  \"domain\": \"nuclear\",\n"
+    s = s + "  \"verb\": \"verify\",\n"
+    s = s + "  \"kind\": \"" + kind + "\",\n"
+    s = s + "  \"producer\": \"" + producer + "\",\n"
+    s = s + "  \"absorbed\": " + absorbed + ",\n"
+    s = s + "  \"gate_type\": \"" + gate + "\",\n"
+    s = s + "  \"provisional\": " + provisional + ",\n"
+    s = s + "  \"view\": \"" + view + "\",\n"
+    s = s + "  \"query\": { \"Z_set\": [" + _join_ints(z_set) + "], \"N_range\": [" + _join_ints(n_range) + "], \"accelerator_band_log10_s\": [" + band_lo + ", " + band_hi + "], \"island_sigma\": " + island_sig + ", \"magic_Z\": [" + _join_ints(magic_z) + "], \"magic_N\": [" + _join_ints(magic_n) + "], \"filter\": \"" + filter + "\" },\n"
+    s = s + "  \"n11_cohort_excluded\": [" + _json_str_list(excluded) + "],\n"
+    s = s + "  \"honest_skipped\": [\n" + _json_str_list_multiline(skipped, "    ") + "\n  ],\n"
+    s = s + "  \"rank_formula\": \"" + rank_form + "\",\n"
+    s = s + "  \"verify_status\": \"" + verify + "\",\n"
+    s = s + "  \"top_k_candidates\": [\n    " + _join_objs(candidates, ",\n    ") + "\n  ]\n"
+    s = s + "}\n"
+    return s
+}
+
+// Join integer-typed strings into a comma-sep JSON int list body.
+fn _join_ints(items: [string]) -> string {
+    let mut out = ""
+    let mut i = 0
+    while i < len(items) {
+        if i > 0 { out = out + ", " }
+        out = out + items[i]
+        i = i + 1
+    }
+    return out
+}
+
+// Join strings as comma-sep JSON string-list body: "a", "b", "c"
+fn _json_str_list(items: [string]) -> string {
+    let mut out = ""
+    let mut i = 0
+    while i < len(items) {
+        if i > 0 { out = out + ", " }
+        out = out + "\"" + items[i] + "\""
+        i = i + 1
+    }
+    return out
+}
+
+// Multi-line string list (one entry per line) with leading indent.
+fn _json_str_list_multiline(items: [string], indent: string) -> string {
+    let mut out = ""
+    let mut i = 0
+    while i < len(items) {
+        if i > 0 { out = out + ",\n" }
+        out = out + indent + "\"" + items[i] + "\""
+        i = i + 1
+    }
+    return out
+}
+
+// Join already-formatted object strings with a separator.
+fn _join_objs(items: [string], sep: string) -> string {
+    let mut out = ""
+    let mut i = 0
+    while i < len(items) {
+        if i > 0 { out = out + sep }
+        out = out + items[i]
+        i = i + 1
+    }
+    return out
+}

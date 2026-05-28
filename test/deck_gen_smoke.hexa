@@ -1,0 +1,222 @@
+// HEXA Standard Library — deck/gen smoke test
+//
+// Round-trips the MgBeH8 spec through gen_deck("rtsc", spec) and prints
+// the emitted file paths + content lengths. Writes the 4 files to a
+// temporary dir under /tmp/deck_gen_smoke/ and `diff`s against the
+// canonical exports/rtsc/decks/MgBeH8/ deck (via stdlib/io exec).
+//
+// Also smoke-tests the other 5 dispatch branches by emitting their
+// best-effort templates for synthetic specs (verifies the dispatch
+// path + non-empty output — does NOT byte-validate domain semantics).
+//
+// Usage:
+//   hexa run test/deck_gen_smoke.hexa
+
+import "stdlib/deck/gen.hexa"
+import "stdlib/io.hexa"
+
+fn _mgbeh8_spec() -> DeckSpec {
+    let spec = deck_spec_new()
+    spec_set(spec, "prototype",                    "beh8_clathrate")
+    spec_set(spec, "prefix",                       "mgbeh8")
+    spec_set(spec, "celldm_bohr",                  "8.5132")
+    spec_set(spec, "a_conv_ang",                   "4.505")
+    spec_set(spec, "anchor_a_ang",                 "5.30")
+    spec_set(spec, "contraction_pct",              "15")
+    spec_set(spec, "a_site_symbol",                "Mg")
+    spec_set(spec, "a_site_mass",                  "24.305")
+    spec_set(spec, "a_site_upf",                   "Mg.pbe-spnl-rrkjus_psl.1.0.0.UPF")
+    spec_set(spec, "a_site_radius_ang",            "1.60")
+    spec_set(spec, "pressure_kbar",                "100.0")
+    spec_set(spec, "pressure_comment",             "10 GPa  (QE press unit = kbar; 10 GPa = 100 kbar)")
+    spec_set(spec, "pressure_kbar_int",            "100")
+    spec_set(spec, "pressure_gpa",                 "10")
+    spec_set(spec, "fallback_pressure_kbar",       "500.0")
+    spec_set(spec, "fallback_pressure_kbar_int",   "500")
+    spec_set(spec, "fallback_pressure_comment",    "50 GPa")
+    spec_set(spec, "fallback_pressure_gpa",        "50")
+    spec_set(spec, "nq",                           "2")
+    spec_set(spec, "max_seconds",                  "504000")
+    spec_set(spec, "walltime_comment",
+        "140h floor (preflight ×1.5 of 93h est for 2x2x2 metallic)")
+    return spec
+}
+
+fn _caauh3_spec() -> DeckSpec {
+    let spec = deck_spec_new()
+    spec_set(spec, "prototype",       "perovskite_pm3m")
+    spec_set(spec, "prefix",          "caauh3")
+    spec_set(spec, "a_site_symbol",   "Ca")
+    spec_set(spec, "b_site_symbol",   "Au")
+    spec_set(spec, "a_site_mass",     "40.078")
+    spec_set(spec, "b_site_mass",     "196.967")
+    spec_set(spec, "a_site_upf",      "Ca.pbe-spn-rrkjus_psl.1.0.0.UPF")
+    spec_set(spec, "b_site_upf",      "Au.pbe-n-rrkjus_psl.1.0.0.UPF")
+    spec_set(spec, "celldm_bohr",     "6.8361")
+    spec_set(spec, "anchor_a_ang",    "3.828")
+    spec_set(spec, "a_conv_ang",      "3.618")
+    spec_set(spec, "contraction_pct", "5-7")
+    spec_set(spec, "pressure_kbar",   "50.0")
+    spec_set(spec, "pressure_gpa",    "50")
+    spec_set(spec, "outdir",          "/home/aiden/rtsc_caauh3/out")
+    spec_set(spec, "pseudo_dir",      "/home/aiden/rtsc_caauh3/pseudo")
+    spec_set(spec, "mixing_beta",     "0.4")
+    spec_set(spec, "degauss",         "0.02")
+    spec_set(spec, "nq",              "4")
+    return spec
+}
+
+fn _write_all(files: [DeckFile], dir: string) {
+    let _mk = exec("mkdir -p " + dir)
+    let mut i = 0
+    while i < len(files) {
+        let f = files[i]
+        let _w = write_text(dir + "/" + f.path, f.content)
+        println("  wrote " + dir + "/" + f.path + " (" + str(len(f.content)) + " bytes)")
+        i = i + 1
+    }
+}
+
+fn main() {
+    println("# deck_gen_smoke — 6-domain generic deck generator")
+    println("")
+
+    // ── 1. RTSC MgBeH8 round-trip (regression) ─────────────────────────
+    println("## 1. RTSC MgBeH8 (beh8_clathrate prototype) — regression diff")
+    let mg_files = gen_deck("rtsc", _mgbeh8_spec())
+    println("  emitted " + str(len(mg_files)) + " files")
+    let mg_dir = "/tmp/deck_gen_smoke/MgBeH8"
+    _write_all(mg_files, mg_dir)
+    let ref_dir = "/Users/ghost/core/demiurge/exports/rtsc/decks/MgBeH8"
+    println("  diff vs " + ref_dir + " (expect empty for byte-match):")
+    let _d1 = exec("diff -ur " + ref_dir + " " + mg_dir + " || true")
+    println("")
+
+    // ── 2. RTSC CaAuH3 (perovskite) — structural emit ─────────────────
+    println("## 2. RTSC CaAuH3 (perovskite_pm3m prototype) — best-effort")
+    let ca_files = gen_deck("rtsc", _caauh3_spec())
+    println("  emitted " + str(len(ca_files)) + " files")
+    let ca_dir = "/tmp/deck_gen_smoke/CaAuH3"
+    _write_all(ca_files, ca_dir)
+    println("  diff vs " + "/Users/ghost/core/demiurge/exports/rtsc/decks/CaAuH3 (structural divergence expected):")
+    let _d2 = exec("diff -ur /Users/ghost/core/demiurge/exports/rtsc/decks/CaAuH3 " + ca_dir + " | head -40 || true")
+    println("")
+
+    // ── 3. Nuclear — top_k_next.json envelope smoke ───────────────────
+    println("## 3. Nuclear (n12 funnel schema) — emit envelope")
+    let nu_spec = deck_spec_new()
+    spec_set(nu_spec, "kind", "n12_zn_funnel_smoke")
+    spec_set(nu_spec, "producer", "deck_gen_smoke")
+    spec_set(nu_spec, "view", "smoke-test envelope")
+    spec_set(nu_spec, "rank_formula", "composite = c_total * island_weight")
+    spec_set(nu_spec, "verify_status", "anchors PASS via test/nuclear_r4_anchor_smoke.hexa")
+    spec_set(nu_spec, "query_filter", "predicted_input == true")
+    spec_set_list(nu_spec, "query_z_set", ["119", "120"])
+    spec_set_list(nu_spec, "query_n_range", ["176", "182"])
+    spec_set_list(nu_spec, "query_magic_z", ["82", "114", "120", "126"])
+    spec_set_list(nu_spec, "query_magic_n", ["126", "184"])
+    spec_set_list(nu_spec, "excluded", ["293-119", "295-119"])
+    spec_set_list(nu_spec, "honest_skipped", ["Z=121: no cited Q_alpha"])
+    // One stub candidate
+    let cand_spec = deck_spec_new()
+    spec_set(cand_spec, "name", "298-120")
+    spec_set(cand_spec, "Z", "120")
+    spec_set(cand_spec, "N", "178")
+    spec_set(cand_spec, "A", "298")
+    spec_set(cand_spec, "Q_alpha_MeV", "11.486")
+    spec_set(cand_spec, "Q_alpha_band_MeV", "WS4 model")
+    spec_set(cand_spec, "Q_alpha_source", "PREDICTED arxiv:1706.04068")
+    spec_set(cand_spec, "log10_T_total_s_alpha_sf", "-1.95869")
+    spec_set(cand_spec, "alpha_branching", "0.999998")
+    spec_set(cand_spec, "dominant_channel", "alpha")
+    spec_set(cand_spec, "c_total_score", "0.898069")
+    spec_set(cand_spec, "island_weight", "0.606531")
+    spec_set(cand_spec, "composite_score", "0.544707")
+    spec_set(cand_spec, "model_validity_flag", "nominal")
+    spec_set(cand_spec, "note", "N=178 deformed-magic candidate")
+    let cand_json = deck_nuclear_candidate(cand_spec)
+    spec_set_list(nu_spec, "candidates_json", [cand_json])
+
+    let nu_files = gen_deck("nuclear", nu_spec)
+    println("  emitted " + str(len(nu_files)) + " files")
+    let nu_dir = "/tmp/deck_gen_smoke/nuclear"
+    _write_all(nu_files, nu_dir)
+    println("  jq validation (json well-formed):")
+    let _j = exec("jq . " + nu_dir + "/top_k_next.json > /dev/null && echo '  OK json well-formed' || echo '  FAIL json malformed'")
+    println("")
+
+    // ── 4. Material (best-effort POSCAR/xyz/cif) ───────────────────────
+    println("## 4. Material (best-effort all formats)")
+    let mat_spec = deck_spec_new()
+    spec_set(mat_spec, "title", "Cu FCC test")
+    spec_set(mat_spec, "scaling", "1.0")
+    spec_set_list(mat_spec, "lattice_a", ["3.6149", "0.0", "0.0"])
+    spec_set_list(mat_spec, "lattice_b", ["0.0", "3.6149", "0.0"])
+    spec_set_list(mat_spec, "lattice_c", ["0.0", "0.0", "3.6149"])
+    spec_set_list(mat_spec, "species", ["Cu"])
+    spec_set_list(mat_spec, "counts", ["4"])
+    spec_set_list(mat_spec, "positions", [
+        "0.0 0.0 0.0",
+        "0.5 0.5 0.0",
+        "0.5 0.0 0.5",
+        "0.0 0.5 0.5"
+    ])
+    spec_set(mat_spec, "cif_a", "3.6149")
+    spec_set(mat_spec, "cif_b", "3.6149")
+    spec_set(mat_spec, "cif_c", "3.6149")
+    spec_set(mat_spec, "cif_space_group", "Fm-3m")
+    let mat_files = gen_deck("material", mat_spec)
+    println("  emitted " + str(len(mat_files)) + " files")
+    _write_all(mat_files, "/tmp/deck_gen_smoke/material")
+    println("")
+
+    // ── 5. Chem (best-effort NWChem + xyz) ─────────────────────────────
+    println("## 5. Chem (best-effort NWChem .nw + .xyz)")
+    let chem_spec = deck_spec_new()
+    spec_set(chem_spec, "prefix", "h2o")
+    spec_set(chem_spec, "title", "Water — minimal NWChem deck")
+    spec_set(chem_spec, "method", "dft")
+    spec_set_list(chem_spec, "atoms", [
+        "O  0.000  0.000  0.000",
+        "H  0.757  0.586  0.000",
+        "H -0.757  0.586  0.000"
+    ])
+    let chem_files = gen_deck("chem", chem_spec)
+    println("  emitted " + str(len(chem_files)) + " files")
+    _write_all(chem_files, "/tmp/deck_gen_smoke/chem")
+    println("")
+
+    // ── 6. Chip (best-effort Verilog + Liberty stub) ───────────────────
+    println("## 6. Chip (best-effort Verilog .v + Liberty .lib)")
+    let chip_spec = deck_spec_new()
+    spec_set(chip_spec, "module_name", "adder8")
+    spec_set_list(chip_spec, "inputs",  ["a:8", "b:8", "cin"])
+    spec_set_list(chip_spec, "outputs", ["sum:8", "cout"])
+    spec_set_list(chip_spec, "params",  ["WIDTH=8"])
+    spec_set(chip_spec, "body", "  assign {cout, sum} = a + b + cin;\n")
+    spec_set_list(chip_spec, "lib_pg_pins", ["VDD", "VSS"])
+    let chip_files = gen_deck("chip", chip_spec)
+    println("  emitted " + str(len(chip_files)) + " files")
+    _write_all(chip_files, "/tmp/deck_gen_smoke/chip")
+    println("")
+
+    // ── 7. Bio (best-effort PDB + mmCIF stub) ──────────────────────────
+    println("## 7. Bio (best-effort PDB + mmCIF — linear CA stub)")
+    let bio_spec = deck_spec_new()
+    spec_set(bio_spec, "pdb_id", "TEST")
+    spec_set(bio_spec, "title", "Test peptide — linear CA stub")
+    spec_set(bio_spec, "sequence", "MKTAYIAKQ")  // 9 residues
+    spec_set(bio_spec, "chain_id", "A")
+    let bio_files = gen_deck("bio", bio_spec)
+    println("  emitted " + str(len(bio_files)) + " files")
+    _write_all(bio_files, "/tmp/deck_gen_smoke/bio")
+    println("")
+
+    // ── 8. Unknown domain — empty result (dispatch guard) ──────────────
+    println("## 8. Unknown domain dispatch — should emit 0 files")
+    let unk = gen_deck("nonexistent", deck_spec_new())
+    println("  emitted " + str(len(unk)) + " files (expect 0)")
+    println("")
+
+    println("__DECK_GEN_SMOKE__ DONE")
+}
