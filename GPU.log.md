@@ -1044,3 +1044,45 @@ small-M GEMV wedge (decode, N=256 K=512, 256 outputs)
 **상태**: W1 perf-wedge milestone 은 이미 RETIRED (정정 불요). correctness probe 는 NN-primitive 카탈로그 (line 709 `NN-specific HEXA primitives`) 의 GEMV 증거로 archive — milestone flip 안 함 (perf 주장 없음, over-closure 금지). artifact `tool/artifacts/gemv_f64_2026_05_28.{ptx,out}`.
 
 cycle-fg sequence: R10 = correctness PASS + perf-phantom 재확인 (병렬 세션 RETIRED 와 일치, honest non-finding).
+
+## 2026-05-28 — cycle-fg/loop Round 11 · NN-primitive catalog: softmax 🟢 + RoPE 🔴 (to_f64 codegen gap)
+
+`/cycle-loop` 자율. line 709 NN-primitive 카탈로그 (softmax·layer_norm·RoPE·swiglu) 중 layer_norm(R4)·swiglu-act(R6) 완료 → 남은 softmax + RoPE 동시 wedge (ubu-2 RTX 5070 sm_120 driver-JIT from sm_80).
+
+### softmax 🟢 PASS
+
+R4 LN-pattern (2 @shared reduce + normalize → **global y 직행**, 3rd-@shared-write 없음 → R8/R9 bug 회피):
+
+```
+softmax wedge (N=256)
+  n_nan_inf=0/256  Σy_gpu=1 (exact)
+  max_abs_err=2.094e-15  max_rel_err=1.473e-13
+  RESULT: PASS (byte-eq <1e-12)
+```
+
+max-shift stability + 2-reduce + normalize. attention 핵심 primitive silicon-validated. R4 LN-fwd 의 "2-reduce + normalize→global" 구조가 softmax 로 일반화 확인 (probability 합 Σ=1.0 exact).
+
+### RoPE 🔴 FAIL — `to_f64(thread-derived)` nvptx codegen gap
+
+```
+RoPE wedge (D=128, 64 pairs, pos=7 base=10000)
+  n_nan_inf=0/128   (NaN 아님 — wrong value)
+  max_abs_err=2.659e+00  (@16=pair 8, gpu=1.105 ref=-1.554)
+  first-fail @ pair 8, pairs 0-7 correct
+  RESULT: FAIL
+```
+
+**root cause (PTX 즉시 pinpoint)**: `probe_rope_f64.ptx` line 101/103 = `// RFC 055 055-P0 - unsupported call: to_f64` (2 occurrences). `to_f64(tid)` + `to_f64(D)` (thread-derived i64) 가 nvptx_emit 에서 **미지원** — 주석만 emit, 변환 미발생 → `exponent = 2.0*to_f64(tid)/to_f64(D)` garbage → `pow(base,exp)` wrong → wrong theta → wrong cos/sin. **pair 0 은 exponent=0 (0/x=0) 이라 우연히 correct, pair 8+ 발산** (first-fail @16 정확히 설명). 대조: softmax PTX = `unsupported call` 0건 (to_f64 미사용 → PASS).
+
+**중요 대조**: R4 LayerNorm `let mean = sm[0] / to_f64(n)` (n=PARAM) 는 PASS. 본 RoPE `to_f64(tid)` (thread-derived register) 는 FAIL. → **to_f64 의 nvptx lowering 이 param-i64 는 처리하나 thread-derived/computed i64 는 unsupported-call 로 떨어짐** (context-dependent gap). [[reference_new_codegen_intrinsic_4_surface]] 의 nvptx 미러 누락 class.
+
+**finding**:
+- ✅ softmax: NN-primitive catalog 4/4 중 3번째 byte-eq (layer_norm·swiglu-act·softmax). attention probability core.
+- 🔴 RoPE: NEW codegen gap — `to_f64(thread-derived i64)` nvptx unsupported. NN-primitive catalog 4번째(RoPE) 는 이 gap 이 막음.
+- **honest**: line 709 milestone flip **안 함** — 3/4 PASS 지만 RoPE codegen-blocked, 완성 아님 (over-closure 금지).
+
+**workaround 후보** (INBOX): host 에서 per-pair angle 배열 precompute → kernel 은 cos/sin 만 (to_f64 회피). 또는 nvptx to_f64 lowering 을 thread-derived 에도 확장 (codegen fix, dedicated).
+
+artifacts: `tool/artifacts/{softmax,rope}_f64_2026_05_28.ptx` + `nnprim_2026_05_28.out`.
+
+cycle-loop sequence: R11 = softmax PASS (win) + RoPE FAIL (codegen finding → INBOX). NN-primitive catalog 3/4 byte-eq · RoPE to_f64-gapped.

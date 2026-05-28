@@ -1,0 +1,12 @@
+=== softmax ===
+softmax wedge (N=256)
+  n_nan_inf=0/256  Σy_gpu=1 (should=1.0)
+  max_abs_err=2.094e-15 (@33 gpu=0.010159629869568285 ref=0.010159629869566192)
+  max_rel_err=1.473e-13
+  RESULT: PASS (byte-eq <1e-12)
+=== rope ===
+RoPE wedge (D=128, 64 pairs, pos=7 base=10000)
+  n_nan_inf=0/128
+  max_abs_err=2.659e+00 (@16 gpu=1.1050550846966871 ref=-1.5542252853468999)
+  max_rel_err=1.584e+00
+  RESULT: FAIL (nan=0)
