@@ -114,6 +114,23 @@ extern int  hxlcl_close(int fd);
 #else
 static int  hxlcl_close(int fd);
 #endif
+// F3 wave 3 — 1-arg / errno-reloc family. chdir/unlink/rmdir use the NEW
+// ptr-arg sub-template (no leading sxtw, 8-instr 32 B body), fsync/dup are
+// byte-for-byte close clones (int-arg sxtw, 9-instr 36 B). All five flip to
+// extern under HEXA_RT_SELFEMIT; default stays static svc-trap.
+#ifdef HEXA_RT_SELFEMIT
+extern int  hxlcl_chdir(const char *path);
+extern int  hxlcl_unlink(const char *path);
+extern int  hxlcl_rmdir(const char *path);
+extern int  hxlcl_fsync(int fd);
+extern int  hxlcl_dup(int oldfd);
+#else
+static int  hxlcl_chdir(const char *path);
+static int  hxlcl_unlink(const char *path);
+static int  hxlcl_rmdir(const char *path);
+static int  hxlcl_fsync(int fd);
+static int  hxlcl_dup(int oldfd);
+#endif
 // B9.6-C1 (F3 Path A) — under HEXA_RT_SELFEMIT hxlcl_getpid is `extern`
 // (resolved by emit_hxlcl_getpid_o.hexa's .o); the forward decl must match
 // that external linkage, else the `static` here wins and masks the self-emit
@@ -1296,6 +1313,15 @@ static int hxlcl_pthread_join(void *thread, void **retval);
 #define HXLCL_SYS_GETEGID      43
 #define HXLCL_SYS_GETGID       47
 #define HXLCL_SYS_GETPPID      39
+// F3 wave 3 — class-C 1-arg / errno-reloc svc-traps (close family extension)
+// Two sub-templates:
+//   ptr-arg   (no sxtw)  : chdir(12), unlink(10), rmdir(137) — 8-instr 32 B
+//   int-arg   (sxtw x0)  : fsync(95), dup(41) — 9-instr 36 B (close shape)
+#define HXLCL_SYS_CHDIR        12
+#define HXLCL_SYS_UNLINK       10
+#define HXLCL_SYS_RMDIR       137
+#define HXLCL_SYS_FSYNC        95
+#define HXLCL_SYS_DUP          41
 
 static inline long _hxlcl_syscall1(long nr, long a0) {
     register long x0 __asm__("x0") = a0;
@@ -1493,6 +1519,19 @@ static long __attribute__((noinline)) hxlcl_write(int fd, const void *buf, unsig
 extern int hxlcl_close(int fd);
 #else
 static int __attribute__((noinline)) hxlcl_close(int fd) { return (int)_hxlcl_syscall1_cf(HXLCL_SYS_CLOSE, (long)fd); }
+#endif
+// F3 wave 3 — 1-arg / errno-reloc family bodies. Three ptr-arg primitives
+// (chdir/unlink/rmdir, no sxtw — 8-instr 32 B body) AUTHOR the NEW sub-template
+// (errno relocs @0x10/0x14 vs close's 0x14/0x18; -4 B vs close because the
+// leading sxtw is absent). Two int-arg primitives (fsync/dup) are byte-for-byte
+// rt_close clones differing ONLY in the SYS# byte (9-instr 36 B, relocs @0x14/
+// 0x18). DEFAULT keeps the static _cf svc-trap; SELFEMIT flips to extern.
+#ifndef HEXA_RT_SELFEMIT
+static int __attribute__((noinline)) hxlcl_chdir(const char *path)  { return (int)_hxlcl_syscall1_cf(HXLCL_SYS_CHDIR,  (long)path); }
+static int __attribute__((noinline)) hxlcl_unlink(const char *path) { return (int)_hxlcl_syscall1_cf(HXLCL_SYS_UNLINK, (long)path); }
+static int __attribute__((noinline)) hxlcl_rmdir(const char *path)  { return (int)_hxlcl_syscall1_cf(HXLCL_SYS_RMDIR,  (long)path); }
+static int __attribute__((noinline)) hxlcl_fsync(int fd)            { return (int)_hxlcl_syscall1_cf(HXLCL_SYS_FSYNC,  (long)fd); }
+static int __attribute__((noinline)) hxlcl_dup(int oldfd)           { return (int)_hxlcl_syscall1_cf(HXLCL_SYS_DUP,    (long)oldfd); }
 #endif
 // F3 ACTIVATION RUNBOOK · Path A — B9.6-C1 class-C syscall-ABI self-emit slot.
 //
