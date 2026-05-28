@@ -161,6 +161,13 @@ fn main() {
     // `#include "runtime_core.c"`). Lives at self/ (NOT self/native/).
     regen_one(root, "self", "runtime_core", regen_only)
 
+    // B9.C — the HI-tier fragment self/runtime_hi_gen.c, `#include`d by
+    // self/runtime_core.c (RFC 061 amalgamation). The rt_str_* stdlib
+    // (split / lines / pad_* / repeat / center). Lives at self/. SSOT for the
+    // .c FILE = self/runtime_hi_gen_emit.hexa (verbatim); SSOT for the
+    // CONTENT = self/runtime_hi.hexa via tool/extract_runtime_hi.sh.
+    regen_one(root, "self", "runtime_hi_gen", regen_only)
+
     println("")
     let pass_n = RUN - FAIL
     println("========================================================================")
