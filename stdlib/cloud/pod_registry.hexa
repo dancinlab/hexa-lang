@@ -851,6 +851,143 @@ fn pod_registry_update_status(pod_id: str, status: str) -> int {
     return 1
 }
 
+// pod_registry_set_limits — populate the M2 (ttl_sec) + M3 (max_cost_usd)
+// guard fields on a tracked pod. `ttl_sec < 0` / `max_cost_usd == ""` leave
+// that limit UNSET (no enforcement). Called by `cloud rent --ttl`/`--max-cost-usd`
+// after the pod reaches READY. Returns 1 on a successful set, 0 if absent.
+fn pod_registry_set_limits(pod_id: str, ttl_sec: int, max_cost_usd: str) -> int {
+    if len(pod_id) == 0 {
+        return 0
+    }
+    let mut records = pod_registry_load()
+    let idx = _m5_find(records, pod_id)
+    if idx < 0 {
+        return 0
+    }
+    let prev = records[idx]
+    records[idx] = PodRecord {
+        id: prev.id,
+        provider: prev.provider,
+        created_at: prev.created_at,
+        rented_by: prev.rented_by,
+        ssh_host: prev.ssh_host,
+        ssh_port: prev.ssh_port,
+        status: prev.status,
+        ttl_sec: ttl_sec,
+        max_cost_usd: max_cost_usd,
+        cumulative_cost_usd: prev.cumulative_cost_usd
+    }
+    _m5_write_atomic(records)
+    return 1
+}
+
+// _usd_cents — parse a USD string ("5" / "5.00" / "0.50") to integer cents.
+// Avoids float; 2-decimal precision is enough for a cost cap. "" / junk → 0.
+fn _usd_cents(s: str) -> int {
+    let n = len(s)
+    if n == 0 {
+        return 0
+    }
+    let mut dollars = 0
+    let mut cents = 0
+    let mut seen_dot = false
+    let mut dec_digits = 0
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "." {
+            seen_dot = true
+        } else {
+            let cc = char_code(c)
+            if cc >= 48 && cc <= 57 {
+                if !seen_dot {
+                    dollars = dollars * 10 + (cc - 48)
+                } else if dec_digits < 2 {
+                    cents = cents * 10 + (cc - 48)
+                    dec_digits = dec_digits + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+    while dec_digits < 2 {
+        cents = cents * 10
+        dec_digits = dec_digits + 1
+    }
+    return dollars * 100 + cents
+}
+
+// pod_registry_limit_sweep — M2/M3 enforcement. Scan the registry; for each
+// ALIVE pod that has OPTED IN to a limit (ttl_sec >= 0 or max_cost_usd set)
+// AND BREACHED it, tear the pod down (runpod_terminate / vast_destroy) +
+// remove it. Pods with no limit set (ttl_sec < 0 AND max_cost_usd == "") are
+// NEVER touched — the opt-in invariant. dry_run == 1 → report only, no kill.
+//   M2 (TTL): elapsed = now − created_at ≥ ttl_sec.
+//   M3 (cost): cumulative_cost_usd ≥ max_cost_usd (cents compare; accrual of
+//              cumulative_cost_usd from the provider rate is the M3 follow-up —
+//              the cap ENFORCEMENT is wired here, ready once accrual lands).
+// `api_key` is consumed only by runpod_terminate when an actual kill fires.
+// Returns the number of pods torn down (0 under dry_run).
+fn pod_registry_limit_sweep(api_key: str, dry_run: int) -> int {
+    let records = pod_registry_load()
+    let now = _reg_now_sec()
+    let mut killed = 0
+    let mut i = 0
+    while i < len(records) {
+        let r = records[i]
+        if r.status != "GONE" {
+            let has_ttl = r.ttl_sec >= 0
+            let has_cost = len(r.max_cost_usd) > 0
+            if has_ttl || has_cost {
+                let mut breach = false
+                let mut why = ""
+                if has_ttl && now > 0 {
+                    let born = _reg_iso_to_sec(r.created_at)
+                    if born > 0 {
+                        let elapsed = now - born
+                        if elapsed >= r.ttl_sec {
+                            breach = true
+                            why = "TTL " + str(elapsed) + "s ≥ " + str(r.ttl_sec) + "s"
+                        }
+                    }
+                }
+                if has_cost && !breach {
+                    let cum_c = _usd_cents(r.cumulative_cost_usd)
+                    let cap_c = _usd_cents(r.max_cost_usd)
+                    if cap_c > 0 && cum_c >= cap_c {
+                        breach = true
+                        why = "cost $" + r.cumulative_cost_usd + " ≥ $" + r.max_cost_usd
+                    }
+                }
+                if breach {
+                    if dry_run == 1 {
+                        eprintln("[cloud] watchdog DRY: " + r.id + " (" + r.provider + ") would teardown — " + why)
+                    } else {
+                        eprintln("[cloud] watchdog: " + r.id + " (" + r.provider + ") teardown — " + why)
+                        let mut term_ok = 0
+                        if r.provider == "runpod" {
+                            term_ok = runpod_terminate(api_key, r.id)
+                        } else if r.provider == "vast" {
+                            let vi = vast_destroy(r.id)
+                            if vi.ok == 1 {
+                                term_ok = 1
+                            }
+                        }
+                        if term_ok == 1 {
+                            let _ = pod_registry_remove(r.id)
+                            killed = killed + 1
+                        } else {
+                            eprintln("[cloud] watchdog: " + r.id + " teardown FAILED — manual destroy required")
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    return killed
+}
+
 // pod_registry_remove — drop a pod from the registry (confirmed teardown).
 // Returns 1 on a successful removal, 0 if `pod_id` is absent.
 fn pod_registry_remove(pod_id: str) -> int {
