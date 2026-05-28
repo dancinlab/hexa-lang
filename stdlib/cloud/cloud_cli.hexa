@@ -804,8 +804,10 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
     println("[cloud] rent vast: READY " + ssh.host + ":" + ssh.port + " (root@" + ssh.host + " -p " + ssh.port + ")")
     let _ = pod_registry_add(inst.instance_id, "vast", ssh.host, ssh.port, "READY")
     if ttl_sec >= 0 || len(max_cost) > 0 {
-        let _ = pod_registry_set_limits(inst.instance_id, ttl_sec, max_cost)
-        println("[cloud] M2/M3 guard: ttl_sec=" + str(ttl_sec) + " max_cost_usd=" + max_cost + " (enforced by `cloud watchdog`)")
+        // Capture the vast offer's hourly rate (dph_total) so the cost-cap can
+        // accrue. "" when the offer JSON didn't carry dph (cost-cap inert, TTL ok).
+        let _ = pod_registry_set_limits(inst.instance_id, ttl_sec, max_cost, offer.dph)
+        println("[cloud] M2/M3 guard: ttl_sec=" + str(ttl_sec) + " max_cost_usd=" + max_cost + " rate=" + offer.dph + "/hr (enforced by `cloud watchdog`)")
     }
     // #1155 zero-flag: write the bare-IP Host block → ~/.ssh/config so a later
     // `cloud run root@<ip>` (or raw ssh) presents the vast key with no
@@ -890,7 +892,9 @@ fn _cloud_rent_runpod(av: [str], start: int) -> int {
     println("[cloud] rent runpod: READY " + port.ip + ":" + port.port + " (root@" + port.ip + " -p " + port.port + ")")
     let _ = pod_registry_add(pod.pod_id, "runpod", port.ip, port.port, "READY")
     if ttl_sec >= 0 || len(max_cost) > 0 {
-        let _ = pod_registry_set_limits(pod.pod_id, ttl_sec, max_cost)
+        // RunPod's create response carries no clean dph; pass "" so the cost-cap
+        // stays inert here (TTL still enforces). RunPod rate capture is a follow-up.
+        let _ = pod_registry_set_limits(pod.pod_id, ttl_sec, max_cost, "")
         println("[cloud] M2/M3 guard: ttl_sec=" + str(ttl_sec) + " max_cost_usd=" + max_cost + " (enforced by `cloud watchdog`)")
     }
     println("pod_id=" + pod.pod_id)
