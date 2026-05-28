@@ -1,0 +1,250 @@
+#!hexa strict
+// ============================================================================
+// stdlib/rtsc/plasma_freq.hexa
+//   Drude ε(ω) primitive trio — RT-SC plasma frequency + dielectric branch
+//   (CLOAK meta-domain 부품 1, mirror of stdlib/srr/lc_resonance.hexa = 부품 2)
+//
+// Surface (pure functions):
+//   fn plasma_freq_drude(n_e, m_e, eps_0, e_charge) → ω_p [rad/s]
+//   fn drude_eps_re(omega_p, omega, gamma)          → Re{ε(ω)}  (dimless)
+//   fn drude_eps_zero_crossing(omega_p, gamma)      → ω* where Re{ε(ω*)} = 0
+//
+// Formulas:
+//                     n_e · e²
+//     ω_p² = ──────────────────────                              (plasma freq)
+//                  ε₀ · m_e
+//
+//                       ω_p²
+//     Re{ε(ω)} = 1 − ─────────────                               (Drude real)
+//                    ω² + γ²
+//
+//     Re{ε(ω*)} = 0  ⇒  ω* = √(ω_p² − γ²)                       (ε<0 boundary)
+//
+// CLOAK side note:
+//   For ω < ω*, Re{ε(ω)} < 0 — this is the RT-SC ε<0 branch that pairs with
+//   SRR's μ<0 branch (stdlib/srr/lc_resonance.hexa F7) to seal Veselago
+//   n_eff = -√(εμ) < 0 (stdlib/cloak/veselago.hexa F3).
+//
+// Honest scope (commons g3):
+//   · Drude (lossy) approximation; sharp-resonance materials need Lorentz.
+//   · Re{ε} only — Im{ε} (absorption) is a sibling-fn target.
+//   · Local (no spatial dispersion); valid for k ≪ k_F (Thomas-Fermi).
+//   · RT-SC assumption n_e ≈ 10²⁸ m⁻³ is a substrate-class anchor, not a
+//     measured value — actual MgB₂ / Graphene / Ag carrier densities vary
+//     within ±0.5 decade.
+//
+// Self-test (this file): 7 closed-form FALSIFIERS
+//   F1: plasma_freq all-unit case (n_e=m_e=ε₀=e=1) → ω_p = 1
+//   F2: plasma_freq density scaling — ω_p(λ·n_e) = √λ · ω_p(n_e)
+//   F3: Drude DC limit ω=0 → Re{ε} = 1 − (ω_p/γ)²  (deeply negative for γ≪ω_p)
+//   F4: Drude high-freq limit ω≫ω_p → Re{ε} → 1   (vacuum recovery)
+//   F5: zero-crossing identity ω* = √(ω_p²−γ²) — Re{ε(ω*)} = 0
+//   F6: ε<0 branch existence — Re{ε(ω)} < 0 for some ω ∈ (γ, ω*)
+//   F7: RT-SC numeric anchor — n_e=1e28, real m_e/ε₀/e → ω_p ≈ 5.640e15 rad/s
+//       (visible-light cloaking band per UFO/CLOAK.md Drude derivation)
+//
+// Run:
+//     hexa run stdlib/rtsc/plasma_freq.hexa
+//
+// @no-lock-needed
+
+use "self/runtime/math_pure"
+
+let VERSION = "1.0.0"
+
+// ─── check harness ──────────────────────────────────────────────────────
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+fn abs_f(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn rel_err(a: float, b: float) -> float {
+    let d = abs_f(a - b)
+    let abs_b = abs_f(b)
+    if abs_b < 1.0e-30 { return d }
+    return d / abs_b
+}
+
+// ─── primitive: plasma frequency ω_p = √(n_e·e²/(ε₀·m_e)) ───────────────
+
+fn plasma_freq_drude(n_e: float, m_e: float,
+                     eps_0: float, e_charge: float) -> float {
+    if m_e <= 0.0 || eps_0 <= 0.0 { return 0.0 }
+    let num = n_e * e_charge * e_charge
+    let den = eps_0 * m_e
+    if num <= 0.0 { return 0.0 }
+    return sqrt_pure(num / den)
+}
+
+// ─── primitive: Drude Re{ε(ω)} = 1 − ω_p²/(ω² + γ²) ─────────────────────
+
+fn drude_eps_re(omega_p: float, omega: float, gamma: float) -> float {
+    let den = omega * omega + gamma * gamma
+    if den < 1.0e-300 { return 1.0 }
+    return 1.0 - (omega_p * omega_p) / den
+}
+
+// ─── primitive: ε=0 crossing ω* = √(ω_p² − γ²) ──────────────────────────
+
+fn drude_eps_zero_crossing(omega_p: float, gamma: float) -> float {
+    let d = omega_p * omega_p - gamma * gamma
+    if d <= 0.0 { return 0.0 }
+    return sqrt_pure(d)
+}
+
+// ─── analytical limit sanity checks (self-test) ─────────────────────────
+
+// F1 — all-unit case (n_e=m_e=ε₀=e=1) → ω_p = 1
+fn check_plasma_unit() {
+    let wp = plasma_freq_drude(1.0, 1.0, 1.0, 1.0)
+    _check(rel_err(wp, 1.0) < 1.0e-15,
+        "F1 plasma_freq all-unit case (n_e=m_e=ε₀=e=1) → ω_p = 1",
+        "ω_p=" + str(wp) + "  target=1.0  rel_err=" + str(rel_err(wp, 1.0)))
+}
+
+// F2 — density scaling ω_p(λ·n_e) = √λ · ω_p(n_e)
+fn check_plasma_density_scale() {
+    let n_e: float = 2.5e27
+    let m_e: float = 9.1093837015e-31
+    let eps_0: float = 8.8541878128e-12
+    let e_c:   float = 1.602176634e-19
+    let lam:   float = 9.0
+    let wp1 = plasma_freq_drude(n_e, m_e, eps_0, e_c)
+    let wp2 = plasma_freq_drude(lam * n_e, m_e, eps_0, e_c)
+    let ok = rel_err(wp2, sqrt_pure(lam) * wp1) < 1.0e-12
+    _check(ok,
+        "F2 plasma_freq density scaling  ω_p(λ·n_e) = √λ · ω_p(n_e)",
+        "ω_p(n_e)=" + str(wp1) + "  ω_p(λn_e)=" + str(wp2) +
+        "  √λ·ω_p(n_e)=" + str(sqrt_pure(lam) * wp1))
+}
+
+// F3 — Drude DC limit ω=0 → Re{ε} = 1 − (ω_p/γ)²
+fn check_drude_dc() {
+    let wp: float = 5.0e15
+    let g:  float = 5.0e13            // γ ≪ ω_p (1% loss)
+    let eps = drude_eps_re(wp, 0.0, g)
+    let target = 1.0 - (wp / g) * (wp / g)
+    _check(rel_err(eps, target) < 1.0e-12,
+        "F3 Drude DC limit  ω=0  → Re{ε} = 1 − (ω_p/γ)²  (deeply negative)",
+        "Re{ε(0)}=" + str(eps) + "  target=" + str(target))
+}
+
+// F4 — Drude high-freq limit ω≫ω_p → Re{ε} → 1 (vacuum recovery)
+//   Tolerance 1e-8 is the libm subtraction-near-1 precision floor for this
+//   form: Re{ε} = 1 − tiny, so |Re{ε}−1| sits at machine-eps × scale, NOT
+//   ω_p²/ω² as the analytic limit suggests. Both anchors honest:
+//     analytic limit:  ω_p²/ω² ≈ (5.64e15/1e20)² ≈ 3.18e-9   ✓
+//     libm round-trip: |1 − ω_p²/(ω²+γ²) − 1| ≈ 3.18e-9       ✓ (matches!)
+fn check_drude_highfreq() {
+    let wp: float = 5.64e15           // RT-SC ω_p
+    let g:  float = 1.0e13
+    let eps = drude_eps_re(wp, 1.0e20, g)        // ω = ω_p · 1.77e4
+    let ok = abs_f(eps - 1.0) < 1.0e-8           // libm precision floor
+    _check(ok,
+        "F4 Drude high-freq limit  ω ≫ ω_p  → Re{ε} → 1  (vacuum recovery)",
+        "Re{ε(1e20)}=" + str(eps) + "  |ε−1|=" + str(abs_f(eps - 1.0)))
+}
+
+// F5 — zero-crossing ω* = √(ω_p² − γ²)
+fn check_drude_zerocross() {
+    let wp: float = 5.0e15
+    let g:  float = 1.0e15            // γ < ω_p (so ω* exists)
+    let w_star = drude_eps_zero_crossing(wp, g)
+    let target = sqrt_pure(wp * wp - g * g)
+    let ok_formula = rel_err(w_star, target) < 1.0e-15
+    // also verify Re{ε(ω*)} ≈ 0
+    let eps_at = drude_eps_re(wp, w_star, g)
+    let ok_value = abs_f(eps_at) < 1.0e-12
+    _check(ok_formula && ok_value,
+        "F5 zero-crossing  ω* = √(ω_p² − γ²)   AND   Re{ε(ω*)} = 0",
+        "ω*=" + str(w_star) + "  target=" + str(target) +
+        "  Re{ε(ω*)}=" + str(eps_at))
+}
+
+// F6 — ε<0 branch exists for ω ∈ (γ, ω*)
+//   Pick ω = 0.5 · ω* — should be solidly in the negative-ε region.
+fn check_drude_eps_neg_branch() {
+    let wp: float = 5.0e15
+    let g:  float = 1.0e13            // very low loss
+    let w_star = drude_eps_zero_crossing(wp, g)
+    let w_probe = 0.5 * w_star
+    let eps = drude_eps_re(wp, w_probe, g)
+    _check(eps < 0.0,
+        "F6 ε<0 branch exists for ω ∈ (γ, ω*)  — Drude RT-SC plasma cloak side",
+        "ω=0.5·ω*=" + str(w_probe) + "  Re{ε}=" + str(eps))
+}
+
+// F7 — RT-SC numeric anchor: n_e = 1e28, real constants → ω_p ≈ 5.640e15 rad/s
+//   This is the visible-light cloaking band — pairs with SRR Q=σ·τ=48 to
+//   seal CLOAK n_eff < 0 at λ ≈ 333 nm (UV-blue, λ = 2πc/ω_p).
+fn check_rtsc_anchor() {
+    let n_e:   float = 1.0e28                    // RT-SC carrier density
+    let m_e:   float = 9.1093837015e-31          // electron rest mass [kg]
+    let eps_0: float = 8.8541878128e-12          // vacuum permittivity [F/m]
+    let e_c:   float = 1.602176634e-19           // elementary charge [C]
+    let wp     = plasma_freq_drude(n_e, m_e, eps_0, e_c)
+    let target: float = 5.640e15                 // ±1e12 (rel ≤ 2e-4)
+    // CODATA-grade closed-form yields ≈ 5.6411e15; require rel_err < 1e-3.
+    let ok = rel_err(wp, target) < 1.0e-3
+    _check(ok,
+        "F7 RT-SC anchor  n_e=1e28  → ω_p ≈ 5.640e15 rad/s  (visible-light band)",
+        "ω_p=" + str(wp) + "  target=5.640e15  rel_err=" + str(rel_err(wp, target)))
+}
+
+// ─── falsifiers ─────────────────────────────────────────────────────────
+
+let FALSIFIERS = [
+    "F1 plasma unit break — ω_p(1,1,1,1) ≠ 1 → DEMOTE √(n_e·e²/(ε₀·m_e)) prefactor",
+    "F2 plasma density-scale break — ω_p(λ·n_e) ≠ √λ·ω_p(n_e) → DEMOTE n_e^(1/2) scaling",
+    "F3 Drude DC break — Re{ε(0)} ≠ 1 − (ω_p/γ)² → DEMOTE 1 − ω_p²/(ω²+γ²) form",
+    "F4 Drude high-freq break — Re{ε(ω≫ω_p)} ≠ 1 → DEMOTE vacuum recovery (Drude IS vacuum-recovering, unlike Lorentz SRR)",
+    "F5 zero-crossing break — ω* ≠ √(ω_p²−γ²) → DEMOTE Re{ε(ω*)}=0 algebraic solution",
+    "F6 ε<0 branch break — Re{ε(0.5·ω*)} ≥ 0 → DEMOTE ε<0 supply (CLOAK Drude side fails to pair with SRR μ<0)",
+    "F7 RT-SC anchor break — ω_p(n_e=1e28) ≠ 5.64e15 rad/s → DEMOTE RT-SC visible-light cloaking-band claim",
+]
+
+// ─── main ───────────────────────────────────────────────────────────────
+
+fn main() {
+    println("========================================================================")
+    println("  stdlib/rtsc — plasma_freq_drude + drude_eps_re + zero_crossing")
+    println("========================================================================")
+    println("  ω_p   = √(n_e · e² / (ε₀ · m_e))                       (plasma freq)")
+    println("  Re{ε} = 1 − ω_p² / (ω² + γ²)                            (Drude real)")
+    println("  ω*    = √(ω_p² − γ²)         (ε=0 crossing, ε<0 below)")
+    println("")
+
+    println("  Analytical limit sanity checks (7 FALSIFIERS):")
+    check_plasma_unit()
+    check_plasma_density_scale()
+    check_drude_dc()
+    check_drude_highfreq()
+    check_drude_zerocross()
+    check_drude_eps_neg_branch()
+    check_rtsc_anchor()
+
+    println("")
+    println("  FALSIFIERS (" + str(FALSIFIERS.len()) + "):")
+    for f in FALSIFIERS { println("    ✗ " + f) }
+
+    println("========================================================================")
+    let pass_n = RUN - FAIL
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("  plasma_freq / drude_eps_re / zero_crossing self-test FAILED.")
+        println("__HEXA_STDLIB_RTSC_PLASMA_FREQ__ FAIL")
+        exit(1)
+    }
+    println("  RTSC Drude primitive trio (ω_p + Re{ε} + ω*): PASS")
+    println("__HEXA_STDLIB_RTSC_PLASMA_FREQ__ PASS")
+    exit(0)
+}
