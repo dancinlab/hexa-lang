@@ -69,6 +69,10 @@ fn _sha256(p: str) -> str {
 }
 
 fn _hexa_run() -> str {
+    // Explicit override (CI warm-bootstrap: the downloaded edge hexa is known
+    // only by full path, not on PATH — release.yml exports HEXA_RUN_CMD="$PH run").
+    let override = env("HEXA_RUN_CMD")
+    if override.len() > 0 { return override }
     // Prefer an on-PATH hexa-run; fall back to the canonical install path.
     if _which("hexa-run") { return "hexa-run" }
     return "/Users/ghost/.hx/bin/hexa-run"
