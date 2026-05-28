@@ -696,14 +696,23 @@ fn _do_build(repo_root: string) {
             // env var = HEXA_HXLCL_GETUID_O. Activates the LOOP slot for the
             // existing #1899 shadow (runtime_arm64::rt_getuid + runtime.c
             // L127-135 extern guard).
-            println("[selfemit] F3 Path A · B9.6-C3 — class-C 0-arg no-errno: getuid (rt_getpid mirror) → _hxlcl_getuid")
             // F3 class-B HARD scale-out — `strndup` joins the leaf loop alongside
             // strdup. Same single-symbol emit shape (1 defined + 1 undef + 1
             // BRANCH26), same _hxlcl_malloc callee-export wrinkle (reuses the
             // HXLCL_MALLOC_SC macro PR #1917 introduced). 2nd activated class-B
             // HARD primitive — proves the recipe scales mechanically.
-            let leaves = ["memset", "memcmp", "memcpy", "memmove", "strcmp", "strncmp", "strchr", "strrchr", "strcpy", "strncpy", "strcat", "strlen", "getpid", "close", "atoi", "munmap", "strdup", "getuid", "strndup"]
-            let upper  = ["MEMSET", "MEMCMP", "MEMCPY", "MEMMOVE", "STRCMP", "STRNCMP", "STRCHR", "STRRCHR", "STRCPY", "STRNCPY", "STRCAT", "STRLEN", "GETPID", "CLOSE", "ATOI", "MUNMAP", "STRDUP", "GETUID", "STRNDUP"]
+            // B9.6-C10/C11/C14 append `fcntl` / `ioctl` / `select` — three
+            // NON-_cf class-C svc primitives (no errno, no reloc). fcntl =
+            // dual-sxtw + svc + ret (5-instr 20 B, SYS#92); ioctl = single-
+            // sxtw + svc + ret (4-instr 16 B, SYS#54); select = sxtw + mov
+            // x5,#0 + svc + ret (5-instr 20 B, SYS#93). Each rides the SAME
+            // leaf template — driver = emit_hxlcl_<base>_o.hexa, env var =
+            // HEXA_HXLCL_<UPPER>_O. Activates LOOP slots for the existing
+            // #1899 shadows (runtime_arm64::rt_fcntl/rt_ioctl/rt_select +
+            // runtime.c L170-176 / L184-192 extern guards).
+            println("[selfemit] F3 Path A · B9.6-C3+C10+C11+C14 — class-C NON-_cf no-errno: getuid/fcntl/ioctl/select (+strndup B-HARD)")
+            let leaves = ["memset", "memcmp", "memcpy", "memmove", "strcmp", "strncmp", "strchr", "strrchr", "strcpy", "strncpy", "strcat", "strlen", "getpid", "close", "atoi", "munmap", "strdup", "getuid", "strndup", "fcntl", "ioctl", "select"]
+            let upper  = ["MEMSET", "MEMCMP", "MEMCPY", "MEMMOVE", "STRCMP", "STRNCMP", "STRCHR", "STRRCHR", "STRCPY", "STRNCPY", "STRCAT", "STRLEN", "GETPID", "CLOSE", "ATOI", "MUNMAP", "STRDUP", "GETUID", "STRNDUP", "FCNTL", "IOCTL", "SELECT"]
             let mut li = 0
             while li < len(leaves) {
                 let n = leaves[li]
