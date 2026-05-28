@@ -1,0 +1,247 @@
+// test/native_build/emit_rt_fs_stat_classd_o.hexa
+//
+// F3 PATH-A RUNBOOK · F3-classd-repr-body8 — class-D HARD scale-out batch3
+// (new-axes exploration). rt_fs_stat — `return hexa_void()` (failure-default
+// stub; 1 HexaVal arg DISCARDED). 5 instr · 20 B · BRANCH26 @0x08.
+//
+// 🔑 NEW SHAPE on the class-D template: NO `mov w0,#imm` arg-load before
+// the bl. hexa_void takes (void), so x0 is unset. This is the FIRST
+// class-D leaf with a 5-instr / 20-B body (vs the 6-instr / 24-B family
+// of pthread_noop / pthread_create_policy / net_zero / net_fail / posix_ok).
+// BRANCH26 sits at offset 0x08 (8), NOT 0x0C (12). callee = _hexa_void —
+// NEW ctor dimension (vs _hexa_int / _hexa_bool already covered).
+//
+// This .o exports a strong external `_rt_fs_stat` whose body is 5
+// instructions (frame + bl _hexa_void + epilogue + ret), declares an
+// UNDEFINED-external `_hexa_void`, and carries ONE BRANCH26 reloc at
+// code offset 0x08 (8).
+//
+// ── ABI (class-D · HexaVal-repr · 1-arg HexaVal-discard, struct-return) ──
+//   Input:  x0:x1 = path   (dropped)
+//   Output: x0 = TAG_VOID (4) · x1 = 0
+//   16-B frame, LR-spill. 5 instr, 20 bytes. ONE BRANCH26 @ 0x08.
+//
+// ── HONESTY ──
+//   - bytes confirmed bit-for-bit vs `as -arch arm64` (probe at
+//     /tmp/classd_probe/fsstat.s 2026-05-28). 5-instr / 20-B confirmed.
+//   - clang only as link-side oracle (real _hexa_void from runtime_core.c).
+//   - SHADOW emit only — runtime.c gated 3-way (HEXA_RT_SELFEMIT → extern).
+
+fn rt_fs_stat_classd_bytes() -> [int] {
+    let mut c = []
+    // stp x29, x30, [sp, #-16]!    0xA9BF7BFD
+    c.push(253); c.push(123); c.push(191); c.push(169)
+    // mov x29, sp                  0x910003FD
+    c.push(253); c.push(3); c.push(0); c.push(145)
+    // bl _hexa_void [BRANCH26]     0x94000000  @ 0x08 (8) — NO arg-load!
+    c.push(0); c.push(0); c.push(0); c.push(148)
+    // ldp x29, x30, [sp], #16      0xA8C17BFD
+    c.push(253); c.push(123); c.push(193); c.push(168)
+    // ret                          0xD65F03C0
+    c.push(192); c.push(3); c.push(95); c.push(214)
+    return c
+}
+
+fn mh_magic_64_v() -> int { return 0xFEEDFACF }
+fn mh_object_v() -> int { return 1 }
+fn cpu_type_arm64_v() -> int { return 0x0100000C }
+fn cpu_subtype_all_v() -> int { return 0 }
+fn lc_segment_64_v() -> int { return 0x19 }
+fn lc_symtab_v() -> int { return 0x02 }
+fn lc_build_version_v() -> int { return 0x32 }
+fn s_attr_pure_v() -> int { return 0x80000000 }
+fn s_attr_some_v() -> int { return 0x00000400 }
+fn n_ext_v() -> int { return 0x01 }
+fn n_sect_v() -> int { return 0x0e }
+
+fn align_to_v(val: int, align: int) -> int {
+    return (val + align - 1) / align * align
+}
+fn push_u16_le_v(buf: [int], val: int) -> [int] {
+    return buf.push(val % 256).push((val / 256) % 256)
+}
+fn push_u32_le_v(buf: [int], val: int) -> [int] {
+    return buf.push(val % 256).push((val / 256) % 256).push((val / 65536) % 256).push((val / 16777216) % 256)
+}
+fn push_u64_le_v(buf: [int], val: int) -> [int] {
+    let mut b = push_u32_le_v(buf, val % 0x100000000)
+    return push_u32_le_v(b, val / 0x100000000)
+}
+
+// strtab: "\0_rt_fs_stat\0_hexa_void\0" = 1 + 12 + 11 = 24 bytes
+//   _rt_fs_stat strx = 1
+//   _hexa_void  strx = 1 + 12 = 13
+fn macho_obj_wrap_rt_fs_stat_classd(code: [int]) -> [int] {
+    let mut out = []
+    let code_size = len(code)
+
+    let strx_stat = 1
+    let strx_void = 13
+    let strtab_size = 1 + 12 + 11
+
+    let nsects = 1
+    let segment_cmd_size = 72 + 80 * nsects
+    let symtab_cmd_size = 24
+    let build_version_cmd_size = 24
+    let sizeofcmds = segment_cmd_size + symtab_cmd_size + build_version_cmd_size
+    let header_size = 32
+    let code_offset = align_to_v(header_size + sizeofcmds, 8)
+    let reloc_offset = align_to_v(code_offset + code_size, 4)
+    let nreloc = 1
+    let reloc_size = 8 * nreloc
+    let symtab_offset = reloc_offset + reloc_size
+    let nlist_size = 16
+    let nsyms = 2
+    let strtab_offset = symtab_offset + nlist_size * nsyms
+    let total_end = strtab_offset + strtab_size
+
+    out = push_u32_le_v(out, mh_magic_64_v())
+    out = push_u32_le_v(out, cpu_type_arm64_v())
+    out = push_u32_le_v(out, cpu_subtype_all_v())
+    out = push_u32_le_v(out, mh_object_v())
+    out = push_u32_le_v(out, 3)
+    out = push_u32_le_v(out, sizeofcmds)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+
+    out = push_u32_le_v(out, lc_segment_64_v())
+    out = push_u32_le_v(out, segment_cmd_size)
+    let mut i = 0
+    while i < 16 { out.push(0); i = i + 1 }
+    out = push_u64_le_v(out, 0)
+    out = push_u64_le_v(out, total_end - code_offset)
+    out = push_u64_le_v(out, code_offset)
+    out = push_u64_le_v(out, total_end - code_offset)
+    out = push_u32_le_v(out, 7)
+    out = push_u32_le_v(out, 7)
+    out = push_u32_le_v(out, nsects)
+    out = push_u32_le_v(out, 0)
+
+    out.push(95).push(95).push(116).push(101).push(120).push(116)
+    let mut j = 0
+    while j < 10 { out.push(0); j = j + 1 }
+    out.push(95).push(95).push(84).push(69).push(88).push(84)
+    j = 0
+    while j < 10 { out.push(0); j = j + 1 }
+    out = push_u64_le_v(out, 0)
+    out = push_u64_le_v(out, code_size)
+    out = push_u32_le_v(out, code_offset)
+    out = push_u32_le_v(out, 2)
+    out = push_u32_le_v(out, reloc_offset)
+    out = push_u32_le_v(out, nreloc)
+    out = push_u32_le_v(out, s_attr_pure_v() + s_attr_some_v())
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+
+    out = push_u32_le_v(out, lc_symtab_v())
+    out = push_u32_le_v(out, symtab_cmd_size)
+    out = push_u32_le_v(out, symtab_offset)
+    out = push_u32_le_v(out, nsyms)
+    out = push_u32_le_v(out, strtab_offset)
+    out = push_u32_le_v(out, strtab_size)
+
+    out = push_u32_le_v(out, lc_build_version_v())
+    out = push_u32_le_v(out, build_version_cmd_size)
+    out = push_u32_le_v(out, 1)
+    out = push_u32_le_v(out, 0x000E0000)
+    out = push_u32_le_v(out, 0x000E0000)
+    out = push_u32_le_v(out, 0)
+
+    while len(out) < code_offset { out.push(0) }
+    let mut k = 0
+    while k < len(code) { out.push(code[k]); k = k + 1 }
+
+    while len(out) < reloc_offset { out.push(0) }
+    // BRANCH26 @ off 0x08 = 8 → sym[1]  (NEW OFFSET vs other class-D leafs)
+    out = push_u32_le_v(out, 8)
+    let r_symnum = 1
+    let r_pcrel = 1
+    let r_length = 2
+    let r_extern = 1
+    let r_kind = 2
+    let bits = (r_symnum % 0x1000000)
+             + (r_pcrel * 0x1000000)
+             + (r_length * 0x2000000)
+             + (r_extern * 0x8000000)
+             + ((r_kind % 16) * 0x10000000)
+    out = push_u32_le_v(out, bits)
+
+    while len(out) < symtab_offset { out.push(0) }
+    // sym[0] = _rt_fs_stat (defined __text @0)
+    out = push_u32_le_v(out, strx_stat)
+    out.push(n_sect_v() + n_ext_v())
+    out.push(1)
+    out = push_u16_le_v(out, 0)
+    out = push_u64_le_v(out, 0)
+    // sym[1] = _hexa_void (UNDEFINED extern)
+    out = push_u32_le_v(out, strx_void)
+    out.push(n_ext_v())
+    out.push(0)
+    out = push_u16_le_v(out, 0)
+    out = push_u64_le_v(out, 0)
+
+    // strtab — "\0_rt_fs_stat\0_hexa_void\0"
+    out.push(0)
+    // "_rt_fs_stat\0" (12 bytes) — _ r t _ f s _ s t a t \0
+    out.push(95).push(114).push(116).push(95).push(102).push(115).push(95).push(115).push(116).push(97).push(116).push(0)
+    // "_hexa_void\0" (11 bytes) — _ h e x a _ v o i d \0
+    out.push(95).push(104).push(101).push(120).push(97).push(95).push(118).push(111).push(105).push(100).push(0)
+
+    return out
+}
+
+fn emit_rt_fs_stat_classd_o() {
+    println("[wire] F3 Path A · F3-classd-repr-body8 · rt_fs_stat class-D · 1-arg discard · hexa_void() NEW SHAPE")
+
+    let code = rt_fs_stat_classd_bytes()
+    if len(code) != 20 {
+        println("FAIL: rt_fs_stat_classd expected 20 bytes, got " + to_string(len(code)))
+        return
+    }
+    println("  rt_fs_stat bytes: " + to_string(len(code)) + " (20 expected · NEW SHAPE)")
+
+    if code[0] != 253 || code[1] != 123 || code[2] != 191 || code[3] != 169 {
+        println("FAIL: stp x29,x30 prologue mismatch")
+        return
+    }
+    println("  prologue       : fd 7b bf a9 (stp x29,x30,[sp,#-16]!) OK")
+
+    // bl @ 0x08 = 8 (NOT 0x0C — NEW OFFSET)
+    if code[8] != 0 || code[9] != 0 || code[10] != 0 || code[11] != 148 {
+        println("FAIL: bl _hexa_void mismatch")
+        return
+    }
+    println("  call           : 00 00 00 94 (bl _hexa_void, BRANCH26 @0x08) OK")
+
+    // ret @ 16
+    if code[16] != 192 || code[17] != 3 || code[18] != 95 || code[19] != 214 {
+        println("FAIL: ret trailer mismatch")
+        return
+    }
+    println("  ret trailer    : c0 03 5f d6 (ret) OK")
+
+    let obj = macho_obj_wrap_rt_fs_stat_classd(code)
+    println("  obj_wrap size  : " + to_string(len(obj)) + " bytes total")
+
+    if obj[0] != 0xcf || obj[1] != 0xfa || obj[2] != 0xed || obj[3] != 0xfe {
+        println("FAIL: MH_MAGIC_64 mismatch")
+        return
+    }
+    println("  MH_MAGIC_64    : cf fa ed fe OK")
+
+    if obj[12] != 1 {
+        println("FAIL: filetype not MH_OBJECT")
+        return
+    }
+    println("  filetype       : 1 (MH_OBJECT) OK")
+
+    let out_path = env_var("HEXA_RT_FS_STAT_CLASSD_O")
+    let mut dest = out_path
+    if dest == "" { dest = "build/poc/rt_fs_stat_classd.o" }
+    write_bytes(dest, obj)
+    println("  wrote          : " + dest)
+    println("[wire] EMIT OK — link via build recipe with HEXA_RT_SELFEMIT=1")
+}
+
+emit_rt_fs_stat_classd_o()

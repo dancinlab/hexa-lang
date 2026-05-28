@@ -6156,6 +6156,206 @@ fn test_rt_net_fail_classd() {
 
 test_rt_net_fail_classd()
 
+// === class-D HARD scale-out batch3 (F3 NEW-AXES) — rt_fs_stat + rt_fs_append_atomic + rt_fs_rotate_if_over
+// ═══════════════════════════════════════════════════════════════════════
+//
+// Batch1+2 (PRs #1914 / #1923 / #1929) landed 7 class-D primitives:
+//   isalpha · isalnum · pthread_noop · pthread_create_policy ·
+//   net_zero · posix_ok · net_fail.
+//
+// Pool-depth audit (F3-classd-new-axes-2026-05-28):
+//   AXIS 1 (HexaVal arg + ctor return): 1-arg fns in runtime.c besides
+//     isalpha/isalnum are math (rt_exp/log/cos/sin: multi-bl loops · HX_FLOAT)
+//     + str_trim (HX_STR-deref · hxlcl_strdup) + fs_* + delete_file (syscall).
+//     DEPLETED for "16-instr range-cmp" template. ONE new-shape candidate:
+//       rt_fs_stat — DISCARDS arg + `bl _hexa_void` (no arg-setup).
+//   AXIS 2 (0-arg ctor): EXACTLY 5 0-arg `HexaVal rt_X(void)` C bodies exist
+//     in runtime.c (pthread_noop · pthread_create_policy · net_fail · net_zero
+//     · posix_ok). ALL 5 ALREADY ACTIVATED. AXIS 2 POOL DEPLETED at the
+//     C-body source. Multi-arg discard fns (rt_fs_append_atomic /
+//     rt_fs_rotate_if_over) compile to byte-identical leaf — same axis at
+//     codegen level (args dropped before ret).
+//   AXIS 3 (2-arg HexaVal returning HexaVal compares): cmp ops (rt_eq · rt_lt
+//     etc) do NOT exist as standalone rt_* fns in runtime.c — equality is via
+//     hexa_eq (TAG-dispatched · multi-bb · NOT class-D tractable).
+//   AXIS 4 (void return + 1 HexaVal arg): rt_print/log/trace_* don't exist as
+//     standalone rt_* fns either (printers are hexa_print / hexa_println,
+//     multi-bl with printf). AXIS DRY.
+//
+// 3 candidates from runtime.c L14129-14140 (rt_fs_* stubs originally
+// un-gated) — they DISCARD all args and return a constant ctor, making them
+// perfect class-D leaves under the 3-way HEXA_RT_SELFEMIT gate (added at the
+// same site this PR).
+//
+// Pick rationale:
+//   1. rt_fs_stat — NEW SHAPE (not a structural replicate). The body
+//      reduces to `bl _hexa_void` with NO arg-setup before the bl — 5 instr
+//      / 20 bytes / BRANCH26 @0x08. This is the FIRST class-D leaf that
+//      lacks the `mov w0, #imm` arg-load step (hexa_void takes void).
+//      Demonstrates a new template variant beyond the 6-instr/24-B family.
+//   2. rt_fs_append_atomic — 2-arg discard + `return hexa_int(-1)` MOVN.
+//      Structural replicate of rt_net_fail_classd: SAME 6-instr / 24-B /
+//      BRANCH26 @0x0C bytecode. The codegen treats discarded args as
+//      no-cost (x2/x3 untouched, no register save). Proves the template
+//      scales mechanically by arg-count under the discard-args contract.
+//   3. rt_fs_rotate_if_over — 3-arg discard + `return hexa_int(0)`.
+//      Structural replicate of rt_posix_ok_classd / rt_net_zero_classd.
+//      Same 6-instr / 24-B / BRANCH26 @0x0C bytecode. Proves the template
+//      extends to 3-arg fns identically.
+//
+// All bytes verified via `as -arch arm64` round-trip (probe at
+// /tmp/classd_probe/fsstat.s + fs_append.s, 2026-05-28).
+
+// ── rt_fs_stat_classd (`return hexa_void()`) ───────────────────────────
+// 5 instr, 20 bytes. NEW SHAPE: NO `mov w0,#imm` before the bl — hexa_void
+// takes (void), so x0 is not loaded. BRANCH26 @ 0x08 (8), NOT 0x0C.
+// callee = _hexa_void (NEW dimension vs _hexa_int / _hexa_bool).
+fn rt_fs_stat_classd() {
+    let mut c = []
+    // stp x29, x30, [sp, #-16]!    0xA9BF7BFD
+    c.push(253); c.push(123); c.push(191); c.push(169)
+    // mov x29, sp                  0x910003FD
+    c.push(253); c.push(3); c.push(0); c.push(145)
+    // bl _hexa_void [BRANCH26]     0x94000000  @ 0x08 (8) — NO arg-load!
+    c.push(0); c.push(0); c.push(0); c.push(148)
+    // ldp x29, x30, [sp], #16      0xA8C17BFD
+    c.push(253); c.push(123); c.push(193); c.push(168)
+    // ret                          0xD65F03C0
+    c.push(192); c.push(3); c.push(95); c.push(214)
+    return c
+}
+
+fn rt_fs_stat_classd_reloc_offs() {
+    let mut o = []; o.push(8); return o
+}
+fn rt_fs_stat_classd_reloc_kinds() {
+    let mut k = []; k.push(2); return k
+}
+
+fn test_rt_fs_stat_classd() {
+    println("test_rt_fs_stat_classd (F3 class-D batch3 · NEW SHAPE · bl _hexa_void · 20 B)")
+    let mut ok = true
+    let s = rt_fs_stat_classd()
+    println("  rt_fs_stat_classd : " + to_string(len(s)) + " bytes (20 expected)")
+    if len(s) != 20 { println("  FAIL: rt_fs_stat_classd expected 20 bytes"); ok = false }
+    // stp x29,x30,[sp,#-16]! (fd 7b bf a9) @ 0
+    if s[0] != 253 || s[1] != 123 || s[2] != 191 || s[3] != 169 {
+        println("  FAIL: stp x29,x30 prologue mismatch"); ok = false
+    }
+    // bl _hexa_void (00 00 00 94) @ 0x08 = 8 — BRANCH26 at NEW offset
+    if s[8] != 0 || s[9] != 0 || s[10] != 0 || s[11] != 148 {
+        println("  FAIL: bl _hexa_void (BRANCH26 @0x08) mismatch"); ok = false
+    }
+    // ldp x29,x30,[sp],#16 (fd 7b c1 a8) @ 12
+    if s[12] != 253 || s[13] != 123 || s[14] != 193 || s[15] != 168 {
+        println("  FAIL: ldp x29,x30 epilogue mismatch"); ok = false
+    }
+    // ret (c0 03 5f d6) @ 16
+    if s[16] != 192 || s[17] != 3 || s[18] != 95 || s[19] != 214 {
+        println("  FAIL: ret trailer mismatch"); ok = false
+    }
+    let offs = rt_fs_stat_classd_reloc_offs()
+    let kinds = rt_fs_stat_classd_reloc_kinds()
+    if len(offs) != 1 || offs[0] != 8 {
+        println("  FAIL: reloc offset expected [8]"); ok = false
+    }
+    if len(kinds) != 1 || kinds[0] != 2 {
+        println("  FAIL: reloc kind expected [2] (BRANCH26)"); ok = false
+    }
+    if ok { println("  ALL CHECKS PASS") }
+}
+
+test_rt_fs_stat_classd()
+
+// ── rt_fs_append_atomic_classd (`return hexa_int(-1)`) ─────────────────
+// 6 instr, 24 bytes. STRUCTURAL REPLICATE of rt_net_fail_classd: same MOVN
+// x0,#-1 + bl _hexa_int + BRANCH26 @0x0C bytecode. Proves the leaf
+// template is invariant under discarded arg-count (2 args vs 0 args).
+fn rt_fs_append_atomic_classd() {
+    let mut c = []
+    c.push(253); c.push(123); c.push(191); c.push(169)
+    c.push(253); c.push(3); c.push(0); c.push(145)
+    // mov x0, #-1 (movn x0, #0)    0x92800000
+    c.push(0); c.push(0); c.push(128); c.push(146)
+    // bl _hexa_int [BRANCH26]      0x94000000  @ 0x0C
+    c.push(0); c.push(0); c.push(0); c.push(148)
+    c.push(253); c.push(123); c.push(193); c.push(168)
+    c.push(192); c.push(3); c.push(95); c.push(214)
+    return c
+}
+
+fn rt_fs_append_atomic_classd_reloc_offs() {
+    let mut o = []; o.push(12); return o
+}
+fn rt_fs_append_atomic_classd_reloc_kinds() {
+    let mut k = []; k.push(2); return k
+}
+
+fn test_rt_fs_append_atomic_classd() {
+    println("test_rt_fs_append_atomic_classd (F3 class-D batch3 · 2-arg discard · MOVN replicate)")
+    let mut ok = true
+    let s = rt_fs_append_atomic_classd()
+    println("  rt_fs_append_atomic_classd : " + to_string(len(s)) + " bytes (24 expected)")
+    if len(s) != 24 { println("  FAIL: rt_fs_append_atomic_classd expected 24 bytes"); ok = false }
+    // mov x0,#-1 (MOVN) (00 00 80 92) @ 8
+    if s[8] != 0 || s[9] != 0 || s[10] != 128 || s[11] != 146 {
+        println("  FAIL: mov x0,#-1 (MOVN) mismatch"); ok = false
+    }
+    if s[12] != 0 || s[13] != 0 || s[14] != 0 || s[15] != 148 {
+        println("  FAIL: bl _hexa_int (BRANCH26 @0x0C) mismatch"); ok = false
+    }
+    if s[20] != 192 || s[21] != 3 || s[22] != 95 || s[23] != 214 {
+        println("  FAIL: ret trailer mismatch"); ok = false
+    }
+    if ok { println("  ALL CHECKS PASS") }
+}
+
+test_rt_fs_append_atomic_classd()
+
+// ── rt_fs_rotate_if_over_classd (`return hexa_int(0)`) ─────────────────
+// 6 instr, 24 bytes. STRUCTURAL REPLICATE of rt_posix_ok_classd / rt_net_zero_classd:
+// same `mov w0,#0 + bl _hexa_int + BRANCH26 @0x0C` bytecode. Proves the leaf
+// template is invariant under discarded arg-count (3 args vs 0 args).
+fn rt_fs_rotate_if_over_classd() {
+    let mut c = []
+    c.push(253); c.push(123); c.push(191); c.push(169)
+    c.push(253); c.push(3); c.push(0); c.push(145)
+    // mov w0, #0                   0x52800000
+    c.push(0); c.push(0); c.push(128); c.push(82)
+    // bl _hexa_int [BRANCH26]      0x94000000  @ 0x0C
+    c.push(0); c.push(0); c.push(0); c.push(148)
+    c.push(253); c.push(123); c.push(193); c.push(168)
+    c.push(192); c.push(3); c.push(95); c.push(214)
+    return c
+}
+
+fn rt_fs_rotate_if_over_classd_reloc_offs() {
+    let mut o = []; o.push(12); return o
+}
+fn rt_fs_rotate_if_over_classd_reloc_kinds() {
+    let mut k = []; k.push(2); return k
+}
+
+fn test_rt_fs_rotate_if_over_classd() {
+    println("test_rt_fs_rotate_if_over_classd (F3 class-D batch3 · 3-arg discard · int(0) replicate)")
+    let mut ok = true
+    let s = rt_fs_rotate_if_over_classd()
+    println("  rt_fs_rotate_if_over_classd : " + to_string(len(s)) + " bytes (24 expected)")
+    if len(s) != 24 { println("  FAIL: rt_fs_rotate_if_over_classd expected 24 bytes"); ok = false }
+    if s[8] != 0 || s[9] != 0 || s[10] != 128 || s[11] != 82 {
+        println("  FAIL: mov w0,#0 mismatch"); ok = false
+    }
+    if s[12] != 0 || s[13] != 0 || s[14] != 0 || s[15] != 148 {
+        println("  FAIL: bl _hexa_int (BRANCH26 @0x0C) mismatch"); ok = false
+    }
+    if s[20] != 192 || s[21] != 3 || s[22] != 95 || s[23] != 214 {
+        println("  FAIL: ret trailer mismatch"); ok = false
+    }
+    if ok { println("  ALL CHECKS PASS") }
+}
+
+test_rt_fs_rotate_if_over_classd()
+
 test_runtime_arm64()
 test_neon_string_ops()
 test_rt_strdup()

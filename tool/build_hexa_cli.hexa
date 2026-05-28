@@ -827,9 +827,24 @@ fn _do_build(repo_root: string) {
             //                                   payload, NEW MOVN axis on the template)
             // All 6 instr · 24 B · BRANCH26 @0x0C. Same _hexa_int callee, same
             // ctor-bundle bind path. Activation count 46/640 → 49/640.
-            println("[selfemit] F3 Path A · B9.6-D3 — class-D HexaVal-repr bodies → _rt_isalpha + _rt_isalnum + _rt_pthread_noop + _rt_pthread_create_policy + _rt_net_zero + _rt_posix_ok + _rt_net_fail")
-            let classd = ["isalpha", "isalnum", "pthread_noop", "pthread_create_policy", "net_zero", "posix_ok", "net_fail"]
-            let classd_upper = ["ISALPHA", "ISALNUM", "PTHREAD_NOOP", "PTHREAD_CREATE_POLICY", "NET_ZERO", "POSIX_OK", "NET_FAIL"]
+            //
+            // F3 class-D batch3 (NEW-AXES exploration · this branch) appends 3
+            // more rt_fs_* primitives — the runtime.c L14129-block (gated 3-way
+            // here):
+            //   - rt_fs_stat            (hexa_void())   — 1-arg discard · NEW
+            //                                              SHAPE (5 instr / 20 B /
+            //                                              BRANCH26 @0x08 ·
+            //                                              callee = _hexa_void
+            //                                              NEW ctor dimension)
+            //   - rt_fs_append_atomic   (hexa_int(-1))  — 2-arg discard · MOVN
+            //                                              replicate of net_fail
+            //   - rt_fs_rotate_if_over  (hexa_int(0))   — 3-arg discard · int(0)
+            //                                              replicate of posix_ok
+            // Activation count 49/640 → 52/640 (this PR), 55→58 with concurrent
+            // batches.
+            println("[selfemit] F3 Path A · B9.6-D3 — class-D HexaVal-repr bodies → 10 primitives (isalpha · isalnum · 2× pthread · net_zero · posix_ok · net_fail · fs_stat · fs_append_atomic · fs_rotate_if_over)")
+            let classd = ["isalpha", "isalnum", "pthread_noop", "pthread_create_policy", "net_zero", "posix_ok", "net_fail", "fs_stat", "fs_append_atomic", "fs_rotate_if_over"]
+            let classd_upper = ["ISALPHA", "ISALNUM", "PTHREAD_NOOP", "PTHREAD_CREATE_POLICY", "NET_ZERO", "POSIX_OK", "NET_FAIL", "FS_STAT", "FS_APPEND_ATOMIC", "FS_ROTATE_IF_OVER"]
             let mut ci = 0
             while ci < len(classd) {
                 let cn = classd[ci]
