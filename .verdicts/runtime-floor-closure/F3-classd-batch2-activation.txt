@@ -1,0 +1,100 @@
+F3 class-D batch2 activation — 4-gate verdict
+===============================================
+PR follow-up to #1929 (batch1: rt_isalpha + rt_isalnum + rt_pthread_noop + rt_pthread_create_policy).
+
+Activates 3 more class-D HexaVal-repr 0-arg leaf primitives via the SAME
+runbook layer (3-way #if HEXA_RT_SELFEMIT extern / #elif !HEXA_HAS_HEXA_RT_STDLIB
+body / #else extern) in self/runtime.c L2289-block.
+
+Cumulative activation count: 46/640 → 49/640.
+
+Pick rationale
+---------------
+The 3 picks are the ENTIRE remaining `void`→HexaVal leaf pool in runtime.c
+(verified by `grep -nE '^HexaVal rt_[a-z_0-9]+\([^)]*\) \{ return hexa_(int|bool)\('`):
+
+| line | fn                       | body                  | template family               |
+|------|--------------------------|-----------------------|-------------------------------|
+| 2240 | rt_pthread_noop          | hexa_int(0)           | batch1 (PR #1923)             |
+| 2241 | rt_pthread_create_policy | hexa_int(1)           | batch1 (PR #1923)             |
+| 2292 | rt_net_fail              | hexa_int(-1)          | batch2 — NEW MOVN axis        |
+| 2293 | rt_net_zero              | hexa_int(0)           | batch2 — replicate            |
+| 2294 | rt_posix_ok              | hexa_int(0)           | batch2 — replicate            |
+
+After these 3 the pure-trivial-leaf pool is EXHAUSTED. Next family for batch3
+must cross into NEW structural axes: (i) rt_str_trim_start/end (HexaVal-arg
+hexa_str-return, NEW LR-spill+frame shape and string deref); (ii) rt_isdigit /
+rt_islower / rt_isupper / rt_isspace / rt_isxdigit / rt_iscntrl / rt_isprint /
+rt_isgraph / rt_ispunct DO NOT EXIST as rt_* fns (only as hxlcl_* helpers
+delegated to rt_isalnum/rt_isalpha — they are NOT direct candidates for class-D
+activation); (iii) rt_fmod/cos/sin/exp/log have loops/full math expansions (≥30
+instr, skip per task spec); (iv) rt_delete_file/append_file/read_lines do file
+I/O (multi-tag dispatch, skip).
+
+Runbook honest report (per task spec): the previous wave (PR #1929) found
+the rt_<n> single-bl leaf pool was shallow. This wave confirms — batch2
+clears the FINAL 3 single-bl leaves in runtime.c. Class-D scale-out
+beyond 49/640 requires a different structural template (multi-bl,
+HexaVal-arg, or HX_STR-deref) and falls outside the ≤30-instr leaf
+constraint per the task spec.
+
+Gate matrix
+-----------
+| Primitive    | (a) DEFAULT 0-extern | (b) JIT-exec | (c) extern genuine | (d) fixpoint |
+|--------------|----------------------|--------------|---------------------|--------------|
+| rt_net_zero  | PASS                 | PASS         | PASS                | PASS         |
+| rt_posix_ok  | PASS                 | PASS         | PASS                | PASS         |
+| rt_net_fail  | PASS                 | PASS         | PASS                | PASS         |
+
+(a) `clang -E -P -arch arm64 -I self self/runtime.c` diff vs origin/main:
+    DEFAULT build (no flags)           = 0 lines diff
+    -DHEXA_HAS_HEXA_RT_STDLIB build    = 0 lines diff
+    (HEXA_RT_SELFEMIT build NEW — emits 3 extern decls for rt_net_zero,
+     rt_posix_ok, rt_net_fail; verified by grep on -E output)
+
+(b) JIT-exec — minimal harness defines HexaVal + hexa_int, declares 3
+    rt_* externs, calls each, verifies return tag/value:
+      PASS rt_net_zero -> tag=0 v=0
+      PASS rt_posix_ok -> tag=0 v=0
+      PASS rt_net_fail -> tag=0 v=-1
+      PASS idempotency (3 fns × 2 calls)
+      exit=0
+
+(c) Linking the harness WITHOUT the 3 .o files:
+      Undefined symbols for architecture arm64:
+        "_rt_net_fail", referenced from: _main
+        "_rt_net_zero", referenced from: _main
+        "_rt_posix_ok", referenced from: _main
+      ld: symbol(s) not found for architecture arm64
+    Confirms the extern is REAL, not a stub.
+
+(d) Fixpoint structural — `git diff origin/main -- self/runtime.c`:
+    - 1 deletion (`#ifndef HEXA_HAS_HEXA_RT_STDLIB` directive becomes
+      `#if defined(HEXA_RT_SELFEMIT)` + `#elif !defined(...)` 3-way).
+    - All 3 standalone C bodies preserved in the `#elif` branch.
+    - 3 extern decls added in the new SELFEMIT branch.
+    No silent removal of any rt_* body. Additive guard.
+
+Layer 1 self-test (`HEXA_VAL_ARENA=0 hexa-run self/codegen/runtime_arm64.hexa`):
+    test_rt_net_zero_classd  ALL CHECKS PASS
+    test_rt_posix_ok_classd  ALL CHECKS PASS
+    test_rt_net_fail_classd  ALL CHECKS PASS
+
+Bytecode .o verification (`nm` + `otool -rv`):
+    /tmp/rt_net_zero_classd.o   T _rt_net_zero    + 1 BR26 reloc → _hexa_int
+    /tmp/rt_posix_ok_classd.o   T _rt_posix_ok    + 1 BR26 reloc → _hexa_int
+    /tmp/rt_net_fail_classd.o   T _rt_net_fail    + 1 BR26 reloc → _hexa_int
+
+All 3 .o = 320 bytes total · 24-byte code section · ONE BRANCH26 @0x0C
+(symbol _hexa_int) — matches batch1 leaf shape exactly except for the
+strtab (which carries the new symbol name) and (rt_net_fail only) the
+mov-immediate opcode (0x92800000 MOVN-x0 vs 0x52800000 mov-w0).
+
+Reusability note
+-----------------
+The runbook template (3-way gate · single-bl _hexa_int callee · 6-instr
+body) is now confirmed PATTERN-COMPLETE — it has captured every single-bl
+0-arg leaf candidate currently present in self/runtime.c. Future batches
+of class-D activation MUST tackle one of: HexaVal-arg unary leaves
+(e.g. rt_isalpha-shape body), or NEW math/IO families (which require
+template extensions beyond the current ≤30-instr leaf constraint).

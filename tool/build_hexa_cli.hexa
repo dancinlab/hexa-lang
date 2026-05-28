@@ -815,9 +815,16 @@ fn _do_build(repo_root: string) {
             // F3-classd-activation-runbook.txt): (a) default 0-extern preserved,
             // (b) guard-on .o links + JIT-exec correct, (c) guard-on no-.o
             // link-fail, (d) self-host fixpoint structural (additive guards).
-            println("[selfemit] F3 Path A · B9.6-D3 — class-D HexaVal-repr bodies → _rt_isalpha + _rt_isalnum + _rt_pthread_noop + _rt_pthread_create_policy")
-            let classd = ["isalpha", "isalnum", "pthread_noop", "pthread_create_policy"]
-            let classd_upper = ["ISALPHA", "ISALNUM", "PTHREAD_NOOP", "PTHREAD_CREATE_POLICY"]
+            // F3 class-D batch2 (this PR) appends 3 more leaf primitives:
+            //   - rt_net_zero (hexa_int(0))   — net delegation stub
+            //   - rt_posix_ok (hexa_int(0))   — POSIX delegation stub (cycle 6 ISO-1)
+            //   - rt_net_fail (hexa_int(-1))  — net delegation stub (signed-negative
+            //                                   payload, NEW MOVN axis on the template)
+            // All 6 instr · 24 B · BRANCH26 @0x0C. Same _hexa_int callee, same
+            // ctor-bundle bind path. Activation count 46/640 → 49/640.
+            println("[selfemit] F3 Path A · B9.6-D3 — class-D HexaVal-repr bodies → _rt_isalpha + _rt_isalnum + _rt_pthread_noop + _rt_pthread_create_policy + _rt_net_zero + _rt_posix_ok + _rt_net_fail")
+            let classd = ["isalpha", "isalnum", "pthread_noop", "pthread_create_policy", "net_zero", "posix_ok", "net_fail"]
+            let classd_upper = ["ISALPHA", "ISALNUM", "PTHREAD_NOOP", "PTHREAD_CREATE_POLICY", "NET_ZERO", "POSIX_OK", "NET_FAIL"]
             let mut ci = 0
             while ci < len(classd) {
                 let cn = classd[ci]
