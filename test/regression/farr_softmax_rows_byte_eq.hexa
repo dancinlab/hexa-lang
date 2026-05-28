@@ -1,3 +1,4 @@
+// @raw117_exempt
 // BC-ANIMA M2 (2026-05-28): byte-eq regression for the new 4-arg
 // `farr_softmax_rows(logits, out, rows, cols)` in-place builtin.
 //
@@ -12,50 +13,39 @@
 // Why ──────────────────────────────────────────────────────────────────
 // The anima M4b trainer (V=151643 decoder) currently CPU-loops
 // ~3V `farr_get`/`farr_set` per step for softmax — replacing it with
-// a single `farr_softmax_rows` call removes a 29M-double per-step
-// cost. Before wiring the trainer, we need a deterministic equivalence
+// a single `farr_softmax_rows` call removes a 29M-double per-step cost.
+// Before wiring the trainer, we need a deterministic equivalence
 // proof: the new in-place variant ≡ the existing allocate-new variant.
 //
-// Falsifier ────────────────────────────────────────────────────────────
-//   F-M2-SOFTMAX-INPLACE-BYTE-EQ
-//     For a 2×4 input, `farr_softmax_rows(X, Y_pre, 2, 4)` writes the
-//     same 8 doubles into `Y_pre` that `farr_softmax_rows_gpu(X, 2, 4)`
-//     returns. Element-wise difference must be exactly 0.0 (binary fp
-//     equality, NOT a tolerance) — the math kernels are identical and
-//     the runtime exec order is deterministic.
-//
-//   F-M2-SOFTMAX-INPLACE-ZERO-ROW
-//     Row of all-zeros must produce uniform 0.25 (exact: exp(0)=1, sum
-//     over 4 cells = 4, 1/4 = 0.25 — no reduction reorder on 4 wide).
-//
-//   F-M2-SOFTMAX-INPLACE-ERR
-//     R<=0 or C<=0 or unknown id → returns -1 (no buffer write).
-//
-// Equivalence chain
-//   `farr_softmax_rows`         → `_hx_farr_softmax_rows_inplace_cpu`
-//   `farr_softmax_rows_gpu`(3a) → `_hx_farr_softmax_rows_cpu`
-//   Both helpers: two-pass max-then-libm-exp-then-divide, same loop
-//   bounds, same accumulator order — bit-identical on the same input.
+// Falsifiers ───────────────────────────────────────────────────────────
+//   F-M2-SOFTMAX-INPLACE-BYTE-EQ   2×4 input — `farr_softmax_rows` (4-arg
+//                                  in-place) ≡ `farr_softmax_rows_gpu`
+//                                  (3-arg alloc-new), max|Δ|=0 (exact
+//                                  binary fp equality, same kernel math).
+//   F-M2-SOFTMAX-INPLACE-ZERO-ROW  all-zero row → uniform 0.25 (IEEE-754
+//                                  exact: 1+1+1+1=4, 1/4 representable).
+//   F-M2-SOFTMAX-INPLACE-ERR       R≤0/C≤0/bad ids → -1, no panic.
 
-fn abs_d(x: f64): f64 {
+fn abs_d(x: float) -> float {
     if x < 0.0 { return 0.0 - x }
     return x
 }
 
-fn fill8(a, v0, v1, v2, v3, v4, v5, v6, v7) {
-    farr_set(a, 0, v0)
-    farr_set(a, 1, v1)
-    farr_set(a, 2, v2)
-    farr_set(a, 3, v3)
-    farr_set(a, 4, v4)
-    farr_set(a, 5, v5)
-    farr_set(a, 6, v6)
-    farr_set(a, 7, v7)
+fn fill8(a: int, v0: float, v1: float, v2: float, v3: float,
+         v4: float, v5: float, v6: float, v7: float) {
+    let _0 = farr_set(a, 0, v0)
+    let _1 = farr_set(a, 1, v1)
+    let _2 = farr_set(a, 2, v2)
+    let _3 = farr_set(a, 3, v3)
+    let _4 = farr_set(a, 4, v4)
+    let _5 = farr_set(a, 5, v5)
+    let _6 = farr_set(a, 6, v6)
+    let _7 = farr_set(a, 7, v7)
 }
 
 fn main() {
-    var pass = 0
-    var fail = 0
+    let mut pass = 0
+    let mut fail = 0
 
     // ── F-M2-SOFTMAX-INPLACE-BYTE-EQ ─────────────────────────────────
     // 2×4 input
@@ -75,26 +65,26 @@ fn main() {
             println("FAIL  F-M2-SOFTMAX-INPLACE-BYTE-EQ  oracle (3-arg) returned " + to_string(Y_oracle))
             fail = fail + 1
         } else {
-            var max_d = 0.0
-            var i = 0
+            let mut max_d = 0.0
+            let mut i = 0
             while i < 8 {
                 let dv = abs_d(farr_get(Y_pre, i) - farr_get(Y_oracle, i))
                 if dv > max_d { max_d = dv }
                 i = i + 1
             }
             if max_d == 0.0 {
-                println("PASS  F-M2-SOFTMAX-INPLACE-BYTE-EQ  max|inplace − oracle| = 0.0 (byte-eq, 2×4)")
+                println("PASS  F-M2-SOFTMAX-INPLACE-BYTE-EQ  max|inplace − oracle| = 0.0 (byte-eq, 2x4)")
                 pass = pass + 1
             } else {
-                println("FAIL  F-M2-SOFTMAX-INPLACE-BYTE-EQ  max|Δ| = " + to_string(max_d))
+                println("FAIL  F-M2-SOFTMAX-INPLACE-BYTE-EQ  max|D| = " + to_string(max_d))
                 fail = fail + 1
             }
         }
     }
 
     // ── F-M2-SOFTMAX-INPLACE-ZERO-ROW ────────────────────────────────
-    // Row of all-zeros → exact 0.25 (no FP slack; 1.0 + 1.0 + 1.0 + 1.0
-    // is exact in IEEE-754 doubles, 1/4 is exact).
+    // Row of all-zeros → exact 0.25 (no FP slack; 1.0+1.0+1.0+1.0 is
+    // exact in IEEE-754 doubles, 1/4 is exact).
     let X0 = farr_zeros(8)
     fill8(X0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
     let Y0 = farr_zeros(8)
@@ -103,8 +93,8 @@ fn main() {
         println("FAIL  F-M2-SOFTMAX-INPLACE-ZERO-ROW  rc=" + to_string(rc0))
         fail = fail + 1
     } else {
-        var zero_ok = true
-        var j = 0
+        let mut zero_ok = true
+        let mut j = 0
         while j < 8 {
             if farr_get(Y0, j) != 0.25 { zero_ok = false }
             j = j + 1
@@ -127,7 +117,7 @@ fn main() {
     let r3 = farr_softmax_rows(0 - 1, Yb, 1, 4)     // bad x_id
     let r4 = farr_softmax_rows(Xb, 0 - 1, 1, 4)     // bad out_id
     if r1 == 0 - 1 && r2 == 0 - 1 && r3 == 0 - 1 && r4 == 0 - 1 {
-        println("PASS  F-M2-SOFTMAX-INPLACE-ERR  all 4 bad-arg cases → -1")
+        println("PASS  F-M2-SOFTMAX-INPLACE-ERR  all 4 bad-arg cases -> -1")
         pass = pass + 1
     } else {
         println("FAIL  F-M2-SOFTMAX-INPLACE-ERR  r1=" + to_string(r1) + " r2=" + to_string(r2) + " r3=" + to_string(r3) + " r4=" + to_string(r4))
@@ -135,7 +125,7 @@ fn main() {
     }
 
     println("")
-    println("──────────────────────────────────────────────")
+    println("--------------------------------------------------")
     println("M2 byte-eq regression: " + to_string(pass) + " PASS / " + to_string(fail) + " FAIL")
     if fail != 0 {
         println("OVERALL: FAIL")
