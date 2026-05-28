@@ -20,6 +20,7 @@
 > **권고 = `mkdir(path)`** (실측 검증): `self/codegen.hexa` 가 `name=="mkdir"` → `hexa_bool(mkdir(HX_STR(p),0755)==0)` 직접 libc `mkdir(2)` 로 lower. ubu-2 current-main `hexa run`(compile-then-exec) 실측: `mkdir("/tmp/mkd_real") -> true` + `/tmp/mkd_real` 실제 생성 확인. `mkdir` 은 bind allowlist 등록(`compiler/check/bind.hexa` L1062). 단일레벨(부모 미생성).
 > **⚠ 초판 오진 정정 — `fs_mkdir_p` 쓰지 말 것**: 처음엔 `fs_mkdir_p`(→`rt_fs_mkdir_p` "재귀 POSIX mkdir 루프")를 canonical 로 권고했으나 **틀림**. `rt_fs_mkdir_p`(`self/runtime.c:13605`) 는 `{ (void)path; return hexa_int(0); }` = **silent no-op weak stub**. `fs_mkdir_p(p)` 는 컴파일·`0`("성공") 반환하나 dir 안 만듦 (local + ubu-2 default `hexa build`/`run` 양쪽 실측 `0`+미생성). 컴파일 통과만 보고 동작한다 오판한 것. anima sed 의 `rt_fs_mkdir_p(` 도 사실 no-op 이었음 — ckpt-save 를 inline decode 로 폐기해서 안 물렸을 뿐 (DECODER.md L121). 또 `hexa run` 은 interp 아님(R7 cutover = compile-then-exec) — interp-stub 으로 오해했던 것도 정정.
 > **recommend**: anima 가 `dir_create(X)` → `mkdir(X)` 1줄 교체 (단일레벨이면 충분; 중첩 경로는 레벨별 mkdir 또는 fs_mkdir_p stub fix 후). **hexa-lang 코드변경 불요** (working `mkdir` 존재 · g0). `fs_mkdir_p` stub 자체는 별 OPEN finding (INBOX.md 참조) — 재귀 mkdir 빌트인 default-build 무동작 = silent-success data-loss class.
+> **✅ stub 해소 (PR #1880)**: `rt_fs_mkdir_p` no-op 을 실 재귀 POSIX `mkdir(2)` 로 복원 (성공/idempotent=0·실패 -errno·정규파일 prefix=-ENOTDIR). 알고리즘 단위테스트 ALL PASS(fs.hexa 26-28 계약) + runtime.c in-context 구문검사 0 error. → 이제 anima 는 중첩 경로에 `fs_mkdir_p(path)` (재귀) 또는 단일레벨 `mkdir(path)` 둘 다 사용 가능.
 
 
 
