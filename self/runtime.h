@@ -981,6 +981,22 @@ HexaVal farr_ce_seed_gpu(HexaVal logits_v, HexaVal target_ids_v,
                          HexaVal R_v, HexaVal V_v,
                          HexaVal out_loss_v, HexaVal out_dlogits_v);      /* runtime.c — RFC lmhead-ce seam */
 
+/* ── BC-ANIMA M3 (2026-05-28): 5-arg seed-only CE gradient ─────────
+ * farr_ce_seed(softmax_id, target_ids_id, dlogits_id, R, C) -> int rc
+ * (0 ok / -1). Writes dlogits[r,c] = softmax[r,c] - onehot(c==tgt[r])
+ * in place. Caller-allocated dlogits. Lighter sibling of the 6-arg
+ * farr_ce_seed_gpu (which fuses loss + seed) — used when softmax is
+ * already computed (anima M2 farr_softmax_rows). 5-arg → past the
+ * hexa_callN ceiling, so codegen lowers to a direct hexa_farr_ce_seed
+ * call (same seam as farr_matmul). CUDA build → _hx_cuda_farr_ce_seed
+ * slim block-per-row kernel; no-CUDA → _hx_farr_ce_seed_cpu_v2 host
+ * FP64 reference. The bare `farr_ce_seed` form is the seam alias. */
+HexaVal hexa_farr_ce_seed(HexaVal softmax_v, HexaVal target_ids_v,
+                          HexaVal dlogits_v,
+                          HexaVal R_v, HexaVal C_v);                       /* runtime.c — BC-ANIMA M3 */
+HexaVal farr_ce_seed(HexaVal softmax, HexaVal target_ids,
+                     HexaVal dlogits, HexaVal R, HexaVal C);               /* runtime.c — BC-ANIMA M3 seam */
+
 /* ── RFC 050 L1 slice 1: forge dispatcher callable from hexa ────────
  * codegen.hexa lowers the 5-arg `forge_dispatch_matmul` builtin to a
  * direct `hexa_forge_dispatch_matmul` call. It packs a ForgeShapeInfo +

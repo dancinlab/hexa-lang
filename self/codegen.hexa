@@ -6957,6 +6957,17 @@ fn gen2_expr(node) {
                 // anima RFC 034 (2026-05-16): farr autograd — ad_matmul
                 // (5-arg; forward = farr_matmul + records backward).
                 if name == "ad_matmul"      { return "hexa_ad_matmul(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")" }
+                // BC-ANIMA M3 (2026-05-28): farr_ce_seed — 5-arg
+                // seed-only CE gradient (softmax, target_ids, dlogits,
+                // R, C) -> int rc. dlogits[r,c] = softmax[r,c]
+                // - onehot(c == target[r]) in place. CUDA build →
+                // _hx_cuda_farr_ce_seed slim kernel; else
+                // _hx_farr_ce_seed_cpu_v2 host FP64 reference. Lighter
+                // sibling of the 6-arg farr_ce_seed_gpu (fused loss +
+                // seed). Same direct-C seam as farr_matmul (past the
+                // hexa_callN ceiling, so no carrier — bare wrapper in
+                // runtime.c links symbol).
+                if name == "farr_ce_seed"   { return "hexa_farr_ce_seed(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")" }
                 // stdlib/os/pty — 5-arg builtin (RFC stdlib-os-pty.md)
                 if name == "pty_set_winsize" {
                     return "hexa_pty_set_winsize(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")"
