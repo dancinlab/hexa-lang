@@ -3426,6 +3426,171 @@ fn rt_kill() {
     return c
 }
 
+// ── rt_lseek (B9.6-C9 — class-C syscall · int+long+int _cf + errno) ───
+// lseek(int fd, long off, int whence) -> long. The FIRST 3-arg svc-_cf body —
+// it extends the proven 2-arg _cf template (dup2/fstat/stat) by ONE more arg.
+// The arg-widening is selective: fd (int, x0) and whence (int, x2) are each
+// sign-extended; off (long, x1) is already 64-bit so it passes through
+// untouched. Note the sxtw targets are x0 AND x2 (NOT x1) — the first body to
+// skip the MIDDLE register. runtime.c L1538:
+//   hxlcl_lseek(int fd, long off, int whence) { return _hxlcl_syscall3_cf(HXLCL_SYS_LSEEK, (long)fd, off, (long)whence); }
+// SYS_LSEEK = 199 (0xc7). clang -O2 (== as -arch arm64, errno-define context):
+//   sxtw x0,w0 / sxtw x2,w2 / mov w16,#199 / svc #0x80 / cset x8,hs / cbz x8,Lret
+//   / adrp x8,errno / str w0,[x8] / mov x0,#-1 / ret
+// 10-instr 40 B body (same length as rt_dup2 — two sxtw + the full _cf errno
+// tail). errno reloc sites: 0x18 (PAGE21) / 0x1c (PAGEOFF12) — same as rt_dup2
+// (the leading two sxtw push the adrp/str down to the dup2 offsets).
+fn rt_lseek() {
+    let mut c = []
+    // sxtw x0, w0  (sign-extend fd)         0x93407C00
+    c.push(0)
+    c.push(124)
+    c.push(64)
+    c.push(147)
+    // sxtw x2, w2  (sign-extend whence)     0x93407C42
+    c.push(66)
+    c.push(124)
+    c.push(64)
+    c.push(147)
+    // mov w16, #199  (SYS_LSEEK)            0x528018F0
+    c.push(240)
+    c.push(24)
+    c.push(128)
+    c.push(82)
+    // svc #0x80                             0xD4001001
+    c.push(1)
+    c.push(16)
+    c.push(0)
+    c.push(212)
+    // cset x8, hs  (capture carry = error)  0x9A9F37E8
+    c.push(232)
+    c.push(55)
+    c.push(159)
+    c.push(154)
+    // cbz x8, Lret (success → skip errno)   0xB4000088  (+0x10 to ret)
+    c.push(136)
+    c.push(0)
+    c.push(0)
+    c.push(180)
+    // adrp x8, errno@PAGE  [RELOC PAGE21]   0x90000008  (imm zeroed)
+    c.push(8)
+    c.push(0)
+    c.push(0)
+    c.push(144)
+    // str w0, [x8, errno@PAGEOFF] [RELOC]   0xB9000100  (imm zeroed)
+    c.push(0)
+    c.push(1)
+    c.push(0)
+    c.push(185)
+    // mov x0, #-1  (error return)           0x92800000
+    c.push(0)
+    c.push(0)
+    c.push(128)
+    c.push(146)
+    // ret  (x0 = new offset / -1 error)     0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
+// Reloc table for rt_lseek — two errno records (adrp/str), same offsets as
+// rt_dup2 (the leading two sxtw match the dup2 prologue length):
+//   offset 0x18 (24) → ARM64_RELOC_PAGE21   (kind 3, pcrel adrp)
+//   offset 0x1c (28) → ARM64_RELOC_PAGEOFF12 (kind 4, str low-12 bits)
+fn rt_lseek_reloc_offs() {
+    let mut o = []
+    o.push(24)
+    o.push(28)
+    return o
+}
+fn rt_lseek_reloc_kinds() {
+    let mut k = []
+    k.push(3)
+    k.push(4)
+    return k
+}
+
+// ── rt_fcntl (B9.6-C10 — class-C syscall · int+int+long NON-_cf no-errno) ─
+// fcntl(int fd, int cmd, long arg) -> int. A 3-arg svc WITHOUT the carry-flag /
+// errno path (runtime.c uses the plain `_hxlcl_syscall3`, not the `_cf`
+// variant) — the 3-arg analogue of rt_kill. fd (int, x0) and cmd (int, x1) are
+// each sign-extended; arg (long, x2) is already 64-bit and passes through
+// untouched, then trap and ret with NO error branch and NO reloc. runtime.c
+// L1524:
+//   hxlcl_fcntl(int fd, int cmd, long arg) { return (int)_hxlcl_syscall3(HXLCL_SYS_FCNTL, (long)fd, (long)cmd, arg); }
+// SYS_FCNTL = 92 (0x5c). clang -O2 (== as -arch arm64) is byte-for-byte:
+//   sxtw x0,w0 / sxtw x1,w1 / mov w16,#92 / svc #0x80 / ret  (no reloc)
+// 5-instr 20 B body — byte-identical SHAPE to rt_kill (dual-sxtw + svc + ret),
+// only the syscall number differs (92 vs 37).
+fn rt_fcntl() {
+    let mut c = []
+    // sxtw x0, w0  (sign-extend fd)         0x93407C00
+    c.push(0)
+    c.push(124)
+    c.push(64)
+    c.push(147)
+    // sxtw x1, w1  (sign-extend cmd)        0x93407C21
+    c.push(33)
+    c.push(124)
+    c.push(64)
+    c.push(147)
+    // mov w16, #92  (SYS_FCNTL)             0x52800B90
+    c.push(144)
+    c.push(11)
+    c.push(128)
+    c.push(82)
+    // svc #0x80                             0xD4001001
+    c.push(1)
+    c.push(16)
+    c.push(0)
+    c.push(212)
+    // ret  (x0 = trap result)               0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
+// ── rt_ioctl (B9.6-C11 — class-C syscall · int+ulong+ptr NON-_cf no-errno) ─
+// ioctl(int fd, unsigned long req, void *arg) -> int. A 3-arg svc WITHOUT the
+// carry-flag / errno path (plain `_hxlcl_syscall3`). Only the FIRST arg (fd,
+// int, x0) is sign-extended; req (unsigned long, x1) and arg (ptr, x2) are both
+// already 64-bit and pass through untouched. So it has a SINGLE sxtw — shorter
+// than fcntl/kill — then trap and ret with NO error branch and NO reloc.
+// runtime.c L1525:
+//   hxlcl_ioctl(int fd, unsigned long req, void *arg) { return (int)_hxlcl_syscall3(HXLCL_SYS_IOCTL, (long)fd, (long)req, (long)arg); }
+// SYS_IOCTL = 54 (0x36). clang -O2 (== as -arch arm64) is byte-for-byte:
+//   sxtw x0,w0 / mov w16,#54 / svc #0x80 / ret  (no reloc)
+// 4-instr 16 B body (4 B shorter than fcntl — the single sxtw) — same length /
+// shape as rt_getuid but with the leading sxtw on x0 instead of a mov x0,#0.
+fn rt_ioctl() {
+    let mut c = []
+    // sxtw x0, w0  (sign-extend fd)         0x93407C00
+    c.push(0)
+    c.push(124)
+    c.push(64)
+    c.push(147)
+    // mov w16, #54  (SYS_IOCTL)             0x528006D0
+    c.push(208)
+    c.push(6)
+    c.push(128)
+    c.push(82)
+    // svc #0x80                             0xD4001001
+    c.push(1)
+    c.push(16)
+    c.push(0)
+    c.push(212)
+    // ret  (x0 = trap result)               0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
 // ── self-test ────────────────────────────────────────────────
 
 fn test_runtime_arm64() {
@@ -3495,6 +3660,11 @@ fn test_runtime_arm64() {
     let st_rkind = rt_stat_reloc_kinds()
     // B9.6-C8 — class-C syscall ABI: 2-arg non-_cf no-errno (int+int, getuid 2-arg analogue).
     let kill_b = rt_kill()
+    let lseek_b = rt_lseek()
+    let ls_roff = rt_lseek_reloc_offs()
+    let ls_rkind = rt_lseek_reloc_kinds()
+    let fcntl_b = rt_fcntl()
+    let ioctl_b = rt_ioctl()
 
     println("runtime_arm64 — ARM64 machine code byte arrays")
     println("  rt_exit          : " + to_string(len(exit_bytes)) + " bytes")
@@ -3539,6 +3709,9 @@ fn test_runtime_arm64() {
     println("  rt_fstat         : " + to_string(len(fstat_b)) + " bytes (" + to_string(len(fs_roff)) + " relocs)")
     println("  rt_stat          : " + to_string(len(stat_b)) + " bytes (" + to_string(len(st_roff)) + " relocs)")
     println("  rt_kill          : " + to_string(len(kill_b)) + " bytes (no reloc)")
+    println("  rt_lseek         : " + to_string(len(lseek_b)) + " bytes (" + to_string(len(ls_roff)) + " relocs)")
+    println("  rt_fcntl         : " + to_string(len(fcntl_b)) + " bytes (no reloc)")
+    println("  rt_ioctl         : " + to_string(len(ioctl_b)) + " bytes (no reloc)")
 
     // Verify sizes match expected instruction counts * 4
     let mut ok = true
@@ -3788,6 +3961,58 @@ fn test_runtime_arm64() {
     if kill_b[12] != 1 || kill_b[13] != 16 || kill_b[14] != 0 || kill_b[15] != 212 { println("  FAIL: rt_kill missing svc #0x80 at offset 12"); ok = false }
     // ret trailer (c0 03 5f d6) directly after svc — no carry-flag / errno path.
     if kill_b[16] != 192 || kill_b[17] != 3 || kill_b[18] != 95 || kill_b[19] != 214 { println("  FAIL: rt_kill no RET (or unexpected errno tail)"); ok = false }
+    // B9.6-C9 — class-C syscall ABI: rt_lseek is a 10-instr 40 B body (FIRST
+    //   3-arg svc-_cf; sxtw x0/fd + sxtw x2/whence — the MIDDLE x1/off long left
+    //   untouched — then mov w16,#199 / svc / cset / cbz / adrp errno / str /
+    //   mov x0,#-1 / ret). errno relocs at the rt_dup2 offsets (0x18/0x1c).
+    if len(lseek_b) != 40 { println("  FAIL: rt_lseek expected 40, got " + to_string(len(lseek_b))); ok = false }
+    // sxtw x0,w0 prefix (00 7c 40 93) — fd arg sign-extended.
+    if lseek_b[0] != 0 || lseek_b[1] != 124 || lseek_b[2] != 64 || lseek_b[3] != 147 { println("  FAIL: rt_lseek missing sxtw x0 (fd)"); ok = false }
+    // sxtw x2,w2 (42 7c 40 93) — whence arg sign-extended (x1/off untouched).
+    if lseek_b[4] != 66 || lseek_b[5] != 124 || lseek_b[6] != 64 || lseek_b[7] != 147 { println("  FAIL: rt_lseek missing sxtw x2 (whence)"); ok = false }
+    // mov w16,#199 (f0 18 80 52) — SYS_LSEEK loaded into x16.
+    if lseek_b[8] != 240 || lseek_b[9] != 24 || lseek_b[10] != 128 || lseek_b[11] != 82 { println("  FAIL: rt_lseek wrong syscall number (SYS_LSEEK=199)"); ok = false }
+    // svc #0x80 at offset 12 (01 10 00 d4).
+    if lseek_b[12] != 1 || lseek_b[13] != 16 || lseek_b[14] != 0 || lseek_b[15] != 212 { println("  FAIL: rt_lseek missing svc #0x80 at offset 12"); ok = false }
+    // cset x8,hs at offset 16 (e8 37 9f 9a) — carry-flag capture.
+    if lseek_b[16] != 232 || lseek_b[17] != 55 || lseek_b[18] != 159 || lseek_b[19] != 154 { println("  FAIL: rt_lseek missing cset (carry capture)"); ok = false }
+    // adrp x8,errno at offset 24 (08 00 00 90) — PAGE21 reloc site (== rt_dup2).
+    if lseek_b[24] != 8 || lseek_b[25] != 0 || lseek_b[26] != 0 || lseek_b[27] != 144 { println("  FAIL: rt_lseek missing adrp errno (reloc 0x18)"); ok = false }
+    // str w0,[x8] at offset 28 (00 01 00 b9) — PAGEOFF12 reloc site.
+    if lseek_b[28] != 0 || lseek_b[29] != 1 || lseek_b[30] != 0 || lseek_b[31] != 185 { println("  FAIL: rt_lseek missing str errno (reloc 0x1c)"); ok = false }
+    // ret trailer (c0 03 5f d6).
+    if lseek_b[36] != 192 || lseek_b[37] != 3 || lseek_b[38] != 95 || lseek_b[39] != 214 { println("  FAIL: rt_lseek no RET"); ok = false }
+    // reloc table: 2 records (PAGE21@0x18 + PAGEOFF12@0x1c) — same as rt_dup2.
+    if len(ls_roff) != 2 { println("  FAIL: rt_lseek expected 2 reloc offsets, got " + to_string(len(ls_roff))); ok = false }
+    if len(ls_rkind) != 2 { println("  FAIL: rt_lseek expected 2 reloc kinds, got " + to_string(len(ls_rkind))); ok = false }
+    if ls_roff[0] != 24 || ls_roff[1] != 28 { println("  FAIL: rt_lseek reloc offsets must be 0x18,0x1c"); ok = false }
+    if ls_rkind[0] != 3 || ls_rkind[1] != 4 { println("  FAIL: rt_lseek reloc kinds must be PAGE21(3),PAGEOFF12(4)"); ok = false }
+    // B9.6-C10 — class-C syscall ABI: rt_fcntl is a 5-instr 20 B leaf (int+int+
+    //   long NON-_cf no-errno; sxtw x0/fd + sxtw x1/cmd, x2/arg long untouched,
+    //   trap, ret — same shape as rt_kill, only the SYS number differs).
+    if len(fcntl_b) != 20 { println("  FAIL: rt_fcntl expected 20, got " + to_string(len(fcntl_b))); ok = false }
+    // sxtw x0,w0 prefix (00 7c 40 93) — fd arg sign-extended.
+    if fcntl_b[0] != 0 || fcntl_b[1] != 124 || fcntl_b[2] != 64 || fcntl_b[3] != 147 { println("  FAIL: rt_fcntl missing sxtw x0 (fd)"); ok = false }
+    // sxtw x1,w1 (21 7c 40 93) — cmd arg sign-extended (x2/arg long untouched).
+    if fcntl_b[4] != 33 || fcntl_b[5] != 124 || fcntl_b[6] != 64 || fcntl_b[7] != 147 { println("  FAIL: rt_fcntl missing sxtw x1 (cmd)"); ok = false }
+    // mov w16,#92 (90 0b 80 52) — SYS_FCNTL loaded into x16.
+    if fcntl_b[8] != 144 || fcntl_b[9] != 11 || fcntl_b[10] != 128 || fcntl_b[11] != 82 { println("  FAIL: rt_fcntl wrong syscall number (SYS_FCNTL=92)"); ok = false }
+    // svc #0x80 at offset 12 (01 10 00 d4) — trap, NO errno tail.
+    if fcntl_b[12] != 1 || fcntl_b[13] != 16 || fcntl_b[14] != 0 || fcntl_b[15] != 212 { println("  FAIL: rt_fcntl missing svc #0x80 at offset 12"); ok = false }
+    // ret trailer (c0 03 5f d6) directly after svc — no carry-flag / errno path.
+    if fcntl_b[16] != 192 || fcntl_b[17] != 3 || fcntl_b[18] != 95 || fcntl_b[19] != 214 { println("  FAIL: rt_fcntl no RET (or unexpected errno tail)"); ok = false }
+    // B9.6-C11 — class-C syscall ABI: rt_ioctl is a 4-instr 16 B leaf (int+ulong+
+    //   ptr NON-_cf no-errno; ONLY x0/fd sign-extended — x1/req + x2/arg already
+    //   64-bit, so a SINGLE sxtw — trap, ret. 4 B shorter than rt_fcntl).
+    if len(ioctl_b) != 16 { println("  FAIL: rt_ioctl expected 16, got " + to_string(len(ioctl_b))); ok = false }
+    // sxtw x0,w0 prefix (00 7c 40 93) — fd arg sign-extended (req/arg untouched).
+    if ioctl_b[0] != 0 || ioctl_b[1] != 124 || ioctl_b[2] != 64 || ioctl_b[3] != 147 { println("  FAIL: rt_ioctl missing sxtw x0 (fd)"); ok = false }
+    // mov w16,#54 (d0 06 80 52) — SYS_IOCTL loaded into x16.
+    if ioctl_b[4] != 208 || ioctl_b[5] != 6 || ioctl_b[6] != 128 || ioctl_b[7] != 82 { println("  FAIL: rt_ioctl wrong syscall number (SYS_IOCTL=54)"); ok = false }
+    // svc #0x80 at offset 8 (01 10 00 d4) — trap, NO errno tail.
+    if ioctl_b[8] != 1 || ioctl_b[9] != 16 || ioctl_b[10] != 0 || ioctl_b[11] != 212 { println("  FAIL: rt_ioctl missing svc #0x80 at offset 8"); ok = false }
+    // ret trailer (c0 03 5f d6) directly after svc — no carry-flag / errno path.
+    if ioctl_b[12] != 192 || ioctl_b[13] != 3 || ioctl_b[14] != 95 || ioctl_b[15] != 214 { println("  FAIL: rt_ioctl no RET (or unexpected errno tail)"); ok = false }
 
     // Verify all sizes are multiples of 4 (ARM64 fixed-width)
     if len(exit_bytes) % 4 != 0 { println("  FAIL: rt_exit not aligned"); ok = false }
@@ -3832,6 +4057,9 @@ fn test_runtime_arm64() {
     if len(fstat_b) % 4 != 0 { println("  FAIL: rt_fstat not aligned"); ok = false }
     if len(stat_b) % 4 != 0 { println("  FAIL: rt_stat not aligned"); ok = false }
     if len(kill_b) % 4 != 0 { println("  FAIL: rt_kill not aligned"); ok = false }
+    if len(lseek_b) % 4 != 0 { println("  FAIL: rt_lseek not aligned"); ok = false }
+    if len(fcntl_b) % 4 != 0 { println("  FAIL: rt_fcntl not aligned"); ok = false }
+    if len(ioctl_b) % 4 != 0 { println("  FAIL: rt_ioctl not aligned"); ok = false }
     // B9.6-D2 — all three end with ret (192,3,95,214).
     let nhf = len(hfloat)
     if hfloat[nhf - 4] != 192 { println("  FAIL: rt_hexa_float no RET"); ok = false }
