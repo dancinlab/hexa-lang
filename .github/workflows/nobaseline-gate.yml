@@ -92,7 +92,46 @@ jobs:
         run: |
           set -euo pipefail
           ./hexa --version
-          echo "::notice::no-baseline dry-run GREEN (darwin-arm64) — real release stages survive seed removal via prebuilt runtime.a"
+          echo "::notice::no-baseline Stage-0/1/2 GREEN (darwin-arm64) — seeds removed via prebuilt runtime.a"
+
+      # .c-graduation Phase-3 driver fix gate (THE missing piece): the prior
+      # nobaseline gate stopped at Stage 0/1/2 + --version and MISSED Stage 3
+      # (precompile), which is where #2040 actually died — `hexa run
+      # tool/build_precompile.hexa` shells `hexa build <s>` per manifest entry,
+      # and the `hexa build` DRIVER hard-compiled self/runtime.c (now removed).
+      # This step exercises the REAL Stage 3 + Package release sequence with the
+      # seeds GONE, so the gate finally == the full release path including the
+      # in-binary runtime-compile. HEXA_PREBUILT_RUNTIME is exported so the
+      # fixed driver links the prebuilt archive instead of the absent runtime.c.
+      - name: Stage 3 + Package — REAL release precompile (seeds removed)
+        shell: bash
+        env:
+          HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
+          # CI dry-run bypass for the Darwin `hexa build` panic-trigger refuse
+          # gate (output-under-/tmp guard); non-heavy precompile only.
+          HEXA_MAC_BUILD_OK: "1"
+        run: |
+          set -euo pipefail
+          export HEXA_LANG="$PWD"
+          export HEXA_MODULE_LOADER="$PWD/build/hexa_module_loader"
+          export PATH="$PWD:$PATH"
+          # Stage 3 — precompile shipped scripts via `hexa build` (the driver path).
+          ./hexa run tool/build_precompile.hexa
+          echo "--- release/precompile/ contents ---"
+          ls -la release/precompile/
+          test -d release/precompile
+          test "$(ls -1 release/precompile/ | wc -l)" -gt 0
+          # Package — mirror release.yml: assemble tarball with prebuilt runtime.a.
+          target="darwin-arm64"; stage="dist/hexa-${target}"
+          mkdir -p "$stage/build" "$stage/release/precompile"
+          cp hexa "$stage/hexa"
+          cp build/hexa_module_loader "$stage/build/hexa_module_loader"
+          cp build/runtime.a "$stage/build/runtime.a"
+          cp -R release/precompile/. "$stage/release/precompile/"
+          tar -czf "hexa-${target}.tar.gz" -C dist "hexa-${target}"
+          n=$(tar -tzf "hexa-${target}.tar.gz" | grep -cE "hexa-${target}/release/precompile/[^/]+$" || true)
+          echo "tarball precompile entries: $n"; test "$n" -gt 0
+          echo "::notice::no-baseline FULL release (incl Stage 3 precompile + Package) GREEN (darwin-arm64) — hexa build DRIVER survives removed seeds"
 
   nobaseline-linux-x86_64:
     name: nobaseline (linux-x86_64)
@@ -133,7 +172,34 @@ jobs:
         run: |
           set -euo pipefail
           ./hexa --version
-          echo "::notice::no-baseline dry-run GREEN (linux-x86_64) — real release stages survive seed removal via prebuilt runtime.a"
+          echo "::notice::no-baseline Stage-0/1/2 GREEN (linux-x86_64) — seeds removed via prebuilt runtime.a"
+
+      # .c-graduation Phase-3 driver fix gate — REAL Stage 3 precompile (the
+      # path that killed #2040: `hexa build` driver hard-compiled runtime.c).
+      - name: Stage 3 + Package — REAL release precompile (seeds removed)
+        shell: bash
+        env:
+          HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
+        run: |
+          set -euo pipefail
+          export HEXA_LANG="$PWD"
+          export HEXA_MODULE_LOADER="$PWD/build/hexa_module_loader"
+          export PATH="$PWD:$PATH"
+          ./hexa run tool/build_precompile.hexa
+          echo "--- release/precompile/ contents ---"
+          ls -la release/precompile/
+          test -d release/precompile
+          test "$(ls -1 release/precompile/ | wc -l)" -gt 0
+          target="linux-x86_64"; stage="dist/hexa-${target}"
+          mkdir -p "$stage/build" "$stage/release/precompile"
+          cp hexa "$stage/hexa"
+          cp build/hexa_module_loader "$stage/build/hexa_module_loader"
+          cp build/runtime.a "$stage/build/runtime.a"
+          cp -R release/precompile/. "$stage/release/precompile/"
+          tar -czf "hexa-${target}.tar.gz" -C dist "hexa-${target}"
+          n=$(tar -tzf "hexa-${target}.tar.gz" | grep -cE "hexa-${target}/release/precompile/[^/]+$" || true)
+          echo "tarball precompile entries: $n"; test "$n" -gt 0
+          echo "::notice::no-baseline FULL release (incl Stage 3 precompile + Package) GREEN (linux-x86_64) — hexa build DRIVER survives removed seeds"
 
   nobaseline-linux-arm64:
     name: nobaseline (linux-arm64)
@@ -174,7 +240,33 @@ jobs:
         run: |
           set -euo pipefail
           ./hexa --version
-          echo "::notice::no-baseline dry-run GREEN (linux-arm64) — real release stages survive seed removal via prebuilt runtime.a"
+          echo "::notice::no-baseline Stage-0/1/2 GREEN (linux-arm64) — seeds removed via prebuilt runtime.a"
+
+      # .c-graduation Phase-3 driver fix gate — REAL Stage 3 precompile.
+      - name: Stage 3 + Package — REAL release precompile (seeds removed)
+        shell: bash
+        env:
+          HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
+        run: |
+          set -euo pipefail
+          export HEXA_LANG="$PWD"
+          export HEXA_MODULE_LOADER="$PWD/build/hexa_module_loader"
+          export PATH="$PWD:$PATH"
+          ./hexa run tool/build_precompile.hexa
+          echo "--- release/precompile/ contents ---"
+          ls -la release/precompile/
+          test -d release/precompile
+          test "$(ls -1 release/precompile/ | wc -l)" -gt 0
+          target="linux-arm64"; stage="dist/hexa-${target}"
+          mkdir -p "$stage/build" "$stage/release/precompile"
+          cp hexa "$stage/hexa"
+          cp build/hexa_module_loader "$stage/build/hexa_module_loader"
+          cp build/runtime.a "$stage/build/runtime.a"
+          cp -R release/precompile/. "$stage/release/precompile/"
+          tar -czf "hexa-${target}.tar.gz" -C dist "hexa-${target}"
+          n=$(tar -tzf "hexa-${target}.tar.gz" | grep -cE "hexa-${target}/release/precompile/[^/]+$" || true)
+          echo "tarball precompile entries: $n"; test "$n" -gt 0
+          echo "::notice::no-baseline FULL release (incl Stage 3 precompile + Package) GREEN (linux-arm64) — hexa build DRIVER survives removed seeds"
 
   # ── .c-graduation Phase 4/5 — FINAL 3 tracked .c removal-safety DRY-RUN ─────
   #

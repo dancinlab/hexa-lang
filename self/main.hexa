@@ -1265,6 +1265,29 @@ fn resolve_hxroot() {
     return "."
 }
 
+// .c-graduation Phase-3 driver fix (2026-05-29): resolve the runtime link
+// argument honoring HEXA_PREBUILT_RUNTIME ("frozen dough" / rustc-stage0).
+//
+// THE SEAM: hexa_cc.c / main.c / module_loader.c only #include "runtime.h"
+// (signatures) at compile time — the bodies live in self/runtime.c. So the
+// final clang LINK can consume a PREBUILT runtime object/archive instead of
+// re-compiling self/runtime.c (which #includes the ~18 seed .c TUs). This is
+// exactly what tool/stage_build_hexa does for release.yml Stage 0/1/2; this
+// helper applies the SAME seam at the `hexa build` / `hexa cc` DRIVER level so
+// the in-binary transpiler-bootstrap (resolve_or_bootstrap_hexat → cmd_cc) and
+// the user-binary final link survive once the seed .c files are removed.
+//
+// Returns the shell-quoting-ready prebuilt path when HEXA_PREBUILT_RUNTIME is
+// set AND the file exists, else "" (caller falls back to the source path —
+// byte-equivalent no-op today while seeds are present).
+fn resolve_prebuilt_runtime() {
+    let p = env("HEXA_PREBUILT_RUNTIME")
+    if len(p) > 0 && file_exists(p) {
+        return p
+    }
+    return ""
+}
+
 fn cmd_cc() {
     println("=== Rebuilding hexa_cc (transpiler) ===")
     let __hxroot = resolve_hxroot()
@@ -1286,18 +1309,28 @@ fn cmd_cc() {
     // ~33 K LOC TU (measured 26.47 s → 18.30 s with -O2). The .o is cached
     // adjacent to runtime.c; rebuild only when runtime.c is newer.
     let rt_c = __hxroot + "/self/runtime.c"
-    let rt_o = __hxroot + "/self/runtime.o"
-    let rt_stamp = exec("[ '" + rt_o + "' -nt '" + rt_c + "' ] && printf cached || printf stale")
-    if rt_stamp == "stale" {
-        let mut rt_cmd = ""
-        if uname == "Linux" {
-            rt_cmd = "clang -O2 -D_GNU_SOURCE -c '" + rt_c + "' -o '" + rt_o + "' 2>&1"
-        } else {
-            rt_cmd = "clang -O2 -c '" + rt_c + "' -o '" + rt_o + "' 2>&1"
+    // .c-graduation Phase-3: HEXA_PREBUILT_RUNTIME wins — link the prebuilt
+    // archive/object directly, skipping the runtime.c → runtime.o compile so
+    // the transpiler bootstraps with the seed .c files ABSENT. Fallback-safe:
+    // env unset / file missing → existing runtime.o-from-runtime.c path.
+    let mut rt_o = __hxroot + "/self/runtime.o"
+    let __prebuilt = resolve_prebuilt_runtime()
+    if len(__prebuilt) > 0 {
+        println("  [rt] HEXA_PREBUILT_RUNTIME — linking prebuilt: " + __prebuilt)
+        rt_o = __prebuilt
+    } else {
+        let rt_stamp = exec("[ '" + rt_o + "' -nt '" + rt_c + "' ] && printf cached || printf stale")
+        if rt_stamp == "stale" {
+            let mut rt_cmd = ""
+            if uname == "Linux" {
+                rt_cmd = "clang -O2 -D_GNU_SOURCE -c '" + rt_c + "' -o '" + rt_o + "' 2>&1"
+            } else {
+                rt_cmd = "clang -O2 -c '" + rt_c + "' -o '" + rt_o + "' 2>&1"
+            }
+            println("  [rt] " + rt_cmd)
+            let rt_out = exec(rt_cmd)
+            if len(rt_out) > 0 { println(rt_out) }
         }
-        println("  [rt] " + rt_cmd)
-        let rt_out = exec(rt_cmd)
-        if len(rt_out) > 0 { println(rt_out) }
     }
     let mut cmd = ""
     if uname == "Linux" {
@@ -2966,8 +2999,19 @@ fn cmd_build(src, out, c_only, target, shared) {
     // edit transparently yields a fresh object; stale objects are never
     // hit. Skipped for --shared (needs -fPIC) and cross-target (zig emits
     // target-specific objects). Hash failure / no $HOME → source fallback.
+    // .c-graduation Phase-3 driver fix: HEXA_PREBUILT_RUNTIME short-circuits
+    // the source-compile + content-hash .o cache. When the prebuilt archive is
+    // present, link it directly as the runtime TU — the final link needs only
+    // runtime.h at compile time, so the seed .c files may be ABSENT. This is
+    // the user-binary-link twin of the cmd_cc (transpiler-bootstrap) seam, so
+    // `hexa build` (e.g. Stage-3 precompile) survives a removed runtime.c.
+    // Fallback-safe: env unset / file missing → existing cache+source path.
+    let __bld_prebuilt = resolve_prebuilt_runtime()
     let mut _rt_obj = ""
-    if shared != "1" && len(target) == 0 && len(env("HOME")) > 0 {
+    if len(__bld_prebuilt) > 0 && shared != "1" && len(target) == 0 {
+        println("  [rt] HEXA_PREBUILT_RUNTIME — linking prebuilt: " + __bld_prebuilt)
+        _rt_obj = __bld_prebuilt
+    } else if shared != "1" && len(target) == 0 && len(env("HOME")) > 0 {
         let _rt_sha = exec("cat '" + __self_dir + "'/runtime*.c '" + __self_dir + "'/runtime*.h '" + __self_dir + "'/native/*.c '" + __self_dir + "'/native/*.h 2>/dev/null | shasum -a 1 2>/dev/null | cut -d' ' -f1").trim()
         if len(_rt_sha) > 0 {
             let _rt_cache = env("HOME") + "/.hexa-cache"
