@@ -1340,6 +1340,14 @@ HexaVal farr_attn_dt_bwd_gpu(HexaVal q_v, HexaVal k_v, HexaVal v_v,
  */
 HexaVal hexa_farr_matmul_t_gpu(HexaVal m_v, HexaVal r_v, HexaVal c_v,
                                HexaVal u_v);                                   /* runtime.c — RFC 040 Phase B2 */
+/* offset-aware packed gemv — out[i]=Σ_j P[off+i·cols+j]·U[j], out[rows].
+ * anima mm_packed_gemv 1:1. 5-arg bare direct-C entry (codegen 5-arg map).
+ * HEXA_CUDA dim-gate (rows·cols>8192) → cuBLAS Dgemv CUBLAS_OP_T. */
+HexaVal hexa_farr_packed_gemv_offset(HexaVal p_v, HexaVal off_v,
+                                     HexaVal rows_v, HexaVal cols_v,
+                                     HexaVal u_v);                            /* runtime.c — offset packed gemv */
+HexaVal farr_packed_gemv_offset(HexaVal p, HexaVal off, HexaVal rows,
+                                HexaVal cols, HexaVal u);                     /* runtime.c — offset packed gemv (5-arg direct) */
 HexaVal hexa_farr_outer_gpu(HexaVal u_v, HexaVal v_v, HexaVal r_v,
                             HexaVal c_v);                                      /* runtime.c — RFC 040 Phase B2 */
 HexaVal hexa_farr_mul_gpu(HexaVal a_v, HexaVal b_v, HexaVal n_v);             /* runtime.c — RFC 040 Phase B2 */

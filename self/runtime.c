@@ -10325,6 +10325,9 @@ HexaVal farr_softmax_rows;
  * CUDA host build only). NOT defined in the no-CUDA build. */
 extern int  _hx_cuda_farr_matmul_t_gpu(int64_t m_id, int64_t R, int64_t C,
                                         int64_t u_id, int64_t out_id);
+extern int  _hx_cuda_farr_packed_gemv_offset_gpu(int64_t p_id, int64_t off,
+                                        int64_t rows, int64_t cols,
+                                        int64_t u_id, int64_t out_id);
 extern int  _hx_cuda_farr_outer_gpu(int64_t u_id, int64_t v_id,
                                      int64_t R, int64_t C, int64_t out_id);
 extern int  _hx_cuda_farr_mul_gpu(int64_t a_id, int64_t b_id,
@@ -10407,6 +10410,40 @@ static int64_t _hx_farr_matmul_t_cpu(int64_t m_id, int64_t R, int64_t C,
         const double* mr = M + r * C;
         double ur = U[r];
         for (int64_t k = 0; k < C; k++) O[k] += mr[k] * ur;
+    }
+    return out_id;
+}
+
+// _hx_farr_packed_gemv_offset_cpu(p_id, off, rows, cols, u_id) -> new
+// farr_id [rows]. P is a packed double buffer; the [rows×cols] sub-block
+// starts at element `off`. out[i] = Σ_j P[off + i·cols + j] · U[j].
+// Mirrors anima flame_mm.hexa mm_packed_gemv EXACTLY — same i-outer /
+// j-inner accumulation order → bit-identical on no-CUDA. -1 on err.
+static int64_t _hx_farr_packed_gemv_offset_cpu(int64_t p_id, int64_t off,
+                                               int64_t rows, int64_t cols,
+                                               int64_t u_id) {
+    if (p_id < 0 || p_id >= _hx_farr_count) return -1;
+    if (u_id < 0 || u_id >= _hx_farr_count) return -1;
+    if (rows <= 0 || cols <= 0 || off < 0)  return -1;
+    HexaFarrEntry* pe = &_hx_farr_table[p_id];
+    HexaFarrEntry* ue = &_hx_farr_table[u_id];
+    if (!pe->buf || !ue->buf)               return -1;
+    if (pe->len < off + rows * cols || ue->len < cols) return -1;
+    HexaVal out_h = hexa_farr_zeros(hexa_int(rows));
+    int64_t out_id = HX_INT(out_h);
+    if (out_id < 0 || out_id >= _hx_farr_count) return -1;
+    pe = &_hx_farr_table[p_id];
+    ue = &_hx_farr_table[u_id];
+    HexaFarrEntry* oe = &_hx_farr_table[out_id];
+    if (!pe->buf || !ue->buf || !oe->buf || oe->len < rows) return -1;
+    const double* P = pe->buf;
+    const double* U = ue->buf;
+    double*       O = oe->buf;
+    for (int64_t i = 0; i < rows; i++) {
+        double acc = 0.0;
+        const double* pr = P + off + i * cols;
+        for (int64_t j = 0; j < cols; j++) acc += pr[j] * U[j];
+        O[i] = acc;
     }
     return out_id;
 }
@@ -10855,6 +10892,49 @@ HexaVal hexa_farr_matmul_t_gpu(HexaVal m_v, HexaVal r_v, HexaVal c_v,
 #else
     return hexa_int(_hx_farr_matmul_t_cpu(m_id, R, C, u_id));
 #endif
+}
+
+// farr_packed_gemv_offset(P, off, rows, cols, u) -> int new farr_id
+// [rows]. out[i] = Σ_j P[off + i·cols + j]·U[j] — offset-aware gemv on a
+// packed-double sub-block (anima mm_packed_gemv 1:1 semantics). 5-arg →
+// past the hexa_callN ceiling → bare direct-C entry + codegen 5-arg map
+// (RFC 032 farr_matmul pattern). On HEXA_CUDA the dim-gate (rows·cols >
+// 8192) routes to the cuBLAS Dgemv path (CUBLAS_OP_T, base+offset
+// pointer, lda=cols); small blocks stay on the CPU helper to dodge the
+// H2D/D2H round-trip overhead.
+HexaVal hexa_farr_packed_gemv_offset(HexaVal p_v, HexaVal off_v,
+                                     HexaVal rows_v, HexaVal cols_v,
+                                     HexaVal u_v) {
+    int64_t p_id  = hexa_as_num(p_v);
+    int64_t off   = hexa_as_num(off_v);
+    int64_t rows  = hexa_as_num(rows_v);
+    int64_t cols  = hexa_as_num(cols_v);
+    int64_t u_id  = hexa_as_num(u_v);
+#ifdef HEXA_CUDA
+    if (rows > 0 && cols > 0 && rows * cols > 8192) {
+        if (off < 0) return hexa_int(-1);
+        if (p_id < 0 || p_id >= _hx_farr_count) return hexa_int(-1);
+        if (u_id < 0 || u_id >= _hx_farr_count) return hexa_int(-1);
+        HexaVal out_h = hexa_farr_zeros(hexa_int(rows));
+        int64_t out_id = hexa_as_num(out_h);
+        if (out_id < 0) return hexa_int(-1);
+        int rc = _hx_cuda_farr_packed_gemv_offset_gpu(p_id, off, rows, cols,
+                                                      u_id, out_id);
+        if (rc != 0) return hexa_int(-1);
+        return hexa_int(out_id);
+    }
+    /* small block → CPU (avoid H2D/D2H overhead). */
+    return hexa_int(_hx_farr_packed_gemv_offset_cpu(p_id, off, rows, cols, u_id));
+#else
+    return hexa_int(_hx_farr_packed_gemv_offset_cpu(p_id, off, rows, cols, u_id));
+#endif
+}
+
+// Bare direct-C entry (5-arg, past hexa_callN ceiling — codegen maps the
+// 5-arg name to this hexa_ wrapper, RFC 032 farr_matmul pattern).
+HexaVal farr_packed_gemv_offset(HexaVal p, HexaVal off, HexaVal rows,
+                                HexaVal cols, HexaVal u) {
+    return hexa_farr_packed_gemv_offset(p, off, rows, cols, u);
 }
 
 // farr_outer_gpu(u, v, R, C) -> int new farr_id [R·C] (u⊗v).

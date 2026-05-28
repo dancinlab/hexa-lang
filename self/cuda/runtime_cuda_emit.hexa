@@ -1646,6 +1646,50 @@ fn emit_runtime_cuda_c() -> str {
             "    return _d2h_out(out_id, C);\n" +
             "}\n" +
             "\n" +
+            "/* packed_gemv_offset: out[i] = Σ_j P[off + i·cols + j]·U[j], out[rows].\n" +
+            " * P is a packed-double buffer; the [rows×cols] row-major sub-block\n" +
+            " * starts at element `off`. anima mm_packed_gemv 1:1.\n" +
+            " *\n" +
+            " * cuBLAS sees the (row-major) sub-block P[off..] as a column-major\n" +
+            " * [cols×rows] matrix A with lda=cols. Then A^T (= [rows×cols], our\n" +
+            " * row-major block) times U[cols] gives out[rows]:\n" +
+            " *   cublasDgemv(handle, CUBLAS_OP_T, m=cols, n=rows, alpha,\n" +
+            " *               A=P_dev+off, lda=cols, U_dev, incx=1, beta,\n" +
+            " *               O_dev, incy=1).\n" +
+            " * Single dot-product per output row, cuBLAS-tiled reduction →\n" +
+            " * TOL_MATMUL ≈ 2e-9 (same caveat as matmul_t). H2D P once (whole\n" +
+            " * buffer), base+offset device pointer, D2H out. */\n" +
+            "int _hx_cuda_farr_packed_gemv_offset_gpu(int64_t p_id, int64_t off,\n" +
+            "                               int64_t rows, int64_t cols,\n" +
+            "                               int64_t u_id, int64_t out_id) {\n" +
+            "    if (_ensure_cublas() != 0) return -1;\n" +
+            "    if (rows <= 0 || cols <= 0 || off < 0) {\n" +
+            "        fprintf(stderr, \"[cuda] packed_gemv_offset: bad off=%lld rows=%lld cols=%lld\\n\",\n" +
+            "                (long long)off, (long long)rows, (long long)cols);\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    if (_h2d(p_id) != 0) return -1;\n" +
+            "    if (_h2d(u_id) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(out_id, rows) != 0) return -1;\n" +
+            "\n" +
+            "    double* P_dev = g_slots[p_id].d_buf + off;\n" +
+            "    double* U_dev = g_slots[u_id].d_buf;\n" +
+            "    double* O_dev = g_slots[out_id].d_buf;\n" +
+            "    const double alpha = 1.0, beta = 0.0;\n" +
+            "    cublasStatus_t st = cublasDgemv(g_cublas, CUBLAS_OP_T,\n" +
+            "                                    (int)cols, (int)rows,\n" +
+            "                                    &alpha,\n" +
+            "                                    P_dev, (int)cols,\n" +
+            "                                    U_dev, 1,\n" +
+            "                                    &beta,\n" +
+            "                                    O_dev, 1);\n" +
+            "    if (st != CUBLAS_STATUS_SUCCESS) {\n" +
+            "        fprintf(stderr, \"[cuda] cublasDgemv(packed_gemv_offset) failed: %d\\n\", (int)st);\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    return _d2h_out(out_id, rows);\n" +
+            "}\n" +
+            "\n" +
             "/* outer: u⊗v = [R·C].  u [R], v [C], out row-major [R,C].\n" +
             " *\n" +
             " * out[R,C] = u[R,1] · v[1,C]. Plug into the trick with M_outer=R, K=1, N=C:\n" +
