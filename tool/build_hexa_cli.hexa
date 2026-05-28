@@ -174,7 +174,10 @@ fn _deploy_one(driver_out: string, dst: string, uname: string) {
     }
     _run("cp -f " + _shq(driver_out) + " " + _shq(dst), "deploy → " + dst)
     if uname == "Darwin" {
-        let _ = exec("codesign --force --sign - " + _shq(dst) + " 2>/dev/null || true")
+        // env HEXA_CODESIGN_IDENTITY 가 있으면 안정 서명(ASP burning 회피), 없으면 ad-hoc.
+        let _csid = env_var("HEXA_CODESIGN_IDENTITY")
+        let _sa = if _csid != "" { "'" + _csid + "'" } else { "-" }
+        let _ = exec("codesign --force --sign " + _sa + " --identifier hexad " + _shq(dst) + " 2>/dev/null || true")
     }
     println("  deployed: " + dst)
 }
@@ -930,11 +933,13 @@ fn _do_build(repo_root: string) {
     println("[4/5] compile hexa_cli_driver")
     _run(cc + " " + cflags + " " + _shq(main_c) + " " + _shq(runtime_c) + selfemit_objs + " -o " + _shq(driver_out) + " " + ldflags, "compile driver")
 
-    // ── Step 4b: Darwin codesign
+    // ── Step 4b: Darwin codesign — stable identity (env) to dodge ASP burning, else ad-hoc.
     if uname == "Darwin" {
         println("[4/5] codesign (Darwin)")
-        let _x1 = exec("codesign --force --sign - " + _shq(driver_out) + " 2>/dev/null || true")
-        let _x2 = exec("codesign --force --sign - " + _shq(ml_out)     + " 2>/dev/null || true")
+        let _csid = env_var("HEXA_CODESIGN_IDENTITY")
+        let _sa = if _csid != "" { "'" + _csid + "'" } else { "-" }
+        let _x1 = exec("codesign --force --sign " + _sa + " --identifier hexad " + _shq(driver_out) + " 2>/dev/null || true")
+        let _x2 = exec("codesign --force --sign " + _sa + " " + _shq(ml_out)     + " 2>/dev/null || true")
     }
 
     // ── Step 4b: shadow install-layout in build/

@@ -150,11 +150,27 @@ fn install_binary(src) {
 
     // Darwin codesign (AppleSystemPolicy SIGKILL 방지) — only the raw binary,
     // not the shell wrapper.
+    //
+    // ASP burning matcher 회피: ad-hoc(`--sign -`) 바이너리는 heavy-exec 후
+    // AppleSystemPolicy 가 이름 단위로 SIGKILL 하기 시작한다(hexadrv→hexa.real→
+    // hxv2 rename treadmill 의 근본 원인). 안정 서명 ID(env HEXA_CODESIGN_IDENTITY
+    // = Developer/self-signed cert hash 또는 name)로 서명하면 TeamIdentifier 가
+    // 박혀 ad-hoc burning 을 피한다. 미설정 시 ad-hoc fallback(기존 동작 유지 —
+    // CI/인증서 없는 호스트 안전). identity 누출 방지로 cert 는 소스에 하드코딩하지
+    // 않고 env 로만 받는다. 메인 드라이버는 `--identifier hexad` 고정(빌드 간 ASP
+    // 평가 안정). notarize 는 별개 — Developer ID Application 인증서 필요(미보유).
     if os_name == "darwin" {
         let has_codesign = exec_with_status("command -v codesign >/dev/null 2>&1")
         if has_codesign[1] == 0 {
-            exec_with_status("codesign --force --sign - '" + pkg_real + "' 2>/dev/null")
-            exec_with_status("codesign --force --sign - '" + bin_dir + "/build/hexa_interp' 2>/dev/null")
+            let cs_id = env("HEXA_CODESIGN_IDENTITY")
+            let sign_arg = if cs_id != "" { "'" + cs_id + "'" } else { "-" }
+            if cs_id == "" {
+                println("  codesign: ad-hoc (set HEXA_CODESIGN_IDENTITY=<cert> to avoid ASP burning)")
+            } else {
+                println("  codesign: stable identity (ASP burning 회피)")
+            }
+            exec_with_status("codesign --force --sign " + sign_arg + " --identifier hexad '" + pkg_real + "' 2>/dev/null")
+            exec_with_status("codesign --force --sign " + sign_arg + " '" + bin_dir + "/build/hexa_interp' 2>/dev/null")
         }
     }
 }
