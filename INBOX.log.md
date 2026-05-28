@@ -52,7 +52,9 @@
 
 **evidence 파일** (demiurge): `~/rtsc_mg2irh6_polymorph/ph.out` (JOB DONE + STOP 1 + Maximum CPU) · `pods.temp.json` (11-job manifest) · sidecar `/system` 0.2.0 (이 gap 들의 caller-side workaround 현황).
 
-## 2026-05-28T — 🟠 OPEN · cloud forget — accept ssh-form / IP / alias pod_id (registry cleanup asymmetry)
+## 2026-05-28T — ✅ RESOLVED #1887 · cloud forget — accept ssh-form / IP / alias pod_id (registry cleanup asymmetry)
+
+> **fix (PR #1887)**: root cause = `pod_registry_forget` 의 re-emit 가 `pod_registry_record` 를 경유 → 그 #1229 sink guard(`_pod_id_looks_valid`)가 ssh-form/IP/alias id 를 거부(정리 대상 그 자체). forget 이 found=1 을 리턴하지만 status flip 은 실패 → GHOST 영구 잔존. 채택안 = recommend (1)(validation 완화)의 fix-at-source 형: forget 가 매칭 row 를 `pod_registry_record` **우회**해 in-place 종결(literal `pod_id` 매칭 → status=closed, label·created_at 보존, last_seen 갱신). sink guard 는 record/adopt 에 유지 → 신규 오염 차단(write-side), forget 은 물리적 존재 row 를 id 형태 무관 종결만(read-cleanup-side). CLI usage `<pod_id|ssh-form|ip|alias>` + not-found 시 open candidate 힌트. 테스트 `pod_registry_forget_test.hexa`(@ci_gate, 23 cases) + e2e(절대 `use`)로 6 GHOST form(numeric·root@ip·ssh-host·bare-ip·alias·`--help`) 전부 status=closed 실측.
 
 `hexa cloud reconcile` 는 GHOST 후보로 numeric provider-id 외에 ssh-form (`root@141.195.21.87` · `ssh1.vast.ai` · `root@ssh9.vast.ai`) + alias (`ubu-2`) + edge-case (`--help` adopted ghost) 까지 모두 잡아 표시하는데, `hexa cloud forget <pod_id>` 는 numeric provider-id 만 허용 (`registry: refusing non-pod-id 'root@<ip>' (expected a provider instance-id; use cloud adopt <id> to track an existing pod)`). 결과 cleanup loop 가 절반만 동작 — anima session 에서 36 GHOST 중 16 만 forget 성공 (numeric only), 20 ssh-form 은 모두 거부.
 
