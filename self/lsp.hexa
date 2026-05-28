@@ -756,7 +756,8 @@ fn scan_stdlib_pub_fns() -> [string] {
     let repo = lsp_repo_root()
     let dir = repo + "/stdlib"
     let mut out = []
-    if !file_exists(dir) { return out }
+    // No dir-existence guard: file_exists() is false for directories, and a
+    // missing stdlib makes grep emit nothing (2>/dev/null) → empty result.
     let raw = exec("grep -rhoE 'pub +(async +|pure +|comptime +)?fn +[A-Za-z_][A-Za-z0-9_]*' '" + dir + "' 2>/dev/null | awk '{print $NF}' | sort -u")
     for l in raw.split("\n") {
         let t = l.trim()
