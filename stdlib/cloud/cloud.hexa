@@ -451,12 +451,6 @@ fn cloud_poll(host: str, pid: int) -> int {
 // command STRING shape is what the falsifier suite pins, so a non-GNU
 // local sed never executes it.
 
-// _CLOUD_TAIL_TAXONOMY — sentinel `until_re` value that selects the 3-tier
-// failure-first classifier (vs an explicit literal ERE, vs "" follow-forever).
-// The CLI's default `--until` resolves to this; an operator who passes an
-// explicit `--until <ere>` opts back into the single legacy terminal block.
-let _CLOUD_TAIL_TAXONOMY = "__TAXONOMY__"
-
 // _CLOUD_TAIL_CRASH_RE — non-zero hard-failure signatures. `STOP [1-9]` is
 // a Fortran non-zero STOP (QE / ph.x abort); `STOP 0` is a clean stop and
 // is deliberately excluded. `Error in routine` is the QE error banner.
@@ -498,14 +492,28 @@ let _CLOUD_TAIL_DONE_RE = "JOB DONE|RESULT_DONE|JOB FAILED"
 // address — a literal `/` in a pattern must be backslash-escaped (markers
 // like "JOB DONE|Traceback" need no escaping).
 //
-// `until_re` controls the terminal behaviour:
+// `until_re` controls the terminal behaviour of THIS entry point:
 //   - "" (empty)  → FOLLOW FOREVER. No terminal block at all; the stream
 //     only ends on a transport drop (255) or a pipeline break. Use this for
 //     a pure live tail with no auto-quit.
-//   - "__TAXONOMY__" (the default the CLI passes) → the 3-tier failure-first
-//     classifier above (exit 0 / 3 / 4).
-//   - any other ERE → a single legacy terminal block (`/until/{p;q}`, exit
-//     0 on match) — back-compat for callers that pass an explicit pattern.
+//   - any non-empty ERE → a single legacy terminal block (`/until/{p;q}`,
+//     exit 0 on match) — back-compat for callers that pass an explicit
+//     pattern. This path does NOT classify; for the 3-tier failure-first
+//     taxonomy (the CLI's default), call `cloud_tail_cmd_taxonomy_opts`.
+//
+// (The CLI default routes to cloud_tail_cmd_taxonomy_opts, which threads a
+// `taxonomy=1` flag rather than a magic sentinel string — a hexa string
+// literal in a comparison can collapse across functions in codegen, so a
+// bool flag is the robust selector.)
+fn cloud_tail_cmd_opts(host: str, ssh_opts: [str], logfile: str, grep_re: str, until_re: str) -> str {
+    let prog = _cloud_tail_sed_prog(grep_re, until_re, 0)
+    let remote = "tail -F -n +1 " + _shq(logfile) + " 2>/dev/null | sed -E -un " + _shq(prog)
+    return _ssh_cmd(host, ssh_opts, remote)
+}
+
+// cloud_tail_cmd_taxonomy_opts — the 3-tier failure-first variant. The
+// remote sed runs the CRASH→TIMEOUT→DONE classifier and quits with the
+// verdict exit code, which ssh / exec_replace inherits:
 //
 // Exit-code contract (callers — Monitor / micro-exp / watcher / /system):
 //   0   — DONE: a clean terminal marker with no trailing failure. The only
@@ -522,19 +530,22 @@ let _CLOUD_TAIL_DONE_RE = "JOB DONE|RESULT_DONE|JOB FAILED"
 //   other non-zero — sed/tail pipeline failed mid-stream (logfile removed
 //         remotely, mawk surfaced after all, disk full, …). Treat the stream
 //         as truncated; the job may still be running.
-fn cloud_tail_cmd_opts(host: str, ssh_opts: [str], logfile: str, grep_re: str, until_re: str) -> str {
-    let prog = _cloud_tail_sed_prog(grep_re, until_re)
+// `grep_re` filters the streamed lines exactly as in cloud_tail_cmd_opts.
+fn cloud_tail_cmd_taxonomy_opts(host: str, ssh_opts: [str], logfile: str, grep_re: str) -> str {
+    let prog = _cloud_tail_sed_prog(grep_re, "", 1)
     let remote = "tail -F -n +1 " + _shq(logfile) + " 2>/dev/null | sed -E -un " + _shq(prog)
     return _ssh_cmd(host, ssh_opts, remote)
 }
 
 // _cloud_tail_sed_prog — assemble the remote sed program from the grep
-// filter + the terminal mode. Factored out so the falsifier suite can pin
-// each branch (taxonomy / explicit ERE / follow-forever) without an ssh hop.
-// The whole program is _shq-quoted by the caller for the remote shell.
-fn _cloud_tail_sed_prog(grep_re: str, until_re: str) -> str {
+// filter + the terminal mode. `taxonomy` (1) selects the 3-tier failure-first
+// classifier and IGNORES `until_re`; otherwise `until_re` drives a single
+// legacy terminal block ("" = follow forever). Factored out so the falsifier
+// suite can pin each branch without an ssh hop. The whole program is
+// _shq-quoted by the caller for the remote shell.
+fn _cloud_tail_sed_prog(grep_re: str, until_re: str, taxonomy: int) -> str {
     let mut prog = ""
-    if until_re == _CLOUD_TAIL_TAXONOMY {
+    if taxonomy == 1 {
         // FAILURE-FIRST 3-tier classifier. Order is load-bearing: CRASH then
         // TIMEOUT then DONE, so a failure line that sits at/before the
         // deceptive `JOB DONE` wins and sets the right `q <code>` verdict.
@@ -557,6 +568,11 @@ fn _cloud_tail_sed_prog(grep_re: str, until_re: str) -> str {
 // cloud_tail_cmd — cloud_tail_cmd_opts with no extra ssh flags.
 fn cloud_tail_cmd(host: str, logfile: str, grep_re: str, until_re: str) -> str {
     return cloud_tail_cmd_opts(host, [], logfile, grep_re, until_re)
+}
+
+// cloud_tail_cmd_taxonomy — cloud_tail_cmd_taxonomy_opts with no extra flags.
+fn cloud_tail_cmd_taxonomy(host: str, logfile: str, grep_re: str) -> str {
+    return cloud_tail_cmd_taxonomy_opts(host, [], logfile, grep_re)
 }
 
 // ── file transfer ────────────────────────────────────────────────────

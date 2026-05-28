@@ -922,16 +922,15 @@ fn _cloud_early_life_check(host: str, ssh_opts: [str], pid: int, sec: int) -> in
     return 3
 }
 
-// Default --until: the 3-tier failure-first taxonomy (INBOX gap 1,
-// 2026-05-28). A bare `cloud tail` now classifies the terminal state into
-// DONE (exit 0) / TIMEOUT-RESUMABLE (exit 3) / CRASHED (exit 4) instead of
-// the old "first marker match == exit 0" that mis-read a walltime-timed-out
-// QE job (which prints `Maximum CPU time exceeded` then a deceptive
-// `JOB DONE` then `STOP 1`) as SUCCESS. The sentinel selects the classifier
-// inside cloud_tail_cmd_opts; the pattern TABLES live there (g20). An
-// operator who wants the old single-block behaviour passes an explicit
-// `--until <ere>`; `--until ''` still follows forever.
-let _CLOUD_TAIL_UNTIL_DEFAULT = _CLOUD_TAIL_TAXONOMY
+// Default `cloud tail` terminal mode (INBOX gap 1, 2026-05-28): when
+// --until is ABSENT the tail handler routes to cloud_tail_cmd_taxonomy_opts,
+// the 3-tier failure-first classifier — DONE (exit 0) / TIMEOUT-RESUMABLE
+// (exit 3) / CRASHED (exit 4) — instead of the old "first marker match ==
+// exit 0" that mis-read a walltime-timed-out QE job (which prints `Maximum
+// CPU time exceeded` then a deceptive `JOB DONE` then `STOP 1`) as SUCCESS.
+// The pattern TABLES live in stdlib/cloud/cloud.hexa (g20). An operator who
+// wants the old single-block behaviour passes an explicit `--until <ere>`;
+// `--until ''` still follows forever.
 
 fn main() {
     let av = args()
@@ -1256,11 +1255,20 @@ fn main() {
         let logfile = av[si + 2]
         let ssh_opts = _ssh_opts_cli(av, si + 3)
         let grep_re = _flag_val(av, si + 3, "--grep", "")
-        // Absent --until → default terminal set; explicit `--until ''` → empty
-        // (follow forever). _flag_val returns the literal value when present,
-        // so `--until ''` yields "" and disables the terminal-exit.
-        let until_re = _flag_val(av, si + 3, "--until", _CLOUD_TAIL_UNTIL_DEFAULT)
-        let cmd = cloud_tail_cmd_opts(host, ssh_opts, logfile, grep_re, until_re)
+        // Terminal mode (INBOX gap 1, 2026-05-28):
+        //   - --until ABSENT  → the 3-tier failure-first taxonomy (exit
+        //     0 DONE / 3 TIMEOUT-RESUMABLE / 4 CRASHED). This is the default
+        //     so a walltime-timed-out QE job is no longer mis-read as success.
+        //   - --until <ere>   → legacy single terminal block (exit 0 on first
+        //     match). Explicit pattern = opt back into the old behaviour.
+        //   - --until ''      → empty ERE = follow forever (no terminal block).
+        let mut cmd = ""
+        if _has_flag(av, si + 3, "--until") == 1 {
+            let until_re = _flag_val(av, si + 3, "--until", "")
+            cmd = cloud_tail_cmd_opts(host, ssh_opts, logfile, grep_re, until_re)
+        } else {
+            cmd = cloud_tail_cmd_taxonomy_opts(host, ssh_opts, logfile, grep_re)
+        }
         let _ = exec_replace(cmd)
         // exec_replace only returns on execvp failure (no /bin/sh) — surface it.
         println("[cloud] tail: exec_replace failed — could not spawn ssh pipeline")

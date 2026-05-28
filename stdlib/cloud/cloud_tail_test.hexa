@@ -122,15 +122,17 @@ fn main() {
     println("case9 PASS — cloud_tail_cmd == cloud_tail_cmd_opts(host, [], ...)")
 
     // ── 3-tier failure-first terminal taxonomy (INBOX gap 1, 2026-05-28) ──
-    // The default `cloud tail` no longer quits-clean on the first marker. It
-    // builds a FAILURE-FIRST classifier so a walltime-timed-out QE job
+    // The default `cloud tail` (no --until) routes to the taxonomy variant,
+    // which builds a FAILURE-FIRST classifier so a walltime-timed-out QE job
     // (Maximum CPU time exceeded → deceptive JOB DONE → STOP 1) is read as
     // TIMEOUT-RESUMABLE (exit 3) / CRASHED (exit 4), not SUCCESS (exit 0).
-    // The sentinel "__TAXONOMY__" selects the classifier; pure string asserts
-    // on the generated remote sed program pin the contract (no ssh / no pod).
+    // cloud_tail_cmd_taxonomy_opts selects the classifier (bool flag, not a
+    // magic sentinel string — hexa literal collision is a known codegen
+    // landmine). Pure string asserts on the generated remote sed program pin
+    // the contract (no ssh / no pod).
 
-    // ── case 10: taxonomy default emits a CRASH block with q4 ───────────
-    let c10 = cloud_tail_cmd_opts("gpu-1", [], "/w/l.log", "", "__TAXONOMY__")
+    // ── case 10: taxonomy emits a CRASH block with q4 ───────────────────
+    let c10 = cloud_tail_cmd_taxonomy_opts("gpu-1", [], "/w/l.log", "")
     if _has(c10, "{p;q4}") != 1 {
         _fail("case10", "taxonomy must emit a CRASHED block quitting q4 — " + c10)
     }
@@ -142,8 +144,8 @@ fn main() {
     }
     println("case10 PASS — taxonomy CRASHED block (STOP [1-9]|Error in routine → q4)")
 
-    // ── case 11: taxonomy default emits a TIMEOUT block with q3 ─────────
-    let c11 = cloud_tail_cmd_opts("gpu-1", [], "/w/l.log", "", "__TAXONOMY__")
+    // ── case 11: taxonomy emits a TIMEOUT block with q3 ─────────────────
+    let c11 = cloud_tail_cmd_taxonomy_opts("gpu-1", [], "/w/l.log", "")
     if _has(c11, "{p;q3}") != 1 {
         _fail("case11", "taxonomy must emit a TIMEOUT-RESUMABLE block quitting q3 — " + c11)
     }
@@ -155,8 +157,8 @@ fn main() {
     }
     println("case11 PASS — taxonomy TIMEOUT block (Maximum CPU time/max_seconds → q3)")
 
-    // ── case 12: taxonomy default emits a clean DONE block with q0 ──────
-    let c12 = cloud_tail_cmd_opts("gpu-1", [], "/w/l.log", "", "__TAXONOMY__")
+    // ── case 12: taxonomy emits a clean DONE block with q0 ──────────────
+    let c12 = cloud_tail_cmd_taxonomy_opts("gpu-1", [], "/w/l.log", "")
     if _has(c12, "{p;q0}") != 1 {
         _fail("case12", "taxonomy must emit a DONE block quitting q0 — " + c12)
     }
@@ -171,7 +173,7 @@ fn main() {
     //            that scanned DONE first would quit q0 (the original bug).
     //            The crash block must precede timeout, which must precede
     //            done, so a failure verdict always wins.
-    let c13 = cloud_tail_cmd_opts("gpu-1", [], "/w/l.log", "", "__TAXONOMY__")
+    let c13 = cloud_tail_cmd_taxonomy_opts("gpu-1", [], "/w/l.log", "")
     let crash_i = c13.index_of("q4")
     let to_i = c13.index_of("q3")
     let done_i = c13.index_of("q0")
@@ -188,7 +190,7 @@ fn main() {
 
     // ── case 14: STOP 0 (clean stop) is NOT a crash — the CRASH set must
     //            match only STOP [1-9], never `STOP 0`.
-    let c14 = cloud_tail_cmd_opts("gpu-1", [], "/w/l.log", "", "__TAXONOMY__")
+    let c14 = cloud_tail_cmd_taxonomy_opts("gpu-1", [], "/w/l.log", "")
     if _has(c14, "STOP 0") != 0 {
         _fail("case14", "CRASH set must NOT match clean 'STOP 0' — " + c14)
     }
@@ -208,14 +210,37 @@ fn main() {
     }
     println("case15 PASS — explicit --until ERE → legacy single block (no taxonomy)")
 
-    // ── case 16: empty --until still follows forever even now that the
-    //            default is the taxonomy sentinel (no terminal block at all).
+    // ── case 16: empty --until still follows forever (no terminal block) ─
+    //            cloud_tail_cmd_opts with "" until is the follow-forever path
+    //            and must emit no terminal block of any kind.
     let c16 = cloud_tail_cmd_opts("gpu-1", [], "/w/l.log", "", "")
     if _has(c16, "q4") != 0 || _has(c16, "q3") != 0 || _has(c16, "{p;q") != 0 {
         _fail("case16", "empty --until must emit NO terminal block (follow forever) — " + c16)
     }
     println("case16 PASS — empty --until → follow forever (no terminal block)")
 
-    println("cloud_tail_test PASS — 16/16 cases")
+    // ── case 17: taxonomy threads a --grep filter AFTER the three terminal
+    //            blocks (terminal-first preserved), so a verdict line always
+    //            surfaces + classifies even when it fails the grep filter.
+    let c17 = cloud_tail_cmd_taxonomy_opts("gpu-1", [], "/w/l.log", "step=")
+    if _has(c17, "/step=/p") != 1 {
+        _fail("case17", "taxonomy must thread the grep filter (/step=/p) — " + c17)
+    }
+    let q4i = c17.index_of("q4")
+    let gi = c17.index_of("/step=/p")
+    if q4i < 0 || gi < 0 || q4i > gi {
+        _fail("case17", "terminal blocks must precede the grep filter — " + c17)
+    }
+    println("case17 PASS — taxonomy threads grep filter after terminal blocks")
+
+    // ── case 18: taxonomy no-opts wrapper == _opts with [] ──────────────
+    let c18a = cloud_tail_cmd_taxonomy("gpu-1", "/w/l.log", "")
+    let c18b = cloud_tail_cmd_taxonomy_opts("gpu-1", [], "/w/l.log", "")
+    if c18a != c18b {
+        _fail("case18", "cloud_tail_cmd_taxonomy must equal _opts with [] opts")
+    }
+    println("case18 PASS — cloud_tail_cmd_taxonomy == _opts(host, [], ...)")
+
+    println("cloud_tail_test PASS — 18/18 cases")
     exit(0)
 }
