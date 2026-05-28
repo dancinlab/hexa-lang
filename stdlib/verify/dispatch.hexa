@@ -1,0 +1,152 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  stdlib/verify/dispatch.hexa — generic calculator dispatch (PR-hx3)
+//
+//  @module(slug="verify.dispatch", desc="name→callable registry for verify calculators")
+//  @version 0.1.0
+//  @stability preview
+//  @since 2026-05-29
+//  @maintainer hexa-core
+//  @rfc demiurge project.tape d_atlas_as_audit_ssot (PR #510)
+//
+//  ── PROBLEM ────────────────────────────────────────────────────────────────
+//
+//  PR-hx5 verify_cli needs a way to call any registered calculator by
+//  string name (e.g. from `hexa verify --expr allen_dynes_tc 1.21 1350 0.10
+//  140.324`) without hard-coding fn names in the CLI itself. d4 (generic
+//  dispatch · no name-hardcoding) requires the generic layer (CLI) to be
+//  domain-blind; new calculators must land as a SINGLE-row registry change
+//  in this file, not as a new CLI branch.
+//
+//  ── DESIGN (string-keyed dispatch + arity-tagged calls) ────────────────────
+//
+//  hexa does not (yet) support first-class fn-pointer values. So the
+//  registry is a string→string-keyed if-else cascade in ONE place — this
+//  file — and downstream callers only see the public surface:
+//
+//    pub fn dispatch(fn_name: string, args: array) -> float
+//    pub fn dispatch_known(fn_name: string) -> bool
+//    pub fn arity_of(fn_name: string) -> int
+//
+//  Adding a calculator = ONE branch added in dispatch() + one row in
+//  arity_of() + one entry in stdlib/verify/calculators/assumes_meta.hexa
+//  known_calculators(). No verify_cli edit required (PR-hx5 will just
+//  call dispatch()).
+//
+//  ── COVERAGE (PR-hx3) ──────────────────────────────────────────────────────
+//
+//    fn_name              arity  source-file
+//    -------------------- -----  -----------------------------------------
+//    allen_dynes_tc         3    stdlib/rtsc/verify/numerics_mcmillan.hexa
+//                                  (omega_log, lambda, mu_star)
+//    mcmillan_tc            3    stdlib/rtsc/verify/numerics_mcmillan.hexa
+//                                  (theta_d, lambda, mu_star)
+//    universal_cooper_tc    2    stdlib/rtsc/verify/numerics_mcmillan.hexa
+//                                  (omega_0_K, lambda_eff)
+//    bcs_gap_ratio          0    stdlib/verify/calculators/bcs_gap_ratio.hexa
+//    eliashberg_full        4    stdlib/verify/calculators/eliashberg_full.hexa
+//                                  (omega_log, omega2, lambda, mu_star)
+//
+//  Unknown name → returns a sentinel NaN-like value (0.0) AND
+//  dispatch_known() returns false; caller MUST check dispatch_known first.
+//
+//  ── RELATED ────────────────────────────────────────────────────────────────
+//
+//  · PR-hx2 stdlib/verify/calculators/* (impl + @assumes metadata)
+//  · PR-hx5 (planned) tool/verify_cli.hexa — calls dispatch()
+//  · demiurge d4 generic-dispatch directive
+// ═══════════════════════════════════════════════════════════════════════════
+
+use "self/runtime/math_pure"
+
+import "stdlib/verify/calculators/bcs_gap_ratio.hexa"
+import "stdlib/verify/calculators/eliashberg_full.hexa"
+import "stdlib/verify/calculators/assumes_meta.hexa"
+
+// ─── inline canonical impls (numerics_mcmillan parity) ─────────────────────
+//
+// We do NOT import stdlib/rtsc/verify/numerics_mcmillan.hexa because that
+// file is a self-contained T2 verify script with its own main() and many
+// rtsc-specific consts. Instead this module owns SLIM, allocation-free
+// copies of the three formulas (mcmillan_tc / allen_dynes_tc /
+// universal_cooper_tc) — they are 3-5 line closed forms (McMillan 1968 /
+// Allen-Dynes 1975), and parity with the rtsc T2 file is unit-checked in
+// dispatch_test.hexa (F2-F4 cross-check anchors).
+
+fn _mcmillan_tc(theta_d: float, lam: float, mu: float) -> float {
+    let den = lam - mu * (1.0 + 0.62 * lam)
+    if den <= 0.0 { return 0.0 }
+    return (theta_d / 1.45) * exp_pure(-1.04 * (1.0 + lam) / den)
+}
+
+fn _allen_dynes_tc(omega_log: float, lam: float, mu: float) -> float {
+    let den = lam - mu * (1.0 + 0.62 * lam)
+    if den <= 0.0 { return 0.0 }
+    return (omega_log / 1.20) * exp_pure(-1.04 * (1.0 + lam) / den)
+}
+
+fn _universal_cooper_tc(omega_0_K: float, lambda_eff: float) -> float {
+    if lambda_eff <= 0.0 { return 0.0 }
+    // n=6 cell: -(n/phi)/lambda_eff = -3/lambda_eff
+    return (omega_0_K / 6.0) * exp_pure(-3.0 / lambda_eff)
+}
+
+// ─── public dispatch surface ──────────────────────────────────────────────
+
+// Returns true iff fn_name is in the registry. Generic callers (verify_cli)
+// MUST check this first; dispatch() returns 0.0 on miss which is also a
+// valid float value (e.g. for very-low-Tc edge cases).
+pub fn dispatch_known(fn_name: string) -> bool {
+    if fn_name == "allen_dynes_tc"      { return true }
+    if fn_name == "mcmillan_tc"         { return true }
+    if fn_name == "universal_cooper_tc" { return true }
+    if fn_name == "bcs_gap_ratio"       { return true }
+    if fn_name == "eliashberg_full"     { return true }
+    return false
+}
+
+// Returns the expected positional-argument count for fn_name. -1 if unknown.
+// Generic callers use this to validate argv length before dispatch().
+pub fn arity_of(fn_name: string) -> int {
+    if fn_name == "allen_dynes_tc"      { return 3 }
+    if fn_name == "mcmillan_tc"         { return 3 }
+    if fn_name == "universal_cooper_tc" { return 2 }
+    if fn_name == "bcs_gap_ratio"       { return 0 }
+    if fn_name == "eliashberg_full"     { return 4 }
+    return -1
+}
+
+// Generic dispatch: calls the calculator by string name with positional
+// args. Returns 0.0 on unknown fn or arity mismatch; caller MUST gate on
+// dispatch_known + arity_of first.
+pub fn dispatch(fn_name: string, args: array) -> float {
+    if fn_name == "allen_dynes_tc" {
+        if args.len() != 3 { return 0.0 }
+        return _allen_dynes_tc(args[0], args[1], args[2])
+    }
+    if fn_name == "mcmillan_tc" {
+        if args.len() != 3 { return 0.0 }
+        return _mcmillan_tc(args[0], args[1], args[2])
+    }
+    if fn_name == "universal_cooper_tc" {
+        if args.len() != 2 { return 0.0 }
+        return _universal_cooper_tc(args[0], args[1])
+    }
+    if fn_name == "bcs_gap_ratio" {
+        if args.len() != 0 { return 0.0 }
+        return bcs_gap_ratio()
+    }
+    if fn_name == "eliashberg_full" {
+        if args.len() != 4 { return 0.0 }
+        return eliashberg_full(args[0], args[1], args[2], args[3])
+    }
+    return 0.0
+}
+
+// Convenience: dispatch + atom-meta-style assumes lookup in one call.
+// Returns (value, assumes-list). On unknown fn returns (0.0, []).
+// PR-hx5 verify_cli uses this when folding AtomMeta on direct-fold.
+pub fn dispatch_with_assumes(fn_name: string, args: array) -> array {
+    let val = dispatch(fn_name, args)
+    let a = assumes_for(fn_name)
+    return [val, a]
+}

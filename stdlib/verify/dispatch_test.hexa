@@ -1,0 +1,101 @@
+#!hexa strict
+// stdlib/verify/dispatch_test.hexa
+// PR-hx3 smoke — generic calculator dispatch.
+//
+// Run:  hexa run stdlib/verify/dispatch_test.hexa
+// Marker on PASS: __VERIFY_DISPATCH_SMOKE__ PASS
+
+use "self/runtime/math_pure"
+
+import "stdlib/verify/dispatch.hexa"
+
+let mut RUN: int = 0
+let mut FAIL: int = 0
+
+fn abs_f(x: float) -> float { if x < 0.0 { return -x } return x }
+fn rel_err(a: float, b: float) -> float {
+    let d = abs_f(b); if d < 1.0e-30 { return abs_f(a - b) }; return abs_f(a - b) / d
+}
+fn _check(ok: bool, label: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+}
+
+fn main() {
+    println("== stdlib/verify/dispatch PR-hx3 smoke ==")
+
+    // F1: dispatch_known returns true for 5 known + false for unknown
+    let known_names = ["allen_dynes_tc", "mcmillan_tc", "universal_cooper_tc",
+                       "bcs_gap_ratio", "eliashberg_full"]
+    let mut all_known = true
+    let mut i = 0
+    while i < known_names.len() {
+        if !dispatch_known(known_names[i]) { all_known = false }
+        i = i + 1
+    }
+    _check(all_known, "F1a dispatch_known() true for 5 registered fns")
+    _check(!dispatch_known("not_real_calc"), "F1b dispatch_known() false for unknown")
+
+    // F2: arity_of correct (3, 3, 2, 0, 4) + -1 unknown
+    _check(arity_of("allen_dynes_tc") == 3, "F2a arity_of(allen_dynes_tc) = 3")
+    _check(arity_of("mcmillan_tc") == 3, "F2b arity_of(mcmillan_tc) = 3")
+    _check(arity_of("universal_cooper_tc") == 2, "F2c arity_of(universal_cooper_tc) = 2")
+    _check(arity_of("bcs_gap_ratio") == 0, "F2d arity_of(bcs_gap_ratio) = 0")
+    _check(arity_of("eliashberg_full") == 4, "F2e arity_of(eliashberg_full) = 4")
+    _check(arity_of("not_real") == -1, "F2f arity_of(unknown) = -1")
+
+    // F3: dispatch allen_dynes_tc Pb anchor (omega_log=56K lambda=1.55 mu=0.10 -> ~7.2 K)
+    let tc_pb = dispatch("allen_dynes_tc", [56.0, 1.55, 0.10])
+    _check(rel_err(tc_pb, 7.2) < 0.20,
+           "F3 dispatch(allen_dynes_tc, [56,1.55,0.10]) ~ 7.2 K Pb anchor (±20%)")
+
+    // F4: dispatch mcmillan_tc Nb (theta_d=275, lambda=1.0, mu=0.13 -> ~9.3K, looser ±30%)
+    let tc_nb = dispatch("mcmillan_tc", [275.0, 1.0, 0.13])
+    _check(tc_nb > 5.0 && tc_nb < 30.0,
+           "F4 dispatch(mcmillan_tc, [275,1.0,0.13]) ~ Nb 9.3 K (loose band)")
+
+    // F5: dispatch bcs_gap_ratio 0-arg ~ 3.5279
+    let r = dispatch("bcs_gap_ratio", [])
+    _check(rel_err(r, 3.527754179) < 1.0e-6,
+           "F5 dispatch(bcs_gap_ratio, []) = 2pi*exp(-gamma_E) (rel<1e-6)")
+
+    // F6: dispatch eliashberg_full MgB2 (omega_log=700 omega2=770 lambda=0.87 mu=0.13)
+    let tc_mgb2 = dispatch("eliashberg_full", [700.0, 770.0, 0.87, 0.13])
+    _check(tc_mgb2 > 25.0 && tc_mgb2 < 55.0,
+           "F6 dispatch(eliashberg_full, MgB2 args) Tc in [25,55] K")
+
+    // F7: arity mismatch -> 0.0 sentinel
+    let bad1 = dispatch("allen_dynes_tc", [56.0, 1.55])  // 2 args instead of 3
+    _check(bad1 == 0.0, "F7a arity-mismatch -> 0.0 sentinel (2 of 3)")
+    let bad2 = dispatch("bcs_gap_ratio", [1.0])  // 1 arg instead of 0
+    _check(bad2 == 0.0, "F7b arity-mismatch -> 0.0 sentinel (1 of 0)")
+
+    // F8: unknown fn -> 0.0 sentinel
+    let unk = dispatch("not_real_calc", [1.0, 2.0])
+    _check(unk == 0.0, "F8 unknown fn dispatch -> 0.0 sentinel")
+
+    // F9: dispatch_with_assumes returns [value, assumes_list]
+    let bundle = dispatch_with_assumes("bcs_gap_ratio", [])
+    _check(bundle.len() == 2, "F9a dispatch_with_assumes returns 2-element array")
+    let v = bundle[0]
+    let a = bundle[1]
+    _check(rel_err(v, 3.527754179) < 1.0e-6 && a.len() == 5,
+           "F9b bundle = (3.5279, 5-element assumes list)")
+
+    // F10: cross-check vs PR-hx2 direct fn for bcs_gap_ratio + eliashberg
+    let direct_bcs = bcs_gap_ratio()
+    let dispatch_bcs = dispatch("bcs_gap_ratio", [])
+    _check(direct_bcs == dispatch_bcs,
+           "F10a dispatch(bcs_gap_ratio) == direct bcs_gap_ratio()")
+    let direct_elia = eliashberg_full(700.0, 770.0, 0.87, 0.13)
+    let dispatch_elia = dispatch("eliashberg_full", [700.0, 770.0, 0.87, 0.13])
+    _check(direct_elia == dispatch_elia,
+           "F10b dispatch(eliashberg_full) == direct eliashberg_full()")
+
+    println("== " + str(RUN - FAIL) + "/" + str(RUN) + " checks passed ==")
+    if FAIL > 0 { println("__VERIFY_DISPATCH_SMOKE__ FAIL"); exit(1) }
+    println("__VERIFY_DISPATCH_SMOKE__ PASS")
+    exit(0)
+}
