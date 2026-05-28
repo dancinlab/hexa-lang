@@ -1,0 +1,87 @@
+B9.6-C6/C7/C8 — class-C syscall-ABI self-emit batch · hxlcl_fstat / hxlcl_stat / hxlcl_kill
+verdict: ACTIVATED (🟢 numerical) — 3 more class-C svc primitives live-injectable via Path A
+host: mini-class arm64 macOS (Darwin 25.5.0) · clang -O2 / as -arch arm64 / ld64
+date: 2026-05-28
+branch: f3-selfemit-batch2-2026-05-28 (off origin/main)
+
+════════════════════════════════════════════════════════════════════════════
+TARGETS — three svc-wrappers from the proven class-C templates
+════════════════════════════════════════════════════════════════════════════
+self/runtime.c (Darwin arm64 raw-trap block):
+  hxlcl_fstat(int fd, void *buf)        { return (int)_hxlcl_syscall2_cf(HXLCL_SYS_FSTAT, ...); }  SYS_FSTAT=339
+  hxlcl_stat(const char*path,void*buf)  { return (int)_hxlcl_syscall2_cf(HXLCL_SYS_STAT,  ...); }  SYS_STAT=338
+  hxlcl_kill(int pid, int sig)          { return (int)_hxlcl_syscall2(HXLCL_SYS_KILL,     ...); }  SYS_KILL=37
+
+- fstat = int+ptr 2-arg svc-_cf → mirror of rt_mkdir (#1899): sxtw targets x0/fd, buf ptr x1
+          untouched. SYS=339 is the FIRST class-C SYS number > 255 → full 16-bit `mov w16` imm.
+- stat  = ptr+ptr 2-arg svc-_cf → NEITHER arg sign-extended (FIRST no-sxtw 2-arg body); 32 B,
+          4 B shorter than mkdir/fstat (the dropped sxtw). errno reloc shifts -4 (0x10/0x14).
+- kill  = int+int NON-_cf no-errno → 2-arg analogue of rt_getuid (#1899): dual sxtw, trap, ret;
+          NO carry-flag / errno path → NO reloc. 20 B (same length as rt_atoi but pure leaf).
+
+════════════════════════════════════════════════════════════════════════════
+SELF-EMIT (self/codegen/runtime_arm64.hexa)
+════════════════════════════════════════════════════════════════════════════
+rt_fstat  9 instr 36 B : sxtw x0,w0 / mov w16,#339 / svc #0x80 / cset x8,hs / cbz x8,Lret /
+                         adrp x8,errno / str w0,[x8] / mov x0,#-1 / ret
+                         (2 errno relocs: PAGE21@0x14, PAGEOFF12@0x18)
+rt_stat   8 instr 32 B : mov w16,#338 / svc #0x80 / cset x8,hs / cbz x8,Lret / adrp x8,errno /
+                         str w0,[x8] / mov x0,#-1 / ret
+                         (2 errno relocs: PAGE21@0x10, PAGEOFF12@0x14 — shifted -4, no sxtw)
+rt_kill   5 instr 20 B : sxtw x0,w0 / sxtw x1,w1 / mov w16,#37 / svc #0x80 / ret   (NO reloc)
+
+════════════════════════════════════════════════════════════════════════════
+3-LAYER VERIFY (JIT-exec is the load-bearing gate)
+════════════════════════════════════════════════════════════════════════════
+LAYER 1 — interp self-test (size / svc / syscall-num / reloc-table / RET assertions):
+    HEXA_VAL_ARENA=0 hexa-run self/codegen/runtime_arm64.hexa     (on-PATH /Users/ghost/.hx/bin/hexa-run)
+      rt_fstat         : 36 bytes (2 relocs)
+      rt_stat          : 32 bytes (2 relocs)
+      rt_kill          : 20 bytes (no reloc)
+      ALL CHECKS PASS
+    (every byte-offset + reloc-table + alignment assertion green)
+
+LAYER 2 — byte-identical to `as -arch arm64` AND clang -O2 (normalized LE byte streams):
+    rt_fstat  : 93407c00 52802a70 d4001001 9a9f37e8 b4000088 90000008 b9000100 92800000 d65f03c0   BYTE-IDENTICAL
+    rt_stat   : 52802a50 d4001001 9a9f37e8 b4000088 90000008 b9000100 92800000 d65f03c0            BYTE-IDENTICAL
+    rt_kill   : 93407c00 93407c21 528004b0 d4001001 d65f03c0                                        BYTE-IDENTICAL
+    Cross-checked two independent rigs:
+      (a) clang -O2 -c of the runtime.c bodies in the `int hxlcl_errno; #define errno hxlcl_errno`
+          context with the exact _hxlcl_syscall2_cf / _hxlcl_syscall2 inlines (faithful oracle).
+      (b) raw `as -arch arm64` of the literal instruction sequence (errno@PAGE/@PAGEOFF).
+    Both produce the emitter's byte stream EXACTLY (emit==oracle, 0 diffs, per-byte compared).
+
+LAYER 3 — JIT-exec correctness (driver supplies external _hxlcl_errno, ld64 link, ./f3jit):
+    fstat(valid fd=3): ret=0 errno=0                  -> PASS (real stat on an open fd)
+    fstat(bad fd=-1):  ret=-1 errno=9 (EBADF)         -> PASS (carry→errno store works)
+    stat(/tmp/f3jit.c): ret=0 errno=0                 -> PASS (real stat on a real path)
+    stat(missing):     ret=-1 errno=2 (ENOENT)        -> PASS (carry→errno store works)
+    kill(self,0):      ret=0                           -> PASS (sig-0 liveness probe, process alive)
+    kill(bad pid,0):   ret=3 (ESRCH, non-_cf raw)      -> PASS (trap fired, raw err code returned)
+    -> "JIT-EXEC ALL PASS (0 failures)" · rc=0
+    Confirms the PC-relative adrp/str errno store binds to the external hxlcl_errno symbol
+    through ld64 (class-C-with-errno reloc path, same as dup2/mkdir), and the non-_cf kill
+    body returns the raw trap value with no errno store (no reloc to bind).
+
+════════════════════════════════════════════════════════════════════════════
+PATH-A ACTIVATION · default-build 0-extern byte-identical
+════════════════════════════════════════════════════════════════════════════
+Guards: self/runtime.c — forward decl + body for all three #ifdef HEXA_RT_SELFEMIT
+        (extern under guard, original `static __attribute__((noinline))` svc-trap by default).
+        ADDITIVE ONLY — wipe_guard compliant (no deletions). Only the Darwin arm64 raw-trap
+        block is guarded; the Linux/libc fallback bodies are untouched.
+
+(a) DEFAULT (guard off):
+      `clang -E -P -arch arm64` expansion of self/runtime.c is CHARACTER-IDENTICAL between this
+      branch and origin/main:
+        diff <(branch default) <(main default)  ->  EMPTY (0 lines)
+      All three stay `static`; no new extern; 0-libc-extern invariant preserved.
+(b) GUARD ON (-DHEXA_RT_SELFEMIT):
+      all three flip to `extern int hxlcl_fstat/stat/kill(...)` (fwd + body); no static body
+      leaks — the self-emit .o supplies the strong symbol.
+
+shadow module self/codegen/runtime_arm64.hexa is NOT `use`d by compiler/main.hexa
+(grep-confirmed) → no hexa_cc.c regen, no fixpoint risk · .c count UNCHANGED (3).
+
+ACTIVATED count: 25/640 → 28/640.  class-C subtrack: 5 → 8.
+all verdicts = raw command output verbatim (g5 claim_verify).
