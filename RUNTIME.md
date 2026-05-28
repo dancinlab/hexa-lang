@@ -2328,6 +2328,23 @@ framing-① (nm aprime 0 externs) 측정-충족 이후 — framing-② (source z
 
 ### RUNTIME source-zero-.c — phase-H self-emit 캠페인 (multi-session)
 
+- [ ] **`self/native/hexa_cc.c=0` (boot-image removal) — F3 lane** — multi-session
+      terminal goal. NOT a per-fn `HEXA_RT_SELFEMIT` guard (boot-image is
+      monolithic; `grep -c HEXA_RT_SELFEMIT self/native/hexa_cc.c` = 0 by
+      design). Activation = the build always warm-rebuilds via `hexa cc
+      --regen` (or uses a stage-(-1) host-binary seed). 3-way decision tree +
+      preconditions (P1 fixpoint + P2/P3 cross-host + P4 runtime.c floor +
+      P5 stage-(-1) seed) + per-step verifier documented at
+      `.verdicts/runtime-floor-closure/F3-hexa-cc-activation-runbook.md`
+      (scaffold 2026-05-29, branch `f3-hexa-cc-guard-scaffold-2026-05-29`).
+      Probe: `hexa-run tool/verify_hexa_cc_regen.hexa --probe`. **Status at
+      HEAD `c1a500ce2`**: P1 PROVEN (#1533 `d1994dfea` gen1==gen2 byte-eq);
+      P2/P3 measurement OPEN (probe to run on `mini` + `ubu-2` next session,
+      Mac kill-storm gate refuses local heavy regen); P4 ORTHOGONAL but
+      parallel (F3 runtime.c svc-wrapper 59/640 ≈ 9.2% at `1018e1a55`); P5
+      DESIGN-OPEN. `--prefer-regen` build flag reserved as future opt-in
+      (documented in `tool/build_hexa_cli.hexa` Step 0 comment; not parsed
+      yet — cold-seed remains the only path until gates green).
 - [x] **rt_arena/alloc/reset/release 머신코드 self-emit** — **LANDED**: 4 fn 모두
       `self/codegen/runtime_arm64.hexa` 에 raw byte push self-emit 으로 구현됨
       (`rt_arena_init` L1157 19-inst 76B · `rt_arena_alloc` L1268 · `rt_arena_reset`

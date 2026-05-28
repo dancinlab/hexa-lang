@@ -1,0 +1,264 @@
+// tool/verify_hexa_cc_regen.hexa — F3 hexa_cc.c activation probe driver.
+//
+// Companion to .verdicts/runtime-floor-closure/F3-hexa-cc-activation-runbook.md.
+//
+// PURPOSE
+//   The boot-image self/native/hexa_cc.c is the cold-seed for the
+//   stage-0 transpiler. `hexa cc --regen` regenerates it from the
+//   4 SSOT .hexa modules (lexer / parser / type_checker / codegen).
+//   The terminal F3 goal is "hexa_cc.c=0" — i.e. the build always
+//   warm-rebuilds (or uses a stage-(-1) host-binary seed) and the
+//   in-tree .c is removed.
+//
+//   Before any flip can happen, the warm path must be PROVEN
+//   byte-identical to the in-tree .c (P1 + P2 + P3 of the runbook).
+//   This driver is the **probe**: it reports the activation state +
+//   what `--regen` would do, WITHOUT executing the heavy regen on a
+//   refused host (Mac kill-storm gate).
+//
+// USAGE
+//   hexa-run tool/verify_hexa_cc_regen.hexa --probe
+//     ^ honest preflight: prints metadata, checks prereqs, reports
+//       whether a real `--regen` would be safe to run on this host,
+//       does NOT invoke regen. ALWAYS SAFE on Mac.
+//
+//   hexa-run tool/verify_hexa_cc_regen.hexa --byte-eq
+//     ^ requires build/hexat + self/runtime.o present; runs
+//       cmd_regen_cc, compares sha256(.new) vs sha256(in-tree).
+//       Reports one of the 7 drift classes from runbook §4.
+//       HEAVY — refuse on Mac without LOCAL_BUILD=1.
+//
+//   hexa-run tool/verify_hexa_cc_regen.hexa --drift-class
+//     ^ alias of --byte-eq with extra line-count diff classification.
+//
+// EXIT CODES
+//   0  BYTE-EQ (warm path safe) | --probe report printed
+//   1  drift detected (class printed)
+//   2  prereqs missing (no build/hexat or no runtime.o)
+//   3  host refused (Mac kill-storm gate) — re-run via pool on mini/ubu-2
+//
+// NON-GOALS
+//   * Does NOT regenerate hexa_cc.c (PR #1533 pattern is the canonical
+//     regen lane — branch + commit + PR).
+//   * Does NOT flip the build to warm-only (that is the final
+//     multi-session gate in the runbook).
+//   * Does NOT touch self/native/hexa_cc.c or the 4 SSOT modules.
+
+fn _uname() -> string {
+    return to_string(exec("uname")).trim()
+}
+
+fn _file_exists_p(p: string) -> bool {
+    let r = exec_with_status("test -f " + _shq(p))
+    return r[1] == 0
+}
+
+fn _shq(s: string) -> string {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+fn _repo_root() -> string {
+    let hl = env_var("HEXA_LANG")
+    if hl != "" { return hl }
+    return to_string(exec("pwd")).trim()
+}
+
+fn _hash(p: string) -> string {
+    // Prefer md5sum (Linux) / md5 (Darwin). Output: hex only.
+    let uname = _uname()
+    let mut cmd = ""
+    if uname == "Darwin" {
+        cmd = "md5 -q " + _shq(p) + " 2>/dev/null | tr -d ' \\n'"
+    } else {
+        cmd = "md5sum " + _shq(p) + " 2>/dev/null | awk '{print $1}' | tr -d ' \\n'"
+    }
+    return to_string(exec(cmd))
+}
+
+fn _line_count(p: string) -> string {
+    return to_string(exec("wc -l < " + _shq(p) + " | tr -d ' \\n'"))
+}
+
+fn _byte_count(p: string) -> string {
+    return to_string(exec("wc -c < " + _shq(p) + " | tr -d ' \\n'"))
+}
+
+fn _host_refuses_heavy() -> bool {
+    // Mirror tool/build_hexa_cli.hexa::_refuse_local_on_mac.
+    if _uname() != "Darwin" { return false }
+    if env_var("LOCAL_BUILD") == "1" { return false }
+    return true
+}
+
+fn cmd_probe(repo_root: string) -> i64 {
+    let cc_c   = repo_root + "/self/native/hexa_cc.c"
+    let hexat  = repo_root + "/build/hexat"
+    let rt_o   = repo_root + "/self/runtime.o"
+
+    println("=== F3 hexa_cc.c activation PROBE ===")
+    println("  host        : " + _uname())
+    println("  repo_root   : " + repo_root)
+    println("")
+    println("[1/3] boot-image metadata")
+    if !_file_exists_p(cc_c) {
+        println("  MISSING: " + cc_c)
+        println("  hexa_cc.c=0 state appears achieved OR this is a broken tree.")
+        println("  (terminal state is reached when the warm path is the only path.)")
+        return 0
+    }
+    println("  path        : " + cc_c)
+    println("  bytes       : " + _byte_count(cc_c))
+    println("  lines       : " + _line_count(cc_c))
+    println("  md5         : " + _hash(cc_c))
+    let guard_n = to_string(exec("grep -c HEXA_RT_SELFEMIT " + _shq(cc_c) + " | tr -d ' \\n'"))
+    println("  selfemit#   : " + guard_n + "  (boot-image; expected 0 — per-fn guard NOT applicable)")
+
+    println("")
+    println("[2/3] warm-path prereqs (P2/P3 measurement gate)")
+    let have_hexat = _file_exists_p(hexat)
+    let have_rt_o  = _file_exists_p(rt_o)
+    if have_hexat { println("  build/hexat      : present (" + _byte_count(hexat) + " B)") }
+    else          { println("  build/hexat      : MISSING — Step 0 bootstrap needed") }
+    if have_rt_o  { println("  self/runtime.o   : present (" + _byte_count(rt_o) + " B)") }
+    else          { println("  self/runtime.o   : MISSING — cmd_cc auto-builds, but --regen smoke link needs it") }
+
+    println("")
+    println("[3/3] host policy gate (P2 refuse-gate)")
+    if _host_refuses_heavy() {
+        println("  POLICY     : Mac kill-storm gate ACTIVE — heavy regen REFUSED")
+        println("  remedy     : pool on mini hexa-run tool/verify_hexa_cc_regen.hexa --byte-eq")
+        println("           OR  LOCAL_BUILD=1 hexa-run tool/verify_hexa_cc_regen.hexa --byte-eq")
+        println("           OR  pool on ubu-2 hexa-run tool/verify_hexa_cc_regen.hexa --byte-eq")
+        println("")
+        println("=== PROBE OK (refuse-gate honored; no regen executed) ===")
+        return 0
+    }
+    println("  POLICY     : heavy regen permitted on this host")
+    if !have_hexat || !have_rt_o {
+        println("")
+        println("  hint: tool/build_hexa_cli  (builds Step 0 + Step 4b runtime.o)")
+        println("        then re-invoke this script with --byte-eq.")
+        println("")
+        println("=== PROBE OK (prereqs MISSING; --byte-eq cannot run yet) ===")
+        return 0
+    }
+    println("")
+    println("=== PROBE OK (ready for --byte-eq) ===")
+    return 0
+}
+
+fn _classify_drift(repo_root: string) -> string {
+    let cc_c     = repo_root + "/self/native/hexa_cc.c"
+    let cc_c_new = repo_root + "/self/native/hexa_cc.c.new"
+    if !_file_exists_p(cc_c_new) {
+        return "BUILD-FAIL"
+    }
+    let h_old = _hash(cc_c)
+    let h_new = _hash(cc_c_new)
+    if h_old == h_new && h_old != "" {
+        return "BYTE-EQ"
+    }
+    let l_old = _line_count(cc_c)
+    let l_new = _line_count(cc_c_new)
+    if l_old == l_new {
+        // Same line count, different hash. Whitespace-only? Cheap check.
+        let ws_diff = exec("diff -w " + _shq(cc_c) + " " + _shq(cc_c_new) + " 2>/dev/null | head -1 | tr -d ' \\n'")
+        if ws_diff == "" {
+            return "LINE-EQ-WHITESPACE"
+        }
+        return "LINE-EQ-CODEGEN"
+    }
+    // Line count differs — classify by magnitude.
+    let delta_raw = exec("python3 -c 'print(abs(int(" + _shq(l_new) + ")-int(" + _shq(l_old) + ")))' 2>/dev/null | tr -d ' \\n'")
+    if delta_raw == "" {
+        // Python missing — fall back to awk.
+        let delta_awk = to_string(exec("awk 'BEGIN{a=" + l_old + ";b=" + l_new + ";d=a-b;if(d<0)d=-d;print d}' | tr -d ' \\n'"))
+        if delta_awk == "" { return "LINE-DIFF-MINOR" }
+        let n = to_int(delta_awk)
+        if n > 100 { return "LINE-DIFF-MAJOR" }
+        return "LINE-DIFF-MINOR"
+    }
+    let n = to_int(delta_raw)
+    if n > 100 { return "LINE-DIFF-MAJOR" }
+    return "LINE-DIFF-MINOR"
+}
+
+fn cmd_byte_eq(repo_root: string) -> i64 {
+    if _host_refuses_heavy() {
+        eprintln("verify_hexa_cc_regen: refuse on Mac without LOCAL_BUILD=1 (kill-storm gate)")
+        eprintln("  remedy: pool on mini OR pool on ubu-2 OR LOCAL_BUILD=1")
+        return 3
+    }
+    let hexat = repo_root + "/build/hexat"
+    let rt_o  = repo_root + "/self/runtime.o"
+    if !_file_exists_p(hexat) {
+        eprintln("verify_hexa_cc_regen: missing " + hexat)
+        eprintln("  build it: tool/build_hexa_cli")
+        return 2
+    }
+    if !_file_exists_p(rt_o) {
+        eprintln("verify_hexa_cc_regen: missing " + rt_o)
+        eprintln("  build it: cmd_cc auto-builds, or tool/build_hexa_cli --install")
+        return 2
+    }
+    println("=== F3 hexa_cc.c BYTE-EQ probe ===")
+    println("  host: " + _uname() + "  repo: " + repo_root)
+    println("")
+    println("[1/2] invoking cmd_regen_cc (heavy; writes self/native/hexa_cc.c.new)")
+    println("      ↳ shell: cd " + repo_root + " && HEXA_LANG=" + repo_root + " hexa-run cc --regen")
+    // INVOKE cmd_regen_cc via a sub-hexa process to preserve isolation.
+    let regen_cmd = "cd " + _shq(repo_root) + " && HEXA_LANG=" + _shq(repo_root) + " hexa-run cc --regen 2>&1 | tail -10"
+    let regen_out = exec(regen_cmd)
+    if len(regen_out) > 0 {
+        println("  --- regen tail ---")
+        println(regen_out)
+        println("  ------------------")
+    }
+    println("")
+    println("[2/2] drift classification")
+    let cls = _classify_drift(repo_root)
+    println("  CLASS: " + cls)
+    if cls == "BYTE-EQ" {
+        println("  ↳ warm path is byte-identical to the in-tree boot-image.")
+        println("  ↳ P1 + P2 GREEN on this host. Warm-only flip is technically safe here.")
+        return 0
+    }
+    println("  ↳ DRIFT detected. See runbook §4 for remediation per class.")
+    println("  ↳ inspect: diff " + repo_root + "/self/native/hexa_cc.c{,.new} | head -200")
+    return 1
+}
+
+fn _usage() {
+    println("usage: hexa-run tool/verify_hexa_cc_regen.hexa <verb>")
+    println("  verbs: --probe       (default, ALWAYS SAFE)")
+    println("         --byte-eq     (heavy; refused on Mac without LOCAL_BUILD=1)")
+    println("         --drift-class (alias of --byte-eq)")
+    println("")
+    println("  runbook: .verdicts/runtime-floor-closure/F3-hexa-cc-activation-runbook.md")
+}
+
+fn main() {
+    let av = args()
+    let repo_root = _repo_root()
+    let mut verb = "--probe"
+    if len(av) >= 2 {
+        verb = to_string(av[1])
+    }
+    if verb == "-h" || verb == "--help" {
+        _usage()
+        return
+    }
+    if verb == "--probe" {
+        let rc = cmd_probe(repo_root)
+        if rc != 0 { exit(to_int(rc)) }
+        return
+    }
+    if verb == "--byte-eq" || verb == "--drift-class" {
+        let rc = cmd_byte_eq(repo_root)
+        if rc != 0 { exit(to_int(rc)) }
+        return
+    }
+    eprintln("verify_hexa_cc_regen: unknown verb '" + verb + "'")
+    _usage()
+    exit(64)
+}
