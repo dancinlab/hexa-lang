@@ -2216,16 +2216,46 @@ fn _adapt_verify_generic(fn_name: string, args: array, v_str: string, id_overrid
 }
 
 // _parse_compute_value — extract the numeric value from a verify compute-mode
-// stdout (`COMPUTE: <label> = <value>` line). Returns the value substring after
-// the LAST " = " on the COMPUTE line, or "" when no COMPUTE line is present.
+// stdout (`COMPUTE: <label> = <value> [raw=<full>]` line). PREFERS the
+// `[raw=<full>]` suffix when present (full float64 round-trippable form from
+// verify_cli's json_stringify path — INBOX #1910 fix-at-source), else falls
+// back to the post-`=` display tail. Returns "" when no COMPUTE line found.
+//
+// Why prefer raw: `_is_rounding_of(claimed, engine_value)` gates a rounded
+// literal as a plausible decimal-rounding of the engine value (g34 — never
+// launder a wrong claim, but DO fold a literal that matches the engine to its
+// own decimal precision). That gate needs the engine's EXACT recomputed
+// double, not its %g 6-sig-fig display form. Before this fix, a claim like
+// "227.501134" against a verify echo of "= 227.501" failed the band test by
+// orders of magnitude even though the engine actually computed
+// 227.50113398567433 — a perfectly rounding-consistent match.
 fn _parse_compute_value(out: string) -> string {
     let lines = out.split("\n")
     let mut i = 0
     while i < len(lines) {
         let ln = to_string(lines[i])
         if ln.starts_with("COMPUTE: ") {
-            // value is the tail after the last " = "
-            let parts = ln.split(" = ")
+            // FIX (#1910) — prefer the `[raw=<full-precision>]` suffix if
+            // verify_cli emitted one (cmd_expr_float_compute path). The raw
+            // form is the shortest %g that strtod-round-trips to the same
+            // double (json_stringify → _shortest_double in self/runtime.c).
+            let raw_open = ln.find("[raw=")
+            if raw_open >= 0 {
+                let raw_tail = ln.slice(raw_open + 5, len(ln))
+                let raw_close = raw_tail.find("]")
+                if raw_close >= 0 {
+                    return raw_tail.slice(0, raw_close).trim()
+                }
+            }
+            // Back-compat — no raw suffix (int compute path, or pre-fix
+            // verify_cli build). Fall through to the legacy " = " tail.
+            // Strip a trailing `[raw=...]` if a malformed close-bracket case
+            // somehow slipped through (defensive — the slice above already
+            // returned in the well-formed case).
+            let mut tail_src = ln
+            let strip = tail_src.find(" [raw=")
+            if strip >= 0 { tail_src = tail_src.slice(0, strip) }
+            let parts = tail_src.split(" = ")
             if len(parts) >= 2 { return to_string(parts[len(parts) - 1]).trim() }
         }
         i = i + 1

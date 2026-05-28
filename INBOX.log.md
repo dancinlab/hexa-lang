@@ -1,6 +1,8 @@
 # INBOX — log
 
-## 2026-05-28 — 🟠 OPEN · `atlas register --from-verify` 의 #1901 rounding auto-route 가 display-rounded 값을 읽음 (#1901 follow-up)
+## 2026-05-28 — ✅ RESOLVED · `atlas register --from-verify` 의 #1901 rounding auto-route 가 display-rounded 값을 읽음 (#1901 follow-up)
+
+> **✅ RESOLVED 2026-05-28** (`fix/atlas-rounding-fullfloat-v2`): verify_cli 의 COMPUTE 출력이 full-precision `[raw=...]` suffix 노출, atlas_cli 의 `_compute_value_of` 가 raw float64 캡처. `_is_rounding_of` 가 이제 rounded-literal claim 도 실제 작동 (#1901 의도 realize). 회귀: full-precision direct-🟢 + genuine-🔴 거부 무손상. (선행 PR #1912 는 stale-base 로 786줄 무관 deletion 포함 → 닫고 clean 2-file cherry-pick 으로 재발사.)
 
 > **출처**: #1901(3-op fold) fix 후 demiurge YH₁₀ verdict atlas fold(#1909) 중 발견. #1901 이 `_is_rounding_of` gate 로 rounded-literal 도 fold 하게 의도했으나, `_compute_value_of` 가 verify 의 **display-rounded** 출력(`227.501`, 3소수)을 읽어 full float64(`227.50113398567433`)가 아님 → `_is_rounding_of("227.501", "227.501134")` 가 band 실패 → rounded claim(`227.501134`)은 여전히 🔴, fold 불가.
 > **현 우회 (clean)**: full-precision 값(`227.50113398567433`)을 register 에 주면 strict-ε 직접 🟢 fold. YH₁₀ 는 이 경로로 #1909 성공.
