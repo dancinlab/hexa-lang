@@ -2233,6 +2233,70 @@ fn _parse_compute_value(out: string) -> string {
     return ""
 }
 
+// _claim_decimals — count the digits AFTER the decimal point in a numeric
+// literal (the precision the user wrote the claimed <v> at). "227.501" → 3,
+// "14" → 0, "1.0e-3" → counted from the mantissa "1.0" = 1 (exponent ignored;
+// good enough for the rounding band). Used to derive the round-tolerance band:
+// a value PRINTED to k decimals is, by half-up rounding, within 0.5·10⁻ᵏ of
+// the true value. This is the literature-rounding interpretation, not a magic
+// fudge — it mirrors verify_cli's VERIFY-KIT V3 `--tol` semantics.
+fn _claim_decimals(s: string) -> int {
+    let t = s.trim()
+    let dot = t.find(".")
+    if dot < 0 { return 0 }
+    let mut k = 0
+    let mut i = dot + 1
+    let n = len(t)
+    while i < n {
+        let c = t[i]
+        if c >= "0" && c <= "9" { k = k + 1; i = i + 1 }
+        else { break }   // stop at an exponent marker ('e'/'E') or other char
+    }
+    return k
+}
+
+// _round_tol_band — the half-up rounding tolerance band for a claimed literal:
+// 0.5 · 10⁻ᵈ where d = _claim_decimals. A claim written to d decimals is, by
+// definition of decimal rounding, within this band of the true value. Returns
+// 0.0 for an integer claim (d=0 → band 0.5; but integer claims compare exactly
+// via the int path, so this float band is only consulted on the float route).
+fn _round_tol_band(claim_str: string) -> float {
+    let d = _claim_decimals(claim_str)
+    let mut band = 0.5
+    let mut k = 0
+    while k < d {
+        band = band / 10.0
+        k = k + 1
+    }
+    return band
+}
+
+// _is_rounding_of — true iff the engine's exact computed value `computed_str`
+// and the user's claimed literal `claim_str` agree WITHIN the claim's half-up
+// rounding band (i.e. the claim is a plausible rounding of the engine value).
+// This is the guard that lets a value-bearing 🔴 (claimed literal disagrees
+// with the engine beyond strict ε=1e-9) be RE-CLASSIFIED as a rounding artifact
+// rather than a genuine falsification — but ONLY when the disagreement is no
+// larger than the precision the user actually wrote. A claim that disagrees
+// BEYOND its own rounding band is a real falsification and stays 🔴 (g34 — the
+// fix never launders a wrong claim).
+fn _is_rounding_of(computed_str: string, claim_str: string) -> bool {
+    let computed = _parse_float_register(computed_str)
+    let claimed = _parse_float_register(claim_str)
+    let band = _round_tol_band(claim_str)
+    return _fabs_register(computed - claimed) <= band
+}
+
+// _compute_value_of — the engine's computed value substring from a compute-mode
+// DiscoveryEvent. The event's `name` is `fn(args)=<value>`; return the tail
+// after the LAST "=". "" when no "=" present (defensive).
+fn _compute_value_of(ev: DiscoveryEvent) -> string {
+    let nm = ev.name
+    let parts = nm.split("=")
+    if len(parts) >= 2 { return to_string(parts[len(parts) - 1]).trim() }
+    return ""
+}
+
 // _adapt_verify_compute — VERIFY-KIT V1 value-less COMPUTE-and-fold adapter.
 // register's --from-verify treats EVERY positional after the fn name as an
 // OPERAND (no claimed value), delegates to `hexa verify --expr <fn> <args>
@@ -2489,8 +2553,10 @@ fn cmd_register(rest: array) {
         else if a == "--rounds" && i + 1 < n { drill_rounds = to_int(to_string(rest[i + 1])); i = i + 2 }
         else if a == "--engine" && i + 1 < n { drill_engine = to_string(rest[i + 1]); i = i + 2 }
         else if a == "--help" || a == "-h" {
-            println("usage: hexa atlas register --from-verify <fn> <n> <v>")
+            println("usage: hexa atlas register --from-verify <fn> <a1> ... <aN> <v>   (any arity)")
+            println("       hexa atlas register --from-verify <fn> <n> <v>                  (1-op)")
             println("       hexa atlas register --from-verify <fn> <a> <b> <v>              (2-op)")
+            println("       hexa atlas register --from-verify <fn> <a> <b> <c> <v>          (3-op · allen_dynes_tc λ ω_log μ*)")
             println("       hexa atlas register --from-verify welch_t_crit <df> <v>          (🟢 NUMERICAL)")
             println("       hexa atlas register --from-verify wilson_hilferty_p <t> <df> <v> (🟢)")
             println("       hexa atlas register --from-drill  --seed \"<text>\" [--rounds N] [--engine mk9|mk10] [--id <id>]")
@@ -2563,23 +2629,71 @@ fn cmd_register(rest: array) {
             pi = pi + 1
         }
         let ev = _adapt_verify_generic(fn_name, args_arr, v_str, id_override, node_source, node_url)
-        // VERIFY-KIT V1 auto-route: a 🟠 from the value-bearing form means the
-        // arity didn't compute (e.g. allen_dynes_tc(λ,ω_log,μ*) is 3-arg but
-        // the last operand was consumed as the claimed <v>, leaving a 2-arg
-        // call). Retry in value-less COMPUTE mode treating ALL positionals as
-        // operands. A genuine 🔴 (calc disagrees) is NOT retried — it stays
-        // falsified. This kills the arity gap without conflating falsification.
-        if ev.verdict == "🟠 INSUFFICIENT" {
-            let mut allargs = []
-            let mut ai = 1
-            while ai < len(positional) {
-                allargs.push(to_string(positional[ai]))
-                ai = ai + 1
+        // VARIABLE-ARITY auto-route (INBOX #1896). The value-bearing form
+        // ALWAYS consumes the LAST positional as the claimed <v>, so an N-arg fn
+        // invoked with all N operands + a claimed value is parsed as an N-arg
+        // VERIFY only when verify_cli's float route counts that arity. Two
+        // failure shapes both stem from this single mis-split:
+        //
+        //   🟠 INSUFFICIENT — the under-arity call has NO calculator path
+        //       (e.g. a 4-arg fn given 4 operands + <v> = 5 tokens, but the
+        //       float route caps at argc=4 so the 5th-as-<v> leaves a 4-arg
+        //       call that DID compute → this is actually fine; the 🟠 shape
+        //       arises when the residual arity has no calc entry at all).
+        //   🔴 FALSIFIED  — the call DID compute, but the user's claimed <v> is
+        //       a literature-ROUNDED literal (e.g. allen_dynes_tc(λ,ω_log,μ*) →
+        //       227.501 vs the engine's 227.501133986), so the strict ε=1e-9
+        //       gate flags |Δ| as a falsification. This is the 3-operand gap:
+        //       `verify --expr allen_dynes_tc 2.8197 1300.43 0.10 --compute` is
+        //       🟢 227.501133986, yet the value-bearing register saw 🔴.
+        //
+        // BOTH are repaired the same way: retry in value-less COMPUTE mode
+        // treating EVERY positional as an operand (any arity; verify_cli owns
+        // the arity table per @D g20 — no arity branching here), then fold the
+        // ENGINE's full-precision value. The 🔴 retry is GATED: the compute
+        // result must be a plausible rounding of the user's claimed <v> (within
+        // its own half-up decimal band) — a genuine deterministic disagreement
+        // BEYOND that band stays 🔴 (g34 — no falsification laundering).
+        let route_orange = ev.verdict == "🟠 INSUFFICIENT"
+        let route_red = ev.verdict == "🔴 FALSIFIED"
+        if route_orange || route_red {
+            // Operand set differs by route:
+            //   🟠 (arity) — the claimed <v> was actually an EXTRA operand the
+            //       value-bearing parse wrongly swallowed → treat EVERY
+            //       positional as an operand (compute over all of them).
+            //   🔴 (rounding) — the value-bearing parse used the RIGHT operands
+            //       (positional[1..n-1]) and the last positional IS the claimed
+            //       result → compute over the TRUE operands only (args_arr), so
+            //       the folded node's name/echo reflects the real call, never
+            //       the claimed value spuriously appended as an operand.
+            let mut retry_args = []
+            if route_orange {
+                let mut ai = 1
+                while ai < len(positional) {
+                    retry_args.push(to_string(positional[ai]))
+                    ai = ai + 1
+                }
+            } else {
+                let mut ri = 0
+                while ri < len(args_arr) {
+                    retry_args.push(to_string(args_arr[ri]))
+                    ri = ri + 1
+                }
             }
-            let cev = _adapt_verify_compute(fn_name, allargs, id_override, node_source, node_url)
-            if cev.verdict == "🟢 SUPPORTED-NUMERICAL" || cev.verdict == "🔵 SUPPORTED-FORMAL" {
-                println("hexa atlas register --from-verify " + cev.name + "  (compute — auto-routed from 🟠)")
-                println("  tier   = " + cev.verdict + "  (delegated via `hexa verify --expr … --compute`)")
+            let cev = _adapt_verify_compute(fn_name, retry_args, id_override, node_source, node_url)
+            let compute_ok = cev.verdict == "🟢 SUPPORTED-NUMERICAL" || cev.verdict == "🔵 SUPPORTED-FORMAL"
+            // For the 🔴-shape retry, demand the engine value be a rounding of
+            // the claimed <v>; the 🟠-shape retry needs no such guard (its
+            // claimed <v> was an EXTRA operand, not a claimed result).
+            let mut accept = false
+            if compute_ok && route_orange { accept = true }
+            else if compute_ok && route_red {
+                if _is_rounding_of(_compute_value_of(cev), v_str) { accept = true }
+            }
+            if accept {
+                let routed_from = if route_red { "🔴 (rounded literal)" } else { "🟠 (arity)" }
+                println("hexa atlas register --from-verify " + cev.name + "  (compute — auto-routed from " + routed_from + ")")
+                println("  tier   = " + cev.verdict + "  (delegated via `hexa verify --expr … --compute`; folds engine full-precision value)")
                 let crerr = register_from_event(cev)
                 if len(crerr) > 0 {
                     println("error: " + crerr)
@@ -2902,8 +3016,8 @@ fn cmd_register(rest: array) {
 
     // No --from-<verb> selected — there is no bare `register <file>` mode.
     println("hexa atlas register: no discovery arm selected.")
-    println("  --from-verify <fn> <n> <v>            (direct in-memory node-gen → live n6/atlas.n6)")
-    println("  --from-verify <fn> <a> <b> <v>        (2-op form)")
+    println("  --from-verify <fn> <a1> ... <aN> <v>  (any arity · direct node-gen → live n6/atlas.n6)")
+    println("  --from-verify <fn> <a> <b> <c> <v>    (3-op form · allen_dynes_tc λ ω_log μ*)")
     println("  --from-verify … --source \"<attr>\"     external provenance (OEIS id, DOI) → node `source =`")
     println("  --from-drill  --seed \"<text>\" [--rounds N] [--engine mk9|mk10]")
     println("  --from-discovery <slug>               (fold .discoveries/<slug>.tape atoms into the live atlas)")
@@ -3402,8 +3516,8 @@ fn cmd_help() {
     println("  dump [K] [--json]       emit all nodes (text or jsonl)")
     println("")
     println("write subcommand (folds DIRECTLY into embedded.gen.hexa — no rebuild, no intermediate):")
-    println("  register --from-verify <fn> <n> <v>          recompute IN-PROCESS; register on 🔵/🟢")
-    println("           --from-verify <fn> <a> <b> <v>      (2-op form)")
+    println("  register --from-verify <fn> <a1> ... <aN> <v>  any arity; recompute IN-PROCESS; 🔵/🟢")
+    println("           --from-verify <fn> <a> <b> <c> <v>  (3-op · allen_dynes_tc λ ω_log μ*)")
     println("           --from-drill  --seed \"<text>\" [--rounds N] [--engine mk9|mk10] [--id <id>]")
     println("           --from-discovery <slug>             fold .discoveries/<slug>.tape discovery atoms")
     println("                          (id · verdict_tier_target · atlas) → @F nodes; idempotent; honest-")
