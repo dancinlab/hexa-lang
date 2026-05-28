@@ -2052,3 +2052,60 @@ Without a distinguishing exit / stderr passthrough, the campaign operator cannot
 ### Filer
 
 demiurge RTSC sc2be2h6 escalate-B (Sc-Be-H clathrate vc-relax recovery attempt blocked by cloud exec opacity)
+
+
+## 2026-05-29 — cloud 255 진단 종합 + stderr passthrough (RTSC 13-job dark)
+
+🟠 **OPEN · recommendation** (host-key 부분은 #1959 로 ✅ 이미 해결)
+
+### 배경
+
+RTSC 캠페인에서 vast 2개 contract (37868501 → ssh-host A:28500 6잡 · 38095989 → ssh-host B:15988 7잡) 가
+ACTIVE+billing 인데 `hexa cloud exec` 가 전부 exit 255. 13잡 dark.
+
+### 진단 (이번 세션, 안전 probe 만)
+
+| 신호 | 결과 | 해석 |
+|---|---|---|
+| `nc -zv <host> <port>` | 양쪽 **succeeded** | sshd 살아있음, 포트 열림 — transport outage 아님 |
+| `ssh-keygen -F` known_hosts | 엔트리 없음 | 옛 host-key 충돌 아님 |
+| `cloud exec` 출력 | 고정 boilerplate "transport outage" | 실제 원인(stderr) 폐기됨 |
+
+→ `_ssh_capture_status` 가 `exec_capture` 의 `res[1]`(ssh STDERR)를 버리고 `res[0]`(stdout)만 보존.
+255 시 remote shell 미실행 → stdout 비어있고 진짜 원인("Permission denied (publickey)" /
+"Host key verification failed" / "kex_exchange…")은 STDERR 에만 존재 → 영구 은폐.
+
+### #1959 와의 관계 (host-key 축은 이미 해결)
+
+origin/main HEAD `#1959 fix(cloud): SSH/scp to fresh GPU pods — accept-new host key under BatchMode`
+가 `_ssh_cmd`/`_scp_capture` 에 `StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null` 를
+추가 → 신규/migration pod 의 host-key 자동수락. **이 줄은 절대 제거 금지** (제거 = 모든 신규 pod 접속 회귀).
+
+⚠ **운영 노트**: 로컬 `hexa.real` 이 #1959 머지 이전 빌드면 여전히 host-key 255. 회수 전
+`hx install` / 재빌드로 #1959 반영 필요 — 그 후 `cloud exec` 재시도.
+
+### 남은 개선 (recommendation)
+
+1. **stderr passthrough** (= INBOX #1950 와 동일 방향, 단 #1959 와 독립):
+   - `SshCapture` 에 `err: str` 필드 추가 → `_ssh_capture_status` 가 `res[1]` 보존.
+   - `_ssh_transport_outage(verb, body, err)` 가 ssh stderr 마지막 비어있지 않은 줄을 메시지에 suffix.
+   - ⚠ **회귀 주의**: 이 패치는 `_ssh_cmd` 의 `accept-new`/`/dev/null`(#1959) 를 **건드리지 않고** struct
+     필드 + transport_outage 함수만 수정해야. (이번 세션 한 agent 가 byte-minimal 하려다 accept-new 를
+     실수로 삭제 → 회귀 → 폐기. 그 패치 머지 금지.)
+2. **255 cause taxonomy** — TCP-open + 255 를 분류:
+   - host-key → #1959 로 해결 (accept-new)
+   - publickey (key not in pod authorized_keys) → "255-AUTH-KEY" + 회수 플레이북 (vast 콘솔 pubkey 재추가 / re-rent)
+   - timeout/refused (TCP closed) → "255-NET"
+   - distinct exit codes (200-204) 로 호출자 harness 가 분기 가능하게.
+3. **host migration auto-stamp** — `cloud ssh-port <contract>` 가 endpoint 변경 감지 시 manifest 자동 갱신.
+4. **`cloud exec/run` 이 contract-id 직접 수용** — 현재 `ssh-port` 로 수동 resolve 후 host:port 전달 필요.
+   contract-id 면 내부 resolve 하도록 (operator UX).
+
+### Cross-ref
+
+- [[d8]] vast trouble → INBOX · #1950 (255 cause-distinguishability, 🟠) · #1959 (accept-new host-key, ✅) ·
+  #1864 (--source env-loss) · #1889 (tail --until 3-tier exit)
+
+### Filer
+
+demiurge RTSC sc2be2h6/13-job-dark 진단 (TCP-open + #1959-host-key + publickey-suspect; 안전 probe only, 코드 회귀 폐기)
