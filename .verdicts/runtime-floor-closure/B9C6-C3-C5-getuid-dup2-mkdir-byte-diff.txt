@@ -1,0 +1,79 @@
+B9.6-C3/C4/C5 — class-C syscall-ABI self-emit batch · hxlcl_getuid / hxlcl_dup2 / hxlcl_mkdir
+verdict: ACTIVATED (🟢 numerical) — 3 more class-C svc primitives live-injectable via Path A
+host: mini-class arm64 macOS (Darwin 25.5.0) · clang -O2 / as -arch arm64 / ld64
+date: 2026-05-28
+branch: f3-selfemit-batch-2026-05-28 (off origin/main)
+
+════════════════════════════════════════════════════════════════════════════
+TARGETS — three svc-wrappers from the proven class-C templates
+════════════════════════════════════════════════════════════════════════════
+self/runtime.c (Darwin arm64 raw-trap block):
+  hxlcl_getuid(void)                 { return (int)_hxlcl_syscall1(HXLCL_SYS_GETUID, 0); }       SYS_GETUID=24
+  hxlcl_dup2(int oldfd,int newfd)    { return (int)_hxlcl_syscall2_cf(HXLCL_SYS_DUP2, ...); }    SYS_DUP2=90
+  hxlcl_mkdir(const char*path,int m) { return (int)_hxlcl_syscall2_cf(HXLCL_SYS_MKDIR, ...); }   SYS_MKDIR=136
+
+- getuid = 0-arg / cannot-fail → exact rt_getpid (#1860) mirror, only mov w16 imm differs (#20→#24).
+- dup2   = FIRST 2-arg svc-_cf → extends rt_close (#1861) 1-arg carry-flag template by one sxtw
+           (both args int, dual sxtw). errno store via PC-relative adrp/str.
+- mkdir  = ptr+int 2-arg svc-_cf → same 9-instr length as rt_close, only x1/mode sign-extended
+           (path ptr untouched), SYS=136.
+
+════════════════════════════════════════════════════════════════════════════
+SELF-EMIT (self/codegen/runtime_arm64.hexa)
+════════════════════════════════════════════════════════════════════════════
+rt_getuid  4 instr 16 B : mov w16,#24 / mov x0,#0 / svc #0x80 / ret           (no reloc)
+rt_dup2   10 instr 40 B : sxtw x0,w0 / sxtw x1,w1 / mov w16,#90 / svc #0x80 /
+                          cset x8,hs / cbz x8,Lret / adrp x8,errno / str w0,[x8] /
+                          mov x0,#-1 / ret   (2 errno relocs: PAGE21@0x18, PAGEOFF12@0x1c)
+rt_mkdir   9 instr 36 B : sxtw x1,w1 / mov w16,#136 / svc #0x80 / cset x8,hs /
+                          cbz x8,Lret / adrp x8,errno / str w0,[x8] / mov x0,#-1 / ret
+                          (2 errno relocs: PAGE21@0x14, PAGEOFF12@0x18)
+
+════════════════════════════════════════════════════════════════════════════
+3-LAYER VERIFY (JIT-exec is the load-bearing gate)
+════════════════════════════════════════════════════════════════════════════
+LAYER 1 — interp self-test (size / svc / syscall-num / reloc-table / RET assertions):
+    HEXA_VAL_ARENA=0 hexa-run self/codegen/runtime_arm64.hexa
+    -> "rt_getuid : 16 bytes" · "rt_dup2 : 40 bytes (2 relocs)" · "rt_mkdir : 36 bytes (2 relocs)"
+       + "ALL CHECKS PASS"  (every byte-offset + reloc-table assertion green)
+
+LAYER 2 — byte-identical to `as -arch arm64` (normalized little-endian byte streams):
+    rt_getuid : 10038052 000080d2 011000d4 c0035fd6                                        BYTE-IDENTICAL
+    rt_dup2   : 007c4093 217c4093 500b8052 011000d4 e8379f9a 880000b4 08000090 000100b9
+                 000080 92 c0035fd6                                                          BYTE-IDENTICAL
+    rt_mkdir  : 217c4093 10118052 011000d4 e8379f9a 880000b4 08000090 000100b9 00008092
+                 c0035fd6                                                                    BYTE-IDENTICAL
+    (`as` of each runtime.c body in the `#define errno hxlcl_errno` context; rt_close
+     reproduced its proven 9-instr shape in the same rig as a control.)
+
+LAYER 3 — JIT-exec correctness (jit_driver.c + as-assembled .o w/ external _hxlcl_errno, ld64 link):
+    getuid:        self-emit=501  libc=501                     -> PASS (returns the REAL uid)
+    dup2(1,21):    ret=21 errno=0                              -> PASS (success returns newfd)
+    dup2(bad):     ret=-1 errno=9 (EBADF)                      -> PASS (carry→errno store works)
+    mkdir(new):    ret=0 errno=0 dir-exists=1                  -> PASS (dir actually created)
+    mkdir(exists): ret=-1 errno=17 (EEXIST)                    -> PASS (carry→errno store works)
+    -> "JIT-EXEC ALL PASS (0 failures)" · rc=0
+    Confirms the PC-relative adrp/str errno store binds to the external hxlcl_errno
+    symbol through ld64 (the class-C-with-errno reloc path, same as rt_close).
+
+════════════════════════════════════════════════════════════════════════════
+PATH-A ACTIVATION · default-build 0-extern byte-identical
+════════════════════════════════════════════════════════════════════════════
+Guards: self/runtime.c — forward decl + body for all three #ifdef HEXA_RT_SELFEMIT
+        (extern under guard, original `static __attribute__((noinline))` svc-trap by default).
+        ADDITIVE ONLY (323 insertions, 0 deletions) — wipe_guard compliant.
+
+(a) DEFAULT (guard off):
+      `clang -E -P` expansion of hxlcl_getuid/dup2/mkdir fwd-decls + bodies is
+      CHARACTER-IDENTICAL between this branch and origin/main:
+        diff <(branch default) <(main default)  ->  EMPTY
+      All three stay `static`; no new extern; 0-libc-extern invariant preserved.
+(b) GUARD ON (HEXA_RT_SELFEMIT=1):
+      all three flip to `extern int hxlcl_getuid/dup2/mkdir(...)` (fwd + body),
+      no static body leaks — the self-emit .o supplies the strong symbol.
+
+shadow module self/codegen/runtime_arm64.hexa is NOT `use`d by compiler/main.hexa
+(grep-confirmed) → no hexa_cc.c regen, no fixpoint risk · .c count UNCHANGED (3).
+
+ACTIVATED count: 22/640 → 25/640.
+all verdicts = raw command output verbatim (g5 claim_verify).
