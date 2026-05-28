@@ -756,15 +756,22 @@ fn scan_stdlib_pub_fns() -> [string] {
     let repo = lsp_repo_root()
     let dir = repo + "/stdlib"
     let mut out = []
-    // No dir-existence guard: file_exists() is false for directories, and a
-    // missing stdlib makes grep emit nothing (2>/dev/null) → empty result.
-    // Extract the trailing identifier with sed, NOT `awk '{print $NF}'`: the
-    // `$NF` gets shell-expanded (to empty) when this string is run through
-    // exec()'s shell, silently blanking every line. `sed 's/.* //'` is $-free.
-    let raw = exec("grep -rhoE 'pub +(async +|pure +|comptime +)?fn +[A-Za-z_][A-Za-z0-9_]*' '" + dir + "' 2>/dev/null | sed 's/.* //' | sort -u")
+    let mut seen = #{}
+    // Single grep + `head` ONLY — the exact exec form cli_def proves works.
+    // (sed/awk/sort/`$NF`/multi-pipe were silently returning empty under exec's
+    // shell; no dir-existence guard since file_exists() is false for dirs and a
+    // missing stdlib just yields no grep output.) Trailing identifier + dedup
+    // are done in hexa, not in the shell.
+    let raw = exec("grep -rhoE 'pub +(async +|pure +|comptime +)?fn +[A-Za-z_][A-Za-z0-9_]*' '" + dir + "' --include='*.hexa' 2>/dev/null | head -8000")
     for l in raw.split("\n") {
         let t = l.trim()
-        if len(t) > 0 { out.push(t) }
+        if len(t) == 0 { continue }
+        let toks = t.split(" ")
+        let name = toks[len(toks) - 1]
+        if len(name) > 0 && !has_key(seen, name) {
+            seen[name] = true
+            out.push(name)
+        }
     }
     return out
 }
