@@ -54,15 +54,16 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Stage 0b — build prebuilt runtime archive (runtime.a)
+      # Stage 0b — resolve runtime.a via the SAME script release.yml uses.
+      # Seeds present here, so it compiles runtime.a from source.
+      - name: Stage 0b — resolve prebuilt runtime archive (runtime.a)
         shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p build/stage1
-          clang $CFLAGS_COMMON -I self -c self/runtime.c -o build/runtime.o
-          ar rcs build/runtime.a build/runtime.o
-          file build/runtime.o
-          ls -la build/runtime.a
+        env:
+          CC: clang
+          LIBS: ""
+          EDGE_ASSET: hexa-darwin-arm64.tar.gz
+          GH_TOKEN: ${{ github.token }}
+        run: bash tool/stage_resolve_runtime_a
 
       - name: Dry-run — TEMP-remove seeds (working copy only, NOT committed)
         shell: bash
@@ -75,36 +76,23 @@ jobs:
           test -f self/native/hexa_cc.c
           test ! -f self/runtime.c
 
-      - name: Stage 0 — hexa_v2 via prebuilt (no runtime.c)
+      # Stage 0/1/2 via the EXACT release.yml script (tool/stage_build_hexa) —
+      # this is what closes the false-green class: the gate now exercises the
+      # real release stage logic, not a gate-only simplified path.
+      - name: Stage 0/1/2 — REAL release build (shared tool/stage_build_hexa)
         shell: bash
         env:
+          CC: clang
+          LIBS: ""
           HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
-        run: |
-          set -euo pipefail
-          clang $CFLAGS_COMMON -I self self/native/hexa_cc.c "$HEXA_PREBUILT_RUNTIME" -o build/hexa_v2
-          file build/hexa_v2
-
-      - name: Stage 1+2 — transpile + driver via prebuilt
-        shell: bash
-        env:
-          HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
-        run: |
-          set -euo pipefail
-          export HEXA_LANG="$PWD"
-          ./build/hexa_v2 self/module_loader.hexa build/stage1/module_loader.c
-          clang $CFLAGS_COMMON -I self build/stage1/module_loader.c "$HEXA_PREBUILT_RUNTIME" -o build/hexa_module_loader
-          export HEXA_MODULE_LOADER="$PWD/build/hexa_module_loader"
-          ./build/hexa_module_loader self/main.hexa build/stage1/main_expanded.hexa
-          ./build/hexa_v2 build/stage1/main_expanded.hexa build/stage1/main.c
-          clang $CFLAGS_COMMON -I self build/stage1/main.c "$HEXA_PREBUILT_RUNTIME" -o hexa
-          file hexa
+        run: bash tool/stage_build_hexa
 
       - name: Assert — ./hexa runs with seeds removed
         shell: bash
         run: |
           set -euo pipefail
           ./hexa --version
-          echo "::notice::no-baseline dry-run GREEN (darwin-arm64) — seed removal is build-safe via prebuilt runtime.a"
+          echo "::notice::no-baseline dry-run GREEN (darwin-arm64) — real release stages survive seed removal via prebuilt runtime.a"
 
   nobaseline-linux-x86_64:
     name: nobaseline (linux-x86_64)
@@ -113,15 +101,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Stage 0b — build prebuilt runtime archive (runtime.a)
+      - name: Stage 0b — resolve prebuilt runtime archive (runtime.a)
         shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p build/stage1
-          gcc $CFLAGS_COMMON -I self -c self/runtime.c -o build/runtime.o
-          ar rcs build/runtime.a build/runtime.o
-          file build/runtime.o
-          ls -la build/runtime.a
+        env:
+          CC: gcc
+          LIBS: "-lm -ldl"
+          EDGE_ASSET: hexa-linux-x86_64.tar.gz
+          GH_TOKEN: ${{ github.token }}
+        run: bash tool/stage_resolve_runtime_a
 
       - name: Dry-run — TEMP-remove seeds (working copy only, NOT committed)
         shell: bash
@@ -133,36 +120,20 @@ jobs:
           test -f self/native/hexa_cc.c
           test ! -f self/runtime.c
 
-      - name: Stage 0 — hexa_v2 via prebuilt (no runtime.c)
+      - name: Stage 0/1/2 — REAL release build (shared tool/stage_build_hexa)
         shell: bash
         env:
+          CC: gcc
+          LIBS: "-lm -ldl"
           HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
-        run: |
-          set -euo pipefail
-          gcc $CFLAGS_COMMON -I self self/native/hexa_cc.c "$HEXA_PREBUILT_RUNTIME" -o build/hexa_v2 -lm -ldl
-          file build/hexa_v2
-
-      - name: Stage 1+2 — transpile + driver via prebuilt
-        shell: bash
-        env:
-          HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
-        run: |
-          set -euo pipefail
-          export HEXA_LANG="$PWD"
-          ./build/hexa_v2 self/module_loader.hexa build/stage1/module_loader.c
-          gcc $CFLAGS_COMMON -I self build/stage1/module_loader.c "$HEXA_PREBUILT_RUNTIME" -o build/hexa_module_loader -lm -ldl
-          export HEXA_MODULE_LOADER="$PWD/build/hexa_module_loader"
-          ./build/hexa_module_loader self/main.hexa build/stage1/main_expanded.hexa
-          ./build/hexa_v2 build/stage1/main_expanded.hexa build/stage1/main.c
-          gcc $CFLAGS_COMMON -I self build/stage1/main.c "$HEXA_PREBUILT_RUNTIME" -o hexa -lm -ldl
-          file hexa
+        run: bash tool/stage_build_hexa
 
       - name: Assert — ./hexa runs with seeds removed
         shell: bash
         run: |
           set -euo pipefail
           ./hexa --version
-          echo "::notice::no-baseline dry-run GREEN (linux-x86_64) — seed removal is build-safe via prebuilt runtime.a"
+          echo "::notice::no-baseline dry-run GREEN (linux-x86_64) — real release stages survive seed removal via prebuilt runtime.a"
 
   nobaseline-linux-arm64:
     name: nobaseline (linux-arm64)
@@ -171,15 +142,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Stage 0b — build prebuilt runtime archive (runtime.a)
+      - name: Stage 0b — resolve prebuilt runtime archive (runtime.a)
         shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p build/stage1
-          gcc $CFLAGS_COMMON -I self -c self/runtime.c -o build/runtime.o
-          ar rcs build/runtime.a build/runtime.o
-          file build/runtime.o
-          ls -la build/runtime.a
+        env:
+          CC: gcc
+          LIBS: "-lm -ldl"
+          EDGE_ASSET: hexa-linux-arm64.tar.gz
+          GH_TOKEN: ${{ github.token }}
+        run: bash tool/stage_resolve_runtime_a
 
       - name: Dry-run — TEMP-remove seeds (working copy only, NOT committed)
         shell: bash
@@ -191,36 +161,20 @@ jobs:
           test -f self/native/hexa_cc.c
           test ! -f self/runtime.c
 
-      - name: Stage 0 — hexa_v2 via prebuilt (no runtime.c)
+      - name: Stage 0/1/2 — REAL release build (shared tool/stage_build_hexa)
         shell: bash
         env:
+          CC: gcc
+          LIBS: "-lm -ldl"
           HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
-        run: |
-          set -euo pipefail
-          gcc $CFLAGS_COMMON -I self self/native/hexa_cc.c "$HEXA_PREBUILT_RUNTIME" -o build/hexa_v2 -lm -ldl
-          file build/hexa_v2
-
-      - name: Stage 1+2 — transpile + driver via prebuilt
-        shell: bash
-        env:
-          HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
-        run: |
-          set -euo pipefail
-          export HEXA_LANG="$PWD"
-          ./build/hexa_v2 self/module_loader.hexa build/stage1/module_loader.c
-          gcc $CFLAGS_COMMON -I self build/stage1/module_loader.c "$HEXA_PREBUILT_RUNTIME" -o build/hexa_module_loader -lm -ldl
-          export HEXA_MODULE_LOADER="$PWD/build/hexa_module_loader"
-          ./build/hexa_module_loader self/main.hexa build/stage1/main_expanded.hexa
-          ./build/hexa_v2 build/stage1/main_expanded.hexa build/stage1/main.c
-          gcc $CFLAGS_COMMON -I self build/stage1/main.c "$HEXA_PREBUILT_RUNTIME" -o hexa -lm -ldl
-          file hexa
+        run: bash tool/stage_build_hexa
 
       - name: Assert — ./hexa runs with seeds removed
         shell: bash
         run: |
           set -euo pipefail
           ./hexa --version
-          echo "::notice::no-baseline dry-run GREEN (linux-arm64) — seed removal is build-safe via prebuilt runtime.a"
+          echo "::notice::no-baseline dry-run GREEN (linux-arm64) — real release stages survive seed removal via prebuilt runtime.a"
 
   # ── .c-graduation Phase 4/5 — FINAL 3 tracked .c removal-safety DRY-RUN ─────
   #

@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# tool/stage_resolve_runtime_a — resolve build/runtime.a (the "frozen dough").
+#
+# Replaces the old Stage 0-pre "warm-regen seed .c" step, which was the REAL
+# Phase-3 break (run 26604873545): it ran `hexa run <orchestrator>` which tried
+# to BUILD build/hexat -> `clang self/runtime.c` -> with runtime.c removed,
+# `no such file: ./self/runtime.c` -> regen failed -> its fallback
+# `git checkout -- self/runtime*.c self/native/*.c` restored NOTHING (the files
+# were committed-removed) -> Stage-0 cascade-failed on all 3 platforms.
+#
+# The robust strategy is the prebuilt "frozen dough" (rustc/gcc stage0 pattern),
+# NOT seed regeneration:
+#
+#   SEEDS PRESENT (today, additive no-op): compile build/runtime.a from the
+#     in-tree self/runtime.c (+ its #include seeds) with the SAME CFLAGS.
+#
+#   SEEDS REMOVED (future Phase-3+): self/runtime.c is gone, so download the
+#     prior edge tarball's bundled build/runtime.a (release.yml Package ships
+#     it) and use THAT. No `git checkout` of a removed file; no warm-regen.
+#
+# On success it leaves build/runtime.a in place and prints the resolved path.
+# Callers then export HEXA_PREBUILT_RUNTIME=build/runtime.a so stage_build_hexa
+# links it. FALLBACK: when seeds ARE present we always rebuild from source, so
+# the prebuilt and source paths are byte-equivalent and either is safe.
+#
+# Env: CC (clang|gcc) · LIBS · CFLAGS_COMMON · EDGE_ASSET (per-platform tarball
+# name, only needed in the seeds-removed branch) · GH_TOKEN (gh download).
+set -uo pipefail
+
+CC="${CC:?CC must be set}"
+CFLAGS="${CFLAGS_COMMON:--O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs}"
+ROOT="$PWD"
+RA="$ROOT/build/runtime.a"
+mkdir -p build
+
+if [ -f self/runtime.c ]; then
+    echo "stage_resolve_runtime_a: seeds present — building runtime.a from source"
+    $CC $CFLAGS -I self -c self/runtime.c -o build/runtime.o
+    ar rcs "$RA" build/runtime.o
+    ls -la "$RA"
+    echo "$RA"
+    exit 0
+fi
+
+# Seeds removed: pull the prior edge tarball's prebuilt runtime.a.
+echo "stage_resolve_runtime_a: self/runtime.c ABSENT — fetching prebuilt runtime.a from prior edge"
+ASSET="${EDGE_ASSET:?EDGE_ASSET must be set when seeds are removed}"
+EDGE_DIR="/tmp/edge_ra"
+mkdir -p "$EDGE_DIR"
+if gh release download edge --repo "${GITHUB_REPOSITORY:-dancinlab/hexa-lang}" \
+      --pattern "$ASSET" --dir "$EDGE_DIR" --clobber 2>/tmp/ra_dl.err \
+   && tar xzf "$EDGE_DIR/$ASSET" -C "$EDGE_DIR" 2>/dev/null; then
+    PRIOR_RA="$(find "$EDGE_DIR" -type f -name runtime.a | head -1)"
+    if [ -n "$PRIOR_RA" ]; then
+        cp "$PRIOR_RA" "$RA"
+        ls -la "$RA"
+        echo "$RA"
+        exit 0
+    fi
+    echo "stage_resolve_runtime_a: prior edge tarball has no build/runtime.a" >&2
+else
+    echo "stage_resolve_runtime_a: edge download failed ($(head -1 /tmp/ra_dl.err 2>/dev/null))" >&2
+fi
+echo "stage_resolve_runtime_a: NO runtime.a available (no source, no prior asset)" >&2
+exit 1

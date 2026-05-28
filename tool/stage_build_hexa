@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# tool/stage_build_hexa — the REAL release Stage-0/1/2 self-host build, factored
+# into ONE script so release.yml AND nobaseline-gate.yml run the IDENTICAL stage
+# sequence. Drift between "the gate path" and "the real release path" is the
+# root cause of the Phase-3 false-green trap (#2035/#2036): the gate proved a
+# prebuilt path while release.yml still source-compiled runtime.c per-stage, so
+# a green gate did NOT mean a green release once seeds were removed. Sharing the
+# stage logic makes that drift structurally impossible.
+#
+# THE SEAM (.c-graduation): when HEXA_PREBUILT_RUNTIME=<path-to-runtime.a> is set
+# and the file exists, EVERY stage links that prebuilt archive instead of
+# re-compiling self/runtime.c (+ its #include seed .c) from source. hexa_cc.c,
+# module_loader.c and main.c only need runtime.h at compile time, so they link a
+# prebuilt runtime.a with NO seed .c present — this is what lets the seeds be
+# removed. FALLBACK-SAFE: env unset OR file absent -> source path (runtime.c),
+# byte-for-byte identical to the historical inline stages (no-op today).
+#
+# Extension-less (not .sh) per the regen_cc_manual / final3_gate_dryrun
+# precedent: the project sidecar hook blocks .sh Write/Edit. Invoked as
+# `bash tool/stage_build_hexa`.
+#
+# Env (set by the caller):
+#   CC                  clang | gcc           (required)
+#   LIBS                extra link libs        (e.g. "-lm -ldl" on Linux; "" mac)
+#   CFLAGS_COMMON       base cflags            (release.yml env; default below)
+#   HEXA_PREBUILT_RUNTIME  optional path to runtime.a (the seam; opt-in)
+#   OUT_HEXA            output driver path     (default: ./hexa)
+set -euo pipefail
+
+CC="${CC:?CC must be set (clang|gcc)}"
+LIBS="${LIBS:-}"
+CFLAGS="${CFLAGS_COMMON:--O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs}"
+OUT_HEXA="${OUT_HEXA:-hexa}"
+ROOT="$PWD"
+
+mkdir -p self/native build/stage1
+
+# Resolve the runtime link argument once: prebuilt archive (seam) or source.
+RT_ARG="self/runtime.c"
+if [ -n "${HEXA_PREBUILT_RUNTIME:-}" ] && [ -f "${HEXA_PREBUILT_RUNTIME}" ]; then
+    echo "stage_build_hexa: HEXA_PREBUILT_RUNTIME set — linking prebuilt: $HEXA_PREBUILT_RUNTIME"
+    RT_ARG="$HEXA_PREBUILT_RUNTIME"
+else
+    echo "stage_build_hexa: source path — compiling self/runtime.c"
+fi
+
+echo "::group::Stage 0 — compile self-hosted transpiler (hexa_v2)"
+$CC $CFLAGS -I self self/native/hexa_cc.c "$RT_ARG" -o build/hexa_v2 $LIBS
+file build/hexa_v2
+echo "::endgroup::"
+
+echo "::group::Stage 1 — flatten + transpile self/main.hexa -> build/stage1/main.c"
+export HEXA_LANG="$ROOT"
+./build/hexa_v2 self/module_loader.hexa build/stage1/module_loader.c
+$CC $CFLAGS -I self build/stage1/module_loader.c "$RT_ARG" -o build/hexa_module_loader $LIBS
+export HEXA_MODULE_LOADER="$ROOT/build/hexa_module_loader"
+./build/hexa_module_loader self/main.hexa build/stage1/main_expanded.hexa
+./build/hexa_v2 build/stage1/main_expanded.hexa build/stage1/main.c
+echo "::endgroup::"
+
+echo "::group::Stage 2 — compile CLI driver ($OUT_HEXA)"
+$CC $CFLAGS -I self build/stage1/main.c "$RT_ARG" -o "$OUT_HEXA" $LIBS
+file "$OUT_HEXA"
+echo "::endgroup::"
