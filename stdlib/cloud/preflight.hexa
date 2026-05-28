@@ -251,6 +251,188 @@ fn _fmt_gib(b: int) -> str {
     return to_string(whole) + "." + fs + " GiB"
 }
 
+// ── DFT/phonon walltime sizing (kind = dft-phonon) ───────────────────
+//
+// Origin: INBOX gap 3 (2026-05-28). The GPU-mem budget path above sizes
+// MEMORY; this path sizes WALLTIME for a DFPT phonon run so the dispatcher
+// can set `max_seconds` (and a `recover=.true.` margin) without a 3× under-
+// size timeout. Pure closed-form arithmetic — no pod-spinup, no LLM.
+//
+// Closed form (seconds):
+//   est_sec = base · atoms³ · nq · (metallic ? mf : 1)
+//
+//   atoms³  — electronic-SCF work per q-point scales ≈ O(N³) (diagonalisation
+//             / cubic-scaling DFT), the dominant cost in each DFPT cycle.
+//   nq      — linear in the number of q-points in the mesh.
+//   mf      — metallic factor: smeared occupations + denser k-mesh + harder
+//             SCF convergence on d/f-electron metals (e.g. Ir-d here).
+//
+// Coefficients base=14, mf=3 are back-solved from the Mg₂IrH₆ anchor
+// (9 atoms, 2×2×2 = 8 q, metallic). The failed run set max_seconds=80000
+// (≈22h) which was ~3× under-sized → rep#9 timeout, so the real walltime
+// need ≈ 3 × 80000 = 240000 s. This form yields:
+//     14 · 9³ · 8 · 3 = 244944 s  (≈68h)
+// which lands on the real need and fires the under-size warn for any
+// user-supplied value below it. Verified verbatim (g5):
+//     hexa verify --expr dft_phonon_walltime 9 8 1 244944  → 🟢
+//
+// Conservatism: the estimate already targets the *real* need (not the
+// failed value), so we additionally recommend `recover=.true.` with the
+// estimate as a floor — a checkpointed run loses 0 work if it is still
+// under-sized.
+
+fn _dft_phonon_est_sec(atoms: int, nq: int, metallic: int) -> int {
+    let mf = if metallic != 0 { 3 } else { 1 }
+    // base = 14; atoms³ · nq · mf. Same closed-form as verify_cli
+    // dft_phonon_walltime (g5 anchor).
+    return 14 * atoms * atoms * atoms * nq * mf
+}
+
+// Format a seconds count as "N.N h" (one-decimal hours, no float).
+fn _fmt_hours(sec: int) -> str {
+    // tenths of an hour = sec * 10 / 3600
+    let t = (sec * 10) / 3600
+    let whole = t / 10
+    let frac = t - whole * 10
+    return to_string(whole) + "." + to_string(frac) + " h"
+}
+
+struct DftPhononArgs {
+    atoms:       int,
+    nq:          int,
+    metallic:    int,
+    max_seconds: int,   // user-supplied proposed max_seconds; 0 = none given
+    ok:          int,
+    err:         str
+}
+
+fn _parse_dft_phonon_args(av: [str], start: int) -> DftPhononArgs {
+    let mut a = DftPhononArgs {
+        atoms: 0, nq: 0, metallic: 0, max_seconds: 0, ok: 1, err: ""
+    }
+    let mut i = start
+    while i < len(av) {
+        let t = av[i]
+        if t == "--kind" {
+            // consume the kind value (already known to be dft-phonon)
+            if i + 1 >= len(av) { a.ok = 0; a.err = "--kind requires a value"; return a }
+            i = i + 2
+        } else if t == "--atoms" || t == "--n-atoms" {
+            if i + 1 >= len(av) { a.ok = 0; a.err = "--atoms requires a value"; return a }
+            let v = _atoi_pf(av[i + 1])
+            if v < 1 { a.ok = 0; a.err = "--atoms must be >= 1"; return a }
+            a.atoms = v
+            i = i + 2
+        } else if t == "--nq" || t == "--n-q" {
+            if i + 1 >= len(av) { a.ok = 0; a.err = "--nq requires a value"; return a }
+            let v = _atoi_pf(av[i + 1])
+            if v < 1 { a.ok = 0; a.err = "--nq must be >= 1"; return a }
+            a.nq = v
+            i = i + 2
+        } else if t == "--metallic" {
+            a.metallic = 1
+            i = i + 1
+        } else if t == "--max-seconds" || t == "--max_seconds" {
+            if i + 1 >= len(av) { a.ok = 0; a.err = "--max-seconds requires a value"; return a }
+            let v = _atoi_pf(av[i + 1])
+            if v < 0 { a.ok = 0; a.err = "--max-seconds must be >= 0"; return a }
+            a.max_seconds = v
+            i = i + 2
+        } else if t == "--help" || t == "-h" || t == "help" {
+            a.ok = 0
+            a.err = "__HELP__"
+            return a
+        } else {
+            // Skip unknown tokens silently (upstream verb prefixes).
+            i = i + 1
+        }
+    }
+    if a.atoms <= 0 { a.ok = 0; a.err = "missing required --atoms <N> (positive integer)"; return a }
+    if a.nq <= 0 { a.ok = 0; a.err = "missing required --nq <M> (positive integer)"; return a }
+    return a
+}
+
+fn _dft_phonon_help() {
+    println("hexa cloud preflight --kind dft-phonon — closed-form walltime sizing")
+    println("")
+    println("usage:")
+    println("  preflight --kind dft-phonon --atoms N --nq M [--metallic]")
+    println("            [--max-seconds S]")
+    println("")
+    println("  --atoms N        atom count in the cell (required)")
+    println("  --nq M           number of q-points in the phonon mesh (required)")
+    println("  --metallic       metallic system (smeared SCF + denser k-mesh)")
+    println("  --max-seconds S  your proposed max_seconds — warns if under-sized")
+    println("")
+    println("model: est_sec = 14 · atoms³ · nq · (metallic? 3 : 1)")
+    println("       (Mg₂IrH₆ anchor: 9 atoms · 8 q · metallic → 244944 s ≈ 68h)")
+    println("")
+    println("exit code: 0 = ok (or no --max-seconds), 1 = invalid args / help,")
+    println("           2 = supplied --max-seconds is under the estimate")
+}
+
+// dft_phonon_preflight_run — closed-form DFPT phonon walltime sizing.
+// Returns: 0 = ok / informational, 1 = invalid args / help,
+// 2 = user --max-seconds is below the estimate (under-sized).
+fn dft_phonon_preflight_run(av: [str], start: int) -> int {
+    let a = _parse_dft_phonon_args(av, start)
+    if a.ok == 0 {
+        if a.err == "__HELP__" {
+            _dft_phonon_help()
+            return 1
+        }
+        println("[preflight] error: " + a.err)
+        println("[preflight] try `preflight --kind dft-phonon --help` for usage.")
+        return 1
+    }
+
+    let est = _dft_phonon_est_sec(a.atoms, a.nq, a.metallic)
+    // Conservative recommendation: pad the estimate by 50% as the
+    // max_seconds floor, on top of mandatory recover=.true. checkpointing.
+    let recommended = (est * 3) / 2
+
+    println("=== hexa cloud preflight — DFT/phonon walltime sizing ===")
+    println("")
+    println("workload:")
+    println("  atoms          = " + to_string(a.atoms))
+    println("  n_q            = " + to_string(a.nq))
+    let mut met_str = "no"
+    if a.metallic == 1 { met_str = "yes (×3 factor)" }
+    println("  metallic       = " + met_str)
+    println("")
+    println("model: est_sec = 14 · atoms³ · nq · (metallic? 3 : 1)")
+    println("")
+    println("estimate:")
+    println("  est_max_seconds        = " + to_string(est) + "  (" + _fmt_hours(est) + ")")
+    println("  recommended floor (×1.5)= " + to_string(recommended) + "  (" + _fmt_hours(recommended) + ")")
+    println("")
+    println("recommend: set max_seconds >= " + to_string(recommended)
+            + " AND recover=.true. (checkpointed run loses 0 work if still under-sized).")
+    println("")
+
+    if a.max_seconds > 0 {
+        println("your proposed max_seconds = " + to_string(a.max_seconds)
+                + "  (" + _fmt_hours(a.max_seconds) + ")")
+        if a.max_seconds < est {
+            println("verdict: UNDER-SIZED — proposed " + to_string(a.max_seconds)
+                    + " < estimate " + to_string(est)
+                    + " → timeout risk (the Mg₂IrH₆ class of 3× undersize).")
+            println("suggest: raise max_seconds to >= " + to_string(recommended)
+                    + " and ensure recover=.true.")
+            return 2
+        }
+        if a.max_seconds < recommended {
+            println("verdict: TIGHT — proposed >= estimate but below the ×1.5 floor;")
+            println("         OK only with recover=.true. (resumable on overrun).")
+            return 0
+        }
+        println("verdict: OK — proposed >= recommended floor with headroom.")
+        return 0
+    }
+
+    return 0
+}
+
 // ── CLI argv parsing ─────────────────────────────────────────────────
 
 struct PreflightArgs {
@@ -403,9 +585,15 @@ fn _parse_preflight_args(av: [str], start: int) -> PreflightArgs {
 // ── help text ───────────────────────────────────────────────────────
 
 fn _preflight_help() {
-    println("hexa cloud preflight — closed-form GPU memory budget check")
+    println("hexa cloud preflight — closed-form pre-rent sizing (no pod/ssh/LLM)")
     println("")
-    println("usage:")
+    println("two kinds:")
+    println("  (default) GPU memory budget   — preflight --params N [...]")
+    println("  --kind dft-phonon             — DFPT phonon walltime sizing")
+    println("                                  (--atoms N --nq M [--metallic]")
+    println("                                   [--max-seconds S]; --help for more)")
+    println("")
+    println("usage (GPU memory budget):")
     println("  preflight --params N [--param-dtype bf16] [--grad-dtype bf16]")
     println("            [--optimizer adamw] [--n-gpu 1]")
     println("            [--bsz 1] [--seq 2048] [--n-layer 32] [--d-model 4096]")
@@ -434,6 +622,35 @@ fn _preflight_help() {
 // breakdown. Returns exit code: 0 = fits, 1 = invalid args / help,
 // 2 = budget exceeds cap.
 fn preflight_run(av: [str], start: int) -> int {
+    // ── kind dispatch (INBOX gap 3) ──────────────────────────────────
+    // `--kind dft-phonon` routes to the closed-form walltime sizer; any
+    // other (or absent) kind falls through to the GPU memory-budget path
+    // below, which is unchanged (g34 surgical — branch added at entry only).
+    let mut ki = start
+    while ki < len(av) {
+        if av[ki] == "--kind" {
+            if ki + 1 < len(av) {
+                let kind = av[ki + 1]
+                if kind == "dft-phonon" || kind == "dft_phonon" || kind == "phonon" {
+                    return dft_phonon_preflight_run(av, start)
+                }
+                if kind == "gpu-mem" || kind == "gpu_mem" || kind == "mem" {
+                    // explicit GPU-mem kind — fall through to the path below
+                    ki = len(av)
+                } else {
+                    println("[preflight] error: unknown --kind `" + kind
+                            + "` (expected: dft-phonon | gpu-mem)")
+                    return 1
+                }
+            } else {
+                println("[preflight] error: --kind requires a value (dft-phonon | gpu-mem)")
+                return 1
+            }
+        } else {
+            ki = ki + 1
+        }
+    }
+
     let a = _parse_preflight_args(av, start)
     if a.ok == 0 {
         if a.err == "__HELP__" {
