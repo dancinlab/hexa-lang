@@ -636,6 +636,7 @@ fn build_capabilities() -> string {
         "\"completionProvider\":{\"triggerCharacters\":[\".\",\":\",\"@\"]}," +
         "\"hoverProvider\":true," +
         "\"definitionProvider\":true," +
+        "\"referencesProvider\":true," +
         "\"renameProvider\":true," +
         "\"semanticTokensProvider\":{" +
             "\"legend\":" + legend + "," +
@@ -736,6 +737,161 @@ fn get_document(uri: string) -> string {
         return doc_store[uri]
     }
     return ""
+}
+
+// ── Repo root + stdlib symbol scan (live, parse-on-request) ──────
+// The LSP runs with cwd = repo root (dispatcher `cd $HEXA_LANG; exec hexa lsp`).
+// stdlib awareness is sourced LIVE from the tree (grep), so a freshly-added
+// `pub fn` shows up on the next request without an index rebuild — the same
+// "read the source at runtime" discipline as the atlas TEXT-parse SSOT.
+
+fn lsp_repo_root() -> string {
+    let r = env_var("HEXA_LANG")
+    if len(r) > 0 { return r }
+    return exec("pwd").trim()
+}
+
+// All `pub fn` names exported across <repo>/stdlib (modifiers tolerated).
+fn scan_stdlib_pub_fns() -> [string] {
+    let repo = lsp_repo_root()
+    let dir = repo + "/stdlib"
+    let mut out = []
+    if !file_exists(dir) { return out }
+    let raw = exec("grep -rhoE 'pub +(async +|pure +|comptime +)?fn +[A-Za-z_][A-Za-z0-9_]*' '" + dir + "' 2>/dev/null | awk '{print $NF}' | sort -u")
+    for l in raw.split("\n") {
+        let t = l.trim()
+        if len(t) > 0 { out.push(t) }
+    }
+    return out
+}
+
+// Top-level declaration names in a single source (file-local symbols).
+fn collect_decls(source: string) -> [string] {
+    let lines = source.split("\n")
+    let mods = ["pub ", "async ", "pure ", "extern ", "comptime "]
+    let kws = ["fn ", "let ", "const ", "static ", "struct ", "enum ", "trait ", "type ", "effect ", "macro "]
+    let mut out = []
+    let mut i = 0
+    while i < len(lines) {
+        let mut body = lines[i].trim()
+        let mut changed = true
+        while changed {
+            changed = false
+            for m in mods {
+                if body.starts_with(m) { body = body.substring(len(m), len(body)); changed = true }
+            }
+        }
+        for kw in kws {
+            if body.starts_with(kw) {
+                let after = body.substring(len(kw), len(body)).trim()
+                let after2 = if after.starts_with("mut ") { after.substring(4, len(after)) } else { after }
+                let achars = after2.chars()
+                let mut j = 0
+                while j < len(achars) {
+                    if !_is_ident_part(char_code(to_string(achars[j]), 0)) { break }
+                    j = j + 1
+                }
+                if j > 0 { out.push(after2.substring(0, j)) }
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// ── Completion (LSP textDocument/completion) ─────────────────────
+// CompletionItemKind: 14=Keyword · 3=Function · 6=Variable.
+
+fn completion_item(label: string, kind: int, detail: string) -> string {
+    return "{\"label\":\"" + escape_json_str(label) + "\",\"kind\":" + to_string(kind) + ",\"detail\":\"" + escape_json_str(detail) + "\"}"
+}
+
+fn handle_completion(source: string) -> string {
+    let mut items = []
+    let mut seen = #{}
+    for kw in get_keywords() {
+        if !has_key(seen, kw) { seen[kw] = true; items.push(completion_item(kw, 14, "keyword")) }
+    }
+    for b in get_builtins() {
+        if !has_key(seen, b) { seen[b] = true; items.push(completion_item(b, 3, "builtin")) }
+    }
+    for s in scan_stdlib_pub_fns() {
+        if !has_key(seen, s) { seen[s] = true; items.push(completion_item(s, 3, "stdlib pub fn")) }
+    }
+    for d in collect_decls(source) {
+        if !has_key(seen, d) { seen[d] = true; items.push(completion_item(d, 6, "symbol")) }
+    }
+    return "{\"isIncomplete\":false,\"items\":[" + join(items, ",") + "]}"
+}
+
+// ── References (LSP textDocument/references) ─────────────────────
+fn handle_references(uri: string, source: string, line: int, character: int) -> string {
+    let word = word_at_position(source, line, character)
+    if word == "" { return "[]" }
+    let occ = find_all_occurrences(source, word)
+    if len(occ) == 0 { return "[]" }
+    let mut locs = []
+    let nlen = len(word)
+    for o in occ {
+        let parts = o.split(":")
+        let ol = parts[0]
+        let oc = parts[1]
+        locs.push("{\"uri\":\"" + uri + "\",\"range\":{\"start\":{\"line\":" + ol + ",\"character\":" + oc + "},\"end\":{\"line\":" + ol + ",\"character\":" + to_string(to_int(oc) + nlen) + "}}}")
+    }
+    return "[" + join(locs, ",") + "]"
+}
+
+// ── Agent-facing one-shot CLI query mode ─────────────────────────
+// `hexa-lsp <def|refs|sig|sym|complete> <name>` — a grep-replacement that
+// reads the real tree each invocation (stale-immune: no editor, no daemon,
+// no stale-branch index). Subverbs share the same symbol surface as the LSP.
+
+fn _grep_repo(pat: string) -> string {
+    let repo = lsp_repo_root()
+    return exec("grep -rnE '" + pat + "' '" + repo + "' --include='*.hexa' 2>/dev/null | head -80")
+}
+
+fn cli_def(name: string) {
+    let pat = "(pub +)?(async +|pure +|comptime +|extern +)?(fn|struct|enum|trait|type|const|static|effect|macro) +" + name + "([^A-Za-z0-9_]|$)"
+    let out = _grep_repo(pat)
+    if out.trim() == "" { println("(no definition found for '" + name + "')") } else { print(out) }
+}
+
+fn cli_refs(name: string) {
+    let pat = "(^|[^A-Za-z0-9_])" + name + "([^A-Za-z0-9_]|$)"
+    let out = _grep_repo(pat)
+    if out.trim() == "" { println("(no references found for '" + name + "')") } else { print(out) }
+}
+
+fn cli_sym(filter: string) {
+    for s in scan_stdlib_pub_fns() {
+        if filter == "" || s.index_of(filter) >= 0 { println(s) }
+    }
+}
+
+fn all_global_names() -> [string] {
+    let mut out = []
+    for kw in get_keywords() { out.push(kw) }
+    for b in get_builtins() { out.push(b) }
+    for s in scan_stdlib_pub_fns() { out.push(s) }
+    return out
+}
+
+fn cli_complete(prefix: string) {
+    for n in all_global_names() {
+        if prefix == "" || n.starts_with(prefix) { println(n) }
+    }
+}
+
+fn lsp_cli(a: [string]) {
+    let sub = a[1]
+    let arg = if len(a) >= 3 { a[2] } else { "" }
+    if sub == "def" { cli_def(arg) }
+    else if sub == "refs" { cli_refs(arg) }
+    else if sub == "sig" { cli_def(arg) }
+    else if sub == "sym" { cli_sym(arg) }
+    else if sub == "complete" { cli_complete(arg) }
+    else { println("usage: hexa-lsp <def|refs|sig|sym|complete> [name]") }
 }
 
 // ── Main LSP loop ──────────────────────────────────────────
@@ -849,6 +1005,29 @@ fn run_lsp() {
                     let result = handle_semantic_tokens_full(source)
                     let resp = make_response(id, result)
                     print(send_message(resp))
+                } else if method == "textDocument/completion" {
+                    let uri = json_get_string(body, "uri")
+                    let source = get_document(uri)
+                    let result = handle_completion(source)
+                    let resp = make_response(id, result)
+                    print(send_message(resp))
+                } else if method == "textDocument/references" {
+                    let uri = json_get_string(body, "uri")
+                    let source = get_document(uri)
+                    let line_str = json_get_string(body, "line")
+                    let char_str = json_get_string(body, "character")
+                    let result = handle_references(uri, source, to_int(line_str), to_int(char_str))
+                    let resp = make_response(id, result)
+                    print(send_message(resp))
+                } else if method == "textDocument/rename" {
+                    let uri = json_get_string(body, "uri")
+                    let source = get_document(uri)
+                    let line_str = json_get_string(body, "line")
+                    let char_str = json_get_string(body, "character")
+                    let new_name = json_get_string(body, "newName")
+                    let result = handle_rename(uri, source, to_int(line_str), to_int(char_str), new_name)
+                    let resp = make_response(id, result)
+                    print(send_message(resp))
                 } else {
                     // Unknown method — if it has an id, respond with method-not-found
                     if id != "" {
@@ -871,5 +1050,16 @@ fn run_lsp() {
 // streaming, incompatible with the exec()-buffered spawn used by other
 // track B verbs.
 fn main() {
-    run_lsp()
+    // One-shot agent CLI query mode: `hexa-lsp <def|refs|sig|sym|complete> [name]`.
+    // With no recognized subverb, fall through to the JSON-RPC daemon (editor mode).
+    let a = args()
+    let mut handled = false
+    if len(a) >= 2 {
+        let s = a[1]
+        if s == "def" || s == "refs" || s == "sig" || s == "sym" || s == "complete" {
+            lsp_cli(a)
+            handled = true
+        }
+    }
+    if !handled { run_lsp() }
 }
