@@ -4056,7 +4056,22 @@ fn cmd_expr_float_compute(rest, fnm: string) {
     }
     // self-verify: recompute a SECOND time — deterministic calc MUST agree.
     let got2 = _recompute_float(fnm, a0, a1, a2, a3, argc)
-    println("COMPUTE: " + label + " = " + _fstr(got))
+    // INBOX #1910 fix-at-source — the COMPUTE line is the canonical handoff
+    // to `atlas register --from-verify` (cmd_expr_float_compute is its
+    // delegation target; see _adapt_verify_compute in tool/atlas_cli.hexa).
+    // `_fstr(got)` returns the %g 6-sig-fig display form (e.g. 227.501),
+    // which is fine for human eyes but lossy for the round-trip atlas needs:
+    // _is_rounding_of(claimed, engine) gates a rounded literal as a plausible
+    // rounding of the engine value, and only works when the engine value is
+    // the EXACT recomputed double (not its display rounding).  We append a
+    // `[raw=<full-precision>]` suffix using json_stringify, which routes to
+    // _shortest_double() in self/runtime.c (the shortest %g form that
+    // strtod-round-trips to the same double — matches CPython repr() /
+    // json.dumps() shortest representation).  atlas_cli's
+    // _parse_compute_value PREFERS the [raw=...] suffix when present and
+    // falls back to the post-`=` tail otherwise (back-compat for any caller
+    // that hasn't been upgraded).  Pure echo change — no recompute touched.
+    println("COMPUTE: " + label + " = " + _fstr(got) + " [raw=" + json_stringify(got) + "]")
     if _fabs(got - got2) <= calc_eps() {
         println("  tier   = 🟢 SUPPORTED-NUMERICAL  (hexa-native libm-class compute, self-verified deterministic · g_self_verify · TECS-L n6-rep Tier2)")
     } else {
