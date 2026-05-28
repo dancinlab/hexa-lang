@@ -1,0 +1,90 @@
+B9.6-C9/C10/C11 — class-C syscall-ABI self-emit batch · hxlcl_lseek / hxlcl_fcntl / hxlcl_ioctl
+verdict: ACTIVATED (🟢 numerical) — 3 more class-C svc primitives live-injectable via Path A
+host: mini-class arm64 macOS (Darwin 25.5.0) · Apple clang 21.0.0 -O2 / as -arch arm64 / ld64
+date: 2026-05-28
+branch: f3-selfemit-batch3-2026-05-28 (off origin/main @ 73edc55ab #1900)
+
+════════════════════════════════════════════════════════════════════════════
+TARGETS — three svc-wrappers extending the proven class-C templates (3-arg)
+════════════════════════════════════════════════════════════════════════════
+self/runtime.c (Darwin arm64 raw-trap block):
+  hxlcl_lseek(int fd, long off, int whence)        { return _hxlcl_syscall3_cf(HXLCL_SYS_LSEEK, ...); }  SYS_LSEEK=199
+  hxlcl_fcntl(int fd, int cmd, long arg)           { return (int)_hxlcl_syscall3(HXLCL_SYS_FCNTL, ...); } SYS_FCNTL=92
+  hxlcl_ioctl(int fd, unsigned long req, void*arg) { return (int)_hxlcl_syscall3(HXLCL_SYS_IOCTL, ...); } SYS_IOCTL=54
+
+- lseek = int+long+int 3-arg svc-_cf → FIRST 3-arg _cf body; extends the 2-arg _cf template
+          (dup2/fstat/stat) by +1 arg. sxtw targets x0/fd AND x2/whence — the MIDDLE x1/off
+          long left untouched (first body to skip the middle reg). 40 B, errno reloc 0x18/0x1c
+          (== rt_dup2 — the two leading sxtw push adrp/str to the dup2 offsets).
+- fcntl = int+int+long 3-arg NON-_cf no-errno → 3-arg analogue of rt_kill. sxtw x0/fd + sxtw
+          x1/cmd, x2/arg long untouched, trap, ret. 20 B, NO reloc. Same shape as rt_kill.
+- ioctl = int+ulong+ptr 3-arg NON-_cf no-errno → ONLY x0/fd sign-extended (req/arg already
+          64-bit), single sxtw, trap, ret. 16 B (4 B shorter than fcntl), NO reloc.
+
+════════════════════════════════════════════════════════════════════════════
+SELF-EMIT (self/codegen/runtime_arm64.hexa)
+════════════════════════════════════════════════════════════════════════════
+rt_lseek 10 instr 40 B : sxtw x0,w0 / sxtw x2,w2 / mov w16,#199 / svc #0x80 / cset x8,hs /
+                         cbz x8,Lret / adrp x8,errno / str w0,[x8] / mov x0,#-1 / ret
+                         (2 errno relocs: PAGE21@0x18, PAGEOFF12@0x1c)
+rt_fcntl  5 instr 20 B : sxtw x0,w0 / sxtw x1,w1 / mov w16,#92 / svc #0x80 / ret   (NO reloc)
+rt_ioctl  4 instr 16 B : sxtw x0,w0 / mov w16,#54 / svc #0x80 / ret                (NO reloc)
+
+════════════════════════════════════════════════════════════════════════════
+3-LAYER VERIFY (JIT-exec is the load-bearing gate)
+════════════════════════════════════════════════════════════════════════════
+LAYER 1 — interp self-test (size / svc / syscall-num / reloc-table / RET / alignment asserts):
+    HEXA_VAL_ARENA=0 hexa-run self/codegen/runtime_arm64.hexa   (on-PATH /Users/ghost/.hx/bin/hexa-run)
+      rt_lseek         : 40 bytes (2 relocs)
+      rt_fcntl         : 20 bytes (no reloc)
+      rt_ioctl         : 16 bytes (no reloc)
+      ALL CHECKS PASS
+    (every byte-offset + reloc-table + alignment assertion green)
+
+LAYER 2 — byte-identical to `as -arch arm64` AND clang -O2 (normalized LE byte streams):
+    rt_lseek : 93407c00 93407c42 528018f0 d4001001 9a9f37e8 b4000088 90000008 b9000100 92800000 d65f03c0   BYTE-IDENTICAL
+    rt_fcntl : 93407c00 93407c21 52800b90 d4001001 d65f03c0                                                BYTE-IDENTICAL
+    rt_ioctl : 93407c00 528006d0 d4001001 d65f03c0                                                         BYTE-IDENTICAL
+    Cross-checked two independent rigs:
+      (a) clang -O2 -c of the runtime.c bodies in the `int hxlcl_errno; #define errno hxlcl_errno`
+          context with the exact _hxlcl_syscall3 / _hxlcl_syscall3_cf inlines (faithful oracle).
+      (b) raw `as -arch arm64` of the literal instruction sequence (errno@PAGE/@PAGEOFF).
+    Both produce the emitter's byte stream EXACTLY (emit==oracle, 0 diffs, per-byte compared).
+    NOTE: lseek sign-extends x0 AND x2 (NOT x1) — clang leaves the long `off` arg in x1
+    untouched; the emitter's sxtw x2,w2 (0x93407c42) matches the oracle exactly.
+
+LAYER 3 — JIT-exec correctness (driver supplies external _hxlcl_errno, ld64 link, ./f3jit_b3):
+    lseek(fd,5,SEEK_SET): ret=5 errno=0                -> PASS (real seek on an open file)
+    lseek(badfd):         ret=-1 errno=9 (EBADF)       -> PASS (carry→errno store works)
+    fcntl(fd,F_GETFL):    ret=65538                    -> PASS (real flags on valid fd)
+    fcntl(badfd):         ret=9 (EBADF raw, non-_cf)   -> PASS (trap fired, raw errno returned)
+    ioctl(fd,FIONREAD):   ret=0 (raw, non-_cf)         -> PASS (trap fired on regular file)
+    -> "JIT-EXEC ALL PASS (0 failures)" · rc=0
+    Confirms the PC-relative adrp/str errno store in lseek binds to the external hxlcl_errno
+    symbol through ld64 (class-C-with-errno reloc path, same as dup2/mkdir), and the non-_cf
+    fcntl/ioctl bodies return the raw trap value with no errno store (no reloc to bind).
+
+════════════════════════════════════════════════════════════════════════════
+PATH-A ACTIVATION · default-build 0-extern byte-identical
+════════════════════════════════════════════════════════════════════════════
+Guards: self/runtime.c — forward decl (#ifdef HEXA_RT_SELFEMIT extern / #else static) for all
+        three, plus #ifndef HEXA_RT_SELFEMIT around each Darwin arm64 svc-trap body.
+        ADDITIVE ONLY — wipe_guard compliant (no deletions). Only the Darwin arm64 raw-trap
+        block is guarded; the Linux/libc fallback bodies (L1685+) are untouched.
+
+(a) DEFAULT (guard off):
+      `clang -E -P -arch arm64` expansion of self/runtime.c is CHARACTER-IDENTICAL between this
+      branch and origin/main:
+        diff <(branch default) <(main default)  ->  EMPTY (0 lines)
+      All three stay `static`; no new extern; 0-libc-extern invariant preserved.
+(b) GUARD ON (-DHEXA_RT_SELFEMIT):
+      all three flip to `extern long hxlcl_lseek(...)` / `extern int hxlcl_fcntl(...)` /
+      `extern int hxlcl_ioctl(...)` (fwd + body excluded); no static body leaks — the
+      self-emit .o supplies the strong symbol.
+
+shadow module self/codegen/runtime_arm64.hexa is NOT `use`d by compiler/main.hexa
+(grep-confirmed 0-hit) → no hexa_cc.c regen, no fixpoint risk · .c count UNCHANGED (3:
+bootstrap_compiler.c / hexa_cc.c / runtime.c).
+
+ACTIVATED count: 28/640 → 31/640.  class-C subtrack: 8 → 11.
+all verdicts = raw command output verbatim (g5 claim_verify).
