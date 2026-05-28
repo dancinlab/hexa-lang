@@ -1,5 +1,13 @@
 # INBOX — log
 
+## 2026-05-28 — 🟠 OPEN · `atlas register --from-verify` 가 3-operand 함수 mis-parse (verified 3-op 닫힌형 fold 불가)
+
+> **출처**: demiurge RTSC 캠페인 첫 측정-grade verdict (YH₁₀ el-ph). `allen_dynes_tc(λ, ω_log, μ*)` = **3-operand** 닫힌형. `hexa verify --expr allen_dynes_tc 2.8197 1300.43 0.10` → 🟢 SUPPORTED-NUMERICAL (227.501, |Δ|=1.3e-4) 정상. 그러나 그 verified 노드를 atlas 에 fold 하려 `atlas register --from-verify allen_dynes_tc 2.8197 1300.43 0.10 227.501` 호출 시 **3-operand 를 mis-parse → false 🔴** (CLI 가 `--from-verify <fn> <args> <v>` 를 2-operand `<fn> <a> <b> <v>` 형태로만 파싱, 3-operand 분기 부재).
+> **증상**: README/help 의 `register --from-verify <fn> <args> <v>` 가 사실상 1-op(`<fn> <n> <v>`) + 2-op(`<fn> <a> <b> <v>`) 만 지원. 3+ operand 함수(allen_dynes_tc · 다변수 물성식)는 verified(🟢)여도 atlas fold 경로 없음 → terminal proof 는 verify verdict 가 대신하나, 검증된 다변수 closed-form 이 atlas 에 누적 안 됨(g62 atlas register at checkpoints 미달).
+> **recommend**: `atlas register --from-verify <fn> <a1> <a2> ... <aN> <v>` 가변-arity 파싱 — fn 의 arity 를 verify_cli `_recomputeN` 패밀리에서 조회(이미 3-op `_recompute3` 존재 — gap3 walltime PR #1885 가 `dft_phonon_walltime` 4-arg 등록함, 즉 verify 측은 3+op 지원하나 atlas register 측 파서가 2-op 천장). register 파서를 verify arity 와 정합.
+> **부차**: `--from-discovery` 는 hexa-lang 의 `.discoveries/` 만 읽어 cross-repo(demiurge) 미지원 (d19 intra-project). demiurge verdict 의 atlas fold 는 (a) 가변-arity --from-verify 또는 (b) tape 를 hexa-lang 으로 미러 필요.
+> **evidence**: demiurge `exports/material_discovery/rtsc_yh10_dft_elph_20260528.json` · `.discoveries/rtsc-yh10-dft-elph.tape` · verify verdict 2건(μ0.10/0.13) 🟢. 우선순위 P2 (verify 가 terminal 증명 제공하므로 기능 차단 아님 · atlas 누적 완전성 갭).
+
 ## 2026-05-28 — ✅ anima DECODER M4b rev2 fire 발견 2 blocker (BPE O(N) 정체 · dir_create codegen gap)
 
 > **finding (anima DECODER M4b rev2 production fire, H100 SXM, 2026-05-28, pod `yfqcywjlxavmgr`)**: HARD top-1 + diverse corpus + n_steps 200 production fire 도중 hexa-lang 보고 대상 2건 노출 (DECODER.md L133 `a_runpod_inbox`). M4c coherence verify 가 full-BPE-scale detokenize 에 의존하는데 그 경로가 #1 로 막혀 있었음.
