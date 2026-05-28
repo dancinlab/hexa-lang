@@ -25,13 +25,13 @@ fn _cloud_help() {
     println("  cloud list [--provider P]                              list live pods (vast + runpod, or one via --provider)")
     println("  cloud status [--provider P]                            alias of list")
     println("  cloud preflight --params N [--gpu KEY] [opts...]        closed-form GPU mem-budget check (no pod/ssh)")
-    println("  cloud run       <host> [conn] [--max-wall S] [--env K=V] -- <argv...> run argv, wait, exit with its code")
+    println("  cloud run       <host> [conn] [--max-wall S] [--env K=V] [--source P] -- <argv...> run argv, wait, exit with its code")
     println("  cloud exec      <host> [conn] -- <shell-cmd>           run shell command via ssh (DEFAULT SHELL PARSES IT)")
-    println("  cloud nohup     <host> <logfile> [conn] [--env K=V] [--early-life-check N] [--register [<jid>]] -- <argv...>   background argv, print remote pid")
+    println("  cloud nohup     <host> <logfile> [conn] [--env K=V] [--source P] [--early-life-check N] [--register [<jid>]] -- <argv...>   background argv, print remote pid")
     println("                                                         --early-life-check N: after launch, sleep N s + poll once; exit 3 if pid already DIED (silent class-1 launch failure)")
     println("                                                         --register [<jid>]: auto-write a row to cwd's ./pods.json on success (bare = auto-jid `auto-<ts>-<host-short>`); replaces the advisory line (ghost-pod L2-auto)")
     println("                                                         on success also prints `__MONITOR_HANDLE__={host,pid,log,tail_cmd}` JSON one-liner (grep '^__MONITOR_HANDLE__=' to extract; Monitor bridge)")
-    println("  cloud fire      <host> [--log <path>] [conn] [--env K=V] [--early-life-check N] [--register [<jid>]] -- <argv...>   atomic nohup + auto-log + Monitor handle")
+    println("  cloud fire      <host> [--log <path>] [conn] [--env K=V] [--source P] [--early-life-check N] [--register [<jid>]] -- <argv...>   atomic nohup + auto-log + Monitor handle")
     println("                                                         like nohup but logfile is OPTIONAL — defaults to /tmp/cloud-<unix_ts>.log on the remote when --log omitted, so caller does not have to invent + thread the path")
     println("  cloud poll      <host> <pid> [conn]                    exit 0 if remote pid alive, else 1 (DEAD path also flips a PENDING ./pods.json row matching pid → FAIL; ghost-pod teardown auto-verdict)")
     println("  cloud tail      <host> <logfile> [conn] [--grep RE] [--until RE]   live-stream a remote log (Monitor bridge)")
@@ -74,6 +74,14 @@ fn _cloud_help() {
     println("                  survives remote word-splitting.")
     println("  --env-file <p>  (run/nohup) read K=V lines from <p> (blank and")
     println("                  #-comment lines skipped); each line acts as --env.")
+    println("  --source <p>    (run/nohup/fire) dot-source remote file <p> BEFORE")
+    println("                  the argv (repeatable, in order): wraps as")
+    println("                  `bash -c '. <p> && exec <argv>'`. ssh runs a NON-")
+    println("                  login shell so ~/.bashrc (conda init / module load)")
+    println("                  is NOT sourced — without this, mpirun/toolchain are")
+    println("                  off PATH and the job dies instantly (exit 127/243).")
+    println("                  e.g. --source ~/miniforge3/etc/profile.d/conda.sh")
+    println("                  (point at a script that also `conda activate <env>`).")
     println("  --early-life-check <s>  (nohup only) after the detached launch,")
     println("                  sleep <s> s then poll the remote pid once; exit 3 if")
     println("                  it already DIED (a launcher that execs and exits at")
@@ -505,6 +513,84 @@ fn _with_env(env_kvs: [str], argv: [str]) -> [str] {
         out.push(argv[j])
         j = j + 1
     }
+    return out
+}
+
+// _shq_src — single-quote-wrap a token for safe embedding in the `bash -c`
+// shell string built by _with_source (escapes any internal single quote).
+fn _shq_src(s: str) -> str {
+    let mut out = "'"
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "'" {
+            out = out + "'\\''"
+        } else {
+            out = out + c
+        }
+        i = i + 1
+    }
+    return out + "'"
+}
+
+// _source_args_cli — scan av[start..] (up to "--") for repeatable
+// `--source <remote-path>` flags, returning the paths in order (mirror of
+// _env_args_cli). A command launched over ssh runs in a NON-interactive,
+// NON-login shell, so ~/.bashrc (where `conda init` + module/PATH setup live)
+// is NOT sourced — `mpirun`/`ph.x`/toolchain binaries fall off PATH and the
+// command dies instantly ("mpirun: command not found", exit 243/127). Setting
+// individual vars via --env cannot replay a `conda activate` (a shell function,
+// not a var). `--source <file>` dot-sources <file> on the remote BEFORE the
+// argv runs, so the caller activates a conda env / loads modules determinist-
+// ically. Repeatable; sourced in order.
+fn _source_args_cli(av: [str], start: int) -> [str] {
+    let mut out = []
+    let mut i = start
+    while i < len(av) {
+        let t = av[i]
+        if t == "--" {
+            return out
+        } else if t == "--source" {
+            if i + 1 < len(av) {
+                out.push(av[i + 1])
+                i = i + 2
+            } else {
+                i = i + 1
+            }
+        } else {
+            i = i + 1
+        }
+    }
+    return out
+}
+
+// _with_source — wrap a structured argv so the remote runs
+// `bash -c '. <f1> && . <f2> && exec <argv>'`. Returns argv unchanged when
+// there are no --source files. `exec` keeps the tracked PID identical to the
+// final process (so cloud_nohup's `$!` is the real job, not a transient bash).
+// Composes AFTER _with_env — the env-prefixed argv (`env K=V <cmd>`) becomes
+// the exec target, so --source and --env stack cleanly.
+fn _with_source(src: [str], argv: [str]) -> [str] {
+    if len(src) == 0 {
+        return argv
+    }
+    let mut sh = ""
+    let mut i = 0
+    while i < len(src) {
+        sh = sh + ". " + _shq_src(src[i]) + " && "
+        i = i + 1
+    }
+    sh = sh + "exec"
+    let mut j = 0
+    while j < len(argv) {
+        sh = sh + " " + _shq_src(argv[j])
+        j = j + 1
+    }
+    let mut out = []
+    out.push("bash")
+    out.push("-c")
+    out.push(sh)
     return out
 }
 
@@ -950,6 +1036,7 @@ fn main() {
             exit(2)
         }
         argv = _with_env(env_kvs, argv)
+        argv = _with_source(_source_args_cli(av, si + 2), argv)
         let r = cloud_run_wall_opts(host, ssh_opts, argv, max_wall)
         // NOTE (#1229 B): `run` does NOT register the host. The registry holds
         // provider pod-ids (for reconcile vs the provider live set), and `host`
@@ -1009,6 +1096,7 @@ fn main() {
             exit(2)
         }
         argv = _with_env(env_kvs, argv)
+        argv = _with_source(_source_args_cli(av, si + 3), argv)
         let r = cloud_nohup_opts(host, ssh_opts, argv, logfile)
         // NOTE (#1229 B): `nohup` does NOT register the host (see `run` above) —
         // `host` is an ssh destination, not a provider pod-id. Tracking happens
@@ -1065,6 +1153,7 @@ fn main() {
             exit(2)
         }
         argv = _with_env(env_kvs, argv)
+        argv = _with_source(_source_args_cli(av, si + 2), argv)
         // Auto-gen canonical /tmp/cloud-<unix_ts>.log when --log omitted, so
         // the caller does not have to invent the path. cloud_nohup_opts then
         // does the actual dispatch (no cloud_fire_opts shim needed in cloud.hexa).
