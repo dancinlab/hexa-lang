@@ -348,6 +348,47 @@ fn _regen_runtime_core(repo_root: string) {
     let _ = exec("rm -f " + _shq(tmp))
 }
 
+// B9.C — regen self/runtime_hi_gen.c (the HI-tier rt_str_* fragment `#include`d
+// by self/runtime_core.c, RFC 061 amalgamation) from its hexa emitter
+// (self/runtime_hi_gen_emit.hexa, the .c-text SSOT). Same STRICTLY-OPTIONAL
+// contract as _regen_runtime_core: runs only when an external hexa-run/hexa is
+// on PATH AND the emitter is present; on SHA-identical regen the runtime.c TU
+// is unchanged; on a fresh clone (no external runner) the in-tree .c is used
+// as-is. runtime_hi_gen.c lives at self/, so it gets its own step.
+fn _regen_runtime_hi_gen(repo_root: string) {
+    let mut runner = ""
+    let r1 = exec_with_status("command -v hexa-run >/dev/null 2>&1")
+    if r1[1] == 0 {
+        runner = "hexa-run"
+    } else {
+        let r2 = exec_with_status("command -v hexa >/dev/null 2>&1")
+        if r2[1] == 0 { runner = "hexa run" }
+    }
+    if runner == "" {
+        println("[0-pre] runtime_hi_gen.c regen SKIP — no external hexa-run on PATH (in-tree .c used)")
+        return
+    }
+    let emitter = repo_root + "/self/runtime_hi_gen_emit.hexa"
+    let dst     = repo_root + "/self/runtime_hi_gen.c"
+    if !_file_exists(emitter) {
+        println("[0-pre] runtime_hi_gen.c regen SKIP — emitter absent (in-tree .c used)")
+        return
+    }
+    let tmp = to_string(exec("mktemp -t regen_runtime_hi_gen_c.XXXXXX")).trim()
+    if tmp == "" {
+        eprintln("  warn: mktemp failed — regen runtime_hi_gen.c skipped (in-tree used)")
+        return
+    }
+    let regen = exec_with_status(runner + " " + _shq(emitter) + " " + _shq(tmp) + " >/dev/null 2>&1")
+    if regen[1] == 0 && _file_exists(tmp) {
+        let _ = exec("cp -f " + _shq(tmp) + " " + _shq(dst))
+        println("[0-pre] runtime_hi_gen.c regen: 1 regenerated from emitter SSOT")
+    } else {
+        eprintln("  warn: emitter runtime_hi_gen_emit.hexa failed (rc=" + to_string(regen[1]) + ") — in-tree .c used")
+    }
+    let _ = exec("rm -f " + _shq(tmp))
+}
+
 fn _do_build(repo_root: string) {
     // multiarch-aware: Linux x86_64 → hexat_linux_x86_64; Mac arm64 → hexat.
     // Falls back to legacy "hexat" path when the arch-specific binary
@@ -420,6 +461,8 @@ fn _do_build(repo_root: string) {
     _regen_native_includes(repo_root)
     // F3 — also regen the CORE-tier fragment self/runtime_core.c (same contract).
     _regen_runtime_core(repo_root)
+    // B9.C — also regen the HI-tier fragment self/runtime_hi_gen.c (same contract).
+    _regen_runtime_hi_gen(repo_root)
 
     // ── Step 0: bootstrap the transpiler artifact (CANON M3b · Go 1.4 C-seed).
     //   The transpiler is no longer a committed binary — build it per-machine
