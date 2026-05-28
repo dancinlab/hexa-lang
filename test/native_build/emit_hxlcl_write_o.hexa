@@ -9,7 +9,7 @@
 //
 // SSOT: bytes character-identical to self/codegen/runtime_arm64.hexa::rt_write.
 
-fn rt_write_bytes() -> [int] {
+fn rt_write_drv_bytes() -> [int] {
     let mut c = []
     // sxtw x0, w0  (sign-extend fd arg)     0x93407C00
     c.push(0); c.push(124); c.push(64); c.push(147)
@@ -234,7 +234,7 @@ fn macho_obj_wrap_v3_v(code: [int],
 fn emit_hxlcl_write_o() {
     println("[wire] F3 Path A · B9.6-C13 · rt_write native override — _hxlcl_write")
 
-    let code = rt_write_bytes()
+    let code = rt_write_drv_bytes()
     if len(code) != 36 {
         println("FAIL: rt_write expected 36 bytes, got " + to_string(len(code)))
         return
