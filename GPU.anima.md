@@ -98,7 +98,7 @@
 
 stacked PRs, g4 <200 LoC 씩.
 
-- [ ] **M0 — anima 트레이너 `farr_zero_slice_gpu` wiring** (anima 단독). 트레이너의 dMg 재설정 루프를 빌트인 한 줄로 교체. hexa-lang 손 안 댐. 안전, 가장 작은 첫걸음. **단계비용 ~33% 즉시 제거 후보**
+- [x] **M0 — anima 트레이너 `farr_zero_slice_gpu` wiring** (anima 단독). 트레이너의 dMg 재설정 루프를 빌트인 한 줄로 교체. hexa-lang 손 안 댐. 안전, 가장 작은 첫걸음. **단계비용 ~33% 즉시 제거 후보** ✅ anima #1319 (2026-05-28)
 - [ ] **M1 — hexa-lang `farr_adamw_step` 빌트인 등록**. 12-arg codegen 슬롯 신설 + `hexa_farr_adamw_step` CPU 기준선 + HEXA_CUDA dispatch + byte-eq 테스트. bootstrap `hexa_cc.c` 재컴 필요
 - [ ] **M2 — hexa-lang `farr_softmax_rows` 빌트인 등록**. 4-arg 슬롯 + CPU 기준선 + dispatch + 테스트 (M1 패턴)
 - [ ] **M3 — hexa-lang `farr_ce_seed` 빌트인 등록**. 5-arg 슬롯 + 기준선 + dispatch + 테스트

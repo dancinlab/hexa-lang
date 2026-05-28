@@ -12,3 +12,10 @@
 - 위험 식별: M1 의 12-arg codegen 슬롯 신설은 `hexa_cc.c` bootstrap 재컴 트리거 — byte-eq + 기존 테스트 매트릭스 통과 필수.
 
 진행 전 상태: 모든 마일스톤 ☐ (미시작).
+
+## 2026-05-28 — M0 LANDED ✅
+
+- anima PR #1319 머지 — `train_v3_moe_longtrain.hexa` 의 step-loop 도입부 3 zero 루프(d_logits[V=151643] · dMg[m_size=29.16M] · d_zT_last[d=64])를 `farr_zero_slice_gpu` 빌트인 호출 3 줄로 교체. 6 lines deleted, 6 lines added.
+- hexa-lang 손 안 댐 — 빌트인은 이미 노출돼 있었음(runtime.c:12229). 트레이너가 `cudaMemset` (HEXA_CUDA) / `memset` (CPU) 경로를 사용하게 됨.
+- 예상 효과: per-step CPU 단일코어 부하 중 ~29M farr_set 호출 제거. 실측 step-rate 변화는 다음 H100 fire 에서 측정 (M4 wiring 완료 후 종합 측정 권장 — 단독 측정은 노이즈 클 수 있음).
+- 상태: M0 ☑ · M1~M5 ☐. 다음 = M1 (hexa-lang `farr_adamw_step` 빌트인) — 별도 세션 권장 (codegen 새 arg-slot + bootstrap 재컴 위험).
