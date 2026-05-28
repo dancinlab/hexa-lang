@@ -1,0 +1,92 @@
+// test/regression/farr_ce_seed_byte_eq.hexa
+//
+// BC-ANIMA M3 (2026-05-28): byte-eq oracle for the 5-arg `farr_ce_seed`
+// builtin (seed-only CE gradient).
+//
+//   farr_ce_seed(softmax, target_ids, dlogits, R, C) -> int rc (0 ok)
+//   Writes dlogits[r,c] = softmax[r,c] - (c == target[r] ? 1.0 : 0.0)
+//
+// The op is exact (no exp/log, no reductions), so byte-equality is
+// claimable on both the CPU baseline (_hx_farr_ce_seed_cpu_v2) and a
+// future GPU build (no parallel-reduce non-determinism).
+//
+// Shape: R=2 rows, C=4 cols. Targets [2, 0].
+//
+//   Row 0: softmax = [0.1, 0.2, 0.6, 0.1], target = 2
+//          expected dlogits = [0.1, 0.2, 0.6 - 1.0, 0.1]
+//                           = [0.1, 0.2, -0.4, 0.1]
+//   Row 1: softmax = [0.25, 0.25, 0.25, 0.25], target = 0
+//          expected dlogits = [0.25 - 1.0, 0.25, 0.25, 0.25]
+//                           = [-0.75, 0.25, 0.25, 0.25]
+//
+// Pass criterion: max|Δ|=0 across all 8 dlogits entries.
+
+fn approx_eq(a: float, b: float) -> bool {
+    // byte-eq: we expect bit-identical doubles since the op is exact.
+    return a == b
+}
+
+fn main() {
+    let R = 2
+    let C = 4
+
+    // softmax inputs (already normalized — caller computed them).
+    let sm = farr_zeros(R * C)
+    let _ = farr_set(sm, 0, 0.1)
+    let _ = farr_set(sm, 1, 0.2)
+    let _ = farr_set(sm, 2, 0.6)
+    let _ = farr_set(sm, 3, 0.1)
+    let _ = farr_set(sm, 4, 0.25)
+    let _ = farr_set(sm, 5, 0.25)
+    let _ = farr_set(sm, 6, 0.25)
+    let _ = farr_set(sm, 7, 0.25)
+
+    // targets (double-encoded vocab ids).
+    let tgt = farr_zeros(R)
+    let _ = farr_set(tgt, 0, 2.0)
+    let _ = farr_set(tgt, 1, 0.0)
+
+    // caller-allocated output dlogits[R*C].
+    let dl = farr_zeros(R * C)
+
+    let rc = farr_ce_seed(sm, tgt, dl, R, C)
+    if rc != 0 {
+        println("[farr_ce_seed_byte_eq] FAIL — rc=" + to_string(rc))
+        return
+    }
+
+    // Expected per-element values (computed by hand above).
+    let expected = farr_zeros(R * C)
+    let _ = farr_set(expected, 0, 0.1)
+    let _ = farr_set(expected, 1, 0.2)
+    let _ = farr_set(expected, 2, -0.4)
+    let _ = farr_set(expected, 3, 0.1)
+    let _ = farr_set(expected, 4, -0.75)
+    let _ = farr_set(expected, 5, 0.25)
+    let _ = farr_set(expected, 6, 0.25)
+    let _ = farr_set(expected, 7, 0.25)
+
+    let mut pass_count = 0
+    let mut fail_count = 0
+    let mut i = 0
+    while i < R * C {
+        let got = farr_get(dl, i)
+        let exp = farr_get(expected, i)
+        if approx_eq(got, exp) {
+            pass_count = pass_count + 1
+        } else {
+            fail_count = fail_count + 1
+            println("  [" + to_string(i) + "] got=" + to_string(got)
+                  + " expected=" + to_string(exp))
+        }
+        i = i + 1
+    }
+
+    if fail_count == 0 {
+        println("[farr_ce_seed_byte_eq] PASS — " + to_string(pass_count)
+              + "/" + to_string(R * C) + " bytes match")
+    } else {
+        println("[farr_ce_seed_byte_eq] FAIL — " + to_string(fail_count)
+              + "/" + to_string(R * C) + " bytes diverged")
+    }
+}

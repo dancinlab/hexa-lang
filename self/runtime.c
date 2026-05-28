@@ -387,6 +387,22 @@ static char *__attribute__((noinline)) hxlcl_strdup(const char *s) {
     return out;
 }
 #endif
+// F3 class-B HARD SCALE-OUT — hxlcl_strndup Path-A activation (2nd class-B HARD).
+// `extern` under HEXA_RT_SELFEMIT (body supplied by emit_hxlcl_strndup_o.hexa's
+// .o = frame + cap-bounded scalar strlen loop + `bl _hxlcl_malloc` + scalar
+// copy loop + explicit NUL terminator + epilogue, 36 instr / 144 B, 1
+// ARM64_RELOC_BRANCH26 @ 0x40). The BL target hxlcl_malloc is already EXPORTED
+// via HXLCL_MALLOC_SC (see L218-block, landed by PR #1917 for rt_strdup) so
+// ld64 can bind the cross-object call — no NEW callee-export macro needed
+// (strndup REUSES the strdup-era export macro since both call _hxlcl_malloc).
+// Default (guard off) keeps the static body below = 0-libc-extern preserved.
+// 2nd ACTIVATED class-B HARD primitive (39/640) — behavioral-equivalence gate
+// proven by the 4-gate sweep (0-extern byte-id default · self-host fixpoint ·
+// JIT-exec behavioral battery: empty / NUL-before-cap / no-NUL-within-cap /
+// cap=0 / NULL passthrough).
+#ifdef HEXA_RT_SELFEMIT
+extern char *hxlcl_strndup(const char *s, size_t cap);
+#else
 static char *__attribute__((noinline)) hxlcl_strndup(const char *s, size_t cap) {
     if (!s) return NULL;
     size_t n = 0;
@@ -397,6 +413,7 @@ static char *__attribute__((noinline)) hxlcl_strndup(const char *s, size_t cap) 
     out[n] = '\0';
     return out;
 }
+#endif
 // Cycle 48 batch — numeric parse + bzero.
 // RUNTIME.md step-2 — hxlcl_atoll forward-decl; the two-mode DEFINITION
 // (delegating to hexa-source rt_atoll) lives below, after the cycle-5 atof
@@ -10068,6 +10085,14 @@ extern int  _hx_cuda_farr_ce_seed_gpu(int64_t logits_id,
                                       int64_t R, int64_t V,
                                       int64_t out_loss_id,
                                       int64_t out_dlogits_id);
+// BC-ANIMA M3 (2026-05-28): 5-arg seed-only CE gradient (softmax →
+// dlogits = softmax - onehot(target)). Lighter sibling of the fused
+// 6-arg _hx_cuda_farr_ce_seed_gpu — used when softmax is already
+// computed (anima trainer separates softmax via M2 farr_softmax_rows).
+extern int  _hx_cuda_farr_ce_seed(int64_t softmax_id,
+                                  int64_t target_ids_id,
+                                  int64_t dlogits_id,
+                                  int64_t R, int64_t C);
 #endif
 
 // ── CPU helpers (Phase B2 no-CUDA fallback). Each: (a) validate ids,
@@ -10326,6 +10351,44 @@ static int64_t _hx_farr_rope_cpu(int64_t t_id, int64_t cos_id,
     return out_id;
 }
 #pragma STDC FP_CONTRACT DEFAULT
+
+// BC-ANIMA M3 (2026-05-28): 5-arg seed-only CE gradient — host FP64
+// reference + no-CUDA fallback for the new `farr_ce_seed` builtin.
+//   _hx_farr_ce_seed_cpu_v2(softmax_id, target_ids_id, dlogits_id, R, C)
+//                            -> int rc (0 ok / -1)
+// Writes dlogits[r,c] = softmax[r,c] - (c == target[r] ? 1.0 : 0.0) per
+// row. Caller-allocated dlogits (in place); targets are double-encoded
+// vocab ids (rounded to int64). This is the LIGHTER sibling of the
+// fused 6-arg _hx_farr_ce_seed_cpu — softmax is precomputed (anima
+// trainer's M2 farr_softmax_rows step), so no exp/log here.
+static int _hx_farr_ce_seed_cpu_v2(int64_t softmax_id, int64_t target_ids_id,
+                                   int64_t dlogits_id,
+                                   int64_t R, int64_t C) {
+    if (softmax_id < 0    || softmax_id    >= _hx_farr_count) return -1;
+    if (target_ids_id < 0 || target_ids_id >= _hx_farr_count) return -1;
+    if (dlogits_id < 0    || dlogits_id    >= _hx_farr_count) return -1;
+    if (R <= 0 || C <= 0) return -1;
+    HexaFarrEntry* se = &_hx_farr_table[softmax_id];
+    HexaFarrEntry* te = &_hx_farr_table[target_ids_id];
+    HexaFarrEntry* de = &_hx_farr_table[dlogits_id];
+    if (!se->buf || !te->buf || !de->buf) return -1;
+    if (se->len < R * C || te->len < R || de->len < R * C) return -1;
+    const double* S   = se->buf;
+    const double* TGT = te->buf;
+    double*       DL  = de->buf;
+    for (int64_t r = 0; r < R; r++) {
+        const double* sr = S + r * C;
+        double*       dr = DL + r * C;
+        double tf = TGT[r];
+        int64_t tgt = (int64_t)(tf + (tf >= 0.0 ? 0.5 : -0.5));
+        for (int64_t c = 0; c < C; c++) {
+            double p = sr[c];
+            if (c == tgt) p -= 1.0;
+            dr[c] = p;
+        }
+    }
+    return 0;
+}
 
 // _hx_farr_ce_seed_cpu(logits_id, target_ids_id, R, V, out_loss_id,
 //   out_dlogits_id) -> int rc (0 ok / -1). The host FP64 reference for
@@ -10783,6 +10846,40 @@ HexaVal farr_ce_seed_gpu(HexaVal logits, HexaVal target_ids,
                          HexaVal out_loss, HexaVal out_dlogits) {
     return hexa_farr_ce_seed_gpu(logits, target_ids, R, V,
                                  out_loss, out_dlogits);
+}
+
+// BC-ANIMA M3 (2026-05-28): farr_ce_seed(softmax, target_ids, dlogits,
+//   R, C) -> int rc (0 ok / -1). 5-arg seed-only CE gradient:
+//   dlogits[r,c] = softmax[r,c] - onehot(c == target[r]) in place.
+//   On HEXA_CUDA: routes to _hx_cuda_farr_ce_seed (slim block-per-row
+//   kernel). No-CUDA: _hx_farr_ce_seed_cpu_v2 host FP64 reference.
+//   The lighter sibling of farr_ce_seed_gpu (6-arg fused loss+seed) —
+//   used when softmax is precomputed via M2 farr_softmax_rows.
+HexaVal hexa_farr_ce_seed(HexaVal softmax_v, HexaVal target_ids_v,
+                          HexaVal dlogits_v,
+                          HexaVal R_v, HexaVal C_v) {
+    int64_t s_id   = hexa_as_num(softmax_v);
+    int64_t t_id   = hexa_as_num(target_ids_v);
+    int64_t dl_id  = hexa_as_num(dlogits_v);
+    int64_t R      = hexa_as_num(R_v);
+    int64_t C      = hexa_as_num(C_v);
+#ifdef HEXA_CUDA
+    if (R <= 0 || C <= 0) return hexa_int(-1);
+    if (s_id  < 0 || s_id  >= _hx_farr_count) return hexa_int(-1);
+    if (t_id  < 0 || t_id  >= _hx_farr_count) return hexa_int(-1);
+    if (dl_id < 0 || dl_id >= _hx_farr_count) return hexa_int(-1);
+    int rc = _hx_cuda_farr_ce_seed(s_id, t_id, dl_id, R, C);
+    return hexa_int(rc);
+#else
+    return hexa_int(_hx_farr_ce_seed_cpu_v2(s_id, t_id, dl_id, R, C));
+#endif
+}
+// 5-arg bare direct-C entry — codegen lowers `farr_ce_seed(...)` to
+// `hexa_farr_ce_seed(...)` (past hexa_callN ceiling, same seam as
+// farr_matmul). This wrapper preserves the seam-alias symmetry.
+HexaVal farr_ce_seed(HexaVal softmax, HexaVal target_ids,
+                     HexaVal dlogits, HexaVal R, HexaVal C) {
+    return hexa_farr_ce_seed(softmax, target_ids, dlogits, R, C);
 }
 
 // ── A1 (2026-05-10): per-phase arena reset side channel ─────────

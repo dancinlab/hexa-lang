@@ -628,6 +628,7 @@ fn _do_build(repo_root: string) {
             println("[selfemit] F3 Path A · B9.6-C2 — class-C syscall WITH arg+errno: close (svc + carry-flag) → _hxlcl_close")
             println("[selfemit] F3 Path A · B9.6-B1 — class-B calling-conv composite: atoi (frame + bl) → _hxlcl_atoi")
             println("[selfemit] F3 Path A · B9.6-B2 — class-B HARD copy-loop: strdup (frame + strlen-loop + bl malloc + copy-loop) → _hxlcl_strdup")
+            println("[selfemit] F3 Path A · class-B HARD scale-out — strndup (cap-bounded copy-loop + bl malloc) → _hxlcl_strndup")
             println("[selfemit] F3 Path A · B9.6-E1 — class-E memory-lifecycle: munmap (unmap stub) → _hxlcl_munmap")
             // From here on the driver/module_loader runtime.c is compiled with
             // the guard ON so the hxlcl_* bodies become extern (resolved below).
@@ -695,7 +696,21 @@ fn _do_build(repo_root: string) {
             // env var = HEXA_HXLCL_GETUID_O. Activates the LOOP slot for the
             // existing #1899 shadow (runtime_arm64::rt_getuid + runtime.c
             // L127-135 extern guard).
-            println("[selfemit] F3 Path A · B9.6-C3 — class-C 0-arg no-errno: getuid (rt_getpid mirror) → _hxlcl_getuid")
+            // F3 class-B HARD scale-out — `strndup` joins the leaf loop alongside
+            // strdup. Same single-symbol emit shape (1 defined + 1 undef + 1
+            // BRANCH26), same _hxlcl_malloc callee-export wrinkle (reuses the
+            // HXLCL_MALLOC_SC macro PR #1917 introduced). 2nd activated class-B
+            // HARD primitive — proves the recipe scales mechanically.
+            // B9.6-C10/C11/C14 append `fcntl` / `ioctl` / `select` — three
+            // NON-_cf class-C svc primitives (no errno, no reloc). fcntl =
+            // dual-sxtw + svc + ret (5-instr 20 B, SYS#92); ioctl = single-
+            // sxtw + svc + ret (4-instr 16 B, SYS#54); select = sxtw + mov
+            // x5,#0 + svc + ret (5-instr 20 B, SYS#93). Each rides the SAME
+            // leaf template — driver = emit_hxlcl_<base>_o.hexa, env var =
+            // HEXA_HXLCL_<UPPER>_O. Activates LOOP slots for the existing
+            // #1899 shadows (runtime_arm64::rt_fcntl/rt_ioctl/rt_select +
+            // runtime.c L170-176 / L184-192 extern guards).
+            println("[selfemit] F3 Path A · B9.6-C3+C10+C11+C14 — class-C NON-_cf no-errno: getuid/fcntl/ioctl/select (+strndup B-HARD)")
             // ── B9.6-C9/C12/C13/C15/C16/C17 (io-family svc-wrapper batch) ──
             // The 6 io-family svc-wrappers — 5 errno-reloc primitives carrying
             // the rt_close PAGE21/PAGEOFF12 errno-store template (lseek/read/
@@ -714,8 +729,8 @@ fn _do_build(repo_root: string) {
             println("[selfemit] F3 Path A · B9.6-C15 — class-C 3-arg NON-_cf: poll (uxtw nfds + sxtw timeout) → _hxlcl_poll")
             println("[selfemit] F3 Path A · B9.6-C16 — class-C 4-arg _cf+errno: waitpid (sxtw pid+opt + mov x3,#0 + errno) → _hxlcl_waitpid")
             println("[selfemit] F3 Path A · B9.6-C17 — class-C 6-arg _cf+errno: mmap (sxtw prot/flags/fd + errno) → _hxlcl_mmap")
-            let leaves = ["memset", "memcmp", "memcpy", "memmove", "strcmp", "strncmp", "strchr", "strrchr", "strcpy", "strncpy", "strcat", "strlen", "getpid", "close", "atoi", "munmap", "strdup", "getuid", "lseek", "read", "write", "poll", "waitpid", "mmap"]
-            let upper  = ["MEMSET", "MEMCMP", "MEMCPY", "MEMMOVE", "STRCMP", "STRNCMP", "STRCHR", "STRRCHR", "STRCPY", "STRNCPY", "STRCAT", "STRLEN", "GETPID", "CLOSE", "ATOI", "MUNMAP", "STRDUP", "GETUID", "LSEEK", "READ", "WRITE", "POLL", "WAITPID", "MMAP"]
+            let leaves = ["memset", "memcmp", "memcpy", "memmove", "strcmp", "strncmp", "strchr", "strrchr", "strcpy", "strncpy", "strcat", "strlen", "getpid", "close", "atoi", "munmap", "strdup", "getuid", "strndup", "fcntl", "ioctl", "select", "lseek", "read", "write", "poll", "waitpid", "mmap"]
+            let upper  = ["MEMSET", "MEMCMP", "MEMCPY", "MEMMOVE", "STRCMP", "STRNCMP", "STRCHR", "STRRCHR", "STRCPY", "STRNCPY", "STRCAT", "STRLEN", "GETPID", "CLOSE", "ATOI", "MUNMAP", "STRDUP", "GETUID", "STRNDUP", "FCNTL", "IOCTL", "SELECT", "LSEEK", "READ", "WRITE", "POLL", "WAITPID", "MMAP"]
             let mut li = 0
             while li < len(leaves) {
                 let n = leaves[li]

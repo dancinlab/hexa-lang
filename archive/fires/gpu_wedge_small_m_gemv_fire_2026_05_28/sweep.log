@@ -1,0 +1,24 @@
+=== run 1 ===
+# F-WEDGE-SMALL-M-GEMV-WALL -- hand-emit GEMV vs cuBLAS (RTX 5070 sm_120)
+# Peak FP32 = 31.20 TFLOPS, K=4096 N=4096, cuEvent 20 warmup + 200 timed median
+# CTA: 4 warps x 32 threads, 16 cols/CTA, K_CHUNK=128, float4 B loads
+# M  cuBLAS_ms  handemit_ms  handemit_TFLOPS  speedup_x  sub_roofline_pct  max_abs_err
+1     0.110624  0.116704     0.288           0.948x   99.08%  1.542e-06
+8     0.114592  0.859680     0.312           0.133x   99.00%  2.638e-06
+32    0.121216  5.823072     0.184           0.021x   99.41%  2.697e-06
+=== run 2 ===
+# F-WEDGE-SMALL-M-GEMV-WALL -- hand-emit GEMV vs cuBLAS (RTX 5070 sm_120)
+# Peak FP32 = 31.20 TFLOPS, K=4096 N=4096, cuEvent 20 warmup + 200 timed median
+# CTA: 4 warps x 32 threads, 16 cols/CTA, K_CHUNK=128, float4 B loads
+# M  cuBLAS_ms  handemit_ms  handemit_TFLOPS  speedup_x  sub_roofline_pct  max_abs_err
+1     0.110624  0.116640     0.288           0.948x   99.08%  1.542e-06
+8     0.114560  0.858560     0.313           0.133x   99.00%  2.638e-06
+32    0.121312  5.820864     0.184           0.021x   99.41%  2.697e-06
+=== run 3 ===
+# F-WEDGE-SMALL-M-GEMV-WALL -- hand-emit GEMV vs cuBLAS (RTX 5070 sm_120)
+# Peak FP32 = 31.20 TFLOPS, K=4096 N=4096, cuEvent 20 warmup + 200 timed median
+# CTA: 4 warps x 32 threads, 16 cols/CTA, K_CHUNK=128, float4 B loads
+# M  cuBLAS_ms  handemit_ms  handemit_TFLOPS  speedup_x  sub_roofline_pct  max_abs_err
+1     0.110592  0.116480     0.288           0.949x   99.08%  1.542e-06
+8     0.114592  0.859680     0.312           0.133x   99.00%  2.638e-06
+32    0.121184  5.845472     0.184           0.021x   99.41%  2.697e-06

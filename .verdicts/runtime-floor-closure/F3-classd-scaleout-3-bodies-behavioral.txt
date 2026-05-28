@@ -1,0 +1,175 @@
+F3 class-D HARD scale-out — 3 more HexaVal-repr struct-return bodies
+Behavioral self-emit · SHADOW only (additive · default build untouched)
+Date: 2026-05-28
+Branch: f3-classd-scaleout-2026-05-28
+Builds on: PR #1914 (rt_isalpha_classd — first class-D body) + PR #1917
+           (rt_strdup activation recipe)
+
+═══════════════════════════════════════════════════════════════════════
+PICKED CANDIDATES (3 of class-D HARD ~350-450 fn family)
+═══════════════════════════════════════════════════════════════════════
+
+  1. rt_isalnum_classd
+     - Sister of rt_isalpha. Same range-cmp template + 1 more range [0-9].
+     - 20 instr · 80 B · BRANCH26 @0x44 · callee = _hexa_bool.
+     - Highest replication signal: mechanical extension of PR #1914.
+     - C body: self/runtime.c L2013 (HEXA_HAS_HEXA_RT_STDLIB-gated).
+
+  2. rt_pthread_noop_classd
+     - 0-arg, `return hexa_int(0)`.
+     - 6 instr · 24 B · BRANCH26 @0x0C · callee = _hexa_int.
+     - NEW DIMENSION on the template: different ctor callee (_hexa_int vs
+       _hexa_bool). _hexa_int is also non-static-exported in runtime_core.c.
+     - C body: self/runtime.c L2186.
+
+  3. rt_pthread_create_policy_classd
+     - 0-arg, `return hexa_int(1)`.
+     - 6 instr · 24 B · BRANCH26 @0x0C · callee = _hexa_int.
+     - Differs from #2 by ONE byte (mov w0,#1 vs mov w0,#0) — demonstrates
+       the class-D template scales mechanically by varying just the
+       constant payload.
+     - C body: self/runtime.c L2187.
+
+SKIPPED (per task spec):
+  - rt_isdigit / rt_islower / rt_isupper / rt_isspace / rt_isxdigit /
+    rt_isprint / rt_iscntrl / rt_isgraph — do NOT exist as rt_is* fns in
+    the codebase (only rt_isalnum + rt_isalpha are present; the rest are
+    handled inline by hxlcl_<name>).
+  - rt_isnan / rt_isinf / rt_isfinite — declared `extern HexaVal` (delegated
+    to hexa-source stdlib/runtime/numeric.hexa). Adding a self-emit body
+    would shadow the hexa source; out of scope for this wave.
+
+═══════════════════════════════════════════════════════════════════════
+LAYER 1 — interp self-test (HEXA_VAL_ARENA=0 hexa-run runtime_arm64.hexa)
+═══════════════════════════════════════════════════════════════════════
+
+All 4 class-D test_* (rt_isalpha from #1914 + 3 new) report ALL CHECKS PASS:
+
+  $ HEXA_VAL_ARENA=0 hexa-run self/codegen/runtime_arm64.hexa 2>&1 \
+      | grep -E "test_rt_(isalpha|isalnum|pthread)_classd|ALL CHECKS PASS|FAIL"
+  test_rt_isalpha_classd (F3 class-D HexaVal-repr body · behavioral self-emit)
+    ALL CHECKS PASS
+  test_rt_isalnum_classd (F3 class-D HARD scale-out · sister of rt_isalpha)
+    ALL CHECKS PASS
+  test_rt_pthread_noop_classd (F3 class-D HARD · 0-arg hexa_int(0))
+    ALL CHECKS PASS
+  test_rt_pthread_create_policy_classd (F3 class-D HARD · 0-arg hexa_int(1))
+    ALL CHECKS PASS
+
+═══════════════════════════════════════════════════════════════════════
+LAYER 2 — `as -arch arm64` round-trip + .o legality
+═══════════════════════════════════════════════════════════════════════
+
+For each body, the hexa-emit __text bytes are BIT-IDENTICAL to `as` of the
+matching assembly source:
+
+  rt_isalnum  (80 B, BRANCH26 @0x44):
+    a9bf7bfd 910003fd f100c03f 5400006b
+    f100e43f 5400012d f101043f 5400006b
+    f101683f 540000ad f101843f 540000ab
+    f101e83f 5400006c 52800020 14000002
+    52800000 94000000 a8c17bfd d65f03c0
+    → cmp build/poc/rt_isalnum_classd.o   vs /tmp/_rt_isalnum.o  = IDENTICAL
+    → otool -r: 1 reloc @ 0x44 (BRANCH26, extern sym[1])
+    → nm: T _rt_isalnum + U _hexa_bool
+    → otool -hVf: MH_MAGIC_64 ARM64 OBJECT 3 LCs (SEGMENT_64+SYMTAB+BUILD_VERSION)
+
+  rt_pthread_noop  (24 B, BRANCH26 @0x0C):
+    a9bf7bfd 910003fd 52800000 94000000
+    a8c17bfd d65f03c0
+    → cmp build/poc/rt_pthread_noop_classd.o vs /tmp/_rt_noop.o = IDENTICAL
+    → otool -r: 1 reloc @ 0x0C (BRANCH26)
+    → nm: T _rt_pthread_noop + U _hexa_int
+
+  rt_pthread_create_policy  (24 B, BRANCH26 @0x0C):
+    a9bf7bfd 910003fd 52800020 94000000
+    a8c17bfd d65f03c0
+    → cmp build/poc/rt_pthread_create_policy_classd.o vs /tmp/_rt_policy.o = IDENTICAL
+    → otool -r: 1 reloc @ 0x0C (BRANCH26)
+    → nm: T _rt_pthread_create_policy + U _hexa_int
+
+LC_DYSYMTAB=0 for all three (matches PR #1914 + #1911 precedent).
+
+═══════════════════════════════════════════════════════════════════════
+LAYER 3 — JIT-exec behavioral battery
+═══════════════════════════════════════════════════════════════════════
+
+Linked all 3 hexa-emit .o + minimal C harness (provides _hexa_bool + _hexa_int
+ctors stand-in matching the runtime_core.c signatures) + 19 behavioral cases:
+
+  $ clang -arch arm64 -O0 /tmp/hexa_classd_test.c \
+      build/poc/rt_isalnum_classd.o \
+      build/poc/rt_pthread_noop_classd.o \
+      build/poc/rt_pthread_create_policy_classd.o \
+      -o /tmp/hexa_classd_test
+
+  $ /tmp/hexa_classd_test ; echo "rc=$?"
+
+  === rt_isalnum (14 inputs) ===
+    PASS: digits '0', '9'                         → .b=1
+    PASS: letters 'A', 'Z', 'a', 'z'              → .b=1
+    PASS: space, '@' (0x40), '/' (0x2f),
+          ':' (0x3a), '[' (0x5b), '`' (0x60),
+          '{' (0x7b), TAB                         → .b=0
+
+  === rt_pthread_noop (3 calls) ===
+    PASS: all 3 calls → .i=0 (deterministic, no register-state leak)
+
+  === rt_pthread_create_policy (2 calls) ===
+    PASS: both calls → .i=1
+
+  SUMMARY: PASS: 19  FAIL: 0
+  RESULT: ALL BEHAVIORAL CHECKS PASS (19/19)
+  rc=0
+
+otool -tvV /tmp/hexa_classd_test confirms ld64 bound the BRANCH26 sites to
+real symbols:
+  _rt_isalnum:                bl _hexa_bool
+  _rt_pthread_noop:           bl _hexa_int
+  _rt_pthread_create_policy:  bl _hexa_int
+
+═══════════════════════════════════════════════════════════════════════
+ACTIVATION DELTA — SHADOW ONLY (per task spec)
+═══════════════════════════════════════════════════════════════════════
+
+Prior to this PR: 38/640 ACTIVATED (PR #1917 rt_strdup activation) +
+44+ shadow.
+
+This PR is SHADOW ONLY — runtime.c untouched, build_hexa_cli.hexa
+selfemit loop untouched. The 3 new class-D shadow bodies are NOT yet
+in the live runtime path.
+
+Why shadow-only for this wave:
+  - class-D activation is more involved than class-B/leaf activation:
+    runtime.c's `rt_<name>` is the C body itself (not a `hxlcl_<name>`),
+    so HEXA_RT_SELFEMIT must gate the function body with extern (rather
+    than swap a static hxlcl_<name> for an extern of the same name).
+  - Layer 3 already confirms behavioral correctness against the real
+    ctor callees — activation is a separate runbook (next wave).
+  - Per-PR safety: ANY activation fail must REVERT just that one body.
+    A shadow-only wave keeps blast radius zero and lets the activation
+    runbook be staged per body.
+
+ACTIVATED count after this PR: 38/640 (unchanged).
+SHADOW count after this PR: 44 + 3 = 47.
+
+═══════════════════════════════════════════════════════════════════════
+DUAL-BUILD INVARIANT
+═══════════════════════════════════════════════════════════════════════
+
+  $ grep -rn 'runtime_arm64' self/codegen compiler tool | grep -v '\.gen\.' \
+      | grep -E 'use|import' = 0 matches
+  → runtime_arm64.hexa shadow stays un-used; default build = origin/main
+    BY CONSTRUCTION (additive only, no diff in linked runtime.c).
+
+═══════════════════════════════════════════════════════════════════════
+HONESTY
+═══════════════════════════════════════════════════════════════════════
+
+  - bytes confirmed bit-for-bit vs `as -arch arm64`.
+  - clang only as link-side oracle (real _hexa_bool / _hexa_int).
+  - NOT byte-identical to clang -O2 (which inlines the ctor + fuses range
+    cmps via and/sub/cmp/cset in 5 instr); behavioral equivalence is the
+    wall — same x0:x1 outputs for every input.
+  - No binaries committed; build/poc/*.o under build/* gitignored.
+  - All 4 class-D tests + 19 behavioral cases PASS. NO REVERTS.
