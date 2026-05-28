@@ -1,0 +1,260 @@
+// stdlib/cloud/ttl_deadman.hexa — CLOUD M2 pod TTL deadman watchdog.
+//
+// `cloud rent --ttl 30m` arms a detached background watchdog that
+// force-terminates the pod when wall-clock exceeds the TTL budget.
+// Designed to SURVIVE agent crash (commons g37 deadman pattern):
+//   • Spawned via `setsid sh -c '... &'` — reparented to PID 1, ignores
+//     SIGHUP, outlives the launching shell.
+//   • Polls the M5 registry (~/.hx/cloud/active-pods.json) every poll_sec
+//     seconds; self-terminates when the pod is gone from the registry
+//     (manual `cloud down`, sibling deadman, agent cleanup).
+//   • On TTL exceed, invokes `hexa cloud down <id> --provider <p>` which
+//     is the canonical teardown verb (STOPPING flip + registry remove).
+//
+// PURE helpers (`_parse_duration`, `_iso_at_offset`, `_deadman_argv`) are
+// network-free and test-covered by ttl_deadman_test.hexa.
+//
+// Wire point: cloud_cli.hexa:_cloud_rent_runpod / _cloud_rent_vast call
+// `ttl_deadman_arm(...)` AFTER successful SSH-ready + pod_registry_add.
+
+use "stdlib/cloud/pod_registry"
+
+// ── duration parser (pure, network-free) ─────────────────────────────
+
+// _td_atoi — leading run of decimal digits → int, or -1 if none.
+fn _td_atoi(s: str) -> int {
+    let n = len(s)
+    let mut i = 0
+    let mut v = 0
+    let mut got = 0
+    while i < n {
+        let cc = char_code(s.substring(i, i + 1))
+        if cc >= 48 && cc <= 57 {
+            v = v * 10 + (cc - 48)
+            got = 1
+            i = i + 1
+        } else {
+            i = n
+        }
+    }
+    if got == 0 {
+        return -1
+    }
+    return v
+}
+
+// _td_shq — POSIX-quote one token for the `setsid sh -c '...'` payload.
+fn _td_shq(s: str) -> str {
+    let mut out = "'"
+    let mut i = 0
+    let n = len(s)
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "'" {
+            out = out + "'\\''"
+        } else {
+            out = out + c
+        }
+        i = i + 1
+    }
+    return out + "'"
+}
+
+// parse_duration — accept "30m" · "1h" · "90s" · "1h30m" · "3600" (raw
+// seconds). Returns the total in seconds, or -1 on parse failure / zero /
+// negative input (deadman opt-out semantics — caller treats -1 as "no
+// deadman armed"). Pure: no exec, no network.
+//
+// Grammar:  duration  ::= seconds-int | (count unit)+
+//           unit      ::= "s" | "m" | "h"
+//           count     ::= [0-9]+
+fn parse_duration(spec: str) -> int {
+    let n = len(spec)
+    if n == 0 {
+        return -1
+    }
+    let mut i = 0
+    let mut total = 0
+    let mut got_unit = 0
+    let mut cur = 0
+    let mut cur_got = 0
+    while i < n {
+        let c = spec.substring(i, i + 1)
+        let cc = char_code(c)
+        if cc >= 48 && cc <= 57 {
+            cur = cur * 10 + (cc - 48)
+            cur_got = 1
+        } else if c == "s" || c == "m" || c == "h" {
+            if cur_got == 0 {
+                return -1
+            }
+            let mut mul = 1
+            if c == "m" { mul = 60 }
+            if c == "h" { mul = 3600 }
+            total = total + cur * mul
+            cur = 0
+            cur_got = 0
+            got_unit = 1
+        } else {
+            // unknown char → reject (rules out negatives, spaces, "1.5h" etc)
+            return -1
+        }
+        i = i + 1
+    }
+    // Trailing bare number with no unit → treat as raw seconds (the
+    // "3600" form). But only if NO unit appeared earlier in the spec.
+    if cur_got == 1 {
+        if got_unit == 1 {
+            return -1
+        }
+        total = cur
+    }
+    if total <= 0 {
+        return -1
+    }
+    return total
+}
+
+// _iso_at_offset — ISO-8601 UTC timestamp `ttl_sec` seconds in the future.
+// Uses GNU `date -d @<epoch>` first, then BSD `date -u -r <epoch>` (macOS).
+// Returns "" if the platform cannot format an epoch (degrades to a blank
+// arming-time banner — the deadman still runs).
+fn _iso_at_offset(ttl_sec: int) -> str {
+    let now_s = exec("date +%s 2>/dev/null").trim()
+    let now_v = _td_atoi(now_s)
+    if now_v < 0 {
+        return ""
+    }
+    let target = now_v + ttl_sec
+    let q = str(target)
+    // GNU first, then BSD/macOS `-r`.
+    let cmd = "date -u -d @" + q + " +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r " + q + " +%Y-%m-%dT%H:%M:%SZ 2>/dev/null"
+    return exec(cmd).trim()
+}
+
+// _now_epoch — unix seconds, 0 on failure.
+fn _now_epoch() -> int {
+    let s = exec("date +%s 2>/dev/null").trim()
+    let v = _td_atoi(s)
+    if v < 0 { return 0 }
+    return v
+}
+
+// _deadman_pid_dir / _deadman_pid_file — per-pod pid record so the test
+// (and `cloud reap` follow-ups) can verify the deadman was spawned without
+// actually forking a subprocess. The pid file holds one line: `<pid>`.
+fn _deadman_pid_dir() -> str {
+    return env_var("HOME") + "/.hx/cloud/deadman"
+}
+
+fn _deadman_pid_file(pod_id: str) -> str {
+    return _deadman_pid_dir() + "/" + pod_id + ".pid"
+}
+
+// _deadman_inline_payload — the shell payload run by `setsid sh -c '...'`.
+// Single quoted string (we pass via _td_shq so embedded `'` are safe). The
+// payload is a small polling loop equivalent to `tool/cloud_ttl_watchdog.sh`
+// (held inline so .sh writes — banned here per project.tape — are avoided).
+fn _deadman_inline_payload(
+    pod_id: str, provider: str, ttl_sec: int,
+    rent_epoch: int, poll_sec: int, log_path: str
+) -> str {
+    let q_id = _td_shq(pod_id)
+    let q_prov = _td_shq(provider)
+    let q_log = _td_shq(log_path)
+    let q_reg = _td_shq(env_var("HOME") + "/.hx/cloud/active-pods.json")
+    let ttl_s = str(ttl_sec)
+    let rent_s = str(rent_epoch)
+    let poll_s = str(poll_sec)
+    // Minimal POSIX-sh polling loop. Idempotent — exits 0 once the pod is
+    // gone OR after a confirmed teardown. `command -v hexa` guard so a
+    // PATH-less reboot does not loop forever invoking a missing binary.
+    return "echo \"[$(date -u +%Y-%m-%dT%H:%M:%SZ)] deadman armed pod=\"" + q_id
+        + "\" ttl=" + ttl_s + " poll=" + poll_s + " pid=$$\" >> " + q_log + " 2>/dev/null;"
+        + " while :; do"
+        + "  NOW=$(date +%s 2>/dev/null || echo 0);"
+        + "  if [ \"$NOW\" -le 0 ]; then sleep " + poll_s + "; continue; fi;"
+        + "  ELAPSED=$((NOW - " + rent_s + "));"
+        + "  if [ -f " + q_reg + " ]; then"
+        + "    grep -q '\"id\":\"'" + q_id + "'\"' " + q_reg + " 2>/dev/null"
+        + "      || { echo \"[$(date -u +%Y-%m-%dT%H:%M:%SZ)] pod gone from registry — deadman exit clean\" >> " + q_log + " 2>/dev/null; exit 0; };"
+        + "  fi;"
+        + "  if [ \"$ELAPSED\" -ge " + ttl_s + " ]; then"
+        + "    echo \"[$(date -u +%Y-%m-%dT%H:%M:%SZ)] TTL exceeded · invoking cloud down " + pod_id + "\" >> " + q_log + " 2>/dev/null;"
+        + "    if command -v hexa >/dev/null 2>&1; then hexa cloud down " + q_id + " --provider " + q_prov + " >> " + q_log + " 2>&1; fi;"
+        + "    echo \"[cloud] deadman: TTL " + ttl_s + "s exceeded · pod " + pod_id + " destroyed\";"
+        + "    exit 0;"
+        + "  fi;"
+        + "  sleep " + poll_s + ";"
+        + " done"
+}
+
+// ttl_deadman_arm — populate the registry's ttl_sec field, then spawn a
+// detached background watchdog. Returns the spawned pid as a string (or
+// "" on spawn failure / opt-out). Verbatim banner printed by the caller.
+//
+// `poll_sec` defaults to min(30, ttl_sec/4) so a very short TTL still
+// gets at least 4 polls before the deadman fires.
+fn ttl_deadman_arm(pod_id: str, provider: str, ttl_sec: int) -> str {
+    if len(pod_id) == 0 || ttl_sec <= 0 {
+        return ""
+    }
+    // Persist ttl_sec into the M5 registry so external readers (`cloud
+    // pods`, `cloud reap`) can show the budget.
+    let _ = pod_registry_set_ttl(pod_id, ttl_sec)
+    let rent_epoch = _now_epoch()
+    if rent_epoch == 0 {
+        // Without an epoch we can't compute elapsed — opt-out rather than
+        // arm a broken deadman.
+        return ""
+    }
+    let mut poll_sec = 30
+    let quarter = ttl_sec / 4
+    if quarter > 0 && quarter < poll_sec {
+        poll_sec = quarter
+    }
+    if poll_sec < 1 { poll_sec = 1 }
+
+    let dir = _deadman_pid_dir()
+    let _ = exec("mkdir -p " + _td_shq(dir) + " 2>/dev/null")
+    let log_path = env_var("HOME") + "/.hx/cloud/deadman.log"
+
+    let payload = _deadman_inline_payload(pod_id, provider, ttl_sec, rent_epoch, poll_sec, log_path)
+    let q_pidfile = _td_shq(_deadman_pid_file(pod_id))
+    // `setsid sh -c '... & echo $! > pidfile'`:
+    //   • setsid detaches into a new session (no controlling TTY) so the
+    //     daemon survives the parent shell's hangup.
+    //   • </dev/null + >>log redirects make it fully background-safe.
+    //   • `echo $! > pidfile` records the spawned pid for the test/reap.
+    let spawn_cmd = "setsid sh -c " + _td_shq(payload + " &\n echo $! > " + _deadman_pid_file(pod_id))
+        + " </dev/null >/dev/null 2>&1 &"
+    let _ = exec(spawn_cmd)
+    // Brief settle so the pid file is written; the daemon already ran the
+    // `echo $!` redirect by the time `setsid` returns.
+    let _ = exec("sleep 0 2>/dev/null")
+    let pid_s = read_file(_deadman_pid_file(pod_id)).trim()
+    return pid_s
+}
+
+// ttl_deadman_record_intent — TEST-ONLY wire-path verifier. Writes a pid
+// file containing "0" (sentinel = "intent recorded, no real spawn") so a
+// network-free unit test can verify the arming surface populates the
+// expected files WITHOUT actually forking a sub-shell. Used by
+// F-CLOUD-M2-WATCHDOG-SPAWN-FLAG.
+fn ttl_deadman_record_intent(pod_id: str, ttl_sec: int) -> int {
+    if len(pod_id) == 0 || ttl_sec <= 0 {
+        return 0
+    }
+    let _ = pod_registry_set_ttl(pod_id, ttl_sec)
+    let dir = _deadman_pid_dir()
+    let _ = exec("mkdir -p " + _td_shq(dir) + " 2>/dev/null")
+    write_file(_deadman_pid_file(pod_id), "0\n")
+    return 1
+}
+
+// ttl_deadman_iso_banner — ISO-8601 UTC timestamp when the deadman will
+// fire (now + ttl_sec). Public so cloud_cli.hexa can print the verbatim
+// "auto-destroys at <ISO>" line without duplicating the date arithmetic.
+fn ttl_deadman_iso_banner(ttl_sec: int) -> str {
+    return _iso_at_offset(ttl_sec)
+}

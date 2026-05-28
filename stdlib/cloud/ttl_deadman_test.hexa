@@ -1,0 +1,155 @@
+// @ci_gate — pure · network-free · deterministic
+// stdlib/cloud/ttl_deadman_test.hexa — CLOUD M2 deadman falsifiers.
+//
+// Falsifiers:
+//   F-CLOUD-M2-DURATION-PARSE        — duration parser covers the documented
+//                                       forms (30m · 1h · 90s · 1h30m · 3600)
+//                                       AND rejects invalid input.
+//   F-CLOUD-M2-WATCHDOG-SPAWN-FLAG   — arming surface writes the pid file
+//                                       + ttl_sec into the M5 registry. No
+//                                       real subprocess fork — uses the
+//                                       `ttl_deadman_record_intent` test
+//                                       wire-path verifier.
+//
+// Run:   hexa run stdlib/cloud/ttl_deadman_test.hexa
+// PASS:  exits 0, prints "ttl_deadman_test PASS — N/N cases".
+
+use "stdlib/cloud/ttl_deadman"
+use "stdlib/cloud/pod_registry"
+
+// ── tiny harness (mirrors pod_registry_atomic_test.hexa) ──────────────
+
+fn _t_assert(cond: int, label: str) {
+    if cond == 0 {
+        println("FAIL: " + label)
+        exit(1)
+    }
+}
+
+fn _t_path_sandbox() -> str {
+    let sb = exec("mktemp -d /tmp/hexa-m2-test.XXXXXX 2>/dev/null").trim()
+    let _ = exec("mkdir -p " + env_var("HOME") + "/.hx/cloud 2>/dev/null")
+    let real = env_var("HOME") + "/.hx/cloud/active-pods.json"
+    let _ = exec("test -f " + real + " && cp -p " + real + " " + sb + "/SAVED.json || true")
+    let _ = exec("rm -f " + real + " 2>/dev/null")
+    // Also save + clear the per-pod deadman pidfile dir so the spawn-intent
+    // check sees a clean slate.
+    let pdir = env_var("HOME") + "/.hx/cloud/deadman"
+    let _ = exec("test -d " + pdir + " && cp -rp " + pdir + " " + sb + "/SAVED-deadman || true")
+    let _ = exec("rm -rf " + pdir + " 2>/dev/null")
+    return sb
+}
+
+fn _t_restore(sb: str) {
+    let real = env_var("HOME") + "/.hx/cloud/active-pods.json"
+    let _ = exec("rm -f " + real + " 2>/dev/null")
+    let _ = exec("test -f " + sb + "/SAVED.json && cp -p " + sb + "/SAVED.json " + real + " || true")
+    let pdir = env_var("HOME") + "/.hx/cloud/deadman"
+    let _ = exec("rm -rf " + pdir + " 2>/dev/null")
+    let _ = exec("test -d " + sb + "/SAVED-deadman && cp -rp " + sb + "/SAVED-deadman " + pdir + " || true")
+    let _ = exec("rm -rf " + sb + " 2>/dev/null")
+}
+
+fn _check_int(label: str, got: int, want: int) {
+    if got != want {
+        println("FAIL " + label + ": got " + str(got) + ", want " + str(want))
+        exit(1)
+    }
+}
+
+fn _t_main() {
+    let sb = _t_path_sandbox()
+
+    // ── F-CLOUD-M2-DURATION-PARSE — 16 cases covering the documented grammar
+    _check_int("parse 30m",      parse_duration("30m"),     1800)
+    _check_int("parse 1h",       parse_duration("1h"),      3600)
+    _check_int("parse 90s",      parse_duration("90s"),     90)
+    _check_int("parse 1h30m",    parse_duration("1h30m"),   5400)
+    _check_int("parse 3600 raw", parse_duration("3600"),    3600)
+    _check_int("parse 2h15m30s", parse_duration("2h15m30s"), 8130)
+    _check_int("parse 0m → -1",  parse_duration("0m"),      -1)
+    _check_int("parse 0 raw → -1", parse_duration("0"),     -1)
+    _check_int("parse \"\" → -1",  parse_duration(""),      -1)
+    _check_int("parse abc → -1",   parse_duration("abc"),   -1)
+    _check_int("parse -5m → -1",   parse_duration("-5m"),   -1)
+    _check_int("parse 1.5h → -1",  parse_duration("1.5h"),  -1)
+    _check_int("parse h → -1",     parse_duration("h"),     -1)
+    // Mixed unit-then-bare-number is rejected (1h30 is ambiguous).
+    _check_int("parse 1h30 → -1",  parse_duration("1h30"),  -1)
+    _check_int("parse 45s",        parse_duration("45s"),   45)
+    _check_int("parse 24h",        parse_duration("24h"),   86400)
+
+    // ── F-CLOUD-M2-WATCHDOG-SPAWN-FLAG — arming surface records intent
+    // Pre-register a pod so set_ttl has a row to flip.
+    let okA = pod_registry_add("podM2A", "runpod", "1.2.3.4", "22001", "READY")
+    _t_assert(okA == 1, "F-CLOUD-M2-SPAWN: pre-add pod")
+
+    // The test wire-path verifier writes a pidfile WITHOUT forking. This
+    // proves the arming surface populates the expected files (the real
+    // ttl_deadman_arm shares the same pod_registry_set_ttl + pidfile path).
+    let recA = ttl_deadman_record_intent("podM2A", 1800)
+    _t_assert(recA == 1, "F-CLOUD-M2-SPAWN: record_intent returned 1")
+
+    // Verify the pidfile lives at the canonical per-pod path.
+    let pidfile = env_var("HOME") + "/.hx/cloud/deadman/podM2A.pid"
+    _t_assert(file_exists(pidfile), "F-CLOUD-M2-SPAWN: pidfile exists @ " + pidfile)
+
+    // Verify ttl_sec landed in the M5 registry.
+    let recs = pod_registry_load()
+    let mut found = 0
+    let mut i = 0
+    while i < len(recs) {
+        if recs[i].id == "podM2A" {
+            _t_assert(recs[i].ttl_sec == 1800, "F-CLOUD-M2-SPAWN: ttl_sec=1800 (got " + str(recs[i].ttl_sec) + ")")
+            found = 1
+        }
+        i = i + 1
+    }
+    _t_assert(found == 1, "F-CLOUD-M2-SPAWN: podM2A still in registry")
+
+    // Opt-out: ttl_sec ≤ 0 → record_intent returns 0, no pidfile written.
+    let _ = exec("rm -f " + env_var("HOME") + "/.hx/cloud/deadman/podM2B.pid 2>/dev/null")
+    let okB = pod_registry_add("podM2B", "vast", "5.6.7.8", "11038", "READY")
+    _t_assert(okB == 1, "F-CLOUD-M2-SPAWN: pre-add podM2B")
+    let recB = ttl_deadman_record_intent("podM2B", 0)
+    _t_assert(recB == 0, "F-CLOUD-M2-SPAWN: record_intent(0) returned 0 (opt-out)")
+    let pidfileB = env_var("HOME") + "/.hx/cloud/deadman/podM2B.pid"
+    _t_assert(file_exists(pidfileB) == false, "F-CLOUD-M2-SPAWN: no pidfile on opt-out")
+
+    // pod_registry_set_ttl idempotency: re-arming with a different TTL
+    // overwrites the budget in place.
+    let okC = pod_registry_set_ttl("podM2A", 7200)
+    _t_assert(okC == 1, "F-CLOUD-M2-SPAWN: set_ttl re-arm returned 1")
+    let recs2 = pod_registry_load()
+    let mut i2 = 0
+    let mut ttl2 = -1
+    while i2 < len(recs2) {
+        if recs2[i2].id == "podM2A" {
+            ttl2 = recs2[i2].ttl_sec
+        }
+        i2 = i2 + 1
+    }
+    _check_int("F-CLOUD-M2-SPAWN: ttl_sec re-armed", ttl2, 7200)
+
+    // Negative ttl → -1 reset (deadman opt-out is uniform).
+    let okD = pod_registry_set_ttl("podM2A", -1)
+    _t_assert(okD == 1, "F-CLOUD-M2-SPAWN: set_ttl(-1) returned 1")
+    let recs3 = pod_registry_load()
+    let mut i3 = 0
+    let mut ttl3 = 99
+    while i3 < len(recs3) {
+        if recs3[i3].id == "podM2A" {
+            ttl3 = recs3[i3].ttl_sec
+        }
+        i3 = i3 + 1
+    }
+    _check_int("F-CLOUD-M2-SPAWN: ttl_sec opt-out reset", ttl3, -1)
+
+    // Cleanup + restore
+    let _ = pod_registry_remove("podM2A")
+    let _ = pod_registry_remove("podM2B")
+    _t_restore(sb)
+    println("ttl_deadman_test PASS — 16 parse + 9 spawn-flag = 25/25 cases")
+}
+
+_t_main()

@@ -9,6 +9,7 @@
 use "stdlib/cloud/cloud"
 use "stdlib/cloud/pod_registry"
 use "stdlib/cloud/preflight"
+use "stdlib/cloud/ttl_deadman"
 use "stdlib/cloud/watchdog"
 use "stdlib/cloud/vast"
 use "stdlib/cloud/runpod"
@@ -19,9 +20,10 @@ fn _cloud_help() {
     println("hexa cloud — structured-argv remote dispatch (cycle A)")
     println("")
     println("usage:")
-    println("  cloud rent <provider> [--gpu T] [--image IMG] [--disk GiB] [--owner TAG] [--query Q] [--max-wait-sec N]")
+    println("  cloud rent <provider> [--gpu T] [--image IMG] [--disk GiB] [--owner TAG] [--query Q] [--max-wait-sec N] [--ttl DUR]")
     println("                                                         provision a GPU pod (vast|runpod), wait ssh-ready, print host:port + id (alias: up)")
     println("                                                         --max-wait-sec N (default 180): bounded SSH-readiness gate; on timeout the rent auto-tears the billing pod down + exits 2 with verbatim verdict (M5 sigil: SSH-never-ready leak guard)")
+    println("                                                         --ttl DUR (M2): arm a detached deadman watchdog (setsid sh -c · agent-crash-safe); pod auto-destroys when wall ≥ DUR. forms: 30m · 1h · 90s · 1h30m · 3600 (raw seconds). 0/neg/absent = no deadman armed.")
     println("  cloud down <id> [--provider P]                         destroy a pod + forget it from the registry (alias: destroy)")
     println("  cloud list [--provider P]                              list live pods (vast + runpod, or one via --provider)")
     println("  cloud status [--provider P]                            alias of list")
@@ -703,6 +705,11 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
     // unbounded (opt-in). Caps the rent so a ghost-RUNNING pod whose ssh
     // transport never comes up (exit 255 forever) can't bleed billing.
     let max_wait_sec = _cli_atoi(_flag_val(av, start, "--max-wait-sec", "180"))
+    // M2 — pod TTL deadman. Default "" = no deadman armed. Parser accepts
+    // 30m · 1h · 90s · 1h30m · 3600 (raw sec). Invalid / 0 / negative → -1
+    // (no deadman; verbatim contract — opt-in only).
+    let ttl_spec = _flag_val(av, start, "--ttl", "")
+    let ttl_sec = parse_duration(ttl_spec)
     let mut disk_gb = disk
     if disk_gb <= 0 {
         disk_gb = 30
@@ -770,6 +777,12 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
     }
     println("[cloud] rent vast: READY " + ssh.host + ":" + ssh.port + " (root@" + ssh.host + " -p " + ssh.port + ")")
     let _ = pod_registry_add(inst.instance_id, "vast", ssh.host, ssh.port, "READY")
+    // M2 — arm the TTL deadman if --ttl parsed. Verbatim banner per spec.
+    if ttl_sec > 0 {
+        let _pid = ttl_deadman_arm(inst.instance_id, "vast", ttl_sec)
+        let _iso = ttl_deadman_iso_banner(ttl_sec)
+        println("[cloud] rent: TTL deadman armed · pod " + inst.instance_id + " auto-destroys at " + _iso)
+    }
     // #1155 zero-flag: write the bare-IP Host block → ~/.ssh/config so a later
     // `cloud run root@<ip>` (or raw ssh) presents the vast key with no
     // --identity. No-op when no vast key is available (graceful).
@@ -804,6 +817,9 @@ fn _cloud_rent_runpod(av: [str], start: int) -> int {
     // RunPod H100 SXM dump (pod RUNNING + ssh exit 255 forever) is the
     // motivating incident; without a cap a dead-ssh pod bleeds billing.
     let max_wait_sec = _cli_atoi(_flag_val(av, start, "--max-wait-sec", "180"))
+    // M2 — pod TTL deadman (see _cloud_rent_vast for the parser contract).
+    let ttl_spec = _flag_val(av, start, "--ttl", "")
+    let ttl_sec = parse_duration(ttl_spec)
     let pod = runpod_create(api_key, gpu, image, pubkey, owner)
     if pod.ok == 0 {
         println("[cloud] rent runpod: " + pod.message)
@@ -848,6 +864,12 @@ fn _cloud_rent_runpod(av: [str], start: int) -> int {
     }
     println("[cloud] rent runpod: READY " + port.ip + ":" + port.port + " (root@" + port.ip + " -p " + port.port + ")")
     let _ = pod_registry_add(pod.pod_id, "runpod", port.ip, port.port, "READY")
+    // M2 — arm the TTL deadman if --ttl parsed. Verbatim banner per spec.
+    if ttl_sec > 0 {
+        let _pid = ttl_deadman_arm(pod.pod_id, "runpod", ttl_sec)
+        let _iso = ttl_deadman_iso_banner(ttl_sec)
+        println("[cloud] rent: TTL deadman armed · pod " + pod.pod_id + " auto-destroys at " + _iso)
+    }
     println("pod_id=" + pod.pod_id)
     println("host=" + port.ip)
     println("port=" + port.port)
@@ -1024,7 +1046,7 @@ fn main() {
         return
     }
     if sub == "version" || sub == "--version" || sub == "-v" {
-        println("hexa cloud 0.4.1 — M1 `rent --max-wait-sec N` bounded SSH-readiness gate (default 180s) · timeout → auto-teardown + exit 2 + verbatim verdict (no more ssh-never-ready billing leak) · [0.4.0: nohup/fire --register + ghost-pod L2-auto · 0.3.4: resolve alias · 0.3.3: vast-key ssh-config autoinject · 0.3.2: --identity · 0.3.1: registry guard · 0.3.0: dft-run]")
+        println("hexa cloud 0.4.2 — M2 `rent --ttl <dur>` pod TTL deadman watchdog (detached setsid · agent-crash-safe; forms 30m·1h·90s·1h30m·3600) — pod auto-destroys when wall ≥ TTL · [0.4.1: M1 max-wait-sec bounded SSH-readiness · 0.4.0: nohup/fire --register · 0.3.4: resolve alias · 0.3.3: vast-key ssh-config autoinject · 0.3.2: --identity · 0.3.1: registry guard · 0.3.0: dft-run]")
         return
     }
     if sub == "rent" || sub == "up" {
@@ -1033,7 +1055,7 @@ fn main() {
         // lifecycle fns + pod_registry. $-INCURRING — the only verb that
         // creates a billing instance.
         if si + 1 >= len(av) {
-            println("[cloud] rent: missing <provider> — usage: cloud rent <vast|runpod> [--gpu T] [--image IMG] [--disk GiB] [--owner TAG] [--query Q] [--max-wait-sec N]")
+            println("[cloud] rent: missing <provider> — usage: cloud rent <vast|runpod> [--gpu T] [--image IMG] [--disk GiB] [--owner TAG] [--query Q] [--max-wait-sec N] [--ttl DUR]")
             exit(2)
         }
         let provider = av[si + 1]

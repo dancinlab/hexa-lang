@@ -851,6 +851,39 @@ fn pod_registry_update_status(pod_id: str, status: str) -> int {
     return 1
 }
 
+// pod_registry_set_ttl — populate the M2 ttl_sec budget on an existing
+// pod row (deadman watchdog uses this immediately after pod_registry_add).
+// Negative / zero values reset the field to "unset" (-1) so the deadman
+// opt-out semantics are uniform with the rent-side --ttl parser.
+// Returns 1 on a successful write, 0 when `pod_id` is absent.
+fn pod_registry_set_ttl(pod_id: str, ttl_sec: int) -> int {
+    if len(pod_id) == 0 {
+        return 0
+    }
+    let mut records = pod_registry_load()
+    let idx = _m5_find(records, pod_id)
+    if idx < 0 {
+        return 0
+    }
+    let prev = records[idx]
+    let mut ttl = ttl_sec
+    if ttl <= 0 { ttl = -1 }
+    records[idx] = PodRecord {
+        id: prev.id,
+        provider: prev.provider,
+        created_at: prev.created_at,
+        rented_by: prev.rented_by,
+        ssh_host: prev.ssh_host,
+        ssh_port: prev.ssh_port,
+        status: prev.status,
+        ttl_sec: ttl,
+        max_cost_usd: prev.max_cost_usd,
+        cumulative_cost_usd: prev.cumulative_cost_usd
+    }
+    _m5_write_atomic(records)
+    return 1
+}
+
 // pod_registry_remove — drop a pod from the registry (confirmed teardown).
 // Returns 1 on a successful removal, 0 if `pod_id` is absent.
 fn pod_registry_remove(pod_id: str) -> int {
