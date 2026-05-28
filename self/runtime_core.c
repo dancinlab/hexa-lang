@@ -1278,10 +1278,48 @@ static inline HexaVal hexa_call4(HexaVal f, HexaVal a1, HexaVal a2, HexaVal a3, 
 
 // ── Constructors ─────────────────────────────────────────
 
+// F3 ACTIVATION RUNBOOK · Path A — HexaVal struct-return ctor self-emit slots
+// (B9.6 class-D, the FIRST x0:x1 register-pair self-emit increment).
+//
+// Each of hexa_int / hexa_bool / hexa_void returns a 16-byte HexaVal BY VALUE;
+// on AAPCS arm64 that is the x0:x1 register PAIR (NRRP — no hidden x8 pointer).
+// x0 = the tag (low 8 B), x1 = the union value (high 8 B). Every prior
+// self-emit leaf returns a single x0 scalar — these are the first emitters
+// of the struct-return sequence, the infra that unblocks the ~350-450
+// HexaVal-producing class-D primitives.
+//
+// DEFAULT build (HEXA_RT_SELFEMIT undefined): the direct C aggregate-literal
+// bodies below are used — clang inlines them at internal call sites and the
+// driver/module_loader extern set is UNCHANGED (0-libc-extern invariant; these
+// were never libc symbols). This is the unchanged behavior.
+//
+// SELF-EMIT build (HEXA_RT_SELFEMIT defined): each becomes an `extern`
+// declaration (no body here); the strong external `_hexa_int` / `_hexa_bool`
+// / `_hexa_void` symbols are provided by the hexa-emitted Mach-O .o
+// (test/native_build/emit_hexa_val_ctors_o.hexa → rt_hexa_void/int/bool's
+// 12-byte x0:x1 sequences), ahead-linked. ld64 binds every callsite to the
+// self-emitted bytes — verified byte-identical to `as -arch arm64` AND
+// JIT-exec-correct (the returned {tag,value} reads back correct for all
+// inputs incl. INT64_MIN/MAX, bool 0/1; see the emit driver's §HONESTY).
+//
+// hexa_float stays C for now — its struct high half comes from a `fmov x1,d0`
+// (FP-arg) path, a separate self-emit increment.
+#ifdef HEXA_RT_SELFEMIT
+extern HexaVal hexa_int(int64_t n);
+#else
 HexaVal hexa_int(int64_t n) { return (HexaVal){.tag=TAG_INT, .i=n}; }
+#endif
 HexaVal hexa_float(double f) { return (HexaVal){.tag=TAG_FLOAT, .f=f}; }
+#ifdef HEXA_RT_SELFEMIT
+extern HexaVal hexa_bool(int b);
+#else
 HexaVal hexa_bool(int b) { return (HexaVal){.tag=TAG_BOOL, .b=b}; }
+#endif
+#ifdef HEXA_RT_SELFEMIT
+extern HexaVal hexa_void(void);
+#else
 HexaVal hexa_void() { return (HexaVal){.tag=TAG_VOID}; }
+#endif
 
 // PR-2.1 (enum-to-string-codegen-emit RFC, stack PR-2/3, 2026-05-24): live
 // constructor for a single migrated unit-variant enum (Direction). `display`

@@ -2542,6 +2542,113 @@ fn rt_arena_release() {
     return c
 }
 
+// ── HexaVal struct-return constructors (B9.6 / F3 class-D) ────
+//
+// FIRST class-D increment: the runtime's universal value constructors
+// (hexa_int / hexa_bool / hexa_void at runtime_core.c:1281-1284) each
+// return a 16-byte `HexaVal` tagged-union BY VALUE. On AAPCS arm64 a
+// ≤16-byte aggregate is returned in the x0:x1 register PAIR (NRRP — no
+// hidden x8 indirect-result pointer). Every prior self-emit leaf in
+// this file returns a single x0 scalar; THESE are the first emitters
+// of the x0:x1 struct-return sequence — the infra that unblocks the
+// ~350-450 HexaVal-producing class-D primitives.
+//
+// ── HexaVal layout (self/runtime.h:79-92, sizeof 16) ──
+//   struct { HexaTag tag; union { int64_t i; double f; int b; char* s; ... }; }
+//   offset 0..8  : tag        (HexaTag enum; low 32 bits = tag value)
+//   offset 8..16 : union value
+// Returned as: x0 = low 8 bytes (tag), x1 = high 8 bytes (union value).
+//
+// ── HexaTag enum values (self/runtime.h:39-52) ──
+//   TAG_INT=0  TAG_FLOAT=1  TAG_BOOL=2  TAG_STR=3  TAG_VOID=4  ...
+//
+// The exact x0:x1 sequences below were VERIFIED against clang -O2 -S of
+// the actual runtime_core.c ctors and assembled with `as -arch arm64`
+// (byte encodings confirmed via otool). Each is a 3-instruction leaf
+// (no prologue — pure register moves + ret); no stack, no relocation,
+// no arena state. The ONLY new ABI vs prior leaves is that x1 is set
+// (the struct high half) in addition to x0.
+
+// ── rt_hexa_void ─────────────────────────────────────────────
+// hexa_void() -> HexaVal{tag=TAG_VOID(4)}. Simplest class-D ctor:
+// zero args, both halves are compile-time constants.
+//   clang -O2 -S:  mov w0, #4 ; mov x1, #0 ; ret
+//   x0 = 4 (TAG_VOID, tag half) · x1 = 0 (union half, unused/zero)
+// 3 instructions, 12 bytes.
+fn rt_hexa_void() {
+    let mut c = []
+    // mov w0, #4   (tag = TAG_VOID)   0x52800080
+    c.push(128)
+    c.push(0)
+    c.push(128)
+    c.push(82)
+    // mov x1, #0   (union half = 0)   0xD2800001
+    c.push(1)
+    c.push(0)
+    c.push(128)
+    c.push(210)
+    // ret                             0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
+// ── rt_hexa_int ──────────────────────────────────────────────
+// hexa_int(int64_t n) -> HexaVal{tag=TAG_INT(0), .i=n}. The int arg
+// arrives in x0; the result needs tag(=0) in x0 and the value in x1.
+//   clang -O2 -S:  mov x1, x0 ; mov x0, #0 ; ret
+//   x1 = n (union half = .i) · x0 = 0 (TAG_INT, tag half)
+// Order matters: x1<-x0 BEFORE x0<-#0 (else the arg is clobbered).
+// 3 instructions, 12 bytes.
+fn rt_hexa_int() {
+    let mut c = []
+    // mov x1, x0   (union half = n)   0xAA0003E1
+    c.push(225)
+    c.push(3)
+    c.push(0)
+    c.push(170)
+    // mov x0, #0   (tag = TAG_INT)    0xD2800000
+    c.push(0)
+    c.push(0)
+    c.push(128)
+    c.push(210)
+    // ret                             0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
+// ── rt_hexa_bool ─────────────────────────────────────────────
+// hexa_bool(int b) -> HexaVal{tag=TAG_BOOL(2), .b=b}. The int arg
+// arrives in w0; the result needs tag(=2) in x0 and the value in x1.
+//   clang -O2 -S:  mov w1, w0 ; mov w0, #2 ; ret
+//   x1 = b (union half = .b, 32-bit move zero-extends) · x0 = 2 (TAG_BOOL)
+// Order matters: w1<-w0 BEFORE w0<-#2 (else the arg is clobbered).
+// 3 instructions, 12 bytes.
+fn rt_hexa_bool() {
+    let mut c = []
+    // mov w1, w0   (union half = b)   0x2A0003E1
+    c.push(225)
+    c.push(3)
+    c.push(0)
+    c.push(42)
+    // mov w0, #2   (tag = TAG_BOOL)   0x52800040
+    c.push(64)
+    c.push(0)
+    c.push(128)
+    c.push(82)
+    // ret                             0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
 // ── self-test ────────────────────────────────────────────────
 
 fn test_runtime_arm64() {
@@ -2571,6 +2678,10 @@ fn test_runtime_arm64() {
     let aalloc = rt_arena_alloc()
     let areset = rt_arena_reset()
     let arel = rt_arena_release()
+    // B9.6 / F3 class-D — HexaVal struct-return constructors (x0:x1 pair).
+    let hvoid = rt_hexa_void()
+    let hint = rt_hexa_int()
+    let hbool = rt_hexa_bool()
 
     println("runtime_arm64 — ARM64 machine code byte arrays")
     println("  rt_exit          : " + to_string(len(exit_bytes)) + " bytes")
@@ -2599,6 +2710,9 @@ fn test_runtime_arm64() {
     println("  rt_arena_alloc   : " + to_string(len(aalloc)) + " bytes")
     println("  rt_arena_reset   : " + to_string(len(areset)) + " bytes")
     println("  rt_arena_release : " + to_string(len(arel)) + " bytes")
+    println("  rt_hexa_void     : " + to_string(len(hvoid)) + " bytes")
+    println("  rt_hexa_int      : " + to_string(len(hint)) + " bytes")
+    println("  rt_hexa_bool     : " + to_string(len(hbool)) + " bytes")
 
     // Verify sizes match expected instruction counts * 4
     let mut ok = true
@@ -2659,6 +2773,15 @@ fn test_runtime_arm64() {
     // Spec constraint: rt_arena_alloc must be < 64 bytes (hot path)
     if len(aalloc) >= 64 { println("  FAIL: rt_arena_alloc must be < 64 bytes"); ok = false }
 
+    // B9.6 / F3 class-D — HexaVal struct-return ctors are each a 3-instr
+    // (12 B) leaf emitting the x0:x1 register-pair return:
+    //   rt_hexa_void  mov w0,#4 / mov x1,#0  / ret  (tag=TAG_VOID, val=0)
+    //   rt_hexa_int   mov x1,x0 / mov x0,#0  / ret  (tag=TAG_INT,  val=x0)
+    //   rt_hexa_bool  mov w1,w0 / mov w0,#2  / ret  (tag=TAG_BOOL, val=w0)
+    if len(hvoid) != 12 { println("  FAIL: rt_hexa_void expected 12, got " + to_string(len(hvoid))); ok = false }
+    if len(hint) != 12 { println("  FAIL: rt_hexa_int expected 12, got " + to_string(len(hint))); ok = false }
+    if len(hbool) != 12 { println("  FAIL: rt_hexa_bool expected 12, got " + to_string(len(hbool))); ok = false }
+
     // Verify all sizes are multiples of 4 (ARM64 fixed-width)
     if len(exit_bytes) % 4 != 0 { println("  FAIL: rt_exit not aligned"); ok = false }
     if len(pstr) % 4 != 0 { println("  FAIL: rt_print_str not aligned"); ok = false }
@@ -2686,6 +2809,9 @@ fn test_runtime_arm64() {
     if len(aalloc) % 4 != 0 { println("  FAIL: rt_arena_alloc not aligned"); ok = false }
     if len(areset) % 4 != 0 { println("  FAIL: rt_arena_reset not aligned"); ok = false }
     if len(arel) % 4 != 0 { println("  FAIL: rt_arena_release not aligned"); ok = false }
+    if len(hvoid) % 4 != 0 { println("  FAIL: rt_hexa_void not aligned"); ok = false }
+    if len(hint) % 4 != 0 { println("  FAIL: rt_hexa_int not aligned"); ok = false }
+    if len(hbool) % 4 != 0 { println("  FAIL: rt_hexa_bool not aligned"); ok = false }
 
     // Verify RET trailer: last 4 bytes = 192, 3, 95, 214 (0xD65F03C0)
     // (except rt_exit which ends with svc)
@@ -2742,6 +2868,13 @@ fn test_runtime_arm64() {
     if areset[na3 - 4] != 192 { println("  FAIL: rt_arena_reset no RET"); ok = false }
     let na4 = len(arel)
     if arel[na4 - 4] != 192 { println("  FAIL: rt_arena_release no RET"); ok = false }
+    // B9.6 / F3 class-D — all three struct-return ctors end with ret.
+    let nhv = len(hvoid)
+    if hvoid[nhv - 4] != 192 { println("  FAIL: rt_hexa_void no RET"); ok = false }
+    let nhi = len(hint)
+    if hint[nhi - 4] != 192 { println("  FAIL: rt_hexa_int no RET"); ok = false }
+    let nhb = len(hbool)
+    if hbool[nhb - 4] != 192 { println("  FAIL: rt_hexa_bool no RET"); ok = false }
 
     // Verify SVC trailer on rt_exit: last 4 bytes = 1, 16, 0, 212 (0xD4001001)
     let ne = len(exit_bytes)
@@ -3123,6 +3256,44 @@ fn test_runtime_arm64() {
         ibs = ibs + 1
     }
     if !found_bswap_rev { println("  FAIL: rt_bswap missing rev x0, x0"); ok = false }
+
+    // ── B9.6 / F3 class-D — struct-return x0:x1 signature checks ──
+    // The defining feature vs every prior single-x0 leaf is that the
+    // HIGH half of the 16-byte HexaVal is set in x1. We assert the
+    // exact tag-half AND value-half instruction bytes per ctor.
+
+    // rt_hexa_void: mov w0, #4 (tag=TAG_VOID) at offset 0
+    //   0x52800080 → little-endian bytes 128, 0, 128, 82.
+    if hvoid[0] != 128 || hvoid[1] != 0 || hvoid[2] != 128 || hvoid[3] != 82 {
+        println("  FAIL: rt_hexa_void missing mov w0,#4 (TAG_VOID tag half)"); ok = false
+    }
+    // rt_hexa_void: mov x1, #0 (union half = 0) at offset 4
+    //   0xD2800001 → little-endian bytes 1, 0, 128, 210.
+    if hvoid[4] != 1 || hvoid[5] != 0 || hvoid[6] != 128 || hvoid[7] != 210 {
+        println("  FAIL: rt_hexa_void missing mov x1,#0 (struct high half)"); ok = false
+    }
+
+    // rt_hexa_int: mov x1, x0 (union half = .i = arg) at offset 0
+    //   0xAA0003E1 → little-endian bytes 225, 3, 0, 170.
+    if hint[0] != 225 || hint[1] != 3 || hint[2] != 0 || hint[3] != 170 {
+        println("  FAIL: rt_hexa_int missing mov x1,x0 (struct high half = arg)"); ok = false
+    }
+    // rt_hexa_int: mov x0, #0 (tag=TAG_INT) at offset 4
+    //   0xD2800000 → little-endian bytes 0, 0, 128, 210.
+    if hint[4] != 0 || hint[5] != 0 || hint[6] != 128 || hint[7] != 210 {
+        println("  FAIL: rt_hexa_int missing mov x0,#0 (TAG_INT tag half)"); ok = false
+    }
+
+    // rt_hexa_bool: mov w1, w0 (union half = .b = arg) at offset 0
+    //   0x2A0003E1 → little-endian bytes 225, 3, 0, 42.
+    if hbool[0] != 225 || hbool[1] != 3 || hbool[2] != 0 || hbool[3] != 42 {
+        println("  FAIL: rt_hexa_bool missing mov w1,w0 (struct high half = arg)"); ok = false
+    }
+    // rt_hexa_bool: mov w0, #2 (tag=TAG_BOOL) at offset 4
+    //   0x52800040 → little-endian bytes 64, 0, 128, 82.
+    if hbool[4] != 64 || hbool[5] != 0 || hbool[6] != 128 || hbool[7] != 82 {
+        println("  FAIL: rt_hexa_bool missing mov w0,#2 (TAG_BOOL tag half)"); ok = false
+    }
 
     if ok {
         println("  ALL CHECKS PASS")
