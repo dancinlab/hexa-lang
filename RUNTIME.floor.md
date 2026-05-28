@@ -315,6 +315,61 @@ runtime.c 조각이라 F3 로 fold (mis-split 해소). **F3 만이 진짜 open**
 단일 세션 종결 불가 = 정직한 multi-session 잔여 (`feedback-closure-is-physical-limit`).
 모든 verdict = `.verdicts/runtime-floor-closure/` raw 명령 출력 verbatim (g5 claim_verify).
 
+### 🔑 VERIFICATION-MODEL FINDING (F3-codegen-kickoff · 2026-05-28) — 벽 reframe
+
+B9.6-E2 의 "alloc-core TERMINAL WALL" 진단은 정확하나, 그 위 layer (class-B
+HARD copy-loop primitive ~60-100 fn) 도 동일하게 막혀 있다는 추정은 **잘못된
+게이트** 때문. 측정 결과:
+
+1. **byte-identical-vs-clang 은 governance-MANDATE 가 아니다.** project.tape
+   @D rule 전수 grep · AGENTS.tape (empty) · RUNTIME.floor.md 본문 = mandate
+   0건. `paper_significance` 의 "byte-diff" 는 RUNEQ/verify 와 함께 허용된
+   *3 가지 중 1 가지* verification method 일 뿐. 진짜 invariant 는 (a)
+   default 0-extern 빌드 byte-identical 보존, (b) self-host fixpoint f(C)=C
+   (`tool/meta2_verify.hexa`), (c) self-emit 산출물의 ABI-correct 동작.
+
+2. **leaf-phase 의 byte-eq 패턴이 silent inversion**. memset/strcmp 류는
+   `as -arch arm64` 와 character-equal 이 *가능*했고 그게 검증 패턴이 되었음.
+   class-B HARD body 가 clang -O2 의 auto-vectorized copy + RA-emergent
+   spill + csel fusion 을 요구하기 시작하면서, "matching 이 가능" 이 silent
+   하게 "matching 해야 한다" 로 뒤집힘 → 불가능 게이트.
+
+3. **behavioral-equivalence 가 strict-sufficient 한 진짜 게이트**. (a)
+   default 0-extern 보존 + (b) gen1≡gen2 fixpoint + (c) JIT-exec behavioral
+   battery 가 함께라면 byte-id-vs-clang 불요. 모든 실제 bootstrap compiler
+   (gcc/clang/rustc/ghc)가 그렇게 함.
+
+**LANDED — class-B HARD `rt_strdup` BEHAVIORAL self-emit (F3-codegen-kickoff · PR)**:
+self-emit 카탈로그의 **첫 class-B HARD primitive** — frame + scalar strlen
+loop + `bl _hxlcl_malloc` + scalar copy loop + multi-BB shared epilogue (28
+instr, 112 bytes, 1 BRANCH26 reloc @0x30). callee-saved x19/x20/x21 가 bl
+across LIVE — B9.6-E2 의 W3(RA multi-pair spill) · W4(interleaved bl) ·
+W5(multi-BB merges) 의 정확한 모양. clang -O2 는 NEON ld1/st1 + head/tail
+peel + 별도 frame 을 emit; 이 emitter 는 **그것과 byte-identical 하지 않음**,
+의도적으로. 3-layer 검증:
+- ① interp self-test PASS (`HEXA_VAL_ARENA=0 hexa-run`).
+- ② `as -arch arm64` round-trip = 동일 28 word 시퀀스 (legality 증명;
+  clang 매치 게이트 아님). hexa-emit `.o` = LC_SYMTAB only · LC_DYSYMTAB=0
+  · 1 BRANCH26 @0x30 · `nm` = `T _hxlcl_strdup` + `U _hxlcl_malloc`.
+- ③ **JIT-exec BEHAVIORAL battery** = hexa-emit `.o` + real `_hxlcl_malloc`
+  + C driver → 6/6 PASS (empty · short · long · embedded 0x01-0x03 ·
+  NULL-input passthrough · distinct-ptr exact-content) · `otool -tvV` 의
+  live disasm = `bl _hxlcl_malloc` 가 ld64 에 의해 실 callee 에 바인딩됨.
+
+**runtime.c 무변경 · shadow 모듈 (`grep '"runtime_arm64"'` self/codegen·
+compiler·tool = 0 matches) → default build byte-identical 보존 BY
+CONSTRUCTION**. `.verdicts/runtime-floor-closure/F3-strdup-behavioral.txt`.
+
+**의의**: B9.6-E2 의 alloc-core terminal 은 그대로 (bump-allocator SEED
+= B9.8 irreducible). 그 *위 layer* (class-B HARD copy-loop ~60-100 fn) 은
+"unbuilt codegen" → **"per-primitive PORT, mechanical"** 로 재분류.
+strdup/strndup/atoll/strtoll 형제는 이제 template 스케일아웃 + Path-A
+활성화로 진행 가능 (~0.5-1d/개 expert). honest 잔여 = (i) Path-A activation
+(runtime.c guard + callee-export + build_hexa_cli 등록, mechanical),
+(ii) sibling expansion (strndup/atoll/atof — 동일 template + cap arg /
+FP-arg variant), (iii) alloc-core seed 의 honest B9.8 floor 수용.
+
+
 ## floor 분류 (F1–F6)
 
 ### F1 — perf-floor (port 금지 · 285x 회귀)
