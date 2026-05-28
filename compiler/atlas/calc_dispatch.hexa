@@ -180,6 +180,13 @@ pub fn calc_is_float_fn(fn_name: string) -> bool {
         //   (prior gap: consciousness claims → 🟠 INSUFFICIENT → self-judged tautology smokes).
         || fn_name == "binary_entropy"
         || fn_name == "kl_divergence_bernoulli"
+        // SRR Lorentz μ primitive trio (Pendry 1999 · CLOAK substrate · 2026-05-28):
+        //   lc_resonance(L,C)        2-arg: 1/√(L·C)  (LC ω₀)
+        //   srr_filling_factor(r,a)  2-arg: π·r²/a²   (SRR F)
+        //   lorentz_mu_re(F,ω,ω₀,γ)  4-arg: 1 + F·ω²·(ω₀²−ω²)/[(ω₀²−ω²)²+(ωγ)²]
+        || fn_name == "lc_resonance"
+        || fn_name == "srr_filling_factor"
+        || fn_name == "lorentz_mu_re"
 }
 
 // calc_is_zero_arg_float_fn — is fn_name a 0-arg closed-form constant?
