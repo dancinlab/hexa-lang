@@ -594,6 +594,21 @@ fn _with_source(src: [str], argv: [str]) -> [str] {
     return out
 }
 
+// _checked_host — guard the positional <host> token. Every cloud verb takes
+// `<host>` FIRST, then [conn]/flags, then `-- <argv>`. A real ssh destination
+// (user@host · alias · IP) NEVER starts with `--`, so a `--`-leading token in
+// the host slot means the caller misplaced a flag (or omitted <host>) — the
+// CLI used to silently treat it AS the host, ssh to it, and exit 255, which
+// reads like a phantom "gateway outage". Reject it loudly instead (INBOX
+// 2026-05-28 cloud gap 2, P1). Returns `h` unchanged for any legal host.
+fn _checked_host(h: str) -> str {
+    if len(h) >= 2 && h.substring(0, 2) == "--" {
+        eprintln("[cloud] '" + h + "' looks like a flag, not a host — every verb is positional `<host> [--port N] [--insecure] ... -- <argv>` (flags go AFTER <host>, args AFTER `--`). Misplaced flag, or omitted <host>?")
+        exit(2)
+    }
+    return h
+}
+
 // _flag_val — scan av[start..] for `<key> <value>` and return the value;
 // `dflt` when the flag is absent or has no following token.
 fn _flag_val(av: [str], start: int, key: str, dflt: str) -> str {
@@ -1026,7 +1041,7 @@ fn main() {
             println("[cloud] run: missing <host> — usage: cloud run <host> [--port N] [--insecure] -- <argv...>")
             exit(2)
         }
-        let host = av[si + 1]
+        let host = _checked_host(av[si + 1])
         let ssh_opts = _ssh_opts_cli(av, si + 2)
         let max_wall = _max_wall_cli(av, si + 2)
         let env_kvs = _env_args_cli(av, si + 2)
@@ -1055,7 +1070,7 @@ fn main() {
             println("[cloud] exec: missing <host> — usage: cloud exec <host> [--port N] [--insecure] -- <shell-cmd>")
             exit(2)
         }
-        let host = av[si + 1]
+        let host = _checked_host(av[si + 1])
         let ssh_opts = _ssh_opts_cli(av, si + 2)
         let tokens = _collect_after(av, si + 2)
         if len(tokens) == 0 {
@@ -1084,7 +1099,7 @@ fn main() {
             println("[cloud] nohup: usage — cloud nohup <host> <logfile> [--port N] [--insecure] [--early-life-check N] [--env K=V] [--source P] [--register [<jid>]] -- <argv...>")
             exit(2)
         }
-        let host = av[si + 1]
+        let host = _checked_host(av[si + 1])
         let logfile = av[si + 2]
         let ssh_opts = _ssh_opts_cli(av, si + 3)
         let env_kvs = _env_args_cli(av, si + 3)
@@ -1141,7 +1156,7 @@ fn main() {
             println("[cloud] fire: usage — cloud fire <host> [--log <path>] [--port N] [--insecure] [--early-life-check N] [--env K=V] [--source P] [--register [<jid>]] -- <argv...>")
             exit(2)
         }
-        let host = av[si + 1]
+        let host = _checked_host(av[si + 1])
         let ssh_opts = _ssh_opts_cli(av, si + 2)
         let env_kvs = _env_args_cli(av, si + 2)
         let early_life = _early_life_cli(av, si + 2)
@@ -1194,7 +1209,7 @@ fn main() {
             println("[cloud] poll: usage — cloud poll <host> <pid> [--port N] [--insecure]")
             exit(2)
         }
-        let host = av[si + 1]
+        let host = _checked_host(av[si + 1])
         let pid = _cli_atoi(av[si + 2])
         let ssh_opts = _ssh_opts_cli(av, si + 3)
         let alive = cloud_poll_opts(host, ssh_opts, pid)
@@ -1229,7 +1244,7 @@ fn main() {
             println("[cloud] tail: usage — cloud tail <host> <logfile> [--port N] [--insecure] [--grep RE] [--until RE]")
             exit(2)
         }
-        let host = av[si + 1]
+        let host = _checked_host(av[si + 1])
         let logfile = av[si + 2]
         let ssh_opts = _ssh_opts_cli(av, si + 3)
         let grep_re = _flag_val(av, si + 3, "--grep", "")
@@ -1248,7 +1263,7 @@ fn main() {
             println("[cloud] watch: usage — cloud watch <host> <pid> [--port N] [--insecure] [--interval N] [--max-wait S] [--then-down <id> [--provider P]]")
             exit(2)
         }
-        let host = av[si + 1]
+        let host = _checked_host(av[si + 1])
         let pid = _cli_atoi(av[si + 2])
         let ssh_opts = _ssh_opts_cli(av, si + 3)
         let interval = _cli_atoi(_flag_val(av, si + 3, "--interval", "30"))
@@ -1372,7 +1387,7 @@ fn main() {
             println("[cloud] copy-to: usage — cloud copy-to <host> <local> <remote> [--port N] [--insecure]")
             exit(2)
         }
-        let host = av[si + 1]
+        let host = _checked_host(av[si + 1])
         let local_path = av[si + 2]
         let remote_path = av[si + 3]
         let ssh_opts = _ssh_opts_cli(av, si + 4)
@@ -1394,7 +1409,7 @@ fn main() {
             println("[cloud] copy-from: usage — cloud copy-from <host> <remote> <local> [--port N] [--insecure]")
             exit(2)
         }
-        let host = av[si + 1]
+        let host = _checked_host(av[si + 1])
         let remote_path = av[si + 2]
         let local_path = av[si + 3]
         let ssh_opts = _ssh_opts_cli(av, si + 4)
