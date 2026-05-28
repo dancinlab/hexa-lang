@@ -1362,6 +1362,17 @@ extern HexaVal farr_rmsnorm_bwd_rows_gpu;                                      /
 HexaVal farr_adamw_step_gpu(HexaVal w, HexaVal m, HexaVal v, HexaVal g,
                             HexaVal n, HexaVal lr, HexaVal b1, HexaVal b2,
                             HexaVal eps, HexaVal wd, HexaVal step_t);          /* runtime.c — RFC 040 Phase B2 (11-arg direct) */
+/* In-place AdamW — additive sibling of farr_adamw_step_gpu. IDENTICAL
+ * arithmetic, ZERO `out` farr alloc (writes W in place → returns w_id).
+ * 11-arg bare direct-C entry (codegen ≥5-arg fallback emits the bare
+ * name). Kills the per-step n-double `out` alloc RSS leak. */
+HexaVal hexa_farr_adamw_step_inplace(HexaVal w_v, HexaVal m_v, HexaVal v_v,
+                                     HexaVal g_v, HexaVal n_v, HexaVal lr_v,
+                                     HexaVal b1_v, HexaVal b2_v, HexaVal eps_v,
+                                     HexaVal wd_v, HexaVal step_v);            /* runtime.c — in-place AdamW (no out alloc) */
+HexaVal farr_adamw_step_inplace(HexaVal w, HexaVal m, HexaVal v, HexaVal g,
+                                HexaVal n, HexaVal lr, HexaVal b1, HexaVal b2,
+                                HexaVal eps, HexaVal wd, HexaVal step_t);      /* runtime.c — in-place AdamW (11-arg direct) */
 
 
 /* ═══════════════════════════════════════════════════════════════

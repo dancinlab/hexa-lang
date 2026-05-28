@@ -1194,6 +1194,35 @@ fn emit_runtime_cuda_c() -> str {
             "    }\n" +
             "}\n" +
             "\n" +
+            "/* In-place AdamW kernel — IDENTICAL arithmetic to _hx_k_adamw_step,\n" +
+            " * but W is both the read source AND the write destination (no separate\n" +
+            " * O). No `__restrict__` aliasing hazard (a single W pointer). Each\n" +
+            " * thread reads W[i] then writes W[i] within its own iteration → safe. */\n" +
+            "__global__ void _hx_k_adamw_step_inplace(double* __restrict__ W,\n" +
+            "                                 double* __restrict__ Mm,\n" +
+            "                                 double* __restrict__ Vv,\n" +
+            "                                 const double* __restrict__ G,\n" +
+            "                                 int64_t n,\n" +
+            "                                 double lr, double b1, double b2,\n" +
+            "                                 double eps, double wd,\n" +
+            "                                 double c1, double c2) {\n" +
+            "    int64_t stride = (int64_t)blockDim.x * (int64_t)gridDim.x;\n" +
+            "    for (int64_t i = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;\n" +
+            "         i < n;\n" +
+            "         i += stride) {\n" +
+            "        double g    = G[i];\n" +
+            "        double mi   = b1 * Mm[i] + (1.0 - b1) * g;\n" +
+            "        double vi   = b2 * Vv[i] + (1.0 - b2) * g * g;\n" +
+            "        double mhat = mi / c1;\n" +
+            "        double vhat = vi / c2;\n" +
+            "        double denom = sqrt(vhat) + eps;\n" +
+            "        double wi   = W[i] - lr * wd * W[i] - lr * mhat / denom;\n" +
+            "        Mm[i] = mi;     /* in-place optimizer state */\n" +
+            "        Vv[i] = vi;\n" +
+            "        W[i]  = wi;     /* W updated IN PLACE — no out buffer */\n" +
+            "    }\n" +
+            "}\n" +
+            "\n" +
             "#endif /* __CUDACC__ — kernel bodies (compiled by nvcc only) */\n" +
             "\n" +
             "/* ════════════════════════════════════════════════════════════════════\n" +
@@ -1501,6 +1530,64 @@ fn emit_runtime_cuda_c() -> str {
             "    (void)n; (void)lr; (void)b1; (void)b2; (void)eps; (void)wd;\n" +
             "    (void)step_t; (void)out_id;\n" +
             "    fprintf(stderr, \"[cuda] adamw_step: built without __CUDACC__\\n\");\n" +
+            "    return -1;\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
+            "/* In-place AdamW host wrapper — no fresh device output buffer; W is\n" +
+            " * updated in place on its own device slot (out == W). H2D W/m/v/g,\n" +
+            " * launch _hx_k_adamw_step_inplace, then D2H W AND m,v back to host\n" +
+            " * (optimizer-state contract). Byte-eq to _hx_cuda_farr_adamw_step_gpu\n" +
+            " * with out_id == w_id (same arithmetic, O ≡ W). Returns 0 ok / -1. */\n" +
+            "int _hx_cuda_farr_adamw_step_inplace_gpu(int64_t w_id, int64_t m_id,\n" +
+            "                                  int64_t v_id, int64_t g_id,\n" +
+            "                                  int64_t n, double lr, double b1,\n" +
+            "                                  double b2, double eps, double wd,\n" +
+            "                                  int64_t step_t) {\n" +
+            "#ifdef __CUDACC__\n" +
+            "    if (n <= 0 || step_t < 1) {\n" +
+            "        fprintf(stderr, \"[cuda] adamw_step_inplace: bad n=%lld step_t=%lld\\n\",\n" +
+            "                (long long)n, (long long)step_t);\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    if (_h2d(w_id) != 0) return -1;\n" +
+            "    if (_h2d(m_id) != 0) return -1;\n" +
+            "    if (_h2d(v_id) != 0) return -1;\n" +
+            "    if (_h2d(g_id) != 0) return -1;\n" +
+            "\n" +
+            "    double b1t = 1.0, b2t = 1.0;\n" +
+            "    for (int64_t e = 0; e < step_t; e++) { b1t *= b1; b2t *= b2; }\n" +
+            "    double c1 = 1.0 - b1t;\n" +
+            "    double c2 = 1.0 - b2t;\n" +
+            "\n" +
+            "    double* W  = g_slots[w_id].d_buf;\n" +
+            "    double* Mm = g_slots[m_id].d_buf;\n" +
+            "    double* Vv = g_slots[v_id].d_buf;\n" +
+            "    const double* G = g_slots[g_id].d_buf;\n" +
+            "\n" +
+            "    int block_sz = 256;\n" +
+            "    int64_t want_blocks = (n + block_sz - 1) / block_sz;\n" +
+            "    int grid_sz = (want_blocks > 1024) ? 1024 : (int)want_blocks;\n" +
+            "    if (grid_sz < 1) grid_sz = 1;\n" +
+            "\n" +
+            "    _hx_k_adamw_step_inplace<<<grid_sz, block_sz>>>(W, Mm, Vv, G, n,\n" +
+            "                                            lr, b1, b2, eps, wd, c1, c2);\n" +
+            "    cudaError_t er = cudaDeviceSynchronize();\n" +
+            "    if (er != cudaSuccess) {\n" +
+            "        fprintf(stderr, \"[cuda] adamw_step_inplace launch failed: %s\\n\",\n" +
+            "                cudaGetErrorString(er));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    /* Write back the in-place-updated W, m, v to their host buffers. */\n" +
+            "    if (_d2h(w_id) != 0) return -1;\n" +
+            "    if (_d2h(m_id) != 0) return -1;\n" +
+            "    if (_d2h(v_id) != 0) return -1;\n" +
+            "    return 0;\n" +
+            "#else\n" +
+            "    (void)w_id; (void)m_id; (void)v_id; (void)g_id;\n" +
+            "    (void)n; (void)lr; (void)b1; (void)b2; (void)eps; (void)wd;\n" +
+            "    (void)step_t;\n" +
+            "    fprintf(stderr, \"[cuda] adamw_step_inplace: built without __CUDACC__\\n\");\n" +
             "    return -1;\n" +
             "#endif\n" +
             "}\n" +

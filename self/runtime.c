@@ -10342,6 +10342,11 @@ extern int  _hx_cuda_farr_adamw_step_gpu(int64_t w_id, int64_t m_id,
                                           int64_t n, double lr, double b1,
                                           double b2, double eps, double wd,
                                           int64_t step_t, int64_t out_id);
+extern int  _hx_cuda_farr_adamw_step_inplace_gpu(int64_t w_id, int64_t m_id,
+                                          int64_t v_id, int64_t g_id,
+                                          int64_t n, double lr, double b1,
+                                          double b2, double eps, double wd,
+                                          int64_t step_t);
 extern int  _hx_cuda_farr_rope_gpu(int64_t t_id, int64_t cos_id,
                                     int64_t sin_id, int64_t T,
                                     int64_t nheads, int64_t hd,
@@ -10776,6 +10781,55 @@ static int64_t _hx_farr_adamw_step_cpu(int64_t w_id, int64_t m_id,
     return out_id;
 }
 
+// _hx_farr_adamw_step_inplace_cpu(...) -> w_id = updated W, written IN
+// PLACE on W's own farr buffer (ZERO `out` allocation). Byte-identical
+// arithmetic to _hx_farr_adamw_step_cpu — same β^t repeated-mul, same
+// c1/c2 bias-correction, same decoupled-wd update form, same libm sqrt.
+// The ONLY difference vs the allocating variant is the destination of
+// the write: O[i] (a fresh farr) → W[i] (in place). m,v stay in place
+// (optimizer-state contract, unchanged). This kills the per-step n=m_size
+// FP64 `out` farr alloc (V·d·E doubles/step → glibc-arena RSS leak under
+// long training). Returns w_id (the in-place-updated W). -1 on err.
+static int64_t _hx_farr_adamw_step_inplace_cpu(int64_t w_id, int64_t m_id,
+                                               int64_t v_id, int64_t g_id,
+                                               int64_t n, double lr,
+                                               double b1, double b2,
+                                               double eps, double wd,
+                                               int64_t step_t) {
+    if (w_id < 0 || w_id >= _hx_farr_count) return -1;
+    if (m_id < 0 || m_id >= _hx_farr_count) return -1;
+    if (v_id < 0 || v_id >= _hx_farr_count) return -1;
+    if (g_id < 0 || g_id >= _hx_farr_count) return -1;
+    if (n <= 0 || step_t < 1)               return -1;
+    HexaFarrEntry* we = &_hx_farr_table[w_id];
+    HexaFarrEntry* me = &_hx_farr_table[m_id];
+    HexaFarrEntry* ve = &_hx_farr_table[v_id];
+    HexaFarrEntry* ge = &_hx_farr_table[g_id];
+    if (!we->buf || !me->buf || !ve->buf || !ge->buf) return -1;
+    if (we->len < n || me->len < n || ve->len < n || ge->len < n) return -1;
+    double* W = we->buf;
+    double* Mm = me->buf;
+    double* Vv = ve->buf;
+    const double* G = ge->buf;
+    double b1t = 1.0, b2t = 1.0;
+    for (int64_t e = 0; e < step_t; e++) { b1t *= b1; b2t *= b2; }
+    double c1 = 1.0 - b1t;
+    double c2 = 1.0 - b2t;
+    for (int64_t i = 0; i < n; i++) {
+        double g  = G[i];
+        double mi = b1 * Mm[i] + (1.0 - b1) * g;
+        double vi = b2 * Vv[i] + (1.0 - b2) * g * g;
+        double mhat = mi / c1;
+        double vhat = vi / c2;
+        double denom = sqrt(vhat) + eps;
+        double wi = W[i] - lr * wd * W[i] - lr * mhat / denom;
+        Mm[i] = mi;       /* m,v updated in place (optimizer state) */
+        Vv[i] = vi;
+        W[i]  = wi;       /* W updated IN PLACE — no `out` farr alloc */
+    }
+    return w_id;
+}
+
 // ── Phase B2 dispatchers ────────────────────────────────────────────
 
 // farr_matmul_t_gpu(M, R, C, u) -> int new farr_id [C] (Mᵀ·u).
@@ -10976,6 +11030,64 @@ HexaVal farr_adamw_step_gpu(HexaVal w, HexaVal m, HexaVal v, HexaVal g,
                             HexaVal eps, HexaVal wd, HexaVal step_t) {
     return hexa_farr_adamw_step_gpu(w, m, v, g, n, lr, b1, b2, eps, wd,
                                     step_t);
+}
+
+// farr_adamw_step_inplace(W,m,v,g,n,lr,b1,b2,eps,wd,step_t) -> int w_id
+// (W updated IN PLACE; m,v in place). Additive sibling of
+// farr_adamw_step_gpu — IDENTICAL arithmetic, but ZERO `out` farr
+// allocation. The allocating variant mallocs an n-double farr every
+// step (V·d·E doubles → glibc-arena RSS leak under long training); this
+// writes the result back into W's own buffer. 11-arg → past the
+// hexa_callN ceiling → bare direct-C entry (RFC 032/035 pattern, same
+// as farr_adamw_step_gpu). On HEXA_CUDA: in-place kernel (out_id == w_id,
+// no fresh device output alloc). No-CUDA: CPU in-place helper.
+HexaVal hexa_farr_adamw_step_inplace(HexaVal w_v, HexaVal m_v, HexaVal v_v,
+                                     HexaVal g_v, HexaVal n_v, HexaVal lr_v,
+                                     HexaVal b1_v, HexaVal b2_v,
+                                     HexaVal eps_v, HexaVal wd_v,
+                                     HexaVal step_v) {
+    int64_t w_id = hexa_as_num(w_v);
+    int64_t m_id = hexa_as_num(m_v);
+    int64_t v_id = hexa_as_num(v_v);
+    int64_t g_id = hexa_as_num(g_v);
+    int64_t n    = hexa_as_num(n_v);
+    double  lr   = __hx_to_double(lr_v);
+    double  b1   = __hx_to_double(b1_v);
+    double  b2   = __hx_to_double(b2_v);
+    double  eps  = __hx_to_double(eps_v);
+    double  wd   = __hx_to_double(wd_v);
+    int64_t step_t = hexa_as_num(step_v);
+#ifdef HEXA_CUDA
+    /* In-place GPU AdamW — out_id == w_id; no fresh device output
+     * buffer. H2D W/m/v/g, run the 1-D grid-stride kernel writing W in
+     * place on device, then D2H W AND m,v back to their host buffers
+     * (optimizer-state contract). Byte-eq to the allocating GPU path
+     * (same kernel arithmetic, O ≡ W). */
+    if (n <= 0 || step_t < 1) return hexa_int(-1);
+    if (w_id < 0 || w_id >= _hx_farr_count) return hexa_int(-1);
+    if (m_id < 0 || m_id >= _hx_farr_count) return hexa_int(-1);
+    if (v_id < 0 || v_id >= _hx_farr_count) return hexa_int(-1);
+    if (g_id < 0 || g_id >= _hx_farr_count) return hexa_int(-1);
+    int rc = _hx_cuda_farr_adamw_step_inplace_gpu(w_id, m_id, v_id, g_id, n,
+                                                  lr, b1, b2, eps, wd,
+                                                  step_t);
+    if (rc != 0) return hexa_int(-1);
+    return hexa_int(w_id);
+#else
+    return hexa_int(_hx_farr_adamw_step_inplace_cpu(w_id, m_id, v_id, g_id, n,
+                                                    lr, b1, b2, eps, wd,
+                                                    step_t));
+#endif
+}
+
+// Bare direct-C entry (11-arg, past hexa_callN ceiling — codegen emits
+// the bare name `farr_adamw_step_inplace(...)` via the ≥5-arg fallback).
+HexaVal farr_adamw_step_inplace(HexaVal w, HexaVal m, HexaVal v, HexaVal g,
+                                HexaVal n, HexaVal lr, HexaVal b1,
+                                HexaVal b2, HexaVal eps, HexaVal wd,
+                                HexaVal step_t) {
+    return hexa_farr_adamw_step_inplace(w, m, v, g, n, lr, b1, b2, eps, wd,
+                                        step_t);
 }
 
 // farr_rope_gpu(t, cos, sin, T, nheads, hd) -> int new farr_id

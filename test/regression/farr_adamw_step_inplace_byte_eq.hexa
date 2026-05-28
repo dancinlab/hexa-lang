@@ -1,0 +1,115 @@
+// test/regression/farr_adamw_step_inplace_byte_eq.hexa
+//
+// Byte-eq oracle for the in-place AdamW builtin `farr_adamw_step_inplace`
+// vs the allocating sibling `farr_adamw_step_gpu`. Both share IDENTICAL
+// arithmetic; the only difference is the write destination (fresh `out`
+// farr vs W in place). So on the SAME inputs the updated W, m, v must be
+// bit-identical.
+//
+//   farr_adamw_step_gpu(W,m,v,g,n,lr,b1,b2,eps,wd,t) -> new farr_id (W')
+//        m,v updated in place.
+//   farr_adamw_step_inplace(W,m,v,g,n,lr,b1,b2,eps,wd,t) -> w_id (W' in W)
+//        m,v updated in place.
+//
+// Pass criterion: max|Δ|=0 across W' (n) + m (n) + v (n) = 3n entries.
+// CPU build: bit-eq (same C arithmetic). ubu-2 HEXA_CUDA: GPU≡GPU
+// (same kernel arithmetic, O ≡ W); per the adamw TOL_ELEM ≈ 1e-12 caveat
+// the in-place and allocating GPU kernels run the identical update so the
+// expected delta is 0.
+
+fn approx_eq(a: float, b: float) -> bool {
+    return a == b   // byte-eq: identical arithmetic → bit-identical
+}
+
+fn main() {
+    let n = 8
+    let lr = 0.001
+    let b1 = 0.9
+    let b2 = 0.999
+    let eps = 0.00000001
+    let wd = 0.01
+    let t = 3
+
+    // Two independent copies of W, m, v, g (so the two calls do not alias).
+    // Branch A = allocating farr_adamw_step_gpu; Branch B = in-place.
+    let wA = farr_zeros(n)
+    let mA = farr_zeros(n)
+    let vA = farr_zeros(n)
+    let g  = farr_zeros(n)
+    let wB = farr_zeros(n)
+    let mB = farr_zeros(n)
+    let vB = farr_zeros(n)
+
+    let mut i = 0
+    while i < n {
+        let wi = 0.5 - to_float(i) * 0.1
+        let mi = 0.01 * to_float(i)
+        let vi = 0.001 * to_float(i + 1)
+        let gi = 0.2 - to_float(i) * 0.05
+        let _ = farr_set(wA, i, wi)
+        let _ = farr_set(mA, i, mi)
+        let _ = farr_set(vA, i, vi)
+        let _ = farr_set(g,  i, gi)
+        let _ = farr_set(wB, i, wi)
+        let _ = farr_set(mB, i, mi)
+        let _ = farr_set(vB, i, vi)
+        i = i + 1
+    }
+
+    // Branch A — allocating (returns NEW farr id with W').
+    let wA_out = farr_adamw_step_gpu(wA, mA, vA, g, n, lr, b1, b2, eps, wd, t)
+    if wA_out < 0 {
+        println("[farr_adamw_step_inplace_byte_eq] FAIL — allocating rc<0")
+        return
+    }
+    // Branch B — in-place (returns wB id; W' written into wB).
+    let wB_out = farr_adamw_step_inplace(wB, mB, vB, g, n, lr, b1, b2, eps, wd, t)
+    if wB_out < 0 {
+        println("[farr_adamw_step_inplace_byte_eq] FAIL — in-place rc<0")
+        return
+    }
+    if wB_out != wB {
+        println("[farr_adamw_step_inplace_byte_eq] FAIL — in-place did not return w_id")
+        return
+    }
+
+    let mut pass_count = 0
+    let mut fail_count = 0
+    i = 0
+    while i < n {
+        // W' compare: allocating result is in wA_out farr; in-place in wB.
+        let gw = farr_get(wA_out, i)
+        let bw = farr_get(wB, i)
+        if approx_eq(gw, bw) { pass_count = pass_count + 1 }
+        else {
+            fail_count = fail_count + 1
+            println("  W[" + to_string(i) + "] alloc=" + to_string(gw) + " inplace=" + to_string(bw))
+        }
+        // m compare (both updated in place on their own buffers).
+        let gm = farr_get(mA, i)
+        let bm = farr_get(mB, i)
+        if approx_eq(gm, bm) { pass_count = pass_count + 1 }
+        else {
+            fail_count = fail_count + 1
+            println("  m[" + to_string(i) + "] alloc=" + to_string(gm) + " inplace=" + to_string(bm))
+        }
+        // v compare.
+        let gv = farr_get(vA, i)
+        let bv = farr_get(vB, i)
+        if approx_eq(gv, bv) { pass_count = pass_count + 1 }
+        else {
+            fail_count = fail_count + 1
+            println("  v[" + to_string(i) + "] alloc=" + to_string(gv) + " inplace=" + to_string(bv))
+        }
+        i = i + 1
+    }
+
+    let total = 3 * n
+    if fail_count == 0 {
+        println("[farr_adamw_step_inplace_byte_eq] PASS — " + to_string(pass_count)
+              + "/" + to_string(total) + " bytes match (W+m+v)")
+    } else {
+        println("[farr_adamw_step_inplace_byte_eq] FAIL — " + to_string(fail_count)
+              + "/" + to_string(total) + " bytes diverged")
+    }
+}
