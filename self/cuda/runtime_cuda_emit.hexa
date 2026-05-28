@@ -1277,6 +1277,70 @@ fn emit_runtime_cuda_c() -> str {
             "#endif\n" +
             "}\n" +
             "\n" +
+            "/* ────────────────────────────────────────────────────────────────────\n" +
+            " * BC-ANIMA M3 (2026-05-28): seed-only CE gradient kernel (5-arg).\n" +
+            " *\n" +
+            " *   row r ∈ [0,R), softmax S[r,*] over columns C:\n" +
+            " *     dlogits[r,c] = S[r,c] - onehot(c == target[r])\n" +
+            " *\n" +
+            " * Lighter sibling of _hx_k_ce_seed (which fuses loss + seed + softmax).\n" +
+            " * Used when softmax is already computed via M2 farr_softmax_rows. Single\n" +
+            " * pass — no reductions. One block per row; HX_RR_BLOCK threads stride C.\n" +
+            " * ──────────────────────────────────────────────────────────────────── */\n" +
+            "__global__ void _hx_k_ce_seed_only(const double* __restrict__ S,\n" +
+            "                                   const double* __restrict__ TGT,\n" +
+            "                                   double* __restrict__ DL,\n" +
+            "                                   int64_t R, int64_t C) {\n" +
+            "    int64_t r = blockIdx.x;\n" +
+            "    if (r >= R) return;\n" +
+            "    const double* sr = S + r * C;\n" +
+            "    double*       dr = DL + r * C;\n" +
+            "    int64_t tgt = (int64_t)(TGT[r] + (TGT[r] >= 0.0 ? 0.5 : -0.5));\n" +
+            "    for (int64_t c = threadIdx.x; c < C; c += blockDim.x) {\n" +
+            "        double p = sr[c];\n" +
+            "        if (c == tgt) p -= 1.0;\n" +
+            "        dr[c] = p;\n" +
+            "    }\n" +
+            "}\n" +
+            "\n" +
+            "/* ── BC-ANIMA M3 (2026-05-28): farr_ce_seed host wrapper.\n" +
+            " * 5-arg seed-only CE gradient — softmax precomputed (anima M2). H2D\n" +
+            " * the two inputs (softmax[R*C], targets[R]) → _ensure_dev_alloc_out\n" +
+            " * for caller-allocated dlogits[R*C] → launch slim block-per-row kernel\n" +
+            " * → cudaDeviceSynchronize → D2H dlogits. Returns 0 ok / -1. */\n" +
+            "int _hx_cuda_farr_ce_seed(int64_t softmax_id, int64_t target_ids_id,\n" +
+            "                          int64_t dlogits_id,\n" +
+            "                          int64_t R, int64_t C) {\n" +
+            "#ifdef __CUDACC__\n" +
+            "    if (R <= 0 || C <= 0) {\n" +
+            "        fprintf(stderr, \"[cuda] ce_seed_only: bad shape R=%lld C=%lld\\n\",\n" +
+            "                (long long)R, (long long)C);\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    if (_h2d(softmax_id) != 0)    return -1;\n" +
+            "    if (_h2d(target_ids_id) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(dlogits_id, R * C) != 0) return -1;\n" +
+            "    const double* S   = g_slots[softmax_id].d_buf;\n" +
+            "    const double* TGT = g_slots[target_ids_id].d_buf;\n" +
+            "    double*       DL  = g_slots[dlogits_id].d_buf;\n" +
+            "    dim3 grid((unsigned)R), block(HX_RR_BLOCK);\n" +
+            "    _hx_k_ce_seed_only<<<grid, block>>>(S, TGT, DL, R, C);\n" +
+            "    cudaError_t er = cudaDeviceSynchronize();\n" +
+            "    if (er != cudaSuccess) {\n" +
+            "        fprintf(stderr, \"[cuda] ce_seed_only launch failed: %s\\n\",\n" +
+            "                cudaGetErrorString(er));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    return _d2h_out(dlogits_id, R * C);\n" +
+            "#else\n" +
+            "    (void)softmax_id; (void)target_ids_id; (void)dlogits_id;\n" +
+            "    (void)R; (void)C;\n" +
+            "    fprintf(stderr, \"[cuda] ce_seed_only: built without __CUDACC__ \"\n" +
+            "                    \"(use nvcc -x cu)\\n\");\n" +
+            "    return -1;\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
             "/* ── causal_softmax_rows host wrapper (flame Phase 4-D-9, the 14th\n" +
             " * kernel — ADDITIVE; the 12 verified kernels + RFC 058 13th + all\n" +
             " * existing wrappers are UNTOUCHED). Mirrors _hx_cuda_farr_softmax_rows_\n" +

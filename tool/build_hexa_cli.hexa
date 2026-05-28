@@ -628,6 +628,7 @@ fn _do_build(repo_root: string) {
             println("[selfemit] F3 Path A · B9.6-C2 — class-C syscall WITH arg+errno: close (svc + carry-flag) → _hxlcl_close")
             println("[selfemit] F3 Path A · B9.6-B1 — class-B calling-conv composite: atoi (frame + bl) → _hxlcl_atoi")
             println("[selfemit] F3 Path A · B9.6-B2 — class-B HARD copy-loop: strdup (frame + strlen-loop + bl malloc + copy-loop) → _hxlcl_strdup")
+            println("[selfemit] F3 Path A · class-B HARD scale-out — strndup (cap-bounded copy-loop + bl malloc) → _hxlcl_strndup")
             println("[selfemit] F3 Path A · B9.6-E1 — class-E memory-lifecycle: munmap (unmap stub) → _hxlcl_munmap")
             // From here on the driver/module_loader runtime.c is compiled with
             // the guard ON so the hxlcl_* bodies become extern (resolved below).
@@ -688,8 +689,21 @@ fn _do_build(repo_root: string) {
             // 0x01-0x03 / NULL passthrough / distinct-ptr exact-content). Rides the
             // SAME single-symbol emit loop; only the .o internals differ. Scales the
             // ~60-100 class-B HARD copy-loop family (strndup/atoll/atof template).
-            let leaves = ["memset", "memcmp", "memcpy", "memmove", "strcmp", "strncmp", "strchr", "strrchr", "strcpy", "strncpy", "strcat", "strlen", "getpid", "close", "atoi", "munmap", "strdup"]
-            let upper  = ["MEMSET", "MEMCMP", "MEMCPY", "MEMMOVE", "STRCMP", "STRNCMP", "STRCHR", "STRRCHR", "STRCPY", "STRNCPY", "STRCAT", "STRLEN", "GETPID", "CLOSE", "ATOI", "MUNMAP", "STRDUP"]
+            // B9.6-C3 appends `getuid` — second 0-arg / cannot-fail svc-trap
+            // (after getpid). EXACT rt_getpid byte shape with only the mov w16
+            // immediate flipped (#20 → #24). No reloc, single-symbol export,
+            // rides the SAME leaf template — driver = emit_hxlcl_getuid_o.hexa,
+            // env var = HEXA_HXLCL_GETUID_O. Activates the LOOP slot for the
+            // existing #1899 shadow (runtime_arm64::rt_getuid + runtime.c
+            // L127-135 extern guard).
+            println("[selfemit] F3 Path A · B9.6-C3 — class-C 0-arg no-errno: getuid (rt_getpid mirror) → _hxlcl_getuid")
+            // F3 class-B HARD scale-out — `strndup` joins the leaf loop alongside
+            // strdup. Same single-symbol emit shape (1 defined + 1 undef + 1
+            // BRANCH26), same _hxlcl_malloc callee-export wrinkle (reuses the
+            // HXLCL_MALLOC_SC macro PR #1917 introduced). 2nd activated class-B
+            // HARD primitive — proves the recipe scales mechanically.
+            let leaves = ["memset", "memcmp", "memcpy", "memmove", "strcmp", "strncmp", "strchr", "strrchr", "strcpy", "strncpy", "strcat", "strlen", "getpid", "close", "atoi", "munmap", "strdup", "getuid", "strndup"]
+            let upper  = ["MEMSET", "MEMCMP", "MEMCPY", "MEMMOVE", "STRCMP", "STRNCMP", "STRCHR", "STRRCHR", "STRCPY", "STRNCPY", "STRCAT", "STRLEN", "GETPID", "CLOSE", "ATOI", "MUNMAP", "STRDUP", "GETUID", "STRNDUP"]
             let mut li = 0
             while li < len(leaves) {
                 let n = leaves[li]

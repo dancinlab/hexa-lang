@@ -1325,3 +1325,57 @@ small-M GEMV wedge problem (rank 1) with an epilogue, not a separate wedge.
 
 cycle-loop sequence: F-WEDGE-TOPK-FUSED-WALL -> 🔴 closed-negative (rank-2 wedge retired
 at naive implementation tier; reduces to rank-1 small-M GEMV + epilogue).
+
+**Cross-fire note**: PR #1922 (F-WEDGE-SMALL-M-GEMV-WALL, landed concurrently) also
+falsifies the rank-1 small-M GEMV wedge as BW-bound (real ceiling 1.19x, not 5-10x).
+Combined with this fire, the 2026-05-27 ranked-wedge table's top-2 candidates are now
+both 🔴 — the LM-head decode pipeline has no obvious single-kernel wedge above 1.10x
+under naive hand-emit. Next direction = (a) tiled GEMM-style design with register top-K
+epilogue, or (b) honestly retire the entire decode wedge family pending mma.sync /
+warp-cooperative redesign.
+
+## 2026-05-28 — F-WEDGE-SMALL-M-GEMV-WALL fire — 🔴 FALSIFIED (empirical seal on Round 10 analytical retirement)
+
+본 fire 는 2026-05-27 ranked-wedge #1 (small-M GEMV, 추정 ceiling 5-10×) 의 pre-registered falsifier `F-WEDGE-SMALL-M-GEMV-WALL` 을 hand-emit GEMV vs cuBLAS 직접 head-to-head 로 검증. Round 10 (line 1021) 은 동일 wedge 를 honest HBM-roofline 분석으로 retire 했고 — 본 fire 는 그 retirement 의 **empirical seal** (분석 retirement 와 측정 retirement 의 일치).
+
+**Tier**: 🔴 FALSIFIED (publishable per project.tape @D `paper_negative_ok`)
+**Branch**: `gpu-wedge/small-m-gemv-fire-2026-05-28`
+**Host**: ubu-2 RTX 5070 sm_120 (driver 580, nvcc compute_90 PTX → driver JIT)
+**Artifact**: `archive/fires/gpu_wedge_small_m_gemv_fire_2026_05_28/{result.json, sweep.log}` + `tool/gpu_wedge_small_m_gemv_handemit.cu`
+**Kernel**: 4 warps/CTA · 16 cols/CTA via float4 B-loads · K_CHUNK=128 shared-mem A-tile · `__shfl_xor_sync` butterfly reduce
+
+| M | cuBLAS_ms | handemit_ms | handemit TFLOPS | speedup × | sub-roofline (compute) |
+|---|---|---|---|---|---|
+| **1**  | 0.1106 | 0.1167 | 0.288 | **0.948×** | 99.08% |
+| 8  | 0.1146 | 0.8590 | 0.313 | 0.133× | 99.00% |
+| 32 | 0.1212 | 5.8210 | 0.184 | 0.021× | 99.41% |
+
+(3 independent runs, median ± timer-jitter; numerical check max_abs_err ≤ 2.70e-6 vs cuBLAS — float roundoff band)
+
+### Rubric (g5)
+
+- 🟢 GREEN if handemit ≥ 1.5× cuBLAS at M=1
+- 🔴 RED  if handemit <  1.05× cuBLAS at M=1
+- **measured = 0.948× → 🔴 FALSIFIED**
+
+### Why the 5-10× estimate was wrong (Round 10 analysis 재확인)
+
+2026-05-27 oracle 의 "99.05% sub-roofline" gap 은 **compute peak (31.2 TFLOPS) reference 의 오적용**. M=1 GEMV 의 arithmetic intensity = 0.50 F/B (W=K·N float32 load = K·N·4 bytes 대 K·N FMA = 2·K·N FLOPs → 2/4 = 0.50 F/B), 머신 balance 31.2 TFLOPS / 700 GB/s = 44.6 F/B 보다 89× 낮음 → **memory-bandwidth-bound**, compute-bound 아님. cuBLAS M=1 = ~590 GB/s = ~84% of ~700 GB/s peak BW → **이미 BW-roofline 근접**. handemit float4 vectorised kernel 도 동일 ~84% BW envelope 에 수렴, timer jitter 내에서 cuBLAS 와 tie (0.948× = within 5%). 진짜 ceiling = 700/590 = **1.19× 천장** (1.5× 임계 미달).
+
+### Implication (ranked-wedge 표 갱신)
+
+| rank | wedge | ceiling | status |
+|---|---|---|---|
+| ~~1~~ | ~~small-M GEMV (M=1)~~ | ~~5-10× est.~~ | **🔴 RETIRED — BW-bound, real ceiling 1.19×** |
+| 1 (new) | top-K fusion (M=8 LLaMA) | 1.80× measured | active, candidate |
+| 2 | top-K fusion (M=32 Qwen) | 1.68× measured | active |
+| 3 | BC3 epilogue (PR #1697) | 1.085× | retired |
+| 4 | grouped QKV | TBD | stride debug pending |
+
+### Methodology lesson (재강조)
+
+Round 10 (analytical) + 본 fire (empirical) 의 일치 = **roofline reference 는 AI-aware 해야 한다** (`feedback_closure_is_physical_limit` g0 instance #2). compute-peak gap 을 memory-bound op 에 적용하면 phantom wedge 가 생긴다. Methodology 가 cheap-first oracle 의 ceiling 추정 안에서 *roofline kind* 를 명시하도록 다음 ranked-wedge 표는 "ceiling (vs compute peak | vs BW peak)" 두 칸 분리 권장.
+
+cycle 결과: F-WEDGE-SMALL-M-GEMV-WALL = 🔴 closed-negative. 다음 active wedge = top-K fusion (rank 1 new).
+
+**Cross-fire note**: PR #1925 (F-WEDGE-TOPK-FUSED-WALL, landed concurrently) also falsifies the rank-1-new top-K fusion wedge at the naive hand-emit tier (0.066x at M=8 LLaMA = 15x slower than cuBLAS+cub). Combined with this fire, the 2026-05-27 ranked-wedge table's top-2 candidates are both 🔴 — LM-head decode has no obvious single-kernel wedge above 1.10x under naive hand-emit.

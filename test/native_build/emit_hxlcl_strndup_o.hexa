@@ -1,0 +1,361 @@
+// test/native_build/emit_hxlcl_strndup_o.hexa
+//
+// F3 ACTIVATION RUNBOOK · Path A · class-B HARD SCALE-OUT — 2nd activated
+// class-B HARD primitive (the SCALE-OUT proof following PR #1911 + #1917
+// rt_strdup recipe). Production-wires a self-emitted strndup over the C
+// `hxlcl_strndup` wrapper (self/runtime.c L390).
+//
+// 🔑 SCALE-OUT THESIS.
+// PR #1911 + #1917 proved class-B HARD copy-loop primitives are tractable
+// under behavioral-equivalence (the byte-id-vs-clang wall is a bootstrapping
+// convenience, not a correctness mandate). This driver is the MECHANICAL
+// PORT of emit_hxlcl_strdup_o.hexa to the strndup body: ONE extra param
+// (cap=x1), ONE extra callee-saved slot (x22=out), a cap-bounded length
+// loop, and an EXPLICIT NUL terminator. The wire-up and macho v3 wrapper
+// shape are IDENTICAL — only the .o internals differ.
+//
+// EMITS: a Mach-O .o exporting a strong external `_hxlcl_strndup` whose body
+// is rt_strndup's verbatim machine code (frame + cap-bounded scalar strlen
+// loop + bl + scalar copy loop + explicit NUL + multi-BB epilogue), declaring
+// an UNDEFINED-external `_hxlcl_malloc` (the callee), and carrying ONE
+// ARM64_RELOC_BRANCH26 reloc at code offset 0x40 (the `bl`). ld64 binds that
+// bl to runtime.c's hxlcl_malloc (non-static under the guard — same
+// HXLCL_MALLOC_SC mechanism as PR #1917 strdup) at link time.
+//
+// ── ABI (class-B HARD: 2-arg pointer-return + frame + bl) ──
+//   Input:  x0 = s · x1 = cap
+//   Output: x0 = ret (malloc'd copy, or NULL on !s / OOM)
+//   x19=s · x20=cap · x21=n · x22=out all callee-saved across the bl
+//   36 instr, 144 bytes. NOT byte-identical to clang -O2 (that is the point).
+//
+// ── HONESTY ──
+//   - closure = runs exact — an strndup-calling C program linked against
+//     this .o + a real _hxlcl_malloc returns a correct cap-bounded copy for
+//     every input (empty / no-NUL-within-cap / NUL-before-cap / NULL ptr).
+//   - clang is used ONLY as a link-side oracle and NEVER in this .o's emit
+//     path (144 bytes come from rt_strndup()).
+//   - BRANCH26 + LC_SYMTAB-only: cross-object `bl` with NO LC_DYSYMTAB
+//     (same as B9.6-B1 rt_atoi and #1911 rt_strdup).
+//   - selfhosted opt-in — HEXA_RT_SELFEMIT=1 gates the build append; unset =
+//     no behavior change (default keeps `static` = 0-libc-extern).
+//   - no binaries committed.
+//
+// SELF-CONTAINED: the macho v3 wrapper (1 text section + 2 nlists + BRANCH26
+// reloc) is inlined byte-for-byte, mirroring emit_hxlcl_strdup_o.hexa for the
+// 2-symbol case (1 defined composite + 1 undefined-external callee) + 1
+// BRANCH26 reloc. The 144 bytes are character-identical to
+// self/codegen/runtime_arm64.hexa rt_strndup().
+
+// ═════════════════════════════════════════════════════════════════
+// Inlined from self/codegen/runtime_arm64.hexa::rt_strndup
+// 36 instructions, 144 bytes. frame + cap-bounded strlen loop +
+// bl _hxlcl_malloc + scalar copy loop + explicit NUL + multi-BB
+// NULL/return epilogue. bl BRANCH26 @ 0x40.
+// ═════════════════════════════════════════════════════════════════
+fn rt_strndup_bytes() -> [int] {
+    let mut c = []
+    // 0x00  stp x29, x30, [sp, #-48]!   0xA9BD7BFD
+    c.push(253); c.push(123); c.push(189); c.push(169)
+    // 0x04  mov x29, sp                 0x910003FD
+    c.push(253); c.push(3); c.push(0); c.push(145)
+    // 0x08  stp x19, x20, [sp, #16]     0xA90153F3
+    c.push(243); c.push(83); c.push(1); c.push(169)
+    // 0x0c  str x21, [sp, #32]          0xF90013F5
+    c.push(245); c.push(19); c.push(0); c.push(249)
+    // 0x10  str x22, [sp, #40]          0xF90017F6  (NEW 4th callee-save)
+    c.push(246); c.push(23); c.push(0); c.push(249)
+    // 0x14  cbz x0, .Lnull              0xB4000320
+    c.push(32); c.push(3); c.push(0); c.push(180)
+    // 0x18  mov x19, x0                 0xAA0003F3
+    c.push(243); c.push(3); c.push(0); c.push(170)
+    // 0x1c  mov x20, x1                 0xAA0103F4  (x20 = cap)
+    c.push(244); c.push(3); c.push(1); c.push(170)
+    // 0x20  mov x21, #0                 0xD2800015  (n = 0)
+    c.push(21); c.push(0); c.push(128); c.push(210)
+    // 0x24  cmp x21, x20                0xEB1402BF
+    c.push(191); c.push(2); c.push(20); c.push(235)
+    // 0x28  b.eq .Llen_done             0x540000A0
+    c.push(160); c.push(0); c.push(0); c.push(84)
+    // 0x2c  ldrb w9, [x19, x21]         0x38756A69
+    c.push(105); c.push(106); c.push(117); c.push(56)
+    // 0x30  cbz w9, .Llen_done          0x34000069
+    c.push(105); c.push(0); c.push(0); c.push(52)
+    // 0x34  add x21, x21, #1            0x910006B5
+    c.push(181); c.push(6); c.push(0); c.push(145)
+    // 0x38  b .Llen                     0x17FFFFFB
+    c.push(251); c.push(255); c.push(255); c.push(23)
+    // 0x3c  add x0, x21, #1             0x910006A0
+    c.push(160); c.push(6); c.push(0); c.push(145)
+    // 0x40  bl _hxlcl_malloc [BRANCH26] 0x94000000  @ 0x40
+    c.push(0); c.push(0); c.push(0); c.push(148)
+    // 0x44  cbz x0, .Lnull              0xB40001A0
+    c.push(160); c.push(1); c.push(0); c.push(180)
+    // 0x48  mov x22, x0                 0xAA0003F6  (out)
+    c.push(246); c.push(3); c.push(0); c.push(170)
+    // 0x4c  mov x10, #0                 0xD280000A
+    c.push(10); c.push(0); c.push(128); c.push(210)
+    // 0x50  cmp x10, x21                0xEB15015F
+    c.push(95); c.push(1); c.push(21); c.push(235)
+    // 0x54  b.eq .Lterm                 0x540000A0
+    c.push(160); c.push(0); c.push(0); c.push(84)
+    // 0x58  ldrb w9, [x19, x10]         0x386A6A69
+    c.push(105); c.push(106); c.push(106); c.push(56)
+    // 0x5c  strb w9, [x22, x10]         0x382A6AC9
+    c.push(201); c.push(106); c.push(42); c.push(56)
+    // 0x60  add x10, x10, #1            0x9100054A
+    c.push(74); c.push(5); c.push(0); c.push(145)
+    // 0x64  b .Lcopy                    0x17FFFFFB
+    c.push(251); c.push(255); c.push(255); c.push(23)
+    // 0x68  mov w9, #0                  0x52800009
+    c.push(9); c.push(0); c.push(128); c.push(82)
+    // 0x6c  strb w9, [x22, x21]         0x38356AC9  (out[n] = '\0')
+    c.push(201); c.push(106); c.push(53); c.push(56)
+    // 0x70  mov x0, x22                 0xAA1603E0
+    c.push(224); c.push(3); c.push(22); c.push(170)
+    // 0x74  b .Lret                     0x14000002
+    c.push(2); c.push(0); c.push(0); c.push(20)
+    // 0x78  .Lnull: mov x0, #0          0xD2800000
+    c.push(0); c.push(0); c.push(128); c.push(210)
+    // 0x7c  .Lret: ldr x22, [sp, #40]   0xF94017F6
+    c.push(246); c.push(23); c.push(64); c.push(249)
+    // 0x80  ldr x21, [sp, #32]          0xF94013F5
+    c.push(245); c.push(19); c.push(64); c.push(249)
+    // 0x84  ldp x19, x20, [sp, #16]     0xA94153F3
+    c.push(243); c.push(83); c.push(65); c.push(169)
+    // 0x88  ldp x29, x30, [sp], #48     0xA8C37BFD
+    c.push(253); c.push(123); c.push(195); c.push(168)
+    // 0x8c  ret                         0xD65F03C0
+    c.push(192); c.push(3); c.push(95); c.push(214)
+    return c
+}
+
+// ═════════════════════════════════════════════════════════════════
+// Inlined macho v3 (constants + helpers + obj_wrap with BRANCH26 + undef).
+// Mirrors emit_hxlcl_strdup_o.hexa for the 2-symbol case
+// (1 defined composite + 1 undefined-external callee) + 1 BRANCH26 reloc.
+// ═════════════════════════════════════════════════════════════════
+fn mh_magic_64_v() -> int { return 0xFEEDFACF }
+fn mh_object_v() -> int { return 1 }
+fn cpu_type_arm64_v() -> int { return 0x0100000C }
+fn cpu_subtype_all_v() -> int { return 0 }
+fn lc_segment_64_v() -> int { return 0x19 }
+fn lc_symtab_v() -> int { return 0x02 }
+fn lc_build_version_v() -> int { return 0x32 }
+fn s_attr_pure_v() -> int { return 0x80000000 }
+fn s_attr_some_v() -> int { return 0x00000400 }
+fn n_ext_v() -> int { return 0x01 }
+fn n_sect_v() -> int { return 0x0e }
+
+fn align_to_v(val: int, align: int) -> int {
+    return (val + align - 1) / align * align
+}
+fn push_u16_le_v(buf: [int], val: int) -> [int] {
+    return buf.push(val % 256).push((val / 256) % 256)
+}
+fn push_u32_le_v(buf: [int], val: int) -> [int] {
+    return buf.push(val % 256).push((val / 256) % 256).push((val / 65536) % 256).push((val / 16777216) % 256)
+}
+fn push_u64_le_v(buf: [int], val: int) -> [int] {
+    let mut b = push_u32_le_v(buf, val % 0x100000000)
+    return push_u32_le_v(b, val / 0x100000000)
+}
+
+// 2 symbols + 1 BRANCH26 reloc. Symbol exported = `_hxlcl_strndup` (defined,
+// 14 chars), undefined callee = `_hxlcl_malloc` (13 chars).
+// strtab: "\0_hxlcl_strndup\0_hxlcl_malloc\0" = 1 + 15 + 14 = 30 bytes.
+//   _hxlcl_strndup strx = 1
+//   _hxlcl_malloc  strx = 1 + 15 = 16
+fn macho_obj_wrap_hxlcl_strndup(code: [int]) -> [int] {
+    let mut out = []
+    let code_size = len(code)
+
+    let strx_strndup = 1
+    let strx_malloc = 16
+    let strtab_size = 1 + 15 + 14
+
+    let nsects = 1
+    let segment_cmd_size = 72 + 80 * nsects
+    let symtab_cmd_size = 24
+    let build_version_cmd_size = 24
+    let sizeofcmds = segment_cmd_size + symtab_cmd_size + build_version_cmd_size
+    let header_size = 32
+    let code_offset = align_to_v(header_size + sizeofcmds, 8)
+    let reloc_offset = align_to_v(code_offset + code_size, 4)
+    let nreloc = 1
+    let reloc_size = 8 * nreloc
+    let symtab_offset = reloc_offset + reloc_size
+    let nlist_size = 16
+    let nsyms = 2
+    let strtab_offset = symtab_offset + nlist_size * nsyms
+    let total_end = strtab_offset + strtab_size
+
+    // Mach-O header
+    out = push_u32_le_v(out, mh_magic_64_v())
+    out = push_u32_le_v(out, cpu_type_arm64_v())
+    out = push_u32_le_v(out, cpu_subtype_all_v())
+    out = push_u32_le_v(out, mh_object_v())
+    out = push_u32_le_v(out, 3)
+    out = push_u32_le_v(out, sizeofcmds)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+
+    // LC_SEGMENT_64 (1 section)
+    out = push_u32_le_v(out, lc_segment_64_v())
+    out = push_u32_le_v(out, segment_cmd_size)
+    let mut i = 0
+    while i < 16 { out.push(0); i = i + 1 }
+    out = push_u64_le_v(out, 0)
+    out = push_u64_le_v(out, total_end - code_offset)
+    out = push_u64_le_v(out, code_offset)
+    out = push_u64_le_v(out, total_end - code_offset)
+    out = push_u32_le_v(out, 7)
+    out = push_u32_le_v(out, 7)
+    out = push_u32_le_v(out, nsects)
+    out = push_u32_le_v(out, 0)
+
+    // section_64 __text
+    out.push(95).push(95).push(116).push(101).push(120).push(116)
+    let mut j = 0
+    while j < 10 { out.push(0); j = j + 1 }
+    out.push(95).push(95).push(84).push(69).push(88).push(84)
+    j = 0
+    while j < 10 { out.push(0); j = j + 1 }
+    out = push_u64_le_v(out, 0)
+    out = push_u64_le_v(out, code_size)
+    out = push_u32_le_v(out, code_offset)
+    out = push_u32_le_v(out, 2)
+    out = push_u32_le_v(out, reloc_offset)
+    out = push_u32_le_v(out, nreloc)
+    out = push_u32_le_v(out, s_attr_pure_v() + s_attr_some_v())
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+
+    // LC_SYMTAB
+    out = push_u32_le_v(out, lc_symtab_v())
+    out = push_u32_le_v(out, symtab_cmd_size)
+    out = push_u32_le_v(out, symtab_offset)
+    out = push_u32_le_v(out, nsyms)
+    out = push_u32_le_v(out, strtab_offset)
+    out = push_u32_le_v(out, strtab_size)
+
+    // LC_BUILD_VERSION
+    out = push_u32_le_v(out, lc_build_version_v())
+    out = push_u32_le_v(out, build_version_cmd_size)
+    out = push_u32_le_v(out, 1)
+    out = push_u32_le_v(out, 0x000E0000)
+    out = push_u32_le_v(out, 0x000E0000)
+    out = push_u32_le_v(out, 0)
+
+    // Pad to code_offset, __text payload
+    while len(out) < code_offset { out.push(0) }
+    let mut k = 0
+    while k < len(code) { out.push(code[k]); k = k + 1 }
+
+    // Pad to reloc_offset, reloc record (BRANCH26 @ off 0x40 → sym[1])
+    while len(out) < reloc_offset { out.push(0) }
+    out = push_u32_le_v(out, 64)
+    let r_symnum = 1
+    let r_pcrel = 1
+    let r_length = 2
+    let r_extern = 1
+    let r_kind = 2
+    let bits = (r_symnum % 0x1000000)
+             + (r_pcrel * 0x1000000)
+             + (r_length * 0x2000000)
+             + (r_extern * 0x8000000)
+             + ((r_kind % 16) * 0x10000000)
+    out = push_u32_le_v(out, bits)
+
+    // Pad to symtab_offset, nlist × 2 (defined first, undefined last)
+    while len(out) < symtab_offset { out.push(0) }
+    // sym[0] = _hxlcl_strndup (defined __text @0)
+    out = push_u32_le_v(out, strx_strndup)
+    out.push(n_sect_v() + n_ext_v())
+    out.push(1)
+    out = push_u16_le_v(out, 0)
+    out = push_u64_le_v(out, 0)
+    // sym[1] = _hxlcl_malloc (UNDEFINED extern — DEFINED in runtime.c .o)
+    out = push_u32_le_v(out, strx_malloc)
+    out.push(n_ext_v())
+    out.push(0)
+    out = push_u16_le_v(out, 0)
+    out = push_u64_le_v(out, 0)
+
+    // String table — "\0_hxlcl_strndup\0_hxlcl_malloc\0" (30 bytes)
+    out.push(0)
+    // "_hxlcl_strndup\0"
+    out.push(95).push(104).push(120).push(108).push(99).push(108).push(95).push(115).push(116).push(114).push(110).push(100).push(117).push(112).push(0)
+    // "_hxlcl_malloc\0"
+    out.push(95).push(104).push(120).push(108).push(99).push(108).push(95).push(109).push(97).push(108).push(108).push(111).push(99).push(0)
+
+    return out
+}
+
+// ═════════════════════════════════════════════════════════════════
+// Driver
+// ═════════════════════════════════════════════════════════════════
+fn emit_hxlcl_strndup_o() {
+    println("[wire] F3 Path A · class-B HARD scale-out · rt_strndup — _hxlcl_strndup")
+
+    let code = rt_strndup_bytes()
+    if len(code) != 144 {
+        println("FAIL: rt_strndup expected 144 bytes, got " + to_string(len(code)))
+        return
+    }
+    println("  rt_strndup bytes: " + to_string(len(code)) + " (144 expected)")
+
+    // stp x29,x30 prologue (fd 7b bd a9) at offset 0 — 48-B frame spill.
+    if code[0] != 253 || code[1] != 123 || code[2] != 189 || code[3] != 169 {
+        println("FAIL: stp x29,x30 prologue mismatch")
+        return
+    }
+    println("  prologue       : fd 7b bd a9 (stp x29,x30,[sp,#-48]!) OK")
+
+    // str x22,[sp,#40] (f6 17 00 f9) at offset 0x10=16 — the NEW 4th callee-save.
+    if code[16] != 246 || code[17] != 23 || code[18] != 0 || code[19] != 249 {
+        println("FAIL: str x22,[sp,#40] (4th callee-save) mismatch")
+        return
+    }
+    println("  4th save slot  : f6 17 00 f9 (str x22,[sp,#40]) OK")
+
+    // bl (00 00 00 94) at offset 0x40=64 — cross-object CALL (BRANCH26 site).
+    if code[64] != 0 || code[65] != 0 || code[66] != 0 || code[67] != 148 {
+        println("FAIL: bl _hxlcl_malloc mismatch")
+        return
+    }
+    println("  call           : 00 00 00 94 (bl _hxlcl_malloc, BRANCH26 @0x40) OK")
+
+    // ret (c0 03 5f d6) at offset 140.
+    if code[140] != 192 || code[141] != 3 || code[142] != 95 || code[143] != 214 {
+        println("FAIL: ret trailer mismatch")
+        return
+    }
+    println("  ret trailer    : c0 03 5f d6 (ret) OK")
+
+    let obj = macho_obj_wrap_hxlcl_strndup(code)
+    println("  obj_wrap size  : " + to_string(len(obj)) + " bytes total")
+
+    // MH_MAGIC_64 LE at offset 0 (0xFEEDFACF → cf fa ed fe)
+    if obj[0] != 0xcf || obj[1] != 0xfa || obj[2] != 0xed || obj[3] != 0xfe {
+        println("FAIL: MH_MAGIC_64 mismatch")
+        return
+    }
+    println("  MH_MAGIC_64    : cf fa ed fe OK")
+
+    // filetype = MH_OBJECT (1) at offset 12
+    if obj[12] != 1 {
+        println("FAIL: filetype not MH_OBJECT")
+        return
+    }
+    println("  filetype       : 1 (MH_OBJECT) OK")
+
+    let out_path = env_var("HEXA_HXLCL_STRNDUP_O")
+    let mut dest = out_path
+    if dest == "" { dest = "build/poc/hxlcl_strndup.o" }
+    write_bytes(dest, obj)
+    println("  wrote          : " + dest)
+    println("[wire] EMIT OK — link via build recipe with HEXA_RT_SELFEMIT=1")
+}
+
+emit_hxlcl_strndup_o()
