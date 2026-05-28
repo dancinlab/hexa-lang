@@ -1,0 +1,77 @@
+#!hexa strict
+// tool/test/hexa_ld_page21/a_main_emit.hexa
+//   B9.C-7 (.c-leg tool/test hexa_ld batch · #1852 pattern) —
+//   hexa_ld_page21/a_main.c source emitter.
+//
+// Mirrors tests/runtime_h_smoke_emit.hexa one-to-one. Emits the
+// hexa_ld phase-H inc2 PoC object-A source (`adrp+add` PAGE21/PAGEOFF12
+// reloc against extern __cstring symbol `_hxld_msg`) verbatim.
+//
+// PROVEN-DEFERRED: hand-written `.c` is preserved because tool/test/
+// hexa_ld_* is explicitly flagged "active linker dev · 보수적 KEEP" in
+// RUNTIME.flip.md L418-419. Activation (i.e. `git rm` of the `.c`) is
+// gated on phase-H linker work concluding AND no future ld driver
+// surface re-consuming these fixtures.
+//
+// Invocation:
+//   hexa-run tool/test/hexa_ld_page21/a_main_emit.hexa <output-path>
+//
+// Default output path (if argv missing): "a_main.c" in cwd.
+//
+// Phase: B9.C-7 batch (hexa_ld linker test fixtures).
+
+let MODULE_NAME = "hexa_ld_page21_a_main_emit"
+
+fn emit_a_main_c() -> str {
+    // Verbatim content of hand-written tool/test/hexa_ld_page21/a_main.c
+    let s = "// a_main.c — object A: entry `_start`. References the `__cstring`\n" +
+            "// symbol `hxld_msg` (defined in object B) via an adrp/add pair\n" +
+            "// (ARM64_RELOC_PAGE21 + ARM64_RELOC_PAGEOFF12), writes the 16-byte\n" +
+            "// string to fd 1 via a raw `svc #0` write(2), then exits(0) via svc.\n" +
+            "//\n" +
+            "// Control/INPUT only — produced with `clang -c`, then linked by\n" +
+            "// hexa_ld (NO clang/ld/as at link time). Freestanding: no libc, no\n" +
+            "// dyld imports, so this exercises ONLY cross-object PAGE21/PAGEOFF12\n" +
+            "// + the __cstring layout — exactly the gap this increment closes.\n" +
+            "//\n" +
+            "// The string is 16 bytes incl. the trailing '\\n' (\"hi from cstring\\n\").\n" +
+            "// macOS arm64 syscall ABI: x16 = syscall number, args in x0..,\n" +
+            "// `svc #0x80`. write = 4, exit = 1.\n" +
+            "\n" +
+            "extern const char hxld_msg[];\n" +
+            "\n" +
+            "__attribute__((naked, used))\n" +
+            "void _start(void) {\n" +
+            "    __asm__ volatile(\n" +
+            "        // x1 = &hxld_msg  (adrp PAGE21 + add PAGEOFF12 — the relocs)\n" +
+            "        \"adrp x1, _hxld_msg@PAGE\\n\"\n" +
+            "        \"add  x1, x1, _hxld_msg@PAGEOFF\\n\"\n" +
+            "        // write(1, x1, 16)\n" +
+            "        \"mov  x0, #1\\n\"            // fd = stdout\n" +
+            "        \"mov  x2, #16\\n\"          // len = 16\n" +
+            "        \"mov  x16, #4\\n\"          // SYS_write\n" +
+            "        \"svc  #0x80\\n\"\n" +
+            "        // exit(0)\n" +
+            "        \"mov  x0, #0\\n\"\n" +
+            "        \"mov  x16, #1\\n\"          // SYS_exit\n" +
+            "        \"svc  #0x80\\n\"\n" +
+            "    );\n" +
+            "}\n"
+    return s
+}
+
+fn main() {
+    let argv = real_args()
+    let out_path = if argv.len() >= 1 { argv[0] } else { "a_main.c" }
+    let c_text = emit_a_main_c()
+    let cmd = "cat > \"" + out_path + "\" <<'__HEXA_LD_PAGE21_A_MAIN_EMIT_EOF__'\n" +
+              c_text + "__HEXA_LD_PAGE21_A_MAIN_EMIT_EOF__"
+    let _ = exec(cmd)
+    let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
+    if exists_check != "y" {
+        println("[hexa_ld_page21_a_main_emit] FATAL: failed to write " + out_path)
+        exit(1)
+    }
+    println("[hexa_ld_page21_a_main_emit] wrote " + out_path)
+    exit(0)
+}

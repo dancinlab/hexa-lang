@@ -1,0 +1,89 @@
+#!hexa strict
+// tool/test/hexa_ld_multisection/a_main_emit.hexa
+//   B9.C-7 (.c-leg tool/test hexa_ld batch · #1852 pattern) —
+//   hexa_ld_multisection/a_main.c source emitter.
+//
+// Emits the hexa_ld phase-H inc3 PoC object-A source (FULL multi-section
+// image: __cstring read + __data read + __bss write/read) verbatim.
+//
+// PROVEN-DEFERRED: hand-written `.c` is preserved per RUNTIME.flip.md
+// L418-419 "active linker dev · 보수적 KEEP" policy.
+//
+// Invocation:
+//   hexa-run tool/test/hexa_ld_multisection/a_main_emit.hexa <output-path>
+
+let MODULE_NAME = "hexa_ld_multisection_a_main_emit"
+
+fn emit_a_main_c() -> str {
+    // Verbatim content of hand-written tool/test/hexa_ld_multisection/a_main.c
+    let s = "// a_main.c — object A: entry `_start`. Exercises a FULL multi-section\n" +
+            "// image laid out by tool/hexa_ld.hexa (phase-H inc3):\n" +
+            "//\n" +
+            "//   (a) read-only string in __cstring  (extern `ms_str`, object B)\n" +
+            "//   (b) initialized mutable global in __data (extern `ms_init`, object B)\n" +
+            "//   (c) zero-init global in __bss (extern `ms_zero`, object B)\n" +
+            "//\n" +
+            "// It reads (b), copies it into (c), reads (c) back, writes (a) to fd 1,\n" +
+            "// then exits with the value read from (c). All via raw `svc #0x80`\n" +
+            "// syscalls — freestanding, NO libc, NO dyld imports — so this binary\n" +
+            "// exercises ONLY the cross-object PAGE21/PAGEOFF12 + the __TEXT/__DATA\n" +
+            "// multi-section layout, exactly the gap this increment closes. The\n" +
+            "// GOT / dyld function-import path is deliberately NOT touched (deferred\n" +
+            "// to the next increment).\n" +
+            "//\n" +
+            "// Control/INPUT only — produced with `clang -c`, then linked by\n" +
+            "// hexa_ld (NO clang/ld/as at link time).\n" +
+            "//\n" +
+            "// Expected behaviour:\n" +
+            "//   ms_init   = 7   (in __data)\n" +
+            "//   ms_zero   = 0   (in __bss)  → set to ms_init → 7\n" +
+            "//   stdout    = \"ms ok\\n\"  (6 bytes, in __cstring)\n" +
+            "//   exit code = 7\n" +
+            "\n" +
+            "extern const char ms_str[];      // __cstring  (read-only)\n" +
+            "extern int        ms_init;       // __data     (initialized = 7)\n" +
+            "extern int        ms_zero;       // __bss      (zero-init)\n" +
+            "\n" +
+            "__attribute__((naked, used))\n" +
+            "void _start(void) {\n" +
+            "    __asm__ volatile(\n" +
+            "        // x9 = &ms_init  (adrp+add → __data)\n" +
+            "        \"adrp x9, _ms_init@PAGE\\n\"\n" +
+            "        \"add  x9, x9, _ms_init@PAGEOFF\\n\"\n" +
+            "        \"ldr  w10, [x9]\\n\"               // w10 = ms_init = 7  (LDR-scaled PAGEOFF? no, this is on x9 already)\n" +
+            "        // x11 = &ms_zero (adrp+add → __bss)\n" +
+            "        \"adrp x11, _ms_zero@PAGE\\n\"\n" +
+            "        \"add  x11, x11, _ms_zero@PAGEOFF\\n\"\n" +
+            "        \"str  w10, [x11]\\n\"              // ms_zero = ms_init = 7   (WRITE to __bss)\n" +
+            "        \"ldr  w12, [x11]\\n\"              // w12 = ms_zero (read back) = 7\n" +
+            "        // write(1, ms_str, 6)\n" +
+            "        \"adrp x1, _ms_str@PAGE\\n\"\n" +
+            "        \"add  x1, x1, _ms_str@PAGEOFF\\n\" // x1 = &ms_str  (__cstring)\n" +
+            "        \"mov  x0, #1\\n\"                  // fd = stdout\n" +
+            "        \"mov  x2, #6\\n\"                  // len = 6 (\"ms ok\\n\")\n" +
+            "        \"mov  x16, #4\\n\"                 // SYS_write\n" +
+            "        \"svc  #0x80\\n\"\n" +
+            "        // exit(w12)  — should be 7\n" +
+            "        \"mov  x0, x12\\n\"\n" +
+            "        \"mov  x16, #1\\n\"                 // SYS_exit\n" +
+            "        \"svc  #0x80\\n\"\n" +
+            "    );\n" +
+            "}\n"
+    return s
+}
+
+fn main() {
+    let argv = real_args()
+    let out_path = if argv.len() >= 1 { argv[0] } else { "a_main.c" }
+    let c_text = emit_a_main_c()
+    let cmd = "cat > \"" + out_path + "\" <<'__HEXA_LD_MULTISECTION_A_MAIN_EMIT_EOF__'\n" +
+              c_text + "__HEXA_LD_MULTISECTION_A_MAIN_EMIT_EOF__"
+    let _ = exec(cmd)
+    let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
+    if exists_check != "y" {
+        println("[hexa_ld_multisection_a_main_emit] FATAL: failed to write " + out_path)
+        exit(1)
+    }
+    println("[hexa_ld_multisection_a_main_emit] wrote " + out_path)
+    exit(0)
+}

@@ -1,0 +1,40 @@
+#!hexa strict
+// tool/test/hexa_ld_dyld_write/b_data_emit.hexa
+//   B9.C-7 (.c-leg tool/test hexa_ld batch · #1852 pattern) —
+//   hexa_ld_dyld_write/b_data.c source emitter.
+//
+// Emits the hexa_ld phase-H inc4 PoC object-B companion (defines `MSG`
+// in __cstring) verbatim.
+//
+// PROVEN-DEFERRED — see a_main_emit.hexa header.
+
+let MODULE_NAME = "hexa_ld_dyld_write_b_data_emit"
+
+fn emit_b_data_c() -> str {
+    // Verbatim content of hand-written tool/test/hexa_ld_dyld_write/b_data.c
+    let s = "// b_data.c — Phase-H inc4 PoC companion: provides the `MSG` __cstring\n" +
+            "// payload used by a_main.c's write(1, MSG, 3) call.\n" +
+            "//\n" +
+            "// Kept separate so the linker exercises cross-object PAGE21/PAGEOFF12\n" +
+            "// reloc (inc2-proven) AND the new dyld bind (inc4) in the SAME binary\n" +
+            "// — both paths must coexist for the result to run.\n" +
+            "\n" +
+            "const char MSG[] = \"hi\\n\";\n"
+    return s
+}
+
+fn main() {
+    let argv = real_args()
+    let out_path = if argv.len() >= 1 { argv[0] } else { "b_data.c" }
+    let c_text = emit_b_data_c()
+    let cmd = "cat > \"" + out_path + "\" <<'__HEXA_LD_DYLD_WRITE_B_DATA_EMIT_EOF__'\n" +
+              c_text + "__HEXA_LD_DYLD_WRITE_B_DATA_EMIT_EOF__"
+    let _ = exec(cmd)
+    let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
+    if exists_check != "y" {
+        println("[hexa_ld_dyld_write_b_data_emit] FATAL: failed to write " + out_path)
+        exit(1)
+    }
+    println("[hexa_ld_dyld_write_b_data_emit] wrote " + out_path)
+    exit(0)
+}

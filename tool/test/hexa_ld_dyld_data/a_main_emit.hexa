@@ -1,0 +1,96 @@
+#!hexa strict
+// tool/test/hexa_ld_dyld_data/a_main_emit.hexa
+//   B9.C-7 (.c-leg tool/test hexa_ld batch · #1852 pattern) —
+//   hexa_ld_dyld_data/a_main.c source emitter.
+//
+// Emits the hexa_ld phase-H inc5 PoC object-A source (first dyld DATA
+// import: GOT_LOAD_PAGE21/PAGEOFF12 → __got slot, no __stubs) verbatim.
+//
+// PROVEN-DEFERRED: hand-written `.c` is preserved per RUNTIME.flip.md
+// L418-419 "active linker dev · 보수적 KEEP" policy.
+//
+// Invocation:
+//   hexa-run tool/test/hexa_ld_dyld_data/a_main_emit.hexa <output-path>
+
+let MODULE_NAME = "hexa_ld_dyld_data_a_main_emit"
+
+fn emit_a_main_c() -> str {
+    // Verbatim content of hand-written tool/test/hexa_ld_dyld_data/a_main.c
+    let s = "// a_main.c — Phase-H inc5 PoC: first dyld DATA import (no __stubs).\n" +
+            "//\n" +
+            "// Exercises the GOT-only data-import path that inc4 deliberately\n" +
+            "// skipped:\n" +
+            "//\n" +
+            "//   `adrp x9, _sym@GOTPAGE`         (ARM64_RELOC_GOT_LOAD_PAGE21)\n" +
+            "//   `ldr  x9, [x9, _sym@GOTPAGEOFF]` (ARM64_RELOC_GOT_LOAD_PAGEOFF12)\n" +
+            "//   `ldr  x10, [x9]`                 (dereference the resolved data)\n" +
+            "//\n" +
+            "// No __stubs entry is emitted for a data import — user code reads\n" +
+            "// the __got slot directly, which dyld populates at load time via\n" +
+            "// LC_DYLD_CHAINED_FIXUPS (same bind format as function imports;\n" +
+            "// only difference is the absence of a __stubs trampoline).\n" +
+            "//\n" +
+            "// We pick `environ` (a libc-exported `char**` global) because it is\n" +
+            "// reliably present on every macOS / iOS host as a PUBLIC data export\n" +
+            "// (re-exported through libSystem.B.dylib), has a known stable name,\n" +
+            "// and crucially does NOT require us to write to it — read-only deref\n" +
+            "// is all we need to verify the bind. Earlier candidate\n" +
+            "// `___stack_chk_guard` was dropped: that symbol is a PRIVATE libc\n" +
+            "// SSP cookie and is NOT externally extern-visible (clang itself\n" +
+            "// refuses to link against it from a normal `extern long ...` ref).\n" +
+            "//\n" +
+            "// Control/INPUT: compiled with `clang -c` to a .o that REFERENCES\n" +
+            "// `___stack_chk_guard` via @GOTPAGE/@GOTPAGEOFF (n_sect=0 extern_ref\n" +
+            "// + kind 5/6 relocs); linked by hexa_ld (NO clang/ld/as in the\n" +
+            "// produced exe's link).\n" +
+            "//\n" +
+            "// Expected behaviour:\n" +
+            "//   stdout    = \"\"           (no output — we only deref the value)\n" +
+            "//   exit code = 0            (raw svc #0x80 SYS_exit; success path\n" +
+            "//                             means the dyld bind + adrp/ldr patch\n" +
+            "//                             both worked — a broken bind would\n" +
+            "//                             segfault on the deref of x9)\n" +
+            "\n" +
+            "extern char **environ;\n" +
+            "\n" +
+            "__attribute__((naked, used))\n" +
+            "void _start(void) {\n" +
+            "    __asm__ volatile(\n" +
+            "        // Load the GOT slot's address into x9, then deref to x10.\n" +
+            "        // The two ldr instructions are deliberately separate so the\n" +
+            "        // first (GOT_LOAD_PAGEOFF12) is unambiguously the kind-6\n" +
+            "        // reloc target, and the second (plain load) just confirms\n" +
+            "        // the slot's contents are a valid pointer (deref doesn't\n" +
+            "        // crash).\n" +
+            "        \"adrp x9, _environ@GOTPAGE\\n\"\n" +
+            "        \"ldr  x9, [x9, _environ@GOTPAGEOFF]\\n\"\n" +
+            "        // Deref — if dyld bound the slot correctly this loads the\n" +
+            "        // `char**` pointer value; if the bind / adrp / ldr patch\n" +
+            "        // is wrong we'd be reading a garbage address and segfault.\n" +
+            "        \"ldr  x10, [x9]\\n\"\n" +
+            "        // exit(0) via raw syscall — no extern function dependency\n" +
+            "        // (we're isolating the data-import surface to a single\n" +
+            "        // failure mode).\n" +
+            "        \"mov  x0, #0\\n\"\n" +
+            "        \"mov  x16, #1\\n\"   // SYS_exit\n" +
+            "        \"svc  #0x80\\n\"\n" +
+            "    );\n" +
+            "}\n"
+    return s
+}
+
+fn main() {
+    let argv = real_args()
+    let out_path = if argv.len() >= 1 { argv[0] } else { "a_main.c" }
+    let c_text = emit_a_main_c()
+    let cmd = "cat > \"" + out_path + "\" <<'__HEXA_LD_DYLD_DATA_A_MAIN_EMIT_EOF__'\n" +
+              c_text + "__HEXA_LD_DYLD_DATA_A_MAIN_EMIT_EOF__"
+    let _ = exec(cmd)
+    let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
+    if exists_check != "y" {
+        println("[hexa_ld_dyld_data_a_main_emit] FATAL: failed to write " + out_path)
+        exit(1)
+    }
+    println("[hexa_ld_dyld_data_a_main_emit] wrote " + out_path)
+    exit(0)
+}
