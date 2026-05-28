@@ -1,0 +1,75 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+// stdlib/cloud/cloud_reap_test.hexa — falsifiers for the M6 orphan finder
+// in stdlib/cloud/pod_registry::pod_registry_orphans.
+//
+// Orphan contract (CLOUD.md M6):
+//   id ∈ provider.alive AND id ∉ registry  → ORPHAN (billing leak)
+//   The inverse (registry has but provider doesn't) is handled by
+//   `cloud reconcile` (GHOST), NOT by reap.
+//
+// LLM-free, network-free, no registry-file dependency. Mirrors
+// reconcile_test.hexa: a pure helper drives the set-diff over canned
+// (provider_alive_ids, registry_ids) inputs so the assertion is
+// hermetic (no runpodctl / vastai calls).
+//
+// Falsifier: F-CLOUD-M6-ORPHAN-SET-DIFF — 3 cases (no orphans · 1 orphan ·
+// only registry-extras → no orphans).
+//
+// Run:   hexa run stdlib/cloud/cloud_reap_test.hexa
+// PASS:  exits 0, prints "cloud_reap_test PASS — N/N cases".
+
+use "stdlib/cloud/pod_registry"
+
+fn _fail(case: str, msg: str) {
+    println("FAIL " + case + ": " + msg)
+    exit(1)
+}
+
+fn _eq_int(case: str, got: int, want: int) {
+    if got != want { _fail(case, "got " + str(got) + " want " + str(want)) }
+}
+
+fn _eq_str(case: str, got: str, want: str) {
+    if got != want { _fail(case, "got " + got + " want " + want) }
+}
+
+fn main() {
+    let mut n = 0
+
+    // Case 1 — no orphans (provider alive set ⊆ registry).
+    // Both rp-aaa and rp-bbb are registered, so neither is an orphan.
+    let alive_1 = ["rp-aaa", "rp-bbb"]
+    let reg_1 = ["rp-aaa", "rp-bbb", "rp-zzz"]
+    let orphans_1 = pod_registry_orphans(alive_1, reg_1, "runpod")
+    _eq_int("case1-no-orphans-count", len(orphans_1), 0); n = n + 1
+
+    // Case 2 — 1 orphan (provider has an id the registry doesn't).
+    // rp-aaa is in both; rp-leaked is alive on the provider but NOT tracked.
+    let alive_2 = ["rp-aaa", "rp-leaked"]
+    let reg_2 = ["rp-aaa"]
+    let orphans_2 = pod_registry_orphans(alive_2, reg_2, "runpod")
+    _eq_int("case2-one-orphan-count", len(orphans_2), 1); n = n + 1
+    _eq_str("case2-one-orphan-id", orphans_2[0].id, "rp-leaked"); n = n + 1
+    _eq_str("case2-one-orphan-provider", orphans_2[0].provider, "runpod"); n = n + 1
+
+    // Case 3 — only registry-extras (registry has pods the provider doesn't).
+    // The inverse case — registry tracks rp-stale + rp-gone but the provider
+    // only shows rp-stale alive. rp-gone is a GHOST (reconcile's job), NOT
+    // an orphan; reap should report 0 orphans here.
+    let alive_3 = ["rp-stale"]
+    let reg_3 = ["rp-stale", "rp-gone", "vast-12345"]
+    let orphans_3 = pod_registry_orphans(alive_3, reg_3, "runpod")
+    _eq_int("case3-only-registry-extras-count", len(orphans_3), 0); n = n + 1
+
+    // Bonus — empty provider list = 0 orphans regardless of registry size.
+    let orphans_4 = pod_registry_orphans([], reg_3, "vast")
+    _eq_int("bonus-empty-provider-count", len(orphans_4), 0); n = n + 1
+
+    // Bonus — empty registry = every alive id is an orphan.
+    let alive_5 = ["x", "y", "z"]
+    let orphans_5 = pod_registry_orphans(alive_5, [], "vast")
+    _eq_int("bonus-empty-registry-count", len(orphans_5), 3); n = n + 1
+    _eq_str("bonus-empty-registry-provider", orphans_5[0].provider, "vast"); n = n + 1
+
+    println("cloud_reap_test PASS — " + str(n) + "/" + str(n) + " cases")
+}
