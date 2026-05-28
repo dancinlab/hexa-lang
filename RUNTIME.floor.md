@@ -27,6 +27,28 @@ flip 캠페인이 안전 quick-win 을 고갈시킨 뒤 남는 진짜 바닥의 
   B9.6h dead-scaffolding sweep 후 **~70 예상** (대부분이 archive/fires + tool 의
   죽은 실험 harness 였음 — runtime floor 아님). sweep 후 남는 ~70 이 이 doc 의 대상.
 
+  **B9.C-5 (self/cuda) — self-emit PROVEN · activation DEFERRED** (2026-05-28).
+  `self/cuda/runtime_bf16.c` (787L) + `self/cuda/runtime_cuda.c` (3250L) 두
+  CUDA bridge `.c` 에 B9.C-4 패턴 1:1 적용:
+  - `runtime_bf16_emit.hexa` + `runtime_bf16_byte_diff.hexa` → **6/6 PASS**
+    (gate-1 source-sha + gate-2 `.o` no-g + gate-3 `__TEXT,__text` -g; HEXA_CUDA
+    undef plain-C fallback 경로 — sibling guard discipline 활용) ·
+    `.verdicts/runtime-floor-closure/B9C5-runtime_bf16-byte-diff.txt`
+  - `runtime_cuda_emit.hexa` + `runtime_cuda_byte_diff.hexa` → **gate-1 PASS**
+    + gate-2/3 SKIP (runtime_cuda.c 가 `<cuda_runtime.h>`/`<cublas_v2.h>` 를
+    top-level unconditional include — Mac host 에 nvcc 부재 SKIP) ·
+    `.verdicts/runtime-floor-closure/B9C5-runtime_cuda-byte-diff.txt`
+
+  activation (즉 `git rm` 으로 `.c` 96→94) 은 **DEFERRED** — `self/cuda/*.c` 는
+  `lib/hxpyembed/`/`lib/hxnccl/` 와 달리 CMake 타깃이 아니라 ~20 dispatch shell
+  script (tool/dispatch_phase4d{6,7,9}_*, dispatch_phase4d_5_{3,4}*, dispatch_r049_*,
+  dispatch_r050_*, dispatch_r055_*, flame_phase4d{7,9}_*.sh) 가 `scp $REPO/self/cuda/runtime_*.c
+  → GPU pod nvcc -x cu` 로 직접 업로드. `git rm` 즉시 20+ dispatch script 가 깨짐 (GPU
+  fan-out 회귀). project.tape 가 `.sh` Write 차단 — Edit 로 20 script regen-before-scp
+  reflow 가능하나 GPU pod 실측 검증 없이 일괄 변경은 blast-radius 과대. 따라서
+  emit + oracle + verdicts 만 LAND, `.c` rm 은 후속 GPU-pod-equipped 세션 (dispatch
+  reflow + 실 nvcc -x cu 회귀 검증) 으로 분리. .c 카운트 96 유지.
+
 세션 quick-win (flip): 4 파일 삭제 — blowfish(wire+🟢RUNEQ #1816) · v565(dead #1818)
 · hxtok(dead #1820) · hxvocoder(dead #1821).
 

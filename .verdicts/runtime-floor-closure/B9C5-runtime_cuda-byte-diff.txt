@@ -1,0 +1,30 @@
+========================================================================
+  self/cuda — runtime_cuda_byte_diff: B9.C-5 .c-leg byte-diff oracle
+========================================================================
+  generator: self/cuda/runtime_cuda_emit.hexa
+  oracle:    cc + otool byte-diff vs hand-written self/cuda/runtime_cuda.c
+  target:    GPU pod (nvcc -x cu -DHEXA_CUDA) — Mac host = SKIP gate-2/3
+             (runtime_cuda.c includes <cuda_runtime.h> unconditionally)
+  gates:     source-text · whole-file .o (no -g) · __text section (with -g)
+
+  scratch: /var/folders/2g/blzd56lx2rvfvt61c1pc9g7r0000gn/T/runtime_cuda_byte_diff.XXXXXX.DsqI1ci1co
+
+  [PASS] cc + otool present (Mac host toolchain)
+         · cc=y otool=y
+  [PASS] hexa emitter self/cuda/runtime_cuda_emit.hexa present
+         · /tmp/wt-b9c5/hexa-lang/self/cuda/runtime_cuda_emit.hexa
+  [PASS] hand-written self/cuda/runtime_cuda.c present
+         · /tmp/wt-b9c5/hexa-lang/self/cuda/runtime_cuda.c
+  [PASS] gate-1 source-text byte-identical (sha256(.c))
+         · orig=9b2e0c3339dc96c5ed7e578ea8a08c0b2c78db8dee947ce2199f4c8142e4b7d1 gen=9b2e0c3339dc96c5ed7e578ea8a08c0b2c78db8dee947ce2199f4c8142e4b7d1
+
+  CUDA include path not found — gate-2/3 SKIP
+  (runtime_cuda.c includes <cuda_runtime.h>/<cublas_v2.h> at top level;
+   compile-side verify requires CUDA toolkit. Production build is nvcc
+   on a GPU pod; gate-1 source-text byte-identity is the binding gate.)
+
+  B9.C-5 runtime_cuda.c .c-leg byte-identity:
+    SOURCE-SHA PROVEN ✓ — gate-1 source-text byte-identical.
+    gate-2/3 SKIP (no CUDA toolchain on this host).
+    DELETION GATE OPEN (source-sha caveat) — see file header.
+__HEXA_LANG_RUNTIME_CUDA_BYTE_DIFF__ PASS

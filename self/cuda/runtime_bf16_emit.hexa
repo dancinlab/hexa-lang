@@ -1,0 +1,828 @@
+#!hexa strict
+// self/cuda/runtime_bf16_emit.hexa
+//   B9.C-5 (.c-leg batch · #1850 pattern) — runtime_bf16.c source emitter.
+//
+// Mirrors lib/hxpyembed/hxpyembed_emit.hexa one-to-one. Emits the
+// forge RFC 049 Stage 2 BF16 substrate (`runtime_bf16.c`) verbatim.
+// runtime_cuda.c `#include`s this file at the end of its translation
+// unit, so both substrates share one `nvcc -x cu` build. The dispatch
+// scripts (tool/dispatch_r049_stage2_mm_lc.sh etc.) upload the
+// regenerated `.c` to a GPU pod for nvcc compile — there is no local
+// CMake target (no `nvcc` on the Mac host).
+//
+// Invocation (from a build wrapper or dispatch-script regen step):
+//   hexa-run self/cuda/runtime_bf16_emit.hexa <output-path>
+//
+// Default output path (if argv missing): "runtime_bf16.c" in cwd.
+//
+// Phase: B9.C-5 batch (runtime_bf16 + runtime_cuda).
+
+
+let MODULE_NAME = "runtime_bf16_emit"
+
+fn emit_runtime_bf16_c() -> str {
+    let s = "/* runtime_bf16.c — forge RFC 049 Stage 2: BF16 mixed-precision substrate.\n" +
+            " *\n" +
+            " *   Status: Stage 2 SCAFFOLD (storage class + kernel-entry signatures).\n" +
+            " *           Stage 2 kernel-body fire-validation = follow-up cost-bearing\n" +
+            " *           cycle. Stage 1 (the BF16 fused FFN kernel itself) is ALREADY\n" +
+            " *           MEASURED PASS — see self/cuda/experiments/r049_bf16_fused_ffn.cu\n" +
+            " *           (9.67x FP64 cuBLAS Dgemm chain on A100, Llama-7B FFN scale,\n" +
+            " *           state/forge_phaseR_r049_bf16_2026_05_17). This file is the\n" +
+            " *           wiring that turns that proven kernel into a forge substrate\n" +
+            " *           storage class — it adds no new measured claim.\n" +
+            " *\n" +
+            " * ─── Relationship to runtime_cuda.c (RFC 040 FP64 substrate) ──────────\n" +
+            " *\n" +
+            " *   runtime_cuda.c hosts the FP64 substrate: the `_CudaFarrSlot` device\n" +
+            " *   mirror table (FP64 `double* d_buf`) + cuBLAS Dgemm dispatch. This\n" +
+            " *   file is its SIBLING for the BF16 tier: a parallel `farr_bf16` storage\n" +
+            " *   class (2-byte `__nv_bfloat16` elements) + `*_bf16_gpu` kernel entry\n" +
+            " *   points. runtime_cuda.c `#include`s this file at the end of its\n" +
+            " *   translation unit so both substrates share one `nvcc -x cu` build.\n" +
+            " *\n" +
+            " *   This file is written so that on a NO-CUDA host (a Mac without the\n" +
+            " *   CUDA toolkit) it `cc -fsyntax-only`s clean as plain C: every line\n" +
+            " *   that needs a CUDA header or the cuBLAS handle is inside\n" +
+            " *   `#ifdef HEXA_CUDA`. With HEXA_CUDA undefined, only portable C\n" +
+            " *   (struct decls, plain helpers, honest-stub bodies) remains — the same\n" +
+            " *   pattern runtime_cuda.c uses for its Phase B elementwise block.\n" +
+            " *\n" +
+            " * ─── Cross-precision determinism contract (RFC 049 §\"Cross-precision\n" +
+            " *     determinism contract\", item 4 — encoded here as the function-\n" +
+            " *     signature surface; PROOF is the Stage 2 fire's job, NOT this\n" +
+            " *     scaffold's) ────────────────────────────────────────────────────\n" +
+            " *\n" +
+            " *   C1. WITHIN-PRECISION WITHIN-RUN bit-equal.\n" +
+            " *       Two invocations of the SAME `*_bf16_gpu` entry point with the\n" +
+            " *       SAME farr inputs, SAME batch size, on the SAME single GPU in\n" +
+            " *       the SAME single process MUST produce byte-identical BF16\n" +
+            " *       output. This is the FP64 D' anchor (within-run determinism\n" +
+            " *       FREE) generalised to BF16. Mechanism: cuBLAS GemmEx pinned to\n" +
+            " *       CUBLAS_GEMM_DEFAULT_TENSOR_OP (deterministic algo), no\n" +
+            " *       atomic-add to HBM, single-stream ordering. RFC 049 Stage 1\n" +
+            " *       MEASURED this PASS 3/3 shapes (within-run biteq) — Stage 2\n" +
+            " *       carries the same anchor.\n" +
+            " *\n" +
+            " *   C2. CROSS-PRECISION is NOT bit-equal — honest caveat.\n" +
+            " *       FP64 vs BF16 outputs of the same logical op are numerically\n" +
+            " *       close (RFC 049 Stage 1 measured 1.20-1.51% relative divergence;\n" +
+            " *       LayerCast paper anchor <= 3.4%) but they are NOT byte-equal and\n" +
+            " *       MUST NOT be compared with memcmp. forge's BF16 oracle compares\n" +
+            " *       against a BF16 CPU reference (RNE rounding), never against the\n" +
+            " *       FP64 path.\n" +
+            " *\n" +
+            " *   C3. CROSS-BATCH-SIZE is NOT bit-equal on the BF16 substrate.\n" +
+            " *       A different batch size changes the reduction tree; BF16's\n" +
+            " *       7-bit mantissa makes that reordering observable (LayerCast\n" +
+            " *       paper §3). The FP64 substrate D' has no such limitation — the\n" +
+            " *       BF16 D' boundary is strictly narrower (same-process +\n" +
+            " *       same-batch + same-GPU). Callers requiring batch-stable output\n" +
+            " *       MUST hold batch size fixed.\n" +
+            " *\n" +
+            " *   C4. PEDANTIC has no BF16 equivalent.\n" +
+            " *       FP64 PEDANTIC mode (cross-mode bit-equal) cannot be offered for\n" +
+            " *       BF16: GemmEx Tensor Core algos reduce in algo-dependent order.\n" +
+            " *       forge_tier_v1.c already returns FORGE_PRECISION_UNSUPPORTED for\n" +
+            " *       PEDANTIC + non-FP64 (RFC 049 §3.3) — this scaffold keeps that\n" +
+            " *       contract; no PEDANTIC entry point is declared here.\n" +
+            " *\n" +
+            " * ─── 3-layer cast pyramid (RFC 049 §\"Architecture\") ───────────────────\n" +
+            " *\n" +
+            " *   L1 master weights  : FP64 packed-double farr (runtime_cuda.c slot\n" +
+            " *                        table). AdamW state lives here. Untouched by\n" +
+            " *                        this file.\n" +
+            " *   L2 compute weights : BF16 `farr_bf16` storage class (THIS FILE) —\n" +
+            " *                        half-width arena, 2 bytes/elem.\n" +
+            " *   L3 compute         : BF16 Tensor Core, FP32 accumulator\n" +
+            " *                        (CUBLAS_COMPUTE_32F). Output cast FP32->BF16\n" +
+            " *                        at the epilogue.\n" +
+            " *\n" +
+            " * ─── RFC 052 compatibility note ───────────────────────────────────────\n" +
+            " *\n" +
+            " *   The `*_bf16_gpu` entry points declared here are the sm_80+\n" +
+            " *   single-block path (RFC 049). RFC 052 (Hopper sm_90+ BF16 WMMA + DSM\n" +
+            " *   cluster combined kernel) is a SUPERSEDING upper tier reachable\n" +
+            " *   through the SAME entry points: a Stage 2 dispatcher selects the\n" +
+            " *   RFC 052 cluster kernel when cc.major >= 9 and falls back to the\n" +
+            " *   RFC 049 body here on sm_80. The signatures below therefore carry\n" +
+            " *   NO sm_90-only argument — the cluster decision is internal to the\n" +
+            " *   kernel body, exactly as RFC 052 §6.5 fallback chain specifies. A\n" +
+            " *   future RFC 052 Stage 2 may add `hexa_farr_ffn_bf16_dsm_gpu` as a\n" +
+            " *   sibling; this scaffold does not pre-empt that name.\n" +
+            " *\n" +
+            " * ─── Governance ───────────────────────────────────────────────────────\n" +
+            " *\n" +
+            " *   g5 (hexa-native-only): forge's C/CUDA layer is the sanctioned\n" +
+            " *     substrate exception — the `.cu` body is a portable artifact built\n" +
+            " *     via nvcc, NOT an LLVM/C-transpile architecture backend.\n" +
+            " *   g3 (real-limits-first): every perf number referenced here traces to\n" +
+            " *     RFC 049 Stage 1's MEASURED fire or the LayerCast / NVIDIA datasheet\n" +
+            " *     literature anchors in the RFC. This file adds no new claim.\n" +
+            " *   No n=6 lattice numerology — BF16 = 2 bytes, FP64 = 8 bytes are IEEE\n" +
+            " *     754 / __nv_bfloat16 facts (f1/f2 deny clear).\n" +
+            " */\n" +
+            "\n" +
+            "#include <stdint.h>\n" +
+            "#include <stddef.h>\n" +
+            "#include <stdio.h>\n" +
+            "#include <stdlib.h>\n" +
+            "#include <string.h>\n" +
+            "\n" +
+            "#ifdef __cplusplus\n" +
+            "extern \"C\" {\n" +
+            "#endif\n" +
+            "\n" +
+            "/* ════════════════════════════════════════════════════════════════════\n" +
+            " * BF16 storage class — `farr_bf16`\n" +
+            " *\n" +
+            " * The FP64 substrate (runtime_cuda.c) keys its device mirror by farr_id\n" +
+            " * into the host `_hx_farr_table` (HexaFarrEntry, FP64 `double* buf`).\n" +
+            " * The BF16 tier needs its own descriptor because a BF16 element is\n" +
+            " * 2 bytes, not 8 — it cannot share the FP64 HexaFarrEntry. `HexaFarrBf16`\n" +
+            " * is the half-width sibling: an opaque handle the forge dispatcher\n" +
+            " * allocates, fills (H2D from an FP64 master via RNE cast, or directly),\n" +
+            " * hands to a `*_bf16_gpu` kernel, then reads back (D2H).\n" +
+            " *\n" +
+            " * Lifetime: caller-managed, mirroring forge_tier_v1.h ForgeArgs — no\n" +
+            " * hidden alloc, no hidden free (RFC 035/040 arena-ownership invariant).\n" +
+            " * ════════════════════════════════════════════════════════════════════ */\n" +
+            "\n" +
+            "/* Element-tag for the BF16 tier. Kept as a plain enum so the struct is\n" +
+            " * portable C even on a no-CUDA host. */\n" +
+            "enum {\n" +
+            "    FARR_BF16_LOC_HOST   = 0,   /* host buffer authoritative              */\n" +
+            "    FARR_BF16_LOC_DEVICE = 1,   /* device buffer authoritative            */\n" +
+            "    FARR_BF16_LOC_MIRROR = 2    /* host + device in sync                  */\n" +
+            "};\n" +
+            "\n" +
+            "/* BF16 storage descriptor. `h_buf` / `d_buf` are void* so this header\n" +
+            " * stays parseable as plain C without <cuda_bf16.h>; the CUDA-side code\n" +
+            " * casts them to `__nv_bfloat16*`. Each BF16 element is 2 bytes — the\n" +
+            " * half-width arena RFC 049 §\"Components\" item 1 calls for (75% storage\n" +
+            " * reduction vs the FP64 packed-double farr). */\n" +
+            "typedef struct HexaFarrBf16 {\n" +
+            "    void*    h_buf;     /* host-side __nv_bfloat16 buffer, or NULL         */\n" +
+            "    void*    d_buf;     /* device-side __nv_bfloat16 buffer, or NULL       */\n" +
+            "    int64_t  len;       /* element count                                  */\n" +
+            "    int      loc;       /* one of FARR_BF16_LOC_*                          */\n" +
+            "    int      owns;      /* 1 = this descriptor owns its buffers (free OK)  */\n" +
+            "} HexaFarrBf16;\n" +
+            "\n" +
+            "/* Bytes-per-element for the BF16 tier. IEEE 754 bfloat16 / NVIDIA\n" +
+            " * __nv_bfloat16 is a 16-bit type. Not a lattice constant — a hardware\n" +
+            " * fact (f1/f2 deny clear). */\n" +
+            "#define HEXA_FARR_BF16_ELEM_BYTES 2\n" +
+            "\n" +
+            "/* ─── storage-class lifecycle (host side, portable) ───────────────────\n" +
+            " *\n" +
+            " * These four are declared unconditionally — the HOST-side bookkeeping\n" +
+            " * (descriptor alloc, host buffer malloc/free) is portable C and useful\n" +
+            " * even on a no-CUDA build for the BF16 CPU reference oracle. The\n" +
+            " * device-touching bodies live in the HEXA_CUDA block below. */\n" +
+            "\n" +
+            "/* Allocate a BF16 storage descriptor + host buffer of `len` elements.\n" +
+            " * Returns NULL on OOM. Zero-fills the host buffer. */\n" +
+            "HexaFarrBf16* hexa_farr_bf16_alloc(int64_t len);\n" +
+            "\n" +
+            "/* Free a BF16 descriptor and any buffers it owns (host + device).\n" +
+            " * Safe on NULL. */\n" +
+            "void hexa_farr_bf16_free(HexaFarrBf16* f);\n" +
+            "\n" +
+            "/* RNE cast helpers — FP64 master <-> BF16 storage. Round-to-nearest-even\n" +
+            " * is the IEEE 754 default; the device path uses __float2bfloat16 (RNE),\n" +
+            " * the host reference path here mirrors that contract. `n` elements.\n" +
+            " * Returns 0 ok / -1 on bad args. Host-side, portable (the BF16 CPU\n" +
+            " * reference oracle, RFC 049 §Authority g_blue_closed_mandate). */\n" +
+            "int hexa_farr_bf16_from_f64(const double* src, HexaFarrBf16* dst, int64_t n);\n" +
+            "int hexa_farr_bf16_to_f64(const HexaFarrBf16* src, double* dst, int64_t n);\n" +
+            "\n" +
+            "/* ─── H2D / D2H (device side — only meaningful with CUDA) ──────────────\n" +
+            " *\n" +
+            " * Declared unconditionally so callers compiled on any host see a stable\n" +
+            " * ABI; the no-CUDA body is an honest stub returning -1. */\n" +
+            "\n" +
+            "/* Upload host BF16 buffer -> device (cudaMalloc on demand). 0 ok / -1. */\n" +
+            "int hexa_farr_bf16_to_device(HexaFarrBf16* f);\n" +
+            "\n" +
+            "/* Download device BF16 buffer -> host. 0 ok / -1. */\n" +
+            "int hexa_farr_bf16_to_host(HexaFarrBf16* f);\n" +
+            "\n" +
+            "/* ════════════════════════════════════════════════════════════════════\n" +
+            " * `*_bf16_gpu` kernel entry points (RFC 049 §\"Components\" item 2)\n" +
+            " *\n" +
+            " * These are the substrate-level surface the forge dispatcher\n" +
+            " * (forge_tier_v1.c, FORGE_PREC_LAYERCAST_BF16_FP32 / FORGE_PREC_PURE_BF16)\n" +
+            " * routes BF16 work to. Each is the BF16 sibling of an existing FP64\n" +
+            " * `_hx_cuda_farr_*_gpu` entry in runtime_cuda.c.\n" +
+            " *\n" +
+            " * Determinism contract C1 (within-precision within-run bit-equal)\n" +
+            " * applies to ALL of these; C2/C3/C4 caveats apply (see file header).\n" +
+            " *\n" +
+            " * Stage 2 status: SIGNATURES landed. Bodies delegate to the MEASURED\n" +
+            " * Stage 1 kernel pattern (r049_bf16_fused_ffn.cu cuBLAS GemmEx BF16\n" +
+            " * path) OR are honest fire-validation-pending stubs — the production\n" +
+            " * kernel fire is the follow-up cost-bearing cycle, NOT this scaffold.\n" +
+            " * ════════════════════════════════════════════════════════════════════ */\n" +
+            "\n" +
+            "/* BF16 matmul: row-major C[M,N] = A[M,K] @ B[K,N], all `farr_bf16`.\n" +
+            " * cuBLAS GemmEx, CUDA_R_16BF input, CUBLAS_COMPUTE_32F (FP32 accumulator),\n" +
+            " * CUDA_R_16BF output, CUBLAS_GEMM_DEFAULT_TENSOR_OP (BF16 Tensor Core on\n" +
+            " * sm_80+, deterministic algo → contract C1). Sibling of\n" +
+            " * runtime_cuda.c::_hx_cuda_farr_matmul_gpu. 0 ok / -1 err. */\n" +
+            "int hexa_farr_matmul_bf16_gpu(HexaFarrBf16* A, int64_t M, int64_t K,\n" +
+            "                              HexaFarrBf16* B, int64_t N,\n" +
+            "                              HexaFarrBf16* C);\n" +
+            "\n" +
+            "/* BF16 fused FFN: Y = SiLU(X @ W1) @ W2. The exact chain RFC 049 Stage 1\n" +
+            " * MEASURED at 9.67x FP64 cuBLAS Dgemm (Llama-7B FFN, A100 — see\n" +
+            " * r049_bf16_fused_ffn.cu). Activation in FP32 (LayerCast storage/compute\n" +
+            " * split), GemmEx BF16 for both matmuls. X[M,D], W1[D,FD], W2[FD,D],\n" +
+            " * Y[M,D]. 0 ok / -1 err. */\n" +
+            "int hexa_farr_ffn_bf16_gpu(HexaFarrBf16* X, int64_t M, int64_t D, int64_t FD,\n" +
+            "                           HexaFarrBf16* W1, HexaFarrBf16* W2,\n" +
+            "                           HexaFarrBf16* Y);\n" +
+            "\n" +
+            "/* LayerCast linear: Y[M,N] = X[M,K] @ W[K,N], W in BF16 storage, X and\n" +
+            " * Y in FP32, FP32 compute (just-in-time upcast per linear — LayerCast\n" +
+            " * paradigm, arxiv 2506.09501). The MEASURED pattern from\n" +
+            " * r049_layercast_linear.cu. X / Y are plain FP32 device-or-host arrays;\n" +
+            " * only the weight uses the BF16 storage class. 0 ok / -1 err. */\n" +
+            "int hexa_farr_layercast_linear_bf16_gpu(const float* X, int64_t M, int64_t K,\n" +
+            "                                        HexaFarrBf16* W, int64_t N,\n" +
+            "                                        float* Y);\n" +
+            "\n" +
+            "/* ════════════════════════════════════════════════════════════════════\n" +
+            " * Host-side portable bodies (no CUDA needed — compile on every host).\n" +
+            " * ════════════════════════════════════════════════════════════════════ */\n" +
+            "\n" +
+            "/* RNE round of an FP32 value to a bfloat16 bit pattern (returned as the\n" +
+            " * raw 16-bit value). Round-to-nearest-even, matching __float2bfloat16.\n" +
+            " * This is the host CPU reference contract for the BF16 oracle; the\n" +
+            " * device path uses the hardware intrinsic. Pure integer arithmetic on\n" +
+            " * the FP32 bit pattern — no <cuda_bf16.h> needed. */\n" +
+            "static uint16_t _hx_f32_to_bf16_rne(float v) {\n" +
+            "    uint32_t bits;\n" +
+            "    memcpy(&bits, &v, sizeof(bits));\n" +
+            "    /* NaN: keep it quiet, preserve a payload bit. */\n" +
+            "    if (((bits >> 23) & 0xFF) == 0xFF && (bits & 0x7FFFFF) != 0) {\n" +
+            "        return (uint16_t)((bits >> 16) | 0x0040);\n" +
+            "    }\n" +
+            "    /* Round-to-nearest-even: add the rounding bias then truncate. The\n" +
+            "     * bias is 0x7FFF + the LSB of the surviving mantissa. */\n" +
+            "    uint32_t lsb        = (bits >> 16) & 1u;\n" +
+            "    uint32_t round_bias = 0x7FFFu + lsb;\n" +
+            "    return (uint16_t)((bits + round_bias) >> 16);\n" +
+            "}\n" +
+            "\n" +
+            "/* Widen a bfloat16 bit pattern back to FP32 (exact — bf16 ⊂ fp32). */\n" +
+            "static float _hx_bf16_to_f32(uint16_t bf) {\n" +
+            "    uint32_t bits = (uint32_t)bf << 16;\n" +
+            "    float v;\n" +
+            "    memcpy(&v, &bits, sizeof(v));\n" +
+            "    return v;\n" +
+            "}\n" +
+            "\n" +
+            "#ifdef HEXA_CUDA\n" +
+            "/* Forward decl — defined in the HEXA_CUDA block below; needed here so\n" +
+            " * hexa_farr_bf16_free (portable section) can reference it. */\n" +
+            "static void _hx_farr_bf16_device_free(HexaFarrBf16* f);\n" +
+            "#endif\n" +
+            "\n" +
+            "HexaFarrBf16* hexa_farr_bf16_alloc(int64_t len) {\n" +
+            "    if (len < 0) return NULL;\n" +
+            "    HexaFarrBf16* f = (HexaFarrBf16*)calloc(1, sizeof(HexaFarrBf16));\n" +
+            "    if (!f) return NULL;\n" +
+            "    size_t bytes = (size_t)len * HEXA_FARR_BF16_ELEM_BYTES;\n" +
+            "    f->h_buf = (len > 0) ? calloc((size_t)len, HEXA_FARR_BF16_ELEM_BYTES)\n" +
+            "                         : NULL;\n" +
+            "    if (len > 0 && !f->h_buf) { free(f); return NULL; }\n" +
+            "    f->d_buf = NULL;\n" +
+            "    f->len   = len;\n" +
+            "    f->loc   = FARR_BF16_LOC_HOST;\n" +
+            "    f->owns  = 1;\n" +
+            "    (void)bytes;\n" +
+            "    return f;\n" +
+            "}\n" +
+            "\n" +
+            "void hexa_farr_bf16_free(HexaFarrBf16* f) {\n" +
+            "    if (!f) return;\n" +
+            "    if (f->owns && f->h_buf) free(f->h_buf);\n" +
+            "#ifdef HEXA_CUDA\n" +
+            "    /* device buffer is cudaFree'd in the CUDA block's helper below */\n" +
+            "    if (f->owns && f->d_buf) _hx_farr_bf16_device_free(f);\n" +
+            "#endif\n" +
+            "    f->h_buf = NULL;\n" +
+            "    f->d_buf = NULL;\n" +
+            "    free(f);\n" +
+            "}\n" +
+            "\n" +
+            "int hexa_farr_bf16_from_f64(const double* src, HexaFarrBf16* dst, int64_t n) {\n" +
+            "    if (!src || !dst || !dst->h_buf || n < 0 || n > dst->len) return -1;\n" +
+            "    uint16_t* hb = (uint16_t*)dst->h_buf;\n" +
+            "    for (int64_t i = 0; i < n; i++) {\n" +
+            "        hb[i] = _hx_f32_to_bf16_rne((float)src[i]);\n" +
+            "    }\n" +
+            "    dst->loc = FARR_BF16_LOC_HOST;\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "int hexa_farr_bf16_to_f64(const HexaFarrBf16* src, double* dst, int64_t n) {\n" +
+            "    if (!src || !src->h_buf || !dst || n < 0 || n > src->len) return -1;\n" +
+            "    const uint16_t* hb = (const uint16_t*)src->h_buf;\n" +
+            "    for (int64_t i = 0; i < n; i++) {\n" +
+            "        dst[i] = (double)_hx_bf16_to_f32(hb[i]);\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "/* ════════════════════════════════════════════════════════════════════\n" +
+            " * CUDA-side bodies — only compiled when HEXA_CUDA is defined (the\n" +
+            " * nvcc -x cu build). On a no-CUDA host this whole block is skipped and\n" +
+            " * the device entry points below take their honest-stub form instead.\n" +
+            " * ════════════════════════════════════════════════════════════════════ */\n" +
+            "#ifdef HEXA_CUDA\n" +
+            "\n" +
+            "#include <cuda_runtime.h>\n" +
+            "#include <cublas_v2.h>\n" +
+            "#include <cuda_bf16.h>\n" +
+            "\n" +
+            "/* cudaFree the device buffer of a BF16 descriptor. Internal helper used\n" +
+            " * by hexa_farr_bf16_free. */\n" +
+            "static void _hx_farr_bf16_device_free(HexaFarrBf16* f) {\n" +
+            "    if (f && f->d_buf) {\n" +
+            "        cudaFree(f->d_buf);\n" +
+            "        f->d_buf = NULL;\n" +
+            "    }\n" +
+            "}\n" +
+            "\n" +
+            "int hexa_farr_bf16_to_device(HexaFarrBf16* f) {\n" +
+            "    if (!f || f->len < 0) return -1;\n" +
+            "    size_t bytes = (size_t)f->len * sizeof(__nv_bfloat16);\n" +
+            "    if (!f->d_buf && f->len > 0) {\n" +
+            "        cudaError_t e = cudaMalloc(&f->d_buf, bytes);\n" +
+            "        if (e != cudaSuccess) {\n" +
+            "            fprintf(stderr, \"[bf16] cudaMalloc %zu B failed: %s\\n\",\n" +
+            "                    bytes, cudaGetErrorString(e));\n" +
+            "            f->d_buf = NULL;\n" +
+            "            return -1;\n" +
+            "        }\n" +
+            "    }\n" +
+            "    /* Sticky device-residence: copy host->device ONLY when the host buffer\n" +
+            "     * is the authoritative copy (loc == HOST — e.g. fresh from from_f64).\n" +
+            "     * If the farr is already MIRROR or DEVICE the device buffer is in sync\n" +
+            "     * (or newer), so a re-upload is both redundant and wrong (it would\n" +
+            "     * clobber a device-authoritative result with stale host data). Without\n" +
+            "     * this guard every *_bf16_gpu call re-staged its full operand set —\n" +
+            "     * measured 17x slowdown on the FFN path (RFC 049 Stage 2 fire,\n" +
+            "     * state/forge_rfc049_stage2_2026_05_19): weights re-uploaded every step. */\n" +
+            "    if (f->len > 0 && f->h_buf && f->loc == FARR_BF16_LOC_HOST) {\n" +
+            "        cudaError_t e = cudaMemcpy(f->d_buf, f->h_buf, bytes,\n" +
+            "                                   cudaMemcpyHostToDevice);\n" +
+            "        if (e != cudaSuccess) {\n" +
+            "            fprintf(stderr, \"[bf16] H2D %zu B failed: %s\\n\",\n" +
+            "                    bytes, cudaGetErrorString(e));\n" +
+            "            return -1;\n" +
+            "        }\n" +
+            "    }\n" +
+            "    f->loc = FARR_BF16_LOC_MIRROR;\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "int hexa_farr_bf16_to_host(HexaFarrBf16* f) {\n" +
+            "    if (!f || f->len < 0) return -1;\n" +
+            "    if (!f->d_buf || !f->h_buf) return -1;\n" +
+            "    size_t bytes = (size_t)f->len * sizeof(__nv_bfloat16);\n" +
+            "    cudaError_t e = cudaMemcpy(f->h_buf, f->d_buf, bytes,\n" +
+            "                               cudaMemcpyDeviceToHost);\n" +
+            "    if (e != cudaSuccess) {\n" +
+            "        fprintf(stderr, \"[bf16] D2H %zu B failed: %s\\n\",\n" +
+            "                bytes, cudaGetErrorString(e));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    f->loc = FARR_BF16_LOC_MIRROR;\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "/* ─── *_bf16_gpu kernel entry points — Stage 2 PRODUCTION BODIES ───────\n" +
+            " *\n" +
+            " * RFC 049 Stage 2 — production wiring of the MEASURED Stage 1 kernels\n" +
+            " * (self/cuda/experiments/r049_bf16_fused_ffn.cu, cuBLAS GemmEx BF16 path,\n" +
+            " * 9.67x FP64 cuBLAS Dgemm chain on A100). The kernel ALGORITHM is unchanged\n" +
+            " * from Stage 1 — these bodies only do the substrate wiring: they reuse the\n" +
+            " * shared `g_cublas` handle from runtime_cuda.c (this file is `#include`d\n" +
+            " * into the same CUDA translation unit, so the static handle + the\n" +
+            " * `_ensure_cublas()` lazy-init helper are both visible here), then drive\n" +
+            " * the proven cublasGemmEx call shape. No new measured claim — the fire\n" +
+            " * (running these on a GPU + confirming 9.67x + within-run bit-equal) is a\n" +
+            " * separate cost-bearing step.\n" +
+            " *\n" +
+            " * `g_cublas` / `_ensure_cublas()` provenance: runtime_cuda.c defines them\n" +
+            " * `static` before its `#include \"runtime_bf16.c\"` line, so they are\n" +
+            " * file-scope-visible to this TU section. We do NOT create a second cuBLAS\n" +
+            " * handle — one handle per process keeps the determinism contract C1\n" +
+            " * (within-run bit-equal) intact and avoids redundant context init.\n" +
+            " *\n" +
+            " * Determinism contract (file header C1): cublasGemmEx with a fixed algo\n" +
+            " * (CUBLAS_GEMM_DEFAULT_TENSOR_OP for the pure-BF16 path) reduces in a\n" +
+            " * fixed order on a single GPU + single stream + single process — so two\n" +
+            " * invocations with identical inputs produce byte-identical BF16 output.\n" +
+            " * No atomic-add to HBM. C2/C3/C4 caveats unchanged (see file header).\n" +
+            " *\n" +
+            " * On any cuBLAS / device error each body returns -1 and names itself on\n" +
+            " * stderr — the runtime_cuda.c error-path convention; no fake result. */\n" +
+            "\n" +
+            "/* SiLU(x) = x * sigmoid(x) on a BF16 device buffer, computed in FP32\n" +
+            " * (LayerCast storage/compute split). Byte-identical to the MEASURED\n" +
+            " * Stage 1 `silu_bf16` kernel in r049_bf16_fused_ffn.cu — same FP32\n" +
+            " * sigmoid, same __float2bfloat16 RNE epilogue, same grid-stride loop. */\n" +
+            "static __global__ void _hx_silu_bf16_k(__nv_bfloat16* h, size_t n) {\n" +
+            "    size_t i = blockIdx.x * blockDim.x + threadIdx.x;\n" +
+            "    size_t stride = (size_t)gridDim.x * blockDim.x;\n" +
+            "    for (; i < n; i += stride) {\n" +
+            "        float v = __bfloat162float(h[i]);\n" +
+            "        float sig = 1.0f / (1.0f + expf(-v));\n" +
+            "        h[i] = __float2bfloat16(v * sig);\n" +
+            "    }\n" +
+            "}\n" +
+            "\n" +
+            "/* On-device upcast BF16 -> FP32 — the LayerCast fallback path's weight\n" +
+            " * widening (r049_layercast_linear.cu `bf16_to_f32_k`). Used only when the\n" +
+            " * running cuBLAS lacks the mixed FP32xBF16 GemmEx type combination. */\n" +
+            "static __global__ void _hx_bf16_to_f32_k(const __nv_bfloat16* in,\n" +
+            "                                         float* out, size_t n) {\n" +
+            "    size_t i = blockIdx.x * blockDim.x + threadIdx.x;\n" +
+            "    size_t stride = (size_t)gridDim.x * blockDim.x;\n" +
+            "    for (; i < n; i += stride) out[i] = __bfloat162float(in[i]);\n" +
+            "}\n" +
+            "\n" +
+            "/* The pure-BF16 GemmEx call shape, lifted verbatim from the MEASURED\n" +
+            " * Stage 1 `gemm_ex_bf16` helper: CUDA_R_16BF input, CUBLAS_COMPUTE_32F\n" +
+            " * (FP32 accumulator), CUDA_R_16BF output, CUBLAS_GEMM_DEFAULT_TENSOR_OP\n" +
+            " * (BF16 Tensor Core on sm_80+, deterministic algo -> contract C1). */\n" +
+            "static cublasStatus_t _hx_gemm_ex_bf16(cublasOperation_t opA,\n" +
+            "                                       cublasOperation_t opB,\n" +
+            "                                       int m, int n, int k,\n" +
+            "                                       const __nv_bfloat16* A, int lda,\n" +
+            "                                       const __nv_bfloat16* B, int ldb,\n" +
+            "                                       __nv_bfloat16* C, int ldc) {\n" +
+            "    const float alpha = 1.0f, beta = 0.0f;\n" +
+            "    return cublasGemmEx(g_cublas, opA, opB, m, n, k,\n" +
+            "                        &alpha,\n" +
+            "                        A, CUDA_R_16BF, lda,\n" +
+            "                        B, CUDA_R_16BF, ldb,\n" +
+            "                        &beta,\n" +
+            "                        C, CUDA_R_16BF, ldc,\n" +
+            "                        CUBLAS_COMPUTE_32F,\n" +
+            "                        CUBLAS_GEMM_DEFAULT_TENSOR_OP);\n" +
+            "}\n" +
+            "\n" +
+            "/* Grid-block count for an elementwise kernel of `n` elements (256-thread\n" +
+            " * blocks, capped at 65535 — the Stage 1 kernels' launch-config helper). */\n" +
+            "static int _hx_bf16_blocks(size_t n) {\n" +
+            "    size_t b = (n + 255) / 256;\n" +
+            "    return (b > 65535) ? 65535 : (int)b;\n" +
+            "}\n" +
+            "\n" +
+            "int hexa_farr_matmul_bf16_gpu(HexaFarrBf16* A, int64_t M, int64_t K,\n" +
+            "                              HexaFarrBf16* B, int64_t N,\n" +
+            "                              HexaFarrBf16* C) {\n" +
+            "    /* Production body: a single BF16 GemmEx — the MEASURED Stage 1\n" +
+            "     * gemm_ex_bf16 pattern (r049_bf16_fused_ffn.cu). */\n" +
+            "    if (!A || !B || !C || M <= 0 || K <= 0 || N <= 0) {\n" +
+            "        fprintf(stderr, \"[bf16] hexa_farr_matmul_bf16_gpu: bad args\\n\");\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    if (M > INT32_MAX || K > INT32_MAX || N > INT32_MAX) {\n" +
+            "        fprintf(stderr, \"[bf16] hexa_farr_matmul_bf16_gpu: \"\n" +
+            "                        \"dim exceeds cuBLAS int range\\n\");\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    if (_ensure_cublas() != 0) {\n" +
+            "        fprintf(stderr, \"[bf16] hexa_farr_matmul_bf16_gpu: no cuBLAS handle\\n\");\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    /* Ensure all three farr are device-resident (H2D on demand). */\n" +
+            "    if (hexa_farr_bf16_to_device(A) != 0 ||\n" +
+            "        hexa_farr_bf16_to_device(B) != 0 ||\n" +
+            "        hexa_farr_bf16_to_device(C) != 0) {\n" +
+            "        fprintf(stderr, \"[bf16] hexa_farr_matmul_bf16_gpu: H2D failed\\n\");\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    const __nv_bfloat16* dA = (const __nv_bfloat16*)A->d_buf;\n" +
+            "    const __nv_bfloat16* dB = (const __nv_bfloat16*)B->d_buf;\n" +
+            "    __nv_bfloat16*       dC = (__nv_bfloat16*)C->d_buf;\n" +
+            "    if (!dA || !dB || !dC) {\n" +
+            "        fprintf(stderr, \"[bf16] hexa_farr_matmul_bf16_gpu: null device buf\\n\");\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    /* Row-major C[M,N] = A[M,K] @ B[K,N]. cuBLAS is column-major; the\n" +
+            "     * standard swap trick computes the transpose: gemm(opN,opN, N, M, K,\n" +
+            "     * B, N, A, K, C, N) — identical to the Stage 1 helper's call sites. */\n" +
+            "    cublasStatus_t st = _hx_gemm_ex_bf16(CUBLAS_OP_N, CUBLAS_OP_N,\n" +
+            "                                         (int)N, (int)M, (int)K,\n" +
+            "                                         dB, (int)N,\n" +
+            "                                         dA, (int)K,\n" +
+            "                                         dC, (int)N);\n" +
+            "    if (st != CUBLAS_STATUS_SUCCESS) {\n" +
+            "        fprintf(stderr, \"[bf16] hexa_farr_matmul_bf16_gpu: \"\n" +
+            "                        \"cublasGemmEx failed: %d\\n\", (int)st);\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    cudaError_t ce = cudaDeviceSynchronize();\n" +
+            "    if (ce != cudaSuccess) {\n" +
+            "        fprintf(stderr, \"[bf16] hexa_farr_matmul_bf16_gpu: sync failed: %s\\n\",\n" +
+            "                cudaGetErrorString(ce));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    /* C's device buffer is now authoritative. */\n" +
+            "    C->loc = FARR_BF16_LOC_DEVICE;\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "int hexa_farr_ffn_bf16_gpu(HexaFarrBf16* X, int64_t M, int64_t D, int64_t FD,\n" +
+            "                           HexaFarrBf16* W1, HexaFarrBf16* W2,\n" +
+            "                           HexaFarrBf16* Y) {\n" +
+            "    /* Production body: the fused FFN chain Y = SiLU(X @ W1) @ W2 — the\n" +
+            "     * MEASURED Stage 1 cublas_ffn_chain_bf16 pattern\n" +
+            "     * (r049_bf16_fused_ffn.cu, 9.67x FP64 cuBLAS @ Llama-7B FFN).\n" +
+            "     *\n" +
+            "     * RFC 052 will supersede this body with the Hopper sm_90+ DSM-cluster\n" +
+            "     * combined kernel via an internal cc.major>=9 branch — same entry\n" +
+            "     * point, no signature change (RFC 052 §6.5 fallback chain). This\n" +
+            "     * Stage 2 body is the sm_80 RFC 049 path. */\n" +
+            "    if (!X || !W1 || !W2 || !Y || M <= 0 || D <= 0 || FD <= 0) {\n" +
+            "        fprintf(stderr, \"[bf16] hexa_farr_ffn_bf16_gpu: bad args\\n\");\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    if (M > INT32_MAX || D > INT32_MAX || FD > INT32_MAX) {\n" +
+            "        fprintf(stderr, \"[bf16] hexa_farr_ffn_bf16_gpu: \"\n" +
+            "                        \"dim exceeds cuBLAS int range\\n\");\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    if (_ensure_cublas() != 0) {\n" +
+            "        fprintf(stderr, \"[bf16] hexa_farr_ffn_bf16_gpu: no cuBLAS handle\\n\");\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    if (hexa_farr_bf16_to_device(X)  != 0 ||\n" +
+            "        hexa_farr_bf16_to_device(W1) != 0 ||\n" +
+            "        hexa_farr_bf16_to_device(W2) != 0 ||\n" +
+            "        hexa_farr_bf16_to_device(Y)  != 0) {\n" +
+            "        fprintf(stderr, \"[bf16] hexa_farr_ffn_bf16_gpu: H2D failed\\n\");\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    const __nv_bfloat16* dX  = (const __nv_bfloat16*)X->d_buf;\n" +
+            "    const __nv_bfloat16* dW1 = (const __nv_bfloat16*)W1->d_buf;\n" +
+            "    const __nv_bfloat16* dW2 = (const __nv_bfloat16*)W2->d_buf;\n" +
+            "    __nv_bfloat16*       dY  = (__nv_bfloat16*)Y->d_buf;\n" +
+            "    if (!dX || !dW1 || !dW2 || !dY) {\n" +
+            "        fprintf(stderr, \"[bf16] hexa_farr_ffn_bf16_gpu: null device buf\\n\");\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    /* The hidden activation H[M,FD] needs its own device scratch — the\n" +
+            "     * caller's farr set does not include it. Cached process-lifetime and\n" +
+            "     * grown on demand: a per-call cudaMalloc/cudaFree pair roughly halved\n" +
+            "     * the FFN speedup (RFC 049 Stage 2 re-fire measured 4.78× with the\n" +
+            "     * per-call malloc; the scratch is forge runtime state, like g_cublas,\n" +
+            "     * and is intentionally never freed). */\n" +
+            "    static __nv_bfloat16* s_ffn_dH = NULL;\n" +
+            "    static size_t s_ffn_dH_bytes = 0;\n" +
+            "    size_t szH = (size_t)M * (size_t)FD * sizeof(__nv_bfloat16);\n" +
+            "    cudaError_t ce;\n" +
+            "    if (szH > s_ffn_dH_bytes) {\n" +
+            "        if (s_ffn_dH) cudaFree(s_ffn_dH);\n" +
+            "        ce = cudaMalloc((void**)&s_ffn_dH, szH);\n" +
+            "        if (ce != cudaSuccess) {\n" +
+            "            fprintf(stderr, \"[bf16] hexa_farr_ffn_bf16_gpu: \"\n" +
+            "                            \"scratch cudaMalloc %zu B failed: %s\\n\",\n" +
+            "                    szH, cudaGetErrorString(ce));\n" +
+            "            s_ffn_dH = NULL; s_ffn_dH_bytes = 0;\n" +
+            "            return -1;\n" +
+            "        }\n" +
+            "        s_ffn_dH_bytes = szH;\n" +
+            "    }\n" +
+            "    __nv_bfloat16* dH = s_ffn_dH;\n" +
+            "    /* H = X @ W1 — row-major (M,D)·(D,FD) -> (M,FD); column-major swap. */\n" +
+            "    cublasStatus_t st = _hx_gemm_ex_bf16(CUBLAS_OP_N, CUBLAS_OP_N,\n" +
+            "                                         (int)FD, (int)M, (int)D,\n" +
+            "                                         dW1, (int)FD,\n" +
+            "                                         dX,  (int)D,\n" +
+            "                                         dH,  (int)FD);\n" +
+            "    if (st != CUBLAS_STATUS_SUCCESS) {\n" +
+            "        fprintf(stderr, \"[bf16] hexa_farr_ffn_bf16_gpu: \"\n" +
+            "                        \"gemm1 failed: %d\\n\", (int)st);\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    /* In-place SiLU on H (BF16 storage, FP32 compute). */\n" +
+            "    size_t n_act = (size_t)M * (size_t)FD;\n" +
+            "    _hx_silu_bf16_k<<<_hx_bf16_blocks(n_act), 256>>>(dH, n_act);\n" +
+            "    ce = cudaGetLastError();\n" +
+            "    if (ce != cudaSuccess) {\n" +
+            "        fprintf(stderr, \"[bf16] hexa_farr_ffn_bf16_gpu: \"\n" +
+            "                        \"silu launch failed: %s\\n\", cudaGetErrorString(ce));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    /* Y = H @ W2 — row-major (M,FD)·(FD,D) -> (M,D); column-major swap. */\n" +
+            "    st = _hx_gemm_ex_bf16(CUBLAS_OP_N, CUBLAS_OP_N,\n" +
+            "                          (int)D, (int)M, (int)FD,\n" +
+            "                          dW2, (int)D,\n" +
+            "                          dH,  (int)FD,\n" +
+            "                          dY,  (int)D);\n" +
+            "    if (st != CUBLAS_STATUS_SUCCESS) {\n" +
+            "        fprintf(stderr, \"[bf16] hexa_farr_ffn_bf16_gpu: \"\n" +
+            "                        \"gemm2 failed: %d\\n\", (int)st);\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    ce = cudaDeviceSynchronize();\n" +
+            "    if (ce != cudaSuccess) {\n" +
+            "        fprintf(stderr, \"[bf16] hexa_farr_ffn_bf16_gpu: sync failed: %s\\n\",\n" +
+            "                cudaGetErrorString(ce));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    Y->loc = FARR_BF16_LOC_DEVICE;\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "int hexa_farr_layercast_linear_bf16_gpu(const float* X, int64_t M, int64_t K,\n" +
+            "                                        HexaFarrBf16* W, int64_t N,\n" +
+            "                                        float* Y) {\n" +
+            "    /* Production body: the LayerCast linear Y[M,N] = X[M,K] @ W[K,N] with\n" +
+            "     * W in BF16 storage, X and Y in FP32, FP32 compute — the MEASURED\n" +
+            "     * Stage 1 r049_layercast_linear.cu pattern (divergence 1.20-1.51% vs\n" +
+            "     * FP32). Tries the direct mixed FP32xBF16 cublasGemmEx first; on an\n" +
+            "     * unsupported-type status falls back to an on-device BF16->FP32 upcast\n" +
+            "     * of the weight followed by cublasSgemm — exactly the Stage 1\n" +
+            "     * try-mixed-then-fallback structure.\n" +
+            "     *\n" +
+            "     * X / Y are plain FP32 HOST arrays (the LayerCast surface uses FP32\n" +
+            "     * activations); this body owns the device staging for X, W and Y. */\n" +
+            "    if (!X || !W || !Y || M <= 0 || K <= 0 || N <= 0) {\n" +
+            "        fprintf(stderr, \"[bf16] hexa_farr_layercast_linear_bf16_gpu: \"\n" +
+            "                        \"bad args\\n\");\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    if (M > INT32_MAX || K > INT32_MAX || N > INT32_MAX) {\n" +
+            "        fprintf(stderr, \"[bf16] hexa_farr_layercast_linear_bf16_gpu: \"\n" +
+            "                        \"dim exceeds cuBLAS int range\\n\");\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    if (W->len < (int64_t)K * N) {\n" +
+            "        fprintf(stderr, \"[bf16] hexa_farr_layercast_linear_bf16_gpu: \"\n" +
+            "                        \"weight farr too small\\n\");\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    if (_ensure_cublas() != 0) {\n" +
+            "        fprintf(stderr, \"[bf16] hexa_farr_layercast_linear_bf16_gpu: \"\n" +
+            "                        \"no cuBLAS handle\\n\");\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    if (hexa_farr_bf16_to_device(W) != 0) {\n" +
+            "        fprintf(stderr, \"[bf16] hexa_farr_layercast_linear_bf16_gpu: \"\n" +
+            "                        \"weight H2D failed\\n\");\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    const __nv_bfloat16* dW = (const __nv_bfloat16*)W->d_buf;\n" +
+            "    if (!dW) {\n" +
+            "        fprintf(stderr, \"[bf16] hexa_farr_layercast_linear_bf16_gpu: \"\n" +
+            "                        \"null weight device buf\\n\");\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    /* Device staging for the FP32 activations. */\n" +
+            "    size_t szX = (size_t)M * (size_t)K * sizeof(float);\n" +
+            "    size_t szY = (size_t)M * (size_t)N * sizeof(float);\n" +
+            "    float* dX = NULL;\n" +
+            "    float* dY = NULL;\n" +
+            "    cudaError_t ce;\n" +
+            "    if ((ce = cudaMalloc((void**)&dX, szX)) != cudaSuccess) {\n" +
+            "        fprintf(stderr, \"[bf16] hexa_farr_layercast_linear_bf16_gpu: \"\n" +
+            "                        \"dX cudaMalloc failed: %s\\n\", cudaGetErrorString(ce));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    if ((ce = cudaMalloc((void**)&dY, szY)) != cudaSuccess) {\n" +
+            "        fprintf(stderr, \"[bf16] hexa_farr_layercast_linear_bf16_gpu: \"\n" +
+            "                        \"dY cudaMalloc failed: %s\\n\", cudaGetErrorString(ce));\n" +
+            "        cudaFree(dX);\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    if ((ce = cudaMemcpy(dX, X, szX, cudaMemcpyHostToDevice)) != cudaSuccess) {\n" +
+            "        fprintf(stderr, \"[bf16] hexa_farr_layercast_linear_bf16_gpu: \"\n" +
+            "                        \"X H2D failed: %s\\n\", cudaGetErrorString(ce));\n" +
+            "        cudaFree(dX); cudaFree(dY);\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    /* Row-major Y[M,N] = X[M,K] @ W[K,N]; column-major swap trick:\n" +
+            "     * gemm(opN,opN, N, M, K, W, N, X, K, Y, N). Try the mixed FP32xBF16\n" +
+            "     * GemmEx first (modern cuBLAS 12.x); FP32 accumulator. */\n" +
+            "    const float alpha = 1.0f, beta = 0.0f;\n" +
+            "    cublasStatus_t st = cublasGemmEx(g_cublas, CUBLAS_OP_N, CUBLAS_OP_N,\n" +
+            "                                     (int)N, (int)M, (int)K,\n" +
+            "                                     &alpha,\n" +
+            "                                     dW, CUDA_R_16BF, (int)N,\n" +
+            "                                     dX, CUDA_R_32F,  (int)K,\n" +
+            "                                     &beta,\n" +
+            "                                     dY, CUDA_R_32F,  (int)N,\n" +
+            "                                     CUBLAS_COMPUTE_32F,\n" +
+            "                                     CUBLAS_GEMM_DEFAULT);\n" +
+            "    if (st != CUBLAS_STATUS_SUCCESS) {\n" +
+            "        /* Fallback: on-device upcast BF16 weight -> FP32, then Sgemm. */\n" +
+            "        float* dW_f32 = NULL;\n" +
+            "        size_t n_w = (size_t)K * (size_t)N;\n" +
+            "        if ((ce = cudaMalloc((void**)&dW_f32,\n" +
+            "                             n_w * sizeof(float))) != cudaSuccess) {\n" +
+            "            fprintf(stderr, \"[bf16] hexa_farr_layercast_linear_bf16_gpu: \"\n" +
+            "                            \"fallback scratch failed: %s\\n\",\n" +
+            "                    cudaGetErrorString(ce));\n" +
+            "            cudaFree(dX); cudaFree(dY);\n" +
+            "            return -1;\n" +
+            "        }\n" +
+            "        _hx_bf16_to_f32_k<<<_hx_bf16_blocks(n_w), 256>>>(dW, dW_f32, n_w);\n" +
+            "        ce = cudaGetLastError();\n" +
+            "        if (ce != cudaSuccess) {\n" +
+            "            fprintf(stderr, \"[bf16] hexa_farr_layercast_linear_bf16_gpu: \"\n" +
+            "                            \"upcast launch failed: %s\\n\",\n" +
+            "                    cudaGetErrorString(ce));\n" +
+            "            cudaFree(dX); cudaFree(dY); cudaFree(dW_f32);\n" +
+            "            return -1;\n" +
+            "        }\n" +
+            "        st = cublasSgemm(g_cublas, CUBLAS_OP_N, CUBLAS_OP_N,\n" +
+            "                         (int)N, (int)M, (int)K,\n" +
+            "                         &alpha, dW_f32, (int)N, dX, (int)K,\n" +
+            "                         &beta, dY, (int)N);\n" +
+            "        cudaFree(dW_f32);\n" +
+            "        if (st != CUBLAS_STATUS_SUCCESS) {\n" +
+            "            fprintf(stderr, \"[bf16] hexa_farr_layercast_linear_bf16_gpu: \"\n" +
+            "                            \"fallback Sgemm failed: %d\\n\", (int)st);\n" +
+            "            cudaFree(dX); cudaFree(dY);\n" +
+            "            return -1;\n" +
+            "        }\n" +
+            "    }\n" +
+            "    ce = cudaMemcpy(Y, dY, szY, cudaMemcpyDeviceToHost);\n" +
+            "    cudaFree(dX);\n" +
+            "    cudaFree(dY);\n" +
+            "    if (ce != cudaSuccess) {\n" +
+            "        fprintf(stderr, \"[bf16] hexa_farr_layercast_linear_bf16_gpu: \"\n" +
+            "                        \"Y D2H failed: %s\\n\", cudaGetErrorString(ce));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "#else  /* !HEXA_CUDA — no-CUDA host: honest stubs, ABI stays stable */\n" +
+            "\n" +
+            "int hexa_farr_bf16_to_device(HexaFarrBf16* f) {\n" +
+            "    (void)f;\n" +
+            "    /* No CUDA toolkit on this host — the BF16 device tier is unavailable.\n" +
+            "     * Host-side farr_bf16 storage + RNE casts still work for the CPU\n" +
+            "     * reference oracle. */\n" +
+            "    return -1;\n" +
+            "}\n" +
+            "\n" +
+            "int hexa_farr_bf16_to_host(HexaFarrBf16* f) {\n" +
+            "    (void)f;\n" +
+            "    return -1;\n" +
+            "}\n" +
+            "\n" +
+            "int hexa_farr_matmul_bf16_gpu(HexaFarrBf16* A, int64_t M, int64_t K,\n" +
+            "                              HexaFarrBf16* B, int64_t N,\n" +
+            "                              HexaFarrBf16* C) {\n" +
+            "    (void)A; (void)M; (void)K; (void)B; (void)N; (void)C;\n" +
+            "    return -1;  /* no-CUDA host: BF16 GPU substrate unavailable */\n" +
+            "}\n" +
+            "\n" +
+            "int hexa_farr_ffn_bf16_gpu(HexaFarrBf16* X, int64_t M, int64_t D, int64_t FD,\n" +
+            "                           HexaFarrBf16* W1, HexaFarrBf16* W2,\n" +
+            "                           HexaFarrBf16* Y) {\n" +
+            "    (void)X; (void)M; (void)D; (void)FD; (void)W1; (void)W2; (void)Y;\n" +
+            "    return -1;  /* no-CUDA host: BF16 GPU substrate unavailable */\n" +
+            "}\n" +
+            "\n" +
+            "int hexa_farr_layercast_linear_bf16_gpu(const float* X, int64_t M, int64_t K,\n" +
+            "                                        HexaFarrBf16* W, int64_t N,\n" +
+            "                                        float* Y) {\n" +
+            "    (void)X; (void)M; (void)K; (void)W; (void)N; (void)Y;\n" +
+            "    return -1;  /* no-CUDA host: BF16 GPU substrate unavailable */\n" +
+            "}\n" +
+            "\n" +
+            "#endif /* HEXA_CUDA */\n" +
+            "\n" +
+            "#ifdef __cplusplus\n" +
+            "}  /* extern \"C\" */\n" +
+            "#endif\n"
+    return s
+}
+
+fn main() {
+    let argv = real_args()
+    let out_path = if argv.len() >= 1 { argv[0] } else { "runtime_bf16.c" }
+    let c_text = emit_runtime_bf16_c()
+    let cmd = "cat > \"" + out_path + "\" <<'__HEXA_EMIT_EOF__'\n" +
+              c_text + "__HEXA_EMIT_EOF__"
+    let _ = exec(cmd)
+    let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
+    if exists_check != "y" {
+        println("[runtime_bf16_emit] FATAL: failed to write " + out_path)
+        exit(1)
+    }
+    println("[runtime_bf16_emit] wrote " + out_path)
+    exit(0)
+}
