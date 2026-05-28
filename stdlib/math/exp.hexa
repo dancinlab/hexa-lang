@@ -1,0 +1,214 @@
+#!hexa strict
+// ============================================================================
+// stdlib/math/exp.hexa
+//   Exponential primitive trio — e^x + e^(-1) + Boltzmann absorption floor
+//   (CLOAK meta-domain 부품 ⓹ — closes transmission 1 − 1/e ⚪→🟢)
+//
+// Surface (pure functions):
+//   fn exp_taylor(x: float)              → e^x        (primary exp impl)
+//   fn exp_neg_one()                     → e^(-1)    ≈ 0.36787944117144233
+//   fn boltzmann_absorption_floor()      → 1 − 1/e   ≈ 0.6321205588285577
+//
+// Formulas:
+//                  ∞   x^n
+//     e^x  =  Σ   ─────                                         (Taylor series)
+//                 n=0   n!
+//
+//     e^x  =  2^k · e^r,  r = x − k·ln(2),  |r| < ln(2)/2     (range reduction)
+//
+//     P_abs(τ=1) = 1 − e^(−1)                  (Beer-Lambert, optical depth=1)
+//                ≈ 0.6321205588                (CLOAK ⓹ transmission floor)
+//
+// CLOAK side note:
+//   The 1 − 1/e ratio is the canonical absorption fraction for a uniform
+//   medium with optical depth τ = 1: the unabsorbed fraction is e^(−τ),
+//   so absorbed fraction = 1 − e^(−τ) = 1 − 1/e ≈ 63.21 %. This anchors
+//   CLOAK ⓹ — the closed-form transmission floor — independently of the
+//   Drude ε<0 branch (CLOAK ⓵-⓸) and the Veselago n_eff seal (CLOAK ⓺).
+//
+// Honest scope (commons g3):
+//   · Wraps self/runtime/math_pure.exp_pure (Taylor + 2^k range reduction).
+//   · Float64 precision; |x| ≤ 709 (overflow guarded inside exp_pure).
+//   · F4 tolerance follows the libm subtraction-near-zero floor (PR #1943
+//     lesson) — exp_neg_one matches exp_pure(-1.0) to within 1e-15 by
+//     construction, not by re-computation.
+//
+// Self-test (this file): 7 closed-form FALSIFIERS
+//   F1: exp_taylor(0) = 1                                 (identity, rel < 1e-15)
+//   F2: exp_taylor(1) ≈ 2.71828182845905                  (rel < 1e-12)
+//   F3: exp_taylor(-1) ≈ 0.36787944117144                 (rel < 1e-12)
+//   F4: exp_neg_one() = exp_taylor(-1) within libm floor  (abs < 1e-15)
+//   F5: boltzmann_absorption_floor() ≈ 0.63212055882856   (rel < 1e-12)
+//   F6: exp(x)·exp(-x) = 1 for x = 2.5                    (rel < 1e-10)
+//   F7: exp(a+b) = exp(a)·exp(b) for a=1.3, b=0.7         (rel < 1e-10)
+//
+// Run:
+//     hexa run stdlib/math/exp.hexa
+//
+// @no-lock-needed
+
+use "self/runtime/math_pure"
+
+let VERSION = "1.0.0"
+
+// ─── check harness ──────────────────────────────────────────────────────
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+fn abs_f(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn rel_err(a: float, b: float) -> float {
+    let d = abs_f(a - b)
+    let abs_b = abs_f(b)
+    if abs_b < 1.0e-30 { return d }
+    return d / abs_b
+}
+
+// ─── primitive: exp_taylor — e^x via math_pure.exp_pure ─────────────────
+
+fn exp_taylor(x: float) -> float {
+    return exp_pure(x)
+}
+
+// ─── primitive: exp_neg_one — e^(-1) ≈ 0.36787944117144233 ──────────────
+
+fn exp_neg_one() -> float {
+    return exp_taylor(-1.0)
+}
+
+// ─── primitive: 1 − 1/e — Boltzmann absorption floor (CLOAK ⓹) ──────────
+
+fn boltzmann_absorption_floor() -> float {
+    return 1.0 - exp_neg_one()
+}
+
+// ─── analytical limit sanity checks (self-test) ─────────────────────────
+
+// F1 — exp_taylor(0) = 1
+fn check_exp_zero() {
+    let v = exp_taylor(0.0)
+    _check(rel_err(v, 1.0) < 1.0e-15,
+        "F1 exp_taylor(0) = 1  (identity)",
+        "exp(0)=" + str(v) + "  target=1.0  rel_err=" + str(rel_err(v, 1.0)))
+}
+
+// F2 — exp_taylor(1) ≈ e ≈ 2.71828182845905
+fn check_exp_one() {
+    let v = exp_taylor(1.0)
+    let target: float = 2.718281828459045
+    _check(rel_err(v, target) < 1.0e-12,
+        "F2 exp_taylor(1) ≈ 2.71828182845905  (e)",
+        "exp(1)=" + str(v) + "  target=" + str(target) +
+        "  rel_err=" + str(rel_err(v, target)))
+}
+
+// F3 — exp_taylor(-1) ≈ 0.36787944117144
+fn check_exp_neg_one_value() {
+    let v = exp_taylor(-1.0)
+    let target: float = 0.36787944117144233
+    _check(rel_err(v, target) < 1.0e-12,
+        "F3 exp_taylor(-1) ≈ 0.36787944117144  (1/e)",
+        "exp(-1)=" + str(v) + "  target=" + str(target) +
+        "  rel_err=" + str(rel_err(v, target)))
+}
+
+// F4 — exp_neg_one() matches exp_taylor(-1) within libm precision
+fn check_exp_neg_one_wrapper() {
+    let a = exp_neg_one()
+    let b = exp_taylor(-1.0)
+    let diff = abs_f(a - b)
+    _check(diff < 1.0e-15,
+        "F4 exp_neg_one() = exp_taylor(-1)  (wrapper identity within libm floor)",
+        "exp_neg_one()=" + str(a) + "  exp_taylor(-1)=" + str(b) +
+        "  |Δ|=" + str(diff))
+}
+
+// F5 — boltzmann_absorption_floor() ≈ 0.6321205588285577
+fn check_boltzmann_floor() {
+    let v = boltzmann_absorption_floor()
+    let target: float = 0.6321205588285577
+    _check(rel_err(v, target) < 1.0e-12,
+        "F5 boltzmann_absorption_floor() ≈ 0.63212055882856  (1 − 1/e · CLOAK ⓹)",
+        "1−1/e=" + str(v) + "  target=" + str(target) +
+        "  rel_err=" + str(rel_err(v, target)))
+}
+
+// F6 — exp(x)·exp(-x) = 1 for x = 2.5
+fn check_exp_inverse() {
+    let x: float = 2.5
+    let prod = exp_taylor(x) * exp_taylor(-x)
+    _check(rel_err(prod, 1.0) < 1.0e-10,
+        "F6 exp(x)·exp(-x) = 1  for x=2.5  (inverse identity)",
+        "exp(2.5)·exp(-2.5)=" + str(prod) +
+        "  rel_err=" + str(rel_err(prod, 1.0)))
+}
+
+// F7 — exp(a+b) = exp(a)·exp(b) for a=1.3, b=0.7
+fn check_exp_addition() {
+    let a: float = 1.3
+    let b: float = 0.7
+    let lhs = exp_taylor(a + b)
+    let rhs = exp_taylor(a) * exp_taylor(b)
+    _check(rel_err(lhs, rhs) < 1.0e-10,
+        "F7 exp(a+b) = exp(a)·exp(b)  for a=1.3, b=0.7  (addition identity)",
+        "exp(a+b)=" + str(lhs) + "  exp(a)·exp(b)=" + str(rhs) +
+        "  rel_err=" + str(rel_err(lhs, rhs)))
+}
+
+// ─── falsifiers ─────────────────────────────────────────────────────────
+
+let FALSIFIERS = [
+    "F1 exp(0) break — exp_taylor(0) ≠ 1 → DEMOTE Taylor identity at origin",
+    "F2 exp(1) break — exp_taylor(1) ≠ e ≈ 2.71828 → DEMOTE Taylor convergence at unit arg",
+    "F3 exp(-1) break — exp_taylor(-1) ≠ 1/e ≈ 0.36788 → DEMOTE negative-arg Taylor branch",
+    "F4 wrapper break — exp_neg_one() ≠ exp_taylor(-1) within 1e-15 → DEMOTE wrapper identity",
+    "F5 Boltzmann floor break — (1 − 1/e) ≠ 0.63212 → DEMOTE CLOAK ⓹ absorption-floor anchor",
+    "F6 inverse break — exp(x)·exp(-x) ≠ 1 → DEMOTE multiplicative inverse identity",
+    "F7 addition break — exp(a+b) ≠ exp(a)·exp(b) → DEMOTE exponential addition law",
+]
+
+// ─── main ───────────────────────────────────────────────────────────────
+
+fn main() {
+    println("========================================================================")
+    println("  stdlib/math — exp_taylor + exp_neg_one + boltzmann_absorption_floor")
+    println("========================================================================")
+    println("  e^x   = Σ x^n/n!                      (Taylor series + 2^k range red.)")
+    println("  e^(-1) ≈ 0.36787944117144              (canonical 1/e anchor)")
+    println("  1−1/e ≈ 0.63212055882856              (Beer-Lambert τ=1 · CLOAK ⓹)")
+    println("")
+
+    println("  Analytical limit sanity checks (7 FALSIFIERS):")
+    check_exp_zero()
+    check_exp_one()
+    check_exp_neg_one_value()
+    check_exp_neg_one_wrapper()
+    check_boltzmann_floor()
+    check_exp_inverse()
+    check_exp_addition()
+
+    println("")
+    println("  FALSIFIERS (" + str(FALSIFIERS.len()) + "):")
+    for f in FALSIFIERS { println("    ✗ " + f) }
+
+    println("========================================================================")
+    let pass_n = RUN - FAIL
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("  exp_taylor / exp_neg_one / boltzmann_absorption_floor self-test FAILED.")
+        println("__HEXA_STDLIB_MATH_EXP__ FAIL")
+        exit(1)
+    }
+    println("  MATH exp primitive trio (e^x + e^(-1) + 1−1/e): PASS")
+    println("__HEXA_STDLIB_MATH_EXP__ PASS")
+    exit(0)
+}
