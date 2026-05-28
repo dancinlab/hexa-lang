@@ -38,7 +38,19 @@ LDFLAGS := \
   -nostdlib -nostartfiles -ffreestanding
 
 C_SRC := $(wildcard src/*.c)
-S_SRC := $(wildcard startup/*.s)
+
+# Hexa-emitted startup `.s` (F5 RFC 063/064 stm32f429 leg).
+# `startup_stm32f429.s` is generated at build time from
+# stdlib/hal/boot_emit.hexa::stm32f429_emit_full_startup_s; the hand-
+# written `.s` was `git rm`d once the byte-diff oracle
+# (stdlib/sscb/firmware/startup/boot_byte_diff_stm32f429.hexa) proved
+# gen ≡ orig 10/10 PASS (.isr_vector + .text.Reset_Handler +
+# .text.Default_Handler + reloc lists for all three).
+HEXA_RUN  ?= hexa-run
+REPO_ROOT ?= $(abspath $(CURDIR)/../../..)
+STARTUP_GEN ?= $(REPO_ROOT)/stdlib/sscb/firmware/startup/startup_stm32f429_gen.hexa
+S_GEN     := startup/startup_stm32f429.s
+S_SRC     := $(S_GEN)
 
 OBJS := $(C_SRC:src/%.c=build/%.o) $(S_SRC:startup/%.s=build/%.o)
 
@@ -50,6 +62,15 @@ build:
 
 build/%.o: src/%.c | build
 	$(CC) $(CFLAGS) -c $< -o $@
+
+# Hexa-emitted startup.s — regenerated whenever the emitter or its
+# inputs change. Quad dependency captures the full chain: per-target
+# generator, CMSIS composer, vector-table emitter, prologue emitter.
+$(S_GEN): $(STARTUP_GEN) \
+          $(REPO_ROOT)/stdlib/hal/boot_emit.hexa \
+          $(REPO_ROOT)/stdlib/hal/vector_table_emit.hexa \
+          $(REPO_ROOT)/stdlib/hal/reset_prologue_emit.hexa
+	$(HEXA_RUN) $(STARTUP_GEN) $@
 
 build/%.o: startup/%.s | build
 	$(CC) $(ASFLAGS) -c $< -o $@
@@ -69,6 +90,7 @@ size: build/firmware.elf
 
 clean:
 	rm -rf build
+	rm -f $(S_GEN)
 
 check:
 	@command -v $(CC) >/dev/null 2>&1 || { echo "MISSING: $(CC)  (brew install --cask gcc-arm-embedded)"; exit 1; }
