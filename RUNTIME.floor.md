@@ -598,6 +598,21 @@ runtime.c 조각이라 F3 로 fold (mis-split 해소). **F3 만이 진짜 open**
     F1(perf)·F2(vendor-ABI) 와 동일 closure 형태 (현 capability irreducible + 미래
     enabler re-open).
 
+  - 📗 **FOUNDATION 증분 (PR1 · 2026-05-28)** — Component 2-lite + byte-diff oracle:
+    - `stdlib/hal/vector_table_emit.hexa` — pure-hexa `.s`-text vector-table 생성기
+      (string-builder · `as` 가 reloc/literal-pool 담당 · 핵심 API
+      `vt_emit_section` + canned `rp2040_emit_vector_table_s`).
+    - `stdlib/hal/t3/vt_byte_diff_rp2040.hexa` — `arm-none-eabi-as` byte-diff 오라클
+      (SHA256(.vector_table) + R_ARM_ABS32 reloc-set 동일성).
+    - 측정: 6/6 PASS · `.verdicts/runtime-floor-closure/F5-vt-byte-diff-rp2040.txt`
+      (`gen sha == orig sha == 212baeea7479dbac…73d82c2`, 4× R_ARM_ABS32).
+    - **증명**: rp2040 `.vector_table` 섹션은 hexa-emittable byte-identical.
+    - **DEFERRED (다음 PR)**: Component 1 (parser `@interrupt(slot=N)` arg —
+      `self/parser.hexa` mod + `self/native/hexa_cc.c` regen, WIPE-PRONE 단일 serial)
+      + Component 3 (reset-prologue ARMv6-M lowering) + Component 5 (`git rm
+      boot_rp2040.s` + numerics_t3_rp2040_compile.hexa rewire). 본 PR 은 토대만 — `.s`
+      파일 삭제 없음 (reset prologue 미생성 → byte-identical 전체 boot.s 불가).
+
 ### F6 — bootstrap seed (terminal)
 
 - [x] **F6 bootstrap** — `hexa_cc.c` (생성된 self-host 컴파일러) + HexaVal repr/GC/

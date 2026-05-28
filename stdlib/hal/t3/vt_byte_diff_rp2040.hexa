@@ -1,0 +1,233 @@
+#!hexa strict
+// stdlib/hal/t3/vt_byte_diff_rp2040.hexa — F5 RFC 063/064 byte-diff oracle.
+//
+// Proves the hexa vector-table emitter (stdlib/hal/vector_table_emit.hexa)
+// produces a `.vector_table` section byte-identical to the hand-written
+// stdlib/hal/t3/boot_rp2040.s.
+//
+// Phase: foundation (PR1 of F5 re-open per RUNTIME.floor.md §F5).
+// This is the BYTE-IDENTICAL `arm-none-eabi-as` byte-diff verify gate
+// the runbook §F5 mandates before the hand-written `.s` can be deleted.
+//
+// PASS criterion:
+//   arm-none-eabi-{as,objcopy} available
+//   emitter output assembles cleanly
+//   sha256(.vector_table bytes from generated .o)
+//     == sha256(.vector_table bytes from boot_rp2040.s .o)
+//
+// FAIL: toolchain missing OR assemble error OR section byte-diff > 0.
+// Returns 1 on FAIL so a parent falsifier_check or CI gate can flip
+// to ✗.
+//
+// Run:
+//   hexa run stdlib/hal/t3/vt_byte_diff_rp2040.hexa
+
+use "stdlib/hal/vector_table_emit"
+
+let MODULE_NAME = "vt_byte_diff_rp2040"
+
+// ─── check harness ────────────────────────────────────────────────────
+
+let mut RUN  = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ─── helpers ─────────────────────────────────────────────────────────
+
+fn _root() -> str {
+    let env_root = env("HEXA_HAL_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _which(cmd: str) -> bool {
+    let r = exec("command -v " + cmd + " >/dev/null 2>&1 && echo y || echo n").trim()
+    return r == "y"
+}
+
+fn _exists(p: str) -> bool {
+    let r = exec("[ -f \"" + p + "\" ] && echo y || echo n").trim()
+    return r == "y"
+}
+
+fn _sha256(p: str) -> str {
+    // macOS uses `shasum -a 256`; linux has `sha256sum`. Prefer
+    // shasum (present on both via perl shim on linux distros that
+    // ship Debian/Ubuntu base).
+    if _which("shasum") {
+        let r = exec("shasum -a 256 \"" + p + "\" 2>/dev/null | awk '{print $1}'").trim()
+        return r
+    }
+    if _which("sha256sum") {
+        let r = exec("sha256sum \"" + p + "\" 2>/dev/null | awk '{print $1}'").trim()
+        return r
+    }
+    return ""
+}
+
+fn _write_file(p: str, content: str) -> bool {
+    // hexa stdlib has no canonical write_file; route through `tee`
+    // via a heredoc to avoid shell-quoting hazards. Caller content
+    // must not contain the EOF marker.
+    let cmd = "cat > \"" + p + "\" <<'__VT_BYTE_DIFF_EOF__'\n" + content + "\n__VT_BYTE_DIFF_EOF__"
+    let _ = exec(cmd)
+    return _exists(p)
+}
+
+// ─── checks ──────────────────────────────────────────────────────────
+
+fn check_toolchain() -> bool {
+    let has_as      = _which("arm-none-eabi-as")
+    let has_objcopy = _which("arm-none-eabi-objcopy")
+    let ok = has_as && has_objcopy
+    let detail = "as=" + (if has_as { "y" } else { "n" }) +
+                 " objcopy=" + (if has_objcopy { "y" } else { "n" })
+    _check(ok, "arm-none-eabi-as + objcopy present", detail)
+    return ok
+}
+
+fn check_orig_present(t3_dir: str) -> bool {
+    let p = t3_dir + "/boot_rp2040.s"
+    let ok = _exists(p)
+    _check(ok, "hand-written boot_rp2040.s present", p)
+    return ok
+}
+
+fn check_emit_assembles(work_dir: str) -> bool {
+    let gen_s = work_dir + "/gen_vt.s"
+    let gen_o = work_dir + "/gen_vt.o"
+    let s_text = rp2040_emit_vector_table_s()
+    let wrote = _write_file(gen_s, s_text)
+    if !wrote {
+        _check(false, "emitter `.s` text written", gen_s); return false
+    }
+    let cmd = "arm-none-eabi-as -mcpu=cortex-m0plus -mthumb -o \"" + gen_o + "\" \"" + gen_s + "\" 2>&1"
+    let out = exec(cmd)
+    let ok = _exists(gen_o)
+    _check(ok, "emitter output assembles via arm-none-eabi-as",
+           if ok { "wrote " + gen_o } else { "assemble error:\n" + out })
+    return ok
+}
+
+fn check_orig_assembles(t3_dir: str, work_dir: str) -> bool {
+    let orig_s = t3_dir + "/boot_rp2040.s"
+    let orig_o = work_dir + "/orig.o"
+    let cmd = "arm-none-eabi-as -mcpu=cortex-m0plus -mthumb -o \"" + orig_o + "\" \"" + orig_s + "\" 2>&1"
+    let out = exec(cmd)
+    let ok = _exists(orig_o)
+    _check(ok, "hand-written boot_rp2040.s assembles",
+           if ok { "wrote " + orig_o } else { "assemble error:\n" + out })
+    return ok
+}
+
+fn check_vector_table_byte_identical(work_dir: str) -> bool {
+    let gen_o = work_dir + "/gen_vt.o"
+    let orig_o = work_dir + "/orig.o"
+    let gen_bin = work_dir + "/gen_vt.bin"
+    let orig_bin = work_dir + "/orig_vt.bin"
+    if !_exists(gen_o) || !_exists(orig_o) {
+        _check(false, ".vector_table section byte-identical (gen ≡ orig)",
+               "missing object file(s)"); return false
+    }
+    let _ = exec("arm-none-eabi-objcopy -O binary --only-section=.vector_table \"" + gen_o + "\" \"" + gen_bin + "\" 2>&1")
+    let _2 = exec("arm-none-eabi-objcopy -O binary --only-section=.vector_table \"" + orig_o + "\" \"" + orig_bin + "\" 2>&1")
+    let gen_sha = _sha256(gen_bin)
+    let orig_sha = _sha256(orig_bin)
+    let ok = gen_sha.len() > 0 && gen_sha == orig_sha
+    let detail = "gen=" + gen_sha + " orig=" + orig_sha
+    _check(ok, ".vector_table section byte-identical (gen ≡ orig)", detail)
+    return ok
+}
+
+fn check_vector_table_relocs_identical(work_dir: str) -> bool {
+    let gen_o = work_dir + "/gen_vt.o"
+    let orig_o = work_dir + "/orig.o"
+    if !_exists(gen_o) || !_exists(orig_o) {
+        _check(false, ".vector_table relocs identical (gen ≡ orig)",
+               "missing object file(s)"); return false
+    }
+    let gen_r = exec("arm-none-eabi-objdump -r --section=.vector_table \"" + gen_o + "\" 2>&1 | grep -E 'R_ARM' | sort").trim()
+    let orig_r = exec("arm-none-eabi-objdump -r --section=.vector_table \"" + orig_o + "\" 2>&1 | grep -E 'R_ARM' | sort").trim()
+    let ok = gen_r == orig_r && gen_r.len() > 0
+    let detail = if ok { "4× R_ARM_ABS32 (stack_top / reset / hard_fault×2)" }
+                 else { "gen:\n" + gen_r + "\norig:\n" + orig_r }
+    _check(ok, ".vector_table relocs identical (gen ≡ orig)", detail)
+    return ok
+}
+
+// ─── main ────────────────────────────────────────────────────────────
+
+fn main() {
+    println("========================================================================")
+    println("  stdlib/hal — vt_byte_diff_rp2040: F5 vector-table byte-diff oracle")
+    println("========================================================================")
+    println("  generator: stdlib/hal/vector_table_emit.hexa (rp2040_emit_vector_table_s)")
+    println("  oracle:    arm-none-eabi-as byte-diff vs boot_rp2040.s")
+    println("  target:    ARMv6-M Cortex-M0+ .vector_table (0x80 bytes, 4 R_ARM_ABS32)")
+    println("")
+
+    let root = _root()
+    let t3_dir = root + "/stdlib/hal/t3"
+    let work_dir = exec("mktemp -d -t vt_byte_diff.XXXXXX").trim()
+    if work_dir.len() == 0 {
+        println("[FATAL] mktemp failed — cannot allocate scratch dir")
+        exit(1)
+    }
+    println("  scratch: " + work_dir)
+    println("")
+
+    if !check_toolchain() {
+        println("")
+        println("  Toolchain missing — install arm-none-eabi-{as,objcopy} to enable oracle.")
+        println("  F5 byte-diff verify SKIP (toolchain gate).")
+        println("__HEXA_LANG_HAL_VT_BYTE_DIFF_RP2040__ SKIP")
+        exit(0)  // SKIP, not FAIL — toolchain is an env precondition
+    }
+
+    if !check_orig_present(t3_dir) {
+        println("__HEXA_LANG_HAL_VT_BYTE_DIFF_RP2040__ FAIL")
+        exit(1)
+    }
+
+    let emit_ok = check_emit_assembles(work_dir)
+    let orig_ok = check_orig_assembles(t3_dir, work_dir)
+
+    if !emit_ok || !orig_ok {
+        println("__HEXA_LANG_HAL_VT_BYTE_DIFF_RP2040__ FAIL")
+        exit(1)
+    }
+
+    check_vector_table_byte_identical(work_dir)
+    check_vector_table_relocs_identical(work_dir)
+
+    println("")
+    println("  F5 Component 2-lite (`.s`-text vector generator) byte-identity:")
+    if FAIL == 0 {
+        println("    PROVEN ✓ — rp2040 .vector_table section is hexa-emittable.")
+        println("    Next-component scope (RUNTIME.floor.md §F5):")
+        println("      Component 1 — parser `@interrupt(slot=N)` / `@vector_table` arg")
+        println("      Component 3 — ARMv6-M reset-prologue lowering (text section)")
+        println("      Component 5 — `git rm boot_rp2040.s` + numerics_t3 rewire")
+    } else {
+        println("    BYTE-DIFF FAIL — emitter output diverges from hand-written `.s`.")
+        println("    Hand-written `.s` MUST NOT be deleted until oracle PASSES.")
+    }
+
+    let pass_n = RUN - FAIL
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_LANG_HAL_VT_BYTE_DIFF_RP2040__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_LANG_HAL_VT_BYTE_DIFF_RP2040__ PASS")
+    exit(0)
+}
+
