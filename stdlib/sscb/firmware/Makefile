@@ -37,7 +37,12 @@ LDFLAGS := \
   -Wl,-Map=build/firmware.map \
   -nostdlib -nostartfiles -ffreestanding
 
-C_SRC := $(wildcard src/*.c)
+# Hand-written firmware C sources, MINUS any files now generated at build time
+# from hexa emitters (B9.C-1 .c-leg pattern — see ADC_DMA_GEN below).
+C_SRC := $(filter-out src/adc_dma.c,$(wildcard src/*.c))
+
+HEXA_RUN  ?= hexa-run
+REPO_ROOT ?= $(abspath $(CURDIR)/../../..)
 
 # Hexa-emitted startup `.s` (F5 RFC 063/064 stm32f429 leg).
 # `startup_stm32f429.s` is generated at build time from
@@ -46,13 +51,21 @@ C_SRC := $(wildcard src/*.c)
 # (stdlib/sscb/firmware/startup/boot_byte_diff_stm32f429.hexa) proved
 # gen ≡ orig 10/10 PASS (.isr_vector + .text.Reset_Handler +
 # .text.Default_Handler + reloc lists for all three).
-HEXA_RUN  ?= hexa-run
-REPO_ROOT ?= $(abspath $(CURDIR)/../../..)
 STARTUP_GEN ?= $(REPO_ROOT)/stdlib/sscb/firmware/startup/startup_stm32f429_gen.hexa
 S_GEN     := startup/startup_stm32f429.s
 S_SRC     := $(S_GEN)
 
-OBJS := $(C_SRC:src/%.c=build/%.o) $(S_SRC:startup/%.s=build/%.o)
+# Hexa-emitted adc_dma.c (B9.C-1 .c-leg — first .c parallel of the F5 .s leg).
+# `src/adc_dma.c` is generated at build time from
+# stdlib/sscb/firmware/src/adc_dma_emit.hexa::emit_adc_dma_c; the hand-
+# written `.c` was `git rm`d once the byte-diff oracle
+# (stdlib/sscb/firmware/src/adc_dma_byte_diff.hexa) proved
+# gen ≡ orig 6/6 PASS (source-text · whole-file .o no-debug ·
+# .text.adc_spi_dma_init section with -g).
+ADC_DMA_GEN ?= $(REPO_ROOT)/stdlib/sscb/firmware/src/adc_dma_emit.hexa
+ADC_DMA_C   := src/adc_dma.c
+
+OBJS := $(C_SRC:src/%.c=build/%.o) build/adc_dma.o $(S_SRC:startup/%.s=build/%.o)
 
 .PHONY: all clean check size
 all: build/firmware.elf build/firmware.bin build/firmware.hex
@@ -71,6 +84,14 @@ $(S_GEN): $(STARTUP_GEN) \
           $(REPO_ROOT)/stdlib/hal/vector_table_emit.hexa \
           $(REPO_ROOT)/stdlib/hal/reset_prologue_emit.hexa
 	$(HEXA_RUN) $(STARTUP_GEN) $@
+
+# Hexa-emitted adc_dma.c — regenerated whenever the emitter changes.
+# Generator owns the SSOT; the .c on disk is a build artifact.
+$(ADC_DMA_C): $(ADC_DMA_GEN)
+	$(HEXA_RUN) $(ADC_DMA_GEN) $@
+
+build/adc_dma.o: $(ADC_DMA_C) | build
+	$(CC) $(CFLAGS) -c $< -o $@
 
 build/%.o: startup/%.s | build
 	$(CC) $(ASFLAGS) -c $< -o $@
@@ -91,6 +112,7 @@ size: build/firmware.elf
 clean:
 	rm -rf build
 	rm -f $(S_GEN)
+	rm -f $(ADC_DMA_C)
 
 check:
 	@command -v $(CC) >/dev/null 2>&1 || { echo "MISSING: $(CC)  (brew install --cask gcc-arm-embedded)"; exit 1; }
