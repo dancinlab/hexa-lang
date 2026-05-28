@@ -1,0 +1,10 @@
+// transcendental precision diagnostic — isolate pow vs cos vs sin (R13 RoPE residual)
+// out[0]=pow(base,expo)  out[1]=cos(theta)  out[2]=sin(theta)  for fixed inputs.
+@gpu_kernel
+fn probe_transc_f64(out: [f64], base: f64, expo: f64, theta: f64, n: i64) {
+    let mut tid: i64 = to_i64(gpu_thread_id_x())
+    if tid >= n { return }
+    if tid == 0 { out[0] = pow(base, expo) }
+    if tid == 1 { out[1] = cos(theta) }
+    if tid == 2 { out[2] = sin(theta) }
+}
