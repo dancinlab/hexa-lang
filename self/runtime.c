@@ -139,15 +139,33 @@ static int  hxlcl_dup2(int oldfd, int newfd);
 #endif
 static int  hxlcl_pipe(int fds[2]);
 static int  hxlcl_fork(void);
+// B9.6-C8 (F3 Path A) — under HEXA_RT_SELFEMIT hxlcl_kill is `extern`
+// (resolved by the hexa-emitted .o). A 2-arg NON-_cf svc (no errno path,
+// getuid's 2-arg analogue: both int args sxtw, trap, ret). Forward decl must
+// flip to external linkage too, else the `static` masks the self-emit symbol.
+#ifdef HEXA_RT_SELFEMIT
+extern int  hxlcl_kill(int pid, int sig);
+#else
 static int  hxlcl_kill(int pid, int sig);
+#endif
 static int  hxlcl_fcntl(int fd, int cmd, long arg);
 static int  hxlcl_ioctl(int fd, unsigned long req, void *arg);
 static long hxlcl_lseek(int fd, long off, int whence);
 static int  hxlcl_select(int nfds, void *r, void *w, void *e, void *t);
 static int  hxlcl_poll(void *fds, unsigned int nfds, int timeout);
 static int  hxlcl_waitpid(int pid, int *status, int options);
+// B9.6-C6/C7 (F3 Path A) — under HEXA_RT_SELFEMIT hxlcl_fstat (int+ptr) and
+// hxlcl_stat (ptr+ptr) are `extern` (resolved by the hexa-emitted .o). Both
+// are 2-arg _cf svc bodies with the carry-flag errno store (PC-relative adrp/
+// str to the hxlcl_errno SYMBOL, externally linkable under the guard — same as
+// dup2/mkdir). Forward decls flip to external linkage too.
+#ifdef HEXA_RT_SELFEMIT
+extern int  hxlcl_fstat(int fd, void *buf);
+extern int  hxlcl_stat(const char *path, void *buf);
+#else
 static int  hxlcl_fstat(int fd, void *buf);
 static int  hxlcl_stat(const char *path, void *buf);
+#endif
 static int  hxlcl_open_sys(const char *path, int flags, ...);
 static void hxlcl_exit(int code) __attribute__((noreturn));
 static void *hxlcl_mmap(void *addr, unsigned long len, int prot, int flags, int fd, long off);
@@ -1492,7 +1510,17 @@ static int __attribute__((noinline)) hxlcl_fork(void) {
     if (r1 == 1) return 0;   // child
     return (int)r0;          // parent: child pid
 }
+// F3 ACTIVATION · Path A — B9.6-C8 class-C syscall-ABI self-emit slot.
+// hxlcl_kill is a 2-arg NON-_cf svc (plain _hxlcl_syscall2, no carry-flag /
+// errno path) — the 2-arg analogue of getuid (#1860). DEFAULT build keeps the
+// static svc-trap. SELF-EMIT build flips to extern; the strong `_hxlcl_kill`
+// symbol comes from the hexa-emitted .o (rt_kill's 20-byte `sxtw x0 / sxtw x1
+// / mov w16,#37 / svc #0x80 / ret`), ahead-linked. No errno store → NO reloc.
+#ifdef HEXA_RT_SELFEMIT
+extern int hxlcl_kill(int pid, int sig);
+#else
 static int __attribute__((noinline)) hxlcl_kill(int pid, int sig) { return (int)_hxlcl_syscall2(HXLCL_SYS_KILL, (long)pid, (long)sig); }
+#endif
 static int __attribute__((noinline)) hxlcl_fcntl(int fd, int cmd, long arg) { return (int)_hxlcl_syscall3(HXLCL_SYS_FCNTL, (long)fd, (long)cmd, arg); }
 static int __attribute__((noinline)) hxlcl_ioctl(int fd, unsigned long req, void *arg) { return (int)_hxlcl_syscall3(HXLCL_SYS_IOCTL, (long)fd, (long)req, (long)arg); }
 // PR #426 follow-up — libc lseek (same Darwin arm64 carry-flag class as
@@ -1547,9 +1575,32 @@ static int __attribute__((noinline)) hxlcl_open_sys(const char *path, int flags,
 // (Darwin uses __DARWIN_INODE64 symbol renaming — no extern decl, must
 // use the header's `struct stat *` signature).
 // cycle 71 — fstat re-trapped via carry-flag-correct svc 0x80 (SYS_FSTAT=339).
+// F3 ACTIVATION · Path A — B9.6-C6 class-C syscall-ABI self-emit slot.
+// hxlcl_fstat is a 2-arg _cf with an int FIRST arg (fd, x0 sign-extended) + a
+// pointer SECOND arg (buf, x1 untouched) — the mirror of mkdir (which signs
+// the 2nd arg). SYS_FSTAT=339 is the first class-C SYS number > 255, exercising
+// the full 16-bit `mov w16` immediate. DEFAULT build keeps the static _cf
+// svc-trap. SELF-EMIT build flips to extern; the strong `_hxlcl_fstat` symbol
+// comes from the hexa-emitted .o (rt_fstat's 36-byte body), ahead-linked.
+// errno store = PC-relative adrp/str to hxlcl_errno (links under guard).
+#ifdef HEXA_RT_SELFEMIT
+extern int hxlcl_fstat(int fd, void *buf);
+#else
 static int __attribute__((noinline)) hxlcl_fstat(int fd, void *buf) { return (int)_hxlcl_syscall2_cf(HXLCL_SYS_FSTAT, (long)fd, (long)buf); }
+#endif
 // cycle 71 — stat re-trapped via carry-flag-correct svc 0x80 (SYS_STAT=338).
+// F3 ACTIVATION · Path A — B9.6-C7 class-C syscall-ABI self-emit slot.
+// hxlcl_stat is a 2-arg _cf where BOTH args are pointers (path x0, buf x1) — so
+// NEITHER is sign-extended. It is the FIRST no-sxtw 2-arg svc body (32 B, 4 B
+// shorter than mkdir/fstat — exactly the dropped sxtw). DEFAULT build keeps the
+// static _cf svc-trap. SELF-EMIT build flips to extern; the strong `_hxlcl_stat`
+// symbol comes from the hexa-emitted .o (rt_stat's 32-byte body), ahead-linked.
+// errno store = PC-relative adrp/str to hxlcl_errno (links under guard).
+#ifdef HEXA_RT_SELFEMIT
+extern int hxlcl_stat(const char *path, void *buf);
+#else
 static int __attribute__((noinline)) hxlcl_stat(const char *path, void *buf) { return (int)_hxlcl_syscall2_cf(HXLCL_SYS_STAT, (long)path, (long)buf); }
+#endif
 // Cycle 65 — close out remaining real syscalls.
 #define HXLCL_SYS_GETTIMEOFDAY 116
 static void __attribute__((noinline, noreturn)) hxlcl_exit(int code) {
