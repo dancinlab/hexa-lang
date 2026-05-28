@@ -8,15 +8,17 @@
  * SGEMM is tile-shape-bound when M is too small. This fire asks: can a plain
  * hand-emit GEMV warp-reduce + broadcast kernel beat cuBLAS at small M?
  *
- * Strategy:
- *   M=1: pure GEMV, memory-bandwidth-bound. Each CTA owns CTA_N_COLS output
- *        columns; each warp owns one column; lanes stripe through K and
- *        warp-reduce via __shfl_xor_sync. A is broadcast through shared mem
- *        (loaded cooperatively, all warps reuse).
- *   M>1: each CTA still owns CTA_N_COLS output columns but additionally
- *        iterates over all M rows reusing the same B column. This keeps the
- *        B traffic at the M=1 amount (1x read), so the kernel transitions
- *        smoothly from BW-bound (M=1) to compute-bound (M>1).
+ * Strategy (v3, float4-vectorised B loads):
+ *   - Each CTA owns CTA_N_COLS = 16 output columns.
+ *   - CTA has 4 warps = 128 threads. Each warp processes 4 columns.
+ *   - Within a warp, lanes stripe across K in groups of WARP_SIZE.
+ *   - B is loaded via float4 (128-bit) — each lane reads B[k, n4_base + 0..3]
+ *     at once, giving 4 partial sums per lane (one per warp-owned column).
+ *   - A[m, k] is broadcast through shared mem (loaded once per K-chunk).
+ *
+ * For M > 1 the kernel loops over M reusing the same B reads. The total B
+ * read volume stays at K*N*4 = 67 MB regardless of M, so the kernel
+ * smoothly transitions from BW-bound (M=1) to compute-bound (M>1).
  *
  * Verdict rubric (g5):
  *   GREEN (SUPPORTED-NUMERICAL) if handemit >= 1.5x cuBLAS at M=1.
@@ -25,10 +27,9 @@
  * Build: nvcc -O3 -arch=compute_90 -code=compute_90 \
  *               gpu_wedge_small_m_gemv_handemit.cu -lcublas \
  *               -o gpu_wedge_small_m_gemv_handemit
- * Run:   ./gpu_wedge_small_m_gemv_handemit
  *
- * The compute_90 PTX is driver-JIT'd to sm_120 on the RTX 5070 host
- * (reference_gpu_fire_infra.md). Pure-ASCII source, no non-ASCII comments.
+ * The compute_90 PTX is driver-JIT'd to sm_120 on RTX 5070 host
+ * (reference_gpu_fire_infra.md). Pure-ASCII source.
  */
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
@@ -45,23 +46,23 @@
 static const double PEAK_FP32_TFLOPS = 31.2;
 
 #define WARP_SIZE 32
-#define CTA_WARPS 8
+#define CTA_WARPS 4
 #define CTA_THREADS (WARP_SIZE * CTA_WARPS)
-#define CTA_N_COLS  CTA_WARPS         /* one warp per output column */
-#define K_CHUNK     128               /* shared-mem K-tile for A reuse across M */
+#define COLS_PER_WARP 4               /* via float4 vectorised B loads */
+#define CTA_N_COLS (CTA_WARPS * COLS_PER_WARP)  /* 16 output cols per CTA */
+#define K_CHUNK 128                   /* shared-mem A-tile size */
 
-/* Hand-emit GEMV/GEMM-skinny kernel.
- *   C[m,n] = sum_k A[m,k] * B[k,n]   for m in [0,M), n in [0,N).
+/* Hand-emit GEMV/GEMM-skinny kernel with float4 B loads.
+ *   C[m,n] = sum_k A[m,k] * B[k,n]
  *   A is M*K row-major, B is K*N row-major, C is M*N row-major.
  *
- * Grid: dim3(N / CTA_N_COLS, 1, 1)    -- one CTA per N-tile, NOT per M-row.
+ * Grid: dim3(N / CTA_N_COLS, 1, 1)
  * Block: dim3(WARP_SIZE, CTA_WARPS, 1)
  *
- * Each warp owns ONE output column n_global = blockIdx.x * CTA_N_COLS + warp.
- * For each output row m, the warp's 32 lanes stripe across K via shared-mem
- * tile of A[m, ...] (loaded cooperatively by the whole CTA, reused across
- * all CTA_WARPS columns).  partial reduce -> __shfl_xor_sync warp butterfly
- * -> lane 0 writes C[m, n_global].
+ * Warp w in CTA cx owns output cols [cx*CTA_N_COLS + w*COLS_PER_WARP,
+ *                                    cx*CTA_N_COLS + (w+1)*COLS_PER_WARP).
+ * Lane L in warp w accumulates 4 partial sums (one per warp-owned column);
+ * within a K-chunk lanes stride by WARP_SIZE reading float4 from B.
  */
 __global__ void gemv_warpreduce_kernel(
     const float * __restrict__ A,
@@ -69,36 +70,49 @@ __global__ void gemv_warpreduce_kernel(
     float * __restrict__ C,
     int M, int K, int N)
 {
-    __shared__ float sA[K_CHUNK];   /* tile of A[m, k:k+K_CHUNK] */
+    __shared__ float sA[K_CHUNK];
 
-    const int n_global = blockIdx.x * CTA_N_COLS + threadIdx.y;
-    const int lane     = threadIdx.x;
-    const int tid      = threadIdx.y * WARP_SIZE + threadIdx.x;
+    const int warp_id = threadIdx.y;
+    const int lane    = threadIdx.x;
+    const int tid     = warp_id * WARP_SIZE + lane;
+    const int n_base  = blockIdx.x * CTA_N_COLS + warp_id * COLS_PER_WARP;
 
-    if (n_global >= N) return;
+    if (n_base >= N) return;
 
     for (int m = 0; m < M; ++m) {
-        float acc = 0.0f;
+        float acc0 = 0.0f, acc1 = 0.0f, acc2 = 0.0f, acc3 = 0.0f;
         for (int k0 = 0; k0 < K; k0 += K_CHUNK) {
             /* cooperatively load A[m, k0:k0+K_CHUNK] into sA. */
-            #pragma unroll
             for (int j = tid; j < K_CHUNK; j += CTA_THREADS) {
                 sA[j] = A[m * K + k0 + j];
             }
             __syncthreads();
-            /* each warp's 32 lanes stripe through this K_CHUNK for its column. */
-            #pragma unroll
+            /* lanes stripe through K_CHUNK; each loads a float4 of B. */
             for (int k = lane; k < K_CHUNK; k += WARP_SIZE) {
-                acc += sA[k] * B[(k0 + k) * N + n_global];
+                float a = sA[k];
+                /* B row pointer for this K-slice. n_base is float4-aligned by
+                 * construction (CTA_N_COLS=16, COLS_PER_WARP=4 -> n_base %4 ==0). */
+                const float *brow = B + (k0 + k) * N + n_base;
+                float4 b4 = *reinterpret_cast<const float4 *>(brow);
+                acc0 += a * b4.x;
+                acc1 += a * b4.y;
+                acc2 += a * b4.z;
+                acc3 += a * b4.w;
             }
             __syncthreads();
         }
-        /* warp-reduce butterfly. */
+        /* warp-reduce 4 lanes-worth of partials in parallel. */
         for (int offset = WARP_SIZE / 2; offset > 0; offset >>= 1) {
-            acc += __shfl_xor_sync(0xffffffff, acc, offset);
+            acc0 += __shfl_xor_sync(0xffffffff, acc0, offset);
+            acc1 += __shfl_xor_sync(0xffffffff, acc1, offset);
+            acc2 += __shfl_xor_sync(0xffffffff, acc2, offset);
+            acc3 += __shfl_xor_sync(0xffffffff, acc3, offset);
         }
         if (lane == 0) {
-            C[m * N + n_global] = acc;
+            float *crow = C + m * N + n_base;
+            /* float4 store (n_base aligned by construction). */
+            float4 out = {acc0, acc1, acc2, acc3};
+            *reinterpret_cast<float4 *>(crow) = out;
         }
     }
 }
@@ -132,14 +146,11 @@ static int run_one_M(cublasHandle_t h, int M, int K, int N,
     CK(cudaMemcpy(dA, hA, szA, cudaMemcpyHostToDevice));
     CK(cudaMemcpy(dB, hB, szB, cudaMemcpyHostToDevice));
 
-    /* cuBLAS baseline: row-major (M*K) A * (K*N) B = (M*N) C maps to col-major
-     * C^T = B^T * A^T  ->  call cublasSgemm(N, OP_N, OP_N, N, M, K, dB, N, dA, K).
-     * Output dC_ref linear memory equals row-major C[m,n] at index m*N + n
-     * (because col-major C^T[n,m] at n + m*ldc == n + m*N). */
     float alpha = 1.0f, beta = 0.0f;
     const int WARMUP = 20, ITERS = 200;
     double *samples = (double *)malloc(ITERS * sizeof(double));
 
+    /* cuBLAS baseline. */
     for (int i = 0; i < WARMUP; ++i) {
         CB(cublasSgemm(h, CUBLAS_OP_N, CUBLAS_OP_N, N, M, K,
                        &alpha, dB, N, dA, K, &beta, dC_ref, N));
@@ -184,7 +195,7 @@ static int run_one_M(cublasHandle_t h, int M, int K, int N,
     qsort(samples, ITERS, sizeof(double), cmp_d);
     *out_handemit_ms = samples[ITERS / 2];
 
-    /* numerical check: same linear-memory layout (row-major C[m,n] at m*N+n). */
+    /* numerical check. */
     CK(cudaMemcpy(hC_ref, dC_ref, szC, cudaMemcpyDeviceToHost));
     CK(cudaMemcpy(hC_he,  dC_he,  szC, cudaMemcpyDeviceToHost));
     double max_abs = 0.0;
@@ -211,7 +222,7 @@ int main(int argc, char **argv) {
     printf("# F-WEDGE-SMALL-M-GEMV-WALL -- hand-emit GEMV vs cuBLAS (RTX 5070 sm_120)\n");
     printf("# Peak FP32 = %.2f TFLOPS, K=%d N=%d, cuEvent 20 warmup + 200 timed median\n",
            PEAK_FP32_TFLOPS, K, N);
-    printf("# CTA: %d warps x %d threads, %d cols/CTA, K_CHUNK=%d (A-reuse via shared)\n",
+    printf("# CTA: %d warps x %d threads, %d cols/CTA, K_CHUNK=%d, float4 B loads\n",
            CTA_WARPS, WARP_SIZE, CTA_N_COLS, K_CHUNK);
     printf("# M  cuBLAS_ms  handemit_ms  handemit_TFLOPS  speedup_x  sub_roofline_pct  max_abs_err\n");
 
