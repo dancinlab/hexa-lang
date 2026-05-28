@@ -168,6 +168,52 @@ pub fn sigma_k(n: int, k: int) -> int {
     return s
 }
 
+// J_k(n) — Jordan totient (OEIS A007434 for k=2, A059376 k=3, A059377 k=4).
+// Generalisation of Euler φ; J_k(n) = #{(x_1,..,x_k) ∈ (ℤ/nℤ)^k : gcd(x_1,..,x_k,n)=1}.
+// Closed-form (Euler-product style): J_k(n) = n^k · Π_{p|n} (1 − p^(−k)).
+// We compute integer-exact via prime factorisation of n:
+//   start = n^k; for each distinct prime p | n, multiply by (p^k − 1) / p^k.
+// Each (p^k − 1)/p^k division is exact because n^k carries a p^k factor for
+// every p|n. J_2(6) = 36 · (1−1/4)(1−1/9) = 36 · (3/4)(8/9) = 24.
+// Closes demiurge HEX-N6 Phase A 11/11 🔵 gap (`@P n6-j2 = jordan_totient(6,2)=24`).
+pub fn jordan_totient(n: int, k: int) -> int {
+    if n <= 0 { return 0 }
+    if k <= 0 { return 0 }
+    // n^k  (integer exact; small n in practice — verify-CLI surface)
+    let mut result = 1
+    let mut e = 0
+    while e < k {
+        result = result * n
+        e = e + 1
+    }
+    // multiply by (p^k − 1)/p^k for every distinct prime p | n (trial division)
+    let mut m = n
+    let mut p = 2
+    while p * p <= m {
+        if m % p == 0 {
+            while m % p == 0 { m = m / p }
+            let mut pk = 1
+            let mut j = 0
+            while j < k {
+                pk = pk * p
+                j = j + 1
+            }
+            result = result / pk * (pk - 1)
+        }
+        p = p + 1
+    }
+    if m > 1 {
+        let mut pk = 1
+        let mut j = 0
+        while j < k {
+            pk = pk * m
+            j = j + 1
+        }
+        result = result / pk * (pk - 1)
+    }
+    return result
+}
+
 // σ*(n) = Σ_{d||n} d — sum of UNITARY divisors (OEIS A034448).
 // d||n ⟺ d|n AND gcd(d, n/d) = 1 (d and its cofactor are coprime).
 // Multiplicative; σ*(p^a) = p^a + 1. n=6 is the smallest unitary-perfect:

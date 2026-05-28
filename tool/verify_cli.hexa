@@ -287,7 +287,7 @@ fn cmd_rubric() {
     println("             omega_big|liouville|liouville_summatory|pisano_period  (A001222/A008836/A002819/A001175 · integer-exact · INBOX #5/#7/#8)")
     println("             gamma0_cusps|gamma0_genus|isotropy_lcm|first_cusp_form_weight|pair_threshold_factor|recomb_3body_density_power")
     println("             nth_prime|is_prime|factorial|catalan|bell|partition  (VERIFY-KIT V7 OEIS A000040/108/142/110/41 · integer-exact)")
-    println("             2-op: sigma_k|jacobi|kronecker|dim_cusp_forms|ssh_winding  (extend _recompute on gap)")
+    println("             2-op: sigma_k|jordan_totient|jacobi|kronecker|dim_cusp_forms|ssh_winding  (extend _recompute on gap)")
     println("             3-op: tknn_chern (RFC 046 TKNN Chern/Hall integer · Diophantine gap label)")
     println("             1-op: mertens|tunnell_count_odd|tunnell_count_even  (TECS-L F21 INBOX-3: A002321 / Tunnell 1983)")
     println("             3-op: elliptic_witness(x,y,n) → 1 iff y²==x³-n²x (BSD congruent-number witness, F19 follow-on)")
@@ -619,6 +619,9 @@ fn _recompute2(fn_name: string, a: int, b: int) -> int {
     if fn_name == "jacobi"    { return jacobi_symbol(a, b) }
     if fn_name == "kronecker" { return kronecker_symbol(a, b) }
     if fn_name == "dim_cusp_forms" { return dim_cusp_forms(a, b) }
+    // J_k(n) — Jordan totient; J_k(n) = n^k · Π_{p|n}(1−p^(−k)) (A007434/A059376/A059377).
+    // Closes demiurge HEX-N6 Phase A 11/11 🔵 gap (`@P n6-j2 = jordan_totient(6,2)=24`).
+    if fn_name == "jordan_totient" { return jordan_totient(a, b) }
     // SSH Zak winding invariant: ssh_winding(v, w) = 1 if w > v else 0.
     // The d(k) circle of radius w centred at (v,0) encloses the origin iff
     // w > v → TOPOLOGICAL (W=1, 2 protected edge modes); else TRIVIAL (W=0).
