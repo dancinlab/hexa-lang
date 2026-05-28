@@ -679,6 +679,20 @@ fn _tknn_chern(p: int, q: int, rgap: int) -> int {
 fn _recompute3(fn_name: string, a: int, b: int, c: int) -> int {
     // tknn_chern(p, q, r): Chern/Hall integer t of the bands below gap r.
     if fn_name == "tknn_chern" { return _tknn_chern(a, b, c) }
+    // dft_phonon_walltime(atoms, nq, metallic): closed-form DFPT phonon
+    // walltime estimate in seconds. est = base · atoms³ · nq · (metallic? mf:1).
+    // atoms³ ≈ electronic-SCF O(N³) dominance per q-point; nq linear in the
+    // number of q-points; metallic factor mf for the harder smeared SCF +
+    // denser k-mesh. Coefficients base=14, mf=3 back-solved from the
+    // Mg₂IrH₆ anchor (9 atoms, 2×2×2=8 q, metallic): the failed run used
+    // max_seconds=80000 (≈22h) which was ~3× undersized, so real need ≈
+    // 240000 s; this form gives 14·9³·8·3 = 244944 s (≈68h), matching the
+    // real need and firing the under-size warn for any value < 244944.
+    // (cloud preflight --kind dft-phonon · INBOX gap 3 · g5 verbatim anchor.)
+    if fn_name == "dft_phonon_walltime" {
+        let mf = if c != 0 { 3 } else { 1 }
+        return 14 * a * a * a * b * mf
+    }
     // ── TECS-L F21 (INBOX 3 / PR #1378 follow-on) ───────────────────────────
     // elliptic_witness(x, y, n) — BSD congruent-number witness check.
     // Returns 1 iff the point (x, y) lies on the curve E_n: y² = x³ − n²·x;
