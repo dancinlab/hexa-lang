@@ -74,6 +74,12 @@ fn _join_argv(argv: [str]) -> str {
 // remote command that did run (its real exit code rides the marker).
 struct SshCapture {
     body:     str,   // remote stdout+stderr (2>&1 merged), incl. any marker
+    err:      str,   // LOCAL ssh client stderr — the ONLY channel that carries
+                     // the ssh client's own diagnostics (publickey/auth failure,
+                     // "Permission denied", "Host key verification failed",
+                     // "Connection refused"). On a 255 transport outage the
+                     // remote shell never ran, so `body` is empty and the real
+                     // cause lives here. Previously discarded — see #1962.
     local_rc: int    // local ssh process exit code; 255 == transport failure
 }
 
@@ -121,7 +127,7 @@ fn _ssh_capture_status(host: str, ssh_opts: [str], remote: str) -> SshCapture {
     // carries everything including the __CLOUD_*__ marker line. Element 2 is
     // the LOCAL ssh process exit code (255 == transport never connected).
     let res = exec_capture(cmd)
-    return SshCapture { body: res[0], local_rc: res[2] }
+    return SshCapture { body: res[0], err: res[1], local_rc: res[2] }
 }
 
 // _ssh_capture — _ssh_capture_status keeping only the captured body, for
@@ -130,15 +136,42 @@ fn _ssh_capture(host: str, ssh_opts: [str], remote: str) -> str {
     return _ssh_capture_status(host, ssh_opts, remote).body
 }
 
+// _ssh_stderr_tail — extract the LAST non-empty trimmed line of the ssh
+// client's stderr. On a 255 transport outage the ssh client prints the real
+// cause as its final stderr line ("Permission denied (publickey).",
+// "Host key verification failed.", "Connection refused", ...); earlier lines
+// are usually banner/debug noise. Returns "" when stderr is empty.
+fn _ssh_stderr_tail(err: str) -> str {
+    let lines = err.split("\n")
+    let mut tail = ""
+    let mut i = 0
+    while i < len(lines) {
+        let t = lines[i].trim()
+        if len(t) > 0 {
+            tail = t
+        }
+        i = i + 1
+    }
+    return tail
+}
+
 // _ssh_transport_outage — shared CloudResult for an ssh exit-255 (the local
 // ssh process). The SSH transport never reached the remote shell, so this is
 // NOT a remote command failure. exit_code 255 is preserved (not the generic
 // -1) so the caller / CLI can recognise the outage and fast-fail rather than
 // retry into a wall of billing. The message names the alive≠reachable mode so
 // the operator stops the pod instead of debugging a phantom remote crash.
-fn _ssh_transport_outage(verb: str, body: str) -> CloudResult {
+// `err` is the ssh client's LOCAL stderr (SshCapture.err): its last non-empty
+// line is appended so the operator sees the ACTUAL cause (publickey/auth vs
+// refused vs host-key) instead of the generic outage text — see #1962.
+fn _ssh_transport_outage(verb: str, body: str, err: str) -> CloudResult {
+    let tail = _ssh_stderr_tail(err)
+    let mut diag = " · (no ssh stderr)"
+    if len(tail) > 0 {
+        diag = " · ssh stderr: " + tail
+    }
     return CloudResult { ok: 0, exit_code: 255, pid: 0, stdout_: body,
-        message: verb + ": ssh transport failure (exit 255) — host unreachable (connection refused / timeout / auth / changed host key). The pod may be alive and billing but not accepting SSH — a vast.ai/RunPod transport outage. Stop retrying; verify reachability or tear the pod down.", logfile: "" }
+        message: verb + ": ssh transport failure (exit 255) — host unreachable (connection refused / timeout / auth / changed host key). The pod may be alive and billing but not accepting SSH — a vast.ai/RunPod transport outage. Stop retrying; verify reachability or tear the pod down." + diag, logfile: "" }
 }
 
 // ── scp transport ───────────────────────────────────────────────────
@@ -314,7 +347,7 @@ fn cloud_run_wall_opts(host: str, ssh_opts: [str], argv: [str], max_wall: int) -
     let body = _strip_marker(out, "__CLOUD_RC__=")
     if rc < 0 {
         if cap.local_rc == 255 {
-            return _ssh_transport_outage("cloud_run", body)
+            return _ssh_transport_outage("cloud_run", body, cap.err)
         }
         return CloudResult { ok: 0, exit_code: -1, pid: 0, stdout_: body,
             message: "cloud_run: no exit-code marker — ssh transport failure or remote shell died", logfile: "" }
@@ -364,7 +397,7 @@ fn cloud_exec_opts(host: str, ssh_opts: [str], cmd_str: str) -> CloudResult {
     let body = _strip_marker(out, "__CLOUD_RC__=")
     if rc < 0 {
         if cap.local_rc == 255 {
-            return _ssh_transport_outage("cloud_exec", body)
+            return _ssh_transport_outage("cloud_exec", body, cap.err)
         }
         return CloudResult { ok: 0, exit_code: -1, pid: 0, stdout_: body,
             message: "cloud_exec: no exit-code marker — ssh transport failure or remote shell died", logfile: "" }
@@ -400,7 +433,7 @@ fn cloud_nohup_opts(host: str, ssh_opts: [str], argv: [str], logfile: str) -> Cl
     let body = _strip_marker(out, "__CLOUD_PID__=")
     if pid < 0 {
         if cap.local_rc == 255 {
-            return _ssh_transport_outage("cloud_nohup", body)
+            return _ssh_transport_outage("cloud_nohup", body, cap.err)
         }
         return CloudResult { ok: 0, exit_code: -1, pid: 0, stdout_: body,
             message: "cloud_nohup: no pid marker — ssh transport failure or nohup did not start", logfile: logfile }

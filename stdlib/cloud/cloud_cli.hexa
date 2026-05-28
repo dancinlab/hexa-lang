@@ -25,6 +25,7 @@ fn _cloud_help() {
     println("                                                         --max-wait-sec N (default 180): bounded SSH-readiness gate; on timeout the rent auto-tears the billing pod down + exits 2 with verbatim verdict (M5 sigil: SSH-never-ready leak guard)")
     println("  cloud rm <id> [--provider P] [--force]                 CANONICAL teardown — confirm + destroy + forget (unifies down/destroy/forget). --provider inferred from registry when absent. --force skips confirm prompt. Idempotent: rm of an absent pod exits 0.")
     println("  cloud down <id> [--provider P]                         (legacy alias of `cloud rm`) destroy a pod + forget it from the registry")
+    println("  cloud reboot <id> [--provider P]                       restart a pod's container (preserve disk) to recover a DARK pod — alive+billing but SSH-dropped; re-runs onstart hook → re-injects key. vast only (runpod console). QE jobs resume from .save")
     println("  cloud list [--provider P]                              list live pods (vast + runpod, or one via --provider)")
     println("  cloud status [--provider P]                            alias of list")
     println("  cloud preflight --params N [--gpu KEY] [opts...]        closed-form GPU mem-budget check (no pod/ssh)")
@@ -891,6 +892,26 @@ fn _cloud_down(id: str, provider: str) -> int {
     return 1
 }
 
+// _cloud_reboot — reboot (restart container of) a pod by id, preserving
+// disk. (INBOX #1963) A vast.ai instance can stay alive+billing yet stop
+// accepting SSH after a host migration / sshd restart; rebooting restarts
+// the container so the image onstart hook re-injects authorized_keys, and
+// in-flight QE jobs resume from their .save recovery files. --provider
+// picks the path; only vast is wired (vast_reboot) — runpod reboot is not
+// yet implemented, so it reports clearly and exits 2 instead of guessing.
+fn _cloud_reboot(id: str, provider: str) -> int {
+    if provider == "runpod" {
+        println("[cloud] reboot: runpod reboot not yet wired — use `cloud rm` + re-rent, or reboot via the runpod console")
+        return 2
+    }
+    let v = vast_reboot(id)
+    println("[cloud] reboot vast: " + v.message)
+    if v.ok == 1 {
+        return 0
+    }
+    return 1
+}
+
 // _rm_lookup_provider — registry-aware provider inference for `cloud rm`.
 // Loads ~/.hx/cloud/active-pods.json (M5 SSOT) and returns the provider
 // string ("vast" / "runpod" / ...) for the matching pod_id. Empty string
@@ -1281,6 +1302,22 @@ fn main() {
         let id = av[si + 1]
         let provider = _flag_val(av, si + 2, "--provider", "vast")
         exit(_cloud_down(id, provider))
+    }
+    if sub == "reboot" {
+        // (INBOX #1963) Restart a pod's container (preserving disk) to
+        // recover a dark pod — one that is alive+billing but no longer
+        // accepting SSH (host migration / sshd restart dropped its
+        // authorized_keys). The reboot re-runs the image onstart hook that
+        // re-injects the key; in-flight QE jobs resume from .save recovery
+        // files. --provider selects the path (default vast; runpod not yet
+        // wired). Exit 0 reboot-confirmed · 1 provider-rejected · 2 usage.
+        if si + 1 >= len(av) {
+            println("[cloud] reboot: missing <id> — usage: cloud reboot <id> [--provider vast|runpod]")
+            exit(2)
+        }
+        let id = av[si + 1]
+        let provider = _flag_val(av, si + 2, "--provider", "vast")
+        exit(_cloud_reboot(id, provider))
     }
     if sub == "list" || sub == "status" {
         // List live pods (read-only, $-free). Bare → both providers;
