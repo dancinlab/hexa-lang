@@ -257,26 +257,3 @@ tool/hexa_daemon_serve.c
 state/flame_phase4d_5_4_2026_05_17/flame_d768_12L_corpus_test_a2_layer2.c
 state/flame_phase4d_20260517_102511/flame_d768_12L_corpus_test_a2.c
 test/lora_cuda_equiv_test.c
-
-# .c-graduation Phase 3 — warm-regen 씨앗 untrack (nobaseline-gate 3-platform GREEN)
-# fresh checkout 에서 Stage 0-pre warm-regen 이 emitter 로 재생성 (18/18 byte-identical).
-self/runtime_core.c
-self/runtime_hi_gen.c
-self/runtime.c
-self/bootstrap_compiler.c
-self/native/crypto_openssl.c
-self/native/crypto_sodium.c
-self/native/exec_argv_sha256.c
-self/native/exec_pipe.c
-self/native/fp_init.c
-self/native/mount.c
-self/native/namespace.c
-self/native/net.c
-self/native/persistent_pipe.c
-self/native/proc_fork.c
-self/native/pty.c
-self/native/signal_flock.c
-self/native/tensor_kernels.c
-self/native/term_ffi.c
-self/native/thread.c
-self/native/wait.c
