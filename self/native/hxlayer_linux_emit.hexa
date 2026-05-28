@@ -1,0 +1,135 @@
+#!hexa strict
+// self/native/hxlayer_linux_emit.hexa
+//   B9.C-9 (.c-text · #1850 pattern) — hxlayer_linux.c source emitter.
+//
+// Emits the fused rmsnorm+silu Linux FFI kernel (`hxlayer_linux.c`)
+// verbatim. tool/build_hxlayer_linux.hexa is rewired to regen the `.c`
+// from this emitter (hexa-run ... > hxlayer_linux.c) before compiling,
+// so the emitter becomes the SSOT and the `.c` becomes a build artifact.
+//
+// Byte-identity: the regenerated C is byte-for-byte the hand-written
+// source, so the compiled `.o`/`.so` is identical — PERF UNCHANGED.
+//
+// Invocation (from tool/build_hxlayer_linux.hexa regen rule):
+//   hexa-run self/native/hxlayer_linux_emit.hexa <output-path>
+//
+// Default output path (if argv missing): "hxlayer_linux.c" in cwd.
+//
+// Phase: B9.C-9 batch (self/native standalone hexa-build .c-text).
+
+let MODULE_NAME = "hxlayer_linux_emit"
+
+fn emit_hxlayer_linux_c() -> str {
+    // Verbatim content of hand-written self/native/hxlayer_linux.c
+    let s =
+            "// hxlayer_linux.c — hexa FFI ↔ fused layer-level kernels (Linux x86_64)\n" +
+            "//\n" +
+            "// C2 roadmap — \"layer-level fused FFI\" Step 1 (minimum shippable increment).\n" +
+            "// This file is the entry point for fusing 2+ eltwise ops into a single C\n" +
+            "// kernel so the Hexa-side incurs one dispatch instead of N, and so the\n" +
+            "// intermediate buffer between ops never hits DRAM.\n" +
+            "//\n" +
+            "// Step 1 kernel: hxlayer_rmsnorm_silu\n" +
+            "//   y = silu( rmsnorm(x, gamma, eps) )\n" +
+            "//\n" +
+            "// Port baseline: the two source ops live in self/native/hxblas_linux.c:\n" +
+            "//   * hxblas_rmsnorm_fwd  (S, D, eps, y, x, g)         → reads x, gamma → y\n" +
+            "//   * hxblas_silu_fwd     (N, out, x)                   → reads x → out\n" +
+            "// The fused kernel combines them into one streaming loop per row:\n" +
+            "//   row i:  compute r = 1/sqrt(mean(x_i²) + eps)\n" +
+            "//           for p: tmp = x_i[p] * r * gamma[p]\n" +
+            "//                  y_i[p] = tmp * sigmoid(tmp)\n" +
+            "// No intermediate buffer between rmsnorm output and silu input — the\n" +
+            "// tmp is carried in a register (scalar) across the inner combined pass.\n" +
+            "//\n" +
+            "// Build (Linux x86_64, Ubuntu/Debian):\n" +
+            "//   hexa scripts/build_hxlayer_linux.hexa\n" +
+            "// Cross-verify (Mac):\n" +
+            "//   hexa scripts/build_hxlayer_linux.hexa --mac-xverify\n" +
+            "//\n" +
+            "// Deployment on H100 pod:\n" +
+            "//   cp self/native/build/libhxlayer.so /usr/local/lib/libhxlayer.so\n" +
+            "//   ldconfig          # OR set LD_LIBRARY_PATH=self/native/build\n" +
+            "//   # hexa source points to @link(\"hxlayer\") → libhxlayer.so resolved\n" +
+            "//\n" +
+            "// ABI convention (matches hxblas_linux.c bit-for-bit):\n" +
+            "//   * pointers are passed as int64_t (Hexa Pointer == uint64_t opaque)\n" +
+            "//   * floats use C float* (f32) — dims and strides are int64_t\n" +
+            "//   * eps scalar is double on the hexa side, cast to float internally\n" +
+            "//\n" +
+            "// .hexanoport marker convention:\n" +
+            "//   This .c is a native shim (extern FFI boundary), not a compilation\n" +
+            "//   target for the Hexa-to-C codegen. See hexa_cc.c.hexanoport.\n" +
+            "\n" +
+            "#ifdef __linux__\n" +
+            "\n" +
+            "#include <math.h>\n" +
+            "#include <stdint.h>\n" +
+            "#include <stddef.h>\n" +
+            "\n" +
+            "// ─────────────────────────────────────────────────────────────\n" +
+            "// Fused RMSNorm + SiLU — single streaming kernel\n" +
+            "//\n" +
+            "// Shape contract:\n" +
+            "//   x     : [N]  input row (float32)\n" +
+            "//   gamma : [N]  per-channel scale (float32)\n" +
+            "//   out   : [N]  output (float32)\n" +
+            "//   eps   : scalar (passed as double, used as float)\n" +
+            "//\n" +
+            "// For this Step 1 increment the row count is fixed at 1 (caller loops\n" +
+            "// over S rows externally if needed). Keeping N scalar keeps the API\n" +
+            "// minimal and matches the \"one fused kernel\" target.\n" +
+            "// ─────────────────────────────────────────────────────────────\n" +
+            "void hxlayer_rmsnorm_silu(int64_t N, int64_t out, int64_t x,\n" +
+            "                          int64_t gamma, double eps) {\n" +
+            "    float* o = (float*)(uintptr_t)out;\n" +
+            "    const float* X = (const float*)(uintptr_t)x;\n" +
+            "    const float* G = (const float*)(uintptr_t)gamma;\n" +
+            "    const float epsf = (float)eps;\n" +
+            "    const float invN = 1.0f / (float)N;\n" +
+            "\n" +
+            "    // Pass 1: compute mean-square. Fused kernel still needs 2 passes\n" +
+            "    // over x because rmsnorm is non-local (needs the row sum). But the\n" +
+            "    // intermediate rmsnorm output never materialises in memory — pass 2\n" +
+            "    // produces silu(tmp) directly.\n" +
+            "    float ms = 0.0f;\n" +
+            "    for (int64_t p = 0; p < N; p++) ms += X[p] * X[p];\n" +
+            "    ms *= invN;\n" +
+            "    const float inv_r = 1.0f / sqrtf(ms + epsf);\n" +
+            "\n" +
+            "    // Pass 2: combined rmsnorm + silu. The rmsnorm scalar `t` is carried\n" +
+            "    // in a register straight into the silu — no intermediate buffer.\n" +
+            "    for (int64_t p = 0; p < N; p++) {\n" +
+            "        float t = X[p] * inv_r * G[p];\n" +
+            "        float s = 1.0f / (1.0f + expf(-t));\n" +
+            "        o[p] = t * s;\n" +
+            "    }\n" +
+            "}\n" +
+            "\n" +
+            "// ─────────────────────────────────────────────────────────────\n" +
+            "// ABI version probe — matches hxblas_version / hxvdsp_version style.\n" +
+            "// Start at 1; bump on any breaking signature change.\n" +
+            "// ─────────────────────────────────────────────────────────────\n" +
+            "int64_t hxlayer_version(void) {\n" +
+            "    return 1;\n" +
+            "}\n" +
+            "\n" +
+            "#endif /* __linux__ */\n"
+    return s
+}
+
+fn main() {
+    let argv = real_args()
+    let out_path = if argv.len() >= 1 { argv[0] } else { "hxlayer_linux.c" }
+    let c_text = emit_hxlayer_linux_c()
+    let cmd = "cat > \"" + out_path + "\" <<'__HXLAYER_EMIT_EOF__'\n" +
+              c_text + "__HXLAYER_EMIT_EOF__"
+    let _ = exec(cmd)
+    let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
+    if exists_check != "y" {
+        println("[hxlayer_linux_emit] FATAL: failed to write " + out_path)
+        exit(1)
+    }
+    println("[hxlayer_linux_emit] wrote " + out_path)
+    exit(0)
+}

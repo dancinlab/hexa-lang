@@ -98,6 +98,20 @@ fn main() {
     exec("mkdir -p " + out_dir)
 
     // ────────────────────────────────────────────────────────────────
+    // .c-text regen (B9.C-9) — hxlayer_linux.c is now a build artifact
+    // emitted byte-for-byte from self/native/hxlayer_linux_emit.hexa (the
+    // SSOT). Regenerate it before every compile so the emitter and the
+    // compiled .so never drift. Byte-identity is proven by
+    // self/native/hxlayer_linux_byte_diff.hexa (source-SHA + .o + .text).
+    // ────────────────────────────────────────────────────────────────
+    let emitter = src_dir + "/hxlayer_linux_emit.hexa"
+    let target_c = src_dir + "/hxlayer_linux.c"
+    if exec("[ -f \"" + emitter + "\" ] && echo y || echo n").trim() == "y" {
+        println("[regen] hxlayer_linux.c <- hxlayer_linux_emit.hexa")
+        run("hexa-run \"" + emitter + "\" \"" + target_c + "\"")
+    }
+
+    // ────────────────────────────────────────────────────────────────
     // --mac-xverify : run on Mac to validate the Linux source compiles
     // and links cleanly BEFORE committing or pushing to the H100 pod.
     // Emits a .dylib in self/native/build/xverify/ alongside the hxblas

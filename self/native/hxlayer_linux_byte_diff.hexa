@@ -1,0 +1,242 @@
+#!hexa strict
+// self/native/hxlayer_linux_byte_diff.hexa
+//   B9.C-9 (.c-text · #1850 pattern) — hxlayer_linux.c byte-diff oracle.
+//
+// Proves the hexa emitter (hxlayer_linux_emit.hexa::emit_hxlayer_linux_c)
+// produces a `.c` source byte-identical AND `.o`-equivalent to the
+// hand-written self/native/hxlayer_linux.c.
+//
+// hxlayer_linux.c is guarded by `#ifdef __linux__`, so the .o gates pass
+// `-D__linux__=1` to flip the kernel body on for the Mac host toolchain
+// (matches tool/build_hxlayer_linux.hexa --mac-xverify cflags).
+//
+// Three gates:
+//   gate-1 source-text byte-equal (sha256(emitted .c) == sha256(orig .c))
+//   gate-2 whole-file .o byte-equal (compile both, NO -g)
+//   gate-3 __TEXT,__text section byte-equal (compile both, with -g)
+//
+// gate-1 (source-SHA) is the STRONGEST always-available gate and is the
+// activation criterion per #1851 precedent; gate-2/3 require a working
+// host cc/otool and SKIP gracefully if absent.
+//
+// ⚠ HARD GATE: byte-diff PASS is REQUIRED before
+// `git rm self/native/hxlayer_linux.c`.
+//
+// Run:
+//   HEXA_HAL_ROOT=<repo-root> hexa-run self/native/hxlayer_linux_byte_diff.hexa
+
+let MODULE_NAME = "hxlayer_linux_byte_diff"
+
+// ─── check harness ────────────────────────────────────────────────────
+
+let mut RUN  = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ─── helpers ─────────────────────────────────────────────────────────
+
+fn _root() -> str {
+    let env_root = env("HEXA_HAL_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _which(cmd: str) -> bool {
+    let r = exec("command -v " + cmd + " >/dev/null 2>&1 && echo y || echo n").trim()
+    return r == "y"
+}
+
+fn _exists(p: str) -> bool {
+    let r = exec("[ -f \"" + p + "\" ] && echo y || echo n").trim()
+    return r == "y"
+}
+
+fn _sha256(p: str) -> str {
+    if _which("shasum") {
+        let r = exec("shasum -a 256 \"" + p + "\" 2>/dev/null | awk '{print $1}'").trim()
+        return r
+    }
+    if _which("sha256sum") {
+        let r = exec("sha256sum \"" + p + "\" 2>/dev/null | awk '{print $1}'").trim()
+        return r
+    }
+    return ""
+}
+
+// hxlayer_linux.c cflags — matches tool/build_hxlayer_linux.hexa xverify
+// (-D__linux__=1 flips the #ifdef __linux__ kernel body on).
+fn _cflags_nodbg() -> str {
+    return "-O3 -fPIC -D__linux__=1 -std=c11"
+}
+
+fn _cflags_dbg() -> str {
+    return _cflags_nodbg() + " -g"
+}
+
+// ─── checks ──────────────────────────────────────────────────────────
+
+fn check_toolchain() -> bool {
+    let has_cc    = _which("cc")
+    let has_otool = _which("otool")
+    let ok = has_cc && has_otool
+    let detail = "cc=" + (if has_cc { "y" } else { "n" }) +
+                 " otool=" + (if has_otool { "y" } else { "n" })
+    _check(ok, "cc + otool present (Mac host toolchain)", detail)
+    return ok
+}
+
+fn check_orig_present(src_dir: str) -> bool {
+    let p = src_dir + "/hxlayer_linux.c"
+    let ok = _exists(p)
+    if ok {
+        _check(true, "hand-written self/native/hxlayer_linux.c present", p)
+    }
+    return ok
+}
+
+fn check_emitter_path(src_dir: str) -> bool {
+    let p = src_dir + "/hxlayer_linux_emit.hexa"
+    let ok = _exists(p)
+    _check(ok, "hexa emitter self/native/hxlayer_linux_emit.hexa present", p)
+    return ok
+}
+
+fn check_source_byte_equal(src_dir: str, work_dir: str) -> bool {
+    let orig_c = src_dir + "/hxlayer_linux.c"
+    let gen_c  = work_dir + "/hxlayer_linux.c"
+    let emitter = src_dir + "/hxlayer_linux_emit.hexa"
+    let out = exec("hexa-run \"" + emitter + "\" \"" + gen_c + "\" 2>&1")
+    if !_exists(gen_c) {
+        _check(false, "gate-1 emitter wrote `.c`", "emit failed:\n" + out); return false
+    }
+    let orig_sha = _sha256(orig_c)
+    let gen_sha  = _sha256(gen_c)
+    let ok = orig_sha.len() > 0 && orig_sha == gen_sha
+    let detail = "orig=" + orig_sha + " gen=" + gen_sha
+    _check(ok, "gate-1 source-text byte-identical (sha256(.c))", detail)
+    return ok
+}
+
+fn check_obj_byte_equal_nodbg(src_dir: str, work_dir: str) -> bool {
+    let orig_c = src_dir + "/hxlayer_linux.c"
+    let gen_c  = work_dir + "/hxlayer_linux.c"
+    let orig_o = work_dir + "/orig.o"
+    let gen_o  = work_dir + "/gen.o"
+    let cf = _cflags_nodbg()
+    let out_o = exec("cc " + cf + " -c \"" + orig_c + "\" -o \"" + orig_o + "\" 2>&1")
+    let out_g = exec("cc " + cf + " -c \"" + gen_c  + "\" -o \"" + gen_o  + "\" 2>&1")
+    if !_exists(orig_o) {
+        _check(false, "gate-2 orig.o compiled (no -g)", "compile error:\n" + out_o); return false
+    }
+    if !_exists(gen_o) {
+        _check(false, "gate-2 gen.o compiled (no -g)", "compile error:\n" + out_g); return false
+    }
+    let orig_sha = _sha256(orig_o)
+    let gen_sha  = _sha256(gen_o)
+    let ok = orig_sha.len() > 0 && orig_sha == gen_sha
+    let detail = "orig=" + orig_sha + " gen=" + gen_sha
+    _check(ok, "gate-2 whole-file .o byte-identical (no -g)", detail)
+    return ok
+}
+
+fn check_section_byte_equal_dbg(src_dir: str, work_dir: str) -> bool {
+    let orig_c = src_dir + "/hxlayer_linux.c"
+    let gen_c  = work_dir + "/hxlayer_linux.c"
+    let orig_o = work_dir + "/orig_g.o"
+    let gen_o  = work_dir + "/gen_g.o"
+    let cf = _cflags_dbg()
+    let _o1 = exec("cc " + cf + " -c \"" + orig_c + "\" -o \"" + orig_o + "\" 2>&1")
+    let _o2 = exec("cc " + cf + " -c \"" + gen_c  + "\" -o \"" + gen_o  + "\" 2>&1")
+    if !_exists(orig_o) || !_exists(gen_o) {
+        _check(false, "gate-3 both .o compiled (with -g)", "compile error"); return false
+    }
+    let orig_dump = work_dir + "/orig_text.txt"
+    let gen_dump  = work_dir + "/gen_text.txt"
+    let _d1 = exec("otool -X -s __TEXT __text \"" + orig_o + "\" > \"" + orig_dump + "\" 2>&1")
+    let _d2 = exec("otool -X -s __TEXT __text \"" + gen_o  + "\" > \"" + gen_dump  + "\" 2>&1")
+    let orig_sha = _sha256(orig_dump)
+    let gen_sha  = _sha256(gen_dump)
+    let ok = orig_sha.len() > 0 && orig_sha == gen_sha
+    let detail = "orig=" + orig_sha + " gen=" + gen_sha
+    _check(ok, "gate-3 __TEXT,__text section byte-identical (with -g)", detail)
+    return ok
+}
+
+// ─── main ────────────────────────────────────────────────────────────
+
+fn main() {
+    println("========================================================================")
+    println("  self/native — hxlayer_linux_byte_diff: B9.C-9 .c-text byte-diff oracle")
+    println("========================================================================")
+    println("  generator: self/native/hxlayer_linux_emit.hexa")
+    println("  oracle:    cc + otool byte-diff vs hand-written hxlayer_linux.c")
+    println("  target:    fused rmsnorm+silu FFI kernel (-D__linux__=1)")
+    println("  gates:     source-text · whole-file .o (no -g) · __text section (with -g)")
+    println("")
+
+    let root = _root()
+    let src_dir = root + "/self/native"
+    let work_dir = exec("mktemp -d -t hxlayer_byte_diff.XXXXXX").trim()
+    if work_dir.len() == 0 {
+        println("[FATAL] mktemp failed — cannot allocate scratch dir")
+        exit(1)
+    }
+    println("  scratch: " + work_dir)
+    println("")
+
+    if !check_emitter_path(src_dir) {
+        println("__HEXA_LANG_HXLAYER_LINUX_BYTE_DIFF__ FAIL")
+        exit(1)
+    }
+
+    if !check_orig_present(src_dir) {
+        println("")
+        println("  POST-DELETION SKIP — hand-written baseline self/native/hxlayer_linux.c")
+        println("  removed after this oracle PASSed (gen ≡ orig). The emitter remains the")
+        println("  SSOT; replay the historical proof via")
+        println("  `git show <pre-deletion-sha>:self/native/hxlayer_linux.c`.")
+        println("__HEXA_LANG_HXLAYER_LINUX_BYTE_DIFF__ SKIP")
+        exit(0)
+    }
+
+    // gate-1 (source-SHA) is always available and is the activation criterion.
+    let _g1 = check_source_byte_equal(src_dir, work_dir)
+
+    // gate-2/3 require host cc + otool; SKIP gracefully if absent.
+    if check_toolchain() {
+        let _g2 = check_obj_byte_equal_nodbg(src_dir, work_dir)
+        let _g3 = check_section_byte_equal_dbg(src_dir, work_dir)
+    } else {
+        println("")
+        println("  Host cc/otool missing — gate-2/3 (.o/.text) SKIPPED.")
+        println("  gate-1 source-SHA byte-identity is the strongest available proof")
+        println("  (acceptable per #1851 precedent).")
+    }
+
+    println("")
+    println("  B9.C-9 hxlayer_linux.c .c-text byte-identity:")
+    if FAIL == 0 {
+        println("    PROVEN ✓ — hand-written hxlayer_linux.c is fully hexa-emittable.")
+        println("    DELETION GATE OPEN — self/native/hxlayer_linux.c may be `git rm`.")
+    } else {
+        println("    BYTE-DIFF FAIL — emitter output diverges from hand-written `.c`.")
+        println("    ⚠ Hand-written `.c` MUST NOT be deleted until oracle PASSES.")
+    }
+
+    let pass_n = RUN - FAIL
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_LANG_HXLAYER_LINUX_BYTE_DIFF__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_LANG_HXLAYER_LINUX_BYTE_DIFF__ PASS")
+    exit(0)
+}
