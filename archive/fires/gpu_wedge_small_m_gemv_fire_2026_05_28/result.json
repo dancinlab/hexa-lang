@@ -1,0 +1,53 @@
+{
+  "campaign": "F-WEDGE-SMALL-M-GEMV-WALL — hand-emit GEMV vs cuBLAS at small M",
+  "parent": "GPU.log.md 2026-05-27 ranked-wedge #1 (small-M GEMV, est. 5-10x ceiling)",
+  "host": "ubu-2 RTX 5070 sm_120 (driver 580, cuBLAS 12, FP32 peak 31.2 TFLOPS)",
+  "method": "cuEvent 20 warmup + 200 timed median, 3 independent runs",
+  "kernel": "gemv_warpreduce_kernel — 4 warps/CTA, 16 cols/CTA via float4 B-loads, K_CHUNK=128 shared-mem A-tile, __shfl_xor_sync butterfly reduce",
+  "build": "nvcc -O3 -arch=compute_90 -code=compute_90 (driver JIT to sm_120)",
+  "shapes": {"K": 4096, "N": 4096, "M_sweep": [1, 8, 32]},
+  "verdict_tier": "RED — FALSIFIED",
+  "falsifier": "F-WEDGE-SMALL-M-GEMV-WALL",
+  "rubric": {
+    "GREEN_threshold_M1": "handemit >= 1.5x cuBLAS",
+    "RED_threshold_M1":   "handemit <  1.05x cuBLAS",
+    "M1_measured_speedup": "0.948x (FAILS both — RED)"
+  },
+  "results": {
+    "M1": {
+      "cuBLAS_ms_median": 0.11061,
+      "handemit_ms_median": 0.11665,
+      "handemit_TFLOPS": 0.288,
+      "speedup_x": 0.948,
+      "sub_roofline_pct_vs_compute_peak": 99.08,
+      "bw_utilization_pct": 84.3,
+      "max_abs_err_vs_cuBLAS": 1.542e-06
+    },
+    "M8": {
+      "cuBLAS_ms_median": 0.11459,
+      "handemit_ms_median": 0.85896,
+      "handemit_TFLOPS": 0.313,
+      "speedup_x": 0.133,
+      "sub_roofline_pct_vs_compute_peak": 99.00,
+      "max_abs_err_vs_cuBLAS": 2.638e-06
+    },
+    "M32": {
+      "cuBLAS_ms_median": 0.12123,
+      "handemit_ms_median": 5.82097,
+      "handemit_TFLOPS": 0.184,
+      "speedup_x": 0.021,
+      "sub_roofline_pct_vs_compute_peak": 99.41,
+      "max_abs_err_vs_cuBLAS": 2.697e-06
+    }
+  },
+  "finding": "The small-M GEMV 'wedge' is BANDWIDTH-BOUND, not compute-bound. The 99.05% sub-roofline gap reported in the 2026-05-27 oracle was measured against the FP32 COMPUTE peak (31.2 TFLOPS), but at M=1 the operation is fundamentally memory-bandwidth-bound (1.0 byte/FLOP arithmetic intensity, far below the 31.2 TFLOPS / 700 GB/s = 44.6 FLOP/byte machine balance). cuBLAS at M=1 already sustains ~590 GB/s = ~84% of RTX 5070's ~700 GB/s peak bandwidth. A hand-emit GEMV kernel with shared-mem A-tile + float4 B-loads + warp-shuffle reduce reaches the same ~84% BW envelope and ties cuBLAS within timer jitter (0.948x; FALSIFIED at the 1.05x bar). At M>=8 the handemit kernel degrades sharply (CTA-level M-loop saturates compute resources without tile-level reuse), confirming the kernel is at its design ceiling.",
+  "ruled_out_axis": "Small-M GEMV is NOT a >=1.5x hexa-vs-cuBLAS wedge. cuBLAS SGEMM is already near the BW roofline at M=1.",
+  "why_estimate_was_wrong": "The 5-10x estimate in the 2026-05-27 ranked-wedge table was computed by reading the FP32-compute sub-roofline ratio (99.05%) as recoverable. It is not — that gap is the natural arithmetic-intensity ceiling of skinny GEMV, not slack in cuBLAS's implementation. The correct ceiling is BW-bound: 700 / 590 = 1.19x at most, well below the 1.5x publishability threshold.",
+  "implication_for_remaining_wedges": [
+    "rank-2/3 top-K fusion (1.68-1.80x) — still a viable wedge; epilogue work moves real FLOPs off the LM-head bottleneck.",
+    "rank-4 BC3 epilogue (1.085x) — remains retired.",
+    "rank-5 grouped QKV — debug deferred."
+  ],
+  "publishability": "negative result publishable per project.tape @D paper_negative_ok — deterministically rules out the small-M GEMV axis from the hexa custom-kernel campaign.",
+  "preserves": ["g3 over-claim 0", "feedback_closure_is_physical_limit (closure = BW physical limit, not compute peak)", "feedback_instrument_first_methodology"]
+}
