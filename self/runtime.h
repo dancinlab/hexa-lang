@@ -1243,6 +1243,25 @@ extern HexaVal farr_rmsnorm_rows_gpu;                                          /
 extern HexaVal farr_add_gpu;                                                   /* runtime.c — RFC 040 fn carrier */
 extern HexaVal farr_scale_gpu;                                                 /* runtime.c — RFC 040 fn carrier */
 
+/* BC-ANIMA M2 (2026-05-28): 4-arg in-place row-softmax for the anima
+ * trainer hot path (V=151643 large-vocab decoder). Unlike the 3-arg
+ * farr_softmax_rows_gpu above (which allocates a fresh output farr per
+ * call via hexa_farr_zeros — fine for ad-hoc smoke but a per-step alloc
+ * for a 29M-param trainer), this variant writes into a CALLER-PROVIDED
+ * `out` farr. Returns 0 on success, -1 on error. ABI mirrors the existing
+ * CUDA kernel _hx_cuda_farr_softmax_rows_gpu(x_id, R, C, out_id).
+ *
+ *   farr_softmax_rows(logits_id, out_id, R, C) -> 0 ok / -1 err
+ *
+ * 4-arg carrier (hexa_fn_new arity 4) — routes through hexa_call4. On
+ * HEXA_CUDA: calls _hx_cuda_farr_softmax_rows_gpu directly (same kernel).
+ * On no-CUDA: calls _hx_farr_softmax_rows_inplace_cpu (new helper).
+ * Byte-eq oracle = the CPU helper (numerically identical to the existing
+ * _hx_farr_softmax_rows_cpu — two-pass max-then-sumexp). */
+HexaVal hexa_farr_softmax_rows(HexaVal x_v, HexaVal out_v,
+                               HexaVal r_v, HexaVal c_v);                      /* runtime.c — BC-ANIMA M2 */
+extern HexaVal farr_softmax_rows;                                              /* runtime.c — BC-ANIMA M2 fn carrier */
+
 /* mk2-closure port (rfc043-flame-camp 61e29993, 2026-05-19):
  * RFC 056 §6.4 device-residence disposition carrier — `farr_set_out_disposition(d)`
  * toggles FORGE_OUT_DEVICE_KEEP for the next forge op so its output stays

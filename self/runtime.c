@@ -9158,6 +9158,41 @@ static int64_t _hx_farr_softmax_rows_cpu(int64_t x_id, int64_t R, int64_t C) {
     return out_id;
 }
 
+// BC-ANIMA M2 (2026-05-28): in-place row-softmax CPU oracle.
+// Writes numerically-stable row-wise softmax of `x_id` [R*C] into
+// caller-provided `out_id` [R*C] (must be pre-allocated, e.g. via
+// hexa_farr_zeros). Returns 0 ok / -1 err. Two-pass (max then sumexp)
+// — bit-identical math to _hx_farr_softmax_rows_cpu above; only the
+// output target differs (no per-call hexa_farr_zeros — for the V=151643
+// anima trainer hot path where a per-step alloc dominates).
+static int _hx_farr_softmax_rows_inplace_cpu(int64_t x_id, int64_t out_id,
+                                             int64_t R, int64_t C) {
+    if (x_id < 0 || x_id >= _hx_farr_count) return -1;
+    if (out_id < 0 || out_id >= _hx_farr_count) return -1;
+    if (R <= 0 || C <= 0)                    return -1;
+    HexaFarrEntry* xe = &_hx_farr_table[x_id];
+    HexaFarrEntry* oe = &_hx_farr_table[out_id];
+    if (!xe->buf || !oe->buf)                return -1;
+    if (xe->len < R * C || oe->len < R * C)  return -1;
+    const double* X = xe->buf;
+    double*       Y = oe->buf;
+    for (int64_t r = 0; r < R; r++) {
+        const double* xr = X + r * C;
+        double*       yr = Y + r * C;
+        double zmax = xr[0];
+        for (int64_t j = 1; j < C; j++) if (xr[j] > zmax) zmax = xr[j];
+        double s = 0.0;
+        for (int64_t j = 0; j < C; j++) {
+            double e = hxlcl_exp(xr[j] - zmax);
+            yr[j] = e;
+            s += e;
+        }
+        double inv = (s > 0.0) ? (1.0 / s) : 0.0;
+        for (int64_t j = 0; j < C; j++) yr[j] *= inv;
+    }
+    return 0;
+}
+
 // _hx_farr_rmsnorm_rows_cpu(x, R, C, eps) -> new farr_id.
 // RMSNorm row-wise: y[r,j] = x[r,j] / sqrt(mean_j(x[r,j]^2) + eps).
 // -1 on err. Matches d_train3_lib c3_rmsnorm_fwd math (without the
@@ -9311,6 +9346,31 @@ HexaVal hexa_farr_softmax_rows_gpu(HexaVal x_v, HexaVal r_v, HexaVal c_v) {
     return hexa_int(out_id);
 #else
     return hexa_int(_hx_farr_softmax_rows_cpu(x_id, R, C));
+#endif
+}
+
+// BC-ANIMA M2 (2026-05-28): farr_softmax_rows(x, out, R, C) -> 0/-1.
+// 4-arg in-place row-softmax. ABI mirrors the existing CUDA kernel
+// _hx_cuda_farr_softmax_rows_gpu(x_id, R, C, out_id) — caller pre-
+// allocates `out` so no per-call hexa_farr_zeros. For the anima M4b
+// decoder trainer (V=151643), this removes a 29M-double alloc per step.
+// On HEXA_CUDA: dispatches to _hx_cuda_farr_softmax_rows_gpu directly.
+// On no-CUDA: dispatches to _hx_farr_softmax_rows_inplace_cpu (the
+// byte-eq oracle — same two-pass max/sumexp math as the 3-arg variant).
+HexaVal hexa_farr_softmax_rows(HexaVal x_v, HexaVal out_v,
+                               HexaVal r_v, HexaVal c_v) {
+    int64_t x_id   = hexa_as_num(x_v);
+    int64_t out_id = hexa_as_num(out_v);
+    int64_t R      = hexa_as_num(r_v);
+    int64_t C      = hexa_as_num(c_v);
+#ifdef HEXA_CUDA
+    if (R <= 0 || C <= 0) return hexa_int(-1);
+    if (x_id < 0 || x_id >= _hx_farr_count) return hexa_int(-1);
+    if (out_id < 0 || out_id >= _hx_farr_count) return hexa_int(-1);
+    int rc = _hx_cuda_farr_softmax_rows_gpu(x_id, R, C, out_id);
+    return hexa_int(rc == 0 ? 0 : -1);
+#else
+    return hexa_int(_hx_farr_softmax_rows_inplace_cpu(x_id, out_id, R, C));
 #endif
 }
 
@@ -9933,6 +9993,8 @@ HexaVal farr_rmsnorm_rows_gpu;
 HexaVal farr_add_gpu;
 HexaVal farr_scale_gpu;
 HexaVal farr_silu_gate_gpu;
+// BC-ANIMA M2 (2026-05-28): 4-arg in-place row-softmax carrier.
+HexaVal farr_softmax_rows;
 
 // ═══════════════════════════════════════════════════════════════════
 // anima RFC 040 Phase B2 (2026-05-16): d_train5 hot-path completion —
@@ -12691,6 +12753,10 @@ static void _hexa_init_fn_shims(void) {
     farr_add_gpu                    = hexa_fn_new((void*)hexa_farr_add_gpu,                    3);
     farr_scale_gpu                  = hexa_fn_new((void*)hexa_farr_scale_gpu,                  3);
     farr_silu_gate_gpu              = hexa_fn_new((void*)hexa_farr_silu_gate_gpu,              3);
+    // BC-ANIMA M2 (2026-05-28): 4-arg in-place row-softmax (V=151643
+    // anima trainer hot path — preallocated `out` removes per-step
+    // hexa_farr_zeros from a 29M-double softmax over the vocab).
+    farr_softmax_rows               = hexa_fn_new((void*)hexa_farr_softmax_rows,               4);
     // mk2-closure port (rfc043-flame-camp c2689508 + c42ac263, 2026-05-19):
     // 3-arg C5 batch builtins use HexaVal carrier + hexa_fn_new (codegen
     // emits hexa_call3, dispatched via the carrier — same pattern as
