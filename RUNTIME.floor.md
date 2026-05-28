@@ -15,7 +15,11 @@ flip 캠페인이 안전 quick-win 을 고갈시킨 뒤 남는 진짜 바닥의 
 
 - `.o` = **0** ✅
 - `.s` = **0** (F5 .s-leg COMPLETE · PR #1843/#1844/#1845/#1846 · 아래 F5)
-- `.c` = **90** (2026-05-28 B9.C-7 PROVEN-DEFERRED · 7-file tool/test
+- `.c` = **90** (2026-05-28 B9.C-8 dispatch-deferred reflow 시도 · 3 self/cuda+forge
+  STILL-DEFERRED `.c` 카운트 미변경 90→90 — gate-1 sha 3/3 재검증 PASS 이나
+  consuming dispatch script 가 `.sh` (project.tape Write/Edit 차단 AND ABSORBED
+  cross-cycle 소유) 라 reflow 불가. `tool/regen_dispatch_c_artifacts.hexa` activation
+  bridge LAND. 아래 B9.C-8 참조. 이전: B9.C-7 PROVEN-DEFERRED · 7-file tool/test
   hexa_ld batch · `.c` 카운트 미변경 90→90 — RUNTIME.flip.md L418-419
   "active linker dev · 보수적 KEEP" 정책 준수. 4 byte-diff oracle 6/6+6/6+6/6+3/3
   PASS · 7 `*_emit.hexa` + 4 per-dir `byte_diff.hexa` LAND ·
@@ -154,6 +158,44 @@ standalone `.c` 중 per-file go/no-go (B9.C-5 "consumption check first" lesson
   - **phase-h 충돌**: `phase-h-inc4-dyld-write` 브랜치는 stale (마지막 활동
     pre-#1307 머지) · 격리 worktree (`/Users/ghost/core/hexa-lang/.claude/
     worktrees/agent-a97d33602dd4f86d9`) 에서 진행 · phase-h 브랜치 reset/삭제 0건.
+
+세션 .c-leg dispatch-deferred reflow 시도: **B9.C-8** — B9.C-5 (self/cuda) +
+B9.C-6 (forge_tier_v1) 의 3 PROVEN-DEFERRED `.c` 를 activate 하려는 세션.
+**결과 = 3 STILL-DEFERRED (.c 카운트 미변경 90→90)** + regen-orchestrator 인프라 LAND.
+mission 의 핵심 통찰("source-SHA 동치 ⇒ regen-before-scp 가 GPU 재검증 불필요")은
+**옳고 입증됨** — 그러나 activation 의 실제 blocker 는 verification 이 아니라
+**dispatch script 가 `.sh`** 라는 거버넌스 제약:
+  - **gate-1 sha 재검증 (삭제 전 필수) — 3/3 PASS** (현 HEAD 기준 drift 0):
+    · `self/cuda/runtime_bf16.c`   sha=`3c32db08…d55835` — `runtime_bf16_byte_diff.hexa` **6/6 PASS**
+    · `self/cuda/runtime_cuda.c`   sha=`9b2e0c33…e4b7d1` — `runtime_cuda_byte_diff.hexa` **gate-1 PASS** (gate-2/3 SKIP · no Mac nvcc)
+    · `self/forge/forge_tier_v1.c` sha=`c51b99af…c2b01`  — `forge_tier_v1_byte_diff.hexa` **6/6 PASS**
+  - **activation BLOCKER = `.sh` dispatch reflow 불가**:
+    · `runtime_bf16.c` SH-consumer 6 · `runtime_cuda.c` SH-consumer 10 ·
+      `forge_tier_v1.c` SH-consumer 4 (+ local `tool/build_hexa_cli.hexa` cp + `self/runtime.c:13266` #include).
+    · project.tape 가 `.sh` Write/Edit 를 **하드-차단** (B9.C-8 에서 Edit 시도 → refusal 재확인).
+    · 동시에 `tool/dispatch_*.sh` / `tool/flame_phase*.sh` 는 `audit_forbidden_exts.hexa`
+      ABSORBED_PREFIXES (flame phase4 / forge / runpod 사이클 소유) — cross-cycle 편집은
+      `inbox_dup_race_precheck` + g_inbox_processing_loop 위반. → 이 세션이 .sh 를
+      못 만지는 건 도구 차단 AND 소유권 충돌 의 **이중 blocker**.
+    · `git rm` 즉시 6+10+4 = 다수 remote dispatcher 가 fresh-clone 에서 깨짐
+      (GPU fan-out 회귀) — B9.C-5 author 가 RUNTIME.floor.md L51-52 에서 이미 동일 진단.
+  - **activation 인프라 LAND** — `tool/regen_dispatch_c_artifacts.hexa`:
+    3 emitter 를 한 번에 regen + gate-1 sha drift-guard (3/3 PASS measured) 하는
+    단일 `.hexa` bridge. `.sh` dispatcher 가 `.hexa` 로 포팅되거나 flame/forge
+    dispatch 사이클을 소유한 GPU-equipped 세션이 scp 직전 `hexa-run
+    tool/regen_dispatch_c_artifacts.hexa` 한 줄을 호출하면 즉시 activate 가능
+    (`.c` git rm → regen 이 sha-동일 재생성). `--regen-only` 는 `.c` 가 이미 rm 된
+    뒤(in-tree baseline 부재) emitter-SSOT 재생성 모드.
+  - **state/flame 2 파일 (out-of-scope 확정)** —
+    `state/flame_phase4d_20260517_102511/flame_d768_12L_corpus_test_a2.c` +
+    `state/flame_phase4d_5_4_2026_05_17/flame_d768_12L_corpus_test_a2_layer2.c`:
+    (1) `state/` ∈ ABSORBED_PREFIXES → BOOTSTRAP `.c` 카운트에 **미포함** (activate 해도 90 불변),
+    (2) consumer = `dispatch_phase4d_5_4.sh` 등 `.sh` (편집 차단) + flame phase4 사이클 소유.
+    → emit/oracle 미작성 (no count benefit · double-blocked). STILL-DEFERRED.
+  - **다음 세션 활성화 경로**: ① flame/forge/runpod dispatch 사이클 소유 세션이
+    `dispatch_*.sh` → `.hexa` 포팅 시 scp 직전 `regen_dispatch_c_artifacts.hexa`
+    호출 추가 → 3 `.c` git rm (.c 90→87) · ② state/flame 은 BOOTSTRAP 외라 별도
+    가치 없음 (skip).
 
 ## 🧱 floor closure 상태 (2026-05-28 — F1-F6 종결 pass)
 

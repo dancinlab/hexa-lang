@@ -1,0 +1,194 @@
+#!hexa strict
+// tool/regen_dispatch_c_artifacts.hexa
+//   B9.C-8 (.c-leg dispatch-deferred reflow) — single-command regen + sha-verify
+//   for the three PROVEN-DEFERRED CUDA/forge `.c` artifacts that remote GPU
+//   dispatch scripts scp to a pod for `nvcc -x cu` / `clang -DHEXA_CUDA` build.
+//
+// ── WHY THIS EXISTS ────────────────────────────────────────────────────
+//
+// B9.C-5 (#1851) + B9.C-6 (#1852) proved three CUDA/forge bridge `.c` files
+// are byte-identically hexa-emittable (gate-1 source-sha PASS, persisted in
+// .verdicts/runtime-floor-closure/):
+//   - self/cuda/runtime_bf16.c    — runtime_bf16_emit.hexa    (6/6 PASS)
+//   - self/cuda/runtime_cuda.c    — runtime_cuda_emit.hexa    (gate-1 PASS;
+//                                    gate-2/3 SKIP — no Mac nvcc)
+//   - self/forge/forge_tier_v1.c  — forge_tier_v1_emit.hexa   (6/6 PASS)
+//
+// Source-SHA equivalence (gate-1) is the binding gate: because the emitter
+// reproduces the `.c` byte-for-byte, scp'ing the regenerated `.c` ships the
+// SAME bytes the original would have → nvcc (deterministic on identical
+// input) produces the SAME object → the GPU build/test is unaffected. No
+// GPU re-verification is needed to swap the hand-written `.c` for an
+// emitter-regenerated one.
+//
+// That makes "regen-before-scp" the activation pattern: a dispatch script
+// runs this orchestrator FIRST (refreshing the `.c` from its hexa emitter,
+// the SSOT), then scp's the freshly-regenerated `.c` as before.
+//
+// ── ACTIVATION STATE (B9.C-8) ──────────────────────────────────────────
+//
+// The three `.c` files are NOT yet `git rm`'d. The blocker is NOT
+// verification (source-sha is proven) — it is that the consuming dispatch
+// scripts are `.sh`:
+//   - project.tape bars `.sh` Write/Edit (hexa-native-only authoring), so
+//     the per-script "regen-before-scp" line cannot be inserted via the
+//     sanctioned tools, and
+//   - tool/dispatch_*.sh / tool/flame_phase*.sh sit in audit_forbidden_exts
+//     ABSORBED_PREFIXES (owned by the flame phase4 / forge / runpod cycles);
+//     editing them from this cycle conflicts with that ownership.
+//
+// This orchestrator is the governance-compliant bridge: it is the single
+// `.hexa` entry point a future `.hexa`-ported dispatcher (or a GPU-equipped
+// session that owns the flame/forge dispatch cycle) calls before scp.
+// Once the dispatch scripts source it, the hand-written `.c` files may be
+// `git rm`'d (the regen recreates them on demand, sha-identical).
+//
+// ── USAGE ──────────────────────────────────────────────────────────────
+//
+//   # regen all three + verify sha-equivalence vs the in-tree `.c`:
+//   hexa-run tool/regen_dispatch_c_artifacts.hexa
+//
+//   # regen only (e.g. when the `.c` has already been git-rm'd — no in-tree
+//   # baseline to compare against; emitter is the SSOT):
+//   hexa-run tool/regen_dispatch_c_artifacts.hexa --regen-only
+//
+//   # exit 0 = all regen OK (and, unless --regen-only, all sha-equal);
+//   # exit 1 = a regen failed or a sha mismatch (drift) was detected.
+//
+// HEXA_HAL_ROOT overrides the repo-root autodetect (defaults to `pwd`).
+
+let MODULE_NAME = "regen_dispatch_c_artifacts"
+
+let mut RUN  = 0
+let mut FAIL = 0
+
+fn _root() -> str {
+    let env_root = env("HEXA_HAL_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _which(cmd: str) -> bool {
+    let r = exec("command -v " + cmd + " >/dev/null 2>&1 && echo y || echo n").trim()
+    return r == "y"
+}
+
+fn _exists(p: str) -> bool {
+    let r = exec("[ -f \"" + p + "\" ] && echo y || echo n").trim()
+    return r == "y"
+}
+
+fn _sha256(p: str) -> str {
+    if _which("shasum") {
+        return exec("shasum -a 256 \"" + p + "\" 2>/dev/null | awk '{print $1}'").trim()
+    }
+    if _which("sha256sum") {
+        return exec("sha256sum \"" + p + "\" 2>/dev/null | awk '{print $1}'").trim()
+    }
+    return ""
+}
+
+fn _hexa_run() -> str {
+    // Prefer an on-PATH hexa-run; fall back to the canonical install path.
+    if _which("hexa-run") { return "hexa-run" }
+    return "/Users/ghost/.hx/bin/hexa-run"
+}
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// Regenerate one `.c` from its emitter into `dst`. When `regen_only` is
+// false AND an in-tree baseline exists, also assert sha-equivalence vs the
+// (pre-regen) baseline captured by the caller.
+fn regen_one(root: str, emitter_rel: str, dst_rel: str, regen_only: bool) {
+    let emitter = root + "/" + emitter_rel
+    let dst     = root + "/" + dst_rel
+
+    if !_exists(emitter) {
+        _check(false, "emitter present: " + emitter_rel, "MISSING — cannot regen " + dst_rel)
+        return
+    }
+
+    // Capture the pre-regen baseline sha (if the `.c` is still in-tree).
+    let had_baseline = _exists(dst)
+    let baseline_sha = if had_baseline { _sha256(dst) } else { "" }
+
+    // Regen the `.c` into a scratch file first, so a mid-write failure never
+    // clobbers a good in-tree baseline.
+    let tmp = exec("mktemp -t regen_c.XXXXXX").trim()
+    if tmp.len() == 0 {
+        _check(false, "regen " + dst_rel, "mktemp scratch failed")
+        return
+    }
+    let cmd = _hexa_run() + " \"" + emitter + "\" \"" + tmp + "\" >/dev/null 2>&1; echo $?"
+    let rc = exec(cmd).trim()
+    if rc != "0" || !_exists(tmp) {
+        _check(false, "regen " + dst_rel, "emitter exit rc=" + rc)
+        let _ = exec("rm -f \"" + tmp + "\"")
+        return
+    }
+
+    let gen_sha = _sha256(tmp)
+
+    if regen_only || !had_baseline {
+        // No baseline to compare: emitter is the SSOT, just install the file.
+        let _ = exec("mkdir -p \"$(dirname \"" + dst + "\")\" 2>/dev/null; cp -f \"" + tmp + "\" \"" + dst + "\"")
+        let _ = exec("rm -f \"" + tmp + "\"")
+        _check(_exists(dst), "regen " + dst_rel + " (no-baseline · emitter SSOT)",
+               "sha=" + gen_sha)
+        return
+    }
+
+    // Baseline present: gate-1 source-sha must match (drift guard).
+    let equal = baseline_sha == gen_sha && gen_sha.len() > 0
+    // Install the regenerated file regardless of equality so `dst` reflects
+    // the emitter SSOT; equality is reported as the binding gate.
+    let _ = exec("cp -f \"" + tmp + "\" \"" + dst + "\"")
+    let _ = exec("rm -f \"" + tmp + "\"")
+    let detail = if equal {
+        "gate-1 byte-identical · sha=" + gen_sha
+    } else {
+        "⚠ DRIFT — baseline=" + baseline_sha + " gen=" + gen_sha
+    }
+    _check(equal, "regen+verify " + dst_rel, detail)
+}
+
+fn main() {
+    println("========================================================================")
+    println("  B9.C-8 — regen_dispatch_c_artifacts: CUDA/forge `.c` regen + sha-verify")
+    println("========================================================================")
+
+    let argv = real_args()
+    let mut regen_only = false
+    let mut i = 0
+    while i < argv.len() {
+        if argv[i] == "--regen-only" { regen_only = true }
+        i = i + 1
+    }
+
+    let root = _root()
+    println("  repo-root: " + root)
+    println("  mode:      " + (if regen_only { "--regen-only (emitter SSOT, no baseline compare)" } else { "regen + gate-1 sha-verify vs in-tree `.c`" }))
+    println("")
+
+    regen_one(root, "self/cuda/runtime_bf16_emit.hexa",   "self/cuda/runtime_bf16.c",   regen_only)
+    regen_one(root, "self/cuda/runtime_cuda_emit.hexa",   "self/cuda/runtime_cuda.c",   regen_only)
+    regen_one(root, "self/forge/forge_tier_v1_emit.hexa", "self/forge/forge_tier_v1.c", regen_only)
+
+    println("")
+    let pass_n = RUN - FAIL
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " artifacts regenerated"
+            + (if regen_only { "" } else { " + verified sha-identical" }))
+    if FAIL > 0 {
+        println("__HEXA_LANG_REGEN_DISPATCH_C__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_LANG_REGEN_DISPATCH_C__ PASS")
+    exit(0)
+}
