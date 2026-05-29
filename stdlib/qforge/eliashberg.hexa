@@ -1,0 +1,372 @@
+// HEXA Standard Library — qforge/eliashberg
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE L1 — the isotropic single-band Migdal-Eliashberg (ME) gap-equation
+// solver on the Matsubara axis. This is the layer UP in rigour from L0: L0
+// returns the Allen-Dynes *fit* to Tc; L1 solves the linearized Eliashberg
+// equations Allen & Dynes (1975) derived that fit FROM.
+//
+//   α²F(ω) (or λ + a representative ω)  ──▶  Matsubara coupling kernel λ(n−m)
+//                                                       │
+//                                          linearized gap eigenvalue ρ(T)
+//                                                       ▼
+//                                     bisect T until ρ(T) = 1  ──▶  Tc (K)
+//
+// @cite Allen & Dynes 1975, PRB 12 905 — §II, Eqs. 2.6-2.14: the linearized
+//       Matsubara gap equation and the eigenvalue criterion ρ(Tc)=1.
+// @cite Bergmann & Rainer 1973, Z. Physik 263 59 — the functional-derivative
+//       linearized-kernel eigenvalue formulation.
+// @cite Carbotte 1990, RMP 62 1027 — Eq. 4.5-4.7 (Matsubara ME at Tc).
+// @cite Marsiglio & Carbotte 2008, "Electron-Phonon Superconductivity"
+//       (Superconductivity vol.1, Springer) — Eq. 56-60, the renormalization
+//       function Z and the linearized gap kernel in matrix form.
+//
+// ── The physics (isotropic single-band, linearized at Tc) ───────────────
+//
+// Matsubara fermion frequencies:  ωₙ = (2n+1) π T,  n = 0,1,2,…
+//
+// Electron-phonon Matsubara coupling kernel (the spectral function folded
+// onto the bosonic frequency difference):
+//
+//   λ(n−m) = 2 ∫₀^∞  ω α²F(ω) / (ω² + (ωₙ−ωₘ)²)  dω
+//          = 2 ∫₀^∞  ω α²F(ω) / (ω² + (2π T (n−m))²)  dω
+//
+// Note the static limit n=m reproduces the dc coupling constant:
+//   λ(0) = 2 ∫ α²F(ω)/ω dω = λ   (the standard mass-enhancement λ).
+//
+// Mass renormalization (Z) on the Matsubara axis, linearized (Δ→0⁺):
+//
+//   Z(n) = 1 + (π T / ωₙ) Σ_m  λ(n−m) · sgn(ωₘ)
+//        = 1 + (1/(2n+1)) Σ_{m≥0} λ(n−m) − λ(n+m+1)        (folded m<0)
+//
+// Linearized gap equation (the φ = Z·Δ amplitude form), at Tc the largest
+// eigenvalue ρ of the kernel K equals 1:
+//
+//   ρ · Z(n) Δ(n) = π T Σ_m [ λ(n−m) − μ* ] · Δ(m) / |2m+1|        (×1/πT)
+//
+// Folding the negative-m half onto m≥0 (Δ symmetric, Δ(−m−1)=Δ(m)) and
+// dividing through, the eigenvalue problem on the half-axis m = 0…N−1 is
+//
+//   ρ Δ(n) = Σ_{m=0}^{N-1} K[n,m] Δ(m),
+//
+//   K[n,m] = ( λ(n−m) + λ(n+m+1) − 2μ* ) / ( (2m+1) · Z(n) ),
+//
+//   Z(n) = 1 + (1/(2n+1)) Σ_{m=0}^{N-1} ( λ(n−m) − λ(n+m+1) ).
+//
+// The μ* cutoff is the standard sharp Matsubara cutoff at the same N (the
+// retarded Coulomb term is frequency-independent up to the cutoff). K is not
+// symmetric (the 1/Z(n) row scale + 1/(2m+1) column weight); we extract its
+// largest eigenvalue via the symmetric similarity transform below so the
+// verified `eigvalsh` (real symmetric Jacobi) applies exactly:
+//
+//   Let S[n,m] = ( λ(n−m)+λ(n+m+1)−2μ* ) / ( sqrt((2n+1)(2m+1)) sqrt(Z(n)Z(m)) ).
+//   S is symmetric (λ(n−m)=λ(m−n), λ(n+m+1) symmetric in n,m) and similar to
+//   K (D K D⁻¹ = S with D = diag(sqrt((2n+1) Z(n)))), so eig(S) = eig(K).
+//
+// Tc = the temperature where the largest eigenvalue ρ_max(T) crosses 1 from
+// above (ρ falls monotonically with T). We bracket [T_lo, T_hi] then bisect.
+//
+// d3/d19 reuse (compose, don't reinvent):
+//   - α²F → (λ, ω_log, ω̄₂) moments + Allen-Dynes/McMillan cross-check :
+//       stdlib/material/sim  (eliashberg_moments_from_a2f, allen_dynes_full,
+//       mcmillan_tc) — verified 🟢.
+//   - largest eigenvalue of the symmetric kernel : stdlib/alloc/math/eigen
+//       (eigvalsh — descending-sorted real-symmetric eigenvalues).
+//
+// Surface (pure functions, no syscall):
+//   pub fn eliashberg_lambda_kernel(omega, a2f, n_minus_m, T_K) -> float
+//   pub fn eliashberg_rho_at_T(omega, a2f, mu_star, T_K, n_mats) -> float
+//   pub fn eliashberg_tc(omega, a2f, mu_star, n_mats) -> float
+//   pub fn eliashberg_rho_from_lambda(lam, omega_rep_K, mu_star, T_K, n_mats) -> float
+//   pub fn eliashberg_tc_from_lambda(lam, omega_rep_K, mu_star, n_mats) -> float
+
+use "stdlib/material/sim"
+use "stdlib/alloc/math/eigen"
+
+// Boltzmann / unit bridge. The kernel is unit-free in (ω, T) as long as both
+// carry the SAME energy unit. α²F frequencies ω arrive in Kelvin (the moment
+// integrator's convention — ω_log is reported in K), so T is in Kelvin too
+// and ωₙ = (2n+1)π T shares the unit. No k_B appears: it is absorbed by
+// expressing every frequency as a temperature (ħω/k_B), the standard
+// Matsubara-axis convention used throughout the el-ph literature.
+let _ELI_PI: float = 3.14159265358979323846
+
+fn _eli_abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+// ── λ(ℓ) — the Matsubara-frequency electron-phonon coupling kernel ───────
+//
+//   λ(ℓ) = 2 ∫₀^∞ ω α²F(ω) / (ω² + (2π T ℓ)²) dω         ℓ = n − m
+//
+// Trapezoid quadrature over the supplied α²F grid (same integrator family as
+// the verified `eliashberg_moments_from_a2f`). At ℓ=0 this is exactly the
+// standard λ = 2∫α²F/ω (the bosonic kernel ω/(ω²+0) = 1/ω) — the 🔵 closed-
+// form sub-check the selftest pins. `omega`/`a2f` are equal-length samples,
+// every ω > 0. Returns 0.0 on malformed input (caller treats as no coupling).
+pub fn eliashberg_lambda_kernel(omega: [float], a2f: [float],
+                                n_minus_m: int, T_K: float) -> float {
+    let n = len(omega)
+    if n < 2 || len(a2f) != n { return 0.0 }
+    let nu = 2.0 * _ELI_PI * T_K * to_float(n_minus_m)   // bosonic Matsubara freq
+    let nu2 = nu * nu
+    let mut acc = 0.0
+    let mut k = 0
+    while k < n - 1 {
+        let w0 = omega[k]
+        let w1 = omega[k + 1]
+        if w0 <= 0.0 || w1 <= 0.0 { return 0.0 }
+        let dw = w1 - w0
+        let g0 = w0 * a2f[k] / (w0 * w0 + nu2)
+        let g1 = w1 * a2f[k + 1] / (w1 * w1 + nu2)
+        acc = acc + 0.5 * (g0 + g1) * dw
+        k = k + 1
+    }
+    return 2.0 * acc
+}
+
+// Single-Einstein-mode analytic kernel: α²F(ω) = (λ ω_E / 2) δ(ω − ω_E),
+// which gives λ(ℓ) = λ ω_E² / (ω_E² + (2πT ℓ)²) exactly (the closed-form a
+// caller passing only (λ, ω_rep) wants — no grid). Used by the from-lambda
+// entry below so a hand-fed (λ, ω) needs no sampled spectrum.
+fn _eli_lambda_kernel_einstein(lam: float, omega_E_K: float,
+                               n_minus_m: int, T_K: float) -> float {
+    let nu = 2.0 * _ELI_PI * T_K * to_float(n_minus_m)
+    let wE2 = omega_E_K * omega_E_K
+    return lam * wE2 / (wE2 + nu * nu)
+}
+
+// ── largest linearized-gap eigenvalue ρ_max(T), grid α²F entry ───────────
+//
+// Assemble the symmetric kernel S[n,m] (size n_mats) from the Matsubara
+// coupling λ(n−m), λ(n+m+1), the renormalization Z(n), and μ*, then return
+// the largest eigenvalue via the verified `eigvalsh`. ρ_max falls with T;
+// Tc is where ρ_max = 1.
+pub fn eliashberg_rho_at_T(omega: [float], a2f: [float], mu_star: float,
+                           T_K: float, n_mats: int) -> float {
+    return _eli_rho_core(omega, a2f, 0.0, 0.0, false,
+                         mu_star, T_K, n_mats)
+}
+
+// Einstein-mode (λ, ω_rep) entry — same eigenvalue solve, analytic kernel.
+pub fn eliashberg_rho_from_lambda(lam: float, omega_rep_K: float,
+                                  mu_star: float, T_K: float,
+                                  n_mats: int) -> float {
+    let dummy: [float] = []
+    return _eli_rho_core(dummy, dummy, lam, omega_rep_K, true,
+                         mu_star, T_K, n_mats)
+}
+
+// Assemble the symmetric linearized-gap kernel S (row-major flat, n×n).
+//   S[n,m] = (λ(|n−m|)+λ(n+m+1) − 2μ*) / ( sqrt((2n+1)(2m+1)) · sqrt(Z(n)Z(m)) )
+// with Z(n) = 1 + (1/(2n+1)) Σ_m (λ(|n−m|) − λ(n+m+1)). S is symmetric and
+// similar to the (non-symmetric) gap kernel K, so eig(S)=eig(K). Returns the
+// empty array on malformed input.
+fn _eli_build_kernel(omega: [float], a2f: [float],
+                     lam: float, omega_rep_K: float, use_einstein: bool,
+                     mu_star: float, T_K: float, n_mats: int) -> [float] {
+    let empty: [float] = []
+    if n_mats < 1 { return empty }
+    if T_K <= 0.0 { return empty }
+
+    // λ(ℓ) lookup table for ℓ = 0 … 2·n_mats (covers both n−m and n+m+1).
+    let lmax = 2 * n_mats
+    let mut lam_tab: [float] = []
+    let mut l = 0
+    while l <= lmax {
+        let v = if use_einstein {
+            _eli_lambda_kernel_einstein(lam, omega_rep_K, l, T_K)
+        } else {
+            eliashberg_lambda_kernel(omega, a2f, l, T_K)
+        }
+        lam_tab.push(v)
+        l = l + 1
+    }
+
+    // Renormalization Z(n) = 1 + (1/(2n+1)) Σ_{m=0}^{N-1} (λ(|n−m|) − λ(n+m+1)).
+    let mut Z: [float] = []
+    let mut n = 0
+    while n < n_mats {
+        let mut s = 0.0
+        let mut m = 0
+        while m < n_mats {
+            let d = if n >= m { n - m } else { m - n }
+            s = s + (lam_tab[d] - lam_tab[n + m + 1])
+            m = m + 1
+        }
+        let zn = 1.0 + s / to_float(2 * n + 1)
+        if zn < 1.0e-9 { Z.push(1.0e-9) } else { Z.push(zn) }
+        n = n + 1
+    }
+
+    let mut S: [float] = []
+    let mut i = 0
+    while i < n_mats {
+        let mut j = 0
+        while j < n_mats {
+            let d = if i >= j { i - j } else { j - i }
+            let num = lam_tab[d] + lam_tab[i + j + 1] - 2.0 * mu_star
+            let den_w = sqrt(to_float((2 * i + 1) * (2 * j + 1)))
+            let den_z = sqrt(Z[i] * Z[j])
+            S.push(num / (den_w * den_z))
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return S
+}
+
+// Largest eigenvalue of the symmetric kernel via power iteration. The
+// linearized-gap kernel is Perron-like: its dominant eigenvalue ρ_max is
+// positive with a sign-definite (nodeless conventional-SC) eigenvector, so
+// power iteration converges to ρ_max robustly. O(n²)/iter — far cheaper than
+// a full Jacobi sweep, which is what makes the T-bisection tractable. The
+// converged-Tc point is independently re-checked against `eigvalsh` (the
+// verified reuse atom) in `eliashberg_rho_at_T` below.
+fn _eli_power_lambda_max(S: [float], n: int) -> float {
+    if n < 1 { return 0.0 }
+    let mut v: [float] = []
+    let mut i = 0
+    while i < n { v.push(1.0 / sqrt(to_float(n))) ; i = i + 1 }
+    let mut rho = 0.0
+    let mut it = 0
+    while it < 200 {
+        // w = S·v
+        let mut w: [float] = []
+        let mut r = 0
+        while r < n {
+            let mut acc = 0.0
+            let mut c = 0
+            while c < n { acc = acc + S[r * n + c] * v[c] ; c = c + 1 }
+            w.push(acc)
+            r = r + 1
+        }
+        // norm
+        let mut nrm2 = 0.0
+        let mut k = 0
+        while k < n { nrm2 = nrm2 + w[k] * w[k] ; k = k + 1 }
+        let nrm = sqrt(nrm2)
+        if nrm < 1.0e-300 { return 0.0 }
+        // Rayleigh quotient ρ = vᵀSv = vᵀw (v unit) → ρ before renorm
+        let mut ray = 0.0
+        let mut q = 0
+        while q < n { ray = ray + v[q] * w[q] ; q = q + 1 }
+        // renormalize v = w/||w||
+        let mut nv: [float] = []
+        let mut p = 0
+        while p < n { nv.push(w[p] / nrm) ; p = p + 1 }
+        v = nv
+        if _eli_abs(ray - rho) < 1.0e-12 * (1.0 + _eli_abs(ray)) {
+            return ray
+        }
+        rho = ray
+        it = it + 1
+    }
+    return rho
+}
+
+// Shared eigenvalue core. `use_power=true` → power-iteration ρ_max (fast,
+// used inside the T-bisection); else the verified `eigvalsh` (full symmetric
+// Jacobi, used for the self-consistency cross-check). `use_einstein=true` →
+// analytic single-mode kernel from (lam,ω_rep); else trapezoid (omega,a2f).
+fn _eli_rho_core(omega: [float], a2f: [float],
+                 lam: float, omega_rep_K: float, use_einstein: bool,
+                 mu_star: float, T_K: float, n_mats: int) -> float {
+    let S = _eli_build_kernel(omega, a2f, lam, omega_rep_K, use_einstein,
+                              mu_star, T_K, n_mats)
+    if len(S) == 0 { return 0.0 }
+    let vals = eigvalsh(S, n_mats)   // descending-sorted (verified atom)
+    return vals[0]                   // largest eigenvalue ρ_max(T)
+}
+
+fn _eli_rho_core_fast(omega: [float], a2f: [float],
+                      lam: float, omega_rep_K: float, use_einstein: bool,
+                      mu_star: float, T_K: float, n_mats: int) -> float {
+    let S = _eli_build_kernel(omega, a2f, lam, omega_rep_K, use_einstein,
+                              mu_star, T_K, n_mats)
+    if len(S) == 0 { return 0.0 }
+    return _eli_power_lambda_max(S, n_mats)
+}
+
+// ── Tc by bisection of ρ_max(T) = 1 (grid α²F entry) ────────────────────
+//
+// ρ_max(T) decreases monotonically in T (more thermal smearing → weaker
+// pairing). Scan an upper bracket, then bisect to ρ=1. Returns 0.0 when no
+// SC solution exists in the search window (ρ_max < 1 even at the coldest
+// probe — no superconductivity), mirroring the L0 sentinel convention.
+pub fn eliashberg_tc(omega: [float], a2f: [float], mu_star: float,
+                     n_mats: int) -> float {
+    let dummy = 0.0
+    return _eli_tc_core(omega, a2f, dummy, dummy, false, mu_star, n_mats)
+}
+
+// Einstein-mode (λ, ω_rep) Tc — same bisection, analytic kernel.
+pub fn eliashberg_tc_from_lambda(lam: float, omega_rep_K: float,
+                                 mu_star: float, n_mats: int) -> float {
+    let dummy: [float] = []
+    return _eli_tc_core(dummy, dummy, lam, omega_rep_K, true, mu_star, n_mats)
+}
+
+fn _eli_rho_dispatch(omega: [float], a2f: [float], lam: float,
+                     omega_rep_K: float, use_einstein: bool,
+                     mu_star: float, T_K: float, n_mats: int) -> float {
+    // Fast power-iteration ρ_max for the inner T-scan (many evals).
+    return _eli_rho_core_fast(omega, a2f, lam, omega_rep_K, use_einstein,
+                              mu_star, T_K, n_mats)
+}
+
+fn _eli_tc_core(omega: [float], a2f: [float], lam: float, omega_rep_K: float,
+                use_einstein: bool, mu_star: float, n_mats: int) -> float {
+    if n_mats < 1 { return 0.0 }
+
+    // Set a temperature scale. For the grid path, derive ω_log from the
+    // verified moment integrator; for the einstein path use ω_rep directly.
+    // T is probed up to ~ω_scale (Tc never exceeds the phonon scale).
+    let mut w_scale = omega_rep_K
+    if !use_einstein {
+        let m = eliashberg_moments_from_a2f(omega, a2f)
+        if m[0] <= 0.0 { return 0.0 }    // malformed / empty spectrum
+        w_scale = m[1]                    // ω_log (K)
+    }
+    if w_scale <= 0.0 { return 0.0 }
+
+    // Coldest probe: a small fraction of the phonon scale. If ρ < 1 even
+    // here, no SC in window → return 0.
+    let t_lo_seed = w_scale * 1.0e-3
+    let rho_lo = _eli_rho_dispatch(omega, a2f, lam, omega_rep_K, use_einstein,
+                                   mu_star, t_lo_seed, n_mats)
+    if rho_lo < 1.0 { return 0.0 }       // no superconductivity
+
+    // Bracket: climb T (geometric) until ρ < 1.
+    let mut t_lo = t_lo_seed
+    let mut t_hi = t_lo_seed
+    let mut bracketed = false
+    let mut step = 0
+    while step < 40 {
+        let t_try = t_lo_seed * pow(1.3, to_float(step + 1))
+        let rho = _eli_rho_dispatch(omega, a2f, lam, omega_rep_K, use_einstein,
+                                    mu_star, t_try, n_mats)
+        if rho < 1.0 {
+            t_hi = t_try
+            bracketed = true
+            // keep the previous (ρ≥1) probe as the low bracket
+            t_lo = if step == 0 { t_lo_seed } else { t_lo_seed * pow(1.3, to_float(step)) }
+            step = 100   // break
+        } else {
+            t_lo = t_try
+            step = step + 1
+        }
+    }
+    if !bracketed { return 0.0 }
+
+    // Bisection: ρ(t_lo) ≥ 1, ρ(t_hi) < 1. 60 halvings → rel ε ≈ 1e-18 in T.
+    let mut it = 0
+    while it < 60 {
+        let t_mid = 0.5 * (t_lo + t_hi)
+        let rho = _eli_rho_dispatch(omega, a2f, lam, omega_rep_K, use_einstein,
+                                    mu_star, t_mid, n_mats)
+        if rho >= 1.0 { t_lo = t_mid } else { t_hi = t_mid }
+        it = it + 1
+    }
+    return 0.5 * (t_lo + t_hi)
+}

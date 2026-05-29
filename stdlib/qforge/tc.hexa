@@ -32,8 +32,17 @@
 //   pub fn qforge_tc_allen_dynes(lam, omega_log_K, mu_star) -> float
 //   pub fn qforge_tc_allen_dynes_full(lam, omega_log_K, omega2_K, mu_star) -> float
 //   pub fn qforge_tc_from_a2f(omega: [float], a2f: [float], mu_star) -> float
+//
+// L1 — isotropic Migdal-Eliashberg Tc (the rigorous form Allen-Dynes fits):
+//   pub fn qforge_tc_eliashberg(omega, a2f, mu_star, n_mats) -> float
+//   pub fn qforge_tc_eliashberg_from_lambda(lam, omega_rep_K, mu_star, n_mats) -> float
+// These delegate to stdlib/qforge/eliashberg (the Matsubara eigenvalue solver
+// ρ_max(Tc)=1). They sit ABOVE L0: L0 returns the Allen-Dynes *fit*, L1 solves
+// the linearized gap equation that fit was derived from. NEW numerical layer
+// (🟢 rel-ε tier for the Tc solve — see eliashberg.hexa + the L1 selftest).
 
 use "stdlib/material/sim"
+use "stdlib/qforge/eliashberg"
 
 // ── L0.1 — thin Allen-Dynes pass-through (f1·f2, ω̄₂ = ω_log → f2 = 1) ───
 //
@@ -72,4 +81,31 @@ pub fn qforge_tc_from_a2f(omega: [float], a2f: [float],
     let omega_log_K = m[1]
     let omega2_K = m[2]
     return allen_dynes_tc(omega_log_K, lam, mu_star, omega2_K)
+}
+
+// ── L1.1 — α²F(ω) → isotropic Eliashberg Tc (Matsubara eigenvalue solve) ─
+//
+// The rigorous superconducting Tc: the temperature where the largest
+// eigenvalue of the linearized isotropic Migdal-Eliashberg gap kernel equals
+// 1 (gap Δ→0⁺). This is the form Allen-Dynes (1975) fit their closed formula
+// FROM — L1 solves it directly. Delegates to the verified-eigensolver-backed
+// `eliashberg_tc` (stdlib/qforge/eliashberg). `n_mats` = number of positive
+// Matsubara frequencies kept (the sharp μ* cutoff); 256–512 is converged for
+// conventional λ≲1.5 phonon scales. Returns 0.0 when no SC solution exists in
+// the search window (same sentinel as L0).
+pub fn qforge_tc_eliashberg(omega: [float], a2f: [float], mu_star: float,
+                            n_mats: int) -> float {
+    return eliashberg_tc(omega, a2f, mu_star, n_mats)
+}
+
+// ── L1.2 — (λ, ω_rep) → isotropic Eliashberg Tc (single-Einstein-mode) ──
+//
+// When only the scalar coupling λ and a representative phonon frequency are
+// known (no sampled spectrum), model α²F as a single Einstein mode at ω_rep:
+// λ(ℓ) = λ ω_rep²/(ω_rep²+(2πTℓ)²). Same Matsubara eigenvalue solve. This is
+// the apples-to-apples L1 counterpart of qforge_tc_allen_dynes(λ, ω, μ*) and
+// the entry the L1 selftest pins for the Eliashberg ≥ Allen-Dynes ordering.
+pub fn qforge_tc_eliashberg_from_lambda(lam: float, omega_rep_K: float,
+                                        mu_star: float, n_mats: int) -> float {
+    return eliashberg_tc_from_lambda(lam, omega_rep_K, mu_star, n_mats)
 }

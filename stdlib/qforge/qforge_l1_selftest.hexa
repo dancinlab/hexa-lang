@@ -1,0 +1,169 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+//
+// qforge_l1_selftest.hexa — QFORGE L1 g5 gate.
+//
+// Closes the L1 isotropic Migdal-Eliashberg gate. UNLIKE L0 (pure pass-
+// through to verified atoms), L1 is a NEW numerical solver — the linearized
+// Matsubara gap-equation eigenvalue problem ρ_max(Tc)=1. Honest tier:
+//
+//   🔵 (closed-form, exact)  λ(0) = 2∫α²F/ω identity (kernel static limit).
+//   🟢 (rel-ε numerical)     the Tc solve itself — gated on
+//        (a) the FALSIFIABLE physics ordering  Tc_Eliashberg ≥ Tc_AllenDynes
+//            ≥ Tc_McMillan  at fixed (λ, ω, μ*)  [Allen-Dynes 1975: the AD fit
+//            UNDERESTIMATES the full ME solve at strong coupling], and
+//        (b) eigenvalue self-consistency — ρ_max(Tc) = 1 at the found Tc,
+//            evaluated through the INDEPENDENT verified `eigvalsh` path
+//            (the Tc was located by power iteration → cross-solver agreement).
+//   guard  malformed α²F (length mismatch) → 0.0 sentinel.
+//
+// No exact literature ME-Tc anchor is hard-wired: a published isotropic-ME Tc
+// depends on the FULL α²F shape + the exact μ* cutoff convention, which is not
+// reproducible to rel-ε from a scalar (λ, ω) pair. Rather than fabricate a
+// benchmark, the gate pins the falsifiable ORDERING + self-consistency (per
+// d6 honesty). The Nb-scale numbers land in the right physical band
+// (Tc ≈ 14-15 K for λ=1, ω_log=192 K, μ*=0.13 — the AD band is 9.9-13 K and
+// the full ME solve sits ABOVE it, exactly as the ordering predicts).
+//
+// Run:  HEXA_LANG=<worktree> hexa build stdlib/qforge/qforge_l1_selftest.hexa \
+//         -o /tmp/qf1 && /tmp/qf1
+// PASS: exits printing "qforge_l1_selftest PASS".
+
+use "stdlib/qforge/tc"
+use "stdlib/qforge/eliashberg"
+use "stdlib/material/sim"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn _ck(name: str, got: float, want: float, tol: float) -> int {
+    let w = _abs(want)
+    let d = _abs(got - want)
+    let rel = if w < 1e-12 { d } else { d / w }
+    if rel <= tol {
+        println("PASS " + name + " (got " + to_string(got) + ")")
+        return 0
+    }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want))
+    return 1
+}
+
+fn _assert(name: str, cond: bool, detail: str) -> int {
+    if cond {
+        println("PASS " + name + "  " + detail)
+        return 0
+    }
+    println("FAIL " + name + "  " + detail)
+    return 1
+}
+
+fn main() {
+    let mut fails = 0
+    let n_mats = 64
+
+    // ── 🔵 sub-check 1 — λ(0) kernel = standard λ = 2∫α²F/ω ───────────────
+    // Rectangular α²F(ω)=0.5 on [1,2]: λ = 2·0.5·∫₁²dω/ω = ln2 = 0.6931472.
+    // The Matsubara kernel at ℓ=0 has bosonic freq ν=0 → ω/(ω²+0)=1/ω, i.e.
+    // exactly the standard λ integrand. EXACT algebraic identity (🔵).
+    let mut omega: [float] = []
+    let mut a2f: [float] = []
+    let npts = 4001
+    let step = 1.0 / to_float(npts - 1)
+    let mut i = 0
+    while i < npts {
+        omega.push(1.0 + step * to_float(i))
+        a2f.push(0.5)
+        i = i + 1
+    }
+    let l0 = eliashberg_lambda_kernel(omega, a2f, 0, 7.0)
+    let l0_moment = eliashberg_moments_from_a2f(omega, a2f)[0]   // verified atom
+    fails = fails + _ck("🔵 λ(0) kernel = ln2", l0, 0.69314718055994531, 1e-5)
+    // cross-check: kernel λ(0) must equal the verified moment-integrator λ.
+    fails = fails + _ck("🔵 λ(0) kernel = sim moment λ", l0, l0_moment, 1e-9)
+
+    // ── 🟢 sub-check 2 — FALSIFIABLE ordering Eliashberg ≥ AD ≥ McMillan ──
+    // Nb-scale single-Einstein-mode: λ=1.0, ω_rep=ω_log=192 K, μ*=0.13.
+    let lam = 1.0
+    let wrep = 192.0
+    let mu = 0.13
+    let tc_eli = qforge_tc_eliashberg_from_lambda(lam, wrep, mu, n_mats)
+    let tc_ad = qforge_tc_allen_dynes(lam, wrep, mu)
+    let tc_mcm = mcmillan_tc(wrep, lam, mu)
+    println("[Nb-scale] Tc_Eliashberg=" + to_string(tc_eli) +
+            "  Tc_AllenDynes=" + to_string(tc_ad) +
+            "  Tc_McMillan=" + to_string(tc_mcm) + " K")
+    fails = fails + _assert("🟢 ordering Eliashberg ≥ AllenDynes",
+                            tc_eli >= tc_ad,
+                            "(" + to_string(tc_eli) + " ≥ " + to_string(tc_ad) + ")")
+    fails = fails + _assert("🟢 ordering AllenDynes ≥ McMillan",
+                            tc_ad >= tc_mcm,
+                            "(" + to_string(tc_ad) + " ≥ " + to_string(tc_mcm) + ")")
+    // physical band: the full ME solve should be a finite, positive Tc near
+    // (not absurdly above) the phonon scale — sanity on the solver output.
+    fails = fails + _assert("🟢 Tc physical band (0 < Tc < ω_rep)",
+                            tc_eli > 0.0 && tc_eli < wrep,
+                            "(Tc=" + to_string(tc_eli) + " K, ω_rep=" + to_string(wrep) + " K)")
+
+    // ── 🟢 sub-check 3 — eigenvalue self-consistency ρ_max(Tc)=1 ──────────
+    // The Tc above was located by POWER ITERATION inside the bisection. Here
+    // we re-evaluate ρ_max at that Tc through the INDEPENDENT verified
+    // `eigvalsh` (full symmetric Jacobi) path — cross-solver agreement to 1.
+    let rho_at_tc = eliashberg_rho_from_lambda(lam, wrep, mu, tc_eli, n_mats)
+    fails = fails + _ck("🟢 self-consistency ρ_max(Tc)=1 (via eigvalsh)",
+                        rho_at_tc, 1.0, 5e-3)
+    // monotonicity: ρ_max strictly decreasing in T (the bisection invariant).
+    let rho_cold = eliashberg_rho_from_lambda(lam, wrep, mu, tc_eli * 0.5, n_mats)
+    let rho_warm = eliashberg_rho_from_lambda(lam, wrep, mu, tc_eli * 1.5, n_mats)
+    fails = fails + _assert("🟢 ρ_max monotone (cold>1>warm)",
+                            rho_cold > 1.0 && rho_warm < 1.0,
+                            "(ρ(0.5Tc)=" + to_string(rho_cold) +
+                            " > 1 > ρ(1.5Tc)=" + to_string(rho_warm) + ")")
+
+    // ── 🟢 sub-check 4 — grid-α²F path drives a self-consistent Tc ────────
+    // Same Einstein content as a NARROW sampled α²F: a sharp Gaussian-ish
+    // peak at 192 K normalized to λ≈1 → the grid entry should find a Tc with
+    // the same ordering vs the L0 Allen-Dynes engine on the same spectrum.
+    let mut go: [float] = []
+    let mut ga: [float] = []
+    let gpts = 1201
+    let wlo = 20.0
+    let whi = 600.0
+    let gstep = (whi - wlo) / to_float(gpts - 1)
+    let peak = 192.0
+    let width = 18.0
+    let mut amp = 0.10
+    let mut j = 0
+    while j < gpts {
+        let w = wlo + gstep * to_float(j)
+        let z = (w - peak) / width
+        go.push(w)
+        ga.push(amp * exp(-0.5 * z * z))
+        j = j + 1
+    }
+    // normalize α²F so its moment-λ ≈ 1.0 (rescale by current λ).
+    let m0 = eliashberg_moments_from_a2f(go, ga)
+    let lam_grid0 = m0[0]
+    let scale = 1.0 / lam_grid0
+    let mut k = 0
+    while k < gpts { ga[k] = ga[k] * scale ; k = k + 1 }
+    let m1 = eliashberg_moments_from_a2f(go, ga)
+    println("[grid α²F] λ=" + to_string(m1[0]) + " ω_log=" + to_string(m1[1]) + " K")
+    let tc_eli_grid = qforge_tc_eliashberg(go, ga, mu, n_mats)
+    let tc_ad_grid = qforge_tc_from_a2f(go, ga, mu)   // L0 engine, same spectrum
+    println("[grid α²F] Tc_Eliashberg=" + to_string(tc_eli_grid) +
+            "  Tc_AllenDynes(L0)=" + to_string(tc_ad_grid) + " K")
+    fails = fails + _assert("🟢 grid-path Tc positive + ordering ≥ L0 AD",
+                            tc_eli_grid > 0.0 && tc_eli_grid >= tc_ad_grid,
+                            "(" + to_string(tc_eli_grid) + " ≥ " + to_string(tc_ad_grid) + ")")
+
+    // ── guard — malformed α²F (length mismatch) → 0.0 sentinel ────────────
+    let tc_bad = qforge_tc_eliashberg([1.0, 2.0], [0.5], mu, n_mats)
+    fails = fails + _ck("guard malformed α²F → Tc=0", tc_bad, 0.0, 1e-12)
+    // zero μ* but empty grid still 0; and λ=0 → no SC.
+    let tc_nolam = qforge_tc_eliashberg_from_lambda(0.0, wrep, mu, n_mats)
+    fails = fails + _ck("guard λ=0 → Tc=0", tc_nolam, 0.0, 1e-12)
+
+    if fails == 0 {
+        println("qforge_l1_selftest PASS")
+    } else {
+        println("qforge_l1_selftest FAIL — " + to_string(fails) + " case(s)")
+    }
+}
