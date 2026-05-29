@@ -1,0 +1,72 @@
+// HEXA Standard Library — deck/cli
+//
+// @version 0.1.0
+// @capabilities [cli]
+//
+// Thin CLI front-door for the generic 6-domain deck generator. Keeps `main()`
+// OUT of the library modules (gen.hexa / rtsc.hexa …) — those stay importable
+// without the flatten-time main() conflict (see docs/rfc/rfc_import_auto_main
+// _suppression.md). The `/deck` plugin (sidecar) is the user surface; this file
+// is the hexa-lang-side entry it shells into.
+//
+// Subverbs:
+//   deck prototypes [<domain>]   — list the known crystal/structure prototypes
+//                                  for <domain> (default: rtsc). The single
+//                                  source is gen_prototypes() (d4 dispatch); a
+//                                  domain with no prototype registry prints a
+//                                  clear "no prototype registry" note.
+//   deck domains                 — list the known deck domains (gen_deck keys).
+//   deck help                    — usage.
+//
+// Run:  hexa run stdlib/deck/cli.hexa prototypes rtsc
+//
+// NB: the EMIT path (`--domain/--slug/--spec/--out`) is driven by the plugin
+// directly against the library API; this front-door currently exposes the
+// read-only coverage subverbs the deck-validate-gate plan requires.
+
+import "stdlib/deck/gen.hexa"
+
+fn _print_list(title: str, xs: [str]) {
+    println(title)
+    if len(xs) == 0 {
+        println("  (none — this domain has no prototype registry)")
+        return
+    }
+    let mut i = 0
+    while i < len(xs) {
+        println("  - " + xs[i])
+        i = i + 1
+    }
+}
+
+fn _usage() {
+    println("deck — generic 6-domain deck generator (coverage surface)")
+    println("  deck prototypes [<domain>]   list known prototypes for <domain> (default rtsc)")
+    println("  deck domains                 list known deck domains")
+    println("  deck help                    this message")
+}
+
+fn main() {
+    // args()[0] is the program path (cf. cloud_cli.hexa) — real args from [1].
+    let av = args()
+    if len(av) < 2 {
+        _usage()
+        return
+    }
+    let sub = av[1]
+    if sub == "prototypes" {
+        let domain = if len(av) >= 3 { av[2] } else { "rtsc" }
+        _print_list("deck prototypes for domain '" + domain + "':", gen_prototypes(domain))
+        return
+    }
+    if sub == "domains" {
+        _print_list("deck domains:", gen_domains())
+        return
+    }
+    if sub == "help" || sub == "--help" || sub == "-h" {
+        _usage()
+        return
+    }
+    println("deck: unknown subverb '" + sub + "'")
+    _usage()
+}

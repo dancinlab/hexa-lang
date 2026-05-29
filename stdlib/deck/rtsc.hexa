@@ -38,11 +38,31 @@
 
 import "stdlib/deck/gen.hexa"
 
+// ── prototype-coverage registry (d4 — single source of known names) ──
+
+// rtsc_prototypes() — the canonical list of RTSC deck prototypes the
+// emitter dispatch below covers. This is the ONE place the known-name set
+// lives: `emit_rtsc` validates the requested prototype against it FIRST,
+// `deck prototypes` (gen.hexa) lists it, and a missing entry here is the
+// single edit needed to register a new prototype (alongside its emitter).
+// Keep this list in lockstep with the dispatch branches in `emit_rtsc`.
+pub fn rtsc_prototypes() -> [string] {
+    return ["beh8_clathrate", "perovskite_pm3m", "im3m_group17", "sodalite_im3m_yh10"]
+}
+
 // ── pub entry point ──────────────────────────────────────────────────
 
 pub fn emit_rtsc(spec: DeckSpec) -> [DeckFile] {
     let files: [DeckFile] = []
     let proto = spec_get_or(spec, "prototype", "beh8_clathrate")
+
+    // COVERAGE GUARD (d16/d4) — an unknown prototype is a LOUD failure, not a
+    // silent empty deck. A partial/empty deck that reaches `cloud dft-run`
+    // strands a billing pod (rent→idle leak); refuse to emit at all instead.
+    if !_rtsc_proto_known(proto) {
+        panic("deck/rtsc: unknown prototype '" + proto + "' — known: ["
+              + _rtsc_proto_csv() + "]")
+    }
 
     if proto == "beh8_clathrate" {
         deck_push(files, "vc-relax.in", _rtsc_beh8_vc_relax(spec))
@@ -72,8 +92,34 @@ pub fn emit_rtsc(spec: DeckSpec) -> [DeckFile] {
         deck_push(files, "RUNBOOK.md",  _rtsc_sodalite_runbook(spec))
         return files
     }
-    // Unknown prototype — return empty (caller checks len).
+    // Unreachable: the coverage guard above panics on anything not in the
+    // dispatch. Kept as a defensive no-op so the dispatch stays total.
     return files
+}
+
+// _rtsc_proto_known — membership test against rtsc_prototypes() (no name
+// hardcode past the registry — d4).
+fn _rtsc_proto_known(proto: string) -> bool {
+    let known = rtsc_prototypes()
+    let mut i = 0
+    while i < len(known) {
+        if known[i] == proto { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// _rtsc_proto_csv — comma-joined known list for the loud-fail message.
+fn _rtsc_proto_csv() -> string {
+    let known = rtsc_prototypes()
+    let mut out = ""
+    let mut i = 0
+    while i < len(known) {
+        if i > 0 { out = out + ", " }
+        out = out + known[i]
+        i = i + 1
+    }
+    return out
 }
 
 // ── BeH8 clathrate prototype (MgBeH8 byte-match) ─────────────────────

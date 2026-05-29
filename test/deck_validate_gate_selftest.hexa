@@ -1,0 +1,218 @@
+// HEXA Standard Library — deck-validate-gate selftest (@ci_gate mirror)
+//
+// Exercises the rent→idle leak guard END-TO-END — SPEND-SAFE ($0, no billing
+// pod is ever rented; every --go path here is REFUSED at the gate before the
+// rent step):
+//
+//   1. UNKNOWN PROTOTYPE  → gen_deck("rtsc", bad) panics (non-zero exit) with a
+//      clear `unknown prototype '<x>' — known: [...]` message and emits NO deck.
+//      panic hard-exits, so this case is driven as a SUBPROCESS `hexa run` on a
+//      generated probe; the exit code + message + no-emit are asserted here.
+//
+//   2. BAD DECK   → dft_run --validate fails the FREE d16 dry-run → NO .validated
+//      stamp → dft_run --go is REFUSED (rc 2) BEFORE any rent (spend-safe).
+//
+//   3. CLEAN DECK → dft_run --validate passes → .validated stamp written → the
+//      freshness predicate (the SAME one the gate keys on) reports gate-OPEN. We
+//      never pass --go on a fresh deck (that WOULD rent).
+//
+//   3b. STALE     → editing relax.in after the stamp invalidates it → --go
+//      REFUSED again (rc 2, no rent).
+//
+//   3c. --force   → SOURCE conformance: the gate is conditioned on `force == 0`
+//      (so --force ⇒ not blocked) and emits the leak-risk warning. The bypass
+//      itself is not run (it reaches the rent path by design).
+//
+// Usage:  hexa run test/deck_validate_gate_selftest.hexa
+//         (prints `__DECK_VALIDATE_GATE__ PASS` on success, `... FAIL` otherwise.)
+//
+// NOTE: dft_run resolves from this repo's edited stdlib only when the compiler's
+// stdlib-resolution root carries these edits (CI runs from the canonical root /
+// a self-rebuild). The unknown-prototype subprocess (case 1) and the FREE
+// --validate path are the always-on assertions; the --go refusal additionally
+// requires the edited gate to be the compiled one.
+
+use "stdlib/deck/gen"
+use "stdlib/io"
+use "stdlib/cloud/dft_dispatch"
+
+let SELF_TMP = "/tmp/deck_validate_gate_selftest"
+
+// A structurally-VALID minimal QE deck (passes the structural-sanity dry-run
+// when pw.x is absent; a real pw.x 1-iter run also parses it).
+fn _clean_relax() -> string {
+    let mut s = ""
+    s = s + "&CONTROL\n  calculation = 'vc-relax'\n  prefix = 'x'\n  nstep = 200\n/\n"
+    s = s + "&SYSTEM\n  ibrav = 2\n  celldm(1) = 8.0\n  nat = 1\n  ntyp = 1\n  ecutwfc = 60\n/\n"
+    s = s + "&ELECTRONS\n  conv_thr = 1.0d-8\n  electron_maxstep = 400\n/\n"
+    s = s + "&IONS\n/\n&CELL\n/\n"
+    s = s + "ATOMIC_SPECIES\n  H 1.008 H.upf\n"
+    s = s + "ATOMIC_POSITIONS crystal\n  H 0.0 0.0 0.0\n"
+    s = s + "K_POINTS automatic\n  4 4 4 0 0 0\n"
+    return s
+}
+
+// A MALFORMED deck — unbalanced namelist (&SYSTEM never closed) + no K_POINTS.
+// The FREE dry-run must catch this (a billing pod would crash on it).
+fn _bad_relax() -> string {
+    let mut s = ""
+    s = s + "&CONTROL\n  calculation = 'vc-relax'\n/\n"
+    s = s + "&SYSTEM\n  ibrav = 2\n  nat = 1\n"   // <-- missing closing '/'
+    s = s + "ATOMIC_POSITIONS crystal\n  H 0.0 0.0 0.0\n"
+    return s
+}
+
+fn _mk_deck(dir: string, relax: string) {
+    let _m = exec("rm -rf " + dir + " && mkdir -p " + dir)
+    let _r = write_text(dir + "/relax.in", relax)
+    // ph.in / scf.in.head / scf.in.tail are required by the deck-completeness
+    // check; their content is not exercised by the dry-run (it acts on relax.in).
+    let _p = write_text(dir + "/ph.in", "&INPUTPH\n/\n")
+    let _h = write_text(dir + "/scf.in.head", "&CONTROL\n/\n")
+    let _t = write_text(dir + "/scf.in.tail", "K_POINTS automatic\n4 4 4 0 0 0\n")
+}
+
+fn _stamp_exists(dir: string) -> bool {
+    return exec("test -f '" + dir + "/.validated' && printf yes || printf no") == "yes"
+}
+
+// _stamp_fresh — mirrors the gate's freshness predicate (_dft_stamp_fresh):
+// stamp exists AND no *.in input is newer than it. Asserting this directly lets
+// the selftest prove "gate OPEN" / "gate stale" WITHOUT calling dft_run --go on a
+// rentable deck (which would spend $).
+fn _stamp_fresh(dir: string) -> bool {
+    if !_stamp_exists(dir) { return false }
+    let newer = exec("find '" + dir + "' -maxdepth 1 -type f -name '*.in' -newer '" + dir + "/.validated' 2>/dev/null | head -1")
+    return len(newer) == 0
+}
+
+// _go_refused — drive the REAL fire-gate IN-PROCESS via dft_run([deck,"--go"]).
+// Returns TRUE iff REFUSED (rc 2). Spend-safe: the d16 gate runs BEFORE
+// `_dft_go`, so an unstamped/stale deck returns rc 2 and never reaches the rent
+// path ($0). In-process dft_run compiles from THIS repo's source (unlike the
+// prebuilt `hexa cloud` binary), so it exercises the edited gate. ONLY called on
+// decks expected to be REFUSED — never on a freshly-stamped deck (that rents).
+fn _go_refused(deck: string) -> bool {
+    let rc = dft_run([deck, "--go"], 0)
+    return rc == 2
+}
+
+fn main() {
+    println("# deck-validate-gate selftest")
+    let mut pass = true
+
+    // ── case 1: known-list accessors + unknown-prototype loud-fail ──
+    println("## 1. prototype coverage registry + unknown-prototype loud-fail")
+    let protos = gen_prototypes("rtsc")
+    let has_im3m = _contains(protos, "im3m_group17")
+    let has_yh10 = _contains(protos, "sodalite_im3m_yh10")
+    println("  rtsc prototypes = " + str(len(protos)) + " (im3m_group17=" + _b(has_im3m) + " sodalite_im3m_yh10=" + _b(has_yh10) + ")")
+    if !has_im3m || !has_yh10 { pass = false; println("  FAIL — #2054 prototypes missing from registry") }
+    if len(gen_prototypes("nonexistent_domain")) != 0 { pass = false; println("  FAIL — unknown domain should have 0 prototypes") }
+
+    // The unknown-prototype case PANICS (hard-exit), so it is driven as a
+    // SUBPROCESS via `hexa run` on a generated probe; we assert the non-zero
+    // exit + the known-list message + that NO deck was emitted.
+    let _mk = exec("rm -rf " + SELF_TMP + " && mkdir -p " + SELF_TMP)
+    let probe = SELF_TMP + "/proto_panic_probe.hexa"
+    let probe_src = "import \"stdlib/deck/gen.hexa\"\n"
+        + "fn main() {\n"
+        + "    let spec = deck_spec_new()\n"
+        + "    spec_set(spec, \"prototype\", \"definitely_not_a_real_prototype\")\n"
+        + "    let files = gen_deck(\"rtsc\", spec)\n"
+        + "    println(\"UNREACHABLE_EMITTED \" + str(len(files)))\n"
+        + "}\n"
+    let _w = write_text(probe, probe_src)
+    // capture combined stdout+stderr and the rc tail in one shot.
+    let probe_out = exec("hexa run " + probe + " 2>&1; printf 'RC=%d' \"$?\"")
+    println("  probe out: " + probe_out)
+    if !probe_out.contains("unknown prototype 'definitely_not_a_real_prototype'") {
+        pass = false; println("  FAIL — missing 'unknown prototype <x>' message")
+    }
+    if !probe_out.contains("known:") { pass = false; println("  FAIL — missing known-list in message") }
+    if probe_out.contains("UNREACHABLE_EMITTED") { pass = false; println("  FAIL — emitted a deck for an unknown prototype") }
+    if probe_out.contains("RC=0") { pass = false; println("  FAIL — unknown prototype must exit non-zero") }
+
+    // ── case 2: BAD deck → dry-run fails → no stamp → --go REFUSED ──
+    // The fire-gate is asserted via a `--go` SUBPROCESS that is REFUSED (rc 2)
+    // BEFORE any rent — spend-safe ($0). Only --validate (FREE) + a refused --go
+    // are ever invoked on unstamped decks, so the selftest cannot spend.
+    println("## 2. bad deck — dry-run FAILS → no stamp → --go REFUSED")
+    let bad = SELF_TMP + "/bad"
+    _mk_deck(bad, _bad_relax())
+    let rc_validate_bad = dft_run([bad, "--validate"], 0)
+    println("  --validate rc = " + str(rc_validate_bad) + " (expect non-zero)")
+    let bad_stamped = _stamp_exists(bad)
+    println("  .validated stamp present = " + _b(bad_stamped) + " (expect false)")
+    let bad_refused = _go_refused(bad)
+    println("  --go REFUSED (rc 2, no rent) = " + _b(bad_refused) + " (expect true)")
+    if rc_validate_bad == 0 { pass = false; println("  FAIL — bad deck dry-run should fail") }
+    if bad_stamped { pass = false; println("  FAIL — bad deck must NOT be stamped") }
+    if !bad_refused { pass = false; println("  FAIL — unstamped deck --go must be REFUSED (rc 2)") }
+
+    // ── case 3: CLEAN deck → dry-run passes → stamp → fire gate OPEN ──
+    println("## 3. clean deck — dry-run PASSES → stamp → fire gate OPEN")
+    let clean = SELF_TMP + "/clean"
+    _mk_deck(clean, _clean_relax())
+    let rc_validate_clean = dft_run([clean, "--validate"], 0)
+    println("  --validate rc = " + str(rc_validate_clean) + " (expect 0)")
+    let clean_stamped = _stamp_exists(clean)
+    println("  .validated stamp present = " + _b(clean_stamped) + " (expect true)")
+    // gate OPEN ⇒ a fresh stamp exists and no input is newer than it. We assert
+    // the freshness predicate directly (the SAME `find -newer` the gate uses); we
+    // do NOT call dft_run --go on a stamped deck (that WOULD rent).
+    let clean_fresh = _stamp_fresh(clean)
+    println("  stamp fresh (gate OPEN) = " + _b(clean_fresh) + " (expect true)")
+    if rc_validate_clean != 0 { pass = false; println("  FAIL — clean deck dry-run should pass") }
+    if !clean_stamped { pass = false; println("  FAIL — clean deck must be stamped") }
+    if !clean_fresh { pass = false; println("  FAIL — stamped clean deck must be fresh (RENTABLE)") }
+
+    // case 3b: stamp goes STALE when relax.in is edited after validation.
+    println("## 3b. stamp invalidation — edit relax.in after stamp → re-validate required")
+    let _touch = exec("sleep 1 && touch " + clean + "/relax.in")
+    let stale_fresh = _stamp_fresh(clean)
+    println("  stamp still fresh after edit = " + _b(stale_fresh) + " (expect FALSE → stale)")
+    let stale_refused = _go_refused(clean)
+    println("  --go after edit REFUSED (rc 2) = " + _b(stale_refused) + " (expect true)")
+    if stale_fresh { pass = false; println("  FAIL — edited deck must invalidate the stamp") }
+    if !stale_refused { pass = false; println("  FAIL — stale stamp must REFUSE --go") }
+
+    // case 3c: --force overrides a missing/stale stamp (expert escape hatch).
+    // The bypass cannot be exercised at runtime WITHOUT reaching the rent path
+    // (that is the whole point of --force), and this selftest never spends $.
+    // So we assert the override at the SOURCE level: the gate is conditioned on
+    // `force == 0` (a `--force` ⇒ force==1 ⇒ not blocked) AND the leak-risk warn
+    // fires only under --force. This is a deterministic conformance check.
+    println("## 3c. --force overrides the stamp gate (source conformance)")
+    let src = read_file(_dft_src_path())
+    let gate_force_guarded = src.contains("force == 0")
+    let force_warn = src.contains("--force: renting an UNVALIDATED deck")
+    println("  gate guarded by `force == 0` = " + _b(gate_force_guarded) + " · leak-warn present = " + _b(force_warn) + " (expect both true)")
+    if !gate_force_guarded { pass = false; println("  FAIL — fire gate must be conditioned on force == 0") }
+    if !force_warn { pass = false; println("  FAIL — --force must surface the leak-risk warning") }
+
+    let _cl = exec("rm -rf " + SELF_TMP)
+    println("")
+    if pass {
+        println("__DECK_VALIDATE_GATE__ PASS")
+    } else {
+        println("__DECK_VALIDATE_GATE__ FAIL")
+    }
+}
+
+fn _contains(xs: [string], v: string) -> bool {
+    let mut i = 0
+    while i < len(xs) { if xs[i] == v { return true }; i = i + 1 }
+    return false
+}
+
+fn _b(v: bool) -> string {
+    if v { return "true" }
+    return "false"
+}
+
+// _dft_src_path — locate dft_dispatch.hexa for the case-3c source conformance
+// check (the test runs with cwd = repo root, where stdlib/ lives).
+fn _dft_src_path() -> string {
+    return "stdlib/cloud/dft_dispatch.hexa"
+}
