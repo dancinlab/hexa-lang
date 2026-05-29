@@ -544,6 +544,63 @@ fn _first_token(s: str) -> str {
     return s
 }
 
+// _runpod_is_help_text — does the output look like cobra/runpodctl usage or
+// help text rather than a pod listing? A wrong subcommand (e.g. the plural
+// `get pods`) makes runpodctl print its usage block, whose lines previously
+// got split into fake pod ids: Usage:, Available, Flags:, Global, Use.
+// (handoff hexa-lang a71ec0dd.)
+fn _runpod_is_help_text(out: str) -> int {
+    if out.index_of("Usage:") >= 0 { return 1 }
+    if out.index_of("Available Commands:") >= 0 { return 1 }
+    if out.index_of("Global Flags:") >= 0 { return 1 }
+    if out.index_of("unknown command") >= 0 { return 1 }
+    if out.index_of("unknown flag") >= 0 { return 1 }
+    return 0
+}
+
+// _runpod_valid_pod_id — is `tok` shaped like a real RunPod pod id? RunPod
+// ids are lowercase alphanumeric (a-z, 0-9) tokens, ~10-24 chars, with no
+// punctuation/uppercase/whitespace. This rejects help-text words such as
+// "Usage:", "Available", "Flags:", "Global", "Use" (uppercase + colons)
+// and table headers, so a degraded CLI invocation can never fabricate pods.
+fn _runpod_valid_pod_id(tok: str) -> int {
+    let n = len(tok)
+    if n < 8 { return 0 }
+    if n > 32 { return 0 }
+    let mut i = 0
+    let mut has_digit = 0
+    while i < n {
+        let c = tok.substring(i, i + 1)
+        let is_lower = c >= "a" && c <= "z"
+        let is_digit = c >= "0" && c <= "9"
+        if !is_lower && !is_digit {
+            return 0
+        }
+        if is_digit { has_digit = 1 }
+        i = i + 1
+    }
+    // a real pod id carries at least one digit; an all-letter lowercase word
+    // (e.g. "available") would otherwise slip through.
+    return has_digit
+}
+
+// _runpod_strip_to_json — drop a leading non-JSON banner (e.g. the
+// `warning: 'runpodctl get pod' is deprecated …` line runpodctl prints
+// before the JSON array) by slicing from the first `[` or `{`. Returns the
+// input unchanged when no JSON opener is found.
+fn _runpod_strip_to_json(out: str) -> str {
+    let lb = out.index_of("[")
+    let ob = out.index_of("{")
+    let mut start = lb
+    if ob >= 0 && (start < 0 || ob < start) {
+        start = ob
+    }
+    if start < 0 {
+        return out
+    }
+    return out.substring(start, len(out))
+}
+
 // _runpod_list_new — `runpodctl pod list -o json` (2.x form). Returns
 // ok=0 when the new verb is rejected (runpodctl < 2.x), so the caller
 // can fall through to the deprecated form.
@@ -556,7 +613,10 @@ fn _runpod_list_new(rpc: str) -> RunPodList {
     if out.index_of("unrecognized") >= 0 {
         return _runpod_list_fail("list (new): runpodctl too old")
     }
-    let parsed = json_parse(out)
+    if _runpod_is_help_text(out) == 1 {
+        return _runpod_list_fail("list (new): runpodctl too old")
+    }
+    let parsed = json_parse(_runpod_strip_to_json(out))
     if type_of(parsed) != "array" {
         return _runpod_list_fail("list (new): non-array JSON")
     }
@@ -575,27 +635,52 @@ fn _runpod_list_new(rpc: str) -> RunPodList {
     return RunPodList { ok: 1, pod_ids: ids, message: "list (new) — " + to_string(len(ids)) + " pods" }
 }
 
-// _runpod_list_old — `runpodctl get pods` (1.x form, deprecated). Under
-// runpodctl 2.x the same verb still works but emits a `deprecated:`
-// banner on stdout that previously slipped past `grep RUNNING` filters
-// in downstream orphan-detection scripts (anima cycle 2026-05-23).
+// _runpod_list_old — `runpodctl get pod` (1.x form, deprecated). The verb
+// is SINGULAR (`get pod`); the plural `get pods` is NOT a runpodctl verb —
+// it errors and prints the usage block, whose lines (Usage:, Available,
+// Flags:, Global, Use) previously got split into fake pod ids (handoff
+// hexa-lang a71ec0dd). Under runpodctl 2.x `get pod` still works but emits
+// a `deprecated:`/`warning:` banner on stdout that must be skipped.
 // First whitespace-separated token of each non-header, non-banner,
-// non-empty line = pod id.
+// non-empty line = pod id, but only if it passes the pod-id shape check —
+// so help/error text can never fabricate pods.
 fn _runpod_list_old(rpc: str) -> RunPodList {
-    let cmd = _shq_local(rpc) + " get pods 2>&1"
+    let cmd = _shq_local(rpc) + " get pod -o json 2>&1"
     let out = exec(cmd)
+    // a wrong/rejected subcommand prints usage text → clean error, no pods.
+    if _runpod_is_help_text(out) == 1 {
+        return _runpod_list_fail("list (old): runpodctl returned usage/help text (bad subcommand or flag)")
+    }
+    // 2.x `get pod -o json` emits a 1-line warning banner then a JSON array.
+    let parsed = json_parse(_runpod_strip_to_json(out))
+    if type_of(parsed) == "array" {
+        let mut ids = []
+        let mut k = 0
+        while k < len(parsed) {
+            let id_v = json_object_get(parsed[k], "id")
+            if type_of(id_v) == "string" {
+                let id_s = to_string(id_v)
+                if len(id_s) > 0 {
+                    ids.push(id_s)
+                }
+            }
+            k = k + 1
+        }
+        return RunPodList { ok: 1, pod_ids: ids, message: "list (old) — " + to_string(len(ids)) + " pods" }
+    }
+    // text-table fallback (very old runpodctl that ignores -o json).
     let lines = out.split("\n")
     let mut ids = []
     let mut i = 0
     while i < len(lines) {
         let line = lines[i]
         let n = len(line)
-        let is_banner = line.index_of("deprecated") >= 0
+        let is_banner = line.index_of("deprecated") >= 0 || line.index_of("warning:") >= 0
         let is_id_hdr = n >= 2 && line.substring(0, 2) == "ID"
         let is_pid_hdr = n >= 6 && line.substring(0, 6) == "POD ID"
         if n > 0 && !is_banner && !is_id_hdr && !is_pid_hdr {
             let tok = _first_token(line)
-            if len(tok) > 0 {
+            if _runpod_valid_pod_id(tok) == 1 {
                 ids.push(tok)
             }
         }
@@ -607,10 +692,11 @@ fn _runpod_list_old(rpc: str) -> RunPodList {
 // runpod_list_pods — return the active pod ids known to the local
 // runpodctl. Tries the canonical 2.x `pod list -o json` form first; on
 // `unknown command`/`unrecognized` falls back to the deprecated 1.x
-// `get pods` form and parses the text table. Stable interface for
+// `get pod -o json` form (SINGULAR — the plural `get pods` is not a
+// runpodctl verb and only prints usage text). Stable interface for
 // downstream orphan-detection / lifecycle scripts independent of the
 // installed runpodctl version (inbox patch
-// cloud-runpod-session-findings-anima-2026-05-23 R1).
+// cloud-runpod-session-findings-anima-2026-05-23 R1; handoff a71ec0dd).
 fn runpod_list_pods() -> RunPodList {
     let rpc = _runpodctl_path()
     if len(rpc) == 0 {
