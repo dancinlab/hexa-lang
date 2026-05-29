@@ -5,6 +5,8 @@
 > SSOT per `AGENTS.tape` `@D g_plan_consolidation`: cycle-by-cycle
 > progression appended to `compiler/PLAN.md`; this file is the
 > *forward-looking checklist* + *brainstorm-to-exhaustion roadmap*.
+>
+> **roofline 잣대 = `domains/GPU-ROOFLINE`** (HW 물리 천장 % 측정대 SSOT · ubu-2 RTX 5070 achieved-peak 분모).
 
 **hexa-lang North-Star ① (NN stack)** + **§12 P4+ chain** + **GOAL — "cuBLAS-using stacks 를 whole-program-fusion 으로 우회"** are the umbrella metrics this file tracks.
 

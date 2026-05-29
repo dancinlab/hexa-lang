@@ -390,6 +390,31 @@ GEMM throughput is a roofline HARD_WALL (`LIMIT_BREAKTHROUGH.md`
 §3.9a); the end-to-end training-step wall is the open SOFT_WALL, and
 flame's standing on it is currently UNMEASURED (prior 2.95× retracted).
 
+## §GPU-ROOFLINE lane — 학습 step 커널 roofline % 롤업
+
+> **잣대 상속**: 분모 = `domains/GPU-ROOFLINE` (HW 물리 천장 SSOT). flame 은 합병 아닌
+> 상속 lane — 학습 step 의 dominant 커널(GEMM/FFN/linear)을 GPU roofline % 로 롤업한다.
+> 디바이스를 명시(아래 H100/H200 분모는 그 디바이스 peak; ubu-2 RTX 5070 분모는 신규 측정대).
+
+flame 학습 step 의 시간 대부분은 GEMM/FFN/linear 커널이 먹는다. 이를 절대 ms 가 아니라
+**그 GPU 의 물리 천장 대비 %** 로 롤업한다(roofline = min(compute-peak, BW×AI)).
+
+| 학습 커널 (출처) | 디바이스 | 측정 | roofline 위치 | roofline % |
+|---|---|---|---|---|
+| RFC 060-C linear fwd+bwd (5 shape) | H100 | BW util 14.1–45.2% peak | memory-bound (낮은 AI) | **14–45% of HBM-roof** |
+| RFC 060-C FFN matmul+SiLU+matmul (6 shape) | H200 (4.8 TB/s) | BW util 13.9–35.4% peak | memory-bound | **14–35% of HBM-roof** |
+| cuBLAS Dgemm (RFC 040 substrate) | — | byte-eq 4.44e-15 vs CPU | reference (정확성 기준선) | roofline-N/A (정확성 게이트) |
+| RFC 060-C FP64 mega-kernel | — | cuBLAS 대비 1.8–4.4× **느림** | compute-bound (FP64 TC) | < cuBLAS = HARD_WALL §3.9a |
+
+> **ubu-2 RTX 5070 분모(신규, GPU-ROOFLINE §peak 상속)**: HBM 559.52 GB/s · FP32 34.11 TF ·
+> FP16-TC 126.52 TF · ridge ≈ 61 flops/byte. 학습 step 의 작은-batch linear/attention 은 AI 가
+> 낮아(< ridge) **memory-bound** → 천장 = BW × AI. cuBLAS 가 거기 100% 붙으면 "못 이김 ≠ 실패"
+> (물리 천장; GPU-ROOFLINE §roofline 의 cuBLAS SGEMM M=1~32 = 100% 천장이 같은 증거).
+>
+> **정직 scope**: flame 의 H100/H200 BW-util 수치는 기존 PERF 측정(재계산 = roofline % 동일 의미).
+> RTX 5070 분모는 신규 측정대로 박제(향후 flame step 의 ubu-2 가벼운 1회 측정 시 그 분모 사용).
+> 환산 무의미 메트릭(autograd 오버헤드 등)은 roofline-N/A.
+
 ## Cross-references
 
 - RFC 045 (Phase 3 closure, source #4 analysis) — `docs/rfc/rfc_drafts_2026_05_12/rfc_045_*.md`
