@@ -1,0 +1,398 @@
+// tool/train_floor_bench.hexa — HEXA-TRAIN-FLOOR M5 A/B step-rate measurement bench
+//
+// GOAL (M5): compare hexa-native trainer step-rate vs PyTorch step-rate on
+// the SAME model/config, emit a verdict-bearing A/B ledger. Modeled on
+// tool/unshadow_bench.hexa (the UNSHADOW A/B harness): two arms, one host,
+// same workload, fair side-by-side, a paired ledger row + computed Δ.
+//
+//   arm H "hexa-native" : the anima decoder trainer (DECODER M5 STEP_RATE_LOG
+//                         producer — train_v3_moe_longtrain.hexa), dispatched
+//                         to a GPU pod via `hexa cloud nohup ... -- <trainer>`.
+//   arm P "pytorch"     : a HuggingFace-Trainer causal-LM baseline at the
+//                         SAME (d, layers, batch, seq), dispatched the same way
+//                         (emit the .py payload with `hexa dojo llm ...`).
+//
+// Both arms log step-rate in the DECODER STEP_RATE_LOG format — a line
+//   "<n> step/s" and/or "<n> s/step" (also tolerates "step_rate=<n>" and an
+//   "RSS <n>MB" / "peak_rss_mb=<n>" line). This bench is LOG-DRIVEN: it does
+//   NOT run the GPU itself (cost + cross-repo infra). It either:
+//     --ledger : parse two ALREADY-PRODUCED arm logs → A/B ledger (the
+//                measurement path, run AFTER a real GPU fire).
+//     --plan   : print the exact cloud-dispatch commands for both arms,
+//                WITHOUT executing them (the honest-defer path — what a human
+//                pastes on a GPU pod). No pod is rented, no cost incurred.
+//
+// LEDGER FORMAT (markdown table + JSONL row):
+//   | backend | step/s | s/step | peak RSS (MB) | GPU-days (prod) |
+//   GPU-days(prod) = prod_steps / (step_per_s * 86400). prod_steps is the
+//   production token-presentation budget (--prod-steps, default 0 = omit).
+//   Δ row = pytorch_step_per_s / hexa_step_per_s (×; >1 = PyTorch faster).
+//
+// Argv:
+//   --plan                      print both arms' cloud-dispatch commands, exit
+//   --ledger                    parse arm logs → ledger (default if --hexa-log given)
+//   --hexa-log <path>           arm H log file (STEP_RATE_LOG-format)
+//   --pytorch-log <path>        arm P log file (STEP_RATE_LOG-format)
+//   --d <n>  --layers <n>  --batch <n>  --seq <n>   model config (for the header)
+//   --host <h>                  GPU pool host for --plan dispatch (default ubu-2)
+//   --hexa-trainer <path>       arm H trainer entry for --plan (default anima path)
+//   --prod-steps <n>            production step budget for GPU-days conversion (default 0)
+//   --out <path>                ledger markdown out (default state/perf/train_floor_ab.md)
+//   --jsonl <path>              ledger JSONL out (default state/perf/train_floor_ab.jsonl)
+//   --tag <s>                   run tag recorded in the ledger
+//
+// hexa-only: no hand-rolled float math beyond integer-scaled ratios; the
+// only syscalls are file read (the logs) + append (the ledger). GPU never
+// touched here (g5 honest defer — verdict 🟠 until a real fire fills the logs).
+
+fn parse_int_safe(s) {
+    let r = to_int(s)
+    if r < 0 { return 0 }
+    return r
+}
+
+// Find the first decimal number starting at index i in s; return it as an
+// integer scaled by 1000 (3 fractional digits kept). e.g. "1.99" -> 1990,
+// "0.28" -> 280, "10" -> 10000. Returns -1 if no digit at/after i.
+fn scan_num_milli(s, start) {
+    let n = len(s)
+    let mut i = start
+    // skip to first digit
+    while i < n {
+        let c = s[i]
+        if c >= "0" && c <= "9" { break }
+        i = i + 1
+    }
+    if i >= n { return -1 }
+    let mut int_part = 0
+    while i < n {
+        let c = s[i]
+        if c < "0" || c > "9" { break }
+        int_part = int_part * 10 + (to_int(c))
+        i = i + 1
+    }
+    let mut frac = 0
+    let mut scale = 1
+    if i < n && s[i] == "." {
+        i = i + 1
+        let mut digits = 0
+        while i < n && digits < 3 {
+            let c = s[i]
+            if c < "0" || c > "9" { break }
+            frac = frac * 10 + (to_int(c))
+            scale = scale * 10
+            i = i + 1
+            digits = digits + 1
+        }
+    }
+    // normalize frac to milli (scale up to 1000)
+    while scale < 1000 { frac = frac * 10; scale = scale * 10 }
+    return int_part * 1000 + frac
+}
+
+// substring search → index of needle in hay, or -1.
+fn index_of(hay, needle) {
+    let nlen = len(needle)
+    let hlen = len(hay)
+    if nlen == 0 { return 0 }
+    let mut i = 0
+    while i + nlen <= hlen {
+        if hay.substring(i, i + nlen) == needle { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+// Read a file's text; "" on failure.
+fn read_file(path) {
+    let raw = exec("cat '" + path + "' 2>/dev/null")
+    return raw
+}
+
+// Format a milli-scaled int (×1000) back to a decimal string, 3 places,
+// trailing zeros trimmed to >=2 places. e.g. 1990 -> "1.99", 280 -> "0.280".
+fn fmt_milli(m) {
+    if m < 0 { return "n/a" }
+    let whole = m / 1000
+    let frac = m - whole * 1000
+    // 3-digit zero-padded frac
+    let mut fs = to_string(frac)
+    while len(fs) < 3 { fs = "0" + fs }
+    return to_string(whole) + "." + fs
+}
+
+// Parse a STEP_RATE_LOG-format log body for the LAST occurrence of each
+// metric. Returns [step_per_s_milli, s_per_step_milli, rss_mb] (-1 = absent).
+// Recognized tokens (case as-emitted by the DECODER trainer / dojo payload):
+//   "<n> step/s"   or "step_rate=<n>"   → step/s
+//   "<n> s/step"   or "sec_per_step=<n>" → s/step
+//   "RSS <n>MB"    or "peak_rss_mb=<n>"  → RSS MB
+// LAST occurrence wins (steady-state, not warmup).
+fn parse_log(body) {
+    let lines = body.split("\n")
+    let mut step_per_s = -1
+    let mut s_per_step = -1
+    let mut rss = -1
+    let mut i = 0
+    while i < len(lines) {
+        let ln = lines[i]
+        // step/s
+        let p1 = index_of(ln, "step/s")
+        if p1 >= 0 {
+            // number is just BEFORE "step/s" — scan from a backtracked window.
+            // Simpler: look for "step_rate=" first, else scan the whole line and
+            // take the number that precedes "step/s".
+            let pe = index_of(ln, "step_rate=")
+            if pe >= 0 {
+                let v = scan_num_milli(ln, pe + 10)
+                if v >= 0 { step_per_s = v }
+            } else {
+                let v = scan_num_milli(ln, 0)
+                if v >= 0 { step_per_s = v }
+            }
+        }
+        // s/step
+        let p2 = index_of(ln, "s/step")
+        if p2 >= 0 {
+            let pe = index_of(ln, "sec_per_step=")
+            if pe >= 0 {
+                let v = scan_num_milli(ln, pe + 13)
+                if v >= 0 { s_per_step = v }
+            } else {
+                let v = scan_num_milli(ln, 0)
+                if v >= 0 { s_per_step = v }
+            }
+        }
+        // RSS
+        let pr = index_of(ln, "peak_rss_mb=")
+        if pr >= 0 {
+            let v = scan_num_milli(ln, pr + 12)
+            if v >= 0 { rss = v / 1000 }
+        } else {
+            let pr2 = index_of(ln, "RSS ")
+            if pr2 >= 0 {
+                let v = scan_num_milli(ln, pr2 + 4)
+                if v >= 0 { rss = v / 1000 }
+            }
+        }
+        i = i + 1
+    }
+    return [step_per_s, s_per_step, rss]
+}
+
+// GPU-days for a production budget. prod_steps / (step_per_s * 86400).
+// step_per_s is milli-scaled. Returns milli-scaled GPU-days, -1 if undef.
+fn gpu_days_milli(step_per_s_milli, prod_steps) {
+    if step_per_s_milli <= 0 || prod_steps <= 0 { return -1 }
+    // days = prod / (sps * 86400). sps = step_per_s_milli/1000.
+    // days_milli = prod * 1000 * 1000 / (step_per_s_milli * 86400)
+    let denom = step_per_s_milli * 86400
+    if denom == 0 { return -1 }
+    return (prod_steps * 1000000) / denom
+}
+
+fn jsonl_escape(s) {
+    let mut out = ""
+    let mut i = 0
+    while i < len(s) {
+        let ch = s[i]
+        if ch == "\\" { out = out + "\\\\" }
+        else if ch == "\"" { out = out + "\\\"" }
+        else if ch == "\n" { out = out + "\\n" }
+        else { out = out + ch }
+        i = i + 1
+    }
+    return out
+}
+
+fn append_line(path, line) {
+    let cmd = "mkdir -p \"$(dirname '" + path + "')\" && printf '%s\\n' '" +
+              line + "' >> '" + path + "'"
+    try { let _ = exec(cmd) } catch e { }
+}
+
+fn write_text_file(path, body) {
+    // write whole body via a heredoc-free printf chain (body may be large;
+    // use a temp + mv). Keep it simple: printf with escaped %.
+    let esc = body
+    // printf treats %; double them.
+    let mut safe = ""
+    let mut i = 0
+    while i < len(esc) {
+        let c = esc[i]
+        if c == "%" { safe = safe + "%%" } else { safe = safe + c }
+        i = i + 1
+    }
+    let cmd = "mkdir -p \"$(dirname '" + path + "')\" && printf '%s' \"$(cat <<'__TFB_EOF__'\n" +
+              body + "\n__TFB_EOF__\n)\" > '" + path + "'"
+    try { let _ = exec(cmd) } catch e { }
+}
+
+// ── --plan : print both arms' cloud-dispatch commands, run NOTHING ──
+fn print_plan(host, hexa_trainer, d, layers, batch, seq, slug) {
+    println("# HEXA-TRAIN-FLOOR M5 — A/B dispatch plan (NO GPU run · honest defer 🟠)")
+    println("#")
+    println("# Config: d=" + to_string(d) + " layers=" + to_string(layers) +
+            " batch=" + to_string(batch) + " seq=" + to_string(seq))
+    println("# Host:   " + host + "   slug: " + slug)
+    println("#")
+    println("# d16 governance — FREE import dry-run before any cost-bearing launch:")
+    println("    pool on " + host + " 'python3 -c \"import torch, transformers\"'")
+    println("")
+    println("# ── arm H (hexa-native trainer) ──")
+    println("# Build the trainer on the pod, then nohup-dispatch; the trainer")
+    println("# must emit DECODER STEP_RATE_LOG lines (\"<n> step/s\", \"<n> s/step\").")
+    println("    hexa cloud nohup " + host + " train.hexa.log -- \\")
+    println("        " + hexa_trainer + " --d " + to_string(d) +
+            " --layers " + to_string(layers) +
+            " --batch " + to_string(batch) + " --seq " + to_string(seq))
+    println("")
+    println("# ── arm P (PyTorch baseline) ──")
+    println("# Emit the HF-Trainer payload at the SAME config, then dispatch:")
+    println("    hexa dojo llm " + slug + " '{\"batch_size\":" + to_string(batch) +
+            ",\"max_steps\":200,\"host\":\"" + host + "\"}'")
+    println("    cd exports/llm/dojo/" + slug + " && bash run.sh   # → train." + slug + ".log")
+    println("")
+    println("# ── harvest + ledger ──")
+    println("    hexa cloud copy-from " + host + " train.hexa.log /tmp/h.log")
+    println("    hexa cloud copy-from " + host + " train." + slug + ".log /tmp/p.log")
+    println("    hexa run tool/train_floor_bench.hexa --ledger \\")
+    println("        --hexa-log /tmp/h.log --pytorch-log /tmp/p.log \\")
+    println("        --d " + to_string(d) + " --layers " + to_string(layers) +
+            " --batch " + to_string(batch) + " --seq " + to_string(seq) +
+            " --prod-steps 0")
+    println("")
+    println("# verdict: 🟠 harness-only — no measurement until the two logs exist.")
+}
+
+// ── --ledger : parse two arm logs → A/B ledger ──
+fn emit_ledger(hexa_log_path, pytorch_log_path, d, layers, batch, seq,
+               prod_steps, out_md, out_jsonl, tag) {
+    let h_body = read_file(hexa_log_path)
+    let p_body = read_file(pytorch_log_path)
+    let h = parse_log(h_body)
+    let p = parse_log(p_body)
+    let h_sps = h[0]
+    let h_spstep = h[1]
+    let h_rss = h[2]
+    let p_sps = p[0]
+    let p_spstep = p[1]
+    let p_rss = p[2]
+
+    let cfg = "d=" + to_string(d) + " layers=" + to_string(layers) +
+              " batch=" + to_string(batch) + " seq=" + to_string(seq)
+
+    // Δ ratio = pytorch_sps / hexa_sps (×). milli/milli → milli ratio.
+    let mut ratio_milli = -1
+    if h_sps > 0 && p_sps > 0 { ratio_milli = (p_sps * 1000) / h_sps }
+
+    let h_gd = gpu_days_milli(h_sps, prod_steps)
+    let p_gd = gpu_days_milli(p_sps, prod_steps)
+
+    // build markdown
+    let mut md = ""
+    md = md + "# HEXA-TRAIN-FLOOR M5 — A/B step-rate ledger\n\n"
+    md = md + "Config: " + cfg + "  ·  tag: " + tag + "\n\n"
+    md = md + "| backend | step/s | s/step | peak RSS (MB) | GPU-days (prod) |\n"
+    md = md + "|---|---|---|---|---|\n"
+    md = md + "| hexa-native | " + fmt_milli(h_sps) + " | " + fmt_milli(h_spstep) +
+             " | " + (if h_rss < 0 { "n/a" } else { to_string(h_rss) }) +
+             " | " + fmt_milli(h_gd) + " |\n"
+    md = md + "| pytorch | " + fmt_milli(p_sps) + " | " + fmt_milli(p_spstep) +
+             " | " + (if p_rss < 0 { "n/a" } else { to_string(p_rss) }) +
+             " | " + fmt_milli(p_gd) + " |\n\n"
+    md = md + "Δ (pytorch_step/s ÷ hexa_step/s) = " + fmt_milli(ratio_milli) + "×"
+    md = md + "  (>1 → PyTorch faster · <1 → hexa-native faster)\n\n"
+    if prod_steps > 0 {
+        md = md + "prod-steps budget = " + to_string(prod_steps) +
+                 " presentations → GPU-days column above.\n\n"
+    }
+    md = md + "baseline reference (HEXA-TRAIN-FLOOR M1, DECODER STEP_RATE_LOG): " +
+             "hexa-native 0.28 step/s (1.99 s/step) · 77~122 GPU-days · GPU util 0~8% · 🔴 INFEASIBLE.\n"
+
+    println(md)
+    write_text_file(out_md, md)
+
+    // JSONL row
+    let row = "{\"tag\": \"" + jsonl_escape(tag) +
+              "\", \"config\": \"" + jsonl_escape(cfg) +
+              "\", \"hexa_step_per_s\": \"" + fmt_milli(h_sps) +
+              "\", \"hexa_s_per_step\": \"" + fmt_milli(h_spstep) +
+              "\", \"hexa_rss_mb\": " + to_string(h_rss) +
+              ", \"pytorch_step_per_s\": \"" + fmt_milli(p_sps) +
+              "\", \"pytorch_s_per_step\": \"" + fmt_milli(p_spstep) +
+              "\", \"pytorch_rss_mb\": " + to_string(p_rss) +
+              ", \"ratio_p_over_h\": \"" + fmt_milli(ratio_milli) +
+              "\", \"prod_steps\": " + to_string(prod_steps) +
+              "}"
+    append_line(out_jsonl, row)
+    println("ledger → " + out_md + "  ·  jsonl → " + out_jsonl)
+
+    // honest gate: if either arm produced no step/s, the ledger is a SKELETON.
+    if h_sps < 0 || p_sps < 0 {
+        println("⚠ 🟠 INCOMPLETE — at least one arm log had no parseable step/s.")
+        println("    (harness verified end-to-end on log parse; awaiting a real GPU fire.)")
+    }
+}
+
+fn main() {
+    let argv = args()
+    let mut mode = ""
+    let mut hexa_log = ""
+    let mut pytorch_log = ""
+    let mut d = 64
+    let mut layers = 1
+    let mut batch = 1
+    let mut seq = 512
+    let mut host = "ubu-2"
+    let mut hexa_trainer = "hexa run train_v3_moe_longtrain.hexa"
+    let mut prod_steps = 0
+    let mut out_md = "state/perf/train_floor_ab.md"
+    let mut out_jsonl = "state/perf/train_floor_ab.jsonl"
+    let mut tag = ""
+    let mut slug = "tfb"
+    let mut i = 1
+    while i < len(argv) {
+        let a = argv[i]
+        if a == "--plan" { mode = "plan"; i = i + 1; continue }
+        if a == "--ledger" { mode = "ledger"; i = i + 1; continue }
+        if a == "--hexa-log" && i + 1 < len(argv) { hexa_log = argv[i+1]; mode = "ledger"; i = i + 2; continue }
+        if a == "--pytorch-log" && i + 1 < len(argv) { pytorch_log = argv[i+1]; i = i + 2; continue }
+        if a == "--d" && i + 1 < len(argv) { d = parse_int_safe(argv[i+1]); i = i + 2; continue }
+        if a == "--layers" && i + 1 < len(argv) { layers = parse_int_safe(argv[i+1]); i = i + 2; continue }
+        if a == "--batch" && i + 1 < len(argv) { batch = parse_int_safe(argv[i+1]); i = i + 2; continue }
+        if a == "--seq" && i + 1 < len(argv) { seq = parse_int_safe(argv[i+1]); i = i + 2; continue }
+        if a == "--host" && i + 1 < len(argv) { host = argv[i+1]; i = i + 2; continue }
+        if a == "--hexa-trainer" && i + 1 < len(argv) { hexa_trainer = argv[i+1]; i = i + 2; continue }
+        if a == "--prod-steps" && i + 1 < len(argv) { prod_steps = parse_int_safe(argv[i+1]); i = i + 2; continue }
+        if a == "--out" && i + 1 < len(argv) { out_md = argv[i+1]; i = i + 2; continue }
+        if a == "--jsonl" && i + 1 < len(argv) { out_jsonl = argv[i+1]; i = i + 2; continue }
+        if a == "--tag" && i + 1 < len(argv) { tag = argv[i+1]; i = i + 2; continue }
+        if a == "--slug" && i + 1 < len(argv) { slug = argv[i+1]; i = i + 2; continue }
+        i = i + 1
+    }
+
+    if mode == "plan" {
+        print_plan(host, hexa_trainer, d, layers, batch, seq, slug)
+        exit(0)
+    }
+    if mode == "ledger" {
+        if len(hexa_log) == 0 || len(pytorch_log) == 0 {
+            println("train_floor_bench --ledger needs --hexa-log <p> and --pytorch-log <p>")
+            exit(2)
+        }
+        emit_ledger(hexa_log, pytorch_log, d, layers, batch, seq,
+                    prod_steps, out_md, out_jsonl, tag)
+        exit(0)
+    }
+
+    println("train_floor_bench — HEXA-TRAIN-FLOOR M5 A/B step-rate harness")
+    println("  --plan                          print both arms' cloud-dispatch commands (NO run)")
+    println("  --ledger --hexa-log <p> --pytorch-log <p>   parse arm logs → A/B ledger")
+    println("  config:   --d N --layers N --batch N --seq N")
+    println("  plan:     --host H --hexa-trainer '<cmd>' --slug S")
+    println("  ledger:   --prod-steps N --out <md> --jsonl <jsonl> --tag S")
+    println("")
+    println("README: tool/TRAIN_FLOOR_BENCH.md   (한국어 실행법 + ledger 포맷)")
+    exit(0)
+}

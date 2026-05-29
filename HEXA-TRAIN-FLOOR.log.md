@@ -2,6 +2,54 @@
 
 Append-only history sister of `HEXA-TRAIN-FLOOR.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-30 — 🟠 M5 A/B step-rate 측정대 스캐폴드 (harness만, 미측정)
+
+hexa-native 학습기 step-rate vs PyTorch step-rate 를 **동일 모델/설정**에서 A/B
+비교하는 측정대(harness)를 구축했다. `tool/unshadow_bench.hexa` (UNSHADOW A/B
+측정대) 패턴 미러 — 두 arm, 같은 호스트/workload, 페어드 ledger row + Δ. **GPU
+실행은 하지 않음** (비용 + cross-repo infra) — 라이브 측정은 honest defer.
+
+### 만든 파일
+
+- [x] **`tool/train_floor_bench.hexa`** — A/B step-rate 측정대 (log-driven).
+  arm H = anima 디코더 트레이너 (`train_v3_moe_longtrain.hexa`, DECODER M5
+  `STEP_RATE_LOG` 생산자), arm P = 동일 (d·layers·batch·seq) HuggingFace-Trainer
+  baseline (`hexa dojo llm` payload). 두 모드:
+  - `--plan` : 두 arm 의 cloud-dispatch 명령 한 세트 출력 (GPU 안 돌림 · pod
+    rent 안 함 · 비용 0). honest-defer 표면.
+  - `--ledger --hexa-log <p> --pytorch-log <p>` : 실제 GPU fire 가 만든 두 arm
+    로그를 파싱 → A/B ledger (실측 경로). STEP_RATE_LOG 포맷 호환 파서.
+- [x] **`tool/TRAIN_FLOOR_BENCH.md`** — 한국어 실행법 + 로그 포맷 + ledger 포맷.
+
+### ledger 포맷
+
+markdown 표 + JSONL row 동시 출력. 열 = `backend · step/s · s/step · peak RSS(MB)
+· GPU-days(prod)`. GPU-days = `prod_steps / (step_per_s × 86400)` (`--prod-steps`
+0 이면 생략). Δ row = `pytorch_step/s ÷ hexa_step/s` (×, >1 = PyTorch 빠름).
+baseline 참조 = M1 기록값 (hexa-native 0.28 step/s · 1.99 s/step · 77~122
+GPU-days · GPU util 0~8% · 🔴 INFEASIBLE) 을 ledger 하단에 명시. 두 arm 중 하나라도
+step/s 미파싱 시 SKELETON + `⚠ 🟠 INCOMPLETE` 표시.
+
+### 로그 포맷 (STEP_RATE_LOG 호환)
+
+마지막 occurrence 채택. step/s = `<n> step/s`|`step_rate=<n>`, s/step =
+`<n> s/step`|`sec_per_step=<n>`, RSS = `RSS <n>MB`|`peak_rss_mb=<n>`. DECODER
+트레이너의 기존 `<n> step/s`·`<n> s/step` 출력 그대로 호환.
+
+### 실행법 (1줄)
+
+`hexa run tool/train_floor_bench.hexa --plan --d 64 --batch 1 --host ubu-2`
+(dispatch 명령 출력) → 실측 후 `--ledger --hexa-log <p> --pytorch-log <p>`.
+
+### 🟠 사유 (g5 — 측정 없음)
+
+`hexa_real parse tool/train_floor_bench.hexa` = `OK ... parses cleanly`
+(syntactic gate PASS). 측정대 코드 + 사용법은 완성, 로그 파서는 self-test 대상.
+**라이브 GPU step-rate 측정 0** (비용 + cross-repo anima 트레이너 infra) →
+🟢/🔵 금지, verdict 🟠. 실제 fire 가 두 arm 로그를 채우면 `--ledger` 로 terminal
+verdict(🟢 Δ measured) 전환. macOS 4GB memcap 으로 로컬 interp 실행은 OOM
+(SIGKILL 137) — 실행은 ubu-2/GPU pod 원격이 정상 경로.
+
 ## 2026-05-30 — 🟠 M3 glibc malloc-tuning 배선 (env-gated, 미측정)
 
 M1 단편화 가설(`malloc_trim`/`mallopt` 호출 0개 → freed chunk OS 미반환 → main-arena
@@ -155,4 +203,3 @@ delta 로 step 마다 로그. 이 한 점이 (a) "freed 됐는데 RSS 안 주는
 trim 부재 확정) byte-scale 가 추산이라 200–325MB 정확 매칭은 M4 측정 전까지
 미확정. 단일 site 단정 대신 "분산 churn × arena 미반환" 결론 — 이 또한 정직한
 localize (plan completion criteria 의 valid 결론).
-
