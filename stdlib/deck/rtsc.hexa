@@ -305,21 +305,85 @@ fn _rtsc_beh8_ph(spec: DeckSpec) -> string {
     return s
 }
 
-// _rtsc_fill_launch_block — emit the CONCURRENT-FILL multi-deck launch script
-// by REUSING the canonical planner dft_fill_plan_disk (stdlib/cloud/fill_plan,
-// #2096/#2101). This is improvement (1): the deck generator's launch emission
-// is concurrent (>1 job when room) + disk-bounded (when tight) + Σ-np≤physcores
-// BY DEFAULT — d_parallel_fire enforced at GENERATION, not by manual chain-
-// splitting on a stuck pod. Budget knobs come from the spec (generic, d4):
+// _rtsc_fill_launch_block — emit the §4b launch-orchestration block.
+//
+// project.tape d_parallel_fire 1순위 = "fire N candidates on PARALLEL pods"
+// + "split a chain onto parallel pods on sight" + dont "queue a candidate
+// behind another when fresh parallel capacity is rentable (d17)". So the
+// DEFAULT emit is SEPARATE-PODS-PER-CANDIDATE: each candidate = its own pod,
+// ONE ph.x el-ph job/pod, ranks=physcores, OMP=MKL=1, scratch isolated
+// (per-pod overlay disk — no shared-disk davcio "No space left" coupling).
+//
+// One-pod-multi-deck CONCURRENT-FILL (dft_fill_plan_disk, #2096/#2101) is the
+// d_parallel_fire FALLBACK — correct ONLY when fresh pods are genuinely not
+// rentable. It is demoted to an EXPLICIT opt-in gated by spec `pack_one_pod`:
+//   pack_one_pod (default "false") → separate-pods §4b (PRIMARY)
+//   pack_one_pod = "true"          → fill_plan concurrent-fill §4b (FALLBACK)
+// (pod 38095989: 5 decks/1 pod → 89% disk — the failure pack_one_pod fences.)
+//
+// Budget knobs come from the spec (generic, d4):
 //   physcores         pod physical cores              (default 128)
-//   ranks_per_deck    MPI ranks per ph.x job          (default 8)
+//   ranks_per_deck    MPI ranks per ph.x job (FALLBACK only) (default 8)
 //   n_decks           candidate decks to fan out      (default 9)
 //   walltime_h        per-job timeout cap (hours)     (default 140)
-//   free_disk_gb      pod free-disk headroom          (default 800)
-//   scratch_gb_per_q  _ph0 scratch GB per q-point     (default 18)
-// The block is wrapped in a fenced ```bash so the dispatcher copies it to the
-// pod as `run_fill.sh` (same materialize contract as the single-deck §4 chain).
+//   free_disk_gb      pod free-disk headroom (FALLBACK only) (default 800)
+//   scratch_gb_per_q  _ph0 scratch GB per q-point (FALLBACK only) (default 18)
 fn _rtsc_fill_launch_block(spec: DeckSpec) -> string {
+    let pack = spec_get_or(spec, "pack_one_pod", "false")
+    if pack == "true" {
+        return _rtsc_pack_one_pod_block(spec)
+    }
+    return _rtsc_separate_pods_block(spec)
+}
+
+// _rtsc_separate_pods_block — the DEFAULT §4b: one candidate = one pod, one
+// ph.x el-ph job/pod, ranks=physcores, OMP=MKL=1, per-pod isolated scratch.
+// d_parallel_fire PRIMARY — no DECKS=(...) multi-deck loop, no shared-pod
+// disk coupling. The emitted `run_pod.sh` runs exactly ONE deck (the pod it
+// lands on); the dispatcher rents N pods and lands one deck on each.
+fn _rtsc_separate_pods_block(spec: DeckSpec) -> string {
+    let n_decks  = _to_int_safe(spec_get_or(spec, "n_decks", "9"))
+    let walltime = _to_int_safe(spec_get_or(spec, "walltime_h", "140"))
+
+    let mut s = ""
+    s = s + "## 4b. 후보별 독립 pod 발사 (SEPARATE-PODS · d_parallel_fire 1순위 · 기본값)\n"
+    s = s + "\n"
+    s = s + "> project.tape d_parallel_fire 1순위 = \"fire N candidates on PARALLEL pods\" +\n"
+    s = s + "> \"split a chain onto parallel pods on sight\" + dont \"queue a candidate behind\n"
+    s = s + "> another when fresh parallel capacity is rentable (d17)\". 따라서 기본 발사는\n"
+    s = s + "> **후보 1개 = pod 1개**: pod 당 ph.x el-ph job 정확히 1개, ranks=physcores,\n"
+    s = s + "> OMP=MKL=1, scratch 는 per-pod overlay 디스크로 완전 격리(공유-디스크 davcio\n"
+    s = s + "> \"No space left\" 커플링 없음 — pod 38095989 5-deck/1-pod 89% disk 사태 회피).\n"
+    s = s + "> 후보 " + to_string(n_decks) + "개 → 디스패처가 pod " + to_string(n_decks)
+        + "개를 동시 rent 하고 deck 1개씩 land 한다(d17 vast.ai 우선).\n"
+    s = s + "> one-pod-multi-deck CONCURRENT-FILL 은 FALLBACK 일 뿐 — fresh pod 를 rent 할 수\n"
+    s = s + "> 없을 때만 spec `pack_one_pod=true` 로 명시적 opt-in(아래 §4b-fallback).\n"
+    s = s + "\n"
+    s = s + "```bash\n"
+    s = s + "#!/usr/bin/env bash\n"
+    s = s + "# SEPARATE-PODS launch — 이 pod 에 land 한 단일 deck 1개만 돌린다(d_parallel_fire 1순위).\n"
+    s = s + "# 디스패처가 후보별로 pod 를 rent 하고 deck 1개씩 이 스크립트로 발사한다.\n"
+    s = s + "set -uo pipefail\n"
+    s = s + "cd \"$(dirname \"$0\")\"\n"
+    s = s + "[ -f ph.in ] || { echo \"no ph.in in $(pwd) — 이 pod 에 deck 가 land 안 됨\"; exit 1; }\n"
+    s = s + "NP=\"${NP:-$(nproc)}\"   # ranks = physcores; oversubscribe 금지(vast el-ph safe launch)\n"
+    s = s + "WALLTIME_H=\"${WALLTIME_H:-" + to_string(walltime) + "}\"\n"
+    s = s + "export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1\n"
+    s = s + "echo \"separate-pod launch: 1 deck=$(basename \"$(pwd)\"), -np $NP, ${WALLTIME_H}h cap\"\n"
+    s = s + "# 진짜-완주 판정 + 재개는 §4c run_resume.sh 가 담당(이 pod 의 단일 deck 에 대해).\n"
+    s = s + "bash run_resume.sh || { echo \"ph NOT terminal — re-dispatch §4c run_resume.sh on THIS pod\"; exit 2; }\n"
+    s = s + "echo \"POD TERMINAL (single deck, real: dynN==q-total, no ph.x)\"\n"
+    s = s + "```\n"
+    s = s + "\n"
+    return s
+}
+
+// _rtsc_pack_one_pod_block — the EXPLICIT opt-in §4b FALLBACK: pack multiple
+// decks onto ONE pod via the canonical planner dft_fill_plan_disk (core budget
+// Σ-np≤physcores ∧ disk headroom). Reachable only via spec pack_one_pod=true —
+// the correct tool for the genuine can't-rent-fresh-pods case. Disk-aware math
+// (fill_plan_disk) is UNCHANGED; this only fences it behind the flag.
+fn _rtsc_pack_one_pod_block(spec: DeckSpec) -> string {
     let physcores = _to_int_safe(spec_get_or(spec, "physcores", "128"))
     let ranks     = _to_int_safe(spec_get_or(spec, "ranks_per_deck", "8"))
     let n_decks   = _to_int_safe(spec_get_or(spec, "n_decks", "9"))
@@ -329,14 +393,16 @@ fn _rtsc_fill_launch_block(spec: DeckSpec) -> string {
     let plan = dft_fill_plan_disk(physcores, ranks, n_decks, walltime, free_disk, scratch)
 
     let mut s = ""
-    s = s + "## 4b. 멀티-deck 동시충전 발사 (CONCURRENT-FILL · d_parallel_fire · #2096/#2101)\n"
+    s = s + "## 4b-fallback. 단일-pod 멀티-deck 동시충전 (CONCURRENT-FILL · d_parallel_fire FALLBACK · opt-in)\n"
     s = s + "\n"
-    s = s + "> N개 후보 deck 을 한 pod 에 손으로 짠 `for deck; do …; wait; done` 순차 체인으로\n"
-    s = s + "> 줄세우지 마라(128-core pod 가 deck 1개만 돌리고 나머지 idle — 2026-05-29 15× 낭비).\n"
-    s = s + "> 아래 블록은 canonical planner `dft_fill_plan_disk` 가 emit 한 것: core budget\n"
-    s = s + "> (Σ-np ≤ " + to_string(physcores) + ") **와** disk headroom 양쪽 한도까지 deck 을 동시 발사한다.\n"
-    s = s + "> 동시 slot = " + to_string(plan.concurrent_jobs) + " (core_slots=" + to_string(plan.slots)
-        + ", disk_slots=" + to_string(plan.disk_slots) + "), Σ-np = " + to_string(plan.sum_np) + ".\n"
+    s = s + "> ⚠ FALLBACK — fresh pod 를 rent 할 수 없을 때만(`pack_one_pod=true`). d_parallel_fire\n"
+    s = s + "> 1순위는 후보별 독립 pod(§4b)다. 한 pod 에 N deck 을 쌓는 건 차선책일 뿐 —\n"
+    s = s + "> 그래도 손으로 짠 `for deck; do …; wait; done` 순차 체인보다는 낫다(128-core 가\n"
+    s = s + "> deck 1개만 돌리고 idle — 2026-05-29 15× 낭비). 아래 블록은 canonical planner\n"
+    s = s + "> `dft_fill_plan_disk` 가 emit: core budget(Σ-np ≤ " + to_string(physcores) + ") **와**\n"
+    s = s + "> disk headroom 양쪽 한도까지 동시 발사. 동시 slot = " + to_string(plan.concurrent_jobs)
+        + " (core_slots=" + to_string(plan.slots) + ", disk_slots=" + to_string(plan.disk_slots)
+        + "), Σ-np = " + to_string(plan.sum_np) + ".\n"
     s = s + "> 디스패처가 이 펜스 블록을 pod 의 `run_fill.sh` 로 복사하고 `bash run_fill.sh DECK1 DECK2 …` 로 실행한다.\n"
     s = s + "\n"
     s = s + "```bash\n"
