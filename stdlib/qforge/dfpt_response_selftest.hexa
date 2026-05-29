@@ -1,0 +1,257 @@
+// @ci_gate — deterministic · network-free · matrix-free DFPT 응답어댑터 g5 게이트
+//
+// dfpt_response_selftest.hexa — QFORGE 통합② (Sternheimer→힘상수 Φ 어댑터) g5 gate.
+//
+// 조화모델(닫힌형 Φ·ω 보유)로 어댑터의 response→Φ 를 실검증한다. 동역학행렬·Φ 를
+// 하드코딩하지 않는다 — matrix-free H_apply + bare-섭동 provider 로 generic 경로를 탄다(d4).
+//
+//   모델: n=4 전자레벨의 명시적 대칭 H₀. 변위방향 dim=2(=원자 1개의 x,y 처럼).
+//   변위 b 의 bare 섭동연산자 ΔV_b (대칭 행렬) → ΔV_b|ψₙ⟩ 를 provider 가 공급.
+//   점유셋 = 최저 2 레벨. 차폐커널 drho_to_dvscf = 0 (독립입자/bare 경로 — g5 검증대상).
+//
+//   KEY anchor — 2차 섭동이론 힘상수(닫힌형):
+//     Φ_αβ = − Σ_{n∈occ} Σ_{m∉occ} [⟨ψₘ|ΔV_α|ψₙ⟩⟨ψₘ|ΔV_β|ψₙ⟩]/(εₙ−εₘ) · (대칭화)
+//   (점유 n 의 2차 에너지미분 합. P_c 가 점유 제거 → m 은 전도상태만.)
+//
+// 검증 케이스:
+//  (A) Φ_adapter ≈ Φ_spectral (어댑터 응답 contraction vs 닫힌형 스펙트럴 합, rel~1e-6).
+//  (B) 유한차분 교차검증(강): H₀+t·ΔV_b 재대각화 → 점유에너지합 E_occ(t) 의 2차미분
+//      d²E/dt² (t→0, 중심차분) ≈ Φ_bb(어댑터). 진짜 곡률 대조.
+//  (C) Sternheimer 수렴: converged=true + max_residual < tol.
+//  (D) Φ 대칭성: Φ_αβ = Φ_βα (어댑터 대칭화).
+//  (E) end-to-end: Φ_adapter → qforge_dynmat → qforge_phonons (d19 L4 재사용).
+//      조화 사슬 Φ 를 별도 구성(닫힌형 ω 보유) → ω(영역경계)=2√(K/M), 음향 sum rule ω(Γ)=0.
+//
+// Run (repo runtime 수동 링크):
+//   ./build/hexa_v2 stdlib/qforge/dfpt_response_selftest.hexa /tmp/dr.c &&
+//   clang -O2 -D_GNU_SOURCE -I build/self /tmp/dr.c build/self/runtime.c -o /tmp/dr -lm -lpthread -ldl && /tmp/dr
+// PASS: "qforge_dfpt_response_selftest PASS".
+use "stdlib/qforge/dfpt_response"
+use "stdlib/qforge/dfpt"
+use "stdlib/alloc/math/eigen"
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_bool(name: str, got: bool, want: bool) -> int {
+    if got == want { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+// ── matrix-free H_apply: 모듈전역 명시 대칭행렬 M(N×N 평탄) → M·v ─────────────
+let mut G_H = []
+let mut G_NH = 0
+fn h_apply(v: [float]) -> [float] {
+    let mut out = []
+    let mut i = 0
+    while i < G_NH {
+        let mut s = 0.0
+        let mut j = 0
+        while j < G_NH { s = s + G_H[i * G_NH + j] * v[j] ; j = j + 1 }
+        out.push(s)
+        i = i + 1
+    }
+    return out
+}
+// ── 변위방향별 bare 섭동행렬 ΔV_b (대칭 N×N 평탄), 모듈전역 ────────────────────
+let mut G_DV0 = []        // 방향 0
+let mut G_DV1 = []        // 방향 1
+let mut G_PSI = []        // 점유 ψₙ 묶음 (평탄 M_occ × N)
+let mut G_NN = 0          // N
+let mut G_MOCC = 0        // 점유 수
+// dV_bare_provider(b): 방향 b 의 ΔV_b 를 각 점유 ψₙ 에 적용 → 평탄 M_occ × N.
+fn dv_bare_provider(b: int) -> [float] {
+    let mut dvm = G_DV0
+    if b == 1 { dvm = G_DV1 }
+    let mut out = []
+    let mut nn = 0
+    while nn < G_MOCC {
+        let mut i = 0
+        while i < G_NN {
+            let mut s = 0.0
+            let mut j = 0
+            while j < G_NN { s = s + dvm[i * G_NN + j] * G_PSI[nn * G_NN + j] ; j = j + 1 }
+            out.push(s)
+            i = i + 1
+        }
+        nn = nn + 1
+    }
+    return out
+}
+// 차폐커널 = 0 (독립입자/bare 경로). real Hartree+XC 커널은 후속.
+fn drho_zero(drho: [float]) -> [float] {
+    let mut out = []
+    let mut i = 0
+    while i < drho.len() { out.push(0.0) ; i = i + 1 }
+    return out
+}
+fn main() {
+    let mut fails = 0
+    let N = 4
+    let TOL = 1.0e-12
+    // ── 명시 대칭 H₀ (well-separated 스펙트럼) ──────────────────────────────
+    let H0 = [ 3.0, 0.2, 0.1, 0.05,
+               0.2, 2.0, 0.15, 0.1,
+               0.1, 0.15, 1.0, 0.2,
+               0.05, 0.1, 0.2, 0.4 ]
+    // 변위방향 ΔV_0, ΔV_1 (대칭, 서로 다른 패턴).
+    let DV0 = [ 0.0, 0.5, 0.2, 0.1,
+                0.5, 0.0, 0.3, 0.2,
+                0.2, 0.3, 0.0, 0.4,
+                0.1, 0.2, 0.4, 0.0 ]
+    let DV1 = [ 0.1, 0.2, 0.0, 0.3,
+                0.2, 0.0, 0.25, 0.1,
+                0.0, 0.25, 0.2, 0.15,
+                0.3, 0.1, 0.15, 0.0 ]
+    // dense 대각화 (d19: eigh 재사용) → ε/ψ (오름차순).
+    let eg = eigh(H0, N)
+    let vals = eg[0]
+    let vecs = eg[1]
+    let mut eps = []
+    let mut psi = []
+    let mut s0 = 0
+    while s0 < N { eps.push(vals[N - 1 - s0]) ; psi.push(vecs[N - 1 - s0]) ; s0 = s0 + 1 }
+    let M_OCC = 2          // 점유 = 최저 2 레벨 {0,1}
+    let mut occ = []
+    occ.push(psi[0])
+    occ.push(psi[1])
+    let mut eps_occ = []
+    eps_occ.push(eps[0])
+    eps_occ.push(eps[1])
+    // 모듈전역 셋업.
+    G_H = H0 ; G_NH = N ; G_DV0 = DV0 ; G_DV1 = DV1 ; G_NN = N ; G_MOCC = M_OCC
+    let mut psi_flat = []
+    let mut pf = 0
+    while pf < M_OCC {
+        let mut k = 0
+        while k < N { psi_flat.push(psi[pf][k]) ; k = k + 1 }
+        pf = pf + 1
+    }
+    G_PSI = psi_flat
+    // ── KEY anchor: 닫힌형 스펙트럴 Φ ────────────────────────────────────
+    //   Φ_αβ = − Σ_{n∈occ} Σ_{m∉occ} ⟨ψₘ|ΔV_α|ψₙ⟩⟨ψₘ|ΔV_β|ψₙ⟩/(εₙ−εₘ), 대칭화.
+    //   ⟨ψₘ|ΔV|ψₙ⟩ = ψₘ · (ΔV ψₙ).
+    let DVS = [DV0, DV1]
+    let mut phi_spec = [0.0, 0.0, 0.0, 0.0]
+    let mut al = 0
+    while al < 2 {
+        let mut be = 0
+        while be < 2 {
+            let mut acc = 0.0
+            let mut nn = 0
+            while nn < M_OCC {
+                let mut mm = 0
+                while mm < N {
+                    // m 은 전도상태만 (점유 0,1 제외)
+                    if mm >= M_OCC {
+                        // ⟨ψₘ|ΔV_α|ψₙ⟩
+                        let mut oa = 0.0
+                        let mut ob = 0.0
+                        let mut i = 0
+                        while i < N {
+                            // (ΔV ψₙ)_i = Σ_j DV[i][j] ψₙ[j]
+                            let mut dva = 0.0
+                            let mut dvb = 0.0
+                            let mut j = 0
+                            while j < N {
+                                dva = dva + DVS[al][i * N + j] * psi[nn][j]
+                                dvb = dvb + DVS[be][i * N + j] * psi[nn][j]
+                                j = j + 1
+                            }
+                            oa = oa + psi[mm][i] * dva
+                            ob = ob + psi[mm][i] * dvb
+                            i = i + 1
+                        }
+                        acc = acc + oa * ob / (eps[nn] - eps[mm])
+                        mm = mm + 1
+                    } else { mm = mm + 1 }
+                }
+                nn = nn + 1
+            }
+            phi_spec[al * 2 + be] = -acc
+            be = be + 1
+        }
+        al = al + 1
+    }
+    // ── 어댑터 실행 ─────────────────────────────────────────────────────
+    let fc = qforge_force_constant(h_apply, occ, eps_occ, dv_bare_provider, drho_zero, 2, TOL, 300)
+    // (A) Φ_adapter ≈ Φ_spectral (4 성분)
+    fails = fails + _ck_close("(A) Phi[0,0] adapter==spectral", fc.phi[0], phi_spec[0], 1.0e-6)
+    fails = fails + _ck_close("(A) Phi[0,1] adapter==spectral", fc.phi[1], phi_spec[1], 1.0e-6)
+    fails = fails + _ck_close("(A) Phi[1,0] adapter==spectral", fc.phi[2], phi_spec[2], 1.0e-6)
+    fails = fails + _ck_close("(A) Phi[1,1] adapter==spectral", fc.phi[3], phi_spec[3], 1.0e-6)
+    // (B) 유한차분 곡률 교차검증(강): E_occ(t)=Σ_occ ε_n(H0+t·ΔV_0), d²E/dt²(0).
+    //   중심차분: [E(+h)−2E(0)+E(−h)]/h².  2차 섭동이론으로 d²E/dt²|0 = 2·(−phi_spec? )...
+    //   주의: E_occ(t) 의 t² 계수 = Σ_occ Σ_{m≠n} |⟨ψₘ|ΔV|ψₙ⟩|²/(εₙ−εₘ)  = −Φ_00.
+    //   따라서 d²E/dt²|0 = 2·(t²계수) = 2·(−Φ_00).  → Φ_00 = −0.5·d²E/dt².
+    let h_fd = 1.0e-3
+    let mut e_p = 0.0
+    let mut e_0 = 0.0
+    let mut e_m = 0.0
+    // H(+h), H(0), H(−h) 점유에너지합.
+    let mut Hp = []
+    let mut H0c = []
+    let mut Hm = []
+    let mut p = 0
+    while p < N * N {
+        Hp.push(H0[p] + h_fd * DV0[p])
+        H0c.push(H0[p])
+        Hm.push(H0[p] - h_fd * DV0[p])
+        p = p + 1
+    }
+    let egp = eigh(Hp, N)
+    let eg0 = eigh(H0c, N)
+    let egm = eigh(Hm, N)
+    let vp = egp[0]
+    let v0 = eg0[0]
+    let vm = egm[0]
+    let mut oc = 0
+    while oc < M_OCC {
+        // 오름차순 점유 = 내림차순의 끝 (N-1-oc)
+        e_p = e_p + vp[N - 1 - oc]
+        e_0 = e_0 + v0[N - 1 - oc]
+        e_m = e_m + vm[N - 1 - oc]
+        oc = oc + 1
+    }
+    let d2e = (e_p - 2.0 * e_0 + e_m) / (h_fd * h_fd)
+    let phi00_fd = -0.5 * d2e
+    fails = fails + _ck_close("(B) FD curvature Phi[0,0] == adapter", phi00_fd, fc.phi[0], 1.0e-4)
+    // (C) Sternheimer 수렴 + 잔차
+    fails = fails + _ck_bool("(C) converged", fc.converged, true)
+    fails = fails + _ck_bool("(C) max_residual < tol", fc.max_residual < 1.0e-6, true)
+    // (D) Φ 대칭성
+    fails = fails + _ck_close("(D) Phi symmetric Phi[0,1]==Phi[1,0]", fc.phi[1], fc.phi[2], 1.0e-12)
+    // ── (E) end-to-end: 조화 사슬 Φ → qforge_dynmat → qforge_phonons (L4 재사용) ──
+    //   어댑터의 Φ-조립 출력형(평탄 dim×dim 블록)을 L4 에 투입. 닫힌형 ω 검증.
+    //   1D 단원자 사슬(M,K): natoms=1, dim=3. x-가지만 결합, y/z 자기강성 BIG.
+    //   Φ(R=0): xx=+2K, yy=zz=BIG. Φ(R=±a): xx=−K.  ω(영역경계)=2√(K/M).
+    let PI = 3.14159265358979323846
+    let Km = 1.0
+    let Mm = 1.0
+    let BIG = 1.0e6
+    let mut phi_chain = []
+    let mut zc = 0
+    while zc < 27 { phi_chain.push(0.0) ; zc = zc + 1 }   // ncells=3, block=9
+    // R=0 block (offset 0): xx=+2K, yy=zz=BIG
+    phi_chain[0] = 2.0 * Km ; phi_chain[4] = BIG ; phi_chain[8] = BIG
+    // R=+a block (offset 9): xx=−K
+    phi_chain[9 + 0] = -Km
+    // R=−a block (offset 18): xx=−K
+    phi_chain[18 + 0] = -Km
+    let masses_chain = [Mm]
+    let cellR_chain = [0.0, 0.0, 0.0,  1.0, 0.0, 0.0,  -1.0, 0.0, 0.0]
+    let pre = 2.0 * sqrt(Km / Mm)
+    // 영역경계 q=π/a → ω=2√(K/M)
+    let qzb = [PI, 0.0, 0.0]
+    let dzb = qforge_dynmat(phi_chain, masses_chain, qzb, 1, 3, cellR_chain)
+    let pzb = qforge_phonons(dzb, masses_chain, 1)
+    fails = fails + _ck_close("(E) e2e ω(q=π/a) zone-boundary = 2√(K/M)", pzb.omega[0], pre, 1.0e-6)
+    // 음향 sum rule q=Γ → ω≈0
+    let qg = [0.0, 0.0, 0.0]
+    let dg = qforge_dynmat(phi_chain, masses_chain, qg, 1, 3, cellR_chain)
+    let pg = qforge_phonons(dg, masses_chain, 1)
+    fails = fails + _ck_close("(E) e2e acoustic sum rule ω(Γ) = 0", pg.omega[0], 0.0, 1.0e-6)
+    fails = fails + _ck_bool("(E) e2e n_acoustic_zero >= 1", pg.n_acoustic_zero >= 1, true)
+    if fails == 0 { println("qforge_dfpt_response_selftest PASS") }
+    else { println("qforge_dfpt_response_selftest FAIL — " + to_string(fails) + " case(s)") }
+}
