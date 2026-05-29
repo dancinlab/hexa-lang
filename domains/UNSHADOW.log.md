@@ -742,3 +742,28 @@ UNSHADOW.md `- [ ]` milestone 등록(14 [x]+B line 무손). 모두 이미-측정
 **next-frontier seed = C1 native HexaArrI64/F64** — 축A 의 closed-negative 가 "갭은 STORAGE 에
 산다(codegen-only unbox 아니다)" 를 결정적으로 못 박았으니, 다음 frontier 는 runtime-레벨 native
 저장 표현(B9 벽 밖·codegen-only 범위 밖)이다. 거울방 다음 회전의 진입점.
+
+## 2026-05-30 — 🔵 native HexaArrI64 저장 표현 [HEADLINE] (부분 착지 + 천장 실증)
+
+**축A 확증.** §unboxed-array closed-negative 가 "갭은 STORAGE(boxed 16B-stride)에 산다"를
+지목 → 이 사이클이 native contiguous `int64_t[]` 표현을 runtime+codegen 에 실착지하고 천장
+실증으로 확인.
+
+**착지**: (1) runtime ABI `self/runtime_core_emit.hexa` — `HexaArrI64 {int64_t* data;int len;
+int cap}` + `hexa_arr_i64_new/push/len/box` public-in-runtime.h(§c-class 벽 관통, layout=
+HexaArr 동offset → polymorphic hexa_len 작동). (2) codegen `self/codegen.hexa` — §unboxed-array
+`_known_intarr` 추론기 재사용, `HEXA_NATIVE_ARR=1` GATED opt-in(default OFF) 시 monomorphic-i64
+리터럴 → native 구성 + raw inline-literal read. real self-host codegen 발화 검증(transpile
++632 lines: FLAG ON=hexa_arr_i64_new/push, FLAG OFF=boxed 무변경).
+
+**측정(mini arm64 best-of-9·faithful A/B proxy)**: byte-diff 4/4 IDENTICAL(`35470124`)+동적경계
+IDENTICAL(`9efbbf5d`). a_boxed 3.17s → b_native(LANDED) 2.68s(1.18×) → d_ideal(CEILING) 0.18s
+≈ref 0.15s(**gap→0.83× AT PARITY**). native storage 가 갭을 parity 까지 닫음 = 축A 예측 확증.
+
+**정직 한계**: LANDED 가 천장의 1/15 만 잡음 — read 가 boxed HexaVal surface 유지(누산기 acc=
+untyped let mut → §hexaval-unbox 체인이 sum 까지 안 뻗어 per-read box 가 vectorize 차단,
+vec-op 8<28). full 천장 = known-int accumulator 일반화(sub-task open). inline literal 필수
+(out-of-line hexa_int 더 느림=runtime.o 벽 re-box). GATED opt-in=무회귀. F64+no-escape 자동발화=open.
+
+verdict=`.verdicts/unshadow-native-arr/`·bench=`UNSHADOW.bench.md §native-arr`·재현=
+`tool/unshadow_native_arr_bench.hexa`. **next sub-task seed = known-int accumulator(read→sum raw 체인)**.

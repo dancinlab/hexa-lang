@@ -726,3 +726,51 @@ ref-C wall anchor** (ref-C 가 roofline-near = 측정 anchor; roofline% = ref-C 
 > 케이스는 typed-repr frontier 랜딩 후 측정 가능(정직: 현재 미수집). g5 byte-diff 5/5 IDENTICAL
 > (verdict verbatim). 재현 = `tool/unshadow_peak_microbench.hexa` (분모) + `tool/unshadow_bench.hexa
 > --workloads <5> --warmup 2 --iters 5` (roofline % 컬럼).
+
+## §native-arr — 🔵 native HexaArrI64 저장 표현 (HEADLINE / F1 데이터-표현 주권)
+
+> milestone "🔵 native HexaArrI64 저장 표현 [HEADLINE]" 의 실측. **요지**: 축A
+> closed-negative(§unboxed-array)가 "갭은 tag-guard 아니라 STORAGE 에 산다"를 결정적으로
+> 지목했다. 이 milestone 은 그 native contiguous 저장 표현(`int64_t[]`)을 runtime ABI +
+> codegen 에 **실제 착지**시키고, 갭이 storage 에 있음을 **천장 실증**으로 확증한다.
+
+**착지물**:
+- runtime ABI (`self/runtime_core_emit.hexa`): `typedef struct HexaArrI64 {int64_t* data;
+  int len; int cap}` + `hexa_arr_i64_new/push/len/box` 헬퍼, **public in runtime.h**
+  (§c-class 벽 관통). layout 이 `HexaArr {ptr,len,cap}` 와 **동일 offset** → polymorphic
+  `hexa_len`(arr_ptr->len read)이 native 표현에도 그대로 작동(loop bound·`len(xs)` 무변경).
+- codegen (`self/codegen.hexa`, §unboxed-array `_known_intarr` 추론기 재사용): `HEXA_NATIVE_ARR=1`
+  GATED opt-in(default OFF=무회귀) 시 불변 monomorphic-i64 리터럴 → `hexa_arr_i64_new/push`
+  native 구성 + 증명된 in-range read = inline compound-literal raw load.
+
+**측정 (mini Apple M4 arm64 · best-of-9 · faithful A/B proxy · full self-host regen=B9 벽 차단)**:
+
+| arm | 표현 | wall (s) | vec-op | 의미 |
+|---|---|---|---|---|
+| ref_c    | idiomatic `int64_t[]` (no runtime) | 0.15 | 28 | parity anchor |
+| a_boxed  | 현 `HexaArr` boxed 16B-stride (§c-class read) | 3.17 | 10 | **BEFORE** |
+| b_native | **LANDED**: native storage + boxed read surface | 2.68 | 8 | 1.18×·−15% |
+| d_ideal  | **CEILING**: native storage + raw `data[i]` read | 0.18 | 28 | 17.6×·gap→0.83× **AT PARITY** |
+
+- **g5 byte-diff: 4/4 IDENTICAL** (`35470124be79241c684dc5103ec55d20`) — 무손실.
+- **동적경계 integrity: IDENTICAL** (`9efbbf5d320a45f2ce6e89491a1ac726`) — native i64 배열이
+  polymorphic 경계(`hexa_arr_i64_box` → real HexaVal)에서 정확히 box.
+- **codegen 발화 검증** (real self-host codegen, +632 lines, `/tmp/hexat.new` transpile):
+  FLAG ON = `hexa_arr_i64_new(N)`+`hexa_arr_i64_push` 구성 · FLAG OFF = boxed `hexa_array_push`
+  +`items[i]`(§c-class) **무변경**.
+
+### 정직한 해석 — 천장 실증 + LANDED 한계
+
+- **천장 실증 = 축A 확증.** d_ideal(native storage·raw read) 0.18s ≈ ref 0.15s = **gap 0.83×
+  AT PARITY**. boxed(a_boxed 3.17s)→native 가 갭을 parity 까지 닫는다. 축A closed-negative 의
+  "갭은 STORAGE 에 산다" 예측이 **결정적으로 옳았음**을 storage 표현 실착지로 확인.
+- **LANDED 는 천장의 1/15 만 잡는다 (정직).** b_native(2.68s)는 native storage 를 쓰지만 read
+  가 여전히 boxed HexaVal surface 를 만든다(`((HexaVal){.tag=TAG_INT,.i=data[i]})`). 이유 =
+  누산기 `acc` 가 untyped `let mut` 라 §hexaval-unbox known-int 체인이 read→sum 까지 안 뻗어
+  per-read HexaVal 구성이 vectorize 를 막는다(vec-op 8 < 28). **inline literal 은 필수**(out-of-line
+  `hexa_int()` 는 더 느림 — runtime.o 벽 너머 re-box, 측정 확인). full 천장 = known-int
+  accumulator 일반화(sub-task open).
+- **GATED opt-in (default OFF).** 무회귀 보장(FLAG OFF byte-diff = boxed 경로 무변경). no-escape
+  자동발화(현 GATED 해제)는 whole-binding escape 증명 필요 = 별도 sub-task. F64 경로도 open.
+- verdict verbatim = `.verdicts/unshadow-native-arr/bench.txt` · 재현 =
+  `tool/unshadow_native_arr_bench.hexa --rt ~/.hx/bin/self --runs 9`.

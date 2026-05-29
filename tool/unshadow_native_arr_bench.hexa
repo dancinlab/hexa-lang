@@ -1,0 +1,274 @@
+// tool/unshadow_native_arr_bench.hexa
+//   UNSHADOW [HEADLINE] milestone "🔵 native HexaArrI64/F64 저장 표현" (F1
+//   데이터-표현 주권). The axis-A closed-negative (§unboxed-array) proved
+//   deterministically that the parity gap does NOT live in the per-element
+//   tag-guard (clang -O2 hoists the loop-invariant guard → 0% Δ) — it lives in
+//   STORAGE: the runtime `HexaArr { HexaVal* items; }` is a 16-byte-stride array
+//   of boxed HexaVal, which clang CANNOT SIMD-gather (axis-A asm: 5 vec-ops vs a
+//   native int64_t[] 23 vec-ops). The ceiling proxy `c_native` closed the gap to
+//   ~0% (0.08s ≈ ref). This milestone lands the actual native contiguous storage
+//   representation `HexaArrI64` (8-byte int64_t[]) + read/build/box helpers in
+//   the runtime emit source (public runtime.h surface — §c-class wall-piercing
+//   pattern), and wires the codegen read arm to emit a NATIVE-backed read for a
+//   statically-proven monomorphic-i64 array.
+//
+// REPRESENTATION UNDER TEST (self/runtime_core_emit.hexa → runtime.h/.c):
+//   typedef struct HexaArrI64 { int64_t* data; int len; int cap; } HexaArrI64;
+//   HexaVal hexa_arr_i64_new(int cap);           // native contiguous, TAG_ARRAY_I64
+//   HexaVal hexa_arr_i64_push(HexaVal a, int64_t x);
+//   int64_t hexa_arr_i64_get(HexaVal a, int64_t i);   // bounds-checked dynamic
+//   int     hexa_arr_i64_len(HexaVal a);
+//   HexaVal hexa_arr_i64_box(HexaVal a, int64_t i);    // unbox→HexaVal at boundary
+//   The data[] member is public in runtime.h so codegen can emit a direct
+//   `a.arr_i64_ptr->data[i]` raw read inside a proven loop — exactly the §c-class
+//   wall-piercing read, but now over CONTIGUOUS int64_t storage (SIMD-gatherable).
+//
+// CODEGEN CHANGE UNDER TEST (self/codegen.hexa):
+//   When `let xs = [int-lit…]` is registered as a _known_intarr (immutable +
+//   monomorphic-i64, §unboxed-array inferencer reuse), the literal lowers to
+//   hexa_arr_i64_new/push (native storage), and a read `xs[i]` covered by a live
+//   in-range fact (§c-class) emits the raw native read `xs.arr_i64_ptr->data[i]`
+//   producing an int64_t the surrounding sum/dot consumes directly — NO HexaVal,
+//   NO 16B stride. Any non-proven use of `xs` boxes at the dynamic boundary via
+//   hexa_arr_i64_box. Else (unproven) the BOXED HexaArr path is unchanged.
+//
+// MEASURE per arm: built? · program-output md5 (g5 byte-diff) · best-of-N wall ·
+//   asm vec-op count (the SIMD-gather signal). 4 arms:
+//     ref_c    — idiomatic native int64_t[] (parity baseline, no runtime)
+//     a_boxed  — current runtime HexaArr boxed read (§c-class state, 16B stride)
+//     b_native — NEW HexaArrI64 native contiguous read (this milestone)
+//     (b_native ≈ ref_c is the win: storage gap closed)
+//
+// INTEGRITY GATE: a typed i64 array handed to a POLYMORPHIC boundary
+//   (hexa_arr_i64_box → checked element fetch) MUST byte-match boxed. OOB read
+//   MUST still throw. The native fast read fires only for the proven loop var.
+//
+// Argv:  --rt <dir> (runtime.h+runtime.o) · --work <dir> · --runs <N>
+
+fn parse_int_safe(s) {
+    let t = s.trim()
+    if len(t) == 0 { return 5 }
+    return to_int(t)
+}
+
+fn arg_val(argv, key, dflt) {
+    let mut i = 0
+    while i < argv.len() {
+        if argv[i] == key && i + 1 < argv.len() { return argv[i + 1] }
+        i = i + 1
+    }
+    return dflt
+}
+
+fn write_file(path, body) {
+    exec("cat > '" + path + "' <<'__UNSHADOW_EOF__'\n" + body + "\n__UNSHADOW_EOF__")
+}
+
+fn build_arm(label, cc_cmd, out_bin) {
+    let r = exec(cc_cmd + " 2>&1")
+    let built = exec("[ -f '" + out_bin + "' ] && printf yes || printf no").trim()
+    let nerr = exec("printf '%s' \"" + r + "\" | grep -ciE 'error|undefined' 2>/dev/null").trim()
+    println("  [" + label + "] built=" + built + " err_lines=" + nerr)
+    return built
+}
+
+fn md5_of_output(bin) {
+    return exec("'" + bin + "' 2>/dev/null | md5 2>/dev/null || '" + bin + "' 2>/dev/null | md5sum 2>/dev/null | cut -d' ' -f1").trim()
+}
+
+fn best_wall(bin, runs) {
+    let mut best = "999"
+    let mut r = 0
+    while r < runs {
+        let t = exec("{ /usr/bin/time -p '" + bin + "' >/dev/null ; } 2>&1 | awk '/^real/{print $2}'").trim()
+        if len(t) > 0 {
+            let cmp = exec("awk 'BEGIN{print (" + t + "<" + best + ")?1:0}'").trim()
+            if cmp == "1" { best = t }
+        }
+        r = r + 1
+    }
+    return best
+}
+
+fn vec_count(asm_path) {
+    // count SIMD/vector ops in the hot loop (NEON on arm64: ld1/st1 .2d/.4s,
+    // add/fadd .2d/.4s, plus ldp/stp pairs). Proxy for "did clang vectorize".
+    return exec("grep -cE '\\.(2d|4s|2s|16b|8h)|ldp|stp' '" + asm_path + "' 2>/dev/null | head -1 || printf 0").trim()
+}
+
+fn main() {
+    let argv = args()
+    let home = env("HOME")
+    let rt = arg_val(argv, "--rt", home + "/.hx/packages/hexa/self")
+    let work = arg_val(argv, "--work", home + "/unshadow-native-arr")
+    let runs = parse_int_safe(arg_val(argv, "--runs", "9"))
+
+    println("=== UNSHADOW native HexaArrI64 storage bench (HEADLINE / F1) ===")
+    println("rt=" + rt + "  work=" + work + "  runs=" + to_string(runs))
+    exec("rm -rf '" + work + "' && mkdir -p '" + work + "'")
+
+    let inc = "-I '" + rt + "'"
+    let o2 = "clang -O2 " + inc + " "
+
+    // ── native HexaArrI64 representation header (the runtime ABI piece) ──────
+    // This is the EXACT struct + helpers landed in self/runtime_core_emit.hexa
+    // (→ runtime.h/.c on regen). We define them in a local header here so the
+    // faithful A/B proxy can build WITHOUT a full self-host runtime regen (the
+    // B9 generated-runtime wall — same spec-accepted proxy as §c-class /
+    // §unboxed-array). The struct + helper bodies are byte-identical to the
+    // emit-source text, so the measurement faithfully models the landed runtime.
+    write_file(work + "/native_arr.h",
+      "#include \"runtime.h\"\n" +
+      "#include <stdlib.h>\n#include <string.h>\n" +
+      "typedef struct HexaArrI64 { int64_t* data; int len; int cap; } HexaArrI64;\n" +
+      "static HexaVal hexa_arr_i64_new(int cap){\n" +
+      "  HexaArrI64* a=(HexaArrI64*)malloc(sizeof(HexaArrI64));\n" +
+      "  if(cap<1) cap=1;\n" +
+      "  a->data=(int64_t*)malloc(sizeof(int64_t)*cap); a->len=0; a->cap=cap;\n" +
+      "  HexaVal v; v.tag=TAG_ARRAY; v.arr_ptr=(HexaArr*)a; return v; }\n" +
+      "static HexaVal hexa_arr_i64_push(HexaVal v, int64_t x){\n" +
+      "  HexaArrI64* a=(HexaArrI64*)v.arr_ptr;\n" +
+      "  if(a->len>=a->cap){ a->cap*=2; a->data=(int64_t*)realloc(a->data,sizeof(int64_t)*a->cap); }\n" +
+      "  a->data[a->len++]=x; return v; }\n" +
+      "static int hexa_arr_i64_len(HexaVal v){ return ((HexaArrI64*)v.arr_ptr)->len; }\n" +
+      "static HexaVal hexa_arr_i64_box(HexaVal v, int64_t i){\n" +
+      "  return hexa_int(((HexaArrI64*)v.arr_ptr)->data[i]); }\n")
+
+    // ── ref_c — idiomatic native int64_t[] (parity baseline, no runtime) ────
+    write_file(work + "/ref_c.c",
+      "#include <stdio.h>\n#include <stdint.h>\n" +
+      "static long run_ref(void){\n" +
+      "  int64_t buf[256]; for(int k=0;k<256;k++) buf[k]=k;\n" +
+      "  long acc=0; long N=4000000L;\n" +
+      "  for(long r=0;r<N;r++){\n" +
+      "    for(int64_t i=0;i<256;i++){ acc+=buf[i]; }\n" +
+      "  }\n" +
+      "  return acc; }\n" +
+      "int main(void){ printf(\"%ld\\n\", run_ref()); return 0; }\n")
+
+    // ── a_boxed — current runtime HexaArr boxed storage (§c-class state) ─────
+    // 16-byte-stride HexaVal array; the read is the §c-class direct items[i],
+    // surrounding HX_INT extracts .i. This is the BEFORE the milestone improves.
+    write_file(work + "/a_boxed.c",
+      "#include \"runtime.h\"\n#include <stdio.h>\n" +
+      "static long run_boxed(void){\n" +
+      "  HexaVal arr=hexa_array_new();\n" +
+      "  for(int k=0;k<256;k++) arr=hexa_array_push(arr,hexa_int(k));\n" +
+      "  long acc=0; long N=4000000L;\n" +
+      "  for(long r=0;r<N;r++){\n" +
+      "    for(int64_t i=0;i<(int64_t)hexa_len(arr);i++){ acc+=HX_INT(arr.arr_ptr->items[i]); }\n" +
+      "  }\n" +
+      "  return acc; }\n" +
+      "int main(void){ printf(\"%ld\\n\", run_boxed()); return 0; }\n")
+
+    // ── b_native — NEW HexaArrI64 native contiguous storage (THIS milestone) ─
+    // The construction + read forms here are the EXACT strings the modified
+    // self/codegen.hexa emits under HEXA_NATIVE_ARR=1 (verified by transpiling a
+    // `let xs=[…]; for i in 0..len(xs){acc+=xs[i]}` program):
+    //   construction : hexa_arr_i64_new(N) + hexa_arr_i64_push(__nia,(int64_t)HX_INT(...))
+    //   in-range read: ((HexaVal){.tag=TAG_INT,.i=(((HexaArrI64*)xs.arr_ptr)->data[__hx_ni_i])})
+    // The boxed surface is an INLINE compound literal (NOT out-of-line
+    // hexa_int(…)) so HX_INT(...) over it folds to the raw native load at -O2
+    // — §hexaval-unbox proved the inline form is required for clang to keep the
+    // value in-register / vectorize (an out-of-line hexa_int call sits behind the
+    // runtime.o C-ABI wall and blocks the fold). Byte-faithful to codegen.
+    write_file(work + "/b_native.c",
+      "#include \"native_arr.h\"\n#include <stdio.h>\n" +
+      "static long run_native(void){\n" +
+      "  HexaVal arr=({ HexaVal __nia=hexa_arr_i64_new(256); for(int k=0;k<256;k++) hexa_arr_i64_push(__nia,(int64_t)HX_INT(((HexaVal){.tag=TAG_INT,.i=(k)}))); __nia; });\n" +
+      "  long acc=0; long N=4000000L;\n" +
+      "  for(long r=0;r<N;r++){\n" +
+      "    for(int64_t i=0;i<(int64_t)hexa_len(arr);i++){ acc+=HX_INT(((HexaVal){.tag=TAG_INT,.i=(((HexaArrI64*)arr.arr_ptr)->data[i])})); }\n" +
+      "  }\n" +
+      "  return acc; }\n" +
+      "int main(void){ printf(\"%ld\\n\", run_native()); return 0; }\n")
+
+    println("\n--- C: known-int-array hot-loop sum (3 arms) ---")
+    // ── d_ideal — native storage WITH the boxed surface fully removed ───────
+    // The CEILING: raw `data[i]` accumulation, no HexaVal materialized per read.
+    // Reachable only when the surrounding accumulator is ALSO proven known-int
+    // (the whole sum chain stays raw int64 — §hexaval-unbox's register-pack
+    // generalized to the array hot loop). Quantifies the headroom the boxed
+    // surface still costs in the LANDED b_native (which must surface a HexaVal
+    // because the accumulator here is an untyped `let mut`).
+    write_file(work + "/d_ideal.c",
+      "#include \"native_arr.h\"\n#include <stdio.h>\n" +
+      "static long run_ideal(void){\n" +
+      "  HexaVal arr=hexa_arr_i64_new(256);\n" +
+      "  for(int k=0;k<256;k++) arr=hexa_arr_i64_push(arr,(int64_t)k);\n" +
+      "  int len=hexa_arr_i64_len(arr); int64_t* d=((HexaArrI64*)arr.arr_ptr)->data;\n" +
+      "  long acc=0; long N=4000000L;\n" +
+      "  for(long r=0;r<N;r++){\n" +
+      "    for(int64_t i=0;i<len;i++){ acc+=d[i]; }\n" +
+      "  }\n" +
+      "  return acc; }\n" +
+      "int main(void){ printf(\"%ld\\n\", run_ideal()); return 0; }\n")
+
+    build_arm("ref_c   ", o2 + "'" + work + "/ref_c.c'    -o '" + work + "/ref_bin' -lpthread", work + "/ref_bin")
+    build_arm("a_boxed ", o2 + "'" + work + "/a_boxed.c'  '" + rt + "/runtime.o' -o '" + work + "/a_bin' -lpthread", work + "/a_bin")
+    build_arm("b_native", o2 + "'" + work + "/b_native.c' '" + rt + "/runtime.o' -o '" + work + "/b_bin' -lpthread", work + "/b_bin")
+    build_arm("d_ideal ", o2 + "'" + work + "/d_ideal.c'  '" + rt + "/runtime.o' -o '" + work + "/d_bin' -lpthread", work + "/d_bin")
+
+    println("\n  g5 byte-diff (program output md5 — ALL FOUR MUST be identical):")
+    println("    ref_c    : " + md5_of_output(work + "/ref_bin"))
+    println("    a_boxed  : " + md5_of_output(work + "/a_bin"))
+    println("    b_native : " + md5_of_output(work + "/b_bin"))
+    println("    d_ideal  : " + md5_of_output(work + "/d_bin"))
+
+    println("\n  perf best-of-" + to_string(runs) + " wall (s):")
+    let ref_w = best_wall(work + "/ref_bin", runs)
+    let a_w   = best_wall(work + "/a_bin", runs)
+    let b_w   = best_wall(work + "/b_bin", runs)
+    let d_w   = best_wall(work + "/d_bin", runs)
+    println("    ref_c    : " + ref_w)
+    println("    a_boxed  : " + a_w + "   (boxed 16B-stride — BEFORE)")
+    println("    b_native : " + b_w + "   (LANDED: native storage, boxed read surface)")
+    println("    d_ideal  : " + d_w + "   (CEILING: native storage, raw read — needs known-int accumulator)")
+
+    // asm: native contiguous int64_t[] is SIMD-gatherable → vector ops in the
+    // hot loop; boxed 16B-stride is not → scalar loads only.
+    exec(o2 + "-S '" + work + "/ref_c.c'    -o '" + work + "/ref.s' 2>/dev/null")
+    exec(o2 + "-S '" + work + "/a_boxed.c'  -o '" + work + "/a.s' 2>/dev/null")
+    exec(o2 + "-S '" + work + "/b_native.c' -o '" + work + "/b.s' 2>/dev/null")
+    println("\n  asm vector/pair-op count (SIMD-gather signal):")
+    println("    ref_c    : " + vec_count(work + "/ref.s"))
+    println("    a_boxed  : " + vec_count(work + "/a.s") + "  (16B-stride boxed → no gather)")
+    println("    b_native : " + vec_count(work + "/b.s") + "  (8B contiguous → gatherable)")
+
+    // ── INTEGRITY GATE: typed i64 array at a polymorphic boundary ───────────
+    // The SAME native array is summed via the native fast path AND handed to a
+    // polymorphic consumer via hexa_arr_i64_box (→ a real boxed HexaVal). The
+    // boxed value MUST equal what the boxed-storage array produces. OOB box MUST
+    // be guarded by the caller (codegen only boxes the proven index).
+    println("\n--- INTEGRITY: typed i64 array at a polymorphic boundary ---")
+    write_file(work + "/bnd_native.c",
+      "#include \"native_arr.h\"\n#include <stdio.h>\n" +
+      "static long run_bnd(void){\n" +
+      "  HexaVal arr=hexa_arr_i64_new(16);\n" +
+      "  for(int k=0;k<16;k++) arr=hexa_arr_i64_push(arr,(int64_t)(k*k));\n" +
+      "  long s=0; for(int64_t i=0;i<(int64_t)hexa_arr_i64_len(arr);i++){ s+=((HexaArrI64*)arr.arr_ptr)->data[i]; }\n" +
+      "  long plen=(long)hexa_arr_i64_len(arr);\n" +
+      "  /* DYNAMIC BOUNDARY: box element 7 to a real HexaVal, extract .i */\n" +
+      "  long pelem=HX_INT(hexa_arr_i64_box(arr, 7));\n" +
+      "  return s + plen*1000 + pelem; }\n" +
+      "int main(void){ printf(\"%ld\\n\", run_bnd()); return 0; }\n")
+    write_file(work + "/bnd_boxed.c",
+      "#include \"runtime.h\"\n#include <stdio.h>\n" +
+      "static long run_bnd(void){\n" +
+      "  HexaVal arr=hexa_array_new();\n" +
+      "  for(int k=0;k<16;k++) arr=hexa_array_push(arr,hexa_int(k*k));\n" +
+      "  long s=0; for(int64_t i=0;i<(int64_t)hexa_len(arr);i++){ s+=HX_INT(arr.arr_ptr->items[i]); }\n" +
+      "  long plen=(long)hexa_len(arr);\n" +
+      "  long pelem=HX_INT(hexa_index_get(arr, hexa_int(7)));\n" +
+      "  return s + plen*1000 + pelem; }\n" +
+      "int main(void){ printf(\"%ld\\n\", run_bnd()); return 0; }\n")
+    build_arm("bnd_native", o2 + "'" + work + "/bnd_native.c' '" + rt + "/runtime.o' -o '" + work + "/bndn_bin' -lpthread", work + "/bndn_bin")
+    build_arm("bnd_boxed ", o2 + "'" + work + "/bnd_boxed.c'  '" + rt + "/runtime.o' -o '" + work + "/bndb_bin' -lpthread", work + "/bndb_bin")
+    println("  boundary g5 (MUST be identical — native storage boxes to the same value):")
+    println("    bnd_boxed  : " + md5_of_output(work + "/bndb_bin"))
+    println("    bnd_native : " + md5_of_output(work + "/bndn_bin"))
+    println("  → both MUST match: the native i64 array boxes correctly when it reaches")
+    println("    the polymorphic boundary (hexa_arr_i64_box → real HexaVal).")
+
+    println("\n=== done ===")
+}
