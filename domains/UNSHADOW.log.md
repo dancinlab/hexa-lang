@@ -2,6 +2,16 @@
 
 Append-only history sister of `UNSHADOW.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-29T14:45Z — 🏗️ HEXA-STACK 전략 정식화 — B+C 랜딩 + floor/ceiling 적층 프레임
+
+B(#2093)·C(#2094) 두 evidence 브랜치 랜딩 완료 후 UNSHADOW 의 전제를 **HEXA-STACK** 으로 정식화.
+
+- [x] B(#2093) MERGED — proof-carrying 인라인. 검증된 identity(`lambda_eliashberg(M0)≡2·M0`, atlas `verified-lambda_eliashberg-num` 🟢)를 license 로 opaque cross-ABI call 을 layout-only 인라인 치환. g5 byte-diff IDENTICAL · single-eval 증명(calls=1) · 핫루프 0.36→0.19s (**~47% faster**, `bl _lambda_eliashberg` 소거).
+- [x] C(#2094) MERGED — unary-plus `+literal` tag-guard 삭제. correctness PROVEN(g5 byte-diff IDENTICAL, md5 `e8060fb1`/`8de57030`) · perf **🔴 CLOSED-NEGATIVE** — clang -O2 가 리터럴-tag guard 를 이미 dead-eliminate.
+- [x] 🏗️ HEXA-STACK 프레임 명문화 — 🟡 FLOOR = clang -O2 **상속**(C-emit 경로가 이미 통과, loop-unroll/reg-alloc/SIMD/sched 공짜, 재구현 0; M1 baseline 이 native-asm 5/5 패배 입증) + 🔵 CEILING = hexa 고유 우위(인라인·atlas-fold·proof-carrying·check-elision) **적층**. "LLVM 이기기"가 아니라 "올라타기".
+- [x] 🔑 수렴된 ABI-벽 meta-finding — 이번 사이클 두 closed-negative(#2-ext rt_str · C tag-elision)가 **한 블로커로 수렴**: precompiled `runtime.o` 의 C-ABI 경계. 경계 너머로는 clang 최적화(🟡 손실)도 🔵 cross-layer 변환도 불가. B 와 #2(hexa_int)가 통과한 이유 = **layout-only**(경계 안쪽 runtime.h-가시)였기 때문. 열쇠 = LTO/same-TU = `.c=0` 졸업(RUNTIME.flip-floor) → 벽 제거 시 #2-ext·C 가 🔴→win 으로 전환될 것으로 예측 (새 milestone 으로 실측 대기).
+- [x] UNSHADOW.md 전제 = HEXA-STACK 재작성 + 3 신규 milestone 추가 (🟡 parity 상속 명문화 · 🔵×🟡 LTO/same-TU unwall 측정 · 🏗️ 적층 원칙 문서화). UNSHADOW.easy.md 에 🏗️ HEXA-STACK 적층 섹션(ASCII 다이어그램 + compare 표) 추가.
+
 ## 2026-05-29T14:00Z — 🔵 C refinement-type tag-check elision pilot — 🔵 correctness PROVEN · 🔴 perf CLOSED-NEGATIVE
 
 🟡 reg-alloc 무손실 우회("don't run the check" = prove-then-delete). 타입/흐름 정보가
