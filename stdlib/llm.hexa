@@ -1,0 +1,152 @@
+// stdlib/llm.hexa — thin chat-completions adapter composing the existing
+// keychain + http + json primitives (handoff 7e45e583, cap (2)).
+//
+// @module(slug="stdlib-llm", desc="single-shot chat-completions POST adapter — keychain_get + http_post_with_headers_status + json_stringify")
+// @usage(import stdlib/llm; let r = llm_post(llm_provider("https://api.openai.com/v1/chat/completions", "gpt-4o-mini", "dancinlab.secret", "openai.api_key"), "hello"); println(to_string(r["body"])))
+//
+// ── module governance metadata (hexa-lang module versioning spec 2026-05-03) ──
+// @version 0.1.0
+// @capabilities [llm_provider, llm_build_body, llm_build_messages_body, llm_build_headers,
+//                llm_post, llm_post_messages, llm_message]
+// @stability preview
+// @since 2026-05-30
+// @maintainer hexa-lang-core
+// @priority P1
+// Versioning policy: docs/hexa_lang_module_versioning_spec_2026_05_03.md
+//
+// PROBLEM (demiurge CLI `llm` verb ↔ live provider call — handoff 7e45e583, cap (2))
+//   The demiurge `llm` verb POSTs a chat-completions request to an OpenAI-style
+//   endpoint: bearer-auth header + a JSON body carrying the model + a messages
+//   array. The Swift cockpit used URLSession. hexa already had every primitive
+//   needed but no thin adapter composing them, so each consumer re-derived the
+//   same key-fetch + body-assembly + header boilerplate (escape-fragile).
+//
+// FIX (additive, no runtime.c change, no new C surface — pure composition)
+//   This module is a ~1-PR adapter over THREE existing stdlib primitives:
+//     · stdlib/keychain.hexa  : keychain_get(service, key)  → API key
+//     · stdlib/alloc/json.hexa: json_stringify(v)           → escape-safe body
+//     · stdlib/http.hexa      : http_post_with_headers_status(url, hdrs, body, t)
+//   llm_post(provider, prompt) pulls the key, builds the chat-completions JSON
+//   body via json_stringify (NOT hand-concatenated — UTF/quote-safe), assembles
+//   `Authorization: Bearer <key>` + `Content-Type: application/json`, and POSTs.
+//   Returns the http.hexa {status, body, ok} map verbatim.
+//
+// WHY json_stringify (not string concat)
+//   The body carries arbitrary user prompt text. Hand-rolling
+//   `"{\"content\":\"" + prompt + "\"}"` is escape-fragile (a `"` or `\n` in the
+//   prompt breaks the JSON). json_stringify is the runtime's canonical encoder
+//   (37+ callsites) and escapes per-leaf. The pure body-builders below are
+//   therefore deterministic + unit-testable WITHOUT any network call.
+//
+// Breaking risk: 0. New module, new symbols.
+//
+// Caveats (C3):
+//   · MVP = single-shot POST returning the RAW response body + status. The
+//     caller parses the provider envelope (choices[0].message.content) via
+//     stdlib/json_object.hexa read-side helpers — this adapter does NOT pick
+//     apart the response, by design (provider-shape-agnostic).
+//   · SSE token STREAMING is DEFERRED. stdlib/http_sse.hexa has the primitive;
+//     a streaming-decode helper (llm_stream / SSE `data:` line consumption) is
+//     a follow-up. Set `stream=false` is implied (we never send `"stream":true`).
+//   · OpenAI-style chat-completions shape only ({model, messages:[{role,content}]}).
+//     Anthropic's Messages API differs (system top-level, max_tokens required);
+//     a provider-shape switch is a follow-up — the body-builder is the seam.
+//   · keychain_get returns "" on miss; llm_post will then send an empty bearer
+//     and the provider 401s. Callers should keychain_has() upstream if they
+//     want to distinguish "no key configured" from "bad key".
+//
+// hexa-only-strict: pure hexa wrapper; the only I/O is the keychain_get +
+//   http_post shellouts already shipped. No exec() here, no new C builtin.
+
+// ── llm_provider — provider config constructor ───────────────────
+//
+// Bundles the four call-site coordinates into one map so callers pass a single
+// value. `kc_service` / `kc_account` name the keychain generic-password item
+// holding the API key (see stdlib/keychain.hexa).
+//   url        : full chat-completions endpoint (e.g. .../v1/chat/completions)
+//   model      : model id string (e.g. "gpt-4o-mini")
+//   kc_service : keychain service name  (e.g. "dancinlab.secret")
+//   kc_account : keychain account/key   (e.g. "openai.api_key")
+pub fn llm_provider(url: string, model: string, kc_service: string, kc_account: string) {
+    let p = #{}
+    p["url"] = url
+    p["model"] = model
+    p["kc_service"] = kc_service
+    p["kc_account"] = kc_account
+    return p
+}
+
+// ── llm_message — one chat message {role, content} ───────────────
+//
+// Helper so callers build a messages array without learning the map literal
+// syntax. role ∈ {"system","user","assistant"}.
+pub fn llm_message(role: string, content: string) {
+    let m = #{}
+    m["role"] = role
+    m["content"] = content
+    return m
+}
+
+// ── llm_build_messages_body — pure JSON body from a messages array ─
+//
+// Builds the chat-completions request body string from a model + an array of
+// {role, content} maps. Deterministic; no I/O. The body is emitted via
+// json_stringify so prompt text is escape-safe. This is the UNIT-TESTABLE
+// seam — assert the emitted string without any network call.
+pub fn llm_build_messages_body(model: string, messages) -> string {
+    let body = #{}
+    body["model"] = model
+    body["messages"] = messages
+    return json_stringify(body)
+}
+
+// ── llm_build_body — pure JSON body from a single prompt (MVP) ────
+//
+// Convenience over llm_build_messages_body: wraps a single prompt string as a
+// one-element [{role:"user", content:prompt}] messages array. This is the MVP
+// single-shot path. Deterministic; no I/O.
+pub fn llm_build_body(model: string, prompt: string) -> string {
+    let messages = []
+    messages.push(llm_message("user", prompt))
+    return llm_build_messages_body(model, messages)
+}
+
+// ── llm_build_headers — pure header map {Authorization, Content-Type} ─
+//
+// Builds the request header map for a given API key. Deterministic; no I/O.
+// Iteration order (Authorization first) is preserved by the runtime dict_keys,
+// which http.hexa::_build_header_flags relies on. Unit-testable seam.
+pub fn llm_build_headers(api_key: string) {
+    let h = #{}
+    h["Authorization"] = "Bearer " + api_key
+    h["Content-Type"] = "application/json"
+    return h
+}
+
+// ── llm_post_messages — full messages-array single-shot POST ──────
+//
+// Pulls the API key from the keychain, builds the body + headers, and POSTs via
+// http_post_with_headers_status. Returns the http.hexa {status, body, ok} map
+// verbatim. `timeout_sec` <= 0 → http.hexa default (30s).
+//
+// This is the only function in the module that performs I/O (keychain_get +
+// http_post). Both are already-shipped shellouts; the request ASSEMBLY is the
+// pure builders above, so the composed request is verifiable offline.
+pub fn llm_post_messages(provider, messages, timeout_sec: int) {
+    let key = keychain_get(to_string(provider["kc_service"]), to_string(provider["kc_account"]))
+    let body = llm_build_messages_body(to_string(provider["model"]), messages)
+    let headers = llm_build_headers(key)
+    return http_post_with_headers_status(to_string(provider["url"]), headers, body, timeout_sec)
+}
+
+// ── llm_post — single-prompt MVP single-shot POST ────────────────
+//
+// The canonical MVP entry point: one prompt string → one chat-completions POST.
+// Wraps the prompt as a [{role:"user", content:prompt}] messages array and
+// delegates to llm_post_messages with the http.hexa default timeout.
+// Returns {status, body, ok}.
+pub fn llm_post(provider, prompt: string) {
+    let messages = []
+    messages.push(llm_message("user", prompt))
+    return llm_post_messages(provider, messages, 0)
+}
