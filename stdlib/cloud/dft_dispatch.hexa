@@ -606,18 +606,50 @@ fn _dft_mpi_env() -> str {
         + " && export OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1"
 }
 
+// _dft_provision_cmd — install Quantum ESPRESSO on a bare pod before the chain.
+// The default rent image is ubuntu:22.04 (no QE), so `pw.x` is absent → relax
+// dies with exit 127 (command not found). This idempotent step installs the
+// Debian `quantum-espresso` package (provides /usr/bin/pw.x · ph.x, MPI-built)
+// + `openmpi-bin` (mpirun), but ONLY when pw.x is not already present — so a
+// QE-preinstalled `--image` short-circuits the apt install. Prints `pw.x OK`
+// (caller asserts it) when both pw.x and mpirun resolve.
+fn _dft_provision_cmd() -> str {
+    return "command -v pw.x >/dev/null 2>&1 || { export DEBIAN_FRONTEND=noninteractive"
+        + " && apt-get update -qq && apt-get install -y -qq quantum-espresso openmpi-bin"
+        + " > /root/provision.log 2>&1; }; "
+        + "command -v pw.x >/dev/null 2>&1 && command -v mpirun >/dev/null 2>&1"
+        + " && echo 'pw.x OK' || echo 'pw.x MISSING'"
+}
+
+// _dft_pseudo_cmd — fetch the deck's pseudopotentials into ./pseudo before the
+// chain. The deck inputs reference UPF files by name (ATOMIC_SPECIES) with
+// `pseudo_dir = './pseudo'`, but the deck upload carries no .UPF (they're large
+// + shared) → pw.x exits 1 (pseudo not found). This parses every `*.UPF` name
+// from the deck's *.in files and wgets each from the QE PSL server into
+// /root/deck/pseudo (idempotent — skips a UPF already present + non-empty).
+// Prints `PSEUDO OK` (caller asserts) when all referenced UPFs are present.
+fn _dft_pseudo_cmd() -> str {
+    return "cd /root/deck && mkdir -p pseudo && "
+        + "need=$(grep -hoE '[A-Za-z0-9._+-]+[.]UPF' *.in 2>/dev/null | sort -u) && "
+        + "miss=0; for upf in $need; do "
+        + "[ -s \"pseudo/$upf\" ] || wget -q --tries=3 --timeout=30 -O \"pseudo/$upf\" "
+        + "\"https://pseudopotentials.quantum-espresso.org/upf_files/$upf\" 2>/dev/null; "
+        + "[ -s \"pseudo/$upf\" ] || { echo \"PSEUDO_MISS $upf\"; miss=1; }; done; "
+        + "[ \"$miss\" = 0 ] && echo \"PSEUDO OK\" || echo \"PSEUDO FAIL\""
+}
+
 // _dft_relax_cmd — the guarded relax invocation (setsid death-immune, walltime
 // cap, phys-core -np, root MPI). Output → relax.out. `relax_name` is the deck's
 // relax input filename (vc-relax.in deck-gen native, or relax.in legacy).
 fn _dft_relax_cmd(np: int, walltime_h: int, relax_name: str) -> str {
     return "cd /root/deck && " + _dft_mpi_env() + " && setsid timeout " + to_string(walltime_h)
-        + "h mpirun -np " + to_string(np) + " --allow-run-as-root pw.x -in " + relax_name + " > relax.out 2>&1"
+        + "h mpirun -np " + to_string(np) + " --allow-run-as-root pw.x -ndiag 1 -in " + relax_name + " > relax.out 2>&1"
 }
 
 // _dft_scf_cmd — scf on the generated geometry.
 fn _dft_scf_cmd(np: int, walltime_h: int) -> str {
     return "cd /root/deck && " + _dft_mpi_env() + " && setsid timeout " + to_string(walltime_h)
-        + "h mpirun -np " + to_string(np) + " --allow-run-as-root pw.x -in scf.in > scf.out 2>&1"
+        + "h mpirun -np " + to_string(np) + " --allow-run-as-root pw.x -ndiag 1 -in scf.in > scf.out 2>&1"
 }
 
 // _dft_ph_cmd — el-ph with recover=.true. (resume across the walltime cap).
@@ -904,11 +936,38 @@ fn _dft_go(deck: str, image: str, disk: int, owner: str, query: str, identity: s
     let np = if np_raw > 0 { np_raw } else { 8 }
     println("[dft-run] ③ -np=" + to_string(np) + " (phys cores)")
 
+    // ③ provision — install QE on the bare pod (idempotent; skipped if pw.x
+    // already present from a QE `--image`). Without this a bare ubuntu:22.04
+    // pod has no pw.x → relax dies exit 127.
+    println("[dft-run] ③ provision QE (apt quantum-espresso if pw.x absent)...")
+    let prov = cloud_exec_opts(host, ssh_opts, _dft_provision_cmd())
+    if prov.ok == 0 || !prov.stdout_.contains("pw.x OK") {
+        println("[dft-run] provision: QE install/verify FAILED — " + prov.message)
+        println("[dft-run]   (see /root/provision.log on the pod; or pass --image with QE preinstalled)")
+        return _dft_teardown(inst.instance_id, 1)
+    }
+    println("[dft-run] ③ provision OK — pw.x + mpirun present")
+
+    // ③ pseudo fetch — download referenced UPFs into ./pseudo (deck carries
+    // none). Without this pw.x exits 1 (pseudopotential not found).
+    println("[dft-run] ③ pseudo fetch (UPF → ./pseudo from QE PSL server)...")
+    let ps = cloud_exec_opts(host, ssh_opts, _dft_pseudo_cmd())
+    if ps.ok == 0 || !ps.stdout_.contains("PSEUDO OK") {
+        println("[dft-run] pseudo: fetch FAILED — " + ps.message + " · " + ps.stdout_)
+        return _dft_teardown(inst.instance_id, 1)
+    }
+    println("[dft-run] ③ pseudo OK — UPFs in ./pseudo")
+
     // ③ relax — run on the deck's relax input (vc-relax.in native / relax.in legacy)
     println("[dft-run] ③ relax (" + relax_name + ", timeout " + to_string(walltime_h) + "h)...")
     let relax = cloud_exec_opts(host, ssh_opts, _dft_relax_cmd(np, walltime_h, relax_name))
     if relax.ok == 0 {
         println("[dft-run] relax stage: " + relax.message)
+        // diagnostics-before-teardown: pull relax.out + print its tail so a
+        // pw.x input/runtime error is visible (the pod is about to be destroyed).
+        let _hf = cloud_copy_from_opts(host, ssh_opts, "/root/deck/relax.out", deck + "/relax.out")
+        let rt = cloud_exec_opts(host, ssh_opts, "tail -40 /root/deck/relax.out 2>/dev/null")
+        println("[dft-run] ── relax.out tail ──\n" + rt.stdout_ + "\n[dft-run] ── end ──")
         return _dft_teardown(inst.instance_id, 1)
     }
     // harvest relax.out + hexa-native coordinate parse (NO hand-parser)
