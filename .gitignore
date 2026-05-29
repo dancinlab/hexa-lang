@@ -257,3 +257,30 @@ tool/hexa_daemon_serve.c
 state/flame_phase4d_5_4_2026_05_17/flame_d768_12L_corpus_test_a2_layer2.c
 state/flame_phase4d_20260517_102511/flame_d768_12L_corpus_test_a2.c
 test/lora_cuda_equiv_test.c
+
+# .c-graduation FINAL — all 23 tracked .c seeds untrack (.c → 0 · full .hexa-only)
+# full-release gate 6/6 GREEN incl Stage 3 (run 26607237845) + fixed driver edge-published (#2042).
+# fresh checkout: Stage 0-pre warm-regen + HEXA_PREBUILT_RUNTIME 드라이버(cmd_cc/cmd_build) 로 재생성/링크.
+self/bootstrap_compiler.c
+self/forge/forge_tier_v1.c
+self/native/crypto_openssl.c
+self/native/crypto_sodium.c
+self/native/exec_argv_sha256.c
+self/native/exec_pipe.c
+self/native/fp_init.c
+self/native/hexa_cc.c
+self/native/mount.c
+self/native/namespace.c
+self/native/net.c
+self/native/persistent_pipe.c
+self/native/proc_fork.c
+self/native/pty.c
+self/native/signal_flock.c
+self/native/tensor_kernels.c
+self/native/term_ffi.c
+self/native/thread.c
+self/native/wait.c
+self/runtime.c
+self/runtime_core.c
+self/runtime_hi_gen.c
+test/native_build/classd_behavioral_harness.c
