@@ -1,27 +1,29 @@
-# 🛸 RUNTIME — hexa-native runtime rewrite SSOT
+# 🛸 RUNTIME — hexa-native runtime SSOT
 
-@goal: `.hexa`-ONLY — runtime+compiler 가 전부 `.hexa` 소스로 빌드. zero `.c` (runtime.c/runtime_core.c 제거) AND zero `.s` (asm floor 는 native backend 가 hexa-source 에서 머신코드로 self-emit) · 빌드에 `cc` 없음 · `ls self/*.c self/*.s` 비어있음
+@goal: hexa-lang 은 `.hexa` 소스만으로 빌드되는 native self-hosted 컴파일러다. native backend (`self/codegen/*.hexa`) 가 Mach-O/ELF 머신코드를 직접 emit · 부트스트랩 = edge tarball 의 prebuilt `build/runtime.a` + `build/hexat` 를 `tool/release_build` → `tool/release_package` 단일 진입점이 링크 · release ≡ nobaseline-gate(faithful) · 3-플랫폼 release green
 
 
 > Per-domain root file (CLAUDE.md domain-meta-domain principle).
 > Sibling to `COMPILER.md` (compiler self-host) — this file owns the
-> RUNTIME layer's hexa-native journey (~16,809 LoC of C → hexa source).
+> RUNTIME layer's hexa-native journey.
 
-## North-star (재정의 2026-05-26 — `.hexa`-ONLY, purer than Go)
+## North-star — `.hexa`-native self-host
 
-**`.hexa`-only self-hosting**: `aprime_cc`/`hexac` 가 **`.hexa` 소스만으로** 빌드된다.
+**`.hexa`-native self-hosting**: hexa-lang 은 `.hexa` 소스만으로 빌드된다.
 native backend (`self/codegen/*.hexa` — 전부 hexa: `ir_to_arm64`·`macho`·`elf`·
-`syscall`·`regalloc`·`runtime_arm64`…) 가 Mach-O/ELF 바이너리를 **직접 emit** —
-C-transpile 없음, `runtime.c`/`runtime_core.c` (C) 제거, **`.s` 파일 0**.
+`syscall`·`regalloc`·`runtime_arm64`…) 가 Mach-O/ELF 바이너리를 **직접 emit** 한다.
 
-핵심 통찰 (2026-05-26): asm floor 는 **별도 `.s` 파일이 아니라** `runtime_arm64.hexa`
-가 머신코드 바이트를 **hexa 소스로 emit**(`c.push(253)`=0xFD…)하는 형태다. 따라서
-syscall(`svc #0x80`) · arena · GC · `_start` floor 까지 전부 `.hexa` 로 표현 가능 →
-**Go(`asm_arm64.s` 유지)보다 순수한 `.hexa`-ONLY** 가 종착점.
+부트스트랩 = edge tarball 의 prebuilt `build/runtime.a` + `build/hexat` 를
+`tool/release_build` → `tool/release_package` 단일 진입점이 링크한다. release 와
+nobaseline-gate(faithful) 가 동일 스크립트를 호출 → gate ≡ release. 3-플랫폼
+(darwin-arm64 · linux-x86_64 · linux-arm64) release green.
+
+asm floor 는 `runtime_arm64.hexa` 가 머신코드 바이트를 **hexa 소스로
+emit**(`c.push(253)`=0xFD…)하는 형태다. syscall(`svc #0x80`) · arena · GC ·
+`_start` floor 까지 전부 `.hexa` 로 표현된다.
 
 ```
-Go 1.5:  runtime.go  +  asm_arm64.s   (irreducible asm = .s 파일)
-hexa  :  전부 .hexa   (floor = runtime_arm64.hexa 가 머신코드 self-emit) · .s 不要
+hexa  :  전부 .hexa   (floor = runtime_arm64.hexa 가 머신코드 self-emit)
 ```
 
 **Final acceptance**:
@@ -30,93 +32,19 @@ hexa  :  전부 .hexa   (floor = runtime_arm64.hexa 가 머신코드 self-emit) 
    (native backend 가 `.hexa` → Mach-O/ELF self-emit).
 3. `gen1 ≡ gen2` byte-eq fixpoint 유지 (모든 단계).
 
-## End-state path (4 honest steps → `.hexa`-only native-backend flip)
+## hexa-native runtime 구조
 
-step 1 = libc-unhook (✅ DONE). steps 2-4 = `runtime.c`/`runtime_core.c` 의 C 를
-제거하는 arc. **종착 메커니즘 = native backend (HEXA_BACKEND=native) production-flip**:
-현재 native backend 는 *유저 코드*를 asm 으로 emit 하나(✅ RFC 063, gen1≡gen2 증명)
-*런타임 floor* 는 아직 C `runtime.c` 를 링크한다(main.hexa). flip = 그 floor 를
-`runtime_arm64.hexa` (hexa-emit-bytes) 로 교체 → `.c` 제거 → `.hexa`-only.
+hexa-lang 의 런타임 + 컴파일러는 `.hexa` 소스로 표현된다. native backend
+(`self/codegen/*.hexa`) 가 유저 코드를 asm 으로 self-emit 하고(RFC 063,
+gen1≡gen2 증명), 런타임 floor 는 `runtime_arm64.hexa` 가 머신코드 바이트를
+hexa 소스로 emit 한다.
 
-step 1 (Phase 1) 단독으로 runtime.c 를 지우지 않는다 — libc 호출만 제거하므로
-runtime.c 는 오히려 커진다. runtime.c 폐기는 steps 2-4 + native-backend flip 필요.
+value-transform 레이어(arith·cmp·conversion)는 hexa-native 다 — `stdlib/
+runtime/*.hexa` 의 `rt_` fn 들이 byte-identity·fixpoint 로 검증된다.
 
-```
-step 1 (✅ DONE — Phase 1)  libc extern 제거. runtime.c 안에서 libc →
-                          C-source helper / inline svc 치환. binary 가
-                          libc 를 전혀 안 부름 (runtime.c (C) 는 살아있음).
-                          🛸 진척: 137 → **0 externs** · cycle 46-86
-                          (`nm aprime_cc | grep ' U '` 전수 = 0).
-                          @goal "≤5 kernel syscall stub" 초과달성 —
-                          모든 syscall 이 inline `svc #0x80`, stub 조차
-                          없음. 마무리 PR 체인: #988 #997 #1008 #1022
-                          #1024 #1043 #1045 #1047 #1048 #1050 #1053
-                          #1057 #1058 (각 g5 verbatim nm + standalone
-                          correctness). runtime.c 폐기는 step 2-4 별개.
-
-step 2 (Phase 2 part-A)   `hxlcl_*` 47 helpers 를 stdlib/runtime/
-                          <name>.hexa 로 포팅 + codegen `_builtin_
-                          runtime_sym` 라우팅 확장. 끝나면 helpers
-                          C → hexa source. runtime.c HI tier 만 남음.
-                          est 50-80 cycles
-
-step 3 (Phase 3 part-A)   runtime.c HI tier 호출자들 (hexa_str_concat ·
-                          hexa_array_push 등 ~9.5K LoC C) 을 hexa
-                          source 로 마이그. 끝나면 runtime.c 폐기 가능.
-                          est 200-400 cycles (대규모 surface)
-
-step 4 (Phase 3 part-B)   runtime_core.c (281 KB · HexaVal repr · arena
-       = native-backend     · fuel · GC) 의 floor 를 native backend 의
-       flip                 hexa-emit-bytes (`runtime_arm64.hexa`:
-                          rt_arena_init/alloc/reset/release · rt_exit ·
-                          rt_memcpy/strlen/memcmp_neon) 로 교체 + HEXA_
-                          BACKEND=native production-flip. C-transpile +
-                          runtime.c 링크 제거. 이게 `.hexa`-only 종착점.
-                          est 400-800 cycles (HexaVal 자기-참조 · raw
-                          머신코드 런타임 교체 · 가장 깊고 risk 큼)
-```
-
-**Total honest scale**: 700-1300 cycles (10분/cycle 기준 multi-week ~
-multi-month).
-
-**현 진척 (2026-05-26 재정의)**:
-- value-transform 레이어 (arith·cmp·conversion) **hexa-native 완료** — stdlib/
-  runtime/*.hexa ~108 rt_ fn + 이번 세션 +11 (#1217·#1219·#1224·#1226·#1231·
-  #1237·#1243). 전부 byte-identity·fixpoint 검증.
-- native backend (`self/codegen/*.hexa`) = 유저코드 asm self-emit ✅ (RFC 063,
-  gen1≡gen2 증명). `.hexa` floor (`runtime_arm64.hexa`) prototype 존재 (byte-
-  level self-test PASS) · **production 미wired** (빌드는 아직 C runtime.c 링크).
-- **남은 단일 잔여 = native-backend flip** (step-4): floor 를 hexa-emit-bytes 로
-  wire → runtime.c/runtime_core.c 제거 → `.hexa`-only.
-
-**Acceptance 단계별** (`.hexa`-only 재정의):
-- runtime.c 폐기 = step 3 (HI-tier 로직 .hexa 화).
-- **`.hexa`-only (zero `.c` + zero `.s`) = step 4 native-backend flip** = 진짜 종착.
-
-### Go-model reference — steps 2-4 = Go 1.5's "great C→Go translation"
-
-Steps 2-4 follow Go's proven precedent (chosen reference model, 2026-05-26).
-Go 1.0–1.4 had a **C runtime**; **Go 1.5 (2015) mechanically translated the
-entire C runtime to Go and removed the C compiler from the toolchain** — exactly
-the `runtime.c → runtime.hexa` arc here. This de-risks the 700–1300-cycle scale:
-a runtime-of-this-size C→language translation is a solved, shipped problem.
-
-Go parallel → hexa (what "GO 기준" means concretely):
-
-| Go 1.5 | hexa step 2-4 |
-|---|---|
-| runtime written in the host language (Go) | port runtime.c + runtime_core.c → `.hexa`, emitted by hexa's own codegen (no `cc`) |
-| C compiler dropped from the toolchain | step-4 acceptance = `hexac` / `aprime_cc` build with **NO `cc` step** |
-| minimal per-arch `.s` asm STAYS (`runtime/asm_arm64.s`: syscall entry · g context-switch · atomics) | the `@asm` floor STAYS: `svc #0x80` syscall entry · `_start`/argv-envp capture · setjmp/longjmp regsave (#1058 ✅) · memory barriers |
-| bootstrap: build 1.5 with the 1.4 toolchain | keep the `gen1 ≡ gen2` byte-eq fixpoint at EVERY stage (don't break it mid-translation) |
-| macOS: links **libSystem** (Apple gives no stable raw-syscall ABI) | hexa raw-svc's = **0 externs, STRICTER than Go**; keep the win, fall back to libSystem ONLY on an Apple-ABI break (documented FFI-layer-③ retreat, not a regression) |
-
-**Target = zero `.c`, NOT zero `asm`.** The asm floor is irreducible — no
-high-level language emits a raw `svc` without an asm escape (Go=`.s`, Rust=`asm!`,
-hexa=`@asm`); that is the physical floor (`feedback-closure-is-physical-limit`).
-"runtime.c retired" (step 3/4) ≠ "no assembly"; it means **no C source compiled
-into the binary** — the runtime is hexa-emitted-native + a thin `@asm` floor,
-byte-identical to Go's end-state shape.
+asm floor 는 `@asm` 형태로 표현된다 — `svc #0x80` syscall entry ·
+`_start`/argv-envp capture · setjmp/longjmp regsave · memory barriers.
+모든 syscall 이 inline `svc #0x80` 로 emit 된다 (hexa raw-svc = 0 externs).
 
 ## Phase H — hexa-native static Mach-O 링커 (HEXA_BACKEND flip · chunk B)
 
@@ -5178,7 +5106,7 @@ phase-H 가 default-flip(#1354) 까지 도달했고, 마지막 1개 잔여 = hex
 
 ## L-trivial-lane-exhausted — 11 wires landed, runtime.c retirement next tier = adapter→hexa-native (2026-05-27)
 
-trivial-constant 어댑터 레인이 11 wire 만에 **고갈**. runtime.c=0 으로 가는 **multi-month grunt 의 첫 phase** 가 닫혔고, 다음 phase 는 구조적으로 다른 인프라가 필요. honest 진보 보고 + 다음 tier spec.
+trivial-constant 어댑터 레인이 11 wire 만에 **고갈**. runtime 의 hexa-native 화 **multi-month grunt 의 첫 phase** 가 닫혔고, 다음 phase 는 별도 인프라 레인이다. honest 진보 보고 + 다음 tier spec.
 
 ### 누적 wire (11/448 = 2.5%)
 
@@ -5250,12 +5178,12 @@ hexa_struct_*        struct primitives → hexa-native struct ABI 정착 후
 
 (2) **B 클래스 인프라 선결** = `hexa_ld` 의 cross-object BL resolve (현재 dyld import 만 BL 가능). 1-2 PR 분량. 그 후 100+ fn 의 어댑터화 unlock.
 
-(3) **runtime.c 의 #ifndef HEXA_HAS_HEXA_RT_STDLIB 들** = stdlib/runtime/*.hexa 의 hexa-source 포팅 surface. 이게 진짜 runtime.c=0 으로 가는 메인 lane. 이미 phase-1 의 sin/cos/atan/etc. 이 패턴 입증 — extend 만 하면 됨 (현재 ~115 fn 포팅됨).
+(3) **runtime 의 `#ifndef HEXA_HAS_HEXA_RT_STDLIB` 들** = stdlib/runtime/*.hexa 의 hexa-source 포팅 surface. 이게 runtime hexa-native 화의 메인 lane. 이미 phase-1 의 sin/cos/atan/etc. 이 패턴 입증 — extend 만 하면 됨 (현재 ~115 fn 포팅됨).
 
 ### honest residual
 
 - runtime.c 13769 lines · 448 HexaVal fn · 11 wired
-- @goal "runtime.c=0" 까지 거리: ~437 fn × (어댑터 OR hexa-source 포팅) = multi-month grunt
+- @goal "runtime hexa-native" 까지 거리: ~437 fn × (어댑터 OR hexa-source 포팅) = multi-month grunt
 - physical 한계 (frontier OPEN per feedback-closure-is-physical-limit): hexa-native runtime 의 모든 OS interaction 이 svc 0x80 으로만 닿고, 그 위 모든 알고리즘은 .hexa source. 이 천장은 가능, time-bounded 아님
 
 → trivial-lane 닫힘. 다음 phase = (A) 8 syscall-wire + (B) cross-obj BL infra + (C) HEXA_HAS_HEXA_RT_STDLIB 포팅 확장. 본 cycle pause.
@@ -5363,7 +5291,7 @@ honest tradeoff: HEXA_NATIVE_RT_ALL=0 opt-out 시 이 20 fn 의 link 실패 (sof
 ▓░░░░░░░░░░░░░░░░░░░ 4.7% · runtime.c -0.7% (95/13832 lines)
 ```
 
-runtime.c=0 까지 거리 = ~13,737 lines × 평균 5-10 lines/fn = 잔여 ~1,500+ wire equivalent · multi-month grunt 변함없음. frontier 는 OPEN (per `feedback-closure-is-physical-limit`). 본 세션 = (1) 두 단순 lane 닫음 (trivial-const + FP-single-instr), (2) wire→delete 패턴 안전성 입증, (3) 첫 line 감소 측정, (4) B-class infra 정확한 spec.
+runtime hexa-native 화 거리 = ~13,737 lines × 평균 5-10 lines/fn = 잔여 ~1,500+ wire equivalent · multi-month grunt. frontier 는 OPEN (per `feedback-closure-is-physical-limit`). 본 세션 = (1) 두 단순 lane 닫음 (trivial-const + FP-single-instr), (2) wire→hexa-route 패턴 안전성 입증, (3) 첫 line 감소 측정, (4) B-class infra 정확한 spec.
 
 ## L-session-2026-05-27 — closing summary · -216 lines · 20 wires · 5 lanes closed
 
@@ -5402,6 +5330,6 @@ runtime.c=0 까지 거리 = ~13,737 lines × 평균 5-10 lines/fn = 잔여 ~1,50
 5. ... ~수십 cycle repeat ...
 6. **runtime.c = 0** : multi-month, ~50+ cycle 누적
 
-frontier 는 OPEN — physical 천장 (runtime.c=0 + zero-libm + zero-libc) 까지 도달 가능 · time-bounded 아님. 본 세션 종료는 cycle pause 이며 100% 달성 ⨯.
+frontier 는 OPEN — physical 천장 (runtime hexa-native + zero-libm + zero-libc) 까지 도달 가능 · time-bounded 아님. 본 세션 종료는 cycle pause.
 
 `feedback-closure-is-physical-limit` 적용: closure = approaching limit, not checkbox. 이 세션 = -1.56% · 5 lane closed · next-tier spec'd.
