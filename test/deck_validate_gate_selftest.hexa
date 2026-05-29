@@ -72,6 +72,32 @@ fn _mk_deck(dir: string, relax: string) {
     let _t = write_text(dir + "/scf.in.tail", "K_POINTS automatic\n4 4 4 0 0 0\n")
 }
 
+// A WHOLE scf.in in the deck-gen NATIVE layout — control namelists + ATOMIC_SPECIES
+// (head), an ATOMIC_POSITIONS block (replaced at dispatch by the relaxed coords),
+// then K_POINTS (tail). Mirrors exports/rtsc/decks/H3S_anchor/scf.in.
+fn _whole_scf() -> string {
+    let mut s = ""
+    s = s + "&CONTROL\n  calculation = 'scf'\n  prefix = 'x'\n/\n"
+    s = s + "&SYSTEM\n  ibrav = 3\n  celldm(1) = 5.6\n  nat = 1\n  ntyp = 1\n  ecutwfc = 80\n/\n"
+    s = s + "&ELECTRONS\n  conv_thr = 1.0d-10\n/\n"
+    s = s + "ATOMIC_SPECIES\n  H 1.008 H.upf\n"
+    s = s + "ATOMIC_POSITIONS crystal\n"
+    s = s + "  H 0.0000000 0.0000000 0.0000000\n"
+    s = s + "\n"
+    s = s + "K_POINTS automatic\n  16 16 16 0 0 0\n"
+    return s
+}
+
+// _mk_native_deck — the deck-gen NATIVE layout: {vc-relax.in, scf.in (WHOLE),
+// ph.in} — NO scf.in.head/.tail. This is the layout that previously aborted
+// dft_run ("relax.in MISSING, scf.in.head MISSING, scf.in.tail MISSING").
+fn _mk_native_deck(dir: string) {
+    let _m = exec("rm -rf " + dir + " && mkdir -p " + dir)
+    let _r = write_text(dir + "/vc-relax.in", _clean_relax())
+    let _s = write_text(dir + "/scf.in", _whole_scf())
+    let _p = write_text(dir + "/ph.in", "&INPUTPH\n/\n")
+}
+
 fn _stamp_exists(dir: string) -> bool {
     return exec("test -f '" + dir + "/.validated' && printf yes || printf no") == "yes"
 }
@@ -190,6 +216,58 @@ fn main() {
     println("  gate guarded by `force == 0` = " + _b(gate_force_guarded) + " · leak-warn present = " + _b(force_warn) + " (expect both true)")
     if !gate_force_guarded { pass = false; println("  FAIL — fire gate must be conditioned on force == 0") }
     if !force_warn { pass = false; println("  FAIL — --force must surface the leak-risk warning") }
+
+    // ── case 4: deck-gen NATIVE layout {vc-relax.in, whole scf.in, ph.in} ──
+    // The layout that previously ABORTED dft_run. Asserts (a) the relax-input
+    // resolver picks vc-relax.in, (b) completeness PASSES (dft_run --validate
+    // does not abort on a missing relax.in/scf.in.head/scf.in.tail), (c) the scf
+    // auto-split yields a head ending BEFORE ATOMIC_POSITIONS + a tail RESUMING at
+    // K_POINTS (the next card after the coords block) — and that a round-trip
+    // dft_assemble_scf(head, coords, tail) preserves K_POINTS.
+    println("## 4. deck-gen NATIVE layout — vc-relax.in + whole scf.in auto-split")
+    let nat = SELF_TMP + "/native"
+    _mk_native_deck(nat)
+
+    // (a) relax-input resolver prefers the deck-gen native vc-relax.in
+    let rin = dft_relax_input_name(nat)
+    println("  relax input resolved = '" + rin + "' (expect vc-relax.in)")
+    if rin != "vc-relax.in" { pass = false; println("  FAIL — must resolve vc-relax.in") }
+
+    // (b) completeness: dft_run --validate must NOT abort with rc 2 (deck
+    // incomplete). On this host pw.x is absent → structural-sanity dry-run runs
+    // on vc-relax.in and PASSES (rc 0), proving the completeness check accepted
+    // the native layout (a rc-2 abort would mean the old relax.in/head/tail
+    // requirement is still in force).
+    let rc_validate_nat = dft_run([nat, "--validate"], 0)
+    println("  --validate rc = " + str(rc_validate_nat) + " (expect 0 — NOT 2/incomplete)")
+    if rc_validate_nat == 2 { pass = false; println("  FAIL — native layout reported deck-incomplete (convention not adapted)") }
+    if rc_validate_nat != 0 { pass = false; println("  FAIL — native-layout clean deck dry-run should pass (rc 0)") }
+    if !_stamp_exists(nat) { pass = false; println("  FAIL — validated native deck must be stamped") }
+
+    // (c) scf auto-split — head ends before ATOMIC_POSITIONS, tail resumes at K_POINTS
+    let split = dft_scf_head_tail(nat)
+    println("  scf split ok = " + _b(split.ok == 1) + " (expect true)")
+    let head_no_pos = !split.head.contains("ATOMIC_POSITIONS")
+    let head_has_species = split.head.contains("ATOMIC_SPECIES")
+    let tail_has_kpoints = split.tail.contains("K_POINTS")
+    let tail_no_species = !split.tail.contains("ATOMIC_SPECIES")
+    println("  head ends before ATOMIC_POSITIONS = " + _b(head_no_pos) + " · head keeps ATOMIC_SPECIES = " + _b(head_has_species))
+    println("  tail resumes at K_POINTS = " + _b(tail_has_kpoints) + " · tail drops the coords block = " + _b(tail_no_species))
+    if split.ok != 1 { pass = false; println("  FAIL — scf head/tail must resolve from a whole scf.in") }
+    if !head_no_pos { pass = false; println("  FAIL — head must end before ATOMIC_POSITIONS") }
+    if !head_has_species { pass = false; println("  FAIL — head must keep ATOMIC_SPECIES (the control block)") }
+    if !tail_has_kpoints { pass = false; println("  FAIL — tail must preserve K_POINTS (the next card)") }
+    if !tail_no_species { pass = false; println("  FAIL — tail must not re-include the dropped coords block") }
+
+    // round-trip: assembling head + new coords + tail must splice the coords
+    // BETWEEN the control block and K_POINTS (the whole point of the contract).
+    let new_coords = "ATOMIC_POSITIONS (crystal)\n  H 0.25 0.25 0.25\n"
+    let assembled = dft_assemble_scf(split.head, new_coords, split.tail)
+    let ap = assembled.index_of("ATOMIC_POSITIONS")
+    let kp = assembled.index_of("K_POINTS")
+    let coords_before_kpoints = ap >= 0 && kp >= 0 && ap < kp
+    println("  assembled: coords spliced before K_POINTS = " + _b(coords_before_kpoints) + " (expect true)")
+    if !coords_before_kpoints { pass = false; println("  FAIL — assembled scf must place coords before K_POINTS") }
 
     let _cl = exec("rm -rf " + SELF_TMP)
     println("")
