@@ -83,6 +83,50 @@ fn main() {
     _check("64/20/4: concurrent = min(20,16) = 16", t.concurrent_jobs, 16)
     _le("64/20/4: Σ-np ≤ physcores", t.sum_np, t.physcores)
     _check("64/20/4: no oversubscribe", t.oversubscribed, 0)
+    // 기존 dft_fill_plan 은 DISK 무제약(차원 추가가 #2096 동작을 안 깸):
+    _check("64/20/4: disk_bound=0 (core-only path unconstrained)", t.disk_bound, 0)
+    _check("64/20/4: disk_slots == core slots (unconstrained)", t.disk_slots, t.slots)
+
+    // ── case 5 (DISK core-bound): 128c/8ranks/9decks, free=500GB/scratch=10GB ─
+    // disk_slots=50 ≫ core_slots=16 → DISK 가 안 깎음. concurrent = min(9,16)=9
+    // (#2096 의 core-only 결과와 동일).
+    let dc = dft_fill_plan_disk(128, 8, 9, 12, 500, 10)
+    _check("disk core-bound: core slots = 16", dc.slots, 16)
+    _check("disk core-bound: disk_slots = floor(500/10) = 50", dc.disk_slots, 50)
+    _check("disk core-bound: concurrent = min(16,50,9) = 9", dc.concurrent_jobs, 9)
+    _check("disk core-bound: disk_bound=0 (ample disk)", dc.disk_bound, 0)
+    _le("disk core-bound: Σ-np ≤ physcores", dc.sum_np, dc.physcores)
+    _check("disk core-bound: no oversubscribe", dc.oversubscribed, 0)
+    // core-only dft_fill_plan(128,9,8,..) 과 동일한 concurrent 인지 회귀 단언:
+    let core_only = dft_fill_plan(128, 9, 8, 12)
+    _check("disk core-bound: matches #2096 core-only concurrent", dc.concurrent_jobs, core_only.concurrent_jobs)
+
+    // ── case 6 (DISK-bound): 128c/8ranks/9decks, free=30GB/scratch=10GB ──────
+    // disk_slots=3 < core_slots=16 → DISK 가 깎는다. concurrent = min(16,3,9)=3.
+    let db = dft_fill_plan_disk(128, 8, 9, 12, 30, 10)
+    _check("disk-bound: core_slots would be 16", fill_slots(128, 8), 16)
+    _check("disk-bound: disk_slots = floor(30/10) = 3", db.disk_slots, 3)
+    _check("disk-bound: concurrent = min(16,3,9) = 3", db.concurrent_jobs, 3)
+    _check("disk-bound: disk_bound flag set (3 < 16 core-slots)", db.disk_bound, 1)
+    _check("disk-bound: eff slots clamped to 3", db.slots, 3)
+    _le("disk-bound: Σ-np ≤ physcores", db.sum_np, db.physcores)
+    _check("disk-bound: no oversubscribe", db.oversubscribed, 0)
+    // WHY 노출 — script 에 disk-bound 한 줄이 박혀 운영자가 이유를 본다.
+    _check("disk-bound: script surfaces 'disk-bound:' reason", _has(db.script, "disk-bound:"), 1)
+    _check("disk-bound: script still backgrounds jobs (&)", _has(db.script, ") &\n"), 1)
+    _check("disk-bound: script uses rolling wait -n", _has(db.script, "wait -n"), 1)
+
+    // ── case 7 (scratch ≤ 0 → DISK 무제약 == core-only 결과) ─────────────────
+    let un = dft_fill_plan_disk(128, 8, 9, 12, 30, 0)
+    _check("unconstrained(scratch=0): disk_slots == core_slots", un.disk_slots, un.slots)
+    _check("unconstrained(scratch=0): disk_bound=0", un.disk_bound, 0)
+    _check("unconstrained(scratch=0): concurrent == core-only", un.concurrent_jobs, core_only.concurrent_jobs)
+    // negative scratch 도 동일하게 무제약 처리:
+    let un2 = dft_fill_plan_disk(128, 8, 9, 12, 30, -5)
+    _check("unconstrained(scratch<0): disk_bound=0", un2.disk_bound, 0)
+    _check("unconstrained(scratch<0): concurrent == core-only", un2.concurrent_jobs, core_only.concurrent_jobs)
+    // script 에는 disk-bound 줄이 없어야(무제약이므로):
+    _check("unconstrained: script has NO 'disk-bound:' line", _has(un.script, "disk-bound:"), 0)
 
     println("fill_plan_test PASS")
 }
