@@ -789,6 +789,18 @@ static void *__attribute__((noinline)) hxlcl_calloc(size_t nmemb, size_t size) {
     }
     return p;
 }
+// ── REAL-libc allocator escape for LONG-LIVED data buffers ──
+// The hxlcl_malloc bump arena above NEVER frees (hxlcl_free is a no-op): it is
+// amortised over the SHORT-LIVED self-compiler lifetime. A long-lived training
+// farr buffer routed through it would leak its full size on every realloc/free
+// (the `#define malloc -> hxlcl_malloc` shim below hides real free() from every
+// downstream call site). These forwarders are defined ABOVE the shim, so the
+// bare malloc/calloc/free/realloc tokens here still bind to the REAL glibc
+// symbols (<stdlib.h>). farr payload buffers call these so free() actually
+// returns memory to glibc, where mallopt(M_TRIM/M_MMAP) (HEXA_FARR_TRIM) can
+// reclaim it. The bump arena is untouched for the compiler-s own churn.
+static void *__attribute__((noinline)) hxlcl_real_calloc(size_t nmemb, size_t size) { return calloc(nmemb, size); }
+static void  __attribute__((noinline)) hxlcl_real_free(void *p) { free(p); }
 static int __attribute__((noinline)) hxlcl_munmap(void *addr, size_t length) {
     (void)addr; (void)length;
     return 0;
@@ -12374,7 +12386,7 @@ HexaVal hexa_farr_zeros(HexaVal n_v) {
     double* buf = NULL;
     if (n > 0) {
         // calloc — zero-fill required (state_zero relies on it).
-        buf = (double*)calloc((size_t)n, sizeof(double));
+        buf = (double*)hxlcl_real_calloc((size_t)n, sizeof(double));
         if (!buf) {
             fprintf(stderr, "[farr] OOM allocating %lld doubles\n", (long long)n);
             exit(77);
@@ -12392,7 +12404,7 @@ HexaVal hexa_farr_zeros(HexaVal n_v) {
                                   (size_t)new_cap * sizeof(HexaFarrEntry));
             if (!nt) {
                 fprintf(stderr, "[farr] OOM growing handle table\n");
-                if (buf) free(buf);
+                if (buf) hxlcl_real_free(buf);
                 exit(77);
             }
             _hx_farr_table = nt;
@@ -12473,7 +12485,7 @@ HexaVal hexa_farr_free(HexaVal h_v) {
     int64_t id = hexa_as_num(h_v);
     if (id < 0 || id >= _hx_farr_count) return hexa_void();
     HexaFarrEntry* e = &_hx_farr_table[id];
-    if (e->buf) { free(e->buf); e->buf = NULL; e->len = 0; }
+    if (e->buf) { hxlcl_real_free(e->buf); e->buf = NULL; e->len = 0; }
     /* RFC 040: also free the device buffer if present + reset residence.
      * No-CUDA build: d_buf is always NULL — the resets keep freelist
      * slots hygienic for a later hexa_farr_zeros reuse. Under -DHEXA_CUDA
@@ -12586,7 +12598,7 @@ HexaVal hexa_farr32_zeros(HexaVal n_v) {
     if (n < 0) n = 0;
     float* buf = NULL;
     if (n > 0) {
-        buf = (float*)calloc((size_t)n, sizeof(float));
+        buf = (float*)hxlcl_real_calloc((size_t)n, sizeof(float));
         if (!buf) {
             fprintf(stderr, "[farr32] OOM allocating %lld floats\n",
                     (long long)n);
@@ -12605,7 +12617,7 @@ HexaVal hexa_farr32_zeros(HexaVal n_v) {
                 (size_t)new_cap * sizeof(HexaFarr32Entry));
             if (!nt) {
                 fprintf(stderr, "[farr32] OOM growing handle table\n");
-                if (buf) free(buf);
+                if (buf) hxlcl_real_free(buf);
                 exit(77);
             }
             _hx_farr32_table = nt;
@@ -12657,7 +12669,7 @@ HexaVal hexa_farr32_free(HexaVal h_v) {
     int64_t id = hexa_as_num(h_v);
     if (id < 0 || id >= _hx_farr32_count) return hexa_void();
     HexaFarr32Entry* e = &_hx_farr32_table[id];
-    if (e->buf) { free(e->buf); e->buf = NULL; e->len = 0; }
+    if (e->buf) { hxlcl_real_free(e->buf); e->buf = NULL; e->len = 0; }
     e->d_buf      = NULL;
     e->loc        = FARR_HOST;
     e->pinned     = 0;
@@ -13038,7 +13050,7 @@ HexaVal hexa_farr_int_zeros(HexaVal n_v) {
     if (n < 0) n = 0;
     int64_t* buf = NULL;
     if (n > 0) {
-        buf = (int64_t*)calloc((size_t)n, sizeof(int64_t));
+        buf = (int64_t*)hxlcl_real_calloc((size_t)n, sizeof(int64_t));
         if (!buf) {
             fprintf(stderr, "[farr_int] OOM allocating %lld int64s\n", (long long)n);
             exit(77);
@@ -13054,7 +13066,7 @@ HexaVal hexa_farr_int_zeros(HexaVal n_v) {
                                   (size_t)new_cap * sizeof(HexaIarrEntry));
             if (!nt) {
                 fprintf(stderr, "[farr_int] OOM growing handle table\n");
-                if (buf) free(buf);
+                if (buf) hxlcl_real_free(buf);
                 exit(77);
             }
             _hx_iarr_table = nt;
@@ -13161,7 +13173,7 @@ HexaVal hexa_farr_int_free(HexaVal h_v) {
     int64_t id = hexa_as_num(h_v);
     if (id < 0 || id >= _hx_iarr_count) return hexa_void();
     HexaIarrEntry* e = &_hx_iarr_table[id];
-    if (e->buf) { free(e->buf); e->buf = NULL; e->len = 0; }
+    if (e->buf) { hxlcl_real_free(e->buf); e->buf = NULL; e->len = 0; }
     if (_hx_iarr_freelist_n >= _hx_iarr_freelist_cap) {
         int64_t new_cap = _hx_iarr_freelist_cap < 16 ? 16 : _hx_iarr_freelist_cap * 2;
         int64_t* nf = (int64_t*)realloc(_hx_iarr_freelist,
