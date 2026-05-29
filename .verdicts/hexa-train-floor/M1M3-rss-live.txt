@@ -1,137 +1,98 @@
 ════════════════════════════════════════════════════════════════════════
-HEXA-TRAIN-FLOOR · branch-4 retry (COLD-SEED path) — M1/M3 RSS-churn 실측 시도
+HEXA-TRAIN-FLOOR · M1/M3 RSS-churn 실측 시도 (#2159 float-pun 벽 해소 後 재시도)
 ════════════════════════════════════════════════════════════════════════
-ts(UTC)   : 2026-05-29T20:28Z
-host      : ubu-2 (summer-B650M-K · x86_64 · 12 cores · RTX 5070 · clang/gcc 13.x)
-clone     : /tmp/hexa-train-floor-b4  (git clone --depth 1 origin/main · HEAD 71f49bc)
-            (재확인: origin/main ef911fd4a 에서도 동일 상태 — 본 결론 불변)
-seed      : self/native/hexa_cc_seed.c · 2982925 B · float_to_bits/bits_to_float 6 hits
+ts(UTC)   : 2026-05-30T (cold-seed fresh-clone retry, post-#2159)
+host      : ubu-2 (summer-B650M-K · x86_64 · 12 cores · RTX 5070 · clang 13.x · glibc)
+clone     : /tmp/htf-rss  (git clone --depth 1 origin/main · HEAD 4c2e0727)
+            #2159 (float-pun 4함수 본문 emitter SSOT 정착) 머지 포함 확인
 미션      : 콜드시드 클린 빌드 → anima 디코더 트레이너 1-step → HEXA_FARR_TRIM on/off
             per-step RSS Δ A/B → M1/M3 churn-fix 🟢/🔴
+verdict   : 🟠 미실측 — 빌드 벽이 float-pun(#2159)이 아닌 NEW 결함으로 이동.
+            #2159 의 link 벽은 해소 확인(✅). 그러나 PR #2119/#2123(mallopt-mmap fix)
+            이 도입한 `#include <malloc.h>` × malloc-shim 매크로 충돌로 Linux/glibc
+            runtime.c 컴파일이 10 error 로 FALSIFIED. RSS A/B 진입 불가.
 
 ────────────────────────────────────────────────────────────────────────
-[A] branch-3 STALE-PATH 오진 — 부분 확인 (콜드시드 트랜스파일러는 정상)
+[1] #2159 float-pun 벽 = 해소 확인 (✅) — 이번 벽은 그게 아님
 ────────────────────────────────────────────────────────────────────────
-fresh clone 상태 (clean, no stale seed):
-  - self/native/hexa_cc_seed.c  PRESENT (2982925 B)
-  - self/native/hexa_cc.c       ABSENT  → build_hexa_cli step0 cold-seed 분기 발화 조건 충족
-  - self/runtime.c              ABSENT  (gitignored generated · origin/main MISSING)
-  - build/hexat                 ABSENT  → cold-seed 부트스트랩 발화
-
-콜드시드 hexat 빌드 (build_hexa_cli step0 cold 분기 그대로):
-  $ clang -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs -fbracket-depth=4096 \
-      self/native/hexa_cc_seed.c -o build/hexat -lm -lpthread -lssl -lcrypto
-  → RC=0 (경고만, 0 error) · build/hexat ELF x86-64 2083312 B
-  → smoke transpile (fn main->i64 {42}) OK
-  → runtime_core_emit / runtime_hi_gen / 16 native fragment 전부 emitter SSOT 에서
-    재생성 성공 (cold-seed 부트스트랩 escape: seed→runtime.o[main 무력화]→emitter 링크)
-
-⇒ branch-3 의 "콜드시드 트랜스파일러 빌드 불가" 부분은 FALSIFIED. 콜드시드 hexat 는 정상.
+fresh-clone emitter SSOT self/runtime_core_emit.hexa 에 4-함수 BODY 정착:
+  1439:  HexaVal hexa_float_to_bits(HexaVal x) { union { double d; int64_t i; } u; ... }
+  1441:  HexaVal float_to_bits(HexaVal x) { return hexa_float_to_bits(x); }
+  (#else / non-SELFEMIT 분기에 정의, #ifdef HEXA_RT_SELFEMIT 분기엔 extern decl)
+설치된 runtime(~/.hx/bin/self/runtime_core.c)에도 동일 body 존재(grep count=1).
+전체 빌드 로그 float_to_bits/bits_to_float 매칭 = 0건 (link error 없음).
+⇒ branch-3/4 가 막혔던 `_float_to_bits`/`_bits_to_float` undefined 벽은 GONE.
 
 ────────────────────────────────────────────────────────────────────────
-[B] 그러나 branch-3 의 LINK 실패(`_float_to_bits`/`_bits_to_float` undefined)는
-    STALE 가 아니라 REAL — SSOT 자체에 정의 부재 (오진 전제 INVERSION)
+[2] NEW 벽 — mallopt-mmap fix(#2119/#2123) × malloc-shim 매크로 충돌 (REAL, glibc-only)
 ────────────────────────────────────────────────────────────────────────
-미션 전제: "seed 가 float_to_bits/bits_to_float 를 DEFINE (6 hits)" → 실측상 FALSE.
+빌드: `hexa run tool/build_hexa_cli.hexa` (cold-seed step0 분기)
+  - step0 cold-seed 트랜스파일러: build/hexat_linux (3.88 MB) + build/hexa_linux (508 KB)
+    빌드 성공 — hexa_cc_seed.c 는 malloc-shim 있지만 `#include <malloc.h>` 0건(monolithic
+    seed 가 mallopt 블록 이전 시점) → 충돌 회피.
+  - 그 다음 단계(runtime.c 컴파일/디스패치)에서 10 errors:
 
-self/native/hexa_cc_seed.c 의 6 hits 전수 (verbatim):
-  39261:    __hexa_codegen_sl_229  = hexa_str("float_to_bits");
-  39262:    __hexa_codegen_sl_230  = hexa_str("hexa_float_to_bits");
-  39263:    __hexa_codegen_sl_231  = hexa_str("bits_to_float");
-  39264:    __hexa_codegen_sl_232  = hexa_str("hexa_bits_to_float");
-  40451:    __hexa_codegen_sl_1415 = hexa_str("hexa_float_to_bits(");
-  40452:    __hexa_codegen_sl_1416 = hexa_str("hexa_bits_to_float(");
-  → 6 hits 전부 codegen 이 user.c 로 EMIT 하는 문자열 리터럴. 함수 BODY 아님.
+  verbatim (clang -std={c11|gnu11} -D_GNU_SOURCE 둘 다 동일 재현):
+    /usr/include/malloc.h:39:14: error: function cannot return function type 'int (size_t)'
+    /usr/include/malloc.h:43:14: error: function cannot return function type 'int (size_t)'
+    /usr/include/malloc.h:51:14: error: function cannot return function type 'int (void *)'
+    /usr/include/malloc.h:64:13: error: function cannot return function type 'int (void *)'
+    self/runtime_core.c:572:19:  error: call to undeclared function 'hxlcl_mkdir'
+    self/runtime_core.c:2265:37: error: call to undeclared function 'hxlcl_backtrace'
+    self/runtime_core.c:2267:13: error: call to undeclared function 'hxlcl_backtrace_symbols_fd'
+    self/runtime_core.c:6060:9:  error: call to undeclared function 'hxlcl_longjmp'
+    5 warnings and 10 errors generated.
 
-DECLARATION (runtime.h L508-511):
-  HexaVal hexa_float_to_bits(HexaVal x);   /* f64->bits reinterpret (INBOX 2026-05-27) */
-  HexaVal hexa_bits_to_float(HexaVal x);   /* bits->f64 reinterpret (INBOX 2026-05-27) */
-  HexaVal float_to_bits(HexaVal x);        /* bare-name alias (2026-05-28) */
-  HexaVal bits_to_float(HexaVal x);        /* bare-name alias (2026-05-28) */
+ROOT CAUSE (확정 — targeted minimal repro 로 입증):
+  단일 TU 텍스트 include 순서:
+    self/runtime.c:1367  #define malloc(n)     hxlcl_malloc((size_t)(n))   ← libc-rename shim
+                  :1368  #define free(p)       hxlcl_free((void *)(p))      (HEXA_MEM_CAP fopen-shim 일가)
+                  :1369  #define realloc(p,n)  hxlcl_realloc(...)
+                  :1370  #define calloc(nm,sz) hxlcl_calloc(...)
+    self/runtime.c:1412  #include "runtime_core.c"            ← shim 활성 상태로 진입
+    self/runtime_core.c:328  #if defined(__linux__)&&defined(__GLIBC__)
+                        :    #include <malloc.h>              ← mallopt/M_MMAP_THRESHOLD 위해 추가(#2119/#2123)
+  → <malloc.h> 의 glibc proto `extern void *malloc (size_t __size) ...` 가
+    매크로 확장 `extern void *hxlcl_malloc((size_t)(size_t __size)) ...` 로 변형
+    → "function cannot return function type 'int (size_t)'" 10 error 캐스케이드.
+    파서 desync 로 뒤따르는 hxlcl_mkdir/backtrace/longjmp forward-decl 도 invisible.
 
-DEFINITION (함수 본문) 탐색 결과 — 전부 ZERO:
-  - hexa_cc_seed.c                : NO body  (codegen 문자열만)
-  - self/runtime_core.c (재생성)  : NO body
-  - self/runtime_core_emit.hexa   : NO body  (.c-text SSOT)
-  - self/runtime*.hexa / runtime/ : NO body
-  - warm install tree self/runtime.o : 심볼 없음
+  REPRO (mr2.c, ubu-2):
+    #include <stdlib.h>
+    static void* hxlcl_malloc(size_t n){return 0;}
+    #define malloc(n) hxlcl_malloc((size_t)(n))
+    #define calloc(nm,sz) hxlcl_malloc((size_t)(nm))
+    #define free(p) ((void)0)
+    #define realloc(p,n) hxlcl_malloc((size_t)(n))
+    #include <malloc.h>
+    int main(void){return 0;}
+    $ clang -O2 -std=c11 -D_GNU_SOURCE -c mr2.c
+    → /usr/include/malloc.h:39:14: error: function cannot return function type 'int (size_t)'  (동일)
+  대조 repro(매크로 없이 stdlib.h→malloc.h mid-file) = RC 0 (정상). ⇒ 매크로 충돌이 단독 원인.
 
-⇒ runtime.h 는 prototype 을 약속하고 codegen 은 `hexa_float_to_bits(...)` 호출을 EMIT
-   하지만, 그 C 함수 BODY 는 SSOT 어디에도 랜딩되지 않은 DANGLING DECLARATION.
-   2026-05-27/28 INBOX 패치가 (a) runtime.h proto + (b) codegen emit-string 은 넣었으나
-   (c) 런타임 정의는 누락.
-
-VERBATIM 재현 (콜드시드 path · stale 아님 · 갓-추출 runtime.c):
-  $ cat /tmp/ftb_test.hexa
-    fn main() -> i64 { let x = 1.5; let b = float_to_bits(x); return b }
-  $ ./build/hexat /tmp/ftb_test.hexa /tmp/ftb_test.c          → OK
-  $ grep -c hexa_float_to_bits /tmp/ftb_test.c                → 1 (codegen emit 확인)
-  $ clang -O2 -D_GNU_SOURCE -DHEXA_HAS_OPENSSL -Wno-trigraphs -fbracket-depth=4096 \
-      -I self /tmp/ftb_test.c self/runtime.c -o /tmp/ftb_test ...
-    ftb_test.c:(.text+0x26): undefined reference to `hexa_float_to_bits'
-    ftb_test.c:(.text+0xab): undefined reference to `hexa_float_to_bits'
-    clang: error: linker command failed with exit code 1
-    BINARY NOT PRODUCED
-
-⇒ branch-3 의 LINK 실패는 WARM/COLD 무관하게 재현. stale runtime.c 시드가 원인이 아니라
-   SSOT 의 정의 부재가 원인. self/runtime.c 는 본 측정에서 콜드시드 amalgam(seed L2-25196)
-   에서 갓 추출 — stale 가능성 0, 그래도 동일 실패.
-
-────────────────────────────────────────────────────────────────────────
-[C] full-toolchain cold-clone 빌드의 2차 구조적 GAP (HEXA-CC-ZERO.md L23 이미 문서화)
-────────────────────────────────────────────────────────────────────────
-- self/runtime.c (driver/module_loader 가 링크하는 런타임 TU) 는 .gitignore:280 →
-  fresh clone / origin/main 모두 부재. build_hexa_cli.hexa 는 이 파일을 line 518/977 에서
-  hard-require 하지만 어떤 step 도 TOP self/runtime.c 를 재생성하지 않음 (조각 fragment 만
-  재생성). HEXA-CC-ZERO.md L23: "🔴 ubu-2 fresh clone 은 probe 바이너리 링크에 runtime
-  amalgam 전체 빌드가 필요." HEXA-BUILDFLOOR.md @goal M1 (self/runtime.c 경로 드리프트)
-  도 동일 미해소.
-- 본 측정은 이 gap 을 우회 — seed L2-25196 (`/* amalgam BEGIN runtime.c */`..`END`) 추출로
-  standalone self/runtime.c (1127759 B) 복원, clang -c clean (.o 622976 B). 즉 콜드시드는
-  full runtime amalgam 복원도 가능 (escape 입증). 그럼에도 [B] 의 float_to_bits 정의 부재가
-  최종 벽.
+  플랫폼: Linux/glibc 전용. mac 무영향 — malloc.h include 가 `__linux__&&__GLIBC__` 게이트
+  안에 있어 Darwin 은 <malloc.h> 자체를 안 끌어옴. 그래서 mac self-host/CI 콜드시드는 통과하나
+  Linux fresh-clone full runtime.c 빌드는 깨짐(이 미션의 ubu-2 측정 경로).
 
 ────────────────────────────────────────────────────────────────────────
-[D] anima 디코더 트레이너 · RSS A/B — 미도달 (g5: unmeasured → 🟠)
+[3] RSS A/B — 진입 불가 (🟠)
 ────────────────────────────────────────────────────────────────────────
-- anima 트레이너(STEP_RATE_LOG producer)는 float bit-reinterpret 경로(quant/AKIDA-int4
-  pack 등)를 codegen 하므로 hexa_float_to_bits emit → [B] 의 undefined link 로 빌드 불가
-  (warm·cold 동일). 따라서 1-step 실행 도달 불가 → HEXA_FARR_TRIM on/off per-step RSS Δ
-  실측 불가.
-- M1/M3 churn-fix 는 본 사이클에서 MEASURED 되지 않음. (참고: 이전 verdict
-  .verdicts/hexa-train-floor/M7-farr-trim-rss.txt 가 별도 surface 의 FARR_TRIM RSS 측정 보유.)
+runtime.c 가 Linux 에서 안 빌드 → hexa 툴체인 미완성 → anima 디코더 트레이너 빌드 불가
+→ HEXA_FARR_TRIM=1/0 × HEXA_RSS_TRACE per-step RSS Δ 측정 0 step. M1/M3 여전히 🟠 미실측.
+pod 미사용(ubu-2 $0, GPU 불필요 — CPU RSS 경로인데 빌드 벽에서 차단).
 
 ────────────────────────────────────────────────────────────────────────
-[E] VERDICT
+[4] FIX (1-line, deferred per 미션 HALT 수칙 — non-float-pun real failure → STOP+report)
 ────────────────────────────────────────────────────────────────────────
-| axis                                              | verdict                    |
-|---------------------------------------------------|----------------------------|
-| 콜드시드 hexat 부트스트랩 (fresh clone, no host hexa) | 🟢 RC=0 · transpile OK     |
-| 콜드시드 escape 로 runtime fragment 전부 재생성       | 🟢 OK (16+core+hi_gen)     |
-| 콜드시드 escape 로 standalone self/runtime.c 복원/.o  | 🟢 clean compile           |
-| branch-3 "콜드시드 빌드불가" 부분                     | 🔴 FALSIFIED (시드 정상)    |
-| branch-3 float_to_bits LINK 실패 = stale-path 오진?  | 🔴 NO — REAL (SSOT 정의부재)|
-| hexa_float_to_bits/float_to_bits 정의 SSOT 존재     | 🔴 ABSENT (dangling decl)  |
-| float_to_bits user-prog LINK (cold path)            | 🔴 undefined reference 재현 |
-| full cold-clone driver 빌드                          | 🔴 BLOCKED (runtime.c gap + float_to_bits gap) |
-| anima 디코더 트레이너 빌드 + 1step                    | 🔴 BLOCKED (위 link 벽)     |
-| HEXA_FARR_TRIM on/off per-step RSS Δ                | 🟠 UNMEASURED (도달불가)    |
-| M1/M3 churn-fix                                      | 🟠 UNMEASURED — 본 사이클 미실측 |
+runtime_core_emit.hexa 의 malloc.h include 를 shim 매크로에서 보호:
+  #undef malloc / free / realloc / calloc  (BEFORE #include <malloc.h>)
+  #include <malloc.h>
+  → 그 후 shim 재정의(또는 mallopt 호출이 hxlcl_* 경유면 #undef 만으로 OK)
+대안: malloc.h include 를 runtime.c shim #define(1367) 보다 위(텍스트상 앞)로 이동.
+미션 제약상 codegen-인접 emitter SSOT 편집은 HALT 후 보고 — 부모/후속 사이클에 위임.
 
-HALT 사유 (cost 아님): 콜드시드 path 가 [B] 의 GENUINE 정의-부재 link 벽에서 막힘.
-stale runtime.c 오진은 [A] 에서 배제 — runtime.c 는 콜드시드 amalgam 갓-추출이라 stale 0,
-그래도 hexa_float_to_bits 정의가 SSOT 전체에 부재해 동일 실패. 따라서 본 RSS-churn 측정은
-runtime SSOT 에 float_to_bits/bits_to_float 정의를 랜딩(별도 codegen/rt-floor guarded 변경 +
-자체 verify 사이클)하기 전까지 차단. flail 금지 — verbatim 포착 후 정지.
-
-ACTIONABLE 핸드오프 (다음 사이클):
-  runtime SSOT (self/runtime_core_emit.hexa 의 .c-text 또는 self/runtime_core.hexa)에
-  4-함수 정의 추가:
-    HexaVal hexa_float_to_bits(HexaVal x){ union{double d;int64_t i;}u; u.d=HX_FLOAT(x); return hexa_int(u.i); }
-    HexaVal hexa_bits_to_float(HexaVal x){ union{int64_t i;double d;}u; u.i=HX_INT(x); return hexa_float(u.d); }
-    HexaVal float_to_bits(HexaVal x){ return hexa_float_to_bits(x); }
-    HexaVal bits_to_float(HexaVal x){ return hexa_bits_to_float(x); }
-  (시드 L454-455 / L9443 등 동일 union-pun 패턴 이미 런타임에 다수 존재 — 정의만 누락.)
-  랜딩 후 seed regen → 콜드 full build → anima 트레이너 빌드 → RSS A/B 재시도.
-  (HEXA-CC-ZERO.md L23 의 runtime.c 재생성 wiring gap 도 병행 해소 필요.)
+────────────────────────────────────────────────────────────────────────
+요약: #2159 ✅(float-pun 벽 해소). M1/M3 🟠 미실측 — RSS-churn 측정 경로가
+  #2119/#2123 mallopt fix 의 Linux-glibc malloc.h 매크로 충돌(NEW REAL bug)로 차단.
+  HALT(미션 수칙) — verbatim 포착 후 정지, fix 위임.
 ════════════════════════════════════════════════════════════════════════
