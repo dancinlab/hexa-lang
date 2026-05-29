@@ -229,6 +229,56 @@ flame(`stdlib/flame/PERF.md`) · forge(`self/forge/PLAN.md`) 는 이 GPU-ROOFLIN
 
 ---
 
+## §attention-lane — flame attention 커널 별도 roofline lane [MS#4 🟢]
+
+> **falsifier/측정법**(MS#4): flame 학습 step 의 attention 커널(QKᵀ + softmax + PV)을 GPU
+> roofline % 로 분리 측정 — achieved/peak % + binding-roof(memory vs compute) 판정.
+> 분모 = §peak ubu-2 RTX 5070 achieved-peak. **2026-05-30 ubu-2 RTX 5070 $0 fire** —
+> 측정대 `/tmp/flame_attn_roofline.cu`(repo root 밖 · pure-ASCII · cuBLAS SGEMM).
+
+**커널 형태**: flame attention 은 `stdlib/flame/decoder_block_lib.hexa:363-428` 의 **CPU host scalar
+루프**(`farr_*`)로 존재 — GPU 경로 설계(PHASE4D7/4D9)는 QKᵀ·PV 를 **cuBLAS Dgemm 으로 dispatch,
+softmax 는 CPU causal-prefix** 유지(byte-eq forge masked-attn 커널 부재). 따라서 attention 의 GPU
+dominant 비용 = QKᵀ + PV 두 GEMM. **flash-attention 아님** — S(score) 행렬을 HBM 에 materialize 한다.
+
+shape = flame d768·12L config (`flame_d768_12L_agtape_fire.hexa`): **T=1024, hd=64, nh=12, nkv=4 GQA**.
+
+| 커널 | shape (T·hd·nh) | FLOP | bytes(HBM working-set) | AI (F/B) | binding | achieved GFLOP/s | binding-roof | **roofline %** |
+|---|---|---|---|---|---|---|---|---|
+| QKᵀ (S=Q·Kᵀ) | T=1024 hd=64 nh=12 | 1.61 GF | 56.6 MB | **28.44** | memory(<ridge 61) | 9242 | BW×AI=16466 GF | **56.1%** (DtoD) / 58.0% (STREAM) |
+| PV (ctx=P·V) | T=1024 hd=64 nh=12 | 1.61 GF | 56.6 MB | **28.44** | memory(<ridge 61) | 8035 | BW×AI=16466 GF | **48.7%** (DtoD) / 50.4% (STREAM) |
+| **attn-core (QKᵀ+PV)** | 〃 | 3.22 GF | 113 MB | **28.44** | **memory-bound** | **8597** | BW×AI=16466 GF | **52.1%** (DtoD) / 54.0% (STREAM) |
+
+**binding-roof 판정**: AI = 28.44 F/B **< ridge 61** → **memory-bound**. 천장 = 대역폭 × AI
+(DtoD 578.88 GB/s · STREAM 559.52 GB/s). materialize 된 S(T²·nh = 12M float = 50 MB) HBM
+write/read 가 traffic 을 지배 → AI 가 일반 SGEMM(M=1024, AI=341)보다 훨씬 낮음.
+
+```
+# verbatim — /tmp/flame_attn_roofline (ubu-2 RTX 5070, 2026-05-30, 2-run stable)
+# flame attention roofline (T=1024 hd=64 nh=12, FP32, full-materialized)
+QKt  median 0.1742 ms  9245.34 GFLOPS  AI=28.444 F/B  bytes=56.62 MB
+PV   median 0.2001 ms  8050.49 GFLOPS  AI=28.444 F/B  bytes=56.62 MB
+attn-core(QKt+PV) median 0.3743 ms  8606.64 GFLOPS  AI=28.444 F/B
+# run1: QKt 9238.55 / PV 8020.98 / attn-core 8586.82  (run-to-run < 0.4%)
+```
+
+> **g5 정직 경계 (🟢 measured · achieved-peak 분모)**:
+> - **achieved/peak 분모** = §peak ubu-2 실측 BW(DtoD 578.88 · STREAM 559.52 GB/s) — 둘 다 나란히.
+>   theoretical 672 GB/s 분모로는 attn-core = 45.2%(격차 숨김 안 함).
+> - **AI=28.44 의 출처**: full-materialized(non-causal 상한). 실제 flame 은 **causal**(triangle, ~½ FLOP·
+>   ½ S-traffic)이라 AI 는 거의 동일(분자·분모 함께 ½)하지만 절대 cost 는 ~½ → 측정값은 **상한**(honest).
+> - **softmax 는 미측정**(CPU·forge masked 커널 부재) → roofline 분자에 미산입. attention 의 GPU dominant =
+>   QKᵀ+PV 2 GEMM 만 측정(softmax 는 GPU 커널 부재 = roofline-N/A on GPU). 이를 명시적 누락으로 표기.
+> - **cuBLAS 가 분자** → 정확성 자명(§g5). hexa-emit attention 커널은 미존재(측정 대상 아님).
+> - **flash-attention 과 대조**: flash 는 S 를 SRAM 에 유지해 HBM traffic 제거 → AI 상승(compute-bound 쪽).
+>   flame 은 materialize 라 memory-bound(52%) — 이는 cuBLAS 의 한계가 아니라 **materialized-attention
+>   알고리즘의 AI 천장**(S write/read 가 binding). flash 로 가면 AI↑ 여지 = 향후 lever(미구현).
+> - **"cuBLAS 못 이김 ≠ 실패"**: QKᵀ/PV 는 cuBLAS SGEMM 자체 → 이미 그 shape 의 BW 천장 부근.
+>   52% 는 cuBLAS 비효율이 아니라 **이 AI(28.4)에서의 binding-roof 대비 위치** — small-K(hd=64) GEMM 의
+>   write-bound 특성(S 출력이 입력보다 큼). M=64 SGEMM(roofline 표 94.99%)보다 낮은 건 S materialize 때문.
+
+---
+
 ## §forge-lane — forge 커널 단위 achieved/peak % 수치표 (SSOT)
 
 > 이전 출처 = `self/forge/PLAN.md §GPU-ROOFLINE lane`(원위치엔 pointer + 분석 서술 보존).

@@ -1,5 +1,22 @@
 # GPU-ROOFLINE — append-only step log
 
+## 2026-05-30 — batch B drain: MS#4 flame attention lane (gpu-roofline-batch-b)
+
+### MS#4 🟢 flame — attention 커널 별도 roofline lane [PASS, measured]
+- 커널 위치: flame attention = `stdlib/flame/decoder_block_lib.hexa:363-428` CPU host scalar 루프(farr_*).
+  GPU 설계(PHASE4D7/4D9) = QKᵀ·PV → cuBLAS Dgemm dispatch · softmax → CPU causal-prefix(byte-eq forge
+  masked-attn 커널 부재). **flash-attention 아님** — S(score) 행렬을 HBM 에 materialize.
+- 측정: ubu-2 RTX 5070 $0 fire(`/tmp/flame_attn_roofline.cu`, pure-ASCII, cuBLAS SGEMM, 200 timed median,
+  2-run < 0.4% drift). shape = flame d768 config T=1024·hd=64·nh=12·nkv=4 GQA.
+- **AI = 28.44 F/B < ridge 61 → memory-bound**. binding-roof = BW × AI:
+  - QKᵀ achieved 9242 GFLOP/s = **56.1%** of HBM-roof(DtoD 578.88)/58.0%(STREAM 559.52)
+  - PV  achieved 8035 GFLOP/s = **48.7%**/50.4%
+  - attn-core(QKᵀ+PV) achieved 8597 GFLOP/s = **52.1%**/54.0%
+- 정직: full-materialized(non-causal 상한) — 실제 causal 은 ~½ cost·동일 AI. softmax 는 GPU 커널 부재 →
+  roofline-N/A(미산입, 명시적 누락). 52% 는 cuBLAS 비효율 아님 — materialized-attention 의 AI 천장(S
+  write/read binding). flash-attn 로 가면 AI↑ 여지 = 향후 lever(미구현). theoretical 672 GB/s 분모로는 45.2%.
+- MS#3 롤업의 "attention 미산입(honest gap)" 이 본 측정으로 채워짐. 결과 = bench.md §attention-lane.
+
 ## 2026-05-30 — batch A drain: @goal 갱신 + MS#2/#3/#6 (gpu-roofline-batch-a)
 
 ### @goal 갱신
