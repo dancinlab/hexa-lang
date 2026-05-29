@@ -1223,6 +1223,36 @@ fn emit_runtime_cuda_c() -> str {
             "    }\n" +
             "}\n" +
             "\n" +
+            "/* ────────────────────────────────────────────────────────────────────\n" +
+            " * Kernel — packed_gemv_offset (small-dim fallback for cuBLAS Dgemv).\n" +
+            " *   out[i] = Σ_j P[off + i·cols + j] · U[j],  i in [0,rows).\n" +
+            " * Layout matches _hx_k_softmax_rows: one block per output row\n" +
+            " * (gridDim.x = rows), HX_RR_BLOCK threads stride across `cols`, then a\n" +
+            " * single block-sum reduction. Reduction order is the SAME fixed tree as\n" +
+            " * the softmax/ce kernels (warp-shfl → shared → re-reduce), NOT the\n" +
+            " * cuBLAS-tiled order — so this path carries the matmul tolerance caveat\n" +
+            " * (not bit-eq vs cuBLAS), same as the existing block-reduction kernels.\n" +
+            " * Used only when `cols` is small (see HEXA_GEMV_CUBLAS_MIN_DIM gate in\n" +
+            " * the host wrapper); at small dims the cuBLAS library dispatch cost\n" +
+            " * dominates the FLOPs, so a plain on-device kernel is cheaper.\n" +
+            " * ──────────────────────────────────────────────────────────────────── */\n" +
+            "__global__ void _hx_k_packed_gemv_offset(const double* __restrict__ P,\n" +
+            "                                 int64_t off,\n" +
+            "                                 const double* __restrict__ U,\n" +
+            "                                 double* __restrict__ O,\n" +
+            "                                 int64_t rows, int64_t cols) {\n" +
+            "    __shared__ double smem[HX_RR_BLOCK / 32];\n" +
+            "    int64_t r = (int64_t)blockIdx.x;\n" +
+            "    if (r >= rows) return;\n" +
+            "    const double* row = P + off + r * cols;\n" +
+            "    double acc = 0.0;\n" +
+            "    for (int64_t j = (int64_t)threadIdx.x; j < cols; j += blockDim.x) {\n" +
+            "        acc += row[j] * U[j];\n" +
+            "    }\n" +
+            "    double total = _hx_block_sum(acc, smem);\n" +
+            "    if (threadIdx.x == 0) O[r] = total;\n" +
+            "}\n" +
+            "\n" +
             "#endif /* __CUDACC__ — kernel bodies (compiled by nvcc only) */\n" +
             "\n" +
             "/* ════════════════════════════════════════════════════════════════════\n" +
@@ -1662,7 +1692,6 @@ fn emit_runtime_cuda_c() -> str {
             "int _hx_cuda_farr_packed_gemv_offset_gpu(int64_t p_id, int64_t off,\n" +
             "                               int64_t rows, int64_t cols,\n" +
             "                               int64_t u_id, int64_t out_id) {\n" +
-            "    if (_ensure_cublas() != 0) return -1;\n" +
             "    if (rows <= 0 || cols <= 0 || off < 0) {\n" +
             "        fprintf(stderr, \"[cuda] packed_gemv_offset: bad off=%lld rows=%lld cols=%lld\\n\",\n" +
             "                (long long)off, (long long)rows, (long long)cols);\n" +
@@ -1675,6 +1704,30 @@ fn emit_runtime_cuda_c() -> str {
             "    double* P_dev = g_slots[p_id].d_buf + off;\n" +
             "    double* U_dev = g_slots[u_id].d_buf;\n" +
             "    double* O_dev = g_slots[out_id].d_buf;\n" +
+            "#ifdef __CUDACC__\n" +
+            "    /* d-threshold gate (hexa-lang #1354): at small contraction dim `cols`\n" +
+            "     * the cuBLAS Dgemv library-dispatch cost dominates the FLOPs and the\n" +
+            "     * H2D/D2H sync round-trip outweighs the saved compute (~3x slowdown\n" +
+            "     * at d=64). Below threshold, use the plain on-device block-reduction\n" +
+            "     * kernel; large `cols` keeps cuBLAS (regression-free). Override via\n" +
+            "     * HEXA_GEMV_CUBLAS_MIN_DIM (default 128, conservative). */\n" +
+            "    long min_dim = 128;\n" +
+            "    const char* _md = getenv(\"HEXA_GEMV_CUBLAS_MIN_DIM\");\n" +
+            "    if (_md && *_md) { long v = atol(_md); if (v > 0) min_dim = v; }\n" +
+            "    if (cols < min_dim) {\n" +
+            "        dim3 grid((unsigned)rows), block(HX_RR_BLOCK);\n" +
+            "        _hx_k_packed_gemv_offset<<<grid, block>>>(g_slots[p_id].d_buf, off,\n" +
+            "                                                  U_dev, O_dev, rows, cols);\n" +
+            "        cudaError_t ker = cudaDeviceSynchronize();\n" +
+            "        if (ker != cudaSuccess) {\n" +
+            "            fprintf(stderr, \"[cuda] packed_gemv_offset kernel failed: %s\\n\",\n" +
+            "                    cudaGetErrorString(ker));\n" +
+            "            return -1;\n" +
+            "        }\n" +
+            "        return _d2h_out(out_id, rows);\n" +
+            "    }\n" +
+            "#endif\n" +
+            "    if (_ensure_cublas() != 0) return -1;\n" +
             "    const double alpha = 1.0, beta = 0.0;\n" +
             "    cublasStatus_t st = cublasDgemv(g_cublas, CUBLAS_OP_T,\n" +
             "                                    (int)cols, (int)rows,\n" +
