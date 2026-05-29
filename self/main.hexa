@@ -84,6 +84,9 @@ fn cmd_help() {
     println("  cloud [run|nohup|poll|copy-to|copy-from] <host> [--port N] [--insecure] -- <argv...>")
     println("                                          structured-argv remote dispatch (PR #81/#84/#86/#88)")
     println("    e.g. hexa cloud run ubu-2 -- python3 train.py    (also: cloud copy-to / copy-from)")
+    println("  dojo <domain> <slug> '<spec>' [--lang=hexa|py|both]")
+    println("                                          cloud training-job 빵틀 (.hexa+.py+run.sh → exports/<d>/dojo/<slug>/)")
+    println("    e.g. hexa dojo llm smoke '{\"model\":\"gpt2\",\"epochs\":1}'    (domains: hexa dojo domains)")
     println("  stdlib [list [--json]]                  stdlib catalog (modules · dirs · tests · docs)")
     println("    e.g. hexa stdlib                      table view (purpose harvested from each module header)")
     println("  sim-universe [status|selftest|anu|multiverse|qpu|qrng|bostrom|godel|")
@@ -6915,6 +6918,27 @@ if len(av) < 3 {
             if file_exists(inst_path) { lp_script = inst_path }
         }
         cmd_run(lp_script, lp_args)
+    } else if sub == "dojo" {
+        // stdlib/dojo/cli.hexa dispatch — generic cloud training-job
+        // generator (학습 빵틀 · sibling of deck). `hexa dojo <domain>
+        // <slug> '<spec-json>' [--lang=hexa|py|both]` emits a .hexa driver
+        // + .py payload + run.sh glue into exports/<domain>/dojo/<slug>/.
+        // The emitter is pure (gen.hexa/llm.hexa); cli.hexa owns the disk
+        // write via stdlib/io.write_text. Pure-hexa string assembly — runs
+        // via cmd_run (compile-then-exec), no AOT build needed.
+        let __inst_dj = install_dir_from_argv0()
+        let mut dj_args = []
+        let mut dji = 3
+        while dji < len(av) {
+            dj_args.push(av[dji])
+            dji = dji + 1
+        }
+        let mut dj_script = "stdlib/dojo/cli.hexa"
+        if len(__inst_dj) > 0 {
+            let inst_path = __inst_dj + "/stdlib/dojo/cli.hexa"
+            if file_exists(inst_path) { dj_script = inst_path }
+        }
+        cmd_run(dj_script, dj_args)
     } else if sub == "cache" {
         // GO M4 (2026-05-25): `hexa cache <subverb>` — 1st-class verb over
         // `~/.hexa-cache/`. Pre-M4 the only way to inspect / prune was raw

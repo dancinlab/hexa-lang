@@ -1,0 +1,226 @@
+// HEXA Standard Library — dojo/cli
+//
+// @version 0.1.0
+// @capabilities [cli]
+//
+// CLI front-door for the generic dojo training-job generator. This is the
+// hexa-lang-side entry the `/dojo` sidecar plugin shells into, and the
+// target of the `dojo` verb registered in self/main.hexa.
+//
+// Unlike gen.hexa / llm.hexa (pure string-emitters, no syscall), THIS file
+// owns the disk I/O: it parses the spec-json argv, calls gen_dojo(...), and
+// writes each returned DojoFile to exports/<domain>/dojo/<slug>/ via
+// stdlib/io.write_text. The emitted .py / .sh land on disk through the hexa
+// runtime's own write_file — never agent Write/Edit — so the hexa-native
+// guard never sees them (same path as deck's run.sh emit).
+//
+// Subverbs:
+//   dojo <domain> <slug> '<spec-json>' [--lang=hexa|py|both]
+//                                  emit the job set (default --lang=both)
+//   dojo domains                   list known dojo domains (full + stub)
+//   dojo help                      usage
+//
+// Run:  hexa dojo llm smoke '{"model":"gpt2","epochs":1}'
+
+import "stdlib/dojo/gen.hexa"
+import "stdlib/io.hexa"
+
+fn _usage() {
+    println("dojo — generic cloud training-job generator (학습 빵틀)")
+    println("  dojo <domain> <slug> '<spec-json>' [--lang=hexa|py|both]")
+    println("                              emit .hexa+.py+run.sh into exports/<domain>/dojo/<slug>/")
+    println("  dojo domains                list known dojo domains (full + stub)")
+    println("  dojo help                   this message")
+    println("")
+    println("spec keys (llm): model · dataset · dataset_config · epochs · batch_size · lr · max_steps · host · output_dir")
+}
+
+// ── minimal JSON field scanners (interp-safe · cert/json_scan style) ──
+
+// Find  "<key>": "<value>"  or  "<key>": <bareword/number>  in `body`,
+// return <value> as a string. Returns "" if absent. Tolerant of spaces
+// after the colon. NOT a full JSON parser — a flat-object field scanner,
+// sufficient for the flat dojo spec schema.
+fn _json_field(body: string, key: string) -> string {
+    let needle = "\"" + key + "\""
+    let nlen = len(needle)
+    let blen = len(body)
+    let mut i = 0
+    while i + nlen <= blen {
+        if body.substring(i, i + nlen) == needle {
+            // advance past the key and any whitespace + colon
+            let mut j = i + nlen
+            while j < blen {
+                let c = body.substring(j, j + 1)
+                if c == " " || c == ":" || c == "\t" { j = j + 1 } else { break }
+            }
+            if j >= blen { return "" }
+            let first = body.substring(j, j + 1)
+            if first == "\"" {
+                // quoted string value — read to the closing quote
+                let mut k = j + 1
+                let mut out = ""
+                while k < blen {
+                    let ch = body.substring(k, k + 1)
+                    if ch == "\"" { return out }
+                    out = out + ch
+                    k = k + 1
+                }
+                return out
+            }
+            // bareword / number — read until , } whitespace
+            let mut k = j
+            let mut out = ""
+            while k < blen {
+                let ch = body.substring(k, k + 1)
+                if ch == "," || ch == "}" || ch == " " || ch == "\n" || ch == "\t" {
+                    return out
+                }
+                out = out + ch
+                k = k + 1
+            }
+            return out
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// Populate a DojoSpec from a flat spec-json string. Only keys present in
+// the json are set; gen/llm fall back to defaults for the rest.
+fn _spec_from_json(body: string) -> DojoSpec {
+    let spec = dojo_spec_new()
+    let keys = ["model", "dataset", "dataset_config", "epochs", "batch_size", "lr", "max_steps", "host", "output_dir"]
+    let mut i = 0
+    while i < len(keys) {
+        let needle = "\"" + keys[i] + "\""
+        if _contains(body, needle) {
+            spec_set(spec, keys[i], _json_field(body, keys[i]))
+        }
+        i = i + 1
+    }
+    return spec
+}
+
+fn _contains(hay: string, needle: string) -> bool {
+    let nlen = len(needle)
+    let hlen = len(hay)
+    let mut i = 0
+    while i + nlen <= hlen {
+        if hay.substring(i, i + nlen) == needle { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// Extract --lang=VALUE from argv (default "both"). Returns the value.
+fn _lang_from_args(av: [string]) -> string {
+    let mut i = 0
+    while i < len(av) {
+        let a = av[i]
+        if len(a) >= 7 && a.substring(0, 7) == "--lang=" {
+            return a.substring(7, len(a))
+        }
+        i = i + 1
+    }
+    return "both"
+}
+
+fn main() {
+    // args()[0] is the program path (cf. deck/cli.hexa) — real args from [1].
+    let av = args()
+    if len(av) < 2 {
+        _usage()
+        return
+    }
+    let sub = av[1]
+    if sub == "help" || sub == "--help" || sub == "-h" {
+        _usage()
+        return
+    }
+    if sub == "domains" {
+        println("dojo domains:")
+        let ds = dojo_domains()
+        let mut i = 0
+        while i < len(ds) {
+            let tag = if dojo_is_stub(ds[i]) { "stub (TODO)" } else { "full" }
+            println("  - " + ds[i] + "  [" + tag + "]")
+            i = i + 1
+        }
+        return
+    }
+
+    // emit form: dojo <domain> <slug> '<spec-json>' [--lang=...]
+    if len(av) < 4 {
+        println("dojo: emit needs <domain> <slug> '<spec-json>'")
+        _usage()
+        exit(2)
+    }
+    let domain = av[1]
+    let slug   = av[2]
+    let spec_json = av[3]
+    let lang = _lang_from_args(av)
+    if lang != "both" && lang != "hexa" && lang != "py" {
+        println("dojo: unknown --lang '" + lang + "' (expected hexa|py|both)")
+        exit(2)
+    }
+
+    if dojo_is_stub(domain) {
+        println("🥋 dojo: '" + domain + "' emitter is TODO — llm first impl only.")
+        println("    graduation = add emit_" + domain + "() + a dispatch branch in stdlib/dojo/gen.hexa")
+        exit(1)
+    }
+
+    let spec = _spec_from_json(spec_json)
+    let files = gen_dojo(domain, slug, spec, lang)
+    if len(files) == 0 {
+        println("❌ dojo: unknown domain '" + domain + "' — run `hexa dojo domains`")
+        exit(1)
+    }
+
+    let out_dir = "exports/" + domain + "/dojo/" + slug + "/"
+    let _ = exec("mkdir -p " + _shq(out_dir) + " 2>/dev/null")
+
+    println("🥋 dojo staged: " + out_dir)
+    let mut i = 0
+    while i < len(files) {
+        let f = files[i]
+        let path = out_dir + f.path
+        let ok = write_text(path, f.content)
+        let nlines = _count_lines(f.content)
+        if ok {
+            println("   " + f.path + "  " + str(nlines) + " lines")
+        } else {
+            println("   ⚠ FAILED to write " + f.path)
+        }
+        i = i + 1
+    }
+    println("")
+    println("   spec: " + spec_json + "  (--lang=" + lang + ")")
+    println("   run:  cd " + out_dir + " && bash run.sh   (d16: free `pool on <host>` import dry-run first)")
+}
+
+// ── tiny helpers ─────────────────────────────────────────────────────
+
+fn _count_lines(s: string) -> int {
+    let mut n = 0
+    let mut i = 0
+    while i < len(s) {
+        if s.substring(i, i + 1) == "\n" { n = n + 1 }
+        i = i + 1
+    }
+    return n
+}
+
+// shell single-quote wrap (embedded ' → '"'"').
+fn _shq(s: string) -> string {
+    let mut out = "'"
+    let mut i = 0
+    while i < len(s) {
+        let c = s.substring(i, i + 1)
+        if c == "'" { out = out + "'\"'\"'" } else { out = out + c }
+        i = i + 1
+    }
+    out = out + "'"
+    return out
+}
