@@ -1,0 +1,78 @@
+F-HEXA-CC-ZERO-P6-CI-GREEN — bootstrap.yml cold-seed migration CI GREEN (verbatim)
+====================================================================================
+
+DATE     : 2026-05-30
+PR       : #2161  (merged → origin/main 1ea7a2446)
+RUN      : https://github.com/dancinlab/hexa-lang/actions/runs/26663051542
+HEAD SHA : f8b47f9fdccff9c3cf819e088ac7773c77e39815  (PR head; squashed → 1ea7a2446 on main)
+EVENT    : pull_request → main
+
+FALSIFIER (P6, CI half)
+  The two fresh-checkout workflows that referenced the #2065-removed
+  self/native/hexa_cc.c must STOP failing on every main commit and the
+  cold-seed bootstrap path must compile + run green on the 3-runner matrix.
+
+bootstrap.yml — GREEN (verbatim gh run view JSON)
+  {"conclusion":"success","headSha":"f8b47f9fdccff9c3cf819e088ac7773c77e39815",
+   "jobs":[
+     {"conclusion":"success","name":"bootstrap (linux-arm64)"},
+     {"conclusion":"success","name":"bootstrap (macos-arm64)"},
+     {"conclusion":"success","name":"bootstrap (linux-x86_64)"}],
+   "status":"completed"}
+
+  3/3 jobs success. Each job proves, on a FRESH `.c=0` checkout (no host hexa,
+  no committed hexa_cc.c, no self/runtime.c):
+    Stage 0 : cc self/native/hexa_cc_seed.c -o build/hexa_v2   (0 local include,
+              NO -I, NO amalgam sed) + a 2nd compile with -Dmain=__seed_main_unused
+              → build/runtime_seed.o (runtime symbols inlined, link seam).
+    Stage 1 : hexa_v2 transpiles self/module_loader.hexa → .c → links against
+              runtime_seed.o → hexa_module_loader runs → flattens self/main.hexa.
+    Smoke   : hexa_v2 transpiles a hexa program → clang/gcc links runtime_seed.o
+              → ./hi prints "ok".
+
+codegen-bootstrap-sync.yml — RETIRED (no longer runs on push/PR)
+  Last codegen-bootstrap-sync runs on main are pre-merge SHAs only
+  (a5c5c684 / f9fa09f85 — both `failure`, the old removed-invariant false-red);
+  NO run on the merged SHA f8b47f9 / 1ea7a2446 — confirming the workflow_dispatch-
+  only retirement removed the push/PR trigger. Its premise (diff codegen.hexa
+  string-literal direct-calls vs the COMMITTED hexa_cc.c) is structurally
+  obsolete: hexa_cc.c left git in #2065 and is gitignored/absent on fresh clone.
+
+LOCAL CROSS-CHECK (Mac arm64, before push — recipe validation)
+  cc hexa_cc_seed.c -o hexat                          rc=0  (2.27 MB Mach-O arm64)
+  cc -Dmain=__seed_main_unused -c … -o runtime_seed.o rc=0  (4.09 MB object)
+  hexat self/module_loader.hexa → ml.c → link seed.o  rc=0  → hexa_module_loader
+  hexa_module_loader self/main.hexa → main_expanded   rc=0  (23 files flattened)
+  hexat hi.hexa → hi.c → link seed.o → ./hi           → "ok"
+
+HONEST CAVEAT (g5/g63) — SCOPE NARROWED vs the old matrix
+  The old bootstrap.yml ALSO rebuilt the full self-host CLI (self/main.hexa →
+  ./hexa) + ran `./hexa tool/stdlib_selftest_aggregate.hexa --ci-gate` + the
+  forge farr32 codegen smoke. Those steps need a fully-linked ./hexa, which the
+  COMMITTED cold-seed CANNOT produce: the seed is pinned at HEXA-CC-ZERO P3
+  (#2126), BEFORE #2159 folded the float-pun bodies
+  (hexa_float_to_bits / hexa_bits_to_float) into runtime_core_emit.hexa and
+  net_emit.hexa added hexa_os_getuid. Linking the current main.c against the
+  stale-seed runtime fails on EXACTLY these 4 undefined symbols (reproduced
+  locally — verbatim `Undefined symbols: _hexa_bits_to_float / _hexa_enum_str_v
+  / _hexa_float_to_bits / _hexa_os_getuid`). The runtime fragments regenerate
+  fresh from the #2159 emitter SSOT (verified: fresh runtime_core.c DEFINES the
+  float-pun bodies), but the top-level self/runtime.c amalgam has NO emitter
+  (it was a hand-maintained committed file removed by #2065), so a coherent
+  same-revision runtime cannot be reconstructed in-checkout from the stale seed.
+
+  → The full-CLI cold build is gated on a SEED REFRESH (re-amalgamate
+    hexa_cc_seed.c from the current SSOT via `hexa cc --regen` + the seed
+    amalgamation, then commit) — a separate, heavier follow-up than this CI-YAML
+    migration. The full self-host CLI is independently exercised by the
+    release.yml / nobaseline-gate "frozen-dough" path (prebuilt runtime.a +
+    hexat from the edge tarball).
+
+P6 STATUS
+  P6 = (A) `hexa_cc.c git rm` + (B) CI/fresh-clone green.
+    (A) CLOSED (#2065 — file already left git; documented in the P6-CLOSURE verdict).
+    (B) The two named CI blockers that referenced the removed hexa_cc.c are
+        RESOLVED and GREEN on main (bootstrap matrix 3/3 success;
+        codegen-bootstrap-sync retired/no-run). The cold-seed TRANSPILER
+        bootstrap (P3/P5's verifiable claim) is now CI-gated green on 3 runners.
+  Residual (NOT a P6-CI blocker): full-CLI cold build via a refreshed seed.
