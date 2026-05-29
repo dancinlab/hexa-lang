@@ -1,0 +1,50 @@
+// arena_reclaim_bench — hot short-lived-allocation workload for the
+// UNSHADOW #3 arena-reclaim measurement (peak RSS primary, alloc-time
+// secondary).
+//
+// Shape: an outer driver calls a leaf fn `churn` in a tight loop. Each
+// `churn` call builds and discards a fresh array of strings (short-lived
+// HexaVal allocations that never escape the call). Under the per-function
+// arena scope (HEXA_VAL_ARENA default ON), every `churn` frame pushes an
+// arena mark on entry and rewinds it on return, so the live set stays flat
+// while the loop runs millions of bump allocations. With HEXA_VAL_ARENA=0
+// every Val is malloc'd and freed individually instead.
+//
+// This is a RECLAIM probe, not a throughput probe: the question is whether
+// the arena's per-frame rewind keeps peak RSS bounded (high-water mark) on a
+// workload that allocates far more bytes cumulatively than it ever holds live.
+//
+// The result Val is a single int (sum of lengths) so nothing escapes the
+// arena frame except a primitive — exercising the heapify short-circuit path.
+
+fn churn(seed: i64) -> i64 {
+    let mut acc: i64 = 0
+    let mut parts: [str] = []
+    let mut i: i64 = 0
+    // Build a transient array of generated strings, then fold it. All of
+    // this allocation is dead on return.
+    while i < 64 {
+        let s = "item-" + str(seed) + "-" + str(i)
+        parts.push(s)
+        acc = acc + len(s)
+        i = i + 1
+    }
+    let mut j: i64 = 0
+    while j < len(parts) {
+        acc = acc + len(parts[j])
+        j = j + 1
+    }
+    return acc
+}
+
+fn main() {
+    let mut total: i64 = 0
+    let mut k: i64 = 0
+    // 200k outer iterations × (64 strings + 64 folds) ≈ tens of millions of
+    // short-lived allocations — enough to surface any unbounded arena growth.
+    while k < 200000 {
+        total = total + churn(k)
+        k = k + 1
+    }
+    println("total=" + str(total))
+}

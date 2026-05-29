@@ -1,0 +1,158 @@
+// @ci_gate — deterministic · network-free · matrix-free Davidson 대각화 g5 게이트
+//
+// qforge_davidson_selftest.hexa — QFORGE L5 brick 4/5 g5 gate.
+//
+// matrix-free H_apply (= 명시적 작은 행렬·벡터 곱) 로 KNOWN 스펙트럼을 검증해
+// Davidson 반복 대각화기 게이트를 닫는다. 같은 solver 가 미래 평면파 H 에도
+// 그대로 쓰인다(matrix-free 계약). 검증 케이스:
+//
+//   (1) 대각 H = diag(5,1,3,2,4): 최저 3 고유값 = {1,2,3} 정확, 고유벡터=단위벡터.
+//   (2) 2×2 [[2,1],[1,2]]: 고유값 {1,3}, 최저=1.
+//   (3) 1D-Laplacian (대각 2, 비대각 −1, n=8): λ_k = 2 − 2·cos(kπ/9), k=1..8.
+//       최저 3 개를 rel-tol ~1e-6 로 검증.
+//   (4) 잔차: 각 밴드 ‖H xᵢ − λᵢ xᵢ‖ < tol.
+//   (5) 직교정규성: xᵢ·xⱼ = δᵢⱼ (~1e-8).
+//   (6) converged 플래그 = true (well-conditioned, max_iter 내).
+//   (7) cross-check: 대각화 결과 최저-k == eigen.hexa dense-eig 최저-k.
+//
+// Run (repo runtime 수동 링크 — 설치 hexa self-path 는 stale):
+//   ./build/hexa_v2 stdlib/qforge/davidson_selftest.hexa /tmp/dv.c &&
+//   clang -O2 -I build/self /tmp/dv.c build/self/runtime.c -o /tmp/dv -lm -lpthread && /tmp/dv
+// PASS: "qforge_davidson_selftest PASS".
+use "stdlib/qforge/davidson"
+use "stdlib/alloc/math/eigen"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ck_int(name: str, got: int, want: int) -> int {
+    if got == want { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_bool(name: str, got: bool, want: bool) -> int {
+    if got == want { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+
+// ── matrix-free 연산자 빌더: 명시적 행렬 M(n×n 평탄) → H_apply(v)=M·v ──
+// 전역 행렬 슬롯을 통해 닫힌 연산자를 노출(named-fn matrix-free 계약).
+let mut G_MAT = []
+let mut G_N = 0
+fn h_apply(v: [float]) -> [float] {
+    let mut out = []
+    let mut i = 0
+    while i < G_N {
+        let mut s = 0.0
+        let mut j = 0
+        while j < G_N { s = s + G_MAT[i * G_N + j] * v[j] ; j = j + 1 }
+        out.push(s)
+        i = i + 1
+    }
+    return out
+}
+fn set_mat(M: [float], n: int) { G_MAT = M ; G_N = n }
+fn diag_of(M: [float], n: int) -> [float] {
+    let mut d = []
+    let mut i = 0
+    while i < n { d.push(M[i * n + i]) ; i = i + 1 }
+    return d
+}
+
+fn main() {
+    let mut fails = 0
+    let TOL = 1.0e-9
+    // ── (1) 대각 H = diag(5,1,3,2,4) → 최저 3 = {1,2,3} ──────────────────
+    let M1 = [5.0,0.0,0.0,0.0,0.0,  0.0,1.0,0.0,0.0,0.0,  0.0,0.0,3.0,0.0,0.0,
+              0.0,0.0,0.0,2.0,0.0,  0.0,0.0,0.0,0.0,4.0]
+    set_mat(M1, 5)
+    let r1 = qforge_davidson(h_apply, diag_of(M1, 5), 5, 3, TOL, 100)
+    fails = fails + _ck_close("(1) diag lambda_0 = 1", r1.evals[0], 1.0, 1.0e-8)
+    fails = fails + _ck_close("(1) diag lambda_1 = 2", r1.evals[1], 2.0, 1.0e-8)
+    fails = fails + _ck_close("(1) diag lambda_2 = 3", r1.evals[2], 3.0, 1.0e-8)
+    fails = fails + _ck_bool("(1) ascending", r1.evals[0] <= r1.evals[1], true)
+    fails = fails + _ck_bool("(1) ascending2", r1.evals[1] <= r1.evals[2], true)
+    fails = fails + _ck_bool("(1) converged", r1.converged, true)
+    // 고유벡터=단위벡터: λ=1 → e_1 (인덱스1 성분 |.|≈1, 나머지≈0)
+    fails = fails + _ck_close("(1) evec0 comp1 = ±1", _abs(r1.evecs[0 * 5 + 1]), 1.0, 1.0e-7)
+
+    // ── (2) 2×2 [[2,1],[1,2]] → {1,3}, 최저=1 ───────────────────────────
+    let M2 = [2.0,1.0, 1.0,2.0]
+    set_mat(M2, 2)
+    let r2 = qforge_davidson(h_apply, diag_of(M2, 2), 2, 1, TOL, 100)
+    fails = fails + _ck_close("(2) 2x2 lambda_0 = 1", r2.evals[0], 1.0, 1.0e-8)
+    fails = fails + _ck_bool("(2) converged", r2.converged, true)
+    // 잔차 (2): ‖H x − λ x‖ < TOL
+    set_mat(M2, 2)
+    let hx2 = h_apply([r2.evecs[0], r2.evecs[1]])
+    let res2a = hx2[0] - r2.evals[0] * r2.evecs[0]
+    let res2b = hx2[1] - r2.evals[0] * r2.evecs[1]
+    let rn2 = sqrt(res2a * res2a + res2b * res2b)
+    fails = fails + _ck_bool("(4) 2x2 residual < tol", rn2 < TOL, true)
+
+    // ── (3) 1D-Laplacian n=8 (대각 2, 비대각 −1): λ_k = 2−2cos(kπ/9) ─────
+    let LN = 8
+    let mut ML = []
+    let mut i = 0
+    while i < LN {
+        let mut j = 0
+        while j < LN {
+            if i == j { ML.push(2.0) }
+            else { if _abs(to_float(i - j)) == 1.0 { ML.push(-1.0) } else { ML.push(0.0) } }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    set_mat(ML, LN)
+    let r3 = qforge_davidson(h_apply, diag_of(ML, LN), LN, 3, 1.0e-10, 200)
+    let pi = 3.141592653589793
+    let l1 = 2.0 - 2.0 * cos(pi / 9.0)
+    let l2 = 2.0 - 2.0 * cos(2.0 * pi / 9.0)
+    let l3 = 2.0 - 2.0 * cos(3.0 * pi / 9.0)
+    fails = fails + _ck_close("(3) laplacian lambda_1", r3.evals[0], l1, 1.0e-6)
+    fails = fails + _ck_close("(3) laplacian lambda_2", r3.evals[1], l2, 1.0e-6)
+    fails = fails + _ck_close("(3) laplacian lambda_3", r3.evals[2], l3, 1.0e-6)
+    fails = fails + _ck_bool("(3) converged", r3.converged, true)
+
+    // ── (4) 잔차: Laplacian 각 밴드 ‖H xᵢ − λᵢ xᵢ‖ < tol ────────────────
+    let mut bk = 0
+    while bk < 3 {
+        let mut xb = []
+        let mut t = 0
+        while t < LN { xb.push(r3.evecs[bk * LN + t]) ; t = t + 1 }
+        set_mat(ML, LN)
+        let hxb = h_apply(xb)
+        let mut rs = 0.0
+        let mut u = 0
+        while u < LN { let e = hxb[u] - r3.evals[bk] * xb[u] ; rs = rs + e * e ; u = u + 1 }
+        fails = fails + _ck_bool("(4) laplacian band residual < tol", sqrt(rs) < 1.0e-10, true)
+        bk = bk + 1
+    }
+
+    // ── (5) 직교정규성: xᵢ·xⱼ = δᵢⱼ (~1e-8) ────────────────────────────
+    let mut a = 0
+    while a < 3 {
+        let mut b = 0
+        while b < 3 {
+            let mut dotv = 0.0
+            let mut t = 0
+            while t < LN { dotv = dotv + r3.evecs[a * LN + t] * r3.evecs[b * LN + t] ; t = t + 1 }
+            let want = if a == b { 1.0 } else { 0.0 }
+            fails = fails + _ck_close("(5) <x_a|x_b> = delta", dotv, want, 1.0e-8)
+            b = b + 1
+        }
+        a = a + 1
+    }
+
+    // ── (7) cross-check: dense eigh 최저-3 == Davidson 최저-3 (Laplacian) ─
+    let eg = eigh(ML, LN)         // [vals desc, vecs rows]
+    let dvals = eg[0]
+    // eigh 내림차순 → 최저 3 = 끝 3 개(LN-1, LN-2, LN-3) 오름차순 매핑
+    fails = fails + _ck_close("(7) dense vs davidson l1", dvals[LN - 1], r3.evals[0], 1.0e-6)
+    fails = fails + _ck_close("(7) dense vs davidson l2", dvals[LN - 2], r3.evals[1], 1.0e-6)
+    fails = fails + _ck_close("(7) dense vs davidson l3", dvals[LN - 3], r3.evals[2], 1.0e-6)
+
+    if fails == 0 { println("qforge_davidson_selftest PASS") }
+    else { println("qforge_davidson_selftest FAIL — " + to_string(fails) + " case(s)") }
+}

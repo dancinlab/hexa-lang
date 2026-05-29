@@ -1,0 +1,98 @@
+// HEXA Standard Library — qforge/mpgrid
+//
+// @version 0.1.0
+// @capabilities [grid]
+//
+// QFORGE L5 brick 3/5 — Monkhorst-Pack k/q-point grid GENERATOR.
+//
+// Generates a uniform Monkhorst-Pack mesh over the (fractional) Brillouin
+// zone. Per axis the canonical MP coordinate is
+//
+//     u_r = (2r − n − 1) / (2n)        r = 1..n
+//
+// which for an ODD n (and zero shift) is Γ-centred — the set contains 0 —
+// and for an EVEN n straddles Γ symmetrically (no point AT Γ). An optional
+// half-grid shift adds 1/(2n) per axis (shift = 1), turning a Γ-centred grid
+// into the "shifted" / Monkhorst-Pack-offset grid used to avoid Γ.
+//
+//   pub fn qforge_mp_grid(n1, n2, n3, shift1, shift2, shift3) -> MpGrid
+//
+// Returns a flat point list (3 floats per k-point: kx, ky, kz fractional) and
+// a uniform weight 1/(n1·n2·n3) per point — the FULL BZ mesh, no symmetry
+// reduction. The point order is the standard nested triple loop
+// (i3 fastest, then i2, then i1), matching Quantum-ESPRESSO's kpoints.f90.
+//
+// ONE PATH, TWO CALLERS (d4): this same generator serves BOTH the SCF
+// k-mesh and the DFPT q-mesh — a q-mesh is just an MP grid with its own
+// (n,shift); there is no second code path. Callers pick the (n,shift); the
+// generator never branches on "is this k or q".
+//
+// d4 (generic dispatch): the mesh is computed ENTIRELY from (n1,n2,n3,shift)
+// — there is NO hardcoded grid table, no per-density special-case. A 4×4×4
+// grid and a 12×12×12 grid traverse the identical code.
+//
+// SCOPE (honest, deferred): this brick generates the FULL (unreduced) BZ
+// mesh only. IBZ symmetry reduction (folding symmetry-equivalent k-points
+// onto an irreducible wedge with accumulated weights) is a clean follow-up
+// brick — it needs the crystal point group, which lives upstream of mesh
+// generation. We deliberately do NOT half-implement it here; every returned
+// point carries the same uniform weight.
+
+// --- result record -------------------------------------------------------
+pub struct MpGrid {
+    n1: int,
+    n2: int,
+    n3: int,
+    npoints: int,            // n1 * n2 * n3
+    coords: [float],         // flat 3*npoints: kx,ky,kz per point (fractional)
+    weights: [float]         // npoints weights, each 1/npoints (sum = 1.0)
+}
+
+// 1-D Monkhorst-Pack coordinate for axis index r∈[1..n] with optional shift.
+//   base  = (2r − n − 1) / (2n)         (canonical MP, Γ-centred for odd n)
+//   shift = + 1/(2n)  when sh != 0      (half-grid offset)
+fn _mp_coord(r: int, n: int, sh: int) -> float {
+    let two_n = 2.0 * to_float(n)
+    let mut u = (2.0 * to_float(r) - to_float(n) - 1.0) / two_n
+    if sh != 0 {
+        u = u + 1.0 / two_n
+    }
+    return u
+}
+
+// Generate the full Monkhorst-Pack mesh. n1,n2,n3 ≥ 1; shift ∈ {0,1} per axis.
+pub fn qforge_mp_grid(n1: int, n2: int, n3: int,
+                      shift1: int, shift2: int, shift3: int) -> MpGrid {
+    let npts = n1 * n2 * n3
+    let w = if npts > 0 { 1.0 / to_float(npts) } else { 0.0 }
+
+    let mut coords: [float] = []
+    let mut weights: [float] = []
+
+    let mut i1 = 1
+    while i1 <= n1 {
+        let u1 = _mp_coord(i1, n1, shift1)
+        let mut i2 = 1
+        while i2 <= n2 {
+            let u2 = _mp_coord(i2, n2, shift2)
+            let mut i3 = 1
+            while i3 <= n3 {
+                let u3 = _mp_coord(i3, n3, shift3)
+                coords.push(u1)
+                coords.push(u2)
+                coords.push(u3)
+                weights.push(w)
+                i3 = i3 + 1
+            }
+            i2 = i2 + 1
+        }
+        i1 = i1 + 1
+    }
+
+    return MpGrid {
+        n1: n1, n2: n2, n3: n3,
+        npoints: npts,
+        coords: coords,
+        weights: weights
+    }
+}
