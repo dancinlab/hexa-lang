@@ -137,6 +137,16 @@ pub fn dir_exists(path) {
     r == "1"
 }
 
+// ── path_exists ──────────────────────────────────────────
+// test -e 의미 — 경로가 존재하면 정규파일/디렉터리/그외 무관 true.
+// Rust Path::exists() / Go os.Stat + !IsNotExist 와 동일.
+pub fn path_exists(path) {
+    if type_of(path) != "string" { return false }
+    if len(path) == 0 { return false }
+    let r = exec("test -e '" + path + "' && printf 1 || printf 0")
+    r == "1"
+}
+
 
 // ══════════════════════════════════════════════════════════════════
 //  PATH — pure string (no FFI, no shell)

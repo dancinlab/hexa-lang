@@ -250,6 +250,15 @@ fn hexa_file_exists(path) -> int {
     return 1
 }
 
+fn hexa_path_exists(path) -> int {
+    // Existence probe (int 0/1) for any path type (file OR dir).
+    let cs = to_cstr(path)
+    let fd = sys_open(cs, O_RDONLY(), 0)
+    if fd < 0 { return 0 }
+    sys_close(fd)
+    return 1
+}
+
 // pread-style ranged read. Used for multi-GB safetensors streaming
 // (whole-file read_file_bytes can't fit). Returns [int] of ≤nbytes
 // byte values; empty on open failure or past-EOF.

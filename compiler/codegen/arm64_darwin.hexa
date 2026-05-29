@@ -1273,6 +1273,7 @@ fn _builtin_runtime_sym(name: string) -> string {
     if name == "exit"          { return "hexa_exit" }
     if name == "exec"          { return "hexa_exec" }
     if name == "file_exists"   { return "rt_file_exists" }
+    if name == "path_exists"   { return "rt_path_exists" }
     // NOTE: index_of is handled by a dedicated arg-count-aware
     // STMT_CALL branch (string method -> hexa_str_index_of /
     // hexa_str_index_of_from, int-boxed). The old

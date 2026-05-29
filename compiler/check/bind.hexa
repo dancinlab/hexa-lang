@@ -1056,7 +1056,7 @@ fn _bind_builtin_names() -> [string] {
         "bytes", "bytes_to_f64_le", "ceil", "chacha20_poly1305_decrypt", "chacha20_poly1305_encrypt", "chacha20_xor", "chars", "clock_ms", "copy_file",
         "cos", "crc32", "dict_keys", "ed25519_keypair", "ed25519_sign", "ed25519_verify", "env", "eprint",
         "eprintln", "exec_pipe_open", "exec_stream_kill", "exec_with_status", "exec", "exit", "exp", "f32_to_bytes_le",
-        "f64_to_bytes_le", "false", "file_exists", "file_modtime", "file_size_native", "file_size", "float_to_bits", "floor", "format",
+        "f64_to_bytes_le", "false", "file_exists", "file_modtime", "file_size_native", "file_size", "float_to_bits", "floor", "format", "path_exists",
         "getenv", "getpid", "hash_string", "http_get", "is_alpha", "is_alphanumeric", "is_digit", "json_decode",
         "json_encode", "json_parse", "json_stringify", "layer_norm", "len", "libsodium_available", "list_dir", "ln", "log",
         "log10", "matmul", "max", "min", "mkdir", "mono_ns", "mount", "namespace_clone_const",

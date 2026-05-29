@@ -1821,6 +1821,7 @@ fn type_of(node) {
             if cl.value == "env" { return "Str" }
             if cl.value == "to_int" { return "Int" }
             if cl.value == "file_exists" { return "Int" }
+            if cl.value == "path_exists" { return "Int" }
             if cl.value == "dir_exists" { return "Int" }
             if cl.value == "mkdir" { return "Int" }
             if cl.value == "list_dir" { return "DynArr" }
@@ -2518,6 +2519,9 @@ fn emit_expr(node) {
         }
         if callee.kind == "Ident" && callee.value == "file_exists" {
             return "hexa_file_exists(" + emit_str_arg(node.args[0]) + ")"
+        }
+        if callee.kind == "Ident" && callee.value == "path_exists" {
+            return "hexa_path_exists(" + emit_str_arg(node.args[0]) + ")"
         }
         if callee.kind == "Ident" && callee.value == "dir_exists" {
             return "hexa_dir_exists(" + emit_str_arg(node.args[0]) + ")"
@@ -3685,7 +3689,10 @@ fn emit_runtime() {
     rp.push("    return (long)n;\n")
     rp.push("}\n")
     rp.push("static long hexa_file_exists(const char* path) {\n")
-    rp.push("    FILE* f = fopen(path, \"rb\"); if (!f) return 0; fclose(f); return 1;\n")
+    rp.push("    struct stat st; if (stat(path, &st) != 0) return 0; return S_ISREG(st.st_mode) ? 1 : 0;\n")
+    rp.push("}\n")
+    rp.push("static long hexa_path_exists(const char* path) {\n")
+    rp.push("    struct stat st; return (stat(path, &st) == 0) ? 1 : 0;\n")
     rp.push("}\n")
     rp.push("static long hexa_dir_exists(const char* path) {\n")
     rp.push("    struct stat st; if (stat(path, &st) != 0) return 0; return S_ISDIR(st.st_mode) ? 1 : 0;\n")

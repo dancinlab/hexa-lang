@@ -101,7 +101,7 @@ fn get_builtins() -> [string] {
     return [
         "print", "println", "len", "type_of",
         "sigma", "phi", "tau", "gcd", "sopfr",
-        "read_file", "write_file", "file_exists", "delete_file", "append_file",
+        "read_file", "write_file", "file_exists", "path_exists", "delete_file", "append_file",
         "keys", "values", "has_key",
         "to_string", "to_int", "to_float",
         "abs", "min", "max", "floor", "ceil", "round", "sqrt", "pow",

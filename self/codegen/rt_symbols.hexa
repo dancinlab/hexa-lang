@@ -185,6 +185,7 @@
     if name == "delete_file"     { return true }
     if name == "file_size"       { return true }
     if name == "file_exists"     { return true }
+    if name == "path_exists"     { return true }
     if name == "input"           { return true }
     return false
 }
