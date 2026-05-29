@@ -518,10 +518,23 @@ fn _vast_destroy_aborted(out: str) -> int {
 }
 
 // _vast_destroy_confirmed — does the destroy output carry a positive
-// success marker? vastai emits "destroying instance" / "success" /
-// "not found" (already gone) on a real destroy. We require one of these
-// AND the absence of the abort marker — rc=0 alone is never trusted.
+// success marker? vastai's destroy response varies by version:
+//   • "destroying instance <id>"  (human form)
+//   • {"success": true}            (--raw / JSON form)
+//   • "not found" / "no such"      (instance already gone)
+//   • EMPTY / whitespace-only      (recent vastai prints NOTHING on a
+//                                   successful destroy — exit 0, no stdout)
+// We accept any of these AND require the absence of the abort marker;
+// rc=0 alone is still never trusted, and the empty-output path is NOT a
+// blind pass — vast_destroy_verdict gates it behind the (c) cross-verify
+// `show instance` live-check, which is the real authority on a leak.
+// (handoff hexa-lang e8b09b5a — false "verify manually" on a confirmed
+// destroy because the matcher missed vast's real success forms.)
 fn _vast_destroy_confirmed(out: str) -> int {
+    // empty / whitespace-only output is the common silent-success shape.
+    if len(out.trim()) == 0 {
+        return 1
+    }
     if out.index_of("destroying") >= 0 {
         return 1
     }
@@ -532,6 +545,13 @@ fn _vast_destroy_confirmed(out: str) -> int {
         return 1
     }
     if out.index_of("not found") >= 0 {
+        return 1
+    }
+    // some vastai builds report an already-gone instance as "no such".
+    if out.index_of("no such") >= 0 {
+        return 1
+    }
+    if out.index_of("No such") >= 0 {
         return 1
     }
     return 0

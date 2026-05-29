@@ -1,0 +1,75 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+// stdlib/cloud/vast_destroy_verdict_test.hexa — falsifier suite for the
+// vast destroy success-marker matcher. The source fns are `_`-prefixed and
+// private to stdlib/cloud/vast.hexa, so this mirrors the pure-string logic
+// (mirror-test pattern matches cloud_rm_test.hexa / pod_registry_guard_test).
+//
+// Falsifiers:
+//   F-VAST-DESTROY-EMPTY    — empty/whitespace stdout (silent success) → confirmed
+//   F-VAST-DESTROY-MARKERS  — destroying/destroyed/success/not found/no such → confirmed
+//   F-VAST-DESTROY-ABORT    — "Aborted" never reads as confirmed
+//   F-VAST-DESTROY-GARBAGE  — unrelated text → NOT confirmed (false-negative is safe)
+//
+// Regression target — handoff hexa-lang e8b09b5a: a confirmed vast destroy
+// printed empty stdout, the old matcher returned 0, and `cloud down`
+// emitted a false "destroy: no success/destroying/not-found marker — verify
+// manually:" warning. The empty-output case below pins the fix.
+//
+// Run:   hexa run stdlib/cloud/vast_destroy_verdict_test.hexa
+// PASS:  exits 0, prints "vast_destroy_verdict_test PASS".
+
+// Mirror of vast.hexa:_vast_destroy_aborted (private).
+fn _vast_destroy_aborted(out: str) -> int {
+    if out.index_of("Aborted") >= 0 { return 1 }
+    if out.index_of("aborted") >= 0 { return 1 }
+    if out.index_of("ABORTED") >= 0 { return 1 }
+    return 0
+}
+
+// Mirror of vast.hexa:_vast_destroy_confirmed (private) — KEEP IN SYNC.
+fn _vast_destroy_confirmed(out: str) -> int {
+    if len(out.trim()) == 0 { return 1 }
+    if out.index_of("destroying") >= 0 { return 1 }
+    if out.index_of("destroyed") >= 0 { return 1 }
+    if out.index_of("success") >= 0 { return 1 }
+    if out.index_of("not found") >= 0 { return 1 }
+    if out.index_of("no such") >= 0 { return 1 }
+    if out.index_of("No such") >= 0 { return 1 }
+    return 0
+}
+
+fn _ck(name: str, got: int, want: int) {
+    if got != want {
+        println("  FAIL: " + name + " got " + to_string(got) + " want " + to_string(want))
+        exit(1)
+    }
+}
+
+fn main() {
+    // F-VAST-DESTROY-EMPTY — the regression case. Recent vastai prints
+    // nothing on a successful destroy (exit 0, empty stdout).
+    _ck("empty → confirmed",      _vast_destroy_confirmed(""), 1)
+    _ck("whitespace → confirmed", _vast_destroy_confirmed("  \n \t "), 1)
+
+    // F-VAST-DESTROY-MARKERS — every real positive form is recognized.
+    _ck("destroying instance",  _vast_destroy_confirmed("destroying instance 12345"), 1)
+    _ck("destroyed",            _vast_destroy_confirmed("instance 12345 destroyed"), 1)
+    _ck("json success",         _vast_destroy_confirmed("{\"success\": true}"), 1)
+    _ck("not found",            _vast_destroy_confirmed("error: instance not found"), 1)
+    _ck("no such",              _vast_destroy_confirmed("no such instance 12345"), 1)
+    _ck("No such",              _vast_destroy_confirmed("No such instance"), 1)
+
+    // F-VAST-DESTROY-ABORT — the EOF-to-confirm abort marker is never a pass.
+    _ck("Aborted detected",     _vast_destroy_aborted("Aborted."), 1)
+    _ck("aborted lc detected",  _vast_destroy_aborted("aborted"), 1)
+    _ck("clean has no abort",   _vast_destroy_aborted("destroying instance 1"), 0)
+    _ck("empty has no abort",   _vast_destroy_aborted(""), 0)
+
+    // F-VAST-DESTROY-GARBAGE — unrelated non-empty text must NOT confirm
+    // (a false-negative is safe; vast_destroy_verdict then surfaces the
+    // diagnostic and the show-instance cross-check decides).
+    _ck("garbage not confirmed", _vast_destroy_confirmed("connection timed out"), 0)
+    _ck("usage not confirmed",   _vast_destroy_confirmed("Usage: vastai destroy"), 0)
+
+    println("vast_destroy_verdict_test PASS")
+}
