@@ -2,6 +2,103 @@
 
 Append-only history sister of `HEXA-TRAIN-FLOOR.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-30 — 🟢🟠 M7 라이브 측정 — RTX 5070(ubu-2, pool, $0)서 1차 사이클 🟠 검증
+
+1차 사이클(M1~M6)의 🟠(static/분석) 클레임을 **실제 GPU(RTX 5070, ubu-2 pool 호스트,
+비용 $0)** 에서 측정으로 검증했다. cross-repo anima 트레이너 전체 빌드(runtime regen
+블로커)는 **deferred** — 대신 emitter SSOT(`runtime_cuda_emit.hexa`·`runtime_core_emit
+.hexa`)의 생성 커널/게이트를 **byte-faithful 하게 복제한 standalone 마이크로벤치**로
+각 fix 메커니즘을 직접 측정(instrument-first / cheap-first). 측정대 raw stdout =
+`.verdicts/hexa-train-floor/M7-*.txt` (g5 verbatim). 소스 = `tool/train_floor_m7/`.
+
+### 측정 환경
+
+- 호스트: **ubu-2** (Linux x86_64, glibc) · GPU **RTX 5070** (12GB, driver 580.159.03) · nvcc 12.0 · cuBLAS
+- 유료 pod **미사용** (전부 무료 pool 호스트서 측정 완료 — A100 헤드룸 검증은 잔여 🟠로 남김)
+
+### A/B 측정 표
+
+#### (1) M4 roofline + M6 fp32 lever — `M7-fp32-roofline.txt` → **🟢 승격**
+
+5070 cuBLAS square GEMM(2N³ FLOPs) fp64(DGEMM) vs fp32(SGEMM) 실측:
+
+| N | fp64 TFLOPs | fp32 TFLOPs | fp32/fp64 |
+|---|---|---|---|
+| 1024 | 0.485 | 20.51 | 42.3× |
+| 2048 | 0.497 | 24.89 | 50.1× |
+| 4096 | 0.500 | 24.25 | 48.5× |
+
+- **M4 roofline 예측 검증 = 맞음(CONFIRMED).** 측정 fp64 rate(0.50 TFLOPs) → 트레이너
+  fp64 floor = 3.03e12 / 0.50e12 = **6.06 s/step (0.165 step/s)**. M4 예측 **6.58 s/step
+  (0.15 step/s)** 및 DECODER 관측 post-#2017/#2018 **0.156~0.18 step/s** 와 ~10% 내 일치.
+  → "트레이너는 5070서 이미 fp64 compute roofline 에 닿아 있다"는 M4 핵심 주장 실측 확인.
+- **M6 fp32 lever 검증 = 맞음.** 측정 fp32/fp64 ceiling-lift = **42~50×** (M4 예측 **~44×**).
+  → fp32 floor = 3.03e12 / 24.5e12 = **0.124 s/step (8.09 step/s)**.
+
+#### (2) M2/M3 gemv d-threshold 게이트 — `M7-gemv-dthreshold.txt` → 🟢(메커니즘) + 🟠(게이트 키 정정)
+
+5070서 cuBLAS Dgemv vs on-device fp64 커널 vs on-device fp32 커널 per-call latency(us):
+
+| rows(out) | cols(d) | cuBLAS us | ondev fp64 us | ondev fp32 us | f64/cuBLAS | f32/f64 |
+|---|---|---|---|---|---|---|
+| 768 | 64 | 8.08 | 10.82 | 7.12 | **1.34** | 0.66 |
+| 256 | 64 | 7.52 | 7.25 | 6.00 | **0.96** | 0.83 |
+| 64 | 64 | 7.29 | 6.22 | 5.82 | **0.85** | 0.94 |
+| 16 | 768 | 10.19 | 6.42 | 6.19 | **0.63** | 0.97 |
+
+- **메커니즘은 실재(🟢)**: 충분히 작은 work 에서 on-device 커널이 cuBLAS 보다 빠르다
+  (f64/cuBLAS 0.63~0.96, 즉 cuBLAS 가 최대 1.6× 느림) — #1354/#2017·#2018 가설 입증.
+- **그러나 게이트 키가 정정 필요(🟠)**: 현 게이트는 `cols < min_dim(128)` (= 내적 차원 d)
+  기준이나, 실측의 진짜 판별자는 **rows(=출력 차원=#blocks)** 다. rows=768(큰 출력)에서는
+  on-device 가 cuBLAS 보다 **느리다**(1.1~1.34×) → 이때 게이트가 켜지면 오히려 회귀.
+  rows 가 작아야(≤256) on-device 가 이긴다. **falsifier 존중**: "cols<128 면 무조건
+  on-device 가 빠르다"는 단순 명제는 5070서 **부분 반증** — d=64라도 rows=768이면 cuBLAS 우세.
+  → 게이트를 `rows·cols` (총 work) 또는 rows 기준으로 재키잉하는 follow-up 이 정답.
+
+#### (3) M1/M3 farr-trim RSS-churn — `M7-farr-trim-rss.txt` → 🟠 유지(synthetic 미재현)
+
+`HEXA_FARR_TRIM` startup mallopt(M_MMAP/M_TRIM_THRESHOLD=256KiB) ON vs OFF, glibc
+trainer alloc 패턴(1.2MB large farr + 32~128KB small interleave) 복제:
+
+| variant | OFF climb | ON climb | 결론 |
+|---|---|---|---|
+| v1 (large free-each-step) | +0 KB/step | +0 KB/step | 둘 다 climb 없음(재현 실패) |
+| v2 (retained 64KB pins) | +63.69 KB/step | +63.69 KB/step | 둘 다 동일 — climb 은 살아있는 small(<256KB)서, mallopt 무관 |
+
+- **NOT confirmed(🟠 유지)**: synthetic 으로는 fix 효과를 재현 못 했다. v2 의 climb 은
+  genuinely-LIVE 한 64KB(<256KB mmap 임계) 청크 누적 → **어떤 mallopt 도 회수 불가**.
+  1.2MB large farr 의 free 는 TRIM 시 OS 반환되나 매 step 재사용돼 climb 을 만든 적 없음.
+- 결론: HEXA_FARR_TRIM 은 monotonic climb 이 **free'd large(>256KB) 청크가 pinned arena
+  top 뒤에 갇힌** 모양일 때만 도움. 실제 anima 트레이너의 200~325MB/step climb 이 그
+  모양인지는 **여기서 미측정**(full anima 트레이너 빌드 = deferred). 메커니즘은 sound
+  (startup 1회 mallopt, steady-state 비용 0)나 실효는 real-trainer RSS_TRACE fire 대기.
+
+#### (4) A/B ledger — `tool/train_floor_bench.hexa --ledger` → `exports/perf/train_floor_m7_ab.md`
+
+측정 floor 로 채운 A/B ledger (arm H = fp64, arm P = hexa-fp32):
+
+| backend | step/s | s/step | GPU-days (100k step) |
+|---|---|---|---|
+| hexa-native (fp64) | 0.165 | 6.06 | 7.01 |
+| hexa-native (fp32) | 8.090 | 0.124 | 0.143 |
+
+Δ = **49.03×** (fp32 가 fp64 대비; M4 예측 44× 와 정합). prod 100k step 환산 = 7.01 → 0.143 GPU-days.
+
+### 🟢 승격된 클레임
+
+- **M4 roofline 예측** (트레이너 = fp64 COMPUTE-bound, 5070 fp64 floor ≈ 0.15 step/s) → 🟢
+  (측정 0.165 step/s, ~10% 내 일치).
+- **M6 fp32 lever 크기** (5070 ~44× ceiling-lift) → 🟢 (측정 42~50×).
+- **M2/M3 게이트 메커니즘** (작은 work 에서 on-device > cuBLAS) → 🟢 (메커니즘 실재 확인).
+
+### 남은 🟠 (honest)
+
+- **M2/M3 게이트 키**: `cols<128` 이 아니라 **rows(또는 rows·cols)** 가 진짜 판별자 —
+  d=64라도 rows=768이면 cuBLAS 우세(부분 반증). 게이트 재키잉 follow-up cycle 필요.
+- **M1/M3 RSS-churn 실효**: synthetic 미재현 → real anima 트레이너 RSS_TRACE fire 대기.
+- **A100 occupancy 헤드룸**(M4: fp64 floor 의 6.4× 헤드룸) = A100 유료 pod 필요 → 미측정 유지.
+- **cross-repo anima 트레이너 빌드**(runtime regen 반영) = 별개 cycle (HALT 조건 회피, deferred).
+
 ## 2026-05-30 — 🟠 M6 fp64→fp32 dtype 스위치 첫 슬라이스 (gemv, opt-in · 미측정)
 
 M4가 지목한 진짜 천장 lever(**fp64 COMPUTE-bound → fp32/bf16**)의 첫 bounded

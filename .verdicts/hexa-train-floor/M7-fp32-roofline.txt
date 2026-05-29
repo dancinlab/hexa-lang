@@ -1,0 +1,11 @@
+# M7-fp32-roofline — RTX 5070 (ubu-2, pool host, $0) — 2026-05-29T18:48:01Z
+# host: ubu-2  GPU: RTX 5070  nvcc 12.0  cuBLAS DGEMM vs SGEMM
+# axis: M4 roofline (trainer fp64 COMPUTE-bound) + M6 fp32 lever ceiling-lift
+# M4 prediction: 5070 fp64 floor=6.58 s/step (0.15 step/s); fp32 lifts ceiling ~44x
+
+# HEXA-TRAIN-FLOOR M7 GEMM roofline — RTX 5070
+# square GEMM N×N×N, FLOPs=2N^3.  reps=30
+# N | dgemm_TFLOPs(fp64) | sgemm_TFLOPs(fp32) | fp32/fp64_speedup
+ 1024 |              0.485 |             20.510 | 42.31
+ 2048 |              0.497 |             24.890 | 50.09
+ 4096 |              0.500 |             24.253 | 48.49
