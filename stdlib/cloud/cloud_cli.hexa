@@ -21,12 +21,13 @@ fn _cloud_help() {
     println("hexa cloud — structured-argv remote dispatch (cycle A)")
     println("")
     println("usage:")
-    println("  cloud rent <provider> [--gpu T] [--image IMG] [--disk GiB] [--owner TAG] [--query Q] [--max-wait-sec N] [--no-register]")
+    println("  cloud rent <provider> [--gpu T] [--image IMG] [--disk GiB] [--owner TAG] [--project NAME] [--query Q] [--max-wait-sec N] [--no-register]")
     println("                                                         provision a GPU pod (vast|runpod), wait ssh-ready, print host:port + id (alias: up)")
+    println("                                                         --project NAME: owning project for the cross-project down-guard (default cwd git-repo basename, else 'unattributed')")
     println("                                                         --no-register: skip the default ./pods.json row write (rent auto-registers a PENDING work row by default — symmetry with nohup/fire --register; a deck-less rent then shows as a leak candidate)")
     println("                                                         --max-wait-sec N (default 180): bounded SSH-readiness gate; on timeout the rent auto-tears the billing pod down + exits 2 with verbatim verdict (M5 sigil: SSH-never-ready leak guard)")
     println("  cloud rm <id> [--provider P] [--force]                 CANONICAL teardown — confirm + destroy + forget (unifies down/destroy/forget). --provider inferred from registry when absent. --force skips confirm prompt. Idempotent: rm of an absent pod exits 0.")
-    println("  cloud down <id> [--provider P]                         (legacy alias of `cloud rm`) destroy a pod + forget it from the registry")
+    println("  cloud down <id> [--provider P] [--force]               (legacy alias of `cloud rm`) destroy a pod + forget it from the registry — REFUSES a cross-project kill (pod.project≠cwd project) unless --force")
     println("  cloud reboot <id> [--provider P]                       restart a pod's container (preserve disk) to recover a DARK pod — alive+billing but SSH-dropped; re-runs onstart hook → re-injects key. vast only (runpod console). QE jobs resume from .save")
     println("  cloud list [--provider P]                              list live pods (vast + runpod, or one via --provider)")
     println("  cloud status [--provider P]                            alias of list")
@@ -54,7 +55,7 @@ fn _cloud_help() {
     println("  cloud orphans   [--hours N]                            list tracked pods, flag stale (>N h, default 6)")
     println("  cloud reconcile                                        cross-ref registry vs provider: ORPHAN/GHOST/OK")
     println("  cloud reap      [--provider P] [--apply]               M6: orphans alive on provider but absent from M5 registry · bare=dry-run · --apply=destroy")
-    println("  cloud adopt     <pod_id> [--purpose TEXT]              track an untracked (ORPHAN) pod")
+    println("  cloud adopt     <pod_id> [--purpose TEXT] [--project NAME]  track an untracked (ORPHAN) pod (stamps M5 project/purpose for the down-guard)")
     println("  cloud forget    <pod_id|ssh-form|ip|alias>             (legacy — use `cloud rm` instead) mark a tracked (GHOST) pod status=closed")
     println("  cloud watchdog  [--threshold-min N] [--util-cap-pct N] [--kill]  idle-pod autokill sweep (DRY-RUN default)")
     println("                                                         COMPOSITE idle = uptime≥thr(min,def 60) AND util≤cap(%,def 5) AND no-compute-proc AND no-workdir — a slow-but-working pod (compute proc present) is NEVER killed")
@@ -382,6 +383,55 @@ fn _resolve_cwd() -> str {
     let git_top = exec("git rev-parse --show-toplevel 2>/dev/null").trim()
     if len(git_top) > 0 { return git_top }
     return exec("pwd").trim()
+}
+
+// _basename — last path segment of `p` (no trailing-slash handling needed
+// for git-toplevel output, which never trails). "" → "".
+fn _basename(p: str) -> str {
+    let n = len(p)
+    if n == 0 {
+        return ""
+    }
+    let mut last = -1
+    let mut i = 0
+    while i < n {
+        if p.substring(i, i + 1) == "/" {
+            last = i
+        }
+        i = i + 1
+    }
+    return p.substring(last + 1, n)
+}
+
+// _resolve_project — the owning project for a pod, used by rent/up/run/nohup/
+// adopt to STAMP attribution and by down/destroy to derive the cwd project for
+// the cross-project kill-guard. An explicit `--project <name>` flag wins;
+// otherwise fall back to the cwd git-repo basename (`git rev-parse
+// --show-toplevel` → basename); only "unattributed" when cwd is not a git repo
+// (so a pod rented from a non-repo shell is flagged, never silently mis-owned).
+fn _resolve_project(av: [str], start: int) -> str {
+    let flag = _flag_val(av, start, "--project", "")
+    if len(flag) > 0 {
+        return flag
+    }
+    let git_top = exec("git rev-parse --show-toplevel 2>/dev/null").trim()
+    if len(git_top) > 0 {
+        return _basename(git_top)
+    }
+    return "unattributed"
+}
+
+// _cwd_project — the cwd's owning project (git-repo basename, else
+// "unattributed"). The down-guard compares this against the target pod's
+// stored project to refuse a cross-project teardown. NO --project override
+// here: the guard must compare the REAL cwd, not an asserted one (--force is
+// the only bypass).
+fn _cwd_project() -> str {
+    let git_top = exec("git rev-parse --show-toplevel 2>/dev/null").trim()
+    if len(git_top) > 0 {
+        return _basename(git_top)
+    }
+    return "unattributed"
 }
 
 // _auto_register — Fix A worker. Build a synthetic argv that mirrors the
@@ -757,6 +807,9 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
     let image = _flag_val(av, start, "--image", "ubuntu:22.04")
     let disk = _cli_atoi(_flag_val(av, start, "--disk", "30"))
     let owner = _flag_val(av, start, "--owner", "(hexa-cloud rent)")
+    // Project attribution (down-guard source) — explicit --project, else
+    // cwd git-repo basename, else "unattributed". `owner` doubles as purpose.
+    let project = _resolve_project(av, start)
     let query = _flag_val(av, start, "--query", "")
     // M1 — bounded SSH-readiness gate. Default 180s; 0/negative = legacy
     // unbounded (opt-in). Caps the rent so a ghost-RUNNING pod whose ssh
@@ -790,7 +843,7 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
     pod_registry_record(inst.instance_id, owner, "running")
     // M5 — crash-safe registry @ ~/.hx/cloud/active-pods.json (RENTING
     // before ssh-ready; flipped to READY below once ssh handshakes).
-    let _ = pod_registry_add(inst.instance_id, "vast", "", "", "RENTING")
+    let _ = pod_registry_add(inst.instance_id, "vast", project, owner, "", "", "RENTING")
     vast_offer_release(offer.offer_id)
     println("[cloud] rent vast: created instance " + inst.instance_id + " (owner=" + owner + ", registered)")
     // M1 — bounded SSH-readiness gate. Sleep cadence is 10s (vast boot is
@@ -831,7 +884,7 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
         return 1
     }
     println("[cloud] rent vast: READY " + ssh.host + ":" + ssh.port + " (root@" + ssh.host + " -p " + ssh.port + ")")
-    let _ = pod_registry_add(inst.instance_id, "vast", ssh.host, ssh.port, "READY")
+    let _ = pod_registry_add(inst.instance_id, "vast", project, owner, ssh.host, ssh.port, "READY")
     if ttl_sec >= 0 || len(max_cost) > 0 {
         // Capture the vast offer's hourly rate (dph_total) so the cost-cap can
         // accrue. "" when the offer JSON didn't carry dph (cost-cap inert, TTL ok).
@@ -875,6 +928,9 @@ fn _cloud_rent_runpod(av: [str], start: int) -> int {
     let gpu = _flag_val(av, start, "--gpu", "NVIDIA A100 80GB PCIe")
     let image = _flag_val(av, start, "--image", "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04")
     let owner = _flag_val(av, start, "--owner", "(hexa-cloud rent)")
+    // Project attribution (down-guard source) — explicit --project, else
+    // cwd git-repo basename, else "unattributed". `owner` doubles as purpose.
+    let project = _resolve_project(av, start)
     // M1 — bounded SSH-readiness gate (default 180s). The 2026-05-28
     // RunPod H100 SXM dump (pod RUNNING + ssh exit 255 forever) is the
     // motivating incident; without a cap a dead-ssh pod bleeds billing.
@@ -891,7 +947,7 @@ fn _cloud_rent_runpod(av: [str], start: int) -> int {
     pod_registry_record(pod.pod_id, owner, "running")
     // M5 — crash-safe registry @ ~/.hx/cloud/active-pods.json (RENTING
     // before ssh-ready; flipped to READY below once ssh handshakes).
-    let _ = pod_registry_add(pod.pod_id, "runpod", "", "", "RENTING")
+    let _ = pod_registry_add(pod.pod_id, "runpod", project, owner, "", "", "RENTING")
     println("[cloud] rent runpod: created pod " + pod.pod_id + " (owner=" + owner + ", registered)")
     // M1 — bounded path. sleep_each=10s; tries = max(1, max_wait_sec/10).
     // 0 / negative max_wait_sec restores legacy 40 × 15s = 600s unbounded.
@@ -926,7 +982,7 @@ fn _cloud_rent_runpod(av: [str], start: int) -> int {
         return 1
     }
     println("[cloud] rent runpod: READY " + port.ip + ":" + port.port + " (root@" + port.ip + " -p " + port.port + ")")
-    let _ = pod_registry_add(pod.pod_id, "runpod", port.ip, port.port, "READY")
+    let _ = pod_registry_add(pod.pod_id, "runpod", project, owner, port.ip, port.port, "READY")
     if ttl_sec >= 0 || len(max_cost) > 0 {
         // Capture the RunPod pod's hourly rate (`costPerHr`) so the M3 cost-cap
         // can accrue. Prefer the value the create response carried; if it was
@@ -954,6 +1010,36 @@ fn _cloud_rent_runpod(av: [str], start: int) -> int {
 // --provider picks the teardown path; defaults to vast (runpod needs an
 // api key). The registry forget runs regardless of the provider verdict
 // so a confirmed-gone pod never lingers as a GHOST row.
+// _down_guard_refuses — cross-project kill-guard (the near-miss fix: anima's
+// RTSC pods were almost destroyed from another project's session). Look up the
+// target pod's stored `project`, derive the cwd project, and REFUSE the
+// teardown when they MISMATCH and the pod is attributed to a REAL project
+// (not ""/"unattributed"). `--force` bypasses; same-project or unattributed
+// pods behave as before. NO env-var opt-out (sidecar s11). Returns 1 = refuse
+// (caller exits non-zero), 0 = allow.
+fn _down_guard_refuses(id: str, force: int) -> int {
+    if force == 1 {
+        return 0
+    }
+    let records = pod_registry_load()
+    let idx = _m5_find(records, id)
+    if idx < 0 {
+        // Untracked pod (orphan / never-registered) — no attribution to guard.
+        return 0
+    }
+    let owner = records[idx].project
+    if len(owner) == 0 || owner == "unattributed" {
+        return 0
+    }
+    let cur = _cwd_project()
+    if owner == cur {
+        return 0
+    }
+    println("[cloud] REFUSE: pod " + id + " belongs to project '" + owner
+        + "' (cwd='" + cur + "'). Re-run from that repo or pass --force.")
+    return 1
+}
+
 fn _cloud_down(id: str, provider: str) -> int {
     // M5 — flag the pod STOPPING before issuing teardown, so an
     // agent-crash between here and provider-confirm still leaves an
@@ -1148,6 +1234,26 @@ fn _cloud_list_print(provider: str) -> int {
         while j < len(rl.pod_ids) {
             println("  runpod " + rl.pod_ids[j])
             j = j + 1
+        }
+    }
+    // M5 registry view — the crash-safe SSOT (~/.hx/cloud/active-pods.json),
+    // which (unlike the provider live-id lists above) carries the project +
+    // purpose attribution used by the cross-project down-guard. Empty registry
+    // → no section (no clutter).
+    let reg = pod_registry_list()
+    if len(reg) > 0 {
+        println("[cloud] registry (project attribution):")
+        println("  ID                       PROVIDER  STATUS    PROJECT          PURPOSE")
+        let mut k = 0
+        while k < len(reg) {
+            let r = reg[k]
+            let mut proj = r.project
+            if len(proj) == 0 {
+                proj = "⚠unattributed"
+            }
+            println("  " + _reg_pad(r.id, 24) + " " + _reg_pad(r.provider, 9) + " "
+                + _reg_pad(r.status, 9) + " " + _reg_pad(proj, 16) + " " + r.purpose)
+            k = k + 1
         }
     }
     return 0
@@ -1430,6 +1536,12 @@ fn main() {
         }
         let id = av[si + 1]
         let provider = _flag_val(av, si + 2, "--provider", "vast")
+        // Cross-project kill-guard — refuse a teardown of a pod owned by a
+        // different project unless --force. (The anima RTSC near-miss fix.)
+        let force = _has_flag(av, si + 2, "--force")
+        if _down_guard_refuses(id, force) == 1 {
+            exit(3)
+        }
         exit(_cloud_down(id, provider))
     }
     if sub == "reboot" {
@@ -1884,9 +1996,16 @@ fn main() {
                 ai = ai + 1
             }
         }
+        // Project attribution for the M5 down-guard — explicit --project, else
+        // cwd git-repo basename, else "unattributed".
+        let adopt_project = _resolve_project(av, si + 2)
         let ok = pod_registry_adopt(pod_id, purpose)
+        // Also stamp the M5 SSOT (active-pods.json) with project/purpose so the
+        // adopted pod gains cross-project down-guard attribution. provider ""
+        // is preserved/inferred elsewhere; status READY (adopt = it's alive).
+        let _m5 = pod_registry_add(pod_id, "", adopt_project, purpose, "", "", "READY")
         if ok == 1 {
-            println("[cloud] adopted " + pod_id + " (label=" + purpose + ", status=running)")
+            println("[cloud] adopted " + pod_id + " (project=" + adopt_project + ", purpose=" + purpose + ", status=running)")
             // #1155 zero-flag: if this is a vast instance, write its bare-IP
             // Host block → ~/.ssh/config (no-op for runpod / no vast key).
             let _inj = vast_ssh_config_autoinject(pod_id)
