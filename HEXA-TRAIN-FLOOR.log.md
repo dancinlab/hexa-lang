@@ -2,6 +2,32 @@
 
 Append-only history sister of `HEXA-TRAIN-FLOOR.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-30 — 🟠 M1/M3 real RSS-churn 실측 — #2159 벽 해소 확인, but mallopt-fix(#2119/#2123) NEW glibc 벽으로 차단
+
+ubu-2 fresh `/tmp/htf-rss` 콜드시드 클론(origin/main HEAD 4c2e0727, #2159 포함)에서 M1/M3
+RSS-churn A/B 재시도. 결론: #2159 float-pun 벽은 해소(✅) 확인되나, RSS 측정 경로가
+mallopt-mmap fix(#2119/#2123)가 도입한 **malloc.h × malloc-shim 매크로 충돌**(NEW REAL bug,
+Linux/glibc 전용)로 차단됨. HALT(미션 수칙: non-float-pun real failure → STOP+report).
+
+- [x] fresh clone 빌드 — step0 cold-seed 트랜스파일러 OK (build/hexat_linux 3.88 MB +
+      build/hexa_linux 508 KB). hexa_cc_seed.c 는 malloc-shim 有·`#include <malloc.h>` 0건이라
+      충돌 회피하고 빌드됨.
+- [x] #2159 float-pun 벽 해소 확인 — emitter SSOT runtime_core_emit.hexa:1439-1441 에 4-함수
+      union-pun BODY 정착, 설치 runtime 에도 동일, 빌드 로그 float_to_bits 매칭 0건(link OK).
+- [x] runtime.c Linux 컴파일 FALSIFIED (10 errors) — `/usr/include/malloc.h:39/43/51/64:
+      function cannot return function type 'int (size_t)'` + hxlcl_mkdir/backtrace/longjmp
+      undeclared. ROOT: runtime.c:1367 `#define malloc(n) hxlcl_malloc(...)` (libc-rename shim)
+      이 runtime.c:1412 `#include "runtime_core.c"` 전에 활성 → runtime_core.c:328 의 mallopt용
+      `#include <malloc.h>` 가 매크로-확장된 glibc proto 로 깨짐. targeted minimal repro 입증.
+- [x] 플랫폼 — Linux/glibc 전용(malloc.h include 가 `__linux__&&__GLIBC__` 게이트). mac/CI 콜드시드
+      통과·Linux fresh-clone full runtime 빌드만 깨짐.
+- [ ] RSS A/B — 진입 불가. TRIM=1/0 × RSS_TRACE per-step Δ 0 step 측정. M1/M3 여전히 🟠 미실측.
+      pod 미사용(ubu-2 $0, 빌드 벽 차단).
+- [ ] FIX(deferred, 위임) — runtime_core_emit.hexa malloc.h include 를 `#undef malloc/free/
+      realloc/calloc` 로 감싸기(BEFORE include), 또는 include 를 shim #define 위로 이동. codegen-인접
+      emitter SSOT 편집은 HALT 수칙상 부모/후속 사이클 위임.
+- verdict: `.verdicts/hexa-train-floor/M1M3-rss-live.txt` (raw verbatim 갱신).
+
 ## 2026-05-30 — 🟢 M8 gemv 게이트 rekey — cols 기준 → rows 기준 (M7 회귀 가드, RTX 5070 실측)
 
 M7이 #2122 게이트 키(`cols < HEXA_GEMV_CUBLAS_MIN_DIM`)를 부분 반증한 걸 닫음.
