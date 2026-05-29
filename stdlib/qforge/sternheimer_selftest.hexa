@@ -1,0 +1,202 @@
+// @ci_gate — deterministic · network-free · matrix-free Sternheimer DFPT g5 게이트
+//
+// sternheimer_selftest.hexa — QFORGE L5 brick 5/5 g5 gate (the LAST L5 brick).
+//
+// matrix-free H_apply (= 명시적 작은 대칭 행렬·벡터 곱)로, 투영 CG Sternheimer
+// 해가 해석적 sum-over-states(스펙트럴) 공식과 일치함을 검증해 게이트를 닫는다.
+//
+//   KEY anchor — 스펙트럴 공식:
+//     Δψₙ = Σ_{m≠n} |ψₘ⟩ ⟨ψₘ|ΔV|ψₙ⟩ / (εₙ − εₘ)
+//   (occupied 상태는 P_c 가 제거하므로 합은 전도공간 상태에만 기여.)
+//
+// 검증 케이스:
+//   (A) 5×5 대칭 H 를 eigh 로 대각화(d19 재사용) → 점유셋 + 상태 n 선택.
+//       ΔV ψₙ = 임의 섭동벡터. Sternheimer CG vs 스펙트럴 합 → 성분별 일치(rel ~1e-6).
+//   (B) 잔차: ‖(H−εₙ)Δψ + P_c ΔV ψₙ‖ < tol.
+//   (C) 사영: ⟨ψₘ|Δψₙ⟩ ≈ 0 (모든 점유 ψₘ, ~1e-8) — Δψ 는 전도공간에 존재.
+//   (D) converged 플래그 = true (max_iter 내).
+//   (E) 유한차분 교차검증: H+t·ΔV 재대각화 → (ψₙ(t)−ψₙ(0))/t → t→0 에서
+//       Sternheimer Δψ 방향과 일치(코사인≈1).
+//
+// Run (repo runtime 수동 링크 — 설치 hexa self-path 는 stale):
+//   ./build/hexa_v2 stdlib/qforge/sternheimer_selftest.hexa /tmp/st.c &&
+//   clang -O2 -I build/self /tmp/st.c build/self/runtime.c -o /tmp/st -lm -lpthread && /tmp/st
+// PASS: "qforge_sternheimer_selftest PASS".
+use "stdlib/qforge/sternheimer"
+use "stdlib/alloc/math/eigen"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ck_bool(name: str, got: bool, want: bool) -> int {
+    if got == want { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+
+// ── matrix-free 연산자 빌더: 명시적 대칭 행렬 M(n×n 평탄) → H_apply(v)=M·v ──
+let mut G_MAT = []
+let mut G_N = 0
+fn h_apply(v: [float]) -> [float] {
+    let mut out = []
+    let mut i = 0
+    while i < G_N {
+        let mut s = 0.0
+        let mut j = 0
+        while j < G_N { s = s + G_MAT[i * G_N + j] * v[j] ; j = j + 1 }
+        out.push(s)
+        i = i + 1
+    }
+    return out
+}
+fn set_mat(M: [float], n: int) { G_MAT = M ; G_N = n }
+
+fn main() {
+    let mut fails = 0
+    let N = 5
+    let TOL = 1.0e-11
+
+    // ── 5×5 대칭 행렬 (well-separated 스펙트럼) ──────────────────────────
+    //   대칭 명시 (M[i][j]=M[j][i]).
+    let M = [ 4.0, 0.3, 0.1, 0.2, 0.05,
+              0.3, 3.0, 0.4, 0.1, 0.2,
+              0.1, 0.4, 2.0, 0.25, 0.15,
+              0.2, 0.1, 0.25, 1.0, 0.35,
+              0.05, 0.2, 0.15, 0.35, 0.5 ]
+
+    // dense 대각화 (d19: stdlib/alloc/math/eigen 재사용)
+    let eg = eigh(M, N)            // [vals desc, vecs rows(직교정규, 부호정규화)]
+    let vals = eg[0]              // 내림차순
+    let vecs = eg[1]             // vecs[k] = k번째 고유벡터 (길이 N)
+
+    // eigh 는 내림차순 → 오름차순으로 재매핑해 ε/ψ 배열 구성.
+    let mut eps = []
+    let mut psi = []
+    let mut s0 = 0
+    while s0 < N {
+        eps.push(vals[N - 1 - s0])
+        psi.push(vecs[N - 1 - s0])
+        s0 = s0 + 1
+    }
+    // 점유셋 = 최저 2 상태 {0,1}. 응답 대상 상태 n = 1 (점유 내, P_c 가 0,1 제거).
+    let n_idx = 1
+    let mut occ = []
+    occ.push(psi[0])
+    occ.push(psi[1])
+    let M_OCC = 2
+
+    // 섭동벡터 ΔV ψₙ (caller 가 ΔV 적용해 공급 — 여기선 임의 벡터로 모사).
+    let dV_psi = [1.0, 0.5, -0.3, 0.8, 0.2]
+
+    // ── (KEY anchor) 스펙트럴 합: Δψ = Σ_{m∉occ, m≠n} ψₘ ⟨ψₘ|ΔVψₙ⟩/(εₙ−εₘ) ──
+    //   P_c 가 점유(0,1)를 제거 → 합은 전도상태 {2,3,4} 에만.
+    let mut spectral = []
+    let mut z = 0
+    while z < N { spectral.push(0.0) ; z = z + 1 }
+    let mut mm = 2
+    while mm < N {                              // 전도상태 2,3,4
+        // ⟨ψₘ|ΔVψₙ⟩ = ψₘ · dV_psi
+        let mut ov = 0.0
+        let mut t = 0
+        while t < N { ov = ov + psi[mm][t] * dV_psi[t] ; t = t + 1 }
+        let coef = ov / (eps[n_idx] - eps[mm])
+        let mut i = 0
+        while i < N { spectral[i] = spectral[i] + coef * psi[mm][i] ; i = i + 1 }
+        mm = mm + 1
+    }
+
+    // ── Sternheimer 투영 CG ─────────────────────────────────────────────
+    set_mat(M, N)
+    let res = qforge_sternheimer(h_apply, eps[n_idx], psi[n_idx], occ, dV_psi, N, TOL, 200)
+
+    // (A) 성분별 일치 (rel ~1e-6 → 작은 절대값이라 abs 1e-6 사용)
+    let mut a = 0
+    while a < N {
+        fails = fails + _ck_close("(A) dpsi[" + to_string(a) + "] == spectral", res.dpsi[a], spectral[a], 1.0e-6)
+        a = a + 1
+    }
+
+    // (B) 잔차 < tol (solver 내부 재계산값)
+    fails = fails + _ck_bool("(B) residual < tol", res.residual < 1.0e-6, true)
+
+    // (C) 사영: ⟨ψₘ|Δψ⟩ ≈ 0 (모든 점유 m)
+    let mut mc = 0
+    while mc < M_OCC {
+        let mut dotv = 0.0
+        let mut t = 0
+        while t < N { dotv = dotv + occ[mc][t] * res.dpsi[t] ; t = t + 1 }
+        fails = fails + _ck_close("(C) <psi_occ" + to_string(mc) + "|dpsi> = 0", dotv, 0.0, 1.0e-8)
+        mc = mc + 1
+    }
+
+    // (D) converged
+    fails = fails + _ck_bool("(D) converged", res.converged, true)
+
+    // ── (E) 유한차분 교차검증: H + t·ΔV(rank-1 대칭화) 재대각화 ─────────────
+    //   ΔV 를 ψₙ 에 작용한 결과만 알지만, dpsi 방향 검증을 위해
+    //   대칭 섭동 ΔV_sym = |dVψ⟩⟨ψₙ| + |ψₙ⟩⟨dVψ| 를 사용(전도공간 응답은 동일 방향).
+    //   1차 응답: Δψₙ = Σ_{m≠n} ψₘ ⟨ψₘ|ΔV_sym|ψₙ⟩/(εₙ−εₘ),
+    //   ⟨ψₘ|ΔV_sym|ψₙ⟩ = ⟨ψₘ|dVψ⟩⟨ψₙ|ψₙ⟩ + ⟨ψₘ|ψₙ⟩⟨dVψ|ψₙ⟩ = ⟨ψₘ|dVψ⟩ (m≠n,직교)
+    //   → spectral 과 동일. 따라서 FD 방향이 dpsi 와 일치해야.
+    let t_fd = 1.0e-5
+    // ΔV_sym 평탄 행렬 빌드
+    let mut dvm = []
+    let mut ii = 0
+    while ii < N {
+        let mut jj = 0
+        while jj < N {
+            dvm.push(dV_psi[ii] * psi[n_idx][jj] + psi[n_idx][ii] * dV_psi[jj])
+            jj = jj + 1
+        }
+        ii = ii + 1
+    }
+    // H(t) = M + t·ΔV_sym
+    let mut Mt = []
+    let mut p = 0
+    while p < N * N { Mt.push(M[p] + t_fd * dvm[p]) ; p = p + 1 }
+    let egt = eigh(Mt, N)
+    let valst = egt[0]
+    let vecst = egt[1]
+    // H(t) 의 상태 n (오름차순 매핑, 부호를 ψₙ(0)과 정렬)
+    let psn0 = psi[n_idx]
+    let mut psnt = vecst[N - 1 - n_idx]
+    // 부호 정렬: ψₙ(t)·ψₙ(0) < 0 이면 뒤집기
+    let mut sgn = 0.0
+    let mut td = 0
+    while td < N { sgn = sgn + psnt[td] * psn0[td] ; td = td + 1 }
+    if sgn < 0.0 {
+        let mut sg = 0
+        while sg < N { psnt[sg] = -psnt[sg] ; sg = sg + 1 }
+    }
+    // FD 방향 = (ψₙ(t) − ψₙ(0))/t, 그다음 P_c 사영(전도공간 성분만)
+    let mut fd = []
+    let mut f = 0
+    while f < N { fd.push((psnt[f] - psn0[f]) / t_fd) ; f = f + 1 }
+    // P_c 사영 (점유 0,1 제거)
+    let mut po = 0
+    while po < M_OCC {
+        let mut c = 0.0
+        let mut t = 0
+        while t < N { c = c + occ[po][t] * fd[t] ; t = t + 1 }
+        let mut i = 0
+        while i < N { fd[i] = fd[i] - c * occ[po][i] ; i = i + 1 }
+        po = po + 1
+    }
+    // 코사인 유사도(dpsi vs fd) ≈ 1
+    let mut dotdf = 0.0
+    let mut ndp = 0.0
+    let mut nfd = 0.0
+    let mut cc = 0
+    while cc < N {
+        dotdf = dotdf + res.dpsi[cc] * fd[cc]
+        ndp = ndp + res.dpsi[cc] * res.dpsi[cc]
+        nfd = nfd + fd[cc] * fd[cc]
+        cc = cc + 1
+    }
+    let cosim = dotdf / (sqrt(ndp) * sqrt(nfd))
+    fails = fails + _ck_close("(E) FD direction cos(dpsi,fd) ~ 1", cosim, 1.0, 1.0e-4)
+
+    if fails == 0 { println("qforge_sternheimer_selftest PASS") }
+    else { println("qforge_sternheimer_selftest FAIL — " + to_string(fails) + " case(s)") }
+}

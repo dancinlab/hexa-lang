@@ -1,0 +1,166 @@
+// HEXA Standard Library — qforge/sternheimer
+//
+// QFORGE L5 brick 5/5 — Sternheimer DFPT 선형 응답 solver (the LAST L5 brick).
+//
+// DFPT(밀도범함수 섭동이론)에서 섭동 ΔV 에 대한 1차 파동함수 응답 |Δψₙ⟩ 은
+// 비어있는 상태 전부에 대한 합(sum-over-empty-states) 없이 다음 투영 선형계를 풀어 얻는다:
+//
+//     (H − εₙ) |Δψₙ⟩ = − P_c ΔV |ψₙ⟩
+//
+// 여기서 P_c = 1 − Σ_occ |ψₘ⟩⟨ψₘ| 는 점유(occupied) 부분공간을 사영해 제거한다.
+// (H−εₙ) 연산자는 점유공간에서 특이(singular)하므로, 그 여공간(=전도공간)으로
+// 제한해야 가역(invertible)이 된다. Δψₙ 을 전도공간(conduction space)에 묶어 둔다.
+//
+// 풀이법 = 투영 켤레기울기(projected conjugate gradient, CG). RHS 와 모든 CG
+// iterate 를 점유 상태 전부(ψₙ 자기 자신 포함)에 직교 사영해 전도공간에 유지한다.
+//
+// ── P_c 사영 계약 (projection contract) ───────────────────────────────────
+//   occ_states = P_c 를 정의하는 점유 고유벡터들 (행=벡터, 각 길이 n).
+//     · RHS = − P_c (ΔV|ψₙ⟩) — caller 가 ΔV|ψₙ⟩ 를 미리 계산해 dV_psi 로 넘긴다.
+//     · 매 CG iterate(해 dpsi · 검색방향 · 잔차)를 occ_states 전부에 직교 사영.
+//     · 결과 Δψₙ 은 ⟨ψₘ|Δψₙ⟩ ≈ 0 (모든 점유 m) — 즉 전도공간에만 존재.
+//   ΔV 의 "적용"은 이 brick 밖이다 — caller 가 dV_psi = ΔV|ψₙ⟩ 를 공급해 solver 를
+//   generic 하게 유지한다 (d4: 이름 하드코딩 없음).
+//
+// ── matrix-free 계약 (one solver, two callers) ────────────────────────────
+//   H_apply = 행렬-자유 연산자: 벡터 v 를 받아 H·v 를 돌려주는 함수(클로저).
+//   Davidson(brick 4/5)과 동일한 계약. 따라서 같은 solver 가
+//     (a) selftest 의 명시적 작은 dense 행렬 (H_apply = 행렬·벡터 곱), 그리고
+//     (b) 미래의 평면파(PW) H (H_apply = FFT 기반 운동·포텐셜 적용)
+//   둘 다에서 그대로 동작한다 — generic 디스패치(d4).
+//
+//   pub fn qforge_sternheimer(H_apply, eps_n, psi_n, occ_states, dV_psi,
+//                             n, tol, max_iter) -> SternResult
+//
+// reuse (d19): dot/norm 벡터 헬퍼는 stdlib/qforge/davidson.hexa(#2083, dv_dot/
+//   dv_norm)와 동일한 계약. 그러나 davidson.hexa 의 dv_* 는 `pub` 가 아닌 파일-로컬
+//   `fn` 이라 import 불가 → 여기서 최소 로컬 사본(st_dot/st_norm)을 둔다(주: d19 note).
+//   P_c 직교 사영(st_project_out)은 본 brick 고유 로직.
+//   selftest 의 KEY anchor 는 stdlib/alloc/math/eigen 의 dense eigh(A,n)를 재사용해
+//   sum-over-states 스펙트럴 공식과 대조한다 (L1/Davidson 가 이미 재사용).
+
+// 결과 묶음: 1차 응답 Δψₙ · 반복수 · 수렴플래그 · 최종 잔차노름.
+pub struct SternResult {
+    dpsi: [float],       // n 성분, 전도공간 내 1차 파동함수 응답 |Δψₙ⟩
+    iters: int,
+    converged: bool,
+    residual: float
+}
+
+// ── 벡터 헬퍼 (local; davidson.hexa dv_dot/dv_norm 와 동일 계약 — pub 아님, d19 note) ──
+fn st_dot(a: [float], b: [float], n: int) -> float {
+    let mut s = 0.0
+    let mut i = 0
+    while i < n { s = s + a[i] * b[i] ; i = i + 1 }
+    return s
+}
+fn st_norm(a: [float], n: int) -> float { return sqrt(st_dot(a, a, n)) }
+
+// ── P_c 사영: w 에서 점유 부분공간 성분을 제거 (전도공간으로 투영) ──────────
+//   w ← w − Σ_m ⟨ψₘ|w⟩ ψₘ.  occ_states[m] 는 직교정규 가정(eigh 출력은 직교정규).
+//   안정성을 위해 두 번 사영(2x classical Gram-Schmidt) — 작은 누적오차 제거.
+fn st_project_out(w: [float], occ: [[float]], m: int, n: int) -> [float] {
+    let mut v = []
+    let mut t = 0
+    while t < n { v.push(w[t]) ; t = t + 1 }
+    let mut pass = 0
+    while pass < 2 {
+        let mut j = 0
+        while j < m {
+            let c = st_dot(occ[j], v, n)
+            let mut i = 0
+            while i < n { v[i] = v[i] - c * occ[j][i] ; i = i + 1 }
+            j = j + 1
+        }
+        pass = pass + 1
+    }
+    return v
+}
+
+// ── Sternheimer 본체: 투영 CG 로 (H−εₙ)Δψ = −P_c ΔV ψₙ 풀이 ─────────────────
+// H_apply: v -> H·v (matrix-free) · eps_n: 상태 n 의 고유값 εₙ ·
+// psi_n: 상태 n 의 고유벡터 (계약상 occ_states 에 포함) ·
+// occ_states: 점유 고유벡터들(행=벡터, m=len) — P_c 정의 ·
+// dV_psi: 미리 계산된 ΔV|ψₙ⟩ (caller 공급) · n: 차원 · tol/max_iter: CG 종료조건.
+pub fn qforge_sternheimer(H_apply, eps_n: float, psi_n: [float],
+                          occ_states: [[float]], dV_psi: [float],
+                          n: int, tol: float, max_iter: int) -> SternResult {
+    let m = occ_states.len()
+
+    // A(x) = P_c (H − εₙ) P_c x — 전도공간으로 제한한 대칭 연산자.
+    // (P_c 가 양쪽에 있어 SPD 가 아닌 일반 대칭이지만, 전도공간에서 비특이.)
+
+    // RHS b = − P_c (ΔV|ψₙ⟩).  (caller 가 dV_psi = ΔV ψₙ 공급)
+    let mut b = st_project_out(dV_psi, occ_states, m, n)
+    let mut i0 = 0
+    while i0 < n { b[i0] = -b[i0] ; i0 = i0 + 1 }
+
+    // x0 = 0 (전도공간). r0 = b − A x0 = b.  p0 = r0.
+    let mut x = []
+    let mut k0 = 0
+    while k0 < n { x.push(0.0) ; k0 = k0 + 1 }
+    let mut r = []
+    let mut k1 = 0
+    while k1 < n { r.push(b[k1]) ; k1 = k1 + 1 }
+    let mut p = []
+    let mut k2 = 0
+    while k2 < n { p.push(r[k2]) ; k2 = k2 + 1 }
+
+    let b_norm = st_norm(b, n)
+    let mut rs_old = st_dot(r, r, n)
+    let mut iters = 0
+    let mut converged = false
+
+    // 빈 RHS(섭동이 전도공간에 성분 없음) → 자명한 해 Δψ=0.
+    if b_norm < tol {
+        return SternResult { dpsi: x, iters: 0, converged: true, residual: 0.0 }
+    }
+
+    while iters < max_iter {
+        // Ap = P_c (H − εₙ) P_c p
+        let pc_p = st_project_out(p, occ_states, m, n)
+        let hp = H_apply(pc_p)
+        let mut ap = []
+        let mut i = 0
+        while i < n { ap.push(hp[i] - eps_n * pc_p[i]) ; i = i + 1 }
+        let ap2 = st_project_out(ap, occ_states, m, n)
+
+        let pAp = st_dot(p, ap2, n)
+        if pAp == 0.0 { break }              // 방향 소진 (특이) — 종료
+        let alpha = rs_old / pAp
+
+        let mut i2 = 0
+        while i2 < n {
+            x[i2] = x[i2] + alpha * p[i2]
+            r[i2] = r[i2] - alpha * ap2[i2]
+            i2 = i2 + 1
+        }
+        iters = iters + 1
+
+        let r_norm = st_norm(r, n)
+        if r_norm < tol { converged = true ; break }
+
+        let rs_new = st_dot(r, r, n)
+        let beta = rs_new / rs_old
+        let mut i3 = 0
+        while i3 < n { p[i3] = r[i3] + beta * p[i3] ; i3 = i3 + 1 }
+        rs_old = rs_new
+    }
+
+    // 최종 해를 전도공간으로 한 번 더 사영(누적 점유 누설 제거).
+    let dpsi = st_project_out(x, occ_states, m, n)
+
+    // 실제 잔차노름 ‖(H−εₙ)Δψ + P_c ΔV ψₙ‖ = ‖P_c[(H−εₙ)Δψ] − b‖ 재계산.
+    let hd = H_apply(dpsi)
+    let mut res_vec = []
+    let mut j = 0
+    while j < n { res_vec.push(hd[j] - eps_n * dpsi[j]) ; j = j + 1 }
+    let res_pc = st_project_out(res_vec, occ_states, m, n)
+    let mut diff = []
+    let mut q = 0
+    while q < n { diff.push(res_pc[q] - b[q]) ; q = q + 1 }
+    let residual = st_norm(diff, n)
+    let conv = converged || (residual < tol)
+
+    return SternResult { dpsi: dpsi, iters: iters, converged: conv, residual: residual }
+}
