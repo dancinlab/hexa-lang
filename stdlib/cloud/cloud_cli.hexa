@@ -170,6 +170,24 @@ fn _cli_atoi(s: str) -> int {
     return v
 }
 
+// _need_val — d4-generic value-flag validator. Given the flag KEY at av[i],
+// return the value av[i+1] iff it exists AND does not itself look like a flag
+// (`--*` / bare `--`). Otherwise emit a clear actionable error and exit(2),
+// instead of silently swallowing the next flag as the value (the `--port
+// --insecure` -> `Bad port '--insecure'` class of bug). Drives off the call
+// site (every value-flag parser calls it) — no per-flag branch lives here.
+fn _need_val(av: [str], i: int, key: str) -> str {
+    if i + 1 >= len(av) {
+        eprintln("[cloud] error: flag " + key + " needs a value, got end-of-args")
+        exit(2)
+    }
+    let nxt = av[i + 1]
+    if nxt == "--" || nxt.starts_with("--") {
+        eprintln("[cloud] error: flag " + key + " needs a value, got '" + nxt + "'")
+        exit(2)
+    }
+    return nxt
+}
 // _ttl_to_sec — parse a `--ttl` duration to seconds. Accepts a bare integer
 // (seconds) or a `<N>s` / `<N>m` / `<N>h` suffix form. Empty / unparseable →
 // -1 (UNSET, no TTL enforcement). M2 deadman uses this.
@@ -217,23 +235,17 @@ fn _ssh_opts_cli(av: [str], start: int) -> [str] {
             // `Permission denied (publickey)` on every direct-IP pod, forcing a
             // raw-ssh workaround OUTSIDE the sanctioned `hexa cloud` path.
             // IdentitiesOnly=yes stops ssh-agent keys from racing ahead of it.
-            if i + 1 < len(av) {
-                opts.push("-i")
-                opts.push(av[i + 1])
-                opts.push("-o")
-                opts.push("IdentitiesOnly=yes")
-                i = i + 2
-            } else {
-                i = i + 1
-            }
+            let idv = _need_val(av, i, "--identity")
+            opts.push("-i")
+            opts.push(idv)
+            opts.push("-o")
+            opts.push("IdentitiesOnly=yes")
+            i = i + 2
         } else if t == "--port" {
-            if i + 1 < len(av) {
-                opts.push("-p")
-                opts.push(av[i + 1])
-                i = i + 2
-            } else {
-                i = i + 1
-            }
+            let pv = _need_val(av, i, "--port")
+            opts.push("-p")
+            opts.push(pv)
+            i = i + 2
         } else if t == "--max-wall" {
             // run-verb wall cap (handled by _max_wall_cli) — skip flag+value
             // here so it never lands in ssh_opts.
@@ -265,10 +277,7 @@ fn _max_wall_cli(av: [str], start: int) -> int {
         if t == "--" {
             return 0
         } else if t == "--max-wall" {
-            if i + 1 < len(av) {
-                return _cli_atoi(av[i + 1])
-            }
-            return 0
+            return _cli_atoi(_need_val(av, i, "--max-wall"))
         }
         i = i + 1
     }
@@ -305,10 +314,7 @@ fn _early_life_cli(av: [str], start: int) -> int {
         if t == "--" {
             return 0
         } else if t == "--early-life-check" {
-            if i + 1 < len(av) {
-                return _cli_atoi(av[i + 1])
-            }
-            return 0
+            return _cli_atoi(_need_val(av, i, "--early-life-check"))
         }
         i = i + 1
     }
@@ -581,24 +587,16 @@ fn _env_args_cli(av: [str], start: int) -> [str] {
         if t == "--" {
             return out
         } else if t == "--env" {
-            if i + 1 < len(av) {
-                out.push(av[i + 1])
-                i = i + 2
-            } else {
-                i = i + 1
-            }
+            out.push(_need_val(av, i, "--env"))
+            i = i + 2
         } else if t == "--env-file" {
-            if i + 1 < len(av) {
-                let fkvs = _env_file_kvs(av[i + 1])
-                let mut k = 0
-                while k < len(fkvs) {
-                    out.push(fkvs[k])
-                    k = k + 1
-                }
-                i = i + 2
-            } else {
-                i = i + 1
+            let fkvs = _env_file_kvs(_need_val(av, i, "--env-file"))
+            let mut k = 0
+            while k < len(fkvs) {
+                out.push(fkvs[k])
+                k = k + 1
             }
+            i = i + 2
         } else {
             i = i + 1
         }
@@ -665,12 +663,8 @@ fn _source_args_cli(av: [str], start: int) -> [str] {
         if t == "--" {
             return out
         } else if t == "--source" {
-            if i + 1 < len(av) {
-                out.push(av[i + 1])
-                i = i + 2
-            } else {
-                i = i + 1
-            }
+            out.push(_need_val(av, i, "--source"))
+            i = i + 2
         } else {
             i = i + 1
         }
@@ -723,12 +717,16 @@ fn _checked_host(h: str) -> str {
 }
 
 // _flag_val — scan av[start..] for `<key> <value>` and return the value;
-// `dflt` when the flag is absent or has no following token.
+// `dflt` when the flag is ABSENT. When the key IS present but its value is
+// missing or itself looks like a flag (`--*` / bare `--`), error+exit(2) via
+// _need_val rather than silently swallowing the next flag (same value-flag
+// guard as the positional consumers — driven by the call site, no per-flag
+// branch).
 fn _flag_val(av: [str], start: int, key: str, dflt: str) -> str {
     let mut i = start
     while i < len(av) {
-        if av[i] == key && i + 1 < len(av) {
-            return av[i + 1]
+        if av[i] == key {
+            return _need_val(av, i, key)
         }
         i = i + 1
     }

@@ -1,0 +1,151 @@
+// stdlib/cloud/flag_value_validate_test.hexa — @ci_gate selftest for the
+// value-flag validator (_need_val) and the parsers that route through it.
+//
+// VERBATIM copies of the cloud_cli.hexa functions under test (cloud_cli is a
+// `fn main` standalone CLI whose full module graph carries an UNRELATED
+// pre-existing origin/main transpile collision — `_shq_local` redefine +
+// pod_registry_add arity — so this self-contained harness exercises the
+// exact patched logic without that graph). Kept byte-identical to the
+// shipped functions; a drift makes this test meaningless, so review both
+// together.
+//
+// Run:  hexa run stdlib/cloud/flag_value_validate_test.hexa -- <case>
+//   port-missing   → `--port --insecure` (the ORIGINAL bug) → clear error
+//   port-eol       → `--port` at end-of-args            → end-of-args error
+//   port-valid     → `--port 11038`                      → -p 11038
+//   identity-miss  → `--identity --port`                 → clear error
+//   provider-miss  → `_flag_val --provider --force`      → clear error
+//   provider-valid → `_flag_val --provider vast`         → vast
+//   provider-absent→ `_flag_val` absent                  → default(runpod)
+//   valid-combo    → `--port 22 --insecure --identity k` → full opts, no error
+
+// ── functions under test (VERBATIM from stdlib/cloud/cloud_cli.hexa) ──
+
+fn _need_val(av: [str], i: int, key: str) -> str {
+    if i + 1 >= len(av) {
+        eprintln("[cloud] error: flag " + key + " needs a value, got end-of-args")
+        exit(2)
+    }
+    let nxt = av[i + 1]
+    if nxt == "--" || nxt.starts_with("--") {
+        eprintln("[cloud] error: flag " + key + " needs a value, got '" + nxt + "'")
+        exit(2)
+    }
+    return nxt
+}
+
+fn _ssh_opts_cli(av: [str], start: int) -> [str] {
+    let mut opts = []
+    let mut i = start
+    while i < len(av) {
+        let t = av[i]
+        if t == "--" {
+            i = len(av)
+        } else if t == "--insecure" {
+            opts.push("-o")
+            opts.push("StrictHostKeyChecking=no")
+            opts.push("-o")
+            opts.push("UserKnownHostsFile=/dev/null")
+            i = i + 1
+        } else if t == "--identity" {
+            let idv = _need_val(av, i, "--identity")
+            opts.push("-i")
+            opts.push(idv)
+            opts.push("-o")
+            opts.push("IdentitiesOnly=yes")
+            i = i + 2
+        } else if t == "--port" {
+            let pv = _need_val(av, i, "--port")
+            opts.push("-p")
+            opts.push(pv)
+            i = i + 2
+        } else if t == "--max-wall" {
+            i = i + 2
+        } else if t == "--early-life-check" {
+            i = i + 2
+        } else if t == "--grep" || t == "--until" {
+            i = i + 2
+        } else {
+            i = i + 1
+        }
+    }
+    return opts
+}
+
+fn _flag_val(av: [str], start: int, key: str, dflt: str) -> str {
+    let mut i = start
+    while i < len(av) {
+        if av[i] == key {
+            return _need_val(av, i, key)
+        }
+        i = i + 1
+    }
+    return dflt
+}
+
+// ── harness ──
+
+fn _print_opts(label: str, opts: [str]) {
+    let mut s = label
+    let mut i = 0
+    while i < len(opts) {
+        s = s + " " + opts[i]
+        i = i + 1
+    }
+    println(s)
+}
+
+fn main() {
+    let argv = args()
+    // find the case token after "--"
+    let mut ci = 0
+    let mut found = -1
+    while ci < len(argv) {
+        if argv[ci] == "--" {
+            found = ci + 1
+            ci = len(argv)
+        } else {
+            ci = ci + 1
+        }
+    }
+    if found < 0 || found >= len(argv) {
+        println("usage: -- <case>")
+        exit(0)
+    }
+    let mode = argv[found]
+
+    if mode == "port-missing" {
+        // ORIGINAL BUG: --port value omitted, --insecure slides in.
+        let av = ["--port", "--insecure", "--", "echo"]
+        let opts = _ssh_opts_cli(av, 0)
+        _print_opts("UNEXPECTED-parsed", opts)   // should NOT reach — _need_val exits 2
+    } else if mode == "port-eol" {
+        let av = ["--port"]
+        let opts = _ssh_opts_cli(av, 0)
+        _print_opts("UNEXPECTED-parsed", opts)
+    } else if mode == "port-valid" {
+        let av = ["--port", "11038", "--", "echo"]
+        let opts = _ssh_opts_cli(av, 0)
+        _print_opts("OK", opts)
+    } else if mode == "identity-miss" {
+        let av = ["--identity", "--port", "22"]
+        let opts = _ssh_opts_cli(av, 0)
+        _print_opts("UNEXPECTED-parsed", opts)
+    } else if mode == "provider-miss" {
+        let v = _flag_val(["--provider", "--force"], 0, "--provider", "runpod")
+        println("UNEXPECTED-provider=" + v)
+    } else if mode == "provider-valid" {
+        let v = _flag_val(["--provider", "vast", "--force"], 0, "--provider", "runpod")
+        println("OK provider=" + v)
+    } else if mode == "provider-absent" {
+        let v = _flag_val(["--force"], 0, "--provider", "runpod")
+        println("OK provider=" + v)
+    } else if mode == "valid-combo" {
+        let av = ["--port", "22", "--insecure", "--identity", "/k/id", "--", "echo", "hi"]
+        let opts = _ssh_opts_cli(av, 0)
+        _print_opts("OK", opts)
+    } else {
+        println("unknown case: " + mode)
+        exit(1)
+    }
+}
