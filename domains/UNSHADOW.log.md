@@ -699,7 +699,7 @@ polymorphic site(`hexa_len`+checked element fetch)로 흘려보낸 boundary corp
 memo(🔵·측정 깔끔) 3)C13 escape→stack(🔵·공간축 첫 채굴) 4)C2 NaN-box(🔵·블라스트 大→후순위)
 5)C17 atlas-PGO(🔵). C8 monomorph·C11 AOT-atlas=deferred, C9/C10=🟡 측정-격차-확인-시만.
 
-**MIRROR-ROOM fold.** 채굴 trail → `domains/UNSHADOW.MINING.tape`(SSOT·거울 표면). survivor 5건 →
+**MIRROR-ROOM fold.** 채굴 trail → `domains/UNSHADOW.MINING.md`(SSOT·거울 표면). survivor 5건 →
 UNSHADOW.md `- [ ]` milestone 등록(14 [x]+B line 무손). 모두 이미-측정 발견 OR LLVM-can't 근거에 묶임,
 새 perf 숫자 발명 0. ruled-out(codegen-only unbox 축A🔴·AoS↔SoA-without-typed-repr E🔴) 재제안 안 함.
 **next-frontier seed = C1 native HexaArrI64/F64** — 축A 의 closed-negative 가 "갭은 STORAGE 에
