@@ -514,3 +514,34 @@ bf16 lever 의 실제 거처는 **gemv 가 아니라 TensorCore GemmEx matmul**.
 selector parity + 완결성 위해 opt-in 으로 랜딩(기본 fp64, NOT recommended 명시).
 잔여(M9+): `matmul_t`/`matmul` 을 bf16 storage + `_hx_gemm_ex_bf16` 로 배선해
 실제 24.9–123x 천장 돌파 흡수. 추론 AKIDA-int4 무손상(별개 경로).
+
+## 2026-05-30 — A100 헤드룸 (RENTED A100 80GB PCIe, vast.ai, GPU 사전승인)
+M7/M8/bf16 마이크로벤치 스타일을 **실제 A100** 에서 재측정 (pod 38457696, ssh3.vast.ai:17696,
+nvcc 12.4 native sm_80). preflight(closed-form) = d768·12L f64+adamw on a100-80gb = 15.97 GiB
+PASS(>15% headroom). GemmEx shape = `self/cuda/runtime_bf16_emit.hexa _hx_gemm_ex_bf16` verbatim.
+raw verdict = `.verdicts/hexa-train-floor/A100-headroom.txt` (2 runs). source =
+`tool/train_floor_m7/a100_headroom.cu`.
+
+### 측정 (square GEMM n=256/512/768/1024/2048, FLOPs=2n^3, reps=200)
+- **(1) A100 fp64 Dgemm 🟢**: 4.40 → 18.08 TFLOP/s (n=256→2048). n=2048 = fp64 peak(~19.5)의
+  ~93% = 대형 GEMM 은 이미 fp64 roofline 근접. 5070 fp64(~0.50 TFLOP/s, M7)의 **~30–36×**
+  (n≥768) — M4 예측 fp64 floor headroom 6.4× **이상** = CONSISTENT (floor 는 하한).
+- **(2) bf16 GemmEx vs fp64 Dgemm 🟢 측정 / 🟠 32× 예측 대비**: lift = 1.19×(n=256) →
+  8.8×(n=2048), n 따라 monotone 상승하나 **트레이너 dims(n≤2048)서 ~8.8× 포화 — M4 의
+  headline 32× 미도달**. 32× 는 asymptotic(n≫2048, bf16-TC peak 312 / fp64 peak 19.5 = 16×
+  matched, 32× 는 un-tuned 베이스라인). falsifier 존중 — 과대주장 0(g3).
+
+### cross-device honest 비교
+bf16-lever (B) 가 RTX 5070 서 측정한 동일 GemmEx-vs-Dgemm = 24.9×→123×. A100 비율이 더 작은(1.2–8.8×)
+이유 = A100 는 **진짜 fp64 유닛**(데이터센터)이라 베이스라인이 강함; 5070(컨슈머)은 fp64 ~1/64 로
+crippled → 비율 inflate. **A100 의 1.2–8.8× 가 production honest number**: fp64-capable GPU 에서
+트레이너 dims 의 bf16 레버는 ~5–9×지 32× 아님.
+
+### scope / limitation (정직)
+이 마이크로벤치는 A100 **GEMM 천장(fp64 floor + bf16 lift)** 만 측정. 완전한 occupancy "헤드룸"
+(real step/s, 커널런치+메모리+activation 오버헤드, e2e per-step)은 real d768·12L 트레이너(cross-repo
+anima, runtime-regen 블로커)가 필요 — 여기선 불가. 추론 AKIDA-int4 무관(학습 GEMM 경로).
+
+### teardown
+pod 38457696 `hexa cloud down --force` confirmed destroyed · `reconcile` 0-drift · 5s 프로브 pod
+3개(38457517/583/627)도 leak-guard auto-destroy + registry forget. 내 pod 0개 잔존.
