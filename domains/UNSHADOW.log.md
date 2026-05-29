@@ -2,6 +2,36 @@
 
 Append-only history sister of `UNSHADOW.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-30T07:30Z — 📐 typed-repr RFC + 백로그 재개 (DESIGN, 구현 아님)
+
+E(🔴 CLOSED-NEGATIVE)의 근본 원인 "typed 표현 부재(monomorphic struct layout 0 + unboxed-primitive
+array 0)" 를 다음 frontier 로 설계·등록. **DOC/RFC only** — codegen 무편집·.c 무생성·측정 없음.
+
+**read-only 조사 (E-finding 정밀 확인)**:
+- struct = `hexa_struct_pack_map`(필드명→HexaVal 해시맵, `self/codegen.hexa:8043`) · 필드 접근 =
+  `hexa_map_get_ic`(strcmp/inline-cache, `:5394`). **typed monomorphic 레이아웃 부재 확정.**
+- valstruct 예외는 일반 메커니즘 **아님** — 인터프리터 hot `Val` 전용(12필드 하드코딩, `:7995`),
+  레이아웃 = 고정 12-슬롯 **polymorphic** carrier(`runtime_core_emit.hexa:1207`), 접근도
+  `hexa_valstruct_get_by_key`(`:3535`)가 여전히 strcmp 분기 + scalar rebox. 일반화 불가.
+- array = `HexaArr { HexaVal* items; int len; int cap }`(`self/runtime.h:74`) = AoP, 각 원소 24B
+  boxed. 리터럴 = `hexa_array_push` 체인(`:7594`). **`[i64]`=native `int64_t[]` 아님 확정.**
+- §c-class 가 남긴 확장점 = `items[i]` direct read 까지 갔으나 read 가 여전히 boxed HexaVal 산출
+  + tag-guard 잔존(bench L577-579 "미측정 lever"). = 옵션 A 진입점.
+
+**feasibility 판정**: 옵션 A(unboxed-primitive array)가 더 작은 첫 걸음. (1) §hexaval-unbox 가
+scalar 에서 검증한 박싱-제거 레버(11.30×·gap 100% closed)의 array 축 직계 확장 (2) §c-class 가
+typed-context 검출 + 직접 read 를 이미 구현(3.25×) → A 는 그 read 의 box+tag-guard 만 닫음 (3)
+블라스트 반경 좁음(element-kind 추론 + 2 emit-site + box/unbox 헬퍼, 기존 BOXED 경로 무변경). 옵션
+B(typed monomorphic struct)는 monomorphic 증명·struct 전 경로 공존으로 크고 A 다음 — 단 E 재오픈
+선결이라 가치 분명. 둘 다 `.c=0` LTO 졸업과 직교(§c-class 가 codegen 증명은 runtime.o 벽 독립임 입증).
+
+- [x] RFC draft 작성 = `domains/UNSHADOW.typed-repr.md` (§문제·§설계옵션 A/B·§codegen·type-layer
+      착지점·§ROI/난이도/선후·§성공게이트, 모든 동기 = 측정된 발견에 묶음, 새 perf 숫자 0)
+- [x] UNSHADOW.md 에 milestone `- [ ]` 2줄 등록 (기존 13 `[x]` 무변경) — A(🟢 unboxed-array) ·
+      B(🔵 typed monomorphic struct)
+- [ ] (다음 사이클) 옵션 A 구현·측정 — byte-diff IDENTICAL + array 축 parity Δ
+- [ ] (A 이후) 옵션 B 구현·측정 → 완료 시 E(AoS↔SoA) 재오픈
+
 ## 2026-05-30T06:00Z — 🔵 E AoS↔SoA 자동전환 — 🔴 CLOSED-NEGATIVE (typed-struct layout 부재로 축 ruled-out)
 
 UNSHADOW 마지막 open milestone "🔵 E AoS↔SoA 자동전환 OR F CPU/GPU fusion (도메인 택1)" 을 **E 축(codegen-native)** 으로 택해 SCOPED PILOT 수행 (F=GPU fusion 은 flame/forge 도메인 중복+GPU 임대 비용이라 제외, E 가 UNSHADOW 고유 codegen turf). 결과 = **honest closed-negative** — SoA 를 표현할 정적 struct 레이아웃 자체가 hexa 표현계에 없음. 이 축은 `typed monomorphic struct layout` + `unboxed-primitive array` 인프라가 랜딩되기 전까지 결정적으로 ruled-out.
