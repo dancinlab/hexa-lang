@@ -581,3 +581,52 @@ emit. 양쪽 arm 모두 "out of bounds" surfaced=1. **증명-안전한 read 만 
   full self-host regen 은 B9 generated-runtime 벽으로 차단(prior agents 도 동일) → faithful A/B
   프록시(emit 문자열은 codegen L7661 과 byte-동일·스펙 허용) · repo 안 `.c` 0개. 재현 =
   `tool/unshadow_cclass_bounds_bench.hexa --rt <self-with-runtime.o> --runs 9`.
+
+## §unboxed-array — 🟢 unboxed-primitive array (axis A) — perf 🔴 CLOSED-NEGATIVE
+
+> milestone "🟢 unboxed-primitive array" 의 실측. **요지**: §c-class 가 명시한 미측정
+> lever("known-array 추적기가 생기면 tag-guard 도 삭제")를 측정한다. codegen 이 불변
+> `let xs=[int-lit…]` 를 monomorphic-i64 로 정적증명하면 in-range read `xs[i]` 의
+> §c-class array-tag guard 를 삭제하고 raw `.i` 를 추출한다(boxed-storage unbox). **발견**:
+> 이 unbox 는 갭을 안 닫는다 — 갭은 tag-guard 가 아니라 **boxed 저장 표현**에 산다.
+> SSOT 도구 = `tool/unshadow_unboxed_array_bench.hexa` · verdict = `.verdicts/unshadow-unboxed-array/`.
+
+측정: `mini` (macOS arm64) · clang · best-of-9 wall · 같은 `runtime.o` 링크 · 2026-05-30.
+워크로드 = 256-elem 정수 배열의 sum × 4M outer iters (codegen 이 `let xs=[..]` +
+`for i in 0..len(xs) { acc += xs[i] }` 에 emit 하는 정확한 C shape).
+
+### 표 — 4-way wall min (s) + asm
+
+| arm | 원소 read emit | wall (s) | `bl _hexa_index_get` | SIMD vec-op | 판정 |
+|---|---|---|---|---|---|
+| ref_c (idiomatic `int64_t buf[]`) | `buf[i]` | **0.08** | — | 23 | parity baseline |
+| a_boxed (BEFORE = §c-class) | `(HX_IS_ARRAY(a)?items[i]:checked)` | 1.12 | 1 (cold) | 5 | boxed read + tag-guard |
+| b_unbox (AFTER = 신규 codegen) | `a.arr_ptr->items[i]` (guard 삭제) | **1.12** | **0** | 5 | tag-guard 삭제 → **~0% Δ** |
+| c_native (CEILING = HexaArrI64) | `data[i]` (native `int64_t*`) | **0.08** | 0 | 23 | 갭 100% close |
+
+> g5: 4-arm stdout md5 전부 `35470124be79241c684dc5103ec55d20` (IDENTICAL).
+
+### 무결성 게이트 — typed 배열이 polymorphic 경계서 정확히 box
+
+typed `[i64]` 배열을 unboxed fast-path 로 sum 하면서 **동시에** polymorphic site
+(`hexa_len` + checked `hexa_index_get` element fetch = codegen 이 non-proven 접근에 emit
+하는 BOXED 경로)로 흘려보내는 boundary corpus. boxed(a_bnd)·unbox(b_bnd) 양쪽 arm md5
+`9efbbf5d320a45f2ce6e89491a1ac726` 동일 → **typed array 가 동적 경계서 정확히 box, unbox 는
+값 무변경**. (c-class 의 OOB-still-throws 에 대응하는 이 milestone 의 무결성 게이트.)
+
+### 정직한 해석 — 갭은 tag-guard 가 아니라 STORAGE 에 산다
+
+- **correctness WIN.** element-kind 증명(immutable int-literal-array + live in-range fact)
+  이 정확·좁고, byte-diff 4-arm + 동적경계 IDENTICAL. provably-dead guard 만 삭제(무회귀).
+- **perf 🔴 CLOSED-NEGATIVE.** b_unbox 1.12s ≈ a_boxed 1.12s. tag-guard `HX_IS_ARRAY(arr)?`
+  는 **loop-invariant** 라 clang -O2 가 이미 hoist — 삭제해도(index_get 1→0, cold fallback
+  제거) wall 무변. §c-class 가 "미측정 lever" 라 한 그 lever 가 **null** 임을 측정으로 확정.
+- **진짜 벽 = boxed 저장.** `sizeof(HexaVal)=16` → `HexaArr.items[]` 는 16B-stride 박스
+  배열, clang SIMD-gather 불가(5 vec-op). native `int64_t[]`(c_native, 8B contiguous)만
+  vectorize(23 vec-op)해 갭 100% close. `.verdicts/unshadow-unboxed-array/asm_simd.txt`.
+- **누락 인프라 = native `HexaArrI64`/`F64` 저장 표현**(RUNTIME 변경 — 새 struct + box/unbox
+  헬퍼 + 모든 array primitive 의 element-kind 분기). B9 벽 밖·codegen-only pilot 범위 밖.
+  → axis A 가 "codegen-only unbox 는 perf 레버 아님" 을 결정적 배제. 갭은 STORAGE.
+- caveat: 단일 호스트(mini)·best-of-9·양 arm 동일 runtime.o·full self-host regen 은 B9 벽
+  차단 → faithful A/B 프록시(b_unbox emit 은 codegen L7666 신규 arm 과 byte-동일·스펙 허용) ·
+  repo 안 `.c` 0개. 재현 = `tool/unshadow_unboxed_array_bench.hexa --rt <self-with-runtime.o> --runs 9`.

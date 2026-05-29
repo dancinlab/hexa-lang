@@ -1,0 +1,241 @@
+// tool/unshadow_unboxed_array_bench.hexa
+//   UNSHADOW milestone "🟢 unboxed-primitive array" (axis A of the typed-repr
+//   RFC, domains/UNSHADOW.typed-repr.md). Extends the merged §c-class win:
+//   c-class elided the bounds check on `arr[i]` inside a proven
+//   `for i in 0..len(arr)` loop but the read STILL yielded a BOXED HexaVal and
+//   kept a single array-tag guard (bench L577-579 names dropping that guard as
+//   the unmeasured lever). This milestone closes it for a STATICALLY-PROVEN
+//   monomorphic-i64 array.
+//
+// CODEGEN CHANGE UNDER TEST (self/codegen.hexa):
+//   An immutable `let xs = [1,2,3,…]` (every element an IntLit) registers `xs`
+//   as a known-int-array. A read `xs[i]` covered by a live in-range fact then
+//   knows the receiver is TAG_ARRAY *and* the element is TAG_INT, so:
+//     • the §c-class array-tag guard (`HX_IS_ARRAY(xs)?…:checked`) is DROPPED
+//       (array-ness statically proven) → direct `xs.arr_ptr->items[i]`,
+//     • `_is_known_int(xs[i])` returns true so a surrounding sum/dot BinOp
+//       extracts the raw `.i` via HX_INT with NO per-element tag dispatch.
+//   Storage is still the runtime's HexaVal* (HexaArr) under the runtime.o wall
+//   (true native int64_t[] storage = HexaArrI64 is the modeled CEILING below);
+//   the win measured as LANDED is the boxed-storage unbox (guard + tag work
+//   dropped).
+//
+//   ARMS (all link the SAME real runtime.o; only the element read differs):
+//     ref_c   idiomatic plain `int64_t buf[]` sum (parity baseline, no HexaVal)
+//     a_boxed BEFORE = §c-class read: (HX_IS_ARRAY(a)?a.arr_ptr->items[i]
+//                                                    :checked), then HX_INT()
+//     b_unbox AFTER  = new codegen read for a known-int-array:
+//                       a.arr_ptr->items[i]  (no tag guard), then HX_INT()
+//     c_native CEILING = true native int64_t[] storage (what HexaArrI64 gives):
+//                         int64_t* data; … data[i]   (no HexaVal at all)
+//
+// INTEGRITY GATE (the hard one — the dynamic boundary): a typed i64 array
+//   passed to a POLYMORPHIC site MUST still box correctly and produce identical
+//   output. We emit a boundary corpus: the SAME `[i64]` literal is (1) summed
+//   via the unboxed fast path AND (2) handed to a polymorphic `hexa_len` /
+//   element-print site that consumes boxed HexaVal. Both arms (boxed vs unbox)
+//   MUST byte-match the reference — the unbox NEVER changes a value, only how
+//   the proven in-range read is emitted. A wrong unbox = tag/repr confusion =
+//   silent miscompile, so this gate is non-negotiable.
+//
+// MEASURE per arm: built? · program-output md5 (g5 byte-diff) · best-of-N wall ·
+//   inner-loop `bl _hexa_index_get` count (the boxed-call drop) + asm shape.
+//
+// Argv:
+//   --rt   <dir>   dir holding runtime.h + runtime.c + runtime.o
+//                  (default ~/.hx/packages/hexa/self)
+//   --work <dir>   scratch dir (default ~/unshadow-uba)
+//   --runs <N>     timed runs per arm, best-of-N (default 5)
+
+fn parse_int_safe(s) {
+    let t = s.trim()
+    if len(t) == 0 { return 5 }
+    return to_int(t)
+}
+
+fn arg_val(argv, key, dflt) {
+    let mut i = 0
+    while i < argv.len() {
+        if argv[i] == key && i + 1 < argv.len() { return argv[i + 1] }
+        i = i + 1
+    }
+    return dflt
+}
+
+fn write_file(path, body) {
+    exec("cat > '" + path + "' <<'__UNSHADOW_EOF__'\n" + body + "\n__UNSHADOW_EOF__")
+}
+
+fn build_arm(label, cc_cmd, out_bin) {
+    let r = exec(cc_cmd + " 2>&1")
+    let built = exec("[ -f '" + out_bin + "' ] && printf yes || printf no").trim()
+    let nerr = exec("printf '%s' \"" + r + "\" | grep -ciE 'error|undefined' 2>/dev/null").trim()
+    println("  [" + label + "] built=" + built + " err_lines=" + nerr)
+    return built
+}
+
+fn md5_of_output(bin) {
+    return exec("'" + bin + "' 2>/dev/null | md5 2>/dev/null || '" + bin + "' 2>/dev/null | md5sum 2>/dev/null | cut -d' ' -f1").trim()
+}
+
+fn best_wall(bin, runs) {
+    let mut best = "999"
+    let mut r = 0
+    while r < runs {
+        let t = exec("{ /usr/bin/time -p '" + bin + "' >/dev/null ; } 2>&1 | awk '/^real/{print $2}'").trim()
+        if len(t) > 0 {
+            let cmp = exec("awk 'BEGIN{print (" + t + "<" + best + ")?1:0}'").trim()
+            if cmp == "1" { best = t }
+        }
+        r = r + 1
+    }
+    return best
+}
+
+fn bl_count(asm_path, sym) {
+    return exec("grep -c 'bl[[:space:]]*_" + sym + "' '" + asm_path + "' 2>/dev/null | head -1 || printf 0").trim()
+}
+
+fn main() {
+    let argv = args()
+    let home = env("HOME")
+    let rt = arg_val(argv, "--rt", home + "/.hx/packages/hexa/self")
+    let work = arg_val(argv, "--work", home + "/unshadow-uba")
+    let runs = parse_int_safe(arg_val(argv, "--runs", "5"))
+
+    println("=== UNSHADOW unboxed-primitive array bench (axis A) ===")
+    println("rt=" + rt + "  work=" + work + "  runs=" + to_string(runs))
+    exec("rm -rf '" + work + "' && mkdir -p '" + work + "'")
+
+    let inc = "-I '" + rt + "'"
+    let o2 = "clang -O2 " + inc + " "
+
+    // ── shared HexaVal-backed hot-loop body, parameterized by GET() ─────────
+    // Builds a 256-elem int array (the runtime HexaArr of boxed HexaVal*), then
+    // sums GET(arr,i) over N outer iters. This is exactly the C shape codegen
+    // emits for `let xs = [..]` + `for i in 0..len(xs) { acc += xs[i] }`.
+    write_file(work + "/body.h",
+      "static long run_corpus(void){\n" +
+      "  HexaVal arr=hexa_array_new();\n" +
+      "  for(int k=0;k<256;k++) arr=hexa_array_push(arr,hexa_int(k));\n" +
+      "  long acc=0; long N=4000000L;\n" +
+      "  for(long r=0;r<N;r++){\n" +
+      "    for(int64_t i=0;i<(int64_t)hexa_len(arr);i++){ acc+=HX_INT(GET(arr,i)); }\n" +
+      "  }\n" +
+      "  return acc; }\n" +
+      "int main(void){ printf(\"%ld\\n\", run_corpus()); return 0; }\n")
+
+    // ref-C — idiomatic native int64_t[] sum (NO HexaVal). Parity baseline.
+    write_file(work + "/ref_c.c",
+      "#include <stdio.h>\n#include <stdint.h>\n" +
+      "static long run_ref(void){\n" +
+      "  int64_t buf[256]; for(int k=0;k<256;k++) buf[k]=k;\n" +
+      "  long acc=0; long N=4000000L;\n" +
+      "  for(long r=0;r<N;r++){\n" +
+      "    for(int64_t i=0;i<256;i++){ acc+=buf[i]; }\n" +
+      "  }\n" +
+      "  return acc; }\n" +
+      "int main(void){ printf(\"%ld\\n\", run_ref()); return 0; }\n")
+
+    // a_boxed (BEFORE = §c-class) — array-tag-guarded read, yields boxed HexaVal.
+    write_file(work + "/a_boxed.c",
+      "#include \"runtime.h\"\n#include <stdio.h>\n" +
+      "#define GET(a,i) (HX_IS_ARRAY(a) ? (a).arr_ptr->items[(i)] : hexa_index_get((a), hexa_int((i))))\n" +
+      "#include \"body.h\"\n")
+
+    // b_unbox (AFTER = new codegen for a known-int-array) — tag guard DROPPED,
+    // direct boxed-storage element read. The surrounding HX_INT() extracts `.i`.
+    write_file(work + "/b_unbox.c",
+      "#include \"runtime.h\"\n#include <stdio.h>\n" +
+      "#define GET(a,i) ((a).arr_ptr->items[(i)])\n" +
+      "#include \"body.h\"\n")
+
+    // c_native (CEILING) — true native int64_t[] storage. Models the HexaArrI64
+    // representation the RFC targets: `let xs:[i64]` lowers to a native buffer,
+    // the read is `data[i]` with no HexaVal. Same program output.
+    write_file(work + "/c_native.c",
+      "#include \"runtime.h\"\n#include <stdio.h>\n" +
+      "static long run_native(void){\n" +
+      "  HexaVal arr=hexa_array_new();\n" +
+      "  for(int k=0;k<256;k++) arr=hexa_array_push(arr,hexa_int(k));\n" +
+      "  int len=hexa_len(arr);\n" +
+      "  int64_t* data=(int64_t*)malloc(sizeof(int64_t)*len);\n" +
+      "  for(int k=0;k<len;k++) data[k]=arr.arr_ptr->items[k].i; /* unbox-on-build */\n" +
+      "  long acc=0; long N=4000000L;\n" +
+      "  for(long r=0;r<N;r++){\n" +
+      "    for(int64_t i=0;i<len;i++){ acc+=data[i]; }\n" +
+      "  }\n" +
+      "  free(data); return acc; }\n" +
+      "int main(void){ printf(\"%ld\\n\", run_native()); return 0; }\n")
+
+    println("\n--- C: known-int-array hot-loop sum (4 arms) ---")
+    build_arm("ref_c   ", o2 + "'" + work + "/ref_c.c'   -o '" + work + "/ref_bin' -lpthread", work + "/ref_bin")
+    build_arm("a_boxed ", o2 + "'" + work + "/a_boxed.c'  '" + rt + "/runtime.o' -o '" + work + "/a_bin' -lpthread", work + "/a_bin")
+    build_arm("b_unbox ", o2 + "'" + work + "/b_unbox.c'  '" + rt + "/runtime.o' -o '" + work + "/b_bin' -lpthread", work + "/b_bin")
+    build_arm("c_native", o2 + "'" + work + "/c_native.c' '" + rt + "/runtime.o' -o '" + work + "/c_bin' -lpthread", work + "/c_bin")
+
+    println("\n  g5 byte-diff (program output md5 — ALL FOUR MUST be identical):")
+    println("    ref_c    : " + md5_of_output(work + "/ref_bin"))
+    println("    a_boxed  : " + md5_of_output(work + "/a_bin"))
+    println("    b_unbox  : " + md5_of_output(work + "/b_bin"))
+    println("    c_native : " + md5_of_output(work + "/c_bin"))
+
+    println("\n  perf best-of-" + to_string(runs) + " wall (s):")
+    let ref_w = best_wall(work + "/ref_bin", runs)
+    let a_w   = best_wall(work + "/a_bin", runs)
+    let b_w   = best_wall(work + "/b_bin", runs)
+    let c_w   = best_wall(work + "/c_bin", runs)
+    println("    ref_c    : " + ref_w)
+    println("    a_boxed  : " + a_w)
+    println("    b_unbox  : " + b_w)
+    println("    c_native : " + c_w)
+
+    // asm: arm a has a bl _hexa_index_get on the !HX_IS_ARRAY cold fallback (the
+    // ternary), arm b dropped the ternary entirely (no index_get anywhere), arm
+    // c never touches HexaVal in the loop.
+    exec(o2 + "-S '" + work + "/a_boxed.c'  -o '" + work + "/a.s' 2>/dev/null")
+    exec(o2 + "-S '" + work + "/b_unbox.c'  -o '" + work + "/b.s' 2>/dev/null")
+    exec(o2 + "-S '" + work + "/c_native.c' -o '" + work + "/c.s' 2>/dev/null")
+    println("\n  asm bl _hexa_index_get (total):  a_boxed=" + bl_count(work + "/a.s", "hexa_index_get") +
+            "  b_unbox=" + bl_count(work + "/b.s", "hexa_index_get") +
+            "  c_native=" + bl_count(work + "/c.s", "hexa_index_get"))
+
+    // ── INTEGRITY GATE: the dynamic boundary — typed array used polymorphically
+    // The SAME [i64] literal is BOTH summed via the unboxed fast path AND handed
+    // to a polymorphic consumer (hexa_len + a boxed element fetch via the
+    // CHECKED hexa_index_get, the path codegen emits when the access is NOT the
+    // proven loop read). Both arms MUST box correctly there and byte-match.
+    println("\n--- INTEGRITY: typed i64 array at a polymorphic boundary ---")
+    write_file(work + "/bnd_body.h",
+      "static long run_bnd(void){\n" +
+      "  HexaVal arr=hexa_array_new();\n" +
+      "  for(int k=0;k<16;k++) arr=hexa_array_push(arr,hexa_int(k*k));\n" +
+      "  /* (1) unboxed fast-path sum (the proven loop read) */\n" +
+      "  long s=0; for(int64_t i=0;i<(int64_t)hexa_len(arr);i++){ s+=HX_INT(GET(arr,i)); }\n" +
+      "  /* (2) DYNAMIC BOUNDARY: hand the same array to a polymorphic site — the\n" +
+      "     length + a checked (boxed) element fetch, exactly the BOXED path\n" +
+      "     codegen emits for a non-proven access. MUST box correctly. */\n" +
+      "  long plen=(long)hexa_len(arr);\n" +
+      "  long pelem=HX_INT(hexa_index_get(arr, hexa_int(7)));\n" +
+      "  return s + plen*1000 + pelem; }\n" +
+      "int main(void){ printf(\"%ld\\n\", run_bnd()); return 0; }\n")
+    // boundary arm A (boxed read on the fast path)
+    write_file(work + "/a_bnd.c",
+      "#include \"runtime.h\"\n#include <stdio.h>\n" +
+      "#define GET(a,i) (HX_IS_ARRAY(a) ? (a).arr_ptr->items[(i)] : hexa_index_get((a), hexa_int((i))))\n" +
+      "#include \"bnd_body.h\"\n")
+    // boundary arm B (unboxed read on the fast path; boundary use stays checked)
+    write_file(work + "/b_bnd.c",
+      "#include \"runtime.h\"\n#include <stdio.h>\n" +
+      "#define GET(a,i) ((a).arr_ptr->items[(i)])\n" +
+      "#include \"bnd_body.h\"\n")
+    build_arm("a_bnd", o2 + "'" + work + "/a_bnd.c' '" + rt + "/runtime.o' -o '" + work + "/abnd_bin' -lpthread", work + "/abnd_bin")
+    build_arm("b_bnd", o2 + "'" + work + "/b_bnd.c' '" + rt + "/runtime.o' -o '" + work + "/bbnd_bin' -lpthread", work + "/bbnd_bin")
+    println("  boundary g5 (MUST be identical — unbox never changes a value):")
+    println("    a_bnd (boxed) : " + md5_of_output(work + "/abnd_bin"))
+    println("    b_bnd (unbox) : " + md5_of_output(work + "/bbnd_bin"))
+    println("  → both MUST match: the typed array boxes correctly when it reaches")
+    println("    the polymorphic boundary (hexa_len + checked element fetch).")
+
+    println("\n=== done ===")
+}

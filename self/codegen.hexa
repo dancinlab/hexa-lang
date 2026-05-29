@@ -2893,6 +2893,16 @@ fn _gen2_stmt_inner(node, depth) {
             if _is_float_init_expr(node.left) {
                 _known_float_add(node.name)
             }
+            // UNSHADOW item A: register immutable let bound to a monomorphic
+            // i64 array literal (`[1,2,3,…]`) as a known-int-array, so an
+            // in-range read of it inside a proven loop can drop the array-tag
+            // guard and read the raw `.i` element (boxed-storage unbox).
+            if _is_int_literal_array(node.left) {
+                _known_intarr_add(node.name)
+            } else {
+                // A same-name re-let to a non-int-array RHS voids the proof.
+                _known_intarr_void(node.name)
+            }
             // PROBE r11 B3: also try comptime-fold for plain immutable `let`.
             // `let x = 2+3` now folds to literal 5 and registers in the
             // comptime-const table — downstream references inline the literal
@@ -2989,6 +2999,9 @@ fn _gen2_stmt_inner(node, depth) {
         // non-folded / string-folded names (mirrors the re-`let` D18 invalidate).
         if type_of(node.left) != "string" && node.left.kind == "Ident" {
             _invalidate_comptime_const(node.left.name)
+            // UNSHADOW item A: reassigning the binding may swap in a non-int
+            // array (or a non-array) — void the known-int-array proof.
+            _known_intarr_void(node.left.name)
         }
         return pad + gen2_expr(node.left) + " = " + gen2_expr(node.right) + ";\n"
     }
@@ -7658,6 +7671,29 @@ fn gen2_expr(node) {
                 let _ir_ctr = _inrange_counter_for(node.left.name, idx.name)
                 if _ir_ctr != "" {
                     let _ir_av = gen2_expr(node.left)
+                    // ── UNSHADOW item A: unboxed-primitive array read ───────────
+                    // If `arr` is ALSO a proven known-int-array (immutable let =
+                    // monomorphic i64 array literal), the receiver is statically
+                    // TAG_ARRAY *and* the element is statically TAG_INT. Both the
+                    // §c-class array-tag guard (`HX_IS_ARRAY(arr)?…`) and the
+                    // per-element runtime work are now provably dead — drop the
+                    // ternary and emit a DIRECT element read. The element is
+                    // produced as a HexaVal lvalue (`arr.arr_ptr->items[ctr]`,
+                    // boxed-storage form), but `_is_known_int(arr[i])` now
+                    // certifies it TAG_INT, so a surrounding sum/dot BinOp
+                    // extracts the raw `.i` via HX_INT() with no tag dispatch —
+                    // the boxed-storage unbox (storage is still HexaVal* under
+                    // the runtime.o wall; native int64_t[] storage is the modeled
+                    // ceiling measured in the A/B proxy). DOUBLE-EVAL SAFE: _ir_av
+                    // and _ir_ctr each appear once. FOLD-SHADOW SAFE: registration
+                    // is immutable-let-only + voided on reassignment, and the
+                    // read still requires a live in-range fact (no resize/realias
+                    // in the loop). BOUNDARY-BOX: any use of `arr` NOT matching
+                    // this proven read (passed to a fn / unproven index / untyped
+                    // flow) falls through to the unchanged BOXED HexaArr path.
+                    if _is_known_intarr_name(node.left.name) {
+                        return "(" + _ir_av + ".arr_ptr->items[" + _ir_ctr + "])"
+                    }
                     return "(HX_IS_ARRAY(" + _ir_av + ") ? (" + _ir_av + ").arr_ptr->items[" + _ir_ctr + "] : hexa_index_get(" + _ir_av + ", hexa_int(" + _ir_ctr + ")))"
                 }
             }
@@ -9575,6 +9611,78 @@ let mut _known_float_set = []        // 64 buckets; each bucket is [name, ...]
 // CODEGEN proof, which is the axis unwall separated out).
 let mut _inrange_facts = []          // stack of [idx_var, arr_name, c_counter]
 
+// ── UNSHADOW item A: unboxed-primitive array — element-kind tracker ─────────
+// Names of immutable `let`s whose initializer is a STATICALLY-PROVEN
+// monomorphic-i64 array literal (`[1,2,3,…]`, every element an IntLit). For
+// such a binding the codegen KNOWS each element is TAG_INT, so a read
+// `arr[i]` covered by a live in-range fact (§c-class) is provably (a) on a
+// TAG_ARRAY receiver and (b) a TAG_INT element. That lets us:
+//   • DROP the §c-class array-tag guard (`HX_IS_ARRAY(arr)?…`) — array-ness is
+//     now statically proven for this binding, not just bounds.
+//   • Mark the read known-int so a surrounding sum/dot BinOp extracts the raw
+//     `.i` (`arr.arr_ptr->items[i].i`) with NO per-element box / HX_INT tag
+//     work — the boxed-storage form of the unbox.
+// This is a flat list (known-int-arrays are rare & local). Registration is
+// gated on immutable LetStmt only; any reassignment of the name (AssignStmt
+// LHS Ident) VOIDS it (mirrors _invalidate_comptime_const), and the read
+// fast-path STILL also requires a live in-range fact (which independently
+// proves no resize/reassign in the loop body). Box at the dynamic boundary is
+// automatic: ANY use outside the proven `arr[i]` read (passing `arr` to a fn,
+// `arr` flowing to an untyped site, an unproven index) falls through to the
+// unchanged BOXED HexaArr path — the elem stays a boxed HexaVal there.
+let mut _known_intarr_set = []
+
+fn _known_intarr_add(name) {
+    // de-dup
+    let mut i = 0
+    while i < len(_known_intarr_set) {
+        if _known_intarr_set[i] == name { return }
+        i = i + 1
+    }
+    _known_intarr_set = _known_intarr_set.push(name)
+}
+
+fn _known_intarr_void(name) {
+    // Remove `name` if present (reassignment / re-let invalidates the proof).
+    let n = len(_known_intarr_set)
+    if n <= 0 { return }
+    let mut _rebuilt = []
+    let mut i = 0
+    while i < n {
+        if _known_intarr_set[i] != name { _rebuilt = _rebuilt.push(_known_intarr_set[i]) }
+        i = i + 1
+    }
+    _known_intarr_set = _rebuilt
+}
+
+fn _is_known_intarr_name(name) {
+    let mut i = 0
+    while i < len(_known_intarr_set) {
+        if _known_intarr_set[i] == name { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// Is `node` an array literal whose every element is an IntLit? (Exact, narrow
+// monomorphic-i64 proof — no Idents, no calls, no float, no nesting. The
+// narrowest provable case the RFC names.)
+// decreases node — structural (single level; elements must be leaf IntLits)
+fn _is_int_literal_array(node) {
+    if type_of(node) == "string" { return false }
+    if node.kind != "Array" { return false }
+    if type_of(node.items) != "array" { return false }
+    if len(node.items) == 0 { return false }
+    let mut i = 0
+    while i < len(node.items) {
+        let el = node.items[i]
+        if type_of(el) == "string" { return false }
+        if el.kind != "IntLit" { return false }
+        i = i + 1
+    }
+    return true
+}
+
 // ── enum-variant access fix (inbox: enum-variant-access-miscodegen) ──
 // `<EnumName>.<VARIANT>` (e.g. RegionShape.K_BY_K) is an enum-variant
 // constant, NOT a runtime field access — the gen2_enum_decl #define
@@ -9982,6 +10090,22 @@ fn _is_known_int(node) {
     if type_of(node) == "string" { return false }
     if node.kind == "IntLit" { return true }
     if node.kind == "Ident" { return _is_known_int_name(node.name) }
+    // UNSHADOW item A: a read `arr[i]` of a proven known-int-array, where the
+    // index is covered by a live in-range fact, is statically TAG_INT — its
+    // element kind is monomorphic i64 by the array-literal proof. Certifying it
+    // here lets a surrounding sum/dot BinOp extract the raw `.i` (HX_INT) with
+    // no per-element tag dispatch. Narrow: requires BOTH the known-int-array
+    // registration AND a live in-range fact (same guards as the Index emit
+    // fast-path), so it never fires on an unproven / boxed access.
+    if node.kind == "Index" {
+        let _l = node.left
+        let _r = node.right
+        if type_of(_l) != "string" && _l.kind == "Ident" && _is_known_intarr_name(_l.name) {
+            if type_of(_r) != "string" && _r.kind == "Ident" {
+                if _inrange_counter_for(_l.name, _r.name) != "" { return true }
+            }
+        }
+    }
     return false
 }
 
