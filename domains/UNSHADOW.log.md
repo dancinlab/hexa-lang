@@ -2,6 +2,77 @@
 
 Append-only history sister of `UNSHADOW.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-29 — #B proof-carrying 최적화 + cross-layer 인라인 — 🔵🟢 g5 IDENTICAL · ~47% faster
+
+UNSHADOW.easy.md §B ("증명-허가"): VERIFIED semantic identity 가 codegen 에게
+opaque cross-ABI call 을 proven-equivalent closed form 으로 치환하도록 license.
+#4(atlas verdict=license) + #2(layout-only cross-ABI inline) 의 **결합** 1건.
+🟡 SIMD 항목의 무손실 🔵 우회 — raw SIMD 재구현 아님.
+
+**The license (proof — 없으면 transform 은 UNSOUND)**: atlas SSOT 노드
+`compiler/atlas/embedded.gen.hexa:9196` (VERBATIM):
+```
+@F verified-lambda_eliashberg-num = lambda_eliashberg(0.5) = 1.0 :: formula [d=2026-05-24 active]
+  tier = "🟢 SUPPORTED-NUMERICAL"
+  verified-by = "hexa verify --expr lambda_eliashberg 0.5 1.0"
+  cite = "TECS-L n6-rep Tier2 — hexa-native libm-class numerical recompute (ε=1e-9)"
+```
+identity `lambda_eliashberg(M0) ≡ 2·M0` (검증 도메인 M0≥0; guard M0<0→
+_NOCALC_F=-999999.0, verify_cli.hexa:1490) 보증. codegen 은 fn body 를 모름 —
+오직 atlas verdict 만이 opaque call → closed-form 치환을 허가. LLVM 불가
+(precompiled runtime.o symbol · no LTO/cross-TU · theorem DB 부재).
+정직 caveat: mini 설치 패키지는 af645e419(stale runtime.h `rt_read_lines`
+미선언) 라 verify_cli/atlas_cli rebuild 둘 다 실패 → live `hexa verify` 재실행
+미획득. 커밋된 atlas 노드가 persisted verdict(=plan 의 "documented atlas
+property" license source). 전체 = `.verdicts/unshadow-B-proof-carrying/F-UNSHADOW-B-PROOF-CARRYING.txt`.
+
+**The transform (self/codegen.hexa, gen2_expr Call→Ident, #4 fold 직후)**:
+```
+lambda_eliashberg(EXPR)
+  → ({ HexaVal __le_x = (EXPR);
+       HX_FLOAT(__le_x) < 0.0 ? hexa_float(-999999.0)
+                              : ((HexaVal){.tag=TAG_FLOAT,.f=(2.0 * HX_FLOAT(__le_x))}); })
+```
+layout-only(#2 교훈): runtime.h-가시 심볼만 — TAG_FLOAT(40)·HX_FLOAT(v)=(v).f(156)
+·hexa_float(229)·HexaVal{tag;union{double f}}(79). 내부 헬퍼 0(cf. #2-ext
+rt_str_*→HX_STRLEN link-fail). GUARD EXACT: name 일치 + `_is_known_fn_global`
++ `!_gen2_has_decl` + arg 1개. canonical top-level fn 정의 시에만 fire(fold-off=
+실제 call → byte-comparable). 그 외 모든 호출 통과.
+
+**DOUBLE-EVAL SAFE (#2-ext 교훈 — expr 인자는 let-bind 필수)**: EXPR 를 `__le_x`
+로 단 1회 bind, guard+2 multiplicand 에서 3× 읽음. corpus_se.hexa 의
+side-effecting 인자 `bump_then(4.0)` → INLINED arm 도 **calls=1** (단일 평가 증명).
+
+**g5 byte-diff (mini macOS arm64; hexat.base vs hexat.new · 동일 runtime.o)**:
+- HIT (corpus_B.hexa, expr 인자+음수): `1/3/6.5/-999999/-999999` 양 arm 동일,
+  md5 `570eaa6582498425d615c71d83456309` 양쪽 → BYTE-IDENTICAL.
+  음수 입력 guard 경로(-999999)도 정확히 보존 = faithful inline.
+- single-eval (corpus_se.hexa): base `val=8 calls=1` · new `val=8 calls=1`,
+  md5 `d44d54acb80a2420b5b19e51fbd7a5d1` 양쪽 → BYTE-IDENTICAL.
+- NO-HIT (corpus_nohit.hexa, global lambda_eliashberg 없음): emit C base vs new
+  BYTE-IDENTICAL = transform inert, general-case zero behavior change.
+
+**perf (mini · 30M-iter 핫루프 · clang -O2 · 5 interleaved trials)**:
+
+      | arm  | wall (s, 5 trials)          | best  |
+      |------|-----------------------------|-------|
+      | base | 0.36 0.36 0.36 0.36 0.36    | 0.36  |
+      | new  | 0.19 0.19 0.19 0.20 0.20    | 0.19  |
+
+      Δ ≈ 47% faster · acc=1.8e+08 양 arm 동일. asm(`_u_main` -O2 -S): base 는
+      iter 마다 `bl _lambda_eliashberg`, new 는 이를 **소거**(inlined stmt-expr)
+      → const-fold 막던 opaque cross-ABI call 제거 = #2 boundary-removal thesis.
+
+Honesty (roofline · g5): REAL win. fold-on 은 opaque call 을 아예 안 함 → clang
+이 인라인된 분기를 hot loop 에 직접 펼침. 검증된 identity 가 license 인 "안 돌기"
+(🔵) — raw SIMD/벡터 재구현(🟡) 아님. LLVM 비교대상 없음(verdict DB 부재).
+
+Build note (codegen-change landing recipe · B9): SSOT=`self/codegen.hexa` 1파일.
+A/B = 동일 origin/main(b639ed090) fresh-clone build tree 에 codegen.base/new 각각
+overlay → `hexa cc --regen` → `hexa_cc.c.new` clang → 설치 패키지의 runtime.o/.h
+(`f41d5142` 일관 set) 와 링크 → 2 standalone hexat. 두 hexat 의 emit C 만 콜사이트
+상이(나머지 동일). /tmp executable reaper 회피 위해 ~/unshadow-B-bin 으로 relink.
+
 ## 2026-05-29 — #2 EXTENSION (rt_str_* string prim inline) — 🔴 CLOSED-NEGATIVE (ABI 경계 차단)
 
 #2 hexa_int 인라인을 STRING 런타임 prim 으로 확장 시도. 결론: **rt_str_\* prim 의 body 를
