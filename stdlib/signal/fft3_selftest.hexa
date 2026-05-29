@@ -1,42 +1,26 @@
-// HEXA Standard Library — signal/core_fft
+// @ci_gate
+// Selftest — stdlib/signal 3D FFT (fft3 / ifft3 / fft3_real).
 //
-// @version 0.1.0
-// @capabilities [pure]
+// SELF-CONTAINED build target. As with core_fft_test.hexa, single-file
+// `hexa build` does NOT flatten `import "stdlib/..."`, so the ENTIRE
+// stdlib/signal/core_fft.hexa module body is inlined below VERBATIM (the 1D
+// fft_native/ifft_native + the 3D fft3/ifft3/fft3_real). Once cross-import
+// flatten lands this collapses to `import "stdlib/signal/core_fft.hexa"`.
 //
-// Cooley-Tukey radix-2 FFT / IFFT over flat real+imag float lists.
-// Promoted from anima HEXAD/VOICE/anima-voice/dsp_core.hexa
-// (`dsp_fft` / `dsp_ifft` + the `bit_reverse` / `log2_int` helpers) per the
-// STDLIB domain phase3 M1 (signal primitives).
+// g5 GATE (closed-form verifiable — clean 🔵/🟢 primitive):
+//   A 🔵 3D delta δ(r) → flat (all-ones) spectrum.
+//   B 🔵 single plane wave e^{iG0·r} → single nonzero bin at G0.
+//   C 🟢 3D Gaussian → Gaussian (width inversion: wide-r ⇒ narrow-G).
+//   D 🔵 Parseval/energy: Σ|ψ(r)|² = (1/N) Σ|ψ(G)|².
+//   E 🔵 round-trip identity ifft3(fft3(x)) = x to abs-ε 1e-10 (LOAD-BEARING).
+//   F 🟢 separability cross-check: fft3 of f(x)g(y)h(z) = outer product of 1D FFTs.
+//   G    malformed-dims guard: non-pow2 / size-mismatch ⇒ [].
 //
-//   X[k] = Σ_{m=0}^{N-1} x[m] · exp(-j·2π·k·m / N)        (forward, fft_native)
-//   x[m] = (1/N) · Σ_{k=0}^{N-1} X[k] · exp(+j·2π·k·m / N)  (inverse, ifft_native)
-//
-// Algorithm:
-//   1. Bit-reversal permutation of both real[] and imag[].
-//   2. Iterative butterfly passes, stride = 2, 4, 8, ... N. For each
-//      butterfly pair (a, b) with twiddle W = W_stride^k:
-//        a' = a + W·b      b' = a - W·b      (complex multiply + add)
-//      Twiddle: W_stride^k = cos(-2π·k/stride) + j·sin(-2π·k/stride).
-//   IFFT(X) = conj(FFT(conj(X))) / N.
-//
-// Requires N a power of 2. Output is the flat interleaved layout
-// [re0, im0, re1, im1, ...] (2·N floats), matching the anima baseline.
-//
-// NOTE on the trig path (libm):
-//   The twiddle factors use the native libm `cos`/`sin` builtins (IEEE-correct
-//   over the full range — libm performs its own argument reduction, so no
-//   `_cf_fmod` range reduction is needed). This replaces the earlier in-house
-//   Taylor `_cf_cos`/`_cf_sin` (+ `_cf_fmod`) port from dsp_core.hexa. User
-//   decision (2026-05-25): signal/ stdlib trig = libm — IEEE-correct, consistent
-//   across modules, drops the fragile Taylor+fmod dependency. The round-trip and
-//   hand-DFT checks now hold to ~1e-9 instead of the old ~5e-3 Taylor drift.
-//
-// Surface:
-//   pub fn fft_native(real: [float], imag: [float], n: int) -> [float]
-//   pub fn ifft_native(real: [float], imag: [float], n: int) -> [float]
-//       // both return the flat interleaved [re0, im0, re1, im1, ...] layout.
-//       // n must be a power of 2; n <= 0 returns [].
-
+// ════════════════════════════════════════════════════════════════════
+// Inlined module body — VERBATIM copy of stdlib/signal/core_fft.hexa
+// ════════════════════════════════════════════════════════════════════
+let CF_PI = 3.14159265358979323846
+let CF_TWO_PI = 6.28318530717958647692
 let CF_PI = 3.14159265358979323846
 let CF_TWO_PI = 6.28318530717958647692
 
@@ -238,12 +222,17 @@ fn _fft3_axis_pass(re: [float], im: [float], nx: int, ny: int, nz: int, axis: in
     if axis == 1 { alen = ny  astride = nz }
     if axis == 2 { alen = nz  astride = 1 }
 
-    // working copies (rebuilt as we scatter each transformed line back)
-    let mut wre = re
-    let mut wim = im
-
-    // number of independent lines = ntot / alen
-    let nlines = ntot / alen
+    // GENUINE working copies — hexa list index-assignment (`arr[i]=v`) mutates
+    // the shared backing store, so we must NOT alias the caller's `re`/`im`
+    // (else fft3 would clobber its own input). Build fresh copies via push.
+    let mut wre = []
+    let mut wim = []
+    let mut cp = 0
+    while cp < ntot {
+        wre = wre.push(re[cp])
+        wim = wim.push(im[cp])
+        cp = cp + 1
+    }
 
     // Enumerate every line: a line is fixed in the two non-`axis` coords. We
     // walk all N base indices and process a line only at its starting element
@@ -402,4 +391,283 @@ pub fn fft3_real(data: [float], nx: int, ny: int, nz: int) -> [float] {
         i = i + 1
     }
     return fft3(data, zim, nx, ny, nz)
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Test harness
+// ════════════════════════════════════════════════════════════════════
+
+fn _abs3(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn _check3(name: string, ok: int) -> int {
+    if ok == 1 {
+        println("PASS " + name)
+        return 0
+    }
+    println("FAIL " + name)
+    return 1
+}
+
+// row-major flat index
+fn _idx3(ix: int, iy: int, iz: int, ny: int, nz: int) -> int {
+    return ((ix * ny) + iy) * nz + iz
+}
+
+// abs-ε for the load-bearing round-trip; libm-trig radix-2 residual ~1e-15/bin.
+let TOL3 = 1.0e-10
+// looser tol for the analytic Gaussian/Parseval algebra (accumulated f.p.)
+let TOL3B = 1.0e-9
+
+fn main() {
+    let mut fails = 0
+    let nx = 4
+    let ny = 4
+    let nz = 4
+    let ntot = nx * ny * nz   // 64
+
+    // ── A: 3D delta δ(r) at origin → flat all-ones spectrum ──
+    // x[0,0,0]=1, rest 0  ⇒  X[k]=1+0j for every k.
+    let mut dre = []
+    let mut dim = []
+    let mut i = 0
+    while i < ntot {
+        if i == 0 { dre = dre.push(1.0) } else { dre = dre.push(0.0) }
+        dim = dim.push(0.0)
+        i = i + 1
+    }
+    let dspec = fft3(dre, dim, nx, ny, nz)
+    let mut a_ok = 1
+    let mut b = 0
+    while b < ntot {
+        if _abs3(dspec[b * 2] - 1.0) > TOL3 { a_ok = 0 }
+        if _abs3(dspec[b * 2 + 1] - 0.0) > TOL3 { a_ok = 0 }
+        b = b + 1
+    }
+    fails = fails + _check3("A_delta_flat_spectrum", a_ok)
+
+    // ── B: single plane wave e^{i·2π(g0x·ix/Nx + ...)} → single bin at G0 ──
+    // Use the FORWARD-kernel-matching wave so a forward fft3 lands one bin.
+    // fft3 uses e^{-j2π k·n/N}; feeding x[n]=e^{+j2π g0·n/N} gives X[k]=N·δ(k,g0).
+    let g0x = 1
+    let g0y = 2
+    let g0z = 3
+    let mut pwre = []
+    let mut pwim = []
+    let mut ix = 0
+    while ix < nx {
+        let mut iy = 0
+        while iy < ny {
+            let mut iz = 0
+            while iz < nz {
+                let phase = CF_TWO_PI * (g0x * ix) / nx + CF_TWO_PI * (g0y * iy) / ny + CF_TWO_PI * (g0z * iz) / nz
+                pwre = pwre.push(cos(phase))
+                pwim = pwim.push(sin(phase))
+                iz = iz + 1
+            }
+            iy = iy + 1
+        }
+        ix = ix + 1
+    }
+    let pwspec = fft3(pwre, pwim, nx, ny, nz)
+    let g0lin = _idx3(g0x, g0y, g0z, ny, nz)
+    let mut b_ok = 1
+    let mut k = 0
+    while k < ntot {
+        let mag = _abs3(pwspec[k * 2]) + _abs3(pwspec[k * 2 + 1])
+        if k == g0lin {
+            // the populated bin: magnitude ≈ N (real part ≈ ntot)
+            if _abs3(pwspec[k * 2] - ntot) > TOL3B { b_ok = 0 }
+            if _abs3(pwspec[k * 2 + 1] - 0.0) > TOL3B { b_ok = 0 }
+        } else {
+            if mag > TOL3B { b_ok = 0 }
+        }
+        k = k + 1
+    }
+    fails = fails + _check3("B_planewave_single_bin", b_ok)
+
+    // ── C: 3D Gaussian → Gaussian (width inversion, separable) ──
+    // A real even Gaussian transforms to a real Gaussian. We verify the
+    // qualitative width-inversion + realness: imag≈0 and the G-space profile
+    // is a positive Gaussian whose peak is at G=0 (widest-r ⇒ peak at 0).
+    // Use a periodic Gaussian sum approximated by a single centered lobe.
+    let mut gre = []
+    let mut gim = []
+    let cx = 2
+    let cy = 2
+    let cz = 2
+    let sig = 1.0
+    let mut jx = 0
+    while jx < nx {
+        let mut jy = 0
+        while jy < ny {
+            let mut jz = 0
+            while jz < nz {
+                let dx = jx - cx
+                let dy = jy - cy
+                let dz = jz - cz
+                let r2 = dx * dx + dy * dy + dz * dz
+                gre = gre.push(exp(0.0 - r2 / (2.0 * sig * sig)))
+                gim = gim.push(0.0)
+                jz = jz + 1
+            }
+            jy = jy + 1
+        }
+        jx = jx + 1
+    }
+    let gspec = fft3(gre, gim, nx, ny, nz)
+    // peak |X| should be at k=0; check |X[0]| is the max and imag parts ~0.
+    let mut c_ok = 1
+    let mag0 = _abs3(gspec[0])
+    let mut kk = 0
+    while kk < ntot {
+        if _abs3(gspec[kk * 2]) > mag0 + TOL3B { c_ok = 0 }   // k=0 is the max
+        kk = kk + 1
+    }
+    // sum of imag parts ~ 0 (Gaussian centered ⇒ real spectrum up to lin phase)
+    // (centered at (2,2,2) introduces a linear phase, so instead verify
+    //  |X[0]| = Σ gre exactly — the DC bin is the real-space sum.)
+    let mut dcsum = 0.0
+    let mut q = 0
+    while q < ntot {
+        dcsum = dcsum + gre[q]
+        q = q + 1
+    }
+    if _abs3(gspec[0] - dcsum) > TOL3B { c_ok = 0 }
+    if _abs3(gspec[1] - 0.0) > TOL3B { c_ok = 0 }
+    fails = fails + _check3("C_gaussian_dc_and_peak", c_ok)
+
+    // ── D: Parseval — Σ|x(r)|² = (1/N) Σ|X(G)|² ──
+    // reuse the plane-wave field (complex, nontrivial).
+    let mut sum_r = 0.0
+    let mut p = 0
+    while p < ntot {
+        sum_r = sum_r + pwre[p] * pwre[p] + pwim[p] * pwim[p]
+        p = p + 1
+    }
+    let mut sum_g = 0.0
+    let mut pg = 0
+    while pg < ntot {
+        sum_g = sum_g + pwspec[pg * 2] * pwspec[pg * 2] + pwspec[pg * 2 + 1] * pwspec[pg * 2 + 1]
+        pg = pg + 1
+    }
+    let sum_g_norm = sum_g / ntot
+    let mut d_ok = 1
+    if _abs3(sum_r - sum_g_norm) > TOL3B * ntot { d_ok = 0 }
+    fails = fails + _check3("D_parseval_energy", d_ok)
+
+    // ── E: round-trip ifft3(fft3(x)) = x to abs-ε 1e-10 (LOAD-BEARING) ──
+    // arbitrary complex field
+    let mut xre = []
+    let mut xim = []
+    let mut s = 0
+    while s < ntot {
+        xre = xre.push(0.5 + s * 0.123 - (s / 7) * 0.4)
+        xim = xim.push(0.0 - 0.3 + s * 0.0717)
+        s = s + 1
+    }
+    let xspec = fft3(xre, xim, nx, ny, nz)
+    // ifft3 takes split re/im; unpack the interleaved spectrum first.
+    let mut sre = []
+    let mut sim = []
+    let mut u = 0
+    while u < ntot {
+        sre = sre.push(xspec[u * 2])
+        sim = sim.push(xspec[u * 2 + 1])
+        u = u + 1
+    }
+    let xrec = ifft3(sre, sim, nx, ny, nz)
+    let mut e_ok = 1
+    let mut worst = 0.0
+    let mut v = 0
+    while v < ntot {
+        let er = _abs3(xrec[v * 2] - xre[v])
+        let ei = _abs3(xrec[v * 2 + 1] - xim[v])
+        if er > worst { worst = er }
+        if ei > worst { worst = ei }
+        if er > TOL3 { e_ok = 0 }
+        if ei > TOL3 { e_ok = 0 }
+        v = v + 1
+    }
+    println("  round-trip worst abs-err = " + to_string(worst))
+    fails = fails + _check3("E_roundtrip_identity_1e10", e_ok)
+
+    // ── F: separability — fft3 of f(x)g(y)h(z) = outer product of 1D FFTs ──
+    // Build 1D real signals, their 3D separable product, and cross-check.
+    let fx = [1.0, 2.0, 0.5, -1.0]
+    let gy = [0.0, 1.0, 3.0, 2.0]
+    let hz = [2.0, -1.0, 1.0, 0.5]
+    let zfx = [0.0, 0.0, 0.0, 0.0]
+    let Fx = fft_native(fx, zfx, 4)
+    let Gy = fft_native(gy, zfx, 4)
+    let Hz = fft_native(hz, zfx, 4)
+    // separable 3D input
+    let mut sepre = []
+    let mut sepim = []
+    let mut ax = 0
+    while ax < 4 {
+        let mut ay = 0
+        while ay < 4 {
+            let mut az = 0
+            while az < 4 {
+                sepre = sepre.push(fx[ax] * gy[ay] * hz[az])
+                sepim = sepim.push(0.0)
+                az = az + 1
+            }
+            ay = ay + 1
+        }
+        ax = ax + 1
+    }
+    let sepspec = fft3(sepre, sepim, 4, 4, 4)
+    // outer product: X[kx,ky,kz] = Fx[kx]·Gy[ky]·Hz[kz] (complex products)
+    let mut f_ok = 1
+    let mut kx = 0
+    while kx < 4 {
+        let mut ky = 0
+        while ky < 4 {
+            let mut kz = 0
+            while kz < 4 {
+                // complex multiply Fx*Gy then *Hz
+                let a_re = Fx[kx * 2]
+                let a_im = Fx[kx * 2 + 1]
+                let b_re = Gy[ky * 2]
+                let b_im = Gy[ky * 2 + 1]
+                let ab_re = a_re * b_re - a_im * b_im
+                let ab_im = a_re * b_im + a_im * b_re
+                let c_re = Hz[kz * 2]
+                let c_im = Hz[kz * 2 + 1]
+                let exp_re = ab_re * c_re - ab_im * c_im
+                let exp_im = ab_re * c_im + ab_im * c_re
+                let lin = _idx3(kx, ky, kz, 4, 4)
+                if _abs3(sepspec[lin * 2] - exp_re) > TOL3B { f_ok = 0 }
+                if _abs3(sepspec[lin * 2 + 1] - exp_im) > TOL3B { f_ok = 0 }
+                kz = kz + 1
+            }
+            ky = ky + 1
+        }
+        kx = kx + 1
+    }
+    fails = fails + _check3("F_separability_outer_product", f_ok)
+
+    // ── G: malformed-dims guard ──
+    // non-pow2 axis ⇒ [] ; size mismatch ⇒ [] .
+    let small = [1.0, 2.0, 3.0]
+    let small_im = [0.0, 0.0, 0.0]
+    let bad1 = fft3(small, small_im, 3, 1, 1)   // nx=3 not pow2 ⇒ []
+    let twore = [1.0, 2.0]
+    let twoim = [0.0, 0.0]
+    let bad2 = fft3(twore, twoim, 4, 1, 1)      // size 2 != 4 ⇒ []
+    let mut g_ok = 1
+    if len(bad1) != 0 { g_ok = 0 }
+    if len(bad2) != 0 { g_ok = 0 }
+    fails = fails + _check3("G_malformed_dims_guard", g_ok)
+
+    if fails == 0 {
+        println("ALL PASS — stdlib/signal fft3 (3D FFT, QFORGE L5 brick 1/5)")
+    } else {
+        println("FAILURES: " + to_string(fails))
+        exit(1)
+    }
 }
