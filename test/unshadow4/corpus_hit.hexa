@@ -1,0 +1,22 @@
+// UNSHADOW #4 corpus — FOLD-HIT program.
+//
+// Calls beenet_grid_bins(100.0, 10.0) with exact literal args matching the
+// atlas verdict `hexa verify --expr beenet_grid_bins 100.0 10.0 11` (🟢).
+// With the atlas-guided const-fold ON, codegen emits hexa_int(11) directly
+// instead of the runtime call. Output MUST be byte-identical fold-on vs
+// fold-off (the function body and the folded constant agree).
+//
+// beenet_grid_bins(ω_max, Δω) = floor(ω_max/Δω) + 1   (RTSC d7 α²F grid bins)
+// matches tool/verify_cli.hexa:_beenet_grid_bins exactly.
+
+fn beenet_grid_bins(omega_max: float, step: float) -> int {
+    let bins = omega_max / step
+    let bins_int = to_int(bins)
+    return bins_int + 1
+}
+
+fn main() {
+    // FOLD SITE — exact literal args, exact verified pair.
+    let folded = beenet_grid_bins(100.0, 10.0)
+    println(folded)
+}

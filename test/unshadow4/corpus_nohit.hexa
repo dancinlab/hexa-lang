@@ -1,0 +1,25 @@
+// UNSHADOW #4 corpus — NO-FOLD program (general-case fall-through proof).
+//
+// Three call sites that the EXACT guard must NOT fold:
+//   (1) different literal args  → beenet_grid_bins(50.0, 5.0)  = 11  (value
+//        coincidentally also 11, but args differ → guard rejects → real call)
+//   (2) different literal args  → beenet_grid_bins(200.0, 10.0) = 21
+//   (3) non-literal arg (variable) → must run the real fn, never fold
+// All three go through the normal runtime call; the const-fold is inert here.
+// This program is the "zero behavior change for the general case" witness.
+
+fn beenet_grid_bins(omega_max: float, step: float) -> int {
+    let bins = omega_max / step
+    let bins_int = to_int(bins)
+    return bins_int + 1
+}
+
+fn main() {
+    let a = beenet_grid_bins(50.0, 5.0)      // different literals — no fold
+    let b = beenet_grid_bins(200.0, 10.0)    // different literals — no fold
+    let w = 100.0
+    let c = beenet_grid_bins(w, 10.0)        // non-literal arg — no fold
+    println(a)
+    println(b)
+    println(c)
+}

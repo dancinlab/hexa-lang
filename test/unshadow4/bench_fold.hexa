@@ -1,0 +1,28 @@
+// UNSHADOW #4 micro-bench — hot loop calling the pilot fn with literal args.
+//
+// fold-OFF (baseline codegen): each iteration runs a real beenet_grid_bins
+//   call across the C-ABI boundary (div + to_int + add + box).
+// fold-ON  (atlas-guided): codegen replaced beenet_grid_bins(100.0,10.0) with
+//   the verified constant hexa_int(11) — the call never happens; clang can
+//   then const-fold/hoist the whole expression out of the loop.
+//
+// The accumulator prevents dead-code elimination of the loop body. Output is
+// identical in both arms (sum = 11 * iters), so this also doubles as a g5
+// correctness witness at scale.
+
+fn beenet_grid_bins(omega_max: float, step: float) -> int {
+    let bins = omega_max / step
+    let bins_int = to_int(bins)
+    return bins_int + 1
+}
+
+fn main() {
+    let iters = 30000000
+    let mut sum = 0
+    let mut i = 0
+    while i < iters {
+        sum = sum + beenet_grid_bins(100.0, 10.0)
+        i = i + 1
+    }
+    println(sum)
+}
