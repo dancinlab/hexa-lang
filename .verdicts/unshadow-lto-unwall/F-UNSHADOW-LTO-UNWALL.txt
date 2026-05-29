@@ -1,0 +1,113 @@
+F-UNSHADOW-LTO-UNWALL — 🔵×🟡 LTO / same-TU unwall of the runtime.o C-ABI wall
+================================================================================
+Host: pool mini (macOS arm64, Apple clang 21.0.0).  Both arms same host, back-to-back.
+Runtime artifacts: ~/.hx/packages/hexa/self/{runtime.h, runtime.c, runtime.o}.
+Reproducer (committed, parse-gated + compiled-built + run on mini):
+  tool/unshadow_lto_unwall_bench.hexa  (build → /tmp/unshadow_lto_bench → run --runs 5)
+
+FALSIFIER (pre-registered)
+  "Removing the precompiled runtime.o C-ABI wall (via -flto OR same-TU compile)
+   flips the two converged closed-negatives to a win: #2-ext rt_str inline now
+   LINKS and wins, and C bounds/null elision on an opaque runtime value now
+   fires under clang -O2 — both byte-identical."
+
+DIAGNOSED LINK MODEL (the wall, post .c=0 graduation)
+  Emitted user.c does `#include "runtime.h"` (codegen.hexa:948) and the final
+  link consumes a SEPARATE precompiled runtime object as a 2nd TU. Three branches
+  in cmd_build (self/main.hexa ~L3009–3041):
+    (1) HEXA_PREBUILT_RUNTIME set → link prebuilt runtime.o/.a directly.
+    (2) default (HOME set) → content-hash cache: `clang -O2 -c runtime.c -o
+        runtime.<sha>.o`, then link that OBJECT. ← the live default = WALL.
+    (3) first-build / no HOME / --shared / cross → pass runtime.c SOURCE as a
+        2nd source file to the one clang call (still a separate TU; no -flto).
+  runtime.h exports ONLY HexaVal-level ABI. The internal scalar helpers a real
+  inline needs — HX_STRLEN, hxlcl_strncmp, HX_ARR_LEN — are defined ONLY inside
+  the runtime.c amalgam (runtime.c:1211 `#include "runtime_core.c"`, emitted by
+  runtime_core_emit.hexa:763/1090). They are NOT in runtime.h scope. THIS is the
+  wall both closed-negatives hit (#2-ext _HX_STRLEN undefined; C bounds check
+  ABI-walled inside hexa_array_get in the precompiled object).
+  Post-graduation self/runtime.c is ABSENT in the repo (B9 generated); only the
+  precompiled runtime.o persists. So the wall is structurally PRESENT, not gone.
+
+UNWALL METHODS TESTED (cheapest-first)
+  ① -flto on (inline_walled.c + runtime.o) link.
+  ② same-TU: emitted user.c does `#include "runtime.c"` (amalgam in textual scope).
+
+VERIFICATION (verbatim — tool/unshadow_lto_unwall_bench.hexa --runs 5, mini)
+  --- #2-ext: rt_str_starts_with inline ---
+    [base_walled  ] built=yes err_lines=0
+    [inline_walled] built=no err_lines=7
+    [inline_lto    ] built=no err_lines=7
+    [base_samtu   ] built=yes err_lines=0
+    [inline_samtu ] built=yes err_lines=0
+
+    g5 byte-diff (program output md5):
+      base_walled  : f869400ef52db12c02539725a42b4a5e
+      base_samtu   : f869400ef52db12c02539725a42b4a5e
+      inline_samtu : f869400ef52db12c02539725a42b4a5e   [IDENTICAL all 3]
+
+    perf best-of-5 wall (s):
+      base_walled (runtime.o)      : 0.36
+      base_samtu  (runtime.c call) : 0.25
+      inline_samtu(inlined body)   : 0.25
+
+  [#2-ext asm — independent run, 60M-iter hot loop, -O2 -S]
+    base_walled : bl _rt_str_starts_with = 3 ; bl _hxlcl_strncmp = 0
+    base_samtu  : bl _rt_str_starts_with = 1 ; bl _hxlcl_strncmp = 9
+    inline_samtu: bl _rt_str_starts_with = 1 ; bl _hxlcl_strncmp = 9
+
+  [#2-ext -flto failure (verbatim, compile-time — before LTO can act)]
+    ./body.h:9: error: call to undeclared function 'hxlcl_strncmp'
+    ./body.h:9: error: call to undeclared function 'HX_STRLEN'
+    (LTO is a LINK-time optimization; the failure is a COMPILE-time textual-scope
+     error — the helper macros/statics are simply not declared in user.c. -flto
+     cannot conjure a declaration, so it never runs. ① is INSUFFICIENT for #2-ext.)
+
+  --- C: hexa_array_get bounds-check elision (index structurally in [0,len)) ---
+    [cbase_walled ] built=yes err_lines=0
+    [csamtu       ] built=yes err_lines=0
+
+    g5 byte-diff (program output md5):
+      cbase_walled : fda59d53d471380a39dc273a37a35d3e
+      csamtu       : fda59d53d471380a39dc273a37a35d3e   [IDENTICAL]
+
+    perf best-of-5 wall (s):
+      cbase_walled : 0.73
+      csamtu       : 0.72
+
+    same-TU asm: bl _hexa_throw = 1  (out-of-bounds string occurrences = 2)
+    → the bounds check + throw SURVIVE same-TU. main-region `bl _hexa_array_get`
+      = 1 in BOTH walled and same-TU (the fn is too large for clang to inline into
+      the loop), so same-TU yields NO inlining, NO elision, NO Δ for C.
+
+FINDING (honest, mixed verdict)
+  #2-ext  → 🔵×🟡 FLIPPED 🔴→WIN by removing the wall, but NOT via the hand-emitted
+    inline. ① -flto is INSUFFICIENT (compile-time scope failure). ② same-TU LINKS
+    and WINS: base 0.36s → same-TU 0.25s = −31%, byte-identical. The decisive Δ
+    comes from same-TU compilation itself — clang -O2, now seeing the runtime fn
+    bodies, inlines/unrolls rt_str_starts_with on its own (bl 3→1, strncmp inlined
+    ×9). The explicit codegen INLINE emit (inline_samtu) gives ZERO additional win
+    over the same-TU out-of-line call (0.25 = 0.25, identical bl histogram). So the
+    #2-ext closed-negative's blocker (the link wall) is real and same-TU removes it,
+    but the value is unlocked by clang's own optimizer once the boundary is open —
+    the bespoke inline transform is redundant with -O2 cross-TU inlining.
+  C       → 🔵 correctness lossless (byte-identical) · 🔴 perf NULL — wall removal
+    alone does NOT flip C. With the wall gone and hexa_array_get fully visible,
+    clang -O2 STILL does not elide the bounds check (hexa_throw + oob-string survive)
+    and does not even inline the get into the loop (fn too large) → 0.73 vs 0.72s,
+    no Δ. clang cannot prove `i < HX_ARR_LEN(arr)` for the opaque pushed array
+    (hexa_array_push may realloc). A real bounds-elision win requires a 🔵
+    proof-carrying CODEGEN transform (emit a bounds-free get when the index is
+    provably in range) — that is the deferred 🔵 axis, NOT something wall removal
+    unlocks on its own. This is a VALID honest null result for C.
+
+RULED-OUT AXES
+  - -flto does NOT remove the runtime.h textual-scope wall (compile-time, pre-LTO).
+  - same-TU removes the wall and flips #2-ext, but the win is clang -O2's cross-TU
+    inlining, not the bespoke inline emit (which is redundant once unwalled).
+  - same-TU does NOT auto-elide opaque-value bounds/null checks; clang lacks the
+    in-range proof. Bounds elision stays a deferred proof-carrying-codegen item.
+
+VERDICT: 🔵×🟡 same-TU unwall FLIPS #2-ext 🔴→WIN (−31%, byte-identical, g5 PASS) ·
+         🔴 C bounds/null elision NULL under unwall (correctness lossless, perf no Δ) ·
+         -flto INSUFFICIENT for the textual-helper class. Mixed but terminal finding.

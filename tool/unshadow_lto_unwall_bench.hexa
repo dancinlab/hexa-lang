@@ -1,0 +1,169 @@
+// tool/unshadow_lto_unwall_bench.hexa
+//   UNSHADOW milestone "🔵×🟡 LTO/same-TU unwall 측정" — reproducible measurement
+//   of whether removing the precompiled-runtime.o C-ABI wall flips the two
+//   closed-negatives (#2-ext rt_str inline · C bounds/null elision) to a win.
+//
+// THESIS (UNSHADOW.md): both closed-negatives converged on ONE blocker —
+//   the emitted user.c does `#include "runtime.h"` and links a SEPARATE
+//   precompiled `runtime.o` (the WALL). runtime.h exports only the HexaVal-
+//   level ABI; the internal scalar helpers a real inline needs (HX_STRLEN,
+//   hxlcl_strncmp, HX_ARR_LEN) live ONLY inside the runtime.c amalgam
+//   (via #include "runtime_core.c"). Two unwall methods are tested cheapest-first:
+//     ① -flto  on the (runtime.o + user.o) link.
+//     ② same-TU: emitted user.c does `#include "runtime.c"` (amalgam in scope).
+//
+// ARMS (all on ONE host, back-to-back; clang -O2; arm64):
+//   #2-ext  base_walled   : runtime.h + out-of-line rt_str_starts_with + link runtime.o
+//   #2-ext  inline_walled : runtime.h + inlined body (refs HX_STRLEN/hxlcl_strncmp)
+//                           + link runtime.o   → expect COMPILE/LINK FAIL (the wall)
+//   #2-ext  inline_lto    : same as inline_walled + -flto  → expect STILL FAIL
+//                           (LTO is link-time; the failure is compile-time textual scope)
+//   #2-ext  base_samtu    : runtime.c (same-TU) + out-of-line call
+//   #2-ext  inline_samtu  : runtime.c (same-TU) + inlined body  → expect LINK OK
+//   C       cbase_walled  : runtime.h + out-of-line hexa_array_get + link runtime.o
+//   C       csamtu        : runtime.c (same-TU) + hexa_array_get visible
+//
+// MEASURE per arm: built? (link verdict) · program-output md5 (g5 byte-diff) ·
+//   best-of-K wall (s) · hot-loop `bl` histogram (call vs inlined).
+//
+// hexa-only: exec() used for clang spawn / file IO only. The actual wall is
+//   measured by /usr/bin/time -p inside exec (ms-granular host time, not a
+//   hexa builtin) — disclosed; hot loops run hundreds of ms so startup is noise.
+//
+// Argv:
+//   --rt   <dir>   directory holding runtime.h + runtime.c + runtime.o
+//                  (default ~/.hx/packages/hexa/self)
+//   --work <dir>   scratch work dir (default ~/unshadow-lto-unwall)
+//   --runs <N>     timed runs per arm, best-of-N (default 5)
+
+fn parse_int_safe(s) {
+    let t = s.trim()
+    if len(t) == 0 { return 0 }
+    let r = exec("printf '%s' '" + t + "' | awk '{n=$1+0; print n}'").trim()
+    if len(r) == 0 { return 5 }
+    return to_int(r)
+}
+
+fn arg_val(argv, key, dflt) {
+    let mut i = 0
+    while i < argv.len() {
+        if argv[i] == key && i + 1 < argv.len() { return argv[i + 1] }
+        i = i + 1
+    }
+    return dflt
+}
+
+fn write_file(path, body) {
+    // heredoc-free: route through a temp via printf to avoid quoting traps.
+    exec("cat > '" + path + "' <<'__UNSHADOW_EOF__'\n" + body + "\n__UNSHADOW_EOF__")
+}
+
+fn build_arm(label, cc_cmd, out_bin) {
+    let r = exec(cc_cmd + " 2>&1")
+    let built = exec("[ -f '" + out_bin + "' ] && printf yes || printf no").trim()
+    let nerr = exec("printf '%s' \"" + r + "\" | grep -ciE 'error|undefined' 2>/dev/null").trim()
+    println("  [" + label + "] built=" + built + " err_lines=" + nerr)
+    return built
+}
+
+fn md5_of_output(bin) {
+    return exec("'" + bin + "' 2>/dev/null | md5 2>/dev/null || '" + bin + "' 2>/dev/null | md5sum 2>/dev/null | cut -d' ' -f1").trim()
+}
+
+fn best_wall(bin, runs) {
+    let mut best = "999"
+    let mut r = 0
+    while r < runs {
+        let t = exec("{ /usr/bin/time -p '" + bin + "' >/dev/null ; } 2>&1 | awk '/^real/{print $2}'").trim()
+        if len(t) > 0 {
+            let cmp = exec("awk 'BEGIN{print (" + t + "<" + best + ")?1:0}'").trim()
+            if cmp == "1" { best = t }
+        }
+        r = r + 1
+    }
+    return best
+}
+
+fn bl_count(asm_path, sym) {
+    return exec("grep -c 'bl[[:space:]]*_" + sym + "' '" + asm_path + "' 2>/dev/null || printf 0").trim()
+}
+
+fn main() {
+    let argv = args()
+    let home = env("HOME")
+    let rt = arg_val(argv, "--rt", home + "/.hx/packages/hexa/self")
+    let work = arg_val(argv, "--work", home + "/unshadow-lto-unwall")
+    let runs = parse_int_safe(arg_val(argv, "--runs", "5"))
+
+    println("=== UNSHADOW LTO/same-TU unwall bench ===")
+    println("rt=" + rt + "  work=" + work + "  runs=" + to_string(runs))
+    exec("rm -rf '" + work + "' && mkdir -p '" + work + "'")
+
+    let inc = "-I '" + rt + "'"
+    let o2 = "clang -O2 " + inc + " "
+
+    // ── shared #2-ext bodies ──
+    write_file(work + "/body.h",
+      "static int run_corpus(void){\n" +
+      "  HexaVal a=hexa_str(\"hexagon\"), p1=hexa_str(\"hexa\"), p2=hexa_str(\"gon\"), p3=hexa_str(\"\");\n" +
+      "  int hits=0; long N=60000000L;\n" +
+      "  for(long i=0;i<N;i++){ hits+=SW(a,p1); hits+=SW(a,p2); hits+=SW(a,p3); }\n" +
+      "  return hits; }\n" +
+      "int main(void){ printf(\"%d\\n\", run_corpus()); return 0; }\n")
+    write_file(work + "/inline_body.h",
+      "#define SW(s,p) ({ HexaVal __sw_s=(s),__sw_p=(p); (!HX_IS_STR(__sw_s)||!HX_IS_STR(__sw_p))?0:(hxlcl_strncmp(HX_STR(__sw_s),HX_STR(__sw_p),HX_STRLEN(__sw_p))==0); })\n")
+
+    write_file(work + "/base.c",          "#include \"runtime.h\"\n#include <stdio.h>\n#define SW(s,p) rt_str_starts_with((s),(p))\n#include \"body.h\"\n")
+    write_file(work + "/inline_walled.c",  "#include \"runtime.h\"\n#include <stdio.h>\n#include \"inline_body.h\"\n#include \"body.h\"\n")
+    write_file(work + "/base_samtu.c",     "#include \"runtime.c\"\n#include <stdio.h>\n#define SW(s,p) rt_str_starts_with((s),(p))\n#include \"body.h\"\n")
+    write_file(work + "/inline_samtu.c",   "#include \"runtime.c\"\n#include <stdio.h>\n#include \"inline_body.h\"\n#include \"body.h\"\n")
+
+    println("\n--- #2-ext: rt_str_starts_with inline ---")
+    build_arm("base_walled  ", o2 + "'" + work + "/base.c' '" + rt + "/runtime.o' -o '" + work + "/base_bin' -lpthread", work + "/base_bin")
+    build_arm("inline_walled", o2 + "'" + work + "/inline_walled.c' '" + rt + "/runtime.o' -o '" + work + "/iw_bin' -lpthread", work + "/iw_bin")
+    build_arm("inline_lto    ", o2 + "-flto '" + work + "/inline_walled.c' '" + rt + "/runtime.o' -o '" + work + "/ilto_bin' -lpthread", work + "/ilto_bin")
+    build_arm("base_samtu   ", o2 + "'" + work + "/base_samtu.c' -o '" + work + "/bsam_bin' -lpthread", work + "/bsam_bin")
+    build_arm("inline_samtu ", o2 + "'" + work + "/inline_samtu.c' -o '" + work + "/isam_bin' -lpthread", work + "/isam_bin")
+
+    println("\n  g5 byte-diff (program output md5):")
+    println("    base_walled  : " + md5_of_output(work + "/base_bin"))
+    println("    base_samtu   : " + md5_of_output(work + "/bsam_bin"))
+    println("    inline_samtu : " + md5_of_output(work + "/isam_bin"))
+
+    println("\n  perf best-of-" + to_string(runs) + " wall (s):")
+    println("    base_walled (runtime.o)      : " + best_wall(work + "/base_bin", runs))
+    println("    base_samtu  (runtime.c call) : " + best_wall(work + "/bsam_bin", runs))
+    println("    inline_samtu(inlined body)   : " + best_wall(work + "/isam_bin", runs))
+
+    // ── C: bounds/null elision on an opaque runtime value ──
+    write_file(work + "/cbody.h",
+      "static long run_c(void){\n" +
+      "  HexaVal arr=hexa_array_new();\n" +
+      "  for(int k=0;k<256;k++) arr=hexa_array_push(arr,hexa_int(k));\n" +
+      "  long acc=0; long N=2000000L; int len=256;\n" +
+      "  for(long r=0;r<N;r++) for(long i=0;i<len;i++) acc+=HX_INT(GET(arr,i));\n" +
+      "  return acc; }\n" +
+      "int main(void){ printf(\"%ld\\n\", run_c()); return 0; }\n")
+    write_file(work + "/cbase.c",  "#include \"runtime.h\"\n#include <stdio.h>\n#define GET(a,i) hexa_array_get((a),(i))\n#include \"cbody.h\"\n")
+    write_file(work + "/csamtu.c", "#include \"runtime.c\"\n#include <stdio.h>\n#define GET(a,i) hexa_array_get((a),(i))\n#include \"cbody.h\"\n")
+
+    println("\n--- C: hexa_array_get bounds-check elision (index structurally in [0,len)) ---")
+    build_arm("cbase_walled ", o2 + "'" + work + "/cbase.c' '" + rt + "/runtime.o' -o '" + work + "/cb_bin' -lpthread", work + "/cb_bin")
+    build_arm("csamtu       ", o2 + "'" + work + "/csamtu.c' -o '" + work + "/cs_bin' -lpthread", work + "/cs_bin")
+
+    println("\n  g5 byte-diff (program output md5):")
+    println("    cbase_walled : " + md5_of_output(work + "/cb_bin"))
+    println("    csamtu       : " + md5_of_output(work + "/cs_bin"))
+
+    println("\n  perf best-of-" + to_string(runs) + " wall (s):")
+    println("    cbase_walled : " + best_wall(work + "/cb_bin", runs))
+    println("    csamtu       : " + best_wall(work + "/cs_bin", runs))
+
+    // bounds-check survival in the same-TU asm
+    exec(o2 + "-S '" + work + "/csamtu.c' -o '" + work + "/csamtu.s' 2>/dev/null")
+    println("\n  same-TU asm: bl _hexa_throw = " + bl_count(work + "/csamtu.s", "hexa_throw") +
+            "  (oob-string occurrences = " + exec("grep -c 'out of bounds' '" + work + "/csamtu.s' 2>/dev/null || printf 0").trim() + ")")
+    println("  → if hexa_throw / oob-string survive, clang -O2 did NOT elide the opaque bounds check.")
+
+    println("\n=== done ===")
+}

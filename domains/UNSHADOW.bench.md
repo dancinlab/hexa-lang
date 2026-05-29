@@ -215,3 +215,74 @@ BYTE-DIFF VERDICT: IDENTICAL across all 4 reclaim configs ✅
 > caveat: 단일 호스트(mini) 단일 세션 · peak RSS = 전 프로세스 max RSS(startup 포함이나
 > hot loop 가 지배) · wall = best-of-3 real(노이즈 최저) · 측정 바이너리는 설치 toolchain 의
 > 캐시된 `runtime.o` 링크본(코드 변경 없음, 순수 env A/B).
+
+---
+
+## §lto-unwall — runtime.o C-ABI 벽 제거 (LTO vs same-TU) 실측
+
+> milestone "🔵×🟡 LTO/same-TU unwall 측정" 의 실측 — 이번 사이클 두 closed-negative
+> (#2-ext rt_str inline · C bounds/null elision)가 수렴한 **단일 블로커 = precompiled
+> `runtime.o` C-ABI 벽**을 제거하면 둘이 🔴→win 으로 뒤집히는지.
+> SSOT 도구 = `tool/unshadow_lto_unwall_bench.hexa` · verdict = `.verdicts/unshadow-lto-unwall/`.
+
+### 진단한 링크 모델 (= 벽)
+
+졸업(.c=0) 후에도 emit 된 user.c 는 `#include "runtime.h"` 하고, 최종 링크는 **별도
+precompiled runtime 오브젝트를 2nd TU 로** 소비한다 (`self/main.hexa` `cmd_build` ~L3009–3041):
+
+| branch | 조건 | runtime 입력 | 벽? |
+|---|---|---|---|
+| (1) | `HEXA_PREBUILT_RUNTIME` set | 미리 빌드된 `runtime.o`/`.a` 직접 링크 | **벽** |
+| (2) | 기본 (HOME 존재) | content-hash 캐시 `clang -O2 -c runtime.c -o runtime.<sha>.o` → 그 **오브젝트** 링크 | **벽 (현 기본)** |
+| (3) | 첫 빌드 / no HOME / `--shared` / cross | `runtime.c` **소스**를 2nd source 로 동일 clang 호출 (그래도 별 TU; -flto 없음) | 별 TU |
+
+`runtime.h` 는 HexaVal-레벨 ABI 만 export. 진짜 인라인이 필요로 하는 내부 스칼라 헬퍼
+(`HX_STRLEN`·`hxlcl_strncmp`·`HX_ARR_LEN`)는 **runtime.c 아말감 안에만** 정의된다
+(`runtime.c:1211 #include "runtime_core.c"`, emit = `runtime_core_emit.hexa:763/1090`).
+이것이 두 closed-negative 가 부딪힌 **그 벽**이다. 졸업 후 `self/runtime.c` 는 repo 에 부재
+(B9 generated); 영속 산출물은 precompiled `runtime.o` 뿐 — **벽은 구조적으로 살아있다.**
+
+### 측정: `mini` (macOS arm64, Apple clang 21) · 두 arm back-to-back · best-of-5 wall · 2026-05-30
+
+**#2-ext — rt_str_starts_with 인라인** (60M-iter hot loop, 3 call-site):
+
+| arm | 링크 모델 | built (링크) | 출력 md5 (g5) | wall (s, best-of-5) |
+|---|---|---|---|---|
+| base_walled   | runtime.h + out-of-line call + `runtime.o` | yes | `f869400e…` | 0.36 |
+| inline_walled | runtime.h + 인라인 본문 + `runtime.o` | **no (LINK FAIL)** | — | — |
+| inline_lto    | inline_walled + `-flto` | **no (STILL FAIL)** | — | — |
+| base_samtu    | **same-TU** `#include "runtime.c"` + out-of-line call | yes | `f869400e…` | **0.25** |
+| inline_samtu  | **same-TU** + 인라인 본문 | yes | `f869400e…` | **0.25** |
+
+> `-flto` 는 **컴파일-타임**에 `hxlcl_strncmp`/`HX_STRLEN` undeclared 로 실패 — LTO 는
+> 링크-타임 최적화라 user.c 가 컴파일조차 안 되면 발화 못 함. ① 은 #2-ext 에 **불충분**.
+> asm (60M-iter, `-O2 -S`): base_walled `bl _rt_str_starts_with`=3 · same-TU=1 (`bl _hxlcl_strncmp`=9, clang 가 본문 인라인+언롤).
+
+**C — hexa_array_get bounds-check elision** (idx 가 구조적으로 `[0,len)`, 2M×256 iter):
+
+| arm | 링크 모델 | built | 출력 md5 (g5) | wall (s, best-of-5) | bounds-check 살아남음? |
+|---|---|---|---|---|---|
+| cbase_walled | runtime.h + out-of-line `hexa_array_get` + `runtime.o` | yes | `fda59d53…` | 0.73 | (벽 안) |
+| csamtu       | **same-TU** `#include "runtime.c"` | yes | `fda59d53…` | 0.72 | **yes** (`bl _hexa_throw`=1 · oob-string×2) |
+
+> same-TU 에서도 main-region `bl _hexa_array_get`=1 (양쪽 동일) — `hexa_array_get` 는
+> 너무 커서 clang 이 루프에 인라인 안 함 → 인라인 0, elision 0, Δ 0.
+
+### 정직한 해석 — #2-ext FLIP (same-TU), C NULL
+
+- **#2-ext: 🔵×🟡 FLIP 🔴→WIN, 단 hand-emit 인라인 덕이 아니다.** ① `-flto` 불충분(컴파일-타임 scope
+  실패). ② **same-TU 가 LINK + WIN**: 0.36→0.25s = **−31%**, byte-identical. 결정적 Δ 는 same-TU
+  컴파일 자체에서 온다 — clang -O2 가 이제 런타임 본문을 보고 `rt_str_starts_with` 를 **스스로**
+  인라인/언롤(`bl` 3→1). codegen 의 명시적 INLINE emit(inline_samtu)은 same-TU out-of-line call 대비
+  **추가 win 0** (0.25=0.25, asm 동일). 즉 #2-ext 의 블로커(링크 벽)는 실재하고 same-TU 가 제거하지만,
+  가치는 경계가 열리면 clang -O2 의 cross-TU 인라이너가 따낸다 — 맞춤 인라인 변환은 unwall 후 redundant.
+- **C: 🔵 correctness lossless · 🔴 perf NULL.** 벽을 없애고 `hexa_array_get` 본문이 다 보여도 clang -O2
+  는 bounds check 를 **elide 안 한다**(throw + oob-string 잔존), 루프에 인라인도 안 한다 → Δ 없음
+  (0.73 vs 0.72). clang 은 push-된 opaque 배열에 대해 `i < HX_ARR_LEN(arr)` 를 증명 못 함
+  (`hexa_array_push` 는 realloc 가능). 진짜 bounds-elision win 은 **🔵 proof-carrying CODEGEN 변환**
+  (index 가 in-range 임을 증명할 때 bounds-free get emit)을 요구 — 그것이 deferred 🔵 축이며 unwall 단독으로
+  열리지 않는다. C 의 정직한 **null** 결과.
+
+> caveat: 단일 호스트(mini) 단일 세션 · wall = best-of-5 real(노이즈 최저) · 측정대는 설치
+> toolchain 의 `runtime.h`/`runtime.c`/`runtime.o` 사용 · 모든 arm 동일 호스트 back-to-back ·
+> 재현 = `tool/unshadow_lto_unwall_bench.hexa` (parse-gate PASS · compiled-build PASS · run PASS on mini).
