@@ -14,7 +14,7 @@ DECODER M5 STEP_RATE_LOG 실측 기준 baseline:
 
 ## M1~M7 1차 사이클 결과 (2026-05-30 · static 🟠 → M7 RTX 5070 실측 일부 🟢 승격)
 
-M7 실측(ubu-2 RTX 5070, $0): **M4 roofline · M6 fp32 lever = 🟢 CONFIRMED** (관측 0.165 step/s ≈ 예측 0.15 · fp32/fp64 42~50× ≈ 예측 44×). M2/M3 게이트 메커니즘 🟢이나 키가 rows 기준이어야 함이 실측으로 정정됨(→ M8). M1/M3 RSS-churn 실효 + A100 헤드룸은 🟠 유지(deferred).
+M7 실측(ubu-2 RTX 5070, $0): **M4 roofline · M6 fp32 lever = 🟢 CONFIRMED** (관측 0.165 step/s ≈ 예측 0.15 · fp32/fp64 42~50× ≈ 예측 44×). M2/M3 게이트 메커니즘 🟢이나 키가 rows 기준이어야 함이 실측으로 정정됨(→ M8). M1/M3 RSS-churn 실효 = 🟢 MEASURED (2026-05-30, PR #2175): farr 버퍼 hxlcl no-op-free 가 진짜 원인 — option-b real-libc 우회로 per-step RSS +256MB → 0MB/step 완전 평탄화(ubu-2, verdict `M1M3-hxlcl-free-fix.txt`). A100 헤드룸만 🟠 유지(deferred).
 
 
 | PR | 닫은 것 | 메커니즘 |
@@ -55,7 +55,7 @@ roofline 분석 (d768·12L fp64: P=104.2M, FLOPs/step=3.03e12, AI=207 FLOP/byte)
 
 ## deferred
 
-- M1/M3 RSS-churn 실효(🟠): synthetic 미재현(64KB 청크 < 256KB mmap 임계 → mallopt 무관) → real anima 트레이너 `HEXA_RSS_TRACE=1` fire 필요(cross-repo 빌드 = 별개 cycle).
+- ~~M1/M3 RSS-churn 실효(🟠)~~ → 🟢 CLOSED (2026-05-30, PR #2175): 진짜 원인은 mallopt(#2123) dead-code 가 아니라 farr 가 hxlcl no-op-free arena 에 묶인 것. option-b real-libc 우회로 +256MB/step → 0MB/step 평탄화 실측. mallopt 가 무관했던 이유 = hxlcl 이 glibc arena 를 raw mmap 으로 우회. verdict `M1M3-hxlcl-free-fix.txt`.
 - A100 occupancy 헤드룸(M4: fp64 floor 의 6.4×) = 유료 A100 pod 필요 → 미측정 유지.
 - cross-repo anima 트레이너를 새 hexa runtime(#2122~#2130)으로 빌드 = runtime regen 블로커 → 별개 cycle(HALT 회피, deferred).
 - `hexa_farr_free` 본체 1줄 call-site patch = 다음 edge-runtime.c regen 시 적용 (B9 #2065로 본체가 gitignored, runtime.h 주석에 patch-spec 명시됨).

@@ -1,0 +1,69 @@
+// farr per-step RSS-churn A/B harness (HEXA-TRAIN-FLOOR M1/M3).
+//
+// Reproduces the #2171 workload: each step allocs 8 farr buffers of 32 MB
+// (4M doubles), touches every page (write), then frees them all. Across
+// >=12 steps the per-step delta of resident RSS is printed. With the
+// hxlcl no-op-free bug a step leaks ~250 MB; with the option-b real-libc
+// farr fix the free returns pages to the OS so the per-step delta flattens.
+//
+// RSS is read self-referentially from /proc/<getpid>/statm field 2
+// (resident pages) * page_size, so no external sampler is needed.
+//
+// Env: FARR_AB_STEPS (default 14), FARR_AB_BUFS (default 8),
+//      FARR_AB_MB (default 32).
+
+fn rss_mb() -> int {
+    let pid = getpid()
+    // statm field 2 = resident pages; page size 4096 on x86_64/glibc.
+    let out = to_string(exec("awk '{print $2}' /proc/" + to_string(pid) + "/statm")).trim()
+    if out == "" { return 0 }
+    let pages = to_int(out)
+    return (pages * 4096) / (1024 * 1024)
+}
+
+fn main() {
+    let mut steps = 14
+    let se = env("FARR_AB_STEPS")
+    if se != "" { steps = to_int(se) }
+    let mut bufs = 8
+    let be = env("FARR_AB_BUFS")
+    if be != "" { bufs = to_int(be) }
+    let mut mb = 32
+    let me = env("FARR_AB_MB")
+    if me != "" { mb = to_int(me) }
+
+    // elements per buffer = mb MiB / 8 bytes per double
+    let n_elem = (mb * 1024 * 1024) / 8
+
+    println("=== farr churn A/B harness ===")
+    println("steps=" + to_string(steps) + " bufs/step=" + to_string(bufs) + " size=" + to_string(mb) + "MB elem=" + to_string(n_elem))
+    println("step  rss_MB  delta_MB")
+
+    let mut prev = rss_mb()
+    println("base  " + to_string(prev) + "  -")
+
+    let mut s = 0
+    while s < steps {
+        let mut hs = farr_zeros(0)   // placeholder handle, overwritten below
+        // alloc + touch + free, bufs buffers this step
+        let mut b = 0
+        while b < bufs {
+            let h = farr_zeros(n_elem)
+            // touch every page (stride 512 doubles = 4096 B page)
+            let mut i = 0
+            while i < n_elem {
+                let _ = farr_set(h, i, 1.0)
+                i = i + 512
+            }
+            let _ = farr_free(h)
+            b = b + 1
+        }
+        let _ = farr_free(hs)
+        let cur = rss_mb()
+        let delta = cur - prev
+        println("step" + to_string(s) + "  " + to_string(cur) + "  " + to_string(delta))
+        prev = cur
+        s = s + 1
+    }
+    println("=== done ===")
+}

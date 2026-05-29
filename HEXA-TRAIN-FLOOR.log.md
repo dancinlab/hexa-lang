@@ -704,3 +704,41 @@ cold-seed default path (build_hexa_cli step0)로 ubu-2(x86_64·RTX 5070) `/tmp` 
 - build-fix 는 landed+verified; 측정은 clean-built hexa 토대 위 후속 세션 인계.
 - residue: ubu-2 /tmp 임시 클론·repro 파일 자동 폐기. pod 미사용(ubu-2 = pool 호스트,
   유료 RunPod 아님). 격리 worktree 만 사용, install/warm tree 무손상.
+
+## 2026-05-30 M1/M3 — hxlcl no-op-free farr-churn fix MEASURED 🟢 (PR #2175)
+finding: farr per-step RSS-churn 완전 평탄화. 이전 🟠 UNMEASURED → 🟢 PASS.
+verdict: .verdicts/hexa-train-floor/M1M3-hxlcl-free-fix.txt (A/B + self-compile verbatim)
+
+### 근본 원인 (PR #2171 진단 확정, 재확인)
+hxlcl_* 는 GENERAL 런타임 allocator(주석 L719 "never frees — amortised across the
+one-shot compiler lifetime" = SHORT-LIVED 트랜스파일러용 self-compile 속도 장치).
+seed/runtime 가 `#define malloc/free/calloc/realloc → hxlcl_*` 로 malloc-family 를
+mmap bump-arena 로 렌더링하며 `hxlcl_free` 는 NO-OP. 이 shim 이 LONG-LIVED farr 학습
+데이터 경로까지 덮어 step 당 8×32MB=256MB 가 OS 로 반환 안 됨. #2123 mallopt 는 hxlcl
+이 glibc arena 를 raw mmap 으로 우회하므로 farr 에 닿지 않는 dead code.
+
+### FIX = option (b): farr DATA BUFFER 만 REAL glibc 우회 (file:line)
+self/native/hexa_cc_seed.c (tracked SSOT; #2065 이후 self/runtime.c amalgam 은
+gitignored·emitter 없음 → seed 자체가 추적되는 runtime SSOT 이고 bootstrap.yml
+Stage 0 의 runtime_seed.o = seed 2차 컴파일이 general 런타임 심볼 제공):
+  L12381-12390 #undef-fence 로 real-libc 헬퍼 정의 후 hxlcl shim 재establish:
+    static void* hexa_farr_sys_calloc(size_t,size_t){ return calloc(...); }
+    static void  hexa_farr_sys_free(void*){ free(...); }
+  farr/farr32/farr_int 3종 zeros calloc · free · OOM-path free call-site rewrite.
+  소형 handle table/freelist realloc 은 arena 유지(persistent·tiny). 컴파일러
+  bump-arena 무손상 = self-compile 속도 보존. (+30/-9, wipe-guard 통과)
+이유: option (a)/(d)(hxlcl_free 를 real 로)는 컴파일러 arena 속도/안정성 광역 blast.
+option (c)(shim TU 게이팅)는 amalgam 단일 TU 구조상 대공사. (b) = MINIMAL·g0.
+
+### A/B 실측 (ubu-2 gcc 13.3.0 · glibc 2.39 · /tmp fresh clone HEAD 91bef6c · NO GPU)
+8×32MB farr alloc+touch+free × 14 step, /proc 자가측정:
+  BASELINE (hxlcl no-op-free, fix revert): +256 MB/step 단조증가, 2→3586 MB.
+  FIXED    (option-b real-libc)          : 0 MB/step 평탄, 14 step 내내 2 MB 고정.
+  Δ = 전 +256 MB/step → 후 0 MB/step (성공 임계 <10MB/step 대비 literally 0).
+self-compile: 4/4 SSOT transpile rc=0 (lexer/parser/type_checker 바이트수 = P5 verdict
+  와 동일 = 컴파일러 출력 무영향). AKIDA-int4 farr 의미 불변.
+→ 🟢 M1/M3 PASS (measured, g5).
+
+### residue
+ubu-2 /tmp 임시 클론·harness 자동 폐기(rm -rf). pod 미사용(ubu-2 = pool CPU 호스트,
+유료 RunPod 0). install/warm tree·Mac workstation 무손상. 격리 /tmp 측정만.

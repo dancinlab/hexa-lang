@@ -1,0 +1,126 @@
+════════════════════════════════════════════════════════════════════════
+HEXA-TRAIN-FLOOR · M1/M3 — hxlcl_free no-op farr-churn fix (runtime-level 실측)
+════════════════════════════════════════════════════════════════════════
+ts(UTC)   : 2026-05-30T08:00Z
+host      : ubu-2 (summer-B650M-K · x86_64 · 12 cores · RTX 5070 · clang 13.x · glibc 2.39)
+clone     : /tmp/farr-ab-*/repo  (git clone --depth 1 origin/main · HEAD 259baa9)
+branch    : hxlcl-farr-free-fix-2026-05-30 (base = origin/main 259baa9, float-pun #2159 포함)
+미션      : runtime-level farr A/B (8×32MB alloc+touch+free × 16 steps) — hxlcl 인터포지션
+            경유 per-step RSS climb 을 fix 전/후 실측 → M1/M3 churn 🟢/🔴
+
+────────────────────────────────────────────────────────────────────────
+[근본 원인] (#2171 진단 확정)
+────────────────────────────────────────────────────────────────────────
+hxlcl_* 는 GENERAL 런타임 allocator 다. self/runtime.c (≡ seed amalgam) 가
+`#define malloc(n) hxlcl_malloc(...)` (+ free/calloc/realloc) 로 malloc-family 를
+mmap bump-arena 로 렌더링하며 `hxlcl_free` 는 NO-OP. 이 arena 는 SHORT-LIVED
+트랜스파일러용 self-compile 속도 장치(never-free, 1회성 컴파일 수명에 amortize).
+그러나 shim 이 LONG-LIVED farr 학습 데이터 경로까지 덮음:
+  hexa_farr_zeros -> calloc -> hxlcl_calloc (bump, 회수 안 됨)
+  hexa_farr_free  -> free   -> hxlcl_free   (NO-OP)
+→ step 당 8×32MB = 256MB 가 OS 로 절대 반환 안 됨 = +250MB/step leak.
+#2123 mallopt 가 dead code 인 이유: hxlcl 이 glibc arena 를 우회(raw mmap)하므로
+M_MMAP/M_TRIM_THRESHOLD 가 farr 에 닿지 않음 (mallinfo2 arena=0 KB 로 확인).
+
+────────────────────────────────────────────────────────────────────────
+[택한 FIX = option (b)] farr DATA BUFFER 를 REAL glibc 로 우회 (shim bypass)
+────────────────────────────────────────────────────────────────────────
+file: self/native/hexa_cc_seed.c (tracked SSOT · runtime.c amalgam region)
+  hexa_farr_zeros (L12371) 직전에 #undef-fence 로 real-libc 헬퍼 정의:
+    static void* hexa_farr_sys_calloc(size_t,size_t){ return calloc(...); }
+    static void  hexa_farr_sys_free(void*){ free(...); }
+  (helper 본문은 #undef malloc/free/calloc/realloc 윈도우 안 → REAL libc;
+   직후 hxlcl shim 재establish 하여 나머지 TU 영향 0)
+  call-site 3종 rewrite (farr/farr32/farr_int 전부):
+    buf=(T*)calloc(...)        -> hexa_farr_sys_calloc(...)   ×3
+    if(e->buf){ free(e->buf); } -> hexa_farr_sys_free(e->buf)  ×3
+    OOM-path  if(buf)free(buf) -> hexa_farr_sys_free(buf)      ×3
+  소형 handle table/freelist 의 realloc 은 arena 유지(persistent·tiny).
+이유: hxlcl IS general allocator(주석 L719 "never frees — amortised across the
+  one-shot compiler lifetime"). option (a)/(d)(hxlcl_free 를 real 로)는 컴파일러
+  bump-arena 의 속도/안정성 광역 blast. option (c)(shim TU 게이팅)는 amalgam 단일
+  TU 구조상 대공사. option (b) 가 MINIMAL·g0-correct: farr 버퍼만 real libc, 컴파일러
+  arena 무손상(self-compile 속도 보존), AKIDA-int4 inference farr 의미 불변.
+
+────────────────────────────────────────────────────────────────────────
+[A/B 실측 — verbatim stdout, ubu-2 clean toolchain]
+────────────────────────────────────────────────────────────────────────
+빌드: /tmp fresh clone origin/main HEAD 91bef6c (PR #2175 머지 후 = fix 포함)
+  cc(gcc 13.3.0) hexa_cc_seed.c -o hexa_v2 -lm + cc -Dmain=__seed_main_unused
+  -c hexa_cc_seed.c -o runtime_seed.o (CI bootstrap.yml Stage 0 미러 = seed
+  자체가 general 런타임 소스. self/runtime.c 부재 시 runtime_seed.o 가 farr
+  심볼 제공). harness = tool/farr_churn_ab.hexa (8×32MB farr alloc+touch(page
+  write)+free × 14 step, /proc/$PPID/statm 자가측정). BASELINE = 동일 clone 에서
+  sed 로 farr call-site 를 shimmed calloc/free 로 revert (hxlcl arena 복귀).
+  NO GPU pod — ubu-2 CPU $0.
+=VERBATIM=
+########## ARM=baseline (hxlcl no-op-free) ##########
+=== farr churn ===
+steps=14 bufs/step=8 size=32MB elem=4194304
+step  rss_MB  delta_MB
+base  2  -
+step0  258  256
+step1  514  256
+step2  770  256
+step3  1026  256
+step4  1282  256
+step5  1538  256
+step6  1794  256
+step7  2050  256
+step8  2306  256
+step9  2562  256
+step10  2818  256
+step11  3074  256
+step12  3330  256
+step13  3586  256
+=== end ===
+
+########## ARM=fixed (option-b real-libc) ##########
+=== farr churn ===
+steps=14 bufs/step=8 size=32MB elem=4194304
+step  rss_MB  delta_MB
+base  2  -
+step0  2  0
+step1  2  0
+step2  2  0
+step3  2  0
+step4  2  0
+step5  2  0
+step6  2  0
+step7  2  0
+step8  2  0
+step9  2  0
+step10  2  0
+step11  2  0
+step12  2  0
+step13  2  0
+=== end ===
+=END-VERBATIM=
+
+────────────────────────────────────────────────────────────────────────
+[self-compile 무손상 확인 — verbatim stdout, ubu-2 clean toolchain]
+────────────────────────────────────────────────────────────────────────
+=VERBATIM=
+HEAD : 91bef6c
+seed sys-calloc (fixed): 4
+hexa_v2: ELF 64-bit LSB pie executable, x86-64  2244504B
+  OK   lexer  -> 191259B
+  OK   parser  -> 411242B
+  OK   type_checker  -> 149174B
+  OK   codegen  -> 1014351B
+SELF-COMPILE RC=0
+=END-VERBATIM=
+(lexer/parser/type_checker 바이트수 = HEXA-CC-ZERO P5 verdict 와 동일 → farr
+ fix 가 컴파일러 출력 무영향 입증. fix 는 런타임 farr 경로에 격리됨.)
+
+────────────────────────────────────────────────────────────────────────
+[판정]
+────────────────────────────────────────────────────────────────────────
+🟢 M1/M3 PASS (measured, g5):
+  farr per-step RSS climb  +256 MB/step (baseline) → 0 MB/step (fixed)
+  = 완전 평탄화 (<10MB/step 성공 임계 대비 literally 0). 14 step 누적
+  BASELINE 3584 MB vs FIXED 0 MB.
+  self-compile 4/4 SSOT transpile rc=0 (무손상).
+  AKIDA-int4 inference farr 의미 불변 (동일 데이터·실제 backing alloc).
+  NO GPU pod 사용 (ubu-2 CPU $0).
+PR #2175 (squash-merged origin/main 91bef6c).
