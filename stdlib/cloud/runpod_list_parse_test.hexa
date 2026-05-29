@@ -1,0 +1,104 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+// stdlib/cloud/runpod_list_parse_test.hexa — falsifier suite for the
+// runpod pod-list parser hardening. The source fns are `_`-prefixed and
+// private to stdlib/cloud/runpod.hexa, so this mirrors the pure-string
+// logic (mirror-test pattern matches cloud_rm_test.hexa / reconcile_test).
+//
+// Regression target — handoff hexa-lang a71ec0dd: `runpodctl get pods`
+// (PLURAL, not a real verb) errored and printed its usage block; the old
+// _runpod_list_old split each help line into a fake pod, so `cloud list`
+// reported "5 pods" (Usage:, Available, Flags:, Global, Use) and `cloud
+// reconcile` classified them as ORPHANs. Fix: SINGULAR `get pod -o json`,
+// help-text detection, and a pod-id shape validator.
+//
+// Falsifiers:
+//   F-RUNPOD-HELP-DETECT  — usage/help text is recognized, never parsed as pods
+//   F-RUNPOD-ID-REJECT    — help words (Usage:, Available, Flags:, Global, Use) fail id check
+//   F-RUNPOD-ID-ACCEPT    — real lowercase-alnum pod ids pass
+//   F-RUNPOD-STRIP        — a leading `warning:` banner is stripped before JSON
+//
+// Run:   hexa run stdlib/cloud/runpod_list_parse_test.hexa
+// PASS:  exits 0, prints "runpod_list_parse_test PASS".
+
+// Mirror of runpod.hexa:_runpod_is_help_text (private) — KEEP IN SYNC.
+fn _runpod_is_help_text(out: str) -> int {
+    if out.index_of("Usage:") >= 0 { return 1 }
+    if out.index_of("Available Commands:") >= 0 { return 1 }
+    if out.index_of("Global Flags:") >= 0 { return 1 }
+    if out.index_of("unknown command") >= 0 { return 1 }
+    if out.index_of("unknown flag") >= 0 { return 1 }
+    return 0
+}
+
+// Mirror of runpod.hexa:_runpod_valid_pod_id (private) — KEEP IN SYNC.
+fn _runpod_valid_pod_id(tok: str) -> int {
+    let n = len(tok)
+    if n < 8 { return 0 }
+    if n > 32 { return 0 }
+    let mut i = 0
+    let mut has_digit = 0
+    while i < n {
+        let c = tok.substring(i, i + 1)
+        let is_lower = c >= "a" && c <= "z"
+        let is_digit = c >= "0" && c <= "9"
+        if !is_lower && !is_digit { return 0 }
+        if is_digit { has_digit = 1 }
+        i = i + 1
+    }
+    return has_digit
+}
+
+// Mirror of runpod.hexa:_runpod_strip_to_json (private) — KEEP IN SYNC.
+fn _runpod_strip_to_json(out: str) -> str {
+    let lb = out.index_of("[")
+    let ob = out.index_of("{")
+    let mut start = lb
+    if ob >= 0 && (start < 0 || ob < start) { start = ob }
+    if start < 0 { return out }
+    return out.substring(start, len(out))
+}
+
+fn _ck(name: str, got: int, want: int) {
+    if got != want {
+        println("  FAIL: " + name + " got " + to_string(got) + " want " + to_string(want))
+        exit(1)
+    }
+}
+
+fn _ck_str(name: str, got: str, want: str) {
+    if got != want {
+        println("  FAIL: " + name + " got '" + got + "' want '" + want + "'")
+        exit(1)
+    }
+}
+
+fn main() {
+    // F-RUNPOD-HELP-DETECT — the exact usage block `get pods` printed in the
+    // wild is recognized as help, so it is never split into pods.
+    let usage = "Usage:\n  runpodctl get [command]\n\nAvailable Commands:\n  pod   get all pods\n\nFlags:\n  -h, --help\n\nGlobal Flags:\n  -o, --output string\n\nUse \"runpodctl get [command] --help\""
+    _ck("usage block is help",  _runpod_is_help_text(usage), 1)
+    _ck("json array not help",  _runpod_is_help_text("[{\"id\":\"podabc123def\"}]"), 0)
+    _ck("empty not help",       _runpod_is_help_text(""), 0)
+
+    // F-RUNPOD-ID-REJECT — every help-text word that leaked as a fake pod
+    // must fail the id-shape check.
+    _ck("Usage: rejected",     _runpod_valid_pod_id("Usage:"), 0)
+    _ck("Available rejected",  _runpod_valid_pod_id("Available"), 0)
+    _ck("Flags: rejected",     _runpod_valid_pod_id("Flags:"), 0)
+    _ck("Global rejected",     _runpod_valid_pod_id("Global"), 0)
+    _ck("Use rejected",        _runpod_valid_pod_id("Use"), 0)
+    _ck("ID header rejected",  _runpod_valid_pod_id("ID"), 0)
+    _ck("all-alpha rejected",  _runpod_valid_pod_id("availablepods"), 0)
+
+    // F-RUNPOD-ID-ACCEPT — real lowercase-alnum RunPod ids pass.
+    _ck("real id 1 ok",        _runpod_valid_pod_id("abc123def456gh"), 1)
+    _ck("real id 2 ok",        _runpod_valid_pod_id("x9y8z7w6v5u4"), 1)
+    _ck("short rejected",      _runpod_valid_pod_id("ab12"), 0)
+
+    // F-RUNPOD-STRIP — the deprecation banner before the JSON is stripped.
+    let banner = "warning: 'runpodctl get pod' is deprecated\n[{\"id\":\"podabc123def\"}]"
+    _ck_str("banner stripped", _runpod_strip_to_json(banner), "[{\"id\":\"podabc123def\"}]")
+    _ck_str("no opener passthrough", _runpod_strip_to_json("warning: only"), "warning: only")
+
+    println("runpod_list_parse_test PASS")
+}
