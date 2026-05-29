@@ -758,18 +758,17 @@ fn cloud_copy_from_resume(host: str, remote_path: str, local_path: str) -> Cloud
 }
 
 // cloud_copy_to_recursive_opts — upload a local DIRECTORY tree to
-// host:remote_path with `scp -r`. Pre-checks the local source exists
-// (exit 102 otherwise), then prepends "-r" to the scp opts so the whole
-// subtree copies. Single-file copy-to stays on cloud_copy_to_opts.
-// NOTE: the source of a `-r` copy is normally a DIRECTORY, so the guard
-// uses `path_exists` (true for files AND dirs) rather than `file_exists`
-// (file-only — it returns false for a directory, which falsely reported
-// `local_source_missing` and tore the rented pod back down).
+// host:remote_path with `scp -r`, then prepends "-r" to the scp opts so
+// the whole subtree copies. Single-file copy-to stays on cloud_copy_to_opts.
+// NOTE: no file-only `file_exists` pre-check here — the source of a `-r`
+// copy is normally a DIRECTORY, and `file_exists` returns false for a dir
+// (it falsely reported `local_source_missing` and tore the rented pod back
+// down). There is no runtime-callable dir-aware existence builtin
+// (`path_exists`/`path_is_dir` are compile-time intrinsics, not linkable
+// here), so we let `scp -r` surface a genuinely-missing source: it exits
+// non-zero with "No such file or directory", which `_scp_capture` captures
+// into the returned CloudResult.message — same clean failure, dir-correct.
 fn cloud_copy_to_recursive_opts(host: str, ssh_opts: [str], local_path: str, remote_path: str) -> CloudResult {
-    if !path_exists(local_path) {
-        return CloudResult { ok: 0, exit_code: 102, pid: 0, stdout_: "",
-            message: "local_source_missing · " + local_path, logfile: "" }
-    }
     let mut ropts = ["-r"]
     let scp_opts = _scp_opts(ssh_opts)
     let mut i = 0
