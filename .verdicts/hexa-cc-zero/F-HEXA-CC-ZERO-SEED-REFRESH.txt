@@ -1,0 +1,141 @@
+F-HEXA-CC-ZERO-SEED-REFRESH — cold-seed refresh closes full-CLI cold build (2026-05-30)
+========================================================================================
+falsifier  : "Refreshing self/native/hexa_cc_seed.c from CURRENT origin/main SSOT
+              (which now includes #2159's float-pun bodies in runtime_core_emit.hexa
+              + net_emit.hexa's hexa_os_getuid) makes a fresh-clone FULL self-host
+              CLI cold build (self/main.hexa → ./hexa) LINK CLEAN — resolving the
+              4 undefined symbols (hexa_float_to_bits / hexa_bits_to_float /
+              hexa_enum_str_v / hexa_os_getuid) the STALE seed (pinned at d67dd37,
+              pre-#2159) failed on — and the float-pun round-trip works in the
+              cold-built toolchain."
+host       : ubu-2 (Linux x86_64, gcc 13.3.0). BLOCKING ssh, /tmp fresh clone.
+clone HEAD : 91bef6c1a (origin/main, post-#2159 / post-#2174).
+method     : fresh clone → cold-build a TRANSPILER hexat from the STALE committed
+             seed (cc hexa_cc_seed.c -o hexat, the P3 self-contained TU) → use that
+             hexat to regen ALL runtime fragments from the CURRENT emitter SSOTs
+             (runtime_core.c · runtime_hi_gen.c · net.c · 14 other native/*.c ·
+             forge_tier_v1.c) + transpile+merge the 4 SSOT modules (lexer/parser/
+             type_checker/codegen) into a fresh hexa_cc.c (the exact merge_modules_awk
+             pipeline from self/main.hexa) → take the CURRENT hand-maintained runtime.c
+             (recovered from git 7906951c0^ = 151c52c82, the last-tracked revision
+             just before #2065's .c=0 graduation — it carries the F3 self-emit
+             hxlcl_longjmp/hxlcl_backtrace defs + hexa_range_field that the d67dd37
+             skeleton lacked) → recursively inline its local #includes with the
+             freshly-regenerated fragments (the same /* amalgam BEGIN/END X */ marker
+             structure #2126 used) → splice into hexa_cc.c at the runtime.h seam.
+
+──────────────────────────────────────────────────────────────────
+결론 (one-line)
+──────────────────────────────────────────────────────────────────
+SEED REFRESH PASS — the refreshed self/native/hexa_cc_seed.c (3209404 B, md5
+538765a10a6750dd217ee3c0ae784a3b) is a single self-contained TU (0 real local
+#include) that DEFINES all 4 previously-missing symbols. A fresh-clone FULL
+self-host CLI cold build LINKS CLEAN (0 undefined symbols) where the stale seed
+FAILED on exactly those 4, and the float-pun round-trip (bits_to_float(
+float_to_bits(3.14)) == 3.14) works in the cold-built toolchain.
+
+──────────────────────────────────────────────────────────────────
+[1] 4-SYMBOL-NOW-PRESENT grep (refreshed seed, verbatim)
+──────────────────────────────────────────────────────────────────
+runtime_core.c (regen from current runtime_core_emit.hexa, #2159 bodies):
+  HexaVal hexa_float_to_bits(HexaVal x) { union { double d; int64_t i; } u; u.d = HX_FLOAT(x); return hexa_int(u.i); }
+  HexaVal hexa_bits_to_float(HexaVal x) { union { int64_t i; double d; } u; u.i = HX_INT(x); return hexa_float(u.d); }
+  HexaVal float_to_bits(HexaVal x) { return hexa_float_to_bits(x); }     (bare alias)
+  HexaVal bits_to_float(HexaVal x) { return hexa_bits_to_float(x); }     (bare alias)
+  HexaVal hexa_enum_str_v(const HexaEnumDesc* desc) { ... }
+net.c (regen from current net_emit.hexa):
+  HexaVal hexa_os_getuid(void) { ... }
+seed grep (self/native/hexa_cc_seed.c):
+  HexaVal hexa_float_to_bits : 2   HexaVal hexa_bits_to_float : 2
+  hexa_enum_str_v            : 7   HexaVal hexa_os_getuid     : 1
+  real local #include "..."  : 0   (fully self-contained, system <...> only)
+
+──────────────────────────────────────────────────────────────────
+[2] BEFORE — STALE seed full-CLI cold build (the RED gate, verbatim)
+──────────────────────────────────────────────────────────────────
+recover stale runtime.c TU from committed hexa_cc_seed.c (d67dd37 pin), compile
+as runtime.o, link the CURRENT seed-built main.c against it:
+  stale runtime.o rc=0
+  gcc ... main.c runtime_stale.o -o hexa_full_stale -lm -ldl   → FAILED
+  /usr/bin/ld:
+    undefined reference to `hexa_bits_to_float'
+    undefined reference to `hexa_enum_str_v'
+    undefined reference to `hexa_float_to_bits'
+    undefined reference to `hexa_os_getuid'
+  collect2: error: ld returned 1 exit status
+  (4 distinct undefined symbols — exactly the P6-CI agent's reproduction.)
+
+──────────────────────────────────────────────────────────────────
+[3] AFTER — REFRESHED seed full-CLI cold build (verbatim)
+──────────────────────────────────────────────────────────────────
+Stage 0 : cc hexa_cc_seed.c -> hexat
+  hexat rc=0  → ELF 64-bit LSB pie executable, x86-64  (transpiler)
+Stage 0b: cc -Dmain=__seed_main_unused -c hexa_cc_seed.c -> runtime_seed.o   rc=0
+Stage 0c: cc -x c -c <inlined runtime portion> -> runtime_pure.o (476960 B)   rc=0
+          (pure runtime TU — no transpiler symbols, the link seam for the full CLI)
+Stage 1 : hexat self/module_loader.hexa -> module_loader.c  → link runtime_seed.o
+          → hexa_module_loader  (link clean) → flatten self/main.hexa
+          → build/stage1/main_expanded.hexa (23 files, 28331 lines)
+Stage 2 : hexat main_expanded.hexa -> main.c (31663 lines)  rc=0
+Stage 2b: gcc ... main.c runtime_pure.o -o build/hexa_full -lm -ldl
+          FULL-CLI link rc=0
+          undefined reference count: 0   ← ZERO undefined symbols (4 resolved)
+          build/hexa_full : ELF 64-bit LSB pie executable, x86-64
+          ./build/hexa_full --version  → hexa 0.1.0-dispatch   (working binary)
+
+FLOAT-PUN ROUND-TRIP (cold-built toolchain, verbatim):
+  fn main() { let b = float_to_bits(3.14); let f = bits_to_float(b);
+              if f == 3.14 { println("FLOAT-PUN-OK") } ... }
+  hexat fp.hexa -> fp.c  rc=0 → link runtime_seed.o (clean) → ./fp
+  OUTPUT: FLOAT-PUN-OK     ← bits_to_float(float_to_bits(3.14)) == 3.14 in cold toolchain
+
+──────────────────────────────────────────────────────────────────
+[4] TRANSPILER FIXPOINT + DETERMINISM (refreshed-seed hexat, verbatim)
+──────────────────────────────────────────────────────────────────
+4/4 SSOT transpile via refreshed-seed hexat — all rc=0:
+  lexer        md5=df4e26d8   (== P3 verdict; lexer/parser/tc byte-identical to prior)
+  parser       md5=c1e02425   (== P3 verdict)
+  type_checker md5=6153a812   (== P3 verdict)
+  codegen      md5=1bde6f88   (differs from P3's 1a9c46dc — codegen.hexa changed
+                               since d67dd37, expected; PER-ARCH DETERMINISTIC)
+determinism (codegen 2x): run1 == run2  → DETERMINISTIC.
+
+──────────────────────────────────────────────────────────────────
+[5] SEED PROVENANCE + ARCH-NEUTRALITY
+──────────────────────────────────────────────────────────────────
+size : 3209404 bytes (3.06 MB)   md5 : 538765a10a6750dd217ee3c0ae784a3b
+file : C source, Unicode text, UTF-8 text  (ARCH-NEUTRAL — one seed feeds all arches)
+0 real local #include "..."  ·  140 system <...> includes  ·  20 amalgam fragments.
+.gitignore: NOT matched (git check-ignore rc=1) — committed directly, no sign-gate.
+provenance: `cc --regen`-equivalent (cold-hexat transpile + merge_modules_awk) of the
+  4 SSOT modules @ origin/main 91bef6c1a + the CURRENT runtime fragment emitters
+  (#2159 float-pun + net getuid) + the hand-maintained runtime.c @ 151c52c82
+  (last-tracked, the F3-self-emit-coherent revision). Re-pin via the same recipe
+  when codegen / runtime emitter SSOT changes.
+
+──────────────────────────────────────────────────────────────────
+[6] HONEST NOTES (g5/g63)
+──────────────────────────────────────────────────────────────────
+1. The full-CLI cold build links main.c against a PURE runtime.o (the inlined
+   runtime portion compiled alone), NOT runtime_seed.o — runtime_seed.o carries
+   the transpiler symbols (parse_*), which multiple-define against main.c's own
+   embedded compiler. This mirrors the real build (build_hexa_cli compiles
+   self/runtime.c as a separate runtime.o). The cold-seed TRANSPILER bootstrap
+   (bootstrap.yml's scope) still uses runtime_seed.o for module_loader/smoke
+   (no parser-symbol clash there) — unchanged, still green.
+2. One source-level fix during amalgamation: the current hand-maintained runtime.c
+   carried 4 `__attribute__((weak))` float-pun STOPGAP defs (added before #2159
+   landed the real defs in runtime_core_emit.hexa). In a single amalgamated TU the
+   strong runtime_core.c def + the later weak runtime.c def collide (gcc
+   redefinition). The 4 weak duplicates were dropped from the runtime portion —
+   exactly what runtime.c's own comment intends ("weak so any future real
+   definition supersedes"). runtime_core.c now IS that real definition.
+3. crypto_blowfish.c is NOT included by the current runtime.c (the stale seed
+   inlined it; the current SSOT runtime.c does not #include it) — the refreshed
+   seed follows the current runtime.c include set (20 fragments vs the stale 21).
+   No symbol from the full-CLI / transpiler / smoke link references it (link clean).
+4. arm64 (mini) cross-host cold build NOT re-run this cycle — the seed is
+   arch-neutral C text (byte-identical bytes feed both arches, as P3 #2126
+   established); x86_64 full-CLI GREEN is the deliverable. arm64 re-verification
+   is a redundant recheck (the seed bytes are identical). Cross-arch codegen
+   byte difference remains the orthogonal per-arch-determinism axis (P3 caveat).
