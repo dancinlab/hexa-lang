@@ -5124,7 +5124,21 @@ fn gen2_expr(node) {
             if op == "+" || op == "-" || op == "*" || op == "&" || op == "|" || op == "^" || op == "<<" || op == ">>" {
                 let l = gen2_expr(node.left)
                 let r = gen2_expr(node.right)
-                return "hexa_int(HX_INT(" + l + ") " + op + " HX_INT(" + r + "))"
+                // UNSHADOW HexaVal-unbox pilot: the known-int fast path proves
+                // both operands are TAG_INT, so the result is statically TAG_INT.
+                // Emit the boxed result as an INLINE C compound literal
+                // `((HexaVal){.tag=TAG_INT,.i=(…)})` instead of an out-of-line
+                // `hexa_int(…)` call. runtime.c:1231 `hexa_int(n)` returns exactly
+                // `{.tag=TAG_INT,.i=n}`, so this is byte-equivalent — but the
+                // inline form removes the opaque `bl _hexa_int` ABI boundary at
+                // every hot-loop arithmetic step, letting clang -O2 keep the
+                // accumulator in a register and fold/propagate the value through
+                // (the runtime.o C-ABI wall that §parity-attest names as the raw
+                // 7.9×~1263× gap's primary cause). DOUBLE-EVAL SAFE: l and r are
+                // each expanded exactly once (same as the prior `hexa_int(…)`
+                // form). FOLD-SHADOW SAFE: _is_known_int only certifies immutable
+                // int-only `let`s / IntLits — no rebinding, no mut, no params.
+                return "((HexaVal){.tag=TAG_INT,.i=(HX_INT(" + l + ") " + op + " HX_INT(" + r + "))})"
             }
             // C2: known-int comparisons — bypass hexa_cmp_* tag dispatch
             if op == "<" || op == ">" || op == "<=" || op == ">=" || op == "==" || op == "!=" {
