@@ -1,0 +1,210 @@
+// tool/build_hexa_cloud.hexa — native port of build_hexa_cloud.sh.
+//
+// Builds the standalone `hexa cloud` sub-binary (bin/hexa-cloud) from the
+// SSOT stdlib/cloud/cloud_cli.hexa dispatcher. self/main.hexa routes
+// `sub == "cloud"` to bin/hexa-cloud when present (spawn fast-path).
+//
+// WHY a hexa-native port (HEXA-BUILDFLOOR M1/M5 · Go/Rust canonical):
+//   The retired .sh hard-coded THREE dead paths that drifted from reality —
+//     self/native/hexat   (transpiler) — never existed (→ build/hexa_v2)
+//     self/runtime.c      (C runtime)  — B9 moved it (→ build/self/runtime.c)
+//     (no -I build/self)               — runtime.h header unfound
+//   so `clang` reported `use of undeclared identifier 'write_text'` even
+//   though write_text is a normal stdlib fn (stdlib/io.hexa) present in the
+//   598KB cgen. The wall was a BUILD-RECIPE drift, not a runtime/codegen gap.
+//   Like Go (`go build`) / Rust (`cargo`), the build logic now lives in the
+//   project's own language and RESOLVES each artifact path (committed →
+//   generated fallback) instead of pinning one literal that rots.
+//
+// Output: bin/hexa-cloud (Mach-O on Darwin, ELF on Linux).
+//
+// Env:
+//   HEXA_CLOUD_OUT=<path>  override output path (default repo/bin/hexa-cloud)
+//   HEXA_MEM_CAP_MB=<n>    module_loader / transpile memcap (default 4096)
+//   CLANG=<cc>             compiler override (default clang)
+//   NO_SMOKE=1             skip the --help smoke test
+
+fn _die(msg: string) {
+    eprintln("build_hexa_cloud: " + msg)
+    exit(1)
+}
+
+// shell single-quote escape: ' -> '\''
+fn _shq(s: string) -> string {
+    let mut out = "'"
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "'" {
+            out = out + "'\\''"
+        } else {
+            out = out + c
+        }
+        i = i + 1
+    }
+    out = out + "'"
+    return out
+}
+
+fn _run(cmd: string, label: string) {
+    let r = exec_with_status(cmd)
+    let rc = r[1]
+    if rc != 0 {
+        eprintln("build_hexa_cloud: " + label + " failed (rc=" + to_string(rc) + ")")
+        let out = to_string(r[0])
+        if len(out) > 0 { eprintln(out) }
+        exit(rc)
+    }
+}
+
+fn _uname() -> string {
+    return to_string(exec("uname")).trim()
+}
+
+// REPO_ROOT — HEXA_LANG if set, else cwd.
+fn _repo_root() -> string {
+    let hl = env_var("HEXA_LANG")
+    if hl != "" { return hl }
+    return to_string(exec("pwd")).trim()
+}
+
+// Resolve the first existing path from a preference list. _die if none.
+fn _resolve(label: string, a: string, b: string) -> string {
+    if file_exists(a) { return a }
+    if file_exists(b) { return b }
+    _die(label + " not found (tried: " + a + " | " + b + ")")
+    return ""
+}
+
+// First existing directory among a 2-candidate list, else "".
+fn _first_dir(a: string, b: string) -> string {
+    let ra = exec_with_status("test -d " + _shq(a))
+    if ra[1] == 0 { return a }
+    let rb = exec_with_status("test -d " + _shq(b))
+    if rb[1] == 0 { return b }
+    return ""
+}
+
+// Latest brew Cellar subdir matching <formula>/<*>/<leaf> (e.g. include|lib).
+fn _brew_dir(formula: string, leaf: string) -> string {
+    let glob = "/opt/homebrew/Cellar/" + formula + "/*/" + leaf
+    let r = to_string(exec("ls -d " + glob + " 2>/dev/null | tail -n1")).trim()
+    return r
+}
+
+fn _mktemp(suffix: string) -> string {
+    let t = to_string(exec("mktemp -t hexa_cloud_" + suffix + ".XXXXXX")).trim()
+    if t == "" { _die("mktemp failed for " + suffix) }
+    return t
+}
+
+fn main() {
+    let repo = _repo_root()
+    let src  = repo + "/stdlib/cloud/cloud_cli.hexa"
+
+    let mut out = env_var("HEXA_CLOUD_OUT")
+    if out == "" { out = repo + "/bin/hexa-cloud" }
+
+    if !file_exists(src) {
+        _die("cloud source missing: " + src)
+    }
+
+    // ── Artifact resolution (M5 canonical: committed → generated fallback) ──
+    // transpiler: build/hexa_v2 (per-machine artifact) → self/native/hexa_v2
+    //             (committed, fresh-clone resilient).
+    let transpiler = _resolve("transpiler",
+        repo + "/build/hexa_v2",
+        repo + "/self/native/hexa_v2")
+    // module flattener.
+    let module_loader = _resolve("module_loader",
+        repo + "/build/hexa_module_loader",
+        repo + "/self/native/hexa_module_loader")
+    // C runtime: build/self/runtime.c (B9 generated SSOT) → self/runtime.c
+    //            (legacy committed location, kept as fallback).
+    let runtime_c = _resolve("runtime.c",
+        repo + "/build/self/runtime.c",
+        repo + "/self/runtime.c")
+
+    // Header include dirs — runtime.h sits beside the generated runtime.c.
+    let inc_gen = repo + "/build/self"
+    let inc_self = repo + "/self"
+
+    let memcap = if env_var("HEXA_MEM_CAP_MB") != "" { env_var("HEXA_MEM_CAP_MB") } else { "4096" }
+    let mut cc = env_var("CLANG")
+    if cc == "" { cc = "clang" }
+
+    let _ = exec("mkdir -p " + _shq(repo + "/bin"))
+    println("[build_hexa_cloud] src=" + src)
+    println("[build_hexa_cloud] out=" + out)
+    println("[build_hexa_cloud] transpiler=" + transpiler)
+    println("[build_hexa_cloud] runtime.c=" + runtime_c)
+
+    // ── Step 1: flatten the use-graph (module_loader). ──
+    let flat = _mktemp("flat") + ".hexa"
+    _run("HEXA_MEM_CAP_MB=" + memcap + " " + _shq(module_loader) + " "
+        + _shq(src) + " " + _shq(flat) + " >/dev/null 2>&1", "module_loader flatten")
+    let rflat = exec_with_status("test -s " + _shq(flat))
+    if rflat[1] != 0 { _die("module_loader produced empty flatten") }
+
+    // ── Step 2: transpile flat → C (build/hexa_v2). ──
+    let cgen = _mktemp("cgen") + ".c"
+    _run("HEXA_MEM_CAP_MB=" + memcap + " " + _shq(transpiler) + " "
+        + _shq(flat) + " " + _shq(cgen) + " >/dev/null 2>&1", "transpile")
+    let rcgen = exec_with_status("test -s " + _shq(cgen))
+    if rcgen[1] != 0 { _die("transpile produced empty C") }
+
+    // ── Step 3: clang link with the resolved runtime + optional crypto libs. ──
+    let uname = _uname()
+    let mut cflags = "-O2 -Wno-trigraphs -fbracket-depth=4096 -I " + _shq(inc_gen) + " -I " + _shq(inc_self)
+    let mut ldflags = "-lpthread"
+    if uname == "Linux" {
+        cflags = "-O2 -D_GNU_SOURCE -Wno-trigraphs -fbracket-depth=4096 -I " + _shq(inc_gen) + " -I " + _shq(inc_self)
+        ldflags = "-lpthread -lm -ldl"
+    }
+
+    // Optional libsodium / openssl (Mac homebrew; Linux relies on system paths).
+    let sod_inc = _brew_dir("libsodium", "include")
+    let sod_lib = _brew_dir("libsodium", "lib")
+    let ssl_inc = _brew_dir("openssl@3", "include")
+    let ssl_lib = _brew_dir("openssl@3", "lib")
+    if sod_inc != "" { cflags  = cflags  + " -DHEXA_HAS_LIBSODIUM -I" + sod_inc }
+    if sod_lib != "" { ldflags = ldflags + " -L" + sod_lib + " -lsodium" }
+    if ssl_inc != "" { cflags  = cflags  + " -DHEXA_HAS_OPENSSL -I" + ssl_inc }
+    if ssl_lib != "" { ldflags = ldflags + " -L" + ssl_lib + " -lssl -lcrypto" }
+
+    let link = cc + " " + cflags + " " + _shq(cgen) + " " + _shq(runtime_c)
+        + " -o " + _shq(out) + " " + ldflags + " 2>&1"
+    let lr = exec_with_status(link)
+    let lout = to_string(lr[0])
+    // Surface any error/undefined lines verbatim (the write_text wall class).
+    let errs = to_string(exec("printf '%s' " + _shq(lout) + " | grep -iE 'error|undefined' | head -5")).trim()
+    if len(errs) > 0 {
+        eprintln("[build_hexa_cloud] link diagnostics:")
+        eprintln(errs)
+    }
+    let rbin = exec_with_status("test -x " + _shq(out))
+    if rbin[1] != 0 {
+        _die("clang produced no binary")
+    }
+    let _ = exec("rm -f " + _shq(flat) + " " + _shq(cgen))
+
+    // ── Step 4: --help smoke (the dispatcher main() handles --help internally). ──
+    if env_var("NO_SMOKE") != "1" {
+        let smoke = _mktemp("smoke")
+        let sr = exec_with_status(_shq(out) + " --help > " + _shq(smoke) + " 2>&1")
+        if sr[1] != 0 {
+            eprintln("build_hexa_cloud: --help exited non-zero (rc=" + to_string(sr[1]) + ")")
+            eprintln(to_string(exec("cat " + _shq(smoke))))
+            let _ = exec("rm -f " + _shq(smoke))
+            exit(2)
+        }
+        let h1 = exec_with_status("grep -q 'hexa cloud' " + _shq(smoke))
+        if h1[1] != 0 { _die("--help missing canonical header 'hexa cloud'") }
+        let h2 = exec_with_status("grep -q 'cloud run' " + _shq(smoke))
+        if h2[1] != 0 { _die("--help missing 'cloud run' verb line") }
+        let _ = exec("rm -f " + _shq(smoke))
+    }
+
+    println("[build_hexa_cloud] OK -> " + out)
+}
