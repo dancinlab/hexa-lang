@@ -260,6 +260,7 @@ int     rt_str_starts_with(HexaVal s, HexaVal prefix); /* runtime.c:3766 */
 HexaVal rt_read_file(HexaVal path);                   /* runtime.c:4844 */
 HexaVal rt_write_file(HexaVal path, HexaVal content); /* runtime.c:4857 */
 HexaVal rt_file_exists(HexaVal path);                 /* runtime.c:4877 */
+HexaVal rt_path_exists(HexaVal path);                 /* runtime_core.c — stat-based exists (any type) */
 HexaVal rt_read_lines(HexaVal path);                  /* runtime.c:4921 — defined but header-decl was missing → implicit-decl error in transpiled user.c */
 HexaVal rt_read_bytes_at(HexaVal path, HexaVal offset, HexaVal nbytes); /* runtime_core.c:6849 — ditto */
 

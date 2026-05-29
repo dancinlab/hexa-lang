@@ -5827,6 +5827,10 @@ fn gen2_expr(node) {
                 // M1 full · file Step 5: direct rt_file_* emit (shim removed).
                 return "rt_file_exists(" + gen2_expr(node.args[0]) + ")"
             }
+            if name == "path_exists" {
+                // stat-based existence (any type) — rt_path_exists.
+                return "rt_path_exists(" + gen2_expr(node.args[0]) + ")"
+            }
             // FIX-A (Anima serving unblock, 2026-04-18): 3 builtins required by
             // checkpoint.hexa / train_logger.hexa / tokenizer_bpe.hexa. C syms
             // live in self/runtime.c alongside hexa_timestamp.
@@ -10585,6 +10589,7 @@ fn _is_builtin_name(name) {
     if name == "net_set_timeout" { return true }
     if name == "net_write" { return true }
     if name == "file_exists" { return true }
+    if name == "path_exists" { return true }
     if name == "is_alpha" { return true }
     if name == "is_digit" { return true }
     if name == "is_alphanumeric" { return true }

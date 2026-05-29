@@ -119,7 +119,7 @@ fn _repl_balance(buf: string) -> i64 {
 fn _repl_builtins() -> [string] {
     return [
         "println", "eprintln", "print", "input", "exec", "exec_with_status",
-        "read_file", "write_file", "append_file", "file_exists", "env",
+        "read_file", "write_file", "append_file", "file_exists", "path_exists", "env",
         "argv", "args", "exit", "len", "to_string", "to_int", "str",
         "split", "char_code", "from_char_code", "trim", "starts_with",
         "ends_with", "substring", "push", "pop",

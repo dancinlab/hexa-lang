@@ -146,6 +146,7 @@ fn readdir_darwin(fd: int) -> [string] {
 
 fn rt_list_dir(path: string) -> [string] { return fs_readdir(path) }
 fn rt_file_exists(path: string) -> bool { return fs_exists(path) }
+fn rt_path_exists(path: string) -> bool { return fs_exists(path) }
 fn rt_stat(path: string) -> int { return fs_stat_size(path) }
 fn rt_mkdir(path: string, mode: int) -> int { return fs_mkdir(path, mode) }
 
