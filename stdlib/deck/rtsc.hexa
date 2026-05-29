@@ -37,6 +37,12 @@
 // Spec authors stating "10 GPa target" must pass "100.0" + "10 GPa".
 
 import "stdlib/deck/gen.hexa"
+// CONCURRENT-FILL launch SSOT (project.tape d_parallel_fire · #2096/#2101).
+// The deck generator REUSES this planner (d19) so the emitted multi-deck
+// launch script is concurrent + disk-aware BY DEFAULT — never a hand-written
+// sequential `for deck; do …; wait; done` per-pod chain (the failure class
+// this bundle prevents). deck/ only imports it; the cloud agent owns its body.
+import "stdlib/cloud/fill_plan.hexa"
 
 // ── prototype-coverage registry (d4 — single source of known names) ──
 
@@ -299,6 +305,47 @@ fn _rtsc_beh8_ph(spec: DeckSpec) -> string {
     return s
 }
 
+// _rtsc_fill_launch_block — emit the CONCURRENT-FILL multi-deck launch script
+// by REUSING the canonical planner dft_fill_plan_disk (stdlib/cloud/fill_plan,
+// #2096/#2101). This is improvement (1): the deck generator's launch emission
+// is concurrent (>1 job when room) + disk-bounded (when tight) + Σ-np≤physcores
+// BY DEFAULT — d_parallel_fire enforced at GENERATION, not by manual chain-
+// splitting on a stuck pod. Budget knobs come from the spec (generic, d4):
+//   physcores         pod physical cores              (default 128)
+//   ranks_per_deck    MPI ranks per ph.x job          (default 8)
+//   n_decks           candidate decks to fan out      (default 9)
+//   walltime_h        per-job timeout cap (hours)     (default 140)
+//   free_disk_gb      pod free-disk headroom          (default 800)
+//   scratch_gb_per_q  _ph0 scratch GB per q-point     (default 18)
+// The block is wrapped in a fenced ```bash so the dispatcher copies it to the
+// pod as `run_fill.sh` (same materialize contract as the single-deck §4 chain).
+fn _rtsc_fill_launch_block(spec: DeckSpec) -> string {
+    let physcores = _to_int_safe(spec_get_or(spec, "physcores", "128"))
+    let ranks     = _to_int_safe(spec_get_or(spec, "ranks_per_deck", "8"))
+    let n_decks   = _to_int_safe(spec_get_or(spec, "n_decks", "9"))
+    let walltime  = _to_int_safe(spec_get_or(spec, "walltime_h", "140"))
+    let free_disk = _to_int_safe(spec_get_or(spec, "free_disk_gb", "800"))
+    let scratch   = _to_int_safe(spec_get_or(spec, "scratch_gb_per_q", "18"))
+    let plan = dft_fill_plan_disk(physcores, ranks, n_decks, walltime, free_disk, scratch)
+
+    let mut s = ""
+    s = s + "## 4b. 멀티-deck 동시충전 발사 (CONCURRENT-FILL · d_parallel_fire · #2096/#2101)\n"
+    s = s + "\n"
+    s = s + "> N개 후보 deck 을 한 pod 에 손으로 짠 `for deck; do …; wait; done` 순차 체인으로\n"
+    s = s + "> 줄세우지 마라(128-core pod 가 deck 1개만 돌리고 나머지 idle — 2026-05-29 15× 낭비).\n"
+    s = s + "> 아래 블록은 canonical planner `dft_fill_plan_disk` 가 emit 한 것: core budget\n"
+    s = s + "> (Σ-np ≤ " + to_string(physcores) + ") **와** disk headroom 양쪽 한도까지 deck 을 동시 발사한다.\n"
+    s = s + "> 동시 slot = " + to_string(plan.concurrent_jobs) + " (core_slots=" + to_string(plan.slots)
+        + ", disk_slots=" + to_string(plan.disk_slots) + "), Σ-np = " + to_string(plan.sum_np) + ".\n"
+    s = s + "> 디스패처가 이 펜스 블록을 pod 의 `run_fill.sh` 로 복사하고 `bash run_fill.sh DECK1 DECK2 …` 로 실행한다.\n"
+    s = s + "\n"
+    s = s + "```bash\n"
+    s = s + plan.script
+    s = s + "```\n"
+    s = s + "\n"
+    return s
+}
+
 fn _rtsc_beh8_runbook(spec: DeckSpec) -> string {
     let a_sym     = spec_get(spec, "a_site_symbol")
     let a_radius  = spec_get_or(spec, "a_site_radius_ang", "1.60")
@@ -412,6 +459,7 @@ fn _rtsc_beh8_runbook(spec: DeckSpec) -> string {
     s = s + "\n"
     s = s + "> 동적 불안정(허수 freq) → 위 §1 압력 fallback(" + fb_p + " GPa)으로 재발사.\n"
     s = s + "\n"
+    s = s + _rtsc_fill_launch_block(spec)
     s = s + "## 5. 파서 (parser)\n"
     s = s + "\n"
     s = s + "- `parser_template: rtsc-dft-elph`\n"
