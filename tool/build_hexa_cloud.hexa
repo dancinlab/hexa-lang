@@ -18,7 +18,25 @@
 //
 // Output: bin/hexa-cloud (Mach-O on Darwin, ELF on Linux).
 //
+// INSTALL (`-- --install`; the part handoff 9c04af5a's recipe needs and the
+// initial port omitted — two verified traps):
+//   - dispatch path = ~/.hx/bin/bin/hexa-cloud (the DOUBLED bin/bin — the
+//     wrapper appends /bin/hexa-cloud to ~/.hx/bin).
+//   - a fresh clang binary's codesign Identifier is not AMFI-blessed → `Killed:
+//     9` on launch; re-sign with the blessed id BEFORE install:
+//        codesign -s - -i hexa-cloud.staged -f <built>
+//   - timestamped backup of the live binary FIRST, then install, then VERIFY
+//     (`hexa-cloud --help` must render the cloud manual); on failure RESTORE
+//     the backup so the LIVE binary is never left broken.
+//
+// Usage:
+//   hexa run tool/build_hexa_cloud.hexa               # build only
+//   hexa run tool/build_hexa_cloud.hexa -- --install  # build + codesign + install
+//
 // Env:
+//   HEXA_LANG=<repo>       stdlib root — REQUIRED so `use` resolves to this
+//                          tree, not the installed pack (else a stale stdlib
+//                          compiles; reference_hexa_stdlib_edit_runs_old_compiled)
 //   HEXA_CLOUD_OUT=<path>  override output path (default repo/bin/hexa-cloud)
 //   HEXA_MEM_CAP_MB=<n>    module_loader / transpile memcap (default 4096)
 //   CLANG=<cc>             compiler override (default clang)
@@ -97,6 +115,64 @@ fn _mktemp(suffix: string) -> string {
     let t = to_string(exec("mktemp -t hexa_cloud_" + suffix + ".XXXXXX")).trim()
     if t == "" { _die("mktemp failed for " + suffix) }
     return t
+}
+
+fn _has_arg(av: [string], flag: string) -> int {
+    let mut i = 0
+    while i < len(av) {
+        if av[i] == flag { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+// _install — codesign + timestamped-backup + install to the dispatch path
+// (~/.hx/bin/bin/hexa-cloud, the doubled bin/bin) + verify-or-restore. On any
+// verify failure the backup is restored so the LIVE binary is never broken.
+fn _install(built: string) {
+    let home = env_var("HOME")
+    if home == "" { _die("install: HOME unset") }
+    let dispatch = home + "/.hx/bin/bin/hexa-cloud"
+
+    // AMFI: re-sign with the blessed Identifier (else `Killed: 9`).
+    println("[build_hexa_cloud] codesign -s - -i hexa-cloud.staged -f " + built)
+    _run("codesign -s - -i hexa-cloud.staged -f " + _shq(built), "codesign")
+
+    // timestamped backup of the live binary (if present).
+    let ts = to_string(exec("date +%Y%m%d-%H%M%S")).trim()
+    let mut backup = ""
+    if file_exists(dispatch) {
+        backup = dispatch + ".bak-pre-" + ts
+        _run("cp -p " + _shq(dispatch) + " " + _shq(backup), "backup live binary")
+        println("[build_hexa_cloud] backup: " + backup)
+    } else {
+        let _ = exec("mkdir -p " + _shq(home + "/.hx/bin/bin"))
+        println("[build_hexa_cloud] no live binary at dispatch path — fresh install")
+    }
+
+    // install (mv the signed binary into place).
+    _run("mv " + _shq(built) + " " + _shq(dispatch), "install")
+    let _ = exec("chmod 755 " + _shq(dispatch))
+    println("[build_hexa_cloud] installed -> " + dispatch)
+
+    // VERIFY: `hexa-cloud --help` must render the cloud manual (the live-binary-
+    // not-broken gate; network-free + deterministic). cloud-guard only refuses
+    // RAW provider/ssh calls — invoking our own subcommand binary is sanctioned.
+    let vr = exec_with_status(_shq(dispatch) + " --help 2>&1")
+    let vout = to_string(vr[0])
+    let ok = vr[1] == 0 && vout.contains("hexa cloud") && vout.contains("cloud run")
+    if !ok {
+        eprintln("[build_hexa_cloud] VERIFY FAILED (rc=" + to_string(vr[1]) + ") — restoring backup")
+        if backup != "" {
+            let _ = exec("mv " + _shq(backup) + " " + _shq(dispatch))
+            eprintln("[build_hexa_cloud] restored: " + dispatch)
+        }
+        exit(5)
+    }
+    println("[build_hexa_cloud] VERIFY OK — " + dispatch + " --help renders the cloud manual")
+    if backup != "" {
+        println("[build_hexa_cloud] backup retained: " + backup + " (rm when confident)")
+    }
 }
 
 fn main() {
@@ -191,6 +267,12 @@ fn main() {
 
     // ── Step 4: --help smoke (the dispatcher main() handles --help internally). ──
     if env_var("NO_SMOKE") != "1" {
+        // codesign before smoke on Darwin — an unsigned fresh clang binary is
+        // AMFI-SIGKILLed (`Killed: 9`) so an un-signed smoke mis-reads as a
+        // build failure. Harmless no-op on Linux (not invoked there).
+        if uname == "Darwin" {
+            let _ = exec("codesign -s - -i hexa-cloud.staged -f " + _shq(out) + " 2>/dev/null")
+        }
         let smoke = _mktemp("smoke")
         let sr = exec_with_status(_shq(out) + " --help > " + _shq(smoke) + " 2>&1")
         if sr[1] != 0 {
@@ -206,5 +288,12 @@ fn main() {
         let _ = exec("rm -f " + _shq(smoke))
     }
 
-    println("[build_hexa_cloud] OK -> " + out)
+    println("[build_hexa_cloud] BUILD OK -> " + out)
+
+    // ── Step 5 (--install): codesign + backup + install + verify-or-restore. ──
+    if _has_arg(args(), "--install") == 1 {
+        _install(out)
+    } else {
+        println("[build_hexa_cloud] (build only — pass `-- --install` to codesign + install to ~/.hx/bin/bin/hexa-cloud)")
+    }
 }
