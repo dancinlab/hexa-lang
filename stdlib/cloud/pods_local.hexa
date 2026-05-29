@@ -322,6 +322,28 @@ pub fn pods_local_rm(target: str) -> int {
     return 0
 }
 
+// ── budget cap (optional top-level `budget` object) ───────────────────
+//
+// Schema extension (additive, optional): a project can declare a spend
+// ceiling in ./pods.json so the watchdog has a per-project budget to honor:
+//   { ..., "budget": { "cap": "20.00", "currency": "USD" } }
+// `cloud watchdog` cross-refs this cap (Q4): on breach it alerts + kills the
+// lowest-value running pod. Absent budget object → "" (no cap, watchdog
+// budget guard inert — only the idle classifier fires).
+
+// pods_local_budget_cap_usd — read the project's spend cap from ./pods.json's
+// optional top-level `budget.cap`. Returns "" when no budget object / cap is
+// declared (budget guard inert). The value is returned verbatim (a USD
+// string like "20.00") so the caller parses it with its own cents helper.
+pub fn pods_local_budget_cap_usd() -> str {
+    let root = _pl_load()
+    if !json_object_has(root, "budget") {
+        return ""
+    }
+    let b = json_object_get_object(root, "budget")
+    return json_object_get_str(b, "cap", "")
+}
+
 // pods_local_dispatch — `cloud dispatch [tree|active|add|verdict|rm] ...`
 // sub-router. Bare `cloud dispatch` renders the full table (same as
 // `cloud pods`).

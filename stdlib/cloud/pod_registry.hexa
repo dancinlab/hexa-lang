@@ -1092,6 +1092,89 @@ fn pod_registry_limit_sweep(api_key: str, dry_run: int) -> int {
     return killed
 }
 
+// ── budget cross-ref (Q4 — watchdog honors a ./pods.json budget.cap) ──
+//
+// The per-project ./pods.json may declare a spend ceiling (budget.cap). The
+// watchdog cross-refs it: on breach it kills the LOWEST-VALUE running pod (g64
+// honor-cap — sacrifice the cheapest pod first to claw spend back under cap).
+// These helpers expose the cost accrual + selection so cloud_cli can wire the
+// guard WITHOUT duplicating the private cents/accrual math (d4 single source).
+
+// pod_registry_total_accrued_cents — sum of derived-on-read accrued cost
+// (cost_per_hr × elapsed) across every ALIVE pod, in integer cents. A pod
+// with no captured rate / unparseable created_at contributes 0 (conservative
+// — never over-counts). This is the watchdog's "current spend" estimate to
+// compare against budget.cap.
+pub fn pod_registry_total_accrued_cents() -> int {
+    let records = pod_registry_load()
+    let now = _reg_now_sec()
+    let mut total = 0
+    let mut i = 0
+    while i < len(records) {
+        let r = records[i]
+        if r.status != "GONE" && now > 0 && len(r.cost_per_hr_usd) > 0 {
+            let born = _reg_iso_to_sec(r.created_at)
+            if born > 0 {
+                total = total + _accrued_cents(r.cost_per_hr_usd, now - born)
+            }
+        }
+        i = i + 1
+    }
+    return total
+}
+
+// pod_registry_lowest_value_id — the ALIVE pod whose accrued cost is lowest
+// (the cheapest to sacrifice when over budget). Ties broken by registry
+// order. Returns "" when no alive pod is tracked. "value" = accrued cost so
+// far: killing the lowest-accrued pod claws back the least sunk spend while
+// reducing the ongoing burn rate.
+pub fn pod_registry_lowest_value_id() -> str {
+    let records = pod_registry_load()
+    let now = _reg_now_sec()
+    let mut best_id = ""
+    let mut best_cents = -1
+    let mut i = 0
+    while i < len(records) {
+        let r = records[i]
+        if r.status != "GONE" {
+            let mut c = 0
+            if now > 0 && len(r.cost_per_hr_usd) > 0 {
+                let born = _reg_iso_to_sec(r.created_at)
+                if born > 0 {
+                    c = _accrued_cents(r.cost_per_hr_usd, now - born)
+                }
+            }
+            if best_cents < 0 || c < best_cents {
+                best_cents = c
+                best_id = r.id
+            }
+        }
+        i = i + 1
+    }
+    return best_id
+}
+
+// pod_registry_provider_of — provider string ("vast"|"runpod"|...) for a
+// tracked id, "" when absent. Lets the budget killer pick the teardown path.
+pub fn pod_registry_provider_of(pod_id: str) -> str {
+    let records = pod_registry_load()
+    let mut i = 0
+    while i < len(records) {
+        if records[i].id == pod_id {
+            return records[i].provider
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// pod_registry_usd_to_cents — public wrapper over the private cents parser so
+// cloud_cli can compare a budget.cap USD string against accrued cents without
+// re-implementing the parse (d4 single source).
+pub fn pod_registry_usd_to_cents(s: str) -> int {
+    return _usd_cents(s)
+}
+
 // pod_registry_remove — drop a pod from the registry (confirmed teardown).
 // Returns 1 on a successful removal, 0 if `pod_id` is absent.
 fn pod_registry_remove(pod_id: str) -> int {

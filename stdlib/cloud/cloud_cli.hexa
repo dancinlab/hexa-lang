@@ -21,8 +21,9 @@ fn _cloud_help() {
     println("hexa cloud — structured-argv remote dispatch (cycle A)")
     println("")
     println("usage:")
-    println("  cloud rent <provider> [--gpu T] [--image IMG] [--disk GiB] [--owner TAG] [--query Q] [--max-wait-sec N]")
+    println("  cloud rent <provider> [--gpu T] [--image IMG] [--disk GiB] [--owner TAG] [--query Q] [--max-wait-sec N] [--no-register]")
     println("                                                         provision a GPU pod (vast|runpod), wait ssh-ready, print host:port + id (alias: up)")
+    println("                                                         --no-register: skip the default ./pods.json row write (rent auto-registers a PENDING work row by default — symmetry with nohup/fire --register; a deck-less rent then shows as a leak candidate)")
     println("                                                         --max-wait-sec N (default 180): bounded SSH-readiness gate; on timeout the rent auto-tears the billing pod down + exits 2 with verbatim verdict (M5 sigil: SSH-never-ready leak guard)")
     println("  cloud rm <id> [--provider P] [--force]                 CANONICAL teardown — confirm + destroy + forget (unifies down/destroy/forget). --provider inferred from registry when absent. --force skips confirm prompt. Idempotent: rm of an absent pod exits 0.")
     println("  cloud down <id> [--provider P]                         (legacy alias of `cloud rm`) destroy a pod + forget it from the registry")
@@ -56,6 +57,9 @@ fn _cloud_help() {
     println("  cloud adopt     <pod_id> [--purpose TEXT]              track an untracked (ORPHAN) pod")
     println("  cloud forget    <pod_id|ssh-form|ip|alias>             (legacy — use `cloud rm` instead) mark a tracked (GHOST) pod status=closed")
     println("  cloud watchdog  [--threshold-min N] [--util-cap-pct N] [--kill]  idle-pod autokill sweep (DRY-RUN default)")
+    println("                                                         COMPOSITE idle = uptime≥thr(min,def 60) AND util≤cap(%,def 5) AND no-compute-proc AND no-workdir — a slow-but-working pod (compute proc present) is NEVER killed")
+    println("                                                         also cross-refs ./pods.json budget.cap: on breach → alert + (with --kill) tear down the lowest-value running pod (g64 honor-cap)")
+    println("                                                         bare = DRY-RUN table (pod·age·util·has-proc·has-workdir·idle?·action); --kill enforces (needs RUNPOD_API_KEY / vast key)")
     println("  cloud dft-run   <deck-dir> [--go] [--query Q] [--walltime-h N] [--identity P] [--image I] [--disk G] [--owner T]")
     println("                                                         guarded DFT el-ph (QE) dispatch; PREVIEW ($0) unless --go. deck: relax.in·ph.in·scf.in.head·scf.in.tail·pseudo/")
     println("  cloud pods                                              full work table from cwd's ./pods.json (per-project active pod/job manifest)")
@@ -402,6 +406,31 @@ fn _auto_register(reg_token: str, host: str, pid: int) -> str {
     synth.push("--pid=" + pid_s)
     let _ = pods_local_add(synth, 0)
     println("[cloud] 📋 registered jid=" + jid + " in " + cwd + "/pods.json")
+    return jid
+}
+
+// _rent_register_pods_json — Q2 worker. On a successful `cloud rent`, write a
+// ./pods.json row IN-PROCESS so a freshly-rented pod can never become an
+// untracked ghost (symmetry with nohup/fire `--register`). Reuses the SAME
+// pods_local_add gateway as `cloud dispatch add` / `_auto_register` (d4 single
+// dispatch — no duplicated writer). job-id = `rent-<ts>-<host-short>`; the
+// PROVIDER pod-id is the pod-id; stage=rented, verdict=PENDING (no deck yet —
+// that PENDING is exactly the leak signal the watchdog/operator looks for).
+// cwd = git-root else pwd, so a manual + auto register land in one file.
+fn _rent_register_pods_json(pod_id: str, host: str, provider: str, owner: str) -> str {
+    let jid = "rent-" + str(timestamp()) + "-" + _host_short(host)
+    let cwd = _resolve_cwd()
+    let mut synth = []
+    synth.push(jid)
+    synth.push(pod_id)
+    synth.push(cwd)
+    if len(host) > 0 { synth.push("--host=" + host) }
+    synth.push("--provider=" + provider)
+    synth.push("--kind=rent")
+    synth.push("--stage=rented")
+    synth.push("--verdict=PENDING")
+    let _ = pods_local_add(synth, 0)
+    println("[cloud] 📋 registered jid=" + jid + " (pod " + pod_id + ") in " + cwd + "/pods.json — `cloud dispatch verdict " + jid + " PASS` once a deck lands")
     return jid
 }
 
@@ -816,6 +845,13 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
     if len(_injected) > 0 {
         println("[cloud] rent vast: ~/.ssh/config Host " + _injected + " → vast identity (auto · zero-flag ssh; #1155)")
     }
+    // Q2 — auto-register a ./pods.json row by default (symmetry with nohup/fire
+    // --register); `--no-register` opts out. Off the registry's billing-leak
+    // defense (M5 global), this is the per-project work-manifest row so a deck-
+    // less rent surfaces as a PENDING job in `cloud pods`.
+    if _has_flag(av, start, "--no-register") == 0 {
+        let _ = _rent_register_pods_json(inst.instance_id, ssh.host, "vast", owner)
+    }
     println("instance_id=" + inst.instance_id)
     println("host=" + ssh.host)
     println("port=" + ssh.port)
@@ -902,6 +938,10 @@ fn _cloud_rent_runpod(av: [str], start: int) -> int {
         }
         let _ = pod_registry_set_limits(pod.pod_id, ttl_sec, max_cost, rate)
         println("[cloud] M2/M3 guard: ttl_sec=" + str(ttl_sec) + " max_cost_usd=" + max_cost + " rate=" + rate + "/hr (enforced by `cloud watchdog`)")
+    }
+    // Q2 — auto-register a ./pods.json row by default; `--no-register` opts out.
+    if _has_flag(av, start, "--no-register") == 0 {
+        let _ = _rent_register_pods_json(pod.pod_id, port.ip, "runpod", owner)
     }
     println("pod_id=" + pod.pod_id)
     println("host=" + port.ip)
@@ -1279,6 +1319,44 @@ fn _cloud_early_life_check(host: str, ssh_opts: [str], pid: int, sec: int) -> in
 // wants the old single-block behaviour passes an explicit `--until <ere>`;
 // `--until ''` still follows forever.
 
+// _watchdog_budget_guard — Q4 budget cross-ref. Reads the per-project
+// ./pods.json budget.cap (USD), compares it against the M5 registry's total
+// accrued spend, and on a breach alerts + (when kill==1) tears down the
+// LOWEST-VALUE running pod (cheapest accrued — claw spend back under cap with
+// the least sunk loss; g64 honor-cap). No budget.cap declared → no-op.
+// Returns 1 iff a breach was detected (whether or not a kill fired), else 0.
+fn _watchdog_budget_guard(api_key: str, kill: int) -> int {
+    let cap_usd = pods_local_budget_cap_usd()
+    if len(cap_usd) == 0 {
+        return 0
+    }
+    let cap_c = pod_registry_usd_to_cents(cap_usd)
+    if cap_c <= 0 {
+        return 0
+    }
+    let spent_c = pod_registry_total_accrued_cents()
+    let cap_d = cap_c / 100
+    let spent_d = spent_c / 100
+    if spent_c < cap_c {
+        println("[cloud] watchdog budget: $" + str(spent_d) + " accrued / $" + cap_usd + " cap — under budget")
+        return 0
+    }
+    println("[cloud] ⚠ watchdog budget BREACH: $" + str(spent_d) + " accrued ≥ $" + cap_usd + " cap (./pods.json)")
+    let victim = pod_registry_lowest_value_id()
+    if len(victim) == 0 {
+        println("[cloud] watchdog budget: no running pod to sacrifice")
+        return 1
+    }
+    let provider = pod_registry_provider_of(victim)
+    if kill == 0 {
+        println("[cloud] watchdog budget: DRY-RUN — would kill lowest-value pod " + victim + " (" + provider + "); pass --kill to enforce")
+        return 1
+    }
+    println("[cloud] watchdog budget: killing lowest-value pod " + victim + " (" + provider + ") to honor cap")
+    let _ = _cloud_down(victim, provider)
+    return 1
+}
+
 fn main() {
     let av = args()
     let mut si = -1
@@ -1303,7 +1381,7 @@ fn main() {
         return
     }
     if sub == "version" || sub == "--version" || sub == "-v" {
-        println("hexa cloud 0.4.1 — M1 `rent --max-wait-sec N` bounded SSH-readiness gate (default 180s) · timeout → auto-teardown + exit 2 + verbatim verdict (no more ssh-never-ready billing leak) · [0.4.0: nohup/fire --register + ghost-pod L2-auto · 0.3.4: resolve alias · 0.3.3: vast-key ssh-config autoinject · 0.3.2: --identity · 0.3.1: registry guard · 0.3.0: dft-run]")
+        println("hexa cloud 0.5.0 — leak-guard: `rent` auto-registers a ./pods.json row by default (--no-register opts out) · `watchdog` COMPOSITE idle classifier (uptime≥thr AND util≤cap AND no-compute-proc AND no-workdir — slow-but-working pod NEVER killed) + ./pods.json budget.cap cross-ref (breach → kill lowest-value pod) · [0.4.1: rent --max-wait-sec bounded SSH gate · 0.4.0: nohup/fire --register · 0.3.x: resolve/ssh-config/identity/registry-guard/dft-run]")
         return
     }
     if sub == "rent" || sub == "up" {
@@ -1400,10 +1478,10 @@ fn main() {
         // dry-run with no runpod pods needs no creds). Opt-in invariant: pods
         // with no limit set are never touched.
         let m23_kill = _has_flag(av, si + 1, "--kill")
+        // SOFT runpod key (M7 secret-get path, non-exiting): "" when absent
+        // so a vast-only sweep doesn't die on a missing runpod key.
+        let m23_key = exec("secret get runpod.api_key 2>/dev/null").trim()
         if m23_kill == 1 {
-            // SOFT runpod key (M7 secret-get path, non-exiting): "" when absent
-            // so a vast-only sweep doesn't die on a missing runpod key.
-            let m23_key = exec("secret get runpod.api_key 2>/dev/null").trim()
             let n = pod_registry_limit_sweep(m23_key, 0)
             if n > 0 {
                 println("[cloud] watchdog: " + str(n) + " pod(s) torn down by M2/M3 limit (ttl/cost)")
@@ -1411,6 +1489,21 @@ fn main() {
         } else {
             let _ = pod_registry_limit_sweep("", 1)
         }
+        // Q3 — COMPOSITE idle sweep over the M5 registry (the RTSC leak-guard):
+        // idle = uptime≥thr AND util≤cap AND no-compute-proc AND no-workdir.
+        // A slow-but-working pod (compute proc present) is NEVER killed. Honors
+        // the same --threshold-min / --util-cap-pct flags; DRY-RUN unless --kill.
+        let wd_thr = _cli_atoi(_flag_val(av, si + 1, "--threshold-min", "60"))
+        let wd_cap = _cli_atoi(_flag_val(av, si + 1, "--util-cap-pct", "5"))
+        let mut wd_thr_eff = wd_thr
+        if wd_thr_eff < 5 { wd_thr_eff = 60 }
+        let wd_dry = 1 - m23_kill
+        let _ic = composite_watchdog_sweep(m23_key, wd_thr_eff, wd_cap, wd_dry)
+        // Q4 — budget cross-ref: if ./pods.json declares budget.cap and current
+        // accrued spend breaches it, alert + (on --kill) tear down the lowest-
+        // value running pod (g64 honor-cap — sacrifice the cheapest first).
+        let _bg = _watchdog_budget_guard(m23_key, m23_kill)
+        // Legacy runpod util sweep (kept for the runpodctl-only path / back-compat).
         let rc = watchdog_run(av, si + 1)
         exit(rc)
     }
