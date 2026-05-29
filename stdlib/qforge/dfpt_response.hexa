@@ -1,0 +1,199 @@
+// HEXA Standard Library — qforge/dfpt_response
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE 통합② — DFPT 선형응답 어댑터 (Sternheimer → 힘상수 Φ).
+//   파이프라인:  L5 Sternheimer 선형응답  →  **이 어댑터(Φ 조립)**  →  L4 동역학행렬.
+// L4(dfpt.hexa #2090)는 해석적 Φ 를 받고 Sternheimer→Φ 어댑터를 DEFERRED 했다 —
+// 본 brick 이 그 다리: 원자변위 → ΔV → 1차응답 Δψ → 2차 에너지미분 → 힘상수 블록
+// Φ_αβ.  반환 Φ 는 그대로 qforge_dynmat 에 투입.
+//
+// ── DFPT 자기무모순(self-consistent) 선형응답 — 변위방향 β 마다: ─────────────
+//     (1) ΔV_scf ← bare ΔV_bare(β).
+//     (2) 점유 ψₙ 마다 Sternheimer(d19 #2084): (H−εₙ)|Δψₙ⟩ = −P_c ΔV_scf|ψₙ⟩.
+//     (3) 1차 밀도응답 Δρ(r) = Σ_occ 2·ψₙ(r)·Δψₙ(r)  (실수 성분곱 합).
+//     (4) 차폐 갱신 ΔV_scf ← ΔV_bare + drho_to_dvscf(Δρ)  (Hartree+XC = caller, d4).
+//     (5) ‖ΔV_scf 변화‖ < tol 까지 (2)~(4) 반복 → 자기무모순.
+//   힘상수(2n+1 정리, 자기무모순 Δψ 만으로 2차 미분, 대칭화로 Φ_αβ=Φ_βα):
+//     (6) Φ_αβ = −Σ_occ ½[⟨ΔV_bare(α)ψₙ|Δψₙ(β)⟩ + ⟨Δψₙ(α)|ΔV_bare(β)ψₙ⟩].
+//
+// ── d4 generic 계약 (어댑터 하나, 두 caller) — caller 가 세 함수 공급(이름 하드코딩 없음):
+//     H_apply(v) -> H·v             : matrix-free 해밀토니안 (Sternheimer/Davidson 동일 계약)
+//     dV_bare_provider(b) -> [float]: 변위방향 b 의 bare ΔV_bare|ψₙ 묶음 (평탄 M_occ × n)
+//     drho_to_dvscf(drho) -> [float]: Δρ(길이 n) → 차폐 ΔV(길이 n). 0 커널 = 독립입자(bare).
+//   동일 어댑터가 (a) selftest 조화모델 과 (b) 미래 평면파(PW) 실계를 모두 처리.
+//
+// ── 자기무모순 차폐 vs bare 경로 (정직 스코프) ──────────────────────────────
+//   자기무모순 차폐 반복(5)을 GENERIC 하게 완전 구현 — 단 실제 Hartree+XC 커널은
+//   caller 공급(d4). drho_to_dvscf 가 0 이면 루프 1회 수렴 = 독립입자(bare) 응답이고,
+//   비자명 커널이면 자기무모순 차폐 — 동일 generic 경로. selftest 는 bare 경로를 g5
+//   검증한다(0 커널). 실 Hartree+XC 커널 작성은 후속(real PW 시스템).
+//
+// reuse (d19): qforge_sternheimer(#2084) 선형응답 · 반환 Φ 는 qforge_dynmat(#2090,
+//   L4) 에 그대로 투입 · selftest 는 eigh(stdlib/alloc/math/eigen) 로 조화모델 대각화.
+use "stdlib/qforge/sternheimer"
+// 결과: Φ 블록(평탄 dim×dim row-major) + SCF 반복수 + 수렴 + 최대잔차.
+pub struct ForceConstResult {
+    phi: [float],            // dim*dim 평탄 row-major 힘상수 블록 (qforge_dynmat 투입형)
+    scf_iters: int,          // 최대 변위방향에 걸친 SCF 반복수(최댓값)
+    converged: bool,         // 모든 방향의 SCF 차폐 + 모든 Sternheimer 수렴
+    max_residual: float      // 방향 전체의 최대 Sternheimer 잔차
+}
+// 내부 헬퍼: ‖a−b‖ (SCF 차폐 수렴 판정용).
+fn fc_norm_diff(a: [float], b: [float], n: int) -> float {
+    let mut s = 0.0
+    let mut i = 0
+    while i < n { let d = a[i] - b[i] ; s = s + d * d ; i = i + 1 }
+    return sqrt(s)
+}
+// ── 단일 변위방향 β 의 자기무모순 응답: {Δψₙ}_occ 묶음 (평탄 M_occ × n) ────────
+//   반환 끝에 메타 4개 append: [.., max_iters, max_res, conv(1/0), scf_it].
+//   dvb = 방향 b 의 bare ΔV|ψₙ 묶음 (caller 의 dV_bare_provider 산출).
+fn fc_scf_response(H_apply, occ_states: [[float]], eps: [float],
+                   dvb: [float], drho_to_dvscf,
+                   n: int, m_occ: int, tol: float, max_iter: int) -> [float] {
+    // ΔV_scf 묶음 = M_occ × n (상태별 ΔV ψₙ).  초기 = bare.
+    let mut dvscf = []
+    let mut t = 0
+    while t < m_occ * n { dvscf.push(dvb[t]) ; t = t + 1 }
+    let mut dpsi_all = []
+    let mut prep = 0
+    while prep < m_occ * n { dpsi_all.push(0.0) ; prep = prep + 1 }
+    let mut scf_it = 0
+    let mut max_st_iters = 0
+    let mut max_res = 0.0
+    let mut all_conv = 1.0
+    // SCF 차폐 반복: drho_to_dvscf 가 0 이면 1회로 수렴(=bare/독립입자).
+    while scf_it < max_iter {
+        // (2) 점유상태마다 Sternheimer 로 Δψₙ 풀이.
+        let mut nn = 0
+        while nn < m_occ {
+            let mut dvpsi = []
+            let mut k = 0
+            while k < n { dvpsi.push(dvscf[nn * n + k]) ; k = k + 1 }
+            let res = qforge_sternheimer(H_apply, eps[nn], occ_states[nn],
+                                         occ_states, dvpsi, n, tol, max_iter)
+            let mut w = 0
+            while w < n { dpsi_all[nn * n + w] = res.dpsi[w] ; w = w + 1 }
+            if res.iters > max_st_iters { max_st_iters = res.iters }
+            if res.residual > max_res { max_res = res.residual }
+            if res.converged == false { all_conv = 0.0 }
+            nn = nn + 1
+        }
+        // (3) 1차 밀도응답 Δρ(r) = Σ_occ 2·ψₙ(r)·Δψₙ(r)  (실수 성분곱).
+        let mut drho = []
+        let mut r0 = 0
+        while r0 < n { drho.push(0.0) ; r0 = r0 + 1 }
+        let mut nd = 0
+        while nd < m_occ {
+            let mut i = 0
+            while i < n { drho[i] = drho[i] + 2.0 * occ_states[nd][i] * dpsi_all[nd * n + i] ; i = i + 1 }
+            nd = nd + 1
+        }
+        // (4) 차폐 갱신: 상태별 ΔV ψₙ = (ΔV_bare ψₙ) + (ΔV_scr ⊙ ψₙ).
+        //   drho_to_dvscf 가 r-공간 차폐포텐셜 ΔV_H+xc(r)(길이 n)를 돌려준다(국소 곱).
+        let dvscr = drho_to_dvscf(drho)
+        let mut new_dvscf = []
+        let mut nb = 0
+        while nb < m_occ {
+            let mut i = 0
+            while i < n {
+                new_dvscf.push(dvb[nb * n + i] + dvscr[i] * occ_states[nb][i])
+                i = i + 1
+            }
+            nb = nb + 1
+        }
+        let delta = fc_norm_diff(new_dvscf, dvscf, m_occ * n)
+        let mut sw = 0
+        while sw < m_occ * n { dvscf[sw] = new_dvscf[sw] ; sw = sw + 1 }
+        scf_it = scf_it + 1
+        if delta < tol { break }
+    }
+    // 결과 묶음 끝에 메타 3개 append (scf_iters, max_res, conv).
+    dpsi_all.push(to_float(max_st_iters))
+    dpsi_all.push(max_res)
+    dpsi_all.push(all_conv)
+    dpsi_all.push(to_float(scf_it))
+    return dpsi_all
+}
+// ── 공개 API: 변위방향들 → 힘상수 블록 Φ (자기무모순 DFPT 응답) ─────────────
+//   H_apply       : matrix-free H·v (Sternheimer/Davidson 동일 계약, d4).
+//   occ_states    : 점유 고유벡터들(행=벡터, 길이 n) — P_c 정의 + ψₙ 출처.
+//   eps           : 점유 고유값 εₙ (occ_states 와 같은 순서).
+//   dV_bare_provider(b) -> [float] : 변위방향 b 의 bare ΔV|ψₙ 묶음(평탄 M_occ × n).
+//   drho_to_dvscf(drho) -> [float] : Δρ(길이 n) → 차폐 ΔV(길이 n). 0 커널 = bare 경로.
+//   natoms_dim    : 힘상수 블록 차원 dim = 변위방향 수(= 3·natoms).
+//   tol/max_iter  : Sternheimer + SCF 차폐 종료조건.
+//   반환: ForceConstResult{ phi(dim*dim), scf_iters, converged, max_residual }.
+pub fn qforge_force_constant(H_apply, occ_states: [[float]], eps: [float],
+                             dV_bare_provider, drho_to_dvscf,
+                             natoms_dim: int, tol: float, max_iter: int) -> ForceConstResult {
+    let m_occ = occ_states.len()
+    let n = occ_states[0].len()
+    let dim = natoms_dim
+    // 방향별 bare ΔV|ψₙ 묶음 사전계산 (Φ 대칭 contraction 에 α,β 둘 다 필요).
+    let mut bare_all = []
+    let mut b = 0
+    while b < dim {
+        let dvb = dV_bare_provider(b)
+        bare_all.push(dvb)
+        b = b + 1
+    }
+    // 방향별 자기무모순 응답 {Δψₙ}.
+    let mut resp_all = []
+    let mut max_iters = 0
+    let mut max_res = 0.0
+    let mut all_conv = true
+    let mut bb = 0
+    while bb < dim {
+        let resp = fc_scf_response(H_apply, occ_states, eps, bare_all[bb],
+                                   drho_to_dvscf, n, m_occ, tol, max_iter)
+        // 메타 꼬리 4개 분리: [.. , max_st_iters, max_res, conv, scf_it]
+        let total = resp.len()
+        let st_it = resp[total - 4]
+        let rr = resp[total - 3]
+        let cv = resp[total - 2]
+        if st_it > to_float(max_iters) { max_iters = to_int(st_it) }
+        if rr > max_res { max_res = rr }
+        if cv < 0.5 { all_conv = false }
+        resp_all.push(resp)
+        bb = bb + 1
+    }
+    // ── Φ_αβ contraction (2n+1 정리, 대칭화) ─────────────────────────────
+    //   Φ_αβ = Σ_occ [ ⟨ΔV_bare(α) ψₙ | Δψₙ(β)⟩ + ⟨Δψₙ(α) | ΔV_bare(β) ψₙ⟩ ] / 2
+    //   ⟨ΔV_bare(α) ψₙ | Δψₙ(β)⟩ = bare_all[α][n,:] · resp_all[β][n,:].
+    let mut phi = []
+    let mut z = 0
+    while z < dim * dim { phi.push(0.0) ; z = z + 1 }
+    let mut al = 0
+    while al < dim {
+        let mut be = 0
+        while be < dim {
+            let mut acc = 0.0
+            let mut nn = 0
+            while nn < m_occ {
+                // ⟨ΔV_bare(α) ψₙ | Δψₙ(β)⟩
+                let mut t1 = 0.0
+                let mut t2 = 0.0
+                let mut i = 0
+                while i < n {
+                    let dva_n = bare_all[al][nn * n + i]
+                    let dvb_n = bare_all[be][nn * n + i]
+                    let dpb_n = resp_all[be][nn * n + i]
+                    let dpa_n = resp_all[al][nn * n + i]
+                    t1 = t1 + dva_n * dpb_n
+                    t2 = t2 + dpa_n * dvb_n
+                    i = i + 1
+                }
+                acc = acc + 0.5 * (t1 + t2)
+                nn = nn + 1
+            }
+            // 부호: ⟨ΔVψ|Δψ⟩ = Σ|⟨..⟩|²/(εₙ−ε_m) (전도상태 ↑ → 음). Φ=+∂²E/∂u² 이라 반전.
+            phi[al * dim + be] = -acc
+            be = be + 1
+        }
+        al = al + 1
+    }
+    return ForceConstResult { phi: phi, scf_iters: max_iters, converged: all_conv, max_residual: max_res }
+}
