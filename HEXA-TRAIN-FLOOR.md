@@ -46,7 +46,7 @@ roofline 분석 (d768·12L fp64: P=104.2M, FLOPs/step=3.03e12, AI=207 FLOP/byte)
 - [x] M3 #2017/#2018 회귀 분석 — 왜 3× 느려졌나, cuBLAS gemv를 d-threshold로 조건부 활성
 - [x] M4 step-rate floor 측정 — roofline 기준 물리 천장 산출 (끝 = 100% 아닌 물리 한계)
 - [x] M5 PyTorch 대비 throughput parity 측정대 구축 — A/B 측정 + verdict 영속
-- [ ] M6 fp64 → fp32/bf16(TensorCore) 학습 경로 — M4가 지목한 진짜 천장 lever (A100 32×·5070 44× floor 인하). 추론 int4와 분리된 학습-mixed-precision 트랙
+- [x] M6 fp64 → fp32/bf16(TensorCore) 학습 경로 — M4가 지목한 진짜 천장 lever (A100 32×·5070 44× floor 인하). 추론 int4와 분리된 학습-mixed-precision 트랙
 - [ ] M7 라이브 측정으로 1차 사이클 🟠 → 🟢 승격 — `HEXA_FARR_TRIM=1`+`HEXA_RSS_TRACE=1`+`HEXA_GEMV_CUBLAS_MIN_DIM`로 ubu-2/GPU pod서 step/s·RSS Δ 실측 (`tool/train_floor_bench.hexa --ledger`)
 
 ## deferred
