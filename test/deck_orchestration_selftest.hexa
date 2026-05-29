@@ -1,0 +1,120 @@
+// HEXA Standard Library — deck/rtsc launch-orchestration selftest
+//
+// Asserts the §4b launch-orchestration DEFAULT vs opt-in contract
+// (project.tape d_parallel_fire): the deck generator's DEFAULT emit leads
+// with SEPARATE-PODS-PER-CANDIDATE (1순위), and the one-pod-multi-deck
+// CONCURRENT-FILL block is reachable ONLY via the explicit spec flag
+// `pack_one_pod=true` (FALLBACK).
+//
+// Checks (on the beh8_clathrate RUNBOOK.md, the prototype that emits §4b):
+//   DEFAULT (no flag):
+//     - §4b header = "SEPARATE-PODS" (one candidate = one pod)
+//     - NO `DECKS=(` multi-deck loop in the default path
+//     - cites d_parallel_fire 1순위 + the per-pod isolated-scratch contract
+//     - §4c run_resume.sh driver still present (UNREGRESSED, #2113)
+//   OPT-IN (pack_one_pod=true):
+//     - §4b-fallback CONCURRENT-FILL block present
+//     - the fill_plan `DECKS=(` multi-deck loop IS emitted
+//     - labeled FALLBACK
+//
+// Usage:
+//   hexa run test/deck_orchestration_selftest.hexa
+
+import "stdlib/deck/gen.hexa"
+
+fn _beh8_base_spec() -> DeckSpec {
+    let spec = deck_spec_new()
+    spec_set(spec, "prototype",                    "beh8_clathrate")
+    spec_set(spec, "prefix",                       "mgbeh8")
+    spec_set(spec, "celldm_bohr",                  "8.5132")
+    spec_set(spec, "a_conv_ang",                   "4.505")
+    spec_set(spec, "anchor_a_ang",                 "5.30")
+    spec_set(spec, "contraction_pct",              "15")
+    spec_set(spec, "a_site_symbol",                "Mg")
+    spec_set(spec, "a_site_mass",                  "24.305")
+    spec_set(spec, "a_site_upf",                   "Mg.pbe-spnl-rrkjus_psl.1.0.0.UPF")
+    spec_set(spec, "a_site_radius_ang",            "1.60")
+    spec_set(spec, "pressure_kbar",                "100.0")
+    spec_set(spec, "pressure_comment",             "10 GPa")
+    spec_set(spec, "pressure_kbar_int",            "100")
+    spec_set(spec, "pressure_gpa",                 "10")
+    spec_set(spec, "fallback_pressure_kbar",       "500.0")
+    spec_set(spec, "fallback_pressure_kbar_int",   "500")
+    spec_set(spec, "fallback_pressure_comment",    "50 GPa")
+    spec_set(spec, "fallback_pressure_gpa",        "50")
+    spec_set(spec, "nq",                           "2")
+    spec_set(spec, "max_seconds",                  "504000")
+    spec_set(spec, "walltime_comment",             "140h floor")
+    return spec
+}
+
+// _runbook_of — emit a deck for `spec` and return the RUNBOOK.md content.
+fn _runbook_of(spec: DeckSpec) -> string {
+    let files = gen_deck("rtsc", spec)
+    let mut i = 0
+    while i < len(files) {
+        if files[i].path == "RUNBOOK.md" {
+            return files[i].content
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+fn _check(name: string, cond: bool, fails: [bool]) {
+    if cond {
+        println("  PASS  " + name)
+    } else {
+        println("  FAIL  " + name)
+        fails[0] = true
+    }
+}
+
+fn main() {
+    println("# deck_orchestration_selftest — §4b launch-orchestration default vs opt-in")
+    println("")
+    let fails = [false]
+
+    // ── DEFAULT (no pack_one_pod) — separate-pods per candidate ──────────
+    println("## DEFAULT emit (no flag) — expect SEPARATE-PODS (d_parallel_fire 1순위)")
+    let rb_default = _runbook_of(_beh8_base_spec())
+    _check("§4b header = SEPARATE-PODS",
+        rb_default.contains("SEPARATE-PODS"), fails)
+    _check("cites d_parallel_fire 1순위",
+        rb_default.contains("d_parallel_fire 1순위"), fails)
+    _check("후보 1개 = pod 1개 contract present",
+        rb_default.contains("후보 1개 = pod 1개")
+        || rb_default.contains("후보 1개 = pod 1개"), fails)
+    _check("NO multi-deck DECKS=( loop in default path",
+        !rb_default.contains("DECKS=( \"$@\" )"), fails)
+    _check("default does NOT emit the CONCURRENT-FILL fallback header",
+        !rb_default.contains("4b-fallback"), fails)
+    _check("§4c run_resume.sh driver UNREGRESSED (#2113)",
+        rb_default.contains("run_resume.sh")
+        && rb_default.contains("REAL-TERMINAL"), fails)
+    println("")
+
+    // ── OPT-IN (pack_one_pod=true) — concurrent-fill fallback ────────────
+    println("## OPT-IN emit (pack_one_pod=true) — expect CONCURRENT-FILL FALLBACK")
+    let spec_pack = _beh8_base_spec()
+    spec_set(spec_pack, "pack_one_pod", "true")
+    let rb_pack = _runbook_of(spec_pack)
+    _check("§4b-fallback CONCURRENT-FILL header present",
+        rb_pack.contains("4b-fallback")
+        && rb_pack.contains("CONCURRENT-FILL"), fails)
+    _check("labeled FALLBACK",
+        rb_pack.contains("FALLBACK"), fails)
+    _check("fill_plan multi-deck DECKS=( loop IS emitted",
+        rb_pack.contains("DECKS=( \"$@\" )"), fails)
+    _check("opt-in does NOT emit the separate-pods header",
+        !rb_pack.contains("SEPARATE-PODS"), fails)
+    _check("§4c run_resume.sh driver still present in opt-in path",
+        rb_pack.contains("run_resume.sh"), fails)
+    println("")
+
+    if fails[0] {
+        println("__DECK_ORCHESTRATION_SELFTEST__ FAIL")
+    } else {
+        println("__DECK_ORCHESTRATION_SELFTEST__ PASS")
+    }
+}
