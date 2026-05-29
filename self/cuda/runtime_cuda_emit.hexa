@@ -1253,6 +1253,74 @@ fn emit_runtime_cuda_c() -> str {
             "    if (threadIdx.x == 0) O[r] = total;\n" +
             "}\n" +
             "\n" +
+            "/* ────────────────────────────────────────────────────────────────────\n" +
+            " * HEXA-TRAIN-FLOOR M6 — fp32 dtype slice for packed_gemv_offset.\n" +
+            " *   out[i] = Σ_j P[off + i·cols + j] · U[j],  computed in fp32.\n" +
+            " *\n" +
+            " * SAME layout / reduction shape as _hx_k_packed_gemv_offset (one block\n" +
+            " * per output row, HX_RR_BLOCK threads stride `cols`, single block-sum),\n" +
+            " * but the per-thread products + accumulator are `float` (fp32) instead\n" +
+            " * of `double`. The device storage stays fp64 (_CudaFarrSlot.d_buf is\n" +
+            " * `double*`); each operand is narrowed fp64→fp32 AT THE LOAD and the\n" +
+            " * row dot-product reduces in fp32. The result is widened fp32→fp64 at\n" +
+            " * the store so the host ABI (packed-double farr) is unchanged.\n" +
+            " *\n" +
+            " * Why this is the M4-identified lever (HEXA-TRAIN-FLOOR.md §M4): the\n" +
+            " * trainer is fp64 COMPUTE-bound; the gemv contraction is the hot path.\n" +
+            " * fp32 multiply-accumulate runs at the device's fp32 throughput\n" +
+            " * (A100/5070: 32–64× the fp64 rate) — this kernel is the first slice\n" +
+            " * that exercises that rate without touching the fp64 storage layout.\n" +
+            " *\n" +
+            " * ACCURACY CAVEAT (opt-in only): fp32 has a 24-bit mantissa vs fp64's\n" +
+            " * 53-bit; the accumulator carries ~7 significant decimal digits. For a\n" +
+            " * length-`cols` dot product the relative error grows ~cols·2^-24. This\n" +
+            " * is mixed-precision training territory — it DOES perturb convergence\n" +
+            " * and is therefore OFF BY DEFAULT (HEXA_TRAIN_DTYPE unset/`fp64` keeps\n" +
+            " * the exact fp64 path). No bit-eq vs the fp64 reference is claimed; the\n" +
+            " * caller opts in only when the fp32 throughput win outweighs the loss\n" +
+            " * of mantissa bits (the M6→M7 measurement gate decides that per model).\n" +
+            " * ──────────────────────────────────────────────────────────────────── */\n" +
+            "__device__ __forceinline__ float _hx_warp_sum_f(float v) {\n" +
+            "    for (int offset = 16; offset > 0; offset >>= 1) {\n" +
+            "        v += __shfl_down_sync(0xFFFFFFFFu, v, offset);\n" +
+            "    }\n" +
+            "    return v;\n" +
+            "}\n" +
+            "\n" +
+            "__device__ __forceinline__ float _hx_block_sum_f(float v, float* smem) {\n" +
+            "    int lane = threadIdx.x & 31;\n" +
+            "    int wid  = threadIdx.x >> 5;\n" +
+            "    v = _hx_warp_sum_f(v);\n" +
+            "    if (lane == 0) smem[wid] = v;\n" +
+            "    __syncthreads();\n" +
+            "    int n_warps = (blockDim.x + 31) >> 5;\n" +
+            "    if (wid == 0) {\n" +
+            "        float w = (lane < n_warps) ? smem[lane] : 0.0f;\n" +
+            "        w = _hx_warp_sum_f(w);\n" +
+            "        if (lane == 0) smem[0] = w;\n" +
+            "    }\n" +
+            "    __syncthreads();\n" +
+            "    return smem[0];\n" +
+            "}\n" +
+            "\n" +
+            "__global__ void _hx_k_packed_gemv_offset_f32(const double* __restrict__ P,\n" +
+            "                                 int64_t off,\n" +
+            "                                 const double* __restrict__ U,\n" +
+            "                                 double* __restrict__ O,\n" +
+            "                                 int64_t rows, int64_t cols) {\n" +
+            "    __shared__ float smem[HX_RR_BLOCK / 32];\n" +
+            "    int64_t r = (int64_t)blockIdx.x;\n" +
+            "    if (r >= rows) return;\n" +
+            "    const double* row = P + off + r * cols;\n" +
+            "    float acc = 0.0f;\n" +
+            "    for (int64_t j = (int64_t)threadIdx.x; j < cols; j += blockDim.x) {\n" +
+            "        /* narrow fp64→fp32 at load; multiply-accumulate in fp32. */\n" +
+            "        acc += (float)row[j] * (float)U[j];\n" +
+            "    }\n" +
+            "    float total = _hx_block_sum_f(acc, smem);\n" +
+            "    if (threadIdx.x == 0) O[r] = (double)total;  /* widen fp32→fp64 store */\n" +
+            "}\n" +
+            "\n" +
             "#endif /* __CUDACC__ — kernel bodies (compiled by nvcc only) */\n" +
             "\n" +
             "/* ════════════════════════════════════════════════════════════════════\n" +
@@ -1689,6 +1757,25 @@ fn emit_runtime_cuda_c() -> str {
             " * Single dot-product per output row, cuBLAS-tiled reduction →\n" +
             " * TOL_MATMUL ≈ 2e-9 (same caveat as matmul_t). H2D P once (whole\n" +
             " * buffer), base+offset device pointer, D2H out. */\n" +
+            "/* HEXA-TRAIN-FLOOR M6 — training compute dtype selector.\n" +
+            " *   Returns 1 when HEXA_TRAIN_DTYPE selects an fp32 compute path, 0\n" +
+            " *   otherwise (default = fp64, the exact-precision substrate). The env\n" +
+            " *   var is read once per call (cheap; the value is process-stable in\n" +
+            " *   practice). Accepted fp32 spellings: `fp32`, `f32`, `float`. Any\n" +
+            " *   other value (incl. `fp64`/`f64`/`double`/unset) keeps fp64 — so an\n" +
+            " *   unrecognized value NEVER silently downgrades precision (fail-safe\n" +
+            " *   to the exact path). bf16/TensorCore lives in the runtime_bf16.c\n" +
+            " *   sibling storage class (RFC 049) — this selector only gates the\n" +
+            " *   in-place fp32 kernel slice; `bf16` here falls through to fp64. */\n" +
+            "static int _hx_train_dtype_is_fp32(void) {\n" +
+            "    const char* d = getenv(\"HEXA_TRAIN_DTYPE\");\n" +
+            "    if (!d || !*d) return 0;\n" +
+            "    if (strcmp(d, \"fp32\") == 0) return 1;\n" +
+            "    if (strcmp(d, \"f32\")  == 0) return 1;\n" +
+            "    if (strcmp(d, \"float\") == 0) return 1;\n" +
+            "    return 0;  /* fp64 (default) / bf16 (sibling TU) / unknown → exact */\n" +
+            "}\n" +
+            "\n" +
             "int _hx_cuda_farr_packed_gemv_offset_gpu(int64_t p_id, int64_t off,\n" +
             "                               int64_t rows, int64_t cols,\n" +
             "                               int64_t u_id, int64_t out_id) {\n" +
@@ -1705,6 +1792,26 @@ fn emit_runtime_cuda_c() -> str {
             "    double* U_dev = g_slots[u_id].d_buf;\n" +
             "    double* O_dev = g_slots[out_id].d_buf;\n" +
             "#ifdef __CUDACC__\n" +
+            "    /* HEXA-TRAIN-FLOOR M6 — fp32 dtype slice (opt-in). When\n" +
+            "     * HEXA_TRAIN_DTYPE selects fp32, run the fp32-accumulating on-device\n" +
+            "     * gemv kernel: it narrows the fp64 device operands to fp32 at load\n" +
+            "     * and reduces in fp32, exercising the device's fp32 throughput (the\n" +
+            "     * M4-identified fp64-compute-bound lever). Independent of the cuBLAS\n" +
+            "     * min-dim sync gate below — fp32 is a COMPUTE-precision choice, not a\n" +
+            "     * dispatch-cost one. NOT bit-eq vs fp64 (mantissa loss); default\n" +
+            "     * (unset/fp64) keeps the exact fp64 path unchanged. */\n" +
+            "    if (_hx_train_dtype_is_fp32()) {\n" +
+            "        dim3 grid_f((unsigned)rows), block_f(HX_RR_BLOCK);\n" +
+            "        _hx_k_packed_gemv_offset_f32<<<grid_f, block_f>>>(\n" +
+            "            g_slots[p_id].d_buf, off, U_dev, O_dev, rows, cols);\n" +
+            "        cudaError_t fer = cudaDeviceSynchronize();\n" +
+            "        if (fer != cudaSuccess) {\n" +
+            "            fprintf(stderr, \"[cuda] packed_gemv_offset fp32 kernel failed: %s\\n\",\n" +
+            "                    cudaGetErrorString(fer));\n" +
+            "            return -1;\n" +
+            "        }\n" +
+            "        return _d2h_out(out_id, rows);\n" +
+            "    }\n" +
             "    /* d-threshold gate (hexa-lang #1354): at small contraction dim `cols`\n" +
             "     * the cuBLAS Dgemv library-dispatch cost dominates the FLOPs and the\n" +
             "     * H2D/D2H sync round-trip outweighs the saved compute (~3x slowdown\n" +
