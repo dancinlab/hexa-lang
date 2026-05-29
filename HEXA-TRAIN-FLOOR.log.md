@@ -2,6 +2,66 @@
 
 Append-only history sister of `HEXA-TRAIN-FLOOR.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-30 — 🟠 M6 fp64→fp32 dtype 스위치 첫 슬라이스 (gemv, opt-in · 미측정)
+
+M4가 지목한 진짜 천장 lever(**fp64 COMPUTE-bound → fp32/bf16**)의 첫 bounded
+shippable slice. 학습 hot-path의 fp64 정밀도를 env `HEXA_TRAIN_DTYPE`로 선택
+가능하게 했다 — 최소 1개 hot 커널(packed_gemv)에 fp32 변형 + dtype 디스패치 추가.
+**기본 fp64 유지(무회귀)**, fp32는 opt-in. GPU 실측 안 함(M7).
+
+### ① fp64 박힌 학습 hot-path 전수 매핑 (`self/cuda/runtime_cuda_emit.hexa`)
+
+| 지점 | file:line(emit) | fp64 형태 | M6 상태 |
+|---|---|---|---|
+| 디바이스 슬롯 미러 테이블 | `_CudaFarrSlot.d_buf` `double*` (~L76) | 저장 자체가 fp64 | scope (storage layout = bf16 sibling TU) |
+| H2D/D2H 복사 | `_h2d`/`_d2h` `sizeof(double)` (~L223/259) | fp64 바이트 | scope (slot fp64면 불변) |
+| matmul (Phase A) | `cublasDgemm` (~L655) | fp64 D-gemm | scope |
+| matmul_t | `cublasDgemm` (~L1664) | fp64 D-gemm | scope |
+| outer | `cublasDgemm` (~L1770) | fp64 D-gemm | scope (K=1 bit-exact) |
+| **gemv (packed)** | `cublasDgemv` + `_hx_k_packed_gemv_offset` (~L1239/1732) | fp64 D-gemv + fp64 on-device 커널 | **✅ M6 fp32 변형 추가** |
+| AdamW | `_hx_k_adamw_step`/`_inplace` (~L1171/1201) | fp64 옵티마이저 상태 | scope (수렴 민감 — master fp64 권장) |
+| softmax/rmsnorm/ce/rope 커널 | `__global__ ... double` (~L893~2107) | fp64 reduction | scope |
+| 엘리먼트와이즈(add/scale/mul/silu) | `_hx_cuda_kern_*` `double` (~L1918~) | fp64 | scope |
+| bf16 substrate | `self/cuda/runtime_bf16_emit.hexa` | `__nv_bfloat16` storage class (RFC 049 Stage 2 scaffold) | 이미 존재 — TensorCore 경로는 여기 (M6 범위 밖) |
+
+### ② 구현한 dtype 스위치
+
+- **env**: `HEXA_TRAIN_DTYPE` — `fp32`/`f32`/`float` → fp32 compute path 활성.
+  그 외(unset·`fp64`·`f64`·`double`·`bf16`·미인식) → fp64(현행, 정확) fail-safe.
+- **selector**: `_hx_train_dtype_is_fp32()` (emit ~L1707) — getenv+strcmp, 미인식
+  값은 절대 silent downgrade 안 함(정확 경로로 fail-safe).
+- **fp32 커널**: `_hx_k_packed_gemv_offset_f32` (emit ~L1255) + `_hx_warp_sum_f`/
+  `_hx_block_sum_f` — 기존 fp64 `_hx_k_packed_gemv_offset`/`_hx_block_sum`의
+  `float` 미러. fp64 디바이스 버퍼를 load에서 fp64→fp32 narrow, dot-product를
+  fp32로 reduce, store에서 fp32→fp64 widen (호스트 packed-double ABI 불변).
+- **디스패치 wire**: `_hx_cuda_farr_packed_gemv_offset_gpu` (emit ~L1794, `#ifdef
+  __CUDACC__` 내부) — `_hx_train_dtype_is_fp32()` true면 fp32 커널, else 기존
+  d-threshold→fp64 cuBLAS 경로로 fallthrough. cuBLAS min-dim sync gate와 독립
+  (fp32 = compute-precision 선택, dispatch-cost 선택 아님).
+
+### ③ 정확도 경계
+
+- 기본 dtype = **fp64 유지** → 1차 사이클(#2122/#2127 등) 무회귀.
+- fp32는 24-bit 만티사(fp64 53-bit) → dot-product 상대오차 ~cols·2^-24. mixed-
+  precision 학습 영역 = **수렴에 영향** → opt-in only, bit-eq vs fp64 미주장.
+- 추론 AKIDA-int4 경로 무손상(이 변경은 forge GPU 학습 substrate만).
+
+### ④ 잔여 scope (honest)
+
+- **bf16/TensorCore**: `cublasGemmEx`/WMMA = `runtime_bf16_emit.hexa` 별도 storage
+  class(2-byte). M6는 fp32 슬라이스만; bf16은 별 트랙(RFC 049 Stage 2 fire).
+- **나머지 hot 커널 fp32화**: matmul/matmul_t/outer(Dgemm)·AdamW·softmax/rmsnorm/
+  rope·elementwise — gemv와 동일 패턴으로 확장 가능하나 M6 bounded slice 밖.
+- **slot storage fp32**: `_CudaFarrSlot.d_buf`를 fp32로 = H2D 대역폭 절반 + cuBLAS
+  Sgemv 직접. 현 슬라이스는 fp64 storage 유지 + load-time narrow(레이아웃 무변경).
+
+### 🟠 사유
+
+GPU/clang 실측 없음(g5) — `hexa_real parse` 게이트만 통과(syntactic). fp32 커널은
+verified fp64 `_hx_block_sum` 패턴의 정확한 `float` 미러 + 표준 C selector. 실제
+step/s 게인(A100 32×·5070 44× 천장) + 수렴 영향 측정은 M7(GPU pod + regen 필요).
+B9: runtime_cuda.c는 generated → emitter(`runtime_cuda_emit.hexa`)만 수정.
+
 ## 2026-05-30 — 🟠 M5 A/B step-rate 측정대 스캐폴드 (harness만, 미측정)
 
 hexa-native 학습기 step-rate vs PyTorch step-rate 를 **동일 모델/설정**에서 A/B
