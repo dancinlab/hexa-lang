@@ -116,6 +116,7 @@ jobs:
           CC: clang
           LIBS: ""
           HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
+          EDGE_ASSET: hexa-darwin-arm64.tar.gz
           GH_TOKEN: ${{ github.token }}
         run: bash tool/stage_prebuild_hexat
 
@@ -270,6 +271,7 @@ jobs:
           CC: gcc
           LIBS: "-lm -ldl"
           HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
+          EDGE_ASSET: hexa-linux-x86_64.tar.gz
           GH_TOKEN: ${{ github.token }}
         run: bash tool/stage_prebuild_hexat
 
@@ -336,6 +338,7 @@ jobs:
           CC: gcc
           LIBS: "-lm -ldl"
           HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
+          EDGE_ASSET: hexa-linux-arm64.tar.gz
           GH_TOKEN: ${{ github.token }}
         run: bash tool/stage_prebuild_hexat
 
