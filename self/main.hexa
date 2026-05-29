@@ -87,6 +87,8 @@ fn cmd_help() {
     println("  dojo <domain> <slug> '<spec>' [--lang=hexa|py|both]")
     println("                                          cloud training-job 빵틀 (.hexa+.py+run.sh → exports/<d>/dojo/<slug>/)")
     println("    e.g. hexa dojo llm smoke '{\"model\":\"gpt2\",\"epochs\":1}'    (domains: hexa dojo domains)")
+    println("  hf <flags>                              HuggingFace upload wrapper (pure hexa · validate + sha256 + hf CLI)")
+    println("    e.g. hexa hf --dry-run --repo org/clm-v4-sft-stage1 --ckpt <p> --readme <p>   (or --selftest)")
     println("  stdlib [list [--json]]                  stdlib catalog (modules · dirs · tests · docs)")
     println("    e.g. hexa stdlib                      table view (purpose harvested from each module header)")
     println("  sim-universe [status|selftest|anu|multiverse|qpu|qrng|bostrom|godel|")
@@ -6939,6 +6941,28 @@ if len(av) < 3 {
             if file_exists(inst_path) { dj_script = inst_path }
         }
         cmd_run(dj_script, dj_args)
+    } else if sub == "hf" {
+        // stdlib/hf/upload.hexa dispatch — HuggingFace upload wrapper
+        // (pure hexa · sibling of dojo). `hexa hf <flags>` validates
+        // README + repo naming, walks files + sha256, and shells out to
+        // the `hf` CLI for repo create / upload / tag. Token handling is
+        // ps-invisible (file-backed HF_HOME/token, never --token argv).
+        // Ported as-is from anima tool/hf_upload_mk2.hexa v2.2.0. Pure-hexa
+        // string assembly — runs via cmd_run (compile-then-exec), no AOT
+        // build needed (same stdlib hot-swap path as dojo).
+        let __inst_hf = install_dir_from_argv0()
+        let mut hf_args = []
+        let mut hfi = 3
+        while hfi < len(av) {
+            hf_args.push(av[hfi])
+            hfi = hfi + 1
+        }
+        let mut hf_script = "stdlib/hf/upload.hexa"
+        if len(__inst_hf) > 0 {
+            let inst_path = __inst_hf + "/stdlib/hf/upload.hexa"
+            if file_exists(inst_path) { hf_script = inst_path }
+        }
+        cmd_run(hf_script, hf_args)
     } else if sub == "cache" {
         // GO M4 (2026-05-25): `hexa cache <subverb>` — 1st-class verb over
         // `~/.hexa-cache/`. Pre-M4 the only way to inspect / prune was raw
