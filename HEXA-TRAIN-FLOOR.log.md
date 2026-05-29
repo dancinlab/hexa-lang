@@ -49,6 +49,48 @@ syscall 1회(소수 buffer 재사용 trainer 라 수용가능).
 정적 검증(parse·clang) 통과지만, per-step RSS 단조증가가 실제로 끊기는지는 M4
 라이브 측정 전까지 미확정. fix + 정적 검증만이 M3 범위.
 
+## 2026-05-30 — 🟠 M2 cuBLAS gemv d-threshold 게이팅 (코드 수정, 미측정)
+
+#2018(offset cuBLAS Dgemv) 가 작은 d(=64)에서 cuBLAS 라이브러리 dispatch 비용 +
+H2D/D2H sync 왕복이 절약한 FLOPs 보다 커서 ~3× 느려진(0.28 → 0.156~0.18 step/s)
+문제(hexa-lang #1354 예측)에, **contraction dim `cols`(=gemv 내적 차원, "d") 기준
+d-threshold 게이팅**을 넣었다. 작은 d 면 cuBLAS 우회 → on-device 커널, 큰 d 면 기존
+cuBLAS 유지.
+
+### 무엇을 어디에 바꿨나
+
+- [x] **on-device gemv 커널 추가** — `self/cuda/runtime_cuda_emit.hexa:1226` 부근
+  (`#endif __CUDACC__ kernel bodies` 직전). `_hx_k_packed_gemv_offset` —
+  one-block-per-row 도트곱 + `_hx_block_sum` 블록 reduction(softmax/ce 커널과 동일
+  고정 트리). cuBLAS 라이브러리 dispatch(handle state·heuristic·kernel-select)
+  오버헤드 없이 default stream 위에서 실행. cuBLAS-tiled 가 아닌 블록 reduction
+  순서라 matmul TOL caveat 동일(bit-eq 아님 — 기존 블록 reduction 커널들과 같은 caveat).
+- [x] **host wrapper 게이트 분기** — `_hx_cuda_farr_packed_gemv_offset_gpu`,
+  `self/cuda/runtime_cuda_emit.hexa:1692~1730`. H2D/out-alloc 직후, `cols < min_dim`
+  이면 커널 launch + `cudaDeviceSynchronize` + `_d2h_out` 로 early-return.
+  `_ensure_cublas()` 호출을 함수 머리에서 **cuBLAS 분기 직전으로 이동**(작은-d 경로는
+  cuBLAS handle 불필요).
+
+### threshold 값 / override
+
+- 기본값 **128**(보수적), env **`HEXA_GEMV_CUBLAS_MIN_DIM`** 로 오버라이드
+  (`getenv`+`atol`, `<stdlib.h>` 이미 include). 근거 1줄 주석 코드에 포함(#1354).
+
+### 회귀 가드
+
+- 큰-d(≥128) 경로는 cuBLAS `cublasDgemv` 호출·인자(P_dev/U_dev/O_dev, lda 등) **무변경**.
+- 커널 분기 전체가 `#ifdef __CUDACC__` 안 → nvcc 없이 빌드 시 항상 cuBLAS 폴백(no-CUDA
+  host 무영향).
+- 추론 경로(AKIDA-int4) 무접촉 — 이 함수는 학습 fp64 host-farr gemv 전용.
+- CPU oracle 무변경 → `test/regression/farr_packed_gemv_offset_byte_eq.hexa`
+  (CPU API vs inline scalar, GPU 미경유) 영향 없음.
+
+### 🟠 사유 (g5 — 측정 없음)
+
+코드 수정 + 정적 검증만 수행. `hexa_real parse self/cuda/runtime_cuda_emit.hexa`
+= `OK ... parses cleanly` (syntactic gate PASS). **speedup 실측(GPU 실행) 미수행**
+이므로 🟢/🔵 금지 — verdict 🟠. 실제 d=64 step/s 회복 측정은 후속(M4 측정대 분리).
+
 ## 2026-05-30 — 🟠 M1 churn source localize (static, 미측정)
 
 200~325MB/step host-RSS churn 의 코드 site 를 **정적 추적 + byte-scale 추산**으로

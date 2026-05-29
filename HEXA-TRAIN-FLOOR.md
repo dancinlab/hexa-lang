@@ -30,7 +30,7 @@ hexa-lang #2017(AdamW in-place) + #2018(cuBLAS gemv) 적용 후 → 0.156~0.18 s
 
 ## milestones
 
-- [ ] M1 RSS churn 200~325MB/step source localize — AdamW 外 CUDA/runtime-side 지점 특정
+- [x] M1 RSS churn 200~325MB/step source localize — AdamW 外 CUDA/runtime-side 지점 특정
 - [ ] M2 작은 행렬(d=64) GPU↔CPU sync 오버헤드 제거 — fused/batched dispatch or d-threshold 게이팅
 - [ ] M3 #2017/#2018 회귀 분석 — 왜 3× 느려졌나, cuBLAS gemv를 d-threshold로 조건부 활성
 - [ ] M4 step-rate floor 측정 — roofline 기준 물리 천장 산출 (끝 = 100% 아닌 물리 한계)
