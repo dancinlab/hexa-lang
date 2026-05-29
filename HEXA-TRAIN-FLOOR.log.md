@@ -482,3 +482,35 @@ delta 로 step 마다 로그. 이 한 점이 (a) "freed 됐는데 RSS 안 주는
 trim 부재 확정) byte-scale 가 추산이라 200–325MB 정확 매칭은 M4 측정 전까지
 미확정. 단일 site 단정 대신 "분산 churn × arena 미반환" 결론 — 이 또한 정직한
 localize (plan completion criteria 의 valid 결론).
+
+## 2026-05-30T00:00Z — bf16 천장 돌파 (M6 fp32 → bf16 확장)
+
+`HEXA_TRAIN_DTYPE=bf16` 경로 추가. dtype selector 를 fp64|fp32|bf16 3-way 로
+일반화하고, 학습 hot 커널 `packed_gemv_offset` 에 in-place bf16-MAC 슬라이스를
+추가. bf16 substrate(`self/cuda/runtime_bf16_emit.hexa`, RFC 049)는 이미 같은
+TU 에 `#include "runtime_bf16.c"`(emit L3637)로 링크됨 → `_hx_gemm_ex_bf16`
+(cublasGemmEx · CUDA_R_16BF · CUBLAS_COMPUTE_32F · TENSOR_OP) 재사용 가능.
+
+### 구현 (self/cuda/runtime_cuda_emit.hexa, B9 emitter)
+- `#include <cuda_bf16.h>` 추가 (`__double2bfloat16`/`__bfloat162float`).
+- 3-way selector: `_hx_train_dtype()` → enum HX_TRAIN_DTYPE_{FP64,FP32,BF16}.
+  env `HEXA_TRAIN_DTYPE` ∈ {bf16,bfloat16}=BF16, {fp32,f32,float}=FP32, 그 외/unset=FP64.
+  M6 `_hx_train_dtype_is_fp32()` 는 shim 으로 위임(무회귀). 기본 fp64 유지.
+- bf16 커널 `_hx_k_packed_gemv_offset_bf16`: 연산자 fp64→bf16(RNE) narrow,
+  곱 fp32 widen, **FP32 accumulator**(수렴 안정, GemmEx COMPUTE_32F 규율 동일).
+  storage 는 fp64 유지(host ABI 불변). dispatcher 에 bf16 분기 추가(fp32 앞).
+
+### 실측 (ubu-2 RTX 5070, $0, .verdicts/hexa-train-floor/bf16-lever.txt)
+- (A) in-place bf16-MAC **gemv 커널 = 🔴 NEGATIVE**: bf16/f64 = 0.85–5.67x
+  latency(bf16 더 느림, cols≥128). 이유: per-element bf16 변환 오버헤드 +
+  per-row block-reduction 은 memory-bound + scalar bf16 는 TensorCore(WMMA) 미가동.
+  fp32(M6)가 in-place 최선(f32/f64 0.66–0.94). 정확도 OK(max|rel| ~1.3e-2 @cols≥128).
+- (B) **bf16 TensorCore GemmEx vs fp64 Dgemm = 🟢 24.9x(n=256) → 123x(n=2048)**.
+  진짜 M4 천장 돌파는 square GEMM(cublasGemmEx TENSOR_OP) = RFC 049 `_hx_gemm_ex_bf16`
+  shape. 단 bf16 **storage tile** 필요(fp64-storage gemv wrapper 는 in-place WMMA 불가).
+
+### finding / scope
+bf16 lever 의 실제 거처는 **gemv 가 아니라 TensorCore GemmEx matmul**. gemv 슬라이스는
+selector parity + 완결성 위해 opt-in 으로 랜딩(기본 fp64, NOT recommended 명시).
+잔여(M9+): `matmul_t`/`matmul` 을 bf16 storage + `_hx_gemm_ex_bf16` 로 배선해
+실제 24.9–123x 천장 돌파 흡수. 추론 AKIDA-int4 무손상(별개 경로).
