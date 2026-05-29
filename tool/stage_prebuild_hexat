@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# ─────────────────────────────────────────────────────────────────────────
+# tool/stage_prebuild_hexat — build build/hexat (the self-hosted transpiler)
+# from self/native/hexa_cc.c + runtime.a WHILE the seeds are still present.
+# SHARED by release.yml + nobaseline-gate.yml.
+#
+# ── Why this exists (THE nobaseline gate-fail root cause) ────────────────────
+# `hexa cc --regen` (used by stage_regen_hexa_cc to recreate a removed
+# hexa_cc.c) transpiles the 4 SSOT modules by driving a `build/hexat` binary.
+# When build/hexat is absent it tries to BOOTSTRAP one via cmd_cc, which
+# clang-compiles self/runtime.c → runtime.o then self/native/hexa_cc.c +
+# runtime.o → build/hexat.
+#
+# In the nobaseline gate, ALL 23 seeds (including self/runtime.c AND
+# self/native/hexa_cc.c) are removed BEFORE Stage 0a regen, so that bootstrap
+# clang fails ("no such file: ./self/runtime.c") → build/hexat never appears →
+# `hexa cc --regen` reports "hexat not found" → FATAL. (The edge `hexa` asset
+# is the stale 0.1.0-dispatch release whose in-process 2-arg transpile only
+# emits a stub, so it cannot self-serve as the transpiler either.)
+#
+# final3 succeeds at the SAME `hexa cc --regen` purely by accident of ordering:
+# its section C runs the emitter while runtime.c + hexa_cc.c are still present,
+# which bootstraps build/hexat; section A then reuses that binary after removal.
+#
+# This script makes that ordering EXPLICIT and shared: build build/hexat from
+# the seeds up-front (Stage 0b time, seeds present), so the later removal +
+# `hexa cc --regen` finds a ready transpiler and reuses it (no re-bootstrap).
+#
+# Verified (ubu-1, linux-x86_64): prebuild hexat → remove all 23 seeds →
+# `hexa cc --regen` → 948326-byte hexa_cc.c.new, rc=0.
+#
+# Env contract (caller sets, same as Stage 0b):
+#   CC                    — C compiler (clang|gcc)
+#   LIBS                  — link libs ("" | "-lm -ldl")
+#   CFLAGS_COMMON         — (optional) base CFLAGS
+#   HEXA_PREBUILT_RUNTIME — prebuilt runtime.a (Stage 0b output)
+#
+# No-op-safe for release: release never removes seeds, so a prebuilt build/hexat
+# is simply a ready transpiler (does not change any emitted bytes).
+# ─────────────────────────────────────────────────────────────────────────
+set -euo pipefail
+: "${CC:?CC must be set}"
+LIBS="${LIBS:-}"
+CFLAGS="${CFLAGS_COMMON:--O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs}"
+# -fbracket-depth is clang-only (deeply-nested generated C); gcc rejects it.
+case "$CC" in *clang*) CFLAGS="$CFLAGS -fbracket-depth=4096";; esac
+
+ROOT="$PWD"
+RA="${HEXA_PREBUILT_RUNTIME:-$ROOT/build/runtime.a}"
+HEXAT="$ROOT/build/hexat"
+CC_SRC="$ROOT/self/native/hexa_cc.c"
+mkdir -p build
+
+if [ -x "$HEXAT" ]; then
+  echo "[stage_prebuild_hexat] build/hexat already present — no-op"
+  exit 0
+fi
+
+if [ ! -f "$CC_SRC" ]; then
+  # hexa_cc.c already removed (e.g. post-PR2 with no seeds at all in tree) —
+  # nothing to build from here; stage_regen_hexa_cc handles the regen path.
+  echo "[stage_prebuild_hexat] self/native/hexa_cc.c absent — skip (regen owns it)"
+  exit 0
+fi
+if [ ! -f "$RA" ]; then
+  echo "[stage_prebuild_hexat] FATAL: runtime.a missing at $RA (run Stage 0b first)" >&2
+  exit 1
+fi
+
+echo "[stage_prebuild_hexat] building build/hexat from hexa_cc.c + runtime.a"
+$CC $CFLAGS -I "$ROOT" -I "$ROOT/self" "$CC_SRC" "$RA" -o "$HEXAT" $LIBS
+test -x "$HEXAT"
+echo "[stage_prebuild_hexat] build/hexat = $(wc -c < "$HEXAT") bytes"

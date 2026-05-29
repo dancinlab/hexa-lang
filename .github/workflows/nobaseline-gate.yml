@@ -71,6 +71,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: bash tool/stage_resolve_runtime_a
 
+      # Stage 0a-pre — prebuild build/hexat from hexa_cc.c + runtime.a WHILE seeds
+      # are present, so the later `hexa cc --regen` (Stage 0a, after the seeds
+      # are removed) REUSES it instead of re-bootstrapping build/hexat from the
+      # now-deleted self/runtime.c + hexa_cc.c (THE nobaseline gate-fail).
+      - name: Stage 0a-pre — prebuild build/hexat (shared tool/stage_prebuild_hexat)
+        shell: bash
+        env:
+          CC: clang
+          LIBS: ""
+          HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
+        run: bash tool/stage_prebuild_hexat
+
       - name: Dry-run — TEMP-remove ALL 23 seeds (working copy only, NOT committed)
         shell: bash
         run: |
@@ -148,6 +160,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: bash tool/stage_resolve_runtime_a
 
+      # Stage 0a-pre — prebuild build/hexat from hexa_cc.c + runtime.a WHILE seeds
+      # are present, so the later `hexa cc --regen` (Stage 0a, after the seeds
+      # are removed) REUSES it instead of re-bootstrapping build/hexat from the
+      # now-deleted self/runtime.c + hexa_cc.c (THE nobaseline gate-fail).
+      - name: Stage 0a-pre — prebuild build/hexat (shared tool/stage_prebuild_hexat)
+        shell: bash
+        env:
+          CC: gcc
+          LIBS: "-lm -ldl"
+          HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
+        run: bash tool/stage_prebuild_hexat
+
       - name: Dry-run — TEMP-remove ALL 23 seeds (working copy only, NOT committed)
         shell: bash
         run: |
@@ -203,6 +227,18 @@ jobs:
           EDGE_ASSET: hexa-linux-arm64.tar.gz
           GH_TOKEN: ${{ github.token }}
         run: bash tool/stage_resolve_runtime_a
+
+      # Stage 0a-pre — prebuild build/hexat from hexa_cc.c + runtime.a WHILE seeds
+      # are present, so the later `hexa cc --regen` (Stage 0a, after the seeds
+      # are removed) REUSES it instead of re-bootstrapping build/hexat from the
+      # now-deleted self/runtime.c + hexa_cc.c (THE nobaseline gate-fail).
+      - name: Stage 0a-pre — prebuild build/hexat (shared tool/stage_prebuild_hexat)
+        shell: bash
+        env:
+          CC: gcc
+          LIBS: "-lm -ldl"
+          HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
+        run: bash tool/stage_prebuild_hexat
 
       - name: Dry-run — TEMP-remove ALL 23 seeds (working copy only, NOT committed)
         shell: bash
