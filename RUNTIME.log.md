@@ -169,7 +169,7 @@ net-new + JSON/net flip) · #1454 (Phase 3 GPU/pty policy flip) — 본 next-lis
 - [ ] **section extraction** FARR/safetensors/socket 등 (자매 .c file 로 split, -1000 line/section)
 - [ ] **Linux self-host arch-gate** 잔여 17 fn (read/write/open/close/mkdir/...) — RUNTIME.log 2026-05-25T13:30Z 패턴 반복
 - [ ] **runtime.c → hexa-source 포팅** (step 2-4 of north-star path)
-- [ ] **runtime.c=0 literal goal** — multi-session multi-month grunt (현재 -2.48% · 잔여 13,489 lines)
+- [ ] **runtime hexa-native frontier** — multi-session phase-H lane (repr/arena/GC self-emit)
 
 ## 2026-05-25T13:30Z — Linux self-host arch-gate sweep (부분 진척 · 17 fn 잔여)
 
