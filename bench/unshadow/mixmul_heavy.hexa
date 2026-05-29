@@ -1,0 +1,23 @@
+// UNSHADOW A/B workload — 정수 곱·가산·모듈러 믹싱 루프 (LCG류). 자족형.
+// hash/collatz 와 같은 op-mix(mul·add·mod) · 함수콜 없는 단일 hot loop.
+fn mix(rounds: int) -> int {
+    let s = 12345
+    let i = 0
+    while i < rounds {
+        s = s * 1103515245
+        s = s + 12345
+        s = s % 2147483647
+        if s < 0 { s = 0 - s }
+        i = i + 1
+    }
+    s
+}
+
+let iterations = 200000
+let result = 0
+let i = 0
+while i < iterations {
+    result = result + mix(1000)
+    i = i + 1
+}
+println(result)
