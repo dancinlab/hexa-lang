@@ -169,3 +169,50 @@ pub fn gen_prototypes(domain: string) -> [string] {
 pub fn deck_push(files: [DeckFile], path: string, content: string) {
     files.push(DeckFile { path: path, content: content })
 }
+
+// ── disk preflight (improvement 4 — /deck estimate disk-headroom line) ──
+//
+// A DFT phonon (ph.x el-ph) run writes per-q `_ph0` scratch (5-18 GB / q-point
+// on a 10-atom metallic; 2026-05-30 lesson). The /deck preflight estimate must
+// surface a DISK-headroom line so a deck is not dispatched to a pod that fills
+// its disk mid-run (the disk-full crash this bundle prevents). Required scratch
+// ≈ q_points × scratch_gb_per_q; warn when a target pod's free disk < that.
+//
+// d4-generic — closed-form, no per-deck name hardcoding; pure (no syscall), so
+// the CLI / skill feeds (q_points, scratch_gb_per_q, free_disk_gb) it scraped.
+
+// deck_disk_required_gb — closed-form scratch headroom a ph.x el-ph deck needs.
+// required ≈ q_points × scratch_gb_per_q (non-negative; clamps junk to 0).
+pub fn deck_disk_required_gb(q_points: int, scratch_gb_per_q: int) -> int {
+    if q_points <= 0 { return 0 }
+    if scratch_gb_per_q <= 0 { return 0 }
+    return q_points * scratch_gb_per_q
+}
+
+// deck_disk_fits — does a target pod's free disk cover the required scratch?
+// free_disk_gb < required → false (the caller WARNs). required == 0 (unknown
+// q / scratch) → true (nothing to gate on — never a false alarm).
+pub fn deck_disk_fits(q_points: int, scratch_gb_per_q: int, free_disk_gb: int) -> bool {
+    let required = deck_disk_required_gb(q_points, scratch_gb_per_q)
+    if required <= 0 { return true }
+    return free_disk_gb >= required
+}
+
+// deck_disk_preflight_line — the one-line disk-headroom string the /deck
+// estimate appends after emit. Includes the required figure and, when a
+// free_disk_gb is supplied (> 0) and is short, an explicit ⚠ WARN with the
+// shortfall. free_disk_gb ≤ 0 → "unknown free disk" (informational only).
+pub fn deck_disk_preflight_line(q_points: int, scratch_gb_per_q: int, free_disk_gb: int) -> string {
+    let required = deck_disk_required_gb(q_points, scratch_gb_per_q)
+    let mut s = "disk preflight: required ≈ " + str(q_points) + " q × " + str(scratch_gb_per_q)
+        + " GB/q = " + str(required) + " GB scratch"
+    if free_disk_gb <= 0 {
+        return s + " (target free disk unknown — measure `df -BG <scratch>` before dispatch)"
+    }
+    s = s + " · target free disk = " + str(free_disk_gb) + " GB"
+    if free_disk_gb < required {
+        let short = required - free_disk_gb
+        return s + " — ⚠ WARN: short " + str(short) + " GB; ph.x _ph0 scratch will disk-full mid-run (pick a bigger-disk pod or split q)"
+    }
+    return s + " — OK (fits)"
+}

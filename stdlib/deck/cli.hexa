@@ -16,6 +16,9 @@
 //                                  domain with no prototype registry prints a
 //                                  clear "no prototype registry" note.
 //   deck domains                 — list the known deck domains (gen_deck keys).
+//   deck disk-estimate <q> <gb-per-q> [free-gb]
+//                                — disk-headroom preflight line (improvement 4):
+//                                  required ≈ q × gb-per-q; ⚠ WARN if free < that.
 //   deck help                    — usage.
 //
 // Run:  hexa run stdlib/deck/cli.hexa prototypes rtsc
@@ -39,11 +42,28 @@ fn _print_list(title: str, xs: [str]) {
     }
 }
 
+// _atoi — minimal dec-string → int for the disk-estimate args (small non-neg
+// integers). Non-digit / empty → 0. (cli args arrive as strings.)
+fn _atoi(s: str) -> int {
+    if len(s) == 0 { return 0 }
+    let mut n = 0
+    let mut i = 0
+    while i < len(s) {
+        let d = ord(s.substring(i, i+1)) - 48
+        if d < 0 { return 0 }
+        if d > 9 { return 0 }
+        n = n * 10 + d
+        i = i + 1
+    }
+    return n
+}
+
 fn _usage() {
     println("deck — generic 6-domain deck generator (coverage surface)")
-    println("  deck prototypes [<domain>]   list known prototypes for <domain> (default rtsc)")
-    println("  deck domains                 list known deck domains")
-    println("  deck help                    this message")
+    println("  deck prototypes [<domain>]            list known prototypes for <domain> (default rtsc)")
+    println("  deck domains                          list known deck domains")
+    println("  deck disk-estimate <q> <gb-per-q> [free-gb]  disk-headroom preflight line (⚠ if free<required)")
+    println("  deck help                             this message")
 }
 
 fn main() {
@@ -61,6 +81,17 @@ fn main() {
     }
     if sub == "domains" {
         _print_list("deck domains:", gen_domains())
+        return
+    }
+    if sub == "disk-estimate" {
+        if len(av) < 4 {
+            println("deck disk-estimate: need <q-points> <gb-per-q> [free-gb]")
+            return
+        }
+        let q = _atoi(av[2])
+        let gbq = _atoi(av[3])
+        let free = if len(av) >= 5 { _atoi(av[4]) } else { 0 }
+        println(deck_disk_preflight_line(q, gbq, free))
         return
     }
     if sub == "help" || sub == "--help" || sub == "-h" {
