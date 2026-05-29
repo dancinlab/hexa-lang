@@ -1,0 +1,89 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+// stdlib/cloud/vast_key_source_test.hexa — guards the vast.ai key SOURCING /
+// SYNC wiring (handoff 5bb23201).
+//
+// THE BUG: the vastai CLI authenticates from its OWN config file
+// (~/.config/vastai/vast_api_key). hexa cloud never wrote that file, so when
+// the key rotated, vastai read the STALE file → HTTP 401 "Invalid user key",
+// blocking `rent` + `cloud list` — even though the LIVE key was present in the
+// sidecar secret store. The fix sources the key with `secret get vast.api_key`
+// PRIMARY + the ~/.secrets/vastai_api_key FILE as fallback, and SYNCs the live
+// value into the vastai config file so a stale file can never 401.
+//
+// The two decisions are pure and mirrored here byte-for-byte from vast.hexa:
+//   (1) _vast_api_key resolution ORDER: env → secret store → legacy file
+//   (2) _vast_key_sync WRITE decision: write iff (live key present) AND
+//       (current file content != live key); else no-op.
+// The live `secret get` + file IO are exercised in the binary path; here we
+// pin the order + the write/no-op logic.
+//
+// Run:   hexa run stdlib/cloud/vast_key_source_test.hexa
+// PASS:  exits 0, prints "vast_key_source_test PASS".
+
+// ── mirror of _vast_api_key resolution order (env > secret > file) ─────────
+// Simulated by the three candidate strings the real fn probes in order; the
+// first non-empty wins. "" means that source was absent.
+fn _resolve_key(env_key: str, secret_key: str, file_key: str) -> str {
+    if len(env_key) > 0 {
+        return env_key
+    }
+    if len(secret_key) > 0 {
+        return secret_key
+    }
+    if len(file_key) > 0 {
+        return file_key
+    }
+    return ""
+}
+
+// ── mirror of _vast_key_sync WRITE decision ────────────────────────────────
+// returns "write" when a live key exists and the config file differs; else
+// "noop". (The real fn also throttles via a /tmp marker — orthogonal to the
+// write decision, exercised in the binary path.)
+fn _sync_decision(live_key: str, current_cfg: str) -> str {
+    if len(live_key) == 0 {
+        return "noop"
+    }
+    if current_cfg == live_key {
+        return "noop"
+    }
+    return "write"
+}
+
+fn _ck_str(name: str, got: str, want: str) {
+    if got != want {
+        println("  FAIL: " + name + " got '" + got + "' want '" + want + "'")
+        exit(1)
+    }
+    println("  ok: " + name)
+}
+
+fn main() {
+    // ── resolution order: secret store is PRIMARY over the legacy file ─────
+    // The whole point of the fix: a STALE legacy file must NOT win when a live
+    // secret exists.
+    _ck_str("live secret wins over stale file",
+        _resolve_key("", "LIVE_SECRET", "STALE_FILE"), "LIVE_SECRET")
+    _ck_str("env override wins over everything",
+        _resolve_key("ENV_KEY", "LIVE_SECRET", "STALE_FILE"), "ENV_KEY")
+    _ck_str("legacy file used only as fallback (no secret)",
+        _resolve_key("", "", "FILE_KEY"), "FILE_KEY")
+    _ck_str("nothing resolves → empty",
+        _resolve_key("", "", ""), "")
+
+    // ── sync write decision ────────────────────────────────────────────────
+    // stale config file vs live secret → WRITE (this is the 401 fix).
+    _ck_str("stale config != live secret → write",
+        _sync_decision("LIVE_SECRET", "STALE_FILE"), "write")
+    // already in sync → no-op (cheap steady state).
+    _ck_str("config already == live secret → noop",
+        _sync_decision("LIVE_SECRET", "LIVE_SECRET"), "noop")
+    // empty config file, live secret present → write.
+    _ck_str("empty config + live secret → write",
+        _sync_decision("LIVE_SECRET", ""), "write")
+    // no live key → never write (don't clobber the file with empty).
+    _ck_str("no live key → noop (never clobber)",
+        _sync_decision("", "EXISTING_FILE"), "noop")
+
+    println("vast_key_source_test PASS")
+}
