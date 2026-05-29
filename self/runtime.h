@@ -1526,4 +1526,61 @@ HexaVal hexa_map_count(HexaVal m, HexaVal pred);        /* runtime_core.c:2866 *
 HexaVal hexa_str_concat(HexaVal a, HexaVal b);          /* runtime_core.c:4321 */
 int     hexa_str_eq(HexaVal a, HexaVal b);              /* runtime_core.c:4446 */
 
+
+/* ── HEXA-TRAIN-FLOOR M4 · host-RSS retention trace (env opt-in) ──────────
+ * Instrument for the M1 finding (HEXA-TRAIN-FLOOR.log.md): the 200-325MB/step
+ * host-RSS churn looks like glibc main-arena RETENTION (freed chunks not
+ * returned to the OS), not a true leak. This probe measures, per free, the
+ * arena footprint BEFORE vs AFTER an explicit malloc_trim(0) -- the delta is
+ * exactly the "freed-but-not-returned" headroom that malloc_trim reclaims.
+ *
+ * SEPARATION FROM M3 (CRITICAL -- no line overlap): the M3 agent is wiring a
+ * malloc_trim() call directly into the hexa_farr_free BODY (self/runtime.c).
+ * This helper lives in the HEADER (a different file) and is OFF by default; it
+ * only does work when HEXA_RSS_TRACE is set. The runtime.c body invokes it via
+ * the single call below -- placed so it composes with, but never edits the
+ * same line as, M3's trim wiring.
+ *
+ * GLIBC-ONLY: mallinfo2()/malloc_trim() are glibc (Linux). On macOS / musl the
+ * helper compiles to a no-op stub (#else), so the inference probe (AKIDA-int4)
+ * and every non-Linux build are byte-unaffected.
+ *
+ * WIRING (one line, for the next edge-runtime.c regen -- self/runtime.c is a
+ * #2065 graduated build asset, gitignored, no committable emitter):
+ *     HexaVal hexa_farr_free(HexaVal h_v) {
+ *         ...
+ *         if (e->buf) { free(e->buf); e->buf = NULL; e->len = 0; }
+ *         hexa_rss_trace_on_free();   // <-- add this one line (M4 hook)
+ *         ...
+ *     }
+ * Enable with HEXA_RSS_TRACE=1; unset = zero overhead (one branch). Output is
+ * one stderr line per free:
+ *   [rss-trace] step-free N: uordblks=A hblkhd=B trimmed=D (bytes)
+ */
+#if defined(__GLIBC__)
+#include <malloc.h>   /* mallinfo2, malloc_trim -- glibc only */
+static inline void hexa_rss_trace_on_free(void) {
+    static int     _hx_rss_trace_on  = -1;   /* -1=unprobed 0=off 1=on */
+    static long long _hx_rss_free_seq = 0;
+    if (_hx_rss_trace_on < 0) {
+        const char* e = getenv("HEXA_RSS_TRACE");
+        _hx_rss_trace_on = (e && e[0] && e[0] != '0') ? 1 : 0;
+    }
+    if (!_hx_rss_trace_on) return;
+    struct mallinfo2 before = mallinfo2();
+    /* Reclaim freed arena headroom to the OS, then measure the shrink --
+     * that delta is the retention M1 hypothesised. */
+    malloc_trim(0);
+    struct mallinfo2 after = mallinfo2();
+    long long trimmed = (long long)before.uordblks - (long long)after.uordblks
+                      + (long long)before.hblkhd  - (long long)after.hblkhd;
+    fprintf(stderr,
+        "[rss-trace] step-free %lld: uordblks=%zu hblkhd=%zu trimmed=%lld\n",
+        (long long)(++_hx_rss_free_seq),
+        after.uordblks, after.hblkhd, trimmed);
+}
+#else
+static inline void hexa_rss_trace_on_free(void) { /* non-glibc: no-op */ }
+#endif /* __GLIBC__ */
+
 #endif /* HEXA_RUNTIME_H */
