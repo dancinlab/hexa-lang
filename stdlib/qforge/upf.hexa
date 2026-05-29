@@ -1,0 +1,226 @@
+// HEXA Standard Library — qforge/upf
+//
+// @version 0.1.0
+// @capabilities [parse, fs]
+//
+// QFORGE L5 brick 2/5 — UPF v2 norm-conserving pseudopotential PARSER.
+//
+// Reads a Quantum-ESPRESSO UPF v2 (.UPF) file and extracts the data a
+// plane-wave SCF kernel needs to build the ionic potential:
+//
+//   header   — element, Z_valence, mesh_size, NC/US/PAW flags, l_max,
+//              number_of_proj  (from the single-line <PP_HEADER .../> attrs)
+//   radial   — r[] (PP_R), rab[] (PP_RAB)             — the log mesh + dr/di
+//   V_loc    — vloc[] (PP_LOCAL, Rydberg)             — local ionic potential
+//   beta     — projector lengths (PP_BETA.i)          — non-local projectors
+//   D_ij     — dij[] (PP_DIJ, flat nproj*nproj, Ry)   — projector couplings
+//   rho      — rho[] (PP_RHOATOM)                     — atomic charge 4*pi*r^2*rho(r)
+//
+// SCOPE (honest, deferred): NORM-CONSERVING only. Ultrasoft (US) and PAW
+// pseudopotentials carry augmentation charges (PP_AUGMENTATION / PP_Q) that a
+// NC plane-wave path cannot consume; this parser DETECTS the is_ultrasoft /
+// is_paw header flags and returns a clean `unsupported` error instead of
+// silently mis-reading them. US/PAW support is a later brick.
+//
+// This is a PARSER (parser/integrity tier), not a closed-form physics
+// derivation: the g5 gate checks the extracted values against the file's own
+// declared header attributes plus four numeric INTEGRITY invariants that hold
+// for any physical NC UPF (mesh monotonicity, charge normalisation, Coulomb
+// tail of V_loc, projector array lengths). See upf_selftest.hexa.
+//
+//   pub fn upf_parse(path: str) -> Upf
+//
+// d3/d4 (one canonical home, generic dispatch): the parser is element- and
+// material-agnostic — it branches only on the UPF header flags, never on a
+// hardcoded element name. A new pseudopotential is data (a file), not code.
+
+// --- parsed-record structs ---------------------------------------------
+pub struct UpfHeader {
+    element: str,
+    pseudo_type: str,        // "NC" | "USPP" | "PAW" | "SL" | ...
+    is_ultrasoft: bool,
+    is_paw: bool,
+    z_valence: float,
+    mesh_size: int,
+    l_max: int,
+    number_of_proj: int
+}
+
+pub struct Upf {
+    ok: bool,                // parse + scope check succeeded
+    error: str,              // "" on success; else a human-readable reason
+    header: UpfHeader,
+    r: [float],              // PP_R    — radial mesh (bohr)
+    rab: [float],            // PP_RAB  — dr/di integration weights
+    vloc: [float],           // PP_LOCAL — local potential (Rydberg)
+    rho: [float],            // PP_RHOATOM — atomic charge 4*pi*r^2*rho(r)
+    dij: [float],            // PP_DIJ  — flat nproj*nproj couplings (Ry)
+    beta_lengths: [int]      // per-projector PP_BETA.i sample count
+}
+
+// --- primitive string helpers ------------------------------------------
+
+// Extract the value of attribute `key` from an XML-ish tag line of the form
+//   ... key="value" ...
+// Returns "" when the key is absent. Tolerant of surrounding whitespace.
+fn _upf_attr(line: str, key: str) -> str {
+    let q = chr_dquote()
+    let needle = key + "=" + q
+    let k = line.index_of(needle)
+    if k < 0 { return "" }
+    let start = k + len(needle)
+    let rest = line.substring(start, len(line))
+    let e = rest.index_of(q)
+    if e < 0 { return "" }
+    return rest.substring(0, e)
+}
+
+// The ASCII double-quote character, built without embedding a literal " in a
+// way the parser/codegen might mishandle (chr(34) = ").
+fn chr_dquote() -> str {
+    return chr(34)
+}
+
+// Whitespace tokeniser (space/tab/newline/CR). Skips empties.
+fn _upf_split_ws(s: str) -> [str] {
+    let mut out: [str] = []
+    let mut cur = ""
+    let mut i = 0
+    let n = len(s)
+    while i < n {
+        let ch = s.substring(i, i + 1)
+        let is_sp = ch == " " || ch == "\t" || ch == "\n" || ch == "\r"
+        if is_sp {
+            if cur != "" { out = out.push(cur) }
+            cur = ""
+        } else {
+            cur = cur + ch
+        }
+        i = i + 1
+    }
+    if cur != "" { out = out.push(cur) }
+    return out
+}
+
+// Extract the numeric payload between an opening tag whose name starts with
+// `open` (e.g. "<PP_R" — matches both "<PP_R>" and "<PP_LOCAL columns=...>")
+// and its matching close tag "</closebase". Parses all whitespace-separated
+// floats in between. Returns [] when the tag is absent.
+fn _upf_block_floats(text: str, open_tag: str, close_base: str) -> [float] {
+    let mut out: [float] = []
+    let o = text.index_of(open_tag)
+    if o < 0 { return out }
+    // advance to the end of the opening tag (the next '>')
+    let after_open = text.substring(o, len(text))
+    let gt = after_open.index_of(">")
+    if gt < 0 { return out }
+    let body_start = o + gt + 1
+    let close = "</" + close_base
+    let body_rest = text.substring(body_start, len(text))
+    let c = body_rest.index_of(close)
+    if c < 0 { return out }
+    let body = body_rest.substring(0, c)
+    let toks = _upf_split_ws(body)
+    let nt = len(toks)
+    let mut i = 0
+    while i < nt {
+        out = out.push(to_float(toks[i]))
+        i = i + 1
+    }
+    return out
+}
+
+// Count how many PP_BETA.i blocks exist and record each one's sample length.
+fn _upf_beta_lengths(text: str, nproj: int) -> [int] {
+    let mut out: [int] = []
+    let mut i = 1
+    while i <= nproj {
+        let open = "<PP_BETA." + to_string(i)
+        let vals = _upf_block_floats(text, open, "PP_BETA." + to_string(i))
+        out = out.push(len(vals))
+        i = i + 1
+    }
+    return out
+}
+
+fn _upf_truthy(v: str) -> bool {
+    return v == "true" || v == "T" || v == ".true." || v == ".TRUE." || v == "1"
+}
+
+// --- public parser entry ------------------------------------------------
+pub fn upf_parse(path: str) -> Upf {
+    let bad_header = UpfHeader {
+        element: "", pseudo_type: "", is_ultrasoft: false, is_paw: false,
+        z_valence: 0.0, mesh_size: 0, l_max: 0, number_of_proj: 0
+    }
+    let mut empty_r: [float] = []
+    let mut empty_rab: [float] = []
+    let mut empty_vloc: [float] = []
+    let mut empty_rho: [float] = []
+    let mut empty_dij: [float] = []
+    let mut empty_beta: [int] = []
+
+    let text = read_file(path)
+    if len(text) == 0 {
+        return Upf { ok: false, error: "cannot read or empty file: " + path,
+            header: bad_header, r: empty_r, rab: empty_rab, vloc: empty_vloc,
+            rho: empty_rho, dij: empty_dij, beta_lengths: empty_beta }
+    }
+
+    // locate the single-line <PP_HEADER ... /> element
+    let h = text.index_of("<PP_HEADER")
+    if h < 0 {
+        return Upf { ok: false, error: "malformed UPF: no PP_HEADER element",
+            header: bad_header, r: empty_r, rab: empty_rab, vloc: empty_vloc,
+            rho: empty_rho, dij: empty_dij, beta_lengths: empty_beta }
+    }
+    let after_h = text.substring(h, len(text))
+    let hclose = after_h.index_of(">")
+    if hclose < 0 {
+        return Upf { ok: false, error: "malformed UPF: unterminated PP_HEADER",
+            header: bad_header, r: empty_r, rab: empty_rab, vloc: empty_vloc,
+            rho: empty_rho, dij: empty_dij, beta_lengths: empty_beta }
+    }
+    let hline = after_h.substring(0, hclose + 1)
+
+    let element = _upf_attr(hline, "element").trim()
+    let pseudo_type = _upf_attr(hline, "pseudo_type").trim()
+    let is_us = _upf_truthy(_upf_attr(hline, "is_ultrasoft").trim())
+    let is_paw = _upf_truthy(_upf_attr(hline, "is_paw").trim())
+    let z_valence = to_float(_upf_attr(hline, "z_valence").trim())
+    let mesh_size = to_int(to_float(_upf_attr(hline, "mesh_size").trim()))
+    let l_max = to_int(to_float(_upf_attr(hline, "l_max").trim()))
+    let nproj = to_int(to_float(_upf_attr(hline, "number_of_proj").trim()))
+
+    let header = UpfHeader {
+        element: element, pseudo_type: pseudo_type,
+        is_ultrasoft: is_us, is_paw: is_paw, z_valence: z_valence,
+        mesh_size: mesh_size, l_max: l_max, number_of_proj: nproj
+    }
+
+    // SCOPE GUARD — US/PAW carry augmentation charge a NC path cannot consume.
+    if is_us {
+        return Upf { ok: false,
+            error: "unsupported: ultrasoft pseudopotential (NC-only parser; US augmentation deferred)",
+            header: header, r: empty_r, rab: empty_rab, vloc: empty_vloc,
+            rho: empty_rho, dij: empty_dij, beta_lengths: empty_beta }
+    }
+    if is_paw {
+        return Upf { ok: false,
+            error: "unsupported: PAW dataset (NC-only parser; PAW reconstruction deferred)",
+            header: header, r: empty_r, rab: empty_rab, vloc: empty_vloc,
+            rho: empty_rho, dij: empty_dij, beta_lengths: empty_beta }
+    }
+
+    // body blocks
+    let r = _upf_block_floats(text, "<PP_R", "PP_R")
+    let rab = _upf_block_floats(text, "<PP_RAB", "PP_RAB")
+    let vloc = _upf_block_floats(text, "<PP_LOCAL", "PP_LOCAL")
+    let rho = _upf_block_floats(text, "<PP_RHOATOM", "PP_RHOATOM")
+    let dij = _upf_block_floats(text, "<PP_DIJ", "PP_DIJ")
+    let beta_lengths = _upf_beta_lengths(text, nproj)
+
+    return Upf { ok: true, error: "", header: header,
+        r: r, rab: rab, vloc: vloc, rho: rho, dij: dij,
+        beta_lengths: beta_lengths }
+}

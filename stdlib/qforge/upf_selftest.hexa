@@ -1,0 +1,174 @@
+// @ci_gate — deterministic · reads a checked-in real NC UPF fixture
+//
+// qforge_l5_upf_selftest.hexa — QFORGE L5 brick 2/5 g5 gate.
+//
+// Closes the UPF v2 norm-conserving PARSER gate by parsing a REAL pseudo-
+// potential file (Si.pz-vbc.UPF, Von Barth-Car NC, fetched from the official
+// Quantum-ESPRESSO pseudopotential server — pseudopotentials.quantum-
+// espresso.org/upf_files/Si.pz-vbc.UPF) and asserting:
+//
+//   HEADER (vs the file's own declared <PP_HEADER .../> attributes):
+//     element = "Si" · pseudo_type = "NC" · is_ultrasoft = false ·
+//     is_paw = false · z_valence = 4.0 · mesh_size = 431 · l_max = 1 ·
+//     number_of_proj = 2
+//
+//   INTEGRITY (numeric invariants that hold for ANY physical NC UPF):
+//     (a) mesh strictly monotone increasing (r[i+1] > r[i])
+//     (b) charge normalisation  INT rho(r) dr ~= Z_valence   (rel-eps).
+//         QE's PP_RHOATOM stores 4*pi*r^2*rho(r), so the radial integral with
+//         the PP_RAB weights INT (4 pi r^2 rho) (dr/di) di -> Z_val = 4.
+//     (c) V_loc Coulomb tail  V_loc(r->inf) -> -2 Z_val / r  (Rydberg units,
+//         e^2 = 2). Checked at the outermost mesh point (rel-eps).
+//     (d) projector array lengths: every PP_BETA.i has mesh_size samples,
+//         and PP_DIJ has number_of_proj^2 entries.
+//
+//   SCOPE GUARDS (honest deferred scope):
+//     - an ULTRASOFT file (H.pbe-rrkjus_psl.1.0.0.UPF from the RTSC pods) is
+//       parsed -> ok = false, error mentions "ultrasoft" (US augmentation
+//       deferred), not silently mis-read.
+//     - a MALFORMED file (no PP_HEADER) -> ok = false, error mentions
+//       "malformed".
+//
+// This is a PARSER/INTEGRITY gate (not a closed-form physics derivation): the
+// anchors are the file's own declared attributes + universal NC invariants.
+//
+// Run:  (manual link against repo runtime — installed hexa self-path is stale)
+//   ./build/hexa_v2 stdlib/qforge/upf_selftest.hexa /tmp/uf.c &&
+//   clang -O2 -I build/self /tmp/uf.c build/self/runtime.c -o /tmp/uf -lm -lpthread && /tmp/uf
+// PASS: exits printing "qforge_l5_upf_selftest PASS".
+use "stdlib/qforge/upf"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn _ck_str(name: str, got: str, want: str) -> int {
+    if got == want {
+        println("PASS " + name + " (" + got + ")")
+        return 0
+    }
+    println("FAIL " + name + " — got '" + got + "' want '" + want + "'")
+    return 1
+}
+
+fn _ck_int(name: str, got: int, want: int) -> int {
+    if got == want {
+        println("PASS " + name + " (" + to_string(got) + ")")
+        return 0
+    }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want))
+    return 1
+}
+
+fn _ck_bool(name: str, got: bool, want: bool) -> int {
+    if got == want {
+        println("PASS " + name + " (" + to_string(got) + ")")
+        return 0
+    }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want))
+    return 1
+}
+
+fn _ck_rel(name: str, got: float, want: float, tol: float) -> int {
+    let w = _abs(want)
+    let d = _abs(got - want)
+    let rel = if w < 1e-12 { d } else { d / w }
+    if rel <= tol {
+        println("PASS " + name + " (got " + to_string(got) + ", rel " + to_string(rel) + ")")
+        return 0
+    }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want) + " rel " + to_string(rel))
+    return 1
+}
+
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond {
+        println("PASS " + name)
+        return 0
+    }
+    println("FAIL " + name)
+    return 1
+}
+
+fn main() {
+    let mut fails = 0
+    let nc_path = "stdlib/qforge/fixtures/Si.pz-vbc.UPF"
+    let us_path = "stdlib/qforge/fixtures/H.pbe-rrkjus_psl.1.0.0.UPF"
+    let bad_path = "stdlib/qforge/fixtures/malformed.UPF"
+
+    // ── g5 GATE: real NC UPF parse ─────────────────────────────────────
+    let pp = upf_parse(nc_path)
+    fails = fails + _ck_true("NC parse ok", pp.ok)
+
+    // HEADER vs the file's own declared <PP_HEADER> attributes
+    fails = fails + _ck_str("header.element", pp.header.element, "Si")
+    fails = fails + _ck_str("header.pseudo_type", pp.header.pseudo_type, "NC")
+    fails = fails + _ck_bool("header.is_ultrasoft", pp.header.is_ultrasoft, false)
+    fails = fails + _ck_bool("header.is_paw", pp.header.is_paw, false)
+    fails = fails + _ck_rel("header.z_valence", pp.header.z_valence, 4.0, 1e-12)
+    fails = fails + _ck_int("header.mesh_size", pp.header.mesh_size, 431)
+    fails = fails + _ck_int("header.l_max", pp.header.l_max, 1)
+    fails = fails + _ck_int("header.number_of_proj", pp.header.number_of_proj, 2)
+
+    let m = pp.header.mesh_size
+    let z = pp.header.z_valence
+
+    // body arrays present at declared mesh size
+    fails = fails + _ck_int("len(r)=mesh", len(pp.r), m)
+    fails = fails + _ck_int("len(rab)=mesh", len(pp.rab), m)
+    fails = fails + _ck_int("len(vloc)=mesh", len(pp.vloc), m)
+    fails = fails + _ck_int("len(rho)=mesh", len(pp.rho), m)
+
+    // (a) mesh strictly monotone increasing
+    let mut mono = true
+    let mut i = 0
+    while i + 1 < len(pp.r) {
+        if pp.r[i + 1] <= pp.r[i] { mono = false }
+        i = i + 1
+    }
+    fails = fails + _ck_true("(a) mesh monotone increasing", mono)
+
+    // (b) charge normalisation  INT (4 pi r^2 rho) (dr/di) di ~= Z_valence
+    let mut q = 0.0
+    let mut j = 0
+    while j < len(pp.rho) {
+        q = q + pp.rho[j] * pp.rab[j]
+        j = j + 1
+    }
+    fails = fails + _ck_rel("(b) INT rho dr = Z_valence", q, z, 1e-6)
+
+    // (c) V_loc Coulomb tail  V_loc(r_last) -> -2 Z / r_last  (Rydberg)
+    let last = len(pp.r) - 1
+    let r_last = pp.r[last]
+    let v_last = pp.vloc[last]
+    let v_coulomb = -2.0 * z / r_last
+    fails = fails + _ck_rel("(c) V_loc tail = -2Z/r", v_last, v_coulomb, 1e-4)
+
+    // (d) projector array lengths
+    let nproj = pp.header.number_of_proj
+    let mut beta_ok = len(pp.beta_lengths) == nproj
+    let mut k = 0
+    while k < len(pp.beta_lengths) {
+        if pp.beta_lengths[k] != m { beta_ok = false }
+        k = k + 1
+    }
+    fails = fails + _ck_true("(d) every PP_BETA.i length = mesh", beta_ok)
+    fails = fails + _ck_int("(d) len(PP_DIJ) = nproj^2", len(pp.dij), nproj * nproj)
+
+    // ── SCOPE GUARD: ultrasoft file rejected cleanly ───────────────────
+    let us = upf_parse(us_path)
+    fails = fails + _ck_bool("US guard: ok=false", us.ok, false)
+    fails = fails + _ck_bool("US guard: is_ultrasoft flag read", us.header.is_ultrasoft, true)
+    let has_us_word = us.error.index_of("ultrasoft") >= 0
+    fails = fails + _ck_true("US guard: error mentions 'ultrasoft'", has_us_word)
+
+    // ── SCOPE GUARD: malformed file rejected cleanly ───────────────────
+    let bad = upf_parse(bad_path)
+    fails = fails + _ck_bool("malformed guard: ok=false", bad.ok, false)
+    let has_bad_word = bad.error.index_of("malformed") >= 0
+    fails = fails + _ck_true("malformed guard: error mentions 'malformed'", has_bad_word)
+
+    if fails == 0 {
+        println("qforge_l5_upf_selftest PASS")
+    } else {
+        println("qforge_l5_upf_selftest FAIL — " + to_string(fails) + " case(s)")
+    }
+}
