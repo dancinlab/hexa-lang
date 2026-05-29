@@ -1,0 +1,53 @@
+UNSHADOW milestone "🟢 unboxed-primitive array" (axis A, typed-repr RFC) — pilot verdict
+mini (macOS arm64) · clang · best-of-9 wall · same runtime.o all arms · 2026-05-30
+tool/unshadow_unboxed_array_bench.hexa  (faithful A/B proxy — full self-host regen blocked by B9 wall, spec-accepted)
+
+VERBATIM bench stdout (mini, --runs 9):
+
+=== UNSHADOW unboxed-primitive array bench (axis A) ===
+rt=/Users/mini/.hx/packages/hexa/self  work=/tmp/uba-work  runs=9
+--- C: known-int-array hot-loop sum (4 arms) ---
+  [ref_c   ] built=yes err_lines=0
+  [a_boxed ] built=yes err_lines=0
+  [b_unbox ] built=yes err_lines=0
+  [c_native] built=yes err_lines=0
+  g5 byte-diff (program output md5 — ALL FOUR MUST be identical):
+    ref_c    : 35470124be79241c684dc5103ec55d20
+    a_boxed  : 35470124be79241c684dc5103ec55d20
+    b_unbox  : 35470124be79241c684dc5103ec55d20
+    c_native : 35470124be79241c684dc5103ec55d20
+  perf best-of-9 wall (s):
+    ref_c    : 0.08
+    a_boxed  : 1.12
+    b_unbox  : 1.12
+    c_native : 0.08
+  asm bl _hexa_index_get (total):  a_boxed=1  b_unbox=0  c_native=0
+--- INTEGRITY: typed i64 array at a polymorphic boundary ---
+  [a_bnd] built=yes err_lines=0
+  [b_bnd] built=yes err_lines=0
+  boundary g5 (MUST be identical — unbox never changes a value):
+    a_bnd (boxed) : 9efbbf5d320a45f2ce6e89491a1ac726
+    b_bnd (unbox) : 9efbbf5d320a45f2ce6e89491a1ac726
+  → both MUST match: the typed array boxes correctly when it reaches
+    the polymorphic boundary (hexa_len + checked element fetch).
+=== done ===
+
+INTERPRETATION (honest):
+- g5 byte-diff IDENTICAL across all 4 arms + the dynamic-boundary case (both 9efbbf5d…).
+  Correctness PROVEN, integrity gate PASS — the typed array boxes correctly at a
+  polymorphic site, and dropping the tag-guard never changes a value.
+- PERF = 🔴 CLOSED-NEGATIVE on the LANDED transform (boxed-storage tag-guard drop):
+  b_unbox 1.12s ≈ a_boxed 1.12s = ~0% Δ. The c-class tag-guard `HX_IS_ARRAY(arr)?`
+  is LOOP-INVARIANT — clang -O2 already hoists it out of the hot loop in arm A, so
+  removing it (arm B, index_get 1→0) yields no wall change.
+- The REAL wall is the STORAGE representation, not the tag-guard. sizeof(HexaVal)=16
+  → HexaArr.items[] is a 16-byte-strided boxed array; clang cannot SIMD-gather it
+  (a_boxed/b_unbox = 5 vector ops). The native int64_t[] (c_native) is 8-byte
+  contiguous → clang vectorizes (23 vector ops) and closes the gap 100%
+  (c_native 0.08s ≈ ref 0.08s).  asm_simd.txt has the vector-op counts.
+- MISSING INFRA (the determinant): a true native int64_t[]/double[] array
+  representation (HexaArrI64/F64) does NOT exist — HexaArr is boxed HexaVal* only.
+  That is a RUNTIME change (new struct + box/unbox helpers + every array primitive
+  must branch on element-kind), blocked here by the B9 generated-runtime wall and
+  out of scope for a codegen-only pilot. Axis A therefore RULES OUT "codegen-only
+  unbox (drop tag-guard, read boxed .i)" as a perf lever — the gap lives in storage.

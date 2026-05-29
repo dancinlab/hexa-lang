@@ -1,0 +1,11 @@
+# UNSHADOW unboxed-array asm — SIMD vectorization is the wall
+# sizeof(HexaVal)=16 (tag+union) → boxed items[] = 16-byte stride, no SIMD gather
+# native int64_t[] = 8-byte contiguous → clang -O2 vectorizes
+
+## vector-op counts (.2d/.4s/q-reg/ldp):
+  a_boxed  = 5
+  b_unbox  = 5
+  c_native = 23
+
+## bl _hexa_index_get:
+  a_boxed=1  b_unbox=0  c_native=0

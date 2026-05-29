@@ -629,3 +629,48 @@ elision 을 라이선스.
 amalgam merge 가 pre-existing 타입에러로 실패, 내 edit 무관) → faithful A/B 프록시(emit 문자열
 codegen L7661 과 byte-동일·스펙 허용). 잔존 lever = known-array 추적기(생기면 tag-guard 도 삭제).
 verdict=`.verdicts/unshadow-cclass-bounds/` · 재현=`tool/unshadow_cclass_bounds_bench.hexa`.
+
+---
+
+## 🟢 unboxed-primitive array (axis A, typed-repr RFC) — 2026-05-30
+
+§c-class 가 남긴 미측정 lever("known-array 추적기가 생기면 tag-guard 도 삭제")를 측정했다.
+**결과 = correctness WIN · perf 🔴 CLOSED-NEGATIVE** — 갭이 tag-guard 가 아니라 **저장 표현**
+에 산다는 것을 결정적으로 못 박았다.
+
+**element-kind 증명 + unbox site (self/codegen.hexa).**
+- `_is_int_literal_array(node)` — 배열 리터럴 `[1,2,3,…]` 의 모든 원소가 IntLit 인지 (정확·좁은
+  monomorphic-i64 증명, Ident·call·float·nesting 전부 거부).
+- LetStmt 등록 (`gen2_stmt`, ~L2897): 불변 `let xs=[int-lit…]` → `_known_intarr_add(xs)`.
+  AssignStmt LHS Ident 재대입 → `_known_intarr_void` (re-let 비-int-array 도 void). LetMutStmt 제외.
+- Index emit (~L7666): `xs[i]` 가 live in-range fact 로 덮이고(`_inrange_counter_for`) `xs` 가
+  known-int-array 이면 → §c-class ternary `(HX_IS_ARRAY(xs)?items[i]:checked)` 대신 **direct
+  `(xs.arr_ptr->items[ctr])`** (array-tag guard 삭제, array-ness 정적증명).
+- `_is_known_int(node)` (~L9981): `node` 가 known-int-array 의 in-range read `arr[i]` 면 true →
+  주변 sum/dot BinOp 가 raw `.i` 를 HX_INT 로 추출(원소-당 tag dispatch 0). 두 게이트 모두
+  immutable-let 등록 AND live in-range fact 둘 다 요구 → unproven/boxed 접근엔 절대 발화 안 함.
+
+**byte-diff IDENTICAL (g5, mini best-of-9).** 4-arm(ref_c·a_boxed=§c-class·b_unbox=신규·c_native
+=ceiling) stdout md5 전부 `35470124…`. **무결성 게이트 PASS**: typed `[i64]` 배열을
+polymorphic site(`hexa_len`+checked element fetch)로 흘려보낸 boundary corpus — boxed/unbox
+양쪽 arm md5 `9efbbf5d…` 동일. unbox 는 값을 절대 안 바꾸고, typed array 는 동적 경계서 정확히 box.
+
+**perf 🔴 CLOSED-NEGATIVE.** b_unbox 1.12s ≈ a_boxed 1.12s = **~0% Δ**. tag-guard
+`HX_IS_ARRAY(arr)?` 는 **loop-invariant** 라 clang -O2 가 이미 hot loop 밖으로 hoist — 삭제해도
+(asm `bl _hexa_index_get` 1→0, cold fallback 제거) wall 무변. 진짜 벽 = **boxed 저장**:
+`sizeof(HexaVal)=16` → `HexaArr.items[]` 는 16B-stride 박스 배열, clang 이 SIMD-gather 불가
+(a_boxed/b_unbox = 5 vec-op). native `int64_t[]`(c_native, 8B contiguous)만 vectorize
+(23 vec-op)해 갭 100% close (c_native 0.08s ≈ ref 0.08s). asm=`.verdicts/unshadow-unboxed-array/asm_simd.txt`.
+
+**누락 인프라 (축 ruled-out).** 진짜 native `int64_t[]`/`double[]` 저장 표현(`HexaArrI64`/`F64`)
+이 **없다** — `HexaArr` 는 boxed `HexaVal*` 전용. 그건 RUNTIME 변경(새 struct + box/unbox 헬퍼 +
+모든 array primitive 가 element-kind 분기)이고 B9 벽 밖·codegen-only pilot 범위 밖. → axis A 가
+**"codegen-only unbox(tag-guard 삭제 + boxed `.i` read)는 perf 레버가 아니다"** 를 결정적으로
+배제. 갭은 STORAGE 에 산다. paper_negative_ok: 데이터-표현 축 결정적 배제 = valid terminal.
+
+**정직 caveat**: full self-host regen 은 B9 generated-runtime 벽 차단 → faithful A/B 프록시
+(b_unbox emit 은 codegen L7666 신규 arm 과 byte-동일·스펙 허용, prior round 들과 동일). 단일
+호스트(mini)·best-of-9·양 arm 동일 runtime.o·repo 안 `.c` 0개. codegen 변경은 byte-identical
++ provably-dead guard 삭제(무회귀)라 axis B(monomorphic struct)의 element-kind 증명·box/unbox
+경계 규율 기반으로 유지. verdict=`.verdicts/unshadow-unboxed-array/` ·
+재현=`tool/unshadow_unboxed_array_bench.hexa`.
