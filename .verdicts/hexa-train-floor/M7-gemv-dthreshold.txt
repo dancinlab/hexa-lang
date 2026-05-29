@@ -1,0 +1,41 @@
+# M7-gemv-dthreshold — RTX 5070 (ubu-2, pool host, $0) — 2026-05-29T18:47:27Z
+# host: ubu-2  GPU: NVIDIA GeForce RTX 5070 (12GB, driver 580.159.03)  nvcc 12.0
+# source: /tmp/m7_gemv_bench.cu (faithful replica of self/cuda/runtime_cuda_emit.hexa
+#   _hx_k_packed_gemv_offset[_f32] kernels + cublasDgemv CUBLAS_OP_T path, HX_RR_BLOCK=256)
+# axis: M2/M3 gemv d-threshold gate (cuBLAS vs on-device) + M6 fp32 dtype slice
+
+# HEXA-TRAIN-FLOOR M7 gemv microbench — RTX 5070
+# rows(out)=768  reps=4000  warmup=200
+# per-call latency (us) — lower=faster.  3 paths × 4 contraction dims (cols=d)
+# cols | cublas_Dgemv_us | ondevice_f64_us | ondevice_f32_us | f64/cublas | f32/f64
+   64 |           8.078 |          10.819 |           7.123 | 1.339 | 0.658
+  128 |           8.403 |          10.817 |           7.141 | 1.287 | 0.660
+  256 |           8.999 |          11.300 |           7.695 | 1.256 | 0.681
+  768 |          11.576 |          12.796 |          10.152 | 1.105 | 0.793
+
+# HEXA-TRAIN-FLOOR M7 gemv microbench — RTX 5070
+# rows(out)=256  reps=4000  warmup=200
+# per-call latency (us) — lower=faster.  3 paths × 4 contraction dims (cols=d)
+# cols | cublas_Dgemv_us | ondevice_f64_us | ondevice_f32_us | f64/cublas | f32/f64
+   64 |           7.522 |           7.248 |           6.001 | 0.964 | 0.828
+  128 |           7.712 |           7.260 |           6.094 | 0.941 | 0.839
+  256 |           7.979 |           7.866 |           6.407 | 0.986 | 0.815
+  768 |          10.479 |           8.379 |           7.247 | 0.800 | 0.865
+
+# HEXA-TRAIN-FLOOR M7 gemv microbench — RTX 5070
+# rows(out)=64  reps=4000  warmup=200
+# per-call latency (us) — lower=faster.  3 paths × 4 contraction dims (cols=d)
+# cols | cublas_Dgemv_us | ondevice_f64_us | ondevice_f32_us | f64/cublas | f32/f64
+   64 |           7.287 |           6.215 |           5.821 | 0.853 | 0.937
+  128 |           7.387 |           6.267 |           5.913 | 0.848 | 0.944
+  256 |           7.837 |           6.498 |           6.049 | 0.829 | 0.931
+  768 |          10.206 |           6.820 |           6.413 | 0.668 | 0.940
+
+# HEXA-TRAIN-FLOOR M7 gemv microbench — RTX 5070
+# rows(out)=16  reps=4000  warmup=200
+# per-call latency (us) — lower=faster.  3 paths × 4 contraction dims (cols=d)
+# cols | cublas_Dgemv_us | ondevice_f64_us | ondevice_f32_us | f64/cublas | f32/f64
+   64 |           7.520 |           5.986 |           5.580 | 0.796 | 0.932
+  128 |           7.434 |           6.011 |           5.670 | 0.809 | 0.943
+  256 |           7.841 |           6.102 |           5.819 | 0.778 | 0.954
+  768 |          10.185 |           6.418 |           6.194 | 0.630 | 0.965

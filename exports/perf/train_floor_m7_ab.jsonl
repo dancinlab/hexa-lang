@@ -1,0 +1,1 @@
+{"tag": "M7-armH=fp64-armP=hexa-fp32-RTX5070-measured", "config": "d=768 layers=12 batch=1 seq=512", "hexa_step_per_s": "0.165", "hexa_s_per_step": "n/a", "hexa_rss_mb": 1024, "pytorch_step_per_s": "8.090", "pytorch_s_per_step": "n/a", "pytorch_rss_mb": 1024, "ratio_p_over_h": "49.030", "prod_steps": 100000}

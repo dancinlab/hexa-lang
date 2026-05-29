@@ -51,5 +51,9 @@ roofline 분석 (d768·12L fp64: P=104.2M, FLOPs/step=3.03e12, AI=207 FLOP/byte)
 
 ## deferred
 
-- M7 라이브 측정 = GPU pod 비용 + cross-repo anima 트레이너 의존 → 명시적 측정 go 필요 (1차 사이클은 전부 🟠 static/분석).
+- M7 1차 라이브 측정 완료(RTX 5070, ubu-2, $0) — M4 roofline + M6 fp32 lever **🟢 승격**(측정 0.165 step/s ≈ 예측 0.15; fp32/fp64 42~50× ≈ 예측 44×). M2/M3 게이트 메커니즘 🟢. verdict = `.verdicts/hexa-train-floor/M7-*.txt`. (밀스톤 flip 보류 — 아래 잔여 🟠 닫힌 뒤.)
+- M2/M3 게이트 키 정정(🟠): 실측상 진짜 판별자는 `cols`(d) 아니라 **rows(출력차원=#blocks)** — d=64라도 rows=768이면 cuBLAS 우세(부분 반증). 게이트를 `rows·cols`(총 work)/rows 기준 재키잉.
+- M1/M3 RSS-churn 실효(🟠): synthetic 미재현 → real anima 트레이너 `HEXA_RSS_TRACE=1` fire 필요(cross-repo 빌드 = 별개 cycle).
+- A100 occupancy 헤드룸(M4: fp64 floor 의 6.4×) = 유료 A100 pod 필요 → 미측정 유지.
+- cross-repo anima 트레이너를 새 hexa runtime(#2122~#2130)으로 빌드 = runtime regen 블로커 → 별개 cycle(HALT 회피, deferred).
 - `hexa_farr_free` 본체 1줄 call-site patch = 다음 edge-runtime.c regen 시 적용 (B9 #2065로 본체가 gitignored, runtime.h 주석에 patch-spec 명시됨).

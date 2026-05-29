@@ -1,0 +1,62 @@
+# M7-farr-trim-rss — RTX 5070 host ubu-2 (pool, $0) — 2026-05-29T18:49:01Z
+# host: ubu-2 (Linux x86_64, glibc)  gcc -O2
+# source: /tmp/m7_farr_rss.c (faithful replica of runtime_core_emit.hexa
+#   __attribute__((constructor)) _hexa_init_malloc_tuning HEXA_FARR_TRIM gate)
+# axis: M1/M3 per-step host-RSS monotonic climb — TRIM ON vs OFF
+
+=== ARM OFF (HEXA_FARR_TRIM unset) ===
+# HEXA_FARR_TRIM=0/unset(OFF)  steps=200
+step   0  RSS 1816 KB  (delta vs s0 = +156 KB)
+step  40  RSS 1816 KB  (delta vs s0 = +156 KB)
+step  80  RSS 1816 KB  (delta vs s0 = +156 KB)
+step 120  RSS 1816 KB  (delta vs s0 = +156 KB)
+step 160  RSS 1816 KB  (delta vs s0 = +156 KB)
+step 199  RSS 1816 KB  (delta vs s0 = +156 KB)
+# rss s0=1660 KB  s4=1816 KB  sN=1816 KB
+# net climb (s4->sN) = +0 KB over 196 steps = +0.00 KB/step
+
+=== ARM ON (HEXA_FARR_TRIM=1) ===
+# HEXA_FARR_TRIM=1(ON)  steps=200
+step   0  RSS 1812 KB  (delta vs s0 = +156 KB)
+step  40  RSS 1812 KB  (delta vs s0 = +156 KB)
+step  80  RSS 1812 KB  (delta vs s0 = +156 KB)
+step 120  RSS 1812 KB  (delta vs s0 = +156 KB)
+step 160  RSS 1812 KB  (delta vs s0 = +156 KB)
+step 199  RSS 1812 KB  (delta vs s0 = +156 KB)
+# rss s0=1656 KB  s4=1812 KB  sN=1812 KB
+# net climb (s4->sN) = +0 KB over 196 steps = +0.00 KB/step
+
+=== variant 2 (faithful pinning — retained small chunks behind freed large) ===
+--- OFF ---
+# HEXA_FARR_TRIM=OFF steps=200 (pinning variant)
+step   0 RSS 1744 KB (delta s0 +92)
+step  40 RSS 4308 KB (delta s0 +2656)
+step  80 RSS 6868 KB (delta s0 +5216)
+step 120 RSS 9428 KB (delta s0 +7776)
+step 160 RSS 11988 KB (delta s0 +10336)
+step 199 RSS 14484 KB (delta s0 +12832)
+# s0=1652 s4=2000 sN=14484 KB
+# net climb s4->sN = +12484 KB over 196 steps = +63.69 KB/step
+--- ON ---
+# HEXA_FARR_TRIM=1(ON) steps=200 (pinning variant)
+step   0 RSS 1752 KB (delta s0 +92)
+step  40 RSS 4316 KB (delta s0 +2656)
+step  80 RSS 6876 KB (delta s0 +5216)
+step 120 RSS 9436 KB (delta s0 +7776)
+step 160 RSS 11996 KB (delta s0 +10336)
+step 199 RSS 14492 KB (delta s0 +12832)
+# s0=1660 s4=2008 sN=14492 KB
+# net climb s4->sN = +12484 KB over 196 steps = +63.69 KB/step
+
+# VERDICT (honest, g5): 🟠 NOT confirmed by synthetic. Both arms identical.
+#   - variant 1 (free-each-step): +0 KB/step both arms (no climb to fix).
+#   - variant 2 (retained 64KB pins): +63.69 KB/step both arms — climb is from
+#     genuinely-LIVE small chunks (<256KB mmap threshold), which NO mallopt can
+#     reclaim. The large 1.2MB farr free returns to OS under TRIM but was reused
+#     each step anyway, so it never drove the climb in either arm.
+#   - Conclusion: HEXA_FARR_TRIM only helps when the monotonic climb is dominated
+#     by FREE'D large (>256KB) chunks stranded behind a pinned arena top. Whether
+#     the real anima trainer's 200-325MB/step climb has that shape is UNMEASURED
+#     here (requires the full cross-repo anima trainer build = deferred). Mechanism
+#     is sound (startup mallopt, no steady-state cost); benefit stays 🟠 pending a
+#     real-trainer RSS_TRACE fire.
