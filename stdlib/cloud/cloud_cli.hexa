@@ -718,6 +718,98 @@ fn _checked_host(h: str) -> str {
     return h
 }
 
+// _is_vast_numeric_id — PURE: 1 iff `h` is a bare vast.ai instance id (all
+// ASCII digits, length >= 5). A real ssh destination carries an `@` (user@host)
+// or a `.` (dotted IP / dns), or is a `~/.ssh/config` alias with letters; a bare
+// numeric token is therefore a provider pod-id, not a host. vast ids are 7-8
+// digits today — the >=5 floor keeps a stray `22` / `2222` from being mistaken
+// for an id while staying robust to any future id width.
+fn _is_vast_numeric_id(h: str) -> int {
+    let n = len(h)
+    if n < 5 {
+        return 0
+    }
+    let mut i = 0
+    while i < n {
+        let c = h.substring(i, i + 1)
+        if c < "0" || c > "9" {
+            return 0
+        }
+        i = i + 1
+    }
+    return 1
+}
+
+// ResolvedHost — the host slot after numeric-id resolution. `resolved=1` means
+// `host` was a bare vast id and is now an ssh destination (root@<endpoint>) with
+// `port` set; `via` records which endpoint won ("proxy" | "direct"). resolved=0
+// leaves `host` byte-for-byte unchanged (a real host, or an id with no live
+// endpoint yet — the existing ~/.ssh/config / explicit-flag paths still apply).
+struct ResolvedHost {
+    host:     str,
+    port:     str,
+    resolved: int,
+    via:      str
+}
+
+// _resolve_cloud_host — PROXY-FIRST numeric-id → ssh-destination resolver
+// (handoff a6a268a9). When `<host>` is a bare vast id, `run`/`exec`/`nohup`/
+// `fire`/`copy-to`/`copy-from` used to hand the digits straight to ssh, which
+// resolved them via ~/.ssh/config (only if rent/adopt had injected a block) or
+// fell through to the bare-IP:22 direct endpoint — a blocked/stale 2.65.x IP
+// that silently TIMES OUT. This mirrors the #2098 adopt autoinject fix at the
+// VERB layer so every transport verb reaches the live proxy without a config
+// block: prefer the proxy endpoint (vast_ssh_endpoint → ssh*.vast.ai:<port>),
+// fall back to the bare direct IP only when the proxy is not yet mapped, and
+// leave a non-id host (or an unmapped id) untouched. Pure-ish: the only effect
+// is the vastai read inside vast_*_endpoint.
+fn _resolve_cloud_host(h: str) -> ResolvedHost {
+    if _is_vast_numeric_id(h) == 0 {
+        return ResolvedHost { host: h, port: "", resolved: 0, via: "" }
+    }
+    let proxy = vast_ssh_endpoint(h)
+    if proxy.ok == 1 {
+        return ResolvedHost { host: "root@" + proxy.host, port: proxy.port, resolved: 1, via: "proxy" }
+    }
+    let direct = vast_direct_endpoint(h)
+    if direct.ok == 1 {
+        return ResolvedHost { host: "root@" + direct.host, port: direct.port, resolved: 1, via: "direct" }
+    }
+    // No live endpoint mapped yet — leave the id as-is so the legacy
+    // ~/.ssh/config block path (written by rent/adopt) still applies.
+    return ResolvedHost { host: h, port: "", resolved: 0, via: "" }
+}
+
+// _ssh_opts_has_port — 1 iff ssh_opts already carries an explicit `-p <n>`
+// (the user passed `--port`). Used to decide whether a resolved proxy port
+// should be injected — an explicit `--port` always wins.
+fn _ssh_opts_has_port(opts: [str]) -> int {
+    let mut i = 0
+    while i < len(opts) {
+        if opts[i] == "-p" {
+            return 1
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+// _apply_resolved_port — append the resolved endpoint's `-p <port>` to ssh_opts
+// UNLESS the caller already set an explicit `--port` (which wins). Returns the
+// (possibly extended) ssh_opts list. d4: one funnel, no per-verb branch.
+fn _apply_resolved_port(opts: [str], rh: ResolvedHost) -> [str] {
+    if rh.resolved == 0 || len(rh.port) == 0 {
+        return opts
+    }
+    if _ssh_opts_has_port(opts) == 1 {
+        return opts
+    }
+    let mut out = opts
+    out.push("-p")
+    out.push(rh.port)
+    return out
+}
+
 // _flag_val — scan av[start..] for `<key> <value>` and return the value;
 // `dflt` when the flag is ABSENT. When the key IS present but its value is
 // missing or itself looks like a flag (`--*` / bare `--`), error+exit(2) via
@@ -1669,8 +1761,12 @@ fn main() {
             println("[cloud] run: missing <host> — usage: cloud run <host> [--port N] [--insecure] -- <argv...>")
             exit(2)
         }
-        let host = _checked_host(av[si + 1])
-        let ssh_opts = _ssh_opts_cli(av, si + 2)
+        let _rh = _resolve_cloud_host(_checked_host(av[si + 1]))
+        let host = _rh.host
+        if _rh.resolved == 1 {
+            println("[cloud] run: resolved vast id → " + host + " :" + _rh.port + " (" + _rh.via + ")")
+        }
+        let ssh_opts = _apply_resolved_port(_ssh_opts_cli(av, si + 2), _rh)
         let max_wall = _max_wall_cli(av, si + 2)
         let env_kvs = _env_args_cli(av, si + 2)
         let mut argv = _collect_after(av, si + 2)
@@ -1698,8 +1794,12 @@ fn main() {
             println("[cloud] exec: missing <host> — usage: cloud exec <host> [--port N] [--insecure] -- <shell-cmd>")
             exit(2)
         }
-        let host = _checked_host(av[si + 1])
-        let ssh_opts = _ssh_opts_cli(av, si + 2)
+        let _rh = _resolve_cloud_host(_checked_host(av[si + 1]))
+        let host = _rh.host
+        if _rh.resolved == 1 {
+            println("[cloud] exec: resolved vast id → " + host + " :" + _rh.port + " (" + _rh.via + ")")
+        }
+        let ssh_opts = _apply_resolved_port(_ssh_opts_cli(av, si + 2), _rh)
         let tokens = _collect_after(av, si + 2)
         if len(tokens) == 0 {
             println("[cloud] exec: empty shell-cmd — usage: cloud exec <host> [--port N] [--insecure] -- <shell-cmd>")
@@ -1727,9 +1827,13 @@ fn main() {
             println("[cloud] nohup: usage — cloud nohup <host> <logfile> [--port N] [--insecure] [--early-life-check N] [--env K=V] [--source P] [--register [<jid>]] -- <argv...>")
             exit(2)
         }
-        let host = _checked_host(av[si + 1])
+        let _rh = _resolve_cloud_host(_checked_host(av[si + 1]))
+        let host = _rh.host
+        if _rh.resolved == 1 {
+            println("[cloud] nohup: resolved vast id → " + host + " :" + _rh.port + " (" + _rh.via + ")")
+        }
         let logfile = av[si + 2]
-        let ssh_opts = _ssh_opts_cli(av, si + 3)
+        let ssh_opts = _apply_resolved_port(_ssh_opts_cli(av, si + 3), _rh)
         let env_kvs = _env_args_cli(av, si + 3)
         let early_life = _early_life_cli(av, si + 3)
         let reg_token = _register_cli(av, si + 3)
@@ -1784,8 +1888,12 @@ fn main() {
             println("[cloud] fire: usage — cloud fire <host> [--log <path>] [--port N] [--insecure] [--early-life-check N] [--env K=V] [--source P] [--register [<jid>]] -- <argv...>")
             exit(2)
         }
-        let host = _checked_host(av[si + 1])
-        let ssh_opts = _ssh_opts_cli(av, si + 2)
+        let _rh = _resolve_cloud_host(_checked_host(av[si + 1]))
+        let host = _rh.host
+        if _rh.resolved == 1 {
+            println("[cloud] fire: resolved vast id → " + host + " :" + _rh.port + " (" + _rh.via + ")")
+        }
+        let ssh_opts = _apply_resolved_port(_ssh_opts_cli(av, si + 2), _rh)
         let env_kvs = _env_args_cli(av, si + 2)
         let early_life = _early_life_cli(av, si + 2)
         let log_path = _log_path_cli(av, si + 2)
@@ -1837,9 +1945,10 @@ fn main() {
             println("[cloud] poll: usage — cloud poll <host> <pid> [--port N] [--insecure]")
             exit(2)
         }
-        let host = _checked_host(av[si + 1])
+        let _rh = _resolve_cloud_host(_checked_host(av[si + 1]))
+        let host = _rh.host
         let pid = _cli_atoi(av[si + 2])
-        let ssh_opts = _ssh_opts_cli(av, si + 3)
+        let ssh_opts = _apply_resolved_port(_ssh_opts_cli(av, si + 3), _rh)
         let alive = cloud_poll_opts(host, ssh_opts, pid)
         if alive == 1 {
             println("[cloud] pid " + str(pid) + " ALIVE")
@@ -1872,9 +1981,10 @@ fn main() {
             println("[cloud] tail: usage — cloud tail <host> <logfile> [--port N] [--insecure] [--grep RE] [--until RE]")
             exit(2)
         }
-        let host = _checked_host(av[si + 1])
+        let _rh = _resolve_cloud_host(_checked_host(av[si + 1]))
+        let host = _rh.host
         let logfile = av[si + 2]
-        let ssh_opts = _ssh_opts_cli(av, si + 3)
+        let ssh_opts = _apply_resolved_port(_ssh_opts_cli(av, si + 3), _rh)
         let grep_re = _flag_val(av, si + 3, "--grep", "")
         // Terminal mode (INBOX gap 1, 2026-05-28):
         //   - --until ABSENT  → the 3-tier failure-first taxonomy (exit
@@ -1900,9 +2010,10 @@ fn main() {
             println("[cloud] watch: usage — cloud watch <host> <pid> [--port N] [--insecure] [--interval N] [--max-wait S] [--then-down <id> [--provider P]]")
             exit(2)
         }
-        let host = _checked_host(av[si + 1])
+        let _rh = _resolve_cloud_host(_checked_host(av[si + 1]))
+        let host = _rh.host
         let pid = _cli_atoi(av[si + 2])
-        let ssh_opts = _ssh_opts_cli(av, si + 3)
+        let ssh_opts = _apply_resolved_port(_ssh_opts_cli(av, si + 3), _rh)
         let interval = _cli_atoi(_flag_val(av, si + 3, "--interval", "30"))
         let max_wait = _cli_atoi(_flag_val(av, si + 3, "--max-wait", "0"))
         let rc = _cloud_watch(host, ssh_opts, pid, interval, max_wait)
@@ -2088,10 +2199,14 @@ fn main() {
             println("[cloud] copy-to: usage — cloud copy-to <host> <local> <remote> [--port N] [--insecure]")
             exit(2)
         }
-        let host = _checked_host(av[si + 1])
+        let _rh = _resolve_cloud_host(_checked_host(av[si + 1]))
+        let host = _rh.host
+        if _rh.resolved == 1 {
+            println("[cloud] copy-to: resolved vast id → " + host + " :" + _rh.port + " (" + _rh.via + ")")
+        }
         let local_path = av[si + 2]
         let remote_path = av[si + 3]
-        let ssh_opts = _ssh_opts_cli(av, si + 4)
+        let ssh_opts = _apply_resolved_port(_ssh_opts_cli(av, si + 4), _rh)
         let mut want_recursive = _has_flag(av, si + 4, "--recursive")
         if _has_flag(av, si + 4, "-r") == 1 {
             want_recursive = 1
@@ -2110,10 +2225,14 @@ fn main() {
             println("[cloud] copy-from: usage — cloud copy-from <host> <remote> <local> [--port N] [--insecure]")
             exit(2)
         }
-        let host = _checked_host(av[si + 1])
+        let _rh = _resolve_cloud_host(_checked_host(av[si + 1]))
+        let host = _rh.host
+        if _rh.resolved == 1 {
+            println("[cloud] copy-from: resolved vast id → " + host + " :" + _rh.port + " (" + _rh.via + ")")
+        }
         let remote_path = av[si + 2]
         let local_path = av[si + 3]
-        let ssh_opts = _ssh_opts_cli(av, si + 4)
+        let ssh_opts = _apply_resolved_port(_ssh_opts_cli(av, si + 4), _rh)
         let want_resume = _has_flag(av, si + 4, "--resume")
         let r = _copy_from_run(host, ssh_opts, remote_path, local_path, want_resume)
         println("[cloud] " + r.message + " · " + host + ":" + remote_path + " -> " + local_path)
