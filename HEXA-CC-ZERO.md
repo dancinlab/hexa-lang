@@ -9,7 +9,7 @@
 
 - [x] P1 — `hexa cc --regen` self-host fixpoint byte-eq PASS (cross-host: Mac arm64 #2105 + ubu x86_64) · 🟢 v_n≡v_{n+1} 4/4 모듈 byte-eq + DETERMINISTIC 양 호스트 실측. ⚠ 잔여(P1 fixpoint 성질과 별개): in-tree seed(build/hexat)가 자기 SSOT 의 fixpoint 아님 = stale seed(hexa_int 인라인 #2078 미반영) — 양 호스트 동일 방향. seed 갱신(재regen+커밋)은 후속
 - [ ] P2 — cross-host kill-storm-free (Mac arm64 + ubu x86_64 둘 다 warm-rebuild PASS)
-- [ ] P3 — stage-(-1) seed 전략 (hexa_cc.c 없이 cold bootstrap 경로 확정)
+- [x] P3 — stage-(-1) cold-seed TRUE-COLD-PASS cross-host (#2116 design option b 구현) · 🟢 단일 self-contained `self/native/hexa_cc_seed.c`(2.85 MB · 0 local include) 커밋 → bare clone + `cc hexa_cc_seed.c -o hexat`(사전설치 hexa 不要)만으로 작동 트랜스파일러 빌드, x86_64(ubu-2)+arm64(mini) 양 arch 4/4 SSOT transpile rc=0 · DETERMINISTIC · x86_64 는 per-arch fixpoint(gen_b≡gen_c)까지 PASS. ⚠ 잔여(cold-boot 닫힘과 별개): cross-arch strict byte-eq 는 3/4(codegen arch-specific·per-arch deterministic — P1 의 per-arch fixpoint 모델과 일치)
 - [ ] P5 — `--prefer-regen` opt-in flag 활성 (build_hexa_cli.hexa step 0)
 - [ ] P6 — `self/native/hexa_cc.c` git rm + CI/fresh-clone green
 
@@ -45,3 +45,14 @@ verdict: `.verdicts/hexa-cc-zero/F-HEXA-CC-ZERO-BYTEEQ-UBU.txt` (ubu-2 stdout + 
 - 🔴 **in-tree seed drift 도 Mac 과 동일 방향으로 재현** — 커밋 seed(summer build/hexat) 출력(gen_a) vs 현 SSOT 출력(gen_b)은 4/4 모듈 DRIFT (lexer 904·parser 320·tc 558·codegen 2728 diff lines). root cause = 현 SSOT codegen 이 정수 리터럴을 인라인 박스 `((HexaVal){.tag=TAG_INT,.i=(N)})` 로 emit(= PR #2078 hexa_int 인라인 · UNSHADOW #2), 커밋 seed 는 그 최적화 前 `hexa_int(N)` 형태. 즉 SSOT 가 NEWER · seed 미갱신 = Mac(153 hunk)과 동일 root. cross-host 일관 = 최종 regen 없이 커밋된 stale seed 의 결정적 신호.
 - ✅ **P1 cross-host CLOSED (fixpoint 성질)** — Mac arm64(#2105) + ubu x86_64 양쪽 self-host fixpoint byte-eq 4/4 PASS. P1 체크박스 flip. 단 in-tree seed 갱신(재regen+커밋)은 P1 fixpoint 성질과 **별개** 잔여 — 양 호스트 공통.
 - ℹ️ **P3 cold-seed 는 무관·미flip** — P1 byte-eq fixpoint(기존 hexat 존재 전제 warm-rebuild)는 P3 stage-(-1) cold bootstrap(hexa_cc.c 없이 부트스트랩 경로)과 별개 frontier. P3 는 여전히 open. P2/P5/P6 도 미터치.
+
+## 2026-05-30 P3 COLD-SEED 구현 + TRUE-COLD 실측 (verdict 첨부)
+
+verdict: `.verdicts/hexa-cc-zero/F-HEXA-CC-ZERO-P3-COLDBOOT.txt` (양 arch cold-boot stdout + per-module md5 verbatim)
+
+설계 #2116 option(b) 구현 — 단일 self-contained pre-amalgamated C-seed TU `self/native/hexa_cc_seed.c`(2982925 B · md5 6ee710e4) 커밋. hexa_cc.c(4 SSOT transpile+merge = P1 fixpoint) + runtime.c + runtime_core.c + runtime_hi_gen.c + native/*.c + forge_tier_v1.c 전 fragment 를 단일 TU 로 inline (로컬 `#include "..."` 0개). 양 arch 격리 /tmp dir 에서 PATH 의 hexa 제거(subshell scrub) 후 측정 — 설치 hexa.real·Mac toolchain 무손상.
+
+- 🟢 **TRUE-COLD-PASS cross-host** — bare clone(host hexa 없음) + C 컴파일러만으로 작동 트랜스파일러 빌드 성공: x86_64(ubu-2 gcc 13.3) `cc rc=0`→hexat 2244840 B→4/4 SSOT transpile rc=0 + 4/4 byte-eq + per-arch fixpoint(gen_b≡gen_c) ; arm64(mini Apple clang 21) `cc rc=0`→hexat 2269712 B(Mach-O arm64)→4/4 SSOT transpile rc=0 + DETERMINISTIC(run1≡run2). **stage-(-1) chicken-egg 닫힘** — build/hexat 이 bare clone offline 로 도달 가능.
+- 🟡 **honest caveat — cross-arch strict byte-eq 는 3/4** — lexer/parser/type_checker 는 x86_64≡arm64 byte-identical, codegen.hexa 만 arch-specific(x86_64 1a9c46dc vs arm64 6e30c168 — string-pool ordering/size 구조차)이나 PER-ARCH DETERMINISTIC. P1(#2105/#2109)이 애초 PER-ARCH fixpoint 였고 cross-arch byte-eq 를 주장한 적 없음 = 일관. cold-boot 도달성(P3 falsifier)은 양 arch PASS.
+- ℹ️ **"0 .c" = 0 HAND-WRITTEN .c** — `self/native/hexa_cc.c.hexanoport` 마커 R1. generated seed 는 위반 아님(Go-1.4 C-seed = CANON M3b 자체 선언). 새 파일명이라 `.gitignore`(specific `self/native/hexa_cc.c` 만) 미매칭 = 직접 커밋(sign-gate 불필요).
+- ⚠ **잔여(P3 닫힘과 별개)**: ① seed 는 d67dd37 pin(re-pin = `cc --regen` on SSOT 변경) ② cross-arch codegen 결정성은 별도 축 ③ runtime memcap fscanf-NULL(d67dd37 pre-#594 잔재 · HEXA_MEM_CAP_MB 설정 시만 · cold-boot 은 HEXA_MEM_UNLIMITED=1 우회) ④ bootstrap-default wiring(build_hexa_cli Step 0 가 seed 우선) = 후속 사이클.

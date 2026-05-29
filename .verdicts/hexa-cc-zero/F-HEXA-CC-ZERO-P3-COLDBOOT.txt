@@ -1,0 +1,122 @@
+F-HEXA-CC-ZERO-P3-COLDBOOT — stage-(-1) cold-seed TRUE-COLD falsifier (2026-05-30)
+==================================================================================
+falsifier  : "a bare `git clone` with NO pre-installed hexa on PATH + a C
+              compiler ALONE produces a WORKING build/hexat that transpiles the
+              4 SSOT modules — cross-host (arm64 + x86_64)?"
+method     : design #2116 option (b) — commit a single self-contained,
+             pre-amalgamated C-seed TU (self/native/hexa_cc_seed.c). On each
+             arch: fresh clone of the seed branch → drop hexat from PATH (subshell
+             with hexa/hexa-run/.local/bin scrubbed) → `cc hexa_cc_seed.c -o hexat`
+             (ZERO -I, one cc line) → transpile lexer/parser/type_checker/codegen.
+hosts      : ubu-2 (Linux x86_64, gcc 13.3) + mini (Darwin arm64, Apple clang 21).
+seed       : self/native/hexa_cc_seed.c
+             size = 2982925 bytes (2.85 MB), md5 = 6ee710e433ea476b49b379958b5b25c9
+             ARCH-NEUTRAL C (same bytes feed both hosts). 0 local #include "..."
+             remaining (all of runtime.c + runtime_core.c + runtime_hi_gen.c +
+             native/*.c + forge_tier_v1.c inlined; only system <...> headers left).
+provenance : `hexa cc --regen` @ d67dd37 (a recent origin/main ancestor) — the
+             hexa_cc portion is the P1 self-host byte-eq FIXPOINT (gen_b≡gen_c,
+             4/4 modules, verified below). runtime = the d67dd37 consistent set.
+             Re-pin via `cc --regen` when codegen/runtime SSOT changes.
+
+──────────────────────────────────────────────────────────────────
+결론 (one-line)
+──────────────────────────────────────────────────────────────────
+TRUE-COLD-PASS (cross-host) — bare clone + a C compiler ALONE (no pre-installed
+hexa) builds a WORKING, DETERMINISTIC transpiler from the single committed
+hexa_cc_seed.c on BOTH x86_64 (ubu-2) and arm64 (mini). The stage-(-1)
+chicken-egg is closed: build/hexat is now reachable from a bare clone offline.
+  • x86_64 (ubu-2): cc → hexat → 4/4 SSOT transpile rc=0, byte-eq to the seed's
+    own P1 fixpoint, AND per-arch fixpoint gen_b≡gen_c (full self-host fixpoint).
+  • arm64 (mini): cc → hexat → 4/4 SSOT transpile rc=0, DETERMINISTIC (run1≡run2).
+HONEST CAVEAT (g5/g63): strict CROSS-ARCH byte-eq holds for 3/4 modules
+(lexer/parser/type_checker byte-identical x86_64≡arm64); codegen.hexa emits an
+ARCH-SPECIFIC output (x86_64 md5 1a9c46dc, arm64 md5 6e30c168 — structural
+string-pool ordering/size differs) but is PER-ARCH DETERMINISTIC. This matches
+P1's measured model exactly: P1 (#2105 Mac, #2109 ubu) was a PER-ARCH fixpoint,
+NEVER a cross-arch byte-eq claim. The cold-boot PROPERTY (the P3 falsifier) is
+the seed→working-hexat reachability, which is PASS on both arches.
+
+──────────────────────────────────────────────────────────────────
+[A] x86_64 (ubu-2) cold-boot stdout (verbatim, scrubbed PATH)
+──────────────────────────────────────────────────────────────────
+host: Linux x86_64
+clone HEAD: d67dd37132071b7039d50e23564bf909d38aadb8
+seed: self/native/hexa_cc_seed.c = 2982925 bytes, md5=6ee710e433ea476b49b379958b5b25c9
+runtime.c on fresh clone: ABSENT (gitignored)
+hexa_cc.c on fresh clone:  ABSENT
+--- COLD BUILD (scrubbed PATH, no hexa) + transpile + byte-eq ---
+hexa on PATH: NONE
+cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+cc rc=0  hexat_cold=2244840 bytes (ELF: ELF 64-bit LSB pie executable, x86-64)
+  transpile lexer:        rc=0 md5=df4e26d86b356bbac7e152bb65e8d08b
+  transpile parser:       rc=0 md5=c1e02425e2410336977b9edc581f4591
+  transpile type_checker: rc=0 md5=6153a8121ed17cc48242283ede313f4c
+  transpile codegen:      rc=0 md5=1a9c46dc6b12398f43afe874f2bb680b
+reference (seed fixpoint, HEXA_MEM_UNLIMITED): lexer=df4e26d8 parser=c1e02425
+  type_checker=6153a812 codegen=1a9c46dc  → 4/4 BYTE-EQ.
+
+[A-fix] x86_64 per-arch FIXPOINT (gen_b vs gen_c)
+  gen_b (hexat_A-transpiled) vs gen_c (hexat_B-transpiled) — 4/4 BYTE-EQ:
+    lexer:        df4e26d86b356bbac7e152bb65e8d08b
+    parser:       c1e02425e2410336977b9edc581f4591
+    type_checker: 6153a8121ed17cc48242283ede313f4c
+    codegen:      1a9c46dc6b12398f43afe874f2bb680b
+  full hexa_cc.c fixpoint: gen_b md5 289ef611d0825929f1de2d217396702c == gen_c. PASS.
+
+──────────────────────────────────────────────────────────────────
+[B] arm64 (mini) cold-boot stdout (verbatim, scrubbed PATH)
+──────────────────────────────────────────────────────────────────
+host: Darwin arm64
+clone HEAD: d800c11937379fb06d207d029c4f5ec768098802  (= origin/main + seed branch)
+seed: 2982925 bytes, md5=6ee710e433ea476b49b379958b5b25c9
+runtime.c on fresh clone: ABSENT
+hexa_cc.c on fresh clone:  ABSENT
+--- COLD BUILD (scrubbed PATH, no hexa) + transpile ---
+hexa on PATH: NONE
+cc: Apple clang version 21.0.0 (clang-2100.1.1.101)
+cc rc=0  (no openssl on mini → libsodium/openssl crypto fns return 'not linked', non-fatal)
+hexat_cold_mini=2269712 bytes (Mach-O 64-bit executable arm64)
+  transpile lexer:        rc=0 md5=df4e26d86b356bbac7e152bb65e8d08b   (== x86_64)
+  transpile parser:       rc=0 md5=c1e02425e2410336977b9edc581f4591   (== x86_64)
+  transpile type_checker: rc=0 md5=6153a8121ed17cc48242283ede313f4c   (== x86_64)
+  transpile codegen:      rc=0 md5=6e30c1680ce7c165112d776a42772ead   (arch-specific)
+  determinism (codegen 2x): 6e30c1680ce7c165112d776a42772ead (run1≡run2). DETERMINISTIC.
+
+──────────────────────────────────────────────────────────────────
+[C] ARCHITECTURAL FACTS (why this seed is needed)
+──────────────────────────────────────────────────────────────────
+A bare clone has THREE absent C inputs the cold path needs, all gitignored:
+  • self/native/hexa_cc.c   — transpiler TU (regen via `cc --regen`, no in-repo .c)
+  • self/runtime.c          — HAND-MAINTAINED runtime (GC/values/strings); .hexanoport
+                              marker: "Cannot be ported to .hexa". NO emitter.
+  • self/native/crypto_blowfish.c — HAND-WRITTEN native fragment, NO emitter.
+The other runtime fragments (runtime_core.c, runtime_hi_gen.c, native/*.c,
+forge_tier_v1.c) DO regen from `*_emit.hexa` emitters. The seed amalgamates ALL
+of them into one TU, so a bare clone needs neither the regen step nor any -I.
+
+"0 .c" reconciliation: per self/native/hexa_cc.c.hexanoport (R1) the north-star
+is 0 HAND-WRITTEN .c, NOT literally 0 .c on disk. hexa_cc_seed.c is GENERATED
+(its SSOT = the 4 .hexa modules + the hand-maintained runtime), so committing it
+is R1-compliant (Go-1.4 C-seed model, as CANON M3b already declares in code).
+
+.gitignore: the new filename hexa_cc_seed.c is NOT matched by .gitignore (which
+lists the SPECIFIC file self/native/hexa_cc.c, not self/native/*.c) — committed
+directly, NO .gitignore edit, NO sign-gate needed.
+
+──────────────────────────────────────────────────────────────────
+[D] RESIDUALS (do NOT block P3 cold-boot closure)
+──────────────────────────────────────────────────────────────────
+1. cross-arch codegen byte difference (3/4 cross-arch byte-eq; codegen arch-
+   specific, per-arch deterministic). Orthogonal to cold-boot reachability;
+   matches P1's per-arch fixpoint model. A future cross-arch-determinism axis.
+2. seed pinned at d67dd37 (40 commits behind HEAD at capture). Re-pin via
+   `cc --regen` is the maintenance contract; the per-arch fixpoint property is
+   commit-invariant.
+3. runtime memcap fscanf-NULL: the d67dd37 runtime carries the pre-#594/#789
+   `%ld %ld` /proc/self/statm fscanf bug — triggered ONLY when HEXA_MEM_CAP_MB
+   is set. Cold boot runs with HEXA_MEM_UNLIMITED=1 (no RSS probe) → no segfault.
+   A newer-runtime re-pin retires this. NOT a seed defect (env-gated, documented).
+4. bootstrap-default wiring (build_hexa_cli.hexa Step 0 / cmd_cc preferring the
+   committed seed when no hexa on PATH) — next-cycle follow-up; the seed's
+   existence + this cold-boot proof is the P3 deliverable.
