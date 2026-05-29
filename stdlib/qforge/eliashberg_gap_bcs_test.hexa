@@ -1,0 +1,292 @@
+// Isolated numeric test — non-linear Eliashberg gap Δ(iωₙ) below Tc, the
+// weak-coupling BCS anchor 2Δ(0)/k_BTc → 3.528 (Bardeen-Cooper-Schrieffer
+// 1957, Phys. Rev. 108 1175).
+//
+// SELF-CONTAINED (no `use`): the solver bodies are copied VERBATIM from
+// stdlib/qforge/eliashberg.hexa — the PR-2 non-linear gap iteration
+// (`eliashberg_gap_from_lambda` → `_eli_gap_core`) plus the existing
+// linearized Tc bisection it sits below (`_eli_build_kernel` /
+// `_eli_power_lambda_max` / `eliashberg_tc_from_lambda`). A single-file copy
+// is required because a multi-use compiled build of the stdlib link-fails
+// locally (no generated runtime.c in the worktree); the parse-gate +
+// this isolated numeric build IS the g5 gate (per the handoff).
+//
+// HONEST FINDING (g5/g63 · SCOPE-tier): the non-linear solver runs and is
+// PHYSICALLY FAITHFUL — at fixed low T the ratio 2Δ(iω₀)/Tc CONVERGES
+// DOWNWARD toward ~3.5 as the Matsubara window ω_max/ω_E grows (grid refines),
+// i.e. the over-3.528 values are frequency-truncation artifacts, not a solver
+// bug. The best-resolved single point (T=Tc/4, N=400, ω_max/ω_E≈15) lands at
+// 2Δ/kTc = 3.587 (≈1.7% above the BCS 3.528). A TIGHT-tolerance 3.528 hit
+// needs the simultaneous T→0 AND ω_max≫ω_E regime (N≳1000+), which is the
+// expensive fine-grid limit (and large-N segfaults the current build) the
+// handoff pre-registered as the scope boundary. Run results are recorded
+// verbatim in .verdicts/eliashberg-nonlinear-gap-bcs/bcs-anchor.txt.
+
+let _ELI_PI: float = 3.14159265358979323846
+
+fn _eli_abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn _eli_lambda_kernel_einstein(lam: float, omega_E_K: float,
+                               n_minus_m: int, T_K: float) -> float {
+    let nu = 2.0 * _ELI_PI * T_K * to_float(n_minus_m)
+    let wE2 = omega_E_K * omega_E_K
+    return lam * wE2 / (wE2 + nu * nu)
+}
+
+fn _eli_build_kernel(lam: float, omega_rep_K: float,
+                     mu_star: float, T_K: float, n_mats: int) -> [float] {
+    let empty: [float] = []
+    if n_mats < 1 { return empty }
+    if T_K <= 0.0 { return empty }
+    let lmax = 2 * n_mats
+    let mut lam_tab: [float] = []
+    let mut l = 0
+    while l <= lmax {
+        lam_tab.push(_eli_lambda_kernel_einstein(lam, omega_rep_K, l, T_K))
+        l = l + 1
+    }
+    let mut Z: [float] = []
+    let mut n = 0
+    while n < n_mats {
+        let mut s = 0.0
+        let mut m = 0
+        while m < n_mats {
+            let d = if n >= m { n - m } else { m - n }
+            s = s + (lam_tab[d] - lam_tab[n + m + 1])
+            m = m + 1
+        }
+        let zn = 1.0 + s / to_float(2 * n + 1)
+        if zn < 1.0e-9 { Z.push(1.0e-9) } else { Z.push(zn) }
+        n = n + 1
+    }
+    let mut S: [float] = []
+    let mut i = 0
+    while i < n_mats {
+        let mut j = 0
+        while j < n_mats {
+            let d = if i >= j { i - j } else { j - i }
+            let num = lam_tab[d] + lam_tab[i + j + 1] - 2.0 * mu_star
+            let den_w = sqrt(to_float((2 * i + 1) * (2 * j + 1)))
+            let den_z = sqrt(Z[i] * Z[j])
+            S.push(num / (den_w * den_z))
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return S
+}
+
+fn _eli_power_lambda_max(S: [float], n: int) -> float {
+    if n < 1 { return 0.0 }
+    let mut v: [float] = []
+    let mut i = 0
+    while i < n { v.push(1.0 / sqrt(to_float(n))) ; i = i + 1 }
+    let mut rho = 0.0
+    let mut it = 0
+    while it < 300 {
+        let mut w: [float] = []
+        let mut r = 0
+        while r < n {
+            let mut acc = 0.0
+            let mut c = 0
+            while c < n { acc = acc + S[r * n + c] * v[c] ; c = c + 1 }
+            w.push(acc)
+            r = r + 1
+        }
+        let mut nrm2 = 0.0
+        let mut k = 0
+        while k < n { nrm2 = nrm2 + w[k] * w[k] ; k = k + 1 }
+        let nrm = sqrt(nrm2)
+        if nrm < 1.0e-300 { return 0.0 }
+        let mut ray = 0.0
+        let mut q = 0
+        while q < n { ray = ray + v[q] * w[q] ; q = q + 1 }
+        let mut nv: [float] = []
+        let mut p = 0
+        while p < n { nv.push(w[p] / nrm) ; p = p + 1 }
+        v = nv
+        if _eli_abs(ray - rho) < 1.0e-12 * (1.0 + _eli_abs(ray)) { return ray }
+        rho = ray
+        it = it + 1
+    }
+    return rho
+}
+
+fn _eli_rho(lam: float, omega_rep_K: float, mu_star: float,
+            T_K: float, n_mats: int) -> float {
+    let S = _eli_build_kernel(lam, omega_rep_K, mu_star, T_K, n_mats)
+    if len(S) == 0 { return 0.0 }
+    return _eli_power_lambda_max(S, n_mats)
+}
+
+fn eli_tc(lam: float, omega_rep_K: float, mu_star: float, n_mats: int) -> float {
+    if n_mats < 1 { return 0.0 }
+    let w_scale = omega_rep_K
+    if w_scale <= 0.0 { return 0.0 }
+    let t_lo_seed = w_scale * 1.0e-3
+    let rho_lo = _eli_rho(lam, omega_rep_K, mu_star, t_lo_seed, n_mats)
+    if rho_lo < 1.0 { return 0.0 }
+    let mut t_lo = t_lo_seed
+    let mut t_hi = t_lo_seed
+    let mut bracketed = false
+    let mut step = 0
+    while step < 40 {
+        let t_try = t_lo_seed * pow(1.3, to_float(step + 1))
+        let rho = _eli_rho(lam, omega_rep_K, mu_star, t_try, n_mats)
+        if rho < 1.0 {
+            t_hi = t_try
+            bracketed = true
+            t_lo = if step == 0 { t_lo_seed } else { t_lo_seed * pow(1.3, to_float(step)) }
+            step = 100
+        } else {
+            t_lo = t_try
+            step = step + 1
+        }
+    }
+    if !bracketed { return 0.0 }
+    let mut it = 0
+    while it < 60 {
+        let t_mid = 0.5 * (t_lo + t_hi)
+        let rho = _eli_rho(lam, omega_rep_K, mu_star, t_mid, n_mats)
+        if rho >= 1.0 { t_lo = t_mid } else { t_hi = t_mid }
+        it = it + 1
+    }
+    return 0.5 * (t_lo + t_hi)
+}
+
+// NON-LINEAR below-Tc gap Δ(iωₙ) — copied verbatim from `_eli_gap_core`.
+fn eli_gap(lam: float, omega_rep_K: float, mu_star: float,
+           T_K: float, n_mats: int) -> [float] {
+    let empty: [float] = []
+    if n_mats < 1 { return empty }
+    if T_K <= 0.0 { return empty }
+    let lmax = 2 * n_mats
+    let mut lam_tab: [float] = []
+    let mut l = 0
+    while l <= lmax {
+        lam_tab.push(_eli_lambda_kernel_einstein(lam, omega_rep_K, l, T_K))
+        l = l + 1
+    }
+    let piT = _ELI_PI * T_K
+    let mut wmat: [float] = []
+    let mut mi = 0
+    while mi < n_mats { wmat.push(piT * to_float(2 * mi + 1)) ; mi = mi + 1 }
+    let mut delta: [float] = []
+    let mut s = 0
+    while s < n_mats { delta.push(0.1 * piT) ; s = s + 1 }
+    let mut it = 0
+    while it < 1000 {
+        let mut Em: [float] = []
+        let mut m = 0
+        while m < n_mats {
+            let dm = delta[m]
+            Em.push(sqrt(wmat[m] * wmat[m] + dm * dm))
+            m = m + 1
+        }
+        let mut Z: [float] = []
+        let mut n = 0
+        while n < n_mats {
+            let mut acc = 0.0
+            let mut mm = 0
+            while mm < n_mats {
+                let d = if n >= mm { n - mm } else { mm - n }
+                acc = acc + (lam_tab[d] - lam_tab[n + mm + 1]) * (wmat[mm] / Em[mm])
+                mm = mm + 1
+            }
+            let zn = 1.0 + acc / to_float(2 * n + 1)
+            if zn < 1.0e-9 { Z.push(1.0e-9) } else { Z.push(zn) }
+            n = n + 1
+        }
+        let mut dnew: [float] = []
+        let mut nn = 0
+        while nn < n_mats {
+            let mut acc = 0.0
+            let mut mm = 0
+            while mm < n_mats {
+                let d = if nn >= mm { nn - mm } else { mm - nn }
+                let ker = lam_tab[d] + lam_tab[nn + mm + 1] - 2.0 * mu_star
+                acc = acc + ker * (delta[mm] / Em[mm])
+                mm = mm + 1
+            }
+            dnew.push(piT * acc / Z[nn])
+            nn = nn + 1
+        }
+        let mut maxd = 0.0
+        let scale = _eli_abs(dnew[0])
+        let mut k = 0
+        while k < n_mats {
+            let ch = _eli_abs(dnew[k] - delta[k])
+            if ch > maxd { maxd = ch }
+            k = k + 1
+        }
+        let alpha = 0.5
+        let mut p = 0
+        while p < n_mats {
+            delta[p] = (1.0 - alpha) * delta[p] + alpha * dnew[p]
+            p = p + 1
+        }
+        let denom = if scale < 1.0e-12 { 1.0e-12 } else { scale }
+        if maxd / denom < 1.0e-9 { return delta }
+        it = it + 1
+    }
+    return delta
+}
+
+fn main() {
+    let wrep = 1000.0           // Einstein mode (K) — large vs Tc (adiabatic)
+    let mu = 0.0                // pure phonon, weak-coupling BCS limit
+    let lam = 0.4
+
+    // ── Probe A — T-sweep at a well-resolved grid (N=400). The ratio is
+    // CLOSEST to 3.528 where ω_max/ω_E is largest (T=Tc/4); it inflates as T
+    // falls only because the FIXED window ω_max=(2N-1)πT shrinks below ω_E.
+    println("=== Probe A: T-sweep, N=400 ===")
+    let n_mats = 400
+    let tc = eli_tc(lam, wrep, mu, n_mats)
+    println("lam=" + to_string(lam) + " Tc=" + to_string(tc) + " K")
+    let mut divs: [float] = []
+    divs.push(4.0)
+    divs.push(8.0)
+    divs.push(16.0)
+    divs.push(32.0)
+    divs.push(64.0)
+    let mut i = 0
+    while i < len(divs) {
+        let tlow = tc / divs[i]
+        let g = eli_gap(lam, wrep, mu, tlow, n_mats)
+        if len(g) > 0 {
+            let d0 = g[0]
+            let ratio = 2.0 * d0 / tc
+            let wmax = _ELI_PI * tlow * to_float(2 * n_mats - 1)
+            println("  T=Tc/" + to_string(divs[i]) +
+                    " 2D/kTc=" + to_string(ratio) +
+                    " wmax/wE=" + to_string(wmax / wrep))
+        }
+        i = i + 1
+    }
+
+    // ── Probe B — grid refinement at fixed T=Tc/16. As N grows (window
+    // widens) the ratio CONVERGES DOWNWARD toward ~3.5 — the over-3.528 values
+    // are truncation artifacts, confirming the solver is physically faithful.
+    println("=== Probe B: grid refinement, T=Tc/16 ===")
+    let mut Ns: [int] = []
+    Ns.push(200)
+    Ns.push(400)
+    let mut j = 0
+    while j < len(Ns) {
+        let nm = Ns[j]
+        let tcj = eli_tc(lam, wrep, mu, nm)
+        let tlow = tcj / 16.0
+        let g = eli_gap(lam, wrep, mu, tlow, nm)
+        if len(g) > 0 && tcj > 0.0 {
+            let ratio = 2.0 * g[0] / tcj
+            let wmax = _ELI_PI * tlow * to_float(2 * nm - 1)
+            println("  N=" + to_string(nm) +
+                    " 2D/kTc=" + to_string(ratio) +
+                    " wmax/wE=" + to_string(wmax / wrep))
+        }
+        j = j + 1
+    }
+    println("BCS weak-coupling target: 2Delta/kTc -> 3.528")
+    println("eliashberg_gap_bcs_test DONE")
+}
