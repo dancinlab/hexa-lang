@@ -1,90 +1,51 @@
-# codegen-bootstrap-sync.yml — regen-desync gate (PR #1287 §1 follow-up).
+# codegen-bootstrap-sync.yml — RETIRED (HEXA-CC-ZERO P6).
 #
-#   FAILS if any `hexa_<sym>(` C-call shape referenced inside a STRING
-#   LITERAL of `self/codegen.hexa` is NOT present in the committed
-#   bootstrap transpiler `self/native/hexa_cc.c`. That divergence means
-#   a contributor added a direct-call mapping to codegen.hexa but did
-#   not run `hexa cc --regen` + commit the regenerated hexa_cc.c, so a
-#   clean `hexa cc` (non-regen) on a fresh checkout emits the OLD
-#   carrier-form (`hexa_call1(<sym>, ...)`) instead of the new direct
-#   call. The runtime exposes ONLY the direct symbol -> downstream
-#   clang link fails with `error: use of undeclared identifier '<sym>'`.
+# This gate used to FAIL if any `hexa_<sym>(` C-call shape emitted by a string
+# literal in `self/codegen.hexa` was missing from the committed bootstrap
+# transpiler `self/native/hexa_cc.c` — catching a "added a direct-call mapping
+# to codegen.hexa but forgot to `hexa cc --regen` + commit hexa_cc.c" desync
+# (the #1187 farr32 class).
 #
-#   The desync class that prompted this gate (#1187 farr32 mappings on
-#   codegen.hexa, 0 `hexa_farr32_*` on hexa_cc.c) was caught and
-#   regenerated in #1291. This gate prevents recurrence for the entire
-#   direct-call surface (~384 distinct hexa_<sym>( shapes today).
+# Its PREMISE is now structurally obsolete: `self/native/hexa_cc.c` left git in
+# the B9 `.c=0` graduation (#2065 — tracked `.c` = 0) and is a gitignored build
+# artifact, ABSENT on every fresh checkout. The gate's `open('self/native/
+# hexa_cc.c')` therefore fails on every commit (a removed-invariant false-red),
+# and there is no longer a committed bootstrap C seed to diff codegen.hexa
+# against. The hand-maintained C seed it guarded no longer exists.
 #
-# How to fix a failing gate:
-#   1. cd <repo>
-#   2. hexa cc --regen      (regenerates self/native/hexa_cc.c)
-#   3. git add self/native/hexa_cc.c
-#   4. git commit -m "regen(self/native): hexa_cc.c — sync with codegen.hexa"
-#
-# Trigger: any change touching either codegen.hexa or hexa_cc.c.
-# No build needed — pure grep diff (~1 second runtime).
+# The successor "is the committed bootstrap artifact fresh?" invariant now
+# attaches to the cold-seed `self/native/hexa_cc_seed.c` (HEXA-CC-ZERO P3/P5 —
+# a self-contained pre-amalgamated TU). The freshness check for THAT artifact
+# is a seed-REFRESH model (re-amalgamate hexa_cc_seed.c from the current SSOT
+# via `hexa cc --regen` + the seed amalgamation, then commit) — a different
+# shape than a string-literal grep diff, tracked as the HEXA-CC-ZERO
+# seed-refresh follow-up. Until that lands, this workflow is a deliberate
+# no-op so it stops false-failing on the removed `hexa_cc.c`.
 
 name: codegen-bootstrap-sync
 
+# Retired: never triggers on push/pull_request (the old paths referenced a
+# removed file). Kept manually dispatchable only so the workflow name survives
+# in history with this rationale. No automatic runs.
 on:
-  push:
-    paths:
-      - 'self/codegen.hexa'
-      - 'self/native/hexa_cc.c'
-  pull_request:
-    paths:
-      - 'self/codegen.hexa'
-      - 'self/native/hexa_cc.c'
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  codegen-bootstrap-sync:
-    name: codegen.hexa direct-calls -> hexa_cc.c (regen desync gate)
+  retired:
+    name: codegen-bootstrap-sync (RETIRED — hexa_cc.c removed in #2065)
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 1
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Gate -- every hexa_<sym>( in codegen.hexa string literals must exist in hexa_cc.c
+      - name: Explain retirement
         shell: bash
         run: |
-          set -euo pipefail
-          python3 <<'PY'
-          import re, sys
-
-          cg_path = 'self/codegen.hexa'
-          cc_path = 'self/native/hexa_cc.c'
-
-          with open(cg_path, encoding='utf-8') as f:
-              cg = f.read()
-          with open(cc_path, encoding='utf-8') as f:
-              cc = f.read()
-
-          # Extract every `hexa_<symbol>(` shape that appears INSIDE a
-          # string literal of codegen.hexa. The §1 desync class is
-          # specifically string-emitted direct-call mappings (e.g.
-          # `return "hexa_farr32_zeros(" + a0 + ")"`). Comments and
-          # identifiers in the hexa source itself are excluded.
-          str_lits = re.findall(r'"([^"\\]*(?:\\.[^"\\]*)*)"', cg)
-          syms = set()
-          for s in str_lits:
-              for m in re.findall(r'hexa_[a-zA-Z_0-9]+(?=\()', s):
-                  syms.add(m)
-
-          missing = sorted(s for s in syms if s not in cc)
-          print(f"codegen.hexa string-literals reference {len(syms)} distinct hexa_<sym>( call shapes")
-          print(f"hexa_cc.c size: {len(cc)} bytes")
-
-          if missing:
-              print(f"::error::regen desync: {len(missing)} hexa_<sym>( call shape(s) in codegen.hexa not present in hexa_cc.c")
-              print("  Bootstrap transpiler is STALE — run `hexa cc --regen` and commit self/native/hexa_cc.c.")
-              print("  Missing symbols:")
-              for s in missing:
-                  print(f"    - {s}")
-              sys.exit(1)
-
-          print("OK: every codegen.hexa direct-call symbol is present in hexa_cc.c (regen in sync)")
-          PY
+          echo "codegen-bootstrap-sync is RETIRED (HEXA-CC-ZERO P6)."
+          echo "It diffed self/codegen.hexa string-literal direct-calls against the"
+          echo "committed bootstrap C seed self/native/hexa_cc.c, which was removed in"
+          echo "#2065 (.c=0 graduation) and is now a gitignored build artifact."
+          echo "The successor freshness invariant attaches to the cold-seed"
+          echo "self/native/hexa_cc_seed.c via a seed-REFRESH model (HEXA-CC-ZERO"
+          echo "seed-refresh follow-up), not a string-literal grep diff."
