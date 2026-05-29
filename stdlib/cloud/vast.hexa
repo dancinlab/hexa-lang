@@ -55,15 +55,92 @@ fn _vast_fail_offer(msg: str) -> VastOffer {
     return VastOffer { ok: 0, offer_id: "", dph: "", message: msg }
 }
 
+// ── vastai key sourcing (handoff 5bb23201) ────────────────────────────
+// The vastai CLI authenticates from its OWN config file
+// (~/.config/vastai/vast_api_key); hexa cloud never set that file. So when the
+// key rotated, vastai read the STALE file and returned HTTP 401 "Invalid user
+// key" — blocking `rent` + `cloud list` — even though the LIVE key was present
+// in the sidecar secret store. The fix (mirrors runpod_api_key's resolution
+// surface): source the key from `secret get vast.api_key` PRIMARY, with the
+// legacy ~/.secrets/vastai_api_key FILE as fallback, and SYNC the live value
+// into the vastai config file so a stale file can never 401 when a live secret
+// exists. This is a WIRING fix, not key rotation.
+
+// _vast_api_key — resolve the vast.ai API key, canonical order:
+//   1. VAST_API_KEY env             (explicit override / CI)
+//   2. `secret get vast.api_key`    (sidecar secret store — the LIVE SSOT)
+//   3. ~/.secrets/vastai_api_key    (legacy file — fallback only)
+// Returns "" when nothing resolves. Never prints the key.
+fn _vast_api_key() -> str {
+    let env_key = env_var("VAST_API_KEY")
+    if len(env_key) > 0 {
+        return env_key
+    }
+    let s = exec("secret get vast.api_key 2>/dev/null").trim()
+    if len(s) > 0 {
+        return s
+    }
+    let f = env_var("HOME") + "/.secrets/vastai_api_key"
+    if file_exists(f) {
+        return read_file(f).trim()
+    }
+    return ""
+}
+
+// _vast_key_sync — idempotently mirror the live key (from _vast_api_key) into
+// the vastai CLI's config file (~/.config/vastai/vast_api_key) so the CLI
+// authenticates with the LIVE secret rather than a stale on-disk copy. Writes
+// ONLY when a live key exists AND differs from the current file content (so the
+// common steady-state is a cheap read-only diff). Throttled to once per ~60s
+// via a /tmp marker so the 9 _vastai_path call sites do not each shell out to
+// `secret get`. Returns 1 on a write, 0 on no-op. Network-free; key never
+// printed.
+fn _vast_key_sync() -> int {
+    let home = env_var("HOME")
+    if len(home) == 0 {
+        return 0
+    }
+    // throttle: skip the secret-store probe if we synced within the last ~60s.
+    let marker = "/tmp/.hexa-cloud-vast-key-synced"
+    let fresh = exec("find " + _shq_local(marker) + " -mmin -1 2>/dev/null").trim()
+    if len(fresh) > 0 {
+        return 0
+    }
+    let key = _vast_api_key()
+    if len(key) == 0 {
+        return 0
+    }
+    let cfg_dir = home + "/.config/vastai"
+    let cfg = cfg_dir + "/vast_api_key"
+    let mut current = ""
+    if file_exists(cfg) {
+        current = read_file(cfg).trim()
+    }
+    // touch the marker regardless so the throttle holds even on a no-op.
+    let _ = exec("touch " + _shq_local(marker) + " 2>/dev/null")
+    if current == key {
+        return 0
+    }
+    let _ = exec("mkdir -p " + _shq_local(cfg_dir) + " 2>/dev/null")
+    write_file(cfg, key)
+    let _ = exec("chmod 600 " + _shq_local(cfg) + " 2>/dev/null")
+    return 1
+}
+
 // ── vastai detection ─────────────────────────────────────────────────
 
 // _vastai_path — return the vastai binary path if available, else "".
 // `VASTAI_DISABLE=1` in the env forces the no-CLI path even if vastai is
-// installed (useful when unit-testing the command-string logic).
+// installed (useful when unit-testing the command-string logic). Before
+// handing back the binary it ensures the CLI's config key is in sync with the
+// live secret store (handoff 5bb23201) — this is the single funnel every
+// vastai invocation passes through (d4), so the auth path can never 401 on a
+// stale file when a live secret exists.
 fn _vastai_path() -> str {
     if env_var("VASTAI_DISABLE") == "1" {
         return ""
     }
+    let _ = _vast_key_sync()
     let home_bin = env_var("HOME") + "/bin/vastai"
     if file_exists(home_bin) {
         return home_bin
