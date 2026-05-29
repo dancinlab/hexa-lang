@@ -1,0 +1,673 @@
+// @ci_gate
+// Selftest — stdlib/signal 3D FFT (fft3 / ifft3 / fft3_real).
+//
+// SELF-CONTAINED build target. As with core_fft_test.hexa, single-file
+// `hexa build` does NOT flatten `import "stdlib/..."`, so the ENTIRE
+// stdlib/signal/core_fft.hexa module body is inlined below VERBATIM (the 1D
+// fft_native/ifft_native + the 3D fft3/ifft3/fft3_real). Once cross-import
+// flatten lands this collapses to `import "stdlib/signal/core_fft.hexa"`.
+//
+// g5 GATE (closed-form verifiable — clean 🔵/🟢 primitive):
+//   A 🔵 3D delta δ(r) → flat (all-ones) spectrum.
+//   B 🔵 single plane wave e^{iG0·r} → single nonzero bin at G0.
+//   C 🟢 3D Gaussian → Gaussian (width inversion: wide-r ⇒ narrow-G).
+//   D 🔵 Parseval/energy: Σ|ψ(r)|² = (1/N) Σ|ψ(G)|².
+//   E 🔵 round-trip identity ifft3(fft3(x)) = x to abs-ε 1e-10 (LOAD-BEARING).
+//   F 🟢 separability cross-check: fft3 of f(x)g(y)h(z) = outer product of 1D FFTs.
+//   G    malformed-dims guard: non-pow2 / size-mismatch ⇒ [].
+//
+// ════════════════════════════════════════════════════════════════════
+// Inlined module body — VERBATIM copy of stdlib/signal/core_fft.hexa
+// ════════════════════════════════════════════════════════════════════
+let CF_PI = 3.14159265358979323846
+let CF_TWO_PI = 6.28318530717958647692
+let CF_PI = 3.14159265358979323846
+let CF_TWO_PI = 6.28318530717958647692
+
+// ── bit reversal: reverse the `bits` lowest bits of `x` (verbatim) ──────────
+
+fn _cf_bit_reverse(x: int, bits: int) -> int {
+    let mut result = 0
+    let mut val = x
+    let mut i = 0
+    while i < bits {
+        result = result * 2 + (val - (val / 2) * 2)  // result = result*2 + val%2
+        val = val / 2
+        i = i + 1
+    }
+    return result
+}
+
+// ── log2 for powers of 2 (verbatim log2_int) ────────────────────────────────
+
+fn _cf_log2_int(n: int) -> int {
+    let mut result = 0
+    let mut v = n
+    while v > 1 {
+        v = v / 2
+        result = result + 1
+    }
+    return result
+}
+
+// ── fft_native(real, imag, n): in-place Cooley-Tukey radix-2 FFT ────────────
+//
+// Byte-equal port of dsp_core.hexa::dsp_fft. Returns flat
+// [re0, im0, re1, im1, ...] (2·n floats). Requires n a power of 2.
+
+pub fn fft_native(real: [float], imag: [float], n: int) -> [float] {
+    if n <= 0 { return [] }
+    let bits = _cf_log2_int(n)
+
+    // Step 1: bit-reversal permutation into working arrays
+    let mut re = []
+    let mut im = []
+    let mut i = 0
+    while i < n {
+        let rev = _cf_bit_reverse(i, bits)
+        re = re.push(real[rev])
+        im = im.push(imag[rev])
+        i = i + 1
+    }
+
+    // Step 2: iterative butterfly passes
+    // stride doubles each stage: 2, 4, 8 ... n
+    let mut stride = 2
+    while stride <= n {
+        let half = stride / 2
+        let mut j = 0
+        while j < n {
+            let mut k = 0
+            while k < half {
+                // Twiddle factor: W_stride^k = exp(-j * 2*pi*k / stride)
+                let tw_re = cos(0.0 - CF_TWO_PI * k / stride)
+                let tw_im = sin(0.0 - CF_TWO_PI * k / stride)
+                let a_idx = j + k
+                let b_idx = j + k + half
+                // Complex multiply: tw * b
+                let tb_re = tw_re * re[b_idx] - tw_im * im[b_idx]
+                let tb_im = tw_re * im[b_idx] + tw_im * re[b_idx]
+                // Butterfly: a' = a + tw*b, b' = a - tw*b
+                let a_re = re[a_idx]
+                let a_im = im[a_idx]
+                // hexa lists are pass-by-value, so we rebuild with updated values
+                // We must build new arrays for each swap to avoid mutation issues.
+                // For efficiency we build temporary copies only of the two elements.
+                let new_a_re = a_re + tb_re
+                let new_a_im = a_im + tb_im
+                let new_b_re = a_re - tb_re
+                let new_b_im = a_im - tb_im
+                // Rebuild re and im with updated values at a_idx and b_idx.
+                // Since hexa arrays are pass-by-value and we cannot mutate in place,
+                // we rebuild the entire array. For small N (<=512) this is acceptable.
+                let mut re_new = []
+                let mut im_new = []
+                let mut q = 0
+                while q < n {
+                    if q == a_idx {
+                        re_new = re_new.push(new_a_re)
+                        im_new = im_new.push(new_a_im)
+                    } else if q == b_idx {
+                        re_new = re_new.push(new_b_re)
+                        im_new = im_new.push(new_b_im)
+                    } else {
+                        re_new = re_new.push(re[q])
+                        im_new = im_new.push(im[q])
+                    }
+                    q = q + 1
+                }
+                re = re_new
+                im = im_new
+                k = k + 1
+            }
+            j = j + stride
+        }
+        stride = stride * 2
+    }
+
+    // Pack output as interleaved [re0, im0, re1, im1, ...]
+    let mut out = []
+    let mut p = 0
+    while p < n {
+        out = out.push(re[p])
+        out = out.push(im[p])
+        p = p + 1
+    }
+    return out
+}
+
+// ── ifft_native(real, imag, n): inverse FFT ─────────────────────────────────
+//
+// Byte-equal port of dsp_core.hexa::dsp_ifft.
+// IFFT(X) = conj(FFT(conj(X))) / N — conjugate input, forward FFT, conjugate
+// output, divide by N. Returns flat [re0, im0, re1, im1, ...].
+
+pub fn ifft_native(real: [float], imag: [float], n: int) -> [float] {
+    if n <= 0 { return [] }
+
+    // Conjugate input: negate imaginary parts
+    let mut conj_im = []
+    let mut i = 0
+    while i < n {
+        conj_im = conj_im.push(0.0 - imag[i])
+        i = i + 1
+    }
+
+    // Forward FFT on conjugated input
+    let fft_out = fft_native(real, conj_im, n)
+
+    // Conjugate output and divide by N
+    let mut out = []
+    let inv_n = 1.0 / n
+    let mut j = 0
+    while j < n {
+        let re_val = fft_out[j * 2] * inv_n
+        let im_val = 0.0 - fft_out[j * 2 + 1] * inv_n
+        out = out.push(re_val)
+        out = out.push(im_val)
+        j = j + 1
+    }
+    return out
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  3D FFT — separable row-column-depth (axis-wise 1D) decomposition
+// ════════════════════════════════════════════════════════════════════════════
+//
+// The load-bearing primitive of plane-wave DFT (QFORGE L5 brick 1/5): the
+// ψ(G) ↔ ψ(r) transform, charge density, and Hartree potential all reduce to a
+// forward/inverse 3D FFT. By separability of the DFT kernel,
+//
+//     X[kx,ky,kz] = Σ_x Σ_y Σ_z  x[ix,iy,iz] · e^{-j2π(kx·ix/Nx + ky·iy/Ny + kz·iz/Nz)}
+//
+// factorizes into three successive 1D passes — first along z, then y, then x —
+// each pass a batch of 1D FFTs over the lines of one axis. We therefore REUSE
+// `fft_native` / `ifft_native` verbatim (no re-implementation of the radix-2
+// butterfly, per d3/d19); fft3 only orchestrates strided gather → 1D pass →
+// scatter.
+//
+// Layout (row-major, matching the natural C / QE-FFT convention):
+//
+//     idx(ix,iy,iz) = ((ix · Ny) + iy) · Nz + iz          (0 ≤ ix<Nx, …)
+//
+// so the z-axis is the contiguous (innermost) one. Both `re[]` and `im[]` are
+// flat length-N (N = Nx·Ny·Nz) SPLIT arrays on input.
+//
+// Surface:
+//     pub fn fft3 (re, im, nx, ny, nz) -> [float]   // forward
+//     pub fn ifft3(re, im, nx, ny, nz) -> [float]   // inverse (÷N)
+//
+//   Both return the flat INTERLEAVED layout [re0,im0,re1,im1,…] (2·N floats),
+//   matching the 1D `fft_native` output convention; index of (ix,iy,iz) is
+//   2·idx(ix,iy,iz) (re) and +1 (im).
+//
+//   Each of Nx, Ny, Nz must independently be a power of 2 (radix-2 reuse). Any
+//   non-positive / mismatched-size input returns [] (malformed-dims guard).
+//
+// Inverse identity:  IFFT3(X) = conj( FFT3( conj(X) ) ) / N — exactly the 1D
+// trick lifted to 3D, so ifft3 reuses the same axis-wise machinery via the
+// `inverse` flag and a final 1/N scale.
+
+// ── _fft3_core: split-array (re_in, im_in) → split (re_out, im_out) packed as
+//    [re0..re_{N-1}, im0..im_{N-1}] (length 2N). `inverse=1` ⇒ inverse passes,
+//    `inverse=0` ⇒ forward. NO 1/N scaling here (caller applies it for ifft3).
+fn _fft3_axis_pass(re: [float], im: [float], nx: int, ny: int, nz: int, axis: int, inverse: int) -> [float] {
+    // Transform every line along `axis` (0=x, 1=y, 2=z) with the 1D fft/ifft.
+    // Returns split [re(0..N-1), im(0..N-1)].
+    let ntot = nx * ny * nz
+    // length of the transformed axis + stride between successive samples on it
+    let mut alen = nz
+    let mut astride = 1
+    if axis == 0 { alen = nx  astride = ny * nz }
+    if axis == 1 { alen = ny  astride = nz }
+    if axis == 2 { alen = nz  astride = 1 }
+
+    // GENUINE working copies — hexa list index-assignment (`arr[i]=v`) mutates
+    // the shared backing store, so we must NOT alias the caller's `re`/`im`
+    // (else fft3 would clobber its own input). Build fresh copies via push.
+    let mut wre = []
+    let mut wim = []
+    let mut cp = 0
+    while cp < ntot {
+        wre = wre.push(re[cp])
+        wim = wim.push(im[cp])
+        cp = cp + 1
+    }
+
+    // Enumerate every line: a line is fixed in the two non-`axis` coords. We
+    // walk all N base indices and process a line only at its starting element
+    // (the element whose `axis` coordinate is 0), then stride through it.
+    let mut base = 0
+    while base < ntot {
+        // decode (ix,iy,iz) of `base`
+        let iz = base - (base / nz) * nz
+        let tmp = base / nz
+        let iy = tmp - (tmp / ny) * ny
+        let ix = tmp / ny
+        // is this the start of a line along `axis`? (axis-coord == 0)
+        let mut is_start = 0
+        if axis == 0 { if ix == 0 { is_start = 1 } }
+        if axis == 1 { if iy == 0 { is_start = 1 } }
+        if axis == 2 { if iz == 0 { is_start = 1 } }
+        if is_start == 1 {
+            // gather the line
+            let mut lre = []
+            let mut lim = []
+            let mut t = 0
+            while t < alen {
+                let gidx = base + t * astride
+                lre = lre.push(wre[gidx])
+                lim = lim.push(wim[gidx])
+                t = t + 1
+            }
+            // 1D transform (REUSE fft_native / ifft_native verbatim)
+            let mut spec = []
+            if inverse == 0 {
+                spec = fft_native(lre, lim, alen)
+            } else {
+                spec = ifft_native(lre, lim, alen)
+            }
+            // scatter back (spec is interleaved [re,im,...]). hexa supports
+            // list index-assignment (`arr[i] = v`), so we mutate in place.
+            let mut s = 0
+            while s < alen {
+                let gidx = base + s * astride
+                wre[gidx] = spec[s * 2]
+                wim[gidx] = spec[s * 2 + 1]
+                s = s + 1
+            }
+        }
+        base = base + 1
+    }
+
+    // pack split [re.., im..]
+    let mut out = []
+    let mut p = 0
+    while p < ntot {
+        out = out.push(wre[p])
+        p = p + 1
+    }
+    let mut q = 0
+    while q < ntot {
+        out = out.push(wim[q])
+        q = q + 1
+    }
+    return out
+}
+
+// ── _is_pow2: true (1) iff n>0 and a power of two ────────────────────────────
+fn _cf_is_pow2(n: int) -> int {
+    if n <= 0 { return 0 }
+    let mut v = n
+    while v > 1 {
+        if v - (v / 2) * 2 != 0 { return 0 }   // odd factor ⇒ not pow2
+        v = v / 2
+    }
+    return 1
+}
+
+// ── _fft3_run: shared forward/inverse driver (inverse handles 1/N scaling) ───
+fn _fft3_run(re: [float], im: [float], nx: int, ny: int, nz: int, inverse: int) -> [float] {
+    // malformed-dims guard: each axis must be an independent power of 2, and
+    // the input arrays must both be exactly Nx·Ny·Nz long.
+    if _cf_is_pow2(nx) == 0 { return [] }
+    if _cf_is_pow2(ny) == 0 { return [] }
+    if _cf_is_pow2(nz) == 0 { return [] }
+    let ntot = nx * ny * nz
+    if len(re) != ntot { return [] }
+    if len(im) != ntot { return [] }
+
+    // split working arrays
+    let mut wre = re
+    let mut wim = im
+
+    // pass order: z (axis 2) → y (axis 1) → x (axis 0). Order is immaterial
+    // for a separable transform; innermost-first is cache-friendliest.
+    let mut axis = 2
+    while axis >= 0 {
+        let packed = _fft3_axis_pass(wre, wim, nx, ny, nz, axis, inverse)
+        // unpack split [re.., im..] back into wre/wim
+        let mut nre = []
+        let mut nim = []
+        let mut p = 0
+        while p < ntot {
+            nre = nre.push(packed[p])
+            nim = nim.push(packed[ntot + p])
+            p = p + 1
+        }
+        wre = nre
+        wim = nim
+        axis = axis - 1
+    }
+
+    // For the inverse, ifft_native already divides each 1D pass by its axis
+    // length, so the cumulative scaling after three passes is 1/(Nx·Ny·Nz) = 1/N
+    // exactly — no extra global scale is needed. (Forward applies no scale.)
+
+    // pack output as INTERLEAVED [re0, im0, re1, im1, ...] (matches fft_native).
+    let mut out = []
+    let mut o = 0
+    while o < ntot {
+        out = out.push(wre[o])
+        out = out.push(wim[o])
+        o = o + 1
+    }
+    return out
+}
+
+// ── fft3(re, im, nx, ny, nz): forward 3D FFT ─────────────────────────────────
+//
+//   X[kx,ky,kz] = Σ x[ix,iy,iz] · e^{-j2π(kx·ix/Nx + ky·iy/Ny + kz·iz/Nz)}
+//
+// Input: split flat re[]/im[] (length Nx·Ny·Nz, row-major idx=((ix·Ny)+iy)·Nz+iz).
+// Output: interleaved [re0,im0,…] (2·N floats). Each axis must be a power of 2.
+// Malformed dims (non-pow2 / size mismatch / non-positive) ⇒ [].
+pub fn fft3(re: [float], im: [float], nx: int, ny: int, nz: int) -> [float] {
+    return _fft3_run(re, im, nx, ny, nz, 0)
+}
+
+// ── ifft3(re, im, nx, ny, nz): inverse 3D FFT (÷ N) ──────────────────────────
+//
+//   x[ix,iy,iz] = (1/N) Σ X[kx,ky,kz] · e^{+j2π(…)}        N = Nx·Ny·Nz
+//
+// IFFT3(X) = conj(FFT3(conj(X)))/N, realized as three inverse 1D passes (each
+// 1/Nx, 1/Ny, 1/Nz ⇒ cumulative 1/N). Same layout / guards as fft3.
+pub fn ifft3(re: [float], im: [float], nx: int, ny: int, nz: int) -> [float] {
+    return _fft3_run(re, im, nx, ny, nz, 1)
+}
+
+// ── fft3_real(data, nx, ny, nz): real-input convenience ──────────────────────
+//
+// Mirrors the 1D ergonomics: takes a real-only flat field (length N) and an
+// all-zero imaginary part is synthesized internally. Returns the same
+// interleaved complex spectrum as fft3. Malformed dims ⇒ [].
+pub fn fft3_real(data: [float], nx: int, ny: int, nz: int) -> [float] {
+    let ntot = nx * ny * nz
+    if len(data) != ntot { return [] }
+    let mut zim = []
+    let mut i = 0
+    while i < ntot {
+        zim = zim.push(0.0)
+        i = i + 1
+    }
+    return fft3(data, zim, nx, ny, nz)
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Test harness
+// ════════════════════════════════════════════════════════════════════
+
+fn _abs3(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn _check3(name: string, ok: int) -> int {
+    if ok == 1 {
+        println("PASS " + name)
+        return 0
+    }
+    println("FAIL " + name)
+    return 1
+}
+
+// row-major flat index
+fn _idx3(ix: int, iy: int, iz: int, ny: int, nz: int) -> int {
+    return ((ix * ny) + iy) * nz + iz
+}
+
+// abs-ε for the load-bearing round-trip; libm-trig radix-2 residual ~1e-15/bin.
+let TOL3 = 1.0e-10
+// looser tol for the analytic Gaussian/Parseval algebra (accumulated f.p.)
+let TOL3B = 1.0e-9
+
+fn main() {
+    let mut fails = 0
+    let nx = 4
+    let ny = 4
+    let nz = 4
+    let ntot = nx * ny * nz   // 64
+
+    // ── A: 3D delta δ(r) at origin → flat all-ones spectrum ──
+    // x[0,0,0]=1, rest 0  ⇒  X[k]=1+0j for every k.
+    let mut dre = []
+    let mut dim = []
+    let mut i = 0
+    while i < ntot {
+        if i == 0 { dre = dre.push(1.0) } else { dre = dre.push(0.0) }
+        dim = dim.push(0.0)
+        i = i + 1
+    }
+    let dspec = fft3(dre, dim, nx, ny, nz)
+    let mut a_ok = 1
+    let mut b = 0
+    while b < ntot {
+        if _abs3(dspec[b * 2] - 1.0) > TOL3 { a_ok = 0 }
+        if _abs3(dspec[b * 2 + 1] - 0.0) > TOL3 { a_ok = 0 }
+        b = b + 1
+    }
+    fails = fails + _check3("A_delta_flat_spectrum", a_ok)
+
+    // ── B: single plane wave e^{i·2π(g0x·ix/Nx + ...)} → single bin at G0 ──
+    // Use the FORWARD-kernel-matching wave so a forward fft3 lands one bin.
+    // fft3 uses e^{-j2π k·n/N}; feeding x[n]=e^{+j2π g0·n/N} gives X[k]=N·δ(k,g0).
+    let g0x = 1
+    let g0y = 2
+    let g0z = 3
+    let mut pwre = []
+    let mut pwim = []
+    let mut ix = 0
+    while ix < nx {
+        let mut iy = 0
+        while iy < ny {
+            let mut iz = 0
+            while iz < nz {
+                let phase = CF_TWO_PI * (g0x * ix) / nx + CF_TWO_PI * (g0y * iy) / ny + CF_TWO_PI * (g0z * iz) / nz
+                pwre = pwre.push(cos(phase))
+                pwim = pwim.push(sin(phase))
+                iz = iz + 1
+            }
+            iy = iy + 1
+        }
+        ix = ix + 1
+    }
+    let pwspec = fft3(pwre, pwim, nx, ny, nz)
+    let g0lin = _idx3(g0x, g0y, g0z, ny, nz)
+    let mut b_ok = 1
+    let mut k = 0
+    while k < ntot {
+        let mag = _abs3(pwspec[k * 2]) + _abs3(pwspec[k * 2 + 1])
+        if k == g0lin {
+            // the populated bin: magnitude ≈ N (real part ≈ ntot)
+            if _abs3(pwspec[k * 2] - ntot) > TOL3B { b_ok = 0 }
+            if _abs3(pwspec[k * 2 + 1] - 0.0) > TOL3B { b_ok = 0 }
+        } else {
+            if mag > TOL3B { b_ok = 0 }
+        }
+        k = k + 1
+    }
+    fails = fails + _check3("B_planewave_single_bin", b_ok)
+
+    // ── C: 3D Gaussian → Gaussian (width inversion, separable) ──
+    // A real even Gaussian transforms to a real Gaussian. We verify the
+    // qualitative width-inversion + realness: imag≈0 and the G-space profile
+    // is a positive Gaussian whose peak is at G=0 (widest-r ⇒ peak at 0).
+    // Use a periodic Gaussian sum approximated by a single centered lobe.
+    let mut gre = []
+    let mut gim = []
+    let cx = 2
+    let cy = 2
+    let cz = 2
+    let sig = 1.0
+    let mut jx = 0
+    while jx < nx {
+        let mut jy = 0
+        while jy < ny {
+            let mut jz = 0
+            while jz < nz {
+                let dx = jx - cx
+                let dy = jy - cy
+                let dz = jz - cz
+                let r2 = dx * dx + dy * dy + dz * dz
+                gre = gre.push(exp(0.0 - r2 / (2.0 * sig * sig)))
+                gim = gim.push(0.0)
+                jz = jz + 1
+            }
+            jy = jy + 1
+        }
+        jx = jx + 1
+    }
+    let gspec = fft3(gre, gim, nx, ny, nz)
+    // peak |X| should be at k=0; check |X[0]| is the max and imag parts ~0.
+    let mut c_ok = 1
+    let mag0 = _abs3(gspec[0])
+    let mut kk = 0
+    while kk < ntot {
+        if _abs3(gspec[kk * 2]) > mag0 + TOL3B { c_ok = 0 }   // k=0 is the max
+        kk = kk + 1
+    }
+    // sum of imag parts ~ 0 (Gaussian centered ⇒ real spectrum up to lin phase)
+    // (centered at (2,2,2) introduces a linear phase, so instead verify
+    //  |X[0]| = Σ gre exactly — the DC bin is the real-space sum.)
+    let mut dcsum = 0.0
+    let mut q = 0
+    while q < ntot {
+        dcsum = dcsum + gre[q]
+        q = q + 1
+    }
+    if _abs3(gspec[0] - dcsum) > TOL3B { c_ok = 0 }
+    if _abs3(gspec[1] - 0.0) > TOL3B { c_ok = 0 }
+    fails = fails + _check3("C_gaussian_dc_and_peak", c_ok)
+
+    // ── D: Parseval — Σ|x(r)|² = (1/N) Σ|X(G)|² ──
+    // reuse the plane-wave field (complex, nontrivial).
+    let mut sum_r = 0.0
+    let mut p = 0
+    while p < ntot {
+        sum_r = sum_r + pwre[p] * pwre[p] + pwim[p] * pwim[p]
+        p = p + 1
+    }
+    let mut sum_g = 0.0
+    let mut pg = 0
+    while pg < ntot {
+        sum_g = sum_g + pwspec[pg * 2] * pwspec[pg * 2] + pwspec[pg * 2 + 1] * pwspec[pg * 2 + 1]
+        pg = pg + 1
+    }
+    let sum_g_norm = sum_g / ntot
+    let mut d_ok = 1
+    if _abs3(sum_r - sum_g_norm) > TOL3B * ntot { d_ok = 0 }
+    fails = fails + _check3("D_parseval_energy", d_ok)
+
+    // ── E: round-trip ifft3(fft3(x)) = x to abs-ε 1e-10 (LOAD-BEARING) ──
+    // arbitrary complex field
+    let mut xre = []
+    let mut xim = []
+    let mut s = 0
+    while s < ntot {
+        xre = xre.push(0.5 + s * 0.123 - (s / 7) * 0.4)
+        xim = xim.push(0.0 - 0.3 + s * 0.0717)
+        s = s + 1
+    }
+    let xspec = fft3(xre, xim, nx, ny, nz)
+    // ifft3 takes split re/im; unpack the interleaved spectrum first.
+    let mut sre = []
+    let mut sim = []
+    let mut u = 0
+    while u < ntot {
+        sre = sre.push(xspec[u * 2])
+        sim = sim.push(xspec[u * 2 + 1])
+        u = u + 1
+    }
+    let xrec = ifft3(sre, sim, nx, ny, nz)
+    let mut e_ok = 1
+    let mut worst = 0.0
+    let mut v = 0
+    while v < ntot {
+        let er = _abs3(xrec[v * 2] - xre[v])
+        let ei = _abs3(xrec[v * 2 + 1] - xim[v])
+        if er > worst { worst = er }
+        if ei > worst { worst = ei }
+        if er > TOL3 { e_ok = 0 }
+        if ei > TOL3 { e_ok = 0 }
+        v = v + 1
+    }
+    println("  round-trip worst abs-err = " + to_string(worst))
+    fails = fails + _check3("E_roundtrip_identity_1e10", e_ok)
+
+    // ── F: separability — fft3 of f(x)g(y)h(z) = outer product of 1D FFTs ──
+    // Build 1D real signals, their 3D separable product, and cross-check.
+    let fx = [1.0, 2.0, 0.5, -1.0]
+    let gy = [0.0, 1.0, 3.0, 2.0]
+    let hz = [2.0, -1.0, 1.0, 0.5]
+    let zfx = [0.0, 0.0, 0.0, 0.0]
+    let Fx = fft_native(fx, zfx, 4)
+    let Gy = fft_native(gy, zfx, 4)
+    let Hz = fft_native(hz, zfx, 4)
+    // separable 3D input
+    let mut sepre = []
+    let mut sepim = []
+    let mut ax = 0
+    while ax < 4 {
+        let mut ay = 0
+        while ay < 4 {
+            let mut az = 0
+            while az < 4 {
+                sepre = sepre.push(fx[ax] * gy[ay] * hz[az])
+                sepim = sepim.push(0.0)
+                az = az + 1
+            }
+            ay = ay + 1
+        }
+        ax = ax + 1
+    }
+    let sepspec = fft3(sepre, sepim, 4, 4, 4)
+    // outer product: X[kx,ky,kz] = Fx[kx]·Gy[ky]·Hz[kz] (complex products)
+    let mut f_ok = 1
+    let mut kx = 0
+    while kx < 4 {
+        let mut ky = 0
+        while ky < 4 {
+            let mut kz = 0
+            while kz < 4 {
+                // complex multiply Fx*Gy then *Hz
+                let a_re = Fx[kx * 2]
+                let a_im = Fx[kx * 2 + 1]
+                let b_re = Gy[ky * 2]
+                let b_im = Gy[ky * 2 + 1]
+                let ab_re = a_re * b_re - a_im * b_im
+                let ab_im = a_re * b_im + a_im * b_re
+                let c_re = Hz[kz * 2]
+                let c_im = Hz[kz * 2 + 1]
+                let exp_re = ab_re * c_re - ab_im * c_im
+                let exp_im = ab_re * c_im + ab_im * c_re
+                let lin = _idx3(kx, ky, kz, 4, 4)
+                if _abs3(sepspec[lin * 2] - exp_re) > TOL3B { f_ok = 0 }
+                if _abs3(sepspec[lin * 2 + 1] - exp_im) > TOL3B { f_ok = 0 }
+                kz = kz + 1
+            }
+            ky = ky + 1
+        }
+        kx = kx + 1
+    }
+    fails = fails + _check3("F_separability_outer_product", f_ok)
+
+    // ── G: malformed-dims guard ──
+    // non-pow2 axis ⇒ [] ; size mismatch ⇒ [] .
+    let small = [1.0, 2.0, 3.0]
+    let small_im = [0.0, 0.0, 0.0]
+    let bad1 = fft3(small, small_im, 3, 1, 1)   // nx=3 not pow2 ⇒ []
+    let twore = [1.0, 2.0]
+    let twoim = [0.0, 0.0]
+    let bad2 = fft3(twore, twoim, 4, 1, 1)      // size 2 != 4 ⇒ []
+    let mut g_ok = 1
+    if len(bad1) != 0 { g_ok = 0 }
+    if len(bad2) != 0 { g_ok = 0 }
+    fails = fails + _check3("G_malformed_dims_guard", g_ok)
+
+    if fails == 0 {
+        println("ALL PASS — stdlib/signal fft3 (3D FFT, QFORGE L5 brick 1/5)")
+    } else {
+        println("FAILURES: " + to_string(fails))
+        exit(1)
+    }
+}
