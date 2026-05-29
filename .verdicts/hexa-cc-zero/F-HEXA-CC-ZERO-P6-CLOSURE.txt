@@ -1,0 +1,103 @@
+F-HEXA-CC-ZERO-P6-CLOSURE — "self/native/hexa_cc.c git rm + CI/fresh-clone green"
+================================================================================
+DATE: 2026-05-30
+HEAD: origin/main ef911fd4a (docs(unshadow): mining+거울방 … (#2155))
+
+FALSIFIER (P6, two halves):
+  (A) "git rm" — self/native/hexa_cc.c must be gone from git (untracked +
+      gitignored + absent from origin/main + absent on a fresh clone).
+  (B) "CI / fresh-clone green" — a CI workflow that builds from a clean
+      fresh checkout (no host hexa) must PASS on current main, bootstrapping
+      build/hexat from the committed cold-seed (self/native/hexa_cc_seed.c).
+  P6 CLOSES only if BOTH halves are green.
+
+VERDICT: 🟠 PARTIAL — half (A) CLOSED, half (B) 🔴 RED. P6 NOT flipped.
+
+--------------------------------------------------------------------------------
+HALF (A) — "git rm" = already-done no-op.  ✅ CONFIRMED (verbatim, this HEAD)
+--------------------------------------------------------------------------------
+$ git ls-files self/native/hexa_cc.c
+                                          (blank → NOT tracked)        [exit 0]
+$ git cat-file -e origin/main:self/native/hexa_cc.c
+  fatal: path 'self/native/hexa_cc.c' does not exist in 'origin/main'  [exit 128]
+                                          (→ ABSENT from origin/main)
+$ git check-ignore -v self/native/hexa_cc.c
+  .gitignore:286:self/native/hexa_cc.c	self/native/hexa_cc.c         [exit 0]
+                                          (→ IGNORED at .gitignore L286)
+
+  → The file left git long ago (B9 #2065 era). There is NOTHING to `git rm`
+    (a `git rm` would ERROR — pathspec not in index). The "git rm" framing of
+    the milestone is satisfied by the file's pre-existing absence. The COLD
+    SEED self/native/hexa_cc_seed.c (which MUST stay) is committed, present
+    on origin/main, byte-identical to the P3/P5 artifacts:
+$ git cat-file -s origin/main:self/native/hexa_cc_seed.c     → 2982925
+$ git cat-file -p origin/main:self/native/hexa_cc_seed.c | md5sum
+  6ee710e433ea476b49b379958b5b25c9          (== P3 verdict 6ee710e4)
+
+--------------------------------------------------------------------------------
+HALF (B.1) — fresh-clone bootstrap via seed (transpiler).  ✅ PROVEN (cited)
+--------------------------------------------------------------------------------
+  The P5 TRUE-COLD-DEFAULT verdict (.verdicts/hexa-cc-zero/F-HEXA-CC-ZERO-
+  P5-BOOTSTRAP.txt, #2134, branch HEAD e06e3db) proved: bare clone, scrubbed
+  PATH (no hexa), `cc self/native/hexa_cc_seed.c -o build/hexat` (no -I, 0
+  local include) → ELF x86-64 build/hexat → 4/4 SSOT transpile rc=0.
+
+  RE-RUN JUDGED REDUNDANT — the exact artifacts that verdict exercised are
+  BYTE-IDENTICAL to current origin/main HEAD ef911fd4a:
+$ git diff 6465f04dc(P5 merge) origin/main \
+      -- tool/build_hexa_cli.hexa self/native/hexa_cc_seed.c --stat
+                                          (EMPTY — neither file changed)
+    seed md5 6ee710e4 == P5-tested · step-0 cold branch (build_hexa_cli.hexa
+    L623-647) unchanged. Recompiling the identical 2.98 MB TU with the
+    identical step-0 command yields the identical result. HONEST: this half
+    is CITED, not re-run, because the source is provably identical.
+
+--------------------------------------------------------------------------------
+HALF (B.2) — "CI green" on current main.  🔴 RED — BLOCKS P6.
+--------------------------------------------------------------------------------
+  Two CI workflows that build/inspect from a fresh actions/checkout@v6
+  (clean clone, no host hexa) FAIL on EVERY recent main commit because they
+  reference the now-removed self/native/hexa_cc.c (and self/runtime.c, also
+  gitignored + absent). This is precisely the P6 "CI/fresh-clone green" gate.
+
+  (1) bootstrap.yml — 3-runner matrix (macos-arm64 · linux-x86_64 ·
+      linux-arm64). Stage 0 hard-codes:
+        $CC -I self self/native/hexa_cc.c self/runtime.c -o build/hexa_v2
+      On a fresh checkout NEITHER file exists.
+$ gh run view 26660445604 --log-failed   (latest main push, #2155):
+        cc1: fatal error: self/native/hexa_cc.c: No such file or directory
+        compilation terminated.
+        cc1: fatal error: self/runtime.c: No such file or directory
+        compilation terminated.
+        ##[error]Process completed with exit code 1.
+      Every recent run = `failure` in ~15-20 s (fast = Stage 0 early-out).
+
+  (2) codegen-bootstrap-sync.yml — opens self/native/hexa_cc.c directly
+      (python `open('self/native/hexa_cc.c')`) to diff codegen.hexa direct
+      calls against the committed seed. On fresh checkout the file is absent
+      → fails. Its entire premise (compare codegen.hexa to a COMMITTED
+      hexa_cc.c) is structurally obsoleted by HEXA-CC-ZERO's removal of that
+      file; it needs deletion or re-targeting at the cold-seed.
+
+REMAINING P6 WORK (the genuine gap — its own cycle, push-watch verifiable):
+  · Migrate bootstrap.yml Stage 0 (×3 runners) to the proven cold-seed path:
+      $CC self/native/hexa_cc_seed.c -o build/hexat   (no -I, 0 local include)
+    then wire Stages 1+ to regenerate self/runtime.c from its SSOT
+    (self/runtime.hexa + the *_emit.hexa fragments) via the seed-built hexat
+    BEFORE the CLI link — currently build_hexa_cli.hexa only WARNS when
+    runtime.c is missing (L203) and does not regenerate the top-level TU, so
+    the full-CLI fresh-clone path is itself unproven.
+  · Delete or re-target codegen-bootstrap-sync.yml at the seed (its premise
+    is gone with hexa_cc.c).
+  NOT TRIVIAL: multi-job CI, validatable only by push + watch (no local CI
+  run), plus an unsettled runtime.c top-level generation path on fresh clone.
+  Per the cycle's hard constraint (no CI infra build unless trivial; red CI →
+  do not flip P6), this is deferred to a dedicated P6-CI cycle.
+
+PER-ARCH CODEGEN DETERMINISM CAVEAT: codegen.hexa is arch-specific but
+  PER-ARCH deterministic (P1/P3 established). NOT a P6 blocker.
+
+CONCLUSION: HEXA-CC-ZERO = 4/5 (P1✅ P2✅ P3✅ P5✅). P6 stays OPEN — half
+  (A) git-rm CLOSED + half (B.1) seed-bootstrap PROVEN, but half (B.2) CI is
+  RED on current main (two workflows reference the removed hexa_cc.c). The
+  domain is NOT yet fully closed; P6 closes when the CI migration lands green.
