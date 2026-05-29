@@ -2,6 +2,21 @@
 
 Append-only history sister of `UNSHADOW.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-30T00:00Z — 🔵×🟡 same-TU 빌드 기본화 cost/benefit PILOT (measured · opt-in 권고)
+
+§lto-unwall(−31%)을 빌드-레시피로 만든 milestone "same-TU 빌드 기본화" 의 측정 파일럿. 결론 = **opt-in flag, NOT default**.
+
+- [x] cmd_build 에 GATED same-TU MODE 구현 (self/main.hexa · HEXA_SAME_TU=1, opt-in·reversible).
+  - codegen 반쪽: HEXA_SAME_TU=1 → transpile 스텝에 `HEXA_USE_RUNTIME_C=1`(기존 codegen.hexa:947 hatch) → user.c `#include "runtime.c"`.
+  - link 반쪽: HEXA_SAME_TU=1 → 별 runtime 2nd TU(`_rt_input`) 제거 → 단일 TU 컴파일. `shared/target` 가드. unset → byte-identical legacy walled. parse-gate PASS.
+- [x] 진단한 링크 모델 = §lto-unwall 과 동일: emit user.c=`#include "runtime.h"` + 별 precompiled runtime.o 2nd TU = 벽. (HEXA_PREBUILT / content-hash `.o` 캐시 / source 3분기.)
+- [x] BENEFIT 실측(mini · best-of-5): string-boundary 1.87→1.48s(**−21%**) · HexaVal-arith control 0.58→0.44s(**−24%**). 경계호출 `_u_main` 인라인: `_rt_str_starts_with` 2→0 · `_hexa_contains_poly` 1→0 · `_hexa_int` 12→0 · `_hexa_to_string` 1→0 · `_hexa_bool` 2→0. **win 은 string 전용 아님** — HexaVal 박싱 전체 ABI 개방.
+- [x] COST 실측: 빌드시간 walled WARM 0.10s(캐시·live default) vs same-TU 3.55s = **~35× 세금** (런타임이 user TU 에 융합 → runtime.o 캐시 구조적 불가). 바이너리 −0.05%(−192 B · wash). 2차 비용 = default-on 은 generated runtime.c 디스크 의존 재도입(B9 graduation 이 지운 것).
+- [x] g5 byte-diff IDENTICAL — 양 workload 양 arm 출력 동일(md5 `0e2afa85` · `657d1ec4`).
+- [x] 측정 방법 = 정직한 A/B 프록시(스펙 허용): full self-host rebuild 은 B9 벽으로 차단(runtime.c GENERATED) → 두 빌드 모드·동일 runtime.c 소스(B9-faithful pre-graduation 트리 151c52c8, emitter SSOT 와 byte-identical)·TU/link 만 격리. INSTALLED hexat transpile + runtime.h→runtime.c 텍스트 swap(codegen 반쪽과 동일 변환).
+- [x] verdict=`.verdicts/unshadow-same-tu/F-UNSHADOW-SAME-TU.txt` · bench=`UNSHADOW.bench.md §same-tu` · 재현=`tool/unshadow_same_tu_bench.hexa`.
+- [x] 권고 = **OPT-IN (HEXA_SAME_TU=1), NOT default** — −21~24% byte-identical win 실재·일반화하나 ~35× 빌드세금 + generated-.c 의존 재도입으로 default-on 은 나쁜 트레이드. release/perf 빌드용 opt-in 가치. terminal.
+
 ## 2026-05-29T14:45Z — 🏗️ HEXA-STACK 전략 정식화 — B+C 랜딩 + floor/ceiling 적층 프레임
 
 B(#2093)·C(#2094) 두 evidence 브랜치 랜딩 완료 후 UNSHADOW 의 전제를 **HEXA-STACK** 으로 정식화.

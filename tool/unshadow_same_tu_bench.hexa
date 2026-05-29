@@ -1,0 +1,230 @@
+// tool/unshadow_same_tu_bench.hexa
+//   UNSHADOW milestone "🔵×🟡 same-TU 빌드 기본화" — reproducible A/B PILOT.
+//
+// THESIS (UNSHADOW.md · §lto-unwall): the emitted user.c does
+//   `#include "runtime.h"` and the final link consumes a SEPARATE precompiled
+//   runtime object (the C-ABI WALL). Making the build same-TU — user.c does
+//   `#include "runtime.c"` so the runtime amalgam enters the user TU — lets
+//   clang -O2 inline across the boundary. §lto-unwall measured this flips the
+//   #2-ext rt_str boundary call 🔴→WIN (−31%, byte-identical) and that -flto
+//   was INSUFFICIENT. This pilot measures the cost/benefit of making same-TU
+//   the build default vs an opt-in flag.
+//
+// BUILD-RECIPE CHANGE UNDER TEST (self/main.hexa cmd_build, gated HEXA_SAME_TU=1):
+//   (1) codegen half — set HEXA_USE_RUNTIME_C=1 on the transpile step so user.c
+//       emits `#include "runtime.c"` (existing codegen.hexa:947 escape hatch).
+//   (2) link half — drop the separate runtime.o/.c 2nd-TU input; the runtime is
+//       already textually in user.c, so the final clang compiles ONE TU.
+//   GATED + reversible: unset HEXA_SAME_TU → byte-for-byte the legacy walled build.
+//
+// THIS TOOL measures the same two arms faithfully WITHOUT a full hexa self-host
+//   rebuild (B9 wall — runtime.c is GENERATED, absent from a fresh clone). The
+//   method (honest A/B proxy, blessed by the milestone spec):
+//     · transpile a real boundary-call-heavy .hexa workload with the INSTALLED
+//       hexat (emits `#include "runtime.h"`).
+//     · WALLED arm  : compile user.c + link a precompiled runtime object (2 TU).
+//     · SAME-TU arm : textually swap `runtime.h`→`runtime.c` in user.c (the exact
+//       transform the codegen half performs) and compile as ONE TU.
+//   Both arms use the SAME runtime SOURCE (only the TU/link strategy varies) —
+//   this isolates exactly the variable the cmd_build edit controls.
+//
+// RUNTIME SOURCE: B9-graduated runtime.c is absent from the repo. Supply a
+//   faithful tree via --rt <dir> (must hold self/runtime.c + the #include'd
+//   fragments + runtime.h). The emitter reproduces runtime.c byte-identically
+//   (B9.C-10 source-SHA gate), so any emitter-regen OR a pre-graduation
+//   checkout is a faithful source. Default: $HEXA_LANG/self.
+//
+// MEASURE per arm: built? · program-output md5 (g5 byte-diff) · best-of-K wall ·
+//   build-time (walled-warm vs walled-cold vs same-TU) · binary size ·
+//   _u_main hot-fn boundary `bl` histogram (which runtime calls got inlined).
+//
+// Argv:
+//   --rt    <dir>   dir holding self/ runtime source tree (default $HEXA_LANG/self)
+//   --hexat <path>  installed transpiler (default ~/.hx/packages/hexa/build/hexat)
+//   --work  <dir>   scratch (default ~/unshadow-same-tu)
+//   --runs  <N>     timed runs per arm, best-of-N (default 5)
+
+fn parse_int_safe(s) {
+    let t = s.trim()
+    if len(t) == 0 { return 5 }
+    let r = exec("printf '%s' '" + t + "' | awk '{n=$1+0; print n}'").trim()
+    if len(r) == 0 { return 5 }
+    return to_int(r)
+}
+
+fn arg_val(argv, key, dflt) {
+    let mut i = 0
+    while i < argv.len() {
+        if argv[i] == key && i + 1 < argv.len() { return argv[i + 1] }
+        i = i + 1
+    }
+    return dflt
+}
+
+fn write_file(path, body) {
+    exec("cat > '" + path + "' <<'__UTU_EOF__'\n" + body + "\n__UTU_EOF__")
+}
+
+fn exists(p) {
+    return exec("[ -f '" + p + "' ] && printf yes || printf no").trim() == "yes"
+}
+
+fn best_wall(bin, runs) {
+    let mut best = "999"
+    let mut r = 0
+    while r < runs {
+        let t = exec("{ /usr/bin/time -p '" + bin + "' >/dev/null ; } 2>&1 | awk '/^real/{print $2}'").trim()
+        if len(t) > 0 {
+            let cmp = exec("awk 'BEGIN{print (" + t + "<" + best + ")?1:0}'").trim()
+            if cmp == "1" { best = t }
+        }
+        r = r + 1
+    }
+    return best
+}
+
+fn best_build(cmd, runs) {
+    let mut best = "999"
+    let mut r = 0
+    while r < runs {
+        let t = exec("{ /usr/bin/time -p sh -c \"" + cmd + "\" ; } 2>&1 | awk '/^real/{print $2}'").trim()
+        if len(t) > 0 {
+            let cmp = exec("awk 'BEGIN{print (" + t + "<" + best + ")?1:0}'").trim()
+            if cmp == "1" { best = t }
+        }
+        r = r + 1
+    }
+    return best
+}
+
+fn md5_of(bin) {
+    return exec("'" + bin + "' 2>/dev/null | md5 2>/dev/null || '" + bin + "' 2>/dev/null | md5sum 2>/dev/null | cut -d' ' -f1").trim()
+}
+
+fn size_of(bin) {
+    return exec("stat -f '%z' '" + bin + "' 2>/dev/null || stat -c '%s' '" + bin + "' 2>/dev/null").trim()
+}
+
+// histogram boundary `bl` calls inside the user hot fn _u_main of an asm file.
+fn umain_bl(asm_path, work) {
+    let extract = "awk 'BEGIN{p=0} /^_u_main:/{p=1; next} p && /^_[A-Za-z]/ && !/^_u_main/{p=0} p{print}' '" + asm_path + "' > '" + work + "/umain.txt'"
+    exec(extract)
+    return exec("grep -oE 'bl[[:space:]]+_[a-zA-Z0-9_]+' '" + work + "/umain.txt' | sort | uniq -c | sort -rn").trim()
+}
+
+fn main() {
+    let argv = args()
+    let home = env("HOME")
+    let hexa_lang = env("HEXA_LANG")
+    let mut rt_default = home + "/.hx/packages/hexa/self"
+    if len(hexa_lang) > 0 { rt_default = hexa_lang + "/self" }
+    let rt = arg_val(argv, "--rt", rt_default)
+    let hexat = arg_val(argv, "--hexat", home + "/.hx/packages/hexa/build/hexat")
+    let work = arg_val(argv, "--work", home + "/unshadow-same-tu")
+    let runs = parse_int_safe(arg_val(argv, "--runs", "5"))
+
+    println("=== UNSHADOW same-TU build A/B pilot ===")
+    println("rt=" + rt + "  hexat=" + hexat + "  work=" + work + "  runs=" + to_string(runs))
+
+    if !exists(rt + "/runtime.c") {
+        println("FATAL: " + rt + "/runtime.c not found (B9: runtime.c is GENERATED).")
+        println("  Supply a faithful runtime tree via --rt <dir>, e.g. an emitter regen")
+        println("  or a pre-graduation `git archive <ref> self | tar -x` checkout.")
+        exit(1)
+    }
+    if !exists(hexat) {
+        println("FATAL: transpiler not found: " + hexat)
+        exit(1)
+    }
+    exec("rm -rf '" + work + "' && mkdir -p '" + work + "'")
+
+    let cf = "-O2 -Wno-trigraphs -Wno-macro-redefined -fbracket-depth=4096 -I '" + rt + "'"
+
+    // Shared precompiled runtime object (walled 2nd TU). Compiled from the SAME
+    // runtime.c the same-TU arm textually includes — same source, only TU varies.
+    let rtobj = work + "/rtobj"
+    exec("clang " + cf + " -c -x c '" + rt + "/runtime.c' -o '" + rtobj + "' 2>/dev/null")
+    if !exists(rtobj) {
+        println("FATAL: runtime.c failed to compile to a walled object.")
+        exit(1)
+    }
+
+    // ── two workloads: string-boundary-heavy + HexaVal-arith (control) ──
+    write_file(work + "/wl.hexa",
+      "fn main() {\n" +
+      "    let s = \"hexagon-string-boundary\"\n" +
+      "    let mut hits = 0\n" +
+      "    let mut i = 0\n" +
+      "    while i < 40000000 {\n" +
+      "        if s.starts_with(\"hexa\") { hits = hits + 1 }\n" +
+      "        if s.contains(\"string\") { hits = hits + 1 }\n" +
+      "        if s.starts_with(\"xyz\") { hits = hits + 1 }\n" +
+      "        i = i + 1\n" +
+      "    }\n" +
+      "    println(to_string(hits))\n" +
+      "}\n")
+    write_file(work + "/ctl.hexa",
+      "fn main() {\n" +
+      "    let mut acc = 0\n" +
+      "    let mut i = 0\n" +
+      "    while i < 40000000 {\n" +
+      "        acc = acc + (i * 3) - (i / 2)\n" +
+      "        i = i + 1\n" +
+      "    }\n" +
+      "    println(to_string(acc))\n" +
+      "}\n")
+
+    let names = ["wl", "ctl"]
+    let labels = ["string-boundary", "HexaVal-arith (control)"]
+    let mut ni = 0
+    while ni < names.len() {
+        let nm = names[ni]
+        println("\n--- workload: " + labels[ni] + " ---")
+        // transpile via the installed hexat (emits #include "runtime.h").
+        exec("'" + hexat + "' '" + work + "/" + nm + ".hexa' '" + work + "/" + nm + "_walled.c' 2>/dev/null")
+        // same-TU user source: textual include swap (the codegen half).
+        exec("sed 's|#include \"runtime.h\"|#include \"runtime.c\"|' '" + work + "/" + nm + "_walled.c' > '" + work + "/" + nm + "_samtu_src'")
+
+        // build both arms
+        exec("clang " + cf + " '" + work + "/" + nm + "_walled.c' '" + rtobj + "' -o '" + work + "/" + nm + "_w' 2>/dev/null")
+        exec("clang " + cf + " -x c '" + work + "/" + nm + "_samtu_src' -o '" + work + "/" + nm + "_s' 2>/dev/null")
+        let wbin = work + "/" + nm + "_w"
+        let sbin = work + "/" + nm + "_s"
+        println("  built: walled=" + (if exists(wbin) { "yes" } else { "NO" }) +
+                "  same-TU=" + (if exists(sbin) { "yes" } else { "NO" }))
+
+        // g5 byte-diff
+        let wmd5 = md5_of(wbin)
+        let smd5 = md5_of(sbin)
+        println("  g5 md5: walled=" + wmd5 + "  same-TU=" + smd5 +
+                (if wmd5 == smd5 && len(wmd5) > 0 { "  [IDENTICAL]" } else { "  [⚠ DIFF]" }))
+
+        // perf wall
+        println("  wall best-of-" + to_string(runs) + ": walled=" + best_wall(wbin, runs) +
+                "s  same-TU=" + best_wall(sbin, runs) + "s")
+
+        // binary size
+        println("  binary size: walled=" + size_of(wbin) + "B  same-TU=" + size_of(sbin) + "B")
+        ni = ni + 1
+    }
+
+    // ── COST: build-time matrix on the string-boundary workload ──
+    println("\n--- build-time (best-of-3, mini-class) ---")
+    let cold = "clang " + cf + " -c -x c '" + rt + "/runtime.c' -o '" + work + "/rtobj_c' && clang " + cf + " '" + work + "/wl_walled.c' '" + work + "/rtobj_c' -o '" + work + "/wlc_bin'"
+    let warm = "clang " + cf + " '" + work + "/wl_walled.c' '" + rtobj + "' -o '" + work + "/wlw_bin'"
+    let samt = "clang " + cf + " -x c '" + work + "/wl_samtu_src' -o '" + work + "/sam_bin'"
+    println("  walled COLD (compile runtime.o + link)  : " + best_build(cold, 3) + "s")
+    println("  walled WARM (cached runtime.o, link only): " + best_build(warm, 3) + "s   ← live default hot path")
+    println("  same-TU (recompile amalgam EVERY build)  : " + best_build(samt, 3) + "s")
+
+    // ── BENEFIT detail: _u_main boundary bl histogram (string workload) ──
+    exec("clang " + cf + " -S '" + work + "/wl_walled.c' -o '" + work + "/wl_w.s' 2>/dev/null")
+    exec("clang " + cf + " -x c -S '" + work + "/wl_samtu_src' -o '" + work + "/wl_s.s' 2>/dev/null")
+    println("\n--- _u_main hot-fn boundary `bl` histogram (string workload) ---")
+    println("  [WALLED]\n" + umain_bl(work + "/wl_w.s", work))
+    println("  [SAME-TU]\n" + umain_bl(work + "/wl_s.s", work))
+    println("  → bl _rt_str_starts_with / _hexa_contains_poly / _hexa_int etc. that")
+    println("    vanish in same-TU were inlined by clang -O2 across the (now-open) boundary.")
+
+    println("\n=== done ===")
+}

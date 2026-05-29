@@ -1,0 +1,108 @@
+F-UNSHADOW-SAME-TU — 🔵×🟡 same-TU 빌드 기본화 cost/benefit PILOT (measured)
+================================================================================
+Host: pool mini (macOS arm64, Apple clang). Both arms same host, back-to-back.
+Runtime source: pre-graduation self/ tree (commit 151c52c8, B9-faithful — the
+  emitter reproduces runtime.c byte-identically, B9.C-10 source-SHA gate) via
+  `git archive 151c52c8 self | tar -x` into /tmp (the repo is .c=0 post-B9, so
+  runtime.c must be supplied; this is the milestone-blessed faithful proxy).
+Reproducer (committed, parse-gated + run on mini):
+  tool/unshadow_same_tu_bench.hexa  --rt <dir-with-self/runtime.c> --runs 5
+
+FALSIFIER (pre-registered)
+  "Making the C-emit build same-TU by default (user.c `#include "runtime.c"`,
+   no separate runtime.o 2nd TU) (a) opens #2-ext-class cross-layer boundary
+   wins generally (clang -O2 inlines bl _rt_*/_hexa_* across the now-open
+   boundary), byte-identical, AND (b) carries an acceptable build-time/binary
+   cost — i.e. default-on is a net win."
+
+BUILD-RECIPE CHANGE IMPLEMENTED (self/main.hexa cmd_build, GATED HEXA_SAME_TU=1)
+  Two coordinated, reversible edits — opt-in only, NOT a forced global default:
+   (1) codegen half — when HEXA_SAME_TU=1, the transpile step is run with
+       HEXA_USE_RUNTIME_C=1 (the existing codegen.hexa:947 escape hatch), so
+       emitted user.c does `#include "runtime.c"` instead of `runtime.h` → the
+       runtime amalgam enters the user TU.
+   (2) link half — when HEXA_SAME_TU=1, the separate runtime object/source 2nd
+       TU is dropped from the final clang call (_rt_input = "") — the runtime is
+       already textually present, so a single TU compiles. (Adding it as a 2nd
+       TU would duplicate every symbol → link error.)
+   guarded `shared != "1" && len(target) == 0` (same-TU not applied to --shared
+   PIC or cross-target zig builds). Unset HEXA_SAME_TU → byte-for-byte the
+   legacy walled build (the resolve_prebuilt / content-hash-.o / source path).
+   self/main.hexa parses cleanly.
+
+MEASUREMENT METHOD (honest A/B proxy — no full self-host rebuild)
+  The full `hexa cc --regen` self-host rebuild is blocked by the B9 wall
+  (runtime.c GENERATED, absent from a fresh clone — same blocker the prior
+  unwall agent hit). The milestone spec explicitly blesses a faithful A/B proxy:
+  two build modes, SAME runtime source, isolating only the TU/link strategy.
+   · workload transpiled by the INSTALLED hexat (emits `#include "runtime.h"`).
+   · WALLED  : compile user.c + link a precompiled runtime object (2 TU) — the
+               live default.
+   · SAME-TU : textually swap runtime.h→runtime.c in user.c (the EXACT transform
+               the codegen half performs) and compile as ONE TU.
+   Both arms compile against the SAME runtime.c source (the walled object is
+   compiled from it), so only the TU boundary varies — precisely the variable
+   the cmd_build edit controls.
+
+VERIFICATION (verbatim — tool/unshadow_same_tu_bench.hexa --runs 5, mini)
+  --- workload: string-boundary ---
+    built: walled=yes  same-TU=yes
+    g5 md5: walled=0e2afa85abbd8d3d13b7a79efb429a8e  same-TU=0e2afa85abbd8d3d13b7a79efb429a8e  [IDENTICAL]
+    wall best-of-5: walled=1.87s  same-TU=1.48s
+    binary size: walled=409080B  same-TU=408888B
+  --- workload: HexaVal-arith (control) ---
+    built: walled=yes  same-TU=yes
+    g5 md5: walled=657d1ec4586d9e7cb3572bd47e3d1bb2  same-TU=657d1ec4586d9e7cb3572bd47e3d1bb2  [IDENTICAL]
+    wall best-of-5: walled=0.58s  same-TU=0.44s
+    binary size: walled=408728B  same-TU=408552B
+  --- build-time (best-of-3, mini-class) ---
+    walled COLD (compile runtime.o + link)  : 3.53s
+    walled WARM (cached runtime.o, link only): 0.10s   ← live default hot path
+    same-TU (recompile amalgam EVERY build)  : 3.55s
+  --- _u_main hot-fn boundary `bl` histogram (string workload) ---
+    [WALLED]                              [SAME-TU]
+      12 bl _hexa_int                       (gone — inlined)
+       2 bl _rt_str_starts_with             (gone — inlined → 2 bl _hxlcl_strncmp + 2 _hxlcl_strlen)
+       1 bl _hexa_contains_poly             (gone — inlined → 1 bl _hxlcl_strstr)
+       1 bl _hexa_to_string                 (gone — inlined → 1 __hexa_to_string_rec)
+       2 bl _hexa_bool                      (gone — inlined)
+       4 bl _hexa_add_slow                  4 bl _hexa_add_slow (kept)
+       3 bl _hexa_truthy                    4 bl _hexa_truthy (kept)
+
+FINDING (honest — benefit real, cost prohibitive for default)
+  BENEFIT (real, generalizes): same-TU opens the whole HexaVal/runtime ABI to
+    clang -O2 cross-TU inlining. The #2-ext-class boundary calls _rt_str_starts_with
+    (2→0) and _hexa_contains_poly (1→0) flip called→inlined exactly as §lto-unwall
+    predicted; and crucially the win is NOT string-specific — the HexaVal-arith
+    control (_hexa_int boxing) also wins (0.58→0.44s, −24%), because hexa_int /
+    hexa_to_string / hexa_bool boxing helpers are themselves runtime boundary
+    calls that same-TU inlines. Measured wall: string −21% (1.87→1.48s), arith
+    −24% (0.58→0.44s). g5 byte-IDENTICAL on BOTH workloads.
+  COST (prohibitive for default-on): same-TU recompiles the full ~14.6K-line
+    runtime amalgam into EVERY user TU — 3.55s/build vs the walled WARM default
+    of 0.10s = ~35× build-time tax. The walled model amortizes the one-time
+    3.53s runtime compile via the content-hash `runtime.<sha>.o` cache; same-TU
+    structurally CANNOT cache the runtime (it is fused into each user TU, keyed
+    by user source). Binary size is a wash (−0.05%, −192 B). A second structural
+    cost: same-TU as a shipped default REQUIRES runtime.c on disk, which B9
+    graduation removed — default-on would re-introduce a generated-.c dependency.
+
+RULED-OUT AXES
+  - default-on same-TU is NOT a net win — the ~35× per-build compile tax on the
+    hot path dominates the −21~24% runtime win for general (non-perf) builds.
+  - the benefit is NOT string-specific — it generalizes to any HexaVal-boxing
+    hot loop (control workload confirms), so the lever is the whole runtime ABI.
+  - binary size is NOT a meaningful axis (wash).
+
+RECOMMENDATION: OPT-IN FLAG (HEXA_SAME_TU=1), NOT default-on. The −21~24%
+  byte-identical runtime win is real and generalizes, but the ~35× build-time
+  tax (3.55s vs 0.10s WARM) + the re-introduced generated-runtime.c dependency
+  make default-on a poor tradeoff for the common build. Same-TU is worth it for
+  RELEASE / perf builds of HexaVal-/boundary-call-heavy programs — exactly the
+  opt-in surface this pilot landed. Terminal: opt-in, not default.
+
+VERDICT: 🔵×🟡 same-TU build = OPT-IN (HEXA_SAME_TU=1), NOT default. BENEFIT
+  −21~24% byte-identical (boundary calls _rt_str_starts_with/_hexa_contains_poly/
+  _hexa_int inlined, generalizes past strings) · COST ~35× build-time tax
+  (3.55s vs 0.10s warm) + generated-runtime.c dependency · binary Δ −0.05%
+  (wash). Terminal measured recommendation: opt-in flag.
