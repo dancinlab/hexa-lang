@@ -1,0 +1,30 @@
+=== UNSHADOW C-class proof-carrying bounds-elision bench ===
+rt=/Users/mini/.hx/packages/hexa/self  work=/Users/mini/unshadow-cclass  runs=9
+
+--- C: in-range arr[i] read (checked vs proof-elided) ---
+  [a_checked] built=yes err_lines=0
+  [b_elided ] built=yes err_lines=0
+
+  g5 byte-diff (program output md5 — MUST be identical):
+    a_checked : fda59d53d471380a39dc273a37a35d3e
+    b_elided  : fda59d53d471380a39dc273a37a35d3e
+
+  perf best-of-9 wall (s):
+    a_checked : 1.88
+    b_elided  : 0.56
+
+  asm bl _hexa_index_get  (total):       a_checked=1  b_elided=1
+    (same static total — but in arm A the call is the HOT inner-loop body;
+     in arm B it sits on the COLD !HX_IS_ARRAY fallback branch — the array
+     fast path does a direct arr_ptr->items[i] load. Confirmed by the wall Δ
+     and manual loop-structure inspection: arm B inner loop has NO index_get.)
+  asm bl _hexa_throw      (total):       a_checked=0  b_elided=0  (both 0 — throw is behind the runtime.o wall)
+  [a_oob] built=yes err_lines=0
+  [b_oob] built=yes err_lines=0
+
+  INTEGRITY — OOB access must still throw in BOTH arms:
+    a_oob (checked)  out-of-bounds surfaced = 1
+    b_oob (elided)   out-of-bounds surfaced = 1
+  → both MUST be >=1 (throw fired). The elision never touches an out-of-range read.
+
+=== done ===

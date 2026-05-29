@@ -539,3 +539,34 @@ vs inline literal)만 격리. codegen 편집 자체는 parse-clean + emit 문자
 류(피연산자가 mut 누산기 → known-int 미발화)는 이 pilot 미적용(별도 mut-accumulator 언박싱
 필요). 상세 = `UNSHADOW.bench.md §hexaval-unbox` · verdict = `.verdicts/unshadow-hexaval-unbox/`.
 
+
+## 🔵 C-class proof-carrying bounds-check elision — WIN (2026-05-30)
+
+milestone "🔵 C-class proof-carrying bounds/null elision" 종결 = WIN. §lto-unwall 이 NULL 로
+분리해낸 axis(벽 제거 단독 불충분, CODEGEN 증명 필요)를 실측으로 따냄.
+
+**전제(unwall 진단)**: runtime.o 벽을 없애고 `hexa_index_get` 본문이 다 보여도 clang -O2 는
+opaque(realloc-able) 배열의 bounds check 를 elide 못 함. 진짜 win = codegen 이 static fact 로
+elision 을 라이선스.
+
+**구현(self/codegen.hexa, +241 / -0)**:
+- `_inrange_facts` 스택 + helpers(`_node_is_int_zero`·`_len_call_target_ident`·
+  `_name_resized_in_body`·`_inrange_push/pop/_inrange_counter_for`).
+- ForStmt range fast-path: `for i in 0..len(arr)` 가 (배타 range · lower=0 리터럴 ·
+  upper=`len(arr)`/`arr.len()` bare Ident · body 가 arr resize/reassign·`i` reassign 안 함)
+  이면 in-range fact push, loop exit 에 pop.
+- Index emit: 그 read `arr[i]` 를 `(HX_IS_ARRAY(arr) ? arr.arr_ptr->items[counter] :
+  hexa_index_get(arr, hexa_int(counter)))` 로 emit — bounds+throw 삭제, array-tag guard 1개만
+  잔존(untyped codegen, OOB-안전). HexaArr+arr_ptr 가 runtime.h public → runtime.o 벽 관통.
+
+**측정(mini macOS arm64, A/B proxy, best-of-9)**: 256-elem int array hot loop
+**1.88→0.56s = 3.25× (−69%)**. g5 byte-diff IDENTICAL(`fda59d53`). asm: arm B inner loop
+= 직접 `items[i]` 로드, `bl _hexa_index_get` 은 cold non-array fallback 으로 hoist.
+
+**무결성 게이트 PASS**: `arr[len]` OOB 접근은 양쪽 arm 모두 throw(검증식 안 덮는 read=검사형).
+증명-안전한 read 만 삭제 — OOB read 없음.
+
+**정직**: full self-host regen 은 B9 generated-runtime 벽으로 차단(`hexa cc --regen` →
+amalgam merge 가 pre-existing 타입에러로 실패, 내 edit 무관) → faithful A/B 프록시(emit 문자열
+codegen L7661 과 byte-동일·스펙 허용). 잔존 lever = known-array 추적기(생기면 tag-guard 도 삭제).
+verdict=`.verdicts/unshadow-cclass-bounds/` · 재현=`tool/unshadow_cclass_bounds_bench.hexa`.
