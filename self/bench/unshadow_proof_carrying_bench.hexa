@@ -1,0 +1,39 @@
+// UNSHADOW #B — proof-carrying optimization + cross-layer inline micro-bench.
+//
+// A VERIFIED semantic identity (atlas node `verified-lambda_eliashberg-num`,
+// `lambda_eliashberg(0.5)=1.0`, tier 🟢 SUPPORTED-NUMERICAL, verified-by
+// `hexa verify --expr lambda_eliashberg 0.5 1.0`) licenses codegen to replace
+// the opaque cross-ABI call `lambda_eliashberg(box(EXPR))` with the inlined,
+// layout-only closed form (gen2_expr Call→Ident in self/codegen.hexa):
+//
+//   lambda_eliashberg(EXPR)
+//     → ({ HexaVal __le_x = (EXPR);
+//          HX_FLOAT(__le_x) < 0.0 ? hexa_float(-999999.0)
+//                                 : ((HexaVal){.tag=TAG_FLOAT,.f=(2.0*HX_FLOAT(__le_x))}); })
+//
+// The transform is UNSOUND without the verified identity (codegen has no
+// knowledge of the fn body); LLVM cannot do it (precompiled runtime.o symbol,
+// no theorem DB). EXPR is let-bound ONCE → double-eval safe. The inline fires
+// only for the canonical top-level fn (EXACT guard) → byte-identical A/B.
+//
+// Bench harness (A/B = hexat.base vs hexat.new, SAME runtime.o, clang -O2):
+//   fold-off arm  → real cross-ABI call + box per iteration
+//   fold-on  arm  → inlined layout-only box (call eliminated)
+// Measured on mini (macOS arm64): 0.36s → 0.19s (~47% faster), acc identical,
+// `bl _lambda_eliashberg` dropped from the _u_main hot loop.
+
+fn lambda_eliashberg(moment_m0: float) -> float {
+    if moment_m0 < 0.0 { return -999999.0 }
+    return 2.0 * moment_m0
+}
+
+fn main() {
+    let mut acc = 0.0
+    let mut i = 0
+    while i < 30000000 {
+        let x = to_float(i % 7)
+        acc = acc + lambda_eliashberg(x)
+        i = i + 1
+    }
+    println(acc)
+}
