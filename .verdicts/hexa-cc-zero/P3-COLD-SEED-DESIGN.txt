@@ -1,0 +1,282 @@
+P3-COLD-SEED-DESIGN — HEXA-CC-ZERO stage-(-1) cold-seed strategy (DESIGN)
+==========================================================================
+date     : 2026-05-30
+tier     : 🟠 DESIGN PROPOSAL (g5/g63 honest fence — NOT a measured verdict;
+           no `--regen`/`--byte-eq` run this cycle; no bootstrap code edited)
+scope    : design + investigation only. Recommends ONE stage-(-1) option,
+           reconciles the repo "0 .c" north-star, and lists the precise
+           next-cycle implementation steps. Companion to:
+             .verdicts/hexa-cc-zero/F-HEXA-CC-ZERO-PROBE.txt (P1 measured)
+             .verdicts/hexa-cc-zero/F-HEXA-CC-ZERO-BYTEEQ-{MAC,UBU}.txt
+             .verdicts/runtime-floor-closure/F3-hexa-cc-activation-runbook.md
+                                                   (the 3-way decision tree)
+
+──────────────────────────────────────────────────────────────────────────
+0 · PROBLEM RESTATEMENT (what "cold seed" actually means here)
+──────────────────────────────────────────────────────────────────────────
+Goal of HEXA-CC-ZERO: remove the C transpiler seed → "0 .c" self-host.
+P1 (self-host fixpoint byte-eq) is CLOSED cross-host (#2105 Mac, #2109 ubu).
+
+The OPEN frontier is the stage-(-1) chicken-egg. A truly fresh clone with
+NO pre-installed hexa/hexa-run on PATH cannot produce build/hexat, because
+BOTH bootstrap paths hard-require generated C that is gitignored + absent
+on a fresh clone:
+
+  • tool/build_hexa_cli.hexa:612-619 (_do_build, Step 0):
+        if !_file_exists(hexat) {
+            _must_exist(self/native/hexa_cc.c)           ← ABSENT fresh-clone
+            sed 's|runtime.h|runtime.c|' hexa_cc.c > amalgam   (needs runtime.c)
+            cc <amalgam> → build/hexat                   ← needs self/runtime.c too
+        }
+  • self/main.hexa:1336-1341 (cmd_cc):
+        clang … self/native/hexa_cc.c  self/runtime.o → build/hexat
+        (runtime.o compiled from self/runtime.c at L1311-1333)
+
+MEASURED repo-state facts (this cycle, git ls-files + .gitignore at HEAD):
+  • self/native/hexa_cc.c          → gitignored (.gitignore:286), 0 tracked,
+                                       ABSENT on fresh clone (both hosts).
+  • self/runtime.c                 → gitignored (.gitignore:280), 0 tracked,
+                                       ABSENT on fresh clone.
+  • self/native/*.c (16 amalgam frags + runtime_core.c + runtime_hi_gen.c)
+                                   → ALL gitignored, 0 tracked (git ls-files
+                                     self/native/*.c = 0).
+  • self/native/hexa_v2 / hexat    → gitignored (.gitignore:138), per-machine
+                                       build artifact, ABSENT on fresh clone.
+  • self/native/hexa_cc.c.hexanoport (1052 B) → THE ONLY tracked artifact;
+                                       a doc/marker stub, NOT compilable C.
+
+KEY ARCHITECTURAL FINDING (sharpens the probe's conclusion):
+  The cold path's `cc hexa_cc.c runtime.c` has TWO absent C inputs on a
+  fresh clone, not one. hexa_cc.c is the transpiler TU; runtime.c (+ its
+  ~18 `#include`d native fragments + runtime_core.c) is the runtime TU.
+  ⇒ A cold seed that ships ONLY hexa_cc.c still cannot link build/hexat.
+    The complete C-seed surface = { hexa_cc.c, runtime.c, runtime_core.c,
+    runtime_hi_gen.c, self/native/*.c }. Any "commit the .c seed" option
+    MUST commit the WHOLE amalgam set (or a single pre-amalgamated TU),
+    otherwise it does not reach true cold boot.
+
+  Today's reality = WARM seed: the regen helpers in _do_build (L574-591,
+  _regen_native_includes / _regen_runtime_core / …) run ONLY when an
+  external `hexa-run` is already on PATH; on a bare clone they SKIP and
+  the in-tree .c (absent) is used — so build/hexat cannot be produced.
+  `hx install hexa-lang` is what ships a working binary out-of-band.
+
+──────────────────────────────────────────────────────────────────────────
+1 · "0 .c" GOAL RECONCILIATION (hand-written vs literal) — DECISIVE
+──────────────────────────────────────────────────────────────────────────
+The repo already answers this, verbatim, in the tracked marker file
+self/native/hexa_cc.c.hexanoport:
+
+  "This .c file is an artifact, not hand-written source. The four .hexa
+   modules are the authoritative source of truth. … R1 (HEXA-FIRST)
+   compliance: NOT a violation. … Hand-maintained C in this repo is
+   limited to self/runtime.c (hexa runtime primitives: GC, value tags,
+   string ops) which is NOT a porting target."
+
+⇒ The north-star is **0 HAND-WRITTEN / 0 HAND-MAINTAINED .c**, NOT literally
+  0 .c files on disk. A generated .c whose SSOT is the .hexa modules is
+  already compliant by the repo's own R1 rule. The CANON M3 comment in
+  .gitignore (L132-137) reinforces this: the .c seed is "arch-neutral",
+  the binary is the thing that must never live in git — the .c may.
+
+CAVEAT (honest): runtime.c is the ONE genuinely hand-written .c (runtime
+  primitives). The "0 .c" goal is bounded by the parallel F3 runtime-floor
+  campaign (rt_<fn> self-emit, 59/640 ≈ 9.2% at 1018e1a55) that ports
+  runtime.c → hexa-native. That is ORTHOGONAL to the stage-(-1) seed and
+  multi-month; the seed strategy must not block on it.
+
+──────────────────────────────────────────────────────────────────────────
+2 · CANONICAL PEER PRIOR ART (Go / Rust — the chicken-egg solutions)
+──────────────────────────────────────────────────────────────────────────
+Go (pre-1.5):  shipped the compiler/runtime as hand-portable **C source**
+  in the tree (cmd/cc, 6c/6g…). `make.bash` = a C compiler builds the C
+  Go-toolchain, which then builds the Go-written stage. Go 1.4 was the
+  last C-bootstrap; Go 1.5 went "Go-on-Go" but STILL needs a prior Go
+  binary (Go 1.4) as stage0 — a *previously built toolchain* seed.
+  → Go's true-cold-from-only-a-C-compiler era = "commit generated/portable
+    C source" (our option b). Modern Go = "need a prior binary" (our d).
+
+Rust (stage0): does NOT keep a hand-written seed in the tree. `x.py`
+  **downloads a prebuilt beta `rustc`** (the stage0 snapshot, pinned in
+  src/stage0.json) and builds stage1 with it. The seed is a DELIVERED
+  BINARY, out-of-band, per-host. Bootstrapping Rust "from only a C
+  compiler" is famously NOT possible from the repo alone (mrustc exists
+  out-of-tree precisely to fill that gap).
+  → Rust's model = "ship a per-arch prebuilt binary" (our option a / d).
+
+Reconciliation with hexa-lang: hexa-lang's CANON M3b already chose the
+  Go-1.4 framing in code comments ("CANON M3b · Go 1.4 C-seed",
+  build_hexa_cli.hexa:593) — i.e. the .c IS the seed — but then GITIGNORED
+  that .c, which silently degraded it to the Rust model (binary delivered
+  by `hx install`) WITHOUT shipping a pinned stage0 binary in-repo. The
+  result is the current gap: neither a committed C-seed (Go) NOR a pinned
+  downloaded stage0 (Rust) — only an implicit "you already have hexa".
+
+──────────────────────────────────────────────────────────────────────────
+3 · OPTIONS MATRIX (cost · unblocks · reaches TRUE cold boot?)
+──────────────────────────────────────────────────────────────────────────
+"TRUE cold boot" ≜ bare `git clone` + a C compiler ONLY (no pre-installed
+hexa, no network) can produce build/hexat.
+
+┌────┬───────────────────────────┬────────────┬───────────────────────────┬──────────────┐
+│ opt│ strategy                  │ cost        │ unblocks                  │ TRUE cold?   │
+├────┼───────────────────────────┼────────────┼───────────────────────────┼──────────────┤
+│ a  │ COMMIT per-arch prebuilt  │ binary in   │ fresh clone runs hexat    │ NO (only on  │
+│    │ transpiler binary         │ git; arch   │ directly on a MATCHING    │ the committed│
+│    │ (Rust stage0 model)       │ matrix      │ host; no cc step          │ arches; cc   │
+│    │                           │ (mac arm64 +│ needed for those arches   │ not the seed)│
+│    │                           │ linux x86 + │                           │ — and binary │
+│    │                           │ …); churns  │                           │ in git is the│
+│    │                           │ each codegen│                           │ exact thing  │
+│    │                           │ change      │                           │ M3b forbids  │
+├────┼───────────────────────────┼────────────┼───────────────────────────┼──────────────┤
+│ b  │ COMMIT the generated C    │ large .c in │ ANY host with a C compiler│ YES — this is│
+│    │ seed amalgam (un-gitignore│ git (~1.85  │ bootstraps build/hexat    │ the only opt │
+│    │ hexa_cc.c + runtime.c +   │ MB hexa_cc.c│ from a bare clone, no     │ that reaches │
+│    │ runtime_core.c +          │ + ~runtime  │ network, no prior hexa.   │ true cold    │
+│    │ runtime_hi_gen.c +        │ set; arch-  │ Arch-NEUTRAL (one seed,   │ boot, arch-  │
+│    │ native/*.c)               │ neutral, so │ all arches). Go-1.4 model.│ neutral.     │
+│    │ = "0 HAND-WRITTEN .c"     │ ONE copy,   │                           │              │
+│    │ (Go 1.4 model)            │ no matrix   │                           │              │
+├────┼───────────────────────────┼────────────┼───────────────────────────┼──────────────┤
+│ c  │ hand-written stage-(-1)   │ HIGH eng    │ in principle a tiny C     │ YES in theory│
+│    │ micro-seed (a minimal C   │ (write+     │ kernel could grow to hexat│ but VIOLATES │
+│    │ subset interpreter that   │ maintain a  │                           │ the "0 hand- │
+│    │ runs enough hexa to       │ new hand-   │                           │ written .c"  │
+│    │ transpile the rest)       │ written C   │                           │ goal — adds  │
+│    │                           │ compiler;   │                           │ NEW hand C.  │
+│    │                           │ months)     │                           │ Self-defeat. │
+├────┼───────────────────────────┼────────────┼───────────────────────────┼──────────────┤
+│ d  │ KEEP warm-seed; document  │ ~0 (doc     │ nothing new — status quo  │ NO — fresh   │
+│    │ that fresh clone requires │ only)       │ formalized                │ clone needs  │
+│    │ `hx install hexa-lang`    │             │                           │ a binary 1st │
+│    │ first (ships a binary)    │             │                           │ (Rust-like,  │
+│    │ = Rust delivered-stage0   │             │                           │ but undocum- │
+│    │                           │             │                           │ ented/pinned)│
+└────┴───────────────────────────┴────────────┴───────────────────────────┴──────────────┘
+
+NOTE on (a) vs (b): (a) ships the OUTPUT of the seed (a binary), so it is
+not a "seed" in the Go sense and is forbidden by CANON M3b (.gitignore
+L132-137: "the transpiler is a build artifact … must stay out of git").
+(b) ships the SOURCE of the seed (generated .c), which M3b's own comment
+calls "arch-neutral C seed" and the .hexanoport marker calls R1-compliant.
+
+──────────────────────────────────────────────────────────────────────────
+4 · RECOMMENDATION — OPTION (b), with a packaging refinement
+──────────────────────────────────────────────────────────────────────────
+RECOMMEND: (b) — commit the GENERATED C-seed amalgam (un-gitignore the
+complete cold-seed .c set), as a SINGLE pre-amalgamated stage-(-1) TU.
+
+One-line why: (b) is the ONLY option that reaches true cold boot from a
+bare clone + a C compiler alone, it is arch-NEUTRAL (one seed, no per-arch
+matrix), and it is already the repo's declared model (CANON M3b "Go 1.4
+C-seed" + the R1-compliant .hexanoport marker) — it just needs the .c to
+actually be tracked instead of gitignored.
+
+4-axis reasoning:
+  • complete : ✅ true cold boot, every arch, offline. The only option that
+               closes the stage-(-1) chicken-egg outright. (a) covers only
+               committed arches; (d) does not close it; (c) closes it but
+               by violating the goal.
+  • simple   : ✅ no new code path — the cold branch in _do_build (L612-619)
+               ALREADY consumes exactly this .c set; it works the moment
+               the files are present. Refinement: ship ONE pre-amalgamated
+               TU (`self/native/hexa_cc_seed.c`, the sed-swapped
+               runtime.h→runtime.c result + the runtime amalgam inlined) so
+               a fresh clone needs `cc seed.c -o hexat` with ZERO -I gymnastics
+               and ZERO missing-fragment risk. Generated by `cc --regen`,
+               re-pinned only when codegen/runtime SSOT changes.
+  • safe     : ✅ purely additive — the warm regen path (the byte-eq fixpoint
+               gate, P1) is UNCHANGED and remains the per-PR authority; the
+               committed seed is only the FALLBACK when no hexa is on PATH.
+               No bootstrap behavior flips this cycle. The committed .c is
+               gated by the SAME `cc --regen` byte-eq check that already
+               guards P1, so drift is caught (LINE-DIFF-MAJOR → re-pin).
+  • std      : ✅ matches Go 1.4 (the canonical "commit the C seed" lineage)
+               and matches the repo's OWN CANON M3b comment. (a) is the Rust
+               model but contradicts M3b's no-binary-in-git rule.
+
+"0 .c" reconciliation for (b): (b) keeps a generated .c in git but ZERO
+hand-maintained .c that is a porting target — fully consistent with the
+repo's stated "0 HAND-WRITTEN .c" north-star (per the .hexanoport marker
++ R1). The literal-0-.c reading is NOT the repo's goal and is in fact
+impossible while runtime.c (the one hand-written C) exists; that is the
+separate, orthogonal, multi-month F3 runtime-floor campaign's job.
+
+Why NOT the others (one line each):
+  • (a) forbidden by CANON M3b (binary in git) + arch matrix churn; covers
+        only committed arches → not arch-neutral true cold.
+  • (c) introduces NEW hand-written C → directly contradicts the "0 hand-
+        written .c" goal; highest cost; self-defeating.
+  • (d) zero-cost and honest, but does NOT achieve cold boot — it just
+        renames the status quo. Acceptable as an INTERIM doc (and should be
+        written down regardless), but it is not the terminal answer.
+
+──────────────────────────────────────────────────────────────────────────
+5 · NEXT-CYCLE IMPLEMENTATION STEPS (for option b) — precise, gated
+──────────────────────────────────────────────────────────────────────────
+PRECONDITIONS (must be MEASURED GREEN first — see runbook §3 P1/P2/P3):
+  P1 fixpoint byte-eq — CLOSED cross-host (#2105 Mac, #2109 ubu). ✅
+  P2 warm-rebuild on Mac without kill-storm — run `--byte-eq` via
+     `pool on mini` or LOCAL_BUILD=1; capture verdict. (still OPEN)
+  P3 warm-rebuild on ubu x86_64 — CI bootstrap.yml lane. (likely green)
+
+STEP 1 (seed generation, on a build-capable host — mini/ubu, NOT Mac-local):
+  - run `hexa cc --regen` to produce the canonical hexa_cc.c from the 4 SSOT
+    .hexa modules (verify BYTE-EQ vs fixpoint per runbook §4 class table).
+  - produce the runtime amalgam: `sed 's|#include "runtime.h"|#include
+    "runtime.c"|' hexa_cc.c` AND ensure runtime.c + runtime_core.c +
+    runtime_hi_gen.c + self/native/*.c are all regenerated from emitters.
+  - PACKAGING REFINEMENT: emit ONE self-contained TU
+    `self/native/hexa_cc_seed.c` (amalgam + runtime inlined) OR commit the
+    full multi-file set unchanged — decide by file-count vs single-TU
+    review burden (single TU recommended: one `cc` line, no -I, no fragment
+    drift). Add a `.hexanoport`-style header marking it generated/R1-OK.
+
+STEP 2 (un-gitignore — the tracking flip):
+  - remove .gitignore:286 `self/native/hexa_cc.c` (and, if single-TU, add
+    the new seed instead). DO NOT un-ignore the BINARY entries (L138-144) —
+    M3b still forbids committed binaries.
+  - this is a >50-line addition of generated .c → use a SCOPED commit
+    subject (wipe_guard is about DELETIONS, but be explicit) and note the
+    seed provenance (`cc --regen` at <commit>) in the commit body.
+
+STEP 3 (build wiring — make the cold path prefer the committed seed):
+  - in tool/build_hexa_cli.hexa Step 0 (L612-619): when build/hexat is
+    absent AND no external hexa on PATH, use the COMMITTED seed directly
+    (it is now present) instead of relying on the warm regen SKIP. The
+    `_must_exist(hexa_cc.c)` call (L615) then SUCCEEDS on a fresh clone.
+  - keep the warm regen helpers (L574-591) as the optimization when a hexa
+    IS present (re-pin freshness), with the committed seed as the floor.
+
+STEP 4 (cross-host TRUE-COLD verification — the falsifier):
+  - falsifier: "a bare `git clone` (no hexa on PATH, no network) + a C
+    compiler produces a working build/hexat, cross-host."
+  - method: fresh `git clone --depth 1` on mini (arm64) AND ubu-2 (x86_64),
+    scrub PATH of any hexa, `cc self/native/hexa_cc_seed.c -o build/hexat`
+    (or the documented multi-file cc line), then smoke
+    `build/hexat <probe.hexa> /tmp/out.c` → expect a non-empty C emit.
+  - persist the run to .verdicts/hexa-cc-zero/P3-COLD-BOOT-<host>.txt.
+  - on GREEN cross-host: this closes the stage-(-1) cold-seed frontier
+    (the build/hexat-from-bare-clone property), and the seed becomes the
+    auto-folded terminal artifact (no per-arch matrix).
+
+STEP 5 (CI lane): add a `cold-seed.yml` GHA job that does Step 4 on a
+  scrubbed PATH on both hosts every PR, so a future SSOT change that breaks
+  the committed seed is caught (re-pin via `cc --regen`).
+
+OUT OF SCOPE for the b-flip (do NOT block on these):
+  • F3 runtime.c → hexa-native self-emit (the literal-0-.c lane). Orthogonal.
+  • removing the WARM path. The warm regen stays as the freshness optimizer.
+
+──────────────────────────────────────────────────────────────────────────
+6 · HONEST FENCE (g5/g63)
+──────────────────────────────────────────────────────────────────────────
+This is a 🟠 DESIGN PROPOSAL. No `hexa cc --regen`, no `--byte-eq`, and no
+cold-boot run were executed this cycle (Mac kill-storm gate honored). The
+repo-state facts in §0 are MEASURED (git ls-files + .gitignore at HEAD on
+this worktree); the OPTION COMPARISON and the cold-boot reachability claims
+are reasoned from the code paths, not measured. The actual TRUE-COLD
+verdict is produced by Step 4 in a future build-capable cycle and must be
+persisted verbatim before any milestone flip. No bootstrap code, no
+HEXA-CC-ZERO.md, no P2/P3/P5/P6 milestone was touched.
