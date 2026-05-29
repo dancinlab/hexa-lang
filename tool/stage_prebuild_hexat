@@ -57,10 +57,35 @@ if [ -x "$HEXAT" ]; then
 fi
 
 if [ ! -f "$CC_SRC" ]; then
-  # hexa_cc.c already removed (e.g. post-PR2 with no seeds at all in tree) —
-  # nothing to build from here; stage_regen_hexa_cc handles the regen path.
-  echo "[stage_prebuild_hexat] self/native/hexa_cc.c absent — skip (regen owns it)"
-  exit 0
+  # hexa_cc.c already removed (post-PR2: seeds git-removed at checkout). We can
+  # NOT build build/hexat from source here. Pull a prebuilt build/hexat from the
+  # prior edge tarball (release.yml Package bundles it — the runtime.a "frozen
+  # dough" precedent #2019, extended to the transpiler). With a ready build/hexat
+  # in place, the later `hexa cc --regen` reuses it instead of trying (and
+  # failing) to clang-bootstrap from the now-removed self/runtime.c + hexa_cc.c.
+  echo "[stage_prebuild_hexat] self/native/hexa_cc.c absent — pulling build/hexat from prior edge"
+  ASSET="${EDGE_ASSET:?EDGE_ASSET must be set when seeds are removed}"
+  EDGE_DIR="/tmp/edge_hexat"
+  rm -rf "$EDGE_DIR"; mkdir -p "$EDGE_DIR"
+  if gh release download edge --repo "${GITHUB_REPOSITORY:-dancinlab/hexa-lang}" \
+        --pattern "$ASSET" --dir "$EDGE_DIR" --clobber 2>/tmp/hexat_dl.err \
+     && tar xzf "$EDGE_DIR/$ASSET" -C "$EDGE_DIR" 2>/dev/null; then
+    PRIOR_HEXAT="$(find "$EDGE_DIR" -type f -path '*/build/hexat' | head -1)"
+    if [ -n "$PRIOR_HEXAT" ]; then
+      cp "$PRIOR_HEXAT" "$HEXAT"
+      chmod +x "$HEXAT"
+      test -x "$HEXAT"
+      echo "[stage_prebuild_hexat] build/hexat from edge = $(wc -c < "$HEXAT") bytes"
+      exit 0
+    fi
+    echo "[stage_prebuild_hexat] FATAL: prior edge tarball ($ASSET) has NO build/hexat —" >&2
+    echo "  this edge PREDATES hexat-bundling (release.yml Package cp build/hexat)." >&2
+    echo "  Publish a hexat-bearing edge first (merge PR-A → main → edge release)," >&2
+    echo "  then re-run this faithful gate. (chicken-egg boundary — expected RED.)" >&2
+    exit 1
+  fi
+  echo "[stage_prebuild_hexat] FATAL: edge download failed ($(head -1 /tmp/hexat_dl.err 2>/dev/null))" >&2
+  exit 1
 fi
 if [ ! -f "$RA" ]; then
   echo "[stage_prebuild_hexat] FATAL: runtime.a missing at $RA (run Stage 0b first)" >&2

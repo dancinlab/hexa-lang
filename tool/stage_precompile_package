@@ -37,6 +37,12 @@ mkdir -p "$stage/build" "$stage/release/precompile"
 cp hexa "$stage/hexa"
 cp build/hexa_module_loader "$stage/build/hexa_module_loader"
 cp build/runtime.a "$stage/build/runtime.a"
+# Ship the self-hosted transpiler too — post-PR2 (seeds git-removed) the
+# `hexa cc --regen` step has no self/native/hexa_cc.c to bootstrap build/hexat
+# from, so stage_prebuild_hexat must pull a prebuilt build/hexat from THIS edge
+# tarball. Mirrors the runtime.a "frozen dough" precedent (#2019). Guarded so
+# older trees without a built hexat still package cleanly (additive no-op).
+[ -f build/hexat ] && cp build/hexat "$stage/build/hexat" || true
 cp -R release/precompile/. "$stage/release/precompile/"
 tar -czf "hexa-${TARGET}.tar.gz" -C dist "hexa-${TARGET}"
 
