@@ -761,8 +761,12 @@ fn cloud_copy_from_resume(host: str, remote_path: str, local_path: str) -> Cloud
 // host:remote_path with `scp -r`. Pre-checks the local source exists
 // (exit 102 otherwise), then prepends "-r" to the scp opts so the whole
 // subtree copies. Single-file copy-to stays on cloud_copy_to_opts.
+// NOTE: the source of a `-r` copy is normally a DIRECTORY, so the guard
+// uses `path_exists` (true for files AND dirs) rather than `file_exists`
+// (file-only — it returns false for a directory, which falsely reported
+// `local_source_missing` and tore the rented pod back down).
 fn cloud_copy_to_recursive_opts(host: str, ssh_opts: [str], local_path: str, remote_path: str) -> CloudResult {
-    if !file_exists(local_path) {
+    if !path_exists(local_path) {
         return CloudResult { ok: 0, exit_code: 102, pid: 0, stdout_: "",
             message: "local_source_missing · " + local_path, logfile: "" }
     }

@@ -1,0 +1,60 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+// stdlib/cloud/copy_recursive_dir_guard_test.hexa — falsifier for the
+// cloud_copy_to_recursive_opts source-existence guard (cloud.hexa).
+//
+// ROOT CAUSE (RTSC dft-run, 2026-05-30): the recursive copy-to guard used
+// `file_exists(local_path)`, but `local_path` for a `scp -r` upload is a
+// DIRECTORY (the deck folder). `file_exists` is file-only → returns false
+// for a directory → the guard falsely reported `local_source_missing` and
+// the rent→idle watchdog tore the rented pod back down. The fix swaps the
+// guard to `path_exists` (true for files AND dirs).
+//
+// Falsifiers:
+//   F-CLOUD-COPYR-DIR   — path_exists must accept a real directory (the
+//                         exact case file_exists wrongly rejected).
+//   F-CLOUD-COPYR-FILE  — path_exists must still accept a regular file.
+//   F-CLOUD-COPYR-MISS  — path_exists must reject a nonexistent path.
+//   F-CLOUD-COPYR-BUG   — file_exists (the OLD guard) must reject a
+//                         directory — this is the bug we fixed.
+//
+// Run:   hexa run stdlib/cloud/copy_recursive_dir_guard_test.hexa
+// PASS:  exits 0, prints "copy_recursive_dir_guard_test PASS".
+
+fn _ck(name: str, got: bool, want: bool) {
+    if got != want {
+        let g = if got { "true" } else { "false" }
+        let w = if want { "true" } else { "false" }
+        println("  FAIL: " + name + " got " + g + " want " + w)
+        exit(1)
+    }
+}
+
+fn main() {
+    // Build an isolated scratch tree: <tmp>/deck/ holding one file, so the
+    // directory and a file inside it both genuinely exist on disk.
+    let base = "/tmp/hexa_copyr_guard_test"
+    exec("rm -rf '" + base + "' && mkdir -p '" + base + "/deck'")
+    exec("printf 'x' > '" + base + "/deck/vc-relax.in'")
+
+    let deck_dir = base + "/deck"
+    let deck_file = base + "/deck/vc-relax.in"
+    let missing = base + "/deck/does-not-exist.in"
+
+    // F-CLOUD-COPYR-DIR — the recursive-copy guard's actual input (a dir).
+    _ck("path_exists(dir)", path_exists(deck_dir), true)
+    _ck("path_is_dir(dir)", path_is_dir(deck_dir), true)
+
+    // F-CLOUD-COPYR-FILE — guard must still accept a plain file source.
+    _ck("path_exists(file)", path_exists(deck_file), true)
+
+    // F-CLOUD-COPYR-MISS — guard must reject a path that isn't there.
+    _ck("path_exists(missing)", path_exists(missing), false)
+
+    // F-CLOUD-COPYR-BUG — the OLD guard (file_exists) rejected the dir;
+    // asserting it here pins the exact regression the fix addresses.
+    _ck("file_exists(dir) is the bug", file_exists(deck_dir), false)
+    _ck("file_exists(file) ok", file_exists(deck_file), true)
+
+    exec("rm -rf '" + base + "'")
+    println("copy_recursive_dir_guard_test PASS")
+}
