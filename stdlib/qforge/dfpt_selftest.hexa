@@ -1,0 +1,150 @@
+// @ci_gate — deterministic · network-free · 해석적 분산과 대조하는 DFPT 포논 g5 게이트
+//
+// dfpt_selftest.hexa — QFORGE L4 (DFPT 동역학행렬 조립 + 포논 solver) g5 gate.
+//
+// 해석적 force-constant 모델(닫힌형 분산 보유)로 조립기+solver 를 검증한다.
+// 동역학행렬은 하드코딩하지 않는다 — 모든 케이스가 실공간 Φ 를 만들어 generic
+// qforge_dynmat 으로 조립하고 qforge_phonons(eigh 재사용)로 대각화한다(d4).
+//
+//   조립기는 원자당 3 DOF(x,y,z)를 가정한다(dim=3·natoms).  1D 사슬은 x-가지만
+//   결합시키고 y/z 에 큰 자기강성 BIG 을 둬 분리(고주파)한다 → x-가지가 최저 ω.
+//
+// 검증 케이스:
+//  (A) 1D 단원자 사슬 (M,K): ω(q)=2√(K/M)|sin(qa/2)|.
+//      Φxx = on-site +2K, 이웃(R=±a) −K.  q=π/a(영역경계 ω=2√(K/M)) · q=π/2a(mid).
+//  (B) 음향 sum rule: q=Γ → x-음향가지 ω≈0 (on-site = −Σ이웃 이 강제).
+//  (C) 2원자 사슬 (M1,M2) at Γ: optical ω=√(2K(1/M1+1/M2)) · acoustic ω=0.
+//  (D) D(q) 대칭성(Hermitize) + 안정 모델 ω²≥0.
+//  (E) 불안정 Φ(음의 곡률) → NEGATIVE ω² 반환(soft mode 정직, clamp 안함 — d6).
+//
+// Run (repo runtime 수동 링크):
+//   ./build/hexa_v2 stdlib/qforge/dfpt_selftest.hexa /tmp/df.c &&
+//   clang -O2 -D_GNU_SOURCE -I build/self /tmp/df.c build/self/runtime.c -o /tmp/df -lm -lpthread -ldl && /tmp/df
+// PASS: "qforge_dfpt_selftest PASS".
+use "stdlib/qforge/dfpt"
+use "stdlib/qforge/mpgrid"
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_bool(name: str, got: bool, want: bool) -> int {
+    if got == want { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+// 1원자(natoms=1, dim=3) x-사슬 블록 빌더: xx 성분만 채우고 y/z 에 자기강성 yz_self.
+fn mono_block(xx: float, yz_self: float) -> [float] {
+    let mut b: [float] = []
+    let mut z = 0
+    while z < 9 { b.push(0.0) ; z = z + 1 }
+    b[0 * 3 + 0] = xx          // xx
+    b[1 * 3 + 1] = yz_self     // yy
+    b[2 * 3 + 2] = yz_self     // zz
+    return b
+}
+fn main() {
+    let mut fails = 0
+    let PI = 3.14159265358979323846
+    let M = 1.0
+    let K = 1.0
+    let BIG = 1.0e6
+
+    // ── (A)+(B) 1D 단원자 사슬: natoms=1, dim=3, x-가지만 사슬결합 ──────────
+    //   Φ(R=0): xx=+2K, yy=zz=BIG.  Φ(R=±a): xx=−K, yy=zz=0.  ncells=3.
+    let b0 = mono_block(2.0 * K, BIG)
+    let bp = mono_block(-K, 0.0)
+    let bm = mono_block(-K, 0.0)
+    let mut phi_mono: [float] = []
+    let mut t = 0
+    while t < 9 { phi_mono.push(b0[t]) ; t = t + 1 }
+    let mut t1 = 0
+    while t1 < 9 { phi_mono.push(bp[t1]) ; t1 = t1 + 1 }
+    let mut t2 = 0
+    while t2 < 9 { phi_mono.push(bm[t2]) ; t2 = t2 + 1 }
+    let masses_mono = [M]
+    let cellR_mono = [0.0, 0.0, 0.0,   1.0, 0.0, 0.0,   -1.0, 0.0, 0.0]
+    let pre = 2.0 * sqrt(K / M)
+
+    // (A1) 영역경계 q=π/a → ω_x = 2√(K/M) = 2.0
+    let qzb = [PI, 0.0, 0.0]
+    let dzb = qforge_dynmat(phi_mono, masses_mono, qzb, 1, 3, cellR_mono)
+    let pzb = qforge_phonons(dzb, masses_mono, 1)
+    fails = fails + _ck_close("(A1) ω(q=π/a) zone-boundary", pzb.omega[0], pre * 1.0, 1.0e-6)
+
+    // (A2) mid-zone q=π/2a → ω_x = 2√(K/M)·sin(π/4) = √2
+    let qmid = [PI / 2.0, 0.0, 0.0]
+    let dmid = qforge_dynmat(phi_mono, masses_mono, qmid, 1, 3, cellR_mono)
+    let pmid = qforge_phonons(dmid, masses_mono, 1)
+    let wmid_an = pre * 0.70710678118654752    // sin(π/4)
+    fails = fails + _ck_close("(A2) ω(q=π/2a) mid-zone", pmid.omega[0], wmid_an, 1.0e-6)
+
+    // (B) 음향 sum rule: q=Γ → x-음향 ω ≈ 0
+    let qg = [0.0, 0.0, 0.0]
+    let dg = qforge_dynmat(phi_mono, masses_mono, qg, 1, 3, cellR_mono)
+    let pg = qforge_phonons(dg, masses_mono, 1)
+    fails = fails + _ck_close("(B) ω_acoustic(Γ) = 0", pg.omega[0], 0.0, 1.0e-6)
+    fails = fails + _ck_bool("(B) n_acoustic_zero >= 1", pg.n_acoustic_zero >= 1, true)
+
+    // ── (C) 2원자 사슬 at Γ: M1=1, M2=2, K=1 (x-가지 결합, y/z BIG 분리) ────
+    //   Γ x-블록(질량가중 전) = [[2K, −2K],[−2K, 2K]] → 고유값 0(음향)·2K(1/M1+1/M2)(광학).
+    let M1 = 1.0
+    let M2 = 2.0
+    let mut phi_di: [float] = []
+    let mut z6 = 0
+    while z6 < 36 { phi_di.push(0.0) ; z6 = z6 + 1 }
+    // atom0: x0=0 y1 z2 ; atom1: x3=3 y4 z5.  x0-x3 사슬결합.
+    phi_di[0 * 6 + 0] = 2.0 * K          // x0,x0
+    phi_di[3 * 6 + 3] = 2.0 * K          // x3,x3
+    phi_di[0 * 6 + 3] = -2.0 * K         // x0,x3
+    phi_di[3 * 6 + 0] = -2.0 * K         // x3,x0
+    phi_di[1 * 6 + 1] = BIG              // y0
+    phi_di[2 * 6 + 2] = BIG              // z0
+    phi_di[4 * 6 + 4] = BIG              // y1
+    phi_di[5 * 6 + 5] = BIG              // z1
+    let masses_di = [M1, M2]
+    let cellR_di = [0.0, 0.0, 0.0]
+    let ddi = qforge_dynmat(phi_di, masses_di, qg, 2, 1, cellR_di)
+    let pdi = qforge_phonons(ddi, masses_di, 2)
+    let w_opt_an = sqrt(2.0 * K * (1.0 / M1 + 1.0 / M2))
+    fails = fails + _ck_close("(C) ω_acoustic(Γ) diatomic = 0", pdi.omega[0], 0.0, 1.0e-6)
+    fails = fails + _ck_close("(C) ω_optical(Γ) = √(2K(1/M1+1/M2))", pdi.omega[1], w_opt_an, 1.0e-6)
+
+    // ── (D) D(q) 대칭성(Hermitize) + 안정 ω²≥0 ─────────────────────────────
+    let mut sym_ok = true
+    let dd = ddi.dim
+    let mut ia = 0
+    while ia < dd {
+        let mut ib = 0
+        while ib < dd {
+            if _abs(ddi.mat[ia * dd + ib] - ddi.mat[ib * dd + ia]) > 1.0e-12 { sym_ok = false }
+            ib = ib + 1
+        }
+        ia = ia + 1
+    }
+    fails = fails + _ck_bool("(D) D(q) Hermitian/symmetric", sym_ok, true)
+    fails = fails + _ck_bool("(D) ω²_acoustic ≥ 0 (stable)", pzb.omega2[0] >= -1.0e-9, true)
+
+    // ── (E) 불안정 Φ (음의 곡률) → NEGATIVE ω² (soft mode 정직, clamp 안함, d6) ─
+    //   on-site xx = −2K (음의 곡률), 이웃 +K → D(영역경계) 음수 → ω² < 0.
+    let s0 = mono_block(-2.0 * K, BIG)
+    let sp = mono_block(K, 0.0)
+    let sm = mono_block(K, 0.0)
+    let mut phi_soft: [float] = []
+    let mut u0 = 0
+    while u0 < 9 { phi_soft.push(s0[u0]) ; u0 = u0 + 1 }
+    let mut u1 = 0
+    while u1 < 9 { phi_soft.push(sp[u1]) ; u1 = u1 + 1 }
+    let mut u2 = 0
+    while u2 < 9 { phi_soft.push(sm[u2]) ; u2 = u2 + 1 }
+    let dsoft = qforge_dynmat(phi_soft, masses_mono, qzb, 1, 3, cellR_mono)
+    let psoft = qforge_phonons(dsoft, masses_mono, 1)
+    fails = fails + _ck_bool("(E) soft mode ω² < 0 (negative, not clamped)", psoft.omega2[0] < 0.0, true)
+    fails = fails + _ck_bool("(E) soft mode ω < 0 (imaginary flagged)", psoft.omega[0] < 0.0, true)
+
+    // ── (reuse d19) mpgrid 로 q-점 생성 시연: 2×1×1 → npoints=2 ─────────────
+    let mp = qforge_mp_grid(2, 1, 1, 0, 0, 0)
+    fails = fails + _ck_bool("(reuse) mpgrid npoints == 2", mp.npoints == 2, true)
+
+    if fails == 0 { println("qforge_dfpt_selftest PASS") }
+    else { println("qforge_dfpt_selftest FAIL — " + to_string(fails) + " case(s)") }
+}
