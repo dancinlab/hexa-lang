@@ -1,0 +1,185 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+// stdlib/cloud/runexec_proxy_resolve_test.hexa — guards the numeric-id PROXY-
+// FIRST resolution that `cloud run/exec/nohup/fire/poll/tail/watch/copy-to/
+// copy-from` now apply to a bare vast instance id (handoff a6a268a9).
+//
+// THE BUG: `cloud run/copy/exec <numeric-vast-id>` handed the bare digits
+// straight to ssh, which either resolved them via a ~/.ssh/config block (only
+// if rent/adopt had injected one) or fell through to the bare public-IP:22
+// direct endpoint — a blocked/stale 2.65.x IP that silently TIMES OUT. PR #2098
+// fixed adopt's autoinject to proxy-first; this mirrors that at the VERB layer
+// so every transport verb reaches the LIVE proxy (ssh*.vast.ai:<port>) with no
+// config block, falling back to the direct IP only when the proxy is unmapped.
+//
+// The decision fns are mirrored here BYTE-FOR-BYTE from cloud_cli.hexa
+// (_is_vast_numeric_id · _apply_resolved_port + the _resolve_cloud_host
+// preference order). The live vastai read in _resolve_cloud_host is exercised
+// in the binary smoke (cloud resolve <id>); here we pin the pure logic.
+//
+// Run:   hexa run stdlib/cloud/runexec_proxy_resolve_test.hexa
+// PASS:  exits 0, prints "runexec_proxy_resolve_test PASS".
+
+// ── mirror of cloud_cli.hexa _is_vast_numeric_id ───────────────────────────
+fn _is_vast_numeric_id(h: str) -> int {
+    let n = len(h)
+    if n < 5 {
+        return 0
+    }
+    let mut i = 0
+    while i < n {
+        let c = h.substring(i, i + 1)
+        if c < "0" || c > "9" {
+            return 0
+        }
+        i = i + 1
+    }
+    return 1
+}
+
+// ── mirror of cloud_cli.hexa ResolvedHost + _apply_resolved_port ───────────
+struct ResolvedHost {
+    host:     str,
+    port:     str,
+    resolved: int,
+    via:      str
+}
+
+fn _ssh_opts_has_port(opts: [str]) -> int {
+    let mut i = 0
+    while i < len(opts) {
+        if opts[i] == "-p" {
+            return 1
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+fn _apply_resolved_port(opts: [str], rh: ResolvedHost) -> [str] {
+    if rh.resolved == 0 || len(rh.port) == 0 {
+        return opts
+    }
+    if _ssh_opts_has_port(opts) == 1 {
+        return opts
+    }
+    let mut out = opts
+    out.push("-p")
+    out.push(rh.port)
+    return out
+}
+
+// PURE model of _resolve_cloud_host's preference order (proxy → direct → leave
+// as-is). The two endpoint lookups are simulated by the caller's flags so this
+// stays network-free while pinning the ORDER (proxy wins over direct).
+fn _resolve_model(h: str, proxy_ok: int, proxy_host: str, proxy_port: str, direct_ok: int, direct_host: str, direct_port: str) -> ResolvedHost {
+    if _is_vast_numeric_id(h) == 0 {
+        return ResolvedHost { host: h, port: "", resolved: 0, via: "" }
+    }
+    if proxy_ok == 1 {
+        return ResolvedHost { host: "root@" + proxy_host, port: proxy_port, resolved: 1, via: "proxy" }
+    }
+    if direct_ok == 1 {
+        return ResolvedHost { host: "root@" + direct_host, port: direct_port, resolved: 1, via: "direct" }
+    }
+    return ResolvedHost { host: h, port: "", resolved: 0, via: "" }
+}
+
+fn _ck_str(name: str, got: str, want: str) {
+    if got != want {
+        println("  FAIL: " + name + " got '" + got + "' want '" + want + "'")
+        exit(1)
+    }
+    println("  ok: " + name)
+}
+
+fn _ck(name: str, got: int, want: int) {
+    if got != want {
+        println("  FAIL: " + name + " got " + to_string(got) + " want " + to_string(want))
+        exit(1)
+    }
+    println("  ok: " + name)
+}
+
+fn main() {
+    // ── numeric-id detection ───────────────────────────────────────────────
+    _ck("38095989 is a vast id", _is_vast_numeric_id("38095989"), 1)
+    _ck("12345 (5 digits) is a vast id", _is_vast_numeric_id("12345"), 1)
+    _ck("root@1.2.3.4 is NOT a vast id (has @ and .)", _is_vast_numeric_id("root@1.2.3.4"), 0)
+    _ck("1.2.3.4 is NOT a vast id (dotted)", _is_vast_numeric_id("1.2.3.4"), 0)
+    _ck("ssh5.vast.ai is NOT a vast id (letters)", _is_vast_numeric_id("ssh5.vast.ai"), 0)
+    _ck("22 (short) is NOT a vast id (< 5 digits)", _is_vast_numeric_id("22"), 0)
+    _ck("2222 (short) is NOT a vast id (< 5 digits)", _is_vast_numeric_id("2222"), 0)
+    _ck("empty is NOT a vast id", _is_vast_numeric_id(""), 0)
+
+    // ── PROXY-FIRST: proxy endpoint wins even when direct is also live ──────
+    let both = _resolve_model("38095989", 1, "ssh5.vast.ai", "12345", 1, "2.65.1.2", "40022")
+    _ck_str("proxy-first host", both.host, "root@ssh5.vast.ai")
+    _ck_str("proxy-first port", both.port, "12345")
+    _ck_str("proxy-first via", both.via, "proxy")
+    _ck("proxy-first resolved", both.resolved, 1)
+    _ck("proxy-first never the stale 2.65.x direct host", _has_stale(both.host), 0)
+
+    // ── fallback to direct ONLY when proxy unmapped ────────────────────────
+    let fb = _resolve_model("38095989", 0, "", "", 1, "2.65.1.2", "40022")
+    _ck_str("direct-fallback host", fb.host, "root@2.65.1.2")
+    _ck_str("direct-fallback port", fb.port, "40022")
+    _ck_str("direct-fallback via", fb.via, "direct")
+
+    // ── neither mapped → leave the id untouched (legacy ssh/config path) ────
+    let none = _resolve_model("38095989", 0, "", "", 0, "", "")
+    _ck_str("unmapped id left as-is", none.host, "38095989")
+    _ck("unmapped id resolved=0", none.resolved, 0)
+
+    // ── a real host is never rewritten ─────────────────────────────────────
+    let realh = _resolve_model("root@1.2.3.4", 1, "ssh5.vast.ai", "12345", 0, "", "")
+    _ck_str("real host untouched", realh.host, "root@1.2.3.4")
+    _ck("real host resolved=0", realh.resolved, 0)
+
+    // ── port injection: resolved port appended when no explicit --port ─────
+    let opts0 = _apply_resolved_port([], both)
+    _ck("resolved port injects -p", _opts_contains(opts0, "-p"), 1)
+    _ck("resolved port injects the value", _opts_contains(opts0, "12345"), 1)
+
+    // ── explicit --port WINS over the resolved port (no double -p) ─────────
+    let user_opts = ["-p", "9999", "-o", "StrictHostKeyChecking=no"]
+    let opts1 = _apply_resolved_port(user_opts, both)
+    _ck("explicit --port preserved", _opts_contains(opts1, "9999"), 1)
+    _ck("explicit --port: resolved port NOT also injected", _opts_contains(opts1, "12345"), 0)
+    _ck("explicit --port: single -p only", _count(opts1, "-p"), 1)
+
+    // ── unresolved host: ssh_opts untouched ────────────────────────────────
+    let opts2 = _apply_resolved_port(["-o", "X=Y"], none)
+    _ck("unresolved: opts unchanged length", len(opts2), 2)
+
+    println("runexec_proxy_resolve_test PASS")
+}
+
+fn _has_stale(h: str) -> int {
+    if h.contains("2.65.") {
+        return 1
+    }
+    return 0
+}
+
+fn _opts_contains(opts: [str], t: str) -> int {
+    let mut i = 0
+    while i < len(opts) {
+        if opts[i] == t {
+            return 1
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+fn _count(opts: [str], t: str) -> int {
+    let mut n = 0
+    let mut i = 0
+    while i < len(opts) {
+        if opts[i] == t {
+            n = n + 1
+        }
+        i = i + 1
+    }
+    return n
+}
