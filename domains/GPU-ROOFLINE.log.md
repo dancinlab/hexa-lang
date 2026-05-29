@@ -1,5 +1,42 @@
 # GPU-ROOFLINE — append-only step log
 
+## 2026-05-30 — batch A drain: @goal 갱신 + MS#2/#3/#6 (gpu-roofline-batch-a)
+
+### @goal 갱신
+- 측정대-구축 @goal → 7 마일스톤 포괄 상위 목표로 보강(의미 보존+확장): "모든 dominant 커널을
+  HW 물리 천장 % 로 측정·확정하고 도달 가능 천장까지 끌어올린다 · cuBLAS 천장이면 못 이김≠실패 ·
+  hexa-emit 은 variable-shape 로 직접 % 를 연다".
+
+### MS#2 🔵 GPU — PTX-diff → roofline 정적 예측 (fire 없이) [PASS]
+- 기존 GPU.md PTX-diff $0 oracle 재활용(신규 fire 0): N104 cuBLAS SASS-diff · N67 vec-add scale-up ·
+  RFC067-D HGEMM 5-shape. PTX instruction histogram → flops_done/bytes_moved 정적 AI → ridge(61) binding 선택.
+- 4/4 비교쌍 정적 예측 vs 기존 실측 ±15% 게이트 PASS(실제 Δ ≤3pp):
+  vec-add AI=0.167≪ridge → 93% BW-roof(N67 실측 93% spec) · cuBLAS HMMA-dense → 0.53 ratio(N104 0.533) ·
+  hexa naive WMMA SMEM-tile 부재 → monotonic 강등 0.767→0.287(RFC067-D 곡선 일치).
+- 정직: 정적 AI 는 L2/reg 재사용 못 봄 → memory-bound 보수적; L2 hit-rate·occupancy = roofline-N/A(정적).
+- 결과 = GPU-ROOFLINE.bench.md §ptx-static.
+
+### MS#3 🟢 flame — 학습 step 전체 dominant 커널 roofline 완전 롤업 [PASS, 부분]
+- linear(14–45% HBM-roof, H100) + FFN(14–35%, H200) 시간-가중 합산 = **~14–42% of HBM-roof**.
+  둘 다 memory-bound(AI<ridge 61) 동질 → binding 정합(혼합 없음).
+- 정직: 개별 %는 실측-유래(🟢), step-time 비중(35/45/20%)은 가정(🟠 — PERF.md per-kernel 프로파일 부재,
+  step time 114–133s FP64 통합값만 측정). attention 커널 별도 측정 미존재(MS#4) → 롤업에서 명시적 누락 표기,
+  "누락 커널 0" 게이트 부분충족(2-커널 합산만). H100/H200 분모 명시(RTX 5070 아님).
+- 결과 = GPU-ROOFLINE.bench.md §flame-lane.
+
+### MS#6 🔴 forge — FP64 TC 41–43% 천장 origin 분석 [CLOSED-NEGATIVE]
+- 가설(operand SMEM tiling 부재 = §3.9a HARD_WALL) **확정**. 3 독립 fire 수렴:
+  Phase R C-V3(41–43% baseline) · RFC 052 §3.9a("no SMEM operand tiling/reuse, memory-bound" + 12% occupancy 직접 명시) ·
+  RFC 060-C FP64 mega-kernel(2× A100, 1.8–4.4× 느림, "Phase R 41–43% 와 정합" 교차 확증).
+- finding: SMEM-tile 없이 cuBLAS(77–87% CUTLASS-grade) 따라잡기 = 물리적 닫힘 = 확정 천장 = "못 이김≠실패".
+  끌어올림 = C Phase 4 CUTLASS-grade(SMEM 타일링+SW pipelining+autotune, 3–6주 vendor-tuning, batch 밖).
+- tier = 🔴 CLOSED-NEGATIVE(valid finding). 결과 = GPU-ROOFLINE.bench.md §forge-lane.
+
+### 안전 / scope
+- 격리 worktree `gpu-roofline-batch-a` ← origin/main. 공유 트리·타 에이전트 브랜치 미접촉. 명시 3경로만 stage.
+- 신규 fire 0(전부 기존 측정 재계산/정적분석) · codegen·.c·.cu 무변경 · vast RTSC 학습 pod 미접촉.
+- 남은 open: MS#1(hexa-emit 직접 %·variable-shape codegen) · MS#4(attention lane fire) · MS#5(WMMA shape sweep) · MS#7(멀티디바이스 분모) — 후속 fire-bearing batch.
+
 ## 2026-05-30 — 단일 SSOT 통합 + 7 open milestone 생성 (gpu-roofline-consolidate)
 
 ### 문서 통합 (수치 SSOT 단일화)
