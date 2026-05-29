@@ -1,0 +1,172 @@
+// HEXA Standard Library — cloud/parallel_audit
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// d_parallel_fire 위반 가드 (project.tape 강제화 T2).
+//
+// T1(fill_plan.hexa)이 새 발사를 기본 병렬화한다면, T2 는 이미 떠 있는
+// pod 가 규칙을 어기고 있는지 감지한다: pod 가 M개 deck 을 queue 에
+// 쌓아두고 단 1개의 ph.x 만 돌리며 spare core 가 남아 있으면
+// (single-pod sequential queue), 그건 d_parallel_fire 위반이다 —
+// 2026-05-29 vast 38095989(128-core, 8 ranks=deck 1개, 8+ queued)이 실측.
+//
+// 순수 결정 함수 — pod 의 live state(physcores, live ph.x rank 수,
+// queued/idle deck 수, deck당 ranks)만 받아 VIOLATION/OK 와 구체적 split
+// 제안을 낸다. 네트워크/pod 접근은 호출자(cloud_cli)가 담당. d4 generic —
+// count/name hardcoding 없음.
+//
+// 위반 조건 (셋 다 참):
+//   live_jobs == 1            (단일 슬롯만 사용)
+//   queued_decks > 0          (대기 중인 deck 존재)
+//   spare_cores ≥ ranks_per_job   (최소 1개 더 동시 발사할 여유 core)
+//     where spare_cores = physcores - live_jobs * ranks_per_job
+//
+// Single-module 라이브러리(no `use`) — repo hexa_v2 로 직접 transpile.
+
+// AuditVerdict — 감사 결과의 구조화된 형태.
+struct AuditVerdict {
+    physcores: int,
+    live_jobs: int,
+    ranks_per_job: int,
+    queued_decks: int,
+    spare_cores: int,    // physcores - live_jobs*ranks_per_job (음수면 0 clamp)
+    free_slots: int,     // spare_cores / ranks_per_job (추가 동시 발사 가능 수)
+    violation: int,      // 1 == d_parallel_fire 위반
+    message: str,        // 사람이 읽는 verdict + split 제안
+}
+
+// _pa_max — 두 정수 중 큰 값.
+fn _pa_max(a: int, b: int) -> int {
+    if a > b {
+        return a
+    }
+    return b
+}
+
+// dft_parallel_audit — pod live state 를 d_parallel_fire 규칙으로 감사한다.
+//
+// (physcores, live_jobs, ranks_per_job, queued_decks) → AuditVerdict.
+// VIOLATION 이면 message 에 구체적 split 제안(몇 개를 동시 발사로 채울지)을
+// 담고, OK 면 그 이유를 담는다.
+pub fn dft_parallel_audit(physcores: int, live_jobs: int, ranks_per_job: int, queued_decks: int) -> AuditVerdict {
+    let used = live_jobs * ranks_per_job
+    let spare = _pa_max(physcores - used, 0)
+    let mut free_slots = 0
+    if ranks_per_job > 0 {
+        free_slots = spare / ranks_per_job
+    }
+
+    // 위반: 단일 슬롯 + 대기 deck 존재 + 한 job 더 들어갈 여유.
+    let mut violation = 0
+    if live_jobs == 1 {
+        if queued_decks > 0 {
+            if spare >= ranks_per_job {
+                if ranks_per_job > 0 {
+                    violation = 1
+                }
+            }
+        }
+    }
+
+    let mut msg = ""
+    if violation == 1 {
+        // 채울 수 있는 추가 동시 job 수 = min(queued_decks, free_slots).
+        let mut fill = free_slots
+        if queued_decks < fill {
+            fill = queued_decks
+        }
+        let total = live_jobs + fill
+        msg = "VIOLATION — d_parallel_fire: pod has " + to_string(live_jobs)
+            + " live ph.x job (" + to_string(ranks_per_job) + " ranks) but "
+            + to_string(queued_decks) + " deck(s) queued idle with "
+            + to_string(spare) + " spare cores (" + to_string(free_slots)
+            + " free slot(s)). SPLIT NOW: launch " + to_string(fill)
+            + " more deck(s) concurrently (background `mpirun -np "
+            + to_string(ranks_per_job) + " --bind-to none ph.x` per deck, OMP/MKL=1) → "
+            + to_string(total) + " concurrent jobs / " + to_string(total * ranks_per_job)
+            + " of " + to_string(physcores) + " cores. Use the dft_fill_plan launch (T1)."
+    } else {
+        // OK 사유를 명시한다.
+        let mut why = ""
+        if queued_decks == 0 {
+            why = "no queued decks"
+        } else {
+            if live_jobs != 1 {
+                why = "already parallel (" + to_string(live_jobs) + " live jobs)"
+            } else {
+                why = "no spare core for another job (spare " + to_string(spare)
+                    + " < ranks_per_job " + to_string(ranks_per_job) + ")"
+            }
+        }
+        msg = "OK — d_parallel_fire satisfied: " + why + " (" + to_string(live_jobs)
+            + " live / " + to_string(ranks_per_job) + " ranks / " + to_string(queued_decks)
+            + " queued / " + to_string(physcores) + " cores)."
+    }
+
+    return AuditVerdict {
+        physcores: physcores,
+        live_jobs: live_jobs,
+        ranks_per_job: ranks_per_job,
+        queued_decks: queued_decks,
+        spare_cores: spare,
+        free_slots: free_slots,
+        violation: violation,
+        message: msg,
+    }
+}
+
+// ── CLI entry — `hexa cloud parallel-audit` ───────────────────────────
+// _pa_atoi — 음이 아닌 10진 정수 파싱(비숫자면 0).
+fn _pa_atoi(s: str) -> int {
+    let mut i = 0
+    let mut v = 0
+    let n = len(s)
+    while i < n {
+        let cc = char_code(s.substring(i, i + 1))
+        if cc >= 48 && cc <= 57 {
+            v = v * 10 + (cc - 48)
+        }
+        i = i + 1
+    }
+    return v
+}
+
+// _pa_flag_val — av[start..] 에서 `flag <val>` 의 val 을 찾는다(없으면 default).
+fn _pa_flag_val(av: [str], start: int, flag: str, default_v: str) -> str {
+    let mut i = start
+    while i < len(av) {
+        if av[i] == flag {
+            if i + 1 < len(av) {
+                return av[i + 1]
+            }
+        }
+        i = i + 1
+    }
+    return default_v
+}
+
+// parallel_audit_run — `hexa cloud parallel-audit` 핸들러.
+//
+// pod 의 live state 를 flag 로 받아(네트워크 접근 없는 순수 감사):
+//   --physcores N --live-jobs N --ranks-per-job N --queued-decks N
+// d_parallel_fire 위반이면 verdict + split 제안을 출력하고 exit 1,
+// OK 면 exit 0. (위반 = nonzero exit → gate/CI 에서 잡힌다.)
+pub fn parallel_audit_run(av: [str], start: int) -> int {
+    let physcores = _pa_atoi(_pa_flag_val(av, start, "--physcores", "0"))
+    let live = _pa_atoi(_pa_flag_val(av, start, "--live-jobs", "0"))
+    let ranks = _pa_atoi(_pa_flag_val(av, start, "--ranks-per-job", "0"))
+    let queued = _pa_atoi(_pa_flag_val(av, start, "--queued-decks", "0"))
+    if physcores <= 0 || ranks <= 0 {
+        println("[parallel-audit] usage: hexa cloud parallel-audit --physcores N --live-jobs N --ranks-per-job N --queued-decks N")
+        println("           d_parallel_fire 위반 가드 — pod 의 live state 를 받아 single-pod-sequential-queue 위반을 감지한다.")
+        println("           VIOLATION → exit 1 + split 제안 · OK → exit 0. (네트워크 접근 없는 순수 감사.)")
+        return 2
+    }
+    let verdict = dft_parallel_audit(physcores, live, ranks, queued)
+    println("[parallel-audit] " + verdict.message)
+    if verdict.violation == 1 {
+        return 1
+    }
+    return 0
+}
