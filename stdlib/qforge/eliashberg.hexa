@@ -315,6 +315,184 @@ pub fn eliashberg_ad_saturated_ratio(mu_star: float) -> float {
     return exp(-1.04 / denom) / 1.2
 }
 
+// ── NON-LINEAR below-Tc gap Δ(iωₙ): the self-consistent Matsubara solve ───
+//
+// The functions above LINEARIZE at Tc (Δ→0⁺, eigenvalue ρ(Tc)=1) — they locate
+// Tc but say nothing about the gap MAGNITUDE below it. Here we iterate the FULL
+// coupled isotropic Migdal-Eliashberg equations on the Matsubara axis at a
+// temperature T < Tc, retaining the Δ in the denominators (the non-linearity):
+//
+//   Z(n) = 1 + (π T / ωₙ) Σ_m  λ(n−m) · ωₘ / sqrt(ωₘ² + Δ(m)²)
+//   Z(n) Δ(n) = π T Σ_m [ λ(n−m) − μ* ] · Δ(m) / sqrt(ωₘ² + Δ(m)²)
+//
+// with ωₙ = (2n+1)πT and the sum running over ALL Matsubara frequencies (both
+// signs). Folding the negative-m half onto m≥0 (Δ even, Z·ω odd) gives, for the
+// half-axis m = 0…N−1 with ωₘ = (2m+1)πT > 0:
+//
+//   Z(n) = 1 + (1/(2n+1)) Σ_{m=0}^{N-1} [ λ(|n−m|) − λ(n+m+1) ] · ωₘ/Eₘ        (a)
+//   Δ(n) = (πT/Z(n)) Σ_{m=0}^{N-1} [ λ(|n−m|) + λ(n+m+1) − 2μ* ] · Δ(m)/Eₘ     (b)
+//
+//   Eₘ = sqrt(ωₘ² + Δ(m)²).
+//
+// Note (a) reduces EXACTLY to the linearized Z(n) of `_eli_build_kernel` as
+// Δ→0 (Eₘ→ωₘ, ωₘ/Eₘ→1) — the two layers are consistent. The fixed-point
+// iteration (Picard, damped) starts from a small uniform Δ seed; below Tc it
+// flows to the non-trivial gap, above Tc it collapses toward Δ≡0.
+//
+// @cite Marsiglio & Carbotte 2008 (Superconductivity vol.1) Eq. 56-60 — the
+//       imaginary-axis non-linear ME gap iteration {Z(n), Δ(n)}.
+// @cite Allen & Mitrović 1982, Solid State Physics 37 1 — Eqs. 3.1-3.4, the
+//       isotropic Matsubara gap + renormalization equations.
+//
+// Returns a flat array [Δ(0), Δ(1), …, Δ(N−1)] in the SAME energy unit as ω/T
+// (Kelvin), or the empty array on malformed input.
+pub fn eliashberg_gap_from_lambda(lam: float, omega_rep_K: float,
+                                  mu_star: float, T_K: float,
+                                  n_mats: int) -> [float] {
+    let dummy: [float] = []
+    return _eli_gap_core(dummy, dummy, lam, omega_rep_K, true,
+                         mu_star, T_K, n_mats)
+}
+
+// Grid-α²F entry — same non-linear iteration, trapezoid kernel.
+pub fn eliashberg_gap_from_a2f(omega: [float], a2f: [float], mu_star: float,
+                               T_K: float, n_mats: int) -> [float] {
+    return _eli_gap_core(omega, a2f, 0.0, 0.0, false,
+                         mu_star, T_K, n_mats)
+}
+
+// The self-consistent {Z, Δ} Picard iteration. Damped fixed-point: seed Δ with
+// a small uniform value, iterate (a)+(b) to convergence (rel-Δ < 1e-9) or up to
+// a fixed cap. Returns the converged half-axis Δ array (Kelvin), empty on bad
+// input. The lambda lookup table covers ℓ = 0 … 2·n_mats (both |n−m| and n+m+1).
+fn _eli_gap_core(omega: [float], a2f: [float],
+                 lam: float, omega_rep_K: float, use_einstein: bool,
+                 mu_star: float, T_K: float, n_mats: int) -> [float] {
+    let empty: [float] = []
+    if n_mats < 1 { return empty }
+    if T_K <= 0.0 { return empty }
+
+    // λ(ℓ) table, ℓ = 0 … 2·n_mats.
+    let lmax = 2 * n_mats
+    let mut lam_tab: [float] = []
+    let mut l = 0
+    while l <= lmax {
+        let v = if use_einstein {
+            _eli_lambda_kernel_einstein(lam, omega_rep_K, l, T_K)
+        } else {
+            eliashberg_lambda_kernel(omega, a2f, l, T_K)
+        }
+        lam_tab.push(v)
+        l = l + 1
+    }
+
+    // ωₘ = (2m+1)πT  (Kelvin).
+    let piT = _ELI_PI * T_K
+    let mut wmat: [float] = []
+    let mut mi = 0
+    while mi < n_mats { wmat.push(piT * to_float(2 * mi + 1)) ; mi = mi + 1 }
+
+    // Seed Δ with a small fraction of πT (uniform). A non-zero seed is required
+    // — Δ≡0 is always a (trivial) fixed point; the seed breaks that symmetry so
+    // the iteration flows to the non-trivial branch below Tc (and decays toward
+    // ~0 above Tc, which the caller reads as "no gap").
+    let mut delta: [float] = []
+    let mut s = 0
+    while s < n_mats { delta.push(0.1 * piT) ; s = s + 1 }
+
+    let mut it = 0
+    while it < 1000 {
+        // Eₘ = sqrt(ωₘ² + Δ(m)²) for the current Δ.
+        let mut Em: [float] = []
+        let mut m = 0
+        while m < n_mats {
+            let dm = delta[m]
+            Em.push(sqrt(wmat[m] * wmat[m] + dm * dm))
+            m = m + 1
+        }
+
+        // Z(n) = 1 + (1/(2n+1)) Σ_m [λ(|n−m|) − λ(n+m+1)] · ωₘ/Eₘ.
+        let mut Z: [float] = []
+        let mut n = 0
+        while n < n_mats {
+            let mut acc = 0.0
+            let mut mm = 0
+            while mm < n_mats {
+                let d = if n >= mm { n - mm } else { mm - n }
+                acc = acc + (lam_tab[d] - lam_tab[n + mm + 1]) * (wmat[mm] / Em[mm])
+                mm = mm + 1
+            }
+            let zn = 1.0 + acc / to_float(2 * n + 1)
+            if zn < 1.0e-9 { Z.push(1.0e-9) } else { Z.push(zn) }
+            n = n + 1
+        }
+
+        // Δ_new(n) = (πT/Z(n)) Σ_m [λ(|n−m|) + λ(n+m+1) − 2μ*] · Δ(m)/Eₘ.
+        let mut dnew: [float] = []
+        let mut nn = 0
+        while nn < n_mats {
+            let mut acc = 0.0
+            let mut mm = 0
+            while mm < n_mats {
+                let d = if nn >= mm { nn - mm } else { mm - nn }
+                let ker = lam_tab[d] + lam_tab[nn + mm + 1] - 2.0 * mu_star
+                acc = acc + ker * (delta[mm] / Em[mm])
+                mm = mm + 1
+            }
+            dnew.push(piT * acc / Z[nn])
+            nn = nn + 1
+        }
+
+        // Convergence: max absolute change vs the gap scale Δ(0).
+        let mut maxd = 0.0
+        let scale = _eli_abs(dnew[0])
+        let mut k = 0
+        while k < n_mats {
+            let ch = _eli_abs(dnew[k] - delta[k])
+            if ch > maxd { maxd = ch }
+            k = k + 1
+        }
+        // Damped update (Picard mixing) for stability near Tc.
+        let alpha = 0.5
+        let mut p = 0
+        while p < n_mats {
+            delta[p] = (1.0 - alpha) * delta[p] + alpha * dnew[p]
+            p = p + 1
+        }
+        let denom = if scale < 1.0e-12 { 1.0e-12 } else { scale }
+        if maxd / denom < 1.0e-9 {
+            return delta
+        }
+        it = it + 1
+    }
+    return delta
+}
+
+// ── 2Δ(0)/k_BTc universal ratio — the BCS weak-coupling anchor ────────────
+//
+// The single most-cited number in superconductivity: for a weak-coupling BCS
+// superconductor, 2Δ(0)/k_BTc → 3.52787…  (Δ(0) = the T=0 gap edge). Strong
+// el-ph coupling pushes the ratio UP (e.g. Pb ≈ 4.5); the weak-coupling limit
+// is the universal floor. With every frequency expressed in Kelvin (the
+// Matsubara-axis convention used throughout this file) k_B = 1, so the ratio is
+// simply 2·Δ(0)/Tc.
+//
+// On the Matsubara axis the T=0 gap EDGE is reached by analytic continuation
+// iω→ω+i0⁺; the lowest-frequency Matsubara gap Δ(iω₀) at T≪Tc is its standard
+// proxy (Δ(iωₙ) is flat at low ω and ≈ the real-axis edge for ω ≪ ω_phonon).
+// This returns 2·Δ(iω₀, T)/Tc at a single low temperature T — the caller picks
+// T ≈ Tc/several to approach the T=0 edge.
+//
+// @cite Bardeen-Cooper-Schrieffer 1957, Phys. Rev. 108 1175 — 2Δ(0)/kBTc=3.528.
+pub fn eliashberg_gap_ratio_from_lambda(lam: float, omega_rep_K: float,
+                                        mu_star: float, T_K: float,
+                                        tc_K: float, n_mats: int) -> float {
+    if tc_K <= 0.0 { return 0.0 }
+    let g = eliashberg_gap_from_lambda(lam, omega_rep_K, mu_star, T_K, n_mats)
+    if len(g) == 0 { return 0.0 }
+    return 2.0 * g[0] / tc_K
+}
+
 // ── Tc by bisection of ρ_max(T) = 1 (grid α²F entry) ────────────────────
 //
 // ρ_max(T) decreases monotonically in T (more thermal smearing → weaker

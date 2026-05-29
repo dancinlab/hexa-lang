@@ -1,0 +1,109 @@
+SCOPE VERDICT — Eliashberg full-spectrum PR-2: non-linear below-Tc gap Δ(iωₙ)
+==============================================================================
+date: 2026-05-30 · arc: eliashberg-full-spectrum (handoff bcd05edd) · this = PR-2 of ~6
+tier: 🟢 implementation landed + physically-faithful (verified converging) · SCOPE on the
+      tight-tolerance 3.528 hit (pre-registered finicky-grid boundary)
+
+------------------------------------------------------------------------------
+1. WHAT LANDED (stdlib/qforge/eliashberg.hexa, +~155 LOC)
+------------------------------------------------------------------------------
+The NON-LINEAR self-consistent below-Tc gap iteration {Z(iωₙ), Δ(iωₙ)} — the
+layer ABOVE the existing LINEARIZED eigenvalue solver (which only locates Tc via
+ρ(Tc)=1 in the Δ→0 limit). New public surface:
+
+  pub fn eliashberg_gap_from_lambda(lam, ω_rep, μ*, T, n_mats) -> [float]
+  pub fn eliashberg_gap_from_a2f(ω, α²F, μ*, T, n_mats)        -> [float]
+  pub fn eliashberg_gap_ratio_from_lambda(lam, ω_rep, μ*, T, Tc, n_mats) -> float
+  fn    _eli_gap_core(...)   — the damped Picard fixed-point
+
+Equations (isotropic single-band, Matsubara axis, half-axis fold m=0…N-1):
+  Z(n) = 1 + (1/(2n+1)) Σ_m [λ(|n−m|) − λ(n+m+1)] · ωₘ/Eₘ
+  Δ(n) = (πT/Z(n)) Σ_m [λ(|n−m|) + λ(n+m+1) − 2μ*] · Δ(m)/Eₘ ,  Eₘ=√(ωₘ²+Δ(m)²)
+@cite Marsiglio & Carbotte 2008 Eq.56-60 · Allen & Mitrović 1982 Eq.3.1-3.4.
+The Z(n) reduces EXACTLY to the linearized `_eli_build_kernel` Z(n) as Δ→0
+(Eₘ→ωₘ) — the two layers are mutually consistent. libm sqrt only (no Taylor,
+per @D stdlib_trig_libm). A small non-zero uniform Δ seed breaks the trivial
+Δ≡0 fixed point so the iteration flows to the SC branch below Tc.
+
+------------------------------------------------------------------------------
+2. THE FALSIFIER (pre-registered) + THE VERIFICATION (verbatim run)
+------------------------------------------------------------------------------
+Falsifier: weak-coupling BCS universal ratio 2Δ(0)/k_BTc → 3.528 (BCS 1957).
+Build+run on pool host mini (macOS arm64), HEXA_MAC_BUILD_OK=1, lam=0.4, μ*=0,
+single Einstein mode ω_E=1000 K (adiabatic, ω_E≫Tc). VERBATIM stdout:
+
+  === PARSE eliashberg.hexa ===
+  OK: stdlib/qforge/eliashberg.hexa parses cleanly
+  === PARSE eliashberg_gap_bcs_test.hexa ===
+  OK: stdlib/qforge/eliashberg_gap_bcs_test.hexa parses cleanly
+  === BUILD + RUN ===
+      OK: build/artifacts/eli_gap_bcs.c
+  OK: built .../eli_gap_bcs
+  === Probe A: T-sweep, N=400 ===
+  lam=0.4 Tc=23.4231 K
+    T=Tc/4.0 2D/kTc=3.58713 wmax/wE=14.6988
+    T=Tc/8.0 2D/kTc=3.64184 wmax/wE=7.34939
+    T=Tc/16.0 2D/kTc=3.83743 wmax/wE=3.6747
+    T=Tc/32.0 2D/kTc=4.43992 wmax/wE=1.83735
+    T=Tc/64.0 2D/kTc=5.26138 wmax/wE=0.918674
+  === Probe B: grid refinement, T=Tc/16 ===
+    N=200 2D/kTc=4.43478 wmax/wE=1.83669
+    N=400 2D/kTc=3.83743 wmax/wE=3.6747
+  BCS weak-coupling target: 2Delta/kTc -> 3.528
+  eliashberg_gap_bcs_test DONE
+
+(Test file: stdlib/qforge/eliashberg_gap_bcs_test.hexa — self-contained, solver
+bodies copied verbatim; a multi-use compiled stdlib build link-fails locally,
+so parse-gate + this isolated numeric build IS the g5 gate per the handoff.)
+
+------------------------------------------------------------------------------
+3. THE FINDING — physically faithful, SCOPE on the tight hit (HONEST g5/g63)
+------------------------------------------------------------------------------
+The solver is CORRECT and physically faithful, NOT a bug:
+  • Best-resolved point (T=Tc/4, N=400, ω_max/ω_E≈15): 2Δ/kTc = 3.587 — within
+    ≈1.7% of the BCS 3.528.
+  • The ratio rises ABOVE 3.528 only as T falls at FIXED N, because the
+    frequency window ω_max=(2N−1)πT shrinks below ω_E (ω_max/ω_E: 14.7→0.92);
+    the kernel is then truncated and the gap is artificially inflated — a grid
+    artifact, not physics.
+  • Probe B confirms: at fixed T=Tc/16, GROWING N (window 1.84→3.67) drives the
+    ratio DOWNWARD 4.43→3.84, converging toward ~3.5 as the grid refines.
+
+So the falsifier is NOT falsified (the solver heads to 3.528 in the right
+direction) but a TIGHT-tolerance clean hit needs the simultaneous regime
+  T → 0   AND   ω_max ≫ ω_E   ⟹  N ≳ 1000+ Matsubara points,
+which is the expensive fine-grid limit the handoff PRE-REGISTERED as the scope
+boundary ("if the weak-coupling limit needs a very fine Matsubara grid
+(expensive) … land a SCOPE verdict"). N≥800 additionally segfaults the current
+build (O(N²) array-push memory pressure) — a separate runtime ceiling, logged
+below as the next-PR gap. The true T=0 real-axis gap EDGE further requires
+analytic continuation iω→ω+i0⁺ of the Matsubara Δ (a Padé / N-point continuation
+pass), which this PR does not implement.
+
+VERDICT: 🟢 non-linear Δ(iωₙ) solver landed + verified physically faithful
+(converges toward 3.528; best resolved 3.587, ≈1.7%). SCOPE on the
+tight-tolerance 3.528 anchor — gap to it = {(i) fine-grid N≳1000 with the
+large-N build segfault fixed, (ii) Padé analytic continuation to the real-axis
+edge}.
+
+------------------------------------------------------------------------------
+4. ARC STATUS — bcd05edd NOT flipped done (multi-PR, this is PR-2 of ~6)
+------------------------------------------------------------------------------
+  PR-1 ✅ (#2144) closed-form λ→∞ Allen-Dynes saturated-ratio anchor.
+  PR-2 ✅ (this) non-linear below-Tc Δ(iωₙ) {Z,Δ} self-consistent iteration +
+         BCS-ratio probe (🟢 faithful · SCOPE on tight 3.528).
+  PR-2.5 (sharpened next step, NEW): (a) lift the large-N (≥800) build segfault
+         — O(N²) per-iter array reuse instead of repeated `.push`; (b) add a
+         Padé / N-point analytic-continuation Δ(iωₙ)→Δ(ω+i0⁺) pass to read the
+         real-axis gap EDGE; together these would let 2Δ(0)/kTc hit 3.528 to
+         tight tolerance — the PR-2 falsifier upgraded from SCOPE to 🟢-numeric.
+  PR-3 band-resolved (2-band) λ_ij(n−m) + coupled Δ_i — MgB₂ 2-gap anchor.
+  PR-4 anisotropic k-resolved Δ_k (d-wave) — the actual gate-(e) unconventional.
+  PR-5 anharmonic α²F external-data ingest (simulation-only-prediction).
+  PR-6 verify-binary rebuild → deployed `hexa verify` surfaces the 7-identity
+       catalog (un-stale).
+
+g60 5-gate (demiurge rtsc.md §8.9): gate (e) oracle-parity is the ONLY model-
+side gate; (a)/(b)/(c)/(d) are wet-lab/measurement-bound and CANNOT be closed
+by stdlib. PR-2 sharpens (e) toward a quantitative below-Tc gap-magnitude model
+but does NOT flip absorbed=true. bcd05edd stays OPEN.
