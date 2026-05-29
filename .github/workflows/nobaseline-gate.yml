@@ -318,43 +318,19 @@ jobs:
           git ls-files '*.c' | wc -l
           ls self/*.c 2>/dev/null || echo "  (no self/*.c — expected post-PR2)"
 
-      # Stage 0b — seeds gone → resolve_runtime_a pulls runtime.a from edge.
-      - name: Stage 0b — resolve prebuilt runtime archive (runtime.a) FROM EDGE
+      # ── SINGLE-JOB-FAITHFUL: this job now runs the IDENTICAL shared entry
+      # points release.yml calls — tool/release_build then tool/release_package —
+      # with the 23 seeds REMOVED. There is no separate gate copy of the stage
+      # sequence to drift from release; this IS a dynamic seed-removed run of the
+      # real release path. gate-green ≡ release-green by shared definition.
+      - name: Build — shared release_build (seeds removed, edge-pull)
         shell: bash
         env:
+          TARGET: darwin-arm64
           CC: clang
           LIBS: ""
-          EDGE_ASSET: hexa-darwin-arm64.tar.gz
           GH_TOKEN: ${{ github.token }}
-        run: bash tool/stage_resolve_runtime_a
-
-      # Stage 0a-pre — seeds gone → prebuild_hexat pulls build/hexat from edge
-      # (NOT bootstrapped from source). RED until edge bundles hexat.
-      - name: Stage 0a-pre — pull build/hexat FROM EDGE (shared tool/stage_prebuild_hexat)
-        shell: bash
-        env:
-          CC: clang
-          LIBS: ""
-          HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
-          EDGE_ASSET: hexa-darwin-arm64.tar.gz
-          GH_TOKEN: ${{ github.token }}
-        run: bash tool/stage_prebuild_hexat
-
-      - name: Stage 0a — regen hexa_cc.c (shared tool/stage_regen_hexa_cc)
-        shell: bash
-        env:
-          CC: clang
-          EDGE_ASSET: hexa-darwin-arm64.tar.gz
-          GH_TOKEN: ${{ github.token }}
-        run: bash tool/stage_regen_hexa_cc
-
-      - name: Stage 0/1/2 — REAL release build (shared tool/stage_build_hexa)
-        shell: bash
-        env:
-          CC: clang
-          LIBS: ""
-          HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
-        run: bash tool/stage_build_hexa
+        run: bash tool/release_build
 
       - name: Assert — ./hexa runs with seeds removed
         shell: bash
@@ -363,12 +339,14 @@ jobs:
           ./hexa --version
           echo "faithful-nobaseline OK (darwin-arm64)"
 
-      - name: Stage 3 + Package — REAL release path (shared tool/stage_precompile_package)
+      - name: Package — shared release_package (seeds removed)
         shell: bash
         env:
-          HEXA_MAC_BUILD_OK: "1"
-          HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
-        run: TARGET=darwin-arm64 bash tool/stage_precompile_package
+          TARGET: darwin-arm64
+          CC: clang
+          LIBS: ""
+          GH_TOKEN: ${{ github.token }}
+        run: bash tool/release_package
 
   faithful-nobaseline-linux-x86_64:
     name: faithful-nobaseline (linux-x86_64)
@@ -385,40 +363,17 @@ jobs:
           echo "removed seeds BEFORE any build; tracked .c now:"
           git ls-files '*.c' | wc -l
 
-      - name: Stage 0b — resolve prebuilt runtime archive (runtime.a) FROM EDGE
+      # ── SINGLE-JOB-FAITHFUL — same shared release_build + release_package the
+      # real release runs, with seeds removed. Dynamic seed-removed run of the
+      # real release path (no separate copy). See darwin job for full rationale.
+      - name: Build — shared release_build (seeds removed, edge-pull)
         shell: bash
         env:
+          TARGET: linux-x86_64
           CC: gcc
           LIBS: "-lm -ldl"
-          EDGE_ASSET: hexa-linux-x86_64.tar.gz
           GH_TOKEN: ${{ github.token }}
-        run: bash tool/stage_resolve_runtime_a
-
-      - name: Stage 0a-pre — pull build/hexat FROM EDGE (shared tool/stage_prebuild_hexat)
-        shell: bash
-        env:
-          CC: gcc
-          LIBS: "-lm -ldl"
-          HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
-          EDGE_ASSET: hexa-linux-x86_64.tar.gz
-          GH_TOKEN: ${{ github.token }}
-        run: bash tool/stage_prebuild_hexat
-
-      - name: Stage 0a — regen hexa_cc.c (shared tool/stage_regen_hexa_cc)
-        shell: bash
-        env:
-          CC: gcc
-          EDGE_ASSET: hexa-linux-x86_64.tar.gz
-          GH_TOKEN: ${{ github.token }}
-        run: bash tool/stage_regen_hexa_cc
-
-      - name: Stage 0/1/2 — REAL release build (shared tool/stage_build_hexa)
-        shell: bash
-        env:
-          CC: gcc
-          LIBS: "-lm -ldl"
-          HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
-        run: bash tool/stage_build_hexa
+        run: bash tool/release_build
 
       - name: Assert — ./hexa runs with seeds removed
         shell: bash
@@ -427,11 +382,14 @@ jobs:
           ./hexa --version
           echo "faithful-nobaseline OK (linux-x86_64)"
 
-      - name: Stage 3 + Package — REAL release path (shared tool/stage_precompile_package)
+      - name: Package — shared release_package (seeds removed)
         shell: bash
         env:
-          HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
-        run: TARGET=linux-x86_64 bash tool/stage_precompile_package
+          TARGET: linux-x86_64
+          CC: gcc
+          LIBS: "-lm -ldl"
+          GH_TOKEN: ${{ github.token }}
+        run: bash tool/release_package
 
   faithful-nobaseline-linux-arm64:
     name: faithful-nobaseline (linux-arm64)
@@ -448,40 +406,16 @@ jobs:
           echo "removed seeds BEFORE any build; tracked .c now:"
           git ls-files '*.c' | wc -l
 
-      - name: Stage 0b — resolve prebuilt runtime archive (runtime.a) FROM EDGE
+      # ── SINGLE-JOB-FAITHFUL — same shared release_build + release_package the
+      # real release runs, with seeds removed. See darwin job for full rationale.
+      - name: Build — shared release_build (seeds removed, edge-pull)
         shell: bash
         env:
+          TARGET: linux-arm64
           CC: gcc
           LIBS: "-lm -ldl"
-          EDGE_ASSET: hexa-linux-arm64.tar.gz
           GH_TOKEN: ${{ github.token }}
-        run: bash tool/stage_resolve_runtime_a
-
-      - name: Stage 0a-pre — pull build/hexat FROM EDGE (shared tool/stage_prebuild_hexat)
-        shell: bash
-        env:
-          CC: gcc
-          LIBS: "-lm -ldl"
-          HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
-          EDGE_ASSET: hexa-linux-arm64.tar.gz
-          GH_TOKEN: ${{ github.token }}
-        run: bash tool/stage_prebuild_hexat
-
-      - name: Stage 0a — regen hexa_cc.c (shared tool/stage_regen_hexa_cc)
-        shell: bash
-        env:
-          CC: gcc
-          EDGE_ASSET: hexa-linux-arm64.tar.gz
-          GH_TOKEN: ${{ github.token }}
-        run: bash tool/stage_regen_hexa_cc
-
-      - name: Stage 0/1/2 — REAL release build (shared tool/stage_build_hexa)
-        shell: bash
-        env:
-          CC: gcc
-          LIBS: "-lm -ldl"
-          HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
-        run: bash tool/stage_build_hexa
+        run: bash tool/release_build
 
       - name: Assert — ./hexa runs with seeds removed
         shell: bash
@@ -490,11 +424,14 @@ jobs:
           ./hexa --version
           echo "faithful-nobaseline OK (linux-arm64)"
 
-      - name: Stage 3 + Package — REAL release path (shared tool/stage_precompile_package)
+      - name: Package — shared release_package (seeds removed)
         shell: bash
         env:
-          HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
-        run: TARGET=linux-arm64 bash tool/stage_precompile_package
+          TARGET: linux-arm64
+          CC: gcc
+          LIBS: "-lm -ldl"
+          GH_TOKEN: ${{ github.token }}
+        run: bash tool/release_package
 
   # ── .c-graduation Phase 4/5 — FINAL 3 tracked .c removal-safety DRY-RUN ─────
   #
