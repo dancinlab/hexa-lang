@@ -1,0 +1,51 @@
+=== UNSHADOW native HexaArrI64 storage bench (HEADLINE / F1) ===
+rt=/Users/ghost/.hx/bin/self  work=/Users/ghost/unshadow-native-arr  runs=9
+
+--- C: known-int-array hot-loop sum (3 arms) ---
+  [ref_c   ] built=yes err_lines=0
+  [a_boxed ] built=yes err_lines=0
+  [b_native] built=yes err_lines=0
+  [d_ideal ] built=yes err_lines=0
+
+  g5 byte-diff (program output md5 — ALL FOUR MUST be identical):
+    ref_c    : 35470124be79241c684dc5103ec55d20
+    a_boxed  : 35470124be79241c684dc5103ec55d20
+    b_native : 35470124be79241c684dc5103ec55d20
+    d_ideal  : 35470124be79241c684dc5103ec55d20
+
+  perf best-of-9 wall (s):
+    ref_c    : 0.16
+    a_boxed  : 2.43   (boxed 16B-stride — BEFORE)
+    b_native : 2.40   (LANDED: native storage, boxed read surface)
+    d_ideal  : 0.16   (CEILING: native storage, raw read — needs known-int accumulator)
+
+  asm vector/pair-op count (SIMD-gather signal):
+    ref_c    : 28
+    a_boxed  : 10  (16B-stride boxed → no gather)
+    b_native : 8  (8B contiguous → gatherable)
+
+--- INTEGRITY: typed i64 array at a polymorphic boundary ---
+  [bnd_native] built=yes err_lines=0
+  [bnd_boxed ] built=yes err_lines=0
+  boundary g5 (MUST be identical — native storage boxes to the same value):
+    bnd_boxed  : 9efbbf5d320a45f2ce6e89491a1ac726
+    bnd_native : 9efbbf5d320a45f2ce6e89491a1ac726
+  → both MUST match: the native i64 array boxes correctly when it reaches
+    the polymorphic boundary (hexa_arr_i64_box → real HexaVal).
+
+=== done ===
+
+=== codegen emit verification (real self-host codegen via /tmp/hexat.new, +632 lines) ===
+--- FLAG ON (HEXA_NATIVE_ARR=1): native contiguous storage + raw read ---
+    HexaVal xs = ({ HexaVal __nia = hexa_arr_i64_new(4); hexa_arr_i64_push(__nia, (int64_t)HX_INT(((HexaVal){.tag=TAG_INT,.i=(10)}))); hexa_arr_i64_push(__nia, (int64_t)HX_INT(((HexaVal){.tag=TAG_INT,.i=(20)}))); hexa_arr_i64_push(__nia, (int64_t)HX_INT(((HexaVal){.tag=TAG_INT,.i=(30)}))); hexa_arr_i64_push(__nia, (int64_t)HX_INT(((HexaVal){.tag=TAG_INT,.i=(40)}))); __nia; });
+            acc = hexa_add(acc, hexa_int(((HexaArrI64*)xs.arr_ptr)->data[__hx_ni_i]));
+--- FLAG OFF (default): unchanged boxed HexaArr (§c-class read) ---
+    HexaVal xs = hexa_array_push(hexa_array_push(hexa_array_push(hexa_array_push(hexa_array_new(), ((HexaVal){.tag=TAG_INT,.i=(10)})), ((HexaVal){.tag=TAG_INT,.i=(20)})), ((HexaVal){.tag=TAG_INT,.i=(30)})), ((HexaVal){.tag=TAG_INT,.i=(40)}));
+            acc = hexa_add(acc, (xs.arr_ptr->items[__hx_ni_i]));
+
+NOTE: the FLAG-ON read above (hexa_int(...)) is from an interim transpiler build;
+the FINAL codegen (self/codegen.hexa) emits the INLINE compound-literal form
+  ((HexaVal){.tag=TAG_INT,.i=(((HexaArrI64*)xs.arr_ptr)->data[__hx_ni_i])})
+matching the bench b_native arm (the authoritative perf measurement). The
+out-of-line hexa_int() form was measured SLOWER (re-box behind runtime.o wall);
+inline literal is required for the fold — §hexaval-unbox lesson.

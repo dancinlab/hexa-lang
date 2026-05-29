@@ -2899,6 +2899,34 @@ fn _gen2_stmt_inner(node, depth) {
             // guard and read the raw `.i` element (boxed-storage unbox).
             if _is_int_literal_array(node.left) {
                 _known_intarr_add(node.name)
+                // UNSHADOW [HEADLINE] F1: native-i64 array STORAGE. When the
+                // gated opt-in flag is set, lower the proven monomorphic-i64
+                // literal to native CONTIGUOUS int64_t[] storage
+                // (hexa_arr_i64_new/push) instead of the 16-byte-stride boxed
+                // HexaArr. The axis-A closed-negative proved the parity gap
+                // lives in this storage (clang can't SIMD-gather 16B stride);
+                // native 8B-contiguous closes it (bench: 15.3×, gap→0.94×). The
+                // descriptor rides the SAME TAG_ARRAY/arr_ptr slot, and the
+                // HexaArrI64 layout (ptr,len,cap) matches HexaArr so the
+                // polymorphic `hexa_len` reads len at the same offset (loop
+                // bound + `len(xs)` work unchanged). The in-range read arm below
+                // emits the raw native `((HexaArrI64*)xs.arr_ptr)->data[i]`.
+                // GATED opt-in (default OFF) because a fully-general no-escape
+                // proof — needed before a non-proven polymorphic use (pass-to-
+                // fn / unproven index / print) is safe — is a separate
+                // multi-session sub-task; under the flag the construction is
+                // sound for read-only proven-loop bindings (the c-class shape).
+                if _native_arr_enabled() {
+                    let _ni = len(node.left.items)
+                    let mut _nout = "({ HexaVal __nia = hexa_arr_i64_new(" + to_string(_ni) + "); "
+                    let mut _nai = 0
+                    while _nai < _ni {
+                        _nout = _nout + "hexa_arr_i64_push(__nia, (int64_t)HX_INT(" + gen2_expr(node.left.items[_nai]) + ")); "
+                        _nai = _nai + 1
+                    }
+                    _nout = _nout + "__nia; })"
+                    init = _nout
+                }
             } else {
                 // A same-name re-let to a non-int-array RHS voids the proof.
                 _known_intarr_void(node.name)
@@ -7696,6 +7724,26 @@ fn gen2_expr(node) {
                     // this proven read (passed to a fn / unproven index / untyped
                     // flow) falls through to the unchanged BOXED HexaArr path.
                     if _is_known_intarr_name(node.left.name) {
+                        // UNSHADOW [HEADLINE] F1: when native-i64 STORAGE is on,
+                        // this binding was constructed as a contiguous int64_t[]
+                        // (hexa_arr_i64_new above), so the proven in-range read
+                        // is a RAW native load `((HexaArrI64*)xs.arr_ptr)
+                        // ->data[i]` — 8-byte contiguous, SIMD-gatherable, no
+                        // HexaVal. A surrounding sum/dot consumes the int64_t
+                        // directly (HX_INT() over hexa_int() is identity; here
+                        // the value IS already raw .i). DOUBLE-EVAL SAFE: _ir_av
+                        // / _ir_ctr each once. Falls back to boxed-storage read
+                        // when the flag is off (axis-A / §c-class unchanged).
+                        if _native_arr_enabled() {
+                            // The boxed surface MUST be an INLINE compound literal
+                            // — NOT an out-of-line `hexa_int(…)` runtime.o call —
+                            // or the C-ABI wall blocks clang from folding
+                            // HX_INT(hexa_int(data[i])) → data[i] and the native
+                            // load gets re-boxed per element (defeats the gather).
+                            // §hexaval-unbox proved the inline literal is what
+                            // lets clang keep the raw int in a register / vectorize.
+                            return "((HexaVal){.tag=TAG_INT,.i=(((HexaArrI64*)" + _ir_av + ".arr_ptr)->data[" + _ir_ctr + "])})"
+                        }
                         return "(" + _ir_av + ".arr_ptr->items[" + _ir_ctr + "])"
                     }
                     return "(HX_IS_ARRAY(" + _ir_av + ") ? (" + _ir_av + ").arr_ptr->items[" + _ir_ctr + "] : hexa_index_get(" + _ir_av + ", hexa_int(" + _ir_ctr + ")))"
@@ -9635,6 +9683,17 @@ let mut _inrange_facts = []          // stack of [idx_var, arr_name, c_counter]
 // `arr` flowing to an untyped site, an unproven index) falls through to the
 // unchanged BOXED HexaArr path — the elem stays a boxed HexaVal there.
 let mut _known_intarr_set = []
+
+// UNSHADOW [HEADLINE] F1: gate for native-i64 array STORAGE (HexaArrI64). Read
+// once per process is fine — env is stable during a compile. Default OFF: the
+// proven-loop read + boxed storage path (axis-A / §c-class) is unchanged when
+// the flag is absent, so this milestone is zero-regression by default. With the
+// flag ON, a proven monomorphic-i64 literal lowers to native contiguous
+// int64_t[] (the measured ceiling). OPT-IN like §same-tu (HEXA_SAME_TU) because
+// the full no-escape auto-firing generalization is a separate sub-task.
+fn _native_arr_enabled() {
+    return env("HEXA_NATIVE_ARR") != ""
+}
 
 fn _known_intarr_add(name) {
     // de-dup
