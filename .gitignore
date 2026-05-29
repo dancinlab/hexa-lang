@@ -280,3 +280,9 @@ self/native/wait.c
 self/runtime.c
 self/runtime_core.c
 self/runtime_hi_gen.c
+# Final 3 (regen/unused/.c-text · removed in #2065): hexa_cc.c = edge-regen via
+# stage_regen_hexa_cc; forge_tier_v1.c = unused via prebuilt; classd harness =
+# .c-text emitter regenerates. Listed so a regenerated copy stays untracked.
+self/native/hexa_cc.c
+self/forge/forge_tier_v1.c
+test/native_build/classd_behavioral_harness.c
