@@ -1,0 +1,148 @@
+// RFC 067 P5 perf HGEMM hexa-emit vs cuBLAS -- M=N=K=256 WMMA GEMM.
+//
+// Scales the proven wmma_64x64_grid pattern (PR #206) to a 4x4 grid of
+// thread blocks. Each block computes a 64x64 output sub-block of C via
+// 16 warps in a 4x4 warp grid, K-loop accumulating across K=256 in
+// K_TILES = K/16 = 16 iterations.
+//
+// Layout:
+//   A row-major     [M=256 x K=256] f16. Row stride = 256 elem = 512 B.
+//   B col-major     [K=256 x N=256] f16. Col stride = 256 elem = 512 B.
+//   C row-major out [M=256 x N=256] f32. Row stride = 256 elem = 1024 B.
+//
+// Grid layout:
+//   ctaid.x = block_col in [0..3]  (each owns 64 output cols)
+//   ctaid.y = block_row in [0..3]  (each owns 64 output rows)
+//
+//   warp_id = tid.x / 32 in [0..15]
+//   m_tile  = warp_id / 4 in [0..3]   (per-warp output row 16x sub-tile)
+//   n_tile  = warp_id % 4 in [0..3]   (per-warp output col 16x sub-tile)
+//
+// Per-warp base address:
+//   A: a + (ctaid.y * 64 + m_tile * 16) * 256 * 2 bytes
+//      = a + ctaid.y * 32768 + m_tile * 8192
+//      (wmma.load.a stride = 256 elements)
+//   B: b + (ctaid.x * 64 + n_tile * 16) * 256 * 2 bytes
+//      = b + ctaid.x * 32768 + n_tile * 8192
+//      (wmma.load.b stride = 256 elements)
+//   C: c + ((ctaid.y * 64 + m_tile * 16) * 256 + (ctaid.x * 64 + n_tile * 16)) * 4
+//      = c + ctaid.y * 65536 + m_tile * 16384 + ctaid.x * 256 + n_tile * 64
+//      (wmma.store.d stride = 256 elements)
+//
+// K-loop advance: per K-tile, +16 elements = 32 bytes on both A and B
+// (advances the inner contiguous K dimension).
+//
+// Falsifier F-RFC067-PERF-HGEMM-NUMERIC -- M=N=K=256 output numeric
+//   matches CPU FP32 reference within rel-err 1e-2 (per ISA spec for
+//   f16-mul-f32-acc chains).
+// Falsifier F-RFC067-PERF-HGEMM-TIME -- mean ms_hexa and ms_cublas
+//   captured over N reps with cuEventRecord.
+
+.version 8.0
+.target sm_90
+.address_size 64
+
+.visible .entry wmma_128x128_grid (
+    .param .u64 a,
+    .param .u64 b,
+    .param .u64 c,
+    .param .u64 k_tiles
+)
+{
+    .reg .u64 %rd<24>;
+    .reg .u32 %r<20>;
+    .reg .pred %p1;
+    .reg .b32 %ra<8>;
+    .reg .b32 %rb<8>;
+    .reg .f32 %fc<8>;
+
+    ld.param.u64 %rd0, [a];
+    ld.param.u64 %rd1, [b];
+    ld.param.u64 %rd2, [c];
+    ld.param.u64 %rd3, [k_tiles];
+
+    // ctaid.y -> block_row, ctaid.x -> block_col.
+    mov.u32 %r10, %ctaid.y;
+    mov.u32 %r11, %ctaid.x;
+
+    // tid.x in [0, 511]. warp_id = tid.x / 32 in [0, 15].
+    mov.u32 %r1, %tid.x;
+    shr.u32 %r2, %r1, 5;          // warp_id = tid.x >> 5
+    // m_tile = warp_id / 4 = warp_id >> 2
+    shr.u32 %r3, %r2, 2;
+    // n_tile = warp_id % 4 = warp_id & 3
+    and.b32 %r4, %r2, 3;
+
+    // A base offset = ctaid.y * 32768 + m_tile * 8192 bytes.
+    // 32768 = 64 (rows) * 256 (stride elems) * 2 (f16 bytes).
+    //  8192 = 16 (rows) * 256 (stride elems) * 2 (f16 bytes).
+    mul.lo.u32 %r5, %r10, 16384;
+    mul.lo.u32 %r6, %r3, 4096;
+    add.u32 %r7, %r5, %r6;
+    cvt.u64.u32 %rd4, %r7;
+    add.u64 %rd10, %rd0, %rd4;
+
+    // B base offset = ctaid.x * 32768 + n_tile * 8192 bytes.
+    // (B is col-major; cols laid out same way as A rows here.)
+    mul.lo.u32 %r5, %r11, 16384;
+    mul.lo.u32 %r6, %r4, 4096;
+    add.u32 %r7, %r5, %r6;
+    cvt.u64.u32 %rd5, %r7;
+    add.u64 %rd11, %rd1, %rd5;
+
+    // C base offset = ctaid.y * 65536 + m_tile * 16384 + ctaid.x * 256 + n_tile * 64.
+    // 65536 = 64 (rows) * 256 (stride elems) * 4 (f32 bytes).
+    // 16384 = 16 (rows) * 256 (stride elems) * 4 (f32 bytes).
+    //   256 = 64 (cols) * 4 (f32 bytes).
+    //    64 = 16 (cols) * 4 (f32 bytes).
+    mul.lo.u32 %r5, %r10, 32768;
+    mul.lo.u32 %r6, %r3, 8192;
+    add.u32 %r7, %r5, %r6;
+    mul.lo.u32 %r8, %r11, 256;
+    add.u32 %r7, %r7, %r8;
+    mul.lo.u32 %r8, %r4, 64;
+    add.u32 %r7, %r7, %r8;
+    cvt.u64.u32 %rd6, %r7;
+    add.u64 %rd12, %rd2, %rd6;
+
+    // Init accumulator.
+    mov.f32 %fc0, 0f00000000;
+    mov.f32 %fc1, 0f00000000;
+    mov.f32 %fc2, 0f00000000;
+    mov.f32 %fc3, 0f00000000;
+    mov.f32 %fc4, 0f00000000;
+    mov.f32 %fc5, 0f00000000;
+    mov.f32 %fc6, 0f00000000;
+    mov.f32 %fc7, 0f00000000;
+
+    cvt.s32.s64 %r0, %rd3;
+
+$kloop:
+    setp.le.s32 %p1, %r0, 0;
+    @%p1 bra $kloop_done;
+
+    // Explicit stride 256 (= K_TOTAL, matches A row stride / B col stride).
+    wmma.load.a.sync.aligned.row.m16n16k16.global.f16
+        {%ra0, %ra1, %ra2, %ra3, %ra4, %ra5, %ra6, %ra7}, [%rd10], 128;
+
+    wmma.load.b.sync.aligned.col.m16n16k16.global.f16
+        {%rb0, %rb1, %rb2, %rb3, %rb4, %rb5, %rb6, %rb7}, [%rd11], 128;
+
+    wmma.mma.sync.aligned.row.col.m16n16k16.f32.f32
+        {%fc0, %fc1, %fc2, %fc3, %fc4, %fc5, %fc6, %fc7},
+        {%ra0, %ra1, %ra2, %ra3, %ra4, %ra5, %ra6, %ra7},
+        {%rb0, %rb1, %rb2, %rb3, %rb4, %rb5, %rb6, %rb7},
+        {%fc0, %fc1, %fc2, %fc3, %fc4, %fc5, %fc6, %fc7};
+
+    // Per K-tile: advance 16 f16 elements = 32 bytes on both A and B.
+    add.u64 %rd10, %rd10, 32;
+    add.u64 %rd11, %rd11, 32;
+    sub.s32 %r0, %r0, 1;
+    bra $kloop;
+
+$kloop_done:
+    // Store C tile with row stride = 256 elements.
+    wmma.store.d.sync.aligned.row.m16n16k16.global.f32
+        [%rd12], {%fc0, %fc1, %fc2, %fc3, %fc4, %fc5, %fc6, %fc7}, 128;
+    ret;
+}

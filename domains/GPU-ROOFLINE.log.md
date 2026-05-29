@@ -117,3 +117,28 @@
 ### 안전
 - vast RTSC 학습 pod 미접촉(adopt/list 만 — 이번엔 list 도 불필요, fire 는 무료 pool ubu-2).
 - `.cu` 는 /tmp(repo root 밖) 에서만 작성·컴파일. repo root 손작성 0.
+
+## 2026-05-30 — batch C drain: MS#5 forge WMMA variable-shape roofline sweep (ubu-2 fire)
+
+### §wmma-shape-sweep (MS#5 🟢) — ubu-2 RTX 5070 $0 fire
+- 측정대 `/tmp/ms5_host.cu`(repo root 밖·pure-ASCII): 기존 hexa-emit WMMA PTX 로드 +
+  cuBLAS GemmEx(f16→f32 tensor-op) 동shape 나란히 + byte-eq(hexa WMMA vs CPU FP64 ref).
+  median of 200(20 warmup, cudaEventRecord per-launch).
+- 커널: `wmma_256x256_grid` = compiler-emitted(PR #214, 256-locked) · 128/512/1024 =
+  hand-emit shape-port(N4 방식, 동일 WMMA microcode, address-arith 상수만 scale).
+  M=128 PTX 신규 shape-port(2×2 grid of 64×64 block, k_tiles=8).
+- **shape sweep ratio = 0.994(128) → 0.786(256) → 0.448(512) → 0.292(1024)** 단조 강등.
+  → **0.767 은 강하게 shape 의존** 확정. M=128 = cuBLAS parity(둘 다 launch-bound tiny),
+  M↑ 하며 SMEM-operand-tile 부재 naive K-loop 이 compute/BW-bound 에서 밀림.
+- **byte-eq max|Δ|=0 全 shape**(N4 timing-only fire 가 빠뜨린 정확성 게이트 추가).
+  sawtooth int 입력, f16-mul-f32-acc lossless → CPU FP64 ref 와 bit-exact.
+- N4 곡선(0.767/0.417/0.287)과 run-to-run drift 이내 일치(measure 재현성).
+- honest: variable-shape **compiler** emission 은 MS#1(multi-session codegen) 의존 — 미구현.
+  ratio 곡선은 microcode-동일 hand-port 라 valid. "cuBLAS 못 이김 ≠ 실패"(SMEM-tile 부재 =
+  MS#6 CLOSED-NEGATIVE 동일 origin · 끌어올림 = CUTLASS-grade §0.1 3–6주, batch 밖).
+- artifact: `archive/fires/gpu_roofline_ms5_wmma_shape_sweep_2026_05_30/`
+  (ms5_host.cu + ms5_fire.log + wmma_128x128_grid.ptx + README.md).
+
+### 안전
+- vast RTSC 학습 pod 미접촉. fire = 무료 pool ubu-2 RTX 5070($0). codegen 무변경.
+- `.cu`/`.ptx` 는 /tmp(ubu-2)·archive/fires(repo) 에서만. repo root 손작성 0.
