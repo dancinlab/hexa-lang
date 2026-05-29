@@ -145,6 +145,24 @@ pub fn gen_deck(domain: string, spec: DeckSpec) -> [DeckFile] {
     return none
 }
 
+// gen_domains() — the known deck domains (the dispatch keys of gen_deck).
+// Single source for the `deck` CLI's domain coverage listing.
+pub fn gen_domains() -> [string] {
+    return ["rtsc", "nuclear", "material", "chem", "chip", "bio"]
+}
+
+// gen_prototypes(domain) — the known prototype names for `domain`, for the
+// `deck prototypes <domain>` list subverb. Generic dispatch (g4): a domain
+// with a prototype registry returns its list; one without returns []. Adding
+// a prototype registry for a new domain = ONE branch here + its accessor (no
+// per-formula hardcode past this dispatch). Today only `rtsc` parameterizes
+// by crystal prototype.
+pub fn gen_prototypes(domain: string) -> [string] {
+    if domain == "rtsc" { return rtsc_prototypes() }
+    let none: [string] = []
+    return none
+}
+
 // ── shared emit helpers ──────────────────────────────────────────────
 
 // Append a DeckFile to an accumulator.

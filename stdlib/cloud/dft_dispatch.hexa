@@ -479,16 +479,126 @@ fn _dft_ph_cmd(np: int, walltime_h: int) -> str {
 
 // ── orchestrator ─────────────────────────────────────────────────────
 
-// dft_run — `hexa cloud dft-run <deck-dir> [--go] [...]`. PREVIEW unless --go.
+// ── d16 dry-run stamp gate (rent→idle leak guard) ────────────────────
+//
+// A deck is UNRENTABLE until it passes a d16 free 1-iteration dry-run. The
+// dry-run writes `<deck>/.validated` (timestamp + host); the `--go` rent path
+// REFUSES a deck dir lacking a fresh stamp unless `--force`. This is the
+// systemic guard against "rent → deck blocked/invalid → pod sits idle billing"
+// — the validation is FREE (local pw.x dry-run, electron_maxstep=1, or a
+// structural namelist sanity when pw.x is absent) and happens BEFORE any spend.
+
+let DFT_STAMP_NAME = ".validated"
+
+// _dft_stamp_path — the stamp file for a deck dir.
+fn _dft_stamp_path(deck: str) -> str {
+    return deck + "/" + DFT_STAMP_NAME
+}
+
+// _dft_stamp_fresh — a stamp is "fresh" if it exists AND is newer than every
+// deck input (relax.in/ph.in/scf.in.head/scf.in.tail). An edit after the
+// dry-run invalidates the stamp → must re-validate (a stale deck never rents
+// on an old PASS). `find -newer` returns the stamp iff no input is newer.
+fn _dft_stamp_fresh(deck: str) -> bool {
+    let sp = _dft_stamp_path(deck)
+    let exists = exec("test -f '" + sp + "' && printf yes || printf no") == "yes"
+    if !exists { return false }
+    // any input newer than the stamp → stale
+    let newer = exec("find '" + deck + "' -maxdepth 1 -type f "
+        + "\\( -name relax.in -o -name ph.in -o -name scf.in.head -o -name scf.in.tail "
+        + "-o -name '*.in' \\) -newer '" + sp + "' 2>/dev/null | head -1")
+    if len(newer) > 0 { return false }
+    return true
+}
+
+// _dft_write_stamp — record a PASS: timestamp (UTC ISO-8601) + host + the
+// validation method used. Written ONLY after a successful dry-run.
+fn _dft_write_stamp(deck: str, method: str) -> bool {
+    let ts = exec("date -u +%Y-%m-%dT%H:%M:%SZ")
+    let host = exec("hostname -s 2>/dev/null || hostname")
+    let body = "validated=" + ts + "\nhost=" + host + "\nmethod=" + method
+        + "\ndeck=" + deck + "\n"
+    return write_text(_dft_stamp_path(deck), body)
+}
+
+// _dft_dryrun — the FREE d16 1-iteration dry-run. Prefers a real QE pw.x
+// 1-electron-step run on relax.in (catches directive/basis/namelist errors a
+// billing pod would otherwise hit); if pw.x is absent locally, falls back to a
+// structural namelist sanity (balanced &…/ blocks + required cards present).
+// Returns "" on PASS, else a non-empty error string.
+fn _dft_dryrun(deck: str) -> str {
+    let have_pw = exec("command -v pw.x >/dev/null 2>&1 && printf yes || printf no") == "yes"
+    if have_pw {
+        // electron_maxstep=1 · 1 SCF iter — exercises the parser + setup only.
+        let cmd = "cd '" + deck + "' && rm -f .dryrun.out && "
+            + "sed 's/electron_maxstep[ ]*=[ ]*[0-9]*/electron_maxstep = 1/; "
+            + "s/nstep[ ]*=[ ]*[0-9]*/nstep = 1/' relax.in > .dryrun.in 2>/dev/null && "
+            + "timeout 300 pw.x -in .dryrun.in > .dryrun.out 2>&1; "
+            + "if grep -qiE 'Error in routine|%%%%%%%|stopping' .dryrun.out; then "
+            + "printf 'QE_ERROR'; else printf 'OK'; fi"
+        let res = exec(cmd)
+        if res.contains("OK") { return "" }
+        let tail = exec("tail -8 '" + deck + "/.dryrun.out' 2>/dev/null")
+        return "QE dry-run reported a deck error:\n" + tail
+    }
+    // Fallback: structural sanity — &… / block balance + required cards.
+    let relax = read_file(deck + "/relax.in")
+    if len(relax) == 0 { return "relax.in empty or unreadable" }
+    let opens = exec("grep -cE '^[ ]*&[A-Za-z]' '" + deck + "/relax.in'")
+    let closes = exec("grep -cE '^[ ]*/[ ]*$' '" + deck + "/relax.in'")
+    if opens != closes {
+        return "namelist block imbalance — " + opens + " '&NAME' opens vs "
+            + closes + " '/' closes (a malformed deck would crash pw.x)"
+    }
+    if !relax.contains("ATOMIC_POSITIONS") {
+        return "no ATOMIC_POSITIONS card — empty/partial deck"
+    }
+    if !relax.contains("K_POINTS") {
+        return "no K_POINTS card — empty/partial deck"
+    }
+    return ""
+}
+
+// dft_validate — `hexa cloud dft-run <deck> --validate`. Runs the FREE d16
+// dry-run; on PASS writes `<deck>/.validated`, on FAIL leaves no stamp and
+// surfaces the error. This is the gate the `--go` rent path requires.
+fn dft_validate(deck: str) -> int {
+    println("[dft-run] --validate: d16 FREE 1-iteration dry-run on " + deck)
+    let have_pw = exec("command -v pw.x >/dev/null 2>&1 && printf yes || printf no") == "yes"
+    let method = if have_pw { "qe-pw.x-1iter" } else { "structural-sanity" }
+    let err = _dft_dryrun(deck)
+    if len(err) > 0 {
+        println("[dft-run] ✗ dry-run FAILED — no .validated stamp written:")
+        println(err)
+        println("[dft-run] fix the deck, then re-run `hexa cloud dft-run " + deck + " --validate`.")
+        return 1
+    }
+    let ok = _dft_write_stamp(deck, method)
+    if !ok {
+        println("[dft-run] dry-run PASSED but could not write stamp " + _dft_stamp_path(deck))
+        return 1
+    }
+    println("[dft-run] ✓ dry-run PASSED (" + method + ") — wrote " + _dft_stamp_path(deck))
+    println("[dft-run] deck is now RENTABLE: `hexa cloud dft-run " + deck + " --go`")
+    return 0
+}
+
+// dft_run — `hexa cloud dft-run <deck-dir> [--validate] [--go] [--force] [...]`.
+// PREVIEW unless --go. --validate runs the FREE dry-run + writes the stamp.
 pub fn dft_run(av: [str], start: int) -> int {
     let deck = _dft_first_positional(av, start)
     if len(deck) == 0 {
-        println("[dft-run] usage: hexa cloud dft-run <deck-dir> [--go] [--identity PATH] [--query Q] [--walltime-h N] [--image IMG] [--disk GiB] [--owner TAG]")
+        println("[dft-run] usage: hexa cloud dft-run <deck-dir> [--validate] [--go] [--force] [--identity PATH] [--query Q] [--walltime-h N] [--image IMG] [--disk GiB] [--owner TAG]")
         println("           <deck-dir> must contain: relax.in · ph.in · scf.in.head · scf.in.tail · pseudo/")
-        println("           default = PREVIEW (validate + plan + parse a local relax.out if present, $0). --go to rent + dispatch.")
+        println("           default = PREVIEW (validate + plan + parse a local relax.out if present, $0).")
+        println("           --validate : run the FREE d16 1-iter dry-run + write a `.validated` stamp (required before --go).")
+        println("           --go       : rent a billing pod + dispatch (REFUSED unless a fresh `.validated` stamp exists, or --force).")
+        println("           --force    : override the stamp gate (expert — rents an unvalidated deck).")
         return 2
     }
+    let validate_only = _dft_has_flag(av, start, "--validate")
     let go = _dft_has_flag(av, start, "--go")
+    let force = _dft_has_flag(av, start, "--force")
     let identity = _dft_flag_val(av, start, "--identity", env_var("HOME") + "/.ssh/id_vast_anima")
     let extra_q = _dft_flag_val(av, start, "--query", "")
     let walltime_h = _dft_atoi(_dft_flag_val(av, start, "--walltime-h", "12"))
@@ -515,6 +625,11 @@ pub fn dft_run(av: [str], start: int) -> int {
         return 2
     }
 
+    // --validate — run the FREE d16 dry-run + write the `.validated` stamp.
+    if validate_only == 1 {
+        return dft_validate(deck)
+    }
+
     // ① rent query preview
     let query = dft_rent_query(extra_q)
     println("[dft-run] ① rent guard: offers `verified=true rentable=true " + query + "` + create --direct")
@@ -533,12 +648,36 @@ pub fn dft_run(av: [str], start: int) -> int {
         println("[dft-run] ③ no local relax.out (the relax stage produces it on the pod).")
     }
 
+    // The d16 fire-gate decision, computed up-front so both the PREVIEW report
+    // and the --go precondition share ONE source of truth. blocked == TRUE iff a
+    // --go MUST refuse to rent: no fresh `.validated` stamp AND no --force.
+    let fresh = _dft_stamp_fresh(deck)
+    let blocked = !fresh && force == 0
+
     if go == 0 {
+        let stamped = if fresh { "fresh ✓ — RENTABLE" } else { "MISSING/stale — run --validate first (NOT rentable)" }
         println("[dft-run] ② transport: bare-IP via `show instances --raw`, identity " + identity)
         println("[dft-run] ③ chain: -np = phys cores (lscpu Core×Socket) · --allow-run-as-root · recover=.true. · timeout " + to_string(walltime_h) + "h · setsid")
         println("[dft-run] ④ monitor: numeric-id registry · imaginary-mode<-5cm⁻¹ → unstable · non-interactive teardown")
+        println("[dft-run] .validated stamp: " + stamped)
         println("[dft-run] PREVIEW only — re-run with --go to rent a billing pod and dispatch ($-incurring).")
         return 0
+    }
+
+    // FIRE PRECONDITION (d16 gate) — refuse to rent for a deck that has not
+    // passed a fresh FREE dry-run. This is the systemic rent→idle leak guard:
+    // a blocked/invalid deck never reaches a billing pod. --force overrides.
+    if blocked {
+        println("[dft-run] ✗ REFUSED — no fresh `.validated` stamp for " + deck)
+        println("[dft-run]   a deck must pass a FREE d16 dry-run before it can rent a billing pod")
+        println("[dft-run]   (systemic guard vs rent→deck-blocked→pod-idle billing leak).")
+        println("[dft-run]   run:  hexa cloud dft-run " + deck + " --validate")
+        println("[dft-run]   then: hexa cloud dft-run " + deck + " --go")
+        println("[dft-run]   (expert override: add --force to rent an unvalidated deck.)")
+        return 2
+    }
+    if !fresh && force == 1 {
+        println("[dft-run] ⚠ --force: renting an UNVALIDATED deck (no fresh .validated stamp) — leak risk on the user.")
     }
     return _dft_go(deck, image, disk, owner, query, identity, walltime_h)
 }
