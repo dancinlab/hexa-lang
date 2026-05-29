@@ -651,3 +651,41 @@ cold-seed default path (build_hexa_cli step0)로 ubu-2(x86_64·RTX 5070) `/tmp` 
   M1 동일 gap). 그 후 콜드 full build → 트레이너 빌드 → RSS A/B 재시도.
 - residue: ubu-2 `/tmp/hexa-train-floor-b4` 임시 클론(자동 폐기). pod 미사용(GPU 불필요 — 빌드
   벽에서 차단). 격리 worktree 만 사용, install/warm tree 무손상.
+
+## 2026-05-30 — malloc.h shim 충돌 fix (+RSS 측정)
+
+### 벽 = `#include <malloc.h>` × libc-rename 시밍 (Linux-glibc 빌드 회귀, PR #2119/#2123)
+- PR #2119/#2123 이 `self/runtime_core_emit.hexa`(emitted runtime_core.c ~L328)에
+  `#if __linux__ && __GLIBC__ #include <malloc.h> #endif` + mallopt(M_MMAP_THRESHOLD/
+  M_TRIM_THRESHOLD) constructor 를 추가.
+- 그러나 runtime.c(seed 1369)는 `#define malloc(n) hxlcl_malloc((size_t)(n))`(+free/
+  realloc/calloc) libc-rename 시밍이 `#include "runtime_core.c"`(amalgam) BEFORE 활성.
+- glibc `extern void *malloc (size_t __size)` 프로토타입이 매크로 확장 →
+  `hxlcl_malloc((size_t)(size_t __size))` → `malloc.h:39 error: function cannot return
+  function type 'int (size_t)'` + hxlcl_mkdir/backtrace/longjmp undeclared cascade = 10 errors.
+  Linux-glibc 전용 (mac 은 include 가 gate 안 → mac CI 통과). 콜드시드 hexa_cc_seed.c 는
+  mallopt 블록 없는 pre-#2119 amalgam 이라 트랜스파일러 자체는 빌드 → 벽은 step 0-pre regen
+  후 runtime.c 컴파일 단계.
+
+### fix (B9 emitter SSOT, runtime_core_emit.hexa L360-381)
+- seed 의 ctype/exit 시밍과 동일 패턴: `<malloc.h>` include 전 malloc/free/realloc/calloc
+  를 #undef → 시스템 헤더 프로토타입 오염 차단 → include 후 4개 재정의 → 나머지 runtime_core.c
+  call site 가 계속 hxlcl_*(bump arena)로 라우팅. runtime_core.c 는 항상 시밍 하 amalgam
+  (standalone TU 아님, runtime_core_byte_diff.hexa L8-9 근거)이라 무조건 재정의 안전.
+  mallopt/malloc_trim 은 의도적 비-시밍 real libc. HEXA_FARR_TRIM gating 의미 불변.
+
+### ubu-2 검증 (glibc 2.39, clang+gcc) — #2165 동일 minimal-repro
+- CONTROL(수정 전): clang rc=1, malloc.h:39/43/51/64 + hxlcl_* undeclared = 10 errors 🔴.
+- FIX: clang rc=0, gcc rc=0 (0 errors) 🟢. `clang -E` 로 downstream `malloc(16)` →
+  `hxlcl_malloc((size_t)(16))` 시밍 보존 확인. emit 라인 == repro fix 블록 byte-identical.
+- verdict: .verdicts/hexa-train-floor/M1M3-malloch-shim-fix.txt
+
+### M1/M3 RSS 측정 = 🟠 UNMEASURED (build-fix 는 unblock)
+- ubu-2 로컬 `hexa` 의 자체 runtime 이 stale buggy runtime_core.c(pre-fix)라
+  `hexa run <emitter>` 가 emitter 컴파일에서 동일 10-error 로 실패 (chicken-egg: fixed
+  runtime 으로 재빌드된 hexa 선행 필요 — stale-local 함정, 신규 벽 아님). full
+  `hexa run tool/build_hexa_cli.hexa` 완주 불가 → anima DECODER trainer 빌드 미도달 →
+  HEXA_FARR_TRIM on/off per-step RSS Δ UNMEASURED → M1/M3 🟢/🔴 판정 보류.
+- build-fix 는 landed+verified; 측정은 clean-built hexa 토대 위 후속 세션 인계.
+- residue: ubu-2 /tmp 임시 클론·repro 파일 자동 폐기. pod 미사용(ubu-2 = pool 호스트,
+  유료 RunPod 아님). 격리 worktree 만 사용, install/warm tree 무손상.

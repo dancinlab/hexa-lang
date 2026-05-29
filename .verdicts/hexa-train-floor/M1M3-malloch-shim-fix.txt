@@ -1,0 +1,37 @@
+F3 — malloc.h × libc-rename shim 충돌 fix (Linux-glibc 빌드 회귀, PR #2119/#2123)
+host: ubu-2 (x86_64, Ubuntu GLIBC 2.39-0ubuntu8.7, clang + gcc)
+method: targeted minimal repro (#2165 동일 방법) — runtime.c libc-rename 시밍 활성 상태에서
+        runtime_core.c fragment(`#include <malloc.h>` + mallopt 블록) 컴파일.
+
+── CONTROL (수정 전, FALSIFIED) ────────────────────────────────────────────────
+$ clang -c repro_buggy.c   (shim 활성 후 가드 없는 #include <malloc.h>)
+/usr/include/malloc.h:39:14: error: function cannot return function type 'int (size_t)'
+  39 | extern void *malloc (size_t __size) ...
+note: expanded from macro 'malloc'  #define malloc(n) hxlcl_malloc((size_t)(n))
+... (malloc.h:39/43/51/64 + hxlcl_mkdir/backtrace/longjmp undeclared cascade) = 10 errors
+rc=1   → 🔴 FALSIFIED
+
+── FIX (이 PR, runtime_core_emit.hexa) ─────────────────────────────────────────
+#if defined(__linux__) && defined(__GLIBC__)
+#undef malloc / #undef free / #undef realloc / #undef calloc
+#include <malloc.h>
+#define malloc(n) hxlcl_malloc((size_t)(n))   (+ free/realloc/calloc 재정의)
+#endif
+
+$ clang -c fix.c   → clang rc=0   (0 errors)
+$ gcc   -c fix.c   → gcc   rc=0   (0 errors)
+downstream 시밍 보존 검증 (clang -E):
+  void *use(void){ char *b=(char*)hxlcl_malloc((size_t)(16)); hxlcl_free((void *)(b));
+                   ... hxlcl_realloc(...); hxlcl_calloc(...); }
+  → runtime_core.c 의 나머지 malloc-family call site 는 계속 hxlcl_* (bump arena) 로 라우팅.
+  → mallopt(M_MMAP_THRESHOLD/M_TRIM_THRESHOLD, ...) 는 비-시밍 real libc 심볼 사용 (의도대로).
+emit 라인 == repro fix 블록 byte-identical.
+
+VERDICT: 🟢 (build-fix) — 10-error cascade 소멸, mac 경로 무영향(gate 안), HEXA_FARR_TRIM 의미 불변.
+
+── M1/M3 RSS 측정 ──────────────────────────────────────────────────────────────
+🟠 UNMEASURED (this session). 사유: ubu-2 로컬 설치 `hexa` 의 자체 runtime 이 stale buggy
+runtime_core.c (pre-fix) 라 `hexa run <emitter>` 가 emitter 자체 컴파일에서 동일 10-error
+로 실패 (chicken-egg: fixed runtime 으로 재빌드된 hexa 가 선행 필요 — stale-local 함정,
+신규 벽 아님). anima DECODER trainer 측정은 clean-built hexa 토대 위에서 후속 세션 수행.
+build-fix 는 landed + verified → 측정은 unblocked 상태로 인계.
