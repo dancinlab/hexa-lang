@@ -1232,9 +1232,9 @@ fn emit_runtime_cuda_c() -> str {
             " * the softmax/ce kernels (warp-shfl → shared → re-reduce), NOT the\n" +
             " * cuBLAS-tiled order — so this path carries the matmul tolerance caveat\n" +
             " * (not bit-eq vs cuBLAS), same as the existing block-reduction kernels.\n" +
-            " * Used only when `cols` is small (see HEXA_GEMV_CUBLAS_MIN_DIM gate in\n" +
-            " * the host wrapper); at small dims the cuBLAS library dispatch cost\n" +
-            " * dominates the FLOPs, so a plain on-device kernel is cheaper.\n" +
+            " * Used only when `rows` is small (see HEXA_GEMV_CUBLAS_MIN_ROWS gate in\n" +
+            " * the host wrapper); at small output dims the one-block-per-row launch\n" +
+            " * beats the cuBLAS Dgemv dispatch+sync cost (M7 RTX 5070 crossover).\n" +
             " * ──────────────────────────────────────────────────────────────────── */\n" +
             "__global__ void _hx_k_packed_gemv_offset(const double* __restrict__ P,\n" +
             "                                 int64_t off,\n" +
@@ -1812,16 +1812,24 @@ fn emit_runtime_cuda_c() -> str {
             "        }\n" +
             "        return _d2h_out(out_id, rows);\n" +
             "    }\n" +
-            "    /* d-threshold gate (hexa-lang #1354): at small contraction dim `cols`\n" +
-            "     * the cuBLAS Dgemv library-dispatch cost dominates the FLOPs and the\n" +
-            "     * H2D/D2H sync round-trip outweighs the saved compute (~3x slowdown\n" +
-            "     * at d=64). Below threshold, use the plain on-device block-reduction\n" +
-            "     * kernel; large `cols` keeps cuBLAS (regression-free). Override via\n" +
-            "     * HEXA_GEMV_CUBLAS_MIN_DIM (default 128, conservative). */\n" +
-            "    long min_dim = 128;\n" +
-            "    const char* _md = getenv(\"HEXA_GEMV_CUBLAS_MIN_DIM\");\n" +
-            "    if (_md && *_md) { long v = atol(_md); if (v > 0) min_dim = v; }\n" +
-            "    if (cols < min_dim) {\n" +
+            "    /* work-size gate (hexa-lang #1354, rekeyed by HEXA-TRAIN-FLOOR M8).\n" +
+            "     * The on-device kernel is one-block-per-row, so its true cost\n" +
+            "     * predictor is `rows` (= #blocks = output dim), NOT the contraction\n" +
+            "     * dim `cols`. M7 RTX 5070 microbench (.verdicts/hexa-train-floor/\n" +
+            "     * M7-gemv-dthreshold.txt): on-device beats cuBLAS Dgemv at rows<=256\n" +
+            "     * across ALL cols (f64/cuBLAS 0.63-0.99), but LOSES at rows=768\n" +
+            "     * (1.11-1.34x) even for cols=64 — so a cols<128 gate would regress\n" +
+            "     * large-output gemv. Rekeyed to rows: use the on-device block-\n" +
+            "     * reduction kernel only when rows < threshold; large rows keeps\n" +
+            "     * cuBLAS (regression-free). Default 512, between the measured\n" +
+            "     * win@256 and loss@768 crossover. Override via\n" +
+            "     * HEXA_GEMV_CUBLAS_MIN_ROWS; legacy HEXA_GEMV_CUBLAS_MIN_DIM still\n" +
+            "     * honored as an alias for back-compat. */\n" +
+            "    long min_rows = 512;\n" +
+            "    const char* _mr = getenv(\"HEXA_GEMV_CUBLAS_MIN_ROWS\");\n" +
+            "    if (!(_mr && *_mr)) _mr = getenv(\"HEXA_GEMV_CUBLAS_MIN_DIM\");\n" +
+            "    if (_mr && *_mr) { long v = atol(_mr); if (v > 0) min_rows = v; }\n" +
+            "    if (rows < min_rows) {\n" +
             "        dim3 grid((unsigned)rows), block(HX_RR_BLOCK);\n" +
             "        _hx_k_packed_gemv_offset<<<grid, block>>>(g_slots[p_id].d_buf, off,\n" +
             "                                                  U_dev, O_dev, rows, cols);\n" +
