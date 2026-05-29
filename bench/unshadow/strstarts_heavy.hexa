@@ -1,0 +1,24 @@
+// bench/unshadow/strstarts_heavy.hexa — UNSHADOW #2 EXTENSION micro-bench.
+//
+// Hot loop hammering the `rt_str_starts_with` string prim via the
+// `.starts_with()` method. Intended A/B: base (out-of-line
+// `rt_str_starts_with(s, p)` call across the precompiled-runtime.o C-ABI
+// boundary) vs an inlined-at-call-site arm.
+//
+// FINDING (closed-negative): the inline arm CANNOT be linked. The prim body
+// (`HX_STRLEN(prefix)` + `hxlcl_strncmp(HX_STR(s), HX_STR(p), plen)`) needs
+// runtime-internal symbols that runtime.h deliberately does NOT export to
+// emitted programs (only the HexaVal-level ABI fn `rt_str_starts_with` is
+// exported). So this bench runs the BASE arm only; the inline arm is the
+// ruled-out axis. See domains/UNSHADOW.log.md (2026-05-29 extension entry).
+fn main() {
+    let s = "the quick brown fox jumps over the lazy dog 0123456789"
+    let p = "the quick"
+    let mut acc = 0
+    let mut i = 0
+    while i < 20000000 {
+        if s.starts_with(p) { acc = acc + 1 }
+        i = i + 1
+    }
+    println("acc=" + to_string(acc))
+}

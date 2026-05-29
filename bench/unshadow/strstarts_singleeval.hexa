@@ -1,0 +1,22 @@
+// bench/unshadow/strstarts_singleeval.hexa — double-eval guard probe.
+//
+// The receiver of `.starts_with()` is a side-effecting call (`make_str()`
+// increments a global counter). A correct single-evaluation lowering prints
+// `calls=1`; a double-eval (the to_int / comptime-fold miscompile class)
+// would print `calls=2`.
+//
+// The proposed inline DID let-bind the args exactly once in the emitted C —
+//   `({ HexaVal __sw_s = (make_str()), __sw_p = ("hello"); ... })`
+// — so the single-eval guard design is correct (verified in the emitted C).
+// The inline is blocked at LINK (unexported runtime internals), not by the
+// guard. The BASE arm here is the live reference: it prints `calls=1`.
+let mut _calls = 0
+fn make_str() -> string {
+    _calls = _calls + 1
+    return "hello_world"
+}
+fn main() {
+    let r = make_str().starts_with("hello")
+    println("result=" + to_string(r))
+    println("calls=" + to_string(_calls))
+}
