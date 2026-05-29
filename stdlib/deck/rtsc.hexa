@@ -346,6 +346,88 @@ fn _rtsc_fill_launch_block(spec: DeckSpec) -> string {
     return s
 }
 
+// _rtsc_resume_terminal_block — emit the RESUME-AWARE + REAL-TERMINAL ph.x
+// run/monitor logic (improvements 2 + 3). Two failure classes this session
+// hit, prevented at GENERATION:
+//
+//  (2) RESUME-AWARE re-dispatch — ph.in already carries `recover=.true.`, so a
+//      re-dispatch resumes mid-q (completed `<prefix>.dynN` preserved). When the
+//      recover state is CORRUPT (the 'PARTIAL_EL_PHON' / 'closing tag ... not
+//      found' class — memory reference_qe_ph_jobdone_checkpoint_trap), a bare
+//      recover loops or dies; the emitted logic DETECTS that and falls back to a
+//      `start_q` recompute of the REMAINING q-range (start_q = first missing q),
+//      keeping the finished dynN. Re-dispatch is then a built-in capability, not
+//      the manual surgery this session needed.
+//
+//  (3) REAL-TERMINAL check — completion is `count(nonzero <prefix>.dynN) ==
+//      q-total (from <prefix>.dyn0) AND no ph.x running`, NOT a bare
+//      `grep "JOB DONE" ph.out` (a per-invocation checkpoint that false-fires on
+//      a half-done resumed el-ph run — 2026-05-29 mgb2 14/28q false DONE).
+//
+// `prefix` is the only structural input (the fildyn stem). d4-generic — no
+// per-formula / per-deck name hardcoding.
+fn _rtsc_resume_terminal_block(prefix: string) -> string {
+    let mut s = ""
+    s = s + "## 4c. 재개-인식 + 진짜-완주 판정 (RESUME-AWARE + REAL-TERMINAL · #2)\n"
+    s = s + "\n"
+    s = s + "> ⚠ `grep \"JOB DONE\" ph.out` 로 terminal 판정 금지 — `JOB DONE` 은 그 invocation\n"
+    s = s + "> (체크포인트)의 종료 마커일 뿐, q-grid 전체 완주가 아니다(2026-05-29 mgb2 14/28q 오판).\n"
+    s = s + "> 진짜 완주 = `nonzero <prefix>.dynN 개수 == <prefix>.dyn0 의 q-total` **AND** ph.x 미실행.\n"
+    s = s + "> 재개 상태가 corrupt(PARTIAL_EL_PHON / closing tag not found)면 완료된 dynN 은 보존하고\n"
+    s = s + "> 남은 q-range 를 `start_q` 로 recompute — 재발사는 손수술이 아니라 내장 기능.\n"
+    s = s + "> 디스패처가 이 펜스 블록을 pod 의 `run_resume.sh` 로 복사해 실행/재발사한다.\n"
+    s = s + "\n"
+    s = s + "```bash\n"
+    s = s + "#!/usr/bin/env bash\n"
+    s = s + "# RESUME-AWARE ph.x driver — recover=.true. + start_q corrupt-fallback + real-terminal.\n"
+    s = s + "set -uo pipefail\n"
+    s = s + "cd \"$(dirname \"$0\")\"\n"
+    s = s + "PREFIX=\"" + prefix + "\"\n"
+    s = s + "NP=\"${NP:-$(nproc)}\"\n"
+    s = s + "export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1\n"
+    s = s + "\n"
+    s = s + "# q-total = irreducible q-point count, parsed from <prefix>.dyn0 (QE writes it there).\n"
+    s = s + "q_total() { [ -f \"${PREFIX}.dyn0\" ] && awk 'NR==1{print $1+0; exit}' \"${PREFIX}.dyn0\" || echo 0; }\n"
+    s = s + "# done_q = number of NON-EMPTY <prefix>.dynN (N>=1). Empty/zero-byte dynN = not done.\n"
+    s = s + "done_q() { local n=0 f; for f in ${PREFIX}.dyn[1-9]*; do [ -s \"$f\" ] && n=$((n+1)); done; echo \"$n\"; }\n"
+    s = s + "# REAL terminal: all q present AND no ph.x process alive (NOT a bare JOB DONE grep).\n"
+    s = s + "is_terminal() {\n"
+    s = s + "  local qt; qt=$(q_total); local dq; dq=$(done_q)\n"
+    s = s + "  [ \"$qt\" -gt 0 ] && [ \"$dq\" -eq \"$qt\" ] && [ \"$(pgrep -c ph.x || echo 0)\" -eq 0 ]\n"
+    s = s + "}\n"
+    s = s + "# CORRUPT recover state — the PARTIAL_EL_PHON / closing-tag class in ph.out.\n"
+    s = s + "recover_corrupt() {\n"
+    s = s + "  [ -f ph.out ] || return 1\n"
+    s = s + "  grep -qE 'PARTIAL_EL_PHON|closing tag.*not found|Error in routine.*davcio|wrong recover' ph.out\n"
+    s = s + "}\n"
+    s = s + "# first MISSING q index (1-based) → start_q for a remaining-range recompute.\n"
+    s = s + "first_missing_q() {\n"
+    s = s + "  local qt; qt=$(q_total); local i\n"
+    s = s + "  for i in $(seq 1 \"$qt\"); do [ -s \"${PREFIX}.dyn${i}\" ] || { echo \"$i\"; return; }; done\n"
+    s = s + "  echo \"$qt\"\n"
+    s = s + "}\n"
+    s = s + "\n"
+    s = s + "if is_terminal; then echo \"REAL TERMINAL: $(done_q)/$(q_total) q, no ph.x — el-ph complete\"; exit 0; fi\n"
+    s = s + "\n"
+    s = s + "if recover_corrupt; then\n"
+    s = s + "  SQ=$(first_missing_q)\n"
+    s = s + "  echo \"recover state CORRUPT — start_q=$SQ recompute of remaining range (completed dynN preserved)\"\n"
+    s = s + "  # start_q/last_q recompute the remaining q only; recover=.false. avoids the bad checkpoint.\n"
+    s = s + "  sed -i -E \"s/recover *= *\\.true\\./recover=.false./\" ph.in\n"
+    s = s + "  grep -qE 'start_q' ph.in || sed -i \"/^&inputph/a\\\\  start_q = ${SQ}\\\\n  last_q = $(q_total)\" ph.in\n"
+    s = s + "else\n"
+    s = s + "  echo \"resuming via recover=.true. (mid-q checkpoint; completed dynN preserved)\"\n"
+    s = s + "fi\n"
+    s = s + "\n"
+    s = s + "setsid timeout \"${WALLTIME_H:-140}h\" mpirun --allow-run-as-root -np \"$NP\" --bind-to none ph.x -in ph.in > ph.out 2>&1 || true\n"
+    s = s + "\n"
+    s = s + "if is_terminal; then echo \"REAL TERMINAL: $(done_q)/$(q_total) q — el-ph complete\"; exit 0; fi\n"
+    s = s + "echo \"NOT terminal: $(done_q)/$(q_total) q done — re-dispatch this script to continue\"; exit 2\n"
+    s = s + "```\n"
+    s = s + "\n"
+    return s
+}
+
 fn _rtsc_beh8_runbook(spec: DeckSpec) -> string {
     let a_sym     = spec_get(spec, "a_site_symbol")
     let a_radius  = spec_get_or(spec, "a_site_radius_ang", "1.60")
@@ -451,15 +533,20 @@ fn _rtsc_beh8_runbook(spec: DeckSpec) -> string {
     s = s + "grep -q \"JOB DONE\" scf.out || { echo \"scf FAILED\"; exit 1; }\n"
     s = s + "\n"
     s = s + "# --- 3. phonon + el-ph (simple) ---\n"
-    s = s + "mpirun -np \"$NP\" ph.x -inp ph.in > ph.out 2>&1\n"
-    s = s + "grep -q \"JOB DONE\" ph.out || { echo \"ph FAILED\"; exit 1; }\n"
+    s = s + "mpirun -np \"$NP\" ph.x -inp ph.in > ph.out 2>&1 || true\n"
+    s = s + "# ⚠ ph.x 의 el-ph 완주는 bare `grep \"JOB DONE\" ph.out` 로 판정하지 마라 — 그건\n"
+    s = s + "#   per-invocation 체크포인트라 절반만 끝난 resumed 런에서 false-fire 한다.\n"
+    s = s + "#   진짜 완주 판정 + 재개(recover/start_q)는 §4c `run_resume.sh` 가 담당:\n"
+    s = s + "#   완주 아니면 (NOT terminal, rc 2) §4c 를 재발사해 이어 돌린다.\n"
+    s = s + "bash run_resume.sh || { echo \"ph NOT terminal — re-dispatch §4c run_resume.sh\"; exit 2; }\n"
     s = s + "\n"
-    s = s + "echo \"JOB DONE\"\n"
+    s = s + "echo \"PH EL-PH TERMINAL (real: dynN==q-total, no ph.x)\"\n"
     s = s + "```\n"
     s = s + "\n"
     s = s + "> 동적 불안정(허수 freq) → 위 §1 압력 fallback(" + fb_p + " GPa)으로 재발사.\n"
     s = s + "\n"
     s = s + _rtsc_fill_launch_block(spec)
+    s = s + _rtsc_resume_terminal_block(prefix)
     s = s + "## 5. 파서 (parser)\n"
     s = s + "\n"
     s = s + "- `parser_template: rtsc-dft-elph`\n"
