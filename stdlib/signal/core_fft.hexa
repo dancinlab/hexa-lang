@@ -185,3 +185,221 @@ pub fn ifft_native(real: [float], imag: [float], n: int) -> [float] {
     }
     return out
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+//  3D FFT — separable row-column-depth (axis-wise 1D) decomposition
+// ════════════════════════════════════════════════════════════════════════════
+//
+// The load-bearing primitive of plane-wave DFT (QFORGE L5 brick 1/5): the
+// ψ(G) ↔ ψ(r) transform, charge density, and Hartree potential all reduce to a
+// forward/inverse 3D FFT. By separability of the DFT kernel,
+//
+//     X[kx,ky,kz] = Σ_x Σ_y Σ_z  x[ix,iy,iz] · e^{-j2π(kx·ix/Nx + ky·iy/Ny + kz·iz/Nz)}
+//
+// factorizes into three successive 1D passes — first along z, then y, then x —
+// each pass a batch of 1D FFTs over the lines of one axis. We therefore REUSE
+// `fft_native` / `ifft_native` verbatim (no re-implementation of the radix-2
+// butterfly, per d3/d19); fft3 only orchestrates strided gather → 1D pass →
+// scatter.
+//
+// Layout (row-major, matching the natural C / QE-FFT convention):
+//
+//     idx(ix,iy,iz) = ((ix · Ny) + iy) · Nz + iz          (0 ≤ ix<Nx, …)
+//
+// so the z-axis is the contiguous (innermost) one. Both `re[]` and `im[]` are
+// flat length-N (N = Nx·Ny·Nz) SPLIT arrays on input.
+//
+// Surface:
+//     pub fn fft3 (re, im, nx, ny, nz) -> [float]   // forward
+//     pub fn ifft3(re, im, nx, ny, nz) -> [float]   // inverse (÷N)
+//
+//   Both return the flat INTERLEAVED layout [re0,im0,re1,im1,…] (2·N floats),
+//   matching the 1D `fft_native` output convention; index of (ix,iy,iz) is
+//   2·idx(ix,iy,iz) (re) and +1 (im).
+//
+//   Each of Nx, Ny, Nz must independently be a power of 2 (radix-2 reuse). Any
+//   non-positive / mismatched-size input returns [] (malformed-dims guard).
+//
+// Inverse identity:  IFFT3(X) = conj( FFT3( conj(X) ) ) / N — exactly the 1D
+// trick lifted to 3D, so ifft3 reuses the same axis-wise machinery via the
+// `inverse` flag and a final 1/N scale.
+
+// ── _fft3_core: split-array (re_in, im_in) → split (re_out, im_out) packed as
+//    [re0..re_{N-1}, im0..im_{N-1}] (length 2N). `inverse=1` ⇒ inverse passes,
+//    `inverse=0` ⇒ forward. NO 1/N scaling here (caller applies it for ifft3).
+fn _fft3_axis_pass(re: [float], im: [float], nx: int, ny: int, nz: int, axis: int, inverse: int) -> [float] {
+    // Transform every line along `axis` (0=x, 1=y, 2=z) with the 1D fft/ifft.
+    // Returns split [re(0..N-1), im(0..N-1)].
+    let ntot = nx * ny * nz
+    // length of the transformed axis + stride between successive samples on it
+    let mut alen = nz
+    let mut astride = 1
+    if axis == 0 { alen = nx  astride = ny * nz }
+    if axis == 1 { alen = ny  astride = nz }
+    if axis == 2 { alen = nz  astride = 1 }
+
+    // working copies (rebuilt as we scatter each transformed line back)
+    let mut wre = re
+    let mut wim = im
+
+    // number of independent lines = ntot / alen
+    let nlines = ntot / alen
+
+    // Enumerate every line: a line is fixed in the two non-`axis` coords. We
+    // walk all N base indices and process a line only at its starting element
+    // (the element whose `axis` coordinate is 0), then stride through it.
+    let mut base = 0
+    while base < ntot {
+        // decode (ix,iy,iz) of `base`
+        let iz = base - (base / nz) * nz
+        let tmp = base / nz
+        let iy = tmp - (tmp / ny) * ny
+        let ix = tmp / ny
+        // is this the start of a line along `axis`? (axis-coord == 0)
+        let mut is_start = 0
+        if axis == 0 { if ix == 0 { is_start = 1 } }
+        if axis == 1 { if iy == 0 { is_start = 1 } }
+        if axis == 2 { if iz == 0 { is_start = 1 } }
+        if is_start == 1 {
+            // gather the line
+            let mut lre = []
+            let mut lim = []
+            let mut t = 0
+            while t < alen {
+                let gidx = base + t * astride
+                lre = lre.push(wre[gidx])
+                lim = lim.push(wim[gidx])
+                t = t + 1
+            }
+            // 1D transform (REUSE fft_native / ifft_native verbatim)
+            let mut spec = []
+            if inverse == 0 {
+                spec = fft_native(lre, lim, alen)
+            } else {
+                spec = ifft_native(lre, lim, alen)
+            }
+            // scatter back (spec is interleaved [re,im,...]). hexa supports
+            // list index-assignment (`arr[i] = v`), so we mutate in place.
+            let mut s = 0
+            while s < alen {
+                let gidx = base + s * astride
+                wre[gidx] = spec[s * 2]
+                wim[gidx] = spec[s * 2 + 1]
+                s = s + 1
+            }
+        }
+        base = base + 1
+    }
+
+    // pack split [re.., im..]
+    let mut out = []
+    let mut p = 0
+    while p < ntot {
+        out = out.push(wre[p])
+        p = p + 1
+    }
+    let mut q = 0
+    while q < ntot {
+        out = out.push(wim[q])
+        q = q + 1
+    }
+    return out
+}
+
+// ── _is_pow2: true (1) iff n>0 and a power of two ────────────────────────────
+fn _cf_is_pow2(n: int) -> int {
+    if n <= 0 { return 0 }
+    let mut v = n
+    while v > 1 {
+        if v - (v / 2) * 2 != 0 { return 0 }   // odd factor ⇒ not pow2
+        v = v / 2
+    }
+    return 1
+}
+
+// ── _fft3_run: shared forward/inverse driver (inverse handles 1/N scaling) ───
+fn _fft3_run(re: [float], im: [float], nx: int, ny: int, nz: int, inverse: int) -> [float] {
+    // malformed-dims guard: each axis must be an independent power of 2, and
+    // the input arrays must both be exactly Nx·Ny·Nz long.
+    if _cf_is_pow2(nx) == 0 { return [] }
+    if _cf_is_pow2(ny) == 0 { return [] }
+    if _cf_is_pow2(nz) == 0 { return [] }
+    let ntot = nx * ny * nz
+    if len(re) != ntot { return [] }
+    if len(im) != ntot { return [] }
+
+    // split working arrays
+    let mut wre = re
+    let mut wim = im
+
+    // pass order: z (axis 2) → y (axis 1) → x (axis 0). Order is immaterial
+    // for a separable transform; innermost-first is cache-friendliest.
+    let mut axis = 2
+    while axis >= 0 {
+        let packed = _fft3_axis_pass(wre, wim, nx, ny, nz, axis, inverse)
+        // unpack split [re.., im..] back into wre/wim
+        let mut nre = []
+        let mut nim = []
+        let mut p = 0
+        while p < ntot {
+            nre = nre.push(packed[p])
+            nim = nim.push(packed[ntot + p])
+            p = p + 1
+        }
+        wre = nre
+        wim = nim
+        axis = axis - 1
+    }
+
+    // For the inverse, ifft_native already divides each 1D pass by its axis
+    // length, so the cumulative scaling after three passes is 1/(Nx·Ny·Nz) = 1/N
+    // exactly — no extra global scale is needed. (Forward applies no scale.)
+
+    // pack output as INTERLEAVED [re0, im0, re1, im1, ...] (matches fft_native).
+    let mut out = []
+    let mut o = 0
+    while o < ntot {
+        out = out.push(wre[o])
+        out = out.push(wim[o])
+        o = o + 1
+    }
+    return out
+}
+
+// ── fft3(re, im, nx, ny, nz): forward 3D FFT ─────────────────────────────────
+//
+//   X[kx,ky,kz] = Σ x[ix,iy,iz] · e^{-j2π(kx·ix/Nx + ky·iy/Ny + kz·iz/Nz)}
+//
+// Input: split flat re[]/im[] (length Nx·Ny·Nz, row-major idx=((ix·Ny)+iy)·Nz+iz).
+// Output: interleaved [re0,im0,…] (2·N floats). Each axis must be a power of 2.
+// Malformed dims (non-pow2 / size mismatch / non-positive) ⇒ [].
+pub fn fft3(re: [float], im: [float], nx: int, ny: int, nz: int) -> [float] {
+    return _fft3_run(re, im, nx, ny, nz, 0)
+}
+
+// ── ifft3(re, im, nx, ny, nz): inverse 3D FFT (÷ N) ──────────────────────────
+//
+//   x[ix,iy,iz] = (1/N) Σ X[kx,ky,kz] · e^{+j2π(…)}        N = Nx·Ny·Nz
+//
+// IFFT3(X) = conj(FFT3(conj(X)))/N, realized as three inverse 1D passes (each
+// 1/Nx, 1/Ny, 1/Nz ⇒ cumulative 1/N). Same layout / guards as fft3.
+pub fn ifft3(re: [float], im: [float], nx: int, ny: int, nz: int) -> [float] {
+    return _fft3_run(re, im, nx, ny, nz, 1)
+}
+
+// ── fft3_real(data, nx, ny, nz): real-input convenience ──────────────────────
+//
+// Mirrors the 1D ergonomics: takes a real-only flat field (length N) and an
+// all-zero imaginary part is synthesized internally. Returns the same
+// interleaved complex spectrum as fft3. Malformed dims ⇒ [].
+pub fn fft3_real(data: [float], nx: int, ny: int, nz: int) -> [float] {
+    let ntot = nx * ny * nz
+    if len(data) != ntot { return [] }
+    let mut zim = []
+    let mut i = 0
+    while i < ntot {
+        zim = zim.push(0.0)
+        i = i + 1
+    }
+    return fft3(data, zim, nx, ny, nz)
+}
