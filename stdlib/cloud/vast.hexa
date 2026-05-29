@@ -72,24 +72,9 @@ fn _vastai_path() -> str {
     return on_path
 }
 
-// _shq_local — POSIX-quote a token for the local /bin/sh -c. Mirrors
-// cloud.hexa's _shq; kept local here so this module does not depend on a
-// private export. Wraps in single quotes; a literal ' becomes '\''.
-fn _shq_local(s: str) -> str {
-    let mut out = "'"
-    let mut i = 0
-    let n = len(s)
-    while i < n {
-        let c = s.substring(i, i + 1)
-        if c == "'" {
-            out = out + "'\\''"
-        } else {
-            out = out + c
-        }
-        i = i + 1
-    }
-    return out + "'"
-}
+// _shq_local now lives canonically in stdlib/cloud/cloud.hexa (pub) — this
+// module's private copy was removed to fix the cloud_cli flatten collision
+// (f8f3d35b). `use "stdlib/cloud/cloud"` (above) brings it in scope.
 
 // ── vastai JSON noise strip (robustness, fix-at-source) ───────────────
 // Real bug: `hexa cloud list --provider vast` →
