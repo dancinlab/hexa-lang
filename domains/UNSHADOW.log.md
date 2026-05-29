@@ -2,6 +2,73 @@
 
 Append-only history sister of `UNSHADOW.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-29T14:00Z — 🔵 C refinement-type tag-check elision pilot — 🔵 correctness PROVEN · 🔴 perf CLOSED-NEGATIVE
+
+🟡 reg-alloc 무손실 우회("don't run the check" = prove-then-delete). 타입/흐름 정보가
+정적으로 보증하는 런타임 검사를 codegen 이 **삭제**한다. 딱 1건만 실증 (general
+flow-analysis framework 아님). host = mini (macOS arm64).
+
+**ELIDED CHECK**: unary-plus `+x` 의 numeric-operand tag-guard (`self/codegen.hexa`
+`gen2_expr` UnaryOp arm).
+```
+base:  ({ HexaVal __upx = (OPERAND); if (!(HX_IS_INT(__upx)||HX_IS_FLOAT(__upx)||HX_TAG(__upx)==TAG_CHAR)) hexa_throw(hexa_str("unary + requires a numeric operand")); __upx; })
+new :  (OPERAND)        // only when _is_known_int(operand) || _is_known_float(operand)
+```
+**STATIC PROOF**: operand 이 IntLit/FloatLit/UnaryOp(-lit) → `HX_IS_INT||HX_IS_FLOAT`
+가 정적으로 TRUE → `hexa_throw` arm 은 unreachable dead code. unary `+` 는 numeric
+identity → 치환 후 값 == operand 정확히 동일.
+
+**GUARD EXACT (comptime-fold-shadow family 회피)**: `_is_known_int`/`_is_known_float`
+(IntLit/FloatLit/immutable-typed Ident 만 certify) 가 참일 때만 elide. 그 외 모든
+operand (unknown-tag Ident · Call · Field …) 은 full guard 유지 = general-case zero
+change. local let Ident 은 `_is_known_int_name` 의 fn-local-shadow bail 로 보수적으로
+elide 안 함 (그 family 의 silent-miscompile 재진입 방지).
+
+**g5 byte-diff (program output md5, base vs new — 동일 runtime.o)**:
+- HIT  (`+5`,`+3.5`,`+c`,`+(-7)`, hot-loop `+1`): base=`e8060fb1e37a28301afe3a0d34c9bb08`
+  · new=`e8060fb1e37a28301afe3a0d34c9bb08` → **IDENTICAL** · out `5|3.5|10|-7|15000`.
+- NO-HIT (`+ident(p)`,`+ident(i)`): base=`8de5703038f59d6723697d1c24baf7fd`
+  · new=`8de5703038f59d6723697d1c24baf7fd` → **IDENTICAL** · out `42|499500`.
+- emitted-C isolation: HIT 에서 base 는 statement-expr guard, new 는 bare `(((HexaVal)
+  {.tag=TAG_INT,.i=(5)}))` (guard DELETED). NO-HIT 의 base/new C 는 **byte-identical**
+  (guard kept on opaque operand = inert).
+
+**perf (60M-iter hot loop, `sum += (+1)`, clang -O2)**:
+
+      | arm   | -O2 u_main | bl _hexa_throw | wall (s)  | -O0 throw |
+      |-------|-----------|----------------|-----------|-----------|
+      | base  | 66 instrs | 0              | ~0.16     | 1         |
+      | new   | 66 instrs | 0              | ~0.16     | 0         |
+
+  -O2 에서 **base/new asm IDENTICAL** (66 instr · throw 0개 양쪽) — clang -O2 가
+  `{.tag=TAG_INT}` compound literal 에 constant-prop 해서 guard 를 이미 dead-eliminate.
+  -O0 에서만 base 에 `hexa_throw` 1개 잔존, new 0개 (소스 elision 가시) — 단 wall
+  win 없음 (debug 빌드는 perf 타깃 아님).
+
+**정직한 finding (g5 · roofline)**:
+- correctness = **PROVEN** — byte-identical (HIT+NO-HIT), 무손실 elision, elided arm
+  은 정적 unreachable. LOSSLESS 원칙 충족.
+- perf = **🔴 CLOSED-NEGATIVE** — codegen 이 inline 으로 emit 하는 elidable 검사
+  (리터럴-tag guard) 는 **clang -O2 가 이미 fold** → 소스 elision 은 -O2 와 중복(no Δ).
+  elision 은 clang-가시 리터럴에서만 fire 하는데 거기가 바로 clang 이 이미 하는 곳.
+  진짜 win 이 날 검사(opaque runtime 값의 bounds/null)는 `hexa_array_get` 안 =
+  precompiled runtime.o ABI 뒤 → call-site elision 은 runtime.h 내부 매크로(`HX_ARR_LEN`)
+  필요 = #2-EXT `rt_str_starts_with` 와 **동일한 ABI 벽**.
+- **RULED-OUT AXIS**: 소스레벨 tag-elision 은 inline-가시 검사에서 clang -O2 를 못 이김
+  (중복); opaque-value bounds/null 검사는 ABI-walled. 무손실 우회의 perf 여지는
+  runtime.h 경계를 넓히지 않는 한 없음.
+
+verdict 원문: `.verdicts/unshadow-C-tag-elision/F-UNSHADOW-C-TAG-ELISION.txt` (verbatim).
+bench: `self/bench/unshadow_c_tag_elision_bench.hexa`.
+
+Build note (codegen-change landing recipe · B9): `hexa_cc.c` 는 gitignored generated
+artifact → SSOT = `self/codegen.hexa` 한 파일. mini 검증 = fresh worktree 에 main 의
+`hexa_cc.c` seed → `hexa cc --regen` (base=origin/main codegen, new=elision codegen)
+→ 두 `.new` object 를 설치 `~/.hx/packages/hexa/self/runtime.o` (arm64) 와 clang 링크
+→ 2 standalone hexat → corpus DIRECT 트랜스파일 → A/B byte-diff. merged-amalgam
+smoke 의 link 실패는 PRE-EXISTING merge-MVP 한계 (DIRECT 경로로 우회).
+
+
 ## 2026-05-29 — #2 EXTENSION (rt_str_* string prim inline) — 🔴 CLOSED-NEGATIVE (ABI 경계 차단)
 
 #2 hexa_int 인라인을 STRING 런타임 prim 으로 확장 시도. 결론: **rt_str_\* prim 의 body 를

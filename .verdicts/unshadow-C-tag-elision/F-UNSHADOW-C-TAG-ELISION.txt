@@ -1,0 +1,30 @@
+F-UNSHADOW-C-TAG-ELISION — refinement-type tag-check elision (unary-plus numeric guard)
+host: mini (macOS arm64) · runtime.o = ~/.hx/packages/hexa/self/runtime.o (Mach-O arm64)
+transpilers: hexat.base (origin/main codegen) vs hexat.new (elision codegen), SAME runtime.o
+
+ELIDED CHECK: unary-plus `+x` numeric-operand guard in gen2_expr UnaryOp arm (self/codegen.hexa).
+  base emits: ({ HexaVal __upx = (OPERAND); if (!(HX_IS_INT(__upx)||HX_IS_FLOAT(__upx)||HX_TAG(__upx)==TAG_CHAR)) hexa_throw(hexa_str("unary + requires a numeric operand")); __upx; })
+  new  emits (when _is_known_int|_is_known_float(operand)): (OPERAND)
+STATIC PROOF: operand is IntLit/FloatLit/UnaryOp(-lit) → HX_IS_INT||HX_IS_FLOAT statically TRUE → throw arm is unreachable dead code; unary + is numeric identity → value == operand exactly.
+
+g5 byte-diff (program output md5, base vs new — host mini macOS arm64):
+  HIT   corpus (+5, +3.5, +c, +(-7), hot-loop +1): base=e8060fb1e37a28301afe3a0d34c9bb08  new=e8060fb1e37a28301afe3a0d34c9bb08  IDENTICAL  out=5|3.5|10|-7|15000
+  NO-HIT corpus (+ident(p), +ident(i)):           base=8de5703038f59d6723697d1c24baf7fd  new=8de5703038f59d6723697d1c24baf7fd  IDENTICAL  out=42|499500
+  emitted-C: HIT diff = guard DELETED at +literal sites; NO-HIT diff = EMPTY (byte-identical C, guard kept on opaque operand = inert / general-case zero change).
+
+PERF (60M-iter hot loop, sum += (+1)):
+  -O2: base/new u_main = 66 instrs IDENTICAL · 0 bl _hexa_throw · 0 throw-string in BOTH · wall base~0.16s new~0.16s (no Δ).
+       → clang -O2 ALREADY dead-eliminates the literal-tag guard (constant prop on {.tag=TAG_INT} compound literal). Source-level elision is REDUNDANT with -O2.
+  -O0: base 1 bl _hexa_throw + 1 throw-string; new 0 (guard text gone) · wall base 0.29s new 0.36s (no win; debug build is not the perf target).
+
+FINDING:
+  correctness = PROVEN — byte-identical (HIT + NO-HIT), sound lossless elision; elided branch is statically unreachable.
+  perf = CLOSED-NEGATIVE — the only codegen-INLINE elidable check (the +literal tag-guard) is already folded by clang -O2.
+    The elision fires only on clang-visible literals (it conservatively bails on opaque local idents via the _is_known_int_name
+    fn-local-shadow guard, per the comptime-fold-shadow family safety rule — forcing it there would re-enter that miscompile family).
+    Checks that WOULD yield a real win (bounds/null on opaque runtime values) live INSIDE hexa_array_get behind the precompiled
+    runtime.o ABI — call-site elision needs runtime.h internals (HX_ARR_LEN, unavailable in user.c), the same wall as the
+    #2-EXT rt_str_starts_with CLOSED-NEGATIVE.
+  RULED-OUT AXIS: source-level tag elision cannot beat clang -O2 for inline-visible checks; opaque-value (bounds/null) checks are ABI-walled.
+
+VERDICT: 🔵 correctness lossless (byte-diff IDENTICAL) · 🔴 perf closed-negative (clang -O2 redundancy + runtime.o ABI wall).
