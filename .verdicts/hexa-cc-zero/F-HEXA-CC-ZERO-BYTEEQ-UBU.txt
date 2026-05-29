@@ -1,0 +1,153 @@
+F-HEXA-CC-ZERO-BYTEEQ-UBU — HEXA-CC-ZERO P1 byte-eq fixpoint 실측 (2026-05-30)
+==============================================================================
+falsifier  : "`hexa cc --regen` 으로 재생성한 트랜스파일러가 자기 SSOT 로부터
+              자기 자신을 byte-identical 하게 재생산하는가? (self-host fixpoint
+              v_n == v_{n+1}) — ubu x86_64 cross-host 축."
+method     : pool on ubu-2 — 실제 warm-rebuild 2-iteration fixpoint.
+             ① /tmp fresh clone of origin/main (ca98235) → 4 SSOT 모듈
+                (lexer/parser/type_checker/codegen) = current SSOT.
+             ② gen_a: 기존 build/hexat(seed) 로 4 SSOT transpile (HEXA_VAL_ARENA=0).
+             ③ gen_b: gen_a merge → hexa_cc.c.new → clang → hexat.new(=gen_b 바이너리)
+                로 4 SSOT 재transpile.
+             ④ gen_c: gen_b merge → hexat.new2 → 4 SSOT 재transpile.
+             ⑤ FIXPOINT = gen_b 출력 .c vs gen_c 출력 .c per-module md5.
+             ⑥ determinism = 같은 gen_b 바이너리 2회 실행 동일 출력.
+             read-only: 설치 hexa.real·summer build/hexat seed 미변경 (모든 산출물
+             /tmp 테스트 경로; install dir 는 /tmp/hxinst self-contained copy).
+host       : ubu-2 (Linux x86_64, summer). `uname -m` = x86_64.
+             hexat seed = ELF 64-bit LSB pie x86-64 (summer build/hexat,
+             md5 4ca3d5d7748c334d8c1d2622cfe77d41, 미변경).
+             SSOT provenance = /tmp/hxcc fresh clone @ origin/main ca98235.
+             ※ Mac arm64 축은 PR #2105 에서 별도 측정 (F-HEXA-CC-ZERO-BYTEEQ-MAC.txt).
+
+
+────────────────────────────────────────────────────────────────
+결론 (one-line)
+────────────────────────────────────────────────────────────────
+SELF-HOST-FIXPOINT-BYTE-EQ-PASS (ubu-x86_64) — v_n ≡ v_{n+1} 4/4 모듈 byte-eq +
+DETERMINISTIC. Mac arm64(#2105) + ubu x86_64 양쪽 PASS = P1 self-host fixpoint
+성질 CROSS-HOST 입증. 단 IN-TREE-SEED-DRIFT (커밋된 build/hexat 는 자기 SSOT 의
+fixpoint 아님 — stale seed) 도 Mac 과 동일 방향으로 재현 (hexa_int 인라인 #2078
+누락). P1 cross-host fixpoint 성질은 PASS, seed 갱신은 별개 잔여.
+
+
+────────────────────────────────────────────────────────────────
+[A] `hexa cc --regen` 실행 stdout (verbatim, seed = gen_b 바이너리, /tmp/hxinst)
+────────────────────────────────────────────────────────────────
+=== hexa cc --regen : hexa_cc.c 자동 재생성 ===
+  SSOT: self/{lexer,parser,type_checker,codegen}.hexa
+[1/4] transpiling SSOT modules via hexat
+  [transpile] HEXA_VAL_ARENA=0 /tmp/hxinst/build/hexat ./self/lexer.hexa /tmp/_lexer.c 2>&1
+    OK: /tmp/_lexer.c
+  [transpile] HEXA_VAL_ARENA=0 /tmp/hxinst/build/hexat ./self/parser.hexa /tmp/_parser.c 2>&1
+    OK: /tmp/_parser.c
+  [transpile] HEXA_VAL_ARENA=0 /tmp/hxinst/build/hexat ./self/type_checker.hexa /tmp/_tc.c 2>&1
+    OK: /tmp/_tc.c
+  [transpile] HEXA_VAL_ARENA=0 /tmp/hxinst/build/hexat ./self/codegen.hexa /tmp/_cg.c 2>&1
+    OK: /tmp/_cg.c
+  lexer=ok parser=ok tc=ok cg=ok
+[2/4] merging modules → self/native/hexa_cc.c.new  (MVP: concat + #include dedup + main strip)
+sh: 1: cannot open ./self/native/hexa_cc.c: No such file
+sh: 1: cannot open ./self/native/hexa_cc.c: No such file
+  hexa_cc.c      bytes=  lines=
+  hexa_cc.c.new  bytes=1921311  lines=28533
+[3/4] clang compile hexa_cc.c.new → /tmp/hexat.new (failure tolerated)
+  clang -O2 -D_GNU_SOURCE -DHEXA_HAS_OPENSSL  -I './self' -x c -c -Wno-trigraphs -fbracket-depth=4096 ./self/native/hexa_cc.c.new -o /tmp/hexa_cc.new.o 2>&1 | head -40
+In file included from ./self/native/hexa_cc.c.new:2:
+./self/runtime.h:421:28: warning: '/*' within block comment [-Wcomment]
+  421 | /* ── Additional native/*.c forward-decls (auto-generated 2026-05-15) ──
+      |                        ^
+./self/runtime.h:422:36: warning: '/*' within block comment [-Wcomment]
+  422 |  * Sourced from grep of self/native/*.c hexa_* definitions; ensures user.c
+      |                                    ^
+2 warnings generated.
+  clang -O2 /tmp/hexa_cc.new.o './self/runtime.o' -o /tmp/hexat.new -lm -lpthread -lssl -lcrypto 2>&1 | head -40
+  compiled=yes
+[4/4] diff summary
+  diff: diff: ./self/native/hexa_cc.c: 그런 파일이나 디렉터리가 없습니다
+Phase C MVP done. Merge algorithm limitations:
+  - simple concat; no global symbol collision resolution
+  - main() stripped via awk brace-depth (single-line `}` assumed)
+(※ "hexa_cc.c: No such file" 는 fresh-tree 에 in-tree seed 부재 → diff report 만
+  영향, regen 산출물엔 무관. compiled=yes.)
+
+
+────────────────────────────────────────────────────────────────
+[B] SELF-HOST FIXPOINT — gen_b vs gen_c per-module md5 (v_n == v_{n+1})
+────────────────────────────────────────────────────────────────
+gen_b = hexat.new (gen_a merge 로 빌드) 가 4 SSOT 를 transpile 한 출력
+gen_c = hexat.new2 (gen_b merge 로 빌드) 가 4 SSOT 를 transpile 한 출력
+
+--- gen_b md5 ---
+df4e26d86b356bbac7e152bb65e8d08b  lexer.c
+c1e02425e2410336977b9edc581f4591  parser.c
+6153a8121ed17cc48242283ede313f4c  type_checker.c
+6e30c1680ce7c165112d776a42772ead  codegen.c
+--- gen_c md5 ---
+df4e26d86b356bbac7e152bb65e8d08b  lexer.c
+c1e02425e2410336977b9edc581f4591  parser.c
+6153a8121ed17cc48242283ede313f4c  type_checker.c
+6e30c1680ce7c165112d776a42772ead  codegen.c
+--- per-module verdict ---
+lexer        : FIXPOINT-EQ  df4e26d86b356bbac7e152bb65e8d08b
+parser       : FIXPOINT-EQ  c1e02425e2410336977b9edc581f4591
+type_checker : FIXPOINT-EQ  6153a8121ed17cc48242283ede313f4c
+codegen      : FIXPOINT-EQ  6e30c1680ce7c165112d776a42772ead
+→ 4/4 모듈 byte-identical. SSOT 트랜스파일러는 ubu x86_64 에서 fixpoint.
+
+[determinism] 같은 gen_b 바이너리(hexat.new) 2회 실행:
+  lexer        : DETERMINISTIC  df4e26d86b356bbac7e152bb65e8d08b
+  parser       : DETERMINISTIC  c1e02425e2410336977b9edc581f4591
+  type_checker : DETERMINISTIC  6153a8121ed17cc48242283ede313f4c
+  codegen      : DETERMINISTIC  6e30c1680ce7c165112d776a42772ead
+
+[추가 iter] gen_c == gen_d (hexat.new2 로 한 번 더 transpile) 도 4/4 STABLE
+  → fixpoint 안정 (1-iter 뿐 아니라 후속 iter 도 동일).
+
+
+────────────────────────────────────────────────────────────────
+[C] IN-TREE-SEED DRIFT — gen_a(커밋 seed build/hexat) vs gen_b(SSOT)
+────────────────────────────────────────────────────────────────
+gen_a = summer build/hexat (seed, md5 4ca3d5d7..) 가 transpile 한 출력
+gen_b = gen_a 로 빌드한 hexat.new (현 SSOT 트랜스파일러) 출력
+
+  lexer        : SEED-DRIFT (904 diff lines)  gen_a=e592e6d3.. gen_b=df4e26d8..
+  parser       : SEED-DRIFT (320 diff lines)  gen_a=49006860.. gen_b=c1e02425..
+  type_checker : SEED-DRIFT (558 diff lines)  gen_a=4e764bc1.. gen_b=6153a812..
+  codegen      : SEED-DRIFT (2728 diff lines) gen_a=ed9e8f16.. gen_b=6e30c168..
+
+drift 원인 (codegen 첫 diff 샘플):
+  < if (hexa_truthy(hexa_eq(nn, hexa_int(0)))) {                     # seed (old)
+  > if (hexa_truthy(hexa_eq(nn, ((HexaVal){.tag=TAG_INT,.i=(0)})))) {  # SSOT (new)
+  → 현 SSOT codegen 은 정수 리터럴을 인라인 박스 `((HexaVal){.tag=TAG_INT,.i=(N)})`
+    로 emit (= PR #2078 "inline hexa_int integer-literal box · UNSHADOW #2").
+    커밋된 seed 바이너리는 그 최적화 前에 빌드됨 → 구 `hexa_int(N)` 호출 형태.
+  → 즉 커밋 seed(build/hexat)는 자기 SSOT 의 fixpoint 가 아님 = 최종 regen 없이
+    커밋된 STALE seed. Mac(#2105, 153 hunk)과 동일 방향·동일 root cause
+    (SSOT NEWER · seed 미갱신). cross-host 일관 = seed 갱신 누락의 결정적 신호.
+
+
+────────────────────────────────────────────────────────────────
+[D] 안전성 (installed/seed 미변경)
+────────────────────────────────────────────────────────────────
+- 설치 ~/.hx/bin/hexa.real md5 = d72b69379904532d7853d264d6ea71f6 (전후 동일·미변경)
+- summer build/hexat (seed) md5 = 4ca3d5d7748c334d8c1d2622cfe77d41 (전후 동일·미변경)
+- 모든 regen·transpile 산출물은 /tmp (hxccwork·hxinst·_*.c·hexat.new) — install/seed
+  와 격리. /tmp/hxinst 는 hexa.real 의 self-contained COPY (원본 무손상).
+- summer 공유 워크트리는 read-only 참조만 (build/hexat·runtime.o·runtime.h 복사,
+  force-reset/switch/삭제 없음).
+
+
+────────────────────────────────────────────────────────────────
+[E] 판정 매트릭스
+────────────────────────────────────────────────────────────────
+| axis                                   | host       | verdict          |
+|----------------------------------------|------------|------------------|
+| self-host fixpoint v_n==v_{n+1} (출력)  | ubu-x86_64 | 🟢 BYTE-EQ 4/4   |
+| regen 결정성 (gen2==gen3)               | ubu-x86_64 | 🟢 DETERMINISTIC |
+| in-tree seed == SSOT regen             | ubu-x86_64 | 🔴 SEED-DRIFT    |
+| (cross-host 종합 — Mac #2105 + ubu)     | both       | 🟢 FIXPOINT PASS |
+
+P1 self-host fixpoint 성질 = Mac arm64(#2105) + ubu x86_64 양쪽 🟢 PASS = cross-host
+입증. 잔여 = (1) in-tree seed 갱신(재regen+커밋, 양 호스트 공통), (2) P3 cold-seed
+stage-(-1) bootstrap (별개 frontier — P1 byte-eq 와 무관, 미flip).
