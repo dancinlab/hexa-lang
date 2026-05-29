@@ -28,6 +28,7 @@
 // dry_run=1 + mock injection 으로 termination 경로 회피).
 
 use "stdlib/alloc/json_object"
+use "stdlib/cloud/cloud"
 use "stdlib/cloud/runpod"
 use "stdlib/cloud/pod_registry"
 
@@ -141,23 +142,9 @@ fn _should_autokill_composite(
 
 // ── snapshot fetch (runpodctl, real) ─────────────────────────────────
 
-// _shq_local — POSIX-quote (cloud.hexa / runpod.hexa mirror; 모듈 간 의존
-// 최소화를 위해 다시 정의).
-fn _shq_local(s: str) -> str {
-    let mut out = "'"
-    let mut i = 0
-    let n = len(s)
-    while i < n {
-        let c = s.substring(i, i + 1)
-        if c == "'" {
-            out = out + "'\\''"
-        } else {
-            out = out + c
-        }
-        i = i + 1
-    }
-    return out + "'"
-}
+// _shq_local now lives canonically in stdlib/cloud/cloud.hexa (pub) — this
+// module's private copy was removed to fix the cloud_cli flatten collision
+// (f8f3d35b). `use "stdlib/cloud/cloud"` (top) brings it in scope.
 
 // _runpodctl_bin — runpod.hexa 의 `_runpodctl_path` 와 같은 검출 규칙;
 // 모듈 경계 보존 (이 함수는 watchdog 전용 사본).

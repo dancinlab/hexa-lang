@@ -50,6 +50,25 @@ fn _shq(s: str) -> str {
     return out + "'"
 }
 
+// _shq_local — public alias of _shq for sibling cloud modules (vast · runpod
+// · watchdog) that previously each kept a private copy, colliding when
+// cloud_cli flattens all three (f8f3d35b). Single canonical home (d3).
+pub fn _shq_local(s: str) -> str {
+    let mut out = "'"
+    let mut i = 0
+    let n = len(s)
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "'" {
+            out = out + "'\\''"
+        } else {
+            out = out + c
+        }
+        i = i + 1
+    }
+    return out + "'"
+}
+
 // _join_argv — POSIX-quote every element and join with single spaces.
 fn _join_argv(argv: [str]) -> str {
     let mut out = ""
