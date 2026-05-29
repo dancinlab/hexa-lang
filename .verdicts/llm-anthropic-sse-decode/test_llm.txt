@@ -1,0 +1,57 @@
+verdict: 🟢 PASS — stdlib/llm.hexa 0.2.0 Anthropic-shape + SSE stream-decode
+method: parse-gate (hexa parse, syntactic) + isolated self-contained build+run on mini (arm64)
+host: mini (macos arm64) · build/hexat + clang -O2 · NO network / NO key / NO cost
+file: stdlib/test/test_llm.hexa (self-contained, no `use`; builders copied verbatim from llm.hexa)
+
+── parse-gate ──
+OK: stdlib/llm.hexa parses cleanly
+OK: stdlib/test/test_llm.hexa parses cleanly
+
+── isolated logic test (verbatim stdout) ──
+PASS headers Authorization bearer
+PASS headers Content-Type json
+PASS body model id
+PASS body has 1 message
+PASS body msg[0] role user
+PASS body msg[0] content
+PASS body escapes quote+newline (round-trip)
+PASS multi body has 2 messages
+PASS multi msg[0] system role
+PASS multi msg[1] user content
+PASS multi body model
+PASS provider url
+PASS provider model
+PASS provider kc_service
+PASS provider kc_account
+PASS anthropic header x-api-key
+PASS anthropic header version
+PASS anthropic header content-type
+map key 'Authorization' not found
+PASS anthropic header no bearer
+PASS anthropic body model
+PASS anthropic body system top-level
+PASS anthropic body max_tokens
+PASS anthropic body has 1 message
+PASS anthropic body msg[0] role user
+map key 'system' not found
+PASS anthropic body omits empty system
+PASS sse decode concatenates deltas
+map key 'content' not found
+map key 'content' not found
+PASS sse decode skips role/finish/keepalive
+ALL PASS (28/28)
+
+note: the `map key '...' not found` lines are benign runtime diagnostics emitted
+      by the deliberate negative-lookup asserts (probing an ABSENT key to confirm
+      its absence — e.g. anthropic body carries no bearer Authorization, omitted
+      system field, role/finish frames carry no delta.content). The asserts PASS.
+
+gate (g5): the SSE decoder folds the synthetic OpenAI delta lines
+  ["data: {choices[0].delta.content:He}", "...llo", "data: [DONE]"] → "Hello".
+  PURE (line-list → text), offline. NO live-streaming claim — live transport
+  wiring (http_sse_post + llm_stream_decode over streamed lines) is follow-up.
+
+follow-up: Anthropic STREAMING delta shape differs (event: content_block_delta →
+  data:{delta:{type:text_delta,text:...}} i.e. delta.text, not
+  choices[].delta.content). A llm_stream_decode_anthropic keyed on that envelope
+  is the remaining follow-up; this decoder decodes only the OpenAI shape.

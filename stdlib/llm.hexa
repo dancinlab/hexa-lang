@@ -5,11 +5,19 @@
 // @usage(import stdlib/llm; let r = llm_post(llm_provider("https://api.openai.com/v1/chat/completions", "gpt-4o-mini", "dancinlab.secret", "openai.api_key"), "hello"); println(to_string(r["body"])))
 //
 // ── module governance metadata (hexa-lang module versioning spec 2026-05-03) ──
-// @version 0.1.0
+// @version 0.2.0
 // @capabilities [llm_provider, llm_build_body, llm_build_messages_body, llm_build_headers,
-//                llm_post, llm_post_messages, llm_message]
+//                llm_post, llm_post_messages, llm_message,
+//                llm_provider_anthropic, llm_build_body_anthropic, llm_build_headers_anthropic,
+//                llm_post_anthropic, llm_stream_decode]
 // @stability preview
 // @since 2026-05-30
+// @changelog
+//   0.2.0 (2026-05-30) — Anthropic Messages-API shape (system top-level, required
+//                        max_tokens, x-api-key + anthropic-version headers, no bearer)
+//                        + pure SSE stream-decode (llm_stream_decode) for OpenAI
+//                        chat-completions `choices[].delta.content` deltas.
+//   0.1.0 (2026-05-30) — initial single-shot chat-completions POST adapter.
 // @maintainer hexa-lang-core
 // @priority P1
 // Versioning policy: docs/hexa_lang_module_versioning_spec_2026_05_03.md
@@ -45,12 +53,16 @@
 //     caller parses the provider envelope (choices[0].message.content) via
 //     stdlib/json_object.hexa read-side helpers — this adapter does NOT pick
 //     apart the response, by design (provider-shape-agnostic).
-//   · SSE token STREAMING is DEFERRED. stdlib/http_sse.hexa has the primitive;
-//     a streaming-decode helper (llm_stream / SSE `data:` line consumption) is
-//     a follow-up. Set `stream=false` is implied (we never send `"stream":true`).
-//   · OpenAI-style chat-completions shape only ({model, messages:[{role,content}]}).
-//     Anthropic's Messages API differs (system top-level, max_tokens required);
-//     a provider-shape switch is a follow-up — the body-builder is the seam.
+//   · SSE token-stream DECODE landed in 0.2.0: llm_stream_decode(sse_lines) is a
+//     PURE (line-list → text) folder over OpenAI `data:` deltas — offline-testable.
+//     The single-shot llm_post path still never sends `"stream":true`; wiring the
+//     live transport (http_sse_post + llm_stream_decode over the streamed lines)
+//     is the remaining follow-up (no offline gate, needs a live endpoint).
+//   · Anthropic Messages-API shape landed in 0.2.0 (llm_provider_anthropic /
+//     llm_build_body_anthropic / llm_build_headers_anthropic / llm_post_anthropic).
+//     The OpenAI chat-completions path ({model, messages}) is unchanged — the two
+//     shapes share the messages array + json_stringify seam but diverge on
+//     system-placement (top-level vs role), required max_tokens, and auth headers.
 //   · keychain_get returns "" on miss; llm_post will then send an empty bearer
 //     and the provider 401s. Callers should keychain_has() upstream if they
 //     want to distinguish "no key configured" from "bad key".
@@ -149,4 +161,162 @@ pub fn llm_post(provider, prompt: string) {
     let messages = []
     messages.push(llm_message("user", prompt))
     return llm_post_messages(provider, messages, 0)
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  Anthropic Messages-API shape (0.2.0)
+// ════════════════════════════════════════════════════════════════════
+//
+// Anthropic's /v1/messages endpoint diverges from OpenAI chat-completions
+// in THREE places, all of which the body/header builders below encode:
+//   1. `system` is a TOP-LEVEL request field, NOT a {role:"system"} message.
+//   2. `max_tokens` is REQUIRED (OpenAI defaults it; Anthropic 400s without).
+//   3. Auth is `x-api-key: <key>` + `anthropic-version: <ver>` headers, NOT
+//      `Authorization: Bearer <key>`.
+// The messages array itself ({role:"user"/"assistant", content:string}) and the
+// json_stringify escape-safety are SHARED with the OpenAI path — same seam.
+
+// ── llm_provider_anthropic — Anthropic provider config constructor ───
+//
+// Like llm_provider, but carries the API version pin (Anthropic requires an
+// `anthropic-version` header) and a required default max_tokens (the Messages
+// API rejects requests without it). `version` defaults are caller-supplied
+// (e.g. "2023-06-01"). url is the full /v1/messages endpoint.
+pub fn llm_provider_anthropic(url: string, model: string, kc_service: string, kc_account: string, version: string, max_tokens: int) {
+    let p = #{}
+    p["url"] = url
+    p["model"] = model
+    p["kc_service"] = kc_service
+    p["kc_account"] = kc_account
+    p["version"] = version
+    p["max_tokens"] = max_tokens
+    return p
+}
+
+// ── llm_build_body_anthropic — pure Anthropic Messages request body ──
+//
+// Builds the /v1/messages request body string. `system` is emitted as a
+// TOP-LEVEL field (only when non-empty — Anthropic accepts its absence) and
+// `max_tokens` is ALWAYS emitted (required). The messages array carries only
+// user/assistant turns (no system role). Deterministic; no I/O; emitted via
+// json_stringify so all text is escape-safe. UNIT-TESTABLE seam.
+pub fn llm_build_body_anthropic(model: string, system: string, messages, max_tokens: int) -> string {
+    let body = #{}
+    body["model"] = model
+    body["max_tokens"] = max_tokens
+    if len(system) > 0 {
+        body["system"] = system
+    }
+    body["messages"] = messages
+    return json_stringify(body)
+}
+
+// ── llm_build_headers_anthropic — pure Anthropic header map ──────────
+//
+// {x-api-key, anthropic-version, Content-Type}. NOT a bearer Authorization
+// header — Anthropic authenticates via the x-api-key header. Deterministic;
+// no I/O. Unit-testable seam.
+pub fn llm_build_headers_anthropic(api_key: string, version: string) {
+    let h = #{}
+    h["x-api-key"] = api_key
+    h["anthropic-version"] = version
+    h["Content-Type"] = "application/json"
+    return h
+}
+
+// ── llm_post_anthropic — Anthropic Messages single-shot POST ─────────
+//
+// Pulls the API key from the keychain, builds the Anthropic body (system
+// top-level + required max_tokens) + headers (x-api-key + anthropic-version),
+// and POSTs via http_post_with_headers_status. Returns the http.hexa
+// {status, body, ok} map verbatim. `system` "" → omitted. `timeout_sec` <= 0
+// → http.hexa default. The only I/O fn on the Anthropic path; request ASSEMBLY
+// is the pure builders above, so the composed request is verifiable offline.
+pub fn llm_post_anthropic(provider, system: string, messages, timeout_sec: int) {
+    let key = keychain_get(to_string(provider["kc_service"]), to_string(provider["kc_account"]))
+    let body = llm_build_body_anthropic(to_string(provider["model"]), system, messages, to_int(provider["max_tokens"]))
+    let headers = llm_build_headers_anthropic(key, to_string(provider["version"]))
+    return http_post_with_headers_status(to_string(provider["url"]), headers, body, timeout_sec)
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  SSE token-stream DECODE (0.2.0) — pure, offline-testable
+// ════════════════════════════════════════════════════════════════════
+//
+// llm_stream_decode(sse_lines) -> text
+//   Folds a list of raw SSE lines (as produced by http_sse.hexa's line
+//   stream, e.g. http_sse_get_lines / http_sse_open + http_sse_next) into the
+//   concatenated assistant text. PURE: input is a line array, output is the
+//   joined token text — NO network, NO exec — so it is fully offline-testable.
+//
+// Canonical delta shape decoded here: OpenAI chat-completions STREAMING, where
+// each event is a `data: {...}` line whose JSON carries
+//   choices[0].delta.content  → a token fragment (may be absent on the first /
+//                                last frames, which carry role / finish_reason).
+// The terminal `data: [DONE]` sentinel ends the stream and is skipped.
+//
+// FOLLOW-UP (other provider shape): Anthropic Messages STREAMING uses a
+// different envelope — `event: content_block_delta` whose `data:` JSON is
+// {type:"content_block_delta", delta:{type:"text_delta", text:"..."}} — i.e.
+// delta.text, not choices[].delta.content. A second decoder
+// (llm_stream_decode_anthropic) keyed on that shape is the remaining follow-up;
+// this fn deliberately decodes only the OpenAI shape to keep one canonical path.
+
+// _llm_sse_data_payload — extract the payload of a `data:` line, or "" if the
+// line is not a data line. Strips the one leading space per SSE spec. Pure.
+fn _llm_sse_data_payload(raw_line: string) -> string {
+    // tolerate trailing \r / \n
+    let mut line = raw_line
+    let n = len(line)
+    let mut end = n
+    if end > 0 && line.substring(end - 1, end) == "\n" { end = end - 1 }
+    if end > 0 && line.substring(end - 1, end) == "\r" { end = end - 1 }
+    if end != n { line = line.substring(0, end) }
+    if len(line) < 5 { return "" }
+    if line.substring(0, 5) != "data:" { return "" }
+    let mut value = line.substring(5, len(line))
+    if len(value) > 0 && value.substring(0, 1) == " " {
+        value = value.substring(1, len(value))
+    }
+    return value
+}
+
+// _llm_openai_delta_content — pull choices[0].delta.content from a parsed
+// OpenAI streaming frame, or "" when this frame carries no token (role-only
+// first frame, finish_reason last frame, or a malformed frame). Pure.
+fn _llm_openai_delta_content(frame) -> string {
+    if type_of(frame) != "map" { return "" }
+    let choices = frame["choices"]
+    if type_of(choices) != "array" { return "" }
+    if len(choices) == 0 { return "" }
+    let c0 = choices[0]
+    if type_of(c0) != "map" { return "" }
+    let delta = c0["delta"]
+    if type_of(delta) != "map" { return "" }
+    let content = delta["content"]
+    if type_of(content) != "string" { return "" }
+    return to_string(content)
+}
+
+// llm_stream_decode — decode a list of SSE lines into concatenated text.
+//
+// For each `data:` line: a `[DONE]` payload terminates; any other payload is
+// JSON-parsed and its choices[0].delta.content (if present) appended. Non-data
+// lines (event:, id:, blank keep-alive, comments) are ignored. PURE — no I/O.
+//
+// Example:  ["data: {\"choices\":[{\"delta\":{\"content\":\"He\"}}]}",
+//            "data: {\"choices\":[{\"delta\":{\"content\":\"llo\"}}]}",
+//            "data: [DONE]"]  →  "Hello"
+pub fn llm_stream_decode(sse_lines) -> string {
+    let mut out = ""
+    let mut i = 0
+    while i < len(sse_lines) {
+        let payload = _llm_sse_data_payload(to_string(sse_lines[i]))
+        i = i + 1
+        if len(payload) == 0 { continue }
+        if payload == "[DONE]" { break }
+        let frame = json_parse(payload)
+        out = out + _llm_openai_delta_content(frame)
+    }
+    return out
 }

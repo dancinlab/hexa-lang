@@ -49,6 +49,73 @@ fn llm_build_headers(api_key: string) {
     return h
 }
 
+// ── Anthropic Messages-API builders (copied verbatim from llm.hexa) ──
+
+fn llm_build_body_anthropic(model: string, system: string, messages, max_tokens: int) -> string {
+    let body = #{}
+    body["model"] = model
+    body["max_tokens"] = max_tokens
+    if len(system) > 0 {
+        body["system"] = system
+    }
+    body["messages"] = messages
+    return json_stringify(body)
+}
+
+fn llm_build_headers_anthropic(api_key: string, version: string) {
+    let h = #{}
+    h["x-api-key"] = api_key
+    h["anthropic-version"] = version
+    h["Content-Type"] = "application/json"
+    return h
+}
+
+// ── SSE stream-decode (copied verbatim from llm.hexa) ────────────────
+
+fn _llm_sse_data_payload(raw_line: string) -> string {
+    let mut line = raw_line
+    let n = len(line)
+    let mut end = n
+    if end > 0 && line.substring(end - 1, end) == "\n" { end = end - 1 }
+    if end > 0 && line.substring(end - 1, end) == "\r" { end = end - 1 }
+    if end != n { line = line.substring(0, end) }
+    if len(line) < 5 { return "" }
+    if line.substring(0, 5) != "data:" { return "" }
+    let mut value = line.substring(5, len(line))
+    if len(value) > 0 && value.substring(0, 1) == " " {
+        value = value.substring(1, len(value))
+    }
+    return value
+}
+
+fn _llm_openai_delta_content(frame) -> string {
+    if type_of(frame) != "map" { return "" }
+    let choices = frame["choices"]
+    if type_of(choices) != "array" { return "" }
+    if len(choices) == 0 { return "" }
+    let c0 = choices[0]
+    if type_of(c0) != "map" { return "" }
+    let delta = c0["delta"]
+    if type_of(delta) != "map" { return "" }
+    let content = delta["content"]
+    if type_of(content) != "string" { return "" }
+    return to_string(content)
+}
+
+fn llm_stream_decode(sse_lines) -> string {
+    let mut out = ""
+    let mut i = 0
+    while i < len(sse_lines) {
+        let payload = _llm_sse_data_payload(to_string(sse_lines[i]))
+        i = i + 1
+        if len(payload) == 0 { continue }
+        if payload == "[DONE]" { break }
+        let frame = json_parse(payload)
+        out = out + _llm_openai_delta_content(frame)
+    }
+    return out
+}
+
 fn expect(name: string, got: string, want: string) -> int {
     if got == want {
         println("PASS " + name)
@@ -135,8 +202,51 @@ fn main() {
     fails = fails + expect("provider kc_service", to_string(p["kc_service"]), "dancinlab.secret")
     fails = fails + expect("provider kc_account", to_string(p["kc_account"]), "openai.api_key")
 
+    // ── Anthropic headers: x-api-key + anthropic-version (NOT bearer) ─
+    let ah = llm_build_headers_anthropic("sk-ant-FAKE-999", "2023-06-01")
+    fails = fails + expect("anthropic header x-api-key", to_string(ah["x-api-key"]), "sk-ant-FAKE-999")
+    fails = fails + expect("anthropic header version", to_string(ah["anthropic-version"]), "2023-06-01")
+    fails = fails + expect("anthropic header content-type", to_string(ah["Content-Type"]), "application/json")
+    // anthropic must NOT carry a bearer Authorization header
+    fails = fails + expect_bool("anthropic header no bearer", type_of(ah["Authorization"]) == "string", false)
+
+    // ── Anthropic body: system top-level + required max_tokens ────────
+    let aconv = []
+    aconv.push(llm_message("user", "ping"))
+    let abody = llm_build_body_anthropic("claude-3-5-sonnet", "You are terse.", aconv, 256)
+    let aparsed = json_parse(abody)
+    fails = fails + expect("anthropic body model", to_string(aparsed["model"]), "claude-3-5-sonnet")
+    // system is a TOP-LEVEL field (not a message role)
+    fails = fails + expect("anthropic body system top-level", to_string(aparsed["system"]), "You are terse.")
+    // max_tokens is present
+    fails = fails + expect("anthropic body max_tokens", to_string(aparsed["max_tokens"]), "256")
+    let amsgs = aparsed["messages"]
+    fails = fails + expect_bool("anthropic body has 1 message", len(amsgs) == 1, true)
+    fails = fails + expect("anthropic body msg[0] role user", to_string(amsgs[0]["role"]), "user")
+    // empty system → field omitted
+    let abody2 = llm_build_body_anthropic("claude-3-haiku", "", aconv, 64)
+    let aparsed2 = json_parse(abody2)
+    fails = fails + expect_bool("anthropic body omits empty system", type_of(aparsed2["system"]) == "string", false)
+
+    // ── SSE decode: OpenAI choices[].delta.content deltas → "Hello" ───
+    let sse = []
+    sse.push("data: {\"choices\":[{\"delta\":{\"content\":\"He\"}}]}")
+    sse.push("data: {\"choices\":[{\"delta\":{\"content\":\"llo\"}}]}")
+    sse.push("data: [DONE]")
+    fails = fails + expect("sse decode concatenates deltas", llm_stream_decode(sse), "Hello")
+
+    // first frame role-only (no content) + keep-alive/blank lines ignored
+    let sse2 = []
+    sse2.push("data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}")
+    sse2.push(": keep-alive")
+    sse2.push("")
+    sse2.push("data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}")
+    sse2.push("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}")
+    sse2.push("data: [DONE]")
+    fails = fails + expect("sse decode skips role/finish/keepalive", llm_stream_decode(sse2), "Hi")
+
     if fails == 0 {
-        println("ALL PASS (16/16)")
+        println("ALL PASS (28/28)")
     } else {
         println("FAILURES: " + to_string(fails))
     }
