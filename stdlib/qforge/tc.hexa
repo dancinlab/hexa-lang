@@ -1,0 +1,75 @@
+// HEXA Standard Library — qforge/tc
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE L0 — the first engine layer of the QFORGE domain, a hexa-native
+// first-principles electron-phonon engine. L0 is a *composing* layer: it does
+// NOT re-implement any physics. It binds the already-verified 🟢
+// SUPPORTED-NUMERICAL Tc / α²F atoms living in `stdlib/material/sim` (Allen-
+// Dynes, McMillan, Eliashberg-moment integrator — PR#299 Python bit-exact)
+// into a QFORGE-namespaced superconductor-Tc pipeline.
+//
+//   raw α²F(ω) ──eliashberg_moments_from_a2f──▶ [λ, ω_log, ω̄₂]
+//                                                       │
+//                                              allen_dynes_full
+//                                                       ▼
+//                                                     Tc (K)
+//
+// d3 (one canonical code home): the predictors live ONLY in stdlib/material/
+// sim.hexa. This module `use`s them and calls through — no copy, no move
+// (moving would churn RTSC and invalidate the verified atoms). d4 (generic
+// dispatch): the pipeline is formula-agnostic — it forwards whatever spectral
+// function / scalar moments it is handed; there is no per-material branch and
+// no hardcoded formula. New materials are data (an α²F grid + μ*), not code.
+//
+// All three Tc entries forward to the verified `allen_dynes_tc` (Allen &
+// Dynes 1975, PRB 12 905, ω_log/1.2 prefactor) — the form whose published
+// Nb-anchor band is Tc = 9.9-13 K; `eliashberg_moments_from_a2f` supplies the
+// (λ, ω_log, ω̄₂) moments for the spectral-function entry.
+//
+// Surface (pure functions, no syscall):
+//   pub fn qforge_tc_allen_dynes(lam, omega_log_K, mu_star) -> float
+//   pub fn qforge_tc_allen_dynes_full(lam, omega_log_K, omega2_K, mu_star) -> float
+//   pub fn qforge_tc_from_a2f(omega: [float], a2f: [float], mu_star) -> float
+
+use "stdlib/material/sim"
+
+// ── L0.1 — thin Allen-Dynes pass-through (f1·f2, ω̄₂ = ω_log → f2 = 1) ───
+//
+// The 3-scalar entry: hand-fed (λ, ω_log) with μ*. ω̄₂ defaults to ω_log so
+// the spectral-shape factor f2 = 1 and only the f1 strong-coupling lift acts.
+// Forwards to the verified `allen_dynes_tc` (Allen & Dynes 1975, PRB 12 905,
+// canonical ω_log/1.2 prefactor) — this is the form whose published Nb-anchor
+// range is Tc = 9.9-13 K (atlas `rtsc_nb_dft_tc_measurement_match`). Zero new
+// physics.
+pub fn qforge_tc_allen_dynes(lam: float, omega_log_K: float,
+                             mu_star: float) -> float {
+    return allen_dynes_tc(omega_log_K, lam, mu_star, omega_log_K)
+}
+
+// ── L0.2 — full Allen-Dynes pass-through (f1·f2, explicit ω̄₂) ───────────
+//
+// The 4-scalar entry: caller supplies the mean-square frequency ω̄₂ so the
+// spectral-shape correction f2 is active. Direct forward to the verified atom.
+pub fn qforge_tc_allen_dynes_full(lam: float, omega_log_K: float,
+                                  omega2_K: float, mu_star: float) -> float {
+    return allen_dynes_tc(omega_log_K, lam, mu_star, omega2_K)
+}
+
+// ── L0.3 — α²F(ω) → Tc, the full engine pipeline ────────────────────────
+//
+// Collapse a sampled Eliashberg spectral function α²F(ω) into its three
+// moments via the verified trapezoid integrator, then feed the full f1·f2
+// Allen-Dynes Tc. This is the canonical L0 entry the later layers (L1-L5)
+// regress against. Returns 0.0 when the moments are malformed (sentinel
+// λ ≤ 0 from the integrator) — no superconductivity predicted / bad input.
+pub fn qforge_tc_from_a2f(omega: [float], a2f: [float],
+                          mu_star: float) -> float {
+    let m = eliashberg_moments_from_a2f(omega, a2f)
+    let lam = m[0]
+    if lam <= 0.0 { return 0.0 }
+    let omega_log_K = m[1]
+    let omega2_K = m[2]
+    return allen_dynes_tc(omega_log_K, lam, mu_star, omega2_K)
+}
