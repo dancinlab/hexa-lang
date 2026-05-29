@@ -1,0 +1,20 @@
+// UNSHADOW A/B workload — Collatz (불규칙 분기 + mod/div). 자족형.
+fn collatz_steps(n: int) -> int {
+    let steps = 0
+    let v = n
+    while v != 1 {
+        if v % 2 == 0 { v = v / 2 }
+        else { v = v * 3 + 1 }
+        steps = steps + 1
+    }
+    steps
+}
+
+let iterations = 2000000
+let result = 0
+let i = 0
+while i < iterations {
+    result = result + collatz_steps(97)
+    i = i + 1
+}
+println(result)

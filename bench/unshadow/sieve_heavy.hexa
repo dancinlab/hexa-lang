@@ -1,0 +1,26 @@
+// UNSHADOW A/B workload — sieve (분기 + 중첩 루프). 자족형(no use).
+// In-process heavy loop so process startup amortizes in the timed window.
+fn count_primes(limit: int) -> int {
+    let count = 0
+    let n = 2
+    while n < limit {
+        let is_prime = 1
+        let d = 2
+        while d * d <= n {
+            if n % d == 0 { is_prime = 0 }
+            d = d + 1
+        }
+        count = count + is_prime
+        n = n + 1
+    }
+    count
+}
+
+let iterations = 60000
+let result = 0
+let i = 0
+while i < iterations {
+    result = result + count_primes(60)
+    i = i + 1
+}
+println(result)

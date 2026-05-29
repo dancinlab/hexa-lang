@@ -1,0 +1,22 @@
+// UNSHADOW A/B workload — iterative fib (단순 루프 + 정수 산술). 자족형.
+fn fib_iter(n: int) -> int {
+    let a = 0
+    let b = 1
+    let i = 0
+    while i < n {
+        let t = a + b
+        a = b
+        b = t
+        i = i + 1
+    }
+    a
+}
+
+let iterations = 6000000
+let result = 0
+let i = 0
+while i < iterations {
+    result = result + fib_iter(40)
+    i = i + 1
+}
+println(result)

@@ -11,7 +11,7 @@
 
 ## milestones
 
-- [ ] hexa-native primitive vs clang -O2 baseline micro-bench harness (재사용 측정대 · M1)
+- [x] hexa-native primitive vs clang -O2 baseline micro-bench harness (재사용 측정대 · M1)
 - [ ] 🟢 cross-layer 인라인 측정 — 런타임/유저 C-ABI 벽 제거 시 Δ
 - [ ] 🔵 A 루프→closed-form 제거 1건 (atlas Faulhaber류 — "안 돌기" 실증)
 - [ ] 🔵 C refinement-type bounds/null/tag-elision (타입정보 = 공짜 license)

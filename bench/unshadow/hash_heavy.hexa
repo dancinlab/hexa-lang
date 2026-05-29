@@ -1,0 +1,21 @@
+// UNSHADOW A/B workload — FNV-1a 변형 해시 (비트/정수 연산 누적). 자족형.
+fn hash_range(start: int, end: int) -> int {
+    let hash = 2166136261
+    let i = start
+    while i < end {
+        hash = hash * 16777619
+        hash = hash + i
+        i = i + 1
+    }
+    if hash < 0 { hash = 0 - hash }
+    hash % 1000000007
+}
+
+let iterations = 1000000
+let result = 0
+let i = 0
+while i < iterations {
+    result = result + hash_range(0, 200)
+    i = i + 1
+}
+println(result)

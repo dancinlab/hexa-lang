@@ -1,0 +1,263 @@
+// tool/unshadow_bench.hexa — UNSHADOW M1 A/B micro-bench harness (재사용 측정대)
+//
+// Axis: HEXA_BACKEND env toggle
+//   arm A "native" : aprime_cc --emit=asm → clang assemble+link runtime.c
+//                    (HEXA_BACKEND=native — user code is native-emitted asm)
+//   arm B "clangO2": default C path — hexat → C → clang -O2 → exe
+//                    (HEXA_BACKEND unset/=c — user code is clang -O2 compiled C)
+// Both arms link against the SAME self/runtime.c, run on the SAME host,
+// back-to-back, same workload, with warmup — a FAIR A/B (g5).
+//
+// For each workload the harness:
+//   1. builds both arms (build time NOT in the timing window),
+//   2. byte-diffs the two binaries' stdout — correctness gate (g5),
+//   3. times each compiled binary: <warmup> discarded runs then <iters>
+//      timed runs bracketed by time_ms(); reports min_ms / median_ms,
+//   4. emits a paired JSONL row + computed Δ% = (clangO2-native)/clangO2.
+//
+// Timing primitive = time_ms() (hexa_time_ms in runtime.c) — in-process
+// wall clock. We time the WHOLE compiled-binary process (startup + run);
+// to amortize startup the workload should loop heavily in-process. ms
+// granularity (no ns builtin in compiled path) — disclosed in the doc.
+//
+// Argv:
+//   --workloads "<p1,p2,...>"  comma list of .hexa sources (required)
+//   --warmup <N>               default 2  (discarded runs per arm)
+//   --iters  <N>               default 5  (timed runs per arm; min+median)
+//   --aprime <path>            aprime_cc path (else $HEXA_APRIME_CC / resolver)
+//   --hexa   <path>            hexa driver  (default /Users/ghost/.hx/bin/hexa)
+//   --out    <path>            JSONL out (default state/perf/unshadow_ab.jsonl)
+//   --tag    <s>               host/run tag recorded in each row
+//
+// hexa-only: wall clock = time_ms(); exec() used only for spawn / file IO,
+// never as the timing primitive.
+
+fn parse_int_safe(s) {
+    let r = to_int(s)
+    if r < 0 { return 0 }
+    return r
+}
+
+fn stem_of(path) {
+    // basename without dir or .hexa extension
+    let mut base = path
+    let mut i = len(path) - 1
+    while i >= 0 {
+        if path[i] == "/" { base = path.substring(i + 1, len(path)); break }
+        i = i - 1
+    }
+    if len(base) > 5 && base.substring(len(base) - 5, len(base)) == ".hexa" {
+        base = base.substring(0, len(base) - 5)
+    }
+    return base
+}
+
+fn jsonl_escape(s) {
+    let mut out = ""
+    let mut i = 0
+    while i < len(s) {
+        let ch = s[i]
+        if ch == "\\" { out = out + "\\\\" }
+        else if ch == "\"" { out = out + "\\\"" }
+        else if ch == "\n" { out = out + "\\n" }
+        else { out = out + ch }
+        i = i + 1
+    }
+    return out
+}
+
+// median of a sorted-via-insertion small int array
+fn median_ms(samples) {
+    let n = len(samples)
+    if n == 0 { return 0 }
+    // copy + insertion sort (n is tiny)
+    let mut a = []
+    let mut i = 0
+    while i < n { a.push(samples[i]); i = i + 1 }
+    let mut j = 1
+    while j < n {
+        let key = a[j]
+        let mut k = j - 1
+        while k >= 0 && a[k] > key { a[k + 1] = a[k]; k = k - 1 }
+        a[k + 1] = key
+        j = j + 1
+    }
+    return a[n / 2]
+}
+
+fn min_ms(samples) {
+    let n = len(samples)
+    if n == 0 { return 0 }
+    let mut m = samples[0]
+    let mut i = 1
+    while i < n {
+        if samples[i] < m { m = samples[i] }
+        i = i + 1
+    }
+    return m
+}
+
+// Build <src> with the given backend env prefix → out binary.
+// backend_env = "" (clang-O2 C path) | "HEXA_BACKEND=native " (native asm).
+// Returns "ok" or an error string.
+fn build_arm(hexa, src, out_bin, backend_env, aprime_env) {
+    let cmd = backend_env + aprime_env + "'" + hexa + "' build '" + src +
+              "' -o '" + out_bin + "' 2>&1; echo \"___RC=$?\""
+    let raw = exec(cmd)
+    let lines = raw.split("\n")
+    let mut k = len(lines) - 1
+    let mut rc = 127
+    while k >= 0 {
+        let line = lines[k].trim()
+        if len(line) > 6 && line.substring(0, 6) == "___RC=" {
+            rc = parse_int_safe(line.substring(6, len(line)))
+            break
+        }
+        k = k - 1
+    }
+    if rc != 0 { return "build-fail rc=" + to_string(rc) + " :: " + raw }
+    let chk = exec("test -x '" + out_bin + "' && printf yes || printf no")
+    if chk != "yes" { return "build-fail: binary not produced: " + out_bin }
+    return "ok"
+}
+
+// Capture stdout (+stderr) of a binary, trimmed — for the byte-diff gate.
+fn run_capture(bin) {
+    return exec("'" + bin + "' 2>&1").trim()
+}
+
+// Time <iters> runs of bin after <warmup> discarded runs.
+// Returns [min_ms, median_ms] over the per-run brackets.
+fn time_binary(bin, warmup, iters) {
+    let mut w = 0
+    while w < warmup { let _ = exec("'" + bin + "' >/dev/null 2>&1"); w = w + 1 }
+    let mut samples = []
+    let mut i = 0
+    while i < iters {
+        let t0 = time_ms()
+        let _ = exec("'" + bin + "' >/dev/null 2>&1")
+        let t1 = time_ms()
+        samples.push(t1 - t0)
+        i = i + 1
+    }
+    return [min_ms(samples), median_ms(samples)]
+}
+
+fn append_jsonl(path, row) {
+    let cmd = "mkdir -p \"$(dirname '" + path + "')\" && printf '%s\\n' '" +
+              row + "' >> '" + path + "'"
+    try { let _ = exec(cmd) } catch e { }
+}
+
+fn main() {
+    let argv = args()
+    let mut workloads_csv = ""
+    let mut warmup = 2
+    let mut iters = 5
+    let mut aprime = ""
+    let mut hexa = "/Users/ghost/.hx/bin/hexa"
+    let mut out = "state/perf/unshadow_ab.jsonl"
+    let mut tag = ""
+    let mut i = 1
+    while i < len(argv) {
+        let a = argv[i]
+        if a == "--workloads" && i + 1 < len(argv) { workloads_csv = argv[i + 1]; i = i + 2; continue }
+        if a == "--warmup" && i + 1 < len(argv) { warmup = parse_int_safe(argv[i + 1]); i = i + 2; continue }
+        if a == "--iters" && i + 1 < len(argv) { iters = parse_int_safe(argv[i + 1]); i = i + 2; continue }
+        if a == "--aprime" && i + 1 < len(argv) { aprime = argv[i + 1]; i = i + 2; continue }
+        if a == "--hexa" && i + 1 < len(argv) { hexa = argv[i + 1]; i = i + 2; continue }
+        if a == "--out" && i + 1 < len(argv) { out = argv[i + 1]; i = i + 2; continue }
+        if a == "--tag" && i + 1 < len(argv) { tag = argv[i + 1]; i = i + 2; continue }
+        i = i + 1
+    }
+    if len(workloads_csv) == 0 {
+        println("usage: unshadow_bench --workloads \"a.hexa,b.hexa\" [--warmup N --iters N --aprime PATH --hexa PATH --out PATH --tag S]")
+        exit(2)
+    }
+    let aprime_env = ""
+    if len(aprime) > 0 { aprime = "HEXA_APRIME_CC='" + aprime + "' " }
+    // ^ rebind: aprime now holds the env-prefix form (empty if not given).
+
+    let workloads = workloads_csv.split(",")
+    println("unshadow_bench: workloads=" + to_string(len(workloads)) +
+            " warmup=" + to_string(warmup) + " iters=" + to_string(iters) +
+            " tag=" + tag)
+    println("  out=" + out)
+    println("")
+
+    let mut total_fail = 0
+    let mut w = 0
+    while w < len(workloads) {
+        let src = workloads[w].trim()
+        if len(src) == 0 { w = w + 1; continue }
+        let stem = stem_of(src)
+        let bin_c = "/tmp/unshadow_" + stem + "_clangO2"
+        let bin_n = "/tmp/unshadow_" + stem + "_native"
+        println("[" + to_string(w + 1) + "/" + to_string(len(workloads)) + "] " + stem + "  (" + src + ")")
+
+        // ── build arm B: clang -O2 C path ──
+        let bb = build_arm(hexa, src, bin_c, "", "")
+        if bb != "ok" {
+            println("    clangO2 BUILD-FAIL: " + bb)
+            total_fail = total_fail + 1
+            w = w + 1
+            continue
+        }
+        // ── build arm A: HEXA_BACKEND=native ──
+        let bn = build_arm(hexa, src, bin_n, "HEXA_BACKEND=native ", aprime)
+        if bn != "ok" {
+            println("    native BUILD-FAIL: " + bn)
+            total_fail = total_fail + 1
+            w = w + 1
+            continue
+        }
+
+        // ── correctness gate (g5): byte-diff outputs ──
+        let out_c = run_capture(bin_c)
+        let out_n = run_capture(bin_n)
+        let mut ok = "MATCH"
+        if out_c != out_n {
+            ok = "MISMATCH"
+            total_fail = total_fail + 1
+            println("    OUTPUT MISMATCH — clangO2=[" + out_c + "] native=[" + out_n + "]")
+        }
+
+        // ── timing ──
+        let tc = time_binary(bin_c, warmup, iters)
+        let tn = time_binary(bin_n, warmup, iters)
+        let c_min = tc[0]
+        let c_med = tc[1]
+        let n_min = tn[0]
+        let n_med = tn[1]
+        // Δ% by min (lower noise) — positive = native faster.
+        let mut delta_x1000 = 0
+        if c_min > 0 { delta_x1000 = ((c_min - n_min) * 1000) / c_min }
+        let row = "{\"workload\": \"" + jsonl_escape(stem) +
+                  "\", \"src\": \"" + jsonl_escape(src) +
+                  "\", \"tag\": \"" + jsonl_escape(tag) +
+                  "\", \"iters\": " + to_string(iters) +
+                  ", \"warmup\": " + to_string(warmup) +
+                  ", \"correctness\": \"" + ok + "\"" +
+                  ", \"native_min_ms\": " + to_string(n_min) +
+                  ", \"native_median_ms\": " + to_string(n_med) +
+                  ", \"clangO2_min_ms\": " + to_string(c_min) +
+                  ", \"clangO2_median_ms\": " + to_string(c_med) +
+                  ", \"delta_permille_min\": " + to_string(delta_x1000) +
+                  "}"
+        println("    correctness=" + ok +
+                " native(min/med)=" + to_string(n_min) + "/" + to_string(n_med) + "ms" +
+                " clangO2(min/med)=" + to_string(c_min) + "/" + to_string(c_med) + "ms" +
+                " Δ‰(min)=" + to_string(delta_x1000))
+        append_jsonl(out, row)
+        println("    " + row)
+        println("")
+        w = w + 1
+    }
+
+    if total_fail > 0 {
+        println("unshadow_bench: " + to_string(total_fail) + " failure(s) (build or mismatch)")
+        exit(1)
+    }
+    println("unshadow_bench: OK — " + to_string(len(workloads)) + " workload(s) measured")
+    exit(0)
+}
