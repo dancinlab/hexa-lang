@@ -10,18 +10,29 @@ DECODER M5 STEP_RATE_LOG 실측 기준 baseline:
 |---|---|---|
 | step-rate | 0.28 step/s (1.99 s/step) | 너무 느림 |
 | production 환산 | 77~122 GPU-days | 사실상 1회 학습 불가 |
-| GPU util | 0~8% | compute 아님 — sync/메모리 병목 |
 | 판정 | 🔴 INFEASIBLE | scale에서 hexa-native 학습 막힘 |
 
-## 근본 원인 (2축)
+## M1~M5 1차 사이클 결과 (2026-05-30, 모두 🟠 — static/분석, 라이브 미측정)
 
-1. **RSS churn** — step마다 200~325MB 할당/해제. AdamW 별개 source, CUDA/runtime-side로 확정 (anima trainer 결백).
-2. **작은 행렬 GPU↔CPU sync** — d=64에선 cuBLAS 계산보다 sync 왕복 오버헤드가 큼.
+| PR | 닫은 것 | 메커니즘 |
+|---|---|---|
+| #2122 | M2 + M3 (동일 root) | gemv d-threshold 게이팅 — d<128이면 cuBLAS 우회 on-device 커널. #2017/#2018 회귀(d=64서 sync>cuBLAS) 직접 차단. env `HEXA_GEMV_CUBLAS_MIN_DIM` |
+| #2123 | M1 churn 보너스 FIX | 시작 시 `mallopt(M_MMAP/M_TRIM_THRESHOLD,256KiB)` → 큰 farr가 mmap-backed → `free()` 즉시 munmap. env `HEXA_FARR_TRIM` |
+| #2127 | M4 instrument + roofline | `hexa_rss_trace_on_free`(env `HEXA_RSS_TRACE`) + roofline 분석 |
+| #2124 | M5 측정대 | `tool/train_floor_bench.hexa` A/B step-rate 하니스 (`--plan`/`--ledger`) |
 
-## 적용했으나 역효과난 fix
+## 🔑 M4 핵심 발견 — 진짜 바닥은 fp64 정밀도 (sync/메모리 아님)
 
-hexa-lang #2017(AdamW in-place) + #2018(cuBLAS gemv) 적용 후 → 0.156~0.18 step/s
-(baseline보다 ~3× 느려짐). 원인 = "d=64에선 GPU sync 비용 > cuBLAS 절약" — hexa-lang #1354 예측 적중.
+roofline 분석 (d768·12L fp64: P=104.2M, FLOPs/step=3.03e12, AI=207 FLOP/byte):
+
+| GPU | fp64 floor | 관측 대비 | 결론 |
+|---|---|---|---|
+| A100 | 0.312 s/step (3.21 step/s) | 관측 1.99s = floor의 15.7% (6.4× 헤드룸) | occupancy 회수 여지 |
+| RTX 5070 | 6.58 s/step (0.15 step/s) | post-#2017/#2018(0.156~0.18) **정확 일치** | 이미 fp64 천장 |
+
+- 트레이너는 **COMPUTE-bound (fp64)** — memory/sync-bound 아님 (mem-only floor가 관측보다 100~300× 낮음).
+- 최대 lever = **fp64 → fp32/bf16(TensorCore)** — A100 32× · 5070 44× 천장 인하.
+- M2/M3(sync)·M1/M3(churn) fix는 fp64 천장 *내부* occupancy(16%→100%) 회수까지만. 천장 자체는 정밀도가 박는다.
 
 ## 경계 (변경 금지)
 
@@ -31,7 +42,14 @@ hexa-lang #2017(AdamW in-place) + #2018(cuBLAS gemv) 적용 후 → 0.156~0.18 s
 ## milestones
 
 - [x] M1 RSS churn 200~325MB/step source localize — AdamW 外 CUDA/runtime-side 지점 특정
-- [ ] M2 작은 행렬(d=64) GPU↔CPU sync 오버헤드 제거 — fused/batched dispatch or d-threshold 게이팅
-- [ ] M3 #2017/#2018 회귀 분석 — 왜 3× 느려졌나, cuBLAS gemv를 d-threshold로 조건부 활성
-- [ ] M4 step-rate floor 측정 — roofline 기준 물리 천장 산출 (끝 = 100% 아닌 물리 한계)
-- [ ] M5 PyTorch 대비 throughput parity 측정대 구축 — A/B 측정 + verdict 영속
+- [x] M2 작은 행렬(d=64) GPU↔CPU sync 오버헤드 제거 — fused/batched dispatch or d-threshold 게이팅
+- [x] M3 #2017/#2018 회귀 분석 — 왜 3× 느려졌나, cuBLAS gemv를 d-threshold로 조건부 활성
+- [x] M4 step-rate floor 측정 — roofline 기준 물리 천장 산출 (끝 = 100% 아닌 물리 한계)
+- [x] M5 PyTorch 대비 throughput parity 측정대 구축 — A/B 측정 + verdict 영속
+- [ ] M6 fp64 → fp32/bf16(TensorCore) 학습 경로 — M4가 지목한 진짜 천장 lever (A100 32×·5070 44× floor 인하). 추론 int4와 분리된 학습-mixed-precision 트랙
+- [ ] M7 라이브 측정으로 1차 사이클 🟠 → 🟢 승격 — `HEXA_FARR_TRIM=1`+`HEXA_RSS_TRACE=1`+`HEXA_GEMV_CUBLAS_MIN_DIM`로 ubu-2/GPU pod서 step/s·RSS Δ 실측 (`tool/train_floor_bench.hexa --ledger`)
+
+## deferred
+
+- M7 라이브 측정 = GPU pod 비용 + cross-repo anima 트레이너 의존 → 명시적 측정 go 필요 (1차 사이클은 전부 🟠 static/분석).
+- `hexa_farr_free` 본체 1줄 call-site patch = 다음 edge-runtime.c regen 시 적용 (B9 #2065로 본체가 gitignored, runtime.h 주석에 patch-spec 명시됨).
