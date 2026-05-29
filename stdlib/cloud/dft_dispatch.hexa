@@ -29,9 +29,16 @@
 // coordinate parser so you can eyeball the result — spending NOTHING. Only the
 // explicit `--go` flag rents a billing pod and dispatches the chain.
 //
-// DECK CONVENTION (<deck-dir>/): relax.in · ph.in · scf.in.head + scf.in.tail
-// (the generated CELL_PARAMETERS+ATOMIC_POSITIONS block is spliced BETWEEN the
-// two halves so K_POINTS etc. in the tail are preserved) · pseudo/.
+// DECK CONVENTION (<deck-dir>/) — BOTH layouts accepted (d4 one generic path):
+//   • relax : vc-relax.in (deck-gen native) OR relax.in (legacy)
+//   • ph    : ph.in
+//   • scf   : a WHOLE scf.in (deck-gen native — auto-split at the
+//             ATOMIC_POSITIONS block) OR explicit scf.in.head + scf.in.tail
+//             (legacy). The relaxed CELL_PARAMETERS+ATOMIC_POSITIONS block is
+//             spliced BETWEEN head and tail so K_POINTS etc. in the tail are
+//             preserved; the assembled deck is written to scf.in.gen so a
+//             whole-scf.in source template is never clobbered.
+//   • pseudo/
 
 use "stdlib/cloud/cloud"
 use "stdlib/cloud/vast"
@@ -305,6 +312,134 @@ pub fn dft_assemble_scf(head: str, coords: str, tail: str) -> str {
     return out
 }
 
+// ── deck-layout adaptation — accept the deck-gen NATIVE layout ────────
+//
+// The deck-gen (stdlib/deck/rtsc.hexa) emits {vc-relax.in, scf.in (whole),
+// ph.in} — NOT the {relax.in, scf.in.head, scf.in.tail} convention dft_run was
+// born with. Rather than force decks to re-shape (blocked by the deck-guard),
+// the DISPATCHER adapts: it accepts `vc-relax.in` as the relax input and
+// AUTO-SPLITS a whole `scf.in` into head/tail at the ATOMIC_POSITIONS block so
+// the relaxed coords slot between them (reusing dft_assemble_scf). Explicit
+// scf.in.head/.tail still win when present (back-compat).
+
+// _dft_is_coord_row — a real ATOMIC_POSITIONS coordinate row: element-led AND
+// the 3 trailing tokens are numeric ("S 0.0 0.0 0.0"). This is STRICTER than
+// _dft_is_pos_line (element-led only) so a following CARD keyword that also
+// starts with a capital letter — `K_POINTS automatic`, `CELL_PARAMETERS …`,
+// `OCCUPATIONS` — is NOT mistaken for a coordinate row and correctly begins the
+// tail. (The earlier letter-only test swallowed K_POINTS into the dropped block.)
+fn _dft_is_coord_row(line: str) -> int {
+    let toks = _dft_tokens(line.trim())
+    if len(toks) < 4 {
+        return 0
+    }
+    if _dft_is_pos_line(toks[0]) == 0 {
+        return 0
+    }
+    let base = len(toks) - 3
+    if _dft_is_num(toks[base]) == 0 {
+        return 0
+    }
+    if _dft_is_num(toks[base + 1]) == 0 {
+        return 0
+    }
+    if _dft_is_num(toks[base + 2]) == 0 {
+        return 0
+    }
+    return 1
+}
+
+// DftScfSplit — a whole scf.in cut into the part BEFORE ATOMIC_POSITIONS (head)
+// and the part resuming at the first card AFTER the positions block (tail).
+// ok==0 when no ATOMIC_POSITIONS line was found (caller falls back / FATALs).
+struct DftScfSplit {
+    ok:   int,
+    head: str,
+    tail: str
+}
+
+// dft_scf_split — split a whole scf.in at its ATOMIC_POSITIONS card. head = all
+// lines before the `ATOMIC_POSITIONS` line (control namelists + ATOMIC_SPECIES
+// + any pre-positions comment). The positions block (the ATOMIC_POSITIONS line
+// itself + the element-led coordinate rows + blank lines) is DROPPED — the
+// relaxed coords replace it. tail = from the first non-blank line that is NOT a
+// coordinate row (the next card, e.g. K_POINTS / CELL_PARAMETERS) onward, so
+// K_POINTS etc. are preserved. Mirrors the head/tail contract of dft_assemble_scf.
+pub fn dft_scf_split(whole: str) -> DftScfSplit {
+    let lines = whole.split("\n")
+    let n = len(lines)
+    let mut pos_at = -1
+    let mut i = 0
+    while i < n {
+        if lines[i].contains("ATOMIC_POSITIONS") {
+            pos_at = i
+            i = n
+        } else {
+            i = i + 1
+        }
+    }
+    if pos_at < 0 {
+        return DftScfSplit { ok: 0, head: "", tail: "" }
+    }
+    // head — everything strictly before the ATOMIC_POSITIONS line, NL-terminated.
+    let mut head = ""
+    let mut h = 0
+    while h < pos_at {
+        head = head + lines[h] + "\n"
+        h = h + 1
+    }
+    // skip the positions block: blank lines + element-led coordinate rows that
+    // follow the ATOMIC_POSITIONS line. Stop at the first card line (a non-blank
+    // line that is not a coordinate row) — that index begins the tail.
+    let mut ts = n
+    let mut s = pos_at + 1
+    while s < n {
+        let t = lines[s].trim()
+        if len(t) == 0 || _dft_is_coord_row(t) == 1 {
+            s = s + 1
+        } else {
+            ts = s
+            s = n
+        }
+    }
+    let mut tail = ""
+    let mut q = ts
+    while q < n {
+        tail = tail + lines[q] + "\n"
+        q = q + 1
+    }
+    return DftScfSplit { ok: 1, head: head, tail: tail }
+}
+
+// dft_relax_input_name — the relax input filename a deck provides: prefer the
+// deck-gen native `vc-relax.in`, fall back to the legacy `relax.in`. Returns ""
+// when neither is present.
+pub fn dft_relax_input_name(deck: str) -> str {
+    let has_vc = exec("test -f '" + deck + "/vc-relax.in' && printf yes || printf no") == "yes"
+    if has_vc { return "vc-relax.in" }
+    let has_relax = exec("test -f '" + deck + "/relax.in' && printf yes || printf no") == "yes"
+    if has_relax { return "relax.in" }
+    return ""
+}
+
+// dft_scf_head_tail — resolve a deck's scf head/tail. Explicit scf.in.head +
+// scf.in.tail WIN (back-compat). Else AUTO-SPLIT a whole scf.in at its
+// ATOMIC_POSITIONS block. ok==0 when neither path yields a usable head/tail.
+pub fn dft_scf_head_tail(deck: str) -> DftScfSplit {
+    let has_head = exec("test -f '" + deck + "/scf.in.head' && printf yes || printf no") == "yes"
+    let has_tail = exec("test -f '" + deck + "/scf.in.tail' && printf yes || printf no") == "yes"
+    if has_head && has_tail {
+        return DftScfSplit { ok: 1,
+            head: read_file(deck + "/scf.in.head"),
+            tail: read_file(deck + "/scf.in.tail") }
+    }
+    let has_scf = exec("test -f '" + deck + "/scf.in' && printf yes || printf no") == "yes"
+    if has_scf {
+        return dft_scf_split(read_file(deck + "/scf.in"))
+    }
+    return DftScfSplit { ok: 0, head: "", tail: "" }
+}
+
 // ── ④ stability verdict (guard) ──────────────────────────────────────
 
 // dft_phonon_stable — scan a ph.x stdout for phonon frequencies (the
@@ -472,10 +607,11 @@ fn _dft_mpi_env() -> str {
 }
 
 // _dft_relax_cmd — the guarded relax invocation (setsid death-immune, walltime
-// cap, phys-core -np, root MPI). Output → relax.out.
-fn _dft_relax_cmd(np: int, walltime_h: int) -> str {
+// cap, phys-core -np, root MPI). Output → relax.out. `relax_name` is the deck's
+// relax input filename (vc-relax.in deck-gen native, or relax.in legacy).
+fn _dft_relax_cmd(np: int, walltime_h: int, relax_name: str) -> str {
     return "cd /root/deck && " + _dft_mpi_env() + " && setsid timeout " + to_string(walltime_h)
-        + "h mpirun -np " + to_string(np) + " --allow-run-as-root pw.x -in relax.in > relax.out 2>&1"
+        + "h mpirun -np " + to_string(np) + " --allow-run-as-root pw.x -in " + relax_name + " > relax.out 2>&1"
 }
 
 // _dft_scf_cmd — scf on the generated geometry.
@@ -540,12 +676,14 @@ fn _dft_write_stamp(deck: str, method: str) -> bool {
 // structural namelist sanity (balanced &…/ blocks + required cards present).
 // Returns "" on PASS, else a non-empty error string.
 fn _dft_dryrun(deck: str) -> str {
+    let relax_name = dft_relax_input_name(deck)
+    if len(relax_name) == 0 { return "no relax input (vc-relax.in / relax.in) — empty deck" }
     let have_pw = exec("command -v pw.x >/dev/null 2>&1 && printf yes || printf no") == "yes"
     if have_pw {
         // electron_maxstep=1 · 1 SCF iter — exercises the parser + setup only.
         let cmd = "cd '" + deck + "' && rm -f .dryrun.out && "
             + "sed 's/electron_maxstep[ ]*=[ ]*[0-9]*/electron_maxstep = 1/; "
-            + "s/nstep[ ]*=[ ]*[0-9]*/nstep = 1/' relax.in > .dryrun.in 2>/dev/null && "
+            + "s/nstep[ ]*=[ ]*[0-9]*/nstep = 1/' '" + relax_name + "' > .dryrun.in 2>/dev/null && "
             + "timeout 300 pw.x -in .dryrun.in > .dryrun.out 2>&1; "
             + "if grep -qiE 'Error in routine|%%%%%%%|stopping' .dryrun.out; then "
             + "printf 'QE_ERROR'; else printf 'OK'; fi"
@@ -555,10 +693,10 @@ fn _dft_dryrun(deck: str) -> str {
         return "QE dry-run reported a deck error:\n" + tail
     }
     // Fallback: structural sanity — &… / block balance + required cards.
-    let relax = read_file(deck + "/relax.in")
-    if len(relax) == 0 { return "relax.in empty or unreadable" }
-    let opens = exec("grep -cE '^[ ]*&[A-Za-z]' '" + deck + "/relax.in'")
-    let closes = exec("grep -cE '^[ ]*/[ ]*$' '" + deck + "/relax.in'")
+    let relax = read_file(deck + "/" + relax_name)
+    if len(relax) == 0 { return relax_name + " empty or unreadable" }
+    let opens = exec("grep -cE '^[ ]*&[A-Za-z]' '" + deck + "/" + relax_name + "'")
+    let closes = exec("grep -cE '^[ ]*/[ ]*$' '" + deck + "/" + relax_name + "'")
     if opens != closes {
         return "namelist block imbalance — " + opens + " '&NAME' opens vs "
             + closes + " '/' closes (a malformed deck would crash pw.x)"
@@ -602,7 +740,7 @@ pub fn dft_run(av: [str], start: int) -> int {
     let deck = _dft_first_positional(av, start)
     if len(deck) == 0 {
         println("[dft-run] usage: hexa cloud dft-run <deck-dir> [--validate] [--go] [--force] [--identity PATH] [--query Q] [--walltime-h N] [--image IMG] [--disk GiB] [--owner TAG]")
-        println("           <deck-dir> must contain: relax.in · ph.in · scf.in.head · scf.in.tail · pseudo/")
+        println("           <deck-dir> must contain: (vc-relax.in | relax.in) · ph.in · (scf.in | scf.in.head + scf.in.tail) · pseudo/")
         println("           default = PREVIEW (validate + plan + parse a local relax.out if present, $0).")
         println("           --validate : run the FREE d16 1-iter dry-run + write a `.validated` stamp (required before --go).")
         println("           --go       : rent a billing pod + dispatch (REFUSED unless a fresh `.validated` stamp exists, or --force).")
@@ -619,21 +757,31 @@ pub fn dft_run(av: [str], start: int) -> int {
     let disk = _dft_atoi(_dft_flag_val(av, start, "--disk", "60"))
     let owner = _dft_flag_val(av, start, "--owner", "(hexa-cloud dft-run)")
 
-    // deck validation
-    let has_relax = exec("test -f '" + deck + "/relax.in' && printf yes || printf no") == "yes"
+    // deck validation — accept BOTH layouts (d4 single generic path):
+    //   • relax  : vc-relax.in (deck-gen native) OR relax.in (legacy)
+    //   • scf    : a WHOLE scf.in (auto-split at ATOMIC_POSITIONS) OR explicit
+    //              scf.in.head + scf.in.tail (legacy)
+    let relax_name = dft_relax_input_name(deck)
+    let has_relax = len(relax_name) > 0
     let has_ph = exec("test -f '" + deck + "/ph.in' && printf yes || printf no") == "yes"
-    let has_head = exec("test -f '" + deck + "/scf.in.head' && printf yes || printf no") == "yes"
-    let has_tail = exec("test -f '" + deck + "/scf.in.tail' && printf yes || printf no") == "yes"
-    let m_relax = if has_relax { "found" } else { "MISSING (required)" }
+    let scf = dft_scf_head_tail(deck)
+    let has_scf = scf.ok == 1
+    let m_relax = if has_relax { "found (" + relax_name + ")" } else { "MISSING (vc-relax.in / relax.in required)" }
     let m_ph = if has_ph { "found" } else { "MISSING (required)" }
-    let m_head = if has_head { "found" } else { "MISSING (required)" }
-    let m_tail = if has_tail { "found" } else { "MISSING (required)" }
+    let m_scf = if has_scf {
+        if exec("test -f '" + deck + "/scf.in.head' && printf yes || printf no") == "yes" {
+            "found (scf.in.head + scf.in.tail)"
+        } else {
+            "found (whole scf.in — auto-split at ATOMIC_POSITIONS)"
+        }
+    } else {
+        "MISSING (scf.in whole, or scf.in.head + scf.in.tail, required)"
+    }
     println("[dft-run] deck: " + deck)
-    println("  relax.in     : " + m_relax)
+    println("  relax        : " + m_relax)
     println("  ph.in        : " + m_ph)
-    println("  scf.in.head  : " + m_head)
-    println("  scf.in.tail  : " + m_tail)
-    if !has_relax || !has_ph || !has_head || !has_tail {
+    println("  scf          : " + m_scf)
+    if !has_relax || !has_ph || !has_scf {
         println("[dft-run] deck incomplete — see DECK CONVENTION in dft_dispatch.hexa. Aborting.")
         return 2
     }
@@ -692,7 +840,7 @@ pub fn dft_run(av: [str], start: int) -> int {
     if !fresh && force == 1 {
         println("[dft-run] ⚠ --force: renting an UNVALIDATED deck (no fresh .validated stamp) — leak risk on the user.")
     }
-    return _dft_go(deck, image, disk, owner, query, identity, walltime_h)
+    return _dft_go(deck, image, disk, owner, query, identity, walltime_h, relax_name)
 }
 
 // _dft_go — the $-incurring path. Rents → resolves the direct endpoint →
@@ -701,7 +849,7 @@ pub fn dft_run(av: [str], start: int) -> int {
 // stability verdict → tears the pod down. Each remote stage is a single
 // guarded cloud_exec (timeout-capped), so an outage surfaces as a stage error
 // rather than a silent hang.
-fn _dft_go(deck: str, image: str, disk: int, owner: str, query: str, identity: str, walltime_h: int) -> int {
+fn _dft_go(deck: str, image: str, disk: int, owner: str, query: str, identity: str, walltime_h: int, relax_name: str) -> int {
     println("[dft-run] ① RENT — searching verified offers...")
     let offer = vast_search_offers(query, 1)
     if offer.ok == 0 {
@@ -756,9 +904,9 @@ fn _dft_go(deck: str, image: str, disk: int, owner: str, query: str, identity: s
     let np = if np_raw > 0 { np_raw } else { 8 }
     println("[dft-run] ③ -np=" + to_string(np) + " (phys cores)")
 
-    // ③ relax
-    println("[dft-run] ③ relax (timeout " + to_string(walltime_h) + "h)...")
-    let relax = cloud_exec_opts(host, ssh_opts, _dft_relax_cmd(np, walltime_h))
+    // ③ relax — run on the deck's relax input (vc-relax.in native / relax.in legacy)
+    println("[dft-run] ③ relax (" + relax_name + ", timeout " + to_string(walltime_h) + "h)...")
+    let relax = cloud_exec_opts(host, ssh_opts, _dft_relax_cmd(np, walltime_h, relax_name))
     if relax.ok == 0 {
         println("[dft-run] relax stage: " + relax.message)
         return _dft_teardown(inst.instance_id, 1)
@@ -770,10 +918,18 @@ fn _dft_go(deck: str, image: str, disk: int, owner: str, query: str, identity: s
         println("[dft-run] ③ FATAL: relax produced no 'Begin final coordinates' — not dispatching scf on stale geometry.")
         return _dft_teardown(inst.instance_id, 1)
     }
-    // assemble scf.in = head + parsed coords + tail, upload it
-    let scf_in = dft_assemble_scf(read_file(deck + "/scf.in.head"), coords, read_file(deck + "/scf.in.tail"))
-    write_file(deck + "/scf.in", scf_in)
-    let _us = cloud_copy_to_opts(host, ssh_opts, deck + "/scf.in", "/root/deck/scf.in")
+    // assemble scf.in = head + parsed coords + tail. The head/tail come from
+    // explicit scf.in.head/.tail OR an auto-split of a whole scf.in — resolved
+    // BEFORE we write, so a whole-scf.in deck's source template is not clobbered
+    // (the assembled deck is written to scf.in.gen; the pod's scf.in is the gen).
+    let split = dft_scf_head_tail(deck)
+    if split.ok == 0 {
+        println("[dft-run] ③ FATAL: could not resolve scf head/tail (no scf.in[.head/.tail]).")
+        return _dft_teardown(inst.instance_id, 1)
+    }
+    let scf_in = dft_assemble_scf(split.head, coords, split.tail)
+    write_file(deck + "/scf.in.gen", scf_in)
+    let _us = cloud_copy_to_opts(host, ssh_opts, deck + "/scf.in.gen", "/root/deck/scf.in")
 
     // ③ scf
     println("[dft-run] ③ scf...")
