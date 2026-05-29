@@ -133,3 +133,34 @@ flame(`stdlib/flame/PERF.md`) · forge(`self/forge/PLAN.md`) 는 이 GPU-ROOFLIN
 - **forge lane** = forge GPU builtin 커널 단위 achieved/peak %. 분모 = GPU-ROOFLINE §peak.
 
 각 lane 은 doc 상단에 "GPU-ROOFLINE 잣대 상속" 1줄 명시 — 잣대 SSOT 는 이 파일 1개.
+
+---
+
+## §flame-lane — 학습 step 커널 roofline % 수치표 (SSOT)
+
+> 이전 출처 = `stdlib/flame/PERF.md §GPU-ROOFLINE lane`(원위치엔 pointer + 분석 서술 보존).
+> flame 학습 step 의 dominant 커널(GEMM/FFN/linear)을 절대 ms 가 아니라 **그 GPU 의 물리
+> 천장 대비 %** 로 롤업(roofline = min(compute-peak, BW×AI)). 디바이스 명시(H100/H200 분모는
+> 그 디바이스 peak; ubu-2 RTX 5070 분모는 신규 측정대 = §peak).
+
+| 학습 커널 (출처) | 디바이스 | 측정 | roofline 위치 | roofline % |
+|---|---|---|---|---|
+| RFC 060-C linear fwd+bwd (5 shape) | H100 | BW util 14.1–45.2% peak | memory-bound (낮은 AI) | **14–45% of HBM-roof** |
+| RFC 060-C FFN matmul+SiLU+matmul (6 shape) | H200 (4.8 TB/s) | BW util 13.9–35.4% peak | memory-bound | **14–35% of HBM-roof** |
+| cuBLAS Dgemm (RFC 040 substrate) | — | byte-eq 4.44e-15 vs CPU | reference (정확성 기준선) | roofline-N/A (정확성 게이트) |
+| RFC 060-C FP64 mega-kernel | — | cuBLAS 대비 1.8–4.4× **느림** | compute-bound (FP64 TC) | < cuBLAS = HARD_WALL §3.9a |
+
+---
+
+## §forge-lane — forge 커널 단위 achieved/peak % 수치표 (SSOT)
+
+> 이전 출처 = `self/forge/PLAN.md §GPU-ROOFLINE lane`(원위치엔 pointer + 분석 서술 보존).
+> forge GPU builtin 커널을 절대 ms 가 아니라 **그 GPU 의 물리 천장(roofline) 대비 %** 로 기록.
+> 디바이스 명시(기존 측정은 A100/H100 TC peak 분모; ubu-2 RTX 5070 은 신규 분모 = §peak).
+
+| forge 커널 (출처) | 디바이스 peak 분모 | achieved / peak | roofline 위치 |
+|---|---|---|---|
+| hand-WMMA Dgemm (Agent #14 C Phase 3) | FP64 TC peak | **41–43%** (cuBLAS 77–87%) | compute-bound (FP64 TC), HARD_WALL §3.9a |
+| cuBLAS Dgemm (RFC 040 substrate) | FP64 TC peak | 77–87% (reference) | compute-bound, byte-eq 4.44e-15 정확성 기준선 |
+| DSM-fused FFN (Agent #13 B Phase 2) | FP64 TC peak | hand-kernel < cuBLAS (200–300× 느림) | compute-bound, hand-kernel ceiling |
+| nn_ffn_bf16_fwd (RFC 050 BF16 inherit) | BF16/FP16 TC peak | precision pivot lane (RFC 049) | compute-bound, BF16 GemmEx 상속 |

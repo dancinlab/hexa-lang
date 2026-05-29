@@ -1,5 +1,24 @@
 # GPU-ROOFLINE — append-only step log
 
+## 2026-05-30 — 단일 SSOT 통합 + 7 open milestone 생성 (gpu-roofline-consolidate)
+
+### 문서 통합 (수치 SSOT 단일화)
+- flame/forge 의 roofline % 수치표를 `domains/GPU-ROOFLINE.bench.md` 단일 SSOT 로 이전:
+  - §flame-lane = `stdlib/flame/PERF.md §GPU-ROOFLINE lane` 의 학습 커널 표(H100/H200 BW-util · FP64 mega-kernel HARD_WALL).
+  - §forge-lane = `self/forge/PLAN.md §GPU-ROOFLINE lane` 의 forge 커널 표(hand-WMMA 41–43% · cuBLAS 77–87% · DSM-FFN · BF16 inherit).
+- 원위치(PERF.md/PLAN.md)는 "측정 SSOT = domains/GPU-ROOFLINE.bench.md (수치 중복 제거)" 1줄 pointer 로 대체.
+  분석/scope/HARD_WALL 서술은 원위치 보존(수치표만 이전 — 의미 손실 0).
+- `domains/GPU-ROOFLINE.md` 에 GPU·flame·forge 3-lane 통합 요약 섹션 추가(각 lane 1줄 현황 + .bench.md 링크).
+
+### 7 open milestone 생성 (각 falsifier+측정법 inline)
+- GPU 2(#1 hexa-emit 커널 직접 roofline · #2 PTX-diff 정적예측) · flame 2(#3 step 전체 롤업 · #4 attention lane) ·
+  forge 2(#5 WMMA variable-shape · #6 FP64 TC 41–43% origin 🔴) · 공통 1(#7 멀티디바이스 분모 A100/H100).
+- 기존 deferred 2건(hexa-emit 커널 · PTX-diff)은 #1·#2 로 승격(중복 제거).
+- 측정 fire 안 함 — open 으로 두고 후속 loop 위임. codegen 무변경. vast RTSC 학습 pod 미접촉.
+
+### 안전
+- 격리 worktree `gpu-roofline-consolidate` ← origin/main. 공유 트리 미접촉. 명시 5경로만 stage.
+
 ## 2026-05-30 — 도메인 신설 + achieved-peak 분모 박제
 
 ### 측정대 신설 (UNSHADOW roofline 측정대와 동형)
