@@ -292,6 +292,54 @@ attn-core(QKt+PV) median 0.3743 ms  8606.64 GFLOPS  AI=28.444 F/B
 | DSM-fused FFN (Agent #13 B Phase 2) | FP64 TC peak | hand-kernel < cuBLAS (200–300× 느림) | compute-bound, hand-kernel ceiling |
 | nn_ffn_bf16_fwd (RFC 050 BF16 inherit) | BF16/FP16 TC peak | precision pivot lane (RFC 049) | compute-bound, BF16 GemmEx 상속 |
 
+### §wmma-shape-sweep — hexa-emit WMMA HGEMM shape 별 roofline % [MS#5 🟢]
+
+> **falsifier/측정법**(MS#5): hexa-emit WMMA 커널을 shape sweep(M=N=K ∈ {128,256,512,1024})
+> 별로 cuBLAS 동shape 와 나란히 측정 → ratio 곡선으로 0.767 이 **shape 의존인지** 판정 ·
+> byte-eq 게이트(hexa WMMA 출력 vs CPU FP64 ref, max|Δ|). **2026-05-30 ubu-2 RTX 5070 $0 fire**
+> (`/tmp/ms5_host.cu` · repo root 밖 · pure-ASCII · cuBLAS GemmEx f16→f32 tensor-op).
+> median of 200(20 warmup, `cudaEventRecord` per-launch). 분모 = §peak 의 cuBLAS 동shape(천장).
+
+**커널**: `wmma_256x256_grid` = **compiler-emitted**(PR #214, 256-locked) · 128/512/1024 =
+hand-emit shape-port(N4 방식, 동일 WMMA microcode, address-arith 상수만 scale — variable-shape
+**compiler** emission 은 MS#1 codegen 의존, 미구현).
+
+| M=N=K | hexa TFLOPS | cuBLAS TFLOPS | **forge/cuBLAS ratio** | binding-roof | byte-eq (max\|Δ\| vs CPU FP64) |
+|---|---|---|---|---|---|
+| **128**  | 0.771  | 0.776  | **0.994** | launch-bound (둘 다 tiny) | **0** |
+| **256**  | 3.507  | 4.462  | **0.786** | TC/launch transition | **0** |
+| **512**  | 10.331 | 23.046 | **0.448** | compute (SMEM-tile 부재 → HBM-throttled) | **0** |
+| **1024** | 15.556 | 53.261 | **0.292** | compute (K-loop L2-thrash) | **0** (corner 64×64 ref) |
+
+```
+# verbatim — /tmp/ms5_host (ubu-2 RTX 5070, 2026-05-30)
+Device: NVIDIA GeForce RTX 5070   CUDA driver=13000 runtime=12000
+[S=128]  cuBLAS median=0.005408 ms TFLOPS=0.7756 | hexa median=0.005440 ms TFLOPS=0.7710 | ratio=0.9941 | hexa-vs-CPUref max|d|=0 (corner 128x128)
+[S=256]  cuBLAS median=0.007520 ms TFLOPS=4.4620 | hexa median=0.009568 ms TFLOPS=3.5069 | ratio=0.7860 | hexa-vs-CPUref max|d|=0 (corner 256x256)
+[S=512]  cuBLAS median=0.011648 ms TFLOPS=23.0456 | hexa median=0.025984 ms TFLOPS=10.3308 | ratio=0.4483 | hexa-vs-CPUref max|d|=0 (corner 512x512)
+[S=1024] cuBLAS median=0.040320 ms TFLOPS=53.2610 | hexa median=0.138048 ms TFLOPS=15.5561 | ratio=0.2921 | hexa-vs-CPUref max|d|=0 (corner 64x64)
+```
+
+> **finding (🟢 measured · byte-eq 0)**: ratio **0.767 은 강하게 shape 의존** — M 증가 시
+> **0.994 → 0.786 → 0.448 → 0.292** 단조 강등. M=128 = cuBLAS 와 **parity**(0.994; 둘 다
+> launch-bound tiny problem), M↑ 하며 SMEM-operand-tile 부재 naive K-loop 이 compute/BW-bound
+> 영역에서 밀림. **N4 곡선(0.767/0.417/0.287)과 run-to-run drift 이내 일치 + N4 가 빠뜨린
+> byte-eq 게이트 추가**(max|Δ|=0 全 shape).
+>
+> **g5 정직 경계**:
+> - **byte-eq** = hexa WMMA 출력 vs CPU FP64 reference `max|Δ|=0` 全 shape(sawtooth int 입력,
+>   f16-mul-f32-acc lossless) — 정확성 게이트 PASS. cuBLAS 는 reference(정확성 자명).
+> - **shape-lock honest**: M=256 만 compiler-emitted(`nvptx_target.hexa` 256-locked). 128/512/1024
+>   는 동일 microcode 의 hand-emit address-port — variable-shape **compiler** emission 은 MS#1
+>   (multi-session codegen) 의존, 이 batch scope 밖. ratio 곡선 자체는 microcode-동일이라 valid.
+> - **"cuBLAS 못 이김 ≠ 실패"**: M≥512 의 강등은 cuBLAS 비효율이 아니라 hexa kernel 의 SMEM-operand
+>   tiling 부재(§forge-lane MS#6 CLOSED-NEGATIVE 와 동일 origin). cuBLAS 는 M 증가 시 SM/타일링으로
+>   선형 scale, 단일-buffered hexa 는 못 함 → ratio 강등은 **알고리즘 천장**(끌어올림 = CUTLASS-grade,
+>   §0.1 3–6주 effort, batch 밖).
+> - **M=128 의 0.994 의미**: 둘 다 sub-microsecond launch-bound 라 ratio≈1 — 이 영역에선 SMEM-tile
+>   부재가 binding 이 아님(tile 재사용 기회 자체가 적음). 천장 격차는 M 이 커져 compute-bound 로
+>   진입할 때 비로소 벌어짐 — **곡선이 SMEM-tile-부재 가설을 shape-축에서 직접 입증**.
+
 ### §forge-lane — FP64 TC 41–43% 천장 origin 분석 [MS#6 🔴 CLOSED-NEGATIVE]
 
 > **falsifier/측정법**(MS#6): operand SMEM tiling 부재 = §3.9a HARD_WALL 가설 검증/반증 ·

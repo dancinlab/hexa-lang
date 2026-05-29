@@ -1,0 +1,6 @@
+Device: NVIDIA GeForce RTX 5070
+CUDA driver=13000 runtime=12000
+[S=128] cuBLAS median=0.005408 ms TFLOPS=0.7756 | hexa median=0.005440 ms TFLOPS=0.7710 | ratio=0.9941 | hexa-vs-CPUref max|d|=0 (corner 128x128)
+[S=256] cuBLAS median=0.007520 ms TFLOPS=4.4620 | hexa median=0.009568 ms TFLOPS=3.5069 | ratio=0.7860 | hexa-vs-CPUref max|d|=0 (corner 256x256)
+[S=512] cuBLAS median=0.011648 ms TFLOPS=23.0456 | hexa median=0.025984 ms TFLOPS=10.3308 | ratio=0.4483 | hexa-vs-CPUref max|d|=0 (corner 512x512)
+[S=1024] cuBLAS median=0.040320 ms TFLOPS=53.2610 | hexa median=0.138048 ms TFLOPS=15.5561 | ratio=0.2921 | hexa-vs-CPUref max|d|=0 (corner 64x64)
