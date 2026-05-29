@@ -1,0 +1,88 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+//
+// stdlib/cloud/fill_plan_test.hexa — CONCURRENT-FILL 발사 플랜 생성기
+// (fill_plan.hexa, project.tape d_parallel_fire T1) 의 selftest.
+//
+// 단언:
+//   - 128-core pod + 9 decks(deck당 8 ranks) → 동시 job >1, Σ-np ≤ physcores,
+//     어떤 job 도 oversubscribe 안 함. script 가 background(&) + 전면 순차
+//     `wait` 루프 아님(rolling `wait -n`).
+//   - 작은 pod(8-core) + 1 deck → 동시 job 1 의 올바른(단일) 플랜.
+//   - 거대 단일 job(ranks > physcores) → slots=1, oversubscribed=1 로 표기.
+//
+// Run:   hexa run stdlib/cloud/fill_plan_test.hexa
+// PASS:  exits 0, prints "fill_plan_test PASS".
+use "stdlib/cloud/fill_plan"
+
+fn _check(case: str, got: int, want: int) {
+    if got != want {
+        println("  FAIL: " + case + " — got " + to_string(got) + " want " + to_string(want))
+        exit(1)
+    }
+    println("  ok: " + case)
+}
+
+fn _has(s: str, t: str) -> int {
+    if s.contains(t) {
+        return 1
+    }
+    return 0
+}
+
+fn _le(case: str, got: int, cap: int) {
+    if got > cap {
+        println("  FAIL: " + case + " — got " + to_string(got) + " > cap " + to_string(cap))
+        exit(1)
+    }
+    println("  ok: " + case + " (" + to_string(got) + " ≤ " + to_string(cap) + ")")
+}
+
+fn main() {
+    // ── case 1: 128-core, 9 decks, 8 ranks/deck → concurrent fill ──────
+    let p = dft_fill_plan(128, 9, 8, 12)
+    _check("128/9/8: slots = physcores/ranks = 16", p.slots, 16)
+    _check("128/9/8: concurrent = min(9,16) = 9", p.concurrent_jobs, 9)
+    // d_parallel_fire 핵심: 동시 job > 1 (순차 체인 아님)
+    if p.concurrent_jobs <= 1 {
+        println("  FAIL: 128/9/8 emitted a single-job (sequential) plan")
+        exit(1)
+    }
+    println("  ok: 128/9/8 concurrent_jobs > 1 (" + to_string(p.concurrent_jobs) + ")")
+    // Σ -np ≤ physcores
+    _le("128/9/8: Σ-np ≤ physcores", p.sum_np, p.physcores)
+    // 어떤 job 도 oversubscribe 안 함
+    _check("128/9/8: no oversubscribe", p.oversubscribed, 0)
+    // script 가 동시 발사 형태 — background & + rolling wait -n, OMP/MKL=1
+    _check("128/9/8: script backgrounds jobs (&)", _has(p.script, ") &\n"), 1)
+    _check("128/9/8: script uses rolling wait -n (not full sequential wait)", _has(p.script, "wait -n"), 1)
+    _check("128/9/8: OMP_NUM_THREADS=1", _has(p.script, "OMP_NUM_THREADS=1"), 1)
+    _check("128/9/8: MKL_NUM_THREADS=1", _has(p.script, "MKL_NUM_THREADS=1"), 1)
+    _check("128/9/8: per-job timeout cap", _has(p.script, "timeout \"${WALLTIME_H}h\""), 1)
+    _check("128/9/8: --allow-run-as-root -np per job", _has(p.script, "--allow-run-as-root -np"), 1)
+    _check("128/9/8: --bind-to none", _has(p.script, "--bind-to none"), 1)
+    // 순차 전면 루프 금지 — `for ...; do ...; wait; done` 한 줄 패턴 부재
+    _check("128/9/8: NOT a sequential per-deck full-wait loop", _has(p.script, "; wait; done"), 0)
+
+    // ── case 2: 작은 pod(8-core), 1 deck → 단일 올바른 플랜 ──────────────
+    let q = dft_fill_plan(8, 1, 8, 6)
+    _check("8/1/8: slots = 1", q.slots, 1)
+    _check("8/1/8: concurrent = 1", q.concurrent_jobs, 1)
+    _le("8/1/8: Σ-np ≤ physcores", q.sum_np, q.physcores)
+    _check("8/1/8: no oversubscribe", q.oversubscribed, 0)
+    _check("8/1/8: still emits a valid launch (background &)", _has(q.script, ") &\n"), 1)
+
+    // ── case 3: 거대 단일 job (ranks > physcores) → slots=1, over=1 ──────
+    let r = dft_fill_plan(8, 4, 16, 6)
+    _check("8/4/16: slots clamped to 1", r.slots, 1)
+    _check("8/4/16: concurrent = 1", r.concurrent_jobs, 1)
+    _check("8/4/16: oversubscribed flagged", r.oversubscribed, 1)
+
+    // ── case 4: d4 generic — 다른 (physcores, decks, ranks) 도 불변식 유지 ─
+    let t = dft_fill_plan(64, 20, 4, 10)
+    _check("64/20/4: slots = 16", t.slots, 16)
+    _check("64/20/4: concurrent = min(20,16) = 16", t.concurrent_jobs, 16)
+    _le("64/20/4: Σ-np ≤ physcores", t.sum_np, t.physcores)
+    _check("64/20/4: no oversubscribe", t.oversubscribed, 0)
+
+    println("fill_plan_test PASS")
+}
