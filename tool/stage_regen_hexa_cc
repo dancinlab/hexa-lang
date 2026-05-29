@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# ─────────────────────────────────────────────────────────────────────────
+# tool/stage_regen_hexa_cc — regenerate self/native/hexa_cc.c if absent.
+# SHARED by release.yml + nobaseline-gate.yml. No-op while the seed is
+# present (today); load-bearing post-PR2 once hexa_cc.c is git-removed.
+# Lifted from tool/final3_gate_dryrun section A (proven 3-platform green).
+#
+# Env contract (caller sets):
+#   CC          — C compiler (used by `hexa cc --regen` downstream)
+#   EDGE_ASSET  — edge tarball name for the platform
+#   GH_TOKEN    — for `gh release download`
+# ─────────────────────────────────────────────────────────────────────────
+set -euo pipefail
+: "${CC:?CC must be set}"
+: "${EDGE_ASSET:?EDGE_ASSET must be set}"
+
+if [ -f self/native/hexa_cc.c ]; then
+  echo "[stage_regen_hexa_cc] hexa_cc.c present — no-op"
+  exit 0
+fi
+
+echo "[stage_regen_hexa_cc] hexa_cc.c absent — edge-regen from $EDGE_ASSET"
+tmpd="$(mktemp -d)"
+gh release download edge --pattern "$EDGE_ASSET" --output "$tmpd/edge.tar.gz"
+tar -xzf "$tmpd/edge.tar.gz" -C "$tmpd"
+edge_dir="$tmpd/${EDGE_ASSET%.tar.gz}"
+"$edge_dir/hexa" cc --regen
+test -f self/native/hexa_cc.c
+echo "[stage_regen_hexa_cc] regenerated hexa_cc.c"

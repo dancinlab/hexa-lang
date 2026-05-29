@@ -34,8 +34,12 @@ permissions:
 
 env:
   CFLAGS_COMMON: "-O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs"
-  # The 18 warm-regen seeds + 2 root bootstrap seeds removed in the dry-run.
-  # hexa_cc.c is deliberately KEPT (compiler source, #includes runtime.h only).
+  # ALL 23 seeds — the 18 warm-regen seeds + 2 root bootstrap seeds + the 3
+  # extra graduation seeds (hexa_cc.c, forge_tier_v1.c, the classd test
+  # harness). The gate TEMP-removes ALL of them, then runs the VERBATIM shared
+  # release path (stage_regen_hexa_cc + stage_build_hexa + stage_precompile_
+  # package). hexa_cc.c is now removed too and recreated by the regen step, so
+  # gate == release byte-for-byte (the 5th-failure drift is structurally sealed).
   SEEDS: >-
     self/runtime_core.c self/runtime_hi_gen.c self/runtime.c
     self/bootstrap_compiler.c
@@ -45,6 +49,8 @@ env:
     self/native/net.c self/native/persistent_pipe.c self/native/proc_fork.c
     self/native/pty.c self/native/signal_flock.c self/native/tensor_kernels.c
     self/native/term_ffi.c self/native/thread.c self/native/wait.c
+    self/native/hexa_cc.c self/forge/forge_tier_v1.c
+    test/native_build/classd_behavioral_harness.c
 
 jobs:
   nobaseline-darwin-arm64:
@@ -65,16 +71,26 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: bash tool/stage_resolve_runtime_a
 
-      - name: Dry-run — TEMP-remove seeds (working copy only, NOT committed)
+      - name: Dry-run — TEMP-remove ALL 23 seeds (working copy only, NOT committed)
         shell: bash
         run: |
           set -euo pipefail
           for f in $SEEDS; do rm -f "$f"; done
           echo "removed seeds; remaining self/**/*.c:"
           find self -name '*.c' | sort
-          # hexa_cc.c (+ forge_tier_v1.c, unused via prebuilt) must remain.
-          test -f self/native/hexa_cc.c
+          # ALL 23 removed including hexa_cc.c (recreated by stage_regen_hexa_cc).
           test ! -f self/runtime.c
+          test ! -f self/native/hexa_cc.c
+
+      # Regenerate hexa_cc.c via the SAME script release.yml uses (edge-regen),
+      # since it is now among the removed seeds.
+      - name: Stage 0a — regen hexa_cc.c (shared tool/stage_regen_hexa_cc)
+        shell: bash
+        env:
+          CC: clang
+          EDGE_ASSET: hexa-darwin-arm64.tar.gz
+          GH_TOKEN: ${{ github.token }}
+        run: bash tool/stage_regen_hexa_cc
 
       # Stage 0/1/2 via the EXACT release.yml script (tool/stage_build_hexa) —
       # this is what closes the false-green class: the gate now exercises the
@@ -103,35 +119,18 @@ jobs:
       # seeds GONE, so the gate finally == the full release path including the
       # in-binary runtime-compile. HEXA_PREBUILT_RUNTIME is exported so the
       # fixed driver links the prebuilt archive instead of the absent runtime.c.
-      - name: Stage 3 + Package — REAL release precompile (seeds removed)
+      # Stage 3 + Package via the EXACT release.yml SHARED script — this is the
+      # final drift seam (the 5th failure): release was MISSING the HEXA_PREBUILT_
+      # RUNTIME export here. Now BOTH workflows call tool/stage_precompile_package
+      # → byte-identical → drift structurally impossible.
+      - name: Stage 3 + Package — REAL release path (shared tool/stage_precompile_package)
         shell: bash
         env:
           HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
           # CI dry-run bypass for the Darwin `hexa build` panic-trigger refuse
           # gate (output-under-/tmp guard); non-heavy precompile only.
           HEXA_MAC_BUILD_OK: "1"
-        run: |
-          set -euo pipefail
-          export HEXA_LANG="$PWD"
-          export HEXA_MODULE_LOADER="$PWD/build/hexa_module_loader"
-          export PATH="$PWD:$PATH"
-          # Stage 3 — precompile shipped scripts via `hexa build` (the driver path).
-          ./hexa run tool/build_precompile.hexa
-          echo "--- release/precompile/ contents ---"
-          ls -la release/precompile/
-          test -d release/precompile
-          test "$(ls -1 release/precompile/ | wc -l)" -gt 0
-          # Package — mirror release.yml: assemble tarball with prebuilt runtime.a.
-          target="darwin-arm64"; stage="dist/hexa-${target}"
-          mkdir -p "$stage/build" "$stage/release/precompile"
-          cp hexa "$stage/hexa"
-          cp build/hexa_module_loader "$stage/build/hexa_module_loader"
-          cp build/runtime.a "$stage/build/runtime.a"
-          cp -R release/precompile/. "$stage/release/precompile/"
-          tar -czf "hexa-${target}.tar.gz" -C dist "hexa-${target}"
-          n=$(tar -tzf "hexa-${target}.tar.gz" | grep -cE "hexa-${target}/release/precompile/[^/]+$" || true)
-          echo "tarball precompile entries: $n"; test "$n" -gt 0
-          echo "::notice::no-baseline FULL release (incl Stage 3 precompile + Package) GREEN (darwin-arm64) — hexa build DRIVER survives removed seeds"
+        run: TARGET=darwin-arm64 bash tool/stage_precompile_package
 
   nobaseline-linux-x86_64:
     name: nobaseline (linux-x86_64)
@@ -149,15 +148,23 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: bash tool/stage_resolve_runtime_a
 
-      - name: Dry-run — TEMP-remove seeds (working copy only, NOT committed)
+      - name: Dry-run — TEMP-remove ALL 23 seeds (working copy only, NOT committed)
         shell: bash
         run: |
           set -euo pipefail
           for f in $SEEDS; do rm -f "$f"; done
           echo "removed seeds; remaining self/**/*.c:"
           find self -name '*.c' | sort
-          test -f self/native/hexa_cc.c
           test ! -f self/runtime.c
+          test ! -f self/native/hexa_cc.c
+
+      - name: Stage 0a — regen hexa_cc.c (shared tool/stage_regen_hexa_cc)
+        shell: bash
+        env:
+          CC: gcc
+          EDGE_ASSET: hexa-linux-x86_64.tar.gz
+          GH_TOKEN: ${{ github.token }}
+        run: bash tool/stage_regen_hexa_cc
 
       - name: Stage 0/1/2 — REAL release build (shared tool/stage_build_hexa)
         shell: bash
@@ -174,32 +181,12 @@ jobs:
           ./hexa --version
           echo "::notice::no-baseline Stage-0/1/2 GREEN (linux-x86_64) — seeds removed via prebuilt runtime.a"
 
-      # .c-graduation Phase-3 driver fix gate — REAL Stage 3 precompile (the
-      # path that killed #2040: `hexa build` driver hard-compiled runtime.c).
-      - name: Stage 3 + Package — REAL release precompile (seeds removed)
+      # Stage 3 + Package via the EXACT release SHARED script (gate == release).
+      - name: Stage 3 + Package — REAL release path (shared tool/stage_precompile_package)
         shell: bash
         env:
           HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
-        run: |
-          set -euo pipefail
-          export HEXA_LANG="$PWD"
-          export HEXA_MODULE_LOADER="$PWD/build/hexa_module_loader"
-          export PATH="$PWD:$PATH"
-          ./hexa run tool/build_precompile.hexa
-          echo "--- release/precompile/ contents ---"
-          ls -la release/precompile/
-          test -d release/precompile
-          test "$(ls -1 release/precompile/ | wc -l)" -gt 0
-          target="linux-x86_64"; stage="dist/hexa-${target}"
-          mkdir -p "$stage/build" "$stage/release/precompile"
-          cp hexa "$stage/hexa"
-          cp build/hexa_module_loader "$stage/build/hexa_module_loader"
-          cp build/runtime.a "$stage/build/runtime.a"
-          cp -R release/precompile/. "$stage/release/precompile/"
-          tar -czf "hexa-${target}.tar.gz" -C dist "hexa-${target}"
-          n=$(tar -tzf "hexa-${target}.tar.gz" | grep -cE "hexa-${target}/release/precompile/[^/]+$" || true)
-          echo "tarball precompile entries: $n"; test "$n" -gt 0
-          echo "::notice::no-baseline FULL release (incl Stage 3 precompile + Package) GREEN (linux-x86_64) — hexa build DRIVER survives removed seeds"
+        run: TARGET=linux-x86_64 bash tool/stage_precompile_package
 
   nobaseline-linux-arm64:
     name: nobaseline (linux-arm64)
@@ -217,15 +204,23 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: bash tool/stage_resolve_runtime_a
 
-      - name: Dry-run — TEMP-remove seeds (working copy only, NOT committed)
+      - name: Dry-run — TEMP-remove ALL 23 seeds (working copy only, NOT committed)
         shell: bash
         run: |
           set -euo pipefail
           for f in $SEEDS; do rm -f "$f"; done
           echo "removed seeds; remaining self/**/*.c:"
           find self -name '*.c' | sort
-          test -f self/native/hexa_cc.c
           test ! -f self/runtime.c
+          test ! -f self/native/hexa_cc.c
+
+      - name: Stage 0a — regen hexa_cc.c (shared tool/stage_regen_hexa_cc)
+        shell: bash
+        env:
+          CC: gcc
+          EDGE_ASSET: hexa-linux-arm64.tar.gz
+          GH_TOKEN: ${{ github.token }}
+        run: bash tool/stage_regen_hexa_cc
 
       - name: Stage 0/1/2 — REAL release build (shared tool/stage_build_hexa)
         shell: bash
@@ -242,31 +237,12 @@ jobs:
           ./hexa --version
           echo "::notice::no-baseline Stage-0/1/2 GREEN (linux-arm64) — seeds removed via prebuilt runtime.a"
 
-      # .c-graduation Phase-3 driver fix gate — REAL Stage 3 precompile.
-      - name: Stage 3 + Package — REAL release precompile (seeds removed)
+      # Stage 3 + Package via the EXACT release SHARED script (gate == release).
+      - name: Stage 3 + Package — REAL release path (shared tool/stage_precompile_package)
         shell: bash
         env:
           HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
-        run: |
-          set -euo pipefail
-          export HEXA_LANG="$PWD"
-          export HEXA_MODULE_LOADER="$PWD/build/hexa_module_loader"
-          export PATH="$PWD:$PATH"
-          ./hexa run tool/build_precompile.hexa
-          echo "--- release/precompile/ contents ---"
-          ls -la release/precompile/
-          test -d release/precompile
-          test "$(ls -1 release/precompile/ | wc -l)" -gt 0
-          target="linux-arm64"; stage="dist/hexa-${target}"
-          mkdir -p "$stage/build" "$stage/release/precompile"
-          cp hexa "$stage/hexa"
-          cp build/hexa_module_loader "$stage/build/hexa_module_loader"
-          cp build/runtime.a "$stage/build/runtime.a"
-          cp -R release/precompile/. "$stage/release/precompile/"
-          tar -czf "hexa-${target}.tar.gz" -C dist "hexa-${target}"
-          n=$(tar -tzf "hexa-${target}.tar.gz" | grep -cE "hexa-${target}/release/precompile/[^/]+$" || true)
-          echo "tarball precompile entries: $n"; test "$n" -gt 0
-          echo "::notice::no-baseline FULL release (incl Stage 3 precompile + Package) GREEN (linux-arm64) — hexa build DRIVER survives removed seeds"
+        run: TARGET=linux-arm64 bash tool/stage_precompile_package
 
   # ── .c-graduation Phase 4/5 — FINAL 3 tracked .c removal-safety DRY-RUN ─────
   #
