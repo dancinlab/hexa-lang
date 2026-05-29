@@ -50,6 +50,53 @@ step/s 미파싱 시 SKELETON + `⚠ 🟠 INCOMPLETE` 표시.
 verdict(🟢 Δ measured) 전환. macOS 4GB memcap 으로 로컬 interp 실행은 OOM
 (SIGKILL 137) — 실행은 ubu-2/GPU pod 원격이 정상 경로.
 
+## 2026-05-30 — 🟠 M3 glibc malloc-tuning 배선 (env-gated, 미측정)
+
+M1 단편화 가설(`malloc_trim`/`mallopt` 호출 0개 → freed chunk OS 미반환 → main-arena
+누적)에 대응해, runtime init constructor 에 **glibc malloc 튜닝 배선**을 추가.
+host-farr free 경로 자체(`hexa_farr_free`)는 hand-maintained 한 gitignored
+`self/runtime.c` HI-tier(RFC 061 P2/P3 미이주, 본 worktree 부재)라 직접 못 고침 →
+대신 **alloc 분류 자체를 mmap 으로 유도**해 free 시 즉시 OS 반환되게 하는 동등-효과
+fix 를 tracked emit SSOT 에 배선.
+
+### 바꾼 file:line
+
+- `self/runtime_core_emit.hexa:333` (편집 후) — `_hexa_init_mem_cap` 닫힘 직후에
+  신규 `__attribute__((constructor)) _hexa_init_malloc_tuning()` 를 emit. CORE-tier
+  runtime_core.c SSOT (B9-generated, byte-identical regen #1871).
+
+### 메커니즘
+
+`HEXA_FARR_TRIM=1` 시 startup 1회 `mallopt(M_MMAP_THRESHOLD, 256KiB)` +
+`mallopt(M_TRIM_THRESHOLD, 256KiB)`. 256KiB 임계 → per-step 거대 packed-double
+farr chunk(V·8B ≈ 1.2MB) 가 mmap-backed 가 되어 `free()` 시 즉시 **munmap → OS
+반환** (main-arena 우회), 동시에 top-chunk 도 eager trim. per-free 비용 0(startup
+1회 set) → steady-state throughput 회귀 불가, 유일 tradeoff = 거대 alloc/free 당
+syscall 1회(소수 buffer 재사용 trainer 라 수용가능).
+
+### env 게이트
+
+- `HEXA_FARR_TRIM=1` — 활성 스위치 (default OFF → 추론 AKIDA-int4 + self-compile
+  의 fat-arena 보존 무손상, training driver 만 opt-in)
+- `HEXA_FARR_MMAP_KB=<N>` / `HEXA_FARR_TRIM_KB=<N>` — 임계 KiB 오버라이드 (M4 sweep)
+- glibc 전용: `#if defined(__linux__) && defined(__GLIBC__)` 가드 (macOS/musl 무동작)
+
+### 검증
+
+- `hexa parse self/runtime_core_emit.hexa` → `OK: ... parses cleanly` (EXIT 0).
+- emit C fragment 격리 `clang -O2 -Wall -Wextra -c` → EXIT 0 (코드 경고 0).
+- runtime regen(emitter→runtime_core.c) 미실행: regen 은 heavy pool build 이고
+  base `self/runtime.c` 가 worktree 부재(gitignored). SSOT emit 변경이 canonical
+  surface 이므로 push; regen 은 build_hexa_cli `_regen_runtime_core()` 가 머지 후
+  byte-identical 로 흡수.
+
+### verdict = 🟠 이유
+
+라이브 RSS/alloc **측정 0** (g5: 측정 없이 🟢/🔵 금지). 메커니즘 정합성은 높음
+(mmap-backed large-alloc → munmap-on-free 가 main-arena retention 을 직접 우회) +
+정적 검증(parse·clang) 통과지만, per-step RSS 단조증가가 실제로 끊기는지는 M4
+라이브 측정 전까지 미확정. fix + 정적 검증만이 M3 범위.
+
 ## 2026-05-30 — 🟠 M2 cuBLAS gemv d-threshold 게이팅 (코드 수정, 미측정)
 
 #2018(offset cuBLAS Dgemv) 가 작은 d(=64)에서 cuBLAS 라이브러리 dispatch 비용 +
@@ -156,4 +203,3 @@ delta 로 step 마다 로그. 이 한 점이 (a) "freed 됐는데 RSS 안 주는
 trim 부재 확정) byte-scale 가 추산이라 200–325MB 정확 매칭은 M4 측정 전까지
 미확정. 단일 site 단정 대신 "분산 churn × arena 미반환" 결론 — 이 또한 정직한
 localize (plan completion criteria 의 valid 결론).
-
