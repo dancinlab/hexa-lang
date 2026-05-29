@@ -259,6 +259,46 @@ fn main() {
     println("  " + cmd)
     run_ok(cmd)
 
+    // Step 3: cross-build the module_loader ELF alongside the driver.
+    //   ROOT CAUSE (hexat_linux module-aware build mode): the driver's
+    //   `cmd_build` flatten step (self/main.hexa) is platform-agnostic — it
+    //   already walks the full `use` dependency graph — but it dispatches the
+    //   walk to a COMPILED `build/hexa_module_loader` binary
+    //   (resolve_module_loader_compiled). On Mac that ELF is produced by
+    //   tool/build_hexa_module_loader.sh; the Linux cross-build never emitted
+    //   it, so on a pod the flatten step hit `[flat] warn: compiled
+    //   module_loader not found — falling back to raw src` and transpiled the
+    //   ENTRY FILE ONLY → every transitive `use foo` symbol was unresolved at
+    //   link (anima train_v3_moe_prodaux `v3_moe_fwd` implicit-decl). Emitting
+    //   the loader ELF here makes the existing, correct flatten path light up
+    //   on Linux — no codegen change, no byte-eq risk to single-file builds.
+    //
+    //   module_loader.hexa is self-contained (0 `use`/`import`), so the
+    //   recipe is identical to the driver: host hexat transpile → musl static.
+    let ml_hexa = repo_root + "/self/module_loader.hexa"
+    let ml_c = repo_root + "/build/stage1/module_loader.c"
+    let ml_out = repo_root + "/build/hexa_module_loader_" + target
+    let ml_canon = repo_root + "/build/hexa_module_loader"
+    if file_exists(ml_hexa) {
+        println("")
+        println("[3/3] module_loader → linux/" + target + " (flatten engine)")
+        println("  transpile : " + ml_c)
+        run_ok(hexat + " " + ml_hexa + " " + ml_c)
+        let ml_cmd = cc + " " + cflags + " " + extra_cflags + " -I " + inc + " " + ml_c + " -o " + ml_out + " " + ldflags
+        println("  " + ml_cmd)
+        run_ok(ml_cmd)
+        // Canonical name the driver probes (resolve_module_loader_compiled
+        // looks for build/hexa_module_loader). Copy the host-target build to
+        // it so `hexa build` finds the loader on a same-arch pod without an
+        // env override; the per-arch name stays for multi-arch runner images.
+        run_ok("cp -f " + ml_out + " " + ml_canon)
+        let ml_sha = exec_with_status("shasum -a 256 " + ml_out + " | awk '{print $1}'")[0].trim()
+        println("  module_loader sha256 : " + ml_sha)
+    } else {
+        println("")
+        println("[3/3] WARN module_loader source missing — driver multi-module flatten will fall back to raw src on the pod")
+    }
+
     let file_info = exec_with_status("file " + out_path)[0].trim()
     let size = exec_with_status("wc -c < '" + out_path + "' | tr -d ' '")[0].trim()
     let sha = exec_with_status("shasum -a 256 " + out_path + " | awk '{print $1}'")[0].trim()
@@ -273,7 +313,10 @@ fn main() {
     println("")
     println("deploy:")
     println("  scp " + out_path + " root@<pod>:/opt/hexa/bin/hexa")
+    println("  scp " + ml_canon + " root@<pod>:/opt/hexa/build/hexa_module_loader")
     println("  ssh root@<pod> 'chmod +x /opt/hexa/bin/hexa && /opt/hexa/bin/hexa version'")
+    println("  # multi-module build then needs the loader reachable; the driver probes:")
+    println("  #   $HEXA_MODULE_LOADER  >  <install>/build/hexa_module_loader  >  ./build/hexa_module_loader")
     println("")
     println("docker runner image (multi-arch):")
     println("  hexa tool/build_runner_image.hexa   # builds arm64+x86_64")
