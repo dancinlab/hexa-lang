@@ -50,6 +50,25 @@ floor   │  loop-unroll · reg-alloc · SIMD · sched       │  ← C-emit 경
 
 > **핵심 4가지**: floor 는 **상속**한다(안 짠다) · ceiling 은 **적층**한다(쌓는다) · `runtime.o` ABI 벽이 **블로커**다(경계 너머 clang·🔵 둘 다 막힘) · LTO/same-TU `.c=0` 졸업이 **열쇠**다(벽 제거 → 두 tier 동시 개방).
 
+### 측정 증거 (이번 캠페인 누적 · 전부 g5 byte-diff IDENTICAL · mini macOS arm64)
+
+> 원칙은 말이 아니라 **실측**으로 뒷받침된다. 각 🔵 ceiling 기법 = 측정된 win, 각 🟡/벽 한계 = 정직한 finding. 상세 = `UNSHADOW.bench.md` + milestone 줄.
+
+| layer | 기법 (milestone) | 측정 | verdict |
+|---|---|---|---|
+| 🟡 floor | clang -O2 **부분 상속** (parity §parity-attest) | emit-C @-O0→@-O2 = **1.19×~1.78×** · hot-fn instr **−44%** | 🟢 상속 참 (rides clang -O2) |
+| 🔵 ceiling | #2 cross-layer 인라인 — `hexa_int` 정수리터럴 박스 (runtime.h-가시) | hot-loop 1.83→1.31s = **~28%** · `bl` 13→5 | 🟢 WIN (layout-only, 경계 안) |
+| 🔵 ceiling | A atlas-guided const-fold — 검증식 → 직접 `hexa_int(11)` emit | hot-loop 0.26→0.09s = **~65%** | 🟢 WIN ("안 돌기") |
+| 🔵 ceiling | B proof-carrying — 검증 identity license 로 opaque call 치환 | hot-loop 0.36→0.19s = **~47%** · call 소거 | 🟢 WIN (#2 layout 결합) |
+| 🟢 자원 | arena reclaim 배선 (기존 opt-in 측정) | peak RSS **−40%** · wall **−26%** (N=400k) | 🟢 WIN (constant-factor, bound 아님) |
+| ⛔ 벽 | C refinement tag-elision (#2-EXT 와 수렴) | base/new asm IDENTICAL — clang -O2 가 이미 dead-elim | 🔴 CLOSED-NEG (벽 안=중복·벽 밖=opaque) |
+| 🔑 열쇠 | LTO/same-TU unwall — #2-ext rt_str (벽 제거) | `-flto` 불충분(컴파일-타임 실패) · **same-TU FLIP 🔴→WIN** 0.36→0.25s = **−31%** | 🟢→🔵 unwall 입증 |
+| 🔑 열쇠 | 〃 — C bounds/null elision (벽 제거) | 벽 제거+본문 가시에도 clang 이 opaque bounds 안 elide (Δ 0) | 🔴 NULL — proof-carrying codegen 필요 (별 axis) |
+
+> **요약 한 줄**: 🔵 ceiling 3종(#2 28% · A 65% · B 47%)이 floor(상속 1.19~1.78×) 위에서 실측 win 을 따냈고, 자원축도 −40% RSS. 한계도 정직 — C tag-elision 은 🔴(벽), same-TU 는 벽을 깨 **−31% FLIP**(단 `-flto` 불충분), bounds-null 은 벽 제거만으론 🔴 NULL(증명 codegen 필요).
+>
+> **아직 안 잰 최대 레버** = 🟢 **HexaVal 언박싱** (open milestone). parity §parity-attest 가 raw 7.9×~1263× 갭의 주범으로 **HexaVal 박싱**을 지목 — known-int/bool/float 값전달을 박싱 없이 레지스터 패킹하면 이 갭의 대부분을 닫을 잠재력. 측정 전이므로 **예측 레버**로만 표기(아직 win 주장 금지).
+
 ---
 
 ## 분류 3종 (altitude 기준)

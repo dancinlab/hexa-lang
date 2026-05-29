@@ -2,6 +2,24 @@
 
 Append-only history sister of `UNSHADOW.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-30T00:00Z — 🏗️ 적층 원칙 문서화 milestone FLIP — 측정 증거표 추가
+
+원칙(🟡 floor 상속 + 🔵 ceiling 적층 + ⛔ runtime.o ABI 벽 + 🔑 LTO/same-TU)은 #2095 에서
+이미 easy.md §HEXA-STACK 으로 명문화됨(ASCII 다이어그램 + compare 표). 이번 milestone =
+원칙이 **이번 캠페인 누적 실측으로 뒷받침**됨을 확인 + 빠진 조각(consolidated 측정 증거표)을 채움.
+
+- [x] doc 확인 — easy.md §HEXA-STACK 이 4원칙 모두 캡처(floor=clang -O2 상속·ceiling=인라인/atlas-fold/proof-carrying/check-elision 적층·블로커=runtime.o C-ABI 벽·열쇠=LTO/same-TU) 확인. UNSHADOW.md 전제 절도 동일.
+- [x] gap 채움 — easy.md §HEXA-STACK 에 "측정 증거" 표 추가: 각 🔵 ceiling 기법 = 측정 win, 각 🟡/벽 한계 = 정직 finding.
+  - 🟡 floor 상속: emit-C @-O0→@-O2 1.19×~1.78× · hot-fn instr −44% (parity §parity-attest)
+  - 🔵 #2 cross-layer 인라인: ~28% (1.83→1.31s)
+  - 🔵 A atlas const-fold: ~65% (0.26→0.09s)
+  - 🔵 B proof-carrying: ~47% (0.36→0.19s)
+  - 🟢 arena reclaim: peak RSS −40% · wall −26%
+  - 🔴 C tag-elision: CLOSED-NEG (clang -O2 가 이미 dead-elim)
+  - 🔑 same-TU unwall: FLIP 🔴→WIN −31% (단 `-flto` 불충분) · C bounds/null 은 🔴 NULL(증명 codegen 필요)
+  - 🟢 HexaVal 언박싱 = 미측정 **예측 레버**로만 표기(raw 7.9×~1263× 갭 주범 지목, win 주장 금지)
+- [x] milestone "🏗️ 적층 원칙 문서화" → `[x]` flip (UNSHADOW.md). doc-only, 측정 0(전부 기존 verdict 인용).
+
 ## 2026-05-29T14:45Z — 🏗️ HEXA-STACK 전략 정식화 — B+C 랜딩 + floor/ceiling 적층 프레임
 
 B(#2093)·C(#2094) 두 evidence 브랜치 랜딩 완료 후 UNSHADOW 의 전제를 **HEXA-STACK** 으로 정식화.
