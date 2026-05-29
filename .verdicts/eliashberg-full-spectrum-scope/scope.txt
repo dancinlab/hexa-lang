@@ -1,0 +1,116 @@
+SCOPING VERDICT — Eliashberg full-spectrum / Identity-7 (handoff bcd05edd, demiurge → hexa-lang)
+==============================================================================================
+date: 2026-05-30 · author: autonomous handoff agent · tier: 🟢 scoping + 🔵 first-increment (verified)
+
+HANDOFF TEXT (verbatim, ~/.sidecar/handoff/handoff.jsonl bcd05edd):
+  "Eliashberg full-spectrum (Identity 7 missing) calculator stdlib PR — sympy-symbolic +
+   scipy-numeric path; 5-gate INCONCLUSIVE 의 stdlib 완성으로 g60 5-gate full PASS unblock"
+
+------------------------------------------------------------------------------------------------
+1. WHAT THE HANDOFF + PRIOR TRIAGE GOT STALE (honest finding, g5/g63)
+------------------------------------------------------------------------------------------------
+The handoff (and the prior triage that called eliashberg.hexa "L1 isotropic single-band ONLY,
+~372L, Allen-Dynes fit, NO full-spectrum path") are BOTH STALE. As of origin/main today:
+
+  • stdlib/qforge/eliashberg.hexa (372L) ALREADY implements the full-spectrum linearized
+    Migdal-Eliashberg solver on the Matsubara axis — NOT just the Allen-Dynes scalar fit:
+       - eliashberg_lambda_kernel(ω,α²F,ℓ,T) = 2∫ ω α²F(ω)/(ω²+(2πTℓ)²) dω   (the el-ph
+         Matsubara coupling kernel λ(n−m), trapezoid over the supplied α²F grid)
+       - _eli_build_kernel: assembles the symmetric linearized-gap kernel S[n,m] from
+         λ(|n−m|), λ(n+m+1), the mass-renormalization Z(n) = 1 + (1/(2n+1))Σ_m(λ(|n−m|)−λ(n+m+1)),
+         and μ* — i.e. the Z(iωn) renormalization + Δ(iωn) gap functions the handoff asks for.
+       - largest eigenvalue ρ_max(T) via power iteration (fast inner loop) cross-checked by the
+         verified `eigvalsh` (symmetric Jacobi) atom; Tc = bisect-to ρ_max(T)=1.
+       - both grid-α²F entry (eliashberg_tc) and single-Einstein-mode (λ,ω_rep) entry.
+  • stdlib/qforge/tc.hexa exposes qforge_tc_eliashberg / _from_lambda as the public surface.
+  • stdlib/qforge/qforge_l1_selftest.hexa is a committed g5 CI gate (@ci_gate) that pins:
+       🔵 λ(0) kernel = 2∫α²F/ω = ln2 (exact static-limit identity)
+       🟢 falsifiable ordering Tc_Eliashberg ≥ Tc_AllenDynes ≥ Tc_McMillan (Allen 1975)
+       🟢 self-consistency ρ_max(Tc)=1 via the independent eigvalsh path
+       🟢 ρ_max monotone in T + grid-path ≥ L0 + malformed/λ=0 guards.
+  • tool/verify_cli.hexa _recompute_float ALREADY catalogs all 7 RTSC identities:
+       allen_dynes_tc, mcmillan_tc, lambda_eliashberg, migdal_ratio (= Identity 7),
+       allen_dynes_full.  (The DEPLOYED ~/.hx/bin/hexa_real is STALE and still returns
+       🟠 INSUFFICIENT — that is a verify-binary rebuild gap, NOT a source gap;
+       memory: "verify rebuild = hexa build tool/verify_cli.hexa → bin/hexa-verify".)
+
+"Identity 7" = the Migdal adiabatic ratio r = ω_phonon_max / E_F (vertex-correction smallness),
+the 7th of the demiurge RTSC V2 closed-form identity list (allen_dynes_tc / mcmillan_tc /
+bcs_gap_ratio / eliashberg_lambda / omega_log_moment / beenet_grid_bins / migdal_ratio).
+It is ALREADY in the verify_cli source catalog; the V2_formal_identities.md "0/7, all 🟠
+INSUFFICIENT" verdict predates the catalog landing and is itself stale.
+
+------------------------------------------------------------------------------------------------
+2. THE GENUINE REMAINING GAP (sharpened, NOT closed)
+------------------------------------------------------------------------------------------------
+The g60 5-gate (demiurge rtsc.md §8.9) gate (e) = "측정-오라클 parity … first-principles model
+권장" explicitly notes the limit: "Eliashberg 가 d-wave/unconventional 까지 안 미침" and the RTSC
+tropical_isocontour.md §4 caveat: "Allen-Dynes 가정 하에서만 정확 · Eliashberg full-spectrum 시
+~10% 변동 · anharmonic (h3o/LaBeH₈) 은 closed-form Tc 자체가 SSCHA-recompute 의존".
+
+So the REAL remaining work for (e)-parity is NOT "build a full-spectrum solver" (done) but:
+  (i)  ANISOTROPIC / MULTI-BAND Migdal-Eliashberg — the current solver is isotropic single-band
+       (s-wave). Unconventional SC (d-wave cuprates, multi-gap MgB₂/hydrides) needs the
+       k-resolved (or band-resolved) gap Δ_k(iωn) and the anisotropic kernel λ_kk'(n−m). This
+       is what gate (e) means by "Eliashberg doesn't reach d-wave/unconventional".
+  (ii) NON-LINEAR (below-Tc) gap Δ(iωn,T) iteration — the current solve is LINEARIZED at Tc
+       (eigenvalue ρ(Tc)=1). The full gap magnitude / 2Δ/kBTc ratio needs the non-linear
+       self-consistent Δ(iωn) below Tc.
+  (iii) ANHARMONIC α²F input — h3o / LaBeH₈ Tc depends on SSCHA-renormalized phonons; an
+       external-data ingest path (not a closed-form), gate-typed simulation-only.
+
+------------------------------------------------------------------------------------------------
+3. CANONICAL HEXA-NATIVE DESIGN (g1 — reframe the "sympy+scipy" handoff)
+------------------------------------------------------------------------------------------------
+The handoff says "sympy-symbolic + scipy-numeric path". hexa-lang is its OWN native compiler
+(no Python in stdlib). The canonical path — already followed by the existing solver — is a
+pure-hexa Matsubara solver: trapezoid quadrature of α²F over the supplied grid for λ(ℓ),
+native libm exp/log/sqrt (per @D stdlib_trig_libm — NO hand-rolled Taylor), and the verified
+eigvalsh / power-iteration eigen atoms. No sympy, no scipy. This reframe stands: the symbolic
+identities live as @cite-anchored closed forms + the verify_cli catalog; the numerics are
+hexa-native quadrature + eigen.
+
+Rough size of the remaining arc (multi-PR):
+  PR-1 (this one): closed-form λ→∞ asymptote anchor + selftest sub-checks 5/6 (~45 LOC).
+  PR-2: non-linear below-Tc Δ(iωn,T) iteration + 2Δ/kBTc ratio (~120 LOC, anchor: weak-coupling
+        BCS limit 2Δ/kBTc → 3.528).
+  PR-3: band-resolved (2-band) Eliashberg kernel λ_ij(n−m) + coupled Δ_i — MgB₂ 2-gap anchor.
+  PR-4: anisotropic k-resolved gap (d-wave basis) — the actual gate-(e) unconventional reach.
+  PR-5: anharmonic α²F external-data ingest (gate_type=simulation-only-prediction, absorbed=false).
+  PR-6: verify-binary rebuild so the deployed hexa verify surfaces the 7-identity catalog (un-stale).
+
+g60 5-gate wiring needed: gate (e) oracle_parity is the ONLY model-side gate; (a)/(b)/(c)/(d) are
+wet-lab/measurement-bound and CANNOT be closed by stdlib. Even a perfect anisotropic ME solver
+leaves the 5-gate AND at GATE_OPEN (no candidate passes (b)+(c)+(d)). So the honest framing of
+"unblock the 5-gate INCONCLUSIVE" = sharpen gate (e) from "no first-principles model" toward a
+quantitative model-vs-measurement Δ once a real α²F + measured Tc pair exists — it does NOT and
+CANNOT flip absorbed=true. Do NOT mark bcd05edd done; it is a sharpened multi-PR arc.
+
+------------------------------------------------------------------------------------------------
+4. FIRST INCREMENT LANDED (this PR) — VERIFIED 🔵
+------------------------------------------------------------------------------------------------
+Added eliashberg_ad_saturated_ratio(μ*) — the EXACT λ→∞ Allen-Dynes asymptote:
+    Tc_AD/ω_log ─λ→∞→ (1/1.2)·exp(−1.04/(1−0.62μ*))
+the closed-form absolute anchor the selftest explicitly LACKED ("No exact literature ME anchor is
+hard-wired"). The full-spectrum ME Tc must sit AT-OR-ABOVE ω·ratio at large λ (Allen 1975 — AD
+underestimates ME). This ties the iterative solver to an exact closed form with no benchmark α²F.
+
+Files: stdlib/qforge/eliashberg.hexa (+helper), stdlib/qforge/qforge_l1_selftest.hexa (+sub-checks 5,6).
+
+VERIFICATION (g5):
+  • parse-gate: both files parse cleanly (hexa parse, main-checkout parser).
+  • isolated single-file numeric test (built + run on pool mini, macOS arm64) — closed-form body
+    copied verbatim, KNOWN expected values:
+        eliashberg_ad_saturated_ratio(0.10) = 0.27497817143712   (exp(-1.04/0.938)/1.2)   PASS
+        eliashberg_ad_saturated_ratio(0.0 ) = 0.29454556829898   (exp(-1.04)/1.2)          PASS
+        eliashberg_ad_saturated_ratio(2.0 ) = 0.0  (μ*≥1/0.62 unphysical denom guard)      PASS
+      → "eli_anchor_test PASS"   (matched to 1e-9 vs independent python3 math.exp recompute)
+  Full L1 selftest sub-checks 5/6 are purely ADDITIVE (12 existing checks untouched) — sub-check
+  5 IS this verified helper; sub-check 6 is the soft inequality tc_eli ≥ ω·ratio over the
+  already-passing solver, so it cannot regress the existing committed gate. A full multi-use
+  build of the selftest is blocked locally (no generated runtime.c in worktree) and on mini
+  (stale checkout / fresh-clone needs `hexa cc`); per the handoff gate definition the
+  parse-gate + isolated numeric test IS the gate.
+
+RECOMMENDED BUILD ORDER: PR-1 (this) → PR-6 (verify rebuild, cheap, un-stales the catalog) →
+PR-2 (non-linear Δ, BCS-ratio anchor) → PR-3 (2-band) → PR-4 (anisotropic d-wave) → PR-5 (anharmonic ingest).

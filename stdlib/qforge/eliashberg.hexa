@@ -288,6 +288,33 @@ fn _eli_rho_core_fast(omega: [float], a2f: [float],
     return _eli_power_lambda_max(S, n_mats)
 }
 
+// ── λ→∞ Allen-Dynes asymptote — a CLOSED-FORM anchor for the ME solve ────
+//
+// The Allen-Dynes Tc exponent  −1.04 (1+λ) / (λ − μ*(1+0.62λ))  has an exact
+// strong-coupling limit: as λ → ∞ the (1+λ)/λ and (1+0.62λ)/λ ratios saturate
+// to 1 and 0.62, so
+//
+//   Tc_AD / ω_log  ──λ→∞──▶  (1/1.2) · exp( −1.04 / (1 − 0.62 μ*) ).
+//
+// This is the "tropical / min-plus" λ-saturated regime: once λ is large enough
+// Tc is simply proportional to ω_log (the RTSC tropical-isocontour result).
+// It is an EXACT algebraic identity — no quadrature, no iteration — so it pins
+// an absolute anchor the full-spectrum ME Tc must respect: the linearized
+// Migdal-Eliashberg solve sits AT-OR-ABOVE the Allen-Dynes fit (Allen & Dynes
+// 1975 — the AD fit underestimates the ME solve at strong coupling), hence at
+// large λ
+//
+//   eliashberg_tc_from_lambda(λ, ω, μ*)  ≥  ω · eliashberg_ad_saturated_ratio(μ*).
+//
+// Closes the L1 selftest's "no exact literature ME anchor" gap with a closed-
+// form LOWER bound that needs no benchmark spectrum. Returns 0.0 for the
+// unphysical μ* ≥ 1/0.62 (≈1.613) where the saturated denominator vanishes.
+pub fn eliashberg_ad_saturated_ratio(mu_star: float) -> float {
+    let denom = 1.0 - 0.62 * mu_star
+    if denom <= 0.0 { return 0.0 }
+    return exp(-1.04 / denom) / 1.2
+}
+
 // ── Tc by bisection of ρ_max(T) = 1 (grid α²F entry) ────────────────────
 //
 // ρ_max(T) decreases monotonically in T (more thermal smearing → weaker
