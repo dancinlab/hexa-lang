@@ -1,0 +1,139 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+//
+// stdlib/deck/fill_emit_test.hexa — improvement (1) selftest:
+// the RTSC deck generator's launch emission REUSES the canonical concurrent-
+// fill planner (dft_fill_plan_disk, stdlib/cloud/fill_plan, #2096/#2101) so the
+// emitted run script launches decks CONCURRENTLY up to core budget AND disk
+// headroom — NOT a hand-written sequential `for deck; do …; wait; done` chain.
+//
+// 단언:
+//   - 여유 있는 경우(128-core · 9 decks · 8 ranks · 800G disk · 18G/q):
+//       동시 job > 1 (concurrent fill), Σ-np ≤ physcores, oversubscribe 없음.
+//   - disk 가 빡빡할 때(30G disk / 18G-per-q → disk_slots=1): plan 이 disk-bound,
+//       동시 job 이 디스크 한도로 깎임(< core_slots).
+//   - 생성된 RUNBOOK §4b 블록이 concurrent-fill 스크립트(rolling `wait -n`,
+//       background `&`)를 담고, 순차-전면-wait 체인이 아님.
+//
+// Run:  hexa run stdlib/deck/fill_emit_test.hexa
+// PASS: exits 0, prints "deck_fill_emit_test PASS".
+use "stdlib/deck/rtsc"
+use "stdlib/deck/gen"
+use "stdlib/cloud/fill_plan"
+
+fn _check(case: str, got: int, want: int) {
+    if got != want {
+        println("  FAIL: " + case + " — got " + to_string(got) + " want " + to_string(want))
+        exit(1)
+    }
+    println("  ok: " + case)
+}
+
+fn _ge(case: str, got: int, lo: int) {
+    if got < lo {
+        println("  FAIL: " + case + " — got " + to_string(got) + " < " + to_string(lo))
+        exit(1)
+    }
+    println("  ok: " + case + " (" + to_string(got) + " ≥ " + to_string(lo) + ")")
+}
+
+fn _le(case: str, got: int, cap: int) {
+    if got > cap {
+        println("  FAIL: " + case + " — got " + to_string(got) + " > cap " + to_string(cap))
+        exit(1)
+    }
+    println("  ok: " + case + " (" + to_string(got) + " ≤ " + to_string(cap) + ")")
+}
+
+fn _has(case: str, s: str, sub: str) {
+    if !s.contains(sub) {
+        println("  FAIL: " + case + " — missing '" + sub + "'")
+        exit(1)
+    }
+    println("  ok: " + case)
+}
+
+fn _hasnt(case: str, s: str, sub: str) {
+    if s.contains(sub) {
+        println("  FAIL: " + case + " — should NOT contain '" + sub + "'")
+        exit(1)
+    }
+    println("  ok: " + case)
+}
+
+// _beh8_spec — a minimal AcBeH8-style spec sufficient to drive the runbook
+// emit (the fill block reads only the launch-budget knobs; defaults cover the
+// rest). Mirrors the live deck spec field set (a_site_*, prefix, pressures).
+fn _beh8_spec(physcores: str, ranks: str, n_decks: str, free_disk: str, scratch: str) -> DeckSpec {
+    let sp = deck_spec_new()
+    spec_set(sp, "prototype", "beh8_clathrate")
+    spec_set(sp, "prefix", "acbeh8")
+    spec_set(sp, "celldm_bohr", "8.5132")
+    spec_set(sp, "a_conv_ang", "4.505")
+    spec_set(sp, "anchor_a_ang", "5.30")
+    spec_set(sp, "contraction_pct", "15")
+    spec_set(sp, "a_site_symbol", "Ac")
+    spec_set(sp, "a_site_mass", "227.0")
+    spec_set(sp, "a_site_upf", "Ac.pbe.UPF")
+    spec_set(sp, "pressure_gpa", "10")
+    spec_set(sp, "pressure_kbar_int", "100")
+    spec_set(sp, "fallback_pressure_gpa", "50")
+    spec_set(sp, "fallback_pressure_kbar_int", "500")
+    // launch-budget knobs (improvement-1 surface)
+    spec_set(sp, "physcores", physcores)
+    spec_set(sp, "ranks_per_deck", ranks)
+    spec_set(sp, "n_decks", n_decks)
+    spec_set(sp, "walltime_h", "140")
+    spec_set(sp, "free_disk_gb", free_disk)
+    spec_set(sp, "scratch_gb_per_q", scratch)
+    return sp
+}
+
+// _runbook_text — emit the deck file-set and return the RUNBOOK.md content.
+fn _runbook_text(sp: DeckSpec) -> str {
+    let files = gen_deck("rtsc", sp)
+    let mut i = 0
+    while i < len(files) {
+        if files[i].path == "RUNBOOK.md" { return files[i].content }
+        i = i + 1
+    }
+    return ""
+}
+
+fn main() {
+    println("# deck_fill_emit_test — improvement (1) concurrent-fill emission")
+
+    // ── A. ample room — concurrent fill, core-bounded ──────────────────
+    // 128 cores / 8 ranks = 16 core-slots; 800G / 18G-per-q = 44 disk-slots;
+    // 9 decks → concurrent = min(16,44,9) = 9 (> 1).
+    let pa = dft_fill_plan_disk(128, 8, 9, 140, 800, 18)
+    _ge("ample: concurrent fill (>1 job)", pa.concurrent_jobs, 2)
+    _check("ample: concurrent = min(16,44,9) = 9", pa.concurrent_jobs, 9)
+    _le("ample: Σ-np ≤ physcores", pa.sum_np, 128)
+    _check("ample: no oversubscribe", pa.oversubscribed, 0)
+    _check("ample: not disk-bound", pa.disk_bound, 0)
+
+    // ── B. tight disk — disk-bound, concurrency clamped below core-slots ─
+    // 30G / 18G-per-q = 1 disk-slot; 16 core-slots → disk caps concurrency.
+    let pb = dft_fill_plan_disk(128, 8, 9, 140, 30, 18)
+    _check("tight-disk: disk-bound flag set", pb.disk_bound, 1)
+    _le("tight-disk: concurrent < core-slots", pb.concurrent_jobs, pa.slots - 1)
+    _le("tight-disk: Σ-np ≤ physcores", pb.sum_np, 128)
+    _check("tight-disk: still no oversubscribe", pb.oversubscribed, 0)
+
+    // ── C. emitted RUNBOOK embeds the concurrent-fill script (not seq chain) ─
+    let rb = _runbook_text(_beh8_spec("128", "8", "9", "800", "18"))
+    _has("emit: RUNBOOK non-empty", rb, "# ")
+    _has("emit: §4b concurrent-fill section present", rb, "CONCURRENT-FILL")
+    _has("emit: script backgrounds jobs (&)", rb, "ph.x -in ph.in > ph.out 2>&1 ) &")
+    _has("emit: rolling wait -n (not full sequential wait)", rb, "wait -n")
+    _has("emit: OMP=1 / MKL=1 pinned", rb, "export OMP_NUM_THREADS=1")
+    // the legacy single-deck §4 chain (recover-safe) stays — regression shape.
+    _has("emit: legacy single-deck §4 chain still present", rb, "## 4. 실행 체인")
+
+    // ── D. unconstrained disk (scratch ≤ 0) never narrows core-only fill ─
+    let pc = dft_fill_plan_disk(128, 8, 9, 140, 30, 0)
+    _check("scratch=0: not disk-bound", pc.disk_bound, 0)
+    _check("scratch=0: concurrent == core-only(min(16,9))", pc.concurrent_jobs, 9)
+
+    println("deck_fill_emit_test PASS")
+}
