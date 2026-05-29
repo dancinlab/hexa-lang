@@ -414,4 +414,53 @@ same-TU 에서도 main-region `bl _hexa_array_get`=1 (양쪽 동일) — fn 이 
 
 > caveat: 단일 호스트(mini) 단일 세션 · wall = best-of-5 real · 측정대는 설치 toolchain 의
 > `runtime.h`/`runtime.c`/`runtime.o` 사용 · 재현 = `tool/unshadow_lto_unwall_bench.hexa`.
+## 2026-05-30 · 🟡 parity 상속 명문화 (measurement + doc, NO codegen change)
+
+milestone `🟡 parity 상속 명문화` 실측. HEXA-STACK 🟡 floor 명제 = hexa 의 C-emit
+경로가 emit 한 C 를 그대로 `clang -O2` 에 먹이므로(self/main.hexa L3041 final-link
+하드코딩) LLVM 최적화 패스를 재구현 0 으로 상속한다. 이 사이클은 그 상속을 **두 축**
+으로 측정해 못 박았다. 코드 변경 0 — 측정대(`tool/unshadow_bench.hexa`) + 손수 짠 ref-C
+(/tmp, hook 회피) 재사용. host = mini (macOS arm64, clang 21.0.0). 워크로드 3종 =
+fib_heavy · hash_heavy · sieve_heavy (M1 스칼라/정수 hot loop).
+
+방법: 워크로드마다 4 바이너리 — (a) idiomatic plain-`long` ref-C @ clang -O2, @ -O0;
+(b) hexa emit-C(`build/artifacts/<stem>.c`) @ clang -O2, @ -O0. 둘 다 같은
+캐시 `runtime.o` 링크. ref-C 는 repo 밖 `/tmp/unshadow_parity/*.c` 에서만 작성·컴파일
+(hexa-native hook 회피, repo 안 `.c` 0개).
+
+- [x] g5 (value): 워크로드마다 ref-C·hexaO2·hexaO0 stdout 3/3 byte-identical (verbatim):
+      `fib 614004930000000 / hash 295847716000000 / sieve 1020000` — 세 바이너리 동일.
+- [x] 축 1 (LLVM 패스 상속, emit-C O0/O2 같은 TU):
+      | workload | hexaO0 ms | hexaO2 ms | O0/O2 speedup |
+      |---|---|---|---|
+      | fib_heavy   | 1556 | 1263 | 1.23× |
+      | hash_heavy  | 2302 | 1295 | 1.78× |
+      | sieve_heavy | 266  | 224  | 1.19× |
+      → emit-C 에 LLVM 패스가 실제 적용됨(O0 대비 -O2 1.19×~1.78× 빠름). disasm:
+      hash_range hot fn instr 155→87 (−44%) at -O2, fast-path `hexa_add`/`hexa_cmp_lt`
+      가 runtime.h static-inline 매크로라 clang 이 inline+fold. **"rides clang -O2" 참.**
+- [x] 축 2 (raw parity, hexa @-O2 / idiomatic ref-C @-O2):
+      | workload | ref-C @-O2 ms | hexa @-O2 ms | ratio |
+      |---|---|---|---|
+      | fib_heavy   | 1   | 1263 | 1263× |
+      | hash_heavy  | 163 | 1295 | 7.9×  |
+      | sieve_heavy | 8   | 224  | 28×   |
+      → ratio ≈1.0 **아님**. 정직 보고.
+
+정직한 발견 (HONEST): **상속은 참(축 1) · raw parity 는 🔴 NOT free(축 2)**, 원인 =
+이미 문서화된 blocker. emit-C 의 모든 정수 op 는 `HexaVal` 경유이고 fast-path 외 분기·
+박싱·`hexa_mod` 등은 precompiled `runtime.o` 안의 out-of-line 호출(hash_range O2 에서도
+`bl` 17개 잔존). clang 은 이 C-ABI 벽 **너머로** fold/LICM 못 한다. fib 1263× 는
+idiomatic ref-C 에서 clang 이 `fib_iter(40)` invariant 를 증명해 바깥 6M 루프를 통째
+elide(ref O0 333→O2 1ms) 했기 때문 — hexa emit-C 는 opaque `HexaVal` 반환이라 그 LICM
+불가 → 6M 번 전부 실행. 즉 🟡 floor 의 두 얼굴: (a) emit-C **내부** 패스는 공짜 상속
+(축 1, 참), (b) **runtime.o 벽 너머** cross-TU 최적화는 상속 안 됨(축 2, 막힘). 이 벽은
+`UNSHADOW.md` 전제 blocker(#2-EXT·C tag-elision closed-negative 수렴점)와 동일.
+raw parity ≈1.0 은 `.c=0` LTO/same-TU 졸업(RUNTIME.flip-floor) 의존 → 다음 milestone
+`🔵×🟡 LTO/same-TU unwall 측정` 가 정확히 그것을 측정한다.
+
+attestation: 🟡 floor = clang -O2 **부분 상속** 확인 — emit-C 내부 패스 재구현 0 상속
+(O0→O2 1.19×~1.78× · hot-fn instr −44%), raw parity ratio 는 7.9×~1263×(≠1.0) 로
+runtime.o C-ABI 벽이 cross-TU fold/LICM 차단 → parity free 아님, `.c=0` LTO 졸업 의존.
+상세 = `UNSHADOW.bench.md §parity-attest`. NO codegen change.
 
