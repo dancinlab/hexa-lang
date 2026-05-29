@@ -1,0 +1,93 @@
+F-LINUX-HEXAT — Linux x86_64 hexat free-fn trim regression (handoff 2eddb92a, anima M5)
+================================================================================
+CONCLUSION: STALE-BINARY-ONLY. The committed dist/linux-x86_64/hexat ELF was
+            STALE (predated #1527 free-fn trim lowering). origin/main
+            self/codegen.hexa already carries the fix. No source change.
+            Deliverable = rebuilt ELF only.
+
+ENVIRONMENT
+  Build/repro host : ubu-2 (x86_64 Linux)
+  Fresh clone      : /tmp/hexat-fix-* from github.com/dancinlab/hexa-lang origin/main @ 6df3d2438
+  Source path      : self/codegen.hexa (gen2 free-fn trim arm, line 5651 `if name == "trim"`)
+  Regen path       : hexa cc --regen → self/native/hexa_cc.c.new (28533 lines, 14× str_trim)
+  Build recipe     : clang -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs -fbracket-depth=4096
+                     -I ./self <amalgam(runtime.h→runtime.c)> -o hexat -static -lm
+  runtime artifacts: build/self/{runtime,runtime_core,runtime_hi_gen}.c + self/native/*.c
+                     + self/forge/*.c (B9 generated; copied from main repo build/self)
+
+STALE-BINARY EVIDENCE
+  - committed hexat commit b3db3c38f (2026-05-28) is AFTER #1527 (9a1089f4e),
+    BUT the ELF contents predate it: `strings dist/linux-x86_64/hexat | grep rt_str_trim` = 0.
+  - self/native/hexa_cc.c (the transpiler source the old recipe compiled) was
+    REMOVED in #2065 (".c-graduation: tracked .c = 0"). The committed ELF can no
+    longer be reproduced by the old recipe — it must go through `hexa cc --regen`.
+  - sha256 stale = 3ff995fc8b68e3a5b9e46a803a269e03204ff0b439a668a6dfadc58acc01d496
+  - sha256 fresh = 0cbfc6c8bc3965684e556a67289bd41cb608a2425168048c37e0448d0cdf9098
+
+MINIMAL REPRO (/tmp/repro_trim.hexa — self-contained, no `use`)
+  pub fn layer_block_bwd(x: string) -> string { return trim(x) }
+  pub fn v3_moe_fwd(s: string) -> string { return layer_block_bwd(s) }
+  pub fn v3_moe_bwd(s: string) -> string { let a = v3_moe_fwd(s); return trim(a) }
+  fn main() { let r = v3_moe_bwd("  hello  "); print(r) }
+
+================================================================================
+BEFORE — STALE committed hexat (transpile + clang)  [VERBATIM]
+================================================================================
+$ /tmp/hexat_stale /tmp/repro_trim.hexa /tmp/repro_stale.c
+OK: /tmp/repro_stale.c
+
+# generated .c — free-fn trim lowered to undeclared identifier:
+17:    return __hexa_fn_arena_return(hexa_call1(trim, x));
+32:    return __hexa_fn_arena_return(hexa_call1(trim, a));
+
+$ clang -D_GNU_SOURCE -I ./self -Wno-trigraphs -c /tmp/repro_stale.c -o /tmp/x.o
+/tmp/repro_stale.c:17:46: error: use of undeclared identifier 'trim'
+   17 |     return __hexa_fn_arena_return(hexa_call1(trim, x));
+/tmp/repro_stale.c:32:46: error: use of undeclared identifier 'trim'
+   32 |     return __hexa_fn_arena_return(hexa_call1(trim, a));
+clang exit code = 1   (FAILS — matches handoff implicit-function-declaration class)
+
+================================================================================
+AFTER — REBUILT hexat from origin/main (transpile + clang + link + run)  [VERBATIM]
+================================================================================
+$ /tmp/hexat_fresh /tmp/repro_trim.hexa /tmp/repro_fresh.c
+OK: /tmp/repro_fresh.c
+
+# generated .c — free-fn trim now lowered to a real runtime symbol:
+21:    return __hexa_fn_arena_return(rt_str_trim(x));
+36:    return __hexa_fn_arena_return(rt_str_trim(a));
+
+$ clang -D_GNU_SOURCE -I ./self -Wno-trigraphs -c /tmp/repro_fresh.c -o /tmp/repro_fresh2.o
+./self/runtime.h:421:28: warning: '/*' within block comment [-Wcomment]   (cosmetic only)
+2 warnings generated.
+clang object-compile exit code = 0    (CLEAN — 0 undeclared-identifier / 0 implicit-function-declaration)
+
+# rt_str_trim is defined in the runtime:
+self/runtime_core.c:804:HexaVal rt_str_trim(HexaVal s);          (proto)
+self/runtime_core.c:6820:// ... rt_str_trim — codegen ...        (body)
+
+$ clang /tmp/repro_fresh2.o /tmp/runtime.o -o /tmp/repro_fresh_bin -lm -lpthread
+link exit code = 0
+$ /tmp/repro_fresh_bin
+hello
+run exit code = 0   (trim("  hello  ") == "hello", correct)
+
+# all three pub-fn bodies emitted in fresh .c:
+  layer_block_bwd: 3 occurrences   v3_moe_fwd: 3   v3_moe_bwd: 3
+
+ANIMA CROSS-CHECK
+  anima/CORE/DECODER/train_v3_moe_prodaux.hexa was renamed/absent; v3_moe_fwd/bwd
+  live in v3_moe_arch.hexa, layer_block_bwd in v3_moe_bwd_lib.hexa. Direct
+  transpile on ubu-2 is confounded by `use flame_mm` resolving to a Mac path
+  (/Users/ghost/core/anima/...) absent on ubu-2 → stub output (NOT the trim bug).
+  Per plan §5, the self-contained hexa-lang minimal repro is the gate; anima
+  re-verifies on their side with the rebuilt hexat + full module tree.
+
+REBUILT ELF
+  file   : ELF 64-bit LSB executable, x86-64, statically linked, GNU/Linux 3.2.0
+  size   : 3733296 bytes
+  sha256 : 0cbfc6c8bc3965684e556a67289bd41cb608a2425168048c37e0448d0cdf9098
+  built  : ubu-2, scp'd to Mac for commit (verified sha256 identical post-transfer)
+
+VERDICT: STALE-BINARY-ONLY — rebuilt dist/linux-x86_64/hexat fixes the regression.
+         No self/codegen.hexa change required (source already correct @ #1527).

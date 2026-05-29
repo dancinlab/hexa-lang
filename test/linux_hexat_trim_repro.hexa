@@ -1,0 +1,23 @@
+// Minimal repro for Linux hexat free-fn trim + pub-fn-body omission
+// Mirrors anima v3_moe_fwd/bwd/layer_block_bwd symptom class:
+//   - a pub fn defined
+//   - a FREE function call to that pub fn (not a method)
+//   - a free-fn trim(x) call
+
+pub fn layer_block_bwd(x: string) -> string {
+    return trim(x)
+}
+
+pub fn v3_moe_fwd(s: string) -> string {
+    return layer_block_bwd(s)
+}
+
+pub fn v3_moe_bwd(s: string) -> string {
+    let a = v3_moe_fwd(s)
+    return trim(a)
+}
+
+fn main() {
+    let r = v3_moe_bwd("  hello  ")
+    print(r)
+}
