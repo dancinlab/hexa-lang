@@ -1,0 +1,120 @@
+F-HEXA-CC-ZERO-P5-BOOTSTRAP — cold-seed bootstrap default wiring
+================================================================
+FALSIFIER: a true fresh clone (host hexa absent → regen-source
+  self/native/hexa_cc.c gitignored+ABSENT) must reach build/hexat via the
+  default build_hexa_cli step-0 path with NO manual step, NO host hexa,
+  using only a C compiler + the committed cold-seed self/native/hexa_cc_seed.c.
+  P5 FAILS if step 0 hard-requires hexa_cc.c (the pre-P5 behavior) or if the
+  seed-built hexat cannot transpile the SSOT modules.
+
+METHOD: ubu-2 (x86_64). git clone --depth 1 --branch <P5 branch> origin into
+  isolated /tmp, scrub PATH (no hexa/hexa-run), then run the EXACT step-0 cold
+  branch command from the edited build_hexa_cli.hexa:
+    cc -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs self/native/hexa_cc_seed.c \
+       -o build/hexat -lpthread -lm -ldl     (no amalgam sed · no -I · 0 local include)
+  then verify the produced hexat transpiles all 4 SSOT modules (rc=0).
+  Installed hexa.real untouched; isolated /tmp dir; no Mac-local build.
+
+VERDICT: 🟢 PASS — TRUE-COLD-DEFAULT (ubu-2 x86_64, gcc/cc 13.3.0)
+  · hexa_cc.c ABSENT (fresh clone) → COLD branch taken
+  · hexa_cc_seed.c PRESENT (2982925 B) → seed bootstrap
+  · PATH scrubbed: no hexa
+  · cc rc=0 → build/hexat ELF x86-64 2244456 B
+  · 4/4 SSOT transpile rc=0 (lexer/parser/type_checker/codegen)
+  WARM path (hexa_cc.c present) unchanged — preference branch only adds the
+  cold fallback; dev loop amalgam route preserved verbatim.
+
+RAW STDOUT (ubu-2 /tmp/p5_coldboot_test.sh — verbatim)
+------------------------------------------------------
+=== HEXA-CC-ZERO P5 TRUE-COLD-DEFAULT (ubu-2 x86_64) ===
+host=summer-B650M-K arch=x86_64 cc=cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+--- fresh clone of branch worktree-agent-a6c31f8bdb7e92c88 (bare clone, NO host hexa) ---
+HEAD=e06e3db
+--- confirm regen-source hexa_cc.c ABSENT + cold-seed PRESENT ---
+hexa_cc.c: ABSENT (true fresh clone)
+hexa_cc_seed.c: PRESENT (2982925 bytes)
+--- scrub PATH (remove any hexa) ---
+PATH scrubbed: no hexa
+--- run step-0 cold-seed bootstrap (exactly as build_hexa_cli step 0 cold branch) ---
++ cc -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs self/native/hexa_cc_seed.c -o build/hexat -lpthread -lm -ldl
+self/native/hexa_cc_seed.c:4653:1: warning: ‘no_builtin’ attribute directive ignored [-Wattributes]
+ 4653 | HexaVal hexa_valstruct_set_by_key(HexaVal v, const char* key, HexaVal val) {
+      | ^~~~~~~
+self/native/hexa_cc_seed.c:5118:1: warning: ‘weak_import’ attribute directive ignored [-Wattributes]
+ 5118 | extern HexaVal array_store  __attribute__((weak_import, weak));
+      | ^~~~~~
+self/native/hexa_cc_seed.c:5119:1: warning: ‘weak_import’ attribute directive ignored [-Wattributes]
+ 5119 | extern HexaVal map_store    __attribute__((weak_import, weak));
+      | ^~~~~~
+self/native/hexa_cc_seed.c:5120:1: warning: ‘weak_import’ attribute directive ignored [-Wattributes]
+ 5120 | extern HexaVal struct_store __attribute__((weak_import, weak));
+      | ^~~~~~
+self/native/hexa_cc_seed.c:5193:1: warning: ‘no_builtin’ attribute directive ignored [-Wattributes]
+ 5193 | HexaVal hexa_val_heapify(HexaVal v) {
+      | ^~~~~~~
+self/native/hexa_cc_seed.c:5716:1: warning: ‘weak_import’ attribute directive ignored [-Wattributes]
+ 5716 | extern HexaVal return_val __attribute__((weak_import, weak));
+      | ^~~~~~
+self/native/hexa_cc_seed.c: In function ‘hexa_str_index_of’:
+self/native/hexa_cc_seed.c:5961:15: warning: initialization discards ‘const’ qualifier from pointer target type [-Wdiscarded-qualifiers]
+ 5961 |     char* p = hxlcl_strstr(HX_STR(s), HX_STR(sub));
+      |               ^~~~~~~~~~~~
+self/native/hexa_cc_seed.c: In function ‘hexa_format_n’:
+self/native/hexa_cc_seed.c:8121:27: warning: initialization discards ‘const’ qualifier from pointer target type [-Wdiscarded-qualifiers]
+ 8121 |             char* close = hxlcl_strchr(src, '}');
+      |                           ^~~~~~~~~~~~
+self/native/hexa_cc_seed.c: In function ‘hexa_str_split’:
+self/native/hexa_cc_seed.c:8210:23: warning: initialization discards ‘const’ qualifier from pointer target type [-Wdiscarded-qualifiers]
+ 8210 |         char* found = hxlcl_strstr(pos, d);
+      |                       ^~~~~~~~~~~~
+self/native/hexa_cc_seed.c: In function ‘hexa_str_replace’:
+self/native/hexa_cc_seed.c:8266:23: warning: initialization discards ‘const’ qualifier from pointer target type [-Wdiscarded-qualifiers]
+ 8266 |         char* found = hxlcl_strstr(pos, HX_STR(old));
+      |                       ^~~~~~~~~~~~
+self/native/hexa_cc_seed.c: At top level:
+self/native/hexa_cc_seed.c:23433: warning: "_DEFAULT_SOURCE" redefined
+23433 | #define _DEFAULT_SOURCE
+      | 
+In file included from /usr/include/x86_64-linux-gnu/bits/libc-header-start.h:33,
+                 from /usr/include/stdio.h:28,
+                 from self/native/hexa_cc_seed.c:8:
+/usr/include/features.h:238: note: this is the location of the previous definition
+  238 | # define _DEFAULT_SOURCE        1
+      | 
+In function ‘hxlcl_tcgetattr’,
+    inlined from ‘hxlcl_tcgetattr’ at self/native/hexa_cc_seed.c:9078:12,
+    inlined from ‘term_raw_enter’ at self/native/hexa_cc_seed.c:23471:9:
+self/native/hexa_cc_seed.c:9082:46: warning: ‘__builtin_memset’ writing 72 bytes into a region of size 60 overflows the destination [-Wstringop-overflow=]
+ 9082 |         for (size_t i = 0; i < 72; i++) p[i] = 0;
+      |                                         ~~~~~^~~
+self/native/hexa_cc_seed.c: In function ‘term_raw_enter’:
+self/native/hexa_cc_seed.c:23449:23: note: destination object ‘_term_saved’ of size 60
+23449 | static struct termios _term_saved;
+      |                       ^~~~~~~~~~~
+In function ‘hxlcl_tcgetattr’,
+    inlined from ‘hxlcl_tcgetattr’ at self/native/hexa_cc_seed.c:9078:12,
+    inlined from ‘term_raw_enter’ at self/native/hexa_cc_seed.c:23471:9,
+    inlined from ‘hexa_term_raw_enter’ at self/native/hexa_cc_seed.c:23805:62:
+self/native/hexa_cc_seed.c:9082:46: warning: ‘__builtin_memset’ writing 72 bytes into a region of size 60 overflows the destination [-Wstringop-overflow=]
+ 9082 |         for (size_t i = 0; i < 72; i++) p[i] = 0;
+      |                                         ~~~~~^~~
+self/native/hexa_cc_seed.c: In function ‘hexa_term_raw_enter’:
+self/native/hexa_cc_seed.c:23449:23: note: destination object ‘_term_saved’ of size 60
+23449 | static struct termios _term_saved;
+      |                       ^~~~~~~~~~~
++ CCRC=0
++ set +x
+cc rc=0
+-rwxrwxr-x 1 summer summer 2244456  5월 30 04:12 build/hexat
+build/hexat: ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=9819f27c955a5024d0e3ecae70b507aba3221d70, for GNU/Linux 3.2.0, not stripped
+--- verify produced hexat transpiles an SSOT module (lexer.hexa) ---
+OK: /tmp/lexer_out.c
+transpile rc=0
+lexer_out.c bytes=191259 md5=df4e26d86b356bbac7e152bb65e8d08b
+--- transpile all 4 SSOT modules ---
+  lexer rc=0 bytes=191259 md5=df4e26d86b356bbac7e152bb65e8d08b
+  parser rc=0 bytes=411242 md5=c1e02425e2410336977b9edc581f4591
+  type_checker rc=0 bytes=149174 md5=6153a8121ed17cc48242283ede313f4c
+  codegen rc=0 bytes=988769 md5=6e30c1680ce7c165112d776a42772ead
+=== P5 COLD-DEFAULT: build/hexat reached from bare clone, no host hexa, no manual step ===
+RESULT: PASS

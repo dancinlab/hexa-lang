@@ -10,7 +10,7 @@
 - [x] P1 — `hexa cc --regen` self-host fixpoint byte-eq PASS (cross-host: Mac arm64 #2105 + ubu x86_64) · 🟢 v_n≡v_{n+1} 4/4 모듈 byte-eq + DETERMINISTIC 양 호스트 실측. ⚠ 잔여(P1 fixpoint 성질과 별개): in-tree seed(build/hexat)가 자기 SSOT 의 fixpoint 아님 = stale seed(hexa_int 인라인 #2078 미반영) — 양 호스트 동일 방향. seed 갱신(재regen+커밋)은 후속
 - [ ] P2 — cross-host kill-storm-free (Mac arm64 + ubu x86_64 둘 다 warm-rebuild PASS)
 - [x] P3 — stage-(-1) cold-seed TRUE-COLD-PASS cross-host (#2116 design option b 구현) · 🟢 단일 self-contained `self/native/hexa_cc_seed.c`(2.85 MB · 0 local include) 커밋 → bare clone + `cc hexa_cc_seed.c -o hexat`(사전설치 hexa 不要)만으로 작동 트랜스파일러 빌드, x86_64(ubu-2)+arm64(mini) 양 arch 4/4 SSOT transpile rc=0 · DETERMINISTIC · x86_64 는 per-arch fixpoint(gen_b≡gen_c)까지 PASS. ⚠ 잔여(cold-boot 닫힘과 별개): cross-arch strict byte-eq 는 3/4(codegen arch-specific·per-arch deterministic — P1 의 per-arch fixpoint 모델과 일치)
-- [ ] P5 — `--prefer-regen` opt-in flag 활성 (build_hexa_cli.hexa step 0)
+- [x] P5 — cold-seed 부트스트랩 DEFAULT wiring (build_hexa_cli.hexa step 0) · 🟢 #2126 P3 seed 를 "proven capability" → ACTUAL default bootstrap path 로 전환. step 0 가 regen-source `hexa_cc.c` 부재(true fresh clone) + `hexa_cc_seed.c` 존재 시 self-contained seed 에서 직접 `cc hexa_cc_seed.c -o build/hexat`(amalgam sed 없음·-I 없음·0 local include) 부트스트랩 — host hexa·manual step 不要. hexa_cc.c 존재 시 기존 warm amalgam 경로 그대로(dev loop 무변경). TRUE-COLD-DEFAULT ubu-2 x86_64 PASS(verdict 첨부)
 - [ ] P6 — `self/native/hexa_cc.c` git rm + CI/fresh-clone green
 
 ## 2026-05-30 P1 PROBE 측정 (verdict 첨부)
@@ -56,3 +56,15 @@ verdict: `.verdicts/hexa-cc-zero/F-HEXA-CC-ZERO-P3-COLDBOOT.txt` (양 arch cold-
 - 🟡 **honest caveat — cross-arch strict byte-eq 는 3/4** — lexer/parser/type_checker 는 x86_64≡arm64 byte-identical, codegen.hexa 만 arch-specific(x86_64 1a9c46dc vs arm64 6e30c168 — string-pool ordering/size 구조차)이나 PER-ARCH DETERMINISTIC. P1(#2105/#2109)이 애초 PER-ARCH fixpoint 였고 cross-arch byte-eq 를 주장한 적 없음 = 일관. cold-boot 도달성(P3 falsifier)은 양 arch PASS.
 - ℹ️ **"0 .c" = 0 HAND-WRITTEN .c** — `self/native/hexa_cc.c.hexanoport` 마커 R1. generated seed 는 위반 아님(Go-1.4 C-seed = CANON M3b 자체 선언). 새 파일명이라 `.gitignore`(specific `self/native/hexa_cc.c` 만) 미매칭 = 직접 커밋(sign-gate 불필요).
 - ⚠ **잔여(P3 닫힘과 별개)**: ① seed 는 d67dd37 pin(re-pin = `cc --regen` on SSOT 변경) ② cross-arch codegen 결정성은 별도 축 ③ runtime memcap fscanf-NULL(d67dd37 pre-#594 잔재 · HEXA_MEM_CAP_MB 설정 시만 · cold-boot 은 HEXA_MEM_UNLIMITED=1 우회) ④ bootstrap-default wiring(build_hexa_cli Step 0 가 seed 우선) = 후속 사이클.
+
+## 2026-05-30 P5 COLD-SEED 부트스트랩 DEFAULT WIRING + TRUE-COLD-DEFAULT 실측 (verdict 첨부)
+
+verdict: `.verdicts/hexa-cc-zero/F-HEXA-CC-ZERO-P5-BOOTSTRAP.txt` (ubu-2 stdout verbatim + per-module md5)
+
+P3(#2126)의 cold-seed 는 "proven capability"였지만 DEFAULT 부트스트랩(`tool/build_hexa_cli.hexa` step 0)은 여전히 gitignored·fresh-clone-absent 인 `hexa_cc.c` 를 hard-require 했다 (P3 잔여 ④). P5 = step 0 에 **seed-preference branch** 를 wire — surgical 변경(rewrite 아님). `if !_file_exists(hexat)` 안에서 `hexa_cc.c` 부재 AND `hexa_cc_seed.c` 존재 시 self-contained seed 에서 직접 부트스트랩(`cc hexa_cc_seed.c -o build/hexat` · amalgam sed 없음 · `-I` 없음 — seed 가 runtime 을 이미 inline + 0 local include), 아니면 기존 warm amalgam 경로(dev loop 무변경).
+
+- 🟢 **TRUE-COLD-DEFAULT PASS (ubu-2 x86_64 · gcc/cc 13.3.0)** — `origin/<P5 branch>` `/tmp` fresh clone(HEAD e06e3db) → `hexa_cc.c: ABSENT (true fresh clone)` 확인 → PATH scrub(`no hexa`) → step-0 cold branch 명령 그대로 실행: `cc rc=0` → `build/hexat` ELF x86-64 2244456 B → **4/4 SSOT transpile rc=0** (lexer 191259 B · parser 411242 B · type_checker 149174 B · codegen 988769 B). **host hexa 없이 · manual step 없이 build/hexat 도달 = cold-seed 가 ACTUAL default bootstrap path**.
+- 🟢 **WARM path 무변경** — `hexa_cc.c` 존재 시 기존 amalgam sed(`runtime.h`→`runtime.c`) + `-I self` 경로가 byte-for-byte 보존(else 분기). 부트스트랩 logic = preference branch 추가일 뿐, 기존 dev 루프 회귀 0. `hexa parse tool/build_hexa_cli.hexa` PASS.
+- ℹ️ **codegen md5 6e30c168 = P3 arm64-baseline 과 동일 값(ubu-2 측정)** — codegen.hexa 의 arch-specific PER-ARCH DETERMINISTIC 성질(P1/P3 캐비엇)과 일치, P5 falsifier(cold-boot 도달성)와 무관.
+- ✅ **P5 CLOSED** — cold-seed 가 default bootstrap path. P3 잔여 ④ 해소.
+- ⚠ **HEXA-CC-ZERO 전체 = NOT-YET-FULLY-CLOSED**: P1✅ · P3✅ · P5✅ 이지만 **P2(cross-host kill-storm-free warm-rebuild)** open · **P6(`hexa_cc.c` git rm + CI green)** open. P6 는 P5 가 닫혔으므로 이제 unblocked(seed 가 부트스트랩하므로 hexa_cc.c 제거 가능)이나 CI/fresh-clone green 의 형식 종결은 별도 사이클. fully-closed = P1+P2+P3+P5+P6 (현 3/5).
