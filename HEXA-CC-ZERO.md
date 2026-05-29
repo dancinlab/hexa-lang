@@ -12,3 +12,14 @@
 - [ ] P3 — stage-(-1) seed 전략 (hexa_cc.c 없이 cold bootstrap 경로 확정)
 - [ ] P5 — `--prefer-regen` opt-in flag 활성 (build_hexa_cli.hexa step 0)
 - [ ] P6 — `self/native/hexa_cc.c` git rm + CI/fresh-clone green
+
+## 2026-05-30 P1 PROBE 측정 (verdict 첨부)
+
+verdict: `.verdicts/hexa-cc-zero/F-HEXA-CC-ZERO-PROBE.txt` (양 호스트 stdout verbatim)
+
+측정 결과 (read-only `--probe`, heavy regen 미실행 — Mac kill-storm gate 준수):
+
+- 🟢 **파일 제거(구 P6)는 사실상 완료** — `self/native/hexa_cc.c` 는 Mac·ubu-2 fresh clone 모두에서 untracked + `.gitignore` L286 + `origin/main` MISSING. 단 `git rm` 형식 종결/CI green 은 미검증이라 P6 체크박스는 보류.
+- 🔴 **P1 byte-eq fixpoint 는 이번 사이클 미측정** — `cc --regen` 은 Mac kill 게이트, ubu-2 fresh clone 은 probe 바이너리 링크에 runtime amalgam(runtime.c/runtime_core.c/forge_tier_v1.c — 모두 gitignored generated) 전체 빌드가 필요. runbook 의 "P1 PROVEN @ d1994dfea(#1533)" 는 citation 이지 이번 verdict 아님. 실측은 build-capable 호스트(`pool on mini` / `LOCAL_BUILD=1` / ubu-2 full build)에서 `--byte-eq` 1회 필요.
+- 🔴 **진짜 잔여 frontier = cold-bootstrap 의존성 (P3)** — `tool/build_hexa_cli.hexa:612-618` 와 `self/main.hexa:1337(cmd_cc)` 둘 다 gitignored·fresh-clone-absent 인 `hexa_cc.c` 를 hard-require. host 에 hexa/hexa-run 이 미설치된 진짜 fresh clone 은 `build/hexat` 부트스트랩 불가 → 현 상태는 WARM-seed(host hexa 가 먼저 `cc --regen` 으로 hexa_cc.c 재생성) bootstrap 이지 true stage-(-1) cold seed 아님.
+- ℹ️ plan 전제 "self/native/hexa_v2 = git-tracked binary seed" 는 FALSIFIED — hexa_v2 는 gitignored(L138, CANON M3b "트랜스파일러 바이너리는 git 에 없음"). git-tracked artifact 는 1052 B `hexa_cc.c.hexanoport`(marker doc, 컴파일 불가) 뿐.
