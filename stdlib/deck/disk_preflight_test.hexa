@@ -1,0 +1,86 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+//
+// stdlib/deck/disk_preflight_test.hexa — improvement (4) selftest:
+// /deck preflight estimate carries a DISK-headroom line — required ≈
+// q_points × scratch_gb_per_q, ⚠ WARN if a target pod's free disk < that.
+// Prevents dispatching a deck to a pod that disk-fulls mid-run (ph.x _ph0
+// scratch 5-18 GB/q · 2026-05-30 lesson).
+//
+// 단언:
+//   - required = q × gb-per-q (closed form), 0 for junk inputs.
+//   - estimate LINE includes the disk figure (the task's stated selftest).
+//   - free < required → ⚠ WARN + shortfall; free ≥ required → OK; free
+//     unknown(≤0) → informational (never a false alarm).
+//
+// Run:  hexa run stdlib/deck/disk_preflight_test.hexa
+// PASS: exits 0, prints "deck_disk_preflight_test PASS".
+use "stdlib/deck/gen"
+
+fn _check(case: str, got: int, want: int) {
+    if got != want {
+        println("  FAIL: " + case + " — got " + to_string(got) + " want " + to_string(want))
+        exit(1)
+    }
+    println("  ok: " + case)
+}
+
+fn _is(case: str, got: bool, want: bool) {
+    if got != want {
+        println("  FAIL: " + case)
+        exit(1)
+    }
+    println("  ok: " + case)
+}
+
+fn _has(case: str, s: str, sub: str) {
+    if !s.contains(sub) {
+        println("  FAIL: " + case + " — '" + s + "' missing '" + sub + "'")
+        exit(1)
+    }
+    println("  ok: " + case)
+}
+
+fn _hasnt(case: str, s: str, sub: str) {
+    if s.contains(sub) {
+        println("  FAIL: " + case + " — '" + s + "' should NOT contain '" + sub + "'")
+        exit(1)
+    }
+    println("  ok: " + case)
+}
+
+fn main() {
+    println("# deck_disk_preflight_test — improvement (4) disk-headroom estimate")
+
+    // ── closed-form required = q × gb-per-q ──────────────────────────────
+    _check("required: 8 q × 18 GB/q = 144 GB", deck_disk_required_gb(8, 18), 144)
+    _check("required: 64 q × 5 GB/q = 320 GB", deck_disk_required_gb(64, 5), 320)
+    _check("required: junk q(0) → 0", deck_disk_required_gb(0, 18), 0)
+    _check("required: junk gb-per-q(0) → 0", deck_disk_required_gb(8, 0), 0)
+
+    // ── fits gate ────────────────────────────────────────────────────────
+    _is("fits: 800 GB free covers 144 GB required", deck_disk_fits(8, 18, 800), true)
+    _is("fits: 100 GB free SHORT of 144 GB required", deck_disk_fits(8, 18, 100), false)
+    _is("fits: required==0 (unknown) → no false alarm", deck_disk_fits(0, 0, 0), true)
+
+    // ── the estimate LINE carries the disk figure (task's selftest) ──────
+    let ok = deck_disk_preflight_line(8, 18, 800)
+    _has("line(ample): names the disk figure", ok, "144 GB scratch")
+    _has("line(ample): shows q × gb-per-q", ok, "8 q × 18 GB/q")
+    _has("line(ample): target free disk shown", ok, "800 GB")
+    _has("line(ample): OK verdict (fits)", ok, "OK (fits)")
+    _hasnt("line(ample): no false WARN", ok, "WARN")
+
+    // ── tight free disk → ⚠ WARN + shortfall ─────────────────────────────
+    let warn = deck_disk_preflight_line(8, 18, 100)
+    _has("line(tight): ⚠ WARN present", warn, "⚠ WARN")
+    _has("line(tight): shortfall (144-100=44 GB)", warn, "short 44 GB")
+    _has("line(tight): names disk-full risk", warn, "disk-full")
+
+    // ── unknown free disk → informational, never a WARN ──────────────────
+    let unk = deck_disk_preflight_line(8, 18, 0)
+    _has("line(unknown): names required figure", unk, "144 GB scratch")
+    _has("line(unknown): says free disk unknown", unk, "free disk unknown")
+    _hasnt("line(unknown): no false WARN", unk, "WARN")
+
+    println("deck_disk_preflight_test PASS")
+}
