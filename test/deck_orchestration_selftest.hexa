@@ -87,8 +87,11 @@ fn main() {
         || rb_default.contains("후보 1개 = pod 1개"), fails)
     _check("NO multi-deck DECKS=( loop in default path",
         !rb_default.contains("DECKS=( \"$@\" )"), fails)
-    _check("default does NOT emit the CONCURRENT-FILL fallback header",
-        !rb_default.contains("4b-fallback"), fails)
+    // NB: the default text references "§4b-fallback" in prose (a pointer to
+    // the opt-in), so we discriminate on the EMITTED heading "## 4b-fallback."
+    // — present ONLY when the fallback block is actually emitted.
+    _check("default does NOT emit the CONCURRENT-FILL fallback heading",
+        !rb_default.contains("## 4b-fallback."), fails)
     _check("§4c run_resume.sh driver UNREGRESSED (#2113)",
         rb_default.contains("run_resume.sh")
         && rb_default.contains("REAL-TERMINAL"), fails)
@@ -99,8 +102,8 @@ fn main() {
     let spec_pack = _beh8_base_spec()
     spec_set(spec_pack, "pack_one_pod", "true")
     let rb_pack = _runbook_of(spec_pack)
-    _check("§4b-fallback CONCURRENT-FILL header present",
-        rb_pack.contains("4b-fallback")
+    _check("§4b-fallback CONCURRENT-FILL heading present",
+        rb_pack.contains("## 4b-fallback.")
         && rb_pack.contains("CONCURRENT-FILL"), fails)
     _check("labeled FALLBACK",
         rb_pack.contains("FALLBACK"), fails)
