@@ -1,0 +1,126 @@
+# arena-retention-audit-5cd0e4c8 — runtime arena/alloc retention audit
+# handoff: 5cd0e4c8 (anima → hexa-lang), "CLM B0 Track2 trainer 🔴 INFEASIBLE"
+# date: 2026-05-30  ·  scope: CPU-only static audit, NO GPU fire (cost-gated)
+# tier: 🟠 ROOT-CAUSE MAPPED + mitigations LANDED; residual localization needs a GPU fire
+# verifier: static source audit of origin/main runtime (file:line cited)
+
+## ASK (verbatim essence)
+Runtime arena retention audit: malloc_trim / mallopt / M_MMAP_THRESHOLD / madvise
+absence + _CudaFarrSlot device-mirror tally. Residual ~328-331 MB/step host-RSS
+climb that is UNCHANGED after #2017 in-place AdamW (so NOT the AdamW out-farr).
+Trainer-side alloc all freed (anima EMPIRICALLY confirmed).
+
+## RUNTIME ALLOCATOR SHAPE (how the hexa farr arena actually works)
+The training path does NOT use the HexaVal bump arena (HEXA_VAL_ARENA, the B9.6-E1
+munmap-no-op finding). It uses the typed packed-double "farr" handle table
+(RFC 030/032/033/034), a DIFFERENT allocator:
+
+  - hexa_farr_zeros(n)  build/self/runtime.c:5479 — calloc(n,8) a fresh double[n]
+    buffer + grab a handle slot (pop freelist runtime.c:5493, else grow table 5497).
+  - hexa_farr_free(h)   build/self/runtime.c:5580 — free(e->buf) (5584), under
+    -DHEXA_CUDA also _hx_cuda_farr_device_free (5591), push slot to freelist (5612).
+
+KEY: this is NOT a bump-allocator-that-never-frees. It is a malloc/free handle table
+WITH a slot freelist. Reclaim works — IF farr_free is called. The buffer goes back to
+glibc via free(); the device mirror goes back via cudaFree. So a truly-all-freed
+trainer should not leak host buffers per se.
+
+## THREE HYPOTHESES (a/b/c) — VERDICT
+(a) "arena never resets per step" — REJECTED. There is no per-step bump arena in this
+    path. farr is malloc/free + freelist; reset-per-step is not the model. (The bump
+    arena DOES exist for the interp/str path with PHASE_RESET__ hooks at runtime.c
+    ~10300-10446, but the trainer's farr buffers are not in it.)
+
+(b) "missing malloc_trim / mallopt / madvise after bulk free" — PARTIALLY TRUE, and
+    this is the dominant runtime-side mechanism for a glibc main-arena RSS climb:
+      * Original ask CONFIRMED at audit time: zero malloc_trim/mallopt/M_MMAP_THRESHOLD/
+        madvise in the runtime. STILL no madvise/MADV_DONTNEED in any committable
+        emitter (self/*emit*.hexa, runtime.h) = 0 hits.
+      * MITIGATIONS NOW LANDED (origin/main):
+        - #2123: _hexa_init_malloc_tuning (self/runtime_core_emit.hexa, __GLIBC__-only,
+          __attribute__((constructor))). HEXA_FARR_TRIM=1 → startup mallopt(
+          M_MMAP_THRESHOLD,256KiB)+mallopt(M_TRIM_THRESHOLD,256KiB). Large (>256KiB)
+          farr chunks become mmap-backed → free() munmaps straight to OS, bypassing
+          main-arena fragmentation. Zero per-free cost. default OFF.
+          Overridable: HEXA_FARR_MMAP_KB / HEXA_FARR_TRIM_KB.
+        - #2127: hexa_rss_trace_on_free() (self/runtime.h ~1562, __GLIBC__-only).
+          HEXA_RSS_TRACE=1 → per-free mallinfo2() before→malloc_trim(0)→after delta to
+          stderr. The diagnostic the ask requested.
+      * GAP (deferred, NOT committable here): the #2127 helper is DEFINED but its
+        CALL-SITE is NOT wired into hexa_farr_free's body. hexa_farr_free's body lives
+        ONLY in self/runtime.c, which is gitignored / NOT TRACKED (B9 #2065 .c
+        graduation). There is NO committable emitter for that body (runtime_core_emit
+        emits the malloc-tuning constructor but NOT the farr_free body — only 1
+        comment-level mention). So the "add one line" patch-spec (runtime.h comment
+        "<-- add this one line (M4 hook)") can ONLY be applied at the next runtime.c
+        REGEN (heavy pool build = separate cycle). This is the genuine wall for a
+        CPU-safe source increment this cycle.
+      * SYNTHETIC RESULT (.verdicts/hexa-train-floor/M7-farr-trim-rss.txt, RTX 5070,
+        $0): TRIM ON ≡ OFF in both arms. free-each-step variant = +0 KB/step (nothing
+        to fix). 64KB-pinned variant = +63.69 KB/step IDENTICAL both arms — the climb
+        there is from genuinely-LIVE <256KiB chunks that NO mallopt can reclaim. So
+        HEXA_FARR_TRIM only helps if the real climb is dominated by FREE'D >256KiB
+        chunks stranded behind a pinned arena top. Whether anima's 328MB/step has that
+        shape is UNMEASURED (needs cross-repo trainer build + HEXA_RSS_TRACE fire).
+
+(c) "_CudaFarrSlot device-mirror tally grows unbounded" — PLAUSIBLE but BOUNDED by
+    design; audit shows it is keyed to the host handle and freed in lockstep:
+      * _CudaFarrSlot table: self/cuda/runtime_cuda_emit.hexa:73-99 (g_slots, keyed by
+        the SAME farr_id int handle as the host table; geometric grow).
+      * _h2d (runtime_cuda_emit.hexa:185) cudaMalloc's lazily and REUSES the slot when
+        s->len == e->len (line ~220) — only re-mallocs on size change. Per-step reuse
+        of the same handle does NOT accumulate device memory.
+      * _ensure_dev_alloc_out (~747) same reuse-if-size-matches discipline.
+      * _hx_cuda_farr_device_free (~296) cudaFree's the slot, view-aware (non-owning
+        sub-views d_buf=NULL'd, never double-freed). Called from hexa_farr_free
+        (runtime.c:5591). So device memory tracks host farr lifetime exactly.
+      * IMPLICATION: device mirror leaks ONLY if the corresponding host farr_free is
+        never called. Since anima confirmed all trainer-side allocs are freed, the
+        device tally should be bounded — UNLESS a builtin allocates a HIDDEN transient
+        farr the trainer cannot see/free. The gemv-offset path (farr_packed_gemv_offset,
+        runtime_cuda_emit.hexa:1662) returns a NEW out-farr [rows] PER CALL; if the
+        trainer does not free each gemv output, BOTH the host buffer AND its device
+        mirror accumulate. This is the #1 remaining suspect for a "trainer thinks it
+        freed everything but a per-call builtin output handle is retained" leak — but
+        it is the trainer's free-discipline on the builtin RETURN value, observable
+        only with a real fire + HEXA_RSS_TRACE per-handle tally.
+
+## WHICH LAYER OWNS THE FIX
+- The mallopt/trim MITIGATION = runtime (LANDED #2123, env-gated, glibc-only).
+- The RSS diagnostic = runtime (LANDED #2127 helper; call-site wiring DEFERRED to next
+  regen — gitignored body, no committable emitter).
+- The RESIDUAL 328MB/step localization = needs a REAL anima trainer GPU fire with
+  HEXA_RSS_TRACE=1 (+ optionally HEXA_FARR_TRIM=1) to determine the chunk-size shape and
+  whether a per-call builtin output handle (gemv-offset) is retained. This is
+  cost-bearing (H100/A100 pod or the existing ubu-2 RTX 5070 cross-repo build) and is
+  anima's cost decision, NOT autonomous.
+
+## SECOND FINDING (from M4, already on origin/main — context for "INFEASIBLE")
+The trainer's INFEASIBLE step-rate is COMPUTE-bound on fp64, not memory/sync-bound.
+d768·12L fp64: AI=207 FLOP/byte. RTX 5070 fp64 floor 6.58 s/step ≈ observed
+0.156-0.18 step/s (already at ceiling). A100 fp64 floor 0.312 s/step = 6.4× headroom.
+Mem-only floor is 100-300× lower than observed → the RSS leak, while real, is NOT the
+throughput ceiling. The throughput lever is fp64→fp32/bf16 (M6, landed #2130). The RSS
+leak is the OOM-over-long-run ceiling (step1 1.79GB → step300 100GB), separate axis.
+
+## NEXT STEP FOR ANIMA (precise)
+1. Build the anima MoE trainer against current origin/main hexa runtime (so #2017/#2018/
+   #2122/#2123/#2127/#2130 are all in). Cross-repo build is a SEPARATE cycle.
+2. Fire ONE short run (e.g. 20-50 steps) with HEXA_RSS_TRACE=1 (and a second with
+   HEXA_FARR_TRIM=1) and capture the per-free mallinfo2 delta log + RSS slope.
+   - If the slope flattens under HEXA_FARR_TRIM=1 → it was >256KiB free'd-chunk
+     fragmentation; the fix is "export HEXA_FARR_TRIM=1" (already shipped, zero-code).
+   - If the per-free deltas show a steadily-GROWING uordblks that malloc_trim does NOT
+     reclaim → a LIVE handle is retained; instrument _hx_farr_count / freelist_n growth
+     to find the un-freed builtin output (prime suspect: farr_packed_gemv_offset return
+     value not farr_free'd per step).
+3. Once the shape is known, the runtime-side fix (if any) is a 1-line
+   hexa_rss_trace_on_free()/free-discipline change applied at the next runtime.c REGEN.
+
+## CPU INCREMENT THIS CYCLE
+NONE landable. Every CPU-safe runtime mitigation the ask named is ALREADY on origin/main
+(#2123 mallopt, #2127 RSS-trace helper). The only pending item — wiring the RSS-trace
+call-site — is in a gitignored B9 edge-asset (self/runtime.c) with no committable
+emitter, so it cannot be committed without a regen. Honest outcome (g5): sharp
+root-cause + bounded next-step, no code change. Handoff 5cd0e4c8 stays OPEN; the
+INFEASIBLE verdict is genuine and the residual needs a GPU cycle (anima's decision).
