@@ -13,7 +13,10 @@
 //   2. byte-diffs the two binaries' stdout — correctness gate (g5),
 //   3. times each compiled binary: <warmup> discarded runs then <iters>
 //      timed runs bracketed by time_ms(); reports min_ms / median_ms,
-//   4. emits a paired JSONL row + computed Δ% = (clangO2-native)/clangO2.
+//   4. emits a paired JSONL row + computed Δ% = (clangO2-native)/clangO2,
+//      AND a roofline % column (절대 잣대) — achieved/binding-roof %, 분모는
+//      mini Apple M4 achieved-peak microbench(tool/unshadow_peak_microbench.hexa)
+//      에서 박제(int-roof 12.88 GIOP/s). 기존 native-vs-clang A/B 출력은 보존(@L3).
 //
 // Timing primitive = time_ms() (hexa_time_ms in runtime.c) — in-process
 // wall clock. We time the WHOLE compiled-binary process (startup + run);
@@ -36,6 +39,65 @@ fn parse_int_safe(s) {
     let r = to_int(s)
     if r < 0 { return 0 }
     return r
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// roofline 분모 어댑터 (@L1/@L2/@L3)
+//
+// roofline = min(compute-roof, memory-roof × AI). 워크로드 arithmetic-intensity
+// (AI = flops/bytes) 로 binding roof 자동선택: AI < ridge-point → memory-bound,
+// else compute-bound. ridge = compute-roof / memory-roof.
+//
+// 분모(achieved-peak)는 mini Apple M4 에서 tool/unshadow_peak_microbench.hexa 로
+// 1회 실측해 박제 (스펙시트 추정 금지 · @L2). theoretical 도 나란히 주석에 기록.
+//   roof_int_giops  = 12.88  (scalar int mul+add achieved · theoretical ~13–19)
+//   roof_fp_gflops  = 15.24  (FMA double achieved      · theoretical ~17.6 = 87%)
+//   roof_mem_gbs    = 95.0   (STREAM-triad achieved    · theoretical ~120  = 79%)
+// ridge-point ≈ 12.88 ÷ (95 ÷ 8) ≈ 1.08 ops/byte.
+//
+// 정직 caveat: M1 baseline 워크로드(sieve/fib/hash/collatz/mixmul)는 전부 정수
+// 스칼라 hot loop · register-resident(메모리 traffic ≈ 0) → AI ≫ ridge → 모두
+// compute-bound(int-roof). achieved 추정은 per-workload 논리-op 계수 모델 기반이며,
+// clang -O2 가 op 를 fold/strength-reduce/dead-elim 하므로 "논리 op 수" 가 실제
+// 실행 op 보다 많을 수 있다 — 그래서 본 어댑터의 절대 GIOP/s 는 *상한 추정*이고,
+// 진짜 anchor 는 idiomatic ref-C wall(§parity-attest / §hexaval-unbox 측정값)이다.
+// roofline % 환산이 무의미한 메트릭(RSS 등)은 호출측에서 roofline-N/A 로 표기.
+
+// 워크로드별 정수-op 계수 (= 논리 op 수, 상한 추정). 미등록 워크로드는 -1 = N/A.
+fn workload_int_ops(stem) {
+    if stem == "sieve_heavy"   { return 60000 * 58 * 23 }       // ≈8.0e7
+    if stem == "fib_heavy"     { return 6000000 * 40 * 3 }      // ≈7.2e8
+    if stem == "hash_heavy"    { return 1000000 * 200 * 4 }     // ≈8.0e8
+    if stem == "collatz_heavy" { return 2000000 * 118 * 4 }     // ≈9.4e8
+    if stem == "mixmul_heavy"  { return 200000 * 1000 * 5 }     // ≈1.0e9
+    if stem == "knownint_heavy" { return 16 * 60000000 }        // exact: 16-op chain ×60M
+    return -1
+}
+
+// achieved GIOP/s ×1000 (정수, fixed-point) given ops & wall ms.
+//   ops / (ms/1000) / 1e9 × 1000  =  ops / (ms × 1e6)  (×1000 fixed-point)
+fn achieved_giops_x1000(ops, ms) {
+    if ms <= 0 { return 0 }
+    if ops < 0 { return -1 }
+    return (ops / ms) / 1000
+}
+
+// roofline % ×10 (fixed-point) of achieved int throughput vs achieved int-roof.
+// int-roof = 12.88 GIOP/s = 12880 (GIOP/s ×1000). returns -1 if N/A.
+fn roofline_pct_x10_int(ops, ms) {
+    if ops < 0 || ms <= 0 { return -1 }
+    let giops_x1000 = achieved_giops_x1000(ops, ms)   // GIOP/s ×1000
+    if giops_x1000 < 0 { return -1 }
+    // pct = giops / 12.88 × 100 ; ×10 fixed-point = giops_x1000 × 1000 / 12880
+    return (giops_x1000 * 1000) / 12880
+}
+
+// "NN.N" 문자열 (×10 fixed-point int → 소수 1자리). -1 → "N/A".
+fn fixed_x10_str(v) {
+    if v < 0 { return "N/A" }
+    let whole = v / 10
+    let frac = v - whole * 10
+    return to_string(whole) + "." + to_string(frac)
 }
 
 fn stem_of(path) {
@@ -232,6 +294,15 @@ fn main() {
         // Δ% by min (lower noise) — positive = native faster.
         let mut delta_x1000 = 0
         if c_min > 0 { delta_x1000 = ((c_min - n_min) * 1000) / c_min }
+        // ── roofline % (절대 잣대) — 워크로드 compute-bound int-roof 기준 ──
+        // bound = "compute-int" (register-resident 스칼라 → AI ≫ ridge) | "N/A".
+        let ops = workload_int_ops(stem)
+        let mut bound = "compute-int"
+        if ops < 0 { bound = "N/A" }
+        let rf_c_x10 = roofline_pct_x10_int(ops, c_min)   // clangO2 arm roofline % ×10
+        let rf_n_x10 = roofline_pct_x10_int(ops, n_min)   // native arm  roofline % ×10
+        let rf_c_str = fixed_x10_str(rf_c_x10)
+        let rf_n_str = fixed_x10_str(rf_n_x10)
         let row = "{\"workload\": \"" + jsonl_escape(stem) +
                   "\", \"src\": \"" + jsonl_escape(src) +
                   "\", \"tag\": \"" + jsonl_escape(tag) +
@@ -243,11 +314,17 @@ fn main() {
                   ", \"clangO2_min_ms\": " + to_string(c_min) +
                   ", \"clangO2_median_ms\": " + to_string(c_med) +
                   ", \"delta_permille_min\": " + to_string(delta_x1000) +
+                  ", \"roof_bound\": \"" + bound + "\"" +
+                  ", \"roof_int_giops_x1000\": 12880" +
+                  ", \"roofline_pct_native_x10\": " + to_string(rf_n_x10) +
+                  ", \"roofline_pct_clangO2_x10\": " + to_string(rf_c_x10) +
                   "}"
         println("    correctness=" + ok +
                 " native(min/med)=" + to_string(n_min) + "/" + to_string(n_med) + "ms" +
                 " clangO2(min/med)=" + to_string(c_min) + "/" + to_string(c_med) + "ms" +
                 " Δ‰(min)=" + to_string(delta_x1000))
+        println("    roofline[" + bound + "]: native=" + rf_n_str + "%  clangO2=" +
+                rf_c_str + "%  (achieved int-roof 12.88 GIOP/s · mini M4)")
         append_jsonl(out, row)
         println("    " + row)
         println("")
