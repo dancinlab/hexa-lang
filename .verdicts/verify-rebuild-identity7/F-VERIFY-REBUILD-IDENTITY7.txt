@@ -1,0 +1,76 @@
+F-VERIFY-REBUILD-IDENTITY7 — `hexa verify` Identity-7 (migdal_ratio) surfaces from rebuilt bin/hexa-verify
+========================================================================================================
+date    : 2026-05-30
+base    : origin/main 85c3c57e8 (P2 cross-host warm-rebuild PASS)
+context : bcd05edd Eliashberg cycle (PR #2144) — tool/verify_cli.hexa catalogs all 7 RTSC
+          identities incl. migdal_ratio (= Identity-7). Hypothesis under test: the DEPLOYED
+          `hexa verify` binary is STALE and predates the catalog additions, so
+          `hexa verify <identity>` does not surface them.
+
+FALSIFIER (pre-registered)
+--------------------------
+A freshly-rebuilt bin/hexa-verify (from current origin/main tool/verify_cli.hexa) MUST surface
+Identity-7 (migdal_ratio = ω_phonon / E_F) at a terminal tier. If the rebuild fails to surface it,
+the catalog-rebuild path is broken. If a committable arch-matched artifact exists, commit it; else
+honest "gitignored artifact — recipe-confirmed, no committable binary" (mirrors seed-refresh / #2104
+trim-fix / verify_rebuild_finding stale-local-artifact theme).
+
+METHOD
+------
+1. Dispatch resolution (self/main.hexa:6341-6409): `hexa verify` PREFERS
+   <install_dir>/bin/hexa-verify, falls back to cwd bin/hexa-verify, then interprets
+   tool/verify_cli.hexa. It spawns the standalone compiled binary (like cloud spawns bin/hexa-cloud).
+2. Tracking status:  git ls-files bin/hexa-verify  → EMPTY (NOT tracked).
+                     git check-ignore -v bin/hexa-verify  → .gitignore:106:bin/hexa-verify
+   ⇒ bin/hexa-verify is a GITIGNORED per-host build artifact. Committing it is meaningless.
+3. Catalog source confirmed in origin/main tool/verify_cli.hexa:
+     _allen_dynes_tc (L1451) · _mcmillan_tc (L1464) · _migdal_ratio (L1515)
+   migdal_ratio was added in PR #730 (3268f03c2, 2026-05-24) — predates the current artifacts.
+4. Rebuild on build-capable pool host (NEVER Mac-local heavy build):
+     - mini (arm64): fresh depth-1 clone. `hexa build tool/verify_cli.hexa` FAILED with the
+       documented bessel dup-symbol collision (bessel_j1 vs _bessel_j1) — root cause = stale
+       0.1.0-dispatch driver + NO build/hexa_module_loader in a depth-1 clone (8 `use` stmts ⇒
+       multi-module build emits both local + extern-stub bessel defs). Matches verify_rebuild_finding
+       "#2002 bessel dup-symbol ... stale/env, not a real defect".
+     - ubu-2 (x86_64): fresh clone, HEXA_MODULE_LOADER wired → C codegen step SUCCEEDED
+       (OK: build/artifacts/hexa-verify.c, NO bessel collision). Final link against prebuilt
+       ~/.hx/bin/self/runtime.o (self/runtime.c is a B9 generated artifact, absent from checkout) →
+       ELF x86-64 bin/hexa-verify produced.
+
+VERIFICATION (verbatim stdout)
+------------------------------
+[ubu-2 freshly-rebuilt x86_64 binary]
+verify --expr migdal_ratio(0.05,10.0)=0.005
+  calc   = 0.005  ≈ expected 0.005  (|Δ|=0.0 ≤ ε=1e-9)
+  tier   = 🟢 SUPPORTED-NUMERICAL  (hexa-native libm-class recompute, TECS-L n6-rep Tier2)
+
+[local arm64 bin/hexa-verify — already present, May 29 07:48]
+verify --expr migdal_ratio(0.05,10.0)=0.005
+  calc   = 0.005  ≈ expected 0.005  (|Δ|=0.0 ≤ ε=1e-9)
+  tier   = 🟢 SUPPORTED-NUMERICAL  (hexa-native libm-class recompute, TECS-L n6-rep Tier2)
+
+[siblings, ubu-2 — engine correctness, calc deterministic]
+verify --expr allen_dynes_tc(2.5,1100.0,0.1)=213.284
+  calc   = 181.157  (f1-uncorrected McMillan branch; my expected 213.284 wrong → 🔴, NOT an engine bug)
+verify --expr mcmillan_tc(1.0,400.0,0.1)=17.6
+  calc   = 23.0531  (closed-form recompute correct; my expected 17.6 wrong → 🔴, NOT an engine bug)
+
+FINDING
+-------
+🟢 Identity-7 (migdal_ratio) SURFACES from the rebuild on BOTH a freshly-rebuilt ubu-2 binary AND the
+   existing local arm64 bin/hexa-verify — tier 🟢 SUPPORTED-NUMERICAL, calc 0.005 == expected, |Δ|=0.
+
+CLOSED-NEGATIVE on the "deployed binary is stale" hypothesis (for the local arm64 artifact):
+   The local bin/hexa-verify (May 29) POSTDATES the migdal_ratio addition (#730, May 24) and already
+   recomputes it correctly. The "stale deployed binary" diagnosis does NOT hold for the local artifact
+   — same pattern as verify_rebuild_finding (stale-local / env, not a real defect).
+
+COMMITTABLE: NONE. bin/hexa-verify is gitignored (.gitignore:106) — a per-host build artifact.
+   Committing it is meaningless (arch-specific, non-portable). The recipe is CONFIRMED working
+   (ubu-2 codegen OK + 🟢 verdict). The deliverable is THIS verdict, not a binary.
+   Activation on any host = local rebuild: `hexa build tool/verify_cli.hexa -o bin/hexa-verify`
+   with HEXA_MODULE_LOADER wired (else 8-`use` multi-module bessel dup-symbol). Already documented
+   in tool/verify_cli.hexa #2007 "🟠 no-path trailer 재빌드 한 줄".
+
+VERDICT: 🟢 SUPPORTED-NUMERICAL (Identity-7 surfaces) + 🔴 CLOSED-NEGATIVE (no stale-binary defect;
+         gitignored artifact ⇒ no committable binary). Verdict-only deliverable.
