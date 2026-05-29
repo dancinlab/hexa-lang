@@ -459,22 +459,34 @@ fn _dft_ssh_opts(port: str, identity: str) -> [str] {
 
 // ── ③ remote chain script ────────────────────────────────────────────
 
+// _dft_mpi_env — single-threaded BLAS (OMP/MKL/OPENBLAS=1) + root-MPI env
+// for every mpirun-emitting command. OMP/MKL/OPENBLAS=1 stops each MPI rank's
+// BLAS thread fan-out from over-subscribing the pod cores (055b38f8); the two
+// OMPI_ALLOW_RUN_AS_ROOT vars keep prterun from dying when the pod runs as
+// root and a given mpirun path doesn't honor --allow-run-as-root (f06b0a4c,
+// belt-and-suspenders — the flag is still passed below).
+fn _dft_mpi_env() -> str {
+    return "export OMP_NUM_THREADS=1 && export MKL_NUM_THREADS=1"
+        + " && export OPENBLAS_NUM_THREADS=1 && export OMPI_ALLOW_RUN_AS_ROOT=1"
+        + " && export OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1"
+}
+
 // _dft_relax_cmd — the guarded relax invocation (setsid death-immune, walltime
 // cap, phys-core -np, root MPI). Output → relax.out.
 fn _dft_relax_cmd(np: int, walltime_h: int) -> str {
-    return "cd /root/deck && export OMP_NUM_THREADS=1 && setsid timeout " + to_string(walltime_h)
+    return "cd /root/deck && " + _dft_mpi_env() + " && setsid timeout " + to_string(walltime_h)
         + "h mpirun -np " + to_string(np) + " --allow-run-as-root pw.x -in relax.in > relax.out 2>&1"
 }
 
 // _dft_scf_cmd — scf on the generated geometry.
 fn _dft_scf_cmd(np: int, walltime_h: int) -> str {
-    return "cd /root/deck && export OMP_NUM_THREADS=1 && setsid timeout " + to_string(walltime_h)
+    return "cd /root/deck && " + _dft_mpi_env() + " && setsid timeout " + to_string(walltime_h)
         + "h mpirun -np " + to_string(np) + " --allow-run-as-root pw.x -in scf.in > scf.out 2>&1"
 }
 
 // _dft_ph_cmd — el-ph with recover=.true. (resume across the walltime cap).
 fn _dft_ph_cmd(np: int, walltime_h: int) -> str {
-    return "cd /root/deck && export OMP_NUM_THREADS=1 && setsid timeout " + to_string(walltime_h)
+    return "cd /root/deck && " + _dft_mpi_env() + " && setsid timeout " + to_string(walltime_h)
         + "h mpirun -np " + to_string(np) + " --allow-run-as-root ph.x -in ph.in > ph.out 2>&1"
 }
 
