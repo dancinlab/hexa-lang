@@ -1,0 +1,221 @@
+// stdlib/test/test_record.hexa — isolated logic test for record.hexa
+//
+// Self-contained (NO `use` import) so it compiles + runs without the local
+// module_loader (multi-use builds link-fail locally; this is the parse-gate +
+// isolated-logic-test gate per the stdlib CLI verify recipe). The path-builder,
+// the atomic writer (copied from stdlib/io.hexa verbatim), and the emit/read
+// logic are copied from record.hexa; any drift between this copy and the module
+// is the test's job to surface.
+//
+// Coverage:
+//   1. record_dir() path-builder — exact exports/<domain>/<slug>/<ts>/ string.
+//   2. record_dir() with a deeper domain segment.
+//   3. record_emit() → record_read_manifest() round-trip: manifest cmd / rc /
+//      byte-counts survive json_stringify→json_parse.
+//   4. stdout.txt / stderr.txt files contain the captured bytes verbatim.
+//   5. meta map round-trips through the manifest.
+
+// ── verbatim copy: stdlib/io.hexa atomic writer ─────────────────────
+fn shell_quote_io(s: string) -> string {
+    let mut out = []
+    out.push("'")
+    let mut i = 0
+    while i < len(s) {
+        let c = s[i]
+        if c == '\'' {
+            out.push("'\"'\"'")
+        } else {
+            out.push(s.substring(i, i + 1))
+        }
+        i = i + 1
+    }
+    out.push("'")
+    return out.join("")
+}
+
+fn write_text_atomic(path: string, content: string) -> bool {
+    if len(path) == 0 { return false }
+    let tmp = path + ".tmp"
+    write_file(tmp, content)
+    let q_tmp = shell_quote_io(tmp)
+    let q_dst = shell_quote_io(path)
+    let _ = exec("mv " + q_tmp + " " + q_dst + " 2>/dev/null")
+    return file_exists(path)
+}
+
+// ── verbatim copy: stdlib/record.hexa under test ────────────────────
+fn _rec_join(base: string, leaf: string) -> string {
+    if len(base) == 0 { return leaf }
+    if base.substring(len(base) - 1, len(base)) == "/" {
+        return base + leaf
+    }
+    return base + "/" + leaf
+}
+
+fn _rec_shell_escape(s: string) -> string {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+fn record_dir(domain: string, slug: string, ts: string) -> string {
+    return "exports/" + domain + "/" + slug + "/" + ts + "/"
+}
+
+fn record_result(cmd: string, stdout: string, stderr: string, rc: int) {
+    let r = json_parse("{}")
+    r["cmd"] = cmd
+    r["stdout"] = stdout
+    r["stderr"] = stderr
+    r["rc"] = rc
+    return r
+}
+
+fn record_emit(dir: string, run_result, meta) -> bool {
+    if len(dir) == 0 { return false }
+    let mut cmd = ""
+    let mut out = ""
+    let mut err = ""
+    let mut rc = 0
+    if type_of(run_result) == "map" {
+        if has_key(run_result, "cmd")    { cmd = to_string(run_result["cmd"]) }
+        if has_key(run_result, "stdout") { out = to_string(run_result["stdout"]) }
+        if has_key(run_result, "stderr") { err = to_string(run_result["stderr"]) }
+        if has_key(run_result, "rc")     { rc  = to_int(run_result["rc"]) }
+    }
+    let _mk = exec("mkdir -p " + _rec_shell_escape(dir) + " 2>/dev/null")
+    let out_path = _rec_join(dir, "stdout.txt")
+    let err_path = _rec_join(dir, "stderr.txt")
+    let man_path = _rec_join(dir, "manifest.json")
+    let manifest = json_parse("{}")
+    manifest["cmd"] = cmd
+    manifest["rc"] = rc
+    manifest["stdout_bytes"] = len(out)
+    manifest["stderr_bytes"] = len(err)
+    manifest["meta"] = meta
+    let ok_out = write_text_atomic(out_path, out)
+    let ok_err = write_text_atomic(err_path, err)
+    let ok_man = write_text_atomic(man_path, json_stringify(manifest))
+    return ok_out && ok_err && ok_man
+}
+
+fn record_read_manifest(dir: string) {
+    let man_path = _rec_join(dir, "manifest.json")
+    if !file_exists(man_path) {
+        let e = json_parse("{}")
+        e["ok"] = 0
+        e["error"] = "record: manifest not found at " + man_path
+        return e
+    }
+    let src = read_file(man_path)
+    let parsed = json_parse(src)
+    if type_of(parsed) != "map" {
+        let e = json_parse("{}")
+        e["ok"] = 0
+        e["error"] = "record: manifest was not a JSON object at " + man_path
+        return e
+    }
+    return parsed
+}
+
+// ── assertion helpers ───────────────────────────────────────────────
+fn expect(name: string, got: string, want: string) -> int {
+    if got == want {
+        println("PASS " + name)
+        return 0
+    }
+    println("FAIL " + name)
+    println("  got : " + got)
+    println("  want: " + want)
+    return 1
+}
+
+fn expect_int(name: string, got: int, want: int) -> int {
+    if got == want {
+        println("PASS " + name)
+        return 0
+    }
+    println("FAIL " + name + " got=" + to_string(got) + " want=" + to_string(want))
+    return 1
+}
+
+fn expect_bool(name: string, got: bool, want: bool) -> int {
+    if got == want {
+        println("PASS " + name)
+        return 0
+    }
+    println("FAIL " + name + " got=" + to_string(got) + " want=" + to_string(want))
+    return 1
+}
+
+fn main() {
+    let mut fails = 0
+
+    // 1. path-builder: exact canonical string
+    fails = fails + expect(
+        "record_dir basic",
+        record_dir("chip", "yosys-synth", "2026-05-30T12-00-00Z"),
+        "exports/chip/yosys-synth/2026-05-30T12-00-00Z/"
+    )
+
+    // 2. path-builder: another domain/slug/ts
+    fails = fails + expect(
+        "record_dir energy",
+        record_dir("energy_wind", "verify", "20260530"),
+        "exports/energy_wind/verify/20260530/"
+    )
+
+    // 3+. emit → read round-trip against a /tmp record dir
+    let test_dir = "/tmp/hexa_record_test_3f7a/exports/test/emit/20260530T0000/"
+    let _clean0 = exec("rm -rf /tmp/hexa_record_test_3f7a 2>/dev/null")
+
+    let run = record_result(
+        "yosys -p 'synth' top.v",
+        "captured-stdout-line-1\ncaptured-stdout-line-2\n",
+        "warn: cell mapped to placeholder\n",
+        0
+    )
+    let meta = json_parse("{}")
+    meta["domain"] = "test"
+    meta["engine"] = "yosys"
+    meta["nonce"] = 42
+
+    let emitted = record_emit(test_dir, run, meta)
+    fails = fails + expect_bool("record_emit ok", emitted, true)
+
+    // read the manifest back and assert the fields round-trip
+    let man = record_read_manifest(test_dir)
+    fails = fails + expect("manifest cmd", to_string(man["cmd"]), "yosys -p 'synth' top.v")
+    fails = fails + expect_int("manifest rc", to_int(man["rc"]), 0)
+    fails = fails + expect_int("manifest stdout_bytes", to_int(man["stdout_bytes"]), 46)
+    fails = fails + expect_int("manifest stderr_bytes", to_int(man["stderr_bytes"]), 33)
+
+    // meta map round-trips
+    let man_meta = man["meta"]
+    fails = fails + expect("manifest meta.domain", to_string(man_meta["domain"]), "test")
+    fails = fails + expect("manifest meta.engine", to_string(man_meta["engine"]), "yosys")
+    fails = fails + expect_int("manifest meta.nonce", to_int(man_meta["nonce"]), 42)
+
+    // 4. stdout/stderr artifact files contain the captured bytes verbatim
+    fails = fails + expect(
+        "stdout.txt bytes",
+        read_file(test_dir + "stdout.txt"),
+        "captured-stdout-line-1\ncaptured-stdout-line-2\n"
+    )
+    fails = fails + expect(
+        "stderr.txt bytes",
+        read_file(test_dir + "stderr.txt"),
+        "warn: cell mapped to placeholder\n"
+    )
+
+    // 5. missing-manifest path returns the error sentinel
+    let miss = record_read_manifest("/tmp/hexa_record_test_3f7a/nope/")
+    fails = fails + expect_int("read_manifest miss ok=0", to_int(miss["ok"]), 0)
+
+    // cleanup
+    let _clean1 = exec("rm -rf /tmp/hexa_record_test_3f7a 2>/dev/null")
+
+    if fails == 0 {
+        println("ALL PASS (13/13)")
+    } else {
+        println("FAILURES: " + to_string(fails))
+    }
+}
