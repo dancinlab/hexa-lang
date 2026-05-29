@@ -1980,7 +1980,22 @@ fn main() {
         // poll/pull/lifecycle handle. `--purpose TEXT` sets the registry
         // label; defaults to "(adopted)".
         if si + 1 >= len(av) {
-            println("[cloud] adopt: missing <pod_id> — usage: cloud adopt <pod_id> [--purpose TEXT]")
+            println("[cloud] adopt: missing <pod_id> — usage: cloud adopt <pod_id> [--purpose TEXT] [--project NAME]")
+            exit(2)
+        }
+        // help-guard (#cloud-adopt-help): `cloud adopt --help`/`-h` 는 usage 를
+        // 출력하고 정상(0) 종료 — `--help` 를 pod-id 로 오인해 "adopted --help" 를
+        // 찍던 misparse 차단. 일반화: `-` 로 시작하는 pod-id 토큰은 pod-id 가 아니라
+        // 놓친 flag 로 보고 거부(exit 2) — _pod_id_looks_valid 의 write-side 거부가
+        // registry 오염은 이미 막지만, verb 가 그 전에 거짓 success 를 찍었다.
+        let _adopt_first = av[si + 1]
+        if _adopt_first == "--help" || _adopt_first == "-h" {
+            println("usage: cloud adopt <pod_id> [--purpose TEXT] [--project NAME]")
+            println("  track an untracked (ORPHAN) pod — stamps M5 project/purpose for the down-guard.")
+            exit(0)
+        }
+        if len(_adopt_first) >= 1 && _adopt_first.substring(0, 1) == "-" {
+            println("[cloud] adopt: '" + _adopt_first + "' is not a pod-id (starts with '-') — did you mean a flag? usage: cloud adopt <pod_id> [--purpose TEXT] [--project NAME]")
             exit(2)
         }
         let pod_id = av[si + 1]
