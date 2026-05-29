@@ -2,6 +2,21 @@
 
 Append-only history sister of `HEXA-TRAIN-FLOOR.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-30T07:20Z — M1/M3 RSS 실측 (clean toolchain) · 🔴 CLOSED-NEGATIVE
+
+verdict: `.verdicts/hexa-train-floor/M1M3-rss-live.txt` (ubu-2 stdout verbatim · A/B + control)
+
+직전 사이클의 stale-local 벽(설치 hexa 의 pre-#2168 런타임)을 콜드시드로 우회해 측정에 도달.
+
+- [x] **CLEAN TOOLCHAIN 부트스트랩 (stale-local BROKEN)** — host hexa 0 의존. `hexa_cc_seed.c`(2982925 B, 0 local include) → `clang … -o build/hexat` RC=0. runtime SSOT(#2168 malloc.h undef-wrap + #2159 float-pun)를 EMITTER-PROGRAM 방식으로 재생성(seed main 을 `objcopy --redefine-sym` 무력화 후 링크·실행) → fresh runtime_core.c 가 두 픽스 모두 verbatim 보유(L1398/L1400 float-pun · L337/L341/L363 malloc.h+mallopt). full amalgam(seed top + fresh core + seed native) compile RC=0.
+- [x] **클린 드라이버 float_to_bits + farr clean 컴파일/링크/실행** — 🟢 PASS. #2159+#2168 둘 다 THIS toolchain LIVE.
+- [x] **M1/M3 per-step RSS A/B 실측 (12 steps · 8×32MB farr/step)** — 🔴 CLOSED-NEGATIVE.
+  - HEXA RUNTIME farr 경로(hxlcl_* shim, production 동일): **TRIM=0 과 TRIM=1 둘 다 +250 MB/step 무한 climb(12 step 후 +2.86 GB), 차이 0**. mallopt 무효.
+  - CONTROL(farr calloc/free → REAL glibc 강제): **TRIM=1 = +0.03 MB FLAT vs TRIM=0 = +30.5 MB plateau** → mallopt 기전 자체는 건전(glibc 경로에선 ~1000× 평탄화).
+- [x] **ROOT CAUSE = hxlcl_* bump-arena 인터포지션** — runtime 이 malloc-family 를 무조건 `hxlcl_*` 로 렌더(runtime_core.c L1368/L1757). `hxlcl_malloc`=mmap bump arena(절대 반환 안 함), `hxlcl_free`=NO-OP. farr 의 `calloc`/`free` 가 이 레이어로 가서 glibc 를 한 번도 안 거치므로 `mallopt(M_MMAP/M_TRIM)`(glibc 튜닝)이 farr 청크에 닿지 못함 = DEAD CODE(Linux farr 한정). 설치 hexa.real·build/hexat_linux nm 에 `_hxlcl_alloc_ptr/_end` PRESENT → production 동일.
+- [x] **결론**: `mallopt 로 farr churn 을 잡는다`(M1/M3 #2123 가설) = 결정적 반증. 진짜 fix = farr free 경로 자체(① 대형 farr buf 직접 mmap/munmap, ② hxlcl_free 를 freeing allocator 로, ③ farr 만 `__libc_calloc/free` 명시 바인딩 + mallopt 유지 — control 이 ③ 작동 입증). 셋 다 runtime SSOT(self/runtime_core_emit.hexa) 변경 + B9 self-verify 필요 = 별도 사이클.
+- [x] **residue**: ubu-2 $0(GPU 불필요·CPU RSS). pod 미사용→delete 불필요. SSOT 무변경(측정 shim 은 /tmp 한정 휘발). install/warm tree 무손상.
+
 ## 2026-05-30 — 🟠 M1/M3 real RSS-churn 실측 — #2159 벽 해소 확인, but mallopt-fix(#2119/#2123) NEW glibc 벽으로 차단
 
 ubu-2 fresh `/tmp/htf-rss` 콜드시드 클론(origin/main HEAD 4c2e0727, #2159 포함)에서 M1/M3
