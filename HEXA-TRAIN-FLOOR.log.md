@@ -96,6 +96,99 @@ syscall 1회(소수 buffer 재사용 trainer 라 수용가능).
 (mmap-backed large-alloc → munmap-on-free 가 main-arena retention 을 직접 우회) +
 정적 검증(parse·clang) 통과지만, per-step RSS 단조증가가 실제로 끊기는지는 M4
 라이브 측정 전까지 미확정. fix + 정적 검증만이 M3 범위.
+## 2026-05-30 — 🟠 M4 instrument hook + roofline floor (분석, GPU 비용 0)
+
+M1 추천 instrument hook 을 코드로 구현 + d768 trainer 의 roofline 기반 step-rate
+floor(물리 천장)를 분석적으로 산출. **라이브 GPU 측정 0** → verdict 🟠.
+
+### (A) instrument hook — env-가드 RSS-trace 헬퍼
+
+- [x] **hook 위치**: `self/runtime.h` 말미(`#endif HEXA_RUNTIME_H` 직전),
+  `static inline void hexa_rss_trace_on_free(void)`. env **`HEXA_RSS_TRACE`** opt-in
+  (unset = zero overhead, 분기 1회). free 마다 `mallinfo2()` before → `malloc_trim(0)`
+  → after delta(`uordblks`+`hblkhd`)를 stderr 1줄(`[rss-trace] step-free N: …`)로 로그.
+  `#if defined(__GLIBC__)` 가드 — macOS/musl 은 no-op stub(추론 AKIDA-int4·비-Linux
+  빌드 byte-무영향).
+- [x] **M3 충돌 회피(CRITICAL)**: M3 는 `hexa_farr_free` **본체**(`self/runtime.c`)에
+  trim 호출을 직접 배선 중. 본 헬퍼는 **헤더(별도 파일)**에 살고 default-OFF —
+  같은 라인 편집 0. 본체는 헬퍼를 `hexa_rss_trace_on_free();` **한 줄**로만 호출
+  (free(e->buf) 직후) → M3 trim 라인과 합성되나 절대 겹치지 않음.
+
+#### ⚠ B9 제약 — 본체 wiring 은 edge-asset regen 대기 (committable emitter 부재)
+
+`self/runtime.c`(= `hexa_farr_free` 본체 site, 본래 `runtime.c:6298`)는 **#2065
+`.c`-graduation** 으로 tracked `.c`=0 달성 시 **gitignored edge-tarball 빌드 자산**
+(`build/runtime.a`)이 됨. `runtime_core.c`(→`runtime_core_emit.hexa`)·16 native
+fragment 과 달리 **runtime.c 루트 본체에는 committable `.hexa` emitter 가 없다**
+(`stage_resolve_runtime_a` 가 prebuilt 를 pull). 따라서 본체 1줄 call-site 는 다음
+edge-runtime.c regen 때 적용할 **patch spec** 로 헤더 주석에 명시:
+
+```c
+HexaVal hexa_farr_free(HexaVal h_v) {
+    ...
+    if (e->buf) { free(e->buf); e->buf = NULL; e->len = 0; }
+    hexa_rss_trace_on_free();   // <-- M4 hook (1줄, M3 trim 과 비겹침)
+    ...
+}
+```
+
+헤더(`self/runtime.h`)는 tracked → 헬퍼는 이번 PR 로 land. 사용법:
+`HEXA_RSS_TRACE=1 <trainer>` → step 별 `trimmed=Δ` 가 #1(arena retention) vs
+#4(VAL_ARENA plateau)를 분리한다 (M1 §"instrument hook 1점" 정합).
+
+### (B) roofline floor — d768·12L trainer (fp64 doubles)
+
+config(SSOT `stdlib/flame/flame_d768_12L_corpus_test.hexa`): T=1024 · d=768 ·
+nh=12 · nkv=4(GQA) · h=3072 · V=256(byte) · L=12 · B=nsamp=4. **fp64**.
+
+| 지표 | 값 | 근거 |
+|---|---|---|
+| params P | 104.2M (per-layer 8.65M × 12 + emb) | header bp_total 식 |
+| tokens/step | 4096 (T·B) | T=1024·B=4 |
+| FLOPs/step | **3.03e12** (matmul 6·P·tok=2.56e12 + attn 4.64e11) | 6·P·tok + 3·(2·2·L·T²·d·B) |
+| bytes/step | **1.46e10** (weight 3·P·8 + act 2·L·20·T·B·d·8) | naive fresh-farr per op(M1) |
+| arithmetic intensity | **207 FLOP/byte** | ridge point(~5–10) 훨씬 위 → **compute-bound** |
+
+#### roofline floor step-rate (peak 스펙은 공개치)
+
+| GPU | fp64 peak | floor(fp64) | step/s | gap vs 1.99s(0.28st/s) | bound |
+|---|---|---|---|---|---|
+| **A100-80G SXM** | 9.7 TF | **0.312 s/step** | 3.21 | 측정 1.99s = **6.4× 느림 = floor 의 15.7%** | COMPUTE(fp64) |
+| A100-40G PCIe | 9.7 TF | 0.312 s/step | 3.21 | 6.4× (15.7%) | COMPUTE(fp64) |
+| RTX 4090 | 1.29 TF | 2.345 s/step | 0.43 | 0.85× (이미 floor 근처) | COMPUTE(fp64) |
+| **RTX 5070(sm_120)** | ~0.46 TF | **6.58 s/step** | 0.15 | — (post-fix 0.156–0.18st/s ≈ 5070 fp64 floor!) | COMPUTE(fp64) |
+
+#### bound 판정 = **COMPUTE-bound (fp64)**, NOT memory/sync
+
+- arithmetic intensity 207 ≫ ridge → 메모리 아님. mem-only floor 는 A100 7.2ms /
+  5070 21.7ms (관측 1.99–6.4s 대비 100–300×↓) → **메모리 대역폭은 천장이 아니다**.
+- 5070 fp64 floor(6.58s) > 관측 baseline(1.99s) → **baseline 0.28st/s 는 5070 fp64
+  로 못 나옴** = baseline 은 A100급 또는 fp32 경로였을 가능성. 반면 **post #2017/#2018
+  회귀치 0.156–0.18st/s 는 5070 fp64 compute floor(0.15st/s)와 정확 일치** → 5070 에선
+  트레이너가 **이미 fp64 roofline 에 닿아 있다**(더 못 짜냄, 천장).
+- A100 에선 1.99s = floor 의 16% → 6.4× 헤드룸. 0~8% GPU util(도메인 doc)은 작은-op
+  간 sync/dispatch stall 로 fp64 유닛에 일이 안 닿는 것 = **fp64 천장 자체는 정상이나
+  occupancy 손실**. M2(d-threshold)·M3(arena)는 이 16%→100% 헤드룸을 메우는 작업.
+
+#### 핵심 lever (instrument-first 사전예측)
+
+같은 FLOPs 라도 unit peak 이 precision 으로 갈림:
+
+| | A100 fp64 | A100 fp32 | A100 tf32-TC | 5070 fp64 | 5070 bf16-TC |
+|---|---|---|---|---|---|
+| floor s/step | 0.312 | 0.155 | 0.0097 | 6.58 | 0.022(mem) |
+| step/s | 3.21 | 6.45 | 103 | 0.15 | 46 |
+
+→ **가장 큰 천장 인하는 fp64→fp32/bf16(TC)** (A100 32×, 5070 44×). 메모리/sync 최적화
+(M2·M3)는 fp64 천장 내 16%→100% 헤드룸 회수까지만 — 그 위 한계는 precision 이 결정.
+이 분석은 instrument-first(faithful 모델로 GPU값 사전예측) — 실측 전 천장 + bound 확정.
+
+### 🟠 사유 (g5 — 측정 없음)
+
+instrument 코드(헤더 헬퍼) + 분석 모델(FLOPs/bytes/peak/floor 표) + 측정 실행법
+(`HEXA_RSS_TRACE=1`)만 land. **라이브 GPU step/s·RSS Δ 실측 0** → 🟢/🔵 금지,
+verdict 🟠. FLOPs/bytes 는 추산(naive fresh-farr 가정)이라 ±, peak 은 공개 스펙.
+`hexa_real parse` 게이트는 헤더(.h)라 미적용 — C 헤더 syntactic 은 clang -fsyntax 후속.
 
 ## 2026-05-30 — 🟠 M2 cuBLAS gemv d-threshold 게이팅 (코드 수정, 미측정)
 
