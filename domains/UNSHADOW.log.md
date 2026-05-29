@@ -2,6 +2,35 @@
 
 Append-only history sister of `UNSHADOW.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-29 — #2 EXTENSION (rt_str_* string prim inline) — 🔴 CLOSED-NEGATIVE (ABI 경계 차단)
+
+#2 hexa_int 인라인을 STRING 런타임 prim 으로 확장 시도. 결론: **rt_str_\* prim 의 body 를
+codegen 콜사이트에 인라인하는 것은 `runtime.h` export 경계로 인해 구조적으로 불가** —
+publishable closed-negative. milestone flip 없음(확장 로그 only). verdict 원문:
+`.verdicts/unshadow-2ext-rt-str-inline/F-UNSHADOW-2EXT-RT-STR-INLINE.txt`.
+
+- [x] prim 선정: `rt_str_starts_with` (HexaVal 2-arg · PURE · 비할당 · LIVE). 후보 조사에서 발견한 함정:
+      `str_len` free-fn 경로는 dead — `cg_rt_target()=="c"` 라 `rt_str_len_v`/`rt_str_*` 분기는 도달 불가이고,
+      `str_len` 빌트인은 `hexa_str_len(HexaVal)`(컴파일 불가) 를 emit하는 latent 버그 경로. 실제 작동하는
+      문자열-길이 경로는 `.len()` → `hexa_int(hexa_len(...))` 로 **이미** 직접 export 콜(추가 인라인 여지 없음).
+- [x] codegen 구현: 3개 `.starts_with()` 콜사이트(self/codegen.hexa) 를 GCC statement-expression 인라인으로 교체.
+      DOUBLE-EVAL 가드 적용 — 두 인자 모두 `__sw_s`/`__sw_p` 로 **단 한 번** let-bind (expr 인자라 필수).
+- [x] g5 격리 byte-diff: base vs inline emitted C 가 **콜사이트 라인만** 상이(나머지 byte-identical). verbatim:
+      `< ...rt_str_starts_with(__hexa_sl_0, __hexa_sl_1)...`
+      `> ...({ HexaVal __sw_s = (__hexa_sl_0), __sw_p = (__hexa_sl_1); (!HX_IS_STR(__sw_s)||!HX_IS_STR(__sw_p))?0:(hxlcl_strncmp(HX_STR(__sw_s),HX_STR(__sw_p),HX_STRLEN(__sw_p))==0); })...`
+- [x] single-eval 가드 검증: emitted C 에서 각 인자가 정확히 1회 let-bind 됨이 육안 확인. BASE single-eval 레퍼런스
+      `make_str().starts_with("hello")` → `calls=1`. 가드 **설계는 정상** — 반증은 가드가 아니라 링크 경계.
+- [x] **THE WALL** (반증): inline arm 링크 실패 — `Undefined symbols: "_HX_STRLEN", referenced from _u_main` (x8).
+      근본원인: `grep -c "HX_STRLEN|hxlcl_strncmp" self/runtime.h` = **0**. runtime.h 는 `<string.h>` 도 미포함,
+      HexaVal-레벨 ABI 함수만 export(`rt_str_starts_with` 자체는 runtime.h:257 export). `HX_IS_STR`/`HX_STR` 는
+      export 되지만 `HX_STRLEN`/`hxlcl_strncmp` 는 runtime.c amalgam 내부에만 존재 → emitted 프로그램에서 참조 불가.
+- [x] **정직한 finding (ruled-out axis)**: hexa_int 가 성공한 이유 = box-literal `((HexaVal){.tag=TAG_INT,.i=N})`
+      이 runtime.h-가시 struct 레이아웃 + 리터럴만 사용(내부 헬퍼 0). 모든 의미있는 rt_str_\* body 는 내부 스칼라
+      헬퍼(HX_STRLEN/strncmp)를 건드려 순수-레이아웃 인라인 형태가 없음. 인라인하려면 (a) runtime.h 에 내부
+      헬퍼 export(=UNSHADOW 가 없애려는 경계를 도로 넓힘) 또는 (b) 전역 emit 프리앰블에 `#include <string.h>`
+      추가(콜사이트 surgical 인라인 아님 + strncmp/strlen 매크로-shadow 충돌 재유발) 필요. 둘 다 스코프 밖 → CLOSED.
+- [x] 정확성 우선: silent miscompile 위험 회피 위해 codegen 변경 **revert**(인라인은 `_HX_STRLEN` 미정의로 빌드 자체 실패).
+      bench/log/verdict 만 commit. UNSHADOW.md cross-layer milestone **미변경**(extension).
 ## 2026-05-29T12:59Z — #4 atlas-guided const-fold pilot — 🔵🟢 g5 IDENTICAL · ~65% faster
 
 UNSHADOW.easy.md §A ("루프/호출을 안 돌기"): codegen 이 PURE·atlas-검증

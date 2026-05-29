@@ -1,0 +1,69 @@
+F-UNSHADOW-2EXT-RT-STR-INLINE  —  🔴 CLOSED-NEGATIVE
+========================================================
+Host: pool mini (macOS arm64).  Base: origin/main 002cedc58 (codegen.hexa
+context identical at the buildable measurement base af645e419).
+
+FALSIFIER (pre-registered)
+  "A simple pure rt_str_* accessor (rt_str_starts_with) can be inlined at its
+   codegen call site — replacing the out-of-line precompiled-runtime.o C-ABI
+   call with its body — so clang -O2 optimizes across the boundary, while
+   staying byte-identical and single-eval (let-bound expr arg)."
+
+METHOD
+  Prim chosen: rt_str_starts_with (the str_len free-fn path is a dead/latent
+  branch: cg_rt_target()=="c" so the rt_* family is unreachable, and the
+  str_len builtin emits an uncompilable `hexa_str_len(HexaVal)`; the working
+  string-length path is `.len()` -> hexa_int(hexa_len(...)) which is already a
+  direct exported call). rt_str_starts_with IS live (emitted by `.starts_with()`)
+  and PURE (runtime_core.c):
+      int rt_str_starts_with(HexaVal s, HexaVal prefix) {
+          if (!HX_IS_STR(s) || !HX_IS_STR(prefix)) return 0;
+          size_t plen = HX_STRLEN(prefix);
+          return hxlcl_strncmp(HX_STR(s), HX_STR(prefix), plen) == 0;
+      }
+  Inline emitted at all 3 call sites with a DOUBLE-EVAL GUARD (both args
+  let-bound once into __sw_s / __sw_p in a GCC statement-expression).
+
+VERIFICATION (verbatim)
+  [isolation diff — base vs inline emitted C, ONLY the call site differs]
+  23c23
+  <     hexa_println(hexa_to_string(hexa_bool(rt_str_starts_with(__hexa_sl_0, __hexa_sl_1))));
+  ---
+  >     hexa_println(hexa_to_string(hexa_bool(({ HexaVal __sw_s = (__hexa_sl_0), __sw_p = (__hexa_sl_1); (!HX_IS_STR(__sw_s) || !HX_IS_STR(__sw_p)) ? 0 : (hxlcl_strncmp(HX_STR(__sw_s), HX_STR(__sw_p), HX_STRLEN(__sw_p)) == 0); }))));
+
+  [double-eval guard — design CORRECT: each arg let-bound exactly once,
+   visible above as `HexaVal __sw_s = (...), __sw_p = (...)`. BASE single-eval
+   reference: result=true / calls=1]
+
+  [BASE corpus g5 reference output]
+  true / false / true / true / false / true / false / true / hits=3
+
+  [THE WALL — inline arm fails to LINK]
+  Undefined symbols for architecture arm64:
+    "_HX_STRLEN", referenced from:
+        _u_main in sw_corpus_inl.o   (x8)
+  clang: error: linker command failed with exit code 1
+
+  [root cause — runtime.h export boundary]
+  grep -c "HX_STRLEN\|hxlcl_strncmp" self/runtime.h  ->  0
+  runtime.h does NOT include <string.h> and exports ONLY HexaVal-level ABI
+  functions (rt_str_starts_with itself is exported at runtime.h:257). HX_IS_STR
+  and HX_STR ARE exported; HX_STRLEN and hxlcl_strncmp are NOT — they exist only
+  inside the runtime.c amalgam. Emitted programs (`#include "runtime.h"` + link
+  runtime.o) therefore cannot reference the prim's internal helpers.
+
+FINDING (ruled-out axis)
+  rt_str_* body-inlining at the codegen call site is BLOCKED by the runtime.h
+  ABI boundary. Every meaningful rt_str_* accessor body touches runtime-internal
+  scalar helpers (HX_STRLEN, hxlcl_strncmp, libc strlen/strncmp) that are
+  deliberately NOT exported to emitted programs. This is the structural reason
+  the hexa_int pilot (#2) succeeded where strings cannot: hexa_int's box-literal
+  `((HexaVal){.tag=TAG_INT,.i=N})` uses ONLY the runtime.h-visible HexaVal struct
+  layout + a literal — no internal helper. String prims have no such purely-layout
+  inline form. The double-eval guard design is independently correct (proven in
+  the emitted C); the falsification is purely at the link boundary, NOT the guard.
+  Inlining would require either exporting the internal helpers in runtime.h (a
+  runtime-ABI change that re-widens the very boundary UNSHADOW aims to remove) or
+  adding `#include <string.h>` to the global emit prelude (not a surgical call-site
+  inline; reintroduces the strncmp/strlen macro-shadow collisions runtime.c fights).
+  Both are out of scope for a call-site inline. CLOSED-NEGATIVE.

@@ -1,0 +1,24 @@
+// bench/unshadow/strstarts_corpus.hexa — string-heavy correctness corpus
+// for the `.starts_with()` -> rt_str_starts_with prim. Exercises empty
+// strings, exact match, over-length prefix, and UTF-8. BASE output (g5
+// reference, verified on mini macOS arm64):
+//   true / false / true / true / false / true / false / true / hits=3
+fn main() {
+    let s = "hello, world"
+    println(to_string(s.starts_with("hello")))
+    println(to_string(s.starts_with("world")))
+    println(to_string(s.starts_with("")))
+    println(to_string(s.starts_with("hello, world")))
+    println(to_string(s.starts_with("hello, world!")))
+    println(to_string("".starts_with("")))
+    println(to_string("".starts_with("x")))
+    println(to_string("café ☕".starts_with("café")))
+    let mut hits = 0
+    let words = ["apple", "apricot", "banana", "avocado", "cherry"]
+    let mut i = 0
+    while i < 5 {
+        if words[i].starts_with("a") { hits = hits + 1 }
+        i = i + 1
+    }
+    println("hits=" + to_string(hits))
+}
