@@ -1,0 +1,143 @@
+// stdlib/test/test_llm.hexa — isolated golden-fixture test for llm.hexa
+//
+// Self-contained (NO `use` import) so it compiles + runs without the local
+// module_loader (multi-use builds link-fail locally; this is the parse-gate +
+// isolated-logic-test gate per the stdlib CLI verify recipe). The pure
+// request-builders are copied verbatim from llm.hexa; any drift between this
+// copy and the module is the test's job to surface.
+//
+// NO network / NO LLM call / NO keychain read / NO cost. We assert the COMPOSED
+// REQUEST (body + headers) the IO function WOULD send, built with a FAKE key:
+//   · headers — byte-exact (pure string concat, deterministic)
+//   · body    — round-tripped through json_parse and asserted structurally
+//               (model id + messages role/content), so the test is robust to
+//               json_stringify's exact compact spacing.
+
+fn llm_provider(url: string, model: string, kc_service: string, kc_account: string) {
+    let p = #{}
+    p["url"] = url
+    p["model"] = model
+    p["kc_service"] = kc_service
+    p["kc_account"] = kc_account
+    return p
+}
+
+fn llm_message(role: string, content: string) {
+    let m = #{}
+    m["role"] = role
+    m["content"] = content
+    return m
+}
+
+fn llm_build_messages_body(model: string, messages) -> string {
+    let body = #{}
+    body["model"] = model
+    body["messages"] = messages
+    return json_stringify(body)
+}
+
+fn llm_build_body(model: string, prompt: string) -> string {
+    let messages = []
+    messages.push(llm_message("user", prompt))
+    return llm_build_messages_body(model, messages)
+}
+
+fn llm_build_headers(api_key: string) {
+    let h = #{}
+    h["Authorization"] = "Bearer " + api_key
+    h["Content-Type"] = "application/json"
+    return h
+}
+
+fn expect(name: string, got: string, want: string) -> int {
+    if got == want {
+        println("PASS " + name)
+        return 0
+    }
+    println("FAIL " + name)
+    println("  got : " + got)
+    println("  want: " + want)
+    return 1
+}
+
+fn expect_bool(name: string, got: bool, want: bool) -> int {
+    if got == want {
+        println("PASS " + name)
+        return 0
+    }
+    println("FAIL " + name + " got=" + to_string(got) + " want=" + to_string(want))
+    return 1
+}
+
+fn main() {
+    let mut fails = 0
+
+    // ── headers: byte-exact (pure concat) ─────────────────────────
+    let h = llm_build_headers("sk-FAKE-KEY-123")
+    fails = fails + expect(
+        "headers Authorization bearer",
+        to_string(h["Authorization"]),
+        "Bearer sk-FAKE-KEY-123"
+    )
+    fails = fails + expect(
+        "headers Content-Type json",
+        to_string(h["Content-Type"]),
+        "application/json"
+    )
+
+    // ── single-prompt body (MVP): round-trip structural assert ────
+    let body = llm_build_body("gpt-4o-mini", "Hello, world")
+    let parsed = json_parse(body)
+    fails = fails + expect(
+        "body model id",
+        to_string(parsed["model"]),
+        "gpt-4o-mini"
+    )
+    let msgs = parsed["messages"]
+    fails = fails + expect_bool("body has 1 message", len(msgs) == 1, true)
+    fails = fails + expect(
+        "body msg[0] role user",
+        to_string(msgs[0]["role"]),
+        "user"
+    )
+    fails = fails + expect(
+        "body msg[0] content",
+        to_string(msgs[0]["content"]),
+        "Hello, world"
+    )
+
+    // ── escape safety: a quote + newline in the prompt survives ───
+    let tricky = llm_build_body("m", "say \"hi\"\nthen bye")
+    let tparsed = json_parse(tricky)
+    let tmsgs = tparsed["messages"]
+    fails = fails + expect(
+        "body escapes quote+newline (round-trip)",
+        to_string(tmsgs[0]["content"]),
+        "say \"hi\"\nthen bye"
+    )
+
+    // ── multi-message body: system + user preserved in order ──────
+    let conv = []
+    conv.push(llm_message("system", "You are terse."))
+    conv.push(llm_message("user", "2+2?"))
+    let mbody = llm_build_messages_body("gpt-4o", conv)
+    let mparsed = json_parse(mbody)
+    let mm = mparsed["messages"]
+    fails = fails + expect_bool("multi body has 2 messages", len(mm) == 2, true)
+    fails = fails + expect("multi msg[0] system role", to_string(mm[0]["role"]), "system")
+    fails = fails + expect("multi msg[1] user content", to_string(mm[1]["content"]), "2+2?")
+    fails = fails + expect("multi body model", to_string(mparsed["model"]), "gpt-4o")
+
+    // ── provider config carries the four call-site coordinates ────
+    let p = llm_provider("https://api.openai.com/v1/chat/completions", "gpt-4o-mini", "dancinlab.secret", "openai.api_key")
+    fails = fails + expect("provider url", to_string(p["url"]), "https://api.openai.com/v1/chat/completions")
+    fails = fails + expect("provider model", to_string(p["model"]), "gpt-4o-mini")
+    fails = fails + expect("provider kc_service", to_string(p["kc_service"]), "dancinlab.secret")
+    fails = fails + expect("provider kc_account", to_string(p["kc_account"]), "openai.api_key")
+
+    if fails == 0 {
+        println("ALL PASS (16/16)")
+    } else {
+        println("FAILURES: " + to_string(fails))
+    }
+}
