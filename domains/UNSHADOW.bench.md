@@ -378,3 +378,142 @@ fold/LICM 을 막아 parity 가 free 가 **아니다**. parity ≈1.0 은 `.c=0`
 > 바이너리는 캐시된 `runtime.o` 링크(코드 변경 0) · reference C 는 `/tmp` 외부 작성(hook
 > 회피 · repo 안 `.c` 0개) · fib ref-O2=1ms 는 clang 의 dead-loop elim 으로 degenerate
 > (ratio 절대값보다 "벽 너머 fold 불가"라는 정성 신호가 본질).
+
+## §hexaval-unbox — 🟢 HexaVal 언박싱 pilot (known-int rebox → inline literal)
+
+> milestone `🟢 HexaVal 언박싱 / register-pack` 의 실측. **요지**: §parity-attest 가
+> raw 7.9×~1263× 갭의 주범으로 지목한 HexaVal 박싱을 **한 좁은 지점**에서 제거한다 —
+> codegen STRUCTURAL-2 known-int BinOp fast-path 가 결과를 **out-of-line `hexa_int(…)`**
+> 로 재박싱하던 것을 **inline C compound literal** `((HexaVal){.tag=TAG_INT,.i=(…)})` 로
+> 바꿔, 핫루프 매 산술 step 의 `bl _hexa_int` ABI 호출(= runtime.o C-ABI 벽)을 없앤다.
+> `self/codegen.hexa` L5127. 발화 조건 = `_is_known_int` 가 두 피연산자를 정적 TAG_INT
+> 로 인증할 때만(불변 int-only `let`/IntLit). 그 외엔 기존 boxed emit = 일반 경로 무변경.
+
+측정: `mini` (macOS arm64) · clang 21.0.0 · best-of-11 wall(real min, ms) · 같은
+`runtime.o` 링크 · 2026-05-30 · tag `mac-arm64-mini`. 워크로드 = `knownint_heavy`
+(16-op 불변 int `let` 체인 × 60M, 매 op 가 known-int fast-path 발화).
+
+### 표 — 3-way wall min (ms) + asm
+
+| arm | wall (ms) | hot `mix()` `bl _hexa_int` | parity gap (arm/ref) |
+|---|---|---|---|
+| ref-C @-O2 (plain `int64_t`) | 54  | — (no HexaVal) | 1.00× (baseline) |
+| BEFORE — out-of-line `hexa_int(…)` rebox (origin/main) | 599 | **17** | **11.09×** |
+| AFTER — inline `((HexaVal){.tag=TAG_INT,.i=(…)})` (pilot) | 53  | **0** | **0.98×** |
+
+> g5(정확성): before/after/ref **세 바이너리 stdout 전부 동일** = `34200003330000000`
+> (md5 `63888b02e0325abf096209d943c8413f`). asm: AFTER `mix()` 는 순수 레지스터 arith
+> (`add`/`sub`/`lsl` in x8..x11), HexaVal spill(`str`/`ldr`) 0 — clang -O2 가 16-op
+> 체인을 ~10 스칼라 명령으로 fold. BEFORE 는 17개 opaque `bl _hexa_int` 가 이 fold 를 차단.
+
+### 발견 — 박싱 제거가 known-int 워크로드의 parity 갭을 닫는다
+
+- **unbox speedup = 11.30× (91.2% wall drop)** · **parity gap 11.09× → 0.98×** = known-int
+  핫루프의 raw-parity 갭을 **100% closed**(AFTER 53ms ≈ ref 54ms, 노이즈 내 동일).
+- §parity-attest 의 "raw parity 는 runtime.o C-ABI 벽이 막는다"가 박싱 축에서 **확증** —
+  벽 = 매 op 의 `hexa_int(…)` out-of-line rebox. inline literal 로 그 호출을 제거하면
+  clang -O2 가 벽 없이 누산기를 레지스터에 유지·fold → idiomatic C 와 parity.
+
+**정직 caveat**:
+- 측정은 **faithful C A/B proxy** — 두 arm 이 각 codegen variant 의 call-site emit 을
+  정확히 미러(같은 runtime.o·clang -O2). full self-host transpiler rebuild **아님**:
+  **B9 빌드 벽**(origin/main HEAD 에 일관된 generated-.c 셋 부재 + 설치 트리 runtime.h
+  ABI skew → `hexa cc --regen` merge forward-decl 버그/module link skew 로 canonical
+  재빌드 차단, 메모리 `reference_b9_generated_c_no_checkout_shortcut`). proxy sound 근거 =
+  byte-equivalence 가 **runtime 소스에서 증명**됨(`runtime_core_emit.hexa:1371`
+  `hexa_int(n)={.tag=TAG_INT,.i=n}`) + 변경 변수 1개만 격리.
+- 갭-클로저 절대값은 **known-int 비율이 높은** 워크로드 기준. `_is_known_int` 미발화
+  케이스(mut 누산기 — 예 `fib_heavy` 의 `let mut a; a=b`)는 이 pilot 미적용 →
+  mut-accumulator 언박싱(raw `int64_t` 캐리)은 별도 follow-up.
+- codegen 편집 검증: `self/codegen.hexa` parse-clean(`hexa parse` OK) + 편집 라인이
+  emit 하는 C 문자열이 AFTER arm 형태(`((HexaVal){.tag=TAG_INT,.i=(HX_INT(l) op HX_INT(r))})`)
+  와 정확히 일치(구성으로 검증). 재현 = `bench/unshadow/knownint_heavy.hexa` ·
+  verdict = `.verdicts/unshadow-hexaval-unbox/pilot.txt`.
+## §same-tu — C-emit same-TU 빌드 기본화 cost/benefit PILOT 실측
+
+> milestone "🔵×🟡 same-TU 빌드 기본화" 의 실측. **요지**: §lto-unwall 이 입증한
+> same-TU(`#include "runtime.c"`)를 C-emit 빌드 경로의 빌드-레시피로 만들면 (1) 무엇이
+> 드는가(레시피 변경), (2) BENEFIT(#2-ext류 경계호출 cross-layer 전면 개방), (3) COST
+> (빌드시간·바이너리)를 측정해 default/opt-in/no 정직 권고를 낸다.
+> SSOT 도구 = `tool/unshadow_same_tu_bench.hexa` · verdict = `.verdicts/unshadow-same-tu/`.
+
+### 구현한 same-TU 빌드 MODE (self/main.hexa cmd_build · GATED HEXA_SAME_TU=1)
+
+reversible · opt-in 두 짝 편집(전역 default 강제 flip 아님):
+
+1. **codegen 반쪽** — HEXA_SAME_TU=1 일 때 transpile 스텝을 `HEXA_USE_RUNTIME_C=1`
+   (기존 codegen.hexa:947 escape hatch)으로 돌려 user.c 가 `#include "runtime.c"` 를
+   emit → 런타임 아말감이 user TU 안으로 들어온다.
+2. **link 반쪽** — HEXA_SAME_TU=1 일 때 별도 runtime 오브젝트/소스 2nd TU 를 최종
+   clang 호출에서 뺀다(`_rt_input = ""`). 런타임이 이미 텍스트로 들어와 있으니 단일 TU
+   컴파일. (2nd TU 로 또 넣으면 모든 심볼 중복 → 링크 에러.)
+
+`shared != "1" && len(target) == 0` 가드(–shared PIC·cross-target zig 제외). unset →
+바이트 동일하게 legacy walled 빌드. main.hexa parse-gate PASS.
+
+### 측정 방법 (정직한 A/B 프록시 — full self-host rebuild 없이)
+
+full `hexa cc --regen` 자체빌드는 **B9 벽**(runtime.c GENERATED · fresh clone 부재 —
+선행 unwall 에이전트가 부딪힌 그 블로커)으로 막힘. milestone 스펙이 명시 허용한 faithful
+프록시: 두 빌드 모드 · **동일 runtime 소스** · TU/link 전략만 격리.
+- workload 는 INSTALLED hexat 로 transpile(`#include "runtime.h"` emit).
+- **WALLED**: user.c + 별 precompiled runtime 오브젝트 링크(2 TU) — live default.
+- **SAME-TU**: user.c 의 runtime.h→runtime.c 텍스트 swap(codegen 반쪽과 동일 변환) →
+  단일 TU 컴파일.
+- runtime 소스는 B9 graduation(commit 151c52c8) 직전 `git archive | tar -x` 트리(에미터가
+  byte-identical 재현 = B9.C-10 source-SHA 게이트라 faithful). 양 arm 이 같은 runtime.c 로
+  컴파일되므로 오직 TU 경계만 변수.
+
+### 측정: `mini` (macOS arm64) · best-of-5 wall · 2026-05-30
+
+| workload | g5 (md5) | walled wall | same-TU wall | Δ | walled size | same-TU size |
+|---|---|---|---|---|---|---|
+| string-boundary       | IDENTICAL `0e2afa85…` | 1.87s | **1.48s** | **−21%** | 409080 B | 408888 B |
+| HexaVal-arith (control) | IDENTICAL `657d1ec4…` | 0.58s | **0.44s** | **−24%** | 408728 B | 408552 B |
+
+**빌드시간 (best-of-3):**
+
+| 빌드 모드 | 빌드시간 | 메모 |
+|---|---|---|
+| walled COLD (runtime.o 컴파일 + 링크) | 3.53s | first-ever build |
+| **walled WARM (runtime.o 캐시 · 링크만)** | **0.10s** | **live default hot path** |
+| **same-TU (매 빌드 아말감 재컴파일)** | **3.55s** | runtime.o 캐시 구조적 불가 |
+
+**`_u_main` 핫함수 경계 `bl` 히스토그램 (string workload):**
+
+| bl 타깃 | walled | same-TU | 비고 |
+|---|---|---|---|
+| `_rt_str_starts_with` | 2 | **0** | 인라인 → `_hxlcl_strncmp`×2 + `_hxlcl_strlen`×2 |
+| `_hexa_contains_poly`  | 1 | **0** | 인라인 → `_hxlcl_strstr`×1 |
+| `_hexa_int`            | 12 | **0** | 정수 박싱 헬퍼 전부 인라인 |
+| `_hexa_to_string`      | 1 | **0** | 인라인 → `__hexa_to_string_rec` |
+| `_hexa_bool`           | 2 | **0** | 인라인 |
+
+### 정직한 해석 — BENEFIT 실재·일반화 / COST 기본화엔 과대
+
+- **BENEFIT (실재·일반화):** same-TU 가 HexaVal/runtime ABI 전체를 clang -O2 cross-TU
+  인라이너에 연다. #2-ext류 경계호출 `_rt_str_starts_with`(2→0)·`_hexa_contains_poly`(1→0)
+  가 §lto-unwall 예측대로 call→inlined. 결정적으로 win 은 **string 전용이 아니다** —
+  HexaVal-arith 컨트롤(`_hexa_int` 박싱)도 −24%(0.58→0.44s)로 이긴다. hexa_int/
+  hexa_to_string/hexa_bool 박싱 헬퍼 자체가 런타임 경계호출이라 same-TU 가 전부 인라인.
+  g5 양 workload byte-IDENTICAL.
+- **COST (기본화엔 과대):** same-TU 는 ~14.6K-line 런타임 아말감을 **매 user TU 마다 재컴파일**
+  → 3.55s/빌드 vs walled WARM 0.10s = **~35× 빌드시간 세금**. walled 는 1회 3.53s 런타임
+  컴파일을 content-hash `runtime.<sha>.o` 캐시로 amortize; same-TU 는 런타임이 user TU 에
+  융합돼 **구조적으로 캐시 불가**. 바이너리 크기는 wash(−0.05% · −192 B). 2차 구조적 비용:
+  default-on same-TU 는 디스크에 runtime.c 를 요구 → B9 graduation 이 지운 generated-.c
+  의존을 재도입.
+
+### 권고 (정직)
+
+**OPT-IN FLAG (HEXA_SAME_TU=1) · NOT default-on.** −21~24% byte-identical 런타임 win 은
+실재하고 일반화하지만, ~35× 빌드시간 세금(3.55s vs 0.10s WARM) + generated-runtime.c 의존
+재도입 때문에 일반 빌드에서 default-on 은 나쁜 트레이드. same-TU 는 HexaVal-/경계호출-heavy
+프로그램의 **release/perf 빌드**에 가치 — 이 pilot 이 랜딩한 opt-in surface 가 바로 그것.
+terminal 측정 권고 = opt-in flag.
+
+> caveat: 단일 호스트(mini) 단일 세션 · wall = best-of-5 real min · 양 arm 동일 runtime.c
+> 소스(walled .o 도 그것으로 컴파일) back-to-back · runtime 소스 = B9-faithful pre-graduation
+> 트리(emitter SSOT 와 byte-identical) · full self-host rebuild 은 B9 벽으로 차단되어 A/B
+> 프록시 사용(스펙 허용) · repo 안 `.c` 0개 유지(/tmp 외부 트리). 재현 =
+> `tool/unshadow_same_tu_bench.hexa --rt <self-with-runtime.c> --runs 5`.

@@ -2906,6 +2906,17 @@ fn cmd_build(src, out, c_only, target, shared) {
     if env_var("HEXA_MEM_UNLIMITED") != "1" && len(env_var("HEXA_MEM_CAP_MB")) == 0 {
         v2_env = "HEXA_MEM_CAP_MB=4096 "
     }
+    // UNSHADOW same-TU pilot (HEXA_SAME_TU=1, opt-in · §same-tu): compile the
+    // runtime amalgam INTO the user TU instead of linking a separate
+    // runtime.o (the C-ABI wall). The codegen half is the existing
+    // HEXA_USE_RUNTIME_C escape hatch (codegen.hexa:947) — it makes user.c
+    // emit `#include "runtime.c"` rather than `runtime.h`, so the runtime
+    // bodies enter the same TU and clang -O2 inlines across the old boundary.
+    // The link half (drop the separate _rt_input) is below at the final-link
+    // assembly. GATED + reversible: unset → byte-for-byte the legacy walled
+    // build. §lto-unwall measured this flips #2-ext rt_str 🔴→WIN −31%.
+    let _same_tu = env_var("HEXA_SAME_TU") == "1" && shared != "1" && len(target) == 0
+    if _same_tu { v2_env = v2_env + "HEXA_USE_RUNTIME_C=1 " }
     let trans = v2_env + v2 + " " + __actual_src + " " + c_file + " 2>&1"
     println("  [1/2] " + trans)
     let r1 = exec(trans)
@@ -3011,7 +3022,13 @@ fn cmd_build(src, out, c_only, target, shared) {
     // Fallback-safe: env unset / file missing → existing cache+source path.
     let __bld_prebuilt = resolve_prebuilt_runtime()
     let mut _rt_obj = ""
-    if len(__bld_prebuilt) > 0 && shared != "1" && len(target) == 0 {
+    if _same_tu {
+        // same-TU: the runtime amalgam is already textually #include'd into
+        // user.c (HEXA_USE_RUNTIME_C above). Adding runtime.o/.c as a 2nd TU
+        // would duplicate every symbol → link error. So skip the runtime
+        // object entirely; _rt_input stays empty below.
+        println("  [rt] HEXA_SAME_TU=1 — runtime amalgam compiled INTO user TU (no separate runtime.o)")
+    } else if len(__bld_prebuilt) > 0 && shared != "1" && len(target) == 0 {
         println("  [rt] HEXA_PREBUILT_RUNTIME — linking prebuilt: " + __bld_prebuilt)
         _rt_obj = __bld_prebuilt
     } else if shared != "1" && len(target) == 0 && len(env("HOME")) > 0 {
@@ -3038,8 +3055,10 @@ fn cmd_build(src, out, c_only, target, shared) {
     }
     // Runtime input to the final link: cached object when available, else
     // runtime.c source (first build of a given runtime, or no $HOME).
+    // same-TU mode keeps this EMPTY — the runtime is already in the user TU.
     let mut _rt_input = "'" + __runtime_c + "'"
-    if len(_rt_obj) > 0 { _rt_input = "'" + _rt_obj + "'" }
+    if _same_tu { _rt_input = "" }
+    else if len(_rt_obj) > 0 { _rt_input = "'" + _rt_obj + "'" }
     if len(target) == 0 {
         compile = "clang -O2 " + _shared_cflags + os_clang_cflags() + _strict + "-Wno-trigraphs -fbracket-depth=4096 -I '" + __self_dir + "' " + c_file + " " + _rt_input + " -o '" + tmp + "'" + os_clang_ldflags() + " 2>&1"
     } else {
