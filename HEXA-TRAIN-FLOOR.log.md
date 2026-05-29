@@ -545,3 +545,49 @@ anima, runtime-regen 블로커)가 필요 — 여기선 불가. 추론 AKIDA-int
 ### teardown
 pod 38457696 `hexa cloud down --force` confirmed destroyed · `reconcile` 0-drift · 5s 프로브 pod
 3개(38457517/583/627)도 leak-guard auto-destroy + registry forget. 내 pod 0개 잔존.
+
+## 2026-05-30 — cross-repo anima 빌드 시도 (HEXA-TRAIN-FLOOR branch-4 unblock)
+
+DECODER 트레이너(`anima/training/train_full_decoder.hexa`, 순수 hexa CPU)를 새 hexa
+runtime(#2122~#2142)으로 빌드해 env flag(`HEXA_FARR_TRIM`·`HEXA_RSS_TRACE`)를
+**실제 트레이너에서 live** 시키려는 시도. 결과 = **🔴 HONEST HALT (B9 top-amalgam SSOT 부재)**.
+빌드 못 함 — 단, regen 경로 대부분이 작동함을 입증하고 진짜 블로커를 1줄로 특정.
+
+### regen 경로 (확인)
+- env flag 거처: `HEXA_FARR_TRIM`/`HEXA_RSS_TRACE` = `self/runtime_core_emit.hexa` →
+  `self/runtime_core.c` (**CPU CORE runtime** — CUDA 불필요, branch-4 RSS-churn 에 정확히 일치).
+  `HEXA_GEMV_CUBLAS_MIN_ROWS`/`HEXA_TRAIN_DTYPE` = `self/cuda/runtime_cuda_emit.hexa` (GPU-only, branch-4 무관).
+- 빌드 레시피 = `tool/build_hexa_cli.hexa` step `[0-pre]`: 외부 hexa runner 가 PATH 에
+  있으면 native/*.c·runtime_core.c·runtime_hi_gen.c·forge/cuda .c 를 emitter SSOT 에서 regen.
+- 호스트: ubu-2(linux, RTX5070, nvcc O) = 설치 hexa 가 `~/.hx/bin/self/runtime.c` 부재로
+  어떤 .hexa 도 못 컴파일(install dir 미시드). mini(arm64 mac) = canonical dir 에 작동하는
+  stale `runtime.c`(af645e419, 2026-05-26) + 32 native .c 보유 = **live buildable window**.
+
+### 시도 (mini, $0, LOCAL_BUILD=1)
+`/tmp` 에 origin/main(f269c4a9a) fresh clone → canonical 의 stale `runtime.c`+fragments 시드
+→ `hexa run tool/build_hexa_cli.hexa`. 진행: bootstrap hexat OK → `[0-pre]` regen OK
+(**runtime_core.c 에 HEXA_FARR_TRIM 4-hit 폴드 확인** · native 16 + forge + hi_gen 전부 regen)
+→ stage1~3 transpile OK → **stage4 link FAIL**:
+```
+Undefined symbols for architecture arm64:
+  "_bits_to_float", referenced from: __lower_hexpr in main_native-*.o
+  "_float_to_bits", referenced from: __lower_hexpr / __nvptx_f64_hexlit in main_native-*.o
+ld: symbol(s) not found for architecture arm64
+build_hexa_cli: compile driver failed (rc=1)
+```
+
+### 진짜 블로커 (B9, 1줄 특정)
+top-level `self/runtime.c` **amalgam 자체가 emitter SSOT 없음** (모든 #include fragment 은
+`_emit.hexa` 있는데 top 만 없음) + gitignored. `float_to_bits`/`bits_to_float` 의 weak def 는
+PR #1677(acc8435a)이 `self/runtime.c` 에 박음 (tensor_kernels_emit.hexa 는 dup 제거 — 주석이
+#1677 canonical=runtime.c 명시). fresh clone 의 컴파일러(main.hexa `_lower_hexpr`)는 이 심볼을
+호출하지만, fresh clone 으로 **2026-05-26 이후 심볼을 가진 runtime.c 를 재생성할 수단이 없음**.
+시드한 stale runtime.c(2026-05-26)는 #1677 이전이라 def 0개. → 빌드 reproducible 불가.
+
+### 결론 / branch-4 영향
+- CORE-runtime flag regen 은 **작동** (runtime_core.c FARR_TRIM 폴드 성공). 블로커는 한 층 위
+  top-amalgam ABI 갭이지 flag 가 아님.
+- **branch-4(real RSS-churn) 는 이 cycle 로 unblock 안 됨** — top `runtime.c` SSOT 갭 선결 필요.
+- handoff `97ee1245` (hexa-lang): GAP = `self/runtime_emit.hexa` SSOT 추가 OR runtime.c git-track
+  OR float_to_bits def 를 fragment emitter 로 이동 → fresh-clone 빌드 reproducible 화.
+- residue 정리: ubu-2 `~/.hx/bin/self/*.c` 임시 symlink 제거 완료. mini `/tmp/htf` = 임시(자동 폐기).
