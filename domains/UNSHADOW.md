@@ -16,5 +16,5 @@
 - [ ] 🔵 A 루프→closed-form 제거 1건 (atlas Faulhaber류 — "안 돌기" 실증)
 - [ ] 🔵 C refinement-type bounds/null/tag-elision (타입정보 = 공짜 license)
 - [ ] 🔵 B proof-carrying 최적화 1건 (cross-layer 인라인과 결합)
-- [ ] 🟢 전용 arena reclaim 배선 — 자원(RSS·alloc 지연) 측정
+- [x] 🟢 전용 arena reclaim 배선 — 자원(RSS·alloc 지연) 측정 — 기존 region-reclaim opt-in(`HEXA_VAL_ARENA`+`HEXA_STR_ARENA`, default ON) fully-off 대비 **peak RSS −40% · wall −26%** (mini, `self/bench/arena_reclaim_bench.hexa`, N=400k), g5 byte-diff 4/4 IDENTICAL. 정직 caveat: constant-factor win 이며 peak RSS 는 여전히 N 에 선형(bound 아님). 상세=`UNSHADOW.bench.md §arena-reclaim`
 - [ ] 🔵 E AoS↔SoA 자동전환 OR F CPU/GPU fusion (도메인 택1)
