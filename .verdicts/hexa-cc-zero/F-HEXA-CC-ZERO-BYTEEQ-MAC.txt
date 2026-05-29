@@ -1,0 +1,129 @@
+F-HEXA-CC-ZERO-BYTEEQ-MAC — HEXA-CC-ZERO P1 byte-eq fixpoint 실측 (2026-05-30)
+==============================================================================
+falsifier  : "`hexa cc --regen` 으로 재생성한 트랜스파일러가 기존 트랜스파일러와
+              byte-identical 인가? (self-host fixpoint v_n == v_{n+1}) — Mac arm64."
+method     : pool on mini — 실제 warm-rebuild. `hexa cc --regen` (heavy) 을
+             HEXA_MEM_UNLIMITED=1 로 1회 실행 → 4 SSOT 모듈(.c) 재생성 →
+             hexat.new 링크 → gen2 재트랜스파일 → hexat.new2 링크 → gen-N+1
+             재트랜스파일 → per-module md5 fixpoint 비교 (v_n == v_{n+1}).
+             read-only: 설치 hexa.real·hexa_cc.c 원본 미변경 (build/hexat 는
+             mini-local untracked artifact; swap 후 backup 으로 복원·md5 검증).
+host       : Mac arm64 (mini, Darwin arm64, CLT + homebrew sodium/openssl@3)
+             ※ ubu x86_64 cross-host 는 이번 사이클 OFF-LIMITS (sibling agent
+               점유) → deferred follow-up. 본 verdict 는 Mac arm64 ONLY.
+tree       : mini ~/core/hexa-lang @ af645e419 (origin/main 대비 755 commits
+             stale·shared-worktree). origin/main(6df3d24)은 hexa_cc.c +
+             build/hexat 둘 다 부재 → fresh clone 에서는 byte-eq 측정 불가
+             (cold-seed·prior-hexat 모두 absent). 따라서 self-consistent 한
+             stale 트리에서 fixpoint property 를 측정.
+
+
+────────────────────────────────────────────────────────────────
+결론 (one-line)
+────────────────────────────────────────────────────────────────
+SELF-HOST-FIXPOINT-BYTE-EQ-PASS (mac-arm64) — v_n ≡ v_{n+1} 4/4 모듈 byte-eq.
+단, IN-TREE-SEED-DRIFT — 커밋된 build/hexat/hexa_cc.c(af645e419)는 자기 SSOT 의
+fixpoint 가 아님 (stale seed). P1 은 Mac arm64 PARTIAL (fixpoint 성질 입증;
+in-tree seed 갱신 + ubu cross-host 잔여). 절대 "fully closed" 아님.
+
+
+────────────────────────────────────────────────────────────────
+[A] `hexa cc --regen` 실행 stdout (verbatim, build/hexat = orig seed)
+────────────────────────────────────────────────────────────────
+=== hexa cc --regen : hexa_cc.c 자동 재생성 ===
+  SSOT: self/{lexer,parser,type_checker,codegen}.hexa
+[1/4] transpiling SSOT modules via hexat
+  [transpile] HEXA_VAL_ARENA=0 .../build/hexat .../self/lexer.hexa /tmp/_lexer.c 2>&1
+    OK: /tmp/_lexer.c
+  [transpile] HEXA_VAL_ARENA=0 .../build/hexat .../self/parser.hexa /tmp/_parser.c 2>&1
+    OK: /tmp/_parser.c
+  [transpile] HEXA_VAL_ARENA=0 .../build/hexat .../self/type_checker.hexa /tmp/_tc.c 2>&1
+    OK: /tmp/_tc.c
+  [transpile] HEXA_VAL_ARENA=0 .../build/hexat .../self/codegen.hexa /tmp/_cg.c 2>&1
+    OK: /tmp/_cg.c
+  lexer=ok parser=ok tc=ok cg=ok
+[2/4] merging modules → self/native/hexa_cc.c.new  (MVP: concat + #include dedup + main strip)
+  hexa_cc.c      bytes=1848771  lines=28396
+  hexa_cc.c.new  bytes=1848179  lines=28401
+[3/4] clang compile hexa_cc.c.new → /tmp/hexat.new (failure tolerated)
+  clang -O2 -DHEXA_HAS_LIBSODIUM -I/opt/homebrew/include -DHEXA_HAS_OPENSSL \
+    -I/opt/homebrew/opt/openssl@3/include -I '.../self' -x c -c -Wno-trigraphs \
+    -fbracket-depth=4096 .../self/native/hexa_cc.c.new -o /tmp/hexa_cc.new.o
+  (runtime.h 블록코멘트 -Wcomment 경고 2건만; 0 error → .o OK)
+  compiled=yes
+[4/4] diff summary
+  diff: Files .../self/native/hexa_cc.c and .../self/native/hexa_cc.c.new differ
+Phase C MVP done.
+
+
+────────────────────────────────────────────────────────────────
+[B] IN-TREE-SEED DRIFT — gen1(build/hexat, 커밋된 seed) vs gen2(hexat.new, SSOT)
+────────────────────────────────────────────────────────────────
+hexa_cc.c (in-tree, af645e419) md5 : 69a042e0de1280cd6a9f7c182c53c6a3   28396 lines / 1848771 B
+hexa_cc.c.new (regen)         md5 : 926983f2eef085bd513e4ee007788fc1   28401 lines / 1848179 B
+→ DIFFER. 153 diff hunks. 원인 2종 (둘 다 SSOT 가 NEWER, 커밋된 seed 가 stale):
+  (1) main() 템플릿: 커밋 seed 는 `setvbuf(stdout/stderr,...,_IOLBF,0)` 미포함,
+      현 codegen.hexa SSOT 는 emit. (lexer/tc/parser main body)
+  (2) parser sl 슬롯: 신규 string-literal "shared"/",shared" (sl_615/616) 가
+      현 self/parser.hexa(L4541-4549 attr threading)에서 추가 → __hexa_parser_sl_N
+      +2 renumber 캐스케이드.
+  (3) comptime const-fold: 현 codegen 은 `max_scan`→hexa_int(64),
+      `_strlit_chunk`→hexa_int(500) 로 fold; 커밋 seed 바이너리는 심볼 유지.
+→ 즉 커밋된 build/hexat·hexa_cc.c(af645e419, mtime 2026-05-26 23:36-37)는
+  자기 트리의 현 SSOT 로부터 생성된 것이 아님 = 최종 regen 없이 커밋된 stale seed.
+  (= P1 "in-tree seed == SSOT regen" 형태로는 🔴 DRIFT)
+
+
+────────────────────────────────────────────────────────────────
+[C] SELF-HOST FIXPOINT — v_n == v_{n+1} (SSOT 트랜스파일러의 자기-안정성)
+────────────────────────────────────────────────────────────────
+절차: hexat.new(=gen1 출력으로 빌드) 로 4 SSOT 재트랜스파일(gen2) →
+      hexa_cc.c.new(gen2) 머지 → hexat.new2 빌드 → 4 SSOT 재트랜스파일(gen-N+1) →
+      gen2 출력 vs gen-N+1 출력 per-module md5 비교.
+
+[determinism] 같은 hexat.new 2회 실행 (gen2 vs gen3):
+  lexer        : DETERMINISTIC  e592e6d3e1c471222d9153e94c7a5c85
+  parser       : DETERMINISTIC  51fac985d0b6c2cdbcd9db746bcaf7aa
+  type_checker : DETERMINISTIC  4e764bc1a726023e05df73d0a60e3325
+  codegen      : DETERMINISTIC  75b0fadb9c9d557d13facac0f17e88a3
+
+[FIXPOINT v_n == v_{n+1}] hexat.new(gen2) vs hexat.new2(gen-N+1) per-module 출력:
+  lexer        : FIXPOINT-EQ  e592e6d3e1c471222d9153e94c7a5c85
+  parser       : FIXPOINT-EQ  51fac985d0b6c2cdbcd9db746bcaf7aa
+  type_checker : FIXPOINT-EQ  4e764bc1a726023e05df73d0a60e3325
+  codegen      : FIXPOINT-EQ  75b0fadb9c9d557d13facac0f17e88a3
+  → 4/4 모듈 byte-identical. SSOT 트랜스파일러는 fixpoint (자기 자신을 재생산).
+
+[binary md5] hexat.new vs hexat.new2 : 63a27e92.. vs 55cff623.. (DIFFER)
+  → 바이너리 md5 는 다름. 단 이는 clang 의 build-path/timestamp 메타데이터 차이일
+    뿐, fixpoint 기준이 아님. fixpoint 기준 = 트랜스파일러 출력(.c) 의 byte-eq 이고
+    그건 4/4 PASS. (재생성 hexa_cc.c.new 도 두 regen 모두 1848179 B / 28401 lines 동일.)
+
+
+────────────────────────────────────────────────────────────────
+[D] 안전성 (installed/live 미변경)
+────────────────────────────────────────────────────────────────
+- 설치 ~/.hx/packages/hexa/hexa.real md5 = 200a36009082ccb3da1854cb2297114d (전후 동일·미변경)
+- build/hexat 는 mini-LOCAL untracked artifact (git ls-files → <none>). fixpoint
+  측정 위해 hexat.new 로 1회 swap → backup(/tmp/hexat.orig.bak) 으로 복원 →
+  md5 5f64eda8a4861878dae2ea1646b4ae55 == backup 으로 무결성 확인.
+- self/native/hexa_cc.c (in-tree) md5 = 69a042e0.. 전후 동일·미변경.
+- 모든 regen 산출물(.new·hexat.new*·/tmp/*.c·runtime.o) 정리 완료.
+
+
+────────────────────────────────────────────────────────────────
+[E] 판정 매트릭스
+────────────────────────────────────────────────────────────────
+| axis                                   | host       | verdict          |
+|----------------------------------------|------------|------------------|
+| self-host fixpoint v_n==v_{n+1} (출력)  | mac-arm64  | 🟢 BYTE-EQ 4/4   |
+| regen 결정성 (gen2==gen3)               | mac-arm64  | 🟢 DETERMINISTIC |
+| in-tree seed == SSOT regen             | mac-arm64  | 🔴 DRIFT (stale)  |
+| cross-host (ubu x86_64)                | —          | ⏸ DEFERRED       |
+
+honest note: P1 의 핵심 성질(self-host fixpoint, 트랜스파일러가 자기 SSOT 로부터
+재생성한 출력이 안정·재생산) 은 Mac arm64 에서 🟢 입증됨. 그러나
+(1) 커밋된 in-tree seed(af645e419)는 현 SSOT 의 fixpoint 가 아님(최종 regen
+필요한 stale seed) 이고, (2) ubu x86_64 cross-host 는 미측정.
+따라서 P1 은 "Mac arm64 fixpoint 성질 PASS · seed 갱신 + cross-host 잔여" =
+PARTIAL. 절대 fully-closed 아님.
