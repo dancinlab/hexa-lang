@@ -6,7 +6,7 @@
 
 ## 전제 (별개 축과의 관계)
 
-- `.c=0` 졸업(`drafts/dotc-graduation-plan.md` · Phase 1~5)은 UNSHADOW 의 **전제조건**(그림자 떼기). 이 도메인은 그 위에서 얻는 **perf 주권**을 측정한다 — 파일 안 겹침, 병렬 가능.
+- runtime hexa-native frontier(RUNTIME.flip/floor)는 UNSHADOW 의 **전제조건**. 이 도메인은 그 위에서 얻는 **perf 주권**을 측정한다 — 파일 안 겹침, 병렬 가능.
 - 정직한 천장 + 재프레임(v2): raw 스칼라/벡터는 LLVM 과 비김(PTX-diff). **진짜 ROI 는 🔵 hexa-arch 추월** — LLVM 에 없는 종목(이론·증명·전스택의미·comptime). 🟡 "LLVM 재구현"은 함정, 후순위. 상세 = `UNSHADOW.easy.md`.
 
 ## milestones
