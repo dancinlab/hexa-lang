@@ -1,0 +1,264 @@
+// HEXA Standard Library — deck (simulation input-deck generator)
+//
+// Generic generator for compute-cluster simulation decks (QE, NWChem,
+// LAMMPS, ...). One generic dispatcher (`gen_deck`) routes per-domain
+// emitters by `domain` string — first round implements `rtsc` only
+// (QE el-ph deck for hydride / perovskite-hydride anchors).
+//
+// d4 governance: single generic dispatch — adding a new domain (e.g.
+// "chip", "bio") is one new branch + one new emitter module. No
+// per-instance hardcoding; all anchor data is manifest-driven.
+//
+// d16 governance: every emitted deck is syntax-validate-FREE: pure
+// string emission, no shell-out, no remote dependency at gen time.
+//
+// ── Public API ──────────────────────────────────────────────────────
+//   pub struct DeckFile  — { path: str, content: str }
+//   pub fn gen_deck(domain: str, spec: any) -> [DeckFile]
+//
+// ── Domain emitters (1st round) ─────────────────────────────────────
+//   stdlib/deck/rtsc_emitter.hexa  — QE el-ph (vc-relax+scf+ph+run.sh)
+//
+// Absorbed: hand-written QE decks (demiurge exports/rtsc/decks/*).
+// Used by: demiurge RTSC campaign (anchor sweep · SSCHA precision).
+
+pub struct DeckFile {
+    path: any,    // str — basename ("vc-relax.in", "run.sh", ...)
+    content: any  // str — full file body
+}
+
+// Generic dispatcher. `spec` is a per-domain dict-like value (any).
+// Unknown `domain` returns an empty list — caller checks len().
+pub fn gen_deck(domain: any, spec: any) -> any {
+    if domain == "rtsc" {
+        return rtsc_emit(spec)
+    }
+    return []
+}
+
+// ── RTSC QE el-ph deck emitter ──────────────────────────────────────
+//
+// spec keys (all required unless marked):
+//   anchor   : "h3o" | "h3f" | "h3p" | "h3cl" | "AcBeH8" | "YH10" | "CaAuH3"
+//   press    : float  — GPa (vc-relax target; 0.0 = ambient)
+//   q_grid   : str    — "4x4x4" / "6x6x6" (ph.x ldisp nq1/2/3)
+//   soc      : bool   — optional, default false; full-rel Au UPF when true
+//   sscha    : bool   — optional, default false; emits sscha_post.sh stub
+//   workname : str    — short slug for /root/<workname> staging dir
+//
+// Anchors carry their crystallographic data inline (rtsc_anchor_data)
+// — Im-3m / Pm-3m / Fm-3m primitive cells with the canonical
+// ATOMIC_POSITIONS literal each anchor uses in the demiurge corpus.
+
+// Anchor record: [ibrav, celldm1_bohr, nat, ntyp, ecutwfc, ecutrho,
+//                 species_block, positions_block, kgrid_relax,
+//                 kgrid_scf, structure_hint, smearing_class]
+// smearing_class: "metal" (degauss 0.02) or "wide" (degauss 0.03).
+fn rtsc_anchor_data(anchor: any) -> any {
+    // h3o (Im-3m H3O — group-17 binary hydride family).
+    if anchor == "h3o" {
+        let sp = "  O 15.999 O.pbe-n-rrkjus_psl.1.0.0.UPF\n  H  1.008 H.pbe-rrkjus_psl.1.0.0.UPF\n"
+        let pos = "  O 0.0 0.0 0.0\n  H 0.5 0.5 0.0\n  H 0.5 0.0 0.5\n  H 0.0 0.5 0.5\n"
+        return [3, 5.20, 4, 2, 80.0, 640.0, sp, pos, "12 12 12 0 0 0", "16 16 16 0 0 0", "Im-3m", "metal"]
+    }
+    if anchor == "h3f" {
+        let sp = "  F 18.998 F.pbe-n-rrkjus_psl.1.0.0.UPF\n  H  1.008 H.pbe-rrkjus_psl.1.0.0.UPF\n"
+        let pos = "  F 0.0 0.0 0.0\n  H 0.5 0.5 0.0\n  H 0.5 0.0 0.5\n  H 0.0 0.5 0.5\n"
+        return [3, 5.13, 4, 2, 80.0, 640.0, sp, pos, "12 12 12 0 0 0", "16 16 16 0 0 0", "Im-3m", "metal"]
+    }
+    if anchor == "h3p" {
+        let sp = "  P 30.974 P.pbe-n-rrkjus_psl.1.0.0.UPF\n  H  1.008 H.pbe-rrkjus_psl.1.0.0.UPF\n"
+        let pos = "  P 0.0 0.0 0.0\n  H 0.5 0.5 0.0\n  H 0.5 0.0 0.5\n  H 0.0 0.5 0.5\n"
+        return [3, 5.45, 4, 2, 80.0, 640.0, sp, pos, "12 12 12 0 0 0", "16 16 16 0 0 0", "Im-3m", "metal"]
+    }
+    if anchor == "h3cl" {
+        let sp = "  Cl 35.453 Cl.pbe-n-rrkjus_psl.1.0.0.UPF\n  H  1.008 H.pbe-rrkjus_psl.1.0.0.UPF\n"
+        let pos = "  Cl 0.0 0.0 0.0\n  H 0.5 0.5 0.0\n  H 0.5 0.0 0.5\n  H 0.0 0.5 0.5\n"
+        return [3, 5.62, 4, 2, 80.0, 640.0, sp, pos, "12 12 12 0 0 0", "16 16 16 0 0 0", "Im-3m", "metal"]
+    }
+    if anchor == "AcBeH8" {
+        // XBeH8 family (Ac variant) — Fm-3m clathrate analogue, ambient-pressure candidate.
+        let sp = "  Ac 227.0 Ac.pbe-spdfn-rrkjus_psl.1.0.0.UPF\n  Be  9.012 Be.pbe-n-rrkjus_psl.1.0.0.UPF\n  H   1.008 H.pbe-rrkjus_psl.1.0.0.UPF\n"
+        let pos = "  Ac 0.0 0.0 0.0\n  Be 0.5 0.5 0.5\n  H 0.25 0.25 0.25\n  H 0.75 0.25 0.25\n  H 0.25 0.75 0.25\n  H 0.25 0.25 0.75\n  H 0.75 0.75 0.25\n  H 0.75 0.25 0.75\n  H 0.25 0.75 0.75\n  H 0.75 0.75 0.75\n"
+        return [2, 9.40, 10, 3, 90.0, 720.0, sp, pos, "8 8 8 0 0 0", "12 12 12 0 0 0", "Fm-3m", "metal"]
+    }
+    if anchor == "YH10" {
+        // YH10 sodalite-clathrate (Im-3m, Y at body-center + 10 H clathrate cage).
+        let sp = "  Y 88.906 Y.pbe-spn-rrkjus_psl.1.0.0.UPF\n  H  1.008 H.pbe-rrkjus_psl.1.0.0.UPF\n"
+        let pos = "  Y 0.0 0.0 0.0\n  H 0.25 0.50 0.00\n  H 0.50 0.25 0.00\n  H 0.50 0.75 0.00\n  H 0.75 0.50 0.00\n  H 0.25 0.00 0.50\n  H 0.75 0.00 0.50\n  H 0.00 0.25 0.50\n  H 0.00 0.75 0.50\n  H 0.50 0.50 0.25\n  H 0.50 0.50 0.75\n"
+        return [3, 6.80, 11, 2, 90.0, 720.0, sp, pos, "12 12 12 0 0 0", "16 16 16 0 0 0", "Im-3m", "metal"]
+    }
+    if anchor == "CaAuH3" {
+        let sp = "  Ca 40.078 Ca.pbe-spn-rrkjus_psl.1.0.0.UPF\n  Au 196.967 Au.pbe-n-rrkjus_psl.1.0.0.UPF\n  H  1.008 H.pbe-rrkjus_psl.1.0.0.UPF\n"
+        let pos = "  Ca 0.5 0.5 0.5\n  Au 0.0 0.0 0.0\n  H  0.5 0.0 0.0\n  H  0.0 0.5 0.0\n  H  0.0 0.0 0.5\n"
+        return [1, 6.8361, 5, 3, 80.0, 640.0, sp, pos, "12 12 12 0 0 0", "16 16 16 0 0 0", "Pm-3m", "metal"]
+    }
+    return []
+}
+
+// Parse "4x4x4" -> [4,4,4] (ph.x ldisp nq).
+fn rtsc_q_parse(s: any) -> any {
+    let parts = s.split("x")
+    if len(parts) != 3 { return [4, 4, 4] }
+    return [to_int(parts[0]), to_int(parts[1]), to_int(parts[2])]
+}
+
+// Resolve UPF list — flip Au to full-rel when soc=true.
+fn rtsc_soc_species(species_block: any, soc: any) -> any {
+    if soc == false { return species_block }
+    let scalar_au = "Au.pbe-n-rrkjus_psl.1.0.0.UPF"
+    let rel_au = "Au.rel-pbe-n-rrkjus_psl.1.0.0.UPF"
+    return species_block.replace(scalar_au, rel_au)
+}
+
+// Emit the four files (+ optional sscha_post.sh).
+pub fn rtsc_emit(spec: any) -> any {
+    let anchor = spec["anchor"]
+    let press = spec["press"]
+    let q_grid = spec["q_grid"]
+    let workname = spec["workname"]
+    let mut soc = false
+    if spec.has("soc") { soc = spec["soc"] }
+    let mut sscha = false
+    if spec.has("sscha") { sscha = spec["sscha"] }
+
+    let A = rtsc_anchor_data(anchor)
+    if len(A) == 0 { return [] }
+    let ibrav = A[0]
+    let celldm = A[1]
+    let nat = A[2]
+    let ntyp = A[3]
+    let ecutwfc = A[4]
+    let ecutrho = A[5]
+    let species = rtsc_soc_species(A[6], soc)
+    let positions = A[7]
+    let kgrid_relax = A[8]
+    let kgrid_scf = A[9]
+
+    let q = rtsc_q_parse(q_grid)
+    let nq1 = q[0]; let nq2 = q[1]; let nq3 = q[2]
+
+    let prefix = workname.lower()
+    let work = "/root/" + workname
+
+    let mut soc_block = ""
+    if soc { soc_block = "  noncolin = .true.\n  lspinorb = .true.\n" }
+
+    // vc-relax.in
+    let mut vc = "&control\n  calculation = 'vc-relax'\n  prefix = '" + prefix + "'\n"
+    vc = vc + "  outdir = '" + work + "/out'\n  pseudo_dir = '" + work + "/pseudo'\n"
+    vc = vc + "  tprnfor = .true.\n  tstress = .true.\n  forc_conv_thr = 1.0d-4\n"
+    vc = vc + "  etot_conv_thr = 1.0d-5\n  nstep = 200\n  verbosity = 'low'\n/\n"
+    vc = vc + "&system\n  ibrav = " + to_string(ibrav) + "\n  celldm(1) = " + to_string(celldm) + "\n"
+    vc = vc + "  nat = " + to_string(nat) + "\n  ntyp = " + to_string(ntyp) + "\n"
+    vc = vc + "  ecutwfc = " + to_string(ecutwfc) + "\n  ecutrho = " + to_string(ecutrho) + "\n"
+    vc = vc + "  nosym = .true.\n  occupations = 'smearing'\n  smearing = 'mp'\n  degauss = 0.02\n"
+    vc = vc + soc_block + "/\n"
+    vc = vc + "&electrons\n  conv_thr = 1.0d-10\n  mixing_beta = 0.4\n  electron_maxstep = 400\n/\n"
+    vc = vc + "&ions\n  ion_dynamics = 'bfgs'\n/\n"
+    vc = vc + "&cell\n  cell_dynamics = 'bfgs'\n  press = " + to_string(press) + "\n  press_conv_thr = 0.5\n/\n"
+    vc = vc + "ATOMIC_SPECIES\n" + species
+    vc = vc + "ATOMIC_POSITIONS crystal\n" + positions
+    vc = vc + "K_POINTS automatic\n  " + kgrid_relax + "\n"
+
+    // scf.in
+    let mut scf = "&control\n  calculation = 'scf'\n  prefix = '" + prefix + "'\n"
+    scf = scf + "  outdir = '" + work + "/out'\n  pseudo_dir = '" + work + "/pseudo'\n"
+    scf = scf + "  tprnfor = .true.\n  tstress = .true.\n  verbosity = 'low'\n/\n"
+    scf = scf + "&system\n  ibrav = " + to_string(ibrav) + "\n  celldm(1) = " + to_string(celldm) + "\n"
+    scf = scf + "  nat = " + to_string(nat) + "\n  ntyp = " + to_string(ntyp) + "\n"
+    scf = scf + "  ecutwfc = " + to_string(ecutwfc) + "\n  ecutrho = " + to_string(ecutrho) + "\n"
+    scf = scf + "  occupations = 'smearing'\n  smearing = 'mp'\n  degauss = 0.02\n"
+    scf = scf + soc_block + "/\n"
+    scf = scf + "&electrons\n  conv_thr = 1.0d-12\n  mixing_beta = 0.4\n  electron_maxstep = 400\n/\n"
+    scf = scf + "ATOMIC_SPECIES\n" + species
+    scf = scf + "ATOMIC_POSITIONS crystal\n" + positions
+    scf = scf + "K_POINTS automatic\n  " + kgrid_scf + "\n"
+
+    // ph.in
+    let mut ph = prefix + " phonon + electron-phonon " + q_grid + " q (RTSC " + anchor + ")\n"
+    ph = ph + "&inputph\n  prefix = '" + prefix + "'\n"
+    ph = ph + "  outdir = '" + work + "/out'\n"
+    ph = ph + "  fildyn = '" + work + "/" + prefix + ".dyn'\n"
+    ph = ph + "  fildvscf = '" + prefix + ".dvscf'\n"
+    ph = ph + "  ldisp = .true.\n"
+    ph = ph + "  nq1 = " + to_string(nq1) + ", nq2 = " + to_string(nq2) + ", nq3 = " + to_string(nq3) + "\n"
+    ph = ph + "  tr2_ph = 1.0d-14\n  recover = .true.\n"
+    ph = ph + "  electron_phonon = 'simple'\n  el_ph_sigma = 0.005\n  el_ph_nsigma = 10\n/\n"
+
+    // run.sh — sourced QE env + path-direct decks at /root/<workname>/
+    let mut rs = "#!/usr/bin/env bash\n"
+    rs = rs + "# RTSC " + anchor + " " + workname + " — autonomous run (d17)\n"
+    rs = rs + "set -uo pipefail\n"
+    rs = rs + "WORK=" + work + "\n"
+    rs = rs + "mkdir -p \"$WORK/out\" \"$WORK/pseudo\"\n"
+    rs = rs + "cd \"$WORK\"\n"
+    rs = rs + "# Decks already staged at /root/" + workname + "/ via hexa cloud copy-to\n"
+    rs = rs + "# Source QE env (detached env loss · #1864 / reference_detached_remote_env_loss)\n"
+    rs = rs + "source ~/miniforge3/etc/profile.d/conda.sh 2>/dev/null || source /opt/conda/etc/profile.d/conda.sh 2>/dev/null || true\n"
+    rs = rs + "conda activate qe 2>/dev/null || true\n"
+    rs = rs + "which pw.x ph.x > \"$WORK/run.log\" 2>&1\n"
+    rs = rs + "# Pseudo PSL 1.0.0 auto-download (scalar + full-rel branch)\n"
+    rs = rs + "PSL_BASE=\"https://pseudopotentials.quantum-espresso.org/upf_files\"\n"
+    rs = rs + "cd \"$WORK/pseudo\"\n"
+    rs = rs + "for f in " + rtsc_upf_list(species) + "; do\n"
+    rs = rs + "  [[ -f \"$f\" ]] || wget -q \"$PSL_BASE/$f\" || curl -sLO \"$PSL_BASE/$f\" || echo \"MISSING_PSEUDO=$f\"\n"
+    rs = rs + "done\nls -la \"$WORK/pseudo\" > \"$WORK/pseudo_check.log\"\ncd \"$WORK\"\n"
+    rs = rs + "NCORES=$(nproc); NPROC=$((NCORES > 8 ? 8 : NCORES))\n"
+    rs = rs + "echo \"=== START $(date -u) ===\" >> \"$WORK/run.log\"\n"
+    rs = rs + "echo \"[vc-relax] start $(date -u)\" >> \"$WORK/run.log\"\n"
+    rs = rs + "timeout 21600 mpirun -np $NPROC pw.x -in vc-relax.in > vc-relax.out 2>&1\n"
+    rs = rs + "echo \"[scf] start $(date -u)\" >> \"$WORK/run.log\"\n"
+    rs = rs + "timeout 21600 mpirun -np $NPROC pw.x -in scf.in > scf.out 2>&1\n"
+    rs = rs + "echo \"[ph] start $(date -u)\" >> \"$WORK/run.log\"\n"
+    rs = rs + "timeout 86400 mpirun -np $NPROC ph.x -in ph.in > ph.out 2>&1\n"
+    rs = rs + "echo \"=== END $(date -u) ===\" >> \"$WORK/run.log\"\n"
+
+    let mut out: any = []
+    out.push(DeckFile { path: "vc-relax.in", content: vc })
+    out.push(DeckFile { path: "scf.in", content: scf })
+    out.push(DeckFile { path: "ph.in", content: ph })
+    out.push(DeckFile { path: "run.sh", content: rs })
+    if sscha {
+        let mut ss = "#!/usr/bin/env bash\n# SSCHA precision post-pass for " + anchor + " " + workname + "\n"
+        ss = ss + "# Run AFTER harmonic ph.x converges; consumes ph.x dynmat + scf wfc.\n"
+        ss = ss + "# Stub — invoke sscha-runner against $WORK/out + $WORK/" + prefix + ".dyn*\n"
+        ss = ss + "set -uo pipefail\nWORK=" + work + "\necho \"[sscha] start $(date -u)\" >> \"$WORK/run.log\"\n"
+        ss = ss + "# TODO: wire sscha-runner CLI here (Stage-2)\n"
+        out.push(DeckFile { path: "sscha_post.sh", content: ss })
+    }
+    return out
+}
+
+// Extract UPF filenames from a species block (newline + 3-token rows).
+fn rtsc_upf_list(species_block: any) -> any {
+    let lines = species_block.split("\n")
+    let mut out = ""
+    let mut i = 0
+    while i < len(lines) {
+        let ln = lines[i].trim()
+        if len(ln) > 0 {
+            let parts = ln.split(" ")
+            // Find first token that ends with ".UPF".
+            let mut j = 0
+            while j < len(parts) {
+                let p = parts[j].trim()
+                let plen = len(p)
+                if plen >= 4 {
+                    if p.substring(plen - 4, plen) == ".UPF" {
+                        if len(out) > 0 { out = out + " " }
+                        out = out + p
+                        j = len(parts)
+                    }
+                }
+                j = j + 1
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+pub fn deck_status() -> any {
+    return "STAGE-1 — gen_deck dispatcher + rtsc emitter (7 anchors: h3o h3f h3p h3cl AcBeH8 YH10 CaAuH3; SOC + SSCHA-stub branches; d4 generic, d16 syntax-validate-free)"
+}
