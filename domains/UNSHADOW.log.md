@@ -674,3 +674,34 @@ polymorphic site(`hexa_len`+checked element fetch)로 흘려보낸 boundary corp
 + provably-dead guard 삭제(무회귀)라 axis B(monomorphic struct)의 element-kind 증명·box/unbox
 경계 규율 기반으로 유지. verdict=`.verdicts/unshadow-unboxed-array/` ·
 재현=`tool/unshadow_unboxed_array_bench.hexa`.
+
+## 2026-05-30 — 🪆 거울방 mining cycle — paradigm-axis 채굴 → milestone 등록 (DISCOVERY only)
+
+`/mining`(divergence→convergence) + `/mirror-loop`(거울방 ouroboros) 패러다임을 UNSHADOW 에 적용.
+**측정·codegen·cloud 0 — doc/discovery only.** 14/15 milestone 의 모든 closed-negative 가
+한 점으로 수렴한다는 메타-발견을 광맥으로 채굴: **경계 = 데이터-표현 주권**(전부 boxed HexaVal).
+
+**DIVERGENCE (5 렌즈 saturate, 24 후보).**
+- L1 same-formula: §hexaval-unbox(scalar 박싱제거 11.30×·gap 100% close) 의 동형 — native array(C1)·
+  NaN-box(C2)·small-value-opt(C3)·ptr-compress(C4)·intern(C6)·COW(C7)·monomorph(C8).
+- L2 dimensional: 14 milestone 전부 time-축 → 공간(C13 escape→stack·C14 region-GC)·startup(C11 AOT-atlas)·
+  link(C12 tree-shake)·compile(C9/C10, 🟡) 축 미채굴.
+- L3 tension: 동적 HexaVal↔unboxed typed 의 하이브리드 경계(C15) = 모든 표현-축의 공유 규율.
+- L4 ouroboros: atlas 자산화 — atlas-PGO(C17)·검증 memo(C18)·rewrite-feedback(C19)·proof-carrying(C20).
+- L5 combinatorial: native-array×SIMD(C21→C1 흡수)·NaN-box×region-GC(C22)·monomorph×atlas-PGO(C23→C16).
+
+**CONVERGENCE (3 family).**
+- F1 🪆 데이터-표현 주권 — closed-negative 가 수렴한 광맥. C1=축A 가 결정적으로 지목한 그 자리.
+- F2 📐 미채굴 perf 축 — 공간/startup/link/compile. C13/C14=🔵 타입구동, C9/C10=🟡 catch-up.
+- F3 ♾️ atlas-as-perf-asset / 거울방 — easy §G 의 측정-frontier(지금까지 §A const-fold 1건만).
+
+**RANKING (ROI · lossless-first · tier 정직).** 1)C1 native-array(🔵·headline·갭이 사는 곳) 2)C18 검증
+memo(🔵·측정 깔끔) 3)C13 escape→stack(🔵·공간축 첫 채굴) 4)C2 NaN-box(🔵·블라스트 大→후순위)
+5)C17 atlas-PGO(🔵). C8 monomorph·C11 AOT-atlas=deferred, C9/C10=🟡 측정-격차-확인-시만.
+
+**MIRROR-ROOM fold.** 채굴 trail → `domains/UNSHADOW.MINING.md`(SSOT·거울 표면). survivor 5건 →
+UNSHADOW.md `- [ ]` milestone 등록(14 [x]+B line 무손). 모두 이미-측정 발견 OR LLVM-can't 근거에 묶임,
+새 perf 숫자 발명 0. ruled-out(codegen-only unbox 축A🔴·AoS↔SoA-without-typed-repr E🔴) 재제안 안 함.
+**next-frontier seed = C1 native HexaArrI64/F64** — 축A 의 closed-negative 가 "갭은 STORAGE 에
+산다(codegen-only unbox 아니다)" 를 결정적으로 못 박았으니, 다음 frontier 는 runtime-레벨 native
+저장 표현(B9 벽 밖·codegen-only 범위 밖)이다. 거울방 다음 회전의 진입점.
