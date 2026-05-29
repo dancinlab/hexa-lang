@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# ─────────────────────────────────────────────────────────────────────────
+# tool/release_package — the SINGLE shared release PACKAGE entry point.
+#
+# Composes the existing Stage 3 (precompile) + Package script:
+#
+#   tool/stage_precompile_package  → release/precompile/ + hexa-$TARGET.tar.gz
+#
+# Split from `tool/release_build` so the darwin release job can interleave its
+# Developer-ID signing / notarize steps (release-only, gated) BETWEEN build and
+# package. Linux jobs simply call release_build then release_package back-to-back.
+#
+# ── Same false-green seal as release_build ───────────────────────────────────
+# release.yml AND the faithful gate both call `bash tool/release_package`
+# verbatim with the SAME env contract. There is no separate copy → no drift →
+# "gate green" ≡ "release green" by shared definition (not static comparison).
+#
+# ── Env contract IN (caller sets ONLY these) ─────────────────────────────────
+#   TARGET    darwin-arm64 | linux-x86_64 | linux-arm64   (required)
+#   CC        clang | gcc                                  (accepted for a
+#             uniform contract with release_build; unused here)
+#   LIBS      extra link libs                              (likewise; unused here)
+#   GH_TOKEN  GitHub token                                 (likewise; unused here)
+#
+# Derived here so there is NO per-stage env to drift:
+#   HEXA_PREBUILT_RUNTIME = $PWD/build/runtime.a  (Stage 0b output; the seam)
+#   HEXA_MAC_BUILD_OK     = 1  iff TARGET=darwin-arm64  (CI dry-run bypass for the
+#                              Darwin `hexa build` output-under-/tmp refuse gate)
+#
+# Extension-less (not .sh) per the stage_* precedent. Invoked as
+# `bash tool/release_package`.
+# ─────────────────────────────────────────────────────────────────────────
+set -euo pipefail
+
+: "${TARGET:?TARGET must be set (darwin-arm64|linux-x86_64|linux-arm64)}"
+
+export TARGET
+export HEXA_PREBUILT_RUNTIME="${HEXA_PREBUILT_RUNTIME:-$PWD/build/runtime.a}"
+
+# darwin only: the `hexa build` driver refuses to emit under /tmp unless this is
+# set (panic-trigger refuse gate); non-heavy precompile only. Derived from TARGET
+# so the caller never wires it per-stage (the historical drift surface).
+case "$TARGET" in
+  darwin-arm64) export HEXA_MAC_BUILD_OK="1" ;;
+esac
+
+echo "::group::Stage 3 + Package — precompile + tarball"
+bash tool/stage_precompile_package
+echo "::endgroup::"
+
+echo "[release_package] PASS — hexa-${TARGET}.tar.gz"

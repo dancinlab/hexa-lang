@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# ─────────────────────────────────────────────────────────────────────────
+# tool/release_build — the SINGLE shared release BUILD entry point.
+#
+# Composes the four existing stage scripts that bring a checkout up to a
+# working ./hexa driver, in the EXACT order the release pipeline needs:
+#
+#   1. tool/stage_resolve_runtime_a  (Stage 0b)  → build/runtime.a
+#   2. tool/stage_prebuild_hexat     (Stage 0a-pre) → build/hexat
+#   3. tool/stage_regen_hexa_cc      (Stage 0a)   → self/native/hexa_cc.c (if absent)
+#   4. tool/stage_build_hexa         (Stage 0/1/2) → ./hexa
+#
+# ── Why this script exists (the .c=0 false-green class, structurally sealed) ──
+# Across 8 attempts the `release` job and the `nobaseline-gate` faithful job
+# were SEPARATE COPIES of this stage sequence with per-stage env inlined in the
+# YAML. Every attempt one env line drifted between the copy and the original →
+# "gate green" ≠ "release green". Even the 8th attempt only proved the two
+# copies STATICALLY env-equivalent (15/15) — never a DYNAMIC seed-removed run of
+# the real release path.
+#
+# This entry point ELIMINATES the copies. release.yml AND the faithful gate now
+# call `bash tool/release_build` verbatim, with the SAME minimal env contract.
+# "gate green" and "release green" become the SAME EXECUTION by construction —
+# there is no longer a separate copy to drift or to statically compare.
+#
+# ── Env contract IN (caller sets ONLY these) ─────────────────────────────────
+#   TARGET    darwin-arm64 | linux-x86_64 | linux-arm64   (required)
+#   CC        clang | gcc                                  (required)
+#   LIBS      extra link libs ("" mac · "-lm -ldl" linux)  (required, may be "")
+#   GH_TOKEN  GitHub token for `gh release download`       (required for edge-pull)
+#
+# Everything else is DERIVED here so there is NO per-stage env to drift:
+#   EDGE_ASSET            = hexa-$TARGET.tar.gz   (per-platform edge tarball)
+#   HEXA_PREBUILT_RUNTIME = $PWD/build/runtime.a  (Stage 0b output; the seam)
+#   CFLAGS_COMMON         = baked default (overridable via env if a caller sets it)
+#
+# Extension-less (not .sh) per the stage_* precedent: the project sidecar hook
+# blocks .sh Write/Edit. Invoked as `bash tool/release_build`.
+# ─────────────────────────────────────────────────────────────────────────
+set -euo pipefail
+
+: "${TARGET:?TARGET must be set (darwin-arm64|linux-x86_64|linux-arm64)}"
+: "${CC:?CC must be set (clang|gcc)}"
+# LIBS may legitimately be empty ("" on macOS) — declare without :? so an
+# empty value is accepted but an UNSET value is caught.
+LIBS="${LIBS?LIBS must be set (\"\" on macOS, \"-lm -ldl\" on Linux)}"
+
+# Derived, shared by every sub-stage. Exported so the child `bash tool/stage_*`
+# processes inherit one consistent value — no per-stage YAML env to drift.
+export CC
+export LIBS
+export TARGET
+export EDGE_ASSET="hexa-${TARGET}.tar.gz"
+export HEXA_PREBUILT_RUNTIME="${HEXA_PREBUILT_RUNTIME:-$PWD/build/runtime.a}"
+export CFLAGS_COMMON="${CFLAGS_COMMON:--O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs}"
+# GH_TOKEN flows to the sub-stages' `gh release download`. Required only in the
+# seeds-removed (edge-pull) branch; harmless no-op while seeds are present.
+export GH_TOKEN="${GH_TOKEN:-}"
+
+echo "::group::release_build — env contract"
+echo "  TARGET=$TARGET CC=$CC LIBS=\"$LIBS\""
+echo "  EDGE_ASSET=$EDGE_ASSET"
+echo "  HEXA_PREBUILT_RUNTIME=$HEXA_PREBUILT_RUNTIME"
+echo "  CFLAGS_COMMON=$CFLAGS_COMMON"
+echo "::endgroup::"
+
+echo "::group::Stage 0b — resolve prebuilt runtime archive (runtime.a)"
+bash tool/stage_resolve_runtime_a
+echo "::endgroup::"
+
+echo "::group::Stage 0a-pre — prebuild build/hexat"
+bash tool/stage_prebuild_hexat
+echo "::endgroup::"
+
+echo "::group::Stage 0a — regen hexa_cc.c (no-op while seed present)"
+bash tool/stage_regen_hexa_cc
+echo "::endgroup::"
+
+echo "::group::Stage 0/1/2 — self-host build (./hexa)"
+bash tool/stage_build_hexa
+echo "::endgroup::"
+
+echo "[release_build] PASS — ./hexa built (TARGET=$TARGET)"

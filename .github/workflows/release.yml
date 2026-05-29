@@ -93,51 +93,23 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      # ── .c-graduation Phase 3 (real-path fix) — Stage 0b resolves the prebuilt
-      # "frozen dough" runtime.a, and Stage 0/1/2 link it via a SHARED script
-      # (tool/stage_build_hexa). The old "warm-regen seed .c" Stage 0-pre is
-      # GONE: it ran `hexa run <orchestrator>` -> built hexat -> `clang
-      # self/runtime.c` -> died "no such file" once the seed was removed, and
-      # its `git checkout` fallback restored nothing (committed-removed). The
-      # prebuilt path needs NO seed .c. When seeds ARE present (today) Stage 0b
-      # rebuilds runtime.a from source -> byte-equivalent, additive no-op.
-      - name: Stage 0b — resolve prebuilt runtime archive (runtime.a)
+      # ── .c=0 SINGLE-JOB-FAITHFUL refactor — the whole 0b→build sequence is now
+      # ONE shared entry point (tool/release_build) that the faithful nobaseline
+      # gate calls VERBATIM. Caller passes only TARGET/CC/LIBS/GH_TOKEN; every
+      # per-stage env (EDGE_ASSET, HEXA_PREBUILT_RUNTIME, CFLAGS) is derived
+      # INSIDE the script, so there is no per-stage env to drift. "gate green" ≡
+      # "release green" by shared definition — not by static env comparison. The
+      # 8 prior false-greens were all drift between two copies of these stages;
+      # the copies are now eliminated. Seeds present today → byte-equivalent
+      # no-op (Stage 0b rebuilds runtime.a from source).
+      - name: Build — shared release_build (Stage 0b→0/1/2)
         shell: bash
         env:
+          TARGET: darwin-arm64
           CC: clang
           LIBS: ""
-          EDGE_ASSET: hexa-darwin-arm64.tar.gz
           GH_TOKEN: ${{ github.token }}
-        run: bash tool/stage_resolve_runtime_a
-
-      - name: Stage 0a-pre — prebuild build/hexat (shared tool/stage_prebuild_hexat)
-        shell: bash
-        env:
-          CC: clang
-          LIBS: ""
-          HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
-          EDGE_ASSET: hexa-darwin-arm64.tar.gz
-          GH_TOKEN: ${{ github.token }}
-        run: bash tool/stage_prebuild_hexat
-
-      # ── .c-graduation — regenerate hexa_cc.c if absent (shared script). No-op
-      # while the seed is present (today); load-bearing once hexa_cc.c is
-      # git-removed in PR2 (edge-regen via `hexa cc --regen`).
-      - name: Stage 0a — regen hexa_cc.c (shared, no-op while seed present)
-        shell: bash
-        env:
-          CC: clang
-          EDGE_ASSET: hexa-darwin-arm64.tar.gz
-          GH_TOKEN: ${{ github.token }}
-        run: bash tool/stage_regen_hexa_cc
-
-      - name: Stage 0/1/2 — self-host build (shared with nobaseline-gate)
-        shell: bash
-        env:
-          CC: clang
-          LIBS: ""
-          HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
-        run: bash tool/stage_build_hexa
+        run: bash tool/release_build
 
       # ── macOS Developer ID signing (GATED · skips cleanly when secrets
       # absent → release ships ad-hoc and install.sh strips quarantine +
@@ -188,24 +160,19 @@ jobs:
             echo "::notice::Developer ID signing SKIPPED (no MACOS_CERT_P12) — release ships ad-hoc; install.sh strips quarantine + re-signs locally per Mac."
           fi
 
-      # ── GO M4 — precompile shipped scripts into release/precompile/ so the
-      # tarball's first `hexa run <script>` skips the clang fork (cold-cache
-      # fork-storm mitigation). Each tool/precompile.json manifest entry →
-      # release/precompile/hexa_run.<key>. HEXA_MODULE_LOADER (set inside the
-      # shared script) points at the just-built loader to dodge the silent-stub
-      # link-fail trap (compiled `use` needs the env hint).
-      # ── Stage 3 (precompile) + Package — SHARED script (tool/stage_precompile_
-      # package), byte-identical with nobaseline-gate. Exports HEXA_PREBUILT_
-      # RUNTIME so the `hexa build` DRIVER (invoked per manifest entry) links
-      # runtime.a instead of compiling the (possibly-removed) self/runtime.c.
-      # No-op when seeds present. This single shared definition is what makes
-      # gate == release byte-for-byte → Stage 3 drift structurally impossible.
-      - name: Stage 3 + Package (shared) — hexa-darwin-arm64.tar.gz
+      # ── Package — shared release_package (Stage 3 precompile + tarball). The
+      # faithful nobaseline gate calls this VERBATIM. Split from release_build so
+      # the Developer-ID sign/notarize steps (release-only, gated) interleave
+      # between build and package. HEXA_PREBUILT_RUNTIME / HEXA_MAC_BUILD_OK are
+      # derived inside the script from TARGET — no per-stage env to drift.
+      - name: Package — shared release_package (Stage 3 + tarball)
         shell: bash
         env:
-          HEXA_MAC_BUILD_OK: "1"
-          HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
-        run: TARGET=darwin-arm64 bash tool/stage_precompile_package
+          TARGET: darwin-arm64
+          CC: clang
+          LIBS: ""
+          GH_TOKEN: ${{ github.token }}
+        run: bash tool/release_package
 
       # ── Notarize the tarball (GATED · requires the Developer ID signing step
       # above + secrets MACOS_NOTARY_APPLE_ID / MACOS_NOTARY_TEAM_ID /
@@ -252,53 +219,26 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      # ── .c-graduation Phase 3 (real-path fix) — see darwin-arm64 job for the
-      # full rationale. Stage 0b resolves the prebuilt runtime.a (source today,
-      # prior-edge asset once seeds removed); Stage 0/1/2 link it via the shared
-      # tool/stage_build_hexa. Additive no-op while seeds are present.
-      - name: Stage 0b — resolve prebuilt runtime archive (runtime.a)
+      # ── .c=0 SINGLE-JOB-FAITHFUL refactor — see darwin-arm64 job. Linux calls
+      # release_build then release_package back-to-back (no sign/notarize). Both
+      # are the SAME shared entry points the faithful nobaseline gate runs.
+      - name: Build — shared release_build (Stage 0b→0/1/2)
         shell: bash
         env:
+          TARGET: linux-x86_64
           CC: gcc
           LIBS: "-lm -ldl"
-          EDGE_ASSET: hexa-linux-x86_64.tar.gz
           GH_TOKEN: ${{ github.token }}
-        run: bash tool/stage_resolve_runtime_a
+        run: bash tool/release_build
 
-      - name: Stage 0a-pre — prebuild build/hexat (shared tool/stage_prebuild_hexat)
+      - name: Package — shared release_package (Stage 3 + tarball)
         shell: bash
         env:
+          TARGET: linux-x86_64
           CC: gcc
           LIBS: "-lm -ldl"
-          HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
-          EDGE_ASSET: hexa-linux-x86_64.tar.gz
           GH_TOKEN: ${{ github.token }}
-        run: bash tool/stage_prebuild_hexat
-
-      # ── .c-graduation — regen hexa_cc.c if absent (shared; no-op today).
-      - name: Stage 0a — regen hexa_cc.c (shared, no-op while seed present)
-        shell: bash
-        env:
-          CC: gcc
-          EDGE_ASSET: hexa-linux-x86_64.tar.gz
-          GH_TOKEN: ${{ github.token }}
-        run: bash tool/stage_regen_hexa_cc
-
-      - name: Stage 0/1/2 — self-host build (shared with nobaseline-gate)
-        shell: bash
-        env:
-          CC: gcc
-          LIBS: "-lm -ldl"
-          HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
-        run: bash tool/stage_build_hexa
-
-      # ── Stage 3 (precompile) + Package — SHARED script (see darwin job for
-      # full rationale). Exports HEXA_PREBUILT_RUNTIME → gate == release.
-      - name: Stage 3 + Package (shared) — hexa-linux-x86_64.tar.gz
-        shell: bash
-        env:
-          HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
-        run: TARGET=linux-x86_64 bash tool/stage_precompile_package
+        run: bash tool/release_package
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
@@ -320,51 +260,26 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      # ── .c-graduation Phase 3 (real-path fix) — see darwin-arm64 job for the
-      # full rationale. Stage 0b resolves the prebuilt runtime.a; Stage 0/1/2
-      # link it via the shared tool/stage_build_hexa. Additive no-op today.
-      - name: Stage 0b — resolve prebuilt runtime archive (runtime.a)
+      # ── .c=0 SINGLE-JOB-FAITHFUL refactor — see darwin-arm64 job. Linux calls
+      # release_build then release_package back-to-back. Same shared entry points
+      # the faithful nobaseline gate runs verbatim.
+      - name: Build — shared release_build (Stage 0b→0/1/2)
         shell: bash
         env:
+          TARGET: linux-arm64
           CC: gcc
           LIBS: "-lm -ldl"
-          EDGE_ASSET: hexa-linux-arm64.tar.gz
           GH_TOKEN: ${{ github.token }}
-        run: bash tool/stage_resolve_runtime_a
+        run: bash tool/release_build
 
-      - name: Stage 0a-pre — prebuild build/hexat (shared tool/stage_prebuild_hexat)
+      - name: Package — shared release_package (Stage 3 + tarball)
         shell: bash
         env:
+          TARGET: linux-arm64
           CC: gcc
           LIBS: "-lm -ldl"
-          HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
-          EDGE_ASSET: hexa-linux-arm64.tar.gz
           GH_TOKEN: ${{ github.token }}
-        run: bash tool/stage_prebuild_hexat
-
-      # ── .c-graduation — regen hexa_cc.c if absent (shared; no-op today).
-      - name: Stage 0a — regen hexa_cc.c (shared, no-op while seed present)
-        shell: bash
-        env:
-          CC: gcc
-          EDGE_ASSET: hexa-linux-arm64.tar.gz
-          GH_TOKEN: ${{ github.token }}
-        run: bash tool/stage_regen_hexa_cc
-
-      - name: Stage 0/1/2 — self-host build (shared with nobaseline-gate)
-        shell: bash
-        env:
-          CC: gcc
-          LIBS: "-lm -ldl"
-          HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
-        run: bash tool/stage_build_hexa
-
-      # ── Stage 3 (precompile) + Package — SHARED script (see darwin job).
-      - name: Stage 3 + Package (shared) — hexa-linux-arm64.tar.gz
-        shell: bash
-        env:
-          HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
-        run: TARGET=linux-arm64 bash tool/stage_precompile_package
+        run: bash tool/release_package
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
