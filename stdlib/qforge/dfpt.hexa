@@ -1,0 +1,131 @@
+// HEXA Standard Library — qforge/dfpt
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE L4 — DFPT 동역학행렬(dynamical matrix) 조립 + 포논 solver.
+//   파이프라인 위치:  L0 Tc ← L1 Eliashberg ← L3 a²F ← **L4 ω(q,ν)** ← L5 SCF bricks.
+//   L5(Sternheimer 등)가 1차 선형응답으로 실공간 힘상수 Φ_αβ(R) 를 만들고,
+//   L4 가 그걸 q-공간 동역학행렬 D(q) 로 조립 → 대각화 → 포논 주파수 ω(q,ν).
+//
+// ── 다리(bridge) 설계 (d4: 하나의 조립기, 두 caller) ───────────────────────
+//   force-constants Φ 는 CALLER 가 공급한다 — 이름 하드코딩 없음.
+//     (a) SELFTEST: 해석적 Φ(1D 사슬/2원자 사슬 등 — 닫힌형 분산 보유).
+//     (b) 실엔진: L5 Sternheimer 선형응답 (Δψ→Δρ→ΔV_scf→2차 에너지미분)이
+//         만든 Φ. 둘 다 동일한 generic 경로를 탄다.
+//   → 본 파일은 행렬을 하드코딩하지 않는다. Φ·질량·q·cell_R 만 받는다.
+//
+// ── Φ 표현 (실공간 force constants) ─────────────────────────────────────
+//   phi:   평탄 배열, ncells 개의 (3N×3N) 블록을 이어붙인 것.
+//          phi[c*(3N*3N) + a*(3N) + b] = Φ_ab(R_c)   (a,b ∈ [0,3N), N=natoms)
+//   cell_R: 평탄 3*ncells, 각 셀의 격자벡터 R_c (cos(q·R) 위상에 사용).
+//   masses: natoms 개 원자질량 (원자 a 의 직교성분 3개에 같은 질량 적용).
+//
+// ── 실대칭 채택 (정직) ────────────────────────────────────────────────
+//   eigh(d19 재사용)는 실대칭 전용이다. 반전대칭 결정(또는 q=Γ, 영역경계)에서
+//   D(q) 는 실대칭이 되어 D(q)=Σ_R Φ(R) cos(q·R) 의 실수부가 정확한 스펙트럼을
+//   준다. 본 조립기는 실수부(cos 위상)를 모으고 명시적으로 Hermitize(대칭화)한다.
+//   복소 D(q)(반전대칭 깨짐)는 후속 — 여기선 정직하게 실대칭 범위로 한정한다.
+//
+// Public API:
+//   pub fn qforge_dynmat(phi, masses, qvec, natoms, ncells, cell_R) -> DynMat
+//   pub fn qforge_phonons(dynmat, masses, natoms) -> PhononResult
+//
+// reuse (d19): qforge_phonons 는 stdlib/alloc/math/eigen 의 eigh(A,n) 로 D(q)를
+//   대각화한다 (L1/Davidson/Sternheimer 가 이미 재사용). selftest 는 q-점에
+//   stdlib/qforge/mpgrid 의 qforge_mp_grid 를 쓸 수 있다.
+use "stdlib/alloc/math/eigen"
+
+// 조립된 q-공간 동역학행렬: dim=3*natoms, mat=평탄 row-major(dim*dim), 실대칭.
+pub struct DynMat {
+    dim: int,
+    mat: [float],            // 평탄 dim*dim, 질량가중 + Hermitize 완료
+    qx: float,
+    qy: float,
+    qz: float
+}
+// 포논 결과: ω²(오름차순) · ω(부호보존 sqrt) · 모드(고유벡터 행) · 음향영점수.
+pub struct PhononResult {
+    omega2: [float],         // 3N, 오름차순 — 음수면 soft mode(정직, clamp 안함)
+    omega: [float],          // 부호보존 sqrt: ω²<0 → ω<0 (허수 표시)
+    modes: [[float]],        // 모드 고유벡터 (행=모드, 오름차순 정렬)
+    n_acoustic_zero: int     // |ω| < 1e-6 인 음향 영점 가지 수 (q=Γ acoustic sum rule)
+}
+fn _phi_abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+// ── D(q) 조립: D_ab(q) = (1/√(Ma Mb)) Σ_R Φ_ab(R) cos(q·R) ────────────────
+//   질량가중 + cos 위상 합산 + 명시적 Hermitize(대칭화).  실대칭 dim×dim 반환.
+pub fn qforge_dynmat(phi: [float], masses: [float], qvec: [float],
+                     natoms: int, ncells: int, cell_R: [float]) -> DynMat {
+    let dim = 3 * natoms
+    let block = dim * dim
+    // 1) cos 위상 합산: acc_ab = Σ_R Φ_ab(R) cos(q·R)
+    let mut acc: [float] = []
+    let mut z = 0
+    while z < block { acc.push(0.0) ; z = z + 1 }
+    let mut c = 0
+    while c < ncells {
+        let rx = cell_R[c * 3 + 0]
+        let ry = cell_R[c * 3 + 1]
+        let rz = cell_R[c * 3 + 2]
+        let phase = qvec[0] * rx + qvec[1] * ry + qvec[2] * rz
+        let cw = cos(phase)
+        let base = c * block
+        let mut k = 0
+        while k < block { acc[k] = acc[k] + phi[base + k] * cw ; k = k + 1 }
+        c = c + 1
+    }
+    // 2) 질량가중: D_ab = acc_ab / √(M_a M_b).  원자 a 의 질량 = masses[a/3].
+    let mut mat: [float] = []
+    let mut zz = 0
+    while zz < block { mat.push(0.0) ; zz = zz + 1 }
+    let mut i = 0
+    while i < dim {
+        let mi = masses[i / 3]
+        let mut j = 0
+        while j < dim {
+            let mj = masses[j / 3]
+            mat[i * dim + j] = acc[i * dim + j] / sqrt(mi * mj)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    // 3) Hermitize(대칭화): D ← (D + Dᵀ)/2 — eigh 실대칭 입력 보장.
+    let mut a = 0
+    while a < dim {
+        let mut b = a + 1
+        while b < dim {
+            let avg = 0.5 * (mat[a * dim + b] + mat[b * dim + a])
+            mat[a * dim + b] = avg
+            mat[b * dim + a] = avg
+            b = b + 1
+        }
+        a = a + 1
+    }
+    return DynMat { dim: dim, mat: mat, qx: qvec[0], qy: qvec[1], qz: qvec[2] }
+}
+// ── 포논 solver: D(q) 대각화(eigh, d19) → ω²(오름차순) → 부호보존 ω ──────────
+//   eigh 는 내림차순 → 오름차순으로 뒤집는다.  ω = sign(ω²)·√|ω²|
+//   (음수 ω² = soft/허수 모드 → ω<0 로 표시, clamp 하지 않음 — d6 정직).
+pub fn qforge_phonons(dynmat: DynMat, masses: [float], natoms: int) -> PhononResult {
+    let dim = dynmat.dim
+    let eg = eigh(dynmat.mat, dim)        // [vals desc, vecs rows]
+    let vals = eg[0]
+    let vecs = eg[1]
+    let mut omega2: [float] = []
+    let mut omega: [float] = []
+    let mut modes: [[float]] = []
+    let mut nzero = 0
+    let mut s = 0
+    while s < dim {
+        let w2 = vals[dim - 1 - s]        // 오름차순 재매핑
+        omega2.push(w2)
+        let aw = _phi_abs(w2)
+        let r = sqrt(aw)
+        if w2 < 0.0 { omega.push(-r) } else { omega.push(r) }
+        modes.push(vecs[dim - 1 - s])
+        if _phi_abs(w2) < 1.0e-12 || (w2 >= 0.0 && r < 1.0e-6) { nzero = nzero + 1 }
+        s = s + 1
+    }
+    return PhononResult { omega2: omega2, omega: omega, modes: modes, n_acoustic_zero: nzero }
+}
