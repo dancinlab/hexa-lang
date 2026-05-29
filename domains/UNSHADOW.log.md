@@ -2,6 +2,35 @@
 
 Append-only history sister of `UNSHADOW.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-30T06:00Z — 🔵 E AoS↔SoA 자동전환 — 🔴 CLOSED-NEGATIVE (typed-struct layout 부재로 축 ruled-out)
+
+UNSHADOW 마지막 open milestone "🔵 E AoS↔SoA 자동전환 OR F CPU/GPU fusion (도메인 택1)" 을 **E 축(codegen-native)** 으로 택해 SCOPED PILOT 수행 (F=GPU fusion 은 flame/forge 도메인 중복+GPU 임대 비용이라 제외, E 가 UNSHADOW 고유 codegen turf). 결과 = **honest closed-negative** — SoA 를 표현할 정적 struct 레이아웃 자체가 hexa 표현계에 없음. 이 축은 `typed monomorphic struct layout` + `unboxed-primitive array` 인프라가 랜딩되기 전까지 결정적으로 ruled-out.
+
+### REALITY CHECK — struct/array-of-struct 표현 전수조사 (구현 전 선행)
+
+- **struct literal 생성** (`self/codegen.hexa:7914 gen2_struct_decl`): 모든 struct 는 `hexa_struct_pack_map("Name", N, _k, _v)` 로 emit — **필드명(string) 키 → HexaVal 값의 해시맵**. 정적 C struct 레이아웃 0. (예외 1건 = `name == "Val" && len(fields)==12` 의 `hexa_valstruct_new_v` flat-struct 특수경로 — 인터프리터 hot Val 1종만 hand-special-case, 12 슬롯 **고정**이고 각 슬롯도 여전히 boxed `HexaVal`. 범용 typed-layout 아님.)
+- **필드 접근** (`self/codegen.hexa:5336 k=="Field"`): `obj.field` → `hexa_map_get_ic(obj, "field", &ic)` — per-site inline-cache 해시 조회. `arr[i].field` → `hexa_map_get_ic(hexa_index_get(arr,i), "field", &ic)` (조회 2단).
+- **runtime 표현** (`self/runtime.h:74,79-92,130`): `HexaVal` = 태그드 유니온(24B, `tag`+union). struct = `TAG_MAP` → `HexaMap{HexaMapTable*}` (`slots`/`vals`/`order_keys`/...). array = `TAG_ARRAY` → `HexaArr{HexaVal* items; len; cap}`. **array-of-struct = `HexaVal*`(boxed) 배열, 각 원소가 별도 힙 `HexaMap`.** 동일-struct 여부를 정적으로 아는 타입계 부재(런타임 `__type__` 문자열만).
+
+### 왜 SoA 가 표현 불가 (3-fold)
+
+1. **(a) "이 값이 동일-struct 배열이다" 정적 증명 불가** — array 는 `HexaArr` of `HexaVal`(임의 태그 혼재 가능). 원소가 같은 struct 타입임을 보장하는 monomorphic array 타입이 codegen/타입계에 없음.
+2. **(b) "루프가 한 필드만 sweep" 분석은 가능하나 무의미** — 필드 접근이 `hexa_map_get_ic`(해시 조회)라 필드-contiguous 메모리가 애초에 존재하지 않음. AoS 조차 진짜 AoS 가 아니라 **AoP**(Array-of-Pointers-to-heap-maps).
+3. **(c) re-lay-out / field-contiguous 접근 emit 불가** — SoA = `{xs:[...], ys:[...]}` 의 `xs` 가 `double` contiguous 여야 SIMD/cache-dense 이득. hexa 엔 `double[]` 같은 unboxed-primitive 배열 타입이 없음 (`HexaArr` 은 `HexaVal*` = 24B boxed 스칼라). 필드를 따로 모아도 여전히 boxed `HexaVal` 배열 → cache-density·SIMD 이득의 전제(unboxed contiguous primitive) 불성립.
+
+### 누락된 인프라 (이게 랜딩돼야 E 가 열림)
+
+1. **typed monomorphic struct layout** — `struct Point{x:f64,y:f64}` 를 필드명 해시맵이 아니라 정적 C struct(또는 SoA 변환 가능한 IR 노드)로 codegen 이 다룰 타입계. 현재 0.
+2. **unboxed-primitive array** (`[f64]`/`[i64]` = native `double[]`/`int64_t[]`) — boxed `HexaVal*` 가 아닌 contiguous primitive 배열. SoA 의 cache/SIMD 이득은 전적으로 여기에 의존. 현재 0.
+3. 위 둘 위에서야 (a) monomorphic AoS 인식 → (b) 단일-필드 sweep 탐지 → (c) SoA 재배치/접근 emit 의 transform 이 비로소 표현 가능.
+
+### 판정
+
+- **🔴 CLOSED-NEGATIVE** — E(AoS↔SoA) 는 hexa 의 현 dynamic-HexaVal 표현계에서 **표현 불가**. 좁은 한 케이스조차 transform 을 emit 할 layout 노드가 없어 byte-diff 검증 대상 자체가 성립 안 함. 거짓 win 강행보다 정직한 ruled-out 이 terminal 결과.
+- **확정적으로 배제** — `typed monomorphic struct layout` + `unboxed-primitive array` 두 인프라가 랜딩되기 전까지 E 는 닫힘. (이 typed-repr 인프라는 RUNTIME.flip-floor 의 `.c=0` 졸업과 직교 — 별도 typed-repr RFC 사안. unwall 이 분리해낸 "runtime.h-가시 layout" axis 와도 다름: HexaArr 은 이미 가시지만 boxed HexaVal* 라 SoA 무의미.)
+- transform 미구현 → `self/codegen.hexa` 무변경 → byte-diff N/A (검증할 변경 없음). 측정 N/A. cloud/GPU 미사용(E 축, F 미접촉).
+- paper_negative_ok ethos 충족: 한 축(데이터 표현 자유 E)을 결정적으로 ruled-out → valid terminal milestone close. UNSHADOW 선언 backlog 의 마지막 open milestone 종결.
+
 ## 2026-05-30T00:00Z — 🔵×🟡 same-TU 빌드 기본화 cost/benefit PILOT (measured · opt-in 권고)
 
 §lto-unwall(−31%)을 빌드-레시피로 만든 milestone "same-TU 빌드 기본화" 의 측정 파일럿. 결론 = **opt-in flag, NOT default**.
