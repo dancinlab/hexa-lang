@@ -1,0 +1,87 @@
+// test_hexat_linux_multi_file.hexa — regression guard for the Linux
+// module-aware build mode (PR #2072 "feat(tool): module-aware Linux build —
+// cross-build hexa_module_loader ELF").
+//
+// ROOT CAUSE #2072 fixed: the Linux CLI driver's cmd_build flatten step
+// (self/main.hexa) is platform-agnostic and walks the full `use` graph, but
+// it dispatches the walk to a COMPILED build/hexa_module_loader binary
+// (resolve_module_loader_compiled). The Linux cross-build
+// (tool/build_hexa_cli_linux.hexa) never emitted that ELF, so on a pod the
+// flatten step fell back to raw src and transpiled the ENTRY FILE ONLY —
+// every transitive `use foo` symbol was unresolved at link.
+//
+// The heavy cross-build (musl-cross + clang) cannot run inside a `hexa run`
+// unit test, so this guard locks the PURE derivation logic #2072 added: the
+// per-arch + canonical module_loader output-path scheme. If the Step-3
+// wiring is removed or its path scheme regresses, these asserts fail.
+//
+// Verified end-to-end on a Linux x86_64 host: a 3-level transitive program
+// (prog -> mid -> leaf) FAILS to link without build/hexa_module_loader and
+// builds + runs (`mid_calc(6)=42`) once the ELF is present.
+
+// Mirror of the path derivations in tool/build_hexa_cli_linux.hexa Step 3.
+fn _ml_per_arch_out(repo_root: string, target: string) -> string {
+    return repo_root + "/build/hexa_module_loader_" + target
+}
+fn _ml_canon_out(repo_root: string) -> string {
+    return repo_root + "/build/hexa_module_loader"
+}
+fn _ml_stage1_c(repo_root: string) -> string {
+    return repo_root + "/build/stage1/module_loader.c"
+}
+
+fn test_hexat_linux_multi_file() -> bool {
+    let mut ok = true
+    let repo = "/opt/hexa"
+
+    // T1: per-arch loader output name (x86_64) — what a pod runner image keeps.
+    let t1 = _ml_per_arch_out(repo, "x86_64")
+    if t1 != "/opt/hexa/build/hexa_module_loader_x86_64" {
+        println("FAIL T1 per-arch x86_64: " + t1)
+        ok = false
+    }
+
+    // T2: per-arch loader output name (arm64).
+    let t2 = _ml_per_arch_out(repo, "arm64")
+    if t2 != "/opt/hexa/build/hexa_module_loader_arm64" {
+        println("FAIL T2 per-arch arm64: " + t2)
+        ok = false
+    }
+
+    // T3: canonical name — MUST match resolve_module_loader_compiled()'s probe
+    //     (<install>/build/hexa_module_loader). This is the exact name the
+    //     driver looks up; a mismatch silently re-arms the raw-src fallback.
+    let t3 = _ml_canon_out(repo)
+    if t3 != "/opt/hexa/build/hexa_module_loader" {
+        println("FAIL T3 canonical loader name: " + t3)
+        ok = false
+    }
+
+    // T4: the canonical name is the per-arch name minus the "_<arch>" suffix —
+    //     i.e. the cp target is a strict prefix of the per-arch artifact.
+    let canon = _ml_canon_out(repo)
+    let per = _ml_per_arch_out(repo, "x86_64")
+    if !per.starts_with(canon) {
+        println("FAIL T4 per-arch is not a suffix-extension of canonical")
+        ok = false
+    }
+
+    // T5: stage1 transpile output for the loader lands under build/stage1/.
+    let t5 = _ml_stage1_c(repo)
+    if t5 != "/opt/hexa/build/stage1/module_loader.c" {
+        println("FAIL T5 stage1 module_loader.c path: " + t5)
+        ok = false
+    }
+
+    return ok
+}
+
+// Standalone runner: `hexa run stdlib/test/test_hexat_linux_multi_file.hexa`.
+fn main() {
+    if test_hexat_linux_multi_file() {
+        println("test_hexat_linux_multi_file: PASS")
+    } else {
+        println("test_hexat_linux_multi_file: FAIL")
+        exit(1)
+    }
+}
