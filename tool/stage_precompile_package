@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# ─────────────────────────────────────────────────────────────────────────
+# tool/stage_precompile_package — Stage 3 (precompile) + Package, SHARED by
+# release.yml + nobaseline-gate.yml. Single source of truth so the gate can
+# NEVER drift from release (the 5th-failure root cause: release's inline
+# Stage 3 was MISSING the HEXA_PREBUILT_RUNTIME export that the gate had).
+#
+# Env contract (caller sets):
+#   TARGET                — darwin-arm64 | linux-x86_64 | linux-arm64 (required)
+#   HEXA_PREBUILT_RUNTIME — path to build/runtime.a (defaults to $PWD/build/runtime.a)
+#   HEXA_MAC_BUILD_OK     — set "1" by the darwin caller (step-env), flows in
+#                           naturally; NOT baked here.
+# ─────────────────────────────────────────────────────────────────────────
+set -euo pipefail
+: "${TARGET:?TARGET must be set (darwin-arm64|linux-x86_64|linux-arm64)}"
+
+export HEXA_LANG="$PWD"
+export HEXA_MODULE_LOADER="$PWD/build/hexa_module_loader"
+export PATH="$PWD:$PATH"
+# THE FIX — export the prebuilt runtime so the `hexa build` DRIVER (invoked by
+# build_precompile per manifest entry) links runtime.a instead of compiling
+# the (possibly-removed) self/runtime.c. No-op when seeds present (the driver
+# still finds runtime.c; the prebuilt path is taken only when it exists).
+export HEXA_PREBUILT_RUNTIME="${HEXA_PREBUILT_RUNTIME:-$PWD/build/runtime.a}"
+
+echo "[stage_precompile_package] TARGET=$TARGET HEXA_PREBUILT_RUNTIME=$HEXA_PREBUILT_RUNTIME"
+
+# ── Stage 3 — precompile shipped scripts ────────────────────────────────────
+./hexa run tool/build_precompile.hexa
+ls -la release/precompile/
+test -d release/precompile
+test "$(ls -1 release/precompile/ | wc -l)" -gt 0
+
+# ── Package — assemble tarball (parity with release) ────────────────────────
+stage="dist/hexa-${TARGET}"
+mkdir -p "$stage/build" "$stage/release/precompile"
+cp hexa "$stage/hexa"
+cp build/hexa_module_loader "$stage/build/hexa_module_loader"
+cp build/runtime.a "$stage/build/runtime.a"
+cp -R release/precompile/. "$stage/release/precompile/"
+tar -czf "hexa-${TARGET}.tar.gz" -C dist "hexa-${TARGET}"
+
+n=$(tar -tzf "hexa-${TARGET}.tar.gz" | grep -cE "hexa-${TARGET}/release/precompile/[^/]+$" || true)
+echo "[stage_precompile_package] tarball precompile entries: $n"
+test "$n" -gt 0
+echo "[stage_precompile_package] PASS — hexa-${TARGET}.tar.gz"
