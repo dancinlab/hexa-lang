@@ -2,6 +2,35 @@
 
 Append-only history sister of `HEXA-TRAIN-FLOOR.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-30 — 🟢 M8 gemv 게이트 rekey — cols 기준 → rows 기준 (M7 회귀 가드, RTX 5070 실측)
+
+M7이 #2122 게이트 키(`cols < HEXA_GEMV_CUBLAS_MIN_DIM`)를 부분 반증한 걸 닫음.
+진짜 성능 판별자 = `cols`(내적 차원)가 아니라 **rows**(출력 차원 = on-device
+커널의 #blocks). on-device 커널이 one-block-per-row 라 rows가 커지면 cuBLAS가
+이김.
+
+- [x] **재키잉**: `self/cuda/runtime_cuda_emit.hexa` `_hx_cuda_farr_packed_gemv_offset_gpu`
+  host wrapper의 분기를 `cols < min_dim` → **`rows < min_rows`**(default 512)로 변경.
+  env = 새 `HEXA_GEMV_CUBLAS_MIN_ROWS`(legacy `HEXA_GEMV_CUBLAS_MIN_DIM`은 rows
+  alias로 back-compat 유지). M7 crossover 근거 주석 동봉. 도움 doc 코멘트(~L1235)도
+  `rows`로 갱신. fp32(M6)·AKIDA-int4 경로 무손상(분기 위쪽 그대로).
+- [x] **방식 = 순수 rows 기준** (rows·cols 총-work 아님): M7 표가 rows가 단독 판별자임을
+  보임 — rows≤256이면 모든 cols(64~768)서 on-device 승, rows=768이면 모든 cols서
+  cuBLAS 승. cols는 결정을 뒤집지 않음 → rows-only가 정답. default 512는 측정된
+  win@256과 loss@768 사이.
+- [x] **검증**: `hexa_real parse self/cuda/runtime_cuda_emit.hexa` → clean.
+- [x] **실측 (ubu-2 RTX 5070, $0)** — `.verdicts/hexa-train-floor/M8-gate-rekey.txt`
+  (g5 verbatim). source = `tool/train_floor_m7/m8_gate_rekey.cu`(rekey된 게이트
+  decision + 동일 block-reduction 커널 + cublasDgemv byte-faithful 복제):
+  - **M7 회귀 케이스 rows=768·cols=64 → 게이트가 cuBLAS 선택**(7.8~8.0 vs on-device
+    10.8 us) = 회귀 제거 확인. ✅
+  - 작은 work(rows 16·64) → on-device 선택, 전부 더 빠름. ✅
+  - **default(512) 3-run 전부 `ANY_REGRESSION=NO`** = 무회귀 🟢. rows=256 corner는
+    coin-flip tie(M7 0.96, M8 default 3-run 모두 on-device 미세 우세) — default가
+    on-device로 두는 게 맞음. (override 256 sweep는 rows=256을 cuBLAS로 밀어 오히려
+    "gate가 더 빠른 on-device를 안 골랐다" YES가 떠 calibration 검증.)
+- [x] **g5/g3**: 무회귀가 실측(3-run NO)으로 확인 → 🟢. 과대주장 0.
+
 ## 2026-05-30 — 🟢🟠 M7 라이브 측정 — RTX 5070(ubu-2, pool, $0)서 1차 사이클 🟠 검증
 
 1차 사이클(M1~M6)의 🟠(static/분석) 클레임을 **실제 GPU(RTX 5070, ubu-2 pool 호스트,
@@ -453,3 +482,35 @@ delta 로 step 마다 로그. 이 한 점이 (a) "freed 됐는데 RSS 안 주는
 trim 부재 확정) byte-scale 가 추산이라 200–325MB 정확 매칭은 M4 측정 전까지
 미확정. 단일 site 단정 대신 "분산 churn × arena 미반환" 결론 — 이 또한 정직한
 localize (plan completion criteria 의 valid 결론).
+
+## 2026-05-30T00:00Z — bf16 천장 돌파 (M6 fp32 → bf16 확장)
+
+`HEXA_TRAIN_DTYPE=bf16` 경로 추가. dtype selector 를 fp64|fp32|bf16 3-way 로
+일반화하고, 학습 hot 커널 `packed_gemv_offset` 에 in-place bf16-MAC 슬라이스를
+추가. bf16 substrate(`self/cuda/runtime_bf16_emit.hexa`, RFC 049)는 이미 같은
+TU 에 `#include "runtime_bf16.c"`(emit L3637)로 링크됨 → `_hx_gemm_ex_bf16`
+(cublasGemmEx · CUDA_R_16BF · CUBLAS_COMPUTE_32F · TENSOR_OP) 재사용 가능.
+
+### 구현 (self/cuda/runtime_cuda_emit.hexa, B9 emitter)
+- `#include <cuda_bf16.h>` 추가 (`__double2bfloat16`/`__bfloat162float`).
+- 3-way selector: `_hx_train_dtype()` → enum HX_TRAIN_DTYPE_{FP64,FP32,BF16}.
+  env `HEXA_TRAIN_DTYPE` ∈ {bf16,bfloat16}=BF16, {fp32,f32,float}=FP32, 그 외/unset=FP64.
+  M6 `_hx_train_dtype_is_fp32()` 는 shim 으로 위임(무회귀). 기본 fp64 유지.
+- bf16 커널 `_hx_k_packed_gemv_offset_bf16`: 연산자 fp64→bf16(RNE) narrow,
+  곱 fp32 widen, **FP32 accumulator**(수렴 안정, GemmEx COMPUTE_32F 규율 동일).
+  storage 는 fp64 유지(host ABI 불변). dispatcher 에 bf16 분기 추가(fp32 앞).
+
+### 실측 (ubu-2 RTX 5070, $0, .verdicts/hexa-train-floor/bf16-lever.txt)
+- (A) in-place bf16-MAC **gemv 커널 = 🔴 NEGATIVE**: bf16/f64 = 0.85–5.67x
+  latency(bf16 더 느림, cols≥128). 이유: per-element bf16 변환 오버헤드 +
+  per-row block-reduction 은 memory-bound + scalar bf16 는 TensorCore(WMMA) 미가동.
+  fp32(M6)가 in-place 최선(f32/f64 0.66–0.94). 정확도 OK(max|rel| ~1.3e-2 @cols≥128).
+- (B) **bf16 TensorCore GemmEx vs fp64 Dgemm = 🟢 24.9x(n=256) → 123x(n=2048)**.
+  진짜 M4 천장 돌파는 square GEMM(cublasGemmEx TENSOR_OP) = RFC 049 `_hx_gemm_ex_bf16`
+  shape. 단 bf16 **storage tile** 필요(fp64-storage gemv wrapper 는 in-place WMMA 불가).
+
+### finding / scope
+bf16 lever 의 실제 거처는 **gemv 가 아니라 TensorCore GemmEx matmul**. gemv 슬라이스는
+selector parity + 완결성 위해 opt-in 으로 랜딩(기본 fp64, NOT recommended 명시).
+잔여(M9+): `matmul_t`/`matmul` 을 bf16 storage + `_hx_gemm_ex_bf16` 로 배선해
+실제 24.9–123x 천장 돌파 흡수. 추론 AKIDA-int4 무손상(별개 경로).

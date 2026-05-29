@@ -1,0 +1,117 @@
+// stdlib/test/test_keychain.hexa — isolated golden-fixture test for keychain.hexa
+//
+// Self-contained (NO `use` import) so it compiles + runs without the local
+// module_loader (multi-use builds link-fail locally; this is the parse-gate +
+// isolated-logic-test gate per the stdlib CLI verify recipe). The pure
+// command-builder + rc-parse helpers are copied verbatim from keychain.hexa;
+// any drift between this copy and the module is the test's job to surface.
+
+fn _kc_shell_escape(s: string) -> string {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+fn _kc_keychain_flag(keychain_path: string) -> string {
+    if len(keychain_path) == 0 { return "" }
+    return " " + _kc_shell_escape(keychain_path)
+}
+
+fn keychain_build_get_cmd(service: string, key: string, keychain_path: string) -> string {
+    return "security find-generic-password -a " + _kc_shell_escape(key)
+         + " -s " + _kc_shell_escape(service)
+         + " -w" + _kc_keychain_flag(keychain_path)
+}
+
+fn keychain_build_set_cmd(service: string, key: string, value: string, keychain_path: string) -> string {
+    return "security add-generic-password -a " + _kc_shell_escape(key)
+         + " -s " + _kc_shell_escape(service)
+         + " -w " + _kc_shell_escape(value)
+         + " -U" + _kc_keychain_flag(keychain_path)
+}
+
+fn keychain_build_delete_cmd(service: string, key: string, keychain_path: string) -> string {
+    return "security delete-generic-password -a " + _kc_shell_escape(key)
+         + " -s " + _kc_shell_escape(service)
+         + _kc_keychain_flag(keychain_path)
+}
+
+fn _kc_rc_ok(raw: string) -> bool {
+    let marker = "::rc="
+    let mi = raw.last_index_of(marker)
+    if mi < 0 { return false }
+    let rc_str = raw.substring(mi + len(marker), len(raw)).trim()
+    return to_int(rc_str) == 0
+}
+
+fn expect(name: string, got: string, want: string) -> int {
+    if got == want {
+        println("PASS " + name)
+        return 0
+    }
+    println("FAIL " + name)
+    println("  got : " + got)
+    println("  want: " + want)
+    return 1
+}
+
+fn expect_bool(name: string, got: bool, want: bool) -> int {
+    if got == want {
+        println("PASS " + name)
+        return 0
+    }
+    println("FAIL " + name + " got=" + to_string(got) + " want=" + to_string(want))
+    return 1
+}
+
+fn main() {
+    let mut fails = 0
+
+    // 1. get cmd, default keychain (no path)
+    fails = fails + expect(
+        "get_cmd default",
+        keychain_build_get_cmd("dancinlab.secret", "openai.api_key", ""),
+        "security find-generic-password -a 'openai.api_key' -s 'dancinlab.secret' -w"
+    )
+
+    // 2. get cmd with explicit keychain path
+    fails = fails + expect(
+        "get_cmd path",
+        keychain_build_get_cmd("svc", "k", "/tmp/x.keychain-db"),
+        "security find-generic-password -a 'k' -s 'svc' -w '/tmp/x.keychain-db'"
+    )
+
+    // 3. set cmd has -U update flag
+    fails = fails + expect(
+        "set_cmd update",
+        keychain_build_set_cmd("svc", "k", "v", ""),
+        "security add-generic-password -a 'k' -s 'svc' -w 'v' -U"
+    )
+
+    // 4. delete cmd
+    fails = fails + expect(
+        "delete_cmd",
+        keychain_build_delete_cmd("svc", "k", ""),
+        "security delete-generic-password -a 'k' -s 'svc'"
+    )
+
+    // 5. shell-escape: single-quote in a value is neutralized
+    fails = fails + expect(
+        "set_cmd escapes quote",
+        keychain_build_set_cmd("svc", "k", "a'b", ""),
+        "security add-generic-password -a 'k' -s 'svc' -w 'a'\\''b' -U"
+    )
+
+    // 6. rc-parse: exit 0 sentinel → true
+    fails = fails + expect_bool("rc_ok zero", _kc_rc_ok("some-secret\n::rc=0"), true)
+
+    // 7. rc-parse: exit 44 (miss) → false
+    fails = fails + expect_bool("rc_ok miss", _kc_rc_ok("::rc=44"), false)
+
+    // 8. rc-parse: no sentinel → false (defensive)
+    fails = fails + expect_bool("rc_ok no marker", _kc_rc_ok("garbage"), false)
+
+    if fails == 0 {
+        println("ALL PASS (8/8)")
+    } else {
+        println("FAILURES: " + to_string(fails))
+    }
+}

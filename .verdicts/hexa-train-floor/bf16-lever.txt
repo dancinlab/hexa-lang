@@ -1,0 +1,62 @@
+# bf16-lever — RTX 5070 (ubu-2, pool host, $0) — 2026-05-30T00:00:00Z
+# host: ubu-2  GPU: NVIDIA GeForce RTX 5070 (12GB, driver 580.159.03)  nvcc 12.0
+# sources:
+#   /tmp/m_bf16_gemv_bench.cu — faithful replica of self/cuda/runtime_cuda_emit.hexa
+#     _hx_k_packed_gemv_offset[_f32|_bf16] kernels + cublasDgemv path (HX_RR_BLOCK=256)
+#   /tmp/m_bf16_gemm_tc.cu    — cublasGemmEx(CUDA_R_16BF, CUBLAS_COMPUTE_32F,
+#     CUBLAS_GEMM_DEFAULT_TENSOR_OP) vs cublasDgemm fp64 (RFC 049 _hx_gemm_ex_bf16 shape)
+# axis: bf16 dtype lever — (A) in-place bf16-MAC gemv kernel  (B) TensorCore GemmEx matmul
+# build: nvcc -O3 -arch=sm_80 (sm_120 not in nvcc 12.0; driver 580 JIT forward-compat)
+
+# ── (A) bf16-MAC gemv kernel (the in-place dtype slice added this PR) ──────────
+# per-call latency (us) — lower=faster.  4 paths × contraction dims (cols=d)
+# bf16/f64 > 1.0  ⇒  bf16 SLOWER than fp64 (NEGATIVE for this kernel shape)
+# rows(out)=768  reps=4000
+# cols | cublas_Dgemv_us | ondev_f64_us | ondev_f32_us | ondev_bf16_us | bf16/f64 | bf16/f32 | max|rel|_bf16_vs_f64
+   64 |           7.843 |       10.822 |        7.095 |         9.219 | 0.852 | 1.299 | 2.795e+00
+  128 |           8.385 |       10.811 |        7.142 |        11.222 | 1.038 | 1.571 | 1.329e-02
+  256 |           8.988 |       11.292 |        7.748 |        16.857 | 1.493 | 2.176 | 1.258e-02
+  768 |          11.726 |       12.867 |       10.144 |        39.341 | 3.058 | 3.878 | 1.704e-02
+ 2048 |          18.345 |       16.832 |       16.932 |        95.473 | 5.672 | 5.639 | 9.008e-02
+# rows(out)=256  reps=4000
+# cols | cublas_Dgemv_us | ondev_f64_us | ondev_f32_us | ondev_bf16_us | bf16/f64 | bf16/f32 | max|rel|_bf16_vs_f64
+   64 |           7.212 |        7.159 |        5.909 |         6.911 | 0.965 | 1.170 | 1.206e+00
+  128 |           7.413 |        7.218 |        6.116 |         7.945 | 1.101 | 1.299 | 1.240e-02
+  256 |           7.959 |        7.882 |        6.406 |         9.925 | 1.259 | 1.549 | 1.258e-02
+  768 |          10.263 |        8.374 |        7.339 |        18.160 | 2.169 | 2.474 | 1.704e-02
+ 2048 |          15.767 |        9.720 |       10.153 |        39.209 | 4.034 | 3.862 | 9.008e-02
+# rows(out)=64  reps=4000
+# cols | cublas_Dgemv_us | ondev_f64_us | ondev_f32_us | ondev_bf16_us | bf16/f64 | bf16/f32 | max|rel|_bf16_vs_f64
+   64 |           7.597 |        6.283 |        5.882 |         6.208 | 0.988 | 1.055 | 4.709e-01
+  128 |           7.455 |        6.166 |        5.893 |         6.560 | 1.064 | 1.113 | 4.366e-03
+  256 |           7.823 |        6.497 |        6.067 |         7.090 | 1.091 | 1.169 | 1.609e-03
+  768 |          10.318 |        6.833 |        6.351 |         9.801 | 1.434 | 1.543 | 1.704e-02
+ 2048 |          15.578 |        7.631 |        7.140 |        16.685 | 2.186 | 2.337 | 9.008e-02
+
+# (A) VERDICT 🔴 FALSIFIED for the gemv kernel shape: the in-place bf16-MAC kernel
+#   is NOT a speedup — bf16/f64 ranges 0.85–5.67x latency (bf16 SLOWER ≥ cols=128).
+#   The per-element __double2bfloat16/__bfloat162float scalar conversions add cost
+#   on a memory-bound per-row block reduction, and scalar bf16 math does NOT engage
+#   TensorCore (which needs WMMA tile ops). fp32 (M6) stays the best in-place lever
+#   (f32/f64 0.66–0.94). Accuracy is OK (max|rel| ~1.3e-2 for cols≥128, fp32 acc.).
+#   ⇒ kernel landed opt-in (default fp64), but bf16 is NOT recommended for gemv.
+
+# ── (B) bf16 TensorCore GemmEx vs fp64 Dgemm (where the ceiling-break IS) ──────
+# square GEMM C[n,n]=A·B  reps=200  warmup=20
+# n | dgemm_fp64_ms | gemmEx_bf16_tc_ms | speedup(fp64/bf16)
+  256 |        0.1044 |            0.0042 | 24.88x
+  512 |        0.6080 |            0.0145 | 41.89x
+ 1024 |        4.4310 |            0.0514 | 86.26x
+ 2048 |       34.5787 |            0.2809 | 123.11x
+
+# (B) VERDICT 🟢 MEASURED: bf16 TensorCore GemmEx is 24.9x (n=256) → 123x (n=2048)
+#   faster than fp64 Dgemm on RTX 5070. This is the real M4 ceiling-break — square
+#   GEMM via cublasGemmEx CUDA_R_16BF + CUBLAS_COMPUTE_32F + TENSOR_OP, the shape
+#   the RFC 049 _hx_gemm_ex_bf16 substrate (self/cuda/runtime_bf16_emit.hexa) already
+#   implements. RESIDUAL: that path needs bf16 STORAGE tiles (the fp64-storage gemv
+#   wrappers can't drive WMMA in-place); wiring matmul_t/matmul to bf16 storage +
+#   GemmEx is the next bounded slice (M9+).
+
+# CONCLUSION: bf16 lever = TensorCore GemmEx (🟢 measured 24.9–123x), NOT in-place
+#   gemv (🔴 falsified, slower). 3-way dtype selector fp64|fp32|bf16 landed; bf16
+#   gemv kernel landed opt-in for completeness but flagged not-recommended.

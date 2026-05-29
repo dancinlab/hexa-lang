@@ -51,7 +51,7 @@ roofline 분석 (d768·12L fp64: P=104.2M, FLOPs/step=3.03e12, AI=207 FLOP/byte)
 - [x] M5 PyTorch 대비 throughput parity 측정대 구축 — A/B 측정 + verdict 영속
 - [x] M6 fp64 → fp32/bf16(TensorCore) 학습 경로 — M4가 지목한 진짜 천장 lever (A100 32×·5070 44× floor 인하). 추론 int4와 분리된 학습-mixed-precision 트랙
 - [x] M7 라이브 측정으로 1차 사이클 🟠 → 🟢 승격 — RTX 5070(ubu-2, $0) 실측: M4 roofline(0.165≈0.15 예측)·M6 fp32 lever(42~50×≈44×)·M2/M3 게이트 메커니즘 = 🟢 승격(#2132, verdict `.verdicts/hexa-train-floor/`). 잔여 = M8 + deferred
-- [ ] M8 M2/#2122 게이트 키 정정 — 실측상 진짜 판별자는 `cols`(d) 아니라 **rows(출력차원=#blocks)**. d=64라도 rows=768이면 cuBLAS 우세 → 현 게이트 d=64서 회귀 위험. `rows·cols`(총 work) 기준 재키잉 (부분 반증 fix, shipped #2122 회귀 가드)
+- [x] M8 M2/#2122 게이트 키 정정 — 실측상 진짜 판별자는 `cols`(d) 아니라 **rows(출력차원=#blocks)**. d=64라도 rows=768이면 cuBLAS 우세 → 현 게이트 d=64서 회귀 위험. `rows·cols`(총 work) 기준 재키잉 (부분 반증 fix, shipped #2122 회귀 가드)
 
 ## deferred
 
