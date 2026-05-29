@@ -43,6 +43,7 @@
 
 use "stdlib/material/sim"
 use "stdlib/qforge/eliashberg"
+use "stdlib/qforge/elph"
 
 // ── L0.1 — thin Allen-Dynes pass-through (f1·f2, ω̄₂ = ω_log → f2 = 1) ───
 //
@@ -108,4 +109,24 @@ pub fn qforge_tc_eliashberg(omega: [float], a2f: [float], mu_star: float,
 pub fn qforge_tc_eliashberg_from_lambda(lam: float, omega_rep_K: float,
                                         mu_star: float, n_mats: int) -> float {
     return eliashberg_tc_from_lambda(lam, omega_rep_K, mu_star, n_mats)
+}
+
+// ── L3.1 — α²F(ω) ASSEMBLY from el-ph matrix elements (BZ double-delta) ──
+//
+// The QFORGE entry one rung BELOW the spectral function: assemble α²F(ω) itself
+// from the electron-phonon matrix elements |g(k,q,ν)|², the phonon frequencies
+// ω(q,ν), the electron band energies ε_k, and N(E_F), via the Fermi-surface
+// double-delta BZ sum (Gaussian-smeared δ). Delegates to the verified-integrator
+// -backed `qforge_a2f_from_elph` (stdlib/qforge/elph). The returned α²F feeds
+// straight into qforge_tc_from_a2f / qforge_tc_eliashberg above — L3 produces
+// the input L0/L1 consume. NEW physics layer (🟢 rel-ε on synthetic-analytic;
+// real QE-DFPT |g| cross-val is the deferred next sub-step). Returns [-1.0] on
+// malformed input (the elph assembler sentinel).
+pub fn qforge_a2f_from_elph(eps_k: [float], eps_kq: [float], g2: [float],
+                            omega_qnu: [float], e_fermi: float, n_ef: float,
+                            omega_grid: [float], weight: float,
+                            sigma_el: float, sigma_ph: float) -> [float] {
+    return qforge_a2f_from_elph_impl(eps_k, eps_kq, g2, omega_qnu, e_fermi,
+                                     n_ef, omega_grid, weight,
+                                     sigma_el, sigma_ph)
 }

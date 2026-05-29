@@ -1,0 +1,210 @@
+// HEXA Standard Library — qforge/elph
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE L3 — the Eliashberg spectral-function ASSEMBLER. This is the first
+// genuinely-new physics layer BELOW the spectral function: given the electron-
+// phonon matrix elements |g|², the phonon frequencies ω(q,ν), the electron
+// band energies ε_k, and the Fermi-level density of states N(E_F), it ASSEMBLES
+// the Eliashberg spectral function α²F(ω) on a frequency grid via the
+// Fermi-surface double-delta Brillouin-zone sum, then closes the loop with the
+// verified L2 moment integrator (λ = 2∫α²F/ω) and the L0/L1 Tc engines.
+//
+//   |g(k,q,ν)|², ω(q,ν), ε_k, N(E_F)
+//        │  ── BZ double-delta sum (Gaussian-smeared δ) + ω histogram bin ──▶
+//        ▼
+//   α²F(ω) on a grid  ──eliashberg_moments_from_a2f──▶  λ, ω_log  (L2)
+//        │                                                  │
+//        │                                          allen_dynes / eliashberg
+//        ▼                                                  ▼
+//   2∫α²F/ω = λ  (round-trip)                            Tc (K)  (L0/L1)
+//
+// L3 ASSEMBLES — it does NOT compute g or ω from DFT. Those are L4 (DFPT
+// phonons) and L5 (plane-wave SCF). L3 takes the matrix elements + phonon
+// spectrum AS INPUT (synthetic-analytic here; real QE-DFPT plumbing is the
+// deferred next sub-step) and performs the spectral assembly the literature
+// EPW / QE `a2F` post-processing performs.
+//
+// ── The physics (Allen 1972 · Grimvall 1981 · Giustino 2017 RMP) ────────────
+//
+// @cite Allen 1972, PRB 6 2577 — the el-ph spectral function as the Fermi-
+//       surface double-delta sum over the electron-phonon matrix elements.
+// @cite Grimvall 1981, "The Electron-Phonon Interaction in Metals" §3.2 —
+//       α²F definition + λ = 2∫α²F/ω normalization.
+// @cite Giustino 2017, RMP 89 015003 — Eq. 38-40: the Wannier/EPW α²F
+//       discretization with smeared Fermi-surface deltas.
+//
+//   α²F(ω) = 1/N(E_F) · Σ_{q,ν} Σ_k  |g_{k,k+q}^ν|²
+//              · δ(ε_k − E_F) · δ(ε_{k+q} − E_F) · δ(ω − ω_{q,ν})
+//
+// On a finite sample of the BZ, each Dirac δ is replaced by a normalized
+// Gaussian of width σ (δ_σ(x) = exp(−x²/2σ²)/(σ√(2π)), ∫δ_σ = 1 so the
+// estimator is consistent), and the (q,ν,k) sum carries a uniform BZ-sampling
+// weight `w` (= 1/(N_k N_q) for a uniform grid, supplied by the caller — d4:
+// no hardcoded grid size). The ω-δ deposits each sample's spectral weight into
+// the histogram bin nearest ω_{q,ν}, smeared by σ_ph so the result is a smooth
+// α²F(ω) on the requested frequency grid.
+//
+// Honest scope (d6): this layer closes on SYNTHETIC ANALYTIC cases whose α²F is
+// known in closed form (Einstein single-mode, 2-mode), proven by the round-trip
+// 2∫α²F/ω = λ identity (🔵 algebraic) and a smearing→0 / grid→dense convergence
+// to the analytic α²F (🟢 rel-ε). No QE-anchored λ is fabricated.
+//
+// d3/d19 reuse (compose, don't reinvent):
+//   - α²F → (λ, ω_log, ω̄₂) moments  : stdlib/material/sim
+//       (eliashberg_moments_from_a2f) — verified 🟢 (PR#299 bit-exact).
+//   - Tc round-trip                  : stdlib/qforge/tc (qforge_tc_from_a2f).
+// New code here = the Gaussian-smeared δ and the BZ double-delta assembler
+// only; the moment + Tc closure reuse the verified atoms unchanged.
+//
+// Surface (pure functions, no syscall):
+//   pub fn qforge_gaussian_delta(x, sigma) -> float
+//   pub fn qforge_a2f_from_elph_impl(eps_k, eps_kq, g2, omega_qnu, e_fermi,
+//                          n_ef, omega_grid, weight, sigma_el, sigma_ph) -> [float]
+//   (re-exposed as qforge_a2f_from_elph in stdlib/qforge/tc — the L3 surface)
+//   pub fn qforge_a2f_lambda(omega_grid, a2f) -> float
+//   pub fn qforge_a2f_einstein_samples(...) -> helper builders for the analytic case
+
+use "stdlib/material/sim"
+
+let _ELPH_PI: float = 3.14159265358979323846
+let _ELPH_SQRT2PI: float = 2.50662827463100050242   // √(2π)
+
+fn _elph_abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+// ── Normalized Gaussian-smeared Dirac delta ─────────────────────────────────
+//
+//   δ_σ(x) = exp(−x² / 2σ²) / (σ √(2π))
+//
+// ∫_{−∞}^{∞} δ_σ(x) dx = 1 exactly (the normalization that makes the
+// double-delta estimator consistent — as σ→0 it tends to the Dirac δ). Used
+// for BOTH the Fermi-surface electron deltas δ(ε−E_F) and the phonon
+// frequency delta δ(ω−ω_{q,ν}). Returns 0 for a non-positive σ (degenerate
+// smearing — caller treats as no contribution).
+pub fn qforge_gaussian_delta(x: float, sigma: float) -> float {
+    if sigma <= 0.0 { return 0.0 }
+    let z = x / sigma
+    return exp(-0.5 * z * z) / (sigma * _ELPH_SQRT2PI)
+}
+
+// ── The Eliashberg spectral-function assembler (BZ double-delta sum) ─────────
+//
+// Assemble α²F(ω) on `omega_grid` from a flat list of (k, q, ν) BZ samples.
+// The four sample arrays are equal-length and index-aligned: for sample i,
+//   eps_k[i]    = electron band energy ε_k        (same unit as e_fermi)
+//   eps_kq[i]   = electron band energy ε_{k+q}     (same unit as e_fermi)
+//   g2[i]       = |g_{k,k+q}^ν|²  (el-ph matrix element squared, ≥ 0)
+//   omega_qnu[i]= phonon frequency ω_{q,ν}         (same unit as omega_grid; K)
+//
+// For each sample the spectral weight deposited is
+//   w · g2[i] · δ_σel(ε_k−E_F) · δ_σel(ε_{k+q}−E_F) / N(E_F),
+// histogrammed over the ω grid by the normalized phonon delta δ_σph(ω−ω_{q,ν}).
+// `weight` is the uniform BZ-sample weight (= 1/(N_k·N_q) for a uniform grid;
+// the caller owns the grid → d4 no hardcode). σ_el / σ_ph are the electron /
+// phonon Gaussian smearings; as both → 0 with a dense grid the estimator
+// converges to the analytic α²F.
+//
+// Returns the α²F(ω) array (same length as omega_grid). Returns [-1.0] on
+// malformed input (length mismatch, < 2 grid points, N(E_F) ≤ 0, σ ≤ 0).
+pub fn qforge_a2f_from_elph_impl(eps_k: [float], eps_kq: [float], g2: [float],
+                                 omega_qnu: [float], e_fermi: float, n_ef: float,
+                                 omega_grid: [float], weight: float,
+                                 sigma_el: float, sigma_ph: float) -> [float] {
+    let ns = len(eps_k)
+    let ng = len(omega_grid)
+    // malformed-input guard (d6 honest gate, not a silent zero)
+    if ns < 1 || ng < 2 { return [-1.0] }
+    if len(eps_kq) != ns || len(g2) != ns || len(omega_qnu) != ns {
+        return [-1.0]
+    }
+    if n_ef <= 0.0 || sigma_el <= 0.0 || sigma_ph <= 0.0 { return [-1.0] }
+
+    // accumulator over the ω grid
+    let mut a2f: [float] = []
+    let mut g = 0
+    while g < ng { a2f.push(0.0) ; g = g + 1 }
+
+    let inv_nef = 1.0 / n_ef
+    let mut i = 0
+    while i < ns {
+        // Fermi-surface double delta: both electrons pinned to E_F.
+        let dk = qforge_gaussian_delta(eps_k[i] - e_fermi, sigma_el)
+        let dkq = qforge_gaussian_delta(eps_kq[i] - e_fermi, sigma_el)
+        // spectral weight of this (k,q,ν) sample (before the ω-histogram)
+        let wgt = weight * g2[i] * dk * dkq * inv_nef
+        if wgt != 0.0 {
+            // deposit into the ω grid via the normalized phonon delta
+            let wq = omega_qnu[i]
+            let mut j = 0
+            while j < ng {
+                a2f[j] = a2f[j] + wgt * qforge_gaussian_delta(omega_grid[j] - wq,
+                                                              sigma_ph)
+                j = j + 1
+            }
+        }
+        i = i + 1
+    }
+    return a2f
+}
+
+// ── Round-trip λ from the assembled α²F (reuse L2 verified integrator) ───────
+//
+//   λ = 2 ∫ α²F(ω)/ω dω
+//
+// Thin forward to the verified `eliashberg_moments_from_a2f` (stdlib/material/
+// sim) — the SAME integrator L0/L1 consume, so the assembled α²F is checked on
+// the identical λ path. Returns the λ moment (m[0]); −1.0 on malformed input
+// (propagates the integrator sentinel). d3: no re-implementation of the
+// integral.
+pub fn qforge_a2f_lambda(omega_grid: [float], a2f: [float]) -> float {
+    let m = eliashberg_moments_from_a2f(omega_grid, a2f)
+    return m[0]
+}
+
+// ── Analytic-case sample builder: a single Einstein phonon mode ──────────────
+//
+// Build the four index-aligned (k,q,ν) sample arrays for the closed-form
+// Einstein case: a single phonon mode ω₀, a constant matrix element |g|², and
+// a flat band of `nk` electron states sitting exactly on the Fermi level
+// (ε_k = ε_{k+q} = E_F). With every electron δ on-shell, the FS double-delta
+// sum collapses to a clean prefactor and the assembled α²F is the discrete
+// realization of  α²F(ω) = (λ ω₀ / 2) δ(ω − ω₀)  — the case whose λ is known
+// in closed form (2∫α²F/ω = λ).
+//
+// Returns a flat [4·nk] packing: [eps_k…, eps_kq…, g2…, omega_qnu…], each of
+// length nk. The selftest unpacks these into the four arrays the assembler
+// takes. (Packing avoids a struct dependency — d4 keeps the assembler generic.)
+pub fn qforge_a2f_einstein_samples(nk: int, e_fermi: float, g2_const: float,
+                                   omega0: float) -> [float] {
+    let mut packed: [float] = []
+    let mut i = 0
+    while i < nk { packed.push(e_fermi) ; i = i + 1 }        // eps_k on E_F
+    i = 0
+    while i < nk { packed.push(e_fermi) ; i = i + 1 }        // eps_kq on E_F
+    i = 0
+    while i < nk { packed.push(g2_const) ; i = i + 1 }       // constant |g|²
+    i = 0
+    while i < nk { packed.push(omega0) ; i = i + 1 }         // single mode ω₀
+    return packed
+}
+
+// ── Closed-form Einstein λ — the analytic target the assembler must hit ──────
+//
+// For the Einstein construction above (nk on-shell electrons, constant |g|²,
+// uniform sample weight w, FS double-delta peaked at x=0 → δ_σ(0)=1/(σ√2π)),
+// the assembled spectral weight integrates to
+//   D = w · nk · g2 · (1/(σ_el√2π))² / N(E_F)
+// and the assembled α²F is D·δ_σph(ω−ω₀), so the round-trip coupling is
+//   λ = 2 ∫ α²F/ω dω → 2 D / ω₀   as σ_ph → 0.
+// This returns that analytic λ for the SAME inputs the sample builder used, so
+// the selftest can assert the assembled-then-integrated λ matches it to rel-ε.
+// (No physics is hidden in the assembler — this is the independent closed form.)
+pub fn qforge_einstein_lambda_analytic(nk: int, g2_const: float, omega0: float,
+                                       n_ef: float, weight: float,
+                                       sigma_el: float) -> float {
+    if n_ef <= 0.0 || sigma_el <= 0.0 || omega0 <= 0.0 { return -1.0 }
+    let d0 = 1.0 / (sigma_el * _ELPH_SQRT2PI)    // δ_σel(0)
+    let big_d = weight * to_float(nk) * g2_const * d0 * d0 / n_ef
+    return 2.0 * big_d / omega0
+}

@@ -1,0 +1,238 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+//
+// qforge_l3_selftest.hexa — QFORGE L3 g5 gate.
+//
+// Closes the L3 Eliashberg-spectral-function ASSEMBLER gate. L3 is a NEW
+// physics layer: it assembles α²F(ω) from the el-ph matrix elements |g|², the
+// phonon frequencies ω(q,ν), the electron energies ε_k, and N(E_F) via the
+// Fermi-surface double-delta BZ sum (Gaussian-smeared δ). It does NOT compute g
+// or ω from DFT (L4/L5); it ASSEMBLES given them. Honest tier (d6):
+//
+//   🔵 (closed-form, exact)  the λ-normalization identity λ = 2∫α²F/ω. For the
+//        Einstein construction (on-shell electrons, constant |g|², single ω₀)
+//        the assembled spectral weight integrates to D = w·nk·g²·δ_σel(0)²/N(E_F)
+//        and λ = 2D/ω₀ EXACTLY in the σ_ph→0 limit — an algebraic identity
+//        between `qforge_a2f_from_elph` ∘ `eliashberg_moments_from_a2f` and the
+//        independent closed form `qforge_einstein_lambda_analytic`.
+//   🟢 (rel-ε numerical)     the SMEARED double-delta BZ sum: as the phonon
+//        smearing σ_ph shrinks on a dense ω grid, the assembled-then-integrated
+//        λ CONVERGES MONOTONICALLY to the analytic λ. The selftest exhibits the
+//        convergence sequence (σ_ph = 12,6,3,1.5 K → rel-err falling) and pins
+//        the tightest to rel-ε ≤ 1%.
+//   🟢 (rel-ε numerical)     2-mode double-delta normalization: two modes
+//        (ω₁,ω₂) → λ = λ₁ + λ₂ (additivity of the FS double-delta sum).
+//   🟢 (cross-layer)         round-trip — assembled α²F → L2 moments
+//        (λ, ω_log) → L0 `qforge_tc_allen_dynes` recovers the expected Tc.
+//   guard  malformed input (length mismatch / N(E_F)≤0 / σ≤0) → [-1.0] sentinel.
+//
+// No QE-anchored λ is hard-wired (d6): the analytic α²F is the only reference,
+// and the gate is the assembler reproducing IT — not a fabricated DFT number.
+// Real-QE-DFPT |g| cross-validation is the deferred next L3 sub-step.
+//
+// Run:  HEXA_MAC_BUILD_OK=1 HEXA_LANG=<worktree> hexa build \
+//         stdlib/qforge/qforge_l3_selftest.hexa -o /tmp/qf3 && /tmp/qf3
+// PASS: exits printing "qforge_l3_selftest PASS".
+
+use "stdlib/qforge/tc"
+use "stdlib/qforge/elph"
+use "stdlib/material/sim"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn _ck(name: str, got: float, want: float, tol: float) -> int {
+    let w = _abs(want)
+    let d = _abs(got - want)
+    let rel = if w < 1e-12 { d } else { d / w }
+    if rel <= tol {
+        println("PASS " + name + " (got " + to_string(got) + ")")
+        return 0
+    }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want))
+    return 1
+}
+
+fn _assert(name: str, cond: bool, detail: str) -> int {
+    if cond {
+        println("PASS " + name + "  " + detail)
+        return 0
+    }
+    println("FAIL " + name + "  " + detail)
+    return 1
+}
+
+// Build a uniform ω grid [wlo, whi] with ng points (each > 0 for the 1/ω
+// integrand the moment integrator carries).
+fn _grid(wlo: float, whi: float, ng: int) -> [float] {
+    let mut g: [float] = []
+    let step = (whi - wlo) / to_float(ng - 1)
+    let mut j = 0
+    while j < ng { g.push(wlo + step * to_float(j)) ; j = j + 1 }
+    return g
+}
+
+// Slice packed Einstein samples [4·nk] into one of the four arrays (block b).
+fn _slice(packed: [float], nk: int, b: int) -> [float] {
+    let mut out: [float] = []
+    let mut i = 0
+    while i < nk { out.push(packed[b * nk + i]) ; i = i + 1 }
+    return out
+}
+
+// Assemble the Einstein α²F then return its round-trip λ (2∫α²F/ω) for a given
+// phonon smearing σ_ph — the convergence knob.
+fn _einstein_lambda(nk: int, ef: float, g2c: float, w0: float, n_ef: float,
+                    wgt: float, sig_el: float, sig_ph: float,
+                    wlo: float, whi: float, ng: int) -> float {
+    let packed = qforge_a2f_einstein_samples(nk, ef, g2c, w0)
+    let ek = _slice(packed, nk, 0)
+    let ekq = _slice(packed, nk, 1)
+    let g2 = _slice(packed, nk, 2)
+    let wq = _slice(packed, nk, 3)
+    let grid = _grid(wlo, whi, ng)
+    let a2f = qforge_a2f_from_elph(ek, ekq, g2, wq, ef, n_ef, grid, wgt,
+                                   sig_el, sig_ph)
+    return qforge_a2f_lambda(grid, a2f)
+}
+
+fn main() {
+    let mut fails = 0
+
+    // ── shared Einstein construction ───────────────────────────────────────
+    // nk on-shell electrons, constant |g|², single phonon mode ω₀ = 300 K.
+    // BZ-sample weight w = 1/(N_k·N_q); here a single q so w = 1/nk → the
+    // per-electron weight. N(E_F) chosen so the analytic λ lands near 1 (Nb-ish).
+    let nk = 200
+    let ef = 0.0            // measure ε relative to E_F (on-shell ⇒ ε−E_F = 0)
+    let w0 = 300.0          // single Einstein mode (K)
+    let n_ef = 1.0          // states / (spin·cell·energy) — unit reference
+    let sig_el = 0.05       // electron FS smearing (K) — on-shell so σ-independent
+    let wgt = 1.0 / to_float(nk)   // uniform BZ-sample weight 1/(N_k N_q), 1 q
+    // pick g2 so the analytic λ ≈ 1.0:  λ = 2 w nk g² δ(0)²/N(E_F)/ω₀.
+    let d0 = 1.0 / (sig_el * 2.50662827463100050242)
+    let g2c = 1.0 * w0 * n_ef / (2.0 * wgt * to_float(nk) * d0 * d0)
+
+    let lam_analytic = qforge_einstein_lambda_analytic(nk, g2c, w0, n_ef,
+                                                       wgt, sig_el)
+    println("[Einstein] analytic λ = " + to_string(lam_analytic) +
+            "  (target ≈ 1.0, ω₀=" + to_string(w0) + " K)")
+
+    // ── 🔵 sub-check 1 — λ-normalization identity (σ_ph→0 limit) ───────────
+    // Assemble with a SHARP phonon delta on a DENSE wide grid; the round-trip
+    // λ must equal the closed-form analytic λ. As σ_ph→0 / grid→dense the
+    // discrete double-delta sum reproduces the algebraic 2D/ω₀ identity (🔵).
+    let lam_sharp = _einstein_lambda(nk, ef, g2c, w0, n_ef, wgt, sig_el,
+                                     0.8, 60.0, 1080.0, 20001)
+    fails = fails + _ck("🔵 Einstein λ-normalization (2∫α²F/ω = λ)",
+                        lam_sharp, lam_analytic, 1e-2)
+
+    // ── 🟢 sub-check 2 — smearing→analytic CONVERGENCE (monotone, rel-ε) ───
+    // Shrink σ_ph on a fixed dense grid; rel-err to the analytic λ must fall
+    // monotonically toward 0. The 1/ω weighting of a finite-σ Gaussian peak at
+    // ω₀ gives a leading O((σ_ph/ω₀)²) bias → halving σ_ph quarters the error.
+    let ng = 24001
+    let l12 = _einstein_lambda(nk, ef, g2c, w0, n_ef, wgt, sig_el, 12.0, 60.0, 1080.0, ng)
+    let l6  = _einstein_lambda(nk, ef, g2c, w0, n_ef, wgt, sig_el, 6.0,  60.0, 1080.0, ng)
+    let l3  = _einstein_lambda(nk, ef, g2c, w0, n_ef, wgt, sig_el, 3.0,  60.0, 1080.0, ng)
+    let l15 = _einstein_lambda(nk, ef, g2c, w0, n_ef, wgt, sig_el, 1.5,  60.0, 1080.0, ng)
+    let e12 = _abs(l12 - lam_analytic) / lam_analytic
+    let e6  = _abs(l6  - lam_analytic) / lam_analytic
+    let e3  = _abs(l3  - lam_analytic) / lam_analytic
+    let e15 = _abs(l15 - lam_analytic) / lam_analytic
+    println("[convergence] σ_ph=12→ λ=" + to_string(l12) + " (relerr " + to_string(e12) + ")")
+    println("[convergence] σ_ph= 6→ λ=" + to_string(l6)  + " (relerr " + to_string(e6)  + ")")
+    println("[convergence] σ_ph= 3→ λ=" + to_string(l3)  + " (relerr " + to_string(e3)  + ")")
+    println("[convergence] σ_ph=1.5→ λ=" + to_string(l15) + " (relerr " + to_string(e15) + ")")
+    fails = fails + _assert("🟢 smearing→0 convergence MONOTONE",
+                            e12 > e6 && e6 > e3 && e3 > e15,
+                            "(" + to_string(e12) + " > " + to_string(e6) + " > " +
+                            to_string(e3) + " > " + to_string(e15) + ")")
+    fails = fails + _assert("🟢 tightest σ_ph rel-err ≤ 1%",
+                            e15 <= 1e-2,
+                            "(relerr=" + to_string(e15) + " ≤ 0.01)")
+    // ~4× error reduction per σ_ph halving (O(σ²) bias) — quantitative shape.
+    fails = fails + _assert("🟢 O(σ²) bias (e6/e3 ≈ 4, e3/e15 ≈ 4)",
+                            (e6 / e3) > 3.0 && (e6 / e3) < 5.0 &&
+                            (e3 / e15) > 3.0 && (e3 / e15) < 5.0,
+                            "(e6/e3=" + to_string(e6 / e3) +
+                            " e3/e15=" + to_string(e3 / e15) + ")")
+
+    // ── 🟢 sub-check 3 — 2-mode double-delta normalization (additivity) ────
+    // Two modes ω₁=150 K, ω₂=400 K, each a separate (q,ν) sample over the same
+    // nk on-shell electrons. λ_total = λ₁ + λ₂ where λ_i = 2 D_i/ω_i. Build the
+    // sample lists by hand (generic flat-array path — no Einstein helper).
+    let w1 = 150.0
+    let w2 = 400.0
+    let g2_1 = g2c        // reuse the same |g|² magnitude for mode 1
+    let g2_2 = 0.5 * g2c  // half coupling for mode 2 (distinct → tests additivity)
+    let mut ek: [float] = []
+    let mut ekq: [float] = []
+    let mut g2: [float] = []
+    let mut wq: [float] = []
+    let mut i = 0
+    while i < nk { ek.push(ef); ekq.push(ef); g2.push(g2_1); wq.push(w1); i = i + 1 }
+    i = 0
+    while i < nk { ek.push(ef); ekq.push(ef); g2.push(g2_2); wq.push(w2); i = i + 1 }
+    let grid2 = _grid(40.0, 800.0, 24001)
+    let a2f2 = qforge_a2f_from_elph(ek, ekq, g2, wq, ef, n_ef, grid2,
+                                    wgt, sig_el, 1.5)
+    let lam_2mode = qforge_a2f_lambda(grid2, a2f2)
+    // analytic: λ₁ = 2 D₁/ω₁ with D₁ = w·nk·g2_1·δ(0)²/N(E_F); λ₂ likewise.
+    let big_d1 = wgt * to_float(nk) * g2_1 * d0 * d0 / n_ef
+    let big_d2 = wgt * to_float(nk) * g2_2 * d0 * d0 / n_ef
+    let lam_2mode_analytic = 2.0 * big_d1 / w1 + 2.0 * big_d2 / w2
+    println("[2-mode] λ_assembled=" + to_string(lam_2mode) +
+            "  λ_analytic=" + to_string(lam_2mode_analytic) +
+            "  (λ₁+λ₂, ω₁=150 ω₂=400 K)")
+    fails = fails + _ck("🟢 2-mode double-delta λ = λ₁+λ₂",
+                        lam_2mode, lam_2mode_analytic, 1e-2)
+
+    // ── 🟢 sub-check 4 — round-trip assembled α²F → L2 moments → L0 Tc ─────
+    // Feed the assembled Einstein α²F through the verified moment integrator and
+    // the L0 Allen-Dynes engine; the recovered (λ, ω_log) and Tc must match the
+    // direct (λ_analytic, ω₀) hand-fed through the SAME L0 entry. Cross-layer
+    // consistency: L3 output is a valid L0 input.
+    let packed = qforge_a2f_einstein_samples(nk, ef, g2c, w0)
+    let grid3 = _grid(60.0, 1080.0, 24001)
+    let a2f3 = qforge_a2f_from_elph(_slice(packed, nk, 0), _slice(packed, nk, 1),
+                                    _slice(packed, nk, 2), _slice(packed, nk, 3),
+                                    ef, n_ef, grid3, wgt, sig_el, 1.5)
+    let m = eliashberg_moments_from_a2f(grid3, a2f3)
+    let lam_rt = m[0]
+    let wlog_rt = m[1]
+    println("[round-trip] L2 moments from assembled α²F: λ=" + to_string(lam_rt) +
+            "  ω_log=" + to_string(wlog_rt) + " K  (ω₀=" + to_string(w0) + ")")
+    // ω_log of a tight single Einstein peak ≈ ω₀.
+    fails = fails + _ck("🟢 round-trip ω_log ≈ ω₀", wlog_rt, w0, 5e-3)
+    fails = fails + _ck("🟢 round-trip λ ≈ analytic", lam_rt, lam_analytic, 1e-2)
+    let mu = 0.13
+    let tc_from_l3 = qforge_tc_from_a2f(grid3, a2f3, mu)         // L3→L0 chain
+    let tc_direct = qforge_tc_allen_dynes(lam_analytic, w0, mu)  // direct L0
+    println("[round-trip] Tc(L3→L2→L0)=" + to_string(tc_from_l3) +
+            "  Tc(direct L0)=" + to_string(tc_direct) + " K")
+    fails = fails + _ck("🟢 round-trip Tc(L3 chain) = Tc(direct L0)",
+                        tc_from_l3, tc_direct, 1e-2)
+
+    // ── guard — malformed input → [-1.0] sentinel ──────────────────────────
+    let bad_len = qforge_a2f_from_elph([0.0, 0.0], [0.0], [1.0, 1.0],
+                                       [300.0, 300.0], ef, n_ef,
+                                       _grid(60.0, 1080.0, 100), wgt, sig_el, 1.5)
+    fails = fails + _assert("guard length-mismatch → [-1.0]",
+                            len(bad_len) == 1 && bad_len[0] < 0.0,
+                            "(len=" + to_string(len(bad_len)) + ")")
+    let bad_nef = qforge_a2f_from_elph([ef], [ef], [1.0], [300.0], ef, 0.0,
+                                       _grid(60.0, 1080.0, 100), wgt, sig_el, 1.5)
+    fails = fails + _assert("guard N(E_F)≤0 → [-1.0]",
+                            len(bad_nef) == 1 && bad_nef[0] < 0.0,
+                            "(N(E_F)=0)")
+    let bad_sig = qforge_a2f_from_elph([ef], [ef], [1.0], [300.0], ef, n_ef,
+                                       _grid(60.0, 1080.0, 100), wgt, 0.0, 1.5)
+    fails = fails + _assert("guard σ_el≤0 → [-1.0]",
+                            len(bad_sig) == 1 && bad_sig[0] < 0.0,
+                            "(σ_el=0)")
+
+    if fails == 0 {
+        println("qforge_l3_selftest PASS")
+    } else {
+        println("qforge_l3_selftest FAIL — " + to_string(fails) + " case(s)")
+    }
+}
