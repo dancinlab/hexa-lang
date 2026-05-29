@@ -1,0 +1,200 @@
+// HEXA Standard Library — qforge/davidson
+//
+// QFORGE L5 brick 4/5 — Davidson 블록 반복 대각화기 (iterative diagonalizer).
+//
+// 평면파 DFT 의 Kohn-Sham 해밀토니안 H 는 거대(npw×npw, Hermitian)하지만
+// 필요한 것은 가장 낮은 `nbands` 개의 고유쌍뿐이다. Davidson 알고리즘:
+//
+//   1. 작은 시험 부분공간 V (열=직교정규 벡터)을 만든다.
+//   2. 투영 행렬 Hs = Vᵀ H V (작은 dense) 를 형성한다.
+//   3. 작은 dense 대칭 고유문제를 푼다  →  stdlib/alloc/math/eigen 재사용 (d19).
+//   4. Ritz 벡터 xᵢ = V·yᵢ, 잔차 rᵢ = H xᵢ − λᵢ xᵢ 를 계산한다.
+//   5. 대각(Jacobi) 전처리 보정벡터 tᵢ = rᵢ / (λᵢ − diag) 를 V 에 추가한다.
+//   6. 재직교정규화 후 ‖rᵢ‖ < tol 까지 반복한다.
+//
+// ── matrix-free 계약 (one solver, two callers) ────────────────────────────
+//   H_apply = 행렬-자유 연산자: 벡터 v 를 받아 H·v 를 돌려주는 함수(클로저).
+//   따라서 같은 solver 가
+//     (a) selftest 의 명시적 작은 행렬 (H_apply = 행렬·벡터 곱), 그리고
+//     (b) 미래의 평면파 H (H_apply = FFT 기반 운동·포텐셜 적용)
+//   둘 다에서 그대로 동작한다 — generic 디스패치(d4), 이름 하드코딩 없음.
+//   diag = H 의 대각선 (전처리기용). selftest 와 PW 호출자 모두 이를 제공.
+//
+//   pub fn qforge_davidson(H_apply, diag, n, nbands, tol, max_iter) -> DavidResult
+//
+// reuse (d19): 투영 부분공간 대각화는 stdlib/alloc/math/eigen 의 cyclic-Jacobi
+//   대칭 eigensolver `eigh(A, n)` 를 호출 (L1 Eliashberg 가 이미 재사용).
+use "stdlib/alloc/math/eigen"
+
+// 결과 묶음: 가장 낮은 nbands 고유값(오름차순) · 고유벡터(행=벡터) · 반복수 · 수렴플래그.
+pub struct DavidResult {
+    evals: [float],      // nbands 개, 오름차순
+    evecs: [float],      // 행-우선 평탄화: evecs[k*n + i] = k-번째 고유벡터의 i 성분
+    iters: int,
+    converged: bool
+}
+
+// ── 벡터 헬퍼 (local; stdlib 에 공개 dot/axpy/norm 없음 — d19 grep 확인) ──
+fn dv_dot(a: [float], b: [float], n: int) -> float {
+    let mut s = 0.0
+    let mut i = 0
+    while i < n { s = s + a[i] * b[i] ; i = i + 1 }
+    return s
+}
+fn dv_norm(a: [float], n: int) -> float { return sqrt(dv_dot(a, a, n)) }
+
+// Modified Gram-Schmidt: 새 벡터 w 를 basis (행=벡터, m 개, 각 길이 n) 에 직교화 후
+// 정규화. 노름이 무너지면(선형종속) [] 반환.
+fn dv_orthonormalize(basis: [[float]], m: int, w: [float], n: int) -> [float] {
+    let mut v = []
+    let mut t = 0
+    while t < n { v.push(w[t]) ; t = t + 1 }
+    let mut j = 0
+    while j < m {
+        let proj = dv_dot(basis[j], v, n)
+        let mut i = 0
+        while i < n { v[i] = v[i] - proj * basis[j][i] ; i = i + 1 }
+        j = j + 1
+    }
+    let nrm = dv_norm(v, n)
+    if nrm < 1.0e-10 { return [] }
+    let mut i2 = 0
+    while i2 < n { v[i2] = v[i2] / nrm ; i2 = i2 + 1 }
+    return v
+}
+
+// 투영 Hs = Vᵀ H V (m×m 평탄) + W[j]=H·basis[j] (잔차 계산 재사용) 반환.
+fn dv_project(H_apply, basis: [[float]], m: int, n: int) -> [[float]] {
+    let mut W = []
+    let mut j = 0
+    while j < m { W.push(H_apply(basis[j])) ; j = j + 1 }
+    let mut Hs = []
+    let mut a = 0
+    while a < m {
+        let mut b = 0
+        while b < m { Hs.push(dv_dot(basis[a], W[b], n)) ; b = b + 1 }
+        a = a + 1
+    }
+    return [Hs, W]
+}
+
+// ── Davidson 본체 ──────────────────────────────────────────────────────────
+// H_apply: v -> H·v (matrix-free) · diag: H 대각선 · n: 차원 · nbands: 원하는 최저 밴드 수.
+pub fn qforge_davidson(H_apply, diag: [float], n: int, nbands: int,
+                       tol: float, max_iter: int) -> DavidResult {
+    // 초기 기저 = diag 가 가장 작은 nbands 개 인덱스의 단위벡터(부분 선택정렬).
+    let mut order = []
+    let mut p = 0
+    while p < n { order.push(p) ; p = p + 1 }
+    let mut s = 0
+    while s < nbands {
+        let mut best = s
+        let mut q = s + 1
+        while q < n {
+            if diag[order[q]] < diag[order[best]] { best = q }
+            q = q + 1
+        }
+        let tmp = order[s] ; order[s] = order[best] ; order[best] = tmp
+        s = s + 1
+    }
+    let mut basis = []
+    let mut k = 0
+    while k < nbands {
+        let mut e = []
+        let mut i = 0
+        while i < n { if i == order[k] { e.push(1.0) } else { e.push(0.0) } ; i = i + 1 }
+        basis.push(e)
+        k = k + 1
+    }
+    let mut m = nbands
+    let mut iters = 0
+    let mut evals = []
+    let mut evecs = []
+    let mut converged = false
+    while iters < max_iter {
+        iters = iters + 1
+        // (1) 투영 + 작은 dense 대각화 (eigen.hexa 재사용, d19).
+        let pr = dv_project(H_apply, basis, m, n)
+        let Hs = pr[0]
+        let W = pr[1]
+        let eg = eigh(Hs, m)          // [vals desc, vecs rows]
+        let vals = eg[0]
+        let vecs = eg[1]
+        // eigh 는 내림차순 → 가장 낮은 nbands 는 끝 nbands 개(인덱스 m-nbands..m-1).
+        // (2) Ritz 쌍 + 잔차, 보정벡터 수집.
+        let mut corrections = []
+        let mut max_res = 0.0
+        evals = []
+        evecs = []
+        let mut bk = 0
+        while bk < nbands {
+            let col = m - 1 - bk           // eigh 내림차순 → 오름차순 bk-번째 = 끝에서 bk 번째
+            let lam = vals[col]
+            let yk = vecs[col]             // 길이 m, 부분공간 좌표
+            // Ritz 벡터 x = Σ_j y[j]·basis[j]  (길이 n) · H·x = Σ_j y[j]·W[j].
+            let mut x = []
+            let mut Hx = []
+            let mut t0 = 0
+            while t0 < n { x.push(0.0) ; Hx.push(0.0) ; t0 = t0 + 1 }
+            let mut j = 0
+            while j < m {
+                let c = yk[j]
+                let mut i = 0
+                while i < n {
+                    x[i] = x[i] + c * basis[j][i]
+                    Hx[i] = Hx[i] + c * W[j][i]
+                    i = i + 1
+                }
+                j = j + 1
+            }
+            // 잔차 r = H·x − λ·x.
+            let mut r = []
+            let mut i2 = 0
+            while i2 < n { r.push(Hx[i2] - lam * x[i2]) ; i2 = i2 + 1 }
+            let rn = dv_norm(r, n)
+            if rn > max_res { max_res = rn }
+            evals.push(lam)
+            let mut ix = 0
+            while ix < n { evecs.push(x[ix]) ; ix = ix + 1 }
+            // (3) 대각(Jacobi) 전처리 보정: t = r / (λ − diag), 특이점 보호.
+            if rn > tol {
+                let mut corr = []
+                let mut id = 0
+                while id < n {
+                    let denom = lam - diag[id]
+                    let dd = if denom < 0.0 { if denom > -1.0e-8 { -1.0e-8 } else { denom } }
+                             else { if denom < 1.0e-8 { 1.0e-8 } else { denom } }
+                    corr.push(r[id] / dd)
+                    id = id + 1
+                }
+                corrections.push(corr)
+            }
+            bk = bk + 1
+        }
+        // 수렴 판정.
+        if max_res < tol {
+            return DavidResult { evals: evals, evecs: evecs, iters: iters, converged: true }
+        }
+        // (4) 부분공간이 너무 커지면 현재 Ritz 벡터로 collapse(재시작) 후 보정벡터 추가.
+        if m + len(corrections) > 4 * nbands {
+            basis = []
+            let mut rb = 0
+            while rb < nbands {
+                let mut ev = []
+                let mut i = 0
+                while i < n { ev.push(evecs[rb * n + i]) ; i = i + 1 }
+                let on = dv_orthonormalize(basis, rb, ev, n)
+                if len(on) == n { basis.push(on) }
+                rb = rb + 1
+            }
+            m = len(basis)
+        }
+        let mut ci = 0
+        while ci < len(corrections) {
+            let on = dv_orthonormalize(basis, m, corrections[ci], n)
+            if len(on) == n { basis.push(on) ; m = m + 1 }
+            ci = ci + 1
+        }
+    }
+    return DavidResult { evals: evals, evecs: evecs, iters: iters, converged: converged }
+}
