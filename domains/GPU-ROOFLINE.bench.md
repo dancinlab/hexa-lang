@@ -69,6 +69,74 @@ M=4096   median 1.0863 ms  126.52 TFLOPS
 
 ---
 
+## §multi-device-peak — 디바이스별 achieved-peak 분모 (MS#7)
+
+현 분모는 RTX 5070 1개였다(§peak). MS#7 은 **데이터센터급 디바이스 A100 을 분모 행에 추가** —
+roofline % 잣대를 멀티디바이스로 확장(같은 커널을 다른 디바이스 천장 대비 % 로 읽을 수 있게).
+
+측정: **vast pod 38481895** (NVIDIA **A100 80GB PCIe**, sm_80, 108 SM, driver 590.48.01,
+core-clk 1410 MHz, mem-clk 1512 MHz HBM2e) · PyTorch 2.6.0+cu124 번들 cuBLAS/cuBLASLt
+(이미지에 nvcc/CUDA-toolkit 부재 — torch 휠 번들 런타임, non-ASCII PTX 무관 = driver-native)
+· microbench `/tmp/gpu_rfl_bench.py`(STREAM-triad BW + cuBLAS GEMM) + `/tmp/gpu_rfl_bench2.py`
+(FP32 SGEMM TF32-off + FP64 DGEMM compute-peak, M=N=K=8192). 2026-05-30. **측정 후 pod 즉시 down(비용 차단).**
+
+### A100 80GB PCIe achieved-peak (분모 박제)
+
+| 분모 (achieved-peak) | 실측 | theoretical 스펙 (A100 80GB PCIe) | achieved/theo | 측정법 |
+|---|---|---|---|---|
+| **HBM2e 대역폭** | **1640.77 GB/s** | 1935 GB/s (HBM2e marketing) | **84.8%** | STREAM-triad `a=b+α·c`(read2+write1=3×64M×4B), median of 200 |
+| **HBM2e 대역폭** (DtoD) | 1607.65 GB/s | 1935 GB/s | 83.1% | torch copy_ DtoD 256MB(read+write), median of 200 |
+| **FP32 (CUDA-core)** | **19.12 TFLOP/s** | 19.5 (FP32 peak) | **98.1%** | cuBLAS SGEMM M=8192, TF32 OFF(true-fp32 path), median of 50 |
+| **FP64 (DGEMM, FP64-TC)** | **16.90 TFLOP/s** | 19.5 (FP64 tensor) / 9.7 (FP64 CUDA-core) | **86.7% of TC / 174% of core** | cuBLAS DGEMM M=8192 (cuBLAS = FP64 tensor cores), median of 50 |
+| **TF32 (tensor-core)** | **112.73 TFLOP/s** | 156 (TF32 TC dense) | **72.3%** | cuBLAS GEMM fp32-in TF32-on M=4096, median of 100 |
+| **BF16 (tensor-core)** | **239.04 TFLOP/s** | 312 (BF16 TC dense) | **76.6%** | cuBLAS GEMM bf16 M=4096, median of 100 |
+| **FP16 (tensor-core)** | **245.19 TFLOP/s** | 312 (FP16 TC dense) / 624 (sparse) | **78.6% / 39.3%** | cuBLAS HGEMM M=4096, median of 100 |
+
+> **격차 정직 노트(A100)**: (1) HBM2e achieved 84.8% = 일반적 STREAM sustainable(85% 부근), 정상.
+> (2) FP32 SGEMM 98.1% = cuBLAS 가 FP32 peak 에 거의 붙음(데이터센터급 CUTLASS-grade). (3) FP64 DGEMM
+> 16.90 TF = FP64 **tensor-core** 천장(19.5) 의 86.7% — A100 의 FP64-TC 가 일반 FP64 CUDA-core(9.7)
+> 의 2배라 cuBLAS DGEMM 이 174% of CUDA-core(=FP64-TC 사용 증거). (4) FP16/BF16 TC 78.6%/76.6% =
+> sustainable cuBLAS(dense, sparse-off). 모두 achieved 가 honest 분모(스펙은 나란히).
+
+**ridge-point** (A100, FP32): `19.12 TFLOP/s / 1.64077 TB/s ≈ 11.7 flops/byte`(SGEMM 분모) ·
+tensor 기준 `245.19 / 1.64077 ≈ 149 flops/byte`(FP16-TC). AI < ridge = memory-bound.
+
+### 멀티디바이스 분모 비교표 (RTX 5070 행 포함)
+
+| device | sm | HBM BW achieved (theo) | FP32 achieved (theo) | FP64 achieved (theo) | FP16-TC achieved (theo) | 측정 호스트 |
+|---|---|---|---|---|---|---|
+| **RTX 5070** (Blackwell, 소비자) | sm_120 | 559.5 GB/s (672, 83.3%) | 34.11 TF (≈31, 110%)¹ | — (FP64 게이팅) | 126.52 TF (494 dense, 26%)² | ubu-2 ($0 fire) |
+| **A100 80GB PCIe** (Ampere, DC) | sm_80 | 1640.8 GB/s (1935, 84.8%) | 19.12 TF (19.5, 98.1%) | 16.90 TF (19.5 TC, 86.7%) | 245.19 TF (312 dense, 78.6%) | vast 38481895 (측정 pod) |
+
+> ¹ RTX 5070 FP32 achieved 가 marketing 넘음 = Blackwell SM FP32-lane 이 추정보다 많음(§peak 노트).
+> ² RTX 5070 의 marketing FP16-TC 494 는 sparse+이상조건 — 소비자 Blackwell tensor 게이팅으로
+> sustainable 은 26% 뿐. **A100(DC) 은 78.6% sustainable** = 데이터센터 GPU 가 tensor 천장에
+> 훨씬 가깝게 붙음(게이팅 없음). **이게 멀티디바이스 분모의 핵심 발견**: 같은 cuBLAS 라도
+> 디바이스 등급(소비자 vs DC)이 achieved/theoretical % 를 크게 가른다 — 분모를 디바이스별로
+> 박제해야 roofline % 가 의미를 가진다(단일 RTX 5070 분모로 A100 커널을 읽으면 천장 왜곡).
+
+```
+# verbatim — /tmp/gpu_rfl_bench (A100 80GB PCIe, vast 38481895, 2026-05-30)
+# device: NVIDIA A100 80GB PCIe  sm_80  SMs=108  mem=85.1 GB
+STREAM_TRIAD_BW_GBps 1640.77  (median 0.4908 ms, 805 MB)
+DtoD_COPY_BW_GBps 1607.65  (median 0.3339 ms)
+HGEMM_TC_TFLOPs M=4096 245.19  (median 0.5605 ms)
+BF16GEMM_TC_TFLOPs M=4096 239.04  (median 0.5750 ms)
+DGEMM_TFLOPs M=4096 16.98  (median 8.0954 ms)
+TF32GEMM_TC_TFLOPs M=4096 112.73  (median 1.2192 ms)
+# verbatim — /tmp/gpu_rfl_bench2 (FP32/FP64 compute-peak via GEMM M=8192)
+FP32_SGEMM (TF32off) M=8192 19.12 TFLOPs (median 57.5066 ms)
+FP64_DGEMM M=8192 16.90 TFLOPs (median 65.0660 ms)
+```
+
+> **방법 노트**: A100 이미지엔 nvcc/CUDA-toolkit/cuBLAS 가 없어(`/usr/local/cuda` 부재, gcc 부재)
+> RTX 5070 의 `.cu`+nvcc 경로 대신 **PyTorch 번들 cuBLAS** 로 측정(torch.matmul = cuBLAS GEMM,
+> torch.add = elementwise). 결과는 동일 cuBLAS 라이브러리라 RTX 5070 `.cu` cuBLAS 측정과 동형.
+> FP32/FP64 peak 는 launch-bound FMA-chain 이 아닌 **compute-bound GEMM**(M=8192) 으로 측정 —
+> Python eager FMA-chain 은 per-iter 커널 launch 가 지배(0.13 TF artifact)라 폐기, GEMM 이 honest.
+
+---
+
 ## §roofline 표 — 커널 × achieved × binding-roof × roofline%
 
 측정대 `tool/gpu_hbm_roofline.cu`(ubu-2 RTX 5070, cuBLAS SGEMM small-M sweep

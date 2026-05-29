@@ -1,5 +1,28 @@
 # GPU-ROOFLINE — append-only step log
 
+## 2026-05-30 — batch E2 drain: MS#7 멀티디바이스 분모 (A100) (gpu-roofline-batch-e2)
+
+### MS#7 🟢 공통 — 멀티디바이스 분모: A100 80GB PCIe 행 추가 [PASS, measured]
+- 측정 pod: **vast 38481895**(@hexa-lang gpu-roofline-msrt, 이전 시도가 띄운 것 — 새 임대 없이 resume).
+  GPU resolve = **NVIDIA A100 80GB PCIe**, sm_80, 108 SM, driver 590.48.01, core 1410 MHz, mem 1512 MHz HBM2e.
+- 이미지에 nvcc/CUDA-toolkit/cuBLAS/gcc 부재(bare Ubuntu 22.04 + 드라이버만) → RTX 5070 의 `.cu`+nvcc 경로
+  대신 **PyTorch 2.6.0+cu124 번들 cuBLAS** 로 측정. venv 는 /dev/shm 가 noexec 라 /root 에(10G overlay, 4.9G).
+  STREAM-triad(`torch.add`) + cuBLAS GEMM(`torch.matmul`). FP32/FP64 peak 는 launch-bound FMA-chain
+  (0.13 TF artifact) 폐기 → compute-bound GEMM M=8192 로 재측정(honest).
+- **A100 achieved-peak(분모 박제)**:
+  - HBM2e 대역폭 STREAM-triad = **1640.77 GB/s**(theo 1935, **84.8%**) · DtoD = 1607.65 GB/s(83.1%)
+  - FP32 SGEMM(TF32-off) M=8192 = **19.12 TFLOP/s**(theo 19.5, **98.1%**)
+  - FP64 DGEMM M=8192 = **16.90 TFLOP/s**(FP64-TC theo 19.5, **86.7%** / FP64-CUDA-core 9.7 의 174% = FP64-TC 사용 증거)
+  - FP16-TC HGEMM M=4096 = **245.19 TFLOP/s**(theo 312 dense, **78.6%** / 624 sparse, 39.3%)
+  - BF16-TC = 239.04 TF · TF32-TC = 112.73 TF(theo 156, 72.3%)
+- **핵심 발견(멀티디바이스 분모의 의의)**: 같은 cuBLAS 라도 디바이스 등급(소비자 vs DC)이
+  achieved/theoretical % 를 크게 가른다 — A100(DC) FP16-TC **78.6% sustainable** vs RTX 5070(소비자)
+  **26%**(소비자 Blackwell tensor 게이팅). 단일 RTX 5070 분모로 A100 커널을 읽으면 천장이 왜곡되므로
+  분모를 디바이스별로 박제해야 roofline % 가 의미를 가진다. RTX 5070 행 + A100 행 비교표 = `.bench.md §multi-device-peak`.
+- **정리**: 측정 종료 직후 `hexa cloud rm 38481895 --force` 로 즉시 down(비용 차단) 확인. vast RTSC 학습
+  pod(@anima 37868501·38095989·38367660·38382692·38384813·38444699) **전부 미접촉**(list/resolve 만).
+- verbatim = `.bench.md §multi-device-peak`(/tmp/gpu_rfl_bench·bench2 stdout). MS#7 `[x]` flip.
+
 ## 2026-05-30 — MS#1 sub-task 1a 규모 재평가 = honest STOP (1b 선결 의존) (gpu-rfl-ms1-1a)
 
 ### MS#1 1a 🟠 MIR fragment-operand threading — BLOCKED (1b 선결 필요, flip 보류)
