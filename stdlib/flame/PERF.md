@@ -399,12 +399,9 @@ flame's standing on it is currently UNMEASURED (prior 2.95× retracted).
 flame 학습 step 의 시간 대부분은 GEMM/FFN/linear 커널이 먹는다. 이를 절대 ms 가 아니라
 **그 GPU 의 물리 천장 대비 %** 로 롤업한다(roofline = min(compute-peak, BW×AI)).
 
-| 학습 커널 (출처) | 디바이스 | 측정 | roofline 위치 | roofline % |
-|---|---|---|---|---|
-| RFC 060-C linear fwd+bwd (5 shape) | H100 | BW util 14.1–45.2% peak | memory-bound (낮은 AI) | **14–45% of HBM-roof** |
-| RFC 060-C FFN matmul+SiLU+matmul (6 shape) | H200 (4.8 TB/s) | BW util 13.9–35.4% peak | memory-bound | **14–35% of HBM-roof** |
-| cuBLAS Dgemm (RFC 040 substrate) | — | byte-eq 4.44e-15 vs CPU | reference (정확성 기준선) | roofline-N/A (정확성 게이트) |
-| RFC 060-C FP64 mega-kernel | — | cuBLAS 대비 1.8–4.4× **느림** | compute-bound (FP64 TC) | < cuBLAS = HARD_WALL §3.9a |
+> **측정 SSOT = `domains/GPU-ROOFLINE.bench.md §flame-lane` (수치 중복 제거)** —
+> 학습 커널별 roofline % 수치표(H100/H200 BW-util · FP64 mega-kernel HARD_WALL)는
+> 거기로 이전. 아래 분석/scope 서술은 원위치 보존.
 
 > **ubu-2 RTX 5070 분모(신규, GPU-ROOFLINE §peak 상속)**: HBM 559.52 GB/s · FP32 34.11 TF ·
 > FP16-TC 126.52 TF · ridge ≈ 61 flops/byte. 학습 step 의 작은-batch linear/attention 은 AI 가
