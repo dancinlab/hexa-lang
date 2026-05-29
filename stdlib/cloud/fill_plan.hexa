@@ -72,6 +72,21 @@ fn _fill_min(a: int, b: int) -> int {
     return b
 }
 
+// _fill_mpi_env — pure-MPI bin-packed 발사가 필요로 하는 env export 블록.
+// (1) single-threaded BLAS: OMP/MKL/OPENBLAS=1 — N개 ph.x rank 가 한 pod 의
+//     core 를 over-subscribe 하지 않도록 각 rank 의 BLAS thread fan-out 차단
+//     (el-ph bin-pack 에서 thread×rank 폭주 → core thrash 방지, 055b38f8).
+// (2) root MPI: OMPI_ALLOW_RUN_AS_ROOT(+_CONFIRM)=1 — vast/pod 가 root 로 돌므로
+//     `--allow-run-as-root` 플래그를 못 받는 prterun 단계에서도 안 죽게 env
+//     로도 명시(f06b0a4c, belt-and-suspenders — 아래 플래그와 병행).
+fn _fill_mpi_env() -> str {
+    return "export OMP_NUM_THREADS=1\n"
+        + "export MKL_NUM_THREADS=1\n"
+        + "export OPENBLAS_NUM_THREADS=1\n"
+        + "export OMPI_ALLOW_RUN_AS_ROOT=1\n"
+        + "export OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1\n"
+}
+
 // dft_fill_plan — CONCURRENT-FILL launch 플랜을 생성한다.
 //
 // (physcores, n_decks, ranks_per_deck, walltime_h) → FillPlan.
@@ -100,8 +115,7 @@ pub fn dft_fill_plan(physcores: int, n_decks: int, ranks_per_deck: int, walltime
     s = s + "RANKS_PER_DECK=" + to_string(ranks_per_deck) + "\n"
     s = s + "SLOTS=" + to_string(slots) + "\n"
     s = s + "WALLTIME_H=" + to_string(walltime_h) + "\n"
-    s = s + "export OMP_NUM_THREADS=1\n"
-    s = s + "export MKL_NUM_THREADS=1\n"
+    s = s + _fill_mpi_env()
     s = s + "\n"
     s = s + "# DECKS = 발사할 deck 디렉터리들. 디스패처가 실제 목록으로 치환한다.\n"
     s = s + "DECKS=( \"$@\" )\n"
@@ -217,8 +231,7 @@ pub fn dft_fill_plan_disk(physcores: int, ranks_per_deck: int, n_decks: int, wal
     s = s + "FREE_DISK_GB=" + to_string(free_disk_gb) + "\n"
     s = s + "SCRATCH_GB_PER_JOB=" + to_string(scratch_gb_per_job) + "\n"
     s = s + "WALLTIME_H=" + to_string(walltime_h) + "\n"
-    s = s + "export OMP_NUM_THREADS=1\n"
-    s = s + "export MKL_NUM_THREADS=1\n"
+    s = s + _fill_mpi_env()
     s = s + "\n"
     s = s + "# DECKS = 발사할 deck 디렉터리들. 디스패처가 실제 목록으로 치환한다.\n"
     s = s + "DECKS=( \"$@\" )\n"
