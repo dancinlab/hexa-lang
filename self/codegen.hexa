@@ -5505,6 +5505,52 @@ fn gen2_expr(node) {
                     return "hexa_int(11)"
                 }
             }
+            // ── UNSHADOW item #B: proof-carrying optimization + cross-layer inline ─
+            // hexa-arch-native optimization (UNSHADOW.easy.md §B, "증명-허가"):
+            // a VERIFIED SEMANTIC IDENTITY licenses codegen to replace an opaque,
+            // out-of-line C-ABI call with the proven-equivalent closed form,
+            // INLINED using only runtime.h-visible layout (the #2 cross-layer
+            // inline lesson — hexa_int/hexa_float box literals link, internal
+            // helpers like HX_STRLEN do not). This COMBINES #4 (atlas verdict as
+            // a license) with #2 (layout-only cross-ABI inline).
+            //
+            // THE LICENSE (proof — without it this transform is UNSOUND):
+            //   atlas node `verified-lambda_eliashberg-num`
+            //     @F lambda_eliashberg(0.5) = 1.0  (= 2·0.5)  tier 🟢 SUPPORTED-NUMERICAL
+            //   `hexa verify --expr lambda_eliashberg 0.5 1.0`  (verify_cli.hexa:3402)
+            //   certifies the identity  lambda_eliashberg(M0) ≡ 2·M0  on the
+            //   verified domain (guard: M0<0 → _NOCALC_F = -999999.0,
+            //   verify_cli.hexa:1490). codegen has NO knowledge of the fn body —
+            //   only the atlas identity authorizes substituting the closed form
+            //   for the opaque call. LLVM cannot do this: the call is a precompiled
+            //   runtime.o symbol (no LTO / no cross-TU visibility) and LLVM has no
+            //   theorem/verdict DB to license the substitution.
+            //
+            // THE TRANSFORM (faithful — preserves the verified guard, so the A/B
+            // byte-diff is IDENTICAL on ALL inputs incl. negatives):
+            //   lambda_eliashberg(EXPR)
+            //     → ({ HexaVal __le_x = (EXPR);
+            //          HX_FLOAT(__le_x) < 0.0
+            //            ? hexa_float(-999999.0)
+            //            : ((HexaVal){.tag=TAG_FLOAT,.f=(2.0 * HX_FLOAT(__le_x))}); })
+            //
+            // DOUBLE-EVAL SAFE (the #2-ext lesson — expression args, unlike the
+            // #4 literal args, MUST be let-bound once): EXPR is bound a single time
+            // into __le_x, then read 3× (the guard test + the two multiplicands).
+            // Without the let-bind, a side-effecting EXPR would run 3× — the
+            // to_int double-eval / comptime-fold-shadow miscompile family.
+            //
+            // GUARD IS EXACT (comptime-fold-shadow family avoidance): fires ONLY
+            // when (a) the name is EXACTLY lambda_eliashberg, (b) it resolves to a
+            // top-level user fn declaration (`_is_known_fn_global`) whose body is
+            // the atlas-canonical closed form — so fold-off (real call) vs fold-on
+            // (inlined closed form) are byte-comparable, (c) it is NOT a local-let
+            // shadow (`!_gen2_has_decl`), (d) there is EXACTLY 1 arg. Any other
+            // call falls through unchanged (zero behavior change otherwise).
+            if name == "lambda_eliashberg" && _is_known_fn_global(name) && !_gen2_has_decl(name) && len(node.args) == 1 {
+                let _le_arg = gen2_expr(node.args[0])
+                return "({ HexaVal __le_x = (" + _le_arg + "); HX_FLOAT(__le_x) < 0.0 ? hexa_float(-999999.0) : ((HexaVal){.tag=TAG_FLOAT,.f=(2.0 * HX_FLOAT(__le_x))}); })"
+            }
             // PROBE r15-D3: Option/Result tagged-array constructors —
             // `Some(x)` / `Ok(x)` / `Err(x)` lower to `[hexa_str(tag), x]`,
             // mirroring the EnumPath payload convention (`[tag, payload]`

@@ -1,0 +1,170 @@
+// @ci_gate — deterministic · network-free · 모델 Kohn-Sham SCF 드라이버 g5 게이트
+//
+// qforge_scf_selftest.hexa — QFORGE 통합① (PW-SCF 드라이버) g5 gate.
+//
+// 해석적 고정점이 알려진 모델로 SCF 수학을 실검증한다(실제 PW 물리 불필요).
+// d4: 같은 드라이버가 모델 H_of_rho / rho_of_psi 클로저로 구동된다.
+//
+// 검증 케이스:
+//   (A) ρ-무관 1D-Laplacian (n=8): H(ρ)=H0 고정 → SCF 가 1 KS-step 으로
+//       해석적 고유값 λ_k=2−2cos(kπ/9) 로 수렴(diagonalize→occupy→density 경로).
+//   (B) ρ-의존 2-level toy: H(ρ)=diag(1+λρ₀, 10+λρ₁), λ=1, nelec=2(이중점유).
+//       고유벡터=단위벡터(ρ-무관) → 최저=site0 → ρ_out=(2,0) 자기무모순.
+//       해석적 고정점: ρ*=(2,0), ε₀*=1+λ·2=3, E*=2·ε₀*=6 (mixing+수렴 경로).
+//   (C) mixing 안정성: 너무 큰 mix(=2.0) 가 발산 대신 damp(clamp 1.0)되어
+//       (B) 와 동일한 고정점으로 안전 수렴(silent divergence 금지).
+//
+// Assert:
+//   (a) 수렴 고유값 == 모델 해석값 (rel-tol ~1e-6)
+//   (b) 종료 시 자기무모순 잔차 < tol  (converged 경로가 잔차 게이트 통과)
+//   (c) converged == true (max_iter 내)
+//   (d) ρ-의존 toy 의 총 에너지 == 해석적 E* (=6)
+//   (e) mixing — 과대 mix 가 damp 되어 발산하지 않고 동일 고정점 수렴
+//
+// Run (repo runtime 수동 링크 — 설치 hexa self-path 는 stale):
+//   ./build/hexa_v2 stdlib/qforge/scf_selftest.hexa /tmp/scf.c &&
+//   clang -O2 -D_GNU_SOURCE -I build/self /tmp/scf.c build/self/runtime.c -o /tmp/scf -lm -lpthread -ldl && /tmp/scf
+// PASS: "qforge_scf_selftest PASS".
+// 비-전이적 use 해석(기존 l1 selftest 패턴): 전이 의존성 전체 명시.
+//   scf → davidson → eigen.  소비자가 닫힘(closure)을 모두 나열한다.
+use "stdlib/alloc/math/eigen"
+use "stdlib/qforge/davidson"
+use "stdlib/qforge/scf"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ck_bool(name: str, got: bool, want: bool) -> int {
+    if got == want { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+
+// ── 모델 (A): ρ-무관 1D-Laplacian (대각 2, 비대각 −1, n=8) ─────────────────
+// 전역 행렬 슬롯을 통해 행렬-자유 연산자 노출(named-fn matrix-free 계약).
+let mut GA_MAT = []
+let mut GA_N = 0
+fn ga_apply(v: [float]) -> [float] {
+    let mut out = []
+    let mut i = 0
+    while i < GA_N {
+        let mut s = 0.0
+        let mut j = 0
+        while j < GA_N { s = s + GA_MAT[i * GA_N + j] * v[j] ; j = j + 1 }
+        out.push(s)
+        i = i + 1
+    }
+    return out
+}
+// H_of_rho (A): ρ 무관 — 고정 Laplacian 연산자 반환(d4 — 클로저가 물리를 캡슐화).
+fn ha_of_rho(rho: [float]) { return ga_apply }
+// 행렬 대각선 추출(Davidson 전처리기용 · 검증 재계산용).
+fn diag_lap(M: [float], n: int) -> [float] {
+    let mut d = []
+    let mut i = 0
+    while i < n { d.push(M[i * n + i]) ; i = i + 1 }
+    return d
+}
+// 평탄 evecs → 밴드별 벡터(검증용 local; scf.hexa 의 동명 helper 는 비-pub).
+fn slice_psis_local(evecs: [float], nbands: int, ndim: int) -> [[float]] {
+    let mut psis = []
+    let mut b = 0
+    while b < nbands {
+        let mut v = []
+        let mut i = 0
+        while i < ndim { v.push(evecs[b * ndim + i]) ; i = i + 1 }
+        psis.push(v)
+        b = b + 1
+    }
+    return psis
+}
+// rho_of_psi (A): 점유 궤도의 site-density Σ_b occ_b |ψ_b[i]|².
+fn rho_of_psi_density(psis: [[float]], occ: [float], nbands: int) -> [float] {
+    let ndim = len(psis[0])
+    let mut rho = []
+    let mut i = 0
+    while i < ndim { rho.push(0.0) ; i = i + 1 }
+    let mut b = 0
+    while b < nbands {
+        let mut t = 0
+        while t < ndim { rho[t] = rho[t] + occ[b] * psis[b][t] * psis[b][t] ; t = t + 1 }
+        b = b + 1
+    }
+    return rho
+}
+
+// ── 모델 (B/C): ρ-의존 2-level toy. H(ρ)=diag(1+λρ₀, 10+λρ₁), λ=1 ──────────
+let mut GB_RHO = []
+let GB_LAMBDA = 1.0
+fn gb_apply(v: [float]) -> [float] {
+    // H 는 대각: (H v)[i] = (base_i + λ·ρ_i)·v[i].  base = [1, 10].
+    let h0 = 1.0 + GB_LAMBDA * GB_RHO[0]
+    let h1 = 10.0 + GB_LAMBDA * GB_RHO[1]
+    return [h0 * v[0], h1 * v[1]]
+}
+// H_of_rho (B): 입력 ρ 를 전역 슬롯에 박고 대각 연산자 반환(d4 — ρ 의존성 캡슐화).
+fn hb_of_rho(rho: [float]) { GB_RHO = rho ; return gb_apply }
+
+fn main() {
+    let mut fails = 0
+    let pi = 3.141592653589793
+
+    // ══ (A) ρ-무관 Laplacian: 1 KS-step 으로 해석적 고유값 수렴 ════════════
+    let LN = 8
+    let mut ML = []
+    let mut i = 0
+    while i < LN {
+        let mut j = 0
+        while j < LN {
+            if i == j { ML.push(2.0) }
+            else { if _abs(to_float(i - j)) == 1.0 { ML.push(-1.0) } else { ML.push(0.0) } }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    GA_MAT = ML ; GA_N = LN
+    // nbands=3, nelec=2 (최저 밴드 이중점유). ρ-무관이므로 즉시 자기무모순.
+    let rA = qforge_scf(ha_of_rho, rho_of_psi_density, LN, 3, 2, 0.5, 1.0e-9, 100)
+    let l1 = 2.0 - 2.0 * cos(pi / 9.0)
+    let l2 = 2.0 - 2.0 * cos(2.0 * pi / 9.0)
+    let l3 = 2.0 - 2.0 * cos(3.0 * pi / 9.0)
+    fails = fails + _ck_close("(A)(a) laplacian eps_1", rA.evals[0], l1, 1.0e-6)
+    fails = fails + _ck_close("(A)(a) laplacian eps_2", rA.evals[1], l2, 1.0e-6)
+    fails = fails + _ck_close("(A)(a) laplacian eps_3", rA.evals[2], l3, 1.0e-6)
+    fails = fails + _ck_bool("(A)(c) converged", rA.converged, true)
+    // (b) 종료 시 자기무모순 잔차 < tol 을 직접 확인. converged=true 는 루프가
+    // resid<tol 에서만 반환하므로 게이트 통과를 의미하고, 추가로 수렴 밀도가
+    // 고정점(ρ = ρ_of_psi[ψ])임을 재계산해 |Δρ|∞ < tol 을 명시 검증한다.
+    // (ρ-무관이라도 KS 고유값은 첫 step 부터 정확; 밀도 잔차는 선형 혼합 mix=0.5
+    //  에서 기하적으로 줄어 max_iter 내에 닫힘 — 1-step 아님, 선형 혼합의 실제 성질.)
+    GA_MAT = ML ; GA_N = LN
+    let drA = qforge_davidson(ga_apply, diag_lap(ML, LN), LN, 3, 1.0e-10, 200)
+    let psisA = slice_psis_local(drA.evecs, 3, LN)
+    let occA = [2.0, 0.0, 0.0]
+    let rhoA_fp = rho_of_psi_density(psisA, occA, 3)
+    let dresidA = scf_dmax(rA.rho, rhoA_fp, LN)
+    fails = fails + _ck_bool("(A)(b) self-consistency resid < tol at exit", dresidA < 1.0e-9, true)
+
+    // ══ (B) ρ-의존 2-level toy: 해석적 고정점 ρ*=(2,0), ε₀*=3, E*=6 ═══════
+    GB_RHO = []
+    let rB = qforge_scf(hb_of_rho, rho_of_psi_density, 2, 2, 2, 0.5, 1.0e-10, 200)
+    fails = fails + _ck_close("(B)(a) eps_0* = 3", rB.evals[0], 3.0, 1.0e-6)
+    fails = fails + _ck_close("(B)(d) E_total* = 6", rB.e_total, 6.0, 1.0e-6)
+    fails = fails + _ck_close("(B)(b) rho*[0] = 2", rB.rho[0], 2.0, 1.0e-6)
+    fails = fails + _ck_close("(B)(b) rho*[1] = 0", rB.rho[1], 0.0, 1.0e-6)
+    fails = fails + _ck_bool("(B)(c) converged", rB.converged, true)
+
+    // ══ (C) mixing 안정성: 과대 mix(2.0) → damp(clamp) → 동일 고정점 수렴 ══
+    // 과대 mix 가 silent divergence 없이 동일 해석 고정점으로 안전 수렴해야 한다.
+    GB_RHO = []
+    let rC = qforge_scf(hb_of_rho, rho_of_psi_density, 2, 2, 2, 2.0, 1.0e-10, 200)
+    fails = fails + _ck_bool("(C)(e) converged (no divergence)", rC.converged, true)
+    fails = fails + _ck_close("(C)(e) eps_0* = 3 (damped)", rC.evals[0], 3.0, 1.0e-6)
+    fails = fails + _ck_close("(C)(e) E_total* = 6 (damped)", rC.e_total, 6.0, 1.0e-6)
+    // 발산 가드: 수렴 밀도 유한·물리적(0 ≤ ρ ≤ nelec).
+    fails = fails + _ck_bool("(C)(e) rho[0] bounded [0,2]", rC.rho[0] >= 0.0 && rC.rho[0] <= 2.0001, true)
+
+    if fails == 0 { println("qforge_scf_selftest PASS") }
+    else { println("qforge_scf_selftest FAIL — " + to_string(fails) + " case(s)") }
+}
