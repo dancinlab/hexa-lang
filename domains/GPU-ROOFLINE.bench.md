@@ -292,6 +292,57 @@ attn-core(QKt+PV) median 0.3743 ms  8606.64 GFLOPS  AI=28.444 F/B
 | DSM-fused FFN (Agent #13 B Phase 2) | FP64 TC peak | hand-kernel < cuBLAS (200–300× 느림) | compute-bound, hand-kernel ceiling |
 | nn_ffn_bf16_fwd (RFC 050 BF16 inherit) | BF16/FP16 TC peak | precision pivot lane (RFC 049) | compute-bound, BF16 GemmEx 상속 |
 
+### §hexa-emit-direct — hexa-emit 커널 직접 achieved/peak % (cuBLAS 아님) [MS#1 🔵 부분]
+
+> **falsifier/측정법**(MS#1): **compiler-emitted** hexa WMMA 커널(`wmma_256x256_grid`, PR #214,
+> 256-locked)의 TFLOPS 를 **device achieved tensor-core peak 를 분모로** 직접 환산(cuBLAS 와의
+> ratio 아님 — cuBLAS-independent numerator) · byte-eq 게이트(hexa WMMA 출력 vs CPU FP64 ref,
+> max|Δ|=0). **2026-05-30 ubu-2 RTX 5070 $0 fire**(`archive/fires/gpu_roofline_ms1_hexa_emit_direct_2026_05_30/ms1_host.cu`
+> · repo root 밖 build · pure-ASCII · `cuModuleLoad` 로 compiler-emit PTX 직접 로드).
+> median of 200(20 warmup, `cudaEventRecord` per-launch). 분모 = device achieved tensor-core peak.
+
+**커널**: `wmma_256x256_grid` = **compiler-emitted**(PR #214 / `nvptx_target.hexa` WMMA 경로,
+256×256×256 shape-locked). 이 표는 **cuBLAS reference 가 아니라 hexa codegen 이 직접 emit 한
+커널**의 절대 achieved/peak % 다.
+
+| hexa-emit 커널 | shape | hexa TFLOPS (measured) | 분모 = achieved TC peak | **DIRECT achieved/peak %** | byte-eq (max\|Δ\| vs CPU FP64) |
+|---|---|---|---|---|---|
+| `wmma_256x256_grid` (compiler-emitted) | 256³ | **3.53–3.59** (2 run, stable) | §peak 박제 126.52 TF (M=4096) | **2.79 – 2.84 %** | **0** |
+| `wmma_256x256_grid` (compiler-emitted) | 256³ | 3.53–3.59 | same-process 71.13 TF (M=4096, COMPUTE_32F) | **4.96 – 5.05 %** | **0** |
+| shape-local 참조: cuBLAS HGEMM S=256 | 256³ | 4.462 | §peak 126.52 TF | 3.53 % | — (reference) |
+
+```
+# verbatim — archive/fires/gpu_roofline_ms1_hexa_emit_direct_2026_05_30/ms1_fire.log (run 2)
+Device: NVIDIA GeForce RTX 5070
+CUDA driver=13000 runtime=12000
+achieved-peak (cuBLAS HGEMM M=4096, tensor-core): 71.1276 TFLOPS
+hexa-emit (COMPILER-emitted wmma_256x256_grid, S=256): median=0.009344 ms  TFLOPS=3.5910
+byte-eq hexa-vs-CPUref(FP64) max|d|=0 (full 256x256)
+DIRECT hexa-emit achieved/peak = 3.5910 / 71.1276 = 5.0487%  (cuBLAS-INDEPENDENT numerator)
+shape-local cuBLAS HGEMM S=256 = 4.4620 TFLOPS = 6.2733% of achieved-peak
+hexa-emit / cuBLAS(S=256) = 80.4794%
+```
+
+> **finding (🟢 measured · byte-eq 0 · cuBLAS-INDEPENDENT)**: compiler-emit hexa WMMA 커널의
+> **직접 achieved/peak % = 2.79–2.84%**(분모 = §peak 박제 126.52 TF) / **4.96–5.05%**(분모 =
+> same-process 71.13 TF). hexa-emit 자체 처리량 3.53–3.59 TF 는 MS#5 sweep(3.507)와 일치 = 안정.
+> byte-eq max|Δ|=0(full 256×256, sawtooth int 입력 lossless).
+>
+> **g5 정직 경계**:
+> - **cuBLAS-INDEPENDENT numerator**: 분자 = compiler-emit hexa 커널 TFLOPS 직접 측정(cuBLAS 와의
+>   ratio 가 아님). 분모만 device achieved tensor-core peak — MS#1 이 요구한 "hexa codegen 산출"
+>   직접 % 다.
+> - **분모 2개 정직 병기**: §peak 박제값 126.52 TF 는 §peak fire 시점 cuBLAS 설정(GB205 default).
+>   본 fire 의 same-process cuBLAS HGEMM M=4096 = 71.13 TF 는 `CUBLAS_COMPUTE_32F`(f32-accumulate)
+>   + sm_90 PTX JIT 경로라 더 낮음. 둘 다 병기(격차 숨김 금지) — direct % 도 양쪽.
+> - **왜 % 가 작은가(정직)**: 256³ 는 tensor core 가 saturate 되지 않는 launch/occupancy-bound
+>   영역. shape-local cuBLAS(S=256)조차 자기 M=4096 peak 의 3.5% 뿐 — 256 shape 자체가 TC 천장에서
+>   먼 영역이라 분모(M=4096 peak)대비 % 가 작게 나오는 것이 **물리적으로 정직한 읽기**. hexa-emit 은
+>   그 shape-local cuBLAS 의 79–80% 까지 따라붙음(MS#5 ratio 0.786 과 일치).
+> - **부분 진전(honest open)**: 이 점은 **256-locked 1점만**. variable-shape **compiler** emission
+>   (multi-session codegen)이 되면 hexa-emit 직접 % 곡선을 shape-축으로 그릴 수 있다 — MS#1 의
+>   codegen 선행. 분해된 sub-task = GPU-ROOFLINE.md `## MS#1 codegen sub-milestone`.
+
 ### §wmma-shape-sweep — hexa-emit WMMA HGEMM shape 별 roofline % [MS#5 🟢]
 
 > **falsifier/측정법**(MS#5): hexa-emit WMMA 커널을 shape sweep(M=N=K ∈ {128,256,512,1024})
