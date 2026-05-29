@@ -1,0 +1,178 @@
+// stdlib/record.hexa — timestamped exports/ run-record emit layer
+//
+// @module(slug="stdlib-record", desc="timestamped exports/<domain>/<slug>/<ts>/ run-record emit — captured stdout/stderr/rc + JSON manifest")
+// @usage(import stdlib/record; let dir = record_dir("chip", "yosys-synth", ts); record_emit(dir, run, meta))
+//
+// ── module governance metadata (hexa-lang module versioning spec 2026-05-03) ──
+// @version 0.1.0
+// @capabilities [record_dir, record_emit, record_result, record_read_manifest]
+// @stability preview
+// @since 2026-05-30
+// @maintainer hexa-lang-core
+// @priority P1
+// Versioning policy: docs/hexa_lang_module_versioning_spec_2026_05_03.md
+//
+// PROBLEM (demiurge CLI `action` verb ↔ durable run records — handoff 7e45e583)
+//   The demiurge `action` verb dispatches to engine producers (yosys / ngspice
+//   / gmsh / pvlib / FreeCAD + claude-CLI) via stdlib/proc.hexa, then must
+//   leave behind a durable, inspectable record of each invocation: the command,
+//   the captured stdout / stderr, the exit code, and a metadata manifest. The
+//   subprocess half (run + capture) already lives in stdlib/proc.hexa
+//   (proc_run_with_stdin, proc_run_json_bridge). The record-emit half — a
+//   generic timestamped exports/ writer — was missing; each domain hand-rolled
+//   its own exports/ write (cf. stdlib/cockpit/cellrun.hexa, stdlib/deck/gen.hexa,
+//   stdlib/fusion/funnel.hexa all build `exports/<domain>/.../<stamp>/` by hand).
+//
+// FIX (additive, no runtime.c change, no FFI)
+//   A generic emit layer over the existing atomic writer (stdlib/io.hexa
+//   write_text_atomic) + the runtime json_stringify builtin. Given a run-result
+//   map (cmd + stdout/stderr/rc) and an arbitrary metadata map, write a record
+//   dir holding the captured artifacts + a manifest.json. Mirrors the
+//   `exports/<domain>/<slug>/<ts>/` convention used elsewhere in stdlib.
+//
+// TIMESTAMP CONTRACT (g1 — pure path-builder)
+//   record_dir() takes `ts` as an INPUT string; it does NOT generate the
+//   timestamp internally. hexa has no Date.now in pure code — the caller
+//   supplies the stamp (mirroring how the deck / cellrun layers take the stamp
+//   as input, e.g. stdlib/cockpit/cellrun.hexa::_stamp_now is the caller's job).
+//   This keeps record_dir() a pure, trivially-testable string builder.
+//
+// RUN-RESULT SHAPE
+//   proc.hexa returns either a raw merged string (proc_run_with_stdin) or a
+//   JSON-bridge map (proc_run_json_bridge). There is no single canonical struct,
+//   so record_emit() accepts a normalized map with keys:
+//     "cmd"    : string  — the command line that was run
+//     "stdout" : string  — captured stdout (may be merged stdout+stderr)
+//     "stderr" : string  — captured stderr ("" if merged into stdout)
+//     "rc"     : int     — process exit code
+//   record_result() builds exactly this map for callers that have the four
+//   pieces in hand (e.g. after an exec() + "; echo $?" capture).
+//
+// Breaking risk: 0. New module, new symbols.
+//
+// Caveats (C3):
+//   · stdout/stderr are written as plaintext via write_text_atomic — embedded
+//     NUL bytes are truncated (same C-string caveat as stdlib/io.hexa). Binary
+//     engine output should be captured to a file by the producer, not piped
+//     through a hexa string.
+//   · The manifest is emitted with json_stringify (compact, key order is the
+//     runtime map's). record_read_manifest round-trips it via json_parse.
+//   · record_dir() does NOT create the directory — record_emit() does (mkdir -p).
+//     This keeps the path-builder pure and side-effect-free.
+
+// _rec_join — join a base dir and a leaf with a single "/" separator,
+// tolerating a trailing slash on the base. Pure string helper.
+fn _rec_join(base: string, leaf: string) -> string {
+    if len(base) == 0 { return leaf }
+    if base.substring(len(base) - 1, len(base)) == "/" {
+        return base + leaf
+    }
+    return base + "/" + leaf
+}
+
+// _rec_shell_escape — single-quote wrap with internal quote escape, for the
+// mkdir shellout. Identical pattern to stdlib/io.hexa::shell_quote_io;
+// duplicated so this module imports nothing (resolver simplicity).
+fn _rec_shell_escape(s: string) -> string {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+// record_dir(domain, slug, ts) -> path
+//
+// Pure path-builder for the canonical record directory:
+//   exports/<domain>/<slug>/<ts>/
+//
+// `ts` is supplied by the caller (NOT generated here — see TIMESTAMP CONTRACT).
+// No filesystem side effect; record_emit() is responsible for mkdir -p.
+pub fn record_dir(domain: string, slug: string, ts: string) -> string {
+    return "exports/" + domain + "/" + slug + "/" + ts + "/"
+}
+
+// record_result(cmd, stdout, stderr, rc) -> map
+//
+// Build the normalized run-result map record_emit() consumes. Convenience for
+// callers that captured the four pieces directly (exec + "; echo $?").
+pub fn record_result(cmd: string, stdout: string, stderr: string, rc: int) {
+    let r = json_parse("{}")
+    r["cmd"] = cmd
+    r["stdout"] = stdout
+    r["stderr"] = stderr
+    r["rc"] = rc
+    return r
+}
+
+// record_emit(dir, run_result, meta) -> bool
+//
+// Write the captured run artifacts + a metadata manifest into `dir`:
+//   <dir>/stdout.txt    — run_result["stdout"]
+//   <dir>/stderr.txt    — run_result["stderr"]
+//   <dir>/manifest.json — { cmd, rc, stdout_bytes, stderr_bytes, meta }
+//
+// `run_result` is the normalized map (see record_result). `meta` is an
+// arbitrary hexa value (map / array / scalar) embedded verbatim under the
+// manifest's "meta" key. All writes go through write_text_atomic (no partial
+// records). Returns true iff every artifact materialized.
+//
+// Missing keys default safely: absent stdout/stderr → "", absent rc → 0,
+// absent cmd → "".
+pub fn record_emit(dir: string, run_result, meta) -> bool {
+    if len(dir) == 0 { return false }
+
+    // Defensive key extraction — tolerate a run_result missing fields.
+    let mut cmd = ""
+    let mut out = ""
+    let mut err = ""
+    let mut rc = 0
+    if type_of(run_result) == "map" {
+        if has_key(run_result, "cmd")    { cmd = to_string(run_result["cmd"]) }
+        if has_key(run_result, "stdout") { out = to_string(run_result["stdout"]) }
+        if has_key(run_result, "stderr") { err = to_string(run_result["stderr"]) }
+        if has_key(run_result, "rc")     { rc  = to_int(run_result["rc"]) }
+    }
+
+    // Ensure the record dir exists (record_dir is a pure builder; mkdir here).
+    let _mk = exec("mkdir -p " + _rec_shell_escape(dir) + " 2>/dev/null")
+
+    let out_path = _rec_join(dir, "stdout.txt")
+    let err_path = _rec_join(dir, "stderr.txt")
+    let man_path = _rec_join(dir, "manifest.json")
+
+    // Build the manifest map. byte-counts are recorded so a reader can detect
+    // truncation without re-reading the (possibly large) artifact files.
+    let manifest = json_parse("{}")
+    manifest["cmd"] = cmd
+    manifest["rc"] = rc
+    manifest["stdout_bytes"] = len(out)
+    manifest["stderr_bytes"] = len(err)
+    manifest["meta"] = meta
+
+    let ok_out = write_text_atomic(out_path, out)
+    let ok_err = write_text_atomic(err_path, err)
+    let ok_man = write_text_atomic(man_path, json_stringify(manifest))
+
+    return ok_out && ok_err && ok_man
+}
+
+// record_read_manifest(dir) -> map
+//
+// Read back the manifest.json written by record_emit. Returns the parsed map,
+// or {"ok": 0, "error": "..."} on a missing / unparseable manifest (Result-
+// style, compatible with the proc.hexa json-bridge convention).
+pub fn record_read_manifest(dir: string) {
+    let man_path = _rec_join(dir, "manifest.json")
+    if !file_exists(man_path) {
+        let e = json_parse("{}")
+        e["ok"] = 0
+        e["error"] = "record: manifest not found at " + man_path
+        return e
+    }
+    let src = read_file(man_path)
+    let parsed = json_parse(src)
+    if type_of(parsed) != "map" {
+        let e = json_parse("{}")
+        e["ok"] = 0
+        e["error"] = "record: manifest was not a JSON object at " + man_path
+        return e
+    }
+    return parsed
+}
