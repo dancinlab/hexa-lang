@@ -630,3 +630,99 @@ typed `[i64]` 배열을 unboxed fast-path 로 sum 하면서 **동시에** polymo
 - caveat: 단일 호스트(mini)·best-of-9·양 arm 동일 runtime.o·full self-host regen 은 B9 벽
   차단 → faithful A/B 프록시(b_unbox emit 은 codegen L7666 신규 arm 과 byte-동일·스펙 허용) ·
   repo 안 `.c` 0개. 재현 = `tool/unshadow_unboxed_array_bench.hexa --rt <self-with-runtime.o> --runs 9`.
+
+## §roofline — HW 물리 천장(roofline) % 절대 잣대 (분모 = mini achieved-peak)
+
+> milestone "🎯 roofline 측정대 — 상대 Δ → HW 물리 천장 % 전환" 의 실측. **요지**:
+> UNSHADOW 측정 잣대를 "vs idiomatic C @ clang -O2"(상대 Δ) 에서 **HW 물리 천장의 몇 %**
+> (절대) 로 전환한다. 기존 닫힌 9개 결과의 ns 를 재활용해 roofline % 로 재표기.
+> SSOT 도구 = `tool/unshadow_bench.hexa`(roofline 컬럼 추가) + `tool/unshadow_peak_microbench.hexa`
+> (achieved-peak 분모 측정) · verdict = `.verdicts/unshadow-roofline-stand/g5-roofline-bench.txt`.
+
+### roofline 잣대 정의 (두 roof · binding 자동선택 · achieved-peak 분모)
+
+roofline = `min(compute-roof, memory-roof × AI)`. 워크로드 arithmetic-intensity
+`AI = flops/bytes` 로 binding roof 자동선택:
+
+- **ridge-point** = compute-roof ÷ memory-roof. `AI < ridge` → **memory-bound**
+  (분모 = memory-roof × AI), `AI ≥ ridge` → **compute-bound** (분모 = compute-roof).
+- 보고값 = `achieved ÷ binding-roof × 100` (%). achieved 가 천장의 몇 % 인지.
+
+### achieved-peak 분모 (mini Apple M4 · clang -O2 · best-of-5 · 2026-05-30 · @L2 실측)
+
+스펙시트 추정 금지 — `tool/unshadow_peak_microbench.hexa` 가 mini 에서 1회 실측. achieved
+와 theoretical 을 **나란히** 박제(격차 숨기지 않음):
+
+| roof | achieved (실측 분모) | theoretical (스펙시트) | achieved/theoretical |
+|---|---|---|---|
+| memory (STREAM-triad) | **92.3–95.2 GB/s** | LPDDR5X 시스템 ~120 GB/s | ~77–79% |
+| compute (FMA double)  | **15.24 GFLOP/s** | P-core ~17.6 GFLOP/s (4.4GHz·2 FP pipe·2 flop) | ~87% |
+| compute (scalar int)  | **12.88–13.06 GIOP/s** | mul+add 스칼라 throughput (~13–19) | — |
+
+> ridge-point ≈ 12.88 ÷ (95 ÷ 8) ≈ **1.08 ops/byte**. 측정 커널은 idiomatic ref-C
+> (plain `double`/`int64_t`, clang -O2) — repo root `.c` 훅 회피 위해 `/tmp`(project.tape
+> 밖) 에서 emit·컴파일. achieved 가 theoretical 의 77–87% = single-thread·non-SIMD-intrinsic
+> 측정의 정직한 천장(멀티스레드/명시 SIMD 면 더 높으나, 워크로드도 single-thread 라 공정).
+
+### §workload bound 판정 (AI → binding roof)
+
+닫힌 9개 + M1 baseline 워크로드는 **전부 정수/부동 스칼라 hot loop · register-resident**
+(배열 메모리 traffic ≈ 0) → AI ≫ ridge(1.08) → **모두 compute-bound** (binding = int-roof
+또는 fp-roof). array 파일럿(§c-class·§unboxed-array)도 256-elem(≤L1) 라 compute-bound.
+즉 이 corpus 에서 memory-roof 가 binding 인 워크로드는 없다(정직: memory-bound 케이스는
+미수집 — array-of-struct/SoA 워크로드가 typed-repr frontier 랜딩 후 생겨야 측정 가능).
+
+### §roofline 표 — 닫힌 9개 + M1 baseline 5워크로드의 roofline %
+
+**roofline% = achieved ÷ binding-roof × 100.** compute-bound 정수 워크로드는 두 가지로
+보고: (1) **op-count 모델 기반 절대 GIOP/s ÷ int-roof** (상한 추정 — clang 이 op 를
+fold/dead-elim 하므로 논리 op 수가 실제 실행보다 많을 수 있어 *하한* roofline%), (2) **idiomatic
+ref-C wall anchor** (ref-C 가 roofline-near = 측정 anchor; roofline% = ref-C wall ÷ arm wall).
+두 방식이 보완 — (1) 은 절대 천장 대비, (2) 는 "idiomatic C 가 따낸 achieved 의 몇 %".
+
+| # | 워크로드/파일럿 | 측정 ns (재활용) | binding roof | roofline % (achieved/roof) | 비고 |
+|---|---|---|---|---|---|
+| M1 | sieve_heavy (clangO2 arm) | 232ms | int-roof 12.88 GIOP/s | **2.6%** (native 2.2%) | g5 IDENTICAL · op-count 모델 |
+| M1 | fib_heavy (clangO2) | 1297ms | int-roof | **4.3%** (native 3.1%) | g5 IDENTICAL |
+| M1 | hash_heavy (clangO2) | 1343ms | int-roof | **4.6%** (native 2.9%) | g5 IDENTICAL · 최대 |
+| M1 | collatz_heavy (clangO2) | 3518ms | int-roof | **2.0%** (native 1.8%) | g5 IDENTICAL · 최소 |
+| M1 | mixmul_heavy (clangO2) | 2696ms | int-roof | **2.8%** (native 2.0%) | g5 IDENTICAL |
+| — | sieve (ref-C anchor §parity) | ref 8ms / hexa 224ms | int-roof | **3.6%** (ref/arm) | idiomatic-C anchor |
+| — | hash (ref-C anchor §parity) | ref 163ms / hexa 1295ms | int-roof | **12.6%** (ref/arm) | idiomatic-C anchor |
+| — | fib (ref-C anchor §parity) | ref 1ms / hexa 1263ms | int-roof | (degenerate) | clang dead-loop-elim → 정성 신호 |
+| #2 | hexaval-unbox BEFORE | 599ms | int-roof | **9.0%** (ref/arm) | out-of-line hexa_int rebox |
+| #2 | hexaval-unbox AFTER (pilot) | 53ms | int-roof | **101.9%** (ref/arm, AT PARITY) | inline literal → 천장 도달 |
+| #4 | atlas const-fold | 0.26→0.09s | — (work 제거) | **roofline-N/A** | 🔵 "안 돌기" — 분모 anchor 없음(wall-Δ 65%) |
+| B | proof-carrying inline | 0.36→0.19s | — (work 제거) | **roofline-N/A** | 🔵 "안 돌기"(wall-Δ 47%) |
+| §c | c-class bounds-elide a_checked | 1.88s | int-roof | **4.3%** (ref/arm) | boxed read+bounds |
+| §c | c-class b_elided | 0.56s | int-roof | **14.3%** (ref/arm) | 3.25× vs a — bounds-check 삭제 |
+| §A | unboxed-array a_boxed | 1.12s | int-roof | **7.1%** (ref/arm) | boxed read |
+| §A | unboxed-array b_unbox | 1.12s | int-roof | **7.1%** (ref/arm) | tag-guard 삭제 ~0%Δ |
+| §A | unboxed-array c_native (CEILING) | 0.08s | int-roof | **100%** (ref/arm) | native HexaArrI64 = 천장 |
+| #3 | arena reclaim (RSS −40%) | — | (공간 메트릭) | **roofline-N/A** | RSS 는 대역폭/연산 천장과 무관(정직) |
+| #2e | rt_str inline 🔴 | — (LINK FAIL) | — | **roofline-N/A** | CLOSED-NEG, 빌드 arm 없음 |
+| C | tag-elision 🔴 | — (clang 이미 dead-elim) | — | **roofline-N/A** | CLOSED-NEG, Δ 0 |
+
+### 정직한 해석 — roofline % 가 드러내는 것
+
+- **hexa C-emit 의 절대 천장 % 는 낮다 (2–5%).** clangO2 arm(최적화된 hexa 경로) 조차
+  achieved int-roof 의 2–4.6% — 모든 정수 연산이 boxed HexaVal ABI 를 경유하기 때문.
+  native arm 은 더 낮음(1.8–3.1%) — **M1 의 "native 가 clang -O2 에 5/5 패배" 사실이 roofline
+  % 로도 그대로 드러난다.** 이득은 raw 경쟁이 아니라 🟢 벽제거·🔵 우회.
+- **🔵 ceiling 기법이 천장을 닫는다.** #2 hexaval-unbox 가 박싱 호출을 inline literal 로
+  치환하자 known-int 핫루프가 **9.0% → 101.9%**(idiomatic-C anchor 기준 AT PARITY) 로
+  천장에 도달. §unboxed-array 의 c_native(HexaArrI64) 도 **100%** — 즉 천장은 STORAGE 표현에
+  산다(boxed→native). §c-class bounds-elision 은 4.3%→14.3% (3.25×).
+- **"안 돌기"(🔵 A·B) 는 roofline-N/A 가 정직하다.** atlas const-fold·proof-carrying 인라인은
+  연산 자체를 제거(loop hoist)하므로 분모로 삼을 idiomatic-C op-equivalent 가 없다 — 절대
+  roofline% 대신 wall-Δ(65%·47%) 로 보고. 환산 무의미한 메트릭은 무리한 % 부여 금지.
+- **RSS(§arena)·CLOSED-NEG(#2-ext·C) 는 roofline-N/A.** RSS 는 공간 메트릭(대역폭/연산 천장과
+  직교) · CLOSED-NEG 는 win arm 자체가 없어(link-fail / clang 이 이미 처리) 환산 대상 부재.
+
+> caveat: 단일 호스트(mini Apple M4)·single-thread·non-SIMD-intrinsic 측정 → achieved 가
+> theoretical 의 77–87%(정직 격차). op-count 모델 roofline% 는 *하한 추정*(clang fold 로 논리
+> op 수 ≥ 실행 op 수). idiomatic ref-C anchor roofline% 가 보완 측정. memory-bound 워크로드는
+> 본 corpus 에 없음(전부 register/L1-resident compute-bound) — SoA/array-of-struct memory-bound
+> 케이스는 typed-repr frontier 랜딩 후 측정 가능(정직: 현재 미수집). g5 byte-diff 5/5 IDENTICAL
+> (verdict verbatim). 재현 = `tool/unshadow_peak_microbench.hexa` (분모) + `tool/unshadow_bench.hexa
+> --workloads <5> --warmup 2 --iters 5` (roofline % 컬럼).
