@@ -290,11 +290,82 @@ pub fn dft_relax_to_scf_coords(relax_out: str) -> str {
     return out
 }
 
+// _dft_head_ibrav0 — force `ibrav = 0` + drop celldm() in the scf head.
+// The relaxed geometry is injected as `CELL_PARAMETERS (angstrom)`, but QE
+// FORBIDS CELL_PARAMETERS when ibrav≠0 (it expects celldm) → pw.x exits 1. A
+// deck written for the "ibrav=N + manually-replace celldm" workflow (e.g.
+// ibrav=3 BCC) is thus incompatible with CELL_PARAMETERS injection. Rewrite
+// every `ibrav = N` to `ibrav = 0` and DROP every `celldm(...)` line so
+// `ibrav=0 + CELL_PARAMETERS (angstrom)` is a self-contained valid cell.
+fn _dft_head_ibrav0(head: str) -> str {
+    let lines = head.split("\n")
+    let mut out = ""
+    let mut i = 0
+    let n = len(lines)
+    while i < n {
+        let ln = lines[i]
+        if ln.contains("ibrav") && ln.contains("=") {
+            out = out + "  ibrav = 0\n"
+        } else if ln.contains("celldm") {
+            // dropped — ibrav=0 + CELL_PARAMETERS (angstrom) needs no celldm
+        } else {
+            out = out + ln + "\n"
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// _dft_strip_geom_cards — drop any ATOMIC_POSITIONS / CELL_PARAMETERS block
+// (the card header + its blank / element-led coordinate rows / 3-numeric
+// vector rows) from the scf tail. The split's tail must be K_POINTS-onward,
+// but a deck whose ATOMIC_POSITIONS block is immediately followed by another
+// (or whose split left the original positions in) yields a DUPLICATE coords
+// card after injection → QE `card_atomic_positions (2)` → scf exit 1. This
+// guarantees the injected CELL_PARAMETERS+ATOMIC_POSITIONS is the ONLY geom.
+fn _dft_strip_geom_cards(tail: str) -> str {
+    let lines = tail.split("\n")
+    let n = len(lines)
+    let mut out = ""
+    let mut i = 0
+    while i < n {
+        let t = lines[i].trim()
+        if t.contains("ATOMIC_POSITIONS") || t.contains("CELL_PARAMETERS") {
+            // skip the card header + following blank/coord/vector rows
+            i = i + 1
+            let mut skipping = 1
+            while i < n && skipping == 1 {
+                let u = lines[i].trim()
+                let toks = _dft_tokens(u)
+                let mut dropline = 0
+                if len(u) == 0 {
+                    dropline = 1
+                } else if _dft_is_coord_row(u) == 1 {
+                    dropline = 1
+                } else if len(toks) == 3 && _dft_is_num(toks[0]) == 1 && _dft_is_num(toks[1]) == 1 && _dft_is_num(toks[2]) == 1 {
+                    dropline = 1
+                }
+                if dropline == 1 {
+                    i = i + 1
+                } else {
+                    skipping = 0
+                }
+            }
+        } else {
+            out = out + lines[i] + "\n"
+            i = i + 1
+        }
+    }
+    return out
+}
+
 // dft_assemble_scf — splice the generated coords between the deck's
 // scf.in.head (control namelists + ATOMIC_SPECIES) and scf.in.tail
-// (K_POINTS etc.). Documented deck contract avoids blind in-place splicing.
+// (K_POINTS etc.). The head is ibrav-normalized to 0 (injected geometry is
+// CELL_PARAMETERS) and the tail is stripped of any leftover geometry card so
+// the injected ATOMIC_POSITIONS is the ONLY one (no duplicate-card scf crash).
 pub fn dft_assemble_scf(head: str, coords: str, tail: str) -> str {
-    let mut out = head
+    let mut out = _dft_head_ibrav0(head)
     if len(out) > 0 {
         if !out.contains("\n") {
             out = out + "\n"
@@ -307,7 +378,7 @@ pub fn dft_assemble_scf(head: str, coords: str, tail: str) -> str {
     }
     out = out + coords
     if len(tail) > 0 {
-        out = out + tail
+        out = out + _dft_strip_geom_cards(tail)
     }
     return out
 }
