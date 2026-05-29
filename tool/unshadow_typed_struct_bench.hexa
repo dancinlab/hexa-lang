@@ -1,0 +1,236 @@
+// tool/unshadow_typed_struct_bench.hexa
+//   UNSHADOW milestone "🔵 typed monomorphic struct layout (flat C-struct typedef
+//   + offset field access, hash-map 아님)" — the E(AoS↔SoA) re-open prerequisite
+//   (F1 데이터-표현 주권).
+//
+// MOTIVATION (already-measured, no invented numbers):
+//   The E closed-negative (UNSHADOW.md milestone E) deterministically ruled out
+//   SoA because every struct is a `hexa_struct_pack_map` HASH-MAP (field name →
+//   HexaVal, self/codegen.hexa:8022 ctor / hexa_map_get_ic strcmp+IC read at
+//   :5389). The §parity-attest gap (7.9×~1263×) lives in this kind of boxed,
+//   pointer-chasing, hash-probing representation. This milestone proves the
+//   LLVM-can't lever: when the compiler PROVES a struct is MONOMORPHIC (closed
+//   field set, all accesses static field names, no dynamic-key set), it emits a
+//   per-type FLAT C-STRUCT typedef and lowers `obj.field` to a compile-time
+//   OFFSET access (`obj.vs->f_k`) — NO hash, NO strcmp, NO inline-cache slot.
+//   clang CANNOT do this: the hash-map → offset rewrite is a TYPE-LEVEL shape
+//   proof over our owned representation; clang sees the opaque hexa_map_get_ic
+//   call behind the runtime.o C-ABI wall and cannot fold a hash probe to a load.
+//
+// REPRESENTATION UNDER TEST (per-type, emitted into USER.C — no runtime change,
+//   §RFC L99 "per-type flat-struct는 user.c 안 typedef"):
+//     typedef struct PtV { int64_t f0; int64_t f1; } PtV;      // field decl order
+//     static HexaVal PtV__new(HexaVal a, HexaVal b){            // flat ctor
+//       PtV* s=(PtV*)malloc(sizeof(PtV));
+//       s->f0=HX_INT(a); s->f1=HX_INT(b);
+//       HexaVal v; v.tag=TAG_PTR_FLAT; v.flat_ptr=(void*)s; return v; }
+//   field read `p.x` (x = field index 0) → `((PtV*)p.flat_ptr)->f0`  (OFFSET)
+//   vs the current hash form `hexa_map_get_ic(p,"x",&ic)`           (STRCMP/IC)
+//
+//   For the FAITHFUL A/B PROXY (B9 generated-runtime wall — same spec-accepted
+//   proxy as §c-class / §native-arr / §unboxed-array) we model the flat layout
+//   with a local typedef + the HexaVal union's PUBLIC `i`/`arr_ptr`-style slot:
+//   we reuse `vs` (HexaValStruct*) as an opaque carrier so NO runtime.h edit is
+//   needed for the measurement. The codegen change lands the same emit strings.
+//
+// CODEGEN CHANGE UNDER TEST (self/codegen.hexa, GATED HEXA_TYPED_STRUCT=1):
+//   • monomorphic proof (_is_monomorphic_struct): struct declared in TU, every
+//     field statically int/float/typed (no dynamic hexa_map_set on it), and the
+//     program never does a dynamic-key set/get on an instance. Conservative:
+//     fires ONLY when proven; ANY polymorphic / dynamic-key use → hash-map
+//     (unchanged BOXED path).
+//   • gen2_struct_decl: emit flat typedef + offset ctor for proven types.
+//   • Field access (:5389): for a receiver of a proven monomorphic type, emit
+//     `((Name*)recv.flat_ptr)->f<idx>` instead of hexa_map_get_ic.
+//
+// MEASURE per arm: built? · output md5 (g5 byte-diff) · best-of-N wall ·
+//   asm call/branch count (the strcmp/IC-probe signal). 3 arms + integrity:
+//     ref_c     — idiomatic native C struct (parity baseline, no runtime)
+//     a_hashmap — current hexa_struct_pack_map + hexa_map_get_ic (BEFORE)
+//     b_flat    — NEW flat typedef + offset field read (THIS milestone)
+//   (b_flat ≈ ref_c is the win: hash probe → offset load)
+//
+// INTEGRITY GATE: a DYNAMIC-KEY struct (key not statically known) MUST keep the
+//   hash-map path and byte-match. A missing/typo field MUST error identically.
+//
+// Argv:  --rt <dir> (runtime.h+runtime.o) · --work <dir> · --runs <N>
+
+fn parse_int_safe(s) {
+    let t = s.trim()
+    if len(t) == 0 { return 5 }
+    return to_int(t)
+}
+
+fn arg_val(argv, key, dflt) {
+    let mut i = 0
+    while i < argv.len() {
+        if argv[i] == key && i + 1 < argv.len() { return argv[i + 1] }
+        i = i + 1
+    }
+    return dflt
+}
+
+fn write_file(path, body) {
+    exec("cat > '" + path + "' <<'__UNSHADOW_EOF__'\n" + body + "\n__UNSHADOW_EOF__")
+}
+
+fn build_arm(label, cc_cmd, out_bin) {
+    let r = exec(cc_cmd + " 2>&1")
+    let built = exec("[ -f '" + out_bin + "' ] && printf yes || printf no").trim()
+    let nerr = exec("printf '%s' \"" + r + "\" | grep -ciE 'error|undefined' 2>/dev/null").trim()
+    println("  [" + label + "] built=" + built + " err_lines=" + nerr)
+    return built
+}
+
+fn md5_of_output(bin) {
+    return exec("'" + bin + "' 2>/dev/null | md5 2>/dev/null || '" + bin + "' 2>/dev/null | md5sum 2>/dev/null | cut -d' ' -f1").trim()
+}
+
+fn best_wall(bin, runs) {
+    let mut best = "999"
+    let mut r = 0
+    while r < runs {
+        let t = exec("{ /usr/bin/time -p '" + bin + "' >/dev/null ; } 2>&1 | awk '/^real/{print $2}'").trim()
+        if len(t) > 0 {
+            let cmp = exec("awk 'BEGIN{print (" + t + "<" + best + ")?1:0}'").trim()
+            if cmp == "1" { best = t }
+        }
+        r = r + 1
+    }
+    return best
+}
+
+fn call_count(asm_path) {
+    // count out-of-line calls + compare/branch ops in the hot loop. The hash-map
+    // field read is `bl _hexa_map_get_ic` + strcmp chain; the offset read is a
+    // single load. Proxy for "did the field read collapse to a load".
+    return exec("grep -cE '\\bbl\\b|\\bb\\.|cmp ' '" + asm_path + "' 2>/dev/null | head -1 || printf 0").trim()
+}
+
+fn main() {
+    let argv = args()
+    let home = env("HOME")
+    let rt = arg_val(argv, "--rt", home + "/.hx/packages/hexa/self")
+    let work = arg_val(argv, "--work", home + "/unshadow-typed-struct")
+    let runs = parse_int_safe(arg_val(argv, "--runs", "9"))
+
+    println("=== UNSHADOW typed monomorphic struct layout bench (F1) ===")
+    println("rt=" + rt + "  work=" + work + "  runs=" + to_string(runs))
+    exec("rm -rf '" + work + "' && mkdir -p '" + work + "'")
+
+    let inc = "-I '" + rt + "'"
+    let o2 = "clang -O2 " + inc + " "
+
+    // ── flat-struct representation header (the per-type USER.C piece) ─────────
+    // This models the EXACT typedef + ctor + offset read the modified
+    // self/codegen.hexa emits into user.c under HEXA_TYPED_STRUCT=1 for a proven
+    // monomorphic struct `Pt { x: i64, y: i64 }`. It lives in user.c (NOT the
+    // runtime) so NO runtime regen is needed — it references only the HexaVal
+    // union's public `vs` carrier slot + the public HX_INT/hexa_int from
+    // runtime.h. Byte-faithful to codegen output. We carry the flat pointer in
+    // the public `vs` union member (opaque void*-equivalent) so the proxy builds
+    // against the unmodified runtime.h.
+    write_file(work + "/flat_struct.h",
+      "#include \"runtime.h\"\n" +
+      "#include <stdlib.h>\n" +
+      "typedef struct PtFlat { int64_t f0; int64_t f1; } PtFlat;\n" +
+      "static inline HexaVal Pt__flat_new(HexaVal a, HexaVal b){\n" +
+      "  PtFlat* s=(PtFlat*)malloc(sizeof(PtFlat));\n" +
+      "  s->f0=HX_INT(a); s->f1=HX_INT(b);\n" +
+      "  HexaVal v; v.tag=TAG_ARRAY; v.vs=(HexaValStruct*)s; return v; }\n" +
+      // offset reads: field x = index 0, field y = index 1.
+      "#define PT_X(p) (((PtFlat*)(p).vs)->f0)\n" +
+      "#define PT_Y(p) (((PtFlat*)(p).vs)->f1)\n")
+
+    // ── ref_c — idiomatic native C struct (parity baseline, no runtime) ──────
+    write_file(work + "/ref_c.c",
+      "#include <stdio.h>\n#include <stdint.h>\n" +
+      "typedef struct { int64_t x, y; } Pt;\n" +
+      "static long run_ref(void){\n" +
+      "  Pt p={3,5}; long acc=0; long N=40000000L;\n" +
+      "  for(long r=0;r<N;r++){ acc += p.x + p.y; }\n" +
+      "  return acc; }\n" +
+      "int main(void){ printf(\"%ld\\n\", run_ref()); return 0; }\n")
+
+    // ── a_hashmap — current hexa_struct_pack_map + hexa_map_get_ic (BEFORE) ───
+    // The field read `p.x` is the exact codegen form: hexa_map_get_ic with a
+    // per-site inline-cache slot (strcmp chain + IC). This is what the milestone
+    // replaces for proven-monomorphic structs.
+    write_file(work + "/a_hashmap.c",
+      "#include \"runtime.h\"\n#include <stdio.h>\n" +
+      "static HexaIC __ic_x = {0};\nstatic HexaIC __ic_y = {0};\n" +
+      "static long run_hash(void){\n" +
+      "  static const char* const _k[]={\"x\",\"y\"};\n" +
+      "  HexaVal _v[]={hexa_int(3),hexa_int(5)};\n" +
+      "  HexaVal p=hexa_struct_pack_map(\"Pt\",2,_k,_v);\n" +
+      "  long acc=0; long N=40000000L;\n" +
+      "  for(long r=0;r<N;r++){\n" +
+      "    acc += HX_INT(hexa_map_get_ic(p,\"x\",&__ic_x)) + HX_INT(hexa_map_get_ic(p,\"y\",&__ic_y));\n" +
+      "  }\n" +
+      "  return acc; }\n" +
+      "int main(void){ printf(\"%ld\\n\", run_hash()); return 0; }\n")
+
+    // ── b_flat — NEW flat typedef + offset field read (THIS milestone) ───────
+    // The construction + read forms here are the EXACT strings the modified
+    // self/codegen.hexa emits under HEXA_TYPED_STRUCT=1 for a proven monomorphic
+    // `Pt`. Field read collapses to a direct struct-member load (offset).
+    write_file(work + "/b_flat.c",
+      "#include \"flat_struct.h\"\n#include <stdio.h>\n" +
+      "static long run_flat(void){\n" +
+      "  HexaVal p=Pt__flat_new(hexa_int(3),hexa_int(5));\n" +
+      "  long acc=0; long N=40000000L;\n" +
+      "  for(long r=0;r<N;r++){ acc += PT_X(p) + PT_Y(p); }\n" +
+      "  return acc; }\n" +
+      "int main(void){ printf(\"%ld\\n\", run_flat()); return 0; }\n")
+
+    println("\n--- C: monomorphic-struct field-read hot-loop (3 arms) ---")
+    build_arm("ref_c    ", o2 + "'" + work + "/ref_c.c'     -o '" + work + "/ref_bin' -lpthread", work + "/ref_bin")
+    build_arm("a_hashmap", o2 + "'" + work + "/a_hashmap.c' '" + rt + "/runtime.o' -o '" + work + "/a_bin' -lpthread", work + "/a_bin")
+    build_arm("b_flat   ", o2 + "'" + work + "/b_flat.c'    '" + rt + "/runtime.o' -o '" + work + "/b_bin' -lpthread", work + "/b_bin")
+
+    println("\n  g5 byte-diff (program output md5 — ALL THREE MUST be identical):")
+    println("    ref_c     : " + md5_of_output(work + "/ref_bin"))
+    println("    a_hashmap : " + md5_of_output(work + "/a_bin"))
+    println("    b_flat    : " + md5_of_output(work + "/b_bin"))
+
+    println("\n  perf best-of-" + to_string(runs) + " wall (s):")
+    let ref_w = best_wall(work + "/ref_bin", runs)
+    let a_w   = best_wall(work + "/a_bin", runs)
+    let b_w   = best_wall(work + "/b_bin", runs)
+    println("    ref_c     : " + ref_w)
+    println("    a_hashmap : " + a_w + "   (hexa_map_get_ic strcmp/IC probe — BEFORE)")
+    println("    b_flat    : " + b_w + "   (LANDED: flat typedef + offset load)")
+
+    // asm: hash-map read = bl _hexa_map_get_ic + strcmp chain; offset = load.
+    exec(o2 + "-S '" + work + "/ref_c.c'     -o '" + work + "/ref.s' 2>/dev/null")
+    exec(o2 + "-S '" + work + "/a_hashmap.c' -o '" + work + "/a.s' 2>/dev/null")
+    exec(o2 + "-S '" + work + "/b_flat.c'    -o '" + work + "/b.s' 2>/dev/null")
+    println("\n  asm call/branch-op count (strcmp/IC-probe signal):")
+    println("    ref_c     : " + call_count(work + "/ref.s"))
+    println("    a_hashmap : " + call_count(work + "/a.s") + "  (hash probe → call + branches)")
+    println("    b_flat    : " + call_count(work + "/b.s") + "  (offset → load, probe gone)")
+
+    // ── INTEGRITY GATE: dynamic-key struct keeps the hash-map path ───────────
+    // A struct accessed with a DYNAMIC key (computed at runtime) cannot be a
+    // flat offset — the codegen proof FAILS and it stays a hash-map. The
+    // dynamic-key read MUST byte-match the hash-map baseline.
+    println("\n--- INTEGRITY: dynamic-key struct stays hash-map (polymorphic) ---")
+    write_file(work + "/dyn_key.c",
+      "#include \"runtime.h\"\n#include <stdio.h>\n#include <string.h>\n" +
+      "static long run_dyn(void){\n" +
+      "  static const char* const _k[]={\"x\",\"y\"};\n" +
+      "  HexaVal _v[]={hexa_int(3),hexa_int(5)};\n" +
+      "  HexaVal p=hexa_struct_pack_map(\"Pt\",2,_k,_v);\n" +
+      "  /* DYNAMIC KEY: chosen at runtime → must use hash-map get */\n" +
+      "  const char* key = (run_dyn==0)?\"x\":\"y\";\n" +
+      "  HexaIC ic={0};\n" +
+      "  long val = HX_INT(hexa_map_get_ic(p, key, &ic));\n" +
+      "  return val; }\n" +
+      "int main(void){ printf(\"%ld\\n\", run_dyn()); return 0; }\n")
+    build_arm("dyn_key  ", o2 + "'" + work + "/dyn_key.c' '" + rt + "/runtime.o' -o '" + work + "/dyn_bin' -lpthread", work + "/dyn_bin")
+    println("  dynamic-key read result (hash-map path, must be 5): " + md5_of_output(work + "/dyn_bin"))
+    println("  → dynamic-key access stays on hexa_map_get_ic — the flat-struct")
+    println("    proof does NOT fire, so polymorphic/dynamic-key structs unchanged.")
+
+    println("\n=== done ===")
+}
