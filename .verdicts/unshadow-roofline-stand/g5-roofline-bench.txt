@@ -1,0 +1,27 @@
+=== UNSHADOW roofline 측정대 g5 verdict (verbatim) ===
+host: mini (macOS arm64, Apple M4) · 2026-05-30 · tag mac-arm64-mini-roofline
+tool: tool/unshadow_bench.hexa (roofline-adapter) · warmup 2 · iters 5
+
+=== achieved-peak 분모 (tool/unshadow_peak_microbench.hexa · mini Apple M4 · clang -O2 · best-of-5) ===
+memory-roof  STREAM-triad : 92.31–95.16 GB/s   (theoretical LPDDR5X ~120 GB/s → 77–79%)
+compute-roof FMA double   : 15.24 GFLOP/s       (theoretical P-core ~17.6 GFLOP/s → 87%)
+compute-roof scalar int   : 12.88–13.06 GIOP/s  (mul+add 스칼라 throughput; 분모 박제값 = 12.88)
+ridge-point ≈ 1.08 ops/byte
+
+=== 5 baseline workloads — g5 byte-diff + roofline % (int-roof 12.88 GIOP/s) ===
+[1/5] sieve_heavy   correctness=MATCH  native 280/282ms clangO2 232/235ms  roofline native=2.2% clangO2=2.6%
+[2/5] fib_heavy     correctness=MATCH  native 1782/1786ms clangO2 1297/1300ms  roofline native=3.1% clangO2=4.3%
+[3/5] hash_heavy    correctness=MATCH  native 2106/2109ms clangO2 1343/1357ms  roofline native=2.9% clangO2=4.6%
+[4/5] collatz_heavy correctness=MATCH  native 3884/3887ms clangO2 3518/3529ms  roofline native=1.8% clangO2=2.0%
+[5/5] mixmul_heavy  correctness=MATCH  native 3699/3701ms clangO2 2696/2718ms  roofline native=2.0% clangO2=2.8%
+
+g5 VERDICT: 5/5 byte-diff IDENTICAL (correctness=MATCH all) — roofline % 재표기는 정확성 floor 위에서 산출.
+honest: clangO2 arm(최적화된 hexa C-emit) 조차 achieved int-roof 의 2–5% — boxed HexaVal ABI 가 천장에서 멀다.
+native arm 은 더 낮음(M1 "native 5/5 패배" 가 roofline % 로도 그대로 드러남).
+
+원시 JSONL (verbatim):
+{"workload": "sieve_heavy", "src": "bench/unshadow/sieve_heavy.hexa", "tag": "mac-arm64-mini-roofline", "iters": 5, "warmup": 2, "correctness": "MATCH", "native_min_ms": 280, "native_median_ms": 282, "clangO2_min_ms": 232, "clangO2_median_ms": 235, "delta_permille_min": -206, "roof_bound": "compute-int", "roof_int_giops_x1000": 12880, "roofline_pct_native_x10": 22, "roofline_pct_clangO2_x10": 26}
+{"workload": "fib_heavy", "src": "bench/unshadow/fib_heavy.hexa", "tag": "mac-arm64-mini-roofline", "iters": 5, "warmup": 2, "correctness": "MATCH", "native_min_ms": 1782, "native_median_ms": 1786, "clangO2_min_ms": 1297, "clangO2_median_ms": 1300, "delta_permille_min": -373, "roof_bound": "compute-int", "roof_int_giops_x1000": 12880, "roofline_pct_native_x10": 31, "roofline_pct_clangO2_x10": 43}
+{"workload": "hash_heavy", "src": "bench/unshadow/hash_heavy.hexa", "tag": "mac-arm64-mini-roofline", "iters": 5, "warmup": 2, "correctness": "MATCH", "native_min_ms": 2106, "native_median_ms": 2109, "clangO2_min_ms": 1343, "clangO2_median_ms": 1357, "delta_permille_min": -568, "roof_bound": "compute-int", "roof_int_giops_x1000": 12880, "roofline_pct_native_x10": 29, "roofline_pct_clangO2_x10": 46}
+{"workload": "collatz_heavy", "src": "bench/unshadow/collatz_heavy.hexa", "tag": "mac-arm64-mini-roofline", "iters": 5, "warmup": 2, "correctness": "MATCH", "native_min_ms": 3884, "native_median_ms": 3887, "clangO2_min_ms": 3518, "clangO2_median_ms": 3529, "delta_permille_min": -104, "roof_bound": "compute-int", "roof_int_giops_x1000": 12880, "roofline_pct_native_x10": 18, "roofline_pct_clangO2_x10": 20}
+{"workload": "mixmul_heavy", "src": "bench/unshadow/mixmul_heavy.hexa", "tag": "mac-arm64-mini-roofline", "iters": 5, "warmup": 2, "correctness": "MATCH", "native_min_ms": 3699, "native_median_ms": 3701, "clangO2_min_ms": 2696, "clangO2_median_ms": 2718, "delta_permille_min": -372, "roof_bound": "compute-int", "roof_int_giops_x1000": 12880, "roofline_pct_native_x10": 20, "roofline_pct_clangO2_x10": 28}

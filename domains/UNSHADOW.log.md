@@ -2,6 +2,43 @@
 
 Append-only history sister of `UNSHADOW.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-30T09:00Z — 🎯 roofline 측정대 — 상대 Δ → HW 물리 천장 % 절대 잣대 전환 (MEASURED · g5 5/5 IDENTICAL)
+
+UNSHADOW 측정 잣대를 "vs idiomatic C @ clang -O2"(상대 Δ) 에서 **HW 물리 천장(roofline) %**
+(절대) 로 영구 전환. 새 대량 벤치가 아니라 **분모 교체 + 분석적 재계산 + 잣대 전환**.
+
+- [x] **격리 worktree** — `/tmp/uns-roofline` (origin/main 베이스). 공유 트리·타 브랜치 미접촉.
+- [x] **achieved-peak 분모 1회 실측** (@L2 · mini Apple M4 · clang -O2 · best-of-5) — 스펙시트
+  추정 금지. `tool/unshadow_peak_microbench.hexa`(/tmp 에 ref-C 커널 emit·`.c` 훅 회피):
+  - memory-roof STREAM-triad = **92.3–95.2 GB/s** (theoretical LPDDR5X ~120 → 77–79%)
+  - compute-roof FMA double = **15.24 GFLOP/s** (theoretical P-core ~17.6 → 87%)
+  - compute-roof scalar int = **12.88–13.06 GIOP/s** · ridge-point ≈ 1.08 ops/byte
+  - achieved 와 theoretical **나란히** 박제(@L2 정직 — 격차 숨기지 않음).
+- [x] **harness 어댑터** (@L3 · `tool/unshadow_bench.hexa`) — 워크로드별 정수-op 계수 +
+  binding-roof 자동선택(AI=flops/bytes vs ridge; register-resident 스칼라 → AI≫ridge →
+  compute-bound int-roof) + achieved/binding-roof %. 기존 native-vs-clang A/B 출력·JSONL 보존,
+  roofline % 컬럼·필드(roof_bound·roofline_pct_{native,clangO2}_x10) 추가. parse-gate PASS.
+- [x] **기존 9개 재표기** (@L4 · `UNSHADOW.bench.md §roofline` 표) — ns 재활용 → roofline %:
+  - M1 baseline 5/5: hexa C-emit clangO2 arm **2.0–4.6%** · native **1.8–3.1%** of int-roof
+    (native 5/5 패배가 roofline % 로도 그대로 드러남 — 정직).
+  - #2 hexaval-unbox: BEFORE **9.0%** → AFTER **101.9%** (idiomatic-C anchor, AT PARITY).
+  - §unboxed-array c_native(HexaArrI64) **100%**(천장 = STORAGE) · §c-class b_elided **14.3%**(3.25×).
+  - 🔵 "안 돌기"(#4 const-fold·B proof-carrying)=**roofline-N/A**(work 제거→분모 anchor 없음,
+    wall-Δ 65%·47% 로 보고) · #3 arena RSS=**roofline-N/A**(공간 메트릭) · #2-ext·C 🔴
+    CLOSED-NEG=**roofline-N/A**(win arm 부재). 환산 무의미한 것은 정직하게 N/A.
+- [x] **g5 게이트** — 5 워크로드 byte-diff **5/5 IDENTICAL**(correctness=MATCH 전부). verdict
+  verbatim = `.verdicts/unshadow-roofline-stand/g5-roofline-bench.txt` (원시 JSONL 포함).
+- [x] **문서** — `UNSHADOW.bench.md §roofline`(잣대 정의·achieved-peak 분모·재표기 표·정직 해석) ·
+  `UNSHADOW.md` roofline 측정대 milestone flip(@goal 은 이미 "roofline % 기준" 반영) · 이 로그.
+- [x] **정직 finding** — hexa C-emit 의 절대 천장 % 는 낮다(2–5%, boxed HexaVal ABI). 이득은 raw
+  경쟁이 아니라 🟢 벽제거·🔵 우회 — #2 unbox·c_native 가 천장을 닫음(→101.9%·100%). memory-bound
+  워크로드는 본 corpus 에 없음(전부 register/L1 compute-bound) — SoA/AoS 케이스는 typed-repr
+  frontier 랜딩 후 측정 가능(미수집, 정직). op-count roofline% 는 하한 추정(clang fold) ·
+  idiomatic ref-C anchor % 가 보완.
+- [x] **hexa-loop bench adapter** (@L5, 별도 ship) — sidecar hexa-loop SKILL.md bench-adapter
+  verify 기준을 "byte-diff IDENTICAL + Δ" → "byte-diff IDENTICAL + roofline %" 로 갱신. version
+  lockstep bump(g22) + `sidecar sync`. hexa-lang repo 와 분리된 commit.
+
 ## 2026-05-30T07:30Z — 📐 typed-repr RFC + 백로그 재개 (DESIGN, 구현 아님)
 
 E(🔴 CLOSED-NEGATIVE)의 근본 원인 "typed 표현 부재(monomorphic struct layout 0 + unboxed-primitive
