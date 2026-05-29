@@ -1,0 +1,25 @@
+UNSHADOW HexaVal-unbox pilot — verdict (mini macOS arm64, clang 21.0.0)
+========================================================================
+falsifier: known-int binop result reboxed via inline ((HexaVal){.tag=TAG_INT,.i=(...)})
+  must (a) be byte-identical to out-of-line hexa_int(...) AND (b) close the parity gap.
+
+G5 byte-diff gate (output, both arms + ref-C):
+  before  stdout = 34200003330000000
+  after   stdout = 34200003330000000
+  ref-C   stdout = 34200003330000000
+  G5: IDENTICAL  (md5 63888b02e0325abf096209d943c8413f)
+
+asm (hot mix(), otool -S / clang -S, -O2):
+  before  bl _hexa_int = 17   (total bl = 19)
+  after   bl _hexa_int = 0    (total bl = 2 = mix-call + printf)
+  after mix() = pure register arith (add/sub/lsl in x8..x11), zero HexaVal spills.
+
+wall (best-of-11, ms):
+  ref-C @-O2          = 54
+  before (boxed rebox)= 599
+  after  (inline lit) = 53
+
+findings:
+  unbox speedup (before/after) = 11.30x   (91.2% wall drop)
+  parity gap before = 11.09x ;  after = 0.98x  (AT PARITY)
+  gap closed = 100% of the before-parity gap on this known-int workload.

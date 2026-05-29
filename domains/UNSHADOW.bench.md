@@ -378,3 +378,54 @@ fold/LICM 을 막아 parity 가 free 가 **아니다**. parity ≈1.0 은 `.c=0`
 > 바이너리는 캐시된 `runtime.o` 링크(코드 변경 0) · reference C 는 `/tmp` 외부 작성(hook
 > 회피 · repo 안 `.c` 0개) · fib ref-O2=1ms 는 clang 의 dead-loop elim 으로 degenerate
 > (ratio 절대값보다 "벽 너머 fold 불가"라는 정성 신호가 본질).
+
+## §hexaval-unbox — 🟢 HexaVal 언박싱 pilot (known-int rebox → inline literal)
+
+> milestone `🟢 HexaVal 언박싱 / register-pack` 의 실측. **요지**: §parity-attest 가
+> raw 7.9×~1263× 갭의 주범으로 지목한 HexaVal 박싱을 **한 좁은 지점**에서 제거한다 —
+> codegen STRUCTURAL-2 known-int BinOp fast-path 가 결과를 **out-of-line `hexa_int(…)`**
+> 로 재박싱하던 것을 **inline C compound literal** `((HexaVal){.tag=TAG_INT,.i=(…)})` 로
+> 바꿔, 핫루프 매 산술 step 의 `bl _hexa_int` ABI 호출(= runtime.o C-ABI 벽)을 없앤다.
+> `self/codegen.hexa` L5127. 발화 조건 = `_is_known_int` 가 두 피연산자를 정적 TAG_INT
+> 로 인증할 때만(불변 int-only `let`/IntLit). 그 외엔 기존 boxed emit = 일반 경로 무변경.
+
+측정: `mini` (macOS arm64) · clang 21.0.0 · best-of-11 wall(real min, ms) · 같은
+`runtime.o` 링크 · 2026-05-30 · tag `mac-arm64-mini`. 워크로드 = `knownint_heavy`
+(16-op 불변 int `let` 체인 × 60M, 매 op 가 known-int fast-path 발화).
+
+### 표 — 3-way wall min (ms) + asm
+
+| arm | wall (ms) | hot `mix()` `bl _hexa_int` | parity gap (arm/ref) |
+|---|---|---|---|
+| ref-C @-O2 (plain `int64_t`) | 54  | — (no HexaVal) | 1.00× (baseline) |
+| BEFORE — out-of-line `hexa_int(…)` rebox (origin/main) | 599 | **17** | **11.09×** |
+| AFTER — inline `((HexaVal){.tag=TAG_INT,.i=(…)})` (pilot) | 53  | **0** | **0.98×** |
+
+> g5(정확성): before/after/ref **세 바이너리 stdout 전부 동일** = `34200003330000000`
+> (md5 `63888b02e0325abf096209d943c8413f`). asm: AFTER `mix()` 는 순수 레지스터 arith
+> (`add`/`sub`/`lsl` in x8..x11), HexaVal spill(`str`/`ldr`) 0 — clang -O2 가 16-op
+> 체인을 ~10 스칼라 명령으로 fold. BEFORE 는 17개 opaque `bl _hexa_int` 가 이 fold 를 차단.
+
+### 발견 — 박싱 제거가 known-int 워크로드의 parity 갭을 닫는다
+
+- **unbox speedup = 11.30× (91.2% wall drop)** · **parity gap 11.09× → 0.98×** = known-int
+  핫루프의 raw-parity 갭을 **100% closed**(AFTER 53ms ≈ ref 54ms, 노이즈 내 동일).
+- §parity-attest 의 "raw parity 는 runtime.o C-ABI 벽이 막는다"가 박싱 축에서 **확증** —
+  벽 = 매 op 의 `hexa_int(…)` out-of-line rebox. inline literal 로 그 호출을 제거하면
+  clang -O2 가 벽 없이 누산기를 레지스터에 유지·fold → idiomatic C 와 parity.
+
+**정직 caveat**:
+- 측정은 **faithful C A/B proxy** — 두 arm 이 각 codegen variant 의 call-site emit 을
+  정확히 미러(같은 runtime.o·clang -O2). full self-host transpiler rebuild **아님**:
+  **B9 빌드 벽**(origin/main HEAD 에 일관된 generated-.c 셋 부재 + 설치 트리 runtime.h
+  ABI skew → `hexa cc --regen` merge forward-decl 버그/module link skew 로 canonical
+  재빌드 차단, 메모리 `reference_b9_generated_c_no_checkout_shortcut`). proxy sound 근거 =
+  byte-equivalence 가 **runtime 소스에서 증명**됨(`runtime_core_emit.hexa:1371`
+  `hexa_int(n)={.tag=TAG_INT,.i=n}`) + 변경 변수 1개만 격리.
+- 갭-클로저 절대값은 **known-int 비율이 높은** 워크로드 기준. `_is_known_int` 미발화
+  케이스(mut 누산기 — 예 `fib_heavy` 의 `let mut a; a=b`)는 이 pilot 미적용 →
+  mut-accumulator 언박싱(raw `int64_t` 캐리)은 별도 follow-up.
+- codegen 편집 검증: `self/codegen.hexa` parse-clean(`hexa parse` OK) + 편집 라인이
+  emit 하는 C 문자열이 AFTER arm 형태(`((HexaVal){.tag=TAG_INT,.i=(HX_INT(l) op HX_INT(r))})`)
+  와 정확히 일치(구성으로 검증). 재현 = `bench/unshadow/knownint_heavy.hexa` ·
+  verdict = `.verdicts/unshadow-hexaval-unbox/pilot.txt`.

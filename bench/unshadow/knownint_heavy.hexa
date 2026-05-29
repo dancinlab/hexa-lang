@@ -1,0 +1,46 @@
+// UNSHADOW HexaVal-unbox pilot — known-int rebox hot workload.
+//
+// Every binop below has BOTH operands provably TAG_INT (immutable int `let`s
+// or IntLits), so codegen takes the STRUCTURAL-2 known-int fast path. On
+// origin/main that path re-boxes each intermediate via the out-of-line
+// `hexa_int(…)` runtime call (`bl _hexa_int` at -O2 — the runtime.o C-ABI
+// wall). The pilot emits the result as an INLINE compound literal
+// `((HexaVal){.tag=TAG_INT,.i=(…)})` instead, so clang -O2 can keep the
+// chain in registers and drop the rebox calls. Byte-equivalent (hexa_int(n)
+// ≡ {.tag=TAG_INT,.i=n}); the value is identical, only the boxing form moves.
+fn mix(n: int) -> int {
+    let a = n + 1
+    let b = a + 2
+    let c = b * 3
+    let d = c - a
+    let e = d + b
+    let f = e * 2
+    let g = f - c
+    let h = g + a
+    let i = h * 2
+    let j = i - b
+    let k = j + c
+    let l = k - d
+    let m = l + e
+    let o = m * 2
+    let p = o - f
+    let q = p + g
+    return q
+}
+
+fn main() {
+    // warmup
+    let mut warm = 0
+    while warm < 3 {
+        mix(7)
+        warm = warm + 1
+    }
+    // timed body
+    let mut r = 0
+    let mut rounds = 0
+    while rounds < 60000000 {
+        r = r + mix(rounds)
+        rounds = rounds + 1
+    }
+    println(r)
+}
