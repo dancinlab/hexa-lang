@@ -1,26 +1,17 @@
 name: nobaseline-gate
 
-# ── .c-graduation Phase 2 — no-baseline DRY-RUN gate ────────────────────────
+# ── .c-graduation faithful-nobaseline gate ──────────────────────────────────
 #
-# Proves that removing the bootstrap seed `.c` files is SAFE *before* any real
-# removal lands (Phase 3+). On each release platform it:
+# `.c=0` has landed on main (tracked `.c` = 0; real 3-platform release green).
+# The old seed-present DRY-RUN jobs (nobaseline-* / final3-*) ASSUMED the
+# bootstrap seeds were present at checkout and temp-removed / cold-compiled
+# them; on a `.c=0` tree those seeds no longer exist, so those jobs failed
+# forever and were self-redundant. They have been RETIRED.
 #
-#   1. Stage 0b  — build build/runtime.a from the FULL self/runtime.c source
-#                  (seeds still present), the "frozen dough".
-#   2. TEMP-remove the 18 warm-regen seeds + 2 root seeds (runtime.c,
-#      bootstrap_compiler.c) FROM THE WORKING COPY ONLY — never committed.
-#      hexa_cc.c is kept (it #includes only runtime.h, links runtime.a).
-#   3. Stage 0/1/2 via the prebuilt path (HEXA_PREBUILT_RUNTIME=build/runtime.a)
-#      — clang/gcc hexa_cc.c + runtime.a, transpile module_loader + main,
-#      compile ./hexa — all with the seeds GONE.
-#   4. Assert ./hexa --version succeeds (green).
-#
-# This is the gate the #2011 break taught us to require: local byte-identical
-# checks are NOT enough — the no-baseline path must build green on the CI
-# edge-compile path, all 3 release platforms, before `git rm` of any seed.
-#
-# DRY-RUN ONLY: the removal happens in the runner's checkout and is never
-# committed. The tracked .c count stays 23.
+# The faithful-nobaseline-* jobs below ARE the authoritative seed-removed gate:
+# they remove ALL seeds FIRST (via $SEEDS), then build via the SAME shared
+# tool/release_build + tool/release_package the real release runs, edge-pulling
+# runtime.a + build/hexat. gate-green ≡ release-green by shared definition.
 
 on:
   push:
@@ -36,10 +27,9 @@ env:
   CFLAGS_COMMON: "-O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs"
   # ALL 23 seeds — the 18 warm-regen seeds + 2 root bootstrap seeds + the 3
   # extra graduation seeds (hexa_cc.c, forge_tier_v1.c, the classd test
-  # harness). The gate TEMP-removes ALL of them, then runs the VERBATIM shared
-  # release path (stage_regen_hexa_cc + stage_build_hexa + stage_precompile_
-  # package). hexa_cc.c is now removed too and recreated by the regen step, so
-  # gate == release byte-for-byte (the 5th-failure drift is structurally sealed).
+  # harness). The faithful jobs TEMP-remove ALL of them FIRST (via $SEEDS),
+  # then run the VERBATIM shared release path (release_build + release_package)
+  # edge-pulling runtime.a + build/hexat — so NO seed is ever compiled.
   SEEDS: >-
     self/runtime_core.c self/runtime_hi_gen.c self/runtime.c
     self/bootstrap_compiler.c
@@ -53,253 +43,16 @@ env:
     test/native_build/classd_behavioral_harness.c
 
 jobs:
-  nobaseline-darwin-arm64:
-    name: nobaseline (darwin-arm64)
-    runs-on: macos-latest
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@v6
-
-      # Stage 0b — resolve runtime.a via the SAME script release.yml uses.
-      # Seeds present here, so it compiles runtime.a from source.
-      - name: Stage 0b — resolve prebuilt runtime archive (runtime.a)
-        shell: bash
-        env:
-          CC: clang
-          LIBS: ""
-          EDGE_ASSET: hexa-darwin-arm64.tar.gz
-          GH_TOKEN: ${{ github.token }}
-        run: bash tool/stage_resolve_runtime_a
-
-      # Stage 0a-pre — prebuild build/hexat from hexa_cc.c + runtime.a WHILE seeds
-      # are present, so the later `hexa cc --regen` (Stage 0a, after the seeds
-      # are removed) REUSES it instead of re-bootstrapping build/hexat from the
-      # now-deleted self/runtime.c + hexa_cc.c (THE nobaseline gate-fail).
-      - name: Stage 0a-pre — prebuild build/hexat (shared tool/stage_prebuild_hexat)
-        shell: bash
-        env:
-          CC: clang
-          LIBS: ""
-          HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
-        run: bash tool/stage_prebuild_hexat
-
-      - name: Dry-run — TEMP-remove ALL 23 seeds (working copy only, NOT committed)
-        shell: bash
-        run: |
-          set -euo pipefail
-          for f in $SEEDS; do rm -f "$f"; done
-          echo "removed seeds; remaining self/**/*.c:"
-          find self -name '*.c' | sort
-          # ALL 23 removed including hexa_cc.c (recreated by stage_regen_hexa_cc).
-          test ! -f self/runtime.c
-          test ! -f self/native/hexa_cc.c
-
-      # Regenerate hexa_cc.c via the SAME script release.yml uses (edge-regen),
-      # since it is now among the removed seeds.
-      - name: Stage 0a — regen hexa_cc.c (shared tool/stage_regen_hexa_cc)
-        shell: bash
-        env:
-          CC: clang
-          EDGE_ASSET: hexa-darwin-arm64.tar.gz
-          GH_TOKEN: ${{ github.token }}
-        run: bash tool/stage_regen_hexa_cc
-
-      # Stage 0/1/2 via the EXACT release.yml script (tool/stage_build_hexa) —
-      # this is what closes the false-green class: the gate now exercises the
-      # real release stage logic, not a gate-only simplified path.
-      - name: Stage 0/1/2 — REAL release build (shared tool/stage_build_hexa)
-        shell: bash
-        env:
-          CC: clang
-          LIBS: ""
-          HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
-        run: bash tool/stage_build_hexa
-
-      - name: Assert — ./hexa runs with seeds removed
-        shell: bash
-        run: |
-          set -euo pipefail
-          ./hexa --version
-          echo "::notice::no-baseline Stage-0/1/2 GREEN (darwin-arm64) — seeds removed via prebuilt runtime.a"
-
-      # .c-graduation Phase-3 driver fix gate (THE missing piece): the prior
-      # nobaseline gate stopped at Stage 0/1/2 + --version and MISSED Stage 3
-      # (precompile), which is where #2040 actually died — `hexa run
-      # tool/build_precompile.hexa` shells `hexa build <s>` per manifest entry,
-      # and the `hexa build` DRIVER hard-compiled self/runtime.c (now removed).
-      # This step exercises the REAL Stage 3 + Package release sequence with the
-      # seeds GONE, so the gate finally == the full release path including the
-      # in-binary runtime-compile. HEXA_PREBUILT_RUNTIME is exported so the
-      # fixed driver links the prebuilt archive instead of the absent runtime.c.
-      # Stage 3 + Package via the EXACT release.yml SHARED script — this is the
-      # final drift seam (the 5th failure): release was MISSING the HEXA_PREBUILT_
-      # RUNTIME export here. Now BOTH workflows call tool/stage_precompile_package
-      # → byte-identical → drift structurally impossible.
-      - name: Stage 3 + Package — REAL release path (shared tool/stage_precompile_package)
-        shell: bash
-        env:
-          HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
-          # CI dry-run bypass for the Darwin `hexa build` panic-trigger refuse
-          # gate (output-under-/tmp guard); non-heavy precompile only.
-          HEXA_MAC_BUILD_OK: "1"
-        run: TARGET=darwin-arm64 bash tool/stage_precompile_package
-
-  nobaseline-linux-x86_64:
-    name: nobaseline (linux-x86_64)
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Stage 0b — resolve prebuilt runtime archive (runtime.a)
-        shell: bash
-        env:
-          CC: gcc
-          LIBS: "-lm -ldl"
-          EDGE_ASSET: hexa-linux-x86_64.tar.gz
-          GH_TOKEN: ${{ github.token }}
-        run: bash tool/stage_resolve_runtime_a
-
-      # Stage 0a-pre — prebuild build/hexat from hexa_cc.c + runtime.a WHILE seeds
-      # are present, so the later `hexa cc --regen` (Stage 0a, after the seeds
-      # are removed) REUSES it instead of re-bootstrapping build/hexat from the
-      # now-deleted self/runtime.c + hexa_cc.c (THE nobaseline gate-fail).
-      - name: Stage 0a-pre — prebuild build/hexat (shared tool/stage_prebuild_hexat)
-        shell: bash
-        env:
-          CC: gcc
-          LIBS: "-lm -ldl"
-          HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
-        run: bash tool/stage_prebuild_hexat
-
-      - name: Dry-run — TEMP-remove ALL 23 seeds (working copy only, NOT committed)
-        shell: bash
-        run: |
-          set -euo pipefail
-          for f in $SEEDS; do rm -f "$f"; done
-          echo "removed seeds; remaining self/**/*.c:"
-          find self -name '*.c' | sort
-          test ! -f self/runtime.c
-          test ! -f self/native/hexa_cc.c
-
-      - name: Stage 0a — regen hexa_cc.c (shared tool/stage_regen_hexa_cc)
-        shell: bash
-        env:
-          CC: gcc
-          EDGE_ASSET: hexa-linux-x86_64.tar.gz
-          GH_TOKEN: ${{ github.token }}
-        run: bash tool/stage_regen_hexa_cc
-
-      - name: Stage 0/1/2 — REAL release build (shared tool/stage_build_hexa)
-        shell: bash
-        env:
-          CC: gcc
-          LIBS: "-lm -ldl"
-          HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
-        run: bash tool/stage_build_hexa
-
-      - name: Assert — ./hexa runs with seeds removed
-        shell: bash
-        run: |
-          set -euo pipefail
-          ./hexa --version
-          echo "::notice::no-baseline Stage-0/1/2 GREEN (linux-x86_64) — seeds removed via prebuilt runtime.a"
-
-      # Stage 3 + Package via the EXACT release SHARED script (gate == release).
-      - name: Stage 3 + Package — REAL release path (shared tool/stage_precompile_package)
-        shell: bash
-        env:
-          HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
-        run: TARGET=linux-x86_64 bash tool/stage_precompile_package
-
-  nobaseline-linux-arm64:
-    name: nobaseline (linux-arm64)
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Stage 0b — resolve prebuilt runtime archive (runtime.a)
-        shell: bash
-        env:
-          CC: gcc
-          LIBS: "-lm -ldl"
-          EDGE_ASSET: hexa-linux-arm64.tar.gz
-          GH_TOKEN: ${{ github.token }}
-        run: bash tool/stage_resolve_runtime_a
-
-      # Stage 0a-pre — prebuild build/hexat from hexa_cc.c + runtime.a WHILE seeds
-      # are present, so the later `hexa cc --regen` (Stage 0a, after the seeds
-      # are removed) REUSES it instead of re-bootstrapping build/hexat from the
-      # now-deleted self/runtime.c + hexa_cc.c (THE nobaseline gate-fail).
-      - name: Stage 0a-pre — prebuild build/hexat (shared tool/stage_prebuild_hexat)
-        shell: bash
-        env:
-          CC: gcc
-          LIBS: "-lm -ldl"
-          HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
-        run: bash tool/stage_prebuild_hexat
-
-      - name: Dry-run — TEMP-remove ALL 23 seeds (working copy only, NOT committed)
-        shell: bash
-        run: |
-          set -euo pipefail
-          for f in $SEEDS; do rm -f "$f"; done
-          echo "removed seeds; remaining self/**/*.c:"
-          find self -name '*.c' | sort
-          test ! -f self/runtime.c
-          test ! -f self/native/hexa_cc.c
-
-      - name: Stage 0a — regen hexa_cc.c (shared tool/stage_regen_hexa_cc)
-        shell: bash
-        env:
-          CC: gcc
-          EDGE_ASSET: hexa-linux-arm64.tar.gz
-          GH_TOKEN: ${{ github.token }}
-        run: bash tool/stage_regen_hexa_cc
-
-      - name: Stage 0/1/2 — REAL release build (shared tool/stage_build_hexa)
-        shell: bash
-        env:
-          CC: gcc
-          LIBS: "-lm -ldl"
-          HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
-        run: bash tool/stage_build_hexa
-
-      - name: Assert — ./hexa runs with seeds removed
-        shell: bash
-        run: |
-          set -euo pipefail
-          ./hexa --version
-          echo "::notice::no-baseline Stage-0/1/2 GREEN (linux-arm64) — seeds removed via prebuilt runtime.a"
-
-      # Stage 3 + Package via the EXACT release SHARED script (gate == release).
-      - name: Stage 3 + Package — REAL release path (shared tool/stage_precompile_package)
-        shell: bash
-        env:
-          HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
-        run: TARGET=linux-arm64 bash tool/stage_precompile_package
-
-  # ── faithful-nobaseline — the REAL post-PR2 removal-safety proof. ──────────
+  # ── faithful-nobaseline — the authoritative seed-removed release-safety gate.
   #
-  # The nobaseline-* jobs above prebuild build/hexat from PRESENT seeds, THEN
-  # remove the seeds — so the later `hexa cc --regen` reuses a hexat that was
-  # bootstrapped from source. That is an ACCIDENT OF ORDERING that the real
-  # post-PR2 release (seeds ABSENT at checkout) does NOT enjoy. Those jobs prove
-  # the shared-script wiring is intact, but their green does NOT authorize the
-  # seed removal.
-  #
-  # These faithful-* jobs model post-PR2 FAITHFULLY: remove ALL 23 seeds FIRST,
-  # then resolve runtime.a AND build/hexat from the prior edge tarball (NEVER
-  # prebuild either from seeds), then regen hexa_cc.c + Stage 0/1/2 + Stage 3 +
-  # Package — with NO seed ever compiled. ONLY a green here authorizes the PR2
-  # `git rm` of the 23 seeds.
-  #
-  # ⚠ EXPECTED RED until a hexat-bearing edge is published. The current edge
-  # tarball does NOT contain build/hexat; stage_prebuild_hexat will fail with a
-  # clear "edge predates hexat-bundling" message. After PR-A merges to main, the
-  # main-push edge release bundles build/hexat (release.yml Package), and THEN
-  # this gate (re-run on main) goes green — that green is the real proof.
+  # These faithful-* jobs model a `.c=0` checkout FAITHFULLY: remove ALL seeds
+  # FIRST (via $SEEDS), then resolve runtime.a AND build/hexat from the prior
+  # edge tarball (NEVER prebuild either from seeds), then build + package via
+  # the IDENTICAL shared entry points release.yml calls (tool/release_build then
+  # tool/release_package) — with NO seed ever compiled. There is no separate
+  # gate copy of the stage sequence to drift from release; this IS a dynamic
+  # seed-removed run of the real release path. gate-green ≡ release-green by
+  # shared definition.
   faithful-nobaseline-darwin-arm64:
     name: faithful-nobaseline (darwin-arm64)
     runs-on: macos-latest
@@ -308,7 +61,7 @@ jobs:
       - uses: actions/checkout@v6
 
       # FAITHFUL: remove ALL 23 seeds BEFORE anything builds — models the
-      # post-PR2 checkout (seeds git-removed). No source compile is possible.
+      # .c=0 checkout (seeds git-removed). No source compile is possible.
       - name: Faithful — TEMP-remove ALL 23 seeds FIRST (working copy only)
         shell: bash
         run: |
@@ -316,7 +69,7 @@ jobs:
           for f in $SEEDS; do rm -f "$f"; done
           echo "removed seeds BEFORE any build; tracked .c now:"
           git ls-files '*.c' | wc -l
-          ls self/*.c 2>/dev/null || echo "  (no self/*.c — expected post-PR2)"
+          ls self/*.c 2>/dev/null || echo "  (no self/*.c — expected on .c=0)"
 
       # ── SINGLE-JOB-FAITHFUL: this job now runs the IDENTICAL shared entry
       # points release.yml calls — tool/release_build then tool/release_package —
@@ -432,76 +185,3 @@ jobs:
           LIBS: "-lm -ldl"
           GH_TOKEN: ${{ github.token }}
         run: bash tool/release_package
-
-  # ── .c-graduation Phase 4/5 — FINAL 3 tracked .c removal-safety DRY-RUN ─────
-  #
-  # The 20 warm-regen seeds are already UNtracked (Phase 3, #2035) → tracked
-  # .c = 3. This matrix proves each of the FINAL 3 removal-safe, per platform,
-  # WITHOUT committing any removal (working-copy temp-remove only):
-  #
-  #   A. self/native/hexa_cc.c — the C source of the self-hosted transpiler.
-  #      Chicken-egg: a fresh checkout WITHOUT it has no C source to build the
-  #      transpiler from. ESCAPE = download a prior edge `hexa` driver, run
-  #      `hexa cc --regen` to REGENERATE hexa_cc.c, then Stage-0 builds the
-  #      transpiler from the regenerated copy + prebuilt runtime.a. If regen
-  #      cannot run in CI (stale binary can't parse current .hexa sources, or
-  #      no edge asset) → HARD-BLOCKER reported, hexa_cc.c is irreducible.
-  #
-  #   B. self/forge/forge_tier_v1.c — "unused via prebuilt". Temp-remove it and
-  #      confirm the full prebuilt Stage-0/1/2 build is still green → confirms
-  #      the unused claim; removal trivially safe.
-  #
-  #   C. test/native_build/classd_behavioral_harness.c — a test fixture.
-  #      Run gen_c_text_emitter to produce a verbatim `.c-text` emitter from
-  #      the .c, then assert the regenerated source is BYTE-IDENTICAL (sha256)
-  #      → the .c-text path reproduces it; removal safe (emitter regenerates).
-  #
-  # DRY-RUN ONLY — never committed. Tracked .c count stays 3.
-
-  final3-darwin-arm64:
-    name: final3 (darwin-arm64)
-    runs-on: macos-latest
-    timeout-minutes: 30
-    env:
-      CC: clang
-      LIBS: ""
-      EDGE_ASSET: hexa-darwin-arm64.tar.gz
-    steps:
-      - uses: actions/checkout@v6
-      - name: final3 removal-safety dry-run
-        shell: bash
-        run: bash tool/final3_gate_dryrun
-        env:
-          GH_TOKEN: ${{ github.token }}
-
-  final3-linux-x86_64:
-    name: final3 (linux-x86_64)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      CC: gcc
-      LIBS: "-lm -ldl"
-      EDGE_ASSET: hexa-linux-x86_64.tar.gz
-    steps:
-      - uses: actions/checkout@v6
-      - name: final3 removal-safety dry-run
-        shell: bash
-        run: bash tool/final3_gate_dryrun
-        env:
-          GH_TOKEN: ${{ github.token }}
-
-  final3-linux-arm64:
-    name: final3 (linux-arm64)
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 35
-    env:
-      CC: gcc
-      LIBS: "-lm -ldl"
-      EDGE_ASSET: hexa-linux-arm64.tar.gz
-    steps:
-      - uses: actions/checkout@v6
-      - name: final3 removal-safety dry-run
-        shell: bash
-        run: bash tool/final3_gate_dryrun
-        env:
-          GH_TOKEN: ${{ github.token }}
