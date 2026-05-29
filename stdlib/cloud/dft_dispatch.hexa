@@ -322,6 +322,33 @@ pub fn dft_assemble_scf(head: str, coords: str, tail: str) -> str {
 // the relaxed coords slot between them (reusing dft_assemble_scf). Explicit
 // scf.in.head/.tail still win when present (back-compat).
 
+// _dft_is_coord_row — a real ATOMIC_POSITIONS coordinate row: element-led AND
+// the 3 trailing tokens are numeric ("S 0.0 0.0 0.0"). This is STRICTER than
+// _dft_is_pos_line (element-led only) so a following CARD keyword that also
+// starts with a capital letter — `K_POINTS automatic`, `CELL_PARAMETERS …`,
+// `OCCUPATIONS` — is NOT mistaken for a coordinate row and correctly begins the
+// tail. (The earlier letter-only test swallowed K_POINTS into the dropped block.)
+fn _dft_is_coord_row(line: str) -> int {
+    let toks = _dft_tokens(line.trim())
+    if len(toks) < 4 {
+        return 0
+    }
+    if _dft_is_pos_line(toks[0]) == 0 {
+        return 0
+    }
+    let base = len(toks) - 3
+    if _dft_is_num(toks[base]) == 0 {
+        return 0
+    }
+    if _dft_is_num(toks[base + 1]) == 0 {
+        return 0
+    }
+    if _dft_is_num(toks[base + 2]) == 0 {
+        return 0
+    }
+    return 1
+}
+
 // DftScfSplit — a whole scf.in cut into the part BEFORE ATOMIC_POSITIONS (head)
 // and the part resuming at the first card AFTER the positions block (tail).
 // ok==0 when no ATOMIC_POSITIONS line was found (caller falls back / FATALs).
@@ -368,7 +395,7 @@ pub fn dft_scf_split(whole: str) -> DftScfSplit {
     let mut s = pos_at + 1
     while s < n {
         let t = lines[s].trim()
-        if len(t) == 0 || _dft_is_pos_line(t) == 1 {
+        if len(t) == 0 || _dft_is_coord_row(t) == 1 {
             s = s + 1
         } else {
             ts = s
