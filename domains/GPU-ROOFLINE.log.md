@@ -1,5 +1,44 @@
 # GPU-ROOFLINE — append-only step log
 
+## 2026-05-30 — MS#1 sub-task 1a 규모 재평가 = honest STOP (1b 선결 의존) (gpu-rfl-ms1-1a)
+
+### MS#1 1a 🟠 MIR fragment-operand threading — BLOCKED (1b 선결 필요, flip 보류)
+
+코드-감사 결과 1a 는 **1b/1c 선결 없이 독립 완결 불가** → honest STOP. fail 아님, multi-session 의존 확정.
+
+**핵심 발견 — WMMA emit 경로가 둘로 분리(disjoint):**
+
+1. **`gpu_wmma_*` STMT_CALL 경로**(`nvptx_target.hexa:1778-1816`) — placeholder `{/* a */}` 가 있는 그 경로.
+   - **codegen 소비 측 threading 은 이미 완결**: L1791-1793(mma 의 src A/B/C)·L1806(store_c 의 src D)
+     가 `s.args[i].kind == "local"` 이면 `_nvptx_wmma_frag_tuple(s.args[i].local_id, ...)` 로 실제 FRAG
+     tuple 을 emit. placeholder 는 `s.args` 가 비었을 때만 fallback. 즉 **operand threading 을 받을 준비가
+     codegen 에 이미 되어 있음** — 1a 가 손댈 codegen 변경분 = 없음(no-op).
+   - **그러나 이 op 들을 생산하는 HIR→MIR 경로가 부재**: `gpu_wmma_*` STMT_CALL 은 오직 test fixture
+     (`nvptx_lower_test.hexa` Case 23/threading)에서만 합성됨. `hir_to_mir.hexa` 에 `gpu_wmma` 참조 0건
+     (grep 확인). 따라서 "MIR 이 K-loop 을 돌며 fragment Local 을 s.args 로 운반" 할 K-loop 자체가
+     소스 레벨에 없음. 그 producer(parametric per-tile load/mma/store K-loop)를 만드는 것이 곧
+     **1b(HIR fixed-array/shared-tile surface) + 1c(grid/CTA geometry parametric emit)**.
+
+2. **matmul-shape 경로**(`_nvptx_emit_matmul_body`, `nvptx_target.hexa:7580+`) — 소스 `gpu_matmul(...)` 이
+   실제로 lower 되는 경로(`hir_to_mir.hexa:1248`, `_nvptx_mfunc_is_matmul_shape` recognise).
+   - 이 경로는 fragment threading 을 **이미 hand-emit PTX 텍스트 템플릿으로 완결**: L7613-7617 의
+     `wmma.mma...frc0, fra0, frb0, frc0` 가 A·B → mma, C accumulator chain 을 직접 연결. K-loop·stride
+     상수(`32768`/`8192`/`65536`)도 여기 hand-PTX. placeholder STMT_CALL 경로를 전혀 거치지 않음.
+   - `F-RFC067-TILE-LOOP-NUMERIC` 는 이 경로로 **이미 PASS**(GPU.md:47, PR #191, single-tile max|Δ|=0).
+     1a 문서가 "미발화" 라 한 것은 placeholder STMT_CALL 경로 기준이고, 실제 working 경로는 matmul-shape.
+
+**결론**: 1a "fragment-operand threading" 은 (a) codegen 소비 측은 이미 구현됨, (b) STMT_CALL producer 는
+부재하며 그 producer 제작 = 1b+1c, (c) 실 GEMM 경로(matmul-shape)는 별도로 이미 threading 완결. 따라서
+**surgical 1a-only 변경으로 실제 효과를 내는 코드 변경분이 없음** — placeholder 경로를 건드려도 producer
+없이는 no-op, producer 를 만들면 1b/1c 침범. spec 이 예상한 honest STOP 조건("불가(1b 선결)면 STOP") 충족.
+
+**권고 순서**: 1b(HIR fixed-array surface → shared-tile parametric) 먼저 → 그 surface 가 parametric K-loop
+MIR(per-tile `gpu_wmma_load_a/b` → `gpu_wmma_mma`(threaded args) → `gpu_wmma_store_c`)을 생산하게 한 뒤
+1a 의 codegen 소비 측(이미 준비됨)이 자동 활성. 1c(grid/CTA geometry)와 병행. codegen 무변경(이미 완결).
+
+**byte-eq 회귀**: 1a 가 코드 변경 0 이므로 256×256 출력 불변 자명(회귀 N/A). 기존 §hexa-emit-direct
+256 1점(max|Δ|=0, PR #214)·matmul-shape PASS(PR #191) 그대로. STOP 이라 ubu-2 fire 미실행(불필요).
+
 ## 2026-05-30 — batch B drain: MS#4 flame attention lane (gpu-roofline-batch-b)
 
 ### MS#4 🟢 flame — attention 커널 별도 roofline lane [PASS, measured]
