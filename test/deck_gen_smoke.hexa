@@ -66,6 +66,42 @@ fn _caauh3_spec() -> DeckSpec {
     return spec
 }
 
+fn _h3cl_spec() -> DeckSpec {
+    let spec = deck_spec_new()
+    spec_set(spec, "prototype",      "im3m_group17")
+    spec_set(spec, "prefix",         "h3cl")
+    spec_set(spec, "x_site_symbol",  "Cl")
+    spec_set(spec, "x_site_mass",    "35.45")
+    spec_set(spec, "x_site_upf",     "Cl.pbe-n-rrkjus_psl.1.0.0.UPF")
+    spec_set(spec, "celldm_bohr",    "5.60")
+    spec_set(spec, "a_conv_ang",     "2.96")
+    spec_set(spec, "pressure_kbar",  "2000.0")
+    spec_set(spec, "pressure_comment", "200 GPa")
+    spec_set(spec, "pressure_gpa",   "200")
+    spec_set(spec, "k_grid",         "16 16 16")
+    spec_set(spec, "nq",             "4")
+    spec_set(spec, "anharmonic",     "true")
+    return spec
+}
+
+fn _yh10_spec() -> DeckSpec {
+    let spec = deck_spec_new()
+    spec_set(spec, "prototype",      "sodalite_im3m_yh10")
+    spec_set(spec, "prefix",         "yh10_250")
+    spec_set(spec, "m_site_symbol",  "Y")
+    spec_set(spec, "m_site_mass",    "88.906")
+    spec_set(spec, "m_site_upf",     "Y.pbe-spn-rrkjus_psl.1.0.0.UPF")
+    spec_set(spec, "celldm_bohr",    "8.975")
+    spec_set(spec, "a_conv_ang",     "4.75")
+    spec_set(spec, "h32f_x",         "0.3750000")
+    spec_set(spec, "pressure_kbar",  "2500.0")
+    spec_set(spec, "pressure_comment", "250 GPa")
+    spec_set(spec, "pressure_gpa",   "250")
+    spec_set(spec, "k_grid",         "12 12 12")
+    spec_set(spec, "nq",             "2")
+    return spec
+}
+
 fn _write_all(files: [DeckFile], dir: string) {
     let _mk = exec("mkdir -p " + dir)
     let mut i = 0
@@ -100,6 +136,20 @@ fn main() {
     _write_all(ca_files, ca_dir)
     println("  diff vs " + "/Users/ghost/core/demiurge/exports/rtsc/decks/CaAuH3 (structural divergence expected):")
     let _d2 = exec("diff -ur /Users/ghost/core/demiurge/exports/rtsc/decks/CaAuH3 " + ca_dir + " | head -40 || true")
+    println("")
+
+    // ── 2b. RTSC H3Cl (im3m_group17 prototype) — structural emit ──────
+    println("## 2b. RTSC H3Cl (im3m_group17 prototype) — emit + sanity")
+    let h3cl_files = gen_deck("rtsc", _h3cl_spec())
+    println("  emitted " + str(len(h3cl_files)) + " files (expect 4)")
+    _write_all(h3cl_files, "/tmp/deck_gen_smoke/H3Cl")
+    println("")
+
+    // ── 2c. RTSC YH10 (sodalite_im3m_yh10 prototype) — structural emit ─
+    println("## 2c. RTSC YH10 (sodalite_im3m_yh10 prototype) — emit + sanity")
+    let yh10_files = gen_deck("rtsc", _yh10_spec())
+    println("  emitted " + str(len(yh10_files)) + " files (expect 4)")
+    _write_all(yh10_files, "/tmp/deck_gen_smoke/YH10")
     println("")
 
     // ── 3. Nuclear — top_k_next.json envelope smoke ───────────────────
