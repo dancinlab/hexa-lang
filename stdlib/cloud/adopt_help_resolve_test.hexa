@@ -1,0 +1,98 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+// stdlib/cloud/adopt_help_resolve_test.hexa — guards for two `hexa cloud` bugs
+// fixed in branch cloud-adopt-help-resolve-fix:
+//   (1) `cloud adopt --help` misparse — `--help` was treated as a pod-id and a
+//       phantom "adopted --help" was printed. The adopt verb now help-guards a
+//       leading `--help`/`-h` (usage + exit 0) and rejects any `-`-leading
+//       pod-id token (exit 2). The decision is a pure fn (_adopt_arg_class)
+//       mirrored here byte-for-byte from the cloud_cli.hexa branch.
+//   (2) numeric-id → stale direct-IP timeout — vast_ssh_config_autoinject now
+//       writes a PROXY Host block keyed on the numeric id (HostName
+//       ssh*.vast.ai + Port) instead of the bare direct IP, so `cloud exec
+//       <numeric-id>` (ssh resolves the id via ~/.ssh/config) reaches the live
+//       proxy. The pure block builder (vast_ssh_config_block_proxy) is mirrored
+//       here verbatim from vast.hexa.
+//
+// Run:   hexa run stdlib/cloud/adopt_help_resolve_test.hexa
+// PASS:  exits 0, prints "adopt_help_resolve_test PASS".
+
+// ── mirror of cloud_cli.hexa adopt arg-class decision ───────────────────
+// "help" → print usage + exit 0 · "flag" → reject (exit 2) · "id" → adopt.
+fn _adopt_arg_class(first: str) -> str {
+    if first == "--help" || first == "-h" {
+        return "help"
+    }
+    if len(first) >= 1 && first.substring(0, 1) == "-" {
+        return "flag"
+    }
+    return "id"
+}
+
+// ── mirror of vast.hexa proxy Host block (vast_ssh_config_block_proxy) ───
+fn _vast_cfg_begin(ip: str) -> str { return "# >>> hexa-cloud vast " + ip + " >>>" }
+fn _vast_cfg_end(ip: str) -> str { return "# <<< hexa-cloud vast " + ip + " <<<" }
+
+fn vast_ssh_config_block_proxy(iid: str, host: str, port: str, identity: str) -> str {
+    return _vast_cfg_begin(iid) + "\n"
+        + "Host " + iid + "\n"
+        + "    HostName " + host + "\n"
+        + "    Port " + port + "\n"
+        + "    User root\n"
+        + "    IdentityFile " + identity + "\n"
+        + "    IdentitiesOnly yes\n"
+        + "    StrictHostKeyChecking no\n"
+        + "    UserKnownHostsFile /dev/null\n"
+        + _vast_cfg_end(iid)
+}
+
+fn _ck_str(name: str, got: str, want: str) {
+    if got != want {
+        println("  FAIL: " + name + " got '" + got + "' want '" + want + "'")
+        exit(1)
+    }
+    println("  ok: " + name)
+}
+
+fn _ck(name: str, got: int, want: int) {
+    if got != want {
+        println("  FAIL: " + name + " got " + to_string(got) + " want " + to_string(want))
+        exit(1)
+    }
+    println("  ok: " + name)
+}
+
+fn _has(s: str, t: str) -> int {
+    if s.contains(t) {
+        return 1
+    }
+    return 0
+}
+
+fn main() {
+    // ── bug #1: adopt arg-class ─────────────────────────────────────────
+    _ck_str("adopt --help → help-guard", _adopt_arg_class("--help"), "help")
+    _ck_str("adopt -h → help-guard", _adopt_arg_class("-h"), "help")
+    _ck_str("adopt --project → rejected as flag", _adopt_arg_class("--project"), "flag")
+    _ck_str("adopt -x → rejected as flag", _adopt_arg_class("-x"), "flag")
+    _ck_str("adopt 38095989 (numeric id) → adopt", _adopt_arg_class("38095989"), "id")
+    _ck_str("adopt root@1.2.3.4 → adopt (write-side guard catches @)", _adopt_arg_class("root@1.2.3.4"), "id")
+    // The critical regression the bug introduced: a leading '-' must NEVER be
+    // classed as a pod-id (that produced the phantom "adopted --help").
+    _ck("no '-'-leading token is class 'id'", _has(_adopt_arg_class("--help"), "id"), 0)
+
+    // ── bug #2: proxy Host block prefers ssh*.vast.ai + Port ─────────────
+    let iid = "38095989"
+    let proxy_host = "ssh5.vast.ai"
+    let port = "12345"
+    let key = "/home/u/.ssh/id_vast_anima"
+    let blk = vast_ssh_config_block_proxy(iid, proxy_host, port, key)
+    _ck("proxy block keys Host on numeric id", _has(blk, "Host " + iid + "\n"), 1)
+    _ck("proxy block points HostName at ssh*.vast.ai", _has(blk, "HostName " + proxy_host), 1)
+    _ck("proxy block carries the proxy Port", _has(blk, "Port " + port), 1)
+    _ck("proxy block sets User root", _has(blk, "User root"), 1)
+    _ck("proxy block uses vast identity", _has(blk, "IdentityFile " + key), 1)
+    // the stale 2.65.x direct IP must NOT be the HostName the id resolves to
+    _ck("proxy block has NO stale 2.65.x direct IP", _has(blk, "2.65."), 0)
+
+    println("adopt_help_resolve_test PASS")
+}

@@ -955,6 +955,28 @@ pub fn vast_ssh_config_block(ip: str, identity: str) -> str {
         + _vast_cfg_end(ip)
 }
 
+// vast_ssh_config_block_proxy — PURE: a marker-scoped Host block KEYED ON THE
+// NUMERIC INSTANCE ID (`Host <iid>`) that resolves to the LIVE vast proxy
+// endpoint (`HostName ssh*.vast.ai` + `Port <ssh_port>` + `User root`). This is
+// the fix for the "`cloud exec <numeric-id>` → stale 2.65.x direct IP timeout"
+// bug: a bare `ssh <iid>` (and `cloud exec <iid>`, which hands the token to
+// ssh) now resolves to the working proxy host instead of the blocked/stale
+// direct IP. Unlike the direct-IP block, this one DOES carry Port+HostName —
+// it must, because the id is not itself routable; it is keyed on the id (not
+// the IP) so it never hijacks another service. No trailing newline.
+pub fn vast_ssh_config_block_proxy(iid: str, host: str, port: str, identity: str) -> str {
+    return _vast_cfg_begin(iid) + "\n"
+        + "Host " + iid + "\n"
+        + "    HostName " + host + "\n"
+        + "    Port " + port + "\n"
+        + "    User root\n"
+        + "    IdentityFile " + identity + "\n"
+        + "    IdentitiesOnly yes\n"
+        + "    StrictHostKeyChecking no\n"
+        + "    UserKnownHostsFile /dev/null\n"
+        + _vast_cfg_end(iid)
+}
+
 // vast_ssh_config_splice — PURE + idempotent: given the existing ~/.ssh/config
 // text, return it with `ip`'s managed block inserted (or REPLACED if already
 // present). Any lines between this ip's begin/end markers are dropped first,
@@ -1042,15 +1064,92 @@ fn vast_ssh_config_ensure(ip: str, identity: str) -> int {
     return 1
 }
 
-// vast_ssh_config_autoinject — resolve the bare-IP endpoint for `iid` and (if
-// a vast key is available) write its ~/.ssh/config block. The single call the
+// vast_ssh_config_ensure_proxy — I/O: idempotently splice the id-keyed PROXY
+// Host block (vast_ssh_config_block_proxy) into ~/.ssh/config. Mirrors
+// vast_ssh_config_ensure but reuses the same marker-scoped splice (the block's
+// own begin/end markers are keyed on `iid`, so it replaces in place and never
+// collides with a direct-IP block). Returns 1 on write, 0 on no-op.
+fn vast_ssh_config_ensure_proxy(iid: str, host: str, port: str, identity: str) -> int {
+    if len(iid) == 0 || len(host) == 0 || len(port) == 0 || len(identity) == 0 {
+        return 0
+    }
+    let home = env_var("HOME")
+    if len(home) == 0 {
+        return 0
+    }
+    let ssh_dir = home + "/.ssh"
+    let _ = exec("mkdir -p " + _shq_local(ssh_dir) + " 2>/dev/null && chmod 700 " + _shq_local(ssh_dir) + " 2>/dev/null")
+    let cfg = ssh_dir + "/config"
+    let mut existing = ""
+    if file_exists(cfg) {
+        existing = read_file(cfg)
+    }
+    // The marker-scoped splice strips this iid's prior block (begin/end keyed on
+    // iid) then appends the fresh proxy block — idempotent across re-adopts.
+    let begin = _vast_cfg_begin(iid)
+    let end = _vast_cfg_end(iid)
+    let lines = existing.split("\n")
+    let mut kept = []
+    let mut skip = 0
+    let mut i = 0
+    while i < len(lines) {
+        let ln = lines[i]
+        if ln == begin {
+            skip = 1
+        } else {
+            if ln == end {
+                skip = 0
+            } else {
+                if skip == 0 {
+                    kept.push(ln)
+                }
+            }
+        }
+        i = i + 1
+    }
+    let mut base = ""
+    let mut j = 0
+    while j < len(kept) {
+        if j > 0 {
+            base = base + "\n"
+        }
+        base = base + kept[j]
+        j = j + 1
+    }
+    let block = vast_ssh_config_block_proxy(iid, host, port, identity)
+    let trimmed = base.trim()
+    let mut updated = block + "\n"
+    if len(trimmed) > 0 {
+        updated = trimmed + "\n\n" + block + "\n"
+    }
+    write_file(cfg, updated)
+    let _ = exec("chmod 600 " + _shq_local(cfg) + " 2>/dev/null")
+    return 1
+}
+
+// vast_ssh_config_autoinject — resolve the endpoint for `iid` and (if a vast
+// key is available) write its ~/.ssh/config block. The single call the
 // `rent`/`adopt` verbs use; safe no-op when no key / endpoint not yet mapped.
-// Returns the IP written, or "" when it skipped.
+// Returns the host written, or "" when it skipped.
+//
+// PROXY-FIRST (fix for `cloud exec <numeric-id>` → stale 2.65.x timeout):
+// prefer the LIVE vast proxy endpoint (`ssh*.vast.ai:<port>` from
+// vast_ssh_endpoint) and write an id-keyed Host block so `ssh <iid>` /
+// `cloud exec <iid>` reaches the working proxy. Only when the proxy is not yet
+// mapped do we fall back to the bare direct-IP block (the legacy `--direct`
+// heavy-chain path) — that block is still useful but must NOT be the default,
+// since a blocked/stale direct IP silently times out every numeric-id exec.
 pub fn vast_ssh_config_autoinject(iid: str) -> str {
     let identity = _vast_default_identity()
     if len(identity) == 0 {
         return ""
     }
+    let proxy = vast_ssh_endpoint(iid)
+    if proxy.ok == 1 {
+        let _ = vast_ssh_config_ensure_proxy(iid, proxy.host, proxy.port, identity)
+        return proxy.host
+    }
+    // proxy not mapped yet → fall back to the direct bare-IP block.
     let ep = vast_direct_endpoint(iid)
     if ep.ok == 0 {
         return ""
