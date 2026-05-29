@@ -591,3 +591,37 @@ PR #1677(acc8435a)이 `self/runtime.c` 에 박음 (tensor_kernels_emit.hexa 는 
 - handoff `97ee1245` (hexa-lang): GAP = `self/runtime_emit.hexa` SSOT 추가 OR runtime.c git-track
   OR float_to_bits def 를 fragment emitter 로 이동 → fresh-clone 빌드 reproducible 화.
 - residue 정리: ubu-2 `~/.hx/bin/self/*.c` 임시 symlink 제거 완료. mini `/tmp/htf` = 임시(자동 폐기).
+
+## 2026-05-29T20:28Z — branch-4 retry (cold-seed) RSS-churn 실측
+
+cold-seed default path (build_hexa_cli step0)로 ubu-2(x86_64·RTX 5070) `/tmp` fresh-clone
+(origin/main 71f49bc, 재확인 ef911fd4a 동일) 클린 빌드 시도. 결과: **stale-path 오진 일부 배제,
+그러나 float_to_bits LINK 벽은 REAL** — verdict `.verdicts/hexa-train-floor/M1M3-rss-live.txt`.
+
+### 콜드시드 트랜스파일러 = 정상 (branch-3 부분 오진 FALSIFIED)
+- `clang ... hexa_cc_seed.c -o build/hexat` RC=0 · smoke transpile OK.
+- 콜드시드 escape 입증: seed→`runtime.o`(main 무력화 `-Dmain=__seed_main_unused`)→emitter 링크로
+  runtime_core.c / runtime_hi_gen.c / 16 native fragment 전부 emitter SSOT 에서 재생성 성공.
+- seed L2-25196 (`amalgam BEGIN runtime.c`..`END`) 추출 → standalone `self/runtime.c`(1.13MB)
+  복원 → `clang -c` clean(.o 623KB). 즉 콜드시드는 runtime amalgam 복원까지 가능.
+
+### 그러나 float_to_bits 정의 부재가 최종 벽 (미션 전제 INVERSION)
+- 미션 전제 "seed 가 float_to_bits 6 DEFINE" → 실측 FALSE. 6 hits 전부 codegen emit-string
+  (`hexa_str("hexa_float_to_bits(")` L39261-40452). 함수 BODY 아님.
+- runtime.h L508-511 가 proto 선언, codegen 이 호출 EMIT, 그러나 정의(body)는 seed·재생성
+  runtime_core.c·runtime_core_emit.hexa·runtime*.hexa·warm runtime.o 전부 ZERO = dangling decl.
+- VERBATIM 재현: `float_to_bits(1.5)` user-prog → `undefined reference to 'hexa_float_to_bits'`
+  (콜드시드 갓-추출 runtime.c 링크 · stale 0). branch-3 LINK 실패와 동일, stale 원인 아님.
+- 본 로그 직전(prior branch-4) 진단과 합치: PR #1677(acc8435a)이 weak def 를 **top
+  self/runtime.c** 에 박았고 seed 는 #1677 이전 → 0 defs. top amalgam = emitter SSOT 부재 +
+  gitignored → fresh clone(콜드시드 포함) 으로 def-보유 runtime.c 재생성 수단 없음.
+
+### branch-4(real RSS-churn) = 이 cycle 도 unblock 안 됨
+- anima 디코더 트레이너는 float bit-reinterpret(quant/AKIDA-int4 pack) codegen → 위 link 벽 →
+  빌드 불가 → 1-step 미도달 → **HEXA_FARR_TRIM on/off per-step RSS Δ UNMEASURED (🟠)** →
+  M1/M3 churn-fix 🟢/🔴 판정 불가.
+- 선결: runtime SSOT(self/runtime_core_emit.hexa .c-text 또는 fragment emitter)에 4-함수
+  union-pun 정의 랜딩 + top `self/runtime.c` emitter-SSOT 화(HEXA-CC-ZERO.md L23·HEXA-BUILDFLOOR
+  M1 동일 gap). 그 후 콜드 full build → 트레이너 빌드 → RSS A/B 재시도.
+- residue: ubu-2 `/tmp/hexa-train-floor-b4` 임시 클론(자동 폐기). pod 미사용(GPU 불필요 — 빌드
+  벽에서 차단). 격리 worktree 만 사용, install/warm tree 무손상.
