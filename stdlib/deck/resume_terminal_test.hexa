@@ -85,7 +85,7 @@ fn main() {
     _has("real-terminal: done_q counts NON-EMPTY dynN (-s test)", rb, "[ -s \"$f\" ] && n=$((n+1))")
     _has("real-terminal: terminal needs dq == qt", rb, "[ \"$dq\" -eq \"$qt\" ]")
     // [p]h bracket trick — never self-matches, `.` not a wildcard (graph/phys).
-    _has("real-terminal: terminal needs no LIVE ph.x ([p]h bracket pgrep -fc)", rb, "pgrep -fc '[p]h[.]x -in ph[.]in'")
+    _has("real-terminal: terminal needs no LIVE ph.x ([p]h bracket, end-anchored pgrep -fc)", rb, "pgrep -fc '[p]h[.]x -in ph[.]in$'")
     // (3) anti-trap: completion is NOT decided by a bare JOB DONE grep.
     _hasnt("real-terminal: NO bare 'grep JOB DONE ph.out' completion", rb, "grep -q \"JOB DONE\" ph.out")
     _has("real-terminal: dynN<q-total OR live ph.x → NOT terminal path", rb, "NOT terminal:")

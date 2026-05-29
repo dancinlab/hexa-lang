@@ -397,7 +397,7 @@ fn _rtsc_resume_terminal_block(prefix: string) -> string {
     s = s + "  # (over-matches 'graph'/'phys'). Use the `[p]h` bracket trick: the literal\n"
     s = s + "  # pattern string never contains the substring it matches, so the pgrep / a\n"
     s = s + "  # monitor grep can't self-match — only a LIVE `ph.x -in ph.in` argv counts.\n"
-    s = s + "  local nph; nph=$(pgrep -fc '[p]h[.]x -in ph[.]in' 2>/dev/null || echo 0)\n"
+    s = s + "  local nph; nph=$(pgrep -fc '[p]h[.]x -in ph[.]in$' 2>/dev/null || echo 0)\n"
     s = s + "  [ \"$qt\" -gt 0 ] && [ \"$dq\" -eq \"$qt\" ] && [ \"$nph\" -eq 0 ]\n"
     s = s + "}\n"
     s = s + "# CORRUPT recover state — the PARTIAL_EL_PHON / closing-tag class in ph.out.\n"
