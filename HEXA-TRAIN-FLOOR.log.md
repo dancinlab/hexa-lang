@@ -2,6 +2,35 @@
 
 Append-only history sister of `HEXA-TRAIN-FLOOR.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-30 — 🟢 M8 gemv 게이트 rekey — cols 기준 → rows 기준 (M7 회귀 가드, RTX 5070 실측)
+
+M7이 #2122 게이트 키(`cols < HEXA_GEMV_CUBLAS_MIN_DIM`)를 부분 반증한 걸 닫음.
+진짜 성능 판별자 = `cols`(내적 차원)가 아니라 **rows**(출력 차원 = on-device
+커널의 #blocks). on-device 커널이 one-block-per-row 라 rows가 커지면 cuBLAS가
+이김.
+
+- [x] **재키잉**: `self/cuda/runtime_cuda_emit.hexa` `_hx_cuda_farr_packed_gemv_offset_gpu`
+  host wrapper의 분기를 `cols < min_dim` → **`rows < min_rows`**(default 512)로 변경.
+  env = 새 `HEXA_GEMV_CUBLAS_MIN_ROWS`(legacy `HEXA_GEMV_CUBLAS_MIN_DIM`은 rows
+  alias로 back-compat 유지). M7 crossover 근거 주석 동봉. 도움 doc 코멘트(~L1235)도
+  `rows`로 갱신. fp32(M6)·AKIDA-int4 경로 무손상(분기 위쪽 그대로).
+- [x] **방식 = 순수 rows 기준** (rows·cols 총-work 아님): M7 표가 rows가 단독 판별자임을
+  보임 — rows≤256이면 모든 cols(64~768)서 on-device 승, rows=768이면 모든 cols서
+  cuBLAS 승. cols는 결정을 뒤집지 않음 → rows-only가 정답. default 512는 측정된
+  win@256과 loss@768 사이.
+- [x] **검증**: `hexa_real parse self/cuda/runtime_cuda_emit.hexa` → clean.
+- [x] **실측 (ubu-2 RTX 5070, $0)** — `.verdicts/hexa-train-floor/M8-gate-rekey.txt`
+  (g5 verbatim). source = `tool/train_floor_m7/m8_gate_rekey.cu`(rekey된 게이트
+  decision + 동일 block-reduction 커널 + cublasDgemv byte-faithful 복제):
+  - **M7 회귀 케이스 rows=768·cols=64 → 게이트가 cuBLAS 선택**(7.8~8.0 vs on-device
+    10.8 us) = 회귀 제거 확인. ✅
+  - 작은 work(rows 16·64) → on-device 선택, 전부 더 빠름. ✅
+  - **default(512) 3-run 전부 `ANY_REGRESSION=NO`** = 무회귀 🟢. rows=256 corner는
+    coin-flip tie(M7 0.96, M8 default 3-run 모두 on-device 미세 우세) — default가
+    on-device로 두는 게 맞음. (override 256 sweep는 rows=256을 cuBLAS로 밀어 오히려
+    "gate가 더 빠른 on-device를 안 골랐다" YES가 떠 calibration 검증.)
+- [x] **g5/g3**: 무회귀가 실측(3-run NO)으로 확인 → 🟢. 과대주장 0.
+
 ## 2026-05-30 — 🟢🟠 M7 라이브 측정 — RTX 5070(ubu-2, pool, $0)서 1차 사이클 🟠 검증
 
 1차 사이클(M1~M6)의 🟠(static/분석) 클레임을 **실제 GPU(RTX 5070, ubu-2 pool 호스트,

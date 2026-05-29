@@ -1,0 +1,107 @@
+# M8-gate-rekey — RTX 5070 (ubu-2, pool host, $0) — 2026-05-29T19:19:37Z
+# host: ubu-2  GPU: NVIDIA GeForce RTX 5070 (driver 580)  nvcc 12.0  sm_90
+# source: tool/train_floor_m7/m8_gate_rekey.cu (faithful replica of the rekeyed
+#   self/cuda/runtime_cuda_emit.hexa:_hx_cuda_farr_packed_gemv_offset_gpu gate +
+#   _hx_k_packed_gemv_offset block-reduction kernel + cublasDgemv CUBLAS_OP_T)
+# axis: M8 gate rekey cols-based -> rows-based (M7 finding: rows is the predictor)
+# gate: on-device iff rows < HEXA_GEMV_CUBLAS_MIN_ROWS (default 512)
+# regression? = gate chose the >3%-slower path. KEY case = rows=768,cols=64.
+
+## DEFAULT gate (HEXA_GEMV_CUBLAS_MIN_ROWS unset -> 512) — 3 runs:
+### run $i
+# HEXA-TRAIN-FLOOR M8 gate-rekey verify — RTX 5070
+# rekeyed gate: on-device iff rows < HEXA_GEMV_CUBLAS_MIN_ROWS (default 512)
+# reps=4000 warmup=200  HX_RR_BLOCK=256
+# rows | cols | gate_picks | cublas_us | ondev_us | faster_path | regression?
+   16 |   64 |  ondevice |     7.293 |    5.957 |  ondevice | no
+   16 |  128 |  ondevice |     7.445 |    5.975 |  ondevice | no
+   16 |  256 |  ondevice |     7.848 |    6.084 |  ondevice | no
+   16 |  768 |  ondevice |    10.265 |    6.483 |  ondevice | no
+   64 |   64 |  ondevice |     7.763 |    6.257 |  ondevice | no
+   64 |  128 |  ondevice |     7.837 |    6.294 |  ondevice | no
+   64 |  256 |  ondevice |     7.902 |    6.527 |  ondevice | no
+   64 |  768 |  ondevice |    10.377 |    6.841 |  ondevice | no
+  256 |   64 |  ondevice |     7.291 |    7.288 |  ondevice | no
+  256 |  128 |  ondevice |     7.774 |    7.349 |  ondevice | no
+  256 |  256 |  ondevice |     8.445 |    7.883 |  ondevice | no
+  256 |  768 |  ondevice |    10.569 |    8.397 |  ondevice | no
+  768 |   64 |    cublas |     8.017 |   10.804 |    cublas | no
+  768 |  128 |    cublas |     8.651 |   10.814 |    cublas | no
+  768 |  256 |    cublas |     8.908 |   11.292 |    cublas | no
+  768 |  768 |    cublas |    11.680 |   12.855 |    cublas | no
+# ANY_REGRESSION=NO
+### run $i
+# HEXA-TRAIN-FLOOR M8 gate-rekey verify — RTX 5070
+# rekeyed gate: on-device iff rows < HEXA_GEMV_CUBLAS_MIN_ROWS (default 512)
+# reps=4000 warmup=200  HX_RR_BLOCK=256
+# rows | cols | gate_picks | cublas_us | ondev_us | faster_path | regression?
+   16 |   64 |  ondevice |     7.221 |    6.012 |  ondevice | no
+   16 |  128 |  ondevice |     7.792 |    6.021 |  ondevice | no
+   16 |  256 |  ondevice |     8.082 |    6.146 |  ondevice | no
+   16 |  768 |  ondevice |    10.166 |    6.477 |  ondevice | no
+   64 |   64 |  ondevice |     7.243 |    6.238 |  ondevice | no
+   64 |  128 |  ondevice |     7.793 |    6.312 |  ondevice | no
+   64 |  256 |  ondevice |     8.042 |    6.550 |  ondevice | no
+   64 |  768 |  ondevice |    10.220 |    6.841 |  ondevice | no
+  256 |   64 |  ondevice |     7.310 |    7.293 |  ondevice | no
+  256 |  128 |  ondevice |     7.677 |    7.366 |  ondevice | no
+  256 |  256 |  ondevice |     8.212 |    7.859 |  ondevice | no
+  256 |  768 |  ondevice |    10.314 |    8.495 |  ondevice | no
+  768 |   64 |    cublas |     7.982 |   10.802 |    cublas | no
+  768 |  128 |    cublas |     8.565 |   10.829 |    cublas | no
+  768 |  256 |    cublas |     8.995 |   11.280 |    cublas | no
+  768 |  768 |    cublas |    11.574 |   12.812 |    cublas | no
+# ANY_REGRESSION=NO
+### run $i
+# HEXA-TRAIN-FLOOR M8 gate-rekey verify — RTX 5070
+# rekeyed gate: on-device iff rows < HEXA_GEMV_CUBLAS_MIN_ROWS (default 512)
+# reps=4000 warmup=200  HX_RR_BLOCK=256
+# rows | cols | gate_picks | cublas_us | ondev_us | faster_path | regression?
+   16 |   64 |  ondevice |     7.274 |    5.966 |  ondevice | no
+   16 |  128 |  ondevice |     7.338 |    5.947 |  ondevice | no
+   16 |  256 |  ondevice |     7.812 |    6.095 |  ondevice | no
+   16 |  768 |  ondevice |    10.182 |    6.422 |  ondevice | no
+   64 |   64 |  ondevice |     7.233 |    6.182 |  ondevice | no
+   64 |  128 |  ondevice |     7.380 |    6.249 |  ondevice | no
+   64 |  256 |  ondevice |     7.820 |    6.503 |  ondevice | no
+   64 |  768 |  ondevice |    10.538 |    6.934 |  ondevice | no
+  256 |   64 |  ondevice |     7.563 |    7.197 |  ondevice | no
+  256 |  128 |  ondevice |     7.426 |    7.307 |  ondevice | no
+  256 |  256 |  ondevice |     7.965 |    7.879 |  ondevice | no
+  256 |  768 |  ondevice |    10.297 |    8.415 |  ondevice | no
+  768 |   64 |    cublas |     7.828 |   10.816 |    cublas | no
+  768 |  128 |    cublas |     8.371 |   10.840 |    cublas | no
+  768 |  256 |    cublas |     8.918 |   11.296 |    cublas | no
+  768 |  768 |    cublas |    11.524 |   12.820 |    cublas | no
+# ANY_REGRESSION=NO
+
+## env override sanity (HEXA_GEMV_CUBLAS_MIN_ROWS=256):
+# rows | cols | gate_picks | cublas_us | ondev_us | faster_path | regression?
+   16 |  256 |  ondevice |     7.903 |    6.103 |  ondevice | no
+   16 |  768 |  ondevice |    10.181 |    6.421 |  ondevice | no
+   64 |  256 |  ondevice |     7.827 |    6.488 |  ondevice | no
+   64 |  768 |  ondevice |    10.205 |    6.794 |  ondevice | no
+  256 |   64 |    cublas |     7.262 |    7.136 |  ondevice | no
+  256 |  128 |    cublas |     7.453 |    7.236 |  ondevice | YES
+  256 |  256 |    cublas |     7.972 |    7.827 |  ondevice | no
+  256 |  768 |    cublas |    10.369 |    8.500 |  ondevice | YES
+  768 |   64 |    cublas |     7.959 |   10.795 |    cublas | no
+  768 |  128 |    cublas |     8.625 |   10.825 |    cublas | no
+  768 |  256 |    cublas |     8.983 |   11.270 |    cublas | no
+  768 |  768 |    cublas |    11.588 |   12.791 |    cublas | no
+# ANY_REGRESSION=YES
+
+## legacy alias sanity (HEXA_GEMV_CUBLAS_MIN_DIM=256 honored as rows alias):
+   16 |  256 |  ondevice |     7.892 |    6.103 |  ondevice | no
+   16 |  768 |  ondevice |    10.177 |    6.417 |  ondevice | no
+   64 |  256 |  ondevice |     7.823 |    6.566 |  ondevice | no
+   64 |  768 |  ondevice |    10.219 |    6.810 |  ondevice | no
+  256 |   64 |    cublas |     7.284 |    7.156 |  ondevice | no
+  256 |  128 |    cublas |     7.455 |    7.253 |  ondevice | no
+  256 |  256 |    cublas |     7.971 |    7.911 |  ondevice | no
+  256 |  768 |    cublas |    10.474 |    8.521 |  ondevice | YES
+  768 |   64 |    cublas |     7.926 |   10.818 |    cublas | no
+  768 |  128 |    cublas |     8.602 |   10.798 |    cublas | no
+  768 |  256 |    cublas |     8.968 |   11.278 |    cublas | no
+  768 |  768 |    cublas |    11.582 |   12.808 |    cublas | no
+# ANY_REGRESSION=YES
