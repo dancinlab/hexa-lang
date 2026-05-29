@@ -588,6 +588,8 @@ struct PodRecord {
     provider:              str,    // "runpod" | "vast" | "ssh"
     created_at:            str,    // ISO-8601 UTC
     rented_by:             str,    // optional agent tag ("" if absent)
+    project:               str,    // owning project ("anima"/"demiurge"/...; "" = unattributed — cross-project down-guard source)
+    purpose:              str,    // free-form purpose/label ("" if absent; surfaces the existing adopt --purpose / rent --owner intent)
     ssh_host:              str,
     ssh_port:              str,
     status:                str,    // "RENTING" | "READY" | "STOPPING" | "GONE"
@@ -686,6 +688,8 @@ fn _m5_parse_records(body: str) -> [PodRecord] {
                 provider: _reg_field(rec, "provider"),
                 created_at: _reg_field(rec, "created_at"),
                 rented_by: _reg_field(rec, "rented_by"),
+                project: _reg_field(rec, "project"),
+                purpose: _reg_field(rec, "purpose"),
                 ssh_host: _reg_field(rec, "ssh_host"),
                 ssh_port: _reg_field(rec, "ssh_port"),
                 status: _reg_field(rec, "status"),
@@ -738,6 +742,8 @@ fn _m5_emit_record(r: PodRecord) -> str {
         + "\"provider\":\"" + _reg_jstr(r.provider) + "\","
         + "\"created_at\":\"" + _reg_jstr(r.created_at) + "\","
         + "\"rented_by\":\"" + _reg_jstr(r.rented_by) + "\","
+        + "\"project\":\"" + _reg_jstr(r.project) + "\","
+        + "\"purpose\":\"" + _reg_jstr(r.purpose) + "\","
         + "\"ssh_host\":\"" + _reg_jstr(r.ssh_host) + "\","
         + "\"ssh_port\":\"" + _reg_jstr(r.ssh_port) + "\","
         + "\"status\":\"" + _reg_jstr(r.status) + "\","
@@ -785,7 +791,7 @@ fn _m5_find(records: [PodRecord], pod_id: str) -> int {
 // pod_registry_add — register a freshly-rented pod. Idempotent on `id`
 // (same id → update in place, preserving created_at). Returns 1 on
 // success, 0 on empty id.
-fn pod_registry_add(pod_id: str, provider: str, ssh_host: str, ssh_port: str, status: str) -> int {
+fn pod_registry_add(pod_id: str, provider: str, project: str, purpose: str, ssh_host: str, ssh_port: str, status: str) -> int {
     if len(pod_id) == 0 {
         return 0
     }
@@ -798,13 +804,31 @@ fn pod_registry_add(pod_id: str, provider: str, ssh_host: str, ssh_port: str, st
     let agent_tag = env_var("HEXA_AGENT_TAG")
     let idx = _m5_find(records, pod_id)
     if idx >= 0 {
-        // update in place, preserve created_at
+        // update in place, preserve created_at + project/purpose attribution
+        // (a status flip / ssh-ready update must NOT erase the owning project;
+        // a non-empty incoming value overrides, "" keeps the prior).
         let prev = records[idx]
+        let mut proj = prev.project
+        if len(project) > 0 {
+            proj = project
+        }
+        let mut purp = prev.purpose
+        if len(purpose) > 0 {
+            purp = purpose
+        }
+        // Preserve a known provider when the caller passes "" (e.g. `adopt`
+        // stamping project/purpose without re-asserting the provider).
+        let mut prov = prev.provider
+        if len(provider) > 0 {
+            prov = provider
+        }
         records[idx] = PodRecord {
             id: pod_id,
-            provider: provider,
+            provider: prov,
             created_at: prev.created_at,
             rented_by: prev.rented_by,
+            project: proj,
+            purpose: purp,
             ssh_host: ssh_host,
             ssh_port: ssh_port,
             status: status,
@@ -819,6 +843,8 @@ fn pod_registry_add(pod_id: str, provider: str, ssh_host: str, ssh_port: str, st
             provider: provider,
             created_at: now,
             rented_by: agent_tag,
+            project: project,
+            purpose: purpose,
             ssh_host: ssh_host,
             ssh_port: ssh_port,
             status: status,
@@ -849,6 +875,8 @@ fn pod_registry_update_status(pod_id: str, status: str) -> int {
         provider: prev.provider,
         created_at: prev.created_at,
         rented_by: prev.rented_by,
+        project: prev.project,
+        purpose: prev.purpose,
         ssh_host: prev.ssh_host,
         ssh_port: prev.ssh_port,
         status: status,
@@ -884,6 +912,8 @@ fn pod_registry_set_limits(pod_id: str, ttl_sec: int, max_cost_usd: str, cost_pe
         provider: prev.provider,
         created_at: prev.created_at,
         rented_by: prev.rented_by,
+        project: prev.project,
+        purpose: prev.purpose,
         ssh_host: prev.ssh_host,
         ssh_port: prev.ssh_port,
         status: prev.status,

@@ -51,7 +51,7 @@ fn _t_main() {
 
     // ── F-CLOUD-M5-ATOMIC-WRITE ──────────────────────────────────────
     // Initial add — file should exist + be readable + chmod 600.
-    let ok1 = pod_registry_add("podA1", "runpod", "1.2.3.4", "22001", "READY")
+    let ok1 = pod_registry_add("podA1", "runpod", "anima", "rtsc-grind", "1.2.3.4", "22001", "READY")
     _t_assert(ok1 == 1, "F-CLOUD-M5-ATOMIC-WRITE: add returned 1")
     _t_assert(file_exists(path), "F-CLOUD-M5-ATOMIC-WRITE: file exists post-add")
     let perm = exec("stat -f %Lp " + path + " 2>/dev/null || stat -c %a " + path + " 2>/dev/null").trim()
@@ -66,6 +66,8 @@ fn _t_main() {
     _t_assert(recs[0].provider == "runpod", "F-CLOUD-M5-ATOMIC-WRITE: provider roundtrip")
     _t_assert(recs[0].ssh_host == "1.2.3.4", "F-CLOUD-M5-ATOMIC-WRITE: ssh_host roundtrip")
     _t_assert(recs[0].status == "READY", "F-CLOUD-M5-ATOMIC-WRITE: status roundtrip")
+    _t_assert(recs[0].project == "anima", "F-CLOUD-M5-ATOMIC-WRITE: project roundtrip")
+    _t_assert(recs[0].purpose == "rtsc-grind", "F-CLOUD-M5-ATOMIC-WRITE: purpose roundtrip")
     // M2/M3 reserved fields default-init.
     _t_assert(recs[0].ttl_sec == -1, "F-CLOUD-M5-ATOMIC-WRITE: ttl_sec=-1 default")
     _t_assert(recs[0].cumulative_cost_usd == "0.0", "F-CLOUD-M5-ATOMIC-WRITE: cum_cost=0.0 default")
@@ -91,7 +93,7 @@ fn _t_main() {
     // return a FULL valid state (not a half-written file). We enforce
     // this by checking len() is always coherent (1 or 2 or 1 again after
     // remove) and parse never crashes.
-    let _ = pod_registry_add("podB2", "vast", "5.6.7.8", "11038", "READY")
+    let _ = pod_registry_add("podB2", "vast", "demiurge", "el-ph", "5.6.7.8", "11038", "READY")
     let mid = pod_registry_load()
     _t_assert(len(mid) == 2, "F-CLOUD-M5-CONCURRENT-READ: 2 recs after second add")
 
