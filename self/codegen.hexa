@@ -4854,7 +4854,17 @@ fn _collect_plus_parts(node) {
 fn gen2_expr(node) {
     let k = node.kind
 
-    if k == "IntLit" { return "hexa_int(" + node.value + ")" }
+    // UNSHADOW #2 — cross-layer inline pilot: lower an integer literal to a
+    // C compound literal `((HexaVal){.tag=TAG_INT,.i=(N)})` instead of an
+    // out-of-line `hexa_int(N)` call. The boxing of a literal int has no side
+    // effects, so this removes the opaque C-ABI call boundary and lets
+    // clang -O2 const-fold / propagate the HexaVal through downstream
+    // expressions (e.g. `hexa_add(hexa_int(1), hexa_int(2))` can fold to a
+    // single immediate pair). DOUBLE-EVAL SAFE: `node.value` is a pure literal
+    // token, never an expression with side effects, so the single textual
+    // expansion is the only evaluation. Byte-equivalent to hexa_int():
+    // runtime.c:1231 `hexa_int(n)` returns exactly `{ .tag = TAG_INT, .i = n }`.
+    if k == "IntLit" { return "((HexaVal){.tag=TAG_INT,.i=(" + node.value + ")})" }
     if k == "FloatLit" { return "hexa_float(" + node.value + ")" }
     if k == "BoolLit" {
         if node.value == "true" { return "hexa_bool(1)" }

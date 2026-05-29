@@ -1,0 +1,44 @@
+// UNSHADOW #2 — cross-layer inline pilot micro-bench (integer-literal boxing).
+//
+// Hammers integer-literal-heavy arithmetic in a hot loop (with warmup) to
+// measure the effect of inlining the `hexa_int(N)` runtime primitive at its
+// call site. The BEFORE arm transpiles each `IntLit` to an out-of-line
+// `hexa_int(N)` C-ABI call; the AFTER arm (this branch's codegen.hexa edit)
+// transpiles it to a `((HexaVal){.tag=TAG_INT,.i=(N)})` compound literal,
+// removing the opaque call boundary so clang -O2 can const-fold and propagate.
+//
+// Measurement protocol (host = pool `mini`, macOS arm64):
+//   transpile with hexat_base (origin/main) and hexat_mine (this branch),
+//   clang -O2 compile-then-link against the SAME precompiled runtime.o,
+//   then interleave 5 timed runs of each binary.
+//
+// Result (2026-05-29): base ~1.83 s, mine ~1.31 s  →  ~28% faster, stable.
+//   Hot-loop `bl _hexa_int` call instructions: 13 (base) → 5 (mine) at -O2.
+//   Program output byte-identical (md5 5dd08ae3...; g5 correctness gate PASS).
+
+fn hot(n) {
+    let mut acc = 0
+    let mut i = 0
+    while i < n {
+        acc = acc + (i * 3 + 7) - (i * 2 + 5) + 1
+        i = i + 1
+    }
+    return acc
+}
+
+fn main() {
+    // warmup
+    let mut warm = 0
+    while warm < 3 {
+        hot(1000000)
+        warm = warm + 1
+    }
+    // timed body
+    let mut r = 0
+    let mut rounds = 0
+    while rounds < 200 {
+        r = r + hot(1000000)
+        rounds = rounds + 1
+    }
+    println(r)
+}
