@@ -1,0 +1,114 @@
+VERDICT: demiurge CLI migration — 3 remaining verbs blocked on 3 hexa stdlib capabilities
+HANDOFF: 7e45e583 (demiurge → hexa-lang), status open
+SLUG: demi-cli-migration-3-stdlib-caps
+DATE: 2026-05-30
+SCOPE: hexa-lang STDLIB SIDE ONLY (demiurge owns the consumer; not touched)
+
+HANDOFF VERBATIM:
+  "demi CLI 마이그레이션 잔여 3 verb (action·llm·emit-component) blocked on missing
+   hexa stdlib infra: (1) Keychain FFI binding (SecItemAdd/SecItemCopyMatching) for
+   llm secret storage, (2) an HTTP/URLSession-equiv client for live LLM calls, (3)
+   the engine-producer subprocess + timestamped exports/ record-emit layer (action
+   dispatches to yosys/ngspice/gmsh/pvlib/FreeCAD + claude-CLI). 21/24 demi verbs
+   already hexa-native byte-identical (#517-531)."
+
+VERB → CAPABILITY MAP:
+  llm           → (1) Keychain  + (2) HTTP client
+  action        → (3) subprocess + timestamped exports/ record layer
+  emit-component→ (2) HTTP (likely) / general
+
+═══════════════════════════════════════════════════════════════════════════════
+CAP (1) — KEYCHAIN CREDENTIAL STORE
+═══════════════════════════════════════════════════════════════════════════════
+EXISTS (before this cycle): NOTHING. No hexa stdlib keychain/secret/SecItem
+  surface. (The `secret` skill / ~/.local/bin/secret is a bash CLI, not hexa.)
+GAP: a get/set/delete credential surface callable from hexa.
+HANDOFF FRAMING vs REALITY: handoff says "SecItemAdd/SecItemCopyMatching FFI".
+  That OVERSTATES it. hexa HAS C FFI (stdlib/c_ffi.hexa: extern fn + @link
+  framework) so SecItem CAN be bound — BUT it needs CFDictionary/CFString/
+  CFTypeRef marshalling (a multi-call CoreFoundation arc). The canonical g1
+  hexa-native path is a shellout to the base-installed macOS `security` CLI —
+  the SAME pattern stdlib/http.hexa (curl) and stdlib/proc.hexa (shell) use, and
+  exactly what the existing `secret` bash CLI does:
+    security {find,add,delete}-generic-password -a <key> -s <service> [-w] ...
+  NO new C FFI intrinsic, NO 4-surface registration (codegen/_is_builtin/
+  runtime_core.c/bind.hexa) is required — those would only be needed for a raw
+  SecItem extern-fn path, which buys nothing over the CLI for generic-password.
+SIZE: 1 PR. *** SMALLEST / most self-contained → FIRST INCREMENT (LANDED). ***
+DESIGN: stdlib/keychain.hexa — keychain_get / keychain_get_status / keychain_set
+  / keychain_delete / keychain_has / keychain_available + pure command-builders
+  (keychain_build_{get,set,delete}_cmd) for golden-fixture testing.
+
+═══════════════════════════════════════════════════════════════════════════════
+CAP (2) — HTTP / URLSession-EQUIV CLIENT
+═══════════════════════════════════════════════════════════════════════════════
+EXISTS (already, substantial — NEARLY DONE):
+  · stdlib/http.hexa (223L) — http_get_with_headers / _status,
+    http_post_with_headers / _status (curl shellout, header-map support, status
+    extraction). This is the LLM-call surface: POST + bearer header + JSON body.
+  · stdlib/net/http_client.hexa (126L) — no-header GET (http_get / http_get_status).
+  · stdlib/http_sse.hexa, http2.hexa, websocket.hexa — streaming variants present.
+GAP: minimal. The live-LLM POST path (auth header + JSON body + status) is
+  ALREADY covered by http_post_with_headers_status. Remaining work is a thin
+  ADAPTER/convenience (e.g. an llm_post(provider, model, messages) wrapper that
+  composes keychain_get → http_post_with_headers_status → json_parse), plus
+  optionally SSE streaming-token consumption if demi wants token streaming (the
+  primitive http_sse.hexa exists; a streaming-decode helper may be needed).
+SIZE: ~1 PR (adapter), OR 0 if demi calls http.hexa directly. NOT greenfield.
+
+═══════════════════════════════════════════════════════════════════════════════
+CAP (3) — ENGINE-PRODUCER SUBPROCESS + TIMESTAMPED exports/ RECORD LAYER
+═══════════════════════════════════════════════════════════════════════════════
+EXISTS (subprocess half — substantial):
+  · stdlib/proc.hexa (481L) — proc_run_with_stdin, proc_run_json_bridge,
+    proc_spawn_supervised (setsid/nohup detach + .resource lease-TTL),
+    proc_kill/reap/alive. The "dispatch to yosys/ngspice/gmsh/pvlib/FreeCAD +
+    claude-CLI" subprocess need is covered by exec() + proc_run_with_stdin +
+    proc_run_json_bridge. Engine-producer = run engine, capture stdout/JSON.
+GAP (record-emit half — GREENFIELD but small): the "timestamped exports/ record
+  layer" — a helper that writes a run record to exports/<domain>/<slug>/<ts>/
+  with inputs + captured stdout + exit-status + metadata manifest. No dedicated
+  stdlib module owns this today (each domain hand-rolls exports/ writes; cf.
+  /deck stdlib/deck/gen.hexa emits exports/<domain>/decks/<slug>/ but is
+  deck-specific). A generic stdlib/record.hexa (record_open(slug) → ts-stamped
+  dir, record_write(name, content), record_capture(cmd) → run+log+manifest,
+  record_finalize() → status.json) is the missing piece.
+SIZE: subprocess = DONE; record layer = 1 small PR (greenfield, pure fs_write +
+  exec, parse-gate-verifiable, no FFI). Mid-size overall.
+
+═══════════════════════════════════════════════════════════════════════════════
+FIRST INCREMENT (THIS CYCLE)
+═══════════════════════════════════════════════════════════════════════════════
+PICKED: CAP (1) Keychain — smallest, fully self-contained, greenfield, zero new
+  C surface, parse-gate + isolated-logic-test verifiable.
+LANDED: stdlib/keychain.hexa + stdlib/test/test_keychain.hexa
+VERIFY:
+  · parse-gate: `hexa parse stdlib/keychain.hexa`       → OK parses cleanly
+  · parse-gate: `hexa parse stdlib/test/test_keychain.hexa` → OK parses cleanly
+  · isolated logic test (single-file build, HEXA_MAC_BUILD_OK=1): ALL PASS (8/8)
+      get/set/delete command-builders byte-exact · shell-escape neutralizes '
+      · rc-sentinel parse (0→ok, 44→miss, no-marker→false)
+  · LIVE contract smoke against throwaway keychain: set→get returns exact value,
+    delete→miss yields rc=44. The module emits exactly these invocations.
+
+═══════════════════════════════════════════════════════════════════════════════
+RECOMMENDED BUILD ORDER FOR REMAINING CAPS
+═══════════════════════════════════════════════════════════════════════════════
+  [DONE] CAP 1 Keychain         — stdlib/keychain.hexa (this PR)
+  [NEXT] CAP 2 HTTP adapter     — thin llm_post() composing keychain_get +
+                                  http_post_with_headers_status + json_parse;
+                                  primitives already exist. ~1 PR. Unblocks `llm`.
+                                  (Optional follow: SSE streaming-decode helper.)
+  [THEN] CAP 3 record layer     — stdlib/record.hexa (timestamped exports/ run
+                                  records). Subprocess half already in proc.hexa.
+                                  ~1 PR greenfield. Unblocks `action`.
+  Rationale: 1 unblocks `llm`'s secret half immediately + is risk-free; 2 is the
+  smallest remaining (mostly composition) and finishes `llm`; 3 is the last
+  greenfield write and finishes `action`/`emit-component`.
+
+HANDOFF 7e45e583 STATUS: STAYS OPEN (not all 3 delivered). Sharpened: cap (1)
+  delivered; caps (2)/(3) re-scoped DOWN — (2) is ~done (adapter only), (3)
+  subprocess done + small record layer remaining. The "needs 3 stdlib
+  capabilities" framing was accurate in spirit but 2 of 3 are mostly built; the
+  true remaining greenfield surface is ~2 small PRs, not 3 large arcs. No
+  SecItem C-FFI intrinsic arc is required (handoff framing corrected).

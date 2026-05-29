@@ -1,0 +1,198 @@
+// stdlib/keychain.hexa — macOS Keychain credential store via the `security` CLI
+//
+// @module(slug="stdlib-keychain", desc="generic-password get/set/delete via the macOS `security` CLI shellout")
+// @usage(import stdlib/keychain; let k = keychain_get("dancinlab.secret", "openai.api_key"))
+//
+// ── module governance metadata (hexa-lang module versioning spec 2026-05-03) ──
+// @version 0.1.0
+// @capabilities [keychain_get, keychain_get_status, keychain_set, keychain_delete,
+//                keychain_has, keychain_available, keychain_build_get_cmd,
+//                keychain_build_set_cmd, keychain_build_delete_cmd]
+// @stability preview
+// @since 2026-05-30
+// @maintainer hexa-lang-core
+// @priority P1
+// Versioning policy: docs/hexa_lang_module_versioning_spec_2026_05_03.md
+//
+// PROBLEM (demiurge CLI `llm` verb ↔ secret storage — handoff 7e45e583)
+//   The demiurge `llm` verb stores / reads provider API keys in the macOS
+//   Keychain. The Swift cockpit used SecItemAdd / SecItemCopyMatching
+//   directly. hexa-lang had NO credential-storage stdlib surface, so the
+//   `llm` verb's hexa-native port was blocked.
+//
+// FIX (additive, no runtime.c change, no new C FFI intrinsic)
+//   The canonical g1 hexa-native path is a shellout to the base-installed
+//   macOS `security` CLI — IDENTICAL pattern to stdlib/http.hexa (curl) and
+//   stdlib/proc.hexa (shell). The dedicated `secret` CLI (~/.local/bin/secret)
+//   already proves this exact backing: it wraps
+//     security {find,add,delete}-generic-password -a <key> -s <service> ...
+//   We bind the same three verbs as a pure-hexa wrapper. NO SecItem FFI is
+//   needed for generic-password credentials — `security(1)` is the supported
+//   command-line surface for the same Keychain Services calls.
+//
+// WHY NOT SecItemAdd / SecItemCopyMatching via extern fn (the handoff text)
+//   hexa HAS C FFI (stdlib/c_ffi.hexa: extern fn + @link framework). Binding
+//   Security.framework SecItemAdd directly is possible but needs CFDictionary
+//   construction (CFStringCreate, CFDictionaryCreate, CFTypeRef marshalling) —
+//   a multi-call ObjC/CoreFoundation arc for zero functional gain over the
+//   `security` CLI, which Apple ships and supports. The CLI shellout is the
+//   smaller, portable-by-the-same-constraint, parse-gate-verifiable surface.
+//
+// Breaking risk: 0. New module, new symbols.
+//
+// Caveats (C3):
+//   · macOS only. `security` is a Darwin binary; keychain_available() probes
+//     for it so callers can branch (Linux → env-var / secret-file fallback).
+//   · Keys / service / values are shell-escaped (single-quote wrap). A value
+//     containing a literal NUL byte is unsafe (hexa-string truncation; same
+//     caveat as stdlib/http.hexa request bodies).
+//   · keychain_get returns "" on miss AND on error — indistinguishable.
+//     Use keychain_get_status for {ok, value, found} when the distinction
+//     matters (e.g. "key absent" vs "keychain locked").
+//   · A locked keychain may surface an interactive unlock GUI prompt; callers
+//     in headless contexts should `security unlock-keychain` upstream.
+//
+// hexa-only-strict: pure hexa wrapper; exec("security ...") shellout, no new
+//   C builtin, no FFI. Mirrors stdlib/http.hexa exactly.
+
+// _kc_shell_escape — single-quote wrap with internal quote escape.
+// Identical pattern to stdlib/http.hexa::_http_shell_escape; duplicated here
+// so this module imports nothing (resolver simplicity + private_fn_collision
+// lint: module-prefixed name keeps both authoritative).
+fn _kc_shell_escape(s: string) -> string {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+// _kc_keychain_flag — optional explicit keychain file path. Empty → use the
+// default search list. A non-empty path is appended as the trailing keychain
+// argument that `security {find,delete}-generic-password` accept.
+fn _kc_keychain_flag(keychain_path: string) -> string {
+    if len(keychain_path) == 0 { return "" }
+    return " " + _kc_shell_escape(keychain_path)
+}
+
+// keychain_available() -> bool
+//
+// Probe for the macOS `security` binary. Linux / containers return false so
+// callers can fall back to env vars or a secret file without an exec error.
+pub fn keychain_available() -> bool {
+    let out = to_string(exec("command -v security >/dev/null 2>&1 && echo y || echo n")).trim()
+    return out == "y"
+}
+
+// keychain_build_get_cmd — deterministic `security find-generic-password`
+// command string. Pure transform, no exec(); exposed for golden-fixture tests.
+//   -a <account/key>  -s <service>  -w (password only)  [<keychain>]
+pub fn keychain_build_get_cmd(service: string, key: string, keychain_path: string) -> string {
+    return "security find-generic-password -a " + _kc_shell_escape(key)
+         + " -s " + _kc_shell_escape(service)
+         + " -w" + _kc_keychain_flag(keychain_path)
+}
+
+// keychain_build_set_cmd — deterministic `security add-generic-password`
+// command string. `-U` updates in place if the item already exists.
+pub fn keychain_build_set_cmd(service: string, key: string, value: string, keychain_path: string) -> string {
+    return "security add-generic-password -a " + _kc_shell_escape(key)
+         + " -s " + _kc_shell_escape(service)
+         + " -w " + _kc_shell_escape(value)
+         + " -U" + _kc_keychain_flag(keychain_path)
+}
+
+// keychain_build_delete_cmd — deterministic `security delete-generic-password`.
+pub fn keychain_build_delete_cmd(service: string, key: string, keychain_path: string) -> string {
+    return "security delete-generic-password -a " + _kc_shell_escape(key)
+         + " -s " + _kc_shell_escape(service)
+         + _kc_keychain_flag(keychain_path)
+}
+
+// keychain_get(service, key) -> string
+//
+// Body-only get against the default keychain search list. Returns the stored
+// password, or "" on miss / locked / error. For the found-vs-error
+// distinction use keychain_get_status.
+pub fn keychain_get(service: string, key: string) -> string {
+    let r = keychain_get_status(service, key, "")
+    return to_string(r["value"])
+}
+
+// keychain_get_status(service, key, keychain_path) -> map
+//
+// Full {ok, value, found}. `keychain_path` "" = default search list.
+//   ok    : bool — security exited 0 AND a non-empty value was returned
+//   value : string — the password ("" on miss/error)
+//   found : bool — alias of ok; named for call-site readability
+//
+// security writes the password to stdout with `-w` and exits 44 on miss.
+// We append `; echo "::rc=$?"` so the wrapper can read the exit status
+// from stdout without a separate exec round-trip.
+pub fn keychain_get_status(service: string, key: string, keychain_path: string) {
+    let result = #{}
+    result["ok"] = false
+    result["value"] = ""
+    result["found"] = false
+    if len(service) == 0 || len(key) == 0 { return result }
+
+    let cmd = keychain_build_get_cmd(service, key, keychain_path) + " 2>/dev/null; echo \"::rc=$?\""
+    let raw = to_string(exec(cmd))
+    let marker = "::rc="
+    let mi = raw.last_index_of(marker)
+    if mi < 0 { return result }
+    let value = raw.substring(0, mi)
+    let rc_str = raw.substring(mi + len(marker), len(raw)).trim()
+    let rc = to_int(rc_str)
+
+    // security emits the password followed by a trailing newline; strip it.
+    let mut v = value
+    if len(v) > 0 && v.substring(len(v) - 1, len(v)) == "\n" {
+        v = v.substring(0, len(v) - 1)
+    }
+    let ok = rc == 0
+    result["ok"] = ok
+    result["value"] = v
+    result["found"] = ok
+    return result
+}
+
+// keychain_set(service, key, value) -> bool
+//
+// Store / update (`-U`) a generic-password item in the default keychain.
+// Returns true on exit 0. A locked or missing default keychain → false.
+pub fn keychain_set(service: string, key: string, value: string) -> bool {
+    if len(service) == 0 || len(key) == 0 { return false }
+    let cmd = keychain_build_set_cmd(service, key, value, "") + " >/dev/null 2>&1; echo \"::rc=$?\""
+    let raw = to_string(exec(cmd))
+    return _kc_rc_ok(raw)
+}
+
+// keychain_delete(service, key) -> bool
+//
+// Remove a generic-password item. Returns true on exit 0; false on miss
+// (security exits 44 when no matching item exists) — idempotent-friendly:
+// callers wanting "ensure absent" can ignore the false-on-miss.
+pub fn keychain_delete(service: string, key: string) -> bool {
+    if len(service) == 0 || len(key) == 0 { return false }
+    let cmd = keychain_build_delete_cmd(service, key, "") + " >/dev/null 2>&1; echo \"::rc=$?\""
+    let raw = to_string(exec(cmd))
+    return _kc_rc_ok(raw)
+}
+
+// keychain_has(service, key) -> bool — existence probe without leaking the
+// value into a return string (find-generic-password without `-w`).
+pub fn keychain_has(service: string, key: string) -> bool {
+    if len(service) == 0 || len(key) == 0 { return false }
+    let cmd = "security find-generic-password -a " + _kc_shell_escape(key)
+            + " -s " + _kc_shell_escape(service)
+            + " >/dev/null 2>&1; echo \"::rc=$?\""
+    let raw = to_string(exec(cmd))
+    return _kc_rc_ok(raw)
+}
+
+// _kc_rc_ok — read the `::rc=<n>` sentinel from a captured buffer; true iff 0.
+// Pure string parse, no exec(); shared by set/delete/has + testable directly.
+fn _kc_rc_ok(raw: string) -> bool {
+    let marker = "::rc="
+    let mi = raw.last_index_of(marker)
+    if mi < 0 { return false }
+    let rc_str = raw.substring(mi + len(marker), len(raw)).trim()
+    return to_int(rc_str) == 0
+}
