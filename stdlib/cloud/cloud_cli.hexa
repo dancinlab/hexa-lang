@@ -14,6 +14,7 @@ use "stdlib/cloud/vast"
 use "stdlib/cloud/runpod"
 use "stdlib/cloud/dft_dispatch"
 use "stdlib/cloud/pods_local"
+use "stdlib/cloud/parallel_audit"
 use "stdlib/cloud/providers_catalog"
 use "stdlib/sys"
 
@@ -62,6 +63,7 @@ fn _cloud_help() {
     println("                                                         also cross-refs ./pods.json budget.cap: on breach → alert + (with --kill) tear down the lowest-value running pod (g64 honor-cap)")
     println("                                                         bare = DRY-RUN table (pod·age·util·has-proc·has-workdir·idle?·action); --kill enforces (needs RUNPOD_API_KEY / vast key)")
     println("  cloud dft-run   <deck-dir> [--go] [--query Q] [--walltime-h N] [--identity P] [--image I] [--disk G] [--owner T]")
+    println("  cloud parallel-audit --physcores N --live-jobs N --ranks-per-job N --queued-decks N  (d_parallel_fire 위반 가드 — VIOLATION→exit1+split 제안)")
     println("                                                         guarded DFT el-ph (QE) dispatch; PREVIEW ($0) unless --go. deck: relax.in·ph.in·scf.in.head·scf.in.tail·pseudo/")
     println("  cloud pods                                              full work table from cwd's ./pods.json (per-project active pod/job manifest)")
     println("  cloud dispatch [tree|active|add|verdict|rm]            manage ./pods.json (update-form): bare = full table")
@@ -1469,7 +1471,7 @@ fn main() {
     while i < len(av) {
         let t = av[i]
         if si < 0 {
-            if t == "rent" || t == "up" || t == "rm" || t == "down" || t == "destroy" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "fire" || t == "poll" || t == "tail" || t == "watch" || t == "ssh-port" || t == "resolve" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "reap" || t == "adopt" || t == "forget" || t == "dft-run" || t == "pods" || t == "dispatch" || t == "providers" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
+            if t == "rent" || t == "up" || t == "rm" || t == "down" || t == "destroy" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "fire" || t == "poll" || t == "tail" || t == "watch" || t == "ssh-port" || t == "resolve" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "reap" || t == "adopt" || t == "forget" || t == "dft-run" || t == "parallel-audit" || t == "pods" || t == "dispatch" || t == "providers" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
                 si = i
                 sub = t
             }
@@ -1615,6 +1617,14 @@ fn main() {
         let _bg = _watchdog_budget_guard(m23_key, m23_kill)
         // Legacy runpod util sweep (kept for the runpodctl-only path / back-compat).
         let rc = watchdog_run(av, si + 1)
+        exit(rc)
+    }
+    if sub == "parallel-audit" {
+        // d_parallel_fire 위반 가드 (T2). pod 의 live state 를 flag 로 받아
+        // single-pod-sequential-queue 위반(1 live job + queued decks + spare
+        // cores)을 순수 감사하고, VIOLATION → exit 1 + split 제안 · OK → exit 0.
+        // 네트워크/pod 접근 없음 — 호출자가 physcores/live/ranks/queued 를 전달.
+        let rc = parallel_audit_run(av, si + 1)
         exit(rc)
     }
     if sub == "dft-run" {

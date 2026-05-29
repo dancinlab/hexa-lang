@@ -1,0 +1,75 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+//
+// stdlib/cloud/parallel_audit_test.hexa — d_parallel_fire 위반 가드
+// (parallel_audit.hexa, project.tape T2) 의 selftest.
+//
+// 단언:
+//   - mock pod (8 live ranks / 128 cores / 9 queued decks, deck당 8 ranks)
+//     → VIOLATION. message 가 split 제안(몇 개 더 동시 발사)을 명시.
+//   - full pod (live ranks == physcores: 16 live jobs × 8 ranks = 128)
+//     → OK (여유 core 없음).
+//   - single-deck-on-small-pod (1 live / 8 cores / 0 queued) → OK.
+//
+// Run:   hexa run stdlib/cloud/parallel_audit_test.hexa
+// PASS:  exits 0, prints "parallel_audit_test PASS".
+use "stdlib/cloud/parallel_audit"
+
+fn _check(case: str, got: int, want: int) {
+    if got != want {
+        println("  FAIL: " + case + " — got " + to_string(got) + " want " + to_string(want))
+        exit(1)
+    }
+    println("  ok: " + case)
+}
+
+fn _has(s: str, t: str) -> int {
+    if s.contains(t) {
+        return 1
+    }
+    return 0
+}
+
+fn main() {
+    // ── case 1: mock pod (8 ranks / 128 cores / 9 queued) → VIOLATION ──
+    // live_jobs=1 (8 ranks = deck 1개), ranks_per_job=8, queued=9.
+    let v = dft_parallel_audit(128, 1, 8, 9)
+    _check("8/128/9-queued: VIOLATION", v.violation, 1)
+    _check("8/128/9-queued: spare_cores = 120", v.spare_cores, 120)
+    _check("8/128/9-queued: free_slots = 15", v.free_slots, 15)
+    _check("8/128/9-queued: message says VIOLATION", _has(v.message, "VIOLATION"), 1)
+    // split 제안 명시 — "SPLIT NOW" + 추가 발사 개수(min(9,15)=9) + concurrent
+    _check("8/128/9-queued: message names the split", _has(v.message, "SPLIT NOW"), 1)
+    _check("8/128/9-queued: split = launch 9 more (min(9,15))", _has(v.message, "launch 9 more"), 1)
+    _check("8/128/9-queued: split → 10 concurrent jobs", _has(v.message, "10 concurrent jobs"), 1)
+    _check("8/128/9-queued: suggests fill_plan launch", _has(v.message, "dft_fill_plan"), 1)
+
+    // ── case 2: full pod (live ranks == physcores) → OK ───────────────
+    // 16 live jobs × 8 ranks = 128 cores fully used, 5 queued.
+    let f = dft_parallel_audit(128, 16, 8, 5)
+    _check("full-pod: OK (not violation)", f.violation, 0)
+    _check("full-pod: spare_cores = 0", f.spare_cores, 0)
+    _check("full-pod: message OK", _has(f.message, "OK"), 1)
+    // live_jobs != 1 → 이미 병렬
+    _check("full-pod: message says already parallel", _has(f.message, "already parallel"), 1)
+
+    // ── case 3: single-deck-on-small-pod → OK ─────────────────────────
+    // 1 live job / 8 cores / 0 queued — 대기 deck 없음.
+    let s = dft_parallel_audit(8, 1, 8, 0)
+    _check("single-small: OK (not violation)", s.violation, 0)
+    _check("single-small: message OK", _has(s.message, "OK"), 1)
+    _check("single-small: reason = no queued decks", _has(s.message, "no queued decks"), 1)
+
+    // ── case 4: single job, queued, but no spare core → OK ────────────
+    // 1 live × 8 ranks on an 8-core pod, 3 queued — 여유 core 없음.
+    let n = dft_parallel_audit(8, 1, 8, 3)
+    _check("1-job-full-small-pod: OK (no spare core)", n.violation, 0)
+    _check("1-job-full-small-pod: reason = no spare core", _has(n.message, "no spare core"), 1)
+
+    // ── case 5: d4 generic — 64-core, 1 live(4 ranks), 12 queued → VIOLATION
+    let g = dft_parallel_audit(64, 1, 4, 12)
+    _check("64/1live4/12-queued: VIOLATION", g.violation, 1)
+    _check("64/1live4/12-queued: free_slots = 15", g.free_slots, 15)
+    _check("64/1live4/12-queued: split = launch 12 more (min(12,15))", _has(g.message, "launch 12 more"), 1)
+
+    println("parallel_audit_test PASS")
+}
