@@ -36,6 +36,7 @@
 use "stdlib/cloud/cloud"
 use "stdlib/cloud/vast"
 use "stdlib/cloud/pod_registry"
+use "stdlib/io"  // write_text — atomic plaintext write of the .validated stamp (dft_run)
 
 // Bohr radius in angstrom — the QE `alat`→angstrom cell conversion factor
 // the recipe pins (CELL_PARAMETERS (alat=X) vectors × (X·BOHR_ANGSTROM)).
