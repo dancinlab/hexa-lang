@@ -5300,6 +5300,23 @@ fn gen2_expr(node) {
         // Go/Rust rule that `+` only applies to a number. Previously `+x`
         // mis-parsed to an empty map `{}`.
         if node.op == "+" {
+            // UNSHADOW 🔵 C — refinement-type tag-check ELISION (prove-then-delete).
+            // The numeric-operand guard below is a runtime tag-check. When the
+            // operand is PROVABLY TAG_INT or TAG_FLOAT at emit time (IntLit /
+            // FloatLit / immutable int|float-typed Ident — exactly what
+            // _is_known_int / _is_known_float certify), the guard predicate
+            // `!(HX_IS_INT||HX_IS_FLOAT||...)` is STATICALLY FALSE → the
+            // hexa_throw arm is dead. Unary `+` is numeric identity, so the
+            // statement-expr collapses to the operand itself. We DELETE the
+            // whole check and emit the operand directly. byte-identical: the
+            // elided branch was statically unreachable; the surviving value is
+            // `__upx == (_o)` exactly. EXACT guard (comptime-fold-shadow family
+            // hazard): elide ONLY on local _is_known proof — every other
+            // operand (unknown-tag Ident, Call, Field, …) keeps the full guard,
+            // so the general case is unchanged.
+            if _is_known_int(node.left) || _is_known_float(node.left) {
+                return "(" + gen2_expr(node.left) + ")"
+            }
             let _o = gen2_expr(node.left)
             return "({ HexaVal __upx = (" + _o + "); " +
                    "if (!(HX_IS_INT(__upx)||HX_IS_FLOAT(__upx)||HX_TAG(__upx)==TAG_CHAR)) " +
