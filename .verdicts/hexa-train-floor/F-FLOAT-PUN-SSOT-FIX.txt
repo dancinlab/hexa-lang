@@ -1,0 +1,76 @@
+F-FLOAT-PUN-SSOT-FIX — runtime-floor link-wall closure (handoff 18eb94c5)
+========================================================================
+🟢 NUMERICAL PASS — float-pun round-trip 3.14 == 3.14 + regen-contains-4-defs
+
+FALSIFIER (pre-registered)
+  The 4 float-pun functions are proto-only (self/runtime.h:508-511) with NO
+  emitter SSOT — the body existed only in the gitignored on-disk self/runtime.c
+  (PR #1677 weak def). A fresh clone regenerates runtime_core.c WITHOUT them, so
+  float-pun codegen (anima quantization / AKIDA int4) link-fails with undefined
+  symbols. FALSIFIER: a fresh-clone regen contains the 4 defs AND a float-pun
+  round-trip links+runs to 3.14. If the regen lacks them or the round-trip is
+  wrong → 🔴 (no handoff flip).
+
+METHOD
+  Land the 4 union-pun bodies into the CORE-tier emitter SSOT
+  self/runtime_core_emit.hexa, right after the hexa_float ctor emit (RFC 061
+  §4.1 HexaVal representation home). Bodies copied VERBATIM from the proven
+  on-disk runtime.c (build/self/runtime.c:13482-13494):
+    hexa_float_to_bits: union {double d; int64_t i;} u; u.d = HX_FLOAT(x); return hexa_int(u.i);
+    hexa_bits_to_float: union {int64_t i; double d;} u; u.i = HX_INT(x);   return hexa_float(u.d);
+    float_to_bits / bits_to_float = bare-name aliases (return hexa_*(x)).
+  Deps (HX_FLOAT·HX_INT·hexa_int·hexa_float) all defined within runtime_core.c
+  (L1031-1282) → self-contained. SELFEMIT-guard convention matched.
+
+VERIFICATION (ubu-2 / summer-B650M-K x86_64, BLOCKING ssh, fresh clones)
+
+  [regen diff — AFTER vs BEFORE = EXACTLY the insertion, nothing else]
+    1372a1373,1383
+    > extern HexaVal hexa_float_to_bits(HexaVal x);
+    > extern HexaVal hexa_bits_to_float(HexaVal x);
+    > extern HexaVal float_to_bits(HexaVal x);
+    > extern HexaVal bits_to_float(HexaVal x);
+    > #else
+    > HexaVal hexa_float_to_bits(HexaVal x) { union { double d; int64_t i; } u; u.d = HX_FLOAT(x); return hexa_int(u.i); }
+    > HexaVal hexa_bits_to_float(HexaVal x) { union { int64_t i; double d; } u; u.i = HX_INT(x); return hexa_float(u.d); }
+    > HexaVal float_to_bits(HexaVal x) { return hexa_float_to_bits(x); }
+    > HexaVal bits_to_float(HexaVal x) { return hexa_bits_to_float(x); }
+    > #endif
+    > #ifdef HEXA_RT_SELFEMIT
+
+  [BEFORE — fresh clone origin/main → regen runtime_core.c → grep 4 float-pun defs]
+    BEFORE_DEFS=0
+  [BEFORE — caller TU references float_to_bits/bits_to_float, origin/main rt provides 0 defs]
+    /usr/bin/ld: fpun_caller.c:(.text+0x6): undefined reference to `float_to_bits'
+    /usr/bin/ld: fpun_caller.c:(.text+0x11): undefined reference to `bits_to_float'
+    clang: error: linker command failed with exit code 1
+    BEFORE_LINK_EXIT=1                                        ← THE WALL (link-fail)
+
+  [AFTER — fresh clone worktree-agent-a40caca9bb385d9f2 → regen runtime_core.c → grep 4 defs]
+    1378:HexaVal hexa_float_to_bits(HexaVal x) { union { double d; int64_t i; } u; u.d = HX_FLOAT(x); return hexa_int(u.i); }
+    1379:HexaVal hexa_bits_to_float(HexaVal x) { union { int64_t i; double d; } u; u.i = HX_INT(x); return hexa_float(u.d); }
+    1380:HexaVal float_to_bits(HexaVal x) { return hexa_float_to_bits(x); }
+    1381:HexaVal bits_to_float(HexaVal x) { return hexa_bits_to_float(x); }
+    AFTER_DEFS_RC=0                                           ← regen CONTAINS the 4 defs
+
+  [AFTER — link caller + the 4 spliced defs from the regen]
+    AFTER_LINK_EXIT=0                                         ← links clean
+
+  [AFTER — float-pun round-trip 3.14 (the spliced defs from the AFTER regen)]
+    bits=4614253070214989087 roundtrip=3.1400000000000001 match=1
+    ROUNDTRIP_EXIT=0                                          ← 3.14 == 3.14 ✓
+
+FINDING
+  Δ vs baseline: origin/main regen = 0 float-pun defs → undefined-symbol link
+  fail (BEFORE). After landing the bodies in the emitter SSOT, a fresh-clone
+  regen of runtime_core.c contains all 4 defs and a float-pun round-trip links
+  and runs to 3.14 (4614253070214989087 → 3.1400000000000001 == 3.14). The
+  anima float-pun (quantization / AKIDA int4) link-wall is cleared at the SSOT
+  level — fresh clones now regenerate the bodies.
+
+  NOTE on scope of the proof: the round-trip + link proofs use the 4 defs
+  EXACTLY as spliced from the ubu-2 fresh-clone regen of the edited emitter
+  (rc_after.c L1378-1381) against a minimal HexaVal shim — this isolates the
+  fix (union-pun correctness + symbol resolution) free of summer's unrelated
+  stale-repo header skew. The BEFORE/AFTER regen-diff proves nothing else in
+  runtime_core.c changed.

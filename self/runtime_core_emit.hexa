@@ -1423,6 +1423,23 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "#else\n"
     buf = buf + "HexaVal hexa_float(double f) { return (HexaVal){.tag=TAG_FLOAT, .f=f}; }\n"
     buf = buf + "#endif\n"
+    // f64<->bits reinterpret primitives (RFC 061 §4.1 HexaVal representation
+    // bits). union-pun, tagged in/out. SSOT for hexa_float_to_bits /
+    // hexa_bits_to_float + their bare-name aliases (the const-fold &fn-ptr
+    // path in self/main.hexa emits the UNPREFIXED symbol). Without these the
+    // float-pun codegen (anima quantization / AKIDA int4) link-fails on a
+    // fresh clone (proto-only in runtime.h, body had no emitter — INBOX fix).
+    buf = buf + "#ifdef HEXA_RT_SELFEMIT\n"
+    buf = buf + "extern HexaVal hexa_float_to_bits(HexaVal x);\n"
+    buf = buf + "extern HexaVal hexa_bits_to_float(HexaVal x);\n"
+    buf = buf + "extern HexaVal float_to_bits(HexaVal x);\n"
+    buf = buf + "extern HexaVal bits_to_float(HexaVal x);\n"
+    buf = buf + "#else\n"
+    buf = buf + "HexaVal hexa_float_to_bits(HexaVal x) { union { double d; int64_t i; } u; u.d = HX_FLOAT(x); return hexa_int(u.i); }\n"
+    buf = buf + "HexaVal hexa_bits_to_float(HexaVal x) { union { int64_t i; double d; } u; u.i = HX_INT(x); return hexa_float(u.d); }\n"
+    buf = buf + "HexaVal float_to_bits(HexaVal x) { return hexa_float_to_bits(x); }\n"
+    buf = buf + "HexaVal bits_to_float(HexaVal x) { return hexa_bits_to_float(x); }\n"
+    buf = buf + "#endif\n"
     buf = buf + "#ifdef HEXA_RT_SELFEMIT\n"
     buf = buf + "extern HexaVal hexa_bool(int b);\n"
     buf = buf + "#else\n"
