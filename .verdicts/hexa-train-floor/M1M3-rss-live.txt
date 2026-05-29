@@ -1,98 +1,154 @@
 ════════════════════════════════════════════════════════════════════════
-HEXA-TRAIN-FLOOR · M1/M3 RSS-churn 실측 시도 (#2159 float-pun 벽 해소 後 재시도)
+HEXA-TRAIN-FLOOR · M1/M3 per-step RSS-churn A/B — CLEAN-TOOLCHAIN 실측
+🔴 CLOSED-NEGATIVE — HEXA_FARR_TRIM mallopt 픽스는 hexa farr 경로(Linux)에
+   무효: farr 할당이 hxlcl_* bump-arena(no-op free)로 인터포즈되어 glibc 를
+   우회 → mallopt(M_MMAP/M_TRIM) 가 farr 청크에 닿지 못함. 제어군이 기전 건전성 입증.
 ════════════════════════════════════════════════════════════════════════
-ts(UTC)   : 2026-05-30T (cold-seed fresh-clone retry, post-#2159)
-host      : ubu-2 (summer-B650M-K · x86_64 · 12 cores · RTX 5070 · clang 13.x · glibc)
-clone     : /tmp/htf-rss  (git clone --depth 1 origin/main · HEAD 4c2e0727)
-            #2159 (float-pun 4함수 본문 emitter SSOT 정착) 머지 포함 확인
-미션      : 콜드시드 클린 빌드 → anima 디코더 트레이너 1-step → HEXA_FARR_TRIM on/off
-            per-step RSS Δ A/B → M1/M3 churn-fix 🟢/🔴
-verdict   : 🟠 미실측 — 빌드 벽이 float-pun(#2159)이 아닌 NEW 결함으로 이동.
-            #2159 의 link 벽은 해소 확인(✅). 그러나 PR #2119/#2123(mallopt-mmap fix)
-            이 도입한 `#include <malloc.h>` × malloc-shim 매크로 충돌로 Linux/glibc
-            runtime.c 컴파일이 10 error 로 FALSIFIED. RSS A/B 진입 불가.
+ts(UTC)   : 2026-05-30T07:20Z
+host      : ubu-2 (summer-B650M-K · x86_64 · 12 cores · RTX 5070 · gcc/clang 13.x · glibc)
+clone     : /tmp/htf-m1m3  (git clone --depth 1 origin/main · HEAD 2caca70 = #2168)
+toolchain : COLD-SEED bootstrap (host hexa 의존 0) — stale-local 벽 BROKEN
 
 ────────────────────────────────────────────────────────────────────────
-[1] #2159 float-pun 벽 = 해소 확인 (✅) — 이번 벽은 그게 아님
+[1] CLEAN TOOLCHAIN 부트스트랩 (stale-local 깨기) — 🟢 PASS
 ────────────────────────────────────────────────────────────────────────
-fresh-clone emitter SSOT self/runtime_core_emit.hexa 에 4-함수 BODY 정착:
-  1439:  HexaVal hexa_float_to_bits(HexaVal x) { union { double d; int64_t i; } u; ... }
-  1441:  HexaVal float_to_bits(HexaVal x) { return hexa_float_to_bits(x); }
-  (#else / non-SELFEMIT 분기에 정의, #ifdef HEXA_RT_SELFEMIT 분기엔 extern decl)
-설치된 runtime(~/.hx/bin/self/runtime_core.c)에도 동일 body 존재(grep count=1).
-전체 빌드 로그 float_to_bits/bits_to_float 매칭 = 0건 (link error 없음).
-⇒ branch-3/4 가 막혔던 `_float_to_bits`/`_bits_to_float` undefined 벽은 GONE.
+직전 사이클(branch-4)은 설치된 stale hexa 의 pre-#2168 런타임 때문에 막혔다.
+이번엔 host hexa 를 일절 쓰지 않고 self/native/hexa_cc_seed.c (2982925 B, 0 local
+include) 콜드시드만으로 부트스트랩:
+
+  $ clang -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs -fbracket-depth=4096 \
+      self/native/hexa_cc_seed.c -o build/hexat -lm -lpthread -lssl -lcrypto
+  → RC=0 · build/hexat = ELF x86-64 2083312 B · smoke transpile OK
+
+런타임 SSOT(#2168 malloc.h undef-wrap + #2159 float-pun bodies 보유)를 cold hexat
+으로 재생성. runtime_core_emit / runtime_hi_gen 는 EMITTER PROGRAM(런타임 텍스트를
+실행시 출력) — seed 의 main 을 objcopy --redefine-sym 으로 무력화해 링크 후 실행:
+
+  $ ./build/hexat self/runtime_core_emit.hexa /tmp/rce_emitter.c          → OK
+  $ clang -c /tmp/rce_emitter.c -o rce_emitter.o ; objcopy --redefine-sym main=__seed_main_unused seed.o seed_nomain.o
+  $ clang rce_emitter.o seed_nomain.o -o rce_emit_bin                     → link RC=0
+  $ ./rce_emit_bin self/runtime_core.c    → RAW C 380262 B (no main, no hexa_str 래핑)
+
+  [생성된 runtime_core.c 의 FIX 검증 — verbatim]
+    L1398: HexaVal hexa_float_to_bits(HexaVal x) { union { double d; int64_t i; } u; u.d = HX_FLOAT(x); return hexa_int(u.i); }   ← #2159
+    L1400: HexaVal float_to_bits(HexaVal x) { return hexa_float_to_bits(x); }                                                     ← #2159
+    L337:  #undef malloc                                                                                                          ← #2168
+    L341:  #include <malloc.h>                                                                                                    ← #2168
+    L363:  (void)mallopt(M_MMAP_THRESHOLD, (int)(mmap_kb * 1024));   L364: (void)mallopt(M_TRIM_THRESHOLD, ...);                   ← #2123
+
+full runtime amalgam 조립: seed 의 runtime.c top(L2-1412) + FRESH runtime_core.c(위)
++ seed 의 native/forge fragment(L8849-25196). hxlcl 렌더 4종(mkdir/backtrace/
+backtrace_symbols_fd/longjmp)은 fresh-clone-부재 top runtime.c 가 제공하던 libc-rename
+(seed 가 더 오래됨)이라 측정-하니스용 shim 으로 해소. hexa_range_field(PROBE r14, body
+가 gitignored top runtime.c 에만 존재 = HEXA-CC-ZERO.md L23 갭)는 runtime_core.c
+L2894 주석 의미대로 충실히 재구성한 별도 TU 로 링크(하니스가 호출 안 함 — 링크 해소용).
+
+  $ clang -I self -include hxlcl_shim.h -c /tmp/amalg.c -o amalg.o                → RC=0 (clean runtime TU)
+  → nm: T hexa_float_to_bits · T float_to_bits · U mallopt
+
+⇒ stale-local 벽 BROKEN. #2159+#2168 둘 다 THIS toolchain 에 LIVE.
 
 ────────────────────────────────────────────────────────────────────────
-[2] NEW 벽 — mallopt-mmap fix(#2119/#2123) × malloc-shim 매크로 충돌 (REAL, glibc-only)
+[2] CLEAN DRIVER 가 float_to_bits + farr 프로그램 clean 컴파일/링크 — 🟢 PASS
 ────────────────────────────────────────────────────────────────────────
-빌드: `hexa run tool/build_hexa_cli.hexa` (cold-seed step0 분기)
-  - step0 cold-seed 트랜스파일러: build/hexat_linux (3.88 MB) + build/hexa_linux (508 KB)
-    빌드 성공 — hexa_cc_seed.c 는 malloc-shim 있지만 `#include <malloc.h>` 0건(monolithic
-    seed 가 mallopt 블록 이전 시점) → 충돌 회피.
-  - 그 다음 단계(runtime.c 컴파일/디스패치)에서 10 errors:
-
-  verbatim (clang -std={c11|gnu11} -D_GNU_SOURCE 둘 다 동일 재현):
-    /usr/include/malloc.h:39:14: error: function cannot return function type 'int (size_t)'
-    /usr/include/malloc.h:43:14: error: function cannot return function type 'int (size_t)'
-    /usr/include/malloc.h:51:14: error: function cannot return function type 'int (void *)'
-    /usr/include/malloc.h:64:13: error: function cannot return function type 'int (void *)'
-    self/runtime_core.c:572:19:  error: call to undeclared function 'hxlcl_mkdir'
-    self/runtime_core.c:2265:37: error: call to undeclared function 'hxlcl_backtrace'
-    self/runtime_core.c:2267:13: error: call to undeclared function 'hxlcl_backtrace_symbols_fd'
-    self/runtime_core.c:6060:9:  error: call to undeclared function 'hxlcl_longjmp'
-    5 warnings and 10 errors generated.
-
-ROOT CAUSE (확정 — targeted minimal repro 로 입증):
-  단일 TU 텍스트 include 순서:
-    self/runtime.c:1367  #define malloc(n)     hxlcl_malloc((size_t)(n))   ← libc-rename shim
-                  :1368  #define free(p)       hxlcl_free((void *)(p))      (HEXA_MEM_CAP fopen-shim 일가)
-                  :1369  #define realloc(p,n)  hxlcl_realloc(...)
-                  :1370  #define calloc(nm,sz) hxlcl_calloc(...)
-    self/runtime.c:1412  #include "runtime_core.c"            ← shim 활성 상태로 진입
-    self/runtime_core.c:328  #if defined(__linux__)&&defined(__GLIBC__)
-                        :    #include <malloc.h>              ← mallopt/M_MMAP_THRESHOLD 위해 추가(#2119/#2123)
-  → <malloc.h> 의 glibc proto `extern void *malloc (size_t __size) ...` 가
-    매크로 확장 `extern void *hxlcl_malloc((size_t)(size_t __size)) ...` 로 변형
-    → "function cannot return function type 'int (size_t)'" 10 error 캐스케이드.
-    파서 desync 로 뒤따르는 hxlcl_mkdir/backtrace/longjmp forward-decl 도 invisible.
-
-  REPRO (mr2.c, ubu-2):
-    #include <stdlib.h>
-    static void* hxlcl_malloc(size_t n){return 0;}
-    #define malloc(n) hxlcl_malloc((size_t)(n))
-    #define calloc(nm,sz) hxlcl_malloc((size_t)(nm))
-    #define free(p) ((void)0)
-    #define realloc(p,n) hxlcl_malloc((size_t)(n))
-    #include <malloc.h>
-    int main(void){return 0;}
-    $ clang -O2 -std=c11 -D_GNU_SOURCE -c mr2.c
-    → /usr/include/malloc.h:39:14: error: function cannot return function type 'int (size_t)'  (동일)
-  대조 repro(매크로 없이 stdlib.h→malloc.h mid-file) = RC 0 (정상). ⇒ 매크로 충돌이 단독 원인.
-
-  플랫폼: Linux/glibc 전용. mac 무영향 — malloc.h include 가 `__linux__&&__GLIBC__` 게이트
-  안에 있어 Darwin 은 <malloc.h> 자체를 안 끌어옴. 그래서 mac self-host/CI 콜드시드는 통과하나
-  Linux fresh-clone full runtime.c 빌드는 깨짐(이 미션의 ubu-2 측정 경로).
+  $ cat ftb_farr.hexa   # float_to_bits(x) → bits_to_float → farr_zeros(1e6)+farr_set 루프
+  $ ./build/hexat ftb_farr.hexa ftb_farr.c                                        → OK
+  $ clang -I self -include hxlcl_shim.h ftb_farr.c amalg.o -o ftb_farr ...         → link RC=0 · 실행 OK
+⇒ #2159(float-pun) + #2168(malloc.h) 둘 다 컴파일+링크+실행 확인.
 
 ────────────────────────────────────────────────────────────────────────
-[3] RSS A/B — 진입 불가 (🟠)
+[3] M1/M3 측정 하니스 — anima 디코더 per-step large-farr churn 충실 재현
 ────────────────────────────────────────────────────────────────────────
-runtime.c 가 Linux 에서 안 빌드 → hexa 툴체인 미완성 → anima 디코더 트레이너 빌드 불가
-→ HEXA_FARR_TRIM=1/0 × HEXA_RSS_TRACE per-step RSS Δ 측정 0 step. M1/M3 여전히 🟠 미실측.
-pod 미사용(ubu-2 $0, GPU 불필요 — CPU RSS 경로인데 빌드 벽에서 차단).
+하니스(/tmp/m1m3_harness.c)는 REAL 런타임 farr 경로를 직접 구동:
+  step 당 ALLOCS=8 회 hexa_farr_zeros(4e6 doubles = 32 MB/farr, ≫256KiB 임계) +
+  4096-stride farr_set(페이지 resident 보장) + hexa_farr_free.  per-step VmRSS
+  (/proc/self/status) 측정. 12 steps. (디코더 트레이너의 layer 별 large-farr
+  alloc→free 패턴과 동형 — anima 트레이너는 동일 hexa_farr_zeros/free 핫패스 사용.)
+하니스 = clean amalgam(#2159+#2168)에 직접 링크 → anima .py/.sh write-block 우회
+(g30) + 측정 표면이 RUNTIME-level 이라 트레이너 source 와 무관하게 동일 farr 핫패스.
 
 ────────────────────────────────────────────────────────────────────────
-[4] FIX (1-line, deferred per 미션 HALT 수칙 — non-float-pun real failure → STOP+report)
+[4] ★ TRIM on/off RSS Δ 실측 — 12 steps, 8×32MB farr/step ★
 ────────────────────────────────────────────────────────────────────────
-runtime_core_emit.hexa 의 malloc.h include 를 shim 매크로에서 보호:
-  #undef malloc / free / realloc / calloc  (BEFORE #include <malloc.h>)
-  #include <malloc.h>
-  → 그 후 shim 재정의(또는 mallopt 호출이 hxlcl_* 경유면 #undef 만으로 OK)
-대안: malloc.h include 를 runtime.c shim #define(1367) 보다 위(텍스트상 앞)로 이동.
-미션 제약상 codegen-인접 emitter SSOT 편집은 HALT 후 보고 — 부모/후속 사이클에 위임.
+
+[A] HEXA RUNTIME farr 경로 그대로 (farr calloc/free → hxlcl_* shim, PRODUCTION 과 동일)
+  per-step VmRSS (KiB):
+    | step | TRIM=0 (arm B)        | TRIM=1 (arm A)        |
+    |------|-----------------------|-----------------------|
+    |  0   | 3864 (base)           | 3856 (base)           |
+    |  1   | 253912  (+250048)     | 253904  (+250048)     |
+    |  2   | 503928  (+250016)     | 503920  (+250016)     |
+    |  6   | 1503992 (+250016/st)  | 1503984 (+250016/st)  |
+    | 12   | 3004088               | 3004080               |
+    | climb| +3000224 KiB (≈2.86GB)| +3000224 KiB (≈2.86GB)|
+  → 두 arm 모두 +250 MB/step 무한 climb. TRIM 차이 0. mallopt 무효.
+
+[B] CONTROL — farr calloc/free 를 REAL libc(glibc)로 강제(#undef calloc/free 를
+    hexa_farr_zeros 직전 삽입; mallopt 가 실제로 튜닝하는 allocator)
+  per-step VmRSS (KiB):
+    | step | TRIM=0 (arm B)        | TRIM=1 (arm A)        |
+    |------|-----------------------|-----------------------|
+    |  0   | 3856 (base)           | 3868 (base)           |
+    |  1   | 35136  (+31280)       | 3896  (+28)           |
+    |  2   | 35136  (+0)           | 3896  (+0)            |
+    | 12   | 35136                 | 3896                  |
+    | climb| +31280 KiB (≈30.5 MB) | +28 KiB (≈0.03 MB)    |
+  → glibc 경로에서는 TRIM=1 이 RSS climb 을 +30.5MB → +0.03MB 로 FLATTEN.
+    (TRIM=0 도 glibc arena 재사용으로 plateau — 단, mmap-trim 켜면 munmap 으로
+     매 free 반환 → 사실상 0.)
 
 ────────────────────────────────────────────────────────────────────────
-요약: #2159 ✅(float-pun 벽 해소). M1/M3 🟠 미실측 — RSS-churn 측정 경로가
-  #2119/#2123 mallopt fix 의 Linux-glibc malloc.h 매크로 충돌(NEW REAL bug)로 차단.
-  HALT(미션 수칙) — verbatim 포착 후 정지, fix 위임.
+[5] ROOT CAUSE — hxlcl_* bump-arena 인터포지션 (verbatim)
+────────────────────────────────────────────────────────────────────────
+런타임 amalgam 은 malloc-family 를 hxlcl_* 로 무조건 렌더(runtime_core.c
+L1368/L1757, HEXA_RT_SELFEMIT 게이트 아님 — "runtime_core.c is ALWAYS amalgamated
+under the shim"). 그 hxlcl_* 구현(amalg.c L747-790, seed/설치본 hexa.real/
+build/hexat_linux 모두 동일 _hxlcl_alloc_ptr bump arena):
+
+  static void *hxlcl_malloc(size_t n) { ...mmap 4MB chunk bump... }   ← 절대 반환 안 함
+  static void  hxlcl_free(void *p) { (void)p; }                       ← NO-OP
+  static void *hxlcl_calloc(...)  { p = hxlcl_malloc(total); zero; }  ← 같은 arena
+
+hexa_farr_zeros(L13108)는 `calloc(...)`(→hxlcl_calloc→bump arena) 로 32MB farr 를
+할당하고 hexa_farr_free(L13209)는 `free(e->buf)`(→hxlcl_free = no-op) 로 "해제".
+∴ farr 청크는 free 호출에도 OS 로 반환되지 않고 bump arena 가 단조 증가.
+mallopt(M_MMAP_THRESHOLD/M_TRIM_THRESHOLD) 는 glibc malloc 을 튜닝하지만 farr 는
+glibc 를 한 번도 거치지 않으므로 mallopt 가 farr 청크에 닿지 못함 = DEAD CODE
+(Linux farr 경로 한정). #2123 의 환경변수 게이트/constructor 은 정상 발화하나
+효력 대상이 없다. 설치본 hexa.real·build/hexat_linux 의 nm: _hxlcl_alloc_ptr/
+_hxlcl_alloc_end PRESENT → PRODUCTION 도 동일 bump arena.
+
+CONTROL([B])이 기전 건전성을 입증: 동일 mallopt 가 glibc 경로에선 +30.5MB→+0.03MB
+flatten. 즉 픽스 자체는 옳고, 인터포지션 레이어가 무효화한다 = 한 축의 결정적 배제.
+
+────────────────────────────────────────────────────────────────────────
+[6] VERDICT
+────────────────────────────────────────────────────────────────────────
+| axis                                                          | verdict                          |
+|---------------------------------------------------------------|----------------------------------|
+| 콜드시드 clean toolchain 부트스트랩 (host hexa 0)              | 🟢 RC=0 · #2159+#2168 LIVE        |
+| 클린 드라이버 float_to_bits + farr clean 컴파일/링크/실행      | 🟢 PASS                          |
+| 측정 하니스 (REAL farr 핫패스, 12 steps)                       | 🟢 빌드+실행                     |
+| M1/M3 — HEXA_FARR_TRIM 가 hexa farr 경로 RSS climb 평탄화?     | 🔴 NO — 두 arm 동일 +250MB/step  |
+| (control) mallopt 기전 자체 건전성 (glibc 경로)               | 🟢 TRIM=1 = +30.5MB→+0.03MB FLAT |
+| ROOT CAUSE: farr 가 hxlcl_* bump-arena(no-op free) 인터포즈    | 🔴 mallopt 가 glibc 안 거침=DEAD |
+
+★ M1/M3 = 🔴 CLOSED-NEGATIVE ★
+HEXA_FARR_TRIM(#2123 mallopt) 은 Linux hexa farr per-step RSS-churn 을 평탄화하지
+못한다. farr 할당·해제가 런타임의 hxlcl_* bump-arena(free=no-op, glibc 미경유)로
+인터포즈되어 mallopt 의 튜닝 대상(glibc malloc)을 우회하기 때문. control 군이
+동일 mallopt 가 glibc 경로에서 climb 을 ~1000× 평탄화함을 입증 → 픽스 기전은 건전,
+무효화 원인은 인터포지션 레이어. = "mallopt 로 farr churn 을 잡는다" 가설의 결정적 반증.
+
+ACTIONABLE (다음 사이클, 이번 결론과 별개):
+  hexa farr per-step RSS 를 실제로 잡으려면 mallopt 가 아니라 farr 자체의 free
+  경로를 고쳐야 함 — 옵션:
+   (a) hexa_farr_free 의 buf 를 hxlcl 우회해 직접 mmap/munmap (대형 farr 만, ≥임계),
+   (b) hxlcl_free 를 진짜 freeing allocator 로 (bump arena → free-list/mmap-반환),
+   (c) farr 의 calloc/free 를 __libc_calloc/__libc_free 로 명시 바인딩(렌더 우회) +
+       mallopt 유지 — control([B]) 이 바로 이 경로가 작동함을 보임.
+  (b)/(c) 는 runtime SSOT 변경(self/runtime_core_emit.hexa) + B9 self-verify 사이클 필요.
+
+NOTE: 이 측정은 ubu-2 $0 (GPU 불필요 — CPU RSS). pod 임대 없음, delete 불필요.
+콜드시드/amalgam/하니스 모두 /tmp 휘발 — SSOT 무변경(측정 전용 shim 은 /tmp 한정).
 ════════════════════════════════════════════════════════════════════════
