@@ -1002,3 +1002,29 @@ the PyTorch comparison; NEVER claim a PyTorch speedup from these).
 - CPU-side BF16 reference oracle not wired (would duplicate the FP64
   path with no inheritance benefit).
 state SSOT: `state/forge_rfc050_perf_inherit_2026_05_19/`.
+
+---
+
+## §GPU-ROOFLINE lane — forge 커널 단위 achieved/peak %
+
+> **잣대 상속**: 분모 = `domains/GPU-ROOFLINE` (HW 물리 천장 SSOT · ubu-2 RTX 5070
+> achieved-peak). forge 는 합병 아닌 상속 lane — GPU builtin 커널 단위로 achieved/peak %
+> 를 기록한다. 디바이스 명시(아래 기존 측정은 A100/H100 TC peak 분모; ubu-2 RTX 5070 은 신규 분모).
+
+forge GPU builtin 커널을 절대 ms 가 아니라 **그 GPU 의 물리 천장(roofline) 대비 %** 로 기록.
+
+| forge 커널 (출처) | 디바이스 peak 분모 | achieved / peak | roofline 위치 |
+|---|---|---|---|
+| hand-WMMA Dgemm (Agent #14 C Phase 3) | FP64 TC peak | **41–43%** (cuBLAS 77–87%) | compute-bound (FP64 TC), HARD_WALL §3.9a |
+| cuBLAS Dgemm (RFC 040 substrate) | FP64 TC peak | 77–87% (reference) | compute-bound, byte-eq 4.44e-15 정확성 기준선 |
+| DSM-fused FFN (Agent #13 B Phase 2) | FP64 TC peak | hand-kernel < cuBLAS (200–300× 느림) | compute-bound, hand-kernel ceiling |
+| nn_ffn_bf16_fwd (RFC 050 BF16 inherit) | BF16/FP16 TC peak | precision pivot lane (RFC 049) | compute-bound, BF16 GemmEx 상속 |
+
+> **ubu-2 RTX 5070 분모(신규, GPU-ROOFLINE §peak 상속)**: FP16 tensor-core achieved 126.52 TFLOP/s
+> (cuBLAS HGEMM M=4096) · FP32 34.11 TF · HBM 559.52 GB/s · ridge ≈ 61 flops/byte. forge 의
+> 대형 GEMM 커널은 compute-bound(AI ≫ ridge) → 천장 = TC FLOP-peak.
+>
+> **정직 scope**: hand-WMMA 41–43% FP64 TC peak = 기존 측정(GPU-ROOFLINE % 로 환산 = 동일 의미).
+> cuBLAS 가 77–87% TC peak 에 붙어있어 hand-kernel 이 추월 불가 = "못 이김 ≠ 실패"(물리 천장 ·
+> CUTLASS-grade pipelining 은 weeks effort). RTX 5070 분모는 신규 측정대로 박제(향후 forge
+> builtin 의 ubu-2 가벼운 1회 측정 시 그 분모 사용). 환산 무의미 메트릭은 roofline-N/A.
