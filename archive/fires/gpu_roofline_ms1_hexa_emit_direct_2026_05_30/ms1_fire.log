@@ -1,0 +1,32 @@
+# MS#1 hexa-emit DIRECT achieved/peak roofline — ubu-2 RTX 5070 sm_120, 2026-05-30
+# cuBLAS-INDEPENDENT numerator: COMPILER-emitted wmma_256x256_grid (PR #214, 256-locked).
+# Two consecutive runs (run-to-run stability):
+
+# --- run 1 ---
+Device: NVIDIA GeForce RTX 5070
+CUDA driver=13000 runtime=12000
+achieved-peak (cuBLAS HGEMM M=4096, tensor-core): 71.1252 TFLOPS
+hexa-emit (COMPILER-emitted wmma_256x256_grid, S=256): median=0.009504 ms  TFLOPS=3.5306
+byte-eq hexa-vs-CPUref(FP64) max|d|=0 (full 256x256)
+DIRECT hexa-emit achieved/peak = 3.5306 / 71.1252 = 4.9639%  (cuBLAS-INDEPENDENT numerator)
+shape-local cuBLAS HGEMM S=256 = 4.4620 TFLOPS = 6.2735% of achieved-peak
+hexa-emit / cuBLAS(S=256) = 79.1246%
+
+# --- run 2 ---
+Device: NVIDIA GeForce RTX 5070
+CUDA driver=13000 runtime=12000
+achieved-peak (cuBLAS HGEMM M=4096, tensor-core): 71.1276 TFLOPS
+hexa-emit (COMPILER-emitted wmma_256x256_grid, S=256): median=0.009344 ms  TFLOPS=3.5910
+byte-eq hexa-vs-CPUref(FP64) max|d|=0 (full 256x256)
+DIRECT hexa-emit achieved/peak = 3.5910 / 71.1276 = 5.0487%  (cuBLAS-INDEPENDENT numerator)
+shape-local cuBLAS HGEMM S=256 = 4.4620 TFLOPS = 6.2733% of achieved-peak
+hexa-emit / cuBLAS(S=256) = 80.4794%
+
+# NOTE on denominator: this run's same-process cuBLAS HGEMM M=4096 = 71.13 TF
+# (CUBLAS_COMPUTE_32F f32-accumulate path + sm_90 PTX JIT). The pinned §peak
+# achieved-peak (GPU-ROOFLINE.bench.md §peak) = 126.52 TF (different cuBLAS
+# config / GB205 default at the time of the §peak fire). Direct % reported
+# against BOTH for honesty:
+#   vs pinned §peak 126.52 TF  = 2.79% (hexa 3.53) .. 2.84% (hexa 3.59)
+#   vs same-process 71.13 TF   = 4.96% .. 5.05%
+# hexa-emit kernel TFLOPS (3.53-3.59) matches MS#5 sweep (3.507) = stable.

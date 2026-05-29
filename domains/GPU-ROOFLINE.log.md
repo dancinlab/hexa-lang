@@ -142,3 +142,39 @@
 ### 안전
 - vast RTSC 학습 pod 미접촉. fire = 무료 pool ubu-2 RTX 5070($0). codegen 무변경.
 - `.cu`/`.ptx` 는 /tmp(ubu-2)·archive/fires(repo) 에서만. repo root 손작성 0.
+
+## 2026-05-30 — batch D drain: MS#1 hexa-emit 직접 achieved/peak % (256-locked 1점) + codegen 규모 산정
+
+### MS#1 부분 진전 (256-locked, open 유지 — variable-shape compiler emission = multi-session)
+- **falsifier/측정법**: compiler-emitted hexa WMMA 커널(`wmma_256x256_grid`, PR #214, 256-locked)의
+  TFLOPS 를 device achieved tensor-core peak 분모로 **직접** 환산(cuBLAS 와의 ratio 아님 =
+  cuBLAS-INDEPENDENT numerator) + byte-eq(hexa WMMA vs CPU FP64 ref).
+- **2026-05-30 ubu-2 RTX 5070 sm_120 $0 fire** — `cuModuleLoad` 로 compiler-emit PTX 직접 로드,
+  median of 200(20 warmup, cudaEventRecord per-launch). pure-ASCII, base64 byte-exact 전송.
+- **결과(2 run, stable)**: hexa-emit `wmma_256x256_grid` = **3.53–3.59 TFLOPS** ·
+  **DIRECT achieved/peak = 2.79–2.84%**(분모 §peak 박제 126.52 TF) / **4.96–5.05%**(same-process
+  cuBLAS HGEMM M=4096 = 71.13 TF) · **byte-eq max|Δ|=0**(full 256×256, sawtooth int lossless).
+- **분모 2개 정직 병기**: §peak 박제 126.52 TF(§peak fire 시점 GB205 default cfg) vs 본 fire
+  same-process 71.13 TF(CUBLAS_COMPUTE_32F f32-acc + sm_90 PTX JIT). 둘 다 기록(격차 숨김 금지).
+- **왜 % 가 작은가(정직)**: 256³ 는 TC 가 saturate 안 되는 launch/occupancy-bound 영역.
+  shape-local cuBLAS(S=256)조차 자기 M=4096 peak 의 3.5% 뿐 → M=4096-peak 분모 대비 % 가 작은 게
+  물리적 정직. hexa-emit 은 shape-local cuBLAS 의 **79–80%** 까지 따라붙음(MS#5 ratio 0.786 일치).
+- hexa-emit TFLOPS(3.53–3.59) = MS#5 sweep(3.507)와 일치 = 측정 재현성.
+- 상세 = `.bench.md §hexa-emit-direct`. artifact = `archive/fires/gpu_roofline_ms1_hexa_emit_direct_2026_05_30/`.
+
+### codegen 규모 산정 (honest STOP — variable-shape compiler emission = multi-session)
+- `nvptx_target.hexa` 직접 코드-감사: 현 WMMA 경로는 **단일 16×16×16 타일 intrinsic** 만 emit.
+  256-grid 드라이버(CTA 기하·K-loop·stride 상수 32768/8192/65536)는 **hand-PTX** 에 박힘.
+- 4 gap 확정(소스 코멘트가 직접 명시): (1a) `gpu_wmma_mma` fragment operand = placeholder
+  `{/* a */}`, "Real GEMM K-loop integration is the P4 wiring"(미완, F-RFC067-TILE-LOOP-NUMERIC
+  미발화) · (1b) `.shared` staging = synthetic 2048 B 고정(`_nvptx_shared_default_bytes`),
+  HIR 에 `[T; N]` fixed-array surface 부재 → shape-param SMEM-tile 불가 · (1c) grid/CTA 기하 +
+  stride 상수 codegen-parametric 부재 · (1d) shape-sweep byte-eq 회귀 + 직접 % 곡선.
+- frontend(HIR/MIR) + backend(NVPTX) 양쪽 변경 = **1-batch surgical 불가 = multi-session**.
+  → MS#1 open 유지 + `## MS#1 codegen sub-milestone` 4 sub-task(1a-1d) 로 분해 등록.
+- batch scope = 256-locked 직접 % 측정(부분 진전) + codegen 규모 정직 산정 + sub-task 분해.
+  codegen 무변경(측정 + 문서만 — over-promise 금지).
+
+### 안전
+- vast RTSC 학습 pod 미접촉. fire = 무료 pool ubu-2 RTX 5070($0). codegen 무변경.
+- `.cu`/`.ptx` 는 /tmp(ubu-2)·archive/fires(repo) 에서만. repo root 손작성 0.
