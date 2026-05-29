@@ -607,18 +607,45 @@ fn _do_build(repo_root: string) {
     //     hexa-run tool/verify_hexa_cc_regen.hexa --probe
     //
     //   `--prefer-regen` is reserved as the future opt-in flag; it is NOT
-    //   parsed here yet (no behavior change). The cold-seed path stays the
-    //   only path until the runbook gates are measured green on Mac + ubu.
+    //   parsed here yet (no behavior change). The warm regen-source path
+    //   (hexa_cc.c present) stays preferred for the dev loop.
+    //
+    //   HEXA-CC-ZERO P5 — COLD-SEED DEFAULT WIRING (2026-05-30):
+    //   the regen-source `self/native/hexa_cc.c` is gitignored and ABSENT in
+    //   a true fresh clone (no host hexa to `cc --regen` it). When it is
+    //   absent BUT the committed cold-seed `self/native/hexa_cc_seed.c` is
+    //   present (P3 / #2126 — a single self-contained 2.85 MB TU with ZERO
+    //   local #include), bootstrap directly FROM THE SEED: one
+    //   `cc hexa_cc_seed.c -o hexat`, no amalgam sed (the runtime is already
+    //   inlined) and no `-I self` (the seed needs no header search path).
+    //   This makes a bare clone bootstrap with NO manual step + NO host hexa.
+    //   The seed is the COLD fallback; hexa_cc.c (when present) is preferred.
     if !_file_exists(hexat) {
-        println("[0/5] bootstrap transpiler: cc hexa_cc.c runtime.c → " + hexat)
-        let hexa_cc_c = repo_root + "/self/native/hexa_cc.c"
-        _must_exist(hexa_cc_c, "hexa_cc.c (transpiler C seed)")
-        let amalgam = repo_root + "/build/_hexa_cc_amalgam.c"
-        _run("sed 's|#include \"runtime.h\"|#include \"runtime.c\"|' " + _shq(hexa_cc_c) + " > " + _shq(amalgam), "amalgam hexa_cc.c")
-        _run(cc + " " + cflags + " " + _shq(amalgam) + " -o " + _shq(hexat) + " " + ldflags, "bootstrap hexat")
-        let _ = exec("rm -f " + _shq(amalgam))
+        let hexa_cc_c   = repo_root + "/self/native/hexa_cc.c"
+        let hexa_seed_c = repo_root + "/self/native/hexa_cc_seed.c"
+        if !_file_exists(hexa_cc_c) && _file_exists(hexa_seed_c) {
+            // COLD path — self-contained committed seed (P5 default).
+            println("[0/5] bootstrap transpiler: cc hexa_cc_seed.c → " + hexat + " (cold-seed · hexa_cc.c absent)")
+            // Self-contained TU: no amalgam swap, no `-I self`. Drop the
+            // header-search `-I` from cflags so the build is truly include-free.
+            let mut seed_cflags = "-O2 -std=c11 -D_GNU_SOURCE -Wno-trigraphs -fbracket-depth=4096"
+            if uname == "Linux" {
+                let mut bracket = " -fbracket-depth=4096"
+                if cc == "gcc" || cc == "cc" { bracket = "" }
+                seed_cflags = "-O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs" + bracket
+            }
+            _run(cc + " " + seed_cflags + " " + _shq(hexa_seed_c) + " -o " + _shq(hexat) + " " + ldflags, "bootstrap hexat (cold-seed)")
+        } else {
+            // WARM path — regen-source hexa_cc.c present (dev loop unchanged).
+            println("[0/5] bootstrap transpiler: cc hexa_cc.c runtime.c → " + hexat)
+            _must_exist(hexa_cc_c, "hexa_cc.c (transpiler C seed)")
+            let amalgam = repo_root + "/build/_hexa_cc_amalgam.c"
+            _run("sed 's|#include \"runtime.h\"|#include \"runtime.c\"|' " + _shq(hexa_cc_c) + " > " + _shq(amalgam), "amalgam hexa_cc.c")
+            _run(cc + " " + cflags + " " + _shq(amalgam) + " -o " + _shq(hexat) + " " + ldflags, "bootstrap hexat")
+            let _ = exec("rm -f " + _shq(amalgam))
+        }
     }
-    _must_exist(hexat, "hexat (bootstrap from hexa_cc.c failed)")
+    _must_exist(hexat, "hexat (bootstrap from hexa_cc.c / hexa_cc_seed.c failed)")
 
     // ── F3 ACTIVATION RUNBOOK · Path A — emit the self-emit leaf objects.
     //
