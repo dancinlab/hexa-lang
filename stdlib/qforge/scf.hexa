@@ -1,0 +1,183 @@
+// HEXA Standard Library — qforge/scf
+//
+// QFORGE 통합① — 평면파 DFT 의 Kohn-Sham 자기무모순(SCF) 드라이버.
+//
+// 이미 g5-검증된 L5 브릭들(Davidson 대각화기 · eigen 의 eigh)을 하나의
+// 자기무모순 Kohn-Sham 루프로 엮는다. 입력 밀도 ρ 로부터
+//
+//   1. 호출자의 H_of_rho(rho) → H_apply  (행렬-자유 연산자, d4) 로 해밀토니안을 만든다.
+//   2. qforge_davidson 으로 최저 nbands 고유쌍을 대각화한다 (d19 재사용).
+//   3. nelec 전자를 최저 상태부터 채운다(occupation; 이중점유 2e/state).
+//   4. 호출자의 rho_of_psi(occupied_psis) → rho_out 으로 새 밀도를 만든다.
+//   5. 선형 혼합 ρ_new = (1−mix)·ρ_in + mix·ρ_out 으로 진동을 억제한다.
+//   6. 자기무모순 잔차 max(|Δρ|, |ΔE|) < tol 까지 (5) 를 반복한다.
+//
+// 수렴 시 수렴 밀도 · KS 고유값 · 총 에너지 · 반복수 · 수렴 플래그를 돌려준다.
+//
+// ── d4 generic 계약 (one driver, many physics) ───────────────────────────
+//   루프는 물리-무관(physics-agnostic)이다. 호출자가 H_of_rho 와 rho_of_psi 를
+//   공급하므로, 같은 드라이버가
+//     (a) selftest 의 모델 H (해석적 고정점이 알려진 toy), 그리고
+//     (b) 미래의 실제 평면파 H
+//   둘 다를 그대로 구동한다 — 이름 하드코딩 없음(d4).
+//
+// ── 미래 통합 NEXT (이 파일에서 절대 half-구현 금지) ──────────────────────
+//   실제 PW H_of_rho 조립은 명시적 다음 통합 조각이며 <200줄 예산을 깬다:
+//     · Ewald 합(이온-이온 에너지)
+//     · FFT-Poisson Hartree[ρ]   (signal/core_fft 의 fft3/ifft3 재사용)
+//     · LDA 교환-상관 함수(V_xc[ρ], E_xc[ρ])
+//     · UPF-구동 V_loc + 비국소 투영(qforge/upf)
+//     · 운동 에너지(FFT 로 |G+k|²/2)
+//   본 파일은 DRIVER 만 제공하고 모델로 SCF 수학을 실검증한다. 실제 PW H 는
+//   상위 호출자가 위 조각을 조립해 H_of_rho 클로저로 넘긴다 (d4).
+//
+// reuse (d19): 대각화는 stdlib/qforge/davidson 의 qforge_davidson 를,
+//   그 내부는 stdlib/alloc/math/eigen 의 eigh 를 재사용한다.
+use "stdlib/qforge/davidson"
+
+// SCF 결과 묶음: 수렴 밀도 · KS 고유값(오름차순) · 총 에너지 · 반복수 · 수렴 플래그.
+pub struct ScfResult {
+    rho: [float],        // 수렴한 밀도(길이 = H_of_rho 가 기대하는 grid 차원)
+    evals: [float],      // 최저 nbands KS 고유값, 오름차순
+    e_total: float,      // 총 에너지(밴드 에너지 합 = Σ occ_k · ε_k)
+    iters: int,
+    converged: bool
+}
+
+// |x|.
+fn scf_abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+// 두 밀도의 L∞ 거리(자기무모순 잔차의 밀도 성분).
+fn scf_dmax(a: [float], b: [float], n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n {
+        let d = scf_abs(a[i] - b[i])
+        if d > m { m = d }
+        i = i + 1
+    }
+    return m
+}
+
+// 점유(occupation): nelec 전자를 최저 상태부터 채운다. 닫힌-껍질 이중점유
+// (state 당 2e). 반환 = 각 밴드 점유수 [float] (0, 1, 또는 2).
+fn scf_occupations(nbands: int, nelec: int) -> [float] {
+    let mut occ = []
+    let mut left = to_float(nelec)
+    let mut k = 0
+    while k < nbands {
+        if left >= 2.0 { occ.push(2.0) ; left = left - 2.0 }
+        else { if left >= 1.0 { occ.push(left) ; left = 0.0 } else { occ.push(0.0) } }
+        k = k + 1
+    }
+    return occ
+}
+
+// 밴드 에너지 합 E = Σ_k occ_k · ε_k (모델의 KS 총-에너지 대용).
+fn scf_band_energy(evals: [float], occ: [float], nbands: int) -> float {
+    let mut e = 0.0
+    let mut k = 0
+    while k < nbands { e = e + occ[k] * evals[k] ; k = k + 1 }
+    return e
+}
+
+// 점유된 KS 궤도(행=벡터)를 evecs 평탄 배열에서 잘라 호출자에게 넘길 형태로 만든다.
+// occupied_psis[b] = b-번째 밴드의 고유벡터(길이 ndim), occ_b 와 함께 전달.
+fn scf_slice_psis(evecs: [float], nbands: int, ndim: int) -> [[float]] {
+    let mut psis = []
+    let mut b = 0
+    while b < nbands {
+        let mut v = []
+        let mut i = 0
+        while i < ndim { v.push(evecs[b * ndim + i]) ; i = i + 1 }
+        psis.push(v)
+        b = b + 1
+    }
+    return psis
+}
+
+// ── SCF 본체 ────────────────────────────────────────────────────────────
+// H_of_rho:   rho -> H_apply   (행렬-자유 연산자 클로저; d4 — 물리는 호출자가 결정)
+// rho_of_psi: (psis, occ, nbands) -> rho_out   (점유 궤도에서 새 밀도)
+// n:        H 의 차원(npw / grid 점수)
+// nbands:   대각화할 최저 밴드 수(점유 + 일부 미점유 가능)
+// nelec:    전자 수(닫힌-껍질 이중점유로 점유)
+// mix:      선형 혼합 계수 ∈ (0,1]; 0<mix≤1 권장
+// tol:      자기무모순 허용오차 max(|Δρ|∞, |ΔE|) < tol
+// max_iter: 최대 SCF 반복
+pub fn qforge_scf(H_of_rho, rho_of_psi, n: int, nbands: int, nelec: int,
+                  mix: float, tol: float, max_iter: int) -> ScfResult {
+    // ── mixing 안정성 가드(d4): 발산을 유발하는 비물리적 혼합을 damp ──────
+    //   mix ≤ 0 또는 mix > 1 은 선형 혼합에서 비물리적(발산/부호반전). 안전구간으로 clamp.
+    let mut a = mix
+    if a <= 0.0 { a = 0.1 }     // 0 이하 → 진전 없음/부호반전 → 보수적 0.1 로 damp
+    if a > 1.0 { a = 1.0 }      // 1 초과 → over-relaxation 발산 위험 → 1.0 로 clamp
+
+    // 초기 밀도 = 균일(전하 중성으로 정규화: 합 = nelec). 모델에서는 grid 차원 = n.
+    let mut rho = []
+    let mut i = 0
+    let rho0 = to_float(nelec) / to_float(n)
+    while i < n { rho.push(rho0) ; i = i + 1 }
+
+    let occ = scf_occupations(nbands, nelec)
+
+    let mut evals = []
+    let mut e_total = 0.0
+    let mut e_prev = 0.0
+    let mut iters = 0
+    let mut converged = false
+    let mut first = true
+
+    while iters < max_iter {
+        iters = iters + 1
+
+        // (1) 입력 밀도로 해밀토니안 조립 (호출자 H_of_rho → H_apply, d4).
+        let H_apply = H_of_rho(rho)
+
+        // H 의 대각선(Davidson 전처리기용). 단위벡터에 H_apply 를 때려 추출.
+        let mut diag = []
+        let mut d = 0
+        while d < n {
+            let mut e = []
+            let mut t = 0
+            while t < n { if t == d { e.push(1.0) } else { e.push(0.0) } ; t = t + 1 }
+            let col = H_apply(e)
+            diag.push(col[d])
+            d = d + 1
+        }
+
+        // (2) 최저 nbands 대각화 (qforge_davidson 재사용, d19).
+        let dr = qforge_davidson(H_apply, diag, n, nbands, 1.0e-10, 200)
+        evals = dr.evals
+
+        // (3) 점유 → (4) 새 밀도 (호출자 rho_of_psi).
+        let psis = scf_slice_psis(dr.evecs, nbands, n)
+        let rho_out = rho_of_psi(psis, occ, nbands)
+
+        // 총 에너지(모델: 밴드 에너지 합).
+        e_total = scf_band_energy(evals, occ, nbands)
+
+        // 자기무모순 잔차: max(|Δρ|∞, |ΔE|).
+        let dr_rho = scf_dmax(rho, rho_out, n)
+        let dr_e = if first { tol + 1.0 } else { scf_abs(e_total - e_prev) }
+        let resid = if dr_rho > dr_e { dr_rho } else { dr_e }
+
+        // (5) 선형 혼합: ρ_new = (1−a)·ρ_in + a·ρ_out.
+        let mut rho_new = []
+        let mut k = 0
+        while k < n { rho_new.push((1.0 - a) * rho[k] + a * rho_out[k]) ; k = k + 1 }
+        rho = rho_new
+
+        e_prev = e_total
+        first = false
+
+        // (6) 수렴 판정.
+        if resid < tol {
+            converged = true
+            return ScfResult { rho: rho, evals: evals, e_total: e_total,
+                               iters: iters, converged: true }
+        }
+    }
+    return ScfResult { rho: rho, evals: evals, e_total: e_total,
+                       iters: iters, converged: converged }
+}
