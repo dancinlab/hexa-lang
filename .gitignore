@@ -258,8 +258,10 @@ state/flame_phase4d_20260517_102511/flame_d768_12L_corpus_test_a2.c
 test/lora_cuda_equiv_test.c
 
 # .c-graduation FINAL — all 23 tracked .c seeds untrack (.c → 0 · full .hexa-only)
-# full-release gate 6/6 GREEN incl Stage 3 (run 26607237845) + fixed driver edge-published (#2042).
-# fresh checkout: Stage 0-pre warm-regen + HEXA_PREBUILT_RUNTIME 드라이버(cmd_cc/cmd_build) 로 재생성/링크.
+# faithful-nobaseline gate 3-platform GREEN on main (run 26626250487): 23 seeds removed
+# first, then bootstrap from the edge tarball's prebuilt runtime.a + build/hexat
+# (#2050 verbatim-gate single-source · #2058 hexat-bundle). Fresh checkout path:
+# stage_resolve_runtime_a + stage_prebuild_hexat (edge-pull) → stage_regen_hexa_cc → build.
 self/bootstrap_compiler.c
 self/native/crypto_openssl.c
 self/native/crypto_sodium.c
@@ -280,3 +282,8 @@ self/native/wait.c
 self/runtime.c
 self/runtime_core.c
 self/runtime_hi_gen.c
+# Final 3 (regen/unused/.c-text): hexa_cc.c = edge-regen via stage_regen_hexa_cc;
+# forge_tier_v1.c = unused via prebuilt; classd harness = .c-text emitter regenerates.
+self/native/hexa_cc.c
+self/forge/forge_tier_v1.c
+test/native_build/classd_behavioral_harness.c
