@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+# ─────────────────────────────────────────────────────────────────────────
+# tool/stage_prebuild_hexat — build build/hexat (the self-hosted transpiler)
+# from self/native/hexa_cc.c + runtime.a WHILE the seeds are still present.
+# SHARED by release.yml + nobaseline-gate.yml.
+#
+# ── Why this exists (THE nobaseline gate-fail root cause) ────────────────────
+# `hexa cc --regen` (used by stage_regen_hexa_cc to recreate a removed
+# hexa_cc.c) transpiles the 4 SSOT modules by driving a `build/hexat` binary.
+# When build/hexat is absent it tries to BOOTSTRAP one via cmd_cc, which
+# clang-compiles self/runtime.c → runtime.o then self/native/hexa_cc.c +
+# runtime.o → build/hexat.
+#
+# In the nobaseline gate, ALL 23 seeds (including self/runtime.c AND
+# self/native/hexa_cc.c) are removed BEFORE Stage 0a regen, so that bootstrap
+# clang fails ("no such file: ./self/runtime.c") → build/hexat never appears →
+# `hexa cc --regen` reports "hexat not found" → FATAL. (The edge `hexa` asset
+# is the stale 0.1.0-dispatch release whose in-process 2-arg transpile only
+# emits a stub, so it cannot self-serve as the transpiler either.)
+#
+# final3 succeeds at the SAME `hexa cc --regen` purely by accident of ordering:
+# its section C runs the emitter while runtime.c + hexa_cc.c are still present,
+# which bootstraps build/hexat; section A then reuses that binary after removal.
+#
+# This script makes that ordering EXPLICIT and shared: build build/hexat from
+# the seeds up-front (Stage 0b time, seeds present), so the later removal +
+# `hexa cc --regen` finds a ready transpiler and reuses it (no re-bootstrap).
+#
+# Verified (ubu-1, linux-x86_64): prebuild hexat → remove all 23 seeds →
+# `hexa cc --regen` → 948326-byte hexa_cc.c.new, rc=0.
+#
+# Env contract (caller sets, same as Stage 0b):
+#   CC                    — C compiler (clang|gcc)
+#   LIBS                  — link libs ("" | "-lm -ldl")
+#   CFLAGS_COMMON         — (optional) base CFLAGS
+#   HEXA_PREBUILT_RUNTIME — prebuilt runtime.a (Stage 0b output)
+#
+# No-op-safe for release: release never removes seeds, so a prebuilt build/hexat
+# is simply a ready transpiler (does not change any emitted bytes).
+# ─────────────────────────────────────────────────────────────────────────
+set -euo pipefail
+: "${CC:?CC must be set}"
+LIBS="${LIBS:-}"
+CFLAGS="${CFLAGS_COMMON:--O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs}"
+# -fbracket-depth is clang-only (deeply-nested generated C); gcc rejects it.
+case "$CC" in *clang*) CFLAGS="$CFLAGS -fbracket-depth=4096";; esac
+
+ROOT="$PWD"
+RA="${HEXA_PREBUILT_RUNTIME:-$ROOT/build/runtime.a}"
+HEXAT="$ROOT/build/hexat"
+CC_SRC="$ROOT/self/native/hexa_cc.c"
+mkdir -p build
+
+if [ -x "$HEXAT" ]; then
+  echo "[stage_prebuild_hexat] build/hexat already present — no-op"
+  exit 0
+fi
+
+if [ ! -f "$CC_SRC" ]; then
+  # hexa_cc.c already removed (post-PR2: seeds git-removed at checkout). We can
+  # NOT build build/hexat from source here. Pull a prebuilt build/hexat from the
+  # prior edge tarball (release.yml Package bundles it — the runtime.a "frozen
+  # dough" precedent #2019, extended to the transpiler). With a ready build/hexat
+  # in place, the later `hexa cc --regen` reuses it instead of trying (and
+  # failing) to clang-bootstrap from the now-removed self/runtime.c + hexa_cc.c.
+  echo "[stage_prebuild_hexat] self/native/hexa_cc.c absent — pulling build/hexat from prior edge"
+  ASSET="${EDGE_ASSET:?EDGE_ASSET must be set when seeds are removed}"
+  EDGE_DIR="/tmp/edge_hexat"
+  rm -rf "$EDGE_DIR"; mkdir -p "$EDGE_DIR"
+  if gh release download edge --repo "${GITHUB_REPOSITORY:-dancinlab/hexa-lang}" \
+        --pattern "$ASSET" --dir "$EDGE_DIR" --clobber 2>/tmp/hexat_dl.err \
+     && tar xzf "$EDGE_DIR/$ASSET" -C "$EDGE_DIR" 2>/dev/null; then
+    PRIOR_HEXAT="$(find "$EDGE_DIR" -type f -path '*/build/hexat' | head -1)"
+    if [ -n "$PRIOR_HEXAT" ]; then
+      cp "$PRIOR_HEXAT" "$HEXAT"
+      chmod +x "$HEXAT"
+      test -x "$HEXAT"
+      echo "[stage_prebuild_hexat] build/hexat from edge = $(wc -c < "$HEXAT") bytes"
+      exit 0
+    fi
+    echo "[stage_prebuild_hexat] FATAL: prior edge tarball ($ASSET) has NO build/hexat —" >&2
+    echo "  this edge PREDATES hexat-bundling (release.yml Package cp build/hexat)." >&2
+    echo "  Publish a hexat-bearing edge first (merge PR-A → main → edge release)," >&2
+    echo "  then re-run this faithful gate. (chicken-egg boundary — expected RED.)" >&2
+    exit 1
+  fi
+  echo "[stage_prebuild_hexat] FATAL: edge download failed ($(head -1 /tmp/hexat_dl.err 2>/dev/null))" >&2
+  exit 1
+fi
+if [ ! -f "$RA" ]; then
+  echo "[stage_prebuild_hexat] FATAL: runtime.a missing at $RA (run Stage 0b first)" >&2
+  exit 1
+fi
+
+echo "[stage_prebuild_hexat] building build/hexat from hexa_cc.c + runtime.a"
+$CC $CFLAGS -I "$ROOT" -I "$ROOT/self" "$CC_SRC" "$RA" -o "$HEXAT" $LIBS
+test -x "$HEXAT"
+echo "[stage_prebuild_hexat] build/hexat = $(wc -c < "$HEXAT") bytes"

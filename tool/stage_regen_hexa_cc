@@ -23,7 +23,30 @@ echo "[stage_regen_hexa_cc] hexa_cc.c absent — edge-regen from $EDGE_ASSET"
 tmpd="$(mktemp -d)"
 gh release download edge --pattern "$EDGE_ASSET" --output "$tmpd/edge.tar.gz"
 tar -xzf "$tmpd/edge.tar.gz" -C "$tmpd"
-edge_dir="$tmpd/${EDGE_ASSET%.tar.gz}"
-"$edge_dir/hexa" cc --regen
-test -f self/native/hexa_cc.c
-echo "[stage_regen_hexa_cc] regenerated hexa_cc.c"
+# The edge tarball unpacks to hexa-<target>/hexa; locate the driver robustly
+# (the dir is not always ${EDGE_ASSET%.tar.gz}).
+edge_hexa="$(find "$tmpd" -name hexa -type f -perm -u+x 2>/dev/null | head -1)"
+[ -z "$edge_hexa" ] && edge_hexa="$(find "$tmpd" -name hexa -type f 2>/dev/null | head -1)"
+chmod +x "$edge_hexa" 2>/dev/null || true
+echo "[stage_regen_hexa_cc] edge hexa = ${edge_hexa:-<none>}"
+
+# Regenerate via the SAME proven path as tool/final3_gate_dryrun section A
+# (final3 is 3-platform GREEN): pass OUT/HEXA_V2 env + HEXA_MEM_UNLIMITED, and
+# fall back to the manual pipeline. A bare `hexa cc --regen` with no OUT/HEXA_V2
+# does NOT produce the file in CI — that thinness was the gate-fail bug.
+export HEXA_LANG="$PWD"
+export HEXA_MEM_UNLIMITED=1
+REGEN="self/native/hexa_cc.c.new"
+rm -f "$REGEN"
+if OUT="$REGEN" HEXA_V2="$edge_hexa" "$edge_hexa" cc --regen 2>/tmp/regen.err && [ -s "$REGEN" ]; then
+  echo "[stage_regen_hexa_cc] regen via 'hexa cc --regen' OK"
+elif OUT="$PWD/$REGEN" HEXA_V2="$edge_hexa" bash tool/regen_cc_manual 2>/tmp/regen2.err && [ -s "$REGEN" ]; then
+  echo "[stage_regen_hexa_cc] regen via tool/regen_cc_manual OK"
+else
+  echo "[stage_regen_hexa_cc] FATAL: regen produced no hexa_cc.c" >&2
+  tail -3 /tmp/regen.err /tmp/regen2.err 2>/dev/null >&2 || true
+  exit 1
+fi
+cp "$REGEN" self/native/hexa_cc.c
+test -s self/native/hexa_cc.c
+echo "[stage_regen_hexa_cc] regenerated hexa_cc.c ($(wc -c < self/native/hexa_cc.c) bytes)"

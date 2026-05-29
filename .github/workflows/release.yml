@@ -110,6 +110,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: bash tool/stage_resolve_runtime_a
 
+      - name: Stage 0a-pre — prebuild build/hexat (shared tool/stage_prebuild_hexat)
+        shell: bash
+        env:
+          CC: clang
+          LIBS: ""
+          HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
+          GH_TOKEN: ${{ github.token }}
+        run: bash tool/stage_prebuild_hexat
+
       # ── .c-graduation — regenerate hexa_cc.c if absent (shared script). No-op
       # while the seed is present (today); load-bearing once hexa_cc.c is
       # git-removed in PR2 (edge-regen via `hexa cc --regen`).
@@ -255,6 +264,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: bash tool/stage_resolve_runtime_a
 
+      - name: Stage 0a-pre — prebuild build/hexat (shared tool/stage_prebuild_hexat)
+        shell: bash
+        env:
+          CC: gcc
+          LIBS: "-lm -ldl"
+          HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
+          GH_TOKEN: ${{ github.token }}
+        run: bash tool/stage_prebuild_hexat
+
       # ── .c-graduation — regen hexa_cc.c if absent (shared; no-op today).
       - name: Stage 0a — regen hexa_cc.c (shared, no-op while seed present)
         shell: bash
@@ -311,6 +329,15 @@ jobs:
           EDGE_ASSET: hexa-linux-arm64.tar.gz
           GH_TOKEN: ${{ github.token }}
         run: bash tool/stage_resolve_runtime_a
+
+      - name: Stage 0a-pre — prebuild build/hexat (shared tool/stage_prebuild_hexat)
+        shell: bash
+        env:
+          CC: gcc
+          LIBS: "-lm -ldl"
+          HEXA_PREBUILT_RUNTIME: ${{ github.workspace }}/build/runtime.a
+          GH_TOKEN: ${{ github.token }}
+        run: bash tool/stage_prebuild_hexat
 
       # ── .c-graduation — regen hexa_cc.c if absent (shared; no-op today).
       - name: Stage 0a — regen hexa_cc.c (shared, no-op while seed present)
