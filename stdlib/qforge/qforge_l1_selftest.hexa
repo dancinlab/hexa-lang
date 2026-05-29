@@ -154,6 +154,31 @@ fn main() {
                             tc_eli_grid > 0.0 && tc_eli_grid >= tc_ad_grid,
                             "(" + to_string(tc_eli_grid) + " ≥ " + to_string(tc_ad_grid) + ")")
 
+    // ── 🔵 sub-check 5 — λ→∞ Allen-Dynes asymptote (CLOSED-FORM anchor) ───
+    // The AD Tc exponent saturates as λ→∞: Tc_AD/ω_log → exp(-1.04/(1-0.62μ*))/1.2.
+    // EXACT algebra. At μ*=0.10 this is exp(-1.04/0.938)/1.2 = 0.27497817…  (🔵).
+    let sat10 = eliashberg_ad_saturated_ratio(0.10)
+    fails = fails + _ck("🔵 AD saturated ratio (μ*=0.10)", sat10, 0.27497817143712, 1e-9)
+    // μ*=0 → exp(-1.04)/1.2 = 0.29454557… (the pure phonon-mediated ceiling).
+    let sat0 = eliashberg_ad_saturated_ratio(0.0)
+    fails = fails + _ck("🔵 AD saturated ratio (μ*=0)", sat0, 0.29454556829898, 1e-9)
+    // unphysical μ* ≥ 1/0.62 → denominator ≤ 0 → 0.0 sentinel.
+    let sat_bad = eliashberg_ad_saturated_ratio(2.0)
+    fails = fails + _ck("guard AD saturated ratio (μ*=2.0) → 0", sat_bad, 0.0, 1e-12)
+
+    // ── 🟢 sub-check 6 — full-spectrum ME ≥ the closed-form asymptote anchor ─
+    // At large λ the ME Tc must sit AT-OR-ABOVE ω·sat(μ*) (Allen-Dynes 1975:
+    // the AD fit underestimates the ME solve; the asymptote is its λ→∞ floor).
+    // This is the absolute anchor the selftest previously lacked — it ties the
+    // iterative full-spectrum solver to an exact closed form, no benchmark α²F.
+    let lam_big = 3.0
+    let tc_eli_big = qforge_tc_eliashberg_from_lambda(lam_big, wrep, mu, n_mats)
+    let anchor = wrep * eliashberg_ad_saturated_ratio(mu)
+    fails = fails + _assert("🟢 ME Tc ≥ closed-form λ→∞ anchor (large λ)",
+                            tc_eli_big >= anchor,
+                            "(Tc_ME=" + to_string(tc_eli_big) +
+                            " ≥ ω·sat=" + to_string(anchor) + " K)")
+
     // ── guard — malformed α²F (length mismatch) → 0.0 sentinel ────────────
     let tc_bad = qforge_tc_eliashberg([1.0, 2.0], [0.5], mu, n_mats)
     fails = fails + _ck("guard malformed α²F → Tc=0", tc_bad, 0.0, 1e-12)
