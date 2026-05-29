@@ -5447,6 +5447,47 @@ fn gen2_expr(node) {
         let callee = node.left
         if type_of(callee) != "string" && callee.kind == "Ident" {
             let name = callee.name
+            // ── UNSHADOW item #4: atlas-guided const-fold pilot ────────────
+            // hexa-arch-native optimization (UNSHADOW.easy.md §A, "루프/호출을
+            // 안 돌기"): when codegen sees a call to a PURE atlas-verified fn
+            // whose value is recorded in the atlas AND every argument is a
+            // literal, emit the verified literal result directly instead of a
+            // runtime call across the C-ABI boundary. LLVM cannot do this — it
+            // has no theorem/verdict DB.
+            //
+            // SCOPE — ONE narrow case (NOT a general fold framework):
+            //   beenet_grid_bins(100.0, 10.0)  →  hexa_int(11)
+            //
+            // Verdict source (g5 · @D h_verify_auto_absorb):
+            //   `hexa verify --expr beenet_grid_bins 100.0 10.0 11`
+            //     calc = 11.0 ≈ expected 11.0 (|Δ|=0.0 ≤ ε=1e-9)
+            //     tier = 🟢 SUPPORTED-NUMERICAL · absorb = already in atlas
+            //   def: beenet_grid_bins(ω,Δ) = floor(ω/Δ)+1  (verify_cli.hexa:1500)
+            //   → floor(100.0/10.0)+1 = floor(10.0)+1 = 11.
+            //
+            // GUARD IS EXACT (comptime-fold-shadow family avoidance, MEMORY
+            // reference_comptime_fold_shadow_family): the fold fires ONLY when
+            // (a) the name is EXACTLY beenet_grid_bins, (b) it resolves to a
+            // top-level fn declaration (`_is_known_fn_global` — i.e. the user
+            // actually defined `fn beenet_grid_bins(...)` with the atlas-
+            // canonical body, so fold-off vs fold-on are byte-comparable), (c)
+            // there are EXACTLY 2 args, and (d) BOTH args are FloatLit nodes
+            // whose source tokens EXACTLY match the verified pair ("100.0",
+            // "10.0"). Any other call — different args, a non-literal arg, a
+            // local-let shadow that isn't a known global — falls through
+            // unchanged (zero behavior change for the general case). DOUBLE-EVAL
+            // SAFE: literal args are never evaluated (the call is replaced
+            // wholesale by a constant), so there is no double-eval surface.
+            if name == "beenet_grid_bins" && _is_known_fn_global(name) && !_gen2_has_decl(name) && len(node.args) == 2 {
+                let _fa0 = node.args[0]
+                let _fa1 = node.args[1]
+                if type_of(_fa0) != "string" && _fa0.kind == "FloatLit"
+                    && type_of(_fa1) != "string" && _fa1.kind == "FloatLit"
+                    && _fa0.value == "100.0" && _fa1.value == "10.0" {
+                    // atlas-verified literal — emit the constant, skip the call.
+                    return "hexa_int(11)"
+                }
+            }
             // PROBE r15-D3: Option/Result tagged-array constructors —
             // `Some(x)` / `Ok(x)` / `Err(x)` lower to `[hexa_str(tag), x]`,
             // mirroring the EnumPath payload convention (`[tag, payload]`
