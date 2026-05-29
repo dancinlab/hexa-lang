@@ -1,0 +1,67 @@
+=== arm A (checked) run_corpus inner loop — bl _hexa_index_get is the hot body ===
+LBB0_4:                                 ; =>This Loop Header: Depth=1
+                                        ;     Child Loop BB0_6 Depth 2
+	mov	x0, x19
+	mov	x1, x20
+	bl	_hexa_len
+	cmp	w0, #1
+	b.lt	LBB0_3
+; %bb.5:                                ;   in Loop: Header=BB0_4 Depth=1
+	mov	x21, #0                         ; =0x0
+LBB0_6:                                 ;   Parent Loop BB0_4 Depth=1
+                                        ; =>  This Inner Loop Header: Depth=2
+	mov	x0, x21
+	bl	_hexa_int
+	mov	x2, x0
+	mov	x3, x1
+	mov	x0, x19
+	mov	x1, x20
+	bl	_hexa_index_get
+	add	x22, x1, x22
+	add	x21, x21, #1
+	mov	x0, x19
+	mov	x1, x20
+	bl	_hexa_len
+	cmp	x21, w0, sxtw
+	b.lt	LBB0_6
+	b	LBB0_3
+LBB0_7:
+
+=== arm B (elided) — LBB0_8 inner loop: HX_IS_ARRAY (cmp #5) gate, fast path = direct items[i] load (x26 += #16); index_get only in cold LBB0_6 ===
+LBB0_4:                                 ; =>This Loop Header: Depth=1
+                                        ;     Child Loop BB0_8 Depth 2
+	mov	x0, x19
+	mov	x1, x20
+	bl	_hexa_len
+	cmp	w0, #1
+	b.lt	LBB0_3
+; %bb.5:                                ;   in Loop: Header=BB0_4 Depth=1
+	mov	x21, #0                         ; =0x0
+	mov	w26, #8                         ; =0x8
+	b	LBB0_8
+LBB0_6:                                 ;   in Loop: Header=BB0_8 Depth=2
+	mov	x0, x21
+	bl	_hexa_int
+	mov	x2, x0
+	mov	x3, x1
+	mov	x0, x19
+	mov	x1, x20
+	bl	_hexa_index_get
+LBB0_7:                                 ;   in Loop: Header=BB0_8 Depth=2
+	add	x22, x1, x22
+	add	x21, x21, #1
+	mov	x0, x19
+	mov	x1, x20
+	bl	_hexa_len
+	add	x26, x26, #16
+	cmp	x21, w0, sxtw
+	b.ge	LBB0_3
+LBB0_8:                                 ;   Parent Loop BB0_4 Depth=1
+                                        ; =>  This Inner Loop Header: Depth=2
+	cmp	x24, #5
+	b.ne	LBB0_6
+; %bb.9:                                ;   in Loop: Header=BB0_8 Depth=2
+	ldr	x8, [x20]
+	ldr	x1, [x8, x26]
+	b	LBB0_7
+LBB0_10:

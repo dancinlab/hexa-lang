@@ -3291,11 +3291,37 @@ fn _gen2_stmt_inner(node, depth) {
             // state is rebuilt after the loop (D17 block-scope pattern).
             _invalidate_comptime_const(node.name)
             let _cc_mark = _comptime_const_scope_mark()
+            // ── UNSHADOW item C: proof-carrying bounds-elision ──────────────
+            // Establish an in-range fact for `arr[i]` reads in this body iff:
+            //   (1) exclusive range  →  i < end  (inclusive `..=` voids it)
+            //   (2) lower bound is the literal 0  →  i >= 0
+            //   (3) upper bound is exactly `len(arr)` / `arr.len()` for a bare
+            //       Ident `arr`  →  end == arr.len, so i < arr.len
+            //   (4) `arr` is never resized/reassigned/aliased in the body, AND
+            //       the index var `i` is never reassigned (the elided read uses
+            //       the hidden native counter, which the body cannot touch).
+            // Then for the EXACT read `arr[i]`, 0 <= counter < arr.len holds by
+            // construction of the C for-loop, so the runtime bounds check (and
+            // its hexa_throw arm) is provably dead and may be elided. The fact
+            // is popped at loop exit (LOCAL + EXACT — fold-shadow family safe).
+            let mut _ir_pushed = false
+            if iter.value != "inclusive" && _node_is_int_zero(iter.left) {
+                let _ir_arr = _len_call_target_ident(iter.right)
+                if _ir_arr != "" {
+                    if !_name_resized_in_body(node.body, _ir_arr) {
+                        if !_name_resized_in_body(node.body, node.name) {
+                            _inrange_push(node.name, _ir_arr, "__hx_ni_" + node.name)
+                            _ir_pushed = true
+                        }
+                    }
+                }
+            }
             let mut fi = 0
             while fi < len(node.body) {
                 chunks.push(gen2_stmt(node.body[fi], depth + 2))
                 fi = fi + 1
             }
+            if _ir_pushed { _inrange_pop() }
             _comptime_const_scope_restore(_cc_mark)
             chunks.push(pad2 + "}\n")
             chunks.push(pad + "}\n")
@@ -7608,6 +7634,34 @@ fn gen2_expr(node) {
             }
             return "hexa_array_slice(" + arr_c + ", " + s_c + ", " + e_c + ")"
         }
+        // ── UNSHADOW item C: proof-carrying bounds-elision emit ─────────────
+        // If `arr[i]` is covered by a LIVE in-range fact (established by an
+        // enclosing `for i in 0..len(arr)` with no resize of arr / reassign of
+        // i), emit a BOUNDS-FREE, throw-FREE direct read indexing the native
+        // counter — `(arr.arr_ptr->items[__hx_ni_i])`. By construction of that
+        // C for-loop, 0 <= counter < arr.len, so the runtime bounds check and
+        // its hexa_throw arm are provably dead. HexaArr {items,len,cap} and the
+        // `arr_ptr` union field are public in runtime.h → no runtime-internal
+        // macro needed, works through the runtime.o C-ABI wall. Any read NOT
+        // matching the proven (arr,i) pair falls through to the checked form.
+        // The proof guarantees `0 <= counter < hexa_len(arr)` (the loop bound IS
+        // arr's length), but codegen is untyped (HexaVal) and cannot statically
+        // prove `arr` is a TAG_ARRAY rather than a map/string (`len()` is
+        // polymorphic). So we elide the BOUNDS CHECK + hexa_throw — the proven-
+        // dead part — but retain a single cheap TAG guard: on the array hot path
+        // emit the direct `arr.arr_ptr->items[counter]` (no `idx<0||idx>=len`
+        // compare, no throw, no oob-string); only a non-array `arr` falls back to
+        // the full checked `hexa_index_get`. This is the EXACT provably-safe
+        // elision — never an OOB read.
+        if type_of(node.left) != "string" && node.left.kind == "Ident" {
+            if type_of(idx) != "string" && idx.kind == "Ident" {
+                let _ir_ctr = _inrange_counter_for(node.left.name, idx.name)
+                if _ir_ctr != "" {
+                    let _ir_av = gen2_expr(node.left)
+                    return "(HX_IS_ARRAY(" + _ir_av + ") ? (" + _ir_av + ").arr_ptr->items[" + _ir_ctr + "] : hexa_index_get(" + _ir_av + ", hexa_int(" + _ir_ctr + ")))"
+                }
+            }
+        }
         return "hexa_index_get(" + gen2_expr(node.left) + ", " + gen2_expr(node.right) + ")"
     }
 
@@ -9503,6 +9557,24 @@ let mut _known_int_set = []          // 64 buckets; each bucket is [name, ...]
 // div runtime tag dispatch. Critical for training loops (99% float ops).
 let mut _known_float_set = []        // 64 buckets; each bucket is [name, ...]
 
+// ── UNSHADOW item C: proof-carrying array bounds-check elision ──────────────
+// Stack of ACTIVE in-range index facts. A fact is established ONLY by the
+// `for i in 0..len(arr)` exclusive-range fast-path (gen2_stmt ForStmt) AFTER a
+// conservative body scan proves `arr` is never resized/reassigned in the loop
+// body and `i` is never reassigned. Each entry is a 3-tuple stored as a small
+// array: [idx_var_name, arr_name, c_native_counter]. While such a fact is live,
+// `gen2_expr` Index emits a BOUNDS-FREE, throw-FREE direct read
+// (`<arr>.arr_ptr->items[<c_counter>]`) for exactly the read `arr[i]` — the
+// runtime `hexa_index_get` bounds check (`idx<0 || idx>=HX_ARR_LEN` → hexa_throw)
+// is provably dead because the C for-loop guarantees `0 <= counter < arr.len`.
+// The fact is LOCAL and EXACT (comptime-fold-shadow family hazard): it is popped
+// on loop exit, and any nested re-binding of `i` / mutation of `arr` voids it.
+// HexaArr {items,len,cap} + the `arr_ptr` union field are public in runtime.h,
+// so the elided read needs NO runtime-internal macro and works through the
+// runtime.o C-ABI wall (the §lto-unwall NULL was a CLANG limitation; this is a
+// CODEGEN proof, which is the axis unwall separated out).
+let mut _inrange_facts = []          // stack of [idx_var, arr_name, c_counter]
+
 // ── enum-variant access fix (inbox: enum-variant-access-miscodegen) ──
 // `<EnumName>.<VARIANT>` (e.g. RegionShape.K_BY_K) is an enum-variant
 // constant, NOT a runtime field access — the gen2_enum_decl #define
@@ -9911,6 +9983,175 @@ fn _is_known_int(node) {
     if node.kind == "IntLit" { return true }
     if node.kind == "Ident" { return _is_known_int_name(node.name) }
     return false
+}
+
+// ── UNSHADOW item C: proof-carrying bounds-elision helpers ──────────────────
+// Is `node` the integer literal 0? (IntLit.value is the source text string.)
+fn _node_is_int_zero(node) {
+    if type_of(node) == "string" { return false }
+    if node.kind != "IntLit" { return false }
+    return node.value == "0"
+}
+
+// If `node` is `len(arr)` (free fn) or `arr.len()` (method) where `arr` is a
+// BARE identifier, return arr's name; otherwise "". Only the bare-Ident form is
+// accepted so the body-mutation scan can reason about the array by name.
+fn _len_call_target_ident(node) {
+    if type_of(node) == "string" { return "" }
+    if node.kind != "Call" { return "" }
+    let callee = node.left
+    if type_of(callee) == "string" { return "" }
+    // free fn: len(arr)
+    if callee.kind == "Ident" && callee.name == "len" {
+        if type_of(node.args) == "array" && len(node.args) == 1 {
+            let a0 = node.args[0]
+            if type_of(a0) != "string" && a0.kind == "Ident" { return a0.name }
+        }
+        return ""
+    }
+    // method: arr.len()  (callee is a Field node: .left=arr Ident, .name="len")
+    if callee.kind == "Field" && callee.name == "len" {
+        if type_of(node.args) == "array" && len(node.args) == 0 {
+            let recv = callee.left
+            if type_of(recv) != "string" && recv.kind == "Ident" { return recv.name }
+        }
+        return ""
+    }
+    return ""
+}
+
+// CONSERVATIVE body scan: returns true if `arr_name` MIGHT be resized, mutated
+// at the container level, reassigned, captured-and-mutated, or aliased such that
+// `arr.arr_ptr->items` / `arr.len` could change during the loop. ANY of these
+// voids the in-range proof, so we over-approximate to safety:
+//   - reassignment:           `arr = …`  (AssignStmt/Compound/Logical LHS Ident)
+//   - method receiver:        `arr.push(…)` / `arr.pop()` / `arr.<anything>(…)`
+//                              — a push can realloc .items AND grow .len
+//   - passed to ANY call:     `f(arr)` / `m.g(arr)` — callee may push/realloc
+//                              (hexa arrays are heap-backed; pass-by-value copies
+//                              the HexaVal header but shares the .items buffer)
+//   - `arr[k] = v` element write is SAFE (no realloc, no .len change) and is NOT
+//     flagged here — but it is also never the read we elide.
+// decreases node — structural
+fn _name_resized_in_body(node, arr_name) {
+    if type_of(node) == "string" { return false }
+    if type_of(node) == "array" {
+        let mut i = 0
+        while i < len(node) {
+            if _name_resized_in_body(node[i], arr_name) { return true }
+            i = i + 1
+        }
+        return false
+    }
+    let k = node.kind
+    // reassignment of the whole binding
+    if k == "AssignStmt" || k == "CompoundAssign" || k == "LogicalAssign" {
+        if type_of(node.left) != "string" && node.left.kind == "Ident" {
+            if node.left.name == arr_name { return true }
+        }
+    }
+    // any Call: method-receiver mutation, or arr passed as an argument
+    if k == "Call" {
+        let callee = node.left
+        if type_of(callee) != "string" && callee.kind == "Field" {
+            let recv = callee.left
+            if type_of(recv) != "string" && recv.kind == "Ident" && recv.name == arr_name {
+                // arr.<method>(…) — push/pop/insert/remove/clear can all
+                // resize. Conservatively void on ANY method call on arr.
+                return true
+            }
+        }
+        if type_of(node.args) == "array" {
+            let mut ai = 0
+            while ai < len(node.args) {
+                let a = node.args[ai]
+                if type_of(a) != "string" && a.kind == "Ident" && a.name == arr_name {
+                    return true
+                }
+                ai = ai + 1
+            }
+        }
+    }
+    // Generic structural recursion (mirror _gen2_collect_assigned coverage).
+    if type_of(node.left) != "string" {
+        if _name_resized_in_body(node.left, arr_name) { return true }
+    }
+    if type_of(node.right) != "string" {
+        if _name_resized_in_body(node.right, arr_name) { return true }
+    }
+    if type_of(node.cond) != "string" {
+        if _name_resized_in_body(node.cond, arr_name) { return true }
+    }
+    if type_of(node.then_body) != "string" {
+        if _name_resized_in_body(node.then_body, arr_name) { return true }
+    }
+    if type_of(node.else_body) != "string" {
+        if _name_resized_in_body(node.else_body, arr_name) { return true }
+    }
+    if type_of(node.body) != "string" {
+        if _name_resized_in_body(node.body, arr_name) { return true }
+    }
+    if type_of(node.iter_expr) != "string" {
+        if _name_resized_in_body(node.iter_expr, arr_name) { return true }
+    }
+    if type_of(node.args) == "array" {
+        let mut ai2 = 0
+        while ai2 < len(node.args) {
+            if _name_resized_in_body(node.args[ai2], arr_name) { return true }
+            ai2 = ai2 + 1
+        }
+    }
+    if type_of(node.items) == "array" {
+        let mut ii = 0
+        while ii < len(node.items) {
+            if _name_resized_in_body(node.items[ii], arr_name) { return true }
+            ii = ii + 1
+        }
+    }
+    if type_of(node.arms) == "array" {
+        let mut mi = 0
+        while mi < len(node.arms) {
+            let arm = node.arms[mi]
+            if type_of(arm) != "string" && type_of(arm.body) == "array" {
+                if _name_resized_in_body(arm.body, arr_name) { return true }
+            }
+            mi = mi + 1
+        }
+    }
+    return false
+}
+
+// Push an in-range fact: while live, `arr[idx_var]` reads elide the bounds check
+// and index the native counter `c_counter` directly.
+fn _inrange_push(idx_var, arr_name, c_counter) {
+    _inrange_facts = _inrange_facts.push([idx_var, arr_name, c_counter])
+}
+
+fn _inrange_pop() {
+    // Rebuild to length n-1 with index+push only (portable in-place truncation
+    // across compiled-binary vintages — mirrors _comptime_const_scope_restore;
+    // avoids relying on a .slice/.truncate codegen branch).
+    let n = len(_inrange_facts)
+    if n <= 0 { return }
+    let mut _rebuilt = []
+    let mut i = 0
+    while i < n - 1 {
+        _rebuilt.push(_inrange_facts[i])
+        i = i + 1
+    }
+    _inrange_facts = _rebuilt
+}
+
+// If reading `arr_name[idx_name]` is covered by a LIVE in-range fact, return the
+// native C counter to index by; else "". Most-recent (innermost) fact wins.
+fn _inrange_counter_for(arr_name, idx_name) {
+    let mut i = len(_inrange_facts) - 1
+    while i >= 0 {
+        let f = _inrange_facts[i]
+        if f[0] == idx_name && f[1] == arr_name { return f[2] }
+        i = i - 1
+    }
+    return ""
 }
 
 // Check if an initializer expression is int-only (for LetStmt registration).

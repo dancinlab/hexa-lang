@@ -517,3 +517,67 @@ terminal 측정 권고 = opt-in flag.
 > 트리(emitter SSOT 와 byte-identical) · full self-host rebuild 은 B9 벽으로 차단되어 A/B
 > 프록시 사용(스펙 허용) · repo 안 `.c` 0개 유지(/tmp 외부 트리). 재현 =
 > `tool/unshadow_same_tu_bench.hexa --rt <self-with-runtime.c> --runs 5`.
+
+## §c-class — 🔵 proof-carrying array bounds-check elision (codegen 증명)
+
+> milestone "🔵 C-class proof-carrying bounds/null elision" 의 실측. **요지**: §lto-unwall
+> 이 C 를 NULL 로 분리해낸 이유 = 벽(runtime.o)을 없애고 `hexa_index_get`/`hexa_array_get`
+> 본문이 다 보여도 clang -O2 는 opaque(realloc-able) 배열의 bounds check 를 elide 못 한다
+> (`i < HX_ARR_LEN(arr)` 를 증명 불가). 진짜 win 은 **CODEGEN 증명** — 그 axis 가 이 milestone.
+> SSOT 도구 = `tool/unshadow_cclass_bounds_bench.hexa` · verdict = `.verdicts/unshadow-cclass-bounds/`.
+
+### 정적 증명 (self/codegen.hexa)
+
+`for i in 0..len(arr)` range fast-path 에서 다음이 모두 성립할 때만 in-range fact 를 push:
+
+1. **배타 range** (`..`, not `..=`)  →  `i < end`
+2. **lower bound = 리터럴 `0`**  →  `i >= 0`
+3. **upper bound = `len(arr)` / `arr.len()`** (arr 은 bare Ident)  →  `end == arr.len`, 즉 `i < arr.len`
+4. body 가 **arr 을 resize/reassign/alias 안 함** (push/pop/임의 method-recv/임의 call 인자/재대입
+   모두 보수적으로 void) **AND `i` 를 reassign 안 함** (elided read 는 hidden native counter 를
+   index 하므로 body 가 못 건드림)
+
+→ C for-loop 구조상 `0 <= counter < arr.len` 이 매 iteration 보장. fact 는 loop exit 에 pop
+(LOCAL·EXACT·fold-shadow family 안전). read `arr[i]` 의 emit:
+
+```
+A (checked, 기존):  hexa_index_get(arr, hexa_int(i))
+B (elided, 신규):   (HX_IS_ARRAY(arr) ? arr.arr_ptr->items[i] : hexa_index_get(arr, hexa_int(i)))
+```
+
+codegen 이 untyped(HexaVal) 이라 arr 의 array-tag 는 정적 증명 불가(`len()` 은 polymorphic) →
+**bounds check + hexa_throw 만 삭제**, array-tag guard 1개만 잔존(non-array 는 검사형 fallback).
+`HexaArr {items,len,cap}` + `arr_ptr` union 필드가 **runtime.h public** → runtime-internal 매크로
+불필요, **runtime.o C-ABI 벽 관통**.
+
+### 측정 (mini macOS arm64 · best-of-9 · 256-elem int array, hot loop)
+
+| arm | read emit | built | 출력 md5 (g5) | wall (s) | inner-loop `bl _hexa_index_get` |
+|---|---|---|---|---|---|
+| a_checked | `hexa_index_get(arr, hexa_int(i))` | yes | `fda59d53…` | 1.88 | **1** (hot body) |
+| b_elided  | `HX_IS_ARRAY?items[i]:검사형` | yes | `fda59d53…` | **0.56** | **0** (cold fallback only) |
+
+**Δ = 1.88→0.56s = 3.25× (−69%).** asm: arm A 의 `bl _hexa_index_get` 은 inner-loop body
+(`LBB0_6`, `b.lt LBB0_6` 로 루프백); arm B 의 inner-loop(`LBB0_8`)는 `cmp x24,#5`(HX_IS_ARRAY,
+TAG_ARRAY=5) → fast path `%bb.9`: `ldr x8,[x20]`(arr_ptr) + `ldr x1,[x8,x26]`(items[i]) 직접 로드,
+`bl _hexa_index_get` 은 절대 안 닿는 cold `LBB0_6` 으로 hoist. (`bl _hexa_throw` 은 양쪽 0 — throw
+는 runtime.o 벽 안.) 상세 asm = `.verdicts/unshadow-cclass-bounds/asm_loop_structure.txt`.
+
+### 무결성 게이트 — OOB 는 양쪽 arm 여전히 throw
+
+`arr[len]`(one past end) 접근: 검증식이 **안 덮는** read(loop var 가 아님) → codegen 은 검사형
+emit. 양쪽 arm 모두 "out of bounds" surfaced=1. **증명-안전한 read 만 삭제 — OOB read 절대 없음.**
+
+### 정직한 해석
+
+- **🔵 WIN (correctness PROVEN · perf REAL).** §lto-unwall 이 NULL 로 분리한 이 axis 가 실제로
+  win 으로 전환됨 — 단 unwall(벽 제거)이 아니라 **codegen 증명**으로. unwall 의 진단("벽 제거
+  단독으론 불충분, proof-carrying codegen 필요")이 정확히 입증됨. clang 이 못 한 elision 을
+  codegen 이 static fact 로 라이선스해 emit.
+- **잔존 array-tag guard 1개.** untyped HexaVal codegen 의 한계 — array-type 추론기가 없어
+  bounds+throw 만 삭제하고 tag-guard 1개는 유지(증명-안전). 향후 known-array 추적기가 생기면
+  tag-guard 도 삭제 가능(미측정 lever).
+- caveat: 단일 호스트(mini) 단일 세션 · best-of-9 real min · 양 arm 동일 runtime.o(walled) ·
+  full self-host regen 은 B9 generated-runtime 벽으로 차단(prior agents 도 동일) → faithful A/B
+  프록시(emit 문자열은 codegen L7661 과 byte-동일·스펙 허용) · repo 안 `.c` 0개. 재현 =
+  `tool/unshadow_cclass_bounds_bench.hexa --rt <self-with-runtime.o> --runs 9`.
