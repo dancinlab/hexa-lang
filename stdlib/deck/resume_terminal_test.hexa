@@ -1,0 +1,111 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+//
+// stdlib/deck/resume_terminal_test.hexa — improvements (2)+(3) selftest:
+//
+//  (2) RESUME-AWARE run template — the emitted ph run script sets recover on
+//      re-dispatch AND, when the recover state is corrupt (PARTIAL_EL_PHON /
+//      closing-tag class), falls back to a `start_q` recompute of the remaining
+//      q-range (completed <prefix>.dynN preserved).
+//  (3) REAL-TERMINAL check — el-ph completion = count(nonzero <prefix>.dynN) ==
+//      q-total (from <prefix>.dyn0) AND no ph.x running, NOT a bare
+//      grep "JOB DONE" ph.out (a per-invocation checkpoint that false-fires).
+//
+// The generator is pure-hexa (string emit), so these are string/structure
+// asserts over the emitted RUNBOOK §4c bash block (the task's stated selftest
+// shape). They verify the EMITTED logic encodes: dynN<q-total OR live ph.x →
+// NOT terminal; dynN==q-total + idle → terminal.
+//
+// Run:  hexa run stdlib/deck/resume_terminal_test.hexa
+// PASS: exits 0, prints "deck_resume_terminal_test PASS".
+use "stdlib/deck/rtsc"
+use "stdlib/deck/gen"
+
+fn _has(case: str, s: str, sub: str) {
+    if !s.contains(sub) {
+        println("  FAIL: " + case + " — missing '" + sub + "'")
+        exit(1)
+    }
+    println("  ok: " + case)
+}
+
+fn _hasnt(case: str, s: str, sub: str) {
+    if s.contains(sub) {
+        println("  FAIL: " + case + " — should NOT contain '" + sub + "'")
+        exit(1)
+    }
+    println("  ok: " + case)
+}
+
+fn _beh8_spec() -> DeckSpec {
+    let sp = deck_spec_new()
+    spec_set(sp, "prototype", "beh8_clathrate")
+    spec_set(sp, "prefix", "acbeh8")
+    spec_set(sp, "celldm_bohr", "8.5132")
+    spec_set(sp, "a_conv_ang", "4.505")
+    spec_set(sp, "anchor_a_ang", "5.30")
+    spec_set(sp, "contraction_pct", "15")
+    spec_set(sp, "a_site_symbol", "Ac")
+    spec_set(sp, "a_site_mass", "227.0")
+    spec_set(sp, "a_site_upf", "Ac.pbe.UPF")
+    spec_set(sp, "pressure_gpa", "10")
+    spec_set(sp, "pressure_kbar_int", "100")
+    spec_set(sp, "fallback_pressure_gpa", "50")
+    spec_set(sp, "fallback_pressure_kbar_int", "500")
+    return sp
+}
+
+fn _runbook(sp: DeckSpec) -> str {
+    let files = gen_deck("rtsc", sp)
+    let mut i = 0
+    while i < len(files) {
+        if files[i].path == "RUNBOOK.md" { return files[i].content }
+        i = i + 1
+    }
+    return ""
+}
+
+fn _phin(sp: DeckSpec) -> str {
+    let files = gen_deck("rtsc", sp)
+    let mut i = 0
+    while i < len(files) {
+        if files[i].path == "ph.in" { return files[i].content }
+        i = i + 1
+    }
+    return ""
+}
+
+fn main() {
+    println("# deck_resume_terminal_test — improvements (2)+(3)")
+    let rb = _runbook(_beh8_spec())
+    _has("emit: §4c RESUME-AWARE + REAL-TERMINAL section present", rb, "RESUME-AWARE + REAL-TERMINAL")
+
+    // ── (3) REAL-TERMINAL — q-total from dyn0, nonzero dynN count, no ph.x ──
+    _has("real-terminal: q-total parsed from <prefix>.dyn0", rb, ".dyn0")
+    _has("real-terminal: q-total awk parse", rb, "q_total()")
+    _has("real-terminal: done_q counts NON-EMPTY dynN (-s test)", rb, "[ -s \"$f\" ] && n=$((n+1))")
+    _has("real-terminal: terminal needs dq == qt", rb, "[ \"$dq\" -eq \"$qt\" ]")
+    // [p]h bracket trick — never self-matches, `.` not a wildcard (graph/phys).
+    _has("real-terminal: terminal needs no LIVE ph.x ([p]h bracket, end-anchored pgrep -fc)", rb, "pgrep -fc '[p]h[.]x -in ph[.]in$'")
+    // (3) anti-trap: completion is NOT decided by a bare JOB DONE grep.
+    _hasnt("real-terminal: NO bare 'grep JOB DONE ph.out' completion", rb, "grep -q \"JOB DONE\" ph.out")
+    _has("real-terminal: dynN<q-total OR live ph.x → NOT terminal path", rb, "NOT terminal:")
+
+    // ── (2) RESUME-AWARE — recover, corrupt-detect, start_q remaining range ──
+    _has("resume: recover=.true. resume path", rb, "recover=.true.")
+    _has("resume: corrupt-recover detector (PARTIAL_EL_PHON class)", rb, "recover_corrupt()")
+    _has("resume: PARTIAL_EL_PHON / closing-tag corrupt class matched", rb, "PARTIAL_EL_PHON")
+    _has("resume: corrupt → start_q fallback", rb, "start_q=")
+    _has("resume: first_missing_q drives remaining range", rb, "first_missing_q()")
+    _has("resume: completed dynN preserved (not wiped)", rb, "completed dynN preserved")
+    _has("resume: corrupt path flips recover=.false. for clean recompute", rb, "recover=.false.")
+
+    // ── ph.in still ships recover=.true. (re-dispatch picks up mid-q) ──
+    let phin = _phin(_beh8_spec())
+    _has("ph.in: recover=.true. (resumable checkpoint)", phin, "recover")
+
+    // ── regression: §4 single-deck chain + §4b fill block both still present ─
+    _has("regression: §4 single-deck chain present", rb, "## 4. 실행 체인")
+    _has("regression: §4b concurrent-fill block present", rb, "CONCURRENT-FILL")
+
+    println("deck_resume_terminal_test PASS")
+}
