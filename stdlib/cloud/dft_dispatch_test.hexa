@@ -41,6 +41,13 @@ fn _seq(a: str, b: str) -> int {
     return 0
 }
 
+fn _bool_int(b: bool) -> int {
+    if b {
+        return 1
+    }
+    return 0
+}
+
 fn main() {
     // ── ③ relax → scf coordinate parser ──────────────────────────────
     // alat=1.0 → scale = BOHR_ANGSTROM = 0.52917720859, so the x-axis cell
@@ -113,6 +120,49 @@ fn main() {
     _check("endpoint: 22/tcp HostPort", _seq(ep.port, "40012"), 1)
     let ep_absent = vast_parse_direct_endpoint(inst_json, "99999")
     _check("endpoint: ok=0 for absent instance", ep_absent.ok, 0)
+
+    // ── option α phase-1: --detach flag parse + detached relax command shape ──
+    // --detach / --resume are BOOLEAN flags (take no value): the positional
+    // scanner must skip ONE token, so the deck dir is still resolved after them.
+    _check("flag: --detach is boolean", _dft_is_bool_flag("--detach"), 1)
+    _check("flag: --resume is boolean", _dft_is_bool_flag("--resume"), 1)
+    let av_d = ["dft-run", "/decks/CaBeH8", "--detach"]
+    _check("parse: --detach has_flag", _dft_has_flag(av_d, 1, "--detach"), 1)
+    _check("parse: deck positional past --detach", _seq(_dft_first_positional(av_d, 1), "/decks/CaBeH8"), 1)
+    _check("parse: --detach is 1 positional (no value swallow)", _dft_count_positionals(av_d, 1), 1)
+    let av_r = ["dft-run", "--resume", "/decks/ScH9"]
+    _check("parse: deck positional past leading --resume", _seq(_dft_first_positional(av_r, 1), "/decks/ScH9"), 1)
+
+    // detached relax = the SAME guarded relax cmd, wrapped in a `sh -lc` argv for
+    // cloud_nohup (login shell → detached-env-loss guard). Shape contract: argv
+    // is ["sh","-lc", <relax cmd>] and the inner cmd is the reused _dft_relax_cmd.
+    let relax_cmd = _dft_relax_cmd(28, 12, "vc-relax.in")
+    let argv = _dft_detach_argv(relax_cmd)
+    _check("detach argv: sh launcher", _seq(argv[0], "sh"), 1)
+    _check("detach argv: login -c", _seq(argv[1], "-lc"), 1)
+    _check("detach argv: carries the relax invocation", _has(argv[2], "pw.x -ndiag 1 -in vc-relax.in"), 1)
+    _check("detach argv: relax output → relax.out", _has(argv[2], "> relax.out"), 1)
+    // phase-1 launches relax DETACHED — it must NOT contain scf / ph / teardown.
+    _check("detach argv: no scf in phase-1 relax launch", _has(argv[2], "scf.in"), 0)
+    _check("detach argv: no ph in phase-1 relax launch", _has(argv[2], "ph.in"), 0)
+    // per-stage remote logfile (cloud_nohup target — a --resume tail attaches here).
+    _check("detach: relax remote logfile path", _seq(_dft_remote_logfile("relax"), "/root/deck/.relax.detach.log"), 1)
+
+    // ── detach state stamp round-trip (the --detach→--resume handoff SSOT) ──
+    let sdeck = "/tmp/dft_detach_state_test"
+    let _mk = exec("mkdir -p '" + sdeck + "'")
+    let wrote = _dft_write_state(sdeck, "relax", "12345", "1.2.3.4", "40012",
+                                 "/home/u/.ssh/id_vast_anima", 28, 12, "vc-relax.in")
+    _check("state: write_state ok", _bool_int(wrote), 1)
+    _check("state: phase field", _seq(_dft_state_field(sdeck, "phase"), "relax"), 1)
+    _check("state: instance_id field", _seq(_dft_state_field(sdeck, "instance_id"), "12345"), 1)
+    _check("state: host field", _seq(_dft_state_field(sdeck, "host"), "1.2.3.4"), 1)
+    _check("state: port field", _seq(_dft_state_field(sdeck, "port"), "40012"), 1)
+    _check("state: np field", _seq(_dft_state_field(sdeck, "np"), "28"), 1)
+    _check("state: relax_name field", _seq(_dft_state_field(sdeck, "relax_name"), "vc-relax.in"), 1)
+    _check("state: absent key → empty", len(_dft_state_field(sdeck, "nope")), 0)
+    let _rm = exec("rm -rf '" + sdeck + "'")
+    _check("state: missing stamp → empty field", len(_dft_state_field(sdeck, "phase")), 0)
 
     println("dft_dispatch_test PASS")
 }
