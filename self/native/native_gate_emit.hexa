@@ -1,0 +1,1535 @@
+#!hexa strict
+// self/native/native_gate_emit.hexa
+//   B9.C (.c-text · #1848 pattern) — native_gate.c source emitter.
+//
+// native_gate.c is the LD_PRELOAD (Linux) / DYLD_INSERT_LIBRARIES (macOS)
+// sandbox shim — a STANDALONE shared object (cc -shared -fPIC), NOT a
+// runtime.c #include fragment. This emitter is the SSOT; native_gate.c
+// becomes a regenerated build artifact (`hexa-run native_gate_emit.hexa
+// native_gate.c` before `cc -shared ...`).
+//
+// Byte-identity: regenerated C is byte-for-byte the hand-written source,
+// so the compiled native_gate.so is identical — behavior UNCHANGED. This
+// removes the last committed hand-written .c in self/native (the rest of
+// the tree is already emit+byte_diff pairs).
+//
+// Invocation:  hexa-run self/native/native_gate_emit.hexa <output-path>
+// Default output path (if argv missing): "native_gate.c" in cwd.
+//
+// Phase: B9.C (self/native standalone .so .c-text · F3 · HEXA-CC-ZERO C-front).
+
+let MODULE_NAME = "native_gate_emit"
+
+fn emit_native_gate_c() -> str {
+    let mut s = ""
+    s = s +
+            "// self/native/native_gate.c — LD_PRELOAD (Linux) / DYLD_INSERT_LIBRARIES (macOS)\n" +
+            "// shim that blocks writes to .py / .rs / .sh / .toml at the VFS syscall\n" +
+            "// boundary. Kernel returns EPERM before any byte hits disk.\n" +
+            "//\n" +
+            "// Mirrors the effect of macOS sandbox-exec + self/sbpl/native.sb on Linux,\n" +
+            "// where sandbox-exec isn't available. Same allowlist — bench/rust_baseline,\n" +
+            "// tool/emergency, self/native, scripts/safe_hexa_launchd.sh, /tmp.\n" +
+            "//\n" +
+            "// BUILD (Ubuntu / Linux):\n" +
+            "//   cc -shared -fPIC -O2 -D_GNU_SOURCE \\\n" +
+            "//      -o $WS/hexa-lang/self/native/native_gate.so \\\n" +
+            "//      $WS/hexa-lang/self/native/native_gate.c -ldl\n" +
+            "//\n" +
+            "// INSTALL (per-user, no root):\n" +
+            "//   # in ~/.bashrc or ~/.zshrc:\n" +
+            "//   export LD_PRELOAD=\"$WS/hexa-lang/self/native/native_gate.so${LD_PRELOAD:+:$LD_PRELOAD}\"\n" +
+            "//\n" +
+            "// OPT-OUT (emergency):\n" +
+            "//   CLAUDX_NO_SANDBOX=1 <cmd>   — env gate (checked per-call, zero-cost\n" +
+            "//                                 when set on invocation: shim early-returns).\n" +
+            "//\n" +
+            "// ALLOWED to compile as .c (self/native/ is on raw#8 allowlist — FFI shim tree).\n" +
+            "// SSOT: airgenome/rules/airgenome.json#AG10 + self/sbpl/native.sb.\n" +
+            "//\n" +
+            "// NOTES:\n" +
+            "//   - Intercepts `open`, `openat`, `creat`, `rename`, `renameat`, `renameat2`.\n" +
+            "//   - LFS aliases: `open64`, `__open64`, `openat64`, `__openat64` also\n" +
+            "//     hooked (Phase 11 fix — curl/wget go fopen → __open64 on glibc and\n" +
+            "//     bypassed the plain `open` shim). All four route through the same\n" +
+            "//     `refuse()` policy; LFS path semantics are identical (off64_t only\n" +
+            "//     affects pread/pwrite, not the gate decision).\n" +
+            "//   - `fopen` family (fopen/fopen64/freopen/freopen64) is ALSO hooked\n" +
+            "//     directly (Phase 13 fix — verification in Phase 12 caught curl\n" +
+            "//     calling `fopen` whose internal `__open64` resolves through libc\n" +
+            "//     hidden alias / PLT-bypass, sidestepping our `__open64` interposer\n" +
+            "//     entirely). Hooking `fopen` itself closes the libc-internal gap;\n" +
+            "//     `fdopen` (already-open fd) and `tmpfile` (anonymous) need no shim.\n" +
+            "//   - macOS `DYLD_INSERT_LIBRARIES` is blocked on SIP-protected binaries;\n" +
+            "//     for Mac, sandbox-exec is the primary path (self/sbpl/native.sb).\n" +
+            "//     This shim is for unprivileged Linux (and unsigned mac executables).\n" +
+            "//\n" +
+            "// LIMITATION: hexa CLI 자체는 static musl link (build/hexa_linux_*: ELF …\n" +
+            "// statically linked, stripped) 라 LD_PRELOAD 무영향.  본 .so 는 hexa 가\n" +
+            "// spawn 하는 *dynamic 자식 프로세스* (curl, wget, busybox sh -c 서브셸,\n" +
+            "// popen 으로 띄운 외부 툴 etc.) 만 enforce 한다.  hexa 자신의 직접 file\n" +
+            "// IO (raw_loader 의 .raw open, codegen 산출물 write 등) 는 본 레이어를\n" +
+            "// **우회** — 그 경로는 다음 두 레이어로 cover:\n" +
+            "//   - L0 agent-layer pre_tool_guard: 모든 hexa subprocess 진입 직전에\n" +
+            "//     pretool hook 이 정책 검사 (cross-platform, hexa 자체 static 여부와\n" +
+            "//     무관).\n" +
+            "//   - L0' macOS sandbox-exec + self/sbpl/native.sb: darwin host 에서 hexa\n" +
+            "//     binary 자체를 sandbox profile 로 감싼다 (LD_PRELOAD 등가물).\n" +
+            "// 따라서 enforcement layer ladder 는:\n" +
+            "//   L0  agent-layer pre_tool_guard      — 모든 hexa subprocess (cross-platform)\n" +
+            "//   L0' sandbox-exec native.sb (macOS)  — hexa 자체 file IO (darwin)\n" +
+            "//   L1  본 .so + LD_PRELOAD (Linux)     — dynamic 자식 process (이 파일)\n" +
+            "//   L2  chflags uchg / launchd sweep    — filesystem-level (raw#1 os-lock)\n" +
+            "// hexa CLI 자체는 L0 + L0' (macOS) 또는 L0 + 자체 raw_loader assertion\n" +
+            "// (Linux container) 으로 cover; 본 .so 의 책임 범위가 아님을 명시한다.\n" +
+            "// 자세한 ladder rationale: hive .raw raw#7 entry + Mac→docker hard-landing\n" +
+            "// policy 2026-04-25 + doc/security/os-level-enforcement-limits.md §11.\n" +
+            "//\n" +
+            "// MACOS HOST L1 GAP (2026-04-26, doc §12): macOS 의 DYLD_INSERT_LIBRARIES\n" +
+            "// 는 SIP-protected binary (curl/wget/sh 등) 에 inject 차단 → host 의 L1\n" +
+            "// 등가 enforce 가 부재. 본 cycle 결정: Mac→docker hard-landing 정책으로\n" +
+            "// 정책 레벨 mitigate (macOS host 에서 hexa run 자체가 컨테이너로 강제됨).\n" +
+            "// 향후 옵션: (A) sandbox-exec wrapper for spawn (transitional, deprecated\n" +
+            "// API), (B) EndpointSecurity Framework (signing+entitlement, 장기). 상세\n" +
+            "// trade-off 표는 doc/security/os-level-enforcement-limits.md §12 참조.\n" +
+            "\n" +
+            "// NOTE: build with -D_GNU_SOURCE on the command line (see BUILD above).\n" +
+            "// Compiling without that define exposes a POSIX-only signature; dlsym\n" +
+            "// RTLD_NEXT would still work, but openat/renameat extern decls wouldn't\n" +
+            "// be visible from the glibc headers.\n" +
+            "\n" +
+            "#include <dlfcn.h>\n" +
+            "#include <dirent.h>\n" +
+            "#include <errno.h>\n" +
+            "#include <fcntl.h>\n" +
+            "#include <stdarg.h>\n" +
+            "#include <stdio.h>\n" +
+            "#include <stdlib.h>\n" +
+            "#include <string.h>\n" +
+            "#include <sys/stat.h>\n" +
+            "#include <sys/types.h>\n" +
+            "#include <time.h>\n" +
+            "#include <unistd.h>\n" +
+            "\n" +
+            "static const char *BANNED_SUFFIXES[] = { \".py\", \".rs\", \".sh\", \".toml\", NULL };\n" +
+            "\n" +
+            "// raw#8 filename taxonomy (F1 version / F2 stage / F3 temp + no-backup)\n" +
+            "static const char *RAW8_SUFFIXES[] = {\n" +
+            "    \".bak\", \".orig\", NULL\n" +
+            "};\n" +
+            "static const char *RAW8_CONTAINS[] = {\n" +
+            "    \"_v2.\", \"_v3.\", \"_v4.\", \"_v5.\", \"_v6.\", \"_v7.\", \"_v8.\", \"_v9.\", \"_v10.\",\n" +
+            "    \"_mk2.\", \"_mk3.\", \"_mk4.\", \"_mk5.\",\n" +
+            "    \"_new.\", \"_copy.\", \"_old.\", \"_backup.\",\n" +
+            "    \"_phase\", \"_stage\", \"_Phase\",\n" +
+            "    \".bak.\", \".legacy-\", \".pre-\",\n" +
+            "    \"-backup\", \"/TMP-\", \"/TIMESTAMP-\",\n" +
+            "    NULL\n" +
+            "};\n" +
+            "\n" +
+            "// raw#13 ai/git config paths (path-substring match).\n" +
+            "// raw#13 expansion 2026-04-22 — per-repo .claude/settings*.json + agents/ + commands/\n" +
+            "// added (AG10 purge 후 project-local 금지 확정).\n" +
+            "// user-global ~/.claude/ is whitelisted via is_user_global_claude() below.\n" +
+            "static const char *RAW13_PATHS[] = {\n" +
+            "    \"/.github/workflows/\",\n" +
+            "    \"/.githooks/\",\n" +
+            "    \"/.husky/\",\n" +
+            "    \"/husky.config.\",\n" +
+            "    \"/.pre-commit-config.yaml\",\n" +
+            "    \"/.pre-commit-config.yml\",\n" +
+            "    \"/lefthook.yaml\",\n" +
+            "    \"/lefthook.yml\",\n" +
+            "    \"/.cursorrules\",\n" +
+            "    \"/.continue/\",\n" +
+            "    \"/.aider.conf.yaml\",\n" +
+            "    \"/.aider.conf.yml\",\n" +
+            "    \"/.windsurfrules\",\n" +
+            "    \"/CLAUDE.md\",\n" +
+            "    \"/.claude/hooks/\",\n" +
+            "    \"/.claude/skills/\",\n" +
+            "    \"/.claude/settings.json\",\n" +
+            "    \"/.claude/settings.local.json\",\n" +
+            "    \"/.claude/agents/\",\n" +
+            "    \"/.claude/commands/\",\n" +
+            "    NULL\n" +
+            "};\n" +
+            "\n" +
+            "static int ends_with(const char *s, const char *suf) {\n" +
+            "    if (!s || !suf) return 0;\n" +
+            "    size_t ls = strlen(s), lf = strlen(suf);\n" +
+            "    if (ls < lf) return 0;\n" +
+            "    return strcmp(s + ls - lf, suf) == 0;\n" +
+            "}\n" +
+            "\n" +
+            "static int on_allowlist(const char *path) {\n" +
+            "    static const char *allow_substrings[] = {\n" +
+            "        \"/bench/rust_baseline/\",\n" +
+            "        \"/tool/emergency/\",\n" +
+            "        \"/self/native/\",\n" +
+            "        \"/scripts/safe_hexa_launchd.sh\",\n" +
+            "        \"/.hexa-cache/\",\n" +
+            "        \"/.claude-cache/\",\n" +
+            "        \"/.git/\",\n" +
+            "        \"/.hx/\",\n" +
+            "        \"/tmp/\",\n" +
+            "        \"/private/tmp/\",\n" +
+            "        \"/var/folders/\",\n" +
+            "        NULL\n" +
+            "    };\n" +
+            "    for (int i = 0; allow_substrings[i]; i++) {\n" +
+            "        if (strstr(path, allow_substrings[i])) return 1;\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "static int opt_out(void) {\n" +
+            "    const char *v = getenv(\"CLAUDX_NO_SANDBOX\");\n" +
+            "    return v && v[0] && strcmp(v, \"0\") != 0;\n" +
+            "}\n" +
+            "\n" +
+            "static int is_write_flag(int flags) {\n" +
+            "    return (flags & (O_WRONLY | O_RDWR | O_CREAT | O_TRUNC | O_APPEND)) != 0;\n" +
+            "}\n" +
+            "\n" +
+            "static int refuse_raw8(const char *path) {\n" +
+            "    for (int i = 0; RAW8_SUFFIXES[i]; i++) {\n" +
+            "        if (ends_with(path, RAW8_SUFFIXES[i])) return 1;\n" +
+            "    }\n" +
+            "    for (int i = 0; RAW8_CONTAINS[i]; i++) {\n" +
+            "        if (strstr(path, RAW8_CONTAINS[i])) return 1;\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "// user-global ~/.claude/ is always allowed (raw#13 exception — AG10 purge 후\n" +
+            "// user-global AI 도구 설정은 유지). Detect \"/Users/<user>/.claude/\" (macOS) or\n" +
+            "// \"/home/<user>/.claude/\" (Linux) by finding \"/.claude/\" and looking for a\n" +
+            "// $HOME-prefix match.\n" +
+            "static int is_user_global_claude(const char *path) {\n" +
+            "    if (!path) return 0;\n" +
+            "    const char *hit = strstr(path, \"/.claude/\");\n" +
+            "    if (!hit) return 0;\n" +
+            "    const char *home = getenv(\"HOME\");\n" +
+            "    if (home && home[0]) {\n" +
+            "        size_t hn = strlen(home);\n" +
+            "        if (strncmp(path, home, hn) == 0 && path[hn] == '/') {\n" +
+            "            // Only the top-level $HOME/.claude/ counts as user-global;\n" +
+            "            // $HOME/core/hexa-lang/.claude/ is per-repo (still banned).\n" +
+            "            if (strncmp(path + hn, \"/.claude/\", 9) == 0) return 1;\n" +
+            "        }\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "static int refuse_raw13(const char *path) {\n" +
+            "    if (is_user_global_claude(path)) return 0;\n" +
+            "    for (int i = 0; RAW13_PATHS[i]; i++) {\n" +
+            "        if (strstr(path, RAW13_PATHS[i])) return 1;\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "// raw#6 — folder-name F4 (banned basenames). Hive-only initial deployment\n" +
+            "// 2026-04-25; other repos still pending raw_6.list expansion. Allowlist\n" +
+            "// mirrors self/sbpl/native.sb raw#6 block + on_allowlist short-circuits.\n" +
+            "static const char *RAW6_BANNED[] = {\n" +
+            "    \"/utils/\", \"/helpers/\", \"/common/\", \"/lib/\",\n" +
+            "    \"/misc/\", \"/stuff/\", \"/base/\",\n" +
+            "    NULL\n" +
+            "};\n" +
+            "static const char *RAW6_ALLOW[] = {\n" +
+            "    \"/node_modules/\",\n" +
+            "    \"/packages/\",\n" +
+            "    \"/infrastructure/\",\n" +
+            "    \"/libs/\",\n" +
+            "    \"/archive/\",\n" +
+            "    NULL\n" +
+            "};\n" +
+            "\n" +
+            "static int is_under_hive_repo(const char *path) {\n" +
+            "    if (!path) return 0;\n" +
+            "    return strstr(path, \"/core/hive/\") != NULL;\n" +
+            "}\n" +
+            "\n" +
+            "static int refuse_raw6(const char *path) {\n" +
+            "    if (!is_under_hive_repo(path)) return 0;\n" +
+            "    for (int i = 0; RAW6_ALLOW[i]; i++) {\n" +
+            "        if (strstr(path, RAW6_ALLOW[i])) return 0;\n" +
+            "    }\n" +
+            "    for (int i = 0; RAW6_BANNED[i]; i++) {\n" +
+            "        if (strstr(path, RAW6_BANNED[i])) return 1;\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "// raw#7 — tree-structure F5 (loner-dir) + F6 (parent-child stem repeat).\n" +
+            "//\n" +
+            "// Promoted 2026-04-26 from agent-layer (tool/ai_native_scan.hexa) to\n" +
+            "// os-level on Linux LD_PRELOAD. macOS SBPL still cannot enforce — kernel\n" +
+            "// regex lacks dir-content introspection (F5) and backreferences (F6\n" +
+            "// fail-opens on backref patterns). On Linux the shim sees full paths +\n" +
+            "// has FS access, so both F5 + F6 are straightforward C.\n" +
+            "//\n" +
+            "// Both helpers gate behind on_allowlist() (in refuse() flow) plus an\n" +
+            "// is_under_managed_repo() check (mirrors refuse_raw6's is_under_hive_repo)\n" +
+            "// so cross-repo expansion follows the raw_6.list precedent.\n" +
+            "\n" +
+            "// F6 entry-point stem whitelist — mirrors ai_native_scan.hexa#L612.\n" +
+            "// `index/mod/main/lib/init` are conventional entry-point names; never flagged.\n" +
+            "static const char *RAW7_F6_ENTRY_STEMS[] = {\n" +
+            "    \"index\", \"mod\", \"main\", \"lib\", \"init\", NULL\n" +
+            "};\n" +
+            "\n" +
+            "// raw#7 path-substring exemptions (vendor / test-fixtures / generated trees).\n" +
+            "// Mirrors raw_7.list intent: tests/integration/*/test.sh is the canonical\n" +
+            "// F5-loner exemption; vendor + node_modules are universal grandfather paths.\n" +
+            "//\n" +
+            "// This is the STATIC FALLBACK — always consulted first (cheap), and used\n" +
+            "// when the per-repo `.raw-exemptions/raw_7.list` file is missing or empty.\n" +
+            "// The dynamic, file-based reader below augments this list (cross-port from\n" +
+            "// `hive/tool/ai_native_scan.hexa#load_raw_7_exemptions`).\n" +
+            "static const char *RAW7_ALLOW[] = {\n" +
+            "    \"/node_modules/\",\n" +
+            "    \"/vendor/\",\n" +
+            "    \"/archive/\",\n" +
+            "    \"/.git/\",\n" +
+            "    \"/.hexa-cache/\",\n" +
+            "    \"/.claude-cache/\",\n" +
+            "    \"/.claude/worktrees/\",\n" +
+            "    \"/tests/integration/\",   // raw_7.list: per-test isolation by design\n" +
+            "    \"/tests/fixtures/\",\n" +
+            "    \"/test/fixtures/\",\n" +
+            "    \"/testdata/\",\n" +
+            "    \"/.raw-exemptions/\",\n" +
+            "    NULL\n" +
+            "};\n" +
+            "\n" +
+            "static int is_under_managed_repo(const char *path) {\n" +
+            "    if (!path) return 0;\n" +
+            "    return strstr(path, \"/core/hive/\") != NULL\n" +
+            "        || strstr(path, \"/core/hexa-lang/\") != NULL;\n" +
+            "}\n" +
+            "\n" +
+            "// ─── raw_7.list file-based reader ────────────────────────────────────\n" +
+            "//\n" +
+            "// Cross-port from `hive/tool/ai_native_scan.hexa` (commit 1f54f8dfc).\n" +
+            "// Reads `<repo_root>/.raw-exemptions/raw_7.list` once per process (lazy\n" +
+            "// load on first refuse_raw7_* call), parses each non-comment line, and\n" +
+            "// substring-matches candidate paths against the assembled pattern array.\n" +
+            "//\n" +
+            "// Two file formats are auto-detected per line:\n" +
+            "//   (a) pipe-separated  — hexa-lang style:\n" +
+            "//       <pattern> | <line_range> | <reason> | <expiry YYYY-MM-DD>\n" +
+            "//   (b) bare pattern    — hive style; metadata supplied by preceding\n" +
+            "//                          `#` comment block (reason/expiry/owner/jurisdiction).\n"
+    s = s +
+            "//\n" +
+            "// Both paths populate `raw7_exemption_t` rows uniformly; downstream match\n" +
+            "// logic only consults `pattern` + `expiry_unix` (debug-build expiry warner).\n" +
+            "//\n" +
+            "// Self-recursion safety: this reader uses fopen/fgets which will hit our\n" +
+            "// own `open()` shim. That call passes `O_RDONLY`, so `is_write_flag(flags)\n" +
+            "// == 0` short-circuits `refuse()` to allow before any raw#7 logic runs.\n" +
+            "// The static `g_raw7_loading` guard adds a second layer (paranoia: if a\n" +
+            "// future code path triggered raw7 check on read, the guard prevents\n" +
+            "// infinite recursion during the load itself).\n" +
+            "\n" +
+            "#define RAW7_PATTERN_MAX     256\n" +
+            "#define RAW7_META_MAX         64\n" +
+            "#define RAW7_MAX_ENTRIES     128\n" +
+            "#define RAW7_LINE_MAX       1024\n" +
+            "\n" +
+            "typedef struct {\n" +
+            "    char pattern[RAW7_PATTERN_MAX];\n" +
+            "    long expiry_unix;                       // 0 = no expiry parsed\n" +
+            "    char expiry_iso[16];                    // YYYY-MM-DD (cached, for warner)\n" +
+            "    char owner[RAW7_META_MAX];\n" +
+            "    char jurisdiction[RAW7_META_MAX];\n" +
+            "    char reason[RAW7_PATTERN_MAX];\n" +
+            "} raw7_exemption_t;\n" +
+            "\n" +
+            "// Per-repo cache. Each repo we encounter gets one cache slot. In practice\n" +
+            "// we only ever hit hive + hexa-lang here, but the fixed array is cheap.\n" +
+            "typedef struct {\n" +
+            "    char repo_root[256];                    // \"/Users/<u>/core/<repo>\" or \"\"\n" +
+            "    int  loaded;                            // 0 = unloaded, 1 = loaded, -1 = file missing\n" +
+            "    int  count;\n" +
+            "    raw7_exemption_t entries[RAW7_MAX_ENTRIES];\n" +
+            "} raw7_cache_t;\n" +
+            "\n" +
+            "#define RAW7_CACHE_SLOTS 4\n" +
+            "static raw7_cache_t g_raw7_cache[RAW7_CACHE_SLOTS];\n" +
+            "static int g_raw7_loading = 0;              // re-entrancy guard\n" +
+            "\n" +
+            "// Strip leading + trailing whitespace in-place; returns the (mutated) buffer.\n" +
+            "static char *raw7_trim(char *s) {\n" +
+            "    if (!s) return s;\n" +
+            "    while (*s == ' ' || *s == '\\t' || *s == '\\r' || *s == '\\n') s++;\n" +
+            "    size_t n = strlen(s);\n" +
+            "    while (n > 0 && (s[n-1] == ' ' || s[n-1] == '\\t' ||\n" +
+            "                     s[n-1] == '\\r' || s[n-1] == '\\n')) {\n" +
+            "        s[--n] = '\\0';\n" +
+            "    }\n" +
+            "    return s;\n" +
+            "}\n" +
+            "\n" +
+            "// Parse YYYY-MM-DD into unix-ts (UTC, 00:00:00). Returns 0 on parse failure.\n" +
+            "static long raw7_parse_iso_date(const char *s) {\n" +
+            "    if (!s || strlen(s) < 10) return 0;\n" +
+            "    int y = 0, m = 0, d = 0;\n" +
+            "    if (sscanf(s, \"%4d-%2d-%2d\", &y, &m, &d) != 3) return 0;\n" +
+            "    if (y < 1970 || m < 1 || m > 12 || d < 1 || d > 31) return 0;\n" +
+            "    struct tm tm;\n" +
+            "    memset(&tm, 0, sizeof(tm));\n" +
+            "    tm.tm_year = y - 1900;\n" +
+            "    tm.tm_mon  = m - 1;\n" +
+            "    tm.tm_mday = d;\n" +
+            "    return (long)timegm(&tm);\n" +
+            "}\n" +
+            "\n" +
+            "// Determine the repo-root prefix for a path.\n" +
+            "// Returns 1 + writes prefix into out (caller-sized) on hit, 0 if path is\n" +
+            "// outside known managed repos.\n" +
+            "static int raw7_repo_root_for(const char *path, char *out, size_t out_sz) {\n" +
+            "    if (!path || !out || out_sz < 32) return 0;\n" +
+            "    static const char *repos[] = {\n" +
+            "        \"/core/hive/\",\n" +
+            "        \"/core/hexa-lang/\",\n" +
+            "        NULL\n" +
+            "    };\n" +
+            "    for (int i = 0; repos[i]; i++) {\n" +
+            "        const char *hit = strstr(path, repos[i]);\n" +
+            "        if (!hit) continue;\n" +
+            "        // Root = path[0..end-of-repo-segment] without trailing slash.\n" +
+            "        size_t end = (size_t)(hit - path) + strlen(repos[i]) - 1; // omit '/'\n" +
+            "        if (end >= out_sz) return 0;\n" +
+            "        memcpy(out, path, end);\n" +
+            "        out[end] = '\\0';\n" +
+            "        return 1;\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "// Build \"<root>/.raw-exemptions/raw_7.list\" into out. Returns 0 on overflow.\n" +
+            "static int raw7_list_path(const char *repo_root, char *out, size_t out_sz) {\n" +
+            "    static const char *suffix = \"/.raw-exemptions/raw_7.list\";\n" +
+            "    size_t rl = strlen(repo_root), sl = strlen(suffix);\n" +
+            "    if (rl + sl + 1 > out_sz) return 0;\n" +
+            "    memcpy(out, repo_root, rl);\n" +
+            "    memcpy(out + rl, suffix, sl);\n" +
+            "    out[rl + sl] = '\\0';\n" +
+            "    return 1;\n" +
+            "}\n" +
+            "\n" +
+            "// Parse a pipe-separated entry \"<pat> | <range> | <reason> | <expiry>\".\n" +
+            "// Returns 1 on parse-as-pipe, 0 if line lacks pipes (caller treats as bare).\n" +
+            "static int raw7_parse_pipe_entry(char *line, raw7_exemption_t *out) {\n" +
+            "    char *first = strchr(line, '|');\n" +
+            "    if (!first) return 0;\n" +
+            "    *first = '\\0';\n" +
+            "    char *pat = raw7_trim(line);\n" +
+            "    if (!*pat) return 0;\n" +
+            "    strncpy(out->pattern, pat, RAW7_PATTERN_MAX - 1);\n" +
+            "    out->pattern[RAW7_PATTERN_MAX - 1] = '\\0';\n" +
+            "\n" +
+            "    // Skip line_range field.\n" +
+            "    char *cur = first + 1;\n" +
+            "    char *p2 = strchr(cur, '|');\n" +
+            "    if (p2) { *p2 = '\\0'; cur = p2 + 1; } else { return 1; }\n" +
+            "\n" +
+            "    // reason\n" +
+            "    char *p3 = strchr(cur, '|');\n" +
+            "    if (p3) {\n" +
+            "        *p3 = '\\0';\n" +
+            "        char *r = raw7_trim(cur);\n" +
+            "        strncpy(out->reason, r, RAW7_PATTERN_MAX - 1);\n" +
+            "        out->reason[RAW7_PATTERN_MAX - 1] = '\\0';\n" +
+            "        cur = p3 + 1;\n" +
+            "    } else {\n" +
+            "        return 1;\n" +
+            "    }\n" +
+            "\n" +
+            "    // expiry\n" +
+            "    char *exp = raw7_trim(cur);\n" +
+            "    strncpy(out->expiry_iso, exp, sizeof(out->expiry_iso) - 1);\n" +
+            "    out->expiry_iso[sizeof(out->expiry_iso) - 1] = '\\0';\n" +
+            "    out->expiry_unix = raw7_parse_iso_date(exp);\n" +
+            "    return 1;\n" +
+            "}\n" +
+            "\n" +
+            "// Apply a metadata field captured from a preceding `# key: value` line.\n" +
+            "static void raw7_apply_meta(raw7_exemption_t *e,\n" +
+            "                             const char *key,\n" +
+            "                             const char *val) {\n" +
+            "    if (strcmp(key, \"reason\") == 0) {\n" +
+            "        strncpy(e->reason, val, RAW7_PATTERN_MAX - 1);\n" +
+            "        e->reason[RAW7_PATTERN_MAX - 1] = '\\0';\n" +
+            "    } else if (strcmp(key, \"expiry\") == 0) {\n" +
+            "        strncpy(e->expiry_iso, val, sizeof(e->expiry_iso) - 1);\n" +
+            "        e->expiry_iso[sizeof(e->expiry_iso) - 1] = '\\0';\n" +
+            "        e->expiry_unix = raw7_parse_iso_date(val);\n" +
+            "    } else if (strcmp(key, \"owner\") == 0) {\n" +
+            "        strncpy(e->owner, val, RAW7_META_MAX - 1);\n" +
+            "        e->owner[RAW7_META_MAX - 1] = '\\0';\n" +
+            "    } else if (strcmp(key, \"jurisdiction\") == 0) {\n" +
+            "        strncpy(e->jurisdiction, val, RAW7_META_MAX - 1);\n" +
+            "        e->jurisdiction[RAW7_META_MAX - 1] = '\\0';\n" +
+            "    }\n" +
+            "}\n" +
+            "\n" +
+            "// Parse a comment-block accumulator. Mirrors hive's reader:\n" +
+            "// each blank line resets the pending-meta buffer; each non-comment line\n" +
+            "// becomes a new entry inheriting the accumulator's metadata.\n" +
+            "static int load_raw_7_exemptions(const char *repo_root,\n" +
+            "                                  raw7_exemption_t *out_arr,\n" +
+            "                                  int max_entries) {\n" +
+            "    if (!repo_root || !out_arr || max_entries <= 0) return 0;\n" +
+            "\n" +
+            "    char list_path[512];\n" +
+            "    if (!raw7_list_path(repo_root, list_path, sizeof(list_path))) return 0;\n" +
+            "\n" +
+            "    FILE *f = fopen(list_path, \"r\");\n" +
+            "    if (!f) return -1;                          // file missing → caller falls back to static\n" +
+            "\n" +
+            "    raw7_exemption_t pending;                   // accumulator for comment-block metadata\n" +
+            "    memset(&pending, 0, sizeof(pending));\n" +
+            "\n" +
+            "    int count = 0;\n" +
+            "    char line[RAW7_LINE_MAX];\n" +
+            "    while (fgets(line, sizeof(line), f) != NULL && count < max_entries) {\n" +
+            "        char *t = raw7_trim(line);\n" +
+            "        if (!*t) {\n" +
+            "            // blank → reset pending metadata block\n" +
+            "            memset(&pending, 0, sizeof(pending));\n" +
+            "            continue;\n" +
+            "        }\n" +
+            "        if (t[0] == '#') {\n" +
+            "            // strip leading '#' and any whitespace, then look for \"key: value\"\n" +
+            "            char *body = raw7_trim(t + 1);\n" +
+            "            char *colon = strchr(body, ':');\n" +
+            "            if (colon) {\n" +
+            "                *colon = '\\0';\n" +
+            "                char *key = raw7_trim(body);\n" +
+            "                char *val = raw7_trim(colon + 1);\n" +
+            "                raw7_apply_meta(&pending, key, val);\n" +
+            "            }\n" +
+            "            continue;\n" +
+            "        }\n" +
+            "        // Pattern line. Defensive: refuse double-quote (matches hive reader).\n" +
+            "        if (strchr(t, '\"')) continue;\n" +
+            "\n" +
+            "        raw7_exemption_t entry = pending;       // inherit comment-block metadata\n" +
+            "        if (raw7_parse_pipe_entry(t, &entry) == 0) {\n" +
+            "            // bare-pattern form (hive style)\n" +
+            "            strncpy(entry.pattern, t, RAW7_PATTERN_MAX - 1);\n" +
+            "            entry.pattern[RAW7_PATTERN_MAX - 1] = '\\0';\n" +
+            "        }\n" +
+            "        if (entry.pattern[0] == '\\0') continue;\n" +
+            "        out_arr[count++] = entry;\n" +
+            "    }\n" +
+            "    fclose(f);\n" +
+            "    return count;\n" +
+            "}\n" +
+            "\n" +
+            "// Get-or-load the cache slot for `repo_root`. Returns slot ptr, or NULL if\n" +
+            "// the cache is full (degenerate case — only 2 repos in practice).\n" +
+            "static raw7_cache_t *raw7_get_cache(const char *repo_root) {\n" +
+            "    if (g_raw7_loading) return NULL;            // re-entrancy: fail closed (use static)\n" +
+            "    for (int i = 0; i < RAW7_CACHE_SLOTS; i++) {\n" +
+            "        if (g_raw7_cache[i].loaded != 0\n" +
+            "            && strcmp(g_raw7_cache[i].repo_root, repo_root) == 0) {\n" +
+            "            return &g_raw7_cache[i];\n" +
+            "        }\n" +
+            "    }\n" +
+            "    // Find empty slot.\n" +
+            "    for (int i = 0; i < RAW7_CACHE_SLOTS; i++) {\n" +
+            "        if (g_raw7_cache[i].loaded == 0) {\n" +
+            "            g_raw7_loading = 1;\n" +
+            "            strncpy(g_raw7_cache[i].repo_root, repo_root,\n" +
+            "                    sizeof(g_raw7_cache[i].repo_root) - 1);\n" +
+            "            g_raw7_cache[i].repo_root[\n" +
+            "                sizeof(g_raw7_cache[i].repo_root) - 1] = '\\0';\n" +
+            "            int n = load_raw_7_exemptions(repo_root,\n" +
+            "                                          g_raw7_cache[i].entries,\n" +
+            "                                          RAW7_MAX_ENTRIES);\n" +
+            "            if (n < 0) {\n" +
+            "                g_raw7_cache[i].count = 0;\n" +
+            "                g_raw7_cache[i].loaded = -1;     // file missing\n" +
+            "            } else {\n" +
+            "                g_raw7_cache[i].count = n;\n" +
+            "                g_raw7_cache[i].loaded = 1;\n" +
+            "            }\n" +
+            "            g_raw7_loading = 0;\n" +
+            "            return &g_raw7_cache[i];\n" +
+            "        }\n" +
+            "    }\n" +
+            "    return NULL;                                // cache full\n" +
+            "}\n" +
+            "\n" +
+            "// Substring + dir-prefix glob match (mirrors hive `_path_matches_exemption`).\n" +
+            "// Pattern semantics:\n" +
+            "//   - empty pattern: never matches.\n" +
+            "//   - all other patterns: free substring match (covers both `bin/hive`\n" +
+            "//     exact-file form AND `packages/foo/test/fixtures/` dir-prefix form;\n" +
+            "//     the trailing `/` distinguishes intent at authoring time, not match time).\n" +
+            "static int path_matches_raw7_exemption(const char *path,\n" +
+            "                                        const raw7_exemption_t *arr,\n" +
+            "                                        int count) {\n" +
+            "    if (!path || !arr || count <= 0) return 0;\n" +
+            "    for (int i = 0; i < count; i++) {\n" +
+            "        const char *pat = arr[i].pattern;\n" +
+            "        if (!pat || !*pat) continue;\n" +
+            "        if (strstr(path, pat)) return 1;\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "// Combined check: static RAW7_ALLOW (cheap path), then dynamic file list.\n" +
+            "static int raw7_path_exempt(const char *path) {\n" +
+            "    if (!path) return 0;\n" +
+            "    // Cheap static-list pass first.\n" +
+            "    for (int i = 0; RAW7_ALLOW[i]; i++) {\n" +
+            "        if (strstr(path, RAW7_ALLOW[i])) return 1;\n" +
+            "    }\n" +
+            "    // Dynamic file-based list (per-repo).\n" +
+            "    char repo_root[256];\n" +
+            "    if (!raw7_repo_root_for(path, repo_root, sizeof(repo_root))) return 0;\n" +
+            "    raw7_cache_t *c = raw7_get_cache(repo_root);\n" +
+            "    if (!c || c->loaded != 1 || c->count == 0) return 0;\n" +
+            "    return path_matches_raw7_exemption(path, c->entries, c->count);\n" +
+            "}\n" +
+            "\n" +
+            "// Debug-build expiry warner — emits stderr line for any expired or\n" +
+            "// soon-to-expire entries on first cache load. Compile with\n" +
+            "// `-DRAW7_DEBUG_EXPIRY` to enable; off by default to keep the shim quiet.\n" +
+            "#ifdef RAW7_DEBUG_EXPIRY\n" +
+            "__attribute__((unused))\n" +
+            "static void expiry_warn_raw7(const raw7_cache_t *c) {\n" +
+            "    if (!c || c->count == 0) return;\n" +
+            "    long now = (long)time(NULL);\n" +
+            "    long soon = now + (30L * 24L * 3600L);      // within 30 days\n" +
+            "    for (int i = 0; i < c->count; i++) {\n" +
+            "        const raw7_exemption_t *e = &c->entries[i];\n" +
+            "        if (e->expiry_unix <= 0) continue;\n" +
+            "        if (e->expiry_unix < now) {\n" +
+            "            fprintf(stderr, \"[raw_7.list expiry-warn] EXPIRED  %s  pattern=%s\\n\",\n" +
+            "                    e->expiry_iso, e->pattern);\n" +
+            "        } else if (e->expiry_unix < soon) {\n" +
+            "            long days = (e->expiry_unix - now) / (24L * 3600L);\n" +
+            "            fprintf(stderr, \"[raw_7.list expiry-warn] %ldd  %s  pattern=%s\\n\",\n" +
+            "                    days, e->expiry_iso, e->pattern);\n" +
+            "        }\n" +
+            "    }\n" +
+            "}\n" +
+            "#endif\n" +
+            "\n"
+    s = s +
+            "// Find the last '/' in path. Returns NULL if none.\n" +
+            "static const char *raw7_last_slash(const char *path) {\n" +
+            "    return strrchr(path, '/');\n" +
+            "}\n" +
+            "\n" +
+            "// raw#7 F6: parent_dir_name == file_stem (or stem starts with \"<parent>_\").\n" +
+            "// Pure pointer-math, zero syscalls. Returns 1 to refuse.\n" +
+            "static int refuse_raw7_parent_child_stem(const char *path) {\n" +
+            "    if (!path) return 0;\n" +
+            "    if (!is_under_managed_repo(path)) return 0;\n" +
+            "    if (raw7_path_exempt(path)) return 0;\n" +
+            "\n" +
+            "    const char *slash1 = raw7_last_slash(path);\n" +
+            "    if (!slash1 || slash1 == path) return 0;     // no parent component\n" +
+            "    const char *basename = slash1 + 1;\n" +
+            "    if (!*basename) return 0;\n" +
+            "\n" +
+            "    // Locate parent-dir component: scan back for second-to-last slash.\n" +
+            "    const char *p = slash1 - 1;\n" +
+            "    while (p > path && *p != '/') p--;\n" +
+            "    if (*p != '/') return 0;                      // path had only one '/'\n" +
+            "    const char *pdir = p + 1;\n" +
+            "    size_t pdir_len = (size_t)(slash1 - pdir);\n" +
+            "    if (pdir_len == 0) return 0;\n" +
+            "\n" +
+            "    // Compute stem length: basename up to last '.'.\n" +
+            "    const char *dot = strrchr(basename, '.');\n" +
+            "    size_t stem_len = dot ? (size_t)(dot - basename) : strlen(basename);\n" +
+            "    if (stem_len == 0) return 0;\n" +
+            "\n" +
+            "    // Whitelist conventional entry-point stems (index/mod/main/lib/init).\n" +
+            "    for (int i = 0; RAW7_F6_ENTRY_STEMS[i]; i++) {\n" +
+            "        size_t en = strlen(RAW7_F6_ENTRY_STEMS[i]);\n" +
+            "        if (en == stem_len\n" +
+            "            && strncmp(basename, RAW7_F6_ENTRY_STEMS[i], en) == 0) {\n" +
+            "            return 0;\n" +
+            "        }\n" +
+            "    }\n" +
+            "\n" +
+            "    // Exact-match: parent == stem.\n" +
+            "    if (stem_len == pdir_len && strncmp(basename, pdir, pdir_len) == 0) {\n" +
+            "        return 1;\n" +
+            "    }\n" +
+            "    // Prefix-match: stem starts with \"<parent>_\".\n" +
+            "    if (stem_len > pdir_len + 1\n" +
+            "        && strncmp(basename, pdir, pdir_len) == 0\n" +
+            "        && basename[pdir_len] == '_') {\n" +
+            "        return 1;\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "// raw#7 F5: refuse if creating this file would leave the parent dir as a\n" +
+            "// \"loner\" (this file is the sole regular-file entry). Gate behind O_CREAT\n" +
+            "// + ENOENT(path) in caller so steady-state writes pay zero. Cost on first-\n" +
+            "// write: one opendir + a bounded readdir scan (early-exit at 2 entries).\n" +
+            "//\n" +
+            "// Algorithm: open parent dir; iterate dirent until we either:\n" +
+            "//   (a) see a second non-{\".\",\"..\"} entry that's not the file we're about\n" +
+            "//       to create — return 0 (allow, dir is not a loner)\n" +
+            "//   (b) exhaust the iterator — return 1 (would-be loner, refuse)\n" +
+            "// We accept that the create itself is racing dir contents; the lint-layer\n" +
+            "// already provides eventual consistency. This shim's job is to catch the\n" +
+            "// 95% \"first file in fresh dir\" pattern, not be perfectly atomic.\n" +
+            "static int refuse_raw7_loner_dir(const char *path) {\n" +
+            "    if (!path) return 0;\n" +
+            "    if (!is_under_managed_repo(path)) return 0;\n" +
+            "    if (raw7_path_exempt(path)) return 0;\n" +
+            "\n" +
+            "    const char *slash = raw7_last_slash(path);\n" +
+            "    if (!slash || slash == path) return 0;\n" +
+            "    size_t plen = (size_t)(slash - path);\n" +
+            "    if (plen == 0 || plen >= 4096) return 0;\n" +
+            "\n" +
+            "    char parent[4096];\n" +
+            "    memcpy(parent, path, plen);\n" +
+            "    parent[plen] = '\\0';\n" +
+            "\n" +
+            "    DIR *d = opendir(parent);\n" +
+            "    if (!d) return 0;                             // parent missing → let real open() set ENOENT\n" +
+            "\n" +
+            "    const char *new_basename = slash + 1;\n" +
+            "    int seen_other = 0;\n" +
+            "    struct dirent *de;\n" +
+            "    while ((de = readdir(d)) != NULL) {\n" +
+            "        const char *n = de->d_name;\n" +
+            "        if (n[0] == '.' && (n[1] == '\\0' || (n[1] == '.' && n[2] == '\\0'))) {\n" +
+            "            continue;                             // skip \".\" and \"..\"\n" +
+            "        }\n" +
+            "        if (strcmp(n, new_basename) == 0) {\n" +
+            "            // Already exists — not a fresh-create loner case; let real call decide.\n" +
+            "            closedir(d);\n" +
+            "            return 0;\n" +
+            "        }\n" +
+            "        // Any other entry → not a loner-to-be.\n" +
+            "        seen_other = 1;\n" +
+            "        break;\n" +
+            "    }\n" +
+            "    closedir(d);\n" +
+            "\n" +
+            "    // Empty parent + we are about to add 1 entry → would-be loner. Refuse.\n" +
+            "    return seen_other ? 0 : 1;\n" +
+            "}\n" +
+            "\n" +
+            "// raw#20 — .own append-only: O_TRUNC on path ending in /.own = EPERM.\n" +
+            "static int refuse_raw20(const char *path, int flags) {\n" +
+            "    if (!(flags & O_TRUNC)) return 0;\n" +
+            "    if (!path) return 0;\n" +
+            "    size_t n = strlen(path);\n" +
+            "    if (n >= 5 && strcmp(path + n - 5, \"/.own\") == 0) return 1;\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "// ─── raw#1 — file-lock SSOT path-literal deny (F2 agent top priority) ──\n" +
+            "//\n" +
+            "// raw#1 mandate: locked SSOT files (~/core/*/.raw, .own, .roadmap, .guide,\n" +
+            "// .ext, .workspace) are append-only-via-canonical-tools. ANY direct file\n" +
+            "// IO via open(O_WRONLY|O_RDWR|O_TRUNC|O_APPEND), creat(), unlink(),\n" +
+            "// rename() (as src or dst), chmod() targeting these path literals is\n" +
+            "// rejected with EPERM at the syscall boundary.\n" +
+            "//\n" +
+            "// Match strategy: ends_with() against the literal suffix list. The path\n" +
+            "// must end with exactly one of these segments (not contain). This keeps\n" +
+            "// the pattern tight — `/some/dir/.raw-exemptions/foo` does NOT match\n" +
+            "// because it doesn't end with `/.raw`.\n" +
+            "//\n" +
+            "// Interaction with raw#20: raw#20 was the partial precursor (only O_TRUNC\n" +
+            "// on /.own). raw#1 supersedes — refuse_raw1 is checked FIRST and covers\n" +
+            "// all write modes + the additional five SSOT files. raw#20 retained for\n" +
+            "// defense-in-depth (free since refuse_raw1 already returned 1 in matching\n" +
+            "// cases; refuse_raw20 only fires on the narrower /.own + O_TRUNC subset).\n" +
+            "//\n" +
+            "// FP risk audit (F2 agent):\n" +
+            "//   - Tools that legitimately mutate locked SSOT (raw_lock_release.sh,\n" +
+            "//     hexa raw-edit) bypass this shim because they're invoked under\n" +
+            "//     CLAUDX_NO_SANDBOX=1. opt_out() is checked at refuse() entry.\n" +
+            "//   - Hexa CLI itself is statically linked (musl) → LD_PRELOAD has no\n" +
+            "//     effect on hexa's own raw_loader file IO. This shim guards\n" +
+            "//     dynamically-linked subprocesses (sh, python, curl, etc.) only.\n" +
+            "//   - SSOT path candidates: /.raw /.own /.roadmap /.guide /.ext /.workspace\n" +
+            "//   - Free files inside the SSOT-named DIR (.raw/foo) are NOT matched\n" +
+            "//     because ends_with(/.raw/foo, \"/.raw\") = false. Intentional — only\n" +
+            "//     the literal lock files themselves are protected here.\n" +
+            "\n" +
+            "static const char *RAW1_PATHS[] = {\n" +
+            "    \"/.raw\",\n" +
+            "    \"/.own\",\n" +
+            "    \"/.roadmap\",\n" +
+            "    \"/.guide\",\n" +
+            "    \"/.ext\",\n" +
+            "    \"/.workspace\",\n" +
+            "    NULL\n" +
+            "};\n" +
+            "\n" +
+            "static int matches_raw1_path(const char *path) {\n" +
+            "    if (!path) return 0;\n" +
+            "    for (int i = 0; RAW1_PATHS[i]; i++) {\n" +
+            "        if (ends_with(path, RAW1_PATHS[i])) return 1;\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "// Write-side gate: open/openat/creat/fopen — any write-implying flag\n" +
+            "// against a RAW1_PATHS literal = EPERM.\n" +
+            "static int refuse_raw1_write(const char *path, int flags) {\n" +
+            "    if (!path) return 0;\n" +
+            "    if (!(flags & (O_WRONLY | O_RDWR | O_TRUNC | O_APPEND | O_CREAT))) return 0;\n" +
+            "    return matches_raw1_path(path);\n" +
+            "}\n" +
+            "\n" +
+            "// Mutation-side gate: unlink/rename/chmod targeting the literals.\n" +
+            "// Caller passes EITHER src or dst (or single arg for unlink/chmod).\n" +
+            "static int refuse_raw1_mutate(const char *path) {\n" +
+            "    return matches_raw1_path(path);\n" +
+            "}\n" +
+            "\n" +
+            "// ── raw#22 per-file manifest (explicit RAW22_MANIFEST_PATHS) ─────────\n" +
+            "//\n" +
+            "// Minimum-viable per-file SSOT lock: an explicit array of path SUFFIXES\n" +
+            "// that are write-locked unconditionally. Future cycle promotes this to\n" +
+            "// a sentinel-file scan (`.raw22-locked` marker in the same/parent dir);\n" +
+            "// the explicit array is the safe MVP — no extra syscalls per write.\n" +
+            "//\n" +
+            "// Match strategy: ends_with() against the suffix list. Use long-enough\n" +
+            "// suffixes that cross-repo collisions are unlikely (e.g. include a\n" +
+            "// distinctive parent segment). Add entries by editing this list.\n" +
+            "//\n" +
+            "// Bypass: opt_out() honored. dev-toggle HIVE_HEXA_LANG_IMPROVEMENT does\n" +
+            "// NOT bypass — manifest paths are SSOT-canonical and never auto-edited\n" +
+            "// even during hexa-lang dev sessions.\n" +
+            "//\n" +
+            "// Trade-off vs sentinel-file pattern:\n" +
+            "//   explicit array (this) — zero per-write syscalls, requires recompile\n" +
+            "//                            to add entries; safe + cheap.\n" +
+            "//   sentinel-file scan    — fstatat(parent, \".raw22-locked\") per write;\n" +
+            "//                            data-driven (no recompile); ~1 syscall cost.\n" +
+            "// We pick explicit for MVP; sentinel can layer on later via a separate\n" +
+            "// refuse_raw22_sentinel() helper.\n" +
+            "\n" +
+            "static const char *RAW22_MANIFEST_PATHS[] = {\n" +
+            "    // SSOT manifest files locked across all repos. Suffix-match anchored\n" +
+            "    // by leading '/' so unrelated paths can't accidentally match.\n" +
+            "    \"/airgenome/rules/airgenome.json\",\n" +
+            "    \"/.raw-exemptions/raw_7.list\",\n" +
+            "    \"/.raw-exemptions/raw_22.list\",\n" +
+            "    \"/self/sbpl/native.sb\",\n" +
+            "    \"/self/native/native_gate.c\",\n" +
+            "    NULL\n" +
+            "};\n" +
+            "\n" +
+            "static int matches_raw22_manifest(const char *path) {\n" +
+            "    if (!path) return 0;\n" +
+            "    for (int i = 0; RAW22_MANIFEST_PATHS[i]; i++) {\n" +
+            "        if (ends_with(path, RAW22_MANIFEST_PATHS[i])) return 1;\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "// Explicit-array layer (cheap, recompile-required). Renamed from earlier\n" +
+            "// matches_raw22_manifest() callsites — kept as a thin alias so existing\n" +
+            "// callsites (refuse_raw22_write / refuse_raw22_mutate / rename src) stay\n" +
+            "// stable. Future entries: edit RAW22_MANIFEST_PATHS[] above.\n" +
+            "static int refuse_raw22_explicit(const char *path) {\n" +
+            "    return matches_raw22_manifest(path);\n" +
+            "}\n" +
+            "\n" +
+            "// ── raw#22 sentinel-file pattern (data-driven layer) ─────────────────\n" +
+            "//\n" +
+            "// Promotion of the explicit-array MVP to a data-driven lock: scan the\n" +
+            "// path's parent directory for a sentinel file `.raw22-locked`. If\n" +
+            "// present, the entire directory (write/unlink/chmod targeting any file\n" +
+            "// directly inside it) is refused. No recompile needed — operators add\n" +
+            "// or remove the sentinel on disk to flip the lock.\n" +
+            "//\n" +
+            "// Layered semantics:\n" +
+            "//   refuse_raw22_explicit() — array-driven, zero per-write syscall, must\n" +
+            "//                              recompile to add entries; SSOT-canonical.\n" +
+            "//   refuse_raw22_sentinel() — sentinel-driven, ~1 fstatat per write of\n" +
+            "//                              any path; data-driven, operator-flippable.\n" +
+            "// Both are checked: explicit-array hits return 1 first (fast path);\n" +
+            "// otherwise sentinel scan runs.\n" +
+            "//\n" +
+            "// Naming convention: `.raw22-locked` (active state, directly readable)\n" +
+            "// rather than `.raw22-manifest` (which suggests a list of paths inside\n" +
+            "// the file; the sentinel is purely presence-based, contents ignored).\n" +
+            "//\n" +
+            "// Scan scope (trade-off): parent-dir only. Walking every ancestor would\n" +
+            "// catch repo-root sentinels but adds O(depth) syscalls per write — too\n" +
+            "// expensive for the per-syscall hot path. Operators wanting subtree\n" +
+            "// locks must place the sentinel in each leaf dir (or use the explicit\n" +
+            "// array for canonical SSOT files).\n" +
+            "//\n" +
+            "// Performance: one fstatat() per write/mutate. Linux fstatat on dentry\n" +
+            "// cache is ~100ns; sentinel absence is the common case so kernel caches\n" +
+            "// the negative dentry. opt_out() short-circuits before the syscall.\n" +
+            "// Per-process caching (e.g. cache parent-dir fd → present bit) is\n" +
+            "// possible but skipped in this MVP: cache invalidation under\n" +
+            "// concurrent rmdir/create races is more code than the syscall saves.\n" +
+            "#define RAW22_SENTINEL_NAME \".raw22-locked\"\n" +
+            "\n" +
+            "static int refuse_raw22_sentinel(const char *path) {\n" +
+            "    if (!path) return 0;\n" +
+            "    // Split path into parent dir + basename. We need the parent so we\n" +
+            "    // can fstatat(AT_FDCWD, \"<parent>/.raw22-locked\"). If path has no\n" +
+            "    // slash, parent is \".\" (cwd). The sentinel itself must not lock\n" +
+            "    // its own creation, so skip when basename == RAW22_SENTINEL_NAME.\n" +
+            "    const char *slash = strrchr(path, '/');\n" +
+            "    const char *base  = slash ? slash + 1 : path;\n" +
+            "    if (strcmp(base, RAW22_SENTINEL_NAME) == 0) return 0;\n" +
+            "\n" +
+            "    char sentinel[4096];\n" +
+            "    if (slash) {\n" +
+            "        size_t plen = (size_t)(slash - path);\n" +
+            "        // \"<parent>/.raw22-locked\" — bound check with sentinel name + NUL.\n" +
+            "        if (plen + 1 + sizeof(RAW22_SENTINEL_NAME) >= sizeof(sentinel)) return 0;\n" +
+            "        memcpy(sentinel, path, plen);\n" +
+            "        sentinel[plen] = '/';\n" +
+            "        memcpy(sentinel + plen + 1, RAW22_SENTINEL_NAME, sizeof(RAW22_SENTINEL_NAME));\n" +
+            "    } else {\n" +
+            "        memcpy(sentinel, \"./\" RAW22_SENTINEL_NAME, sizeof(\"./\" RAW22_SENTINEL_NAME));\n" +
+            "    }\n" +
+            "\n" +
+            "    struct stat st;\n" +
+            "    if (fstatat(AT_FDCWD, sentinel, &st, AT_SYMLINK_NOFOLLOW) == 0) return 1;\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "static int refuse_raw22_write(const char *path, int flags) {\n" +
+            "    if (opt_out()) return 0;\n" +
+            "    if (!path) return 0;\n" +
+            "    if (!(flags & (O_WRONLY | O_RDWR | O_TRUNC | O_APPEND | O_CREAT))) return 0;\n" +
+            "    if (refuse_raw22_explicit(path)) return 1;\n" +
+            "    return refuse_raw22_sentinel(path);\n" +
+            "}\n" +
+            "\n" +
+            "static int refuse_raw22_mutate(const char *path) {\n" +
+            "    if (opt_out()) return 0;\n" +
+            "    if (!path) return 0;\n" +
+            "    if (refuse_raw22_explicit(path)) return 1;\n" +
+            "    return refuse_raw22_sentinel(path);\n"
+    s = s +
+            "}\n" +
+            "\n" +
+            "// ─── hexa-lang self-edit allowance — raw.hexa_lang_improvement gate ──\n" +
+            "//\n" +
+            "// Background mirrors self/sbpl/native.sb#hexa-lang block. Universal\n" +
+            "// raw#8 already blocks .py/.rs/.sh/.toml everywhere; the 19 grand-\n" +
+            "// fathered foreign-ext files in /Users/<u>/core/hexa-lang/ would\n" +
+            "// therefore be unwritable in production sessions. SBPL cannot read\n" +
+            "// env so it relies on agent-layer pre_tool_guard.hexa as primary; on\n" +
+            "// Linux LD_PRELOAD we CAN read env, so the dev toggle gates here\n" +
+            "// directly:\n" +
+            "//\n" +
+            "//   HIVE_HEXA_LANG_IMPROVEMENT=1  → hexa-lang foreign-ext writes\n" +
+            "//                                    permitted (full 19-file allow +\n" +
+            "//                                    new files). Production sessions\n" +
+            "//                                    never set this — hive/coding-agent\n" +
+            "//                                    propagates only when the user\n" +
+            "//                                    enables raw.hexa_lang_improvement\n" +
+            "//                                    in /hive selector (defaultOn=false).\n" +
+            "//\n" +
+            "//   unset / 0                      → grandfather-list-only allow:\n" +
+            "//                                    only the 19 audited files match\n" +
+            "//                                    is_grandfathered_hexa_lang_path();\n" +
+            "//                                    new foreign-ext writes get EPERM.\n" +
+            "//\n" +
+            "// Detection. We compare path against $HOME/core/hexa-lang/ prefix.\n" +
+            "// $HOME may be unset (boot, daemons) — fall back to scanning the path\n" +
+            "// for \"/core/hexa-lang/\" substring (matches refuse_raw6 style).\n" +
+            "static int is_under_hexa_lang(const char *path) {\n" +
+            "    if (!path) return 0;\n" +
+            "    return strstr(path, \"/core/hexa-lang/\") != NULL;\n" +
+            "}\n" +
+            "\n" +
+            "static int dev_toggle_on(void) {\n" +
+            "    const char *v = getenv(\"HIVE_HEXA_LANG_IMPROVEMENT\");\n" +
+            "    return v && v[0] && strcmp(v, \"0\") != 0;\n" +
+            "}\n" +
+            "\n" +
+            "// 19 grandfathered files (audited 2026-04-26). Match by suffix from\n" +
+            "// the hexa-lang root segment so /Users/<any>/core/hexa-lang/<rel>\n" +
+            "// works regardless of $HOME. The trailing $ in the SBPL regex is\n" +
+            "// equivalent to ends_with() here.\n" +
+            "static const char *HEXA_LANG_GRANDFATHER_SUFFIXES[] = {\n" +
+            "    \"/core/hexa-lang/hexa.toml\",\n" +
+            "    \"/core/hexa-lang/tool/install_darwin_marker.sh\",\n" +
+            "    \"/core/hexa-lang/tool/extract_runtime_hi.sh\",\n" +
+            "    \"/core/hexa-lang/scripts/safe_hexa_launchd.sh\",\n" +
+            "    \"/core/hexa-lang/stdlib/anima_audio_worker.py\",\n" +
+            "    \"/core/hexa-lang/tool/emergency/raw_reset.sh\",\n" +
+            "    \"/core/hexa-lang/tool/emergency/raw_sudo_unlock.sh\",\n" +
+            "    \"/core/hexa-lang/tests/integration/run_all.sh\",\n" +
+            "    NULL\n" +
+            "};\n" +
+            "\n" +
+            "static int is_grandfathered_hexa_lang_path(const char *path) {\n" +
+            "    if (!path) return 0;\n" +
+            "    for (int i = 0; HEXA_LANG_GRANDFATHER_SUFFIXES[i]; i++) {\n" +
+            "        if (ends_with(path, HEXA_LANG_GRANDFATHER_SUFFIXES[i])) return 1;\n" +
+            "    }\n" +
+            "    // 11 numbered integration test scripts: tests/integration/<NN>_<name>/test.sh\n" +
+            "    // Match suffix /test.sh under /tests/integration/<digit-prefixed>_<...>/\n" +
+            "    const char *hit = strstr(path, \"/core/hexa-lang/tests/integration/\");\n" +
+            "    if (hit) {\n" +
+            "        const char *rest = hit + strlen(\"/core/hexa-lang/tests/integration/\");\n" +
+            "        // first char must be digit (01_..11_)\n" +
+            "        if (rest[0] >= '0' && rest[0] <= '9') {\n" +
+            "            if (ends_with(path, \"/test.sh\")) return 1;\n" +
+            "        }\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "// Returns 1 if the path is a hexa-lang foreign-ext file we should\n" +
+            "// gate. Returns 0 if the path is outside hexa-lang or not a foreign\n" +
+            "// ext (let the universal rules decide).\n" +
+            "static int hexa_lang_foreign_ext(const char *path) {\n" +
+            "    if (!is_under_hexa_lang(path)) return 0;\n" +
+            "    return ends_with(path, \".py\") || ends_with(path, \".rs\")\n" +
+            "        || ends_with(path, \".sh\") || ends_with(path, \".toml\");\n" +
+            "}\n" +
+            "\n" +
+            "// Decision for hexa-lang scope:\n" +
+            "//   dev toggle ON  → never refuse here (universal raw#8 still applies\n" +
+            "//                    elsewhere; we let the toggle owner do all writes\n" +
+            "//                    inside hexa-lang including new files).\n" +
+            "//   toggle OFF     → grandfather-list-only allow; everything else under\n" +
+            "//                    hexa-lang foreign-ext refuses with EPERM.\n" +
+            "static int refuse_hexa_lang_scope(const char *path) {\n" +
+            "    if (!hexa_lang_foreign_ext(path)) return 0;\n" +
+            "    if (dev_toggle_on()) return 0;\n" +
+            "    if (is_grandfathered_hexa_lang_path(path)) return 0;\n" +
+            "    return 1;\n" +
+            "}\n" +
+            "\n" +
+            "static int refuse(const char *path, int flags) {\n" +
+            "    if (opt_out()) return 0;\n" +
+            "    if (!path || !is_write_flag(flags)) return 0;\n" +
+            "    // raw#1 file-lock SSOT path-literal deny — checked BEFORE allowlist\n" +
+            "    // so locked SSOT files in /tmp/ subdirs (or other allow-prefixes) are\n" +
+            "    // still protected. Locked SSOT is repo-canonical, never a temp file.\n" +
+            "    if (refuse_raw1_write(path, flags)) return 1;\n" +
+            "    // raw#22 — manifest paths checked BEFORE allowlist (SSOT-canonical,\n" +
+            "    // never legitimately under /tmp/ etc.).\n" +
+            "    if (refuse_raw22_write(path, flags)) return 1;\n" +
+            "    if (on_allowlist(path)) return 0;\n" +
+            "    // hexa-lang scope check runs BEFORE universal raw#8 so the dev\n" +
+            "    // toggle can rescue grandfathered files that would otherwise be\n" +
+            "    // caught by the universal foreign-ext deny. When toggle is OFF\n" +
+            "    // and the file is non-grandfathered, refuse here; when toggle is\n" +
+            "    // ON, let the path through (skip raw#8 for hexa-lang scope).\n" +
+            "    if (refuse_hexa_lang_scope(path)) return 1;\n" +
+            "    if (is_under_hexa_lang(path) && hexa_lang_foreign_ext(path)) {\n" +
+            "        // either dev_toggle_on or grandfathered — explicit allow.\n" +
+            "        if (refuse_raw13(path)) return 1;        // raw#13 still applies\n" +
+            "        if (refuse_raw20(path, flags)) return 1; // raw#20 .own gate\n" +
+            "        if (refuse_raw6(path)) return 1;         // raw#6 folder-naming\n" +
+            "        if (refuse_raw7_parent_child_stem(path)) return 1;       // raw#7 F6\n" +
+            "        if ((flags & O_CREAT) && refuse_raw7_loner_dir(path)) return 1; // raw#7 F5\n" +
+            "        return 0;\n" +
+            "    }\n" +
+            "    for (int i = 0; BANNED_SUFFIXES[i]; i++) {\n" +
+            "        if (ends_with(path, BANNED_SUFFIXES[i])) return 1;\n" +
+            "    }\n" +
+            "    if (refuse_raw8(path)) return 1;\n" +
+            "    if (refuse_raw13(path)) return 1;\n" +
+            "    if (refuse_raw20(path, flags)) return 1;\n" +
+            "    if (refuse_raw6(path)) return 1;\n" +
+            "    if (refuse_raw7_parent_child_stem(path)) return 1;           // raw#7 F6\n" +
+            "    if ((flags & O_CREAT) && refuse_raw7_loner_dir(path)) return 1;   // raw#7 F5\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "static int refuse_rename(const char *newpath) {\n" +
+            "    if (opt_out()) return 0;\n" +
+            "    if (!newpath) return 0;\n" +
+            "    // raw#1 — checked BEFORE allowlist (locked SSOT is canonical, not temp).\n" +
+            "    if (refuse_raw1_mutate(newpath)) return 1;\n" +
+            "    if (refuse_raw22_mutate(newpath)) return 1;\n" +
+            "    if (on_allowlist(newpath)) return 0;\n" +
+            "    for (int i = 0; BANNED_SUFFIXES[i]; i++) {\n" +
+            "        if (ends_with(newpath, BANNED_SUFFIXES[i])) return 1;\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "// raw#1 oldpath-side rename guard — refuse renaming the locked SSOT itself\n" +
+            "// (not just refusing it as a destination). Standalone helper because\n" +
+            "// refuse_rename() handles dst-side; this handles src-side.\n" +
+            "static int refuse_rename_src_raw1(const char *oldpath) {\n" +
+            "    if (opt_out()) return 0;\n" +
+            "    if (!oldpath) return 0;\n" +
+            "    if (refuse_raw1_mutate(oldpath)) return 1;\n" +
+            "    if (refuse_raw22_explicit(oldpath)) return 1;      // raw#22 src-side (array)\n" +
+            "    if (refuse_raw22_sentinel(oldpath)) return 1;      // raw#22 src-side (sentinel)\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "// ── open / openat / creat ────────────────────────────────────────────\n" +
+            "\n" +
+            "typedef int  (*open_fn)(const char *, int, ...);\n" +
+            "typedef int  (*openat_fn)(int, const char *, int, ...);\n" +
+            "typedef int  (*creat_fn)(const char *, mode_t);\n" +
+            "typedef int  (*rename_fn)(const char *, const char *);\n" +
+            "typedef int  (*renameat_fn)(int, const char *, int, const char *);\n" +
+            "\n" +
+            "int open(const char *pathname, int flags, ...) {\n" +
+            "    static open_fn real = NULL;\n" +
+            "    if (!real) real = (open_fn)dlsym(RTLD_NEXT, \"open\");\n" +
+            "    if (refuse(pathname, flags)) { errno = EPERM; return -1; }\n" +
+            "    mode_t mode = 0;\n" +
+            "    if (flags & O_CREAT) {\n" +
+            "        va_list ap; va_start(ap, flags); mode = va_arg(ap, int); va_end(ap);\n" +
+            "        return real(pathname, flags, mode);\n" +
+            "    }\n" +
+            "    return real(pathname, flags);\n" +
+            "}\n" +
+            "\n" +
+            "int openat(int dirfd, const char *pathname, int flags, ...) {\n" +
+            "    static openat_fn real = NULL;\n" +
+            "    if (!real) real = (openat_fn)dlsym(RTLD_NEXT, \"openat\");\n" +
+            "    if (refuse(pathname, flags)) { errno = EPERM; return -1; }\n" +
+            "    mode_t mode = 0;\n" +
+            "    if (flags & O_CREAT) {\n" +
+            "        va_list ap; va_start(ap, flags); mode = va_arg(ap, int); va_end(ap);\n" +
+            "        return real(dirfd, pathname, flags, mode);\n" +
+            "    }\n" +
+            "    return real(dirfd, pathname, flags);\n" +
+            "}\n" +
+            "\n" +
+            "int creat(const char *pathname, mode_t mode) {\n" +
+            "    static creat_fn real = NULL;\n" +
+            "    if (!real) real = (creat_fn)dlsym(RTLD_NEXT, \"creat\");\n" +
+            "    if (refuse(pathname, O_WRONLY | O_CREAT | O_TRUNC)) { errno = EPERM; return -1; }\n" +
+            "    return real(pathname, mode);\n" +
+            "}\n" +
+            "\n" +
+            "// ── LFS aliases: open64 / __open64 / openat64 / __openat64 ───────────\n" +
+            "//\n" +
+            "// glibc exposes Large-File-Support variants of the open family; on 64-bit\n" +
+            "// Linux these are functionally identical to plain open/openat (off_t is\n" +
+            "// already 64-bit), but stdio (fopen) and several dynamically-linked tools\n" +
+            "// (curl, wget) call __open64 directly via the LFS-redirect macro. Without\n" +
+            "// dedicated dlsym shims those calls bypass our `open` interposer entirely\n" +
+            "// — Phase 11 verification caught curl writing through this gap.\n" +
+            "//\n" +
+            "// All four route through the same `refuse()` policy used by `open` so\n" +
+            "// raw#8/13/20/6/7 + hexa-lang scope checks are identical. The signatures\n" +
+            "// match glibc's prototypes (varargs `mode_t` only on O_CREAT).\n" +
+            "typedef int (*open64_fn)(const char *, int, ...);\n" +
+            "typedef int (*openat64_fn)(int, const char *, int, ...);\n" +
+            "\n" +
+            "int open64(const char *pathname, int flags, ...) {\n" +
+            "    static open64_fn real = NULL;\n" +
+            "    if (!real) real = (open64_fn)dlsym(RTLD_NEXT, \"open64\");\n" +
+            "    if (refuse(pathname, flags)) { errno = EPERM; return -1; }\n" +
+            "    mode_t mode = 0;\n" +
+            "    if (flags & O_CREAT) {\n" +
+            "        va_list ap; va_start(ap, flags); mode = va_arg(ap, int); va_end(ap);\n" +
+            "        return real(pathname, flags, mode);\n" +
+            "    }\n" +
+            "    return real(pathname, flags);\n" +
+            "}\n" +
+            "\n" +
+            "int __open64(const char *pathname, int flags, ...) {\n" +
+            "    static open64_fn real = NULL;\n" +
+            "    if (!real) real = (open64_fn)dlsym(RTLD_NEXT, \"__open64\");\n" +
+            "    if (refuse(pathname, flags)) { errno = EPERM; return -1; }\n" +
+            "    mode_t mode = 0;\n" +
+            "    if (flags & O_CREAT) {\n" +
+            "        va_list ap; va_start(ap, flags); mode = va_arg(ap, int); va_end(ap);\n" +
+            "        return real(pathname, flags, mode);\n" +
+            "    }\n" +
+            "    return real(pathname, flags);\n" +
+            "}\n" +
+            "\n" +
+            "int openat64(int dirfd, const char *pathname, int flags, ...) {\n" +
+            "    static openat64_fn real = NULL;\n" +
+            "    if (!real) real = (openat64_fn)dlsym(RTLD_NEXT, \"openat64\");\n" +
+            "    if (refuse(pathname, flags)) { errno = EPERM; return -1; }\n" +
+            "    mode_t mode = 0;\n" +
+            "    if (flags & O_CREAT) {\n" +
+            "        va_list ap; va_start(ap, flags); mode = va_arg(ap, int); va_end(ap);\n" +
+            "        return real(dirfd, pathname, flags, mode);\n" +
+            "    }\n" +
+            "    return real(dirfd, pathname, flags);\n" +
+            "}\n" +
+            "\n" +
+            "int __openat64(int dirfd, const char *pathname, int flags, ...) {\n" +
+            "    static openat64_fn real = NULL;\n" +
+            "    if (!real) real = (openat64_fn)dlsym(RTLD_NEXT, \"__openat64\");\n" +
+            "    if (refuse(pathname, flags)) { errno = EPERM; return -1; }\n" +
+            "    mode_t mode = 0;\n" +
+            "    if (flags & O_CREAT) {\n" +
+            "        va_list ap; va_start(ap, flags); mode = va_arg(ap, int); va_end(ap);\n" +
+            "        return real(dirfd, pathname, flags, mode);\n" +
+            "    }\n" +
+            "    return real(dirfd, pathname, flags);\n" +
+            "}\n" +
+            "\n" +
+            "// ── fopen / fopen64 / freopen / freopen64 (Phase 13 PLT-bypass close) ──\n" +
+            "//\n" +
+            "// Phase 12 verification caught a libc-internal gap: glibc's `fopen` routes\n" +
+            "// through `__open64` via a HIDDEN ALIAS / direct-call inside libc.so itself,\n" +
+            "// not via the public PLT. LD_PRELOAD's symbol-interposition only redirects\n" +
+            "// calls that go through the PLT/GOT lookup — calls inside libc to its own\n" +
+            "// hidden aliases bind directly to the libc-internal implementation, bypassing\n" +
+            "// our `__open64` shim entirely. curl/wget exhibited this: their `fopen` for\n" +
+            "// the output file appeared to \"succeed\" (fopen returned non-NULL) even with\n" +
+            "// the open shim in place, because the underlying syscall used libc's private\n" +
+            "// `__open64` slot.\n" +
+            "//\n" +
+            "// Fix = hook `fopen` itself. dlsym(RTLD_NEXT, \"fopen\") finds glibc's public\n" +
+            "// `fopen`, but we get to inspect path + mode and gate BEFORE the libc-\n" +
+            "// internal `__open64` is invoked. Once we decide to allow, we hand off to\n" +
+            "// real_fopen; libc's internal alias path is fine downstream because the\n" +
+            "// policy decision already happened here.\n" +
+            "//\n" +
+            "// Mode parsing semantics (POSIX/C99 fopen mode):\n" +
+            "//   \"r\"      — read-only.            writes=0 → enforce skipped.\n" +
+            "//   \"rb\"     — read-only binary.     writes=0.\n" +
+            "//   \"w\",\"wb\" — write/truncate.       writes=1 → enforce.\n" +
+            "//   \"a\",\"ab\" — append.               writes=1 → enforce.\n" +
+            "//   \"r+\"     — read + write.         writes=1 → enforce.\n" +
+            "//   \"w+\"     — read + write + trunc. writes=1 → enforce.\n" +
+            "//   \"a+\"     — read + append.        writes=1 → enforce.\n" +
+            "//   \"...e\"   — O_CLOEXEC modifier.   ignored for policy.\n" +
+            "//   \"...x\"   — O_EXCL on create.     write-implying ('w' or 'a' present).\n" +
+            "// Detection: any of {'w','a','+'} in the mode string ⇒ a write may occur.\n" +
+            "//\n" +
+            "// Self-recursion safety: the raw7 reader (load_raw_7_exemptions) calls\n" +
+            "// fopen(list_path, \"r\"). Mode \"r\" → writes=0 → enforce skipped → real_fopen\n" +
+            "// runs without entering refuse(). The pre-existing `g_raw7_loading` flag\n" +
+            "// remains as defense-in-depth (paranoia: a future code path that read-mode-\n" +
+            "// opens a write-mode-cached file would still be guarded by re-entrancy).\n" +
+            "//\n" +
+            "// `fdopen(fd, mode)` and `tmpfile()` need no shims:\n" +
+            "//   fdopen — fd was opened earlier; that open() was already gated.\n" +
+            "//   tmpfile — anonymous + auto-deleted; outside policy scope.\n" +
+            "//\n" +
+            "// Refuse signal mode for fopen: synthesize O_WRONLY|O_CREAT to mirror what\n"
+    s = s +
+            "// the underlying open would have used. refuse() consults is_write_flag()\n" +
+            "// which only checks for any write bit, so this is sufficient.\n" +
+            "\n" +
+            "typedef FILE *(*fopen_fn)(const char *, const char *);\n" +
+            "typedef FILE *(*freopen_fn)(const char *, const char *, FILE *);\n" +
+            "\n" +
+            "static int fopen_mode_writes(const char *mode) {\n" +
+            "    if (!mode) return 0;\n" +
+            "    // 'r' alone (with optional 'b','e','x' modifiers) is read-only;\n" +
+            "    // any 'w', 'a', or '+' anywhere in the string implies write capability.\n" +
+            "    return (strchr(mode, 'w') != NULL)\n" +
+            "        || (strchr(mode, 'a') != NULL)\n" +
+            "        || (strchr(mode, '+') != NULL);\n" +
+            "}\n" +
+            "\n" +
+            "FILE *fopen(const char *path, const char *mode) {\n" +
+            "    static fopen_fn real = NULL;\n" +
+            "    if (!real) real = (fopen_fn)dlsym(RTLD_NEXT, \"fopen\");\n" +
+            "    if (path && fopen_mode_writes(mode)) {\n" +
+            "        if (refuse(path, O_WRONLY | O_CREAT)) { errno = EPERM; return NULL; }\n" +
+            "    }\n" +
+            "    return real(path, mode);\n" +
+            "}\n" +
+            "\n" +
+            "FILE *fopen64(const char *path, const char *mode) {\n" +
+            "    static fopen_fn real = NULL;\n" +
+            "    if (!real) real = (fopen_fn)dlsym(RTLD_NEXT, \"fopen64\");\n" +
+            "    if (path && fopen_mode_writes(mode)) {\n" +
+            "        if (refuse(path, O_WRONLY | O_CREAT)) { errno = EPERM; return NULL; }\n" +
+            "    }\n" +
+            "    return real(path, mode);\n" +
+            "}\n" +
+            "\n" +
+            "FILE *freopen(const char *path, const char *mode, FILE *stream) {\n" +
+            "    static freopen_fn real = NULL;\n" +
+            "    if (!real) real = (freopen_fn)dlsym(RTLD_NEXT, \"freopen\");\n" +
+            "    // freopen with NULL path = mode-change on existing fd; no path to gate.\n" +
+            "    if (path && fopen_mode_writes(mode)) {\n" +
+            "        if (refuse(path, O_WRONLY | O_CREAT)) { errno = EPERM; return NULL; }\n" +
+            "    }\n" +
+            "    return real(path, mode, stream);\n" +
+            "}\n" +
+            "\n" +
+            "FILE *freopen64(const char *path, const char *mode, FILE *stream) {\n" +
+            "    static freopen_fn real = NULL;\n" +
+            "    if (!real) real = (freopen_fn)dlsym(RTLD_NEXT, \"freopen64\");\n" +
+            "    if (path && fopen_mode_writes(mode)) {\n" +
+            "        if (refuse(path, O_WRONLY | O_CREAT)) { errno = EPERM; return NULL; }\n" +
+            "    }\n" +
+            "    return real(path, mode, stream);\n" +
+            "}\n" +
+            "\n" +
+            "int rename(const char *oldpath, const char *newpath) {\n" +
+            "    static rename_fn real = NULL;\n" +
+            "    if (!real) real = (rename_fn)dlsym(RTLD_NEXT, \"rename\");\n" +
+            "    if (refuse_rename_src_raw1(oldpath)) { errno = EPERM; return -1; }\n" +
+            "    if (refuse_rename(newpath)) { errno = EPERM; return -1; }\n" +
+            "    return real(oldpath, newpath);\n" +
+            "}\n" +
+            "\n" +
+            "int renameat(int olddfd, const char *oldpath, int newdfd, const char *newpath) {\n" +
+            "    static renameat_fn real = NULL;\n" +
+            "    if (!real) real = (renameat_fn)dlsym(RTLD_NEXT, \"renameat\");\n" +
+            "    if (refuse_rename_src_raw1(oldpath)) { errno = EPERM; return -1; }\n" +
+            "    if (refuse_rename(newpath)) { errno = EPERM; return -1; }\n" +
+            "    return real(olddfd, oldpath, newdfd, newpath);\n" +
+            "}\n" +
+            "\n" +
+            "// renameat2 — Linux 3.15+ extension. coreutils `mv` uses this by default\n" +
+            "// (RENAME_NOREPLACE flag) on modern glibc, completely bypassing rename()\n" +
+            "// and renameat(). raw#1 verification on ubu1 (kernel 6.17, glibc 2.39)\n" +
+            "// caught this gap. Hook signature matches glibc/Linux. Same policy as\n" +
+            "// renameat(): src-side raw#1 mutate deny + dst-side refuse_rename().\n" +
+            "typedef int (*renameat2_fn)(int, const char *, int, const char *, unsigned int);\n" +
+            "\n" +
+            "int renameat2(int olddfd, const char *oldpath, int newdfd, const char *newpath,\n" +
+            "              unsigned int flags) {\n" +
+            "    static renameat2_fn real = NULL;\n" +
+            "    if (!real) real = (renameat2_fn)dlsym(RTLD_NEXT, \"renameat2\");\n" +
+            "    if (refuse_rename_src_raw1(oldpath)) { errno = EPERM; return -1; }\n" +
+            "    if (refuse_rename(newpath)) { errno = EPERM; return -1; }\n" +
+            "    if (!real) { errno = ENOSYS; return -1; }\n" +
+            "    return real(olddfd, oldpath, newdfd, newpath, flags);\n" +
+            "}\n" +
+            "\n" +
+            "// ── unlink / unlinkat / chmod / fchmodat (raw#1 mutation gate) ───────\n" +
+            "//\n" +
+            "// Phase X (raw#1) — mutation surface beyond write+rename. unlink removes\n" +
+            "// the file outright; chmod can flip W bits to enable a subsequent write\n" +
+            "// that bypasses the open-time gate (e.g. chmod 0644 on a chmod-ed-down\n" +
+            "// .raw, then open O_WRONLY). Both must refuse on RAW1_PATHS literals.\n" +
+            "//\n" +
+            "// opt_out() honored; allowlist intentionally NOT consulted (locked SSOT\n" +
+            "// is repo-canonical and never legitimately under /tmp/ etc.).\n" +
+            "\n" +
+            "typedef int (*unlink_fn)(const char *);\n" +
+            "typedef int (*unlinkat_fn)(int, const char *, int);\n" +
+            "typedef int (*chmod_fn)(const char *, mode_t);\n" +
+            "typedef int (*fchmodat_fn)(int, const char *, mode_t, int);\n" +
+            "\n" +
+            "int unlink(const char *pathname) {\n" +
+            "    static unlink_fn real = NULL;\n" +
+            "    if (!real) real = (unlink_fn)dlsym(RTLD_NEXT, \"unlink\");\n" +
+            "    if (!opt_out() && (refuse_raw1_mutate(pathname) || refuse_raw22_mutate(pathname))) { errno = EPERM; return -1; }\n" +
+            "    return real(pathname);\n" +
+            "}\n" +
+            "\n" +
+            "int unlinkat(int dirfd, const char *pathname, int flags) {\n" +
+            "    static unlinkat_fn real = NULL;\n" +
+            "    if (!real) real = (unlinkat_fn)dlsym(RTLD_NEXT, \"unlinkat\");\n" +
+            "    if (!opt_out() && (refuse_raw1_mutate(pathname) || refuse_raw22_mutate(pathname))) { errno = EPERM; return -1; }\n" +
+            "    return real(dirfd, pathname, flags);\n" +
+            "}\n" +
+            "\n" +
+            "int chmod(const char *pathname, mode_t mode) {\n" +
+            "    static chmod_fn real = NULL;\n" +
+            "    if (!real) real = (chmod_fn)dlsym(RTLD_NEXT, \"chmod\");\n" +
+            "    if (!opt_out() && (refuse_raw1_mutate(pathname) || refuse_raw22_mutate(pathname))) { errno = EPERM; return -1; }\n" +
+            "    return real(pathname, mode);\n" +
+            "}\n" +
+            "\n" +
+            "int fchmodat(int dirfd, const char *pathname, mode_t mode, int flags) {\n" +
+            "    static fchmodat_fn real = NULL;\n" +
+            "    if (!real) real = (fchmodat_fn)dlsym(RTLD_NEXT, \"fchmodat\");\n" +
+            "    if (!opt_out() && (refuse_raw1_mutate(pathname) || refuse_raw22_mutate(pathname))) { errno = EPERM; return -1; }\n" +
+            "    return real(dirfd, pathname, mode, flags);\n" +
+            "}\n" +
+            "\n" +
+            "// ── raw#6 mkdir / mkdirat (folder-naming F4 — create-time deny) ──────\n" +
+            "//\n" +
+            "// Existing refuse_raw6() catches WRITES under banned-named dirs (utils/,\n" +
+            "// helpers/, common/, lib/, misc/, stuff/, base/) but only fires when a\n" +
+            "// file inside the dir is opened. This hook closes the gap at create-time\n" +
+            "// so `mkdir ~/core/hive/utils` itself fails before any file is written.\n" +
+            "//\n" +
+            "// Scope: hive-only (matches refuse_raw6 is_under_hive_repo gate). Other\n" +
+            "// repos pending raw_6.list cross-port follow-up cycle.\n" +
+            "//\n" +
+            "// Allowlist mirrors refuse_raw6: node_modules/, packages/, infrastructure/,\n" +
+            "// libs/, archive/. Path-substring match is sufficient — hive layout never\n" +
+            "// has a legit `/utils/` segment outside those prefixes.\n" +
+            "//\n" +
+            "// We refuse if the LAST path component (basename) matches a banned name.\n" +
+            "// This avoids false-positive on parent path segments that happen to contain\n" +
+            "// a banned token (the existing substring ban in refuse_raw6 already handles\n" +
+            "// path-segment writes; mkdir gate fires on the component being created).\n" +
+            "\n" +
+            "typedef int (*mkdir_fn)(const char *, mode_t);\n" +
+            "typedef int (*mkdirat_fn)(int, const char *, mode_t);\n" +
+            "\n" +
+            "static const char *RAW6_BANNED_BASENAMES[] = {\n" +
+            "    \"utils\", \"helpers\", \"common\", \"lib\",\n" +
+            "    \"misc\", \"stuff\", \"base\",\n" +
+            "    NULL\n" +
+            "};\n" +
+            "\n" +
+            "// Strip trailing '/' (treat \"foo/\" same as \"foo\") then return last component.\n" +
+            "static const char *raw6_basename(const char *path) {\n" +
+            "    if (!path || !*path) return NULL;\n" +
+            "    size_t n = strlen(path);\n" +
+            "    while (n > 0 && path[n-1] == '/') n--;\n" +
+            "    if (n == 0) return NULL;\n" +
+            "    const char *end = path + n;\n" +
+            "    const char *p = end - 1;\n" +
+            "    while (p > path && *p != '/') p--;\n" +
+            "    return (*p == '/') ? p + 1 : p;\n" +
+            "}\n" +
+            "\n" +
+            "static int raw6_basename_eq(const char *path, const char *name) {\n" +
+            "    const char *b = raw6_basename(path);\n" +
+            "    if (!b) return 0;\n" +
+            "    size_t bl = strlen(path);\n" +
+            "    while (bl > 0 && path[bl-1] == '/') bl--;\n" +
+            "    size_t off = (size_t)(b - path);\n" +
+            "    size_t blen = bl - off;\n" +
+            "    size_t nl = strlen(name);\n" +
+            "    return blen == nl && strncmp(b, name, nl) == 0;\n" +
+            "}\n" +
+            "\n" +
+            "static int refuse_raw6_mkdir(const char *path) {\n" +
+            "    if (opt_out()) return 0;\n" +
+            "    if (!path) return 0;\n" +
+            "    if (!is_under_hive_repo(path)) return 0;\n" +
+            "    for (int i = 0; RAW6_ALLOW[i]; i++) {\n" +
+            "        if (strstr(path, RAW6_ALLOW[i])) return 0;\n" +
+            "    }\n" +
+            "    for (int i = 0; RAW6_BANNED_BASENAMES[i]; i++) {\n" +
+            "        if (raw6_basename_eq(path, RAW6_BANNED_BASENAMES[i])) return 1;\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "int mkdir(const char *pathname, mode_t mode) {\n" +
+            "    static mkdir_fn real = NULL;\n" +
+            "    if (!real) real = (mkdir_fn)dlsym(RTLD_NEXT, \"mkdir\");\n" +
+            "    if (refuse_raw6_mkdir(pathname)) { errno = EPERM; return -1; }\n" +
+            "    return real(pathname, mode);\n" +
+            "}\n" +
+            "\n" +
+            "int mkdirat(int dirfd, const char *pathname, mode_t mode) {\n" +
+            "    static mkdirat_fn real = NULL;\n" +
+            "    if (!real) real = (mkdirat_fn)dlsym(RTLD_NEXT, \"mkdirat\");\n" +
+            "    if (refuse_raw6_mkdir(pathname)) { errno = EPERM; return -1; }\n" +
+            "    return real(dirfd, pathname, mode);\n" +
+            "}\n" +
+            "\n" +
+            "// ── raw#144 execve / execvp — argv length guard ──────────────────────\n" +
+            "//\n" +
+            "// Linux kernel ARG_MAX = 2,097,152 bytes total for argv+envp+pointers.\n" +
+            "// Massive argv (e.g. accidental `python -c \"$X\"*1000000`) wastes kernel\n" +
+            "// memory + can cause E2BIG late in execve. We pre-validate argv summed\n" +
+            "// length against a conservative threshold; over → EPERM (errno=E2BIG)\n" +
+            "// before the kernel touches it.\n" +
+            "//\n" +
+            "// Conservative budget: ARG_MAX - 64KB envp_overhead - 4KB pointer table.\n" +
+            "// This is intentionally pessimistic so envp drift (CI/CD env explosions)\n" +
+            "// doesn't push us over kernel limit at exec time. Tools needing larger\n" +
+            "// argv (rare; usually a misuse) bypass via CLAUDX_NO_SANDBOX=1.\n" +
+            "//\n" +
+            "// Short-cmd bypass: if argv total < SHORT_CMD_BYPASS (32KB) we return\n" +
+            "// allow immediately — the vast majority of execs never approach the\n" +
+            "// limit and we don't want extra walking cost.\n" +
+            "//\n" +
+            "// Linux-only. macOS execve goes through SBPL (sandbox-exec) when present\n" +
+            "// and ARG_MAX is enforced by darwin kernel; we don't shim there.\n" +
+            "\n" +
+            "typedef int (*execve_fn)(const char *, char *const[], char *const[]);\n" +
+            "typedef int (*execvp_fn)(const char *, char *const[]);\n" +
+            "\n" +
+            "#define RAW144_ARG_MAX           2097152L   // Linux kernel default\n" +
+            "#define RAW144_ENVP_OVERHEAD       65536L   // 64KB reserved for envp+pointers\n" +
+            "#define RAW144_BUDGET           (RAW144_ARG_MAX - RAW144_ENVP_OVERHEAD)\n" +
+            "#define RAW144_SHORT_BYPASS        32768L   // <32KB → fast-path allow\n" +
+            "\n" +
+            "static int refuse_raw144(char *const argv[]) {\n" +
+            "    if (opt_out()) return 0;\n" +
+            "    if (!argv) return 0;\n" +
+            "    long total = 0;\n" +
+            "    for (int i = 0; argv[i]; i++) {\n" +
+            "        total += (long)strlen(argv[i]) + 1;     // +1 for NUL terminator\n" +
+            "        if (total < RAW144_SHORT_BYPASS && argv[i+1] == NULL) return 0;\n" +
+            "        if (total > RAW144_BUDGET) return 1;\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "int execve(const char *pathname, char *const argv[], char *const envp[]) {\n" +
+            "    static execve_fn real = NULL;\n" +
+            "    if (!real) real = (execve_fn)dlsym(RTLD_NEXT, \"execve\");\n" +
+            "    if (refuse_raw144(argv)) { errno = E2BIG; return -1; }\n" +
+            "    return real(pathname, argv, envp);\n" +
+            "}\n" +
+            "\n" +
+            "int execvp(const char *file, char *const argv[]) {\n" +
+            "    static execvp_fn real = NULL;\n" +
+            "    if (!real) real = (execvp_fn)dlsym(RTLD_NEXT, \"execvp\");\n" +
+            "    if (refuse_raw144(argv)) { errno = E2BIG; return -1; }\n" +
+            "    return real(file, argv);\n" +
+            "}\n" +
+            "\n" +
+            "// ── symlink / symlinkat (raw#21) ─────────────────────────────────────\n" +
+            "\n" +
+            "typedef int (*symlink_fn)(const char *, const char *);\n" +
+            "typedef int (*symlinkat_fn)(const char *, int, const char *);\n" +
+            "\n" +
+            "static int refuse_symlink(const char *linkpath) {\n" +
+            "    if (opt_out()) return 0;\n" +
+            "    if (!linkpath) return 0;\n" +
+            "    if (strstr(linkpath, \"/archive/deprecated/\")) return 0;  // allowlist\n" +
+            "    if (strstr(linkpath, \"/tmp/\")) return 0;\n" +
+            "    // All other symlink creates are blocked (raw#21 conservative).\n" +
+            "    // Allowlist can be widened later if false positives emerge.\n" +
+            "    return 1;\n" +
+            "}\n" +
+            "\n" +
+            "int symlink(const char *target, const char *linkpath) {\n" +
+            "    static symlink_fn real = NULL;\n" +
+            "    if (!real) real = (symlink_fn)dlsym(RTLD_NEXT, \"symlink\");\n" +
+            "    if (refuse_symlink(linkpath)) { errno = EPERM; return -1; }\n" +
+            "    return real(target, linkpath);\n" +
+            "}\n" +
+            "\n" +
+            "int symlinkat(const char *target, int newdirfd, const char *linkpath) {\n" +
+            "    static symlinkat_fn real = NULL;\n" +
+            "    if (!real) real = (symlinkat_fn)dlsym(RTLD_NEXT, \"symlinkat\");\n" +
+            "    if (refuse_symlink(linkpath)) { errno = EPERM; return -1; }\n" +
+            "    return real(target, newdirfd, linkpath);\n" +
+            "}\n"
+    return s
+}
+
+fn main() {
+    let argv = real_args()
+    let out_path = if argv.len() >= 1 { argv[0] } else { "native_gate.c" }
+    let c_text = emit_native_gate_c()
+    let cmd = "cat > \"" + out_path + "\" <<'NATIVE_GATE_EMIT_EOF'\n" +
+              c_text + "NATIVE_GATE_EMIT_EOF"
+    let _ = exec(cmd)
+    let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
+    if exists_check != "y" {
+        println("[native_gate_emit] FATAL: failed to write " + out_path)
+        exit(1)
+    }
+    println("[native_gate_emit] wrote " + out_path)
+    exit(0)
+}
