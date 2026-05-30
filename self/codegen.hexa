@@ -3211,6 +3211,7 @@ fn _gen2_stmt_inner(node, depth) {
             // UNSHADOW item A: reassigning the binding may swap in a non-int
             // array (or a non-array) — void the known-int-array proof.
             _known_intarr_void(node.left.name)
+            _known_floatarr_void(node.left.name)
         }
         return pad + gen2_expr(node.left) + " = " + gen2_expr(node.right) + ";\n"
     }
