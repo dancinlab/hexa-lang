@@ -26,7 +26,7 @@
 // d13/d14/d15 baked in: pure PBE (xpbe96 cpbe96) recommended first
 // pass for metal-oxide clusters; SCF aids smear+damp+lshift+maxiter400.
 
-import "stdlib/deck/gen.hexa"
+import "stdlib/deck/types.hexa"
 
 pub fn emit_chem(spec: DeckSpec) -> [DeckFile] {
     let files: [DeckFile] = []
