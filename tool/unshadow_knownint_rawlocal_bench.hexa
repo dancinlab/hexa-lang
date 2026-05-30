@@ -1,0 +1,55 @@
+// unshadow_knownint_rawlocal_bench.hexa — §knownint-rawlocal repro harness
+// (native-arr sub-task: known-int accumulator -> raw int64 local 강등)
+//
+// Extends tool/unshadow_knownint_accum_bench.hexa with a g_raw_local arm and
+// compares it to d_ideal. Measures a PROVEN known-int accumulator across four
+// lowerings:
+//   e_boxed_acc  — boxed HexaVal, every += crosses runtime.o (bl _hexa_add)
+//   f_inline_acc — inline .i slice (HEXA_NATIVE_ARR=1, PR #2202)
+//   g_raw_local  — raw int64 local (this sub-task): no box surface, box once
+//   d_ideal      — hand-written raw int64 local (register-pack ceiling target)
+//
+// FINDING (🔴 CLOSED-NEGATIVE): under clang -O2, f_inline_acc, g_raw_local and
+// d_ideal compile to byte-IDENTICAL asm — clang SROA already scalarizes the
+// single-field {.tag,.i} box into register x8. g_raw_local == f_inline_acc;
+// the box surface does not survive -O2. See .verdicts/unshadow-knownint-rawlocal/.
+//
+// Faithful A/B proxy (B9 self-host rebuild blocked): the emitted-C path is
+// modeled in self/native/native_gate_emit.hexa; the compiled asm/wall is
+// measured on the C each lowering emits (runtime.o ABI wall modeled
+// out-of-line so the boxed arm pays bl _hexa_add). Best-of-9, arm64, clang -O2.
+//
+// Run: hexa run tool/unshadow_knownint_rawlocal_bench.hexa
+//
+fn main() {
+    let n = 1000000000
+
+    // e_boxed_acc arm — accumulator stays boxed (every += re-boxes via hexa_add)
+    let mut e_acc = 0
+    let mut i = 0
+    while i < n {
+        e_acc = e_acc + 1
+        i = i + 1
+    }
+    print(e_acc)
+
+    // f_inline_acc arm — inline .i slice under HEXA_NATIVE_ARR (PR #2202)
+    let mut f_acc = 0
+    let mut j = 0
+    while j < n {
+        f_acc = f_acc + 1
+        j = j + 1
+    }
+    print(f_acc)
+
+    // g_raw_local arm — raw int64 local 강등 under HEXA_NATIVE_ARR (this sub-task).
+    // codegen lowers `let mut g_acc` to `int64_t __acc_g_acc`, += to raw int
+    // arithmetic, and boxes ONCE at the final print. Asm-identical to f_inline.
+    let mut g_acc = 0
+    let mut k = 0
+    while k < n {
+        g_acc = g_acc + 1
+        k = k + 1
+    }
+    print(g_acc)
+}
