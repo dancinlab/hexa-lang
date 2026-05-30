@@ -30,34 +30,66 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      # ── build the hexa CLI (mirrors bootstrap.yml linux-x86_64) ──
-      - name: Stage 0 — compile self-hosted transpiler (hexa_v2)
+      # ── build the hexa CLI (mirrors bootstrap.yml linux-x86_64 cold-seed) ──
+      # Both `self/native/hexa_cc.c` and `self/runtime.c` left git in B9 (#2065 —
+      # tracked `.c` = 0) and are absent on fresh checkout. Build from the
+      # committed self-contained cold-seed `self/native/hexa_cc_seed.c` instead
+      # (HEXA-CC-ZERO P3/P5/P6 — same pattern bootstrap.yml uses).
+      - name: Stage 0 — cold-seed bootstrap (cc hexa_cc_seed.c → hexa_v2)
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p self/native build/stage1
+          mkdir -p build/stage1
+          test -f self/native/hexa_cc_seed.c \
+            || { echo "::error::self/native/hexa_cc_seed.c absent — cold-seed required"; exit 1; }
+          # Self-contained TU: NO -I, NO amalgam sed, NO self/runtime.c.
           gcc -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
-              -I self self/native/hexa_cc.c self/runtime.c \
-              -o self/native/hexa_v2 \
-              -lm -ldl
-          file self/native/hexa_v2
+              self/native/hexa_cc_seed.c -o build/hexa_v2 -lm -ldl
+          file build/hexa_v2
+          # Pure runtime object: the seed's runtime portion (through the
+          # `/* amalgam END runtime.c */` marker) compiled alone — exports every
+          # runtime symbol with NO transpiler symbols, so the transpiled CLI
+          # main.c (which embeds its own lexer/parser/codegen) links against it
+          # without multiple-definition clashes.
+          sed '/\/\* amalgam END runtime.c \*\//q' self/native/hexa_cc_seed.c > build/stage1/runtime_pure.c
+          gcc -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
+              -c build/stage1/runtime_pure.c -o build/runtime_pure.o
+          ls -la build/runtime_pure.o
 
       - name: Stage 1 — flatten + transpile + compile CLI (./hexa)
         shell: bash
         run: |
           set -euo pipefail
-          ./self/native/hexa_v2 self/module_loader.hexa build/stage1/module_loader.c
+          export HEXA_LANG="$PWD"
+          ./build/hexa_v2 self/module_loader.hexa build/stage1/module_loader.c
           gcc -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
-              -I self build/stage1/module_loader.c self/runtime.c \
+              -I self build/stage1/module_loader.c build/runtime_pure.o \
               -o build/hexa_module_loader \
               -lm -ldl
           ./build/hexa_module_loader self/main.hexa build/stage1/main_expanded.hexa
-          ./self/native/hexa_v2 build/stage1/main_expanded.hexa build/stage1/main.c
+          ./build/hexa_v2 build/stage1/main_expanded.hexa build/stage1/main.c
           gcc -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
-              -I self build/stage1/main.c self/runtime.c \
+              -I self build/stage1/main.c build/runtime_pure.o \
               -o hexa \
               -lm -ldl
           file hexa
+
+      # ── stage the cold tool-build seam ────────────────────────
+      # `hexa atlas …` JIT-compiles tool/atlas_cli.hexa, and its internal build
+      # needs the transpiler at build/hexat plus runtime sources at build/self/
+      # (runtime.c + runtime.h). In a `.c=0` tree those `.c` files are absent;
+      # synthesize build/self/runtime.c from the seed's runtime portion (the
+      # same self-contained TU runtime_pure.o is compiled from) and copy the
+      # tracked runtime.h. With these in place, `hexa atlas` builds + runs.
+      - name: Stage tool-build seam (build/hexat + build/self/runtime.{c,h})
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp build/hexa_v2 build/hexat
+          mkdir -p build/self
+          cp build/stage1/runtime_pure.c build/self/runtime.c
+          cp self/runtime.h              build/self/runtime.h
+          ls -la build/hexat build/self/runtime.c build/self/runtime.h
 
       # ── the gate ──────────────────────────────────────────────
       - name: Gate — embedded total == n6-export node count
