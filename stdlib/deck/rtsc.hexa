@@ -36,7 +36,7 @@
 // and pressure_gpa_comment (string) — the emitter writes them as-is.
 // Spec authors stating "10 GPa target" must pass "100.0" + "10 GPa".
 
-import "stdlib/deck/gen.hexa"
+import "stdlib/deck/types.hexa"
 // CONCURRENT-FILL launch SSOT (project.tape d_parallel_fire · #2096/#2101).
 // The deck generator REUSES this planner (d19) so the emitted multi-deck
 // launch script is concurrent + disk-aware BY DEFAULT — never a hand-written
@@ -53,7 +53,7 @@ import "stdlib/cloud/fill_plan.hexa"
 // single edit needed to register a new prototype (alongside its emitter).
 // Keep this list in lockstep with the dispatch branches in `emit_rtsc`.
 pub fn rtsc_prototypes() -> [string] {
-    return ["beh8_clathrate", "perovskite_pm3m", "im3m_group17", "sodalite_im3m_yh10"]
+    return ["beh8_clathrate", "perovskite_pm3m", "im3m_group17", "sodalite_im3m_yh10", "a15_ysbh6"]
 }
 
 // ── pub entry point ──────────────────────────────────────────────────
@@ -96,6 +96,13 @@ pub fn emit_rtsc(spec: DeckSpec) -> [DeckFile] {
         deck_push(files, "scf.in",      _rtsc_sodalite_scf(spec))
         deck_push(files, "ph.in",       _rtsc_sodalite_ph(spec))
         deck_push(files, "RUNBOOK.md",  _rtsc_sodalite_runbook(spec))
+        return files
+    }
+    if proto == "a15_ysbh6" {
+        deck_push(files, "vc-relax.in", _rtsc_a15_vc_relax(spec))
+        deck_push(files, "scf.in",      _rtsc_a15_scf(spec))
+        deck_push(files, "ph.in",       _rtsc_a15_ph(spec))
+        deck_push(files, "RUNBOOK.md",  _rtsc_a15_runbook(spec))
         return files
     }
     // Unreachable: the coverage guard above panics on anything not in the
@@ -652,6 +659,185 @@ fn _rtsc_beh8_runbook(spec: DeckSpec) -> string {
 // (Pm-3m, 5-atom, ibrav=1, octahedral H) — does NOT byte-match the
 // hand-authored author-style variations. Use for new-perovskite decks;
 // regen of the CaAuH3 deck will diverge stylistically (TODO d6 honest).
+
+// ── A15 ternary-hydride prototype (YSbH6 · Cr3Si motif · cubic Pm-3) ──
+// 8-atom cell: A + B on the 2a bcc sites (Pm-3n -> Pm-3 since A!=B), H6 on the
+// A15 6c chains. Ref: arXiv:2512.19901 (Caussé/Pickard 2025) — YSbH6 Tc~118K@50GPa.
+fn _rtsc_a15_vc_relax(spec: DeckSpec) -> string {
+    let prefix    = spec_get(spec, "prefix")
+    let a_sym     = spec_get(spec, "a_site_symbol")
+    let b_sym     = spec_get(spec, "b_site_symbol")
+    let a_mass    = spec_get(spec, "a_site_mass")
+    let b_mass    = spec_get(spec, "b_site_mass")
+    let a_upf     = spec_get(spec, "a_site_upf")
+    let b_upf     = spec_get(spec, "b_site_upf")
+    let celldm    = spec_get(spec, "celldm_bohr")
+    let press_kb  = spec_get_or(spec, "pressure_kbar", "500.0")
+    let outdir    = spec_get_or(spec, "outdir", "./out")
+    let pseudo    = spec_get_or(spec, "pseudo_dir", "./pseudo")
+    let mixing    = spec_get_or(spec, "mixing_beta", "0.4")
+    let degauss   = spec_get_or(spec, "degauss", "0.02")
+
+    let mut s = ""
+    s = s + "&control\n"
+    s = s + "  ! A15-type ternary hydride — " + a_sym + b_sym + "H6 (Cr3Si motif, cubic Pm-3).\n"
+    s = s + "  ! " + a_sym + " + " + b_sym + " on the 2a bcc sites (Pm-3n->Pm-3 since A!=B);\n"
+    s = s + "  !   H6 forms the A15 6c chains. START celldm(1)=" + celldm + " Bohr; vc-relax FINDS a.\n"
+    s = s + "  calculation = 'vc-relax'\n"
+    s = s + "  prefix = '" + prefix + "'\n"
+    s = s + "  outdir = '" + outdir + "'\n"
+    s = s + "  pseudo_dir = '" + pseudo + "'\n"
+    s = s + "  tprnfor = .true.\n"
+    s = s + "  tstress = .true.\n"
+    s = s + "  forc_conv_thr = 1.0d-4\n"
+    s = s + "  etot_conv_thr = 1.0d-5\n"
+    s = s + "  nstep = 200\n"
+    s = s + "  verbosity = 'low'\n"
+    s = s + "/\n"
+    s = s + "&system\n"
+    s = s + "  ! ibrav=1 simple cubic; 8-atom A15 cell (1 " + a_sym + " + 1 " + b_sym + " + 6 H).\n"
+    s = s + "  ibrav = 1\n"
+    s = s + "  celldm(1) = " + celldm + "\n"
+    s = s + "  nat = 8\n"
+    s = s + "  ntyp = 3\n"
+    s = s + "  ecutwfc = 80.0\n"
+    s = s + "  ecutrho = 640.0\n"
+    s = s + "  nosym = .true.\n"
+    s = s + "  occupations = 'smearing'\n"
+    s = s + "  smearing = 'mp'\n"
+    s = s + "  degauss = " + degauss + "\n"
+    s = s + "/\n"
+    s = s + "&electrons\n"
+    s = s + "  conv_thr = 1.0d-10\n"
+    s = s + "  mixing_beta = " + mixing + "\n"
+    s = s + "  electron_maxstep = 400\n"
+    s = s + "/\n"
+    s = s + "&ions\n"
+    s = s + "  ion_dynamics = 'bfgs'\n"
+    s = s + "/\n"
+    s = s + "&cell\n"
+    s = s + "  cell_dynamics = 'bfgs'\n"
+    s = s + "  press = " + press_kb + "\n"
+    s = s + "  press_conv_thr = 0.5\n"
+    s = s + "/\n"
+    s = s + "\n"
+    s = s + "ATOMIC_SPECIES\n"
+    s = s + "  " + a_sym + " " + a_mass + "  " + a_upf + "\n"
+    s = s + "  " + b_sym + " " + b_mass + " " + b_upf + "\n"
+    s = s + "  H  1.008   H.pbe-rrkjus_psl.1.0.0.UPF\n"
+    s = s + "ATOMIC_POSITIONS crystal\n"
+    s = s + "  " + a_sym + " 0.00 0.00 0.00\n"
+    s = s + "  " + b_sym + " 0.50 0.50 0.50\n"
+    s = s + "  H  0.25 0.00 0.50\n"
+    s = s + "  H  0.75 0.00 0.50\n"
+    s = s + "  H  0.50 0.25 0.00\n"
+    s = s + "  H  0.50 0.75 0.00\n"
+    s = s + "  H  0.00 0.50 0.25\n"
+    s = s + "  H  0.00 0.50 0.75\n"
+    s = s + "K_POINTS automatic\n"
+    s = s + "  12 12 12 0 0 0\n"
+    return s
+}
+
+fn _rtsc_a15_scf(spec: DeckSpec) -> string {
+    let prefix    = spec_get(spec, "prefix")
+    let a_sym     = spec_get(spec, "a_site_symbol")
+    let b_sym     = spec_get(spec, "b_site_symbol")
+    let a_mass    = spec_get(spec, "a_site_mass")
+    let b_mass    = spec_get(spec, "b_site_mass")
+    let a_upf     = spec_get(spec, "a_site_upf")
+    let b_upf     = spec_get(spec, "b_site_upf")
+    let celldm    = spec_get(spec, "celldm_bohr")
+    let outdir    = spec_get_or(spec, "outdir", "./out")
+    let pseudo    = spec_get_or(spec, "pseudo_dir", "./pseudo")
+    let mixing    = spec_get_or(spec, "mixing_beta", "0.4")
+    let degauss   = spec_get_or(spec, "degauss", "0.02")
+
+    let mut s = ""
+    s = s + "&control\n"
+    s = s + "  calculation = 'scf'\n"
+    s = s + "  prefix = '" + prefix + "'\n"
+    s = s + "  outdir = '" + outdir + "'\n"
+    s = s + "  pseudo_dir = '" + pseudo + "'\n"
+    s = s + "  verbosity = 'high'\n"
+    s = s + "  tstress = .true.\n"
+    s = s + "  tprnfor = .true.\n"
+    s = s + "/\n"
+    s = s + "&system\n"
+    s = s + "  ibrav = 1\n"
+    s = s + "  celldm(1) = " + celldm + "    ! REPLACE with relaxed value from vc-relax.out\n"
+    s = s + "  nat = 8\n"
+    s = s + "  ntyp = 3\n"
+    s = s + "  ecutwfc = 80.0\n"
+    s = s + "  ecutrho = 640.0\n"
+    s = s + "  nosym = .true.\n"
+    s = s + "  occupations = 'smearing'\n"
+    s = s + "  smearing = 'mp'\n"
+    s = s + "  degauss = " + degauss + "\n"
+    s = s + "/\n"
+    s = s + "&electrons\n"
+    s = s + "  conv_thr = 1.0d-12\n"
+    s = s + "  mixing_beta = " + mixing + "\n"
+    s = s + "  electron_maxstep = 400\n"
+    s = s + "/\n"
+    s = s + "ATOMIC_SPECIES\n"
+    s = s + "  " + a_sym + " " + a_mass + "  " + a_upf + "\n"
+    s = s + "  " + b_sym + " " + b_mass + " " + b_upf + "\n"
+    s = s + "  H  1.008   H.pbe-rrkjus_psl.1.0.0.UPF\n"
+    s = s + "! REPLACE positions below with relaxed ATOMIC_POSITIONS from vc-relax.out\n"
+    s = s + "ATOMIC_POSITIONS crystal\n"
+    s = s + "  " + a_sym + " 0.00 0.00 0.00\n"
+    s = s + "  " + b_sym + " 0.50 0.50 0.50\n"
+    s = s + "  H  0.25 0.00 0.50\n"
+    s = s + "  H  0.75 0.00 0.50\n"
+    s = s + "  H  0.50 0.25 0.00\n"
+    s = s + "  H  0.50 0.75 0.00\n"
+    s = s + "  H  0.00 0.50 0.25\n"
+    s = s + "  H  0.00 0.50 0.75\n"
+    s = s + "K_POINTS automatic\n"
+    s = s + "  16 16 16 0 0 0\n"
+    return s
+}
+
+fn _rtsc_a15_ph(spec: DeckSpec) -> string {
+    let prefix = spec_get(spec, "prefix")
+    let a_sym  = spec_get(spec, "a_site_symbol")
+    let b_sym  = spec_get(spec, "b_site_symbol")
+    let nq     = spec_get_or(spec, "nq", "4")
+    let outdir = spec_get_or(spec, "outdir", "./out")
+
+    let mut s = ""
+    s = s + a_sym + b_sym + "H6 phonon + electron-phonon " + nq + "x" + nq + "x" + nq + " q (A15 ternary hydride · Cr3Si motif)\n"
+    s = s + "&inputph\n"
+    s = s + "  prefix = '" + prefix + "'\n"
+    s = s + "  outdir = '" + outdir + "'\n"
+    s = s + "  fildyn = '" + prefix + ".dyn'\n"
+    s = s + "  fildvscf = '" + prefix + ".dvscf'\n"
+    s = s + "  ldisp = .true.\n"
+    s = s + "  nq1 = " + nq + ", nq2 = " + nq + ", nq3 = " + nq + "\n"
+    s = s + "  tr2_ph = 1.0d-14\n"
+    s = s + "  recover = .true.\n"
+    s = s + "  electron_phonon = 'simple'\n"
+    s = s + "  el_ph_sigma = 0.005\n"
+    s = s + "  el_ph_nsigma = 10\n"
+    s = s + "/\n"
+    return s
+}
+
+fn _rtsc_a15_runbook(spec: DeckSpec) -> string {
+    let a_sym = spec_get(spec, "a_site_symbol")
+    let b_sym = spec_get(spec, "b_site_symbol")
+    let press = spec_get_or(spec, "pressure_gpa", "50")
+    let mut s = ""
+    s = s + "# " + a_sym + b_sym + "H6 — RTSC A15 ternary-hydride 런북 (BUILD 산출물)\n"
+    s = s + "\n"
+    s = s + "> A15-type (Cr3Si motif) cubic Pm-3 RTSC 후보. 압력 " + press + " GPa.\n"
+    s = s + "> " + a_sym + " + " + b_sym + " on 2a bcc sites, H6 on the A15 6c chains.\n"
+    s = s + "> Ref: arXiv:2512.19901 (YSbH6 Tc~118K@50GPa, dyn-stable 20-120GPa).\n"
+    s = s + "\n"
+    s = s + "체인: vc-relax -> scf (16^3 k) -> ph (el-ph simple, " + spec_get_or(spec, "nq", "4") + "^3 q). recover=.true.\n"
+    return s
+}
 
 fn _rtsc_perovskite_vc_relax(spec: DeckSpec) -> string {
     let prefix    = spec_get(spec, "prefix")               // "caauh3"

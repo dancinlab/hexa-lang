@@ -29,7 +29,7 @@
 // only) — extend per campaign needs (parser stdlib/material/atoms_from_cif
 // will read both this minimal form and full CIF files).
 
-import "stdlib/deck/gen.hexa"
+import "stdlib/deck/types.hexa"
 
 pub fn emit_material(spec: DeckSpec) -> [DeckFile] {
     let files: [DeckFile] = []

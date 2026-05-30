@@ -1,0 +1,59 @@
+// stdlib/deck/emit_run.hexa — minimal /deck EMIT driver.
+//
+// gen.hexa is a pure library (gen_deck / emit_<domain> / accessors) with no
+// main(); the /deck plugin's documented `hexa run gen.hexa --domain ... --out`
+// invocation therefore emitted nothing (no entrypoint). This thin runnable
+// front-door supplies the missing main: it builds a DeckSpec from key=val argv
+// pairs (no JSON parser needed), dispatches via gen_deck(domain, spec), and
+// writes each emitted DeckFile under the out dir via stdlib/io.write_text.
+//
+// Usage:
+//   hexa run stdlib/deck/emit_run.hexa <domain> <slug> <out-dir> [key=val ...]
+// e.g.
+//   hexa run .../emit_run.hexa rtsc YSbH6 exports/rtsc/decks/YSbH6/ \
+//     prototype=a15_ysbh6 prefix=ysbh6 a_site_symbol=Y ...
+//
+// The generator writes the deck *.in files (not a human), so this is the
+// canonical, deck-guard-clean emit path.
+import "stdlib/deck/gen.hexa"
+import "stdlib/deck/types.hexa"
+import "stdlib/io.hexa"
+
+fn main() {
+    let av = args()
+    if len(av) < 4 {
+        println("usage: emit_run <domain> <slug> <out-dir> [key=val ...]")
+        return
+    }
+    let domain = av[1]
+    let outdir = av[3]
+
+    let spec = deck_spec_new()
+    let mut i = 4
+    while i < len(av) {
+        let kv = av[i]
+        let parts = kv.split("=")
+        if len(parts) >= 2 {
+            spec_set(spec, parts[0], parts[1])
+        }
+        i = i + 1
+    }
+
+    let files = gen_deck(domain, spec)
+    if len(files) == 0 {
+        println("emit_run: no files emitted (unknown domain or stub): " + domain)
+        return
+    }
+
+    let mut j = 0
+    while j < len(files) {
+        let dst = outdir + files[j].path
+        let ok = write_text(dst, files[j].content)
+        if ok {
+            println("wrote " + dst)
+        } else {
+            println("FAILED " + dst)
+        }
+        j = j + 1
+    }
+}

@@ -1,0 +1,101 @@
+// stdlib/deck/types.hexa — deck type + accessor LEAF module.
+//
+// Holds the DeckFile / DeckSpec structs and their pure accessor/builder
+// helpers, with NO imports. Both the gen.hexa dispatcher AND every domain
+// emitter (rtsc / nuclear / material / chem / chip / bio) import THIS module
+// for the shared types — breaking the former gen.hexa <-> emitter import
+// CYCLE that double-emitted the DeckSpec/DeckFile C constructors and made
+// `hexa run gen.hexa` (the /deck emit entrypoint) fail to compile.
+// (d3 single canonical home for the types.)
+
+// One emitted deck file: a relative path (under the caller's deck dir) and
+// its full text content. The caller writes these to disk via stdlib/io —
+// emitters stay pure (no syscall).
+pub struct DeckFile {
+    path:     string,
+    content:  string,
+}
+
+// Generic spec carrier. hexa has no native map type, so a spec is two
+// parallel arrays for scalar fields (keys <-> vals) plus two parallel arrays
+// for list-valued fields (list_keys <-> list_vals).
+pub struct DeckSpec {
+    keys:       [string],
+    vals:       [string],
+    list_keys:  [string],
+    list_vals:  [[string]],
+}
+
+// ── spec constructors / accessors ────────────────────────────────────
+
+pub fn deck_spec_new() -> DeckSpec {
+    return DeckSpec { keys: [], vals: [], list_keys: [], list_vals: [] }
+}
+
+// Set (or overwrite) a scalar field.
+pub fn spec_set(spec: DeckSpec, key: string, value: string) {
+    let mut i = 0
+    while i < len(spec.keys) {
+        if spec.keys[i] == key {
+            spec.vals[i] = value
+            return
+        }
+        i = i + 1
+    }
+    spec.keys.push(key)
+    spec.vals.push(value)
+}
+
+// Set (or overwrite) a list-valued field.
+pub fn spec_set_list(spec: DeckSpec, key: string, values: [string]) {
+    let mut i = 0
+    while i < len(spec.list_keys) {
+        if spec.list_keys[i] == key {
+            spec.list_vals[i] = values
+            return
+        }
+        i = i + 1
+    }
+    spec.list_keys.push(key)
+    spec.list_vals.push(values)
+}
+
+pub fn spec_has(spec: DeckSpec, key: string) -> bool {
+    let mut i = 0
+    while i < len(spec.keys) {
+        if spec.keys[i] == key { return true }
+        i = i + 1
+    }
+    return false
+}
+
+pub fn spec_get(spec: DeckSpec, key: string) -> string {
+    let mut i = 0
+    while i < len(spec.keys) {
+        if spec.keys[i] == key { return spec.vals[i] }
+        i = i + 1
+    }
+    return ""
+}
+
+pub fn spec_get_or(spec: DeckSpec, key: string, default: string) -> string {
+    if spec_has(spec, key) { return spec_get(spec, key) }
+    return default
+}
+
+pub fn spec_get_list(spec: DeckSpec, key: string) -> [string] {
+    let mut i = 0
+    while i < len(spec.list_keys) {
+        if spec.list_keys[i] == key { return spec.list_vals[i] }
+        i = i + 1
+    }
+    let empty: [string] = []
+    return empty
+}
+
+// ── shared emit helper ──────────────────────────────────────────────
+
+// Append a DeckFile to an accumulator.
+pub fn deck_push(files: [DeckFile], path: string, content: string) {
+    files.push(DeckFile { path: path, content: content })
+}

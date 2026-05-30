@@ -31,7 +31,7 @@
 //   - mmCIF emission is the minimal atom_site loop only; full mmCIF
 //     dictionary categories (entity, struct, refln…) are out of scope.
 
-import "stdlib/deck/gen.hexa"
+import "stdlib/deck/types.hexa"
 
 pub fn emit_bio(spec: DeckSpec) -> [DeckFile] {
     let files: [DeckFile] = []

@@ -22,7 +22,7 @@
 // stub only (mandatory keys + pg_pin block + one ff/cell entry). For
 // full Liberty timing/power tables, extend per campaign.
 
-import "stdlib/deck/gen.hexa"
+import "stdlib/deck/types.hexa"
 
 pub fn emit_chip(spec: DeckSpec) -> [DeckFile] {
     let files: [DeckFile] = []

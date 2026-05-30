@@ -35,7 +35,7 @@
 // island_weight, composite_score. Those are SCIENTIFIC inputs/outputs
 // from the campaign; this emitter only assembles the JSON envelope.
 
-import "stdlib/deck/gen.hexa"
+import "stdlib/deck/types.hexa"
 
 pub fn emit_nuclear(spec: DeckSpec) -> [DeckFile] {
     let files: [DeckFile] = []
