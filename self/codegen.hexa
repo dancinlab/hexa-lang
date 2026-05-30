@@ -1882,6 +1882,13 @@ fn gen2_fn_decl(node) {
     if _stack_alloc_enabled() {
         _stack_noescape_scan(node.body)
     }
+    // UNSHADOW known-int-accum: pre-scan the body for `let mut acc = <known-int>`
+    // accumulators whose every write is proven all-int — register them so the
+    // CompoundAssign / AssignStmt / read arms emit the INLINE `.i` form (raw
+    // int64 sum chain, the d_ideal ceiling). GATED on HEXA_NATIVE_ARR (the scan
+    // itself no-ops when OFF) → boxed default path unchanged. Runs AFTER
+    // _gen2_boxed_cells so closure-captured accumulators are excluded.
+    _known_int_accum_scan(node.body)
     let mut _hoisted = []
     let mut hoists = []
     let mut ii = 0
@@ -2220,6 +2227,9 @@ fn gen2_fn_decl(node) {
     // closure mut-capture: clear boxed-cell set on fn exit so a later fn's
     // (or the script body's) same-named binding isn't spuriously boxed.
     _gen2_boxed_cells = []
+    // UNSHADOW known-int-accum: clear the fn-scoped accumulator proof on exit so
+    // a later fn's same-named `let mut` isn't spuriously certified known-int.
+    _known_int_accum_reset()
     return chunks.join("")
 }
 
@@ -3194,6 +3204,24 @@ fn _gen2_stmt_inner(node, depth) {
             else if op == "%" { _nv = "hexa_mod(" + _rd + ", " + _rhs + ")" }
             else { return pad + "/* compound " + op + " (boxed) */\n" }
             return pad + _cn + " = hexa_array_set(" + _cn + ", 0, " + _nv + ");\n"
+        }
+        // UNSHADOW known-int-accum: `acc <op>= rhs` where `acc` is a PROVEN
+        // known-int accumulator (whole-fn-body writes scanned all-int) and the
+        // RHS is itself known-int. Emit the INLINE compound-literal `.i` form —
+        // the SAME shape the known-int BinOp fast-path uses (L5344) — instead of
+        // the out-of-line `hexa_add(acc, rhs)` runtime.o ABI call. clang -O2
+        // folds `HX_INT((HexaVal){.tag=TAG_INT,.i=X})` → X, collapsing the whole
+        // read→sum chain to raw int64 arithmetic (the §native-arr d_ideal
+        // ceiling: no ABI wall, SIMD-gatherable). `/`/`%` excluded (handled by
+        // the scan voiding the proof — they need the runtime div-by-zero throw).
+        // DOUBLE-EVAL SAFE: lhs and rhs each expanded once. Fires only under the
+        // proof (fn-scoped + GATED) so the general boxed path is unchanged.
+        if type_of(node.left) != "string" && node.left.kind == "Ident" && _is_known_int_accum_name(node.left.name) {
+            if (op == "+" || op == "-" || op == "*" || op == "&" || op == "|" || op == "^" || op == "<<" || op == ">>") && _is_known_int(node.right) {
+                let _alhs = gen2_expr(node.left)
+                let _arhs = gen2_expr(node.right)
+                return pad + _alhs + " = ((HexaVal){.tag=TAG_INT,.i=(HX_INT(" + _alhs + ") " + op + " HX_INT(" + _arhs + "))});\n"
+            }
         }
         // FMA for compound assign: x += a * b  →  x = fma(a, b, x)
         // B20: suppressed inside @strict_fp fns (two roundings must be
@@ -9959,6 +9987,246 @@ fn _is_int_literal_array(node) {
     return true
 }
 
+// ── UNSHADOW sub-task: known-int ACCUMULATOR — mut-binding kind propagation ──
+// §native-arr LANDED the native int64_t[] STORAGE (the d_ideal "AT PARITY"
+// ceiling proxy) but only realized ~1.18× of the 17.6× because the read→sum
+// chain re-surfaces a boxed HexaVal at the accumulator: `let mut acc = 0` is an
+// UNTYPED mut binding, so `acc += xs[i]` emitted `acc = hexa_add(acc, xs[i])` —
+// an OUT-OF-LINE runtime.o ABI call that sits behind the C-ABI wall and blocks
+// clang -O2 from register-packing / vectorizing the loop (vec-op 8 < native 28).
+//
+// This tracker extends the §hexaval-unbox known-int chain to a PROVEN mut
+// accumulator. A `let mut acc = <known-int init>` is registered known-int-accum
+// iff a CONSERVATIVE whole-fn-body scan proves EVERY write to `acc` keeps it
+// statically TAG_INT:
+//   • the initializer is known-int (IntLit / known-int-array element-derived /
+//     another known-int-accum) — float / string / array / unknown init voids it;
+//   • every reassignment is `acc = <accum-int-safe>` or a CompoundAssign
+//     `acc <op>= <accum-int-safe>` with op ∈ {+,-,*,&,|,^,<<,>>} — `/` and `%`
+//     are EXCLUDED (they need the runtime div-by-zero throw, same rule the
+//     known-int BinOp fast-path at L5327 uses);
+//   • `accum-int-safe` RHS = IntLit · a known-int name · `acc` itself · an
+//     `arr[i]` read where `arr` is a proven int-literal-array in this fn (the
+//     §native-arr / §unboxed-array element-kind fact);
+//   • `acc` is never captured-and-mutated by a closure (the boxed-cell path
+//     takes precedence and would alias through hexa_array_set).
+// ANY write that does not match voids the binding — then `acc` stays the
+// unchanged BOXED HexaVal path (zero regression). With the proof, the
+// CompoundAssign / AssignStmt arms emit the INLINE compound-literal `.i` form
+// (`acc = ((HexaVal){.tag=TAG_INT,.i=(HX_INT(acc) OP HX_INT(rhs))})`), the same
+// shape the known-int BinOp path uses — clang -O2 folds `HX_INT((HexaVal){.i=X})`
+// → X, collapsing the whole chain to raw int64 arithmetic (the d_ideal ceiling:
+// no out-of-line hexa_add, SIMD-gatherable). `_is_known_int` also certifies the
+// accumulator so a read `acc` in a surrounding int BinOp extracts the raw `.i`.
+//
+// GATED on HEXA_NATIVE_ARR (reuses §native-arr's flag): the accumulator unbox is
+// the read→sum tail of the SAME native-array opt, so default OFF = byte-identical
+// boxed path, and the parity story is the unified native-arr + known-int chain.
+// FN-SCOPED: reset at each gen2_fn_decl entry (a fresh scan per function body).
+let mut _known_int_accum_set = []
+// int-literal-array names proven within the CURRENT fn (scan-local; lets the
+// accumulator RHS `arr[i]` certification be self-contained at scan time, before
+// any LetStmt emit has populated the global _known_intarr_set for this fn).
+let mut _accum_scan_intarr = []
+
+fn _known_int_accum_reset() {
+    _known_int_accum_set = []
+    _accum_scan_intarr = []
+}
+
+fn _known_int_accum_add(name) {
+    let mut i = 0
+    while i < len(_known_int_accum_set) {
+        if _known_int_accum_set[i] == name { return }
+        i = i + 1
+    }
+    _known_int_accum_set = _known_int_accum_set.push(name)
+}
+
+fn _is_known_int_accum_name(name) {
+    let mut i = 0
+    while i < len(_known_int_accum_set) {
+        if _known_int_accum_set[i] == name { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn _accum_scan_intarr_has(name) {
+    let mut i = 0
+    while i < len(_accum_scan_intarr) {
+        if _accum_scan_intarr[i] == name { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// Is `node` an `arr[i]` read whose receiver is a scan-proven int-literal-array?
+// (The narrow element-kind fact — same monomorphic-i64 proof §native-arr uses,
+// but resolved scan-locally so the accumulator scan is self-contained.)
+fn _accum_rhs_is_intarr_read(node) {
+    if type_of(node) == "string" { return false }
+    if node.kind != "Index" { return false }
+    let _l = node.left
+    if type_of(_l) == "string" { return false }
+    if _l.kind != "Ident" { return false }
+    return _accum_scan_intarr_has(_l.name)
+}
+
+// Is `node` an accum-int-safe RHS for accumulator `acc_name`? (IntLit · known-int
+// name · `acc` self-reference · proven int-literal-array read · a +/-/* BinOp
+// whose operands are each recursively accum-int-safe.) CONSERVATIVE — anything
+// else voids the proof. decreases node — structural.
+fn _is_accum_int_safe(node, acc_name) {
+    if type_of(node) == "string" { return false }
+    let k = node.kind
+    if k == "IntLit" { return true }
+    if k == "Ident" {
+        if node.name == acc_name { return true }
+        if _is_known_int_name(node.name) { return true }
+        if _is_known_int_accum_name(node.name) { return true }
+        return false
+    }
+    if k == "Index" { return _accum_rhs_is_intarr_read(node) }
+    if k == "BinaryOp" {
+        let op = node.op
+        if op == "+" || op == "-" || op == "*" || op == "&" || op == "|" || op == "^" || op == "<<" || op == ">>" {
+            return _is_accum_int_safe(node.left, acc_name) && _is_accum_int_safe(node.right, acc_name)
+        }
+        return false
+    }
+    if k == "UnaryOp" {
+        if node.op == "-" || node.op == "~" { return _is_accum_int_safe(node.left, acc_name) }
+        return false
+    }
+    return false
+}
+
+// Conservative whole-body scan: does EVERY write to `acc_name` keep it known-int?
+// Returns true only if no write voids the int-kind proof. A write is voiding when
+// it is an AssignStmt / CompoundAssign / LogicalAssign whose LHS Ident == acc_name
+// and whose RHS is NOT accum-int-safe, or a CompoundAssign with op ∈ {/, %}
+// (div/mod need the runtime throw), or a LogicalAssign (??= / ||= / &&= can carry
+// a non-int). decreases node — structural.
+fn _accum_writes_all_int(node, acc_name) {
+    if type_of(node) == "string" { return true }
+    if type_of(node) == "array" {
+        let mut i = 0
+        while i < len(node) {
+            if !_accum_writes_all_int(node[i], acc_name) { return false }
+            i = i + 1
+        }
+        return true
+    }
+    let k = node.kind
+    if k == "AssignStmt" {
+        if type_of(node.left) != "string" && node.left.kind == "Ident" && node.left.name == acc_name {
+            if !_is_accum_int_safe(node.right, acc_name) { return false }
+        }
+    }
+    if k == "CompoundAssign" {
+        if type_of(node.left) != "string" && node.left.kind == "Ident" && node.left.name == acc_name {
+            let op = node.op
+            if op == "/" || op == "%" || op == "**" { return false }
+            if !(op == "+" || op == "-" || op == "*" || op == "&" || op == "|" || op == "^" || op == "<<" || op == ">>") { return false }
+            if !_is_accum_int_safe(node.right, acc_name) { return false }
+        }
+    }
+    if k == "LogicalAssign" {
+        if type_of(node.left) != "string" && node.left.kind == "Ident" && node.left.name == acc_name {
+            return false
+        }
+    }
+    // structural recursion (mirror _name_resized_in_body coverage)
+    if type_of(node.left) != "string" {
+        if !_accum_writes_all_int(node.left, acc_name) { return false }
+    }
+    if type_of(node.right) != "string" {
+        if !_accum_writes_all_int(node.right, acc_name) { return false }
+    }
+    if type_of(node.cond) != "string" {
+        if !_accum_writes_all_int(node.cond, acc_name) { return false }
+    }
+    if type_of(node.then_body) != "string" {
+        if !_accum_writes_all_int(node.then_body, acc_name) { return false }
+    }
+    if type_of(node.else_body) != "string" {
+        if !_accum_writes_all_int(node.else_body, acc_name) { return false }
+    }
+    if type_of(node.body) != "string" {
+        if !_accum_writes_all_int(node.body, acc_name) { return false }
+    }
+    if type_of(node.iter_expr) != "string" {
+        if !_accum_writes_all_int(node.iter_expr, acc_name) { return false }
+    }
+    if type_of(node.args) == "array" {
+        let mut ai = 0
+        while ai < len(node.args) {
+            if !_accum_writes_all_int(node.args[ai], acc_name) { return false }
+            ai = ai + 1
+        }
+    }
+    if type_of(node.items) == "array" {
+        let mut ii = 0
+        while ii < len(node.items) {
+            if !_accum_writes_all_int(node.items[ii], acc_name) { return false }
+            ii = ii + 1
+        }
+    }
+    if type_of(node.arms) == "array" {
+        let mut mi = 0
+        while mi < len(node.arms) {
+            let arm = node.arms[mi]
+            if type_of(arm) != "string" && type_of(arm.body) == "array" {
+                if !_accum_writes_all_int(arm.body, acc_name) { return false }
+            }
+            mi = mi + 1
+        }
+    }
+    return true
+}
+
+// Pre-scan a fn body: (1) collect every immutable `let X = [int-lit…]` name into
+// the scan-local int-literal-array set, then (2) register every `let mut acc =
+// <known-int init>` whose whole-body writes are proven all-int (and which a
+// closure does not capture-and-mutate) as a known-int accumulator. GATED on
+// HEXA_NATIVE_ARR (reuses §native-arr's flag) — no-op when OFF.
+fn _known_int_accum_scan(body) {
+    _known_int_accum_reset()
+    if !_native_arr_enabled() { return }
+    if type_of(body) == "string" { return }
+    if type_of(body) != "array" { return }
+    // Pass 1: int-literal-array names (top-level lets — the §native-arr shape).
+    let n = len(body)
+    let mut i = 0
+    while i < n {
+        let s = body[i]
+        if type_of(s) != "string" && s.kind == "LetStmt" {
+            if type_of(s.left) != "string" && _is_int_literal_array(s.left) {
+                _accum_scan_intarr = _accum_scan_intarr.push(s.name)
+            }
+        }
+        i = i + 1
+    }
+    // Pass 2: mut accumulators (top-level lets — accumulators live in fn scope).
+    i = 0
+    while i < n {
+        let s = body[i]
+        if type_of(s) != "string" && s.kind == "LetMutStmt" {
+            // init must be known-int: IntLit · known-int name · proven intarr read.
+            if type_of(s.left) != "string" && _is_accum_int_safe(s.left, s.name) {
+                // closure-captured (boxed cell) accumulators take the boxed path.
+                if !_gen2_is_boxed_cell(s.name) {
+                    if _accum_writes_all_int(body, s.name) {
+                        _known_int_accum_add(s.name)
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+}
+
 // ── enum-variant access fix (inbox: enum-variant-access-miscodegen) ──
 // `<EnumName>.<VARIANT>` (e.g. RegionShape.K_BY_K) is an enum-variant
 // constant, NOT a runtime field access — the gen2_enum_decl #define
@@ -10795,7 +11063,15 @@ fn _is_known_int_name(name) {
 fn _is_known_int(node) {
     if type_of(node) == "string" { return false }
     if node.kind == "IntLit" { return true }
-    if node.kind == "Ident" { return _is_known_int_name(node.name) }
+    if node.kind == "Ident" {
+        // UNSHADOW known-int-accum: a proven mut accumulator is statically
+        // TAG_INT (whole-body writes scanned all-int). Checked BEFORE
+        // _is_known_int_name because the accumulator is a fn-LOCAL `let mut`
+        // and _is_known_int_name bails on _gen2_name_in_cur_lets. Fn-scoped +
+        // GATED (HEXA_NATIVE_ARR) so the boxed default path is unchanged.
+        if _is_known_int_accum_name(node.name) { return true }
+        return _is_known_int_name(node.name)
+    }
     // UNSHADOW item A: a read `arr[i]` of a proven known-int-array, where the
     // index is covered by a live in-range fact, is statically TAG_INT — its
     // element kind is monomorphic i64 by the array-literal proof. Certifying it
