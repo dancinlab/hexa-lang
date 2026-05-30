@@ -1,0 +1,233 @@
+// tests/m_cache_import_closure_test.hexa — INBOX cache-import-invalidation:
+// the `~/.hexa-cache/hexa_run.<key>` AOT artifact must bust when an imported
+// module changes, not only when the entrypoint changes.
+//
+// PROBLEM: `cmd_run_user_direct` / `cmd_run` / `cmd_batch` keyed the run-cache
+// off the ENTRYPOINT bytes only (`sha256_file(file)`), so editing a
+// transitively-imported module (e.g. stdlib/cloud/dft_dispatch.hexa, imported
+// by cloud_cli.hexa) did NOT invalidate the cached binary — `hexa run` /
+// `hexa cloud` kept serving the stale build until `~/.hexa-cache` was
+// hand-`rm -rf`'d. This silently no-op'd merged source fixes (PR #2219).
+//
+// FIX (self/main.hexa): the run-cache key now folds a content-hash of the FULL
+// import closure (entrypoint + every transitively-imported module). Editing any
+// imported module changes the closure hash → different key → forced cache-miss
+// + recompile. The release/precompile probe keeps the entrypoint-only base key.
+//
+// This test re-implements the closure-hash logic inline (the helpers are
+// private to the driver — same convention as m_cache_gc_test.hexa). Any change
+// to the _import_closure_hash / _closure_* family in self/main.hexa must mirror
+// here. It fabricates a tiny entrypoint+import pair on disk, computes the key,
+// MUTATES the imported file, recomputes, and asserts the key changed.
+//
+// Falsifiers:
+//   F-1 (import edit busts)   — same entrypoint, CHANGED import body → the
+//                               closure key DIFFERS (the bug: it was equal).
+//   F-2 (no-op is stable)     — nothing changed → the key is IDENTICAL across
+//                               two computations (no spurious cache-miss churn).
+//   F-3 (no-import fallback)   — an entrypoint with NO imports → the closure
+//                               walk finds nothing and the key falls back to
+//                               the entrypoint-only base key (unchanged shape).
+//
+// Exit codes: 0 — all 3 falsifiers PASS · 1 — any FAIL.
+
+fn _trim(s: string) -> string {
+    return s.trim()
+}
+
+fn _exec(cmd: string) -> string {
+    return to_string(exec(cmd))
+}
+
+fn _shq(s: string) -> string {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+fn _mktemp_dir() -> string {
+    let d = _trim(_exec("mktemp -d 2>/dev/null"))
+    return d
+}
+
+fn _write(path: string, body: string) {
+    let _ = _exec("cat > " + _shq(path) + " <<'__HX_EOF__'\n" + body + "\n__HX_EOF__")
+}
+
+// ─── Inline copy of the self/main.hexa import-closure helpers ───────────
+// These MUST stay byte-equivalent to the driver helpers (per m_cache_gc_test
+// convention). caller_dir resolution here is intentionally caller-relative
+// only — the fabricated fixtures live in one temp dir, which is the common
+// case the bug bites (sibling stdlib modules).
+
+fn _closure_try_variants(base: string) -> string {
+    if _trim(_exec("test -e " + _shq(base) + " && printf ok || printf no")) == "ok" { return base }
+    let with_ext = base + ".hexa"
+    if _trim(_exec("test -e " + _shq(with_ext) + " && printf ok || printf no")) == "ok" { return with_ext }
+    let mod_path = base + "/mod.hexa"
+    if _trim(_exec("test -e " + _shq(mod_path) + " && printf ok || printf no")) == "ok" { return mod_path }
+    return ""
+}
+
+fn _closure_resolve(imp: string, caller_dir: string) -> string {
+    let v1 = _closure_try_variants(caller_dir + "/" + imp)
+    if len(v1) > 0 { return v1 }
+    return ""
+}
+
+fn _closure_parse_import(line: string) -> string {
+    let s = line.trim()
+    let mut t = s
+    if t.starts_with("pub ") { t = t.substring(4, len(t)) }
+    let mut keep = false
+    if t.starts_with("use \"") { keep = true }
+    if t.starts_with("import \"") { keep = true }
+    if t.starts_with("from \"") { keep = true }
+    if !keep { return "" }
+    let n = len(t)
+    let mut i = 0
+    while i < n {
+        if t.substring(i, i + 1) == "\"" {
+            let mut j = i + 1
+            while j < n {
+                if t.substring(j, j + 1) == "\"" { return t.substring(i + 1, j) }
+                j = j + 1
+            }
+            return ""
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+fn _closure_dirname(path: string) -> string {
+    let n = len(path)
+    let mut i = n - 1
+    while i >= 0 {
+        if path.substring(i, i + 1) == "/" { return path.substring(0, i) }
+        i = i - 1
+    }
+    return "."
+}
+
+fn _import_closure_hash(entry: string) -> string {
+    let mut visited: [string] = []
+    let mut queue: [string] = []
+    queue.push(entry)
+    let mut combined = ""
+    let mut found_any = false
+    let mut head = 0
+    while head < len(queue) {
+        let cur = queue[head]
+        head = head + 1
+        let mut seen = false
+        let mut vi = 0
+        while vi < len(visited) {
+            if visited[vi] == cur { seen = true; vi = len(visited) } else { vi = vi + 1 }
+        }
+        if seen { continue }
+        visited.push(cur)
+        let fh = sha256_file(cur)
+        combined = sha256(combined + "\n" + cur + ":" + fh)
+        let src = read_file(cur)
+        if len(src) == 0 { continue }
+        let cdir = _closure_dirname(cur)
+        let lines = src.split("\n")
+        let mut li = 0
+        while li < len(lines) {
+            let imp = _closure_parse_import(lines[li])
+            if len(imp) > 0 {
+                let resolved = _closure_resolve(imp, cdir)
+                if len(resolved) > 0 {
+                    found_any = true
+                    queue.push(resolved)
+                }
+            }
+            li = li + 1
+        }
+    }
+    if !found_any { return "" }
+    return combined
+}
+
+fn _run_cache_base_key(file: string) -> string {
+    return sha256_file(file).substring(0, 16) + "_v"
+}
+
+fn _run_cache_key(file: string) -> string {
+    let base = _run_cache_base_key(file)
+    let closure = _import_closure_hash(file)
+    if len(closure) == 0 { return base }
+    return base + "_" + closure.substring(0, 16)
+}
+
+// ─── Falsifiers ─────────────────────────────────────────────────────────
+
+fn _scenario_import_edit_busts() -> bool {
+    let d = _mktemp_dir()
+    if len(d) == 0 { println("  [F-1] FAIL: mktemp failed"); return false }
+    let entry = d + "/cli.hexa"
+    let dep = d + "/lib.hexa"
+    _write(dep, "pub fn greet() -> string { return \"v1\" }")
+    _write(entry, "use \"lib\"\npub fn main() -> i32 { return 0 }")
+    let key_before = _run_cache_key(entry)
+    // Mutate ONLY the imported module — the entrypoint bytes are untouched.
+    _write(dep, "pub fn greet() -> string { return \"v2-CHANGED\" }")
+    let key_after = _run_cache_key(entry)
+    // The entrypoint bytes never changed, so the entrypoint-only base key is
+    // identical across the two computations — exactly the condition under which
+    // the OLD code served a stale binary. The closure key must still differ.
+    _exec("rm -rf " + _shq(d) + " 2>/dev/null")
+    if key_before == key_after {
+        println("  [F-1] FAIL: import edit did NOT change the run-cache key (stale-on-import bug)")
+        return false
+    }
+    println("  [F-1] PASS: import edit busts the key (before=" + key_before + " after=" + key_after + ")")
+    return true
+}
+
+fn _scenario_noop_is_stable() -> bool {
+    let d = _mktemp_dir()
+    if len(d) == 0 { println("  [F-2] FAIL: mktemp failed"); return false }
+    let entry = d + "/cli.hexa"
+    let dep = d + "/lib.hexa"
+    _write(dep, "pub fn greet() -> string { return \"v1\" }")
+    _write(entry, "use \"lib\"\npub fn main() -> i32 { return 0 }")
+    let k1 = _run_cache_key(entry)
+    let k2 = _run_cache_key(entry)  // recompute, nothing changed
+    _exec("rm -rf " + _shq(d) + " 2>/dev/null")
+    if k1 != k2 {
+        println("  [F-2] FAIL: identical inputs produced different keys (k1=" + k1 + " k2=" + k2 + ")")
+        return false
+    }
+    println("  [F-2] PASS: no-op recompute is stable (" + k1 + ")")
+    return true
+}
+
+fn _scenario_no_import_fallback() -> bool {
+    let d = _mktemp_dir()
+    if len(d) == 0 { println("  [F-3] FAIL: mktemp failed"); return false }
+    let entry = d + "/solo.hexa"
+    _write(entry, "pub fn main() -> i32 { return 0 }")  // no imports
+    let key = _run_cache_key(entry)
+    let base = _run_cache_base_key(entry)
+    _exec("rm -rf " + _shq(d) + " 2>/dev/null")
+    if key != base {
+        println("  [F-3] FAIL: no-import entrypoint key must equal base key (key=" + key + " base=" + base + ")")
+        return false
+    }
+    println("  [F-3] PASS: no-import entrypoint falls back to base key (" + key + ")")
+    return true
+}
+
+pub fn main() -> i32 {
+    println("[m_cache_import_closure_test] start (INBOX cache-import-invalidation)")
+    let mut ok = true
+    if !_scenario_import_edit_busts() { ok = false }
+    if !_scenario_noop_is_stable()    { ok = false }
+    if !_scenario_no_import_fallback() { ok = false }
+    if ok {
+        println("[m_cache_import_closure_test] ALL 3 FALSIFIERS PASS")
+        return 0
+    }
+    println("[m_cache_import_closure_test] FAIL")
+    return 1
+}
