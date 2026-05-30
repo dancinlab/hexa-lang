@@ -49,6 +49,18 @@
 > ⊘ **P3 · P5 = WITHDRAWN** (cold-seed/cold-boot · 사용자 결정 superseded — ✅도 ❌도 아님).
 > 아래 dated 로그 중 cold-boot "5/5 CLOSED" 서술은 REVERSAL 前 기록(historical) — 이 snapshot 이 정합 SSOT.
 
+- [x] C1 — `native_gate.c` (마지막 hand-written .c) emit+byte_diff gate-1 PROVEN · 🟢 `native_gate_emit.hexa`(1488 C줄 → 문자열 emitter) + `native_gate_byte_diff.hexa`(sha256 oracle) 신설. emit 출력이 orig 와 byte-identical(`b340553c…` 양쪽 일치 · 62038 B) · oracle 3/3 PASS. self/native 의 나머지 60+ native 가 이미 emit+byte_diff 쌍이고 native_gate.c 만 예외였음 — 이걸로 트리 전체가 일관. ⚠ 잔여(deletion gate · gate-1 과 별개): native_gate.c 는 raw#8 allowlist(`airgenome AG10`)라 git rm 의무 아님 — 제거하려면 BUILD 레시피가 `cc -shared` 前 emitter 로 regen 하도록 wire(헤더 BUILD 주석 갱신) 후속. verdict: `.verdicts/hexa-cc-zero/F-HEXA-CC-ZERO-CFRONT-NATIVE-GATE.txt`
+
+## 2026-05-30 C1 — native_gate.c emit+byte_diff (C-front · verdict 첨부)
+
+verdict: `.verdicts/hexa-cc-zero/F-HEXA-CC-ZERO-CFRONT-NATIVE-GATE.txt` (oracle stdout verbatim + orig sha256)
+
+CC front(트랜스파일러 씨앗) 정합화에 이어 C front(손-작성 C 잔존) 진행. self/native 의 커밋된 hand-written `.c` 는 `native_gate.c`(LD_PRELOAD/DYLD 샌드박스 shim, 1488줄) 단 1개 — 나머지는 전부 `*_emit.hexa`+`*_byte_diff.hexa` 쌍. native_gate.c 를 같은 #1848 패턴으로 전환.
+
+- 🟢 **gate-1 source-SHA byte-identity PROVEN** — `hexa run native_gate_emit.hexa <out>` 출력이 orig native_gate.c 와 byte-for-byte 동일(sha256 `b340553c9bbf04b9ca5f00b228c3780ddf8f6309cfe309a4799b7a4388c40b0c` 양쪽 · 62038 B). `native_gate_byte_diff.hexa` oracle 3/3 PASS (`__HEXA_LANG_NATIVE_GATE_BYTE_DIFF__ PASS`). emitter 가 SSOT 가 될 자격 입증.
+- ℹ️ **amalgam fragment 아닌 standalone .so** — mount.c 등(runtime.c #include fragment)과 달리 native_gate.c 는 `cc -shared -fPIC` 단독 TU. .so 동등성은 byte-identity 에서 자명(같은 bytes → 같은 .so), 별도 full hexa_cc 빌드 의존 없음.
+- ⚠ **잔여(C-front 닫힘과 별개 · 후속)**: ① deletion — native_gate.c 는 raw#8 allowlist 라 git rm 의무 아님; 제거 시 BUILD 레시피(헤더 주석의 수동 `cc -shared`)가 emitter regen 을 先행하도록 wire. ② .so smoke(regen→cc -shared→LD_PRELOAD refuse 동작)는 Linux 호스트에서 별도 검증.
+
 ## 2026-05-30 P1 PROBE 측정 (verdict 첨부)
 
 verdict: `.verdicts/hexa-cc-zero/F-HEXA-CC-ZERO-PROBE.txt` (양 호스트 stdout verbatim)

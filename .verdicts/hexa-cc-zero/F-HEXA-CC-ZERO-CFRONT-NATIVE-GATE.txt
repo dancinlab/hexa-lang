@@ -1,0 +1,28 @@
+# F-HEXA-CC-ZERO-CFRONT-NATIVE-GATE — native_gate.c emit+byte_diff gate-1
+# host: Darwin arm64 · date: 2026-05-30 (session) · HEAD: 459656588
+# falsifier: sha256(emit native_gate_emit.hexa) != sha256(orig native_gate.c)
+# orig native_gate.c sha256: b340553c9bbf04b9ca5f00b228c3780ddf8f6309cfe309a4799b7a4388c40b0c
+# ----- hexa run self/native/native_gate_byte_diff.hexa (stdout verbatim) -----
+========================================================================
+  self/native — native_gate_byte_diff: B9.C .c-text byte-diff oracle
+========================================================================
+  generator: self/native/native_gate_emit.hexa
+  oracle:    source-SHA byte-diff vs hand-written native_gate.c
+  note:      standalone .so shim — .so proof via `cc -shared` regen build
+
+  scratch: /var/folders/pg/76j9wlc94l13bb2mwp2szvgh0000gn/T/native_gate_byte_diff.XXXXXX.4pFUoaaSqQ
+
+  [PASS] hexa emitter self/native/native_gate_emit.hexa present
+         · /Users/mini/dancinlab/hexa-lang/self/native/native_gate_emit.hexa
+  [PASS] hand-written self/native/native_gate.c present
+         · /Users/mini/dancinlab/hexa-lang/self/native/native_gate.c
+  [PASS] gate-1 source-text byte-identical (sha256(.c))
+         · orig=b340553c9bbf04b9ca5f00b228c3780ddf8f6309cfe309a4799b7a4388c40b0c gen=b340553c9bbf04b9ca5f00b228c3780ddf8f6309cfe309a4799b7a4388c40b0c
+
+  B9.C native_gate.c .c-text byte-identity:
+    PROVEN ✓ — hand-written native_gate.c is fully hexa-emittable.
+    DELETION GATE OPEN — self/native/native_gate.c may be `git rm` once the
+    `cc -shared` regen build (regen + native_gate.so compile + smoke) PASSes.
+========================================================================
+  3/3 checks passed
+__HEXA_LANG_NATIVE_GATE_BYTE_DIFF__ PASS
