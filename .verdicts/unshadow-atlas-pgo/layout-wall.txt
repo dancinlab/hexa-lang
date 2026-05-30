@@ -1,0 +1,33 @@
+UNSHADOW atlas-guided PGO — layout effect + wall measurement (mini macOS arm64)
+binaries: /tmp/pgo_off, /tmp/pgo_on (clang -O2, linked against install runtime.o)
+faithful A/B proxy — full self-host rebuild blocked by B9 generated-runtime wall (spec-allowed)
+
+[PRIMARY — LAYOUT decision, the atlas-PGO axis]
+out-of-line symbol `_lambda_eliashberg`:
+  OFF  nm: 0000000100000778 T _lambda_eliashberg   (out-of-line copy present)
+  ON   nm: (absent)                                 (no out-of-line copy)
+  → atlas verdict's `static inline` promotion eliminated the out-of-line symbol.
+otool lambda references (out-of-line body / call site):
+  OFF = 1   ON = 0
+
+[wall — best-of-7, 9-sample distributions]
+OFF: 0.38 0.39 0.39 0.39 0.39 0.39 0.41 0.40 0.41   best = 0.38s
+ON:  0.40 0.39 0.41 0.40 0.41 0.41 0.41 0.38 0.39   best = 0.38s
+  → wall Δ ≈ 0 (AT PARITY, distributions overlap).
+
+HONEST FINDING:
+  The atlas-guided LAYOUT decision FIRES correctly and is byte-identical —
+  the verdict promotes the fn to static-inline+hot with no user annotation,
+  and the out-of-line symbol is eliminated (1→0). But for a TINY LEAF fn the
+  wall win is NULL: clang -O2 already inlines small leaves at every call site
+  regardless of the symbol's out-of-line presence, so removing the out-of-line
+  copy is a code-SIZE/layout effect, not a hot-loop speedup here. The wall
+  lever lives where the out-of-line call genuinely dominates (opaque /
+  cross-C-ABI symbol that clang WON'T inline — the §B/E runtime.o-wall
+  scenario), which atlas-PGO's `__attribute__((hot))` section placement +
+  inline forcing would then actually move. That requires a perf-property atom
+  schema + a codegen atlas-lookup surface to fire beyond the hard-coded
+  license — registered as an open sub-task (same narrow wall as §A/§B/E).
+
+GATE: byte-diff IDENTICAL ✅ · layout decision fires (sym 1→0) ✅ · wall Δ honest NULL (leaf)
+VERDICT TIER: 🔵 narrow-fire (layout proven) + 🟠 wall-lever deferred to perf-atom schema

@@ -1492,6 +1492,39 @@ fn gen2_has_inline_always(node) {
     return false
 }
 
+// ── UNSHADOW item: atlas-guided PGO — layout/inline decision (F3·C17) ──
+// hexa-arch-native optimization (UNSHADOW.MINING.md F3·C17, easy.md §G
+// "atlas-as-PGO"): the inline/hot LAYOUT decision is driven by the ATLAS
+// VERDICT, not by a user `@inline_always`/`@hot` annotation and not by a
+// runtime PGO profile. When the atlas PROVES a fn is a verified pure
+// hot-path atom, codegen auto-promotes it to `static inline` +
+// `__attribute__((hot))` so the C compiler treats it as an inline + hot
+// candidate — exactly the §A const-fold / §B proof-carrying / E memo
+// regime, generalized from "inline a CALL SITE" to "lay out the whole FN".
+//
+// LLVM-can't: clang's PGO needs a runtime instrumentation profile (.profdata)
+// to decide hot/inline; it has NO theorem/verdict DB. The atlas IS that DB —
+// the verdict is a COMPILE-TIME license, available with zero profiling run.
+//
+// THE LICENSE: atlas node `verified-lambda_eliashberg-num` (@F 🟢
+// SUPPORTED-NUMERICAL) certifies lambda_eliashberg is a deterministic,
+// side-effect-free numeric fn — a pure hot-path atom. (Same exact hard-coded
+// license set as §B/E — see the honest caveat: codegen has NO live
+// atlas-query surface yet, so the firing guard hard-codes the verified name.
+// Generalizing to a perf-property atom schema + a codegen atlas-lookup is a
+// registered open sub-task; this is the minimal demonstration.)
+//
+// FAITHFUL: inline + hot are semantics-preserving layout hints, so ON/OFF is
+// stdout BYTE-IDENTICAL. GATED OPT-IN `HEXA_ATLAS_PGO` (default OFF = zero
+// regression). A user-supplied @inline_always still wins independently.
+fn gen2_is_atlas_pgo_hot(node) {
+    if env("HEXA_ATLAS_PGO") == "" { return false }
+    if type_of(node.name) != "string" { return false }
+    // hard-coded atlas-verified pure hot-path license set (§B/E pattern).
+    if node.name == "lambda_eliashberg" { return true }
+    return false
+}
+
 fn gen2_fn_forward(node) {
     let has_restrict = gen2_has_attr(node, "restrict")
     let mut params = []
@@ -1514,6 +1547,11 @@ fn gen2_fn_forward(node) {
     if gen2_has_attr(node, "hot") { suffix = " __attribute__((hot))" }
     if gen2_has_attr(node, "cold") { suffix = " __attribute__((cold))" }
     if gen2_has_attr(node, "noinline") { suffix = " __attribute__((noinline))" }
+    // UNSHADOW atlas-guided PGO: atlas verdict drives the inline/hot layout.
+    if gen2_is_atlas_pgo_hot(node) {
+        if prefix == "" { prefix = "static inline " }
+        if suffix == "" { suffix = " __attribute__((hot))" }
+    }
     let _name_real = _hexa_mangle_ident(node.name)
     // @lazy: the body gets a _body suffix; the original name becomes a
     // thunk wrapper. Forward-declare both (wrapper is always zero-arg).
@@ -1841,6 +1879,9 @@ fn gen2_fn_decl(node) {
     let _fn_name = if _is_lazy { _fn_name_real + "_body" } else { _fn_name_real }
     let mut prefix = ""
     if gen2_has_inline_always(node) { prefix = "static inline " }
+    // UNSHADOW atlas-guided PGO: atlas verdict promotes the fn DEFINITION to
+    // `static inline` (the hot attr lives on the fwd-decl per the note below).
+    if prefix == "" && gen2_is_atlas_pgo_hot(node) { prefix = "static inline " }
     // S1-D3b / PROBE r10-15g: @hot/@cold/@noinline emit __attribute__ on the
     // forward DECLARATION only (see gen2_fn_forward). Placing these attrs on
     // the function DEFINITION trips clang's -Wgcc-compat warning ("GCC does

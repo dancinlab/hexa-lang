@@ -907,3 +907,33 @@ verdict=`.verdicts/unshadow-typed-struct/typed-struct.txt`·bench=`UNSHADOW.benc
 
 verdict=`.verdicts/unshadow-nanbox/proxy.txt`·bench=`UNSHADOW.bench.md §nanbox`·설계=`UNSHADOW.nanbox.md`·
 재현=`tool/unshadow_nanbox_bench.hexa --runs 3`(best-of-N 반복 — value-pass 분산 큼).
+
+## 2026-05-30 — 🔵 atlas-guided PGO (layout/inline 결정 · F3·C17) [~]
+
+거울방 G milestone — easy.md §G "atlas-as-PGO". 검증 hot-path 속성으로 fn LAYOUT(inline/hot) 결정.
+직전 E(검증 memoization #2194) 가 진단한 같은 제약 예상 → 정독 후 확증.
+
+- **codegen inline 경로 정독**: `self/codegen.hexa` 에 fn-level inline 결정 surface 이미 존재 —
+  `gen2_has_inline_always`(@inline_always→`static inline`)·`gen2_has_attr`(@hot/@cold/@noinline→
+  `__attribute__`). 단 발화 트리거 = **사용자 어노테이션**(또는 §A/§B/E 처럼 fn名 하드코딩). atlas-
+  query 호출 = **codegen 에 0건**. atlas atom kind = @P/@C/@F/@L 전부 수학-검증, hot-path/perf-속성
+  atom = **0** → **E 와 정확히 같은 narrow 벽**(LIVE atlas-query surface 부재 + perf-atom 부재).
+- **최소 슬라이스 착지**(milestone 분기 2+3 — narrow 벽이라 honest 분해 + 최소 실증): atlas verdict 가
+  LAYOUT 을 구동하는 §A const-fold→fn-LAYOUT 일반화. `gen2_is_atlas_pgo_hot`(GATED `HEXA_ATLAS_PGO`·
+  default OFF) 신설 + `gen2_fn_forward`/`gen2_fn_decl` 에서 atlas-verified fn(`lambda_eliashberg`,
+  node `verified-lambda_eliashberg-num` @F 🟢) 을 `static inline __attribute__((hot))` 자동 승격
+  (사용자 어노테이션 0). 라이선스 = atlas verdict(런타임 프로파일 아님 = clang PGO 와의 차별점).
+- **END-TO-END**: edited self/codegen.hexa → install self dir swap → `hexa cc --regen` → `/tmp/hexat.new`
+  (full hexa_cc amalgam) → restore. OFF emit `HexaVal lambda_eliashberg(…)` 평범 · ON emit
+  `static inline … __attribute__((hot))` 자동승격 확인.
+- **실측(mini arm64·faithful A/B proxy·B9 벽·스펙 허용)**: g5 byte-diff **IDENTICAL**(`239999988.0`·
+  md5 `b38a2a0c…`). **[PRIMARY 레이아웃축]** out-of-line 심볼 `_lambda_eliashberg` nm OFF=present(`T`)
+  → **ON=absent** · otool lambda ref **1→0**. **wall Δ ≈ 0 (AT PARITY·정직 NULL)** best-of-7 0.38s≈0.38s.
+- **honest 한계**: TINY LEAF fn 은 clang -O2 가 이미 call-site 인라인 → out-of-line copy 제거는
+  code-SIZE/layout 효과지 hot-loop 속도 아님. wall 레버 = out-of-line call 이 지배하는 OPAQUE/cross-C-ABI
+  심볼(§B/E runtime.o 벽). 일반화(perf-atom schema + codegen atlas-lookup) = sub-task open.
+- **결론**: LAYOUT 결정 발화 PROVEN(sym 1→0)·byte-eq PASS·wall NULL(leaf, 정직). milestone `[~]`
+  (부분 착지) + sub-task `[ ]`. over-promise 0.
+
+verdict=`.verdicts/unshadow-atlas-pgo/`(emit-layout.txt·layout-wall.txt)·bench=`UNSHADOW.bench.md §atlas-pgo`·
+재현=`tool/unshadow_atlas_pgo_bench.hexa`.

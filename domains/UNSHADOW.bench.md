@@ -1027,3 +1027,35 @@ flip 必. worktree 격리 grep 실측 (self/codegen.hexa + runtime_core_emit.hex
   포함)는 전역 flip sub-task 선결.
 
 verdict=`.verdicts/unshadow-nanbox/proxy.txt` · 재현=`tool/unshadow_nanbox_bench.hexa --runs 3`.
+
+## §atlas-pgo — 🔵 atlas-guided PGO (layout/inline 결정 · F3·C17)
+
+> **착지 = LAYOUT 결정 발화 + byte-eq · wall-lever = perf-atom schema deferred (E 와 동일 narrow 벽).**
+> 라이선스 = atlas verdict(`verified-lambda_eliashberg-num` @F 🟢 = pure hot-path atom)이 inline/hot
+> LAYOUT 을 구동 — 사용자 `@inline_always`/`@hot` 아님·런타임 프로파일 아님. clang PGO 는 `.profdata`
+> 런 필요(런타임 instrumentation), atlas 는 컴파일타임 verdict(런 0). codegen GATED `HEXA_ATLAS_PGO`
+> (default OFF=무회귀): `gen2_is_atlas_pgo_hot`+`gen2_fn_forward`/`gen2_fn_decl` 가 atlas-verified fn 을
+> `static inline __attribute__((hot))` 로 자동 승격(§A const-fold→fn-LAYOUT 일반화).
+
+| arm | fn 레이아웃 (emit) | out-of-line 심볼 | wall best-of-7 |
+|---|---|---|---|
+| OFF (default) | `HexaVal lambda_eliashberg(…)` | `T _lambda_eliashberg` present | 0.38s |
+| ON (`HEXA_ATLAS_PGO=1`) | `static inline … __attribute__((hot))` (어노테이션 0) | **absent** (소거) | 0.38s |
+
+- **g5 byte-diff IDENTICAL** — `239999988.0` 양 arm, md5 `b38a2a0c…` (inline/hot = 의미보존 레이아웃).
+- **[PRIMARY 레이아웃축]** out-of-line 심볼 `_lambda_eliashberg`: nm OFF=present → **ON=absent** ·
+  otool lambda ref **1 → 0**. atlas verdict 의 `static inline` 승격이 out-of-line copy 를 소거.
+- **wall Δ ≈ 0 (AT PARITY · 정직 NULL)**: best-of-7 OFF 0.38s ≈ ON 0.38s (9-sample 분포 겹침).
+  TINY LEAF fn 은 clang -O2 가 call-site 마다 이미 인라인 → out-of-line copy 제거는 code-SIZE/layout
+  효과지 hot-loop 속도가 아님. **wall 레버가 사는 곳** = out-of-line call 이 실제 지배하는 OPAQUE/
+  cross-C-ABI 심볼(§verify-memo/§B 의 runtime.o 벽 시나리오, clang 이 안 인라인) → 거기서 `hot` 섹션배치+
+  inline-force 가 움직임. 그 일반화 = perf-property atom schema + codegen atlas-lookup surface 선결.
+- **LLVM-can't**: clang PGO 는 런타임 프로파일(.profdata)만으로 hot/inline 결정; theorem/verdict DB 없음.
+  atlas 가 곧 그 DB — verdict 가 컴파일타임 라이선스(프로파일 런 0).
+- **정직 caveat (E 와 동일 narrow 벽)**: codegen LIVE atlas-query surface 부재 + atlas 에 perf-property
+  atom kind 부재(현 @P/@C/@F/@L 전부 수학-검증 kind) → 발화 가드 = atlas-verified fn 名 하드코딩
+  (§A/§B/E 동일). 둘 다 선결해야 OPAQUE hot fn 일반화 + GATED 해제. = open sub-task.
+- faithful A/B proxy (full self-host regen = B9 generated-runtime 벽 차단·스펙 허용; emit 은 edited
+  codegen 로 재빌드한 `/tmp/hexat.new` 의 end-to-end 출력과 byte-동일).
+
+verdict=`.verdicts/unshadow-atlas-pgo/` (emit-layout.txt · layout-wall.txt) · 재현=`tool/unshadow_atlas_pgo_bench.hexa`.
