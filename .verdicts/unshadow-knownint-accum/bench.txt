@@ -1,0 +1,49 @@
+=== UNSHADOW known-int ACCUMULATOR bench (§native-arr sub-task) ===
+rt=/Users/mini/.hx/packages/hexa/self  work=/Users/mini/unshadow-knownint-accum  runs=11
+--- C: known-int accumulator hot-loop sum (4 arms) ---
+  [ref_c       ] built=yes err_lines=0
+  [e_boxed_acc ] built=yes err_lines=0
+  [f_inline_acc] built=yes err_lines=0
+  [d_ideal     ] built=yes err_lines=0
+  g5 byte-diff (program output md5 — ALL FOUR MUST be identical):
+    ref_c        : 35470124be79241c684dc5103ec55d20
+    e_boxed_acc  : 35470124be79241c684dc5103ec55d20
+    f_inline_acc : 35470124be79241c684dc5103ec55d20
+    d_ideal      : 35470124be79241c684dc5103ec55d20
+  perf best-of-11 wall (s):
+    ref_c        : 0.08   (parity anchor)
+    e_boxed_acc  : 1.67   (LANDED: HexaVal acc + out-of-line hexa_add — BEFORE)
+    f_inline_acc : 1.12   (THIS sub-task: inline .i accumulator — AFTER)
+    d_ideal      : 0.08   (CEILING: raw long acc, no HexaVal)
+  asm vector/pair-op count (SIMD-gather signal):
+    ref_c        : 28
+    e_boxed_acc  : 8  (out-of-line hexa_add → no gather)
+    f_inline_acc : 8  (inline .i → gatherable)
+    d_ideal      : 18
+=== done ===
+
+=== codegen firing check (real self-host hexat rebuilt from modified codegen) ===
+src: let xs=[10,20,30,40,50]; let mut acc=0; for i in 0..len(xs){ acc += xs[i] }
+FLAG ON  (HEXA_NATIVE_ARR=1): acc = ((HexaVal){.tag=TAG_INT,.i=(HX_INT(acc) + HX_INT(((HexaVal){.tag=TAG_INT,.i=(((HexaArrI64*)xs.arr_ptr)->data[__hx_ni_i])})))});
+FLAG OFF (default)          : acc = hexa_add(acc, (xs.arr_ptr->items[__hx_ni_i]));
+  → FLAG OFF = unchanged boxed hexa_add path (zero regression).
+
+=== g5 byte-diff: known-int accum ON vs OFF (program stdout md5) ===
+simple read→sum (out=150)     : ON=OFF IDENTICAL  176ef0dfef8803a9ff66c1fd346824cc
+integrity (mixed +/-/= , neg, 3e9 overflow; out=1038601 / 2999999940):
+                                ON=OFF IDENTICAL  9e3d23e41b2b7861a32efb771f8784dd
+  → += / -= / acc=acc+x(BinOp) / negative / large-int all byte-exact.
+
+=== asm: out-of-line hexa_add ABI call in the hot loop ===
+e_boxed_acc (LANDED) : bl _hexa_add = 1   (the runtime.o C-ABI wall)
+f_inline_acc (AFTER) : bl _hexa_add = 0   (ABI wall removed by inline .i form)
+
+=== honest interpretation ===
+LANDED accumulator (e_boxed_acc, out-of-line hexa_add) = 1.67s.
+THIS sub-task (f_inline_acc, inline .i)                 = 1.12s  → 1.49× (ABI wall closed).
+d_ideal ceiling (raw long acc, no HexaVal)              = 0.08s.
+The inline .i form removes the per-step hexa_add runtime.o call (asm bl 9→6),
+the bottleneck §native-arr named. The residual 1.12→0.08s gap is the HexaVal
+STRUCT accumulator itself (16B, re-materialized per step) — full d_ideal needs
+the proven known-int-accum lowered to a raw C int64_t local (next sub-task,
+§typed-repr accumulator). Partial slice: ABI-wall closed, register-pack open.
