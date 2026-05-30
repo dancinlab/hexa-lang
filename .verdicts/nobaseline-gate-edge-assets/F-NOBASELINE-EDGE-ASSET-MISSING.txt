@@ -1,0 +1,120 @@
+F-NOBASELINE-EDGE-ASSET-MISSING — nobaseline-gate.yml CI failure verdict
+Date: 2026-05-30
+Verdict tier: 🔴 INFRA (not repo-fixable) — edge release missing 2 of 3 platform assets
+
+═══════════════════════════════════════════════════════════════════════════
+FALSIFIER (pre-registered)
+═══════════════════════════════════════════════════════════════════════════
+Claim under test: "nobaseline-gate.yml fails on a repo-level bug in the
+edge-tarball download logic (stale URL / wrong asset name / missing fallback)."
+Falsifier: if the asset name + repo + download command in
+tool/stage_resolve_runtime_a EXACTLY match a live, present edge asset for the
+failing target, then the failure is NOT a repo bug — it is the edge release
+state (an infra/availability condition).
+
+═══════════════════════════════════════════════════════════════════════════
+METHOD
+═══════════════════════════════════════════════════════════════════════════
+1. Read .github/workflows/nobaseline-gate.yml + the shared entry point it runs
+   (tool/release_build → tool/stage_resolve_runtime_a, tool/stage_prebuild_hexat).
+2. Pulled the failed-step log for the latest nobaseline-gate run (26669871403).
+3. Queried the LIVE edge release asset list via `gh release view edge`.
+4. Cross-checked the asset-upload logic in .github/workflows/release.yml AND
+   the matching release run (26669871380, same commit/push as the gate run).
+
+═══════════════════════════════════════════════════════════════════════════
+VERIFICATION (real runs — verbatim)
+═══════════════════════════════════════════════════════════════════════════
+gh run list --workflow=nobaseline-gate.yml --limit 10  → 10/10 FAILURE
+  (LONG-RED — structural, every run on main + every PR fails. NOT transient.)
+
+Failed-step log (run 26669871403, jobs linux-x86_64 AND darwin-arm64):
+  stage_resolve_runtime_a: self/runtime.c ABSENT — fetching prebuilt runtime.a from prior edge
+  stage_resolve_runtime_a: edge download failed (no assets match the file pattern)
+  stage_resolve_runtime_a: NO runtime.a available (no source, no prior asset)
+
+The download command (tool/stage_resolve_runtime_a:50-51):
+  gh release download edge --repo dancinlab/hexa-lang \
+     --pattern "hexa-${TARGET}.tar.gz" --dir /tmp/edge_ra --clobber
+  → for TARGET=darwin-arm64  pattern = hexa-darwin-arm64.tar.gz
+  → for TARGET=linux-x86_64  pattern = hexa-linux-x86_64.tar.gz
+  → for TARGET=linux-arm64   pattern = hexa-linux-arm64.tar.gz
+
+LIVE edge release assets (gh release view edge --json assets):
+  ONLY: hexa-linux-arm64.tar.gz   (4050095 bytes, uploaded 2026-05-30T00:59:01Z)
+  MISSING: hexa-darwin-arm64.tar.gz
+  MISSING: hexa-linux-x86_64.tar.gz
+
+Matching release run 26669871380 (SAME commit/push as gate run 26669871403):
+  setup                  => success
+  release (linux-arm64)  => success   ← only this job reached Upload
+  release (linux-x86_64) => failure   ← failed BEFORE its Upload step
+  release (darwin-arm64) => failure   ← failed BEFORE its Upload step
+
+═══════════════════════════════════════════════════════════════════════════
+FINDING (ruled-out axis + root cause)
+═══════════════════════════════════════════════════════════════════════════
+RULED OUT (repo-level): the asset name template, repo slug, gh CLI invocation,
+download pattern, and tar-unpack in tool/stage_resolve_runtime_a are all
+CORRECT. `hexa-linux-arm64.tar.gz` IS present and that pattern WOULD match it
+(the linux-arm64 gate job resolves; darwin + x86_64 cannot). There is no stale
+URL, no wrong artifact name, no hardcoded moved host. The download logic itself
+is sound. → repo-bug hypothesis FALSIFIED.
+
+ROOT CAUSE (infra/availability): the `edge` rolling prerelease currently holds
+only 1 of the 3 platform tarballs. The darwin-arm64 and linux-x86_64 gate jobs
+ask for assets that do not exist on the release, so `gh release download` exits
+"no assets match the file pattern" → the gate's edge-pull branch fails.
+
+WHY THE EDGE IS PARTIAL — release.yml is long-red, only 1 of 3 jobs uploads:
+  - release.yml mechanism (verified from the workflow file):
+      · `setup` job force-moves the `edge` git tag to github.sha
+        (`git tag -f edge` + `git push origin -f edge`).
+      · Each of the 3 matrix jobs (darwin-arm64 / linux-x86_64 / linux-arm64)
+        runs `bash tool/release_build` → `bash tool/release_package`, then an
+        `Upload to GitHub Release` step using softprops/action-gh-release@v2
+        with `files: hexa-<target>.tar.gz` (create-or-UPDATE the edge release,
+        clobber-upload its OWN tarball — it does NOT wipe sibling assets).
+  - So edge ends up with all 3 assets ONLY if all 3 matrix jobs reach Upload.
+  - Release run 26669871380 (the matching push) confirms: darwin-arm64 +
+    linux-x86_64 FAILED before their Upload step; only linux-arm64 succeeded to
+    Upload → the edge release holds exactly ONE asset (hexa-linux-arm64.tar.gz),
+    precisely the observed gate-failure state.
+  - Chicken-and-egg / partial-publish infra condition: the gate consumes edge
+    assets that the (also-failing) release workflow must produce. Because
+    softprops clobber-uploads per-job, a partial release run leaves a PARTIAL
+    edge (1 fresh asset, no siblings) rather than a fully stale one.
+
+CLASSIFICATION: 🔴 INFRA — NOT repo-fixable from nobaseline-gate.yml or
+tool/stage_resolve_runtime_a. No code change to the gate or the resolver makes
+a missing remote asset appear. Faking a fallback (e.g. building runtime.a from
+source) would DEFEAT the gate's entire purpose (it exists precisely to prove a
+seeds-removed .c=0 checkout can build using ONLY prior edge artifacts — a
+source-build fallback is the false-green class this gate was built to seal).
+
+═══════════════════════════════════════════════════════════════════════════
+OWNER + RESTORE PATH
+═══════════════════════════════════════════════════════════════════════════
+Owner: release-pipeline maintainer (dancinlab/hexa-lang release.yml + the
+self-host bootstrap that release_build depends on).
+
+Restore path (in priority order):
+  1. Get the `release` workflow GREEN on darwin-arm64 + linux-x86_64 for one
+     push to main (these two currently fail in release_build/release_package
+     BEFORE Upload). Once all 3 matrix Upload steps succeed on the same run,
+     edge will hold hexa-{darwin-arm64,linux-x86_64,linux-arm64}.tar.gz and the
+     nobaseline gate's edge-pull will resolve for every target.
+  2. Until then, the nobaseline gate is EXPECTED-RED for darwin-arm64 and
+     linux-x86_64. This is the same "chicken-egg boundary — expected RED"
+     condition already documented in tool/stage_prebuild_hexat:81-84 for the
+     hexat-bundling boundary.
+  3. (Root upstream) FIX the release.yml darwin-arm64 + linux-x86_64 job
+     failures (they fail before Upload). That is a SEPARATE release-pipeline
+     investigation — the same self-host bootstrap the gate exercises — and is
+     the owner's call, not a nobaseline-gate fix.
+
+NO FAKE FIX APPLIED. NO PR. The gate file and resolver are correct; the wall
+is the edge release asset availability, which is produced by the (also-red)
+release pipeline, not by anything in nobaseline-gate.yml.
+
+Handoff filed: sidecar handoff 726b8b67 → hexa-lang (release-pipeline owner).
