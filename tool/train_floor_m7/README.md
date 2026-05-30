@@ -9,7 +9,10 @@ standalone 마이크로벤치. cross-repo anima 트레이너 전체 빌드(runti
 |---|---|---|---|
 | `m7_gemv_bench.cu` | M2/M3 gemv d-threshold 게이트 + M6 fp32 | `runtime_cuda_emit.hexa` `_hx_k_packed_gemv_offset[_f32]` + cublasDgemv(OP_T), HX_RR_BLOCK=256 | `.verdicts/hexa-train-floor/M7-gemv-dthreshold.txt` |
 | `m7_gemm_roofline.cu` | M4 roofline + M6 fp32 ceiling-lift | cuBLAS DGEMM vs SGEMM (트레이너 dominant 비용) | `.verdicts/hexa-train-floor/M7-fp32-roofline.txt` |
-| `m7_farr_rss.c` / `m7_farr_rss2.c` | M1/M3 HEXA_FARR_TRIM RSS-churn | `runtime_core_emit.hexa` `_hexa_init_malloc_tuning` mallopt 게이트 | `.verdicts/hexa-train-floor/M7-farr-trim-rss.txt` |
+
+M1/M3 HEXA_FARR_TRIM RSS-churn A/B (구 `m7_farr_rss{,2}.c` 합성 프로브)는
+1회성 측정으로 소비 완료 — verdict 만 영속(`.verdicts/hexa-train-floor/M7-farr-trim-rss.txt`,
+🟠 합성 미재현, real anima 트레이너 RSS_TRACE fire 대기). HEXA-C-ZERO C2 로 프로브 .c 제거.
 
 ## 빌드 + 실행 (ubu-2 / RTX 5070)
 
@@ -22,11 +25,6 @@ nvcc -O3 -arch=sm_90 -lcublas m7_gemv_bench.cu -o m7_gemv_bench
 # GEMM roofline (fp64 vs fp32 throughput)
 nvcc -O3 -arch=sm_90 -lcublas m7_gemm_roofline.cu -o m7_gemm_roofline
 ./m7_gemm_roofline
-
-# farr RSS-churn A/B (glibc Linux)
-gcc -O2 m7_farr_rss2.c -o m7_farr_rss2
-./m7_farr_rss2 200            # OFF
-HEXA_FARR_TRIM=1 ./m7_farr_rss2 200   # ON
 ```
 
 ## 핵심 결과 (raw = `.verdicts/hexa-train-floor/`)
