@@ -71,26 +71,39 @@ fn check_gk_center() {
         "K[1,1] = " + str(center))
 }
 
-// ── F3: gaussian_kernel_1d is symmetric (K[i,j]==K[j,i] pre-norm; rows eq) ──
-//   Symmetric n with equal rowsums ⇒ K stays symmetric after row-normalize.
-fn check_gk_symmetry() {
+// ── F3: gaussian_kernel_1d is row-stochastic + edge-asymmetric (NOT symmetric) ─
+//   The UNNORMALIZED weight w(i,j)=exp(-(i-j)²/2σ²) is symmetric, but each row
+//   is divided by its OWN sum, and edge rows sum to less than center rows, so
+//   the row-normalized K is intentionally ASYMMETRIC at the boundary
+//   (K[0,1] ≠ K[1,0]). This is the correct row-stochastic smoothing operator
+//   (every output is a proper weighted average of inputs, weights sum to 1).
+//   numpy: K = np.exp(...); K /= K.sum(1,keepdims=True)  →  K != K.T  (boundary).
+//   We assert (a) row-stochastic (Σ_j K[i,j]=1, already F1's invariant) AND
+//   (b) the boundary asymmetry is genuinely present (design, not a bug).
+fn check_gk_rowstochastic_asym() {
     let n = 4
     let k = gaussian_kernel_1d(n, 1.5)
-    let mut worst = 0.0
+    // (a) every row sums to 1 (row-stochastic)
+    let mut worst_rs = 0.0
     let mut i = 0
     while i < n {
+        let mut rs = 0.0
         let mut j = 0
-        while j < n {
-            let e = abs_f(farr_get(k, i * n + j) - farr_get(k, j * n + i))
-            if e > worst { worst = e }
-            j = j + 1
-        }
+        while j < n { rs = rs + farr_get(k, i * n + j); j = j + 1 }
+        let e = abs_f(rs - 1.0)
+        if e > worst_rs { worst_rs = e }
         i = i + 1
     }
+    // (b) boundary asymmetry present: K[0,1] strictly > K[1,0]
+    //     (row 0 sum < row 1 sum ⇒ row 0's off-diagonal normalizes larger)
+    let k01 = farr_get(k, 0 * n + 1)
+    let k10 = farr_get(k, 1 * n + 0)
     let _ = farr_free(k)
-    _check(worst < 1.0e-12,
-        "F3 gaussian_kernel_1d(4,1.5) is symmetric",
-        "max |K[i,j]-K[j,i]| = " + str(worst))
+    let row_stochastic = worst_rs < 1.0e-12
+    let edge_asym = k01 > k10 + 1.0e-9
+    _check(row_stochastic && edge_asym,
+        "F3 gaussian_kernel_1d(4,1.5) row-stochastic + edge-asymmetric (design)",
+        "max|rowsum-1|=" + str(worst_rs) + "  K[0,1]=" + str(k01) + " > K[1,0]=" + str(k10))
 }
 
 // ── F4: separable_blur of a constant image preserves the constant ───────────
@@ -244,7 +257,7 @@ fn check_r2_meanpred() {
 let FALSIFIERS = [
     "F1 gaussian_kernel_1d row-sum ≠ 1 → DEMOTE row-normalization",
     "F2 gaussian_kernel_1d center ≠ numpy 0.45186276 → DEMOTE exp weighting",
-    "F3 gaussian_kernel_1d not symmetric → DEMOTE kernel construction",
+    "F3 gaussian_kernel_1d not row-stochastic OR not edge-asymmetric → DEMOTE construction",
     "F4 separable_blur(const) ≠ const → DEMOTE partition-of-unity / K·X·K^T",
     "F5 separable_blur impulse: center not max or negative → DEMOTE smoothing",
     "F6 nearest_template exact mismatch → DEMOTE argmin L2",
@@ -263,7 +276,7 @@ fn main() {
     println("  Falsifiers (10):")
     check_gk_rowsum()
     check_gk_center()
-    check_gk_symmetry()
+    check_gk_rowstochastic_asym()
     check_blur_constant()
     check_blur_impulse()
     check_nt_exact()

@@ -16,11 +16,16 @@
 //
 // Surface:
 //   pub fn gaussian_kernel_1d(n: int, sigma: float) -> int
-//       Row-normalized n×n Gaussian smoothing matrix K, flattened
-//       row-major into a fresh farr of length n*n.
+//       Row-normalized (row-stochastic) n×n Gaussian smoothing matrix K,
+//       flattened row-major into a fresh farr of length n*n.
 //         K[i,j] = exp(-(i-j)^2 / (2 sigma^2)),  then each ROW is
 //         divided by its own sum so  Σ_j K[i,j] = 1  for every i.
 //       Returns the farr handle (caller frees). sigma must be > 0.
+//       NOTE: the result is row-stochastic but NOT symmetric — edge rows
+//       sum to less than center rows pre-normalization, so the boundary
+//       entries differ (K[0,1] ≠ K[1,0]). This is the standard
+//       weighted-average smoothing operator (matches numpy
+//       `K/=K.sum(1,keepdims=True)`), intentional, not a defect.
 //
 //   pub fn separable_blur(x: int, k: int, g: int) -> int
 //       Separable 2-D blur of a flat g*g image `x` (row-major) by the
