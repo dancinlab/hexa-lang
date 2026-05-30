@@ -115,9 +115,32 @@ gcc -I self build/stage1/main.c build/runtime_seed.o -o hexa_full_A -lm -ldl  �
 → confirms #2179 HONEST NOTE [1]: full CLI must link the PURE runtime.o, not runtime_seed.o.
 
 ──────────────────────────────────────────────────────────────────
-[C] CI GREEN evidence (run ids) — appended post-push (see PR checks)
+[C] CI evidence on main (verbatim, watched)
 ──────────────────────────────────────────────────────────────────
-(to be filled after `gh pr checks --watch`: bootstrap 3/3, docker YAML-valid)
+PR #2185 merge commit f25617ad4:
+  bootstrap (run 26668956927) — conclusion: SUCCESS  ✅ 3/3
+    bootstrap (macos-arm64)  success (57s) · (linux-x86_64) success · (linux-arm64) success
+    GREEN steps incl. RESTORED: ✓ Stage 2 full CLI ./hexa + version  ✓ forge farr32 codegen smoke
+    → full-CLI restore + farr32 are CI-GREEN on all 3 platforms (not just ubu-2-local).
+  docker-runner-push (run 26668956936) — FAILURE: the UNEDITED "Smoke — interp can transpile"
+    step linked hi.c with NO runtime object (relying on the removed hexa_cc.c -I inline) →
+    undefined hexa_str / __hexa_fn_arena_enter / hexa_println / hexa_void /
+    __hexa_fn_arena_return / hexa_set_args. FIXED in #2189 (add build/runtime_pure.o).
+  nobaseline-gate (run 26668956960) — FAILURE (UNRELATED, file untouched): linux-arm64 success;
+    darwin-arm64 + linux-x86_64 failed at `stage_resolve_runtime_a: edge download failed (no
+    assets match the file pattern)` — edge-tarball infra, NOT a dead-ref/cold-seed issue.
+
+PR #2189 merge commit fbfd7d3e8 (docker smoke fix):
+  docker-runner-push (run 26669165055) — conclusion: FAILURE, BUT my touched jobs went GREEN:
+    ✅ build ELFs (x86_64)  success    ✅ build ELFs (arm64)  success
+       (the ELF compile + interp smoke that #2185 left RED are now GREEN — fix confirmed)
+    ❌ docker buildx build --push  failure (PRE-EXISTING, OUT OF SCOPE):
+       "/self/native/native_gate.c": not found — the Dockerfile L137 `COPY
+       self/native/native_gate.c` fails because .dockerignore excludes it from the buildx
+       context (native_gate.c IS tracked in git). docker-runner-push push-job has been FAILURE
+       on EVERY run for 2+ days (back to 2026-05-29 18:10, well before this PR). Different file,
+       Dockerfile-level, publish-only (push runs on main only) — NOT the hexa_cc.c/runtime.c
+       dead-ref class this sweep targets. Left for a separate .dockerignore/Dockerfile fix.
 
 ──────────────────────────────────────────────────────────────────
 [D] HONEST NOTES (g5/g63)
