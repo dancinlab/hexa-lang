@@ -27,7 +27,24 @@
 // SAFE BY DEFAULT — a bare `hexa cloud dft-run <deck>` is PREVIEW: it validates
 // the deck, prints the guarded plan, and (if a local relax.out exists) runs the
 // coordinate parser so you can eyeball the result — spending NOTHING. Only the
-// explicit `--go` flag rents a billing pod and dispatches the chain.
+// explicit `--go` / `--detach` / `--resume` flags rent a billing pod and dispatch.
+//
+// DISPATCH MODES — three explicit, $-incurring entry points:
+//   --go      SYNCHRONOUS — rent → relax → scf → el-ph → verdict → teardown all
+//             in ONE local process (HOURS — exceeds the 10-min Bash cap). Kept
+//             100% intact for back-compat (/system & single-shot callers).
+//   --detach  PHASE-1 (option α) — rent + provision + launch relax DETACHED on
+//             the pod (cloud_nohup → remote log), register, write a state stamp,
+//             return 0. NO teardown. The long work runs on the POD, so the local
+//             process exits immediately (no Bash-cap overrun, no forbidden local
+//             `( nohup dft-run --go & )` double-fork / launchd-zombie fork-storm).
+//   --resume  PHASE-2 — EXPLICIT + IDEMPOTENT. Reads the state stamp, copies the
+//             outputs back, runs the LOCAL hexa-native coord parser, and advances
+//             ONE terminal step: relax-done → assemble + launch scf+ph detached;
+//             ph-terminal → harvest + dft_phonon_stable verdict + teardown. NOT an
+//             auto-poll loop (re-invoke per candidate; a no-op while a step runs).
+//   PACED CAMPAIGN — `--detach` every candidate (each on its own pod, d_parallel_
+//   fire), then poll `--resume <deck>` per candidate to walk each to its verdict.
 //
 // DECK CONVENTION (<deck-dir>/) — BOTH layouts accepted (d4 one generic path):
 //   • relax : vc-relax.in (deck-gen native) OR relax.in (legacy)
@@ -634,10 +651,12 @@ fn _dft_flag_val(av: [str], start: int, flag: str, default_v: str) -> str {
 
 // _dft_is_bool_flag — flags that take NO value (so the positional scanner must
 // skip 1, not 2). `--bin-pack` is boolean (the opt-in toggle); --validate/--go/
-// --force are the other booleans. Everything else (--query/--walltime-h/…) takes
-// a value. Keep in lockstep with the dft_run flag parse.
+// --force/--detach/--resume are the other booleans. Everything else
+// (--query/--walltime-h/…) takes a value. Keep in lockstep with the dft_run
+// flag parse.
 fn _dft_is_bool_flag(t: str) -> int {
-    if t == "--bin-pack" || t == "--validate" || t == "--go" || t == "--force" {
+    if t == "--bin-pack" || t == "--validate" || t == "--go" || t == "--force"
+        || t == "--detach" || t == "--resume" {
         return 1
     }
     return 0
@@ -875,16 +894,79 @@ fn dft_validate(deck: str) -> int {
     return 0
 }
 
+// ── 2-phase detach state stamp (--detach / --resume, option α) ───────
+//
+// The forbidden background workaround was `( nohup dft-run --go & )` — a
+// launchd-zombie double-fork that ran the WHOLE synchronous chain (hours) in
+// a detached LOCAL process. Option α replaces it with a 2-phase contract that
+// never blocks past the Bash cap and never double-forks locally:
+//
+//   --detach  (phase-1): rent → provision → pseudo → launch RELAX *detached on
+//             the pod* (cloud_nohup → remote logfile), register the pod, write
+//             a small state stamp under the deck, return 0. NO teardown — the
+//             pod keeps running the relax while the local process exits.
+//   --resume  (phase-2, EXPLICIT + IDEMPOTENT): reads the state stamp, copies
+//             relax.out / scf.out / ph.out back, runs the LOCAL hexa-native
+//             coord parser, and advances ONE terminal step — relax-done →
+//             assemble+launch scf+ph detached; ph-terminal → harvest+verdict+
+//             teardown. Re-invokable (a no-op when the current step is still
+//             running). NOT an auto-poll loop (that would hang past the cap).
+//
+// The stamp is a tiny KEY=VALUE plaintext (own d4 generic format, never a
+// per-deck branch). It carries the endpoint + run parameters --resume needs so
+// phase-2 is self-contained from a fresh local process.
+
+let DFT_DETACH_STATE = ".dft_detach.state"
+
+// _dft_state_path — the detach state stamp for a deck dir.
+fn _dft_state_path(deck: str) -> str {
+    return deck + "/" + DFT_DETACH_STATE
+}
+
+// _dft_write_state — persist the phase / endpoint / run params so --resume can
+// reconstruct the pod context from a fresh local process. KEY=VALUE plaintext.
+fn _dft_write_state(deck: str, phase: str, iid: str, host: str, port: str,
+                    identity: str, np: int, walltime_h: int, relax_name: str) -> bool {
+    let body = "phase=" + phase + "\ninstance_id=" + iid + "\nhost=" + host
+        + "\nport=" + port + "\nidentity=" + identity + "\nnp=" + to_string(np)
+        + "\nwalltime_h=" + to_string(walltime_h) + "\nrelax_name=" + relax_name
+        + "\ndeck=" + deck + "\n"
+    return write_text(_dft_state_path(deck), body)
+}
+
+// _dft_state_field — read one KEY=VALUE field from the detach state stamp.
+// Returns "" when the stamp or the key is absent (caller decides the fallback).
+fn _dft_state_field(deck: str, key: str) -> str {
+    let sp = _dft_state_path(deck)
+    let exists = exec("test -f '" + sp + "' && printf yes || printf no") == "yes"
+    if !exists { return "" }
+    let raw = read_file(sp)
+    let lines = raw.split("\n")
+    let mut i = 0
+    while i < len(lines) {
+        let ln = lines[i]
+        let pre = key + "="
+        if len(ln) >= len(pre) && ln.substring(0, len(pre)) == pre {
+            return ln.substring(len(pre), len(ln)).trim()
+        }
+        i = i + 1
+    }
+    return ""
+}
+
 // dft_run — `hexa cloud dft-run <deck-dir> [--validate] [--go] [--force] [...]`.
 // PREVIEW unless --go. --validate runs the FREE dry-run + writes the stamp.
 pub fn dft_run(av: [str], start: int) -> int {
     let deck = _dft_first_positional(av, start)
     if len(deck) == 0 {
-        println("[dft-run] usage: hexa cloud dft-run <deck-dir> [--validate] [--go] [--force] [--bin-pack] [--identity PATH] [--query Q] [--walltime-h N] [--image IMG] [--disk GiB] [--owner TAG]")
+        println("[dft-run] usage: hexa cloud dft-run <deck-dir> [--validate] [--go|--detach|--resume] [--force] [--bin-pack] [--identity PATH] [--query Q] [--walltime-h N] [--image IMG] [--disk GiB] [--owner TAG]")
         println("           <deck-dir> must contain: (vc-relax.in | relax.in) · ph.in · (scf.in | scf.in.head + scf.in.tail) · pseudo/")
         println("           default = PREVIEW (validate + plan + parse a local relax.out if present, $0).")
-        println("           --validate : run the FREE d16 1-iter dry-run + write a `.validated` stamp (required before --go).")
-        println("           --go       : rent a billing pod + dispatch (REFUSED unless a fresh `.validated` stamp exists, or --force).")
+        println("           --validate : run the FREE d16 1-iter dry-run + write a `.validated` stamp (required before --go/--detach).")
+        println("           --go       : rent + run the WHOLE chain SYNCHRONOUSLY in this process (hours — blocks past the 10-min cap).")
+        println("           --detach   : phase-1 — rent + provision + launch relax DETACHED on the pod, then return 0 (NO teardown).")
+        println("           --resume   : phase-2 — advance ONE terminal step (relax→scf+ph detached; ph-terminal→harvest+verdict+teardown). Idempotent.")
+        println("                        paced campaign: `--detach` each candidate, then poll `--resume` per candidate — no `( nohup --go & )` double-fork.")
         println("           --force    : override the stamp gate (expert — rents an unvalidated deck).")
         println("           --bin-pack : DEFAULT = ONE deck / pod (d_parallel_fire). dft-run dispatches a SINGLE deck per pod;")
         println("                        passing >1 deck dir without --bin-pack is REFUSED (silent pod overload guard, ysbh6/cabeh8 2026-05-30).")
@@ -893,6 +975,8 @@ pub fn dft_run(av: [str], start: int) -> int {
     }
     let validate_only = _dft_has_flag(av, start, "--validate")
     let go = _dft_has_flag(av, start, "--go")
+    let detach = _dft_has_flag(av, start, "--detach")
+    let resume_flag = _dft_has_flag(av, start, "--resume")
     let force = _dft_has_flag(av, start, "--force")
     let bin_pack = _dft_has_flag(av, start, "--bin-pack")
 
@@ -985,31 +1069,50 @@ pub fn dft_run(av: [str], start: int) -> int {
     let fresh = _dft_stamp_fresh(deck)
     let blocked = !fresh && force == 0
 
-    if go == 0 {
+    // --resume (phase-2) operates on an ALREADY-rented pod recorded in the
+    // detach state stamp — it does NOT rent, so the d16 .validated gate (a
+    // pre-rent guard) does not apply. Dispatch it before the rent-only gates.
+    if resume_flag == 1 {
+        return _dft_resume(deck)
+    }
+
+    if go == 0 && detach == 0 {
         let stamped = if fresh { "fresh ✓ — RENTABLE" } else { "MISSING/stale — run --validate first (NOT rentable)" }
         println("[dft-run] ② transport: bare-IP via `show instances --raw`, identity " + identity)
         println("[dft-run] ③ chain: -np = phys cores (lscpu Core×Socket) · --allow-run-as-root · recover=.true. · timeout " + to_string(walltime_h) + "h · setsid")
         println("[dft-run] ④ monitor: numeric-id registry · imaginary-mode<-5cm⁻¹ → unstable · non-interactive teardown")
         println("[dft-run] .validated stamp: " + stamped)
-        println("[dft-run] PREVIEW only — re-run with --go to rent a billing pod and dispatch ($-incurring).")
+        println("[dft-run] PREVIEW — --go runs the chain SYNCHRONOUSLY (hours, blocks); --detach launches relax")
+        println("[dft-run]   detached on the pod + returns 0, then `--resume` advances each terminal step ($-incurring).")
         return 0
     }
 
     // FIRE PRECONDITION (d16 gate) — refuse to rent for a deck that has not
     // passed a fresh FREE dry-run. This is the systemic rent→idle leak guard:
     // a blocked/invalid deck never reaches a billing pod. --force overrides.
+    // Applies to BOTH the synchronous --go path and the --detach launch (both rent).
     if blocked {
         println("[dft-run] ✗ REFUSED — no fresh `.validated` stamp for " + deck)
         println("[dft-run]   a deck must pass a FREE d16 dry-run before it can rent a billing pod")
         println("[dft-run]   (systemic guard vs rent→deck-blocked→pod-idle billing leak).")
         println("[dft-run]   run:  hexa cloud dft-run " + deck + " --validate")
-        println("[dft-run]   then: hexa cloud dft-run " + deck + " --go")
+        println("[dft-run]   then: hexa cloud dft-run " + deck + " --go      (synchronous, blocks hours), OR")
+        println("[dft-run]         hexa cloud dft-run " + deck + " --detach  (launch relax detached, return 0)")
         println("[dft-run]   (expert override: add --force to rent an unvalidated deck.)")
         return 2
     }
     if !fresh && force == 1 {
         println("[dft-run] ⚠ --force: renting an UNVALIDATED deck (no fresh .validated stamp) — leak risk on the user.")
     }
+
+    // --detach (phase-1) — rent + provision + launch relax DETACHED on the pod,
+    // register, write the state stamp, return 0 (NO teardown). Phase-2 advance
+    // is the explicit `--detach`→`--resume` handoff (option α; replaces the
+    // forbidden `( nohup dft-run --go & )` local double-fork).
+    if detach == 1 {
+        return _dft_detach(deck, image, disk, owner, query, identity, walltime_h, relax_name)
+    }
+
     return _dft_go(deck, image, disk, owner, query, identity, walltime_h, relax_name)
 }
 
@@ -1154,6 +1257,146 @@ fn _dft_go(deck: str, image: str, disk: int, owner: str, query: str, identity: s
     }
     println("[dft-run] results harvested to " + deck + "/{relax.out,scf.out,ph.out}.")
     return _dft_teardown(inst.instance_id, 0)
+}
+
+// ── option α phase-1: --detach launch ────────────────────────────────
+
+// _dft_remote_logfile — the pod-side logfile a detached stage writes to. One
+// file per stage so a --resume tail can attach to the live one.
+fn _dft_remote_logfile(stage: str) -> str {
+    return "/root/deck/." + stage + ".detach.log"
+}
+
+// _dft_detach_argv — wrap a guarded stage shell-string (the reused _dft_*_cmd,
+// which already does `cd /root/deck && … > <out> 2>&1`) into a `sh -lc` argv so
+// cloud_nohup_opts launches it DETACHED on the pod. A login shell (-l) restores
+// PATH/conda the non-interactive nohup shell would otherwise lose (the detached
+// remote env-loss class). cloud_nohup adds its own `> logfile 2>&1` wrapper.
+fn _dft_detach_argv(stage_cmd: str) -> [str] {
+    return ["sh", "-lc", stage_cmd]
+}
+
+// _dft_detach — option α PHASE-1. Rents → resolves the direct endpoint →
+// reachability precheck → uploads the deck → provisions QE → fetches pseudos →
+// launches RELAX *detached on the pod* (cloud_nohup → remote logfile) → records
+// the pod in the registry → writes the detach state stamp → returns 0. There is
+// NO teardown: the pod keeps running the relax after this local process exits.
+// Advance with `hexa cloud dft-run <deck> --resume` (phase-2). This replaces the
+// forbidden `( nohup dft-run --go & )` local double-fork — the long work runs on
+// the POD, not in a detached local process, so the Bash cap is never exceeded.
+fn _dft_detach(deck: str, image: str, disk: int, owner: str, query: str, identity: str, walltime_h: int, relax_name: str) -> int {
+    println("[dft-run] ━ DETACH (phase-1) — rent + provision + launch relax detached on the pod ━")
+    println("[dft-run] ① RENT — searching verified offers...")
+    let offer = vast_search_offers(query, 1)
+    if offer.ok == 0 {
+        println("[dft-run] rent: " + offer.message)
+        return 1
+    }
+    println("[dft-run] picked offer " + offer.offer_id)
+    let inst = vast_create(offer.offer_id, image, disk)
+    if inst.ok == 0 {
+        vast_offer_release(offer.offer_id)
+        println("[dft-run] create: " + inst.message)
+        return 1
+    }
+    // ④ registry — numeric instance-id ONLY (no argv fragments, #1229).
+    pod_registry_record(inst.instance_id, owner, "running")
+    vast_offer_release(offer.offer_id)
+    println("[dft-run] created + registered instance " + inst.instance_id)
+
+    // ② wait for boot, then resolve the DIRECT bare-IP endpoint.
+    let _w = vast_wait_ssh(inst.instance_id, 30, 20)
+    let ep = vast_direct_endpoint(inst.instance_id)
+    if ep.ok == 0 {
+        println("[dft-run] ② transport: " + ep.message)
+        println("[dft-run] instance " + inst.instance_id + " kept + tracked (cloud list); not auto-destroyed.")
+        return 1
+    }
+    let host = "root@" + ep.host
+    let ssh_opts = _dft_ssh_opts(ep.port, identity)
+    println("[dft-run] ② direct endpoint " + ep.host + ":" + ep.port + " (identity " + identity + ")")
+
+    // ① reachability precheck — TCP echo. unreachable → destroy + abort.
+    let reach = cloud_exec_opts(host, ssh_opts, "echo REACHABLE")
+    if reach.ok == 0 || !reach.stdout_.contains("REACHABLE") {
+        println("[dft-run] ① reachability FAILED (" + reach.message + ") — destroying unreachable pod " + inst.instance_id)
+        let _d = vast_destroy(inst.instance_id)
+        pod_registry_forget(inst.instance_id)
+        println("[dft-run] re-run `hexa cloud dft-run <deck> --detach` to try another offer.")
+        return 1
+    }
+    println("[dft-run] ① reachability OK")
+
+    // upload the deck
+    let up = cloud_copy_to_recursive_opts(host, ssh_opts, deck, "/root/deck")
+    if up.ok == 0 {
+        println("[dft-run] upload: " + up.message)
+        return _dft_teardown(inst.instance_id, 1)
+    }
+
+    // ③ phys-core -np
+    let lscpu = cloud_exec_opts(host, ssh_opts, "lscpu")
+    let np_raw = dft_physcores(lscpu.stdout_)
+    let np = if np_raw > 0 { np_raw } else { 8 }
+    println("[dft-run] ③ -np=" + to_string(np) + " (phys cores)")
+
+    // ③ provision QE (idempotent; skipped if pw.x present from a QE --image).
+    println("[dft-run] ③ provision QE (apt quantum-espresso if pw.x absent)...")
+    let prov = cloud_exec_opts(host, ssh_opts, _dft_provision_cmd())
+    if prov.ok == 0 || !prov.stdout_.contains("pw.x OK") {
+        println("[dft-run] provision: QE install/verify FAILED — " + prov.message)
+        return _dft_teardown(inst.instance_id, 1)
+    }
+    println("[dft-run] ③ provision OK — pw.x + mpirun present")
+
+    // ③ pseudo fetch — download referenced UPFs into ./pseudo.
+    println("[dft-run] ③ pseudo fetch (UPF → ./pseudo from QE PSL server)...")
+    let ps = cloud_exec_opts(host, ssh_opts, _dft_pseudo_cmd())
+    if ps.ok == 0 || !ps.stdout_.contains("PSEUDO OK") {
+        println("[dft-run] pseudo: fetch FAILED — " + ps.message + " · " + ps.stdout_)
+        return _dft_teardown(inst.instance_id, 1)
+    }
+    println("[dft-run] ③ pseudo OK — UPFs in ./pseudo")
+
+    // ③ launch RELAX DETACHED — cloud_nohup runs the (reused) guarded relax cmd
+    // on the pod, output → relax.out, wrapper noise → the remote logfile, and
+    // returns immediately with the remote PID. NO synchronous wait, NO teardown.
+    let relax_log = _dft_remote_logfile("relax")
+    let relax_argv = _dft_detach_argv(_dft_relax_cmd(np, walltime_h, relax_name))
+    let launched = cloud_nohup_opts(host, ssh_opts, relax_argv, relax_log)
+    if launched.ok == 0 {
+        println("[dft-run] ③ relax detach launch FAILED — " + launched.message)
+        return _dft_teardown(inst.instance_id, 1)
+    }
+    println("[dft-run] ③ relax LAUNCHED detached — remote pid " + to_string(launched.pid) + " · log " + relax_log)
+
+    // write the detach state stamp so --resume can reconstruct the pod context.
+    let wrote = _dft_write_state(deck, "relax", inst.instance_id, ep.host, ep.port,
+                                 identity, np, walltime_h, relax_name)
+    if !wrote {
+        println("[dft-run] ⚠ could not write detach state stamp " + _dft_state_path(deck)
+            + " — --resume will not find the pod (instance " + inst.instance_id + " is tracked in `cloud list`).")
+    }
+    println("[dft-run] ━ DETACH OK — pod " + inst.instance_id + " is running relax; this process is DONE (no teardown). ━")
+    println("[dft-run]   monitor : hexa cloud tail " + host + " " + relax_log)
+    println("[dft-run]   advance : hexa cloud dft-run " + deck + " --resume   (parse relax→scf+ph; idempotent, re-invokable)")
+    return 0
+}
+
+// _dft_resume — option α PHASE-2. PLACEHOLDER in this PR (phase-1 only). PR2
+// implements the explicit, idempotent terminal-step advance: relax-done → LOCAL
+// coord parse + assemble + launch scf+ph detached; ph-terminal → harvest +
+// verdict + teardown. Until then, surface where the pod is.
+fn _dft_resume(deck: str) -> int {
+    let iid = _dft_state_field(deck, "instance_id")
+    if len(iid) == 0 {
+        println("[dft-run] --resume: no detach state stamp at " + _dft_state_path(deck) + " — run `--detach` first.")
+        return 2
+    }
+    println("[dft-run] --resume: phase-2 advance is not in this build (phase-1 detach only).")
+    println("[dft-run]   pod instance " + iid + " (host " + _dft_state_field(deck, "host")
+        + ":" + _dft_state_field(deck, "port") + ") is running stage `" + _dft_state_field(deck, "phase") + "`.")
+    return 0
 }
 
 // _dft_teardown — non-interactive destroy + registry forget (④ orphan guard).
