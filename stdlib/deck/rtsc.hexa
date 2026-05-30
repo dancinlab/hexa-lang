@@ -390,7 +390,10 @@ fn _rtsc_pack_one_pod_block(spec: DeckSpec) -> string {
     let walltime  = _to_int_safe(spec_get_or(spec, "walltime_h", "140"))
     let free_disk = _to_int_safe(spec_get_or(spec, "free_disk_gb", "800"))
     let scratch   = _to_int_safe(spec_get_or(spec, "scratch_gb_per_q", "18"))
-    let plan = dft_fill_plan_disk(physcores, ranks, n_decks, walltime, free_disk, scratch)
+    // bin_pack=1: 이 블록 자체가 pack_one_pod opt-in 의 멀티-deck 동시충전 경로다
+    // (core ∧ disk 한도까지 동시 발사). bin_pack=0 이면 concurrent_jobs=1 로 강등되어
+    // 이 §4b-fallback 의 의미가 사라진다.
+    let plan = dft_fill_plan_disk(physcores, ranks, n_decks, walltime, free_disk, scratch, 1)
 
     let mut s = ""
     s = s + "## 4b-fallback. 단일-pod 멀티-deck 동시충전 (CONCURRENT-FILL · d_parallel_fire FALLBACK · opt-in)\n"
