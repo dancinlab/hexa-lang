@@ -1512,8 +1512,8 @@ fn gen2_has_inline_always(node) {
 //
 // UNSHADOW G frontier (this change): the firing guard NO LONGER hard-codes the
 // fn name. codegen now performs a LIVE ATLAS QUERY at compile time — it reads
-// the atlas SSOT (compiler/atlas/embedded.gen.hexa, TEXT-parse, same precedence
-// as the rest of the toolchain) and licenses a fn as a pure hot-path iff a
+// the atlas SSOT (compiler/atlas/embedded.gen.hexa, TEXT-parse, resolved via
+// $HEXA_LANG > ./ — codegen-self-contained) and licenses a fn as hot-path iff a
 // dedicated PERF-PROPERTY atom `perf-<fnname>-hot` carrying the `hot-path` perf
 // tag is present. This is the shared infra §A/§B/E/G were all blocked on:
 //   - perf-property atom kind: `@F perf-<fn>-hot ... perf = "hot-path ..."`
@@ -1532,18 +1532,17 @@ fn gen2_is_atlas_pgo_hot(node) {
     return gen2_atlas_perf_hot(node.name)
 }
 
-// Resolve the atlas SSOT path — same precedence as _daemon_atlas_ssot_path:
-//   $HEXA_LANG > install_dir_from_argv0() > ./   (repo-root relative).
+// Resolve the atlas SSOT path. codegen.hexa is compiled into the transpiler
+// amalgam WITHOUT main.hexa, so this must stay self-contained (no call into
+// main.hexa's install_dir_from_argv0). Precedence:
+//   $HEXA_LANG/compiler/atlas/embedded.gen.hexa  (toolchain-standard) >
+//   ./compiler/atlas/embedded.gen.hexa           (repo-root relative).
+// Returns "" if neither is locatable — caller then declines promotion.
 fn gen2_atlas_ssot_path() {
     let rel = "/compiler/atlas/embedded.gen.hexa"
     let h = env("HEXA_LANG")
     if len(h) > 0 {
         let p = h + rel
-        if file_exists(p) { return p }
-    }
-    let inst = install_dir_from_argv0()
-    if len(inst) > 0 {
-        let p = inst + rel
         if file_exists(p) { return p }
     }
     let cwd = "." + rel
