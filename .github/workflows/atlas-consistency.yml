@@ -31,30 +31,42 @@ jobs:
         uses: actions/checkout@v6
 
       # ── build the hexa CLI (mirrors bootstrap.yml linux-x86_64) ──
-      - name: Stage 0 — compile self-hosted transpiler (hexa_v2)
+      # `.c=0` graduation (B9 / HEXA-CC-ZERO P5): self/native/hexa_cc.c and
+      # self/runtime.c are NO LONGER committed. The cold-seed
+      # self/native/hexa_cc_seed.c is a single self-contained TU that inlines
+      # the transpiler + the full runtime, so it compiles standalone with no
+      # -I, no amalgam sed, no self/runtime.c. (Direct `cc … hexa_cc.c
+      # self/runtime.c` was a dead path — both files absent → checkout-fatal.)
+      - name: Stage 0 — cold-seed bootstrap (cc hexa_cc_seed.c → hexa_v2)
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p self/native build/stage1
+          mkdir -p build/stage1
+          test -f self/native/hexa_cc_seed.c \
+            || { echo "::error::self/native/hexa_cc_seed.c absent — cold-seed required"; exit 1; }
           gcc -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
-              -I self self/native/hexa_cc.c self/runtime.c \
-              -o self/native/hexa_v2 \
-              -lm -ldl
-          file self/native/hexa_v2
+              self/native/hexa_cc_seed.c -o build/hexa_v2 -lm -ldl
+          file build/hexa_v2
+          # Second compile, main renamed away → a runtime object the transpiled
+          # C links against in place of the absent self/runtime.c.
+          gcc -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
+              -Dmain=__seed_main_unused -c self/native/hexa_cc_seed.c -o build/runtime_seed.o
+          ls -la build/runtime_seed.o
 
       - name: Stage 1 — flatten + transpile + compile CLI (./hexa)
         shell: bash
         run: |
           set -euo pipefail
-          ./self/native/hexa_v2 self/module_loader.hexa build/stage1/module_loader.c
+          export HEXA_LANG="$PWD"
+          ./build/hexa_v2 self/module_loader.hexa build/stage1/module_loader.c
           gcc -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
-              -I self build/stage1/module_loader.c self/runtime.c \
+              -I self build/stage1/module_loader.c build/runtime_seed.o \
               -o build/hexa_module_loader \
               -lm -ldl
           ./build/hexa_module_loader self/main.hexa build/stage1/main_expanded.hexa
-          ./self/native/hexa_v2 build/stage1/main_expanded.hexa build/stage1/main.c
+          ./build/hexa_v2 build/stage1/main_expanded.hexa build/stage1/main.c
           gcc -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
-              -I self build/stage1/main.c self/runtime.c \
+              -I self build/stage1/main.c build/runtime_seed.o \
               -o hexa \
               -lm -ldl
           file hexa

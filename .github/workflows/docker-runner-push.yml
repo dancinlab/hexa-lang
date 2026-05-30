@@ -45,8 +45,7 @@ on:
       - 'docker/runner/Dockerfile'
       - 'self/main.hexa'
       - 'self/hexa_full.hexa'
-      - 'self/runtime.c'
-      - 'self/native/hexa_cc.c'
+      - 'self/native/hexa_cc_seed.c'
       - 'self/native/native_gate.c'
       - 'self/module_loader.hexa'
       - 'self/stdlib/**'
@@ -92,16 +91,28 @@ jobs:
           echo "cc     : $(gcc --version | head -1)"
           echo "target : ${{ matrix.target }}"
 
-      - name: Stage 0 — compile self-hosted transpiler (hexa_v2)
+      # `.c=0` graduation (B9 / HEXA-CC-ZERO P5): self/native/hexa_cc.c and
+      # self/runtime.c are NO LONGER committed. The cold-seed
+      # self/native/hexa_cc_seed.c is a single self-contained TU (transpiler +
+      # full runtime inlined) — compiles standalone, no -I, no self/runtime.c.
+      # (Direct `cc … hexa_cc.c` was a dead path — the file is absent.)
+      - name: Stage 0 — cold-seed bootstrap (cc hexa_cc_seed.c → hexa_v2)
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p self/native build/stage1 build
+          mkdir -p build/stage1 build
+          test -f self/native/hexa_cc_seed.c \
+            || { echo "::error::self/native/hexa_cc_seed.c absent — cold-seed required"; exit 1; }
           gcc ${{ env.CFLAGS_COMMON }} \
-              -I self self/native/hexa_cc.c \
+              self/native/hexa_cc_seed.c \
               -o build/hexa_v2 \
               -lm -ldl
           file build/hexa_v2
+          # Second compile, main renamed away → a runtime object the transpiled
+          # C links against in place of the absent self/runtime.c.
+          gcc ${{ env.CFLAGS_COMMON }} \
+              -Dmain=__seed_main_unused -c self/native/hexa_cc_seed.c -o build/runtime_seed.o
+          ls -la build/runtime_seed.o
 
       - name: Stage 1 — transpile + compile CLI dispatcher (static)
         shell: bash
@@ -109,9 +120,12 @@ jobs:
           set -euo pipefail
           ./build/hexa_v2 self/main.hexa build/stage1/main.c
           # -static for distroless drop-in.  glibc-static is preinstalled
-          # on ubuntu-latest / ubuntu-24.04-arm runners.
+          # on ubuntu-latest / ubuntu-24.04-arm runners. The transpiled C only
+          # #includes runtime.h (prototypes) — the bodies come from the cold-seed
+          # runtime object (build/runtime_seed.o) in place of the absent
+          # self/runtime.c.
           gcc ${{ env.CFLAGS_COMMON }} -static \
-              -I self build/stage1/main.c \
+              -I self build/stage1/main.c build/runtime_seed.o \
               -o build/hexa_linux_${{ matrix.target }} \
               -lm -ldl
           file build/hexa_linux_${{ matrix.target }}
@@ -121,10 +135,10 @@ jobs:
         run: |
           set -euo pipefail
           ./build/hexa_v2 self/hexa_full.hexa /tmp/hexa_full_regen.c
-          # runtime.c is included as a sibling header by the transpiled C.
-          cp self/runtime.c /tmp/runtime.c
+          # runtime bodies link from the cold-seed runtime object (the absent
+          # self/runtime.c is `.c=0`-graduated; build/runtime_seed.o supplies them).
           gcc ${{ env.CFLAGS_COMMON }} -static \
-              -I self /tmp/hexa_full_regen.c \
+              -I self /tmp/hexa_full_regen.c build/runtime_seed.o \
               -o build/hexa_interp_linux_${{ matrix.target }} \
               -lm -ldl
           file build/hexa_interp_linux_${{ matrix.target }}
@@ -141,7 +155,7 @@ jobs:
           HEXA_EOF
           ./build/hexa_v2 /tmp/hexa_ci/hi.hexa /tmp/hexa_ci/hi.c
           gcc ${{ env.CFLAGS_COMMON }} -static \
-              -I self /tmp/hexa_ci/hi.c -o /tmp/hexa_ci/hi \
+              -I self /tmp/hexa_ci/hi.c build/runtime_seed.o -o /tmp/hexa_ci/hi \
               -lm -ldl
           OUT="$(/tmp/hexa_ci/hi)"
           [[ "$OUT" == "ok" ]] || { echo "::error::smoke failed (got '$OUT')"; exit 1; }
