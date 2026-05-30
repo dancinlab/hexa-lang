@@ -1,0 +1,39 @@
+=== UNSHADOW escape→stack-alloc bench (F2 · SPACE axis) ===
+rt=/tmp/uns-escape-stack/rtdir  work=/Users/ghost/unshadow-escape-stack  runs=9
+(primary metric = HEAP-ALLOC COUNT + PEAK-RSS; wall is secondary)
+
+--- C: non-escaping flat-struct hot-loop (2 arms + parity) ---
+  [a_heap ] built=yes err_lines=0
+  [b_stack] built=yes err_lines=0
+
+  g5 byte-diff (computed-acc must be IDENTICAL across arms):
+    a_heap  acc=140000000  md5=6ca934e49da9a8a3923d49622f65db6b
+    b_stack acc=140000000  md5=6ca934e49da9a8a3923d49622f65db6b
+    → byte-diff: IDENTICAL
+
+  [PRIMARY] heap-alloc count (loop descriptor mallocs):
+    a_heap  : 20000000   (one malloc per Pt{..} — BEFORE)
+    b_stack : 0   (stack-local __flat — no malloc, LANDED)
+
+  [PRIMARY] peak-RSS (KB):
+    a_heap  : 1920
+    b_stack : 1904
+  [a_heap_nf ] built=yes err_lines=0
+  [b_stack_nf] built=yes err_lines=0
+
+  [PRIMARY] peak-RSS (KB) — NO-FREE shape (descriptor accumulates; the
+            arena/GC reclaim-lag case where stack-alloc wins on space):
+    a_heap_nf  (4M no-free mallocs) : 127408
+    b_stack_nf (stack, reclaimed)   : 1920
+
+  [secondary] best-of-9 wall (s):
+    a_heap  : 0.06
+    b_stack : 0.06
+
+--- INTEGRITY: escaping binding stays on the heap (no dangling) ---
+  [escape ] built=yes err_lines=0
+  escaping read result (heap path, live after return): 4
+  → a returned descriptor stays on the heap — the stack-alloc proof
+    fires ONLY for bindings used solely as p.field within the scope.
+
+=== done ===

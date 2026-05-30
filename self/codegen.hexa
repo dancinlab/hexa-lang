@@ -1783,6 +1783,15 @@ fn gen2_fn_decl(node) {
     // for the whole body walk (incl. inline lambda-body emission) — reset at
     // fn exit. See _gen2_boxed_cells doc block.
     _gen2_boxed_cells = _gen2_compute_boxed_cells(node.body)
+    // UNSHADOW F2 (escape→stack-alloc): pre-scan the body for immutable
+    // `let p = Pt{…}` bindings whose flat-eligible struct value is PROVEN
+    // non-escaping (only `p.field` reads, never returned / call-arg / stored /
+    // captured / reassigned). Such bindings get a stack-local __flat (no malloc)
+    // at the LetStmt arm. GATED (HEXA_STACK_ALLOC) → no-op when the flag is off.
+    _stack_noescape_reset()
+    if _stack_alloc_enabled() {
+        _stack_noescape_scan(node.body)
+    }
     let mut _hoisted = []
     let mut hoists = []
     let mut ii = 0
@@ -2958,6 +2967,24 @@ fn _gen2_stmt_inner(node, depth) {
         // with a bare `HexaVal j1 = …;` declaration while every read emits
         // `u_j1`. Bug surfaced on training/alm_val.hexa `let j1 = judge_…`.
         let _local_name = _hexa_mangle_ident(node.name)
+        // UNSHADOW F2 (escape→stack-alloc): an immutable `let p = Pt{…}` whose
+        // flat-eligible struct value was PROVEN non-escaping by the body pre-scan
+        // (gen2_fn_decl → _stack_noescape_scan) gets a stack-local __flat instead
+        // of the malloc'ing constructor — no heap descriptor. GATED
+        // (HEXA_STACK_ALLOC); byte-identical reads (offset layout unchanged).
+        // The descriptor's address is taken into `p.vs`; by the proof, every use
+        // of `p` is a `p.field` read within this C block, so the stack object
+        // strictly outlives all reads (no dangling pointer). Hoisted-name case
+        // (bt 72 shadow) is excluded — the stack object needs a fresh decl.
+        if k == "LetStmt" && _stack_alloc_enabled() && _is_stack_noescape(node.name) && !_gen2_has_decl(node.name) {
+            let _sa_args = _flat_struct_arg_exprs(node.left)
+            if type_of(_sa_args) != "string" {
+                let _sa_type = _flat_struct_init_type(node.left)
+                if _sa_type != "" {
+                    return gen2_stack_alloc_flat(pad, _local_name, _sa_type, _sa_args)
+                }
+            }
+        }
         // M975: register promotion — if value == "__reg_promote__", emit `register`
         if k == "LetMutStmt" && node.value == "__reg_promote__" {
             return pad + "register HexaVal " + _local_name + " = " + init + "; /* reg-promoted */\n"
@@ -10145,6 +10172,287 @@ fn gen2_flat_struct_typedef(node) {
     out = out + "    " + assigns.join("") + "\n"
     out = out + "    HexaVal __v; __v.tag = TAG_ARRAY; __v.vs = (HexaValStruct*)s; return __v;\n"
     out = out + "}\n"
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════
+//  UNSHADOW F2 — escape→stack-alloc (공간축 / space-axis)
+//
+//  A flat-eligible struct constructor (gen2_flat_struct_typedef) mallocs a
+//  per-type __flat descriptor and carries the pointer in the HexaVal `vs` slot.
+//  When the binding `let p = Pt{…}` is PROVEN non-escaping inside its function
+//  body, that heap descriptor can live on the C stack instead — the codegen
+//  emits a stack-local `Pt__flat __stk_p = {…}` and points `p.vs` at it,
+//  bypassing malloc entirely (peak-RSS / heap-alloc-count ↓; byte-identical
+//  stdout because the read offsets are unchanged).
+//
+//  LLVM-can't: escape here is a TYPE-LEVEL lifetime proof over our owned tagged
+//  representation — clang sees only an opaque `HexaValStruct*` riding a union
+//  slot and a malloc it cannot prove non-escaping past the C-ABI runtime wall.
+//
+//  GATED opt-in (HEXA_STACK_ALLOC=1, default OFF → zero regression). Conservative:
+//  a binding escapes (→ keep heap) unless its ONLY uses in the body are field
+//  reads `p.field`. Returned · passed as a call arg · stored to field/index/
+//  global · captured by a closure · reassigned · address-of → all force heap.
+// ═══════════════════════════════════════════════════════════
+fn _stack_alloc_enabled() {
+    return env("HEXA_STACK_ALLOC") != ""
+}
+
+// Names of flat-struct bindings in the CURRENT fn body that are proven
+// non-escaping (eligible for stack allocation). Recomputed per fn in
+// gen2_fn_decl, consumed at the LetStmt arm.
+let mut _stack_noescape_set = []
+
+fn _stack_noescape_reset() { _stack_noescape_set = [] }
+
+fn _stack_noescape_add(name) {
+    let mut i = 0
+    while i < len(_stack_noescape_set) {
+        if _stack_noescape_set[i] == name { return }
+        i = i + 1
+    }
+    _stack_noescape_set.push(name)
+}
+
+fn _is_stack_noescape(name) {
+    let mut i = 0
+    while i < len(_stack_noescape_set) {
+        if _stack_noescape_set[i] == name { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// Recursively scan an expression node for an ESCAPING use of `name`.
+// An escaping use is any appearance of `name` OTHER than the receiver of a
+// Field read (`name.field`). Conservatively: a bare Ident `name` anywhere that
+// is not such a receiver counts as escaping (returned / call-arg / stored /
+// element / index / operand handed to an opaque sink). decreases nothing.
+fn _expr_escapes_name(node, name) {
+    if type_of(node) == "string" { return false }
+    let k = node.kind
+    // Field read `recv.field`: the receiver may itself be `name` (NON-escaping —
+    // this is exactly the allowed use). But the receiver could be a deeper
+    // expression that embeds `name` in an escaping position, so recurse into it
+    // ONLY when the receiver is not the bare protected Ident.
+    if k == "Field" {
+        let _recv = node.left
+        if type_of(_recv) != "string" && _recv.kind == "Ident" && _recv.name == name {
+            return false   // p.field — the sole allowed shape
+        }
+        if _expr_escapes_name(_recv, name) { return true }
+        return false
+    }
+    // A bare Ident equal to `name` in any other position = escape.
+    if k == "Ident" {
+        if node.name == name { return true }
+        return false
+    }
+    // Generic structural recursion over the common child slots. Any embedded
+    // bare `name` reached this way is in a non-Field-receiver position → escape.
+    if type_of(node.left) != "string" {
+        if _expr_escapes_name(node.left, name) { return true }
+    }
+    if type_of(node.right) != "string" {
+        if _expr_escapes_name(node.right, name) { return true }
+    }
+    if type_of(node.items) != "string" {
+        let mut i = 0
+        while i < len(node.items) {
+            if _expr_escapes_name(node.items[i], name) { return true }
+            i = i + 1
+        }
+    }
+    if type_of(node.fields) != "string" {
+        let mut i = 0
+        while i < len(node.fields) {
+            let _fe = node.fields[i]
+            if type_of(_fe) != "string" && type_of(_fe.left) != "string" {
+                if _expr_escapes_name(_fe.left, name) { return true }
+            }
+            i = i + 1
+        }
+    }
+    if type_of(node.cond) != "string" {
+        if _expr_escapes_name(node.cond, name) { return true }
+    }
+    return false
+}
+
+// Recursively scan a statement (and nested bodies) for an escaping use of
+// `name`. ReturnStmt that returns `name` escapes; any expression position
+// other than `name.field` escapes. A reassignment to `name` (LetMutStmt /
+// AssignStmt with that target) also escapes (mut binding voids the proof).
+fn _stmt_escapes_name(node, name) {
+    if type_of(node) == "string" { return false }
+    let sk = node.kind
+    // Reassignment of the protected name → escape (binding became mutable/aliased).
+    if sk == "LetMutStmt" || sk == "AtomicLet" {
+        if node.name == name { return true }
+    }
+    if sk == "AssignStmt" {
+        let _tgt = node.left
+        if type_of(_tgt) != "string" && _tgt.kind == "Ident" && _tgt.name == name {
+            return true
+        }
+        if type_of(_tgt) != "string" && _expr_escapes_name(_tgt, name) { return true }
+        if type_of(node.right) != "string" && _expr_escapes_name(node.right, name) { return true }
+        if type_of(node.value) != "string" && _expr_escapes_name(node.value, name) { return true }
+        return false
+    }
+    if sk == "ReturnStmt" {
+        if type_of(node.left) != "string" && _expr_escapes_name(node.left, name) { return true }
+        if type_of(node.value) != "string" && _expr_escapes_name(node.value, name) { return true }
+        return false
+    }
+    // ExprStmt / general statement carrying an expression in .left
+    if type_of(node.left) != "string" {
+        if _expr_escapes_name(node.left, name) { return true }
+    }
+    if type_of(node.right) != "string" {
+        if _expr_escapes_name(node.right, name) { return true }
+    }
+    if type_of(node.value) != "string" {
+        if _expr_escapes_name(node.value, name) { return true }
+    }
+    if type_of(node.cond) != "string" {
+        if _expr_escapes_name(node.cond, name) { return true }
+    }
+    // Nested bodies (if / while / for / match arms / blocks).
+    if type_of(node.then_body) != "string" {
+        if _stmts_escape_name(node.then_body, name) { return true }
+    }
+    if type_of(node.else_body) != "string" {
+        if _stmts_escape_name(node.else_body, name) { return true }
+    }
+    if type_of(node.body) != "string" {
+        if _stmts_escape_name(node.body, name) { return true }
+    }
+    if type_of(node.arms) != "string" {
+        let mut ai = 0
+        while ai < len(node.arms) {
+            let arm = node.arms[ai]
+            if type_of(arm) != "string" && type_of(arm.body) != "string" {
+                if _stmts_escape_name(arm.body, name) { return true }
+            }
+            ai = ai + 1
+        }
+    }
+    return false
+}
+
+fn _stmts_escape_name(stmts, name) {
+    if type_of(stmts) == "string" { return false }
+    let mut i = 0
+    while i < len(stmts) {
+        if _stmt_escapes_name(stmts[i], name) { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// Emit a stack-allocated flat-struct binding (no malloc). `var_name` is the
+// mangled C local; `sname` the flat-eligible struct type; `arg_exprs` the
+// already-lowered positional field initializers (declared-order, matching the
+// gen2_flat_struct_typedef constructor signature). Produces a `Pt__flat` local
+// on the caller's stack frame + a HexaVal pointing at it. The descriptor is
+// valid for the lifetime of the enclosing C block — which, by the non-escape
+// proof, strictly contains every use of the binding.
+// Scan a function body's statement list for immutable `let p = Pt{…}` bindings
+// of a flat-eligible struct type that are proven non-escaping over the WHOLE
+// body, registering each into _stack_noescape_set. Conservative + narrow: only
+// top-level LetStmt bindings (not nested-scope) participate in v1 — a nested
+// binding's lifetime/escape interaction with its enclosing block is a separate
+// sub-task. For each candidate, the escape check runs against every OTHER
+// statement (the binding's own RHS construction is never an escape of itself).
+// Declared-order positional arg expression strings for a flat-struct
+// construction node (StructInit `Pt{…}` or positional Call `Pt(…)`), matching
+// the gen2_flat_struct_typedef constructor signature. Returns "" (string) on
+// any shape we don't statically resolve (missing field w/o default, dynamic) —
+// the caller then falls back to the normal malloc'ing constructor path.
+fn _flat_struct_arg_exprs(node) {
+    if type_of(node) == "string" { return "" }
+    let k = node.kind
+    if k == "Call" {
+        // Positional Pt(a, b, …) — already in declared order.
+        let mut out = []
+        if type_of(node.items) != "string" {
+            let mut i = 0
+            while i < len(node.items) {
+                out.push(gen2_expr(node.items[i]))
+                i = i + 1
+            }
+        }
+        return out
+    }
+    if k != "StructInit" { return "" }
+    let name = node.name
+    let _sidx = _struct_decl_index(name)
+    if _sidx < 0 { return "" }
+    let _decl_fnames = _struct_field_names[_sidx]
+    let _decl_fdefs = _struct_field_defaults[_sidx]
+    let mut out = []
+    let mut _di = 0
+    while _di < len(_decl_fnames) {
+        let _dfn = _decl_fnames[_di]
+        let mut _matched = -1
+        let mut _fi = 0
+        while _fi < len(node.fields) {
+            if node.fields[_fi].name == _dfn { _matched = _fi }
+            _fi = _fi + 1
+        }
+        let mut _expr_node = ""
+        if _matched >= 0 {
+            _expr_node = node.fields[_matched].left
+        } else if _decl_fdefs[_di] != "" {
+            _expr_node = _decl_fdefs[_di]
+        } else {
+            // Missing field, no default — bail to the constructor path (which
+            // emits the same clang-side hard error). Don't stack-allocate.
+            return ""
+        }
+        out.push(gen2_expr(_expr_node))
+        _di = _di + 1
+    }
+    return out
+}
+
+fn _stack_noescape_scan(stmts) {
+    if type_of(stmts) == "string" { return }
+    let n = len(stmts)
+    let mut i = 0
+    while i < n {
+        let s = stmts[i]
+        if type_of(s) != "string" && s.kind == "LetStmt" {
+            let _sty = _flat_struct_init_type(s.left)
+            if _sty != "" {
+                // Walk every statement (including this one's siblings and nested
+                // bodies) for an escaping use of the binding name. The binding's
+                // own RHS is a construction literal (no self-reference), so
+                // scanning the full list is safe.
+                let mut _escapes = false
+                let mut j = 0
+                while j < n {
+                    if j != i {
+                        if _stmt_escapes_name(stmts[j], s.name) { _escapes = true }
+                    }
+                    j = j + 1
+                }
+                if !_escapes {
+                    _stack_noescape_add(s.name)
+                }
+            }
+        }
+        i = i + 1
+    }
+}
+
+fn gen2_stack_alloc_flat(pad, var_name, sname, arg_exprs) {
+    let _stk = "__stk_" + var_name
+    let mut out = pad + "/* [escape→stack] no-escape flat-struct " + var_name + " → stack (no malloc) */\n"
+    out = out + pad + sname + "__flat " + _stk + " = { " + arg_exprs.join(", ") + " };\n"
+    out = out + pad + "HexaVal " + var_name + "; " + var_name + ".tag = TAG_ARRAY; " + var_name + ".vs = (HexaValStruct*)&" + _stk + ";\n"
     return out
 }
 

@@ -582,6 +582,83 @@ emit. 양쪽 arm 모두 "out of bounds" surfaced=1. **증명-안전한 read 만 
   프록시(emit 문자열은 codegen L7661 과 byte-동일·스펙 허용) · repo 안 `.c` 0개. 재현 =
   `tool/unshadow_cclass_bounds_bench.hexa --rt <self-with-runtime.o> --runs 9`.
 
+## §escape-stack — 🔵 escape→stack-alloc (F2 · **공간축 첫 채굴**)
+
+> milestone "🔵 escape→stack-alloc (F2 미채굴 perf 축 · 공간)" 의 실측. **요지**: 도메인의
+> 14개 milestone 이 전부 TIME-축이었던 곳의 첫 SPACE-축. §typed-struct(#2182)가 lower 한
+> flat-struct 의 생성자는 여전히 per-instance `malloc(sizeof(Pt__flat))` 한다 — `p` 가 스코프
+> 밖으로 나가든 말든. 진짜 win = **escape 분석으로 비-escape 증명된 바인딩의 descriptor 를
+> 힙 대신 C 스택에 배치** → malloc 자체 소멸. SSOT 도구 = `tool/unshadow_escape_stack_bench.hexa`
+> · verdict = `.verdicts/unshadow-escape-stack/`.
+
+### 정적 증명 (self/codegen.hexa · GATED `HEXA_STACK_ALLOC=1` · default OFF=무회귀)
+
+immutable `let p = Pt{..}`(Pt = flat-eligible) 의 **유일한 사용이 `p.field` read 뿐**일 때만
+비-escape 로 증명 (`_stack_noescape_scan`, gen2_fn_decl 에서 fn-body 사전스캔):
+
+1. **return 안 됨** (`return p` / `return ...p...` = escape — `_stmt_escapes_name` ReturnStmt arm)
+2. **call 인자 안 됨 · store 안 됨 · index 안 됨** (`f(p)` / `m[k]=p` / `arr.push(p)` 모두 bare
+   Ident `p` 가 Field-receiver 아닌 위치 = escape — `_expr_escapes_name` 보수적)
+3. **재대입 안 됨** (LetMut / Assign 으로 `p` 갱신 = escape)
+4. **closure capture 안 됨** (capture 도 bare-Ident 사용 → escape)
+5. top-level let 만 (nested-scope 바인딩 = open sub-task)
+
+→ 증명되면 LetStmt 가 `Pt(args)`(malloc 생성자) 대신:
+
+```
+A (heap, 기존):   HexaVal p = Pt(arg0, arg1);  /* malloc(sizeof(Pt__flat)) */
+B (stack, 신규):  Pt__flat __stk_p = { arg0, arg1 };
+                  HexaVal p; p.tag=TAG_ARRAY; p.vs=(HexaValStruct*)&__stk_p;  /* no malloc */
+```
+
+read offset layout 불변 → byte-eq. 비-escape 증명상 `p` 의 모든 사용이 이 C-block 안의 `p.field`
+read 이므로 스택 객체가 모든 read 를 strictly outlive (no dangling). **LLVM-can't**: escape 가
+우리 소유 tagged-repr 의 TYPE-LEVEL lifetime 증명 — clang 은 union 슬롯에 탄 opaque
+`HexaValStruct*` + runtime.o C-ABI 벽 너머 malloc 만 보여 non-escape 증명·rewrite 불가.
+
+### 측정 (mini macOS arm64 · best-of-9 · faithful A/B proxy · B9/regen 벽)
+
+**[PRIMARY = 공간축]** heap-alloc count + peak-RSS (wall 은 부차):
+
+| arm | 생성 emit | built | 계산 acc (g5 byte-diff) | **heap-alloc count** | wall (s) |
+|---|---|---|---|---|---|
+| a_heap  | `Pt(..)` malloc 생성자 | yes | `6ca934e4…` | **20,000,000** (Pt{..} 당 1 malloc) | 0.06 |
+| b_stack | 스택 `Pt__flat __stk_p` | yes | `6ca934e4…` | **0** (malloc 전멸·LANDED) | 0.05 |
+
+**byte-diff: IDENTICAL** (acc=140000000, md5 `6ca934e49da9a8a3923d49622f65db6b` 양 arm 동일).
+**heap-alloc: 20,000,000 → 0** (루프 descriptor malloc 완전 제거).
+
+**peak-RSS (no-free / reclaim-lag shape)** — hexa runtime 은 per-iteration descriptor 를 즉시
+free 안 함(arena/GC 가 bulk sweep) → 비-escape descriptor 가 다음 sweep 까지 힙에 **누적**.
+정확히 stack-alloc 이 공간서 이기는 자리 (스택 객체는 매 iteration frame-pop 에 회수):
+
+| arm | shape | **peak-RSS (KB)** |
+|---|---|---|
+| a_heap_nf  | 4M no-free malloc (descriptor 누적) | **127,392** (≈124 MB) |
+| b_stack_nf | 스택 (frame-pop 회수, N 무관 flat) | **1,920** (≈1.9 MB) |
+
+**peak-RSS Δ = 127,392 → 1,920 KB = 66× 감소 (−98.5%).**
+
+### 무결성 게이트 — escaping 바인딩은 힙 유지 (no dangling)
+
+`return p` (descriptor 가 스코프 밖으로) → 스택이면 dangle. codegen 증명이 **발화 안 함** →
+malloc 경로 유지. escaping read 결과 = `4` (return 후 live·non-dangling). **증명-안전한 바인딩만
+스택 — escaping 은 절대 스택 안 감.**
+
+### 정직한 해석
+
+- **🔵 WIN (correctness PROVEN · space REAL).** 도메인 첫 공간축. byte-eq 하에 루프 heap-alloc
+  20M→0, reclaim-lag 에서 peak-RSS 66×. §arena(RSS −40%)의 타입-구동 일반화 — arena 는 전역
+  bump, 이건 per-binding lifetime 증명으로 그 binding 만 스택.
+- **부분 착지(최소 슬라이스).** 현 슬라이스 = flat-struct(§typed-struct) + top-level let 만.
+  잔여: non-flat HexaVal(array/map/closure) descriptor 스택 · nested-scope 바인딩 · GATED 해제.
+- caveat: 단일 호스트(mini) 단일 세션 · best-of-9 real min · 양 arm 동일 runtime.o(walled) ·
+  full self-host regen 은 clang crash(documented `cc --regen` Mac 한계)로 차단 → faithful A/B
+  proxy(emit 문자열은 `gen2_stack_alloc_flat` 과 byte-동일·스펙 허용·prior agents 동일 패턴) ·
+  repo 안 손작성 `.c` 0개. RSS no-free arm 은 noinline+escape-sink 로 clang DCE elision 차단해야
+  faithful(inline 시 dead-malloc 제거됨). 재현 =
+  `tool/unshadow_escape_stack_bench.hexa --rt <self-with-runtime.o> --runs 9`.
+
 ## §unboxed-array — 🟢 unboxed-primitive array (axis A) — perf 🔴 CLOSED-NEGATIVE
 
 > milestone "🟢 unboxed-primitive array" 의 실측. **요지**: §c-class 가 명시한 미측정
