@@ -1,98 +1,65 @@
 #!/usr/bin/env bash
-# stage_resolve_runtime_a — produce build/runtime.a for the release build.
+# tool/stage_resolve_runtime_a — resolve build/runtime.a (the "frozen dough").
 #
-# Strategy:
-#   1. If self/runtime.c is present (seeds-present / pre-graduation tree),
-#      compile it from source: $CC $CFLAGS -I self -c self/runtime.c -> .o, ar rcs.
-#   2. Otherwise (graduated tree, .c removed), try to pull build/runtime.a out
-#      of the prior `edge` release tarball for this target.
-#   3. Edge-miss fallback (P7): if the edge tarball is missing/unusable (e.g.
-#      edge only ships one arch), restore the pinned pre-graduation .c seeds
-#      from git and fall through to the from-source compile (step 1's logic).
-#      Restored files are EPHEMERAL — left uncommitted, rebuilt at CI time.
+# Replaces the old Stage 0-pre "warm-regen seed .c" step, which was the REAL
+# Phase-3 break (run 26604873545): it ran `hexa run <orchestrator>` which tried
+# to BUILD build/hexat -> `clang self/runtime.c` -> with runtime.c removed,
+# `no such file: ./self/runtime.c` -> regen failed -> its fallback
+# `git checkout -- self/runtime*.c self/native/*.c` restored NOTHING (the files
+# were committed-removed) -> Stage-0 cascade-failed on all 3 platforms.
 #
-set -euo pipefail
+# The robust strategy is the prebuilt "frozen dough" (rustc/gcc stage0 pattern),
+# NOT seed regeneration:
+#
+#   SEEDS PRESENT (today, additive no-op): compile build/runtime.a from the
+#     in-tree self/runtime.c (+ its #include seeds) with the SAME CFLAGS.
+#
+#   SEEDS REMOVED (future Phase-3+): self/runtime.c is gone, so download the
+#     prior edge tarball's bundled build/runtime.a (release.yml Package ships
+#     it) and use THAT. No `git checkout` of a removed file; no warm-regen.
+#
+# On success it leaves build/runtime.a in place and prints the resolved path.
+# Callers then export HEXA_PREBUILT_RUNTIME=build/runtime.a so stage_build_hexa
+# links it. FALLBACK: when seeds ARE present we always rebuild from source, so
+# the prebuilt and source paths are byte-equivalent and either is safe.
+#
+# Env: CC (clang|gcc) · LIBS · CFLAGS_COMMON · EDGE_ASSET (per-platform tarball
+# name, only needed in the seeds-removed branch) · GH_TOKEN (gh download).
+set -uo pipefail
 
-TARGET="${1:-${TARGET:-}}"
-CC="${CC:-cc}"
-CFLAGS="${CFLAGS:--O2}"
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$ROOT"
-
-# Pinned pre-graduation seed commit (parent of the graduation commit
-# 7906951c0 "graduate: remove committed transpiler+runtime C seeds (.c=0)").
-# This is the only authoritative source for self/runtime.c (no SSOT emitter).
-FROZEN_SEED_REF="7906951c0^"
-
-# The exact .c set self/runtime.c needs to compile: runtime.c itself,
-# every runtime/*.c fragment it #includes, and native/hexa_cc.c (also
-# #included by runtime.c). Derived from `git show $REF:self/runtime.c`.
-FROZEN_RUNTIME_C="
-self/runtime.c
-self/native/hexa_cc.c
-self/runtime/io.c
-self/runtime/mem.c
-self/runtime/str.c
-self/runtime/map.c
-self/runtime/vec.c
-self/runtime/math.c
-self/runtime/fs.c
-self/runtime/proc.c
-self/runtime/net.c
-self/runtime/time.c
-self/runtime/json.c
-self/runtime/atlas.c
-self/runtime/sys.c
-self/runtime/rand.c
-self/runtime/hash.c
-self/runtime/sort.c
-self/runtime/utf8.c
-self/runtime/regex.c
-self/runtime/bigint.c
-self/runtime/complex.c
-self/runtime/thread.c
-self/runtime/signal.c
-"
-
-build_from_source() {
-  echo "[resolve_runtime_a] compiling build/runtime.a from self/runtime.c"
-  "$CC" $CFLAGS -I self -c self/runtime.c -o build/runtime.o
-  ar rcs build/runtime.a build/runtime.o
-  echo "[resolve_runtime_a] built build/runtime.a from source"
-}
-
-restore_frozen_seed() {
-  echo "[resolve_runtime_a] restoring pinned pre-graduation .c seeds from ${FROZEN_SEED_REF}"
-  # shellcheck disable=SC2086
-  git checkout "$FROZEN_SEED_REF" -- $FROZEN_RUNTIME_C
-}
-
+CC="${CC:?CC must be set}"
+CFLAGS="${CFLAGS_COMMON:--O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs}"
+ROOT="$PWD"
+RA="$ROOT/build/runtime.a"
 mkdir -p build
 
-# --- step 1: seeds-present path (byte-unchanged) ---
 if [ -f self/runtime.c ]; then
-  echo "[resolve_runtime_a] self/runtime.c present -> compiling from source"
-  build_from_source
-  exit 0
+    echo "stage_resolve_runtime_a: seeds present — building runtime.a from source"
+    $CC $CFLAGS -I self -c self/runtime.c -o build/runtime.o
+    ar rcs "$RA" build/runtime.o
+    ls -la "$RA"
+    echo "$RA"
+    exit 0
 fi
 
-if [ -z "$TARGET" ]; then
-  echo "[resolve_runtime_a] ERROR: TARGET not set" >&2
-  exit 1
+# Seeds removed: pull the prior edge tarball's prebuilt runtime.a.
+echo "stage_resolve_runtime_a: self/runtime.c ABSENT — fetching prebuilt runtime.a from prior edge"
+ASSET="${EDGE_ASSET:?EDGE_ASSET must be set when seeds are removed}"
+EDGE_DIR="/tmp/edge_ra"
+mkdir -p "$EDGE_DIR"
+if gh release download edge --repo "${GITHUB_REPOSITORY:-dancinlab/hexa-lang}" \
+      --pattern "$ASSET" --dir "$EDGE_DIR" --clobber 2>/tmp/ra_dl.err \
+   && tar xzf "$EDGE_DIR/$ASSET" -C "$EDGE_DIR" 2>/dev/null; then
+    PRIOR_RA="$(find "$EDGE_DIR" -type f -name runtime.a | head -1)"
+    if [ -n "$PRIOR_RA" ]; then
+        cp "$PRIOR_RA" "$RA"
+        ls -la "$RA"
+        echo "$RA"
+        exit 0
+    fi
+    echo "stage_resolve_runtime_a: prior edge tarball has no build/runtime.a" >&2
+else
+    echo "stage_resolve_runtime_a: edge download failed ($(head -1 /tmp/ra_dl.err 2>/dev/null))" >&2
 fi
-
-# --- step 2: graduated tree -> try edge release first ---
-TARGET_TARBALL="hexa-${TARGET}.tar.gz"
-echo "[resolve_runtime_a] self/runtime.c absent -> trying edge release tarball"
-if gh release download edge --pattern "$TARGET_TARBALL" --dir build --clobber 2>/dev/null \
-   && tar -xzf "build/${TARGET_TARBALL}" -C build 2>/dev/null \
-   && [ -f build/runtime.a ]; then
-  echo "[resolve_runtime_a] extracted build/runtime.a from edge tarball"
-  exit 0
-fi
-
-# --- step 3: edge miss -> frozen-seed fallback (restore .c, compile from source) ---
-echo "[resolve_runtime_a] edge tarball missing/unusable for ${TARGET} -> frozen-seed fallback"
-restore_frozen_seed
-build_from_source
-exit 0
+echo "stage_resolve_runtime_a: NO runtime.a available (no source, no prior asset)" >&2
+exit 1
