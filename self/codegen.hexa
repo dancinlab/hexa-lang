@@ -10088,7 +10088,7 @@ fn _is_accum_int_safe(node, acc_name) {
         return false
     }
     if k == "Index" { return _accum_rhs_is_intarr_read(node) }
-    if k == "BinaryOp" {
+    if k == "BinOp" {
         let op = node.op
         if op == "+" || op == "-" || op == "*" || op == "&" || op == "|" || op == "^" || op == "<<" || op == ">>" {
             return _is_accum_int_safe(node.left, acc_name) && _is_accum_int_safe(node.right, acc_name)
