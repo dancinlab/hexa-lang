@@ -2,6 +2,34 @@
 
 Append-only history sister of `UNSHADOW.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-31 — 🔴 native-arr sub-task: known-int accumulator → raw int64 local 강등 — CLOSED-NEGATIVE
+
+§knownint-accum(PR #2202)이 누산기 ABI-벽을 inline `.i` 슬라이스로 닫은 뒤, 남은 f_inline→d_ideal
+Δ 를 raw C `int64_t` local 강등(box surface 완전 제거)으로 회수하려는 sub-task.
+
+- [x] **PRE-REGISTERED FALSIFIER**: raw int64 local 강등이 f_inline→d_ideal Δ 를 회수해 register-pack
+  천장 도달(현 inline `.i` 박스가 register-alloc 을 막는다는 가설).
+- [x] **실측** (mini macOS arm64 · Apple clang 21.0.0 · -O2 · faithful A/B proxy · runtime.o ABI 벽
+  = out-of-line hexart.c):
+  - **THE gate**: f_inline vs g_raw hot-loop 정규화 asm **byte-IDENTICAL** (md5 `436ccab8`·diff exit 0).
+  - hot-loop `bl _hexa_add`: e=1 · f=0 · g=0. 추가 Δ(f_inline→g_raw) = **0**.
+  - wall best-of-9 n=1e9: e_boxed **0.67s**(ABI 벽·fold 불가) · f_inline **0.00s** · g_raw **0.00s**
+    (f==g = 동일 최적화 tier; e_boxed 만 opaque hexa_add 로 fold 불가).
+  - g5 정확성 e/f/g 3-arm match(n=5/1e6 · 3×10⁹ overflow).
+- [x] **FINDING (🔴 FALSIFIED)**: clang -O2 SROA/mem2reg 가 single-field `{.tag,.i}` box 를 이미
+  register 로 scalarize(.tag dead · .i promote) → inline `.i` 슬라이스 hot loop 가 이미 raw int64
+  register add(손작성 raw local 과 byte-identical). raw 강등 = 추가 Δ 0. box surface 가 -O2 를
+  넘어 생존 안 함 → 제거할 게 없음. f_inline IS the ceiling.
+- [x] **RULED-OUT AXIS**: single-int accumulator 의 source-level box-stripping = -O2 하 dead lever
+  (SROA 가 box-eliminator). 유일 잔여 레버 = e_boxed ABI-벽 tax(`bl _hexa_add`, 0.67s) =
+  SROA 가 못 닫는 multi-field/escaping/aliased HexaVal(runtime.o 경계 통과). §knownint-accum 이
+  남긴 "d_ideal 잔여 갭" 은 inline-.i arm 의 생존 box 가 아니라 e_boxed out-of-line ABI arm 이었음.
+- [x] **codegen 무변경**: 확인된 no-op 을 GATED 로 심으면 dead complexity → 정직 deliverable =
+  ruled-out axis. byte-diff = asm-IDENTICAL(no emit change). repo 안 `.c` 0개(proxy=/tmp/unshadow_rl).
+- [x] verdict=`.verdicts/unshadow-knownint-rawlocal/{byte-diff,finding}.txt` ·
+  bench=`UNSHADOW.bench.md §knownint-rawlocal` · 재현=`tool/unshadow_knownint_rawlocal_bench.hexa`.
+  milestone `[x]` flip(terminal closed-negative · paper_negative_ok).
+
 ## 2026-05-30 — 🔵 검증 memoization (F3 atlas-as-perf-asset / 거울방) WIN (최소 슬라이스)
 
 - [x] **codegen**: `self/codegen.hexa` Call(`lambda_eliashberg`) 처리에 GATED memo 분기 추가.
