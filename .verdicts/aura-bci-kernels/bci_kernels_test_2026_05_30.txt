@@ -1,0 +1,43 @@
+========================================================================
+  stdlib/aura/bci_kernels — gaussian_kernel_1d · separable_blur ·
+                            nearest_template · r2   (handoff f125d45c)
+========================================================================
+
+  Falsifiers (10):
+  [PASS] F1 gaussian_kernel_1d(5,1.0): every row sums to 1
+         · max |rowsum-1| = 2.22045e-16
+  [PASS] F2 gaussian_kernel_1d(3,1.0) center K[1,1] ≈ 0.45186276 (numpy)
+         · K[1,1] = 0.451863
+  [PASS] F3 gaussian_kernel_1d(4,1.5) row-stochastic + edge-asymmetric (design)
+         · max|rowsum-1|=0.0  K[0,1]=0.341148 > K[1,0]=0.265797
+  [PASS] F4 separable_blur(const 7.0, K) == const 7.0 (partition of unity)
+         · max |Y-7| = 1.77636e-15
+  [PASS] F5 separable_blur(center impulse): center stays max, all ≥ 0
+         · center = 0.162103
+  [PASS] F6 nearest_template exact match → index 3
+         · idx = 3
+  [PASS] F7 nearest_template nearest (y≈[1.1,1.1,1.1]) → index 1
+         · idx = 1
+  [PASS] F8 r2(y==ref) == 1.0 (perfect)
+         · r2 = 1.0
+  [PASS] F9 r2 known case == 0.8 (numpy)
+         · r2 = 0.8
+  [PASS] F10 r2 mean-predictor == 0.0
+         · r2 = 0.0
+
+  FALSIFIERS (10):
+    ✗ F1 gaussian_kernel_1d row-sum ≠ 1 → DEMOTE row-normalization
+    ✗ F2 gaussian_kernel_1d center ≠ numpy 0.45186276 → DEMOTE exp weighting
+    ✗ F3 gaussian_kernel_1d not row-stochastic OR not edge-asymmetric → DEMOTE construction
+    ✗ F4 separable_blur(const) ≠ const → DEMOTE partition-of-unity / K·X·K^T
+    ✗ F5 separable_blur impulse: center not max or negative → DEMOTE smoothing
+    ✗ F6 nearest_template exact mismatch → DEMOTE argmin L2
+    ✗ F7 nearest_template nearest mismatch → DEMOTE argmin L2
+    ✗ F8 r2 perfect ≠ 1.0 → DEMOTE SS_res/SS_tot
+    ✗ F9 r2 known ≠ 0.8 → DEMOTE coefficient of determination
+    ✗ F10 r2 mean-predictor ≠ 0.0 → DEMOTE SS_tot baseline
+========================================================================
+  10/10 checks passed
+  AURA BCI kernels (gaussian_kernel_1d + separable_blur + nearest_template + r2): PASS
+__HEXA_STDLIB_AURA_BCI_KERNELS__ PASS
+EXIT=0

@@ -1,0 +1,303 @@
+#!hexa strict
+// ============================================================================
+// stdlib/aura/bci_kernels_test.hexa
+//   Falsifier self-test for the AURA BCI porting primitives (handoff f125d45c).
+//
+//   gaussian_kernel_1d · separable_blur · nearest_template · r2
+//
+//   Each falsifier checks a hand-computed numpy-reference value. The numpy
+//   equivalents:
+//     gaussian_kernel_1d(n,σ): K=np.exp(-(i-j)**2/(2σ**2)); K/=K.sum(1,keepdims=True)
+//     separable_blur(x,K):     K @ x.reshape(g,g) @ K.T
+//     nearest_template(y,T):   int(np.argmin(((T-y)**2).sum(1)))
+//     r2(y,r):                 1 - ((y-r)**2).sum() / ((r-r.mean())**2).sum()
+//
+// Run:
+//     hexa run stdlib/aura/bci_kernels_test.hexa
+// ============================================================================
+
+import "stdlib/aura/bci_kernels.hexa"
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn abs_f(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+fn _approx(a: float, b: float, tol: float) -> bool {
+    return abs_f(a - b) < tol
+}
+
+// ── F1: gaussian_kernel_1d rows each sum to 1 (normalization invariant) ─────
+fn check_gk_rowsum() {
+    let n = 5
+    let k = gaussian_kernel_1d(n, 1.0)
+    let mut worst = 0.0
+    let mut i = 0
+    while i < n {
+        let mut rs = 0.0
+        let mut j = 0
+        while j < n {
+            rs = rs + farr_get(k, i * n + j)
+            j = j + 1
+        }
+        let e = abs_f(rs - 1.0)
+        if e > worst { worst = e }
+        i = i + 1
+    }
+    let _ = farr_free(k)
+    _check(worst < 1.0e-12,
+        "F1 gaussian_kernel_1d(5,1.0): every row sums to 1",
+        "max |rowsum-1| = " + str(worst))
+}
+
+// ── F2: gaussian_kernel_1d center value vs numpy ────────────────────────────
+//   For n=3,σ=1: row1 (center) unnormalized = [e^-0.5, 1, e^-0.5]
+//   = [0.60653066, 1, 0.60653066], sum=2.21306132,
+//   normalized center K[1,1] = 1/2.21306132 = 0.45186276.
+fn check_gk_center() {
+    let k = gaussian_kernel_1d(3, 1.0)
+    let center = farr_get(k, 1 * 3 + 1)
+    let _ = farr_free(k)
+    _check(_approx(center, 0.45186276187760605, 1.0e-9),
+        "F2 gaussian_kernel_1d(3,1.0) center K[1,1] ≈ 0.45186276 (numpy)",
+        "K[1,1] = " + str(center))
+}
+
+// ── F3: gaussian_kernel_1d is row-stochastic + edge-asymmetric (NOT symmetric) ─
+//   The UNNORMALIZED weight w(i,j)=exp(-(i-j)²/2σ²) is symmetric, but each row
+//   is divided by its OWN sum, and edge rows sum to less than center rows, so
+//   the row-normalized K is intentionally ASYMMETRIC at the boundary
+//   (K[0,1] ≠ K[1,0]). This is the correct row-stochastic smoothing operator
+//   (every output is a proper weighted average of inputs, weights sum to 1).
+//   numpy: K = np.exp(...); K /= K.sum(1,keepdims=True)  →  K != K.T  (boundary).
+//   We assert (a) row-stochastic (Σ_j K[i,j]=1, already F1's invariant) AND
+//   (b) the boundary asymmetry is genuinely present (design, not a bug).
+fn check_gk_rowstochastic_asym() {
+    let n = 4
+    let k = gaussian_kernel_1d(n, 1.5)
+    // (a) every row sums to 1 (row-stochastic)
+    let mut worst_rs = 0.0
+    let mut i = 0
+    while i < n {
+        let mut rs = 0.0
+        let mut j = 0
+        while j < n { rs = rs + farr_get(k, i * n + j); j = j + 1 }
+        let e = abs_f(rs - 1.0)
+        if e > worst_rs { worst_rs = e }
+        i = i + 1
+    }
+    // (b) boundary asymmetry present: K[0,1] strictly > K[1,0]
+    //     (row 0 sum < row 1 sum ⇒ row 0's off-diagonal normalizes larger)
+    let k01 = farr_get(k, 0 * n + 1)
+    let k10 = farr_get(k, 1 * n + 0)
+    let _ = farr_free(k)
+    let row_stochastic = worst_rs < 1.0e-12
+    let edge_asym = k01 > k10 + 1.0e-9
+    _check(row_stochastic && edge_asym,
+        "F3 gaussian_kernel_1d(4,1.5) row-stochastic + edge-asymmetric (design)",
+        "max|rowsum-1|=" + str(worst_rs) + "  K[0,1]=" + str(k01) + " > K[1,0]=" + str(k10))
+}
+
+// ── F4: separable_blur of a constant image preserves the constant ───────────
+//   Row-normalized K ⇒ K·1 = 1 ⇒ K·(c·J)·K^T = c·J. Partition-of-unity.
+fn check_blur_constant() {
+    let g = 3
+    let k = gaussian_kernel_1d(g, 1.0)
+    let x = farr_zeros(g * g)
+    let mut i = 0
+    while i < g * g {
+        let _ = farr_set(x, i, 7.0)
+        i = i + 1
+    }
+    let y = separable_blur(x, k, g)
+    let mut worst = 0.0
+    let mut j = 0
+    while j < g * g {
+        let e = abs_f(farr_get(y, j) - 7.0)
+        if e > worst { worst = e }
+        j = j + 1
+    }
+    let _ = farr_free(k)
+    let _ = farr_free(x)
+    let _ = farr_free(y)
+    _check(worst < 1.0e-12,
+        "F4 separable_blur(const 7.0, K) == const 7.0 (partition of unity)",
+        "max |Y-7| = " + str(worst))
+}
+
+// ── F5: separable_blur sum-preservation on row-normalized kernel ────────────
+//   For row-normalized K, total mass need NOT be preserved (only per-row),
+//   but the blur of a single non-zero pixel must spread to a value bounded by
+//   the original and stay non-negative. Check Y is non-negative + finite, and
+//   the center-pixel impulse stays the largest output (smoothing monotone).
+fn check_blur_impulse() {
+    let g = 5
+    let k = gaussian_kernel_1d(g, 1.0)
+    let x = farr_zeros(g * g)
+    let _ = farr_set(x, 2 * g + 2, 1.0)   // center impulse
+    let y = separable_blur(x, k, g)
+    let center = farr_get(y, 2 * g + 2)
+    let mut all_le = true
+    let mut all_nonneg = true
+    let mut j = 0
+    while j < g * g {
+        let v = farr_get(y, j)
+        if v < 0.0 { all_nonneg = false }
+        if v > center + 1.0e-12 { all_le = false }
+        j = j + 1
+    }
+    let _ = farr_free(k)
+    let _ = farr_free(x)
+    let _ = farr_free(y)
+    _check(all_le && all_nonneg && center > 0.0,
+        "F5 separable_blur(center impulse): center stays max, all ≥ 0",
+        "center = " + str(center))
+}
+
+// ── F6: nearest_template picks the exact-match row ──────────────────────────
+fn check_nt_exact() {
+    let d = 3
+    let n_t = 4
+    let t = farr_zeros(n_t * d)
+    // template rows: 0:[0,0,0] 1:[1,1,1] 2:[5,5,5] 3:[2,3,4]
+    let _ = farr_set(t, 1 * d + 0, 1.0); let _ = farr_set(t, 1 * d + 1, 1.0); let _ = farr_set(t, 1 * d + 2, 1.0)
+    let _ = farr_set(t, 2 * d + 0, 5.0); let _ = farr_set(t, 2 * d + 1, 5.0); let _ = farr_set(t, 2 * d + 2, 5.0)
+    let _ = farr_set(t, 3 * d + 0, 2.0); let _ = farr_set(t, 3 * d + 1, 3.0); let _ = farr_set(t, 3 * d + 2, 4.0)
+    let y = farr_zeros(d)
+    let _ = farr_set(y, 0, 2.0); let _ = farr_set(y, 1, 3.0); let _ = farr_set(y, 2, 4.0)
+    let idx = nearest_template(y, t, n_t, d)
+    let _ = farr_free(t)
+    let _ = farr_free(y)
+    _check(idx == 3,
+        "F6 nearest_template exact match → index 3",
+        "idx = " + str(idx))
+}
+
+// ── F7: nearest_template picks the nearest (not exact) row ───────────────────
+//   y=[1.1,1.1,1.1]: d² to row1[1,1,1]=0.03, row3[2,3,4]≈... bigger → idx 1.
+fn check_nt_nearest() {
+    let d = 3
+    let n_t = 4
+    let t = farr_zeros(n_t * d)
+    let _ = farr_set(t, 1 * d + 0, 1.0); let _ = farr_set(t, 1 * d + 1, 1.0); let _ = farr_set(t, 1 * d + 2, 1.0)
+    let _ = farr_set(t, 2 * d + 0, 5.0); let _ = farr_set(t, 2 * d + 1, 5.0); let _ = farr_set(t, 2 * d + 2, 5.0)
+    let _ = farr_set(t, 3 * d + 0, 2.0); let _ = farr_set(t, 3 * d + 1, 3.0); let _ = farr_set(t, 3 * d + 2, 4.0)
+    let y = farr_zeros(d)
+    let _ = farr_set(y, 0, 1.1); let _ = farr_set(y, 1, 1.1); let _ = farr_set(y, 2, 1.1)
+    let idx = nearest_template(y, t, n_t, d)
+    let _ = farr_free(t)
+    let _ = farr_free(y)
+    _check(idx == 1,
+        "F7 nearest_template nearest (y≈[1.1,1.1,1.1]) → index 1",
+        "idx = " + str(idx))
+}
+
+// ── F8: r2 perfect prediction == 1.0 ────────────────────────────────────────
+fn check_r2_perfect() {
+    let n = 4
+    let yv = farr_zeros(n)
+    let rv = farr_zeros(n)
+    let mut i = 0
+    while i < n {
+        let _ = farr_set(yv, i, (i + 1) * 1.0)
+        let _ = farr_set(rv, i, (i + 1) * 1.0)
+        i = i + 1
+    }
+    let v = r2(yv, rv, n)
+    let _ = farr_free(yv)
+    let _ = farr_free(rv)
+    _check(_approx(v, 1.0, 1.0e-12),
+        "F8 r2(y==ref) == 1.0 (perfect)",
+        "r2 = " + str(v))
+}
+
+// ── F9: r2 known value vs numpy ─────────────────────────────────────────────
+//   ref=[1,2,3,4] mean=2.5  SS_tot = 1.5²+0.5²+0.5²+1.5² = 5.0
+//   y  =[1,2,3,5]          SS_res = 0+0+0+1² = 1.0
+//   R² = 1 - 1/5 = 0.8
+fn check_r2_known() {
+    let n = 4
+    let yv = farr_zeros(n)
+    let rv = farr_zeros(n)
+    let _ = farr_set(rv, 0, 1.0); let _ = farr_set(rv, 1, 2.0); let _ = farr_set(rv, 2, 3.0); let _ = farr_set(rv, 3, 4.0)
+    let _ = farr_set(yv, 0, 1.0); let _ = farr_set(yv, 1, 2.0); let _ = farr_set(yv, 2, 3.0); let _ = farr_set(yv, 3, 5.0)
+    let v = r2(yv, rv, n)
+    let _ = farr_free(yv)
+    let _ = farr_free(rv)
+    _check(_approx(v, 0.8, 1.0e-12),
+        "F9 r2 known case == 0.8 (numpy)",
+        "r2 = " + str(v))
+}
+
+// ── F10: r2 mean-predictor == 0.0 (predict the mean everywhere) ─────────────
+//   y=const(mean(ref)) ⇒ SS_res == SS_tot ⇒ R² = 0.
+fn check_r2_meanpred() {
+    let n = 4
+    let yv = farr_zeros(n)
+    let rv = farr_zeros(n)
+    let _ = farr_set(rv, 0, 1.0); let _ = farr_set(rv, 1, 2.0); let _ = farr_set(rv, 2, 3.0); let _ = farr_set(rv, 3, 4.0)
+    let mut i = 0
+    while i < n { let _ = farr_set(yv, i, 2.5); i = i + 1 }
+    let v = r2(yv, rv, n)
+    let _ = farr_free(yv)
+    let _ = farr_free(rv)
+    _check(_approx(v, 0.0, 1.0e-12),
+        "F10 r2 mean-predictor == 0.0",
+        "r2 = " + str(v))
+}
+
+let FALSIFIERS = [
+    "F1 gaussian_kernel_1d row-sum ≠ 1 → DEMOTE row-normalization",
+    "F2 gaussian_kernel_1d center ≠ numpy 0.45186276 → DEMOTE exp weighting",
+    "F3 gaussian_kernel_1d not row-stochastic OR not edge-asymmetric → DEMOTE construction",
+    "F4 separable_blur(const) ≠ const → DEMOTE partition-of-unity / K·X·K^T",
+    "F5 separable_blur impulse: center not max or negative → DEMOTE smoothing",
+    "F6 nearest_template exact mismatch → DEMOTE argmin L2",
+    "F7 nearest_template nearest mismatch → DEMOTE argmin L2",
+    "F8 r2 perfect ≠ 1.0 → DEMOTE SS_res/SS_tot",
+    "F9 r2 known ≠ 0.8 → DEMOTE coefficient of determination",
+    "F10 r2 mean-predictor ≠ 0.0 → DEMOTE SS_tot baseline",
+]
+
+fn main() {
+    println("========================================================================")
+    println("  stdlib/aura/bci_kernels — gaussian_kernel_1d · separable_blur ·")
+    println("                            nearest_template · r2   (handoff f125d45c)")
+    println("========================================================================")
+    println("")
+    println("  Falsifiers (10):")
+    check_gk_rowsum()
+    check_gk_center()
+    check_gk_rowstochastic_asym()
+    check_blur_constant()
+    check_blur_impulse()
+    check_nt_exact()
+    check_nt_nearest()
+    check_r2_perfect()
+    check_r2_known()
+    check_r2_meanpred()
+
+    println("")
+    println("  FALSIFIERS (" + str(FALSIFIERS.len()) + "):")
+    for f in FALSIFIERS { println("    ✗ " + f) }
+
+    println("========================================================================")
+    let pass_n = RUN - FAIL
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("  AURA BCI kernels self-test FAILED.")
+        println("__HEXA_STDLIB_AURA_BCI_KERNELS__ FAIL")
+        exit(1)
+    }
+    println("  AURA BCI kernels (gaussian_kernel_1d + separable_blur + nearest_template + r2): PASS")
+    println("__HEXA_STDLIB_AURA_BCI_KERNELS__ PASS")
+    exit(0)
+}

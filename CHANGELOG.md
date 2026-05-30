@@ -6,6 +6,10 @@ For the full audit trail, see `git log`.
 
 ---
 
+## 2026-05-30
+
+- **`stdlib/aura/bci_kernels.hexa` (+ `_test`) — AURA BCI .hexa-native porting primitives (handoff f125d45c) — 10/10 falsifiers PASS** — anima AURA-* 앱의 `// TODO(f125d45c)` 스텁이 참조하는 4개 numpy-등가 커널을 신설. `gaussian_kernel_1d(n,σ)` → row-stochastic n×n 가우시안 행렬 (K[i,j]=exp(-(i-j)²/2σ²), 행별 정규화 Σ_j K[i,j]=1; **edge-asymmetric — 경계행 합이 작아 K[0,1]≠K[1,0], 표준 weighted-average smoothing operator, numpy `K/=K.sum(1,keepdims=True)` 정합**) · `separable_blur(x,k,g)` → 분리형 2D blur Y=K·reshape(x,[g,g])·K^T · `nearest_template(y,templates,n_t,d)` → argmin_i ‖y−templates[i]‖² (정수 인덱스·동률 최저) · `r2(y,ref,n)` → 결정계수 1−SS_res/SS_tot. **기존 C builtin 충분 — 신규 builtin 불필요**: `stats/correlation.hexa` + `consciousness/phi_spatial.hexa` 선례대로 farr handle API(`farr_zeros`/`get`/`set`/`free`) + `self/runtime/math_pure.exp_pure` 위 순수-hexa 포팅. `hexa run stdlib/aura/bci_kernels_test.hexa` → **10/10 PASS · `__HEXA_STDLIB_AURA_BCI_KERNELS__ PASS`** (verdict: `.verdicts/aura-bci-kernels/`). 손계산 numpy 레퍼런스 일치 (center K[1,1]=0.45186276 · r2 known=0.8 exact · 행합=1 within 2.2e-16 · row-stochastic+edge-asym · partition-of-unity · argmin exact/nearest · r2 perfect=1/mean-pred=0). LESSON: 첫 작성 F3(대칭성 가정)이 FAIL→실 버그 아닌 **잘못된 invariant**(row-normalized 가우시안은 경계 비대칭이 정상)였고 self-test가 이를 잡아냄 → F3을 올바른 invariant(row-stochastic + edge-asymmetric)로 교정.
+
 ## 2026-05-28
 
 - **`tool/atlas_cli.hexa` + `tool/verify_cli.hexa` — `_compute_value_of` 가 full-precision float64 캡처 (INBOX #1910 fix · #1901 의도 realize)** — verify_cli 의 COMPUTE 출력에 `[raw=<full-float64>]` suffix 추가, atlas `_compute_value_of` 가 그 raw 값을 파싱(이전: display-rounded 3소수 파싱). `_is_rounding_of(claimed, full_engine)` 가 이제 rounded-literal claim(`227.501134`)도 fold 가능 → #1901 의 rounding-accept 의도가 실제 작동. 회귀 무손상: full-precision direct-🟢 · genuine-wrong-🔴 거부. INBOX #1910 ✅ RESOLVED.
