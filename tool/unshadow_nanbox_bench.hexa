@@ -1,0 +1,122 @@
+// tool/unshadow_nanbox_bench.hexa
+//   UNSHADOW milestone "🔵 NaN-boxing HexaVal 표현" (F1 데이터-표현 주권).
+//   DESIGN + feasibility + 최소 A/B 측정 — NOT a global flip (multi-session
+//   scale, see domains/UNSHADOW.nanbox.md §3). This driver emits a faithful
+//   A/B proxy C program into a temp --work dir (outside the repo · same spec
+//   as §c-class / §native-arr: B9 self-host regen wall blocks a real global
+//   re-representation, so we model the two HexaVal representations byte-
+//   faithfully and measure the SAME workload on each), compiles it with cc -O2,
+//   and runs it.
+//
+// REPRESENTATIONS UNDER TEST:
+//   A (current)  : HexaVal16 = struct { HexaTag tag; union{int64_t i; double f;
+//                  void* p;} } — sizeof 16B (self/runtime.h:79-92).
+//   B (NaN-box)  : HexaVal8 = uint64_t. int/bool/ptr packed in a quiet-NaN
+//                  payload (box marker = sign|exp|qbit = 0xFFF8...); a genuine
+//                  positive qNaN (0x7FF8...) does NOT collide. sizeof 8B.
+//
+// THREE AXES (mini Apple M4 arm64, best-of-7 stabilized — NaN-box loses on
+// almost every axis, density wins only memory-bound random access):
+//   1. sequential traverse+sum  — NaN-box ~2.5-2.8x SLOWER (mask-extract defeats
+//      the auto-vectorizer; the plain tag==INT + direct load SIMD-vectorizes).
+//   2. value-pass register-fit  — NaN-box ~30-36% SLOWER (best-of-7). The 8B=1
+//      register theory loses to the per-call box/unbox mask+shift+OR extraction
+//      cost. The milestone register-fit claim is FALSIFIED by this proxy. (A
+//      single run can read 37% faster — pure measurement noise; repeat-measure.)
+//   3. random / cache-pressure  — NaN-box ~7-11% faster (2x density halves the
+//      working set; the ONLY winning axis, and only when prefetch can't hide it).
+//   => per-program GATED default OFF (LLVM-can't: C has a fixed ABI and cannot
+//      pick a per-program value representation) — but the measured advantage is
+//      NARROW (memory-bound random only); most workloads regress.
+//
+// NaN-COLLISION (correctness constraint, UNSHADOW.nanbox.md §5): genuine f64
+//   NaN must not be mistaken for a box. Positive canonical qNaN is safe; every
+//   float store must canonicalize negative / payload NaNs. Programs that observe
+//   raw f64 bits (bit-cast · serialize · hash-of-double) are NOT safely covered
+//   = the deterministic limit of this representation.
+//
+// Argv:  --work <dir>  (temp build dir, default mktemp)  ·  --runs <N>
+
+fn parse_int_safe(s) {
+    let t = s.trim()
+    if len(t) == 0 { return 1 }
+    return to_int(t)
+}
+
+fn proxy_c_source() {
+    // The faithful A/B proxy. Emitted to --work as a .c (NOT written into the
+    // repo — the project.tape root forbids hand-authored .c; a temp work dir is
+    // the established §native-arr / §c-class measurement pattern).
+    let s = ""
+    let s = s + "#include <stdint.h>\n#include <stdio.h>\n#include <stdlib.h>\n#include <time.h>\n"
+    let s = s + "typedef enum { TAG_INT=0,TAG_FLOAT,TAG_BOOL } HexaTag;\n"
+    let s = s + "typedef struct { HexaTag tag; union { int64_t i; double f; void* p; } u; } HexaVal16;\n"
+    let s = s + "typedef uint64_t HexaVal8;\n"
+    let s = s + "#define QNAN 0xFFF8000000000000ULL\n"
+    let s = s + "#define box_int(n) (QNAN|((uint64_t)(n)&0xFFFFFFFFFFFFULL))\n"
+    let s = s + "#define unbox_int(v) ((int64_t)(((v)<<16)>>16))\n"
+    let s = s + "#define is_boxed(v) (((v)&QNAN)==QNAN)\n"
+    let s = s + "static double now(void){struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return t.tv_sec+t.tv_nsec*1e-9;}\n"
+    let s = s + "__attribute__((noinline)) static HexaVal16 step16(HexaVal16 v){v.u.i=v.u.i*1664525+1013904223;return v;}\n"
+    let s = s + "__attribute__((noinline)) static HexaVal8 step8(HexaVal8 v){return box_int(unbox_int(v)*1664525+1013904223);}\n"
+    let s = s + "int main(void){\n"
+    let s = s + "  const int N=8000000,REP=40;\n"
+    let s = s + "  HexaVal16* a16=malloc(sizeof(HexaVal16)*N); HexaVal8* a8=malloc(sizeof(HexaVal8)*N);\n"
+    let s = s + "  for(int i=0;i<N;i++){a16[i].tag=TAG_INT;a16[i].u.i=i;a8[i]=box_int(i);}\n"
+    let s = s + "  double t0=now(); volatile int64_t s16=0;\n"
+    let s = s + "  for(int r=0;r<REP;r++)for(int i=0;i<N;i++)if(a16[i].tag==TAG_INT)s16+=a16[i].u.i;\n"
+    let s = s + "  double tA=now()-t0;\n"
+    let s = s + "  t0=now(); volatile int64_t s8=0;\n"
+    let s = s + "  for(int r=0;r<REP;r++)for(int i=0;i<N;i++)if(is_boxed(a8[i]))s8+=unbox_int(a8[i]);\n"
+    let s = s + "  double tB=now()-t0;\n"
+    let s = s + "  printf(\"sizeof 16B=%zu 8B=%zu (%.2fx denser)\\n\",sizeof(HexaVal16),sizeof(HexaVal8),(double)sizeof(HexaVal16)/sizeof(HexaVal8));\n"
+    let s = s + "  printf(\"[seq] A=%.3fs B=%.3fs B/A=%.3f match=%s\\n\",tA,tB,tB/tA,s16==s8?\"YES\":\"NO\");\n"
+    let s = s + "  int* perm=malloc(sizeof(int)*N); for(int i=0;i<N;i++)perm[i]=i;\n"
+    let s = s + "  for(int i=N-1;i>0;i--){int j=(int)((uint64_t)i*2862933555777941757ull>>33)%(i+1);int t=perm[i];perm[i]=perm[j];perm[j]=t;}\n"
+    let s = s + "  for(int i=0;i<N;i++){a16[i].u.i=(uint32_t)(i*2654435761u)%N;a8[i]=box_int((uint32_t)(i*2654435761u)%N);}\n"
+    let s = s + "  t0=now(); volatile int64_t r16=0;\n"
+    let s = s + "  for(int r=0;r<5;r++){int idx=0;for(int i=0;i<N;i++){idx=(int)a16[perm[idx]].u.i;r16+=idx;}}\n"
+    let s = s + "  double tC=now()-t0;\n"
+    let s = s + "  t0=now(); volatile int64_t r8=0;\n"
+    let s = s + "  for(int r=0;r<5;r++){int idx=0;for(int i=0;i<N;i++){idx=(int)unbox_int(a8[perm[idx]]);r8+=idx;}}\n"
+    let s = s + "  double tD=now()-t0;\n"
+    let s = s + "  printf(\"[random] A=%.3fs B=%.3fs B/A=%.3f match=%s\\n\",tC,tD,tD/tC,r16==r8?\"YES\":\"NO\");\n"
+    let s = s + "  t0=now(); HexaVal16 v16; v16.tag=TAG_INT; v16.u.i=1;\n"
+    let s = s + "  for(int r=0;r<REP;r++)for(int i=0;i<N;i++)v16=step16(v16);\n"
+    let s = s + "  double tE=now()-t0; volatile int64_t e16=v16.u.i;\n"
+    let s = s + "  t0=now(); HexaVal8 v8=box_int(1);\n"
+    let s = s + "  for(int r=0;r<REP;r++)for(int i=0;i<N;i++)v8=step8(v8);\n"
+    let s = s + "  double tF=now()-t0; volatile int64_t e8=unbox_int(v8); (void)e16;(void)e8;\n"
+    let s = s + "  printf(\"[regfit] A=%.3fs B=%.3fs B/A=%.3f\\n\",tE,tF,tF/tE);\n"
+    let s = s + "  double rn=0.0/0.0; uint64_t bits; __builtin_memcpy(&bits,&rn,8);\n"
+    let s = s + "  printf(\"real-NaN=0x%016llx is_boxed=%d (neg/payload NaN need canonicalize)\\n\",(unsigned long long)bits,is_boxed(bits));\n"
+    let s = s + "  return 0;\n}\n"
+    return s
+}
+
+fn main() {
+    let args = hexa_args()
+    let work = "/tmp/uns-nanbox-work"
+    let runs = 1
+    let mut i = 1
+    while i < len(args) {
+        let a = args[i]
+        if a == "--work" && i + 1 < len(args) { work = args[i + 1]; i = i + 1 }
+        if a == "--runs" && i + 1 < len(args) { runs = parse_int_safe(args[i + 1]); i = i + 1 }
+        i = i + 1
+    }
+    exec_capture("mkdir -p " + work)
+    let src = work + "/nanbox_proxy.c"
+    let bin = work + "/nanbox_proxy"
+    write_file(src, proxy_c_source())
+    let cc = exec_capture("cc -O2 -o " + bin + " " + src + " 2>&1")
+    println("== compile ==")
+    println(cc)
+    println("== run (faithful A/B proxy · mini arm64) ==")
+    let mut r = 0
+    while r < runs {
+        println(exec_capture(bin))
+        r = r + 1
+    }
+    println("== see domains/UNSHADOW.nanbox.md §4 for interpretation ==")
+}

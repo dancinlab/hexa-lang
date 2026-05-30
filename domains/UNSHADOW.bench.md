@@ -960,3 +960,70 @@ OFF=0(§B fold) · ON=1(static 캐시 1콜 후 HIT).
   빠르다. memo 가 이기는 곳 = clang 이 fold 못 하는 opaque/cross-ABI 반복호출(=UNSHADOW 의 벽).
 - verdict verbatim = `.verdicts/unshadow-verify-memo/{e2e-bytediff,opaque-ab-proxy}.txt` ·
   재현 = `HEXA_VERIFY_MEMO=1` 로 `tool/unshadow_verify_memo_bench.hexa` 트랜스파일 + OPAQUE A/B proxy.
+
+---
+
+## §nanbox — NaN-boxing HexaVal 표현 (DESIGN + 최소 A/B 측정)
+
+> 상태: **DESIGN / feasibility + 최소측정** (전역 flip 아님 · 의도적 honest 분해). 전역 ABI
+> 변경이라 1-batch 불가 = multi-session. 설계 SSOT = `domains/UNSHADOW.nanbox.md`. 측정대 =
+> `tool/unshadow_nanbox_bench.hexa` (faithful A/B proxy · B9 self-host regen 벽 밖 · §c-class·
+> §native-arr 와 동일 스펙 허용). mini Apple M4 arm64.
+
+### §nanbox 사실 정정
+
+milestone 텍스트 "24B → 8B" 의 **24B 는 stale**. 현 `sizeof(HexaVal)=16B` (`§unboxed-array` L701
+이 이미 정정). NaN-box 밀도 이득 = **정확히 2× (16→8)**, 3× 아님.
+
+### §nanbox 규모 산정 (multi-session · 1-batch 불가)
+
+NaN-box 는 union 을 **물리 제거** (`HexaVal`=bare `uint64_t`) → 레이아웃 가정 사이트 전부 동시
+flip 必. worktree 격리 grep 실측 (self/codegen.hexa + runtime_core_emit.hexa + compiler/):
+
+| surface | 사이트 | 비고 |
+|---|---|---|
+| `HX_*` 매크로 use (추출+tag+SET) | **1151** | 매크로 본문 교체로 다수 흡수 |
+| emitted-C `TAG_*` 리터럴 | **430** | tag 비교/구성 box 인코딩 재작성 |
+| `((HexaVal){.tag=..,.i=..})` compound-literal | **19** | **매크로 우회** = 전역 flip 단일 토글 지점 |
+
+판정 = **multi-session**. 무리한 전역 flip 금지 (milestone 지시). → 설계+feasibility+최소측정+sub-task.
+
+### §nanbox 측정 (faithful A/B proxy · 3 축 · best-of-7 stabilized)
+
+| 워크로드 | A(16B box) | B(8B NaN-box) | B/A | 판정 |
+|---|---|---|---|---|
+| sequential traverse+sum (8M·rep40) | 0.39s | 1.10s | **2.5–2.8× 느림** | 🔴 NaN-box 패배 |
+| value-pass register-fit (noinline·4M·rep30) | 0.16s | 0.21s | **1.30–1.36 = 30–36% 느림** | 🔴 NaN-box 패배 |
+| random / cache-pressure (4M perm-chase) | 0.24s | 0.22s | 0.89–0.93 = **7–11% 빠름** | 🟢 유일 승 |
+
+- sizeof 16→8 (**2× denser**) · N=8M 배열 footprint 128MB→64MB · int round-trip checksum **match=YES**.
+- value-pass 는 best-of-7 안정화 측정 (단발에선 37% 빠름~36% 느림 사이 큰 분산 → **반드시 반복측정**).
+
+### §nanbox 핵심 해석 (honest — 거의 전 축 퇴보, density 만 승)
+
+> ⚠ 정직 정정: 초기 단발 측정의 "value-pass 37% 빠름" 은 **측정 artifact** 였다. best-of-7 안정화
+> 시 value-pass 는 일관되게 **30–36% 느림**. 가설(8B=1 reg → register-fit 승)은 이 proxy 에서
+> **falsified** — box_int/unbox_int 의 mask+shift+OR 추출 오버헤드가 register-fit 이득을 압도.
+
+- 🔴 **sequential/vectorizable 패배 (2.5–2.8×)**: `is_boxed()`+mask-extract 가 auto-vectorizer 를
+  죽임 (16B box 는 `tag==INT`+직접 load 라 clang -O2 SIMD). → §native-arr 가 잡은 contiguous
+  int64[] 종목을 NaN-box 가 **퇴보**시킴 = C1 과 **상충**(의존 아니라 분리).
+- 🔴 **value-pass 패배 (30–36%)**: 매 호출 box/unbox 추출비용 > register-fit 이득. milestone 의
+  register-fit 가설은 이 proxy 기준 **반증** (소유 ABI 라도 추출비용은 공짜 아님).
+- 🟢 **cache-pressure 7–11% 승 (유일)**: 밀도 2× 가 random working-set 절반 — prefetch 가 못
+  가리는 메모리-bound random-access 만 승.
+- → **per-program GATED default OFF 가 정답** (milestone "프로그램별 표현 선택" 일치). 단 측정상
+  우위 종목은 **memory-bound random-access 단 하나** — 대부분 워크로드(sequential·value-pass)는
+  NaN-box 가 **손해**. "전역 캐시밀도 3×" 의 milestone 기대는 (a) 밀도는 2× (b) 밀도 이득이 실
+  wall 로 전환되는 건 random-bound 한정 → **대폭 축소**. 이게 핵심 closed-negative-leaning 발견.
+
+### §nanbox NaN-collision (정확성 근본 제약)
+
+- 측정: 진짜 f64 NaN = `0x7ff8...`(sign=0) · box 마커 = `0xFFF8...`(sign=1) → canonical **positive**
+  qNaN 충돌 안 함(`is_boxed()=0` 실측). **그러나** negative-NaN·signaling·payload-bearing NaN 은
+  마커와 겹침 → **모든 float store 에서 canonicalize 必** (libm `sqrt(-1)` 등 음수-NaN 산출 가드).
+- **결정적 한계**: raw f64 비트 관찰/구성 프로그램(bit-cast·직렬화·hash-of-double)은 안전하게 못
+  덮음 → 그 corpus 는 GATED OFF 유지. full-corpus byte-diff 게이트(음수-NaN·NaN-payload·bit-cast
+  포함)는 전역 flip sub-task 선결.
+
+verdict=`.verdicts/unshadow-nanbox/proxy.txt` · 재현=`tool/unshadow_nanbox_bench.hexa --runs 3`.
