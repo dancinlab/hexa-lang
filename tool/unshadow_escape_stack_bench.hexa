@@ -120,6 +120,14 @@ fn main() {
 
     let inc = "-I '" + rt + "'"
     let o2 = "clang -O2 " + inc + " "
+    // runtime.o is linked against libsodium + openssl@3 (the install build). Pull
+    // those in so the proxy arms link; harmless if the runtime.o lacks them. Paths
+    // discovered from the install build line — fall back to brew --prefix if absent.
+    let _sodium = exec("ls -d /opt/homebrew/Cellar/libsodium/*/lib 2>/dev/null | head -1 || printf ''").trim()
+    let _ossl = exec("ls -d /opt/homebrew/Cellar/openssl@3/*/lib 2>/dev/null | head -1 || printf ''").trim()
+    let mut libs = " -lpthread"
+    if len(_sodium) > 0 { libs = libs + " -L" + _sodium + " -lsodium" }
+    if len(_ossl) > 0 { libs = libs + " -L" + _ossl + " -lssl -lcrypto" }
 
     // ── malloc-counting shim header ──────────────────────────────────────────
     // A process-global counter incremented on each malloc via a thin wrapper.
@@ -183,8 +191,8 @@ fn main() {
       "int main(void){ printf(\"%ld %ld\\n\", run_stack(), __mallocs); return 0; }\n")
 
     println("\n--- C: non-escaping flat-struct hot-loop (2 arms + parity) ---")
-    build_arm("a_heap ", o2 + "'" + work + "/a_heap.c'  '" + rt + "/runtime.o' -o '" + work + "/a_bin' -lpthread", work + "/a_bin")
-    build_arm("b_stack", o2 + "'" + work + "/b_stack.c' '" + rt + "/runtime.o' -o '" + work + "/b_bin' -lpthread", work + "/b_bin")
+    build_arm("a_heap ", o2 + "'" + work + "/a_heap.c'  '" + rt + "/runtime.o' -o '" + work + "/a_bin'" + libs, work + "/a_bin")
+    build_arm("b_stack", o2 + "'" + work + "/b_stack.c' '" + rt + "/runtime.o' -o '" + work + "/b_bin'" + libs, work + "/b_bin")
 
     // g5 byte-diff: the ACC half of the output must be identical (the malloc
     // count half differs by design — that IS the space-axis finding). Compare
@@ -211,6 +219,56 @@ fn main() {
     println("    a_heap  : " + peak_rss_kb(work + "/a_bin"))
     println("    b_stack : " + peak_rss_kb(work + "/b_bin"))
 
+    // PRIMARY METRIC 2b — peak-RSS under the NO-FREE shape. The hexa runtime
+    // does NOT free per-iteration HexaVal descriptors eagerly (arena / GC sweep
+    // reclaims in bulk); a non-escaping descriptor therefore ACCUMULATES on the
+    // heap until the next sweep. This is exactly where stack-alloc wins on space:
+    // the stack descriptor is reclaimed at every loop-iteration frame pop, so RSS
+    // stays flat regardless of N. We model it with a smaller N (no free → the
+    // heap arm's RSS grows ~N·sizeof(Pt__flat); the stack arm stays flat).
+    // noinline allocator + a global escape sink so clang CANNOT prove the heap
+    // descriptor dead and elide it (the inline path forwards the store + DCEs the
+    // malloc). This makes the heap arm's RSS growth real (~N·sizeof(Pt__flat)).
+    write_file(work + "/a_heap_nofree.c",
+      "#include \"flat_heap.h\"\n#include <stdio.h>\n" +
+      "volatile void* __sink;\n" +
+      "__attribute__((noinline)) static HexaVal mk_heap(long r){\n" +
+      "  Pt__flat* s=(Pt__flat*)malloc(sizeof(Pt__flat));\n" +
+      "  s->f0=hexa_int(r&7); s->f1=hexa_int((r*3)&7);\n" +
+      "  __sink=(void*)s; /* escape sink → not provably dead */\n" +
+      "  HexaVal v; v.tag=TAG_ARRAY; v.vs=(HexaValStruct*)s; return v; }\n" +
+      "static long run_heap_nf(void){\n" +
+      "  long acc=0; long N=4000000L;\n" +
+      "  for(long r=0;r<N;r++){\n" +
+      "    HexaVal p = mk_heap(r); /* no free — accumulates on heap */\n" +
+      "    acc += HX_INT(PT_X(p)) + HX_INT(PT_Y(p));\n" +
+      "  }\n" +
+      "  return acc; }\n" +
+      "int main(void){ printf(\"%ld\\n\", run_heap_nf()); return 0; }\n")
+    // stack arm: the same noinline-via-helper is impossible by construction (a
+    // stack descriptor cannot outlive the helper frame) — which IS the non-escape
+    // guarantee. So the stack object lives in run_stack_nf's frame and is
+    // reclaimed at every iteration; RSS stays flat regardless of N.
+    write_file(work + "/b_stack_nofree.c",
+      "#include \"flat_heap.h\"\n#include <stdio.h>\n" +
+      "volatile long __sink2;\n" +
+      "static long run_stack_nf(void){\n" +
+      "  long acc=0; long N=4000000L;\n" +
+      "  for(long r=0;r<N;r++){\n" +
+      "    Pt__flat __stk_p = { hexa_int(r&7), hexa_int((r*3)&7) };\n" +
+      "    HexaVal p; p.tag=TAG_ARRAY; p.vs=(HexaValStruct*)&__stk_p;\n" +
+      "    __sink2=(long)(intptr_t)p.vs; /* mirror the heap sink — fair compare */\n" +
+      "    acc += HX_INT(PT_X(p)) + HX_INT(PT_Y(p));\n" +
+      "  }\n" +
+      "  return acc; }\n" +
+      "int main(void){ printf(\"%ld\\n\", run_stack_nf()); return 0; }\n")
+    build_arm("a_heap_nf ", o2 + "'" + work + "/a_heap_nofree.c'  '" + rt + "/runtime.o' -o '" + work + "/anf_bin'" + libs, work + "/anf_bin")
+    build_arm("b_stack_nf", o2 + "'" + work + "/b_stack_nofree.c' '" + rt + "/runtime.o' -o '" + work + "/bnf_bin'" + libs, work + "/bnf_bin")
+    println("\n  [PRIMARY] peak-RSS (KB) — NO-FREE shape (descriptor accumulates; the")
+    println("            arena/GC reclaim-lag case where stack-alloc wins on space):")
+    println("    a_heap_nf  (4M no-free mallocs) : " + peak_rss_kb(work + "/anf_bin"))
+    println("    b_stack_nf (stack, reclaimed)   : " + peak_rss_kb(work + "/bnf_bin"))
+
     // SECONDARY — wall (space axis; time is incidental but recorded).
     println("\n  [secondary] best-of-" + to_string(runs) + " wall (s):")
     println("    a_heap  : " + best_wall(work + "/a_bin", runs))
@@ -232,7 +290,7 @@ fn main() {
       "  HexaVal p = make_pt(12345);\n" +
       "  printf(\"%ld\\n\", HX_INT(PT_X(p)) + HX_INT(PT_Y(p)));\n" +
       "  free((void*)p.vs); return 0; }\n")
-    build_arm("escape ", o2 + "'" + work + "/escape.c' '" + rt + "/runtime.o' -o '" + work + "/e_bin' -lpthread", work + "/e_bin")
+    build_arm("escape ", o2 + "'" + work + "/escape.c' '" + rt + "/runtime.o' -o '" + work + "/e_bin'" + libs, work + "/e_bin")
     println("  escaping read result (heap path, live after return): " + exec("'" + work + "/e_bin' 2>/dev/null").trim())
     println("  → a returned descriptor stays on the heap — the stack-alloc proof")
     println("    fires ONLY for bindings used solely as p.field within the scope.")

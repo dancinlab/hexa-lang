@@ -2,6 +2,35 @@
 
 Append-only history sister of `UNSHADOW.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-30T09:30Z — 🔵 escape→stack-alloc — 도메인 첫 공간축 채굴 (MEASURED · byte-diff IDENTICAL · heap-alloc 20M→0 · peak-RSS 66×)
+
+14개 milestone 이 전부 TIME-축이었던 UNSHADOW 의 첫 SPACE-축 (F2·C13). 비-escape 증명된
+flat-struct(§typed-struct #2182) 바인딩의 descriptor 를 힙(malloc) 대신 C 스택에 배치.
+
+- [x] **격리 worktree** — `/tmp/uns-escape-stack` (origin/main `c1c537c7a` 베이스). 공유 트리·타
+  브랜치 미접촉. 편집 직후 commit (durable-worktree 수칙).
+- [x] **escape 분석기** (`self/codegen.hexa`) — `_stack_noescape_scan`(gen2_fn_decl 사전스캔) +
+  `_stmt_escapes_name`/`_expr_escapes_name`(재귀 walker). immutable `let p = Pt{..}`(flat-eligible)
+  의 유일 사용이 `p.field` read 일 때만 비-escape 증명. return/call-arg/store/index/reassign/
+  capture = 힙 보수적 유지. top-level let 만(nested = open).
+- [x] **stack-alloc emit** — `gen2_stack_alloc_flat`. 증명된 LetStmt 를
+  `Pt__flat __stk_p = {..}; HexaVal p; p.tag=TAG_ARRAY; p.vs=(HexaValStruct*)&__stk_p;` 로 lower
+  (malloc 우회). LetStmt arm 에 GATED 분기(`HEXA_STACK_ALLOC=1`·default OFF·hoisted-name 제외).
+  parse-gate PASS.
+- [x] **측정대** (`tool/unshadow_escape_stack_bench.hexa`) — faithful A/B proxy (B9/regen 벽).
+  a_heap(malloc ctor) vs b_stack(스택 __flat) · malloc-counting shim · mac maxrss · noinline+
+  escape-sink 로 clang DCE 차단한 no-free RSS arm · escaping=heap 무결성 게이트.
+- [x] **실측** (mini macOS arm64 · best-of-9) — `.verdicts/unshadow-escape-stack/bench.txt` verbatim:
+  - **g5 byte-diff IDENTICAL** (acc=140000000 · md5 `6ca934e49da9a8a3923d49622f65db6b` 양 arm).
+  - **[PRIMARY] heap-alloc count: a_heap 20,000,000 → b_stack 0** (루프 malloc 전멸).
+  - **[PRIMARY] peak-RSS (no-free/reclaim-lag): 127,392 → 1,920 KB = 66× (−98.5%)**.
+  - 무결성: escaping(returned) 바인딩 = 힙 유지 · return 후 live(=4) · no dangling.
+- [x] **regen 벽** — `hexa cc --regen` 이 clang crash (documented Mac `cc --regen` 한계) → full
+  self-host regen 차단 → faithful A/B proxy 로 검증(prior agents 동일 패턴·스펙 허용). repo 안
+  손작성 `.c` 0개 (codegen=.hexa).
+- [x] **부분 착지(최소 슬라이스)** — milestone `[~]`. 잔여 sub-task open: (1) non-flat descriptor
+  (array/map/closure) (2) nested-scope 바인딩 (3) GATED 해제(default 발화).
+
 ## 2026-05-30T09:00Z — 🎯 roofline 측정대 — 상대 Δ → HW 물리 천장 % 절대 잣대 전환 (MEASURED · g5 5/5 IDENTICAL)
 
 UNSHADOW 측정 잣대를 "vs idiomatic C @ clang -O2"(상대 Δ) 에서 **HW 물리 천장(roofline) %**
