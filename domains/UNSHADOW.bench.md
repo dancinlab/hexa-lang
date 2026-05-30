@@ -904,3 +904,59 @@ ref-C wall anchor** (ref-C 가 roofline-near = 측정 anchor; roofline% = ref-C 
   sub-task. real self-host codegen 발화 검증(transpile)도 sub-task(emit 문자열은 byte-동일 확인).
 - verdict verbatim = `.verdicts/unshadow-typed-struct/typed-struct.txt` · 재현 =
   `HEXA_TYPED_STRUCT=1 tool/unshadow_typed_struct_bench.hexa --rt ~/.hx/packages/hexa/self --runs 9`.
+
+## §verify-memo — 🔵 검증 memoization (F3 atlas-as-perf-asset · 거울방)
+
+> milestone "🔵 검증 memoization" 의 실측. **요지**: atlas 가 fn 의 PURE(deterministic·
+> side-effect-free) 를 증명하면 codegen 이 같은-인자 반복 호출에 fn-local static last-arg
+> 캐시를 삽입한다. PURE ⇒ cached-value ≡ recomputed-value EXACTLY → byte-diff IDENTICAL.
+> LLVM-can't: clang `pure`/`const` attr 는 한 표현식 내 인접 동일콜만 CSE 하고, 정밀컴파일된
+> runtime.o 심볼의 loop-cross idempotent 를 증명 못 해 매 iteration `bl _lambda_eliashberg`
+> 를 다시 emit 한다 — clang 에 theorem/verdict DB 가 없다.
+
+발화 fn = `lambda_eliashberg` (atlas node `verified-lambda_eliashberg-num` 🟢 ·
+`hexa verify --expr lambda_eliashberg 0.5 1.0`). GATED opt-in `HEXA_VERIFY_MEMO`
+(default OFF). codegen 분기 = `self/codegen.hexa` Call(`lambda_eliashberg`) 처리, §B
+closed-form inline 보다 우선(env 켜졌을 때만). 1-arg + `_is_known_fn_global` +
+`!_gen2_has_decl` 가드(§A/§B 동일 exactness). EXPR 1회 let-bind(single-eval).
+
+### §verify-memo emit (END-TO-END · edited codegen 으로 재빌드한 `/tmp/hexat.new`)
+
+| HEXA_VERIFY_MEMO | emit | 의미 |
+|---|---|---|
+| unset (default) | `__le_x … 2.0*HX_FLOAT(__le_x)` | §B closed-form inline — **무회귀** |
+| `=1` | `static int __lem_v=0; … if(!(__lem_v && __lem_a==__lem_xf)){ __lem_r=lambda_eliashberg(__lem_x); … } __lem_r;` | memo 캐시 발화 |
+
+g5 byte-diff(real compiler, `lambda_eliashberg(0.5)`×2,000,000): OFF·ON 둘 다
+stdout `2000000.0`, **md5 `7fe719e9` IDENTICAL**. asm `bl _lambda_eliashberg`(literal arg):
+OFF=0(§B fold) · ON=1(static 캐시 1콜 후 HIT).
+
+### §verify-memo perf (OPAQUE-arg A/B proxy · runtime.o C-ABI 벽 시나리오)
+
+> proxy(`/tmp` throwaway · clang -O2 · `lambda_eliashberg`=noinline opaque symbol,
+> 정밀컴파일 runtime.o 모사 · arg=argv→opaque). B9 generated-runtime 벽으로 full
+> self-host regen 차단·스펙 허용; emit 문자열은 end-to-end 컴파일러 출력과 byte-동일.
+
+| mode | calls | wall(첫측) | wall(best-of-5) | byte-diff stdout |
+|---|---|---|---|---|
+| nomemo | 20,000,000 | 0.1889s | 0.1546s | `4c281195` |
+| memo | **1** | 0.0253s | **0.0255s** | `4c281195` (IDENTICAL) |
+
+→ call count **20M → 1** · wall **6.06× faster (−83.5%)** · byte-diff **IDENTICAL**.
+
+### §verify-memo 무결성 게이트
+
+- **NEGATIVE-arg 가드 보존**: arg=-1.0 → nomemo==memo==`-19999980000000.0`
+  (verified guard `m0<0 → -999999.0` 가 캐시 미스 경로의 실제 호출로 보존 · IDENTICAL).
+- **cache-invalidation**: varying arg(`i%7-3`, 음수 가드 교차 포함) → nomemo==memo==
+  `-428997861.0` (last-arg 캐시가 arg 변경 시 정확 재계산 · match YES). silent-stale 없음.
+
+### §verify-memo 정직한 caveat
+
+- **LIVE atlas-query surface 부재**: §A const-fold·§B proof-carrying 과 동일하게 codegen 에
+  컴파일타임 atlas lookup 이 없다 → 발화 가드는 atlas-verified fn 名 하드코딩(verdict=라이선스).
+  다수 fn 일반화 = atlas 에 pure/idempotent 속성 atom + codegen lookup surface 둘 다 선결(sub-task).
+- **memo 가치는 OPAQUE 반복인자 한정**: LITERAL arg 면 §B inline(0 call)이 memo(1 call)보다
+  빠르다. memo 가 이기는 곳 = clang 이 fold 못 하는 opaque/cross-ABI 반복호출(=UNSHADOW 의 벽).
+- verdict verbatim = `.verdicts/unshadow-verify-memo/{e2e-bytediff,opaque-ab-proxy}.txt` ·
+  재현 = `HEXA_VERIFY_MEMO=1` 로 `tool/unshadow_verify_memo_bench.hexa` 트랜스파일 + OPAQUE A/B proxy.

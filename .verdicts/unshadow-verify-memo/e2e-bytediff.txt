@@ -1,0 +1,15 @@
+UNSHADOW verify-memo — END-TO-END g5 byte-diff (real compiler built from edited self/codegen.hexa)
+transpiler: /tmp/hexat.new (full hexa_cc amalgam, codegen.hexa = edited memo branch)
+bench: tool/unshadow_verify_memo_bench.hexa  (lambda_eliashberg(0.5) × 2,000,000)
+
+memo OFF (HEXA_VERIFY_MEMO unset)  → emits §B closed-form inline (__le_x …)
+memo ON  (HEXA_VERIFY_MEMO=1)      → emits memo cache template (__lem_v/__lem_a/__lem_r …)
+
+OFF stdout: 2000000.0
+ON  stdout: 2000000.0
+diff: IDENTICAL   md5 = 7fe719e945b7d83ba9081adaebc95b8f (both)
+
+asm bl _lambda_eliashberg (literal-arg 0.5):
+  OFF = 0  (§B inline folds to constant — even faster when arg is static)
+  ON  = 1  (static cache: 1 real call, then 2M-1 HITs)
+GATE: byte-diff IDENTICAL ✅

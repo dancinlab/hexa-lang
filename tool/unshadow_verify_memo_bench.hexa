@@ -1,0 +1,32 @@
+// UNSHADOW — 검증 memoization (F3 atlas-as-perf-asset) A/B bench.
+//
+// Milestone: "🔵 검증 memoization" — atlas 가 fn 의 pure+idempotent 를
+// 증명하면 codegen 이 같은-인자 반복 호출에 호출-캐시(memo)를 삽입한다.
+// 발화 = atlas-verified pure fn(여기 `lambda_eliashberg`, atlas node
+// `verified-lambda_eliashberg-num` 🟢) + 1-arg + 같은 인자 반복.
+//
+// codegen 의 발화 분기(GATED `HEXA_VERIFY_MEMO`)는 self/codegen.hexa 의
+// `lambda_eliashberg` Call 처리에 있다. 이 .hexa 자체는 hot-loop 워크로드 —
+// 같은 인자(0.5)로 N 회 호출. memo ON 이면 실제 호출은 1회, 나머지는 캐시 HIT.
+// PURE 라 캐시값 ≡ 재계산값 → stdout BYTE-IDENTICAL (memo ON/OFF).
+//
+// 측정: tool/unshadow_verify_memo_proxy.c (faithful A/B proxy — B9
+// generated-runtime 벽으로 full self-host rebuild 차단·스펙 허용). proxy 는
+// 이 .hexa 가 emit 하는 정확한 C 캐시 템플릿을 그대로 담아 call-count·wall·
+// byte-diff 를 잰다.
+
+fn lambda_eliashberg(m0: float) -> float {
+    if m0 < 0.0 { return -999999.0 }
+    return 2.0 * m0
+}
+
+fn main() {
+    let mut acc = 0.0
+    let mut i = 0
+    while i < 2000000 {
+        // 같은 인자(0.5)로 반복 호출 — memo HIT 경로.
+        acc = acc + lambda_eliashberg(0.5)
+        i = i + 1
+    }
+    println(acc)
+}

@@ -1,0 +1,14 @@
+UNSHADOW verify-memo — faithful A/B proxy, OPAQUE arg (runtime.o C-ABI wall scenario)
+proxy: /tmp/uns_verify_memo_proxy2.c (throwaway harness, /tmp — clang -O2)
+fn: lambda_eliashberg (atlas verified-lambda_eliashberg-num, PURE; __attribute__((noinline)) = opaque like runtime.o symbol)
+N = 20,000,000  arg = 0.5 (from argv → opaque to optimizer)
+
+mode=nomemo calls=20000000 wall=0.1889s  (best-of-5: 0.1546s)
+mode=memo   calls=1        wall=0.0253s  (best-of-5: 0.0255s)
+  → call count 20,000,000 → 1
+  → wall 0.1546s → 0.0255s = 6.06× faster (−83.5%)
+byte-diff stdout: IDENTICAL  md5 = 4c281195f34b8018752d57b7635f2bca (both)
+
+NEGATIVE-arg guard preserved (arg=-1.0): nomemo == memo == -19999980000000.0  (GUARD IDENTICAL ✅)
+cache-invalidation (varying arg i%7-3, incl. negatives): nomemo=-428997861.0 == memo=-428997861.0 (match YES ✅)
+GATE: byte-diff IDENTICAL + call-count↓ + wall Δ ✅
