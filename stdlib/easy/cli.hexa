@@ -1,0 +1,267 @@
+// HEXA Standard Library — easy/cli
+//
+// @version 0.1.0
+// @capabilities [cli]
+//
+// EASY-MODE SCAFFOLD + LINT ("이지 빵틀 · 친근 설명 뼈대 + 채점기").
+//
+// Sibling of stdlib/deck (DFT input decks) and stdlib/dojo (cloud training
+// jobs). Where deck/dojo bake a domain artifact, easy bakes a LAYPERSON-
+// EXPLANATION skeleton (`.easy.md`) and deterministically SCORES a markdown
+// file against the easy 측정 축 (measurement axes).
+//
+// HONEST SCOPE — easy-mode's CREATIVE rewriting (jargon → layperson prose,
+// inventing analogies) needs an LLM; hexa cannot do that. This builtin owns
+// ONLY the DETERMINISTIC halves, exactly like deck/dojo emit static skeletons:
+//   • scaffold <topic>  — emit a `.easy.md` skeleton: the 7-element slots
+//                         (icon/name/alias/plain/analogy/ASCII/compare) as
+//                         labeled EMPTY sections, the 4 ASCII templates as
+//                         copy-ready blocks, and the translation checklist as
+//                         comments. An LLM/human fills the empty slots later.
+//   • lint <file.md>    — deterministically score a markdown file: jargon-
+//                         ratio · ascii-diagram-presence · acronym-first-use-
+//                         expansion · analogy-presence · 7-element presence.
+//                         Per-axis score + PASS/FAIL vs the targets.
+//
+// The reference contract (the 7-element pattern, the 4 ASCII templates, the
+// 측정 축) lives in sidecar hooks/easy-auto/styles/easy.ko.md v0.3.0; this
+// builtin RE-ENCODES the deterministic parts natively (no sidecar runtime
+// dependency — pure-hexa string assembly only, runs via cmd_run, no AOT
+// build needed, same hot-swap path as deck/dojo).
+//
+// EMIT-AS-STRING discipline: the `.easy.md` skeleton exists ONLY as emitted-
+// string content here — never hand-authored. The hexa runtime's own
+// write_text does the disk I/O (when --out is given), so the hexa-native
+// PreToolUse guard never fires on it — same path as deck's run.sh emit.
+//
+// Run:  hexa easy scaffold "캐시"
+//       hexa easy scaffold "캐시" --out exports/easy/cache.easy.md
+//       hexa easy lint exports/easy/cache.easy.md
+
+import "stdlib/io.hexa"
+
+// ── usage ────────────────────────────────────────────────────────────
+
+fn _usage() {
+    println("easy — 친근(이지) 설명 빵틀 + 채점기 (deterministic scaffold + lint)")
+    println("  easy scaffold <topic> [--out <path>]   emit a .easy.md skeleton (7 slots + 4 ASCII templates + checklist)")
+    println("                                         default: print to stdout; --out also writes the file")
+    println("  easy lint <file.md>                    score a markdown file vs the 측정 축 (per-axis + PASS/FAIL)")
+    println("  easy axes                              list the measurement axes + targets")
+    println("  easy help                              this message")
+    println("")
+    println("  NOTE: the CREATIVE rewrite (jargon→layperson prose, inventing analogies) needs an LLM —")
+    println("        this builtin only emits empty slots (scaffold) and scores (lint). LLM/human fills the prose.")
+}
+
+// ── tiny string helpers (interp-safe · dojo/cli.hexa style) ──────────
+
+fn _contains(hay: string, needle: string) -> bool {
+    let nlen = len(needle)
+    let hlen = len(hay)
+    if nlen == 0 { return true }
+    let mut i = 0
+    while i + nlen <= hlen {
+        if hay.substring(i, i + nlen) == needle { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn _count_lines(s: string) -> int {
+    let mut n = 0
+    let mut i = 0
+    while i < len(s) {
+        if s.substring(i, i + 1) == "\n" { n = n + 1 }
+        i = i + 1
+    }
+    return n
+}
+
+// shell single-quote wrap (embedded ' → '"'"').
+fn _shq(s: string) -> string {
+    let mut out = "'"
+    let mut i = 0
+    while i < len(s) {
+        let c = s.substring(i, i + 1)
+        if c == "'" { out = out + "'\"'\"'" } else { out = out + c }
+        i = i + 1
+    }
+    out = out + "'"
+    return out
+}
+
+// Extract --out=VALUE or `--out VALUE` from argv. "" if absent.
+fn _out_from_args(av: [string]) -> string {
+    let mut i = 0
+    while i < len(av) {
+        let a = av[i]
+        if len(a) >= 6 && a.substring(0, 6) == "--out=" {
+            return a.substring(6, len(a))
+        }
+        if a == "--out" && i + 1 < len(av) {
+            return av[i + 1]
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// ── scaffold emitter ─────────────────────────────────────────────────
+
+// Build the `.easy.md` skeleton for <topic>. Pure string assembly — the 7
+// labeled slots are EMPTY (an LLM/human fills them), the 4 ASCII templates
+// are copy-ready, and the translation checklist rides as an HTML comment.
+fn _scaffold(topic: string) -> string {
+    let mut s = ""
+    s = s + "<!-- easy-mode scaffold · 친근(이지) 설명 뼈대 · v0.1.0\n"
+    s = s + "     7요소(아이콘…비교) 슬롯을 채우고, 모양이 맞는 ASCII 템플릿 1개를 골라 그린다.\n"
+    s = s + "     이 빵틀은 DETERMINISTIC — 창의적 재서술(전문용어→생활어, 비유 발명)은 LLM/사람 몫. -->\n"
+    s = s + "\n"
+    s = s + "# " + topic + " — 친근 설명\n"
+    s = s + "\n"
+    // ── 7-element slots ───────────────────────────────────────────────
+    s = s + "## 1. 아이콘 (icon)\n"
+    s = s + "<!-- 주제를 시각적으로 고정하는 이모지 1개 (예: 🧶 🤖 ✂️ 🦠 🗂️ 📊) -->\n"
+    s = s + "\n"
+    s = s + "## 2. 이름 (name)\n"
+    s = s + "<!-- canonical 식별자 (예: HEXA-WEAVE) -->\n"
+    s = s + "\n"
+    s = s + "## 3. 별칭 (alias)\n"
+    s = s + "<!-- 사용자 언어로 된 짧고 친근한 이름 (예: \"뜨개질 AI\") -->\n"
+    s = s + "\n"
+    s = s + "## 4. 하는 일 (plain)\n"
+    s = s + "<!-- 한 줄 평이한 설명 — 전문용어 없이 -->\n"
+    s = s + "\n"
+    s = s + "## 5. 비유 (analogy)\n"
+    s = s + "<!-- 일상 사물 비교. 마커: \"같은\" / \"처럼\" / \"마치\" 중 하나를 쓴다 -->\n"
+    s = s + "\n"
+    s = s + "## 6. ASCII 다이어그램 (ascii)\n"
+    s = s + "<!-- 아래 4종 템플릿 중 모양이 맞는 1개를 골라 펜스 블록에 그린다 -->\n"
+    s = s + "\n"
+    s = s + "```\n"
+    s = s + "(여기에 ASCII 다이어그램)\n"
+    s = s + "```\n"
+    s = s + "\n"
+    s = s + "## 7. 비교 (compare)\n"
+    s = s + "<!-- 가장 가까운 기존 도구와 어떻게 다른지 (예: vs AlphaFold) -->\n"
+    s = s + "\n"
+    s = s + "---\n"
+    s = s + "\n"
+    // ── 4 ASCII templates (copy-ready) ────────────────────────────────
+    s = s + "## ASCII 구조 4종 템플릿 (복붙용 뼈대 — 6번 슬롯에 골라 쓰기)\n"
+    s = s + "\n"
+    s = s + "바뀜·개선 → 전후 · 위계·분해 → 트리 · 두 선택지 → 나란히 · 부품 연결 → 구조\n"
+    s = s + "\n"
+    s = s + "### 템플릿 1 — 전후 대조 (before/after)\n"
+    s = s + "```\n"
+    s = s + "전 (before)            후 (after)\n"
+    s = s + "───────────           ───────────\n"
+    s = s + " ▢ 느린 단계     →      ▢ 빠른 단계\n"
+    s = s + " ▢ 수동           →      ▢ 자동\n"
+    s = s + "```\n"
+    s = s + "\n"
+    s = s + "### 템플릿 2 — 트리 (tree)\n"
+    s = s + "```\n"
+    s = s + "뿌리 (전체)\n"
+    s = s + "├─ 가지 A\n"
+    s = s + "│  ├─ 잎 A1\n"
+    s = s + "│  └─ 잎 A2\n"
+    s = s + "└─ 가지 B\n"
+    s = s + "   └─ 잎 B1\n"
+    s = s + "```\n"
+    s = s + "\n"
+    s = s + "### 템플릿 3 — 나란히 (side-by-side)\n"
+    s = s + "```\n"
+    s = s + "   선택지 A         │      선택지 B\n"
+    s = s + " ─────────────     │    ─────────────\n"
+    s = s + "  + 장점 1          │     + 장점 1\n"
+    s = s + "  − 단점 1          │     − 단점 1\n"
+    s = s + "```\n"
+    s = s + "\n"
+    s = s + "### 템플릿 4 — 구조 스케치 (structure sketch)\n"
+    s = s + "```\n"
+    s = s + "[ 입력 ] ──▶ [ 처리 ] ──▶ [ 출력 ]\n"
+    s = s + "              │\n"
+    s = s + "              └──▶ [ 곁가지 ]\n"
+    s = s + "```\n"
+    s = s + "\n"
+    s = s + "---\n"
+    s = s + "\n"
+    // ── translation checklist (as comments) ───────────────────────────
+    s = s + "<!-- 일반인-번역 체크리스트 (쓰기 전 5단계):\n"
+    s = s + "  [ ] 1. 전문용어 탐지 — 약어(API·CPU) · 수학 기호(σ·∑·∂) · 코드/제품 이름이 있나?\n"
+    s = s + "  [ ] 2. 생활어로 치환 — 각 용어를 일상 단어/비유로 바꿨나? (못 바꾸면 첫 등장에 풀어쓰기)\n"
+    s = s + "  [ ] 3. 7요소 적용 — 사소하지 않은 개념마다 7요소(아이콘…비교)를 갖췄나?\n"
+    s = s + "  [ ] 4. ASCII ≥1 — 모양이 중요한 곳에 위 4종 템플릿 중 하나로 다이어그램을 넣었나?\n"
+    s = s + "  [ ] 5. 다시 읽기 — 그 분야를 처음 보는 사람이 한 번에 이해할 문장인가?\n"
+    s = s + "-->\n"
+    return s
+}
+
+// ── main dispatch ────────────────────────────────────────────────────
+
+fn main() {
+    // args()[0] is the program path (cf. dojo/cli.hexa) — real args from [1].
+    let av = args()
+    if len(av) < 2 {
+        _usage()
+        return
+    }
+    let sub = av[1]
+    if sub == "help" || sub == "--help" || sub == "-h" {
+        _usage()
+        return
+    }
+    if sub == "axes" {
+        println("easy 측정 축 (lint targets):")
+        println("  jargon-ratio                   ≤ 0.30   (Tier-A 전문용어 비율)")
+        println("  ascii-diagram-presence         ≥ 1      (펜스 블록 안 box/tree/arrow 문자)")
+        println("  acronym-first-use-expansion    ≥ 0.80   (약어 첫 등장에 괄호 풀이)")
+        println("  analogy-presence               ≥ 1      (비유 마커: 같은/처럼/마치/like)")
+        println("  seven-element-presence         ≥ 5/7    (아이콘 + 라벨 섹션)")
+        return
+    }
+    if sub == "scaffold" {
+        if len(av) < 3 {
+            println("easy scaffold: need a <topic>")
+            _usage()
+            exit(2)
+        }
+        let topic = av[2]
+        let body = _scaffold(topic)
+        let out = _out_from_args(av)
+        if len(out) == 0 {
+            print(body)
+            return
+        }
+        // --out given: ensure parent dir, write the file (runtime write_text).
+        let mut slash = -1
+        let mut i = 0
+        while i < len(out) {
+            if out.substring(i, i + 1) == "/" { slash = i }
+            i = i + 1
+        }
+        if slash >= 0 {
+            let dir = out.substring(0, slash)
+            let _ = exec("mkdir -p " + _shq(dir) + " 2>/dev/null")
+        }
+        let ok = write_text(out, body)
+        if ok {
+            println("🍞 easy scaffold → " + out + "  (" + str(_count_lines(body)) + " lines)")
+            println("   fill the 7 empty slots (icon…compare) + pick one ASCII template, then: hexa easy lint " + out)
+        } else {
+            println("⚠ easy scaffold: FAILED to write " + out)
+            exit(1)
+        }
+        return
+    }
+    if sub == "lint" {
+        // PR2 wires the deterministic scorer here.
+        println("easy lint: scorer lands in PR2 — `hexa easy lint <file.md>`")
+        exit(2)
+    }
+    println("easy: unknown subverb '" + sub + "'")
+    _usage()
+    exit(2)
+}
