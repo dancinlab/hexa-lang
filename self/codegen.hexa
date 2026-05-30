@@ -2931,6 +2931,17 @@ fn _gen2_stmt_inner(node, depth) {
                 // A same-name re-let to a non-int-array RHS voids the proof.
                 _known_intarr_void(node.name)
             }
+            // UNSHADOW typed monomorphic struct layout: register an immutable
+            // `let p = Pt{...}` (or `Pt(...)`) whose type is flat-eligible so the
+            // Field arm can lower `p.field` to an OFFSET load. Fires only under
+            // HEXA_TYPED_STRUCT=1 (via _is_flat_eligible_struct gate). Any re-let
+            // to a non-flat-struct RHS voids the binding (mirrors known-intarr).
+            let _flat_init_type = _flat_struct_init_type(node.left)
+            if _flat_init_type != "" {
+                _flat_var_add(node.name, _flat_init_type)
+            } else {
+                _flat_var_void(node.name)
+            }
             // PROBE r11 B3: also try comptime-fold for plain immutable `let`.
             // `let x = 2+3` now folds to literal 5 and registers in the
             // comptime-const table — downstream references inline the literal
@@ -5425,6 +5436,25 @@ fn gen2_expr(node) {
         // identifier"). Non-enum field access is unchanged (falls through).
         if type_of(node.left) != "string" && node.left.kind == "Ident" && _is_enum_name(node.left.name) {
             return node.left.name + "_" + node.name
+        }
+        // UNSHADOW typed monomorphic struct layout (GATED HEXA_TYPED_STRUCT=1):
+        // if the receiver is a var statically known to hold a flat-eligible
+        // struct instance AND `field` is a declared field of that type, emit a
+        // compile-time OFFSET load (`((Name__flat*)recv.vs)->f<idx>`) instead of
+        // hexa_map_get_ic. NO strcmp, NO inline-cache slot, NO hash probe. The
+        // flat pointer rides the public HexaVal `vs` slot (matches the flat
+        // constructor in gen2_flat_struct_typedef). Any dynamic key, any non-
+        // flat receiver, or a typo'd / non-declared field (idx<0) falls through
+        // to the unchanged hexa_map_get_ic hash-map path — so polymorphic /
+        // dynamic-key structs are unaffected (integrity gate).
+        if type_of(node.left) != "string" && node.left.kind == "Ident" {
+            let _fst = _flat_var_type(node.left.name)
+            if _fst != "" {
+                let _fidx = _flat_field_index(_fst, node.name)
+                if _fidx >= 0 {
+                    return "(((" + _fst + "__flat*)(" + node.left.name + ").vs)->f" + to_string(_fidx) + ")"
+                }
+            }
         }
         let obj = gen2_expr(node.left)
         let field = node.name
@@ -8093,6 +8123,18 @@ fn gen2_struct_decl(node) {
         return "HexaVal " + name + "(" + vs_params.join(", ") + ") {\n    return hexa_valstruct_new_v(" + vs_args.join(", ") + ");\n}\n"
     }
 
+    // UNSHADOW typed monomorphic struct layout (GATED HEXA_TYPED_STRUCT=1): when
+    // this struct type is flat-eligible (declared, closed non-empty field set),
+    // emit a per-type FLAT C-struct typedef + flat constructor instead of the
+    // hash-map pack. Field reads on a statically-known instance lower to OFFSET
+    // loads (see the `Field` arm). Default OFF → the hash-map path below is
+    // unchanged (zero regression). Polymorphic / dynamic-key structs are never
+    // flat-eligible (a dynamic-key read never matches the offset arm), so they
+    // keep the hash-map ctor + hexa_map_get_ic.
+    if _is_flat_eligible_struct(name) {
+        return gen2_flat_struct_typedef(node)
+    }
+
     // rt 32-A: struct constructor fast-path. Instead of emitting:
     //     HexaVal __s = hexa_map_new();
     //     __s = hexa_map_set(__s, "__type__", ...);
@@ -9955,6 +9997,155 @@ fn _struct_decl_index(name) {
         i = i + 1
     }
     return -1
+}
+
+// ── UNSHADOW typed monomorphic struct layout (flat C-struct + offset access) ──
+//   E(AoS↔SoA) re-open prerequisite (F1 데이터-표현 주권). The E closed-negative
+//   ruled out SoA because every struct is a `hexa_struct_pack_map` HASH-MAP and
+//   every field read is a `hexa_map_get_ic` strcmp/IC probe. When a struct type
+//   is PROVEN MONOMORPHIC (closed field set, all accesses are static field
+//   names, NO dynamic-key set/get), the compiler can emit a per-type FLAT
+//   C-STRUCT typedef and lower `obj.field` to a compile-time OFFSET load. This
+//   is the LLVM-can't lever: clang sees the opaque hexa_map_get_ic behind the
+//   runtime.o C-ABI wall and cannot fold a hash probe to a load; the hash→offset
+//   rewrite is a TYPE-LEVEL shape proof over our owned representation.
+//
+//   GATED opt-in (HEXA_TYPED_STRUCT=1, default OFF). When the flag is absent the
+//   hash-map ctor + hexa_map_get_ic read are UNCHANGED → zero regression. When
+//   ON, a proven-monomorphic struct gets a flat typedef + offset reads. The flat
+//   typedef lives in USER.C (per RFC §codegen-landing — no runtime change), and
+//   the flat pointer rides the public HexaVal `vs` union slot, so the proxy and
+//   the landed codegen both pierce the wall with NO runtime.h edit.
+fn _typed_struct_enabled() {
+    return env("HEXA_TYPED_STRUCT") != ""
+}
+
+// A struct type is FLAT-ELIGIBLE when it is declared in this TU with a non-empty
+// closed field set AND no field name collides with the dynamic-key escape hatch.
+// Conservative monomorphic proof: declared + >=1 field. Any dynamic-key use of an
+// instance (a non-literal-string key) keeps the value on the hash-map path
+// because the codegen only lowers a STATIC field name to an offset — a
+// dynamic-key read never matches the offset arm and falls through unchanged.
+// decreases nothing — pure registry lookup.
+fn _is_flat_eligible_struct(name) {
+    if !_typed_struct_enabled() { return false }
+    let _idx = _struct_decl_index(name)
+    if _idx < 0 { return false }
+    let _fnames = _struct_field_names[_idx]
+    if len(_fnames) == 0 { return false }
+    return true
+}
+
+// field index of `field` within struct type `sname`, or -1 if not a declared
+// field (a non-declared / dynamic key → no offset, hash-map fallback).
+fn _flat_field_index(sname, field) {
+    let _idx = _struct_decl_index(sname)
+    if _idx < 0 { return -1 }
+    let _fnames = _struct_field_names[_idx]
+    let mut i = 0
+    while i < len(_fnames) {
+        if _fnames[i] == field { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+// var name → flat-eligible struct type. Populated at `let p = Pt{...}` when Pt
+// is flat-eligible and the binding is immutable (LetStmt). A reassignment / re-
+// let / mut binding VOIDS it (mirrors _known_intarr_void), so the offset read
+// fires ONLY for a binding statically known to hold a flat-struct instance.
+let mut _flat_var_names = []   // [name, ...]
+let mut _flat_var_types = []   // [struct_type, ...] parallel
+
+fn _flat_var_add(name, sname) {
+    let mut i = 0
+    while i < len(_flat_var_names) {
+        if _flat_var_names[i] == name {
+            _flat_var_types[i] = sname
+            return
+        }
+        i = i + 1
+    }
+    _flat_var_names.push(name)
+    _flat_var_types.push(sname)
+}
+
+fn _flat_var_void(name) {
+    let n = len(_flat_var_names)
+    if n <= 0 { return }
+    let mut _rn = []
+    let mut _rt = []
+    let mut i = 0
+    while i < n {
+        if _flat_var_names[i] != name {
+            _rn = _rn.push(_flat_var_names[i])
+            _rt = _rt.push(_flat_var_types[i])
+        }
+        i = i + 1
+    }
+    _flat_var_names = _rn
+    _flat_var_types = _rt
+}
+
+// If `node` is a struct-construction expression (`Pt { ... }` StructInit, or a
+// positional `Pt(...)` Call) of a FLAT-ELIGIBLE struct type, return that type
+// name; else "". Used at LetStmt to bind a var to its flat-struct type. Narrow:
+// only direct construction literals (the receiver type is then statically known
+// for the whole immutable binding). decreases nothing — structural check.
+fn _flat_struct_init_type(node) {
+    if type_of(node) == "string" { return "" }
+    let k = node.kind
+    if k == "StructInit" {
+        if _is_flat_eligible_struct(node.name) { return node.name }
+        return ""
+    }
+    if k == "Call" {
+        // positional constructor: callee is a bare Ident naming a struct type.
+        if type_of(node.left) != "string" && node.left.kind == "Ident" {
+            if _is_flat_eligible_struct(node.left.name) { return node.left.name }
+        }
+    }
+    return ""
+}
+
+// struct type held by var `name`, or "" if not a known flat-struct binding.
+fn _flat_var_type(name) {
+    let mut i = 0
+    while i < len(_flat_var_names) {
+        if _flat_var_names[i] == name { return _flat_var_types[i] }
+        i = i + 1
+    }
+    return ""
+}
+
+// Emit the per-type flat C-struct typedef + flat constructor for a proven
+// monomorphic struct. Lives in user.c; carries the flat pointer in the public
+// HexaVal `vs` union slot (opaque carrier — no runtime.h edit). Field decl order
+// = slot order. Constructor signature MIRRORS the hash-map ctor (positional
+// HexaVal params) so existing call sites are unchanged. Fields are stored as raw
+// HexaVal (general — works for any field type; the offset read returns the
+// HexaVal directly, NO strcmp/IC). The win is the OFFSET vs the hash probe.
+fn gen2_flat_struct_typedef(node) {
+    let name = node.name
+    let nfields = len(node.fields)
+    let mut members = []
+    let mut params = []
+    let mut assigns = []
+    let mut fi = 0
+    while fi < nfields {
+        let fname = node.fields[fi].name
+        members.push("HexaVal f" + to_string(fi) + "; ")
+        params.push("HexaVal " + fname)
+        assigns.push("s->f" + to_string(fi) + " = " + fname + "; ")
+        fi = fi + 1
+    }
+    let mut out = "typedef struct " + name + "__flat { " + members.join("") + "} " + name + "__flat;\n"
+    out = out + "HexaVal " + name + "(" + params.join(", ") + ") {\n"
+    out = out + "    " + name + "__flat* s = (" + name + "__flat*)malloc(sizeof(" + name + "__flat));\n"
+    out = out + "    " + assigns.join("") + "\n"
+    out = out + "    HexaVal __v; __v.tag = TAG_ARRAY; __v.vs = (HexaValStruct*)s; return __v;\n"
+    out = out + "}\n"
+    return out
 }
 
 fn _known_hash(key) {

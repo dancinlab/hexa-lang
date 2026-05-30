@@ -1,0 +1,24 @@
+=== UNSHADOW typed monomorphic struct layout bench (F1) ===
+rt=/Users/mini/.hx/packages/hexa/self  work=/Users/mini/unshadow-typed-struct  runs=9
+--- C: monomorphic-struct field-read hot-loop (3 arms) ---
+  [ref_c    ] built=yes err_lines=0
+  [a_hashmap] built=yes err_lines=0
+  [b_flat   ] built=yes err_lines=0
+  g5 byte-diff (program output md5 — ALL THREE MUST be identical):
+    ref_c     : 0f047a3268a6e167334f5a28a80ea668
+    a_hashmap : 0f047a3268a6e167334f5a28a80ea668
+    b_flat    : 0f047a3268a6e167334f5a28a80ea668
+  perf best-of-9 wall (s):
+    ref_c     : 0.01
+    a_hashmap : 5.48   (hexa_map_get_ic strcmp/IC probe — BEFORE)
+    b_flat    : 0.05   (LANDED: flat typedef + offset load)
+  asm call/branch-op count (strcmp/IC-probe signal):
+    ref_c     : 2
+    a_hashmap : 19  (hash probe → call + branches)
+    b_flat    : 4  (offset → load, probe gone)
+--- INTEGRITY: dynamic-key struct stays hash-map (polymorphic) ---
+  [dyn_key  ] built=yes err_lines=0
+  dynamic-key read result (hash-map path, must be 5): 1dcca23355272056f04fe8bf20edfce0
+  → dynamic-key access stays on hexa_map_get_ic — the flat-struct
+    proof does NOT fire, so polymorphic/dynamic-key structs unchanged.
+=== done ===
