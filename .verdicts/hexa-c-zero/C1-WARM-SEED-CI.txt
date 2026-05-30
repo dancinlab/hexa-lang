@@ -36,3 +36,20 @@ Both are UPSTREAM (release-pipeline + cc --regen), NOT fixable inside C1 scope.
 33:  workflow_dispatch:
 40:    name: bootstrap (DISABLED — cold-seed removed by user decision)
 47:          echo "bootstrap is DISABLED (cold-seed removed by user decision 2026-05-30)."
+
+=== PR #2212 CHECK STATE (this docs-only PR; gate-2: NOT merged) ===
+# bootstrap workflow = workflow_dispatch-only -> does NOT run on this PR (correct).
+# The PR check tab shows 3 RED, but ALL 3 are PRE-EXISTING upstream/.c=0-removal
+# structural REDs on origin/main HEAD 5561241c8 — none introduced by this PR
+# (this PR touches only CI comments + docs + verdicts):
+#   - faithful-nobaseline (darwin-arm64 · linux-x86_64)  = FAIL
+#       same edge-asset gap (handoff 726b8b67); nobaseline-gate is RED on
+#       main HEAD 5561241c8 push-event too (and every prior commit).
+#   - check @grace consent trailers                       = FAIL
+#       grace_consent.yml `chmod +x build/hexa_v2_linux` on a committed
+#       transpiler binary REMOVED in the .c=0 graduation (NOT tracked on main)
+#       -> RED for ANY PR off the current main; not caused by this change.
+# origin/main HEAD 5561241c8 push runs: nobaseline-gate=failure · release=failure.
+# DECISION (gate 1+2): PR HELD OPEN, NOT merged — a docs/CI-comment change cannot
+# turn pre-existing upstream REDs green, and merging blind into a red check tab is
+# disallowed. C1 = git-rm CLOSED · warm-CI DEFERRED (honest). No fake green.
