@@ -84,6 +84,29 @@ fn _resolve_model(h: str, proxy_ok: int, proxy_host: str, proxy_port: str, direc
     return ResolvedHost { host: h, port: "", resolved: 0, via: "" }
 }
 
+// ── mirror of cloud_cli.hexa _proxy_fallback_direct decision (Fix-cloud-1) ──
+// PURE model of the proxy→direct single-retry trigger. The live
+// vast_direct_endpoint read is simulated by `direct_ok`/`direct_host`/
+// `direct_port` so this stays network-free while pinning the TRIGGER
+// CONDITIONS: fires ONLY when the proxy WON resolution AND the proxy dispatch
+// hit a TRANSPORT OUTAGE (exit_code == 255) AND a direct endpoint is mapped.
+struct DirectRetry {
+    retry:    int,
+    host:     str,
+    ssh_opts: [str]
+}
+
+fn _fallback_model(rh_resolved: int, rh_via: str, exit_code: int, base_opts: [str], direct_ok: int, direct_host: str, direct_port: str) -> DirectRetry {
+    if rh_resolved == 0 || rh_via != "proxy" || exit_code != 255 {
+        return DirectRetry { retry: 0, host: "", ssh_opts: [] }
+    }
+    if direct_ok == 0 {
+        return DirectRetry { retry: 0, host: "", ssh_opts: [] }
+    }
+    let drh = ResolvedHost { host: "root@" + direct_host, port: direct_port, resolved: 1, via: "direct" }
+    return DirectRetry { retry: 1, host: drh.host, ssh_opts: _apply_resolved_port(base_opts, drh) }
+}
+
 fn _ck_str(name: str, got: str, want: str) {
     if got != want {
         println("  FAIL: " + name + " got '" + got + "' want '" + want + "'")
@@ -150,6 +173,33 @@ fn main() {
     // ── unresolved host: ssh_opts untouched ────────────────────────────────
     let opts2 = _apply_resolved_port(["-o", "X=Y"], none)
     _ck("unresolved: opts unchanged length", len(opts2), 2)
+
+    // ── Fix-cloud-1: proxy→direct single retry on transport outage (255) ───
+    // proxy WON + 255 outage + direct mapped → retry once via the DIRECT IP,
+    // carrying the DIRECT port (not the stale proxy one).
+    let fbk = _fallback_model(1, "proxy", 255, [], 1, "154.59.156.28", "58047")
+    _ck("transport-255 over proxy → retry via direct", fbk.retry, 1)
+    _ck_str("direct retry host", fbk.host, "root@154.59.156.28")
+    _ck("direct retry carries the DIRECT port", _opts_contains(fbk.ssh_opts, "58047"), 1)
+    _ck("direct retry never the stale proxy host", _has_stale(fbk.host), 0)
+
+    // a GENUINE remote command failure (any non-255 exit) NEVER retries —
+    // the command actually ran; only a transport outage triggers fallback.
+    let cmdfail = _fallback_model(1, "proxy", 1, [], 1, "154.59.156.28", "58047")
+    _ck("remote exit 1 (real failure) → NO retry", cmdfail.retry, 0)
+    let cmdfail2 = _fallback_model(1, "proxy", 124, [], 1, "154.59.156.28", "58047")
+    _ck("remote exit 124 (max-wall) → NO retry", cmdfail2.retry, 0)
+
+    // the direct endpoint NEVER retries into itself (avoids ping-pong); and a
+    // proxy outage with NO mapped direct endpoint stays a proxy failure.
+    let viad = _fallback_model(1, "direct", 255, [], 1, "154.59.156.28", "58047")
+    _ck("already-direct 255 → NO further retry", viad.retry, 0)
+    let nodirect = _fallback_model(1, "proxy", 255, [], 0, "", "")
+    _ck("proxy 255 but no direct mapped → NO retry", nodirect.retry, 0)
+
+    // an unresolved host (real host, not a vast id) never falls back.
+    let unres = _fallback_model(0, "", 255, [], 1, "154.59.156.28", "58047")
+    _ck("unresolved host 255 → NO retry", unres.retry, 0)
 
     println("runexec_proxy_resolve_test PASS")
 }

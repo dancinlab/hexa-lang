@@ -60,6 +60,7 @@
 use "stdlib/cloud/cloud"
 use "stdlib/cloud/vast"
 use "stdlib/cloud/pod_registry"
+use "stdlib/cloud/preflight_dft"  // tls_dft_mpi_sweet_spot — d11 pre-rent OOM mem-budget gate (Fix-deck-1)
 use "stdlib/io"  // write_text — atomic plaintext write of the .validated stamp (dft_run)
 
 // Bohr radius in angstrom — the QE `alat`→angstrom cell conversion factor
@@ -1303,6 +1304,136 @@ fn _dft_stage_probe_cmd(procname: str, out: str) -> str {
         + "else echo __DFT_FAILED__; fi"
 }
 
+// ── d11 pre-rent OOM gate (Fix-deck-1) ───────────────────────────────
+//
+// The whole RTSC wave3b --detach batch SIGKILL'd at SCF iter#2 (~71s, uniform) —
+// an OOM signature: a superhydride relax under-provisioned RAM on a pod whose
+// only RAM-relevant offer floor was implicit. d11 (size the job before paid GPU
+// rent) requires a HARD mem-budget gate BEFORE the billing rent: refuse-or-
+// down-size when atoms·basis·np won't fit the offer RAM, rather than renting and
+// OOM-killing. The budget math is NOT reimplemented here — it is delegated whole
+// to tls_dft_mpi_sweet_spot (stdlib/cloud/preflight_dft); this code only parses a
+// DftSpec out of the deck and reads the verdict.
+
+// RAM floor (GiB) the gate sizes the relax against AND then pins into the rent
+// query (cpu_ram>=N) so the rented offer is GUARANTEED to satisfy the closed-form
+// fit — without it the fit would be against a hypothetical the offer query never
+// enforced (the wave3b leak). 64 GiB is a sane mid-tier vast CPU-node floor.
+let DFT_DETACH_RAM_FLOOR = 64
+
+// _dft_field_int — the integer value of a QE namelist `key = value` field in
+// `text` (first match). e.g. `nat = 10` → 10, `ecutwfc = 80` → 80. 0 if absent.
+fn _dft_field_int(text: str, key: str) -> int {
+    let lines = text.split("\n")
+    let mut i = 0
+    while i < len(lines) {
+        let t = lines[i].trim()
+        if t.contains(key) && t.contains("=") {
+            // value = the last numeric token on the line (after `key = …`).
+            return _dft_last_int(t)
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+// _dft_deck_spec — parse the deck's relax input into a DftSpec for the OOM gate.
+// Atoms come from the ATOMIC_POSITIONS coordinate-row count (authoritative; falls
+// back to the `nat =` field). n_basis_pw is the standard plane-wave count estimate
+// ≈ (1/6π²)·(2·Ecut)^{3/2}·V_cell with V_cell ≈ n_atoms × 60 bohr³ (superhydride
+// per-atom volume) — this is an INPUT estimate, not budget math. method_id=0 (SCF;
+// the relax's per-step cost is SCF-dominated). All integer arithmetic (g-idiom).
+fn _dft_deck_spec(deck: str) -> DftSpec {
+    let relax_name = dft_relax_input_name(deck)
+    let mut text = ""
+    if len(relax_name) > 0 {
+        text = read_file(deck + "/" + relax_name)
+    }
+    // atoms — count real ATOMIC_POSITIONS coordinate rows; fall back to `nat =`.
+    let lines = text.split("\n")
+    let mut n_atoms = 0
+    let mut in_pos = 0
+    let mut i = 0
+    while i < len(lines) {
+        let raw = lines[i]
+        if raw.contains("ATOMIC_POSITIONS") {
+            in_pos = 1
+        } else if in_pos == 1 {
+            if _dft_is_coord_row(raw) == 1 {
+                n_atoms = n_atoms + 1
+            } else if len(raw.trim()) > 0 {
+                in_pos = 0
+            }
+        }
+        i = i + 1
+    }
+    if n_atoms <= 0 { n_atoms = _dft_field_int(text, "nat") }
+    if n_atoms <= 0 { n_atoms = 1 }
+    // ecutwfc (Ry) — drives the plane-wave count; default 80 (deck-gen RTSC).
+    let mut ecut = _dft_field_int(text, "ecutwfc")
+    if ecut <= 0 { ecut = 80 }
+    // 2·Ecut → integer (2·Ecut)^{3/2} via isqrt of the cube (closed-form input).
+    let two_ec = 2 * ecut
+    let cube = two_ec * two_ec * two_ec
+    let pw_factor = _dft_isqrt(cube)            // ≈ (2·Ecut)^{3/2}
+    let v_cell = n_atoms * 60                    // bohr³ — superhydride per-atom vol
+    // n_basis ≈ pw_factor · V / (6π² ≈ 59); minimum 1.
+    let mut n_basis = pw_factor * v_cell / 59
+    if n_basis < 1 { n_basis = 1 }
+    // electrons — informational band count; ≈ 8 per atom for hydride cells.
+    let n_elec = n_atoms * 8
+    return DftSpec {
+        n_atoms:     n_atoms,
+        n_basis_pw:  n_basis,
+        n_kpoints:   1,          // irreducible-k after symmetry; conservative 1
+        n_spin:      1,
+        n_electrons: n_elec,
+        cutoff_ry:   ecut,
+        method_id:   0           // SCF — relax per-step cost is SCF-dominated
+    }
+}
+
+// _dft_isqrt — integer floor(sqrt(n)) (Newton). pure helper for the PW estimate.
+fn _dft_isqrt(n: int) -> int {
+    if n < 2 { return n }
+    let mut x = n
+    let mut y = (x + 1) / 2
+    while y < x {
+        x = y
+        y = (x + n / x) / 2
+    }
+    return x
+}
+
+// _dft_oom_preflight — d11 HARD gate. Sizes the deck's relax (DftSpec) against the
+// RAM floor via tls_dft_mpi_sweet_spot (REUSED budget math) BEFORE the paid rent.
+// Returns the recommended MPI rank count to CLAMP -np to, or 0 to REFUSE the fire
+// (the relax won't fit even one rank on the floor → renting would OOM-kill it, the
+// wave3b pattern). Prints a clear [dft-run] verdict either way.
+fn _dft_oom_preflight(deck: str) -> int {
+    let spec = _dft_deck_spec(deck)
+    let node = DftNodeSpec {
+        total_mem_gib: DFT_DETACH_RAM_FLOOR,
+        n_cpu_cores:   16,       // the rent query's cpu_cores_effective>=16 floor
+        has_gpu:       0,
+        gpu_mem_gib:   0
+    }
+    let rec = tls_dft_mpi_sweet_spot(spec, node)
+    println("[dft-run] ⓪ OOM preflight (d11) — " + to_string(spec.n_atoms) + " atoms · ~"
+        + to_string(spec.n_basis_pw) + " PW basis · per-rank ~" + to_string(rec.per_rank_mem_gib)
+        + " GiB vs " + to_string(DFT_DETACH_RAM_FLOOR) + " GiB floor")
+    if rec.kind == "mem-bound-zero" {
+        println("[dft-run] ⓪ ✗ REFUSED — one MPI rank needs ~" + to_string(rec.per_rank_mem_gib)
+            + " GiB but the " + to_string(DFT_DETACH_RAM_FLOOR) + " GiB offer floor can't fit it.")
+        println("[dft-run]   renting would OOM-kill the relax (wave3b SIGKILL@iter#2 pattern). NOT firing.")
+        println("[dft-run]   reduce ecutwfc / cell size, or rent a larger-RAM node manually (--query cpu_ram>=N).")
+        return 0
+    }
+    println("[dft-run] ⓪ OK — relax fits; -np clamped to " + to_string(rec.recommended_np)
+        + " (mem-budget sweet-spot, eff " + to_string(rec.efficiency_bp) + "bp)")
+    return rec.recommended_np
+}
+
 // _dft_detach — option α PHASE-1. Rents → resolves the direct endpoint →
 // reachability precheck → uploads the deck → provisions QE → fetches pseudos →
 // launches RELAX *detached on the pod* (cloud_nohup → remote logfile) → records
@@ -1313,8 +1444,18 @@ fn _dft_stage_probe_cmd(procname: str, out: str) -> str {
 // the POD, not in a detached local process, so the Bash cap is never exceeded.
 fn _dft_detach(deck: str, image: str, disk: int, owner: str, query: str, identity: str, walltime_h: int, relax_name: str) -> int {
     println("[dft-run] ━ DETACH (phase-1) — rent + provision + launch relax detached on the pod ━")
+    // ⓪ d11 HARD OOM gate (Fix-deck-1) — size the relax BEFORE the paid rent. A
+    // 0 verdict means even one rank won't fit the RAM floor → REFUSE (don't rent
+    // an OOM-doomed pod). Otherwise clamp -np to the mem-budget sweet-spot AND pin
+    // cpu_ram>=floor into the offer query so the rented node actually has the RAM
+    // the closed-form fit assumed (the wave3b leak: no enforced RAM floor).
+    let np_cap = _dft_oom_preflight(deck)
+    if np_cap <= 0 {
+        return 1
+    }
+    let ram_query = query + " cpu_ram>=" + to_string(DFT_DETACH_RAM_FLOOR)
     println("[dft-run] ① RENT — searching verified offers...")
-    let offer = vast_search_offers(query, 1)
+    let offer = vast_search_offers(ram_query, 1)
     if offer.ok == 0 {
         println("[dft-run] rent: " + offer.message)
         return 1
@@ -1361,11 +1502,18 @@ fn _dft_detach(deck: str, image: str, disk: int, owner: str, query: str, identit
         return _dft_teardown(inst.instance_id, 1)
     }
 
-    // ③ phys-core -np
+    // ③ phys-core -np, CLAMPED to the ⓪ OOM-gate mem-budget sweet-spot (np_cap) so
+    // a high-core but modest-RAM node can't over-subscribe ranks into an OOM kill.
     let lscpu = cloud_exec_opts(host, ssh_opts, "lscpu")
     let np_raw = dft_physcores(lscpu.stdout_)
-    let np = if np_raw > 0 { np_raw } else { 8 }
-    println("[dft-run] ③ -np=" + to_string(np) + " (phys cores)")
+    let np_phys = if np_raw > 0 { np_raw } else { 8 }
+    let np = if np_phys < np_cap { np_phys } else { np_cap }
+    if np < np_phys {
+        println("[dft-run] ③ -np=" + to_string(np) + " (phys " + to_string(np_phys)
+            + " → clamped to ⓪ mem-budget sweet-spot " + to_string(np_cap) + ")")
+    } else {
+        println("[dft-run] ③ -np=" + to_string(np) + " (phys cores)")
+    }
 
     // ③ provision QE (idempotent; skipped if pw.x present from a QE --image).
     println("[dft-run] ③ provision QE (apt quantum-espresso if pw.x absent)...")

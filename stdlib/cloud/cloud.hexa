@@ -445,7 +445,7 @@ fn cloud_nohup_opts(host: str, ssh_opts: [str], argv: [str], logfile: str) -> Cl
     if len(warns) > 0 {
         return _cloud_fail("cloud_nohup: refused — " + warns[0])
     }
-    let remote = "nohup " + _join_argv(argv) + " > " + _shq(logfile) + " 2>&1 & echo __CLOUD_PID__=$!"
+    let remote = "nohup " + _join_argv(argv) + " < /dev/null > " + _shq(logfile) + " 2>&1 & echo __CLOUD_PID__=$!"
     let cap = _ssh_capture_status(host, ssh_opts, remote)
     let out = cap.body
     let pid = _parse_uint_after(out, "__CLOUD_PID__=")
