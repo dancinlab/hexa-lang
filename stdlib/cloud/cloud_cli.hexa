@@ -64,6 +64,7 @@ fn _cloud_help() {
     println("                                                         also cross-refs ./pods.json budget.cap: on breach → alert + (with --kill) tear down the lowest-value running pod (g64 honor-cap)")
     println("                                                         bare = DRY-RUN table (pod·age·util·has-proc·has-workdir·idle?·action); --kill enforces (needs RUNPOD_API_KEY / vast key)")
     println("  cloud dft-run   <deck-dir> [--go] [--query Q] [--walltime-h N] [--identity P] [--image I] [--disk G] [--owner T]")
+    println("  cloud dft-fanout <deck-dir>... [--go] [--force] [--query Q] [--walltime-h N] [...]  (§4b SEPARATE-PODS: N candidates -> N pods, 1 deck/pod; PREVIEW $0 unless --go)")
     println("  cloud parallel-audit --physcores N --live-jobs N --ranks-per-job N --queued-decks N  (d_parallel_fire 위반 가드 — VIOLATION→exit1+split 제안)")
     println("                                                         guarded DFT el-ph (QE) dispatch; PREVIEW ($0) unless --go. deck: relax.in·ph.in·scf.in.head·scf.in.tail·pseudo/")
     println("  cloud pods                                              full work table from cwd's ./pods.json (per-project active pod/job manifest)")
@@ -1564,7 +1565,7 @@ fn main() {
     while i < len(av) {
         let t = av[i]
         if si < 0 {
-            if t == "rent" || t == "up" || t == "rm" || t == "down" || t == "destroy" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "fire" || t == "poll" || t == "tail" || t == "watch" || t == "ssh-port" || t == "resolve" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "reap" || t == "adopt" || t == "attribute" || t == "forget" || t == "dft-run" || t == "parallel-audit" || t == "pods" || t == "dispatch" || t == "providers" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
+            if t == "rent" || t == "up" || t == "rm" || t == "down" || t == "destroy" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "fire" || t == "poll" || t == "tail" || t == "watch" || t == "ssh-port" || t == "resolve" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "reap" || t == "adopt" || t == "attribute" || t == "forget" || t == "dft-run" || t == "dft-fanout" || t == "parallel-audit" || t == "pods" || t == "dispatch" || t == "providers" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
                 si = i
                 sub = t
             }
@@ -1726,6 +1727,14 @@ fn main() {
         // billing pod and runs the rent/transport/chain/monitor-guarded chain.
         // Encodes the demiurge RTSC checklist (dft_dispatch.hexa, INBOX #1249).
         let rc = dft_run(av, si + 1)
+        exit(rc)
+    }
+    if sub == "dft-fanout" {
+        // §4b SEPARATE-PODS-PER-CANDIDATE executor (PR #2125 follow-up, handoff
+        // 22486f26): fan N candidate decks onto N pods, exactly one deck per pod
+        // (project.tape d_parallel_fire 1순위 + d17). PREVIEW roll-call by default
+        // ($0); --go rents one pod per READY deck and dispatches each chain.
+        let rc = dft_fanout(av, si + 1)
         exit(rc)
     }
     if sub == "pods" {

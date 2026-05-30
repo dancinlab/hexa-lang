@@ -946,6 +946,151 @@ pub fn dft_run(av: [str], start: int) -> int {
     return _dft_go(deck, image, disk, owner, query, identity, walltime_h, relax_name)
 }
 
+// ── §4b SEPARATE-PODS fan-out (d_parallel_fire 1순위) ─────────────────
+//
+// The RTSC deck-gen §4b RUNBOOK (stdlib/deck/rtsc.hexa, PR #2125) promotes
+// SEPARATE-PODS-PER-CANDIDATE as the DEFAULT launch posture: N candidate decks
+// → N pods, exactly one deck per pod (project.tape d_parallel_fire 1순위 +
+// d17 — never queue a candidate behind another when fresh parallel capacity is
+// rentable). The single-deck `dft_run` could only land ONE deck on ONE pod, so
+// the §4b header's "디스패처가 N pod 동시 rent" promise had no executor and an
+// operator fell back to packing N decks onto one pod (the disk-coupling leak
+// PR #2125 demotes to a FALLBACK). `dft_fanout` is that missing executor: it
+// rolls each candidate deck through the SAME completeness + d16 `.validated`
+// gate as `dft_run`, then fires each READY deck on its OWN pod via `_dft_go`
+// (one candidate = one pod = isolated per-pod scratch — no shared-disk davcio
+// "No space left" coupling). PLAN-by-default ($0 roll-call); `--go` fires.
+//
+// HONEST SCOPE: hexa stdlib has no thread primitive, so the rent/fire of the N
+// pods is issued one-after-another rather than truly simultaneously. The
+// d_parallel_fire invariant this DOES satisfy is the structural one — every
+// candidate gets its OWN pod (never packed behind another on one pod), and each
+// pod's chain is independent. Wall-clock-simultaneous N-pod rent (a remote-job
+// concurrency layer) remains the larger follow-up arc.
+
+// _dft_deck_complete — TRUE iff `deck` has the relax + ph + scf inputs `_dft_go`
+// needs (the same three-file contract `dft_run` checks inline). Pure over the
+// filesystem — no rent, no spend.
+fn _dft_deck_complete(deck: str) -> bool {
+    let has_relax = len(dft_relax_input_name(deck)) > 0
+    let has_ph = exec("test -f '" + deck + "/ph.in' && printf yes || printf no") == "yes"
+    let has_scf = dft_scf_head_tail(deck).ok == 1
+    return has_relax && has_ph && has_scf
+}
+
+// _dft_readiness_tag — one of "READY" | "UNVALIDATED" | "INCOMPLETE" for a deck,
+// mirroring dft_run's gate: a deck must be COMPLETE (3 inputs) and carry a fresh
+// `.validated` stamp to fire without --force. `force=1` promotes a complete-but-
+// unvalidated deck to READY (the expert override, leak risk acknowledged). This
+// is the pure classifier the fan-out plan + the --go partition both read, so the
+// preview roll-call and the fire decision share ONE source of truth.
+fn _dft_readiness_tag(deck: str, force: int) -> str {
+    if !_dft_deck_complete(deck) { return "INCOMPLETE" }
+    if _dft_stamp_fresh(deck) { return "READY" }
+    if force == 1 { return "READY" }
+    return "UNVALIDATED"
+}
+
+// dft_fanout_plan — PURE plan-text builder (isolated-testable, no I/O): given a
+// parallel list of deck dirs + their readiness tags, render the SEPARATE-PODS
+// fan-out roll-call (one candidate = one pod) + the ready/blocked counts. The
+// `decks` and `tags` arrays are index-aligned. Kept side-effect-free so a test
+// can assert the exact plan text without renting a pod.
+pub fn dft_fanout_plan(decks: [str], tags: [str]) -> str {
+    let n = len(decks)
+    let mut ready = 0
+    let mut s = "[dft-fanout] §4b SEPARATE-PODS-PER-CANDIDATE (d_parallel_fire 1순위)\n"
+    s = s + "[dft-fanout] " + to_string(n) + " candidate deck(s) -> "
+        + to_string(n) + " pod(s), exactly one deck per pod (d17 · isolated scratch)\n"
+    let mut i = 0
+    while i < n {
+        let tag = if i < len(tags) { tags[i] } else { "INCOMPLETE" }
+        let mark = if tag == "READY" { "+ pod " + to_string(ready + 1) } else { "x skip" }
+        s = s + "  [" + mark + "] " + decks[i] + " - " + tag + "\n"
+        if tag == "READY" { ready = ready + 1 }
+        i = i + 1
+    }
+    let blocked = n - ready
+    s = s + "[dft-fanout] " + to_string(ready) + " READY -> "
+        + to_string(ready) + " pod(s) to rent; " + to_string(blocked) + " blocked\n"
+    if blocked > 0 {
+        s = s + "[dft-fanout] blocked decks need `hexa cloud dft-run <deck> --validate`"
+            + " (or --force to fire unvalidated)\n"
+    }
+    return s
+}
+
+// dft_fanout — `hexa cloud dft-fanout <deck-dir>... [--go] [--force] [...]`.
+// The §4b executor: roll-call each candidate deck, then (default) PREVIEW the
+// separate-pods plan, or (--go) fire each READY deck on its OWN pod via _dft_go.
+// Mirrors dft_run's flags so a candidate fired here is identical to one fired
+// singly — just with the 1-deck-per-pod fan-out the §4b RUNBOOK promises.
+pub fn dft_fanout(av: [str], start: int) -> int {
+    // collect every positional deck dir (dft_run takes one; fan-out takes N).
+    let mut decks: [str] = []
+    let mut i = start
+    while i < len(av) {
+        let t = av[i]
+        if len(t) >= 2 && t.substring(0, 2) == "--" {
+            i = i + 2  // flag + its value (value-taking flags); --go/--force re-scanned below
+        } else {
+            decks = decks + [t]
+            i = i + 1
+        }
+    }
+    // --go / --force are valueless — re-scan independently so the +2 skip above
+    // never silently eats a deck dir following one of them.
+    let go = _dft_has_flag(av, start, "--go")
+    let force = _dft_has_flag(av, start, "--force")
+    if len(decks) == 0 {
+        println("[dft-fanout] usage: hexa cloud dft-fanout <deck-dir>... [--go] [--force] [--identity P] [--query Q] [--walltime-h N] [--image I] [--disk G] [--owner T]")
+        println("           fan N candidate decks onto N pods - exactly one deck per pod (§4b d_parallel_fire 1순위).")
+        println("           default = PREVIEW roll-call ($0); --go rents one pod PER ready deck and dispatches.")
+        return 2
+    }
+    let identity = _dft_flag_val(av, start, "--identity", env_var("HOME") + "/.ssh/id_vast_anima")
+    let extra_q = _dft_flag_val(av, start, "--query", "")
+    let walltime_h = _dft_atoi(_dft_flag_val(av, start, "--walltime-h", "12"))
+    let image = _dft_flag_val(av, start, "--image", "ubuntu:22.04")
+    let disk = _dft_atoi(_dft_flag_val(av, start, "--disk", "60"))
+    let owner = _dft_flag_val(av, start, "--owner", "(hexa-cloud dft-fanout)")
+
+    // ① roll-call — classify each candidate (pure over fs + stamp; $0).
+    let mut tags: [str] = []
+    let mut j = 0
+    while j < len(decks) {
+        tags = tags + [_dft_readiness_tag(decks[j], force)]
+        j = j + 1
+    }
+    print(dft_fanout_plan(decks, tags))
+
+    if go == 0 {
+        println("[dft-fanout] PREVIEW only - re-run with --go to rent one pod per READY deck ($-incurring).")
+        return 0
+    }
+
+    // ② fire — one READY deck per pod, sequentially (no thread primitive: the
+    // rents are issued back-to-back, but each candidate still gets its OWN pod).
+    let query = dft_rent_query(extra_q)
+    let mut fired = 0
+    let mut failed = 0
+    let mut k = 0
+    while k < len(decks) {
+        if tags[k] == "READY" {
+            let deck = decks[k]
+            let relax_name = dft_relax_input_name(deck)
+            println("[dft-fanout] -- firing pod for candidate: " + deck + " --")
+            let rc = _dft_go(deck, image, disk, owner, query, identity, walltime_h, relax_name)
+            if rc == 0 { fired = fired + 1 } else { failed = failed + 1 }
+        }
+        k = k + 1
+    }
+    println("[dft-fanout] done - " + to_string(fired) + " pod(s) completed, "
+        + to_string(failed) + " failed/aborted.")
+    if failed > 0 { return 1 }
+    return 0
+}
+
 // _dft_go — the $-incurring path. Rents → resolves the direct endpoint →
 // reachability precheck → uploads the deck → runs relax → harvests +
 // hexa-parses the geometry → assembles + runs scf → runs el-ph → renders the
