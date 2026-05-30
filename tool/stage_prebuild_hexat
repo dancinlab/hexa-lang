@@ -1,83 +1,98 @@
 #!/usr/bin/env bash
-# stage_prebuild_hexat — produce build/hexat (the bootstrap transpiler binary)
-#   for the release build chain.
+# ─────────────────────────────────────────────────────────────────────────
+# tool/stage_prebuild_hexat — build build/hexat (the self-hosted transpiler)
+# from self/native/hexa_cc.c + runtime.a WHILE the seeds are still present.
+# SHARED by release.yml + nobaseline-gate.yml.
 #
-# Strategy mirrors stage_resolve_runtime_a:
-#   1. If self/native/hexa_cc.c is present, build hexat from source via the
-#      existing in-tree path ($CC against runtime.a + the native .c units).
-#   2. Otherwise (graduated tree), try to pull build/hexat out of the prior
-#      `edge` release tarball for this target.
-#   3. Edge-miss fallback (P7): restore the pinned pre-graduation native .c
-#      seeds from git and build hexat from source. Restored files are
-#      EPHEMERAL — left uncommitted, rebuilt at CI time.
+# ── Why this exists (THE nobaseline gate-fail root cause) ────────────────────
+# `hexa cc --regen` (used by stage_regen_hexa_cc to recreate a removed
+# hexa_cc.c) transpiles the 4 SSOT modules by driving a `build/hexat` binary.
+# When build/hexat is absent it tries to BOOTSTRAP one via cmd_cc, which
+# clang-compiles self/runtime.c → runtime.o then self/native/hexa_cc.c +
+# runtime.o → build/hexat.
 #
+# In the nobaseline gate, ALL 23 seeds (including self/runtime.c AND
+# self/native/hexa_cc.c) are removed BEFORE Stage 0a regen, so that bootstrap
+# clang fails ("no such file: ./self/runtime.c") → build/hexat never appears →
+# `hexa cc --regen` reports "hexat not found" → FATAL. (The edge `hexa` asset
+# is the stale 0.1.0-dispatch release whose in-process 2-arg transpile only
+# emits a stub, so it cannot self-serve as the transpiler either.)
+#
+# final3 succeeds at the SAME `hexa cc --regen` purely by accident of ordering:
+# its section C runs the emitter while runtime.c + hexa_cc.c are still present,
+# which bootstraps build/hexat; section A then reuses that binary after removal.
+#
+# This script makes that ordering EXPLICIT and shared: build build/hexat from
+# the seeds up-front (Stage 0b time, seeds present), so the later removal +
+# `hexa cc --regen` finds a ready transpiler and reuses it (no re-bootstrap).
+#
+# Verified (ubu-1, linux-x86_64): prebuild hexat → remove all 23 seeds →
+# `hexa cc --regen` → 948326-byte hexa_cc.c.new, rc=0.
+#
+# Env contract (caller sets, same as Stage 0b):
+#   CC                    — C compiler (clang|gcc)
+#   LIBS                  — link libs ("" | "-lm -ldl")
+#   CFLAGS_COMMON         — (optional) base CFLAGS
+#   HEXA_PREBUILT_RUNTIME — prebuilt runtime.a (Stage 0b output)
+#
+# No-op-safe for release: release never removes seeds, so a prebuilt build/hexat
+# is simply a ready transpiler (does not change any emitted bytes).
+# ─────────────────────────────────────────────────────────────────────────
 set -euo pipefail
+: "${CC:?CC must be set}"
+LIBS="${LIBS:-}"
+CFLAGS="${CFLAGS_COMMON:--O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs}"
+# -fbracket-depth is clang-only (deeply-nested generated C); gcc rejects it.
+case "$CC" in *clang*) CFLAGS="$CFLAGS -fbracket-depth=4096";; esac
 
-TARGET="${1:-${TARGET:-}}"
-CC="${CC:-cc}"
-CFLAGS="${CFLAGS:--O2}"
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$ROOT"
-
-# Pinned pre-graduation seed commit (parent of graduation commit 7906951c0).
-FROZEN_SEED_REF="7906951c0^"
-
-# The .c compilation units hexat_main.c needs: itself plus the three native
-# .c files it #includes (hexa_cc.c, hexat_emit.c, atlas_embed.c). The headers
-# runtime_decl.h / native_gate.h remain committed in the graduated tree.
-# Derived from `git show $REF:self/native/hexat_main.c`.
-FROZEN_HEXAT_C="
-self/native/hexat_main.c
-self/native/hexa_cc.c
-self/native/hexat_emit.c
-self/native/atlas_embed.c
-"
-
+ROOT="$PWD"
+RA="${HEXA_PREBUILT_RUNTIME:-$ROOT/build/runtime.a}"
+HEXAT="$ROOT/build/hexat"
+CC_SRC="$ROOT/self/native/hexa_cc.c"
 mkdir -p build
 
-build_hexat_from_source() {
-  echo "[prebuild_hexat] building build/hexat from source"
-  "$CC" $CFLAGS -I self -I self/native -o build/hexat \
-    self/native/hexat_main.c build/runtime.a
-  echo "[prebuild_hexat] built build/hexat from source"
-}
-
-restore_frozen_seed() {
-  echo "[prebuild_hexat] restoring pinned pre-graduation native .c seeds from ${FROZEN_SEED_REF}"
-  # shellcheck disable=SC2086
-  git checkout "$FROZEN_SEED_REF" -- $FROZEN_HEXAT_C
-}
-
-# chicken-egg note: the very first edge tarball predated hexat-bundling, so a
-# fresh edge may lack build/hexat; once one platform publishes a hexat-bearing
-# tarball, the others can pull it. The frozen-seed fallback (P7) removes this
-# dependency by rebuilding hexat from the pinned pre-graduation .c seeds, so
-# every platform is self-sufficient without pulling edge.
-
-# --- step 1: native .c present (seeds-present path, byte-equivalent) ---
-if [ -f self/native/hexat_main.c ] && [ -f self/native/hexa_cc.c ]; then
-  echo "[prebuild_hexat] native .c seeds present -> building hexat from source"
-  build_hexat_from_source
+if [ -x "$HEXAT" ]; then
+  echo "[stage_prebuild_hexat] build/hexat already present — no-op"
   exit 0
 fi
 
-if [ -z "$TARGET" ]; then
-  echo "[prebuild_hexat] ERROR: TARGET not set" >&2
+if [ ! -f "$CC_SRC" ]; then
+  # hexa_cc.c already removed (post-PR2: seeds git-removed at checkout). We can
+  # NOT build build/hexat from source here. Pull a prebuilt build/hexat from the
+  # prior edge tarball (release.yml Package bundles it — the runtime.a "frozen
+  # dough" precedent #2019, extended to the transpiler). With a ready build/hexat
+  # in place, the later `hexa cc --regen` reuses it instead of trying (and
+  # failing) to clang-bootstrap from the now-removed self/runtime.c + hexa_cc.c.
+  echo "[stage_prebuild_hexat] self/native/hexa_cc.c absent — pulling build/hexat from prior edge"
+  ASSET="${EDGE_ASSET:?EDGE_ASSET must be set when seeds are removed}"
+  EDGE_DIR="/tmp/edge_hexat"
+  rm -rf "$EDGE_DIR"; mkdir -p "$EDGE_DIR"
+  if gh release download edge --repo "${GITHUB_REPOSITORY:-dancinlab/hexa-lang}" \
+        --pattern "$ASSET" --dir "$EDGE_DIR" --clobber 2>/tmp/hexat_dl.err \
+     && tar xzf "$EDGE_DIR/$ASSET" -C "$EDGE_DIR" 2>/dev/null; then
+    PRIOR_HEXAT="$(find "$EDGE_DIR" -type f -path '*/build/hexat' | head -1)"
+    if [ -n "$PRIOR_HEXAT" ]; then
+      cp "$PRIOR_HEXAT" "$HEXAT"
+      chmod +x "$HEXAT"
+      test -x "$HEXAT"
+      echo "[stage_prebuild_hexat] build/hexat from edge = $(wc -c < "$HEXAT") bytes"
+      exit 0
+    fi
+    echo "[stage_prebuild_hexat] FATAL: prior edge tarball ($ASSET) has NO build/hexat —" >&2
+    echo "  this edge PREDATES hexat-bundling (release.yml Package cp build/hexat)." >&2
+    echo "  Publish a hexat-bearing edge first (merge PR-A → main → edge release)," >&2
+    echo "  then re-run this faithful gate. (chicken-egg boundary — expected RED.)" >&2
+    exit 1
+  fi
+  echo "[stage_prebuild_hexat] FATAL: edge download failed ($(head -1 /tmp/hexat_dl.err 2>/dev/null))" >&2
+  exit 1
+fi
+if [ ! -f "$RA" ]; then
+  echo "[stage_prebuild_hexat] FATAL: runtime.a missing at $RA (run Stage 0b first)" >&2
   exit 1
 fi
 
-# --- step 2: graduated tree -> try edge release first ---
-TARGET_TARBALL="hexa-${TARGET}.tar.gz"
-echo "[prebuild_hexat] native .c absent -> trying edge release tarball for build/hexat"
-if gh release download edge --pattern "$TARGET_TARBALL" --dir build --clobber 2>/dev/null \
-   && tar -xzf "build/${TARGET_TARBALL}" -C build 2>/dev/null \
-   && [ -f build/hexat ]; then
-  echo "[prebuild_hexat] extracted build/hexat from edge tarball"
-  exit 0
-fi
-
-# --- step 3: edge miss -> frozen-seed fallback (restore native .c, compile) ---
-echo "[prebuild_hexat] edge tarball missing/unusable for ${TARGET} -> frozen-seed fallback"
-restore_frozen_seed
-build_hexat_from_source
-exit 0
+echo "[stage_prebuild_hexat] building build/hexat from hexa_cc.c + runtime.a"
+$CC $CFLAGS -I "$ROOT" -I "$ROOT/self" "$CC_SRC" "$RA" -o "$HEXAT" $LIBS
+test -x "$HEXAT"
+echo "[stage_prebuild_hexat] build/hexat = $(wc -c < "$HEXAT") bytes"
