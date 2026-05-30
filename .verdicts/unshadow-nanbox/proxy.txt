@@ -1,0 +1,30 @@
+# UNSHADOW §nanbox — faithful A/B proxy verbatim (mini Apple M4 arm64)
+# repro: tool/unshadow_nanbox_bench.hexa --runs 3  (emits cc -O2 proxy to temp work dir)
+# date: 2026-05-30 · best-of-7 stabilized (single runs are noisy, esp value-pass)
+
+## AXIS 1 — sequential traverse+sum (16B box vs 8B NaN-box)
+sizeof: 16B-box=16  8B-nanbox=8
+array footprint @ N=8000000:  A=128.0 MB   B=64.0 MB  (2.00x denser)
+traverse+sum wall:  A(16B)=0.392s   B(8B)=1.096s   B/A=2.795 (-180% faster)
+checksum match: YES (s16=1279999840000000 s8=1279999840000000)
+real-NaN bits=0x7ff8000000000000  is_boxed()=0  (collision risk: depends on canonicalization)
+
+## AXES 2+3 — random/cache-pressure + value-pass register-fit (7 repeated runs)
+[RANDOM/cache-pressure] A(16B)=0.246s B(8B)=0.226s  B/A=0.919 (8% faster)  match=YES
+[VALUE-PASS register-fit] A(16B)=0.166s B(8B)=0.226s  B/A=1.364 (-36% faster)
+[RANDOM/cache-pressure] A(16B)=0.255s B(8B)=0.222s  B/A=0.872 (13% faster)  match=YES
+[VALUE-PASS register-fit] A(16B)=0.165s B(8B)=0.215s  B/A=1.305 (-30% faster)
+[RANDOM/cache-pressure] A(16B)=0.245s B(8B)=0.219s  B/A=0.893 (11% faster)  match=YES
+[VALUE-PASS register-fit] A(16B)=0.157s B(8B)=0.205s  B/A=1.306 (-31% faster)
+[RANDOM/cache-pressure] A(16B)=0.241s B(8B)=0.209s  B/A=0.868 (13% faster)  match=YES
+[VALUE-PASS register-fit] A(16B)=0.152s B(8B)=0.202s  B/A=1.326 (-33% faster)
+[RANDOM/cache-pressure] A(16B)=0.240s B(8B)=0.214s  B/A=0.892 (11% faster)  match=YES
+[VALUE-PASS register-fit] A(16B)=0.157s B(8B)=0.215s  B/A=1.372 (-37% faster)
+[RANDOM/cache-pressure] A(16B)=0.248s B(8B)=0.228s  B/A=0.920 (8% faster)  match=YES
+[VALUE-PASS register-fit] A(16B)=0.163s B(8B)=0.215s  B/A=1.317 (-32% faster)
+[RANDOM/cache-pressure] A(16B)=0.246s B(8B)=0.221s  B/A=0.900 (10% faster)  match=YES
+[VALUE-PASS register-fit] A(16B)=0.172s B(8B)=0.219s  B/A=1.272 (-27% faster)
+
+## FINDING: NaN-box loses on seq(2.5-2.8x) AND value-pass(30-36%, best-of-7);
+##   wins ONLY memory-bound random-access (7-11%). register-fit hypothesis FALSIFIED.
+##   => per-program GATED default OFF; advantage narrow & workload-conditional.
