@@ -107,24 +107,26 @@ fn main() {
     }
 
     let extra_cflags = env("EXTRA_CFLAGS")
-    // COLD-SEED (HEXA-CC-ZERO P3/P5/P6): the legacy regen-source
-    // self/native/hexa_cc.c + self/runtime.c both left git in B9 (#2065 —
-    // tracked `.c` = 0) and are absent on a fresh checkout. The committed
-    // self-contained cold-seed self/native/hexa_cc_seed.c IS the amalgam
-    // (~3 MB · ZERO real local #include · runtime + transpiler inlined), so it
-    // compiles standalone with NO `-I`, NO amalgam sed, NO separate runtime.c.
-    // This also kills the stale-drift hazard the old runtime.h→runtime.c swap
-    // carried (the seed is regenerated from the current SSOT on each refresh).
-    let src = repo_root + "/self/native/hexa_cc_seed.c"
+    // WARM-SEED ONLY (2026-05-30 — cold-seed REVERSED by user decision):
+    // the committed transpiler cold-seed self/native/hexa_cc_seed.c was removed
+    // (HEXA-CC-ZERO P3/P5 withdrawn — ZERO committed transpiler `.c`). The
+    // regen-source self/native/hexa_cc.c is gitignored and regenerated LOCALLY
+    // by an existing hexa via `hexa cc --regen`. It is then amalgamated
+    // (runtime.h → runtime.c) into a single TU for the cross-compile.
+    // Cold-boot from a bare clone is intentionally NOT supported — run
+    // `hexa cc --regen` with an existing hexa first, or `hx install hexa-lang`.
+    let src     = repo_root + "/self/native/hexa_cc.c"
+    let amalgam = repo_root + "/build/_hexat_linux_amalgam.c"
 
-    println("=== hexat → linux/x86_64 (static ELF · cold-seed) ===")
+    println("=== hexat → linux/x86_64 (static ELF · warm-seed) ===")
     println("  src    : " + src)
     println("  output : " + out_path)
     println("  cc     : " + cc)
 
     if !file_exists(src) {
-        eprintln("error: cold-seed source missing: " + src)
-        eprintln("  (self/native/hexa_cc_seed.c is the committed bootstrap seed)")
+        eprintln("error: regen-source missing: " + src)
+        eprintln("  cold-seed was removed by user decision (no committed transpiler .c)")
+        eprintln("  run `hexa cc --regen` with an existing hexa, or `hx install hexa-lang`")
         exit(1)
     }
 
@@ -136,9 +138,14 @@ fn main() {
     }
 
     run_ok("mkdir -p " + exec_with_status("dirname '" + out_path + "'")[0].trim())
+    run_ok("mkdir -p " + repo_root + "/build")
 
-    let cflags = "-O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs"
-    let cmd = cc + " " + cflags + " " + extra_cflags + " " + src + " -o " + out_path + " -static -lm"
+    // Amalgam swap: hexa_cc.c heads with the proto-only runtime.h; pull the
+    // runtime bodies into one TU so the cross-compile has no separate runtime.c.
+    run_ok("sed 's|#include \"runtime.h\"|#include \"runtime.c\"|' '" + src + "' > '" + amalgam + "'")
+
+    let cflags = "-O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs -I" + repo_root + "/self"
+    let cmd = cc + " " + cflags + " " + extra_cflags + " " + amalgam + " -o " + out_path + " -static -lm"
     println("  " + cmd)
     run_ok(cmd)
 

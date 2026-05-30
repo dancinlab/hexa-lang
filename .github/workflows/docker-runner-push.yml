@@ -1,261 +1,47 @@
-# docker-runner-push.yml — build + push hexa-runner image to ghcr.io
+# docker-runner-push.yml — DISABLED (cold-seed removed by user decision 2026-05-30).
 #
-# PURPOSE
-#   LD_PRELOAD distribution: the hexa-runner Linux container is the
-#   only environment where OS-level enforce (native_gate.so / EPERM at
-#   VFS syscalls) actually has teeth (macOS SIP blocks DYLD on signed
-#   bins per Mac→docker hard-landing policy 2026-04-25). For that
-#   policy to propagate, the image must be reachable from any host the
-#   hive resolver routes into — meaning a public-readable registry, not
-#   just whatever happens to live on the operator's local Docker engine.
+# PURPOSE (historical)
+#   Built linux/amd64 + linux/arm64 hexa ELFs and pushed a multi-arch
+#   hexa-runner image to ghcr.io/dancinlab/hexa-runner. The ELF build mirrored
+#   bootstrap.yml's cold-seed Stage 0 — it compiled the CLI + interp from the
+#   committed self-contained cold-seed `self/native/hexa_cc_seed.c`.
 #
-#   This workflow assembles both linux/amd64 + linux/arm64 ELFs natively
-#   (mirroring bootstrap.yml stages) and pushes the multi-arch manifest
-#   list to ghcr.io/dancinlab/hexa-runner:<tag>.
+# WHY DISABLED
+#   Per an explicit user decision (2026-05-30) the committed transpiler cold-seed
+#   `self/native/hexa_cc_seed.c` was REMOVED (the repo now has ZERO committed
+#   transpiler `.c`). A fresh-checkout SOURCE build of the ELFs is therefore
+#   impossible on a runner with no pre-installed `hexa`, and the warm CI path
+#   (download a released/edge hexa binary then build) is not wired here yet
+#   (edge-tarball infra currently RED — handoff 726b8b67). Rather than leave the
+#   build steps referencing the deleted seed (a dead-ref), this workflow is a
+#   deliberate no-op. Reverses HEXA-CC-ZERO P6 (#2185).
 #
-# RELATIONSHIP TO LOCAL TOOL
-#   tool/build_runner_image.hexa is the operator-side path (cross-build
-#   on macOS via aarch64-linux-musl-gcc + x86_64-linux-musl-gcc, then
-#   `docker buildx ... --push`).  It still works.  This workflow is the
-#   server-side autopilot for the same artifact, so the registry stays
-#   in sync with main without depending on a particular operator
-#   running the local tool.
-#
-# IMAGE TAGS PUSHED
-#   ghcr.io/dancinlab/hexa-runner:latest         (always)
-#   ghcr.io/dancinlab/hexa-runner:<short-sha>    (commit pin)
-#
-# WHY ghcr.io
-#   GitHub-native: GITHUB_TOKEN already has package:write, no extra
-#   secret to manage.  Mirrors the existing pattern used by
-#   tool/ensure_hive_exec.hexa (ghcr.io/dancinlab/airgenome:fat).
-#
-# TRIGGER
-#   - push to main (auto-publish)
-#   - workflow_dispatch (manual re-publish)
-#   PR builds intentionally NOT pushed — reviewers should not pollute
-#   the registry; bootstrap.yml already gates the ELF build itself.
+# RE-ENABLE PATH
+#   Restore the ELF build once a clean warm CI build (from a released hexa binary,
+#   then `hexa cc --regen`) exists — never from a committed transpiler `.c` — then
+#   re-attach the docker buildx push.
 
 name: docker-runner-push
 
+# Disabled: never triggers (the old build required the removed cold-seed).
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'docker/runner/Dockerfile'
-      - 'self/main.hexa'
-      - 'self/hexa_full.hexa'
-      - 'self/native/hexa_cc_seed.c'
-      - 'self/native/native_gate.c'
-      - 'self/module_loader.hexa'
-      - 'self/stdlib/**'
-      - '.github/workflows/docker-runner-push.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
-  packages: write   # required for ghcr.io push via GITHUB_TOKEN
-
-env:
-  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/hexa-runner
-  CFLAGS_COMMON: "-O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs"
 
 jobs:
-  # ── Build native ELFs per arch ─────────────────────────────
-  # Runs on the matching native runner (no QEMU emulation cost).
-  # Produces:
-  #   - build/hexa_linux_<arch>           CLI dispatcher (self/main.hexa)
-  #   - build/hexa_interp_linux_<arch>    interp (self/hexa_full.hexa)
-  # Both static-linked via -static so they drop into distroless cleanly.
-  build-elfs:
-    name: build ELFs (${{ matrix.target }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: ubuntu-latest
-            target: x86_64
-          - runner: ubuntu-24.04-arm
-            target: arm64
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 25
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Toolchain info
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "uname  : $(uname -a)"
-          echo "cc     : $(gcc --version | head -1)"
-          echo "target : ${{ matrix.target }}"
-
-      # Both `self/native/hexa_cc.c` and `self/runtime.c` left git in B9 (#2065 —
-      # tracked `.c` = 0) and are absent on fresh checkout. Build from the
-      # committed self-contained cold-seed `self/native/hexa_cc_seed.c`
-      # (HEXA-CC-ZERO P3/P5/P6 — same pattern bootstrap.yml uses).
-      - name: Stage 0 — cold-seed bootstrap (cc hexa_cc_seed.c → hexa_v2)
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p self/native build/stage1 build
-          test -f self/native/hexa_cc_seed.c \
-            || { echo "::error::self/native/hexa_cc_seed.c absent — cold-seed required"; exit 1; }
-          # Self-contained TU: NO -I, NO amalgam sed, NO self/runtime.c.
-          gcc ${{ env.CFLAGS_COMMON }} \
-              self/native/hexa_cc_seed.c -o build/hexa_v2 -lm -ldl
-          file build/hexa_v2
-          # Pure runtime object (seed's runtime portion through the
-          # `/* amalgam END runtime.c */` marker) — runtime symbols only, no
-          # transpiler symbols, so the transpiled CLI links clean. Static for
-          # the distroless drop-in.
-          sed '/\/\* amalgam END runtime.c \*\//q' self/native/hexa_cc_seed.c > build/stage1/runtime_pure.c
-          gcc ${{ env.CFLAGS_COMMON }} -c build/stage1/runtime_pure.c -o build/runtime_pure.o
-          ls -la build/runtime_pure.o
-
-      - name: Stage 1 — transpile + compile CLI dispatcher (static)
-        shell: bash
-        run: |
-          set -euo pipefail
-          export HEXA_LANG="$PWD"
-          ./build/hexa_v2 self/main.hexa build/stage1/main.c
-          # -static for distroless drop-in.  glibc-static is preinstalled
-          # on ubuntu-latest / ubuntu-24.04-arm runners.
-          gcc ${{ env.CFLAGS_COMMON }} -static \
-              -I self build/stage1/main.c build/runtime_pure.o \
-              -o build/hexa_linux_${{ matrix.target }} \
-              -lm -ldl
-          file build/hexa_linux_${{ matrix.target }}
-
-      - name: Stage 2 — transpile + compile interp (static)
-        shell: bash
-        run: |
-          set -euo pipefail
-          export HEXA_LANG="$PWD"
-          ./build/hexa_v2 self/hexa_full.hexa /tmp/hexa_full_regen.c
-          # Link the transpiled interp against the seed's pure runtime object
-          # (self/runtime.c is absent in the `.c=0` tree).
-          gcc ${{ env.CFLAGS_COMMON }} -static \
-              -I self /tmp/hexa_full_regen.c build/runtime_pure.o \
-              -o build/hexa_interp_linux_${{ matrix.target }} \
-              -lm -ldl
-          file build/hexa_interp_linux_${{ matrix.target }}
-
-      - name: Smoke — interp can transpile a tiny program
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p /tmp/hexa_ci
-          cat > /tmp/hexa_ci/hi.hexa <<'HEXA_EOF'
-          fn main() {
-              println("ok")
-          }
-          HEXA_EOF
-          ./build/hexa_v2 /tmp/hexa_ci/hi.hexa /tmp/hexa_ci/hi.c
-          # Link against the seed's pure runtime object — the transpiled C only
-          # gets prototypes from runtime.h, the bodies come from runtime_pure.o
-          # (self/runtime.c is absent in the `.c=0` tree).
-          gcc ${{ env.CFLAGS_COMMON }} -static \
-              -I self /tmp/hexa_ci/hi.c build/runtime_pure.o -o /tmp/hexa_ci/hi \
-              -lm -ldl
-          OUT="$(/tmp/hexa_ci/hi)"
-          [[ "$OUT" == "ok" ]] || { echo "::error::smoke failed (got '$OUT')"; exit 1; }
-
-      - name: Upload ELF artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          name: hexa-elfs-${{ matrix.target }}
-          path: |
-            build/hexa_linux_${{ matrix.target }}
-            build/hexa_interp_linux_${{ matrix.target }}
-          if-no-files-found: error
-          retention-days: 7
-
-  # ── Assemble + push multi-arch image ───────────────────────
-  push:
-    name: docker buildx build --push
-    needs: [build-elfs]
+  disabled:
+    name: docker-runner-push (DISABLED — cold-seed removed by user decision)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 1
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Download arm64 ELFs
-        uses: actions/download-artifact@v8
-        with:
-          name: hexa-elfs-arm64
-          path: build/
-
-      - name: Download x86_64 ELFs
-        uses: actions/download-artifact@v8
-        with:
-          name: hexa-elfs-x86_64
-          path: build/
-
-      - name: Verify ELF layout
+      - name: Explain
         shell: bash
         run: |
-          set -euo pipefail
-          ls -la build/
-          file build/hexa_linux_arm64 build/hexa_linux_x86_64 \
-               build/hexa_interp_linux_arm64 build/hexa_interp_linux_x86_64
-          # Restore exec bit (zip-based artifact transport drops it).
-          chmod +x build/hexa_linux_arm64 build/hexa_linux_x86_64 \
-                   build/hexa_interp_linux_arm64 build/hexa_interp_linux_x86_64
-
-      - name: Set up QEMU (multi-arch emulation for buildx)
-        uses: docker/setup-qemu-action@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Compute tags
-        id: tags
-        shell: bash
-        run: |
-          set -euo pipefail
-          SHORT_SHA="$(git rev-parse --short HEAD)"
-          {
-            echo "short_sha=${SHORT_SHA}"
-            echo "tag_latest=${IMAGE_NAME}:latest"
-            echo "tag_sha=${IMAGE_NAME}:${SHORT_SHA}"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Build + push multi-arch image
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: docker/runner/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            ${{ steps.tags.outputs.tag_latest }}
-            ${{ steps.tags.outputs.tag_sha }}
-          # Cache via GHA backend — speeds up no-source-change reruns.
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          provenance: false
-
-      - name: Summary
-        shell: bash
-        run: |
-          set -euo pipefail
-          {
-            echo "## hexa-runner image pushed"
-            echo ""
-            echo "- \`${{ steps.tags.outputs.tag_latest }}\`"
-            echo "- \`${{ steps.tags.outputs.tag_sha }}\`"
-            echo ""
-            echo "Platforms: \`linux/amd64\`, \`linux/arm64\`"
-            echo ""
-            echo "Pull: \`docker pull ${{ steps.tags.outputs.tag_latest }}\`"
-          } >> "$GITHUB_STEP_SUMMARY"
+          echo "docker-runner-push is DISABLED (cold-seed removed by user decision 2026-05-30)."
+          echo "Its ELF build mirrored bootstrap.yml's cold-seed Stage 0, which compiled the"
+          echo "CLI + interp from the removed self/native/hexa_cc_seed.c. The repo now has ZERO"
+          echo "committed transpiler .c, so a fresh-checkout source build is unsupported."
+          echo "Re-enable once a clean warm CI build (from a released hexa binary) is wired,"
+          echo "then re-attach the docker buildx push."

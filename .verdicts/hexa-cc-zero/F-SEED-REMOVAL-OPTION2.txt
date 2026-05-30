@@ -1,0 +1,71 @@
+falsifier  : "Removing the committed transpiler cold-seed self/native/hexa_cc_seed.c
+              (git rm) AND reverting every seed consumer to a warm-only path leaves
+              git ls-tree -r <branch> with ZERO committed transpiler .c, with NO
+              dangling reference to the deleted seed in any .hexa / .yml code, and
+              the WARM rebuild path (hexa cc --regen → build) still intact."
+method     : git rm + source/CI revert + static grep + ls-tree count (warm-rebuild
+             attempted on a pool build host; see WARM REBUILD note below).
+date       : 2026-05-30
+decision   : USER (explicit) — eliminate committed transpiler C seed entirely;
+             accept that bare-clone cold-boot is given up (warm-seed / hx install).
+             This INTENTIONALLY REVERSES this session's P3 (#2126) / P5 (#2134) /
+             seed-refresh (#2179) and the P6 CI green (#2185/#2161).
+
+VERDICT — ⊘ WITHDRAWN (P3/P5/P6 cold-boot) · 🟢 SEED-REMOVAL ACHIEVED
+  This is a deliberate scope reversal by user decision, NOT a falsification of the
+  prior measurements. P1 (per-arch fixpoint byte-eq) and P2 (cross-host
+  kill-storm-free) results STAND. The P3/P5/P6 cold-boot-from-bare-clone claims
+  are WITHDRAWN (⊘) — superseded by the user's choice to carry zero committed
+  transpiler .c.
+
+REMOVAL (the deletion)
+  $ git rm self/native/hexa_cc_seed.c          → removed (2.85 MB generated seed)
+  scoped subject + WIPE-OK trailer (user-approved >50-line deletion in self/).
+
+GATE 1 — git ls-tree: zero committed transpiler .c
+  After `git rm`, the only tracked .c under self/native/ is native_gate.c (a
+  non-transpiler OS-enforce shim). hexa_cc_seed.c is ABSENT from the index/tree.
+  hexa_cc.c remains gitignored + locally regenerated (never committed).
+  transpiler-.c count on the branch = 0.
+
+GATE 2 — no dangling reference to the deleted seed (code)
+  `git grep hexa_cc_seed -- '*.hexa' '*.yml' '*.yaml'` over the branch = 0 hits.
+  Doc-only mentions (HEXA-CC-ZERO.md / HEXA-TRAIN-FLOOR.log.md / older verdicts)
+  are historical record (withdrawal narrative), not live build references.
+
+CONSUMERS REVERTED (per file)
+  · tool/build_hexa_cli.hexa  — step 0 #2134 seed-preference branch REMOVED.
+      Warm-only: if build/hexat absent AND hexa_cc.c absent → _die() with a clear
+      error ("no bootstrap hexa on PATH — run `hx install hexa-lang` or provide an
+      existing hexa to `hexa cc --regen` …; cold-seed was removed by user
+      decision"). hexa_cc.c present → existing warm amalgam path (dev loop intact).
+  · tool/build_hexat_linux.hexa — src flipped seed → hexa_cc.c + runtime.h→runtime.c
+      amalgam sed + `-I self`; clear error on absent regen-source.
+  · .github/workflows/bootstrap.yml — DISABLED (workflow_dispatch only) with an
+      honest comment: cold-seed removed; fresh-checkout source bootstrap
+      unsupported; CI must build from a released binary once a warm path is wired.
+  · .github/workflows/atlas-consistency.yml — DISABLED (same rationale).
+  · .github/workflows/docker-runner-push.yml — DISABLED (same rationale).
+  · .github/workflows/codegen-bootstrap-sync.yml — already RETIRED no-op; comment
+      updated to record the seed removal (zero committed transpiler .c).
+
+  CI HONESTY: a clean WARM CI path (download released/edge hexa binary then build)
+  is NOT wired here — the edge-tarball infra is currently RED (handoff 726b8b67).
+  Disabling (honest SKIP) was chosen over a half-working warm CI to avoid leaving
+  a dead-ref to the deleted seed (which would re-create the dead-ref class).
+
+WARM REBUILD note
+  The warm path is `hexa cc --regen` → `self/native/hexa_cc.c` (gitignored) →
+  amalgam (runtime.h→runtime.c) → cc → build/hexat. This is the unchanged
+  pre-#2134 dev loop that build_hexa_cli.hexa step 0 now exclusively takes when
+  hexa_cc.c is present. Heavy build verification is pool-only (ubu-2/mini, never
+  Mac-local); on this run the pool hosts failed preflight (workdir missing on
+  ubu-1/ubu-2), so the on-host `hexa cc --regen` capture is DEFERRED to a host
+  with the worktree. The warm path code is the same surface proven by every prior
+  dev-loop build; the revert only DELETED the cold branch, it did not touch the
+  warm amalgam invocation. If a host warm-rebuild later FAILS, this verdict must
+  be downgraded to 🔴 and the repo treated as unbuildable until fixed.
+
+PRs REVERSED
+  #2126 (P3 cold-seed) · #2134 (P5 seed-default) · #2179 (seed-refresh) ·
+  #2185 / #2161 (P6 CI cold-seed restore).

@@ -9,8 +9,35 @@
 
 - [x] P1 — `hexa cc --regen` self-host fixpoint byte-eq PASS (cross-host: Mac arm64 #2105 + ubu x86_64) · 🟢 v_n≡v_{n+1} 4/4 모듈 byte-eq + DETERMINISTIC 양 호스트 실측. ⚠ 잔여(P1 fixpoint 성질과 별개): in-tree seed(build/hexat)가 자기 SSOT 의 fixpoint 아님 = stale seed(hexa_int 인라인 #2078 미반영) — 양 호스트 동일 방향. seed 갱신(재regen+커밋)은 후속
 - [x] P2 — cross-host kill-storm-free warm-rebuild PASS (mini arm64 + ubu-2 x86_64 둘 다 `cc --regen` RC=0 · 4/4 SSOT transpile OK · merged-C compile OK) · 🟢 Mac kill-storm refuse-gate(`_refuse_local_on_mac`) PRESENT+FIRING(exit 2 + pool 힌트) · pool-offload 경로로만 실행(Mac 워크스테이션 heavy-build 0) · install/seed md5 PRE==POST(read-only). ubu-2 는 `/tmp/hexat.new` ELF working transpiler 까지 링크. ⚠ in-tree seed byte-eq DRIFT 은 P1 의 알려진 stale-seed(P2 축=clean-completion+kill-storm safety, seed byte-eq 아님)
-- [x] P3 — stage-(-1) cold-seed TRUE-COLD-PASS cross-host (#2116 design option b 구현) · 🟢 단일 self-contained `self/native/hexa_cc_seed.c`(2.85 MB · 0 local include) 커밋 → bare clone + `cc hexa_cc_seed.c -o hexat`(사전설치 hexa 不要)만으로 작동 트랜스파일러 빌드, x86_64(ubu-2)+arm64(mini) 양 arch 4/4 SSOT transpile rc=0 · DETERMINISTIC · x86_64 는 per-arch fixpoint(gen_b≡gen_c)까지 PASS. ⚠ 잔여(cold-boot 닫힘과 별개): cross-arch strict byte-eq 는 3/4(codegen arch-specific·per-arch deterministic — P1 의 per-arch fixpoint 모델과 일치)
-- [x] P5 — cold-seed 부트스트랩 DEFAULT wiring (build_hexa_cli.hexa step 0) · 🟢 #2126 P3 seed 를 "proven capability" → ACTUAL default bootstrap path 로 전환. step 0 가 regen-source `hexa_cc.c` 부재(true fresh clone) + `hexa_cc_seed.c` 존재 시 self-contained seed 에서 직접 `cc hexa_cc_seed.c -o build/hexat`(amalgam sed 없음·-I 없음·0 local include) 부트스트랩 — host hexa·manual step 不要. hexa_cc.c 존재 시 기존 warm amalgam 경로 그대로(dev loop 무변경). TRUE-COLD-DEFAULT ubu-2 x86_64 PASS(verdict 첨부)
+> ## ⊘ REVERSAL — cold-seed 철회 (사용자 결정 · 2026-05-30)
+>
+> **도메인 골 재정의(honest)**: "0 committed transpiler `.c` (warm-seed bootstrap)".
+> 즉 커밋된 트랜스파일러 `.c` = 0 — 단, cold-boot-from-bare-clone 능력은 **포기**한다.
+>
+> 사용자의 명시적 결정으로 커밋된 트랜스파일러 cold-seed `self/native/hexa_cc_seed.c`
+> (2.85 MB · generated)를 `git rm` 으로 **완전 제거**했다. 이로써 레포의 커밋된
+> 트랜스파일러 `.c` 는 0개(`self/native/` 에는 비-트랜스파일러 `native_gate.c` 만 잔존).
+> 빌드는 이제 **warm-seed** 만 지원한다: 기존 `hexa` 가 `hexa cc --regen` 으로
+> gitignored `self/native/hexa_cc.c` 를 **로컬 재생성**하거나, 배포 바이너리
+> (`hx install hexa-lang`)를 설치해야 한다. bare clone 으로부터의 cold-boot 은
+> 의도적으로 미지원(없는 hexa·없는 seed → 명확한 에러로 종료).
+>
+> 이 변경은 이번 세션의 P3(#2126 cold-seed)·P5(#2134 seed-default)·
+> seed-refresh(#2179) + P6 CI(#2185/#2161)를 **고의로 역행(REVERSE)** 한다.
+> 실패가 아니라 사용자가 선택한 **scope 변경**이다.
+>
+> - **P1(fixpoint byte-eq)·P2(kill-storm-free)** 결과는 **유효(stand)**.
+> - **P3 / P5 / P6 의 cold-boot claim 은 철회(⊘ withdrawn)** — ✅ 아니고 ❌ 아님,
+>   사용자 결정으로 superseded.
+> - 소비자 revert: `tool/build_hexa_cli.hexa` step 0(warm-only + 명확 에러),
+>   `tool/build_hexat_linux.hexa`(hexa_cc.c amalgam), CI 4종
+>   (`bootstrap.yml`·`atlas-consistency.yml`·`docker-runner-push.yml` →
+>   honest SKIP/disabled, `codegen-bootstrap-sync.yml` 코멘트 갱신).
+> - verdict: `.verdicts/hexa-cc-zero/F-SEED-REMOVAL-OPTION2.txt`.
+>
+> ---
+- [⊘] P3 — ⊘ WITHDRAWN (사용자 결정 2026-05-30, 아래 REVERSAL 섹션 참조) — stage-(-1) cold-seed TRUE-COLD-PASS cross-host (#2116 design option b 구현) · 🟢 단일 self-contained `self/native/hexa_cc_seed.c`(2.85 MB · 0 local include) 커밋 → bare clone + `cc hexa_cc_seed.c -o hexat`(사전설치 hexa 不要)만으로 작동 트랜스파일러 빌드, x86_64(ubu-2)+arm64(mini) 양 arch 4/4 SSOT transpile rc=0 · DETERMINISTIC · x86_64 는 per-arch fixpoint(gen_b≡gen_c)까지 PASS. ⚠ 잔여(cold-boot 닫힘과 별개): cross-arch strict byte-eq 는 3/4(codegen arch-specific·per-arch deterministic — P1 의 per-arch fixpoint 모델과 일치)
+- [⊘] P5 — ⊘ WITHDRAWN (사용자 결정 2026-05-30, 아래 REVERSAL 섹션 참조) — cold-seed 부트스트랩 DEFAULT wiring (build_hexa_cli.hexa step 0) · 🟢 #2126 P3 seed 를 "proven capability" → ACTUAL default bootstrap path 로 전환. step 0 가 regen-source `hexa_cc.c` 부재(true fresh clone) + `hexa_cc_seed.c` 존재 시 self-contained seed 에서 직접 `cc hexa_cc_seed.c -o build/hexat`(amalgam sed 없음·-I 없음·0 local include) 부트스트랩 — host hexa·manual step 不要. hexa_cc.c 존재 시 기존 warm amalgam 경로 그대로(dev loop 무변경). TRUE-COLD-DEFAULT ubu-2 x86_64 PASS(verdict 첨부)
 - [x] P6 — `self/native/hexa_cc.c` git rm + CI/fresh-clone green · 🟢 (A) git-rm 이미-완료(#2065) + (B.1) 콜드시드 트랜스파일러 부트스트랩 CI-gated green(bootstrap.yml 3/3, #2161) + (B.2) **full-CLI fresh-clone cold build GREEN** — 시드 refresh(현 SSOT 재regen+amalgam) 후 `self/main.hexa → ./hexa` 가 4 심볼(`hexa_float_to_bits`/`hexa_bits_to_float`/`hexa_enum_str_v`/`hexa_os_getuid`) LINK CLEAN(BEFORE stale=4 undefined → AFTER refreshed=0) + float-pun round-trip(`bits_to_float(float_to_bits(3.14))==3.14`) PASS, ubu-2 x86_64 로컬 실측. 🎉 **DOMAIN CLOSED 5/5** (P1✅·P2✅·P3✅·P5✅·P6✅)
 
 ## 2026-05-30 P1 PROBE 측정 (verdict 첨부)
@@ -101,7 +128,8 @@ verdict: `.verdicts/hexa-cc-zero/F-HEXA-CC-ZERO-P6-CI-GREEN.txt` (green run JSON
 
 PR #2161 (squash → origin/main `1ea7a2446`) — 직전 (B.2) RED 의 두 워크플로를 마이그레이션. CI 검증 = PR head `f8b47f9` 의 run `26663051542`(pull_request → main).
 
-- 🟢 **bootstrap.yml = 3/3 GREEN (cold-seed)** — `{"conclusion":"success", jobs:[linux-arm64✓·macos-arm64✓·linux-x86_64✓]}`. Stage 0 = `cc self/native/hexa_cc_seed.c -o build/hexa_v2`(0 local include·NO -I·NO amalgam sed, build_hexa_cli step-0 cold branch 미러) + 시드 2차 컴파일(`-Dmain=__seed_main_unused`) → `build/runtime_seed.o`(런타임 심볼 inline 링크 seam). Stage 1 = hexa_v2 가 module_loader 트랜스파일→링크→실행→main.hexa flatten. Smoke = hexa 프로그램 transpile/compile/run → "ok". **fresh `.c=0` checkout 에서 host hexa·hexa_cc.c·runtime.c 없이 콜드시드 트랜스파일러 부트스트랩 CI-gated green** (P3/P5 의 입증 claim 을 CI 게이트로 승격).
+- ⊘ **P6 WITHDRAWN (cold-seed 제거 · 2026-05-30)** — 아래 cold-seed CI green claim 은 seed 제거로 **무효화**됨. `bootstrap.yml`·`atlas-consistency.yml`·`docker-runner-push.yml` 은 honest SKIP/disabled 로 전환(소스 부트스트랩 미지원). cold-boot CI green 주장 철회.
+- 🟢 **(철회됨 ⊘) bootstrap.yml = 3/3 GREEN (cold-seed)** — `{"conclusion":"success", jobs:[linux-arm64✓·macos-arm64✓·linux-x86_64✓]}`. Stage 0 = `cc self/native/hexa_cc_seed.c -o build/hexa_v2`(0 local include·NO -I·NO amalgam sed, build_hexa_cli step-0 cold branch 미러) + 시드 2차 컴파일(`-Dmain=__seed_main_unused`) → `build/runtime_seed.o`(런타임 심볼 inline 링크 seam). Stage 1 = hexa_v2 가 module_loader 트랜스파일→링크→실행→main.hexa flatten. Smoke = hexa 프로그램 transpile/compile/run → "ok". **fresh `.c=0` checkout 에서 host hexa·hexa_cc.c·runtime.c 없이 콜드시드 트랜스파일러 부트스트랩 CI-gated green** (P3/P5 의 입증 claim 을 CI 게이트로 승격).
 - 🟢 **codegen-bootstrap-sync.yml = RETIRED** — 전제(codegen.hexa string-literal direct-call 을 **커밋된** hexa_cc.c 와 diff)가 #2065 의 hexa_cc.c 제거로 구조적 무효(매 커밋 removed-invariant false-red). push/PR 트리거 제거 → `workflow_dispatch`-only no-op. 머지 SHA `1ea7a2446` 에서 run 0개(트리거 제거 확인). 후속 freshness = 콜드시드 seed-refresh 모델.
 - 🔴 **full-CLI fresh-clone 은 여전히 미입증 — SEED-REFRESH 잔여(별도 작업)** — `self/main.hexa` → `./hexa` 전체 self-host 재빌드는 **커밋된 콜드시드가 stale**(P3 #2126 pin, **pre-#2159**)이라 현 main.c 링크가 정확히 4 심볼(`hexa_float_to_bits`/`hexa_bits_to_float`/`hexa_enum_str_v`/`hexa_os_getuid`)에서 깨짐(로컬 재현 verbatim). #2159 가 emitter SSOT 엔 float-pun 본문을 정착했지만 **시드 자체는 미갱신**, 그리고 top-level `self/runtime.c` 어말감은 emitter 가 없음(#2065 에 제거된 hand-maintained 파일)이라 stale 시드로부터 coherent same-revision runtime 을 in-checkout 재구성 불가. → **시드 refresh**(현 SSOT 에서 `hexa cc --regen` + amalgam 으로 hexa_cc_seed.c 재생성 + commit) 후속 사이클. 전체 CLI 는 release/nobaseline-gate frozen-dough 경로(prebuilt runtime.a + edge hexat)가 별도 커버.
 - 🟠 **P6 미flip (HONEST g5/g63)** — P6 의 두 CI blocker(removed hexa_cc.c 참조)는 RESOLVED + GREEN 이고 콜드시드 트랜스파일러 부트스트랩이 CI-gated green 이나, 직전 사이클이 P6 의 (B.2) 바에 포함시킨 **full-CLI fresh-clone green** 은 seed-staleness 로 미달. gate scope 를 트랜스파일러+smoke 로 좁혀 green 을 얻은 것이라(stdlib ci-gate·farr32 smoke·full-CLI 단계 제거 — 모두 full ./hexa 의존) over-claim 회피 위해 **P6 체크박스 미flip**. P6 잔여 = **시드 refresh** 1건으로 좁혀짐.
