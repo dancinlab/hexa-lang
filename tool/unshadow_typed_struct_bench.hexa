@@ -133,22 +133,29 @@ fn main() {
     write_file(work + "/flat_struct.h",
       "#include \"runtime.h\"\n" +
       "#include <stdlib.h>\n" +
-      "typedef struct PtFlat { int64_t f0; int64_t f1; } PtFlat;\n" +
-      "static inline HexaVal Pt__flat_new(HexaVal a, HexaVal b){\n" +
-      "  PtFlat* s=(PtFlat*)malloc(sizeof(PtFlat));\n" +
-      "  s->f0=HX_INT(a); s->f1=HX_INT(b);\n" +
+      // Byte-faithful to gen2_flat_struct_typedef: fields are raw HexaVal (general
+      // — any field type), the flat ptr rides the public `vs` slot, the read is a
+      // direct member load returning the HexaVal (NO strcmp/IC). Surrounding
+      // HX_INT extracts `.i`. Type name `Pt__flat` matches the codegen mangle.
+      "typedef struct Pt__flat { HexaVal f0; HexaVal f1; } Pt__flat;\n" +
+      "static inline HexaVal Pt(HexaVal a, HexaVal b){\n" +
+      "  Pt__flat* s=(Pt__flat*)malloc(sizeof(Pt__flat));\n" +
+      "  s->f0=a; s->f1=b;\n" +
       "  HexaVal v; v.tag=TAG_ARRAY; v.vs=(HexaValStruct*)s; return v; }\n" +
-      // offset reads: field x = index 0, field y = index 1.
-      "#define PT_X(p) (((PtFlat*)(p).vs)->f0)\n" +
-      "#define PT_Y(p) (((PtFlat*)(p).vs)->f1)\n")
+      // offset reads (the exact Field-arm emit): field x = index 0, y = index 1.
+      "#define PT_X(p) (((Pt__flat*)(p).vs)->f0)\n" +
+      "#define PT_Y(p) (((Pt__flat*)(p).vs)->f1)\n")
 
     // ── ref_c — idiomatic native C struct (parity baseline, no runtime) ──────
+    // The field read is mutated each iteration (volatile-fed seed → the receiver
+    // changes) so the read CANNOT be hoisted/const-folded out of the loop —
+    // isolating the per-iteration field-access cost (offset load vs hash probe).
     write_file(work + "/ref_c.c",
       "#include <stdio.h>\n#include <stdint.h>\n" +
       "typedef struct { int64_t x, y; } Pt;\n" +
       "static long run_ref(void){\n" +
-      "  Pt p={3,5}; long acc=0; long N=40000000L;\n" +
-      "  for(long r=0;r<N;r++){ acc += p.x + p.y; }\n" +
+      "  long acc=0; long N=40000000L;\n" +
+      "  for(long r=0;r<N;r++){ Pt p={r&7,(r*3)&7}; acc += p.x + p.y; }\n" +
       "  return acc; }\n" +
       "int main(void){ printf(\"%ld\\n\", run_ref()); return 0; }\n")
 
@@ -161,10 +168,10 @@ fn main() {
       "static HexaIC __ic_x = {0};\nstatic HexaIC __ic_y = {0};\n" +
       "static long run_hash(void){\n" +
       "  static const char* const _k[]={\"x\",\"y\"};\n" +
-      "  HexaVal _v[]={hexa_int(3),hexa_int(5)};\n" +
-      "  HexaVal p=hexa_struct_pack_map(\"Pt\",2,_k,_v);\n" +
       "  long acc=0; long N=40000000L;\n" +
       "  for(long r=0;r<N;r++){\n" +
+      "    HexaVal _v[]={hexa_int(r&7),hexa_int((r*3)&7)};\n" +
+      "    HexaVal p=hexa_struct_pack_map(\"Pt\",2,_k,_v);\n" +
       "    acc += HX_INT(hexa_map_get_ic(p,\"x\",&__ic_x)) + HX_INT(hexa_map_get_ic(p,\"y\",&__ic_y));\n" +
       "  }\n" +
       "  return acc; }\n" +
@@ -177,9 +184,11 @@ fn main() {
     write_file(work + "/b_flat.c",
       "#include \"flat_struct.h\"\n#include <stdio.h>\n" +
       "static long run_flat(void){\n" +
-      "  HexaVal p=Pt__flat_new(hexa_int(3),hexa_int(5));\n" +
       "  long acc=0; long N=40000000L;\n" +
-      "  for(long r=0;r<N;r++){ acc += PT_X(p) + PT_Y(p); }\n" +
+      "  for(long r=0;r<N;r++){\n" +
+      "    HexaVal p=Pt(hexa_int(r&7),hexa_int((r*3)&7));\n" +
+      "    acc += HX_INT(PT_X(p)) + HX_INT(PT_Y(p));\n" +
+      "  }\n" +
       "  return acc; }\n" +
       "int main(void){ printf(\"%ld\\n\", run_flat()); return 0; }\n")
 

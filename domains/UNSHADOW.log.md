@@ -767,3 +767,47 @@ vec-op 8<28). full 천장 = known-int accumulator 일반화(sub-task open). inli
 
 verdict=`.verdicts/unshadow-native-arr/`·bench=`UNSHADOW.bench.md §native-arr`·재현=
 `tool/unshadow_native_arr_bench.hexa`. **next sub-task seed = known-int accumulator(read→sum raw 체인)**.
+
+## 🔵 typed monomorphic struct layout — flat C-struct + offset field access (부분 착지) 2026-05-30
+
+milestone "🔵 typed monomorphic struct layout (flat C-struct typedef + offset field access)"
+부분 착지. E(AoS↔SoA) 재오픈 선결 — E closed-negative 가 SoA 불가의 (b)(c) 원인으로 지목한
+"struct=`hexa_struct_pack_map` 해시맵·field=`hexa_map_get_ic` strcmp/IC 프로브" 를 제거하는 레버.
+
+**착지물** (`self/codegen.hexa`, GATED `HEXA_TYPED_STRUCT=1` · default OFF=무회귀):
+- `_typed_struct_enabled()` 게이트 + `_is_flat_eligible_struct`(monomorphic 증명=declared·비-empty
+  닫힌 필드집합) + `_flat_field_index`(정적 필드→슬롯 인덱스) + `_flat_var_add/void/type`(불변
+  `let p=Pt{…}`/`Pt(…)` 직접-construction 바인딩 → struct 타입 추적, re-let void).
+- `gen2_struct_decl`: flat-eligible → `gen2_flat_struct_typedef` — per-type `typedef struct
+  Name__flat { HexaVal f0; HexaVal f1; … }` + positional flat ctor(`HexaVal Name(HexaVal x,…){
+  malloc; s->f0=x; …; v.tag=TAG_ARRAY; v.vs=(HexaValStruct*)s; }`). 시그니처는 hash ctor 와
+  동일(call site 무변경). flat ptr 이 public HexaVal `vs` union slot 에 타 → runtime.h 무변경.
+- Field arm(`:5389`): 정적 flat 수신자(`_flat_var_type` 매칭) + 선언된 필드(`_flat_field_index>=0`)
+  → offset 로드 `(((Name__flat*)(recv).vs)->f<idx>)`. else `hexa_map_get_ic` **무변경**(동적-키·
+  비-flat 수신자·typo 필드 idx<0 전부 fall-through).
+
+**측정 (mini Apple M4 arm64 · best-of-9 · faithful A/B proxy · full self-host regen=B9 벽 차단·스펙 허용)**:
+- g5 byte-diff **3/3 IDENTICAL** (`0f047a3268a6e167334f5a28a80ea668`) — ref_c·a_hashmap·b_flat
+  동일 stdout. 무손실.
+- 무결성: 동적-키 struct(런타임 결정 키) offset arm 미발화 → `hexa_map_get_ic` hash-map 유지
+  (`1dcca233…`, 정확히 5 read). 다형/동적-키 struct 무변경.
+- a_hashmap 5.48s → b_flat(LANDED) 0.05s = **109× · −99% · gap 547×→5× AT PARITY**(ref 0.01s).
+  asm call+branch 프로브 신호 19→4(hexa_struct_pack_map + 2× hexa_map_get_ic strcmp/IC → offset
+  로드, clang loop-invariant fold). 벤치는 per-iter construction 포함이라 109× 는 read+construct 합산.
+
+**LLVM-can't**: 해시맵→offset 재작성은 우리 소유 표현에 대한 타입-레벨 shape 증명. clang 은
+`hexa_map_get_ic` 를 runtime.o C-ABI 벽 너머 opaque 호출로만 보아 hash probe 를 load 로 fold 못 함.
+flat typedef 는 user.c 안 emit(runtime 무변경) — RFC §codegen-landing 그대로.
+
+**honest scope (착지 슬라이스, over-promise 금지)**:
+- 발화 = 불변 직접-construction 바인딩(`let p=Pt{…}`/`Pt(…)`) + 정적 필드 read 만. struct 가
+  fn 인자/반환으로 흘러간 수신자(타입 추적 끊김)·mut 재대입·eq/serialize/map-interop polymorphic
+  연산·중첩 struct 필드 = **미발화**(hash-map 유지) = open sub-task.
+- real self-host codegen 발화 검증(transpile)은 deferred — emit 문자열이 `gen2_flat_struct_typedef`
+  + Field arm 과 byte-동일함은 정적 확인(proxy 가 그 문자열을 그대로 모델). full regen=B9 generated-
+  runtime 벽 차단(§c-class·§native-arr 와 동일 스펙 허용).
+- GATED opt-in(default OFF) = 무회귀 보장.
+
+verdict=`.verdicts/unshadow-typed-struct/typed-struct.txt`·bench=`UNSHADOW.bench.md §typed-struct`·
+재현=`HEXA_TYPED_STRUCT=1 tool/unshadow_typed_struct_bench.hexa --rt ~/.hx/packages/hexa/self --runs 9`.
+**next sub-task seed = 변수-흐름 typed-struct 추적(fn 인자/반환 수신자) + real self-host transpile 발화검증**.

@@ -774,3 +774,56 @@ ref-C wall anchor** (ref-C 가 roofline-near = 측정 anchor; roofline% = ref-C 
   자동발화(현 GATED 해제)는 whole-binding escape 증명 필요 = 별도 sub-task. F64 경로도 open.
 - verdict verbatim = `.verdicts/unshadow-native-arr/bench.txt` · 재현 =
   `tool/unshadow_native_arr_bench.hexa --rt ~/.hx/bin/self --runs 9`.
+
+## §typed-struct — 🔵 typed monomorphic struct layout (flat C-struct + offset access · F1)
+
+> milestone "🔵 typed monomorphic struct layout" 의 실측 — E(AoS↔SoA) 재오픈 **선결**.
+> **요지**: E closed-negative 가 SoA 불가의 (b)(c) 원인으로 지목한 "struct=`hexa_struct_pack_map`
+> 해시맵·field=`hexa_map_get_ic` strcmp/IC 프로브" 를 제거한다. struct 가 **monomorphic** 임을
+> 증명하면(닫힌 필드집합·정적 키·동적-키 set/get 없음) per-type **flat C-struct typedef** 를
+> emit 하고 `obj.field` 를 컴파일-타임 **offset 로드**(`((Name__flat*)recv.vs)->f<idx>`)로 낮춘다.
+
+**LLVM-can't**: 해시맵→offset 재작성은 우리 소유 표현에 대한 **타입-레벨 shape 증명**이다. clang
+은 `hexa_map_get_ic` 를 runtime.o C-ABI 벽 너머 opaque 호출로만 보아 hash probe 를 load 로 fold
+못 한다. flat typedef 는 **user.c 안**에 emit(runtime 무변경, RFC §codegen-landing) + flat ptr
+이 public HexaVal `vs` union slot 에 타 → 벽 관통(§c-class 패턴).
+
+**착지물** (`self/codegen.hexa`, GATED `HEXA_TYPED_STRUCT=1` · default OFF=무회귀):
+- `_typed_struct_enabled()` 게이트 + `_is_flat_eligible_struct`(declared·비-empty 닫힌 필드집합) +
+  `_flat_field_index`(정적 필드→슬롯) + `_flat_var_*`(불변 `let p=Pt{...}`/`Pt(...)` → 타입 추적,
+  re-let void).
+- `gen2_struct_decl`: flat-eligible → `gen2_flat_struct_typedef`(per-type `typedef struct
+  Name__flat {HexaVal f0; …}` + positional flat ctor, 시그니처는 hash ctor 와 동일).
+- Field arm(`:5389`): 정적 flat 수신자 + 선언된 필드 → offset 로드, **else `hexa_map_get_ic`
+  무변경**(동적-키·비-flat 수신자·typo 필드 idx<0 = 전부 fall-through = 무결성 게이트).
+
+**측정 (mini Apple M4 arm64 · best-of-9 · faithful A/B proxy · full self-host regen=B9 벽 차단·스펙 허용)**:
+
+| arm | 표현 | wall (s) | call+branch | 의미 |
+|---|---|---|---|---|
+| ref_c     | idiomatic native C struct (no runtime) | 0.01 | 2 | parity anchor |
+| a_hashmap | 현 `hexa_struct_pack_map` + `hexa_map_get_ic` strcmp/IC | 5.48 | 19 | **BEFORE** |
+| b_flat    | **LANDED**: per-type flat typedef + offset 로드 | 0.05 | 4 | **109×·−99% · gap 547×→5× AT PARITY** |
+
+- **g5 byte-diff: 3/3 IDENTICAL** (`0f047a3268a6e167334f5a28a80ea668`) — 무손실. ON/OFF 동일 stdout.
+- **무결성 게이트 PASS**: 동적-키 struct(런타임 결정 키)는 offset arm 미발화 → `hexa_map_get_ic`
+  hash-map 경로 유지(`1dcca233…`, 정확히 5 read). 다형/동적-키 struct **무변경**.
+- 각 arm 의 ctor/read 문자열은 `gen2_flat_struct_typedef` + Field arm emit 과 **byte-동일**
+  (typedef·`Pt(a,b)` ctor·`((Pt__flat*)(p).vs)->f0` 읽기).
+
+### 정직한 해석
+
+- **갭의 정체 = 해시맵 표현 그 자체.** a_hashmap 5.48s 는 per-iter `hexa_struct_pack_map`(해시테이블
+  구성) + 2× `hexa_map_get_ic`(strcmp/IC 프로브). flat typedef + offset 로드는 그 전부를 단일
+  멤버 로드로 치환 → clang 이 loop-invariant 로 보고 fold(b_flat 0.05s ≈ ref 0.01s). 이 갭이
+  §parity-attest(7.9×~1263×)이 사는 표현축의 struct 쪽 인스턴스.
+- **벤치는 construction 포함**(per-iter malloc). b_flat 0.05s 는 flat-ctor malloc 비용도 포함 —
+  순수 field-read 는 offset 로드 1개. 즉 109× 는 read+construct 합산 우위.
+- **GATED opt-in (default OFF) = 무회귀.** FLAG OFF 면 hash-map ctor + `hexa_map_get_ic` 무변경.
+  ON 이라도 동적-키/비-flat/typo 필드는 전부 hash-map fallback.
+- **honest scope (착지 슬라이스)**: 발화 = 불변 `let p=Pt{…}`/`Pt(…)` **직접 construction
+  바인딩** + 정적 필드 read. struct 가 fn 인자/반환으로 흘러간 수신자(타입 추적 끊김)·mut 재대입·
+  eq/serialize/map-interop polymorphic 연산·중첩 struct 필드는 **미발화**(hash-map 유지) = open
+  sub-task. real self-host codegen 발화 검증(transpile)도 sub-task(emit 문자열은 byte-동일 확인).
+- verdict verbatim = `.verdicts/unshadow-typed-struct/typed-struct.txt` · 재현 =
+  `HEXA_TYPED_STRUCT=1 tool/unshadow_typed_struct_bench.hexa --rt ~/.hx/packages/hexa/self --runs 9`.
