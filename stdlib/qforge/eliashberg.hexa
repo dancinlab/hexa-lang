@@ -400,19 +400,35 @@ fn _eli_gap_core(omega: [float], a2f: [float],
     let mut s = 0
     while s < n_mats { delta.push(0.1 * piT) ; s = s + 1 }
 
+    // Pre-allocate the per-iteration working arrays ONCE and reuse them across
+    // every Picard iteration via index assignment (`arr[i] = …`) — NOT a fresh
+    // `.push`-grown array each iteration. The old per-iter allocation/growth
+    // was O(N²) memory churn over the 1000-iteration cap (re-growing three
+    // length-N arrays each pass), which segfaulted at N≥800. Reusing the
+    // buffers makes the working-set O(N) and lets N=1000+ run cleanly — the
+    // enabler for the tight BCS weak-coupling (ω_max≫ω_E) limit.
+    let mut Em: [float] = []
+    let mut Z: [float] = []
+    let mut dnew: [float] = []
+    let mut pre = 0
+    while pre < n_mats {
+        Em.push(0.0)
+        Z.push(1.0)
+        dnew.push(0.0)
+        pre = pre + 1
+    }
+
     let mut it = 0
     while it < 1000 {
         // Eₘ = sqrt(ωₘ² + Δ(m)²) for the current Δ.
-        let mut Em: [float] = []
         let mut m = 0
         while m < n_mats {
             let dm = delta[m]
-            Em.push(sqrt(wmat[m] * wmat[m] + dm * dm))
+            Em[m] = sqrt(wmat[m] * wmat[m] + dm * dm)
             m = m + 1
         }
 
         // Z(n) = 1 + (1/(2n+1)) Σ_m [λ(|n−m|) − λ(n+m+1)] · ωₘ/Eₘ.
-        let mut Z: [float] = []
         let mut n = 0
         while n < n_mats {
             let mut acc = 0.0
@@ -423,12 +439,11 @@ fn _eli_gap_core(omega: [float], a2f: [float],
                 mm = mm + 1
             }
             let zn = 1.0 + acc / to_float(2 * n + 1)
-            if zn < 1.0e-9 { Z.push(1.0e-9) } else { Z.push(zn) }
+            if zn < 1.0e-9 { Z[n] = 1.0e-9 } else { Z[n] = zn }
             n = n + 1
         }
 
         // Δ_new(n) = (πT/Z(n)) Σ_m [λ(|n−m|) + λ(n+m+1) − 2μ*] · Δ(m)/Eₘ.
-        let mut dnew: [float] = []
         let mut nn = 0
         while nn < n_mats {
             let mut acc = 0.0
@@ -439,7 +454,7 @@ fn _eli_gap_core(omega: [float], a2f: [float],
                 acc = acc + ker * (delta[mm] / Em[mm])
                 mm = mm + 1
             }
-            dnew.push(piT * acc / Z[nn])
+            dnew[nn] = piT * acc / Z[nn]
             nn = nn + 1
         }
 

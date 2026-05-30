@@ -1,0 +1,102 @@
+SCOPE VERDICT — Eliashberg full-spectrum PR-2.5: large-N segfault fix + sharper BCS anchor
+==========================================================================================
+date: 2026-05-30 · arc: eliashberg-full-spectrum (handoff bcd05edd · PR-2.5 handoff ed8a3b5e)
+this = PR-2.5 of ~6 (sharpen of PR-2 #2166; baseline verdict = bcs-anchor.txt)
+tier: 🟢 large-N (N≥800) build segfault FIXED + verified · SCOPE-SHARPENED on the tight
+      2Δ/kTc=3.528 hit (1.7% → 1.18%, still > the 0.5% tight threshold — Padé deferred)
+
+------------------------------------------------------------------------------
+1. WHAT LANDED (stdlib/qforge/eliashberg.hexa · _eli_gap_core)
+------------------------------------------------------------------------------
+The per-iteration working arrays {Em, Z, dnew} in the damped-Picard fixed-point
+loop were re-allocated and `.push`-grown afresh on EVERY one of the up-to-1000
+iterations — O(N²) memory churn that segfaulted at N≥800 (the PR-2 next-PR gap).
+
+FIX: pre-allocate Em/Z/dnew ONCE (length N) before the iteration loop and reuse
+them via index assignment (`arr[i] = …`) instead of `.push`. The per-iteration
+working-set is now O(N), not O(N²) churn. No numerics changed — the iteration is
+identical, only the buffer lifetime. The same refactor was applied to the
+self-contained verbatim copy in eliashberg_gap_bcs_test.hexa (eli_gap).
+
+This is the (a) enabler the PR-2 verdict / ed8a3b5e handoff pre-registered. The
+(b) Padé / N-point analytic continuation iωₙ→ω+i0⁺ for the real-axis gap EDGE is
+NOT in this PR — it is the remaining piece for a tight 🟢 (see §3).
+
+------------------------------------------------------------------------------
+2. THE FALSIFIER (pre-registered) + THE VERIFICATION (verbatim run)
+------------------------------------------------------------------------------
+Falsifier: weak-coupling BCS universal ratio 2Δ(0)/k_BTc → 3.528 (BCS 1957), now
+probed at the LARGE-N grid (N≥800) that previously segfaulted. Build+run on pool
+host mini (macOS arm64), HEXA_MAC_BUILD_OK=1, lam=0.4, μ*=0, ω_E=1000 K. VERBATIM:
+
+  === BUILD ===
+  OK: built /tmp/eli_gap_bcs
+  === RUN ===
+  === Probe A: T-sweep, N=400 ===
+  lam=0.4 Tc=23.4231 K
+    T=Tc/4.0 2D/kTc=3.58713 wmax/wE=14.6988
+    T=Tc/8.0 2D/kTc=3.64184 wmax/wE=7.34939
+    T=Tc/16.0 2D/kTc=3.83743 wmax/wE=3.6747
+    T=Tc/32.0 2D/kTc=4.43992 wmax/wE=1.83735
+    T=Tc/64.0 2D/kTc=5.26138 wmax/wE=0.918674
+  === Probe B: grid refinement, T=Tc/16 ===
+    N=200 2D/kTc=4.43478 wmax/wE=1.83669
+    N=400 2D/kTc=3.83743 wmax/wE=3.6747
+  === Probe C: large-N anchor, T=Tc/4 ===
+  lam=0.4 Tc=23.4172 K
+    N=800 2D/kTc=3.57492 wmax/wE=29.4086
+    N=1000 2D/kTc=3.57334 wmax/wE=36.7653
+    N=1500 2D/kTc=3.57178 wmax/wE=55.1572
+  BCS weak-coupling target: 2Delta/kTc -> 3.528
+  eliashberg_gap_bcs_test DONE
+  EXIT=0
+
+(Probe A/B reproduce the PR-2 baseline numbers byte-identical — the refactor is
+numerics-neutral. Probe C is NEW: the N≥800 grid that segfaulted before now runs.
+Test file = stdlib/qforge/eliashberg_gap_bcs_test.hexa; parse-gate + this isolated
+numeric build IS the g5 gate, per the handoff.)
+
+------------------------------------------------------------------------------
+3. THE FINDING — segfault FIXED · anchor SHARPENED 1.7%→1.18% (HONEST g5/g63)
+------------------------------------------------------------------------------
+  • SEGFAULT FIXED: N=800, 1000, 1500 all build+run cleanly (EXIT=0). Previously
+    N≥800 segfaulted (O(N²) per-iter push). This is the PR-2.5 (a) deliverable,
+    verified by a non-crashing run at N up to 1500.
+  • SHARPER ANCHOR: at the best regime T=Tc/4 the now-reachable large grids drive
+    the ratio monotonically toward 3.528 as the window ω_max/ω_E widens:
+        N= 400 → 3.58713 (ω_max/ω_E=14.7)   [PR-2 best, 1.7% high]
+        N= 800 → 3.57492 (ω_max/ω_E=29.4)
+        N=1000 → 3.57334 (ω_max/ω_E=36.8)
+        N=1500 → 3.57178 (ω_max/ω_E=55.2)   [PR-2.5 best, 1.18% high]
+    The ratio is converging from above to a finite-T plateau ≈3.5717, NOT to
+    3.528. The residual ~1.18% is NOT a grid artifact (the window is now huge,
+    55× ω_E) — it is the finite-T / real-axis-edge gap: the lowest-Matsubara
+    proxy Δ(iω₀) at T=Tc/4 systematically OVERestimates the T=0 real-axis edge
+    Δ(0). Closing it needs the simultaneous T→0 limit AND the Padé analytic
+    continuation iωₙ→ω+i0⁺ — deliverable (b), DEFERRED to the next step.
+  • HONEST: this does NOT hit 3.528 to tight (<0.5%) tolerance. 1.18% is an
+    improvement over PR-2's 1.7% (the segfault fix unlocked the wider window) but
+    NOT a tight 🟢. No 3.528 is fabricated.
+
+VERDICT: 🟢 large-N segfault FIXED + verified (N up to 1500 runs, EXIT=0) ·
+SCOPE-SHARPENED on the tight 2Δ/kTc=3.528 anchor — best resolved 3.57178 (1.18%,
+down from PR-2's 1.7%). Remaining gap to the tight hit = Padé / N-point analytic
+continuation Δ(iωₙ)→Δ(ω+i0⁺) for the real-axis T=0 gap edge (the over-3.528
+plateau is the finite-T Matsubara-proxy bias, not truncation).
+
+------------------------------------------------------------------------------
+4. ARC STATUS — bcd05edd NOT flipped (multi-PR) · ed8a3b5e (a) DONE / (b) OPEN
+------------------------------------------------------------------------------
+  PR-1   ✅ (#2144) closed-form λ→∞ Allen-Dynes saturated-ratio anchor.
+  PR-2   ✅ (#2166) non-linear Δ(iωₙ) {Z,Δ} solver + BCS probe (🟢 · SCOPE 1.7%).
+  PR-2.5 ✅ (this) large-N segfault fixed (O(N²)→O(N) buffer reuse) + sharper
+           BCS anchor (1.18% at N=1500). ed8a3b5e (a) segfault = DONE; (b) Padé
+           analytic continuation = still OPEN (the remaining piece for tight 🟢).
+  PR-3   2-band λ_ij(n−m) + coupled Δ_i — MgB₂ 2-gap anchor.
+  PR-4   anisotropic k-resolved Δ_k (d-wave) — gate-(e) unconventional.
+  PR-5   anharmonic α²F external-data ingest (simulation-only-prediction).
+  PR-6   verify-binary rebuild → deployed `hexa verify` 7-identity catalog.
+
+g60 5-gate (demiurge rtsc.md §8.9): gate (e) oracle-parity only model-side gate;
+PR-2.5 sharpens (e) toward a quantitative below-Tc gap-magnitude model but does
+NOT flip absorbed=true. bcd05edd stays OPEN. ed8a3b5e (a) satisfied, (b) carried.
