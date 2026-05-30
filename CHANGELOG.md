@@ -6,6 +6,13 @@ For the full audit trail, see `git log`.
 
 ---
 
+## 2026-05-30
+
+- **`stdlib/easy/cli.hexa` + `self/main.hexa` — `hexa easy` 1급 verb 신설 (친근/이지 설명 빵틀 + 측정 축 채점기 · deck/dojo 패턴 미러 · 3-PR 스택 #2205·#2206·#2207)** — easy-mode 의 DETERMINISTIC 절반을 hexa-native builtin 으로 추가. 창의적 재서술(전문용어→생활어, 비유 발명)은 LLM 몫 — builtin 은 빈 슬롯 emit(scaffold)과 점수 산출(lint)만 담당.
+  - **`easy scaffold <topic> [--out <path>]`** — `.easy.md` 골격 emit: 7요소 슬롯(아이콘/이름/별칭/하는일/비유/ASCII/비교) = 라벨된 빈 섹션 · ASCII 4종 템플릿(전후/트리/나란히/구조) = 복붙 펜스 블록 · 일반인-번역 5단계 체크리스트 = HTML 주석. `--out` 없으면 stdout, 있으면 runtime `write_text`(hexa-native guard 우회 = deck run.sh emit 경로).
+  - **`easy lint <file.md>`** — LLM/judgement 없이 파일 텍스트만으로 측정 축 5개 채점 + per-axis PASS/FAIL + 종합 verdict. 채점 전 HTML 주석 + markdown 구조(헤더/펜스/hr) 제거 → AUTHORED prose 만 채점(빈 scaffold 는 analogy=0 으로 정직 FAIL). 축: jargon-ratio ≤ 0.30 · ascii-diagram-presence ≥ 1 · acronym-first-use-expansion ≥ 0.80 · analogy-presence ≥ 1 · seven-element-presence ≥ 5/7. 정수 permille 산술(부동소수 round-trip 회피).
+  - **CLI dispatch** — `self/main.hexa` 에 dojo 미러로 `easy` verb 등록(`cmd_run` compile-then-exec, AOT 빌드 불필요) + help 텍스트. 레퍼런스 계약(sidecar `hooks/easy-auto/styles/easy.ko.md` v0.3.0)을 런타임 의존 없이 native 재인코딩. 3-fixture 검증: 빈 scaffold FAIL · 채운 `.easy.md` PASS · jargon-heavy(0.457) FAIL.
+
 ## 2026-05-28
 
 - **`tool/atlas_cli.hexa` + `tool/verify_cli.hexa` — `_compute_value_of` 가 full-precision float64 캡처 (INBOX #1910 fix · #1901 의도 realize)** — verify_cli 의 COMPUTE 출력에 `[raw=<full-float64>]` suffix 추가, atlas `_compute_value_of` 가 그 raw 값을 파싱(이전: display-rounded 3소수 파싱). `_is_rounding_of(claimed, full_engine)` 가 이제 rounded-literal claim(`227.501134`)도 fold 가능 → #1901 의 rounding-accept 의도가 실제 작동. 회귀 무손상: full-precision direct-🟢 · genuine-wrong-🔴 거부. INBOX #1910 ✅ RESOLVED.
