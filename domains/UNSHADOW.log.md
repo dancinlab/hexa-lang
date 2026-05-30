@@ -937,3 +937,43 @@ verdict=`.verdicts/unshadow-nanbox/proxy.txt`·bench=`UNSHADOW.bench.md §nanbox
 
 verdict=`.verdicts/unshadow-atlas-pgo/`(emit-layout.txt·layout-wall.txt)·bench=`UNSHADOW.bench.md §atlas-pgo`·
 재현=`tool/unshadow_atlas_pgo_bench.hexa`.
+
+---
+
+## 2026-05-30 — 🔵 codegen LIVE atlas-query surface + perf-property atom (UNSHADOW G)
+
+§atlas-pgo·§verify-memo 둘 다의 open sub-task("codegen LIVE atlas-query surface + perf-property
+atom schema") 착지 — §A/§B/E/G 가 공유하던 단일 인프라 갭. 발화 가드의 **하드코딩 fn名 → LIVE atlas 조회** 전환.
+
+- **규모 산정**: 새 atom KIND(@Y 등) 신설은 parser.hexa enum + static_atlas merge + atlas_cli 4-site
+  kind-list + by_kind + embed gen tool = multi-session·atlas 거버넌스 위험. honest 최소 슬라이스 채택 =
+  기존 **F 커널 재사용**(`@F perf-<fn>-hot :: perf-property`) → 새 KIND 스키마변경·atlas_cli 미러 0,
+  1-batch 착지. fn perf 속성은 이제 atlas atom 1급 표현.
+- **착지**: (1) embedded.gen.hexa 에 `perf-lambda_eliashberg-hot` atom 등록(atlas_fold 거버넌스·
+  derived-from verified-lambda_eliashberg-num). (2) self/codegen.hexa `gen2_is_atlas_pgo_hot` 가
+  `node.name == "lambda_..."` 하드코딩 → `gen2_atlas_perf_hot(node.name)` LIVE 조회. `gen2_atlas_perf_hot`
+  +`gen2_atlas_ssot_path` 신설 + module-global 캐시(`_gen2_atlas_perf_loaded/_text`) — SSOT 를 CU 당
+  1회 lazy read + `perf-<fn>-hot`/`hot-path` 태그 매칭, fn-decl당 O(1).
+- **버그 발견+수정**: 초안은 main.hexa 의 `install_dir_from_argv0()` 호출 → regen amalgam
+  (lexer+parser+tc+codegen, main.hexa 제외)에서 undeclared identifier 컴파일 실패. SSOT 경로 해소를
+  `$HEXA_LANG > ./` 로 codegen-self-contained 축소(commit 90bd37f6).
+- **END-TO-END** (mini arm64·edited codegen 으로 full hexa_cc amalgam 재빌드 `/tmp/hexat.new`): OFF=
+  `HexaVal lambda_eliashberg(…)` 평범 · ON=`static inline … __attribute__((hot))` LIVE 조회 구동 승격.
+- **실측 (faithful A/B proxy·B9 generated-runtime 벽·스펙 허용)**:
+  - **[GATE 1] g5 byte-diff IDENTICAL** — `2.4e+08` 양 arm, md5 `71f62d5deba6863b74d5206c380d2f0a`.
+  - **[GATE 2 · PRIMARY 레이아웃축]** out-of-line 심볼 `_lambda_eliashberg`: nm OFF=present(`T`)→ON=absent ·
+    otool lambda ref **1→0**.
+  - **[GATE 3 · NEGATIVE CONTROL — 하드코딩→LIVE 실증]** SSOT 에서 perf atom 제거(grep -v) 후 ON 재-emit:
+    grep -c 1→0, ON emit = `HexaVal lambda_eliashberg(…)` **승격 안 함**(같은 fn名·HEXA_ATLAS_PGO=1).
+    atom 복원 → count 1, 승격 재발화. **결정이 fn名 아닌 atlas 조회가 구동함을 결정적으로 증명.**
+- **honest scope**: wall 은 §atlas-pgo 와 동일 TINY LEAF NULL(이 변경은 공유 하드코딩 가드 제거지 wall
+  레버 아님). OPAQUE/cross-ABI hot fn 일반화(wall 레버) = 이제 차단 해제(임의 fn 에 perf atom 등록 가능)
+  되었으나 별도 측정·GATED 해제는 후속. memo framework 도 같은 `gen2_atlas_perf_hot` 조회 재사용 가능
+  (다른 태그 pure/idempotent 발화) → §verify-memo sub 도 동시 충족.
+- **B9 빌드 노트**: regen 은 install 패키지에서 hexa_cc.c + self/{runtime.c,runtime.h,runtime_core.c,
+  runtime_hi_gen.c} + self/native/*.c + self/forge/* seed 필요(전부 gitignored generated). runtime.o
+  컴파일 → /tmp/hexat.new 링크. emit C 는 compile-then-link(`-x c -c` → `.o` → 링크)로 빌드(`-x c`
+  sticky 가 runtime.o 를 C 소스로 오인하는 함정 회피).
+
+verdict=`.verdicts/unshadow-atlas-query/live-query.txt`·bench=`UNSHADOW.bench.md §atlas-query`·
+재현=`tool/unshadow_atlas_pgo_bench.hexa`(동일 bench·HEXA_ATLAS_PGO + perf atom 유무로 A/B).

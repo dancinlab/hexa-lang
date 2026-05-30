@@ -1059,3 +1059,32 @@ verdict=`.verdicts/unshadow-nanbox/proxy.txt` · 재현=`tool/unshadow_nanbox_be
   codegen 로 재빌드한 `/tmp/hexat.new` 의 end-to-end 출력과 byte-동일).
 
 verdict=`.verdicts/unshadow-atlas-pgo/` (emit-layout.txt · layout-wall.txt) · 재현=`tool/unshadow_atlas_pgo_bench.hexa`.
+
+## §atlas-query — 🔵 codegen LIVE atlas-query surface + perf-property atom (UNSHADOW G)
+
+§atlas-pgo·§verify-memo 둘 다의 open sub-task("codegen LIVE atlas-query surface + perf-property
+atom schema") 착지. 발화 가드의 **하드코딩 fn名 → LIVE atlas 조회** 전환.
+
+- **perf-property atom** (compiler/atlas/embedded.gen.hexa · atlas_fold 거버넌스):
+  `@F perf-lambda_eliashberg-hot = lambda_eliashberg :: perf-property` · `perf = "hot-path pure
+  idempotent inline-worthy"` · `derived-from = verified-lambda_eliashberg-num`. fn perf 속성을
+  atlas atom 으로 1급 표현(기존 F 커널 재사용 → 새 KIND 스키마 변경·atlas_cli 미러 회피).
+- **codegen LIVE 조회** (self/codegen.hexa): `gen2_is_atlas_pgo_hot` 가 `node.name == "lambda_..."`
+  하드코딩을 제거하고 `gen2_atlas_perf_hot(node.name)` 호출. SSOT(embedded.gen.hexa) 를 CU 당 1회
+  lazy read + module-global 캐시 → fn-decl 당 O(1). `perf-<fn>-hot` atom + `hot-path` 태그 존재시만
+  static-inline+hot 승격. 경로 = `$HEXA_LANG > ./`(codegen-self-contained·main.hexa 의존 없음).
+- **END-TO-END** (edited codegen 으로 full 트랜스파일러 재빌드 `/tmp/hexat.new`): OFF=`HexaVal
+  lambda_eliashberg(…)` 평범 · ON=`static inline … __attribute__((hot))` 자동승격(LIVE 조회 구동).
+- **실측 (mini arm64 · faithful A/B proxy · B9 벽 · 스펙 허용)**:
+  - **[GATE 1] g5 byte-diff IDENTICAL** — `2.4e+08` 양 arm, md5 `71f62d5deba6863b74d5206c380d2f0a`.
+  - **[GATE 2 · PRIMARY 레이아웃축]** out-of-line 심볼 `_lambda_eliashberg`: nm OFF=present(`T`) →
+    **ON=absent** · otool lambda ref **1 → 0**.
+  - **[GATE 3 · NEGATIVE CONTROL — LIVE 조회 실증]** SSOT 에서 perf atom 제거(grep -v) 후 ON 재-emit:
+    `grep -c` 1→0, ON emit = `HexaVal lambda_eliashberg(…)` **승격 안 함**(같은 fn名·HEXA_ATLAS_PGO=1).
+    atom 복원 → count 1, 승격 재발화. **결정은 fn名 아닌 atlas 조회가 구동함을 결정적으로 증명**.
+- **honest scope**: wall 은 여전히 TINY LEAF NULL(§atlas-pgo 와 동일). 이 변경은 wall 을 움직이지
+  않고 §A/§B/E/G 가 공유하던 하드코딩 가드를 제거 — OPAQUE/cross-ABI hot fn 일반화(wall 레버)가
+  이제 **차단 해제**(임의 fn 에 perf atom 등록 가능)되었으나 별도 측정이라 여기서 주장 안 함.
+
+verdict=`.verdicts/unshadow-atlas-query/live-query.txt` · 재현=`tool/unshadow_atlas_pgo_bench.hexa`
+(동일 bench · HEXA_ATLAS_PGO + perf atom 유무로 A/B).

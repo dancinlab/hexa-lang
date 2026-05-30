@@ -1,0 +1,64 @@
+UNSHADOW G — codegen LIVE atlas-query surface + perf-property atom
+host: mini macOS arm64 · faithful A/B proxy (B9 generated-runtime wall) · spec-allowed
+transpiler: /tmp/hexat.new (full hexa_cc amalgam, codegen.hexa = LIVE-atlas-query branch)
+bench: tool/unshadow_atlas_pgo_bench.hexa (lambda_eliashberg x 20,000,000, loop-derived arg)
+
+WHAT CHANGED vs the predecessor (#2196 hard-coded license):
+  OLD guard:  if node.name == "lambda_eliashberg" { return true }   (hard-coded name)
+  NEW guard:  return gen2_atlas_perf_hot(node.name)                  (LIVE atlas query)
+  gen2_atlas_perf_hot reads the atlas SSOT (compiler/atlas/embedded.gen.hexa)
+  ONCE per CU (lazy + module-global cache), then licenses a fn as a pure hot-path
+  iff a dedicated PERF-PROPERTY atom `perf-<fn>-hot` carrying the `hot-path` tag
+  is present. Path precedence $HEXA_LANG > ./ (codegen-self-contained — the regen
+  amalgam excludes main.hexa, so no install_dir_from_argv0 dependency).
+
+PERF-PROPERTY ATOM (registered into embedded.gen.hexa, atlas_fold governance):
+  @F perf-lambda_eliashberg-hot = lambda_eliashberg :: perf-property [d=2026-05-30 active]
+    perf = "hot-path pure idempotent inline-worthy"
+    derived-from = "verified-lambda_eliashberg-num"
+  (reuses the existing F kernel — no new atom KIND schema change, so no atlas_cli
+   kind-list mirror needed. fn perf properties are now a first-class atlas atom.)
+
+SSOT presence check:  grep -c perf-lambda_eliashberg-hot embedded.gen.hexa = 1
+
+PGO OFF (HEXA_ATLAS_PGO unset):
+  fwd:  HexaVal lambda_eliashberg(HexaVal m0);
+  defn: HexaVal lambda_eliashberg(HexaVal m0) {
+
+PGO ON (HEXA_ATLAS_PGO=1, LIVE atlas query):
+  fwd:  static inline HexaVal lambda_eliashberg(HexaVal m0) __attribute__((hot));
+  defn: static inline HexaVal lambda_eliashberg(HexaVal m0) {
+  -> the LIVE atlas lookup of perf-lambda_eliashberg-hot promoted the layout,
+     NO user annotation, NO hard-coded fn name.
+
+[GATE 1 — byte-diff IDENTICAL]
+  stdout:  OFF = 2.4e+08   ON = 2.4e+08
+  md5:     OFF = 71f62d5deba6863b74d5206c380d2f0a
+           ON  = 71f62d5deba6863b74d5206c380d2f0a
+  IDENTICAL ✅  (inline/hot = semantics-preserving layout)
+
+[GATE 2 — PRIMARY layout axis: out-of-line symbol]
+  nm _lambda_eliashberg:  OFF = 0000000100000728 T _lambda_eliashberg (present)
+                          ON  = (absent)
+  otool lambda refs:      OFF = 1   ON = 0
+  -> static-inline promotion eliminated the out-of-line copy ✅
+
+[GATE 3 — NEGATIVE CONTROL: proves LIVE query, not hard-coded name]
+  Remove perf-lambda_eliashberg-hot atom from the SSOT (grep -v), re-emit ON:
+    grep -c perf-lambda_eliashberg-hot embedded.gen.hexa = 0
+    ON emit (atom ABSENT):  HexaVal lambda_eliashberg(HexaVal m0);   <- NOT promoted
+  -> with the SAME fn name and HEXA_ATLAS_PGO=1, removing the atom turns the
+     promotion OFF. The decision is driven by the atlas QUERY, not the name.
+     Restored atom -> count = 1 (promotion fires again). ✅
+
+HONEST SCOPE (unchanged from #2196):
+  The wall lever is still NULL for this TINY LEAF fn (clang -O2 already inlines at
+  every call site). This change does NOT move wall; it removes the hard-coded name
+  guard that §A/§B/E/G all shared. The wall lever lives where out-of-line calls
+  genuinely dominate (OPAQUE/cross-C-ABI runtime.o symbols) — that generalization
+  is now unblocked (a perf atom can be registered for any such fn) but is a
+  separate measurement, not claimed here.
+
+GATE: byte-diff IDENTICAL ✅ · layout fires (sym 1->0) ✅ · LIVE-query proven (negative control) ✅
+VERDICT TIER: 🔵 LIVE atlas-query surface landed + perf-property atom registered
+              (hard-coded -> LIVE transition proven; wall-lever generalization unblocked)
