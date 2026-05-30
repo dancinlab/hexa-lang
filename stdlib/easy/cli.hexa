@@ -199,6 +199,308 @@ fn _scaffold(topic: string) -> string {
     return s
 }
 
+// ── lint scorer (deterministic · 측정 축) ─────────────────────────────
+//
+// All scores are computed from the file text alone — NO LLM, NO judgement.
+// Each axis returns an int score and is compared against a fixed target;
+// the surface prints per-axis numbers + a PASS/FAIL ⇒ an overall verdict.
+// We strip HTML comments (<!-- ... -->) before scoring prose axes so the
+// scaffold's own checklist/slot hints (which intentionally name jargon like
+// "API·CPU·σ" as examples) never inflate the jargon count of an unfilled
+// skeleton — only the AUTHORED prose is scored.
+
+// Count occurrences of `needle` in `hay` (non-overlapping).
+fn _count_occ(hay: string, needle: string) -> int {
+    let nlen = len(needle)
+    if nlen == 0 { return 0 }
+    let hlen = len(hay)
+    let mut n = 0
+    let mut i = 0
+    while i + nlen <= hlen {
+        if hay.substring(i, i + nlen) == needle {
+            n = n + 1
+            i = i + nlen
+        } else {
+            i = i + 1
+        }
+    }
+    return n
+}
+
+// Strip HTML comment spans <!-- ... --> from text (slot hints / checklist).
+fn _strip_comments(s: string) -> string {
+    let slen = len(s)
+    let mut out = ""
+    let mut i = 0
+    while i < slen {
+        if i + 4 <= slen && s.substring(i, i + 4) == "<!--" {
+            // skip to the closing -->
+            let mut j = i + 4
+            let mut closed = false
+            while j + 3 <= slen {
+                if s.substring(j, j + 3) == "-->" {
+                    i = j + 3
+                    closed = true
+                    break
+                }
+                j = j + 1
+            }
+            if !closed { return out }
+        } else {
+            out = out + s.substring(i, i + 1)
+            i = i + 1
+        }
+    }
+    return out
+}
+
+// Count whitespace-separated tokens in `s` (rough word count, ASCII+CJK).
+fn _word_count(s: string) -> int {
+    let slen = len(s)
+    let mut n = 0
+    let mut in_tok = false
+    let mut i = 0
+    while i < slen {
+        let c = s.substring(i, i + 1)
+        let ws = c == " " || c == "\n" || c == "\t" || c == "\r"
+        if ws {
+            in_tok = false
+        } else {
+            if !in_tok { n = n + 1 }
+            in_tok = true
+        }
+        i = i + 1
+    }
+    return n
+}
+
+// jargon-ratio numerator: total jargon-marker hits in `prose`.
+// Markers = a small acronym/keyword list + math symbols. The denominator
+// (word_count) is returned by the caller; ratio printed as permille int.
+fn _jargon_hits(prose: string) -> int {
+    // Acronyms / product-name fragments common in tech prose. Conservative
+    // list — false-negative-leaning (we'd rather under-flag than over-flag).
+    let kws = [
+        "API", "CPU", "GPU", "RAM", "SDK", "CLI", "HTTP", "JSON", "YAML",
+        "SQL", "TCP", "UDP", "DNS", "SSH", "RPC", "ORM", "AST", "LLM",
+        "SIMD", "MMU", "DMA", "ISA", "FFT", "DFT", "latency", "throughput",
+        "origin", "p99", "cache hit", "gateway", "asymptotic", "heuristic",
+    ]
+    // Math symbols (single chars). σ ∑ ∂ μ Σ ∏ ∇ ∫ √ ≤ ≥ ≈ ∈ — multi-byte
+    // UTF-8 each; _count_occ on the exact substring matches the bytes.
+    let syms = ["σ", "∑", "∂", "μ", "Σ", "∏", "∇", "∫", "√", "≤", "≥", "≈", "∈"]
+    let mut hits = 0
+    let mut i = 0
+    while i < len(kws) {
+        hits = hits + _count_occ(prose, kws[i])
+        i = i + 1
+    }
+    i = 0
+    while i < len(syms) {
+        hits = hits + _count_occ(prose, syms[i])
+        i = i + 1
+    }
+    return hits
+}
+
+// ascii-diagram-presence: count fenced ``` blocks whose body contains at
+// least one box/tree/arrow drawing char. Scans the WHOLE file (templates
+// in the scaffold count — they ARE ascii diagrams the author keeps/edits).
+fn _ascii_diagram_count(s: string) -> int {
+    let slen = len(s)
+    let drawing = ["─", "│", "├", "└", "┌", "┐", "┘", "╲", "╱", "→", "←", "▶", "▢", "■", "□", "╳"]
+    let mut count = 0
+    let mut i = 0
+    let mut in_fence = false
+    let mut fence_body = ""
+    while i < slen {
+        if i + 3 <= slen && s.substring(i, i + 3) == "```" {
+            if in_fence {
+                // closing fence — score the accumulated body
+                let mut k = 0
+                let mut has = false
+                while k < len(drawing) {
+                    if _contains(fence_body, drawing[k]) { has = true; break }
+                    k = k + 1
+                }
+                if has { count = count + 1 }
+                fence_body = ""
+                in_fence = false
+            } else {
+                in_fence = true
+                fence_body = ""
+            }
+            i = i + 3
+            // skip to end of the fence line (language tag etc.)
+            while i < slen && s.substring(i, i + 1) != "\n" { i = i + 1 }
+        } else {
+            if in_fence { fence_body = fence_body + s.substring(i, i + 1) }
+            i = i + 1
+        }
+    }
+    return count
+}
+
+// acronym-first-use-expansion: of the distinct acronyms PRESENT in prose,
+// how many have a parenthetical/dash expansion somewhere ( "API (...)" or
+// "API —" or "API:" ). Returns [expanded, total] as a 2-int array.
+fn _acronym_expansion(prose: string) -> [int] {
+    let acrs = ["API", "CPU", "GPU", "RAM", "SDK", "CLI", "HTTP", "JSON", "SQL", "LLM", "DFT", "FFT", "DMA"]
+    let mut total = 0
+    let mut expanded = 0
+    let mut i = 0
+    while i < len(acrs) {
+        let a = acrs[i]
+        if _contains(prose, a) {
+            total = total + 1
+            // expansion markers right after the acronym: " (" , "(", " —", "—", ":"
+            if _contains(prose, a + " (") || _contains(prose, a + "(") ||
+               _contains(prose, a + " —") || _contains(prose, a + "—") ||
+               _contains(prose, a + ":") {
+                expanded = expanded + 1
+            }
+        }
+        i = i + 1
+    }
+    return [expanded, total]
+}
+
+// analogy-presence: count analogy-marker occurrences in prose. NB the bare
+// label word "비유" is deliberately NOT a marker — it appears in the
+// scaffold's "## 5. 비유 (analogy)" header, which is structure, not an
+// authored analogy. Only real comparison markers count.
+fn _analogy_count(prose: string) -> int {
+    let marks = ["같은", "같이", "처럼", "마치", " like "]
+    let mut n = 0
+    let mut i = 0
+    while i < len(marks) {
+        n = n + _count_occ(prose, marks[i])
+        i = i + 1
+    }
+    return n
+}
+
+// Strip markdown structure from text for PROSE-axis scoring: drop ATX
+// header lines (^#...), fenced code blocks (``` ... ```), and horizontal
+// rules (---). What remains is the AUTHORED explanation prose — so a bare
+// unfilled scaffold (all headers + template fences, no prose) scores ~empty
+// on the prose axes (jargon / analogy) instead of inheriting template text.
+fn _prose_only(s: string) -> string {
+    let slen = len(s)
+    let mut out = ""
+    let mut i = 0
+    let mut in_fence = false
+    // line-by-line
+    while i < slen {
+        // read one line
+        let mut j = i
+        while j < slen && s.substring(j, j + 1) != "\n" { j = j + 1 }
+        let line = s.substring(i, j)
+        let llen = len(line)
+        // fence toggle?
+        if llen >= 3 && line.substring(0, 3) == "```" {
+            in_fence = !in_fence
+        } else {
+            if !in_fence {
+                // skip ATX header (#) and hr (---) lines
+                let first = if llen > 0 { line.substring(0, 1) } else { "" }
+                let is_header = first == "#"
+                let is_hr = line == "---" || line == "***" || line == "___"
+                if !is_header && !is_hr {
+                    out = out + line + "\n"
+                }
+            }
+        }
+        i = j + 1
+    }
+    return out
+}
+
+// seven-element-presence: how many of the 7 labeled element sections exist
+// in the file (by their canonical English-tag substrings) + whether an emoji
+// icon is present. Returns the count of present elements [0..7].
+fn _seven_element_count(s: string) -> int {
+    let tags = ["(icon)", "(name)", "(alias)", "(plain)", "(analogy)", "(ascii)", "(compare)"]
+    let mut n = 0
+    let mut i = 0
+    while i < len(tags) {
+        if _contains(s, tags[i]) { n = n + 1 }
+        i = i + 1
+    }
+    return n
+}
+
+// Integer permille (x/y * 1000) with /0 guard → 0.
+fn _permille(x: int, y: int) -> int {
+    if y <= 0 { return 0 }
+    return (x * 1000) / y
+}
+
+// Render a 0..1000 permille as a "0.NNN" decimal string.
+fn _permille_str(p: int) -> string {
+    let whole = p / 1000
+    let frac = p - whole * 1000
+    let mut fs = str(frac)
+    while len(fs) < 3 { fs = "0" + fs }
+    return str(whole) + "." + fs
+}
+
+// Run the full lint over a file's text. Prints per-axis lines + verdict.
+// Returns 0 if all axes PASS, else 1.
+fn _lint(text: string) -> int {
+    // prose = comment-stripped + markdown-structure-stripped (headers / fences
+    // / hr removed) → the AUTHORED explanation only. An unfilled scaffold is
+    // all structure, so its prose is ~empty (axes don't inherit template text).
+    let prose = _prose_only(_strip_comments(text))
+    let words = _word_count(prose)
+
+    // axis 1 — jargon-ratio ≤ 0.30
+    let jh = _jargon_hits(prose)
+    let jr = _permille(jh, words)
+    let jargon_pass = jr <= 300
+
+    // axis 2 — ascii-diagram-presence ≥ 1
+    let ad = _ascii_diagram_count(text)
+    let ascii_pass = ad >= 1
+
+    // axis 3 — acronym-first-use-expansion ≥ 0.80 (vacuous-PASS if none)
+    let ae = _acronym_expansion(prose)
+    let exp = ae[0]
+    let tot = ae[1]
+    let aer = if tot == 0 { 1000 } else { _permille(exp, tot) }
+    let acr_pass = aer >= 800
+
+    // axis 4 — analogy-presence ≥ 1
+    let an = _analogy_count(prose)
+    let analogy_pass = an >= 1
+
+    // axis 5 — seven-element-presence ≥ 5/7
+    let se = _seven_element_count(text)
+    let seven_pass = se >= 5
+
+    println("easy lint — 측정 축 채점 (deterministic · no LLM)")
+    println("  words(prose, comment-stripped) = " + str(words))
+    println("")
+    let p1 = if jargon_pass { "PASS" } else { "FAIL" }
+    let p2 = if ascii_pass { "PASS" } else { "FAIL" }
+    let p3 = if acr_pass { "PASS" } else { "FAIL" }
+    let p4 = if analogy_pass { "PASS" } else { "FAIL" }
+    let p5 = if seven_pass { "PASS" } else { "FAIL" }
+    println("  jargon-ratio                 = " + _permille_str(jr) + "   (target ≤ 0.300, hits=" + str(jh) + ")   [" + p1 + "]")
+    println("  ascii-diagram-presence       = " + str(ad) + "       (target ≥ 1)                   [" + p2 + "]")
+    println("  acronym-first-use-expansion  = " + _permille_str(aer) + "   (target ≥ 0.800, " + str(exp) + "/" + str(tot) + ")   [" + p3 + "]")
+    println("  analogy-presence             = " + str(an) + "       (target ≥ 1)                   [" + p4 + "]")
+    println("  seven-element-presence       = " + str(se) + "/7     (target ≥ 5/7)                 [" + p5 + "]")
+    println("")
+    let all_pass = jargon_pass && ascii_pass && acr_pass && analogy_pass && seven_pass
+    if all_pass {
+        println("  ⇒ ✅ PASS — meets the easy 측정 축 (창의적 prose 품질은 LLM/사람 검토 별도)")
+        return 0
+    }
+    println("  ⇒ ❌ FAIL — fill the unmet axes above (scaffold slots / analogy / ascii)")
+    return 1
+}
+
 // ── main dispatch ────────────────────────────────────────────────────
 
 fn main() {
@@ -257,9 +559,20 @@ fn main() {
         return
     }
     if sub == "lint" {
-        // PR2 wires the deterministic scorer here.
-        println("easy lint: scorer lands in PR2 — `hexa easy lint <file.md>`")
-        exit(2)
+        if len(av) < 3 {
+            println("easy lint: need a <file.md>")
+            _usage()
+            exit(2)
+        }
+        let path = av[2]
+        if !file_exists(path) {
+            println("easy lint: file not found — " + path)
+            exit(2)
+        }
+        let text = read_text(path)
+        println("📋 easy lint: " + path)
+        let rc = _lint(text)
+        exit(rc)
     }
     println("easy: unknown subverb '" + sub + "'")
     _usage()
