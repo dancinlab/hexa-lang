@@ -1,0 +1,178 @@
+// HEXA Standard Library — aura/bci_kernels
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// AURA BCI .hexa-native porting primitives (handoff f125d45c).
+//
+// Four numpy-equivalent kernels the anima AURA-NAV `nav_overlay.hexa`
+// companion (and the broader AURA-* app set) needs to drop the
+// `// TODO(f125d45c)` stubs and compile/run. The numpy reference for
+// each was independently verified (anima AURA verify/nav_write_fidelity);
+// this module reproduces the same arithmetic over native farr handles +
+// `sqrt`/`exp_pure`, so it is a byte-faithful pure-hexa port — NO new C
+// builtin required (mirrors stats/correlation.hexa + consciousness/
+// phi_spatial.hexa, which are likewise pure-hexa over the farr handle API).
+//
+// Surface:
+//   pub fn gaussian_kernel_1d(n: int, sigma: float) -> int
+//       Row-normalized n×n Gaussian smoothing matrix K, flattened
+//       row-major into a fresh farr of length n*n.
+//         K[i,j] = exp(-(i-j)^2 / (2 sigma^2)),  then each ROW is
+//         divided by its own sum so  Σ_j K[i,j] = 1  for every i.
+//       Returns the farr handle (caller frees). sigma must be > 0.
+//
+//   pub fn separable_blur(x: int, k: int, g: int) -> int
+//       Separable 2-D blur of a flat g*g image `x` (row-major) by the
+//       g×g kernel `k` (as produced by gaussian_kernel_1d(g, sigma)):
+//             Y = K · X · K^T
+//       where X = reshape(x, [g,g]). Returns a fresh flat g*g farr
+//       (caller frees). Equivalent to  np.einsum('ai,ij,bj->ab', K, X, K)
+//       i.e. blur along rows then along columns (separable Gaussian).
+//
+//   pub fn nearest_template(y: int, templates: int, n_t: int, d: int) -> int
+//       argmin over n_t templates of the squared-L2 distance to query
+//       vector `y` (length d). `templates` is a flat n_t*d farr, row i =
+//       template i. Returns the integer index i* minimising
+//             Σ_c (y[c] - templates[i*d + c])^2 .
+//       Ties resolve to the lowest index. Returns -1 if n_t <= 0.
+//
+//   pub fn r2(y: int, ref: int, n: int) -> float
+//       Coefficient of determination of prediction `y` against the
+//       reference/observed series `ref` (both farr handles, length n):
+//             R^2 = 1 - SS_res / SS_tot
+//             SS_res = Σ (y[i] - ref[i])^2
+//             SS_tot = Σ (ref[i] - mean(ref))^2 .
+//       Returns 1.0 when SS_tot == 0 and SS_res == 0 (perfect constant
+//       fit), else 0.0 when SS_tot == 0 and SS_res > 0 (degenerate /
+//       undefined — matches the numpy guard the AURA reference uses).
+//
+// Numerics: `sqrt` is not needed (squared distances stay squared);
+// `exp_pure` (self/runtime/math_pure) supplies e^x for the kernel.
+// farr builtins (farr_zeros / farr_get / farr_set) are intrinsic.
+
+use "self/runtime/math_pure"
+
+// ── gaussian_kernel_1d — row-normalized n×n Gaussian matrix ─────────────────
+pub fn gaussian_kernel_1d(n: int, sigma: float) -> int {
+    let k = farr_zeros(n * n)
+    if n <= 0 { return k }
+    let two_s2 = 2.0 * sigma * sigma
+    let mut i = 0
+    while i < n {
+        // unnormalized row + its sum
+        let mut rowsum = 0.0
+        let mut j = 0
+        while j < n {
+            let diff = (i - j) * 1.0
+            let w = exp_pure(-(diff * diff) / two_s2)
+            let _ = farr_set(k, i * n + j, w)
+            rowsum = rowsum + w
+            j = j + 1
+        }
+        // row-normalize so Σ_j K[i,j] = 1
+        if rowsum > 0.0 {
+            let mut c = 0
+            while c < n {
+                let _ = farr_set(k, i * n + c, farr_get(k, i * n + c) / rowsum)
+                c = c + 1
+            }
+        }
+        i = i + 1
+    }
+    return k
+}
+
+// ── separable_blur — Y = K · reshape(x) · K^T ──────────────────────────────
+pub fn separable_blur(x: int, k: int, g: int) -> int {
+    let out = farr_zeros(g * g)
+    if g <= 0 { return out }
+    // step 1: T = K · X      (blur along rows / first axis)
+    //   T[a,j] = Σ_i K[a,i] · X[i,j]
+    let t = farr_zeros(g * g)
+    let mut a = 0
+    while a < g {
+        let mut j = 0
+        while j < g {
+            let mut acc = 0.0
+            let mut i = 0
+            while i < g {
+                acc = acc + farr_get(k, a * g + i) * farr_get(x, i * g + j)
+                i = i + 1
+            }
+            let _ = farr_set(t, a * g + j, acc)
+            j = j + 1
+        }
+        a = a + 1
+    }
+    // step 2: Y = T · K^T    (blur along columns / second axis)
+    //   Y[a,b] = Σ_j T[a,j] · K[b,j]
+    let mut a2 = 0
+    while a2 < g {
+        let mut b = 0
+        while b < g {
+            let mut acc = 0.0
+            let mut j = 0
+            while j < g {
+                acc = acc + farr_get(t, a2 * g + j) * farr_get(k, b * g + j)
+                j = j + 1
+            }
+            let _ = farr_set(out, a2 * g + b, acc)
+            b = b + 1
+        }
+        a2 = a2 + 1
+    }
+    let _ = farr_free(t)
+    return out
+}
+
+// ── nearest_template — argmin_i ‖y - templates[i]‖² ────────────────────────
+pub fn nearest_template(y: int, templates: int, n_t: int, d: int) -> int {
+    if n_t <= 0 { return -1 }
+    let mut best = 0
+    let mut best_d2 = 1.0e308   // +INF proxy
+    let mut i = 0
+    while i < n_t {
+        let mut d2 = 0.0
+        let mut c = 0
+        while c < d {
+            let diff = farr_get(y, c) - farr_get(templates, i * d + c)
+            d2 = d2 + diff * diff
+            c = c + 1
+        }
+        if d2 < best_d2 {
+            best_d2 = d2
+            best = i
+        }
+        i = i + 1
+    }
+    return best
+}
+
+// ── r2 — coefficient of determination of y against ref ─────────────────────
+pub fn r2(y: int, ref: int, n: int) -> float {
+    if n <= 0 { return 0.0 }
+    let mut s = 0.0
+    let mut i = 0
+    while i < n {
+        s = s + farr_get(ref, i)
+        i = i + 1
+    }
+    let mean = s / (n * 1.0)
+    let mut ss_res = 0.0
+    let mut ss_tot = 0.0
+    let mut j = 0
+    while j < n {
+        let dr = farr_get(y, j) - farr_get(ref, j)
+        let dm = farr_get(ref, j) - mean
+        ss_res = ss_res + dr * dr
+        ss_tot = ss_tot + dm * dm
+        j = j + 1
+    }
+    if ss_tot <= 0.0 {
+        // constant reference: perfect iff residual is also zero.
+        if ss_res <= 0.0 { return 1.0 }
+        return 0.0
+    }
+    return 1.0 - ss_res / ss_tot
+}
