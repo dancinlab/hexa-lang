@@ -87,6 +87,9 @@ fn cmd_help() {
     println("  dojo <domain> <slug> '<spec>' [--lang=hexa|py|both]")
     println("                                          cloud training-job 빵틀 (.hexa+.py+run.sh → exports/<d>/dojo/<slug>/)")
     println("    e.g. hexa dojo llm smoke '{\"model\":\"gpt2\",\"epochs\":1}'    (domains: hexa dojo domains)")
+    println("  easy scaffold <topic> [--out <p>] | lint <file.md>")
+    println("                                          친근(이지) 설명 빵틀 + 측정 축 채점기 (deterministic · 창의 재서술은 LLM 몫)")
+    println("    e.g. hexa easy scaffold \"캐시\"        emit .easy.md 7-slot skeleton  ·  hexa easy lint x.easy.md  (axes: hexa easy axes)")
     println("  hf <flags>                              HuggingFace upload wrapper (pure hexa · validate + sha256 + hf CLI)")
     println("    e.g. hexa hf --dry-run --repo org/clm-v4-sft-stage1 --ckpt <p> --readme <p>   (or --selftest)")
     println("  stdlib [list [--json]]                  stdlib catalog (modules · dirs · tests · docs)")
@@ -6988,6 +6991,29 @@ if len(av) < 3 {
             if file_exists(inst_path) { dj_script = inst_path }
         }
         cmd_run(dj_script, dj_args)
+    } else if sub == "easy" {
+        // stdlib/easy/cli.hexa dispatch — 친근(이지) 설명 빵틀 + 채점기
+        // (sibling of deck/dojo). `hexa easy scaffold <topic> [--out <path>]`
+        // emits a `.easy.md` skeleton (7-element slots + 4 ASCII templates +
+        // checklist); `hexa easy lint <file.md>` deterministically scores a
+        // markdown file vs the easy 측정 축 (jargon-ratio · ascii-presence ·
+        // acronym-expansion · analogy-presence · 7-element-presence). The
+        // creative rewrite (jargon→layperson prose) stays LLM-side — this
+        // builtin owns ONLY the deterministic halves. Pure-hexa string
+        // assembly — runs via cmd_run (compile-then-exec), no AOT build.
+        let __inst_ez = install_dir_from_argv0()
+        let mut ez_args = []
+        let mut ezi = 3
+        while ezi < len(av) {
+            ez_args.push(av[ezi])
+            ezi = ezi + 1
+        }
+        let mut ez_script = "stdlib/easy/cli.hexa"
+        if len(__inst_ez) > 0 {
+            let inst_path = __inst_ez + "/stdlib/easy/cli.hexa"
+            if file_exists(inst_path) { ez_script = inst_path }
+        }
+        cmd_run(ez_script, ez_args)
     } else if sub == "hf" {
         // stdlib/hf/upload.hexa dispatch — HuggingFace upload wrapper
         // (pure hexa · sibling of dojo). `hexa hf <flags>` validates
