@@ -1276,6 +1276,33 @@ fn _dft_detach_argv(stage_cmd: str) -> [str] {
     return ["sh", "-lc", stage_cmd]
 }
 
+// _dft_scfph_cmd — the scf→el-ph CHAIN as one detached shell-string. scf must
+// finish before ph starts, so the two reused guarded commands are joined with
+// `&&` (ph runs only on a clean scf). The relaxed geometry was already spliced
+// into /root/deck/scf.in by --resume (LOCAL parse + upload) before this launch.
+fn _dft_scfph_cmd(np: int, walltime_h: int) -> str {
+    return _dft_scf_cmd(np, walltime_h) + " && " + _dft_ph_cmd(np, walltime_h)
+}
+
+// _dft_stage_probe_cmd — a remote one-liner that classifies a detached stage
+// HONESTLY (the QE "JOB DONE" checkpoint trap: a bare JOB DONE grep is NOT
+// terminal — ph.out prints it per invocation, and a walltime-killed run prints
+// it too before STOP 1). `procname` is the running binary (pw.x / ph.x), `out`
+// the stage stdout file. Emits exactly one of:
+//   __DFT_RUNNING__  — the binary is still alive (pgrep hit) → resume is a no-op
+//   __DFT_FAILED__   — process gone AND a crash/timeout signature in `out`
+//                      (Error in routine / STOP [1-9] / Maximum CPU time / no JOB DONE)
+//   __DFT_DONE__     — process gone AND a clean JOB DONE with no failure line
+// The failure set is checked BEFORE the JOB DONE set (failure-first), mirroring
+// cloud_tail_cmd_taxonomy's ordering, so a timed-out run never reads as DONE.
+fn _dft_stage_probe_cmd(procname: str, out: str) -> str {
+    return "if pgrep -x " + procname + " >/dev/null 2>&1; then echo __DFT_RUNNING__; "
+        + "elif [ ! -s /root/deck/" + out + " ]; then echo __DFT_FAILED__; "
+        + "elif grep -qE 'Error in routine|STOP [1-9]|Maximum CPU time exceeded|max_seconds' /root/deck/" + out + "; then echo __DFT_FAILED__; "
+        + "elif grep -q 'JOB DONE' /root/deck/" + out + "; then echo __DFT_DONE__; "
+        + "else echo __DFT_FAILED__; fi"
+}
+
 // _dft_detach — option α PHASE-1. Rents → resolves the direct endpoint →
 // reachability precheck → uploads the deck → provisions QE → fetches pseudos →
 // launches RELAX *detached on the pod* (cloud_nohup → remote logfile) → records
@@ -1383,20 +1410,130 @@ fn _dft_detach(deck: str, image: str, disk: int, owner: str, query: str, identit
     return 0
 }
 
-// _dft_resume — option α PHASE-2. PLACEHOLDER in this PR (phase-1 only). PR2
-// implements the explicit, idempotent terminal-step advance: relax-done → LOCAL
-// coord parse + assemble + launch scf+ph detached; ph-terminal → harvest +
-// verdict + teardown. Until then, surface where the pod is.
+// _dft_resume — option α PHASE-2. EXPLICIT + IDEMPOTENT terminal-step advance
+// over the pod recorded by --detach. NOT an auto-poll loop (re-invoke once per
+// candidate; it returns immediately). It reads the state stamp, reconstructs the
+// endpoint, probes the CURRENT stage, and advances ONE terminal step:
+//
+//   phase=relax, relax DONE  → copy relax.out back, LOCAL hexa-native coord
+//                              parse (NO pod-side hand-parse, @L2), assemble scf,
+//                              upload, launch scf→ph CHAIN detached, stamp phon.
+//   phase=relax, STILL RUNNING → no-op, return 0 (re-invoke later).
+//   phase=phon,  ph DONE     → copy scf.out + ph.out back, dft_phonon_stable
+//                              verdict, TEARDOWN, stamp done.
+//   phase=phon,  STILL RUNNING → no-op, return 0.
+//   any stage FAILED         → pull the tail for diagnosis, TEARDOWN(1).
+//
+// The long compute lives on the POD; --resume only ever does fast local I/O +
+// one ssh probe + (at a boundary) a parse/upload/launch — never a blocking wait.
 fn _dft_resume(deck: str) -> int {
     let iid = _dft_state_field(deck, "instance_id")
     if len(iid) == 0 {
         println("[dft-run] --resume: no detach state stamp at " + _dft_state_path(deck) + " — run `--detach` first.")
         return 2
     }
-    println("[dft-run] --resume: phase-2 advance is not in this build (phase-1 detach only).")
-    println("[dft-run]   pod instance " + iid + " (host " + _dft_state_field(deck, "host")
-        + ":" + _dft_state_field(deck, "port") + ") is running stage `" + _dft_state_field(deck, "phase") + "`.")
-    return 0
+    let phase = _dft_state_field(deck, "phase")
+    if phase == "done" {
+        println("[dft-run] --resume: deck " + deck + " already at terminal `done` (instance " + iid + " torn down). Nothing to do.")
+        return 0
+    }
+    let host_ip = _dft_state_field(deck, "host")
+    let port = _dft_state_field(deck, "port")
+    let identity = _dft_state_field(deck, "identity")
+    let relax_name = _dft_state_field(deck, "relax_name")
+    let np = _dft_atoi(_dft_state_field(deck, "np"))
+    let walltime_h = _dft_atoi(_dft_state_field(deck, "walltime_h"))
+    let host = "root@" + host_ip
+    let ssh_opts = _dft_ssh_opts(port, identity)
+    println("[dft-run] --resume: instance " + iid + " @ " + host_ip + ":" + port + " · stage `" + phase + "`")
+
+    if phase == "relax" {
+        // probe relax terminal (honest — pw.x dead AND clean JOB DONE).
+        let probe = cloud_exec_opts(host, ssh_opts, _dft_stage_probe_cmd("pw.x", "relax.out"))
+        if probe.stdout_.contains("__DFT_RUNNING__") {
+            println("[dft-run] --resume: relax STILL RUNNING on the pod — re-invoke `--resume` later.")
+            println("[dft-run]   monitor: hexa cloud tail " + host + " " + _dft_remote_logfile("relax"))
+            return 0
+        }
+        // harvest relax.out + LOCAL coord parse (@L2 — never hand-parse on the pod).
+        let _hr = cloud_copy_from_opts(host, ssh_opts, "/root/deck/relax.out", deck + "/relax.out")
+        let coords = dft_relax_to_scf_coords(read_file(deck + "/relax.out"))
+        if probe.stdout_.contains("__DFT_FAILED__") || len(coords) == 0 {
+            println("[dft-run] --resume: relax FAILED / no 'Begin final coordinates' — not dispatching scf on stale geometry.")
+            let rt = cloud_exec_opts(host, ssh_opts, "tail -40 /root/deck/relax.out 2>/dev/null")
+            println("[dft-run] ── relax.out tail ──\n" + rt.stdout_ + "\n[dft-run] ── end ──")
+            let _ws = _dft_write_state(deck, "failed", iid, host_ip, port, identity, np, walltime_h, relax_name)
+            return _dft_teardown(iid, 1)
+        }
+        // assemble scf = head + LOCAL-parsed coords + tail; write scf.in.gen (no
+        // source clobber); upload as the pod's scf.in.
+        let split = dft_scf_head_tail(deck)
+        if split.ok == 0 {
+            println("[dft-run] --resume: FATAL — could not resolve scf head/tail (no scf.in[.head/.tail]).")
+            return _dft_teardown(iid, 1)
+        }
+        let scf_in = dft_assemble_scf(split.head, coords, split.tail)
+        write_file(deck + "/scf.in.gen", scf_in)
+        let _us = cloud_copy_to_opts(host, ssh_opts, deck + "/scf.in.gen", "/root/deck/scf.in")
+        // launch scf→ph CHAIN detached (one terminal step; ph runs only on clean scf).
+        let phon_log = _dft_remote_logfile("phon")
+        let phon_argv = _dft_detach_argv(_dft_scfph_cmd(np, walltime_h))
+        let launched = cloud_nohup_opts(host, ssh_opts, phon_argv, phon_log)
+        if launched.ok == 0 {
+            println("[dft-run] --resume: scf→ph detach launch FAILED — " + launched.message)
+            return _dft_teardown(iid, 1)
+        }
+        let _ws2 = _dft_write_state(deck, "phon", iid, host_ip, port, identity, np, walltime_h, relax_name)
+        println("[dft-run] --resume: relax DONE → scf→ph CHAIN LAUNCHED detached (pid " + to_string(launched.pid) + " · log " + phon_log + ")")
+        println("[dft-run]   monitor: hexa cloud tail " + host + " " + phon_log)
+        println("[dft-run]   advance: hexa cloud dft-run " + deck + " --resume   (harvest+verdict+teardown on ph-terminal)")
+        return 0
+    }
+
+    if phase == "phon" {
+        // probe ph terminal HONESTLY (ph.x dead AND clean JOB DONE — not the
+        // per-invocation checkpoint marker). scf precedes ph in the chain, so a
+        // ph.x that ran at all implies scf completed.
+        let probe = cloud_exec_opts(host, ssh_opts, _dft_stage_probe_cmd("ph.x", "ph.out"))
+        // scf could still be running (ph.x not yet spawned) — pw.x alive counts as running too.
+        let scfprobe = cloud_exec_opts(host, ssh_opts, "pgrep -x pw.x >/dev/null 2>&1 && echo __DFT_RUNNING__ || echo __DFT_IDLE__")
+        if probe.stdout_.contains("__DFT_RUNNING__") || scfprobe.stdout_.contains("__DFT_RUNNING__") {
+            println("[dft-run] --resume: scf/ph STILL RUNNING on the pod — re-invoke `--resume` later.")
+            println("[dft-run]   monitor: hexa cloud tail " + host + " " + _dft_remote_logfile("phon"))
+            return 0
+        }
+        // harvest scf.out + ph.out.
+        let _hs = cloud_copy_from_opts(host, ssh_opts, "/root/deck/scf.out", deck + "/scf.out")
+        let _hp = cloud_copy_from_opts(host, ssh_opts, "/root/deck/ph.out", deck + "/ph.out")
+        if probe.stdout_.contains("__DFT_FAILED__") {
+            println("[dft-run] --resume: ph (or scf) FAILED before a clean JOB DONE — closed as failure.")
+            let pt = cloud_exec_opts(host, ssh_opts, "tail -40 /root/deck/ph.out 2>/dev/null")
+            println("[dft-run] ── ph.out tail ──\n" + pt.stdout_ + "\n[dft-run] ── end ──")
+            let _wf = _dft_write_state(deck, "failed", iid, host_ip, port, identity, np, walltime_h, relax_name)
+            return _dft_teardown(iid, 1)
+        }
+        // ④ stability verdict on the harvested ph.out.
+        let verdict = dft_phonon_stable(read_file(deck + "/ph.out"))
+        if verdict == 0 {
+            println("[dft-run] ④ VERDICT: UNSTABLE (imaginary mode < -5 cm⁻¹) — closed-negative.")
+        } else {
+            if verdict == 1 {
+                println("[dft-run] ④ VERDICT: dynamically stable (all real modes in computed q-set) — harvest λ/ω_log/Tc.")
+            } else {
+                println("[dft-run] ④ VERDICT: inconclusive (no frequencies parsed) — inspect ph.out.")
+            }
+        }
+        println("[dft-run] results harvested to " + deck + "/{relax.out,scf.out,ph.out}.")
+        let _wd = _dft_write_state(deck, "done", iid, host_ip, port, identity, np, walltime_h, relax_name)
+        return _dft_teardown(iid, 0)
+    }
+
+    if phase == "failed" {
+        println("[dft-run] --resume: deck " + deck + " is at terminal `failed` (pod torn down). Re-`--detach` to retry.")
+        return 1
+    }
+    println("[dft-run] --resume: unknown stage `" + phase + "` in the state stamp — inspect " + _dft_state_path(deck) + ".")
+    return 2
 }
 
 // _dft_teardown — non-interactive destroy + registry forget (④ orphan guard).
