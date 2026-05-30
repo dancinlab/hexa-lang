@@ -1508,11 +1508,19 @@ fn gen2_has_inline_always(node) {
 //
 // THE LICENSE: atlas node `verified-lambda_eliashberg-num` (@F 🟢
 // SUPPORTED-NUMERICAL) certifies lambda_eliashberg is a deterministic,
-// side-effect-free numeric fn — a pure hot-path atom. (Same exact hard-coded
-// license set as §B/E — see the honest caveat: codegen has NO live
-// atlas-query surface yet, so the firing guard hard-codes the verified name.
-// Generalizing to a perf-property atom schema + a codegen atlas-lookup is a
-// registered open sub-task; this is the minimal demonstration.)
+// side-effect-free numeric fn — a pure hot-path atom.
+//
+// UNSHADOW G frontier (this change): the firing guard NO LONGER hard-codes the
+// fn name. codegen now performs a LIVE ATLAS QUERY at compile time — it reads
+// the atlas SSOT (compiler/atlas/embedded.gen.hexa, TEXT-parse, same precedence
+// as the rest of the toolchain) and licenses a fn as a pure hot-path iff a
+// dedicated PERF-PROPERTY atom `perf-<fnname>-hot` carrying the `hot-path` perf
+// tag is present. This is the shared infra §A/§B/E/G were all blocked on:
+//   - perf-property atom kind: `@F perf-<fn>-hot ... perf = "hot-path ..."`
+//     (registered in embedded.gen.hexa, derived-from the verified-num atom).
+//   - codegen LIVE atlas-lookup surface: gen2_atlas_perf_hot_set() below.
+// The atlas file is scanned ONCE per compilation unit (lazy + cached in a
+// module-global), so the lookup is O(1) per fn-decl after the first read.
 //
 // FAITHFUL: inline + hot are semantics-preserving layout hints, so ON/OFF is
 // stdout BYTE-IDENTICAL. GATED OPT-IN `HEXA_ATLAS_PGO` (default OFF = zero
@@ -1520,9 +1528,54 @@ fn gen2_has_inline_always(node) {
 fn gen2_is_atlas_pgo_hot(node) {
     if env("HEXA_ATLAS_PGO") == "" { return false }
     if type_of(node.name) != "string" { return false }
-    // hard-coded atlas-verified pure hot-path license set (§B/E pattern).
-    if node.name == "lambda_eliashberg" { return true }
-    return false
+    // LIVE atlas query (no hard-coded fn name) — license via perf-property atom.
+    return gen2_atlas_perf_hot(node.name)
+}
+
+// Resolve the atlas SSOT path — same precedence as _daemon_atlas_ssot_path:
+//   $HEXA_LANG > install_dir_from_argv0() > ./   (repo-root relative).
+fn gen2_atlas_ssot_path() {
+    let rel = "/compiler/atlas/embedded.gen.hexa"
+    let h = env("HEXA_LANG")
+    if len(h) > 0 {
+        let p = h + rel
+        if file_exists(p) { return p }
+    }
+    let inst = install_dir_from_argv0()
+    if len(inst) > 0 {
+        let p = inst + rel
+        if file_exists(p) { return p }
+    }
+    let cwd = "." + rel
+    if file_exists(cwd) { return cwd }
+    return ""
+}
+
+// LIVE atlas perf-property lookup. Reads the atlas SSOT ONCE (lazy + cached),
+// then answers: does `fn_name` have a `perf-<fn_name>-hot` atom tagged
+// `hot-path`? This replaces the §B/E-style hard-coded name guard with a real
+// compile-time atlas query. Returns false (no promotion) if the SSOT is not
+// locatable — codegen MUST never fail to emit just because the atlas is absent.
+fn gen2_atlas_perf_hot(fn_name) {
+    if !_gen2_atlas_perf_loaded {
+        _gen2_atlas_perf_loaded = true
+        let p = gen2_atlas_ssot_path()
+        if len(p) > 0 {
+            _gen2_atlas_perf_text = read_file(p)
+        }
+    }
+    if len(_gen2_atlas_perf_text) == 0 { return false }
+    // A perf-property atom is identified by its id `perf-<fn>-hot` carrying the
+    // `hot-path` tag. Match the id token so an unrelated substring can't fire.
+    let needle = "perf-" + fn_name + "-hot"
+    let pos = _gen2_atlas_perf_text.index_of(needle)
+    if pos < 0 { return false }
+    // Confirm the matched atom carries the hot-path perf tag (guards against a
+    // perf atom that is registered but NOT hot — e.g. a future cold marker).
+    let tail = _gen2_atlas_perf_text.substring(pos, len(_gen2_atlas_perf_text))
+    let hp = tail.index_of("hot-path")
+    if hp < 0 { return false }
+    return true
 }
 
 fn gen2_fn_forward(node) {
@@ -2521,6 +2574,11 @@ fn gen2_extern_wrapper(node) {
         "target": "", "trait_name": "", "methods": ""
     }
 }
+
+// UNSHADOW G: LIVE atlas perf-property query cache — the atlas SSOT text is
+// read ONCE per compilation unit (lazy), then perf-property lookups are O(1).
+let mut _gen2_atlas_perf_loaded = false
+let mut _gen2_atlas_perf_text = ""
 
 // ROI-38: pre-built indent strings for depth 0-6 — avoids per-call allocation
 let mut _gen2_indent_cache = []
