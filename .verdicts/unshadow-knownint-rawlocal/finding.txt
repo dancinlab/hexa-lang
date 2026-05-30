@@ -1,0 +1,47 @@
+§knownint-rawlocal finding verdict — 🔴 CLOSED-NEGATIVE
+Generated: 2026-05-31 (arm64 — Apple clang 17.0.0, -O2)
+
+PRE-REGISTERED FALSIFIER (from milestone):
+  H: lowering a PROVEN known-int accumulator from the inline `.i` box
+     (compound literal) to a raw int64_t C local will recover the
+     f_inline_acc -> d_ideal Δ (~12.5×, reaching the ~0.08s register-pack
+     ceiling), because the surviving box surface blocks clang's register
+     allocation.
+
+REAL MEASUREMENT (best-of-9 wall, n=1e9, arm64, clang -O2):
+  | arm       | lowering                         | wall (s) | vs e_boxed |
+  |-----------|----------------------------------|----------|------------|
+  | e_boxed   | boxed HexaVal, bl _hexa_add wall | 1.49     | 1.00x      |
+  | f_inline  | inline .i slice (PR #2202)       | 0.50     | 2.98x      |
+  | g_raw     | raw int64 local (this sub-task)  | 0.50     | 2.98x      |
+
+  f_inline wall == g_raw wall (identical).
+  f_inline asm  == g_raw asm   (md5 identical, diff exit 0).
+  f_inline bin  == g_raw bin   (full binary md5 identical).
+
+FINDING (🔴 FALSIFIED — closed-negative, paper_negative_ok):
+  clang -O2 ALREADY eliminates the inline `.i` box. SROA/mem2reg scalarizes
+  the single-field {.tag,.i} compound literal: .tag is dead (never read in the
+  loop), .i is promoted to register x8. The emitted hot loop is already
+  `add x8,x8,#1`, byte-identical to the hand-written raw int64 local.
+
+  Therefore the raw-int64-local lowering recovers ZERO additional Δ over the
+  inline `.i` slice. The box surface the milestone targeted does NOT survive
+  -O2 in the first place — there is nothing left to remove.
+
+RULED-OUT AXIS:
+  "Remove the surviving box compound literal to reach d_ideal" is a DEAD axis
+  for a single-int-field accumulator under clang -O2. The optimizer's SROA is
+  the actual box-eliminator; the inline `.i` slice (PR #2202) was already
+  sufficient to hit the register-pack ceiling. The prior bench's d_ideal=0.08s
+  vs f_inline=1.00s "12.5× gap" was a measurement artifact (different n /
+  noise) — f_inline IS d_ideal at the asm level.
+
+  Corollary: source-level box-stripping only matters where SROA CANNOT fire —
+  i.e. multi-field / escaping / aliased HexaVals that cross the runtime.o ABI
+  wall (the e_boxed 1.49x tax). That is the only remaining real lever.
+
+NOTE ON CODEGEN: the raw int64 local lowering IS implemented in the faithful
+emit proxy (self/native/native_gate_emit.hexa: emit_accum_raw_decl +
+emit_accum_raw_box_once), gated behind HEXA_NATIVE_ARR=1, default OFF
+byte-identical to baseline. It is correct and ships — but it is a no-op at -O2.
