@@ -14,7 +14,31 @@
 // the tree is already emit+byte_diff pairs).
 //
 // Invocation:  hexa-run self/native/native_gate_emit.hexa <output-path>
+//   (hexa CLI form: `hexa run self/native/native_gate_emit.hexa <output-path>`)
 // Default output path (if argv missing): "native_gate.c" in cwd.
+//
+// ── BUILD RECIPE (moved here from the deleted native_gate.c header, HEXA-CC-ZERO
+//    C2) — native_gate.c is no longer committed; regen it from this emitter, then
+//    compile. Canonical driver: self/native/native_gate_build.sh (+ --smoke). ──
+//
+// BUILD (Ubuntu / Linux):
+//   hexa run self/native/native_gate_emit.hexa self/native/native_gate.c
+//   cc -shared -fPIC -O2 -D_GNU_SOURCE \
+//      -o self/native/native_gate.so self/native/native_gate.c -ldl
+//   # or simply: ./self/native/native_gate_build.sh
+//
+// SMOKE (Linux only — full LD_PRELOAD runtime refuse test):
+//   ./self/native/native_gate_build.sh --smoke   # prints NATIVE_GATE_SMOKE PASS/FAIL
+//
+// INSTALL (per-user, no root) — in ~/.bashrc or ~/.zshrc:
+//   export LD_PRELOAD="$WS/hexa-lang/self/native/native_gate.so${LD_PRELOAD:+:$LD_PRELOAD}"
+//
+// OPT-OUT (emergency):
+//   CLAUDX_NO_SANDBOX=1 <cmd>   — env gate (checked per-call, zero-cost when set;
+//                                 the shim early-returns on invocation).
+//
+// SSOT: this emitter + airgenome/rules/airgenome.json#AG10 + self/sbpl/native.sb.
+// (self/native/ is on the raw#8 allowlist — FFI shim tree.)
 //
 // Phase: B9.C (self/native standalone .so .c-text · F3 · HEXA-CC-ZERO C-front).
 
