@@ -781,6 +781,42 @@ fn _resolve_cloud_host(h: str) -> ResolvedHost {
     return ResolvedHost { host: h, port: "", resolved: 0, via: "" }
 }
 
+// DirectRetry — the result of a proxy→direct fallback decision. `retry=1`
+// means the proxy dispatch hit a TRANSPORT OUTAGE (ssh exit 255: connection
+// refused / timeout) and a live DIRECT endpoint is mapped, so the caller
+// should re-dispatch ONCE against `host`/`ssh_opts` (the bare public-IP:port).
+// `retry=0` leaves the original proxy result authoritative.
+struct DirectRetry {
+    retry:    int,
+    host:     str,
+    ssh_opts: [str]
+}
+
+// _proxy_fallback_direct — proxy→direct single-retry decision (Fix-cloud-1).
+// PROXY-FIRST stays the default (ghost's network needs it — a stale direct IP
+// silently times out there); this ONLY fires when the proxy dispatch returned a
+// TRANSPORT OUTAGE (`exit_code == 255`, the _ssh_transport_outage code — ssh
+// never reached the remote shell), NOT on a genuine remote command failure
+// (any other exit code came from a command that actually ran). On mini's
+// network the assumption is inverted — the proxy refuses at TCP while the
+// direct endpoint connects — so when the proxy was the winning endpoint and it
+// outaged, retry ONCE via vast_direct_endpoint(iid). `iid` is the original bare
+// vast id; `base_opts` are the user ssh_opts BEFORE the resolved proxy port was
+// injected, so the direct retry carries the DIRECT port (not the stale proxy
+// one). retry=0 when the proxy did not win, the failure was not a transport
+// outage, or no direct endpoint is mapped.
+fn _proxy_fallback_direct(iid: str, rh: ResolvedHost, base_opts: [str], exit_code: int) -> DirectRetry {
+    if rh.resolved == 0 || rh.via != "proxy" || exit_code != 255 {
+        return DirectRetry { retry: 0, host: "", ssh_opts: [] }
+    }
+    let direct = vast_direct_endpoint(iid)
+    if direct.ok == 0 {
+        return DirectRetry { retry: 0, host: "", ssh_opts: [] }
+    }
+    let drh = ResolvedHost { host: "root@" + direct.host, port: direct.port, resolved: 1, via: "direct" }
+    return DirectRetry { retry: 1, host: drh.host, ssh_opts: _apply_resolved_port(base_opts, drh) }
+}
+
 // _ssh_opts_has_port — 1 iff ssh_opts already carries an explicit `-p <n>`
 // (the user passed `--port`). Used to decide whether a resolved proxy port
 // should be injected — an explicit `--port` always wins.
@@ -1762,12 +1798,14 @@ fn main() {
             println("[cloud] run: missing <host> — usage: cloud run <host> [--port N] [--insecure] -- <argv...>")
             exit(2)
         }
-        let _rh = _resolve_cloud_host(_checked_host(av[si + 1]))
+        let _id = _checked_host(av[si + 1])
+        let _rh = _resolve_cloud_host(_id)
         let host = _rh.host
         if _rh.resolved == 1 {
             println("[cloud] run: resolved vast id → " + host + " :" + _rh.port + " (" + _rh.via + ")")
         }
-        let ssh_opts = _apply_resolved_port(_ssh_opts_cli(av, si + 2), _rh)
+        let base_opts = _ssh_opts_cli(av, si + 2)
+        let ssh_opts = _apply_resolved_port(base_opts, _rh)
         let max_wall = _max_wall_cli(av, si + 2)
         let env_kvs = _env_args_cli(av, si + 2)
         let mut argv = _collect_after(av, si + 2)
@@ -1777,7 +1815,13 @@ fn main() {
         }
         argv = _with_env(env_kvs, argv)
         argv = _with_source(_source_args_cli(av, si + 2), argv)
-        let r = cloud_run_wall_opts(host, ssh_opts, argv, max_wall)
+        let mut r = cloud_run_wall_opts(host, ssh_opts, argv, max_wall)
+        // Fix-cloud-1: proxy→direct single retry on a TRANSPORT OUTAGE (255).
+        let _fb = _proxy_fallback_direct(_id, _rh, base_opts, r.exit_code)
+        if _fb.retry == 1 {
+            println("[cloud] run: proxy unreachable (transport 255) → retrying once via direct " + _fb.host)
+            r = cloud_run_wall_opts(_fb.host, _fb.ssh_opts, argv, max_wall)
+        }
         // NOTE (#1229 B): `run` does NOT register the host. The registry holds
         // provider pod-ids (for reconcile vs the provider live set), and `host`
         // is an ssh destination (`root@<ip>`), not a pod-id — recording it
@@ -1795,12 +1839,14 @@ fn main() {
             println("[cloud] exec: missing <host> — usage: cloud exec <host> [--port N] [--insecure] -- <shell-cmd>")
             exit(2)
         }
-        let _rh = _resolve_cloud_host(_checked_host(av[si + 1]))
+        let _id = _checked_host(av[si + 1])
+        let _rh = _resolve_cloud_host(_id)
         let host = _rh.host
         if _rh.resolved == 1 {
             println("[cloud] exec: resolved vast id → " + host + " :" + _rh.port + " (" + _rh.via + ")")
         }
-        let ssh_opts = _apply_resolved_port(_ssh_opts_cli(av, si + 2), _rh)
+        let base_opts = _ssh_opts_cli(av, si + 2)
+        let ssh_opts = _apply_resolved_port(base_opts, _rh)
         let tokens = _collect_after(av, si + 2)
         if len(tokens) == 0 {
             println("[cloud] exec: empty shell-cmd — usage: cloud exec <host> [--port N] [--insecure] -- <shell-cmd>")
@@ -1815,7 +1861,13 @@ fn main() {
             cmd_str = cmd_str + tokens[ei]
             ei = ei + 1
         }
-        let r = cloud_exec_opts(host, ssh_opts, cmd_str)
+        let mut r = cloud_exec_opts(host, ssh_opts, cmd_str)
+        // Fix-cloud-1: proxy→direct single retry on a TRANSPORT OUTAGE (255).
+        let _fb = _proxy_fallback_direct(_id, _rh, base_opts, r.exit_code)
+        if _fb.retry == 1 {
+            println("[cloud] exec: proxy unreachable (transport 255) → retrying once via direct " + _fb.host)
+            r = cloud_exec_opts(_fb.host, _fb.ssh_opts, cmd_str)
+        }
         if len(r.stdout_) > 0 {
             println(r.stdout_)
         }
