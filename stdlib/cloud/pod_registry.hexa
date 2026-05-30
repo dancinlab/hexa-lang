@@ -822,6 +822,23 @@ fn pod_registry_add(pod_id: str, provider: str, project: str, purpose: str, ssh_
         if len(provider) > 0 {
             prov = provider
         }
+        // Preserve the prior status when the caller passes "" — a pure
+        // attribution re-stamp (`cloud attribute`) must NOT reset a live
+        // pod's status to empty. A non-empty incoming status overrides.
+        let mut st = prev.status
+        if len(status) > 0 {
+            st = status
+        }
+        // Preserve prior ssh coordinates when the caller passes "" so an
+        // attribution-only update never erases a resolved host/port.
+        let mut sh = prev.ssh_host
+        if len(ssh_host) > 0 {
+            sh = ssh_host
+        }
+        let mut sp = prev.ssh_port
+        if len(ssh_port) > 0 {
+            sp = ssh_port
+        }
         records[idx] = PodRecord {
             id: pod_id,
             provider: prov,
@@ -829,9 +846,9 @@ fn pod_registry_add(pod_id: str, provider: str, project: str, purpose: str, ssh_
             rented_by: prev.rented_by,
             project: proj,
             purpose: purp,
-            ssh_host: ssh_host,
-            ssh_port: ssh_port,
-            status: status,
+            ssh_host: sh,
+            ssh_port: sp,
+            status: st,
             ttl_sec: prev.ttl_sec,
             max_cost_usd: prev.max_cost_usd,
             cumulative_cost_usd: prev.cumulative_cost_usd,
@@ -1196,6 +1213,35 @@ pub fn pod_registry_provider_of(pod_id: str) -> str {
         i = i + 1
     }
     return ""
+}
+
+// pod_registry_project_of — the owning project stamped on a tracked pod
+// (the M5 down-guard attribution), or "" if the pod is absent. Symmetric
+// with pod_registry_provider_of; lets cloud_cli echo the effective value
+// after an `attribute` re-stamp without re-loading the registry by hand.
+pub fn pod_registry_project_of(pod_id: str) -> str {
+    let records = pod_registry_load()
+    let mut i = 0
+    while i < len(records) {
+        if records[i].id == pod_id {
+            return records[i].project
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// pod_registry_is_tracked — 1 if `pod_id` already has a registry record
+// (any status, including closed), else 0. A reliable presence test that
+// `provider_of` cannot give (provider may legitimately be ""). Used by the
+// `attribute` verb to distinguish a re-stamp on an ALREADY-tracked pod from
+// `adopt`, which is for untracked ORPHANS.
+pub fn pod_registry_is_tracked(pod_id: str) -> int {
+    let records = pod_registry_load()
+    if _m5_find(records, pod_id) >= 0 {
+        return 1
+    }
+    return 0
 }
 
 // pod_registry_usd_to_cents — public wrapper over the private cents parser so

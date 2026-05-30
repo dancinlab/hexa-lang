@@ -174,16 +174,28 @@ fn eli_gap(lam: float, omega_rep_K: float, mu_star: float,
     let mut delta: [float] = []
     let mut s = 0
     while s < n_mats { delta.push(0.1 * piT) ; s = s + 1 }
+    // Pre-allocate the working arrays ONCE and reuse via index assignment
+    // across all Picard iterations (mirrors _eli_gap_core in eliashberg.hexa).
+    // The old per-iter `.push`-grown Em/Z/dnew was O(N²) churn over the 1000
+    // iteration cap and segfaulted at N≥800; reuse makes it O(N) so N=1000+ runs.
+    let mut Em: [float] = []
+    let mut Z: [float] = []
+    let mut dnew: [float] = []
+    let mut pre = 0
+    while pre < n_mats {
+        Em.push(0.0)
+        Z.push(1.0)
+        dnew.push(0.0)
+        pre = pre + 1
+    }
     let mut it = 0
     while it < 1000 {
-        let mut Em: [float] = []
         let mut m = 0
         while m < n_mats {
             let dm = delta[m]
-            Em.push(sqrt(wmat[m] * wmat[m] + dm * dm))
+            Em[m] = sqrt(wmat[m] * wmat[m] + dm * dm)
             m = m + 1
         }
-        let mut Z: [float] = []
         let mut n = 0
         while n < n_mats {
             let mut acc = 0.0
@@ -194,10 +206,9 @@ fn eli_gap(lam: float, omega_rep_K: float, mu_star: float,
                 mm = mm + 1
             }
             let zn = 1.0 + acc / to_float(2 * n + 1)
-            if zn < 1.0e-9 { Z.push(1.0e-9) } else { Z.push(zn) }
+            if zn < 1.0e-9 { Z[n] = 1.0e-9 } else { Z[n] = zn }
             n = n + 1
         }
-        let mut dnew: [float] = []
         let mut nn = 0
         while nn < n_mats {
             let mut acc = 0.0
@@ -208,7 +219,7 @@ fn eli_gap(lam: float, omega_rep_K: float, mu_star: float,
                 acc = acc + ker * (delta[mm] / Em[mm])
                 mm = mm + 1
             }
-            dnew.push(piT * acc / Z[nn])
+            dnew[nn] = piT * acc / Z[nn]
             nn = nn + 1
         }
         let mut maxd = 0.0
@@ -287,6 +298,34 @@ fn main() {
         }
         j = j + 1
     }
+
+    // ── Probe C — LARGE-N BCS anchor (segfault-fix enabler). At the best
+    // regime T=Tc/4 (where ω_max/ω_E is already largest) growing N to 800…1500
+    // — now reachable since the per-iter array churn is O(N) not O(N²) — both
+    // refines the grid AND widens the window further, driving 2Δ/kTc toward the
+    // BCS 3.528. These N≥800 points previously SEGFAULTED at build/run time.
+    println("=== Probe C: large-N anchor, T=Tc/4 ===")
+    let mut Nc: [int] = []
+    Nc.push(800)
+    Nc.push(1000)
+    Nc.push(1500)
+    let tcc = eli_tc(lam, wrep, mu, 1000)
+    println("lam=" + to_string(lam) + " Tc=" + to_string(tcc) + " K")
+    let mut c = 0
+    while c < len(Nc) {
+        let nm = Nc[c]
+        let tlow = tcc / 4.0
+        let g = eli_gap(lam, wrep, mu, tlow, nm)
+        if len(g) > 0 && tcc > 0.0 {
+            let ratio = 2.0 * g[0] / tcc
+            let wmax = _ELI_PI * tlow * to_float(2 * nm - 1)
+            println("  N=" + to_string(nm) +
+                    " 2D/kTc=" + to_string(ratio) +
+                    " wmax/wE=" + to_string(wmax / wrep))
+        }
+        c = c + 1
+    }
+
     println("BCS weak-coupling target: 2Delta/kTc -> 3.528")
     println("eliashberg_gap_bcs_test DONE")
 }
