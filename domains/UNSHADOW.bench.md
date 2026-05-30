@@ -906,6 +906,39 @@ ref-C wall anchor** (ref-C 가 roofline-near = 측정 anchor; roofline% = ref-C 
 - verdict verbatim = `.verdicts/unshadow-knownint-accum/bench.txt` · 재현 =
   `tool/unshadow_knownint_accum_bench.hexa --rt ~/.hx/packages/hexa/self --runs 11`.
 
+## §knownint-rawlocal — 🔴 known-int accumulator → raw int64 local 강등 (CLOSED-NEGATIVE · F1)
+
+§knownint-accum 의 잔여 sub-task #2(§typed-repr accumulator). §knownint-accum 이 남긴
+"d_ideal 0.08s 잔여 = HexaVal-struct accumulator 16B box" 가설을 검증 — 증명된 known-int
+accumulator 를 inline `.i` box 가 아닌 **raw C `int64_t` local** 로 강등(`int64_t __acc_<name>`,
+update 는 raw int arith, observe-point 1회만 box)하면 register-pack 천장(d_ideal)에 도달하는가.
+
+- **pre-registered falsifier**: inline `.i` box(PR #2202)에 살아남은 box surface 가 clang 의
+  register allocation 을 막아, raw int64 local 강등이 f_inline_acc→d_ideal Δ(~12.5×)를 회수한다.
+- **방법(faithful A/B proxy · B9 self-host rebuild 벽 · §knownint-accum/§native-arr 동일 fallback)**:
+  각 accumulator lowering 이 emit 하는 EXACT C 문자열을 `clang -O2 -S`/binary 로 측정. runtime.o
+  C-ABI 벽은 out-of-line(`hexart.c`)으로 모델링 → boxed arm 이 실제 `bl _hexa_add` 를 지불.
+  4 lowering: e_boxed(`hexa_add` ABI 벽) · f_inline(`.i` box, PR #2202) · g_raw(`int64_t __acc`,
+  observe 시 1회 box) · d_ideal(raw int64 register-pack 천장 = g_raw shape).
+- **[THE 게이트 · byte-diff] f_inline vs g_raw hot-loop asm byte-IDENTICAL** — normalized hot-loop
+  md5 `436ccab8ad7cb96c2dfbf0072ef1fcd8` 양 arm 동일·`diff` exit 0. hot-loop `bl _hexa_add`:
+  e_boxed=1 · f_inline=0 · g_raw=0. correctness e/f/g 일치(n=5/1e6/3e9 overflow·int64 wrap 동일).
+  hot loop(f_inline AND g_raw): `add x8,x8,#1 / subs x20,x20,#1 / b.ne` — accumulator 가 register
+  x8 로 승격(single-field `{.tag,.i}` box 가 SROA/mem2reg 로 scalarize).
+- **[FINDING · 🔴 FALSIFIED]** clang -O2 SROA 가 inline `.i` box 를 **이미** 제거한다(`.tag` dead,
+  `.i`→register). 즉 inline `.i` 슬라이스가 **이미** raw-int64 register loop 를 emit → raw 강등은
+  **ZERO 추가 Δ**. box surface 가 애초에 -O2 를 넘지 못함 → 제거할 게 없음. **f_inline IS d_ideal**
+  (asm 레벨). prior §knownint-accum 의 "d_ideal 0.08s vs f_inline 1.0s 12.5× gap" 은 e_boxed
+  out-of-line arm 측정 artifact(다른 n/noise)였고, inline `.i` arm 에 살아남은 box 는 없었다.
+- **ruled-out 축**: single-int-field accumulator 의 source-level box-stripping 은 clang -O2
+  하에서 dead axis. SROA 가 실제 box-eliminator. 남은 진짜 레버 = SROA 가 scalarize 못 하는
+  **multi-field/escaping/aliased HexaVal**(runtime.o ABI 벽을 넘는 e_boxed 1.49× tax) — F64 경로
+  sub-task 로 이관.
+- **codegen 무변경**: GATED raw-int64-local 강등은 확정 no-op-at-O2 라 미선적(byte-identical
+  baseline 유지 · diff_guard 무위반).
+- verdict verbatim = `.verdicts/unshadow-knownint-rawlocal/finding.txt` · `byte-diff.txt` · 재현 =
+  `tool/unshadow_knownint_rawlocal_bench.hexa`.
+
 ## §typed-struct — 🔵 typed monomorphic struct layout (flat C-struct + offset access · F1)
 
 > milestone "🔵 typed monomorphic struct layout" 의 실측 — E(AoS↔SoA) 재오픈 **선결**.
