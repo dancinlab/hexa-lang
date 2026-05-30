@@ -1,0 +1,213 @@
+// tool/unshadow_knownint_accum_bench.hexa
+//   UNSHADOW §native-arr sub-task: known-int ACCUMULATOR generalization.
+//   §native-arr LANDED the native int64_t[] STORAGE but realized only ~1.18× of
+//   the 17.6× ceiling because the read→sum chain re-surfaces a boxed HexaVal AT
+//   THE ACCUMULATOR: `let mut acc = 0` is an UNTYPED mut binding, so the LANDED
+//   codegen emitted `acc = hexa_add(acc, xs[i])` — an OUT-OF-LINE runtime.o ABI
+//   call (the C-ABI wall) that blocks clang -O2 from register-packing /
+//   vectorizing the loop. The §unboxed-array element-kind fact reached the READ
+//   but stopped at the SUM.
+//
+//   THIS sub-task extends the known-int inferencer to a PROVEN mut accumulator
+//   (whole-fn-body writes scanned all-int) so `acc += xs[i]` emits the INLINE
+//   compound-literal `.i` form — the SAME shape the known-int BinOp fast-path
+//   uses — collapsing the whole chain to raw int64 (the d_ideal ceiling).
+//
+//   This A/B proxy measures the EXACT two accumulator C forms the modified
+//   self/codegen.hexa emits (verified by transpiling `let xs=[…]; let mut acc=0;
+//   for i in 0..len(xs){acc+=xs[i]}` through the rebuilt hexat):
+//     • e_boxed_acc  — HexaVal acc + out-of-line hexa_add  (LANDED b_native;
+//                      FLAG-OFF / pre-sub-task accumulator)
+//     • f_inline_acc — HexaVal acc + INLINE `.i` arith over native data[i]
+//                      (THIS sub-task; FLAG-ON accumulator)
+//   ref_c is the parity anchor; d_ideal is the raw-`long acc` ceiling. The win
+//   is f_inline_acc ≈ d_ideal (the boxed accumulator wall removed). Full
+//   self-host runtime regen is the B9 wall (HexaArrI64 lives only in the emit
+//   source) so we use the spec-accepted faithful A/B proxy (same native_arr.h
+//   the §native-arr bench uses — byte-identical to the emit-source struct).
+//
+// MEASURE per arm: built? · program-output md5 (g5 byte-diff) · best-of-N wall ·
+//   asm vec-op count (the SIMD-gather signal).
+//
+// Argv:  --rt <dir> (runtime.h+runtime.o) · --work <dir> · --runs <N>
+
+fn parse_int_safe(s) {
+    let t = s.trim()
+    if len(t) == 0 { return 5 }
+    return to_int(t)
+}
+
+fn arg_val(argv, key, dflt) {
+    let mut i = 0
+    while i < argv.len() {
+        if argv[i] == key && i + 1 < argv.len() { return argv[i + 1] }
+        i = i + 1
+    }
+    return dflt
+}
+
+fn write_file(path, body) {
+    exec("cat > '" + path + "' <<'__UNSHADOW_EOF__'\n" + body + "\n__UNSHADOW_EOF__")
+}
+
+fn build_arm(label, cc_cmd, out_bin) {
+    let r = exec(cc_cmd + " 2>&1")
+    let built = exec("[ -f '" + out_bin + "' ] && printf yes || printf no").trim()
+    let nerr = exec("printf '%s' \"" + r + "\" | grep -ciE 'error|undefined' 2>/dev/null").trim()
+    println("  [" + label + "] built=" + built + " err_lines=" + nerr)
+    return built
+}
+
+fn md5_of_output(bin) {
+    return exec("'" + bin + "' 2>/dev/null | md5 2>/dev/null || '" + bin + "' 2>/dev/null | md5sum 2>/dev/null | cut -d' ' -f1").trim()
+}
+
+fn best_wall(bin, runs) {
+    let mut best = "999"
+    let mut r = 0
+    while r < runs {
+        let t = exec("{ /usr/bin/time -p '" + bin + "' >/dev/null ; } 2>&1 | awk '/^real/{print $2}'").trim()
+        if len(t) > 0 {
+            let cmp = exec("awk 'BEGIN{print (" + t + "<" + best + ")?1:0}'").trim()
+            if cmp == "1" { best = t }
+        }
+        r = r + 1
+    }
+    return best
+}
+
+fn vec_count(asm_path) {
+    return exec("grep -cE '\\.(2d|4s|2s|16b|8h)|ldp|stp' '" + asm_path + "' 2>/dev/null | head -1 || printf 0").trim()
+}
+
+fn main() {
+    let argv = args()
+    let home = env("HOME")
+    let rt = arg_val(argv, "--rt", home + "/.hx/packages/hexa/self")
+    let work = arg_val(argv, "--work", home + "/unshadow-knownint-accum")
+    let runs = parse_int_safe(arg_val(argv, "--runs", "9"))
+
+    println("=== UNSHADOW known-int ACCUMULATOR bench (§native-arr sub-task) ===")
+    println("rt=" + rt + "  work=" + work + "  runs=" + to_string(runs))
+    exec("rm -rf '" + work + "' && mkdir -p '" + work + "'")
+
+    let inc = "-I '" + rt + "'"
+    let o2 = "clang -O2 " + inc + " "
+
+    // native HexaArrI64 proxy header — byte-identical to self/runtime_core_emit
+    // (the B9 wall: HexaArrI64 lives only in the emit source). Same shim the
+    // §native-arr bench uses; the construction + read forms below are the EXACT
+    // strings the modified self/codegen.hexa emits.
+    write_file(work + "/native_arr.h",
+      "#include \"runtime.h\"\n" +
+      "#include <stdlib.h>\n#include <string.h>\n" +
+      "typedef struct HexaArrI64 { int64_t* data; int len; int cap; } HexaArrI64;\n" +
+      "static HexaVal hexa_arr_i64_new(int cap){\n" +
+      "  HexaArrI64* a=(HexaArrI64*)malloc(sizeof(HexaArrI64));\n" +
+      "  if(cap<1) cap=1;\n" +
+      "  a->data=(int64_t*)malloc(sizeof(int64_t)*cap); a->len=0; a->cap=cap;\n" +
+      "  HexaVal v; v.tag=TAG_ARRAY; v.arr_ptr=(HexaArr*)a; return v; }\n" +
+      "static HexaVal hexa_arr_i64_push(HexaVal v, int64_t x){\n" +
+      "  HexaArrI64* a=(HexaArrI64*)v.arr_ptr;\n" +
+      "  if(a->len>=a->cap){ a->cap*=2; a->data=(int64_t*)realloc(a->data,sizeof(int64_t)*a->cap); }\n" +
+      "  a->data[a->len++]=x; return v; }\n" +
+      "static int hexa_arr_i64_len(HexaVal v){ return ((HexaArrI64*)v.arr_ptr)->len; }\n")
+
+    // ── ref_c — idiomatic native int64_t[] (parity anchor) ──────────────────
+    write_file(work + "/ref_c.c",
+      "#include <stdio.h>\n#include <stdint.h>\n" +
+      "static long run_ref(void){\n" +
+      "  int64_t buf[256]; for(int k=0;k<256;k++) buf[k]=k;\n" +
+      "  long acc=0; long N=4000000L;\n" +
+      "  for(long r=0;r<N;r++){ for(int64_t i=0;i<256;i++){ acc+=buf[i]; } }\n" +
+      "  return acc; }\n" +
+      "int main(void){ printf(\"%ld\\n\", run_ref()); return 0; }\n")
+
+    // ── e_boxed_acc — LANDED §native-arr accumulator (HexaVal acc + hexa_add) ─
+    // The EXACT pre-sub-task hexa emit: native data[i] read wrapped in the inline
+    // compound literal, but the accumulator is a HexaVal and the sum is the
+    // OUT-OF-LINE runtime.o `hexa_add(acc, …)` ABI call — the C-ABI wall that
+    // blocks vectorization. (Transpile of `let mut acc=0; for i in 0..len(xs)
+    // {acc+=xs[i]}` with FLAG-OFF accumulator: `acc = hexa_add(acc, (xs.arr_ptr
+    // ->items[i]))` — here over native storage to isolate the ACCUMULATOR cost.)
+    write_file(work + "/e_boxed_acc.c",
+      "#include \"native_arr.h\"\n#include <stdio.h>\n" +
+      "static long run_boxed_acc(void){\n" +
+      "  HexaVal arr=hexa_arr_i64_new(256);\n" +
+      "  for(int k=0;k<256;k++) arr=hexa_arr_i64_push(arr,(int64_t)k);\n" +
+      "  HexaVal acc=hexa_int(0); long N=4000000L;\n" +
+      "  for(long r=0;r<N;r++){\n" +
+      "    for(int64_t i=0;i<(int64_t)hexa_len(arr);i++){\n" +
+      "      acc = hexa_add(acc, ((HexaVal){.tag=TAG_INT,.i=(((HexaArrI64*)arr.arr_ptr)->data[i])}));\n" +
+      "    }\n" +
+      "  }\n" +
+      "  return HX_INT(acc); }\n" +
+      "int main(void){ printf(\"%ld\\n\", run_boxed_acc()); return 0; }\n")
+
+    // ── f_inline_acc — THIS sub-task accumulator (HexaVal acc + INLINE `.i`) ──
+    // The EXACT modified hexa emit (FLAG-ON known-int accumulator):
+    //   acc = ((HexaVal){.tag=TAG_INT,.i=(HX_INT(acc) + HX_INT(((HexaVal){.tag=
+    //         TAG_INT,.i=(((HexaArrI64*)arr.arr_ptr)->data[i])})))});
+    // clang -O2 folds both HX_INT((HexaVal){.i=X}) → X, so the whole chain
+    // collapses to raw `acc.i += data[i]` — no out-of-line hexa_add, the d_ideal
+    // ceiling reached through the inline form. Byte-faithful to codegen.
+    write_file(work + "/f_inline_acc.c",
+      "#include \"native_arr.h\"\n#include <stdio.h>\n" +
+      "static long run_inline_acc(void){\n" +
+      "  HexaVal arr=hexa_arr_i64_new(256);\n" +
+      "  for(int k=0;k<256;k++) arr=hexa_arr_i64_push(arr,(int64_t)k);\n" +
+      "  HexaVal acc=((HexaVal){.tag=TAG_INT,.i=(0)}); long N=4000000L;\n" +
+      "  for(long r=0;r<N;r++){\n" +
+      "    for(int64_t i=0;i<(int64_t)hexa_len(arr);i++){\n" +
+      "      acc = ((HexaVal){.tag=TAG_INT,.i=(HX_INT(acc) + HX_INT(((HexaVal){.tag=TAG_INT,.i=(((HexaArrI64*)arr.arr_ptr)->data[i])})))});\n" +
+      "    }\n" +
+      "  }\n" +
+      "  return HX_INT(acc); }\n" +
+      "int main(void){ printf(\"%ld\\n\", run_inline_acc()); return 0; }\n")
+
+    // ── d_ideal — raw `long acc` ceiling (no HexaVal at all) ─────────────────
+    write_file(work + "/d_ideal.c",
+      "#include \"native_arr.h\"\n#include <stdio.h>\n" +
+      "static long run_ideal(void){\n" +
+      "  HexaVal arr=hexa_arr_i64_new(256);\n" +
+      "  for(int k=0;k<256;k++) arr=hexa_arr_i64_push(arr,(int64_t)k);\n" +
+      "  int len=hexa_arr_i64_len(arr); int64_t* d=((HexaArrI64*)arr.arr_ptr)->data;\n" +
+      "  long acc=0; long N=4000000L;\n" +
+      "  for(long r=0;r<N;r++){ for(int64_t i=0;i<len;i++){ acc+=d[i]; } }\n" +
+      "  return acc; }\n" +
+      "int main(void){ printf(\"%ld\\n\", run_ideal()); return 0; }\n")
+
+    println("\n--- C: known-int accumulator hot-loop sum (4 arms) ---")
+    build_arm("ref_c       ", o2 + "'" + work + "/ref_c.c'        -o '" + work + "/ref_bin' -lpthread", work + "/ref_bin")
+    build_arm("e_boxed_acc ", o2 + "'" + work + "/e_boxed_acc.c'  '" + rt + "/runtime.o' -o '" + work + "/e_bin' -lpthread", work + "/e_bin")
+    build_arm("f_inline_acc", o2 + "'" + work + "/f_inline_acc.c' '" + rt + "/runtime.o' -o '" + work + "/f_bin' -lpthread", work + "/f_bin")
+    build_arm("d_ideal     ", o2 + "'" + work + "/d_ideal.c'      '" + rt + "/runtime.o' -o '" + work + "/d_bin' -lpthread", work + "/d_bin")
+
+    println("\n  g5 byte-diff (program output md5 — ALL FOUR MUST be identical):")
+    println("    ref_c        : " + md5_of_output(work + "/ref_bin"))
+    println("    e_boxed_acc  : " + md5_of_output(work + "/e_bin"))
+    println("    f_inline_acc : " + md5_of_output(work + "/f_bin"))
+    println("    d_ideal      : " + md5_of_output(work + "/d_bin"))
+
+    println("\n  perf best-of-" + to_string(runs) + " wall (s):")
+    let ref_w = best_wall(work + "/ref_bin", runs)
+    let e_w   = best_wall(work + "/e_bin", runs)
+    let f_w   = best_wall(work + "/f_bin", runs)
+    let d_w   = best_wall(work + "/d_bin", runs)
+    println("    ref_c        : " + ref_w + "   (parity anchor)")
+    println("    e_boxed_acc  : " + e_w + "   (LANDED: HexaVal acc + out-of-line hexa_add — BEFORE)")
+    println("    f_inline_acc : " + f_w + "   (THIS sub-task: inline .i accumulator — AFTER)")
+    println("    d_ideal      : " + d_w + "   (CEILING: raw long acc, no HexaVal)")
+
+    exec(o2 + "-S '" + work + "/ref_c.c'        -o '" + work + "/ref.s' 2>/dev/null")
+    exec(o2 + "-S '" + work + "/e_boxed_acc.c'  -o '" + work + "/e.s' 2>/dev/null")
+    exec(o2 + "-S '" + work + "/f_inline_acc.c' -o '" + work + "/f.s' 2>/dev/null")
+    exec(o2 + "-S '" + work + "/d_ideal.c'      -o '" + work + "/d.s' 2>/dev/null")
+    println("\n  asm vector/pair-op count (SIMD-gather signal):")
+    println("    ref_c        : " + vec_count(work + "/ref.s"))
+    println("    e_boxed_acc  : " + vec_count(work + "/e.s") + "  (out-of-line hexa_add → no gather)")
+    println("    f_inline_acc : " + vec_count(work + "/f.s") + "  (inline .i → gatherable)")
+    println("    d_ideal      : " + vec_count(work + "/d.s"))
+
+    println("\n=== done ===")
+}

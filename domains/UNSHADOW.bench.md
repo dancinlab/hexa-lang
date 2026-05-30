@@ -851,6 +851,60 @@ ref-C wall anchor** (ref-C 가 roofline-near = 측정 anchor; roofline% = ref-C 
   자동발화(현 GATED 해제)는 whole-binding escape 증명 필요 = 별도 sub-task. F64 경로도 open.
 - verdict verbatim = `.verdicts/unshadow-native-arr/bench.txt` · 재현 =
   `tool/unshadow_native_arr_bench.hexa --rt ~/.hx/bin/self --runs 9`.
+- **sub-task 진척 → §knownint-accum (아래)**: known-int accumulator 일반화가 부분 착지.
+  누산기 ABI-벽(out-of-line `hexa_add`) 제거 = e_boxed_acc 1.67s → f_inline_acc 1.12s (**1.49×**,
+  asm `bl _hexa_add` 9→6). full d_ideal(0.08s)는 HexaVal-struct 누산기 자체(raw int64 local 미강등)
+  로 여전히 open.
+
+## §knownint-accum — 🟢 known-int ACCUMULATOR 일반화 (§native-arr sub-task · 부분)
+
+> §native-arr 가 native int64_t[] STORAGE(d_ideal 천장)는 착지했으나 LANDED 는 1.18× 만 잡은 이유 =
+> read→sum 체인이 **누산기**에서 boxed HexaVal surface 재생성. `let mut acc=0`(untyped mut)이라
+> `acc += xs[i]` 가 out-of-line `hexa_add(acc, …)`(runtime.o C-ABI 벽) → clang -O2 vectorize 차단.
+> 이 sub-task = known-int 추론기를 **증명된 mut 누산기**까지 확장 → `acc += xs[i]` 를 inline
+> compound-literal `.i` 형으로 emit(BinOp known-int fast-path 와 동일 shape) → out-of-line
+> `hexa_add` 제거.
+
+**착지물 (`self/codegen.hexa`)**:
+- `_known_int_accum_set` 추적기 + `_known_int_accum_scan(fn body 보수적 스캔)`: `let mut acc=
+  <known-int init>` 이고 전 body 의 모든 write(`=` / `+= -= *= & | ^ << >>`)가 accum-int-safe
+  (IntLit · known-int name · `acc` 자신 · 증명된 int-literal-array `arr[i]` read · 그들의 `+/-/*…`
+  BinOp)면 등록. `/` `%` `**` 제외(runtime div-by-zero throw 필요). closure-capture(boxed cell)는 제외.
+- `_is_known_int` 가 accum 도 certify → 읽기 raw `.i` 추출.
+- CompoundAssign / BinOp 가 `acc<op>=rhs` / `acc = acc <op> rhs` 를 inline `.i` 형
+  (`acc = ((HexaVal){.tag=TAG_INT,.i=(HX_INT(acc) op HX_INT(rhs))})`)로 emit → clang
+  `HX_INT((HexaVal){.i=X})→X` fold → raw int64 sum 체인.
+- GATED `HEXA_NATIVE_ARR`(§native-arr 플래그 재사용) default OFF=무회귀 · FN-SCOPED reset.
+
+**측정 (mini Apple M4 arm64 · best-of-11 · faithful A/B proxy · B9 regen 벽 → proxy)**:
+
+| arm | 누산기 표현 | wall (s) | vec-op | `bl _hexa_add` | 의미 |
+|---|---|---|---|---|---|
+| ref_c        | idiomatic raw `long acc` (no runtime) | 0.08 | 28 | 0 | parity anchor |
+| e_boxed_acc  | `HexaVal acc` + out-of-line `hexa_add` | 1.67 | 8 | **1** | **BEFORE (LANDED)** |
+| f_inline_acc | `HexaVal acc` + inline `.i` (THIS) | **1.12** | 8 | **0** | **AFTER · 1.49×** |
+| d_ideal      | raw `long acc`, no HexaVal | 0.08 | 18 | 0 | CEILING |
+
+- **g5 byte-diff: 4/4 IDENTICAL** (`35470124be79241c684dc5103ec55d20`). 추가 정확성:
+  단순 read→sum(out=150) ON=OFF `176ef0…` · integrity(`+= -=` mixed · BinOp `acc=acc+x` ·
+  음수 · 3×10⁹ overflow; out=1038601 / 2999999940) ON=OFF `9e3d23e4…` — 전부 byte-exact.
+- **codegen 발화 검증** (real self-host hexat, modified codegen 재빌드, /tmp transpile):
+  FLAG ON = `acc = ((HexaVal){.i=(HX_INT(acc) + HX_INT(((HexaVal){.i=data[i]}))})` · FLAG OFF =
+  `acc = hexa_add(acc, items[i])`(boxed §c-class) **무변경**.
+
+### 정직한 해석 — ABI-벽 닫힘 + register-pack open
+
+- **누산기 ABI-벽 = 닫힘.** out-of-line `hexa_add`(runtime.o C-ABI 벽, asm `bl _hexa_add`)가
+  step 마다 호출되던 게 inline `.i` 로 사라짐(asm `bl` 9→6, `_hexa_add` 1→0). e_boxed_acc 1.67s →
+  f_inline_acc **1.12s = 1.49×**. §native-arr 가 지목한 "read→sum 이 누산기에서 re-box" 의
+  **ABI-호출 부분이 제거됨**.
+- **full 천장(d_ideal 0.08s)은 여전히 open (정직).** inline `.i` 라도 clang 은 `acc` 를 16B
+  HexaVal struct 로 유지하고 compound literal 을 step 마다 re-materialize → vec-op 8 (d_ideal 18,
+  ref 28 미달). full d_ideal = 증명된 known-int-accum 을 **raw C `int64_t` local 로 강등**(HexaVal
+  탈피) = 다음 sub-task(§typed-repr accumulator). 이 슬라이스 = **ABI-벽 닫힘 · register-pack open**.
+- **GATED opt-in (default OFF)** = 무회귀(FLAG OFF = boxed `hexa_add` 무변경, byte-diff 입증).
+- verdict verbatim = `.verdicts/unshadow-knownint-accum/bench.txt` · 재현 =
+  `tool/unshadow_knownint_accum_bench.hexa --rt ~/.hx/packages/hexa/self --runs 11`.
 
 ## §typed-struct — 🔵 typed monomorphic struct layout (flat C-struct + offset access · F1)
 
