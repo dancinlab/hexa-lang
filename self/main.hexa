@@ -1522,8 +1522,36 @@ fn dispatch_absorbed(verb, ab_args) {
     if len(__inst) > 0 && file_exists(__inst + "/" + rel) { script = __inst + "/" + rel }
     let __hl = env_var("HEXA_LANG")
     if len(__hl) > 0 && file_exists(__hl + "/" + rel) { script = __hl + "/" + rel }
+    // ADDITIVE fallbacks (roots 4-5) — only consulted when roots 1-3 all miss,
+    // so today's happy path stays byte-identical. On a pool host whose ~/.hx
+    // install carries only the binary (no compiler/ sources) and HEXA_LANG is
+    // unset/polluted, none of 1-3 point at the real checkout. These two recover
+    // the source root from the install-wiring symlink and the conventional
+    // ~/core/hexa-lang checkout (see [[reference_hexa_stdlib_install_wiring]]).
+    //   4. realpath of ~/.hx/install/hexa-lang + rel (install-wiring symlink)
+    //   5. $HOME/core/hexa-lang + rel (conventional checkout)
+    let mut __wire = ""
     if !file_exists(script) {
-        println("error: absorbed verb '" + verb + "' script not found: " + script)
+        let __home = env_var("HOME")
+        if len(__home) > 0 {
+            __wire = exec("readlink -f '" + __home + "/.hx/install/hexa-lang' 2>/dev/null || true")
+            let __wl = len(__wire)
+            if __wl > 0 && __wire.substring(__wl - 1, __wl) == "\n" { __wire = __wire.substring(0, __wl - 1) }
+            if len(__wire) > 0 && file_exists(__wire + "/" + rel) { script = __wire + "/" + rel }
+        }
+    }
+    let __conv = env_var("HOME") + "/core/hexa-lang"
+    if !file_exists(script) && len(env_var("HOME")) > 0 && file_exists(__conv + "/" + rel) {
+        script = __conv + "/" + rel
+    }
+    if !file_exists(script) {
+        println("error: absorbed verb '" + verb + "' script not found: " + rel)
+        println("  roots tried (none resolved <root>/" + rel + "):")
+        println("    1. cwd-relative           : " + rel)
+        println("    2. install_dir_from_argv0 : " + __inst + "/" + rel)
+        println("    3. $HEXA_LANG             : " + __hl + "/" + rel)
+        println("    4. ~/.hx/install/hexa-lang: " + __wire + "/" + rel)
+        println("    5. $HOME/core/hexa-lang   : " + __conv + "/" + rel)
         return
     }
 
