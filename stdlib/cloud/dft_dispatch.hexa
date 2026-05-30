@@ -759,6 +759,14 @@ fn _dft_provision_cmd() -> str {
 // Prints `PSEUDO OK` (caller asserts) when all referenced UPFs are present.
 fn _dft_pseudo_cmd() -> str {
     return "cd /root/deck && mkdir -p pseudo && "
+        // NORMALIZE outdir/pseudo_dir to the pod-relative ./out · ./pseudo BEFORE
+        // anything reads them. A deck authored elsewhere can carry a stale ABSOLUTE
+        // path (e.g. a ghost host's /home/<user>/rtsc_<m>/out) that does NOT exist
+        // on a fresh pod → pw.x dies immediately (no outdir to write, no pseudo_dir
+        // to read). Anchored to line-start so QE comment lines (leading `!`) are
+        // never touched. Makes every deck path-robust regardless of where it was
+        // generated (RTSC ghost-pulled perovskite decks hit this, 2026-05-31).
+        + "sed -i \"s|^[[:space:]]*outdir.*|  outdir = './out'|; s|^[[:space:]]*pseudo_dir.*|  pseudo_dir = './pseudo'|\" *.in 2>/dev/null; "
         + "need=$(grep -hoE '[A-Za-z0-9._+-]+[.]UPF' *.in 2>/dev/null | sort -u) && "
         + "miss=0; for upf in $need; do "
         + "[ -s \"pseudo/$upf\" ] || wget -q --tries=3 --timeout=30 -O \"pseudo/$upf\" "
