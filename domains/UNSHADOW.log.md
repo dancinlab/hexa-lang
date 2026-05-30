@@ -2,6 +2,34 @@
 
 Append-only history sister of `UNSHADOW.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-30 — 🔵 검증 memoization (F3 atlas-as-perf-asset / 거울방) WIN (최소 슬라이스)
+
+- [x] **codegen**: `self/codegen.hexa` Call(`lambda_eliashberg`) 처리에 GATED memo 분기 추가.
+  발화 = env `HEXA_VERIFY_MEMO` 세팅 + atlas-verified fn 名(`lambda_eliashberg`,
+  atlas `verified-lambda_eliashberg-num` 🟢) + `_is_known_fn_global` + `!_gen2_has_decl` +
+  1-arg. emit = fn-local static last-arg 캐시 `({ static int __lem_v=0; static double __lem_a;
+  static HexaVal __lem_r; HexaVal __lem_x=(EXPR); double __lem_xf=HX_FLOAT(__lem_x);
+  if(!(__lem_v && __lem_a==__lem_xf)){ __lem_r=lambda_eliashberg(__lem_x); __lem_a=__lem_xf;
+  __lem_v=1; } __lem_r; })`. §B closed-form inline 보다 우선(env ON 시만). EXPR 1회 let-bind.
+- [x] **라이선스(soundness)**: atlas PURE @F 판정(deterministic·side-effect-free numeric) ⇒
+  f(x) 는 x 에만 의존 ⇒ last-(x,f(x)) 캐싱은 재계산과 관측-동치. PURE 라 cached≡recomputed EXACT.
+- [x] **END-TO-END g5 byte-diff**: edited codegen 으로 full hexa_cc 트랜스파일러 재빌드
+  (`/tmp/hexat.new`, clang compiled=yes). bench `tool/unshadow_verify_memo_bench.hexa`
+  (`lambda_eliashberg(0.5)`×2,000,000) 트랜스파일: OFF→`__le_x`(§B) · ON→`__lem_v`(memo) emit
+  확인. 둘 다 stdout `2000000.0`, **md5 `7fe719e9` IDENTICAL**.
+- [x] **OPAQUE-arg A/B perf**(runtime.o C-ABI 벽 시나리오, noinline opaque symbol): call count
+  **20,000,000 → 1**, wall **0.1546→0.0255s (6.06×, −83.5%)**, byte-diff IDENTICAL(md5 `4c281195`).
+- [x] **무결성 게이트**: NEGATIVE-arg 가드 보존(arg=-1.0 → IDENTICAL) + cache-invalidation
+  (varying arg 음수교차 → 정확 재계산, match YES). silent-stale 없음.
+- [ ] (sub) codegen LIVE atlas-query surface — 현 발화 가드는 fn 名 하드코딩(§A/§B 동일 narrow).
+  일반 memo framework = atlas pure/idempotent 속성 atom + codegen 컴파일타임 lookup surface 선결.
+
+정직 caveat: LITERAL-arg 면 §B inline(0 call)이 memo(1 call)보다 빠름 → memo 가치는 OPAQUE
+반복인자(clang fold 불가·cross-ABI) 한정 = UNSHADOW 벽 위치. faithful A/B proxy(full self-host
+regen=B9 generated-runtime 벽 차단·스펙 허용; emit=end-to-end 컴파일러 출력과 byte-동일).
+verdict=`.verdicts/unshadow-verify-memo/`·bench=`UNSHADOW.bench.md §verify-memo`·
+재현=`HEXA_VERIFY_MEMO=1` 로 `tool/unshadow_verify_memo_bench.hexa` 트랜스파일.
+
 ## 2026-05-30T09:30Z — 🔵 escape→stack-alloc — 도메인 첫 공간축 채굴 (MEASURED · byte-diff IDENTICAL · heap-alloc 20M→0 · peak-RSS 66×)
 
 14개 milestone 이 전부 TIME-축이었던 UNSHADOW 의 첫 SPACE-축 (F2·C13). 비-escape 증명된

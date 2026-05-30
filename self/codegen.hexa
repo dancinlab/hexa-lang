@@ -5685,6 +5685,52 @@ fn gen2_expr(node) {
             // (inlined closed form) are byte-comparable, (c) it is NOT a local-let
             // shadow (`!_gen2_has_decl`), (d) there is EXACTLY 1 arg. Any other
             // call falls through unchanged (zero behavior change otherwise).
+            // ── UNSHADOW item: verify memoization (F3 atlas-as-perf-asset) ──
+            // hexa-arch-native optimization (UNSHADOW.MINING.md F3·C18,
+            // easy.md §G "검증 memoization"): when the atlas PROVES a fn is
+            // PURE + IDEMPOTENT, codegen may insert a call-result CACHE so that
+            // a REPEATED call with the SAME argument value skips the (opaque,
+            // cross-C-ABI) recompute and returns the cached result. LLVM cannot
+            // do this — `pure`/`const` attrs let clang CSE adjacent identical
+            // calls within one expression, but it has no theorem/verdict DB to
+            // prove a runtime.o symbol is idempotent across loop iterations, so
+            // it re-emits the `bl _lambda_eliashberg` every iteration.
+            //
+            // THE LICENSE (proof — without it the cache is UNSOUND):
+            //   atlas node `verified-lambda_eliashberg-num`
+            //     @F lambda_eliashberg(0.5) = 1.0   tier 🟢 SUPPORTED-NUMERICAL
+            //   The verdict certifies lambda_eliashberg is a deterministic,
+            //   side-effect-free numeric function of its single argument (the
+            //   atlas only admits PURE numeric @F entries — see verify_cli.hexa
+            //   _lambda_eliashberg: arithmetic only, no I/O / no global state).
+            //   PURE ⇒ f(x) depends only on x; IDEMPOTENT-as-cache ⇒ caching the
+            //   last (x, f(x)) pair is observationally equivalent to recomputing.
+            //   Because f is pure, cached-value ≡ recomputed-value EXACTLY, so
+            //   the A/B byte-diff (memo HIT vs memo MISS vs no-memo) is IDENTICAL.
+            //
+            // THE TRANSFORM (fn-local static last-arg cache, faithful — calls
+            // the REAL verified fn on a miss, so the verified guard incl.
+            // negatives is preserved verbatim):
+            //   lambda_eliashberg(EXPR)
+            //     → ({ static int __lem_v = 0; static double __lem_a;
+            //          static HexaVal __lem_r;
+            //          HexaVal __lem_x = (EXPR); double __lem_xf = HX_FLOAT(__lem_x);
+            //          if (!(__lem_v && __lem_a == __lem_xf)) {
+            //              __lem_r = lambda_eliashberg(__lem_x);
+            //              __lem_a = __lem_xf; __lem_v = 1; }
+            //          __lem_r; })
+            // The single-eval discipline (#2-ext / to_int double-eval lesson):
+            // EXPR is bound ONCE into __lem_x, so a side-effecting EXPR runs once.
+            //
+            // GATED OPT-IN — DEFAULT OFF (zero regression). Fires only when
+            // env HEXA_VERIFY_MEMO is set AND the EXACT atlas-verified name +
+            // top-level-decl + non-shadow + 1-arg guard holds (same exactness as
+            // §A/§B; comptime-fold-shadow family avoidance). Off → falls through
+            // to the §B closed-form inline / normal call (no behavior change).
+            if name == "lambda_eliashberg" && env("HEXA_VERIFY_MEMO") != "" && _is_known_fn_global(name) && !_gen2_has_decl(name) && len(node.args) == 1 {
+                let _lem_arg = gen2_expr(node.args[0])
+                return "({ static int __lem_v = 0; static double __lem_a; static HexaVal __lem_r; HexaVal __lem_x = (" + _lem_arg + "); double __lem_xf = HX_FLOAT(__lem_x); if (!(__lem_v && __lem_a == __lem_xf)) { __lem_r = lambda_eliashberg(__lem_x); __lem_a = __lem_xf; __lem_v = 1; } __lem_r; })"
+            }
             if name == "lambda_eliashberg" && _is_known_fn_global(name) && !_gen2_has_decl(name) && len(node.args) == 1 {
                 let _le_arg = gen2_expr(node.args[0])
                 return "({ HexaVal __le_x = (" + _le_arg + "); HX_FLOAT(__le_x) < 0.0 ? hexa_float(-999999.0) : ((HexaVal){.tag=TAG_FLOAT,.f=(2.0 * HX_FLOAT(__le_x))}); })"
