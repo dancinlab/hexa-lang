@@ -1,5 +1,5 @@
 @title: 🌱 HEXA-CC-ZERO — "마지막 C 씨앗 제거"
-@goal: self/native/hexa_cc.c 를 repo에서 완전히 제거한다 — `hexa cc --regen` 이 4개 .hexa SSOT 모듈에서 트랜스파일러를 warm-rebuild 하게 하여, 손으로 유지하던 마지막 C 시드를 없애고 "0 .c" self-host에 도달한다.
+@goal: 커밋된 트랜스파일러 `.c` = 0 (warm-seed bootstrap). 손-유지 트랜스파일러 C 씨앗을 git 에서 완전히 제거 — `hexa_cc.c`(gitignored) + cold-seed `hexa_cc_seed.c`(git rm #2200). `hexa cc --regen` 이 4개 .hexa SSOT 모듈에서 기존 hexa 로 트랜스파일러를 warm-rebuild 하는 warm-seed 경로만 지원. cold-boot-from-bare-clone 은 사용자 결정으로 포기(2026-05-30 REVERSAL).
 
 # HEXA-CC-ZERO — current state
 
@@ -38,7 +38,16 @@
 > ---
 - [⊘] P3 — ⊘ WITHDRAWN (사용자 결정 2026-05-30, 아래 REVERSAL 섹션 참조) — stage-(-1) cold-seed TRUE-COLD-PASS cross-host (#2116 design option b 구현) · 🟢 단일 self-contained `self/native/hexa_cc_seed.c`(2.85 MB · 0 local include) 커밋 → bare clone + `cc hexa_cc_seed.c -o hexat`(사전설치 hexa 不要)만으로 작동 트랜스파일러 빌드, x86_64(ubu-2)+arm64(mini) 양 arch 4/4 SSOT transpile rc=0 · DETERMINISTIC · x86_64 는 per-arch fixpoint(gen_b≡gen_c)까지 PASS. ⚠ 잔여(cold-boot 닫힘과 별개): cross-arch strict byte-eq 는 3/4(codegen arch-specific·per-arch deterministic — P1 의 per-arch fixpoint 모델과 일치)
 - [⊘] P5 — ⊘ WITHDRAWN (사용자 결정 2026-05-30, 아래 REVERSAL 섹션 참조) — cold-seed 부트스트랩 DEFAULT wiring (build_hexa_cli.hexa step 0) · 🟢 #2126 P3 seed 를 "proven capability" → ACTUAL default bootstrap path 로 전환. step 0 가 regen-source `hexa_cc.c` 부재(true fresh clone) + `hexa_cc_seed.c` 존재 시 self-contained seed 에서 직접 `cc hexa_cc_seed.c -o build/hexat`(amalgam sed 없음·-I 없음·0 local include) 부트스트랩 — host hexa·manual step 不要. hexa_cc.c 존재 시 기존 warm amalgam 경로 그대로(dev loop 무변경). TRUE-COLD-DEFAULT ubu-2 x86_64 PASS(verdict 첨부)
-- [x] P6 — `self/native/hexa_cc.c` git rm + CI/fresh-clone green · 🟢 (A) git-rm 이미-완료(#2065) + (B.1) 콜드시드 트랜스파일러 부트스트랩 CI-gated green(bootstrap.yml 3/3, #2161) + (B.2) **full-CLI fresh-clone cold build GREEN** — 시드 refresh(현 SSOT 재regen+amalgam) 후 `self/main.hexa → ./hexa` 가 4 심볼(`hexa_float_to_bits`/`hexa_bits_to_float`/`hexa_enum_str_v`/`hexa_os_getuid`) LINK CLEAN(BEFORE stale=4 undefined → AFTER refreshed=0) + float-pun round-trip(`bits_to_float(float_to_bits(3.14))==3.14`) PASS, ubu-2 x86_64 로컬 실측. 🎉 **DOMAIN CLOSED 5/5** (P1✅·P2✅·P3✅·P5✅·P6✅)
+- [x] P6 — 커밋된 트랜스파일러 `.c` = 0 ACHIEVED (warm-seed) · 🟢 (A) `self/native/hexa_cc.c` git-rm(#2065) + cold-seed `hexa_cc_seed.c` git-rm(#2200) 둘 다 완료 → git 추적 트랜스파일러 `.c` = 0 (self/native 엔 비-트랜스파일러 `native_gate.c` 만 잔존). (B) CI = honest SKIP/disabled(#2200: `bootstrap.yml`·`atlas-consistency.yml`·`docker-runner-push.yml` DISABLED · `codegen-bootstrap-sync.yml` RETIRED) — warm CI(edge-tarball)는 RED(handoff 726b8b67)라 deleted-seed dead-ref 회피 위해 의도적 미배선. ⊘ **(B.1) 콜드시드 CI green · (B.2) full-CLI cold build green claim 은 철회** (아래 REVERSAL — cold-boot-from-bare-clone 포기). verdict: `.verdicts/hexa-cc-zero/F-SEED-REMOVAL-OPTION2.txt`
+>
+> ## 🎯 REDEFINED-GOAL STATUS (warm-seed · 2026-05-30 REVERSAL 이후)
+>
+> 재정의된 골 "0 committed transpiler `.c` (warm-seed bootstrap)" 기준 — **CLOSED**:
+> 커밋된 트랜스파일러 `.c` = 0 (hexa_cc.c gitignored + hexa_cc_seed.c git rm) ·
+> warm-seed 경로(`hexa cc --regen`)만 지원 · 소비자 revert + CI honest-SKIP 랜딩(#2200).
+> 종결 set = **P1✅(warm fixpoint byte-eq) · P2✅(warm-rebuild kill-storm-free) · P6✅(git-rm → 0 committed .c)**.
+> ⊘ **P3 · P5 = WITHDRAWN** (cold-seed/cold-boot · 사용자 결정 superseded — ✅도 ❌도 아님).
+> 아래 dated 로그 중 cold-boot "5/5 CLOSED" 서술은 REVERSAL 前 기록(historical) — 이 snapshot 이 정합 SSOT.
 
 ## 2026-05-30 P1 PROBE 측정 (verdict 첨부)
 
