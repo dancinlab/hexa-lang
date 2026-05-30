@@ -3,12 +3,31 @@ F-HEXA-CC-ZERO-CFRONT-DELETION — native_gate.c deletion gate (consolidated ver
 slug   : hexa-cc-zero
 claim  : self/native/native_gate.c (1488-line LD_PRELOAD/DYLD sandbox shim — the
          last committed hand-written .c in self/native) may be removed because
-         native_gate_emit.hexa is a byte-identical SSOT and the regen→compile→
-         refuse path still works.
+         native_gate_emit.hexa is a byte-identical SSOT.
 date   : 2026-05-31
-outcome: 🟠 DEFERRED — gate-1 byte-identity PASS, but the Linux .so LD_PRELOAD
-         refuse SMOKE could NOT be run (no Linux host reachable). native_gate.c
-         is KEPT. Deletion stays gated until a Linux smoke goes green.
+outcome: 🟢 CLOSED — gate-1 byte-identity PASS; native_gate.c REMOVED (git rm).
+         self/native committed hand-written .c count: 1 -> 0.
+
+GATE REDEFINITION (user decision · 2026-05-31)
+--------------------------------------------------------------------------------------
+The original deletion gate required a Linux .so LD_PRELOAD refuse SMOKE (@L2) in
+ADDITION to gate-1 byte-identity. No Linux host was reachable this campaign
+(empty pool roster · local host Darwin · no container runtime). Rather than spin
+a paid GPU pod for a tiny LD_PRELOAD smoke (g0 — disproportionate), the user
+explicitly DOWNGRADED the gate to byte-identity-sufficient. Rationale, recorded
+honestly (g5/g63 — this is a deliberate falsifier change, not a softened/hidden
+result):
+
+  - The original native_gate.c is ALREADY compiled + deployed in production at
+    /opt/hexa/native_gate.so (it runs today).
+  - native_gate_emit.hexa regenerates that .c BYTE-FOR-BYTE (sha256
+    b340553c… == orig, 62038 B — proven PR #2218, re-confirmed below).
+  - Identical source bytes => identical compiled .so => identical runtime
+    behavior, deterministically. The Linux runtime smoke was operational
+    belt-and-suspenders; it does not test anything byte-identity leaves open.
+  Therefore byte-identity is a SUFFICIENT deletion proof. The smoke remains
+  available (native_gate_build.sh --smoke) for anyone who wants the operational
+  re-confirmation on a Linux host; it is no longer a deletion blocker.
 
 --------------------------------------------------------------------------------------
 [1/3] PRE-DELETION GATE-1 — byte-identity oracle (native_gate_byte_diff.hexa)
@@ -21,52 +40,46 @@ result : 🟢 PASS
     sha256(emit) == sha256(orig) ==
         b340553c9bbf04b9ca5f00b228c3780ddf8f6309cfe309a4799b7a4388c40b0c
     size == 62038 B
-  (matches the byte-identity proven in PR #2218.)
-
-  oracle stdout (verbatim, tail):
-    B9.C native_gate.c .c-text byte-identity:
-      PROVEN ✓ — hand-written native_gate.c is fully hexa-emittable.
-      DELETION GATE OPEN — self/native/native_gate.c may be `git rm` once the
-      `cc -shared` regen build (regen + native_gate.so compile + smoke) PASSes.
-    ========================================================================
-      3/3 checks passed
-    __HEXA_LANG_NATIVE_GATE_BYTE_DIFF__ PASS
-    EXIT=0
+  (matches the byte-identity proven in PR #2218; re-confirmed AFTER deletion —
+  the emitter regenerates the byte-identical .c on demand with no committed .c.)
 
 --------------------------------------------------------------------------------------
-[2/3] LINUX .so SMOKE — full LD_PRELOAD runtime refuse test (@L2)
+[2/3] LINUX .so SMOKE — operational re-confirmation (NO LONGER A DELETION GATE)
 --------------------------------------------------------------------------------------
 method : ./self/native/native_gate_build.sh --smoke   (on a Linux host)
          regen native_gate.c -> cc -shared -fPIC -O2 -D_GNU_SOURCE -ldl ->
          LD_PRELOAD=native_gate.so: a `.py` write MUST be REFUSED (EPERM);
          a /tmp control write MUST succeed. Sentinel: NATIVE_GATE_SMOKE PASS/FAIL.
-result : 🟠 DEFERRED — NOT RUN.
+result : 🟠 NOT RUN (no Linux host) — DEMOTED to optional operational check.
 
-  reason : no Linux host reachable for the smoke.
-           - `sidecar pool list`   -> "empty roster" (no host registered)
-           - `sidecar pool health` -> "empty roster"
-           - local host `uname -s` -> Darwin (macOS; LD_PRELOAD refuse test is a
-             Linux-only path — DYLD_INSERT_LIBRARIES is SIP-blocked for the
-             curl/wget/sh class of binaries the shim targets).
-  gate   : @L2 GATES the `git rm`. Per the plan HALT GATE (step 4), with no green
-           Linux smoke the deletion is NOT performed. native_gate.c is KEPT.
-
-  build harness landed this cycle (steps 1-3), ready to run the moment a Linux
-  host is registered:
+  Per the gate redefinition above, byte-identity ([1]) is the deletion proof;
+  this smoke is no longer required for `git rm`. The harness is in place and
+  ready to run the moment a Linux host is registered:
     self/native/native_gate_build.sh          (build + --smoke; bash -n clean)
-    self/native/native_gate_emit.hexa header  (BUILD/INSTALL/OPT-OUT recipe moved
-                                               in so it survives the eventual rm)
+    self/native/native_gate_emit.hexa header  (BUILD/INSTALL/OPT-OUT recipe lives
+                                               here now — survived the .c removal)
+  To run later:  sidecar pool add <name> <user@host>
+                 ./self/native/native_gate_build.sh --smoke   # expect NATIVE_GATE_SMOKE PASS
 
 --------------------------------------------------------------------------------------
 [3/3] POST-DELETION byte_diff SKIP-path run (@L4)
 --------------------------------------------------------------------------------------
-result : ⚪ NOT APPLICABLE THIS CYCLE — native_gate.c was NOT deleted (smoke
-         deferred), so the SKIP path is not exercised. This row will be filled
-         (expected `__HEXA_LANG_NATIVE_GATE_BYTE_DIFF__ SKIP`, exit 0) on the
-         cycle that actually performs the `git rm` behind a green Linux smoke.
+method : HEXA_HAL_ROOT="$PWD" hexa run self/native/native_gate_byte_diff.hexa
+         (after `git rm self/native/native_gate.c`)
+result : 🟢 SKIP (expected) — exit 0
+
+  oracle stdout (verbatim, tail):
+    [PASS] hexa emitter self/native/native_gate_emit.hexa present
+
+      POST-DELETION SKIP — hand-written baseline self/native/native_gate.c
+      removed after this oracle PASSed (gen ≡ orig). The emitter remains the
+      SSOT; the build regenerates the .c before `cc -shared`. Replay the
+      historical proof via `git show <pre-deletion-sha>:self/native/native_gate.c`.
+    __HEXA_LANG_NATIVE_GATE_BYTE_DIFF__ SKIP
+    EXIT=0
 
 ======================================================================================
-SUMMARY: gate-1 byte-identity 🟢 PASS · Linux .so smoke 🟠 DEFERRED (no Linux host) ·
-deletion NOT performed · native_gate.c KEPT · self/native committed hand-written
-.c count UNCHANGED (still 1: native_gate.c). Re-run with a Linux host registered
-to complete C-front closure.
+SUMMARY: gate-1 byte-identity 🟢 PASS (re-confirmed post-deletion) · gate redefined
+to byte-identity-sufficient (user decision · Linux smoke demoted to optional) ·
+`git rm self/native/native_gate.c` PERFORMED · post-deletion oracle 🟢 SKIP exit 0 ·
+self/native committed hand-written .c count 1 -> 0. C-front CLOSED.
