@@ -1,0 +1,34 @@
+// UNSHADOW — atlas-guided PGO (layout/inline 결정) A/B bench (F3·C17).
+//
+// Milestone: "🔵 atlas-guided PGO — layout/inline 결정" — atlas 가 fn 의
+// 검증된 hot-path 속성(pure numeric @F)을 증명하면 codegen 이 그 fn 의
+// LAYOUT 을 결정한다 — 사용자 `@inline_always`/`@hot` 어노테이션 없이도
+// `static inline __attribute__((hot))` 로 자동 승격. 즉 인라인/hot 결정의
+// 라이선스 = atlas verdict (runtime 프로파일 아님 · 사용자 힌트 아님).
+//
+// 발화 = atlas-verified pure hot-path fn(여기 `lambda_eliashberg`, atlas
+// node `verified-lambda_eliashberg-num` 🟢) — §A/§B/E 와 동일 narrow 패턴
+// (codegen 에 LIVE atlas-query surface 부재라 verdict=하드코딩 라이선스).
+//
+// codegen 의 발화 분기(GATED `HEXA_ATLAS_PGO`)는 self/codegen.hexa 의
+// gen2_is_atlas_pgo_hot + gen2_fn_forward/gen2_fn_decl 에 있다.
+// inline/hot 은 의미보존 레이아웃 힌트 → stdout BYTE-IDENTICAL (ON/OFF).
+//
+// 측정: faithful A/B proxy(B9 generated-runtime 벽으로 full self-host
+// rebuild 차단·스펙 허용) — out-of-line call(PGO OFF) vs static-inline+hot
+// (PGO ON) 의 call-instruction count + wall Δ.
+
+fn lambda_eliashberg(m0: float) -> float {
+    if m0 < 0.0 { return -999999.0 }
+    return 2.0 * m0
+}
+
+fn main() {
+    let mut acc = 0.0
+    let mut i = 0
+    while i < 20000000 {
+        acc = acc + lambda_eliashberg(2.0 * to_float(i % 7))
+        i = i + 1
+    }
+    println(acc)
+}

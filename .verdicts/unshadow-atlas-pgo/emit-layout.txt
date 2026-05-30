@@ -1,0 +1,21 @@
+UNSHADOW atlas-guided PGO — END-TO-END emit + g5 byte-diff
+transpiler: /tmp/hexat.new (full hexa_cc amalgam, codegen.hexa = edited atlas-PGO branch)
+bench: tool/unshadow_atlas_pgo_bench.hexa  (lambda_eliashberg × 20,000,000, loop-derived arg)
+
+LICENSE: atlas node `verified-lambda_eliashberg-num` (@F 🟢 SUPPORTED-NUMERICAL)
+  = pure numeric hot-path atom. The VERDICT (not @inline_always, not a runtime
+  profile) drives the inline/hot LAYOUT decision. clang PGO needs a .profdata
+  run; the atlas IS the profile, available at compile time with zero run.
+
+PGO OFF (HEXA_ATLAS_PGO unset):
+  fwd:  HexaVal lambda_eliashberg(HexaVal m0);
+  defn: HexaVal lambda_eliashberg(HexaVal m0) {
+
+PGO ON  (HEXA_ATLAS_PGO=1):
+  fwd:  static inline HexaVal lambda_eliashberg(HexaVal m0) __attribute__((hot));
+  defn: static inline HexaVal lambda_eliashberg(HexaVal m0) {
+  → atlas verdict auto-promoted layout to inline + hot, NO user annotation.
+
+stdout:  OFF = 239999988.0   ON = 239999988.0
+diff: IDENTICAL   md5 = b38a2a0ce9b2adfabbf74b16b49586b6 (both)
+GATE: byte-diff IDENTICAL (inline/hot = semantics-preserving layout) ✅
