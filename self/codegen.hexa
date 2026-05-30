@@ -1889,6 +1889,12 @@ fn gen2_fn_decl(node) {
     // itself no-ops when OFF) → boxed default path unchanged. Runs AFTER
     // _gen2_boxed_cells so closure-captured accumulators are excluded.
     _known_int_accum_scan(node.body)
+    // UNSHADOW [HEADLINE] F1 part-2: pre-scan the body for monomorphic int/f64
+    // array-literal bindings whose name is PROVEN non-escaping (whole-body escape
+    // analysis via _stmt_escapes_name). Those auto-fire native contiguous storage
+    // by DEFAULT (no env flag) — the boxed-HexaArr surface is never reachable, so
+    // it is sound. Escaping bindings keep the boxed representation (no regression).
+    _native_arr_noescape_scan(node.body)
     let mut _hoisted = []
     let mut hoists = []
     let mut ii = 0
@@ -3033,7 +3039,7 @@ fn _gen2_stmt_inner(node, depth) {
                 // fn / unproven index / print) is safe — is a separate
                 // multi-session sub-task; under the flag the construction is
                 // sound for read-only proven-loop bindings (the c-class shape).
-                if _native_arr_enabled() {
+                if _native_arr_autofire_ok(node.name) {
                     let _ni = len(node.left.items)
                     let mut _nout = "({ HexaVal __nia = hexa_arr_i64_new(" + to_string(_ni) + "); "
                     let mut _nai = 0
@@ -3047,6 +3053,35 @@ fn _gen2_stmt_inner(node, depth) {
             } else {
                 // A same-name re-let to a non-int-array RHS voids the proof.
                 _known_intarr_void(node.name)
+            }
+            // UNSHADOW [HEADLINE] F1 (F64 mirror): register an immutable let bound
+            // to a monomorphic f64 array literal (`[1.0, 2.0, …]`) as a known-
+            // float-array, and (when native storage fires) lower it to native
+            // CONTIGUOUS double[] storage (hexa_arr_f64_new/push) instead of the
+            // 16-byte-stride boxed HexaArr. The axis-A closed-negative proved the
+            // gap lives in this storage; native 8B-contiguous double[] closes it
+            // (SIMD-gatherable). The descriptor rides the SAME TAG_ARRAY/arr_ptr
+            // slot and HexaArrF64 layout (ptr,len,cap) matches HexaArr so the
+            // polymorphic `hexa_len` reads len unchanged. The Index read arm emits
+            // the raw native `((HexaArrF64*)xs.arr_ptr)->data[i]`. AUTO-FIRES (no
+            // gate) when whole-binding escape is statically proven safe (see
+            // _native_arr_autofire_ok); else stays boxed (no regression).
+            if _is_float_literal_array(node.left) {
+                _known_floatarr_add(node.name)
+                if _native_arr_autofire_ok(node.name) {
+                    let _nfi = len(node.left.items)
+                    let mut _nfout = "({ HexaVal __nfa = hexa_arr_f64_new(" + to_string(_nfi) + "); "
+                    let mut _nfa = 0
+                    while _nfa < _nfi {
+                        _nfout = _nfout + "hexa_arr_f64_push(__nfa, (double)HX_FLOAT(" + gen2_expr(node.left.items[_nfa]) + ")); "
+                        _nfa = _nfa + 1
+                    }
+                    _nfout = _nfout + "__nfa; })"
+                    init = _nfout
+                }
+            } else {
+                // A same-name re-let to a non-float-array RHS voids the proof.
+                _known_floatarr_void(node.name)
             }
             // UNSHADOW typed monomorphic struct layout: register an immutable
             // `let p = Pt{...}` (or `Pt(...)`) whose type is flat-eligible so the
@@ -7963,7 +7998,7 @@ fn gen2_expr(node) {
                         // the value IS already raw .i). DOUBLE-EVAL SAFE: _ir_av
                         // / _ir_ctr each once. Falls back to boxed-storage read
                         // when the flag is off (axis-A / §c-class unchanged).
-                        if _native_arr_enabled() {
+                        if _native_arr_autofire_ok(node.left.name) {
                             // The boxed surface MUST be an INLINE compound literal
                             // — NOT an out-of-line `hexa_int(…)` runtime.o call —
                             // or the C-ABI wall blocks clang from folding
@@ -7972,6 +8007,23 @@ fn gen2_expr(node) {
                             // §hexaval-unbox proved the inline literal is what
                             // lets clang keep the raw int in a register / vectorize.
                             return "((HexaVal){.tag=TAG_INT,.i=(((HexaArrI64*)" + _ir_av + ".arr_ptr)->data[" + _ir_ctr + "])})"
+                        }
+                        return "(" + _ir_av + ".arr_ptr->items[" + _ir_ctr + "])"
+                    }
+                    // UNSHADOW [HEADLINE] F1 (F64 mirror): proven monomorphic-f64
+                    // array. When native STORAGE fires, the binding is a contiguous
+                    // double[] (hexa_arr_f64_new above), so the proven in-range read
+                    // is a RAW native double load `((HexaArrF64*)xs.arr_ptr)
+                    // ->data[i]` boxed via an INLINE TAG_FLOAT compound literal
+                    // (same fold lesson as the i64 arm — out-of-line hexa_float
+                    // would re-box behind the wall and defeat the gather). A
+                    // surrounding sum/dot extracts the raw .f via HX_FLOAT with no
+                    // tag dispatch (_is_known_float certifies this read). DOUBLE-
+                    // EVAL SAFE: _ir_av / _ir_ctr each once. Falls back to the
+                    // boxed-storage read when native storage did not fire.
+                    if _is_known_floatarr_name(node.left.name) {
+                        if _native_arr_autofire_ok(node.left.name) {
+                            return "((HexaVal){.tag=TAG_FLOAT,.f=(((HexaArrF64*)" + _ir_av + ".arr_ptr)->data[" + _ir_ctr + "])})"
                         }
                         return "(" + _ir_av + ".arr_ptr->items[" + _ir_ctr + "])"
                     }
@@ -9968,6 +10020,42 @@ fn _is_known_intarr_name(name) {
     return false
 }
 
+// UNSHADOW [HEADLINE] F1 (F64 mirror): proven monomorphic-f64 array-literal
+// bindings (the float twin of _known_intarr_set). Same lifecycle: registered on
+// an immutable `let xs = [f64-lit…]`, voided on any same-name re-let to a
+// non-float-array RHS or a reassignment.
+let mut _known_floatarr_set = []
+
+fn _known_floatarr_add(name) {
+    let mut i = 0
+    while i < len(_known_floatarr_set) {
+        if _known_floatarr_set[i] == name { return }
+        i = i + 1
+    }
+    _known_floatarr_set = _known_floatarr_set.push(name)
+}
+
+fn _known_floatarr_void(name) {
+    let n = len(_known_floatarr_set)
+    if n <= 0 { return }
+    let mut _rebuilt = []
+    let mut i = 0
+    while i < n {
+        if _known_floatarr_set[i] != name { _rebuilt = _rebuilt.push(_known_floatarr_set[i]) }
+        i = i + 1
+    }
+    _known_floatarr_set = _rebuilt
+}
+
+fn _is_known_floatarr_name(name) {
+    let mut i = 0
+    while i < len(_known_floatarr_set) {
+        if _known_floatarr_set[i] == name { return true }
+        i = i + 1
+    }
+    return false
+}
+
 // Is `node` an array literal whose every element is an IntLit? (Exact, narrow
 // monomorphic-i64 proof — no Idents, no calls, no float, no nesting. The
 // narrowest provable case the RFC names.)
@@ -9982,6 +10070,30 @@ fn _is_int_literal_array(node) {
         let el = node.items[i]
         if type_of(el) == "string" { return false }
         if el.kind != "IntLit" { return false }
+        i = i + 1
+    }
+    return true
+}
+
+// UNSHADOW [HEADLINE] F1 (F64 mirror): is `node` an array literal whose every
+// element is a FloatLit (or a unary-minus on a FloatLit, the parser shape for a
+// negative float literal)? Exact, narrow monomorphic-f64 proof — no Idents, no
+// calls, no int, no nesting. The float twin of _is_int_literal_array.
+// decreases node — structural (single level; elements must be leaf FloatLits)
+fn _is_float_literal_array(node) {
+    if type_of(node) == "string" { return false }
+    if node.kind != "Array" { return false }
+    if type_of(node.items) != "array" { return false }
+    if len(node.items) == 0 { return false }
+    let mut i = 0
+    while i < len(node.items) {
+        let el = node.items[i]
+        if type_of(el) == "string" { return false }
+        let mut _ok = el.kind == "FloatLit"
+        if !_ok && el.kind == "UnaryOp" && el.op == "-" {
+            if type_of(el.left) != "string" && el.left.kind == "FloatLit" { _ok = true }
+        }
+        if !_ok { return false }
         i = i + 1
     }
     return true
@@ -10860,6 +10972,90 @@ fn _stack_noescape_scan(stmts) {
     }
 }
 
+// ── UNSHADOW [HEADLINE] F1 part-2: no-escape AUTO-FIRE for native array storage ──
+// The native-i64 / native-f64 contiguous-storage lowering was a GATED opt-in
+// (HEXA_NATIVE_ARR) because a polymorphic use of the binding — passing `xs` to an
+// opaque fn, returning it, storing it in another binding / aggregate, or any
+// non-`xs[i]`-read mention — would reach a site that reads it as a boxed HexaArr
+// (items[] of HexaVal), which the native HexaArrI64/HexaArrF64 descriptor does NOT
+// provide (its first member is a raw int64_t*/double*, not HexaVal*). This pre-scan
+// PROVES, per binding, that the WHOLE function body never lets the name escape:
+// reusing the F2 escape analyzer (_stmt_escapes_name / _expr_escapes_name), which
+// treats `xs[i]` element reads + `xs.len()` as local and EVERY other mention
+// (call-arg, return, let-flow, store, aggregate literal, bare operand) as an
+// escape. Only proven-non-escaping native-array bindings auto-fire; an escaping
+// one keeps the boxed HexaArr representation (no regression). This unlocks default-
+// ON firing for the safe read-only-loop shape WITHOUT the env flag (see
+// _native_arr_autofire_ok). The flag still force-enables for testing the lowering
+// in isolation, but firing now also requires the per-binding escape proof.
+let mut _native_arr_noescape_names = []
+
+fn _native_arr_noescape_reset() {
+    _native_arr_noescape_names = []
+}
+
+fn _native_arr_noescape_add(name) {
+    let mut i = 0
+    while i < len(_native_arr_noescape_names) {
+        if _native_arr_noescape_names[i] == name { return }
+        i = i + 1
+    }
+    _native_arr_noescape_names = _native_arr_noescape_names.push(name)
+}
+
+fn _is_native_arr_noescape(name) {
+    let mut i = 0
+    while i < len(_native_arr_noescape_names) {
+        if _native_arr_noescape_names[i] == name { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// Pre-scan a fn body: register every immutable `let xs = [int-lit…]` or
+// `let xs = [f64-lit…]` whose name is PROVEN non-escaping across the whole body
+// (the F2 escape analyzer over every sibling statement). Such a binding may
+// auto-fire native contiguous storage. It only POPULATES the proof set; whether a
+// binding actually lowers is decided in _native_arr_autofire_ok (which also honors
+// the legacy env flag as an escape hatch).
+fn _native_arr_noescape_scan(stmts) {
+    _native_arr_noescape_reset()
+    if type_of(stmts) == "string" { return }
+    if type_of(stmts) != "array" { return }
+    let n = len(stmts)
+    let mut i = 0
+    while i < n {
+        let s = stmts[i]
+        if type_of(s) != "string" && s.kind == "LetStmt" {
+            if type_of(s.left) != "string"
+               && (_is_int_literal_array(s.left) || _is_float_literal_array(s.left)) {
+                let mut _escapes = false
+                let mut j = 0
+                while j < n {
+                    if j != i {
+                        if _stmt_escapes_name(stmts[j], s.name) { _escapes = true }
+                    }
+                    j = j + 1
+                }
+                if !_escapes {
+                    _native_arr_noescape_add(s.name)
+                }
+            }
+        }
+        i = i + 1
+    }
+}
+
+// Should native contiguous storage fire for this array binding? AUTO-FIRE (no env
+// flag) when the binding was PROVEN non-escaping by the whole-body scan — the
+// element reads are the only uses, so the boxed-HexaArr surface is never needed.
+// The legacy HEXA_NATIVE_ARR env flag is an OR escape hatch: when set, fire even
+// without the proof (isolated lowering test / the original opt-in behavior).
+fn _native_arr_autofire_ok(name) {
+    if _is_native_arr_noescape(name) { return true }
+    return _native_arr_enabled()
+}
+
 fn gen2_stack_alloc_flat(pad, var_name, sname, arg_exprs) {
     let _stk = "__stk_" + var_name
     let mut out = pad + "/* [escape→stack] no-escape flat-struct " + var_name + " → stack (no malloc) */\n"
@@ -11306,6 +11502,22 @@ fn _is_known_float(node) {
     if type_of(node) == "string" { return false }
     if node.kind == "FloatLit" { return true }
     if node.kind == "Ident" { return _is_known_float_name(node.name) }
+    // UNSHADOW [HEADLINE] F1 (F64 mirror): a read `arr[i]` of a proven known-
+    // float-array, where the index is covered by a live in-range fact, is
+    // statically TAG_FLOAT — its element kind is monomorphic f64 by the array-
+    // literal proof. Certifying it lets a surrounding sum/dot BinOp extract the
+    // raw `.f` (HX_FLOAT) with no per-element tag dispatch. Narrow: requires BOTH
+    // the known-float-array registration AND a live in-range fact (same guards as
+    // the Index emit fast-path), so it never fires on an unproven / boxed access.
+    if node.kind == "Index" {
+        let _l = node.left
+        let _r = node.right
+        if type_of(_l) != "string" && _l.kind == "Ident" && _is_known_floatarr_name(_l.name) {
+            if type_of(_r) != "string" && _r.kind == "Ident" {
+                if _inrange_counter_for(_l.name, _r.name) != "" { return true }
+            }
+        }
+    }
     return false
 }
 
