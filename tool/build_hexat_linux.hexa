@@ -107,16 +107,24 @@ fn main() {
     }
 
     let extra_cflags = env("EXTRA_CFLAGS")
-    let src = repo_root + "/self/native/hexa_cc.c"
-    let inc = repo_root + "/self"
+    // COLD-SEED (HEXA-CC-ZERO P3/P5/P6): the legacy regen-source
+    // self/native/hexa_cc.c + self/runtime.c both left git in B9 (#2065 —
+    // tracked `.c` = 0) and are absent on a fresh checkout. The committed
+    // self-contained cold-seed self/native/hexa_cc_seed.c IS the amalgam
+    // (~3 MB · ZERO real local #include · runtime + transpiler inlined), so it
+    // compiles standalone with NO `-I`, NO amalgam sed, NO separate runtime.c.
+    // This also kills the stale-drift hazard the old runtime.h→runtime.c swap
+    // carried (the seed is regenerated from the current SSOT on each refresh).
+    let src = repo_root + "/self/native/hexa_cc_seed.c"
 
-    println("=== hexat → linux/x86_64 (static ELF) ===")
+    println("=== hexat → linux/x86_64 (static ELF · cold-seed) ===")
     println("  src    : " + src)
     println("  output : " + out_path)
     println("  cc     : " + cc)
 
     if !file_exists(src) {
-        eprintln("error: source missing: " + src)
+        eprintln("error: cold-seed source missing: " + src)
+        eprintln("  (self/native/hexa_cc_seed.c is the committed bootstrap seed)")
         exit(1)
     }
 
@@ -129,24 +137,10 @@ fn main() {
 
     run_ok("mkdir -p " + exec_with_status("dirname '" + out_path + "'")[0].trim())
 
-    // hexa_cc.c heads with `#include "runtime.h"` (prototype-only header for
-    // the AOT user.c speed path) — that pulls in NO runtime function bodies,
-    // so compiling it alone fails to link (`undefined reference to hexa_str`,
-    // `__hexa_fn_arena_return`, …). The standalone transpiler binary needs the
-    // bodies, which live in runtime.c (it textually `#include`s runtime_core.c).
-    // Amalgamate by swapping the head include runtime.h → runtime.c into a temp
-    // TU, then compile THAT. (This swap was the missing step that let the
-    // committed hexat_linux_x86_64 binary drift stale vs the runtime source —
-    // the #634/#748 _hx_self_rss_bytes fscanf→syscall fix never reached it,
-    // re-introducing the mem-cap-transpile SIGSEGV on Linux pool hosts.)
-    let amalgam = "/tmp/hexa_cc_amalgam_linux.c"
-    run_ok("sed 's|#include \"runtime.h\"|#include \"runtime.c\"|' " + src + " > " + amalgam)
-
     let cflags = "-O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs"
-    let cmd = cc + " " + cflags + " " + extra_cflags + " -I " + inc + " " + amalgam + " -o " + out_path + " -static -lm"
+    let cmd = cc + " " + cflags + " " + extra_cflags + " " + src + " -o " + out_path + " -static -lm"
     println("  " + cmd)
     run_ok(cmd)
-    run_ok("rm -f " + amalgam)
 
     let file_info = exec_with_status("file " + out_path)[0].trim()
     let size = exec_with_status("wc -c < '" + out_path + "' | tr -d ' '")[0].trim()

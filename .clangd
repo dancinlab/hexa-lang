@@ -2,11 +2,13 @@
 #
 # The self/native/*.c files include "runtime.c" relative to self/, not
 # relative to self/native/. Without this, clangd cannot resolve HexaVal
-# and emits a wall of spurious "unknown type name" diagnostics even
-# though the live build (clang -I self self/native/hexa_cc.c) succeeds.
+# and emits a wall of spurious "unknown type name" diagnostics. The
+# regen-source self/native/hexa_cc.c + self/runtime.c left git in B9
+# (#2065 — tracked `.c` = 0); the live transpiler now cold-builds from the
+# self-contained seed (cc self/native/hexa_cc_seed.c — no -I, runtime inlined).
 #
-# Ref: tool/build_hexa_v2_linux.hexa:54 (src = self/native/hexa_cc.c)
-#      tool/build_stage0.hexa:105      (clang … -I self … hexa_cc.c)
+# Ref: tool/build_hexat_linux.hexa (src = self/native/hexa_cc_seed.c · cold-seed)
+#      bootstrap.yml Stage 0       (cc hexa_cc_seed.c -o build/hexa_v2)
 CompileFlags:
   Add:
     - -I.

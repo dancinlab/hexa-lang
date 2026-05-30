@@ -45,8 +45,7 @@ on:
       - 'docker/runner/Dockerfile'
       - 'self/main.hexa'
       - 'self/hexa_full.hexa'
-      - 'self/runtime.c'
-      - 'self/native/hexa_cc.c'
+      - 'self/native/hexa_cc_seed.c'
       - 'self/native/native_gate.c'
       - 'self/module_loader.hexa'
       - 'self/stdlib/**'
@@ -92,26 +91,39 @@ jobs:
           echo "cc     : $(gcc --version | head -1)"
           echo "target : ${{ matrix.target }}"
 
-      - name: Stage 0 — compile self-hosted transpiler (hexa_v2)
+      # Both `self/native/hexa_cc.c` and `self/runtime.c` left git in B9 (#2065 —
+      # tracked `.c` = 0) and are absent on fresh checkout. Build from the
+      # committed self-contained cold-seed `self/native/hexa_cc_seed.c`
+      # (HEXA-CC-ZERO P3/P5/P6 — same pattern bootstrap.yml uses).
+      - name: Stage 0 — cold-seed bootstrap (cc hexa_cc_seed.c → hexa_v2)
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p self/native build/stage1 build
+          test -f self/native/hexa_cc_seed.c \
+            || { echo "::error::self/native/hexa_cc_seed.c absent — cold-seed required"; exit 1; }
+          # Self-contained TU: NO -I, NO amalgam sed, NO self/runtime.c.
           gcc ${{ env.CFLAGS_COMMON }} \
-              -I self self/native/hexa_cc.c \
-              -o build/hexa_v2 \
-              -lm -ldl
+              self/native/hexa_cc_seed.c -o build/hexa_v2 -lm -ldl
           file build/hexa_v2
+          # Pure runtime object (seed's runtime portion through the
+          # `/* amalgam END runtime.c */` marker) — runtime symbols only, no
+          # transpiler symbols, so the transpiled CLI links clean. Static for
+          # the distroless drop-in.
+          sed '/\/\* amalgam END runtime.c \*\//q' self/native/hexa_cc_seed.c > build/stage1/runtime_pure.c
+          gcc ${{ env.CFLAGS_COMMON }} -c build/stage1/runtime_pure.c -o build/runtime_pure.o
+          ls -la build/runtime_pure.o
 
       - name: Stage 1 — transpile + compile CLI dispatcher (static)
         shell: bash
         run: |
           set -euo pipefail
+          export HEXA_LANG="$PWD"
           ./build/hexa_v2 self/main.hexa build/stage1/main.c
           # -static for distroless drop-in.  glibc-static is preinstalled
           # on ubuntu-latest / ubuntu-24.04-arm runners.
           gcc ${{ env.CFLAGS_COMMON }} -static \
-              -I self build/stage1/main.c \
+              -I self build/stage1/main.c build/runtime_pure.o \
               -o build/hexa_linux_${{ matrix.target }} \
               -lm -ldl
           file build/hexa_linux_${{ matrix.target }}
@@ -120,11 +132,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          export HEXA_LANG="$PWD"
           ./build/hexa_v2 self/hexa_full.hexa /tmp/hexa_full_regen.c
-          # runtime.c is included as a sibling header by the transpiled C.
-          cp self/runtime.c /tmp/runtime.c
+          # Link the transpiled interp against the seed's pure runtime object
+          # (self/runtime.c is absent in the `.c=0` tree).
           gcc ${{ env.CFLAGS_COMMON }} -static \
-              -I self /tmp/hexa_full_regen.c \
+              -I self /tmp/hexa_full_regen.c build/runtime_pure.o \
               -o build/hexa_interp_linux_${{ matrix.target }} \
               -lm -ldl
           file build/hexa_interp_linux_${{ matrix.target }}

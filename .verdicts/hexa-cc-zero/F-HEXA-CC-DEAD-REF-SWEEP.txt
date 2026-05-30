@@ -1,0 +1,131 @@
+F-HEXA-CC-DEAD-REF-SWEEP — residual dead `hexa_cc.c` / `runtime.c` reference sweep (2026-05-30)
+==============================================================================================
+falsifier  : "After #2065 (.c=0 graduation) + #2161 (bootstrap.yml cold-seed migration), the
+              CI workflows + build tools STILL hard-reference the removed self/native/hexa_cc.c
+              and/or self/runtime.c (both gitignored + absent on fresh checkout) — a dead-path
+              class that yields false-RED CI / broken recipes. Migrating every such live
+              reference to the committed self-contained cold-seed self/native/hexa_cc_seed.c
+              (`cc hexa_cc_seed.c` — 0 -I, runtime inlined) restores a clean build on a fresh
+              .c=0 checkout; and the refreshed seed (#2179) now lets bootstrap.yml RESTORE the
+              full-CLI + farr32 steps #2161 narrowed away while the seed was stale."
+host       : ubu-2 (Linux x86_64, gcc 13.3.0). BLOCKING ssh, /tmp fresh clones of origin/main
+             b3afd54ba. Seed: self/native/hexa_cc_seed.c 3210738 B md5 611f401e (refreshed,
+             4 symbols DEFINED at seed L3549/L3550/L22711 + hexa_enum_str_v).
+
+──────────────────────────────────────────────────────────────────
+PER-FILE: dead-ref → cold-seed/retire
+──────────────────────────────────────────────────────────────────
+1. .github/workflows/atlas-consistency.yml  [MIGRATED]
+   before: Stage 0 `gcc -I self self/native/hexa_cc.c self/runtime.c -o hexa_v2`
+           Stage 1 linked module_loader.c + main.c against `self/runtime.c`
+   after:  Stage 0 `gcc self/native/hexa_cc_seed.c -o build/hexa_v2` (self-contained, no -I)
+           + pure runtime.o via `sed '/amalgam END runtime.c/q'` → build/runtime_pure.o
+           Stage 1 links module_loader.c + main.c against build/runtime_pure.o
+           + NEW step "Stage tool-build seam": cp build/hexa_v2→build/hexat,
+             cp runtime_pure.c→build/self/runtime.c, cp self/runtime.h→build/self/runtime.h
+             (the `hexa atlas` subcommand JIT-builds tool/atlas_cli.hexa, whose internal build
+              needs build/hexat + build/self/runtime.{c,h} in a .c=0 tree)
+   NOTE: this gate only triggers on paths compiler/atlas/** | n6/** — it does NOT run on this
+         PR. Build chain proven on ubu-2 fresh clone (Stage0/1/seam all OK, ./hexa version =
+         hexa 0.1.0-dispatch). The GATE LOGIC itself reports a PRE-EXISTING atlas drift on
+         origin/main (EMB_COUNT=17264 vs `grep -cE '^@[A-Z]'` N6_COUNT=17206; EXPORT_REPORTED
+         matches EMB at 17264) — a node-counting discrepancy independent of the build path /
+         this sweep. Not introduced here; left untouched.
+
+2. .github/workflows/docker-runner-push.yml  [MIGRATED]
+   before: paths filter listed `self/runtime.c` + `self/native/hexa_cc.c`
+           Stage 0 `gcc -I self self/native/hexa_cc.c -o hexa_v2`
+           Stage 2 `cp self/runtime.c /tmp/runtime.c` (interp build)
+   after:  paths filter → `self/native/hexa_cc_seed.c` (runner image rebuilds when the SEED
+             changes; dropped the two dead `.c` entries)
+           Stage 0 `gcc self/native/hexa_cc_seed.c -o build/hexa_v2` + runtime_pure.o
+           Stage 1 (CLI, -static) + Stage 2 (interp, -static) link against build/runtime_pure.o
+   PROVEN ubu-2 fresh clone: Stage 1 static CLI `version`=hexa 0.1.0-dispatch rc=0,
+           Stage 2 static interp links clean (0 dup/undef). YAML structurally valid.
+   NOTE: push job only fires on its trigger paths/main — does not run on this PR (intended).
+
+3. .github/workflows/nobaseline-gate.yml  [NO CHANGE — ref is NOT dead]
+   The `self/native/hexa_cc.c` entry in $SEEDS is a `rm -f` REMOVAL target, not a compile
+   input. The gate TEMP-removes all seeds FIRST (modelling .c=0), then builds via the shared
+   tool/release_build → tool/stage_regen_hexa_cc, which REGENERATES hexa_cc.c FROM THE EDGE
+   TARBALL (gh release download edge → hexa cc --regen), NOT from the cold-seed. So listing
+   hexa_cc.c there is correct, load-bearing gate logic; `rm -f` on an absent file is a no-op.
+   Changing it to hexa_cc_seed.c would be WRONG (the seed is the committed cold-seed that must
+   SURVIVE, not a regen-from-edge target). Left untouched per "matches the gate's intent".
+
+4a. tool/build_hexat_linux.hexa  [MIGRATED]
+   before: src = self/native/hexa_cc.c; amalgam sed (runtime.h→runtime.c) into temp TU;
+           `cc -I self <amalgam> -static` (legacy stale-drift-prone runtime.h→runtime.c swap)
+   after:  src = self/native/hexa_cc_seed.c (self-contained); dropped amalgam sed + -I;
+           `cc <seed> -o <out> -static -lm`
+   PROVEN ubu-2: `cc hexa_cc_seed.c -static -o build/hexat_linux` → static ELF x86-64, runs,
+           transpiles a tiny program (OK). Selftest T1/T2/T3 logic unchanged.
+4b. tool/build_stage0.hexa / tool/build_hexa_v2_linux.hexa  [DO NOT EXIST]
+   The task named these but `git ls-files tool/` shows neither exists on origin/main. The only
+   real build-recipe dead-ref was tool/build_hexat_linux.hexa (4a). No action possible/needed.
+4c. .clangd  [COMMENT UPDATED — cosmetic]
+   before: comment referenced `clang -I self self/native/hexa_cc.c` + two non-existent tools
+           (tool/build_hexa_v2_linux.hexa:54, tool/build_stage0.hexa:105)
+   after:  comment references the cold-seed (`cc self/native/hexa_cc_seed.c`) + the REAL tool
+           (tool/build_hexat_linux.hexa) + bootstrap.yml Stage 0. CompileFlags unchanged.
+
+5. .github/workflows/bootstrap.yml  [FULL-CLI + farr32 RESTORED; stdlib ci-gate NOT restored]
+   #2161 narrowed bootstrap to transpiler+smoke because the seed was STALE (pre-#2159, missing
+   4 symbols). The seed is now FRESH (#2179). RESTORED to all 3 jobs (macos-arm64 / linux-x64 /
+   linux-arm64):
+     + Stage 0 now also emits build/runtime_pure.o (seed runtime portion alone, via
+       `sed '/amalgam END runtime.c/q'`) — main.c embeds its OWN lexer/parser/codegen, so it
+       must link against this PURE runtime.o, NOT runtime_seed.o (which carries parse_* and
+       multiple-defines — empirically 19 dup-symbol errors, verbatim below).
+     + Stage 2 — compile FULL self-host CLI (./hexa): transpile main_expanded → main.c →
+       `cc -I self main.c build/runtime_pure.o -o hexa` → `./hexa version`.
+     + forge farr32 codegen smoke: cp build/hexa_v2→build/hexat, `hexa build --c-only` →
+       `cc -fsyntax-only -Werror=implicit-function-declaration`.
+   NOT restored: stdlib `--ci-gate`. It LINKS+RUNS stdlib tests; on current main one curated
+   test (stdlib/deck/fill_emit_test.hexa) FAILS a content assertion ("script backgrounds jobs
+   (&) — missing 'ph.x ... ) &'") — a PRE-EXISTING stdlib bug unrelated to the cold-seed (the
+   cold toolchain runs the suite correctly: 30 pass / 1 fail). Re-adding it would turn the
+   matrix RED on that bug, so per the HARD constraint "do NOT force a red restore" it stays out
+   with an honest in-file comment until the deck test is fixed.
+
+──────────────────────────────────────────────────────────────────
+[A] FULL-CLI cold build PROVEN GREEN (ubu-2 fresh clone, verbatim)
+──────────────────────────────────────────────────────────────────
+clone HEAD b3afd54ba. Stage 0 cc hexa_cc_seed.c → build/hexa_v2 (ELF x86-64). Stage 0 pure
+runtime.o: sed '/amalgam END runtime.c/q' → 27488 lines → gcc -c → build/runtime_pure.o
+(477320 B, 0 errors). Stage 1 module_loader + flatten self/main.hexa → main_expanded.hexa
+(28331 lines). Stage 2 hexa_v2 main_expanded → main.c (31663 lines).
+  FULL-CLI link:  gcc -I self build/stage1/main.c build/runtime_pure.o -o hexa -lm -ldl
+                  multiple-definition + undefined-reference count: 0
+                  hexa: ELF 64-bit LSB pie executable, x86-64
+                  ./hexa version  → hexa 0.1.0-dispatch
+  farr32:         cp build/hexa_v2 build/hexat
+                  ./hexa build tool/forge_farr32_codegen_smoke.hexa -o /tmp/farr32.c --c-only
+                  → OK: transpiled (C source, no link)
+                  gcc -fsyntax-only -Werror=implicit-function-declaration -I self /tmp/farr32.c
+                  → FARR32-SYNTAX-OK rc=0
+
+──────────────────────────────────────────────────────────────────
+[B] WHY runtime_seed.o is NOT usable for the full CLI (verbatim dup-symbols)
+──────────────────────────────────────────────────────────────────
+gcc -I self build/stage1/main.c build/runtime_seed.o -o hexa_full_A -lm -ldl  → rc=1
+  multiple definition of `Token'  / `keyword_kind' / `is_ident_start' / `p_tokens' / `p_pos' /
+  `p_pending_annotations' / `parse_stmt' / `parse_expr' / `parse' / `p_lookahead_generic_args' …
+  (19 multiple-definition errors — runtime_seed.o carries the transpiler symbols main.c embeds)
+→ confirms #2179 HONEST NOTE [1]: full CLI must link the PURE runtime.o, not runtime_seed.o.
+
+──────────────────────────────────────────────────────────────────
+[C] CI GREEN evidence (run ids) — appended post-push (see PR checks)
+──────────────────────────────────────────────────────────────────
+(to be filled after `gh pr checks --watch`: bootstrap 3/3, docker YAML-valid)
+
+──────────────────────────────────────────────────────────────────
+[D] HONEST NOTES (g5/g63)
+──────────────────────────────────────────────────────────────────
+1. This is residual HYGIENE — it does NOT reopen HEXA-CC-ZERO (5/5 CLOSED #2179). No milestone
+   flips, no HEXA-CC-ZERO.md edits.
+2. atlas-consistency does NOT trigger on this PR (paths gate); its build chain is proven on
+   ubu-2 but its pre-existing gate-internal node-count drift (17264 vs 17206) is independent
+   and unaddressed (out of scope — orthogonal to dead-ref).
+3. stdlib ci-gate intentionally left OUT of bootstrap.yml (pre-existing fill_emit_test failure
+   would force RED) — honest narrowing, not a claimed-but-unrun green.
