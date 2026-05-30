@@ -1,0 +1,34 @@
+=== UNSHADOW native-arr-f64 — g5 byte-diff (program-output identity) ===
+host=arm64 (mini)  cc=Apple clang -O2  runs=9  N=4000  iters=5000000
+faithful A/B proxy: the four C arms mirror self/codegen.hexa + self/
+runtime_core_emit.hexa F64 emit shapes VERBATIM (B9 full self-host rebuild is
+blocked -> the emitted-C string is the authoritative codegen surface, same
+discipline as the landed i64 bench .verdicts/unshadow-native-arr/).
+
+HOT-LOOP SUM (4 arms — ALL FOUR program-output md5s MUST be identical):
+    ref_c    : 0e996ac90eb43ab92cf72486d2c8c5f5
+    a_boxed  : 0e996ac90eb43ab92cf72486d2c8c5f5
+    b_native : 0e996ac90eb43ab92cf72486d2c8c5f5
+    d_ideal  : 0e996ac90eb43ab92cf72486d2c8c5f5
+  -> 4/4 IDENTICAL (unique md5 = 1, program output = 1010000000000.000000).
+     native HexaArrF64 storage + inline TAG_FLOAT read produces the byte-identical
+     float sum as the boxed HexaArr path and idiomatic C.
+
+POLYMORPHIC BOUNDARY (typed f64 array boxed at a dynamic site — MUST match):
+    bnd_boxed  : 80a01ea660d8b53e7f1244ddf12ef797
+    bnd_native : 80a01ea660d8b53e7f1244ddf12ef797
+  -> 2/2 IDENTICAL (value 7.500000). hexa_arr_f64_box(v,i) returns a real
+     TAG_FLOAT HexaVal equal to the boxed-path value: the native f64 array boxes
+     correctly when it reaches a polymorphic boundary (no value drift).
+
+ARM emit shapes (verbatim from the landed SSOT this session):
+  struct   : typedef struct HexaArrF64 { double* data; int len; int cap; } HexaArrF64;
+  ctor     : HexaVal hexa_arr_f64_new(int cap){ a=malloc(sizeof(HexaArrF64)); a->data=malloc(sizeof(double)*cap); v.tag=TAG_ARRAY; HX_SET_ARR_PTR(v,(HexaArr*)a); }
+  push     : a->data[a->len++]=x;  (realloc-grow)
+  box      : hexa_arr_f64_box(v,i){ ...bounds-check...; return hexa_float(a->data[i]); }
+  a_boxed read  : (a->items[i])                                              // boxed HexaVal, 16B stride
+  b_native read : ((HexaVal){.tag=TAG_FLOAT,.f=(((HexaArrF64*)xs.arr_ptr)->data[i])})  // LANDED inline
+  d_ideal read  : a->data[i]                                                 // raw double accumulator
+
+VERDICT: g5 byte-diff PASS (4/4 + 2/2 IDENTICAL). Behavior preserved exactly.
+=== done ===
